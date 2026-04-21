@@ -206,7 +206,8 @@ fn selfLintFullPipeline(
     if hints.enabled {
         report = selfLintAstCheckIgnoredResult(file, hints, report)
     }
-    selfLintAstCheckMissingDocs(file, stream, report)
+    report = selfLintAstCheckMissingDocs(file, stream, report)
+    selfLintFilterByAllow(file, report)
 }
 
 /// selfLintPackageSources lints every file in a package under a shared
@@ -3091,4 +3092,316 @@ fn selfLintIgnoredResultExpr(
         return selfLintIgnoredResultExpr(file, node.left, hints, out)
     }
     out
+}
+
+// ============================================================
+// RULE REGISTRY
+// ============================================================
+
+/// SelfLintRuleInfo is the queryable metadata for one self-hosted lint
+/// rule. Mirrors `internal/lint/registry.go` on the Go side. The
+/// authoritative list is [selfLintAllRules]. Use [selfLintExplainRule]
+/// for code-based lookup; `osty explain Lxxxx` goes through the Go
+/// registry today but the selfhost list is the source of truth when the
+/// linter runs entirely in Osty.
+pub struct SelfLintRuleInfo {
+    pub code: String,
+    pub name: String,
+    pub category: String,
+    pub summary: String,
+    pub fixable: Bool,
+}
+
+pub fn selfLintAllRules() -> List<SelfLintRuleInfo> {
+    let mut rules: List<SelfLintRuleInfo> = []
+    rules.push(selfLintMakeRule("L0001", "unused_let", "unused", "let binding is never read", true))
+    rules.push(selfLintMakeRule("L0002", "unused_param", "unused", "function parameter is never used", true))
+    rules.push(selfLintMakeRule("L0003", "unused_import", "unused", "use alias is never referenced", true))
+    rules.push(selfLintMakeRule("L0004", "unused_mut", "unused", "let mut binding is never reassigned", true))
+    rules.push(selfLintMakeRule("L0005", "unused_field", "unused", "struct field is never read", false))
+    rules.push(selfLintMakeRule("L0006", "unused_method", "unused", "struct or enum method is never called", false))
+    rules.push(selfLintMakeRule("L0007", "ignored_result", "unused", "discarded Result/Option value", false))
+    rules.push(selfLintMakeRule("L0008", "dead_store", "unused", "assignment is dead — no intervening read", true))
+    rules.push(selfLintMakeRule("L0010", "shadowed_binding", "shadowing", "binding shadows an earlier binding", false))
+    rules.push(selfLintMakeRule("L0020", "dead_code", "dead_code", "statement is unreachable", false))
+    rules.push(selfLintMakeRule("L0021", "redundant_else", "simplify", "redundant else after unconditional return", false))
+    rules.push(selfLintMakeRule("L0022", "constant_condition", "simplify", "condition is a constant boolean", false))
+    rules.push(selfLintMakeRule("L0023", "empty_branch", "simplify", "if or else branch body is empty", false))
+    rules.push(selfLintMakeRule("L0024", "needless_return", "simplify", "tail return is redundant", true))
+    rules.push(selfLintMakeRule("L0025", "identical_branches", "simplify", "if/else arms are identical", false))
+    rules.push(selfLintMakeRule("L0026", "empty_loop_body", "simplify", "loop body is empty", false))
+    rules.push(selfLintMakeRule("L0030", "naming_type", "naming", "type name should be UpperCamelCase", false))
+    rules.push(selfLintMakeRule("L0031", "naming_value", "naming", "binding or function name should be lowerCamelCase", false))
+    rules.push(selfLintMakeRule("L0032", "naming_variant", "naming", "enum variant should be UpperCamelCase", false))
+    rules.push(selfLintMakeRule("L0040", "redundant_bool", "simplify", "if cond { true } else { false } simplifies to cond", true))
+    rules.push(selfLintMakeRule("L0041", "self_compare", "simplify", "expression compared to itself", false))
+    rules.push(selfLintMakeRule("L0042", "self_assign", "simplify", "assignment has no effect (self-assign)", true))
+    rules.push(selfLintMakeRule("L0043", "double_negation", "simplify", "!! collapses to the inner expression", true))
+    rules.push(selfLintMakeRule("L0044", "bool_literal_compare", "simplify", "compare against bool literal can be simplified", true))
+    rules.push(selfLintMakeRule("L0045", "negated_bool_literal", "simplify", "!true / !false can be written directly", false))
+    rules.push(selfLintMakeRule("L0050", "too_many_params", "complexity", "function takes too many parameters", false))
+    rules.push(selfLintMakeRule("L0052", "function_too_long", "complexity", "function body is too long", false))
+    rules.push(selfLintMakeRule("L0053", "deep_nesting", "complexity", "control flow is nested too deeply", false))
+    rules.push(selfLintMakeRule("L0070", "missing_doc", "docs", "public declaration has no doc comment", false))
+    rules
+}
+
+fn selfLintMakeRule(
+    code: String,
+    name: String,
+    category: String,
+    summary: String,
+    fixable: Bool,
+) -> SelfLintRuleInfo {
+    SelfLintRuleInfo { code, name, category, summary, fixable }
+}
+
+pub fn selfLintExplainRule(code: String) -> SelfLintRuleInfo {
+    for r in selfLintAllRules() {
+        if r.code == code {
+            return r
+        }
+    }
+    SelfLintRuleInfo { code: "", name: "", category: "", summary: "", fixable: false }
+}
+
+// ============================================================
+// #[allow(...)] SUPPRESSION
+// ============================================================
+//
+// Mirrors `internal/lint/allow.go`. A user can opt out of specific lint
+// warnings by tagging a declaration with `#[allow(CODE, ...)]` where
+// CODE is either a concrete `Lxxxx` number, a category alias (`unused`,
+// `shadowing`, `dead_code`, `naming`, `simplify`, `complexity`, `docs`),
+// a rule alias (`unused_let`, `unused_param`, …), or the wildcards
+// `lint` / `all` (also the bare `#[allow]` form).
+//
+// Coverage is positional: the annotation suppresses lint diagnostics
+// whose primary token index lies inside the annotated decl's
+// `[start, end)` range, which covers the decl itself plus every nested
+// node. Methods on an annotated struct inherit the parent scope; they
+// can also carry their own `#[allow]` for a narrower override.
+
+struct SelfLintAllowScope {
+    start: Int,
+    end: Int,
+    codes: List<String>,
+    wildcard: Bool,
+}
+
+fn selfLintFilterByAllow(file: AstFile, report: SelfLintReport) -> SelfLintReport {
+    let scopes = selfLintBuildAllowScopes(file)
+    if scopes.len() == 0 {
+        return report
+    }
+    let mut kept: List<SelfLintDiagnostic> = []
+    for diag in report.diagnostics {
+        if !(selfLintDiagIsAllowed(diag, scopes)) {
+            kept.push(diag)
+        }
+    }
+    let mut out = report
+    out.diagnostics = kept
+    out
+}
+
+fn selfLintBuildAllowScopes(file: AstFile) -> List<SelfLintAllowScope> {
+    let mut scopes: List<SelfLintAllowScope> = []
+    for declIdx in file.arena.decls {
+        scopes = selfLintCollectAllowAtDecl(file, declIdx, scopes)
+    }
+    scopes
+}
+
+fn selfLintCollectAllowAtDecl(
+    file: AstFile,
+    idx: Int,
+    acc: List<SelfLintAllowScope>,
+) -> List<SelfLintAllowScope> {
+    if idx < 0 {
+        return acc
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = selfLintMaybePushAllow(file, node, acc)
+    if node.kind == AstNStructDecl
+        || node.kind == AstNEnumDecl
+        || node.kind == AstNInterfaceDecl {
+        for memberIdx in node.children {
+            let member = selfLintAstNode(file, memberIdx)
+            if member.kind == AstNFnDecl || member.kind == AstNField_ || member.kind == AstNVariant {
+                out = selfLintMaybePushAllow(file, member, out)
+            }
+        }
+    }
+    out
+}
+
+fn selfLintMaybePushAllow(
+    file: AstFile,
+    node: AstNode,
+    acc: List<SelfLintAllowScope>,
+) -> List<SelfLintAllowScope> {
+    let scope = selfLintExtractAllowScope(file, node)
+    if !(scope.wildcard) && scope.codes.len() == 0 {
+        return acc
+    }
+    let mut out = acc
+    out.push(scope)
+    out
+}
+
+fn selfLintExtractAllowScope(file: AstFile, node: AstNode) -> SelfLintAllowScope {
+    let annExtra = node.extra
+    if annExtra < 0 {
+        return SelfLintAllowScope { start: -1, end: -1, codes: [], wildcard: false }
+    }
+    let ann = selfLintAstNode(file, annExtra)
+    if ann.kind != AstNAnnotation {
+        return SelfLintAllowScope { start: -1, end: -1, codes: [], wildcard: false }
+    }
+    let mut scope = SelfLintAllowScope { start: node.start, end: node.end, codes: [], wildcard: false }
+    if ann.text == "__group" {
+        for child in ann.children {
+            let childAnn = selfLintAstNode(file, child)
+            scope = selfLintAccumulateAllowArgs(file, childAnn, scope)
+        }
+    } else {
+        scope = selfLintAccumulateAllowArgs(file, ann, scope)
+    }
+    scope
+}
+
+fn selfLintAccumulateAllowArgs(
+    file: AstFile,
+    ann: AstNode,
+    acc: SelfLintAllowScope,
+) -> SelfLintAllowScope {
+    if ann.kind != AstNAnnotation || ann.text != "allow" {
+        return acc
+    }
+    let mut out = acc
+    // Bare `#[allow]` with no args — wildcard.
+    if ann.children.len() == 0 {
+        out.wildcard = true
+        return out
+    }
+    for argIdx in ann.children {
+        let arg = selfLintAstNode(file, argIdx)
+        let name = selfLintAllowArgName(arg)
+        if name == "" {
+            continue
+        }
+        if name == "lint" || name == "all" {
+            out.wildcard = true
+            continue
+        }
+        for c in selfLintResolveAllowName(name) {
+            out.codes.push(c)
+        }
+    }
+    out
+}
+
+fn selfLintAllowArgName(arg: AstNode) -> String {
+    if arg.kind == AstNIdent {
+        return arg.text
+    }
+    // `#[allow(L0001)]` or `#[allow(unused_let)]` may also show up as
+    // AstNField_ when the parser interprets the bare name as key=value
+    // during recovery; fall back to its text field in that case.
+    if arg.kind == AstNField_ && arg.text != "" {
+        return arg.text
+    }
+    ""
+}
+
+fn selfLintResolveAllowName(name: String) -> List<String> {
+    if selfLintIsLintCode(name) {
+        let mut out: List<String> = []
+        out.push(name)
+        return out
+    }
+    let expanded = selfLintAllowCategoryCodes(name)
+    if expanded.len() > 0 {
+        return expanded
+    }
+    let rule = selfLintFindRuleByName(name)
+    let mut out: List<String> = []
+    if rule.code != "" {
+        out.push(rule.code)
+    }
+    out
+}
+
+fn selfLintFindRuleByName(name: String) -> SelfLintRuleInfo {
+    for r in selfLintAllRules() {
+        if r.name == name {
+            return r
+        }
+    }
+    SelfLintRuleInfo { code: "", name: "", category: "", summary: "", fixable: false }
+}
+
+fn selfLintAllowCategoryCodes(name: String) -> List<String> {
+    let rules = selfLintAllRules()
+    let mut out: List<String> = []
+    let mut category = ""
+    if name == "unused" {
+        category = "unused"
+    } else if name == "shadow" || name == "shadowing" {
+        category = "shadowing"
+    } else if name == "dead_code" || name == "unreachable" {
+        category = "dead_code"
+    } else if name == "naming" {
+        category = "naming"
+    } else if name == "simplify" || name == "suspicious" {
+        category = "simplify"
+    } else if name == "complexity" {
+        category = "complexity"
+    } else if name == "docs" {
+        category = "docs"
+    }
+    if category == "" {
+        return out
+    }
+    for r in rules {
+        if r.category == category {
+            out.push(r.code)
+        }
+    }
+    out
+}
+
+fn selfLintIsLintCode(name: String) -> Bool {
+    if name.len() < 2 {
+        return false
+    }
+    let units = strings.split(name, "")
+    if frontUnitAt(units, 0) != "L" {
+        return false
+    }
+    let mut i = 1
+    for i < name.len() {
+        let u = frontUnitAt(units, i)
+        if u < "0" || u > "9" {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+fn selfLintDiagIsAllowed(diag: SelfLintDiagnostic, scopes: List<SelfLintAllowScope>) -> Bool {
+    for scope in scopes {
+        if diag.start < scope.start || diag.start >= scope.end {
+            continue
+        }
+        if scope.wildcard {
+            return true
+        }
+        if selfLintStringListContains(scope.codes, diag.code) {
+            return true
+        }
+    }
+    false
 }
