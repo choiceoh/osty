@@ -20149,7 +20149,7 @@ func opParseClosure(p *OstyParser) int {
 			}
 		} else {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7470:13
-			opError(p, "expected closure parameter")
+			opErrorFull(p, "expected closure parameter", "use an identifier, `_`, or a destructuring pattern like `(a, b)` or `User { name }`", "", "E0205")
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7471:13
 			_ = opAdvance(p)
 		}
@@ -21383,7 +21383,7 @@ func opParsePatternOneAlt(p *OstyParser) int {
 		return opAddNode(p, n)
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8009:5
-	opError(p, "expected pattern")
+	opErrorFull(p, "expected pattern", "supply a literal, variant, struct, tuple, or `_` pattern", "", "E0301")
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8010:5
 	opAdvance(p)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8011:5
@@ -22137,7 +22137,7 @@ func opParseStructDecl(p *OstyParser, isPub bool, anns []int) int {
 			func() struct{} { members = append(members, opAddNode(p, fNode)); return struct{}{} }()
 		} else {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8334:13
-			opError(p, "expected field or method in struct")
+			opErrorFull(p, "expected field or method in struct", "a struct body accepts `name: Type` fields and `fn name(...)` methods", "", "E0107")
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8335:13
 			_ = opAdvance(p)
 		}
@@ -22247,7 +22247,7 @@ func opParseEnumDecl(p *OstyParser, isPub bool, anns []int) int {
 			func() struct{} { members = append(members, opAddNode(p, vNode)); return struct{}{} }()
 		} else {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8383:13
-			opError(p, "expected variant or method in enum")
+			opErrorFull(p, "expected variant or method in enum", "an enum body accepts `VariantName` / `VariantName(T, U)` variants and `fn name(...)` methods", "", "E0108")
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8384:13
 			_ = opAdvance(p)
 		}
@@ -22320,7 +22320,7 @@ func opParseInterfaceDecl(p *OstyParser, isPub bool, anns []int) int {
 			func() struct{} { members = append(members, opParseType(p)); return struct{}{} }()
 		} else {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8418:13
-			opError(p, "expected method or type in interface")
+			opErrorFull(p, "expected method or type in interface", "an interface body accepts `fn name(self) -> T` method signatures and associated type names", "", "E0109")
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8419:13
 			_ = opAdvance(p)
 		}

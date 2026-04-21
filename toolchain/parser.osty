@@ -301,8 +301,6 @@ fn opErrorFull(p: OstyParser, msg: String, hint: String, note: String, code: Str
     p.arena.errors.push(AstParseError { message: msg, tokenIndex: p.pos, hint, note, code })
 }
 
-fn opError(p: OstyParser, msg: String) { opErrorFull(p, msg, "", "", "") }
-
 fn opAddNode(p: OstyParser, node: AstNode) -> Int { astArenaAdd(p.arena, node) }
 
 fn opIntListCount(xs: List<Int>) -> Int {
@@ -869,7 +867,7 @@ fn opParseClosure(p: OstyParser) -> Int {
                 paramNode.text = opAdvance(p).text
             }
         } else {
-            opError(p, "expected closure parameter")
+            opErrorFull(p, "expected closure parameter", "use an identifier, `_`, or a destructuring pattern like `(a, b)` or `User \{ name \}`", "", "E0205")
             let _ = opAdvance(p)
         }
         if opEat(p, FrontColon) { paramNode.right = opParseType(p) }
@@ -1456,7 +1454,7 @@ fn opParsePatternOneAlt(p: OstyParser) -> Int {
         n.end = p.pos
         return opAddNode(p, n)
     }
-    opError(p, "expected pattern")
+    opErrorFull(p, "expected pattern", "supply a literal, variant, struct, tuple, or `_` pattern", "", "E0301")
     opAdvance(p)
     let mut n = emptyAstNode(AstNPattern)
     n.extra = astPatternErrorKind()
@@ -1787,7 +1785,7 @@ fn opParseStructDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
             fNode.extra = opPackAnnotations(p, memberAnns)
             members.push(opAddNode(p, fNode))
         } else {
-            opError(p, "expected field or method in struct")
+            opErrorFull(p, "expected field or method in struct", "a struct body accepts `name: Type` fields and `fn name(...)` methods", "", "E0107")
             let _ = opAdvance(p)
         }
         opSkipNewlines(p)
@@ -1836,7 +1834,7 @@ fn opParseEnumDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
             vNode.extra = opPackAnnotations(p, memberAnns)
             members.push(opAddNode(p, vNode))
         } else {
-            opError(p, "expected variant or method in enum")
+            opErrorFull(p, "expected variant or method in enum", "an enum body accepts `VariantName` / `VariantName(T, U)` variants and `fn name(...)` methods", "", "E0108")
             let _ = opAdvance(p)
         }
         opSkipNewlines(p)
@@ -1871,7 +1869,7 @@ fn opParseInterfaceDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
         } else if opAt(p, FrontIdent) {
             members.push(opParseType(p))
         } else {
-            opError(p, "expected method or type in interface")
+            opErrorFull(p, "expected method or type in interface", "an interface body accepts `fn name(self) -> T` method signatures and associated type names", "", "E0109")
             let _ = opAdvance(p)
         }
         opSkipNewlines(p)

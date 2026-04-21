@@ -142,7 +142,7 @@ let c = 'ab'           // multiple scalars
 
 ---
 
-## Declarations & statements (E0100–E0106)
+## Declarations & statements (E0100–E0109)
 
 ### E0100 — `CodeExpectedDecl`
 
@@ -227,9 +227,51 @@ fn connect(t: Int = computeTimeout()) {}  // rejected
 
 **Fix**: use a literal default, or move the computation into the body.
 
+### E0107 — `CodeExpectedStructMember`
+
+A token that cannot begin a struct member appeared inside a struct body.
+
+Struct bodies accept field declarations (`name: Type`) and method declarations (`fn name(...)` / `pub fn ...`). Any other token is a recovery error.
+
+```osty
+pub struct S {
+    x: Int??,   // nested Option type triggers recovery
+}
+```
+
+**Fix**: provide a field or method declaration.
+
+### E0108 — `CodeExpectedEnumMember`
+
+A token that cannot begin an enum member appeared inside an enum body.
+
+Enum bodies accept variant declarations (`Ident(T, U)` / `Ident`) and method declarations. Any other token is a recovery error.
+
+```osty
+pub enum E {
+    123,   // rejected
+}
+```
+
+**Fix**: provide a variant or method declaration.
+
+### E0109 — `CodeExpectedInterfaceMember`
+
+A token that cannot begin an interface member appeared inside an interface body.
+
+Interface bodies accept method signatures (`fn name(self) -> T`) and associated type references (identifiers). Any other token is a recovery error.
+
+```osty
+pub interface I {
+    123,   // rejected
+}
+```
+
+**Fix**: provide a method signature or an associated type name.
+
 ---
 
-## Expressions (E0200–E0204)
+## Expressions (E0200–E0205)
 
 ### E0200 — `CodeNonAssocChain`
 
@@ -284,6 +326,19 @@ let f = |x: Int| -> Int { x * 2 }   // ok
 Fallback for expression-position tokens that don't begin a valid primary expression.
 
 **Fix**: check for a missing operand, operator, or brace.
+
+### E0205 — `CodeExpectedClosureParam`
+
+A token that cannot begin a closure parameter appeared between `|...|`.
+
+A closure parameter is an identifier, an irrefutable pattern (tuple `(a, b)`, struct `User { name }`, variant `Some(x)`), or `_` for a discarded binding.
+
+```osty
+let f = |123| x           // rejected
+let g = |a, _, (k, v)| v  // ok
+```
+
+**Fix**: use an identifier, `_`, or a destructuring pattern.
 
 ---
 
