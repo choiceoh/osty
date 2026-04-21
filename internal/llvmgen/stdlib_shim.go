@@ -17,6 +17,9 @@
 package llvmgen
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/osty/osty/internal/ast"
 )
 
@@ -414,9 +417,20 @@ func (g *generator) emitBuiltinOptionNone(name string) (value, bool, error) {
 	return out, true, nil
 }
 
-// emitBuiltinOptionSomeCall handles `Some(x)` calls in a ptr-backed Option
-// context. x must already be a ptr; the backend pass-throughs since T? and T
-// share the `ptr` LLVM type (scalar Option<Int> stays unsupported).
+// emitBuiltinOptionSomeCall handles `Some(x)` calls in a ptr-backed
+// Option context. For ptr-typed payloads (String, List, etc.) the
+// backend passes through — T? and T share the `ptr` LLVM type. For
+// aggregate struct payloads (`%StructName`) we box the value into a
+// GC-managed heap cell: allocate sizeof(T) via osty.gc.alloc_v1,
+// memcpy the struct bytes in, return the heap pointer. None stays
+// null ptr so downstream null-check / `?.` paths work unchanged.
+//
+// NOTE (GC hazard): the box uses OSTY_GC_KIND_GENERIC with no tracer.
+// Managed pointers embedded in the struct aren't marked when reached
+// only through this Option, so they could be collected if no other
+// root holds them. In practice toolchain usage (`CrossCompileOutcome`
+// etc.) keeps those strings alive via the construction-site locals,
+// but a proper tracer is a follow-up (see TODO in runtime).
 func (g *generator) emitBuiltinOptionSomeCall(call *ast.CallExpr) (value, bool, error) {
 	if call == nil {
 		return value{}, false, nil
@@ -440,9 +454,31 @@ func (g *generator) emitBuiltinOptionSomeCall(call *ast.CallExpr) (value, bool, 
 	if err != nil {
 		return value{}, true, err
 	}
-	if loaded.typ != "ptr" {
-		return value{}, true, unsupportedf("type-system", "Some payload type %s requires boxed Option; only ptr-backed Some(...) is lowered", loaded.typ)
+	if loaded.typ == "ptr" {
+		loaded.sourceType = ctx.sourceType
+		return loaded, true, nil
 	}
-	loaded.sourceType = ctx.sourceType
-	return loaded, true, nil
+	// Aggregate struct payload: box it on the GC heap.
+	if strings.HasPrefix(loaded.typ, "%") {
+		emitter := g.toOstyEmitter()
+		size := g.emitAggregateByteSize(emitter, loaded.typ)
+		siteName := "runtime.option.some." + strings.TrimPrefix(loaded.typ, "%")
+		sitePtr := llvmStringLiteral(emitter, siteName)
+		box := llvmCall(emitter, "ptr", "osty.gc.alloc_v1", []*LlvmValue{
+			toOstyValue(value{typ: "i64", ref: "1"}), // OSTY_GC_KIND_GENERIC
+			toOstyValue(size),
+			sitePtr,
+		})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  store %s %s, ptr %s",
+			loaded.typ, loaded.ref, box.name,
+		))
+		g.takeOstyEmitter(emitter)
+		g.needsGCRuntime = true
+		out := fromOstyValue(box)
+		out.gcManaged = true
+		out.sourceType = ctx.sourceType
+		return out, true, nil
+	}
+	return value{}, true, unsupportedf("type-system", "Some payload type %s requires boxed Option; only ptr-backed or aggregate-struct Some(...) is lowered", loaded.typ)
 }
