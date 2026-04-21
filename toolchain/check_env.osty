@@ -984,6 +984,20 @@ pub fn checkIsAssignable(env: CheckEnv, dst: Int, src: Int) -> Bool {
     if dk == TkOptional && sk == TkOptional {
         return checkIsAssignable(env, tyInnerAt(env.tys, d), tyInnerAt(env.tys, s))
     }
+    // `T?` (TkOptional) and `Option<T>` (TkNamed "Option") are the
+    // same type spelled two ways. Normalise before comparing.
+    if dk == TkOptional && sk == TkNamed && tyHeadAt(env.tys, s) == "Option" {
+        let sa = tyArgsAt(env.tys, s)
+        if checkIntListLen(sa) == 1 {
+            return checkIsAssignable(env, tyInnerAt(env.tys, d), sa[0])
+        }
+    }
+    if dk == TkNamed && tyHeadAt(env.tys, d) == "Option" && sk == TkOptional {
+        let da = tyArgsAt(env.tys, d)
+        if checkIntListLen(da) == 1 {
+            return checkIsAssignable(env, da[0], tyInnerAt(env.tys, s))
+        }
+    }
     if dk == TkNamed && checkIsInterface(env, tyHeadAt(env.tys, d)) {
         return checkTypeSatisfiesInterface(env, s, d)
     }
@@ -1518,6 +1532,43 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
     checkRegisterFn(env, CheckFnSig {
         name: "toInt", owner: "String", receiverTy: tString_,
         retTy: tyNamed(tys, "Result", [tInt(tys), tyNamed(tys, "Error", [])]),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+
+    // ----- Char / Byte scalar conversions -----
+    checkRegisterFn(env, CheckFnSig {
+        name: "toInt", owner: "Char", receiverTy: tChar(tys), retTy: tInt(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toByte", owner: "Char", receiverTy: tChar(tys), retTy: tByte(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toInt", owner: "Byte", receiverTy: tByte(tys), retTy: tInt(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toChar", owner: "Int", receiverTy: tInt(tys), retTy: tChar(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toByte", owner: "Int", receiverTy: tInt(tys), retTy: tByte(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toString", owner: "Int", receiverTy: tInt(tys), retTy: tString_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toString", owner: "Bool", receiverTy: tBool(tys), retTy: tString_,
         paramNames: [], paramTys: [],
         generics: [], genericBounds: [],
     })
