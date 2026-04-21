@@ -194,18 +194,19 @@ func (g *generator) releaseGCRoots(emitter *LlvmEmitter) {
 
 // safepointKind classifies why a safepoint poll was emitted. The low 56
 // bits of the id passed to `osty.gc.safepoint_v1` hold the per-module
-// serial; the top 8 bits hold one of these values. See
-// `RUNTIME_GC_DELTA.md` §10.1 and the C runtime enum
-// `OSTY_GC_SAFEPOINT_KIND_*` which must stay numerically aligned.
+// serial; the top 8 bits hold one of these values. The numeric values
+// are owned by `toolchain/llvmgen.osty` and must stay aligned with the
+// C runtime enum `OSTY_GC_SAFEPOINT_KIND_*` (`RUNTIME_GC_DELTA.md`
+// §10.1).
 type safepointKind uint8
 
-const (
-	safepointKindUnspecified safepointKind = 0
-	safepointKindEntry       safepointKind = 1
-	safepointKindCall        safepointKind = 2
-	safepointKindLoop        safepointKind = 3
-	safepointKindAlloc       safepointKind = 4
-	safepointKindYield       safepointKind = 5
+var (
+	safepointKindUnspecified = safepointKind(llvmSafepointKindUnspecified())
+	safepointKindEntry       = safepointKind(llvmSafepointKindEntry())
+	safepointKindCall        = safepointKind(llvmSafepointKindCall())
+	safepointKindLoop        = safepointKind(llvmSafepointKindLoop())
+	safepointKindAlloc       = safepointKind(llvmSafepointKindAlloc())
+	safepointKindYield       = safepointKind(llvmSafepointKindYield())
 )
 
 // encodeSafepointID packs kind (high 8 bits) and serial (low 56 bits)
@@ -214,8 +215,7 @@ const (
 // the encoding forward for future kinds does not break older runtimes
 // shipped alongside this LLVM output.
 func encodeSafepointID(kind safepointKind, serial int) int64 {
-	const serialMask int64 = (int64(1) << 56) - 1
-	return (int64(kind) << 56) | (int64(serial) & serialMask)
+	return llvmEncodeSafepointId(int(kind), serial)
 }
 
 // safepointRootChunkSize bounds the number of root slots emitted into a
@@ -225,11 +225,10 @@ func encodeSafepointID(kind safepointKind, serial int) int64 {
 // — so no single `alloca ptr, i64 N` can grow the LLVM-level C stack
 // beyond a bounded frame. The runtime's
 // `OSTY_GC_SAFEPOINT_MAX_ROOTS = 65536` guard aborts anything larger, so
-// the chunk size is kept well below that cap to leave head-room.
-//
-// The package-private `var` form (rather than a const) lets tests lower
-// the bound and drive the splitting path on modest fixtures.
-var safepointRootChunkSize = 4096
+// the chunk size is kept well below that cap to leave head-room. The
+// `var` form (rather than a const) lets tests lower the bound and drive
+// the splitting path on modest fixtures.
+var safepointRootChunkSize = llvmSafepointDefaultRootChunkSize()
 
 // emitGCSafepoint emits a safepoint poll at an unspecified site — kept
 // for callers that have not been classified yet. New call sites should
@@ -249,11 +248,7 @@ func (g *generator) emitGCSafepointKind(emitter *LlvmEmitter, kind safepointKind
 	if len(roots) == 0 {
 		serial := g.nextSafepoint
 		g.nextSafepoint++
-		id := encodeSafepointID(kind, serial)
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @osty.gc.safepoint_v1(i64 %d, ptr null, i64 0)",
-			id,
-		))
+		llvmEmitSafepointEmpty(emitter, encodeSafepointID(kind, serial))
 		g.needsGCRuntime = true
 		return
 	}
@@ -274,22 +269,13 @@ func (g *generator) emitGCSafepointKind(emitter *LlvmEmitter, kind safepointKind
 			end = len(roots)
 		}
 		chunk := roots[start:end]
+		addresses := make([]string, len(chunk))
+		for i, root := range chunk {
+			addresses[i] = g.safepointRootAddress(emitter, root)
+		}
 		serial := g.nextSafepoint
 		g.nextSafepoint++
-		id := encodeSafepointID(kind, serial)
-		slotsPtr := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca ptr, i64 %d", slotsPtr, len(chunk)))
-		for i, root := range chunk {
-			slotPtr := llvmNextTemp(emitter)
-			emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr ptr, ptr %s, i64 %d", slotPtr, slotsPtr, i))
-			emitter.body = append(emitter.body, fmt.Sprintf("  store ptr %s, ptr %s", g.safepointRootAddress(emitter, root), slotPtr))
-		}
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @osty.gc.safepoint_v1(i64 %d, ptr %s, i64 %d)",
-			id,
-			slotsPtr,
-			len(chunk),
-		))
+		llvmEmitSafepointWithRoots(emitter, encodeSafepointID(kind, serial), addresses)
 	}
 	g.needsGCRuntime = true
 }

@@ -443,6 +443,130 @@ pub fn llvmGcRootRelease(emitter: LlvmEmitter, value: LlvmValue) {
     llvmCallVoid(emitter, "osty.gc.root_release_v1", [value])
 }
 
+/// Phase A5 safepoint kind taxonomy (`RUNTIME_GC_DELTA.md` §10.1).
+///
+/// The id passed to `osty.gc.safepoint_v1` packs a kind tag in the high
+/// 8 bits and a per-module serial in the low 56 bits. These accessors
+/// own the kind enum values so the Osty emitter core, the
+/// `support_snapshot.go` Go bridge, and the C runtime
+/// (`OSTY_GC_SAFEPOINT_KIND_*` in `internal/backend/runtime/osty_runtime.c`)
+/// all read the same numeric namespace. Ordering matches the runtime
+/// enum — adding a new kind means extending all three in lock-step.
+pub fn llvmSafepointKindUnspecified() -> Int { 0 }
+
+pub fn llvmSafepointKindEntry() -> Int { 1 }
+
+pub fn llvmSafepointKindCall() -> Int { 2 }
+
+pub fn llvmSafepointKindLoop() -> Int { 3 }
+
+pub fn llvmSafepointKindAlloc() -> Int { 4 }
+
+pub fn llvmSafepointKindYield() -> Int { 5 }
+
+/// Packs a Phase A5 safepoint `kind` (high 8 bits) and per-module
+/// `serial` (low 56 bits) into the single i64 the runtime entrypoint
+/// consumes. The runtime tolerates unknown kinds by falling back to
+/// UNSPECIFIED, so rolling the encoding forward for future kinds does
+/// not break older runtimes shipped alongside this LLVM output.
+pub fn llvmEncodeSafepointId(kind: Int, serial: Int) -> Int {
+    let mask = (1 << 56) - 1
+    (kind << 56) | (serial & mask)
+}
+
+/// Phase A6 stackmap overflow guard (`RUNTIME_GC_DELTA.md` §10.2).
+///
+/// Bounds the number of root slots emitted into a single safepoint's
+/// alloca array. When a frame exposes more managed roots than this,
+/// the Go-side emitter splits the poll into multiple calls — each
+/// inheriting the original kind tag but bumping the serial — so no
+/// single `alloca ptr, i64 N` can grow the LLVM-level C stack beyond
+/// a bounded frame. The runtime's
+/// `OSTY_GC_SAFEPOINT_MAX_ROOTS = 65536` guard aborts anything larger,
+/// so the default sits well below that cap to leave head-room.
+pub fn llvmSafepointDefaultRootChunkSize() -> Int { 4096 }
+
+/// Phase A4 closure env GC kind tag (`RUNTIME_GC_DELTA.md` §2.4).
+///
+/// Points at the dedicated `OSTY_GC_KIND_CLOSURE_ENV = 1029`
+/// reservation in the runtime. The closure allocation path itself
+/// uses `osty.rt.closure_env_alloc_v1`, which installs the
+/// capture-tracing callback at construction; this constant is
+/// retained for heap-dump / `osty_gc_stats` categorisation and as
+/// the pivot for any direct `osty.gc.alloc_v1` caller that wants to
+/// tag an env-shaped allocation.
+pub fn llvmClosureEnvGcKind() -> Int { 1029 }
+
+/// Phase A4 closure capture count the current legacy emitter bakes
+/// into every closure env. Phase 1 closures have no captures yet;
+/// Phase 4 will drive this from the closure AST. The constant lives
+/// at this boundary so the call-site change is one place when
+/// capture-aware lowering lands.
+pub fn llvmClosureEnvPhase1CaptureCount() -> Int { 0 }
+
+/// Phase A4 closure env allocation + thunk install. Calls
+/// `osty.rt.closure_env_alloc_v1` with the supplied capture count
+/// (currently always `llvmClosureEnvPhase1CaptureCount()`) and a
+/// diagnostic site, then stores the thunk symbol at slot 0 so
+/// subsequent indirect calls can dispatch through the env. Returns
+/// the env pointer as a `ptr`-typed LlvmValue. The runtime helper
+/// attaches the capture-tracing GC callback at construction so any
+/// managed pointers a Phase 4 lowering drops into capture slots are
+/// immediately reachable from mark (`RUNTIME_GC_DELTA.md` §2.4).
+pub fn llvmEmitClosureEnvAllocRuntime(
+    emitter: LlvmEmitter,
+    captureCount: Int,
+    siteName: String,
+    thunkSymbol: String,
+) -> LlvmValue {
+    let envTemp = llvmNextTemp(emitter)
+    emitter.body.push(
+        "  {envTemp} = call ptr @osty.rt.closure_env_alloc_v1(i64 {captureCount}, ptr {siteName})",
+    )
+    emitter.body.push("  store ptr @{thunkSymbol}, ptr {envTemp}")
+    LlvmValue { typ: "ptr", name: envTemp, pointer: false }
+}
+
+/// Render the single-line IR for an empty-roots safepoint poll. The
+/// pure form exists so emitters backed by a non-Osty buffer (e.g. the
+/// MIR emitter's `strings.Builder`) can consume the format string
+/// without adapting to the Osty `LlvmEmitter` shape.
+pub fn llvmRenderSafepointEmpty(id: Int) -> String {
+    "  call void @osty.gc.safepoint_v1(i64 {id}, ptr null, i64 0)"
+}
+
+/// Emit the ABI-only form of a safepoint poll — no root slots. Used
+/// as the zero-roots fast path for the legacy emitter; MIR reaches
+/// the same IR through `llvmRenderSafepointEmpty` + its own buffer.
+pub fn llvmEmitSafepointEmpty(emitter: LlvmEmitter, id: Int) {
+    emitter.body.push(llvmRenderSafepointEmpty(id))
+}
+
+/// Emit a safepoint poll whose `rootAddresses` (each already rendered
+/// as an LLVM operand like `%t12` or `@global_slot`) are stored into a
+/// single `alloca ptr, i64 N` slot array and handed to the runtime.
+/// Callers that need to respect `llvmSafepointDefaultRootChunkSize`
+/// must chunk `rootAddresses` before each call so every individual
+/// `alloca` stays bounded (`RUNTIME_GC_DELTA.md` §10.2).
+pub fn llvmEmitSafepointWithRoots(
+    emitter: LlvmEmitter,
+    id: Int,
+    rootAddresses: List<String>,
+) {
+    let count = rootAddresses.len()
+    let slotsPtr = llvmNextTemp(emitter)
+    emitter.body.push("  {slotsPtr} = alloca ptr, i64 {count}")
+    for i in 0..count {
+        let slotPtr = llvmNextTemp(emitter)
+        let addr = rootAddresses[i]
+        emitter.body.push("  {slotPtr} = getelementptr ptr, ptr {slotsPtr}, i64 {i}")
+        emitter.body.push("  store ptr {addr}, ptr {slotPtr}")
+    }
+    emitter.body.push(
+        "  call void @osty.gc.safepoint_v1(i64 {id}, ptr {slotsPtr}, i64 {count})",
+    )
+}
+
 pub fn llvmStructTypeDef(name: String, fieldTypes: List<String>) -> String {
     let fields = llvmStrings.join(fieldTypes, ", ")
     "%{name} = type \{ {fields} \}"
@@ -930,6 +1054,45 @@ pub fn llvmRenderFunction(
     let mut lines = ["define {ret} @{name}({llvmParams(params)}) \{", "entry:"]
     for line in body {
         lines.push(line)
+    }
+    lines.push("\}")
+    llvmStrings.join([llvmStrings.join(lines, "\n"), "\n"], "")
+}
+
+/// Phase A4 fn-value thunk template. Renders the IR body of a private
+/// delegating function that accepts `ptr %env` as its implicit first
+/// argument, discards the env, and forwards the remaining args to
+/// `realSymbol`. The resulting IR is what the legacy emitter caches
+/// in `g.fnValueThunkDefs` so top-level fn references can be wrapped
+/// in a fn-value-compatible ABI (`{ ptr fn, ... }` env layout) without
+/// touching the defining symbol. An empty `retType` is normalised to
+/// `void` so call sites may forward the checker's unit return type
+/// verbatim.
+pub fn llvmRenderClosureThunk(
+    retType: String,
+    thunkSymbol: String,
+    paramTypes: List<String>,
+    realSymbol: String,
+) -> String {
+    let ret = if retType == "" { "void" } else { retType }
+    let mut paramParts: List<String> = ["ptr %env"]
+    let mut argParts: List<String> = []
+    for i in 0..paramTypes.len() {
+        let pt = paramTypes[i]
+        paramParts.push("{pt} %arg{i}")
+        argParts.push("{pt} %arg{i}")
+    }
+    let params = llvmStrings.join(paramParts, ", ")
+    let args = llvmStrings.join(argParts, ", ")
+    let mut lines: List<String> = []
+    lines.push("define private {ret} @{thunkSymbol}({params}) \{")
+    lines.push("entry:")
+    if ret == "void" {
+        lines.push("  call void @{realSymbol}({args})")
+        lines.push("  ret void")
+    } else {
+        lines.push("  %__ret = call {ret} @{realSymbol}({args})")
+        lines.push("  ret {ret} %__ret")
     }
     lines.push("\}")
     llvmStrings.join([llvmStrings.join(lines, "\n"), "\n"], "")
