@@ -48,6 +48,10 @@ func GenerateFromMIR(m *mir.Module, opts Options) ([]byte, error) {
 	if m == nil {
 		return nil, unsupported("source-layout", "nil MIR module")
 	}
+	// Canonicalize the requested target once up front so the header
+	// line and every downstream consumer see the same LLVM-format
+	// triple. See internal/llvmgen/target.go for the mapping rules.
+	opts.Target = CanonicalLLVMTarget(opts.Target)
 	g := newMIRGen(m, opts)
 	if err := g.checkSupported(); err != nil {
 		return nil, err
@@ -78,7 +82,7 @@ func GenerateFromMIR(m *mir.Module, opts Options) ([]byte, error) {
 	g.emitGlobalVars()
 	g.emitStringPool()
 	g.emitRuntimeDeclarations()
-	return []byte(g.out.String()), nil
+	return withDataLayout([]byte(g.out.String()), opts.Target), nil
 }
 
 // ==== generator state ====
