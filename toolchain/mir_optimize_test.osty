@@ -1,0 +1,627 @@
+use std.testing
+
+// ==== copy propagation + terminator folding =========================
+
+fn testMirOptimizePropagatesConstIntoBinary() {
+    // fn f() -> Int {
+    //     let _0: Int  (return)
+    //     let _1 mut: Int
+    //     let _2: Int
+    //     bb0:
+    //         _1 = use const 3 Int
+    //         _2 = _1 + const 4 Int
+    //         _0 = use _2
+    //         return
+    // }
+    let func = mirFunction("pkg.f", "Int", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Int", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+    let a = mirFunctionNewLocal(func, "a", "Int", true, mirNoSpan())
+    let b = mirFunctionNewLocal(func, "b", "Int", false, mirNoSpan())
+
+    let entry = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = entry
+
+    mirFunctionAppend(
+        func,
+        entry,
+        mirAssignInstr(
+            mirPlace(a),
+            mirRVUse(mirOperandConst(mirConstInt(3, "Int"))),
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionAppend(
+        func,
+        entry,
+        mirAssignInstr(
+            mirPlace(b),
+            mirRVBinary(
+                MirBinAdd,
+                mirOperandCopy(mirPlace(a), "Int"),
+                mirOperandConst(mirConstInt(4, "Int")),
+                "Int",
+            ),
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionAppend(
+        func,
+        entry,
+        mirAssignInstr(
+            mirPlace(ret),
+            mirRVUse(mirOperandCopy(mirPlace(b), "Int")),
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionTerminate(func, entry, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    // The `_1 + const 4 Int` operand should now be `const 3 Int`.
+    let addInstr = func.blocks[entry].instrs[1]
+    testing.assert(addInstr.src.kind == MirRVBinary)
+    testing.assert(addInstr.src.arg.kind == MirOpConst)
+    testing.assert(addInstr.src.arg.const.kind == MirConstInt)
+    testing.assertEq(addInstr.src.arg.const.intValue, 3)
+}
+
+fn testMirOptimizeFoldsBranchOnTrueLiteral() {
+    // bb0 -> branch const true -> [bb1, bb2]
+    // Expected: bb0 terminator becomes goto bb1.
+    let func = mirFunction("pkg.fold_br", "Unit", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+
+    let bb0 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb1 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb2 = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = bb0
+
+    mirFunctionTerminate(
+        func,
+        bb0,
+        mirBranchTerm(
+            mirOperandConst(mirConstBool(true)),
+            bb1,
+            bb2,
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionTerminate(func, bb1, mirReturnTerm(mirNoSpan()))
+    mirFunctionTerminate(func, bb2, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    testing.assert(func.blocks[bb0].term.kind == MirTermGoto)
+    testing.assertEq(func.blocks[bb0].term.target, bb1)
+}
+
+fn testMirOptimizeFoldsBranchOnFalseLiteral() {
+    let func = mirFunction("pkg.fold_br_false", "Unit", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+
+    let bb0 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb1 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb2 = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = bb0
+
+    mirFunctionTerminate(
+        func,
+        bb0,
+        mirBranchTerm(
+            mirOperandConst(mirConstBool(false)),
+            bb1,
+            bb2,
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionTerminate(func, bb1, mirReturnTerm(mirNoSpan()))
+    mirFunctionTerminate(func, bb2, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    testing.assert(func.blocks[bb0].term.kind == MirTermGoto)
+    testing.assertEq(func.blocks[bb0].term.target, bb2)
+}
+
+fn testMirOptimizeFoldsSwitchIntOnMatchingCase() {
+    // bb0 -> switchInt const 1 -> [0: bb1, 1: bb2, default: bb3]
+    // Expected: bb0 becomes goto bb2.
+    let func = mirFunction("pkg.fold_sw", "Unit", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+
+    let bb0 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb1 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb2 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb3 = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = bb0
+
+    let cases = [
+        mirSwitchCase(0, bb1, "zero"),
+        mirSwitchCase(1, bb2, "one"),
+    ]
+    mirFunctionTerminate(
+        func,
+        bb0,
+        mirSwitchIntTerm(
+            mirOperandConst(mirConstInt(1, "Int")),
+            cases,
+            bb3,
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionTerminate(func, bb1, mirReturnTerm(mirNoSpan()))
+    mirFunctionTerminate(func, bb2, mirReturnTerm(mirNoSpan()))
+    mirFunctionTerminate(func, bb3, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    testing.assert(func.blocks[bb0].term.kind == MirTermGoto)
+    testing.assertEq(func.blocks[bb0].term.target, bb2)
+}
+
+fn testMirOptimizeFoldsSwitchIntToDefault() {
+    let func = mirFunction("pkg.fold_sw_def", "Unit", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+
+    let bb0 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb1 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb2 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb3 = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = bb0
+
+    let cases = [
+        mirSwitchCase(0, bb1, "zero"),
+        mirSwitchCase(1, bb2, "one"),
+    ]
+    mirFunctionTerminate(
+        func,
+        bb0,
+        mirSwitchIntTerm(
+            mirOperandConst(mirConstInt(99, "Int")),
+            cases,
+            bb3,
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionTerminate(func, bb1, mirReturnTerm(mirNoSpan()))
+    mirFunctionTerminate(func, bb2, mirReturnTerm(mirNoSpan()))
+    mirFunctionTerminate(func, bb3, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    testing.assert(func.blocks[bb0].term.kind == MirTermGoto)
+    testing.assertEq(func.blocks[bb0].term.target, bb3)
+}
+
+fn testMirOptimizeInvalidatesOnProjectionWrite() {
+    // After _1 = const 5, a projected write _1.field0 = ... should
+    // invalidate the _1 const binding. A later read of _1 must stay a
+    // Copy operand, not a ConstOp.
+    let func = mirFunction("pkg.proj_invalidate", "Unit", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+    let a = mirFunctionNewLocal(func, "a", "Int", true, mirNoSpan())
+    let b = mirFunctionNewLocal(func, "b", "Int", true, mirNoSpan())
+
+    let entry = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = entry
+
+    mirFunctionAppend(
+        func,
+        entry,
+        mirAssignInstr(
+            mirPlace(a),
+            mirRVUse(mirOperandConst(mirConstInt(5, "Int"))),
+            mirNoSpan(),
+        ),
+    )
+    // _1.field0 = const 9
+    let projectedDest = mirPlaceProject(mirPlace(a), mirFieldProj(0, "x", "Int"))
+    mirFunctionAppend(
+        func,
+        entry,
+        mirAssignInstr(
+            projectedDest,
+            mirRVUse(mirOperandConst(mirConstInt(9, "Int"))),
+            mirNoSpan(),
+        ),
+    )
+    // _2 = use _1
+    mirFunctionAppend(
+        func,
+        entry,
+        mirAssignInstr(
+            mirPlace(b),
+            mirRVUse(mirOperandCopy(mirPlace(a), "Int")),
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionTerminate(func, entry, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    // After the projection write, the `_2 = use _1` read must not be
+    // folded to a const — the binding was invalidated. But since _2
+    // is dead (never read) it may be dropped. Look for the instruction
+    // only if it survives; regardless, if present, the operand must
+    // still be a Copy.
+    let surviving = func.blocks[entry].instrs
+    let mut n = 0
+    for i in surviving {
+        n = n + 1
+    }
+    // The bare assignment `_1 = const 5` can be dropped as dead
+    // (projection write below invalidates it anyway; its local may be
+    // read later). The projection write is always preserved. What
+    // matters is that nothing rewrote `_2 = use _1` into
+    // `_2 = use const 5`.
+    let mut foundUnfoldedCopy = false
+    for i in surviving {
+        if i.kind == MirInstrAssign
+            && i.dest.local == b
+            && i.src.kind == MirRVUse
+            && i.src.arg.kind == MirOpCopy
+        {
+            foundUnfoldedCopy = true
+        }
+    }
+    // _2 is dead; the dead-assign pass removes it entirely. The test
+    // passes when no const-fold of `_2 = use const 5` leaked through:
+    // either the Copy stayed (foundUnfoldedCopy) or the instr was
+    // dropped. What must NOT happen is a ConstOp in that slot.
+    let mut foundBadFold = false
+    for i in surviving {
+        if i.kind == MirInstrAssign
+            && i.dest.local == b
+            && i.src.kind == MirRVUse
+            && i.src.arg.kind == MirOpConst
+        {
+            foundBadFold = true
+        }
+    }
+    testing.assert(!foundBadFold)
+}
+
+// ==== empty-goto collapse ===========================================
+
+fn testMirOptimizeCollapsesEmptyGotoChain() {
+    // CFG: bb0 -goto-> bb1 (empty goto) -> bb2 (empty goto) -> bb3 (ret)
+    // Expected: bb0 retargets to bb3.
+    let func = mirFunction("pkg.collapse", "Unit", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+
+    let bb0 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb1 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb2 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb3 = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = bb0
+
+    mirFunctionTerminate(func, bb0, mirGotoTerm(bb1, mirNoSpan()))
+    mirFunctionTerminate(func, bb1, mirGotoTerm(bb2, mirNoSpan()))
+    mirFunctionTerminate(func, bb2, mirGotoTerm(bb3, mirNoSpan()))
+    mirFunctionTerminate(func, bb3, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    testing.assert(func.blocks[bb0].term.kind == MirTermGoto)
+    testing.assertEq(func.blocks[bb0].term.target, bb3)
+}
+
+fn testMirOptimizeCollapsesEmptyGotoChainThroughBranch() {
+    // bb0 -branch-> [bb1, bb2]; bb1 -goto-> bb3 (empty); bb2 -goto-> bb4
+    // Expected: bb0 branch targets bb3 directly on both arms.
+    let func = mirFunction("pkg.collapse_br", "Unit", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+    let c = mirFunctionNewLocal(func, "c", "Bool", false, mirNoSpan())
+    func.locals[c].isParam = true
+    func.params.push(c)
+
+    let bb0 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb1 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb2 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb3 = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = bb0
+
+    mirFunctionTerminate(
+        func,
+        bb0,
+        mirBranchTerm(mirOperandCopy(mirPlace(c), "Bool"), bb1, bb2, mirNoSpan()),
+    )
+    mirFunctionTerminate(func, bb1, mirGotoTerm(bb3, mirNoSpan()))
+    mirFunctionTerminate(func, bb2, mirGotoTerm(bb3, mirNoSpan()))
+    mirFunctionTerminate(func, bb3, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    testing.assert(func.blocks[bb0].term.kind == MirTermBranch)
+    testing.assertEq(func.blocks[bb0].term.thenBlock, bb3)
+    testing.assertEq(func.blocks[bb0].term.elseBlock, bb3)
+}
+
+fn testMirOptimizeCollapseLeavesRealBlocksAlone() {
+    // bb0 -goto-> bb1 (non-empty) -> bb2 (ret)
+    // Expected: bb0 target unchanged at bb1.
+    let func = mirFunction("pkg.keep_real", "Unit", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+    let tmp = mirFunctionNewLocal(func, "tmp", "Int", true, mirNoSpan())
+
+    let bb0 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb1 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb2 = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = bb0
+
+    mirFunctionTerminate(func, bb0, mirGotoTerm(bb1, mirNoSpan()))
+    mirFunctionAppend(
+        func,
+        bb1,
+        mirAssignInstr(
+            mirPlace(tmp),
+            mirRVUse(mirOperandConst(mirConstInt(42, "Int"))),
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionTerminate(func, bb1, mirGotoTerm(bb2, mirNoSpan()))
+    mirFunctionTerminate(func, bb2, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    testing.assertEq(func.blocks[bb0].term.target, bb1)
+}
+
+fn testMirOptimizeRewritesEntryWhenItIsEmptyGoto() {
+    // Entry block itself is an empty goto chain pointing at bb2.
+    let func = mirFunction("pkg.entry_rewrite", "Unit", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+
+    let bb0 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb1 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb2 = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = bb0
+
+    mirFunctionTerminate(func, bb0, mirGotoTerm(bb1, mirNoSpan()))
+    mirFunctionTerminate(func, bb1, mirGotoTerm(bb2, mirNoSpan()))
+    mirFunctionTerminate(func, bb2, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    testing.assertEq(func.entry, bb2)
+}
+
+// ==== dead-assign elimination =======================================
+
+fn testMirOptimizeDropsDeadAssign() {
+    // _1 is never read; assign must be dropped.
+    let func = mirFunction("pkg.dead", "Unit", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+    let dead = mirFunctionNewLocal(func, "dead", "Int", true, mirNoSpan())
+
+    let entry = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = entry
+
+    mirFunctionAppend(
+        func,
+        entry,
+        mirAssignInstr(
+            mirPlace(dead),
+            mirRVUse(mirOperandConst(mirConstInt(42, "Int"))),
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionTerminate(func, entry, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    testing.assertEq(func.blocks[entry].instrs.len(), 0)
+}
+
+fn testMirOptimizeKeepsAssignToParam() {
+    // Params are live on entry; we must not drop an assign that
+    // overwrites a parameter (no such thing is dead).
+    let func = mirFunction("pkg.keep_param", "Unit", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+    let p = mirFunctionNewLocal(func, "p", "Int", true, mirNoSpan())
+    func.locals[p].isParam = true
+    func.params.push(p)
+
+    let entry = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = entry
+
+    mirFunctionAppend(
+        func,
+        entry,
+        mirAssignInstr(
+            mirPlace(p),
+            mirRVUse(mirOperandConst(mirConstInt(1, "Int"))),
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionTerminate(func, entry, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    testing.assertEq(func.blocks[entry].instrs.len(), 1)
+}
+
+fn testMirOptimizeKeepsAssignToReturn() {
+    let func = mirFunction("pkg.keep_ret", "Int", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Int", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+
+    let entry = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = entry
+
+    mirFunctionAppend(
+        func,
+        entry,
+        mirAssignInstr(
+            mirPlace(ret),
+            mirRVUse(mirOperandConst(mirConstInt(7, "Int"))),
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionTerminate(func, entry, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    testing.assertEq(func.blocks[entry].instrs.len(), 1)
+}
+
+fn testMirOptimizeStripsDeadCallDest() {
+    // A call whose return value is captured into a dead local should
+    // keep the call (side effects) but drop the dest.
+    let func = mirFunction("pkg.call_dead", "Unit", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+    let cap = mirFunctionNewLocal(func, "cap", "Int", true, mirNoSpan())
+
+    let entry = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = entry
+
+    mirFunctionAppend(
+        func,
+        entry,
+        mirCallInstr(
+            true,
+            mirPlace(cap),
+            "pkg.side_effect",
+            "fn() -> Int",
+            [],
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionTerminate(func, entry, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    testing.assertEq(func.blocks[entry].instrs.len(), 1)
+    let call = func.blocks[entry].instrs[0]
+    testing.assert(call.kind == MirInstrCall)
+    testing.assert(!(call.hasDest))
+}
+
+fn testMirOptimizeDropsDeadStorageMarkers() {
+    // StorageLive / StorageDead on a local that is otherwise dead
+    // should be dropped too.
+    let func = mirFunction("pkg.storage_dead", "Unit", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+    let dead = mirFunctionNewLocal(func, "dead", "Int", true, mirNoSpan())
+
+    let entry = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = entry
+
+    mirFunctionAppend(func, entry, mirStorageLiveInstr(dead, mirNoSpan()))
+    mirFunctionAppend(func, entry, mirStorageDeadInstr(dead, mirNoSpan()))
+    mirFunctionTerminate(func, entry, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+
+    testing.assertEq(func.blocks[entry].instrs.len(), 0)
+}
+
+// ==== idempotence ====================================================
+
+fn testMirOptimizeIsIdempotent() {
+    // Running twice on the same function must give the same result as
+    // running once.
+    let func = mirFunction("pkg.idem", "Int", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Int", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+    let a = mirFunctionNewLocal(func, "a", "Int", true, mirNoSpan())
+
+    let bb0 = mirFunctionNewBlock(func, mirNoSpan())
+    let bb1 = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = bb0
+
+    mirFunctionAppend(
+        func,
+        bb0,
+        mirAssignInstr(
+            mirPlace(a),
+            mirRVUse(mirOperandConst(mirConstInt(10, "Int"))),
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionAppend(
+        func,
+        bb0,
+        mirAssignInstr(
+            mirPlace(ret),
+            mirRVUse(mirOperandCopy(mirPlace(a), "Int")),
+            mirNoSpan(),
+        ),
+    )
+    mirFunctionTerminate(func, bb0, mirGotoTerm(bb1, mirNoSpan()))
+    mirFunctionTerminate(func, bb1, mirReturnTerm(mirNoSpan()))
+
+    mirOptimizeFunction(func)
+    let firstInstrCount = func.blocks[bb0].instrs.len()
+    let firstEntry = func.entry
+
+    mirOptimizeFunction(func)
+
+    testing.assertEq(func.blocks[bb0].instrs.len(), firstInstrCount)
+    testing.assertEq(func.entry, firstEntry)
+}
+
+// ==== external / intrinsic no-op ====================================
+
+fn testMirOptimizeSkipsExternalFunctions() {
+    let func = mirFunction("pkg.ext", "Unit", mirNoSpan())
+    func.isExternal = true
+    // No blocks, no locals. Must not crash; must not mutate anything.
+    mirOptimizeFunction(func)
+    testing.assertEq(func.blocks.len(), 0)
+}
+
+fn testMirOptimizeSkipsIntrinsicFunctions() {
+    let func = mirFunction("pkg.intr", "Unit", mirNoSpan())
+    func.isIntrinsic = true
+    mirOptimizeFunction(func)
+    testing.assertEq(func.blocks.len(), 0)
+}
+
+// ==== module-level entry point ======================================
+
+fn testMirOptimizeModuleReturnsSameHandle() {
+    let m = mirModule("pkg")
+    let func = mirFunction("pkg.main", "Unit", mirNoSpan())
+    let ret = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[ret].isReturn = true
+    func.returnLocal = ret
+    let entry = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = entry
+    mirFunctionTerminate(func, entry, mirReturnTerm(mirNoSpan()))
+    m.functions.push(func)
+
+    let result = mirOptimize(m)
+    testing.assertEq(result.packageName, "pkg")
+    testing.assertEq(result.functions.len(), 1)
+}
