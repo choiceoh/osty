@@ -152,6 +152,37 @@ fn helper() -> dep.Item {
 	}
 }
 
+func TestCheckPackageStructuredHandlesUseBodyASTNative(t *testing.T) {
+	input := canonicalSelfhostInput(t, []byte(`use go "dep" as dep {
+    struct Item {
+        value: Int
+    }
+
+    fn make() -> dep.Item
+}
+
+fn main() {
+    let item = dep.make()
+    let value = item.value
+}
+`), 0)
+	checked, err := selfhost.CheckPackageStructured(selfhost.PackageCheckInput{
+		Files: []selfhost.PackageCheckFile{input},
+	})
+	if err != nil {
+		t.Fatalf("CheckPackageStructured: %v", err)
+	}
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails)
+	}
+	if got := findCheckedBindingType(checked, "item"); got != "dep.Item" {
+		t.Fatalf("binding type for item = %q, want dep.Item", got)
+	}
+	if got := findCheckedBindingType(checked, "value"); got != "Int" {
+		t.Fatalf("binding type for value = %q, want Int", got)
+	}
+}
+
 func TestCheckSourceStructuredReportsIntrinsicBodyViolation(t *testing.T) {
 	checked := selfhost.CheckSourceStructured([]byte(`#[intrinsic]
 pub fn violator() -> Int { 42 }
@@ -262,6 +293,26 @@ pub fn violator() -> Int { 42 }
 	}
 	if got := checked.Summary.ErrorsByContext["E0773"]; got != 1 {
 		t.Fatalf("summary E0773 count = %d, want 1 (summary=%#v)", got, checked.Summary)
+	}
+}
+
+func TestCheckPackageStructuredASTNativeRunsNoAllocGate(t *testing.T) {
+	input := canonicalSelfhostInput(t, []byte(`#[no_alloc]
+fn main() {
+    let items = [1]
+}
+`), 0)
+	checked, err := selfhost.CheckPackageStructured(selfhost.PackageCheckInput{
+		Files: []selfhost.PackageCheckFile{input},
+	})
+	if err != nil {
+		t.Fatalf("CheckPackageStructured: %v", err)
+	}
+	if got := findDiagnosticCode(checked, "E0772"); got == nil {
+		t.Fatalf("expected E0772, got diagnostics %#v", checked.Diagnostics)
+	}
+	if got := checked.Summary.ErrorsByContext["E0772"]; got != 1 {
+		t.Fatalf("summary E0772 count = %d, want 1 (summary=%#v)", got, checked.Summary)
 	}
 }
 
