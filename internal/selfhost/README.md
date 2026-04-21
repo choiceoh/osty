@@ -33,9 +33,11 @@ That flow:
 
 - regenerates `internal/selfhost/astbridge/generated.go`
 - merges the current toolchain/selfhost source bundle
-- builds a temporary `cmd/osty-native-checker`
 - invokes `cmd/osty-bootstrap-gen` to write `internal/selfhost/generated.go`
-- reapplies the small Go hot-path patches in `gen_selfhost.go`
+- normalizes host-specific source markers and reapplies the small Go-side
+  compatibility/hot-path patches in `gen_selfhost.go`
+- installs the regenerated bridge only if `go build ./internal/selfhost/...`
+  still passes; rejected output is preserved as `generated.go.broken`
 
 `internal/check` then maps the checker output back onto the resolver symbols and
 AST nodes consumed by codegen, LSP, and the rest of the host-side pipeline.
