@@ -244,7 +244,7 @@ var safepointRootChunkSize = llvmSafepointDefaultRootChunkSize()
 // iteration. The runtime still sees LOOP-kind safepoints regularly for
 // cancellation / GC progress; setting the stride to 1 restores the
 // historical "poll every back-edge" behavior.
-var loopSafepointStride int64 = 256
+var loopSafepointStride int64 = 1024
 
 // emitGCSafepoint emits a safepoint poll at an unspecified site — kept
 // for callers that have not been classified yet. New call sites should
