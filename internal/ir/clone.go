@@ -249,6 +249,13 @@ func cloneStructDecl(s *StructDecl) *StructDecl {
 		Pod:              s.Pod,
 		ReprC:            s.ReprC,
 		BuilderDerivable: s.BuilderDerivable,
+		BuiltinSource:    s.BuiltinSource,
+	}
+	if len(s.BuiltinSourceArgs) > 0 {
+		out.BuiltinSourceArgs = make([]Type, len(s.BuiltinSourceArgs))
+		for i, t := range s.BuiltinSourceArgs {
+			out.BuiltinSourceArgs[i] = CloneType(t)
+		}
 	}
 	if len(s.BuilderRequiredFields) > 0 {
 		out.BuilderRequiredFields = append([]string(nil), s.BuilderRequiredFields...)
@@ -276,9 +283,16 @@ func cloneStructDecl(s *StructDecl) *StructDecl {
 
 func cloneEnumDecl(e *EnumDecl) *EnumDecl {
 	out := &EnumDecl{
-		Name:     e.Name,
-		Exported: e.Exported,
-		SpanV:    e.SpanV,
+		Name:          e.Name,
+		Exported:      e.Exported,
+		SpanV:         e.SpanV,
+		BuiltinSource: e.BuiltinSource,
+	}
+	if len(e.BuiltinSourceArgs) > 0 {
+		out.BuiltinSourceArgs = make([]Type, len(e.BuiltinSourceArgs))
+		for i, t := range e.BuiltinSourceArgs {
+			out.BuiltinSourceArgs[i] = CloneType(t)
+		}
 	}
 	if len(e.Variants) > 0 {
 		out.Variants = make([]*Variant, len(e.Variants))

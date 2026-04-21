@@ -496,6 +496,20 @@ func (s *monoState) emitStructSpecialization(rec monoTypeInstance) {
 	clone := cloneStructDecl(rec.structDecl)
 	clone.Name = rec.mangled
 	clone.Generics = nil
+	// Option B Phase 2c: preserve the original surface name + concrete
+	// type-args so downstream stages (LLVM backend, AST bridge) can
+	// re-associate a `_ZTS…` mangled struct back with its surface
+	// Map<String, Int> / Option<T> form for intrinsic dispatch.
+	// Recorded BEFORE SubstituteTypes rewrites typeArgs in place.
+	if isStdlibBuiltinName(rec.structDecl.Name) {
+		clone.BuiltinSource = rec.structDecl.Name
+		if len(rec.typeArgs) > 0 {
+			clone.BuiltinSourceArgs = make([]Type, len(rec.typeArgs))
+			for i, ta := range rec.typeArgs {
+				clone.BuiltinSourceArgs[i] = CloneType(ta)
+			}
+		}
+	}
 	env := buildSubstEnv(rec.structDecl.Generics, rec.typeArgs)
 	SubstituteTypes(clone, env)
 	for _, f := range clone.Fields {
@@ -513,11 +527,34 @@ func (s *monoState) emitStructSpecialization(rec monoTypeInstance) {
 	s.receiverEnvOf[clone.Name] = env
 }
 
+// isStdlibBuiltinName reports whether a name identifies a stdlib
+// built-in generic template that the llvm backend's intrinsic
+// dispatch needs to re-recognize after monomorphization. Kept as a
+// focused whitelist rather than a prefix check so user types that
+// happen to share names with stdlib modules aren't accidentally
+// tagged.
+func isStdlibBuiltinName(name string) bool {
+	switch name {
+	case "Map", "List", "Set", "Option", "Result":
+		return true
+	}
+	return false
+}
+
 // emitEnumSpecialization is the enum counterpart of emitStructSpecialization.
 func (s *monoState) emitEnumSpecialization(rec monoTypeInstance) {
 	clone := cloneEnumDecl(rec.enumDecl)
 	clone.Name = rec.mangled
 	clone.Generics = nil
+	if isStdlibBuiltinName(rec.enumDecl.Name) {
+		clone.BuiltinSource = rec.enumDecl.Name
+		if len(rec.typeArgs) > 0 {
+			clone.BuiltinSourceArgs = make([]Type, len(rec.typeArgs))
+			for i, ta := range rec.typeArgs {
+				clone.BuiltinSourceArgs[i] = CloneType(ta)
+			}
+		}
+	}
 	env := buildSubstEnv(rec.enumDecl.Generics, rec.typeArgs)
 	SubstituteTypes(clone, env)
 	for _, v := range clone.Variants {
