@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(just *)",
+      "Bash(go test *)",
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(go env *)",
+      "Bash(go generate *)",
+      "Bash(gofmt *)",
+      "Bash(gotestsum *)",
+      "Bash(watchexec *)",
+      "Bash(./.bin/osty *)",
+      "Bash(./.osty/bin/*)",
+      "Bash(./scripts/*)"
+    ]
+  }
+}

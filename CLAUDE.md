@@ -111,12 +111,35 @@ source → lexer → parser → resolve → check → (format / lint / ir / back
   - `testdata/spec/negative/reject.osty` — `// === CASE: Exxxx ===` 블록별로 풀 파이프라인 실행 후 해당 코드 발화 검증. 새 CASE 블록은 추가만 하면 자동 참여. 현재 어긋나는 케이스는 `negativeWaivers`에 `"Exxxx/<hint>"` 키로 등록
   - waiver는 갭 트래킹 용도. 컴파일러가 올바른 코드를 발화하기 시작하면 해당 waiver 엔트리는 테스트 실패와 함께 제거 요청
 - 골든 스냅샷: `go test ./internal/diag/ -run TestGolden -update` 후 diff 확인
-- 일상 루프는 `justfile`:
+- 일상 루프는 `justfile` **우선**. 직접 `go test`/`go build` 호출은 특수 상황만.
   - `just front` — 프론트엔드 패키지만 (수 초, 스펙 코퍼스 포함)
   - `just spec` — 스펙 코퍼스만 verbose 출력
   - `just short` — `-short` 플래그로 러닝-헤비 제외
-  - `just gen <TestName>` / `just lsp <TestName>`
-  - `just pipe <path>` — 파이프라인 타이밍
+  - `just full` — 전체 `./...` (push 전 선택 검증)
+  - `just gen <TestName>` / `just lsp <TestName>` / `just diag <TestName>` / `just cmd <TestName>`
+  - `just pipe <path>` / `just pipe-gen <path>` — 파이프라인 타이밍 / 코드젠
+  - `just profile <target>` — `.profiles/{cpu,mem}.pprof` 생성
+  - `just watch-front` / `just watch-short` / `just watch-pipe <target>` — 저장 시 자동 재실행 (watchexec 필요)
+  - `just sum` — gotestsum 설치 시 색상/요약 테스트 출력
+  - `just prepush` — `fmt-check` + `vet` + `repair-check` + `ci` 게이트
+
+## 로컬 개발 도구
+
+신규 dev 환경 부트스트랩 (한 번만):
+
+```sh
+just build-all                                              # .bin/osty + .osty/bin/osty-native-checker
+go install gotest.tools/gotestsum@latest                    # 테스트 출력
+go install github.com/go-delve/delve/cmd/dlv@latest         # 디버거
+winget install --id Casey.Just --scope user                 # just (없으면)
+winget install --id LLVM.LLVM                              # clang/lld/llc (머신 스코프; 최종 링크 단계)
+# watchexec: winget에 없음. https://github.com/watchexec/watchexec/releases 에서
+#           x86_64-pc-windows-msvc.zip 받아 $GOPATH/bin 또는 PATH에 배치
+```
+
+- `osty-native-checker`는 CLI가 `.osty/toolchain/<ver>/` 밑에서 자동 관리함
+- `OSTY_NATIVE_CHECKER_BIN`은 **디버그/override 전용**. 글로벌 셸 프로파일에 고정하지 말 것 (워크트리 간 stale 참조 위험)
+- LLVM은 `osty build --backend llvm` / `osty run`의 최종 링크 단계에서만 필요. 프론트엔드/체커만 만지면 없어도 됨
 
 ## v0.5 baseline 규칙
 
