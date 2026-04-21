@@ -1117,6 +1117,8 @@ pub enum LlvmNativeExprKind {
     LlvmNativeExprBool,
     LlvmNativeExprString,
     LlvmNativeExprIdent,
+    LlvmNativeExprStructLit,
+    LlvmNativeExprField,
     LlvmNativeExprUnary,
     LlvmNativeExprBinary,
     LlvmNativeExprCall,
@@ -1142,6 +1144,7 @@ pub struct LlvmNativeExpr {
     pub text: String,
     pub name: String,
     pub op: String,
+    pub fieldIndex: Int,
     pub boolValue: Bool,
     pub inclusive: Bool,
     pub childExprs: List<LlvmNativeExpr>,
@@ -1169,6 +1172,17 @@ pub struct LlvmNativeParam {
     pub llvmType: String,
 }
 
+pub struct LlvmNativeStructField {
+    pub name: String,
+    pub llvmType: String,
+}
+
+pub struct LlvmNativeStruct {
+    pub name: String,
+    pub llvmType: String,
+    pub fields: List<LlvmNativeStructField>,
+}
+
 pub struct LlvmNativeFunction {
     pub name: String,
     pub returnType: String,
@@ -1179,6 +1193,7 @@ pub struct LlvmNativeFunction {
 pub struct LlvmNativeModule {
     pub sourcePath: String,
     pub target: String,
+    pub structs: List<LlvmNativeStruct>,
     pub functions: List<LlvmNativeFunction>,
 }
 
@@ -1194,10 +1209,18 @@ pub struct LlvmNativeMaybeValue {
 }
 
 pub fn llvmNativeEmitModule(module: LlvmNativeModule) -> String {
+    let mut typeDefs: List<String> = []
     let mut definitions: List<String> = []
     let globalsSeed = llvmEmitter()
     let mut stringGlobals = globalsSeed.stringGlobals
     let mut nextStringId = 0
+    for st in module.structs {
+        let mut fieldTypes: List<String> = []
+        for field in st.fields {
+            fieldTypes.push(field.llvmType)
+        }
+        typeDefs.push(llvmStructTypeDef(st.name, fieldTypes))
+    }
     for function in module.functions {
         let rendered = llvmNativeEmitFunction(function, nextStringId)
         nextStringId = rendered.nextStringId
@@ -1206,7 +1229,7 @@ pub fn llvmNativeEmitModule(module: LlvmNativeModule) -> String {
             stringGlobals.push(global)
         }
     }
-    llvmRenderModuleWithGlobals(module.sourcePath, module.target, stringGlobals, definitions)
+    llvmRenderModuleWithGlobalsAndTypes(module.sourcePath, module.target, typeDefs, stringGlobals, definitions)
 }
 
 pub fn llvmNativeEmitFunction(
@@ -1404,6 +1427,8 @@ fn llvmNativeEvalExpr(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
         },
         LlvmNativeExprString -> llvmStringLiteral(emitter, expr.text),
         LlvmNativeExprIdent -> llvmIdent(emitter, expr.name),
+        LlvmNativeExprStructLit -> llvmNativeEvalStructLit(emitter, expr),
+        LlvmNativeExprField -> llvmNativeEvalField(emitter, expr),
         LlvmNativeExprUnary -> llvmNativeEvalUnary(emitter, expr),
         LlvmNativeExprBinary -> llvmNativeEvalBinary(emitter, expr),
         LlvmNativeExprCall -> llvmNativeEvalCall(emitter, expr),
@@ -1411,6 +1436,25 @@ fn llvmNativeEvalExpr(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
         LlvmNativeExprIf -> llvmNativeEvalIfExpr(emitter, expr),
         _ -> llvmNativeZeroValue(expr.llvmType),
     }
+}
+
+fn llvmNativeEvalStructLit(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    if expr.childExprs.len() == 0 {
+        return llvmStructLiteral(emitter, expr.llvmType, [])
+    }
+    let mut fields = [llvmNativeEvalExpr(emitter, expr.childExprs[0])]
+    for i in 1..expr.childExprs.len() {
+        fields.push(llvmNativeEvalExpr(emitter, expr.childExprs[i]))
+    }
+    llvmStructLiteral(emitter, expr.llvmType, fields)
+}
+
+fn llvmNativeEvalField(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    if expr.childExprs.len() == 0 {
+        return llvmNativeZeroValue(expr.llvmType)
+    }
+    let base = llvmNativeEvalExpr(emitter, expr.childExprs[0])
+    llvmExtractValue(emitter, base, expr.llvmType, expr.fieldIndex)
 }
 
 fn llvmNativeEvalUnary(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
