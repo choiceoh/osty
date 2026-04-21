@@ -930,20 +930,41 @@ func (s *monoState) rewriteGenericMethodCall(c *MethodCall) {
 		// generics. Let the existing non-generic path through.
 		return
 	}
-	if !MonomorphShouldInstantiate(len(c.TypeArgs), len(origMethod.Generics)) {
+	// The checker's Instantiations table records the full call-site
+	// substitution. For generic owners (e.g. `List<T>.fold<A>` called
+	// from inside a `List<String>` body) the recorded args include the
+	// owner-level prefix (`[String, A]`) while the method decl carries
+	// only method-local generics (`[A]`). The receiver-level env is
+	// already applied via receiverEnvOf when the clone is emitted, so
+	// the trailing `len(method.Generics)` entries are what this spec
+	// actually needs. Only trim when the shape matches
+	// `owner.Generics + method.Generics` — a raw mismatch (pure user
+	// turbofish error) still fails the arity check below.
+	methodTypeArgs := c.TypeArgs
+	ownerGenericCount := 0
+	switch {
+	case origStruct != nil:
+		ownerGenericCount = len(origStruct.Generics)
+	case origEnum != nil:
+		ownerGenericCount = len(origEnum.Generics)
+	}
+	if ownerGenericCount > 0 && len(methodTypeArgs) == ownerGenericCount+len(origMethod.Generics) {
+		methodTypeArgs = methodTypeArgs[ownerGenericCount:]
+	}
+	if !MonomorphShouldInstantiate(len(methodTypeArgs), len(origMethod.Generics)) {
 		s.addErr("monomorph: arity mismatch for method %s.%s: %d type args vs %d generics",
 			ownerMangled, origMethod.Name, len(c.TypeArgs), len(origMethod.Generics))
 		return
 	}
-	for i, ta := range c.TypeArgs {
+	for i, ta := range methodTypeArgs {
 		if containsTypeVar(ta) {
 			s.addErr("monomorph: type arg %d of method %s.%s still contains a type variable (%s)",
 				i, ownerMangled, origMethod.Name, typeString(ta))
 			return
 		}
 	}
-	typeArgCodes := make([]string, len(c.TypeArgs))
-	for i, ta := range c.TypeArgs {
+	typeArgCodes := make([]string, len(methodTypeArgs))
+	for i, ta := range methodTypeArgs {
 		typeArgCodes[i] = typeCodeOf(ta, s.pkg)
 	}
 	key := MonomorphMethodDedupeKey(ownerMangled, origMethod.Name, typeArgCodes)
@@ -957,7 +978,7 @@ func (s *monoState) rewriteGenericMethodCall(c *MethodCall) {
 			ownerMangled:      ownerMangled,
 			origMethod:        origMethod,
 			mangledMethodName: mangledMethod,
-			methodEnv:         buildSubstEnv(origMethod.Generics, c.TypeArgs),
+			methodEnv:         buildSubstEnv(origMethod.Generics, methodTypeArgs),
 		})
 	}
 	_ = receiverEnv // receiverEnv is resolved at emit time via receiverEnvOf
