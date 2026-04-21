@@ -186,14 +186,13 @@ $ go run ./cmd/osty-vs-go --research
   3 run(s) since the champion was set (run #3 -> run #6)
 ```
 
-### `--loop` — continuous feedback
+### `--loop` — continuous feedback (human-driven)
 
 Runs forever until Ctrl-C, sleeping `--loop <dur>` between sweeps.
 Edit the Osty compiler / runtime in another terminal; every tick
-re-measures, prints the vs-best verdict, and appends to history.
-Pairs naturally with an AI coding agent as the outer loop: the agent
-proposes a compiler tweak, you or CI run the sweep, the verdict
-decides whether to keep the edit.
+re-measures, prints the vs-best verdict, and appends to history. Good
+for a tight edit → measure → decide loop where you're the one making
+changes.
 
 ```sh
 go run ./cmd/osty-vs-go --loop 5m --benchtime 500ms --label "inline-probe"
@@ -202,6 +201,68 @@ go run ./cmd/osty-vs-go --loop 5m --benchtime 500ms --label "inline-probe"
 # run #8 — score 17.183 … -> NEW BEST (-0.4%)
 # …
 ```
+
+### `--autoresearch` — fully autonomous (closest to the original)
+
+This is the closest port of Karpathy's actual loop: the caller plugs
+a **mutator** (any executable that edits the working tree), the
+orchestrator runs mutate → bench → keep-or-revert without asking.
+
+```sh
+just build
+go run ./cmd/osty-vs-go \
+  --autoresearch \
+  --mutator 'benchmarks/osty-vs-go/mutators/noop.sh' \
+  --max-experiments 50 \
+  --benchtime 500ms
+```
+
+Per iteration:
+
+1. Run the mutator command. Nonzero exit → wipe partial writes
+   (`git reset --hard HEAD && git clean -fd`) and skip the bench.
+2. Run the bench sweep.
+3. `decideKeep`: strictly-lower score than the session champion wins
+   ("KEPT" → `git commit`). Ties, regressions, and within-noise all
+   lose ("REVERTED" → `git reset --hard HEAD`). The autonomous loop
+   biases toward revert because accumulating drift is a worse failure
+   than rejecting an indistinguishable 0.5% win.
+
+Required flags:
+
+- `--mutator '<cmd>'` — any shell command that modifies the tree.
+  Mutators are stateless: the same command runs every iteration and
+  sees the current champion at HEAD, so they can branch off the
+  accepted improvements as the session progresses.
+- `--max-experiments N` — mandatory budget so a hung mutator can't
+  burn the machine unattended.
+
+Safety rails:
+
+- Refuses to start with a dirty tree (`git stash` or commit first).
+- Auto-checks out a fresh `autoresearch/<YYYYMMDD-HHMMSS>` branch;
+  your source branch is never modified in place.
+- `git reset --hard` only reaches the autoresearch branch's own HEAD —
+  it cannot touch pre-session commits on your source branch.
+- SIGINT / SIGTERM drain between iterations; a final summary prints
+  the exact `git checkout` to return to your original branch.
+
+Mutators go in [`mutators/`](mutators/); the bundled `noop.sh` is a
+wiring smoke (no real mutation). Drop in a real one:
+
+- **Hand-written random-tweak**: shell script that rewrites one
+  constant in a codegen file. No LLM needed, but you'd manually
+  enumerate what to try.
+- **LLM agent**: `openai/codex`, `claude` CLI, or your own wrapper
+  that reads the current HEAD + the last verdict (via
+  `.osty-vs-go-history.jsonl`) and proposes a patch. Exit 0 on
+  successful patch, nonzero on "can't decide" so the orchestrator
+  skips.
+
+This maps 1:1 to the `autoresearch` loop in
+[karpathy/autoresearch](https://github.com/karpathy/autoresearch) —
+the mutator is the component Karpathy uses an LLM for. The keep/
+revert + fixed time budget + single metric are all preserved.
 
 ### Caveats
 
