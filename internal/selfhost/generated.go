@@ -37552,10 +37552,16 @@ func patKindOf(n *AstNode) int {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16288:1
 func armGuarded(cx *ElabCx, armIdx int) bool {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16289:5
+	// `opParseMatchStmt` stores the body in `arm.right` and the guard
+	// expression index in `arm.children[0]` (-1 if absent); the earlier
+	// `arm.right >= 0` check therefore flagged every arm as guarded,
+	// disabling exhaustiveness entirely. Mirrored from
+	// toolchain/elab.osty pending a regen fix.
 	arm := astArenaNodeAt(cx.ast.arena, armIdx)
-	_ = arm
-	return arm.right >= 0
+	if checkIntListLenHelper(arm.children) == 0 {
+		return false
+	}
+	return checkIntListAt(arm.children, 0) >= 0
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16298:1
