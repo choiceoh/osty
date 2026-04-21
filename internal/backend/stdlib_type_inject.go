@@ -207,16 +207,166 @@ func lowerStdlibTypesFromRegistry(reg *stdlib.Registry) map[string]ir.Decl {
 			switch x := d.(type) {
 			case *ir.StructDecl:
 				if len(x.Generics) > 0 && isInjectableTypeName(x.Name) {
-					out[x.Name] = x
+					out[x.Name] = stripMethodsForInjection(x)
 				}
 			case *ir.EnumDecl:
 				if len(x.Generics) > 0 && isInjectableTypeName(x.Name) {
-					out[x.Name] = x
+					out[x.Name] = stripMethodsForInjection(x)
 				}
 			}
 		}
 	}
 	return out
+}
+
+// stripMethodsForInjection drops methods whose signatures would drive
+// monomorphization into an unbounded spec chain. The culprit shape is
+// any `owner<X>` reference in a param or return type where X is not
+// exactly the owner's own generic parameters (as TypeVars) — once X
+// differs, specializing `owner<Foo>` queues `owner<F(Foo)>`, whose own
+// method queues `owner<F(F(Foo))>`, ad infinitum.
+//
+// Canonical triggers from stdlib collections:
+//
+//   - `List<T>.chunked(self) -> List<List<T>>`
+//     Args [List<T>] ≠ [T] → strip.
+//   - `List<T>.enumerate(self) -> List<(Int, T)>`
+//     Args [(Int, T)] ≠ [T] → strip.
+//   - `List<T>.windowed(...) -> List<List<T>>`, same shape as chunked.
+//
+// Safe shapes: methods whose every `owner<...>` occurrence has Args
+// that match the owner's declared generics verbatim (TypeVars by name
+// in order) — `filter(pred) -> List<T>`, `concat(other: List<T>) ->
+// List<T>`, `len() -> Int`, `Map.containsKey(k: K) -> Bool`, … all
+// survive, so the backend's bodied-helper specialization path keeps
+// working for them.
+//
+// Generic methods (`List<T>.map<R>`) are preserved here unchanged;
+// monomorphize's `keepNonGenericMethods` skips generic methods anyway,
+// deferring their specialization to actual call sites.
+//
+// Making monomorphize demand-driven per method would let the skipped
+// methods come back; that's a larger refactor than required to unblock
+// stdlib-body injection for user code that does not touch the
+// structurally-recursive helpers.
+func stripMethodsForInjection(d ir.Decl) ir.Decl {
+	switch x := d.(type) {
+	case *ir.StructDecl:
+		x.Methods = filterMethodsAvoidingOwnerRecursion(x.Name, genericParamNames(x.Generics), x.Methods)
+	case *ir.EnumDecl:
+		x.Methods = filterMethodsAvoidingOwnerRecursion(x.Name, genericParamNames(x.Generics), x.Methods)
+	}
+	return d
+}
+
+func genericParamNames(params []*ir.TypeParam) []string {
+	if len(params) == 0 {
+		return nil
+	}
+	out := make([]string, len(params))
+	for i, p := range params {
+		if p != nil {
+			out[i] = p.Name
+		}
+	}
+	return out
+}
+
+// filterMethodsAvoidingOwnerRecursion drops methods whose param or
+// return types reintroduce owner with modified type args, and drops
+// body-less intrinsic declarations (`fn len(self) -> Int` with no
+// body) since their specializations would fail ir.Validate ("nil
+// Body") — those intrinsics are lowered by the backend directly
+// (`osty_rt_list_len` et al.), not from an injected template. The
+// returned slice preserves every safe method in its original order.
+func filterMethodsAvoidingOwnerRecursion(owner string, generics []string, methods []*ir.FnDecl) []*ir.FnDecl {
+	if len(methods) == 0 {
+		return methods
+	}
+	out := methods[:0:0]
+	for _, m := range methods {
+		if m == nil {
+			continue
+		}
+		if m.Body == nil {
+			continue
+		}
+		// Generic methods (`List<T>.map<R>`) are preserved as templates
+		// by keepNonGenericMethods and only specialized at actual call
+		// sites, so their signatures never drive eager recursion. Only
+		// non-generic methods on the owner participate in the eager
+		// sig-scanning path, so the recursion filter runs against them.
+		if len(m.Generics) == 0 && methodRecursesOwner(owner, generics, m) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// methodRecursesOwner reports whether any param or return type of m
+// contains a `owner<...>` occurrence whose type args are not the
+// identity form `<T, U, …>` for owner's declared generics.
+func methodRecursesOwner(owner string, generics []string, m *ir.FnDecl) bool {
+	if m == nil {
+		return false
+	}
+	for _, p := range m.Params {
+		if p != nil && typeRecursesOwner(p.Type, owner, generics) {
+			return true
+		}
+	}
+	return typeRecursesOwner(m.Return, owner, generics)
+}
+
+func typeRecursesOwner(t ir.Type, owner string, generics []string) bool {
+	switch x := t.(type) {
+	case *ir.NamedType:
+		if x.Name == owner && !argsAreIdentityGenerics(x.Args, generics) {
+			return true
+		}
+		for _, a := range x.Args {
+			if typeRecursesOwner(a, owner, generics) {
+				return true
+			}
+		}
+		return false
+	case *ir.OptionalType:
+		return typeRecursesOwner(x.Inner, owner, generics)
+	case *ir.TupleType:
+		for _, e := range x.Elems {
+			if typeRecursesOwner(e, owner, generics) {
+				return true
+			}
+		}
+		return false
+	case *ir.FnType:
+		for _, p := range x.Params {
+			if typeRecursesOwner(p, owner, generics) {
+				return true
+			}
+		}
+		return typeRecursesOwner(x.Return, owner, generics)
+	}
+	return false
+}
+
+// argsAreIdentityGenerics reports whether args is exactly the identity
+// form for the owner's declared generics: each Args[i] is a TypeVar
+// whose Name matches generics[i]. A match means the `owner<...>`
+// reference is just the method's self-type, which specializes to the
+// already-queued concrete owner and terminates.
+func argsAreIdentityGenerics(args []ir.Type, generics []string) bool {
+	if len(args) != len(generics) {
+		return false
+	}
+	for i, a := range args {
+		tv, ok := a.(*ir.TypeVar)
+		if !ok || tv.Name != generics[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // lowerStdlibModule runs ir.Lower on one stdlib module's file, reusing
