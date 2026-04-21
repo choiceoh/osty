@@ -82,6 +82,14 @@ type Diagnostic struct {
 	// A tool (LSP quick-fix, --fix flag) may apply these automatically when
 	// MachineApplicable is true.
 	Suggestions []Suggestion
+	// File is the filesystem path of the source file that generated this
+	// diagnostic, when known. Multi-file package walkers (resolver, type
+	// checker, lint) stamp this so the renderer can route each diagnostic
+	// to the right file's source snippet even though `token.Pos` itself
+	// does not carry file identity. Empty when the diagnostic predates
+	// package-wide routing (single-file CLI paths leave it unset and the
+	// renderer falls back to the formatter's Filename).
+	File string
 }
 
 // Suggestion is a structured fix: replace the text covered by Span with
@@ -179,6 +187,27 @@ func (b *Builder) Note(text string) *Builder {
 
 // Hint sets the suggestion line.
 func (b *Builder) Hint(text string) *Builder { b.d.Hint = text; return b }
+
+// File stamps the owning source file path. Used by multi-file package
+// walkers so the renderer can route the diagnostic to the right source
+// snippet even though `token.Pos` does not carry file identity.
+func (b *Builder) File(path string) *Builder { b.d.File = path; return b }
+
+// StampFile sets d.File on every diagnostic in ds that does not yet
+// have one. Call sites that know the file context (per-file checker
+// passes, lint walkers) use this so the renderer can route each
+// diagnostic to its owning source snippet.
+func StampFile(ds []*Diagnostic, path string) {
+	if path == "" {
+		return
+	}
+	for _, d := range ds {
+		if d == nil || d.File != "" {
+			continue
+		}
+		d.File = path
+	}
+}
 
 // Suggest attaches a structured fix: replace the text at span with
 // replacement, labelled for the user. MachineApplicable=true marks it

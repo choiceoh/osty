@@ -27,13 +27,43 @@ import (
 // Color is enabled when Color is true; the ANSI escapes are still safe to
 // pipe through `less -R`.
 type Formatter struct {
-	// Filename is shown in the location header.
+	// Filename is shown in the location header when a diagnostic has no
+	// File of its own. Multi-file renderers can leave this empty and
+	// rely on d.File + Sources for accurate routing.
 	Filename string
 	// Source is the file's raw bytes; used to slice the line for the
-	// snippet. May be nil — snippets will be omitted.
+	// snippet when the diagnostic has no File or File matches Filename.
+	// May be nil — snippets will be omitted in that case.
 	Source []byte
+	// Sources maps filesystem paths to their raw bytes. When a
+	// diagnostic carries d.File, the renderer uses this map to pull the
+	// right file's source for the snippet. Empty/nil falls back to
+	// Source + Filename, matching the single-file rendering path.
+	Sources map[string][]byte
 	// Color enables ANSI escape codes for severity, code, and caret.
 	Color bool
+}
+
+// sourceFor returns the bytes the renderer should use when slicing
+// snippets for d. When d.File is set and present in Sources the matching
+// bytes are returned; otherwise Source is returned as-is. The second
+// return value is the filename to display in the location header.
+func (f *Formatter) sourceFor(d *Diagnostic) ([]byte, string) {
+	if d != nil && d.File != "" {
+		if f.Sources != nil {
+			if src, ok := f.Sources[d.File]; ok {
+				return src, d.File
+			}
+		}
+		if d.File == f.Filename {
+			return f.Source, f.Filename
+		}
+		// d.File is set but we don't have the source bytes — show the
+		// header with the right path and skip the snippet rather than
+		// quoting the wrong file's content.
+		return nil, d.File
+	}
+	return f.Source, f.Filename
 }
 
 // Format renders a single diagnostic to a string.
@@ -104,20 +134,23 @@ func (f *Formatter) write(b *bytes.Buffer, d *Diagnostic) {
 	}
 	fmt.Fprintf(b, "%s: %s\n", sev, f.col(ansiBold, d.Message))
 
-	// Location header.
+	// Location header — pulls file path and bytes via sourceFor so
+	// multi-file renderers (pipeline, workspace) render each diagnostic
+	// against its own file even when they share a single Formatter.
 	pos := d.PrimaryPos()
+	src, fname := f.sourceFor(d)
 	if pos.Line > 0 {
-		fname := f.Filename
-		if fname == "" {
-			fname = "<input>"
+		display := fname
+		if display == "" {
+			display = "<input>"
 		}
 		fmt.Fprintf(b, " %s %s:%d:%d\n",
 			f.col(ansiBlue+ansiBold, "-->"),
-			fname, pos.Line, pos.Column)
+			display, pos.Line, pos.Column)
 	}
 
 	// Source snippet with caret(s).
-	f.writeSnippet(b, d)
+	f.writeSnippet(b, d, src)
 
 	// Notes.
 	for _, note := range d.Notes {
@@ -193,8 +226,8 @@ func (f *Formatter) renderReplacement(sug Suggestion) string {
 // separate source lines.
 //
 // If the source isn't available, the snippet is omitted.
-func (f *Formatter) writeSnippet(b *bytes.Buffer, d *Diagnostic) {
-	if len(d.Spans) == 0 || f.Source == nil {
+func (f *Formatter) writeSnippet(b *bytes.Buffer, d *Diagnostic, src []byte) {
+	if len(d.Spans) == 0 || src == nil {
 		return
 	}
 
@@ -239,11 +272,11 @@ func (f *Formatter) writeSnippet(b *bytes.Buffer, d *Diagnostic) {
 			// Visual separator between non-contiguous source lines.
 			fmt.Fprintf(b, " %s %s\n", gutterPad, f.col(ansiBlue+ansiBold, "..."))
 		}
-		lineStart, lineEnd := lineBounds(f.Source, line)
+		lineStart, lineEnd := lineBounds(src, line)
 		if lineStart < 0 {
 			continue
 		}
-		lineText := string(f.Source[lineStart:lineEnd])
+		lineText := string(src[lineStart:lineEnd])
 		lineNum := f.col(ansiBlue+ansiBold, padInt(line, gutterW))
 		fmt.Fprintf(b, " %s %s %s\n", lineNum, pipe, lineText)
 
