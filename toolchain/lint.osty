@@ -161,6 +161,7 @@ pub fn selfLintResolvedAstSource(
     let mut report = emptySelfLintReport(frontLexDiagnosticCount(stream) + astFileErrorCount(file))
     report.resolveErrors = selfResolveDiagnosticCount(resolved)
     report = selfLintAstFile(file, resolved, report)
+    report = selfLintAstCheckUnusedMembers(file, report)
     selfLintAstCheckMissingDocs(file, stream, report)
 }
 
@@ -2475,4 +2476,259 @@ fn selfLintIsDeclPrefixTokenKind(kind: FrontTokenKind) -> Bool {
         || kind == FrontNewline
         || kind == FrontLParen
         || kind == FrontRParen
+}
+
+/// SelfLintMemberAccess is the name-level index of every field read and
+/// method call reachable from the file's top-level declarations. It drives
+/// L0005 (unused field) and L0006 (unused method) — a conservative,
+/// name-only heuristic mirroring the Go-side linter: two structs sharing a
+/// field name are both treated as used if either is referenced, and
+/// reflection / FFI accesses are not modelled.
+struct SelfLintMemberAccess {
+    fields: List<String>,
+    methods: List<String>,
+}
+
+fn selfLintEmptyMemberAccess() -> SelfLintMemberAccess {
+    SelfLintMemberAccess { fields: [], methods: [] }
+}
+
+fn selfLintMemberAccessAddField(
+    acc: SelfLintMemberAccess,
+    name: String,
+) -> SelfLintMemberAccess {
+    if name == "" {
+        return acc
+    }
+    if selfLintStringListContains(acc.fields, name) {
+        return acc
+    }
+    let mut out = acc
+    out.fields.push(name)
+    out
+}
+
+fn selfLintMemberAccessAddMethod(
+    acc: SelfLintMemberAccess,
+    name: String,
+) -> SelfLintMemberAccess {
+    if name == "" {
+        return acc
+    }
+    if selfLintStringListContains(acc.methods, name) {
+        return acc
+    }
+    let mut out = acc
+    out.methods.push(name)
+    out
+}
+
+/// selfLintCollectMemberAccess walks every top-level declaration in `file`
+/// and records the names of fields read and methods called. The walk
+/// descends into function bodies, struct/enum/interface method bodies, and
+/// top-level `let` initializers.
+fn selfLintCollectMemberAccess(file: AstFile) -> SelfLintMemberAccess {
+    let mut out = selfLintEmptyMemberAccess()
+    for declIdx in file.arena.decls {
+        out = selfLintMemberAccessDecl(file, declIdx, out)
+    }
+    out
+}
+
+fn selfLintMemberAccessDecl(
+    file: AstFile,
+    idx: Int,
+    acc: SelfLintMemberAccess,
+) -> SelfLintMemberAccess {
+    if idx < 0 {
+        return acc
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNFnDecl {
+        return selfLintMemberAccessAny(file, node.right, acc)
+    }
+    if node.kind == AstNStructDecl
+        || node.kind == AstNEnumDecl
+        || node.kind == AstNInterfaceDecl {
+        let mut out = acc
+        for memberIdx in node.children {
+            let member = selfLintAstNode(file, memberIdx)
+            if member.kind == AstNFnDecl && member.right >= 0 {
+                out = selfLintMemberAccessAny(file, member.right, out)
+            }
+        }
+        return out
+    }
+    if node.kind == AstNLet && node.right >= 0 {
+        return selfLintMemberAccessAny(file, node.right, acc)
+    }
+    acc
+}
+
+/// selfLintMemberAccessAny is the recursive walker that records member
+/// references. It special-cases a handful of node shapes so method calls
+/// (`x.m(args)`) do not also get counted as field reads on `m`, and so
+/// struct literal / struct pattern field names are recorded without
+/// double-walking the surrounding tuple helpers.
+fn selfLintMemberAccessAny(
+    file: AstFile,
+    idx: Int,
+    acc: SelfLintMemberAccess,
+) -> SelfLintMemberAccess {
+    if idx < 0 {
+        return acc
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = acc
+    if node.kind == AstNCall {
+        if node.left >= 0 {
+            let callee = selfLintAstNode(file, node.left)
+            if callee.kind == AstNField {
+                out = selfLintMemberAccessAddMethod(out, callee.text)
+                out = selfLintMemberAccessAny(file, callee.left, out)
+            } else {
+                out = selfLintMemberAccessAny(file, node.left, out)
+            }
+        }
+        for child in node.children {
+            out = selfLintMemberAccessAny(file, child, out)
+        }
+        return out
+    }
+    if node.kind == AstNField {
+        out = selfLintMemberAccessAddField(out, node.text)
+        return selfLintMemberAccessAny(file, node.left, out)
+    }
+    if node.kind == AstNStructLit {
+        out = selfLintMemberAccessAny(file, node.left, out)
+        out = selfLintMemberAccessAny(file, node.right, out)
+        for child in node.children {
+            let fNode = selfLintAstNode(file, child)
+            if fNode.kind == AstNField_ {
+                out = selfLintMemberAccessAddField(out, fNode.text)
+                out = selfLintMemberAccessAny(file, fNode.left, out)
+            } else {
+                out = selfLintMemberAccessAny(file, child, out)
+            }
+        }
+        return out
+    }
+    if node.kind == AstNPattern && node.extra == selfLintAstPatternFieldKind() {
+        out = selfLintMemberAccessAddField(out, node.text)
+        return selfLintMemberAccessAny(file, node.left, out)
+    }
+    out = selfLintMemberAccessAny(file, node.left, out)
+    out = selfLintMemberAccessAny(file, node.right, out)
+    for child in node.children {
+        out = selfLintMemberAccessAny(file, child, out)
+    }
+    for child in node.children2 {
+        out = selfLintMemberAccessAny(file, child, out)
+    }
+    out
+}
+
+/// selfLintAstCheckUnusedMembers emits L0005 for non-pub struct fields and
+/// L0006 for non-pub struct/enum methods whose names never appear anywhere
+/// in the file's member-access index. Public types and public members are
+/// exempt (external consumers are assumed).
+fn selfLintAstCheckUnusedMembers(
+    file: AstFile,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let access = selfLintCollectMemberAccess(file)
+    let mut out = report
+    for declIdx in file.arena.decls {
+        out = selfLintAstCheckUnusedMembersDecl(file, declIdx, access, out)
+    }
+    out
+}
+
+fn selfLintAstCheckUnusedMembersDecl(
+    file: AstFile,
+    idx: Int,
+    access: SelfLintMemberAccess,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let typePub = node.flags == 1
+    let mut out = report
+    if node.kind == AstNStructDecl {
+        for memberIdx in node.children {
+            let member = selfLintAstNode(file, memberIdx)
+            if member.kind == AstNField_ {
+                out = selfLintMaybeEmitUnusedField(member, memberIdx, typePub, access, out)
+            } else if member.kind == AstNFnDecl {
+                out = selfLintMaybeEmitUnusedMethod(member, memberIdx, typePub, access, out)
+            }
+        }
+        return out
+    }
+    if node.kind == AstNEnumDecl {
+        for memberIdx in node.children {
+            let member = selfLintAstNode(file, memberIdx)
+            if member.kind == AstNFnDecl {
+                out = selfLintMaybeEmitUnusedMethod(member, memberIdx, typePub, access, out)
+            }
+        }
+        return out
+    }
+    out
+}
+
+fn selfLintMaybeEmitUnusedField(
+    member: AstNode,
+    idx: Int,
+    typePub: Bool,
+    access: SelfLintMemberAccess,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if member.text == "" || selfLintIsIntentionalDiscard(member.text) {
+        return report
+    }
+    if typePub || member.flags == 1 {
+        return report
+    }
+    if selfLintStringListContains(access.fields, member.text) {
+        return report
+    }
+    selfLintEmitAtNode(
+        report,
+        "L0005",
+        "field is never read",
+        member.text,
+        member.start,
+        member.end,
+        idx,
+    )
+}
+
+fn selfLintMaybeEmitUnusedMethod(
+    member: AstNode,
+    idx: Int,
+    typePub: Bool,
+    access: SelfLintMemberAccess,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if member.text == "" || selfLintIsIntentionalDiscard(member.text) {
+        return report
+    }
+    if typePub || member.flags == 1 {
+        return report
+    }
+    if selfLintStringListContains(access.methods, member.text) {
+        return report
+    }
+    selfLintEmitAtNode(
+        report,
+        "L0006",
+        "method is never called",
+        member.text,
+        member.start,
+        member.end,
+        idx,
+    )
 }
