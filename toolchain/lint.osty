@@ -841,7 +841,7 @@ fn selfLintAstCheckFunctionScopes(
         let paramNames = selfLintAstParamNames(file, param)
         for item in paramNames {
             if !(selfLintIsIntentionalDiscard(item.name)) && item.name != "self" {
-                if selfLintStringListContains(names, item.name) {
+                if listContainsString(names, item.name) {
                     out = selfLintEmitAtNode(
                         out,
                         "L0010",
@@ -971,7 +971,7 @@ fn selfLintAstCheckExprScopes(
             let paramNames = selfLintAstParamNames(file, param)
             for item in paramNames {
                 if !(selfLintIsIntentionalDiscard(item.name)) {
-                    if selfLintStringListContains(closureNames, item.name) {
+                    if listContainsString(closureNames, item.name) {
                         out = selfLintEmitAtNode(
                             out,
                             "L0010",
@@ -1010,7 +1010,7 @@ fn selfLintAstCheckPatternShadowing(
     let mut local = selfLintStringListCopy(visible)
     for item in names {
         if !(selfLintIsIntentionalDiscard(item.name)) {
-            if selfLintStringListContains(local, item.name) {
+            if listContainsString(local, item.name) {
                 out = selfLintEmitAtNode(
                     out,
                     "L0010",
@@ -2435,15 +2435,6 @@ fn selfLintMutatingMethodName(name: String) -> Bool {
     name == "push" || name == "pop" || name == "insert" || name == "remove" || name == "clear" || name == "close" || name == "shuffle"
 }
 
-fn selfLintStringListContains(items: List<String>, target: String) -> Bool {
-    for item in items {
-        if item == target {
-            return true
-        }
-    }
-    false
-}
-
 fn selfLintIsIntentionalDiscard(name: String) -> Bool {
     name == "_" || strings.hasPrefix(name, "_")
 }
@@ -2615,7 +2606,7 @@ fn selfLintMemberAccessAddField(
     if name == "" {
         return acc
     }
-    if selfLintStringListContains(acc.fields, name) {
+    if listContainsString(acc.fields, name) {
         return acc
     }
     let mut out = acc
@@ -2630,7 +2621,7 @@ fn selfLintMemberAccessAddMethod(
     if name == "" {
         return acc
     }
-    if selfLintStringListContains(acc.methods, name) {
+    if listContainsString(acc.methods, name) {
         return acc
     }
     let mut out = acc
@@ -2828,7 +2819,7 @@ fn selfLintMaybeEmitUnusedField(
     if typePub || member.flags == 1 {
         return report
     }
-    if selfLintStringListContains(access.fields, member.text) {
+    if listContainsString(access.fields, member.text) {
         return report
     }
     selfLintEmitAtNode(
@@ -2855,7 +2846,7 @@ fn selfLintMaybeEmitUnusedMethod(
     if typePub || member.flags == 1 {
         return report
     }
-    if selfLintStringListContains(access.methods, member.text) {
+    if listContainsString(access.methods, member.text) {
         return report
     }
     selfLintEmitAtNode(
@@ -3412,7 +3403,7 @@ fn selfLintDiagIsAllowed(diag: SelfLintDiagnostic, scopes: List<SelfLintAllowSco
         if scope.wildcard {
             return true
         }
-        if selfLintStringListContains(scope.codes, diag.code) {
+        if listContainsString(scope.codes, diag.code) {
             return true
         }
     }

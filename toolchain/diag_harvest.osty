@@ -47,15 +47,6 @@ pub fn diagHarvestLintCodes(source: String) -> List<String> {
     codes
 }
 
-fn diagHarvestContains(codes: List<String>, needle: String) -> Bool {
-    for c in codes {
-        if c == needle {
-            return true
-        }
-    }
-    false
-}
-
 /// diagHarvestRun routes a single case through the correct self-host
 /// phase and records what fired. Cases tagged `phase: "skip"` return
 /// with `skipped: true` and no codes — the test scopes out
@@ -79,7 +70,7 @@ pub fn diagHarvestRun(case: DiagHarvestCase) -> DiagHarvestOutcome {
     }
     DiagHarvestOutcome {
         expectedCode: case.code,
-        matched: diagHarvestContains(codes, case.code),
+        matched: listContainsString(codes, case.code),
         emittedCodes: codes,
         phase: case.phase,
         skipped: false,
