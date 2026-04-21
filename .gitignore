@@ -1,6 +1,9 @@
 # Osty build/test output
+.bin/
 .osty/
 **/.osty/
+.profiles/
+.direnv/
 
 # VS Code extension dependencies and packages
 node_modules/
