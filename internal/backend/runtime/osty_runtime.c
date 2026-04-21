@@ -1552,6 +1552,14 @@ static void osty_rt_map_get_or_abort_raw(void *raw_map, const void *key, void *o
     memcpy(out_value, osty_rt_map_value_slot(map, index), map->value_size);
 }
 
+int64_t osty_rt_map_len(void *raw_map) {
+    osty_rt_map *map = (osty_rt_map *)raw_map;
+    if (map == NULL) {
+        osty_rt_abort("map is null");
+    }
+    return map->len;
+}
+
 void *osty_rt_map_keys(void *raw_map) {
     osty_rt_map *map = (osty_rt_map *)raw_map;
     void *out = osty_rt_list_new();

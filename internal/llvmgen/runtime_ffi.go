@@ -359,6 +359,10 @@ func mapRuntimeKeysSymbol() string {
 	return llvmMapRuntimeKeysSymbol()
 }
 
+func mapRuntimeLenSymbol() string {
+	return llvmMapRuntimeLenSymbol()
+}
+
 func setRuntimeNewSymbol() string {
 	return llvmSetRuntimeNewSymbol()
 }
