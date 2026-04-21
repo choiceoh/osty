@@ -127,6 +127,53 @@ fn main() {}
 	}
 }
 
+func TestNativeBoundaryExecRecognizesBytesIntrinsics(t *testing.T) {
+	src := []byte(`fn main() {
+    let a: Byte = 65
+    let b: Byte = 66
+    let data = Bytes.from([a, b])
+    let size = data.len()
+    let first = data.get(0)
+    let sameSize = Bytes.len(data)
+    let second = Bytes.get(data, 1)
+}
+`)
+	file, res := parseResolvedFile(t, src)
+	mainDecl := file.Decls[0].(*ast.FnDecl)
+	dataLet := mainDecl.Body.Stmts[2].(*ast.LetStmt)
+	sizeLet := mainDecl.Body.Stmts[3].(*ast.LetStmt)
+	firstLet := mainDecl.Body.Stmts[4].(*ast.LetStmt)
+	sameSizeLet := mainDecl.Body.Stmts[5].(*ast.LetStmt)
+	secondLet := mainDecl.Body.Stmts[6].(*ast.LetStmt)
+
+	bin := buildRepoNativeChecker(t)
+	t.Setenv(nativeCheckerEnv, bin)
+
+	oldFactory := nativeCheckerFactory
+	nativeCheckerFactory = defaultNativeChecker
+	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
+
+	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	if len(chk.Diags) != 0 {
+		t.Fatalf("expected no diagnostics, got %v", chk.Diags)
+	}
+	if got := chk.LetTypes[dataLet]; got == nil || got.String() != "Bytes" {
+		t.Fatalf("data type = %v, want Bytes", got)
+	}
+	if got := chk.LetTypes[sizeLet]; got == nil || got.String() != "Int" {
+		t.Fatalf("size type = %v, want Int", got)
+	}
+	if got := chk.LetTypes[firstLet]; got == nil || got.String() != "Byte?" {
+		t.Fatalf("first type = %v, want Byte?", got)
+	}
+	if got := chk.LetTypes[sameSizeLet]; got == nil || got.String() != "Int" {
+		t.Fatalf("sameSize type = %v, want Int", got)
+	}
+	if got := chk.LetTypes[secondLet]; got == nil || got.String() != "Byte?" {
+		t.Fatalf("second type = %v, want Byte?", got)
+	}
+}
+
 func TestNativeBoundaryExecChecksStructuredPackageInput(t *testing.T) {
 	fileA := []byte("fn helper() -> Int { 1 }\n")
 	fileB := []byte("fn main() { let value = helper() }\n")
