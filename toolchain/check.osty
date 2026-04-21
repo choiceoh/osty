@@ -131,6 +131,7 @@ pub fn frontendCheckAstStructured(file: AstFile) -> FrontCheckResult {
 pub fn elabFile(cx: ElabCx) {
     collectDecls(cx)
     elaborateDecls(cx)
+    runCheckGates(cx)
 }
 
 fn collectDecls(cx: ElabCx) {

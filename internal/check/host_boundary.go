@@ -86,12 +86,22 @@ type nativeCheckInstantiation struct {
 	End        int      `json:"end"`
 }
 
+type nativeCheckDiagnostic struct {
+	Code     string   `json:"code"`
+	Severity string   `json:"severity"`
+	Message  string   `json:"message"`
+	Start    int      `json:"start"`
+	End      int      `json:"end"`
+	Notes    []string `json:"notes,omitempty"`
+}
+
 type nativeCheckResult struct {
 	Summary        nativeCheckSummary         `json:"summary"`
 	TypedNodes     []nativeCheckedNode        `json:"typedNodes"`
 	Bindings       []nativeCheckedBinding     `json:"bindings"`
 	Symbols        []nativeCheckedSymbol      `json:"symbols"`
 	Instantiations []nativeCheckInstantiation `json:"instantiations"`
+	Diagnostics    []nativeCheckDiagnostic    `json:"diagnostics,omitempty"`
 }
 
 type nativeCheckerExec struct {
@@ -196,6 +206,19 @@ func adaptEmbeddedCheckResult(checked selfhost.CheckResult) nativeCheckResult {
 			Start:      inst.Start,
 			End:        inst.End,
 		})
+	}
+	if len(checked.Diagnostics) > 0 {
+		result.Diagnostics = make([]nativeCheckDiagnostic, 0, len(checked.Diagnostics))
+		for _, d := range checked.Diagnostics {
+			result.Diagnostics = append(result.Diagnostics, nativeCheckDiagnostic{
+				Code:     d.Code,
+				Severity: d.Severity,
+				Message:  d.Message,
+				Start:    d.Start,
+				End:      d.End,
+				Notes:    append([]string(nil), d.Notes...),
+			})
+		}
 	}
 	return result
 }
@@ -539,14 +562,20 @@ func cloneStringIntMap(src map[string]int) map[string]int {
 }
 
 func nativeCheckerDiags(src []byte, checked nativeCheckResult) []*diag.Diagnostic {
+	out := make([]*diag.Diagnostic, 0, len(checked.Diagnostics))
+	for _, d := range checked.Diagnostics {
+		if converted := convertNativeDiag(src, d); converted != nil {
+			out = append(out, converted)
+		}
+	}
 	if checked.Summary.Errors == 0 {
-		return nil
+		return out
 	}
 	label := "native checker reported type errors"
 	if checked.Summary.Errors == 1 {
 		label = "native checker reported a type error"
 	}
-	return []*diag.Diagnostic{
+	out = append(out,
 		diag.New(diag.Error, fmt.Sprintf("%s: %d error(s)", label, checked.Summary.Errors)).
 			Code(diag.CodeTypeMismatch).
 			Primary(fileStartSpan(src), "native checker summary").
@@ -556,7 +585,80 @@ func nativeCheckerDiags(src []byte, checked nativeCheckResult) []*diag.Diagnosti
 				checked.Summary.Assignments,
 			)).
 			Build(),
+	)
+	return out
+}
+
+// convertNativeDiag lifts a per-record structured diagnostic emitted by
+// the Osty-native checker (see toolchain/check_diag.osty) into a
+// `*diag.Diagnostic`. Start/End are byte offsets in the bundled source
+// the native checker consumed; we translate to line/column via a
+// single linear scan of that byte buffer. Position accuracy is
+// best-effort — the bundled source prepends stdlib imports so the
+// reported line/column may diverge from the user's file by a fixed
+// offset. Downstream consumers still get the structured code + message
+// + notes, which is what the migrated gates (§19.6 E0773, ...) rely on.
+func convertNativeDiag(src []byte, d nativeCheckDiagnostic) *diag.Diagnostic {
+	if d.Code == "" && d.Message == "" {
+		return nil
 	}
+	severity := diag.Error
+	switch strings.ToLower(d.Severity) {
+	case "warning", "warn":
+		severity = diag.Warning
+	}
+	b := diag.New(severity, d.Message)
+	if d.Code != "" {
+		b = b.Code(d.Code)
+	}
+	b = b.Primary(byteRangeSpan(src, d.Start, d.End), "")
+	for _, note := range d.Notes {
+		if strings.TrimSpace(note) == "" {
+			continue
+		}
+		b = b.Note(note)
+	}
+	return b.Build()
+}
+
+// byteRangeSpan builds a `diag.Span` for a [start, end) byte range
+// into `src`. It walks the bytes to recover 1-based line/column.
+// Clamping keeps downstream renderers robust even when the native
+// checker reports offsets beyond EOF.
+func byteRangeSpan(src []byte, start, end int) diag.Span {
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+	if len(src) == 0 {
+		p := token.Pos{Line: 1, Column: 1, Offset: 0}
+		return diag.Span{Start: p, End: p}
+	}
+	if start > len(src) {
+		start = len(src)
+	}
+	if end > len(src) {
+		end = len(src)
+	}
+	startPos := positionAtOffset(src, start)
+	endPos := positionAtOffset(src, end)
+	return diag.Span{Start: startPos, End: endPos}
+}
+
+func positionAtOffset(src []byte, offset int) token.Pos {
+	line := 1
+	col := 1
+	for i := 0; i < offset && i < len(src); i++ {
+		if src[i] == '\n' {
+			line++
+			col = 1
+			continue
+		}
+		col++
+	}
+	return token.Pos{Line: line, Column: col, Offset: offset}
 }
 
 type selfhostSpanKey struct {

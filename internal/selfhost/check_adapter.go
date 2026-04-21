@@ -60,6 +60,21 @@ type CheckInstantiation struct {
 	End        int
 }
 
+// CheckDiagnosticRecord is a structured diagnostic produced by the
+// bootstrapped Osty checker (see toolchain/check_diag.osty). The host
+// bridge lifts each record into a `*diag.Diagnostic` so policy gates
+// authored in Osty surface through the ordinary `check.Result.Diags`
+// channel. Start/End are token indices; the Go bridge converts to byte
+// offsets via the lex stream.
+type CheckDiagnosticRecord struct {
+	Code     string
+	Severity string
+	Message  string
+	Start    int
+	End      int
+	Notes    []string
+}
+
 // CheckResult is the structured Go-facing surface for the bootstrapped checker.
 type CheckResult struct {
 	Summary        CheckSummary
@@ -67,6 +82,7 @@ type CheckResult struct {
 	Bindings       []CheckedBinding
 	Symbols        []CheckedSymbol
 	Instantiations []CheckInstantiation
+	Diagnostics    []CheckDiagnosticRecord
 }
 
 // CheckSource runs the bootstrapped Osty checker over one source string.
@@ -142,6 +158,7 @@ func adaptCheckResult(checked *FrontCheckResult, lexed *OstyLexedSource) CheckRe
 		Bindings:       make([]CheckedBinding, 0, len(checked.bindings)),
 		Symbols:        make([]CheckedSymbol, 0, len(checked.symbols)),
 		Instantiations: make([]CheckInstantiation, 0, len(checked.instantiations)),
+		Diagnostics:    make([]CheckDiagnosticRecord, 0, len(checked.diagnostics)),
 	}
 	for _, node := range checked.typedNodes {
 		if node == nil {
@@ -197,6 +214,20 @@ func adaptCheckResult(checked *FrontCheckResult, lexed *OstyLexedSource) CheckRe
 			ResultType: inst.resultType,
 			Start:      start,
 			End:        end,
+		})
+	}
+	for _, d := range checked.diagnostics {
+		if d == nil {
+			continue
+		}
+		start, end := checkNodeOffsets(rt, stream, d.start, d.end)
+		result.Diagnostics = append(result.Diagnostics, CheckDiagnosticRecord{
+			Code:     d.code,
+			Severity: diagnosticSeverityName(d.severity),
+			Message:  d.message,
+			Start:    start,
+			End:      end,
+			Notes:    append([]string(nil), d.notes...),
 		})
 	}
 	return result

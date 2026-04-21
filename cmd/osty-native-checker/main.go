@@ -58,12 +58,22 @@ type checkInstantiation struct {
 	End        int      `json:"end"`
 }
 
+type checkDiagnostic struct {
+	Code     string   `json:"code"`
+	Severity string   `json:"severity"`
+	Message  string   `json:"message"`
+	Start    int      `json:"start"`
+	End      int      `json:"end"`
+	Notes    []string `json:"notes,omitempty"`
+}
+
 type checkResponse struct {
 	Summary        checkSummary         `json:"summary"`
 	TypedNodes     []checkedNode        `json:"typedNodes"`
 	Bindings       []checkedBinding     `json:"bindings"`
 	Symbols        []checkedSymbol      `json:"symbols"`
 	Instantiations []checkInstantiation `json:"instantiations"`
+	Diagnostics    []checkDiagnostic    `json:"diagnostics,omitempty"`
 }
 
 func main() {
@@ -142,6 +152,19 @@ func run(stdin io.Reader, stdout io.Writer) error {
 			Start:      inst.Start,
 			End:        inst.End,
 		})
+	}
+	if len(checked.Diagnostics) > 0 {
+		resp.Diagnostics = make([]checkDiagnostic, 0, len(checked.Diagnostics))
+		for _, d := range checked.Diagnostics {
+			resp.Diagnostics = append(resp.Diagnostics, checkDiagnostic{
+				Code:     d.Code,
+				Severity: d.Severity,
+				Message:  d.Message,
+				Start:    d.Start,
+				End:      d.End,
+				Notes:    append([]string(nil), d.Notes...),
+			})
+		}
 	}
 	enc := json.NewEncoder(stdout)
 	return enc.Encode(resp)

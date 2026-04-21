@@ -65,6 +65,10 @@ pub fn checkCodeGenericBoundViolation() -> String { "E0749" }
 pub fn checkCodeInterfaceNotSatisfied() -> String { "E0751" }
 pub fn checkCodeClosureAnnotationRequired() -> String { "E0752" }
 pub fn checkCodePatternShapeMismatch() -> String { "E0753" }
+pub fn checkCodeRuntimePrivilegeViolation() -> String { "E0770" }
+pub fn checkCodePodShapeViolation() -> String { "E0771" }
+pub fn checkCodeNoAllocViolation() -> String { "E0772" }
+pub fn checkCodeIntrinsicNonEmptyBody() -> String { "E0773" }
 
 // ---------------------------------------------------------------------
 // Low-level builder. Higher-level constructors below wrap this so call
@@ -341,6 +345,78 @@ pub fn diagRefutablePattern(context: String, start: Int, end: Int) -> CheckDiagn
         "pattern must be irrefutable in {context}"
     }
     checkDiag(checkCodeRefutablePattern(), msg, start, end)
+}
+
+/// diagNoAllocViolation reports a managed-allocation site inside a
+/// `#[no_alloc]` function body. `fnName` names the enclosing function;
+/// `what` describes the offending construct (e.g. "construct a list
+/// literal"); `fixHint` carries the hint note.
+pub fn diagNoAllocViolation(fnName: String, what: String, fixHint: String, start: Int, end: Int) -> CheckDiagnostic {
+    let mut notes: List<String> = [
+        "LANG_SPEC §19.6.1: a `#[no_alloc]` body must not reach the managed allocator",
+    ]
+    if fixHint != "" {
+        notes.push("hint: {fixHint}")
+    }
+    checkDiagWithNotes(
+        checkCodeNoAllocViolation(),
+        "`#[no_alloc]` function `{fnName}` cannot {what}",
+        start,
+        end,
+        notes,
+    )
+}
+
+/// diagRuntimePrivilege reports a use of the runtime sublanguage
+/// surface outside a privileged package (LANG_SPEC §19.2). `what`
+/// describes the specific surface element (e.g. "`#[intrinsic]` is
+/// a runtime-only annotation"); the note anchors the user to the
+/// spec + capability opt-in path.
+pub fn diagRuntimePrivilege(what: String, fixHint: String, start: Int, end: Int) -> CheckDiagnostic {
+    let mut notes: List<String> = [
+        "LANG_SPEC §19.2: the runtime sublanguage is only reachable from `std.runtime.*` or from toolchain-workspace packages that opt in via `[capabilities] runtime = true` in `osty.toml`",
+    ]
+    if fixHint != "" {
+        notes.push("hint: {fixHint}")
+    }
+    checkDiagWithNotes(
+        checkCodeRuntimePrivilegeViolation(),
+        "runtime sublanguage surface used outside a privileged package: {what}",
+        start,
+        end,
+        notes,
+    )
+}
+
+/// diagPodShapeViolation reports a `#[pod]` struct that violates the
+/// §19.4 derivation. The single message carries both the structural
+/// hint (missing `#[repr(c)]`, non-Pod field, unbounded generic) and
+/// the canonical §19.4 reference.
+pub fn diagPodShapeViolation(message: String, fixHint: String, start: Int, end: Int) -> CheckDiagnostic {
+    let mut notes: List<String> = [
+        "LANG_SPEC §19.4: `#[pod]` requires C ABI layout, no managed references, and `T: Pod` bounds on every generic parameter",
+    ]
+    if fixHint != "" {
+        notes.push("hint: {fixHint}")
+    }
+    checkDiagWithNotes(checkCodePodShapeViolation(), message, start, end, notes)
+}
+
+/// diagIntrinsicNonEmptyBody reports an `#[intrinsic]` function whose
+/// body carries statements. LANG_SPEC §19.6 requires the body-less
+/// signature form (or the explicit empty block `{}`); the lowering
+/// layer supplies the implementation and silently ignores any source.
+pub fn diagIntrinsicNonEmptyBody(fnName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeIntrinsicNonEmptyBody(),
+        "`#[intrinsic]` function `{fnName}` must have an empty body",
+        start,
+        end,
+        [
+            "LANG_SPEC §19.6: intrinsic implementations are supplied by the lowering layer; the source body is ignored",
+            "hint: keep the signature and drop the body, or use an empty block",
+        ],
+    )
 }
 
 // ---------------------------------------------------------------------
