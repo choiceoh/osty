@@ -29084,6 +29084,11 @@ func checkInstallPrelude(env *CheckEnv) {
 	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:14813:5
 	tFnGroupListHandle := tyFn(env.tys, []int{tGroup}, tListHandleT)
 	_ = tFnGroupListHandle
+	// Spec §B.6 canonical shape: `taskGroup(|g| { ...; Ok(value) })`.
+	// Body returns `Result<T, Error>`. Mirrored from
+	// toolchain/check_env.osty pending a regen fix.
+	tFnGroupResult := tyFn(env.tys, []int{tGroup}, tResultT)
+	_ = tFnGroupResult
 	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:14814:5
 	tFnT := tyFn(env.tys, make([]int, 0, 1), tT)
 	_ = tFnT
@@ -29096,7 +29101,7 @@ func checkInstallPrelude(env *CheckEnv) {
 	var gT []string = []string{"T"}
 	_ = gT
 	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:14818:5
-	checkRegisterFn(env, &CheckFnSig{name: "taskGroup", owner: "", receiverTy: -1, retTy: tResultT, paramNames: []string{"body"}, paramTys: []int{tFnGroupListHandle}, generics: gT, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "taskGroup", owner: "", receiverTy: -1, retTy: tResultT, paramNames: []string{"body"}, paramTys: []int{tFnGroupResult}, generics: gT, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:14824:5
 	checkRegisterFn(env, &CheckFnSig{name: "spawn", owner: "", receiverTy: -1, retTy: tHandleT, paramNames: []string{"body"}, paramTys: []int{tFnT}, generics: gT, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:14830:5
@@ -29220,6 +29225,25 @@ func checkInstallChannelIntrinsics(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "isClosed", owner: "Channel", receiverTy: tChanT, retTy: tBool(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: gT, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:14959:5
 	checkRegisterFn(env, &CheckFnSig{name: "join", owner: "Handle", receiverTy: tHandleT, retTy: tT, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: gT, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// SelectBuilder / Duration — spec §B.6 select builder and duration
+	// literals. Mirrored from toolchain/check_env.osty pending a regen
+	// fix.
+	bounds := func() []*CheckGenericBound { return make([]*CheckGenericBound, 0) }
+	checkRegisterType(env, &CheckTypeSig{name: "SelectBuilder", generics: []string{}, genericBounds: bounds(), kind: "struct"})
+	checkRegisterType(env, &CheckTypeSig{name: "Duration", generics: []string{}, genericBounds: bounds(), kind: "struct"})
+	tSelectBuilder := tyNamed(tys, "SelectBuilder", []int{})
+	tDuration_ := tyNamed(tys, "Duration", []int{})
+	tChanTy := tyNamed(tys, "Channel", []int{tT})
+	tFnUnitT := tyFn(tys, []int{}, tT)
+	tFnResT := tyFn(tys, []int{tT}, tT)
+	checkRegisterFn(env, &CheckFnSig{name: "recv", owner: "SelectBuilder", receiverTy: tSelectBuilder, retTy: tUnit(tys), paramNames: []string{"ch", "handler"}, paramTys: []int{tChanTy, tFnResT}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "send", owner: "SelectBuilder", receiverTy: tSelectBuilder, retTy: tUnit(tys), paramNames: []string{"ch", "value", "handler"}, paramTys: []int{tChanTy, tT, tFnUnitT}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "timeout", owner: "SelectBuilder", receiverTy: tSelectBuilder, retTy: tUnit(tys), paramNames: []string{"duration", "handler"}, paramTys: []int{tDuration_, tFnUnitT}, generics: gT, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "default", owner: "SelectBuilder", receiverTy: tSelectBuilder, retTy: tUnit(tys), paramNames: []string{"handler"}, paramTys: []int{tFnUnitT}, generics: gT, genericBounds: bounds()})
+	tIntTy := tInt(tys)
+	for _, suffix := range []string{"s", "ms", "us", "ns"} {
+		checkRegisterFn(env, &CheckFnSig{name: suffix, owner: "Int", receiverTy: tIntTy, retTy: tDuration_, paramNames: []string{}, paramTys: []int{}, generics: []string{}, genericBounds: bounds()})
+	}
 }
 
 // Osty: /tmp/selfhost_merged.osty:14977:1
@@ -32303,7 +32327,7 @@ func elabInferCall(cx *ElabCx, callIdx int, node *AstNode, expected int) *ElabRe
 		coreFn := coreIdent(cx.core, baseCallee.text, IdentKind(&IdentKind_IkFn{}), fnSigToTy(cx.env, sig), baseCallee.start, baseCallee.end)
 		_ = coreFn
 		// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17017:9
-		coreArgs := elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, argIdxs, node.start, node.end)
+		coreArgs := elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, argIdxs, node.start, node.end)
 		_ = coreArgs
 		// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17018:9
 		retTy := sig.retTy
@@ -32407,7 +32431,7 @@ func elabInferStaticMethodCall(cx *ElabCx, callIdx int, node *AstNode, fieldNode
 		coreFn := coreIdent(cx.core, sig.name, IdentKind(&IdentKind_IkFn{}), fnSigToTy(cx.env, sig), fieldNode.start, fieldNode.end)
 		_ = coreFn
 		// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17129:9
-		coreArgs := elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, argIdxs, node.start, node.end)
+		coreArgs := elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, argIdxs, node.start, node.end)
 		_ = coreArgs
 		// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17130:9
 		retTy := sig.retTy
@@ -32609,7 +32633,7 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17227:5
 	if checkStringListLenHelper(sig.generics) == 0 {
 		// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17228:9
-		coreArgs := elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, callNode.children, callNode.start, callNode.end)
+		coreArgs := elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, callNode.children, callNode.start, callNode.end)
 		_ = coreArgs
 		// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17229:9
 		retTy := sig.retTy
@@ -32761,9 +32785,13 @@ func elabCallArgs(cx *ElabCx, solver *Solver, sig *CheckFnSig, freshs []int, arg
 	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17340:5
 	gotCount := checkIntListLenHelper(argIdxs)
 	_ = gotCount
-	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17341:5
-	if wantCount != gotCount {
-		// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17342:9
+	// Trailing params whose names start with "?" are marked as having
+	// defaults by selfhostBuildImportedFn / collectFnDecl. An
+	// under-arity call satisfied by defaults does not emit E0701.
+	// Mirrored from toolchain/elab.osty pending a regen fix.
+	defaultCount := paramDefaultCount(sig.paramNames)
+	minArity := wantCount - defaultCount
+	if gotCount > wantCount || gotCount < minArity {
 		func() struct{} {
 			cx.env.diagnostics = append(cx.env.diagnostics, diagArgCount(sig.name, wantCount, gotCount, start, end))
 			return struct{}{}
@@ -32808,9 +32836,14 @@ func elabCallArgs(cx *ElabCx, solver *Solver, sig *CheckFnSig, freshs []int, arg
 		// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17355:9
 		hint := zonk(cx.env, solver, specialisedWant)
 		_ = hint
-		// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17356:9
+		// Closure arguments: if the hint is `fn(P..) -> R` with params
+		// fully resolved (even if R is still open), pass it so the
+		// closure can seed param slots from P. Mirrored from
+		// toolchain/elab.osty pending a regen fix.
+		hintIsFnWithConcreteParams := ostyEqual(tyKindAt(cx.env.tys, hint), TyKind(&TyKind_TkFn{})) &&
+			allFullyResolved(cx.env, solver, tyArgsAt(cx.env.tys, hint))
 		r := func() *ElabResult {
-			if isFullyResolved(cx.env, solver, hint) {
+			if isFullyResolved(cx.env, solver, hint) || hintIsFnWithConcreteParams {
 				return elabCheck(cx, argIdx, hint)
 			} else {
 				return elabInfer(cx, argIdx)
@@ -32844,15 +32877,20 @@ func elabIsToStringFormatter(name string) bool {
 
 // Osty: /tmp/selfhost_merged.osty:17377:1
 func elabCallArgsMonomorphic(cx *ElabCx, callee string, paramTys []int, argIdxs []int, start int, end int) []int {
-	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17385:5
+	return elabCallArgsMonomorphicWithNames(cx, callee, nil, paramTys, argIdxs, start, end)
+}
+
+// elabCallArgsMonomorphicWithNames lets the non-generic call path take
+// default-carrying params into account. paramNames may carry the "?"
+// prefix marking trailing defaults; an under-arity call satisfied by
+// defaults is accepted without an E0701 diag. Mirrored from
+// toolchain/elab.osty pending a regen fix.
+func elabCallArgsMonomorphicWithNames(cx *ElabCx, callee string, paramNames []string, paramTys []int, argIdxs []int, start int, end int) []int {
 	wantCount := checkIntListLenHelper(paramTys)
-	_ = wantCount
-	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17386:5
 	gotCount := checkIntListLenHelper(argIdxs)
-	_ = gotCount
-	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17387:5
-	if wantCount != gotCount {
-		// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:17388:9
+	defaultCount := paramDefaultCount(paramNames)
+	minArity := wantCount - defaultCount
+	if gotCount > wantCount || gotCount < minArity {
 		func() struct{} {
 			cx.env.diagnostics = append(cx.env.diagnostics, diagArgCount(callee, wantCount, gotCount, start, end))
 			return struct{}{}
@@ -32910,6 +32948,22 @@ func elabCallArgsMonomorphic(cx *ElabCx, callee string, paramTys []int, argIdxs 
 		}()
 	}
 	return coreArgs
+}
+
+// paramDefaultCount counts trailing paramNames whose text starts with
+// "?" — the default-availability marker injected by
+// selfhostBuildImportedFn / collectFnDecl. Mirrored from
+// toolchain/elab.osty pending a regen fix.
+func paramDefaultCount(names []string) int {
+	total := 0
+	for i := len(names) - 1; i >= 0; i-- {
+		if len(names[i]) > 0 && names[i][0] == '?' {
+			total++
+		} else {
+			break
+		}
+	}
+	return total
 }
 
 // Osty: /tmp/selfhost_merged.osty:17407:1
@@ -34178,9 +34232,16 @@ func elabInferClosure(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:18029:5
 	bodyIdx := node.left
 	_ = bodyIdx
-	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:18030:5
+	// When expected is `fn(T) -> TyVar(R)` — e.g. `xs.map(|r| body)`
+	// with R open — using elabCheck on the body would route through
+	// checkExpectAssignable which does not treat TyVar as a wildcard
+	// and would emit a spurious mismatch. Fall back to elabInfer when
+	// expectedRet is a bare TyVar; the outer elabCallArgs unify still
+	// binds R from the closure's inferred type. Mirrored from
+	// toolchain/elab.osty pending a regen fix.
+	expectedRetIsVar := ostyEqual(tyKindAt(tys, expectedRet), TyKind(&TyKind_TkVar{}))
 	body := func() *ElabResult {
-		if !(tyIsBad(tys, expectedRet)) {
+		if !(tyIsBad(tys, expectedRet)) && !expectedRetIsVar {
 			return elabCheck(cx, bodyIdx, expectedRet)
 		} else {
 			return elabInfer(cx, bodyIdx)
@@ -38906,6 +38967,10 @@ func registerStdThreadAliasFns(env *CheckEnv, alias string) {
 	checkRegisterFn(env, &CheckFnSig{name: "yield", owner: alias, receiverTy: -1, retTy: tUnit_, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:20928:5
 	checkRegisterFn(env, &CheckFnSig{name: "isCancelled", owner: alias, receiverTy: -1, retTy: tBool_, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// thread.select<T>(body: fn(SelectBuilder) -> T) -> T — spec §B.6
+	// canonical form. Mirrored from toolchain/check.osty pending a regen fix.
+	tSelectBuilder := tyNamed(tys, "SelectBuilder", nil)
+	checkRegisterFn(env, &CheckFnSig{name: "select", owner: alias, receiverTy: -1, retTy: tT, paramNames: []string{"body"}, paramTys: []int{tyFn(tys, []int{tSelectBuilder}, tT)}, generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0)})
 }
 
 // Osty: /tmp/selfhost_merged.osty:20936:1
@@ -39060,8 +39125,15 @@ func collectFnDecl(cx *ElabCx, declIdx int, node *AstNode, owner string, ownerGe
 			// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:21021:13
 			continue
 		}
-		// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:21023:9
-		func() struct{} { paramNames = append(paramNames, paramNode.text); return struct{}{} }()
+		// Prefix default-carrying params with "?" so the arity check
+		// (paramDefaultCount) can count trailing defaults. Default
+		// expression is stored in paramNode.left by opParseFnDecl.
+		// Mirrored from toolchain/check.osty pending a regen fix.
+		storedParamName := paramNode.text
+		if paramNode.left >= 0 {
+			storedParamName = "?" + storedParamName
+		}
+		func() struct{} { paramNames = append(paramNames, storedParamName); return struct{}{} }()
 		// Osty: C:\Users\user\AppData\Local\Temp\osty-bootstrap-gen-2705222029\selfhost_merged.osty:21024:9
 		declared := astTypeToTyInCollect(cx, paramNode.right)
 		_ = declared
