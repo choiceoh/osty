@@ -64,6 +64,7 @@ type checkDiagnostic struct {
 	Message  string   `json:"message"`
 	Start    int      `json:"start"`
 	End      int      `json:"end"`
+	File     string   `json:"file,omitempty"`
 	Notes    []string `json:"notes,omitempty"`
 }
 
@@ -162,6 +163,7 @@ func run(stdin io.Reader, stdout io.Writer) error {
 				Message:  d.Message,
 				Start:    d.Start,
 				End:      d.End,
+				File:     d.File,
 				Notes:    append([]string(nil), d.Notes...),
 			})
 		}

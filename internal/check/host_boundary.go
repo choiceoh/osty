@@ -92,6 +92,7 @@ type nativeCheckDiagnostic struct {
 	Message  string   `json:"message"`
 	Start    int      `json:"start"`
 	End      int      `json:"end"`
+	File     string   `json:"file,omitempty"`
 	Notes    []string `json:"notes,omitempty"`
 }
 
@@ -216,6 +217,7 @@ func adaptEmbeddedCheckResult(checked selfhost.CheckResult) nativeCheckResult {
 				Message:  d.Message,
 				Start:    d.Start,
 				End:      d.End,
+				File:     d.File,
 				Notes:    append([]string(nil), d.Notes...),
 			})
 		}
@@ -610,6 +612,9 @@ func convertNativeDiag(src []byte, d nativeCheckDiagnostic) *diag.Diagnostic {
 	b := diag.New(severity, d.Message)
 	if d.Code != "" {
 		b = b.Code(d.Code)
+	}
+	if d.File != "" {
+		b = b.File(d.File)
 	}
 	b = b.Primary(byteRangeSpan(src, d.Start, d.End), "")
 	for _, note := range d.Notes {

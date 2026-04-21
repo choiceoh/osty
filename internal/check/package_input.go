@@ -38,6 +38,7 @@ func selfhostPackageCheckInput(pkg *resolve.Package, ws *resolve.Workspace, stdl
 			SourceMap: pf.CanonicalMap,
 			Base:      base,
 			Name:      name,
+			Path:      pf.Path,
 		})
 		segmentIdx++
 	}
