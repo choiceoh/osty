@@ -632,6 +632,44 @@ fn main() {
 	}
 }
 
+// Statement-position twin of the higher-order path above: a fn-typed
+// parameter returning unit still has to dispatch through the indirect
+// call ABI. This is the exact shape specialized Map.forEach bodies hit
+// after monomorphization (`f(key, value)`).
+func TestGenerateFnTypedParameterStmtIndirectCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn apply2(f: fn(Int, Int)) {
+    f(1, 2)
+}
+
+fn printPair(a: Int, b: Int) {
+    println(a)
+    println(b)
+}
+
+fn main() {
+    apply2(printPair)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_typed_param_stmt.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"define void @apply2(ptr %f)",
+		"call void (ptr, i64, i64)",
+		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
+		"define private void @__osty_closure_thunk_printPair(ptr %env, i64 %arg0, i64 %arg1)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateMapGetLowersAsOptionReturningIntrinsic locks the root-cause
 // fix: Map.get(key) -> V? now goes through the real
 // osty_rt_map_get_<K> runtime helper (bool return + out-param), with

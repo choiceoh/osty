@@ -307,8 +307,9 @@ fn main() {}
 		for _, o := range offenders {
 			t.Logf("  - %s", o)
 		}
+		t.Fatalf("stale TypeArgs leaked past monomorph; expected 0 offenders")
 	} else {
-		t.Logf("no stale TypeArgs — TurbofishExpr must arise from a different AST bridge path")
+		t.Logf("no stale TypeArgs remain after monomorph")
 	}
 }
 

@@ -1710,6 +1710,119 @@ func TestMonomorphizeMethodLocalGenericOnGenericOwner(t *testing.T) {
 	}
 }
 
+func TestMonomorphizeGenericOwnerNonGenericMethodClearsReceiverTypeArgs(t *testing.T) {
+	// Checker instantiation metadata can attach the owner's concrete
+	// args to a nongeneric method call on a generic owner. Monomorph
+	// should clear those stale TypeArgs once the receiver type has been
+	// rewritten to the concrete owner specialization.
+	tvT := &TypeVar{Name: "T"}
+	vec := &StructDecl{
+		Name:     "Vec",
+		Generics: []*TypeParam{{Name: "T"}},
+		Fields:   []*Field{{Name: "head", Type: tvT}},
+		Methods: []*FnDecl{{
+			Name: "headVal",
+			Params: []*Param{
+				{Name: "self", Type: &NamedType{Name: "Vec", Args: []Type{tvT}}},
+			},
+			Return: tvT,
+			Body:   &Block{Result: &FieldExpr{X: &Ident{Name: "self", Kind: IdentParam, T: &NamedType{Name: "Vec", Args: []Type{tvT}}}, Name: "head", T: tvT}},
+		}},
+	}
+	vecInt := &NamedType{Name: "Vec", Args: []Type{TInt}}
+	call := &MethodCall{
+		Receiver: &Ident{Name: "v", Kind: IdentLocal, T: vecInt},
+		Name:     "headVal",
+		TypeArgs: []Type{TInt},
+		T:        TInt,
+	}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{
+			&LetStmt{Name: "v", Type: vecInt,
+				Value: &StructLit{TypeName: "Vec", T: vecInt,
+					Fields: []StructLitField{{Name: "head", Value: intLit("1")}}}},
+			&ExprStmt{X: call},
+		}},
+	}
+	out, errs := Monomorphize(&Module{Package: "main", Decls: []Decl{vec, main}})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	var mainCp *FnDecl
+	for _, d := range out.Decls {
+		if fn, ok := d.(*FnDecl); ok && fn.Name == "main" {
+			mainCp = fn
+			break
+		}
+	}
+	if mainCp == nil {
+		t.Fatalf("main missing from output decls: %+v", out.Decls)
+	}
+	callCp := mainCp.Body.Stmts[1].(*ExprStmt).X.(*MethodCall)
+	if len(callCp.TypeArgs) != 0 {
+		t.Fatalf("nongeneric method call should shed receiver TypeArgs after monomorph, got %+v", callCp.TypeArgs)
+	}
+}
+
+func TestMonomorphizeBuiltinListMethodFallbackClearsReceiverTypeArgs(t *testing.T) {
+	// Some stdlib-bodied specializations (notably Map helpers) call
+	// builtin generic owners like List.push without that owner template
+	// being present in the module. Monomorph should still clear the
+	// checker-carried receiver args on known nongeneric builtin methods
+	// instead of leaving stale turbofish metadata behind.
+	listInt := &NamedType{Name: "List", Args: []Type{TInt}}
+	call := &MethodCall{
+		Receiver: &Ident{Name: "xs", Kind: IdentLocal, T: listInt},
+		Name:     "push",
+		TypeArgs: []Type{TInt},
+		Args:     []Arg{{Value: intLit("1")}},
+		T:        TUnit,
+	}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{
+			&LetStmt{Name: "xs", Type: listInt},
+			&ExprStmt{X: call},
+		}},
+	}
+	out, errs := Monomorphize(&Module{Package: "main", Decls: []Decl{main}})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	mainCp := out.Decls[0].(*FnDecl)
+	callCp := mainCp.Body.Stmts[1].(*ExprStmt).X.(*MethodCall)
+	if len(callCp.TypeArgs) != 0 {
+		t.Fatalf("builtin List.push fallback should clear stale receiver TypeArgs, got %+v", callCp.TypeArgs)
+	}
+}
+
+func TestMonomorphizeBuiltinOptionalMethodFallbackClearsReceiverTypeArgs(t *testing.T) {
+	optInt := &OptionalType{Inner: TInt}
+	call := &MethodCall{
+		Receiver: &Ident{Name: "x", Kind: IdentLocal, T: optInt},
+		Name:     "isSome",
+		TypeArgs: []Type{TInt},
+		T:        TBool,
+	}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{
+			&LetStmt{Name: "x", Type: optInt},
+			&ExprStmt{X: call},
+		}},
+	}
+	out, errs := Monomorphize(&Module{Package: "main", Decls: []Decl{main}})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	mainCp := out.Decls[0].(*FnDecl)
+	callCp := mainCp.Body.Stmts[1].(*ExprStmt).X.(*MethodCall)
+	if len(callCp.TypeArgs) != 0 {
+		t.Fatalf("builtin Option.isSome fallback should clear stale receiver TypeArgs, got %+v", callCp.TypeArgs)
+	}
+}
+
 func TestMonomorphizeMethodLocalGenericArityMismatch(t *testing.T) {
 	box := genericBoxNonGenericOwner()
 	// get<U> — pass two type args
