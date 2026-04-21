@@ -935,7 +935,12 @@ fn opTryParsePostfix(p: OstyParser, lhs: Int) -> Int {
         n.end = p.pos
         return opAddNode(p, n)
     }
-    if tok.kind == FrontColonColon && opPeekAt(p, 1).kind == FrontLt { return opParseTurbofish(p, lhs) }
+    if tok.kind == FrontColonColon {
+        if opPeekAt(p, 1).kind == FrontLt { return opParseTurbofish(p, lhs) }
+        opErrorFull(p, "`::` must be followed by `<`", "`::` is reserved for turbofish type arguments; use `.` for member access", "", "E0201")
+        opAdvance(p)
+        return 0 - 1
+    }
     if tok.kind == FrontLBrace && !(p.noStructLit) && lhs >= 0 {
         let leftNode = astArenaNodeAt(p.arena, lhs)
         if leftNode.kind == AstNIdent && astIsUpperName(leftNode.text) { return opParseStructLit(p, lhs) }
@@ -1468,14 +1473,26 @@ fn opParsePatternOneAlt(p: OstyParser) -> Int {
 
 fn opParseType(p: OstyParser) -> Int {
     let mut ty = opParseTypeAtom(p)
-    for opAt(p, FrontQuestion) { let s = p.pos
-    opAdvance(p)
-    let mut n = emptyAstNode(AstNType)
-    n.text = "optional"
-    n.left = ty
-    n.start = s
-    n.end = p.pos
-    ty = opAddNode(p, n) }
+    for opAt(p, FrontQuestion) || opAt(p, FrontQQ) {
+        let s = p.pos
+        let isDouble = opAt(p, FrontQQ)
+        opAdvance(p)
+        let mut n = emptyAstNode(AstNType)
+        n.text = "optional"
+        n.left = ty
+        n.start = s
+        n.end = p.pos
+        ty = opAddNode(p, n)
+        if isDouble {
+            let s2 = p.pos
+            let mut n2 = emptyAstNode(AstNType)
+            n2.text = "optional"
+            n2.left = ty
+            n2.start = s2
+            n2.end = p.pos
+            ty = opAddNode(p, n2)
+        }
+    }
     ty
 }
 
@@ -1699,8 +1716,20 @@ fn opParseDecl(p: OstyParser) -> Int {
     if tok.kind == FrontEnum { return opParseEnumDecl(p, isPub, anns) }
     if tok.kind == FrontInterface { return opParseInterfaceDecl(p, isPub, anns) }
     if tok.kind == FrontType { return opParseTypeAliasDecl(p, isPub, anns) }
-    if opIsUseHead(tok) { return opParseUseDecl(p, isPub) }
+    if opIsUseHead(tok) {
+        if opIntListCount(anns) > 0 {
+            opErrorFull(p, "annotation on the wrong kind of declaration", "annotations are not permitted on `use` statements", "", "E0607")
+        }
+        return opParseUseDecl(p, isPub)
+    }
     if tok.kind == FrontLet { return opParseLetStmt(p, anns) }
+    if tok.kind == FrontDefer {
+        opErrorFull(p, "`defer` is not allowed at the top level of a script", "move this `defer` inside a function body — it binds to the enclosing function's return", "", "E0608")
+        opSyncDecl(p)
+        let mut n = emptyAstNode(AstNError)
+        n.start = p.pos
+        return opAddNode(p, n)
+    }
     let errKindName = frontTokenKindName(tok.kind)
     opErrorFull(p, "expected declaration, got {errKindName}", "a declaration starts with `fn`, `struct`, `enum`, `interface`, `type`, `use`, or `let`", "", "E0100")
     opSyncDecl(p)
@@ -1943,7 +1972,14 @@ fn opParseUseDecl(p: OstyParser, isPub: Bool) -> Int {
         for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
             let bodyAnns = opParseAnnotations(p)
             if opAt(p, FrontFn) {
-                goItems.push(opParseFnDecl(p, false, bodyAnns))
+                let fnIdx = opParseFnDecl(p, false, bodyAnns)
+                if isGo {
+                    let fnNode = astArenaNodeAt(p.arena, fnIdx)
+                    if fnNode.right >= 0 {
+                        opErrorFull(p, "`use go` functions must not have a body", "declare only the signature: `fn Name(...) -> Ret`", "", "E0101")
+                    }
+                }
+                goItems.push(fnIdx)
             } else if opAt(p, FrontStruct) {
                 goItems.push(opParseStructDecl(p, false, bodyAnns))
             } else if opAt(p, FrontType) {
@@ -2037,11 +2073,18 @@ fn opParseUsePath(p: OstyParser) -> String {
         return ""
     }
     let mut parts: List<String> = []
+    let mut sawSlash = false
+    let mut mixedReported = false
     parts.push(opAdvance(p).text)
     for {
         let sep = opUsePathSep(p)
         if sep == "" || opPeekAt(p, 1).kind != FrontIdent {
             break
+        }
+        if sep == "/" { sawSlash = true }
+        if sep == "." && sawSlash && !mixedReported {
+            opErrorFull(p, "mixed `.` and `/` separators in use path", "registry paths may only use `.` before the first `/` (`github.com/user/lib`)", "", "E0104")
+            mixedReported = true
         }
         let _ = opAdvance(p)
         parts.push(sep)

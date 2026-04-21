@@ -235,7 +235,7 @@ Struct bodies accept field declarations (`name: Type`) and method declarations (
 
 ```osty
 pub struct S {
-    x: Int??,   // nested Option type triggers recovery
+    123,   // rejected -- field or method declaration required
 }
 ```
 

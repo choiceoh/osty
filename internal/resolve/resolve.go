@@ -494,7 +494,7 @@ func topLevelAnnotations(d ast.Decl) []*ast.Annotation {
 // checkAnnotations validates the annotations on a declaration against
 // v0.2 R26 and v0.4 §18.1:
 //
-//   - unknown names are flagged by the parser (E0400) and skipped here;
+//   - unknown names are flagged with E0400 here;
 //   - the annotation's target kind must be permitted (E0607);
 //   - the same annotation name may not appear twice on one target — for
 //     example `#[deprecated] #[deprecated] fn …` is rejected (E0609).
@@ -502,6 +502,13 @@ func (r *resolver) checkAnnotations(annots []*ast.Annotation, target ast.Annotat
 	var seen map[string]*ast.Annotation
 	for _, a := range annots {
 		if !ast.IsAllowedAnnotation(a.Name) {
+			r.emit(diag.New(diag.Error,
+				fmt.Sprintf("unknown annotation `#[%s]`", a.Name)).
+				Code(diag.CodeUnknownAnnotation).
+				Primary(diag.Span{Start: a.PosV, End: a.EndV},
+					"this annotation name is not recognized").
+				Note("v0.4 §18.1: only `#[json]`, `#[deprecated]`, `#[allow]`, `#[cfg]`, `#[op]`, `#[test]`, and the runtime sublanguage annotations are permitted").
+				Build())
 			continue
 		}
 		if !ast.AnnotationAllowedAt(a.Name, target) {

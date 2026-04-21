@@ -31,6 +31,7 @@ var toolchainCheckerFiles = []string{
 }
 
 const stringsPrelude = `use go "strings" as strings {
+    fn Compare(a: String, b: String) -> Int
     fn Contains(s: String, substr: String) -> Bool
     fn Count(s: String, substr: String) -> Int
     fn Fields(s: String) -> List<String>
@@ -112,6 +113,7 @@ func normalizeStdStringsCalls(src string) string {
 	for _, pair := range [][2]string{
 		{"strings.split(", "strings.Split("},
 		{"strings.join(", "strings.Join("},
+		{"strings.compare(", "strings.Compare("},
 		{"strings.contains(", "strings.Contains("},
 		{"strings.hasPrefix(", "strings.HasPrefix("},
 		{"strings.hasSuffix(", "strings.HasSuffix("},
