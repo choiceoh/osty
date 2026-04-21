@@ -986,13 +986,44 @@ func signatureOf(fn *ast.FnDecl, ownerName string, env typeEnv) (*fnSig, error) 
 		sig.irName = llvmMethodIRName(ownerName, fn.Name)
 		sig.receiverType = ownerType
 		sig.receiverMut = fn.Recv.Mut
-		sig.params = append(sig.params, paramInfo{
+		selfInfo := paramInfo{
 			name:    "self",
 			typ:     ownerType,
 			irTyp:   llvmMethodReceiverIRType(ownerType, fn.Recv.Mut),
 			mutable: fn.Recv.Mut,
 			byRef:   fn.Recv.Mut,
-		})
+		}
+		// Option B Phase 2d: when the owner struct/enum is a
+		// specialized stdlib built-in (Map / List / Set / Option /
+		// Result), the `self` binding must carry the surface-level
+		// map/list/set metadata so intrinsic dispatch inside the
+		// method body (self.len(), self.get(k), self.insert(k, v),
+		// …) recognizes the receiver and routes to the osty_rt_*
+		// runtime helpers. Without this, those calls fall through
+		// to user method dispatch on the mangled struct name and
+		// fail because the intrinsic methods were stripped by the
+		// Phase 2b AST bridge.
+		if info, ok := specializedBuiltinMetaFor(ownerName); ok {
+			selfInfo.sourceType = info.sourceType
+			selfInfo.listElemTyp = info.listElemTyp
+			selfInfo.listElemString = info.listElemString
+			selfInfo.mapKeyTyp = info.mapKeyTyp
+			selfInfo.mapValueTyp = info.mapValueTyp
+			selfInfo.mapKeyString = info.mapKeyString
+			selfInfo.setElemTyp = info.setElemTyp
+			selfInfo.setElemString = info.setElemString
+			// Specialized built-in containers are runtime aggregates
+			// (opaque ptr to an osty_rt_map / list / set handle), not
+			// LLVM struct values. Override the receiver's LLVM type
+			// to "ptr" so intrinsic dispatch (which requires
+			// baseInfo.typ == "ptr") fires for self.len(), self.get(k),
+			// etc. The original %_ZTS… struct type would block that
+			// check even though at the runtime ABI level the
+			// container is already a ptr.
+			selfInfo.typ = "ptr"
+			selfInfo.irTyp = "ptr"
+		}
+		sig.params = append(sig.params, selfInfo)
 	}
 	if fn.Name == "main" {
 		return sig, nil

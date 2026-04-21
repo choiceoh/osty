@@ -72,6 +72,40 @@ fn main() {}
 	}
 }
 
+// TestPhase2dSelfBindingRoutesIntrinsicDispatch locks the Phase 2d
+// fix: inside a specialized Map method body, `self.len()` / `self.get(k)`
+// / `self.insert(k, v)` intrinsic dispatch now fires via the
+// surface-level mapKeyTyp / mapValueTyp populated on the receiver
+// paramInfo. Before this fix, the receiver carried only the mangled
+// struct type (e.g. `%_ZTSN4main3MapISslEE`) and failed the
+// `mapMethodInfo` base-type check, falling through to user method
+// dispatch which can't find the stripped intrinsic methods.
+func TestPhase2dSelfBindingRoutesIntrinsicDispatch(t *testing.T) {
+	src := `fn touch(m: Map<String, Int>) -> Int { m.len() }
+fn main() {}
+`
+	monoMod := pipelineThroughMonomorph(t, src)
+	opts := llvmgen.Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/phase2d_self_intrinsic.osty",
+		Source:      []byte(src),
+	}
+	_, err := llvmgen.GenerateModule(monoMod, opts)
+	// Before Phase 2d: the emitter walled on
+	// `LLVM015 call: call target *ast.FieldExpr (self.len)` from
+	// within Map.isEmpty / Map.getOr / ... bodies. Phase 2d moves
+	// the wall past that point. The exact next-blocker shape is
+	// pinned by TestPhase2MonomorphMapReachesGenerateModule; all
+	// this test asserts is that `self.len` is no longer the
+	// outermost failure.
+	if err != nil && strings.Contains(err.Error(), "self.len") {
+		t.Fatalf("self-binding intrinsic dispatch regressed — receiver-type override to ptr didn't take effect: %v", err)
+	}
+	if err != nil {
+		t.Logf("Phase 2 pipeline still incomplete past self.len (expected): %v", err)
+	}
+}
+
 // TestPhase2cSpecializedBuiltinsCarryBuiltinSource verifies the
 // monomorphizer records BuiltinSource / BuiltinSourceArgs on every
 // specialized struct or enum cloned from a stdlib built-in generic

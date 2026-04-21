@@ -31,8 +31,22 @@ func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
 	}
 	file, err := legacyFileFromModule(mod)
 	if err != nil {
+		// legacyFileFromModule populated the specialized-builtin
+		// side channel but we're bailing early; clear it so a
+		// subsequent unrelated GenerateModule call doesn't see
+		// stale state.
+		currentSpecializedBuiltinSurfaces = nil
+		currentSpecializedBuiltinMeta = nil
 		return nil, err
 	}
+	// Defer cleanup until AFTER generateASTFile consumes the side
+	// channel. Nulling it at legacyFileFromModule return would clear
+	// the map before signatureOf and staticExprInfo (called from
+	// generateASTFile) can read it.
+	defer func() {
+		currentSpecializedBuiltinSurfaces = nil
+		currentSpecializedBuiltinMeta = nil
+	}()
 	out, err := generateASTFile(file, opts)
 	if err != nil {
 		return nil, err
@@ -216,6 +230,90 @@ type specializedBuiltinSurface struct {
 	Args   []ostyir.Type
 }
 
+// specializedBuiltinMeta is the llvmgen-side shape of a specialized
+// built-in's surface-level identity. Used by signatureOf's `self`
+// binding and by staticExprInfo to tag receiver values with the map /
+// list / set metadata the intrinsic dispatch reads.
+type specializedBuiltinMeta struct {
+	sourceType     ast.Type
+	listElemTyp    string
+	listElemString bool
+	mapKeyTyp      string
+	mapValueTyp    string
+	mapKeyString   bool
+	setElemTyp     string
+	setElemString  bool
+}
+
+// currentSpecializedBuiltinMeta maps mangled owner names (the
+// `ownerName` passed into signatureOf) to their surface-level map /
+// list / set metadata. Populated alongside
+// currentSpecializedBuiltinSurfaces at the start of each bridge
+// conversion; read by llvmgen's signatureOf to populate `self`
+// paramInfo.
+var currentSpecializedBuiltinMeta map[string]specializedBuiltinMeta
+
+// specializedBuiltinMetaFor returns the metadata for a specialized
+// built-in owner name, or (zero, false) if the name is unknown or
+// unregistered.
+func specializedBuiltinMetaFor(ownerName string) (specializedBuiltinMeta, bool) {
+	if currentSpecializedBuiltinMeta == nil {
+		return specializedBuiltinMeta{}, false
+	}
+	info, ok := currentSpecializedBuiltinMeta[ownerName]
+	return info, ok
+}
+
+// buildSpecializedBuiltinMeta projects each mangled surface entry
+// into an llvmgen-side metadata shape. Uses the legacy type bridge to
+// turn IR type args into AST types, then classifies per source name:
+// Map<K, V> populates mapKeyTyp / mapValueTyp, List<T> populates
+// listElemTyp, etc. Callers pass the surface map produced by
+// collectSpecializedBuiltinSurfaces.
+func buildSpecializedBuiltinMeta(surfaces map[string]specializedBuiltinSurface) map[string]specializedBuiltinMeta {
+	out := map[string]specializedBuiltinMeta{}
+	for mangled, surf := range surfaces {
+		if surf.Source == "" {
+			continue
+		}
+		astArgs := make([]ast.Type, 0, len(surf.Args))
+		for _, a := range surf.Args {
+			astArgs = append(astArgs, legacyTypeFromIR(a))
+		}
+		meta := specializedBuiltinMeta{
+			sourceType: &ast.NamedType{Path: []string{surf.Source}, Args: astArgs},
+		}
+		switch surf.Source {
+		case "Map":
+			if len(astArgs) == 2 {
+				if k, err := llvmRuntimeABIType(astArgs[0], typeEnv{}); err == nil {
+					meta.mapKeyTyp = k
+				}
+				if v, err := llvmRuntimeABIType(astArgs[1], typeEnv{}); err == nil {
+					meta.mapValueTyp = v
+				}
+				meta.mapKeyString = llvmNamedTypeIsString(astArgs[0])
+			}
+		case "List":
+			if len(astArgs) == 1 {
+				if e, err := llvmRuntimeABIType(astArgs[0], typeEnv{}); err == nil {
+					meta.listElemTyp = e
+				}
+				meta.listElemString = llvmNamedTypeIsString(astArgs[0])
+			}
+		case "Set":
+			if len(astArgs) == 1 {
+				if e, err := llvmRuntimeABIType(astArgs[0], typeEnv{}); err == nil {
+					meta.setElemTyp = e
+				}
+				meta.setElemString = llvmNamedTypeIsString(astArgs[0])
+			}
+		}
+		out[mangled] = meta
+	}
+	return out
+}
+
 func collectSpecializedBuiltinSurfaces(mod *ostyir.Module) map[string]specializedBuiltinSurface {
 	out := map[string]specializedBuiltinSurface{}
 	if mod == nil {
@@ -248,7 +346,12 @@ var currentSpecializedBuiltinSurfaces map[string]specializedBuiltinSurface
 
 func legacyFileFromModule(mod *ostyir.Module) (*ast.File, error) {
 	currentSpecializedBuiltinSurfaces = collectSpecializedBuiltinSurfaces(mod)
-	defer func() { currentSpecializedBuiltinSurfaces = nil }()
+	currentSpecializedBuiltinMeta = buildSpecializedBuiltinMeta(currentSpecializedBuiltinSurfaces)
+	// NOTE: callers (GenerateModule) are responsible for clearing
+	// currentSpecializedBuiltinSurfaces / currentSpecializedBuiltinMeta
+	// after `generateASTFile` consumes them. A deferred clear here
+	// would nil them before the downstream signatureOf /
+	// staticExprInfo paths can read the metadata off the built AST.
 	start, end := legacySpan(mod.At())
 	file := &ast.File{PosV: start, EndV: end}
 	for _, decl := range mod.Decls {
