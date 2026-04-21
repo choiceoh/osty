@@ -56,31 +56,43 @@ func (s *Server) handleSemanticTokens(req *rpcRequest) {
 		return
 	}
 	doc := s.docs.get(params.TextDocument.URI)
-	if doc == nil {
+	if doc == nil || doc.analysis == nil {
 		replyJSON(s.conn, req.ID, &SemanticTokens{Data: []uint32{}})
 		return
 	}
+	replyJSON(s.conn, req.ID, &SemanticTokens{Data: doc.analysis.semanticTokens()})
+}
 
-	l := lexer.New(doc.src)
-	toks := l.Lex()
-	li := doc.analysis.lines
-	idx := doc.analysis.identIndex
-	var sems []semToken
-	for _, tok := range toks {
-		if tok.Kind == token.EOF || tok.Kind == token.NEWLINE || tok.Kind == token.ILLEGAL {
-			continue
-		}
-		st, ok := classifyToken(tok, idx)
-		if !ok {
-			continue
-		}
-		sems = append(sems, fillPosition(st, li, tok.Pos, tok.End))
+// semanticTokens returns the encoded semantic-token payload for one
+// analysis result, computing it at most once. A fresh docAnalysis is
+// built on every didOpen/didChange refresh, so the cache naturally
+// invalidates with the document's semantic state.
+func (a *docAnalysis) semanticTokens() []uint32 {
+	if a == nil || a.lines == nil {
+		return nil
 	}
-	for _, c := range l.Comments() {
-		sems = append(sems, commentSemToken(li, c))
-	}
-
-	replyJSON(s.conn, req.ID, &SemanticTokens{Data: encodeSemTokens(sems)})
+	a.semanticTokenOnce.Do(func() {
+		src := a.lines.src
+		l := lexer.New(src)
+		toks := l.Lex()
+		comments := l.Comments()
+		sems := make([]semToken, 0, len(toks)+len(comments))
+		for _, tok := range toks {
+			if tok.Kind == token.EOF || tok.Kind == token.NEWLINE || tok.Kind == token.ILLEGAL {
+				continue
+			}
+			st, ok := classifyToken(tok, a.identIndex)
+			if !ok {
+				continue
+			}
+			sems = append(sems, fillPosition(st, a.lines, tok.Pos, tok.End))
+		}
+		for _, c := range comments {
+			sems = append(sems, commentSemToken(a.lines, c))
+		}
+		a.semanticTokenData = encodeSemTokens(sems)
+	})
+	return a.semanticTokenData
 }
 
 // classifyToken maps one token.Token to its (type, modifiers) pair through
