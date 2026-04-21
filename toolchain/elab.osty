@@ -511,8 +511,9 @@ fn elabInferBlock(cx: ElabCx, idx: Int, node: AstNode) -> ElabResult {
     let mut i = 0
     for stmtIdx in stmtIdxs {
         let isTail = i == n - 1
-        if isTail && astIsExprKindAt(cx.ast, stmtIdx) {
-            let tail = elabInfer(cx, stmtIdx)
+        let tailExprIdx = blockTailExprIdx(cx.ast, stmtIdx)
+        if isTail && tailExprIdx >= 0 && astIsExprKindAt(cx.ast, tailExprIdx) {
+            let tail = elabInfer(cx, tailExprIdx)
             tailNode = tail.node
             tailTy = tail.ty
         } else {
@@ -530,6 +531,25 @@ fn elabInferBlock(cx: ElabCx, idx: Int, node: AstNode) -> ElabResult {
     ElabResult { node: coreIdx, ty: tailTy }
 }
 
+/// blockTailExprIdx unwraps an `AstNExprStmt` wrapper when it appears
+/// as the last statement of a block. The parser wraps every
+/// expression-used-as-statement in that wrapper (parser.osty:1099);
+/// without this unwrap, `astIsExprKindAt` (which has no `AstNExprStmt`
+/// arm) rejects the tail, elabInferBlock falls into the statement
+/// path, and every block-expression silently reports type `()` —
+/// forcing the enclosing `if cond { ... } else { ... }` to join with
+/// the synthesized Unit else-branch back to `()`.
+fn blockTailExprIdx(ast: AstFile, stmtIdx: Int) -> Int {
+    if stmtIdx < 0 {
+        return stmtIdx
+    }
+    let node = astArenaNodeAt(ast.arena, stmtIdx)
+    if node.kind == AstNExprStmt {
+        return node.left
+    }
+    stmtIdx
+}
+
 fn elabCheckBlock(cx: ElabCx, idx: Int, node: AstNode, expected: Int) -> ElabResult {
     let mark = checkScopeMark(cx.env)
     let mut stmts: List<Int> = []
@@ -542,8 +562,9 @@ fn elabCheckBlock(cx: ElabCx, idx: Int, node: AstNode, expected: Int) -> ElabRes
     let mut i = 0
     for stmtIdx in stmtIdxs {
         let isTail = i == n - 1
-        if isTail && astIsExprKindAt(cx.ast, stmtIdx) {
-            let tail = elabCheck(cx, stmtIdx, expected)
+        let tailExprIdx = blockTailExprIdx(cx.ast, stmtIdx)
+        if isTail && tailExprIdx >= 0 && astIsExprKindAt(cx.ast, tailExprIdx) {
+            let tail = elabCheck(cx, tailExprIdx, expected)
             tailNode = tail.node
             tailTy = tail.ty
         } else {
