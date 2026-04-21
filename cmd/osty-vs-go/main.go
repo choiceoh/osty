@@ -19,6 +19,19 @@
 // Each run is appended to .osty-vs-go-history.jsonl (one JSON object
 // per run). `--history <N>` prints the last N runs as an ASCII trend
 // graph per bench.
+//
+// Autoresearch (inspired by karpathy/autoresearch): every run also
+// captures the current git HEAD and a single composite score —
+// `geomean(ns_osty / ns_go)` across all benches with both sides. The
+// tool compares each new run against the best score seen in history
+// and prints one of {new best, regression, within-noise, neutral}, so
+// the edit-build-bench loop has a one-line keep-or-revert verdict
+// without the user grepping through per-bench deltas. `--research`
+// walks the history and shows the current champion, the latest run,
+// and the deltas that drove the change. `--loop <interval>` blocks
+// until Ctrl-C, re-running on every interval so a human (or an
+// outer-loop agent) can iterate on the compiler with continuous
+// feedback.
 package main
 
 import (
@@ -29,11 +42,13 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -53,7 +68,85 @@ type runRecord struct {
 	BenchTime string        `json:"bench_time"`
 	PairsDir  string        `json:"pairs_dir"`
 	Label     string        `json:"label,omitempty"`
-	Results   []benchResult `json:"results"`
+	GitHead   string        `json:"git_head,omitempty"`
+	// Score is the geomean of osty_ns/go_ns across benches with both
+	// sides present. Lower = Osty closer to Go. NaN when no pair
+	// contributes. Persisted so the research/loop paths don't have to
+	// re-derive it from results (and so backfilling a new metric later
+	// doesn't silently mutate the published score of old runs).
+	Score   float64       `json:"score,omitempty"`
+	Results []benchResult `json:"results"`
+}
+
+// MarshalJSON writes NaN Score as omitted ("no verdict" for this run)
+// rather than producing the invalid JSON token `NaN`. Same trick as
+// benchResult.MarshalJSON.
+func (r runRecord) MarshalJSON() ([]byte, error) {
+	type alias runRecord
+	out := struct {
+		Score *float64 `json:"score,omitempty"`
+		alias
+	}{alias: alias(r)}
+	out.alias.Score = 0
+	if !math.IsNaN(r.Score) {
+		v := r.Score
+		out.Score = &v
+	}
+	return json.Marshal(out)
+}
+
+func (r *runRecord) UnmarshalJSON(data []byte) error {
+	type alias runRecord
+	var in struct {
+		Score *float64 `json:"score,omitempty"`
+		alias
+	}
+	if err := json.Unmarshal(data, &in); err != nil {
+		return err
+	}
+	*r = runRecord(in.alias)
+	if in.Score == nil {
+		r.Score = math.NaN()
+	} else {
+		r.Score = *in.Score
+	}
+	return nil
+}
+
+// composite returns the primary autoresearch metric: geomean of
+// osty/go ns ratios across all benches that have both sides. Lower is
+// better. NaN when no qualifying pair is present.
+func composite(rows []benchResult) float64 {
+	var logSum float64
+	var n int
+	for _, r := range rows {
+		if math.IsNaN(r.GoNs) || math.IsNaN(r.OsNs) || r.GoNs <= 0 {
+			continue
+		}
+		logSum += math.Log(r.OsNs / r.GoNs)
+		n++
+	}
+	if n == 0 {
+		return math.NaN()
+	}
+	return math.Exp(logSum / float64(n))
+}
+
+// gitHead returns the short commit hash the working tree is currently
+// at, or "" when we're not inside a git checkout. A "-dirty" suffix
+// marks uncommitted changes so a research run against an edited tree
+// is labeled for what it is.
+func gitHead() string {
+	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	head := strings.TrimSpace(string(out))
+	// `git diff --quiet` exits nonzero when there are unstaged edits.
+	if err := exec.Command("git", "diff", "--quiet").Run(); err != nil {
+		head += "-dirty"
+	}
+	return head
 }
 
 // MarshalJSON maps NaN metrics to null so the history file is valid
@@ -123,12 +216,25 @@ func main() {
 	filter := fs.String("filter", "", "optional regex over pair names; only matching pairs run")
 	historyN := fs.Int("history", 0, "if >0, skip running and render the last N runs from "+historyFile+" as an ASCII trend graph")
 	label := fs.String("label", "", "optional short label stored with this run (shown in history output)")
+	research := fs.Bool("research", false, "skip running and summarize history as an autoresearch journal (champion, latest, per-bench deltas)")
+	loopInterval := fs.Duration("loop", 0, "if >0, keep running in a loop with this interval between runs — compiles/edits land between ticks and each run prints a vs-best verdict")
+	noiseFrac := fs.Float64("noise", 0.02, "delta fraction below which a vs-best verdict is reported as within-noise (default 2%)")
+	autoresearch := fs.Bool("autoresearch", false, "fully autonomous keep-the-best loop (karpathy/autoresearch-style): before each bench sweep run --mutator, then git-commit on NEW BEST or `git reset --hard HEAD` on regression/noise. Requires --mutator and --max-experiments. Moves HEAD to an autoresearch/<ts> branch so the source branch is never modified in place.")
+	mutatorCmd := fs.String("mutator", "", "shell command run before each autoresearch iteration. Must modify the working tree; the exit code gates whether the iteration proceeds (nonzero = skip). Stateless — the same command runs every iteration, and it sees the current champion at HEAD.")
+	maxExperiments := fs.Int("max-experiments", 0, "cap for --autoresearch: stop after this many bench sweeps (including regressions). 0 = unlimited, use with care.")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
 
 	if *historyN > 0 {
 		if err := printHistory(*historyN); err != nil {
+			fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *research {
+		if err := printResearchJournal(*noiseFrac); err != nil {
 			fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
 			os.Exit(1)
 		}
@@ -151,10 +257,53 @@ func main() {
 		pairRE = re
 	}
 
-	pairs, err := discoverPairs(*pairsDir)
-	if err != nil {
+	if *autoresearch {
+		if *mutatorCmd == "" {
+			fmt.Fprintln(os.Stderr, "osty-vs-go: --autoresearch requires --mutator '<cmd>'")
+			os.Exit(2)
+		}
+		if *maxExperiments <= 0 {
+			fmt.Fprintln(os.Stderr, "osty-vs-go: --autoresearch requires --max-experiments N (>0) so the loop can't run forever unattended")
+			os.Exit(2)
+		}
+		cfg := autoresearchConfig{
+			Mutator:        *mutatorCmd,
+			MaxExperiments: *maxExperiments,
+			BenchTime:      *benchTime,
+			PairsDir:       *pairsDir,
+			OstyBin:        osty,
+			GoBin:          *goBin,
+			Label:          *label,
+			NoiseFrac:      *noiseFrac,
+			PairRE:         pairRE,
+			Interval:       *loopInterval,
+		}
+		if err := runAutoresearch(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if *loopInterval > 0 {
+		runLoop(*loopInterval, *benchTime, *pairsDir, osty, *goBin, *label, *noiseFrac, pairRE)
+		return
+	}
+
+	if _, err := runOnce(*benchTime, *pairsDir, osty, *goBin, *label, *noiseFrac, pairRE); err != nil {
 		fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+// runOnce executes one full bench sweep: discover pairs, run each
+// side, print the table, append to history, print the vs-best verdict.
+// Returns the new record so `--loop` can stream verdicts without
+// re-reading history.
+func runOnce(benchTime, pairsDir, ostyBin, goBin, label string, noiseFrac float64, pairRE *regexp.Regexp) (runRecord, error) {
+	pairs, err := discoverPairs(pairsDir)
+	if err != nil {
+		return runRecord{}, err
 	}
 	if pairRE != nil {
 		filtered := pairs[:0]
@@ -166,28 +315,31 @@ func main() {
 		pairs = filtered
 	}
 	if len(pairs) == 0 {
-		fmt.Fprintln(os.Stderr, "osty-vs-go: no pairs to run")
-		os.Exit(1)
+		return runRecord{}, fmt.Errorf("no pairs to run")
 	}
 
 	seq, err := nextRunSequence()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
-		os.Exit(1)
+		return runRecord{}, err
 	}
+	head := gitHead()
 	labelPart := ""
-	if *label != "" {
-		labelPart = " (" + *label + ")"
+	if label != "" {
+		labelPart = " (" + label + ")"
 	}
-	fmt.Printf("# osty-vs-go run #%d%s — benchtime=%s, pairs=%d\n\n", seq, labelPart, *benchTime, len(pairs))
+	headPart := ""
+	if head != "" {
+		headPart = " @ " + head
+	}
+	fmt.Printf("# osty-vs-go run #%d%s%s — benchtime=%s, pairs=%d\n\n", seq, labelPart, headPart, benchTime, len(pairs))
 
 	var rows []benchResult
 	for _, pair := range pairs {
-		goRows, err := runGoBench(*goBin, *pairsDir, pair, *benchTime)
+		goRows, err := runGoBench(goBin, pairsDir, pair, benchTime)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty-vs-go: go bench %s: %v\n", pair, err)
 		}
-		osRows, err := runOstyBench(osty, *pairsDir, pair, *benchTime)
+		osRows, err := runOstyBench(ostyBin, pairsDir, pair, benchTime)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty-vs-go: osty bench %s: %v\n", pair, err)
 		}
@@ -198,14 +350,297 @@ func main() {
 
 	record := runRecord{
 		Timestamp: time.Now(),
-		BenchTime: *benchTime,
-		PairsDir:  *pairsDir,
-		Label:     *label,
+		BenchTime: benchTime,
+		PairsDir:  pairsDir,
+		Label:     label,
+		GitHead:   head,
+		Score:     composite(rows),
 		Results:   rows,
 	}
+
+	// Compare against the best score in history BEFORE appending — we
+	// want the verdict to reflect the champion that existed when this
+	// run started, not a champion that includes this run.
+	prior, _ := readHistory()
+	printVsBestVerdict(record, prior, noiseFrac)
+
 	if err := appendHistory(record); err != nil {
 		fmt.Fprintf(os.Stderr, "osty-vs-go: history write: %v\n", err)
 	}
+	return record, nil
+}
+
+// runLoop re-runs the full sweep on a fixed cadence until interrupted.
+// Karpathy-style: one metric, one loop, keep the best. Between ticks
+// the user (or an outer agent) edits Osty sources; each tick's verdict
+// tells them whether the edit was an improvement, a regression, or
+// noise. Ctrl-C exits cleanly.
+func runLoop(interval time.Duration, benchTime, pairsDir, ostyBin, goBin, label string, noiseFrac float64, pairRE *regexp.Regexp) {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sig)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	// Run immediately rather than waiting `interval` for the first
+	// tick — the user just launched it and expects feedback.
+	for {
+		if _, err := runOnce(benchTime, pairsDir, ostyBin, goBin, label, noiseFrac, pairRE); err != nil {
+			fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
+		}
+		fmt.Printf("\n(waiting %s before next sweep; Ctrl-C to stop)\n\n", interval)
+		select {
+		case <-sig:
+			fmt.Fprintln(os.Stderr, "osty-vs-go: loop interrupted, exiting")
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// autoresearchConfig bundles the per-run autoresearch parameters.
+// Collecting them in a struct keeps the main dispatcher from growing
+// an unreadable 10-arg function signature and makes it trivial to pass
+// the same config into tests that mock out the bench sweep.
+type autoresearchConfig struct {
+	Mutator        string
+	MaxExperiments int
+	BenchTime      string
+	PairsDir       string
+	OstyBin        string
+	GoBin          string
+	Label          string
+	NoiseFrac      float64
+	PairRE         *regexp.Regexp
+	Interval       time.Duration
+}
+
+// runAutoresearch is the closest faithful take on karpathy/autoresearch
+// we can ship without an in-process LLM: the caller supplies a mutator
+// command (any executable that edits the working tree), and this loop
+// runs mutate → bench → keep-or-revert against the captured champion.
+//
+// Safety rails:
+//   - Must run inside a git checkout; tree must be clean at launch.
+//   - Creates and checks out `autoresearch/<ts>` so the user's source
+//     branch is never written to in place. The start branch is printed
+//     so the user can `git checkout <it>` when the session ends.
+//   - `git reset --hard HEAD` is only called against commits this loop
+//     itself made (the autoresearch branch tip). It cannot reach pre-
+//     session work because that lives on the start branch.
+//   - `--max-experiments` is mandatory so a hung mutator loop can't run
+//     indefinitely and burn the machine.
+//   - SIGINT / SIGTERM drain gracefully between iterations.
+func runAutoresearch(cfg autoresearchConfig) error {
+	if err := requireCleanTree(); err != nil {
+		return err
+	}
+	startBranch, err := currentBranch()
+	if err != nil {
+		return fmt.Errorf("read current branch: %w", err)
+	}
+	workBranch := fmt.Sprintf("autoresearch/%s", time.Now().Format("20060102-150405"))
+	if _, err := gitRun("checkout", "-b", workBranch); err != nil {
+		return fmt.Errorf("create autoresearch branch %s: %w", workBranch, err)
+	}
+	fmt.Printf("# osty-vs-go autoresearch — branch %s (from %s)\n", workBranch, startBranch)
+	fmt.Printf("  mutator: %s\n", cfg.Mutator)
+	fmt.Printf("  budget:  %d experiments (interval between ticks: %s)\n\n",
+		cfg.MaxExperiments, cfg.Interval)
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sig)
+
+	stats := autoresearchStats{startBranch: startBranch, workBranch: workBranch}
+	for i := 1; i <= cfg.MaxExperiments; i++ {
+		select {
+		case <-sig:
+			fmt.Fprintln(os.Stderr, "\nosty-vs-go: autoresearch interrupted, exiting")
+			stats.interrupted = true
+			break
+		default:
+		}
+		if stats.interrupted {
+			break
+		}
+		if err := runAutoresearchIter(cfg, i, &stats); err != nil {
+			fmt.Fprintf(os.Stderr, "osty-vs-go: experiment #%d: %v\n", i, err)
+			stats.errors++
+			continue
+		}
+		if cfg.Interval > 0 && i < cfg.MaxExperiments {
+			fmt.Printf("\n(sleeping %s before next experiment; Ctrl-C to stop)\n", cfg.Interval)
+			select {
+			case <-sig:
+				stats.interrupted = true
+			case <-time.After(cfg.Interval):
+			}
+		}
+	}
+
+	printAutoresearchSummary(stats)
+	return nil
+}
+
+// autoresearchStats aggregates the session counters for the final
+// summary. `kept` counts only real NEW BEST promotions; first-run and
+// kept-by-tolerance paths still count as kept because they moved HEAD.
+type autoresearchStats struct {
+	startBranch string
+	workBranch  string
+	attempted   int
+	kept        int
+	reverted    int
+	mutatorFail int
+	errors      int
+	interrupted bool
+	best        runRecord // champion of this session
+	hasBest     bool
+}
+
+func runAutoresearchIter(cfg autoresearchConfig, iter int, stats *autoresearchStats) error {
+	stats.attempted++
+	fmt.Printf("\n=== autoresearch experiment #%d ===\n", iter)
+
+	// Phase 1: run the mutator. Nonzero exit → skip this iteration's
+	// bench sweep and revert anything the mutator wrote. This keeps a
+	// flaky mutator from contaminating HEAD.
+	if err := runMutator(cfg.Mutator); err != nil {
+		stats.mutatorFail++
+		fmt.Fprintf(os.Stderr, "  mutator failed (%v); reverting any partial writes\n", err)
+		_, _ = gitRun("reset", "--hard", "HEAD")
+		_, _ = gitRun("clean", "-fd")
+		return nil
+	}
+
+	// Phase 2: run the bench sweep. runOnce already writes the history
+	// file and prints the verdict relative to all-time history.
+	rec, err := runOnce(cfg.BenchTime, cfg.PairsDir, cfg.OstyBin, cfg.GoBin, cfg.Label, cfg.NoiseFrac, cfg.PairRE)
+	if err != nil {
+		// Bench failure shouldn't leave the mutator's changes on HEAD.
+		_, _ = gitRun("reset", "--hard", "HEAD")
+		_, _ = gitRun("clean", "-fd")
+		return err
+	}
+
+	// Phase 3: the autonomous decision — against THIS SESSION'S
+	// champion, not all-time history. Otherwise a pre-session run on
+	// a different machine could lock out every mutation.
+	keep := decideKeep(rec, stats.best, stats.hasBest, cfg.NoiseFrac)
+	if keep {
+		if err := commitKept(iter, rec); err != nil {
+			return fmt.Errorf("commit kept experiment #%d: %w", iter, err)
+		}
+		stats.kept++
+		stats.best = rec
+		stats.hasBest = true
+		fmt.Printf("  -> KEPT (committed on %s)\n", stats.workBranch)
+	} else {
+		if _, err := gitRun("reset", "--hard", "HEAD"); err != nil {
+			return fmt.Errorf("revert rejected experiment #%d: %w", iter, err)
+		}
+		if _, err := gitRun("clean", "-fd"); err != nil {
+			return fmt.Errorf("clean untracked in rejected experiment #%d: %w", iter, err)
+		}
+		stats.reverted++
+		fmt.Printf("  -> REVERTED (HEAD unchanged on %s)\n", stats.workBranch)
+	}
+	return nil
+}
+
+// decideKeep is the one-metric keep-or-discard decision. Pulled into
+// a plain function so unit tests can cover the branching matrix
+// without spinning up a tmp git repo.
+func decideKeep(cur runRecord, best runRecord, hasBest bool, noiseFrac float64) bool {
+	if math.IsNaN(cur.Score) {
+		// No verdict possible; treat as no improvement so HEAD stays
+		// at the session's last committed state.
+		return false
+	}
+	if !hasBest {
+		// First qualifying experiment in the session always seeds the
+		// champion. Otherwise we'd discard the only data point.
+		return true
+	}
+	// Strictly lower is a keep. Tie-or-worse is a revert — even within
+	// the noise band, because "kept a regression by accident" is a
+	// worse failure mode than "rejected an indistinguishable improvement".
+	// The noise knob still matters for the human-facing verdict; here
+	// we want the autonomous loop biased toward reverting noise.
+	return cur.Score < best.Score
+}
+
+func runMutator(cmdStr string) error {
+	cmd := exec.Command("sh", "-c", cmdStr)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+	return cmd.Run()
+}
+
+func commitKept(iter int, rec runRecord) error {
+	if _, err := gitRun("add", "-A"); err != nil {
+		return err
+	}
+	// Empty stage (mutator made no real change) is a valid "kept" only
+	// if it's the very first iter; otherwise `git commit` without
+	// --allow-empty would error out. We prefer --allow-empty here so
+	// the linear history of "one commit per accepted experiment"
+	// survives even a degenerate mutator.
+	msg := fmt.Sprintf("autoresearch #%d: score %.4f (kept)", iter, rec.Score)
+	if _, err := gitRun("commit", "--allow-empty", "-m", msg); err != nil {
+		return err
+	}
+	return nil
+}
+
+func requireCleanTree() error {
+	if _, err := exec.LookPath("git"); err != nil {
+		return fmt.Errorf("autoresearch requires git in PATH: %w", err)
+	}
+	if out, err := gitRun("rev-parse", "--is-inside-work-tree"); err != nil || strings.TrimSpace(out) != "true" {
+		return fmt.Errorf("autoresearch must run inside a git working tree")
+	}
+	out, err := gitRun("status", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("check tree state: %w", err)
+	}
+	if strings.TrimSpace(out) != "" {
+		return fmt.Errorf("autoresearch refuses to run with a dirty tree; commit or stash first\n%s", out)
+	}
+	return nil
+}
+
+func currentBranch() (string, error) {
+	out, err := gitRun("rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func gitRun(args ...string) (string, error) {
+	out, err := exec.Command("git", args...).CombinedOutput()
+	return string(out), err
+}
+
+func printAutoresearchSummary(s autoresearchStats) {
+	fmt.Println("\n=== autoresearch summary ===")
+	fmt.Printf("  started from: %s\n", s.startBranch)
+	fmt.Printf("  work branch:  %s\n", s.workBranch)
+	fmt.Printf("  experiments:  %d attempted, %d kept, %d reverted, %d mutator failures, %d errors\n",
+		s.attempted, s.kept, s.reverted, s.mutatorFail, s.errors)
+	if s.hasBest {
+		fmt.Printf("  session best: score %.4f\n", s.best.Score)
+	} else {
+		fmt.Println("  session best: none (no experiment produced a valid score)")
+	}
+	if s.interrupted {
+		fmt.Println("  status:       interrupted")
+	}
+	fmt.Printf("\n  to return to your original branch: git checkout %s\n", s.startBranch)
+	fmt.Printf("  to inspect kept experiments:       git log %s\n", s.workBranch)
 }
 
 // resolveOstyBin picks the Osty binary: explicit flag beats the local
@@ -488,6 +923,186 @@ func formatRatio(osNs, goNs float64) string {
 		return "—"
 	}
 	return fmt.Sprintf("%.2fx", osNs/goNs)
+}
+
+// bestRun picks the history entry with the lowest composite score.
+// Ties break toward the earlier run so a regression doesn't quietly
+// replace a champion of equal score.
+func bestRun(runs []runRecord) (runRecord, bool) {
+	best := runRecord{}
+	found := false
+	for _, r := range runs {
+		if math.IsNaN(r.Score) {
+			continue
+		}
+		if !found || r.Score < best.Score {
+			best = r
+			found = true
+		}
+	}
+	return best, found
+}
+
+// printVsBestVerdict compares a just-completed run against the best
+// score in prior history and prints one of:
+//
+//	-> new best: score 1.234 (prev champion 1.456 at run #3)
+//	-> regression: score 1.500 vs best 1.234 at run #3 (+21.6%)
+//	-> within noise: score 1.239 vs best 1.234 at run #3 (+0.41%)
+//	-> first run: score 1.234 (no prior data)
+//
+// noiseFrac is the |delta/best| band under which we call it noise
+// instead of promoting / regressing. This is the one-line "keep or
+// revert" signal the edit-build-bench loop actually needs.
+func printVsBestVerdict(current runRecord, prior []runRecord, noiseFrac float64) {
+	if math.IsNaN(current.Score) {
+		fmt.Println("\n-> no verdict: this run had no paired benches (both sides present)")
+		return
+	}
+	best, ok := bestRun(prior)
+	if !ok {
+		fmt.Printf("\n-> first run: score %.3f (no prior data)\n", current.Score)
+		return
+	}
+	delta := (current.Score - best.Score) / best.Score
+	bestIdx := runIndex(prior, best)
+	switch {
+	case current.Score < best.Score:
+		fmt.Printf("\n-> NEW BEST: score %.3f  (prev champion %.3f at run #%d; -%.2f%%)\n",
+			current.Score, best.Score, bestIdx, -delta*100)
+	case math.Abs(delta) <= noiseFrac:
+		fmt.Printf("\n-> within noise: score %.3f vs best %.3f at run #%d (%+.2f%%)\n",
+			current.Score, best.Score, bestIdx, delta*100)
+	default:
+		fmt.Printf("\n-> regression: score %.3f vs best %.3f at run #%d (%+.2f%%)\n",
+			current.Score, best.Score, bestIdx, delta*100)
+	}
+	printPerBenchDeltas(current, best)
+}
+
+// runIndex returns the 1-based absolute index of r in runs (the same
+// numbering printHistory and the run header use). 0 if not found.
+func runIndex(runs []runRecord, target runRecord) int {
+	for i, r := range runs {
+		// Timestamp + score uniquely identifies a run in practice;
+		// both are written at appendHistory time.
+		if r.Timestamp.Equal(target.Timestamp) && r.Score == target.Score {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// printPerBenchDeltas shows which benches drove the score change
+// relative to the champion, sorted by |pct delta| descending. Only
+// benches present on both runs contribute — a bench added mid-history
+// doesn't count as a regression because the champion never measured
+// it.
+func printPerBenchDeltas(current, best runRecord) {
+	type delta struct {
+		pair, name string
+		cur, prev  float64
+	}
+	var deltas []delta
+	for _, cr := range current.Results {
+		if math.IsNaN(cr.OsNs) {
+			continue
+		}
+		for _, br := range best.Results {
+			if br.Pair == cr.Pair && br.Name == cr.Name && !math.IsNaN(br.OsNs) && br.OsNs > 0 {
+				deltas = append(deltas, delta{cr.Pair, cr.Name, cr.OsNs, br.OsNs})
+				break
+			}
+		}
+	}
+	if len(deltas) == 0 {
+		return
+	}
+	sort.Slice(deltas, func(i, j int) bool {
+		di := math.Abs((deltas[i].cur - deltas[i].prev) / deltas[i].prev)
+		dj := math.Abs((deltas[j].cur - deltas[j].prev) / deltas[j].prev)
+		return di > dj
+	})
+	// Cap at the top 5 to keep verdict output scannable.
+	if len(deltas) > 5 {
+		deltas = deltas[:5]
+	}
+	fmt.Println("   top per-bench deltas (osty ns/op, vs champion):")
+	for _, d := range deltas {
+		pct := (d.cur - d.prev) / d.prev * 100
+		arrow := "="
+		switch {
+		case pct < -0.5:
+			arrow = "↓"
+		case pct > 0.5:
+			arrow = "↑"
+		}
+		fmt.Printf("     %s %-26s %10.1f -> %-10.1f (%+.2f%%)\n",
+			arrow, d.pair+"."+d.name, d.prev, d.cur, pct)
+	}
+}
+
+// printResearchJournal reports the full history as a research log:
+// the champion, the latest run, the delta, and the per-bench changes
+// that drove it. Works without running any benchmarks, so you can
+// inspect results between sweeps without triggering a new compile.
+func printResearchJournal(noiseFrac float64) error {
+	runs, err := readHistory()
+	if err != nil {
+		return err
+	}
+	if len(runs) == 0 {
+		return fmt.Errorf("no history in %s — run `osty-vs-go` at least once first", historyFile)
+	}
+	fmt.Printf("# osty-vs-go research journal — %d run(s)\n\n", len(runs))
+	best, ok := bestRun(runs)
+	if !ok {
+		fmt.Println("  no run in history has a composite score (need both sides for at least one bench)")
+		return nil
+	}
+	latest := runs[len(runs)-1]
+	printRunHeader(runs, best, "champion")
+	if latest.Timestamp.Equal(best.Timestamp) {
+		fmt.Println("\n  latest run is the current champion.")
+		return nil
+	}
+	printRunHeader(runs, latest, "latest")
+	delta := (latest.Score - best.Score) / best.Score
+	verdict := "regression"
+	switch {
+	case latest.Score < best.Score:
+		verdict = "improvement (unexpected — latest should have been crowned)"
+	case math.Abs(delta) <= noiseFrac:
+		verdict = "within noise"
+	}
+	fmt.Printf("\n  verdict: %s  (%+.2f%% vs champion)\n", verdict, delta*100)
+	printPerBenchDeltas(latest, best)
+
+	// Show the run-number gap between champion and latest so the user
+	// can tell whether regressions are accumulating or are a single
+	// recent bad run.
+	bestIdx := runIndex(runs, best)
+	latestIdx := len(runs)
+	if bestIdx > 0 && latestIdx > bestIdx {
+		fmt.Printf("\n  %d run(s) since the champion was set (run #%d -> run #%d)\n",
+			latestIdx-bestIdx, bestIdx, latestIdx)
+	}
+	return nil
+}
+
+func printRunHeader(allRuns []runRecord, r runRecord, kind string) {
+	idx := runIndex(allRuns, r)
+	labelPart := ""
+	if r.Label != "" {
+		labelPart = " " + r.Label
+	}
+	headPart := ""
+	if r.GitHead != "" {
+		headPart = " @ " + r.GitHead
+	}
+	fmt.Printf("  %s: run #%d%s%s  (score %.3f, %s)\n",
+		kind, idx, labelPart, headPart, r.Score,
+		r.Timestamp.Local().Format("2006-01-02 15:04:05"))
 }
 
 // nextRunSequence scans the history file to pick the next 1-based run
