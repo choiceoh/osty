@@ -57,12 +57,18 @@ type generator struct {
 	label             int
 	stringID          int
 	stringDefs        []*LlvmStringGlobal
-	body              []string
-	locals            []map[string]value
-	returnType        string
-	returnSourceType  ast.Type
-	returnListElemTyp string
-	currentBlock      string
+	body                 []string
+	locals               []map[string]value
+	returnType           string
+	returnSourceType     ast.Type
+	returnListElemTyp    string
+	returnListElemString bool
+	returnMapKeyTyp      string
+	returnMapValueTyp    string
+	returnMapKeyString   bool
+	returnSetElemTyp     string
+	returnSetElemString  bool
+	currentBlock         string
 	currentReachable  bool
 	resultContexts    []builtinResultContext
 	optionContexts    []builtinOptionContext
@@ -139,6 +145,12 @@ func (g *generator) beginFunction() {
 	g.returnType = ""
 	g.returnSourceType = nil
 	g.returnListElemTyp = ""
+	g.returnListElemString = false
+	g.returnMapKeyTyp = ""
+	g.returnMapValueTyp = ""
+	g.returnMapKeyString = false
+	g.returnSetElemTyp = ""
+	g.returnSetElemString = false
 	g.gcRootSlots = nil
 	g.gcRootMarks = []int{0}
 	g.nextSafepoint = 1
