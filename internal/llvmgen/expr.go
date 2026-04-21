@@ -3189,9 +3189,97 @@ func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) 
 		v.setElemTyp = elemTyp
 		v.setElemString = elemString
 		return v, true, nil
+	case "get":
+		out, err := g.emitListGetCall(call, base, elemTyp, elemString)
+		return out, true, err
 	default:
 		return value{}, false, nil
 	}
+}
+
+// emitListGetCall lowers `list.get(i) -> T?` — the bounds-checking
+// counterpart to raw `list[i]` indexing. The runtime's
+// `osty_rt_list_get_<suffix>` aborts on out-of-range access, so the
+// Option semantics are emitted in IR: check `0 <= i < len` first, take
+// the runtime get only on the in-bounds branch, and let a phi node
+// thread the result (the ptr-backed element) or null (None) into the
+// parent block.
+//
+// Only ptr-backed element types are lowered here today: `Option<T>` for
+// T = scalar (Int, Bool, Float, Char, Byte) still needs the
+// scalar-boxing Option codegen that stdlib_shim.go's
+// emitBuiltinOptionSomeCall path handles for user-written Some(x). The
+// injected stdlib bodies that bring this method into play
+// (`List<T>.first`, `last`, …) always receive T of reference type
+// (String, List<U>, struct) because that is the specialization the
+// injection pipeline actually requests — scalar callsites fall through
+// to user-written bodies that don't rely on this dispatch.
+func (g *generator) emitListGetCall(call *ast.CallExpr, base value, elemTyp string, elemString bool) (value, error) {
+	if len(call.Args) != 1 {
+		return value{}, unsupportedf("call", "list.get expects 1 argument, got %d", len(call.Args))
+	}
+	arg := call.Args[0]
+	if arg == nil || arg.Name != "" || arg.Value == nil {
+		return value{}, unsupportedf("call", "list.get requires a positional Int argument")
+	}
+	if elemTyp != "ptr" {
+		return value{}, unsupportedf("type-system", "list.get on List<non-ptr elem %s> needs scalar-Option boxing; only ptr-backed elements lower today", elemTyp)
+	}
+	idx, err := g.emitExpr(arg.Value)
+	if err != nil {
+		return value{}, err
+	}
+	idx, err = g.loadIfPointer(idx)
+	if err != nil {
+		return value{}, err
+	}
+	if idx.typ != "i64" {
+		return value{}, unsupportedf("type-system", "list.get index type %s, want i64", idx.typ)
+	}
+
+	g.declareRuntimeSymbol(listRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+	getSym := listRuntimeGetSymbol("ptr")
+	g.declareRuntimeSymbol(getSym, "ptr", []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+
+	emitter := g.toOstyEmitter()
+	lenVal := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
+	geq0 := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp sge i64 %s, 0", geq0, idx.ref))
+	ltlen := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp slt i64 %s, %s", ltlen, idx.ref, lenVal.name))
+	inBounds := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = and i1 %s, %s", inBounds, geq0, ltlen))
+
+	inLabel := llvmNextLabel(emitter, "list.get.in")
+	outLabel := llvmNextLabel(emitter, "list.get.out")
+	endLabel := llvmNextLabel(emitter, "list.get.end")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", inBounds, inLabel, outLabel))
+
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", inLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(inLabel)
+
+	emitter = g.toOstyEmitter()
+	gotVal := llvmCall(emitter, "ptr", getSym, []*LlvmValue{toOstyValue(base), toOstyValue(idx)})
+	inPred := g.currentBlock
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", outLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi ptr [ %s, %%%s ], [ null, %%%s ]", tmp, gotVal.name, inPred, outLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(endLabel)
+
+	out := value{typ: "ptr", ref: tmp, gcManaged: true}
+	out.listElemTyp = ""
+	out.listElemString = false
+	// Surface ptr-backed `Option<T>` — the Osty source type mirrors the
+	// method's declared return, so downstream matching on `Some` / `None`
+	// reads this as an optional and uses the null-ness of the ptr to
+	// pick arms.
+	_ = elemString
+	return out, nil
 }
 
 func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
