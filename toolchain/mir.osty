@@ -26,6 +26,8 @@
 // the flat struct keyed by the kind. Readers must check `kind` before
 // interpreting kind-specific fields.
 
+use std.strings as strings
+
 // ====================================================================
 // Enum kinds
 // ====================================================================
@@ -1321,18 +1323,18 @@ pub fn mirCountReachable(func: MirFunction) -> Int {
 /// close to Rust MIR dumps. Used by tests and when inspecting backend
 /// output during development.
 pub fn mirPrintModule(m: MirModule) -> String {
-    let mut out = ""
-    out = out + "module \"" + m.packageName + "\"\n"
+    let mut parts: List<String> = []
+    parts.push("module \"{m.packageName}\"\n")
     for u in m.uses {
-        out = out + mirIndent(1) + mirPrintUse(u) + "\n"
+        parts.push("{mirIndent(1)}{mirPrintUse(u)}\n")
     }
     for g in m.globals {
-        out = out + "\n" + mirPrintGlobal(g)
+        parts.push("\n{mirPrintGlobal(g)}")
     }
     for func in m.functions {
-        out = out + "\n" + mirPrintFunction(func)
+        parts.push("\n{mirPrintFunction(func)}")
     }
-    out
+    strings.join(parts, "")
 }
 
 /// mirPrintFunction renders one function using the same format as
