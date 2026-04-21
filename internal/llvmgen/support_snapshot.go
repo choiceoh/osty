@@ -455,6 +455,71 @@ func llvmGcRootRelease(emitter *LlvmEmitter, value *LlvmValue) {
 	llvmCallVoid(emitter, "osty.gc.root_release_v1", []*LlvmValue{value})
 }
 
+// Osty: toolchain/llvmgen.osty:455:5
+func llvmSafepointKindUnspecified() int { return 0 }
+
+// Osty: toolchain/llvmgen.osty:457:5
+func llvmSafepointKindEntry() int { return 1 }
+
+// Osty: toolchain/llvmgen.osty:459:5
+func llvmSafepointKindCall() int { return 2 }
+
+// Osty: toolchain/llvmgen.osty:461:5
+func llvmSafepointKindLoop() int { return 3 }
+
+// Osty: toolchain/llvmgen.osty:463:5
+func llvmSafepointKindAlloc() int { return 4 }
+
+// Osty: toolchain/llvmgen.osty:465:5
+func llvmSafepointKindYield() int { return 5 }
+
+// Osty: toolchain/llvmgen.osty:472:5
+func llvmEncodeSafepointId(kind int, serial int) int64 {
+	const mask int64 = (int64(1) << 56) - 1
+	return (int64(kind) << 56) | (int64(serial) & mask)
+}
+
+// Osty: toolchain/llvmgen.osty:487:5
+func llvmSafepointDefaultRootChunkSize() int { return 4096 }
+
+// Osty: toolchain/llvmgen.osty:498:5
+func llvmClosureEnvGcKind() int { return 1029 }
+
+// Osty: toolchain/llvmgen.osty:505:5
+func llvmClosureEnvPhase1CaptureCount() int { return 0 }
+
+// Osty: toolchain/llvmgen.osty:514:5
+func llvmEmitClosureEnvAllocRuntime(emitter *LlvmEmitter, captureCount int, siteName string, thunkSymbol string) *LlvmValue {
+	envTemp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call ptr @osty.rt.closure_env_alloc_v1(i64 %d, ptr %s)", envTemp, captureCount, siteName))
+	emitter.body = append(emitter.body, fmt.Sprintf("  store ptr @%s, ptr %s", thunkSymbol, envTemp))
+	return &LlvmValue{typ: "ptr", name: envTemp, pointer: false}
+}
+
+// Osty: toolchain/llvmgen.osty:513:5
+func llvmRenderSafepointEmpty(id int64) string {
+	return fmt.Sprintf("  call void @osty.gc.safepoint_v1(i64 %d, ptr null, i64 0)", id)
+}
+
+// Osty: toolchain/llvmgen.osty:521:5
+func llvmEmitSafepointEmpty(emitter *LlvmEmitter, id int64) {
+	emitter.body = append(emitter.body, llvmRenderSafepointEmpty(id))
+}
+
+// Osty: toolchain/llvmgen.osty:523:5
+func llvmEmitSafepointWithRoots(emitter *LlvmEmitter, id int64, rootAddresses []string) {
+	count := len(rootAddresses)
+	slotsPtr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca ptr, i64 %d", slotsPtr, count))
+	for i := 0; i < count; i++ {
+		slotPtr := llvmNextTemp(emitter)
+		addr := rootAddresses[i]
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr ptr, ptr %s, i64 %d", slotPtr, slotsPtr, i))
+		emitter.body = append(emitter.body, fmt.Sprintf("  store ptr %s, ptr %s", addr, slotPtr))
+	}
+	emitter.body = append(emitter.body, fmt.Sprintf("  call void @osty.gc.safepoint_v1(i64 %d, ptr %s, i64 %d)", id, slotsPtr, count))
+}
+
 // Osty: toolchain/llvmgen.osty:327:5
 func llvmStructTypeDef(name string, fieldTypes []string) string {
 	// Osty: toolchain/llvmgen.osty:328:5
@@ -1060,6 +1125,37 @@ func llvmRenderFunction(ret string, name string, params []*LlvmParam, body []str
 }
 
 // Osty: toolchain/llvmgen.osty:688:5
+func llvmRenderClosureThunk(retType string, thunkSymbol string, paramTypes []string, realSymbol string) string {
+	ret := retType
+	if ret == "" {
+		ret = "void"
+	}
+	paramParts := []string{"ptr %env"}
+	argParts := make([]string, 0, len(paramTypes))
+	for i := 0; i < len(paramTypes); i++ {
+		pt := paramTypes[i]
+		paramParts = append(paramParts, fmt.Sprintf("%s %%arg%d", pt, i))
+		argParts = append(argParts, fmt.Sprintf("%s %%arg%d", pt, i))
+	}
+	params := llvmStrings.Join(paramParts, ", ")
+	args := llvmStrings.Join(argParts, ", ")
+	lines := []string{fmt.Sprintf("define private %s @%s(%s) {", ret, thunkSymbol, params), "entry:"}
+	if ret == "void" {
+		lines = append(lines,
+			fmt.Sprintf("  call void @%s(%s)", realSymbol, args),
+			"  ret void",
+		)
+	} else {
+		lines = append(lines,
+			fmt.Sprintf("  %%__ret = call %s @%s(%s)", ret, realSymbol, args),
+			fmt.Sprintf("  ret %s %%__ret", ret),
+		)
+	}
+	lines = append(lines, "}")
+	return llvmStrings.Join([]string{llvmStrings.Join(lines, "\n"), "\n"}, "")
+}
+
+// Osty: toolchain/llvmgen.osty:740:5
 func llvmNeedsObjectArtifact(emit string) bool {
 	return emit == "object" || emit == "binary"
 }

@@ -1029,10 +1029,8 @@ func (g *mirGen) emitGCSafepointKind(kind safepointKind) {
 	g.declareSafepoint()
 	serial := g.nextSafepoint
 	g.nextSafepoint++
-	id := encodeSafepointID(kind, serial)
-	g.fnBuf.WriteString("  call void @osty.gc.safepoint_v1(i64 ")
-	g.fnBuf.WriteString(strconv.FormatInt(id, 10))
-	g.fnBuf.WriteString(", ptr null, i64 0)\n")
+	g.fnBuf.WriteString(llvmRenderSafepointEmpty(encodeSafepointID(kind, serial)))
+	g.fnBuf.WriteByte('\n')
 }
 
 // declareSafepoint registers @osty.gc.safepoint_v1 — split from

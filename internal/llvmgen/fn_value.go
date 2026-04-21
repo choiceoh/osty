@@ -19,6 +19,17 @@ import (
 	"github.com/osty/osty/internal/ast"
 )
 
+// closureThunkParamTypes extracts the LLVM IR types of a fnSig's
+// parameters in source order. The thunk consumes these verbatim:
+// `ptr %env` plus `P_i %arg_i` for each original param.
+func closureThunkParamTypes(sig *fnSig) []string {
+	out := make([]string, 0, len(sig.params))
+	for _, p := range sig.params {
+		out = append(out, llvmParamIRType(p))
+	}
+	return out
+}
+
 func fnValueThunkSymbol(realSymbol string) string {
 	return "__osty_closure_thunk_" + realSymbol
 }
@@ -38,32 +49,9 @@ func (g *generator) ensureFnValueThunk(sig *fnSig) string {
 	if _, ok := g.fnValueThunkDefs[symbol]; ok {
 		return symbol
 	}
-	retLLVM := sig.ret
-	if retLLVM == "" {
-		retLLVM = "void"
-	}
-	// Build param list for the thunk: `ptr %env, <P0> %arg0, ...`.
-	paramParts := make([]string, 0, 1+len(sig.params))
-	paramParts = append(paramParts, "ptr %env")
-	argParts := make([]string, 0, len(sig.params))
-	for i, p := range sig.params {
-		pLLVM := llvmParamIRType(p)
-		paramParts = append(paramParts, fmt.Sprintf("%s %%arg%d", pLLVM, i))
-		argParts = append(argParts, fmt.Sprintf("%s %%arg%d", pLLVM, i))
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "define private %s @%s(%s) {\n",
-		retLLVM, symbol, strings.Join(paramParts, ", "))
-	b.WriteString("entry:\n")
-	if retLLVM == "void" {
-		fmt.Fprintf(&b, "  call void @%s(%s)\n  ret void\n",
-			sig.irName, strings.Join(argParts, ", "))
-	} else {
-		fmt.Fprintf(&b, "  %%__ret = call %s @%s(%s)\n  ret %s %%__ret\n",
-			retLLVM, sig.irName, strings.Join(argParts, ", "), retLLVM)
-	}
-	b.WriteString("}\n")
-	g.fnValueThunkDefs[symbol] = b.String()
+	g.fnValueThunkDefs[symbol] = llvmRenderClosureThunk(
+		sig.ret, symbol, closureThunkParamTypes(sig), sig.irName,
+	)
 	g.fnValueThunkOrder = append(g.fnValueThunkOrder, symbol)
 	return symbol
 }
@@ -75,14 +63,14 @@ func (g *generator) ensureFnValueThunk(sig *fnSig) string {
 // future direct `osty.gc.alloc_v1` callers; the closure allocation
 // path itself uses `osty.rt.closure_env_alloc_v1` which installs the
 // capture-tracing callback at construction.
-const fnValueEnvKind = 1029
+var fnValueEnvKind = llvmClosureEnvGcKind()
 
 // fnValuePhase1CaptureCount is the capture count the current lowering
 // emits for every closure env. Phase 1 closures have no captures yet;
 // Phase 4 will drive this from the closure AST. The constant lives at
 // this boundary so the call-site change is one-line when captures
 // land.
-const fnValuePhase1CaptureCount = 0
+var fnValuePhase1CaptureCount = llvmClosureEnvPhase1CaptureCount()
 
 // emitFnValueEnv materialises a closure env holding the thunk pointer
 // for the given top-level fn. Returns a `ptr`-typed value tagged with
@@ -116,17 +104,12 @@ func (g *generator) emitFnValueEnv(sig *fnSig) (value, error) {
 	})
 	emitter := g.toOstyEmitter()
 	site := llvmStringLiteral(emitter, "runtime.closure.env.ptr")
-	envTemp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  %s = call ptr @osty.rt.closure_env_alloc_v1(i64 %d, ptr %s)",
-		envTemp, fnValuePhase1CaptureCount, site.name,
-	))
-	emitter.body = append(emitter.body, fmt.Sprintf("  store ptr @%s, ptr %s", thunk, envTemp))
+	env := llvmEmitClosureEnvAllocRuntime(emitter, fnValuePhase1CaptureCount, site.name, thunk)
 	g.takeOstyEmitter(emitter)
 	g.needsGCRuntime = true
 	return value{
 		typ:       "ptr",
-		ref:       envTemp,
+		ref:       env.name,
 		fnSigRef:  sig,
 		gcManaged: true,
 	}, nil

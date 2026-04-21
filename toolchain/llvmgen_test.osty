@@ -1286,3 +1286,102 @@ fn testLlvmSmokeMapBasicIsOstyOwned() {
     assertLlvmContains(ir, "= call i64 @osty_rt_map_len(ptr %t0)")
     assertLlvmContains(ir, "ret i32 0")
 }
+
+fn testLlvmSafepointKindValuesAreOstyOwned() {
+    testing.assertEq(llvmSafepointKindUnspecified(), 0)
+    testing.assertEq(llvmSafepointKindEntry(), 1)
+    testing.assertEq(llvmSafepointKindCall(), 2)
+    testing.assertEq(llvmSafepointKindLoop(), 3)
+    testing.assertEq(llvmSafepointKindAlloc(), 4)
+    testing.assertEq(llvmSafepointKindYield(), 5)
+}
+
+fn testLlvmEncodeSafepointIdPacksKindAndSerial() {
+    // CALL kind in the top byte, serial in the bottom.
+    testing.assertEq(
+        llvmEncodeSafepointId(llvmSafepointKindCall(), 42),
+        (2 << 56) | 42,
+    )
+    // Kind round-trips through the high 8 bits.
+    testing.assertEq(
+        (llvmEncodeSafepointId(llvmSafepointKindLoop(), 7) >> 56) & 0xff,
+        3,
+    )
+    // Serial round-trips through the 56-bit mask.
+    let mask = (1 << 56) - 1
+    testing.assertEq(
+        llvmEncodeSafepointId(llvmSafepointKindEntry(), 17) & mask,
+        17,
+    )
+    // Unspecified encodes the bare serial.
+    testing.assertEq(
+        llvmEncodeSafepointId(llvmSafepointKindUnspecified(), 9),
+        9,
+    )
+}
+
+fn testLlvmGcPhaseAConstantsAreOstyOwned() {
+    testing.assertEq(llvmSafepointDefaultRootChunkSize(), 4096)
+    testing.assertEq(llvmClosureEnvGcKind(), 1029)
+    testing.assertEq(llvmClosureEnvPhase1CaptureCount(), 0)
+}
+
+fn testLlvmEmitSafepointEmptyIsOstyOwned() {
+    let emitter = llvmEmitter()
+    llvmEmitSafepointEmpty(emitter, 42)
+    let ir = llvmTestStrings.join(emitter.body, "\n")
+    assertLlvmContains(ir, "call void @osty.gc.safepoint_v1(i64 42, ptr null, i64 0)")
+}
+
+fn testLlvmEmitSafepointWithRootsIsOstyOwned() {
+    let emitter = llvmEmitter()
+    let addresses = ["%root0", "%root1"]
+    llvmEmitSafepointWithRoots(emitter, 7, addresses)
+    let ir = llvmTestStrings.join(emitter.body, "\n")
+
+    assertLlvmContains(ir, "%t0 = alloca ptr, i64 2")
+    assertLlvmContains(ir, "%t1 = getelementptr ptr, ptr %t0, i64 0")
+    assertLlvmContains(ir, "store ptr %root0, ptr %t1")
+    assertLlvmContains(ir, "%t2 = getelementptr ptr, ptr %t0, i64 1")
+    assertLlvmContains(ir, "store ptr %root1, ptr %t2")
+    assertLlvmContains(ir, "call void @osty.gc.safepoint_v1(i64 7, ptr %t0, i64 2)")
+}
+
+fn testLlvmRenderClosureThunkVoidReturn() {
+    let ir = llvmRenderClosureThunk("void", "__osty_closure_thunk_foo", [], "foo")
+
+    assertLlvmContains(ir, "define private void @__osty_closure_thunk_foo(ptr %env) \{")
+    assertLlvmContains(ir, "entry:")
+    assertLlvmContains(ir, "  call void @foo()")
+    assertLlvmContains(ir, "  ret void")
+    assertLlvmContains(ir, "\}")
+}
+
+fn testLlvmRenderClosureThunkValueReturnWithParams() {
+    let ir = llvmRenderClosureThunk("i64", "__osty_closure_thunk_add", ["i64", "i64"], "add")
+
+    assertLlvmContains(ir, "define private i64 @__osty_closure_thunk_add(ptr %env, i64 %arg0, i64 %arg1) \{")
+    assertLlvmContains(ir, "  %__ret = call i64 @add(i64 %arg0, i64 %arg1)")
+    assertLlvmContains(ir, "  ret i64 %__ret")
+}
+
+fn testLlvmRenderClosureThunkEmptyReturnNormalisesToVoid() {
+    // Checker hands us `""` for unit-return fns; the template must
+    // normalise that to `void` so the generated thunk is well-formed.
+    let ir = llvmRenderClosureThunk("", "__osty_closure_thunk_sink", ["ptr"], "sink")
+
+    assertLlvmContains(ir, "define private void @__osty_closure_thunk_sink(ptr %env, ptr %arg0) \{")
+    assertLlvmContains(ir, "  call void @sink(ptr %arg0)")
+    assertLlvmContains(ir, "  ret void")
+}
+
+fn testLlvmEmitClosureEnvAllocRuntimeIsOstyOwned() {
+    let emitter = llvmEmitter()
+    let env = llvmEmitClosureEnvAllocRuntime(emitter, 0, "@.str0", "__osty_closure_thunk_foo")
+    let ir = llvmTestStrings.join(emitter.body, "\n")
+
+    testing.assertEq(env.typ, "ptr")
+    testing.assertEq(env.name, "%t0")
+    assertLlvmContains(ir, "%t0 = call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr @.str0)")
+    assertLlvmContains(ir, "store ptr @__osty_closure_thunk_foo, ptr %t0")
+}
