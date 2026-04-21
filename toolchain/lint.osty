@@ -2468,7 +2468,10 @@ fn selfLintIsLowerCamel(name: String) -> Bool {
 }
 
 fn selfLintFirstUnit(name: String) -> String {
-    frontUnitAt(strings.split(name, ""), 0)
+    if name.isEmpty() {
+        return ""
+    }
+    strings.slice(name, 0, 1)
 }
 
 /// selfLintAstCheckMissingDocs walks every decl (and every `pub` method
@@ -3387,12 +3390,12 @@ fn selfLintIsLintCode(name: String) -> Bool {
         return false
     }
     let units = strings.split(name, "")
-    if frontUnitAt(units, 0) != "L" {
+    if units[0] != "L" {
         return false
     }
     let mut i = 1
-    for i < name.len() {
-        let u = frontUnitAt(units, i)
+    for i < units.len() {
+        let u = units[i]
         if u < "0" || u > "9" {
             return false
         }
@@ -3907,7 +3910,7 @@ fn selfLintIsTestFnName(name: String) -> Bool {
     if name.len() <= 4 {
         return false
     }
-    let fifth = frontUnitAt(strings.split(name, ""), 4)
+    let fifth = strings.slice(name, 4, 5)
     if fifth == "_" {
         return true
     }
