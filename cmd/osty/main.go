@@ -377,6 +377,9 @@ func main() {
 					}
 					runInspect(selected.file.File, selected.chk, flags)
 				}
+				if flags.dumpNativeDiags {
+					dumpNativeDiagsFor(path, selected.chk)
+				}
 				if hasError(diags) {
 					os.Exit(1)
 				}

@@ -154,7 +154,7 @@ func rewriteEnumerateLoopHeader(line sourceLine, counter *int) (string, []repair
 	indexVar := indexBinding
 	switch {
 	case indexBinding == "_":
-		indexVar = fmt.Sprintf("_airepair_index%d", *counter)
+		indexVar = fmt.Sprintf("_osty_index%d", *counter)
 	case isSimpleIdentifierBinding(indexBinding):
 		// use the original binding directly in the rewritten loop header.
 	default:
@@ -163,7 +163,7 @@ func rewriteEnumerateLoopHeader(line sourceLine, counter *int) (string, []repair
 
 	next := *counter
 	*counter = next + 1
-	iterTemp := fmt.Sprintf("_airepair_enumerate%d", next)
+	iterTemp := fmt.Sprintf("_osty_enumerate%d", next)
 
 	bodyIndent := line.indent + semanticIndentStep
 	var out strings.Builder

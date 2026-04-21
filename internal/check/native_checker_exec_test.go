@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/osty/osty/internal/ast"
@@ -163,7 +164,16 @@ func buildRepoNativeChecker(t *testing.T) string {
 		t.Fatalf("getwd: %v", err)
 	}
 	root := filepath.Clean(filepath.Join(cwd, "..", ".."))
-	bin := filepath.Join(t.TempDir(), "osty-native-checker")
+	name := "osty-native-checker"
+	if runtime.GOOS == "windows" {
+		// `go build -o NAME` appends .exe automatically on Windows;
+		// match it here so callers that pass the path directly to
+		// exec.Command (without going through exec.LookPath) find the
+		// binary. The env-var path below goes through LookPath and
+		// handles the extension transparently, so either form works.
+		name += ".exe"
+	}
+	bin := filepath.Join(t.TempDir(), name)
 	cmd := exec.Command("go", "build", "-o", bin, "./cmd/osty-native-checker")
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()

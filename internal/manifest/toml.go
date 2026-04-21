@@ -569,6 +569,15 @@ func (p *tomlParser) skipHorizontalWhitespace() {
 		switch p.src[p.pos] {
 		case ' ', '\t':
 			p.pos++
+		case '\r':
+			// Tolerate CRLF: swallow \r when paired with a following
+			// \n so downstream end-of-line checks see the LF. A lone
+			// \r is left to caller so real errors still surface.
+			if p.pos+1 < len(p.src) && p.src[p.pos+1] == '\n' {
+				p.pos++
+				continue
+			}
+			return
 		default:
 			return
 		}
