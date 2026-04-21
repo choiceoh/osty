@@ -629,6 +629,58 @@ func TestResolveTestSeedEmptyIsFresh(t *testing.T) {
 	}
 }
 
+func TestBenchChildEnvStripsAmbientTargetWhenUnset(t *testing.T) {
+	parent := []string{
+		"PATH=/usr/bin",
+		"OSTY_BENCH_TIME_NS=1000000000",
+		"HOME=/tmp",
+	}
+	got := benchChildEnv(parent, 0)
+	for _, e := range got {
+		if strings.HasPrefix(e, "OSTY_BENCH_TIME_NS=") {
+			t.Fatalf("benchChildEnv must drop OSTY_BENCH_TIME_NS when caller passed 0, got %q", e)
+		}
+	}
+	// Other vars must pass through untouched so the child inherits a
+	// normal environment minus the one bench knob.
+	seenPath, seenHome := false, false
+	for _, e := range got {
+		if e == "PATH=/usr/bin" {
+			seenPath = true
+		}
+		if e == "HOME=/tmp" {
+			seenHome = true
+		}
+	}
+	if !seenPath || !seenHome {
+		t.Fatalf("benchChildEnv dropped non-bench vars, got %v", got)
+	}
+}
+
+func TestBenchChildEnvOverwritesAmbientTargetWhenSet(t *testing.T) {
+	parent := []string{
+		"PATH=/usr/bin",
+		"OSTY_BENCH_TIME_NS=1000000000",
+	}
+	got := benchChildEnv(parent, 500_000_000)
+	var ours string
+	count := 0
+	for _, e := range got {
+		if strings.HasPrefix(e, "OSTY_BENCH_TIME_NS=") {
+			count++
+			ours = e
+		}
+	}
+	// Exactly one OSTY_BENCH_TIME_NS entry — both the stale ambient
+	// value and a duplicate-append would confuse the child's getenv.
+	if count != 1 {
+		t.Fatalf("expected exactly one OSTY_BENCH_TIME_NS in env, got %d (%v)", count, got)
+	}
+	if ours != "OSTY_BENCH_TIME_NS=500000000" {
+		t.Fatalf("OSTY_BENCH_TIME_NS = %q, want our injected value", ours)
+	}
+}
+
 func TestShuffleNativeTestsDeterministicPerSeed(t *testing.T) {
 	base := []nativeTestCase{
 		{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}, {Name: "e"},

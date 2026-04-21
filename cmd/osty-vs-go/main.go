@@ -257,13 +257,26 @@ func discoverPairs(root string) ([]string, error) {
 // opts into the B/op + allocs/op columns that `testing` only reports
 // on request.
 func runGoBench(goBin, pairsDir, pair, benchTime string) ([]benchResult, error) {
-	pkg := "./" + filepath.ToSlash(filepath.Join(pairsDir, pair, "go")) + "/"
+	pkg := goPackageArg(filepath.Join(pairsDir, pair, "go"))
 	cmd := exec.Command(goBin, "test", "-run=^$", "-bench=.", "-benchmem", "-benchtime="+benchTime, pkg)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("%s test: %w\n%s", goBin, err, out)
 	}
 	return parseGoBenchOutput(pair, string(out)), nil
+}
+
+// goPackageArg formats a filesystem path for the `go test` argv. Relative
+// paths get the `./` prefix that the Go toolchain requires to treat
+// them as package paths rather than import paths; absolute paths pass
+// through untouched because `./` + `/abs/…` collapses to a nonsense
+// relative path and `go test` fails to resolve it.
+func goPackageArg(path string) string {
+	slash := filepath.ToSlash(path)
+	if filepath.IsAbs(path) {
+		return slash
+	}
+	return "./" + slash
 }
 
 // Go bench lines with -benchmem look like:
