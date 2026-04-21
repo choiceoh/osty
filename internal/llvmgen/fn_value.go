@@ -264,7 +264,7 @@ func (g *generator) emitIndirectUserCall(call *ast.CallExpr) (value, bool, error
 	// roots coming out of arg evaluation are released at the same
 	// cadence.
 	emitter := g.toOstyEmitter()
-	g.emitGCSafepointKind(emitter, safepointKindCall)
+	g.emitCallSafepointIfNeeded(emitter)
 	g.takeOstyEmitter(emitter)
 	g.pushScope()
 	ret, callErr := g.emitFnValueIndirectCall(envVal, sig, args)

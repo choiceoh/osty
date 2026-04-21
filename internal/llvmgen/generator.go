@@ -244,7 +244,7 @@ var safepointRootChunkSize = llvmSafepointDefaultRootChunkSize()
 // iteration. The runtime still sees LOOP-kind safepoints regularly for
 // cancellation / GC progress; setting the stride to 1 restores the
 // historical "poll every back-edge" behavior.
-var loopSafepointStride int64 = 256
+var loopSafepointStride int64 = 1024
 
 // emitGCSafepoint emits a safepoint poll at an unspecified site — kept
 // for callers that have not been classified yet. New call sites should
@@ -252,6 +252,12 @@ var loopSafepointStride int64 = 256
 // A5 observability stays accurate.
 func (g *generator) emitGCSafepoint(emitter *LlvmEmitter) {
 	g.emitGCSafepointKind(emitter, safepointKindUnspecified)
+}
+
+func (g *generator) emitCallSafepointIfNeeded(emitter *LlvmEmitter) {
+	if g.hasVisibleSafepointRoots() {
+		g.emitGCSafepointKind(emitter, safepointKindCall)
+	}
 }
 
 func (g *generator) emitGCSafepointKind(emitter *LlvmEmitter, kind safepointKind) {
