@@ -1946,8 +1946,9 @@ func TestGenerateFromMIREmitGCManagedParam(t *testing.T) {
 		"declare void @osty.gc.root_bind_v1(ptr)",
 		"declare void @osty.gc.root_release_v1(ptr)",
 		"declare void @osty.gc.safepoint_v1(i64, ptr, i64)",
-		// Entry safepoint with numeric id 0.
-		"call void @osty.gc.safepoint_v1(i64 0, ptr null, i64 0)",
+		// Entry safepoint carries kind=ENTRY (1) in the high byte and
+		// serial 0 in the low 56 bits → 1<<56.
+		"call void @osty.gc.safepoint_v1(i64 72057594037927936, ptr null, i64 0)",
 		// Param slot is bound as a root.
 		"call void @osty.gc.root_bind_v1(ptr %p",
 		// Release on the return path.
@@ -2115,12 +2116,14 @@ func TestGenerateFromMIREmitGCLoopSafepoint(t *testing.T) {
 	if safepoints < 2 {
 		t.Fatalf("expected ≥2 safepoints (entry + back-edge), got %d in:\n%s", safepoints, got)
 	}
-	// Safepoint ids must be strictly increasing per emission site.
-	if !strings.Contains(got, "safepoint_v1(i64 0,") {
-		t.Fatalf("expected safepoint id 0 in:\n%s", got)
+	// Entry safepoint encodes kind=ENTRY (1<<56) | serial=0, loop
+	// back-edge encodes kind=LOOP (3<<56) | serial=1. See
+	// encodeSafepointID + safepointKind* in generator.go.
+	if !strings.Contains(got, "safepoint_v1(i64 72057594037927936,") {
+		t.Fatalf("expected entry safepoint (kind=ENTRY, serial 0) in:\n%s", got)
 	}
-	if !strings.Contains(got, "safepoint_v1(i64 1,") {
-		t.Fatalf("expected safepoint id 1 in:\n%s", got)
+	if !strings.Contains(got, "safepoint_v1(i64 216172782113783809,") {
+		t.Fatalf("expected loop-backedge safepoint (kind=LOOP, serial 1) in:\n%s", got)
 	}
 }
 
