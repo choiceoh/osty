@@ -1,6 +1,7 @@
 package selfhost_test
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/osty/osty/internal/canonical"
@@ -151,6 +152,51 @@ fn helper() -> dep.Item {
 	}
 }
 
+func TestCheckSourceStructuredReportsIntrinsicBodyViolation(t *testing.T) {
+	checked := selfhost.CheckSourceStructured([]byte(`#[intrinsic]
+pub fn violator() -> Int { 42 }
+`))
+	if got := findDiagnosticCode(checked, "E0773"); got == nil {
+		t.Fatalf("expected E0773, got diagnostics %#v", checked.Diagnostics)
+	}
+	if got := checked.Summary.ErrorsByContext["E0773"]; got != 1 {
+		t.Fatalf("summary E0773 count = %d, want 1 (summary=%#v)", got, checked.Summary)
+	}
+}
+
+func TestCheckPackageStructuredReportsIntrinsicBodyViolationWithPath(t *testing.T) {
+	dir := t.TempDir()
+	goodPath := filepath.Join(dir, "good.osty")
+	badPath := filepath.Join(dir, "bad.osty")
+	good := canonicalSelfhostSource(t, []byte(`pub fn ok() -> Int { 0 }
+`))
+	bad := canonicalSelfhostSource(t, []byte(`#[intrinsic]
+pub fn violator() -> Int { 42 }
+`))
+	checked, err := selfhost.CheckPackageStructured(selfhost.PackageCheckInput{
+		Files: []selfhost.PackageCheckFile{
+			{Source: good, Base: 0, Name: "good.osty", Path: goodPath},
+			{Source: bad, Base: len(good) + 1, Name: "bad.osty", Path: badPath},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CheckPackageStructured: %v", err)
+	}
+	got := findDiagnosticCode(checked, "E0773")
+	if got == nil {
+		t.Fatalf("expected E0773, got diagnostics %#v", checked.Diagnostics)
+	}
+	if got.File != badPath {
+		t.Fatalf("diagnostic file = %q, want %q", got.File, badPath)
+	}
+	if want := len(good) + 1; got.Start < want {
+		t.Fatalf("diagnostic start = %d, want >= %d so second-file base survives", got.Start, want)
+	}
+	if got := checked.Summary.ErrorsByContext["E0773"]; got != 1 {
+		t.Fatalf("summary E0773 count = %d, want 1 (summary=%#v)", got, checked.Summary)
+	}
+}
+
 func findCheckedBindingType(result selfhost.CheckResult, name string) string {
 	for _, binding := range result.Bindings {
 		if binding.Name == name {
@@ -158,6 +204,15 @@ func findCheckedBindingType(result selfhost.CheckResult, name string) string {
 		}
 	}
 	return ""
+}
+
+func findDiagnosticCode(result selfhost.CheckResult, code string) *selfhost.CheckDiagnosticRecord {
+	for i := range result.Diagnostics {
+		if result.Diagnostics[i].Code == code {
+			return &result.Diagnostics[i]
+		}
+	}
+	return nil
 }
 
 func canonicalSelfhostSource(t *testing.T, src []byte) []byte {

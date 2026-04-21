@@ -72,6 +72,7 @@ type CheckDiagnosticRecord struct {
 	Message  string
 	Start    int
 	End      int
+	File     string
 	Notes    []string
 }
 
@@ -100,7 +101,9 @@ func CheckSourceStructured(src []byte) CheckResult {
 	if checked == nil {
 		return CheckResult{}
 	}
-	return adaptCheckResult(checked, lexed)
+	result := adaptCheckResult(checked, lexed)
+	selfhostAppendIntrinsicBodyGateForSource(&result, src)
+	return result
 }
 
 func adaptCheckSummary(checked *FrontCheckSummary) CheckSummary {
@@ -227,6 +230,7 @@ func adaptCheckResult(checked *FrontCheckResult, lexed *OstyLexedSource) CheckRe
 			Message:  d.message,
 			Start:    start,
 			End:      end,
+			File:     "",
 			Notes:    append([]string(nil), d.notes...),
 		})
 	}

@@ -19,6 +19,10 @@ type PackageCheckFile struct {
 	// a basename like `user.osty`). Empty when unknown; the telemetry suffix
 	// falls back to `@Lnn:Cnn` without a filename prefix in that case.
 	Name string `json:"name,omitempty"`
+	// Path is the owning source path when known. Package-mode diagnostics carry
+	// this through the native checker boundary so multi-file callers do not
+	// need to guess which file owned a given span.
+	Path string `json:"path,omitempty"`
 }
 
 type PackageCheckGenericBound struct {
@@ -100,7 +104,9 @@ func CheckPackageStructured(input PackageCheckInput) (CheckResult, error) {
 			cx := newElabCx(file, emptyTyArena())
 			selfhostInstallImportSurfaces(cx.env, input.Imports)
 			elabFile(cx)
-			return adaptCheckResultWithByteLayout(serializeCheckResult(cx), layout), nil
+			result := adaptCheckResultWithByteLayout(serializeCheckResult(cx), layout)
+			selfhostAppendIntrinsicBodyGateForPackage(&result, input)
+			return result, nil
 		}
 		var unsupported *selfhostLoweringUnsupported
 		if !errors.As(err, &unsupported) {
@@ -117,7 +123,9 @@ func CheckPackageStructured(input PackageCheckInput) (CheckResult, error) {
 	cx := newElabCx(file, emptyTyArena())
 	selfhostInstallImportSurfaces(cx.env, input.Imports)
 	elabFile(cx)
-	return adaptCheckResultWithTokenLayout(serializeCheckResult(cx), layout), nil
+	result := adaptCheckResultWithTokenLayout(serializeCheckResult(cx), layout)
+	selfhostAppendIntrinsicBodyGateForPackage(&result, input)
+	return result, nil
 }
 
 type selfhostPackageTokenLayout struct {

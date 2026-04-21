@@ -8,6 +8,7 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/canonical"
+	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
@@ -168,6 +169,23 @@ fn main() {}
 	}
 	if got := chk.LookupSymType(paramSym); got == nil || got.String() != "Int" {
 		t.Fatalf("unused param type = %v, want Int", got)
+	}
+}
+
+func TestConvertNativeDiagPreservesFile(t *testing.T) {
+	got := convertNativeDiag([]byte("fn main() {}\n"), nativeCheckDiagnostic{
+		Code:     diag.CodeIntrinsicNonEmptyBody,
+		Severity: "error",
+		Message:  "`#[intrinsic]` function `violator` must have an empty body",
+		Start:    0,
+		End:      0,
+		File:     "/tmp/bad.osty",
+	})
+	if got == nil {
+		t.Fatal("convertNativeDiag returned nil")
+	}
+	if got.File != "/tmp/bad.osty" {
+		t.Fatalf("diag.File = %q, want /tmp/bad.osty", got.File)
 	}
 }
 
