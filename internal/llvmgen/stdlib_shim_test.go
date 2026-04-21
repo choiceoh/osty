@@ -131,6 +131,97 @@ fn main() {
 	}
 }
 
+func TestStdStringsIndexOfRoutesToRuntimeAndOptionIntComposes(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn main() {
+    let at = strings.indexOf("abc", "b") ?? -1
+    println(at)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_strings_index_of.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	for _, want := range []string{
+		"declare i64 @osty_rt_strings_IndexOf(ptr, ptr)",
+		"call i64 @osty_rt_strings_IndexOf",
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
+		"load i64, ptr",
+		"phi i64",
+	} {
+		if !strings.Contains(string(ir), want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, string(ir))
+		}
+	}
+}
+
+func TestStdStringsReplaceRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn main() {
+    let out = strings.replace("food", "foo", "bar")
+    println(out)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_strings_replace.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Replace(ptr, ptr, ptr)",
+		"call ptr @osty_rt_strings_Replace",
+	} {
+		if !strings.Contains(string(ir), want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, string(ir))
+		}
+	}
+}
+
+func TestStdStringsTrimStartRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn main() {
+    let out = strings.trimStart("  hi")
+    println(out)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_strings_trim_start.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_TrimStart(ptr)",
+		"call ptr @osty_rt_strings_TrimStart",
+	} {
+		if !strings.Contains(string(ir), want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, string(ir))
+		}
+	}
+}
+
+func TestStdStringsTrimEndRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn main() {
+    let out = strings.trimEnd("hi  ")
+    println(out)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_strings_trim_end.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_TrimEnd(ptr)",
+		"call ptr @osty_rt_strings_TrimEnd",
+	} {
+		if !strings.Contains(string(ir), want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, string(ir))
+		}
+	}
+}
+
 func TestStdStringsReplaceAllRoutesToRuntime(t *testing.T) {
 	file := parseLLVMGenFile(t, `use std.strings as strings
 

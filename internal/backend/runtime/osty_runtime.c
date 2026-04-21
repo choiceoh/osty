@@ -1181,12 +1181,16 @@ static void osty_gc_mark_payload(void *payload);
 bool osty_rt_strings_Equal(const char *left, const char *right);
 int64_t osty_rt_strings_Compare(const char *left, const char *right);
 int64_t osty_rt_strings_Count(const char *value, const char *substr);
+int64_t osty_rt_strings_IndexOf(const char *value, const char *substr);
 bool osty_rt_strings_Contains(const char *value, const char *substr);
 bool osty_rt_strings_HasSuffix(const char *value, const char *suffix);
 const char *osty_rt_strings_Join(void *raw_parts, const char *sep);
 const char *osty_rt_strings_Repeat(const char *value, int64_t n);
+const char *osty_rt_strings_Replace(const char *value, const char *old, const char *new_value);
 const char *osty_rt_strings_ReplaceAll(const char *value, const char *old, const char *new_value);
 const char *osty_rt_strings_Slice(const char *value, int64_t start, int64_t end);
+const char *osty_rt_strings_TrimStart(const char *value);
+const char *osty_rt_strings_TrimEnd(const char *value);
 const char *osty_rt_strings_TrimPrefix(const char *value, const char *prefix);
 const char *osty_rt_strings_TrimSuffix(const char *value, const char *suffix);
 const char *osty_rt_strings_TrimSpace(const char *value);
@@ -2733,6 +2737,21 @@ int64_t osty_rt_strings_Count(const char *value, const char *substr) {
     return total;
 }
 
+int64_t osty_rt_strings_IndexOf(const char *value, const char *substr) {
+    const char *next;
+
+    value = (value == NULL) ? "" : value;
+    substr = (substr == NULL) ? "" : substr;
+    if (substr[0] == '\0') {
+        return 0;
+    }
+    next = strstr(value, substr);
+    if (next == NULL) {
+        return -1;
+    }
+    return (int64_t)(next - value);
+}
+
 int64_t osty_rt_strings_ByteLen(const char *value) {
     if (value == NULL) {
         return 0;
@@ -3079,6 +3098,64 @@ const char *osty_rt_strings_Repeat(const char *value, int64_t n) {
     return out;
 }
 
+const char *osty_rt_strings_Replace(const char *value, const char *old, const char *new_value) {
+    const char *next;
+    size_t value_len;
+    size_t old_len;
+    size_t new_len;
+    size_t prefix_len;
+    size_t suffix_len;
+    size_t total;
+    char *out;
+
+    value = (value == NULL) ? "" : value;
+    old = (old == NULL) ? "" : old;
+    new_value = (new_value == NULL) ? "" : new_value;
+    value_len = strlen(value);
+    old_len = strlen(old);
+    new_len = strlen(new_value);
+
+    if (old_len == 0) {
+        if (new_len > SIZE_MAX - value_len) {
+            osty_rt_abort("runtime.strings.replace: size overflow");
+        }
+        total = new_len + value_len;
+        out = (char *)osty_gc_allocate_managed(total + 1, OSTY_GC_KIND_STRING, "runtime.strings.replace", NULL, NULL);
+        if (new_len != 0) {
+            memcpy(out, new_value, new_len);
+        }
+        if (value_len != 0) {
+            memcpy(out + new_len, value, value_len);
+        }
+        out[total] = '\0';
+        return out;
+    }
+
+    next = strstr(value, old);
+    if (next == NULL) {
+        return osty_rt_string_dup_site(value, value_len, "runtime.strings.replace.copy");
+    }
+
+    prefix_len = (size_t)(next - value);
+    suffix_len = value_len - prefix_len - old_len;
+    if (prefix_len > SIZE_MAX - new_len || prefix_len + new_len > SIZE_MAX - suffix_len) {
+        osty_rt_abort("runtime.strings.replace: size overflow");
+    }
+    total = prefix_len + new_len + suffix_len;
+    out = (char *)osty_gc_allocate_managed(total + 1, OSTY_GC_KIND_STRING, "runtime.strings.replace", NULL, NULL);
+    if (prefix_len != 0) {
+        memcpy(out, value, prefix_len);
+    }
+    if (new_len != 0) {
+        memcpy(out + prefix_len, new_value, new_len);
+    }
+    if (suffix_len != 0) {
+        memcpy(out + prefix_len + new_len, next + old_len, suffix_len);
+    }
+    out[total] = '\0';
+    return out;
+}
+
 const char *osty_rt_strings_ReplaceAll(const char *value, const char *old, const char *new_value) {
     const char *cursor;
     const char *next;
@@ -3206,6 +3283,38 @@ const char *osty_rt_strings_TrimSuffix(const char *value, const char *suffix) {
         return osty_rt_string_dup_site(value, value_len - suffix_len, "runtime.strings.trim_suffix");
     }
     return osty_rt_string_dup_site(value, value_len, "runtime.strings.trim_suffix");
+}
+
+const char *osty_rt_strings_TrimStart(const char *value) {
+    const char *start;
+
+    if (value == NULL) {
+        return osty_rt_string_dup_site("", 0, "runtime.strings.trim_start.empty");
+    }
+    start = value;
+    while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r' || *start == '\v' || *start == '\f') {
+        start++;
+    }
+    return osty_rt_string_dup_site(start, strlen(start), "runtime.strings.trim_start");
+}
+
+const char *osty_rt_strings_TrimEnd(const char *value) {
+    const char *end;
+    size_t len;
+
+    if (value == NULL) {
+        return osty_rt_string_dup_site("", 0, "runtime.strings.trim_end.empty");
+    }
+    end = value + strlen(value);
+    while (end > value) {
+        char c = *(end - 1);
+        if (c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != '\v' && c != '\f') {
+            break;
+        }
+        end--;
+    }
+    len = (size_t)(end - value);
+    return osty_rt_string_dup_site(value, len, "runtime.strings.trim_end");
 }
 
 const char *osty_rt_strings_TrimSpace(const char *value) {

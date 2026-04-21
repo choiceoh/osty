@@ -63,6 +63,9 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 	case "count":
 		v, err := g.emitStdStringsBinary(call, "count", "i64", llvmStringRuntimeCountSymbol())
 		return v, true, err
+	case "indexOf":
+		v, err := g.emitStdStringsIndexOf(call)
+		return v, true, err
 	case "concat":
 		v, err := g.emitStdStringsBinaryString(call, "concat", llvmStringRuntimeConcatSymbol())
 		return v, true, err
@@ -81,6 +84,9 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 	case "repeat":
 		v, err := g.emitStdStringsRepeat(call)
 		return v, true, err
+	case "replace":
+		v, err := g.emitStdStringsReplace(call)
+		return v, true, err
 	case "replaceAll":
 		v, err := g.emitStdStringsReplaceAll(call)
 		return v, true, err
@@ -98,6 +104,12 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 		return v, true, err
 	case "trimSuffix":
 		v, err := g.emitStdStringsBinaryString(call, "trimSuffix", llvmStringRuntimeTrimSuffixSymbol())
+		return v, true, err
+	case "trimStart":
+		v, err := g.emitStdStringsUnary(call, "trimStart", llvmStringRuntimeTrimStartSymbol())
+		return v, true, err
+	case "trimEnd":
+		v, err := g.emitStdStringsUnary(call, "trimEnd", llvmStringRuntimeTrimEndSymbol())
 		return v, true, err
 	case "trim", "trimSpace":
 		v, err := g.emitStdStringsUnary(call, field.Name, llvmStringRuntimeTrimSpaceSymbol())
@@ -128,9 +140,17 @@ func (g *generator) stdStringsCallStaticResult(call *ast.CallExpr) (value, bool)
 		return value{typ: "i64"}, true
 	case "count":
 		return value{typ: "i64"}, true
+	case "indexOf":
+		return value{
+			typ:       "ptr",
+			gcManaged: true,
+			sourceType: &ast.OptionalType{
+				Inner: &ast.NamedType{Path: []string{"Int"}},
+			},
+		}, true
 	case "contains", "hasPrefix", "hasSuffix":
 		return value{typ: "i1"}, true
-	case "concat", "join", "repeat", "replaceAll", "slice", "trim", "trimSpace", "trimPrefix", "trimSuffix":
+	case "concat", "join", "repeat", "replace", "replaceAll", "slice", "trim", "trimSpace", "trimStart", "trimEnd", "trimPrefix", "trimSuffix":
 		return value{typ: "ptr", gcManaged: true}, true
 	case "split", "splitN":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true}, true
@@ -276,6 +296,40 @@ func (g *generator) emitStdStringsRepeat(call *ast.CallExpr) (value, error) {
 	repeated := fromOstyValue(out)
 	repeated.gcManaged = true
 	return repeated, nil
+}
+
+func (g *generator) emitStdStringsIndexOf(call *ast.CallExpr) (value, error) {
+	if len(call.Args) != 2 {
+		return value{}, unsupportedf("call", "strings.indexOf expects 2 arguments, got %d", len(call.Args))
+	}
+	s, err := g.emitStdStringsArg(call.Args[0], "indexOf", 0)
+	if err != nil {
+		return value{}, err
+	}
+	substr, err := g.emitStdStringsArg(call.Args[1], "indexOf", 1)
+	if err != nil {
+		return value{}, err
+	}
+	return g.emitStringIndexOfRuntime(s, substr)
+}
+
+func (g *generator) emitStdStringsReplace(call *ast.CallExpr) (value, error) {
+	if len(call.Args) != 3 {
+		return value{}, unsupportedf("call", "strings.replace expects 3 arguments, got %d", len(call.Args))
+	}
+	s, err := g.emitStdStringsArg(call.Args[0], "replace", 0)
+	if err != nil {
+		return value{}, err
+	}
+	old, err := g.emitStdStringsArg(call.Args[1], "replace", 1)
+	if err != nil {
+		return value{}, err
+	}
+	newValue, err := g.emitStdStringsArg(call.Args[2], "replace", 2)
+	if err != nil {
+		return value{}, err
+	}
+	return g.emitStringReplaceRuntime(s, old, newValue)
 }
 
 func (g *generator) emitStdStringsReplaceAll(call *ast.CallExpr) (value, error) {

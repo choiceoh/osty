@@ -784,9 +784,11 @@ func (g *generator) staticStdStringsCallSourceType(call *ast.CallExpr) (ast.Type
 	switch field.Name {
 	case "compare", "count":
 		return &ast.NamedType{Path: []string{"Int"}}, true
+	case "indexOf":
+		return &ast.OptionalType{Inner: &ast.NamedType{Path: []string{"Int"}}}, true
 	case "contains", "hasPrefix", "hasSuffix":
 		return &ast.NamedType{Path: []string{"Bool"}}, true
-	case "concat", "join", "repeat", "replaceAll", "slice", "trim", "trimSpace", "trimPrefix", "trimSuffix":
+	case "concat", "join", "repeat", "replace", "replaceAll", "slice", "trim", "trimSpace", "trimStart", "trimEnd", "trimPrefix", "trimSuffix":
 		return stringT, true
 	case "split", "splitN":
 		return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{stringT}}, true
@@ -853,16 +855,20 @@ func (g *generator) staticStringMethodSourceType(call *ast.CallExpr) (ast.Type, 
 		return nil, false
 	}
 	switch field.Name {
-	case "len":
+	case "len", "charCount":
 		return &ast.NamedType{Path: []string{"Int"}}, true
 	case "isEmpty", "startsWith", "endsWith", "contains":
 		return &ast.NamedType{Path: []string{"Bool"}}, true
-	case "split":
+	case "indexOf":
+		return &ast.OptionalType{Inner: &ast.NamedType{Path: []string{"Int"}}}, true
+	case "get":
+		return &ast.OptionalType{Inner: &ast.NamedType{Path: []string{"Byte"}}}, true
+	case "split", "lines":
 		return &ast.NamedType{
 			Path: []string{"List"},
 			Args: []ast.Type{&ast.NamedType{Path: []string{"String"}}},
 		}, true
-	case "trim", "trimPrefix", "trimSuffix", "toString":
+	case "trim", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toString", "join", "replace", "repeat":
 		return &ast.NamedType{Path: []string{"String"}}, true
 	case "chars":
 		return &ast.NamedType{
@@ -924,13 +930,29 @@ func (g *generator) staticStringMethodResult(call *ast.CallExpr) (value, bool) {
 		return value{}, false
 	}
 	switch field.Name {
-	case "len":
+	case "len", "charCount":
 		return value{typ: "i64"}, true
 	case "isEmpty", "startsWith", "endsWith", "contains":
 		return value{typ: "i1"}, true
-	case "split":
+	case "indexOf":
+		return value{
+			typ:       "ptr",
+			gcManaged: true,
+			sourceType: &ast.OptionalType{
+				Inner: &ast.NamedType{Path: []string{"Int"}},
+			},
+		}, true
+	case "get":
+		return value{
+			typ:       "ptr",
+			gcManaged: true,
+			sourceType: &ast.OptionalType{
+				Inner: &ast.NamedType{Path: []string{"Byte"}},
+			},
+		}, true
+	case "split", "lines":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true}, true
-	case "trim", "trimPrefix", "trimSuffix", "toString":
+	case "trim", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toString", "join", "replace", "repeat":
 		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"String"}}}, true
 	case "chars":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "i32"}, true
@@ -955,9 +977,11 @@ func (g *generator) stringMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, bool) 
 		return nil, false
 	}
 	switch field.Name {
-	case "len", "isEmpty", "startsWith", "endsWith", "contains",
-		"trimPrefix", "trimSuffix",
-		"split", "trim", "toString", "chars", "bytes":
+	case "len", "charCount", "isEmpty", "startsWith", "endsWith", "contains",
+		"indexOf",
+		"get",
+		"trimStart", "trimEnd", "trimPrefix", "trimSuffix",
+		"split", "lines", "join", "trim", "replace", "repeat", "toString", "chars", "bytes":
 		return field, true
 	default:
 		return nil, false
