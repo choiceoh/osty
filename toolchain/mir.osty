@@ -1263,7 +1263,7 @@ pub fn mirReachableBlocks(func: MirFunction) -> List<Bool> {
             break
         }
         let top = stack[stack.len() - 1]
-        stack = mirListPopLast(stack)
+        stack.pop()
         if top < 0 || top >= n {
             continue
         }
@@ -1285,23 +1285,6 @@ pub fn mirReachableBlocks(func: MirFunction) -> List<Bool> {
     seen
 }
 
-/// mirListPopLast returns the list with its last element removed. Used
-/// by CFG helpers to avoid requiring a List<T>.pop() stdlib method.
-fn mirListPopLast(xs: List<Int>) -> List<Int> {
-    let mut out: List<Int> = []
-    let n = xs.len()
-    if n <= 1 {
-        return out
-    }
-    let mut i = 0
-    for x in xs {
-        if i < n - 1 {
-            out.push(x)
-        }
-        i = i + 1
-    }
-    out
-}
 
 /// mirCountReachable returns the number of reachable blocks in `func`.
 pub fn mirCountReachable(func: MirFunction) -> Int {

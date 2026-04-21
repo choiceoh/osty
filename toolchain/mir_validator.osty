@@ -51,7 +51,7 @@ pub fn mirValidateModule(m: MirModule) -> List<String> {
         if func.name == "" {
             errs.push("function[{i}]: empty name")
         }
-        if mirValidatorContains(seenNames, func.name) {
+        if listContainsString(seenNames, func.name) {
             errs.push("function \"{func.name}\": duplicate symbol")
         } else {
             seenNames.push(func.name)
@@ -108,7 +108,7 @@ pub fn mirValidateFunction(func: MirFunction) -> List<String> {
             pi = pi + 1
             continue
         }
-        if mirValidatorContainsInt(paramSet, pid) {
+        if listContainsInt(paramSet, pid) {
             errs.push("function \"{func.name}\": params[{pi}]=_{pid} appears more than once")
             pi = pi + 1
             continue
@@ -131,7 +131,7 @@ pub fn mirValidateFunction(func: MirFunction) -> List<String> {
         if loc.typ == "" {
             errs.push("function \"{func.name}\": locals[{li}]=_{loc.id} empty typ")
         }
-        if loc.isParam && !(mirValidatorContainsInt(paramSet, loc.id)) {
+        if loc.isParam && !(listContainsInt(paramSet, loc.id)) {
             errs.push("function \"{func.name}\": locals[{li}]=_{loc.id} marked isParam but not in fn.params")
         }
         if loc.isReturn {
@@ -538,7 +538,7 @@ fn mirValidateTerm(func: MirFunction, bb: MirBasicBlock, t: MirTerm) -> List<Str
             for c in t.cases {
                 let rErrs = mirValidateBlockRef(func, bb, c.target, "switchInt.cases[{ci}]")
                 for e in rErrs { errs.push(e) }
-                if mirValidatorContainsInt(seenVals, c.value) {
+                if listContainsInt(seenVals, c.value) {
                     errs.push("function \"{func.name}\" bb{bb.id}: switchInt.cases[{ci}] value {c.value} duplicates an earlier case")
                 } else {
                     seenVals.push(c.value)
@@ -570,24 +570,3 @@ fn mirValidateBlockRef(
     errs
 }
 
-// ====================================================================
-// Local helpers
-// ====================================================================
-
-fn mirValidatorContains(xs: List<String>, needle: String) -> Bool {
-    for x in xs {
-        if x == needle {
-            return true
-        }
-    }
-    false
-}
-
-fn mirValidatorContainsInt(xs: List<Int>, needle: Int) -> Bool {
-    for x in xs {
-        if x == needle {
-            return true
-        }
-    }
-    false
-}

@@ -520,11 +520,11 @@ pub fn coreCollectReachable(src: CoreArena, root: Int) -> CoreReachResult {
             break
         }
         let top = stack[stack.len() - 1]
-        stack = coreCloneListDropLast(stack)
+        stack.pop()
         if top < 0 || top >= src.nodes.len() {
             continue
         }
-        if coreCloneListContainsInt(seen, top) {
+        if listContainsInt(seen, top) {
             continue
         }
         seen.push(top)
@@ -568,27 +568,3 @@ pub fn coreCollectReachable(src: CoreArena, root: Int) -> CoreReachResult {
     CoreReachResult { indices: seen, err: "" }
 }
 
-fn coreCloneListDropLast(xs: List<Int>) -> List<Int> {
-    let mut out: List<Int> = []
-    let n = xs.len()
-    if n <= 1 {
-        return out
-    }
-    let mut i = 0
-    for x in xs {
-        if i < n - 1 {
-            out.push(x)
-        }
-        i = i + 1
-    }
-    out
-}
-
-fn coreCloneListContainsInt(xs: List<Int>, needle: Int) -> Bool {
-    for x in xs {
-        if x == needle {
-            return true
-        }
-    }
-    false
-}

@@ -1770,3 +1770,24 @@ fn coreIntLen(xs: List<Int>) -> Int {
 fn coreDiagCount(xs: List<CheckDiagnostic>) -> Int {
     xs.len()
 }
+
+// Shared list helpers (toolchain-wide). O(n) linear scans — keep caller
+// sets small or switch to a `Map<K, Bool>` keyed set.
+
+fn listContainsString(xs: List<String>, needle: String) -> Bool {
+    for x in xs {
+        if x == needle {
+            return true
+        }
+    }
+    false
+}
+
+fn listContainsInt(xs: List<Int>, needle: Int) -> Bool {
+    for x in xs {
+        if x == needle {
+            return true
+        }
+    }
+    false
+}
