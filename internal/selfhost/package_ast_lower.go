@@ -156,6 +156,7 @@ func adaptCheckResultWithByteLayout(checked *FrontCheckResult, layout *selfhostP
 		Bindings:       make([]CheckedBinding, 0, len(checked.bindings)),
 		Symbols:        make([]CheckedSymbol, 0, len(checked.symbols)),
 		Instantiations: make([]CheckInstantiation, 0, len(checked.instantiations)),
+		Diagnostics:    make([]CheckDiagnosticRecord, 0, len(checked.diagnostics)),
 	}
 	for _, node := range checked.typedNodes {
 		if node == nil {
@@ -209,6 +210,20 @@ func adaptCheckResultWithByteLayout(checked *FrontCheckResult, layout *selfhostP
 			End:        inst.end,
 		})
 	}
+	for _, d := range checked.diagnostics {
+		if d == nil {
+			continue
+		}
+		result.Diagnostics = append(result.Diagnostics, CheckDiagnosticRecord{
+			Code:     d.code,
+			Severity: diagnosticSeverityName(d.severity),
+			Message:  d.message,
+			Start:    d.start,
+			End:      d.end,
+			File:     "",
+			Notes:    append([]string(nil), d.notes...),
+		})
+	}
 	return result
 }
 
@@ -224,10 +239,28 @@ func (l *selfhostPackageFileLowerer) lowerFile(file *ast.File) error {
 	items := make([]struct {
 		pos  int
 		ord  int
+		use  *ast.UseDecl
 		decl ast.Decl
 		stmt ast.Stmt
-	}, 0, len(file.Decls)+len(file.Stmts))
+	}, 0, len(file.Uses)+len(file.Decls)+len(file.Stmts))
 	ord := 0
+	for _, use := range file.Uses {
+		if use == nil {
+			continue
+		}
+		items = append(items, struct {
+			pos  int
+			ord  int
+			use  *ast.UseDecl
+			decl ast.Decl
+			stmt ast.Stmt
+		}{
+			pos: use.Pos().Offset,
+			ord: ord,
+			use: use,
+		})
+		ord++
+	}
 	for _, decl := range file.Decls {
 		if decl == nil {
 			continue
@@ -235,6 +268,7 @@ func (l *selfhostPackageFileLowerer) lowerFile(file *ast.File) error {
 		items = append(items, struct {
 			pos  int
 			ord  int
+			use  *ast.UseDecl
 			decl ast.Decl
 			stmt ast.Stmt
 		}{
@@ -251,6 +285,7 @@ func (l *selfhostPackageFileLowerer) lowerFile(file *ast.File) error {
 		items = append(items, struct {
 			pos  int
 			ord  int
+			use  *ast.UseDecl
 			decl ast.Decl
 			stmt ast.Stmt
 		}{
@@ -269,7 +304,9 @@ func (l *selfhostPackageFileLowerer) lowerFile(file *ast.File) error {
 	for _, item := range items {
 		idx := -1
 		var err error
-		if item.decl != nil {
+		if item.use != nil {
+			idx, err = l.lowerUseDecl(item.use)
+		} else if item.decl != nil {
 			idx, err = l.lowerDecl(item.decl)
 		} else {
 			idx, err = l.lowerStmt(item.stmt)
@@ -299,7 +336,7 @@ func (l *selfhostPackageFileLowerer) lowerDecl(decl ast.Decl) (int, error) {
 	case *ast.LetDecl:
 		return l.lowerLetDecl(d)
 	case *ast.UseDecl:
-		return -1, nil
+		return l.lowerUseDecl(d)
 	default:
 		return -1, &selfhostLoweringUnsupported{reason: fmt.Sprintf("decl %T", decl)}
 	}
@@ -312,6 +349,10 @@ func (l *selfhostPackageFileLowerer) lowerFnDecl(fn *ast.FnDecl) (int, error) {
 	}
 	node.text = fn.Name
 	node.flags = boolToInt(fn.Pub)
+	node.extra, err = l.lowerAnnotations(fn.Annotations)
+	if err != nil {
+		return -1, err
+	}
 	node.left, err = l.lowerType(fn.ReturnType)
 	if err != nil {
 		return -1, err
@@ -351,6 +392,10 @@ func (l *selfhostPackageFileLowerer) lowerStructDecl(decl *ast.StructDecl) (int,
 	}
 	node.text = decl.Name
 	node.flags = boolToInt(decl.Pub)
+	node.extra, err = l.lowerAnnotations(decl.Annotations)
+	if err != nil {
+		return -1, err
+	}
 	children2, err := l.lowerGenericParams(decl.Generics)
 	if err != nil {
 		return -1, err
@@ -384,6 +429,10 @@ func (l *selfhostPackageFileLowerer) lowerEnumDecl(decl *ast.EnumDecl) (int, err
 	}
 	node.text = decl.Name
 	node.flags = boolToInt(decl.Pub)
+	node.extra, err = l.lowerAnnotations(decl.Annotations)
+	if err != nil {
+		return -1, err
+	}
 	children2, err := l.lowerGenericParams(decl.Generics)
 	if err != nil {
 		return -1, err
@@ -417,6 +466,10 @@ func (l *selfhostPackageFileLowerer) lowerInterfaceDecl(decl *ast.InterfaceDecl)
 	}
 	node.text = decl.Name
 	node.flags = boolToInt(decl.Pub)
+	node.extra, err = l.lowerAnnotations(decl.Annotations)
+	if err != nil {
+		return -1, err
+	}
 	children2, err := l.lowerGenericParams(decl.Generics)
 	if err != nil {
 		return -1, err
@@ -450,6 +503,10 @@ func (l *selfhostPackageFileLowerer) lowerTypeAliasDecl(decl *ast.TypeAliasDecl)
 	}
 	node.text = decl.Name
 	node.flags = boolToInt(decl.Pub)
+	node.extra, err = l.lowerAnnotations(decl.Annotations)
+	if err != nil {
+		return -1, err
+	}
 	node.left, err = l.lowerType(decl.Target)
 	if err != nil {
 		return -1, err
@@ -468,6 +525,10 @@ func (l *selfhostPackageFileLowerer) lowerLetDecl(decl *ast.LetDecl) (int, error
 		return -1, err
 	}
 	node.flags = boolToInt(decl.Mut)
+	node.extra, err = l.lowerAnnotations(decl.Annotations)
+	if err != nil {
+		return -1, err
+	}
 	patIdx, err := l.lowerPattern(&ast.IdentPat{
 		PosV: decl.PosV,
 		EndV: decl.EndV,
@@ -488,6 +549,50 @@ func (l *selfhostPackageFileLowerer) lowerLetDecl(decl *ast.LetDecl) (int, error
 		}
 		if typeIdx >= 0 {
 			node.children = append(node.children, typeIdx)
+		}
+	}
+	return astArenaAdd(l.arena, node), nil
+}
+
+func (l *selfhostPackageFileLowerer) lowerUseDecl(use *ast.UseDecl) (int, error) {
+	if use == nil {
+		return -1, nil
+	}
+	node, err := l.nodeForPublic(AstNodeKind(&AstNodeKind_AstNUseDecl{}), use)
+	if err != nil {
+		return -1, err
+	}
+	switch {
+	case use.RawPath != "":
+		node.text = use.RawPath
+	case use.IsGoFFI && use.GoPath != "":
+		node.text = use.GoPath
+	case use.IsRuntimeFFI && use.RuntimePath != "":
+		node.text = use.RuntimePath
+	default:
+		node.text = strings.Join(use.Path, ".")
+	}
+	if use.IsGoFFI {
+		node.flags += astUseDeclFlagGo()
+	}
+	if use.IsPub {
+		node.flags += astUseDeclFlagPub()
+	}
+	if use.Alias != "" {
+		aliasNode, err := l.newNodeForSpan(AstNodeKind(&AstNodeKind_AstNIdent{}), node.start, node.end)
+		if err != nil {
+			return -1, err
+		}
+		aliasNode.text = use.Alias
+		node.children2 = append(node.children2, astArenaAdd(l.arena, aliasNode))
+	}
+	for _, decl := range use.GoBody {
+		idx, err := l.lowerDecl(decl)
+		if err != nil {
+			return -1, err
+		}
+		if idx >= 0 {
+			node.children = append(node.children, idx)
 		}
 	}
 	return astArenaAdd(l.arena, node), nil
@@ -568,6 +673,10 @@ func (l *selfhostPackageFileLowerer) lowerFieldDecl(field *ast.Field) (int, erro
 		return -1, err
 	}
 	node.text = field.Name
+	node.extra, err = l.lowerAnnotations(field.Annotations)
+	if err != nil {
+		return -1, err
+	}
 	node.right, err = l.lowerType(field.Type)
 	if err != nil {
 		return -1, err
@@ -586,6 +695,10 @@ func (l *selfhostPackageFileLowerer) lowerVariantDecl(variant *ast.Variant) (int
 		return -1, err
 	}
 	node.text = variant.Name
+	node.extra, err = l.lowerAnnotations(variant.Annotations)
+	if err != nil {
+		return -1, err
+	}
 	for i, fieldTy := range variant.Fields {
 		child, err := l.newNodeForSpan(AstNodeKind(&AstNodeKind_AstNField_{}), node.start, node.end)
 		if err != nil {
@@ -1360,72 +1473,76 @@ func (l *selfhostPackageFileLowerer) lowerType(ty ast.Type) (int, error) {
 	if ty == nil {
 		return -1, nil
 	}
-	text, err := selfhostRenderType(ty)
-	if err != nil {
-		return -1, err
-	}
-	node, err := l.nodeForPublic(AstNodeKind(&AstNodeKind_AstNType{}), ty)
-	if err != nil {
-		return -1, err
-	}
-	node.text = text
-	return astArenaAdd(l.arena, node), nil
-}
-
-func selfhostRenderType(ty ast.Type) (string, error) {
 	switch t := ty.(type) {
 	case nil:
-		return "", nil
+		return -1, nil
 	case *ast.NamedType:
-		head := strings.Join(t.Path, ".")
-		if len(t.Args) == 0 {
-			return head, nil
-		}
-		args := make([]string, 0, len(t.Args))
-		for _, arg := range t.Args {
-			rendered, err := selfhostRenderType(arg)
-			if err != nil {
-				return "", err
-			}
-			args = append(args, rendered)
-		}
-		return head + "<" + strings.Join(args, ", ") + ">", nil
-	case *ast.OptionalType:
-		inner, err := selfhostRenderType(t.Inner)
+		node, err := l.nodeForPublic(AstNodeKind(&AstNodeKind_AstNType{}), t)
 		if err != nil {
-			return "", err
+			return -1, err
 		}
-		return inner + "?", nil
+		node.text = strings.Join(t.Path, ".")
+		for _, arg := range t.Args {
+			idx, err := l.lowerType(arg)
+			if err != nil {
+				return -1, err
+			}
+			if idx >= 0 {
+				node.children = append(node.children, idx)
+			}
+		}
+		return astArenaAdd(l.arena, node), nil
+	case *ast.OptionalType:
+		node, err := l.nodeForPublic(AstNodeKind(&AstNodeKind_AstNType{}), t)
+		if err != nil {
+			return -1, err
+		}
+		node.text = "optional"
+		node.left, err = l.lowerType(t.Inner)
+		if err != nil {
+			return -1, err
+		}
+		return astArenaAdd(l.arena, node), nil
 	case *ast.TupleType:
-		elems := make([]string, 0, len(t.Elems))
+		node, err := l.nodeForPublic(AstNodeKind(&AstNodeKind_AstNType{}), t)
+		if err != nil {
+			return -1, err
+		}
+		node.text = "tuple"
 		for _, elem := range t.Elems {
-			rendered, err := selfhostRenderType(elem)
+			idx, err := l.lowerType(elem)
 			if err != nil {
-				return "", err
+				return -1, err
 			}
-			elems = append(elems, rendered)
+			if idx >= 0 {
+				node.children = append(node.children, idx)
+			}
 		}
-		return "(" + strings.Join(elems, ", ") + ")", nil
+		return astArenaAdd(l.arena, node), nil
 	case *ast.FnType:
-		params := make([]string, 0, len(t.Params))
+		node, err := l.nodeForPublic(AstNodeKind(&AstNodeKind_AstNType{}), t)
+		if err != nil {
+			return -1, err
+		}
+		node.text = "fn"
 		for _, param := range t.Params {
-			rendered, err := selfhostRenderType(param)
+			idx, err := l.lowerType(param)
 			if err != nil {
-				return "", err
+				return -1, err
 			}
-			params = append(params, rendered)
+			if idx >= 0 {
+				node.children = append(node.children, idx)
+			}
 		}
-		text := "fn(" + strings.Join(params, ", ") + ")"
 		if t.ReturnType != nil {
-			ret, err := selfhostRenderType(t.ReturnType)
+			node.right, err = l.lowerType(t.ReturnType)
 			if err != nil {
-				return "", err
+				return -1, err
 			}
-			text += " -> " + ret
 		}
-		return text, nil
+		return astArenaAdd(l.arena, node), nil
 	default:
-		return "", &selfhostLoweringUnsupported{reason: fmt.Sprintf("type %T", ty)}
+		return -1, &selfhostLoweringUnsupported{reason: fmt.Sprintf("type %T", ty)}
 	}
 }
 
@@ -1491,6 +1608,99 @@ func (l *selfhostPackageFileLowerer) literalSourceText(node ast.Node) string {
 		return ""
 	}
 	return string(l.file.Source[start:end])
+}
+
+func (l *selfhostPackageFileLowerer) lowerAnnotations(annots []*ast.Annotation) (int, error) {
+	switch len(annots) {
+	case 0:
+		return -1, nil
+	case 1:
+		return l.lowerAnnotation(annots[0])
+	}
+	children := make([]int, 0, len(annots))
+	start := -1
+	end := -1
+	for _, annot := range annots {
+		idx, err := l.lowerAnnotation(annot)
+		if err != nil {
+			return -1, err
+		}
+		if idx < 0 {
+			continue
+		}
+		children = append(children, idx)
+		child := astArenaNodeAt(l.arena, idx)
+		if start < 0 || (child.start >= 0 && child.start < start) {
+			start = child.start
+		}
+		if child.end > end {
+			end = child.end
+		}
+	}
+	if len(children) == 0 {
+		return -1, nil
+	}
+	if len(children) == 1 {
+		return children[0], nil
+	}
+	group, err := l.newNodeForSpan(AstNodeKind(&AstNodeKind_AstNAnnotation{}), start, end)
+	if err != nil {
+		return -1, err
+	}
+	group.text = "__group"
+	group.children = children
+	return astArenaAdd(l.arena, group), nil
+}
+
+func (l *selfhostPackageFileLowerer) lowerAnnotation(annot *ast.Annotation) (int, error) {
+	if annot == nil {
+		return -1, nil
+	}
+	node, err := l.nodeForPublic(AstNodeKind(&AstNodeKind_AstNAnnotation{}), annot)
+	if err != nil {
+		return -1, err
+	}
+	node.text = annot.Name
+	for _, arg := range annot.Args {
+		idx, err := l.lowerAnnotationArg(arg)
+		if err != nil {
+			return -1, err
+		}
+		if idx >= 0 {
+			node.children = append(node.children, idx)
+		}
+	}
+	return astArenaAdd(l.arena, node), nil
+}
+
+func (l *selfhostPackageFileLowerer) lowerAnnotationArg(arg *ast.AnnotationArg) (int, error) {
+	if arg == nil {
+		return -1, nil
+	}
+	if arg.Key != "" {
+		if arg.Value == nil {
+			node, err := l.nodeForPublic(AstNodeKind(&AstNodeKind_AstNIdent{}), arg)
+			if err != nil {
+				return -1, err
+			}
+			node.text = arg.Key
+			return astArenaAdd(l.arena, node), nil
+		}
+		node, err := l.nodeForPublic(AstNodeKind(&AstNodeKind_AstNField_{}), arg)
+		if err != nil {
+			return -1, err
+		}
+		node.text = arg.Key
+		node.left, err = l.lowerExpr(arg.Value)
+		if err != nil {
+			return -1, err
+		}
+		return astArenaAdd(l.arena, node), nil
+	}
+	if arg.Value == nil {
+		return -1, nil
+	}
+	return l.lowerExpr(arg.Value)
 }
 
 func (l *selfhostPackageFileLowerer) nodeForPublic(kind AstNodeKind, node ast.Node) (*AstNode, error) {
