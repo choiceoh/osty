@@ -158,9 +158,17 @@ func TestProbeWholeToolchainMerged(t *testing.T) {
 // native-path whole-toolchain probe. See LLVM_MIGRATION_PLAN.md
 // § "astbridge bootstrap-only adapter" for the migration path.
 func isBootstrapOnlyOstyFile(src []byte) bool {
-	s := string(src)
-	return strings.Contains(s, "use runtime.golegacy.") ||
-		strings.Contains(s, "use go \"")
+	for _, line := range strings.Split(string(src), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "use runtime.golegacy.") ||
+			strings.HasPrefix(trimmed, "use go \"") {
+			return true
+		}
+	}
+	return false
 }
 
 // TestProbeNativeToolchainMerged is the whole-toolchain probe with
