@@ -1076,7 +1076,7 @@ fn selfPkgTopoVisit(
     nodes: List<SelfPkgGraphNode>,
     out: List<String>,
 ) -> List<String> {
-    if selfPkgStringListHas(out, name) {
+    if listContainsString(out, name) {
         return out
     }
     let lookup = selfPkgFindGraphNode(name, nodes)
@@ -1091,7 +1091,7 @@ fn selfPkgTopoVisit(
     for dep in deps {
         next = selfPkgTopoVisit(dep, nodes, next)
     }
-    if !(selfPkgStringListHas(next, name)) {
+    if !(listContainsString(next, name)) {
         next.push(name)
     }
     next
@@ -1109,19 +1109,10 @@ fn selfPkgInsertStringSorted(items: List<String>, item: String) -> List<String> 
             out.push(existing)
         }
     }
-    if !(inserted) && !(selfPkgStringListHas(out, item)) {
+    if !(inserted) && !(listContainsString(out, item)) {
         out.push(item)
     }
     out
-}
-
-fn selfPkgStringListHas(items: List<String>, item: String) -> Bool {
-    for existing in items {
-        if existing == item {
-            return true
-        }
-    }
-    false
 }
 
 /// selfPkgDepLookupItem constructs an import lookup row.

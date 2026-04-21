@@ -2230,7 +2230,7 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
             ))
             continue
         }
-        if stringListContains(seenNames, fieldName) {
+        if listContainsString(seenNames, fieldName) {
             cx.env.diagnostics.push(diagDuplicateField(owner, fieldName, fieldNode.start, fieldNode.end))
         }
         seenNames.push(fieldName)
@@ -2246,8 +2246,8 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     // owner, so we skip fields supplied either explicitly or via spread.
     for f in cx.env.fields {
         if f.owner == owner
-           && !(stringListContains(seenNames, f.name))
-           && !(stringListContains(spreadSupplied, f.name))
+           && !(listContainsString(seenNames, f.name))
+           && !(listContainsString(spreadSupplied, f.name))
            && !(f.hasDefault) {
             cx.env.diagnostics.push(diagMissingField(owner, f.name, node.start, node.end))
         }
@@ -2274,15 +2274,6 @@ fn structLitOwnerName(cx: ElabCx, node: AstNode) -> String {
         return ownerNode.text
     }
     node.text
-}
-
-fn stringListContains(xs: List<String>, needle: String) -> Bool {
-    for x in xs {
-        if x == needle {
-            return true
-        }
-    }
-    false
 }
 
 // ---------------------------------------------------------------------
@@ -3267,7 +3258,7 @@ fn armCoveredByIntCoverage(cx: ElabCx, patIdx: Int, coveredLits: List<String>, c
     if k == astPatternLiteralKind() {
         let t = patLiteralTextOf(cx, p)
         if t == "" { return false }
-        if stringListContains(coveredLits, t) {
+        if listContainsString(coveredLits, t) {
             return true
         }
         let parsed = pmParseIntLit(t)
@@ -3314,7 +3305,7 @@ fn collectArmIntCoverage(cx: ElabCx, patIdx: Int, outLits: List<String>, outInte
     let k = p.extra
     if k == astPatternLiteralKind() {
         let t = patLiteralTextOf(cx, p)
-        if t != "" && !(stringListContains(outLits, t)) {
+        if t != "" && !(listContainsString(outLits, t)) {
             outLits.push(t)
         }
         return
@@ -3381,7 +3372,7 @@ fn armCoveredByEnum(cx: ElabCx, patIdx: Int, scrutTy: Int, covered: List<String>
     }
     let k = patKindOf(p)
     if k == astPatternVariantKind() {
-        return stringListContains(covered, lastPathSegment(p.text))
+        return listContainsString(covered, lastPathSegment(p.text))
     }
     if k == astPatternIdentKind() {
         // zero-arity variant-shadow ident
@@ -3390,7 +3381,7 @@ fn armCoveredByEnum(cx: ElabCx, patIdx: Int, scrutTy: Int, covered: List<String>
         if hit.name == "" {
             return false
         }
-        return stringListContains(covered, p.text)
+        return listContainsString(covered, p.text)
     }
     if k == astPatternOrKind() {
         return armCoveredByEnum(cx, p.left, scrutTy, covered)
@@ -3414,7 +3405,7 @@ fn armCoveredByScalarLits(cx: ElabCx, patIdx: Int, scrutTy: Int, covered: List<S
     if k == astPatternLiteralKind() {
         let t = patLiteralTextOf(cx, p)
         if t == "" { return false }
-        return stringListContains(covered, t)
+        return listContainsString(covered, t)
     }
     if k == astPatternOrKind() {
         return armCoveredByScalarLits(cx, p.left, scrutTy, covered)
@@ -3440,7 +3431,7 @@ fn collectArmVariantNames(cx: ElabCx, patIdx: Int, scrutTy: Int, out: List<Strin
     let k = patKindOf(p)
     if k == astPatternVariantKind() {
         let vname = lastPathSegment(p.text)
-        if !(stringListContains(out, vname)) {
+        if !(listContainsString(out, vname)) {
             out.push(vname)
         }
         return
@@ -3448,7 +3439,7 @@ fn collectArmVariantNames(cx: ElabCx, patIdx: Int, scrutTy: Int, out: List<Strin
     if k == astPatternIdentKind() {
         let owner = tyHeadAt(cx.env.tys, scrutTy)
         let hit = checkLookupVariantInOwner(cx.env, owner, p.text)
-        if hit.name != "" && !(stringListContains(out, p.text)) {
+        if hit.name != "" && !(listContainsString(out, p.text)) {
             out.push(p.text)
         }
         return
@@ -3474,7 +3465,7 @@ fn collectArmScalarLits(cx: ElabCx, patIdx: Int, out: List<String>) {
     let k = patKindOf(p)
     if k == astPatternLiteralKind() {
         let t = patLiteralTextOf(cx, p)
-        if t != "" && !(stringListContains(out, t)) {
+        if t != "" && !(listContainsString(out, t)) {
             out.push(t)
         }
         return
