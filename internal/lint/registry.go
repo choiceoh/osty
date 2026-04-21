@@ -214,6 +214,12 @@ var allRules = []Rule{
 		Description: "Use the opposite literal directly.",
 		Fixable:     true,
 	},
+	{
+		Code: diag.CodeUnnecessaryWrap, Name: "unnecessary_wrap",
+		Category: CategorySimplify, DefaultSeverity: diag.Warning,
+		Summary:     "function returns Result/Option but never errors",
+		Description: "A function declared `-> Result<T, E>` or `-> Option<T>` whose body only exits through `Ok(...)` or `Some(...)` (no `Err`, `None`, or `?` propagation) forces every caller to unwrap for no reason. Drop the wrapping and declare the plain return type.",
+	},
 
 	// ---- Complexity (L0050-L0069) ----
 	{

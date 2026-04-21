@@ -196,13 +196,14 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "L0030" { return FamilyLint }
     if code == "L0031" { return FamilyLint }
     if code == "L0032" { return FamilyLint }
-    // Lint — redundant forms (L0040–L0045)
+    // Lint — redundant forms (L0040–L0046)
     if code == "L0040" { return FamilyLint }
     if code == "L0041" { return FamilyLint }
     if code == "L0042" { return FamilyLint }
     if code == "L0043" { return FamilyLint }
     if code == "L0044" { return FamilyLint }
     if code == "L0045" { return FamilyLint }
+    if code == "L0046" { return FamilyLint }
     // Lint — complexity (L0050–L0053)
     if code == "L0050" { return FamilyLint }
     if code == "L0052" { return FamilyLint }

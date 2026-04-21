@@ -1516,7 +1516,7 @@ enum Color { red, Green }   // warning on `red`
 
 ---
 
-## Lint — redundant forms (L0040–L0045)
+## Lint — redundant forms (L0040–L0046)
 
 ### L0040 — `CodeRedundantBool`
 
@@ -1567,6 +1567,20 @@ let x = !true      // warning: use `false` directly
 ```
 
 **Fix**: replace with the opposite literal.
+
+### L0046 — `CodeUnnecessaryWrap`
+
+A function declared `-> Result<T, E>` or `-> Option<T>` whose body only ever exits via `Ok(...)` or `Some(...)` — the wrapping is pure noise at every call site.
+
+fn parse(s: String) -> Int { s.len() }
+
+```osty
+fn parse(s: String) -> Result<Int, Error> {
+    Ok(s.len())              // warning: fn never returns Err
+}
+```
+
+**Fix**: drop the wrapping and declare the plain return type:
 
 ---
 

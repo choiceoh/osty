@@ -887,6 +887,84 @@ fn testSelfLintAllowSuppressesSpecificCode() {
     testing.assertEq(selfLintCodeCount(withAllow, "L0002"), 1)
 }
 
+fn testSelfLintFindsUnnecessaryResultWrap() {
+    let report = selfLintSource(
+        r"""
+            fn parseLen(s: String) -> Result<Int, Error> {
+                Ok(s.len())
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0046"), 1)
+}
+
+fn testSelfLintFindsUnnecessaryOptionWrap() {
+    let report = selfLintSource(
+        r"""
+            fn maybeLen(s: String) -> Option<Int> {
+                Some(s.len())
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0046"), 1)
+}
+
+fn testSelfLintSkipsWrapWhenBodyPropagatesWithQuestion() {
+    let report = selfLintSource(
+        r"""
+            fn load(path: String) -> Result<Int, Error> {
+                let n = parse(path)?
+                Ok(n)
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0046"), 0)
+}
+
+fn testSelfLintSkipsWrapWhenBodyReturnsErr() {
+    let report = selfLintSource(
+        r"""
+            fn maybeDo(flag: Bool) -> Result<Int, Error> {
+                if flag {
+                    Ok(1)
+                } else {
+                    Err(SomeError.Boom)
+                }
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0046"), 0)
+}
+
+fn testSelfLintSkipsWrapWhenBodyReturnsNone() {
+    let report = selfLintSource(
+        r"""
+            fn maybeLen(s: String) -> Option<Int> {
+                if s.len() == 0 { None } else { Some(s.len()) }
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0046"), 0)
+}
+
+fn testSelfLintWrapRespectsAllow() {
+    let report = selfLintSource(
+        r"""
+            #[allow(L0046)]
+            fn parseLen(s: String) -> Result<Int, Error> {
+                Ok(s.len())
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0046"), 0)
+}
+
 fn testSelfLintAllowAcceptsRuleAlias() {
     let report = selfLintSource(
         r"""

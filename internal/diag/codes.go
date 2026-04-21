@@ -1375,6 +1375,18 @@ const (
 	// Fix: replace with the opposite literal.
 	CodeNegatedBoolLiteral = "L0045"
 
+	// A function declared `-> Result<T, E>` or `-> Option<T>` whose body
+	// only ever exits via `Ok(...)` or `Some(...)` — the wrapping is
+	// pure noise at every call site.
+	//
+	// Example:
+	//   fn parse(s: String) -> Result<Int, Error> {
+	//       Ok(s.len())              // warning: fn never returns Err
+	//   }
+	// Fix: drop the wrapping and declare the plain return type:
+	//   fn parse(s: String) -> Int { s.len() }
+	CodeUnnecessaryWrap = "L0046"
+
 	// Lint — complexity.
 
 	// A function declares too many parameters (> 7 by default).
