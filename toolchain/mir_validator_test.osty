@@ -1,0 +1,317 @@
+use std.testing
+
+// A well-formed module used by many positive tests: one function with
+// a return slot, one parameter, one entry block that returns.
+fn validatorFixtureOK() -> MirModule {
+    let m = mirModule("pkg")
+    let func = mirFunction("pkg.addOne", "Int", mirNoSpan())
+
+    let retId = mirFunctionNewLocal(func, "ret", "Int", false, mirNoSpan())
+    func.locals[retId].isReturn = true
+    func.returnLocal = retId
+
+    let paramId = mirFunctionNewLocal(func, "x", "Int", false, mirNoSpan())
+    func.locals[paramId].isParam = true
+    func.params.push(paramId)
+
+    let entry = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = entry
+
+    let sum = mirRVBinary(
+        MirBinAdd,
+        mirOperandCopy(mirPlace(paramId), "Int"),
+        mirOperandConst(mirConstInt(1, "Int")),
+        "Int",
+    )
+    mirFunctionAppend(func, entry, mirAssignInstr(mirPlace(retId), sum, mirNoSpan()))
+    mirFunctionTerminate(func, entry, mirReturnTerm(mirNoSpan()))
+
+    m.functions.push(func)
+    m
+}
+
+// ==== Positive paths ================================================
+
+fn testValidatorAcceptsWellFormedModule() {
+    let m = validatorFixtureOK()
+    let errs = mirValidateModule(m)
+    testing.assertEq(errs.len(), 0)
+}
+
+fn testValidatorAcceptsExternalFunctionWithoutBlocks() {
+    let m = mirModule("pkg")
+    let func = mirFunction("pkg.extern", "Unit", mirNoSpan())
+    func.isExternal = true
+    m.functions.push(func)
+
+    let errs = mirValidateModule(m)
+    testing.assertEq(errs.len(), 0)
+}
+
+fn testValidatorAcceptsIntrinsicFunctionWithoutBlocks() {
+    let m = mirModule("pkg")
+    let func = mirFunction("pkg.intrinsic", "Unit", mirNoSpan())
+    func.isIntrinsic = true
+    m.functions.push(func)
+
+    let errs = mirValidateModule(m)
+    testing.assertEq(errs.len(), 0)
+}
+
+// ==== Module-level invariants =======================================
+
+fn testValidatorRejectsEmptyPackageName() {
+    let m = mirModule("")
+    let errs = mirValidateModule(m)
+    testing.assert(errs.len() >= 1)
+    testing.assert(mirValidatorTestHas(errs, "empty package"))
+}
+
+fn testValidatorRejectsDuplicateFunctionSymbol() {
+    let m = mirModule("pkg")
+    let f1 = mirFunction("pkg.f", "Unit", mirNoSpan())
+    f1.isExternal = true
+    let f2 = mirFunction("pkg.f", "Unit", mirNoSpan())
+    f2.isExternal = true
+    m.functions.push(f1)
+    m.functions.push(f2)
+
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "duplicate symbol"))
+}
+
+fn testValidatorRejectsEmptyFunctionName() {
+    let m = mirModule("pkg")
+    let func = mirFunction("", "Unit", mirNoSpan())
+    func.isExternal = true
+    m.functions.push(func)
+
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "empty name"))
+}
+
+// ==== Function / local invariants ===================================
+
+fn testValidatorRejectsMissingReturnLocal() {
+    let m = validatorFixtureOK()
+    // Corrupt: point returnLocal at an out-of-range slot.
+    m.functions[0].returnLocal = 99
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "returnLocal"))
+    testing.assert(mirValidatorTestHas(errs, "out of range"))
+}
+
+fn testValidatorRejectsReturnTypeMismatch() {
+    let m = validatorFixtureOK()
+    // Corrupt: change the declared return type away from the local's.
+    m.functions[0].returnType = "String"
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "does not match declared return type"))
+}
+
+fn testValidatorRejectsDuplicateParamRef() {
+    let m = validatorFixtureOK()
+    // Corrupt: reference the param twice in fn.params.
+    m.functions[0].params.push(m.functions[0].params[0])
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "appears more than once"))
+}
+
+fn testValidatorRejectsParamNotMarkedIsParam() {
+    let m = validatorFixtureOK()
+    // Corrupt: drop the IsParam flag from the param slot.
+    m.functions[0].locals[1].isParam = false
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "is not marked isParam"))
+}
+
+fn testValidatorRejectsTwoReturnLocals() {
+    let m = validatorFixtureOK()
+    // Corrupt: flag the parameter slot as another return. Second
+    // encountered IsReturn triggers the duplicate diagnostic.
+    m.functions[0].locals[1].isReturn = true
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "more than one local marked isReturn"))
+}
+
+fn testValidatorRejectsFunctionWithNoBlocks() {
+    let m = mirModule("pkg")
+    let func = mirFunction("pkg.empty", "Unit", mirNoSpan())
+    let retId = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[retId].isReturn = true
+    func.returnLocal = retId
+    m.functions.push(func)
+
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "no blocks"))
+}
+
+fn testValidatorRejectsOutOfRangeEntry() {
+    let m = validatorFixtureOK()
+    m.functions[0].entry = 99
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "entry=99"))
+}
+
+fn testValidatorRejectsExternalFunctionWithBlocks() {
+    let m = mirModule("pkg")
+    let func = mirFunction("pkg.bad", "Unit", mirNoSpan())
+    func.isExternal = true
+    mirFunctionNewBlock(func, mirNoSpan())
+    m.functions.push(func)
+
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "external/intrinsic must have no blocks"))
+}
+
+// ==== Block-level invariants ========================================
+
+fn testValidatorRejectsMissingTerminator() {
+    let m = validatorFixtureOK()
+    // Corrupt: drop the terminator on bb0.
+    m.functions[0].blocks[0].hasTerm = false
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "missing terminator"))
+}
+
+fn testValidatorRejectsGotoOutOfRange() {
+    let m = validatorFixtureOK()
+    let func = m.functions[0]
+    mirFunctionTerminate(func, 0, mirGotoTerm(42, mirNoSpan()))
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "out of range"))
+    testing.assert(mirValidatorTestHas(errs, "goto.target"))
+}
+
+fn testValidatorRejectsBranchOutOfRange() {
+    let m = validatorFixtureOK()
+    let func = m.functions[0]
+    let cond = mirOperandConst(mirConstBool(true))
+    mirFunctionTerminate(func, 0, mirBranchTerm(cond, 1, 99, mirNoSpan()))
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "branch.elseBlock"))
+    testing.assert(mirValidatorTestHas(errs, "out of range"))
+}
+
+fn testValidatorRejectsSwitchIntDuplicateCases() {
+    let m = mirModule("pkg")
+    let func = mirFunction("pkg.sw", "Unit", mirNoSpan())
+    let retId = mirFunctionNewLocal(func, "ret", "Unit", false, mirNoSpan())
+    func.locals[retId].isReturn = true
+    func.returnLocal = retId
+    let scrut = mirFunctionNewLocal(func, "s", "Int", false, mirNoSpan())
+
+    let entry = mirFunctionNewBlock(func, mirNoSpan())
+    let a = mirFunctionNewBlock(func, mirNoSpan())
+    let b = mirFunctionNewBlock(func, mirNoSpan())
+    let def = mirFunctionNewBlock(func, mirNoSpan())
+    func.entry = entry
+
+    let cases = [
+        mirSwitchCase(5, a, "five"),
+        mirSwitchCase(5, b, "again"),
+    ]
+    mirFunctionTerminate(
+        func,
+        entry,
+        mirSwitchIntTerm(mirOperandCopy(mirPlace(scrut), "Int"), cases, def, mirNoSpan()),
+    )
+    mirFunctionTerminate(func, a, mirReturnTerm(mirNoSpan()))
+    mirFunctionTerminate(func, b, mirReturnTerm(mirNoSpan()))
+    mirFunctionTerminate(func, def, mirReturnTerm(mirNoSpan()))
+
+    m.functions.push(func)
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "duplicates an earlier case"))
+}
+
+// ==== Storage marker invariants =====================================
+
+fn testValidatorRejectsStorageLiveOnParam() {
+    let m = validatorFixtureOK()
+    let func = m.functions[0]
+    mirFunctionAppend(func, 0, mirStorageLiveInstr(1, mirNoSpan()))
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "storage_live on parameter"))
+}
+
+fn testValidatorRejectsStorageDeadOnReturn() {
+    let m = validatorFixtureOK()
+    let func = m.functions[0]
+    mirFunctionAppend(func, 0, mirStorageDeadInstr(0, mirNoSpan()))
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "storage_dead on return slot"))
+}
+
+fn testValidatorRejectsStorageOutOfRange() {
+    let m = validatorFixtureOK()
+    let func = m.functions[0]
+    mirFunctionAppend(func, 0, mirStorageLiveInstr(99, mirNoSpan()))
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "storage_live _99 out of range"))
+}
+
+// ==== Callee / operand invariants ===================================
+
+fn testValidatorRejectsFnRefEmptySymbol() {
+    let m = validatorFixtureOK()
+    let func = m.functions[0]
+    let call = mirCallInstr(false, mirPlace(-1), "", "fn() -> Unit", [], mirNoSpan())
+    mirFunctionAppend(func, 0, call)
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "fnRef empty symbol"))
+}
+
+fn testValidatorRejectsPlaceOutOfRange() {
+    let m = validatorFixtureOK()
+    let func = m.functions[0]
+    let badRV = mirRVUse(mirOperandCopy(mirPlace(42), "Int"))
+    mirFunctionAppend(func, 0, mirAssignInstr(mirPlace(0), badRV, mirNoSpan()))
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "out of range"))
+}
+
+fn testValidatorRejectsInvalidIntrinsic() {
+    let m = validatorFixtureOK()
+    let func = m.functions[0]
+    let bad = mirIntrinsicInstr(false, mirPlace(-1), MirIntrinsicInvalid, [], mirNoSpan())
+    mirFunctionAppend(func, 0, bad)
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "intrinsic kind is Invalid"))
+}
+
+// ==== Helper local to this test file ================================
+
+fn mirValidatorTestHas(errs: List<String>, needle: String) -> Bool {
+    for e in errs {
+        if mirValidatorTestSubstring(e, needle) {
+            return true
+        }
+    }
+    false
+}
+
+fn mirValidatorTestSubstring(haystack: String, needle: String) -> Bool {
+    let hLen = haystack.len()
+    let nLen = needle.len()
+    if nLen == 0 {
+        return true
+    }
+    if nLen > hLen {
+        return false
+    }
+    let last = hLen - nLen
+    for start in 0..(last + 1) {
+        let mut matched = true
+        for offset in 0..nLen {
+            if haystack[start + offset] != needle[offset] {
+                matched = false
+                break
+            }
+        }
+        if matched {
+            return true
+        }
+    }
+    false
+}
