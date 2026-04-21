@@ -16,27 +16,23 @@
 //   checkGenericBoundSatisfied(env, solver, ...)  // after zonk
 //   let concrete = zonk(env, solver, returnTy)
 //
-// The solver stores substitutions as a plain `List<Subst>` (linear
-// scan on lookup). Chain lengths are shallow in practice — one level
-// per type parameter — and this keeps the representation friendly to
-// the Osty self-host codegen.
-
-/// Subst is a single `varId -> Ty` binding. `ty` is an arena index.
-pub struct Subst {
-    pub varId: Int,
-    pub ty: Int,
-}
+// The solver stores substitutions in `substByVar`, a sparse array
+// indexed directly by the variable's `varId` (grown on demand, unbound
+// slots hold `-1`). This keeps lookup O(1) instead of the O(n) scan
+// the original `List<Subst>` required and still lowers through the
+// self-host codegen as plain `List<Int>`. Last-binding-wins semantics
+// is preserved because `solverBind` overwrites the slot.
 
 /// Solver owns the substitutions produced during a single constraint
 /// episode. Callers allocate a fresh solver per call site and rely on
 /// the parent arenas (`TyArena`, `CheckEnv`) for the actual type
 /// storage.
 pub struct Solver {
-    pub substs: List<Subst>,
+    pub substByVar: List<Int>,
 }
 
 pub fn newSolver() -> Solver {
-    Solver { substs: [] }
+    Solver { substByVar: [] }
 }
 
 /// freshTyVar is a thin wrapper around `tyVarFresh` that lives on the
@@ -54,19 +50,25 @@ pub fn freshTyVar(tys: TyArena, owner: String, name: String) -> Int {
 /// resolve `ty` through `solverWalk` if they want eager path
 /// compression; `unify` already does that at the unification site.
 pub fn solverBind(solver: Solver, varId: Int, ty: Int) {
-    solver.substs.push(Subst { varId, ty })
+    if varId < 0 {
+        return
+    }
+    let mut n = solver.substByVar.len()
+    for n <= varId {
+        solver.substByVar.push(-1)
+        n = n + 1
+    }
+    solver.substByVar[varId] = ty
 }
 
-/// solverLookup returns the most recent binding for `varId`, or -1 if
-/// none exists.
+/// solverLookup returns the binding for `varId`, or -1 if none exists.
+/// Backed by `substByVar`, a sparse array indexed by `varId`, so the
+/// lookup is O(1) once the slot has been materialised.
 pub fn solverLookup(solver: Solver, varId: Int) -> Int {
-    let mut found = -1
-    for s in solver.substs {
-        if s.varId == varId {
-            found = s.ty
-        }
+    if varId < 0 || varId >= solver.substByVar.len() {
+        return -1
     }
-    found
+    solver.substByVar[varId]
 }
 
 /// solverWalk follows the substitution chain: given any `ty`, if it is
