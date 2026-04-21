@@ -2295,6 +2295,10 @@ func llvmStringRuntimeCountSymbol() string {
 	return "osty_rt_strings_Count"
 }
 
+func llvmStringRuntimeIndexOfSymbol() string {
+	return "osty_rt_strings_IndexOf"
+}
+
 func llvmStringRuntimeJoinSymbol() string {
 	return "osty_rt_strings_Join"
 }
@@ -2303,12 +2307,24 @@ func llvmStringRuntimeRepeatSymbol() string {
 	return "osty_rt_strings_Repeat"
 }
 
+func llvmStringRuntimeReplaceSymbol() string {
+	return "osty_rt_strings_Replace"
+}
+
 func llvmStringRuntimeReplaceAllSymbol() string {
 	return "osty_rt_strings_ReplaceAll"
 }
 
 func llvmStringRuntimeSliceSymbol() string {
 	return "osty_rt_strings_Slice"
+}
+
+func llvmStringRuntimeTrimStartSymbol() string {
+	return "osty_rt_strings_TrimStart"
+}
+
+func llvmStringRuntimeTrimEndSymbol() string {
+	return "osty_rt_strings_TrimEnd"
 }
 
 func llvmStringRuntimeTrimPrefixSymbol() string {
@@ -2345,10 +2361,14 @@ func llvmStringRuntimeDeclarations() []string {
 		"declare i64 @osty_rt_strings_ByteLen(ptr)",
 		"declare i64 @osty_rt_strings_Compare(ptr, ptr)",
 		"declare i64 @osty_rt_strings_Count(ptr, ptr)",
+		"declare i64 @osty_rt_strings_IndexOf(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Join(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Repeat(ptr, i64)",
+		"declare ptr @osty_rt_strings_Replace(ptr, ptr, ptr)",
 		"declare ptr @osty_rt_strings_ReplaceAll(ptr, ptr, ptr)",
 		"declare ptr @osty_rt_strings_Slice(ptr, i64, i64)",
+		"declare ptr @osty_rt_strings_TrimStart(ptr)",
+		"declare ptr @osty_rt_strings_TrimEnd(ptr)",
 		"declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)",
 		"declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)",
 		"declare ptr @osty_rt_strings_TrimSpace(ptr)",
@@ -2412,6 +2432,10 @@ func llvmStringRuntimeCount(emitter *LlvmEmitter, value *LlvmValue, substr *Llvm
 	return llvmCall(emitter, "i64", "osty_rt_strings_Count", []*LlvmValue{value, substr})
 }
 
+func llvmStringRuntimeIndexOf(emitter *LlvmEmitter, value *LlvmValue, substr *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "i64", "osty_rt_strings_IndexOf", []*LlvmValue{value, substr})
+}
+
 func llvmStringRuntimeJoin(emitter *LlvmEmitter, parts *LlvmValue, sep *LlvmValue) *LlvmValue {
 	return llvmCall(emitter, "ptr", "osty_rt_strings_Join", []*LlvmValue{parts, sep})
 }
@@ -2420,12 +2444,24 @@ func llvmStringRuntimeRepeat(emitter *LlvmEmitter, value *LlvmValue, n *LlvmValu
 	return llvmCall(emitter, "ptr", "osty_rt_strings_Repeat", []*LlvmValue{value, n})
 }
 
+func llvmStringRuntimeReplace(emitter *LlvmEmitter, value *LlvmValue, old *LlvmValue, newValue *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_strings_Replace", []*LlvmValue{value, old, newValue})
+}
+
 func llvmStringRuntimeReplaceAll(emitter *LlvmEmitter, value *LlvmValue, old *LlvmValue, newValue *LlvmValue) *LlvmValue {
 	return llvmCall(emitter, "ptr", "osty_rt_strings_ReplaceAll", []*LlvmValue{value, old, newValue})
 }
 
 func llvmStringRuntimeSlice(emitter *LlvmEmitter, value *LlvmValue, start *LlvmValue, end *LlvmValue) *LlvmValue {
 	return llvmCall(emitter, "ptr", "osty_rt_strings_Slice", []*LlvmValue{value, start, end})
+}
+
+func llvmStringRuntimeTrimStart(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_strings_TrimStart", []*LlvmValue{value})
+}
+
+func llvmStringRuntimeTrimEnd(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_strings_TrimEnd", []*LlvmValue{value})
 }
 
 func llvmStringRuntimeTrimPrefix(emitter *LlvmEmitter, value *LlvmValue, prefix *LlvmValue) *LlvmValue {

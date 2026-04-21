@@ -89,6 +89,277 @@ fn main() {
 	}
 }
 
+func TestStringRepeatMethodCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn dup(s: String, n: Int) -> String {
+    s.repeat(n)
+}
+
+fn main() {
+    println(dup("ab", 3))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_repeat_method.osty"})
+	if err != nil {
+		t.Fatalf("repeat method call errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_Repeat",
+		"declare ptr @osty_rt_strings_Repeat(ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("repeat method call missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringJoinMethodCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn render(parts: List<String>) -> String {
+    ", ".join(parts)
+}
+
+fn main() {
+    println(render(["a", "b", "c"]))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_join_method.osty"})
+	if err != nil {
+		t.Fatalf("join method call errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_Join",
+		"declare ptr @osty_rt_strings_Join(ptr, ptr)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("join method call missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringLinesMethodCarriesListMetadata(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn lineCount(s: String) -> Int {
+    s.lines().len()
+}
+
+fn main() {
+    println(lineCount("a\nb\nc"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_lines_method.osty"})
+	if err != nil {
+		t.Fatalf("lines method call errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_Split",
+		"@osty_rt_list_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("lines method chain missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringCharCountMethodCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn size(s: String) -> Int {
+    s.charCount()
+}
+
+fn main() {
+    println(size("가a"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_char_count_method.osty"})
+	if err != nil {
+		t.Fatalf("charCount method call errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_Chars",
+		"@osty_rt_list_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("charCount method call missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringGetMethodCallReturnsOptionalByte(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn firstOrSpace(s: String) -> Byte {
+    s.get(0) ?? ' '.toInt().toByte()
+}
+
+fn main() {
+    println(firstOrSpace("abc").toInt())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_get_method.osty"})
+	if err != nil {
+		t.Fatalf("get method call errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_Bytes",
+		"@osty_rt_list_len",
+		"@osty_rt_list_get_i8",
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 1,",
+		"load i8, ptr",
+		"phi i8",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("get method call missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringGetMethodPreservesOptionalSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn hasFirst(s: String) -> Bool {
+    s.get(0).isSome()
+}
+
+fn main() {
+    println(hasFirst("abc"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_get_is_some.osty"})
+	if err != nil {
+		t.Fatalf("get().isSome() errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_Bytes",
+		"@osty_rt_list_get_i8",
+		"icmp ne ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("get().isSome() missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringIndexOfMethodCallReturnsOptionalInt(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn posOrMinusOne(s: String, needle: String) -> Int {
+    s.indexOf(needle) ?? -1
+}
+
+fn main() {
+    println(posOrMinusOne("abc", "b"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_index_of_method.osty"})
+	if err != nil {
+		t.Fatalf("indexOf method call errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_IndexOf",
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
+		"load i64, ptr",
+		"phi i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("indexOf method call missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringIndexOfMethodPreservesOptionalSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn hasNeedle(s: String, needle: String) -> Bool {
+    s.indexOf(needle).isSome()
+}
+
+fn main() {
+    println(hasNeedle("abc", "b"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_index_of_is_some.osty"})
+	if err != nil {
+		t.Fatalf("indexOf().isSome() errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_IndexOf",
+		"icmp ne ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("indexOf().isSome() missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringReplaceMethodCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn swap(s: String) -> String {
+    s.replace("foo", "bar")
+}
+
+fn main() {
+    println(swap("food"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_replace_method.osty"})
+	if err != nil {
+		t.Fatalf("replace method call errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_Replace",
+		"declare ptr @osty_rt_strings_Replace(ptr, ptr, ptr)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("replace method call missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringTrimStartMethodCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn dropLeft(s: String) -> String {
+    s.trimStart()
+}
+
+fn main() {
+    println(dropLeft("  hi"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_trim_start_method.osty"})
+	if err != nil {
+		t.Fatalf("trimStart method call errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_TrimStart",
+		"declare ptr @osty_rt_strings_TrimStart(ptr)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("trimStart method call missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringTrimEndMethodCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn dropRight(s: String) -> String {
+    s.trimEnd()
+}
+
+fn main() {
+    println(dropRight("hi  "))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_trim_end_method.osty"})
+	if err != nil {
+		t.Fatalf("trimEnd method call errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_TrimEnd",
+		"declare ptr @osty_rt_strings_TrimEnd(ptr)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("trimEnd method call missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // Chained method calls — `s.trimPrefix(a).trimSuffix(b).contains(n)` —
 // must keep flowing through the String dispatcher rather than dropping
 // the source-type hint after the first call. This locks in the
@@ -114,6 +385,79 @@ fn main() {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("chain missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringRepeatMethodChainPreservesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn hasEcho(s: String) -> Bool {
+    s.repeat(2).contains(s)
+}
+
+fn main() {
+    println(hasEcho("ab"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_repeat_chain.osty"})
+	if err != nil {
+		t.Fatalf("repeat-chain string methods errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_Repeat",
+		"@osty_rt_strings_Contains",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("repeat-chain missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringReplaceMethodChainPreservesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn hasBar(s: String) -> Bool {
+    s.replace("foo", "bar").contains("bar")
+}
+
+fn main() {
+    println(hasBar("food"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_replace_chain.osty"})
+	if err != nil {
+		t.Fatalf("replace-chain string methods errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_Replace",
+		"@osty_rt_strings_Contains",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("replace-chain missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringTrimStartEndMethodChainPreservesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn hasBody(s: String) -> Bool {
+    s.trimStart().trimEnd().contains("body")
+}
+
+fn main() {
+    println(hasBody("  body  "))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_trim_start_end_chain.osty"})
+	if err != nil {
+		t.Fatalf("trimStart/trimEnd chain errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_TrimStart",
+		"@osty_rt_strings_TrimEnd",
+		"@osty_rt_strings_Contains",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("trimStart/trimEnd chain missing %q:\n%s", want, got)
 		}
 	}
 }
