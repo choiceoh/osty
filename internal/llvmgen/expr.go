@@ -3284,7 +3284,7 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return value{}, unsupportedf("call", "function %q has no return value", sig.name)
 	}
 	emitter := g.toOstyEmitter()
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindCall)
 	g.takeOstyEmitter(emitter)
 	g.pushScope()
 	args, err := g.userCallArgs(sig, receiverExpr, call)
@@ -3582,7 +3582,7 @@ func (g *generator) emitOptionalUserCall(call *ast.CallExpr) (value, bool, error
 	}
 	out, err := g.emitOptionalPtrExpr(baseValue, func() (value, error) {
 		emitter := g.toOstyEmitter()
-		g.emitGCSafepoint(emitter)
+		g.emitGCSafepointKind(emitter, safepointKindCall)
 		g.takeOstyEmitter(emitter)
 		args, err := g.optionalUserCallArgs(sig, innerSource, baseValue, call)
 		if err != nil {

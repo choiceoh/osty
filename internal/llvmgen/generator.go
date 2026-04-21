@@ -186,14 +186,49 @@ func (g *generator) releaseGCRoots(emitter *LlvmEmitter) {
 	}
 }
 
+// safepointKind classifies why a safepoint poll was emitted. The low 56
+// bits of the id passed to `osty.gc.safepoint_v1` hold the per-module
+// serial; the top 8 bits hold one of these values. See
+// `RUNTIME_GC_DELTA.md` §10.1 and the C runtime enum
+// `OSTY_GC_SAFEPOINT_KIND_*` which must stay numerically aligned.
+type safepointKind uint8
+
+const (
+	safepointKindUnspecified safepointKind = 0
+	safepointKindEntry       safepointKind = 1
+	safepointKindCall        safepointKind = 2
+	safepointKindLoop        safepointKind = 3
+	safepointKindAlloc       safepointKind = 4
+	safepointKindYield       safepointKind = 5
+)
+
+// encodeSafepointID packs kind (high 8 bits) and serial (low 56 bits)
+// into the single i64 the runtime entrypoint consumes. The runtime
+// tolerates unknown kinds by falling back to UNSPECIFIED, so rolling
+// the encoding forward for future kinds does not break older runtimes
+// shipped alongside this LLVM output.
+func encodeSafepointID(kind safepointKind, serial int) int64 {
+	const serialMask int64 = (int64(1) << 56) - 1
+	return (int64(kind) << 56) | (int64(serial) & serialMask)
+}
+
+// emitGCSafepoint emits a safepoint poll at an unspecified site — kept
+// for callers that have not been classified yet. New call sites should
+// invoke `emitGCSafepointKind` directly with a specific kind so Phase
+// A5 observability stays accurate.
 func (g *generator) emitGCSafepoint(emitter *LlvmEmitter) {
+	g.emitGCSafepointKind(emitter, safepointKindUnspecified)
+}
+
+func (g *generator) emitGCSafepointKind(emitter *LlvmEmitter, kind safepointKind) {
 	g.declareRuntimeSymbol("osty.gc.safepoint_v1", "void", []paramInfo{
 		{typ: "i64"},
 		{typ: "ptr"},
 		{typ: "i64"},
 	})
-	id := g.nextSafepoint
+	serial := g.nextSafepoint
 	g.nextSafepoint++
+	id := encodeSafepointID(kind, serial)
 	roots := g.visibleSafepointRoots()
 	if len(roots) == 0 {
 		emitter.body = append(emitter.body, fmt.Sprintf(

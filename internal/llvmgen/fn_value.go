@@ -68,11 +68,20 @@ func (g *generator) ensureFnValueThunk(sig *fnSig) string {
 	return symbol
 }
 
-// fnValueEnvKind is the GC kind tag for closure envs. Uses the
-// generic kind (1) for now — phase 1 envs have no captures so the
-// default trace-none/destroy-none layout works. Phase 4 will want
-// its own kind with a trace that marks captured ptrs.
-const fnValueEnvKind = 1
+// fnValueEnvKind is the GC kind tag for closure envs. Points at the
+// dedicated `OSTY_GC_KIND_CLOSURE_ENV = 1029` reservation in
+// `internal/backend/runtime/osty_runtime.c` (Phase A4,
+// RUNTIME_GC_DELTA §2.4).
+//
+// Phase 1 envs still have no captures and the runtime dispatch stays
+// identical to the GENERIC kind (trace=NULL, destroy=NULL), but the
+// distinct tag means:
+//   - heap dumps and `osty_gc_stats` can separate closure envs from
+//     bare `osty.gc.alloc_v1` objects
+//   - Phase 4 can grow the env to `{ ptr fn, ptr cap0, ptr cap1, ... }`
+//     and register a trace callback keyed on this kind without having
+//     to audit every kind=1 allocation in the runtime first
+const fnValueEnvKind = 1029
 
 // fnValueEnvByteSize is the size in bytes of the bare 1-field env.
 // Stays a compile-time literal because the env layout is fixed: one
@@ -297,7 +306,7 @@ func (g *generator) emitIndirectUserCall(call *ast.CallExpr) (value, bool, error
 	// roots coming out of arg evaluation are released at the same
 	// cadence.
 	emitter := g.toOstyEmitter()
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindCall)
 	g.takeOstyEmitter(emitter)
 	g.pushScope()
 	ret, callErr := g.emitFnValueIndirectCall(envVal, sig, args)

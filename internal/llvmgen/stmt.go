@@ -593,7 +593,7 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	}
 	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.endLabel)
@@ -663,7 +663,7 @@ func (g *generator) emitWhileFor(stmt *ast.ForStmt) error {
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(continueLabel)
 	emitter = g.toOstyEmitter()
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	g.takeOstyEmitter(emitter)
@@ -740,7 +740,7 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(continueLabel)
 	emitter = g.toOstyEmitter()
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	g.takeOstyEmitter(emitter)
@@ -1589,7 +1589,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	g.pushScope()
 	defer g.popScope()
 	emitter := g.toOstyEmitter()
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindCall)
 	g.takeOstyEmitter(emitter)
 	base, err := g.emitExpr(field.X)
 	if err != nil {
@@ -1836,7 +1836,7 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	}
 	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.endLabel)
@@ -1862,7 +1862,7 @@ func (g *generator) emitOptionalUserCallStmt(call *ast.CallExpr) (bool, error) {
 	}
 	if err := g.emitOptionalPtrStmt(baseValue, func() error {
 		emitter := g.toOstyEmitter()
-		g.emitGCSafepoint(emitter)
+		g.emitGCSafepointKind(emitter, safepointKindCall)
 		g.takeOstyEmitter(emitter)
 		args, err := g.optionalUserCallArgs(sig, innerSource, baseValue, call)
 		if err != nil {
@@ -1891,7 +1891,7 @@ func (g *generator) emitUserCallStmt(call *ast.CallExpr) (bool, error) {
 		return false, nil
 	}
 	emitter := g.toOstyEmitter()
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindCall)
 	g.takeOstyEmitter(emitter)
 	g.pushScope()
 	args, err := g.userCallArgs(sig, receiverExpr, call)

@@ -97,6 +97,16 @@ enum {
     OSTY_GC_KIND_MAP = 1026,
     OSTY_GC_KIND_SET = 1027,
     OSTY_GC_KIND_BYTES = 1028,
+    /* Phase A4 (RUNTIME_GC_DELTA §2.4). Reserved kind for closure
+     * environment structs. Phase 1 closures carry no captures so the
+     * layout is still `{ ptr fn_or_thunk }` and the trace callback
+     * stays NULL — identical to the GENERIC dispatch. The dedicated
+     * kind exists so that Phase 4 (the first capture-aware lowering)
+     * has a stable tag to switch on when it grows the env to
+     * `{ ptr fn, ptr cap0, ptr cap1, ... }` and wires up the
+     * per-capture mark_slot trace. Allocation site:
+     * `internal/llvmgen/fn_value.go:fnValueEnvKind`. */
+    OSTY_GC_KIND_CLOSURE_ENV = 1029,
 };
 
 enum {
@@ -124,6 +134,92 @@ static int64_t osty_gc_post_write_count = 0;
 static int64_t osty_gc_post_write_managed_count = 0;
 static int64_t osty_gc_load_count = 0;
 static int64_t osty_gc_load_managed_count = 0;
+
+/* Phase A2 cumulative counters (RUNTIME_GC_DELTA §9.3).
+ *
+ * `allocated_since_collect` only tracks pressure between collections; once
+ * the collector runs it resets to zero. These cumulative totals preserve
+ * the full lifetime signal so tests and `osty_gc_debug_stats` can observe
+ * allocation throughput and sweep pressure across cycles. */
+static int64_t osty_gc_allocated_bytes_total = 0;
+static int64_t osty_gc_swept_count_total = 0;
+static int64_t osty_gc_swept_bytes_total = 0;
+
+/* Phase A6 stackmap overflow guard (RUNTIME_GC_DELTA §10.2).
+ *
+ * The LLVM emitter materialises one `alloca ptr, i64 N` per safepoint,
+ * with N = number of visible managed roots in the current frame. Tight
+ * frames are fine; runaway generated code (e.g. a generator that lifts
+ * every sub-expression to a frame slot) can push N high enough that the
+ * alloca blows the C thread stack well before the GC ever looks at the
+ * slots.
+ *
+ * The runtime can't shrink the LLVM-side alloca retroactively, so this
+ * guard is a crash early / crash loud backstop: any safepoint that
+ * reports more roots than `OSTY_GC_SAFEPOINT_MAX_ROOTS` aborts with a
+ * clear message. Legitimate frames are nowhere near this cap today —
+ * `visibleSafepointRoots()` typically yields a single-digit count — so
+ * tripping this is a bug either in lowering or in a test that crafts
+ * synthetic input. The upper bound can be raised as the compiler grows
+ * larger functions, but the contract that "a safepoint gets a fixed,
+ * bounded slot array" should survive.
+ *
+ * `osty_gc_safepoint_max_roots_seen` is a high-water mark exposed via
+ * `osty_gc_debug_safepoint_max_roots_seen` so tuning passes can tell
+ * how close real programs get to the cap.
+ */
+#define OSTY_GC_SAFEPOINT_MAX_ROOTS ((int64_t)65536)
+static int64_t osty_gc_safepoint_max_roots_seen = 0;
+
+/* Phase A5 safepoint kind taxonomy (RUNTIME_GC_DELTA §10.1).
+ *
+ * Every emitted safepoint poll now encodes a "kind" in the high bits of
+ * the id parameter passed to `osty_gc_safepoint_v1`. The low 56 bits hold
+ * the per-module serial the LLVM emitter has always produced; the top 8
+ * bits classify the *why*: function entry, pre-call, loop back-edge, etc.
+ *
+ * Today the collector does not behave differently across kinds (it is a
+ * single-kind STW collector), but recording the classification gives us:
+ *
+ *   - debuggability: per-kind counters exposed via `osty_gc_debug_*`
+ *   - Phase B/C leverage: tail-biased triggers (e.g. never poll inside
+ *     tight arithmetic loops by muting LOOP kinds under stress)
+ *   - Conformance tests: harnesses can assert on the kind mix emitted
+ *     from a given source shape.
+ *
+ * Kinds are uint8. `UNSPECIFIED` stays the default for legacy callers
+ * that have not migrated yet; new call sites should always supply a
+ * specific kind.
+ */
+enum {
+    OSTY_GC_SAFEPOINT_KIND_UNSPECIFIED = 0,
+    OSTY_GC_SAFEPOINT_KIND_ENTRY = 1,
+    OSTY_GC_SAFEPOINT_KIND_CALL = 2,
+    OSTY_GC_SAFEPOINT_KIND_LOOP = 3,
+    OSTY_GC_SAFEPOINT_KIND_ALLOC = 4,
+    OSTY_GC_SAFEPOINT_KIND_YIELD = 5,
+    OSTY_GC_SAFEPOINT_KIND_COUNT = 6,
+};
+static int64_t osty_gc_safepoint_counts_by_kind[OSTY_GC_SAFEPOINT_KIND_COUNT];
+
+/* Phase A3 mark work queue (RUNTIME_GC_DELTA §4.2).
+ *
+ * Replaces the previous recursive trace path. `osty_gc_mark_header` no longer
+ * recurses; it flips `marked` (acting as the grey colour) and pushes the
+ * header onto this stack. `osty_gc_mark_drain` pops entries and invokes each
+ * header's trace callback, which in turn calls back into `osty_gc_mark_*`
+ * for children — they simply re-enqueue, so the C call stack stays O(1)
+ * regardless of object graph depth.
+ *
+ * The stack is static-global and reused across collections. Capacity grows
+ * monotonically so steady-state workloads avoid realloc churn. `max_depth`
+ * is exposed via `osty_gc_debug_mark_stack_max_depth` for Phase A1 heap
+ * validation and future Phase B tuning.
+ */
+static osty_gc_header **osty_gc_mark_stack = NULL;
+static int64_t osty_gc_mark_stack_count = 0;
+static int64_t osty_gc_mark_stack_cap = 0;
+static int64_t osty_gc_mark_stack_max_depth = 0;
 
 /* Global root slots. Each entry is the address of a storage location that may
  * hold a managed pointer (i.e. `void **`). At mark time the slot is
@@ -279,6 +375,7 @@ static void osty_gc_note_allocation(size_t payload_size) {
         osty_rt_abort("GC payload size overflow");
     }
     osty_gc_allocated_since_collect += (int64_t)payload_size;
+    osty_gc_allocated_bytes_total += (int64_t)payload_size;
     if (pressure_limit <= 0) {
         return;
     }
@@ -472,18 +569,51 @@ static void osty_rt_set_destroy(void *payload) {
     }
 }
 
+static void osty_gc_mark_stack_push(osty_gc_header *header) {
+    if (osty_gc_mark_stack_count == osty_gc_mark_stack_cap) {
+        int64_t new_cap;
+        osty_gc_header **new_buf;
+        new_cap = osty_gc_mark_stack_cap == 0 ? 64 : osty_gc_mark_stack_cap * 2;
+        new_buf = (osty_gc_header **)realloc(
+            osty_gc_mark_stack, (size_t)new_cap * sizeof(osty_gc_header *));
+        if (new_buf == NULL) {
+            osty_rt_abort("out of memory (mark stack)");
+        }
+        osty_gc_mark_stack = new_buf;
+        osty_gc_mark_stack_cap = new_cap;
+    }
+    osty_gc_mark_stack[osty_gc_mark_stack_count++] = header;
+    if (osty_gc_mark_stack_count > osty_gc_mark_stack_max_depth) {
+        osty_gc_mark_stack_max_depth = osty_gc_mark_stack_count;
+    }
+}
+
 static void osty_gc_mark_header(osty_gc_header *header) {
+    /* Enqueue only — the actual trace happens in `osty_gc_mark_drain`.
+     * Setting `marked` before pushing prevents duplicate entries when the
+     * same header is reached via multiple edges (the second call short
+     * circuits on the `marked` check). */
     if (header == NULL || header->marked) {
         return;
     }
     header->marked = true;
-    if (header->trace != NULL) {
-        header->trace(header->payload);
-    }
+    osty_gc_mark_stack_push(header);
 }
 
 static void osty_gc_mark_payload(void *payload) {
     osty_gc_mark_header(osty_gc_find_header(payload));
+}
+
+static void osty_gc_mark_drain(void) {
+    while (osty_gc_mark_stack_count > 0) {
+        osty_gc_header *header = osty_gc_mark_stack[--osty_gc_mark_stack_count];
+        if (header->trace != NULL) {
+            /* Trace callbacks re-enter `osty_gc_mark_*` for children, which
+             * just push more work onto this stack — the C call stack stays
+             * bounded regardless of object graph depth. */
+            header->trace(header->payload);
+        }
+    }
 }
 
 static void osty_gc_mark_root_slot(void *slot_addr) {
@@ -500,14 +630,15 @@ static void osty_gc_mark_root_slot(void *slot_addr) {
 }
 
 static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
-    osty_gc_header *header = osty_gc_objects;
+    osty_gc_header *header;
     osty_gc_header *next;
     int64_t i;
 
-    while (header != NULL) {
-        header->marked = false;
-        header = header->next;
-    }
+    /* Entry invariant: every header has `marked == false` (sweep clears
+     * the colour on its way out, so the next cycle does not need a
+     * dedicated pre-pass). */
+
+    /* 1. Seed the work queue from pinned roots (`root_bind_v1` holders). */
     header = osty_gc_objects;
     while (header != NULL) {
         if (header->root_count > 0) {
@@ -515,21 +646,33 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
         }
         header = header->next;
     }
+    /* 2. Seed from the current safepoint's stack-slot descriptors. */
     for (i = 0; i < root_slot_count; i++) {
         osty_gc_mark_root_slot((void *)root_slots[i]);
     }
+    /* 3. Seed from registered global slots (`global_root_register_v1`). */
     for (i = 0; i < osty_gc_global_root_count; i++) {
         osty_gc_mark_root_slot(osty_gc_global_root_slots[i]);
     }
+    /* 4. Drain the work queue iteratively — bounded C stack regardless of
+     *    object graph depth. Replaces prior recursive trace. */
+    osty_gc_mark_drain();
+    /* 5. Sweep unreachable objects and clear the colour on survivors so
+     *    the post-collection heap satisfies the "no stale marks" invariant
+     *    that Phase A1 `osty_gc_debug_validate_heap` relies on. */
     header = osty_gc_objects;
     while (header != NULL) {
         next = header->next;
         if (!header->marked) {
+            osty_gc_swept_count_total += 1;
+            osty_gc_swept_bytes_total += header->byte_size;
             if (header->destroy != NULL) {
                 header->destroy(header->payload);
             }
             osty_gc_unlink(header);
             free(header);
+        } else {
+            header->marked = false;
         }
         header = next;
     }
@@ -2232,9 +2375,35 @@ void osty_gc_global_root_unregister_v1(void *slot) {
 }
 
 void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) {
-    (void)safepoint_id;
+    /* Phase A5: decode the kind from the high byte. Legacy callers pass
+     * pure serial ids (kind byte == 0 == UNSPECIFIED) so the dispatch is
+     * backwards compatible. Unknown kinds fall through to UNSPECIFIED
+     * rather than aborting — the kind byte is advisory, not a contract. */
+    uint64_t raw_id = (uint64_t)safepoint_id;
+    int kind = (int)((raw_id >> 56) & 0xffu);
+    if (kind < 0 || kind >= OSTY_GC_SAFEPOINT_KIND_COUNT) {
+        kind = OSTY_GC_SAFEPOINT_KIND_UNSPECIFIED;
+    }
+    osty_gc_safepoint_counts_by_kind[kind] += 1;
     if (root_slot_count < 0) {
         osty_rt_abort("negative safepoint root slot count");
+    }
+    if (root_slot_count > OSTY_GC_SAFEPOINT_MAX_ROOTS) {
+        /* Phase A6: lowering emitted a frame whose root slot array
+         * exceeds the runtime cap. Abort with a message that names
+         * both the emitted count and the cap so the generator can be
+         * audited. The id byte may help narrow the site (ENTRY vs
+         * LOOP vs CALL). */
+        char msg[160];
+        snprintf(msg, sizeof(msg),
+                 "safepoint root slot count %lld exceeds cap %lld (kind=%d)",
+                 (long long)root_slot_count,
+                 (long long)OSTY_GC_SAFEPOINT_MAX_ROOTS,
+                 kind);
+        osty_rt_abort(msg);
+    }
+    if (root_slot_count > osty_gc_safepoint_max_roots_seen) {
+        osty_gc_safepoint_max_roots_seen = root_slot_count;
     }
     if (!osty_gc_safepoint_stress_enabled_now() && !osty_gc_collection_requested) {
         return;
@@ -2323,6 +2492,266 @@ int osty_gc_debug_satb_log_contains(void *payload) {
         }
     }
     return 0;
+}
+
+/* Phase A2 lifetime totals (RUNTIME_GC_DELTA §9.3). */
+
+int64_t osty_gc_debug_allocated_bytes_total(void) {
+    return osty_gc_allocated_bytes_total;
+}
+
+int64_t osty_gc_debug_swept_count_total(void) {
+    return osty_gc_swept_count_total;
+}
+
+int64_t osty_gc_debug_swept_bytes_total(void) {
+    return osty_gc_swept_bytes_total;
+}
+
+int64_t osty_gc_debug_allocated_since_collect(void) {
+    return osty_gc_allocated_since_collect;
+}
+
+int64_t osty_gc_debug_pressure_limit_bytes(void) {
+    return osty_gc_pressure_limit_now();
+}
+
+int64_t osty_gc_debug_mark_stack_max_depth(void) {
+    return osty_gc_mark_stack_max_depth;
+}
+
+/* Phase A5 per-kind safepoint counters. `kind` values map to the
+ * OSTY_GC_SAFEPOINT_KIND_* constants; out-of-range queries return -1 so
+ * callers can distinguish from a zero count. */
+int64_t osty_gc_debug_safepoint_count_by_kind(int64_t kind) {
+    if (kind < 0 || kind >= OSTY_GC_SAFEPOINT_KIND_COUNT) {
+        return -1;
+    }
+    return osty_gc_safepoint_counts_by_kind[kind];
+}
+
+int64_t osty_gc_debug_safepoint_count_total(void) {
+    int64_t total = 0;
+    int i;
+    for (i = 0; i < OSTY_GC_SAFEPOINT_KIND_COUNT; i++) {
+        total += osty_gc_safepoint_counts_by_kind[i];
+    }
+    return total;
+}
+
+/* Phase A6 observability: largest root slot array seen since program
+ * start. `osty_gc_debug_safepoint_max_roots_cap` returns the runtime
+ * limit so tuning scripts can compute headroom. */
+int64_t osty_gc_debug_safepoint_max_roots_seen(void) {
+    return osty_gc_safepoint_max_roots_seen;
+}
+
+int64_t osty_gc_debug_safepoint_max_roots_cap(void) {
+    return OSTY_GC_SAFEPOINT_MAX_ROOTS;
+}
+
+/* Aggregate snapshot. Fields mirror the individual debug_* accessors so that
+ * test harnesses written against the scalar ABI keep working; the struct is
+ * for callers that want one atomic read under the GC lock. Field order is
+ * load bearing — clients declare a compatible struct and blit directly. */
+typedef struct osty_gc_stats {
+    int64_t collection_count;
+    int64_t live_count;
+    int64_t live_bytes;
+    int64_t allocated_since_collect;
+    int64_t allocated_bytes_total;
+    int64_t swept_count_total;
+    int64_t swept_bytes_total;
+    int64_t pre_write_count;
+    int64_t pre_write_managed_count;
+    int64_t post_write_count;
+    int64_t post_write_managed_count;
+    int64_t load_count;
+    int64_t load_managed_count;
+    int64_t satb_log_count;
+    int64_t remembered_edge_count;
+    int64_t global_root_count;
+    int64_t pressure_limit_bytes;
+    int64_t mark_stack_max_depth;
+} osty_gc_stats;
+
+void osty_gc_debug_stats(osty_gc_stats *out) {
+    if (out == NULL) {
+        return;
+    }
+    osty_gc_acquire();
+    out->collection_count = osty_gc_collection_count;
+    out->live_count = osty_gc_live_count;
+    out->live_bytes = osty_gc_live_bytes;
+    out->allocated_since_collect = osty_gc_allocated_since_collect;
+    out->allocated_bytes_total = osty_gc_allocated_bytes_total;
+    out->swept_count_total = osty_gc_swept_count_total;
+    out->swept_bytes_total = osty_gc_swept_bytes_total;
+    out->pre_write_count = osty_gc_pre_write_count;
+    out->pre_write_managed_count = osty_gc_pre_write_managed_count;
+    out->post_write_count = osty_gc_post_write_count;
+    out->post_write_managed_count = osty_gc_post_write_managed_count;
+    out->load_count = osty_gc_load_count;
+    out->load_managed_count = osty_gc_load_managed_count;
+    out->satb_log_count = osty_gc_satb_log_count;
+    out->remembered_edge_count = osty_gc_remembered_edge_count;
+    out->global_root_count = osty_gc_global_root_count;
+    out->pressure_limit_bytes = osty_gc_pressure_limit_now();
+    out->mark_stack_max_depth = osty_gc_mark_stack_max_depth;
+    osty_gc_release();
+}
+
+void osty_gc_debug_stats_dump(FILE *out) {
+    osty_gc_stats s;
+    if (out == NULL) {
+        return;
+    }
+    osty_gc_debug_stats(&s);
+    fprintf(out,
+            "osty_gc_stats {\n"
+            "  collections:             %lld\n"
+            "  live:                    %lld objects, %lld bytes\n"
+            "  allocated:               %lld since last collect, %lld total\n"
+            "  swept total:             %lld objects, %lld bytes\n"
+            "  pre_write / managed:     %lld / %lld\n"
+            "  post_write / managed:    %lld / %lld\n"
+            "  load / managed:          %lld / %lld\n"
+            "  satb log:                %lld entries\n"
+            "  remembered edges:        %lld entries\n"
+            "  global roots:            %lld slots\n"
+            "  pressure limit:          %lld bytes\n"
+            "  mark stack peak:         %lld\n"
+            "}\n",
+            (long long)s.collection_count,
+            (long long)s.live_count, (long long)s.live_bytes,
+            (long long)s.allocated_since_collect, (long long)s.allocated_bytes_total,
+            (long long)s.swept_count_total, (long long)s.swept_bytes_total,
+            (long long)s.pre_write_count, (long long)s.pre_write_managed_count,
+            (long long)s.post_write_count, (long long)s.post_write_managed_count,
+            (long long)s.load_count, (long long)s.load_managed_count,
+            (long long)s.satb_log_count,
+            (long long)s.remembered_edge_count,
+            (long long)s.global_root_count,
+            (long long)s.pressure_limit_bytes,
+            (long long)s.mark_stack_max_depth);
+}
+
+/* Phase A1 heap validation oracle (RUNTIME_GC_DELTA §9.5).
+ *
+ * Checks invariants that must hold outside of an active mark phase:
+ *
+ *   - the `osty_gc_objects` list is a correctly linked doubly-linked list
+ *   - `live_count` / `live_bytes` match the actual contents
+ *   - no header has negative `root_count`
+ *   - no header has `marked == true` (colour is cleared at the start of
+ *     every collect and again before sweep, so outside a collection the
+ *     survivors from the previous cycle should all have been cleared on
+ *     entry of the next — we check the stronger invariant that between
+ *     collections no header is stuck grey)
+ *   - every payload in the SATB log still has a matching header
+ *   - every (owner, value) pair in the remembered set still has headers
+ *   - cumulative allocation / sweep counters are non-negative
+ *
+ * Returns 0 on success, or a negative invariant identifier on the first
+ * failure encountered. The identifiers are stable — tests assert on them
+ * directly. Callable while the heap is quiescent (no other thread holds
+ * the GC lock mid-collection); it acquires the lock for its own walk.
+ */
+enum {
+    OSTY_GC_VALIDATE_OK = 0,
+    OSTY_GC_VALIDATE_LIST_FIRST_PREV_NOT_NULL = -1,
+    OSTY_GC_VALIDATE_LIST_LINK_BROKEN = -2,
+    OSTY_GC_VALIDATE_LIVE_COUNT_MISMATCH = -3,
+    OSTY_GC_VALIDATE_LIVE_BYTES_MISMATCH = -4,
+    OSTY_GC_VALIDATE_NEGATIVE_ROOT_COUNT = -5,
+    OSTY_GC_VALIDATE_SATB_DANGLING = -6,
+    OSTY_GC_VALIDATE_REMEMBERED_EDGE_DANGLING = -7,
+    OSTY_GC_VALIDATE_NEGATIVE_CUMULATIVE = -8,
+    OSTY_GC_VALIDATE_STALE_MARK = -9,
+    OSTY_GC_VALIDATE_MARK_STACK_NON_EMPTY = -10,
+    OSTY_GC_VALIDATE_NULL_GLOBAL_SLOT = -11,
+};
+
+int64_t osty_gc_debug_validate_heap(void) {
+    osty_gc_header *header;
+    int64_t walked_count = 0;
+    int64_t walked_bytes = 0;
+    int64_t i;
+    int64_t status = OSTY_GC_VALIDATE_OK;
+
+    osty_gc_acquire();
+
+    header = osty_gc_objects;
+    if (header != NULL && header->prev != NULL) {
+        status = OSTY_GC_VALIDATE_LIST_FIRST_PREV_NOT_NULL;
+        goto done;
+    }
+    while (header != NULL) {
+        if (header->next != NULL && header->next->prev != header) {
+            status = OSTY_GC_VALIDATE_LIST_LINK_BROKEN;
+            goto done;
+        }
+        if (header->prev != NULL && header->prev->next != header) {
+            status = OSTY_GC_VALIDATE_LIST_LINK_BROKEN;
+            goto done;
+        }
+        if (header->root_count < 0) {
+            status = OSTY_GC_VALIDATE_NEGATIVE_ROOT_COUNT;
+            goto done;
+        }
+        if (header->marked) {
+            status = OSTY_GC_VALIDATE_STALE_MARK;
+            goto done;
+        }
+        walked_count += 1;
+        walked_bytes += header->byte_size;
+        header = header->next;
+    }
+    if (walked_count != osty_gc_live_count) {
+        status = OSTY_GC_VALIDATE_LIVE_COUNT_MISMATCH;
+        goto done;
+    }
+    if (walked_bytes != osty_gc_live_bytes) {
+        status = OSTY_GC_VALIDATE_LIVE_BYTES_MISMATCH;
+        goto done;
+    }
+    if (osty_gc_mark_stack_count != 0) {
+        status = OSTY_GC_VALIDATE_MARK_STACK_NON_EMPTY;
+        goto done;
+    }
+    for (i = 0; i < osty_gc_global_root_count; i++) {
+        if (osty_gc_global_root_slots[i] == NULL) {
+            status = OSTY_GC_VALIDATE_NULL_GLOBAL_SLOT;
+            goto done;
+        }
+    }
+    for (i = 0; i < osty_gc_satb_log_count; i++) {
+        if (osty_gc_find_header(osty_gc_satb_log[i]) == NULL) {
+            status = OSTY_GC_VALIDATE_SATB_DANGLING;
+            goto done;
+        }
+    }
+    for (i = 0; i < osty_gc_remembered_edge_count; i++) {
+        if (osty_gc_find_header(osty_gc_remembered_edges[i].owner) == NULL ||
+            osty_gc_find_header(osty_gc_remembered_edges[i].value) == NULL) {
+            status = OSTY_GC_VALIDATE_REMEMBERED_EDGE_DANGLING;
+            goto done;
+        }
+    }
+    if (osty_gc_allocated_since_collect < 0 ||
+        osty_gc_allocated_bytes_total < 0 ||
+        osty_gc_swept_count_total < 0 ||
+        osty_gc_swept_bytes_total < 0 ||
+        osty_gc_live_count < 0 ||
+        osty_gc_live_bytes < 0 ||
+        osty_gc_collection_count < 0) {
+        status = OSTY_GC_VALIDATE_NEGATIVE_CUMULATIVE;
+        goto done;
+    }
+
+done:
+    osty_gc_release();
+    return status;
 }
 
 /* ======================================================================
