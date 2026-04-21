@@ -129,7 +129,7 @@ post_write log가 소유하고, minor GC가 일관되게 소비한다.
 | #   | 기능                                                  | 시뮬 | 실  | 델타                                 | P  | 참조                          |
 | --- | ----------------------------------------------------- | ---- | --- | ------------------------------------ | -- | ----------------------------- |
 | 9.1 | ~~Allocation pressure threshold~~                     | ✅   | ✅  | 2-tier: nursery (`OSTY_GC_NURSERY_BYTES`) + heap (`OSTY_GC_THRESHOLD_BYTES`) | ✅ B5 | `osty_runtime.c:osty_gc_note_allocation` |
-| 9.2 | Mutator assist (allocation debt)                      | ✅   | ❌  | incremental 전제                     | P3 | `lib.osty:242-250`            |
+| 9.2 | ~~Mutator assist (allocation debt)~~                  | ✅   | ✅  | Phase C3 depth: alloc당 `bytes/N` units drain, `OSTY_GC_ASSIST_BYTES_PER_UNIT` 튜닝 | ✅ C3 | `osty_runtime.c:osty_gc_allocate_managed` |
 | 9.3 | ~~`GcStats` 구조체 (cycle / promoted / compacted / …)~~ | ✅ | ✅  | Phase A2 + B6: timing / index / minor / major / promoted / young / old 집합 | ✅ A2/B6 | `osty_runtime.c:osty_gc_debug_stats` |
 | 9.4 | Collection trace 6종 (Minor / Full / Evac / Remap / Incr / Concurrent) | ✅ | 🟡 | Minor + Full 구분 + timing per tier 완료 (B6); Evac/Remap은 Phase D, Incr/Concurrent은 Phase C | P3 | `osty_runtime.c:osty_gc_debug_minor_count` |
 | 9.5 | ~~`validateHeap()` 헬퍼~~                             | ✅   | ✅  | Phase A1 + B 세대 일관성 invariant (코드 -12..-14)  | ✅ A1/B | `osty_runtime.c:osty_gc_debug_validate_heap` |
@@ -301,21 +301,40 @@ Phase A SATB log가 passive recording에서 **live consumer**로 승격. 마킹
     child을 list에서 제거(overwrite)했을 때 SATB가 GREY로 칠해서 생존.
     `satb_barrier_greyed_total = 1`.
 
-### Phase C 경계 / 후속 (C 깊이 남은 구멍)
+### Phase C 깊이 패스 (2차 랜딩)
+
+초기 Phase C가 얕았던 부분들을 메꿨다:
+
+- ✅ **C1 깊이** — `-17 INVALID_COLOR`, `-18 COLOR_MARKED_MISMATCH`,
+  `-19 NONWHITE_OUTSIDE_MARK` 각각에 대한 corruption injector + fork 하네스
+  네거티브 테스트 (`TestBundledRuntimeValidateHeapNegativeInvariantsPhaseC`).
+- ✅ **C2 깊이 — STW guard** — `osty_gc_collect_major_with_stack_roots`와
+  `osty_gc_collect_minor_with_stack_roots`가 MARK_INCREMENTAL/SWEEPING
+  상태에서 호출되면 즉시 abort. mark stack 실수 stomp 방지.
+- ✅ **C3 §9.2 mutator assist** — `osty_gc_allocate_managed`가
+  MARK_INCREMENTAL 동안 `payload_size / bytes_per_unit` units 만큼 grey
+  queue 드레인. `OSTY_GC_ASSIST_BYTES_PER_UNIT` 환경 변수 (기본 128).
+  `mutator_assist_work_total` / `mutator_assist_calls_total` 관측.
+- ✅ **Auto-dispatcher 편입** — `OSTY_GC_INCREMENTAL=1` 시 safepoint가
+  major 대신 incremental로 라우팅. `OSTY_GC_INCREMENTAL_BUDGET` (기본 64)
+  units per safepoint. queue 드레인 시 자동으로 finish + IDLE 복귀.
+- ✅ **C5 깊이 — SATB 시나리오 3종** — `TestBundledRuntimeSATBBarrierScenarios`:
+  (a) MARK 이전 barrier = no-op, (b) 같은 slot 연속 overwrite시 각
+  old_value 개별 grey, (c) finish 이후 barrier = no-op.
+- ✅ **Incremental stress test** — `TestBundledRuntimeIncrementalStress`:
+  15 cycle × 랜덤 budget + 랜덤 alloc + 배리어 write 조합, 각 quiescent
+  point에서 validate_heap 체크, deterministic srand(7).
+
+### Phase C 경계 / 후속
 
 - **§4.4 mostly-concurrent** — 여전히 ❌. 지금은 단일 스레드 incremental만
   — mutator가 step 사이에만 활동. 진짜 concurrent는 GC 스레드를 띄우는
   작업으로 Phase D 근처.
-- **§9.2 mutator assist** — 여전히 ❌. allocation debt 추적해서 alloc 경로
-  에서 mark 작업 보조하는 메커니즘 없음. adaptive 트리거 없이는 큰 힙에서
-  budget step이 느리게 소화될 수 있음.
-- **Auto-dispatcher 연결 안 됨** — 현재 safepoint는 여전히 STW major/minor
-  만 사용. incremental은 명시적 `_start` / `_step` / `_finish` API로만 호출.
-  자동 dispatch에 편입하려면 budget 정책 설계 필요.
-- **Minor + incremental 상호작용** — incremental은 major 경로만; minor는
-  여전히 STW. 혼합 워크로드 (long-running OLD scan + 빠른 YOUNG churn)는
-  미탐색.
-- **Go 측 위반 남아있음** — Phase A5/A6/A4 깊이 패스의 llvmgen 변경이
+- **Minor + incremental 상호작용** — 두 cycle이 동시에 돌 수 없도록 abort
+  guard는 추가됐지만, 혼합 워크로드 (긴 OLD scan + 빠른 YOUNG churn)에서
+  가장 좋은 선택 (incremental vs STW minor)을 결정하는 정책은 아직 없음.
+  단순한 tier 분리만.
+- **Go 측 위반 여전** — Phase A5/A6/A4 깊이 패스의 llvmgen 변경이
   `generator.go`/`fn_value.go`에 Go로 들어가 있음. CLAUDE.md는 이걸
   `toolchain/*.osty` + `support_snapshot.go` 재생성으로 가야 한다고 명시.
   별도 cleanup task 필요.

@@ -552,6 +552,35 @@ static int64_t osty_gc_incremental_steps_total = 0;
 static int64_t osty_gc_incremental_work_total = 0;
 static int64_t osty_gc_satb_barrier_greyed_total = 0;
 
+/* Phase C3 mutator assist (RUNTIME_GC_DELTA §9.2).
+ *
+ * When an incremental major is active, every new allocation pushes a
+ * fresh WHITE header onto the heap. Left alone, the mutator can
+ * outrun the step scheduler — the grey queue grows faster than steps
+ * drain it, stretching pause-free mark out indefinitely and piling
+ * up survivors. Assist flips the balance: each alloc burns
+ * `assist_bytes_per_unit` bytes of allocation before it pays one
+ * unit of mark work. Steady-state pressure balances at the assist
+ * ratio; spikes self-moderate because big allocations pay big.
+ *
+ * `OSTY_GC_ASSIST_BYTES_PER_UNIT`: allocator tuning knob. 0 disables
+ * assist (pre-Phase-C3 behaviour). Default is 128 bytes per grey
+ * drained — aggressive enough that 10k × 64-byte allocs clear a
+ * 5k-object grey queue without explicit steps.
+ */
+#define OSTY_GC_ASSIST_BYTES_PER_UNIT_DEFAULT 128
+#define OSTY_GC_ASSIST_BYTES_PER_UNIT_ENV "OSTY_GC_ASSIST_BYTES_PER_UNIT"
+static bool osty_gc_assist_bytes_loaded = false;
+static int64_t osty_gc_assist_bytes_per_unit = OSTY_GC_ASSIST_BYTES_PER_UNIT_DEFAULT;
+static int64_t osty_gc_mutator_assist_work_total = 0;
+static int64_t osty_gc_mutator_assist_calls_total = 0;
+
+/* Forward decl so `osty_gc_allocate_managed` can call the assist drain
+ * without having to be moved below the mark helpers. Defined near
+ * `osty_gc_mark_drain`. */
+static int64_t osty_gc_mark_drain_budget(int64_t budget);
+static int64_t osty_gc_assist_bytes_per_unit_now(void);
+
 /* Phase A2 collection timing (RUNTIME_GC_DELTA §9.3 depth follow-up).
  *
  * Measured via `clock_gettime(CLOCK_MONOTONIC)` around every
@@ -972,6 +1001,30 @@ static int64_t osty_gc_pressure_limit_now(void) {
     return osty_gc_pressure_limit_bytes;
 }
 
+/* Phase C3 assist-ratio accessor. Same lazy-env-init shape as the
+ * other tuning knobs. A value of 0 disables mutator assist entirely;
+ * positive means "drain one grey per N allocated bytes". */
+static int64_t osty_gc_assist_bytes_per_unit_now(void) {
+    const char *value;
+    char *end = NULL;
+    long long parsed;
+
+    if (osty_gc_assist_bytes_loaded) {
+        return osty_gc_assist_bytes_per_unit;
+    }
+    osty_gc_assist_bytes_loaded = true;
+    value = getenv(OSTY_GC_ASSIST_BYTES_PER_UNIT_ENV);
+    if (value == NULL || value[0] == '\0') {
+        return osty_gc_assist_bytes_per_unit;
+    }
+    parsed = strtoll(value, &end, 10);
+    if (end == value || (end != NULL && *end != '\0') || parsed < 0) {
+        osty_rt_abort("invalid " OSTY_GC_ASSIST_BYTES_PER_UNIT_ENV);
+    }
+    osty_gc_assist_bytes_per_unit = (int64_t)parsed;
+    return osty_gc_assist_bytes_per_unit;
+}
+
 /* Phase B pressure tier accessors. The nursery limit is read once from
  * `OSTY_GC_NURSERY_BYTES` on first query; an unset env keeps the
  * compiled-in default. A zero value disables automatic minor triggers.
@@ -1081,9 +1134,32 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
      * `osty_gc_promote_age` survivals. */
     header->generation = OSTY_GC_GEN_YOUNG;
     header->age = 0;
+    /* Phase C: header starts WHITE. An incremental major in
+     * progress will NOT retroactively colour this allocation — it was
+     * born after the mark snapshot and stays white until the cycle
+     * ends, at which point sweep reclaims it if still unrooted. SATB
+     * plus mutator assist together keep the grey queue draining so
+     * this is a bounded pressure, not an allocation floodgate. */
+    header->color = OSTY_GC_COLOR_WHITE;
+    header->marked = false;
     osty_gc_acquire();
     osty_gc_link(header);
     osty_gc_note_allocation(payload_size);
+    /* Phase C3 mutator assist: if an incremental major is active,
+     * borrow a proportional amount of mark work from the allocator
+     * so the mutator literally pays for its allocation pressure. */
+    if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL) {
+        int64_t bpu = osty_gc_assist_bytes_per_unit_now();
+        if (bpu > 0) {
+            int64_t units = (int64_t)payload_size / bpu;
+            if (units < 1) {
+                units = 1;
+            }
+            int64_t done = osty_gc_mark_drain_budget(units);
+            osty_gc_mutator_assist_work_total += done;
+            osty_gc_mutator_assist_calls_total += 1;
+        }
+    }
     osty_gc_release();
     return header->payload;
 }
@@ -1382,6 +1458,14 @@ static void osty_gc_collect_major_with_stack_roots(void *const *root_slots, int6
     int64_t t_start;
     int64_t t_end;
 
+    /* Phase C depth guard: STW major must not interleave with an
+     * incremental mark — the in-flight mark stack would be stomped,
+     * surviving greys silently swept. Callers are expected to finish
+     * the incremental cycle first. The abort is intentional: reaching
+     * here is a lifecycle bug in the caller, not an edge case. */
+    if (osty_gc_state != OSTY_GC_STATE_IDLE) {
+        osty_rt_abort("STW major invoked while incremental collection in progress");
+    }
     t_start = osty_gc_now_nanos();
 
     /* 1. Seed from pinned roots. */
@@ -1456,6 +1540,12 @@ static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int6
     int64_t t_end;
     int64_t promote_age = osty_gc_promote_age_now();
 
+    /* Phase C depth guard: minor must not share the mark stack with
+     * an incremental major cycle — they would push into each other's
+     * grey set and corrupt the colouring. Same policy as STW major. */
+    if (osty_gc_state != OSTY_GC_STATE_IDLE) {
+        osty_rt_abort("STW minor invoked while incremental collection in progress");
+    }
     t_start = osty_gc_now_nanos();
     osty_gc_minor_in_progress = true;
 
@@ -1568,6 +1658,95 @@ static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int6
  * compatibility with the Phase A test suite; tests that want to
  * exercise the minor path explicitly go through `_collect_minor`. */
 
+/* Phase C depth: auto-dispatcher incremental opt-in. When the
+ * `OSTY_GC_INCREMENTAL` env var is set to a non-zero value, major
+ * collections chosen by the dispatcher route through the incremental
+ * path instead of STW. Each safepoint contributes
+ * `OSTY_GC_INCREMENTAL_BUDGET` units of mark work and finishes the
+ * cycle once the queue empties. Minor collections are unchanged —
+ * they remain STW on the young list.
+ *
+ * A value of 0 or an unset env reverts to the Phase B dispatcher
+ * semantics (direct STW major), so the incremental path stays
+ * opt-in until the depth pass landing adds the necessary guarantees
+ * about worst-case pause budgets. */
+#define OSTY_GC_INCREMENTAL_ENV "OSTY_GC_INCREMENTAL"
+#define OSTY_GC_INCREMENTAL_BUDGET_ENV "OSTY_GC_INCREMENTAL_BUDGET"
+#define OSTY_GC_INCREMENTAL_BUDGET_DEFAULT 64
+static bool osty_gc_incremental_auto_loaded = false;
+static bool osty_gc_incremental_auto_enabled = false;
+static bool osty_gc_incremental_budget_loaded = false;
+static int64_t osty_gc_incremental_budget = OSTY_GC_INCREMENTAL_BUDGET_DEFAULT;
+
+static bool osty_gc_incremental_auto_now(void) {
+    const char *value;
+    if (osty_gc_incremental_auto_loaded) {
+        return osty_gc_incremental_auto_enabled;
+    }
+    osty_gc_incremental_auto_loaded = true;
+    value = getenv(OSTY_GC_INCREMENTAL_ENV);
+    if (value == NULL || value[0] == '\0' ||
+        strcmp(value, "0") == 0 || strcmp(value, "false") == 0 ||
+        strcmp(value, "FALSE") == 0) {
+        osty_gc_incremental_auto_enabled = false;
+    } else {
+        osty_gc_incremental_auto_enabled = true;
+    }
+    return osty_gc_incremental_auto_enabled;
+}
+
+static int64_t osty_gc_incremental_budget_now(void) {
+    const char *value;
+    char *end = NULL;
+    long long parsed;
+    if (osty_gc_incremental_budget_loaded) {
+        return osty_gc_incremental_budget;
+    }
+    osty_gc_incremental_budget_loaded = true;
+    value = getenv(OSTY_GC_INCREMENTAL_BUDGET_ENV);
+    if (value == NULL || value[0] == '\0') {
+        return osty_gc_incremental_budget;
+    }
+    parsed = strtoll(value, &end, 10);
+    if (end == value || (end != NULL && *end != '\0') || parsed < 0) {
+        osty_rt_abort("invalid " OSTY_GC_INCREMENTAL_BUDGET_ENV);
+    }
+    osty_gc_incremental_budget = (int64_t)parsed;
+    return osty_gc_incremental_budget;
+}
+
+/* Forward declarations for the auto-dispatcher. */
+static void osty_gc_incremental_seed_roots(void *const *root_slots, int64_t root_slot_count);
+static void osty_gc_incremental_sweep(void);
+
+static void osty_gc_auto_drive_incremental(void *const *root_slots, int64_t root_slot_count) {
+    /* Caller holds `osty_gc_lock`. */
+    if (osty_gc_state == OSTY_GC_STATE_IDLE) {
+        /* Start a fresh cycle. */
+        osty_gc_state = OSTY_GC_STATE_MARK_INCREMENTAL;
+        osty_gc_incremental_seed_roots(root_slots, root_slot_count);
+    }
+    if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL) {
+        int64_t budget = osty_gc_incremental_budget_now();
+        int64_t done = osty_gc_mark_drain_budget(budget);
+        osty_gc_incremental_steps_total += 1;
+        osty_gc_incremental_work_total += done;
+        if (osty_gc_mark_stack_count == 0) {
+            /* Cycle done — finish it inline. */
+            osty_gc_state = OSTY_GC_STATE_SWEEPING;
+            osty_gc_incremental_sweep();
+            osty_gc_collection_count += 1;
+            osty_gc_major_count += 1;
+            osty_gc_allocated_since_collect = 0;
+            osty_gc_allocated_since_minor = 0;
+            osty_gc_collection_requested = false;
+            osty_gc_collection_requested_major = false;
+            osty_gc_barrier_logs_clear();
+            osty_gc_state = OSTY_GC_STATE_IDLE;
+        }
+    }
+}
+
 static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
     int64_t pressure_limit = osty_gc_pressure_limit_now();
     bool needs_major = osty_gc_collection_requested_major;
@@ -1577,9 +1756,20 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
             needs_major = true;
         }
     }
+    /* Phase C: if a cycle is mid-flight, finish it regardless of
+     * pressure signal — never leave MARK_INCREMENTAL hanging between
+     * safepoints longer than necessary. */
+    if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL) {
+        osty_gc_auto_drive_incremental(root_slots, root_slot_count);
+        return;
+    }
     if (needs_major) {
-        osty_gc_collect_major_with_stack_roots(root_slots, root_slot_count);
-        osty_gc_collection_requested_major = false;
+        if (osty_gc_incremental_auto_now()) {
+            osty_gc_auto_drive_incremental(root_slots, root_slot_count);
+        } else {
+            osty_gc_collect_major_with_stack_roots(root_slots, root_slot_count);
+            osty_gc_collection_requested_major = false;
+        }
     } else {
         osty_gc_collect_minor_with_stack_roots(root_slots, root_slot_count);
     }
@@ -3905,6 +4095,20 @@ int64_t osty_gc_debug_color_of(void *payload) {
     return (int64_t)header->color;
 }
 
+/* Phase C3 mutator assist accessors. */
+
+int64_t osty_gc_debug_mutator_assist_work_total(void) {
+    return osty_gc_mutator_assist_work_total;
+}
+
+int64_t osty_gc_debug_mutator_assist_calls_total(void) {
+    return osty_gc_mutator_assist_calls_total;
+}
+
+int64_t osty_gc_debug_assist_bytes_per_unit(void) {
+    return osty_gc_assist_bytes_per_unit_now();
+}
+
 int64_t osty_gc_debug_promote_age(void) {
     return osty_gc_promote_age_now();
 }
@@ -4306,6 +4510,39 @@ void osty_gc_debug_unsafe_detach_from_young_list(void) {
     }
     h->next_gen = NULL;
     h->prev_gen = NULL;
+}
+
+/* Phase C depth — negative injectors for the tri-colour invariants
+ * (-17 invalid colour, -18 colour/marked mismatch, -19 non-white at
+ * rest). Each trips exactly one validate_heap code. */
+
+void osty_gc_debug_unsafe_set_invalid_color(void) {
+    /* 42 is outside {WHITE, GREY, BLACK} — validate returns -17
+     * before it has a chance to look at the marked bit. */
+    if (osty_gc_objects != NULL) {
+        osty_gc_objects->color = 42;
+        osty_gc_objects->marked = true;
+    }
+}
+
+void osty_gc_debug_unsafe_desync_color_marked(void) {
+    /* color = GREY but marked = false → validate returns -18. We need
+     * state=IDLE (default) and a live object. Avoid the -9 legacy
+     * path by keeping `marked = false` alongside the non-white
+     * colour. */
+    if (osty_gc_objects != NULL) {
+        osty_gc_objects->color = OSTY_GC_COLOR_GREY;
+        osty_gc_objects->marked = false;
+    }
+}
+
+void osty_gc_debug_unsafe_nonwhite_at_rest(void) {
+    /* Both fields coherent (BLACK, marked=true) but state=IDLE so
+     * -19 NONWHITE_OUTSIDE_MARK fires. */
+    if (osty_gc_objects != NULL) {
+        osty_gc_objects->color = OSTY_GC_COLOR_BLACK;
+        osty_gc_objects->marked = true;
+    }
 }
 
 void osty_gc_debug_stats_dump(FILE *out) {
