@@ -1439,6 +1439,7 @@ type FrontLexStream struct {
 	normalizedTripleUnits int
 	tripleIndentErrors    int
 	escapeErrors          int
+	units                 []string
 }
 
 // Osty: /tmp/selfhost_merged.osty:680:5
@@ -1976,7 +1977,7 @@ func frontendLexStream(source string) *FrontLexStream {
 	units := strings.Split(source, "")
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:1069:5
-	unitCount := stringUnitCount(source)
+	unitCount := len(units)
 	_ = unitCount
 	// Osty: /tmp/selfhost_merged.osty:1070:5
 	var tokens []*FrontLexToken = make([]*FrontLexToken, 0, 1)
@@ -3156,7 +3157,7 @@ func frontendLexStream(source string) *FrontLexStream {
 		}
 		tokenIndex = _cur156 + _rhs157
 	}()
-	return &FrontLexStream{tokens: tokens, diagnostics: diagnostics, comments: comments, stringParts: stringParts, interpolationTokens: interpolationTokens, shebangs: shebangs, bomStripped: bomStripped, sourceUnits: unitCount, normalizedTripleUnits: normalizedTripleUnits, tripleIndentErrors: tripleIndentErrors, escapeErrors: escapeErrors}
+	return &FrontLexStream{tokens: tokens, diagnostics: diagnostics, comments: comments, stringParts: stringParts, interpolationTokens: interpolationTokens, shebangs: shebangs, bomStripped: bomStripped, sourceUnits: unitCount, normalizedTripleUnits: normalizedTripleUnits, tripleIndentErrors: tripleIndentErrors, escapeErrors: escapeErrors, units: units}
 }
 
 // Osty: /tmp/selfhost_merged.osty:1536:5
@@ -16839,7 +16840,10 @@ func ostyLex(source string) *OstyLexResult {
 // Osty: /tmp/selfhost_merged.osty:6239:5
 func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts {
 	// Osty: /tmp/selfhost_merged.osty:6240:5
-	units := strings.Split(source, "")
+	units := stream.units
+	if units == nil {
+		units = strings.Split(source, "")
+	}
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:6242:5
 	var errors []*OstyLexError = make([]*OstyLexError, 0, 1)
@@ -16978,31 +16982,8 @@ func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts
 		}()
 	}
 	// Osty: /tmp/selfhost_merged.osty:6284:5
-	var leadingDocs []string = make([]string, 0, 1)
+	leadingDocs := collectLeadingDocs(units, stream)
 	_ = leadingDocs
-	// Osty: /tmp/selfhost_merged.osty:6285:5
-	li := 0
-	_ = li
-	// Osty: /tmp/selfhost_merged.osty:6286:5
-	for li < tokenCount {
-		// Osty: /tmp/selfhost_merged.osty:6287:9
-		func() struct{} {
-			leadingDocs = append(leadingDocs, ostyJoinDocLines(units, stream, frontLexTokenAt(stream, li)))
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:6288:9
-		func() {
-			var _cur1635 int = li
-			var _rhs1636 int = 1
-			if _rhs1636 > 0 && _cur1635 > math.MaxInt-_rhs1636 {
-				panic("integer overflow")
-			}
-			if _rhs1636 < 0 && _cur1635 < math.MinInt-_rhs1636 {
-				panic("integer overflow")
-			}
-			li = _cur1635 + _rhs1636
-		}()
-	}
 	return &OstyLexFacts{errors: errors, comments: comments, stringParts: stringParts, leadingDocs: leadingDocs}
 }
 
