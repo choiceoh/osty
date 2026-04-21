@@ -527,6 +527,54 @@ pub fn llvmEmitClosureEnvAllocRuntime(
     LlvmValue { typ: "ptr", name: envTemp, pointer: false }
 }
 
+/// Phase A4 fn-value indirect dispatch (`{ ptr fn, ... }` env layout).
+/// Emits:
+///
+/// ```
+///   %fnPtr = load ptr, ptr {envRef}
+///   [%result =] call {retType} (ptr, P...) %fnPtr(ptr {envRef}, <args>)
+/// ```
+///
+/// `paramTypes` holds each user param's LLVM IR type in source order;
+/// `argOperands` holds the already-rendered `<type> <value>` strings
+/// the caller passes through. An empty `retType` collapses to `void`
+/// so checker unit-return signatures flow through verbatim. Returns
+/// the result temp name, or `""` for void — callers graft their own
+/// `value` metadata (sourceType / listElem / mapKey …) onto the ref
+/// since that struct is Go-internal.
+pub fn llvmEmitFnValueIndirectCall(
+    emitter: LlvmEmitter,
+    envRef: String,
+    retType: String,
+    paramTypes: List<String>,
+    argOperands: List<String>,
+) -> String {
+    let ret = if retType == "" { "void" } else { retType }
+    let fnPtr = llvmNextTemp(emitter)
+    emitter.body.push("  {fnPtr} = load ptr, ptr {envRef}")
+
+    let mut callParamTypes: List<String> = ["ptr"]
+    for pt in paramTypes {
+        callParamTypes.push(pt)
+    }
+    let paramList = llvmStrings.join(callParamTypes, ", ")
+    let callType = "{ret} ({paramList})"
+
+    let mut argParts: List<String> = ["ptr {envRef}"]
+    for op in argOperands {
+        argParts.push(op)
+    }
+    let args = llvmStrings.join(argParts, ", ")
+
+    if ret == "void" {
+        emitter.body.push("  call {callType} {fnPtr}({args})")
+        return ""
+    }
+    let result = llvmNextTemp(emitter)
+    emitter.body.push("  {result} = call {callType} {fnPtr}({args})")
+    result
+}
+
 /// Render the single-line IR for an empty-roots safepoint poll. The
 /// pure form exists so emitters backed by a non-Osty buffer (e.g. the
 /// MIR emitter's `strings.Builder`) can consume the format string
@@ -547,7 +595,9 @@ pub fn llvmEmitSafepointEmpty(emitter: LlvmEmitter, id: Int) {
 /// single `alloca ptr, i64 N` slot array and handed to the runtime.
 /// Callers that need to respect `llvmSafepointDefaultRootChunkSize`
 /// must chunk `rootAddresses` before each call so every individual
-/// `alloca` stays bounded (`RUNTIME_GC_DELTA.md` §10.2).
+/// `alloca` stays bounded (`RUNTIME_GC_DELTA.md` §10.2). Prefer
+/// `llvmEmitSafepointChunked` for frame-granularity lowering — this
+/// is the single-chunk primitive it composes.
 pub fn llvmEmitSafepointWithRoots(
     emitter: LlvmEmitter,
     id: Int,
@@ -565,6 +615,45 @@ pub fn llvmEmitSafepointWithRoots(
     emitter.body.push(
         "  call void @osty.gc.safepoint_v1(i64 {id}, ptr {slotsPtr}, i64 {count})",
     )
+}
+
+/// Frame-granularity safepoint lowering (Phase A5 + A6 combined).
+/// Takes a pre-resolved `rootAddresses` list and splits it into
+/// `chunkSize`-bounded pieces so each per-chunk `alloca ptr, i64 N`
+/// stays under the runtime's `OSTY_GC_SAFEPOINT_MAX_ROOTS = 65536`
+/// cap. Each emitted poll consumes one serial drawn from the
+/// `startSerial..` sequence and inherits the same `kindCode` tag.
+/// Returns the next unused serial — callers assign it back into
+/// their per-module counter. An empty `rootAddresses` collapses to
+/// a single zero-roots poll; `chunkSize <= 0` means "one chunk for
+/// everything" and preserves legacy behaviour for callers that wire
+/// the splitting off.
+pub fn llvmEmitSafepointChunked(
+    emitter: LlvmEmitter,
+    kindCode: Int,
+    startSerial: Int,
+    rootAddresses: List<String>,
+    chunkSize: Int,
+) -> Int {
+    let count = rootAddresses.len()
+    if count == 0 {
+        llvmEmitSafepointEmpty(emitter, llvmEncodeSafepointId(kindCode, startSerial))
+        return startSerial + 1
+    }
+    let effectiveChunk = if chunkSize <= 0 { count } else { chunkSize }
+    let chunkCount = (count + effectiveChunk - 1) / effectiveChunk
+    for chunkIndex in 0..chunkCount {
+        let start = chunkIndex * effectiveChunk
+        let tentativeEnd = start + effectiveChunk
+        let end = if tentativeEnd < count { tentativeEnd } else { count }
+        let mut chunk: List<String> = []
+        for i in start..end {
+            chunk.push(rootAddresses[i])
+        }
+        let id = llvmEncodeSafepointId(kindCode, startSerial + chunkIndex)
+        llvmEmitSafepointWithRoots(emitter, id, chunk)
+    }
+    startSerial + chunkCount
 }
 
 pub fn llvmStructTypeDef(name: String, fieldTypes: List<String>) -> String {
