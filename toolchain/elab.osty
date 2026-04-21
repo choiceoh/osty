@@ -2532,8 +2532,20 @@ fn patKindOf(n: AstNode) -> Int {
 }
 
 fn armGuarded(cx: ElabCx, armIdx: Int) -> Bool {
+    // `opParseMatchStmt` encodes an arm as:
+    //   armNode.left     = pattern
+    //   armNode.right    = body expression
+    //   armNode.children = [guardExprIdx]  (-1 when no guard)
+    //
+    // The previous check looked at `arm.right`, which is always
+    // populated with the body — so every arm registered as
+    // "guarded" and exhaustiveness was effectively disabled. Read
+    // the guard slot out of children[0] instead.
     let arm = astArenaNodeAt(cx.ast.arena, armIdx)
-    arm.right >= 0
+    if checkIntListLenHelper(arm.children) == 0 {
+        return false
+    }
+    checkIntListAt(arm.children, 0) >= 0
 }
 
 /// patIsIrrefutable reports whether a pattern is guaranteed to match
