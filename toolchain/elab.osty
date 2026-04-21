@@ -4485,7 +4485,7 @@ pub struct PmIntParse {
 /// the caller treats the literal as opaque for reachability.
 pub fn pmParseIntLit(text: String) -> PmIntParse {
     let units = strings.split(text, "")
-    let n = units.len()
+    let n = pmStringListLen(units)
     if n == 0 {
         return PmIntParse { ok: false, value: 0 }
     }
@@ -4543,6 +4543,10 @@ pub fn pmParseIntLit(text: String) -> PmIntParse {
         value = 0 - value
     }
     PmIntParse { ok: true, value }
+}
+
+fn pmStringListLen(xs: List<String>) -> Int {
+    xs.len()
 }
 
 fn pmDigitValueIn(ch: String, base: Int) -> Int {

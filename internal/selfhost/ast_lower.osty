@@ -87,6 +87,7 @@ use go "github.com/osty/osty/internal/selfhost/astbridge" as astbridge {
     fn InterfaceDeclNode(pos: Pos, end: Pos, isPub: Bool, name: String, generics: List<GenericParam>, extends: List<Type>, methods: List<FnDecl>, doc: String, anns: List<Annotation>) -> Decl
     fn TypeAliasDeclNode(pos: Pos, end: Pos, isPub: Bool, name: String, generics: List<GenericParam>, target: Type, doc: String, anns: List<Annotation>) -> Decl
     fn UseDeclNode(pos: Pos, end: Pos, raw: String, path: List<String>, isGo: Bool, alias: String, body: List<Decl>) -> Decl
+    fn UseDeclNodeFull(pos: Pos, end: Pos, raw: String, path: List<String>, isGo: Bool, isPub: Bool, alias: String, body: List<Decl>) -> Decl
     fn LetDeclNode(pos: Pos, end: Pos, isPub: Bool, isMut: Bool, mutPos: Pos, name: String, typ: Type, value: Expr, doc: String, anns: List<Annotation>) -> Decl
     fn FieldNode(pos: Pos, end: Pos, isPub: Bool, name: String, typ: Type, def: Expr, doc: String, anns: List<Annotation>) -> Field
     fn VariantNode(pos: Pos, end: Pos, name: String, fields: List<Type>, anns: List<Annotation>, doc: String) -> Variant
@@ -689,7 +690,7 @@ fn astLowerDecodeEscapes(s: String) -> String {
         return s
     }
     let units = strings.Split(s, "")
-    let n = units.len()
+    let n = astLowerStringListLen(units)
     let mut parts: List<String> = []
     let mut i = 0
     for i < n {
@@ -751,7 +752,7 @@ struct AstLowerUnicodeEscape {
 fn astLowerDecodeUnicodeEscape(units: List<String>, start: Int) -> AstLowerUnicodeEscape {
     let mut value = 0
     let mut consumed = 0
-    let total = units.len()
+    let total = astLowerStringListLen(units)
     for i in start..total {
         let unit = units[i]
         if unit == r"}" {
@@ -768,6 +769,10 @@ fn astLowerDecodeUnicodeEscape(units: List<String>, start: Int) -> AstLowerUnico
         consumed = consumed + 1
     }
     AstLowerUnicodeEscape { value: 0, consumed: 0 }
+}
+
+fn astLowerStringListLen(xs: List<String>) -> Int {
+    xs.len()
 }
 
 fn astLowerDecl(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbridge.Decl {

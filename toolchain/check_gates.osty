@@ -1078,7 +1078,7 @@ fn containsInterpolation(text: String) -> Bool {
     // is interpolation, `\{` is an escaped literal brace.
     let units = strings.split(text, "")
     let mut i = 0
-    let n = units.len()
+    let n = checkGateStringListLen(units)
     for i < n {
         let unit = units[i]
         if unit == r"{" {
@@ -1090,4 +1090,8 @@ fn containsInterpolation(text: String) -> Bool {
         i = i + 1
     }
     false
+}
+
+fn checkGateStringListLen(xs: List<String>) -> Int {
+    xs.len()
 }
