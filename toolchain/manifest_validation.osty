@@ -800,7 +800,7 @@ fn manifestProfileCycleVisit(
     if manifestBuiltinProfile(name) {
         return false
     }
-    if manifestStringListContains(stack, name) {
+    if listContainsString(stack, name) {
         return true
     }
     for profile in profiles {
@@ -815,15 +815,6 @@ fn manifestProfileCycleVisit(
                 return false
             }
             return manifestProfileCycleVisit(profile.inherits, profiles, manifestStringListAppended(stack, name))
-        }
-    }
-    false
-}
-
-fn manifestStringListContains(items: List<String>, target: String) -> Bool {
-    for item in items {
-        if item == target {
-            return true
         }
     }
     false

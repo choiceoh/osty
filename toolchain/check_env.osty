@@ -1115,7 +1115,7 @@ fn checkCollectInterfaceMethods(env: CheckEnv, owner: String, out: List<CheckFnS
     let mut nextOut: List<CheckFnSig> = out
     let mut nextSeen: List<String> = seen
     for sig in env.fns {
-        if sig.owner == owner && !(checkStringListContainsLocal(nextSeen, sig.name)) {
+        if sig.owner == owner && !(listContainsString(nextSeen, sig.name)) {
             nextOut.push(sig)
             nextSeen.push(sig.name)
         }
@@ -1133,7 +1133,7 @@ fn checkCollectInterfaceMethods(env: CheckEnv, owner: String, out: List<CheckFnS
 fn checkFnSigNames(xs: List<CheckFnSig>) -> List<String> {
     let mut out: List<String> = []
     for sig in xs {
-        if !(checkStringListContainsLocal(out, sig.name)) {
+        if !(listContainsString(out, sig.name)) {
             out.push(sig.name)
         }
     }
@@ -1208,15 +1208,6 @@ fn checkStringKey(xs: List<String>) -> String {
     strings.join(xs, ",")
 }
 
-fn checkStringListContainsLocal(xs: List<String>, needle: String) -> Bool {
-    for x in xs {
-        if x == needle {
-            return true
-        }
-    }
-    false
-}
-
 /// checkVisibleBindingNames collects the identifiers reachable at the
 /// current elaboration point — all active lexical bindings plus every
 /// registered top-level free function. This is the candidate pool the
@@ -1224,12 +1215,12 @@ fn checkStringListContainsLocal(xs: List<String>, needle: String) -> Bool {
 pub fn checkVisibleBindingNames(env: CheckEnv) -> List<String> {
     let mut out: List<String> = []
     for b in env.bindings {
-        if !(checkStringListContainsLocal(out, b.name)) {
+        if !(listContainsString(out, b.name)) {
             out.push(b.name)
         }
     }
     for sig in env.fns {
-        if sig.owner == "" && !(checkStringListContainsLocal(out, sig.name)) {
+        if sig.owner == "" && !(listContainsString(out, sig.name)) {
             out.push(sig.name)
         }
     }
@@ -1244,7 +1235,7 @@ pub fn checkFieldNamesOf(env: CheckEnv, owner: String) -> List<String> {
         return out
     }
     for f in env.fields {
-        if f.owner == owner && !(checkStringListContainsLocal(out, f.name)) {
+        if f.owner == owner && !(listContainsString(out, f.name)) {
             out.push(f.name)
         }
     }
@@ -1266,7 +1257,7 @@ fn checkCollectMethodNames(env: CheckEnv, owner: String, acc: List<String>) -> L
     }
     let mut out = acc
     for sig in env.fns {
-        if sig.owner == owner && !(checkStringListContainsLocal(out, sig.name)) {
+        if sig.owner == owner && !(listContainsString(out, sig.name)) {
             out.push(sig.name)
         }
     }
@@ -1287,7 +1278,7 @@ pub fn checkVariantNamesOf(env: CheckEnv, owner: String) -> List<String> {
     let mut out: List<String> = []
     for v in env.variants {
         let matches = owner == "" || v.owner == owner
-        if matches && !(checkStringListContainsLocal(out, v.name)) {
+        if matches && !(listContainsString(out, v.name)) {
             out.push(v.name)
         }
     }

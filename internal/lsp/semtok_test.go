@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"bytes"
 	"reflect"
 	"testing"
 
@@ -111,5 +112,46 @@ func TestEncodeSemTokensUsesSelfHostedDeltaEncoding(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("encoded = %#v, want %#v", got, want)
+	}
+}
+
+func TestDocAnalysisSemanticTokensMemoizesEncodedPayload(t *testing.T) {
+	s := NewServer(bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{})
+	a := s.analyzeSingleFile([]byte("pub fn main() { let value = 1 }\n"))
+
+	first := a.semanticTokens()
+	second := a.semanticTokens()
+
+	if len(first) == 0 {
+		t.Fatal("semanticTokens() returned no data")
+	}
+	if len(second) == 0 {
+		t.Fatal("semanticTokens() returned no data on second call")
+	}
+	if &first[0] != &second[0] {
+		t.Fatal("semanticTokens() recomputed instead of reusing cached payload")
+	}
+}
+
+func TestDocAnalysisSemanticTokensRefreshOnReanalysis(t *testing.T) {
+	s := NewServer(bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{})
+
+	firstAnalysis := s.analyzeSingleFileViaEngine("untitled:SemanticTokens-1.osty", []byte("pub fn main() { }\n"))
+	first := firstAnalysis.semanticTokens()
+
+	secondAnalysis := s.analyzeSingleFileViaEngine("untitled:SemanticTokens-1.osty", []byte("pub fn main() { let value = 1 }\n"))
+	second := secondAnalysis.semanticTokens()
+
+	if len(first) == 0 || len(second) == 0 {
+		t.Fatal("semanticTokens() returned no data")
+	}
+	if firstAnalysis == secondAnalysis {
+		t.Fatal("reanalysis reused the old docAnalysis")
+	}
+	if &first[0] == &second[0] {
+		t.Fatal("reanalysis reused stale semantic token cache storage")
+	}
+	if reflect.DeepEqual(first, second) {
+		t.Fatal("reanalysis did not update semantic token payload")
 	}
 }

@@ -46,7 +46,24 @@ pub fn benchmark(iterations: Int, body: fn() -> Result<(), Error>) {
     body()
 }
 
+/// `snapshot(name, output)` compares `output` against a golden file
+/// stored at `<source_dir>/__snapshots__/<sanitize(name)>.snap`.
+///
+///   - First run (or file missing): the golden is written and the
+///     test passes with `snapshot: created <path>` on stdout.
+///   - Match: the test passes silently.
+///   - Mismatch: the test prints the location + a line-level diff
+///     (trim prefix/suffix with up to 3 context lines) and exits 1,
+///     just like `assertEq`.
+///
+/// Re-run `osty test --update-snapshots` (or set
+/// `OSTY_UPDATE_SNAPSHOTS=1`) to accept the new output and overwrite
+/// every golden in the run. The LLVM backend intercepts this call
+/// and emits a direct runtime helper — the stub body below exists
+/// only to satisfy the type checker.
 pub fn snapshot(name: String, output: String) {
+    let _ = name
+    let _ = output
 }
 
 // ---------- property-based testing (v0.5 G33) ----------

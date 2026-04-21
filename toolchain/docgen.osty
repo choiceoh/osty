@@ -1410,15 +1410,6 @@ fn selfDocIndexAnchor(refs: List<SelfDocRef>, name: String) -> String {
     ""
 }
 
-fn selfDocStringListContains(items: List<String>, name: String) -> Bool {
-    for item in items {
-        if item == name {
-            return true
-        }
-    }
-    false
-}
-
 fn selfDocAddRefsFromText(
     existing: List<String>,
     text: String,
@@ -1439,7 +1430,7 @@ fn selfDocAddRefsFromText(
                 idx = idx + 1
             }
             let anchor = selfDocIndexAnchor(refs, word)
-            if anchor != "" && word != exclude && !(selfDocStringListContains(out, word)) {
+            if anchor != "" && word != exclude && !(listContainsString(out, word)) {
                 out.push(word)
             }
         } else {

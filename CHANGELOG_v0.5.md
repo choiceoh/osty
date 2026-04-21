@@ -64,6 +64,30 @@ bodies exist so the stub checker accepts imports.
   `[10, 100_000_000]`. `--bench` and `--doc` are mutually exclusive
   (exit 2). In default test mode `bench*` functions are skipped so an
   errant benchmark never runs as a regular test.
+- **`testing.snapshot(name, output)`** — golden-file testing. LLVM
+  lowers the call to `osty_rt_test_snapshot` which resolves
+  `<source_dir>/__snapshots__/<sanitize(name)>.snap` and either
+  creates the file (first run), passes silently (match), or prints a
+  line-level diff and exits 1 (mismatch). Run
+  `osty test --update-snapshots` to accept current output and
+  overwrite every golden in the run; set `OSTY_SNAPSHOT_DIR=<path>`
+  to redirect writes out of the repo (used by the runtime's own
+  test harness). Implementation:
+  [`internal/backend/runtime/osty_runtime.c`](./internal/backend/runtime/osty_runtime.c)
+  (runtime helper + diff),
+  [`internal/llvmgen/stmt.go`](./internal/llvmgen/stmt.go) (call
+  intercept), and [`cmd/osty/test_native.go`](./cmd/osty/test_native.go)
+  (CLI flag).
+- **Structural diff on `testing.assertEq`** — on failure, the
+  emitted message now includes a line-level diff (`- left` / `+ right`
+  with up to 3 context lines) whenever both operands share a
+  diffable shape. Shipped coverage: two `String` values (direct
+  diff) and two `List<T>` values with the same primitive `T` in
+  `{Int, Float, Bool, String}` (rendered to a multi-line literal
+  first, then diffed). Runtime helpers: `osty_rt_strings_DiffLines`,
+  `osty_rt_list_primitive_to_string`. Structs, enums, Maps, and
+  `List<composite>` still fall back to source-text rendering — they
+  need `ToString` protocol dispatch and are tracked separately.
 
 ### Diagnostic codes
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/canonical"
+	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
@@ -168,6 +169,108 @@ fn main() {}
 	}
 	if got := chk.LookupSymType(paramSym); got == nil || got.String() != "Int" {
 		t.Fatalf("unused param type = %v, want Int", got)
+	}
+}
+
+func TestConvertNativeDiagPreservesFile(t *testing.T) {
+	got := convertNativeDiag([]byte("fn main() {}\n"), nativeCheckDiagnostic{
+		Code:     diag.CodeIntrinsicNonEmptyBody,
+		Severity: "error",
+		Message:  "`#[intrinsic]` function `violator` must have an empty body",
+		Start:    0,
+		End:      0,
+		File:     "/tmp/bad.osty",
+	})
+	if got == nil {
+		t.Fatal("convertNativeDiag returned nil")
+	}
+	if got.File != "/tmp/bad.osty" {
+		t.Fatalf("diag.File = %q, want /tmp/bad.osty", got.File)
+	}
+}
+
+func TestNativeBoundaryDoesNotReplayGoPolicyGates(t *testing.T) {
+	src := []byte(`#[intrinsic]
+pub fn raw_null() -> Int { 0 }
+`)
+	file, res := parseResolvedFile(t, src)
+	fn := file.Decls[0].(*ast.FnDecl)
+
+	oldFactory := nativeCheckerFactory
+	nativeCheckerFactory = func() (nativeChecker, string) {
+		return fakeNativeChecker{result: nativeCheckResult{
+			Summary: nativeCheckSummary{},
+			Diagnostics: []nativeCheckDiagnostic{
+				{
+					Code:     diag.CodeIntrinsicNonEmptyBody,
+					Severity: "error",
+					Message:  "`#[intrinsic]` function `raw_null` must have an empty body",
+					Start:    fn.Body.Pos().Offset,
+					End:      fn.Body.End().Offset,
+				},
+			},
+		}}, ""
+	}
+	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
+
+	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+
+	got := 0
+	for _, d := range chk.Diags {
+		if d != nil && d.Code == diag.CodeIntrinsicNonEmptyBody {
+			got++
+		}
+	}
+	if got != 1 {
+		t.Fatalf("expected exactly one native E0773 diagnostic, got %d: %#v", got, chk.Diags)
+	}
+}
+
+func TestNativeBoundarySuppressesPrivilegeDiagnosticsInPrivilegedMode(t *testing.T) {
+	src := []byte(`#[intrinsic]
+pub fn raw_null() -> Int { }
+`)
+	file, res := parseResolvedFile(t, src)
+
+	oldFactory := nativeCheckerFactory
+	nativeCheckerFactory = func() (nativeChecker, string) {
+		return fakeNativeChecker{result: nativeCheckResult{
+			Summary: nativeCheckSummary{
+				Assignments:     1,
+				Accepted:        1,
+				Errors:          1,
+				ErrorsByContext: map[string]int{diag.CodeRuntimePrivilegeViolation: 1},
+				ErrorDetails: map[string]map[string]int{
+					diag.CodeRuntimePrivilegeViolation: {
+						"`#[intrinsic]` is a runtime-only annotation": 1,
+					},
+				},
+			},
+			Diagnostics: []nativeCheckDiagnostic{
+				{
+					Code:     diag.CodeRuntimePrivilegeViolation,
+					Severity: "error",
+					Message:  "`#[intrinsic]` is a runtime-only annotation",
+					Start:    0,
+					End:      0,
+				},
+			},
+		}}, ""
+	}
+	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
+
+	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached(), Privileged: true})
+	if len(chk.Diags) != 0 {
+		t.Fatalf("expected privileged host boundary to suppress E0770 diagnostics, got %#v", chk.Diags)
+	}
+	if chk.NativeCheckerTelemetry == nil {
+		t.Fatal("expected native telemetry to survive filtering")
+	}
+	if chk.NativeCheckerTelemetry.Errors != 0 {
+		t.Fatalf("telemetry errors = %d, want 0", chk.NativeCheckerTelemetry.Errors)
+	}
+	if got := chk.NativeCheckerTelemetry.ErrorsByContext[diag.CodeRuntimePrivilegeViolation]; got != 0 {
+		t.Fatalf("telemetry retained privileged bucket count %d", got)
 	}
 }
 

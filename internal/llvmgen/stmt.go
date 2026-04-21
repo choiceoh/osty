@@ -904,9 +904,57 @@ func (g *generator) emitTestingCallStmt(call *ast.CallExpr) (bool, error) {
 	case "expectError":
 		_, err := g.emitTestingExpect(call, true)
 		return true, err
+	case "snapshot":
+		return true, g.emitTestingSnapshot(call)
 	default:
 		return true, unsupportedf("call", "testing.%s is not supported by LLVM yet", method)
 	}
+}
+
+// emitTestingSnapshot lowers `testing.snapshot(name, output)` into a
+// call to the runtime helper osty_rt_test_snapshot, which handles the
+// golden file lifecycle (create / compare / emit diff + exit). The
+// generator pins the test source path at compile time so snapshot
+// discovery does not depend on the process working directory — each
+// test binary hard-codes its own origin file.
+func (g *generator) emitTestingSnapshot(call *ast.CallExpr) error {
+	if len(call.Args) != 2 {
+		return unsupportedf("call", "testing.snapshot requires two positional arguments")
+	}
+	for _, arg := range call.Args {
+		if arg == nil || arg.Name != "" || arg.Value == nil {
+			return unsupportedf("call", "testing.snapshot requires positional arguments")
+		}
+	}
+	name, err := g.emitTestingStringArg(call.Args[0].Value, "testing.snapshot name")
+	if err != nil {
+		return err
+	}
+	output, err := g.emitTestingStringArg(call.Args[1].Value, "testing.snapshot output")
+	if err != nil {
+		return err
+	}
+	g.declareRuntimeSymbol("osty_rt_test_snapshot", "void", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	sourceLit := llvmStringLiteral(emitter, g.sourcePath)
+	llvmCallVoid(emitter, "osty_rt_test_snapshot", []*LlvmValue{toOstyValue(name), toOstyValue(output), sourceLit})
+	g.takeOstyEmitter(emitter)
+	return nil
+}
+
+// emitTestingStringArg evaluates a String-typed argument to one of
+// the testing helpers and enforces the ptr check once — shared by
+// emitTestingSnapshot and emitRuntimeStringDiff so both surface the
+// same diagnostic shape when a non-String sneaks through.
+func (g *generator) emitTestingStringArg(expr ast.Expr, field string) (value, error) {
+	v, err := g.emitExpr(expr)
+	if err != nil {
+		return value{}, err
+	}
+	if v.typ != "ptr" {
+		return value{}, unsupportedf("type-system", "%s must be String, got %s", field, v.typ)
+	}
+	return v, nil
 }
 
 func (g *generator) testingCallMethod(call *ast.CallExpr) (string, bool) {
@@ -1477,7 +1525,107 @@ func (g *generator) buildAssertCompareMessage(call *ast.CallExpr, name, leftText
 	if rightHasVal {
 		parts = append(parts, staticAssertPart(" = "), dynamicAssertPart(rightStr))
 	}
+	// Structural diff: append a line-level diff for assertEq on types
+	// that have a multi-line friendly string form — two Strings, or
+	// two Lists of the same primitive element. assertNe failures only
+	// happen on byte-equal inputs where a diff would be empty, so we
+	// skip them. Structs, Maps, and List<struct> are deferred: they
+	// need ToString protocol dispatch and per-shape format rules.
+	if name == "assertEq" {
+		leftDiff, rightDiff, ok, err := g.stringifyForStructuralDiff(left, isStringLeft, right, isStringRight)
+		if err != nil {
+			return value{}, err
+		}
+		if ok {
+			diff, err := g.emitRuntimeStringDiff(leftDiff, rightDiff)
+			if err != nil {
+				return value{}, err
+			}
+			parts = append(parts, staticAssertPart("\ndiff (- left, + right):\n"), dynamicAssertPart(diff))
+		}
+	}
 	return g.foldAssertionMessage(parts...)
+}
+
+// listPrimitiveKindID maps an LLVM element type to the elem_kind
+// argument accepted by osty_rt_list_primitive_to_string. Returns 0
+// when the element type is not a supported primitive (struct, enum,
+// Map payload, nested list) — caller falls back to no-diff rendering.
+func listPrimitiveKindID(elemTyp string, elemIsString bool) int {
+	switch elemTyp {
+	case "i64":
+		return 1
+	case "double":
+		return 2
+	case "i1":
+		return 3
+	case "ptr":
+		if elemIsString {
+			return 4
+		}
+	}
+	return 0
+}
+
+// stringifyForStructuralDiff returns (leftStr, rightStr, true) when
+// both operands of an assertEq share a "diffable" shape — today that
+// means either both are Strings or both are Lists of the same
+// primitive element kind (Int / Float / Bool / String). Anything else
+// (mixed shapes, unsupported element types, struct-typed receivers)
+// returns ok=false so the caller skips the diff section.
+func (g *generator) stringifyForStructuralDiff(left value, isStringLeft bool, right value, isStringRight bool) (value, value, bool, error) {
+	if isStringLeft && isStringRight {
+		return left, right, true, nil
+	}
+	kindLeft := listPrimitiveKindID(left.listElemTyp, left.listElemString)
+	kindRight := listPrimitiveKindID(right.listElemTyp, right.listElemString)
+	if kindLeft == 0 || kindRight == 0 || kindLeft != kindRight {
+		return value{}, value{}, false, nil
+	}
+	leftStr, err := g.emitRuntimeListPrimitiveToString(left, kindLeft)
+	if err != nil {
+		return value{}, value{}, false, err
+	}
+	rightStr, err := g.emitRuntimeListPrimitiveToString(right, kindRight)
+	if err != nil {
+		return value{}, value{}, false, err
+	}
+	return leftStr, rightStr, true, nil
+}
+
+// emitRuntimeListPrimitiveToString lowers a call to
+// osty_rt_list_primitive_to_string, which formats a List<T> with
+// primitive T as a multi-line String so the line-diff surfaces
+// element-level divergences.
+func (g *generator) emitRuntimeListPrimitiveToString(v value, kind int) (value, error) {
+	if v.typ != "ptr" {
+		return value{}, unsupportedf("type-system", "osty_rt_list_primitive_to_string expects a ptr (List<T>), got %s", v.typ)
+	}
+	g.declareRuntimeSymbol("osty_rt_list_primitive_to_string", "ptr", []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+	emitter := g.toOstyEmitter()
+	kindLit := llvmIntLiteral(kind)
+	out := llvmCall(emitter, "ptr", "osty_rt_list_primitive_to_string", []*LlvmValue{toOstyValue(v), kindLit})
+	g.takeOstyEmitter(emitter)
+	outV := fromOstyValue(out)
+	outV.gcManaged = true
+	return outV, nil
+}
+
+// emitRuntimeStringDiff lowers a call to osty_rt_strings_DiffLines,
+// which returns a managed String containing a trim-prefix/suffix line
+// diff. An empty result means the two inputs are byte-equal — callers
+// that only invoke this under a failing assertion can ignore that case.
+func (g *generator) emitRuntimeStringDiff(left, right value) (value, error) {
+	if left.typ != "ptr" || right.typ != "ptr" {
+		return value{}, unsupportedf("type-system", "osty_rt_strings_DiffLines expects two String (ptr) values, got %s and %s", left.typ, right.typ)
+	}
+	g.declareRuntimeSymbol("osty_rt_strings_DiffLines", "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", "osty_rt_strings_DiffLines", []*LlvmValue{toOstyValue(left), toOstyValue(right)})
+	g.takeOstyEmitter(emitter)
+	v := fromOstyValue(out)
+	v.gcManaged = true
+	return v, nil
 }
 
 // buildAssertCondMessage composes the failure message for
