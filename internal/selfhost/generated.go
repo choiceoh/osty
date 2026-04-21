@@ -33933,9 +33933,14 @@ func elabInferBlock(cx *ElabCx, idx int, node *AstNode) *ElabResult {
 		}()
 		_ = isTail
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14597:9
-		if isTail && astIsExprKindAt(cx.ast, stmtIdx) {
+		// Unwrap AstNExprStmt before testing `astIsExprKindAt` so a
+		// trailing expression used as a statement (parser.osty:1099)
+		// still contributes its type to the block's tail. Mirrored from
+		// toolchain/elab.osty pending a regen fix.
+		tailExprIdx := blockTailExprIdx(cx.ast, stmtIdx)
+		if isTail && tailExprIdx >= 0 && astIsExprKindAt(cx.ast, tailExprIdx) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14598:13
-			tail := elabInfer(cx, stmtIdx)
+			tail := elabInfer(cx, tailExprIdx)
 			_ = tail
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14599:13
 			tailNode = tail.node
@@ -33970,6 +33975,19 @@ func elabInferBlock(cx *ElabCx, idx int, node *AstNode) *ElabResult {
 	coreIdx := coreBlock(cx.core, stmts, tailNode, tailTy, node.start, node.end)
 	_ = coreIdx
 	return &ElabResult{node: coreIdx, ty: tailTy}
+}
+
+// blockTailExprIdx unwraps AstNExprStmt for the last-stmt-as-tail path.
+// Mirrored from toolchain/elab.osty pending a regen fix.
+func blockTailExprIdx(ast *AstFile, stmtIdx int) int {
+	if stmtIdx < 0 {
+		return stmtIdx
+	}
+	node := astArenaNodeAt(ast.arena, stmtIdx)
+	if _, ok := node.kind.(*AstNodeKind_AstNExprStmt); ok {
+		return node.left
+	}
+	return stmtIdx
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14616:1
@@ -34013,9 +34031,11 @@ func elabCheckBlock(cx *ElabCx, idx int, node *AstNode, expected int) *ElabResul
 		}()
 		_ = isTail
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14628:9
-		if isTail && astIsExprKindAt(cx.ast, stmtIdx) {
+		// Unwrap AstNExprStmt for the tail (mirror of elabInferBlock).
+		tailExprIdx := blockTailExprIdx(cx.ast, stmtIdx)
+		if isTail && tailExprIdx >= 0 && astIsExprKindAt(cx.ast, tailExprIdx) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14629:13
-			tail := elabCheck(cx, stmtIdx, expected)
+			tail := elabCheck(cx, tailExprIdx, expected)
 			_ = tail
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14630:13
 			tailNode = tail.node
