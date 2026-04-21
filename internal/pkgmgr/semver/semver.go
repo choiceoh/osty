@@ -6,8 +6,8 @@
 //	1.2.3
 //	1.2.3-alpha
 //	1.2.3-alpha.1
-//	1.2.3+build.meta
-//	1.2.3-alpha.1+build.meta
+//	1.2.3+sha.abcdef
+//	1.2.3-alpha.1+sha.abcdef
 //
 // Supported requirement forms (ParseReq):
 //
@@ -47,7 +47,7 @@ type Version struct {
 	// ["alpha", "1"]. Empty for a stable release.
 	Pre []string
 	// Build is the dot-separated build metadata, e.g.
-	// ["build", "meta"]. Does NOT participate in precedence.
+	// ["sha", "abcdef"]. Does NOT participate in precedence.
 	Build []string
 }
 

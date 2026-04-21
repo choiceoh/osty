@@ -738,12 +738,14 @@ func TestCheckWithAIRepairPassesSemanticForeignHelpers(t *testing.T) {
 		t.Fatalf("write source: %v", err)
 	}
 
+	// `.length` is intentionally no longer parser-lowered (182f819):
+	// parse-time lowering blindly rewrote genuine struct-field reads, so
+	// airepair's type-aware semantic pass owns the rewrite instead. That
+	// means --no-airepair leaves `.length` in place and the native
+	// checker rejects it.
 	without := runOstyCLI(t, "check", "--no-airepair", path)
-	if without.exit != 0 {
-		t.Fatalf("check --no-airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", without.exit, without.stdout, without.stderr)
-	}
-	if strings.Contains(without.stderr, "--airepair") {
-		t.Fatalf("stderr = %q, did not want airepair summary for parser-owned helper lowering", without.stderr)
+	if without.exit == 0 {
+		t.Fatalf("check --no-airepair exit = %d, want non-zero because `.length` requires airepair\nstdout:\n%s\nstderr:\n%s", without.exit, without.stdout, without.stderr)
 	}
 
 	with := runOstyCLI(t, "check", path)
@@ -789,7 +791,10 @@ func TestCheckWithoutAIRepairPassesParserLoweredEnumerateLoop(t *testing.T) {
 func TestCheckWithoutAIRepairPassesParserLoweredSemanticHelpers(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
-	source := "fn main() {\n    let mut items = [1, 2]\n    let count = len(items)\n    let size = items.length\n    items = append(items, count + size)\n    println(items)\n}\n"
+	// Only the truly parser-owned helpers (`len(list)` → `list.len()`,
+	// `append(list, x)` → `list.push(x)`) — `.length` is airepair-only
+	// after 182f819, so it belongs in TestCheckWithAIRepairPassesSemanticForeignHelpers.
+	source := "fn main() {\n    let mut items = [1, 2]\n    let count = len(items)\n    items = append(items, count)\n    println(items)\n}\n"
 	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}

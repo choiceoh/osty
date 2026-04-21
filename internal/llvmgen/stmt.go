@@ -890,10 +890,7 @@ func (g *generator) emitTestingCallStmt(call *ast.CallExpr) (bool, error) {
 }
 
 func (g *generator) testingCallMethod(call *ast.CallExpr) (string, bool) {
-	if call == nil {
-		return "", false
-	}
-	field, ok := call.Fn.(*ast.FieldExpr)
+	field, ok := fieldExprOfCallFn(call)
 	if !ok || field.IsOptional {
 		return "", false
 	}

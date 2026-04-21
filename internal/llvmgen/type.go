@@ -763,7 +763,7 @@ func (g *generator) staticStdStringsCallSourceType(call *ast.CallExpr) (ast.Type
 	if call == nil || len(g.stdStringsAliases) == 0 {
 		return nil, false
 	}
-	field, ok := call.Fn.(*ast.FieldExpr)
+	field, ok := fieldExprOfCallFn(call)
 	if !ok {
 		return nil, false
 	}
@@ -826,7 +826,7 @@ func (g *generator) staticCharByteConversionResult(call *ast.CallExpr) (value, b
 	if call == nil || len(call.Args) != 0 {
 		return value{}, false
 	}
-	field, ok := call.Fn.(*ast.FieldExpr)
+	field, ok := fieldExprOfCallFn(call)
 	if !ok || field.IsOptional || field.X == nil {
 		return value{}, false
 	}
@@ -867,10 +867,7 @@ func (g *generator) staticStringMethodResult(call *ast.CallExpr) (value, bool) {
 }
 
 func (g *generator) stringMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, bool) {
-	if call == nil {
-		return nil, false
-	}
-	field, ok := call.Fn.(*ast.FieldExpr)
+	field, ok := fieldExprOfCallFn(call)
 	if !ok || field.IsOptional || field.X == nil {
 		return nil, false
 	}
@@ -938,11 +935,35 @@ func (g *generator) staticCollectionMethodResult(call *ast.CallExpr) (value, boo
 	return value{}, false, false
 }
 
-func (g *generator) listMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, bool, bool) {
+// fieldExprOfCallFn returns the FieldExpr callee of `call`, peeking
+// through a TurbofishExpr wrapper when present. The IR→AST bridge
+// (`legacyMethodCallFromIR`) wraps `recv.method` in a TurbofishExpr
+// whenever the IR MethodCall carries TypeArgs — which the checker
+// records for *every* generic method call, including intrinsic ones
+// like `list.push(1)` where the type arg is the receiver's own T.
+// Dispatchers that used to match a bare FieldExpr would then fall
+// through to the "unsupported call" path. Unwrapping the turbofish
+// here makes the dispatch transparent to the bridge shape.
+func fieldExprOfCallFn(call *ast.CallExpr) (*ast.FieldExpr, bool) {
 	if call == nil {
-		return nil, "", false, false
+		return nil, false
 	}
-	field, ok := call.Fn.(*ast.FieldExpr)
+	switch fn := call.Fn.(type) {
+	case *ast.FieldExpr:
+		return fn, fn != nil
+	case *ast.TurbofishExpr:
+		if fn == nil {
+			return nil, false
+		}
+		if fx, ok := fn.Base.(*ast.FieldExpr); ok {
+			return fx, fx != nil
+		}
+	}
+	return nil, false
+}
+
+func (g *generator) listMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, bool, bool) {
+	field, ok := fieldExprOfCallFn(call)
 	if !ok || field.IsOptional {
 		return nil, "", false, false
 	}
@@ -959,10 +980,7 @@ func (g *generator) listMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, 
 }
 
 func (g *generator) mapMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, string, bool, bool) {
-	if call == nil {
-		return nil, "", "", false, false
-	}
-	field, ok := call.Fn.(*ast.FieldExpr)
+	field, ok := fieldExprOfCallFn(call)
 	if !ok || field.IsOptional {
 		return nil, "", "", false, false
 	}
@@ -979,10 +997,7 @@ func (g *generator) mapMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, s
 }
 
 func (g *generator) setMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, bool, bool) {
-	if call == nil {
-		return nil, "", false, false
-	}
-	field, ok := call.Fn.(*ast.FieldExpr)
+	field, ok := fieldExprOfCallFn(call)
 	if !ok || field.IsOptional {
 		return nil, "", false, false
 	}

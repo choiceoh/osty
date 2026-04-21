@@ -1200,7 +1200,7 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
     }
     let callee = astArenaNodeAt(cx.ast.arena, calleeIdx)
     if callee.kind == AstNField {
-        return elabInferMethodCall(cx, node, callee, expected)
+        return elabInferMethodCall(cx, node, callee, expected, [])
     }
 
     // Turbofish: callee is `AstNTurbofish { left = base, children = typeArgs }`.
@@ -1213,6 +1213,16 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
         if baseIdx >= 0 {
             baseCallee = astArenaNodeAt(cx.ast.arena, baseIdx)
         }
+    }
+
+    // Turbofish over a Field callee — `raw.read::<Int>(p)`,
+    // `x.map::<U>(f)` etc. Route through the method-call path, which
+    // already handles package-alias dispatch (owner = alias module) and
+    // method-on-value dispatch. The explicit type arguments are
+    // forwarded so `raw.read::<Int>` binds the method's T = Int even
+    // though the non-turbofish path couldn't see any type info.
+    if baseCallee.kind == AstNField {
+        return elabInferMethodCall(cx, node, baseCallee, expected, explicitArgs)
     }
 
     if baseCallee.kind != AstNIdent {
@@ -1371,9 +1381,11 @@ fn elabOwnerNameForReceiver(tys: TyArena, ty: Int) -> String {
     ""
 }
 
-/// elabInferMethodCall handles `recv.method(args)`. Relies on
-/// `checkLookupMethod` with the receiver's head type.
-fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expected: Int) -> ElabResult {
+/// elabInferMethodCall handles `recv.method(args)` and the turbofish
+/// form `recv.method::<T>(args)`. Relies on `checkLookupMethod` with
+/// the receiver's head type. `explicitArgs` carries any turbofish type
+/// arguments supplied at the call site; pass `[]` for plain calls.
+fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expected: Int, explicitArgs: List<Int>) -> ElabResult {
     let recv = elabInfer(cx, fieldNode.left)
     let recvResolved = checkResolveAliasDeep(cx.env, recv.ty)
     if tyIsBad(cx.env.tys, recvResolved) {
@@ -1420,6 +1432,14 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     let ownerArgs = tyArgsAt(cx.env.tys, recvResolved)
     instSeedOwnerArgs(cx, inst, typeSig.generics, ownerArgs)
     instSeedExpectedRet(cx, inst, sig.retTy, expected)
+
+    // Turbofish: bind explicit type args to the method's generics.
+    // Works when `sig.generics` == method's own generics (package-alias
+    // dispatch where `raw` has no receiver generics). For struct methods
+    // like `List<T>.map<U>(f)`, `sig.generics = ["T", "U"]` and the
+    // strict-match seeder short-circuits; receiver-level bindings from
+    // `instSeedOwnerArgs` remain authoritative.
+    instSeedPositionalArgs(cx, inst, explicitArgs)
 
     let coreArgs = elabCallArgs(cx, inst.solver, sig, inst.freshs, callNode.children, callNode.start, callNode.end)
     let retSubstituted = instSubstitute(cx, inst, sig.retTy)
