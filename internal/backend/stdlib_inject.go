@@ -60,6 +60,79 @@ func ReachableStdlibFns(mod *ir.Module, reg *stdlib.Registry) []ReachableStdlibF
 	return found
 }
 
+// ReachableStdlibMethod pairs a stdlib struct/enum method AST with the
+// module and owning type it came from, so a downstream caller can
+// route lowering and call-site rewriting.
+//
+// Companion to ReachableStdlibFn: free-fn refs flow through that
+// shape, type-qualified method refs flow through this one.
+type ReachableStdlibMethod struct {
+	// Module is the stdlib module name that owns the receiver type
+	// ("encoding", "option", ...).
+	Module string
+	// Type is the receiver type's source name ("Hex", "Option", ...).
+	Type string
+	// Method is the method's source name ("encode", "isSome", ...).
+	// Available redundantly via Fn.Name; kept on the struct so callers
+	// can group by (Module, Type) without dereferencing Fn.
+	Method string
+	// Fn is the method declaration as held in the registry. Callers
+	// must not mutate it — the registry owns a shared immutable copy.
+	Fn *ast.FnDecl
+}
+
+// ReachableStdlibMethods returns the stdlib struct/enum methods
+// referenced from mod via typed method calls, in deterministic
+// (module, type, method) order.
+//
+// Discovery walks `ir.ReachMethods`, which only emits MethodCall
+// references whose receiver has a NamedType with a non-empty Package
+// — so user-defined methods are silently filtered. Each candidate is
+// then validated against `Registry.LookupMethodDecl`; a missing entry
+// is dropped (e.g. a method on a stdlib type that isn't actually
+// declared in the module's stub).
+//
+// Like ReachableStdlibFns, this is first-hop only: methods called by
+// an injected method body are not transitively pulled in. Transitive
+// closure is the next step once the lowering pipeline can accept
+// injected stdlib methods — today this surface is consumed only by
+// callers that track reachability for diagnostics or planning.
+func ReachableStdlibMethods(mod *ir.Module, reg *stdlib.Registry) []ReachableStdlibMethod {
+	if mod == nil || reg == nil {
+		return nil
+	}
+	type key struct{ module, typeName, method string }
+	seen := map[key]struct{}{}
+	var found []ReachableStdlibMethod
+	for ref := range ir.ReachMethods(mod) {
+		k := key{module: ref.Module, typeName: ref.Type, method: ref.Method}
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		fn := reg.LookupMethodDecl(ref.Module, ref.Type, ref.Method)
+		if fn == nil {
+			continue
+		}
+		seen[k] = struct{}{}
+		found = append(found, ReachableStdlibMethod{
+			Module: ref.Module,
+			Type:   ref.Type,
+			Method: ref.Method,
+			Fn:     fn,
+		})
+	}
+	sort.Slice(found, func(i, j int) bool {
+		if found[i].Module != found[j].Module {
+			return found[i].Module < found[j].Module
+		}
+		if found[i].Type != found[j].Type {
+			return found[i].Type < found[j].Type
+		}
+		return found[i].Method < found[j].Method
+	})
+	return found
+}
+
 // injectReachableStdlibBodies lowers every reachable stdlib function in
 // mod, renames each lowered fn to its mangled symbol, and rewrites the
 // matching call sites in mod in place. The returned []ir.Decl must be
