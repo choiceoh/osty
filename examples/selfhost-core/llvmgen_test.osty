@@ -65,12 +65,32 @@ fn testLlvmToolchainPlanIsOstyOwned() {
     assertLlvmContains(compile, "-o /tmp/main.o")
 
     let link = llvmTestStrings.Join(
-        llvmClangLinkBinaryArgs("", "/tmp/main.o", "/tmp/app"),
+        llvmClangLinkBinaryArgs("", ["/tmp/main.o"], "/tmp/app"),
         " ",
     )
     assertLlvmContains(link, "/tmp/main.o")
     assertLlvmContains(link, "-o /tmp/app")
     testing.assert(!(llvmTestStrings.Contains(link, "-target")))
+
+    let linkWin = llvmTestStrings.Join(
+        llvmClangLinkBinaryArgs(
+            "x86_64-pc-windows-msvc",
+            ["/tmp/main.o"],
+            "/tmp/app.exe",
+        ),
+        " ",
+    )
+    testing.assert(!(llvmTestStrings.Contains(linkWin, "-pthread")))
+
+    let linkPosix = llvmTestStrings.Join(
+        llvmClangLinkBinaryArgs(
+            "x86_64-unknown-linux-gnu",
+            ["/tmp/main.o"],
+            "/tmp/app",
+        ),
+        " ",
+    )
+    assertLlvmContains(linkPosix, "-pthread")
     assertLlvmContains(llvmMissingClangMessage(), "clang not found")
     assertLlvmContains(
         llvmClangFailureMessage("link binary", "clang main.o -o app", "boom"),

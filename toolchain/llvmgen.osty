@@ -969,6 +969,13 @@ pub fn llvmClangLinkBinaryArgs(
     for objectPath in objectPaths {
         args.push(objectPath)
     }
+    // -pthread pulls libpthread / libSystem threading symbols for the
+    // POSIX runtime branch in osty_runtime.c. Windows targets use the
+    // Win32 synchronization API (kernel32, default-linked) and reject
+    // the -pthread flag under clang-msvc, so it is omitted there.
+    if !target.contains("windows") {
+        args.push("-pthread")
+    }
     args.push("-o")
     args.push(binaryPath)
     args

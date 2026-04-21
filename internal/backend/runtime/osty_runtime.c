@@ -2,12 +2,15 @@
  * pthread_mutexattr_settype, sched_yield, PTHREAD_MUTEX_RECURSIVE)
  * across glibc/musl/Darwin regardless of compiler default. 2008
  * supersedes the earlier 199309L level previously used for nanosleep
- * alone. */
+ * alone. Windows skips the POSIX surface entirely and uses the Win32
+ * synchronization primitives below. */
+#if !defined(_WIN32)
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE 700
+#endif
 #endif
 
 #include <stdbool.h>
@@ -17,8 +20,235 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <pthread.h>
-#include <sched.h>
+
+/* ============================================================
+ * Platform threading abstraction
+ *
+ * The runtime uses a narrow set of concurrency primitives (threads,
+ * mutexes, condition variables, one-time init, thread-local storage,
+ * a monotonic clock, sleep, yield). POSIX targets bind these to
+ * pthread / POSIX 2008; Windows targets bind them to Win32 directly
+ * (SRWLOCK / CONDITION_VARIABLE / CRITICAL_SECTION / INIT_ONCE /
+ * QueryPerformanceCounter / Sleep / SwitchToThread).
+ *
+ * Thread bodies use the POSIX-style `void *(*)(void*)` signature in
+ * both branches; the Win32 branch wraps that into an __stdcall
+ * trampoline around _beginthreadex. The runtime never invokes
+ * pthread_cancel / pthread_exit, so there is no cancellation surface
+ * to emulate — workers always return normally through the body.
+ * ============================================================ */
+
+#if defined(_WIN32)
+#  define OSTY_RT_PLATFORM_WIN32 1
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#  include <process.h>
+#  define OSTY_RT_TLS __declspec(thread)
+typedef HANDLE             osty_rt_thread_t;
+typedef SRWLOCK            osty_rt_mu_t;
+typedef CRITICAL_SECTION   osty_rt_rmu_t;
+typedef CONDITION_VARIABLE osty_rt_cond_t;
+typedef INIT_ONCE          osty_rt_once_t;
+#  define OSTY_RT_ONCE_INIT INIT_ONCE_STATIC_INIT
+#else
+#  define OSTY_RT_PLATFORM_POSIX 1
+#  include <pthread.h>
+#  include <sched.h>
+#  if defined(__STDC_NO_THREADS__) || defined(__APPLE__)
+#    define OSTY_RT_TLS __thread
+#  else
+#    define OSTY_RT_TLS _Thread_local
+#  endif
+typedef pthread_t       osty_rt_thread_t;
+typedef pthread_mutex_t osty_rt_mu_t;
+typedef pthread_mutex_t osty_rt_rmu_t;
+typedef pthread_cond_t  osty_rt_cond_t;
+typedef pthread_once_t  osty_rt_once_t;
+#  define OSTY_RT_ONCE_INIT PTHREAD_ONCE_INIT
+#endif
+
+/* ---- Thread start / join (POSIX-style signature in both branches). */
+
+#if defined(OSTY_RT_PLATFORM_WIN32)
+typedef struct osty_rt_win_thread_ctx {
+    void *(*fn)(void *);
+    void *arg;
+} osty_rt_win_thread_ctx;
+
+static unsigned __stdcall osty_rt_win_thread_entry(void *raw) {
+    osty_rt_win_thread_ctx ctx = *(osty_rt_win_thread_ctx *)raw;
+    free(raw);
+    /* Return value is discarded — osty task handles propagate the body
+     * result through the GC-managed handle, not via thread return. */
+    ctx.fn(ctx.arg);
+    return 0;
+}
+
+static int osty_rt_thread_start(osty_rt_thread_t *out,
+                                void *(*fn)(void *), void *arg) {
+    osty_rt_win_thread_ctx *ctx =
+        (osty_rt_win_thread_ctx *)malloc(sizeof(*ctx));
+    if (ctx == NULL) {
+        return -1;
+    }
+    ctx->fn = fn;
+    ctx->arg = arg;
+    uintptr_t h = _beginthreadex(NULL, 0, osty_rt_win_thread_entry, ctx, 0,
+                                 NULL);
+    if (h == 0) {
+        free(ctx);
+        return -1;
+    }
+    *out = (HANDLE)h;
+    return 0;
+}
+
+static int osty_rt_thread_join(osty_rt_thread_t t, void **retval) {
+    if (WaitForSingleObject(t, INFINITE) != WAIT_OBJECT_0) {
+        return -1;
+    }
+    if (retval != NULL) {
+        *retval = NULL;
+    }
+    CloseHandle(t);
+    return 0;
+}
+#else
+static inline int osty_rt_thread_start(osty_rt_thread_t *out,
+                                       void *(*fn)(void *), void *arg) {
+    return pthread_create(out, NULL, fn, arg);
+}
+
+static inline int osty_rt_thread_join(osty_rt_thread_t t, void **retval) {
+    return pthread_join(t, retval);
+}
+#endif
+
+/* ---- Non-recursive mutex + condition variable. */
+
+#if defined(OSTY_RT_PLATFORM_WIN32)
+static inline int osty_rt_mu_init(osty_rt_mu_t *m)       { InitializeSRWLock(m); return 0; }
+static inline void osty_rt_mu_destroy(osty_rt_mu_t *m)   { (void)m; }
+static inline void osty_rt_mu_lock(osty_rt_mu_t *m)      { AcquireSRWLockExclusive(m); }
+static inline void osty_rt_mu_unlock(osty_rt_mu_t *m)    { ReleaseSRWLockExclusive(m); }
+static inline int osty_rt_cond_init(osty_rt_cond_t *c)   { InitializeConditionVariable(c); return 0; }
+static inline void osty_rt_cond_destroy(osty_rt_cond_t *c)   { (void)c; }
+static inline void osty_rt_cond_wait(osty_rt_cond_t *c, osty_rt_mu_t *m) {
+    SleepConditionVariableSRW(c, m, INFINITE, 0);
+}
+static inline void osty_rt_cond_signal(osty_rt_cond_t *c)    { WakeConditionVariable(c); }
+static inline void osty_rt_cond_broadcast(osty_rt_cond_t *c) { WakeAllConditionVariable(c); }
+#else
+static inline int osty_rt_mu_init(osty_rt_mu_t *m)       { return pthread_mutex_init(m, NULL); }
+static inline void osty_rt_mu_destroy(osty_rt_mu_t *m)   { pthread_mutex_destroy(m); }
+static inline void osty_rt_mu_lock(osty_rt_mu_t *m)      { pthread_mutex_lock(m); }
+static inline void osty_rt_mu_unlock(osty_rt_mu_t *m)    { pthread_mutex_unlock(m); }
+static inline int osty_rt_cond_init(osty_rt_cond_t *c)   { return pthread_cond_init(c, NULL); }
+static inline void osty_rt_cond_destroy(osty_rt_cond_t *c)   { pthread_cond_destroy(c); }
+static inline void osty_rt_cond_wait(osty_rt_cond_t *c, osty_rt_mu_t *m) {
+    pthread_cond_wait(c, m);
+}
+static inline void osty_rt_cond_signal(osty_rt_cond_t *c)    { pthread_cond_signal(c); }
+static inline void osty_rt_cond_broadcast(osty_rt_cond_t *c) { pthread_cond_broadcast(c); }
+#endif
+
+/* ---- Recursive mutex (GC lock). */
+
+#if defined(OSTY_RT_PLATFORM_WIN32)
+static inline int osty_rt_rmu_init(osty_rt_rmu_t *m)     { InitializeCriticalSection(m); return 0; }
+static inline void osty_rt_rmu_destroy(osty_rt_rmu_t *m) { DeleteCriticalSection(m); }
+static inline void osty_rt_rmu_lock(osty_rt_rmu_t *m)    { EnterCriticalSection(m); }
+static inline void osty_rt_rmu_unlock(osty_rt_rmu_t *m)  { LeaveCriticalSection(m); }
+#else
+static inline int osty_rt_rmu_init(osty_rt_rmu_t *m) {
+    pthread_mutexattr_t attr;
+    int rc = pthread_mutexattr_init(&attr);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    if (rc != 0) {
+        pthread_mutexattr_destroy(&attr);
+        return rc;
+    }
+    rc = pthread_mutex_init(m, &attr);
+    pthread_mutexattr_destroy(&attr);
+    return rc;
+}
+static inline void osty_rt_rmu_destroy(osty_rt_rmu_t *m) { pthread_mutex_destroy(m); }
+static inline void osty_rt_rmu_lock(osty_rt_rmu_t *m)    { pthread_mutex_lock(m); }
+static inline void osty_rt_rmu_unlock(osty_rt_rmu_t *m)  { pthread_mutex_unlock(m); }
+#endif
+
+/* ---- One-time initialization. */
+
+#if defined(OSTY_RT_PLATFORM_WIN32)
+static BOOL CALLBACK osty_rt_once_trampoline(PINIT_ONCE once, PVOID param,
+                                             PVOID *ctx) {
+    (void)once;
+    (void)ctx;
+    void (*fn)(void) = (void (*)(void))(uintptr_t)param;
+    fn();
+    return TRUE;
+}
+static inline void osty_rt_once(osty_rt_once_t *once, void (*init)(void)) {
+    InitOnceExecuteOnce(once, osty_rt_once_trampoline,
+                        (PVOID)(uintptr_t)init, NULL);
+}
+#else
+static inline void osty_rt_once(osty_rt_once_t *once, void (*init)(void)) {
+    pthread_once(once, init);
+}
+#endif
+
+/* ---- Monotonic clock / sleep / yield. */
+
+#if defined(OSTY_RT_PLATFORM_WIN32)
+static uint64_t osty_rt_monotonic_ns(void) {
+    static LARGE_INTEGER freq = {0};
+    LARGE_INTEGER now;
+    if (freq.QuadPart == 0) {
+        QueryPerformanceFrequency(&freq);
+    }
+    QueryPerformanceCounter(&now);
+    uint64_t hz = (uint64_t)freq.QuadPart;
+    uint64_t ticks = (uint64_t)now.QuadPart;
+    uint64_t sec = ticks / hz;
+    uint64_t rem = ticks % hz;
+    return sec * 1000000000ULL + (rem * 1000000000ULL) / hz;
+}
+static void osty_rt_sleep_ns(uint64_t ns) {
+    if (ns == 0) {
+        return;
+    }
+    /* Sleep granularity is milliseconds; round up so short naps still
+     * yield the CPU at least once. */
+    DWORD ms = (DWORD)((ns + 999999ULL) / 1000000ULL);
+    if (ms == 0) {
+        ms = 1;
+    }
+    Sleep(ms);
+}
+static inline void osty_rt_plat_yield(void) { SwitchToThread(); }
+#else
+static inline uint64_t osty_rt_monotonic_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+static inline void osty_rt_sleep_ns(uint64_t ns) {
+    struct timespec req;
+    req.tv_sec = (time_t)(ns / 1000000000ULL);
+    req.tv_nsec = (long)(ns % 1000000000ULL);
+    struct timespec rem;
+    while (nanosleep(&req, &rem) == -1) {
+        req = rem;
+    }
+}
+static inline void osty_rt_plat_yield(void) { sched_yield(); }
+#endif
 
 /* Active LLVM/native GC runtime path. See ../../../../RUNTIME_GC.md.
  *
@@ -184,31 +414,23 @@ static void osty_rt_abort(const char *message) {
  * within allocate_managed) can re-enter write-barriers and root scans
  * without deadlocking. Initialized on first use so no constructor is
  * required. */
-static pthread_once_t osty_gc_lock_once = PTHREAD_ONCE_INIT;
-static pthread_mutex_t osty_gc_lock;
+static osty_rt_once_t osty_gc_lock_once = OSTY_RT_ONCE_INIT;
+static osty_rt_rmu_t osty_gc_lock;
 static int64_t osty_concurrent_workers = 0;
 
 static void osty_gc_lock_init(void) {
-    pthread_mutexattr_t attr;
-    if (pthread_mutexattr_init(&attr) != 0) {
-        osty_rt_abort("gc lock: mutexattr_init failed");
+    if (osty_rt_rmu_init(&osty_gc_lock) != 0) {
+        osty_rt_abort("gc lock: init failed");
     }
-    if (pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) != 0) {
-        osty_rt_abort("gc lock: mutexattr_settype failed");
-    }
-    if (pthread_mutex_init(&osty_gc_lock, &attr) != 0) {
-        osty_rt_abort("gc lock: mutex_init failed");
-    }
-    pthread_mutexattr_destroy(&attr);
 }
 
 static void osty_gc_acquire(void) {
-    pthread_once(&osty_gc_lock_once, osty_gc_lock_init);
-    pthread_mutex_lock(&osty_gc_lock);
+    osty_rt_once(&osty_gc_lock_once, osty_gc_lock_init);
+    osty_rt_rmu_lock(&osty_gc_lock);
 }
 
 static void osty_gc_release(void) {
-    pthread_mutex_unlock(&osty_gc_lock);
+    osty_rt_rmu_unlock(&osty_gc_lock);
 }
 
 static void osty_sched_workers_inc(void) {
@@ -2447,12 +2669,12 @@ typedef struct osty_rt_task_handle_node {
 typedef struct osty_rt_task_group_impl {
     volatile int64_t cancelled;          /* 0 = live, 1 = cancelled */
     void *cause;                         /* reserved for error propagation */
-    pthread_mutex_t children_mu;
+    osty_rt_mu_t children_mu;
     osty_rt_task_handle_node *children;  /* all handles spawned into group */
 } osty_rt_task_group_impl;
 
 typedef struct osty_rt_task_handle_impl_ {
-    pthread_t thread;
+    osty_rt_thread_t thread;
     int has_thread;                      /* 1 while thread is joinable */
     void *body_env;
     osty_rt_task_group_impl *group;      /* inherited group, may be NULL */
@@ -2461,11 +2683,7 @@ typedef struct osty_rt_task_handle_impl_ {
     int32_t errored;                     /* reserved */
 } osty_rt_task_handle_impl;
 
-#if defined(__STDC_NO_THREADS__) || defined(__APPLE__)
-static __thread osty_rt_task_group_impl *osty_sched_current_group = NULL;
-#else
-static _Thread_local osty_rt_task_group_impl *osty_sched_current_group = NULL;
-#endif
+static OSTY_RT_TLS osty_rt_task_group_impl *osty_sched_current_group = NULL;
 
 /* Handles live in the GC heap so they are reclaimed once the Osty
  * `Handle<T>` reference drops. While the spawned thread runs,
@@ -2490,11 +2708,10 @@ static void osty_sched_unimplemented(const char *what) {
     abort();
 }
 
-static void osty_rt_task_thread_cleanup(void *arg) {
-    /* Runs on pthread_cleanup_pop or any unwind out of the trampoline
-     * (pthread_cancel, pthread_exit). Guarantees the worker counter
-     * never leaks even when the body never returns normally. */
-    osty_rt_task_handle_impl *h = (osty_rt_task_handle_impl *)arg;
+static void osty_rt_task_thread_cleanup(osty_rt_task_handle_impl *h) {
+    /* Invoked on the worker's normal return path. The runtime never
+     * calls pthread_cancel / pthread_exit, so bodies always reach the
+     * closing return; unwind-safe cleanup is unnecessary. */
     __atomic_store_n(&h->done, 1, __ATOMIC_RELEASE);
     osty_sched_workers_dec();
 }
@@ -2504,10 +2721,9 @@ static void *osty_rt_task_thread_trampoline(void *arg) {
     if (h->group != NULL) {
         osty_sched_current_group = h->group;
     }
-    pthread_cleanup_push(osty_rt_task_thread_cleanup, h);
     osty_task_spawn_body_fn fn = (osty_task_spawn_body_fn)(*(void **)h->body_env);
     h->result = fn(h->body_env);
-    pthread_cleanup_pop(1);
+    osty_rt_task_thread_cleanup(h);
     return NULL;
 }
 
@@ -2519,29 +2735,29 @@ static void osty_rt_task_group_attach(osty_rt_task_group_impl *g,
         osty_rt_abort("task_group_spawn: out of memory");
     }
     node->handle = h;
-    pthread_mutex_lock(&g->children_mu);
+    osty_rt_mu_lock(&g->children_mu);
     node->next = g->children;
     g->children = node;
-    pthread_mutex_unlock(&g->children_mu);
+    osty_rt_mu_unlock(&g->children_mu);
 }
 
 static void osty_rt_task_group_reap(osty_rt_task_group_impl *g) {
     /* Called from task_group() after the body returns. Any child still
-     * marked joinable is pthread_joined so no thread outlives its
-     * group scope (spec §8.1). Handles themselves are not freed — the
-     * Osty caller may still read their result fields. Nodes ARE freed
-     * because the group stack-frame is about to disappear. */
-    pthread_mutex_lock(&g->children_mu);
+     * marked joinable is joined so no thread outlives its group scope
+     * (spec §8.1). Handles themselves are not freed — the Osty caller
+     * may still read their result fields. Nodes ARE freed because the
+     * group stack-frame is about to disappear. */
+    osty_rt_mu_lock(&g->children_mu);
     osty_rt_task_handle_node *node = g->children;
     g->children = NULL;
-    pthread_mutex_unlock(&g->children_mu);
+    osty_rt_mu_unlock(&g->children_mu);
 
     while (node != NULL) {
         osty_rt_task_handle_node *next = node->next;
         osty_rt_task_handle_impl *h = node->handle;
         if (h != NULL && h->has_thread) {
-            if (pthread_join(h->thread, NULL) != 0) {
-                osty_rt_abort("task_group: pthread_join failed during reap");
+            if (osty_rt_thread_join(h->thread, NULL) != 0) {
+                osty_rt_abort("task_group: thread join failed during reap");
             }
             h->has_thread = 0;
         }
@@ -2558,8 +2774,8 @@ int64_t osty_rt_task_group(void *body_env) {
     group.cancelled = 0;
     group.cause = NULL;
     group.children = NULL;
-    if (pthread_mutex_init(&group.children_mu, NULL) != 0) {
-        osty_rt_abort("task_group: mutex_init failed");
+    if (osty_rt_mu_init(&group.children_mu) != 0) {
+        osty_rt_abort("task_group: mutex init failed");
     }
 
     osty_rt_task_group_impl *prev = osty_sched_current_group;
@@ -2572,7 +2788,7 @@ int64_t osty_rt_task_group(void *body_env) {
      * lifetime). Runs before we restore the previous TLS group so that
      * a nested taskGroup's teardown sees its own scope. */
     osty_rt_task_group_reap(&group);
-    pthread_mutex_destroy(&group.children_mu);
+    osty_rt_mu_destroy(&group.children_mu);
 
     osty_sched_current_group = prev;
     return result;
@@ -2586,11 +2802,11 @@ static void *osty_rt_task_spawn_internal(void *group, void *body_env) {
     h->body_env = body_env;
     h->group = (osty_rt_task_group_impl *)group;
     osty_sched_workers_inc();
-    if (pthread_create(&h->thread, NULL,
-                       osty_rt_task_thread_trampoline, h) != 0) {
+    if (osty_rt_thread_start(&h->thread,
+                             osty_rt_task_thread_trampoline, h) != 0) {
         osty_sched_workers_dec();
         /* h is GC-managed — letting it go unreachable is enough. */
-        osty_rt_abort("task_spawn: pthread_create failed");
+        osty_rt_abort("task_spawn: thread start failed");
     }
     h->has_thread = 1;
     if (h->group != NULL) {
@@ -2613,8 +2829,8 @@ int64_t osty_rt_task_handle_join(void *handle) {
     }
     osty_rt_task_handle_impl *h = (osty_rt_task_handle_impl *)handle;
     if (h->has_thread) {
-        if (pthread_join(h->thread, NULL) != 0) {
-            osty_rt_abort("task_handle_join: pthread_join failed");
+        if (osty_rt_thread_join(h->thread, NULL) != 0) {
+            osty_rt_abort("task_handle_join: thread join failed");
         }
         h->has_thread = 0;
     }
@@ -2649,22 +2865,15 @@ bool osty_rt_cancel_is_cancelled(void) {
 }
 
 void osty_rt_thread_yield(void) {
-    /* Hand the OS scheduler a chance to run other threads. sched_yield
-     * is BSD-historical but portable on POSIX pthread platforms. */
-    sched_yield();
+    /* Hand the OS scheduler a chance to run other threads. */
+    osty_rt_plat_yield();
 }
 
 void osty_rt_thread_sleep(int64_t nanos) {
     if (nanos <= 0) {
         return;
     }
-    struct timespec req;
-    req.tv_sec = (time_t)(nanos / 1000000000LL);
-    req.tv_nsec = (long)(nanos % 1000000000LL);
-    struct timespec rem;
-    while (nanosleep(&req, &rem) == -1) {
-        req = rem;
-    }
+    osty_rt_sleep_ns((uint64_t)nanos);
 }
 
 /* ---- Channels: bounded ring buffer, mutex + two condition variables.
@@ -2677,9 +2886,9 @@ void osty_rt_thread_sleep(int64_t nanos) {
  */
 
 typedef struct osty_rt_chan_impl {
-    pthread_mutex_t mu;
-    pthread_cond_t not_full;
-    pthread_cond_t not_empty;
+    osty_rt_mu_t mu;
+    osty_rt_cond_t not_full;
+    osty_rt_cond_t not_empty;
     int64_t cap;
     int64_t head;
     int64_t tail;
@@ -2710,9 +2919,9 @@ static void osty_rt_chan_destroy(void *payload) {
     if (ch == NULL) {
         return;
     }
-    pthread_mutex_destroy(&ch->mu);
-    pthread_cond_destroy(&ch->not_full);
-    pthread_cond_destroy(&ch->not_empty);
+    osty_rt_mu_destroy(&ch->mu);
+    osty_rt_cond_destroy(&ch->not_full);
+    osty_rt_cond_destroy(&ch->not_empty);
     free(ch->slots);
     ch->slots = NULL;
 }
@@ -2738,9 +2947,9 @@ void *osty_rt_thread_chan_make(int64_t capacity) {
         osty_rt_abort("thread.chan.make: out of memory");
     }
     ch->cap = capacity;
-    if (pthread_mutex_init(&ch->mu, NULL) != 0 ||
-        pthread_cond_init(&ch->not_full, NULL) != 0 ||
-        pthread_cond_init(&ch->not_empty, NULL) != 0) {
+    if (osty_rt_mu_init(&ch->mu) != 0 ||
+        osty_rt_cond_init(&ch->not_full) != 0 ||
+        osty_rt_cond_init(&ch->not_empty) != 0) {
         free(ch->slots);
         ch->slots = NULL;
         osty_rt_abort("thread.chan.make: sync init failed");
@@ -2750,53 +2959,53 @@ void *osty_rt_thread_chan_make(int64_t capacity) {
 
 void osty_rt_thread_chan_close(void *raw) {
     osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.close");
-    pthread_mutex_lock(&ch->mu);
+    osty_rt_mu_lock(&ch->mu);
     ch->closed = 1;
-    pthread_cond_broadcast(&ch->not_empty);
-    pthread_cond_broadcast(&ch->not_full);
-    pthread_mutex_unlock(&ch->mu);
+    osty_rt_cond_broadcast(&ch->not_empty);
+    osty_rt_cond_broadcast(&ch->not_full);
+    osty_rt_mu_unlock(&ch->mu);
 }
 
 bool osty_rt_thread_chan_is_closed(void *raw) {
     osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.is_closed");
-    pthread_mutex_lock(&ch->mu);
+    osty_rt_mu_lock(&ch->mu);
     bool closed = ch->closed != 0;
-    pthread_mutex_unlock(&ch->mu);
+    osty_rt_mu_unlock(&ch->mu);
     return closed;
 }
 
 static void osty_rt_chan_send_raw(osty_rt_chan_impl *ch, int64_t slot) {
-    pthread_mutex_lock(&ch->mu);
+    osty_rt_mu_lock(&ch->mu);
     while (ch->count == ch->cap && !ch->closed) {
-        pthread_cond_wait(&ch->not_full, &ch->mu);
+        osty_rt_cond_wait(&ch->not_full, &ch->mu);
     }
     if (ch->closed) {
-        pthread_mutex_unlock(&ch->mu);
+        osty_rt_mu_unlock(&ch->mu);
         osty_rt_abort("thread.chan.send: send on closed channel");
     }
     ch->slots[ch->tail] = slot;
     ch->tail = (ch->tail + 1) % ch->cap;
     ch->count += 1;
-    pthread_cond_signal(&ch->not_empty);
-    pthread_mutex_unlock(&ch->mu);
+    osty_rt_cond_signal(&ch->not_empty);
+    osty_rt_mu_unlock(&ch->mu);
 }
 
 static osty_rt_chan_recv_result osty_rt_chan_recv_raw(osty_rt_chan_impl *ch) {
     osty_rt_chan_recv_result r = {0, 0};
-    pthread_mutex_lock(&ch->mu);
+    osty_rt_mu_lock(&ch->mu);
     while (ch->count == 0 && !ch->closed) {
-        pthread_cond_wait(&ch->not_empty, &ch->mu);
+        osty_rt_cond_wait(&ch->not_empty, &ch->mu);
     }
     if (ch->count == 0 && ch->closed) {
-        pthread_mutex_unlock(&ch->mu);
+        osty_rt_mu_unlock(&ch->mu);
         return r;
     }
     r.value = ch->slots[ch->head];
     r.ok = 1;
     ch->head = (ch->head + 1) % ch->cap;
     ch->count -= 1;
-    pthread_cond_signal(&ch->not_full);
-    pthread_mutex_unlock(&ch->mu);
+    osty_rt_cond_signal(&ch->not_full);
+    osty_rt_mu_unlock(&ch->mu);
     return r;
 }
 
@@ -2905,7 +3114,7 @@ typedef struct osty_rt_select_arm {
 #define OSTY_RT_SELECT_ARM_CAPACITY 32
 
 typedef struct osty_rt_select_impl {
-    pthread_mutex_t mu;
+    osty_rt_mu_t mu;
     osty_rt_select_arm arms[OSTY_RT_SELECT_ARM_CAPACITY];
     int count;
 } osty_rt_select_impl;
@@ -2927,9 +3136,9 @@ static void osty_rt_select_arm_push(osty_rt_select_impl *sel,
                                     osty_rt_select_arm_kind kind,
                                     void *ch, int64_t timeout_ns,
                                     void *arm_env) {
-    pthread_mutex_lock(&sel->mu);
+    osty_rt_mu_lock(&sel->mu);
     if (sel->count >= OSTY_RT_SELECT_ARM_CAPACITY) {
-        pthread_mutex_unlock(&sel->mu);
+        osty_rt_mu_unlock(&sel->mu);
         osty_rt_abort("thread.select: arm capacity exceeded");
     }
     sel->arms[sel->count].kind = kind;
@@ -2937,7 +3146,7 @@ static void osty_rt_select_arm_push(osty_rt_select_impl *sel,
     sel->arms[sel->count].timeout_ns = timeout_ns;
     sel->arms[sel->count].arm_env = arm_env;
     sel->count += 1;
-    pthread_mutex_unlock(&sel->mu);
+    osty_rt_mu_unlock(&sel->mu);
 }
 
 void osty_rt_select_recv(void *s, void *ch, void *arm) {
@@ -2968,16 +3177,16 @@ void osty_rt_select_default(void *s, void *arm) {
 }
 
 static int osty_rt_select_try_recv(osty_rt_chan_impl *ch, int64_t *out) {
-    pthread_mutex_lock(&ch->mu);
+    osty_rt_mu_lock(&ch->mu);
     if (ch->count > 0) {
         *out = ch->slots[ch->head];
         ch->head = (ch->head + 1) % ch->cap;
         ch->count -= 1;
-        pthread_cond_signal(&ch->not_full);
-        pthread_mutex_unlock(&ch->mu);
+        osty_rt_cond_signal(&ch->not_full);
+        osty_rt_mu_unlock(&ch->mu);
         return 1;
     }
-    pthread_mutex_unlock(&ch->mu);
+    osty_rt_mu_unlock(&ch->mu);
     return 0;
 }
 
@@ -3000,8 +3209,8 @@ void osty_rt_select(void *body_env) {
 
     osty_rt_select_impl sel;
     sel.count = 0;
-    if (pthread_mutex_init(&sel.mu, NULL) != 0) {
-        osty_rt_abort("thread.select: mutex_init failed");
+    if (osty_rt_mu_init(&sel.mu) != 0) {
+        osty_rt_abort("thread.select: mutex init failed");
     }
 
     /* Invoke the body so it can register arms. Body signature matches
@@ -3011,7 +3220,7 @@ void osty_rt_select(void *body_env) {
     fn(body_env, (void *)&sel);
 
     if (sel.count == 0) {
-        pthread_mutex_destroy(&sel.mu);
+        osty_rt_mu_destroy(&sel.mu);
         osty_rt_abort("thread.select: body registered no arms");
     }
 
@@ -3031,17 +3240,11 @@ void osty_rt_select(void *body_env) {
         }
     }
 
-    struct timespec deadline = {0, 0};
+    uint64_t deadline_ns = 0;
     bool has_deadline = false;
     if (timeout_idx >= 0) {
-        clock_gettime(CLOCK_MONOTONIC, &deadline);
-        int64_t ns = sel.arms[timeout_idx].timeout_ns;
-        deadline.tv_sec += (time_t)(ns / 1000000000LL);
-        deadline.tv_nsec += (long)(ns % 1000000000LL);
-        if (deadline.tv_nsec >= 1000000000L) {
-            deadline.tv_sec += 1;
-            deadline.tv_nsec -= 1000000000L;
-        }
+        deadline_ns = osty_rt_monotonic_ns() +
+                      (uint64_t)sel.arms[timeout_idx].timeout_ns;
         has_deadline = true;
     }
 
@@ -3054,7 +3257,7 @@ void osty_rt_select(void *body_env) {
             osty_rt_chan_impl *ch = (osty_rt_chan_impl *)sel.arms[i].ch;
             int64_t value = 0;
             if (osty_rt_select_try_recv(ch, &value)) {
-                pthread_mutex_destroy(&sel.mu);
+                osty_rt_mu_destroy(&sel.mu);
                 osty_rt_select_invoke_recv(&sel.arms[i], value);
                 return;
             }
@@ -3062,29 +3265,23 @@ void osty_rt_select(void *body_env) {
 
         /* Default arm fires if no recv is ready on the first pass. */
         if (default_idx >= 0) {
-            pthread_mutex_destroy(&sel.mu);
+            osty_rt_mu_destroy(&sel.mu);
             osty_rt_select_invoke_plain(&sel.arms[default_idx]);
             return;
         }
 
         /* Timeout check. */
-        if (has_deadline) {
-            struct timespec now;
-            clock_gettime(CLOCK_MONOTONIC, &now);
-            if (now.tv_sec > deadline.tv_sec ||
-                (now.tv_sec == deadline.tv_sec &&
-                 now.tv_nsec >= deadline.tv_nsec)) {
-                pthread_mutex_destroy(&sel.mu);
-                osty_rt_select_invoke_plain(&sel.arms[timeout_idx]);
-                return;
-            }
+        if (has_deadline && osty_rt_monotonic_ns() >= deadline_ns) {
+            osty_rt_mu_destroy(&sel.mu);
+            osty_rt_select_invoke_plain(&sel.arms[timeout_idx]);
+            return;
         }
 
         /* 500μs backoff to avoid busy-spinning. A real fiber scheduler
          * would park on a multi-cond primitive; Phase 1B polling is
-         * the cost of sharing the OS thread pool. */
-        struct timespec nap = {0, 500000L};
-        nanosleep(&nap, NULL);
+         * the cost of sharing the OS thread pool. Windows Sleep has
+         * ms granularity, which osty_rt_sleep_ns rounds up to 1ms. */
+        osty_rt_sleep_ns(500000ULL);
     }
 }
 
