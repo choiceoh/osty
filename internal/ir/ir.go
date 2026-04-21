@@ -404,6 +404,18 @@ type StructDecl struct {
 	Exported bool
 	SpanV    Span
 
+	// BuiltinSource, when non-empty, names the stdlib built-in
+	// generic template this struct was monomorphized from (e.g.
+	// "Map", "List", "Set"). Set by ir.Monomorphize's
+	// emitStructSpecialization when cloning a Builtin-tagged
+	// generic. BuiltinSourceArgs carries the concrete type args
+	// applied during that specialization, in the order matching the
+	// template's Generics. Consumers at the LLVM layer read these
+	// to re-associate a `_ZTS…` mangled struct back with its
+	// surface Map<K, V> / Option<T> form for intrinsic dispatch.
+	BuiltinSource     string
+	BuiltinSourceArgs []Type
+
 	// Pod is set when the struct carries `#[pod]` (LANG_SPEC §19.4).
 	// The front-end shape checker (`internal/check/podshape.go`) is
 	// the authoritative validator that the struct meets the §19.4
@@ -479,6 +491,13 @@ type EnumDecl struct {
 	Generics []*TypeParam
 	Exported bool
 	SpanV    Span
+
+	// BuiltinSource / BuiltinSourceArgs — see StructDecl for semantics.
+	// Populated by the monomorphizer when cloning stdlib built-in enum
+	// templates (Option, Result) so downstream stages can re-associate
+	// a mangled specialization back with its surface form.
+	BuiltinSource     string
+	BuiltinSourceArgs []Type
 }
 
 func (*EnumDecl) declNode()          {}

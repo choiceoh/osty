@@ -204,7 +204,51 @@ func moduleUnsupportedDiagnostic(mod *ostyir.Module) (UnsupportedDiagnostic, boo
 	return UnsupportedDiagnostic{}, false
 }
 
+// specializedBuiltinSurface holds the {source name, concrete args}
+// recovered from a monomorphized built-in specialization's
+// BuiltinSource / BuiltinSourceArgs fields. The AST bridge uses this
+// per-module index to re-synthesize a `Map<String, Int>` surface
+// NamedType whenever it encounters a reference to a `_ZTS…` mangled
+// built-in struct/enum, so the legacy LLVM emitter's intrinsic
+// dispatch (keyed on Path[0] == "Map" / "Option" / …) keeps working.
+type specializedBuiltinSurface struct {
+	Source string
+	Args   []ostyir.Type
+}
+
+func collectSpecializedBuiltinSurfaces(mod *ostyir.Module) map[string]specializedBuiltinSurface {
+	out := map[string]specializedBuiltinSurface{}
+	if mod == nil {
+		return out
+	}
+	for _, decl := range mod.Decls {
+		switch d := decl.(type) {
+		case *ostyir.StructDecl:
+			if d == nil || d.BuiltinSource == "" {
+				continue
+			}
+			out[d.Name] = specializedBuiltinSurface{Source: d.BuiltinSource, Args: d.BuiltinSourceArgs}
+		case *ostyir.EnumDecl:
+			if d == nil || d.BuiltinSource == "" {
+				continue
+			}
+			out[d.Name] = specializedBuiltinSurface{Source: d.BuiltinSource, Args: d.BuiltinSourceArgs}
+		}
+	}
+	return out
+}
+
+// currentSpecializedBuiltinSurfaces is set by legacyFileFromModule at
+// the start of each conversion and consulted by legacyTypeFromIR when
+// a NamedType's name matches a specialized built-in. Keeping it as a
+// local (reset on each call) avoids threading the map through every
+// IR-to-AST visitor helper, while still giving the bridge the lookup
+// context it needs.
+var currentSpecializedBuiltinSurfaces map[string]specializedBuiltinSurface
+
 func legacyFileFromModule(mod *ostyir.Module) (*ast.File, error) {
+	currentSpecializedBuiltinSurfaces = collectSpecializedBuiltinSurfaces(mod)
+	defer func() { currentSpecializedBuiltinSurfaces = nil }()
 	start, end := legacySpan(mod.At())
 	file := &ast.File{PosV: start, EndV: end}
 	for _, decl := range mod.Decls {
@@ -558,6 +602,17 @@ func legacyTypeFromIR(typ ostyir.Type) ast.Type {
 		}
 		return &ast.NamedType{Path: []string{name}}
 	case *ostyir.NamedType:
+		// Phase 2c: if the name is a `_ZTS…` mangled built-in
+		// specialization, rebuild the surface `Map<String, Int>` /
+		// `Option<T>` form so the legacy emitter's intrinsic
+		// dispatch (keyed on Path[0] == "Map" / …) still fires.
+		if surf, ok := currentSpecializedBuiltinSurfaces[t.Name]; ok && surf.Source != "" {
+			out := &ast.NamedType{Path: []string{surf.Source}}
+			for _, arg := range surf.Args {
+				out.Args = append(out.Args, legacyTypeFromIR(arg))
+			}
+			return out
+		}
 		path := splitQualifiedName(t.Package)
 		path = append(path, t.Name)
 		out := &ast.NamedType{Path: path}
@@ -1200,9 +1255,22 @@ func legacyMethodCallFromIR(expr *ostyir.MethodCall) (ast.Expr, error) {
 		X:    receiver,
 		Name: expr.Name,
 	})
-	if len(expr.TypeArgs) != 0 {
+	typeArgs := expr.TypeArgs
+	// Option B Phase 2c: method calls inside a specialized built-in
+	// body (Map$String$Int.containsKey's body calling self.get(key),
+	// etc.) still carry the struct-level K/V TypeArgs after
+	// monomorph's SubstituteTypes — they're semantically redundant
+	// (already encoded by the specialized receiver type) but trip
+	// the legacy emitter with LLVM015 when wrapped in TurbofishExpr.
+	// Drop them here when the receiver is a specialized built-in.
+	if len(typeArgs) != 0 && expr.Receiver != nil {
+		if named, ok := expr.Receiver.Type().(*ostyir.NamedType); ok && strings.HasPrefix(named.Name, "_ZTS") {
+			typeArgs = nil
+		}
+	}
+	if len(typeArgs) != 0 {
 		tf := &ast.TurbofishExpr{PosV: start, EndV: end, Base: fn}
-		for _, arg := range expr.TypeArgs {
+		for _, arg := range typeArgs {
 			tf.Args = append(tf.Args, legacyTypeFromIR(arg))
 		}
 		fn = tf

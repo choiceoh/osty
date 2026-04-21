@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -68,6 +69,114 @@ fn main() {}
 	// of what this test covers.
 	if err != nil {
 		t.Logf("later Phase 2 blocker (not the bodyless one this test covers): %v", err)
+	}
+}
+
+// TestPhase2cSpecializedBuiltinsCarryBuiltinSource verifies the
+// monomorphizer records BuiltinSource / BuiltinSourceArgs on every
+// specialized struct or enum cloned from a stdlib built-in generic
+// template. Without this marker, downstream stages can't re-associate
+// a `_ZTS…` mangled type back with its surface Map<K, V> / Option<T>
+// form, and the llvm backend's intrinsic dispatch (keyed on the
+// surface name) can't fire for methods on specialized builtins.
+func TestPhase2cSpecializedBuiltinsCarryBuiltinSource(t *testing.T) {
+	src := `fn touch(m: Map<String, Int>, k: String) -> Bool {
+    m.containsKey(k)
+}
+fn main() {}
+`
+	monoMod := pipelineThroughMonomorph(t, src)
+
+	foundMap := false
+	for _, d := range monoMod.Decls {
+		sd, ok := d.(*ir.StructDecl)
+		if !ok {
+			continue
+		}
+		if sd.BuiltinSource == "Map" {
+			foundMap = true
+			if len(sd.BuiltinSourceArgs) != 2 {
+				t.Errorf("Map specialization has %d BuiltinSourceArgs, want 2", len(sd.BuiltinSourceArgs))
+			}
+		}
+	}
+	if !foundMap {
+		t.Errorf("expected a Map-sourced specialization with BuiltinSource=\"Map\"")
+	}
+	// Option/Result enum tagging is covered by the EnumDecl clone +
+	// monomorph additions, but only a NamedType reference to
+	// Option<T> (not `T?` surface sugar) drives an enum
+	// specialization today. A focused Option test belongs with Phase
+	// 2d when the ?/chain handling is generalized.
+}
+
+// TestPhase2cTurbofishExprStrippedFromSpecializedBodies verifies the
+// AST bridge elides TypeArgs on MethodCalls whose receiver is a
+// `_ZTS…` mangled built-in. Stale TypeArgs there turned every
+// `self.get(k)` / `self.insert(k, v)` inside the specialized
+// Map.containsKey / Map.update / … bodies into an `*ast.TurbofishExpr`
+// that the legacy emitter can't dispatch, producing LLVM015.
+func TestPhase2cTurbofishExprStrippedFromSpecializedBodies(t *testing.T) {
+	src := `fn touch(m: Map<String, Int>, k: String) -> Bool {
+    m.containsKey(k)
+}
+fn main() {}
+`
+	monoMod := pipelineThroughMonomorph(t, src)
+	opts := llvmgen.Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/phase2c_turbofish.osty",
+		Source:      []byte(src),
+	}
+	_, err := llvmgen.GenerateModule(monoMod, opts)
+	if err != nil && strings.Contains(err.Error(), "TurbofishExpr") {
+		t.Fatalf("TurbofishExpr leaked past the AST bridge — legacy emitter walled on stale TypeArgs: %v", err)
+	}
+	// Any other error is the next Phase 2 blocker — not what this
+	// test covers.
+	if err != nil {
+		t.Logf("later Phase 2 blocker (not the TurbofishExpr one this test covers): %v", err)
+	}
+}
+
+// TestPhase2cDiagnoseTurbofishSource probes which specialized-method
+// expression still carries TypeArgs after monomorph — that's the
+// root of the LLVM015 TurbofishExpr wall. The test lowers + injects +
+// monomorphs a simple `m.containsKey(k)` program, then walks every
+// CallExpr/MethodCall in the monomorphized IR, reporting any that
+// still have non-empty TypeArgs (which means monomorph didn't
+// substitute them out).
+func TestPhase2cDiagnoseTurbofishSource(t *testing.T) {
+	src := `fn touch(m: Map<String, Int>, k: String) -> Bool {
+    m.containsKey(k)
+}
+
+fn main() {}
+`
+	monoMod := pipelineThroughMonomorph(t, src)
+
+	var offenders []string
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		switch x := n.(type) {
+		case *ir.CallExpr:
+			if len(x.TypeArgs) > 0 {
+				offenders = append(offenders, fmt.Sprintf("CallExpr(callee=%T) TypeArgs=%d", x.Callee, len(x.TypeArgs)))
+			}
+		case *ir.MethodCall:
+			if len(x.TypeArgs) > 0 {
+				offenders = append(offenders, fmt.Sprintf("MethodCall(name=%q) TypeArgs=%d", x.Name, len(x.TypeArgs)))
+			}
+		}
+		return true
+	}), monoMod)
+
+	if len(offenders) > 0 {
+		t.Logf("Phase 2c diagnosis: %d call(s) still carry TypeArgs after monomorph:", len(offenders))
+		for _, o := range offenders {
+			t.Logf("  - %s", o)
+		}
+	} else {
+		t.Logf("no stale TypeArgs — TurbofishExpr must arise from a different AST bridge path")
 	}
 }
 
