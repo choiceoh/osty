@@ -22,6 +22,7 @@ pub enum DiagnosticFamily {
     FamilyScaffold,
     FamilyLint,
     FamilyWarning,
+    FamilyBackend,
     FamilyUnknown,
 }
 
@@ -33,6 +34,8 @@ pub fn diagnosticSeverity(code: String) -> DiagnosticSeverity {
         SeverityWarning
     } else if code >= "L0000" && code <= "L9999" {
         SeverityLint
+    } else if code >= "LLVM000" && code <= "LLVM999" {
+        SeverityError
     } else {
         SeverityUnknown
     }
@@ -49,9 +52,16 @@ pub fn diagnosticSeverityName(severity: DiagnosticSeverity) -> String {
 }
 
 /// diagnosticFamily classifies a stable code into the phase family that
-/// owns it. The body delegates to the generated manifest so adding a
-/// new code in internal/diag/codes.go is a one-file change.
+/// owns it. E/W/L codes delegate to the generated manifest so adding a
+/// new Go-side code in internal/diag/codes.go is a one-file change.
+/// Backend codes (`LLVM000-LLVM999`) short-circuit to `FamilyBackend`
+/// because they are populated by the self-hosted LLVM backend in
+/// toolchain/llvmgen.osty, outside the diag_manifest.osty generator's
+/// scope.
 pub fn diagnosticFamily(code: String) -> DiagnosticFamily {
+    if code >= "LLVM000" && code <= "LLVM999" {
+        return FamilyBackend
+    }
     diagnosticFamilyForCode(code)
 }
 
@@ -70,6 +80,7 @@ pub fn diagnosticFamilyName(family: DiagnosticFamily) -> String {
         FamilyScaffold -> "scaffold",
         FamilyLint -> "lint",
         FamilyWarning -> "warning",
+        FamilyBackend -> "backend",
         FamilyUnknown -> "unknown",
     }
 }

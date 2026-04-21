@@ -36,21 +36,48 @@ func TestUnsupportedDiagnosticKindMapping(t *testing.T) {
 	}
 }
 
-// TestUnsupportedStdlibBodyHint verifies the LLVM018 hint is specific enough
-// to direct users to either the stdlib lowering backlog or a runtime shim
-// workaround rather than offering the generic "reduce to smoke subset"
-// fallback.
-func TestUnsupportedStdlibBodyHint(t *testing.T) {
-	got := UnsupportedDiagnosticFor("stdlib-body", "strings.compare body")
-	if got.Code != "LLVM018" {
-		t.Fatalf("Code = %q, want LLVM018", got.Code)
+// TestUnsupportedDiagnosticHintAnchors pins each LLVM0xx hint to stable
+// anchor substrings. The intent is to catch silent regressions where a
+// refactor of the Osty source in toolchain/llvmgen.osty (or its Go
+// snapshot in support_snapshot.go) weakens a hint back to the generic
+// "reduce to smoke subset" fallback. Each anchor is picked to survive
+// minor rewording while pinning the actionable content — the specific
+// migration path (runtime.cabi, runtime ABI shim), the supported
+// subset (Int or Bool, range loops, ASCII identifiers, …), or the
+// gap category (stdlib + runtime shim).
+func TestUnsupportedDiagnosticHintAnchors(t *testing.T) {
+	cases := []struct {
+		kind    string
+		code    string
+		anchors []string
+	}{
+		{"go-ffi", "LLVM001", []string{"runtime.cabi"}},
+		{"runtime-ffi", "LLVM002", []string{"runtime ABI shim"}},
+		{"source-layout", "LLVM010", []string{"main function"}},
+		{"type-system", "LLVM011", []string{"Int or Bool"}},
+		{"statement", "LLVM012", []string{"range-for"}},
+		{"expression", "LLVM013", []string{"value-if"}},
+		{"control-flow", "LLVM014", []string{"range loops"}},
+		{"call", "LLVM015", []string{"positional Int/Bool"}},
+		{"name", "LLVM016", []string{"ASCII identifiers"}},
+		{"function-signature", "LLVM017", []string{"non-generic"}},
+		{"stdlib-body", "LLVM018", []string{"stdlib", "runtime shim"}},
+		{"anything-else", "LLVM000", []string{"LLVM smoke subset"}},
 	}
-	if got.Hint == "" {
-		t.Fatalf("Hint is empty")
-	}
-	for _, want := range []string{"stdlib", "runtime shim"} {
-		if !strings.Contains(got.Hint, want) {
-			t.Errorf("Hint = %q, missing %q", got.Hint, want)
+	for _, tc := range cases {
+		got := UnsupportedDiagnosticFor(tc.kind, "detail")
+		if got.Code != tc.code {
+			t.Errorf("kind=%q: Code = %q, want %q", tc.kind, got.Code, tc.code)
+		}
+		if got.Hint == "" {
+			t.Errorf("kind=%q (%s): Hint is empty", tc.kind, got.Code)
+			continue
+		}
+		for _, anchor := range tc.anchors {
+			if !strings.Contains(got.Hint, anchor) {
+				t.Errorf("kind=%q (%s): Hint = %q, missing anchor %q",
+					tc.kind, got.Code, got.Hint, anchor)
+			}
 		}
 	}
 }
