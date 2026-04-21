@@ -11,6 +11,7 @@ import (
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
 )
 
@@ -21,6 +22,97 @@ type fakeNativeChecker struct {
 
 func (f fakeNativeChecker) CheckSourceStructured([]byte) (nativeCheckResult, error) {
 	return f.result, f.err
+}
+
+type fakeNativePackageChecker struct {
+	t            *testing.T
+	result       nativeCheckResult
+	err          error
+	sourceCalls  int
+	packageCalls int
+	imports      []selfhost.PackageCheckImport
+}
+
+func (f *fakeNativePackageChecker) CheckSourceStructured([]byte) (nativeCheckResult, error) {
+	f.sourceCalls++
+	if f.t != nil {
+		f.t.Fatalf("file-mode checker unexpectedly used raw source path")
+	}
+	return nativeCheckResult{}, fmt.Errorf("unexpected raw source path")
+}
+
+func (f *fakeNativePackageChecker) CheckPackageStructured(input selfhost.PackageCheckInput) (nativeCheckResult, error) {
+	f.packageCalls++
+	f.imports = append([]selfhost.PackageCheckImport(nil), input.Imports...)
+	return f.result, f.err
+}
+
+func TestNativeBoundaryPrefersStructuredPackageCheckerForFileMode(t *testing.T) {
+	src := []byte(`fn main() {
+    let value = 1
+}
+`)
+	file, res := parseResolvedFile(t, src)
+	letStmt := file.Decls[0].(*ast.FnDecl).Body.Stmts[0].(*ast.LetStmt)
+
+	fake := &fakeNativePackageChecker{
+		t: t,
+		result: nativeCheckResult{
+			Summary: nativeCheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
+			Bindings: []nativeCheckedBinding{{
+				Name:     "value",
+				TypeName: "UntypedInt",
+				Start:    letStmt.Pattern.Pos().Offset,
+				End:      letStmt.Pattern.End().Offset,
+			}},
+		},
+	}
+
+	oldFactory := nativeCheckerFactory
+	nativeCheckerFactory = func() (nativeChecker, string) { return fake, "" }
+	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
+
+	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	if fake.packageCalls != 1 {
+		t.Fatalf("packageCalls = %d, want 1", fake.packageCalls)
+	}
+	if fake.sourceCalls != 0 {
+		t.Fatalf("sourceCalls = %d, want 0", fake.sourceCalls)
+	}
+	if got := chk.LetTypes[letStmt]; got == nil || got.String() != "untyped-int" {
+		t.Fatalf("binding type = %v, want untyped-int", got)
+	}
+}
+
+func TestNativeBoundaryBuildsImportSurfacesForStructuredFileMode(t *testing.T) {
+	src := []byte(`use std.strings as strings
+
+fn main() {
+    let joined = strings.join(["a"], ",")
+}
+`)
+	file, res := parseResolvedFile(t, src)
+
+	fake := &fakeNativePackageChecker{t: t}
+	oldFactory := nativeCheckerFactory
+	nativeCheckerFactory = func() (nativeChecker, string) { return fake, "" }
+	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
+
+	_ = File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+
+	if fake.packageCalls != 1 {
+		t.Fatalf("packageCalls = %d, want 1", fake.packageCalls)
+	}
+	foundStrings := false
+	for _, imp := range fake.imports {
+		if imp.Alias == "strings" && (len(imp.Functions) > 0 || len(imp.Fields) > 0 || len(imp.TypeDecls) > 0) {
+			foundStrings = true
+			break
+		}
+	}
+	if !foundStrings {
+		t.Fatalf("structured file-mode imports = %#v, want populated std.strings surface", fake.imports)
+	}
 }
 
 func TestNativeBoundaryOverlaysStructuredCheckResult(t *testing.T) {
