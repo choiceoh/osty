@@ -164,6 +164,61 @@ func TestGenerateIndexedNestedListLenMethodDispatch(t *testing.T) {
 	}
 }
 
+// TestGenerateListLiteralOfStringsPropagatesSourceType covers three
+// paths that previously dropped the `String` source type from list
+// literal elements and first-walled on
+// `LLVM011 list literal mixes String and non-String ptr-backed values`:
+//
+//  1. alias-qualified stdlib strings call (`strings.join(...)`) —
+//     now routed through staticStdStringsCallSourceType so the
+//     return-type is known to be String.
+//  2. plain String literal (`""`) bound through `let mut` and reused
+//     in a later list literal — staticExprSourceType walks the
+//     binding's sourceType, which is now tagged at literal-emission
+//     time.
+//  3. if-expression whose both branches are String literals — the
+//     merged phi value now carries the agreed String source type
+//     (mergeContainerMetadata -> sameSourceType).
+//
+// All three shapes appear in `toolchain/formatter_ast.osty`:
+// `strings.join([strings.join(parts, ", "), ...], "")`,
+// `lines.push(strings.join([ostyAstIndent(1), line], ""))` (line is
+// `let mut line = ""`), and `strings.join([pat, op, pat], "")` where
+// `op` binds an if-expression.
+func TestGenerateListLiteralOfStringsPropagatesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn indent(level: Int) -> String {
+    strings.repeat("  ", level)
+}
+
+fn render(parts: List<String>, flag: Int) -> String {
+    let mut line: String = ""
+    line = strings.join(parts, ", ")
+    let op = if flag == 1 { "<" } else { ">" }
+    let chunks = [indent(1), line, strings.join([op, " end"], "")]
+    strings.join(chunks, "")
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/list_mixed_ptr.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_list_new()",
+		"call ptr @osty_rt_strings_Join",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // Phase 1 of the first-class fn value lowering: a top-level fn used
 // in value position materialises a closure env + thunk, and the
 // subsequent call through the bound name dispatches indirectly.

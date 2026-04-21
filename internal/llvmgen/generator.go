@@ -815,7 +815,42 @@ func mergeContainerMetadata(dst *value, left, right value) {
 		dst.setElemTyp = left.setElemTyp
 		dst.setElemString = left.setElemString && right.setElemString
 	}
+	// Preserve source-type when both branches agree so downstream
+	// consumers (list-literal isString parity, field-source lookups)
+	// don't lose the String/named-type tag across if-expressions and
+	// match-expressions. Shallow identity/equal-string-form comparison
+	// is sufficient here — the backend only needs "same source type"
+	// to decide whether to propagate; deeper structural equality is a
+	// job for the checker.
+	if sameSourceType(left.sourceType, right.sourceType) {
+		dst.sourceType = left.sourceType
+	}
 	dst.gcManaged = valueNeedsManagedRoot(*dst)
+}
+
+func sameSourceType(a, b ast.Type) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	an, aok := a.(*ast.NamedType)
+	bn, bok := b.(*ast.NamedType)
+	if !aok || !bok {
+		return false
+	}
+	if len(an.Path) != len(bn.Path) || len(an.Args) != len(bn.Args) {
+		return false
+	}
+	for i := range an.Path {
+		if an.Path[i] != bn.Path[i] {
+			return false
+		}
+	}
+	for i := range an.Args {
+		if !sameSourceType(an.Args[i], bn.Args[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 type gcSafepointRoot struct {

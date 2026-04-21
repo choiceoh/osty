@@ -23,12 +23,25 @@ As of 2026-04-19:
 - the whole-toolchain merged LLVM probe still first-walls on the
   bootstrap-only `runtime.golegacy.astbridge` bridge
 - the native-only merged LLVM probe (with bootstrap-only files skipped)
-  now first-walls on `LLVM011 [list_mixed_ptr] type-system: list literal
-  mixes String and non-String ptr-backed values` — a collection-literal
-  typing gap (heterogeneous ptr-backed element types in the same
-  `[...]` literal). The earlier LLVM011 `logical not on %PmCheckOutcome`
-  wall is closed: it was a **parser precedence bug**, not a backend
-  gap. The v0.5 grammar has `UnaryExpr ::= prefix UnaryExpr |
+  now first-walls on `LLVM011 [string_non_ascii] plain String literals
+  currently require ASCII text with printable bytes or newline, tab,
+  and carriage-return escapes` — a separate String-literal ASCII-only
+  gap. The earlier `list_mixed_ptr` wall was a **source-type
+  propagation gap**, not the genuine "heterogeneous literal" case it
+  claimed: (1) alias-qualified stdlib strings calls
+  (`strings.join(...)`) never fed through `staticExprSourceType` so
+  the list-literal isString check couldn't tell they returned String;
+  (2) bare `""` literals carried no `sourceType`, so a `let mut line =
+  ""` binding dropped the String tag; (3) if-expression phi values
+  merged container metadata but not `sourceType`, so `let op = if ...
+  { "a" } else { "b" }` also dropped it. All three plumbed through
+  the merged toolchain probe at
+  `formatter_ast.osty:195` / `275` / `532`. Fixed by adding
+  `staticStdStringsCallSourceType`, tagging literal emission with
+  `sourceType = String`, and merging agreed-sourceType in
+  `mergeContainerMetadata`.
+  The earlier LLVM011 `logical not on %PmCheckOutcome` wall is also
+  closed: it was a **parser precedence bug**, not a backend gap. The v0.5 grammar has `UnaryExpr ::= prefix UnaryExpr |
   PostfixExpr`, so `!x.y` must parse as `!(x.y)`; the self-hosted
   front-end was emitting `(!x).y`. Fixed at stable-AST lowering time
   in `internal/parser/lower.go` via `hoistUnaryOverPostfix`, which
@@ -71,7 +84,7 @@ Current-tree observations from the code re-audit:
 |---|---|---|
 | CLI wiring | universal LLVM entry wedge | **resolved** — hello-world `osty gen --backend=llvm` exits 0 and writes `.ll` output |
 | Bootstrap bridge | merged whole-toolchain probe | first wall is still `LLVM002 runtime-ffi` on `runtime.golegacy.astbridge`; this is a bootstrap artifact, not yet a native backend parity claim |
-| Native backend surface | merged native-only probe | first wall is `LLVM011 [list_mixed_ptr]` (heterogeneous ptr element types in a single `[...]` literal) after skipping 4 bootstrap-only files. Closed walls (in order): `LLVM011 [fn_param_struct_type]` Char on `lspUtf16UnitsForChar`; `LLVM012 *ast.MatchExpr is not a call` (match-as-statement lowering); `LLVM012 field assignment base *ast.FieldExpr` (nested `a.b.c = x` via `llvmInsertValue` rebuild chain); parser precedence `(!x).y` / `!(x.y)` hoisted at stable-AST lowering. List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites also closed |
+| Native backend surface | merged native-only probe | first wall is `LLVM011 [string_non_ascii]` (plain String literals currently require ASCII text — a separate non-ASCII literal gap) after skipping 4 bootstrap-only files. Closed walls (in order): `LLVM011 [fn_param_struct_type]` Char on `lspUtf16UnitsForChar`; `LLVM012 *ast.MatchExpr is not a call` (match-as-statement lowering); `LLVM012 field assignment base *ast.FieldExpr` (nested `a.b.c = x` via `llvmInsertValue` rebuild chain); parser precedence `(!x).y` / `!(x.y)` hoisted at stable-AST lowering; `LLVM011 [list_mixed_ptr]` source-type propagation (stdlib strings alias calls, bare `""` literals, if-expr phi branches — `staticStdStringsCallSourceType` + literal sourceType tagging + mergeContainerMetadata sameSourceType). List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites also closed |
 | Checker boundary | `internal/check` / `internal/toolchain` | host still manages an external `osty-native-checker` artifact and falls back to the embedded selfhost checker when it cannot be prepared |
 | Toolchain package health | `osty check --airepair=false toolchain` | current CLI surface is still an aggregate `E0700` summary (`3846 error(s)`) rather than a clean self-compile pass |
 | Stdlib / string surface | `internal/llvmgen/stdlib_shim.go`, `expr.go` | a subset of `std.strings` is shimmed through runtime helpers. `Char` and `Byte` parameters/returns, literals, comparisons, and width conversions now lower; `String.chars` / `String.bytes` still block the pure native path because `List<Char>` / `List<Byte>` collection lowering is separate work |
