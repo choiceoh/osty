@@ -2353,6 +2353,21 @@ func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) 
 		out := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), true, nil
+	case "isEmpty":
+		// `list.isEmpty()` is the stdlib default `self.len() == 0`. We
+		// inline it as `icmp eq i64 <len>, 0` instead of routing through
+		// LLVM018 stdlib-body lowering so the toolchain probe can clear
+		// this wall without the whole default-body lowering stack.
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "list.isEmpty requires no arguments")
+		}
+		g.declareRuntimeSymbol(listRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		lenVal := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
+		cmp := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i64 %s, 0", cmp, lenVal.name))
+		g.takeOstyEmitter(emitter)
+		return value{typ: "i1", ref: cmp}, true, nil
 	case "sorted":
 		symbol := listRuntimeSortedSymbol(elemTyp, elemString)
 		if len(call.Args) != 0 || symbol == "" {
@@ -2399,6 +2414,26 @@ func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
 		return value{}, true, err
 	}
 	switch field.Name {
+	case "len":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "map.len requires no arguments")
+		}
+		g.declareRuntimeSymbol(mapRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "i64", mapRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "isEmpty":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "map.isEmpty requires no arguments")
+		}
+		g.declareRuntimeSymbol(mapRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		lenVal := llvmCall(emitter, "i64", mapRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
+		cmp := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i64 %s, 0", cmp, lenVal.name))
+		g.takeOstyEmitter(emitter)
+		return value{typ: "i1", ref: cmp}, true, nil
 	case "containsKey":
 		if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 			return value{}, true, unsupported("call", "map.containsKey requires one positional argument")
@@ -2478,6 +2513,17 @@ func (g *generator) emitSetMethodCall(call *ast.CallExpr) (value, bool, error) {
 		out := llvmCall(emitter, "i64", setRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), true, nil
+	case "isEmpty":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "set.isEmpty requires no arguments")
+		}
+		g.declareRuntimeSymbol(setRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		lenVal := llvmCall(emitter, "i64", setRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
+		cmp := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i64 %s, 0", cmp, lenVal.name))
+		g.takeOstyEmitter(emitter)
+		return value{typ: "i1", ref: cmp}, true, nil
 	case "contains", "remove":
 		if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 			return value{}, true, unsupportedf("call", "set.%s requires one positional argument", field.Name)

@@ -109,6 +109,40 @@ func TestGenerateExprStmtListPopNoLongerTripsLLVM015(t *testing.T) {
 	}
 }
 
+// TestGenerateCollectionIsEmptyLowersAsLenEqZero verifies that
+// `list.isEmpty()`, `map.isEmpty()`, and `set.isEmpty()` all inline
+// the stdlib default body (`self.len() == 0`) as a runtime `*_len`
+// call followed by `icmp eq i64 ..., 0`, instead of first-walling on
+// LLVM015 [method_call_field] for the default method. Map's `len` /
+// `isEmpty` share the same runtime helper (`osty_rt_map_len`) since
+// the Go wrapper was only declared — the C body had to land alongside
+// the dispatch.
+func TestGenerateCollectionIsEmptyLowersAsLenEqZero(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn allEmpty(xs: List<Int>, m: Map<String, Int>, s: Set<Int>) -> Bool {
+    xs.isEmpty() && m.isEmpty() && s.isEmpty()
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "core",
+		SourcePath:  "/tmp/isempty.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call i64 @osty_rt_list_len(",
+		"call i64 @osty_rt_map_len(",
+		"call i64 @osty_rt_set_len(",
+		"icmp eq i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestGenerateIndexedNestedListLenMethodDispatch(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn main() {
     let stacks: List<List<Int>> = [[1, 2], [3]]
