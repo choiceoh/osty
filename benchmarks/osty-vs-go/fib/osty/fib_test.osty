@@ -1,0 +1,8 @@
+use std.testing
+
+fn benchFib15() {
+    testing.benchmark(50, || {
+        let _ = fib(15)
+        Ok(())
+    })
+}
