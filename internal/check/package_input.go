@@ -301,6 +301,7 @@ func selfhostBuildImportedFn(
 	scopeGenerics := selfhostGenericSet(combinedGenerics)
 	paramNames := make([]string, 0, len(fn.Params))
 	paramTypes := make([]string, 0, len(fn.Params))
+	paramDefaults := make([]bool, 0, len(fn.Params))
 	for i, param := range fn.Params {
 		if param == nil {
 			continue
@@ -309,8 +310,16 @@ func selfhostBuildImportedFn(
 		if name == "" {
 			name = fmt.Sprintf("arg%d", i)
 		}
+		// Encode default-availability into the name with a leading "?"
+		// so the checker's arity check can treat missing trailing args as
+		// satisfied by defaults without threading a parallel List<Bool>
+		// through every CheckFnSig constructor.
+		if param.Default != nil {
+			name = "?" + name
+		}
 		paramNames = append(paramNames, name)
 		paramTypes = append(paramTypes, selfhostImportedTypeSource(localTypes, scopeGenerics, param.Type))
+		paramDefaults = append(paramDefaults, param.Default != nil)
 	}
 	bounds := append([]selfhost.PackageCheckGenericBound(nil), ownerBounds...)
 	bounds = append(bounds, selfhostGenericBounds(localTypes, combinedGenerics, fn.Generics)...)
@@ -325,6 +334,7 @@ func selfhostBuildImportedFn(
 		ReturnType:    selfhostImportedTypeSource(localTypes, scopeGenerics, fn.ReturnType),
 		ParamNames:    paramNames,
 		ParamTypes:    paramTypes,
+		ParamDefaults: paramDefaults,
 		Generics:      combinedGenerics,
 		GenericBounds: bounds,
 	}

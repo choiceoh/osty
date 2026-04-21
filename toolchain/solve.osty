@@ -365,7 +365,7 @@ pub fn isFullyResolved(env: CheckEnv, solver: Solver, ty: Int) -> Bool {
     }
 }
 
-fn allFullyResolved(env: CheckEnv, solver: Solver, xs: List<Int>) -> Bool {
+pub fn allFullyResolved(env: CheckEnv, solver: Solver, xs: List<Int>) -> Bool {
     for x in xs {
         if !(isFullyResolved(env, solver, x)) {
             return false

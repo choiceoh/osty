@@ -1438,10 +1438,12 @@ pub fn checkInstallPrelude(env: CheckEnv) {
     let tT = tyNamed(env.tys, "T", [])
     let tGroup = tyNamed(env.tys, "Group", [])
     let tHandleT = tyNamed(env.tys, "Handle", [tT])
-    let tListHandleT = tyNamed(env.tys, "List", [tHandleT])
     let tListItemT = tyNamed(env.tys, "List", [tT])
     let tResultT = tyNamed(env.tys, "Result", [tT, tyNamed(env.tys, "Error", [])])
-    let tFnGroupListHandle = tyFn(env.tys, [tGroup], tListHandleT)
+    // Spec §B.6 canonical shape: `taskGroup(|g| { ...; Ok(value) })`.
+    // Body returns `Result<T, Error>`, and `taskGroup` passes it through
+    // so T flows from the final Ok expression to the outer return.
+    let tFnGroupResult = tyFn(env.tys, [tGroup], tResultT)
     let tFnT = tyFn(env.tys, [], tT)
     let tFnTToR = tyFn(env.tys, [tT], tyNamed(env.tys, "R", []))
     let _ = tFnTToR
@@ -1449,7 +1451,7 @@ pub fn checkInstallPrelude(env: CheckEnv) {
     checkRegisterFn(env, CheckFnSig {
         name: "taskGroup", owner: "", receiverTy: -1,
         retTy: tResultT,
-        paramNames: ["body"], paramTys: [tFnGroupListHandle],
+        paramNames: ["body"], paramTys: [tFnGroupResult],
         generics: gT, genericBounds: [],
     })
     checkRegisterFn(env, CheckFnSig {
@@ -1547,6 +1549,59 @@ fn checkInstallChannelIntrinsics(env: CheckEnv) {
     checkRegisterType(env, CheckTypeSig { name: "Channel", generics: ["T"], genericBounds: [], kind: "struct" })
     checkRegisterType(env, CheckTypeSig { name: "Handle", generics: ["T"], genericBounds: [], kind: "struct" })
     checkRegisterType(env, CheckTypeSig { name: "Group", generics: [], genericBounds: [], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "SelectBuilder", generics: [], genericBounds: [], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "Duration", generics: [], genericBounds: [], kind: "struct" })
+    // SelectBuilder.recv/send/timeout/default — spec §B.6 canonical
+    // `thread.select(|s| { s.recv(...); s.timeout(...); s.default(...) })`.
+    let tSelectBuilder = tyNamed(env.tys, "SelectBuilder", [])
+    let tDuration_ = tyNamed(env.tys, "Duration", [])
+    let tFnResT = tyFn(env.tys, [tT], tT)
+    let tFnUnitT = tyFn(env.tys, [], tT)
+    checkRegisterFn(env, CheckFnSig {
+        name: "recv", owner: "SelectBuilder", receiverTy: tSelectBuilder,
+        retTy: tUnit(env.tys),
+        paramNames: ["ch", "handler"],
+        paramTys: [tyNamed(env.tys, "Channel", [tT]), tFnResT],
+        generics: gT, genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "send", owner: "SelectBuilder", receiverTy: tSelectBuilder,
+        retTy: tUnit(env.tys),
+        paramNames: ["ch", "value", "handler"],
+        paramTys: [tyNamed(env.tys, "Channel", [tT]), tT, tyFn(env.tys, [], tT)],
+        generics: gT, genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "timeout", owner: "SelectBuilder", receiverTy: tSelectBuilder,
+        retTy: tUnit(env.tys),
+        paramNames: ["duration", "handler"],
+        paramTys: [tDuration_, tFnUnitT],
+        generics: gT, genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "default", owner: "SelectBuilder", receiverTy: tSelectBuilder,
+        retTy: tUnit(env.tys),
+        paramNames: ["handler"],
+        paramTys: [tFnUnitT],
+        generics: gT, genericBounds: [],
+    })
+    // Int duration suffixes: `5.s`, `30.ms`, `100.us`, `1000.ns`.
+    // Spec exercises these as postfix-dot property chains; register
+    // them as zero-arg methods on Int returning Duration.
+    let tIntTy = tInt(env.tys)
+    let durationFromInt = CheckFnSig {
+        name: "s", owner: "Int", receiverTy: tIntTy, retTy: tDuration_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    }
+    let _ = durationFromInt
+    for suffix in ["s", "ms", "us", "ns"] {
+        checkRegisterFn(env, CheckFnSig {
+            name: suffix, owner: "Int", receiverTy: tIntTy, retTy: tDuration_,
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+    }
     // Group.spawn(body: fn() -> T) -> Handle<T> — structural concurrency
     // helper that spawns a scoped task inside a `taskGroup(|g| { ... })`
     // body. Spec §B.6 canonical pattern.

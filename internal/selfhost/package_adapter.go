@@ -33,6 +33,7 @@ type PackageCheckFn struct {
 	ReturnType    string                     `json:"returnType,omitempty"`
 	ParamNames    []string                   `json:"paramNames,omitempty"`
 	ParamTypes    []string                   `json:"paramTypes,omitempty"`
+	ParamDefaults []bool                     `json:"paramDefaults,omitempty"`
 	Generics      []string                   `json:"generics,omitempty"`
 	GenericBounds []PackageCheckGenericBound `json:"genericBounds,omitempty"`
 }

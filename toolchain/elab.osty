@@ -1263,7 +1263,7 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
 
     if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
         let coreFn = coreIdent(cx.core, baseCallee.text, IkFn, fnSigToTy(cx.env, sig), baseCallee.start, baseCallee.end)
-        let coreArgs = elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, argIdxs, node.start, node.end)
+        let coreArgs = elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, argIdxs, node.start, node.end)
         let retTy = sig.retTy
         if !(tyIsBad(cx.env.tys, expected)) {
             let _ = checkExpectAssignable(cx.env, expected, retTy, node.start, node.end)
@@ -1375,7 +1375,7 @@ fn elabInferStaticMethodCall(
     let _ = ownerName
     if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
         let coreFn = coreIdent(cx.core, sig.name, IkFn, fnSigToTy(cx.env, sig), fieldNode.start, fieldNode.end)
-        let coreArgs = elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, argIdxs, node.start, node.end)
+        let coreArgs = elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, argIdxs, node.start, node.end)
         let retTy = sig.retTy
         if !(tyIsBad(cx.env.tys, expected)) {
             let _ = checkExpectAssignable(cx.env, expected, retTy, node.start, node.end)
@@ -1474,7 +1474,7 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     }
 
     if checkStringListLenHelper(sig.generics) == 0 {
-        let coreArgs = elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, callNode.children, callNode.start, callNode.end)
+        let coreArgs = elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, callNode.children, callNode.start, callNode.end)
         let retTy = sig.retTy
         if !(tyIsBad(cx.env.tys, expected)) {
             let _ = checkExpectAssignable(cx.env, expected, retTy, callNode.start, callNode.end)
@@ -1587,7 +1587,13 @@ fn elabCallArgs(
 ) -> List<Int> {
     let wantCount = checkIntListLenHelper(sig.paramTys)
     let gotCount = checkIntListLenHelper(argIdxs)
-    if wantCount != gotCount {
+    // Trailing params whose names start with "?" are marked as having
+    // defaults (encoded by selfhostBuildImportedFn for imported fns).
+    // An under-arity call with `gotCount >= wantCount - defaultCount`
+    // is satisfied by defaults and does NOT emit E0701.
+    let defaultCount = paramDefaultCount(sig.paramNames)
+    let minArity = wantCount - defaultCount
+    if gotCount > wantCount || gotCount < minArity {
         cx.env.diagnostics.push(diagArgCount(sig.name, wantCount, gotCount, start, end))
     }
     let mut coreArgs: List<Int> = []
@@ -1602,7 +1608,18 @@ fn elabCallArgs(
         let rawWant = checkIntListAt(sig.paramTys, i)
         let specialisedWant = checkSubstituteTy(cx.env, rawWant, sig.generics, freshs)
         let hint = zonk(cx.env, solver, specialisedWant)
-        let r = if isFullyResolved(cx.env, solver, hint) {
+        // Closure arguments: if the hint is `fn(P..) -> R` with params
+        // fully resolved (even if R is still open), pass it so the
+        // closure can seed its param slots from P. `results.map(|r| ..)`
+        // is the canonical case: T is bound from the receiver, so P is
+        // concrete, but R is still open until the body is inferred.
+        // Arity mismatches with unresolved param TyVars stay on the
+        // elabInfer path — the outer unify still flags a failure but
+        // without a spurious closure-arity diag against a TyVar-based
+        // shape.
+        let hintIsFnWithConcreteParams = tyKindAt(cx.env.tys, hint) == TkFn
+            && allFullyResolved(cx.env, solver, tyArgsAt(cx.env.tys, hint))
+        let r = if isFullyResolved(cx.env, solver, hint) || hintIsFnWithConcreteParams {
             elabCheck(cx, argIdx, hint)
         } else {
             elabInfer(cx, argIdx)
@@ -1612,6 +1629,28 @@ fn elabCallArgs(
         i = i + 1
     }
     coreArgs
+}
+
+/// paramDefaultCount counts trailing paramNames whose text starts with
+/// a "?" marker. The `?` prefix is injected by the Osty→selfhost import
+/// surface for params that carry default expressions; it lets the
+/// arity check treat missing trailing args as satisfied without
+/// threading a List<Bool> through every CheckFnSig constructor.
+///
+/// Forward-walk with reset-on-break: every non-"?" name resets the
+/// running total, so the final value is the length of the contiguous
+/// "?"-prefixed suffix. This avoids needing reverse indexing on
+/// List<String>.
+fn paramDefaultCount(names: List<String>) -> Int {
+    let mut running = 0
+    for name in names {
+        if name.startsWith("?") {
+            running = running + 1
+        } else {
+            running = 0
+        }
+    }
+    running
 }
 
 /// elabIsToStringFormatter returns true when `callee` is one of the
@@ -1631,9 +1670,23 @@ fn elabCallArgsMonomorphic(
     start: Int,
     end: Int,
 ) -> List<Int> {
+    elabCallArgsMonomorphicWithNames(cx, callee, [], paramTys, argIdxs, start, end)
+}
+
+fn elabCallArgsMonomorphicWithNames(
+    cx: ElabCx,
+    callee: String,
+    paramNames: List<String>,
+    paramTys: List<Int>,
+    argIdxs: List<Int>,
+    start: Int,
+    end: Int,
+) -> List<Int> {
     let wantCount = checkIntListLenHelper(paramTys)
     let gotCount = checkIntListLenHelper(argIdxs)
-    if wantCount != gotCount {
+    let defaultCount = paramDefaultCount(paramNames)
+    let minArity = wantCount - defaultCount
+    if gotCount > wantCount || gotCount < minArity {
         cx.env.diagnostics.push(diagArgCount(callee, wantCount, gotCount, start, end))
     }
     let skipParamCheck = elabIsToStringFormatter(callee)
@@ -2276,7 +2329,15 @@ fn elabInferClosure(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     }
 
     let bodyIdx = node.left
-    let body = if !(tyIsBad(tys, expectedRet)) {
+    // When expected is `fn(T) -> TyVar(R)` — e.g. `xs.map(|r| body)`
+    // with the outer solver still open — using elabCheck on the body
+    // would route through elabCheckViaInfer's `checkExpectAssignable`
+    // which does not treat TyVar as a wildcard and would emit a
+    // spurious mismatch. Fall back to elabInfer when the expected
+    // return is a bare TyVar; the outer elabCallArgs `unify` still
+    // binds R from the closure's inferred type.
+    let expectedRetIsVar = tyKindAt(tys, expectedRet) == TkVar
+    let body = if !(tyIsBad(tys, expectedRet)) && !expectedRetIsVar {
         elabCheck(cx, bodyIdx, expectedRet)
     } else {
         elabInfer(cx, bodyIdx)

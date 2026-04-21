@@ -1388,6 +1388,14 @@ func writeSelfhostPackageImport(b *bytes.Buffer, alias string, pkg *resolve.Pack
 					name = fmt.Sprintf("arg%d", i)
 				}
 				fmt.Fprintf(&body, "%s: %s", name, selfhostTypeSource(param.Type))
+				// Preserve default-availability for the arity check. The
+				// concrete literal value doesn't matter — collectFnDecl
+				// only looks at paramNode.left >= 0 to set the "?"
+				// paramName prefix. `= ()` is a valid literal default
+				// (spec §R18) across all param types.
+				if param.Default != nil {
+					body.WriteString(" = ()")
+				}
 			}
 			body.WriteByte(')')
 			if ret := selfhostTypeSource(fn.ReturnType); ret != "()" {
