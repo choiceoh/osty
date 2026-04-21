@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/selfhost/bundle"
+	"github.com/osty/osty/internal/selfhost/genpatch"
 )
 
 func main() {
@@ -315,130 +316,11 @@ func patchGenerated(path string) error {
 // line diff on every cross-platform regen. The canonical placeholder is
 // `/tmp/selfhost_merged.osty`; line/column suffixes are preserved.
 func normalizeGeneratedSourceComment(src string) string {
-	const (
-		topPrefix  = "// Osty source: "
-		declPrefix = "// Osty: "
-		mergedFile = "selfhost_merged.osty"
-		canonical  = "/tmp/" + mergedFile
-	)
-	lines := strings.Split(src, "\n")
-	for i, line := range lines {
-		if strings.HasPrefix(line, topPrefix) && strings.HasSuffix(line, mergedFile) {
-			lines[i] = topPrefix + canonical
-			continue
-		}
-		if !strings.HasPrefix(line, declPrefix) {
-			continue
-		}
-		idx := strings.Index(line, mergedFile)
-		if idx < 0 {
-			continue
-		}
-		lines[i] = declPrefix + canonical + line[idx+len(mergedFile):]
-	}
-	return strings.Join(lines, "\n")
+	return genpatch.NormalizeGeneratedSourceComment(src)
 }
 
 func replaceGeneratedFunction(src, name, replacement string) (string, error) {
-	start := strings.Index(src, "func "+name+"(")
-	if start < 0 {
-		return "", fmt.Errorf("generated function %s not found", name)
-	}
-	open := strings.IndexByte(src[start:], '{')
-	if open < 0 {
-		return "", fmt.Errorf("generated function %s has no body", name)
-	}
-	open += start
-	depth := 0
-	inLineComment := false
-	inBlockComment := false
-	inString := false
-	inRune := false
-	inRawString := false
-	escaped := false
-	for i := open; i < len(src); i++ {
-		if inLineComment {
-			if src[i] == '\n' {
-				inLineComment = false
-			}
-			continue
-		}
-		if inBlockComment {
-			if src[i] == '*' && i+1 < len(src) && src[i+1] == '/' {
-				inBlockComment = false
-				i++
-			}
-			continue
-		}
-		if inString {
-			if escaped {
-				escaped = false
-				continue
-			}
-			if src[i] == '\\' {
-				escaped = true
-				continue
-			}
-			if src[i] == '"' {
-				inString = false
-			}
-			continue
-		}
-		if inRune {
-			if escaped {
-				escaped = false
-				continue
-			}
-			if src[i] == '\\' {
-				escaped = true
-				continue
-			}
-			if src[i] == '\'' {
-				inRune = false
-			}
-			continue
-		}
-		if inRawString {
-			if src[i] == '`' {
-				inRawString = false
-			}
-			continue
-		}
-		if src[i] == '/' && i+1 < len(src) {
-			if src[i+1] == '/' {
-				inLineComment = true
-				i++
-				continue
-			}
-			if src[i+1] == '*' {
-				inBlockComment = true
-				i++
-				continue
-			}
-		}
-		if src[i] == '"' {
-			inString = true
-			continue
-		}
-		if src[i] == '\'' {
-			inRune = true
-			continue
-		}
-		if src[i] == '`' {
-			inRawString = true
-			continue
-		}
-		switch src[i] {
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return src[:start] + replacement + src[i+1:], nil
-			}
-		}
-	}
-	return "", fmt.Errorf("generated function %s body is unterminated", name)
+	return genpatch.ReplaceGeneratedFunction(src, name, replacement)
 }
 
 const frontPositionAtReplacement = `type frontPositionCacheState struct {

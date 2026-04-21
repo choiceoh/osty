@@ -57,6 +57,11 @@ jobs:
           go build -o "$RUNNER_TEMP/osty-ci/osty" ./cmd/osty
           echo "OSTY_BIN=$RUNNER_TEMP/osty-ci/osty" >> "$GITHUB_ENV"
 
+      - name: Verify selfhost regen is clean
+        run: |
+          go generate ./internal/selfhost
+          git diff --exit-code -- internal/selfhost
+
       - name: Osty repair
         run: |
           while IFS= read -r file; do
