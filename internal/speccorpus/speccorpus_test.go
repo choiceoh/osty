@@ -28,10 +28,9 @@ var positiveWaivers = map[string][]string{
 	// §2 types: trailing decl list in struct body parser gap. Codeless
 	// recovery error ("expected field or method in struct") at 37:14.
 	"02-types.osty": {""},
-	// §6 scripts: top-level expression statements are not yet accepted
-	// by the parser; only `use`/`let` reach top-level. §6 of the spec
-	// requires implicit main wrapping for bare expressions.
-	"06-scripts.osty": {"E0030"},
+	// §6 scripts: top-level expression statements are still rejected at
+	// parse time instead of being wrapped in an implicit main.
+	"06-scripts.osty": {"E0100"},
 }
 
 // negativeWaivers documents CASE blocks in testdata/spec/negative/
@@ -49,15 +48,12 @@ var positiveWaivers = map[string][]string{
 // is intentionally churn-friendly: adding or deleting entries is the
 // normal way to track Exxxx migration work.
 var negativeWaivers = map[string][]string{
-	"E0101/`use go` fn with body":                    {"warning:L0003"},
-	"E0104/mixed dot/slash in use path":              {"error:E0505", "warning:L0003"},
-	"E0105/`} else` across newline":                  {"error:E0201", "error:E0010", "error:E0030"},
-	"E0106/non-literal default value":                {"warning:L0002"},
-	"E0201/`::` not followed by `<`":                 {"error:E0010", "warning:L0001"},
-	"E0203/closure with return type but no block body": {"error:E0011", "warning:L0001"},
-	"E0400/unknown annotation":                       {"warning:L0070"},
-	"E0607/annotation on a `use` statement":          {"warning:L0003"},
-	"E0608/top-level `defer` in script":              {"error:E0030", "warning:L0001"},
+	"E0101/`use go` fn with body":           {"warning:L0003"},
+	"E0104/mixed dot/slash in use path":     {"error:E0505", "warning:L0003"},
+	"E0201/`::` not followed by `<`":        {"error:E0204", "warning:L0001"},
+	"E0400/unknown annotation":              {"warning:L0070"},
+	"E0607/annotation on a `use` statement": {"warning:L0003"},
+	"E0608/top-level `defer` in script":     {"error:E0100", "warning:L0001"},
 }
 
 // TestSpecPositive enforces that every file under
