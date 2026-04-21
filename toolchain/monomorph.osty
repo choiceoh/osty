@@ -93,6 +93,18 @@ pub fn monomorphPrimCode(name: String) -> String {
     if name == "Unit" {
         return "v"
     }
+    // Osty string & byte slice are opaque aggregates at the IR level.
+    // The LLVM bridge needs their codes to be valid identifier chars
+    // (no `?` / `<` / `>`), otherwise a specialized Map<String, V>'s
+    // mangled name fails llvmIsIdent at emit time. Using the
+    // Itanium-style two-char identifiers keeps them unique from the
+    // single-letter primitive set.
+    if name == "String" {
+        return "Ss"
+    }
+    if name == "Bytes" {
+        return "By"
+    }
     ""
 }
 

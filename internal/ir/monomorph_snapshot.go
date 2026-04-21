@@ -122,6 +122,17 @@ func MonomorphPrimCode(name string) string {
 	if name == "Unit" {
 		return "v"
 	}
+	// Osty `String` and `Bytes` are opaque aggregates at IR level but
+	// their mangled forms must be valid LLVM identifier chars so a
+	// specialized `Map<String, V>` passes llvmIsIdent. "Ss" and "By"
+	// are Itanium-style extended identifiers that stay unique from
+	// the single-letter primitive codes above.
+	if name == "String" {
+		return "Ss"
+	}
+	if name == "Bytes" {
+		return "By"
+	}
 	return ""
 }
 
