@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -863,7 +864,14 @@ func buildOstyCLI(t *testing.T) string {
 			ostyCLIBuildErr = fmt.Errorf("mktemp: %w", err)
 			return
 		}
-		ostyCLIBuildPath = filepath.Join(tmpDir, "osty")
+		name := "osty"
+		if runtime.GOOS == "windows" {
+			// `go build -o NAME` appends .exe automatically on
+			// Windows; match it here so direct exec.Command callers
+			// resolve the binary.
+			name += ".exe"
+		}
+		ostyCLIBuildPath = filepath.Join(tmpDir, name)
 		cmd := exec.Command("go", "build", "-o", ostyCLIBuildPath, ".")
 		cmd.Dir, ostyCLIBuildErr = os.Getwd()
 		if ostyCLIBuildErr != nil {
