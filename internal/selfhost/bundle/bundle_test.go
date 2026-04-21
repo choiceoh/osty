@@ -34,6 +34,10 @@ fn demoGo() -> Int {
 fn demoStd() -> String {
     strings.join(["a", "b"], ",")
 }
+
+fn demoSlice() -> String {
+    strings.slice("abcd", 1, 3)
+}
 `)
 
 	merged, err := MergeFiles(root, []string{"go_strings.osty", "std_strings.osty"})
@@ -53,8 +57,14 @@ fn demoStd() -> String {
 	if strings.Contains(got, "strings.join(") {
 		t.Fatalf("merged source kept std.strings camelCase call:\n%s", got)
 	}
+	if strings.Contains(got, "strings.slice(") {
+		t.Fatalf("merged source kept std.strings slice call:\n%s", got)
+	}
 	if !strings.Contains(got, `strings.Join(["a", "b"], ",")`) {
 		t.Fatalf("merged source missing normalized PascalCase strings call:\n%s", got)
+	}
+	if !strings.Contains(got, `ostyStringsSlice("abcd", 1, 3)`) {
+		t.Fatalf("merged source missing std.strings slice shim:\n%s", got)
 	}
 }
 

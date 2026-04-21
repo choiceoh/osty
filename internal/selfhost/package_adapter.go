@@ -309,12 +309,16 @@ func selfhostShiftTokenIndex(idx, base int) int {
 }
 
 func adaptCheckResultWithTokenLayout(checked *FrontCheckResult, layout *selfhostPackageTokenLayout) CheckResult {
+	if checked == nil {
+		return CheckResult{}
+	}
 	result := CheckResult{
 		Summary:        adaptCheckSummaryWithContext(checked, selfhostLayoutTokenPos(layout)),
 		TypedNodes:     make([]CheckedNode, 0, len(checked.typedNodes)),
 		Bindings:       make([]CheckedBinding, 0, len(checked.bindings)),
 		Symbols:        make([]CheckedSymbol, 0, len(checked.symbols)),
 		Instantiations: make([]CheckInstantiation, 0, len(checked.instantiations)),
+		Diagnostics:    make([]CheckDiagnosticRecord, 0, len(checked.diagnostics)),
 	}
 	for _, node := range checked.typedNodes {
 		if node == nil {
@@ -370,6 +374,21 @@ func adaptCheckResultWithTokenLayout(checked *FrontCheckResult, layout *selfhost
 			ResultType: inst.resultType,
 			Start:      start,
 			End:        end,
+		})
+	}
+	for _, d := range checked.diagnostics {
+		if d == nil {
+			continue
+		}
+		start, end := checkNodeOffsetsWithTokenLayout(layout, d.start, d.end)
+		result.Diagnostics = append(result.Diagnostics, CheckDiagnosticRecord{
+			Code:     d.code,
+			Severity: diagnosticSeverityName(d.severity),
+			Message:  d.message,
+			Start:    start,
+			End:      end,
+			File:     "",
+			Notes:    append([]string(nil), d.notes...),
 		})
 	}
 	return result

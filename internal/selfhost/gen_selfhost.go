@@ -226,6 +226,115 @@ func patchGenerated(path string) error {
 	// scoped to the local temp variable name so diag example strings like
 	// `Ok(s.len())` stay untouched.
 	src = strings.ReplaceAll(src, "units.len()", "len(units)")
+	for _, snippet := range []struct {
+		name string
+		old  string
+		new  string
+	}{
+		{
+			name: "FrontLexStream units field",
+			old: `type FrontLexStream struct {
+	tokens                []*FrontLexToken
+	diagnostics           []*FrontLexDiagnostic
+	comments              []*FrontComment
+	stringParts           []*FrontStringPart
+	interpolationTokens   []*FrontInterpolationToken
+	shebangs              int
+	bomStripped           int
+	sourceUnits           int
+	normalizedTripleUnits int
+	tripleIndentErrors    int
+	escapeErrors          int
+}`,
+			new: `type FrontLexStream struct {
+	tokens                []*FrontLexToken
+	diagnostics           []*FrontLexDiagnostic
+	comments              []*FrontComment
+	stringParts           []*FrontStringPart
+	interpolationTokens   []*FrontInterpolationToken
+	shebangs              int
+	bomStripped           int
+	sourceUnits           int
+	normalizedTripleUnits int
+	tripleIndentErrors    int
+	escapeErrors          int
+	units                 []string
+}`,
+		},
+		{
+			name: "frontendLexStream cached units",
+			old: `func frontendLexStream(source string) *FrontLexStream {
+	// Osty: /tmp/selfhost_merged.osty:1067:5
+	units := strings.Split(source, "")
+	_ = units
+	// Osty: /tmp/selfhost_merged.osty:1069:5
+	unitCount := stringUnitCount(source)
+	_ = unitCount`,
+			new: `func frontendLexStream(source string) *FrontLexStream {
+	// Osty: /tmp/selfhost_merged.osty:1067:5
+	units := strings.Split(source, "")
+	_ = units
+	// Osty: /tmp/selfhost_merged.osty:1069:5
+	unitCount := len(units)
+	_ = unitCount`,
+		},
+		{
+			name: "frontendLexStream return units",
+			old:  `return &FrontLexStream{tokens: tokens, diagnostics: diagnostics, comments: comments, stringParts: stringParts, interpolationTokens: interpolationTokens, shebangs: shebangs, bomStripped: bomStripped, sourceUnits: unitCount, normalizedTripleUnits: normalizedTripleUnits, tripleIndentErrors: tripleIndentErrors, escapeErrors: escapeErrors}`,
+			new:  `return &FrontLexStream{tokens: tokens, diagnostics: diagnostics, comments: comments, stringParts: stringParts, interpolationTokens: interpolationTokens, shebangs: shebangs, bomStripped: bomStripped, sourceUnits: unitCount, normalizedTripleUnits: normalizedTripleUnits, tripleIndentErrors: tripleIndentErrors, escapeErrors: escapeErrors, units: units}`,
+		},
+		{
+			name: "ostyLexFactsFromStream cached units",
+			old: `func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts {
+	// Osty: /tmp/selfhost_merged.osty:6240:5
+	units := strings.Split(source, "")
+	_ = units`,
+			new: `func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts {
+	// Osty: /tmp/selfhost_merged.osty:6240:5
+	units := stream.units
+	if units == nil {
+		units = strings.Split(source, "")
+	}
+	_ = units`,
+		},
+		{
+			name: "ostyLexFactsFromStream leading docs",
+			old: `	// Osty: /tmp/selfhost_merged.osty:6284:5
+	var leadingDocs []string = make([]string, 0, 1)
+	_ = leadingDocs
+	// Osty: /tmp/selfhost_merged.osty:6285:5
+	li := 0
+	_ = li
+	// Osty: /tmp/selfhost_merged.osty:6286:5
+	for li < tokenCount {
+		// Osty: /tmp/selfhost_merged.osty:6287:9
+		func() struct{} {
+			leadingDocs = append(leadingDocs, ostyJoinDocLines(units, stream, frontLexTokenAt(stream, li)))
+			return struct{}{}
+		}()
+		// Osty: /tmp/selfhost_merged.osty:6288:9
+		func() {
+			var _cur1635 int = li
+			var _rhs1636 int = 1
+			if _rhs1636 > 0 && _cur1635 > math.MaxInt-_rhs1636 {
+				panic("integer overflow")
+			}
+			if _rhs1636 < 0 && _cur1635 < math.MinInt-_rhs1636 {
+				panic("integer overflow")
+			}
+			li = _cur1635 + _rhs1636
+		}()
+	}`,
+			new: `	// Osty: /tmp/selfhost_merged.osty:6284:5
+	leadingDocs := collectLeadingDocs(units, stream)
+	_ = leadingDocs`,
+		},
+	} {
+		src, err = replaceGeneratedSnippet(src, snippet.name, snippet.old, snippet.new)
+		if err != nil {
+			return err
+		}
+	}
 	for _, fn := range []struct {
 		name string
 		body string
@@ -266,7 +375,10 @@ func patchGenerated(path string) error {
 		{name: "frontCommentAt", body: frontCommentAtReplacement},
 		{name: "frontStringPartAt", body: frontStringPartAtReplacement},
 		{name: "frontInterpolationTokenAt", body: frontInterpolationTokenAtReplacement},
+		{name: "frontLexemeFromUnits", body: frontLexemeFromUnitsReplacement},
 		{name: "stringUnitCount", body: stringUnitCountReplacement},
+		{name: "frontUnitsMatchAt", body: frontUnitsMatchAtReplacement},
+		{name: "frontUnitsMatch", body: frontUnitsMatchReplacement},
 		{name: "ostyLexStringPartCount", body: ostyLexStringPartCountReplacement},
 		{name: "ostyStringListCount", body: ostyStringListCountReplacement},
 		{name: "ostyStringAt", body: ostyStringAtReplacement},
@@ -289,9 +401,6 @@ func patchGenerated(path string) error {
 		{name: "astLowerTokenCount", body: astLowerTokenCountReplacement},
 		{name: "astLowerIntListCount", body: astLowerIntListCountReplacement},
 		{name: "astLowerIntListAt", body: astLowerIntListAtReplacement},
-		{name: "pmParseIntLit", body: pmParseIntLitReplacement},
-		{name: "containsInterpolation", body: containsInterpolationReplacement},
-		{name: "astLowerDecodeEscapes", body: astLowerDecodeEscapesReplacement},
 	} {
 		var err error
 		src, err = replaceGeneratedFunction(src, fn.name, fn.body)
@@ -328,13 +437,18 @@ func replaceGeneratedFunction(src, name, replacement string) (string, error) {
 	return genpatch.ReplaceGeneratedFunction(src, name, replacement)
 }
 
+func replaceGeneratedSnippet(src, name, old, replacement string) (string, error) {
+	if !strings.Contains(src, old) {
+		return "", fmt.Errorf("replace %s: snippet not found", name)
+	}
+	return strings.Replace(src, old, replacement, 1), nil
+}
+
 const frontPositionAtReplacement = `type frontPositionCacheState struct {
-	units  []string
-	target int
-	offset int
-	line   int
-	column int
-	skipLf bool
+	units     []string
+	positions []FrontPos
+	computed  int
+	skipLf    bool
 }
 
 var frontPositionCacheMu sync.Mutex
@@ -361,52 +475,53 @@ func frontPositionAt(units []string, target int) *FrontPos {
 	frontPositionCacheMu.Lock()
 	defer frontPositionCacheMu.Unlock()
 
-	if !frontSameUnits(frontPositionCache.units, units) || target < frontPositionCache.target {
+	if !frontSameUnits(frontPositionCache.units, units) {
+		positions := make([]FrontPos, len(units)+1)
+		positions[0] = FrontPos{offset: 0, line: 1, column: 1}
 		frontPositionCache = frontPositionCacheState{
-			units:  units,
-			target: 0,
-			offset: 0,
-			line:   1,
-			column: 1,
-			skipLf: false,
+			units:     units,
+			positions: positions,
+			computed:  0,
+			skipLf:    false,
 		}
 	}
 
-	offset := frontPositionCache.offset
-	line := frontPositionCache.line
-	column := frontPositionCache.column
-	skipLf := frontPositionCache.skipLf
-	for idx := frontPositionCache.target; idx < target; idx++ {
-		unit := units[idx]
-		next := ""
-		if idx+1 < len(units) {
-			next = units[idx+1]
-		}
-		if skipLf {
-			skipLf = false
-			offset = offset + 1
-		} else if unit == "\r" {
-			line = line + 1
-			column = 1
-			offset = offset + 1
-			if next == "\n" {
-				skipLf = true
+	if target > frontPositionCache.computed {
+		skipLf := frontPositionCache.skipLf
+		for idx := frontPositionCache.computed; idx < target; idx++ {
+			prev := frontPositionCache.positions[idx]
+			offset := prev.offset
+			line := prev.line
+			column := prev.column
+			unit := units[idx]
+			next := ""
+			if idx+1 < len(units) {
+				next = units[idx+1]
 			}
-		} else if unit == "\n" {
-			line = line + 1
-			column = 1
-			offset = offset + 1
-		} else {
-			column = column + 1
-			offset = offset + 1
+			if skipLf {
+				skipLf = false
+				offset = offset + 1
+			} else if unit == "\r" {
+				line = line + 1
+				column = 1
+				offset = offset + 1
+				if next == "\n" {
+					skipLf = true
+				}
+			} else if unit == "\n" {
+				line = line + 1
+				column = 1
+				offset = offset + 1
+			} else {
+				column = column + 1
+				offset = offset + 1
+			}
+			frontPositionCache.positions[idx+1] = FrontPos{offset: offset, line: line, column: column}
 		}
+		frontPositionCache.computed = target
+		frontPositionCache.skipLf = skipLf
 	}
-	frontPositionCache.target = target
-	frontPositionCache.offset = offset
-	frontPositionCache.line = line
-	frontPositionCache.column = column
-	frontPositionCache.skipLf = skipLf
-	return frontPos(offset, line, column)
+	return &frontPositionCache.positions[target]
 }
 `
 
@@ -627,8 +742,45 @@ const frontInterpolationTokenAtReplacement = `func frontInterpolationTokenAt(str
 }
 `
 
+const frontLexemeFromUnitsReplacement = `func frontLexemeFromUnits(units []string, start int, length int) string {
+	if length <= 0 || len(units) == 0 {
+		return ""
+	}
+	if length > 0 && start > math.MaxInt-length {
+		panic("integer overflow")
+	}
+	end := start + length
+	if end <= 0 || start >= len(units) {
+		return ""
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end > len(units) {
+		end = len(units)
+	}
+	if end <= start {
+		return ""
+	}
+	return strings.Join(units[start:end], "")
+}
+`
+
 const stringUnitCountReplacement = `func stringUnitCount(text string) int {
-	return len(strings.Split(text, ""))
+	return countStringUnits(text)
+}
+`
+
+const frontUnitsMatchAtReplacement = `func frontUnitsMatchAt(units []string, start int, text string) bool {
+	return matchTextUnits(units, start, text)
+}
+`
+
+const frontUnitsMatchReplacement = `func frontUnitsMatch(units []string, start int, consumed int, text string) bool {
+	if consumed != stringUnitCount(text) {
+		return false
+	}
+	return matchTextUnits(units, start, text)
 }
 `
 
@@ -757,152 +909,5 @@ const astLowerIntListAtReplacement = `func astLowerIntListAt(xs []int, target in
 		return -1
 	}
 	return xs[target]
-}
-`
-
-const pmParseIntLitReplacement = `func pmParseIntLit(text string) *PmIntParse {
-	units := strings.Split(text, "")
-	n := len(units)
-	if n == 0 {
-		return &PmIntParse{ok: false, value: 0}
-	}
-	negative := false
-	i := 0
-	if units[0] == "-" {
-		negative = true
-		i = 1
-	}
-	if i >= n {
-		return &PmIntParse{ok: false, value: 0}
-	}
-	base := 10
-	if i+1 < n {
-		lead := units[i] + units[i+1]
-		if lead == "0x" || lead == "0X" {
-			base = 16
-			i += 2
-		} else if lead == "0b" || lead == "0B" {
-			base = 2
-			i += 2
-		} else if lead == "0o" || lead == "0O" {
-			base = 8
-			i += 2
-		}
-	}
-	if i >= n {
-		return &PmIntParse{ok: false, value: 0}
-	}
-	value := 0
-	digits := 0
-	for i < n {
-		ch := units[i]
-		if ch == "_" {
-			i++
-			continue
-		}
-		if base == 10 && (ch == "." || ch == "e" || ch == "E") {
-			return &PmIntParse{ok: false, value: 0}
-		}
-		d := pmDigitValueIn(ch, base)
-		if d < 0 {
-			return &PmIntParse{ok: false, value: 0}
-		}
-		if value > (math.MaxInt-d)/base {
-			panic("integer overflow")
-		}
-		value = value*base + d
-		digits++
-		i++
-	}
-	if digits == 0 {
-		return &PmIntParse{ok: false, value: 0}
-	}
-	if negative {
-		value = -value
-	}
-	return &PmIntParse{ok: true, value: value}
-}
-`
-
-const containsInterpolationReplacement = `func containsInterpolation(text string) bool {
-	units := strings.Split(text, "")
-	for i, unit := range units {
-		if unit != "{" {
-			continue
-		}
-		prev := ""
-		if i > 0 {
-			prev = units[i-1]
-		}
-		if prev != "\\" {
-			return true
-		}
-	}
-	return false
-}
-`
-
-const astLowerDecodeEscapesReplacement = `func astLowerDecodeEscapes(s string) string {
-	if strings.Count(s, "\\") == 0 {
-		return s
-	}
-	units := strings.Split(s, "")
-	n := len(units)
-	parts := make([]string, 0, n)
-	for i := 0; i < n; {
-		unit := units[i]
-		if unit != "\\" {
-			parts = append(parts, unit)
-			i++
-			continue
-		}
-		if i+1 >= n {
-			parts = append(parts, "\\")
-			i++
-			continue
-		}
-		next := units[i+1]
-		if next == "n" {
-			parts = append(parts, "\n")
-			i += 2
-			continue
-		}
-		if next == "r" {
-			parts = append(parts, "\r")
-			i += 2
-			continue
-		}
-		if next == "t" {
-			parts = append(parts, "\t")
-			i += 2
-			continue
-		}
-		if next == "0" {
-			parts = append(parts, astbridge.RuneString(0))
-			i += 2
-			continue
-		}
-		if next == "x" && i+3 < n {
-			high := frontHexValue(units[i+2])
-			low := frontHexValue(units[i+3])
-			if high >= 0 && low >= 0 {
-				value := high*16 + low
-				parts = append(parts, astbridge.RuneString(value))
-				i += 4
-				continue
-			}
-		}
-		if next == "u" && i+2 < n && units[i+2] == "{" {
-			parsed := astLowerDecodeUnicodeEscape(units, i+3)
-			if parsed.consumed > 0 {
-				parts = append(parts, astbridge.RuneString(parsed.value))
-				i += 3 + parsed.consumed
-				continue
-			}
-		}
-		parts = append(parts, next)
-		i += 2
-	}
-	return strings.Join(parts, "")
 }
 `

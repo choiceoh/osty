@@ -2010,7 +2010,13 @@ func (g *gen) receiverIsSyntacticList(e ast.Expr) bool {
 // single-level struct field access. Returns nil when the annotation is
 // not locally visible.
 func (g *gen) syntacticType(e ast.Expr) ast.Type {
+	return g.syntacticTypeSeen(e, map[ast.Node]bool{})
+}
+
+func (g *gen) syntacticTypeSeen(e ast.Expr, seen map[ast.Node]bool) ast.Type {
 	switch e := e.(type) {
+	case *ast.ParenExpr:
+		return g.syntacticTypeSeen(e.X, seen)
 	case *ast.Ident:
 		sym := g.symbolFor(e)
 		if sym == nil {
@@ -2018,18 +2024,31 @@ func (g *gen) syntacticType(e ast.Expr) ast.Type {
 		}
 		switch d := sym.Decl.(type) {
 		case *ast.LetStmt:
-			return d.Type
+			if d.Type != nil {
+				return d.Type
+			}
+			return g.syntacticBoundValueType(d, d.Value, seen)
+		case *ast.LetDecl:
+			if d.Type != nil {
+				return d.Type
+			}
+			return g.syntacticBoundValueType(d, d.Value, seen)
 		case *ast.Param:
 			return d.Type
 		case *ast.Field:
 			return d.Type
 		case *ast.IdentPat:
 			if let, ok := g.letStmtForIdentPat[d]; ok {
-				return let.Type
+				if let.Type != nil {
+					return let.Type
+				}
+				return g.syntacticBoundValueType(let, let.Value, seen)
 			}
 		}
+	case *ast.CallExpr:
+		return g.syntacticCallType(e, seen)
 	case *ast.FieldExpr:
-		recvType := g.syntacticType(e.X)
+		recvType := g.syntacticTypeSeen(e.X, seen)
 		nt, ok := recvType.(*ast.NamedType)
 		if !ok || len(nt.Path) == 0 {
 			return nil
@@ -2042,6 +2061,83 @@ func (g *gen) syntacticType(e ast.Expr) ast.Type {
 		}
 	}
 	return nil
+}
+
+func (g *gen) syntacticBoundValueType(node ast.Node, value ast.Expr, seen map[ast.Node]bool) ast.Type {
+	if node == nil || value == nil {
+		return nil
+	}
+	if seen[node] {
+		return nil
+	}
+	seen[node] = true
+	defer delete(seen, node)
+	return g.syntacticTypeSeen(value, seen)
+}
+
+func (g *gen) syntacticCallType(c *ast.CallExpr, seen map[ast.Node]bool) ast.Type {
+	if c == nil {
+		return nil
+	}
+	base := c.Fn
+	if tf, ok := base.(*ast.TurbofishExpr); ok {
+		base = tf.Base
+	}
+	f, ok := base.(*ast.FieldExpr)
+	if !ok {
+		return nil
+	}
+	if recvType := g.syntacticTypeSeen(f.X, seen); recvType != nil {
+		if out := syntacticMethodReturnType(recvType, f.Name); out != nil {
+			return out
+		}
+	}
+	id, ok := f.X.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	if !g.syntacticStringsPackage(id) {
+		return nil
+	}
+	switch f.Name {
+	case "split", "Split", "splitN", "SplitN":
+		return syntacticListType(syntacticNamedType("String"))
+	}
+	return nil
+}
+
+func (g *gen) syntacticStringsPackage(id *ast.Ident) bool {
+	if id == nil {
+		return false
+	}
+	return g.isStdlibPackageAlias(id, "strings") || id.Name == "strings"
+}
+
+func syntacticMethodReturnType(recv ast.Type, name string) ast.Type {
+	nt, ok := recv.(*ast.NamedType)
+	if !ok || len(nt.Path) == 0 {
+		return nil
+	}
+	switch nt.Path[len(nt.Path)-1] {
+	case "String":
+		switch name {
+		case "split", "lines", "graphemes":
+			return syntacticListType(syntacticNamedType("String"))
+		case "chars":
+			return syntacticListType(syntacticNamedType("Char"))
+		case "bytes", "toBytes":
+			return syntacticNamedType("Bytes")
+		}
+	}
+	return nil
+}
+
+func syntacticListType(elem ast.Type) *ast.NamedType {
+	return syntacticNamedType("List", elem)
+}
+
+func syntacticNamedType(name string, args ...ast.Type) *ast.NamedType {
+	return &ast.NamedType{Path: []string{name}, Args: args}
 }
 
 func (g *gen) emitListMethod(c *ast.CallExpr, f *ast.FieldExpr, n *types.Named) bool {

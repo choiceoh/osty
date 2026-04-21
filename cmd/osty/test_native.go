@@ -21,10 +21,9 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/backend"
-	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/parser"
+	"github.com/osty/osty/internal/llvmgen"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/runner"
 )
@@ -116,7 +115,7 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 		}
 	}
 
-	backendID, emitMode := resolveBackendAndEmitFlags("test", backendName, emitName)
+	backendID, _ := resolveBackendAndEmitFlags("test", backendName, emitName)
 	pkgDir, filters, err := resolveTestTarget(fs.Args())
 	if err != nil {
 		fmt.Fprintf(stderr, "osty test: %v\n", err)
@@ -184,7 +183,7 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "running %d %s (seed %s)\n", len(tests), kindLabel, formatTestSeed(seed))
 	started := time.Now()
 	workers := resolveTestWorkers(serial, jobs, len(tests))
-	failures := executeNativeTests(context.Background(), b, emitMode, tmpRoot, pkg, tests, workers, seed, stdout, stderr, benchMode, benchTimeNs)
+	failures := executeNativeTests(context.Background(), b, tmpRoot, pkg, tests, workers, stdout, stderr, benchMode, benchTimeNs)
 	elapsed := time.Since(started)
 	if failures > 0 {
 		fmt.Fprintf(stdout, "FAIL\t%d/%d %s failed in %s (seed %s)\n", failures, len(tests), kindLabel, formatTestDuration(elapsed), formatTestSeed(seed))
@@ -195,17 +194,17 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 }
 
 // executeNativeTests dispatches the compile+run loop over the shuffled
-// tests slice. With workers==1 we keep the serial single-goroutine path
-// so output ordering stays stable and deterministic under the seed.
-// With workers>1 each test is compiled and run on its own goroutine and
-// results are printed in completion order — still reproducible because
-// the *set* of executed tests and the failure verdict do not depend on
-// scheduling.
-func executeNativeTests(ctx context.Context, b backend.Backend, emitMode backend.EmitMode, tmpRoot string, pkg *resolve.Package, tests []nativeTestCase, workers int, seed uint64, stdout, stderr io.Writer, benchMode bool, benchTimeNs int64) int {
+// tests slice. Each source file is lowered to one shared native object
+// plus one shared runtime object; individual tests then link tiny
+// driver binaries against those shared artifacts. That preserves
+// per-test process isolation while avoiding repeated package-level
+// codegen for sibling tests in the same file.
+func executeNativeTests(ctx context.Context, b backend.Backend, tmpRoot string, pkg *resolve.Package, tests []nativeTestCase, workers int, stdout, stderr io.Writer, benchMode bool, benchTimeNs int64) int {
+	binaries := compileNativeTestBinaries(ctx, b, tmpRoot, pkg, tests, workers)
 	if workers <= 1 {
 		failures := 0
 		for _, tc := range tests {
-			if reportNativeTestResult(runSingleNativeTest(ctx, b, emitMode, tmpRoot, pkg, tc, benchTimeNs), stdout, stderr, benchMode) {
+			if reportNativeTestResult(runSingleNativeTest(ctx, binaries, tc, benchTimeNs), stdout, stderr, benchMode) {
 				failures++
 			}
 		}
@@ -221,7 +220,7 @@ func executeNativeTests(ctx context.Context, b backend.Backend, emitMode backend
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			resultsCh <- runSingleNativeTest(ctx, b, emitMode, tmpRoot, pkg, tc, benchTimeNs)
+			resultsCh <- runSingleNativeTest(ctx, binaries, tc, benchTimeNs)
 		}()
 	}
 	go func() {
@@ -237,6 +236,100 @@ func executeNativeTests(ctx context.Context, b backend.Backend, emitMode backend
 	return failures
 }
 
+type nativeTestBinary struct {
+	Path string
+	Err  error
+}
+
+func compileNativeTestBinaries(ctx context.Context, b backend.Backend, tmpRoot string, pkg *resolve.Package, tests []nativeTestCase, workers int) map[string]nativeTestBinary {
+	bundles := groupNativeTestsByPath(tests)
+	out := make(map[string]nativeTestBinary, len(tests))
+	if len(bundles) == 0 {
+		return out
+	}
+	type compiledBundle struct {
+		binaries map[string]nativeTestBinary
+	}
+	if workers <= 1 {
+		for _, bundle := range bundles {
+			for key, bin := range compileNativeTestBundleBinaries(ctx, b, tmpRoot, pkg, bundle) {
+				out[key] = bin
+			}
+		}
+		return out
+	}
+	limit := workers
+	if limit > len(bundles) {
+		limit = len(bundles)
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	sem := make(chan struct{}, limit)
+	resultsCh := make(chan compiledBundle, len(bundles))
+	var wg sync.WaitGroup
+	for _, bundle := range bundles {
+		bundle := bundle
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			resultsCh <- compiledBundle{binaries: compileNativeTestBundleBinaries(ctx, b, tmpRoot, pkg, bundle)}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		close(resultsCh)
+	}()
+	for result := range resultsCh {
+		for key, bin := range result.binaries {
+			out[key] = bin
+		}
+	}
+	return out
+}
+
+func compileNativeTestBundleBinaries(ctx context.Context, b backend.Backend, tmpRoot string, pkg *resolve.Package, bundle nativeTestBundle) map[string]nativeTestBinary {
+	out := make(map[string]nativeTestBinary, len(bundle.Tests))
+	assets, err := compileNativeTestBundle(ctx, b, tmpRoot, pkg, bundle)
+	if err != nil {
+		for _, tc := range bundle.Tests {
+			out[nativeTestBinaryKey(tc)] = nativeTestBinary{Err: err}
+		}
+		return out
+	}
+	for _, tc := range bundle.Tests {
+		binPath, err := linkNativeTestBinary(ctx, assets, tmpRoot, tc)
+		out[nativeTestBinaryKey(tc)] = nativeTestBinary{Path: binPath, Err: err}
+	}
+	return out
+}
+
+type nativeTestBundle struct {
+	SourcePath string
+	Tests      []nativeTestCase
+}
+
+func groupNativeTestsByPath(tests []nativeTestCase) []nativeTestBundle {
+	order := make([]string, 0, len(tests))
+	bundles := map[string][]nativeTestCase{}
+	for _, tc := range tests {
+		if _, ok := bundles[tc.Path]; !ok {
+			order = append(order, tc.Path)
+		}
+		bundles[tc.Path] = append(bundles[tc.Path], tc)
+	}
+	out := make([]nativeTestBundle, 0, len(order))
+	for _, path := range order {
+		out = append(out, nativeTestBundle{
+			SourcePath: path,
+			Tests:      append([]nativeTestCase(nil), bundles[path]...),
+		})
+	}
+	return out
+}
+
 type nativeTestOutcome struct {
 	Test    nativeTestCase
 	Run     nativeTestRun
@@ -244,9 +337,9 @@ type nativeTestOutcome struct {
 	Elapsed time.Duration
 }
 
-func runSingleNativeTest(ctx context.Context, b backend.Backend, emitMode backend.EmitMode, tmpRoot string, pkg *resolve.Package, tc nativeTestCase, benchTimeNs int64) nativeTestOutcome {
+func runSingleNativeTest(ctx context.Context, binaries map[string]nativeTestBinary, tc nativeTestCase, benchTimeNs int64) nativeTestOutcome {
 	start := time.Now()
-	run, err := compileAndRunNativeTest(ctx, b, emitMode, tmpRoot, pkg, tc, benchTimeNs)
+	run, err := runCompiledNativeTest(ctx, binaries, tc, benchTimeNs)
 	return nativeTestOutcome{Test: tc, Run: run, Err: err, Elapsed: time.Since(start)}
 }
 
@@ -308,6 +401,21 @@ func resolveBenchTime(raw string, benchMode bool) (int64, error) {
 		return 0, fmt.Errorf("--benchtime must be positive, got %q", raw)
 	}
 	return d.Nanoseconds(), nil
+}
+
+func runCompiledNativeTest(ctx context.Context, binaries map[string]nativeTestBinary, tc nativeTestCase, benchTimeNs int64) (nativeTestRun, error) {
+	bin, ok := binaries[nativeTestBinaryKey(tc)]
+	if !ok {
+		return nativeTestRun{}, fmt.Errorf("missing compiled test binary for %s", tc.Name)
+	}
+	if bin.Err != nil {
+		return nativeTestRun{}, bin.Err
+	}
+	return runNativeTestBinary(ctx, bin.Path, benchTimeNs)
+}
+
+func nativeTestBinaryKey(tc nativeTestCase) string {
+	return tc.Path + "\x00" + tc.Name
 }
 
 // resolveTestSeed parses the --seed flag. The empty string produces a
@@ -493,77 +601,113 @@ type nativeTestRun struct {
 	Stderr string
 }
 
-func compileAndRunNativeTest(ctx context.Context, b backend.Backend, emitMode backend.EmitMode, tmpRoot string, pkg *resolve.Package, tc nativeTestCase, benchTimeNs int64) (nativeTestRun, error) {
-	file, src, sourcePath, err := parseNativeTestEntry(pkg, tc)
-	if err != nil {
-		return nativeTestRun{}, err
+type nativeTestBundleAssets struct {
+	ObjectPath        string
+	RuntimeObjectPath string
+}
+
+func compileNativeTestBundle(ctx context.Context, b backend.Backend, tmpRoot string, pkg *resolve.Package, bundle nativeTestBundle) (nativeTestBundleAssets, error) {
+	sourcePath := bundle.SourcePath
+	if sourcePath == "" {
+		sourcePath = filepath.Join(pkg.Dir, "__osty_test__.osty")
 	}
-	name := sanitizeNativeTestName(tc.Name)
-	layoutRoot := filepath.Join(tmpRoot, name)
+	file, src, err := parseGenEmitFile(pkg)
+	if err != nil {
+		return nativeTestBundleAssets{}, err
+	}
 	res := resolveFile(file)
 	chk := check.File(file, res, checkOptsForSource(src))
+	binName := sanitizeNativeTestName(filepath.Base(sourcePath))
+	if binName == "osty_test" {
+		binName = "osty_test_bundle_probe"
+	}
+	layoutRoot := filepath.Join(tmpRoot, "bundle-"+binName)
 	entry, err := backend.PrepareEntry("main", sourcePath, file, res, chk)
 	if err != nil {
-		return nativeTestRun{}, err
+		return nativeTestBundleAssets{}, err
 	}
-	// Hand the concatenated source bytes to the backend so the LLVM
-	// emitter can quote the original expression text of
-	// `testing.assertEq` arguments in failure messages. Without this
-	// the backend falls back to location-only output.
 	entry.Source = src
 	req := backend.Request{
 		Layout: backend.Layout{
 			Root:    layoutRoot,
 			Profile: "test",
 		},
-		Emit:       emitMode,
-		Entry:      entry,
-		BinaryName: name,
+		Emit:  backend.EmitObject,
+		Entry: entry,
 	}
 	result, err := b.Emit(ctx, req)
 	if err != nil {
-		return nativeTestRun{}, err
+		return nativeTestBundleAssets{}, err
 	}
-	return runNativeTestBinary(result.Artifacts.Binary, benchTimeNs)
+	runtimeObject, err := backend.EnsureRuntimeObject(ctx, result.Artifacts, "")
+	if err != nil {
+		return nativeTestBundleAssets{}, err
+	}
+	return nativeTestBundleAssets{
+		ObjectPath:        result.Artifacts.Object,
+		RuntimeObjectPath: runtimeObject,
+	}, nil
 }
 
-func parseNativeTestEntry(pkg *resolve.Package, tc nativeTestCase) (*ast.File, []byte, string, error) {
-	if pkg == nil {
-		return nil, nil, "", fmt.Errorf("missing package")
+func linkNativeTestBinary(ctx context.Context, assets nativeTestBundleAssets, tmpRoot string, tc nativeTestCase) (string, error) {
+	stem := sanitizeNativeTestName(tc.Name)
+	if stem == "osty_test" {
+		stem = "osty_test_case"
 	}
-	runnerPath := filepath.Join(pkg.Dir, "__osty_test_runner__.osty")
-	runner := []byte(fmt.Sprintf("fn main() {\n    %s()\n}\n", tc.Name))
-	testPkg := &resolve.Package{
-		Dir:  pkg.Dir,
-		Name: pkg.Name,
+	root := filepath.Join(tmpRoot, "link-"+stem)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", err
 	}
-	testPkg.Files = append(testPkg.Files, pkg.Files...)
-	runnerFile, runnerDiags := parser.ParseDiagnostics(runner)
-	runnerCanonical, runnerCanonicalMap := canonical.SourceWithMap(runner, runnerFile)
-	testPkg.Files = append(testPkg.Files, &resolve.PackageFile{
-		Path:            runnerPath,
-		Source:          runner,
-		CanonicalSource: runnerCanonical,
-		CanonicalMap:    runnerCanonicalMap,
-		File:            runnerFile,
-		ParseDiags:      runnerDiags,
-	})
-	file, src, err := parseGenEmitFile(testPkg)
+	driverPath := filepath.Join(root, stem+"_driver.c")
+	driverObject := filepath.Join(root, stem+"_driver.o")
+	binaryPath := filepath.Join(root, stem)
+	if err := os.WriteFile(driverPath, buildNativeTestDriver(tc.Name), 0o644); err != nil {
+		return "", err
+	}
+	if err := compileNativeTestDriver(ctx, driverPath, driverObject); err != nil {
+		return "", err
+	}
+	if err := linkNativeTestDriver(ctx, []string{driverObject, assets.ObjectPath, assets.RuntimeObjectPath}, binaryPath); err != nil {
+		return "", err
+	}
+	return binaryPath, nil
+}
+
+func buildNativeTestDriver(name string) []byte {
+	return []byte(fmt.Sprintf("extern void %s(void);\nint main(void) {\n    %s();\n    return 0;\n}\n", name, name))
+}
+
+func compileNativeTestDriver(ctx context.Context, sourcePath, objectPath string) error {
+	return runNativeTestClang(ctx, "compile test driver", "-c", sourcePath, "-o", objectPath)
+}
+
+func linkNativeTestDriver(ctx context.Context, objectPaths []string, binaryPath string) error {
+	args := llvmgen.ClangLinkBinaryArgs("", objectPaths, binaryPath)
+	return runNativeTestClang(ctx, "link test binary", args...)
+}
+
+func runNativeTestClang(ctx context.Context, action string, args ...string) error {
+	path, err := exec.LookPath("clang")
 	if err != nil {
-		return nil, nil, "", err
+		return fmt.Errorf("llvm backend: clang not found on PATH: %w", err)
 	}
-	sourcePath := tc.Path
-	if sourcePath == "" {
-		sourcePath = runnerPath
+	cmd := exec.CommandContext(ctx, path, args...)
+	combined, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
 	}
-	return file, src, sourcePath, nil
+	msg := strings.TrimSpace(string(combined))
+	if msg == "" {
+		msg = "<no output>"
+	}
+	return fmt.Errorf("%s: clang %s: %s", action, strings.Join(args, " "), msg)
 }
 
 func sanitizeNativeTestName(name string) string {
 	return runner.SanitizeNativeTestName(name)
 }
 
-func runNativeTestBinary(binPath string, benchTimeNs int64) (nativeTestRun, error) {
+func runNativeTestBinary(ctx context.Context, binPath string, benchTimeNs int64) (nativeTestRun, error) {
 	if binPath == "" {
 		return nativeTestRun{}, fmt.Errorf("native backend did not produce a binary")
 	}
@@ -571,7 +715,7 @@ func runNativeTestBinary(binPath string, benchTimeNs int64) (nativeTestRun, erro
 	if err != nil {
 		return nativeTestRun{}, err
 	}
-	cmd := exec.Command(absBin)
+	cmd := exec.CommandContext(ctx, absBin)
 	// OSTY_BENCH_TIME_NS is read by osty_rt_bench_target_ns. Only set
 	// it when non-zero so unrelated child processes (e.g. the test
 	// runner invoked without --bench) don't inherit a stale value from

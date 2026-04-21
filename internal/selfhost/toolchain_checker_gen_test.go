@@ -53,4 +53,10 @@ func TestToolchainCheckerSourcesTranspile(t *testing.T) {
 	if !bytes.Contains(generated, []byte("func elabInfer(")) {
 		t.Fatalf("generated file does not include elaborator entrypoints")
 	}
+	if bytes.Contains(generated, []byte("units.len()")) || bytes.Contains(generated, []byte("for i < units.len()")) {
+		t.Fatalf("generated file still contains unlowered list-length method calls")
+	}
+	if bytes.Contains(generated, []byte("strings.slice(")) {
+		t.Fatalf("generated file still contains unlowered std.strings slice calls")
+	}
 }

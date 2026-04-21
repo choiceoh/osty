@@ -4,18 +4,18 @@
 // Passes the optimiser runs, to fixed point, per non-external /
 // non-intrinsic function:
 //
-//   1. Per-block const propagation + terminator folding — when a
-//      bare-write assigns a const to a local and the local has no
-//      further bare writes before a read, the read operand is
-//      rewritten to the constant directly. A `BranchTerm` with a
+//   1. Cross-block const propagation + terminator folding — when a
+//      bare-write assigns a const to a local and every predecessor of a
+//      reachable block agrees on that same constant, the read operand
+//      is rewritten to the constant directly. A `BranchTerm` with a
 //      literal bool `cond` or a `SwitchIntTerm` with a literal
 //      integer scrutinee collapses into a plain `GotoTerm`.
 //
-//      The Osty port is **single-block** (the original design-doc
-//      variant). Go's cross-block meet-over-predecessors is left for a
-//      future follow-up once the self-hosted codegen supports the
-//      worklist shape; per-block already recovers most lowering
-//      artefacts from the current HIR→MIR lowerer.
+//      The analysis is a forward worklist over predecessor meets. A
+//      binding survives into a block only when every visited
+//      predecessor agrees on the same `MirConst`; mismatches or missing
+//      bindings drop out. The entry block stays seeded with the empty
+//      state even when back-edges exist.
 //
 //   2. Empty-goto collapse — an edge targeting a block that has no
 //      instructions and a bare `GotoTerm{C}` is retargeted to `C`
@@ -54,6 +54,21 @@ pub fn mirOptimize(m: MirModule) -> MirModule {
     for func in m.functions {
         mirOptimizeFunction(func)
     }
+    // Self-host MIR stores global initialisers by symbol instead of a
+    // direct function pointer. Follow those edges explicitly too so the
+    // module entry point stays in parity with Go's `Module.Globals[i].Init`
+    // walk, even if an init body later stops being treated as an ordinary
+    // function by callers.
+    for g in m.globals {
+        if !(g.hasInit) || g.initSymbol == "" {
+            continue
+        }
+        let initIdx = mirModuleLookupFunction(m, g.initSymbol)
+        if initIdx < 0 || initIdx >= m.functions.len() {
+            continue
+        }
+        mirOptimizeFunction(m.functions[initIdx])
+    }
     m
 }
 
@@ -86,22 +101,32 @@ pub fn mirOptimizeFunction(func: MirFunction) {
 // Pass 1 — per-block const propagation + terminator folding
 // ====================================================================
 
-/// mirCopyPropagateFn walks every block with an empty initial state
-/// (no cross-block refinement) and rewrites bare reads of const-bound
-/// locals to the constants themselves. Returns true when at least one
-/// operand or terminator was rewritten.
+/// MirConstState is one dataflow fact for a basic block entry/exit:
+/// `live` says whether the block has been reached, and `known` stores
+/// the current per-local const binding table.
+struct MirConstState {
+    live: Bool,
+    known: List<MirConst>,
+}
+
+/// mirCopyPropagateFn computes block-entry const states with a forward
+/// predecessor meet, then rewrites bare reads of const-bound locals to
+/// the constants themselves. Returns true when at least one operand or
+/// terminator was rewritten.
 fn mirCopyPropagateFn(func: MirFunction) -> Bool {
     let n = func.blocks.len()
     if n == 0 {
         return false
     }
+    let entryStates = mirComputeBlockStates(func)
     let mut changed = false
     let mut bi = 0
     for _iter in 0..n {
-        // Fresh per-block binding table: each slot of `known` is either
-        // `MirConstInvalid` (no binding) or the live constant for the
-        // local with that ID.
-        let known = mirFreshKnowns(func.locals.len())
+        let known = if entryStates[bi].live {
+            mirCopyKnowns(entryStates[bi].known)
+        } else {
+            mirFreshKnowns(func.locals.len())
+        }
         if mirPropagateBlock(func.blocks[bi], known) {
             changed = true
         }
@@ -118,6 +143,240 @@ fn mirFreshKnowns(nLocals: Int) -> List<MirConst> {
         out.push(mirConstInvalid())
     }
     out
+}
+
+fn mirCopyKnowns(xs: List<MirConst>) -> List<MirConst> {
+    let mut out: List<MirConst> = []
+    for x in xs {
+        out.push(x)
+    }
+    out
+}
+
+fn mirDeadConstState(nLocals: Int) -> MirConstState {
+    MirConstState { live: false, known: mirFreshKnowns(nLocals) }
+}
+
+fn mirLiveConstState(known: List<MirConst>) -> MirConstState {
+    MirConstState { live: true, known }
+}
+
+fn mirCloneConstState(st: MirConstState) -> MirConstState {
+    MirConstState { live: st.live, known: mirCopyKnowns(st.known) }
+}
+
+fn mirConstEqual(a: MirConst, b: MirConst) -> Bool {
+    if a.kind != b.kind || a.typ != b.typ {
+        return false
+    }
+    match a.kind {
+        MirConstInvalid -> true,
+        MirConstInt -> a.intValue == b.intValue,
+        MirConstBool -> a.boolValue == b.boolValue,
+        MirConstFloat -> a.floatText == b.floatText,
+        MirConstString -> a.strValue == b.strValue,
+        MirConstChar -> a.charValue == b.charValue,
+        MirConstByte -> a.byteValue == b.byteValue,
+        MirConstUnit -> true,
+        MirConstNull -> true,
+        MirConstFn -> a.fnSymbol == b.fnSymbol,
+        _ -> false,
+    }
+}
+
+fn mirKnownsEqual(a: List<MirConst>, b: List<MirConst>) -> Bool {
+    if a.len() != b.len() {
+        return false
+    }
+    let n = a.len()
+    let mut i = 0
+    for _iter in 0..n {
+        if !(mirConstEqual(a[i], b[i])) {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+fn mirConstStatesEqual(a: MirConstState, b: MirConstState) -> Bool {
+    if a.live != b.live {
+        return false
+    }
+    if !(a.live) {
+        return true
+    }
+    mirKnownsEqual(a.known, b.known)
+}
+
+fn mirBuildPredecessors(func: MirFunction) -> List<List<Int>> {
+    let mut preds: List<List<Int>> = []
+    let n = func.blocks.len()
+    for _i in 0..n {
+        preds.push([])
+    }
+    let mut bi = 0
+    for bb in func.blocks {
+        if bb.hasTerm {
+            for succ in mirSuccessors(bb.term) {
+                if succ >= 0 && succ < n {
+                    preds[succ].push(bi)
+                }
+            }
+        }
+        bi = bi + 1
+    }
+    preds
+}
+
+fn mirTransferBlock(bb: MirBasicBlock, seed: MirConstState) -> MirConstState {
+    if !(seed.live) {
+        return seed
+    }
+    let known = mirCopyKnowns(seed.known)
+    let n = bb.instrs.len()
+    let mut i = 0
+    for _iter in 0..n {
+        let kind = bb.instrs[i].kind
+        match kind {
+            MirInstrAssign -> {
+                if mirPlaceHasProjections(bb.instrs[i].dest) {
+                    mirClearKnown(known, bb.instrs[i].dest.local)
+                } else if bb.instrs[i].src.kind == MirRVUse &&
+                    bb.instrs[i].src.arg.kind == MirOpConst {
+                    mirSetKnown(known, bb.instrs[i].dest.local, bb.instrs[i].src.arg.const)
+                } else {
+                    mirClearKnown(known, bb.instrs[i].dest.local)
+                }
+            },
+            MirInstrCall -> {
+                if bb.instrs[i].hasDest {
+                    mirClearKnown(known, bb.instrs[i].dest.local)
+                }
+            },
+            MirInstrIntrinsic -> {
+                if bb.instrs[i].hasDest {
+                    mirClearKnown(known, bb.instrs[i].dest.local)
+                }
+            },
+            _ -> {},
+        }
+        i = i + 1
+    }
+    mirLiveConstState(known)
+}
+
+fn mirMeetKnowns(a: List<MirConst>, b: List<MirConst>) -> List<MirConst> {
+    let mut out: List<MirConst> = []
+    let n = a.len()
+    let mut i = 0
+    for _iter in 0..n {
+        if mirConstEqual(a[i], b[i]) {
+            out.push(a[i])
+        } else {
+            out.push(mirConstInvalid())
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn mirMeetPredecessorStates(
+    succ: Int,
+    predList: List<Int>,
+    exitStates: List<MirConstState>,
+    entryBlock: Int,
+    curEntry: MirConstState,
+    nLocals: Int,
+) -> MirConstState {
+    let mut result = mirDeadConstState(nLocals)
+    let mut havePred = false
+    for pred in predList {
+        if pred < 0 || pred >= exitStates.len() {
+            continue
+        }
+        let out = exitStates[pred]
+        if !(out.live) {
+            continue
+        }
+        if !havePred {
+            result = mirCloneConstState(out)
+            havePred = true
+            continue
+        }
+        result = mirLiveConstState(mirMeetKnowns(result.known, out.known))
+    }
+    if !havePred {
+        return curEntry
+    }
+    if succ == entryBlock {
+        return mirLiveConstState(mirFreshKnowns(nLocals))
+    }
+    result
+}
+
+fn mirComputeBlockStates(func: MirFunction) -> List<MirConstState> {
+    let n = func.blocks.len()
+    let nLocals = func.locals.len()
+    let mut entryStates: List<MirConstState> = []
+    let mut exitStates: List<MirConstState> = []
+    let mut inQueue: List<Bool> = []
+    for _i in 0..n {
+        entryStates.push(mirDeadConstState(nLocals))
+        exitStates.push(mirDeadConstState(nLocals))
+        inQueue.push(false)
+    }
+    if func.entry < 0 || func.entry >= n {
+        return entryStates
+    }
+    let preds = mirBuildPredecessors(func)
+    entryStates[func.entry] = mirLiveConstState(mirFreshKnowns(nLocals))
+    let mut worklist: List<Int> = [func.entry]
+    inQueue[func.entry] = true
+    let maxSteps = n * (n + 1) * 8 + 16
+    for _step in 0..maxSteps {
+        if worklist.isEmpty() {
+            break
+        }
+        let id = worklist[worklist.len() - 1]
+        worklist.pop()
+        if id < 0 || id >= n {
+            continue
+        }
+        inQueue[id] = false
+        let bb = func.blocks[id]
+        let inState = entryStates[id]
+        if !(inState.live) {
+            continue
+        }
+        let outState = mirTransferBlock(bb, inState)
+        if mirConstStatesEqual(exitStates[id], outState) {
+            continue
+        }
+        exitStates[id] = outState
+        for succ in mirSuccessors(bb.term) {
+            if succ < 0 || succ >= n {
+                continue
+            }
+            let nextIn = mirMeetPredecessorStates(
+                succ,
+                preds[succ],
+                exitStates,
+                func.entry,
+                entryStates[succ],
+                nLocals,
+            )
+            if mirConstStatesEqual(entryStates[succ], nextIn) {
+                continue
+            }
+            entryStates[succ] = nextIn
+            if !(inQueue[succ]) {
+                worklist.push(succ)
+                inQueue[succ] = true
+            }
+        }
+    }
+    entryStates
 }
 
 /// mirPropagateBlock walks one basic block. The initial `known` table

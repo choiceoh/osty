@@ -50,6 +50,7 @@ const stringsPrelude = `use go "strings" as strings {
 
 fn ostyStringsConcat(a: String, b: String) -> String { a + b }
 fn ostyStringsChars(s: String) -> List<Char> { s.chars() }
+fn ostyStringsSlice(s: String, start: Int, end: Int) -> String { s[start..end] }
 `
 
 func ToolchainCheckerFiles() []string {
@@ -130,6 +131,7 @@ func normalizeStdStringsCalls(src string) string {
 		// through Osty shims defined at the top of the merged bundle.
 		{"strings.concat(", "ostyStringsConcat("},
 		{"strings.chars(", "ostyStringsChars("},
+		{"strings.slice(", "ostyStringsSlice("},
 	} {
 		src = strings.ReplaceAll(src, pair[0], pair[1])
 	}

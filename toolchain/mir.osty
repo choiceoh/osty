@@ -1247,7 +1247,7 @@ pub fn mirSuccessors(t: MirTerm) -> List<Int> {
 pub fn mirReachableBlocks(func: MirFunction) -> List<Bool> {
     let n = func.blocks.len()
     let mut seen: List<Bool> = []
-    for _unused in func.blocks {
+    for _i in 0..n {
         seen.push(false)
     }
     if n == 0 {

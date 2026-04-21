@@ -280,20 +280,20 @@ type gen struct {
 
 func newGen(pkgName string, file *ast.File, res *resolve.Result, chk *check.Result) *gen {
 	g := &gen{
-		pkgName:           pkgName,
-		file:              file,
-		res:               res,
-		chk:               chk,
-		body:              newWriter(),
-		imports:           map[string]string{},
-		variantOwner:      map[string]string{},
-		enumTypes:         map[string]bool{},
+		pkgName:            pkgName,
+		file:               file,
+		res:                res,
+		chk:                chk,
+		body:               newWriter(),
+		imports:            map[string]string{},
+		variantOwner:       map[string]string{},
+		enumTypes:          map[string]bool{},
 		structTypes:        map[string]bool{},
 		structFieldTypes:   map[string]map[string]ast.Type{},
 		letStmtForIdentPat: map[*ast.IdentPat]*ast.LetStmt{},
 		methodNames:        map[string]map[string]bool{},
-		needStdlibOsty:    map[string]bool{},
-		emittedStdlibOsty: map[string]bool{},
+		needStdlibOsty:     map[string]bool{},
+		emittedStdlibOsty:  map[string]bool{},
 	}
 	g.indexTypes()
 	g.initInstances()
@@ -2209,6 +2209,9 @@ func (g *gen) typeOf(e ast.Expr) types.Type {
 			if t := g.symTypeOf(sym); t != nil {
 				return t
 			}
+		}
+		if t := g.bindingTypeOfIdent(id); t != nil {
+			return t
 		}
 	}
 	return nil
