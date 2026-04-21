@@ -4017,6 +4017,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitStdStringsCall(call); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitStdEnvCall(call); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.emitRuntimeFFICall(call); found || err != nil {
 		return v, err
 	}

@@ -78,6 +78,17 @@ bodies exist so the stub checker accepts imports.
   [`internal/llvmgen/stmt.go`](./internal/llvmgen/stmt.go) (call
   intercept), and [`cmd/osty/test_native.go`](./cmd/osty/test_native.go)
   (CLI flag).
+- **`env.args()` end-to-end through the LLVM backend** — `use std.env`
+  + `let args = env.args()` now compiles to a real argv lookup instead
+  of the LLVM015 "call target *ast.FieldExpr (env.args)" wall.
+  [`internal/llvmgen/stdlib_env_shim.go`](./internal/llvmgen/stdlib_env_shim.go)
+  routes the call to `osty_rt_env_args`, and
+  [`internal/llvmgen/decl.go`](./internal/llvmgen/decl.go) widens `main`
+  to `(i32 argc, ptr argv)` with an `osty_rt_env_args_init` prologue
+  whenever the package imports `std.env`. Each `env.args()` invocation
+  returns a fresh GC-managed `List<String>` (copies of process argv, so
+  the result is safe to mutate). Packages that don't import `std.env`
+  keep the bare `define i32 @main()` signature.
 - **Structural diff on `testing.assertEq`** — on failure, the
   emitted message now includes a line-level diff (`- left` / `+ right`
   with up to 3 context lines) whenever both operands share a
