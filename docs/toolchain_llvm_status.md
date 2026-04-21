@@ -23,16 +23,25 @@ As of 2026-04-19:
 - the whole-toolchain merged LLVM probe still first-walls on the
   bootstrap-only `runtime.golegacy.astbridge` bridge
 - the native-only merged LLVM probe (with bootstrap-only files skipped)
-  now first-walls on `LLVM011 [other] type-system: logical not on
-  %PmCheckOutcome` — a separate structural-enum booleanisation gap
-  (`!enumValue` on a nominal enum type). The whole LLVM015
-  [method_call_field] chain that preceded it is closed: `List.isEmpty`
-  / `Map.isEmpty` / `Set.isEmpty` are inlined as `icmp eq i64 <len>,
-  0` (the stdlib default body form), with `osty_rt_map_len` landing
-  in the C runtime alongside the dispatch (the Go wrapper was already
-  declared); `List.pop()` discard sites go through the upstream
-  `osty_rt_list_pop_discard` helper; nested `IndexExpr` propagates
-  List / Map / Set element shapes via `decorateStaticValueFromSourceType`.
+  now first-walls on `LLVM011 [list_mixed_ptr] type-system: list literal
+  mixes String and non-String ptr-backed values` — a collection-literal
+  typing gap (heterogeneous ptr-backed element types in the same
+  `[...]` literal). The earlier LLVM011 `logical not on %PmCheckOutcome`
+  wall is closed: it was a **parser precedence bug**, not a backend
+  gap. The v0.5 grammar has `UnaryExpr ::= prefix UnaryExpr |
+  PostfixExpr`, so `!x.y` must parse as `!(x.y)`; the self-hosted
+  front-end was emitting `(!x).y`. Fixed at stable-AST lowering time
+  in `internal/parser/lower.go` via `hoistUnaryOverPostfix`, which
+  swaps prefix / postfix when a postfix node's receiver is a prefix
+  UnaryExpr (-, !, ~). Unblocks every `!a.b`, `!a[i]`, `!a()`,
+  `!a.m()` site in the toolchain. The whole LLVM015 [method_call_field]
+  chain that preceded it is also still closed: `List.isEmpty` /
+  `Map.isEmpty` / `Set.isEmpty` are inlined as `icmp eq i64 <len>, 0`
+  (the stdlib default body form), with `osty_rt_map_len` landing
+  in the C runtime alongside the dispatch; `List.pop()` discard sites
+  go through the `osty_rt_list_pop_discard` helper; nested `IndexExpr`
+  propagates List / Map / Set element shapes via
+  `decorateStaticValueFromSourceType`.
   The LLVM012 statement-form category has been cleared for the
   toolchain's actual shape: `LLVM011 [fn_param_struct_type]` Char wall
   at `lspUtf16UnitsForChar` fell first (Char→i32 / Byte→i8 lowering),
@@ -71,7 +80,7 @@ Current-tree observations from the code re-audit:
 |---|---|---|
 | CLI wiring | universal LLVM entry wedge | **resolved** — hello-world `osty gen --backend=llvm` exits 0 and writes `.ll` output |
 | Bootstrap bridge | merged whole-toolchain probe | first wall is still `LLVM002 runtime-ffi` on `runtime.golegacy.astbridge`; this is a bootstrap artifact, not yet a native backend parity claim |
-| Native backend surface | merged native-only probe | first wall is now `LLVM011 [other] type-system: logical not on %PmCheckOutcome` (structural-enum booleanisation — `!enumValue` on a nominal enum) after skipping 4 bootstrap-only files; the whole upstream LLVM015 [method_call_field] chain is closed — List / Map / Set `isEmpty` inline as `icmp eq i64 <len>, 0` (with `osty_rt_map_len` now implemented in the C runtime), nested `IndexExpr` propagates container element shapes, and `list.pop()` discard sites route through `osty_rt_list_pop_discard`; the `LLVM011 Char`, `LLVM012 *ast.MatchExpr`, and `LLVM012 field assignment base *ast.FieldExpr` walls remain closed |
+| Native backend surface | merged native-only probe | first wall is now `LLVM011 [list_mixed_ptr] list literal mixes String and non-String ptr-backed values` (heterogeneous ptr element types in a single `[...]` literal) after skipping 4 bootstrap-only files; the earlier `logical not on %PmCheckOutcome` wall was a parser precedence bug — `!x.y` was emitted as `(!x).y` instead of `!(x.y)` by the self-hosted front-end, now hoisted at stable-AST lowering time; List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites all remain closed |
 | Native backend surface | merged native-only probe | first wall is now `LLVM012 statement: field assignment base *ast.FieldExpr` (nested field assignment) after skipping 4 bootstrap-only files; the earlier `LLVM011 [fn_param_struct_type]` Char wall and the subsequent `LLVM012 *ast.MatchExpr is not a call` wall are both closed |
 | Native backend surface | merged native-only probe | first wall is now `LLVM012` (statement form) after skipping 4 bootstrap-only files; the earlier `LLVM011 [fn_param_struct_type]` Char wall is closed |
 | Checker boundary | `internal/check` / `internal/toolchain` | host still manages an external `osty-native-checker` artifact and falls back to the embedded selfhost checker when it cannot be prepared |

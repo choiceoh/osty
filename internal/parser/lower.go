@@ -151,7 +151,7 @@ func (l *stableLowerer) lowerExpr(expr ast.Expr) ast.Expr {
 		return n
 	case *ast.QuestionExpr:
 		n.X = l.lowerExpr(n.X)
-		return n
+		return hoistUnaryOverPostfix(n)
 	case *ast.CallExpr:
 		n.Fn = l.lowerExpr(n.Fn)
 		for i := range n.Args {
@@ -162,20 +162,20 @@ func (l *stableLowerer) lowerExpr(expr ast.Expr) ast.Expr {
 		if lowered, ok := l.lowerBuiltinLenCall(n); ok {
 			return lowered
 		}
-		return n
+		return hoistUnaryOverPostfix(n)
 	case *ast.FieldExpr:
 		n.X = l.lowerExpr(n.X)
-		return n
+		return hoistUnaryOverPostfix(n)
 	case *ast.IndexExpr:
 		n.X = l.lowerExpr(n.X)
 		n.Index = l.lowerExpr(n.Index)
-		return n
+		return hoistUnaryOverPostfix(n)
 	case *ast.TurbofishExpr:
 		n.Base = l.lowerExpr(n.Base)
 		for i := range n.Args {
 			n.Args[i] = l.lowerType(n.Args[i])
 		}
-		return n
+		return hoistUnaryOverPostfix(n)
 	case *ast.RangeExpr:
 		n.Start = l.lowerExpr(n.Start)
 		n.Stop = l.lowerExpr(n.Stop)
@@ -243,6 +243,78 @@ func (l *stableLowerer) lowerExpr(expr ast.Expr) ast.Expr {
 	default:
 		return n
 	}
+}
+
+// hoistUnaryOverPostfix fixes up a bootstrap-parser precedence bug.
+//
+// Per the v0.5 grammar `UnaryExpr ::= ('-' | '!' | '~') UnaryExpr |
+// PostfixExpr`, so `!x.y` must parse as `!(x.y)`. The self-hosted
+// front-end currently emits a flat token-span tree that, after
+// structural reassembly, yields `(!x).y` — the postfix op ends up
+// wrapping the UnaryExpr instead of being absorbed by the UnaryExpr's
+// operand. This breaks every `!a.b`, `!a[i]`, `!a()`, `!a?`, `!a.m()`
+// site in the toolchain source (and every user program with the same
+// shape).
+//
+// Rather than restructure the front-end parser tree we patch it up at
+// AST lowering time: when a postfix node's immediate receiver is a
+// prefix UnaryExpr (-, !, ~), swap them so the prefix wraps the
+// postfix. Idempotent for already-correct trees because the walker
+// only fires when the receiver is literally a *ast.UnaryExpr.
+//
+// Span preservation: the outer (originally postfix) node keeps its
+// own EndV — that's still the true source end. The new inner
+// postfix's PosV is the old unary operand's Pos so its span covers
+// "x.y" rather than "!x.y"; the wrapping UnaryExpr's PosV is the old
+// postfix PosV (the `!` position).
+func hoistUnaryOverPostfix(expr ast.Expr) ast.Expr {
+	switch n := expr.(type) {
+	case *ast.FieldExpr:
+		u, ok := n.X.(*ast.UnaryExpr)
+		if !ok || !isPrefixUnaryOp(u.Op) {
+			return n
+		}
+		n.X = u.X
+		n.PosV = u.X.Pos()
+		return &ast.UnaryExpr{PosV: u.PosV, EndV: n.EndV, Op: u.Op, X: hoistUnaryOverPostfix(n)}
+	case *ast.IndexExpr:
+		u, ok := n.X.(*ast.UnaryExpr)
+		if !ok || !isPrefixUnaryOp(u.Op) {
+			return n
+		}
+		n.X = u.X
+		n.PosV = u.X.Pos()
+		return &ast.UnaryExpr{PosV: u.PosV, EndV: n.EndV, Op: u.Op, X: hoistUnaryOverPostfix(n)}
+	case *ast.CallExpr:
+		u, ok := n.Fn.(*ast.UnaryExpr)
+		if !ok || !isPrefixUnaryOp(u.Op) {
+			return n
+		}
+		n.Fn = u.X
+		n.PosV = u.X.Pos()
+		return &ast.UnaryExpr{PosV: u.PosV, EndV: n.EndV, Op: u.Op, X: hoistUnaryOverPostfix(n)}
+	case *ast.QuestionExpr:
+		u, ok := n.X.(*ast.UnaryExpr)
+		if !ok || !isPrefixUnaryOp(u.Op) {
+			return n
+		}
+		n.X = u.X
+		n.PosV = u.X.Pos()
+		return &ast.UnaryExpr{PosV: u.PosV, EndV: n.EndV, Op: u.Op, X: hoistUnaryOverPostfix(n)}
+	case *ast.TurbofishExpr:
+		u, ok := n.Base.(*ast.UnaryExpr)
+		if !ok || !isPrefixUnaryOp(u.Op) {
+			return n
+		}
+		n.Base = u.X
+		n.PosV = u.X.Pos()
+		return &ast.UnaryExpr{PosV: u.PosV, EndV: n.EndV, Op: u.Op, X: hoistUnaryOverPostfix(n)}
+	}
+	return expr
+}
+
+func isPrefixUnaryOp(op token.Kind) bool {
+	return op == token.NOT || op == token.MINUS || op == token.BITNOT
 }
 
 func (l *stableLowerer) lowerType(ty ast.Type) ast.Type {
