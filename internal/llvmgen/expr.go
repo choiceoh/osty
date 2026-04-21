@@ -81,7 +81,14 @@ func (g *generator) emitStringLiteral(lit *ast.StringLit) (value, error) {
 		emitter := g.toOstyEmitter()
 		out := llvmStringLiteral(emitter, text)
 		g.takeOstyEmitter(emitter)
-		return fromOstyValue(out), nil
+		v := fromOstyValue(out)
+		// Tag the literal with its source type so downstream binders
+		// (`let mut line = ""`) propagate the String-ness forward —
+		// without this, a subsequent `[line, otherString]` list literal
+		// fails the isString parity check because the local's
+		// sourceType is nil.
+		v.sourceType = &ast.NamedType{Path: []string{"String"}}
+		return v, nil
 	}
 	return g.emitInterpolatedString(lit)
 }
@@ -123,6 +130,7 @@ func (g *generator) emitInterpolatedString(lit *ast.StringLit) (value, error) {
 		}
 		result = r
 	}
+	result.sourceType = &ast.NamedType{Path: []string{"String"}}
 	return result, nil
 }
 

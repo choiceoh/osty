@@ -391,6 +391,9 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		if src, ok := g.staticStringMethodSourceType(e); ok {
 			return src, true
 		}
+		if src, ok := g.staticStdStringsCallSourceType(e); ok {
+			return src, true
+		}
 		if id, ok := e.Fn.(*ast.Ident); ok {
 			if sig := g.functions[id.Name]; sig != nil && sig.returnSourceType != nil {
 				return sig.returnSourceType, true
@@ -747,6 +750,39 @@ func (g *generator) staticExprListElemIsBytes(expr ast.Expr) bool {
 		return false
 	}
 	return llvmNamedTypeIsBytes(elemResolved)
+}
+
+// staticStdStringsCallSourceType recovers the source-level return type
+// for `strings.<method>(...)` alias-qualified calls (`use std.strings
+// as strings`). Keeps the dispatch layer (`stdStringsCallStaticResult`)
+// and the source-type layer in sync so nested forms like
+// `strings.join([strings.join(parts, ", "), ...], "")` don't pinball
+// between "String" and "unknown ptr-backed" when a list literal asks
+// `isString?` about the inner call.
+func (g *generator) staticStdStringsCallSourceType(call *ast.CallExpr) (ast.Type, bool) {
+	if call == nil || len(g.stdStringsAliases) == 0 {
+		return nil, false
+	}
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok {
+		return nil, false
+	}
+	alias, ok := field.X.(*ast.Ident)
+	if !ok || !g.stdStringsAliases[alias.Name] {
+		return nil, false
+	}
+	stringT := &ast.NamedType{Path: []string{"String"}}
+	switch field.Name {
+	case "compare", "count":
+		return &ast.NamedType{Path: []string{"Int"}}, true
+	case "contains", "hasPrefix", "hasSuffix":
+		return &ast.NamedType{Path: []string{"Bool"}}, true
+	case "concat", "join", "repeat", "replaceAll", "slice", "trim", "trimSpace", "trimPrefix", "trimSuffix":
+		return stringT, true
+	case "split", "splitN":
+		return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{stringT}}, true
+	}
+	return nil, false
 }
 
 func (g *generator) staticStringMethodSourceType(call *ast.CallExpr) (ast.Type, bool) {
