@@ -70,6 +70,11 @@ func TestParseSnapshot(t *testing.T) {
 				t.Skipf("corpus file missing: %v", err)
 				return
 			}
+			// Normalize CRLF→LF: goldens were captured from a
+			// LF-normalized source, so Windows checkouts with
+			// core.autocrlf=true would otherwise yield different
+			// byte offsets in every Pos field and fail every case.
+			src = []byte(strings.ReplaceAll(string(src), "\r\n", "\n"))
 
 			file, diags := Parse(src)
 			got := dumpParseResult(file, diags)
@@ -86,8 +91,14 @@ func TestParseSnapshot(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden (set UPDATE_SNAPSHOT=1 to seed): %v", err)
 			}
-			if string(want) != got {
-				t.Fatalf("parse snapshot drift for %s\nfirst diff line: %s\n(re-run with UPDATE_SNAPSHOT=1 after a deliberate behavior change)", rel, firstDiffLine(string(want), got))
+			// Normalize CRLF→LF: Windows checkouts with
+			// core.autocrlf=true store goldens with \r\n, but `got`
+			// is generated in-memory with \n only. Without this the
+			// test fails with a diff where every line looks
+			// identical but differs by the trailing \r.
+			wantStr := strings.ReplaceAll(string(want), "\r\n", "\n")
+			if wantStr != got {
+				t.Fatalf("parse snapshot drift for %s\nfirst diff line: %s\n(re-run with UPDATE_SNAPSHOT=1 after a deliberate behavior change)", rel, firstDiffLine(wantStr, got))
 			}
 		})
 	}
