@@ -180,7 +180,6 @@ fn mirConstEqual(a: MirConst, b: MirConst) -> Bool {
         MirConstUnit -> true,
         MirConstNull -> true,
         MirConstFn -> a.fnSymbol == b.fnSymbol,
-        _ -> false,
     }
 }
 

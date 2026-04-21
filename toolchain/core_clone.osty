@@ -181,8 +181,6 @@ pub fn coreKindSlots(kind: CoreKind) -> CoreRefSlots {
         CpOr -> coreSlotsChildren(),
         CpBinding -> coreSlotsLeft(),
         CpErr -> coreSlotsNone(),
-
-        _ -> coreSlotsUnknown(),
     }
 }
 
