@@ -125,6 +125,44 @@ func TestLoadGenPackageEntryWithTransformRepairsForeignSyntax(t *testing.T) {
 	}
 }
 
+func TestPrepareGenBackendEntryUsesPackageLoweringForSiblingFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeGenTestFile(t, dir, "a.osty", "pub fn helper() -> Int { 1 }\n")
+	target := writeGenTestFile(t, dir, "b.osty", "fn main() -> Int { helper() }\n")
+
+	entry, err := loadGenPackageEntry(target)
+	if err != nil {
+		t.Fatalf("loadGenPackageEntry() error = %v", err)
+	}
+	backendEntry, err := prepareGenBackendEntry("main", entry)
+	if err != nil {
+		t.Fatalf("prepareGenBackendEntry() error = %v", err)
+	}
+	if backendEntry.File != entry.file.File {
+		t.Fatal("backend entry did not keep the original package entry AST")
+	}
+	if backendEntry.IR == nil || len(backendEntry.IR.Decls) != 2 {
+		t.Fatalf("backend entry decl count = %d, want 2", len(backendEntry.IR.Decls))
+	}
+}
+
+func TestGenCLIMultiFilePackageEmitsLLVMIR(t *testing.T) {
+	dir := t.TempDir()
+	writeGenTestFile(t, dir, "a.osty", "pub fn helper() -> Int { 1 }\n")
+	target := writeGenTestFile(t, dir, "b.osty", "fn main() -> Int { helper() }\n")
+
+	got := runOstyCLI(t, "gen", "--emit", "llvm-ir", target)
+	if got.exit != 0 {
+		t.Fatalf("osty gen exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "@helper") {
+		t.Fatalf("stdout missing helper symbol:\n%s", got.stdout)
+	}
+	if !strings.Contains(got.stdout, "@main") {
+		t.Fatalf("stdout missing main symbol:\n%s", got.stdout)
+	}
+}
+
 func writeGenTestFile(t *testing.T, dir, name, contents string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
