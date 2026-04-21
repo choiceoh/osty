@@ -41047,10 +41047,115 @@ func collectDecls(cx *ElabCx) {
 			if func() bool { _, ok := _m2232.(*AstNodeKind_AstNLetDecl); return ok }() {
 				collectLetDecl(cx, declIdx, node)
 			}
+			// Mirrored from toolchain/check.osty pending a regen fix.
+			if func() bool { _, ok := _m2232.(*AstNodeKind_AstNUseDecl); return ok }() {
+				collectUseDecl(cx, declIdx, node)
+			}
 			{
 			}
 		}
 	}
+}
+
+// collectUseDecl registers `use go "..." as X { fn foo(...) ... }`
+// bodies so toolchain-style namespaced calls (`X.foo(args)`) resolve
+// through the ordinary method-lookup path. Mirrored from
+// toolchain/check.osty pending a regen fix.
+func collectUseDecl(cx *ElabCx, declIdx int, node *AstNode) {
+	alias := useDeclAliasName(cx, node)
+	if alias == "" {
+		return
+	}
+	env := cx.env
+	moduleTy := tyNamed(env.tys, alias, nil)
+	checkBindSpan(env, alias, moduleTy, false, node.start, node.end)
+	checkRecordSymbol(env, declIdx, "use", alias, "", moduleTy, node.start, node.end)
+	// Only register fn members — struct / type-alias collection would
+	// need `<alias>.<Name>` keys to match the dotted form used in
+	// annotations outside the block; that wiring lives in a
+	// follow-up.
+	for _, bodyIdx := range node.children {
+		body := astArenaNodeAt(cx.ast.arena, bodyIdx)
+		if _, ok := body.kind.(*AstNodeKind_AstNFnDecl); ok {
+			collectFnDecl(cx, bodyIdx, body, alias, make([]string, 0), make([]*CheckGenericBound, 0))
+		}
+	}
+	// `use std.strings as X` — pull the hot subset of std.strings under
+	// the alias so `X.hasPrefix(...)` / `X.join(...)` resolve.
+	if node.text == "std.strings" {
+		registerStdStringsAliasFns(env, alias)
+	}
+}
+
+// registerStdStringsAliasFns registers the hot subset of std.strings
+// exports under alias. Mirrored from toolchain/check.osty pending a
+// regen fix.
+func registerStdStringsAliasFns(env *CheckEnv, alias string) {
+	tys := env.tys
+	tString_ := tString(tys)
+	tBool_ := tBool(tys)
+	tInt_ := tInt(tys)
+	tListString := tyNamed(tys, "List", []int{tString_})
+	tListChar_ := tyNamed(tys, "List", []int{tChar(tys)})
+	tListByte_ := tyNamed(tys, "List", []int{tByte(tys)})
+	tOptInt := tyOptional(tys, tInt_)
+
+	empty := func() []string { return make([]string, 0) }
+	bounds := func() []*CheckGenericBound { return make([]*CheckGenericBound, 0) }
+
+	add := func(name string, ret int, paramNames []string, paramTys []int) {
+		checkRegisterFn(env, &CheckFnSig{
+			name: name, owner: alias, receiverTy: -1, retTy: ret,
+			paramNames: paramNames, paramTys: paramTys,
+			generics: empty(), genericBounds: bounds(),
+		})
+	}
+	s1 := func(name string, ret int) {
+		add(name, ret, []string{"s"}, []int{tString_})
+	}
+	s2 := func(name string, ret int, p2 string) {
+		add(name, ret, []string{"s", p2}, []int{tString_, tString_})
+	}
+
+	s1("len", tInt_)
+	s1("isEmpty", tBool_)
+	add("concat", tString_, []string{"a", "b"}, []int{tString_, tString_})
+	s1("chars", tListChar_)
+	s1("bytes", tListByte_)
+	s2("split", tListString, "sep")
+	add("splitN", tListString, []string{"s", "sep", "n"}, []int{tString_, tString_, tInt_})
+	s1("lines", tListString)
+	add("join", tString_, []string{"parts", "sep"}, []int{tListString, tString_})
+	s2("contains", tBool_, "substr")
+	s2("indexOf", tOptInt, "substr")
+	s2("lastIndexOf", tOptInt, "substr")
+	s2("count", tInt_, "substr")
+	s2("startsWith", tBool_, "prefix")
+	s2("hasPrefix", tBool_, "prefix")
+	s2("endsWith", tBool_, "suffix")
+	s2("hasSuffix", tBool_, "suffix")
+	s1("trim", tString_)
+	s1("trimSpace", tString_)
+	s2("trimPrefix", tString_, "prefix")
+	s2("trimSuffix", tString_, "suffix")
+	s1("toUpper", tString_)
+	s1("toLower", tString_)
+	add("compare", tInt_, []string{"a", "b"}, []int{tString_, tString_})
+}
+
+func useDeclAliasName(cx *ElabCx, node *AstNode) string {
+	if checkIntListLenLocal(node.children2) == 0 {
+		return ""
+	}
+	aliasIdx := checkIntListAtLocal(node.children2, 0)
+	if aliasIdx < 0 {
+		return ""
+	}
+	aliasNode := astArenaNodeAt(cx.ast.arena, aliasIdx)
+	if _, ok := aliasNode.kind.(*AstNodeKind_AstNIdent); !ok {
+		return ""
+	}
+	return aliasNode.text
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18261:1

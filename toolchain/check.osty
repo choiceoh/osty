@@ -136,10 +136,218 @@ fn collectDecls(cx: ElabCx) {
             AstNTypeAlias -> collectTypeAlias(cx, declIdx, node),
             AstNLet -> collectLetDecl(cx, declIdx, node),
             AstNLetDecl -> collectLetDecl(cx, declIdx, node),
+            AstNUseDecl -> collectUseDecl(cx, declIdx, node),
             _ -> {},
         }
     }
 }
+
+/// collectUseDecl handles `use` declarations — both the Go FFI form
+/// with an inline body and the plain `use path as X` aliases.
+/// Registers the alias as a module-like binding and every fn member
+/// under that alias as owner, so call sites like `X.foo(args)`
+/// resolve through the ordinary `checkLookupMethod(env, "X", "foo")`
+/// path. The Go-side resolver threads actual package surfaces
+/// through this symbol; here we only need enough to satisfy the
+/// type checker's dotted-lookup — the native backend still sees the
+/// raw FFI shape.
+///
+/// Note: the probe that filters bootstrap-only files greps the
+/// literal substring `use go <dqlit>` — we deliberately avoid
+/// that token sequence here so a doc comment doesn't accidentally
+/// mark this file as bootstrap-only.
+fn collectUseDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
+    let alias = useDeclAliasName(cx, node)
+    if alias == "" {
+        return
+    }
+    let env = cx.env
+    // Register a binding so bare `X` in expression position has a
+    // type; the head name is what `checkLookupMethod` keys off.
+    let moduleTy = tyNamed(env.tys, alias, [])
+    checkBindSpan(env, alias, moduleTy, false, node.start, node.end)
+    checkRecordSymbol(env, declIdx, "use", alias, "", moduleTy, node.start, node.end)
+
+    // Only register fn members for now. Struct / type-alias bodies
+    // would need to be stored under `<alias>.<Name>` to match the
+    // dotted forms used in type annotations outside the block
+    // (`astbridge.Pos` vs `Pos`) — wiring that into the whole
+    // alias-resolution + unification path is a separate fix.
+    for bodyIdx in node.children {
+        let body = astArenaNodeAt(cx.ast.arena, bodyIdx)
+        if body.kind == AstNFnDecl {
+            collectFnDecl(cx, bodyIdx, body, alias, [], [])
+        }
+    }
+
+    // `use std.strings as X` (no body) — pull the std.strings surface
+    // under the alias. Toolchain code routinely spells this as
+    // `strings`, `ciStrings`, `pkgStrings`, `llvmStrings`, etc.
+    if node.text == "std.strings" {
+        registerStdStringsAliasFns(env, alias)
+    }
+}
+
+/// registerStdStringsAliasFns registers the hot subset of std.strings
+/// exports under `alias` so `alias.fn(...)` resolves. Scope mirrors
+/// the top E0703 names from the `osty check toolchain` histogram so
+/// the net diagnostic reduction is maximal. Additional helpers can
+/// land as they surface; the full std.strings surface lives in
+/// `internal/stdlib/modules/strings.osty`.
+fn registerStdStringsAliasFns(env: CheckEnv, alias: String) {
+    let tys = env.tys
+    let tString_ = tString(tys)
+    let tBool_ = tBool(tys)
+    let tInt_ = tInt(tys)
+    let tListString = tyNamed(tys, "List", [tString_])
+    let tListChar_ = tyNamed(tys, "List", [tChar(tys)])
+    let tListByte_ = tyNamed(tys, "List", [tByte(tys)])
+    let tOptInt = tyOptional(tys, tInt_)
+
+    let emptyGenerics: List<String> = []
+    let emptyBounds: List<CheckGenericBound> = []
+
+    checkRegisterFn(env, CheckFnSig {
+        name: "len", owner: alias, receiverTy: -1, retTy: tInt_,
+        paramNames: ["s"], paramTys: [tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "isEmpty", owner: alias, receiverTy: -1, retTy: tBool_,
+        paramNames: ["s"], paramTys: [tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "concat", owner: alias, receiverTy: -1, retTy: tString_,
+        paramNames: ["a", "b"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "chars", owner: alias, receiverTy: -1, retTy: tListChar_,
+        paramNames: ["s"], paramTys: [tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "bytes", owner: alias, receiverTy: -1, retTy: tListByte_,
+        paramNames: ["s"], paramTys: [tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "split", owner: alias, receiverTy: -1, retTy: tListString,
+        paramNames: ["s", "sep"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "splitN", owner: alias, receiverTy: -1, retTy: tListString,
+        paramNames: ["s", "sep", "n"], paramTys: [tString_, tString_, tInt_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "lines", owner: alias, receiverTy: -1, retTy: tListString,
+        paramNames: ["s"], paramTys: [tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "join", owner: alias, receiverTy: -1, retTy: tString_,
+        paramNames: ["parts", "sep"], paramTys: [tListString, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "contains", owner: alias, receiverTy: -1, retTy: tBool_,
+        paramNames: ["s", "substr"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "indexOf", owner: alias, receiverTy: -1, retTy: tOptInt,
+        paramNames: ["s", "substr"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "lastIndexOf", owner: alias, receiverTy: -1, retTy: tOptInt,
+        paramNames: ["s", "substr"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "count", owner: alias, receiverTy: -1, retTy: tInt_,
+        paramNames: ["s", "substr"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "startsWith", owner: alias, receiverTy: -1, retTy: tBool_,
+        paramNames: ["s", "prefix"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "hasPrefix", owner: alias, receiverTy: -1, retTy: tBool_,
+        paramNames: ["s", "prefix"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "endsWith", owner: alias, receiverTy: -1, retTy: tBool_,
+        paramNames: ["s", "suffix"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "hasSuffix", owner: alias, receiverTy: -1, retTy: tBool_,
+        paramNames: ["s", "suffix"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "trim", owner: alias, receiverTy: -1, retTy: tString_,
+        paramNames: ["s"], paramTys: [tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "trimSpace", owner: alias, receiverTy: -1, retTy: tString_,
+        paramNames: ["s"], paramTys: [tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "trimPrefix", owner: alias, receiverTy: -1, retTy: tString_,
+        paramNames: ["s", "prefix"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "trimSuffix", owner: alias, receiverTy: -1, retTy: tString_,
+        paramNames: ["s", "suffix"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toUpper", owner: alias, receiverTy: -1, retTy: tString_,
+        paramNames: ["s"], paramTys: [tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toLower", owner: alias, receiverTy: -1, retTy: tString_,
+        paramNames: ["s"], paramTys: [tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "compare", owner: alias, receiverTy: -1, retTy: tInt_,
+        paramNames: ["a", "b"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+}
+
+/// useDeclAliasName returns the declared alias (`as X`) or "" when the
+/// alias is missing. The Go-side resolver falls back to the last path
+/// segment; toolchain code always spells the alias explicitly so we
+/// keep the minimal form here.
+fn useDeclAliasName(cx: ElabCx, node: AstNode) -> String {
+    if checkIntListLenLocal(node.children2) == 0 {
+        return ""
+    }
+    let aliasIdx = checkIntListAtLocal(node.children2, 0)
+    if aliasIdx < 0 {
+        return ""
+    }
+    let aliasNode = astArenaNodeAt(cx.ast.arena, aliasIdx)
+    if aliasNode.kind != AstNIdent {
+        return ""
+    }
+    aliasNode.text
+}
+
 
 fn collectFnDecl(
     cx: ElabCx,
