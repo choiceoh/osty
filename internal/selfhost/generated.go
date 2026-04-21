@@ -32386,33 +32386,89 @@ func checkInstallPrelude(env *CheckEnv) {
 	// Mirrored from toolchain/check_env.osty pending a regen fix.
 	checkInstallBuiltinMethods(env)
 	checkInstallChannelIntrinsics(env)
+	checkInstallErrorIntrinsics(env)
 	checkInstallImplicitModules(env)
 }
 
-// checkInstallImplicitModules — mirror.
+// checkInstallImplicitModules — mirror. Adds `time` alongside
+// thread/debug/fmt so `time.sleep(...)` resolves without an explicit
+// `use` line. Mirrored from toolchain/check_env.osty pending a regen
+// fix.
 func checkInstallImplicitModules(env *CheckEnv) {
 	tys := env.tys
-	for _, name := range []string{"thread", "debug", "fmt"} {
+	for _, name := range []string{"thread", "debug", "fmt", "time"} {
 		ty := tyNamed(tys, name, nil)
 		checkBindSpan(env, name, ty, false, 0, 0)
 	}
 	registerStdThreadAliasFns(env, "thread")
 	registerStdDebugAliasFns(env, "debug")
+	registerStdTimeAliasFns(env, "time")
 }
 
-// checkInstallChannelIntrinsics — mirror.
+// registerStdTimeAliasFns — `time.sleep(Duration)`. Mirrored from
+// toolchain/check_env.osty pending a regen fix.
+func registerStdTimeAliasFns(env *CheckEnv, alias string) {
+	tys := env.tys
+	tDuration := tyNamed(tys, "Duration", nil)
+	checkRegisterFn(env, &CheckFnSig{
+		name:          "sleep",
+		owner:         alias,
+		receiverTy:    -1,
+		retTy:         tUnit(tys),
+		paramNames:    []string{"duration"},
+		paramTys:      []int{tDuration},
+		generics:      []string{},
+		genericBounds: make([]*CheckGenericBound, 0),
+	})
+}
+
+// checkInstallErrorIntrinsics — mirror of spec §A.6 Error interface.
+// Registers the type plus `Error.new(String) -> Error` constructor
+// and `err.downcast::<T>() -> Option<T>`. Mirrored from
+// toolchain/check_env.osty pending a regen fix.
+func checkInstallErrorIntrinsics(env *CheckEnv) {
+	tys := env.tys
+	tError := tyNamed(tys, "Error", nil)
+	tString_ := tString(tys)
+	tT := tyNamed(tys, "T", nil)
+	tOptT := tyOptional(tys, tT)
+	bounds := func() []*CheckGenericBound { return make([]*CheckGenericBound, 0) }
+	checkRegisterType(env, &CheckTypeSig{name: "Error", generics: []string{}, genericBounds: bounds(), kind: "interface"})
+	checkRegisterInterface(env, "Error")
+	checkRegisterFn(env, &CheckFnSig{name: "new", owner: "Error", receiverTy: tError, retTy: tError, paramNames: []string{"message"}, paramTys: []int{tString_}, generics: []string{}, genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "downcast", owner: "Error", receiverTy: tError, retTy: tOptT, paramNames: []string{}, paramTys: []int{}, generics: []string{"T"}, genericBounds: bounds()})
+}
+
+// checkInstallChannelIntrinsics — mirror. Registers `Channel` and
+// `Handle` as types (required for receiver-based generic seeding) plus
+// their intrinsic methods. Mirrored from toolchain/check_env.osty
+// pending a regen fix.
 func checkInstallChannelIntrinsics(env *CheckEnv) {
 	tys := env.tys
 	tT := tyNamed(tys, "T", nil)
 	tChanT := tyNamed(tys, "Channel", []int{tT})
+	tHandleT := tyNamed(tys, "Handle", []int{tT})
 	tOptT := tyOptional(tys, tT)
 	gT := []string{"T"}
 	bounds := func() []*CheckGenericBound { return make([]*CheckGenericBound, 0) }
+	checkRegisterType(env, &CheckTypeSig{name: "Channel", generics: []string{"T"}, genericBounds: bounds(), kind: "struct"})
+	checkRegisterType(env, &CheckTypeSig{name: "Handle", generics: []string{"T"}, genericBounds: bounds(), kind: "struct"})
+	checkRegisterType(env, &CheckTypeSig{name: "Group", generics: []string{}, genericBounds: bounds(), kind: "struct"})
+	// Group.spawn(body: fn() -> T) -> Handle<T> — spec §B.6 structural
+	// concurrency helper. Lets `taskGroup(|g| { g.spawn(|| work()) })`
+	// resolve without E0703.
+	tGroupTy := tyNamed(tys, "Group", []int{})
+	checkRegisterFn(env, &CheckFnSig{name: "spawn", owner: "Group", receiverTy: tGroupTy, retTy: tHandleT, paramNames: []string{"body"}, paramTys: []int{tyFn(tys, []int{}, tT)}, generics: gT, genericBounds: bounds()})
 	checkRegisterFn(env, &CheckFnSig{name: "close", owner: "Channel", receiverTy: tChanT, retTy: tUnit(tys), paramNames: []string{}, paramTys: []int{}, generics: gT, genericBounds: bounds()})
 	checkRegisterFn(env, &CheckFnSig{name: "recv", owner: "Channel", receiverTy: tChanT, retTy: tOptT, paramNames: []string{}, paramTys: []int{}, generics: gT, genericBounds: bounds()})
 	checkRegisterFn(env, &CheckFnSig{name: "send", owner: "Channel", receiverTy: tChanT, retTy: tUnit(tys), paramNames: []string{"value"}, paramTys: []int{tT}, generics: gT, genericBounds: bounds()})
 	checkRegisterFn(env, &CheckFnSig{name: "len", owner: "Channel", receiverTy: tChanT, retTy: tInt(tys), paramNames: []string{}, paramTys: []int{}, generics: gT, genericBounds: bounds()})
 	checkRegisterFn(env, &CheckFnSig{name: "isClosed", owner: "Channel", receiverTy: tChanT, retTy: tBool(tys), paramNames: []string{}, paramTys: []int{}, generics: gT, genericBounds: bounds()})
+	// Handle<T>.join() -> T — plain-value signature. Spec §B.6 shows
+	// `a.join() + b.join()` (arithmetic) alongside `h.join()?` (Result
+	// propagation); plain-value lets the first form typecheck, and the
+	// second still works when T itself is Result.
+	checkRegisterFn(env, &CheckFnSig{name: "join", owner: "Handle", receiverTy: tHandleT, retTy: tT, paramNames: []string{}, paramTys: []int{}, generics: gT, genericBounds: bounds()})
 }
 
 // checkInstallBuiltinMethods registers the intrinsic methods spec §10.6
@@ -35214,6 +35270,29 @@ func elabInferCall(cx *ElabCx, callIdx int, node *AstNode, expected int) *ElabRe
 	_ = callee
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15068:5
 	if ostyEqual(callee.kind, AstNodeKind(&AstNodeKind_AstNField{})) {
+		// `Expr.Num(1)` / `Value.newInt(n)` — type-qualified call at
+		// call position. Before dispatching through the method-call
+		// path (which would try to elab the LHS as a value), detect
+		// the enum-variant shape or static-method shape and route
+		// directly. Mirrors the dotted-variant prefix stripping
+		// elabVariantPattern does for pattern-side uses. Mirrored from
+		// toolchain/elab.osty pending a regen fix.
+		if callee.left >= 0 {
+			fieldLhs := astArenaNodeAt(cx.ast.arena, callee.left)
+			if ostyEqual(fieldLhs.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+				variant := checkLookupVariantInOwner(cx.env, fieldLhs.text, callee.text)
+				if variant.name != "" {
+					return elabInferVariantCall(cx, callIdx, node, callee, argIdxs, variant, make([]int, 0, 1), expected)
+				}
+				typeSig := checkLookupType(cx.env, fieldLhs.text)
+				if typeSig.name != "" {
+					staticSig := checkLookupMethod(cx.env, fieldLhs.text, callee.text)
+					if staticSig.name != "" {
+						return elabInferStaticMethodCall(cx, callIdx, node, callee, argIdxs, fieldLhs.text, staticSig, make([]int, 0, 1), expected)
+					}
+				}
+			}
+		}
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15069:9
 		return elabInferMethodCall(cx, node, callee, expected, make([]int, 0, 1))
 	}
@@ -35337,6 +35416,44 @@ func elabInferVariantCall(cx *ElabCx, callIdx int, node *AstNode, baseCallee *As
 	typeArgsConcrete := instConcreteArgs(cx, inst)
 	if checkIntListLenHelper(typeArgsConcrete) > 0 {
 		checkRecordInstantiation(cx.env, callIdx, variant.name, typeArgsConcrete, retTy, node.start, node.end)
+	}
+	coreCallNode := coreCall(cx.core, coreFn, coreArgs, typeArgsConcrete, retTy, node.start, node.end)
+	return &ElabResult{node: coreCallNode, ty: retTy}
+}
+
+// elabInferStaticMethodCall handles `Value.newInt(n)` — a call where
+// the callee is an enum/struct type name dotted with a method that
+// takes no self receiver. Mirrors the fn-call path but skips the
+// receiver-value inference the method-call path would attempt on the
+// LHS ident. Mirrored from toolchain/elab.osty pending a regen fix.
+func elabInferStaticMethodCall(cx *ElabCx, callIdx int, node *AstNode, fieldNode *AstNode, argIdxs []int, ownerName string, sig *CheckFnSig, explicitArgs []int, expected int) *ElabResult {
+	_ = ownerName
+	if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
+		coreFn := coreIdent(cx.core, sig.name, IdentKind(&IdentKind_IkFn{}), fnSigToTy(cx.env, sig), fieldNode.start, fieldNode.end)
+		coreArgs := elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, argIdxs, node.start, node.end)
+		retTy := sig.retTy
+		if !tyIsBad(cx.env.tys, expected) {
+			_ = checkExpectAssignable(cx.env, expected, retTy, node.start, node.end)
+		}
+		coreCallNode := coreCall(cx.core, coreFn, coreArgs, make([]int, 0), retTy, node.start, node.end)
+		return &ElabResult{node: coreCallNode, ty: retTy}
+	}
+	inst := instBegin(cx, sig.generics, sig.name)
+	instSeedExpectedRet(cx, inst, sig.retTy, expected)
+	instSeedPositionalArgs(cx, inst, explicitArgs)
+
+	coreFn := coreIdent(cx.core, sig.name, IdentKind(&IdentKind_IkFn{}), fnSigToTy(cx.env, sig), fieldNode.start, fieldNode.end)
+	coreArgs := elabCallArgs(cx, inst.solver, sig, inst.freshs, argIdxs, node.start, node.end)
+
+	retSubstituted := instSubstitute(cx, inst, sig.retTy)
+	retTy := instZonk(cx, inst, retSubstituted)
+
+	elabReportUnresolvedGenerics(cx, inst.solver, sig, inst.freshs, node.start, node.end)
+	instCheckBounds(cx, inst, sig.genericBounds, node.start, node.end)
+
+	typeArgsConcrete := instConcreteArgs(cx, inst)
+	if checkIntListLenHelper(typeArgsConcrete) > 0 {
+		checkRecordInstantiation(cx.env, callIdx, sig.name, typeArgsConcrete, retTy, node.start, node.end)
 	}
 	coreCallNode := coreCall(cx.core, coreFn, coreArgs, typeArgsConcrete, retTy, node.start, node.end)
 	return &ElabResult{node: coreCallNode, ty: retTy}
@@ -35960,6 +36077,22 @@ func elabInferTurbofish(cx *ElabCx, node *AstNode) *ElabResult {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15396:1
 func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
+	// `EvalError.DivByZero` — enum-qualified bare variant used as a
+	// value expression. Synthesize the variant reference directly so
+	// the ordinary receiver-inference below doesn't emit E0745 on the
+	// enum-name LHS. Mirrored from toolchain/elab.osty pending a regen
+	// fix.
+	if node.left >= 0 {
+		lhs := astArenaNodeAt(cx.ast.arena, node.left)
+		if ostyEqual(lhs.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+			variant := checkLookupVariantInOwner(cx.env, lhs.text, node.text)
+			if variant.name != "" && checkIntListLenHelper(variant.fieldTys) == 0 {
+				variantTy := elabVariantOwnerType(cx, variant)
+				coreIdx := coreIdent(cx.core, node.text, IdentKind(&IdentKind_IkVariant{}), variantTy, node.start, node.end)
+				return &ElabResult{node: coreIdx, ty: variantTy}
+			}
+		}
+	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15397:5
 	recv := elabInfer(cx, node.left)
 	_ = recv
