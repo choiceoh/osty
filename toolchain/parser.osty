@@ -2036,16 +2036,18 @@ fn opParseUsePath(p: OstyParser) -> String {
     if !(opAt(p, FrontIdent)) {
         return ""
     }
-    let mut out = opAdvance(p).text
+    let mut parts: List<String> = []
+    parts.push(opAdvance(p).text)
     for {
         let sep = opUsePathSep(p)
         if sep == "" || opPeekAt(p, 1).kind != FrontIdent {
             break
         }
         let _ = opAdvance(p)
-        out = "{out}{sep}{opAdvance(p).text}"
+        parts.push(sep)
+        parts.push(opAdvance(p).text)
     }
-    out
+    strings.join(parts, "")
 }
 
 fn opUsePathSep(p: OstyParser) -> String {

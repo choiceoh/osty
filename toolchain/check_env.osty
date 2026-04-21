@@ -1185,31 +1185,27 @@ fn checkIndexOfString(xs: List<String>, needle: String) -> Int {
 }
 
 fn checkIntKey(xs: List<Int>) -> String {
-    if xs.len() == 0 {
+    // Accumulate into a `List<String>` and `strings.join` once at the
+    // end — the former `out = "{out},{xs[i]}"` rebuilt the buffer per
+    // element, turning every substCache key render into O(n^2).
+    let n = xs.len()
+    if n == 0 {
         return ""
     }
-    let mut out = "{xs[0]}"
-    let mut i = 1
-    let n = xs.len()
+    let mut parts: List<String> = []
+    let mut i = 0
     for i < n {
-        out = "{out},{xs[i]}"
+        parts.push("{xs[i]}")
         i = i + 1
     }
-    out
+    strings.join(parts, ",")
 }
 
 fn checkStringKey(xs: List<String>) -> String {
     if xs.len() == 0 {
         return ""
     }
-    let mut out = xs[0]
-    let mut i = 1
-    let n = xs.len()
-    for i < n {
-        out = "{out},{xs[i]}"
-        i = i + 1
-    }
-    out
+    strings.join(xs, ",")
 }
 
 fn checkStringListContainsLocal(xs: List<String>, needle: String) -> Bool {

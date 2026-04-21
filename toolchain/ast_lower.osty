@@ -988,23 +988,23 @@ fn astLowerUseDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> 
 }
 
 fn astLowerUseRawPath(toks: List<astbridge.Token>, n: AstNode) -> String {
-    let mut out = ""
+    let mut parts: List<String> = []
     let mut i = n.start + 1
     for i < n.end {
         let tok = astLowerTok(toks, i)
         if astbridge.TokenIsIdent(tok) {
             if astbridge.TokenValue(tok) == "as" {
-                return out
+                return strings.join(parts, "")
             }
-            out = "{out}{astbridge.TokenValue(tok)}"
+            parts.push(astbridge.TokenValue(tok))
         } else if astbridge.TokenIsDot(tok) || astbridge.TokenIsSlash(tok) || astbridge.TokenIsColon(tok) {
-            out = "{out}{astbridge.TokenKindString(tok)}"
+            parts.push(astbridge.TokenKindString(tok))
         } else {
-            return out
+            return strings.join(parts, "")
         }
         i = i + 1
     }
-    out
+    strings.join(parts, "")
 }
 
 fn astLowerUseGoRawPath(toks: List<astbridge.Token>, n: AstNode) -> String {
