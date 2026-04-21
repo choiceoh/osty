@@ -72,6 +72,38 @@ fn main() {}
 	}
 }
 
+// TestPhase2fOptionIsSomeLowersAsNullCheck locks the Phase 2f fix:
+// `.isSome()` / `.isNone()` calls on a receiver whose source type
+// is `T?` (OptionalType) now lower directly to an LLVM null check,
+// no matter what T is. This unblocks the stdlib body of
+// `Map.containsKey` — `self.get(key).isSome()` — inside specialized
+// Map method bodies, where `self.get(key)` feeds through the
+// Phase 2e staticMapMethodSourceType into isSome's intrinsic path.
+func TestPhase2fOptionIsSomeLowersAsNullCheck(t *testing.T) {
+	src := `fn check(x: Int?) -> Bool { x.isSome() }
+fn checkNone(x: String?) -> Bool { x.isNone() }
+fn main() {}
+`
+	monoMod := pipelineThroughMonomorph(t, src)
+	opts := llvmgen.Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/phase2f_isSome.osty",
+		Source:      []byte(src),
+	}
+	out, err := llvmgen.GenerateModule(monoMod, opts)
+	if err != nil {
+		t.Fatalf("isSome/isNone lowering failed: %v", err)
+	}
+	ir := string(out)
+	// Both isSome (ne) and isNone (eq) null checks must appear.
+	if !strings.Contains(ir, "icmp ne ptr") {
+		t.Errorf("expected `icmp ne ptr ... , null` for isSome, IR:\n%s", ir)
+	}
+	if !strings.Contains(ir, "icmp eq ptr") {
+		t.Errorf("expected `icmp eq ptr ... , null` for isNone, IR:\n%s", ir)
+	}
+}
+
 // TestPhase2eCoalesceSourceTypeRecoveredForMapGet locks the Phase
 // 2e fix: `self.get(k) ?? default` inside specialized Map method
 // bodies (notably Map.getOr) now reports `Option<V>` as the left
