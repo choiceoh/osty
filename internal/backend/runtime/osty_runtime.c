@@ -290,8 +290,18 @@ enum {
 #define OSTY_GC_NURSERY_LIMIT_DEFAULT 8192
 
 typedef struct osty_gc_header {
+    /* Global doubly-linked list — used by major collection, sweep, and
+     * validate_heap walks. Every managed header lives here regardless
+     * of generation. */
     struct osty_gc_header *next;
     struct osty_gc_header *prev;
+    /* Per-generation doubly-linked list (Phase B2 depth). Lets minor
+     * collection iterate exactly `|young|` headers instead of walking
+     * the full heap and filtering on `generation`. Promotion moves a
+     * header from the young list to the old list in-place; the global
+     * list is untouched. */
+    struct osty_gc_header *next_gen;
+    struct osty_gc_header *prev_gen;
     int64_t object_kind;
     int64_t byte_size;
     int64_t root_count;
@@ -446,6 +456,12 @@ static int64_t osty_gc_young_count = 0;
 static int64_t osty_gc_young_bytes = 0;
 static int64_t osty_gc_old_count = 0;
 static int64_t osty_gc_old_bytes = 0;
+/* Per-generation list heads (Phase B2 depth). Populated by link /
+ * unlink / promote. The global `osty_gc_objects` list remains the
+ * authoritative iteration order for major collection and heap
+ * validation. */
+static osty_gc_header *osty_gc_young_head = NULL;
+static osty_gc_header *osty_gc_old_head = NULL;
 static int64_t osty_gc_allocated_since_minor = 0;
 static int64_t osty_gc_minor_count = 0;
 static int64_t osty_gc_major_count = 0;
@@ -462,6 +478,11 @@ static int64_t osty_gc_promote_age = OSTY_GC_PROMOTE_AGE_DEFAULT;
  * enqueued (they are assumed live; the remembered set handles any
  * OLD→YOUNG edges into them). */
 static bool osty_gc_minor_in_progress = false;
+/* `osty_gc_collection_requested_major`: set when a minor finishes but
+ * major-level pressure remains (young_bytes still above nursery limit,
+ * or live_bytes above major threshold). The dispatcher at the next
+ * safepoint turns this into an immediate major. */
+static bool osty_gc_collection_requested_major = false;
 
 /* Phase A2 collection timing (RUNTIME_GC_DELTA §9.3 depth follow-up).
  *
@@ -773,6 +794,30 @@ static void osty_gc_index_remove(void *payload) {
     }
 }
 
+/* Per-gen list helpers (Phase B2 depth). Both lists use `next_gen` /
+ * `prev_gen` — a header is on exactly one gen list at a time. */
+static void osty_gc_gen_list_prepend(osty_gc_header **head, osty_gc_header *header) {
+    header->next_gen = *head;
+    header->prev_gen = NULL;
+    if (*head != NULL) {
+        (*head)->prev_gen = header;
+    }
+    *head = header;
+}
+
+static void osty_gc_gen_list_remove(osty_gc_header **head, osty_gc_header *header) {
+    if (header->prev_gen != NULL) {
+        header->prev_gen->next_gen = header->next_gen;
+    } else if (*head == header) {
+        *head = header->next_gen;
+    }
+    if (header->next_gen != NULL) {
+        header->next_gen->prev_gen = header->prev_gen;
+    }
+    header->next_gen = NULL;
+    header->prev_gen = NULL;
+}
+
 static void osty_gc_link(osty_gc_header *header) {
     header->next = osty_gc_objects;
     header->prev = NULL;
@@ -785,9 +830,11 @@ static void osty_gc_link(osty_gc_header *header) {
     if (header->generation == OSTY_GC_GEN_YOUNG) {
         osty_gc_young_count += 1;
         osty_gc_young_bytes += header->byte_size;
+        osty_gc_gen_list_prepend(&osty_gc_young_head, header);
     } else {
         osty_gc_old_count += 1;
         osty_gc_old_bytes += header->byte_size;
+        osty_gc_gen_list_prepend(&osty_gc_old_head, header);
     }
     osty_gc_index_insert(header->payload, header);
 }
@@ -806,9 +853,11 @@ static void osty_gc_unlink(osty_gc_header *header) {
     if (header->generation == OSTY_GC_GEN_YOUNG) {
         osty_gc_young_count -= 1;
         osty_gc_young_bytes -= header->byte_size;
+        osty_gc_gen_list_remove(&osty_gc_young_head, header);
     } else {
         osty_gc_old_count -= 1;
         osty_gc_old_bytes -= header->byte_size;
+        osty_gc_gen_list_remove(&osty_gc_old_head, header);
     }
     osty_gc_index_remove(header->payload);
 }
@@ -822,12 +871,14 @@ static void osty_gc_promote_header(osty_gc_header *header) {
     if (header->generation == OSTY_GC_GEN_OLD) {
         return;
     }
+    osty_gc_gen_list_remove(&osty_gc_young_head, header);
     osty_gc_young_count -= 1;
     osty_gc_young_bytes -= header->byte_size;
     osty_gc_old_count += 1;
     osty_gc_old_bytes += header->byte_size;
     header->generation = OSTY_GC_GEN_OLD;
     header->age = 0;
+    osty_gc_gen_list_prepend(&osty_gc_old_head, header);
     osty_gc_promoted_count_total += 1;
     osty_gc_promoted_bytes_total += header->byte_size;
 }
@@ -1324,17 +1375,21 @@ static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int6
     t_start = osty_gc_now_nanos();
     osty_gc_minor_in_progress = true;
 
-    /* 1. Pinned roots. mark_header filters OLD so the seed set is
-     *    implicitly the YOUNG pinned subset; OLD pinned objects stay
-     *    "live by assumption" without entering the work queue. */
-    header = osty_gc_objects;
+    /* 1. Pinned YOUNG roots only. OLD pinned objects are "live by
+     *    assumption" for the minor and do not need to enter the work
+     *    queue — any OLD→YOUNG reference they hold is captured by the
+     *    remembered set below. Iterating the young list (not the full
+     *    heap) is the Phase B2 depth win: iteration scales with
+     *    nursery size, not total heap size. */
+    header = osty_gc_young_head;
     while (header != NULL) {
         if (header->root_count > 0) {
             osty_gc_mark_header(header);
         }
-        header = header->next;
+        header = header->next_gen;
     }
-    /* 2. Stack roots — same generation filter applies. */
+    /* 2. Stack roots — any YOUNG pointer on the stack gets enqueued;
+     *    mark_header filters OLD so this is implicitly YOUNG-only. */
     for (i = 0; i < root_slot_count; i++) {
         osty_gc_mark_root_slot((void *)root_slots[i]);
     }
@@ -1357,26 +1412,25 @@ static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int6
     osty_gc_mark_drain();
     osty_gc_minor_in_progress = false;
     /* 6. Sweep YOUNG unreachable; promote YOUNG survivors whose age
-     *    reaches the threshold. OLD headers skipped entirely. */
-    header = osty_gc_objects;
+     *    reaches the threshold. We walk the young list exclusively —
+     *    OLD is never touched by a minor. */
+    header = osty_gc_young_head;
     while (header != NULL) {
-        next = header->next;
-        if (header->generation == OSTY_GC_GEN_YOUNG) {
-            if (!header->marked) {
-                osty_gc_swept_count_total += 1;
-                osty_gc_swept_bytes_total += header->byte_size;
-                if (header->destroy != NULL) {
-                    header->destroy(header->payload);
-                }
-                osty_gc_unlink(header);
-                free(header);
-            } else {
-                header->marked = false;
-                if ((int64_t)header->age + 1 >= promote_age) {
-                    osty_gc_promote_header(header);
-                } else if (header->age < UINT8_MAX) {
-                    header->age += 1;
-                }
+        next = header->next_gen;
+        if (!header->marked) {
+            osty_gc_swept_count_total += 1;
+            osty_gc_swept_bytes_total += header->byte_size;
+            if (header->destroy != NULL) {
+                header->destroy(header->payload);
+            }
+            osty_gc_unlink(header);
+            free(header);
+        } else {
+            header->marked = false;
+            if ((int64_t)header->age + 1 >= promote_age) {
+                osty_gc_promote_header(header);
+            } else if (header->age < UINT8_MAX) {
+                header->age += 1;
             }
         }
         header = next;
@@ -1386,6 +1440,27 @@ static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int6
     osty_gc_allocated_since_minor = 0;
     osty_gc_collection_requested = false;
     osty_gc_remembered_edges_compact_after_minor();
+
+    /* Phase B5 depth: minor→major escalation. If the minor couldn't
+     * drag young_bytes below the nursery cap (everything survived and
+     * promoted), or the heap as a whole has crossed its major limit,
+     * flag a major for the next dispatcher turn. Without this path a
+     * pathological workload — every YOUNG survives, gets promoted,
+     * fills OLD — would never trigger a major until a brand-new YOUNG
+     * allocation happens to cross `THRESHOLD_BYTES`, stranding a large
+     * floating OLD heap. */
+    {
+        int64_t nursery_limit = osty_gc_nursery_limit_now();
+        int64_t pressure_limit = osty_gc_pressure_limit_now();
+        bool nursery_still_hot = nursery_limit > 0 &&
+                                 osty_gc_young_bytes >= nursery_limit;
+        bool heap_over_major = pressure_limit > 0 &&
+                               osty_gc_live_bytes >= pressure_limit;
+        if (nursery_still_hot || heap_over_major) {
+            osty_gc_collection_requested_major = true;
+            osty_gc_collection_requested = true;
+        }
+    }
 
     t_end = osty_gc_now_nanos();
     if (t_start != 0 && t_end >= t_start) {
@@ -1407,7 +1482,6 @@ static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int6
  * `osty_gc_debug_collect` stays a forced-major call for backwards
  * compatibility with the Phase A test suite; tests that want to
  * exercise the minor path explicitly go through `_collect_minor`. */
-static bool osty_gc_collection_requested_major = false;
 
 static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
     int64_t pressure_limit = osty_gc_pressure_limit_now();
@@ -3850,6 +3924,53 @@ void osty_gc_debug_unsafe_negative_cumulative(void) {
     osty_gc_allocated_bytes_total = -1;
 }
 
+/* Phase B depth — corruption injectors for the generational invariants
+ * (-12, -13, -14, -15, -16). Each flips exactly one field so tests can
+ * pair it with `osty_gc_debug_validate_heap()` and assert on the
+ * specific error code. */
+
+void osty_gc_debug_unsafe_bump_young_count(void) {
+    osty_gc_young_count += 1;
+}
+
+void osty_gc_debug_unsafe_bump_young_bytes(void) {
+    osty_gc_young_bytes += 1;
+}
+
+void osty_gc_debug_unsafe_set_invalid_generation(void) {
+    if (osty_gc_objects != NULL) {
+        osty_gc_objects->generation = 42;
+    }
+}
+
+void osty_gc_debug_unsafe_corrupt_young_head_gen(void) {
+    /* Flip the young-head's generation to an out-of-range value. The
+     * global walk hits the `-14 invalid generation` check first, which
+     * is stronger than the gen-list membership check (-16) — we'd get
+     * -12 instead of -16 with a plain YOUNG→OLD flip because the
+     * count bookkeeping goes wrong before the list walk. Going to an
+     * invalid value skips that intermediate failure. */
+    if (osty_gc_young_head != NULL) {
+        osty_gc_young_head->generation = 42;
+    }
+}
+
+void osty_gc_debug_unsafe_detach_from_young_list(void) {
+    /* Remove the young-list head but leave the header's global list
+     * membership and gen-count intact — gen list count no longer
+     * matches `osty_gc_young_count` (-15). */
+    osty_gc_header *h = osty_gc_young_head;
+    if (h == NULL) {
+        return;
+    }
+    osty_gc_young_head = h->next_gen;
+    if (osty_gc_young_head != NULL) {
+        osty_gc_young_head->prev_gen = NULL;
+    }
+    h->next_gen = NULL;
+    h->prev_gen = NULL;
+}
+
 void osty_gc_debug_stats_dump(FILE *out) {
     osty_gc_stats s;
     if (out == NULL) {
@@ -3940,6 +4061,9 @@ enum {
     OSTY_GC_VALIDATE_GEN_COUNT_MISMATCH = -12,
     OSTY_GC_VALIDATE_GEN_BYTES_MISMATCH = -13,
     OSTY_GC_VALIDATE_INVALID_GENERATION = -14,
+    /* Phase B2 depth — segregated list consistency. */
+    OSTY_GC_VALIDATE_GEN_LIST_COUNT_MISMATCH = -15,
+    OSTY_GC_VALIDATE_GEN_LIST_MEMBERSHIP = -16,
 };
 
 int64_t osty_gc_debug_validate_heap(void) {
@@ -4008,6 +4132,37 @@ int64_t osty_gc_debug_validate_heap(void) {
         walked_old_bytes != osty_gc_old_bytes) {
         status = OSTY_GC_VALIDATE_GEN_BYTES_MISMATCH;
         goto done;
+    }
+    /* Phase B2 depth: per-gen list consistency. Walk each gen head,
+     * count, and verify it equals the tallied count. Also verify every
+     * node in the young list has generation == YOUNG (and vice versa)
+     * to catch drift where a promote forgot to re-link. */
+    {
+        int64_t gen_walked_young = 0;
+        int64_t gen_walked_old = 0;
+        osty_gc_header *gh = osty_gc_young_head;
+        while (gh != NULL) {
+            if (gh->generation != OSTY_GC_GEN_YOUNG) {
+                status = OSTY_GC_VALIDATE_GEN_LIST_MEMBERSHIP;
+                goto done;
+            }
+            gen_walked_young += 1;
+            gh = gh->next_gen;
+        }
+        gh = osty_gc_old_head;
+        while (gh != NULL) {
+            if (gh->generation != OSTY_GC_GEN_OLD) {
+                status = OSTY_GC_VALIDATE_GEN_LIST_MEMBERSHIP;
+                goto done;
+            }
+            gen_walked_old += 1;
+            gh = gh->next_gen;
+        }
+        if (gen_walked_young != osty_gc_young_count ||
+            gen_walked_old != osty_gc_old_count) {
+            status = OSTY_GC_VALIDATE_GEN_LIST_COUNT_MISMATCH;
+            goto done;
+        }
     }
     if (osty_gc_mark_stack_count != 0) {
         status = OSTY_GC_VALIDATE_MARK_STACK_NON_EMPTY;
