@@ -60,7 +60,7 @@ func runFrontend(src []byte, adaptTokens bool) *FrontendRun {
 	text := normalizeSourceNewlines(string(src))
 	rt := newRuneTable(text)
 	stream := frontendLexStream(text)
-	frontToks := frontTokensFromSource(text, stream)
+	frontToks := frontTokensFromRuneTable(rt, stream)
 	p := newOstyParser(frontToks)
 	opParseFile(p)
 
@@ -71,6 +71,38 @@ func runFrontend(src []byte, adaptTokens bool) *FrontendRun {
 		run.lexDiags = lexDiagnosticsFromFacts(rt, stream, run.facts())
 	}
 	return run
+}
+
+func frontTokensFromRuneTable(rt runeTable, stream *FrontLexStream) []*FrontToken {
+	parseTokens := make([]*FrontToken, 0, len(stream.tokens))
+	for _, tok := range stream.tokens {
+		parseTokens = append(parseTokens, &FrontToken{
+			kind: tok.kind,
+			text: rt.slice(tok.start.offset, tok.start.offset+tok.length),
+		})
+	}
+	return parseTokens
+}
+
+func countStringUnits(text string) int {
+	n := 0
+	for range text {
+		n++
+	}
+	return n
+}
+
+func matchTextUnits(units []string, start int, text string) bool {
+	offset := 0
+	for i := 0; i < len(text); {
+		_, size := utf8.DecodeRuneInString(text[i:])
+		if !ostyEqual(frontUnitAt(units, start+offset), text[i:i+size]) {
+			return false
+		}
+		offset++
+		i += size
+	}
+	return true
 }
 
 // Tokens returns the public token stream, including EOF.
@@ -171,7 +203,12 @@ type runeTable struct {
 }
 
 func newRuneTable(src string) runeTable {
-	rt := runeTable{src: src}
+	count := countStringUnits(src)
+	rt := runeTable{
+		src:       src,
+		runes:     make([]rune, 0, count),
+		byteStart: make([]int, 0, count+1),
+	}
 	for off, r := range src {
 		rt.runes = append(rt.runes, r)
 		rt.byteStart = append(rt.byteStart, off)
@@ -549,18 +586,23 @@ func adapterStringAt(items []string, idx int) string {
 }
 
 func collapseFatArrows(in []token.Token) []token.Token {
-	out := make([]token.Token, 0, len(in))
-	for i := 0; i < len(in); i++ {
-		if i+1 < len(in) && in[i].Kind == token.ASSIGN && in[i+1].Kind == token.GT && in[i].End.Offset == in[i+1].Pos.Offset {
-			tok := in[i]
+	write := 0
+	for read := 0; read < len(in); read++ {
+		tok := in[read]
+		if read+1 < len(in) && tok.Kind == token.ASSIGN && in[read+1].Kind == token.GT && tok.End.Offset == in[read+1].Pos.Offset {
 			tok.Kind = token.ILLEGAL
 			tok.Value = "=>"
-			tok.End = in[i+1].End
-			out = append(out, tok)
-			i++
+			tok.End = in[read+1].End
+			in[write] = tok
+			write++
+			read++
 			continue
 		}
-		out = append(out, in[i])
+		if write != read {
+			in[write] = tok
+		}
+		write++
 	}
-	return out
+	clear(in[write:])
+	return in[:write]
 }
