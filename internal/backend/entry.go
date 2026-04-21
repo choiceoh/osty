@@ -127,9 +127,19 @@ func PreparePackage(packageName, sourcePath string, pkg *resolve.Package, entryF
 // applies to both single-file and multi-file builds at the same time.
 func finalizeEntryModule(entry Entry, mod *ir.Module) (Entry, error) {
 	if stdlibBodyLoweringEnabled() {
-		injected, injectionErrs := injectReachableStdlibBodies(mod, stdlib.LoadCached())
+		reg := stdlib.LoadCached()
+		injected, injectionErrs := injectReachableStdlibBodies(mod, reg)
 		entry.IRIssues = append(entry.IRIssues, injectionErrs...)
 		mod.Decls = append(mod.Decls, injected...)
+		// Option B Phase 1: inject built-in generic type decls
+		// (Map<K,V>, Option<T>, List<T>, Set<T>, Result<T,E>) so
+		// ir.Monomorphize can specialize their methods per user-code
+		// instantiation. Without this step the monomorphizer never
+		// sees the generic templates and falls back to per-helper
+		// hand-emit at the LLVM layer.
+		injectedTypes, typeIssues := injectReachableStdlibTypes(mod, reg)
+		entry.IRIssues = append(entry.IRIssues, typeIssues...)
+		mod.Decls = append(mod.Decls, injectedTypes...)
 	}
 	if monoMod, monoErrs := ir.Monomorphize(mod); monoMod != nil {
 		mod = monoMod
