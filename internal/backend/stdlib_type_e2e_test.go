@@ -72,6 +72,104 @@ fn main() {}
 	}
 }
 
+// TestPhase2gUserCallsiteDispatchesToSpecializedMethod locks the
+// Phase 2g fix: when user code calls `m.forEach(f)` /
+// `m.getOr(k, d)` / etc. on a `Map<String, Int>` receiver,
+// `userCallTarget` now consults `specializedBuiltinMangledForSurface`
+// to find the specialized method registered under the `_ZTSN…`
+// mangled owner type — instead of walling at the surface-typed
+// `ptr` receiver with "no methods registered". The inner wall
+// from the specialized body (f(key, value) → Ident call) is a
+// separate Phase 2h concern.
+func TestPhase2gUserCallsiteDispatchesToSpecializedMethod(t *testing.T) {
+	src := `fn printEntry(k: String, v: Int) { println(v) }
+fn walk(m: Map<String, Int>) {
+    m.forEach(printEntry)
+}
+fn main() {}
+`
+	monoMod := pipelineThroughMonomorph(t, src)
+	opts := llvmgen.Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/phase2g_foreach.osty",
+		Source:      []byte(src),
+	}
+	_, err := llvmgen.GenerateModule(monoMod, opts)
+	// Phase 2g advances the wall past the user-side `m.forEach(…)`
+	// callsite (which previously failed at `got *ast.FieldExpr at
+	// 3:5`) into the specialized forEach body's indirect call
+	// (`got *ast.Ident at 346:13`). A regression would surface the
+	// earlier form.
+	if err != nil && strings.Contains(err.Error(), "got *ast.FieldExpr") {
+		t.Fatalf("user callsite m.forEach(f) regressed to FieldExpr wall — specialized dispatch broken: %v", err)
+	}
+	if err != nil {
+		t.Logf("Phase 2 pipeline still incomplete past user callsite (expected): %v", err)
+	}
+}
+
+// TestPhase2fOptionIsSomeLowersAsNullCheck locks the Phase 2f fix:
+// `.isSome()` / `.isNone()` calls on a receiver whose source type
+// is `T?` (OptionalType) now lower directly to an LLVM null check,
+// no matter what T is. This unblocks the stdlib body of
+// `Map.containsKey` — `self.get(key).isSome()` — inside specialized
+// Map method bodies, where `self.get(key)` feeds through the
+// Phase 2e staticMapMethodSourceType into isSome's intrinsic path.
+func TestPhase2fOptionIsSomeLowersAsNullCheck(t *testing.T) {
+	src := `fn check(x: Int?) -> Bool { x.isSome() }
+fn checkNone(x: String?) -> Bool { x.isNone() }
+fn main() {}
+`
+	monoMod := pipelineThroughMonomorph(t, src)
+	opts := llvmgen.Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/phase2f_isSome.osty",
+		Source:      []byte(src),
+	}
+	out, err := llvmgen.GenerateModule(monoMod, opts)
+	if err != nil {
+		t.Fatalf("isSome/isNone lowering failed: %v", err)
+	}
+	ir := string(out)
+	// Both isSome (ne) and isNone (eq) null checks must appear.
+	if !strings.Contains(ir, "icmp ne ptr") {
+		t.Errorf("expected `icmp ne ptr ... , null` for isSome, IR:\n%s", ir)
+	}
+	if !strings.Contains(ir, "icmp eq ptr") {
+		t.Errorf("expected `icmp eq ptr ... , null` for isNone, IR:\n%s", ir)
+	}
+}
+
+// TestPhase2eCoalesceSourceTypeRecoveredForMapGet locks the Phase
+// 2e fix: `self.get(k) ?? default` inside specialized Map method
+// bodies (notably Map.getOr) now reports `Option<V>` as the left
+// source type through the new staticMapMethodSourceType pathway.
+// Before this, the coalesce emitter walled on
+// `LLVM011 ?? left source type unknown` because `self.get(k)`'s
+// return type wasn't visible through `staticExprSourceType`'s
+// CallExpr dispatch — Map's intrinsic methods aren't registered in
+// `g.methods` the way user-defined ones are.
+func TestPhase2eCoalesceSourceTypeRecoveredForMapGet(t *testing.T) {
+	src := `fn touch(m: Map<String, Int>, k: String) -> Int { m.getOr(k, 0) }
+fn main() {}
+`
+	monoMod := pipelineThroughMonomorph(t, src)
+	opts := llvmgen.Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/phase2e_coalesce.osty",
+		Source:      []byte(src),
+	}
+	_, err := llvmgen.GenerateModule(monoMod, opts)
+	// Phase 2e turns the outermost wall from LLVM011 ?? source-type
+	// into LLVM015 *ast.CallExpr.isSome (next Phase 2f concern).
+	if err != nil && strings.Contains(err.Error(), "?? left source type unknown") {
+		t.Fatalf("`??` source-type recovery regressed for Map.get(k): %v", err)
+	}
+	if err != nil {
+		t.Logf("Phase 2 pipeline still incomplete past the coalesce wall (expected): %v", err)
+	}
+}
+
 // TestPhase2dSelfBindingRoutesIntrinsicDispatch locks the Phase 2d
 // fix: inside a specialized Map method body, `self.len()` / `self.get(k)`
 // / `self.insert(k, v)` intrinsic dispatch now fires via the

@@ -452,6 +452,13 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		return true
 	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty:
 		return true
+	// Stage 5 prep — string → List<Char> / List<Byte> expansions that
+	// the legacy emitter routes through `osty_rt_strings_*`. Accepting
+	// them here lets `.chars()` / `.bytes()` reach the MIR emitter on
+	// `mir-backend` object/binary emission instead of falling back.
+	case mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
+		mir.IntrinsicStringLen, mir.IntrinsicStringIsEmpty:
+		return true
 	// Concurrency — channels / tasks / select / cancellation / helpers.
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
 		mir.IntrinsicChanClose, mir.IntrinsicChanIsClosed:
@@ -485,6 +492,14 @@ func mirIntrinsicLabel(k mir.IntrinsicKind) string {
 		return "eprint"
 	case mir.IntrinsicEprintln:
 		return "eprintln"
+	case mir.IntrinsicStringChars:
+		return "string_chars"
+	case mir.IntrinsicStringBytes:
+		return "string_bytes"
+	case mir.IntrinsicStringLen:
+		return "string_len"
+	case mir.IntrinsicStringIsEmpty:
+		return "string_is_empty"
 	case mir.IntrinsicRawNull:
 		return "raw.null"
 	}
@@ -1414,6 +1429,9 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitSetIntrinsic(i)
 	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty:
 		return g.emitBytesIntrinsic(i)
+	case mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
+		mir.IntrinsicStringLen, mir.IntrinsicStringIsEmpty:
+		return g.emitStringIntrinsic(i)
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
 		mir.IntrinsicChanClose, mir.IntrinsicChanIsClosed:
 		return g.emitChannelIntrinsic(i)
@@ -1829,6 +1847,60 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.storeIntrinsicResult(i, result)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("bytes intrinsic kind %d", i.Kind))
+}
+
+// emitStringIntrinsic dispatches String receiver intrinsics that the
+// MIR lowerer emits for stdlib method calls (`.chars()`, `.bytes()`,
+// `.len()`, `.isEmpty()`). Each maps to a runtime symbol in
+// `osty_runtime.c`'s strings family.
+//
+// The Stage 5 prep here mirrors the legacy `expr.go` dispatch: `.len`
+// calls `osty_rt_strings_ByteLen`; `.isEmpty` composes a `byte_len == 0`
+// compare instead of a dedicated runtime symbol; `.chars` / `.bytes`
+// call the list-building helpers that the runtime already ships.
+func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
+	if len(i.Args) < 1 {
+		return unsupported("mir-mvp", "string intrinsic with no receiver")
+	}
+	strOp := i.Args[0]
+	strReg, err := g.evalOperand(strOp, strOp.Type())
+	if err != nil {
+		return err
+	}
+	switch i.Kind {
+	case mir.IntrinsicStringChars:
+		sym := "osty_rt_strings_Chars"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicStringBytes:
+		sym := "osty_rt_strings_Bytes"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicStringLen:
+		sym := "osty_rt_strings_ByteLen"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		em := g.ostyEmitter()
+		result := llvmCall(em, "i64", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicStringIsEmpty:
+		// Runtime has no `_IsEmpty`; reuse `ByteLen` and emit an eq-0
+		// compare, matching the legacy emitter's shape.
+		sym := "osty_rt_strings_ByteLen"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		em := g.ostyEmitter()
+		size := llvmCall(em, "i64", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
+		result := llvmCompare(em, "eq", size, llvmIntLiteral(0))
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	}
+	return unsupported("mir-mvp", fmt.Sprintf("string intrinsic kind %d", i.Kind))
 }
 
 // ==== concurrency intrinsics ====

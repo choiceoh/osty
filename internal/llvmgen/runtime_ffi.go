@@ -303,6 +303,10 @@ func listRuntimePopDiscardSymbol() string {
 	return "osty_rt_list_pop_discard"
 }
 
+func listRuntimeClearSymbol() string {
+	return "osty_rt_list_clear"
+}
+
 func listRuntimePushBytesV1Symbol() string {
 	return "osty_rt_list_push_bytes_v1"
 }
@@ -415,6 +419,10 @@ func mapRuntimeKeysSymbol() string {
 
 func mapRuntimeLenSymbol() string {
 	return llvmMapRuntimeLenSymbol()
+}
+
+func mapRuntimeClearSymbol() string {
+	return "osty_rt_map_clear"
 }
 
 func setRuntimeNewSymbol() string {

@@ -1605,7 +1605,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if !found {
 		return false, nil
 	}
-	if field.Name != "push" && field.Name != "pop" && field.Name != "insert" {
+	if field.Name != "push" && field.Name != "pop" && field.Name != "insert" && field.Name != "clear" {
 		return false, nil
 	}
 	g.pushScope()
@@ -1634,6 +1634,20 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 		emitter.body = append(emitter.body, fmt.Sprintf(
 			"  call void @%s(%s)",
 			listRuntimePopDiscardSymbol(),
+			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue)}),
+		))
+		g.takeOstyEmitter(emitter)
+		return true, nil
+	}
+	if field.Name == "clear" {
+		if len(call.Args) != 0 {
+			return true, unsupported("call", "list.clear requires no arguments")
+		}
+		g.declareRuntimeSymbol(listRuntimeClearSymbol(), "void", []paramInfo{{typ: "ptr"}})
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			listRuntimeClearSymbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue)}),
 		))
 		g.takeOstyEmitter(emitter)
@@ -1729,7 +1743,7 @@ func (g *generator) emitMapMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if !found {
 		return false, nil
 	}
-	if field.Name != "insert" && field.Name != "remove" && field.Name != "update" && field.Name != "retainIf" {
+	if field.Name != "insert" && field.Name != "remove" && field.Name != "update" && field.Name != "retainIf" && field.Name != "clear" {
 		return false, nil
 	}
 	base, err := g.emitExpr(field.X)
@@ -1741,6 +1755,24 @@ func (g *generator) emitMapMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	}
 	if field.Name == "retainIf" {
 		return true, g.emitMapRetainIfStmt(call, base, keyTyp, keyString)
+	}
+	if field.Name == "clear" {
+		if len(call.Args) != 0 {
+			return true, unsupported("call", "map.clear requires no arguments")
+		}
+		baseLoaded, err := g.loadIfPointer(base)
+		if err != nil {
+			return true, err
+		}
+		g.declareRuntimeSymbol(mapRuntimeClearSymbol(), "void", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			mapRuntimeClearSymbol(),
+			llvmCallArgs([]*LlvmValue{toOstyValue(baseLoaded)}),
+		))
+		g.takeOstyEmitter(emitter)
+		return true, nil
 	}
 	if field.Name == "insert" {
 		if len(call.Args) != 2 || call.Args[0].Name != "" || call.Args[1].Name != "" || call.Args[0].Value == nil || call.Args[1].Value == nil {

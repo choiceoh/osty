@@ -3588,6 +3588,58 @@ func (g *generator) emitMapGetOr(call *ast.CallExpr, base value, keyTyp string, 
 	return out, true, nil
 }
 
+// emitOptionMethodCall lowers `opt.isSome()` and `opt.isNone()` as a
+// ptr-null check when `opt` statically resolves to an Option<T>
+// value (i.e. the receiver's source type is `*ast.OptionalType`, or
+// the expression returns one — e.g. `self.get(k).isSome()` inside
+// a specialized Map method body, where `self.get(k)` advertises
+// `V?` as its source type via staticMapMethodSourceType).
+//
+// This is the Phase 2f intrinsic that lets `Map.containsKey`'s
+// stdlib body compose through the specialized stack without needing
+// a monomorphized Option<V> enum with its own isSome method
+// dispatch. At the LLVM layer, Option<T> for every T is already
+// represented as `ptr` (null = None, non-null = Some), so the
+// check is uniformly a null-comparison regardless of V.
+func (g *generator) emitOptionMethodCall(call *ast.CallExpr) (value, bool, error) {
+	if call == nil {
+		return value{}, false, nil
+	}
+	field, ok := fieldExprOfCallFn(call)
+	if !ok || field.IsOptional {
+		return value{}, false, nil
+	}
+	if field.Name != "isSome" && field.Name != "isNone" {
+		return value{}, false, nil
+	}
+	if len(call.Args) != 0 {
+		return value{}, false, nil
+	}
+	baseSrc, ok := g.staticExprSourceType(field.X)
+	if !ok {
+		return value{}, false, nil
+	}
+	if _, isOpt := baseSrc.(*ast.OptionalType); !isOpt {
+		return value{}, false, nil
+	}
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	if base.typ != "ptr" {
+		return value{}, true, unsupportedf("type-system", "Option.%s receiver type %s, want ptr", field.Name, base.typ)
+	}
+	emitter := g.toOstyEmitter()
+	cmp := llvmNextTemp(emitter)
+	op := "ne"
+	if field.Name == "isNone" {
+		op = "eq"
+	}
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp %s ptr %s, null", cmp, op, base.ref))
+	g.takeOstyEmitter(emitter)
+	return value{typ: "i1", ref: cmp}, true, nil
+}
+
 func (g *generator) emitSetMethodCall(call *ast.CallExpr) (value, bool, error) {
 	field, elemTyp, elemString, found := g.setMethodInfo(call)
 	if !found {
@@ -3976,6 +4028,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return v, err
 	}
 	if v, found, err := g.emitSetMethodCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitOptionMethodCall(call); found || err != nil {
 		return v, err
 	}
 	if v, found, err := g.emitPrimitiveToStringCall(call); found || err != nil {
@@ -4459,7 +4514,22 @@ func (g *generator) userCallTarget(call *ast.CallExpr) (*fnSig, ast.Expr, bool, 
 		}
 		methods := g.methods[baseInfo.typ]
 		if methods == nil {
-			return nil, nil, false, nil
+			// Phase 2g: built-in container method dispatch.
+			// Surface-level receivers (Map<K, V>, List<T>, …)
+			// carry baseInfo.typ == "ptr" because Phase 2c
+			// re-associates the mangled specialization back to the
+			// surface form for intrinsic dispatch. That leaves the
+			// plain `methodsByType[baseInfo.typ]` lookup missing the
+			// specialized struct's bodied methods (forEach, getOr,
+			// update, …). Try the specialized owner type next.
+			if baseSrc, srcOk := g.staticExprSourceType(fn.X); srcOk {
+				if mangledTyp, ok := specializedBuiltinMangledForSurface(baseSrc); ok {
+					methods = g.methods[mangledTyp]
+				}
+			}
+			if methods == nil {
+				return nil, nil, false, nil
+			}
 		}
 		sig := methods[fn.Name]
 		if sig == nil {

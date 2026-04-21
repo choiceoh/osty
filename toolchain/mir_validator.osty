@@ -1,0 +1,593 @@
+// mir_validator.osty — structural invariant checks for a MirModule.
+//
+// Self-hosted port of `internal/mir/validate.go`. Returns a list of
+// diagnostic messages describing every broken invariant. An empty list
+// means the module is structurally sound; a non-empty list means the
+// producer (HIR → MIR lowerer, or a hand-written MIR builder in tests)
+// has a bug.
+//
+// The validator deliberately does NOT re-run type checking. It catches
+// the shape bugs that would otherwise surface as an LLVM verifier
+// failure or, worse, a silently miscompiled program.
+//
+// Invariants checked:
+//   - Module carries a package name; function symbols are unique.
+//   - Every non-external function has at least one block, an entry
+//     block whose ID is in range, and every block has a terminator.
+//   - ReturnLocal is in range, marked IsReturn, and its type matches
+//     fn.returnType. Exactly one local may be marked IsReturn.
+//   - Params reference existing locals, have no duplicates, and every
+//     referenced local is marked IsParam. Conversely, every local
+//     marked IsParam appears in fn.Params.
+//   - Places reference existing locals; projections carry non-empty
+//     type strings and non-negative indices; IndexProj either names a
+//     valid local or uses a constant index (indexLocal < 0).
+//   - Every Operand carries a non-empty type, and CopyOp/MoveOp refer
+//     to a valid Place, while ConstOp has a non-invalid const kind.
+//   - RValues: kind-specific children are valid, and the type string
+//     is non-empty when the MIR design requires one.
+//   - Terminator successors reference existing blocks; SwitchInt cases
+//     have distinct Value entries.
+//   - StorageLive / StorageDead do not target parameters or the return
+//     slot — those are always live within the function body.
+//
+// This file has no runtime dependencies; it is plain functions over
+// the mir.osty data model.
+
+// ====================================================================
+// Public entry points
+// ====================================================================
+
+/// mirValidateModule walks the module and returns every broken-
+/// invariant message it finds. An empty list means the module passes.
+pub fn mirValidateModule(m: MirModule) -> List<String> {
+    let mut errs: List<String> = []
+    if m.packageName == "" {
+        errs.push("module: empty package")
+    }
+    let mut seenNames: List<String> = []
+    let mut i = 0
+    for func in m.functions {
+        if func.name == "" {
+            errs.push("function[{i}]: empty name")
+        }
+        if mirValidatorContains(seenNames, func.name) {
+            errs.push("function \"{func.name}\": duplicate symbol")
+        } else {
+            seenNames.push(func.name)
+        }
+        let fnErrs = mirValidateFunction(func)
+        for e in fnErrs {
+            errs.push(e)
+        }
+        i = i + 1
+    }
+    let mut gi = 0
+    for g in m.globals {
+        let gErrs = mirValidateGlobal(g, gi)
+        for e in gErrs {
+            errs.push(e)
+        }
+        gi = gi + 1
+    }
+    errs
+}
+
+/// mirValidateFunction checks one function in isolation. Returns every
+/// broken-invariant message anchored to the function name.
+pub fn mirValidateFunction(func: MirFunction) -> List<String> {
+    let mut errs: List<String> = []
+
+    if func.returnType == "" {
+        errs.push("function \"{func.name}\": empty returnType")
+    }
+
+    // Return-local checks only apply to functions with a body.
+    if !(func.isExternal) && !(func.isIntrinsic) {
+        let nLocals = func.locals.len()
+        if func.returnLocal < 0 || func.returnLocal >= nLocals {
+            errs.push("function \"{func.name}\": returnLocal {func.returnLocal} out of range (locals={nLocals})")
+        } else {
+            let ret = func.locals[func.returnLocal]
+            if !(ret.isReturn) {
+                errs.push("function \"{func.name}\": returnLocal {func.returnLocal} is not marked isReturn")
+            }
+            if func.returnType != "" && ret.typ != "" && ret.typ != func.returnType {
+                errs.push("function \"{func.name}\": returnLocal _{func.returnLocal} type {ret.typ} does not match declared return type {func.returnType}")
+            }
+        }
+    }
+
+    // Parameters reference existing locals; collect their ids for the
+    // IsParam back-check below.
+    let mut paramSet: List<Int> = []
+    let mut pi = 0
+    for pid in func.params {
+        if pid < 0 || pid >= func.locals.len() {
+            errs.push("function \"{func.name}\": params[{pi}]={pid} out of range (locals={func.locals.len()})")
+            pi = pi + 1
+            continue
+        }
+        if mirValidatorContainsInt(paramSet, pid) {
+            errs.push("function \"{func.name}\": params[{pi}]=_{pid} appears more than once")
+            pi = pi + 1
+            continue
+        }
+        paramSet.push(pid)
+        let loc = func.locals[pid]
+        if !(loc.isParam) {
+            errs.push("function \"{func.name}\": params[{pi}]=_{pid} is not marked isParam")
+        }
+        pi = pi + 1
+    }
+
+    // Locals: dense IDs, non-empty type, IsParam / IsReturn back-checks.
+    let mut returnSeen = false
+    let mut li = 0
+    for loc in func.locals {
+        if loc.id != li {
+            errs.push("function \"{func.name}\": locals[{li}].id = {loc.id} (mismatch)")
+        }
+        if loc.typ == "" {
+            errs.push("function \"{func.name}\": locals[{li}]=_{loc.id} empty typ")
+        }
+        if loc.isParam && !(mirValidatorContainsInt(paramSet, loc.id)) {
+            errs.push("function \"{func.name}\": locals[{li}]=_{loc.id} marked isParam but not in fn.params")
+        }
+        if loc.isReturn {
+            if !(func.isExternal) && !(func.isIntrinsic) && loc.id != func.returnLocal {
+                errs.push("function \"{func.name}\": locals[{li}]=_{loc.id} marked isReturn but returnLocal=_{func.returnLocal}")
+            }
+            if returnSeen {
+                errs.push("function \"{func.name}\": locals[{li}]=_{loc.id}: more than one local marked isReturn")
+            }
+            returnSeen = true
+        }
+        li = li + 1
+    }
+
+    // External / intrinsic functions have no body to validate.
+    if func.isExternal || func.isIntrinsic {
+        if func.blocks.len() != 0 {
+            errs.push("function \"{func.name}\": external/intrinsic must have no blocks")
+        }
+        return errs
+    }
+
+    if func.blocks.len() == 0 {
+        errs.push("function \"{func.name}\": no blocks")
+        return errs
+    }
+    if func.entry < 0 || func.entry >= func.blocks.len() {
+        errs.push("function \"{func.name}\": entry={func.entry} out of range (blocks={func.blocks.len()})")
+    }
+
+    let mut bi = 0
+    for bb in func.blocks {
+        if bb.id != bi {
+            errs.push("function \"{func.name}\": blocks[{bi}].id = {bb.id} (mismatch)")
+        }
+        let blockErrs = mirValidateBlock(func, bb)
+        for e in blockErrs {
+            errs.push(e)
+        }
+        bi = bi + 1
+    }
+    errs
+}
+
+// ====================================================================
+// Globals
+// ====================================================================
+
+fn mirValidateGlobal(g: MirGlobal, idx: Int) -> List<String> {
+    let mut errs: List<String> = []
+    if g.name == "" {
+        errs.push("globals[{idx}]: empty name")
+    }
+    if g.typ == "" {
+        errs.push("global \"{g.name}\": empty typ")
+    }
+    errs
+}
+
+// ====================================================================
+// Blocks / instructions
+// ====================================================================
+
+fn mirValidateBlock(func: MirFunction, bb: MirBasicBlock) -> List<String> {
+    let mut errs: List<String> = []
+    let mut idx = 0
+    for instr in bb.instrs {
+        let iErrs = mirValidateInstr(func, bb, idx, instr)
+        for e in iErrs {
+            errs.push(e)
+        }
+        idx = idx + 1
+    }
+    if !(bb.hasTerm) {
+        errs.push("function \"{func.name}\" bb{bb.id}: missing terminator")
+        return errs
+    }
+    let tErrs = mirValidateTerm(func, bb, bb.term)
+    for e in tErrs {
+        errs.push(e)
+    }
+    errs
+}
+
+fn mirValidateInstr(func: MirFunction, bb: MirBasicBlock, idx: Int, instr: MirInstr) -> List<String> {
+    let mut errs: List<String> = []
+    match instr.kind {
+        MirInstrAssign -> {
+            let pErrs = mirValidatePlace(func, bb, instr.dest, "assign.dest")
+            for e in pErrs { errs.push(e) }
+            let rErrs = mirValidateRValue(func, bb, instr.src)
+            for e in rErrs { errs.push(e) }
+        },
+        MirInstrCall -> {
+            if instr.hasDest {
+                let pErrs = mirValidatePlace(func, bb, instr.dest, "call.dest")
+                for e in pErrs { errs.push(e) }
+            }
+            let cErrs = mirValidateCallee(func, bb, instr)
+            for e in cErrs { errs.push(e) }
+            let mut ai = 0
+            for op in instr.args {
+                let oErrs = mirValidateOperand(func, bb, op, "call.args[{ai}]")
+                for e in oErrs { errs.push(e) }
+                ai = ai + 1
+            }
+        },
+        MirInstrIntrinsic -> {
+            if instr.hasDest {
+                let pErrs = mirValidatePlace(func, bb, instr.dest, "intrinsic.dest")
+                for e in pErrs { errs.push(e) }
+            }
+            if instr.intrinsic == MirIntrinsicInvalid {
+                errs.push("function \"{func.name}\" bb{bb.id} instr[{idx}]: intrinsic kind is Invalid")
+            }
+            let mut ai = 0
+            for op in instr.args {
+                let oErrs = mirValidateOperand(func, bb, op, "intrinsic.args[{ai}]")
+                for e in oErrs { errs.push(e) }
+                ai = ai + 1
+            }
+        },
+        MirInstrStorageLive -> {
+            let sErrs = mirValidateStorageTarget(func, bb, idx, instr.storageLocal, "storage_live")
+            for e in sErrs { errs.push(e) }
+        },
+        MirInstrStorageDead -> {
+            let sErrs = mirValidateStorageTarget(func, bb, idx, instr.storageLocal, "storage_dead")
+            for e in sErrs { errs.push(e) }
+        },
+        _ -> {
+            errs.push("function \"{func.name}\" bb{bb.id} instr[{idx}]: invalid instruction kind")
+        },
+    }
+    errs
+}
+
+fn mirValidateStorageTarget(
+    func: MirFunction,
+    bb: MirBasicBlock,
+    idx: Int,
+    local: Int,
+    kind: String,
+) -> List<String> {
+    let mut errs: List<String> = []
+    if local < 0 || local >= func.locals.len() {
+        errs.push("function \"{func.name}\" bb{bb.id} instr[{idx}]: {kind} _{local} out of range")
+        return errs
+    }
+    let loc = func.locals[local]
+    if loc.isParam {
+        errs.push("function \"{func.name}\" bb{bb.id} instr[{idx}]: {kind} on parameter _{local} (params are live on entry)")
+    }
+    if loc.isReturn {
+        errs.push("function \"{func.name}\" bb{bb.id} instr[{idx}]: {kind} on return slot _{local}")
+    }
+    errs
+}
+
+fn mirValidateCallee(func: MirFunction, bb: MirBasicBlock, instr: MirInstr) -> List<String> {
+    let mut errs: List<String> = []
+    match instr.calleeKind {
+        MirCalleeNone -> {
+            errs.push("function \"{func.name}\" bb{bb.id}: call with no callee")
+        },
+        MirCalleeFn -> {
+            if instr.calleeSymbol == "" {
+                errs.push("function \"{func.name}\" bb{bb.id}: fnRef empty symbol")
+            }
+        },
+        MirCalleeIndirect -> {
+            let oErrs = mirValidateOperand(func, bb, instr.calleeOperand, "indirectCall.callee")
+            for e in oErrs { errs.push(e) }
+        },
+        _ -> {
+            errs.push("function \"{func.name}\" bb{bb.id}: unknown callee kind")
+        },
+    }
+    errs
+}
+
+// ====================================================================
+// RValues, Operands, Places, Projections
+// ====================================================================
+
+fn mirValidateRValue(func: MirFunction, bb: MirBasicBlock, rv: MirRValue) -> List<String> {
+    let mut errs: List<String> = []
+    match rv.kind {
+        MirRVUse -> {
+            let oErrs = mirValidateOperand(func, bb, rv.arg, "useRV")
+            for e in oErrs { errs.push(e) }
+        },
+        MirRVUnary -> {
+            if rv.typ == "" {
+                errs.push("function \"{func.name}\" bb{bb.id}: unaryRV empty typ")
+            }
+            let oErrs = mirValidateOperand(func, bb, rv.arg, "unaryRV.arg")
+            for e in oErrs { errs.push(e) }
+        },
+        MirRVBinary -> {
+            if rv.typ == "" {
+                errs.push("function \"{func.name}\" bb{bb.id}: binaryRV empty typ")
+            }
+            let lErrs = mirValidateOperand(func, bb, rv.arg, "binaryRV.left")
+            for e in lErrs { errs.push(e) }
+            let rErrs = mirValidateOperand(func, bb, rv.right, "binaryRV.right")
+            for e in rErrs { errs.push(e) }
+        },
+        MirRVAggregate -> {
+            if rv.typ == "" {
+                errs.push("function \"{func.name}\" bb{bb.id}: aggregateRV empty typ")
+            }
+            if rv.aggKind == MirAggInvalid {
+                errs.push("function \"{func.name}\" bb{bb.id}: aggregateRV invalid aggKind")
+            }
+            let mut fi = 0
+            for op in rv.aggFields {
+                let oErrs = mirValidateOperand(func, bb, op, "aggregateRV.fields[{fi}]")
+                for e in oErrs { errs.push(e) }
+                fi = fi + 1
+            }
+        },
+        MirRVDiscriminant -> {
+            if rv.typ == "" {
+                errs.push("function \"{func.name}\" bb{bb.id}: discriminantRV empty typ")
+            }
+            let pErrs = mirValidatePlace(func, bb, rv.place, "discriminantRV.place")
+            for e in pErrs { errs.push(e) }
+        },
+        MirRVLen -> {
+            if rv.typ == "" {
+                errs.push("function \"{func.name}\" bb{bb.id}: lenRV empty typ")
+            }
+            let pErrs = mirValidatePlace(func, bb, rv.place, "lenRV.place")
+            for e in pErrs { errs.push(e) }
+        },
+        MirRVCast -> {
+            if rv.castFrom == "" || rv.castTo == "" {
+                errs.push("function \"{func.name}\" bb{bb.id}: castRV empty from/to")
+            }
+            if rv.castKind == MirCastInvalid {
+                errs.push("function \"{func.name}\" bb{bb.id}: castRV invalid castKind")
+            }
+            let oErrs = mirValidateOperand(func, bb, rv.arg, "castRV.arg")
+            for e in oErrs { errs.push(e) }
+        },
+        MirRVRef -> {
+            let pErrs = mirValidatePlace(func, bb, rv.place, "refRV.place")
+            for e in pErrs { errs.push(e) }
+        },
+        MirRVAddressOf -> {
+            let pErrs = mirValidatePlace(func, bb, rv.place, "addressOfRV.place")
+            for e in pErrs { errs.push(e) }
+        },
+        MirRVGlobalRef -> {
+            if rv.globalName == "" {
+                errs.push("function \"{func.name}\" bb{bb.id}: globalRefRV empty name")
+            }
+            if rv.typ == "" {
+                errs.push("function \"{func.name}\" bb{bb.id}: globalRefRV empty typ")
+            }
+        },
+        MirRVNullary -> {
+            if rv.nullaryKind == MirNullaryInvalid {
+                errs.push("function \"{func.name}\" bb{bb.id}: nullaryRV invalid kind")
+            }
+            if rv.typ == "" {
+                errs.push("function \"{func.name}\" bb{bb.id}: nullaryRV empty typ")
+            }
+        },
+        _ -> {
+            errs.push("function \"{func.name}\" bb{bb.id}: unknown rvalue kind")
+        },
+    }
+    errs
+}
+
+fn mirValidateOperand(
+    func: MirFunction,
+    bb: MirBasicBlock,
+    op: MirOperand,
+    ctx: String,
+) -> List<String> {
+    let mut errs: List<String> = []
+    if op.typ == "" && op.kind != MirOpConst {
+        errs.push("function \"{func.name}\" bb{bb.id} {ctx}: operand has empty typ")
+    }
+    match op.kind {
+        MirOpCopy -> {
+            let pErrs = mirValidatePlace(func, bb, op.place, "{ctx}.place")
+            for e in pErrs { errs.push(e) }
+        },
+        MirOpMove -> {
+            let pErrs = mirValidatePlace(func, bb, op.place, "{ctx}.place")
+            for e in pErrs { errs.push(e) }
+        },
+        MirOpConst -> {
+            if op.const.kind == MirConstInvalid {
+                errs.push("function \"{func.name}\" bb{bb.id} {ctx}: constOp has invalid const kind")
+            }
+        },
+        _ -> {
+            errs.push("function \"{func.name}\" bb{bb.id} {ctx}: unknown operand kind")
+        },
+    }
+    errs
+}
+
+fn mirValidatePlace(
+    func: MirFunction,
+    bb: MirBasicBlock,
+    p: MirPlace,
+    ctx: String,
+) -> List<String> {
+    let mut errs: List<String> = []
+    if p.local < 0 || p.local >= func.locals.len() {
+        errs.push("function \"{func.name}\" bb{bb.id} {ctx}: local _{p.local} out of range")
+        return errs
+    }
+    let mut pi = 0
+    for proj in p.projections {
+        let projErrs = mirValidateProjection(func, bb, proj, "{ctx}.projections[{pi}]")
+        for e in projErrs { errs.push(e) }
+        pi = pi + 1
+    }
+    errs
+}
+
+fn mirValidateProjection(
+    func: MirFunction,
+    bb: MirBasicBlock,
+    proj: MirProjection,
+    ctx: String,
+) -> List<String> {
+    let mut errs: List<String> = []
+    match proj.kind {
+        MirProjField -> {
+            if proj.typ == "" {
+                errs.push("function \"{func.name}\" bb{bb.id} {ctx}: fieldProj empty typ")
+            }
+            if proj.index < 0 {
+                errs.push("function \"{func.name}\" bb{bb.id} {ctx}: fieldProj negative index {proj.index}")
+            }
+        },
+        MirProjTuple -> {
+            if proj.typ == "" {
+                errs.push("function \"{func.name}\" bb{bb.id} {ctx}: tupleProj empty typ")
+            }
+            if proj.index < 0 {
+                errs.push("function \"{func.name}\" bb{bb.id} {ctx}: tupleProj negative index {proj.index}")
+            }
+        },
+        MirProjVariant -> {
+            if proj.typ == "" {
+                errs.push("function \"{func.name}\" bb{bb.id} {ctx}: variantProj empty typ")
+            }
+        },
+        MirProjIndex -> {
+            if proj.typ == "" {
+                errs.push("function \"{func.name}\" bb{bb.id} {ctx}: indexProj empty elemTyp")
+            }
+            if proj.indexLocal >= 0 {
+                if proj.indexLocal >= func.locals.len() {
+                    errs.push("function \"{func.name}\" bb{bb.id} {ctx}: indexProj indexLocal _{proj.indexLocal} out of range")
+                }
+            }
+        },
+        MirProjDeref -> {
+            if proj.typ == "" {
+                errs.push("function \"{func.name}\" bb{bb.id} {ctx}: derefProj empty typ")
+            }
+        },
+        _ -> {
+            errs.push("function \"{func.name}\" bb{bb.id} {ctx}: unknown projection kind")
+        },
+    }
+    errs
+}
+
+// ====================================================================
+// Terminators
+// ====================================================================
+
+fn mirValidateTerm(func: MirFunction, bb: MirBasicBlock, t: MirTerm) -> List<String> {
+    let mut errs: List<String> = []
+    match t.kind {
+        MirTermGoto -> {
+            let rErrs = mirValidateBlockRef(func, bb, t.target, "goto.target")
+            for e in rErrs { errs.push(e) }
+        },
+        MirTermBranch -> {
+            let oErrs = mirValidateOperand(func, bb, t.cond, "branch.cond")
+            for e in oErrs { errs.push(e) }
+            let thenErrs = mirValidateBlockRef(func, bb, t.thenBlock, "branch.thenBlock")
+            for e in thenErrs { errs.push(e) }
+            let elseErrs = mirValidateBlockRef(func, bb, t.elseBlock, "branch.elseBlock")
+            for e in elseErrs { errs.push(e) }
+        },
+        MirTermSwitchInt -> {
+            let oErrs = mirValidateOperand(func, bb, t.cond, "switchInt.scrutinee")
+            for e in oErrs { errs.push(e) }
+            let mut seenVals: List<Int> = []
+            let mut ci = 0
+            for c in t.cases {
+                let rErrs = mirValidateBlockRef(func, bb, c.target, "switchInt.cases[{ci}]")
+                for e in rErrs { errs.push(e) }
+                if mirValidatorContainsInt(seenVals, c.value) {
+                    errs.push("function \"{func.name}\" bb{bb.id}: switchInt.cases[{ci}] value {c.value} duplicates an earlier case")
+                } else {
+                    seenVals.push(c.value)
+                }
+                ci = ci + 1
+            }
+            let defErrs = mirValidateBlockRef(func, bb, t.target, "switchInt.default")
+            for e in defErrs { errs.push(e) }
+        },
+        MirTermReturn -> {},
+        MirTermUnreachable -> {},
+        _ -> {
+            errs.push("function \"{func.name}\" bb{bb.id}: unknown terminator kind")
+        },
+    }
+    errs
+}
+
+fn mirValidateBlockRef(
+    func: MirFunction,
+    bb: MirBasicBlock,
+    target: Int,
+    ctx: String,
+) -> List<String> {
+    let mut errs: List<String> = []
+    if target < 0 || target >= func.blocks.len() {
+        errs.push("function \"{func.name}\" bb{bb.id} {ctx}: target bb{target} out of range (blocks={func.blocks.len()})")
+    }
+    errs
+}
+
+// ====================================================================
+// Local helpers
+// ====================================================================
+
+fn mirValidatorContains(xs: List<String>, needle: String) -> Bool {
+    for x in xs {
+        if x == needle {
+            return true
+        }
+    }
+    false
+}
+
+fn mirValidatorContainsInt(xs: List<Int>, needle: Int) -> Bool {
+    for x in xs {
+        if x == needle {
+            return true
+        }
+    }
+    false
+}
