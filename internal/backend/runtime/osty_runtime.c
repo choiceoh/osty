@@ -21,6 +21,19 @@
 #include <string.h>
 #include <time.h>
 
+/* Snapshot / file-IO primitives — mkdir is spelled differently on Win32
+ * vs. POSIX, so we funnel the one-directory-level call through
+ * osty_rt_mkdir_one. Everything else (fopen/fread/fwrite/getenv) is
+ * already cross-platform in the C standard library. */
+#if defined(_WIN32)
+#  include <direct.h>
+#  define OSTY_RT_MKDIR_ONE(path) _mkdir(path)
+#else
+#  include <sys/stat.h>
+#  include <sys/types.h>
+#  define OSTY_RT_MKDIR_ONE(path) mkdir((path), 0755)
+#endif
+
 /* ============================================================
  * Platform threading abstraction
  *
@@ -5858,4 +5871,535 @@ void *osty_rt_parallel(void *items, int64_t concurrency, void *f_env) {
     free(envs);
     free(handles);
     return out;
+}
+
+/* ============================================================
+ * Snapshot / structural-diff helpers
+ *
+ * `osty_rt_strings_DiffLines` and `osty_rt_test_snapshot` implement
+ * `testing.assertEq`'s String-vs-String diff and `testing.snapshot`
+ * respectively. Both live in the runtime so the compiler only needs
+ * to emit a single call instruction — no per-test boilerplate, and
+ * the OSTY_UPDATE_SNAPSHOTS switch works without recompiling.
+ * ============================================================ */
+
+#define OSTY_UPDATE_SNAPSHOTS_ENV "OSTY_UPDATE_SNAPSHOTS"
+#define OSTY_SNAPSHOT_DIR_ENV     "OSTY_SNAPSHOT_DIR"
+#define OSTY_SNAPSHOT_SUBDIR      "__snapshots__"
+#define OSTY_SNAPSHOT_SUFFIX      ".snap"
+#define OSTY_SNAPSHOT_DEFAULT_STEM "snapshot"
+
+/* osty_rt_xmalloc is the local OOM-or-abort shape used by the
+ * snapshot helpers so each call site stays a single line. `site`
+ * tags the abort for debuggability and matches the naming
+ * convention of osty_rt_string_dup_site. */
+static void *osty_rt_xmalloc(size_t n, const char *site) {
+    void *p = malloc(n);
+    if (p == NULL) {
+        osty_rt_abort(site);
+    }
+    return p;
+}
+
+typedef struct osty_rt_diff_scratch {
+    char  *data;
+    size_t len;
+    size_t cap;
+} osty_rt_diff_scratch;
+
+static void osty_rt_diff_scratch_init(osty_rt_diff_scratch *s) {
+    s->data = NULL;
+    s->len = 0;
+    s->cap = 0;
+}
+
+static void osty_rt_diff_scratch_reserve(osty_rt_diff_scratch *s, size_t want) {
+    if (s->cap >= want + 1) {
+        return;
+    }
+    size_t cap = s->cap == 0 ? 64 : s->cap * 2;
+    while (cap < want + 1) {
+        cap *= 2;
+    }
+    char *next = (char *)realloc(s->data, cap);
+    if (next == NULL) {
+        osty_rt_abort("diff scratch: out of memory");
+    }
+    s->data = next;
+    s->cap = cap;
+}
+
+static void osty_rt_diff_scratch_append(osty_rt_diff_scratch *s, const char *src, size_t n) {
+    if (n == 0) {
+        return;
+    }
+    osty_rt_diff_scratch_reserve(s, s->len + n);
+    memcpy(s->data + s->len, src, n);
+    s->len += n;
+}
+
+static void osty_rt_diff_scratch_append_cstr(osty_rt_diff_scratch *s, const char *src) {
+    if (src == NULL) {
+        return;
+    }
+    osty_rt_diff_scratch_append(s, src, strlen(src));
+}
+
+/* Split a '\n'-terminated string into (offset, length) pairs. A
+ * trailing newline does NOT spawn a synthetic empty line, matching
+ * how `diff` and Unified Patch render. Offsets are kept so the
+ * suffix-trim walk stays O(n) rather than O(n²) via running-sum
+ * recomputation. Caller frees both arrays. */
+static void osty_rt_diff_grow_pair(size_t **offs, size_t **lens, size_t *cap) {
+    *cap *= 2;
+    size_t *grown_offs = (size_t *)realloc(*offs, *cap * sizeof(**offs));
+    size_t *grown_lens = (size_t *)realloc(*lens, *cap * sizeof(**lens));
+    if (grown_offs == NULL || grown_lens == NULL) {
+        free(grown_offs != NULL ? grown_offs : *offs);
+        free(grown_lens != NULL ? grown_lens : *lens);
+        osty_rt_abort("diff split: grow failed");
+    }
+    *offs = grown_offs;
+    *lens = grown_lens;
+}
+
+static void osty_rt_diff_split_lines(const char *s, size_t **out_offs, size_t **out_lens, size_t *out_count) {
+    size_t n = (s == NULL) ? 0 : strlen(s);
+    size_t cap = 16;
+    size_t *offs = (size_t *)osty_rt_xmalloc(cap * sizeof(*offs), "diff split: out of memory");
+    size_t *lens = (size_t *)osty_rt_xmalloc(cap * sizeof(*lens), "diff split: out of memory");
+    size_t count = 0;
+    size_t start = 0;
+    for (size_t i = 0; i <= n; i++) {
+        if (i == n || s[i] == '\n') {
+            if (i == n && start == n) {
+                break;
+            }
+            if (count == cap) {
+                osty_rt_diff_grow_pair(&offs, &lens, &cap);
+            }
+            offs[count] = start;
+            lens[count] = i - start;
+            count++;
+            start = i + 1;
+        }
+    }
+    *out_offs = offs;
+    *out_lens = lens;
+    *out_count = count;
+}
+
+static bool osty_rt_diff_line_equal(const char *a, size_t a_off, size_t a_len, const char *b, size_t b_off, size_t b_len) {
+    if (a_len != b_len) {
+        return false;
+    }
+    if (a_len == 0) {
+        return true;
+    }
+    return memcmp(a + a_off, b + b_off, a_len) == 0;
+}
+
+static void osty_rt_diff_emit_line(osty_rt_diff_scratch *s, const char *tag, const char *src, size_t off, size_t len) {
+    osty_rt_diff_scratch_append_cstr(s, tag);
+    osty_rt_diff_scratch_append(s, src + off, len);
+    osty_rt_diff_scratch_append(s, "\n", 1);
+}
+
+/* osty_rt_strings_DiffLines renders a trim-prefix/suffix line diff
+ * with up to 3 lines of shared context on either side. Returns "" if
+ * the inputs are byte-equal (prefix consumes everything). NULL
+ * inputs normalize to "". */
+const char *osty_rt_strings_DiffLines(const char *actual, const char *expected) {
+    const char *a = (actual == NULL) ? "" : actual;
+    const char *e = (expected == NULL) ? "" : expected;
+
+    size_t *a_off = NULL;
+    size_t *a_len = NULL;
+    size_t a_count = 0;
+    size_t *e_off = NULL;
+    size_t *e_len = NULL;
+    size_t e_count = 0;
+    osty_rt_diff_split_lines(a, &a_off, &a_len, &a_count);
+    osty_rt_diff_split_lines(e, &e_off, &e_len, &e_count);
+
+    size_t prefix = 0;
+    while (prefix < a_count && prefix < e_count &&
+           osty_rt_diff_line_equal(a, a_off[prefix], a_len[prefix], e, e_off[prefix], e_len[prefix])) {
+        prefix++;
+    }
+    size_t suffix = 0;
+    while (suffix + prefix < a_count && suffix + prefix < e_count &&
+           osty_rt_diff_line_equal(a, a_off[a_count - 1 - suffix], a_len[a_count - 1 - suffix],
+                                   e, e_off[e_count - 1 - suffix], e_len[e_count - 1 - suffix])) {
+        suffix++;
+    }
+
+    osty_rt_diff_scratch scratch;
+    osty_rt_diff_scratch_init(&scratch);
+
+    /* No divergence → return "" so callers treat as "no diff". Equal
+     * inputs (prefix consumed both sides) land here too. */
+    bool has_diff = (prefix + suffix < a_count) || (prefix + suffix < e_count);
+    if (!has_diff) {
+        free(a_off);
+        free(a_len);
+        free(e_off);
+        free(e_len);
+        return osty_rt_string_dup_site("", 0, "runtime.test.diff.empty");
+    }
+
+    const size_t context = 3;
+    size_t lead_start = prefix > context ? prefix - context : 0;
+    for (size_t i = lead_start; i < prefix; i++) {
+        osty_rt_diff_emit_line(&scratch, "  ", a, a_off[i], a_len[i]);
+    }
+    for (size_t i = prefix; i + suffix < a_count; i++) {
+        osty_rt_diff_emit_line(&scratch, "- ", a, a_off[i], a_len[i]);
+    }
+    for (size_t i = prefix; i + suffix < e_count; i++) {
+        osty_rt_diff_emit_line(&scratch, "+ ", e, e_off[i], e_len[i]);
+    }
+    size_t tail_count = suffix < context ? suffix : context;
+    for (size_t i = 0; i < tail_count; i++) {
+        size_t idx = a_count - suffix + i;
+        osty_rt_diff_emit_line(&scratch, "  ", a, a_off[idx], a_len[idx]);
+    }
+
+    free(a_off);
+    free(a_len);
+    free(e_off);
+    free(e_len);
+
+    /* Strip the trailing newline so callers can splice a header like
+     * "diff:\n" in front without an extra blank line at the bottom. */
+    while (scratch.len > 0 && scratch.data[scratch.len - 1] == '\n') {
+        scratch.len--;
+    }
+
+    const char *out = osty_rt_string_dup_site(scratch.data == NULL ? "" : scratch.data, scratch.len, "runtime.test.diff");
+    free(scratch.data);
+    return out;
+}
+
+/* osty_rt_strndup copies `n` bytes of `src` into a fresh malloc
+ * buffer + NUL terminator. OOM aborts via the shared `site` tag. */
+static char *osty_rt_strndup(const char *src, size_t n, const char *site) {
+    char *out = (char *)osty_rt_xmalloc(n + 1, site);
+    if (n != 0) {
+        memcpy(out, src, n);
+    }
+    out[n] = '\0';
+    return out;
+}
+
+/* osty_rt_list_primitive_to_string renders a List<T> with a primitive
+ * element type as a multi-line String — one element per line so the
+ * trim-prefix/suffix diff in osty_rt_strings_DiffLines surfaces the
+ * divergence meaningfully:
+ *
+ *     [
+ *       1,
+ *       2,
+ *       3,
+ *     ]
+ *
+ * elem_kind:
+ *   1 = Int    (i64,    osty_rt_list_get_i64)
+ *   2 = Float  (double, osty_rt_list_get_f64)
+ *   3 = Bool   (i1,     osty_rt_list_get_i1)
+ *   4 = String (ptr,    osty_rt_list_get_ptr)
+ *
+ * Char (i32) and Byte (i8) go through the generic bytes path and are
+ * intentionally omitted — they are rare in assertions and would bloat
+ * this helper's dispatch without a proportional payoff. */
+#define OSTY_LIST_KIND_INT    1
+#define OSTY_LIST_KIND_FLOAT  2
+#define OSTY_LIST_KIND_BOOL   3
+#define OSTY_LIST_KIND_STRING 4
+
+const char *osty_rt_list_primitive_to_string(void *list, int64_t elem_kind) {
+    if (list == NULL) {
+        return osty_rt_string_dup_site("[]", 2, "runtime.list.to_string.empty");
+    }
+    int64_t n = osty_rt_list_len(list);
+    if (n == 0) {
+        return osty_rt_string_dup_site("[]", 2, "runtime.list.to_string.empty");
+    }
+
+    osty_rt_diff_scratch s;
+    osty_rt_diff_scratch_init(&s);
+    osty_rt_diff_scratch_append(&s, "[\n", 2);
+    char buf[64];
+    for (int64_t i = 0; i < n; i++) {
+        osty_rt_diff_scratch_append(&s, "  ", 2);
+        switch (elem_kind) {
+        case OSTY_LIST_KIND_INT: {
+            int64_t v = osty_rt_list_get_i64(list, i);
+            int w = snprintf(buf, sizeof(buf), "%lld", (long long)v);
+            if (w > 0) osty_rt_diff_scratch_append(&s, buf, (size_t)w);
+            break;
+        }
+        case OSTY_LIST_KIND_FLOAT: {
+            double v = osty_rt_list_get_f64(list, i);
+            int w = snprintf(buf, sizeof(buf), "%.17g", v);
+            if (w > 0) osty_rt_diff_scratch_append(&s, buf, (size_t)w);
+            break;
+        }
+        case OSTY_LIST_KIND_BOOL: {
+            bool v = osty_rt_list_get_i1(list, i);
+            osty_rt_diff_scratch_append_cstr(&s, v ? "true" : "false");
+            break;
+        }
+        case OSTY_LIST_KIND_STRING: {
+            const char *v = (const char *)osty_rt_list_get_ptr(list, i);
+            osty_rt_diff_scratch_append(&s, "\"", 1);
+            osty_rt_diff_scratch_append_cstr(&s, v == NULL ? "" : v);
+            osty_rt_diff_scratch_append(&s, "\"", 1);
+            break;
+        }
+        default:
+            osty_rt_diff_scratch_append_cstr(&s, "<?>");
+            break;
+        }
+        osty_rt_diff_scratch_append(&s, ",\n", 2);
+    }
+    osty_rt_diff_scratch_append(&s, "]", 1);
+
+    const char *out = osty_rt_string_dup_site(s.data == NULL ? "" : s.data, s.len, "runtime.list.to_string");
+    free(s.data);
+    return out;
+}
+
+/* Sanitize a snapshot name into a filesystem-safe stem. Mirrors
+ * `sanitizeNativeTestName` in toolchain/test_runner.osty: letters,
+ * digits, underscore pass through; everything else collapses to `_`.
+ * Empty/all-sanitized input falls back to OSTY_SNAPSHOT_DEFAULT_STEM
+ * so the output path never ends up as `.snap`. Caller frees. */
+static char *osty_rt_snapshot_sanitize(const char *name) {
+    size_t n = (name == NULL) ? 0 : strlen(name);
+    if (n == 0) {
+        return osty_rt_strndup(OSTY_SNAPSHOT_DEFAULT_STEM, sizeof(OSTY_SNAPSHOT_DEFAULT_STEM) - 1, "snapshot sanitize: out of memory");
+    }
+    char *out = (char *)osty_rt_xmalloc(n + 1, "snapshot sanitize: out of memory");
+    size_t j = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+            out[j++] = (char)c;
+        } else {
+            out[j++] = '_';
+        }
+    }
+    out[j] = '\0';
+    if (j == 0) {
+        free(out);
+        return osty_rt_strndup(OSTY_SNAPSHOT_DEFAULT_STEM, sizeof(OSTY_SNAPSHOT_DEFAULT_STEM) - 1, "snapshot sanitize: out of memory");
+    }
+    return out;
+}
+
+/* osty_rt_snapshot_dirname returns a malloc'd copy of the directory
+ * component of `path` (everything up to the last `/` or `\`).
+ * Returns "." on empty input or when `path` has no separator — that's
+ * the right default for `osty test` runs where the source file is in
+ * the test's working directory. A root-relative path like "/foo"
+ * collapses to the single leading separator. Caller frees. */
+static char *osty_rt_snapshot_dirname(const char *path) {
+    size_t n = (path == NULL) ? 0 : strlen(path);
+    size_t last = (size_t)-1;
+    for (size_t i = 0; i < n; i++) {
+        if (path[i] == '/' || path[i] == '\\') {
+            last = i;
+        }
+    }
+    if (last == (size_t)-1) {
+        return osty_rt_strndup(".", 1, "snapshot dirname: out of memory");
+    }
+    if (last == 0) {
+        return osty_rt_strndup(path, 1, "snapshot dirname: out of memory");
+    }
+    return osty_rt_strndup(path, last, "snapshot dirname: out of memory");
+}
+
+/* osty_rt_snapshot_mkdir_p creates `path` and every missing parent
+ * segment. mkdir is best-effort — EEXIST, perm errors, or an
+ * intermediate path that's actually a file all fall through to the
+ * subsequent fopen in write_all, which reports the real error with
+ * the offending path. */
+static void osty_rt_snapshot_mkdir_p(const char *path) {
+    if (path == NULL || path[0] == '\0') {
+        return;
+    }
+    size_t n = strlen(path);
+    char *buf = osty_rt_strndup(path, n, "snapshot mkdir_p: out of memory");
+    for (size_t i = 1; i < n; i++) {
+        char c = buf[i];
+        if (c == '/' || c == '\\') {
+            buf[i] = '\0';
+            (void)OSTY_RT_MKDIR_ONE(buf);
+            buf[i] = c;
+        }
+    }
+    (void)OSTY_RT_MKDIR_ONE(buf);
+    free(buf);
+}
+
+/* Read the entire file into a malloc'd, NUL-terminated buffer. On
+ * success returns 0 and sets *out / *out_len. Missing file → 1.
+ * Any other I/O error → -1. The three exit codes let the caller
+ * distinguish "first run" from a real filesystem problem. */
+static int osty_rt_snapshot_read_all(const char *path, char **out, size_t *out_len) {
+    FILE *f = fopen(path, "rb");
+    if (f == NULL) {
+        *out = NULL;
+        *out_len = 0;
+        return 1;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        return -1;
+    }
+    long sz = ftell(f);
+    if (sz < 0 || fseek(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        return -1;
+    }
+    char *buf = (char *)osty_rt_xmalloc((size_t)sz + 1, "snapshot read: out of memory");
+    size_t got = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    if (got != (size_t)sz) {
+        free(buf);
+        return -1;
+    }
+    buf[sz] = '\0';
+    *out = buf;
+    *out_len = (size_t)sz;
+    return 0;
+}
+
+static int osty_rt_snapshot_write_all(const char *path, const char *data, size_t len) {
+    FILE *f = fopen(path, "wb");
+    if (f == NULL) {
+        return -1;
+    }
+    if (len != 0) {
+        size_t wrote = fwrite(data, 1, len, f);
+        if (wrote != len) {
+            fclose(f);
+            return -1;
+        }
+    }
+    if (fclose(f) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/* Mirrors the truthy rule used by `osty_gc_incremental_auto_now`: an
+ * unset / empty / "0" / "false" / "FALSE" value reads as false,
+ * anything else is true. Keep in sync with that site. */
+static bool osty_rt_env_truthy(const char *name) {
+    const char *v = getenv(name);
+    if (v == NULL || v[0] == '\0' ||
+        strcmp(v, "0") == 0 || strcmp(v, "false") == 0 || strcmp(v, "FALSE") == 0) {
+        return false;
+    }
+    return true;
+}
+
+/* Build the `<dir>/__snapshots__/<stem>.snap` path for a given source
+ * file + snapshot name. Honors OSTY_SNAPSHOT_DIR as an override used
+ * by the test harness to redirect writes into a tempdir. Caller
+ * frees. */
+static char *osty_rt_snapshot_resolve_path(const char *source_path, const char *name) {
+    const char *override_dir = getenv(OSTY_SNAPSHOT_DIR_ENV);
+    char *base_dir = (override_dir != NULL && override_dir[0] != '\0')
+        ? osty_rt_strndup(override_dir, strlen(override_dir), "snapshot path: out of memory")
+        : osty_rt_snapshot_dirname(source_path);
+
+    char *stem = osty_rt_snapshot_sanitize(name);
+    const char *sep = "/" OSTY_SNAPSHOT_SUBDIR "/";
+    size_t dir_len = strlen(base_dir);
+    size_t sep_len = strlen(sep);
+    size_t stem_len = strlen(stem);
+    size_t sfx_len = sizeof(OSTY_SNAPSHOT_SUFFIX) - 1;
+    char *out = (char *)osty_rt_xmalloc(dir_len + sep_len + stem_len + sfx_len + 1, "snapshot path: out of memory");
+    size_t pos = 0;
+    memcpy(out + pos, base_dir, dir_len); pos += dir_len;
+    memcpy(out + pos, sep, sep_len);       pos += sep_len;
+    memcpy(out + pos, stem, stem_len);     pos += stem_len;
+    memcpy(out + pos, OSTY_SNAPSHOT_SUFFIX, sfx_len); pos += sfx_len;
+    out[pos] = '\0';
+
+    free(base_dir);
+    free(stem);
+    return out;
+}
+
+/* Fatal-exit shape shared by the three "cannot read / cannot write"
+ * branches in osty_rt_test_snapshot. `existing` may be NULL when the
+ * failure happens before the golden is read. */
+static void osty_rt_snapshot_fatal(const char *verb, const char *name, char *snap_path, char *existing) {
+    fprintf(stderr, "testing.snapshot(%s): cannot %s %s\n", name, verb, snap_path);
+    free(existing);
+    free(snap_path);
+    exit(1);
+}
+
+/* osty_rt_test_snapshot is called from emitted code whenever a test
+ * runs `testing.snapshot(name, output)`. `source_path` is hard-coded
+ * at emit time so snapshot discovery is independent of the process
+ * working directory. */
+void osty_rt_test_snapshot(const char *name, const char *output, const char *source_path) {
+    const char *name_s = (name == NULL) ? "" : name;
+    const char *output_s = (output == NULL) ? "" : output;
+    const char *src_s = (source_path == NULL) ? "" : source_path;
+
+    char *snap_path = osty_rt_snapshot_resolve_path(src_s, name_s);
+    char *snap_dir = osty_rt_snapshot_dirname(snap_path);
+    osty_rt_snapshot_mkdir_p(snap_dir);
+    free(snap_dir);
+
+    size_t output_len = strlen(output_s);
+
+    if (osty_rt_env_truthy(OSTY_UPDATE_SNAPSHOTS_ENV)) {
+        if (osty_rt_snapshot_write_all(snap_path, output_s, output_len) != 0) {
+            osty_rt_snapshot_fatal("write", name_s, snap_path, NULL);
+        }
+        fprintf(stdout, "snapshot: updated %s\n", snap_path);
+        free(snap_path);
+        return;
+    }
+
+    char *existing = NULL;
+    size_t existing_len = 0;
+    int rd = osty_rt_snapshot_read_all(snap_path, &existing, &existing_len);
+    if (rd == 1) {
+        if (osty_rt_snapshot_write_all(snap_path, output_s, output_len) != 0) {
+            osty_rt_snapshot_fatal("write", name_s, snap_path, NULL);
+        }
+        fprintf(stdout, "snapshot: created %s\n", snap_path);
+        free(snap_path);
+        return;
+    }
+    if (rd != 0) {
+        osty_rt_snapshot_fatal("read", name_s, snap_path, existing);
+    }
+
+    bool equal = (existing_len == output_len) && (output_len == 0 || memcmp(existing, output_s, output_len) == 0);
+    if (equal) {
+        free(existing);
+        free(snap_path);
+        return;
+    }
+
+    const char *diff = osty_rt_strings_DiffLines(output_s, existing);
+    fprintf(stdout, "testing.snapshot(%s) mismatch: %s\n", name_s, snap_path);
+    fprintf(stdout, "hint: re-run with " OSTY_UPDATE_SNAPSHOTS_ENV "=1 to accept the new output\n");
+    if (diff != NULL && diff[0] != '\0') {
+        fprintf(stdout, "%s\n", diff);
+    }
+    free(existing);
+    free(snap_path);
+    exit(1);
 }

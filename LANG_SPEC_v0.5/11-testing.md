@@ -43,6 +43,26 @@ generates detailed failure output including:
 - Runtime values (formatted structurally)
 - A structural diff for composite values
 
+**Structural diff (shipped).** When both sides of `assertEq` share
+a diffable shape, the failure message appends a trim-prefix /
+trim-suffix line diff with up to 3 lines of shared context. Lines
+that differ are prefixed with `- left` or `+ right`; shared context
+lines are prefixed with two spaces. The diff is only computed on the
+failure path — passing asserts pay zero. Today's diff coverage:
+
+- Two `String` values — compared directly, line by line.
+- Two `List<T>` values with the same primitive `T` (`Int`, `Float`,
+  `Bool`, `String`) — each list is rendered as a multi-line literal
+  (`[\n  elem,\n  ...\n]`) via `osty_rt_list_primitive_to_string`
+  before the diff runs, so an element-level divergence surfaces as
+  a single-line `-`/`+` pair.
+
+**Still deferred.** Structs, enums, Maps, Sets, Lists of composite
+elements (`List<Struct>`, `List<Map<K, V>>`), and Lists parameterised
+by `Char` or `Byte` fall back to source-text-only rendering. A full
+solution needs `ToString` protocol dispatch and per-shape format
+rules in the backend.
+
 For example:
 
 ```osty
@@ -123,8 +143,34 @@ fn testRenderOutput() {
 }
 ```
 
-First run writes the snapshot file; subsequent runs compare. Update
-with `osty test --update-snapshots`.
+**Location.** The golden file lives at
+`<source_dir>/__snapshots__/<sanitize(name)>.snap`, where
+`source_dir` is the directory of the test source file and `sanitize`
+follows the rule from [§11.7](#117-test-order) (letters, digits,
+underscore pass through; everything else collapses to `_`; empty or
+all-sanitized names fall back to the stem `snapshot`). The source
+path is pinned at compile time so snapshot resolution is independent
+of the process working directory.
+
+**Lifecycle.**
+
+| Golden state | Result |
+|---|---|
+| Missing | Write `output` to the golden; pass with `snapshot: created <path>` on stdout. |
+| Matches `output` byte-for-byte | Pass silently. |
+| Differs from `output` | Print `testing.snapshot(<name>) mismatch: <path>` + a line-level diff (same shape as §11.2) to stdout and exit 1 — same observable outcome as any failing assertion. |
+
+**Accepting new output.** `osty test --update-snapshots` (which sets
+`OSTY_UPDATE_SNAPSHOTS=1` for the emitted test binaries) overwrites
+every golden encountered during the run and prints
+`snapshot: updated <path>` for each — tests still pass.
+
+**Test-harness override.** The runtime honors
+`OSTY_SNAPSHOT_DIR=<path>` as a drop-in replacement for the source
+directory when resolving the golden's location. This is only intended
+for test harnesses that exercise the snapshot machinery itself and
+want to isolate writes into a tempdir; production `osty test` runs
+leave it unset.
 
 ### 11.6 Parallel Execution
 
