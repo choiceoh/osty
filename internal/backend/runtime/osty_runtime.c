@@ -267,13 +267,51 @@ typedef void (*osty_gc_trace_fn)(void *payload);
 typedef void (*osty_gc_destroy_fn)(void *payload);
 typedef void (*osty_rt_trace_slot_fn)(void *slot_addr);
 
+/* Phase B generation tags (RUNTIME_GC_DELTA §5.1-5.5).
+ *
+ * Every managed allocation is born YOUNG. A minor collection promotes
+ * any YOUNG survivor that has lived through `OSTY_GC_PROMOTE_AGE` minor
+ * cycles into OLD; from then on the survivor participates only in full
+ * collections. The promotion age is configurable via
+ * `OSTY_GC_PROMOTE_AGE_ENV` so experiments can sweep without rebuilding.
+ *
+ * The distinction is purely bookkeeping today — OLD and YOUNG objects
+ * share the same `calloc`-backed heap. Phase D compaction will split
+ * the storage, but the filter logic (minor GC scans YOUNG only, uses
+ * the remembered set for OLD→YOUNG edges) already depends on having a
+ * stable tag on every header. */
+enum {
+    OSTY_GC_GEN_YOUNG = 0,
+    OSTY_GC_GEN_OLD = 1,
+};
+#define OSTY_GC_PROMOTE_AGE_DEFAULT 3
+#define OSTY_GC_PROMOTE_AGE_ENV "OSTY_GC_PROMOTE_AGE"
+#define OSTY_GC_NURSERY_LIMIT_ENV "OSTY_GC_NURSERY_BYTES"
+#define OSTY_GC_NURSERY_LIMIT_DEFAULT 8192
+
 typedef struct osty_gc_header {
+    /* Global doubly-linked list — used by major collection, sweep, and
+     * validate_heap walks. Every managed header lives here regardless
+     * of generation. */
     struct osty_gc_header *next;
     struct osty_gc_header *prev;
+    /* Per-generation doubly-linked list (Phase B2 depth). Lets minor
+     * collection iterate exactly `|young|` headers instead of walking
+     * the full heap and filtering on `generation`. Promotion moves a
+     * header from the young list to the old list in-place; the global
+     * list is untouched. */
+    struct osty_gc_header *next_gen;
+    struct osty_gc_header *prev_gen;
     int64_t object_kind;
     int64_t byte_size;
     int64_t root_count;
     bool marked;
+    /* Phase B: per-object generation and survival counter. `age` is a
+     * u8 because promotion thresholds above ~8 defeat the point of
+     * generational — the old-space ends up with the same pressure the
+     * young-space was supposed to smooth. */
+    uint8_t age;
+    uint8_t generation;
     osty_gc_trace_fn trace;
     osty_gc_destroy_fn destroy;
     const char *site;
@@ -398,6 +436,53 @@ static int64_t osty_gc_load_managed_count = 0;
 static int64_t osty_gc_allocated_bytes_total = 0;
 static int64_t osty_gc_swept_count_total = 0;
 static int64_t osty_gc_swept_bytes_total = 0;
+
+/* Phase B generational bookkeeping (RUNTIME_GC_DELTA §5, §9.1, §9.4).
+ *
+ * `young_count` / `young_bytes`: live population in the nursery. Minor
+ * collection scans exactly this subset; survivors that cross
+ * `promote_age` get moved to the OLD bucket without changing their
+ * payload address (no compaction yet).
+ *
+ * `allocated_since_minor`: pressure counter reset after every minor.
+ * Paired with `osty_gc_nursery_limit_bytes` so minor GC triggers on
+ * nursery overflow independent of the major limit.
+ *
+ * `minor_count` / `major_count` / `promoted_*`: per-tier telemetry for
+ * `osty_gc_stats`, exposed so tests and tuning scripts can assert on
+ * the event mix the runtime is actually producing.
+ */
+static int64_t osty_gc_young_count = 0;
+static int64_t osty_gc_young_bytes = 0;
+static int64_t osty_gc_old_count = 0;
+static int64_t osty_gc_old_bytes = 0;
+/* Per-generation list heads (Phase B2 depth). Populated by link /
+ * unlink / promote. The global `osty_gc_objects` list remains the
+ * authoritative iteration order for major collection and heap
+ * validation. */
+static osty_gc_header *osty_gc_young_head = NULL;
+static osty_gc_header *osty_gc_old_head = NULL;
+static int64_t osty_gc_allocated_since_minor = 0;
+static int64_t osty_gc_minor_count = 0;
+static int64_t osty_gc_major_count = 0;
+static int64_t osty_gc_promoted_count_total = 0;
+static int64_t osty_gc_promoted_bytes_total = 0;
+static int64_t osty_gc_minor_nanos_total = 0;
+static int64_t osty_gc_major_nanos_total = 0;
+static bool osty_gc_nursery_limit_loaded = false;
+static int64_t osty_gc_nursery_limit_bytes = OSTY_GC_NURSERY_LIMIT_DEFAULT;
+static bool osty_gc_promote_age_loaded = false;
+static int64_t osty_gc_promote_age = OSTY_GC_PROMOTE_AGE_DEFAULT;
+/* `osty_gc_minor_in_progress` lets trace callbacks short-circuit when a
+ * minor collection is underway — children that are OLD must not be
+ * enqueued (they are assumed live; the remembered set handles any
+ * OLD→YOUNG edges into them). */
+static bool osty_gc_minor_in_progress = false;
+/* `osty_gc_collection_requested_major`: set when a minor finishes but
+ * major-level pressure remains (young_bytes still above nursery limit,
+ * or live_bytes above major threshold). The dispatcher at the next
+ * safepoint turns this into an immediate major. */
+static bool osty_gc_collection_requested_major = false;
 
 /* Phase A2 collection timing (RUNTIME_GC_DELTA §9.3 depth follow-up).
  *
@@ -709,6 +794,30 @@ static void osty_gc_index_remove(void *payload) {
     }
 }
 
+/* Per-gen list helpers (Phase B2 depth). Both lists use `next_gen` /
+ * `prev_gen` — a header is on exactly one gen list at a time. */
+static void osty_gc_gen_list_prepend(osty_gc_header **head, osty_gc_header *header) {
+    header->next_gen = *head;
+    header->prev_gen = NULL;
+    if (*head != NULL) {
+        (*head)->prev_gen = header;
+    }
+    *head = header;
+}
+
+static void osty_gc_gen_list_remove(osty_gc_header **head, osty_gc_header *header) {
+    if (header->prev_gen != NULL) {
+        header->prev_gen->next_gen = header->next_gen;
+    } else if (*head == header) {
+        *head = header->next_gen;
+    }
+    if (header->next_gen != NULL) {
+        header->next_gen->prev_gen = header->prev_gen;
+    }
+    header->next_gen = NULL;
+    header->prev_gen = NULL;
+}
+
 static void osty_gc_link(osty_gc_header *header) {
     header->next = osty_gc_objects;
     header->prev = NULL;
@@ -718,6 +827,15 @@ static void osty_gc_link(osty_gc_header *header) {
     osty_gc_objects = header;
     osty_gc_live_count += 1;
     osty_gc_live_bytes += header->byte_size;
+    if (header->generation == OSTY_GC_GEN_YOUNG) {
+        osty_gc_young_count += 1;
+        osty_gc_young_bytes += header->byte_size;
+        osty_gc_gen_list_prepend(&osty_gc_young_head, header);
+    } else {
+        osty_gc_old_count += 1;
+        osty_gc_old_bytes += header->byte_size;
+        osty_gc_gen_list_prepend(&osty_gc_old_head, header);
+    }
     osty_gc_index_insert(header->payload, header);
 }
 
@@ -732,7 +850,37 @@ static void osty_gc_unlink(osty_gc_header *header) {
     }
     osty_gc_live_count -= 1;
     osty_gc_live_bytes -= header->byte_size;
+    if (header->generation == OSTY_GC_GEN_YOUNG) {
+        osty_gc_young_count -= 1;
+        osty_gc_young_bytes -= header->byte_size;
+        osty_gc_gen_list_remove(&osty_gc_young_head, header);
+    } else {
+        osty_gc_old_count -= 1;
+        osty_gc_old_bytes -= header->byte_size;
+        osty_gc_gen_list_remove(&osty_gc_old_head, header);
+    }
     osty_gc_index_remove(header->payload);
+}
+
+/* Phase B promotion: move `header` from YOUNG to OLD in place. Only the
+ * bookkeeping counters change; payload address is stable (no compaction
+ * yet), so any outstanding root pointer or SATB log entry keeps pointing
+ * at the same memory. Called once a YOUNG survivor has hit the age
+ * threshold. */
+static void osty_gc_promote_header(osty_gc_header *header) {
+    if (header->generation == OSTY_GC_GEN_OLD) {
+        return;
+    }
+    osty_gc_gen_list_remove(&osty_gc_young_head, header);
+    osty_gc_young_count -= 1;
+    osty_gc_young_bytes -= header->byte_size;
+    osty_gc_old_count += 1;
+    osty_gc_old_bytes += header->byte_size;
+    header->generation = OSTY_GC_GEN_OLD;
+    header->age = 0;
+    osty_gc_gen_list_prepend(&osty_gc_old_head, header);
+    osty_gc_promoted_count_total += 1;
+    osty_gc_promoted_bytes_total += header->byte_size;
 }
 
 static int64_t osty_gc_pressure_limit_now(void) {
@@ -756,18 +904,75 @@ static int64_t osty_gc_pressure_limit_now(void) {
     return osty_gc_pressure_limit_bytes;
 }
 
+/* Phase B pressure tier accessors. The nursery limit is read once from
+ * `OSTY_GC_NURSERY_BYTES` on first query; an unset env keeps the
+ * compiled-in default. A zero value disables automatic minor triggers.
+ * Same lazy-init pattern as `osty_gc_pressure_limit_now`. */
+static int64_t osty_gc_nursery_limit_now(void) {
+    const char *value;
+    char *end = NULL;
+    long long parsed;
+
+    if (osty_gc_nursery_limit_loaded) {
+        return osty_gc_nursery_limit_bytes;
+    }
+    osty_gc_nursery_limit_loaded = true;
+    value = getenv(OSTY_GC_NURSERY_LIMIT_ENV);
+    if (value == NULL || value[0] == '\0') {
+        return osty_gc_nursery_limit_bytes;
+    }
+    parsed = strtoll(value, &end, 10);
+    if (end == value || (end != NULL && *end != '\0') || parsed < 0) {
+        osty_rt_abort("invalid " OSTY_GC_NURSERY_LIMIT_ENV);
+    }
+    osty_gc_nursery_limit_bytes = (int64_t)parsed;
+    return osty_gc_nursery_limit_bytes;
+}
+
+static int64_t osty_gc_promote_age_now(void) {
+    const char *value;
+    char *end = NULL;
+    long long parsed;
+
+    if (osty_gc_promote_age_loaded) {
+        return osty_gc_promote_age;
+    }
+    osty_gc_promote_age_loaded = true;
+    value = getenv(OSTY_GC_PROMOTE_AGE_ENV);
+    if (value == NULL || value[0] == '\0') {
+        return osty_gc_promote_age;
+    }
+    parsed = strtoll(value, &end, 10);
+    if (end == value || (end != NULL && *end != '\0') || parsed < 0 || parsed > 255) {
+        osty_rt_abort("invalid " OSTY_GC_PROMOTE_AGE_ENV);
+    }
+    osty_gc_promote_age = (int64_t)parsed;
+    return osty_gc_promote_age;
+}
+
+/* Phase B pressure split: `allocated_since_collect` still tracks the
+ * major-tier pressure (set by heap limit), while
+ * `allocated_since_minor` tracks the finer nursery tier. Minor is
+ * preferred — nursery overflow triggers a minor, and only heap-wide
+ * overflow escalates to a major. */
 static void osty_gc_note_allocation(size_t payload_size) {
     int64_t pressure_limit = osty_gc_pressure_limit_now();
+    int64_t nursery_limit = osty_gc_nursery_limit_now();
 
     if (payload_size > (size_t)INT64_MAX) {
         osty_rt_abort("GC payload size overflow");
     }
     osty_gc_allocated_since_collect += (int64_t)payload_size;
+    osty_gc_allocated_since_minor += (int64_t)payload_size;
     osty_gc_allocated_bytes_total += (int64_t)payload_size;
-    if (pressure_limit <= 0) {
-        return;
+    if (pressure_limit > 0 &&
+        (osty_gc_live_bytes >= pressure_limit ||
+         osty_gc_allocated_since_collect >= pressure_limit)) {
+        osty_gc_collection_requested = true;
     }
-    if (osty_gc_live_bytes >= pressure_limit || osty_gc_allocated_since_collect >= pressure_limit) {
+    if (nursery_limit > 0 &&
+        (osty_gc_young_bytes >= nursery_limit ||
+         osty_gc_allocated_since_minor >= nursery_limit)) {
         osty_gc_collection_requested = true;
     }
 }
@@ -803,6 +1008,11 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
     header->destroy = destroy;
     header->site = site;
     header->payload = (void *)(header + 1);
+    /* Phase B: every new allocation enters the nursery. Promotion to
+     * OLD happens inside a minor collection after
+     * `osty_gc_promote_age` survivals. */
+    header->generation = OSTY_GC_GEN_YOUNG;
+    header->age = 0;
     osty_gc_acquire();
     osty_gc_link(header);
     osty_gc_note_allocation(payload_size);
@@ -986,6 +1196,15 @@ static void osty_gc_mark_header(osty_gc_header *header) {
     if (header == NULL || header->marked) {
         return;
     }
+    /* Phase B: during a minor collection, OLD headers are treated as
+     * permanent roots — we neither mark nor follow them. Any OLD→YOUNG
+     * edge is captured by the remembered set and seeded separately in
+     * `osty_gc_collect_minor_with_stack_roots`. Without this filter the
+     * minor pass would sweep through tenured objects unnecessarily,
+     * collapsing back to major semantics. */
+    if (osty_gc_minor_in_progress && header->generation == OSTY_GC_GEN_OLD) {
+        return;
+    }
     header->marked = true;
     osty_gc_mark_stack_push(header);
 }
@@ -1030,19 +1249,60 @@ static int64_t osty_gc_now_nanos(void) {
     return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
 }
 
-static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
+/* Phase B remembered set maintenance after a minor collection.
+ *
+ * The post-write barrier logs (owner, value) edges as they land. Minor
+ * GC only consumes entries where the owner is OLD; after the minor
+ * finishes we compact the log so only still-relevant edges remain:
+ *
+ *   - owner must still be resident and OLD,
+ *   - value must still be resident and YOUNG.
+ *
+ * Edges where the value was swept or promoted get dropped. The next
+ * minor starts with a smaller, pre-filtered log. A major collection
+ * clears the log wholesale (everything re-registers through the next
+ * barrier), so this helper is a minor-only codepath. */
+static void osty_gc_remembered_edges_compact_after_minor(void) {
+    int64_t write_idx = 0;
+    int64_t i;
+    for (i = 0; i < osty_gc_remembered_edge_count; i++) {
+        osty_gc_header *owner = osty_gc_find_header(osty_gc_remembered_edges[i].owner);
+        osty_gc_header *value = osty_gc_find_header(osty_gc_remembered_edges[i].value);
+        if (owner == NULL || value == NULL) {
+            continue;
+        }
+        if (owner->generation != OSTY_GC_GEN_OLD) {
+            continue;
+        }
+        if (value->generation != OSTY_GC_GEN_YOUNG) {
+            continue;
+        }
+        osty_gc_remembered_edges[write_idx].owner =
+            osty_gc_remembered_edges[i].owner;
+        osty_gc_remembered_edges[write_idx].value =
+            osty_gc_remembered_edges[i].value;
+        write_idx += 1;
+    }
+    osty_gc_remembered_edge_count = write_idx;
+    /* SATB log is purely for future concurrent marking; clear after every
+     * STW cycle since the snapshot it encodes is of the just-completed
+     * pass. */
+    osty_gc_satb_log_count = 0;
+}
+
+/* Phase B major (full) collection. Scans every header regardless of
+ * generation. Roots = pinned + stack + global. Clears all barrier logs
+ * on exit because the post-sweep heap is a fresh baseline. */
+static void osty_gc_collect_major_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
     osty_gc_header *header;
     osty_gc_header *next;
     int64_t i;
     int64_t t_start;
     int64_t t_end;
 
-    /* Entry invariant: every header has `marked == false` (sweep clears
-     * the colour on its way out, so the next cycle does not need a
-     * dedicated pre-pass). */
     t_start = osty_gc_now_nanos();
 
-    /* 1. Seed the work queue from pinned roots (`root_bind_v1` holders). */
+    /* 1. Seed from pinned roots. */
     header = osty_gc_objects;
     while (header != NULL) {
         if (header->root_count > 0) {
@@ -1054,16 +1314,14 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
     for (i = 0; i < root_slot_count; i++) {
         osty_gc_mark_root_slot((void *)root_slots[i]);
     }
-    /* 3. Seed from registered global slots (`global_root_register_v1`). */
+    /* 3. Seed from registered global slots. */
     for (i = 0; i < osty_gc_global_root_count; i++) {
         osty_gc_mark_root_slot(osty_gc_global_root_slots[i]);
     }
-    /* 4. Drain the work queue iteratively — bounded C stack regardless of
-     *    object graph depth. Replaces prior recursive trace. */
+    /* 4. Drain the work queue iteratively. */
     osty_gc_mark_drain();
-    /* 5. Sweep unreachable objects and clear the colour on survivors so
-     *    the post-collection heap satisfies the "no stale marks" invariant
-     *    that Phase A1 `osty_gc_debug_validate_heap` relies on. */
+    /* 5. Sweep unreachable across both generations. Survivors get their
+     *    colour cleared on the way out. */
     header = osty_gc_objects;
     while (header != NULL) {
         next = header->next;
@@ -1081,7 +1339,9 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
         header = next;
     }
     osty_gc_collection_count += 1;
+    osty_gc_major_count += 1;
     osty_gc_allocated_since_collect = 0;
+    osty_gc_allocated_since_minor = 0;
     osty_gc_collection_requested = false;
     osty_gc_barrier_logs_clear();
 
@@ -1090,14 +1350,158 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
         int64_t elapsed = t_end - t_start;
         osty_gc_collection_nanos_last = elapsed;
         osty_gc_collection_nanos_total += elapsed;
+        osty_gc_major_nanos_total += elapsed;
         if (elapsed > osty_gc_collection_nanos_max) {
             osty_gc_collection_nanos_max = elapsed;
         }
     }
 }
 
+/* Phase B minor collection (RUNTIME_GC_DELTA §5.1-5.5).
+ *
+ * Scans only YOUNG objects. OLD objects are assumed live; any
+ * OLD→YOUNG edge is preserved by walking the remembered set. YOUNG
+ * survivors that cross `promote_age` move to OLD in place (address
+ * stable, no compaction). Frees unreachable YOUNG; OLD untouched.
+ */
+static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
+    osty_gc_header *header;
+    osty_gc_header *next;
+    int64_t i;
+    int64_t t_start;
+    int64_t t_end;
+    int64_t promote_age = osty_gc_promote_age_now();
+
+    t_start = osty_gc_now_nanos();
+    osty_gc_minor_in_progress = true;
+
+    /* 1. Pinned YOUNG roots only. OLD pinned objects are "live by
+     *    assumption" for the minor and do not need to enter the work
+     *    queue — any OLD→YOUNG reference they hold is captured by the
+     *    remembered set below. Iterating the young list (not the full
+     *    heap) is the Phase B2 depth win: iteration scales with
+     *    nursery size, not total heap size. */
+    header = osty_gc_young_head;
+    while (header != NULL) {
+        if (header->root_count > 0) {
+            osty_gc_mark_header(header);
+        }
+        header = header->next_gen;
+    }
+    /* 2. Stack roots — any YOUNG pointer on the stack gets enqueued;
+     *    mark_header filters OLD so this is implicitly YOUNG-only. */
+    for (i = 0; i < root_slot_count; i++) {
+        osty_gc_mark_root_slot((void *)root_slots[i]);
+    }
+    /* 3. Global roots. */
+    for (i = 0; i < osty_gc_global_root_count; i++) {
+        osty_gc_mark_root_slot(osty_gc_global_root_slots[i]);
+    }
+    /* 4. Remembered set: for every edge whose owner is currently OLD,
+     *    mark the value. This is where Phase A's edge log pays off —
+     *    without it we would have to re-scan the entire OLD generation
+     *    for references into YOUNG. */
+    for (i = 0; i < osty_gc_remembered_edge_count; i++) {
+        osty_gc_header *owner = osty_gc_find_header(osty_gc_remembered_edges[i].owner);
+        if (owner == NULL || owner->generation != OSTY_GC_GEN_OLD) {
+            continue;
+        }
+        osty_gc_mark_payload(osty_gc_remembered_edges[i].value);
+    }
+    /* 5. Drain. */
+    osty_gc_mark_drain();
+    osty_gc_minor_in_progress = false;
+    /* 6. Sweep YOUNG unreachable; promote YOUNG survivors whose age
+     *    reaches the threshold. We walk the young list exclusively —
+     *    OLD is never touched by a minor. */
+    header = osty_gc_young_head;
+    while (header != NULL) {
+        next = header->next_gen;
+        if (!header->marked) {
+            osty_gc_swept_count_total += 1;
+            osty_gc_swept_bytes_total += header->byte_size;
+            if (header->destroy != NULL) {
+                header->destroy(header->payload);
+            }
+            osty_gc_unlink(header);
+            free(header);
+        } else {
+            header->marked = false;
+            if ((int64_t)header->age + 1 >= promote_age) {
+                osty_gc_promote_header(header);
+            } else if (header->age < UINT8_MAX) {
+                header->age += 1;
+            }
+        }
+        header = next;
+    }
+    osty_gc_collection_count += 1;
+    osty_gc_minor_count += 1;
+    osty_gc_allocated_since_minor = 0;
+    osty_gc_collection_requested = false;
+    osty_gc_remembered_edges_compact_after_minor();
+
+    /* Phase B5 depth: minor→major escalation. If the minor couldn't
+     * drag young_bytes below the nursery cap (everything survived and
+     * promoted), or the heap as a whole has crossed its major limit,
+     * flag a major for the next dispatcher turn. Without this path a
+     * pathological workload — every YOUNG survives, gets promoted,
+     * fills OLD — would never trigger a major until a brand-new YOUNG
+     * allocation happens to cross `THRESHOLD_BYTES`, stranding a large
+     * floating OLD heap. */
+    {
+        int64_t nursery_limit = osty_gc_nursery_limit_now();
+        int64_t pressure_limit = osty_gc_pressure_limit_now();
+        bool nursery_still_hot = nursery_limit > 0 &&
+                                 osty_gc_young_bytes >= nursery_limit;
+        bool heap_over_major = pressure_limit > 0 &&
+                               osty_gc_live_bytes >= pressure_limit;
+        if (nursery_still_hot || heap_over_major) {
+            osty_gc_collection_requested_major = true;
+            osty_gc_collection_requested = true;
+        }
+    }
+
+    t_end = osty_gc_now_nanos();
+    if (t_start != 0 && t_end >= t_start) {
+        int64_t elapsed = t_end - t_start;
+        osty_gc_collection_nanos_last = elapsed;
+        osty_gc_collection_nanos_total += elapsed;
+        osty_gc_minor_nanos_total += elapsed;
+        if (elapsed > osty_gc_collection_nanos_max) {
+            osty_gc_collection_nanos_max = elapsed;
+        }
+    }
+}
+
+/* Phase B dispatcher. The auto-trigger path chooses minor by default;
+ * crosses to major only when the heap is near its pressure limit (so
+ * minor alone will not make progress) or when a major was explicitly
+ * requested via `osty_gc_collection_requested_major`.
+ *
+ * `osty_gc_debug_collect` stays a forced-major call for backwards
+ * compatibility with the Phase A test suite; tests that want to
+ * exercise the minor path explicitly go through `_collect_minor`. */
+
+static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
+    int64_t pressure_limit = osty_gc_pressure_limit_now();
+    bool needs_major = osty_gc_collection_requested_major;
+    if (!needs_major && pressure_limit > 0) {
+        if (osty_gc_live_bytes >= pressure_limit ||
+            osty_gc_allocated_since_collect >= pressure_limit) {
+            needs_major = true;
+        }
+    }
+    if (needs_major) {
+        osty_gc_collect_major_with_stack_roots(root_slots, root_slot_count);
+        osty_gc_collection_requested_major = false;
+    } else {
+        osty_gc_collect_minor_with_stack_roots(root_slots, root_slot_count);
+    }
+}
+
 static void osty_gc_collect_now(void) {
-    osty_gc_collect_now_with_stack_roots(NULL, 0);
+    osty_gc_collect_major_with_stack_roots(NULL, 0);
 }
 
 static bool osty_gc_safepoint_stress_enabled_now(void) {
@@ -3163,6 +3567,100 @@ void osty_gc_debug_collect(void) {
     osty_gc_release();
 }
 
+/* Phase B test-access entry points. `debug_collect` above stays a
+ * forced-major call so existing Phase A tests (which assume "one
+ * collection frees every unrooted object") keep their semantics.
+ * `debug_collect_minor` / `debug_collect_major` let Phase B tests pin
+ * the tier explicitly regardless of pressure state. */
+void osty_gc_debug_collect_minor(void) {
+    osty_gc_acquire();
+    if (osty_concurrent_workers > 0) {
+        osty_gc_release();
+        return;
+    }
+    osty_gc_collect_minor_with_stack_roots(NULL, 0);
+    osty_gc_release();
+}
+
+void osty_gc_debug_collect_major(void) {
+    osty_gc_acquire();
+    if (osty_concurrent_workers > 0) {
+        osty_gc_release();
+        return;
+    }
+    osty_gc_collect_major_with_stack_roots(NULL, 0);
+    osty_gc_release();
+}
+
+/* Phase B tier / generation accessors. */
+
+int64_t osty_gc_debug_minor_count(void) {
+    return osty_gc_minor_count;
+}
+
+int64_t osty_gc_debug_major_count(void) {
+    return osty_gc_major_count;
+}
+
+int64_t osty_gc_debug_minor_nanos_total(void) {
+    return osty_gc_minor_nanos_total;
+}
+
+int64_t osty_gc_debug_major_nanos_total(void) {
+    return osty_gc_major_nanos_total;
+}
+
+int64_t osty_gc_debug_young_count(void) {
+    return osty_gc_young_count;
+}
+
+int64_t osty_gc_debug_young_bytes(void) {
+    return osty_gc_young_bytes;
+}
+
+int64_t osty_gc_debug_old_count(void) {
+    return osty_gc_old_count;
+}
+
+int64_t osty_gc_debug_old_bytes(void) {
+    return osty_gc_old_bytes;
+}
+
+int64_t osty_gc_debug_promoted_count_total(void) {
+    return osty_gc_promoted_count_total;
+}
+
+int64_t osty_gc_debug_promoted_bytes_total(void) {
+    return osty_gc_promoted_bytes_total;
+}
+
+int64_t osty_gc_debug_nursery_limit_bytes(void) {
+    return osty_gc_nursery_limit_now();
+}
+
+int64_t osty_gc_debug_promote_age(void) {
+    return osty_gc_promote_age_now();
+}
+
+/* Expose the generation tag of a specific payload so tests can assert
+ * on promotion semantics directly. Returns -1 if the payload is not
+ * managed. */
+int64_t osty_gc_debug_generation_of(void *payload) {
+    osty_gc_header *header = osty_gc_find_header(payload);
+    if (header == NULL) {
+        return -1;
+    }
+    return (int64_t)header->generation;
+}
+
+int64_t osty_gc_debug_age_of(void *payload) {
+    osty_gc_header *header = osty_gc_find_header(payload);
+    if (header == NULL) {
+        return -1;
+    }
+    return (int64_t)header->age;
+}
+
 int64_t osty_gc_debug_live_count(void) {
     return osty_gc_live_count;
 }
@@ -3352,6 +3850,20 @@ typedef struct osty_gc_stats {
     int64_t index_count;
     int64_t index_tombstones;
     int64_t index_find_ops_total;
+    /* Phase B — generational tiers and timing. */
+    int64_t minor_count;
+    int64_t major_count;
+    int64_t minor_nanos_total;
+    int64_t major_nanos_total;
+    int64_t young_count;
+    int64_t young_bytes;
+    int64_t old_count;
+    int64_t old_bytes;
+    int64_t promoted_count_total;
+    int64_t promoted_bytes_total;
+    int64_t allocated_since_minor;
+    int64_t nursery_limit_bytes;
+    int64_t promote_age;
 } osty_gc_stats;
 
 void osty_gc_debug_stats(osty_gc_stats *out) {
@@ -3384,6 +3896,19 @@ void osty_gc_debug_stats(osty_gc_stats *out) {
     out->index_count = osty_gc_index_count;
     out->index_tombstones = osty_gc_index_tombstones;
     out->index_find_ops_total = osty_gc_index_find_ops_total;
+    out->minor_count = osty_gc_minor_count;
+    out->major_count = osty_gc_major_count;
+    out->minor_nanos_total = osty_gc_minor_nanos_total;
+    out->major_nanos_total = osty_gc_major_nanos_total;
+    out->young_count = osty_gc_young_count;
+    out->young_bytes = osty_gc_young_bytes;
+    out->old_count = osty_gc_old_count;
+    out->old_bytes = osty_gc_old_bytes;
+    out->promoted_count_total = osty_gc_promoted_count_total;
+    out->promoted_bytes_total = osty_gc_promoted_bytes_total;
+    out->allocated_since_minor = osty_gc_allocated_since_minor;
+    out->nursery_limit_bytes = osty_gc_nursery_limit_now();
+    out->promote_age = osty_gc_promote_age_now();
     osty_gc_release();
 }
 
@@ -3469,6 +3994,53 @@ void osty_gc_debug_unsafe_negative_cumulative(void) {
     osty_gc_allocated_bytes_total = -1;
 }
 
+/* Phase B depth — corruption injectors for the generational invariants
+ * (-12, -13, -14, -15, -16). Each flips exactly one field so tests can
+ * pair it with `osty_gc_debug_validate_heap()` and assert on the
+ * specific error code. */
+
+void osty_gc_debug_unsafe_bump_young_count(void) {
+    osty_gc_young_count += 1;
+}
+
+void osty_gc_debug_unsafe_bump_young_bytes(void) {
+    osty_gc_young_bytes += 1;
+}
+
+void osty_gc_debug_unsafe_set_invalid_generation(void) {
+    if (osty_gc_objects != NULL) {
+        osty_gc_objects->generation = 42;
+    }
+}
+
+void osty_gc_debug_unsafe_corrupt_young_head_gen(void) {
+    /* Flip the young-head's generation to an out-of-range value. The
+     * global walk hits the `-14 invalid generation` check first, which
+     * is stronger than the gen-list membership check (-16) — we'd get
+     * -12 instead of -16 with a plain YOUNG→OLD flip because the
+     * count bookkeeping goes wrong before the list walk. Going to an
+     * invalid value skips that intermediate failure. */
+    if (osty_gc_young_head != NULL) {
+        osty_gc_young_head->generation = 42;
+    }
+}
+
+void osty_gc_debug_unsafe_detach_from_young_list(void) {
+    /* Remove the young-list head but leave the header's global list
+     * membership and gen-count intact — gen list count no longer
+     * matches `osty_gc_young_count` (-15). */
+    osty_gc_header *h = osty_gc_young_head;
+    if (h == NULL) {
+        return;
+    }
+    osty_gc_young_head = h->next_gen;
+    if (osty_gc_young_head != NULL) {
+        osty_gc_young_head->prev_gen = NULL;
+    }
+    h->next_gen = NULL;
+    h->prev_gen = NULL;
+}
+
 void osty_gc_debug_stats_dump(FILE *out) {
     osty_gc_stats s;
     if (out == NULL) {
@@ -3491,6 +4063,10 @@ void osty_gc_debug_stats_dump(FILE *out) {
             "  mark stack peak:         %lld\n"
             "  collect nanos:           total %lld, last %lld, max %lld\n"
             "  index:                   count %lld, tombstones %lld, cap %lld, finds %lld\n"
+            "  tiers:                   minor %lld (%lld ns), major %lld (%lld ns)\n"
+            "  young / old:             %lld objs %lld B / %lld objs %lld B\n"
+            "  promoted total:          %lld objs %lld B\n"
+            "  nursery:                 %lld / %lld bytes, promote_age=%lld\n"
             "}\n",
             (long long)s.collection_count,
             (long long)s.live_count, (long long)s.live_bytes,
@@ -3507,7 +4083,14 @@ void osty_gc_debug_stats_dump(FILE *out) {
             (long long)s.collection_nanos_total, (long long)s.collection_nanos_last,
             (long long)s.collection_nanos_max,
             (long long)s.index_count, (long long)s.index_tombstones,
-            (long long)s.index_capacity, (long long)s.index_find_ops_total);
+            (long long)s.index_capacity, (long long)s.index_find_ops_total,
+            (long long)s.minor_count, (long long)s.minor_nanos_total,
+            (long long)s.major_count, (long long)s.major_nanos_total,
+            (long long)s.young_count, (long long)s.young_bytes,
+            (long long)s.old_count, (long long)s.old_bytes,
+            (long long)s.promoted_count_total, (long long)s.promoted_bytes_total,
+            (long long)s.allocated_since_minor,
+            (long long)s.nursery_limit_bytes, (long long)s.promote_age);
 }
 
 /* Phase A1 heap validation oracle (RUNTIME_GC_DELTA §9.5).
@@ -3544,12 +4127,23 @@ enum {
     OSTY_GC_VALIDATE_STALE_MARK = -9,
     OSTY_GC_VALIDATE_MARK_STACK_NON_EMPTY = -10,
     OSTY_GC_VALIDATE_NULL_GLOBAL_SLOT = -11,
+    /* Phase B: generational bookkeeping invariants. */
+    OSTY_GC_VALIDATE_GEN_COUNT_MISMATCH = -12,
+    OSTY_GC_VALIDATE_GEN_BYTES_MISMATCH = -13,
+    OSTY_GC_VALIDATE_INVALID_GENERATION = -14,
+    /* Phase B2 depth — segregated list consistency. */
+    OSTY_GC_VALIDATE_GEN_LIST_COUNT_MISMATCH = -15,
+    OSTY_GC_VALIDATE_GEN_LIST_MEMBERSHIP = -16,
 };
 
 int64_t osty_gc_debug_validate_heap(void) {
     osty_gc_header *header;
     int64_t walked_count = 0;
     int64_t walked_bytes = 0;
+    int64_t walked_young_count = 0;
+    int64_t walked_young_bytes = 0;
+    int64_t walked_old_count = 0;
+    int64_t walked_old_bytes = 0;
     int64_t i;
     int64_t status = OSTY_GC_VALIDATE_OK;
 
@@ -3577,6 +4171,16 @@ int64_t osty_gc_debug_validate_heap(void) {
             status = OSTY_GC_VALIDATE_STALE_MARK;
             goto done;
         }
+        if (header->generation == OSTY_GC_GEN_YOUNG) {
+            walked_young_count += 1;
+            walked_young_bytes += header->byte_size;
+        } else if (header->generation == OSTY_GC_GEN_OLD) {
+            walked_old_count += 1;
+            walked_old_bytes += header->byte_size;
+        } else {
+            status = OSTY_GC_VALIDATE_INVALID_GENERATION;
+            goto done;
+        }
         walked_count += 1;
         walked_bytes += header->byte_size;
         header = header->next;
@@ -3588,6 +4192,47 @@ int64_t osty_gc_debug_validate_heap(void) {
     if (walked_bytes != osty_gc_live_bytes) {
         status = OSTY_GC_VALIDATE_LIVE_BYTES_MISMATCH;
         goto done;
+    }
+    if (walked_young_count != osty_gc_young_count ||
+        walked_old_count != osty_gc_old_count) {
+        status = OSTY_GC_VALIDATE_GEN_COUNT_MISMATCH;
+        goto done;
+    }
+    if (walked_young_bytes != osty_gc_young_bytes ||
+        walked_old_bytes != osty_gc_old_bytes) {
+        status = OSTY_GC_VALIDATE_GEN_BYTES_MISMATCH;
+        goto done;
+    }
+    /* Phase B2 depth: per-gen list consistency. Walk each gen head,
+     * count, and verify it equals the tallied count. Also verify every
+     * node in the young list has generation == YOUNG (and vice versa)
+     * to catch drift where a promote forgot to re-link. */
+    {
+        int64_t gen_walked_young = 0;
+        int64_t gen_walked_old = 0;
+        osty_gc_header *gh = osty_gc_young_head;
+        while (gh != NULL) {
+            if (gh->generation != OSTY_GC_GEN_YOUNG) {
+                status = OSTY_GC_VALIDATE_GEN_LIST_MEMBERSHIP;
+                goto done;
+            }
+            gen_walked_young += 1;
+            gh = gh->next_gen;
+        }
+        gh = osty_gc_old_head;
+        while (gh != NULL) {
+            if (gh->generation != OSTY_GC_GEN_OLD) {
+                status = OSTY_GC_VALIDATE_GEN_LIST_MEMBERSHIP;
+                goto done;
+            }
+            gen_walked_old += 1;
+            gh = gh->next_gen;
+        }
+        if (gen_walked_young != osty_gc_young_count ||
+            gen_walked_old != osty_gc_old_count) {
+            status = OSTY_GC_VALIDATE_GEN_LIST_COUNT_MISMATCH;
+            goto done;
+        }
     }
     if (osty_gc_mark_stack_count != 0) {
         status = OSTY_GC_VALIDATE_MARK_STACK_NON_EMPTY;
@@ -3612,7 +4257,16 @@ int64_t osty_gc_debug_validate_heap(void) {
             goto done;
         }
     }
-    if (osty_gc_allocated_since_collect < 0 ||
+    if (osty_gc_allocated_since_minor < 0 ||
+        osty_gc_minor_count < 0 ||
+        osty_gc_major_count < 0 ||
+        osty_gc_promoted_count_total < 0 ||
+        osty_gc_promoted_bytes_total < 0 ||
+        osty_gc_young_count < 0 ||
+        osty_gc_young_bytes < 0 ||
+        osty_gc_old_count < 0 ||
+        osty_gc_old_bytes < 0 ||
+        osty_gc_allocated_since_collect < 0 ||
         osty_gc_allocated_bytes_total < 0 ||
         osty_gc_swept_count_total < 0 ||
         osty_gc_swept_bytes_total < 0 ||
