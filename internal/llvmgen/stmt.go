@@ -2297,6 +2297,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if base.typ != "ptr" || elemTyp == "" {
 		return true, unsupportedf("type-system", "list receiver type %s", base.typ)
 	}
+	elemSourceType, _ := g.iterableElemSourceType(field.X)
 	base = g.protectManagedTemporary("list.base", base)
 	baseValue, err := g.loadIfPointer(base)
 	if err != nil {
@@ -2345,7 +2346,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		arg, err := g.emitExpr(call.Args[1].Value)
+		arg, err := g.emitExprWithHintAndSourceType(call.Args[1].Value, elemSourceType, "", false, "", "", false, "", false)
 		if err != nil {
 			return true, err
 		}
@@ -2376,7 +2377,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 		return true, unsupported("call", "list.push requires one positional argument")
 	}
-	arg, err := g.emitExpr(call.Args[0].Value)
+	arg, err := g.emitExprWithHintAndSourceType(call.Args[0].Value, elemSourceType, "", false, "", "", false, "", false)
 	if err != nil {
 		return true, err
 	}

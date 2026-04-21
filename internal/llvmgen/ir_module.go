@@ -13,12 +13,14 @@ import (
 // It consumes the backend-neutral IR (internal/ir) and emits textual
 // LLVM IR.
 //
-// The implementation currently reifies the module back into a legacy
-// AST shape through legacyFileFromModule and then hands off to the
-// long-standing AST-driven emitter. This is a transitional detail:
-// external callers route through IR only, and the in-package test
-// helper generateFromAST is unexported. Once the emitter is rewritten
-// to consume IR directly, the bridge and the AST helper both go away.
+// The implementation now first projects a primitive/control-flow slice
+// into the native-owned entrypoint mirrored from toolchain/llvmgen.osty.
+// Remaining shapes still reify the module back into a legacy AST shape
+// through legacyFileFromModule and then hand off to the long-standing
+// AST-driven emitter. This is a transitional detail: external callers
+// route through IR only, and the in-package test helper generateFromAST
+// is unexported. Once the emitter consumes IR directly end-to-end, the
+// fallback bridge and the AST helper both go away.
 func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
 	if mod == nil {
 		return nil, unsupported("source-layout", "nil module")
@@ -28,6 +30,11 @@ func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
 	}
 	if diag, ok := moduleUnsupportedDiagnostic(mod); ok {
 		return nil, &UnsupportedError{Diagnostic: diag}
+	}
+	if out, ok, err := tryNativeOwnedModule(mod, opts); err != nil {
+		return nil, err
+	} else if ok {
+		return finalizeLegacyFFISurface(out, mod), nil
 	}
 	file, err := legacyFileFromModule(mod)
 	if err != nil {

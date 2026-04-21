@@ -1107,6 +1107,477 @@ pub fn llvmRenderFunction(
     llvmStrings.join([llvmStrings.join(lines, "\n"), "\n"], "")
 }
 
+/// Primitive/native-owned module-entry slice. The host bridge projects the
+/// backend-neutral IR into this LLVM-typed surface first; unsupported shapes
+/// still fall back to the legacy IR -> AST bridge in Go.
+pub enum LlvmNativeExprKind {
+    LlvmNativeExprInvalid,
+    LlvmNativeExprInt,
+    LlvmNativeExprFloat,
+    LlvmNativeExprBool,
+    LlvmNativeExprString,
+    LlvmNativeExprIdent,
+    LlvmNativeExprUnary,
+    LlvmNativeExprBinary,
+    LlvmNativeExprCall,
+    LlvmNativeExprPrintln,
+    LlvmNativeExprIf,
+}
+
+pub enum LlvmNativeStmtKind {
+    LlvmNativeStmtInvalid,
+    LlvmNativeStmtExpr,
+    LlvmNativeStmtLet,
+    LlvmNativeStmtMutLet,
+    LlvmNativeStmtAssign,
+    LlvmNativeStmtReturn,
+    LlvmNativeStmtIf,
+    LlvmNativeStmtWhile,
+    LlvmNativeStmtRange,
+}
+
+pub struct LlvmNativeExpr {
+    pub kind: LlvmNativeExprKind,
+    pub llvmType: String,
+    pub text: String,
+    pub name: String,
+    pub op: String,
+    pub boolValue: Bool,
+    pub inclusive: Bool,
+    pub childExprs: List<LlvmNativeExpr>,
+    pub childBlocks: List<LlvmNativeBlock>,
+}
+
+pub struct LlvmNativeStmt {
+    pub kind: LlvmNativeStmtKind,
+    pub name: String,
+    pub llvmType: String,
+    pub op: String,
+    pub inclusive: Bool,
+    pub childExprs: List<LlvmNativeExpr>,
+    pub childBlocks: List<LlvmNativeBlock>,
+}
+
+pub struct LlvmNativeBlock {
+    pub stmts: List<LlvmNativeStmt>,
+    pub hasResult: Bool,
+    pub result: LlvmNativeExpr,
+}
+
+pub struct LlvmNativeParam {
+    pub name: String,
+    pub llvmType: String,
+}
+
+pub struct LlvmNativeFunction {
+    pub name: String,
+    pub returnType: String,
+    pub params: List<LlvmNativeParam>,
+    pub body: LlvmNativeBlock,
+}
+
+pub struct LlvmNativeModule {
+    pub sourcePath: String,
+    pub target: String,
+    pub functions: List<LlvmNativeFunction>,
+}
+
+pub struct LlvmNativeRenderedFunction {
+    pub definition: String,
+    pub stringGlobals: List<LlvmStringGlobal>,
+    pub nextStringId: Int,
+}
+
+pub struct LlvmNativeMaybeValue {
+    pub hasValue: Bool,
+    pub value: LlvmValue,
+}
+
+pub fn llvmNativeEmitModule(module: LlvmNativeModule) -> String {
+    let mut definitions: List<String> = []
+    let globalsSeed = llvmEmitter()
+    let mut stringGlobals = globalsSeed.stringGlobals
+    let mut nextStringId = 0
+    for function in module.functions {
+        let rendered = llvmNativeEmitFunction(function, nextStringId)
+        nextStringId = rendered.nextStringId
+        definitions.push(rendered.definition)
+        for global in rendered.stringGlobals {
+            stringGlobals.push(global)
+        }
+    }
+    llvmRenderModuleWithGlobals(module.sourcePath, module.target, stringGlobals, definitions)
+}
+
+pub fn llvmNativeEmitFunction(
+    function: LlvmNativeFunction,
+    startStringId: Int,
+) -> LlvmNativeRenderedFunction {
+    let emitter = llvmEmitter()
+    emitter.stringId = startStringId
+    if function.params.len() == 0 {
+        let block = llvmNativeEmitBlock(emitter, function.body)
+        if !(llvmNativeBodyHasTerminator(emitter.body)) {
+            if block.hasValue && function.returnType != "" && function.returnType != "void" {
+                llvmReturn(emitter, block.value)
+            } else if function.returnType == "i32" && function.name == "main" {
+                llvmReturnI32Zero(emitter)
+            } else if function.returnType == "" || function.returnType == "void" {
+                emitter.body.push("  ret void")
+            } else {
+                llvmReturn(emitter, llvmNativeZeroValue(function.returnType))
+            }
+        }
+        return LlvmNativeRenderedFunction {
+            definition: llvmRenderFunction(
+                if function.returnType == "" { "void" } else { function.returnType },
+                function.name,
+                [],
+                emitter.body,
+            ),
+            stringGlobals: emitter.stringGlobals,
+            nextStringId: emitter.stringId,
+        }
+    }
+    let first = function.params[0]
+    let mut params = [llvmParam(first.name, first.llvmType)]
+    llvmBind(
+        emitter,
+        first.name,
+        LlvmValue {
+            typ: first.llvmType,
+            name: "%{first.name}",
+            pointer: false,
+        },
+    )
+    for i in 1..function.params.len() {
+        let param = function.params[i]
+        params.push(llvmParam(param.name, param.llvmType))
+        llvmBind(
+            emitter,
+            param.name,
+            LlvmValue {
+                typ: param.llvmType,
+                name: "%{param.name}",
+                pointer: false,
+            },
+        )
+    }
+    let block = llvmNativeEmitBlock(emitter, function.body)
+    if !(llvmNativeBodyHasTerminator(emitter.body)) {
+        if block.hasValue && function.returnType != "" && function.returnType != "void" {
+            llvmReturn(emitter, block.value)
+        } else if function.returnType == "i32" && function.name == "main" {
+            llvmReturnI32Zero(emitter)
+        } else if function.returnType == "" || function.returnType == "void" {
+            emitter.body.push("  ret void")
+        } else {
+            llvmReturn(emitter, llvmNativeZeroValue(function.returnType))
+        }
+    }
+    return LlvmNativeRenderedFunction {
+        definition: llvmRenderFunction(
+            if function.returnType == "" { "void" } else { function.returnType },
+            function.name,
+            params,
+            emitter.body,
+        ),
+        stringGlobals: emitter.stringGlobals,
+        nextStringId: emitter.stringId,
+    }
+}
+
+fn llvmNativeEmitBlock(
+    emitter: LlvmEmitter,
+    block: LlvmNativeBlock,
+) -> LlvmNativeMaybeValue {
+    for stmt in block.stmts {
+        llvmNativeEmitStmt(emitter, stmt)
+    }
+    if block.hasResult {
+        return LlvmNativeMaybeValue {
+            hasValue: true,
+            value: llvmNativeEvalExpr(emitter, block.result),
+        }
+    }
+    LlvmNativeMaybeValue {
+        hasValue: false,
+        value: llvmI64("0"),
+    }
+}
+
+fn llvmNativeEmitStmt(emitter: LlvmEmitter, stmt: LlvmNativeStmt) {
+    match stmt.kind {
+        LlvmNativeStmtExpr -> {
+            if stmt.childExprs.len() > 0 {
+                let _ = llvmNativeEvalExpr(emitter, stmt.childExprs[0])
+            }
+        },
+        LlvmNativeStmtLet -> {
+            if stmt.childExprs.len() > 0 {
+                llvmImmutableLet(emitter, stmt.name, llvmNativeEvalExpr(emitter, stmt.childExprs[0]))
+            }
+        },
+        LlvmNativeStmtMutLet -> {
+            if stmt.childExprs.len() > 0 {
+                llvmMutableLet(emitter, stmt.name, llvmNativeEvalExpr(emitter, stmt.childExprs[0]))
+            }
+        },
+        LlvmNativeStmtAssign -> {
+            if stmt.childExprs.len() > 0 {
+                let value = llvmNativeAssignValue(emitter, stmt)
+                let _ = llvmAssign(emitter, stmt.name, value)
+            }
+        },
+        LlvmNativeStmtReturn -> {
+            if stmt.childExprs.len() > 0 {
+                llvmReturn(emitter, llvmNativeEvalExpr(emitter, stmt.childExprs[0]))
+            } else if stmt.llvmType == "i32" {
+                llvmReturnI32Zero(emitter)
+            } else {
+                emitter.body.push("  ret void")
+            }
+        },
+        LlvmNativeStmtIf -> {
+            if stmt.childExprs.len() == 0 || stmt.childBlocks.len() == 0 {
+                return
+            }
+            let labels = llvmIfStart(emitter, llvmNativeEvalExpr(emitter, stmt.childExprs[0]))
+            let _ = llvmNativeEmitBlock(emitter, stmt.childBlocks[0])
+            llvmIfElse(emitter, labels)
+            if stmt.childBlocks.len() > 1 {
+                let _ = llvmNativeEmitBlock(emitter, stmt.childBlocks[1])
+            }
+            llvmIfEnd(emitter, labels)
+        },
+        LlvmNativeStmtWhile -> {
+            if stmt.childExprs.len() == 0 || stmt.childBlocks.len() == 0 {
+                return
+            }
+            let condLabel = llvmNextLabel(emitter, "for.cond")
+            let bodyLabel = llvmNextLabel(emitter, "for.body")
+            let endLabel = llvmNextLabel(emitter, "for.end")
+            emitter.body.push("  br label %{condLabel}")
+            emitter.body.push("{condLabel}:")
+            let cond = llvmNativeEvalExpr(emitter, stmt.childExprs[0])
+            emitter.body.push("  br i1 {cond.name}, label %{bodyLabel}, label %{endLabel}")
+            emitter.body.push("{bodyLabel}:")
+            let _ = llvmNativeEmitBlock(emitter, stmt.childBlocks[0])
+            emitter.body.push("  br label %{condLabel}")
+            emitter.body.push("{endLabel}:")
+        },
+        LlvmNativeStmtRange -> {
+            if stmt.childExprs.len() < 2 || stmt.childBlocks.len() == 0 {
+                return
+            }
+            let start = llvmNativeEvalExpr(emitter, stmt.childExprs[0])
+            let end = llvmNativeEvalExpr(emitter, stmt.childExprs[1])
+            let loop = if stmt.inclusive {
+                llvmInclusiveRangeStart(emitter, stmt.name, start, end)
+            } else {
+                llvmRangeStart(emitter, stmt.name, start, end, false)
+            }
+            let _ = llvmNativeEmitBlock(emitter, stmt.childBlocks[0])
+            llvmRangeEnd(emitter, loop)
+        },
+        _ -> {},
+    }
+}
+
+fn llvmNativeAssignValue(emitter: LlvmEmitter, stmt: LlvmNativeStmt) -> LlvmValue {
+    let value = llvmNativeEvalExpr(emitter, stmt.childExprs[0])
+    if stmt.op == "" || stmt.op == "=" {
+        return value
+    }
+    let current = llvmIdent(emitter, stmt.name)
+    llvmNativeApplyBinary(emitter, stmt.op, current, value, current.typ)
+}
+
+fn llvmNativeEvalExpr(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    match expr.kind {
+        LlvmNativeExprInt -> LlvmValue { typ: expr.llvmType, name: expr.text, pointer: false },
+        LlvmNativeExprFloat -> LlvmValue { typ: expr.llvmType, name: expr.text, pointer: false },
+        LlvmNativeExprBool -> LlvmValue {
+            typ: expr.llvmType,
+            name: if expr.boolValue { "true" } else { "false" },
+            pointer: false,
+        },
+        LlvmNativeExprString -> llvmStringLiteral(emitter, expr.text),
+        LlvmNativeExprIdent -> llvmIdent(emitter, expr.name),
+        LlvmNativeExprUnary -> llvmNativeEvalUnary(emitter, expr),
+        LlvmNativeExprBinary -> llvmNativeEvalBinary(emitter, expr),
+        LlvmNativeExprCall -> llvmNativeEvalCall(emitter, expr),
+        LlvmNativeExprPrintln -> llvmNativeEvalPrintln(emitter, expr),
+        LlvmNativeExprIf -> llvmNativeEvalIfExpr(emitter, expr),
+        _ -> llvmNativeZeroValue(expr.llvmType),
+    }
+}
+
+fn llvmNativeEvalUnary(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    if expr.childExprs.len() == 0 {
+        return llvmNativeZeroValue(expr.llvmType)
+    }
+    let value = llvmNativeEvalExpr(emitter, expr.childExprs[0])
+    if expr.op == "+" {
+        return value
+    }
+    if expr.op == "!" {
+        return llvmNotI1(emitter, value)
+    }
+    if expr.llvmType == "double" {
+        return llvmBinaryF64(
+            emitter,
+            llvmFloatBinaryInstruction("-"),
+            llvmNativeZeroValue("double"),
+            value,
+        )
+    }
+    llvmBinaryI64(
+        emitter,
+        llvmIntBinaryInstruction("-"),
+        llvmNativeZeroValue(expr.llvmType),
+        value,
+    )
+}
+
+fn llvmNativeEvalBinary(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    if expr.childExprs.len() < 2 {
+        return llvmNativeZeroValue(expr.llvmType)
+    }
+    let left = llvmNativeEvalExpr(emitter, expr.childExprs[0])
+    let right = llvmNativeEvalExpr(emitter, expr.childExprs[1])
+    llvmNativeApplyBinary(emitter, expr.op, left, right, expr.llvmType)
+}
+
+fn llvmNativeApplyBinary(
+    emitter: LlvmEmitter,
+    op: String,
+    left: LlvmValue,
+    right: LlvmValue,
+    resultType: String,
+) -> LlvmValue {
+    if op == "&&" || op == "||" {
+        return llvmLogicalI1(emitter, llvmLogicalInstruction(op), left, right)
+    }
+    if resultType == "i1" {
+        if left.typ == "double" || right.typ == "double" {
+            return llvmCompareF64(emitter, llvmFloatComparePredicate(op), left, right)
+        }
+        return llvmCompare(emitter, llvmIntComparePredicate(op), left, right)
+    }
+    if resultType == "double" {
+        return llvmBinaryF64(emitter, llvmFloatBinaryInstruction(op), left, right)
+    }
+    llvmBinaryI64(emitter, llvmIntBinaryInstruction(op), left, right)
+}
+
+fn llvmNativeEvalCall(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    if expr.childExprs.len() == 0 {
+        if expr.llvmType == "" || expr.llvmType == "void" {
+            llvmCallVoid(emitter, expr.name, [])
+            return LlvmValue { typ: "void", name: "", pointer: false }
+        }
+        return llvmCall(emitter, expr.llvmType, expr.name, [])
+    }
+    let mut args = [llvmNativeEvalExpr(emitter, expr.childExprs[0])]
+    for i in 1..expr.childExprs.len() {
+        args.push(llvmNativeEvalExpr(emitter, expr.childExprs[i]))
+    }
+    if expr.llvmType == "" || expr.llvmType == "void" {
+        llvmCallVoid(emitter, expr.name, args)
+        return LlvmValue { typ: "void", name: "", pointer: false }
+    }
+    llvmCall(emitter, expr.llvmType, expr.name, args)
+}
+
+fn llvmNativeEvalPrintln(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    if expr.childExprs.len() == 0 {
+        return LlvmValue { typ: "void", name: "", pointer: false }
+    }
+    let value = llvmNativeEvalExpr(emitter, expr.childExprs[0])
+    if value.typ == "double" {
+        llvmPrintlnF64(emitter, value)
+    } else if value.typ == "ptr" {
+        llvmPrintlnString(emitter, value)
+    } else {
+        llvmPrintlnI64(emitter, value)
+    }
+    LlvmValue { typ: "void", name: "", pointer: false }
+}
+
+fn llvmNativeEvalIfExpr(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    if expr.childExprs.len() == 0 || expr.childBlocks.len() < 2 {
+        return llvmNativeZeroValue(expr.llvmType)
+    }
+    let labels = llvmIfExprStart(emitter, llvmNativeEvalExpr(emitter, expr.childExprs[0]))
+    let thenValue = llvmNativeBlockValue(emitter, expr.childBlocks[0], expr.llvmType)
+    llvmIfExprElse(emitter, labels)
+    let elseValue = llvmNativeBlockValue(emitter, expr.childBlocks[1], expr.llvmType)
+    llvmIfExprEnd(emitter, expr.llvmType, thenValue, elseValue, labels)
+}
+
+fn llvmNativeBlockValue(
+    emitter: LlvmEmitter,
+    block: LlvmNativeBlock,
+    llvmType: String,
+) -> LlvmValue {
+    let value = llvmNativeEmitBlock(emitter, block)
+    if value.hasValue {
+        return value.value
+    }
+    llvmNativeZeroValue(llvmType)
+}
+
+fn llvmNativeZeroValue(llvmType: String) -> LlvmValue {
+    LlvmValue { typ: llvmType, name: llvmZeroLiteral(llvmType), pointer: false }
+}
+
+fn llvmNativeBodyHasTerminator(body: List<String>) -> Bool {
+    if body.len() == 0 {
+        return false
+    }
+    let last = body[body.len() - 1]
+    llvmStrings.hasPrefix(last, "  ret ") || llvmStrings.hasPrefix(last, "  br ")
+}
+
+/// Phase A4 fn-value thunk template. Renders the IR body of a private
+/// delegating function that accepts `ptr %env` as its implicit first
+/// argument, discards the env, and forwards the remaining args to
+/// `realSymbol`. The resulting IR is what the legacy emitter caches
+/// in `g.fnValueThunkDefs` so top-level fn references can be wrapped
+/// in a fn-value-compatible ABI (`{ ptr fn, ... }` env layout) without
+/// touching the defining symbol. An empty `retType` is normalised to
+/// `void` so call sites may forward the checker's unit return type
+/// verbatim.
+pub fn llvmRenderClosureThunk(
+    retType: String,
+    thunkSymbol: String,
+    paramTypes: List<String>,
+    realSymbol: String,
+) -> String {
+    let ret = if retType == "" { "void" } else { retType }
+    let mut paramParts: List<String> = ["ptr %env"]
+    let mut argParts: List<String> = []
+    for i in 0..paramTypes.len() {
+        let pt = paramTypes[i]
+        paramParts.push("{pt} %arg{i}")
+        argParts.push("{pt} %arg{i}")
+    }
+    let params = llvmStrings.join(paramParts, ", ")
+    let args = llvmStrings.join(argParts, ", ")
+    let mut lines: List<String> = []
+    lines.push("define private {ret} @{thunkSymbol}({params}) \{")
+    lines.push("entry:")
+    if ret == "void" {
+        lines.push("  call void @{realSymbol}({args})")
+        lines.push("  ret void")
+    } else {
+        lines.push("  %__ret = call {ret} @{realSymbol}({args})")
+        lines.push("  ret {ret} %__ret")
+    }
+    lines.push("\}")
+    llvmStrings.join([llvmStrings.join(lines, "\n"), "\n"], "")
+}
 pub fn llvmNeedsObjectArtifact(emit: String) -> Bool {
     emit == "object" || emit == "binary"
 }
