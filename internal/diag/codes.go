@@ -180,7 +180,7 @@ const (
 	//
 	// Example:
 	//   pub struct S {
-	//       x: Int??,   // nested Option type triggers recovery
+	//       123,   // rejected -- field or method declaration required
 	//   }
 	// Fix: provide a field or method declaration.
 	CodeExpectedStructMember = "E0107"

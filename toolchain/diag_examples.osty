@@ -24,7 +24,7 @@ pub fn diagHarvestCases() -> List<DiagHarvestCase> {
         DiagHarvestCase { code: "E0009", example: "let a = ''             // empty\nlet b = b'\\u\{1F600\}'   // non-ASCII byte\nlet c = 'ab'           // multiple scalars", phase: "resolve" },
         DiagHarvestCase { code: "E0101", example: "use go \"net/http\" \{\n    fn Get(url: String) -> String \{ \"x\" \}  // rejected\n\}", phase: "resolve" },
         DiagHarvestCase { code: "E0106", example: "fn connect(t: Int = computeTimeout()) \{\}  // rejected", phase: "resolve" },
-        DiagHarvestCase { code: "E0107", example: "pub struct S \{\n    x: Int??,   // nested Option type triggers recovery\n\}", phase: "resolve" },
+        DiagHarvestCase { code: "E0107", example: "pub struct S \{\n    123,   // rejected -- field or method declaration required\n\}", phase: "resolve" },
         DiagHarvestCase { code: "E0108", example: "pub enum E \{\n    123,   // rejected\n\}", phase: "resolve" },
         DiagHarvestCase { code: "E0109", example: "pub interface I \{\n    123,   // rejected\n\}", phase: "resolve" },
         DiagHarvestCase { code: "E0200", example: "a < b < c      // rejected\n0..10..20      // rejected", phase: "resolve" },
