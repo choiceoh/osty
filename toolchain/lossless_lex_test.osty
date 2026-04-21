@@ -228,12 +228,7 @@ fn testModeStackOnStringToken() {
     }
     testing.assert(stringIdx >= 0)
     let frames = losslessModeStackAt(stream, stringIdx)
-    let mut frameCount = 0
-    for f in frames {
-        let _ = f
-        frameCount = frameCount + 1
-    }
-    testing.assertEq(frameCount, 1)
+    testing.assertEq(frames.len(), 1)
     let _ = tokenCount
 }
 
@@ -331,12 +326,7 @@ fn testCompatBridgeTokenKinds() {
     let stream = losslessLex(src)
     let fronts = losslessToFrontTokens(stream)
     let losslessCount = losslessTokenCount(stream)
-    let mut bridgeCount = 0
-    for t in fronts {
-        let _ = t
-        bridgeCount = bridgeCount + 1
-    }
-    testing.assertEq(losslessCount, bridgeCount)
+    testing.assertEq(losslessCount, fronts.len())
 }
 
 // -------------------------------------------------------------------

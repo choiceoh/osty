@@ -391,10 +391,5 @@ pub fn checkGenericBoundSatisfied(env: CheckEnv, solver: Solver, concreteTy: Int
 }
 
 fn solveIntLen(xs: List<Int>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }

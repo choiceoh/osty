@@ -1156,23 +1156,12 @@ fn elabPoisonResult(cx: ElabCx, start: Int, end: Int) -> ElabResult {
 }
 
 fn checkIntListLenHelper(xs: List<Int>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn checkIntListAt(xs: List<Int>, idx: Int) -> Int {
-    let mut i = 0
-    for x in xs {
-        if i == idx {
-            return x
-        }
-        i = i + 1
-    }
-    return -1
+    if idx < 0 || idx >= xs.len() { return -1 }
+    xs[idx]
 }
 
 // =====================================================================
@@ -1923,12 +1912,7 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
 }
 
 fn checkStringListLenHelper(xs: List<String>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn parseTupleIndex(text: String) -> Int {
@@ -3527,12 +3511,7 @@ fn allVariantsForOwner(env: CheckEnv, owner: String) -> List<CheckVariantSig> {
 }
 
 fn checkVariantListLen(xs: List<CheckVariantSig>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn lastPathSegment(s: String) -> String {
@@ -3897,12 +3876,7 @@ fn pmExhaustivenessWitnessAt(cx: ElabCx, rows: List<List<Int>>, colTys: List<Int
 }
 
 fn pmWitnessesCount(xs: List<String>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn pmPrependWitnesses(prefix: String, ws: List<String>, startSeen: Int) -> List<String> {
@@ -4138,12 +4112,7 @@ fn pmStructFieldsForOwner(env: CheckEnv, owner: String) -> List<CheckFieldSig> {
 }
 
 fn checkFieldListLen(xs: List<CheckFieldSig>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn pmVariantCtor(cx: ElabCx, v: CheckVariantSig, colTy: Int) -> PmCtor {
@@ -4426,21 +4395,11 @@ fn intListConcat(a: List<Int>, b: List<Int>) -> List<Int> {
 }
 
 fn checkListOfRowsLen(xs: List<List<Int>>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn checkCtorListLen(xs: List<PmCtor>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 // =====================================================================

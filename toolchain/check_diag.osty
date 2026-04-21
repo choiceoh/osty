@@ -489,14 +489,8 @@ fn checkDiagLevenshteinBounded(left: String, right: String, limit: Int) -> Int {
 }
 
 fn checkDiagStringListAt(items: List<String>, target: Int) -> String {
-    let mut idx = 0
-    for item in items {
-        if idx == target {
-            return item
-        }
-        idx = idx + 1
-    }
-    ""
+    if target < 0 || target >= items.len() { return "" }
+    items[target]
 }
 
 // ---------------------------------------------------------------------
@@ -527,12 +521,7 @@ pub fn checkDiagCountErrors(xs: List<CheckDiagnostic>) -> Int {
 }
 
 pub fn checkDiagCount(xs: List<CheckDiagnostic>) -> Int {
-    let mut n = 0
-    for d in xs {
-        let _ = d
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 /// checkDiagRender produces a single-line preview of a diagnostic

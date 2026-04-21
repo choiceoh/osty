@@ -519,12 +519,7 @@ pub fn ciCheckPassed(diags: List<CiDiagCore>, strict: Bool) -> Bool {
 }
 
 pub fn ciDiagCount(diags: List<CiDiagCore>) -> Int {
-    let mut count = 0
-    for d in diags {
-        let _ = d
-        count = count + 1
-    }
-    count
+    diags.len()
 }
 
 pub fn ciSkippedNote() -> String {
@@ -793,12 +788,7 @@ fn dependencyCoreFromRow(row: String) -> CiDependencyCore {
 }
 
 fn packageCount(packages: List<host.ResolvePackage?>) -> Int {
-    let mut count = 0
-    for pkg in packages {
-        let _ = pkg
-        count = count + 1
-    }
-    count
+    packages.len()
 }
 
 fn ciBreakingSeverity(breakingIsError: Bool) -> String {
@@ -1010,12 +1000,7 @@ fn ciAllAsciiDigits(text: String) -> Bool {
 }
 
 fn ciStringUnitCount(text: String) -> Int {
-    let mut count = 0
-    for unit in ciStrings.split(text, "") {
-        let _ = unit
-        count = count + 1
-    }
-    count
+    ciStrings.split(text, "").len()
 }
 
 fn ciParseSemNumber(text: String) -> Int {

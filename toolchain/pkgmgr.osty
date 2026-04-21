@@ -379,12 +379,7 @@ pub fn selfPkgMarshalLock(packages: List<SelfPkgLockPackage>) -> String {
 }
 
 fn selfPkgLockDependencyCount(dependencies: List<SelfPkgLockDependency>) -> Int {
-    let mut count = 0
-    for dep in dependencies {
-        let _ = dep
-        count = count + 1
-    }
-    count
+    dependencies.len()
 }
 
 /// selfPkgSortLockPackages sorts by name then version text.
@@ -722,12 +717,7 @@ fn selfPkgFirstUnits(text: String, limit: Int) -> String {
 }
 
 fn selfPkgStringUnitCount(text: String) -> Int {
-    let mut count = 0
-    for unit in pkgStrings.split(text, "") {
-        let _ = unit
-        count = count + 1
-    }
-    count
+    pkgStrings.split(text, "").len()
 }
 
 /// selfPkgLockChange constructs a lock diff item.
@@ -924,32 +914,17 @@ pub fn selfPkgGraphNode(
 
 /// selfPkgGraphErrorCount counts graph errors.
 pub fn selfPkgGraphErrorCount(graph: SelfPkgGraph) -> Int {
-    let mut count = 0
-    for item in graph.errors {
-        let _ = item
-        count = count + 1
-    }
-    count
+    graph.errors.len()
 }
 
 /// selfPkgGraphNodeCount counts graph nodes.
 pub fn selfPkgGraphNodeCount(graph: SelfPkgGraph) -> Int {
-    let mut count = 0
-    for item in graph.nodes {
-        let _ = item
-        count = count + 1
-    }
-    count
+    graph.nodes.len()
 }
 
 /// selfPkgGraphOrderCount counts ordered graph node names.
 pub fn selfPkgGraphOrderCount(graph: SelfPkgGraph) -> Int {
-    let mut count = 0
-    for item in graph.order {
-        let _ = item
-        count = count + 1
-    }
-    count
+    graph.order.len()
 }
 
 fn emptySelfPkgGraphNode() -> SelfPkgGraphNode {
@@ -1243,10 +1218,5 @@ fn selfPkgLastPathSegment(path: String) -> String {
 }
 
 fn selfPkgStringListCount(items: List<String>) -> Int {
-    let mut count = 0
-    for item in items {
-        let _ = item
-        count = count + 1
-    }
-    count
+    items.len()
 }

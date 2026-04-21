@@ -507,32 +507,16 @@ fn ostyDropSuffixUnits(text: String, count: Int) -> String {
 }
 
 fn ostyLexStringPartCount(parts: List<OstyLexStringPart>) -> Int {
-    let mut count = 0
-    for part in parts {
-        let _ = part
-        count = count + 1
-    }
-    count
+    parts.len()
 }
 
 fn ostyStringListCount(items: List<String>) -> Int {
-    let mut count = 0
-    for item in items {
-        let _ = item
-        count = count + 1
-    }
-    count
+    items.len()
 }
 
 fn ostyStringAt(items: List<String>, target: Int) -> String {
-    let mut idx = 0
-    for item in items {
-        if idx == target {
-            return item
-        }
-        idx = idx + 1
-    }
-    ""
+    if target < 0 || target >= items.len() { return "" }
+    items[target]
 }
 
 // ===================================================================
@@ -573,44 +557,25 @@ fn ostyJoinDocLines(units: List<String>, stream: FrontLexStream, tok: FrontLexTo
 // ===================================================================
 
 pub fn ostyLexResultTokenCount(result: OstyLexResult) -> Int {
-    let mut c = 0
-    for t in result.tokens {
-        let _ = t
-        c = c + 1
-    }
-    c
+    result.tokens.len()
 }
 
 pub fn ostyLexResultErrorCount(result: OstyLexResult) -> Int {
-    let mut c = 0
-    for e in result.errors {
-        let _ = e
-        c = c + 1
-    }
-    c
+    result.errors.len()
 }
 
 pub fn ostyLexResultCommentCount(result: OstyLexResult) -> Int {
-    let mut c = 0
-    for co in result.comments {
-        let _ = co
-        c = c + 1
-    }
-    c
+    result.comments.len()
 }
 
 pub fn ostyLexResultTokenAt(result: OstyLexResult, idx: Int) -> OstyRichToken {
-    let mut i = 0
-    for t in result.tokens {
-        if i == idx {
-            return t
+    if idx < 0 || idx >= result.tokens.len() {
+        return OstyRichToken {
+            kind: FrontEOF, text: "", startOffset: 0, startLine: 0, startCol: 0,
+            endOffset: 0, endLine: 0, endCol: 0, leadingDoc: "", triple: false, partCount: 0,
         }
-        i = i + 1
     }
-    OstyRichToken {
-        kind: FrontEOF, text: "", startOffset: 0, startLine: 0, startCol: 0,
-        endOffset: 0, endLine: 0, endCol: 0, leadingDoc: "", triple: false, partCount: 0,
-    }
+    result.tokens[idx]
 }
 
 // ===================================================================

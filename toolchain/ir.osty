@@ -718,21 +718,11 @@ fn irRefreshSemanticCounters(module: IrModule) {
 }
 
 pub fn irScopeCount(semantic: IrSemantic) -> Int {
-    let mut count = 0
-    for scope in semantic.scopes {
-        let _ = scope
-        count = count + 1
-    }
-    count
+    semantic.scopes.len()
 }
 
 pub fn irSymbolCount(semantic: IrSemantic) -> Int {
-    let mut count = 0
-    for symbol in semantic.symbols {
-        let _ = symbol
-        count = count + 1
-    }
-    count
+    semantic.symbols.len()
 }
 
 pub fn irSymbolAt(semantic: IrSemantic, id: Int) -> IrSymbol {
@@ -1013,12 +1003,7 @@ pub fn irSummarize(module: IrModule) -> IrSummary {
 }
 
 pub fn irDiagnosticCount(module: IrModule) -> Int {
-    let mut count = 0
-    for diag in module.diagnostics {
-        let _ = diag
-        count = count + 1
-    }
-    count
+    module.diagnostics.len()
 }
 
 pub fn irChildCount(module: IrModule, idx: Int) -> Int {
@@ -1030,12 +1015,7 @@ pub fn irDeclCount(module: IrModule) -> Int {
 }
 
 pub fn irListCount(items: List<Int>) -> Int {
-    let mut count = 0
-    for item in items {
-        let _ = item
-        count = count + 1
-    }
-    count
+    items.len()
 }
 
 pub fn irInvalidParentCount(module: IrModule) -> Int {
