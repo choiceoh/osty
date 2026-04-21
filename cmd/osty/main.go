@@ -797,7 +797,74 @@ func runLintLoadedPackage(
 	}
 	all := append(append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...), lr.Diags...)
 	printPackageDiags(pkg, all, flags)
+	if flags.fix || flags.fixDryRun {
+		applyPackageFixes(pkg, lr.Diags, flags)
+	}
 	return lintPackageOutcome{anyErr: hasError(all), anyWarn: hasWarning(all)}
+}
+
+// applyPackageFixes runs lint.ApplyFixes on each file in the package
+// using only diagnostics stamped for that file, then either rewrites the
+// files in place (--fix) or dumps a concatenated dry-run preview
+// (--fix-dry-run). Emits a final summary line counting fixes applied
+// and overlaps skipped across the whole package.
+//
+// Diagnostics whose File is empty are attached to the package's first
+// file — package-mode lint.Package does stamp File on every lint diag,
+// but the fallback keeps this robust against downstream regressions.
+func applyPackageFixes(pkg *resolve.Package, diags []*diag.Diagnostic, flags cliFlags) {
+	if pkg == nil || len(pkg.Files) == 0 {
+		return
+	}
+	byFile := map[string][]*diag.Diagnostic{}
+	for _, d := range diags {
+		path := d.File
+		if path == "" {
+			path = pkg.Files[0].Path
+		}
+		byFile[path] = append(byFile[path], d)
+	}
+	totalApplied, totalSkipped := 0, 0
+	mode := "osty lint"
+	for _, f := range pkg.Files {
+		ds := byFile[f.Path]
+		if len(ds) == 0 {
+			continue
+		}
+		newSrc, applied, skipped := lint.ApplyFixes(f.Source, ds)
+		totalApplied += applied
+		totalSkipped += skipped
+		switch {
+		case flags.fixDryRun:
+			if applied == 0 {
+				continue
+			}
+			// Prefix each file's post-fix content with a header so the
+			// user can diff it against the original per file.
+			fmt.Fprintf(os.Stdout, "// ==== %s ====\n", f.Path)
+			if _, err := os.Stdout.Write(newSrc); err != nil {
+				fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %v\n", mode, err)
+				os.Exit(1)
+			}
+			if len(newSrc) > 0 && newSrc[len(newSrc)-1] != '\n' {
+				fmt.Fprintln(os.Stdout)
+			}
+		case flags.fix:
+			if applied == 0 {
+				continue
+			}
+			if err := os.WriteFile(f.Path, newSrc, 0o644); err != nil {
+				fmt.Fprintf(os.Stderr, "%s --fix: %v\n", mode, err)
+				os.Exit(1)
+			}
+		}
+	}
+	switch {
+	case flags.fixDryRun:
+		fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %d fix(es) would apply, %d overlap(s) would be skipped\n", mode, totalApplied, totalSkipped)
+	case flags.fix:
+		fmt.Fprintf(os.Stderr, "%s --fix: applied %d fix(es), skipped %d overlap(s)\n", mode, totalApplied, totalSkipped)
+	}
 }
 
 // runResolvePackage is runCheckPackage plus a resolution dump per file.
