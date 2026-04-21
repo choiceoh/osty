@@ -1742,6 +1742,61 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         paramNames: ["f"], paramTys: [tFnV_R_map],
         generics: ["K", "V", "R"], genericBounds: [],
     })
+    // Pure-Osty Map helpers (collections.osty §B.9.1) not covered by
+    // the #470 intrinsic set. These are Osty-bodied today but become
+    // real IR functions once Option B Phase 1 (#483) graduates their
+    // stdlib template through `injectReachableStdlibTypes`. Register
+    // the signatures now so callers type-check; backend lowering
+    // flips from "no method" to "stdlib body" as the pipeline fills in.
+    let tPairKV = tyTuple(tys, [tK, tV])
+    let tListPairKV = tyNamed(tys, "List", [tPairKV])
+    let tOptPairKV = tyOptional(tys, tPairKV)
+    let tFnKV_Unit = tyFn(tys, [tK, tV], tUnit(tys))
+    checkRegisterFn(env, CheckFnSig {
+        name: "entries", owner: "Map", receiverTy: tMapKV, retTy: tListPairKV,
+        paramNames: [], paramTys: [],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "forEach", owner: "Map", receiverTy: tMapKV, retTy: tUnit(tys),
+        paramNames: ["f"], paramTys: [tFnKV_Unit],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "any", owner: "Map", receiverTy: tMapKV, retTy: tBool(tys),
+        paramNames: ["pred"], paramTys: [tFnKV_Bool],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "all", owner: "Map", receiverTy: tMapKV, retTy: tBool(tys),
+        paramNames: ["pred"], paramTys: [tFnKV_Bool],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "count", owner: "Map", receiverTy: tMapKV, retTy: tInt(tys),
+        paramNames: ["pred"], paramTys: [tFnKV_Bool],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "find", owner: "Map", receiverTy: tMapKV, retTy: tOptPairKV,
+        paramNames: ["pred"], paramTys: [tFnKV_Bool],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "filter", owner: "Map", receiverTy: tMapKV, retTy: tMapKV,
+        paramNames: ["pred"], paramTys: [tFnKV_Bool],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "merge", owner: "Map", receiverTy: tMapKV, retTy: tMapKV,
+        paramNames: ["other"], paramTys: [tMapKV],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "insertAll", owner: "Map", receiverTy: tMapKV, retTy: tUnit(tys),
+        paramNames: ["other"], paramTys: [tMapKV],
+        generics: ["K", "V"], genericBounds: [],
+    })
 
     // ----- Set<T> intrinsics (spec §10.6) -----
     let tSetT = tyNamed(tys, "Set", [tT])
@@ -1778,6 +1833,22 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
     checkRegisterFn(env, CheckFnSig {
         name: "toList", owner: "Set", receiverTy: tSetT, retTy: tListT,
         paramNames: [], paramTys: [],
+        generics: ["T"], genericBounds: [],
+    })
+    // Pure-Osty Set helpers (collections.osty §B.9.1).
+    checkRegisterFn(env, CheckFnSig {
+        name: "union", owner: "Set", receiverTy: tSetT, retTy: tSetT,
+        paramNames: ["other"], paramTys: [tSetT],
+        generics: ["T"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "intersect", owner: "Set", receiverTy: tSetT, retTy: tSetT,
+        paramNames: ["other"], paramTys: [tSetT],
+        generics: ["T"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "difference", owner: "Set", receiverTy: tSetT, retTy: tSetT,
+        paramNames: ["other"], paramTys: [tSetT],
         generics: ["T"], genericBounds: [],
     })
 
