@@ -299,6 +299,10 @@ func listRuntimeLenSymbol() string {
 	return llvmListRuntimeLenSymbol()
 }
 
+func listRuntimePopDiscardSymbol() string {
+	return "osty_rt_list_pop_discard"
+}
+
 func listRuntimePushBytesV1Symbol() string {
 	return "osty_rt_list_push_bytes_v1"
 }

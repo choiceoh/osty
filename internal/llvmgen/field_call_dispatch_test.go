@@ -61,6 +61,75 @@ fn main() {
 	}
 }
 
+func TestGenerateDiscardedListPopNoLongerTripsLLVM015(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    let mut values: List<Int> = [1, 2, 3]
+    let _ = values.pop()
+    println(values.len())
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/list_pop_discard.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"call void @osty_rt_list_pop_discard",
+		"call i64 @osty_rt_list_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateExprStmtListPopNoLongerTripsLLVM015(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    let mut values: List<Int> = [1, 2]
+    values.pop()
+    println(values.len())
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/list_pop_expr_stmt.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	if got := string(ir); !strings.Contains(got, "call void @osty_rt_list_pop_discard") {
+		t.Fatalf("generated IR missing list pop discard call:\n%s", got)
+	}
+}
+
+func TestGenerateIndexedNestedListLenMethodDispatch(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    let stacks: List<List<Int>> = [[1, 2], [3]]
+    let stack = stacks[0]
+    println(stack.len())
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/indexed_nested_list_len.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	if got := string(ir); !strings.Contains(got, "call i64 @osty_rt_list_len") {
+		t.Fatalf("generated IR missing list len call:\n%s", got)
+	}
+}
+
 // Phase 1 of the first-class fn value lowering: a top-level fn used
 // in value position materialises a closure env + thunk, and the
 // subsequent call through the bound name dispatches indirectly.

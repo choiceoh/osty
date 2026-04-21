@@ -547,7 +547,7 @@ func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
 			v := fromOstyValue(out)
 			v.gcManaged = base.listElemTyp == "ptr"
 			v.rootPaths = g.rootPathsForType(base.listElemTyp)
-			return v, nil
+			return g.decorateStaticValueFromSourceType(v, expr), nil
 		}
 		traceSymbol := g.traceCallbackSymbol(base.listElemTyp, g.rootPathsForType(base.listElemTyp))
 		emitter := g.toOstyEmitter()
@@ -563,7 +563,7 @@ func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
 		loaded := g.loadValueFromAddress(emitter, base.listElemTyp, slot)
 		g.takeOstyEmitter(emitter)
 		loaded.rootPaths = g.rootPathsForType(base.listElemTyp)
-		return loaded, nil
+		return g.decorateStaticValueFromSourceType(loaded, expr), nil
 	case base.mapKeyTyp != "":
 		if index.typ != base.mapKeyTyp {
 			return value{}, unsupportedf("type-system", "map index type %s, want %s", index.typ, base.mapKeyTyp)
@@ -586,7 +586,7 @@ func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
 		g.takeOstyEmitter(emitter)
 		out.gcManaged = base.mapValueTyp == "ptr"
 		out.rootPaths = g.rootPathsForType(base.mapValueTyp)
-		return out, nil
+		return g.decorateStaticValueFromSourceType(out, expr), nil
 	default:
 		return value{}, unsupportedf("expression", "index expression on %s", base.typ)
 	}
@@ -846,17 +846,17 @@ func (g *generator) emitBinary(e *ast.BinaryExpr) (value, error) {
 //
 // Lowering mirrors the null-check/phi shape used by `?` and `?.`:
 //
-//   %is_nil = icmp eq ptr %left, null
-//   br i1 %is_nil, label %none, label %some
-//  some:
-//    ; unwrap: inner-ptr types use %left directly; others load the
-//    ; boxed payload via `load innerTyp, ptr %left`.
-//    br label %end
-//  none:
-//    ; evaluate %right (may be any side-effecting expression).
-//    br label %end
-//  end:
-//    %out = phi innerTyp [ %unwrapped, %some.pred ], [ %right, %none.pred ]
+//	 %is_nil = icmp eq ptr %left, null
+//	 br i1 %is_nil, label %none, label %some
+//	some:
+//	  ; unwrap: inner-ptr types use %left directly; others load the
+//	  ; boxed payload via `load innerTyp, ptr %left`.
+//	  br label %end
+//	none:
+//	  ; evaluate %right (may be any side-effecting expression).
+//	  br label %end
+//	end:
+//	  %out = phi innerTyp [ %unwrapped, %some.pred ], [ %right, %none.pred ]
 //
 // Nil-coalesce is intentionally right-associative at the surface so
 // `a ?? b ?? c` parses as `a ?? (b ?? c)`; here we only see one
@@ -2865,6 +2865,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		if v, ok, ierr := g.emitIndirectUserCall(call); ok || ierr != nil {
 			return v, ierr
 		}
+		if field, ok := call.Fn.(*ast.FieldExpr); ok {
+			return value{}, unsupportedf("call", "call target %T (%s)", call.Fn, debugFieldCallTarget(field))
+		}
 		return value{}, unsupportedf("call", "call target %T", call.Fn)
 	}
 	if sig.ret == "" {
@@ -2898,6 +2901,24 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	ret.gcManaged = valueNeedsManagedRoot(ret)
 	ret.rootPaths = g.rootPathsForType(sig.ret)
 	return ret, nil
+}
+
+func debugFieldCallTarget(field *ast.FieldExpr) string {
+	if field == nil {
+		return "<nil>"
+	}
+	return debugFieldBase(field.X) + "." + field.Name
+}
+
+func debugFieldBase(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.FieldExpr:
+		return debugFieldCallTarget(e)
+	default:
+		return fmt.Sprintf("%T", expr)
+	}
 }
 
 func (g *generator) emitTestingValueCall(call *ast.CallExpr) (value, bool, error) {
