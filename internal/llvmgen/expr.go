@@ -221,8 +221,25 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 	case *ast.MatchExpr:
 		return g.emitMatchExprValue(e)
 	default:
-		return value{}, unsupportedf("expression", "expression %T", expr)
+		return value{}, unsupportedf("expression", "expression %T %s", expr, exprPosLabel(expr))
 	}
+}
+
+// exprPosLabel formats the AST node's source line/column and byte
+// offset for LLVMXXX wall messages. The merged-toolchain probes
+// synthesize paths like /tmp/toolchain_native_merged.osty, so file is
+// usually not useful — but line:col plus byte-offset plus `%T` lets
+// the investigator grep the merge buffer and pinpoint the offending
+// expression immediately.
+func exprPosLabel(node ast.Node) string {
+	if node == nil {
+		return ""
+	}
+	p := node.Pos()
+	if p.Line == 0 && p.Column == 0 && p.Offset == 0 {
+		return ""
+	}
+	return fmt.Sprintf("at %s (offset %d)", p, p.Offset)
 }
 
 func (g *generator) emitIdent(name string) (value, error) {
@@ -545,7 +562,7 @@ func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
 		return value{}, unsupported("expression", "nil index expression")
 	}
 	if rng, ok := expr.Index.(*ast.RangeExpr); ok {
-		return g.emitStringSliceIndex(expr, rng)
+		return g.emitSliceIndex(expr, rng)
 	}
 	base, err := g.emitExpr(expr.X)
 	if err != nil {
@@ -614,19 +631,21 @@ func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
 	}
 }
 
-// emitStringSliceIndex lowers `s[start..end]` and `s[start..=end]` on a
-// String receiver to `osty_rt_strings_Slice`. Missing bounds default to
-// 0 and the string's byte-length respectively. Used by the toolchain's
-// string slicing in parser.osty (`raw[1..n - 1]`, `raw[0..1]`, ...).
-// Non-String index-range targets fall through to the generic index
-// path, which will surface a more specific error.
-func (g *generator) emitStringSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr) (value, error) {
+// emitSliceIndex lowers `base[a..b]` and `base[a..=b]` for both String
+// and List<T> receivers. Dispatch is driven by the base's static source
+// type — String routes to osty_rt_strings_Slice (byte-level), List
+// routes to osty_rt_list_slice (elem_size-level memcpy). Non-slicable
+// receivers surface a type-system diagnostic.
+func (g *generator) emitSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr) (value, error) {
 	base, err := g.emitExpr(expr.X)
 	if err != nil {
 		return value{}, err
 	}
+	if base.listElemTyp != "" {
+		return g.emitListSliceIndex(expr, rng, base)
+	}
 	if base.typ != "ptr" {
-		return value{}, unsupportedf("type-system", "slice indexing on %s, want String (ptr)", base.typ)
+		return value{}, unsupportedf("type-system", "slice indexing on %s, want String (ptr) or List<T>", base.typ)
 	}
 	baseIsString := false
 	if sourceType, ok := g.staticExprSourceType(expr.X); ok {
@@ -635,7 +654,7 @@ func (g *generator) emitStringSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr
 		}
 	}
 	if !baseIsString {
-		return value{}, unsupported("type-system", "slice indexing is only supported on String receivers")
+		return value{}, unsupported("type-system", "slice indexing is only supported on String or List<T> receivers")
 	}
 	base, err = g.loadIfPointer(base)
 	if err != nil {
@@ -688,6 +707,68 @@ func (g *generator) emitStringSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr
 	sliced := fromOstyValue(out)
 	sliced.gcManaged = true
 	sliced.sourceType = &ast.NamedType{Path: []string{"String"}}
+	return sliced, nil
+}
+
+// emitListSliceIndex lowers `list[a..b]` and `list[a..=b]` on a List<T>
+// receiver to osty_rt_list_slice. Bounds default to 0 and list.len —
+// runtime applies saturating clamps, matching String.slice semantics.
+// Inclusive `..=` adds 1 to the end operand before the call.
+func (g *generator) emitListSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr, base value) (value, error) {
+	baseLoaded, err := g.loadIfPointer(base)
+	if err != nil {
+		return value{}, err
+	}
+
+	var startVal value
+	if rng.Start == nil {
+		startVal = value{typ: "i64", ref: "0"}
+	} else {
+		v, err := g.emitExpr(rng.Start)
+		if err != nil {
+			return value{}, err
+		}
+		if v.typ != "i64" {
+			return value{}, unsupportedf("type-system", "slice start type %s, want Int", v.typ)
+		}
+		startVal = v
+	}
+
+	var endVal value
+	if rng.Stop == nil {
+		g.declareRuntimeSymbol(listRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		lenVal := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(baseLoaded)})
+		g.takeOstyEmitter(emitter)
+		endVal = fromOstyValue(lenVal)
+	} else {
+		v, err := g.emitExpr(rng.Stop)
+		if err != nil {
+			return value{}, err
+		}
+		if v.typ != "i64" {
+			return value{}, unsupportedf("type-system", "slice end type %s, want Int", v.typ)
+		}
+		endVal = v
+		if rng.Inclusive {
+			emitter := g.toOstyEmitter()
+			tmp := llvmNextTemp(emitter)
+			emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", tmp, endVal.ref))
+			g.takeOstyEmitter(emitter)
+			endVal = value{typ: "i64", ref: tmp}
+		}
+	}
+
+	g.declareRuntimeSymbol(listRuntimeSliceSymbol(), "ptr", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "i64"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", listRuntimeSliceSymbol(), []*LlvmValue{toOstyValue(baseLoaded), toOstyValue(startVal), toOstyValue(endVal)})
+	g.takeOstyEmitter(emitter)
+	sliced := fromOstyValue(out)
+	sliced.gcManaged = true
+	sliced.listElemTyp = base.listElemTyp
+	sliced.listElemString = base.listElemString
+	sliced.sourceType = base.sourceType
+	sliced.rootPaths = g.rootPathsForType(base.listElemTyp)
 	return sliced, nil
 }
 
