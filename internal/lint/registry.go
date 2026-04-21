@@ -220,6 +220,27 @@ var allRules = []Rule{
 		Summary:     "function returns Result/Option but never errors",
 		Description: "A function declared `-> Result<T, E>` or `-> Option<T>` whose body only exits through `Ok(...)` or `Some(...)` (no `Err`, `None`, or `?` propagation) forces every caller to unwrap for no reason. Drop the wrapping and declare the plain return type.",
 	},
+	{
+		Code: diag.CodeLetReturnSimplify, Name: "let_return_simplify",
+		Category: CategorySimplify, DefaultSeverity: diag.Warning,
+		Summary:     "useless let binding before tail return",
+		Description: "`let x = expr; x` at the end of a block rebinds the expression only to return it unchanged. Drop the let and return the expression directly.",
+		Fixable:     true,
+	},
+	{
+		Code: diag.CodeNeedlessParens, Name: "needless_parens_condition",
+		Category: CategorySimplify, DefaultSeverity: diag.Warning,
+		Summary:     "parentheses around an if / for / match condition are redundant",
+		Description: "Condition syntax does not require outer parentheses; removing them matches the canonical style and keeps the scrutinee read-once.",
+		Fixable:     true,
+	},
+	{
+		Code: diag.CodeInfiniteLoopLiteral, Name: "infinite_loop_literal",
+		Category: CategorySimplify, DefaultSeverity: diag.Warning,
+		Summary:     "redundant literal `true` on an infinite loop",
+		Description: "`for true { ... }` is the same as `for { ... }`. Drop the literal to match the canonical infinite-loop form.",
+		Fixable:     true,
+	},
 
 	// ---- Complexity (L0050-L0069) ----
 	{
@@ -247,6 +268,14 @@ var allRules = []Rule{
 		Category: CategoryDocs, DefaultSeverity: diag.Warning,
 		Summary:     "public declaration has no doc comment",
 		Description: "Public items are the module's external contract — even a one-line `///` helps consumers use them correctly.",
+	},
+
+	// ---- Testing (L0080-L0089) ----
+	{
+		Code: diag.CodeMissingTestAssertion, Name: "missing_test_assertion",
+		Category: CategoryDocs, DefaultSeverity: diag.Warning,
+		Summary:     "test function has no testing.* assertion",
+		Description: "A `test_*` function (or `_test.osty` top-level fn prefixed `test`) with no call into the `testing` module will pass no matter what happens. That is almost always a scaffolding leftover or a typo — mark the function non-test, or call an assertion helper.",
 	},
 }
 

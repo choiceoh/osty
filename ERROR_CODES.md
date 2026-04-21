@@ -1516,7 +1516,7 @@ enum Color { red, Green }   // warning on `red`
 
 ---
 
-## Lint — redundant forms (L0040–L0046)
+## Lint — redundant forms (L0040–L0049)
 
 ### L0040 — `CodeRedundantBool`
 
@@ -1582,6 +1582,40 @@ fn parse(s: String) -> Result<Int, Error> {
 
 **Fix**: drop the wrapping and declare the plain return type:
 
+### L0047 — `CodeLetReturnSimplify`
+
+`let x = expr; x` at the tail of a block is a useless round-trip. The binding is introduced and immediately returned with no other uses — the block can just be `expr`.
+
+```osty
+fn double(n: Int) -> Int {
+    let out = n * 2     // warning: useless binding before tail return
+    out
+}
+```
+
+**Fix**: drop the let and return the expression directly.
+
+### L0048 — `CodeNeedlessParens`
+
+Parentheses wrapping an `if` / `for` / `match` condition are pure noise — they add nothing syntactic and clippy-style convention keeps conditions bare.
+
+```osty
+if (ready) { ... }        // warning: drop the parens
+for (i in 0..n) { ... }   // warning: drop the parens
+```
+
+**Fix**: unwrap the outer `(` / `)`.
+
+### L0049 — `CodeInfiniteLoopLiteral`
+
+`for true { ... }` is just `for { ... }` — an infinite loop whose literal condition adds nothing.
+
+```osty
+for true { tick() }   // warning: redundant `true`
+```
+
+**Fix**: drop the `true`.
+
 ---
 
 ## Lint — complexity (L0050–L0053)
@@ -1614,7 +1648,7 @@ extract inner branches into helpers.
 
 ---
 
-## Lint — documentation (L0070)
+## Lint — documentation (L0070–L0080)
 
 ### L0070 — `CodeMissingDoc`
 
@@ -1627,6 +1661,20 @@ pub fn hashPassword(p: String) -> String { ... }   // warning: missing doc
 ```
 
 **Fix**: add a doc comment, or drop `pub` if the item is internal.
+
+### L0080 — `CodeMissingTestAssertion`
+
+A `test_*` function has no `testing.*` call in its body — the test silently passes no matter what the code under test does. Almost certainly a scaffolding leftover or a typo in an assertion helper name.
+
+call, or rename the function so it isn't auto-discovered.
+
+```osty
+fn test_parsesEmpty() {
+    let r = parse("")          // warning: no testing assertion
+}
+```
+
+**Fix**: add a `testing.assertEq` / `testing.assert` / `testing.fail`
 
 ---
 
