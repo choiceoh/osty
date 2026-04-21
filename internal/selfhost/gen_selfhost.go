@@ -43,6 +43,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// `text=auto` in .gitattributes checks `toolchain/*.osty` out with
+	// CRLF on Windows. The Osty lexer treats `\r` inside a string as
+	// an unterminated-string error, so a raw merged source breaks
+	// bootstrap-gen's resolve pass with ~100 false positives. Strip
+	// CR unconditionally — the in-tree files are canonical LF, and
+	// this keeps the regen pipeline portable across hosts.
+	merged = bytes.ReplaceAll(merged, []byte("\r\n"), []byte("\n"))
 	mergedPath := filepath.Join(tmpDir, "selfhost_merged.osty")
 	if err := os.WriteFile(mergedPath, merged, 0o644); err != nil {
 		return fmt.Errorf("write merged selfhost source: %w", err)
