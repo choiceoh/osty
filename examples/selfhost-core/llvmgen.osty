@@ -612,9 +612,21 @@ pub fn llvmUnsupportedDiagnostic(kind: String, detail: String) -> LlvmUnsupporte
         }
         return LlvmUnsupportedDiagnostic {
             code: "LLVM001",
-            kind: "go-only",
-            message: "use go \"{target}\" is only supported by the Go backend",
-            hint: "replace it with a native/runtime binding before using --backend=llvm",
+            kind: "foreign-ffi",
+            message: "Go FFI import {target} is not supported by the self-hosted native backend",
+            hint: "rewrite the binding as `use runtime.cabi.<lib> { ... }` for extern C symbols, or `use runtime.<surface> { ... }` for an osty_rt_* runtime ABI helper (LANG_SPEC_v0.5 §12.8)",
+        }
+    }
+    if kind == "runtime-ffi" {
+        let mut target = detail
+        if target == "" {
+            target = "<unknown>"
+        }
+        return LlvmUnsupportedDiagnostic {
+            code: "LLVM002",
+            kind: "runtime-ffi",
+            message: "Osty runtime FFI import {target} needs native runtime lowering",
+            hint: "add the runtime ABI shim and lowering before compiling this source natively",
         }
     }
 

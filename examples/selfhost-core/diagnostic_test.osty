@@ -25,6 +25,10 @@ fn testDiagnosticExamplesClassifySeverityPrefixes() {
     assertDiagnosticSeverity("W9999", "warning")
     assertDiagnosticSeverity("L0000", "lint")
     assertDiagnosticSeverity("L9999", "lint")
+    assertDiagnosticSeverity("LLVM000", "error")
+    assertDiagnosticSeverity("LLVM001", "error")
+    assertDiagnosticSeverity("LLVM018", "error")
+    assertDiagnosticSeverity("LLVM999", "error")
     assertDiagnosticSeverity("X0001", "unknown")
     assertDiagnosticSeverity("", "unknown")
 }
@@ -64,6 +68,16 @@ fn testDiagnosticExamplesClassifyToolFamilies() {
     assertDiagnosticFamily("W0750", "warning")
 }
 
+fn testDiagnosticExamplesClassifyBackendCodes() {
+    assertDiagnosticFamily("LLVM000", "backend")
+    assertDiagnosticFamily("LLVM001", "backend")
+    assertDiagnosticFamily("LLVM002", "backend")
+    assertDiagnosticFamily("LLVM010", "backend")
+    assertDiagnosticFamily("LLVM011", "backend")
+    assertDiagnosticFamily("LLVM018", "backend")
+    assertDiagnosticFamily("LLVM999", "backend")
+}
+
 fn testDiagnosticExamplesClassifyUnknownFamilyGaps() {
     assertDiagnosticFamily("E0000", "unknown")
     assertDiagnosticFamily("E0099", "unknown")
@@ -71,11 +85,15 @@ fn testDiagnosticExamplesClassifyUnknownFamilyGaps() {
     assertDiagnosticFamily("E2040", "unknown")
     assertDiagnosticFamily("L0000", "unknown")
     assertDiagnosticFamily("Z0000", "unknown")
+    assertDiagnosticFamily("LLVMabc", "unknown")
 }
 
 fn testDiagnosticExamplesIdentifyCompilationBlockers() {
     testing.assert(diagnosticIsCompilerError("E0500"))
     testing.assert(diagnosticIsCompilerError("E2017"))
+    testing.assert(diagnosticIsCompilerError("LLVM001"))
+    testing.assert(diagnosticIsCompilerError("LLVM011"))
+    testing.assert(diagnosticIsCompilerError("LLVM018"))
     testing.assert(!(diagnosticIsCompilerError("W0001")))
     testing.assert(!(diagnosticIsCompilerError("L0001")))
     testing.assert(!(diagnosticIsCompilerError("Z0000")))
