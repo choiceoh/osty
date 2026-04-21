@@ -36,6 +36,11 @@ func stdlibBodyLoweringEnabled() bool {
 // migrated can consume `Entry.MIR` directly. MIR validation issues are
 // recorded on the entry as non-fatal warnings — they do not short-circuit
 // the backend dispatch, because MIR is opt-in at this stage.
+//
+// PrepareEntry handles the single-file path. For a multi-file package
+// where every sibling .osty file should contribute its top-level
+// declarations to the same emitted module, use PreparePackage so the
+// full Decls slice reaches the backend in one shot.
 func PrepareEntry(packageName, sourcePath string, file *ast.File, res *resolve.Result, chk *check.Result) (Entry, error) {
 	entry := Entry{
 		PackageName: packageName,
@@ -49,56 +54,7 @@ func PrepareEntry(packageName, sourcePath string, file *ast.File, res *resolve.R
 	}
 	mod, issues := ir.Lower(packageName, file, res, chk)
 	entry.IRIssues = append(entry.IRIssues, issues...)
-	// Inject bodied stdlib functions reached from the user module before
-	// monomorphization runs, so any stdlib-owned generic body participates
-	// in the same mono pass. Rewriting callsites after injection rebinds
-	// `strings.foo(...)` to the mangled symbol the injected decl carries.
-	// Gated behind OSTY_STDLIB_BODY_LOWER during rollout.
-	if stdlibBodyLoweringEnabled() {
-		injected, injectionErrs := injectReachableStdlibBodies(mod, stdlib.LoadCached())
-		entry.IRIssues = append(entry.IRIssues, injectionErrs...)
-		mod.Decls = append(mod.Decls, injected...)
-	}
-	// Monomorphize generic free functions in-place on the lowered module.
-	// The backend contract is "no TypeVar leaves IR once it reaches the
-	// emitter", so we run this transform before validation rather than
-	// leaving it to each backend. A nil input produces a nil output; keep
-	// the original module in that pathological case so the validator can
-	// still report its own issues below.
-	if monoMod, monoErrs := ir.Monomorphize(mod); monoMod != nil {
-		mod = monoMod
-		entry.IRIssues = append(entry.IRIssues, monoErrs...)
-	}
-	entry.IR = mod
-	if validateErrs := ir.Validate(mod); len(validateErrs) != 0 {
-		entry.IRIssues = append(entry.IRIssues, validateErrs...)
-		return entry, errors.Join(validateErrs...)
-	}
-	// Produce MIR alongside the HIR module. MIR consumes the monomorphic
-	// HIR; lowerer-reported issues become entry.MIRIssues and the structural
-	// validator adds any post-condition failures. MIR is not yet a
-	// backend-blocking contract — callers that consume it should check for
-	// nil and fall back to the HIR path.
-	//
-	// After lowering we run `mir.Optimize` in-place. The pass is
-	// conservative (cross-block const propagation, dead-assign /
-	// dead-call-dest / orphan-storage elimination, empty-goto collapse,
-	// constant-fold on terminators) and by construction preserves
-	// validator invariants, so it runs before `mir.Validate`. A
-	// `OSTY_MIR_OPTIMIZE=0` escape hatch is honoured so callers can
-	// bisect regressions.
-	mirMod := mir.Lower(mod)
-	if mirMod != nil {
-		if mirOptimizeEnabled() {
-			mir.Optimize(mirMod)
-		}
-		entry.MIRIssues = append(entry.MIRIssues, mirMod.Issues...)
-		if mirValidateErrs := mir.Validate(mirMod); len(mirValidateErrs) != 0 {
-			entry.MIRIssues = append(entry.MIRIssues, mirValidateErrs...)
-		}
-		entry.MIR = mirMod
-	}
-	return entry, nil
+	return finalizeEntryModule(entry, mod)
 }
 
 // mirOptimizeEnabled reports whether `PrepareEntry` should call
@@ -112,4 +68,88 @@ func mirOptimizeEnabled() bool {
 		return false
 	}
 	return true
+}
+
+// PreparePackage is the multi-file analogue of PrepareEntry. It lowers
+// every file in a resolved package into one merged ir.Module, then runs
+// the same stdlib injection / monomorphize / validate / MIR pipeline as
+// the single-file path.
+//
+// pkg supplies the full set of files plus per-file resolve handles
+// (`pf.Refs`, `pf.TypeRefs`, `pf.FileScope`); chk is the package-level
+// `check.Result` returned by `check.Package`. entryFile, when non-nil,
+// is the file the build orchestrator picked as "the" source for
+// diagnostic purposes (typically `main.osty` for binaries) and is what
+// the resulting Entry.File / Entry.Resolve point at — the IR itself
+// already carries every file's contributions, so backends do not need
+// the AST of the non-entry files.
+//
+// When entryFile is nil the first file in pkg.Files acts as the
+// diagnostic anchor.
+func PreparePackage(packageName, sourcePath string, pkg *resolve.Package, entryFile *resolve.PackageFile, chk *check.Result) (Entry, error) {
+	if pkg == nil {
+		return Entry{}, fmt.Errorf("backend: nil package")
+	}
+	if entryFile == nil {
+		for _, pf := range pkg.Files {
+			if pf != nil && pf.File != nil {
+				entryFile = pf
+				break
+			}
+		}
+	}
+	entry := Entry{
+		PackageName: packageName,
+		SourcePath:  sourcePath,
+		Check:       chk,
+	}
+	if entryFile != nil {
+		entry.File = entryFile.File
+		entry.Source = entryFile.Source
+		entry.Resolve = &resolve.Result{
+			Refs:      entryFile.Refs,
+			TypeRefs:  entryFile.TypeRefs,
+			FileScope: entryFile.FileScope,
+		}
+	}
+	mod, issues := ir.LowerPackage(packageName, pkg, chk)
+	entry.IRIssues = append(entry.IRIssues, issues...)
+	if mod == nil {
+		return entry, fmt.Errorf("backend: ir.LowerPackage returned nil module")
+	}
+	return finalizeEntryModule(entry, mod)
+}
+
+// finalizeEntryModule runs the post-lowering pipeline (stdlib injection
+// gate, monomorphize, validate, MIR lowering + optional optimize +
+// validate) shared by PrepareEntry and PreparePackage. Splitting this
+// out keeps the two entry points in lock-step: any new pass added here
+// applies to both single-file and multi-file builds at the same time.
+func finalizeEntryModule(entry Entry, mod *ir.Module) (Entry, error) {
+	if stdlibBodyLoweringEnabled() {
+		injected, injectionErrs := injectReachableStdlibBodies(mod, stdlib.LoadCached())
+		entry.IRIssues = append(entry.IRIssues, injectionErrs...)
+		mod.Decls = append(mod.Decls, injected...)
+	}
+	if monoMod, monoErrs := ir.Monomorphize(mod); monoMod != nil {
+		mod = monoMod
+		entry.IRIssues = append(entry.IRIssues, monoErrs...)
+	}
+	entry.IR = mod
+	if validateErrs := ir.Validate(mod); len(validateErrs) != 0 {
+		entry.IRIssues = append(entry.IRIssues, validateErrs...)
+		return entry, errors.Join(validateErrs...)
+	}
+	mirMod := mir.Lower(mod)
+	if mirMod != nil {
+		if mirOptimizeEnabled() {
+			mir.Optimize(mirMod)
+		}
+		entry.MIRIssues = append(entry.MIRIssues, mirMod.Issues...)
+		if mirValidateErrs := mir.Validate(mirMod); len(mirValidateErrs) != 0 {
+			entry.MIRIssues = append(entry.MIRIssues, mirValidateErrs...)
+		}
+		entry.MIR = mirMod
+	}
+	return entry, nil
 }

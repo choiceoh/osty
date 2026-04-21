@@ -49,6 +49,51 @@ func Lower(pkgName string, file *ast.File, res *resolve.Result, chk *check.Resul
 	return l.run()
 }
 
+// LowerPackage lowers every file in a resolved package into a single
+// Module. Top-level declarations from each file are concatenated in
+// `pkg.Files` discovery order (lexicographic by path) so the merged
+// module's `Decls` slice mirrors the package's source layout
+// deterministically.
+//
+// pkgName names the resulting module — typically `pkg.Name` or "main"
+// for binary packages. chk is the package-level check.Result (which
+// already covers every file's expressions); each file's per-file
+// resolve handles (`pf.Refs`, `pf.TypeRefs`, `pf.FileScope`) are
+// reconstructed into a `resolve.Result` on the fly so the lowerer's
+// existing per-file machinery keeps working.
+//
+// The Module's Span comes from the first file's span; non-fatal issues
+// from every file are concatenated. A nil package returns a nil module
+// and a single descriptive error so callers can distinguish "no work"
+// from "successful empty lower". An empty Files slice returns an empty
+// (but valid) module so the validator and downstream emitters can run.
+func LowerPackage(pkgName string, pkg *resolve.Package, chk *check.Result) (*Module, []error) {
+	if pkg == nil {
+		return nil, []error{fmt.Errorf("ir.LowerPackage: nil package")}
+	}
+	mod := &Module{Package: pkgName}
+	var issues []error
+	for i, pf := range pkg.Files {
+		if pf == nil || pf.File == nil {
+			continue
+		}
+		res := &resolve.Result{
+			Refs:      pf.Refs,
+			TypeRefs:  pf.TypeRefs,
+			FileScope: pf.FileScope,
+		}
+		l := &lowerer{pkgName: pkgName, file: pf.File, res: res, chk: chk}
+		fileMod, fileIssues := l.run()
+		if i == 0 {
+			mod.SpanV = fileMod.SpanV
+		}
+		mod.Decls = append(mod.Decls, fileMod.Decls...)
+		mod.Script = append(mod.Script, fileMod.Script...)
+		issues = append(issues, fileIssues...)
+	}
+	return mod, issues
+}
+
 // lowerer holds per-file state for one Lower call.
 type lowerer struct {
 	pkgName string
