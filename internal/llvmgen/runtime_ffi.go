@@ -335,6 +335,14 @@ func listRuntimeToSetSymbol(elemTyp string, elemString bool) string {
 	return llvmListRuntimeToSetSymbol(elemTyp, elemString)
 }
 
+// listRuntimeSliceSymbol returns the element-agnostic slice helper that
+// backs `list[a..b]` and `list[a..=b]`. Unlike get/push/sorted/to_set,
+// the slice is a pure byte-level copy — the elem_size stored on the
+// list header is enough, so one symbol covers every T.
+func listRuntimeSliceSymbol() string {
+	return "osty_rt_list_slice"
+}
+
 func mapRuntimeNewSymbol() string {
 	return llvmMapRuntimeNewSymbol()
 }

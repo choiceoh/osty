@@ -1110,8 +1110,12 @@ func llvmClangLinkBinaryArgs(target string, objectPaths []string, binaryPath str
 		func() struct{} { args = append(args, objectPath); return struct{}{} }()
 	}
 	// `-pthread` pulls libpthread / libSystem threading symbols, needed
-	// by the bundled runtime's task / channel implementations.
-	func() struct{} { args = append(args, "-pthread"); return struct{}{} }()
+	// by the bundled runtime's POSIX task / channel implementations.
+	// Windows targets use Win32 primitives from kernel32 (default-linked)
+	// and must NOT be passed -pthread (clang-msvc rejects the flag).
+	if !llvmStrings.Contains(target, "windows") {
+		func() struct{} { args = append(args, "-pthread"); return struct{}{} }()
+	}
 	// Osty: examples/selfhost-core/llvmgen.osty:726:5
 	func() struct{} { args = append(args, "-o"); return struct{}{} }()
 	// Osty: examples/selfhost-core/llvmgen.osty:727:5

@@ -20,6 +20,43 @@ build-checker:
 
 build-all: build build-checker
 
+# Cross-compile osty (+ native-checker) for every supported host triple.
+# Targets: linux/{amd64,arm64}, darwin/{amd64,arm64}, windows/{amd64,arm64}.
+# Artifacts land in .bin/cross/<goos>-<goarch>/.
+cross:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    targets=(
+        "linux/amd64"
+        "linux/arm64"
+        "darwin/amd64"
+        "darwin/arm64"
+        "windows/amd64"
+        "windows/arm64"
+    )
+    for t in "${targets[@]}"; do
+        goos="${t%/*}"
+        goarch="${t#*/}"
+        out=".bin/cross/${goos}-${goarch}"
+        mkdir -p "$out"
+        suffix=""
+        if [ "$goos" = "windows" ]; then suffix=".exe"; fi
+        echo ">> building osty for $goos/$goarch"
+        CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -o "$out/osty$suffix" ./cmd/osty
+        echo ">> building osty-native-checker for $goos/$goarch"
+        CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -o "$out/osty-native-checker$suffix" ./cmd/osty-native-checker
+    done
+
+cross-one goos goarch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out=".bin/cross/{{goos}}-{{goarch}}"
+    mkdir -p "$out"
+    suffix=""
+    if [ "{{goos}}" = "windows" ]; then suffix=".exe"; fi
+    CGO_ENABLED=0 GOOS="{{goos}}" GOARCH="{{goarch}}" go build -o "$out/osty$suffix" ./cmd/osty
+    CGO_ENABLED=0 GOOS="{{goos}}" GOARCH="{{goarch}}" go build -o "$out/osty-native-checker$suffix" ./cmd/osty-native-checker
+
 front:
     go test {{test_flags}} {{front_packages}}
 

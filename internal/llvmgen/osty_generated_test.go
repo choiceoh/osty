@@ -67,6 +67,35 @@ func TestGeneratedClangLinkBinaryArgsAcceptMultipleObjects(t *testing.T) {
 	assertGeneratedIRContains(t, got, "-o /tmp/app")
 }
 
+// The POSIX runtime branch needs -pthread to pull libpthread / libSystem.
+// The Windows runtime branch uses Win32 primitives from kernel32 and
+// clang-msvc rejects -pthread, so the flag must be dropped for windows
+// targets. This test pins the per-target branching.
+func TestGeneratedClangLinkBinaryArgsPthreadWindowsBranching(t *testing.T) {
+	cases := []struct {
+		target string
+		want   bool // true = expect -pthread, false = expect NO -pthread
+	}{
+		{"", true},
+		{"x86_64-unknown-linux-gnu", true},
+		{"aarch64-unknown-linux-gnu", true},
+		{"x86_64-apple-darwin", true},
+		{"arm64-apple-darwin", true},
+		{"x86_64-pc-windows-msvc", false},
+		{"aarch64-pc-windows-msvc", false},
+		{"x86_64-pc-windows-gnu", false},
+	}
+	for _, c := range cases {
+		args := llvmClangLinkBinaryArgs(c.target, []string{"/tmp/main.o"}, "/tmp/app")
+		got := strings.Join(args, " ")
+		has := strings.Contains(got, "-pthread")
+		if has != c.want {
+			t.Errorf("target=%q: -pthread present=%v, want=%v; full args: %s",
+				c.target, has, c.want, got)
+		}
+	}
+}
+
 func TestGeneratedComparePoliciesAreOstyOwned(t *testing.T) {
 	if !llvmIsCompareOp("==") {
 		t.Fatal(`llvmIsCompareOp("==") = false, want true`)

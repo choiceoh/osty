@@ -3296,23 +3296,12 @@ pub fn frontendParseRichSummary(source: String) -> FrontParseSummary {
 }
 
 pub fn frontTokenListCount(tokens: List<FrontToken>) -> Int {
-    let mut count = 0
-    for tok in tokens {
-        let _ = tok
-        count = count + 1
-    }
-    count
+    tokens.len()
 }
 
 pub fn frontTokenAtList(tokens: List<FrontToken>, target: Int) -> FrontToken {
-    let mut idx = 0
-    for tok in tokens {
-        if idx == target {
-            return tok
-        }
-        idx = idx + 1
-    }
-    frontEOF()
+    if target < 0 || target >= tokens.len() { return frontEOF() }
+    tokens[target]
 }
 
 pub fn frontLeadingDocAttachmentCount(stream: FrontLexStream) -> Int {

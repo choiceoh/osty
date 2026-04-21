@@ -268,29 +268,20 @@ pub fn emptyIrSummary() -> IrSummary {
 }
 
 pub fn irArenaAdd(arena: IrArena, node: IrNode) -> Int {
-    let idx = irArenaNodeCount(arena)
+    let idx = arena.nodes.len()
     arena.nodes.push(node)
     idx
 }
 
 pub fn irArenaNodeCount(arena: IrArena) -> Int {
-    let mut count = 0
-    for node in arena.nodes {
-        let _ = node
-        count = count + 1
-    }
-    count
+    arena.nodes.len()
 }
 
 pub fn irArenaNodeAt(arena: IrArena, idx: Int) -> IrNode {
-    let mut i = 0
-    for node in arena.nodes {
-        if i == idx {
-            return node
-        }
-        i = i + 1
+    if idx < 0 || idx >= arena.nodes.len() {
+        return emptyIrNode(IrNodeError)
     }
-    emptyIrNode(IrNodeError)
+    arena.nodes[idx]
 }
 
 pub fn irLowerSource(packageName: String, source: String) -> IrModule {

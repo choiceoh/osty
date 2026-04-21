@@ -224,6 +224,9 @@ func patchGenerated(path string) error {
 		{name: "frontTokenAtList", body: frontTokenAtListReplacement},
 		{name: "astArenaNodeCount", body: astArenaNodeCountReplacement},
 		{name: "astArenaNodeAt", body: astArenaNodeAtReplacement},
+		{name: "coreArenaNodeCount", body: coreArenaNodeCountReplacement},
+		{name: "coreArenaNodeAt", body: coreArenaNodeAtReplacement},
+		{name: "opErrorCount", body: opErrorCountReplacement},
 		{name: "frontLexTokenAt", body: frontLexTokenAtReplacement},
 		{name: "frontLexDiagnosticAt", body: frontLexDiagnosticAtReplacement},
 		{name: "frontCommentAt", body: frontCommentAtReplacement},
@@ -399,6 +402,24 @@ const astArenaNodeAtReplacement = `func astArenaNodeAt(arena *AstArena, idx int)
 		return emptyAstNode(AstNodeKind(&AstNodeKind_AstNError{}))
 	}
 	return arena.nodes[idx]
+}
+`
+
+const coreArenaNodeCountReplacement = `func coreArenaNodeCount(arena *CoreArena) int {
+	return len(arena.nodes)
+}
+`
+
+const coreArenaNodeAtReplacement = `func coreArenaNodeAt(arena *CoreArena, idx int) *CoreNode {
+	if idx < 0 || idx >= len(arena.nodes) {
+		return emptyCoreNode(CoreKind(&CoreKind_CkErr{}))
+	}
+	return arena.nodes[idx]
+}
+`
+
+const opErrorCountReplacement = `func opErrorCount(p *OstyParser) int {
+	return len(p.arena.errors)
 }
 `
 

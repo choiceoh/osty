@@ -159,6 +159,29 @@ osty/
 └── testdata/                # .osty fixtures used by tests and backend corpus
 ```
 
+## Supported platforms
+
+The toolchain (Osty CLI, `osty-native-checker`, and the LLVM-backend driver)
+is built and verified for the following six host triples:
+
+| OS      | amd64 (`x86_64`) | arm64 (`aarch64`) |
+|---------|------------------|-------------------|
+| Linux   | ✅ `linux/amd64`  | ✅ `linux/arm64`   |
+| macOS   | ✅ `darwin/amd64` | ✅ `darwin/arm64`  |
+| Windows | ✅ `windows/amd64`| ✅ `windows/arm64` |
+
+CI cross-compiles all six triples on every push; see the `cross-compile` job in
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml). To reproduce locally:
+
+```sh
+just cross                        # build all six triples into .bin/cross/
+just cross-one darwin arm64       # build a single triple
+```
+
+Cross-compilation targeting Osty programs (i.e. `osty build --target
+<arch>-<os>`) is independent of the host matrix above and only requires an LLVM
+toolchain capable of emitting for the requested triple.
+
 ## Building
 
 Requires Go 1.26.2 or newer (matching `go.mod`).
