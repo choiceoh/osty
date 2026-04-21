@@ -100,10 +100,7 @@ ci: build
     {{bin}} ci .
 
 verify-selfhost:
-    go generate ./toolchain
-    git diff --exit-code -- toolchain/generated.go
-    go generate ./internal/ci
-    git diff --exit-code -- internal/ci/osty_generated.go
+    go test {{test_flags}} -run 'SnapshotParity|CoreSnapshotParity' ./internal/ci ./internal/runner
 
 check: fmt-check vet front
 

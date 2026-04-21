@@ -70,15 +70,10 @@ jobs:
         run: |
           "$OSTY_BIN" ci .
 
-      - name: Verify generated selfhost front end
+      - name: Verify selfhost snapshot parity
         run: |
-          go generate ./toolchain
-          git diff --exit-code -- toolchain/generated.go
-
-      - name: Verify generated selfhost CI core
-        run: |
-          go generate ./internal/ci
-          git diff --exit-code -- internal/ci/osty_generated.go
+          go test -count=1 -vet=off -run 'SnapshotParity|CoreSnapshotParity' \
+            ./internal/ci ./internal/runner
 
       - name: Vet
         run: go vet ./...
