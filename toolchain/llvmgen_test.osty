@@ -1080,6 +1080,49 @@ fn testLlvmClosureThunkDefinitionVoidReturn() {
     testing.assert(!(llvmTestStrings.contains(def, "%ret = call")))
 }
 
+fn testLlvmClosureThunkDefinitionEmptyReturnNormalisesToVoid() {
+    let def = llvmClosureThunkDefinition("sink", "", ["ptr"])
+
+    assertLlvmContains(def, "define private void @__osty_closure_thunk_sink(ptr %env, ptr %arg0)")
+    assertLlvmContains(def, "call void @sink(ptr %arg0)")
+    assertLlvmContains(def, "ret void")
+}
+
+fn testLlvmFnValueCallIndirectLoadsFlatEnvSlot() {
+    let emitter = llvmEmitter()
+    let out = llvmFnValueCallIndirect(
+        emitter,
+        "i64",
+        LlvmValue { typ: "ptr", name: "%env", pointer: false },
+        [LlvmValue { typ: "i64", name: "42", pointer: false }],
+    )
+    let ir = llvmTestStrings.join(emitter.body, "\n")
+
+    testing.assertEq(out.typ, "i64")
+    testing.assert(out.name != "")
+    assertLlvmContains(ir, "= load ptr, ptr %env")
+    assertLlvmContains(ir, "= call i64 (ptr, i64) ")
+    assertLlvmContains(ir, "(ptr %env, i64 42)")
+}
+
+fn testLlvmFnValueCallIndirectVoidReturnOmitsResultBinding() {
+    let emitter = llvmEmitter()
+    let out = llvmFnValueCallIndirect(
+        emitter,
+        "",
+        LlvmValue { typ: "ptr", name: "%env", pointer: false },
+        [LlvmValue { typ: "ptr", name: "%arg0", pointer: false }],
+    )
+    let ir = llvmTestStrings.join(emitter.body, "\n")
+
+    testing.assertEq(out.typ, "void")
+    testing.assertEq(out.name, "")
+    assertLlvmContains(ir, "= load ptr, ptr %env")
+    assertLlvmContains(ir, "call void (ptr, ptr) ")
+    assertLlvmContains(ir, "(ptr %env, ptr %arg0)")
+    testing.assert(!(llvmTestStrings.contains(ir, "= call void")))
+}
+
 fn testLlvmClosureBareFnEnvTypeDefIsOneSlot() {
     testing.assertEq(llvmClosureBareFnEnvTypeDef(), "%ClosureEnv.ptr = type \{ ptr \}")
 }
@@ -1326,6 +1369,44 @@ fn testLlvmGcPhaseAConstantsAreOstyOwned() {
     testing.assertEq(llvmClosureEnvPhase1CaptureCount(), 0)
 }
 
+fn testLlvmPlanSafepointChunksSplitsAndEncodesIds() {
+    let chunks = llvmPlanSafepointChunks(llvmSafepointKindLoop(), 11, 7, 3)
+
+    testing.assertEq(chunks.len(), 3)
+    testing.assertEq(chunks[0].start, 0)
+    testing.assertEq(chunks[0].end, 3)
+    testing.assertEq(
+        chunks[0].id,
+        llvmEncodeSafepointId(llvmSafepointKindLoop(), 11),
+    )
+    testing.assertEq(chunks[1].start, 3)
+    testing.assertEq(chunks[1].end, 6)
+    testing.assertEq(
+        chunks[1].id,
+        llvmEncodeSafepointId(llvmSafepointKindLoop(), 12),
+    )
+    testing.assertEq(chunks[2].start, 6)
+    testing.assertEq(chunks[2].end, 7)
+    testing.assertEq(
+        chunks[2].id,
+        llvmEncodeSafepointId(llvmSafepointKindLoop(), 13),
+    )
+}
+
+fn testLlvmPlanSafepointChunksFallsBackToWholeFrameAndEmpty() {
+    let whole = llvmPlanSafepointChunks(llvmSafepointKindCall(), 5, 4, 0)
+    testing.assertEq(whole.len(), 1)
+    testing.assertEq(whole[0].start, 0)
+    testing.assertEq(whole[0].end, 4)
+    testing.assertEq(
+        whole[0].id,
+        llvmEncodeSafepointId(llvmSafepointKindCall(), 5),
+    )
+
+    let empty = llvmPlanSafepointChunks(llvmSafepointKindCall(), 99, 0, 3)
+    testing.assertEq(empty.len(), 0)
+}
+
 fn testLlvmEmitSafepointEmptyIsOstyOwned() {
     let emitter = llvmEmitter()
     llvmEmitSafepointEmpty(emitter, 42)
@@ -1345,34 +1426,6 @@ fn testLlvmEmitSafepointWithRootsIsOstyOwned() {
     assertLlvmContains(ir, "%t2 = getelementptr ptr, ptr %t0, i64 1")
     assertLlvmContains(ir, "store ptr %root1, ptr %t2")
     assertLlvmContains(ir, "call void @osty.gc.safepoint_v1(i64 7, ptr %t0, i64 2)")
-}
-
-fn testLlvmRenderClosureThunkVoidReturn() {
-    let ir = llvmRenderClosureThunk("void", "__osty_closure_thunk_foo", [], "foo")
-
-    assertLlvmContains(ir, "define private void @__osty_closure_thunk_foo(ptr %env) \{")
-    assertLlvmContains(ir, "entry:")
-    assertLlvmContains(ir, "  call void @foo()")
-    assertLlvmContains(ir, "  ret void")
-    assertLlvmContains(ir, "\}")
-}
-
-fn testLlvmRenderClosureThunkValueReturnWithParams() {
-    let ir = llvmRenderClosureThunk("i64", "__osty_closure_thunk_add", ["i64", "i64"], "add")
-
-    assertLlvmContains(ir, "define private i64 @__osty_closure_thunk_add(ptr %env, i64 %arg0, i64 %arg1) \{")
-    assertLlvmContains(ir, "  %__ret = call i64 @add(i64 %arg0, i64 %arg1)")
-    assertLlvmContains(ir, "  ret i64 %__ret")
-}
-
-fn testLlvmRenderClosureThunkEmptyReturnNormalisesToVoid() {
-    // Checker hands us `""` for unit-return fns; the template must
-    // normalise that to `void` so the generated thunk is well-formed.
-    let ir = llvmRenderClosureThunk("", "__osty_closure_thunk_sink", ["ptr"], "sink")
-
-    assertLlvmContains(ir, "define private void @__osty_closure_thunk_sink(ptr %env, ptr %arg0) \{")
-    assertLlvmContains(ir, "  call void @sink(ptr %arg0)")
-    assertLlvmContains(ir, "  ret void")
 }
 
 fn testLlvmEmitClosureEnvAllocRuntimeIsOstyOwned() {

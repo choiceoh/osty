@@ -54,10 +54,10 @@ type generator struct {
 	fnValueThunkDefs  map[string]string
 	fnValueThunkOrder []string
 
-	temp              int
-	label             int
-	stringID          int
-	stringDefs        []*LlvmStringGlobal
+	temp                 int
+	label                int
+	stringID             int
+	stringDefs           []*LlvmStringGlobal
 	body                 []string
 	locals               []map[string]value
 	returnType           string
@@ -70,9 +70,9 @@ type generator struct {
 	returnSetElemTyp     string
 	returnSetElemString  bool
 	currentBlock         string
-	currentReachable  bool
-	resultContexts    []builtinResultContext
-	optionContexts    []builtinOptionContext
+	currentReachable     bool
+	resultContexts       []builtinResultContext
+	optionContexts       []builtinOptionContext
 
 	needsGCRuntime bool
 	gcRootSlots    []value
@@ -259,23 +259,15 @@ func (g *generator) emitGCSafepointKind(emitter *LlvmEmitter, kind safepointKind
 	 * tag but bumps the serial, so per-kind counters in the runtime
 	 * still reflect the logical event count without losing the
 	 * classification. */
-	chunkSize := safepointRootChunkSize
-	if chunkSize <= 0 {
-		chunkSize = len(roots)
-	}
-	for start := 0; start < len(roots); start += chunkSize {
-		end := start + chunkSize
-		if end > len(roots) {
-			end = len(roots)
-		}
-		chunk := roots[start:end]
-		addresses := make([]string, len(chunk))
-		for i, root := range chunk {
+	plan := llvmPlanSafepointChunks(int(kind), g.nextSafepoint, len(roots), safepointRootChunkSize)
+	g.nextSafepoint += len(plan)
+	for _, chunk := range plan {
+		window := roots[chunk.start:chunk.end]
+		addresses := make([]string, len(window))
+		for i, root := range window {
 			addresses[i] = g.safepointRootAddress(emitter, root)
 		}
-		serial := g.nextSafepoint
-		g.nextSafepoint++
-		llvmEmitSafepointWithRoots(emitter, encodeSafepointID(kind, serial), addresses)
+		llvmEmitSafepointWithRoots(emitter, chunk.id, addresses)
 	}
 	g.needsGCRuntime = true
 }

@@ -2303,8 +2303,10 @@ func (g *generator) emitMapMethodCallStmt(call *ast.CallExpr) (bool, error) {
 }
 
 // emitMapUpdateStmt lowers `m.update(key, f)` — stdlib bodied form is
-//   let current = self.get(key)
-//   self.insert(key, f(current))
+//
+//	let current = self.get(key)
+//	self.insert(key, f(current))
+//
 // The three steps run inside a single `osty_rt_map_lock/unlock`
 // critical section so concurrent mutators can't race between read and
 // write. The per-map mutex is recursive (see osty_runtime.c), so the
@@ -2331,10 +2333,10 @@ func (g *generator) emitMapUpdateStmt(call *ast.CallExpr, base value, keyTyp str
 	if err != nil {
 		return err
 	}
-	if fnVal.typ != "ptr" || fnVal.fnSigRef == nil {
-		return unsupportedf("call", "map.update callback must be a fn value (got typ=%s, sig=%v)", fnVal.typ, fnVal.fnSigRef != nil)
+	sig, err := requireFnValueSignature(fnVal, "map.update callback")
+	if err != nil {
+		return err
 	}
-	sig := fnVal.fnSigRef
 	if len(sig.params) != 1 {
 		return unsupportedf("call", "map.update callback arity must be 1 (got %d)", len(sig.params))
 	}
@@ -2396,10 +2398,10 @@ func (g *generator) emitMapRetainIfStmt(call *ast.CallExpr, base value, keyTyp s
 	if err != nil {
 		return err
 	}
-	if predVal.typ != "ptr" || predVal.fnSigRef == nil {
-		return unsupportedf("call", "map.retainIf callback must be a fn value")
+	sig, err := requireFnValueSignature(predVal, "map.retainIf callback")
+	if err != nil {
+		return err
 	}
-	sig := predVal.fnSigRef
 	if len(sig.params) != 2 || sig.ret != "i1" {
 		return unsupportedf("call", "map.retainIf pred arity/ret mismatch (want fn(K,V)->Bool)")
 	}
@@ -2548,11 +2550,11 @@ func (g *generator) emitSetMethodCallStmt(call *ast.CallExpr) (bool, error) {
 
 // emitMapFor lowers `for (k, v) in m { body }` as an index-based walk:
 //
-//   %len = call i64 @osty_rt_map_len(%m)
-//   for %i = 0; %i < %len; %i++:
-//     %k = call <K> @osty_rt_map_key_at_<ksuf>(%m, %i)
-//     alloca %vslot (width by V), call @osty_rt_map_value_at(%m, %i, %vslot), load
-//     body(k, v)
+//	%len = call i64 @osty_rt_map_len(%m)
+//	for %i = 0; %i < %len; %i++:
+//	  %k = call <K> @osty_rt_map_key_at_<ksuf>(%m, %i)
+//	  alloca %vslot (width by V), call @osty_rt_map_value_at(%m, %i, %vslot), load
+//	  body(k, v)
 //
 // This is the infra piece that unlocks `retainIf`, `mergeWith`,
 // `mapValues`, and any user-written map iteration. Matches the stdlib

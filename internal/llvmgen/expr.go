@@ -3087,17 +3087,19 @@ func mapScalarValueByteSize(valTyp string) (int, bool) {
 // `self.get(key).isSome()` (containsKey) can compose naturally.
 //
 // ABI: the C runtime helper is
-//   bool osty_rt_map_get_<K>(void *map, K key, void *out_slot)
+//
+//	bool osty_rt_map_get_<K>(void *map, K key, void *out_slot)
+//
 // It returns true and memcpys V into *out_slot when the key is present;
 // otherwise returns false and leaves *out_slot alone.
 //
 // Option<V> at the LLVM layer is always a ptr:
 //   - V = ptr  →  the map value slot holds a pointer; we pre-zero the
-//                 slot and rely on `load ptr` producing null on miss and
-//                 the stored payload on hit. No branch needed.
+//     slot and rely on `load ptr` producing null on miss and
+//     the stored payload on hit. No branch needed.
 //   - V = scalar (i64 / i1 / double) →  GC-alloc a box in the present
-//                 branch and phi ptr-to-box vs null. Matches the
-//                 boxed-Option ABI consumed by `??`.
+//     branch and phi ptr-to-box vs null. Matches the
+//     boxed-Option ABI consumed by `??`.
 func (g *generator) emitMapGet(call *ast.CallExpr, base value, keyTyp string, keyString bool) (value, bool, error) {
 	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 		return value{}, true, unsupported("call", "map.get requires one positional argument")
@@ -3378,10 +3380,10 @@ func (g *generator) emitMapMergeWith(call *ast.CallExpr, base value, keyTyp stri
 	if err != nil {
 		return value{}, true, err
 	}
-	if combine.typ != "ptr" || combine.fnSigRef == nil {
-		return value{}, true, unsupportedf("call", "map.mergeWith combine must be a fn value")
+	sig, err := requireFnValueSignature(combine, "map.mergeWith combine")
+	if err != nil {
+		return value{}, true, err
 	}
-	sig := combine.fnSigRef
 	if len(sig.params) != 2 || sig.ret != valTyp {
 		return value{}, true, unsupportedf("call", "map.mergeWith combine must be fn(V, V) -> V")
 	}
@@ -3484,10 +3486,10 @@ func (g *generator) emitMapMapValues(call *ast.CallExpr, base value, keyTyp stri
 	if err != nil {
 		return value{}, true, err
 	}
-	if f.typ != "ptr" || f.fnSigRef == nil {
-		return value{}, true, unsupportedf("call", "map.mapValues f must be a fn value")
+	sig, err := requireFnValueSignature(f, "map.mapValues f")
+	if err != nil {
+		return value{}, true, err
 	}
-	sig := f.fnSigRef
 	if len(sig.params) != 1 || sig.params[0].typ != base.mapValueTyp {
 		return value{}, true, unsupportedf("call", "map.mapValues f must take single V argument")
 	}

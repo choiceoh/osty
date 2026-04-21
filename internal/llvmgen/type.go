@@ -646,21 +646,9 @@ func (g *generator) decorateStaticValueFromSourceType(out value, expr ast.Expr) 
 	if !ok {
 		return out
 	}
-	out.sourceType = sourceType
-	if listElemTyp, listElemString, ok, err := llvmListElementInfo(sourceType, g.typeEnv()); err == nil && ok {
-		out.listElemTyp = listElemTyp
-		out.listElemString = listElemString
+	if meta, err := containerMetadataFromSourceType(sourceType, g.typeEnv()); err == nil {
+		meta.applyToValue(&out)
 	}
-	if mapKeyTyp, mapValueTyp, mapKeyString, ok, err := llvmMapTypes(sourceType, g.typeEnv()); err == nil && ok {
-		out.mapKeyTyp = mapKeyTyp
-		out.mapValueTyp = mapValueTyp
-		out.mapKeyString = mapKeyString
-	}
-	if setElemTyp, setElemString, ok, err := llvmSetElementType(sourceType, g.typeEnv()); err == nil && ok {
-		out.setElemTyp = setElemTyp
-		out.setElemString = setElemString
-	}
-	out.gcManaged = valueNeedsManagedRoot(out)
 	return out
 }
 

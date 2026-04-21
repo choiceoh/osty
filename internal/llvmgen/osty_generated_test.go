@@ -58,6 +58,58 @@ func TestGeneratedGcRuntimeAbiSmokeIR(t *testing.T) {
 	assertGeneratedIRContains(t, ir, "call void @osty.gc.root_release_v1(ptr %t0)")
 }
 
+func TestGeneratedSafepointChunkPlanIsOstyOwned(t *testing.T) {
+	chunks := llvmPlanSafepointChunks(llvmSafepointKindLoop(), 11, 7, 3)
+	if got, want := len(chunks), 3; got != want {
+		t.Fatalf("len(chunks) = %d, want %d", got, want)
+	}
+	if got, want := chunks[0].start, 0; got != want {
+		t.Fatalf("chunks[0].start = %d, want %d", got, want)
+	}
+	if got, want := chunks[0].end, 3; got != want {
+		t.Fatalf("chunks[0].end = %d, want %d", got, want)
+	}
+	if got, want := chunks[0].id, llvmEncodeSafepointId(llvmSafepointKindLoop(), 11); got != want {
+		t.Fatalf("chunks[0].id = %d, want %d", got, want)
+	}
+	if got, want := chunks[1].start, 3; got != want {
+		t.Fatalf("chunks[1].start = %d, want %d", got, want)
+	}
+	if got, want := chunks[1].end, 6; got != want {
+		t.Fatalf("chunks[1].end = %d, want %d", got, want)
+	}
+	if got, want := chunks[1].id, llvmEncodeSafepointId(llvmSafepointKindLoop(), 12); got != want {
+		t.Fatalf("chunks[1].id = %d, want %d", got, want)
+	}
+	if got, want := chunks[2].start, 6; got != want {
+		t.Fatalf("chunks[2].start = %d, want %d", got, want)
+	}
+	if got, want := chunks[2].end, 7; got != want {
+		t.Fatalf("chunks[2].end = %d, want %d", got, want)
+	}
+	if got, want := chunks[2].id, llvmEncodeSafepointId(llvmSafepointKindLoop(), 13); got != want {
+		t.Fatalf("chunks[2].id = %d, want %d", got, want)
+	}
+
+	whole := llvmPlanSafepointChunks(llvmSafepointKindCall(), 5, 4, 0)
+	if got, want := len(whole), 1; got != want {
+		t.Fatalf("len(whole) = %d, want %d", got, want)
+	}
+	if got, want := whole[0].start, 0; got != want {
+		t.Fatalf("whole[0].start = %d, want %d", got, want)
+	}
+	if got, want := whole[0].end, 4; got != want {
+		t.Fatalf("whole[0].end = %d, want %d", got, want)
+	}
+	if got, want := whole[0].id, llvmEncodeSafepointId(llvmSafepointKindCall(), 5); got != want {
+		t.Fatalf("whole[0].id = %d, want %d", got, want)
+	}
+
+	if got := len(llvmPlanSafepointChunks(llvmSafepointKindCall(), 99, 0, 3)); got != 0 {
+		t.Fatalf("empty chunk plan len = %d, want 0", got)
+	}
+}
+
 func TestGeneratedClangLinkBinaryArgsAcceptMultipleObjects(t *testing.T) {
 	args := llvmClangLinkBinaryArgs("", []string{"/tmp/main.o", "/tmp/runtime/gc_runtime.o"}, "/tmp/app")
 	got := strings.Join(args, " ")
@@ -521,6 +573,59 @@ func TestGeneratedClosureThunkDefinitionVoidReturn(t *testing.T) {
 	assertGeneratedIRContains(t, def, "ret void")
 	if strings.Contains(def, "%ret = call") {
 		t.Fatalf("void thunk should not bind a return register\nIR:\n%s", def)
+	}
+}
+
+func TestGeneratedClosureThunkDefinitionEmptyReturnNormalizesToVoid(t *testing.T) {
+	def := llvmClosureThunkDefinition("sink", "", []string{"ptr"})
+
+	assertGeneratedIRContains(t, def, "define private void @__osty_closure_thunk_sink(ptr %env, ptr %arg0)")
+	assertGeneratedIRContains(t, def, "call void @sink(ptr %arg0)")
+	assertGeneratedIRContains(t, def, "ret void")
+}
+
+func TestGeneratedFnValueCallIndirectLoadsFlatEnvSlot(t *testing.T) {
+	emitter := llvmEmitter()
+	out := llvmFnValueCallIndirect(
+		emitter,
+		"i64",
+		&LlvmValue{typ: "ptr", name: "%env", pointer: false},
+		[]*LlvmValue{{typ: "i64", name: "42", pointer: false}},
+	)
+	ir := strings.Join(emitter.body, "\n")
+
+	if got, want := out.typ, "i64"; got != want {
+		t.Fatalf("out.typ = %q, want %q", got, want)
+	}
+	if out.name == "" {
+		t.Fatalf("out.name empty, want temp register")
+	}
+	assertGeneratedIRContains(t, ir, "= load ptr, ptr %env")
+	assertGeneratedIRContains(t, ir, "= call i64 (ptr, i64) ")
+	assertGeneratedIRContains(t, ir, "(ptr %env, i64 42)")
+}
+
+func TestGeneratedFnValueCallIndirectVoidReturnOmitsResultBinding(t *testing.T) {
+	emitter := llvmEmitter()
+	out := llvmFnValueCallIndirect(
+		emitter,
+		"",
+		&LlvmValue{typ: "ptr", name: "%env", pointer: false},
+		[]*LlvmValue{{typ: "ptr", name: "%arg0", pointer: false}},
+	)
+	ir := strings.Join(emitter.body, "\n")
+
+	if got, want := out.typ, "void"; got != want {
+		t.Fatalf("out.typ = %q, want %q", got, want)
+	}
+	if got := out.name; got != "" {
+		t.Fatalf("out.name = %q, want empty", got)
+	}
+	assertGeneratedIRContains(t, ir, "= load ptr, ptr %env")
+	assertGeneratedIRContains(t, ir, "call void (ptr, ptr) ")
+	assertGeneratedIRContains(t, ir, "(ptr %env, ptr %arg0)")
+	if strings.Contains(ir, "= call void") {
+		t.Fatalf("void indirect call should not bind a result\nIR:\n%s", ir)
 	}
 }
 
