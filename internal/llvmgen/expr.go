@@ -4405,16 +4405,21 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if sig.ret == "void" {
 		return value{}, unsupportedf("call", "function %q has no return value", sig.name)
 	}
-	emitter := g.toOstyEmitter()
-	g.emitGCSafepointKind(emitter, safepointKindCall)
-	g.takeOstyEmitter(emitter)
+	// The direct-call poll runs before arg evaluation, so when the
+	// current frame has no visible GC roots it can only emit an empty
+	// runtime call. Skip that case to cheapen scalar-heavy recursion.
+	if g.hasVisibleSafepointRoots() {
+		emitter := g.toOstyEmitter()
+		g.emitGCSafepointKind(emitter, safepointKindCall)
+		g.takeOstyEmitter(emitter)
+	}
 	g.pushScope()
 	args, err := g.userCallArgs(sig, receiverExpr, call)
 	if err != nil {
 		g.popScope()
 		return value{}, err
 	}
-	emitter = g.toOstyEmitter()
+	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, sig.ret, sig.irName, args)
 	g.takeOstyEmitter(emitter)
 	g.popScope()
@@ -4703,14 +4708,16 @@ func (g *generator) emitOptionalUserCall(call *ast.CallExpr) (value, bool, error
 		return value{}, true, err
 	}
 	out, err := g.emitOptionalPtrExpr(baseValue, func() (value, error) {
-		emitter := g.toOstyEmitter()
-		g.emitGCSafepointKind(emitter, safepointKindCall)
-		g.takeOstyEmitter(emitter)
+		if g.hasVisibleSafepointRoots() {
+			emitter := g.toOstyEmitter()
+			g.emitGCSafepointKind(emitter, safepointKindCall)
+			g.takeOstyEmitter(emitter)
+		}
 		args, err := g.optionalUserCallArgs(sig, innerSource, baseValue, call)
 		if err != nil {
 			return value{}, err
 		}
-		emitter = g.toOstyEmitter()
+		emitter := g.toOstyEmitter()
 		next := llvmCall(emitter, sig.ret, sig.irName, args)
 		g.takeOstyEmitter(emitter)
 		v := fromOstyValue(next)
