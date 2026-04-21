@@ -25,9 +25,9 @@ import (
 //
 // Empty waiver list = the file must parse with zero errors.
 var positiveWaivers = map[string][]string{
-	// §2 types: trailing decl list in struct body parser gap. Codeless
+	// §2 types: trailing decl list in struct body parser gap. E0107
 	// recovery error ("expected field or method in struct") at 37:14.
-	"02-types.osty": {""},
+	"02-types.osty": {"E0107"},
 	// §6 scripts: top-level expression statements are still rejected at
 	// parse time instead of being wrapped in an implicit main.
 	"06-scripts.osty": {"E0100"},

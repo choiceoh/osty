@@ -20,7 +20,7 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E0007" { return FamilyLexical }
     if code == "E0008" { return FamilyLexical }
     if code == "E0009" { return FamilyLexical }
-    // Declarations & statements (E0100–E0106)
+    // Declarations & statements (E0100–E0109)
     if code == "E0100" { return FamilyDeclaration }
     if code == "E0101" { return FamilyDeclaration }
     if code == "E0102" { return FamilyDeclaration }
@@ -28,12 +28,16 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E0104" { return FamilyDeclaration }
     if code == "E0105" { return FamilyDeclaration }
     if code == "E0106" { return FamilyDeclaration }
-    // Expressions (E0200–E0204)
+    if code == "E0107" { return FamilyDeclaration }
+    if code == "E0108" { return FamilyDeclaration }
+    if code == "E0109" { return FamilyDeclaration }
+    // Expressions (E0200–E0205)
     if code == "E0200" { return FamilyExpression }
     if code == "E0201" { return FamilyExpression }
     if code == "E0202" { return FamilyExpression }
     if code == "E0203" { return FamilyExpression }
     if code == "E0204" { return FamilyExpression }
+    if code == "E0205" { return FamilyExpression }
     // Types & patterns (E0300–E0301)
     if code == "E0300" { return FamilyTypePattern }
     if code == "E0301" { return FamilyTypePattern }
