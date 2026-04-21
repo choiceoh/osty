@@ -511,31 +511,60 @@ pub fn llvmStringLiteral(emitter: LlvmEmitter, text: String) -> LlvmValue {
 }
 
 pub fn llvmCString(text: String) -> LlvmCString {
+    // byteLen counts UTF-8 bytes (not runes) because LLVM IR globals
+    // are sized as `[N x i8]`. `text.bytes().len()` preserves multi-
+    // byte sequences whereas `llvmStrings.split("")` returns rune
+    // count — silently truncating for anything above U+007F.
     let encoded = "{llvmCStringEscape(text)}\\00"
-    let byteLen = llvmStrings.split(text, "").len() + 1
+    let byteLen = text.bytes().len() + 1
     LlvmCString { encoded, byteLen }
 }
 
+// llvmCStringEscape emits an LLVM `c"..."` body for `text`. Iterates
+// over raw UTF-8 bytes so multi-byte code points (BOM, Korean, emoji)
+// emit one `\HH` escape per byte. LLVM IR string globals are byte
+// arrays, so that's the right shape for downstream runtime helpers
+// (strings.Equal, printf, etc.) that treat them as NUL-terminated
+// UTF-8.
 pub fn llvmCStringEscape(text: String) -> String {
     let mut encoded = ""
-    for unit in llvmStrings.split(text, "") {
-        if unit == "\n" {
-            encoded = "{encoded}\\0A"
-        } else if unit == "\t" {
-            encoded = "{encoded}\\09"
-        } else if unit == "\r" {
-            encoded = "{encoded}\\0D"
-        } else if unit == "\"" {
-            encoded = "{encoded}\\22"
-        } else if unit == "\\" {
+    for b in text.bytes() {
+        if b == '\\'.toInt().toByte() {
             encoded = "{encoded}\\5C"
-        } else if unit == "\u{1F}" {
-            encoded = "{encoded}\\1F"
+        } else if b == '"'.toInt().toByte() {
+            encoded = "{encoded}\\22"
+        } else if b >= 0x20.toByte() && b <= 0x7E.toByte() {
+            encoded = "{encoded}{b.toChar().toString()}"
         } else {
-            encoded = "{encoded}{unit}"
+            encoded = "{encoded}\\{llvmHexByte(b)}"
         }
     }
     encoded
+}
+
+fn llvmHexByte(b: Byte) -> String {
+    let n = b.toInt()
+    let hi = (n / 16) % 16
+    let lo = n % 16
+    "{llvmHexDigit(hi)}{llvmHexDigit(lo)}"
+}
+
+fn llvmHexDigit(n: Int) -> String {
+    if n < 10 {
+        "{n}"
+    } else if n == 10 {
+        "A"
+    } else if n == 11 {
+        "B"
+    } else if n == 12 {
+        "C"
+    } else if n == 13 {
+        "D"
+    } else if n == 14 {
+        "E"
+    } else {
+        "F"
+    }
 }
 
 pub fn llvmPrintlnString(emitter: LlvmEmitter, value: LlvmValue) {
@@ -1230,15 +1259,17 @@ pub fn llvmLogicalInstruction(op: String) -> String {
     ""
 }
 
+// llvmIsAsciiStringText gates which plain String literals the LLVM
+// backend accepts directly. Since `llvmCStringEscape` now byte-escapes
+// any non-printable / non-ASCII character via `\HH`, the gate only
+// needs to reject text that can't be encoded as a byte sequence at
+// all — and every `String` is already a valid UTF-8 byte sequence by
+// construction. Kept as a pure `true` stub for call-site stability
+// (formatter_ast / stdlib_shim / decl all fan in here); a future
+// rename to `llvmCanEmitStringLiteral` or inlining into callers is a
+// cleanup follow-up.
 pub fn llvmIsAsciiStringText(text: String) -> Bool {
-    for c in text.chars() {
-        if c == '\n' || c == '\t' || c == '\r' || c == '\u{1F}' {
-            continue
-        }
-        if c < ' ' || c > '~' {
-            return false
-        }
-    }
+    let _ = text
     true
 }
 

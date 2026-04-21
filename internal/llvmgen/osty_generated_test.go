@@ -107,8 +107,13 @@ func TestGeneratedComparePoliciesAreOstyOwned(t *testing.T) {
 	if !llvmIsAsciiStringText("line one\n") {
 		t.Fatal(`llvmIsAsciiStringText("line one\n") = false, want true`)
 	}
-	if llvmIsAsciiStringText("bad €") {
-		t.Fatal(`llvmIsAsciiStringText("bad €") = true, want false`)
+	// Non-ASCII text is now accepted — llvmCStringEscape byte-escapes
+	// every non-printable / high byte via `\HH`, so the gate is a
+	// no-op. The earlier `"bad €" => false` assertion was the legacy
+	// ASCII-only behaviour; see commit history / PR on the
+	// string_non_ascii wall for context.
+	if !llvmIsAsciiStringText("bom \ufeff ok") {
+		t.Fatal(`llvmIsAsciiStringText("bom \ufeff ok") = false, want true`)
 	}
 	if !llvmIsIdent("value2") {
 		t.Fatal(`llvmIsIdent("value2") = false, want true`)
