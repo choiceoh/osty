@@ -8,7 +8,6 @@ package diag
 //
 //go:generate go run ../../cmd/codesdoc -in codes.go -w ../../ERROR_CODES.md
 //go:generate go run ../../cmd/codesdoc -in codes.go -manifest ../../toolchain/diag_manifest.osty
-//go:generate go run ../../cmd/codesdoc -in codes.go -manifest ../../examples/selfhost-core/diag_manifest.osty
 //go:generate go run ../../cmd/codesdoc -in codes.go -harvest-cases ../../toolchain/diag_examples.osty
 
 const (
