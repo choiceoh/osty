@@ -340,6 +340,8 @@ const char *osty_rt_strings_Slice(const char *value, int64_t start, int64_t end)
 const char *osty_rt_strings_TrimPrefix(const char *value, const char *prefix);
 const char *osty_rt_strings_TrimSuffix(const char *value, const char *suffix);
 const char *osty_rt_strings_TrimSpace(const char *value);
+void *osty_rt_strings_Chars(const char *value);
+void *osty_rt_strings_Bytes(const char *value);
 bool osty_rt_set_insert_i64(void *raw_set, int64_t item);
 bool osty_rt_set_insert_i1(void *raw_set, bool item);
 bool osty_rt_set_insert_f64(void *raw_set, double item);
@@ -1189,6 +1191,135 @@ void *osty_rt_strings_SplitN(const char *value, const char *sep, int64_t n) {
         produced++;
     }
     osty_rt_list_push_ptr(out, osty_rt_string_dup_range(cursor, strlen(cursor)));
+    return out;
+}
+
+// osty_rt_strings_Chars decodes `value` as UTF-8 and pushes each code
+// point into the returned list as an i32 (Osty `Char`). Ill-formed
+// sequences follow the Unicode 15.0.0 §3.9 "maximal subpart of an
+// ill-formed subsequence" recommendation (a.k.a. Unicode TR#36): each
+// maximal well-formed prefix that fails to extend into a valid sequence
+// emits exactly one U+FFFD, and the offending byte becomes a candidate
+// start of the next sequence. The accepted lead/continuation ranges
+// come from Table 3-7 "Well-Formed UTF-8 Byte Sequences" so overlongs
+// (C0, C1), surrogates (ED A0..BF ...), and code points beyond
+// U+10FFFF (F4 90..BF ...) are rejected without decode.
+//
+// Storage: push_bytes_v1 with elem_size=4 so `osty_rt_list_get_bytes_v1`
+// + `load i32` on the read side mirrors the push layout.
+void *osty_rt_strings_Chars(const char *value) {
+    osty_rt_list *out = (osty_rt_list *)osty_rt_list_new();
+    if (value == NULL) {
+        return out;
+    }
+
+    const unsigned char *cursor = (const unsigned char *)value;
+    while (*cursor != '\0') {
+        unsigned char b1 = *cursor;
+        int32_t codepoint;
+
+        if (b1 < 0x80) {
+            codepoint = (int32_t)b1;
+            cursor++;
+            osty_rt_list_push_bytes_v1(out, &codepoint, (int64_t)sizeof(codepoint));
+            continue;
+        }
+
+        // Determine lead byte class per Table 3-7. For each class we
+        // record (expected continuation count, allowed range for the
+        // 2nd byte). The 3rd and 4th bytes, when expected, always
+        // fall in 0x80..0xBF.
+        int continuations = 0;
+        unsigned char min2 = 0x80;
+        unsigned char max2 = 0xBF;
+        int32_t accumulator = 0;
+        int lead_ok = 1;
+
+        if (b1 >= 0xC2 && b1 <= 0xDF) {
+            continuations = 1;
+            accumulator = (int32_t)(b1 & 0x1F);
+        } else if (b1 == 0xE0) {
+            continuations = 2;
+            min2 = 0xA0;
+            accumulator = 0;
+        } else if ((b1 >= 0xE1 && b1 <= 0xEC) || b1 == 0xEE || b1 == 0xEF) {
+            continuations = 2;
+            accumulator = (int32_t)(b1 & 0x0F);
+        } else if (b1 == 0xED) {
+            // Exclude the UTF-16 surrogate range D800..DFFF.
+            continuations = 2;
+            max2 = 0x9F;
+            accumulator = (int32_t)(b1 & 0x0F);
+        } else if (b1 == 0xF0) {
+            continuations = 3;
+            min2 = 0x90;
+            accumulator = 0;
+        } else if (b1 >= 0xF1 && b1 <= 0xF3) {
+            continuations = 3;
+            accumulator = (int32_t)(b1 & 0x07);
+        } else if (b1 == 0xF4) {
+            // Cap the 4-byte range at U+10FFFF.
+            continuations = 3;
+            max2 = 0x8F;
+            accumulator = (int32_t)(b1 & 0x07);
+        } else {
+            // 0x80..0xBF (continuation in lead position), 0xC0/0xC1
+            // (overlong 2-byte lead), 0xF5..0xFF (invalid lead). The
+            // maximal well-formed subsequence is empty, so this byte
+            // alone becomes one U+FFFD.
+            lead_ok = 0;
+        }
+
+        if (!lead_ok) {
+            codepoint = 0xFFFD;
+            cursor++;
+            osty_rt_list_push_bytes_v1(out, &codepoint, (int64_t)sizeof(codepoint));
+            continue;
+        }
+
+        cursor++;
+        int consumed_ok = 1;
+        for (int i = 0; i < continuations; i++) {
+            unsigned char bn = *cursor;
+            unsigned char lo = (i == 0) ? min2 : 0x80;
+            unsigned char hi = (i == 0) ? max2 : 0xBF;
+            if (bn < lo || bn > hi) {
+                // Do NOT advance past the offending byte — it becomes
+                // a candidate start of the next sequence. The lead
+                // plus any accepted continuation bytes collapse to a
+                // single U+FFFD.
+                consumed_ok = 0;
+                break;
+            }
+            accumulator = (accumulator << 6) | (int32_t)(bn & 0x3F);
+            cursor++;
+        }
+        codepoint = consumed_ok ? accumulator : 0xFFFD;
+        osty_rt_list_push_bytes_v1(out, &codepoint, (int64_t)sizeof(codepoint));
+    }
+    return out;
+}
+
+// osty_rt_strings_Bytes pushes each raw byte of `value` as an i8 into the
+// returned list. No UTF-8 validation is performed — callers that want
+// codepoints should use osty_rt_strings_Chars instead.
+void *osty_rt_strings_Bytes(const char *value) {
+    osty_rt_list *out;
+    const unsigned char *cursor;
+    size_t n;
+    size_t i;
+    int8_t item;
+
+    out = (osty_rt_list *)osty_rt_list_new();
+    if (value == NULL) {
+        return out;
+    }
+    cursor = (const unsigned char *)value;
+    n = strlen(value);
+    for (i = 0; i < n; i++) {
+        item = (int8_t)cursor[i];
+        osty_rt_list_push_bytes_v1(out, &item, (int64_t)sizeof(item));
+    }
     return out;
 }
 
