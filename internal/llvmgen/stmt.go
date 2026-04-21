@@ -1551,7 +1551,7 @@ func (g *generator) emitMatchArmBodyAsStmt(body ast.Expr) error {
 func (g *generator) emitPrintln(call *ast.CallExpr) error {
 	id, ok := call.Fn.(*ast.Ident)
 	if !ok || id.Name != "println" {
-		return unsupported("call", "only println calls are supported")
+		return unsupportedf("call", "only println calls are supported (got %T at %s)", call.Fn, call.Pos().String())
 	}
 	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 		return unsupported("call", "println requires one positional argument")
