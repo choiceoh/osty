@@ -134,16 +134,21 @@ func composite(rows []benchResult) float64 {
 
 // gitHead returns the short commit hash the working tree is currently
 // at, or "" when we're not inside a git checkout. A "-dirty" suffix
-// marks uncommitted changes so a research run against an edited tree
-// is labeled for what it is.
+// marks uncommitted changes — including staged ones — so a research
+// run against an edited tree can't get misattributed to its clean
+// parent commit in the journal.
 func gitHead() string {
 	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
 	if err != nil {
 		return ""
 	}
 	head := strings.TrimSpace(string(out))
-	// `git diff --quiet` exits nonzero when there are unstaged edits.
-	if err := exec.Command("git", "diff", "--quiet").Run(); err != nil {
+	// `git diff --quiet` only surfaces *unstaged* edits; running
+	// `git add` before benchmarking (a common workflow) would otherwise
+	// slip through and mislabel the score. `--cached` covers that half.
+	unstaged := exec.Command("git", "diff", "--quiet").Run()
+	staged := exec.Command("git", "diff", "--cached", "--quiet").Run()
+	if unstaged != nil || staged != nil {
 		head += "-dirty"
 	}
 	return head
@@ -984,9 +989,11 @@ func printVsBestVerdict(current runRecord, prior []runRecord, noiseFrac float64)
 // numbering printHistory and the run header use). 0 if not found.
 func runIndex(runs []runRecord, target runRecord) int {
 	for i, r := range runs {
-		// Timestamp + score uniquely identifies a run in practice;
-		// both are written at appendHistory time.
-		if r.Timestamp.Equal(target.Timestamp) && r.Score == target.Score {
+		// Timestamp is already unique per run (runs serialize through
+		// time.Now() in runOnce), so score is redundant here — and
+		// folding it into the comparison breaks any run with a NaN
+		// score since NaN != NaN under ==. Use timestamp alone.
+		if r.Timestamp.Equal(target.Timestamp) {
 			return i + 1
 		}
 	}

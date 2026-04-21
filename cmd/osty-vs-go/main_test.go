@@ -190,3 +190,31 @@ func TestDecideKeepStrictlyWorseIsReverted(t *testing.T) {
 		t.Fatal("regression must revert")
 	}
 }
+
+// runIndex must return the run's 1-based position by timestamp alone.
+// Earlier code compared `score == target.Score` too, which silently
+// broke for any run with a NaN composite because `NaN != NaN`.
+
+func TestRunIndexFindsNaNScoredRun(t *testing.T) {
+	base := time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC)
+	runs := []runRecord{
+		mkRun(base, 5.0),
+		mkRun(base.Add(1*time.Minute), math.NaN()),
+		mkRun(base.Add(2*time.Minute), 4.0),
+	}
+	// The NaN-scored record is real history; asking for its index
+	// must return 2, not 0. A 0 would show up in the research journal
+	// as `run #0`, misleading any downstream tooling.
+	got := runIndex(runs, runs[1])
+	if got != 2 {
+		t.Fatalf("runIndex on NaN-scored run = %d, want 2", got)
+	}
+}
+
+func TestRunIndexMissingRun(t *testing.T) {
+	runs := []runRecord{mkRun(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), 1.0)}
+	other := mkRun(time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), 1.0)
+	if got := runIndex(runs, other); got != 0 {
+		t.Fatalf("runIndex on absent run = %d, want 0", got)
+	}
+}
