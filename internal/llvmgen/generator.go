@@ -254,6 +254,12 @@ func (g *generator) emitGCSafepoint(emitter *LlvmEmitter) {
 	g.emitGCSafepointKind(emitter, safepointKindUnspecified)
 }
 
+func (g *generator) emitCallSafepointIfNeeded(emitter *LlvmEmitter) {
+	if g.hasVisibleSafepointRoots() {
+		g.emitGCSafepointKind(emitter, safepointKindCall)
+	}
+}
+
 func (g *generator) emitGCSafepointKind(emitter *LlvmEmitter, kind safepointKind) {
 	g.declareRuntimeSymbol("osty.gc.safepoint_v1", "void", []paramInfo{
 		{typ: "i64"},

@@ -2288,7 +2288,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	g.pushScope()
 	defer g.popScope()
 	emitter := g.toOstyEmitter()
-	g.emitGCSafepointKind(emitter, safepointKindCall)
+	g.emitCallSafepointIfNeeded(emitter)
 	g.takeOstyEmitter(emitter)
 	base, err := g.emitExpr(field.X)
 	if err != nil {
