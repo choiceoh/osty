@@ -1,6 +1,7 @@
 package airepair
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -304,5 +305,8 @@ func readCorpusFixture(t *testing.T, path string) []byte {
 	if err != nil {
 		t.Fatalf("read fixture %s: %v", path, err)
 	}
-	return src
+	// Normalize CRLF→LF so Windows checkouts (core.autocrlf=true) match
+	// the airepair pipeline's own LF normalization and the goldens that
+	// were captured on LF systems.
+	return bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
 }
