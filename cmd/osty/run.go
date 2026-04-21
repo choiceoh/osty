@@ -213,8 +213,20 @@ func runRun(args []string, cliF cliFlags) {
 	}
 	binName := runner.BinaryNameFor(binBaseOverride, pkgName, runtime.GOOS)
 	selectedBackend := backendFromCLI("run", backendID)
-	backendEntry, err := backend.PrepareEntry("main", entryAbs, file, res, chk)
-	if err != nil {
+	// Multi-file packages must merge every sibling .osty file into one
+	// ir.Module before the backend runs; single-file packages keep the
+	// historical PrepareEntry path. countLowerableFiles lives in
+	// build.go alongside the analogous build-side dispatch.
+	var (
+		backendEntry backend.Entry
+		entryErr     error
+	)
+	if rootPkg != nil && countLowerableFiles(rootPkg) > 1 {
+		backendEntry, entryErr = backend.PreparePackage("main", entryAbs, rootPkg, entryFile, chk)
+	} else {
+		backendEntry, entryErr = backend.PrepareEntry("main", entryAbs, file, res, chk)
+	}
+	if err := entryErr; err != nil {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(1)
 	}
