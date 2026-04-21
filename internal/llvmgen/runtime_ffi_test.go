@@ -287,7 +287,14 @@ func TestGenerateStringCompareUsesRuntimeABI(t *testing.T) {
 	}
 }
 
-func TestGenerateNonStringPtrCompareRejected(t *testing.T) {
+// Non-String ptr `==` / `!=` used to be a hard LLVM011 wall. It now
+// lowers to LLVM identity `icmp eq ptr` / `icmp ne ptr`, matching the
+// GC-language convention that pointer equality means same allocation.
+// Structural equality is a separate feature; this test locks the
+// identity semantics against accidental regression to either a wall
+// or a silent structural compare. Ordering ops (<, >, <=, >=) remain
+// rejected — see TestPtrOrderingStillRejected.
+func TestGenerateNonStringPtrCompareIsIdentity(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn main() {
     let a: List<Int> = [1, 2]
     let b: List<Int> = [3, 4]
@@ -299,15 +306,15 @@ func TestGenerateNonStringPtrCompareRejected(t *testing.T) {
 }
 `)
 
-	_, err := generateFromAST(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/nonstr_compare.osty",
 	})
-	if err == nil {
-		t.Fatal("Generate succeeded, want unsupported diagnostic for non-String ptr ==")
+	if err != nil {
+		t.Fatalf("non-String ptr == errored: %v", err)
 	}
-	if got := err.Error(); !strings.Contains(got, "non-String ptr") {
-		t.Fatalf("error = %q, want to mention non-String ptr", got)
+	if got := string(ir); !strings.Contains(got, "icmp eq ptr") {
+		t.Fatalf("non-String ptr == did not lower to icmp eq ptr:\n%s", got)
 	}
 }
 
