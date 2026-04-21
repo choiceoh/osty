@@ -2080,6 +2080,12 @@ pub fn astPrettyPrint(file: AstFile) -> String {
 }
 
 fn astPPNode(arena: AstArena, idx: Int, depth: Int, lines: List<String>) -> List<String> {
+    // `lines` is an immutable parameter; shadow it with a mutable
+    // binding so we can thread the recursive-call return values
+    // through without reassigning a `let`-bound name. The List is
+    // heap-managed so both `push` in place and the return value pass
+    // through the same identity.
+    let mut lines = lines
     if idx < 0 {
         return lines
     }
