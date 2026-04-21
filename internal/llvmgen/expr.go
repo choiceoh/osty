@@ -3606,10 +3606,10 @@ func (g *generator) emitMapMergeWith(call *ast.CallExpr, base value, keyTyp stri
 	if err != nil {
 		return value{}, true, err
 	}
-	if combine.typ != "ptr" || combine.fnSigRef == nil {
-		return value{}, true, unsupportedf("call", "map.mergeWith combine must be a fn value")
+	sig, err := requireFnValueSignature(combine, "map.mergeWith combine")
+	if err != nil {
+		return value{}, true, err
 	}
-	sig := combine.fnSigRef
 	if len(sig.params) != 2 || sig.ret != valTyp {
 		return value{}, true, unsupportedf("call", "map.mergeWith combine must be fn(V, V) -> V")
 	}
@@ -3712,10 +3712,10 @@ func (g *generator) emitMapMapValues(call *ast.CallExpr, base value, keyTyp stri
 	if err != nil {
 		return value{}, true, err
 	}
-	if f.typ != "ptr" || f.fnSigRef == nil {
-		return value{}, true, unsupportedf("call", "map.mapValues f must be a fn value")
+	sig, err := requireFnValueSignature(f, "map.mapValues f")
+	if err != nil {
+		return value{}, true, err
 	}
-	sig := f.fnSigRef
 	if len(sig.params) != 1 || sig.params[0].typ != base.mapValueTyp {
 		return value{}, true, unsupportedf("call", "map.mapValues f must take single V argument")
 	}

@@ -95,6 +95,101 @@ type fieldInfo struct {
 	sourceType     ast.Type
 }
 
+type containerMetadata struct {
+	sourceType     ast.Type
+	listElemTyp    string
+	listElemString bool
+	mapKeyTyp      string
+	mapValueTyp    string
+	mapKeyString   bool
+	setElemTyp     string
+	setElemString  bool
+}
+
+func containerMetadataFromSourceType(sourceType ast.Type, env typeEnv) (containerMetadata, error) {
+	meta := containerMetadata{sourceType: sourceType}
+	if sourceType == nil {
+		return meta, nil
+	}
+	if listElemTyp, listElemString, ok, err := llvmListElementInfo(sourceType, env); err != nil {
+		return containerMetadata{}, err
+	} else if ok {
+		meta.listElemTyp = listElemTyp
+		meta.listElemString = listElemString
+	}
+	if mapKeyTyp, mapValueTyp, mapKeyString, ok, err := llvmMapTypes(sourceType, env); err != nil {
+		return containerMetadata{}, err
+	} else if ok {
+		meta.mapKeyTyp = mapKeyTyp
+		meta.mapValueTyp = mapValueTyp
+		meta.mapKeyString = mapKeyString
+	}
+	if setElemTyp, setElemString, ok, err := llvmSetElementType(sourceType, env); err != nil {
+		return containerMetadata{}, err
+	} else if ok {
+		meta.setElemTyp = setElemTyp
+		meta.setElemString = setElemString
+	}
+	return meta, nil
+}
+
+func (m containerMetadata) applyToParam(info *paramInfo) {
+	if info == nil {
+		return
+	}
+	info.listElemTyp = m.listElemTyp
+	info.listElemString = m.listElemString
+	info.mapKeyTyp = m.mapKeyTyp
+	info.mapValueTyp = m.mapValueTyp
+	info.mapKeyString = m.mapKeyString
+	info.setElemTyp = m.setElemTyp
+	info.setElemString = m.setElemString
+	info.sourceType = m.sourceType
+}
+
+func (m containerMetadata) applyToField(info *fieldInfo) {
+	if info == nil {
+		return
+	}
+	info.listElemTyp = m.listElemTyp
+	info.listElemString = m.listElemString
+	info.mapKeyTyp = m.mapKeyTyp
+	info.mapValueTyp = m.mapValueTyp
+	info.mapKeyString = m.mapKeyString
+	info.setElemTyp = m.setElemTyp
+	info.setElemString = m.setElemString
+	info.sourceType = m.sourceType
+}
+
+func (m containerMetadata) applyToReturn(sig *fnSig) {
+	if sig == nil {
+		return
+	}
+	sig.retListElemTyp = m.listElemTyp
+	sig.retListString = m.listElemString
+	sig.retMapKeyTyp = m.mapKeyTyp
+	sig.retMapValueTyp = m.mapValueTyp
+	sig.retMapKeyString = m.mapKeyString
+	sig.retSetElemTyp = m.setElemTyp
+	sig.retSetElemString = m.setElemString
+	sig.returnSourceType = m.sourceType
+}
+
+func (m containerMetadata) applyToValue(out *value) {
+	if out == nil {
+		return
+	}
+	out.listElemTyp = m.listElemTyp
+	out.listElemString = m.listElemString
+	out.mapKeyTyp = m.mapKeyTyp
+	out.mapValueTyp = m.mapValueTyp
+	out.mapKeyString = m.mapKeyString
+	out.setElemTyp = m.setElemTyp
+	out.setElemString = m.setElemString
+	out.sourceType = m.sourceType
+	out.gcManaged = valueNeedsManagedRoot(*out)
+}
+
 type enumInfo struct {
 	name             string
 	typ              string
@@ -165,9 +260,9 @@ type interfaceMethodSig struct {
 // interfaceImpl records a concrete type that satisfies an interface,
 // together with the symbol its vtable emits.
 type interfaceImpl struct {
-	implName   string // source name of the struct/enum
-	kind       int    // 0 = struct, 1 = enum
-	vtableSym  string // `@osty.vtable.<impl>__<iface>`
+	implName  string // source name of the struct/enum
+	kind      int    // 0 = struct, 1 = enum
+	vtableSym string // `@osty.vtable.<impl>__<iface>`
 }
 
 type typeAliasInfo struct {
@@ -834,29 +929,13 @@ func collectStructFields(info *structInfo, env typeEnv) error {
 			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, true, "")
 			return unsupported(diag.kind, diag.message)
 		}
-		fieldInfo := fieldInfo{name: field.Name, typ: typ, index: i, sourceType: field.Type}
-		if listElemTyp, listElemString, ok, err := llvmListElementInfo(field.Type, env); err != nil {
+		meta, err := containerMetadataFromSourceType(field.Type, env)
+		if err != nil {
 			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, false, unsupportedMessage(err))
 			return unsupported(diag.kind, diag.message)
-		} else if ok {
-			fieldInfo.listElemTyp = listElemTyp
-			fieldInfo.listElemString = listElemString
 		}
-		if mapKeyTyp, mapValueTyp, mapKeyString, ok, err := llvmMapTypes(field.Type, env); err != nil {
-			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, false, unsupportedMessage(err))
-			return unsupported(diag.kind, diag.message)
-		} else if ok {
-			fieldInfo.mapKeyTyp = mapKeyTyp
-			fieldInfo.mapValueTyp = mapValueTyp
-			fieldInfo.mapKeyString = mapKeyString
-		}
-		if setElemTyp, setElemString, ok, err := llvmSetElementType(field.Type, env); err != nil {
-			diag := llvmStructFieldDiagnostic(info.name, field.Name, true, false, false, false, unsupportedMessage(err))
-			return unsupported(diag.kind, diag.message)
-		} else if ok {
-			fieldInfo.setElemTyp = setElemTyp
-			fieldInfo.setElemString = setElemString
-		}
+		fieldInfo := fieldInfo{name: field.Name, typ: typ, index: i}
+		meta.applyToField(&fieldInfo)
 		info.fields = append(info.fields, fieldInfo)
 		info.byName[field.Name] = fieldInfo
 	}
@@ -1055,51 +1134,20 @@ func signatureOf(fn *ast.FnDecl, ownerName string, env typeEnv) (*fnSig, error) 
 			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, true, unsupportedMessage(err))
 			return nil, unsupported(diag.kind, diag.message)
 		}
-		info := paramInfo{name: p.Name, typ: typ, sourceType: p.Type}
-		if listElemTyp, listElemString, ok, err := llvmListElementInfo(p.Type, env); err != nil {
+		meta, err := containerMetadataFromSourceType(p.Type, env)
+		if err != nil {
 			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, true, unsupportedMessage(err))
 			return nil, unsupported(diag.kind, diag.message)
-		} else if ok {
-			info.listElemTyp = listElemTyp
-			info.listElemString = listElemString
 		}
-		if mapKeyTyp, mapValueTyp, mapKeyString, ok, err := llvmMapTypes(p.Type, env); err != nil {
-			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, true, unsupportedMessage(err))
-			return nil, unsupported(diag.kind, diag.message)
-		} else if ok {
-			info.mapKeyTyp = mapKeyTyp
-			info.mapValueTyp = mapValueTyp
-			info.mapKeyString = mapKeyString
-		}
-		if setElemTyp, setElemString, ok, err := llvmSetElementType(p.Type, env); err != nil {
-			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, true, unsupportedMessage(err))
-			return nil, unsupported(diag.kind, diag.message)
-		} else if ok {
-			info.setElemTyp = setElemTyp
-			info.setElemString = setElemString
-		}
+		info := paramInfo{name: p.Name, typ: typ}
+		meta.applyToParam(&info)
 		sig.params = append(sig.params, info)
 	}
-	sig.returnSourceType = fn.ReturnType
-	if listElemTyp, listElemString, ok, err := llvmListElementInfo(fn.ReturnType, env); err != nil {
+	retMeta, err := containerMetadataFromSourceType(fn.ReturnType, env)
+	if err != nil {
 		return nil, unsupportedf("type-system", "function %q return type: %s", fn.Name, unsupportedMessage(err))
-	} else if ok {
-		sig.retListElemTyp = listElemTyp
-		sig.retListString = listElemString
 	}
-	if mapKeyTyp, mapValueTyp, mapKeyString, ok, err := llvmMapTypes(fn.ReturnType, env); err != nil {
-		return nil, unsupportedf("type-system", "function %q return type: %s", fn.Name, unsupportedMessage(err))
-	} else if ok {
-		sig.retMapKeyTyp = mapKeyTyp
-		sig.retMapValueTyp = mapValueTyp
-		sig.retMapKeyString = mapKeyString
-	}
-	if setElemTyp, setElemString, ok, err := llvmSetElementType(fn.ReturnType, env); err != nil {
-		return nil, unsupportedf("type-system", "function %q return type: %s", fn.Name, unsupportedMessage(err))
-	} else if ok {
-		sig.retSetElemTyp = setElemTyp
-		sig.retSetElemString = setElemString
-	}
+	retMeta.applyToReturn(sig)
 	return sig, nil
 }
 
@@ -1208,11 +1256,9 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 		// a closure env (same uniform ABI as phase 1), so we tag the
 		// binding with a synthesised *fnSig so subsequent `p(args)`
 		// inside the body dispatches through emitIndirectUserCall.
-		if ft, ok := p.sourceType.(*ast.FnType); ok {
-			fsig, err := synthFnSigFromFnType(ft, g.typeEnv())
-			if err != nil {
-				return "", err
-			}
+		if fsig, ok, err := synthFnSigFromSourceType(p.sourceType, g.typeEnv()); err != nil {
+			return "", err
+		} else if ok {
 			v.fnSigRef = fsig
 		}
 		v.gcManaged = valueNeedsManagedRoot(v)

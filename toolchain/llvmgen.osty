@@ -486,6 +486,54 @@ pub fn llvmEncodeSafepointId(kind: Int, serial: Int) -> Int {
 /// so the default sits well below that cap to leave head-room.
 pub fn llvmSafepointDefaultRootChunkSize() -> Int { 4096 }
 
+/// LlvmSafepointChunk describes one rooted safepoint poll planned from a
+/// larger visible-root set. `start`/`end` slice the caller-owned root array
+/// and `id` is the fully encoded runtime safepoint id for that chunk.
+pub struct LlvmSafepointChunk {
+    pub start: Int,
+    pub end: Int,
+    pub id: Int,
+}
+
+/// Phase A6 rooted safepoint chunk planner (`RUNTIME_GC_DELTA.md` §10.2).
+///
+/// Ownership of the splitting policy lives here even though the legacy Go
+/// emitter still materializes the actual root-slot addresses from generator
+/// state. `firstSerial` is the serial to use for the first emitted chunk;
+/// each subsequent chunk bumps it by one while preserving `kind`. `chunkSize`
+/// <= 0 means "emit one chunk covering the full root set".
+pub fn llvmPlanSafepointChunks(
+    kind: Int,
+    firstSerial: Int,
+    rootCount: Int,
+    chunkSize: Int,
+) -> List<LlvmSafepointChunk> {
+    let mut chunks: List<LlvmSafepointChunk> = []
+    if rootCount <= 0 {
+        return chunks
+    }
+    let size = if chunkSize <= 0 { rootCount } else { chunkSize }
+    let mut serial = firstSerial
+    for start in 0..rootCount {
+        if start % size != 0 {
+            continue
+        }
+        let mut end = start + size
+        if end > rootCount {
+            end = rootCount
+        }
+        chunks.push(
+            LlvmSafepointChunk {
+                start,
+                end,
+                id: llvmEncodeSafepointId(kind, serial),
+            },
+        )
+        serial = serial + 1
+    }
+    chunks
+}
+
 /// Phase A4 closure env GC kind tag (`RUNTIME_GC_DELTA.md` §2.4).
 ///
 /// Points at the dedicated `OSTY_GC_KIND_CLOSURE_ENV = 1029`
@@ -1054,45 +1102,6 @@ pub fn llvmRenderFunction(
     let mut lines = ["define {ret} @{name}({llvmParams(params)}) \{", "entry:"]
     for line in body {
         lines.push(line)
-    }
-    lines.push("\}")
-    llvmStrings.join([llvmStrings.join(lines, "\n"), "\n"], "")
-}
-
-/// Phase A4 fn-value thunk template. Renders the IR body of a private
-/// delegating function that accepts `ptr %env` as its implicit first
-/// argument, discards the env, and forwards the remaining args to
-/// `realSymbol`. The resulting IR is what the legacy emitter caches
-/// in `g.fnValueThunkDefs` so top-level fn references can be wrapped
-/// in a fn-value-compatible ABI (`{ ptr fn, ... }` env layout) without
-/// touching the defining symbol. An empty `retType` is normalised to
-/// `void` so call sites may forward the checker's unit return type
-/// verbatim.
-pub fn llvmRenderClosureThunk(
-    retType: String,
-    thunkSymbol: String,
-    paramTypes: List<String>,
-    realSymbol: String,
-) -> String {
-    let ret = if retType == "" { "void" } else { retType }
-    let mut paramParts: List<String> = ["ptr %env"]
-    let mut argParts: List<String> = []
-    for i in 0..paramTypes.len() {
-        let pt = paramTypes[i]
-        paramParts.push("{pt} %arg{i}")
-        argParts.push("{pt} %arg{i}")
-    }
-    let params = llvmStrings.join(paramParts, ", ")
-    let args = llvmStrings.join(argParts, ", ")
-    let mut lines: List<String> = []
-    lines.push("define private {ret} @{thunkSymbol}({params}) \{")
-    lines.push("entry:")
-    if ret == "void" {
-        lines.push("  call void @{realSymbol}({args})")
-        lines.push("  ret void")
-    } else {
-        lines.push("  %__ret = call {ret} @{realSymbol}({args})")
-        lines.push("  ret {ret} %__ret")
     }
     lines.push("\}")
     llvmStrings.join([llvmStrings.join(lines, "\n"), "\n"], "")
@@ -2414,6 +2423,39 @@ pub fn llvmClosureCallIndirect(
     LlvmValue { typ: returnType, name: tmp, pointer: false }
 }
 
+/// Emit an indirect call through the legacy fn-value heap env ABI used by
+/// the AST emitter. Here `envPtr` already points at slot 0 itself, so the
+/// fn-pointer load is a plain `load ptr, ptr %env` rather than a typed
+/// closure-env GEP. The call still widens the visible signature to
+/// `(ptr env, ...userArgs)` so LLVM sees the real ABI.
+pub fn llvmFnValueCallIndirect(
+    emitter: LlvmEmitter,
+    returnType: String,
+    envPtr: LlvmValue,
+    extraArgs: List<LlvmValue>,
+) -> LlvmValue {
+    let ret = if returnType == "" { "void" } else { returnType }
+    let fnPtr = llvmNextTemp(emitter)
+    emitter.body.push("  {fnPtr} = load ptr, ptr {envPtr.name}")
+    let mut args = [envPtr]
+    let mut paramTypes: List<String> = ["ptr"]
+    for arg in extraArgs {
+        args.push(arg)
+        paramTypes.push(arg.typ)
+    }
+    let paramList = llvmStrings.join(paramTypes, ", ")
+    let callType = "{ret} ({paramList})"
+    if ret == "void" {
+        emitter.body.push("  call {callType} {fnPtr}({llvmCallArgs(args)})")
+        return LlvmValue { typ: "void", name: "", pointer: false }
+    }
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push(
+        "  {tmp} = call {callType} {fnPtr}({llvmCallArgs(args)})",
+    )
+    LlvmValue { typ: ret, name: tmp, pointer: false }
+}
+
 /// Canonical symbol name for the private thunk that wraps bare
 /// function `symbol` into the closure-env ABI. Deterministic so a
 /// second reference to the same bare fn reuses the same thunk def.
@@ -2432,6 +2474,7 @@ pub fn llvmClosureThunkDefinition(
     returnType: String,
     paramTypes: List<String>,
 ) -> String {
+    let ret = if returnType == "" { "void" } else { returnType }
     let mut headerParts: List<String> = ["ptr %env"]
     let mut argParts: List<String> = []
     let mut i = 0
@@ -2444,14 +2487,14 @@ pub fn llvmClosureThunkDefinition(
     let callArgs = llvmStrings.join(argParts, ", ")
     let thunk = llvmClosureThunkName(symbol)
     let mut lines: List<String> = []
-    lines.push("define private {returnType} @{thunk}({header}) \{")
+    lines.push("define private {ret} @{thunk}({header}) \{")
     lines.push("entry:")
-    if returnType == "void" {
+    if ret == "void" {
         lines.push("  call void @{symbol}({callArgs})")
         lines.push("  ret void")
     } else {
-        lines.push("  %ret = call {returnType} @{symbol}({callArgs})")
-        lines.push("  ret {returnType} %ret")
+        lines.push("  %ret = call {ret} @{symbol}({callArgs})")
+        lines.push("  ret {ret} %ret")
     }
     lines.push("\}")
     llvmStrings.join(lines, "\n")

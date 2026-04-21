@@ -174,10 +174,11 @@ A5–A6는 safepoint ABI 주변 분류·가드.
   C 스택 안전. Sweep이 marked를 clear해 "outside collection == no marks"
   invariant 성립. 테스트 `TestBundledRuntimeMarkWorkQueueDeepGraph`.
 - ✅ **§2.4 A4 Closure env kind 예약** — `OSTY_GC_KIND_CLOSURE_ENV = 1029`.
-  Phase 1 closure env는 여전히 1-field · trace=NULL이지만 heap dump와
-  `osty_gc_stats`에서 일반 `osty.gc.alloc_v1` 객체와 분리 추적 가능.
-  Phase 4 capture 랜딩 시 이 kind 태그로 분기하여 per-capture trace를
-  등록한다. 호출 지점: `internal/llvmgen/fn_value.go:fnValueEnvKind`.
+  Phase 1 closure env는 dedicated allocator `osty.rt.closure_env_alloc_v1`
+  경유로 생성되고, heap dump와 `osty_gc_stats`에서 일반
+  `osty.gc.alloc_v1` 객체와 분리 추적된다. Phase 4 capture 랜딩 시 이
+  kind 태그로 분기하여 per-capture trace를 등록한다. 호출 지점:
+  `internal/llvmgen/fn_value.go:emitFnValueEnv`.
 - ✅ **§10.1 A5 Safepoint kind taxonomy** — safepoint id high byte에 kind
   인코딩 (`UNSPECIFIED/ENTRY/CALL/LOOP/ALLOC/YIELD`), 저 56비트에 per-module
   serial. 런타임이 kind별 카운터 집계 + `osty_gc_debug_safepoint_count_by_kind`.
@@ -334,10 +335,14 @@ Phase A SATB log가 passive recording에서 **live consumer**로 승격. 마킹
   guard는 추가됐지만, 혼합 워크로드 (긴 OLD scan + 빠른 YOUNG churn)에서
   가장 좋은 선택 (incremental vs STW minor)을 결정하는 정책은 아직 없음.
   단순한 tier 분리만.
-- **Go 측 위반 여전** — Phase A5/A6/A4 깊이 패스의 llvmgen 변경이
-  `generator.go`/`fn_value.go`에 Go로 들어가 있음. CLAUDE.md는 이걸
-  `toolchain/*.osty` + `support_snapshot.go` 재생성으로 가야 한다고 명시.
-  별도 cleanup task 필요.
+- **Go/Osty 경계는 축소됐지만 아직 남아 있음** — A5/A6/A4의 kind/ID
+  상수, safepoint 빈 poll / rooted poll 템플릿, closure env alloc 템플릿,
+  rooted safepoint chunk planning 정책, bare-fn thunk symbol/body template,
+  legacy fn-value indirect-call IR template은 이제
+  `toolchain/llvmgen.osty` + `support_snapshot.go`가 소유한다. 남은 Go 코드는
+  legacy emitter의 상태 의존부(visible-root 주소 materialize, thunk cache
+  소유, indirect-call callee shape 판별)라 correctness 위반이라기보다
+  점진적 cleanup 대상이다.
 
 ## 다음 단계
 
