@@ -173,6 +173,45 @@ const (
 	// Fix: use a literal default, or move the computation into the body.
 	CodeDefaultExprNotLiteral = "E0106"
 
+	// A token that cannot begin a struct member appeared inside a struct body.
+	//
+	// Struct bodies accept field declarations (`name: Type`) and method
+	// declarations (`fn name(...)` / `pub fn ...`). Any other token is a
+	// recovery error.
+	//
+	// Example:
+	//   pub struct S {
+	//       x: Int??,   // nested Option type triggers recovery
+	//   }
+	// Fix: provide a field or method declaration.
+	CodeExpectedStructMember = "E0107"
+
+	// A token that cannot begin an enum member appeared inside an enum body.
+	//
+	// Enum bodies accept variant declarations (`Ident(T, U)` / `Ident`)
+	// and method declarations. Any other token is a recovery error.
+	//
+	// Example:
+	//   pub enum E {
+	//       123,   // rejected
+	//   }
+	// Fix: provide a variant or method declaration.
+	CodeExpectedEnumMember = "E0108"
+
+	// A token that cannot begin an interface member appeared inside an
+	// interface body.
+	//
+	// Interface bodies accept method signatures (`fn name(self) -> T`)
+	// and associated type references (identifiers). Any other token is a
+	// recovery error.
+	//
+	// Example:
+	//   pub interface I {
+	//       123,   // rejected
+	//   }
+	// Fix: provide a method signature or an associated type name.
+	CodeExpectedInterfaceMember = "E0109"
+
 	// Expressions.
 
 	// Comparison or range operators are non-associative.
@@ -213,6 +252,18 @@ const (
 	//
 	// Fix: check for a missing operand, operator, or brace.
 	CodeUnexpectedToken = "E0204"
+
+	// A token that cannot begin a closure parameter appeared between `|...|`.
+	//
+	// A closure parameter is an identifier, an irrefutable pattern
+	// (tuple `(a, b)`, struct `User { name }`, variant `Some(x)`), or
+	// `_` for a discarded binding.
+	//
+	// Example:
+	//   let f = |123| x           // rejected
+	//   let g = |a, _, (k, v)| v  // ok
+	// Fix: use an identifier, `_`, or a destructuring pattern.
+	CodeExpectedClosureParam = "E0205"
 
 	// Types & patterns.
 

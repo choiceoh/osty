@@ -107,6 +107,28 @@ fn testLlvmToolchainPlanIsOstyOwned() {
     assertLlvmContains(link, "/tmp/runtime/gc_runtime.o")
     assertLlvmContains(link, "-o /tmp/app")
     testing.assert(!(llvmTestStrings.contains(link, "-target")))
+
+    // Windows target must NOT receive -pthread (clang-msvc rejects it);
+    // POSIX targets MUST receive -pthread for the runtime branch.
+    let linkWin = llvmTestStrings.join(
+        llvmClangLinkBinaryArgs(
+            "x86_64-pc-windows-msvc",
+            ["/tmp/main.o"],
+            "/tmp/app.exe",
+        ),
+        " ",
+    )
+    testing.assert(!(llvmTestStrings.contains(linkWin, "-pthread")))
+
+    let linkPosix = llvmTestStrings.join(
+        llvmClangLinkBinaryArgs(
+            "aarch64-unknown-linux-gnu",
+            ["/tmp/main.o"],
+            "/tmp/app",
+        ),
+        " ",
+    )
+    assertLlvmContains(linkPosix, "-pthread")
     assertLlvmContains(llvmMissingClangMessage(), "clang not found")
     assertLlvmContains(
         llvmClangFailureMessage("link binary", "clang main.o -o app", "boom"),

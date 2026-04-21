@@ -153,8 +153,88 @@ old→young edge를 놓친다.
   `TestBundledRuntimeWriteBarriersLogEdges`. 현재 STW에선 passive recording,
   §5 (세대) / §4.3 (incremental) 때 소비.
 
-P1 완료. 다음 단계는 §5 (세대) → §4.3 (incremental) → §6.2-6.3 (compaction,
-§1.7 stable ID 포함) 순으로 열린다.
+P1 완료.
+
+## Phase A 진행 상태 (관측·안정화 기반)
+
+A1–A3는 런타임 내부 구조 보강, A4는 Phase 4 (closure capture) 핸드오프,
+A5–A6는 safepoint ABI 주변 분류·가드.
+
+- ✅ **§9.5 A1 validateHeap 오라클** — `osty_gc_debug_validate_heap()`.
+  doubly-linked 리스트 무결성 / live_count·live_bytes 일치 / root_count
+  음수 없음 / stale mark 없음 / SATB·remembered edge payload가 힙 안에
+  존재 / 글로벌 slot non-NULL / 누적 카운터 음수 없음. 위반 시 stable
+  negative 코드 반환. 테스트 `TestBundledRuntimeValidateHeapInvariants`.
+- ✅ **§9.3 A2 GcStats 집계** — `osty_gc_stats` 구조체 + 스칼라 accessor +
+  `osty_gc_debug_stats_dump`. 누적 `allocated_bytes_total`,
+  `swept_count_total`, `swept_bytes_total`, `mark_stack_max_depth` 추가.
+  테스트 `TestBundledRuntimeStatsSnapshot`.
+- ✅ **§4.2 A3 Mark work queue** — 재귀 trace 제거, explicit
+  `osty_gc_mark_stack` + `osty_gc_mark_drain`. 깊은 그래프(100k 체인)도
+  C 스택 안전. Sweep이 marked를 clear해 "outside collection == no marks"
+  invariant 성립. 테스트 `TestBundledRuntimeMarkWorkQueueDeepGraph`.
+- ✅ **§2.4 A4 Closure env kind 예약** — `OSTY_GC_KIND_CLOSURE_ENV = 1029`.
+  Phase 1 closure env는 여전히 1-field · trace=NULL이지만 heap dump와
+  `osty_gc_stats`에서 일반 `osty.gc.alloc_v1` 객체와 분리 추적 가능.
+  Phase 4 capture 랜딩 시 이 kind 태그로 분기하여 per-capture trace를
+  등록한다. 호출 지점: `internal/llvmgen/fn_value.go:fnValueEnvKind`.
+- ✅ **§10.1 A5 Safepoint kind taxonomy** — safepoint id high byte에 kind
+  인코딩 (`UNSPECIFIED/ENTRY/CALL/LOOP/ALLOC/YIELD`), 저 56비트에 per-module
+  serial. 런타임이 kind별 카운터 집계 + `osty_gc_debug_safepoint_count_by_kind`.
+  legacy + MIR 양쪽 emitter 15+ 호출 지점 전부 분류 (entry / call / loop).
+  테스트 `TestBundledRuntimeSafepointKindCounters` +
+  `TestGenerateFromMIREmitGCLoopSafepoint` 외 회귀.
+- ✅ **§10.2 A6 Stackmap overflow guard** — `OSTY_GC_SAFEPOINT_MAX_ROOTS = 65536`
+  상한. 런타임이 safepoint 폴마다 `root_slot_count` 확인, 초과 시 kind
+  포함한 메시지로 abort. `osty_gc_debug_safepoint_max_roots_seen`로 peak
+  관측. LLVM-side alloca 자체는 그대로 — 이는 crash early / crash loud
+  backstop. 테스트 `TestBundledRuntimeSafepointRootSlotHighWaterMark`.
+
+### Phase A 심화 보강 (2차 패스)
+
+초기 Phase A 랜딩에서 얕았던 부분들이 아래와 같이 정밀화되었다:
+
+- **A1 심화** — `osty_gc_debug_unsafe_*` corruption injector 11종. fork 기반
+  하네스가 invariant별 네거티브 케이스를 실행하고, 각 에러 코드(−1…−11)가
+  정확히 매칭되는지 확인. `TestBundledRuntimeValidateHeapNegativeInvariants`.
+- **A2 심화** — `clock_gettime(CLOCK_MONOTONIC)` 기반 collection 타이밍.
+  `nanos_total` / `nanos_last` / `nanos_max`를 `osty_gc_stats`에 추가, 누적·
+  최악 사이클·마지막 사이클 관측. `TestBundledRuntimeCollectionTimingRecorded`.
+- **A3 심화** — `osty_gc_find_header`의 O(n) 선형 스캔을 open-addressing +
+  linear probing 해시 테이블로 교체 (SplitMix64 믹싱, load factor 0.75
+  유지, 초기 cap 128, tombstone 기반 삭제). deep-mark 테스트 28s → <1s.
+  capacity / count / tombstones / find_ops 관측.
+  `TestBundledRuntimeFindHeaderHashIndex`.
+- **A4 심화** — Phase 1 태그 swap을 넘어 `osty.rt.closure_env_alloc_v1`
+  전용 allocator + `osty_rt_closure_env_trace` 콜백을 런타임에 구현.
+  capture slot array를 직접 순회하는 self-describing 레이아웃
+  (`{ ptr fn, i64 capture_count, ptr captures[] }`). llvmgen
+  `emitFnValueEnv`가 dedicated 엔트리로 전환 — 현재는 capture_count=0이지만
+  Phase 4가 값만 바꿔끼우면 된다. 3개 캡처 보유한 env로 trace 경로 검증:
+  `TestBundledRuntimeClosureEnvTracesCaptures`.
+- **A5 심화** — E2E 테스트 `TestGenerateFromASTSafepointKindMixCallAndLoop`:
+  legacy 에미터가 lower한 IR을 정규식으로 파싱해 kind 분포를 복원,
+  CALL + LOOP 존재와 UNSPECIFIED 부재를 검증. MIR 측 ENTRY + LOOP는
+  기존 `TestGenerateFromMIREmitGCLoopSafepoint`가 literal serial id로 커버.
+- **A6 심화** — `safepointRootChunkSize` (default 4096) 기반 프레임 분할.
+  visible root 수가 청크를 넘으면 단일 poll이 여러 `safepoint_v1` 호출로
+  쪼개져, 각 `alloca ptr, i64 N`이 bounded 크기 유지. 테스트에서 청크를
+  3으로 낮추고 7개의 managed List를 가진 프레임을 lower하여 3/3/1 분할을
+  확인: `TestGenerateFromASTSafepointSplitsLargeFrames`. 런타임 abort
+  path는 fork 하네스로 exit code + stderr 메시지 검증:
+  `TestBundledRuntimeSafepointOverflowAborts`.
+
+Phase A의 열린 items는 없다. Phase B (세대 GC) 진입 준비 완료 — 세대 구현
+단계에서 §9.3 누적 카운터 + 타이밍 + §10.1 kind 분류를 즉시 활용 가능하고,
+§4.2 work queue는 concurrent marker가 재사용하며, §2.4 closure trace는
+Phase 4 capture 랜딩 시 capture_count만 채우면 된다.
+
+## 다음 단계
+
+Phase B (세대 GC) 개시 시 착수 순서: §1.1 header 확장 (age/forwarding
+bits) → §5.1-5.3 nursery/survivor/tenured → §3.5-3.6 card table + remembered
+set 소비 → §5.4-5.5 promotion + minor trigger → §9.1 pressure tier →
+§9.4 minor/full trace 구분.
 
 ## 유지 규칙
 

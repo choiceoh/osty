@@ -953,7 +953,7 @@ func (g *mirGen) emitGCEntry(fn *mir.Function) {
 	if len(g.gcRoots) == 0 {
 		// Still emit an entry safepoint so cancellation / GC polls
 		// fire even on pointer-free functions.
-		g.emitGCSafepoint()
+		g.emitGCSafepointKind(safepointKindEntry)
 		return
 	}
 	// Zero non-param managed slots before binding. Param slots
@@ -975,7 +975,7 @@ func (g *mirGen) emitGCEntry(fn *mir.Function) {
 		g.fnBuf.WriteString(")\n")
 	}
 	// Entry safepoint.
-	g.emitGCSafepoint()
+	g.emitGCSafepointKind(safepointKindEntry)
 }
 
 // emitGCReleaseRoots releases every bound root in reverse bind order.
@@ -993,18 +993,30 @@ func (g *mirGen) emitGCReleaseRoots() {
 	}
 }
 
-// emitGCSafepoint emits a single safepoint poll. The ABI matches the
-// legacy emitter: `safepoint_v1(i64 id, ptr roots, i64 nroots)` — we
-// pass null/0 because root_bind_v1 already registered the live set.
+// emitGCSafepoint emits a single safepoint poll at an unclassified site.
+// Kept for callers that predate the Phase A5 kind taxonomy; new sites
+// should reach for `emitGCSafepointKind` with a specific kind so the
+// runtime's per-kind counters stay meaningful.
 func (g *mirGen) emitGCSafepoint() {
+	g.emitGCSafepointKind(safepointKindUnspecified)
+}
+
+// emitGCSafepointKind emits a safepoint poll tagged with the given kind.
+// The kind is packed into the high byte of the id the runtime receives;
+// the low 56 bits hold the per-module serial (see encodeSafepointID in
+// the legacy emitter). The ABI remains `safepoint_v1(i64 id, ptr roots,
+// i64 nroots)` — roots stay null/0 because root_bind_v1 already
+// registered the live set.
+func (g *mirGen) emitGCSafepointKind(kind safepointKind) {
 	if !g.opts.EmitGC {
 		return
 	}
 	g.declareSafepoint()
-	id := g.nextSafepoint
+	serial := g.nextSafepoint
 	g.nextSafepoint++
+	id := encodeSafepointID(kind, serial)
 	g.fnBuf.WriteString("  call void @osty.gc.safepoint_v1(i64 ")
-	g.fnBuf.WriteString(strconv.Itoa(id))
+	g.fnBuf.WriteString(strconv.FormatInt(id, 10))
 	g.fnBuf.WriteString(", ptr null, i64 0)\n")
 }
 
@@ -2407,7 +2419,7 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 		// not need extra polls because the function already took
 		// one at entry.
 		if g.opts.EmitGC && x.Target <= g.curBlockID {
-			g.emitGCSafepoint()
+			g.emitGCSafepointKind(safepointKindLoop)
 		}
 		g.fnBuf.WriteString("  br label %")
 		g.fnBuf.WriteString(g.blockLabels[x.Target])
@@ -2417,7 +2429,7 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 		// covers `while cond { ... }` style loops where the cond
 		// block has a conditional branch back to its own body.
 		if g.opts.EmitGC && (x.Then <= g.curBlockID || x.Else <= g.curBlockID) {
-			g.emitGCSafepoint()
+			g.emitGCSafepointKind(safepointKindLoop)
 		}
 		cond, err := g.evalOperand(x.Cond, mir.TBool)
 		if err != nil {

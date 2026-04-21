@@ -1110,8 +1110,12 @@ func llvmClangLinkBinaryArgs(target string, objectPaths []string, binaryPath str
 		func() struct{} { args = append(args, objectPath); return struct{}{} }()
 	}
 	// `-pthread` pulls libpthread / libSystem threading symbols, needed
-	// by the bundled runtime's task / channel implementations.
-	func() struct{} { args = append(args, "-pthread"); return struct{}{} }()
+	// by the bundled runtime's POSIX task / channel implementations.
+	// Windows targets use Win32 primitives from kernel32 (default-linked)
+	// and must NOT be passed -pthread (clang-msvc rejects the flag).
+	if !llvmStrings.Contains(target, "windows") {
+		func() struct{} { args = append(args, "-pthread"); return struct{}{} }()
+	}
 	// Osty: examples/selfhost-core/llvmgen.osty:726:5
 	func() struct{} { args = append(args, "-o"); return struct{}{} }()
 	// Osty: examples/selfhost-core/llvmgen.osty:727:5
@@ -1152,7 +1156,7 @@ func llvmUnsupportedDiagnostic(kind string, detail string) *LlvmUnsupportedDiagn
 			target = "<unknown>"
 		}
 		// Osty: examples/selfhost-core/llvmgen.osty:756:9
-		return &LlvmUnsupportedDiagnostic{code: "LLVM001", kind: "foreign-ffi", message: fmt.Sprintf("Go FFI import %s is not supported by the self-hosted native backend", ostyToString(target)), hint: "rewrite the binding as `use runtime.cabi.<lib> { ... }` for extern C symbols, or `use runtime.<surface> { ... }` for an osty_rt_* runtime ABI helper (LANG_SPEC_v0.5 §12.8)"}
+		return &LlvmUnsupportedDiagnostic{code: "LLVM001", kind: "foreign-ffi", message: fmt.Sprintf("Go FFI import %s is not supported by the self-hosted native backend", ostyToString(target)), hint: "rewrite the binding as `use runtime.cabi.<lib>` with an item block for extern C symbols, or `use runtime.<surface>` with an item block for an osty_rt_* runtime ABI helper (LANG_SPEC_v0.5 §12.8)"}
 	}
 	// Osty: examples/selfhost-core/llvmgen.osty:763:5
 	if kind == "runtime-ffi" {

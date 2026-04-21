@@ -2,12 +2,15 @@
  * pthread_mutexattr_settype, sched_yield, PTHREAD_MUTEX_RECURSIVE)
  * across glibc/musl/Darwin regardless of compiler default. 2008
  * supersedes the earlier 199309L level previously used for nanosleep
- * alone. */
+ * alone. Windows skips the POSIX surface entirely and uses the Win32
+ * synchronization primitives below. */
+#if !defined(_WIN32)
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE 700
+#endif
 #endif
 
 #include <stdbool.h>
@@ -17,8 +20,235 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <pthread.h>
-#include <sched.h>
+
+/* ============================================================
+ * Platform threading abstraction
+ *
+ * The runtime uses a narrow set of concurrency primitives (threads,
+ * mutexes, condition variables, one-time init, thread-local storage,
+ * a monotonic clock, sleep, yield). POSIX targets bind these to
+ * pthread / POSIX 2008; Windows targets bind them to Win32 directly
+ * (SRWLOCK / CONDITION_VARIABLE / CRITICAL_SECTION / INIT_ONCE /
+ * QueryPerformanceCounter / Sleep / SwitchToThread).
+ *
+ * Thread bodies use the POSIX-style `void *(*)(void*)` signature in
+ * both branches; the Win32 branch wraps that into an __stdcall
+ * trampoline around _beginthreadex. The runtime never invokes
+ * pthread_cancel / pthread_exit, so there is no cancellation surface
+ * to emulate — workers always return normally through the body.
+ * ============================================================ */
+
+#if defined(_WIN32)
+#  define OSTY_RT_PLATFORM_WIN32 1
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#  include <process.h>
+#  define OSTY_RT_TLS __declspec(thread)
+typedef HANDLE             osty_rt_thread_t;
+typedef SRWLOCK            osty_rt_mu_t;
+typedef CRITICAL_SECTION   osty_rt_rmu_t;
+typedef CONDITION_VARIABLE osty_rt_cond_t;
+typedef INIT_ONCE          osty_rt_once_t;
+#  define OSTY_RT_ONCE_INIT INIT_ONCE_STATIC_INIT
+#else
+#  define OSTY_RT_PLATFORM_POSIX 1
+#  include <pthread.h>
+#  include <sched.h>
+#  if defined(__STDC_NO_THREADS__) || defined(__APPLE__)
+#    define OSTY_RT_TLS __thread
+#  else
+#    define OSTY_RT_TLS _Thread_local
+#  endif
+typedef pthread_t       osty_rt_thread_t;
+typedef pthread_mutex_t osty_rt_mu_t;
+typedef pthread_mutex_t osty_rt_rmu_t;
+typedef pthread_cond_t  osty_rt_cond_t;
+typedef pthread_once_t  osty_rt_once_t;
+#  define OSTY_RT_ONCE_INIT PTHREAD_ONCE_INIT
+#endif
+
+/* ---- Thread start / join (POSIX-style signature in both branches). */
+
+#if defined(OSTY_RT_PLATFORM_WIN32)
+typedef struct osty_rt_win_thread_ctx {
+    void *(*fn)(void *);
+    void *arg;
+} osty_rt_win_thread_ctx;
+
+static unsigned __stdcall osty_rt_win_thread_entry(void *raw) {
+    osty_rt_win_thread_ctx ctx = *(osty_rt_win_thread_ctx *)raw;
+    free(raw);
+    /* Return value is discarded — osty task handles propagate the body
+     * result through the GC-managed handle, not via thread return. */
+    ctx.fn(ctx.arg);
+    return 0;
+}
+
+static int osty_rt_thread_start(osty_rt_thread_t *out,
+                                void *(*fn)(void *), void *arg) {
+    osty_rt_win_thread_ctx *ctx =
+        (osty_rt_win_thread_ctx *)malloc(sizeof(*ctx));
+    if (ctx == NULL) {
+        return -1;
+    }
+    ctx->fn = fn;
+    ctx->arg = arg;
+    uintptr_t h = _beginthreadex(NULL, 0, osty_rt_win_thread_entry, ctx, 0,
+                                 NULL);
+    if (h == 0) {
+        free(ctx);
+        return -1;
+    }
+    *out = (HANDLE)h;
+    return 0;
+}
+
+static int osty_rt_thread_join(osty_rt_thread_t t, void **retval) {
+    if (WaitForSingleObject(t, INFINITE) != WAIT_OBJECT_0) {
+        return -1;
+    }
+    if (retval != NULL) {
+        *retval = NULL;
+    }
+    CloseHandle(t);
+    return 0;
+}
+#else
+static inline int osty_rt_thread_start(osty_rt_thread_t *out,
+                                       void *(*fn)(void *), void *arg) {
+    return pthread_create(out, NULL, fn, arg);
+}
+
+static inline int osty_rt_thread_join(osty_rt_thread_t t, void **retval) {
+    return pthread_join(t, retval);
+}
+#endif
+
+/* ---- Non-recursive mutex + condition variable. */
+
+#if defined(OSTY_RT_PLATFORM_WIN32)
+static inline int osty_rt_mu_init(osty_rt_mu_t *m)       { InitializeSRWLock(m); return 0; }
+static inline void osty_rt_mu_destroy(osty_rt_mu_t *m)   { (void)m; }
+static inline void osty_rt_mu_lock(osty_rt_mu_t *m)      { AcquireSRWLockExclusive(m); }
+static inline void osty_rt_mu_unlock(osty_rt_mu_t *m)    { ReleaseSRWLockExclusive(m); }
+static inline int osty_rt_cond_init(osty_rt_cond_t *c)   { InitializeConditionVariable(c); return 0; }
+static inline void osty_rt_cond_destroy(osty_rt_cond_t *c)   { (void)c; }
+static inline void osty_rt_cond_wait(osty_rt_cond_t *c, osty_rt_mu_t *m) {
+    SleepConditionVariableSRW(c, m, INFINITE, 0);
+}
+static inline void osty_rt_cond_signal(osty_rt_cond_t *c)    { WakeConditionVariable(c); }
+static inline void osty_rt_cond_broadcast(osty_rt_cond_t *c) { WakeAllConditionVariable(c); }
+#else
+static inline int osty_rt_mu_init(osty_rt_mu_t *m)       { return pthread_mutex_init(m, NULL); }
+static inline void osty_rt_mu_destroy(osty_rt_mu_t *m)   { pthread_mutex_destroy(m); }
+static inline void osty_rt_mu_lock(osty_rt_mu_t *m)      { pthread_mutex_lock(m); }
+static inline void osty_rt_mu_unlock(osty_rt_mu_t *m)    { pthread_mutex_unlock(m); }
+static inline int osty_rt_cond_init(osty_rt_cond_t *c)   { return pthread_cond_init(c, NULL); }
+static inline void osty_rt_cond_destroy(osty_rt_cond_t *c)   { pthread_cond_destroy(c); }
+static inline void osty_rt_cond_wait(osty_rt_cond_t *c, osty_rt_mu_t *m) {
+    pthread_cond_wait(c, m);
+}
+static inline void osty_rt_cond_signal(osty_rt_cond_t *c)    { pthread_cond_signal(c); }
+static inline void osty_rt_cond_broadcast(osty_rt_cond_t *c) { pthread_cond_broadcast(c); }
+#endif
+
+/* ---- Recursive mutex (GC lock). */
+
+#if defined(OSTY_RT_PLATFORM_WIN32)
+static inline int osty_rt_rmu_init(osty_rt_rmu_t *m)     { InitializeCriticalSection(m); return 0; }
+static inline void osty_rt_rmu_destroy(osty_rt_rmu_t *m) { DeleteCriticalSection(m); }
+static inline void osty_rt_rmu_lock(osty_rt_rmu_t *m)    { EnterCriticalSection(m); }
+static inline void osty_rt_rmu_unlock(osty_rt_rmu_t *m)  { LeaveCriticalSection(m); }
+#else
+static inline int osty_rt_rmu_init(osty_rt_rmu_t *m) {
+    pthread_mutexattr_t attr;
+    int rc = pthread_mutexattr_init(&attr);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    if (rc != 0) {
+        pthread_mutexattr_destroy(&attr);
+        return rc;
+    }
+    rc = pthread_mutex_init(m, &attr);
+    pthread_mutexattr_destroy(&attr);
+    return rc;
+}
+static inline void osty_rt_rmu_destroy(osty_rt_rmu_t *m) { pthread_mutex_destroy(m); }
+static inline void osty_rt_rmu_lock(osty_rt_rmu_t *m)    { pthread_mutex_lock(m); }
+static inline void osty_rt_rmu_unlock(osty_rt_rmu_t *m)  { pthread_mutex_unlock(m); }
+#endif
+
+/* ---- One-time initialization. */
+
+#if defined(OSTY_RT_PLATFORM_WIN32)
+static BOOL CALLBACK osty_rt_once_trampoline(PINIT_ONCE once, PVOID param,
+                                             PVOID *ctx) {
+    (void)once;
+    (void)ctx;
+    void (*fn)(void) = (void (*)(void))(uintptr_t)param;
+    fn();
+    return TRUE;
+}
+static inline void osty_rt_once(osty_rt_once_t *once, void (*init)(void)) {
+    InitOnceExecuteOnce(once, osty_rt_once_trampoline,
+                        (PVOID)(uintptr_t)init, NULL);
+}
+#else
+static inline void osty_rt_once(osty_rt_once_t *once, void (*init)(void)) {
+    pthread_once(once, init);
+}
+#endif
+
+/* ---- Monotonic clock / sleep / yield. */
+
+#if defined(OSTY_RT_PLATFORM_WIN32)
+static uint64_t osty_rt_monotonic_ns(void) {
+    static LARGE_INTEGER freq = {0};
+    LARGE_INTEGER now;
+    if (freq.QuadPart == 0) {
+        QueryPerformanceFrequency(&freq);
+    }
+    QueryPerformanceCounter(&now);
+    uint64_t hz = (uint64_t)freq.QuadPart;
+    uint64_t ticks = (uint64_t)now.QuadPart;
+    uint64_t sec = ticks / hz;
+    uint64_t rem = ticks % hz;
+    return sec * 1000000000ULL + (rem * 1000000000ULL) / hz;
+}
+static void osty_rt_sleep_ns(uint64_t ns) {
+    if (ns == 0) {
+        return;
+    }
+    /* Sleep granularity is milliseconds; round up so short naps still
+     * yield the CPU at least once. */
+    DWORD ms = (DWORD)((ns + 999999ULL) / 1000000ULL);
+    if (ms == 0) {
+        ms = 1;
+    }
+    Sleep(ms);
+}
+static inline void osty_rt_plat_yield(void) { SwitchToThread(); }
+#else
+static inline uint64_t osty_rt_monotonic_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+static inline void osty_rt_sleep_ns(uint64_t ns) {
+    struct timespec req;
+    req.tv_sec = (time_t)(ns / 1000000000ULL);
+    req.tv_nsec = (long)(ns % 1000000000ULL);
+    struct timespec rem;
+    while (nanosleep(&req, &rem) == -1) {
+        req = rem;
+    }
+}
+static inline void osty_rt_plat_yield(void) { sched_yield(); }
+#endif
 
 /* Active LLVM/native GC runtime path. See ../../../../RUNTIME_GC.md.
  *
@@ -70,6 +300,14 @@ typedef struct osty_rt_map {
     osty_rt_trace_slot_fn value_trace;
     unsigned char *keys;
     unsigned char *values;
+    // Per-map recursive mutex. Guarantees that all public map ops are
+    // mutually exclusive on a single instance so concurrent mutation
+    // can't realloc the slot arrays mid-read, drop the len mid-walk,
+    // or interleave an insert's memmove. Recursive so that `update`
+    // callbacks that touch the same map from within the lock don't
+    // self-deadlock.
+    pthread_mutex_t mu;
+    int mu_init;
 } osty_rt_map;
 
 typedef struct osty_rt_set {
@@ -97,7 +335,33 @@ enum {
     OSTY_GC_KIND_MAP = 1026,
     OSTY_GC_KIND_SET = 1027,
     OSTY_GC_KIND_BYTES = 1028,
+    /* Phase A4 (RUNTIME_GC_DELTA §2.4). Closure environment struct with
+     * a self-describing capture array. The runtime registers a trace
+     * callback (`osty_rt_closure_env_trace`) that walks the capture
+     * slots so any managed pointer captured by a closure stays
+     * reachable across GC cycles. Layout below in `osty_rt_closure_env`.
+     * Allocation is dedicated: `osty.rt.closure_env_alloc_v1` rather
+     * than the generic `osty.gc.alloc_v1`, so the trace is installed
+     * at construction and not as a post-alloc mutation. Phase 1 still
+     * emits envs with `capture_count = 0`, exercising the allocation
+     * ABI while captures themselves are lowered in Phase 4. */
+    OSTY_GC_KIND_CLOSURE_ENV = 1029,
 };
+
+/* Closure environment payload. The thunk ABI is preserved — the LLVM
+ * call site still does `load ptr, ptr %env` — because `fn_ptr` stays
+ * at offset 0. `capture_count` and `captures[]` follow so the trace
+ * callback can iterate without any side metadata.
+ *
+ * Capture slots hold `void *`, always through managed-pointer
+ * semantics. Non-pointer captures (scalar values boxed by the Osty
+ * frontend) would still go here as tagged managed values; the
+ * frontend is responsible for boxing. */
+typedef struct osty_rt_closure_env {
+    void *fn_ptr;
+    int64_t capture_count;
+    void *captures[];
+} osty_rt_closure_env;
 
 enum {
     OSTY_RT_ABI_I64 = 1,
@@ -124,6 +388,129 @@ static int64_t osty_gc_post_write_count = 0;
 static int64_t osty_gc_post_write_managed_count = 0;
 static int64_t osty_gc_load_count = 0;
 static int64_t osty_gc_load_managed_count = 0;
+
+/* Phase A2 cumulative counters (RUNTIME_GC_DELTA §9.3).
+ *
+ * `allocated_since_collect` only tracks pressure between collections; once
+ * the collector runs it resets to zero. These cumulative totals preserve
+ * the full lifetime signal so tests and `osty_gc_debug_stats` can observe
+ * allocation throughput and sweep pressure across cycles. */
+static int64_t osty_gc_allocated_bytes_total = 0;
+static int64_t osty_gc_swept_count_total = 0;
+static int64_t osty_gc_swept_bytes_total = 0;
+
+/* Phase A2 collection timing (RUNTIME_GC_DELTA §9.3 depth follow-up).
+ *
+ * Measured via `clock_gettime(CLOCK_MONOTONIC)` around every
+ * `osty_gc_collect_now_with_stack_roots` body. Nanosecond resolution;
+ * callers that want ms convert at the edge. `_max` tracks the slowest
+ * single cycle so generational triggers can be tuned against the tail,
+ * not just the mean. `_last` is the most recent cycle's duration.
+ */
+static int64_t osty_gc_collection_nanos_total = 0;
+static int64_t osty_gc_collection_nanos_last = 0;
+static int64_t osty_gc_collection_nanos_max = 0;
+
+/* Phase A3 payload→header hash index (RUNTIME_GC_DELTA §4.2 depth
+ * follow-up). Replaces the O(n) linked-list scan in
+ * `osty_gc_find_header`. Open addressing with linear probing and
+ * tombstones; rehashed on allocation when the combined load
+ * (count + tombstones) crosses 75% of capacity. Keyed by payload
+ * pointer — which is stable for the lifetime of the allocation because
+ * the collector does not relocate yet (compaction lands in Phase D).
+ *
+ * `OSTY_GC_INDEX_TOMBSTONE` is a non-NULL marker distinct from any
+ * real payload pointer so probes can skip erased slots without
+ * treating them as empty.
+ */
+typedef struct osty_gc_index_slot {
+    void *payload;
+    osty_gc_header *header;
+} osty_gc_index_slot;
+
+#define OSTY_GC_INDEX_TOMBSTONE ((void *)(uintptr_t)1)
+
+static osty_gc_index_slot *osty_gc_index_slots = NULL;
+static int64_t osty_gc_index_capacity = 0;
+static int64_t osty_gc_index_count = 0;
+static int64_t osty_gc_index_tombstones = 0;
+static int64_t osty_gc_index_find_ops_total = 0;
+
+/* Phase A6 stackmap overflow guard (RUNTIME_GC_DELTA §10.2).
+ *
+ * The LLVM emitter materialises one `alloca ptr, i64 N` per safepoint,
+ * with N = number of visible managed roots in the current frame. Tight
+ * frames are fine; runaway generated code (e.g. a generator that lifts
+ * every sub-expression to a frame slot) can push N high enough that the
+ * alloca blows the C thread stack well before the GC ever looks at the
+ * slots.
+ *
+ * The runtime can't shrink the LLVM-side alloca retroactively, so this
+ * guard is a crash early / crash loud backstop: any safepoint that
+ * reports more roots than `OSTY_GC_SAFEPOINT_MAX_ROOTS` aborts with a
+ * clear message. Legitimate frames are nowhere near this cap today —
+ * `visibleSafepointRoots()` typically yields a single-digit count — so
+ * tripping this is a bug either in lowering or in a test that crafts
+ * synthetic input. The upper bound can be raised as the compiler grows
+ * larger functions, but the contract that "a safepoint gets a fixed,
+ * bounded slot array" should survive.
+ *
+ * `osty_gc_safepoint_max_roots_seen` is a high-water mark exposed via
+ * `osty_gc_debug_safepoint_max_roots_seen` so tuning passes can tell
+ * how close real programs get to the cap.
+ */
+#define OSTY_GC_SAFEPOINT_MAX_ROOTS ((int64_t)65536)
+static int64_t osty_gc_safepoint_max_roots_seen = 0;
+
+/* Phase A5 safepoint kind taxonomy (RUNTIME_GC_DELTA §10.1).
+ *
+ * Every emitted safepoint poll now encodes a "kind" in the high bits of
+ * the id parameter passed to `osty_gc_safepoint_v1`. The low 56 bits hold
+ * the per-module serial the LLVM emitter has always produced; the top 8
+ * bits classify the *why*: function entry, pre-call, loop back-edge, etc.
+ *
+ * Today the collector does not behave differently across kinds (it is a
+ * single-kind STW collector), but recording the classification gives us:
+ *
+ *   - debuggability: per-kind counters exposed via `osty_gc_debug_*`
+ *   - Phase B/C leverage: tail-biased triggers (e.g. never poll inside
+ *     tight arithmetic loops by muting LOOP kinds under stress)
+ *   - Conformance tests: harnesses can assert on the kind mix emitted
+ *     from a given source shape.
+ *
+ * Kinds are uint8. `UNSPECIFIED` stays the default for legacy callers
+ * that have not migrated yet; new call sites should always supply a
+ * specific kind.
+ */
+enum {
+    OSTY_GC_SAFEPOINT_KIND_UNSPECIFIED = 0,
+    OSTY_GC_SAFEPOINT_KIND_ENTRY = 1,
+    OSTY_GC_SAFEPOINT_KIND_CALL = 2,
+    OSTY_GC_SAFEPOINT_KIND_LOOP = 3,
+    OSTY_GC_SAFEPOINT_KIND_ALLOC = 4,
+    OSTY_GC_SAFEPOINT_KIND_YIELD = 5,
+    OSTY_GC_SAFEPOINT_KIND_COUNT = 6,
+};
+static int64_t osty_gc_safepoint_counts_by_kind[OSTY_GC_SAFEPOINT_KIND_COUNT];
+
+/* Phase A3 mark work queue (RUNTIME_GC_DELTA §4.2).
+ *
+ * Replaces the previous recursive trace path. `osty_gc_mark_header` no longer
+ * recurses; it flips `marked` (acting as the grey colour) and pushes the
+ * header onto this stack. `osty_gc_mark_drain` pops entries and invokes each
+ * header's trace callback, which in turn calls back into `osty_gc_mark_*`
+ * for children — they simply re-enqueue, so the C call stack stays O(1)
+ * regardless of object graph depth.
+ *
+ * The stack is static-global and reused across collections. Capacity grows
+ * monotonically so steady-state workloads avoid realloc churn. `max_depth`
+ * is exposed via `osty_gc_debug_mark_stack_max_depth` for Phase A1 heap
+ * validation and future Phase B tuning.
+ */
+static osty_gc_header **osty_gc_mark_stack = NULL;
+static int64_t osty_gc_mark_stack_count = 0;
+static int64_t osty_gc_mark_stack_cap = 0;
+static int64_t osty_gc_mark_stack_max_depth = 0;
 
 /* Global root slots. Each entry is the address of a storage location that may
  * hold a managed pointer (i.e. `void **`). At mark time the slot is
@@ -184,31 +571,23 @@ static void osty_rt_abort(const char *message) {
  * within allocate_managed) can re-enter write-barriers and root scans
  * without deadlocking. Initialized on first use so no constructor is
  * required. */
-static pthread_once_t osty_gc_lock_once = PTHREAD_ONCE_INIT;
-static pthread_mutex_t osty_gc_lock;
+static osty_rt_once_t osty_gc_lock_once = OSTY_RT_ONCE_INIT;
+static osty_rt_rmu_t osty_gc_lock;
 static int64_t osty_concurrent_workers = 0;
 
 static void osty_gc_lock_init(void) {
-    pthread_mutexattr_t attr;
-    if (pthread_mutexattr_init(&attr) != 0) {
-        osty_rt_abort("gc lock: mutexattr_init failed");
+    if (osty_rt_rmu_init(&osty_gc_lock) != 0) {
+        osty_rt_abort("gc lock: init failed");
     }
-    if (pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) != 0) {
-        osty_rt_abort("gc lock: mutexattr_settype failed");
-    }
-    if (pthread_mutex_init(&osty_gc_lock, &attr) != 0) {
-        osty_rt_abort("gc lock: mutex_init failed");
-    }
-    pthread_mutexattr_destroy(&attr);
 }
 
 static void osty_gc_acquire(void) {
-    pthread_once(&osty_gc_lock_once, osty_gc_lock_init);
-    pthread_mutex_lock(&osty_gc_lock);
+    osty_rt_once(&osty_gc_lock_once, osty_gc_lock_init);
+    osty_rt_rmu_lock(&osty_gc_lock);
 }
 
 static void osty_gc_release(void) {
-    pthread_mutex_unlock(&osty_gc_lock);
+    osty_rt_rmu_unlock(&osty_gc_lock);
 }
 
 static void osty_sched_workers_inc(void) {
@@ -227,6 +606,109 @@ static void osty_sched_workers_dec(void) {
     osty_gc_release();
 }
 
+/* SplitMix64-style mixing for pointer hashing. Pointers on x86_64 / ARM64
+ * have alignment-induced low-bit correlation (headers are 16-byte aligned
+ * thanks to `calloc`), so naive `& mask` would cluster. This finaliser
+ * makes the probe sequence look close to uniform random. */
+static size_t osty_gc_index_hash(void *payload) {
+    uint64_t h = (uint64_t)(uintptr_t)payload;
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
+    return (size_t)h;
+}
+
+static void osty_gc_index_insert(void *payload, osty_gc_header *header);
+
+static void osty_gc_index_grow(int64_t new_capacity) {
+    osty_gc_index_slot *old_slots = osty_gc_index_slots;
+    int64_t old_cap = osty_gc_index_capacity;
+    int64_t i;
+    osty_gc_index_slots = (osty_gc_index_slot *)calloc((size_t)new_capacity,
+                                                       sizeof(osty_gc_index_slot));
+    if (osty_gc_index_slots == NULL) {
+        osty_rt_abort("out of memory (gc index)");
+    }
+    osty_gc_index_capacity = new_capacity;
+    osty_gc_index_count = 0;
+    osty_gc_index_tombstones = 0;
+    if (old_slots != NULL) {
+        for (i = 0; i < old_cap; i++) {
+            void *p = old_slots[i].payload;
+            if (p != NULL && p != OSTY_GC_INDEX_TOMBSTONE) {
+                osty_gc_index_insert(p, old_slots[i].header);
+            }
+        }
+        free(old_slots);
+    }
+}
+
+static void osty_gc_index_insert(void *payload, osty_gc_header *header) {
+    size_t mask;
+    size_t idx;
+    /* Keep load factor ≤ 0.75 including tombstones so probes stay
+     * short. Capacity is always a power of two — start at 128. */
+    if (osty_gc_index_slots == NULL ||
+        (osty_gc_index_count + osty_gc_index_tombstones + 1) * 4 >=
+            osty_gc_index_capacity * 3) {
+        int64_t new_cap = osty_gc_index_capacity == 0 ? 128 : osty_gc_index_capacity * 2;
+        osty_gc_index_grow(new_cap);
+    }
+    mask = (size_t)(osty_gc_index_capacity - 1);
+    idx = osty_gc_index_hash(payload) & mask;
+    while (osty_gc_index_slots[idx].payload != NULL &&
+           osty_gc_index_slots[idx].payload != OSTY_GC_INDEX_TOMBSTONE) {
+        idx = (idx + 1) & mask;
+    }
+    if (osty_gc_index_slots[idx].payload == OSTY_GC_INDEX_TOMBSTONE) {
+        osty_gc_index_tombstones -= 1;
+    }
+    osty_gc_index_slots[idx].payload = payload;
+    osty_gc_index_slots[idx].header = header;
+    osty_gc_index_count += 1;
+}
+
+static osty_gc_header *osty_gc_index_lookup(void *payload) {
+    size_t mask;
+    size_t idx;
+    if (osty_gc_index_slots == NULL || payload == NULL ||
+        payload == OSTY_GC_INDEX_TOMBSTONE) {
+        return NULL;
+    }
+    mask = (size_t)(osty_gc_index_capacity - 1);
+    idx = osty_gc_index_hash(payload) & mask;
+    while (osty_gc_index_slots[idx].payload != NULL) {
+        if (osty_gc_index_slots[idx].payload == payload) {
+            return osty_gc_index_slots[idx].header;
+        }
+        idx = (idx + 1) & mask;
+    }
+    return NULL;
+}
+
+static void osty_gc_index_remove(void *payload) {
+    size_t mask;
+    size_t idx;
+    if (osty_gc_index_slots == NULL || payload == NULL ||
+        payload == OSTY_GC_INDEX_TOMBSTONE) {
+        return;
+    }
+    mask = (size_t)(osty_gc_index_capacity - 1);
+    idx = osty_gc_index_hash(payload) & mask;
+    while (osty_gc_index_slots[idx].payload != NULL) {
+        if (osty_gc_index_slots[idx].payload == payload) {
+            osty_gc_index_slots[idx].payload = OSTY_GC_INDEX_TOMBSTONE;
+            osty_gc_index_slots[idx].header = NULL;
+            osty_gc_index_count -= 1;
+            osty_gc_index_tombstones += 1;
+            return;
+        }
+        idx = (idx + 1) & mask;
+    }
+}
+
 static void osty_gc_link(osty_gc_header *header) {
     header->next = osty_gc_objects;
     header->prev = NULL;
@@ -236,6 +718,7 @@ static void osty_gc_link(osty_gc_header *header) {
     osty_gc_objects = header;
     osty_gc_live_count += 1;
     osty_gc_live_bytes += header->byte_size;
+    osty_gc_index_insert(header->payload, header);
 }
 
 static void osty_gc_unlink(osty_gc_header *header) {
@@ -249,6 +732,7 @@ static void osty_gc_unlink(osty_gc_header *header) {
     }
     osty_gc_live_count -= 1;
     osty_gc_live_bytes -= header->byte_size;
+    osty_gc_index_remove(header->payload);
 }
 
 static int64_t osty_gc_pressure_limit_now(void) {
@@ -279,6 +763,7 @@ static void osty_gc_note_allocation(size_t payload_size) {
         osty_rt_abort("GC payload size overflow");
     }
     osty_gc_allocated_since_collect += (int64_t)payload_size;
+    osty_gc_allocated_bytes_total += (int64_t)payload_size;
     if (pressure_limit <= 0) {
         return;
     }
@@ -288,14 +773,12 @@ static void osty_gc_note_allocation(size_t payload_size) {
 }
 
 static osty_gc_header *osty_gc_find_header(void *payload) {
-    osty_gc_header *header = osty_gc_objects;
-    while (header != NULL) {
-        if (header->payload == payload) {
-            return header;
-        }
-        header = header->next;
-    }
-    return NULL;
+    /* Phase A3 depth: O(1) expected via hash index. The linked list
+     * is now purely for iteration order (mark seeding, sweep, heap
+     * validation) — all "is this a managed pointer" queries go
+     * through the hash. */
+    osty_gc_index_find_ops_total += 1;
+    return osty_gc_index_lookup(payload);
 }
 
 static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, const char *site, osty_gc_trace_fn trace, osty_gc_destroy_fn destroy) {
@@ -448,6 +931,10 @@ static void osty_rt_map_destroy(void *payload) {
     if (map != NULL) {
         free(map->keys);
         free(map->values);
+        if (map->mu_init) {
+            pthread_mutex_destroy(&map->mu);
+            map->mu_init = 0;
+        }
     }
 }
 
@@ -472,18 +959,51 @@ static void osty_rt_set_destroy(void *payload) {
     }
 }
 
+static void osty_gc_mark_stack_push(osty_gc_header *header) {
+    if (osty_gc_mark_stack_count == osty_gc_mark_stack_cap) {
+        int64_t new_cap;
+        osty_gc_header **new_buf;
+        new_cap = osty_gc_mark_stack_cap == 0 ? 64 : osty_gc_mark_stack_cap * 2;
+        new_buf = (osty_gc_header **)realloc(
+            osty_gc_mark_stack, (size_t)new_cap * sizeof(osty_gc_header *));
+        if (new_buf == NULL) {
+            osty_rt_abort("out of memory (mark stack)");
+        }
+        osty_gc_mark_stack = new_buf;
+        osty_gc_mark_stack_cap = new_cap;
+    }
+    osty_gc_mark_stack[osty_gc_mark_stack_count++] = header;
+    if (osty_gc_mark_stack_count > osty_gc_mark_stack_max_depth) {
+        osty_gc_mark_stack_max_depth = osty_gc_mark_stack_count;
+    }
+}
+
 static void osty_gc_mark_header(osty_gc_header *header) {
+    /* Enqueue only — the actual trace happens in `osty_gc_mark_drain`.
+     * Setting `marked` before pushing prevents duplicate entries when the
+     * same header is reached via multiple edges (the second call short
+     * circuits on the `marked` check). */
     if (header == NULL || header->marked) {
         return;
     }
     header->marked = true;
-    if (header->trace != NULL) {
-        header->trace(header->payload);
-    }
+    osty_gc_mark_stack_push(header);
 }
 
 static void osty_gc_mark_payload(void *payload) {
     osty_gc_mark_header(osty_gc_find_header(payload));
+}
+
+static void osty_gc_mark_drain(void) {
+    while (osty_gc_mark_stack_count > 0) {
+        osty_gc_header *header = osty_gc_mark_stack[--osty_gc_mark_stack_count];
+        if (header->trace != NULL) {
+            /* Trace callbacks re-enter `osty_gc_mark_*` for children, which
+             * just push more work onto this stack — the C call stack stays
+             * bounded regardless of object graph depth. */
+            header->trace(header->payload);
+        }
+    }
 }
 
 static void osty_gc_mark_root_slot(void *slot_addr) {
@@ -499,15 +1019,30 @@ static void osty_gc_mark_root_slot(void *slot_addr) {
     osty_gc_mark_payload(payload);
 }
 
+/* Phase A2 depth: monotonic timing helper. Falls back to 0 on systems
+ * where `clock_gettime` is unavailable — callers must treat zero as
+ * "no measurement" (still strictly monotonic inside a single run). */
+static int64_t osty_gc_now_nanos(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+}
+
 static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
-    osty_gc_header *header = osty_gc_objects;
+    osty_gc_header *header;
     osty_gc_header *next;
     int64_t i;
+    int64_t t_start;
+    int64_t t_end;
 
-    while (header != NULL) {
-        header->marked = false;
-        header = header->next;
-    }
+    /* Entry invariant: every header has `marked == false` (sweep clears
+     * the colour on its way out, so the next cycle does not need a
+     * dedicated pre-pass). */
+    t_start = osty_gc_now_nanos();
+
+    /* 1. Seed the work queue from pinned roots (`root_bind_v1` holders). */
     header = osty_gc_objects;
     while (header != NULL) {
         if (header->root_count > 0) {
@@ -515,21 +1050,33 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
         }
         header = header->next;
     }
+    /* 2. Seed from the current safepoint's stack-slot descriptors. */
     for (i = 0; i < root_slot_count; i++) {
         osty_gc_mark_root_slot((void *)root_slots[i]);
     }
+    /* 3. Seed from registered global slots (`global_root_register_v1`). */
     for (i = 0; i < osty_gc_global_root_count; i++) {
         osty_gc_mark_root_slot(osty_gc_global_root_slots[i]);
     }
+    /* 4. Drain the work queue iteratively — bounded C stack regardless of
+     *    object graph depth. Replaces prior recursive trace. */
+    osty_gc_mark_drain();
+    /* 5. Sweep unreachable objects and clear the colour on survivors so
+     *    the post-collection heap satisfies the "no stale marks" invariant
+     *    that Phase A1 `osty_gc_debug_validate_heap` relies on. */
     header = osty_gc_objects;
     while (header != NULL) {
         next = header->next;
         if (!header->marked) {
+            osty_gc_swept_count_total += 1;
+            osty_gc_swept_bytes_total += header->byte_size;
             if (header->destroy != NULL) {
                 header->destroy(header->payload);
             }
             osty_gc_unlink(header);
             free(header);
+        } else {
+            header->marked = false;
         }
         header = next;
     }
@@ -537,6 +1084,16 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
     osty_gc_allocated_since_collect = 0;
     osty_gc_collection_requested = false;
     osty_gc_barrier_logs_clear();
+
+    t_end = osty_gc_now_nanos();
+    if (t_start != 0 && t_end >= t_start) {
+        int64_t elapsed = t_end - t_start;
+        osty_gc_collection_nanos_last = elapsed;
+        osty_gc_collection_nanos_total += elapsed;
+        if (elapsed > osty_gc_collection_nanos_max) {
+            osty_gc_collection_nanos_max = elapsed;
+        }
+    }
 }
 
 static void osty_gc_collect_now(void) {
@@ -955,6 +1512,83 @@ void *osty_rt_list_sorted_string(void *raw_list) {
     }
     qsort(osty_rt_list_cast(out)->data, (size_t)osty_rt_list_cast(out)->len, sizeof(void *), osty_rt_compare_string_ascending);
     return out;
+}
+
+// osty_rt_list_slice returns a new List<T> containing elements at
+// indices [start, end) of src. Bounds are saturating — negative start
+// clamps to 0, end past len clamps to len, end < start yields an empty
+// result. This matches the String.slice semantics (s[a..b]).
+void *osty_rt_list_slice(void *raw_list, int64_t start, int64_t end) {
+    osty_rt_list *src = osty_rt_list_cast(raw_list);
+    int64_t len = src->len;
+    int64_t count;
+    void *out_raw;
+    osty_rt_list *out;
+
+    if (start < 0) {
+        start = 0;
+    }
+    if (end > len) {
+        end = len;
+    }
+    if (end < start) {
+        end = start;
+    }
+    count = end - start;
+
+    out_raw = osty_rt_list_new();
+    out = osty_rt_list_cast(out_raw);
+
+    // Propagate layout even for empty slices so downstream len/push/get
+    // calls see the same element ABI as the source list.
+    if (src->elem_size != 0) {
+        osty_rt_list_ensure_layout(out, src->elem_size, src->trace_elem);
+        if (src->gc_offset_count > 0) {
+            osty_rt_list_ensure_gc_offsets(out, src->gc_offsets, src->gc_offset_count);
+        }
+    }
+
+    if (count == 0) {
+        return out_raw;
+    }
+
+    osty_rt_list_reserve(out, count);
+    memcpy(out->data,
+           src->data + (size_t)start * src->elem_size,
+           (size_t)count * src->elem_size);
+    out->len = count;
+
+    // Emit write barriers for each embedded pointer we copied in, so
+    // incremental / generational GC tracks the new list correctly.
+    if (out->elem_size == sizeof(void *) && src->trace_elem != NULL) {
+        int64_t i;
+        for (i = 0; i < count; i++) {
+            void *child = NULL;
+            memcpy(&child,
+                   out->data + (size_t)i * out->elem_size,
+                   sizeof(child));
+            if (child != NULL) {
+                osty_gc_post_write_v1(out_raw, child, OSTY_GC_KIND_LIST);
+            }
+        }
+    } else if (out->gc_offset_count > 0) {
+        int64_t i;
+        int64_t j;
+        for (i = 0; i < count; i++) {
+            unsigned char *elem = out->data + (size_t)i * out->elem_size;
+            for (j = 0; j < out->gc_offset_count; j++) {
+                void *child = NULL;
+                memcpy(&child,
+                       elem + (size_t)out->gc_offsets[j],
+                       sizeof(child));
+                if (child != NULL) {
+                    osty_gc_post_write_v1(out_raw, child, OSTY_GC_KIND_LIST);
+                }
+            }
+        }
+    }
+
+    return out_raw;
 }
 
 bool osty_rt_strings_Equal(const char *left, const char *right) {
@@ -1659,7 +2293,37 @@ void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, 
     map->value_kind = value_kind;
     map->value_size = (size_t)value_size;
     map->value_trace = value_trace;
+    {
+        pthread_mutexattr_t attr;
+        if (pthread_mutexattr_init(&attr) != 0) {
+            osty_rt_abort("map lock: mutexattr_init failed");
+        }
+        if (pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) != 0) {
+            osty_rt_abort("map lock: mutexattr_settype failed");
+        }
+        if (pthread_mutex_init(&map->mu, &attr) != 0) {
+            osty_rt_abort("map lock: mutex_init failed");
+        }
+        pthread_mutexattr_destroy(&attr);
+        map->mu_init = 1;
+    }
     return map;
+}
+
+// Public lock/unlock for composite ops (update) that must hold the
+// lock across get + callback + insert. Recursive mutex so calls from
+// a user callback into the same map (e.g. counts.len()) re-acquire
+// instead of self-deadlocking.
+void osty_rt_map_lock(void *raw_map) {
+    osty_rt_map *map = (osty_rt_map *)raw_map;
+    if (map == NULL || !map->mu_init) return;
+    pthread_mutex_lock(&map->mu);
+}
+
+void osty_rt_map_unlock(void *raw_map) {
+    osty_rt_map *map = (osty_rt_map *)raw_map;
+    if (map == NULL || !map->mu_init) return;
+    pthread_mutex_unlock(&map->mu);
 }
 
 static bool osty_rt_map_contains_raw(void *raw_map, const void *key) {
@@ -1720,12 +2384,53 @@ static void osty_rt_map_get_or_abort_raw(void *raw_map, const void *key, void *o
     memcpy(out_value, osty_rt_map_value_slot(map, index), map->value_size);
 }
 
+// Option-returning get: fills *out_value and returns true when the key
+// is present, returns false otherwise (and leaves out_value untouched).
+// This is the real intrinsic backing `Map.get(key) -> V?` — callers at
+// the LLVM layer use the return to construct an Option<V>, then feed
+// it into `??`, `match`, `.isSome()`, etc. without needing per-helper
+// special-case lowering.
+static bool osty_rt_map_get_raw(void *raw_map, const void *key, void *out_value) {
+    osty_rt_map *map = (osty_rt_map *)raw_map;
+    int64_t index;
+    if (map == NULL || key == NULL || out_value == NULL) {
+        return false;
+    }
+    index = osty_rt_map_find_index(map, key);
+    if (index < 0) {
+        return false;
+    }
+    memcpy(out_value, osty_rt_map_value_slot(map, index), map->value_size);
+    return true;
+}
+
+// Value-at-slot (V-type-agnostic): memcpy the V stored at slot i
+// into *out_value. Backs the for-(k, v)-in-m iteration path — key
+// accessors are macro-generated per K suffix below.
+void osty_rt_map_value_at(void *raw_map, int64_t index, void *out_value) {
+    osty_rt_map *map = (osty_rt_map *)raw_map;
+    if (map == NULL || out_value == NULL) {
+        osty_rt_abort("invalid map value_at");
+    }
+    osty_rt_map_lock(raw_map);
+    if (index < 0 || index >= map->len) {
+        osty_rt_map_unlock(raw_map);
+        osty_rt_abort("map value_at index out of bounds");
+    }
+    memcpy(out_value, osty_rt_map_value_slot(map, index), map->value_size);
+    osty_rt_map_unlock(raw_map);
+}
+
 int64_t osty_rt_map_len(void *raw_map) {
     osty_rt_map *map = (osty_rt_map *)raw_map;
+    int64_t n;
     if (map == NULL) {
         osty_rt_abort("map is null");
     }
-    return map->len;
+    osty_rt_map_lock(raw_map);
+    n = map->len;
+    osty_rt_map_unlock(raw_map);
+    return n;
 }
 
 void *osty_rt_map_keys(void *raw_map) {
@@ -1735,6 +2440,7 @@ void *osty_rt_map_keys(void *raw_map) {
     if (map == NULL) {
         osty_rt_abort("map is null");
     }
+    osty_rt_map_lock(raw_map);
     for (i = 0; i < map->len; i++) {
         switch (map->key_kind) {
         case OSTY_RT_ABI_I64: {
@@ -1766,14 +2472,60 @@ void *osty_rt_map_keys(void *raw_map) {
             osty_rt_abort("unsupported map key list kind");
         }
     }
+    osty_rt_map_unlock(raw_map);
     return out;
 }
 
+// Every public keyed op takes the per-map lock, runs the raw op, and
+// releases. Recursive so that `update`'s outer lock + a re-entrant op
+// from a user callback (e.g. counts.len() inside f) don't deadlock.
+// key_at snapshots the key under the lock — the return is by-value so
+// the caller doesn't hold any reference past unlock.
 #define OSTY_RT_DEFINE_MAP_KEY_OPS(suffix, ctype) \
-bool osty_rt_map_contains_##suffix(void *raw_map, ctype key) { return osty_rt_map_contains_raw(raw_map, &key); } \
-void osty_rt_map_insert_##suffix(void *raw_map, ctype key, const void *value) { osty_rt_map_insert_raw(raw_map, &key, value); } \
-bool osty_rt_map_remove_##suffix(void *raw_map, ctype key) { return osty_rt_map_remove_raw(raw_map, &key); } \
-void osty_rt_map_get_or_abort_##suffix(void *raw_map, ctype key, void *out_value) { osty_rt_map_get_or_abort_raw(raw_map, &key, out_value); }
+bool osty_rt_map_contains_##suffix(void *raw_map, ctype key) { \
+    bool r; \
+    osty_rt_map_lock(raw_map); \
+    r = osty_rt_map_contains_raw(raw_map, &key); \
+    osty_rt_map_unlock(raw_map); \
+    return r; \
+} \
+void osty_rt_map_insert_##suffix(void *raw_map, ctype key, const void *value) { \
+    osty_rt_map_lock(raw_map); \
+    osty_rt_map_insert_raw(raw_map, &key, value); \
+    osty_rt_map_unlock(raw_map); \
+} \
+bool osty_rt_map_remove_##suffix(void *raw_map, ctype key) { \
+    bool r; \
+    osty_rt_map_lock(raw_map); \
+    r = osty_rt_map_remove_raw(raw_map, &key); \
+    osty_rt_map_unlock(raw_map); \
+    return r; \
+} \
+void osty_rt_map_get_or_abort_##suffix(void *raw_map, ctype key, void *out_value) { \
+    osty_rt_map_lock(raw_map); \
+    osty_rt_map_get_or_abort_raw(raw_map, &key, out_value); \
+    osty_rt_map_unlock(raw_map); \
+} \
+bool osty_rt_map_get_##suffix(void *raw_map, ctype key, void *out_value) { \
+    bool r; \
+    osty_rt_map_lock(raw_map); \
+    r = osty_rt_map_get_raw(raw_map, &key, out_value); \
+    osty_rt_map_unlock(raw_map); \
+    return r; \
+} \
+ctype osty_rt_map_key_at_##suffix(void *raw_map, int64_t index) { \
+    osty_rt_map *map = (osty_rt_map *)raw_map; \
+    ctype out; \
+    if (map == NULL) osty_rt_abort("map is null"); \
+    osty_rt_map_lock(raw_map); \
+    if (index < 0 || index >= map->len) { \
+        osty_rt_map_unlock(raw_map); \
+        osty_rt_abort("map key_at out of bounds"); \
+    } \
+    memcpy(&out, osty_rt_map_key_slot(map, index), sizeof(ctype)); \
+    osty_rt_map_unlock(raw_map); \
+    return out; \
+}
 
 OSTY_RT_DEFINE_MAP_KEY_OPS(i64, int64_t)
 OSTY_RT_DEFINE_MAP_KEY_OPS(i1, bool)
@@ -2023,6 +2775,58 @@ static void osty_rt_enum_ptr_payload_trace(void *payload) {
     osty_gc_mark_root_slot(payload);
 }
 
+/* Phase A4 depth (RUNTIME_GC_DELTA §2.4). Trace callback for closure
+ * envs: walks the capture array so any managed pointer stored in a
+ * closure capture survives GC while the env itself is reachable.
+ *
+ * The env layout is self-describing (see `osty_rt_closure_env`) so the
+ * trace needs no external descriptor — it reads `capture_count`, then
+ * passes each slot address to `osty_gc_mark_slot_v1`. Non-managed
+ * capture values (scalars that the Osty frontend stores as raw bits
+ * inside the slot) are handled transparently because `mark_slot_v1`
+ * filters through `find_header`.
+ */
+static void osty_rt_closure_env_trace(void *payload) {
+    osty_rt_closure_env *env = (osty_rt_closure_env *)payload;
+    int64_t i;
+    if (env == NULL || env->capture_count <= 0) {
+        return;
+    }
+    for (i = 0; i < env->capture_count; i++) {
+        osty_gc_mark_slot_v1((void *)&env->captures[i]);
+    }
+}
+
+/* Phase A4 depth: dedicated allocator for closure envs. Takes the
+ * capture count up front so the layout and trace callback are set
+ * together — there is no post-alloc mutation window where a
+ * collection could see an env without its trace installed.
+ *
+ * Exported as `osty.rt.closure_env_alloc_v1` so the LLVM emitter can
+ * call it with a single `call ptr @osty.rt.closure_env_alloc_v1(i64 N,
+ * ptr %site)` at the fn-value materialisation site.
+ */
+void *osty_rt_closure_env_alloc_v1(int64_t capture_count, const char *site)
+    __asm__(OSTY_GC_SYMBOL("osty.rt.closure_env_alloc_v1"));
+
+void *osty_rt_closure_env_alloc_v1(int64_t capture_count, const char *site) {
+    size_t byte_size;
+    osty_rt_closure_env *env;
+
+    if (capture_count < 0) {
+        osty_rt_abort("negative closure env capture count");
+    }
+    if ((size_t)capture_count > (SIZE_MAX - sizeof(osty_rt_closure_env)) / sizeof(void *)) {
+        osty_rt_abort("closure env capture count overflow");
+    }
+    byte_size = sizeof(osty_rt_closure_env) + (size_t)capture_count * sizeof(void *);
+    env = (osty_rt_closure_env *)osty_gc_allocate_managed(
+        byte_size, OSTY_GC_KIND_CLOSURE_ENV, site,
+        osty_rt_closure_env_trace, NULL);
+    env->capture_count = capture_count;
+    return env;
+}
+
 void *osty_rt_enum_alloc_ptr_v1(const char *site) {
     return osty_gc_allocate_managed(8, OSTY_GC_KIND_GENERIC, site, osty_rt_enum_ptr_payload_trace, NULL);
 }
@@ -2232,9 +3036,35 @@ void osty_gc_global_root_unregister_v1(void *slot) {
 }
 
 void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) {
-    (void)safepoint_id;
+    /* Phase A5: decode the kind from the high byte. Legacy callers pass
+     * pure serial ids (kind byte == 0 == UNSPECIFIED) so the dispatch is
+     * backwards compatible. Unknown kinds fall through to UNSPECIFIED
+     * rather than aborting — the kind byte is advisory, not a contract. */
+    uint64_t raw_id = (uint64_t)safepoint_id;
+    int kind = (int)((raw_id >> 56) & 0xffu);
+    if (kind < 0 || kind >= OSTY_GC_SAFEPOINT_KIND_COUNT) {
+        kind = OSTY_GC_SAFEPOINT_KIND_UNSPECIFIED;
+    }
+    osty_gc_safepoint_counts_by_kind[kind] += 1;
     if (root_slot_count < 0) {
         osty_rt_abort("negative safepoint root slot count");
+    }
+    if (root_slot_count > OSTY_GC_SAFEPOINT_MAX_ROOTS) {
+        /* Phase A6: lowering emitted a frame whose root slot array
+         * exceeds the runtime cap. Abort with a message that names
+         * both the emitted count and the cap so the generator can be
+         * audited. The id byte may help narrow the site (ENTRY vs
+         * LOOP vs CALL). */
+        char msg[160];
+        snprintf(msg, sizeof(msg),
+                 "safepoint root slot count %lld exceeds cap %lld (kind=%d)",
+                 (long long)root_slot_count,
+                 (long long)OSTY_GC_SAFEPOINT_MAX_ROOTS,
+                 kind);
+        osty_rt_abort(msg);
+    }
+    if (root_slot_count > osty_gc_safepoint_max_roots_seen) {
+        osty_gc_safepoint_max_roots_seen = root_slot_count;
     }
     if (!osty_gc_safepoint_stress_enabled_now() && !osty_gc_collection_requested) {
         return;
@@ -2325,6 +3155,409 @@ int osty_gc_debug_satb_log_contains(void *payload) {
     return 0;
 }
 
+/* Phase A2 lifetime totals (RUNTIME_GC_DELTA §9.3). */
+
+int64_t osty_gc_debug_allocated_bytes_total(void) {
+    return osty_gc_allocated_bytes_total;
+}
+
+int64_t osty_gc_debug_swept_count_total(void) {
+    return osty_gc_swept_count_total;
+}
+
+int64_t osty_gc_debug_swept_bytes_total(void) {
+    return osty_gc_swept_bytes_total;
+}
+
+int64_t osty_gc_debug_allocated_since_collect(void) {
+    return osty_gc_allocated_since_collect;
+}
+
+int64_t osty_gc_debug_pressure_limit_bytes(void) {
+    return osty_gc_pressure_limit_now();
+}
+
+int64_t osty_gc_debug_mark_stack_max_depth(void) {
+    return osty_gc_mark_stack_max_depth;
+}
+
+/* Phase A2 depth: collection timing accessors. Nanoseconds relative to
+ * CLOCK_MONOTONIC — zero means "no measurement recorded" (either no
+ * collections yet, or clock_gettime failed on the host). */
+
+int64_t osty_gc_debug_collection_nanos_total(void) {
+    return osty_gc_collection_nanos_total;
+}
+
+int64_t osty_gc_debug_collection_nanos_last(void) {
+    return osty_gc_collection_nanos_last;
+}
+
+int64_t osty_gc_debug_collection_nanos_max(void) {
+    return osty_gc_collection_nanos_max;
+}
+
+/* Phase A3 depth: hash index observability. Exposes capacity and
+ * occupancy so tuning scripts can verify the probe sequences stay
+ * short. `find_ops_total` counts lookups across the program — pairs
+ * with `mark_stack_max_depth` to describe the mark pass's cost
+ * profile. (The counter itself lives near the index state globals
+ * because `osty_gc_find_header` bumps it.) */
+
+int64_t osty_gc_debug_index_capacity(void) {
+    return osty_gc_index_capacity;
+}
+
+int64_t osty_gc_debug_index_count(void) {
+    return osty_gc_index_count;
+}
+
+int64_t osty_gc_debug_index_tombstones(void) {
+    return osty_gc_index_tombstones;
+}
+
+int64_t osty_gc_debug_index_find_ops(void) {
+    return osty_gc_index_find_ops_total;
+}
+
+/* Phase A5 per-kind safepoint counters. `kind` values map to the
+ * OSTY_GC_SAFEPOINT_KIND_* constants; out-of-range queries return -1 so
+ * callers can distinguish from a zero count. */
+int64_t osty_gc_debug_safepoint_count_by_kind(int64_t kind) {
+    if (kind < 0 || kind >= OSTY_GC_SAFEPOINT_KIND_COUNT) {
+        return -1;
+    }
+    return osty_gc_safepoint_counts_by_kind[kind];
+}
+
+int64_t osty_gc_debug_safepoint_count_total(void) {
+    int64_t total = 0;
+    int i;
+    for (i = 0; i < OSTY_GC_SAFEPOINT_KIND_COUNT; i++) {
+        total += osty_gc_safepoint_counts_by_kind[i];
+    }
+    return total;
+}
+
+/* Phase A6 observability: largest root slot array seen since program
+ * start. `osty_gc_debug_safepoint_max_roots_cap` returns the runtime
+ * limit so tuning scripts can compute headroom. */
+int64_t osty_gc_debug_safepoint_max_roots_seen(void) {
+    return osty_gc_safepoint_max_roots_seen;
+}
+
+int64_t osty_gc_debug_safepoint_max_roots_cap(void) {
+    return OSTY_GC_SAFEPOINT_MAX_ROOTS;
+}
+
+/* Aggregate snapshot. Fields mirror the individual debug_* accessors so that
+ * test harnesses written against the scalar ABI keep working; the struct is
+ * for callers that want one atomic read under the GC lock. Field order is
+ * load bearing — clients declare a compatible struct and blit directly. */
+typedef struct osty_gc_stats {
+    int64_t collection_count;
+    int64_t live_count;
+    int64_t live_bytes;
+    int64_t allocated_since_collect;
+    int64_t allocated_bytes_total;
+    int64_t swept_count_total;
+    int64_t swept_bytes_total;
+    int64_t pre_write_count;
+    int64_t pre_write_managed_count;
+    int64_t post_write_count;
+    int64_t post_write_managed_count;
+    int64_t load_count;
+    int64_t load_managed_count;
+    int64_t satb_log_count;
+    int64_t remembered_edge_count;
+    int64_t global_root_count;
+    int64_t pressure_limit_bytes;
+    int64_t mark_stack_max_depth;
+    /* Phase A2 depth — collection timing. */
+    int64_t collection_nanos_total;
+    int64_t collection_nanos_last;
+    int64_t collection_nanos_max;
+    /* Phase A3 depth — hash index state. */
+    int64_t index_capacity;
+    int64_t index_count;
+    int64_t index_tombstones;
+    int64_t index_find_ops_total;
+} osty_gc_stats;
+
+void osty_gc_debug_stats(osty_gc_stats *out) {
+    if (out == NULL) {
+        return;
+    }
+    osty_gc_acquire();
+    out->collection_count = osty_gc_collection_count;
+    out->live_count = osty_gc_live_count;
+    out->live_bytes = osty_gc_live_bytes;
+    out->allocated_since_collect = osty_gc_allocated_since_collect;
+    out->allocated_bytes_total = osty_gc_allocated_bytes_total;
+    out->swept_count_total = osty_gc_swept_count_total;
+    out->swept_bytes_total = osty_gc_swept_bytes_total;
+    out->pre_write_count = osty_gc_pre_write_count;
+    out->pre_write_managed_count = osty_gc_pre_write_managed_count;
+    out->post_write_count = osty_gc_post_write_count;
+    out->post_write_managed_count = osty_gc_post_write_managed_count;
+    out->load_count = osty_gc_load_count;
+    out->load_managed_count = osty_gc_load_managed_count;
+    out->satb_log_count = osty_gc_satb_log_count;
+    out->remembered_edge_count = osty_gc_remembered_edge_count;
+    out->global_root_count = osty_gc_global_root_count;
+    out->pressure_limit_bytes = osty_gc_pressure_limit_now();
+    out->mark_stack_max_depth = osty_gc_mark_stack_max_depth;
+    out->collection_nanos_total = osty_gc_collection_nanos_total;
+    out->collection_nanos_last = osty_gc_collection_nanos_last;
+    out->collection_nanos_max = osty_gc_collection_nanos_max;
+    out->index_capacity = osty_gc_index_capacity;
+    out->index_count = osty_gc_index_count;
+    out->index_tombstones = osty_gc_index_tombstones;
+    out->index_find_ops_total = osty_gc_index_find_ops_total;
+    osty_gc_release();
+}
+
+/* Phase A1 depth: corruption injectors for `validate_heap` negative
+ * tests. Each injector flips exactly one invariant so tests can pair
+ * it with `osty_gc_debug_validate_heap()` and assert on a specific
+ * error code. The symbols are UNSAFE-prefixed to discourage any use
+ * outside the runtime's own tests — they intentionally leave the heap
+ * in a broken state.
+ *
+ * Injectors are idempotent where possible (e.g. bumping live_count by
+ * 1 multiple times compounds) — tests should reset state by calling a
+ * matching clear before moving on, or simply exit the process.
+ */
+
+void osty_gc_debug_unsafe_bump_live_count(void) {
+    osty_gc_live_count += 1;
+}
+
+void osty_gc_debug_unsafe_bump_live_bytes(void) {
+    osty_gc_live_bytes += 1;
+}
+
+void osty_gc_debug_unsafe_break_first_prev(void) {
+    if (osty_gc_objects != NULL) {
+        osty_gc_objects->prev = (osty_gc_header *)(uintptr_t)0xdeadbeef;
+    }
+}
+
+void osty_gc_debug_unsafe_break_next_link(void) {
+    if (osty_gc_objects != NULL && osty_gc_objects->next != NULL) {
+        osty_gc_objects->next->prev = (osty_gc_header *)(uintptr_t)0xdeadbeef;
+    }
+}
+
+void osty_gc_debug_unsafe_set_stale_mark(void) {
+    if (osty_gc_objects != NULL) {
+        osty_gc_objects->marked = true;
+    }
+}
+
+void osty_gc_debug_unsafe_negative_root_count(void) {
+    if (osty_gc_objects != NULL) {
+        osty_gc_objects->root_count = -1;
+    }
+}
+
+void osty_gc_debug_unsafe_dirty_mark_stack(void) {
+    if (osty_gc_objects != NULL) {
+        osty_gc_mark_stack_push(osty_gc_objects);
+    }
+}
+
+void osty_gc_debug_unsafe_append_null_global_slot(void) {
+    /* Register a slot whose address is NULL — this is not a managed
+     * pointer, it's literally the pointer 0 in the slot table, which
+     * the validate pass flags as invalid. */
+    if (osty_gc_global_root_count == osty_gc_global_root_cap) {
+        osty_gc_global_roots_grow();
+    }
+    osty_gc_global_root_slots[osty_gc_global_root_count] = NULL;
+    osty_gc_global_root_count += 1;
+}
+
+void osty_gc_debug_unsafe_satb_dangling(void) {
+    /* Append a bogus pointer that has no matching header. */
+    osty_gc_satb_log_append((void *)(uintptr_t)0xbadc0ffee0ddf00d);
+}
+
+void osty_gc_debug_unsafe_remembered_edge_dangling(void) {
+    /* Skip the dedup check to force-insert a dangling edge. */
+    if (osty_gc_remembered_edge_count == osty_gc_remembered_edge_cap) {
+        osty_gc_remembered_edges_grow();
+    }
+    osty_gc_remembered_edges[osty_gc_remembered_edge_count].owner =
+        (void *)(uintptr_t)0xdeadbeef;
+    osty_gc_remembered_edges[osty_gc_remembered_edge_count].value =
+        (void *)(uintptr_t)0xfeedface;
+    osty_gc_remembered_edge_count += 1;
+}
+
+void osty_gc_debug_unsafe_negative_cumulative(void) {
+    osty_gc_allocated_bytes_total = -1;
+}
+
+void osty_gc_debug_stats_dump(FILE *out) {
+    osty_gc_stats s;
+    if (out == NULL) {
+        return;
+    }
+    osty_gc_debug_stats(&s);
+    fprintf(out,
+            "osty_gc_stats {\n"
+            "  collections:             %lld\n"
+            "  live:                    %lld objects, %lld bytes\n"
+            "  allocated:               %lld since last collect, %lld total\n"
+            "  swept total:             %lld objects, %lld bytes\n"
+            "  pre_write / managed:     %lld / %lld\n"
+            "  post_write / managed:    %lld / %lld\n"
+            "  load / managed:          %lld / %lld\n"
+            "  satb log:                %lld entries\n"
+            "  remembered edges:        %lld entries\n"
+            "  global roots:            %lld slots\n"
+            "  pressure limit:          %lld bytes\n"
+            "  mark stack peak:         %lld\n"
+            "  collect nanos:           total %lld, last %lld, max %lld\n"
+            "  index:                   count %lld, tombstones %lld, cap %lld, finds %lld\n"
+            "}\n",
+            (long long)s.collection_count,
+            (long long)s.live_count, (long long)s.live_bytes,
+            (long long)s.allocated_since_collect, (long long)s.allocated_bytes_total,
+            (long long)s.swept_count_total, (long long)s.swept_bytes_total,
+            (long long)s.pre_write_count, (long long)s.pre_write_managed_count,
+            (long long)s.post_write_count, (long long)s.post_write_managed_count,
+            (long long)s.load_count, (long long)s.load_managed_count,
+            (long long)s.satb_log_count,
+            (long long)s.remembered_edge_count,
+            (long long)s.global_root_count,
+            (long long)s.pressure_limit_bytes,
+            (long long)s.mark_stack_max_depth,
+            (long long)s.collection_nanos_total, (long long)s.collection_nanos_last,
+            (long long)s.collection_nanos_max,
+            (long long)s.index_count, (long long)s.index_tombstones,
+            (long long)s.index_capacity, (long long)s.index_find_ops_total);
+}
+
+/* Phase A1 heap validation oracle (RUNTIME_GC_DELTA §9.5).
+ *
+ * Checks invariants that must hold outside of an active mark phase:
+ *
+ *   - the `osty_gc_objects` list is a correctly linked doubly-linked list
+ *   - `live_count` / `live_bytes` match the actual contents
+ *   - no header has negative `root_count`
+ *   - no header has `marked == true` (colour is cleared at the start of
+ *     every collect and again before sweep, so outside a collection the
+ *     survivors from the previous cycle should all have been cleared on
+ *     entry of the next — we check the stronger invariant that between
+ *     collections no header is stuck grey)
+ *   - every payload in the SATB log still has a matching header
+ *   - every (owner, value) pair in the remembered set still has headers
+ *   - cumulative allocation / sweep counters are non-negative
+ *
+ * Returns 0 on success, or a negative invariant identifier on the first
+ * failure encountered. The identifiers are stable — tests assert on them
+ * directly. Callable while the heap is quiescent (no other thread holds
+ * the GC lock mid-collection); it acquires the lock for its own walk.
+ */
+enum {
+    OSTY_GC_VALIDATE_OK = 0,
+    OSTY_GC_VALIDATE_LIST_FIRST_PREV_NOT_NULL = -1,
+    OSTY_GC_VALIDATE_LIST_LINK_BROKEN = -2,
+    OSTY_GC_VALIDATE_LIVE_COUNT_MISMATCH = -3,
+    OSTY_GC_VALIDATE_LIVE_BYTES_MISMATCH = -4,
+    OSTY_GC_VALIDATE_NEGATIVE_ROOT_COUNT = -5,
+    OSTY_GC_VALIDATE_SATB_DANGLING = -6,
+    OSTY_GC_VALIDATE_REMEMBERED_EDGE_DANGLING = -7,
+    OSTY_GC_VALIDATE_NEGATIVE_CUMULATIVE = -8,
+    OSTY_GC_VALIDATE_STALE_MARK = -9,
+    OSTY_GC_VALIDATE_MARK_STACK_NON_EMPTY = -10,
+    OSTY_GC_VALIDATE_NULL_GLOBAL_SLOT = -11,
+};
+
+int64_t osty_gc_debug_validate_heap(void) {
+    osty_gc_header *header;
+    int64_t walked_count = 0;
+    int64_t walked_bytes = 0;
+    int64_t i;
+    int64_t status = OSTY_GC_VALIDATE_OK;
+
+    osty_gc_acquire();
+
+    header = osty_gc_objects;
+    if (header != NULL && header->prev != NULL) {
+        status = OSTY_GC_VALIDATE_LIST_FIRST_PREV_NOT_NULL;
+        goto done;
+    }
+    while (header != NULL) {
+        if (header->next != NULL && header->next->prev != header) {
+            status = OSTY_GC_VALIDATE_LIST_LINK_BROKEN;
+            goto done;
+        }
+        if (header->prev != NULL && header->prev->next != header) {
+            status = OSTY_GC_VALIDATE_LIST_LINK_BROKEN;
+            goto done;
+        }
+        if (header->root_count < 0) {
+            status = OSTY_GC_VALIDATE_NEGATIVE_ROOT_COUNT;
+            goto done;
+        }
+        if (header->marked) {
+            status = OSTY_GC_VALIDATE_STALE_MARK;
+            goto done;
+        }
+        walked_count += 1;
+        walked_bytes += header->byte_size;
+        header = header->next;
+    }
+    if (walked_count != osty_gc_live_count) {
+        status = OSTY_GC_VALIDATE_LIVE_COUNT_MISMATCH;
+        goto done;
+    }
+    if (walked_bytes != osty_gc_live_bytes) {
+        status = OSTY_GC_VALIDATE_LIVE_BYTES_MISMATCH;
+        goto done;
+    }
+    if (osty_gc_mark_stack_count != 0) {
+        status = OSTY_GC_VALIDATE_MARK_STACK_NON_EMPTY;
+        goto done;
+    }
+    for (i = 0; i < osty_gc_global_root_count; i++) {
+        if (osty_gc_global_root_slots[i] == NULL) {
+            status = OSTY_GC_VALIDATE_NULL_GLOBAL_SLOT;
+            goto done;
+        }
+    }
+    for (i = 0; i < osty_gc_satb_log_count; i++) {
+        if (osty_gc_find_header(osty_gc_satb_log[i]) == NULL) {
+            status = OSTY_GC_VALIDATE_SATB_DANGLING;
+            goto done;
+        }
+    }
+    for (i = 0; i < osty_gc_remembered_edge_count; i++) {
+        if (osty_gc_find_header(osty_gc_remembered_edges[i].owner) == NULL ||
+            osty_gc_find_header(osty_gc_remembered_edges[i].value) == NULL) {
+            status = OSTY_GC_VALIDATE_REMEMBERED_EDGE_DANGLING;
+            goto done;
+        }
+    }
+    if (osty_gc_allocated_since_collect < 0 ||
+        osty_gc_allocated_bytes_total < 0 ||
+        osty_gc_swept_count_total < 0 ||
+        osty_gc_swept_bytes_total < 0 ||
+        osty_gc_live_count < 0 ||
+        osty_gc_live_bytes < 0 ||
+        osty_gc_collection_count < 0) {
+        status = OSTY_GC_VALIDATE_NEGATIVE_CUMULATIVE;
+        goto done;
+    }
+
+done:
+    osty_gc_release();
+    return status;
+}
+
 /* ======================================================================
  * Scheduler: pthread-backed (RUNTIME_SCHEDULER.md Phase 1B/2 hybrid)
  *
@@ -2370,12 +3603,12 @@ typedef struct osty_rt_task_handle_node {
 typedef struct osty_rt_task_group_impl {
     volatile int64_t cancelled;          /* 0 = live, 1 = cancelled */
     void *cause;                         /* reserved for error propagation */
-    pthread_mutex_t children_mu;
+    osty_rt_mu_t children_mu;
     osty_rt_task_handle_node *children;  /* all handles spawned into group */
 } osty_rt_task_group_impl;
 
 typedef struct osty_rt_task_handle_impl_ {
-    pthread_t thread;
+    osty_rt_thread_t thread;
     int has_thread;                      /* 1 while thread is joinable */
     void *body_env;
     osty_rt_task_group_impl *group;      /* inherited group, may be NULL */
@@ -2384,11 +3617,7 @@ typedef struct osty_rt_task_handle_impl_ {
     int32_t errored;                     /* reserved */
 } osty_rt_task_handle_impl;
 
-#if defined(__STDC_NO_THREADS__) || defined(__APPLE__)
-static __thread osty_rt_task_group_impl *osty_sched_current_group = NULL;
-#else
-static _Thread_local osty_rt_task_group_impl *osty_sched_current_group = NULL;
-#endif
+static OSTY_RT_TLS osty_rt_task_group_impl *osty_sched_current_group = NULL;
 
 /* Handles live in the GC heap so they are reclaimed once the Osty
  * `Handle<T>` reference drops. While the spawned thread runs,
@@ -2413,11 +3642,10 @@ static void osty_sched_unimplemented(const char *what) {
     abort();
 }
 
-static void osty_rt_task_thread_cleanup(void *arg) {
-    /* Runs on pthread_cleanup_pop or any unwind out of the trampoline
-     * (pthread_cancel, pthread_exit). Guarantees the worker counter
-     * never leaks even when the body never returns normally. */
-    osty_rt_task_handle_impl *h = (osty_rt_task_handle_impl *)arg;
+static void osty_rt_task_thread_cleanup(osty_rt_task_handle_impl *h) {
+    /* Invoked on the worker's normal return path. The runtime never
+     * calls pthread_cancel / pthread_exit, so bodies always reach the
+     * closing return; unwind-safe cleanup is unnecessary. */
     __atomic_store_n(&h->done, 1, __ATOMIC_RELEASE);
     osty_sched_workers_dec();
 }
@@ -2427,10 +3655,9 @@ static void *osty_rt_task_thread_trampoline(void *arg) {
     if (h->group != NULL) {
         osty_sched_current_group = h->group;
     }
-    pthread_cleanup_push(osty_rt_task_thread_cleanup, h);
     osty_task_spawn_body_fn fn = (osty_task_spawn_body_fn)(*(void **)h->body_env);
     h->result = fn(h->body_env);
-    pthread_cleanup_pop(1);
+    osty_rt_task_thread_cleanup(h);
     return NULL;
 }
 
@@ -2442,29 +3669,29 @@ static void osty_rt_task_group_attach(osty_rt_task_group_impl *g,
         osty_rt_abort("task_group_spawn: out of memory");
     }
     node->handle = h;
-    pthread_mutex_lock(&g->children_mu);
+    osty_rt_mu_lock(&g->children_mu);
     node->next = g->children;
     g->children = node;
-    pthread_mutex_unlock(&g->children_mu);
+    osty_rt_mu_unlock(&g->children_mu);
 }
 
 static void osty_rt_task_group_reap(osty_rt_task_group_impl *g) {
     /* Called from task_group() after the body returns. Any child still
-     * marked joinable is pthread_joined so no thread outlives its
-     * group scope (spec §8.1). Handles themselves are not freed — the
-     * Osty caller may still read their result fields. Nodes ARE freed
-     * because the group stack-frame is about to disappear. */
-    pthread_mutex_lock(&g->children_mu);
+     * marked joinable is joined so no thread outlives its group scope
+     * (spec §8.1). Handles themselves are not freed — the Osty caller
+     * may still read their result fields. Nodes ARE freed because the
+     * group stack-frame is about to disappear. */
+    osty_rt_mu_lock(&g->children_mu);
     osty_rt_task_handle_node *node = g->children;
     g->children = NULL;
-    pthread_mutex_unlock(&g->children_mu);
+    osty_rt_mu_unlock(&g->children_mu);
 
     while (node != NULL) {
         osty_rt_task_handle_node *next = node->next;
         osty_rt_task_handle_impl *h = node->handle;
         if (h != NULL && h->has_thread) {
-            if (pthread_join(h->thread, NULL) != 0) {
-                osty_rt_abort("task_group: pthread_join failed during reap");
+            if (osty_rt_thread_join(h->thread, NULL) != 0) {
+                osty_rt_abort("task_group: thread join failed during reap");
             }
             h->has_thread = 0;
         }
@@ -2481,8 +3708,8 @@ int64_t osty_rt_task_group(void *body_env) {
     group.cancelled = 0;
     group.cause = NULL;
     group.children = NULL;
-    if (pthread_mutex_init(&group.children_mu, NULL) != 0) {
-        osty_rt_abort("task_group: mutex_init failed");
+    if (osty_rt_mu_init(&group.children_mu) != 0) {
+        osty_rt_abort("task_group: mutex init failed");
     }
 
     osty_rt_task_group_impl *prev = osty_sched_current_group;
@@ -2495,7 +3722,7 @@ int64_t osty_rt_task_group(void *body_env) {
      * lifetime). Runs before we restore the previous TLS group so that
      * a nested taskGroup's teardown sees its own scope. */
     osty_rt_task_group_reap(&group);
-    pthread_mutex_destroy(&group.children_mu);
+    osty_rt_mu_destroy(&group.children_mu);
 
     osty_sched_current_group = prev;
     return result;
@@ -2509,11 +3736,11 @@ static void *osty_rt_task_spawn_internal(void *group, void *body_env) {
     h->body_env = body_env;
     h->group = (osty_rt_task_group_impl *)group;
     osty_sched_workers_inc();
-    if (pthread_create(&h->thread, NULL,
-                       osty_rt_task_thread_trampoline, h) != 0) {
+    if (osty_rt_thread_start(&h->thread,
+                             osty_rt_task_thread_trampoline, h) != 0) {
         osty_sched_workers_dec();
         /* h is GC-managed — letting it go unreachable is enough. */
-        osty_rt_abort("task_spawn: pthread_create failed");
+        osty_rt_abort("task_spawn: thread start failed");
     }
     h->has_thread = 1;
     if (h->group != NULL) {
@@ -2536,8 +3763,8 @@ int64_t osty_rt_task_handle_join(void *handle) {
     }
     osty_rt_task_handle_impl *h = (osty_rt_task_handle_impl *)handle;
     if (h->has_thread) {
-        if (pthread_join(h->thread, NULL) != 0) {
-            osty_rt_abort("task_handle_join: pthread_join failed");
+        if (osty_rt_thread_join(h->thread, NULL) != 0) {
+            osty_rt_abort("task_handle_join: thread join failed");
         }
         h->has_thread = 0;
     }
@@ -2572,22 +3799,15 @@ bool osty_rt_cancel_is_cancelled(void) {
 }
 
 void osty_rt_thread_yield(void) {
-    /* Hand the OS scheduler a chance to run other threads. sched_yield
-     * is BSD-historical but portable on POSIX pthread platforms. */
-    sched_yield();
+    /* Hand the OS scheduler a chance to run other threads. */
+    osty_rt_plat_yield();
 }
 
 void osty_rt_thread_sleep(int64_t nanos) {
     if (nanos <= 0) {
         return;
     }
-    struct timespec req;
-    req.tv_sec = (time_t)(nanos / 1000000000LL);
-    req.tv_nsec = (long)(nanos % 1000000000LL);
-    struct timespec rem;
-    while (nanosleep(&req, &rem) == -1) {
-        req = rem;
-    }
+    osty_rt_sleep_ns((uint64_t)nanos);
 }
 
 /* ---- Channels: bounded ring buffer, mutex + two condition variables.
@@ -2600,9 +3820,9 @@ void osty_rt_thread_sleep(int64_t nanos) {
  */
 
 typedef struct osty_rt_chan_impl {
-    pthread_mutex_t mu;
-    pthread_cond_t not_full;
-    pthread_cond_t not_empty;
+    osty_rt_mu_t mu;
+    osty_rt_cond_t not_full;
+    osty_rt_cond_t not_empty;
     int64_t cap;
     int64_t head;
     int64_t tail;
@@ -2633,9 +3853,9 @@ static void osty_rt_chan_destroy(void *payload) {
     if (ch == NULL) {
         return;
     }
-    pthread_mutex_destroy(&ch->mu);
-    pthread_cond_destroy(&ch->not_full);
-    pthread_cond_destroy(&ch->not_empty);
+    osty_rt_mu_destroy(&ch->mu);
+    osty_rt_cond_destroy(&ch->not_full);
+    osty_rt_cond_destroy(&ch->not_empty);
     free(ch->slots);
     ch->slots = NULL;
 }
@@ -2661,9 +3881,9 @@ void *osty_rt_thread_chan_make(int64_t capacity) {
         osty_rt_abort("thread.chan.make: out of memory");
     }
     ch->cap = capacity;
-    if (pthread_mutex_init(&ch->mu, NULL) != 0 ||
-        pthread_cond_init(&ch->not_full, NULL) != 0 ||
-        pthread_cond_init(&ch->not_empty, NULL) != 0) {
+    if (osty_rt_mu_init(&ch->mu) != 0 ||
+        osty_rt_cond_init(&ch->not_full) != 0 ||
+        osty_rt_cond_init(&ch->not_empty) != 0) {
         free(ch->slots);
         ch->slots = NULL;
         osty_rt_abort("thread.chan.make: sync init failed");
@@ -2673,53 +3893,53 @@ void *osty_rt_thread_chan_make(int64_t capacity) {
 
 void osty_rt_thread_chan_close(void *raw) {
     osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.close");
-    pthread_mutex_lock(&ch->mu);
+    osty_rt_mu_lock(&ch->mu);
     ch->closed = 1;
-    pthread_cond_broadcast(&ch->not_empty);
-    pthread_cond_broadcast(&ch->not_full);
-    pthread_mutex_unlock(&ch->mu);
+    osty_rt_cond_broadcast(&ch->not_empty);
+    osty_rt_cond_broadcast(&ch->not_full);
+    osty_rt_mu_unlock(&ch->mu);
 }
 
 bool osty_rt_thread_chan_is_closed(void *raw) {
     osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.is_closed");
-    pthread_mutex_lock(&ch->mu);
+    osty_rt_mu_lock(&ch->mu);
     bool closed = ch->closed != 0;
-    pthread_mutex_unlock(&ch->mu);
+    osty_rt_mu_unlock(&ch->mu);
     return closed;
 }
 
 static void osty_rt_chan_send_raw(osty_rt_chan_impl *ch, int64_t slot) {
-    pthread_mutex_lock(&ch->mu);
+    osty_rt_mu_lock(&ch->mu);
     while (ch->count == ch->cap && !ch->closed) {
-        pthread_cond_wait(&ch->not_full, &ch->mu);
+        osty_rt_cond_wait(&ch->not_full, &ch->mu);
     }
     if (ch->closed) {
-        pthread_mutex_unlock(&ch->mu);
+        osty_rt_mu_unlock(&ch->mu);
         osty_rt_abort("thread.chan.send: send on closed channel");
     }
     ch->slots[ch->tail] = slot;
     ch->tail = (ch->tail + 1) % ch->cap;
     ch->count += 1;
-    pthread_cond_signal(&ch->not_empty);
-    pthread_mutex_unlock(&ch->mu);
+    osty_rt_cond_signal(&ch->not_empty);
+    osty_rt_mu_unlock(&ch->mu);
 }
 
 static osty_rt_chan_recv_result osty_rt_chan_recv_raw(osty_rt_chan_impl *ch) {
     osty_rt_chan_recv_result r = {0, 0};
-    pthread_mutex_lock(&ch->mu);
+    osty_rt_mu_lock(&ch->mu);
     while (ch->count == 0 && !ch->closed) {
-        pthread_cond_wait(&ch->not_empty, &ch->mu);
+        osty_rt_cond_wait(&ch->not_empty, &ch->mu);
     }
     if (ch->count == 0 && ch->closed) {
-        pthread_mutex_unlock(&ch->mu);
+        osty_rt_mu_unlock(&ch->mu);
         return r;
     }
     r.value = ch->slots[ch->head];
     r.ok = 1;
     ch->head = (ch->head + 1) % ch->cap;
     ch->count -= 1;
-    pthread_cond_signal(&ch->not_full);
-    pthread_mutex_unlock(&ch->mu);
+    osty_rt_cond_signal(&ch->not_full);
+    osty_rt_mu_unlock(&ch->mu);
     return r;
 }
 
@@ -2828,7 +4048,7 @@ typedef struct osty_rt_select_arm {
 #define OSTY_RT_SELECT_ARM_CAPACITY 32
 
 typedef struct osty_rt_select_impl {
-    pthread_mutex_t mu;
+    osty_rt_mu_t mu;
     osty_rt_select_arm arms[OSTY_RT_SELECT_ARM_CAPACITY];
     int count;
 } osty_rt_select_impl;
@@ -2850,9 +4070,9 @@ static void osty_rt_select_arm_push(osty_rt_select_impl *sel,
                                     osty_rt_select_arm_kind kind,
                                     void *ch, int64_t timeout_ns,
                                     void *arm_env) {
-    pthread_mutex_lock(&sel->mu);
+    osty_rt_mu_lock(&sel->mu);
     if (sel->count >= OSTY_RT_SELECT_ARM_CAPACITY) {
-        pthread_mutex_unlock(&sel->mu);
+        osty_rt_mu_unlock(&sel->mu);
         osty_rt_abort("thread.select: arm capacity exceeded");
     }
     sel->arms[sel->count].kind = kind;
@@ -2860,7 +4080,7 @@ static void osty_rt_select_arm_push(osty_rt_select_impl *sel,
     sel->arms[sel->count].timeout_ns = timeout_ns;
     sel->arms[sel->count].arm_env = arm_env;
     sel->count += 1;
-    pthread_mutex_unlock(&sel->mu);
+    osty_rt_mu_unlock(&sel->mu);
 }
 
 void osty_rt_select_recv(void *s, void *ch, void *arm) {
@@ -2891,16 +4111,16 @@ void osty_rt_select_default(void *s, void *arm) {
 }
 
 static int osty_rt_select_try_recv(osty_rt_chan_impl *ch, int64_t *out) {
-    pthread_mutex_lock(&ch->mu);
+    osty_rt_mu_lock(&ch->mu);
     if (ch->count > 0) {
         *out = ch->slots[ch->head];
         ch->head = (ch->head + 1) % ch->cap;
         ch->count -= 1;
-        pthread_cond_signal(&ch->not_full);
-        pthread_mutex_unlock(&ch->mu);
+        osty_rt_cond_signal(&ch->not_full);
+        osty_rt_mu_unlock(&ch->mu);
         return 1;
     }
-    pthread_mutex_unlock(&ch->mu);
+    osty_rt_mu_unlock(&ch->mu);
     return 0;
 }
 
@@ -2923,8 +4143,8 @@ void osty_rt_select(void *body_env) {
 
     osty_rt_select_impl sel;
     sel.count = 0;
-    if (pthread_mutex_init(&sel.mu, NULL) != 0) {
-        osty_rt_abort("thread.select: mutex_init failed");
+    if (osty_rt_mu_init(&sel.mu) != 0) {
+        osty_rt_abort("thread.select: mutex init failed");
     }
 
     /* Invoke the body so it can register arms. Body signature matches
@@ -2934,7 +4154,7 @@ void osty_rt_select(void *body_env) {
     fn(body_env, (void *)&sel);
 
     if (sel.count == 0) {
-        pthread_mutex_destroy(&sel.mu);
+        osty_rt_mu_destroy(&sel.mu);
         osty_rt_abort("thread.select: body registered no arms");
     }
 
@@ -2954,17 +4174,11 @@ void osty_rt_select(void *body_env) {
         }
     }
 
-    struct timespec deadline = {0, 0};
+    uint64_t deadline_ns = 0;
     bool has_deadline = false;
     if (timeout_idx >= 0) {
-        clock_gettime(CLOCK_MONOTONIC, &deadline);
-        int64_t ns = sel.arms[timeout_idx].timeout_ns;
-        deadline.tv_sec += (time_t)(ns / 1000000000LL);
-        deadline.tv_nsec += (long)(ns % 1000000000LL);
-        if (deadline.tv_nsec >= 1000000000L) {
-            deadline.tv_sec += 1;
-            deadline.tv_nsec -= 1000000000L;
-        }
+        deadline_ns = osty_rt_monotonic_ns() +
+                      (uint64_t)sel.arms[timeout_idx].timeout_ns;
         has_deadline = true;
     }
 
@@ -2977,7 +4191,7 @@ void osty_rt_select(void *body_env) {
             osty_rt_chan_impl *ch = (osty_rt_chan_impl *)sel.arms[i].ch;
             int64_t value = 0;
             if (osty_rt_select_try_recv(ch, &value)) {
-                pthread_mutex_destroy(&sel.mu);
+                osty_rt_mu_destroy(&sel.mu);
                 osty_rt_select_invoke_recv(&sel.arms[i], value);
                 return;
             }
@@ -2985,29 +4199,23 @@ void osty_rt_select(void *body_env) {
 
         /* Default arm fires if no recv is ready on the first pass. */
         if (default_idx >= 0) {
-            pthread_mutex_destroy(&sel.mu);
+            osty_rt_mu_destroy(&sel.mu);
             osty_rt_select_invoke_plain(&sel.arms[default_idx]);
             return;
         }
 
         /* Timeout check. */
-        if (has_deadline) {
-            struct timespec now;
-            clock_gettime(CLOCK_MONOTONIC, &now);
-            if (now.tv_sec > deadline.tv_sec ||
-                (now.tv_sec == deadline.tv_sec &&
-                 now.tv_nsec >= deadline.tv_nsec)) {
-                pthread_mutex_destroy(&sel.mu);
-                osty_rt_select_invoke_plain(&sel.arms[timeout_idx]);
-                return;
-            }
+        if (has_deadline && osty_rt_monotonic_ns() >= deadline_ns) {
+            osty_rt_mu_destroy(&sel.mu);
+            osty_rt_select_invoke_plain(&sel.arms[timeout_idx]);
+            return;
         }
 
         /* 500μs backoff to avoid busy-spinning. A real fiber scheduler
          * would park on a multi-cond primitive; Phase 1B polling is
-         * the cost of sharing the OS thread pool. */
-        struct timespec nap = {0, 500000L};
-        nanosleep(&nap, NULL);
+         * the cost of sharing the OS thread pool. Windows Sleep has
+         * ms granularity, which osty_rt_sleep_ns rounds up to 1ms. */
+        osty_rt_sleep_ns(500000ULL);
     }
 }
 

@@ -132,12 +132,7 @@ fn testCoreForStmtVarietyFlag() {
 }
 
 fn coreIntListLen(xs: List<Int>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 /// tFn is a thin wrapper used only in this test file — mirrors the

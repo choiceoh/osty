@@ -91,6 +91,13 @@ type Opts struct {
 	// sources from resolve.PackageFile.
 	Source []byte
 
+	// Path is the filesystem path of the file being checked. Used to
+	// stamp d.File on every diagnostic so multi-file callers can route
+	// each diagnostic to its owning source snippet. Empty when the
+	// caller is working with an in-memory buffer without a filesystem
+	// path (the diagnostics simply stay unstamped).
+	Path string
+
 	// Stdlib supplies std.* package signatures to the legacy checker
 	// when checking outside a Workspace that already has a Stdlib
 	// provider attached.
@@ -140,20 +147,30 @@ func firstOpt(opts []Opts) Opts {
 func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
+	// opt.Path is the caller-supplied file path, when known. The File
+	// entry point is used from multi-file walkers that do not always
+	// bundle a resolve.PackageFile, so we pass the path through opts.
+	path := opt.Path
 	if d := DesugarBuildersInFile(f, rr); len(d) > 0 {
+		diag.StampFile(d, path)
 		result.Diags = append(result.Diags, d...)
 	}
 	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib)
+	diag.StampFile(result.Diags, path)
 	if d := runPrivilegeGate(f, opt.Privileged); len(d) > 0 {
+		diag.StampFile(d, path)
 		result.Diags = append(result.Diags, d...)
 	}
 	if d := runPodShapeChecks(f); len(d) > 0 {
+		diag.StampFile(d, path)
 		result.Diags = append(result.Diags, d...)
 	}
 	if d := runNoAllocChecks(f, rr); len(d) > 0 {
+		diag.StampFile(d, path)
 		result.Diags = append(result.Diags, d...)
 	}
 	if d := runIntrinsicBodyChecks(f); len(d) > 0 {
+		diag.StampFile(d, path)
 		result.Diags = append(result.Diags, d...)
 	}
 	recordSelfhostDeclPass(opt.OnDecl, f, "collect")
@@ -175,25 +192,31 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 			continue
 		}
 		if d := DesugarBuildersInFile(pf.File, perFileResolveResult(pf)); len(d) > 0 {
+			diag.StampFile(d, pf.Path)
 			result.Diags = append(result.Diags, d...)
 		}
 	}
 	applyNativePackageResult(result, pkg, pr, nil, opt.Stdlib)
+	stampPackageDiags(result.Diags, pkg)
 	privileged := isPrivilegedPackage(pkg)
 	for _, pf := range pkg.Files {
 		if pf == nil {
 			continue
 		}
 		if d := runPrivilegeGate(pf.File, privileged); len(d) > 0 {
+			diag.StampFile(d, pf.Path)
 			result.Diags = append(result.Diags, d...)
 		}
 		if d := runPodShapeChecks(pf.File); len(d) > 0 {
+			diag.StampFile(d, pf.Path)
 			result.Diags = append(result.Diags, d...)
 		}
 		if d := runNoAllocChecks(pf.File, nil); len(d) > 0 {
+			diag.StampFile(d, pf.Path)
 			result.Diags = append(result.Diags, d...)
 		}
 		if d := runIntrinsicBodyChecks(pf.File); len(d) > 0 {
+			diag.StampFile(d, pf.Path)
 			result.Diags = append(result.Diags, d...)
 		}
 		recordSelfhostDeclPass(opt.OnDecl, pf.File, "collect")
@@ -243,6 +266,7 @@ func Workspace(
 				continue
 			}
 			if d := DesugarBuildersInFile(pf.File, perFileResolveResult(pf)); len(d) > 0 {
+				diag.StampFile(d, pf.Path)
 				out[e.path].Diags = append(out[e.path].Diags, d...)
 			}
 		}
@@ -250,21 +274,26 @@ func Workspace(
 	applyNativeWorkspaceResults(ws, resolved, out, opt.Stdlib)
 	for _, e := range walk {
 		pkgResult := out[e.path]
+		stampPackageDiags(pkgResult.Diags, e.pkg)
 		privileged := isPrivilegedPackagePath(e.path) || isPrivilegedPackage(e.pkg)
 		for _, pf := range e.pkg.Files {
 			if pf == nil {
 				continue
 			}
 			if d := runPrivilegeGate(pf.File, privileged); len(d) > 0 {
+				diag.StampFile(d, pf.Path)
 				pkgResult.Diags = append(pkgResult.Diags, d...)
 			}
 			if d := runPodShapeChecks(pf.File); len(d) > 0 {
+				diag.StampFile(d, pf.Path)
 				pkgResult.Diags = append(pkgResult.Diags, d...)
 			}
 			if d := runNoAllocChecks(pf.File, nil); len(d) > 0 {
+				diag.StampFile(d, pf.Path)
 				pkgResult.Diags = append(pkgResult.Diags, d...)
 			}
 			if d := runIntrinsicBodyChecks(pf.File); len(d) > 0 {
+				diag.StampFile(d, pf.Path)
 				pkgResult.Diags = append(pkgResult.Diags, d...)
 			}
 			recordSelfhostDeclPass(opt.OnDecl, pf.File, "collect")
@@ -312,6 +341,78 @@ func recordSelfhostDeclPass(onDecl func(ast.Decl, string, time.Duration), file *
 	for _, d := range file.Decls {
 		onDecl(d, phase, 0)
 	}
+}
+
+// stampPackageDiags back-fills d.File for any un-stamped diagnostic in ds,
+// using the package's per-file source bytes to disambiguate. The native
+// checker bridge returns diagnostics without a file path when several
+// files share an offset range; this helper routes each to the file whose
+// bytes at the primary position actually contain the identifier named
+// in the diagnostic message.
+//
+// Diagnostics that are already stamped are left alone. Diagnostics with
+// no positional information, no backticked identifier in the message,
+// or ambiguous matches are skipped — the CLI's pickFile still has the
+// final legacy fallback for those.
+func stampPackageDiags(ds []*diag.Diagnostic, pkg *resolve.Package) {
+	if pkg == nil || len(pkg.Files) == 0 {
+		return
+	}
+	for _, d := range ds {
+		if d == nil || d.File != "" {
+			continue
+		}
+		pos := d.PrimaryPos()
+		if pos.Line == 0 {
+			continue
+		}
+		name := firstBacktickedIdent(d.Message)
+		if name == "" {
+			continue
+		}
+		match := ""
+		for _, pf := range pkg.Files {
+			if pf == nil {
+				continue
+			}
+			if offsetMatchesName(pf.Source, pos.Offset, name) {
+				if match != "" {
+					match = ""
+					break
+				}
+				match = pf.Path
+			}
+		}
+		if match != "" {
+			d.File = match
+		}
+	}
+}
+
+// firstBacktickedIdent returns the first `identifier` substring of msg,
+// or "" when none is present.
+func firstBacktickedIdent(msg string) string {
+	start := strings.IndexByte(msg, '`')
+	if start < 0 {
+		return ""
+	}
+	rest := msg[start+1:]
+	end := strings.IndexByte(rest, '`')
+	if end <= 0 {
+		return ""
+	}
+	return rest[:end]
+}
+
+// offsetMatchesName reports whether src at offset contains name.
+func offsetMatchesName(src []byte, offset int, name string) bool {
+	if offset < 0 || offset >= len(src) {
+		return false
+	}
+	if offset+len(name) > len(src) {
+		return false
+	}
+	return string(src[offset:offset+len(name)]) == name
 }
 
 // perFileResolveResult builds the minimal resolve.Result shape the

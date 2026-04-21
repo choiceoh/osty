@@ -114,6 +114,13 @@ type Result struct {
 	// GenBytes, GenError are populated when Config.RunGen is set.
 	GenBytes []byte
 	GenError error
+
+	// Sources maps filesystem path → raw source bytes for every file the
+	// pipeline loaded. Used by CLI renderers (osty pipeline, osty build)
+	// so diagnostics stamped with d.File can pull the right file's text
+	// for caret snippets even when the pipeline spans multiple files or
+	// packages.
+	Sources map[string][]byte
 }
 
 // DeclTiming records how long the type checker spent on one
@@ -502,9 +509,15 @@ func RunLoadedPackage(pkg *resolve.Package, stream io.Writer, cfg Config) Result
 	t0 := time.Now()
 	totalBytes, totalDecls, totalStmts, totalUses := 0, 0, 0, 0
 	var loadDiags []*diag.Diagnostic
+	if r.Sources == nil {
+		r.Sources = map[string][]byte{}
+	}
 	for _, pf := range pkg.Files {
 		totalBytes += len(pf.Source)
 		loadDiags = append(loadDiags, pf.ParseDiags...)
+		if pf.Path != "" && pf.Source != nil {
+			r.Sources[pf.Path] = pf.Source
+		}
 		if pf.File != nil {
 			totalDecls += len(pf.File.Decls)
 			totalStmts += len(pf.File.Stmts)
@@ -700,6 +713,9 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 
 	totalFiles, totalBytes, totalDecls, totalStmts, totalUses := 0, 0, 0, 0, 0
 	var loadDiags []*diag.Diagnostic
+	if r.Sources == nil {
+		r.Sources = map[string][]byte{}
+	}
 	pkgPaths := make([]string, 0, len(ws.Packages))
 	for p := range ws.Packages {
 		pkgPaths = append(pkgPaths, p)
@@ -714,6 +730,9 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 			totalFiles++
 			totalBytes += len(pf.Source)
 			loadDiags = append(loadDiags, pf.ParseDiags...)
+			if pf.Path != "" && pf.Source != nil {
+				r.Sources[pf.Path] = pf.Source
+			}
 			if pf.File != nil {
 				totalDecls += len(pf.File.Decls)
 				totalStmts += len(pf.File.Stmts)

@@ -227,11 +227,56 @@ func patchGenerated(path string) error {
 		{name: "coreArenaNodeCount", body: coreArenaNodeCountReplacement},
 		{name: "coreArenaNodeAt", body: coreArenaNodeAtReplacement},
 		{name: "opErrorCount", body: opErrorCountReplacement},
+		{name: "checkIntListLenLocal", body: checkIntListLenLocalReplacement},
+		{name: "checkIntListAtLocal", body: checkIntListAtLocalReplacement},
+		{name: "checkIntListLenHelper", body: checkIntListLenHelperReplacement},
+		{name: "checkIntListAt", body: checkIntListAtReplacement},
+		{name: "checkStringListLenHelper", body: checkStringListLenHelperReplacement},
+		{name: "checkVariantListLen", body: checkVariantListLenReplacement},
+		{name: "pmWitnessesCount", body: pmWitnessesCountReplacement},
+		{name: "checkFieldListLen", body: checkFieldListLenReplacement},
+		{name: "checkListOfRowsLen", body: checkListOfRowsLenReplacement},
+		{name: "checkCtorListLen", body: checkCtorListLenReplacement},
+		{name: "frontCheckResultTypedNodeCount", body: frontCheckResultTypedNodeCountReplacement},
+		{name: "frontCheckResultInstantiationCount", body: frontCheckResultInstantiationCountReplacement},
+		{name: "selfResolveDiagnosticCount", body: selfResolveDiagnosticCountReplacement},
+		{name: "srAstChildAt", body: srAstChildAtReplacement},
+		{name: "srAstListCount", body: srAstListCountReplacement},
+		{name: "srIntListAt", body: srIntListAtReplacement},
+		{name: "srStringListAt", body: srStringListAtReplacement},
+		{name: "frontLexTokenCount", body: frontLexTokenCountReplacement},
+		{name: "frontLexDiagnosticCount", body: frontLexDiagnosticCountReplacement},
+		{name: "frontCommentCount", body: frontCommentCountReplacement},
+		{name: "frontStringPartCount", body: frontStringPartCountReplacement},
+		{name: "frontInterpolationTokenCount", body: frontInterpolationTokenCountReplacement},
 		{name: "frontLexTokenAt", body: frontLexTokenAtReplacement},
 		{name: "frontLexDiagnosticAt", body: frontLexDiagnosticAtReplacement},
 		{name: "frontCommentAt", body: frontCommentAtReplacement},
 		{name: "frontStringPartAt", body: frontStringPartAtReplacement},
 		{name: "frontInterpolationTokenAt", body: frontInterpolationTokenAtReplacement},
+		{name: "stringUnitCount", body: stringUnitCountReplacement},
+		{name: "ostyLexStringPartCount", body: ostyLexStringPartCountReplacement},
+		{name: "ostyStringListCount", body: ostyStringListCountReplacement},
+		{name: "ostyStringAt", body: ostyStringAtReplacement},
+		{name: "ostyLexResultTokenCount", body: ostyLexResultTokenCountReplacement},
+		{name: "ostyLexResultErrorCount", body: ostyLexResultErrorCountReplacement},
+		{name: "ostyLexResultCommentCount", body: ostyLexResultCommentCountReplacement},
+		{name: "ostyLexResultTokenAt", body: ostyLexResultTokenAtReplacement},
+		{name: "astFileDeclCount", body: astFileDeclCountReplacement},
+		{name: "astFileErrorCount", body: astFileErrorCountReplacement},
+		{name: "astFileDeclAt", body: astFileDeclAtReplacement},
+		{name: "astFileErrorAt", body: astFileErrorAtReplacement},
+		{name: "checkDiagCount", body: checkDiagCountReplacement},
+		{name: "coreIntLen", body: coreIntLenReplacement},
+		{name: "coreDiagCount", body: coreDiagCountReplacement},
+		{name: "solveIntLen", body: solveIntLenReplacement},
+		{name: "selfLintDiagnosticCount", body: selfLintDiagnosticCountReplacement},
+		{name: "selfLintFixCount", body: selfLintFixCountReplacement},
+		{name: "selfLintEditListCount", body: selfLintEditListCountReplacement},
+		{name: "selfLintEditAt", body: selfLintEditAtReplacement},
+		{name: "astLowerTokenCount", body: astLowerTokenCountReplacement},
+		{name: "astLowerIntListCount", body: astLowerIntListCountReplacement},
+		{name: "astLowerIntListAt", body: astLowerIntListAtReplacement},
 	} {
 		var err error
 		src, err = replaceGeneratedFunction(src, fn.name, fn.body)
@@ -252,41 +297,35 @@ func patchGenerated(path string) error {
 	return nil
 }
 
+// normalizeGeneratedSourceComment rewrites both the top-level
+// `// Osty source: …` header and the per-declaration
+// `// Osty: …selfhost_merged.osty:LINE:COL` markers so the generated
+// file is byte-stable across platforms. Without this pass the source
+// paths inherit the host tmpdir — `/var/folders/…` on macOS,
+// `C:\Users\…\AppData\Local\Temp\…` on Windows — producing a ~thousand-
+// line diff on every cross-platform regen. The canonical placeholder is
+// `/tmp/selfhost_merged.osty`; line/column suffixes are preserved.
 func normalizeGeneratedSourceComment(src string) string {
-	// bootstrap-gen embeds the merged-source path into both the
-	// file-level `// Osty source:` banner and every inline `// Osty:`
-	// map comment. Those paths include a platform-specific temp dir
-	// (`/var/folders/...` on macOS, `C:\...\AppData\Local\Temp\...` on
-	// Windows) plus a random suffix — committing them as-is turns
-	// every regen into a huge platform-dependent diff. Rewrite both
-	// forms to a stable `/tmp/selfhost_merged.osty` so the checked-in
-	// file is reproducible regardless of the host that ran the regen.
-	const headerPrefix = "// Osty source: "
-	const inlineMarker = "// Osty: "
-	const pathMarker = "selfhost_merged.osty"
-	const canonical = "/tmp/selfhost_merged.osty"
+	const (
+		topPrefix  = "// Osty source: "
+		declPrefix = "// Osty: "
+		mergedFile = "selfhost_merged.osty"
+		canonical  = "/tmp/" + mergedFile
+	)
 	lines := strings.Split(src, "\n")
 	for i, line := range lines {
-		if strings.HasPrefix(line, headerPrefix) && strings.HasSuffix(line, pathMarker) {
-			lines[i] = headerPrefix + canonical
+		if strings.HasPrefix(line, topPrefix) && strings.HasSuffix(line, mergedFile) {
+			lines[i] = topPrefix + canonical
 			continue
 		}
-		// Inline `// Osty:` comments appear at top level and also
-		// indented inside function bodies — allow leading whitespace.
-		markerAt := strings.Index(line, inlineMarker)
-		if markerAt < 0 {
+		if !strings.HasPrefix(line, declPrefix) {
 			continue
 		}
-		pre := line[:markerAt]
-		if strings.TrimLeft(pre, " \t") != "" {
+		idx := strings.Index(line, mergedFile)
+		if idx < 0 {
 			continue
 		}
-		body := line[markerAt+len(inlineMarker):]
-		pathAt := strings.Index(body, pathMarker)
-		if pathAt < 0 {
-			continue
-		}
-		lines[i] = pre + inlineMarker + canonical + body[pathAt+len(pathMarker):]
+		lines[i] = declPrefix + canonical + line[idx+len(mergedFile):]
 	}
 	return strings.Join(lines, "\n")
 }
@@ -437,10 +476,6 @@ const coreArenaNodeCountReplacement = `func coreArenaNodeCount(arena *CoreArena)
 }
 `
 
-// coreArenaNodeAtReplacement keeps the defensive upper-bound guard
-// (`idx >= len(arena.nodes)`) that the Osty source omits. Removing
-// the patch would let out-of-bounds callers Go-panic instead of
-// returning the sentinel `CkErr` node, a silent behavioral change.
 const coreArenaNodeAtReplacement = `func coreArenaNodeAt(arena *CoreArena, idx int) *CoreNode {
 	if idx < 0 || idx >= len(arena.nodes) {
 		return emptyCoreNode(CoreKind(&CoreKind_CkErr{}))
@@ -451,6 +486,131 @@ const coreArenaNodeAtReplacement = `func coreArenaNodeAt(arena *CoreArena, idx i
 
 const opErrorCountReplacement = `func opErrorCount(p *OstyParser) int {
 	return len(p.arena.errors)
+}
+`
+
+const checkIntListLenLocalReplacement = `func checkIntListLenLocal(xs []int) int {
+	return len(xs)
+}
+`
+
+const checkIntListAtLocalReplacement = `func checkIntListAtLocal(xs []int, idx int) int {
+	if idx < 0 || idx >= len(xs) {
+		return -1
+	}
+	return xs[idx]
+}
+`
+
+const checkIntListLenHelperReplacement = `func checkIntListLenHelper(xs []int) int {
+	return len(xs)
+}
+`
+
+const checkIntListAtReplacement = `func checkIntListAt(xs []int, idx int) int {
+	if idx < 0 || idx >= len(xs) {
+		return -1
+	}
+	return xs[idx]
+}
+`
+
+const checkStringListLenHelperReplacement = `func checkStringListLenHelper(xs []string) int {
+	return len(xs)
+}
+`
+
+const checkVariantListLenReplacement = `func checkVariantListLen(xs []*CheckVariantSig) int {
+	return len(xs)
+}
+`
+
+const pmWitnessesCountReplacement = `func pmWitnessesCount(xs []string) int {
+	return len(xs)
+}
+`
+
+const checkFieldListLenReplacement = `func checkFieldListLen(xs []*CheckFieldSig) int {
+	return len(xs)
+}
+`
+
+const checkListOfRowsLenReplacement = `func checkListOfRowsLen(xs [][]int) int {
+	return len(xs)
+}
+`
+
+const checkCtorListLenReplacement = `func checkCtorListLen(xs []*PmCtor) int {
+	return len(xs)
+}
+`
+
+const frontCheckResultTypedNodeCountReplacement = `func frontCheckResultTypedNodeCount(result *FrontCheckResult) int {
+	return len(result.typedNodes)
+}
+`
+
+const frontCheckResultInstantiationCountReplacement = `func frontCheckResultInstantiationCount(result *FrontCheckResult) int {
+	return len(result.instantiations)
+}
+`
+
+const selfResolveDiagnosticCountReplacement = `func selfResolveDiagnosticCount(result *SelfResolveResult) int {
+	return len(result.diagnostics)
+}
+`
+
+const srAstChildAtReplacement = `func srAstChildAt(children []int, target int) int {
+	if target < 0 || target >= len(children) {
+		return -1
+	}
+	return children[target]
+}
+`
+
+const srAstListCountReplacement = `func srAstListCount(items []int) int {
+	return len(items)
+}
+`
+
+const srIntListAtReplacement = `func srIntListAt(items []int, target int) int {
+	if target < 0 || target >= len(items) {
+		return -1
+	}
+	return items[target]
+}
+`
+
+const srStringListAtReplacement = `func srStringListAt(items []string, target int) string {
+	if target < 0 || target >= len(items) {
+		return ""
+	}
+	return items[target]
+}
+`
+
+const frontLexTokenCountReplacement = `func frontLexTokenCount(stream *FrontLexStream) int {
+	return len(stream.tokens)
+}
+`
+
+const frontLexDiagnosticCountReplacement = `func frontLexDiagnosticCount(stream *FrontLexStream) int {
+	return len(stream.diagnostics)
+}
+`
+
+const frontCommentCountReplacement = `func frontCommentCount(stream *FrontLexStream) int {
+	return len(stream.comments)
+}
+`
+
+const frontStringPartCountReplacement = `func frontStringPartCount(stream *FrontLexStream) int {
+	return len(stream.stringParts)
+}
+`
+
+const frontInterpolationTokenCountReplacement = `func frontInterpolationTokenCount(stream *FrontLexStream) int {
+	return len(stream.interpolationTokens)
 }
 `
 
@@ -491,5 +651,138 @@ const frontInterpolationTokenAtReplacement = `func frontInterpolationTokenAt(str
 		return emptyFrontInterpolationToken()
 	}
 	return stream.interpolationTokens[target]
+}
+`
+
+const stringUnitCountReplacement = `func stringUnitCount(text string) int {
+	return len(strings.Split(text, ""))
+}
+`
+
+const ostyLexStringPartCountReplacement = `func ostyLexStringPartCount(parts []*OstyLexStringPart) int {
+	return len(parts)
+}
+`
+
+const ostyStringListCountReplacement = `func ostyStringListCount(items []string) int {
+	return len(items)
+}
+`
+
+const ostyStringAtReplacement = `func ostyStringAt(items []string, target int) string {
+	if target < 0 || target >= len(items) {
+		return ""
+	}
+	return items[target]
+}
+`
+
+const ostyLexResultTokenCountReplacement = `func ostyLexResultTokenCount(result *OstyLexResult) int {
+	return len(result.tokens)
+}
+`
+
+const ostyLexResultErrorCountReplacement = `func ostyLexResultErrorCount(result *OstyLexResult) int {
+	return len(result.errors)
+}
+`
+
+const ostyLexResultCommentCountReplacement = `func ostyLexResultCommentCount(result *OstyLexResult) int {
+	return len(result.comments)
+}
+`
+
+const ostyLexResultTokenAtReplacement = `func ostyLexResultTokenAt(result *OstyLexResult, idx int) *OstyRichToken {
+	if idx < 0 || idx >= len(result.tokens) {
+		return &OstyRichToken{kind: FrontTokenKind(&FrontTokenKind_FrontEOF{}), text: "", startOffset: 0, startLine: 0, startCol: 0, endOffset: 0, endLine: 0, endCol: 0, leadingDoc: "", triple: false, partCount: 0}
+	}
+	return result.tokens[idx]
+}
+`
+
+const astFileDeclCountReplacement = `func astFileDeclCount(file *AstFile) int {
+	return len(file.arena.decls)
+}
+`
+
+const astFileErrorCountReplacement = `func astFileErrorCount(file *AstFile) int {
+	return len(file.arena.errors)
+}
+`
+
+const astFileDeclAtReplacement = `func astFileDeclAt(file *AstFile, idx int) *AstNode {
+	if idx < 0 || idx >= len(file.arena.decls) {
+		return emptyAstNode(AstNodeKind(&AstNodeKind_AstNError{}))
+	}
+	return astArenaNodeAt(file.arena, file.arena.decls[idx])
+}
+`
+
+const astFileErrorAtReplacement = `func astFileErrorAt(file *AstFile, idx int) *AstParseError {
+	if idx < 0 || idx >= len(file.arena.errors) {
+		return &AstParseError{message: "", tokenIndex: 0, hint: "", note: "", code: ""}
+	}
+	return file.arena.errors[idx]
+}
+`
+
+const checkDiagCountReplacement = `func checkDiagCount(xs []*CheckDiagnostic) int {
+	return len(xs)
+}
+`
+
+const coreIntLenReplacement = `func coreIntLen(xs []int) int {
+	return len(xs)
+}
+`
+
+const coreDiagCountReplacement = `func coreDiagCount(xs []*CheckDiagnostic) int {
+	return len(xs)
+}
+`
+
+const solveIntLenReplacement = `func solveIntLen(xs []int) int {
+	return len(xs)
+}
+`
+
+const selfLintDiagnosticCountReplacement = `func selfLintDiagnosticCount(report *SelfLintReport) int {
+	return len(report.diagnostics)
+}
+`
+
+const selfLintFixCountReplacement = `func selfLintFixCount(diag *SelfLintDiagnostic) int {
+	return len(diag.fixes)
+}
+`
+
+const selfLintEditListCountReplacement = `func selfLintEditListCount(edits []*SelfLintEdit) int {
+	return len(edits)
+}
+`
+
+const selfLintEditAtReplacement = `func selfLintEditAt(edits []*SelfLintEdit, target int) *SelfLintEdit {
+	if target < 0 || target >= len(edits) {
+		return selfLintInvalidEdit()
+	}
+	return edits[target]
+}
+`
+
+const astLowerTokenCountReplacement = `func astLowerTokenCount(toks []astbridge.Token) int {
+	return len(toks)
+}
+`
+
+const astLowerIntListCountReplacement = `func astLowerIntListCount(xs []int) int {
+	return len(xs)
+}
+`
+
+const astLowerIntListAtReplacement = `func astLowerIntListAt(xs []int, target int) int {
+	if target < 0 || target >= len(xs) {
+		return -1
+	}
+	return xs[target]
 }
 `

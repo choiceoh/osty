@@ -539,6 +539,24 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	if stmt.Pattern == nil {
 		return g.emitWhileFor(stmt)
 	}
+	// `for (k, v) in m` — map iteration. Detect before the
+	// ident-pattern reduction since identPatternName would reject the
+	// tuple.
+	if tuplePat, ok := stmt.Pattern.(*ast.TuplePat); ok && len(tuplePat.Elems) == 2 {
+		if iterInfo, ok := g.staticExprInfo(stmt.Iter); ok &&
+			iterInfo.typ == "ptr" &&
+			iterInfo.mapKeyTyp != "" && iterInfo.mapValueTyp != "" {
+			kName, err := identPatternName(tuplePat.Elems[0])
+			if err != nil {
+				return err
+			}
+			vName, err := identPatternName(tuplePat.Elems[1])
+			if err != nil {
+				return err
+			}
+			return g.emitMapFor(stmt, kName, vName, iterInfo.mapKeyTyp, iterInfo.mapValueTyp, iterInfo.mapKeyString)
+		}
+	}
 	iterName, err := identPatternName(stmt.Pattern)
 	if err != nil {
 		return err
@@ -593,7 +611,7 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	}
 	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.endLabel)
@@ -663,7 +681,7 @@ func (g *generator) emitWhileFor(stmt *ast.ForStmt) error {
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(continueLabel)
 	emitter = g.toOstyEmitter()
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	g.takeOstyEmitter(emitter)
@@ -740,7 +758,7 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(continueLabel)
 	emitter = g.toOstyEmitter()
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	g.takeOstyEmitter(emitter)
@@ -1551,7 +1569,7 @@ func (g *generator) emitMatchArmBodyAsStmt(body ast.Expr) error {
 func (g *generator) emitPrintln(call *ast.CallExpr) error {
 	id, ok := call.Fn.(*ast.Ident)
 	if !ok || id.Name != "println" {
-		return unsupported("call", "only println calls are supported")
+		return unsupportedf("call", "only println calls are supported (got %T at %s)", call.Fn, call.Pos().String())
 	}
 	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 		return unsupported("call", "println requires one positional argument")
@@ -1589,7 +1607,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	g.pushScope()
 	defer g.popScope()
 	emitter := g.toOstyEmitter()
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindCall)
 	g.takeOstyEmitter(emitter)
 	base, err := g.emitExpr(field.X)
 	if err != nil {
@@ -1664,12 +1682,18 @@ func (g *generator) emitMapMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if !found {
 		return false, nil
 	}
-	if field.Name != "insert" && field.Name != "remove" {
+	if field.Name != "insert" && field.Name != "remove" && field.Name != "update" && field.Name != "retainIf" {
 		return false, nil
 	}
 	base, err := g.emitExpr(field.X)
 	if err != nil {
 		return true, err
+	}
+	if field.Name == "update" {
+		return true, g.emitMapUpdateStmt(call, base, keyTyp, keyString)
+	}
+	if field.Name == "retainIf" {
+		return true, g.emitMapRetainIfStmt(call, base, keyTyp, keyString)
 	}
 	if field.Name == "insert" {
 		if len(call.Args) != 2 || call.Args[0].Name != "" || call.Args[1].Name != "" || call.Args[0].Value == nil || call.Args[1].Value == nil {
@@ -1710,6 +1734,219 @@ func (g *generator) emitMapMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	return true, nil
 }
 
+// emitMapUpdateStmt lowers `m.update(key, f)` — stdlib bodied form is
+//   let current = self.get(key)
+//   self.insert(key, f(current))
+// The three steps run inside a single `osty_rt_map_lock/unlock`
+// critical section so concurrent mutators can't race between read and
+// write. The per-map mutex is recursive (see osty_runtime.c), so the
+// callback can re-enter the same map (e.g. read self.len()) without
+// self-deadlock.
+func (g *generator) emitMapUpdateStmt(call *ast.CallExpr, base value, keyTyp string, keyString bool) error {
+	if len(call.Args) != 2 ||
+		call.Args[0].Name != "" || call.Args[1].Name != "" ||
+		call.Args[0].Value == nil || call.Args[1].Value == nil {
+		return unsupported("call", "map.update requires two positional arguments")
+	}
+	key, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return err
+	}
+	if key.typ != keyTyp {
+		return unsupportedf("type-system", "map.update key type %s, want %s", key.typ, keyTyp)
+	}
+	loadedKey, err := g.loadIfPointer(key)
+	if err != nil {
+		return err
+	}
+	fnVal, err := g.emitExpr(call.Args[1].Value)
+	if err != nil {
+		return err
+	}
+	if fnVal.typ != "ptr" || fnVal.fnSigRef == nil {
+		return unsupportedf("call", "map.update callback must be a fn value (got typ=%s, sig=%v)", fnVal.typ, fnVal.fnSigRef != nil)
+	}
+	sig := fnVal.fnSigRef
+	if len(sig.params) != 1 {
+		return unsupportedf("call", "map.update callback arity must be 1 (got %d)", len(sig.params))
+	}
+
+	// Take the per-map lock so the get + callback + insert sequence is
+	// atomic w.r.t. other mutators. Recursive so the user callback can
+	// safely touch the same map.
+	g.declareRuntimeSymbol(mapRuntimeLockSymbol(), "void", []paramInfo{{typ: "ptr"}})
+	g.declareRuntimeSymbol(mapRuntimeUnlockSymbol(), "void", []paramInfo{{typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  call void @%s(%s)",
+		mapRuntimeLockSymbol(),
+		llvmCallArgs([]*LlvmValue{toOstyValue(base)}),
+	))
+	g.takeOstyEmitter(emitter)
+
+	// Materialise Option<V> for the current value.
+	optVal, err := g.emitMapGetCore(base, loadedKey, keyTyp, keyString)
+	if err != nil {
+		return err
+	}
+
+	// f(env, opt) -> V via the indirect-call ABI.
+	newVal, err := g.emitFnValueIndirectCall(fnVal, sig, []*LlvmValue{toOstyValue(optVal)})
+	if err != nil {
+		return err
+	}
+	if newVal.typ != base.mapValueTyp {
+		return unsupportedf("type-system", "map.update callback return %s, want %s", newVal.typ, base.mapValueTyp)
+	}
+
+	// Insert under the same lock.
+	if err := g.emitMapInsert(base, value{typ: keyTyp, ref: loadedKey.ref}, newVal); err != nil {
+		return err
+	}
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  call void @%s(%s)",
+		mapRuntimeUnlockSymbol(),
+		llvmCallArgs([]*LlvmValue{toOstyValue(base)}),
+	))
+	g.takeOstyEmitter(emitter)
+	return nil
+}
+
+// emitMapRetainIfStmt lowers `m.retainIf(pred)` on top of the
+// snapshot-keys iterator (`emitMapIterate`) + victim-collect + second
+// remove pass. Even under concurrent mutation of m, the snapshot
+// approach guarantees we never trip an out-of-bounds during the walk:
+// keys is a frozen List<K> taken once, and per-key get() is atomic
+// under the per-map lock. Keys removed by a concurrent thread appear
+// as None in get() and are silently skipped.
+func (g *generator) emitMapRetainIfStmt(call *ast.CallExpr, base value, keyTyp string, keyString bool) error {
+	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
+		return unsupported("call", "map.retainIf requires one positional argument")
+	}
+	predVal, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return err
+	}
+	if predVal.typ != "ptr" || predVal.fnSigRef == nil {
+		return unsupportedf("call", "map.retainIf callback must be a fn value")
+	}
+	sig := predVal.fnSigRef
+	if len(sig.params) != 2 || sig.ret != "i1" {
+		return unsupportedf("call", "map.retainIf pred arity/ret mismatch (want fn(K,V)->Bool)")
+	}
+	valTyp := base.mapValueTyp
+
+	baseVal := g.protectManagedTemporary("retainif.map", base)
+	predHeld := g.protectManagedTemporary("retainif.pred", predVal)
+
+	// victims = list_new()
+	g.declareRuntimeSymbol(listRuntimeNewSymbol(), "ptr", nil)
+	emitter := g.toOstyEmitter()
+	victims := llvmCall(emitter, "ptr", listRuntimeNewSymbol(), nil)
+	g.takeOstyEmitter(emitter)
+	victimsVal := fromOstyValue(victims)
+	victimsVal.gcManaged = true
+	victimsVal.listElemTyp = keyTyp
+	victimsVal.listElemString = keyString
+	victimsVal = g.protectManagedTemporary("retainif.victims", victimsVal)
+
+	// Pass 1: snapshot-iterate, collect victim keys where pred returns false.
+	err = g.emitMapIterate(baseVal, keyTyp, valTyp, keyString, "retainif", func(k, v value) error {
+		predLoaded, err := g.loadIfPointer(predHeld)
+		if err != nil {
+			return err
+		}
+		cond, err := g.emitFnValueIndirectCall(predLoaded, sig, []*LlvmValue{
+			{typ: keyTyp, name: k.ref},
+			{typ: valTyp, name: v.ref},
+		})
+		if err != nil {
+			return err
+		}
+		emitter := g.toOstyEmitter()
+		notCond := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = xor i1 %s, true", notCond, cond.ref))
+		labels := llvmIfExprStart(emitter, &LlvmValue{typ: "i1", name: notCond})
+		g.takeOstyEmitter(emitter)
+		g.currentBlock = labels.thenLabel
+
+		victimsLoaded, err := g.loadIfPointer(victimsVal)
+		if err != nil {
+			return err
+		}
+		pushSym := listRuntimePushSymbol(keyTyp)
+		g.declareRuntimeSymbol(pushSym, "void", []paramInfo{{typ: "ptr"}, {typ: keyTyp}})
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			pushSym,
+			llvmCallArgs([]*LlvmValue{toOstyValue(victimsLoaded), {typ: keyTyp, name: k.ref}}),
+		))
+		llvmIfExprElse(emitter, labels)
+		g.takeOstyEmitter(emitter)
+		g.currentBlock = labels.elseLabel
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+		g.takeOstyEmitter(emitter)
+		g.currentBlock = labels.endLabel
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// Pass 2: remove each victim key. Each remove is atomic under
+	// the per-map lock; double-remove or remove-of-already-gone is a
+	// no-op (osty_rt_map_remove_raw returns false and leaves the map
+	// alone).
+	g.declareRuntimeSymbol(listRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+	victimsLoaded, err := g.loadIfPointer(victimsVal)
+	if err != nil {
+		return err
+	}
+	emitter = g.toOstyEmitter()
+	vlen := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(victimsLoaded)})
+	loop2 := llvmRangeStart(emitter, "retainif_j", llvmIntLiteral(0), vlen, false)
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop2.bodyLabel)
+	cont2 := g.nextNamedLabel("retainif.cont2")
+	g.pushLoop(loopContext{continueLabel: cont2, breakLabel: loop2.endLabel, scopeDepth: len(g.locals)})
+
+	victimsLoaded, err = g.loadIfPointer(victimsVal)
+	if err != nil {
+		g.popLoop()
+		return err
+	}
+	mapLoaded, err := g.loadIfPointer(baseVal)
+	if err != nil {
+		g.popLoop()
+		return err
+	}
+	getSym := listRuntimeGetSymbol(keyTyp)
+	g.declareRuntimeSymbol(getSym, keyTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+	emitter = g.toOstyEmitter()
+	vk := llvmCall(emitter, keyTyp, getSym, []*LlvmValue{toOstyValue(victimsLoaded), llvmI64(loop2.current)})
+	removeSym := mapRuntimeRemoveSymbol(keyTyp, keyString)
+	g.declareRuntimeSymbol(removeSym, "i1", []paramInfo{{typ: "ptr"}, {typ: keyTyp}})
+	llvmCall(emitter, "i1", removeSym, []*LlvmValue{toOstyValue(mapLoaded), vk})
+	g.takeOstyEmitter(emitter)
+
+	g.popLoop()
+	if g.currentReachable {
+		g.branchTo(cont2)
+	}
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", cont2))
+	g.emitGCSafepoint(emitter)
+	llvmRangeEnd(emitter, loop2)
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop2.endLabel)
+
+	return nil
+}
+
 func (g *generator) emitSetMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	field, elemTyp, elemString, found := g.setMethodInfo(call)
 	if !found || field.Name != "insert" {
@@ -1739,6 +1976,112 @@ func (g *generator) emitSetMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	llvmCall(emitter, "i1", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(loaded)})
 	g.takeOstyEmitter(emitter)
 	return true, nil
+}
+
+// emitMapFor lowers `for (k, v) in m { body }` as an index-based walk:
+//
+//   %len = call i64 @osty_rt_map_len(%m)
+//   for %i = 0; %i < %len; %i++:
+//     %k = call <K> @osty_rt_map_key_at_<ksuf>(%m, %i)
+//     alloca %vslot (width by V), call @osty_rt_map_value_at(%m, %i, %vslot), load
+//     body(k, v)
+//
+// This is the infra piece that unlocks `retainIf`, `mergeWith`,
+// `mapValues`, and any user-written map iteration. Matches the stdlib
+// semantics of a stable-order walk (map preserves insertion order) and
+// leaves in-iteration mutation undefined (users collect keys first
+// the way `retainIf` does).
+func (g *generator) emitMapFor(stmt *ast.ForStmt, kName, vName, keyTyp, valTyp string, keyString bool) error {
+	g.pushScope()
+	defer g.popScope()
+	iterable, err := g.emitExpr(stmt.Iter)
+	if err != nil {
+		return err
+	}
+	if iterable.typ != "ptr" {
+		return unsupportedf("type-system", "for-(k,v) iterable type %s", iterable.typ)
+	}
+	iterable = g.protectManagedTemporary("for.map", iterable)
+	g.declareRuntimeSymbol(mapRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+	iterableValue, err := g.loadIfPointer(iterable)
+	if err != nil {
+		return err
+	}
+	emitter := g.toOstyEmitter()
+	lenValue := llvmCall(emitter, "i64", mapRuntimeLenSymbol(), []*LlvmValue{toOstyValue(iterableValue)})
+	loop := llvmRangeStart(emitter, kName+"_idx", llvmIntLiteral(0), lenValue, false)
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop.bodyLabel)
+	continueLabel := g.nextNamedLabel("for.cont")
+	g.pushLoop(loopContext{
+		continueLabel: continueLabel,
+		breakLabel:    loop.endLabel,
+		scopeDepth:    len(g.locals),
+	})
+	scopeDepth := len(g.locals)
+	g.pushScope()
+
+	iterableValue, err = g.loadIfPointer(iterable)
+	if err != nil {
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
+		return err
+	}
+	indexValue := value{typ: "i64", ref: loop.current}
+
+	// Load the key via typed accessor.
+	keyAtSym := mapRuntimeKeyAtSymbol(keyTyp, keyString)
+	g.declareRuntimeSymbol(keyAtSym, keyTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+	emitter = g.toOstyEmitter()
+	keyLoaded := llvmCall(emitter, keyTyp, keyAtSym, []*LlvmValue{toOstyValue(iterableValue), toOstyValue(indexValue)})
+	g.takeOstyEmitter(emitter)
+	keyVal := fromOstyValue(keyLoaded)
+	keyVal.gcManaged = keyTyp == "ptr"
+	keyVal.rootPaths = g.rootPathsForType(keyTyp)
+	g.bindLocal(kName, keyVal)
+
+	// Load the value via V-agnostic slot accessor + load.
+	valueAtSym := mapRuntimeValueAtSymbol()
+	g.declareRuntimeSymbol(valueAtSym, "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
+	emitter = g.toOstyEmitter()
+	vslot := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", vslot, valTyp))
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  call void @%s(%s)",
+		valueAtSym,
+		llvmCallArgs([]*LlvmValue{toOstyValue(iterableValue), toOstyValue(indexValue), {typ: "ptr", name: vslot}}),
+	))
+	g.takeOstyEmitter(emitter)
+	emitter = g.toOstyEmitter()
+	valLoaded := g.loadValueFromAddress(emitter, valTyp, vslot)
+	g.takeOstyEmitter(emitter)
+	valLoaded.gcManaged = valTyp == "ptr"
+	valLoaded.rootPaths = g.rootPathsForType(valTyp)
+	g.bindLocal(vName, valLoaded)
+
+	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
+		return err
+	}
+	if len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+	g.popLoop()
+	if g.currentReachable {
+		g.branchTo(continueLabel)
+	}
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	g.emitGCSafepoint(emitter)
+	llvmRangeEnd(emitter, loop)
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop.endLabel)
+	return nil
 }
 
 func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) error {
@@ -1836,7 +2179,7 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	}
 	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.endLabel)
@@ -1862,7 +2205,7 @@ func (g *generator) emitOptionalUserCallStmt(call *ast.CallExpr) (bool, error) {
 	}
 	if err := g.emitOptionalPtrStmt(baseValue, func() error {
 		emitter := g.toOstyEmitter()
-		g.emitGCSafepoint(emitter)
+		g.emitGCSafepointKind(emitter, safepointKindCall)
 		g.takeOstyEmitter(emitter)
 		args, err := g.optionalUserCallArgs(sig, innerSource, baseValue, call)
 		if err != nil {
@@ -1891,7 +2234,7 @@ func (g *generator) emitUserCallStmt(call *ast.CallExpr) (bool, error) {
 		return false, nil
 	}
 	emitter := g.toOstyEmitter()
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindCall)
 	g.takeOstyEmitter(emitter)
 	g.pushScope()
 	args, err := g.userCallArgs(sig, receiverExpr, call)

@@ -309,12 +309,7 @@ fn astLowerPublicFile(arena: AstArena, toks: List<astbridge.Token>) -> astbridge
 }
 
 fn astLowerTokenCount(toks: List<astbridge.Token>) -> Int {
-    let mut count = 0
-    for tok in toks {
-        let _ = tok
-        count = count + 1
-    }
-    count
+    toks.len()
 }
 
 fn astLowerInterpolatedTokensToExpr(toks: List<astbridge.Token>) -> astbridge.Expr {
@@ -1668,21 +1663,10 @@ fn astLowerLiteralPatternExpr(toks: List<astbridge.Token>, n: AstNode) -> astbri
 }
 
 fn astLowerIntListCount(xs: List<Int>) -> Int {
-    let mut count = 0
-    for x in xs {
-        let _ = x
-        count = count + 1
-    }
-    count
+    xs.len()
 }
 
 fn astLowerIntListAt(xs: List<Int>, target: Int) -> Int {
-    let mut i = 0
-    for x in xs {
-        if i == target {
-            return x
-        }
-        i = i + 1
-    }
-    -1
+    if target < 0 || target >= xs.len() { return -1 }
+    xs[target]
 }

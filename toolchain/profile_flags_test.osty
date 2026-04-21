@@ -52,31 +52,16 @@ fn testParseFeatureListDropsEmpty() {
 
 fn testParseFeatureListEmptyInputReturnsEmpty() {
     let feats = parseFeatureList("")
-    let mut count = 0
-    for f in feats {
-        let _ = f
-        count = count + 1
-    }
-    testing.assertEq(count, 0)
+    testing.assertEq(feats.len(), 0)
 }
 
 fn testParseFeatureListSingleElement() {
     let feats = parseFeatureList("a")
     testing.assertEq(feats[0], "a")
-    let mut count = 0
-    for f in feats {
-        let _ = f
-        count = count + 1
-    }
-    testing.assertEq(count, 1)
+    testing.assertEq(feats.len(), 1)
 }
 
 fn testParseFeatureListWhitespaceOnlyIsEmpty() {
     let feats = parseFeatureList("  ")
-    let mut count = 0
-    for f in feats {
-        let _ = f
-        count = count + 1
-    }
-    testing.assertEq(count, 0)
+    testing.assertEq(feats.len(), 0)
 }

@@ -915,8 +915,8 @@ func (g *generator) staticCollectionMethodResult(call *ast.CallExpr) (value, boo
 			return value{}, true, false
 		}
 	}
-	if _, keyTyp, _, keyString, found := g.mapMethodInfo(call); found {
-		switch field := call.Fn.(*ast.FieldExpr); field.Name {
+	if field, keyTyp, _, keyString, found := g.mapMethodInfo(call); found {
+		switch field.Name {
 		case "len":
 			return value{typ: "i64"}, true, true
 		case "isEmpty":
@@ -931,8 +931,8 @@ func (g *generator) staticCollectionMethodResult(call *ast.CallExpr) (value, boo
 			return value{}, true, false
 		}
 	}
-	if _, elemTyp, elemString, found := g.setMethodInfo(call); found {
-		switch field := call.Fn.(*ast.FieldExpr); field.Name {
+	if field, elemTyp, elemString, found := g.setMethodInfo(call); found {
+		switch field.Name {
 		case "len":
 			return value{typ: "i64"}, true, true
 		case "isEmpty":
@@ -998,7 +998,7 @@ func (g *generator) mapMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, s
 		return nil, "", "", false, false
 	}
 	switch field.Name {
-	case "containsKey", "insert", "remove", "keys", "len", "isEmpty":
+	case "containsKey", "insert", "remove", "keys", "len", "isEmpty", "get", "getOr", "update", "retainIf", "mergeWith", "mapValues":
 	default:
 		return nil, "", "", false, false
 	}

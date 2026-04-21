@@ -62,6 +62,24 @@ fn connect(t: Int = compute()) {}
 fn compute() -> Int { 0 }
 // === END
 
+// === CASE: E0107 === token not starting a struct member
+pub struct S {
+    123,
+}
+// === END
+
+// === CASE: E0108 === token not starting an enum member
+pub enum E {
+    123,
+}
+// === END
+
+// === CASE: E0109 === token not starting an interface member
+pub interface I {
+    123,
+}
+// === END
+
 // === CASE: E0200 === non-associative comparison chain
 fn f() { a() < b() < c() }
 fn a() -> Int { 0 }
@@ -76,6 +94,14 @@ fn foo() {}
 
 // === CASE: E0203 === closure with return type but no block body
 fn f() { let g = |x: Int| -> Int x * 2 }
+// === END
+
+// === CASE: E0205 === token not starting a closure parameter
+fn f() { let g = |123| 0 }
+// === END
+
+// === CASE: E0301 === token not starting a pattern
+fn f(x: Int) -> Int { match x { + -> 1, _ -> 0 } }
 // === END
 
 // === CASE: E0400 === unknown annotation

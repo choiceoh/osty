@@ -190,7 +190,11 @@ func runPipeline(args []string) {
 	}
 
 	if showDiagnostics && len(r.AllDiags) > 0 {
-		formatter := &diag.Formatter{Filename: diagnosticFilename, Source: sourceForDiagnostics}
+		formatter := &diag.Formatter{
+			Filename: diagnosticFilename,
+			Source:   sourceForDiagnostics,
+			Sources:  r.Sources,
+		}
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, formatter.FormatAll(r.AllDiags))
 	}
