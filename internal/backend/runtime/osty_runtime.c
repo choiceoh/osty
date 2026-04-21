@@ -2605,6 +2605,18 @@ int64_t osty_rt_bench_target_ns(void) {
     return (int64_t)v;
 }
 
+/* GC allocation odometer, exported for the bench harness to sample
+ * before/after the timed loop and report `bytes/op`. The underlying
+ * counter (`osty_gc_allocated_bytes_total`) is strictly monotonic
+ * since program start — deltas are meaningful, absolute values are
+ * not. Forward-declaring the existing accessor keeps this symbol
+ * definable next to osty_rt_bench_target_ns without reordering the
+ * GC state block. */
+int64_t osty_gc_debug_allocated_bytes_total(void);
+int64_t osty_rt_bench_alloc_bytes(void) {
+    return osty_gc_debug_allocated_bytes_total();
+}
+
 const char *osty_rt_bool_to_string(bool value) {
     if (value) {
         return osty_rt_string_dup_site("true", 4, "runtime.bool.to_string");

@@ -1161,11 +1161,17 @@ func (g *generator) emitTestingBenchmarkStmt(call *ast.CallExpr) error {
 	g.declareRuntimeSymbol(benchSamplesRecordSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "i64"}})
 	g.declareRuntimeSymbol(benchSamplesReportSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}})
 	g.declareRuntimeSymbol(benchSamplesFreeSymbol(), "void", []paramInfo{{typ: "ptr"}})
+	g.declareRuntimeSymbol(benchAllocBytesRuntimeSymbol(), "i64", nil)
 	emitter = g.toOstyEmitter()
 	finalN := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load i64, ptr %s", finalN, nslot))
 	samplesPtr := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call ptr @%s(i64 %s)", samplesPtr, benchSamplesNewSymbol(), finalN))
+	// Snapshot GC bytes odometer before the timed region so the
+	// post-loop delta reports bytes allocated by the closure body,
+	// with warmup / probe / harness overhead excluded.
+	allocStart := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", allocStart, benchAllocBytesRuntimeSymbol()))
 	startTemp := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", startTemp, benchClockRuntimeSymbol()))
 	g.takeOstyEmitter(emitter)
@@ -1196,8 +1202,27 @@ func (g *generator) emitTestingBenchmarkStmt(call *ast.CallExpr) error {
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", joinLabel))
 	avgTemp := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi i64 [ %s, %%%s ], [ 0, %%%s ]", avgTemp, divTemp, divLabel, skipLabel))
+	// Memory per op: delta(alloc_bytes) / finalN. Shares the same
+	// nonZero guard as avg so a zero-iter bench doesn't sdiv-trap.
+	allocEnd := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", allocEnd, benchAllocBytesRuntimeSymbol()))
+	allocDelta := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sub i64 %s, %s", allocDelta, allocEnd, allocStart))
+	memDivLabel := llvmNextLabel(emitter, "bench.memdiv")
+	memSkipLabel := llvmNextLabel(emitter, "bench.memskip")
+	memJoinLabel := llvmNextLabel(emitter, "bench.memjoin")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", nonZero, memDivLabel, memSkipLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", memDivLabel))
+	memDivTemp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sdiv i64 %s, %s", memDivTemp, allocDelta, finalNReload))
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", memJoinLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", memSkipLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", memJoinLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", memJoinLabel))
+	bytesPerOp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi i64 [ %s, %%%s ], [ 0, %%%s ]", bytesPerOp, memDivTemp, memDivLabel, memSkipLabel))
 	g.takeOstyEmitter(emitter)
-	g.currentBlock = joinLabel
+	g.currentBlock = memJoinLabel
 	g.currentReachable = true
 
 	itersStr, err := g.emitRuntimeIntToString(value{typ: "i64", ref: finalNReload})
@@ -1209,6 +1234,10 @@ func (g *generator) emitTestingBenchmarkStmt(call *ast.CallExpr) error {
 		return err
 	}
 	avgStr, err := g.emitRuntimeIntToString(value{typ: "i64", ref: avgTemp})
+	if err != nil {
+		return err
+	}
+	bytesStr, err := g.emitRuntimeIntToString(value{typ: "i64", ref: bytesPerOp})
 	if err != nil {
 		return err
 	}
@@ -1224,7 +1253,8 @@ func (g *generator) emitTestingBenchmarkStmt(call *ast.CallExpr) error {
 		dynamicAssertPart(totalStr),
 		staticAssertPart("ns avg="),
 		dynamicAssertPart(avgStr),
-		staticAssertPart("ns"),
+		staticAssertPart("ns bytes/op="),
+		dynamicAssertPart(bytesStr),
 	)
 	if err != nil {
 		return err
@@ -1237,8 +1267,9 @@ func (g *generator) emitTestingBenchmarkStmt(call *ast.CallExpr) error {
 	return nil
 }
 
-func benchClockRuntimeSymbol() string  { return "osty_rt_bench_now_nanos" }
-func benchTargetRuntimeSymbol() string { return "osty_rt_bench_target_ns" }
+func benchClockRuntimeSymbol() string      { return "osty_rt_bench_now_nanos" }
+func benchTargetRuntimeSymbol() string     { return "osty_rt_bench_target_ns" }
+func benchAllocBytesRuntimeSymbol() string { return "osty_rt_bench_alloc_bytes" }
 
 // emitBenchAutoTuneN probes the body when --benchtime is active and
 // picks N from that sample. Returns an alloca that downstream code

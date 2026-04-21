@@ -1,0 +1,8 @@
+use std.testing
+
+fn benchSumTo100() {
+    testing.benchmark(200, || {
+        let _ = sumTo(100)
+        Ok(())
+    })
+}
