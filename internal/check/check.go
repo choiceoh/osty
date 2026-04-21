@@ -155,24 +155,8 @@ func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 		diag.StampFile(d, path)
 		result.Diags = append(result.Diags, d...)
 	}
-	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib)
+	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib, opt.Privileged)
 	diag.StampFile(result.Diags, path)
-	if d := runPrivilegeGate(f, opt.Privileged); len(d) > 0 {
-		diag.StampFile(d, path)
-		result.Diags = append(result.Diags, d...)
-	}
-	if d := runPodShapeChecks(f); len(d) > 0 {
-		diag.StampFile(d, path)
-		result.Diags = append(result.Diags, d...)
-	}
-	if d := runNoAllocChecks(f, rr); len(d) > 0 {
-		diag.StampFile(d, path)
-		result.Diags = append(result.Diags, d...)
-	}
-	if d := runIntrinsicBodyChecks(f); len(d) > 0 {
-		diag.StampFile(d, path)
-		result.Diags = append(result.Diags, d...)
-	}
 	recordSelfhostDeclPass(opt.OnDecl, f, "collect")
 	recordSelfhostDeclPass(opt.OnDecl, f, "check")
 	return result
@@ -196,28 +180,28 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 			result.Diags = append(result.Diags, d...)
 		}
 	}
-	applyNativePackageResult(result, pkg, pr, nil, opt.Stdlib)
-	stampPackageDiags(result.Diags, pkg)
 	privileged := isPrivilegedPackage(pkg)
+	applyNativePackageResult(result, pkg, pr, nil, opt.Stdlib, privileged)
+	stampPackageDiags(result.Diags, pkg)
 	for _, pf := range pkg.Files {
 		if pf == nil {
 			continue
 		}
 		if d := runPrivilegeGate(pf.File, privileged); len(d) > 0 {
 			diag.StampFile(d, pf.Path)
-			result.Diags = append(result.Diags, d...)
+			result.Diags = appendMissingDiagnostics(result.Diags, d)
 		}
 		if d := runPodShapeChecks(pf.File); len(d) > 0 {
 			diag.StampFile(d, pf.Path)
-			result.Diags = append(result.Diags, d...)
+			result.Diags = appendMissingDiagnostics(result.Diags, d)
 		}
 		if d := runNoAllocChecks(pf.File, nil); len(d) > 0 {
 			diag.StampFile(d, pf.Path)
-			result.Diags = append(result.Diags, d...)
+			result.Diags = appendMissingDiagnostics(result.Diags, d)
 		}
 		if d := runIntrinsicBodyChecks(pf.File); len(d) > 0 {
 			diag.StampFile(d, pf.Path)
-			result.Diags = append(result.Diags, d...)
+			result.Diags = appendMissingDiagnostics(result.Diags, d)
 		}
 		recordSelfhostDeclPass(opt.OnDecl, pf.File, "collect")
 		recordSelfhostDeclPass(opt.OnDecl, pf.File, "check")
@@ -275,26 +259,26 @@ func Workspace(
 	for _, e := range walk {
 		pkgResult := out[e.path]
 		stampPackageDiags(pkgResult.Diags, e.pkg)
-		privileged := isPrivilegedPackagePath(e.path) || isPrivilegedPackage(e.pkg)
 		for _, pf := range e.pkg.Files {
 			if pf == nil {
 				continue
 			}
+			privileged := isPrivilegedPackagePath(e.path) || isPrivilegedPackage(e.pkg)
 			if d := runPrivilegeGate(pf.File, privileged); len(d) > 0 {
 				diag.StampFile(d, pf.Path)
-				pkgResult.Diags = append(pkgResult.Diags, d...)
+				pkgResult.Diags = appendMissingDiagnostics(pkgResult.Diags, d)
 			}
 			if d := runPodShapeChecks(pf.File); len(d) > 0 {
 				diag.StampFile(d, pf.Path)
-				pkgResult.Diags = append(pkgResult.Diags, d...)
+				pkgResult.Diags = appendMissingDiagnostics(pkgResult.Diags, d)
 			}
 			if d := runNoAllocChecks(pf.File, nil); len(d) > 0 {
 				diag.StampFile(d, pf.Path)
-				pkgResult.Diags = append(pkgResult.Diags, d...)
+				pkgResult.Diags = appendMissingDiagnostics(pkgResult.Diags, d)
 			}
 			if d := runIntrinsicBodyChecks(pf.File); len(d) > 0 {
 				diag.StampFile(d, pf.Path)
-				pkgResult.Diags = append(pkgResult.Diags, d...)
+				pkgResult.Diags = appendMissingDiagnostics(pkgResult.Diags, d)
 			}
 			recordSelfhostDeclPass(opt.OnDecl, pf.File, "collect")
 			recordSelfhostDeclPass(opt.OnDecl, pf.File, "check")
@@ -413,6 +397,57 @@ func offsetMatchesName(src []byte, offset int, name string) bool {
 		return false
 	}
 	return string(src[offset:offset+len(name)]) == name
+}
+
+func appendMissingDiagnostics(dst, extras []*diag.Diagnostic) []*diag.Diagnostic {
+	for _, extra := range extras {
+		if extra == nil || hasEquivalentDiagnostic(dst, extra) {
+			continue
+		}
+		dst = append(dst, extra)
+	}
+	return dst
+}
+
+func hasEquivalentDiagnostic(ds []*diag.Diagnostic, want *diag.Diagnostic) bool {
+	for _, got := range ds {
+		if sameDiagnostic(got, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameDiagnostic(a, b *diag.Diagnostic) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.Severity != b.Severity || a.Code != b.Code || a.Message != b.Message || a.File != b.File {
+		return false
+	}
+	aPos := a.PrimaryPos()
+	bPos := b.PrimaryPos()
+	if aPos != bPos {
+		return false
+	}
+	aEnd := diagnosticPrimaryEnd(a)
+	bEnd := diagnosticPrimaryEnd(b)
+	return aEnd == bEnd
+}
+
+func diagnosticPrimaryEnd(d *diag.Diagnostic) token.Pos {
+	if d == nil {
+		return token.Pos{}
+	}
+	for _, s := range d.Spans {
+		if s.Primary {
+			return s.Span.End
+		}
+	}
+	if len(d.Spans) > 0 {
+		return d.Spans[0].Span.End
+	}
+	return token.Pos{}
 }
 
 // perFileResolveResult builds the minimal resolve.Result shape the

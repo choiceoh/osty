@@ -417,11 +417,11 @@ type selfhostFileSegment struct {
 	sourceMap *sourcemap.Map
 }
 
-func applyNativeFileResult(result *Result, file *ast.File, rr *resolve.Result, src []byte, stdlib resolve.StdlibProvider) {
-	applySelfhostFileResult(result, file, rr, src, stdlib)
+func applyNativeFileResult(result *Result, file *ast.File, rr *resolve.Result, src []byte, stdlib resolve.StdlibProvider, privileged bool) {
+	applySelfhostFileResult(result, file, rr, src, stdlib, privileged)
 }
 
-func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result, src []byte, stdlib resolve.StdlibProvider) {
+func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result, src []byte, stdlib resolve.StdlibProvider, privileged bool) {
 	if result == nil {
 		return
 	}
@@ -454,16 +454,17 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 		))
 		return
 	}
-	result.Diags = append(result.Diags, nativeCheckerDiags(checkedSrc.source, checked)...)
-	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked)
+	policy := nativeDiagPolicy{privileged: privileged}
+	result.Diags = append(result.Diags, nativeCheckerDiags(checkedSrc.source, checked, policy)...)
+	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
 	overlaySelfhostResult(result, checkedSrc, checked)
 }
 
-func applyNativePackageResult(result *Result, pkg *resolve.Package, pr *resolve.PackageResult, ws *resolve.Workspace, stdlib resolve.StdlibProvider) {
-	applySelfhostPackageResult(result, pkg, pr, ws, stdlib)
+func applyNativePackageResult(result *Result, pkg *resolve.Package, pr *resolve.PackageResult, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool) {
+	applySelfhostPackageResult(result, pkg, pr, ws, stdlib, privileged)
 }
 
-func applySelfhostPackageResult(result *Result, pkg *resolve.Package, _ *resolve.PackageResult, ws *resolve.Workspace, stdlib resolve.StdlibProvider) {
+func applySelfhostPackageResult(result *Result, pkg *resolve.Package, _ *resolve.PackageResult, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool) {
 	if result == nil || pkg == nil {
 		return
 	}
@@ -506,8 +507,9 @@ func applySelfhostPackageResult(result *Result, pkg *resolve.Package, _ *resolve
 		))
 		return
 	}
-	result.Diags = append(result.Diags, nativeCheckerDiags(src.source, checked)...)
-	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked)
+	policy := nativeDiagPolicy{privileged: privileged}
+	result.Diags = append(result.Diags, nativeCheckerDiags(src.source, checked, policy)...)
+	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
 	overlaySelfhostResult(result, src, checked)
 }
 
@@ -524,20 +526,26 @@ func applySelfhostWorkspaceResults(ws *resolve.Workspace, _ map[string]*resolve.
 		if isProviderStdlibPackage(ws, path, pkg) {
 			continue
 		}
-		applySelfhostPackageResult(result, pkg, nil, ws, stdlib)
+		privileged := isPrivilegedPackagePath(path) || isPrivilegedPackage(pkg)
+		applySelfhostPackageResult(result, pkg, nil, ws, stdlib, privileged)
 	}
 }
 
-func nativeCheckerTelemetry(checked nativeCheckResult) *NativeCheckerTelemetry {
-	if checked.Summary.Assignments == 0 && checked.Summary.Errors == 0 && len(checked.Summary.ErrorsByContext) == 0 {
+type nativeDiagPolicy struct {
+	privileged bool
+}
+
+func nativeCheckerTelemetry(checked nativeCheckResult, policy nativeDiagPolicy) *NativeCheckerTelemetry {
+	summary := filteredNativeSummary(checked, policy)
+	if summary.Assignments == 0 && summary.Errors == 0 && len(summary.ErrorsByContext) == 0 {
 		return nil
 	}
 	return &NativeCheckerTelemetry{
-		Assignments:     checked.Summary.Assignments,
-		Accepted:        checked.Summary.Accepted,
-		Errors:          checked.Summary.Errors,
-		ErrorsByContext: cloneStringIntMap(checked.Summary.ErrorsByContext),
-		ErrorDetails:    cloneErrorDetailMap(checked.Summary.ErrorDetails),
+		Assignments:     summary.Assignments,
+		Accepted:        summary.Accepted,
+		Errors:          summary.Errors,
+		ErrorsByContext: cloneStringIntMap(summary.ErrorsByContext),
+		ErrorDetails:    cloneErrorDetailMap(summary.ErrorDetails),
 	}
 }
 
@@ -563,32 +571,85 @@ func cloneStringIntMap(src map[string]int) map[string]int {
 	return out
 }
 
-func nativeCheckerDiags(src []byte, checked nativeCheckResult) []*diag.Diagnostic {
+func nativeCheckerDiags(src []byte, checked nativeCheckResult, policy nativeDiagPolicy) []*diag.Diagnostic {
 	out := make([]*diag.Diagnostic, 0, len(checked.Diagnostics))
 	for _, d := range checked.Diagnostics {
+		if shouldSuppressNativeDiag(d, policy) {
+			continue
+		}
 		if converted := convertNativeDiag(src, d); converted != nil {
 			out = append(out, converted)
 		}
 	}
-	if checked.Summary.Errors == 0 {
+	summary := filteredNativeSummary(checked, policy)
+	if summary.Errors == 0 {
 		return out
 	}
 	label := "native checker reported type errors"
-	if checked.Summary.Errors == 1 {
+	if summary.Errors == 1 {
 		label = "native checker reported a type error"
 	}
 	out = append(out,
-		diag.New(diag.Error, fmt.Sprintf("%s: %d error(s)", label, checked.Summary.Errors)).
+		diag.New(diag.Error, fmt.Sprintf("%s: %d error(s)", label, summary.Errors)).
 			Code(diag.CodeTypeMismatch).
 			Primary(fileStartSpan(src), "native checker summary").
 			Note(fmt.Sprintf(
 				"native checker accepted %d of %d assignment/return/call checks",
-				checked.Summary.Accepted,
-				checked.Summary.Assignments,
+				summary.Accepted,
+				summary.Assignments,
 			)).
 			Build(),
 	)
 	return out
+}
+
+func filteredNativeSummary(checked nativeCheckResult, policy nativeDiagPolicy) nativeCheckSummary {
+	summary := checked.Summary
+	if !policy.privileged {
+		return summary
+	}
+	suppressed := 0
+	for _, d := range checked.Diagnostics {
+		if shouldSuppressNativeDiag(d, policy) && nativeDiagIsError(d) {
+			suppressed++
+		}
+	}
+	if suppressed == 0 {
+		return summary
+	}
+	if summary.Errors < suppressed {
+		summary.Errors = 0
+	} else {
+		summary.Errors -= suppressed
+	}
+	if len(summary.ErrorsByContext) > 0 {
+		summary.ErrorsByContext = cloneStringIntMap(summary.ErrorsByContext)
+		delete(summary.ErrorsByContext, diag.CodeRuntimePrivilegeViolation)
+		if len(summary.ErrorsByContext) == 0 {
+			summary.ErrorsByContext = nil
+		}
+	}
+	if len(summary.ErrorDetails) > 0 {
+		summary.ErrorDetails = cloneErrorDetailMap(summary.ErrorDetails)
+		delete(summary.ErrorDetails, diag.CodeRuntimePrivilegeViolation)
+		if len(summary.ErrorDetails) == 0 {
+			summary.ErrorDetails = nil
+		}
+	}
+	return summary
+}
+
+func shouldSuppressNativeDiag(d nativeCheckDiagnostic, policy nativeDiagPolicy) bool {
+	return policy.privileged && d.Code == diag.CodeRuntimePrivilegeViolation
+}
+
+func nativeDiagIsError(d nativeCheckDiagnostic) bool {
+	switch strings.ToLower(strings.TrimSpace(d.Severity)) {
+	case "warning", "warn", "lint":
+		return false
+	default:
+		return true
+	}
 }
 
 // convertNativeDiag lifts a per-record structured diagnostic emitted by

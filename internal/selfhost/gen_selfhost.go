@@ -221,6 +221,11 @@ func patchGenerated(path string) error {
 	}
 	src := string(data)
 	src = normalizeGeneratedSourceComment(src)
+	// bootstrap-gen still leaks a handful of slice-length helper calls as
+	// `units.len()` in otherwise-valid Go. Keep the post-pass narrowly
+	// scoped to the local temp variable name so diag example strings like
+	// `Ok(s.len())` stay untouched.
+	src = strings.ReplaceAll(src, "units.len()", "len(units)")
 	for _, fn := range []struct {
 		name string
 		body string
