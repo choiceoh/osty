@@ -92,6 +92,23 @@ func countStringUnits(text string) int {
 	return n
 }
 
+func splitStringUnits(text string) []string {
+	if text == "" {
+		return nil
+	}
+	units := make([]string, 0, countStringUnits(text))
+	start := 0
+	for idx := range text {
+		if idx == 0 {
+			continue
+		}
+		units = append(units, text[start:idx])
+		start = idx
+	}
+	units = append(units, text[start:])
+	return units
+}
+
 func matchTextUnits(units []string, start int, text string) bool {
 	offset := 0
 	for i := 0; i < len(text); {
