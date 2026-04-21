@@ -304,6 +304,116 @@ func TestLLVMBackendRefusesNilIR(t *testing.T) {
 	}
 }
 
+// TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics — Stage 5 prep
+// IR-only parity check that doesn't require clang. On `mir-backend`,
+// a program using `.chars()` / `.bytes()` / `.len()` / `.isEmpty()` on
+// a String must reach the MIR-direct emitter: the backend header tag
+// is the stable tell (`osty LLVM MIR backend`), and the runtime
+// symbols must all land in the emitted text.
+//
+// Paired with TestLLVMBackendBinaryMIRBackendStringCharsBytes: that
+// one locks in the actual runtime behavior through a linked binary
+// but needs clang and may be skipped. This one always runs and
+// catches silent fallback to the legacy bridge.
+func TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics(t *testing.T) {
+	t.Parallel()
+
+	tc := &fakeLLVMToolchain{}
+	backend := LLVMBackend{toolchain: tc}
+	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
+    let s = "abc"
+    println(s.chars().len())
+    println(s.bytes().len())
+    println(s.len())
+    if s.isEmpty() {
+        println(1)
+    } else {
+        println(0)
+    }
+}
+`)
+	req.Features = []string{"mir-backend"}
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	irBytes, readErr := os.ReadFile(result.Artifacts.LLVMIR)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
+	}
+	ir := string(irBytes)
+	if !strings.Contains(ir, "osty LLVM MIR backend") {
+		t.Fatalf("mir-backend feature did not reach MIR emitter (header missing):\n%s", ir)
+	}
+	for _, want := range []string{
+		"@osty_rt_strings_Chars",
+		"@osty_rt_strings_Bytes",
+		"@osty_rt_strings_ByteLen",
+	} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("expected IR to contain %q, got:\n%s", want, ir)
+		}
+	}
+}
+
+// TestLLVMBackendBinaryMIRBackendStringCharsBytes — Stage 5 prep
+// parity check. With `mir-backend` opted in on object/binary emission,
+// `.chars()` / `.bytes()` / `.len()` / `.isEmpty()` on a String must
+// lower through the MIR-direct emitter (no silent fallback to the
+// legacy AST bridge). The emitted IR header is the only stable tell of
+// which path ran; this test locks in both that signal AND the linked
+// binary's output so a regression on either side surfaces immediately.
+func TestLLVMBackendBinaryMIRBackendStringCharsBytes(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `fn main() {
+    let s = "abc"
+    println(s.chars().len())
+    println(s.bytes().len())
+    println(s.len())
+    if s.isEmpty() {
+        println(1)
+    } else {
+        println(0)
+    }
+}
+`)
+	req.Features = []string{"mir-backend"}
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	irBytes, readErr := os.ReadFile(result.Artifacts.LLVMIR)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
+	}
+	ir := string(irBytes)
+	if !strings.Contains(ir, "osty LLVM MIR backend") {
+		t.Fatalf("mir-backend feature did not reach MIR emitter (header missing):\n%s", ir)
+	}
+	for _, want := range []string{
+		"@osty_rt_strings_Chars",
+		"@osty_rt_strings_Bytes",
+		"@osty_rt_strings_ByteLen",
+	} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("expected IR to contain %q, got:\n%s", want, ir)
+		}
+	}
+
+	cmd := exec.Command(result.Artifacts.Binary)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "3\n3\n3\n0\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
 func TestLLVMBackendBinaryRunsBundledRuntime(t *testing.T) {
 	parallelClangBackendTest(t)
 
