@@ -3287,6 +3287,11 @@ func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
 	if !found {
 		return value{}, false, nil
 	}
+	if preferSpecialized, err := g.specializedBuiltinUserMethodAvailable(call); err != nil {
+		return value{}, true, err
+	} else if preferSpecialized {
+		return value{}, false, nil
+	}
 	base, err := g.emitExpr(field.X)
 	if err != nil {
 		return value{}, true, err
@@ -4877,6 +4882,31 @@ func (g *generator) userCallTarget(call *ast.CallExpr) (*fnSig, ast.Expr, bool, 
 	default:
 		return nil, nil, false, nil
 	}
+}
+
+// specializedBuiltinUserMethodAvailable reports whether `call` targets a
+// specialized stdlib built-in method body registered under the mangled
+// owner type (Map<String, Int> -> %_ZTS...). Intrinsic interceptors use
+// this as an escape hatch so monomorphized helper bodies can win over
+// legacy hand-emit paths at user callsites, while the plain AST path
+// continues to fall back to the runtime-backed helpers.
+func (g *generator) specializedBuiltinUserMethodAvailable(call *ast.CallExpr) (bool, error) {
+	field, ok := fieldExprOfCallFn(call)
+	if !ok || field == nil || field.IsOptional || field.X == nil {
+		return false, nil
+	}
+	baseSource, ok := g.staticExprSourceType(field.X)
+	if !ok {
+		return false, nil
+	}
+	if _, ok := specializedBuiltinMangledForSurface(baseSource); !ok {
+		return false, nil
+	}
+	sig, _, found, err := g.userCallTarget(call)
+	if err != nil {
+		return false, err
+	}
+	return found && sig != nil, nil
 }
 
 func (g *generator) emitEnumVariantCall(call *ast.CallExpr) (value, bool, error) {
