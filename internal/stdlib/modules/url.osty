@@ -1,7 +1,15 @@
-// std.url — URL parsing and building.
+// std.url — URL parsing and building (spec §10.16).
 //
-// This module exposes the parsed Url shape from spec §10.16. Runtime
-// parsing/joining is bridged by the Go generator.
+// Pure-Osty parsing: scheme / host / port / path / query / fragment are
+// decomposed via `strings.splitN`. IPv6 literal hosts (`[::1]:8080`) are
+// not yet supported — the scheme expects a flat `host[:port]` authority,
+// matching the spec's §10.16 example. `join` implements a minimal
+// relative-reference merge: absolute refs (with scheme) replace the
+// base entirely, root-relative refs ("/x") keep the base authority, and
+// otherwise the relative path is appended to the base path's directory.
+
+use std.strings
+use std.error
 
 pub struct Url {
     pub scheme: String,
@@ -11,14 +19,174 @@ pub struct Url {
     pub query: Map<String, String>,
     pub fragment: String?,
 
-    pub fn toString(self) -> String { "" }
-    pub fn queryValues(self, key: String) -> List<String> { [] }
+    pub fn toString(self) -> String {
+        let mut out = "{self.scheme}://{self.host}"
+        out = match self.port {
+            Some(p) -> "{out}:{p}",
+            None    -> out,
+        }
+        out = "{out}{self.path}"
+        if self.query.isEmpty() == false {
+            out = "{out}?{encodeQuery(self.query)}"
+        }
+        out = match self.fragment {
+            Some(f) -> "{out}#{f}",
+            None    -> out,
+        }
+        out
+    }
+
+    pub fn queryValues(self, key: String) -> List<String> {
+        match self.query.get(key) {
+            Some(v) -> [v],
+            None    -> [],
+        }
+    }
 }
 
 pub fn parse(text: String) -> Result<Url, Error> {
-    Ok(Url { scheme: "", host: "", port: None, path: "", query: {:}, fragment: None })
+    let schemeParts = strings.splitN(text, "://", 2)
+    if schemeParts.len() != 2 {
+        return Err(error.new("url: missing scheme in {text}"))
+    }
+    let scheme = schemeParts[0]
+    if scheme.isEmpty() {
+        return Err(error.new("url: empty scheme in {text}"))
+    }
+    let rest = schemeParts[1]
+
+    let fragSplit = strings.splitN(rest, "#", 2)
+    let beforeFragment = fragSplit[0]
+    let fragment: String? = if fragSplit.len() == 2 { Some(fragSplit[1]) } else { None }
+
+    let querySplit = strings.splitN(beforeFragment, "?", 2)
+    let beforeQuery = querySplit[0]
+    let query: Map<String, String> = if querySplit.len() == 2 {
+        parseQuery(querySplit[1])
+    } else {
+        {:}
+    }
+
+    let pathSplit = strings.splitN(beforeQuery, "/", 2)
+    let authority = pathSplit[0]
+    let path = if pathSplit.len() == 2 { "/{pathSplit[1]}" } else { "" }
+
+    let (host, port) = parseAuthority(authority)?
+
+    Ok(Url {
+        scheme: scheme,
+        host: host,
+        port: port,
+        path: path,
+        query: query,
+        fragment: fragment,
+    })
 }
 
 pub fn join(base: String, relative: String) -> Result<String, Error> {
-    Ok("")
+    if relative.isEmpty() {
+        return Ok(base)
+    }
+    if strings.contains(relative, "://") {
+        return Ok(relative)
+    }
+    let baseUrl = parse(base)?
+    let relativeChars = relative.chars()
+    if relativeChars.len() > 0 && relativeChars[0] == '/' {
+        let merged = Url {
+            scheme: baseUrl.scheme,
+            host: baseUrl.host,
+            port: baseUrl.port,
+            path: relative,
+            query: {:},
+            fragment: None,
+        }
+        return Ok(merged.toString())
+    }
+    let dir = dirnameOf(baseUrl.path)
+    let merged = Url {
+        scheme: baseUrl.scheme,
+        host: baseUrl.host,
+        port: baseUrl.port,
+        path: "{dir}{relative}",
+        query: {:},
+        fragment: None,
+    }
+    Ok(merged.toString())
+}
+
+fn parseAuthority(authority: String) -> Result<(String, Int?), Error> {
+    if authority.isEmpty() {
+        return Ok(("", None))
+    }
+    let parts = strings.splitN(authority, ":", 2)
+    if parts.len() == 1 {
+        return Ok((parts[0], None))
+    }
+    let host = parts[0]
+    let portStr = parts[1]
+    if portStr.isEmpty() {
+        return Ok((host, None))
+    }
+    let port = parsePort(portStr)?
+    Ok((host, Some(port)))
+}
+
+fn parsePort(s: String) -> Result<Int, Error> {
+    if s.isEmpty() {
+        return Err(error.new("url: empty port"))
+    }
+    let chars = s.chars()
+    let mut n = 0
+    let mut i = 0
+    for i < chars.len() {
+        let c = chars[i]
+        if c >= '0' && c <= '9' {
+            n = n * 10 + (c.toInt() - '0'.toInt())
+        } else {
+            return Err(error.new("url: invalid port {s}"))
+        }
+        i = i + 1
+    }
+    if n > 65535 {
+        return Err(error.new("url: port out of range: {s}"))
+    }
+    Ok(n)
+}
+
+fn parseQuery(s: String) -> Map<String, String> {
+    let mut out: Map<String, String> = {:}
+    if s.isEmpty() {
+        return out
+    }
+    for pair in strings.split(s, "&") {
+        if pair.isEmpty() {
+            continue
+        }
+        let kv = strings.splitN(pair, "=", 2)
+        let key = kv[0]
+        let value = if kv.len() == 2 { kv[1] } else { "" }
+        out.insert(key, value)
+    }
+    out
+}
+
+fn encodeQuery(q: Map<String, String>) -> String {
+    let mut parts: List<String> = []
+    for (k, v) in q {
+        parts.push("{k}={v}")
+    }
+    strings.join(parts, "&")
+}
+
+fn dirnameOf(path: String) -> String {
+    let chars = path.chars()
+    let mut i = chars.len() - 1
+    for i >= 0 {
+        if chars[i] == '/' {
+            return path[0..i + 1]
+        }
+        i = i - 1
+    }
+    ""
 }

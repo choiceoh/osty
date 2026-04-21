@@ -1,13 +1,11 @@
-// std.compress — compression codecs.
+// std.compress — compression codecs (spec §10.19).
+//
+// Body-less signature stubs: the backend lowers each call to the real
+// gzip codec runtime.
 
 pub struct Gzip {
-    pub fn encode(self, data: Bytes) -> Bytes {
-        data
-    }
-
-    pub fn decode(self, data: Bytes) -> Result<Bytes, Error> {
-        Ok(data)
-    }
+    pub fn encode(self, data: Bytes) -> Bytes
+    pub fn decode(self, data: Bytes) -> Result<Bytes, Error>
 }
 
 pub let gzip: Gzip = Gzip {}

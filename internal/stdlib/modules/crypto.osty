@@ -1,37 +1,23 @@
-// std.crypto — hashes, HMAC, and secure random bytes.
+// std.crypto — hashes, HMAC, and secure random bytes (spec §10.12).
+//
+// Body-less signature stubs: hashes, HMAC, CSPRNG, and constant-time
+// equality all live behind the runtime bridge.
 
 pub struct Hmac {
-    pub fn sha256(self, key: Bytes, message: Bytes) -> Bytes {
-        message
-    }
-
-    pub fn sha512(self, key: Bytes, message: Bytes) -> Bytes {
-        message
-    }
+    pub fn sha256(self, key: Bytes, message: Bytes) -> Bytes
+    pub fn sha512(self, key: Bytes, message: Bytes) -> Bytes
 }
 
 pub let hmac: Hmac = Hmac {}
 
-pub fn sha256(data: Bytes) -> Bytes {
-    data
-}
+pub fn sha256(data: Bytes) -> Bytes
 
-pub fn sha512(data: Bytes) -> Bytes {
-    data
-}
+pub fn sha512(data: Bytes) -> Bytes
 
-pub fn sha1(data: Bytes) -> Bytes {
-    data
-}
+pub fn sha1(data: Bytes) -> Bytes
 
-pub fn md5(data: Bytes) -> Bytes {
-    data
-}
+pub fn md5(data: Bytes) -> Bytes
 
-pub fn randomBytes(n: Int) -> Bytes {
-    randomBytes(n)
-}
+pub fn randomBytes(n: Int) -> Bytes
 
-pub fn constantTimeEq(a: Bytes, b: Bytes) -> Bool {
-    false
-}
+pub fn constantTimeEq(a: Bytes, b: Bytes) -> Bool

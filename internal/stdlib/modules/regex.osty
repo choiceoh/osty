@@ -1,37 +1,25 @@
-// std.regex — RE2 regular expressions.
+// std.regex — RE2 regular expressions (spec §10.9).
+//
+// Match / find / replace / split primitives are body-less — the backend
+// lowers each call to the RE2 runtime. One-shot free functions at the
+// bottom are real Osty wrappers that compile + apply in one call.
 
 pub struct Regex {
-    pub fn matches(self, text: String) -> Bool {
-        false
-    }
+    pub fn matches(self, text: String) -> Bool
 
-    pub fn find(self, text: String) -> Match? {
-        None
-    }
+    pub fn find(self, text: String) -> Match?
 
-    pub fn findAll(self, text: String) -> List<Match> {
-        []
-    }
+    pub fn findAll(self, text: String) -> List<Match>
 
-    pub fn captures(self, text: String) -> Captures? {
-        None
-    }
+    pub fn captures(self, text: String) -> Captures?
 
-    pub fn capturesAll(self, text: String) -> List<Captures> {
-        []
-    }
+    pub fn capturesAll(self, text: String) -> List<Captures>
 
-    pub fn replace(self, text: String, replacement: String) -> String {
-        text
-    }
+    pub fn replace(self, text: String, replacement: String) -> String
 
-    pub fn replaceAll(self, text: String, replacement: String) -> String {
-        text
-    }
+    pub fn replaceAll(self, text: String, replacement: String) -> String
 
-    pub fn split(self, text: String) -> List<String> {
-        []
-    }
+    pub fn split(self, text: String) -> List<String>
 }
 
 pub struct RegexError {
@@ -45,18 +33,12 @@ pub struct Match {
 }
 
 pub struct Captures {
-    pub fn get(self, i: Int) -> String? {
-        None
-    }
+    pub fn get(self, i: Int) -> String?
 
-    pub fn named(self, name: String) -> String? {
-        None
-    }
+    pub fn named(self, name: String) -> String?
 }
 
-pub fn compile(pattern: String) -> Result<Regex, RegexError> {
-    Ok(Regex {})
-}
+pub fn compile(pattern: String) -> Result<Regex, RegexError>
 
 // One-shot helpers: compile + apply in a single call. Fine for infrequent use;
 // if the same pattern runs against many inputs, compile() once and reuse the

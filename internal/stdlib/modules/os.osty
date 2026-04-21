@@ -1,25 +1,21 @@
 // std.os — process, environment, signals, and path helpers.
+//
+// `Path` primitives and process-control entries are body-less; the
+// backend lowers each call to the host-OS runtime. `basename` is a
+// pure derivation from `split` and stays as Osty code.
 
 use std.strings
 
 pub let path: Path = Path {}
 
 pub struct Path {
-    pub fn join(self, parts: List<String>) -> String {
-        ""
-    }
+    pub fn join(self, parts: List<String>) -> String
 
-    pub fn split(self, p: String) -> List<String> {
-        []
-    }
+    pub fn split(self, p: String) -> List<String>
 
-    pub fn extension(self, p: String) -> String {
-        ""
-    }
+    pub fn extension(self, p: String) -> String
 
-    pub fn dirname(self, p: String) -> String {
-        "."
-    }
+    pub fn dirname(self, p: String) -> String
 
     pub fn basename(self, p: String) -> String {
         let parts = self.split(p)
@@ -30,21 +26,13 @@ pub struct Path {
         }
     }
 
-    pub fn absolute(self, p: String) -> Result<String, Error> {
-        Ok(p)
-    }
+    pub fn absolute(self, p: String) -> Result<String, Error>
 
-    pub fn canonical(self, p: String) -> Result<String, Error> {
-        Ok(p)
-    }
+    pub fn canonical(self, p: String) -> Result<String, Error>
 
-    pub fn isAbsolute(self, p: String) -> Bool {
-        false
-    }
+    pub fn isAbsolute(self, p: String) -> Bool
 
-    pub fn separator(self) -> String {
-        "/"
-    }
+    pub fn separator(self) -> String
 }
 
 pub struct Output {
@@ -59,24 +47,14 @@ pub enum Signal {
     Hangup,
 }
 
-pub fn exec(cmd: String, args: List<String> = []) -> Result<Output, Error> {
-    Ok(Output { exitCode: 0, stdout: "", stderr: "" })
-}
+pub fn exec(cmd: String, args: List<String> = []) -> Result<Output, Error>
 
-pub fn execShell(cmd: String) -> Result<Output, Error> {
-    Ok(Output { exitCode: 0, stdout: "", stderr: "" })
-}
+pub fn execShell(cmd: String) -> Result<Output, Error>
 
-pub fn exit(code: Int) -> Never {
-    exit(code)
-}
+pub fn exit(code: Int) -> Never
 
-pub fn pid() -> Int {
-    0
-}
+pub fn pid() -> Int
 
-pub fn hostname() -> Result<String, Error> {
-    Ok("")
-}
+pub fn hostname() -> Result<String, Error>
 
-pub fn onSignal(signal: Signal, handler: fn(Signal) -> ()) {}
+pub fn onSignal(signal: Signal, handler: fn(Signal) -> ())
