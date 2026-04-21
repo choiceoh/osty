@@ -39,6 +39,7 @@ var toolchainCheckerFiles = []string{
 	"toolchain/solve.osty",
 	"toolchain/elab.osty",
 	"toolchain/check.osty",
+	"toolchain/check_gates.osty",
 	"examples/selfhost-core/resolve.osty",
 	"examples/selfhost-core/lint.osty",
 	"internal/selfhost/ast_lower.osty",
