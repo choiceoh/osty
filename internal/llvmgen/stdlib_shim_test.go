@@ -379,3 +379,75 @@ fn main() {
 		t.Fatalf("expected no std.strings aliases from runtime FFI use, got %v", aliases)
 	}
 }
+
+// TestStdStringsJoinNestedInListLiteral pins the narrow shape the
+// formatter_ast.osty probe walled on: a String-typed list literal with
+// an alias-qualified `strings.join(...)` call as a middle element. The
+// broader regression bundle lives in
+// field_call_dispatch_test.go:TestGenerateListLiteralOfStringsPropagatesSourceType;
+// this narrower test stays so an alias-stdlib-only regression would
+// fail here first with a smaller repro.
+func TestStdStringsJoinNestedInListLiteral(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn main() {
+    let parts: List<String> = ["a", "b"]
+    let out = strings.join(["<", strings.join(parts, ", "), ">"], "")
+    println(out)
+}
+`)
+	_, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_strings_nested_join.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+}
+
+// TestStringLetMutInferredSourceType pins the let-mut-with-bare-""
+// shape: `let mut line = "" ; [tag(), line, tag()]`. Paired with
+// TestStdStringsJoinNestedInListLiteral and
+// TestIfExprStringArmsAgreeSourceType so each of the three source-type
+// propagation paths closed by PR #438 has a dedicated narrow repro.
+func TestStringLetMutInferredSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn tag() -> String { "<t>" }
+
+fn main() {
+    let mut line = ""
+    line = tag()
+    let parts = [tag(), line, tag()]
+    println(parts.len())
+}
+`)
+	_, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/let_mut_string_source_type.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+}
+
+// TestIfExprStringArmsAgreeSourceType pins the if-expression phi
+// shape: `let op = if flag { "..=" } else { ".." }` used inside a
+// later String-typed list literal. Both branches agree on String so
+// mergeContainerMetadata / sameSourceType must preserve the tag.
+func TestIfExprStringArmsAgreeSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn tag() -> String { "<t>" }
+
+fn main() {
+    let flag = true
+    let op = if flag { "..=" } else { ".." }
+    let parts = [tag(), op, tag()]
+    println(parts.len())
+}
+`)
+	_, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/if_expr_string_arms.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+}
