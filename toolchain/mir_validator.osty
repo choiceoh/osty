@@ -64,7 +64,7 @@ pub fn mirValidateModule(m: MirModule) -> List<String> {
     }
     let mut gi = 0
     for g in m.globals {
-        let gErrs = mirValidateGlobal(g, gi)
+        let gErrs = mirValidateGlobal(m, g, gi)
         for e in gErrs {
             errs.push(e)
         }
@@ -180,13 +180,25 @@ pub fn mirValidateFunction(func: MirFunction) -> List<String> {
 // Globals
 // ====================================================================
 
-fn mirValidateGlobal(g: MirGlobal, idx: Int) -> List<String> {
+fn mirValidateGlobal(m: MirModule, g: MirGlobal, idx: Int) -> List<String> {
     let mut errs: List<String> = []
     if g.name == "" {
         errs.push("globals[{idx}]: empty name")
     }
     if g.typ == "" {
         errs.push("global \"{g.name}\": empty typ")
+    }
+    if g.hasInit {
+        if g.initSymbol == "" {
+            errs.push("global \"{g.name}\": hasInit but empty initSymbol")
+        } else {
+            let initIdx = mirModuleLookupFunction(m, g.initSymbol)
+            if initIdx < 0 || initIdx >= m.functions.len() {
+                errs.push("global \"{g.name}\": initSymbol \"{g.initSymbol}\" not found")
+            }
+        }
+    } else if g.initSymbol != "" {
+        errs.push("global \"{g.name}\": initSymbol set without hasInit")
     }
     errs
 }
@@ -569,4 +581,3 @@ fn mirValidateBlockRef(
     }
     errs
 }
-
