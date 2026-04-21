@@ -308,14 +308,27 @@ fn selfResolveName(name: String, start: Int, end: Int, node: Int) -> SelfResolve
 /// SelfResolveScope is the self-hosted resolver's compact lexical scope. It
 /// stores the currently visible symbols as a flat list and uses `depth` to
 /// distinguish same-scope duplicates from legal child-scope shadowing.
+///
+/// `inFn`/`inLoop` track the flow context that gates `return`/`defer` and
+/// `break`/`continue`. A closure starts a fresh fn context with `inLoop=false`
+/// so that `for { || { break } }` is correctly rejected: the loop doesn't
+/// leak through the closure barrier. These mirror the Go resolver's flowCtx.
 struct SelfResolveScope {
     symbols: List<SelfSymbol>,
     depth: Int,
     ifaceDefault: Bool,
+    inFn: Bool,
+    inLoop: Bool,
 }
 
 fn srRootScope(result: SelfResolveResult) -> SelfResolveScope {
-    SelfResolveScope { symbols: srSymbolListCopy(result.symbols), depth: 0, ifaceDefault: false }
+    SelfResolveScope {
+        symbols: srSymbolListCopy(result.symbols),
+        depth: 0,
+        ifaceDefault: false,
+        inFn: false,
+        inLoop: false,
+    }
 }
 
 fn srChildScope(parent: SelfResolveScope) -> SelfResolveScope {
@@ -323,14 +336,28 @@ fn srChildScope(parent: SelfResolveScope) -> SelfResolveScope {
         symbols: srSymbolListCopy(parent.symbols),
         depth: parent.depth + 1,
         ifaceDefault: parent.ifaceDefault,
+        inFn: parent.inFn,
+        inLoop: parent.inLoop,
     }
 }
 
-fn srChildScopeWithIfaceDefault(parent: SelfResolveScope, ifaceDefault: Bool) -> SelfResolveScope {
+fn srFnChildScope(parent: SelfResolveScope, ifaceDefault: Bool) -> SelfResolveScope {
     SelfResolveScope {
         symbols: srSymbolListCopy(parent.symbols),
         depth: parent.depth + 1,
         ifaceDefault,
+        inFn: true,
+        inLoop: false,
+    }
+}
+
+fn srLoopChildScope(parent: SelfResolveScope) -> SelfResolveScope {
+    SelfResolveScope {
+        symbols: srSymbolListCopy(parent.symbols),
+        depth: parent.depth + 1,
+        ifaceDefault: parent.ifaceDefault,
+        inFn: parent.inFn,
+        inLoop: true,
     }
 }
 
@@ -590,7 +617,7 @@ fn srAstResolveFunction(
 ) -> SelfResolveResult {
     let node = srAstNode(file, idx)
     let mut out = result
-    let fnScope = srChildScope(scope)
+    let fnScope = srFnChildScope(scope, ifaceDefault)
     out = srAstDeclareGenerics(file, node.children2, fnScope, out)
     for paramIdx in node.children {
         let param = srAstNode(file, paramIdx)
@@ -601,7 +628,7 @@ fn srAstResolveFunction(
         out = srAstResolveParamBindings(file, paramIdx, fnScope, owner, out)
     }
     out = srAstResolveType(file, node.left, fnScope, owner, out)
-    let bodyScope = srChildScopeWithIfaceDefault(fnScope, ifaceDefault)
+    let bodyScope = srChildScope(fnScope)
     srAstResolveBlock(file, node.right, bodyScope, out)
 }
 
@@ -648,7 +675,59 @@ fn srAstResolveStmt(
     if node.kind == AstNFor {
         return srAstResolveFor(file, node, scope, out)
     }
-    if node.kind == AstNReturn || node.kind == AstNDefer || node.kind == AstNExprStmt {
+    if node.kind == AstNReturn {
+        if !scope.inFn {
+            out = srPushFlowDiag(
+                out,
+                "E0602",
+                "`return` is only valid inside a function body",
+                node.start,
+                node.end,
+                idx,
+            )
+        }
+        return srAstResolveExpr(file, node.left, scope, out)
+    }
+    if node.kind == AstNDefer {
+        if !scope.inFn {
+            out = srPushFlowDiag(
+                out,
+                "E0603",
+                "`defer` is only valid inside a function body",
+                node.start,
+                node.end,
+                idx,
+            )
+        }
+        return srAstResolveExpr(file, node.left, scope, out)
+    }
+    if node.kind == AstNBreak {
+        if !scope.inLoop {
+            out = srPushFlowDiag(
+                out,
+                "E0600",
+                "`break` is only valid inside a `for` loop",
+                node.start,
+                node.end,
+                idx,
+            )
+        }
+        return out
+    }
+    if node.kind == AstNContinue {
+        if !scope.inLoop {
+            out = srPushFlowDiag(
+                out,
+                "E0601",
+                "`continue` is only valid inside a `for` loop",
+                node.start,
+                node.end,
+                idx,
+            )
+        }
+        return out
+    }
+    if node.kind == AstNExprStmt {
         return srAstResolveExpr(file, node.left, scope, out)
     }
     if node.kind == AstNAssign || node.kind == AstNChanSend {
@@ -656,6 +735,19 @@ fn srAstResolveStmt(
         return srAstResolveExpr(file, node.right, scope, out)
     }
     srAstResolveExpr(file, idx, scope, out)
+}
+
+fn srPushFlowDiag(
+    result: SelfResolveResult,
+    code: String,
+    message: String,
+    start: Int,
+    end: Int,
+    node: Int,
+) -> SelfResolveResult {
+    let mut out = result
+    out.diagnostics.push(selfResolveDiagnosticAtNode(code, message, "", start, end, node))
+    out
 }
 
 fn srAstResolveFor(
@@ -671,7 +763,7 @@ fn srAstResolveFor(
     let loopScope = srChildScope(scope)
     let patIdx = srAstChildAt(node.children, 0)
     out = srAstResolvePattern(file, patIdx, loopScope, out)
-    let bodyScope = srChildScope(loopScope)
+    let bodyScope = srLoopChildScope(loopScope)
     srAstResolveBlock(file, node.right, bodyScope, out)
 }
 
@@ -892,7 +984,7 @@ fn srAstResolveClosure(
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     let mut out = result
-    let closureScope = srChildScopeWithIfaceDefault(scope, false)
+    let closureScope = srFnChildScope(scope, false)
     for paramIdx in node.children {
         let param = srAstNode(file, paramIdx)
         out = srAstResolveType(file, param.right, closureScope, "", out)
