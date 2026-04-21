@@ -583,6 +583,7 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 		return unsupported("type-system", "range bounds must be Int")
 	}
 	emitter := g.toOstyEmitter()
+	loopSafepointSlot := g.allocLoopSafepointCounter(emitter)
 	loop := llvmRangeStart(emitter, iterName, toOstyValue(start), toOstyValue(stop), rng.Inclusive)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.bodyLabel)
@@ -611,7 +612,7 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	}
 	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
-	g.emitGCSafepointKind(emitter, safepointKindLoop)
+	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.endLabel)
@@ -620,6 +621,7 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 
 func (g *generator) emitWhileFor(stmt *ast.ForStmt) error {
 	emitter := g.toOstyEmitter()
+	loopSafepointSlot := g.allocLoopSafepointCounter(emitter)
 	condLabel := llvmNextLabel(emitter, "for.cond")
 	bodyLabel := llvmNextLabel(emitter, "for.body")
 	continueLabel := llvmNextLabel(emitter, "for.cont")
@@ -681,7 +683,7 @@ func (g *generator) emitWhileFor(stmt *ast.ForStmt) error {
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(continueLabel)
 	emitter = g.toOstyEmitter()
-	g.emitGCSafepointKind(emitter, safepointKindLoop)
+	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	g.takeOstyEmitter(emitter)
@@ -700,6 +702,7 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 		return unsupported("control-flow", "for-let requires an iterator expression")
 	}
 	emitter := g.toOstyEmitter()
+	loopSafepointSlot := g.allocLoopSafepointCounter(emitter)
 	condLabel := llvmNextLabel(emitter, "for.cond")
 	bodyLabel := llvmNextLabel(emitter, "for.body")
 	continueLabel := llvmNextLabel(emitter, "for.cont")
@@ -758,7 +761,7 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(continueLabel)
 	emitter = g.toOstyEmitter()
-	g.emitGCSafepointKind(emitter, safepointKindLoop)
+	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	g.takeOstyEmitter(emitter)
@@ -2670,6 +2673,7 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 		return err
 	}
 	emitter := g.toOstyEmitter()
+	loopSafepointSlot := g.allocLoopSafepointCounter(emitter)
 	lenValue := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(iterableValue)})
 	loop := llvmRangeStart(emitter, iterName+"_idx", llvmIntLiteral(0), lenValue, false)
 	g.takeOstyEmitter(emitter)
@@ -2747,7 +2751,7 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	}
 	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
-	g.emitGCSafepointKind(emitter, safepointKindLoop)
+	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.endLabel)

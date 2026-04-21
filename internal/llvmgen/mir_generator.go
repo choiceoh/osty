@@ -104,8 +104,9 @@ type mirGen struct {
 	// curBlockID tracks the block we're currently emitting so
 	// GotoTerm can detect loop back-edges (goto whose target block
 	// ID is <= the current block's ID) and emit a safepoint.
-	gcRoots    []mir.LocalID
-	curBlockID mir.BlockID
+	gcRoots           []mir.LocalID
+	curBlockID        mir.BlockID
+	loopSafepointSlot string
 
 	// Module-scoped safepoint counter — matches the AST emitter's
 	// safepoint-v1 ABI so each call site has a stable numeric id.
@@ -133,7 +134,7 @@ type mirGen struct {
 	// Under the uniform env ABI every closure call takes an env as
 	// implicit first arg; top-level fns have no env, so the thunk
 	// ignores env and delegates to the real fn.
-	thunkDefs map[string]string // symbol → full thunk IR
+	thunkDefs  map[string]string // symbol → full thunk IR
 	thunkOrder []string
 }
 
@@ -912,6 +913,17 @@ func (g *mirGen) emitAllocaPreamble(fn *mir.Function) {
 		g.fnBuf.WriteString(slot)
 		g.fnBuf.WriteByte('\n')
 	}
+	if g.opts.EmitGC && loopSafepointStride > 1 {
+		g.loopSafepointSlot = "%gc.loop.poll"
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(g.loopSafepointSlot)
+		g.fnBuf.WriteString(" = alloca i64\n")
+		g.fnBuf.WriteString("  store i64 0, ptr ")
+		g.fnBuf.WriteString(g.loopSafepointSlot)
+		g.fnBuf.WriteByte('\n')
+	} else {
+		g.loopSafepointSlot = ""
+	}
 }
 
 // ==== GC instrumentation ====
@@ -1031,6 +1043,66 @@ func (g *mirGen) emitGCSafepointKind(kind safepointKind) {
 	g.nextSafepoint++
 	g.fnBuf.WriteString(llvmRenderSafepointEmpty(encodeSafepointID(kind, serial)))
 	g.fnBuf.WriteByte('\n')
+}
+
+func (g *mirGen) emitLoopSafepointKind() {
+	if !g.opts.EmitGC {
+		return
+	}
+	if g.loopSafepointSlot == "" || loopSafepointStride <= 1 {
+		g.emitGCSafepointKind(safepointKindLoop)
+		return
+	}
+	count := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(count)
+	g.fnBuf.WriteString(" = load i64, ptr ")
+	g.fnBuf.WriteString(g.loopSafepointSlot)
+	g.fnBuf.WriteByte('\n')
+	next := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(next)
+	g.fnBuf.WriteString(" = add i64 ")
+	g.fnBuf.WriteString(count)
+	g.fnBuf.WriteString(", 1\n")
+	shouldPoll := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(shouldPoll)
+	g.fnBuf.WriteString(" = icmp eq i64 ")
+	g.fnBuf.WriteString(next)
+	g.fnBuf.WriteString(", ")
+	g.fnBuf.WriteString(strconv.FormatInt(loopSafepointStride, 10))
+	g.fnBuf.WriteByte('\n')
+	stored := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(stored)
+	g.fnBuf.WriteString(" = select i1 ")
+	g.fnBuf.WriteString(shouldPoll)
+	g.fnBuf.WriteString(", i64 0, i64 ")
+	g.fnBuf.WriteString(next)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString("  store i64 ")
+	g.fnBuf.WriteString(stored)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(g.loopSafepointSlot)
+	g.fnBuf.WriteByte('\n')
+	pollLabel := g.freshLabel("gc.loop.poll")
+	afterLabel := g.freshLabel("gc.loop.after")
+	g.fnBuf.WriteString("  br i1 ")
+	g.fnBuf.WriteString(shouldPoll)
+	g.fnBuf.WriteString(", label %")
+	g.fnBuf.WriteString(pollLabel)
+	g.fnBuf.WriteString(", label %")
+	g.fnBuf.WriteString(afterLabel)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(pollLabel)
+	g.fnBuf.WriteString(":\n")
+	g.emitGCSafepointKind(safepointKindLoop)
+	g.fnBuf.WriteString("  br label %")
+	g.fnBuf.WriteString(afterLabel)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(afterLabel)
+	g.fnBuf.WriteString(":\n")
 }
 
 // declareSafepoint registers @osty.gc.safepoint_v1 — split from
@@ -2593,24 +2665,25 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 	switch x := t.(type) {
 	case *mir.GotoTerm:
 		// Loop back-edges — a goto whose target is at or before the
-		// current block in CFG order — get a safepoint poll. This
-		// matches the legacy emitter's "safepoint at loop headers"
-		// convention and keeps cancellation responsive in tight
-		// loops. Forward gotos (if/else joins, fall-throughs) do
-		// not need extra polls because the function already took
-		// one at entry.
+		// current block in CFG order — advance the throttled loop
+		// safepoint counter. This matches the legacy emitter's
+		// loop-header polling convention while avoiding a full runtime
+		// call on every tight-loop iteration. Forward gotos (if/else
+		// joins, fall-throughs) do not need extra polls because the
+		// function already took one at entry.
 		if g.opts.EmitGC && x.Target <= g.curBlockID {
-			g.emitGCSafepointKind(safepointKindLoop)
+			g.emitLoopSafepointKind()
 		}
 		g.fnBuf.WriteString("  br label %")
 		g.fnBuf.WriteString(g.blockLabels[x.Target])
 		g.fnBuf.WriteByte('\n')
 	case *mir.BranchTerm:
-		// Same back-edge rule applied to conditional branches —
-		// covers `while cond { ... }` style loops where the cond
-		// block has a conditional branch back to its own body.
+		// Same throttled back-edge rule applied to conditional
+		// branches — covers `while cond { ... }` style loops where
+		// the cond block has a conditional branch back to its own
+		// body.
 		if g.opts.EmitGC && (x.Then <= g.curBlockID || x.Else <= g.curBlockID) {
-			g.emitGCSafepointKind(safepointKindLoop)
+			g.emitLoopSafepointKind()
 		}
 		cond, err := g.evalOperand(x.Cond, mir.TBool)
 		if err != nil {
@@ -4367,6 +4440,12 @@ func (g *mirGen) fresh() string {
 	name := fmt.Sprintf("%%t%d", g.tempSeq)
 	g.tempSeq++
 	return name
+}
+
+func (g *mirGen) freshLabel(prefix string) string {
+	label := fmt.Sprintf("%s.%d", prefix, g.tempSeq)
+	g.tempSeq++
+	return label
 }
 
 // ostyEmitter returns an LlvmEmitter whose temp counter is seeded from
