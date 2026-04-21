@@ -1357,6 +1357,11 @@ fn elabOwnerNameForReceiver(tys: TyArena, ty: Int) -> String {
     if head != "" {
         return head
     }
+    // `T?` interns as TkOptional — method calls dispatch under owner
+    // "Option" (Result/Option intrinsics are registered there).
+    if tyKindAt(tys, ty) == TkOptional {
+        return "Option"
+    }
     if tyKindAt(tys, ty) != TkPrim {
         return ""
     }
@@ -2578,11 +2583,15 @@ fn elabVariantPattern(cx: ElabCx, node: AstNode, scrutTy: Int, mutable: Bool, re
         scrutTy
     }
     let scrutHead = tyHeadAt(tys, scrutCanon)
-    let variant = checkLookupVariantInOwner(cx.env, scrutHead, variantName)
+    // Parser stores dotted variant patterns verbatim (`Expr.Add` for
+    // `match e { Expr.Add(...) -> ... }`); strip the enum prefix so
+    // the lookup sees just the variant name registered in the env.
+    let bareName = lastPathSegment(variantName)
+    let variant = checkLookupVariantInOwner(cx.env, scrutHead, bareName)
     let resolved = if variant.name != "" {
         variant
     } else {
-        checkLookupVariant(cx.env, variantName)
+        checkLookupVariant(cx.env, bareName)
     }
     if resolved.name == "" {
         let suggestion = diagDidYouMean(
