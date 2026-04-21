@@ -1377,6 +1377,15 @@ func (g *generator) emitMatchExprValue(expr *ast.MatchExpr) (value, error) {
 		return g.emitGuardedMatchExprValue(scrutinee, expr.Arms)
 	}
 	if scrutinee.typ == "i64" {
+		// `match n { 0 -> ..., 1 -> ..., _ -> ... }` on a plain Int
+		// scrutinee falls into the same i64 dispatch as a payload-free
+		// enum tag match — but the patterns are LiteralPat, not enum
+		// variant idents, so emitTagEnumMatchExprValue's matchEnumTag
+		// returns false on every arm. Detect the literal-pattern shape
+		// up front and route to the dedicated primitive lowering.
+		if isPrimitiveLiteralMatchArms(expr.Arms) {
+			return g.emitPrimitiveLiteralMatchExprValue(scrutinee, expr.Arms)
+		}
 		return g.emitTagEnumMatchExprValue(scrutinee, expr.Arms)
 	}
 	if info := g.enumsByType[scrutinee.typ]; info != nil && info.hasPayload {
@@ -1526,6 +1535,164 @@ func (g *generator) emitTagEnumMatchExprValue(scrutinee value, arms []*ast.Match
 		return g.emitTagEnumMatchSelectValue(scrutinee, arms)
 	}
 	return g.emitTagEnumMatchChainValue(scrutinee, arms)
+}
+
+// isPrimitiveLiteralMatchArms reports whether every arm of a match
+// expression is either a literal pattern (`0`, `true`, `'a'`) or a
+// wildcard, i.e. the shape `match n { 0 -> ..., 1 -> ..., _ -> ... }`.
+// At least one arm must be a literal — bare `match _ { _ -> body }`
+// is not what this routes to.
+func isPrimitiveLiteralMatchArms(arms []*ast.MatchArm) bool {
+	sawLiteral := false
+	for _, arm := range arms {
+		if arm == nil {
+			return false
+		}
+		switch arm.Pattern.(type) {
+		case *ast.WildcardPat:
+		case *ast.LiteralPat:
+			sawLiteral = true
+		default:
+			return false
+		}
+	}
+	return sawLiteral
+}
+
+// emitPrimitiveLiteralMatchExprValue lowers `match n { 0 -> A, 1 -> B,
+// _ -> C }` for a primitive scalar scrutinee (the i64 dispatch slot).
+// Mirrors emitTagEnumMatchExprValue for shape: select-safe arms
+// collapse to a chain of `select` instructions, the rest fall back to
+// nested if-expr phi.
+func (g *generator) emitPrimitiveLiteralMatchExprValue(scrutinee value, arms []*ast.MatchArm) (value, error) {
+	selectSafe := true
+	for _, arm := range arms {
+		if !matchArmBodyIsSelectSafe(arm.Body) {
+			selectSafe = false
+			break
+		}
+	}
+	if selectSafe {
+		return g.emitPrimitiveLiteralMatchSelectValue(scrutinee, arms)
+	}
+	return g.emitPrimitiveLiteralMatchChainValue(scrutinee, arms)
+}
+
+// emitPrimitiveLiteralMatchSelectValue builds the select chain back to
+// front: each non-wildcard arm becomes
+// `select (icmp eq scrutinee, lit), armValue, current`. Wildcard, when
+// present, must be last (matches the corresponding rule in
+// emitTagEnumMatchSelectValue) and seeds `current`.
+func (g *generator) emitPrimitiveLiteralMatchSelectValue(scrutinee value, arms []*ast.MatchArm) (value, error) {
+	var current value
+	haveCurrent := false
+	for i := len(arms) - 1; i >= 0; i-- {
+		arm := arms[i]
+		if _, catchAll := arm.Pattern.(*ast.WildcardPat); catchAll {
+			if i != len(arms)-1 {
+				return value{}, unsupported("expression", "wildcard match arm must be last")
+			}
+			v, err := g.emitMatchArmBodyValue(arm.Body)
+			if err != nil {
+				return value{}, err
+			}
+			current = v
+			haveCurrent = true
+			continue
+		}
+		litPat, ok := arm.Pattern.(*ast.LiteralPat)
+		if !ok || litPat.Literal == nil {
+			return value{}, unsupportedf("expression", "primitive literal match arm must be a literal pattern (got %T)", arm.Pattern)
+		}
+		litValue, err := g.emitExpr(litPat.Literal)
+		if err != nil {
+			return value{}, err
+		}
+		if litValue.typ != scrutinee.typ {
+			return value{}, unsupportedf("type-system", "match literal type %s does not match scrutinee %s", litValue.typ, scrutinee.typ)
+		}
+		armValue, err := g.emitMatchArmBodyValue(arm.Body)
+		if err != nil {
+			return value{}, err
+		}
+		if !haveCurrent {
+			current = armValue
+			haveCurrent = true
+			continue
+		}
+		if armValue.typ != current.typ {
+			return value{}, unsupportedf("type-system", "match arm types %s/%s", armValue.typ, current.typ)
+		}
+		emitter := g.toOstyEmitter()
+		cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(litValue))
+		g.takeOstyEmitter(emitter)
+		current, err = g.emitSelectValue(cond, armValue, current)
+		if err != nil {
+			return value{}, err
+		}
+	}
+	if !haveCurrent {
+		return value{}, unsupported("expression", "match with no arms")
+	}
+	return current, nil
+}
+
+// emitPrimitiveLiteralMatchChainValue builds nested if-expr phi for
+// non-select-safe arm bodies (block bodies with multiple statements,
+// calls with side effects, etc.). Mirrors emitTagEnumMatchChainValue.
+func (g *generator) emitPrimitiveLiteralMatchChainValue(scrutinee value, arms []*ast.MatchArm) (value, error) {
+	if len(arms) == 0 {
+		return value{}, unsupported("expression", "match with no arms")
+	}
+	arm := arms[0]
+	if arm == nil {
+		return value{}, unsupported("expression", "nil match arm")
+	}
+	if len(arms) == 1 {
+		if _, catchAll := arm.Pattern.(*ast.WildcardPat); catchAll {
+			return g.emitMatchArmBodyValue(arm.Body)
+		}
+		return value{}, unsupported("expression", "primitive literal match must end with a wildcard arm")
+	}
+	if _, catchAll := arm.Pattern.(*ast.WildcardPat); catchAll {
+		return value{}, unsupported("expression", "wildcard match arm must be last")
+	}
+	litPat, ok := arm.Pattern.(*ast.LiteralPat)
+	if !ok || litPat.Literal == nil {
+		return value{}, unsupportedf("expression", "primitive literal match arm must be a literal pattern (got %T)", arm.Pattern)
+	}
+	litValue, err := g.emitExpr(litPat.Literal)
+	if err != nil {
+		return value{}, err
+	}
+	if litValue.typ != scrutinee.typ {
+		return value{}, unsupportedf("type-system", "match literal type %s does not match scrutinee %s", litValue.typ, scrutinee.typ)
+	}
+	emitter := g.toOstyEmitter()
+	cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(litValue))
+	labels := llvmIfExprStart(emitter, cond)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.thenLabel
+
+	thenValue, err := g.emitMatchArmBodyValue(arm.Body)
+	if err != nil {
+		return value{}, err
+	}
+	thenPred := g.currentBlock
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+
+	elseValue, err := g.emitPrimitiveLiteralMatchChainValue(scrutinee, arms[1:])
+	if err != nil {
+		return value{}, err
+	}
+	elsePred := g.currentBlock
+	if thenValue.typ != elseValue.typ {
+		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
+	}
+	return g.emitIfExprPhi(labels, thenPred, elsePred, thenValue, elseValue)
 }
 
 func (g *generator) emitTagEnumMatchSelectValue(scrutinee value, arms []*ast.MatchArm) (value, error) {
