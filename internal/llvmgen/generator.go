@@ -230,6 +230,13 @@ func encodeSafepointID(kind safepointKind, serial int) int64 {
 // the splitting path on modest fixtures.
 var safepointRootChunkSize = llvmSafepointDefaultRootChunkSize()
 
+// loopSafepointStride throttles loop back-edge polls so tight
+// pointer-free arithmetic loops do not pay a full runtime call on every
+// iteration. The runtime still sees LOOP-kind safepoints regularly for
+// cancellation / GC progress; setting the stride to 1 restores the
+// historical "poll every back-edge" behavior.
+var loopSafepointStride int64 = 256
+
 // emitGCSafepoint emits a safepoint poll at an unspecified site — kept
 // for callers that have not been classified yet. New call sites should
 // invoke `emitGCSafepointKind` directly with a specific kind so Phase
@@ -270,6 +277,39 @@ func (g *generator) emitGCSafepointKind(emitter *LlvmEmitter, kind safepointKind
 		llvmEmitSafepointWithRoots(emitter, chunk.id, addresses)
 	}
 	g.needsGCRuntime = true
+}
+
+func (g *generator) allocLoopSafepointCounter(emitter *LlvmEmitter) string {
+	if loopSafepointStride <= 1 {
+		return ""
+	}
+	slot := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca i64", slot))
+	emitter.body = append(emitter.body, fmt.Sprintf("  store i64 0, ptr %s", slot))
+	return slot
+}
+
+func (g *generator) emitLoopSafepoint(emitter *LlvmEmitter, counterSlot string) {
+	if counterSlot == "" || loopSafepointStride <= 1 {
+		g.emitGCSafepointKind(emitter, safepointKindLoop)
+		return
+	}
+	count := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load i64, ptr %s", count, counterSlot))
+	next := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", next, count))
+	shouldPoll := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i64 %s, %d", shouldPoll, next, loopSafepointStride))
+	stored := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 0, i64 %s", stored, shouldPoll, next))
+	emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", stored, counterSlot))
+	pollLabel := llvmNextLabel(emitter, "gc.loop.poll")
+	afterLabel := llvmNextLabel(emitter, "gc.loop.after")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", shouldPoll, pollLabel, afterLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", pollLabel))
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", afterLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", afterLabel))
 }
 
 func llvmZeroValue(typ string) value {
