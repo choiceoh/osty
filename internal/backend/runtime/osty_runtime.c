@@ -3329,6 +3329,23 @@ int64_t osty_rt_map_len(void *raw_map) {
     return n;
 }
 
+// osty_rt_map_clear truncates the map to zero entries. Backing storage
+// (keys/values/capacity/kind metadata) is preserved so subsequent
+// inserts keep the same key/value kinds and re-use the allocation.
+// Key and value slots past len are no longer traced (osty_rt_map_trace
+// bounds by len), so cleared entries become unreachable from this map.
+// Runs under the map's recursive mutex so the zero-out is atomic with
+// respect to concurrent readers / iterators.
+void osty_rt_map_clear(void *raw_map) {
+    osty_rt_map *map = (osty_rt_map *)raw_map;
+    if (map == NULL) {
+        osty_rt_abort("map.clear on nil receiver");
+    }
+    osty_rt_map_lock(raw_map);
+    map->len = 0;
+    osty_rt_map_unlock(raw_map);
+}
+
 void *osty_rt_map_keys(void *raw_map) {
     osty_rt_map *map = (osty_rt_map *)raw_map;
     void *out = osty_rt_list_new();

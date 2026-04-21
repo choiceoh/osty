@@ -421,6 +421,10 @@ func mapRuntimeLenSymbol() string {
 	return llvmMapRuntimeLenSymbol()
 }
 
+func mapRuntimeClearSymbol() string {
+	return "osty_rt_map_clear"
+}
+
 func setRuntimeNewSymbol() string {
 	return llvmSetRuntimeNewSymbol()
 }
