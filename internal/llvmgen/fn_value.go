@@ -71,35 +71,35 @@ func (g *generator) ensureFnValueThunk(sig *fnSig) string {
 // fnValueEnvKind is the GC kind tag for closure envs. Points at the
 // dedicated `OSTY_GC_KIND_CLOSURE_ENV = 1029` reservation in
 // `internal/backend/runtime/osty_runtime.c` (Phase A4,
-// RUNTIME_GC_DELTA §2.4).
-//
-// Phase 1 envs still have no captures and the runtime dispatch stays
-// identical to the GENERIC kind (trace=NULL, destroy=NULL), but the
-// distinct tag means:
-//   - heap dumps and `osty_gc_stats` can separate closure envs from
-//     bare `osty.gc.alloc_v1` objects
-//   - Phase 4 can grow the env to `{ ptr fn, ptr cap0, ptr cap1, ... }`
-//     and register a trace callback keyed on this kind without having
-//     to audit every kind=1 allocation in the runtime first
+// RUNTIME_GC_DELTA §2.4). Retained as documentation / a pivot for
+// future direct `osty.gc.alloc_v1` callers; the closure allocation
+// path itself uses `osty.rt.closure_env_alloc_v1` which installs the
+// capture-tracing callback at construction.
 const fnValueEnvKind = 1029
 
-// fnValueEnvByteSize is the size in bytes of the bare 1-field env.
-// Stays a compile-time literal because the env layout is fixed: one
-// ptr slot, 8 bytes on every target this backend supports (LLVM
-// target triple is 64-bit).
-const fnValueEnvByteSize = 8
+// fnValuePhase1CaptureCount is the capture count the current lowering
+// emits for every closure env. Phase 1 closures have no captures yet;
+// Phase 4 will drive this from the closure AST. The constant lives at
+// this boundary so the call-site change is one-line when captures
+// land.
+const fnValuePhase1CaptureCount = 0
 
-// emitFnValueEnv materialises a 1-field closure env holding the
-// thunk pointer for the given top-level fn. Returns a `ptr`-typed
-// value tagged with fnSigRef so a subsequent call site can do
-// indirect dispatch with the correct signature.
+// emitFnValueEnv materialises a closure env holding the thunk pointer
+// for the given top-level fn. Returns a `ptr`-typed value tagged with
+// fnSigRef so a subsequent call site can do indirect dispatch with
+// the correct signature.
 //
-// Allocation goes through the GC (`osty.gc.alloc_v1`) rather than a
-// stack alloca so the env can safely outlive the enclosing frame —
-// e.g. when stored in a `List<fn(...)>`, a struct field, or passed
-// into a higher-order fn that memoises it. The returned value is
-// tagged `gcManaged: true` so downstream `bindNamedLocal` registers
-// it as a frame root.
+// Allocation goes through `osty.rt.closure_env_alloc_v1` (Phase A4
+// dedicated entry, RUNTIME_GC_DELTA §2.4). That helper attaches the
+// capture-tracing callback at construction so any managed pointers
+// placed in capture slots by a Phase 4 lowering are immediately
+// reachable from GC mark without revisiting the emit site.
+//
+// The env layout is `{ ptr fn, i64 capture_count, ptr captures[] }`.
+// `fn` at offset 0 is unchanged from the Phase 1 ABI, so existing
+// thunk call sites (`load ptr, ptr %env`) continue to work. For
+// Phase 1 the capture count is zero — the bulge only grows when the
+// capture-aware lowering lands.
 //
 // Callers must already be inside a function — there is no
 // module-level fn-value literal path (globals would need a separate
@@ -110,14 +110,23 @@ func (g *generator) emitFnValueEnv(sig *fnSig) (value, error) {
 		return value{}, unsupportedf("call", "fn-value env for nil signature")
 	}
 	thunk := g.ensureFnValueThunk(sig)
+	g.declareRuntimeSymbol("osty.rt.closure_env_alloc_v1", "ptr", []paramInfo{
+		{typ: "i64"},
+		{typ: "ptr"},
+	})
 	emitter := g.toOstyEmitter()
-	env := llvmGcAlloc(emitter, fnValueEnvKind, fnValueEnvByteSize, "runtime.closure.env.ptr")
-	emitter.body = append(emitter.body, fmt.Sprintf("  store ptr @%s, ptr %s", thunk, env.name))
+	site := llvmStringLiteral(emitter, "runtime.closure.env.ptr")
+	envTemp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  %s = call ptr @osty.rt.closure_env_alloc_v1(i64 %d, ptr %s)",
+		envTemp, fnValuePhase1CaptureCount, site.name,
+	))
+	emitter.body = append(emitter.body, fmt.Sprintf("  store ptr @%s, ptr %s", thunk, envTemp))
 	g.takeOstyEmitter(emitter)
 	g.needsGCRuntime = true
 	return value{
 		typ:       "ptr",
-		ref:       env.name,
+		ref:       envTemp,
 		fnSigRef:  sig,
 		gcManaged: true,
 	}, nil

@@ -353,9 +353,11 @@ fn main() {
 		"define private i64 @__osty_closure_thunk_identity(ptr %env, i64 %arg0)",
 		// Thunk body delegates to real symbol.
 		"call i64 @identity(i64 %arg0)",
-		// Env allocated on the GC heap (not stack) so the value can
-		// outlive the enclosing frame.
-		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
+		// Env allocated on the GC heap via the Phase A4 dedicated
+		// closure allocator (RUNTIME_GC_DELTA §2.4), so the trace
+		// callback for captures is installed at construction even
+		// though Phase 1 passes 0 captures.
+		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
 		"store ptr @__osty_closure_thunk_identity, ptr",
 		// Indirect call at the use site: load fn ptr from env[0],
 		// invoke through the loaded ptr with env as implicit arg 0.
@@ -576,8 +578,11 @@ fn main() {
 		"%Hook = type { ptr }",
 		// Thunk for inc so the value form has the env-first ABI.
 		"define private i64 @__osty_closure_thunk_inc(ptr %env, i64 %arg0)",
-		// The env is GC-allocated rather than stack-allocated.
-		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
+		// Phase A4 (RUNTIME_GC_DELTA §2.4): closure env goes through
+		// the dedicated runtime allocator so its capture-tracing
+		// callback is installed at construction. Phase 1 passes 0
+		// captures; Phase 4 will grow the count.
+		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
 		// The FieldExpr call path loads the fn ptr from env and
 		// dispatches through it.
 		"= call i64 (ptr, i64)",
@@ -616,8 +621,9 @@ fn main() {
 		"define i64 @apply(ptr %f, i64 %x)",
 		// The call-site inside apply loads fn ptr from env and dispatches.
 		"= call i64 (ptr, i64)",
-		// main materialises a GC-heap env for `inc` and passes it to apply.
-		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
+		// main materialises a GC-heap env for inc and passes it to
+		// apply via the Phase A4 closure-dedicated allocator.
+		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
 		"define private i64 @__osty_closure_thunk_inc(ptr %env, i64 %arg0)",
 	} {
 		if !strings.Contains(got, want) {

@@ -97,17 +97,33 @@ enum {
     OSTY_GC_KIND_MAP = 1026,
     OSTY_GC_KIND_SET = 1027,
     OSTY_GC_KIND_BYTES = 1028,
-    /* Phase A4 (RUNTIME_GC_DELTA §2.4). Reserved kind for closure
-     * environment structs. Phase 1 closures carry no captures so the
-     * layout is still `{ ptr fn_or_thunk }` and the trace callback
-     * stays NULL — identical to the GENERIC dispatch. The dedicated
-     * kind exists so that Phase 4 (the first capture-aware lowering)
-     * has a stable tag to switch on when it grows the env to
-     * `{ ptr fn, ptr cap0, ptr cap1, ... }` and wires up the
-     * per-capture mark_slot trace. Allocation site:
-     * `internal/llvmgen/fn_value.go:fnValueEnvKind`. */
+    /* Phase A4 (RUNTIME_GC_DELTA §2.4). Closure environment struct with
+     * a self-describing capture array. The runtime registers a trace
+     * callback (`osty_rt_closure_env_trace`) that walks the capture
+     * slots so any managed pointer captured by a closure stays
+     * reachable across GC cycles. Layout below in `osty_rt_closure_env`.
+     * Allocation is dedicated: `osty.rt.closure_env_alloc_v1` rather
+     * than the generic `osty.gc.alloc_v1`, so the trace is installed
+     * at construction and not as a post-alloc mutation. Phase 1 still
+     * emits envs with `capture_count = 0`, exercising the allocation
+     * ABI while captures themselves are lowered in Phase 4. */
     OSTY_GC_KIND_CLOSURE_ENV = 1029,
 };
+
+/* Closure environment payload. The thunk ABI is preserved — the LLVM
+ * call site still does `load ptr, ptr %env` — because `fn_ptr` stays
+ * at offset 0. `capture_count` and `captures[]` follow so the trace
+ * callback can iterate without any side metadata.
+ *
+ * Capture slots hold `void *`, always through managed-pointer
+ * semantics. Non-pointer captures (scalar values boxed by the Osty
+ * frontend) would still go here as tagged managed values; the
+ * frontend is responsible for boxing. */
+typedef struct osty_rt_closure_env {
+    void *fn_ptr;
+    int64_t capture_count;
+    void *captures[];
+} osty_rt_closure_env;
 
 enum {
     OSTY_RT_ABI_I64 = 1,
@@ -144,6 +160,43 @@ static int64_t osty_gc_load_managed_count = 0;
 static int64_t osty_gc_allocated_bytes_total = 0;
 static int64_t osty_gc_swept_count_total = 0;
 static int64_t osty_gc_swept_bytes_total = 0;
+
+/* Phase A2 collection timing (RUNTIME_GC_DELTA §9.3 depth follow-up).
+ *
+ * Measured via `clock_gettime(CLOCK_MONOTONIC)` around every
+ * `osty_gc_collect_now_with_stack_roots` body. Nanosecond resolution;
+ * callers that want ms convert at the edge. `_max` tracks the slowest
+ * single cycle so generational triggers can be tuned against the tail,
+ * not just the mean. `_last` is the most recent cycle's duration.
+ */
+static int64_t osty_gc_collection_nanos_total = 0;
+static int64_t osty_gc_collection_nanos_last = 0;
+static int64_t osty_gc_collection_nanos_max = 0;
+
+/* Phase A3 payload→header hash index (RUNTIME_GC_DELTA §4.2 depth
+ * follow-up). Replaces the O(n) linked-list scan in
+ * `osty_gc_find_header`. Open addressing with linear probing and
+ * tombstones; rehashed on allocation when the combined load
+ * (count + tombstones) crosses 75% of capacity. Keyed by payload
+ * pointer — which is stable for the lifetime of the allocation because
+ * the collector does not relocate yet (compaction lands in Phase D).
+ *
+ * `OSTY_GC_INDEX_TOMBSTONE` is a non-NULL marker distinct from any
+ * real payload pointer so probes can skip erased slots without
+ * treating them as empty.
+ */
+typedef struct osty_gc_index_slot {
+    void *payload;
+    osty_gc_header *header;
+} osty_gc_index_slot;
+
+#define OSTY_GC_INDEX_TOMBSTONE ((void *)(uintptr_t)1)
+
+static osty_gc_index_slot *osty_gc_index_slots = NULL;
+static int64_t osty_gc_index_capacity = 0;
+static int64_t osty_gc_index_count = 0;
+static int64_t osty_gc_index_tombstones = 0;
+static int64_t osty_gc_index_find_ops_total = 0;
 
 /* Phase A6 stackmap overflow guard (RUNTIME_GC_DELTA §10.2).
  *
@@ -323,6 +376,109 @@ static void osty_sched_workers_dec(void) {
     osty_gc_release();
 }
 
+/* SplitMix64-style mixing for pointer hashing. Pointers on x86_64 / ARM64
+ * have alignment-induced low-bit correlation (headers are 16-byte aligned
+ * thanks to `calloc`), so naive `& mask` would cluster. This finaliser
+ * makes the probe sequence look close to uniform random. */
+static size_t osty_gc_index_hash(void *payload) {
+    uint64_t h = (uint64_t)(uintptr_t)payload;
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
+    return (size_t)h;
+}
+
+static void osty_gc_index_insert(void *payload, osty_gc_header *header);
+
+static void osty_gc_index_grow(int64_t new_capacity) {
+    osty_gc_index_slot *old_slots = osty_gc_index_slots;
+    int64_t old_cap = osty_gc_index_capacity;
+    int64_t i;
+    osty_gc_index_slots = (osty_gc_index_slot *)calloc((size_t)new_capacity,
+                                                       sizeof(osty_gc_index_slot));
+    if (osty_gc_index_slots == NULL) {
+        osty_rt_abort("out of memory (gc index)");
+    }
+    osty_gc_index_capacity = new_capacity;
+    osty_gc_index_count = 0;
+    osty_gc_index_tombstones = 0;
+    if (old_slots != NULL) {
+        for (i = 0; i < old_cap; i++) {
+            void *p = old_slots[i].payload;
+            if (p != NULL && p != OSTY_GC_INDEX_TOMBSTONE) {
+                osty_gc_index_insert(p, old_slots[i].header);
+            }
+        }
+        free(old_slots);
+    }
+}
+
+static void osty_gc_index_insert(void *payload, osty_gc_header *header) {
+    size_t mask;
+    size_t idx;
+    /* Keep load factor ≤ 0.75 including tombstones so probes stay
+     * short. Capacity is always a power of two — start at 128. */
+    if (osty_gc_index_slots == NULL ||
+        (osty_gc_index_count + osty_gc_index_tombstones + 1) * 4 >=
+            osty_gc_index_capacity * 3) {
+        int64_t new_cap = osty_gc_index_capacity == 0 ? 128 : osty_gc_index_capacity * 2;
+        osty_gc_index_grow(new_cap);
+    }
+    mask = (size_t)(osty_gc_index_capacity - 1);
+    idx = osty_gc_index_hash(payload) & mask;
+    while (osty_gc_index_slots[idx].payload != NULL &&
+           osty_gc_index_slots[idx].payload != OSTY_GC_INDEX_TOMBSTONE) {
+        idx = (idx + 1) & mask;
+    }
+    if (osty_gc_index_slots[idx].payload == OSTY_GC_INDEX_TOMBSTONE) {
+        osty_gc_index_tombstones -= 1;
+    }
+    osty_gc_index_slots[idx].payload = payload;
+    osty_gc_index_slots[idx].header = header;
+    osty_gc_index_count += 1;
+}
+
+static osty_gc_header *osty_gc_index_lookup(void *payload) {
+    size_t mask;
+    size_t idx;
+    if (osty_gc_index_slots == NULL || payload == NULL ||
+        payload == OSTY_GC_INDEX_TOMBSTONE) {
+        return NULL;
+    }
+    mask = (size_t)(osty_gc_index_capacity - 1);
+    idx = osty_gc_index_hash(payload) & mask;
+    while (osty_gc_index_slots[idx].payload != NULL) {
+        if (osty_gc_index_slots[idx].payload == payload) {
+            return osty_gc_index_slots[idx].header;
+        }
+        idx = (idx + 1) & mask;
+    }
+    return NULL;
+}
+
+static void osty_gc_index_remove(void *payload) {
+    size_t mask;
+    size_t idx;
+    if (osty_gc_index_slots == NULL || payload == NULL ||
+        payload == OSTY_GC_INDEX_TOMBSTONE) {
+        return;
+    }
+    mask = (size_t)(osty_gc_index_capacity - 1);
+    idx = osty_gc_index_hash(payload) & mask;
+    while (osty_gc_index_slots[idx].payload != NULL) {
+        if (osty_gc_index_slots[idx].payload == payload) {
+            osty_gc_index_slots[idx].payload = OSTY_GC_INDEX_TOMBSTONE;
+            osty_gc_index_slots[idx].header = NULL;
+            osty_gc_index_count -= 1;
+            osty_gc_index_tombstones += 1;
+            return;
+        }
+        idx = (idx + 1) & mask;
+    }
+}
+
 static void osty_gc_link(osty_gc_header *header) {
     header->next = osty_gc_objects;
     header->prev = NULL;
@@ -332,6 +488,7 @@ static void osty_gc_link(osty_gc_header *header) {
     osty_gc_objects = header;
     osty_gc_live_count += 1;
     osty_gc_live_bytes += header->byte_size;
+    osty_gc_index_insert(header->payload, header);
 }
 
 static void osty_gc_unlink(osty_gc_header *header) {
@@ -345,6 +502,7 @@ static void osty_gc_unlink(osty_gc_header *header) {
     }
     osty_gc_live_count -= 1;
     osty_gc_live_bytes -= header->byte_size;
+    osty_gc_index_remove(header->payload);
 }
 
 static int64_t osty_gc_pressure_limit_now(void) {
@@ -385,14 +543,12 @@ static void osty_gc_note_allocation(size_t payload_size) {
 }
 
 static osty_gc_header *osty_gc_find_header(void *payload) {
-    osty_gc_header *header = osty_gc_objects;
-    while (header != NULL) {
-        if (header->payload == payload) {
-            return header;
-        }
-        header = header->next;
-    }
-    return NULL;
+    /* Phase A3 depth: O(1) expected via hash index. The linked list
+     * is now purely for iteration order (mark seeding, sweep, heap
+     * validation) — all "is this a managed pointer" queries go
+     * through the hash. */
+    osty_gc_index_find_ops_total += 1;
+    return osty_gc_index_lookup(payload);
 }
 
 static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, const char *site, osty_gc_trace_fn trace, osty_gc_destroy_fn destroy) {
@@ -629,14 +785,28 @@ static void osty_gc_mark_root_slot(void *slot_addr) {
     osty_gc_mark_payload(payload);
 }
 
+/* Phase A2 depth: monotonic timing helper. Falls back to 0 on systems
+ * where `clock_gettime` is unavailable — callers must treat zero as
+ * "no measurement" (still strictly monotonic inside a single run). */
+static int64_t osty_gc_now_nanos(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+}
+
 static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
     osty_gc_header *header;
     osty_gc_header *next;
     int64_t i;
+    int64_t t_start;
+    int64_t t_end;
 
     /* Entry invariant: every header has `marked == false` (sweep clears
      * the colour on its way out, so the next cycle does not need a
      * dedicated pre-pass). */
+    t_start = osty_gc_now_nanos();
 
     /* 1. Seed the work queue from pinned roots (`root_bind_v1` holders). */
     header = osty_gc_objects;
@@ -680,6 +850,16 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
     osty_gc_allocated_since_collect = 0;
     osty_gc_collection_requested = false;
     osty_gc_barrier_logs_clear();
+
+    t_end = osty_gc_now_nanos();
+    if (t_start != 0 && t_end >= t_start) {
+        int64_t elapsed = t_end - t_start;
+        osty_gc_collection_nanos_last = elapsed;
+        osty_gc_collection_nanos_total += elapsed;
+        if (elapsed > osty_gc_collection_nanos_max) {
+            osty_gc_collection_nanos_max = elapsed;
+        }
+    }
 }
 
 static void osty_gc_collect_now(void) {
@@ -2166,6 +2346,58 @@ static void osty_rt_enum_ptr_payload_trace(void *payload) {
     osty_gc_mark_root_slot(payload);
 }
 
+/* Phase A4 depth (RUNTIME_GC_DELTA §2.4). Trace callback for closure
+ * envs: walks the capture array so any managed pointer stored in a
+ * closure capture survives GC while the env itself is reachable.
+ *
+ * The env layout is self-describing (see `osty_rt_closure_env`) so the
+ * trace needs no external descriptor — it reads `capture_count`, then
+ * passes each slot address to `osty_gc_mark_slot_v1`. Non-managed
+ * capture values (scalars that the Osty frontend stores as raw bits
+ * inside the slot) are handled transparently because `mark_slot_v1`
+ * filters through `find_header`.
+ */
+static void osty_rt_closure_env_trace(void *payload) {
+    osty_rt_closure_env *env = (osty_rt_closure_env *)payload;
+    int64_t i;
+    if (env == NULL || env->capture_count <= 0) {
+        return;
+    }
+    for (i = 0; i < env->capture_count; i++) {
+        osty_gc_mark_slot_v1((void *)&env->captures[i]);
+    }
+}
+
+/* Phase A4 depth: dedicated allocator for closure envs. Takes the
+ * capture count up front so the layout and trace callback are set
+ * together — there is no post-alloc mutation window where a
+ * collection could see an env without its trace installed.
+ *
+ * Exported as `osty.rt.closure_env_alloc_v1` so the LLVM emitter can
+ * call it with a single `call ptr @osty.rt.closure_env_alloc_v1(i64 N,
+ * ptr %site)` at the fn-value materialisation site.
+ */
+void *osty_rt_closure_env_alloc_v1(int64_t capture_count, const char *site)
+    __asm__(OSTY_GC_SYMBOL("osty.rt.closure_env_alloc_v1"));
+
+void *osty_rt_closure_env_alloc_v1(int64_t capture_count, const char *site) {
+    size_t byte_size;
+    osty_rt_closure_env *env;
+
+    if (capture_count < 0) {
+        osty_rt_abort("negative closure env capture count");
+    }
+    if ((size_t)capture_count > (SIZE_MAX - sizeof(osty_rt_closure_env)) / sizeof(void *)) {
+        osty_rt_abort("closure env capture count overflow");
+    }
+    byte_size = sizeof(osty_rt_closure_env) + (size_t)capture_count * sizeof(void *);
+    env = (osty_rt_closure_env *)osty_gc_allocate_managed(
+        byte_size, OSTY_GC_KIND_CLOSURE_ENV, site,
+        osty_rt_closure_env_trace, NULL);
+    env->capture_count = capture_count;
+    return env;
+}
+
 void *osty_rt_enum_alloc_ptr_v1(const char *site) {
     return osty_gc_allocate_managed(8, OSTY_GC_KIND_GENERIC, site, osty_rt_enum_ptr_payload_trace, NULL);
 }
@@ -2520,6 +2752,45 @@ int64_t osty_gc_debug_mark_stack_max_depth(void) {
     return osty_gc_mark_stack_max_depth;
 }
 
+/* Phase A2 depth: collection timing accessors. Nanoseconds relative to
+ * CLOCK_MONOTONIC — zero means "no measurement recorded" (either no
+ * collections yet, or clock_gettime failed on the host). */
+
+int64_t osty_gc_debug_collection_nanos_total(void) {
+    return osty_gc_collection_nanos_total;
+}
+
+int64_t osty_gc_debug_collection_nanos_last(void) {
+    return osty_gc_collection_nanos_last;
+}
+
+int64_t osty_gc_debug_collection_nanos_max(void) {
+    return osty_gc_collection_nanos_max;
+}
+
+/* Phase A3 depth: hash index observability. Exposes capacity and
+ * occupancy so tuning scripts can verify the probe sequences stay
+ * short. `find_ops_total` counts lookups across the program — pairs
+ * with `mark_stack_max_depth` to describe the mark pass's cost
+ * profile. (The counter itself lives near the index state globals
+ * because `osty_gc_find_header` bumps it.) */
+
+int64_t osty_gc_debug_index_capacity(void) {
+    return osty_gc_index_capacity;
+}
+
+int64_t osty_gc_debug_index_count(void) {
+    return osty_gc_index_count;
+}
+
+int64_t osty_gc_debug_index_tombstones(void) {
+    return osty_gc_index_tombstones;
+}
+
+int64_t osty_gc_debug_index_find_ops(void) {
+    return osty_gc_index_find_ops_total;
+}
+
 /* Phase A5 per-kind safepoint counters. `kind` values map to the
  * OSTY_GC_SAFEPOINT_KIND_* constants; out-of-range queries return -1 so
  * callers can distinguish from a zero count. */
@@ -2573,6 +2844,15 @@ typedef struct osty_gc_stats {
     int64_t global_root_count;
     int64_t pressure_limit_bytes;
     int64_t mark_stack_max_depth;
+    /* Phase A2 depth — collection timing. */
+    int64_t collection_nanos_total;
+    int64_t collection_nanos_last;
+    int64_t collection_nanos_max;
+    /* Phase A3 depth — hash index state. */
+    int64_t index_capacity;
+    int64_t index_count;
+    int64_t index_tombstones;
+    int64_t index_find_ops_total;
 } osty_gc_stats;
 
 void osty_gc_debug_stats(osty_gc_stats *out) {
@@ -2598,7 +2878,96 @@ void osty_gc_debug_stats(osty_gc_stats *out) {
     out->global_root_count = osty_gc_global_root_count;
     out->pressure_limit_bytes = osty_gc_pressure_limit_now();
     out->mark_stack_max_depth = osty_gc_mark_stack_max_depth;
+    out->collection_nanos_total = osty_gc_collection_nanos_total;
+    out->collection_nanos_last = osty_gc_collection_nanos_last;
+    out->collection_nanos_max = osty_gc_collection_nanos_max;
+    out->index_capacity = osty_gc_index_capacity;
+    out->index_count = osty_gc_index_count;
+    out->index_tombstones = osty_gc_index_tombstones;
+    out->index_find_ops_total = osty_gc_index_find_ops_total;
     osty_gc_release();
+}
+
+/* Phase A1 depth: corruption injectors for `validate_heap` negative
+ * tests. Each injector flips exactly one invariant so tests can pair
+ * it with `osty_gc_debug_validate_heap()` and assert on a specific
+ * error code. The symbols are UNSAFE-prefixed to discourage any use
+ * outside the runtime's own tests — they intentionally leave the heap
+ * in a broken state.
+ *
+ * Injectors are idempotent where possible (e.g. bumping live_count by
+ * 1 multiple times compounds) — tests should reset state by calling a
+ * matching clear before moving on, or simply exit the process.
+ */
+
+void osty_gc_debug_unsafe_bump_live_count(void) {
+    osty_gc_live_count += 1;
+}
+
+void osty_gc_debug_unsafe_bump_live_bytes(void) {
+    osty_gc_live_bytes += 1;
+}
+
+void osty_gc_debug_unsafe_break_first_prev(void) {
+    if (osty_gc_objects != NULL) {
+        osty_gc_objects->prev = (osty_gc_header *)(uintptr_t)0xdeadbeef;
+    }
+}
+
+void osty_gc_debug_unsafe_break_next_link(void) {
+    if (osty_gc_objects != NULL && osty_gc_objects->next != NULL) {
+        osty_gc_objects->next->prev = (osty_gc_header *)(uintptr_t)0xdeadbeef;
+    }
+}
+
+void osty_gc_debug_unsafe_set_stale_mark(void) {
+    if (osty_gc_objects != NULL) {
+        osty_gc_objects->marked = true;
+    }
+}
+
+void osty_gc_debug_unsafe_negative_root_count(void) {
+    if (osty_gc_objects != NULL) {
+        osty_gc_objects->root_count = -1;
+    }
+}
+
+void osty_gc_debug_unsafe_dirty_mark_stack(void) {
+    if (osty_gc_objects != NULL) {
+        osty_gc_mark_stack_push(osty_gc_objects);
+    }
+}
+
+void osty_gc_debug_unsafe_append_null_global_slot(void) {
+    /* Register a slot whose address is NULL — this is not a managed
+     * pointer, it's literally the pointer 0 in the slot table, which
+     * the validate pass flags as invalid. */
+    if (osty_gc_global_root_count == osty_gc_global_root_cap) {
+        osty_gc_global_roots_grow();
+    }
+    osty_gc_global_root_slots[osty_gc_global_root_count] = NULL;
+    osty_gc_global_root_count += 1;
+}
+
+void osty_gc_debug_unsafe_satb_dangling(void) {
+    /* Append a bogus pointer that has no matching header. */
+    osty_gc_satb_log_append((void *)(uintptr_t)0xbadc0ffee0ddf00d);
+}
+
+void osty_gc_debug_unsafe_remembered_edge_dangling(void) {
+    /* Skip the dedup check to force-insert a dangling edge. */
+    if (osty_gc_remembered_edge_count == osty_gc_remembered_edge_cap) {
+        osty_gc_remembered_edges_grow();
+    }
+    osty_gc_remembered_edges[osty_gc_remembered_edge_count].owner =
+        (void *)(uintptr_t)0xdeadbeef;
+    osty_gc_remembered_edges[osty_gc_remembered_edge_count].value =
+        (void *)(uintptr_t)0xfeedface;
+    osty_gc_remembered_edge_count += 1;
+}
+
+void osty_gc_debug_unsafe_negative_cumulative(void) {
+    osty_gc_allocated_bytes_total = -1;
 }
 
 void osty_gc_debug_stats_dump(FILE *out) {
@@ -2621,6 +2990,8 @@ void osty_gc_debug_stats_dump(FILE *out) {
             "  global roots:            %lld slots\n"
             "  pressure limit:          %lld bytes\n"
             "  mark stack peak:         %lld\n"
+            "  collect nanos:           total %lld, last %lld, max %lld\n"
+            "  index:                   count %lld, tombstones %lld, cap %lld, finds %lld\n"
             "}\n",
             (long long)s.collection_count,
             (long long)s.live_count, (long long)s.live_bytes,
@@ -2633,7 +3004,11 @@ void osty_gc_debug_stats_dump(FILE *out) {
             (long long)s.remembered_edge_count,
             (long long)s.global_root_count,
             (long long)s.pressure_limit_bytes,
-            (long long)s.mark_stack_max_depth);
+            (long long)s.mark_stack_max_depth,
+            (long long)s.collection_nanos_total, (long long)s.collection_nanos_last,
+            (long long)s.collection_nanos_max,
+            (long long)s.index_count, (long long)s.index_tombstones,
+            (long long)s.index_capacity, (long long)s.index_find_ops_total);
 }
 
 /* Phase A1 heap validation oracle (RUNTIME_GC_DELTA §9.5).

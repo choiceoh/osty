@@ -190,9 +190,44 @@ A5–A6는 safepoint ABI 주변 분류·가드.
   관측. LLVM-side alloca 자체는 그대로 — 이는 crash early / crash loud
   backstop. 테스트 `TestBundledRuntimeSafepointRootSlotHighWaterMark`.
 
+### Phase A 심화 보강 (2차 패스)
+
+초기 Phase A 랜딩에서 얕았던 부분들이 아래와 같이 정밀화되었다:
+
+- **A1 심화** — `osty_gc_debug_unsafe_*` corruption injector 11종. fork 기반
+  하네스가 invariant별 네거티브 케이스를 실행하고, 각 에러 코드(−1…−11)가
+  정확히 매칭되는지 확인. `TestBundledRuntimeValidateHeapNegativeInvariants`.
+- **A2 심화** — `clock_gettime(CLOCK_MONOTONIC)` 기반 collection 타이밍.
+  `nanos_total` / `nanos_last` / `nanos_max`를 `osty_gc_stats`에 추가, 누적·
+  최악 사이클·마지막 사이클 관측. `TestBundledRuntimeCollectionTimingRecorded`.
+- **A3 심화** — `osty_gc_find_header`의 O(n) 선형 스캔을 open-addressing +
+  linear probing 해시 테이블로 교체 (SplitMix64 믹싱, load factor 0.75
+  유지, 초기 cap 128, tombstone 기반 삭제). deep-mark 테스트 28s → <1s.
+  capacity / count / tombstones / find_ops 관측.
+  `TestBundledRuntimeFindHeaderHashIndex`.
+- **A4 심화** — Phase 1 태그 swap을 넘어 `osty.rt.closure_env_alloc_v1`
+  전용 allocator + `osty_rt_closure_env_trace` 콜백을 런타임에 구현.
+  capture slot array를 직접 순회하는 self-describing 레이아웃
+  (`{ ptr fn, i64 capture_count, ptr captures[] }`). llvmgen
+  `emitFnValueEnv`가 dedicated 엔트리로 전환 — 현재는 capture_count=0이지만
+  Phase 4가 값만 바꿔끼우면 된다. 3개 캡처 보유한 env로 trace 경로 검증:
+  `TestBundledRuntimeClosureEnvTracesCaptures`.
+- **A5 심화** — E2E 테스트 `TestGenerateFromASTSafepointKindMixCallAndLoop`:
+  legacy 에미터가 lower한 IR을 정규식으로 파싱해 kind 분포를 복원,
+  CALL + LOOP 존재와 UNSPECIFIED 부재를 검증. MIR 측 ENTRY + LOOP는
+  기존 `TestGenerateFromMIREmitGCLoopSafepoint`가 literal serial id로 커버.
+- **A6 심화** — `safepointRootChunkSize` (default 4096) 기반 프레임 분할.
+  visible root 수가 청크를 넘으면 단일 poll이 여러 `safepoint_v1` 호출로
+  쪼개져, 각 `alloca ptr, i64 N`이 bounded 크기 유지. 테스트에서 청크를
+  3으로 낮추고 7개의 managed List를 가진 프레임을 lower하여 3/3/1 분할을
+  확인: `TestGenerateFromASTSafepointSplitsLargeFrames`. 런타임 abort
+  path는 fork 하네스로 exit code + stderr 메시지 검증:
+  `TestBundledRuntimeSafepointOverflowAborts`.
+
 Phase A의 열린 items는 없다. Phase B (세대 GC) 진입 준비 완료 — 세대 구현
-단계에서 §9.3 누적 카운터 + §10.1 kind 분류를 즉시 활용 가능하고,
-§4.2 work queue는 concurrent marker가 재사용한다.
+단계에서 §9.3 누적 카운터 + 타이밍 + §10.1 kind 분류를 즉시 활용 가능하고,
+§4.2 work queue는 concurrent marker가 재사용하며, §2.4 closure trace는
+Phase 4 capture 랜딩 시 capture_count만 채우면 된다.
 
 ## 다음 단계
 

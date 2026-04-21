@@ -1,6 +1,8 @@
 package llvmgen
 
 import (
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -209,5 +211,129 @@ fn main() {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// safepointKindMix decodes every `safepoint_v1(i64 N, ...)` call in the
+// given IR and returns the count per kind. The high byte of N (bits
+// 56..63) holds the kind tag; the remaining 56 bits are the serial. See
+// encodeSafepointID in generator.go and OSTY_GC_SAFEPOINT_KIND_* in the
+// runtime's osty_runtime.c.
+func safepointKindMix(t *testing.T, ir string) map[safepointKind]int {
+	t.Helper()
+	re := regexp.MustCompile(`safepoint_v1\(i64 (-?\d+),`)
+	matches := re.FindAllStringSubmatch(ir, -1)
+	mix := map[safepointKind]int{}
+	for _, m := range matches {
+		v, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil {
+			t.Fatalf("safepoint id %q not int: %v", m[1], err)
+		}
+		kind := safepointKind(uint64(v) >> 56 & 0xff)
+		mix[kind]++
+	}
+	return mix
+}
+
+// TestGenerateFromASTSafepointSplitsLargeFrames covers the A6 depth
+// follow-up — when a frame has more visible managed roots than
+// `safepointRootChunkSize`, a single safepoint site splits into
+// multiple `osty.gc.safepoint_v1` calls so the per-call `alloca ptr,
+// i64 N` stays bounded. We lower the chunk size for the test so we can
+// trip the path without constructing a function with thousands of
+// roots.
+func TestGenerateFromASTSafepointSplitsLargeFrames(t *testing.T) {
+	prev := safepointRootChunkSize
+	safepointRootChunkSize = 3
+	defer func() { safepointRootChunkSize = prev }()
+
+	// Seven managed List locals visible at the pre-call site. Chunk
+	// size 3 → ceil(7/3) = 3 safepoint calls for that final poll.
+	// Lists are heap-allocated so each let binds a managed root.
+	file := parseLLVMGenFile(t, `fn sink(xs: List<Int>) {}
+
+fn main() {
+    let mut a: List<Int> = []
+    let mut b: List<Int> = []
+    let mut c: List<Int> = []
+    let mut d: List<Int> = []
+    let mut e: List<Int> = []
+    let mut f: List<Int> = []
+    let mut g: List<Int> = []
+    sink(a)
+    sink(b)
+    sink(c)
+    sink(d)
+    sink(e)
+    sink(f)
+    sink(g)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/safepoint_split.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	// The last pre-call site (for sink(g)) sees all seven roots and
+	// must emit three safepoint calls with alloca sizes 3, 3, 1.
+	allocas := regexp.MustCompile(`alloca ptr, i64 (\d+)`).FindAllStringSubmatch(got, -1)
+	sawChunkedPoll := false
+	sizes := make([]int, 0, len(allocas))
+	for _, m := range allocas {
+		n, _ := strconv.Atoi(m[1])
+		sizes = append(sizes, n)
+		if n == 3 {
+			sawChunkedPoll = true
+		}
+	}
+	if !sawChunkedPoll {
+		t.Fatalf("expected at least one alloca with chunk size 3, got sizes=%v IR:\n%s", sizes, got)
+	}
+	// No single alloca exceeds the chunk size — the whole point of the
+	// split. Extra roots would allocate as a separate call.
+	for _, n := range sizes {
+		if n > 3 {
+			t.Fatalf("alloca size %d exceeds chunk cap 3, sizes=%v IR:\n%s", n, sizes, got)
+		}
+	}
+}
+
+// TestGenerateFromASTSafepointKindMixCallAndLoop covers the A5 depth
+// follow-up for the legacy emitter — lowering a function whose body
+// is a `while` loop with a user-level call inside must produce both
+// CALL and LOOP safepoint kinds, and zero UNSPECIFIED (meaning every
+// emit site has been classified).
+func TestGenerateFromASTSafepointKindMixCallAndLoop(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn work() -> Int {
+    1
+}
+
+fn main() {
+    let mut i = 0
+    while i < 3 {
+        i = i + work()
+    }
+    println(i)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/safepoint_kind_mix.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	mix := safepointKindMix(t, string(ir))
+	if mix[safepointKindCall] == 0 {
+		t.Fatalf("expected ≥1 CALL-kind safepoint, mix=%v, IR:\n%s", mix, ir)
+	}
+	if mix[safepointKindLoop] == 0 {
+		t.Fatalf("expected ≥1 LOOP-kind safepoint, mix=%v, IR:\n%s", mix, ir)
+	}
+	if mix[safepointKindUnspecified] != 0 {
+		t.Fatalf("UNSPECIFIED safepoint leaked through a classified path, mix=%v, IR:\n%s", mix, ir)
 	}
 }
