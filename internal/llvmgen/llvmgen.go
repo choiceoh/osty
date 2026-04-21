@@ -14,8 +14,8 @@
 //   - ffi.go             — Go FFI / unknown runtime-FFI detection
 //   - runtime_ffi.go     — Osty runtime C ABI surface + symbol tables
 //   - ir_module.go       — IR → AST bridge (transitional; see doc.go)
-//   - support_snapshot.go — Osty-authored `llvm*` helpers (hand-maintained
-//     snapshot of toolchain/llvmgen.osty)
+//   - support_snapshot.go — generated snapshot of the Osty-authored
+//     `llvm*` helpers in toolchain/llvmgen.osty
 //
 // Keep this file small: it is the contract with external callers.
 package llvmgen
