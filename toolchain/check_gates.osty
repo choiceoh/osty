@@ -277,15 +277,6 @@ fn isPodPrimitiveName(name: String) -> Bool {
         || name == "RawPtr"
 }
 
-fn stringListContainsName(xs: List<String>, name: String) -> Bool {
-    for s in xs {
-        if s == name {
-            return true
-        }
-    }
-    false
-}
-
 fn isPodType(arena: AstArena, typeIdx: Int, podStructs: List<String>, podGenerics: List<String>) -> Bool {
     if typeIdx < 0 {
         return false
@@ -314,10 +305,10 @@ fn isPodType(arena: AstArena, typeIdx: Int, podStructs: List<String>, podGeneric
     if isPodPrimitiveName(name) {
         return node.children.len() == 0
     }
-    if stringListContainsName(podGenerics, name) {
+    if listContainsString(podGenerics, name) {
         return node.children.len() == 0
     }
-    if stringListContainsName(podStructs, name) {
+    if listContainsString(podStructs, name) {
         // Local #[pod] struct reference — accept without re-checking
         // the referenced struct (it owns its own diagnostics).
         return true
@@ -1025,7 +1016,7 @@ fn noAllocCalleeAllowed(arena: AstArena, calleeIdx: Int, noAllocNames: List<Stri
     }
     let callee = astArenaNodeAt(arena, calleeIdx)
     if callee.kind == AstNIdent {
-        return stringListContainsName(noAllocNames, callee.text)
+        return listContainsString(noAllocNames, callee.text)
     }
     if callee.kind == AstNField {
         // `raw.*` — accept any method on a receiver named `raw`, and
@@ -1043,7 +1034,7 @@ fn noAllocCalleeAllowed(arena: AstArena, calleeIdx: Int, noAllocNames: List<Stri
             return true
         }
         if recv.text == "self" {
-            return stringListContainsName(noAllocNames, callee.text)
+            return listContainsString(noAllocNames, callee.text)
         }
         return false
     }
