@@ -1,9 +1,12 @@
 # MIR design (Osty compiler)
 
-Status: Stage 1 — scaffolding, lowering for the currently green LLVM subset,
-no backend rewiring yet. The existing `internal/llvmgen` IR→AST bridge stays
-in place; MIR is introduced underneath `internal/ir` as a new, backend-
-friendly layer that a future llvmgen rewrite can consume directly.
+Status: Stage 3.12 landed (composite map values + ABI fix); Stage 4 partially
+landed — MIR-first IR emission is the default for an expanding shape set while
+`internal/llvmgen`'s IR→AST bridge (`legacyFileFromModule`) stays live as the
+fallback for shapes the MIR emitter does not yet cover. Stage 5 (Go fallback
+removal) is still deferred; the gaps are tracked in the MIR emitter's
+`checkSupported` / `ProbeModule` plus the Stage 5 notes lower in this
+document.
 
 ## Why a second IR
 
