@@ -1,0 +1,8 @@
+use std.testing
+
+fn benchAdd() {
+    testing.benchmark(1000, || {
+        let _ = add(1, 2)
+        Ok(())
+    })
+}

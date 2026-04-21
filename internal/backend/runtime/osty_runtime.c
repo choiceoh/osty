@@ -2535,6 +2535,15 @@ int64_t *osty_rt_bench_samples_new(int64_t count) {
     if (count <= 0) {
         return NULL;
     }
+    /* Reject counts that would wrap size_t on cast+multiply. The bench
+     * harness auto-tune path already clamps to 100M iterations but a
+     * caller can pass any int64 directly through testing.benchmark(N, …),
+     * and writing past a too-small buffer in the record loop would
+     * silently corrupt heap memory. Abort is the right failure mode —
+     * the whole process is a one-shot bench runner. */
+    if ((uint64_t)count > (uint64_t)SIZE_MAX / sizeof(int64_t)) {
+        osty_rt_abort("bench: iteration count too large for sample buffer");
+    }
     size_t bytes = (size_t)count * sizeof(int64_t);
     int64_t *buf = (int64_t *)malloc(bytes);
     if (buf == NULL) {

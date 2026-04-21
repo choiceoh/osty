@@ -381,6 +381,26 @@ func reportNativeTestResult(o nativeTestOutcome, stdout, stderr io.Writer, bench
 	return false
 }
 
+// benchChildEnv produces the env slice for a test-child exec that
+// correctly reflects the caller's --benchtime decision. Inheriting
+// os.Environ() verbatim would let OSTY_BENCH_TIME_NS leak from the
+// parent shell and auto-tune a bench the user wanted to leave at its
+// declared N, so we filter the variable out first and re-add only when
+// the caller set a positive target.
+func benchChildEnv(parentEnv []string, benchTimeNs int64) []string {
+	out := make([]string, 0, len(parentEnv)+1)
+	for _, e := range parentEnv {
+		if strings.HasPrefix(e, "OSTY_BENCH_TIME_NS=") {
+			continue
+		}
+		out = append(out, e)
+	}
+	if benchTimeNs > 0 {
+		out = append(out, fmt.Sprintf("OSTY_BENCH_TIME_NS=%d", benchTimeNs))
+	}
+	return out
+}
+
 // resolveBenchTime parses --benchtime into nanoseconds. Empty / unset
 // returns 0 (meaning "use the user's declared N"). --benchtime without
 // --bench is rejected so users aren't surprised when it silently no-ops
@@ -716,13 +736,12 @@ func runNativeTestBinary(ctx context.Context, binPath string, benchTimeNs int64)
 		return nativeTestRun{}, err
 	}
 	cmd := exec.CommandContext(ctx, absBin)
-	// OSTY_BENCH_TIME_NS is read by osty_rt_bench_target_ns. Only set
-	// it when non-zero so unrelated child processes (e.g. the test
-	// runner invoked without --bench) don't inherit a stale value from
-	// ambient environment.
-	if benchTimeNs > 0 {
-		cmd.Env = append(os.Environ(), fmt.Sprintf("OSTY_BENCH_TIME_NS=%d", benchTimeNs))
-	}
+	// OSTY_BENCH_TIME_NS is read by osty_rt_bench_target_ns. Always
+	// rebuild the child's env from scratch: when benchTimeNs > 0 we
+	// overwrite it with our value, otherwise we strip it so a stale
+	// parent-shell value can't silently activate auto-tune on a bench
+	// run the user asked to keep at its declared N.
+	cmd.Env = benchChildEnv(os.Environ(), benchTimeNs)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
