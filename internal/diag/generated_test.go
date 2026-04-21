@@ -28,9 +28,9 @@ func TestErrorCodesMarkdownUpToDate(t *testing.T) {
 	}
 }
 
-// TestDiagManifestUpToDate fails when toolchain/diag_manifest.osty (or
-// the examples/selfhost-core copy) has drifted from codes.go. Both
-// derive from the same source, so any diff means one or both are stale.
+// TestDiagManifestUpToDate fails when toolchain/diag_manifest.osty has
+// drifted from codes.go. The manifest derives from the same source, so
+// any diff means it is stale.
 func TestDiagManifestUpToDate(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skip drift check in short mode — go generate runs the same logic")
@@ -38,7 +38,6 @@ func TestDiagManifestUpToDate(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	paths := []string{
 		"toolchain/diag_manifest.osty",
-		"examples/selfhost-core/diag_manifest.osty",
 	}
 	for _, p := range paths {
 		p := p

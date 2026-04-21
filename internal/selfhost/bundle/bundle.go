@@ -8,12 +8,12 @@ import (
 )
 
 var toolchainCheckerFiles = []string{
-	"examples/selfhost-core/semver.osty",
-	"examples/selfhost-core/semver_parse.osty",
+	"toolchain/semver.osty",
+	"toolchain/semver_parse.osty",
 	"toolchain/frontend.osty",
 	"toolchain/lexer.osty",
 	"toolchain/parser.osty",
-	"examples/selfhost-core/formatter_ast.osty",
+	"toolchain/formatter_ast.osty",
 	"toolchain/check_bridge.osty",
 	"toolchain/diag_manifest.osty",
 	"toolchain/diag_examples.osty",
@@ -25,8 +25,8 @@ var toolchainCheckerFiles = []string{
 	"toolchain/solve.osty",
 	"toolchain/elab.osty",
 	"toolchain/check.osty",
-	"examples/selfhost-core/resolve.osty",
-	"examples/selfhost-core/lint.osty",
+	"toolchain/resolve.osty",
+	"toolchain/lint.osty",
 	"internal/selfhost/ast_lower.osty",
 }
 
