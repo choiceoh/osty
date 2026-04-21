@@ -264,14 +264,14 @@ func patchGenerated(path string) error {
 		{
 			name: "frontendLexStream cached units",
 			old: `func frontendLexStream(source string) *FrontLexStream {
-	// Osty: /tmp/selfhost_merged.osty:1067:5
+	// Osty: /tmp/selfhost_merged.osty:1068:5
 	units := strings.Split(source, "")
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:1069:5
 	unitCount := stringUnitCount(source)
 	_ = unitCount`,
 			new: `func frontendLexStream(source string) *FrontLexStream {
-	// Osty: /tmp/selfhost_merged.osty:1067:5
+	// Osty: /tmp/selfhost_merged.osty:1068:5
 	units := strings.Split(source, "")
 	_ = units
 	// Osty: /tmp/selfhost_merged.osty:1069:5

@@ -433,6 +433,25 @@ fn astStartsExpr(kind: FrontTokenKind) -> Bool {
     kind == FrontIdent || kind == FrontInt || kind == FrontFloat || kind == FrontString || kind == FrontRawString || kind == FrontChar || kind == FrontByte || kind == FrontLParen || kind == FrontLBracket || kind == FrontLBrace || kind == FrontMinus || kind == FrontNot || kind == FrontBitNot || kind == FrontIf || kind == FrontMatch || kind == FrontBitOr || kind == FrontOr || kind == FrontUnderscore
 }
 
+/// opCanStartScriptStmt decides whether the current top-level token
+/// may open a §6 script statement. Stricter than `astStartsExpr`:
+/// bare identifiers without a postfix / assign / chan-send
+/// continuation are rejected so pseudo-Python surface such as
+/// `from std import testing as t` keeps tripping E0100 for airepair
+/// to rewrite, instead of parsing silently as a chain of no-op
+/// ExprStmts.
+fn opCanStartScriptStmt(p: OstyParser, tok: FrontToken) -> Bool {
+    if tok.kind == FrontReturn || opIsForHead(tok) || tok.kind == FrontBreak || tok.kind == FrontContinue { return true }
+    if tok.kind == FrontIf || tok.kind == FrontMatch { return true }
+    if tok.kind == FrontLParen || tok.kind == FrontLBracket || tok.kind == FrontLBrace { return true }
+    if tok.kind == FrontBitOr || tok.kind == FrontOr { return true }
+    if tok.kind == FrontIdent {
+        let next = opPeekAt(p, 1).kind
+        return next == FrontLParen || next == FrontLBracket || next == FrontDot || next == FrontQDot || next == FrontColonColon || next == FrontChanArrow || next == FrontQuestion || frontIsAssignOp(next)
+    }
+    false
+}
+
 // ===================================================================
 // GENERIC PARAMETER PARSING (shared)
 // ===================================================================
@@ -1729,6 +1748,14 @@ fn opParseDecl(p: OstyParser) -> Int {
         let mut n = emptyAstNode(AstNError)
         n.start = p.pos
         return opAddNode(p, n)
+    }
+    // §6: route top-level stmts through opParseStmt; astLowerPublicFile
+    // splits arena.decls into File.Decls vs File.Stmts. `pub` and
+    // annotations bind only to declarations, so their presence keeps
+    // the classic "expected declaration" path.
+    let hasDeclPrefix = isPub || opIntListCount(anns) > 0
+    if !hasDeclPrefix && opCanStartScriptStmt(p, tok) {
+        return opParseStmt(p)
     }
     let errKindName = frontTokenKindName(tok.kind)
     opErrorFull(p, "expected declaration, got {errKindName}", "a declaration starts with `fn`, `struct`, `enum`, `interface`, `type`, `use`, or `let`", "", "E0100")
