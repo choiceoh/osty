@@ -62,10 +62,11 @@
 
 | 기능 | 非-test 사용 | 현재 상태 | 관련 phase |
 |---|---|---|---|
-| `String` payload enum (`PreText(String)`) | `semver.osty:5` | 🚧 Phase 54-63 — fixture 추가됨, 드라이브 확인 중 | [§Phase 54-63](#phase-54-63-payload-enum-generalization-floatstring) |
-| `Result<T, String>` ABI | semver_parse, manifest_validation | 🟡 부분 구현 — legacy AST emitter가 aggregate `Result<T, E> = {tag, ok, err}`를 갖고 있으나 pkgmgr 전체 shape는 아직 다 못 덮음 | 신규 phase 필요 |
-| `?` 전파 (Result) | `semver_parse.osty` 8곳 | 🟡 부분 구현 — legacy AST path가 matching `Result<_, E>` 반환 함수에서 `?`를 낮춘다. broader selfhost coverage는 아직 미완 | 신규 phase 필요 |
-| struct/enum 복합 payload (Ok(SemVersion)) | semver_parse, manifest_validation | ❌ single-field scalar/ptr만 | 신규 phase 필요 |
+| `String` payload enum (`PreText(String)`) | `semver.osty:5` | ✅ lowered — `SemPreIdent` 전 variant가 정상 lower. 회귀 커버 `TestGenerateResultQuestionExprEnumPayload` | Phase 54-63 완료 |
+| `Result<T, String>` ABI | semver_parse, manifest_validation | ✅ lowered — scalar / struct payload / tag+ptr payload enum 모두 `{i64 tag, T ok, E err}` 3필드 struct로 일관. 회귀 커버 `TestGenerateResultQuestionExpr{Int,Struct,EnumPayload}` | Phase 74 완료 |
+| `?` 전파 (Result) | `semver_parse.osty` 8곳 | ✅ lowered — `emitQuestionExprResult`가 Ok/Err 양쪽 브랜치를 phi+early-return으로 낮춤. struct/enum 페이로드 포함 전 shape가 회귀 테스트로 봉쇄 | Phase 74 완료 |
+| struct/enum 복합 payload (`Ok(SemVersion)`, `Ok(SemPreIdent)`) | semver_parse, manifest_validation | ✅ lowered — `insertvalue`/`extractvalue` + `<Type> zeroinitializer` 경로로 자동 처리. `TestGenerateResultQuestionExprStruct`로 회귀 봉쇄 | Phase 74 완료 |
+| List<String> + mutable-binding source-type tracking | `pkgmgr.osty:selfPkgRegistryYankRequest` 등 | ✅ lowered — StringLit / runtime concat / interpolated String / phi-merge가 sourceType을 `String`으로 유지해 list-literal emitter가 mixed-ptr false-positive를 내지 않음. 회귀 커버 `TestListLiteralMixedPtrStringSourceTracking` (이 PR), `TestStringLetMutInferredSourceType` / `TestStdStringsJoinNestedInListLiteral` (#438, #441) | (#438, 이 PR) |
 
 ### 非-blocker (당초 Tier B 오판 항목)
 
