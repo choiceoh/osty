@@ -74,14 +74,15 @@ pub fn sanitizeNativeTestName(name: String) -> String {
     if name == "" {
         return "osty_test"
     }
-    let mut out = ""
+    let mut parts: List<String> = []
     for unit in strings.split(name, "") {
         if (unit >= "a" && unit <= "z") || (unit >= "A" && unit <= "Z") || (unit >= "0" && unit <= "9") {
-            out = out + unit
+            parts.push(unit)
         } else {
-            out = out + "_"
+            parts.push("_")
         }
     }
+    let out = strings.join(parts, "")
     if out == "" {
         return "osty_test"
     }
