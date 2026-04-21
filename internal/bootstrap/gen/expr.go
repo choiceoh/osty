@@ -522,7 +522,31 @@ func (g *gen) emitCheckedIntegerShift(op token.Kind, left, right ast.Expr, leftK
 }
 
 func (g *gen) needsOstyEqual(left, right ast.Expr) bool {
-	return needsOstyEqualType(g.typeOf(left)) || needsOstyEqualType(g.typeOf(right))
+	if needsOstyEqualType(g.typeOf(left)) || needsOstyEqualType(g.typeOf(right)) {
+		return true
+	}
+	// Fallback: an `x == Variant` comparison where Variant is an enum
+	// variant constructor must go through ostyEqual because variants
+	// lower to distinct pointer-struct allocations that Go's `==`
+	// would compare by identity. The checker drops per-expression
+	// type info on some nested boolean contexts (&& chains inside
+	// else-if arms), leaving both sides' typeOf as nil. Recognising
+	// the variant symbol through the resolver is reliable even
+	// without checker types — this is a name-resolution fact, not a
+	// type-inference one.
+	if g.identResolvesToVariant(left) || g.identResolvesToVariant(right) {
+		return true
+	}
+	return false
+}
+
+func (g *gen) identResolvesToVariant(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	sym := g.symbolFor(id)
+	return sym != nil && sym.Kind == resolve.SymVariant
 }
 
 func needsOstyEqualType(t types.Type) bool {
