@@ -608,6 +608,162 @@ fn testSelfLintFindsDeadStoreAcrossNestedBlockReads() {
     testing.assertEq(selfLintCodeCount(report, "L0008"), 0)
 }
 
+fn testSelfLintFindsUnusedFieldOnNonPubStruct() {
+    let report = selfLintSource(
+        r"""
+            struct Point {
+                x: Int,
+                y: Int,
+            }
+
+            fn build() -> Point {
+                let p = Point { x: 1, y: 2 }
+                p
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0005"), 0)
+}
+
+fn testSelfLintFindsUnusedFieldWhenNeverRead() {
+    let report = selfLintSource(
+        r"""
+            struct Counter {
+                value: Int,
+                spare: Int,
+            }
+
+            fn use(c: Counter) -> Int {
+                c.value
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0005"), 1)
+}
+
+fn testSelfLintSkipsUnusedFieldOnPubStruct() {
+    let report = selfLintSource(
+        r"""
+            pub struct Counter {
+                pub value: Int,
+                spare: Int,
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0005"), 0)
+}
+
+fn testSelfLintSkipsUnusedFieldWhenFieldIsPub() {
+    let report = selfLintSource(
+        r"""
+            struct Counter {
+                pub spare: Int,
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0005"), 0)
+}
+
+fn testSelfLintCountsStructPatternAsFieldRead() {
+    let report = selfLintSource(
+        r"""
+            struct User {
+                name: String,
+                age: Int,
+            }
+
+            fn render(u: User) -> String {
+                let User { name, age } = u
+                name
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0005"), 0)
+}
+
+fn testSelfLintFindsUnusedPrivateMethodOnNonPubStruct() {
+    let report = selfLintSource(
+        r"""
+            struct Counter {
+                value: Int,
+
+                fn bump(self) -> Int { self.value + 1 }
+            }
+
+            fn build(c: Counter) -> Int {
+                c.value
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0006"), 1)
+}
+
+fn testSelfLintSkipsUnusedMethodWhenMethodIsPub() {
+    let report = selfLintSource(
+        r"""
+            struct Counter {
+                value: Int,
+
+                pub fn bump(self) -> Int { self.value + 1 }
+            }
+
+            fn build(c: Counter) -> Int {
+                c.value
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0006"), 0)
+}
+
+fn testSelfLintSkipsUnusedMethodOnPubEnum() {
+    let report = selfLintSource(
+        r"""
+            pub enum Color {
+                Red,
+                Green,
+
+                fn label(self) -> String { "c" }
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0006"), 0)
+}
+
+fn testSelfLintCountsMethodCallAsUsed() {
+    let report = selfLintSource(
+        r"""
+            struct Counter {
+                value: Int,
+
+                fn bump(self) -> Int { self.value + 1 }
+            }
+
+            fn run(c: Counter) -> Int {
+                c.bump()
+            }
+            """,
+    )
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0006"), 0)
+}
+
 fn assertLintFirstFix(
     report: SelfLintReport,
     code: String,
