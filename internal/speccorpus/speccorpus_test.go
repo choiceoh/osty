@@ -24,11 +24,7 @@ import (
 // drop the waiver) or because a new regression appeared.
 //
 // Empty waiver list = the file must parse with zero errors.
-var positiveWaivers = map[string][]string{
-	// §6 scripts: top-level expression statements are still rejected at
-	// parse time instead of being wrapped in an implicit main.
-	"06-scripts.osty": {"E0100"},
-}
+var positiveWaivers = map[string][]string{}
 
 // negativeWaivers documents CASE blocks in testdata/spec/negative/
 // reject.osty where the front-end currently does NOT emit the declared
