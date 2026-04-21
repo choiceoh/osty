@@ -14,7 +14,6 @@ package llvmgen
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/osty/osty/internal/ast"
 )
@@ -135,37 +134,25 @@ func (g *generator) emitFnValueIndirectCall(envVal value, sig *fnSig, args []*Ll
 	if envVal.typ != "ptr" {
 		return value{}, unsupportedf("call", "indirect call needs ptr env, got %s", envVal.typ)
 	}
+	paramTypes := make([]string, len(sig.params))
+	for i, p := range sig.params {
+		paramTypes[i] = llvmParamIRType(p)
+	}
+	argOperands := make([]string, len(args))
+	for i, a := range args {
+		argOperands[i] = fmt.Sprintf("%s %s", a.typ, a.name)
+	}
+	emitter := g.toOstyEmitter()
+	result := llvmEmitFnValueIndirectCall(emitter, envVal.ref, sig.ret, paramTypes, argOperands)
+	g.takeOstyEmitter(emitter)
+
 	retLLVM := sig.ret
 	if retLLVM == "" {
 		retLLVM = "void"
 	}
-	// Build the LLVM call-type string: `ret (ptr, P0, P1, ...)`.
-	paramParts := make([]string, 0, 1+len(sig.params))
-	paramParts = append(paramParts, "ptr")
-	for _, p := range sig.params {
-		paramParts = append(paramParts, llvmParamIRType(p))
-	}
-	callType := retLLVM + " (" + strings.Join(paramParts, ", ") + ")"
-
-	emitter := g.toOstyEmitter()
-	fnPtr := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load ptr, ptr %s", fnPtr, envVal.ref))
-
-	// Assemble argument list with env prefix.
-	argStrs := make([]string, 0, 1+len(args))
-	argStrs = append(argStrs, fmt.Sprintf("ptr %s", envVal.ref))
-	for _, a := range args {
-		argStrs = append(argStrs, fmt.Sprintf("%s %s", a.typ, a.name))
-	}
-
 	if retLLVM == "void" {
-		emitter.body = append(emitter.body, fmt.Sprintf("  call %s %s(%s)", callType, fnPtr, strings.Join(argStrs, ", ")))
-		g.takeOstyEmitter(emitter)
 		return value{}, nil
 	}
-	result := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call %s %s(%s)", result, callType, fnPtr, strings.Join(argStrs, ", ")))
-	g.takeOstyEmitter(emitter)
 	out := value{typ: retLLVM, ref: result}
 	out.listElemTyp = sig.retListElemTyp
 	out.listElemString = sig.retListString
