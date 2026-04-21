@@ -1409,32 +1409,95 @@ pub fn checkInstallPrelude(env: CheckEnv) {
 
     checkInstallBuiltinMethods(env)
     checkInstallChannelIntrinsics(env)
+    checkInstallErrorIntrinsics(env)
     checkInstallImplicitModules(env)
 }
 
 /// checkInstallImplicitModules registers a `thread` / `debug` /
-/// `fmt` binding as if it were implicitly imported, matching how
-/// spec examples use `thread.chan::<T>(...)` and `dbg(...)` without
-/// an explicit `use` line.
+/// `fmt` / `time` binding as if it were implicitly imported,
+/// matching how spec examples use `thread.chan::<T>(...)`,
+/// `dbg(...)`, and `time.sleep(...)` without an explicit `use` line.
 fn checkInstallImplicitModules(env: CheckEnv) {
     let pos = 0
     let tys = env.tys
-    for name in ["thread", "debug", "fmt"] {
+    for name in ["thread", "debug", "fmt", "time"] {
         let ty = tyNamed(tys, name, [])
         checkBindSpan(env, name, ty, false, pos, pos)
     }
     registerStdThreadAliasFns(env, "thread")
     registerStdDebugAliasFns(env, "debug")
+    registerStdTimeAliasFns(env, "time")
+}
+
+/// registerStdTimeAliasFns — `time.sleep(Duration)` and related
+/// bindings spec examples reach for. The Duration type is also
+/// registered so the checker can resolve `time.sleep(1.ms)` shape
+/// calls without E0500 on the argument type.
+fn registerStdTimeAliasFns(env: CheckEnv, alias: String) {
+    let tys = env.tys
+    let tUnit_ = tUnit(tys)
+    let tDuration = tyNamed(tys, "Duration", [])
+    checkRegisterFn(env, CheckFnSig {
+        name: "sleep", owner: alias, receiverTy: -1, retTy: tUnit_,
+        paramNames: ["duration"], paramTys: [tDuration],
+        generics: [], genericBounds: [],
+    })
+}
+
+/// checkInstallErrorIntrinsics registers the built-in `Error` type
+/// plus its two canonical methods: `Error.new(msg)` constructor and
+/// `err.downcast::<T>()` recovery helper. Spec §A.6.
+fn checkInstallErrorIntrinsics(env: CheckEnv) {
+    let tys = env.tys
+    let tError = tyNamed(tys, "Error", [])
+    let tString_ = tString(tys)
+    let tT = tyNamed(tys, "T", [])
+    let tOptT = tyOptional(tys, tT)
+    checkRegisterType(env, CheckTypeSig {
+        name: "Error", generics: [], genericBounds: [], kind: "interface",
+    })
+    checkRegisterInterface(env, "Error")
+    // Error.new(msg: String) -> Error — synthetic constructor so
+    // `Err(Error.new("..."))` resolves. Spec doesn't mandate a
+    // specific name but this is the canonical form in demos.
+    checkRegisterFn(env, CheckFnSig {
+        name: "new", owner: "Error", receiverTy: tError, retTy: tError,
+        paramNames: ["message"], paramTys: [tString_],
+        generics: [], genericBounds: [],
+    })
+    // err.downcast::<T>() -> Option<T> — spec §A.6 nominal recovery.
+    checkRegisterFn(env, CheckFnSig {
+        name: "downcast", owner: "Error", receiverTy: tError, retTy: tOptT,
+        paramNames: [], paramTys: [],
+        generics: ["T"], genericBounds: [],
+    })
 }
 
 /// checkInstallChannelIntrinsics registers the intrinsic methods on
 /// the `Channel<T>` runtime type that `thread.chan::<T>(buf)` yields.
+/// Also registers `Channel` and `Handle` as types so receiver-based
+/// generic seeding (`ch.close()` binds T from the `Channel<Int>`
+/// receiver) works without per-site turbofish.
 fn checkInstallChannelIntrinsics(env: CheckEnv) {
     let tys = env.tys
     let tT = tyNamed(tys, "T", [])
     let tChanT = tyNamed(tys, "Channel", [tT])
+    let tHandleT = tyNamed(tys, "Handle", [tT])
     let tOptT = tyOptional(tys, tT)
     let gT: List<String> = ["T"]
+    checkRegisterType(env, CheckTypeSig { name: "Channel", generics: ["T"], genericBounds: [], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "Handle", generics: ["T"], genericBounds: [], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "Group", generics: [], genericBounds: [], kind: "struct" })
+    // Group.spawn(body: fn() -> T) -> Handle<T> — structural concurrency
+    // helper that spawns a scoped task inside a `taskGroup(|g| { ... })`
+    // body. Spec §B.6 canonical pattern.
+    let tGroupTy = tyNamed(env.tys, "Group", [])
+    checkRegisterFn(env, CheckFnSig {
+        name: "spawn", owner: "Group", receiverTy: tGroupTy,
+        retTy: tHandleT,
+        paramNames: ["body"], paramTys: [tyFn(env.tys, [], tT)],
+        generics: gT, genericBounds: [],
+    })
     checkRegisterFn(env, CheckFnSig {
         name: "close", owner: "Channel", receiverTy: tChanT, retTy: tUnit(tys),
         paramNames: [], paramTys: [],
@@ -1457,6 +1520,16 @@ fn checkInstallChannelIntrinsics(env: CheckEnv) {
     })
     checkRegisterFn(env, CheckFnSig {
         name: "isClosed", owner: "Channel", receiverTy: tChanT, retTy: tBool(tys),
+        paramNames: [], paramTys: [],
+        generics: gT, genericBounds: [],
+    })
+    // Handle<T> intrinsic: `h.join()` blocks on the task and yields T.
+    // Spec §B.6 shows both `h.join()?` (Result-style) and `a.join() + b.join()`
+    // (plain-value style). We pick the plain-value signature so the
+    // latter arithmetic form typechecks; the former still compiles when
+    // T itself is a Result.
+    checkRegisterFn(env, CheckFnSig {
+        name: "join", owner: "Handle", receiverTy: tHandleT, retTy: tT,
         paramNames: [], paramTys: [],
         generics: gT, genericBounds: [],
     })

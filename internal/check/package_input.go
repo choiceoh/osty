@@ -133,7 +133,16 @@ func selfhostBuildImportSurface(alias string, pkg *resolve.Package) selfhost.Pac
 			switch d := decl.(type) {
 			case *ast.FnDecl:
 				if d.Pub && d.Recv == nil {
+					// Register twice: once as a free function (owner=""), once
+					// as an alias-method (owner=alias) so `core.badge(sig)`
+					// dispatches through checkLookupMethod with receiver type
+					// `core`. The alias-method form has no receiver parameter —
+					// matching the stdlib registration style where
+					// `fs.readToString` is keyed by owner but takes no `self`.
 					surface.Functions = append(surface.Functions, selfhostBuildImportedFn(alias, localTypes, "", nil, nil, d))
+					aliasFn := selfhostBuildImportedFn(alias, localTypes, "", nil, nil, d)
+					aliasFn.Owner = alias
+					surface.Functions = append(surface.Functions, aliasFn)
 					surface.Fields = append(surface.Fields, selfhost.PackageCheckField{
 						Owner:      alias,
 						Name:       d.Name,

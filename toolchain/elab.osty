@@ -1200,6 +1200,29 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
     }
     let callee = astArenaNodeAt(cx.ast.arena, calleeIdx)
     if callee.kind == AstNField {
+        // `Expr.Num(1)` / `Value.newInt(n)` — type-qualified call at call
+        // position. The LHS is an enum/struct name (not a value), so
+        // the ordinary method-call path would emit E0745 on the LHS.
+        // Try variant constructor first, then static/instance method
+        // registered under that type name. Mirrors the dotted-variant
+        // prefix stripping elabVariantPattern does for pattern-side
+        // uses.
+        if callee.left >= 0 {
+            let fieldLhs = astArenaNodeAt(cx.ast.arena, callee.left)
+            if fieldLhs.kind == AstNIdent {
+                let variant = checkLookupVariantInOwner(cx.env, fieldLhs.text, callee.text)
+                if variant.name != "" {
+                    return elabInferVariantCall(cx, callIdx, node, callee, argIdxs, variant, [], expected)
+                }
+                let typeSig = checkLookupType(cx.env, fieldLhs.text)
+                if typeSig.name != "" {
+                    let staticSig = checkLookupMethod(cx.env, fieldLhs.text, callee.text)
+                    if staticSig.name != "" {
+                        return elabInferStaticMethodCall(cx, callIdx, node, callee, argIdxs, fieldLhs.text, staticSig, [], expected)
+                    }
+                }
+            }
+        }
         return elabInferMethodCall(cx, node, callee, expected, [])
     }
 
@@ -1337,6 +1360,57 @@ fn elabInferVariantCall(
     let typeArgsConcrete = instConcreteArgs(cx, inst)
     if checkIntListLenHelper(typeArgsConcrete) > 0 {
         checkRecordInstantiation(cx.env, callIdx, variant.name, typeArgsConcrete, retTy, node.start, node.end)
+    }
+
+    let coreCallNode = coreCall(cx.core, coreFn, coreArgs, typeArgsConcrete, retTy, node.start, node.end)
+    ElabResult { node: coreCallNode, ty: retTy }
+}
+
+/// elabInferStaticMethodCall handles `Value.newInt(n)` — a call
+/// where the callee is an enum/struct type name dotted with a
+/// method that takes no self receiver. Mirrors the fn-call path
+/// (instSeedExpectedRet + elabCallArgs + zonk) but skips the
+/// receiver-value inference the ordinary elabInferMethodCall path
+/// would attempt on the LHS ident.
+fn elabInferStaticMethodCall(
+    cx: ElabCx,
+    callIdx: Int,
+    node: AstNode,
+    fieldNode: AstNode,
+    argIdxs: List<Int>,
+    ownerName: String,
+    sig: CheckFnSig,
+    explicitArgs: List<Int>,
+    expected: Int,
+) -> ElabResult {
+    let _ = ownerName
+    if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
+        let coreFn = coreIdent(cx.core, sig.name, IkFn, fnSigToTy(cx.env, sig), fieldNode.start, fieldNode.end)
+        let coreArgs = elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, argIdxs, node.start, node.end)
+        let retTy = sig.retTy
+        if !(tyIsBad(cx.env.tys, expected)) {
+            let _ = checkExpectAssignable(cx.env, expected, retTy, node.start, node.end)
+        }
+        let coreCallNode = coreCall(cx.core, coreFn, coreArgs, [], retTy, node.start, node.end)
+        return ElabResult { node: coreCallNode, ty: retTy }
+    }
+
+    let inst = instBegin(cx, sig.generics, sig.name)
+    instSeedExpectedRet(cx, inst, sig.retTy, expected)
+    instSeedPositionalArgs(cx, inst, explicitArgs)
+
+    let coreFn = coreIdent(cx.core, sig.name, IkFn, fnSigToTy(cx.env, sig), fieldNode.start, fieldNode.end)
+    let coreArgs = elabCallArgs(cx, inst.solver, sig, inst.freshs, argIdxs, node.start, node.end)
+
+    let retSubstituted = instSubstitute(cx, inst, sig.retTy)
+    let retTy = instZonk(cx, inst, retSubstituted)
+
+    elabReportUnresolvedGenerics(cx, inst.solver, sig, inst.freshs, node.start, node.end)
+    instCheckBounds(cx, inst, sig.genericBounds, node.start, node.end)
+
+    let typeArgsConcrete = instConcreteArgs(cx, inst)
+    if checkIntListLenHelper(typeArgsConcrete) > 0 {
+        checkRecordInstantiation(cx.env, callIdx, sig.name, typeArgsConcrete, retTy, node.start, node.end)
     }
 
     let coreCallNode = coreCall(cx.core, coreFn, coreArgs, typeArgsConcrete, retTy, node.start, node.end)
@@ -1771,6 +1845,23 @@ fn elabInferTurbofish(cx: ElabCx, node: AstNode) -> ElabResult {
 // ---------------------------------------------------------------------
 
 fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
+    // `EvalError.DivByZero` — enum-qualified bare variant used as a
+    // value expression (no call parens). The LHS is the enum name,
+    // not a runtime value, so the ordinary receiver-inference below
+    // would emit E0745. If LHS resolves to a registered type and the
+    // field text names a payload-free variant, synthesize the variant
+    // reference directly.
+    if node.left >= 0 {
+        let lhs = astArenaNodeAt(cx.ast.arena, node.left)
+        if lhs.kind == AstNIdent {
+            let variant = checkLookupVariantInOwner(cx.env, lhs.text, node.text)
+            if variant.name != "" && checkIntListLenHelper(variant.fieldTys) == 0 {
+                let variantTy = elabVariantOwnerType(cx, variant)
+                let coreIdx = coreIdent(cx.core, node.text, IkVariant, variantTy, node.start, node.end)
+                return ElabResult { node: coreIdx, ty: variantTy }
+            }
+        }
+    }
     let recv = elabInfer(cx, node.left)
     let recvTy = checkResolveAliasDeep(cx.env, recv.ty)
     if tyIsBad(cx.env.tys, recvTy) {
