@@ -1,6 +1,6 @@
 # RUNTIME_SCHEDULER.md — Osty 런타임 스케줄러 아키텍처 & 단계 로드맵
 
-> **Status (2026-04):** Phase 1B/2 하이브리드 진행 중. pthread 기반 task spawn/join + mutex/cond 기반 채널이 공개 런타임에 들어왔다. `parallel` / `race` / `collectAll` 헬퍼는 더 이상 abort 스텁이 아니며 pthread 위에서 동작한다 (폴링 기반 race tie-break, 공유 카운터 기반 bounded-concurrency parallel, group-scoped collectAll). 남은 abort는 `osty_rt_select_send` 한 곳이며, MIR value-register surface가 들어오면 해소된다. 이 문서는 `LANG_SPEC_v0.5/08-concurrency.md` §8.0과 `LANG_SPEC_v0.5/19-runtime-primitives.md` §19.1 "GC × scheduler interaction" 절에 대응하는 **구현 레퍼런스**다. 스펙은 관찰 가능한 계약만 고정하고, 이 문서는 공개 LLVM 백엔드의 참조 런타임이 어떤 단계로 그 계약을 만족하는지 기술한다.
+> **Status (2026-04):** Phase 1B/2 하이브리드 진행 중. pthread 기반 task spawn/join + mutex/cond 기반 채널이 공개 런타임에 들어왔다. `parallel` / `race` / `collectAll` 헬퍼는 더 이상 abort 스텁이 아니며 pthread 위에서 동작한다 (폴링 기반 race tie-break, 공유 카운터 기반 bounded-concurrency parallel, group-scoped collectAll). `thread.select`의 send arm도 타입별 value-register surface (`osty_rt_select_send_{i64,i1,f64,ptr,bytes_v1}`) 로 완성되어 공개 런타임에 `osty_sched_unimplemented` 경로는 더 이상 남아 있지 않다. 이 문서는 `LANG_SPEC_v0.5/08-concurrency.md` §8.0과 `LANG_SPEC_v0.5/19-runtime-primitives.md` §19.1 "GC × scheduler interaction" 절에 대응하는 **구현 레퍼런스**다. 스펙은 관찰 가능한 계약만 고정하고, 이 문서는 공개 LLVM 백엔드의 참조 런타임이 어떤 단계로 그 계약을 만족하는지 기술한다.
 
 ## 배경
 
@@ -36,8 +36,8 @@ Phase 1A는 `osty_rt_task_*` / `osty_rt_thread_*` 심볼 집합을 먼저 링크
 - `osty_rt_task_group(body)`: 호출 스레드에서 body 실행하고 TLS에 group을 바인딩. 자식 스레드는 `h->group`을 통해 트램펄린에서 TLS를 상속받음. body 리턴 시점에 `osty_rt_task_group_reap`가 group의 child 리스트를 훑고 unjoined 스레드를 pthread_join으로 회수 (spec §8.1 structured lifetime).
 - Cancellation: `cancelled` flag는 atomic (release store / acquire load). group flag set은 subsequent `is_cancelled` 호출에서 관찰 가능.
 - 채널: ring buffer + `pthread_mutex_t mu` + `pthread_cond_t not_full` + `pthread_cond_t not_empty`. Capacity 0은 1로 clamp (진짜 rendezvous는 Phase 1B fiber 영역, 미구현 표기).
-- `osty_rt_select` (recv / timeout / default 지원): 내부 builder 할당 → body에 `(env, s)` 로 호출 → body가 arm 등록 → polling 루프에서 recv 시도, default는 즉시 발화, timeout은 deadline 도달 시 발화. 500μs backoff로 busy-spin 회피.
-- `osty_rt_select_send`: 아직 MIR이 value-register surface를 emit하지 않아 보류 (`osty_sched_unimplemented`). 4-arg 시그니처로 전환될 때 완성.
+- `osty_rt_select` (recv / send / timeout / default 전부 지원): 내부 builder 할당 → body에 `(env, s)` 로 호출 → body가 arm 등록 → polling 루프에서 recv/send 시도, default는 즉시 발화, timeout은 deadline 도달 시 발화. 500μs backoff로 busy-spin 회피.
+- `osty_rt_select_send_{i64,i1,f64,ptr,bytes_v1}`: 타입별 진입점. MIR은 channel element type으로 suffix를 고른 뒤 `(ptr s, ptr ch, <elemLLVM> value, ptr arm_env)` (scalar) 또는 `(ptr s, ptr ch, ptr src, i64 size, ptr arm_env)` (bytes) 형태로 call한다. 값은 scalar면 channel ring-buffer slot에 int64 비트로 packing하고, 복합형이면 GC-managed 버퍼로 복사한 뒤 그 포인터를 slot에 넣는다 — `osty_rt_thread_chan_send_*`와 같은 라인. Enqueue가 성공하면 루프는 arm closure(`() -> ()`)를 plain 호출하고 select에서 리턴 (`case ch <- v: arm()`의 도덕적 등가물). 닫힌 채널로 send하면 abort (blocking send와 동일한 loud-fail).
 - `osty_rt_task_collect_all(body_env)`: fresh group에서 body를 돌려 `List<Handle<T>>`를 받고, 각 handle을 join해 `Ok(result)` 로 감싸 `List<Result<T, Error>>`를 반환. body가 group에만 attach하고 list에는 surface 안 한 stray child는 group teardown에서 pthread_join으로 회수.
 - `osty_rt_task_race(body_env)`: fresh group에서 body를 돌려 handle 리스트를 받고, handle의 `done` flag를 500μs cadence로 폴링. 첫 완료된 handle을 winner로 삼고 group cancel flag를 release-store → sibling은 협력적 cancel point (channel op, sleep, explicit check, join) 에서 관찰. 반환은 `{i64 disc, i64 payload}` enum 레이아웃 (Ok=1, payload=winner result bits). 모든 sibling은 teardown에서 join.
 - `osty_rt_parallel(items, concurrency, f)`: `items`의 `elem_size`가 8바이트 이하인 `List<T>`를 대상으로 bounded-concurrency map. `osty_rt_task_spawn`으로 `min(concurrency, n)` detached worker를 띄우고, 각 worker가 `__atomic_fetch_add`로 공유 카운터에서 인덱스를 가져와 `f(env, item)`을 호출, 결과를 pre-sized 출력 list의 해당 slot에 `Ok(result)` 로 set. 출력 list element size는 16 (enum layout), trace_elem은 NULL — 이는 Phase 1B/2가 전반적으로 가정하는 "task 결과는 8바이트 스칼라 폭" 계약과 일치한다.
@@ -46,8 +46,8 @@ Phase 1A는 `osty_rt_task_*` / `osty_rt_thread_*` 심볼 집합을 먼저 링크
 - GC 상호작용: 모든 `osty_gc_allocate_managed` 호출과 write barrier (`pre_write_v1`, `post_write_v1`, `load_v1`, `root_bind_v1`, `root_release_v1`)는 recursive mutex `osty_gc_lock`으로 직렬화. 자동 collection은 `osty_concurrent_workers > 0`인 동안 **보류**된다 (현재 스레드만의 stack root로는 sibling 스레드의 root를 커버할 수 없음). 모든 worker가 join된 뒤 재개. Concurrent collection은 Phase 3.
 
 **제약.**
-- `osty_rt_select_send`: 여전히 abort 스텁. send arm의 값 register 슬롯을 MIR이 emit하는 시점에 완성.
 - `race`: tie-break은 폴링 기반 (500μs cadence) — 진짜 per-handle 완료 세마포어는 Phase 1B fibers 에서 제공. 결과 payload는 8바이트 폭으로 제한 (handle_join ABI와 동일 제약).
+- `select` send arm: 현재는 `send_bytes_v1` 루트도 8바이트 정렬된 스칼라와 동일 폴링 cadence를 공유. 진짜 send-park (버퍼 full일 때 fiber 대기)는 Phase 1B fibers 에서 제공. Phase 1B/2 polling 루프에서는 채널이 계속 full이면 timeout/default arm이 없는 한 무한 대기 가능.
 - `parallel`: 입력 `List<T>`의 `elem_size` > 8바이트면 abort. 출력 `List<Result<R, Error>>`의 payload는 비-traced slot이라 `R`이 포인터 타입이면 호출자가 결과 list를 루트로 잡고 있는 동안만 안전 (list는 GC 루트로 연결, payload는 정적으로 추적되지 않음 — 현재 handle_join의 `int64_t` 결과 슬롯이 갖는 제약과 동일).
 - GC는 worker-live 동안 일시 보류 → long-running concurrent workload에서 OOM 가능. Phase 3 concurrent collector가 해소.
 - Thread-per-task 모델 — 큰 task 수에서 TLS/stack 오버헤드. Chase-Lev deque + work-stealing 기반 worker pool은 Phase 2+ 후속 작업.
@@ -61,7 +61,7 @@ Phase 1A는 `osty_rt_task_*` / `osty_rt_thread_*` 심볼 집합을 먼저 링크
 - `TestBundledRuntimeSchedulerCollectAll`: 4개 handle 전부 join되고 각 slot이 `{disc=1, payload=capture}` 레이아웃으로 출력 list에 들어가는지 검증.
 - `TestBundledRuntimeSchedulerRace`: 10ms winner + 2초짜리 loser × 2 설정에서 winner 결과가 반환되고, sibling이 cancel 협조해서 전체 wall-clock이 500ms 미만임을 고정.
 - `TestBundledRuntimeSchedulerParallel`: 10 items × concurrency 4 × `f(x)=x*x` 매핑의 각 slot 검증 + 빈 입력 엣지 케이스.
-- `TestBundledRuntimeSchedulerSelectSendStubAborts`: 미구현된 send arm이 loud-fail 함을 고정.
+- `TestBundledRuntimeSchedulerSelectSend`: `osty_rt_select_send_i64`로 capacity-1 채널에 send 후 arm closure가 발화했는지, 채널에 값이 enqueue되었는지, recv arm을 가진 두 번째 select가 그 값을 드레인하는지 검증 (arm이 두 번 호출되는 것까지 고정).
 
 ### Phase 1B — Single-worker cooperative fibers (대안 경로, 미채택)
 
@@ -155,10 +155,15 @@ struct recv_result { int64_t value_or_ptr; int64_t ok; };
 struct recv_result osty_rt_thread_chan_recv_i64(void *ch);
 // ... same for i1/f64/ptr/bytes_v1
 
-// select (Phase 2부터 functional)
+// select (Phase 1B부터 functional — send/recv/timeout/default 모두)
 void osty_rt_select(void *s);
 void osty_rt_select_recv(void *s, void *ch, void *arm);
-void osty_rt_select_send(void *s, void *ch, void *arm);
+void osty_rt_select_send_i64(void *s, void *ch, int64_t value, void *arm);
+void osty_rt_select_send_i1(void *s, void *ch, bool value, void *arm);
+void osty_rt_select_send_f64(void *s, void *ch, double value, void *arm);
+void osty_rt_select_send_ptr(void *s, void *ch, void *value, void *arm);
+void osty_rt_select_send_bytes_v1(void *s, void *ch, const void *src,
+                                  int64_t sz, void *arm);
 void osty_rt_select_timeout(void *s, int64_t ns, void *arm);
 void osty_rt_select_default(void *s, void *arm);
 
@@ -183,7 +188,8 @@ void *osty_rt_parallel(void *items, int64_t concurrency, void *f);   // List<Res
 | §8.3 `collectAll` | sequential stub | sequential stub | ✓ (현재) | ✓ |
 | §8.4 cancel with cause | ✓ | ✓ | ✓ | ✓ |
 | §8 channels blocking | **abort stub** | ✓ | ✓ | ✓ |
-| §8 `thread.select` | **abort stub** | ✓ | ✓ | ✓ |
+| §8 `thread.select` (recv/timeout/default) | **abort stub** | ✓ | ✓ | ✓ |
+| §8 `thread.select` send arm | **abort stub** | ✓ (폴링, 현재) | ✓ (per-channel lock) | ✓ (fiber park) |
 | §19.1 STW GC | ✓ | ✓ + parked-root union | **paused while workers live** | concurrent |
 | §19.10 safepoint contract | unchanged | extended (park-as-safepoint) | gated on `osty_concurrent_workers` | extended (preempt_check) |
 
@@ -207,3 +213,4 @@ void *osty_rt_parallel(void *items, int64_t concurrency, void *f);   // List<Res
 - 2026-04-20: pthread 기반 spawn/join + mutex/cond 채널 런타임 착수. task_group/spawn/handle_join/cancel이 실제 병렬로 동작. `osty_gc_lock` 도입, 자동 collection은 `osty_concurrent_workers > 0`인 동안 보류.
 - 2026-04-20 (follow-up): write barrier / root bind/release 전부 `osty_gc_lock`으로 감쌈; pthread cleanup handler로 worker counter 누수 불가능; `task_group`에 auto-reap 도입; `thread.select`의 recv/timeout/default arm 구현. send arm만 보류.
 - 2026-04-21: `osty_rt_task_collect_all` / `osty_rt_task_race` / `osty_rt_parallel` abort 스텁 제거. race는 handle `done` flag 폴링 (500μs cadence) + group cancel 브로드캐스트, collectAll은 fresh group 스코프에서 handle list를 돌며 `Ok(result)` 로 감싸 반환, parallel은 detached worker × `__atomic_fetch_add` 인덱스 분배로 pre-sized 출력 slot에 결과를 쓴다. MIR: `IntrinsicRace`는 `{i64, i64}` enum 레이아웃 반환으로 전환 (기존 `ptr` 반환 제거). 남은 abort 스텁은 `osty_rt_select_send` 하나.
+- 2026-04-21 (follow-up): `osty_rt_select_send` abort 제거. `osty_rt_select_send_{i64,i1,f64,ptr,bytes_v1}` 5종 진입점을 타입별로 추가하고, select 폴링 루프에 send-arm try-enqueue 경로를 합류시켰다. 스칼라는 channel ring-buffer의 int64 slot에 bits packing, 복합형은 `osty_rt_thread_chan_send_bytes_v1`와 동일하게 GC-managed 버퍼 복사 후 포인터 slot 저장. Enqueue 성공 시 arm closure를 `() -> ()`로 plain 호출한다. MIR (`internal/llvmgen/mir_generator.go emitSelectSend`)은 channel element 타입으로 suffix를 골라 4-arg scalar / 5-arg bytes 형태로 lower. Stdlib `thread.osty`의 `Select.send`도 `(ch, value, f)` 3-인자 surface로 정정. `TestBundledRuntimeSchedulerSelectSendStubAborts`는 `TestBundledRuntimeSchedulerSelectSend` (end-to-end harness) 로 대체. 공개 런타임에서 `osty_sched_unimplemented` 호출은 이제 0개.

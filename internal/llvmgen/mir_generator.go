@@ -2147,13 +2147,92 @@ func (g *mirGen) emitSelectIntrinsic(i *mir.IntrinsicInstr) error {
 	case mir.IntrinsicSelectRecv:
 		return g.emitSimpleConcurrencyCall(i, "osty_rt_select_recv", "void", nil)
 	case mir.IntrinsicSelectSend:
-		return g.emitSimpleConcurrencyCall(i, "osty_rt_select_send", "void", nil)
+		return g.emitSelectSend(i)
 	case mir.IntrinsicSelectTimeout:
 		return g.emitSimpleConcurrencyCall(i, "osty_rt_select_timeout", "void", nil)
 	case mir.IntrinsicSelectDefault:
 		return g.emitSimpleConcurrencyCall(i, "osty_rt_select_default", "void", nil)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("select intrinsic kind %d", i.Kind))
+}
+
+// emitSelectSend lowers `s.send(ch, value, arm)` — a send arm on a
+// select builder. Args are [select_builder, channel, value, arm_env];
+// the channel element type determines which typed runtime variant we
+// dispatch to, mirroring the plain `IntrinsicChanSend` lane (scalar
+// i64/i1/f64/ptr go straight, composites spill through the bytes_v1
+// surface). The arm closure is invoked after the enqueue succeeds —
+// the moral equivalent of `case ch <- v: arm()` in Go select.
+func (g *mirGen) emitSelectSend(i *mir.IntrinsicInstr) error {
+	if len(i.Args) != 4 {
+		return unsupported("mir-mvp", fmt.Sprintf("select_send arity: got %d args", len(i.Args)))
+	}
+	builderOp := i.Args[0]
+	chOp := i.Args[1]
+	valOp := i.Args[2]
+	armOp := i.Args[3]
+	builderReg, err := g.evalOperand(builderOp, builderOp.Type())
+	if err != nil {
+		return err
+	}
+	chReg, err := g.evalOperand(chOp, chOp.Type())
+	if err != nil {
+		return err
+	}
+	elemT := channelElementType(chOp.Type())
+	if elemT == nil {
+		return unsupported("mir-mvp", "select_send: missing element type")
+	}
+	valReg, err := g.evalOperand(valOp, elemT)
+	if err != nil {
+		return err
+	}
+	armReg, err := g.evalOperand(armOp, armOp.Type())
+	if err != nil {
+		return err
+	}
+	elemLLVM := g.llvmType(elemT)
+	if listUsesTypedRuntime(elemLLVM) {
+		suffix := llvmListElementSuffix(elemLLVM)
+		sym := "osty_rt_select_send_" + suffix
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr, ptr, "+elemLLVM+", ptr)")
+		g.fnBuf.WriteString("  call void @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(builderReg)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(chReg)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(elemLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(valReg)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(armReg)
+		g.fnBuf.WriteString(")\n")
+		return nil
+	}
+	// Composite element — bytes_v1 route. Spill value to a stack slot,
+	// hand the runtime a (ptr, size) pair; it copies into GC storage.
+	sym := "osty_rt_select_send_bytes_v1"
+	g.declareRuntime(sym, "declare void @"+sym+"(ptr, ptr, ptr, i64, ptr)")
+	em := g.ostyEmitter()
+	slot := llvmSpillToSlot(em, &LlvmValue{typ: elemLLVM, name: valReg})
+	size := llvmSizeOf(em, elemLLVM)
+	g.flushOstyEmitter(em)
+	g.fnBuf.WriteString("  call void @")
+	g.fnBuf.WriteString(sym)
+	g.fnBuf.WriteString("(ptr ")
+	g.fnBuf.WriteString(builderReg)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(chReg)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(slot.name)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(size.name)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(armReg)
+	g.fnBuf.WriteString(")\n")
+	return nil
 }
 
 // emitCancelIntrinsic handles the cancellation + yield + sleep

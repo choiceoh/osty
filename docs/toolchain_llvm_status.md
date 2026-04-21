@@ -1,10 +1,20 @@
 # Toolchain × LLVM compilability — status report
 
-Snapshot date: 2026-04-21. This refresh revalidated the universal CLI / LLVM
-smoke path, re-ran the whole/native merged toolchain probes, and cross-checked
-the current code paths (`internal/check`, `internal/selfhost`,
-`internal/llvmgen`, `internal/bootstrap/gen`) so this report distinguishes
-historical samples from current-tree observations. Stage numbers shift
+Snapshot date: 2026-04-21 (late). Two major milestones since the morning
+refresh: (1) the native-only merged LLVM probe is now **CLEAN** — `#486`
+closed the last walls by landing `String.bytes()` / `String.chars()`
+intrinsic lowering and `List<T>.clear()`, and an authoritative gate
+(`TestNativeToolchainMergedIsClean` in `internal/llvmgen/`) fails fast if
+a regression re-introduces a wall; (2) `#503` ported the MIR core to
+Osty (`toolchain/mir.osty`), and (3) `#496` finished the runtime
+scheduler — `osty_rt_select_send` joined the public surface, so the
+public LLVM runtime has zero `osty_sched_unimplemented` call sites left
+(concurrency spec §8 fully covered). This refresh revalidated the
+universal CLI / LLVM smoke path, re-ran the whole/native merged
+toolchain probes, and cross-checked the current code paths
+(`internal/check`, `internal/selfhost`, `internal/llvmgen`,
+`internal/bootstrap/gen`) so this report distinguishes historical
+samples from current-tree observations. Stage numbers shift
 week-over-week; for the live MIR-direct coverage see
 [docs/mir_design.md](./mir_design.md) Stage 3.x + Stage 5 sections.
 
@@ -23,10 +33,12 @@ As of 2026-04-21:
 - the whole-toolchain merged LLVM probe still first-walls on the
   bootstrap-only `runtime.golegacy.astbridge` bridge
 - the native-only merged LLVM probe (with bootstrap-only files skipped)
-  now lowers **CLEAN** — the last wall (`LLVM015 [method_call_field]`
-  on `buf.clear()` in `toolchain/ty.osty`'s generic-arg splitter, where
-  rebinding `buf = []` would've lost bootstrap-gen's element inference
-  on Windows regen) was closed by adding `osty_rt_list_clear` to the C
+  now lowers **CLEAN** (`#486`, guarded by
+  `TestNativeToolchainMergedIsClean` in `internal/llvmgen/`) — the
+  last wall (`LLVM015 [method_call_field]` on `buf.clear()` in
+  `toolchain/ty.osty`'s generic-arg splitter, where rebinding
+  `buf = []` would've lost bootstrap-gen's element inference on
+  Windows regen) was closed by adding `osty_rt_list_clear` to the C
   runtime and routing `List<T>.clear()` through `emitListMethodCallStmt`.
   The preceding `String.bytes`/`String.chars` intrinsic gap is also
   closed: `internal/llvmgen/expr.go` dispatches both methods to
@@ -110,17 +122,25 @@ Current-tree observations from the code re-audit:
 |---|---|---|
 | CLI wiring | universal LLVM entry wedge | **resolved** — hello-world `osty gen --backend=llvm` exits 0 and writes `.ll` output |
 | Bootstrap bridge | merged whole-toolchain probe | first wall is still `LLVM002 runtime-ffi` on `runtime.golegacy.astbridge`; this is a bootstrap artifact, not yet a native backend parity claim |
-| Native backend surface | merged native-only probe | **CLEAN** after skipping 4 bootstrap-only files (verified 2026-04-21 via `TestNativeToolchainMergedIsClean` + `TestProbeNativeToolchainMerged`). Most recently closed: `LLVM015 [method_call_field]` on `buf.clear()` in `ty.osty` — `List<T>.clear()` now dispatches through `osty_rt_list_clear` in `emitListMethodCallStmt`, with the symbol added to `listMethodInfo`'s whitelist. Preceding `String.bytes()`/`String.chars()` intrinsic gap also closed (lowers to `osty_rt_strings_Chars` / `osty_rt_strings_Bytes` with `listElemTyp` tagged `i32` / `i8`). Earlier closed walls (in order): `LLVM011 [fn_param_struct_type]` Char on `lspUtf16UnitsForChar`; `LLVM012 *ast.MatchExpr is not a call` (match-as-statement lowering); `LLVM012 field assignment base *ast.FieldExpr` (nested `a.b.c = x` via `llvmInsertValue` rebuild chain); parser precedence `(!x).y` / `!(x.y)` hoisted at stable-AST lowering; `LLVM011 [list_mixed_ptr]` source-type propagation (stdlib strings alias calls, bare `""` literals, if-expr phi branches — `staticStdStringsCallSourceType` + literal sourceType tagging + mergeContainerMetadata sameSourceType); `LLVM011 [string_non_ascii]` multi-byte UTF-8 literals (BOM / Unit Separator / Korean / emoji) now byte-escaped via `\HH` in `llvmCStringEscape`, with `llvmCString` counting UTF-8 bytes instead of runes; `LLVM013 match arm must be a payload-free enum variant` was a source inconsistency (missing `FrontDiagBadNumericSeparator` enum variant) + a latent return-path gap (hardcoded `listElemString=false` in `emitReturningBlock` / `emitReturn`). List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites also closed |
+| Native backend surface | merged native-only probe | **CLEAN** after skipping 4 bootstrap-only files (`#486`, verified 2026-04-21 via `TestNativeToolchainMergedIsClean` + `TestProbeNativeToolchainMerged`). Most recently closed: `LLVM015 [method_call_field]` on `buf.clear()` in `ty.osty` — `List<T>.clear()` now dispatches through `osty_rt_list_clear` in `emitListMethodCallStmt`, with the symbol added to `listMethodInfo`'s whitelist. Preceding `String.bytes()`/`String.chars()` intrinsic gap also closed (lowers to `osty_rt_strings_Chars` / `osty_rt_strings_Bytes` with `listElemTyp` tagged `i32` / `i8`). Earlier closed walls (in order): `LLVM011 [fn_param_struct_type]` Char on `lspUtf16UnitsForChar`; `LLVM012 *ast.MatchExpr is not a call` (match-as-statement lowering); `LLVM012 field assignment base *ast.FieldExpr` (nested `a.b.c = x` via `llvmInsertValue` rebuild chain); parser precedence `(!x).y` / `!(x.y)` hoisted at stable-AST lowering; `LLVM011 [list_mixed_ptr]` source-type propagation (stdlib strings alias calls, bare `""` literals, if-expr phi branches — `staticStdStringsCallSourceType` + literal sourceType tagging + mergeContainerMetadata sameSourceType); `LLVM011 [string_non_ascii]` multi-byte UTF-8 literals (BOM / Unit Separator / Korean / emoji) now byte-escaped via `\HH` in `llvmCStringEscape`, with `llvmCString` counting UTF-8 bytes instead of runes; `LLVM013 match arm must be a payload-free enum variant` was a source inconsistency (missing `FrontDiagBadNumericSeparator` enum variant) + a latent return-path gap (hardcoded `listElemString=false` in `emitReturningBlock` / `emitReturn`). List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites also closed |
+| Public runtime scheduler | `osty_rt_*` task/thread/select | `#496` complete. Select-send arm landed as typed entry points `osty_rt_select_send_{i64,i1,f64,ptr,bytes_v1}` (scalar packing into channel ring slot, bytes via GC-managed copy). The public LLVM runtime now has zero `osty_sched_unimplemented` call sites — concurrency spec §8 (taskGroup / spawn / join / cancel / chan / select / parallel / race / collectAll) is fully covered. See RUNTIME_SCHEDULER.md |
+| MIR Osty port | `toolchain/mir.osty` | `#503` — MIR core (intrinsic kinds, printer, operand/instr shapes) now has an Osty-native mirror in `toolchain/mir.osty`; Go remains authoritative while the Osty side participates in the spec corpus |
 | Checker boundary | `internal/check` / `internal/toolchain` | host still manages an external `osty-native-checker` artifact and falls back to the embedded selfhost checker when it cannot be prepared |
 | Toolchain package health | `osty check --airepair=false toolchain` | current CLI surface is still an aggregate `E0700` summary (`949 error(s)`, `26811 / 27501` accepted) rather than a clean self-compile pass |
 | Stdlib / string surface | `internal/llvmgen/stdlib_shim.go`, `expr.go` | a subset of `std.strings` is shimmed through runtime helpers. `Char` and `Byte` parameters/returns, literals, comparisons, and width conversions lower; `String.chars` / `String.bytes` lower to `osty_rt_strings_Chars` / `osty_rt_strings_Bytes` producing GC-managed lists with `listElemTyp` tagged `i32` / `i8`, and downstream iteration takes the `_bytes_v1` ABI. What remains is retiring the runtime-backed `std.strings` shim in favor of pure-Osty bodies built on those primitives |
 
 The MIR-direct emitter itself (Stages 3.1–3.11) covers a growing subset of the
-language shapes toolchain uses. The 2026-04-21 refresh narrows the story
-further: backend entry is no longer the first blocker, and the native-only
-merged probe now lowers cleanly, but the current tree is still not "fully
-self-hosted" because the bootstrap bridge and the aggregate `949 / 27501`
-checker-error summary on `osty check --airepair=false toolchain` remain live.
+language shapes toolchain uses. The late 2026-04-21 refresh narrows the
+story further: backend entry is no longer the first blocker, the
+native-only merged probe is CLEAN (`#486`, guarded by
+`TestNativeToolchainMergedIsClean`), and the public runtime has no
+unimplemented scheduler paths left (`#496`, select-send arm landed —
+zero `osty_sched_unimplemented` call sites). What remains between here
+and "fully self-hosted native binary" is (a) the bootstrap-only bridge
+`runtime.golegacy.astbridge` on the whole-toolchain merged probe, and
+(b) the aggregate native-checker summary (`949 error(s)`,
+`26811 / 27501 accepted`) on `osty check --airepair=false toolchain` —
+neither of which is a backend wall anymore.
 
 ## How the probe was run
 
@@ -147,11 +167,14 @@ Observed in the 2026-04-21 refresh:
 - `TestProbeNativeToolchainMerged` skipped
   `ast_lower.osty, ci.osty, docgen.osty, manifest_validation.osty` and
   reported `NATIVE TOOLCHAIN first wall: CLEAN`. The authoritative
-  `TestNativeToolchainMergedIsClean` gate passed. The earlier
+  regression gate `TestNativeToolchainMergedIsClean`
+  (`internal/llvmgen/native_toolchain_clean_test.go`) passed,
+  fail-fast on any re-introduced wall. The earlier
   `LLVM011 [list_mixed_ptr]`, `LLVM011 [fn_param_struct_type]` Char,
   `LLVM012 MatchExpr is not a call`, `LLVM012 field assignment base
-  *ast.FieldExpr`, `LLVM011 [other] String.bytes`, and `LLVM015
-  [method_call_field] buf.clear()` walls are all closed
+  *ast.FieldExpr`, `LLVM011 [string_non_ascii]`, `LLVM011 [other]
+  String.bytes`, and `LLVM015 [method_call_field] buf.clear()`
+  (`List<T>.clear`) walls are all closed
 - `/tmp/osty check --airepair=false toolchain` exited with the aggregate
   summary
   `native checker reported type errors: 949 error(s)` plus
@@ -322,17 +345,19 @@ rewire the remaining Go-hosted boundaries."
 
 1. **Keep the native-merged clean gate authoritative.**
    `TestNativeToolchainMergedIsClean` now locks the "no wall" state as a
-   fail-fast regression gate. Future changes that re-introduce a wall
-   surface here immediately (e.g. adding a new method or literal shape
-   the statement-form dispatcher doesn't recognize yet). When a new
-   wall appears, treat it as Tier A: resolve in a follow-up PR and
-   reference this gate.
+   fail-fast regression gate (native-only merged probe CLEAN per `#486`).
+   Future changes that re-introduce a wall surface here immediately
+   (e.g. adding a new method or literal shape the statement-form
+   dispatcher doesn't recognize yet). When a new wall appears, treat it
+   as Tier A: resolve in a follow-up PR and reference this gate.
 
 2. **Shrink the aggregate checker summary on the current tree.**
    Re-profile the `949`-error native-checker summary into a current
    histogram before making more claims from the 2026-04-18 sample —
    the drop from the earlier `1700` / `3846` figures already suggests
-   the root-cause set has shifted.
+   the root-cause set has shifted. With the native probe CLEAN and the
+   scheduler (`#496`) complete, this is now the primary unlock for
+   "self-compile clean."
 
 3. **Retire the runtime-backed `std.strings` shim.**
    Now that `String.chars()` / `String.bytes()` lower to real
@@ -341,13 +366,21 @@ rewire the remaining Go-hosted boundaries."
    `internal/llvmgen/stdlib_shim.go` routes that remain only as a
    bridge.
 
-4. **Retire the bootstrap-only bridge files from the critical path.**
-   Whole-toolchain merged lowering still first-walls on
-   `runtime.golegacy.astbridge`, so the self-hosting story stays
-   incomplete until the CLI is rewired away from those files or they
-   remain explicitly outside the native path.
+4. **Port more of the toolchain/compiler core into `toolchain/*.osty`.**
+   `#503` landed MIR in Osty. The natural next movers are the pieces
+   still living in Go but already expressible in Osty (lint / format /
+   check policy). See [AGENTS.md](../AGENTS.md) for the "Osty로 짤 수
+   있는 건 Go로 짜지 마" rule.
 
-5. **Then re-run `osty check toolchain` and per-file `osty gen
-   --backend=llvm` probes.** Once the checker summary and bootstrap
-   bridge wedges move, the remaining tail should become a much
-   narrower backend/runtime parity queue.
+5. **Retire the bootstrap-only bridge files from the critical path.**
+   Whole-toolchain merged lowering still first-walls on
+   `runtime.golegacy.astbridge` (`LLVM002 runtime-ffi`), so the
+   self-hosting story stays incomplete until the CLI is rewired away
+   from those files or they remain explicitly outside the native path.
+   With the native-only probe CLEAN, this is the last backend-adjacent
+   wedge on the merged surface.
+
+6. **Then re-run `osty check toolchain` and per-file `osty gen
+   --backend=llvm` probes.** Once the checker summary, stdlib-body,
+   and bootstrap-bridge wedges move, the remaining tail should become
+   a much narrower backend/runtime parity queue.
