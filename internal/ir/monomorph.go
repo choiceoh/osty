@@ -555,12 +555,25 @@ func (s *monoState) rewriteType(t Type) Type {
 		for i, a := range x.Args {
 			x.Args[i] = s.rewriteType(a)
 		}
+		// Builtin nominal types (Map, Option, List, Set, Result, …)
+		// are skipped unless a generic template with the same source
+		// name has been registered in Pass 1 — which happens when the
+		// backend's stdlib-type injector has fed in collections.osty /
+		// option.osty / result.osty ahead of monomorphization. In that
+		// case we fall through to the normal specialization path so
+		// bodied helpers like Map.getOr compile as concrete Map$K$V
+		// methods instead of staying hand-emitted in llvmgen.
 		if x.Builtin {
-			return x
+			if _, hasStruct := s.genericStructsByName[x.Name]; !hasStruct {
+				if _, hasEnum := s.genericEnumsByName[x.Name]; !hasEnum {
+					return x
+				}
+			}
 		}
-		// Only user-declared nominal types drive specialization.
-		// Concrete (non-generic) references like `Point` fall through
-		// unchanged — they were not indexed in Pass 1.
+		// Only nominal types with generic templates drive
+		// specialization. Concrete (non-generic) references like
+		// `Point` fall through unchanged — they were not indexed in
+		// Pass 1.
 		if len(x.Args) == 0 {
 			return x
 		}
