@@ -1,32 +1,76 @@
 set shell := ["bash", "-cu"]
 
 bin := ".bin/osty"
-front_packages := "./internal/lexer ./internal/parser ./internal/resolve ./internal/check ./internal/diag ./internal/format ./internal/lint ./internal/pipeline ./internal/speccorpus"
+checker_bin := ".osty/bin/osty-native-checker"
+front_packages := "./internal/lexer ./internal/parser ./internal/resolve ./internal/check ./internal/diag ./internal/format ./internal/lint ./internal/pipeline"
+test_flags := "-count=1 -vet=off"
 
-default:
-    just front
+default: front
+
+help:
+    just --list
 
 build:
     mkdir -p .bin
     go build -o {{bin}} ./cmd/osty
 
+build-checker:
+    mkdir -p .osty/bin
+    go build -o {{checker_bin}} ./cmd/osty-native-checker
+
+build-all: build build-checker
+
 front:
-    go test -count=1 {{front_packages}}
+    go test {{test_flags}} {{front_packages}}
 
 spec:
-    go test -count=1 ./internal/speccorpus -v
+    go test {{test_flags}} ./internal/speccorpus -v
 
 short:
-    go test -short ./...
+    go test {{test_flags}} -short ./...
 
 full:
-    go test ./...
+    go test {{test_flags}} ./...
+
+test pkg="./...":
+    go test {{test_flags}} {{pkg}}
+
+vet:
+    go vet ./...
+
+fmt:
+    gofmt -w $(git ls-files '*.go')
+
+fmt-check:
+    unformatted="$$(gofmt -l $$(git ls-files '*.go'))"; if [ -n "$$unformatted" ]; then printf '%s\n' "$$unformatted"; exit 1; fi
 
 lsp test=".":
-    go test -count=1 ./internal/lsp -run '{{test}}' -v
+    go test {{test_flags}} ./internal/lsp -run '{{test}}' -v
 
 cmd test=".":
-    go test -count=1 ./cmd/osty -run '{{test}}' -v
+    go test {{test_flags}} ./cmd/osty -run '{{test}}' -v
+
+gen test=".":
+    go test {{test_flags}} ./cmd/osty -run '{{test}}' -v
+
+diag test=".":
+    go test {{test_flags}} ./internal/diag -run '{{test}}' -v
+
+repair-check: build
+    while IFS= read -r file; do case "$$file" in testdata/spec/negative/*) continue ;; esac; {{bin}} repair --check "$$file"; done < <(git ls-files '*.osty')
+
+ci: build
+    {{bin}} ci .
+
+verify-selfhost:
+    go generate ./toolchain
+    git diff --exit-code -- toolchain/generated.go
+    go generate ./internal/ci
+    git diff --exit-code -- internal/ci/osty_generated.go
+
+check: fmt-check vet front
+
+prepush: fmt-check vet repair-check ci
 
 pipe target:
     test -x {{bin}} || just build
@@ -42,10 +86,13 @@ profile target:
     {{bin}} pipeline --per-decl --cpuprofile .profiles/cpu.pprof --memprofile .profiles/mem.pprof {{target}}
 
 watch-front:
-    watchexec -e go,osty,md -- just front
+    watchexec -e go,osty,md --restart -- just front
+
+watch-short:
+    watchexec -e go,osty,md --restart -- just short
 
 watch-pipe target:
-    watchexec -e go,osty -- just pipe {{target}}
+    watchexec -e go,osty --restart -- just pipe {{target}}
 
-sum:
-    gotestsum -- ./...
+sum pkg="./...":
+    if command -v gotestsum >/dev/null 2>&1; then gotestsum -- {{pkg}}; else go test {{test_flags}} {{pkg}}; fi
