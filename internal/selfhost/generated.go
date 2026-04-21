@@ -934,7 +934,7 @@ func allAsciiDigits(text string) bool {
 
 // Osty: /tmp/selfhost_merged.osty:461:5
 func stringUnitCount(text string) int {
-	return len(strings.Split(text, ""))
+	return countStringUnits(text)
 }
 
 // Osty: /tmp/selfhost_merged.osty:466:5
@@ -3171,12 +3171,10 @@ func frontLexTokenFromScan(units []string, start int, consumed int, kind FrontTo
 
 // Osty: /tmp/selfhost_merged.osty:1557:5
 type frontPositionCacheState struct {
-	units  []string
-	target int
-	offset int
-	line   int
-	column int
-	skipLf bool
+	units     []string
+	positions []FrontPos
+	computed  int
+	skipLf    bool
 }
 
 var frontPositionCacheMu sync.Mutex
@@ -3203,52 +3201,53 @@ func frontPositionAt(units []string, target int) *FrontPos {
 	frontPositionCacheMu.Lock()
 	defer frontPositionCacheMu.Unlock()
 
-	if !frontSameUnits(frontPositionCache.units, units) || target < frontPositionCache.target {
+	if !frontSameUnits(frontPositionCache.units, units) {
+		positions := make([]FrontPos, len(units)+1)
+		positions[0] = FrontPos{offset: 0, line: 1, column: 1}
 		frontPositionCache = frontPositionCacheState{
-			units:  units,
-			target: 0,
-			offset: 0,
-			line:   1,
-			column: 1,
-			skipLf: false,
+			units:     units,
+			positions: positions,
+			computed:  0,
+			skipLf:    false,
 		}
 	}
 
-	offset := frontPositionCache.offset
-	line := frontPositionCache.line
-	column := frontPositionCache.column
-	skipLf := frontPositionCache.skipLf
-	for idx := frontPositionCache.target; idx < target; idx++ {
-		unit := units[idx]
-		next := ""
-		if idx+1 < len(units) {
-			next = units[idx+1]
-		}
-		if skipLf {
-			skipLf = false
-			offset = offset + 1
-		} else if unit == "\r" {
-			line = line + 1
-			column = 1
-			offset = offset + 1
-			if next == "\n" {
-				skipLf = true
+	if target > frontPositionCache.computed {
+		skipLf := frontPositionCache.skipLf
+		for idx := frontPositionCache.computed; idx < target; idx++ {
+			prev := frontPositionCache.positions[idx]
+			offset := prev.offset
+			line := prev.line
+			column := prev.column
+			unit := units[idx]
+			next := ""
+			if idx+1 < len(units) {
+				next = units[idx+1]
 			}
-		} else if unit == "\n" {
-			line = line + 1
-			column = 1
-			offset = offset + 1
-		} else {
-			column = column + 1
-			offset = offset + 1
+			if skipLf {
+				skipLf = false
+				offset = offset + 1
+			} else if unit == "\r" {
+				line = line + 1
+				column = 1
+				offset = offset + 1
+				if next == "\n" {
+					skipLf = true
+				}
+			} else if unit == "\n" {
+				line = line + 1
+				column = 1
+				offset = offset + 1
+			} else {
+				column = column + 1
+				offset = offset + 1
+			}
+			frontPositionCache.positions[idx+1] = FrontPos{offset: offset, line: line, column: column}
 		}
+		frontPositionCache.computed = target
+		frontPositionCache.skipLf = skipLf
 	}
-	frontPositionCache.target = target
-	frontPositionCache.offset = offset
-	frontPositionCache.line = line
-	frontPositionCache.column = column
-	frontPositionCache.skipLf = skipLf
-	return frontPos(offset, line, column)
+	return &frontPositionCache.positions[target]
 }
 
 // Osty: /tmp/selfhost_merged.osty:1587:5
@@ -4059,40 +4058,7 @@ func frontStringNormalizedLength(length int, triple bool, normalizedTripleUnits 
 
 // Osty: /tmp/selfhost_merged.osty:1910:5
 func frontUnitsMatchAt(units []string, start int, text string) bool {
-	// Osty: /tmp/selfhost_merged.osty:1911:5
-	offset := 0
-	_ = offset
-	// Osty: /tmp/selfhost_merged.osty:1912:5
-	for _, unit := range strings.Split(text, "") {
-		// Osty: /tmp/selfhost_merged.osty:1913:9
-		if !ostyEqual(frontUnitAt(units, func() int {
-			var _p268 int = start
-			var _rhs269 int = offset
-			if _rhs269 > 0 && _p268 > math.MaxInt-_rhs269 {
-				panic("integer overflow")
-			}
-			if _rhs269 < 0 && _p268 < math.MinInt-_rhs269 {
-				panic("integer overflow")
-			}
-			return _p268 + _rhs269
-		}()), unit) {
-			// Osty: /tmp/selfhost_merged.osty:1914:13
-			return false
-		}
-		// Osty: /tmp/selfhost_merged.osty:1916:9
-		func() {
-			var _cur270 int = offset
-			var _rhs271 int = 1
-			if _rhs271 > 0 && _cur270 > math.MaxInt-_rhs271 {
-				panic("integer overflow")
-			}
-			if _rhs271 < 0 && _cur270 < math.MinInt-_rhs271 {
-				panic("integer overflow")
-			}
-			offset = _cur270 + _rhs271
-		}()
-	}
-	return true
+	return matchTextUnits(units, start, text)
 }
 
 // Osty: /tmp/selfhost_merged.osty:1921:5
@@ -5274,28 +5240,26 @@ func frontTokensFromSource(source string, stream *FrontLexStream) []*FrontToken 
 
 // Osty: /tmp/selfhost_merged.osty:2330:5
 func frontLexemeFromUnits(units []string, start int, length int) string {
-	// Osty: /tmp/selfhost_merged.osty:2331:5
-	var parts []string = make([]string, 0, 1)
-	_ = parts
-	// Osty: /tmp/selfhost_merged.osty:2332:5
-	end := func() int {
-		var _p390 int = start
-		var _rhs391 int = length
-		if _rhs391 > 0 && _p390 > math.MaxInt-_rhs391 {
-			panic("integer overflow")
-		}
-		if _rhs391 < 0 && _p390 < math.MinInt-_rhs391 {
-			panic("integer overflow")
-		}
-		return _p390 + _rhs391
-	}()
-	_ = end
-	// Osty: /tmp/selfhost_merged.osty:2333:5
-	for idx := start; idx < end; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2334:9
-		func() struct{} { parts = append(parts, frontUnitAt(units, idx)); return struct{}{} }()
+	if length <= 0 || len(units) == 0 {
+		return ""
 	}
-	return strings.Join(parts, "")
+	if length > 0 && start > math.MaxInt-length {
+		panic("integer overflow")
+	}
+	end := start + length
+	if end <= 0 || start >= len(units) {
+		return ""
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end > len(units) {
+		end = len(units)
+	}
+	if end <= start {
+		return ""
+	}
+	return strings.Join(units[start:end], "")
 }
 
 // Osty: /tmp/selfhost_merged.osty:2342:5
@@ -6636,45 +6600,10 @@ func frontKeywordKindAt(units []string, start int, consumed int) FrontTokenKind 
 
 // Osty: /tmp/selfhost_merged.osty:2782:5
 func frontUnitsMatch(units []string, start int, consumed int, text string) bool {
-	// Osty: /tmp/selfhost_merged.osty:2783:5
 	if consumed != stringUnitCount(text) {
-		// Osty: /tmp/selfhost_merged.osty:2784:9
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:2786:5
-	offset := 0
-	_ = offset
-	// Osty: /tmp/selfhost_merged.osty:2787:5
-	for _, unit := range strings.Split(text, "") {
-		// Osty: /tmp/selfhost_merged.osty:2788:9
-		if !ostyEqual(frontUnitAt(units, func() int {
-			var _p536 int = start
-			var _rhs537 int = offset
-			if _rhs537 > 0 && _p536 > math.MaxInt-_rhs537 {
-				panic("integer overflow")
-			}
-			if _rhs537 < 0 && _p536 < math.MinInt-_rhs537 {
-				panic("integer overflow")
-			}
-			return _p536 + _rhs537
-		}()), unit) {
-			// Osty: /tmp/selfhost_merged.osty:2789:13
-			return false
-		}
-		// Osty: /tmp/selfhost_merged.osty:2791:9
-		func() {
-			var _cur538 int = offset
-			var _rhs539 int = 1
-			if _rhs539 > 0 && _cur538 > math.MaxInt-_rhs539 {
-				panic("integer overflow")
-			}
-			if _rhs539 < 0 && _cur538 < math.MinInt-_rhs539 {
-				panic("integer overflow")
-			}
-			offset = _cur538 + _rhs539
-		}()
-	}
-	return true
+	return matchTextUnits(units, start, text)
 }
 
 // Osty: /tmp/selfhost_merged.osty:2796:5

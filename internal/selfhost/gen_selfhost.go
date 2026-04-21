@@ -266,7 +266,10 @@ func patchGenerated(path string) error {
 		{name: "frontCommentAt", body: frontCommentAtReplacement},
 		{name: "frontStringPartAt", body: frontStringPartAtReplacement},
 		{name: "frontInterpolationTokenAt", body: frontInterpolationTokenAtReplacement},
+		{name: "frontLexemeFromUnits", body: frontLexemeFromUnitsReplacement},
 		{name: "stringUnitCount", body: stringUnitCountReplacement},
+		{name: "frontUnitsMatchAt", body: frontUnitsMatchAtReplacement},
+		{name: "frontUnitsMatch", body: frontUnitsMatchReplacement},
 		{name: "ostyLexStringPartCount", body: ostyLexStringPartCountReplacement},
 		{name: "ostyStringListCount", body: ostyStringListCountReplacement},
 		{name: "ostyStringAt", body: ostyStringAtReplacement},
@@ -329,12 +332,10 @@ func replaceGeneratedFunction(src, name, replacement string) (string, error) {
 }
 
 const frontPositionAtReplacement = `type frontPositionCacheState struct {
-	units  []string
-	target int
-	offset int
-	line   int
-	column int
-	skipLf bool
+	units     []string
+	positions []FrontPos
+	computed  int
+	skipLf    bool
 }
 
 var frontPositionCacheMu sync.Mutex
@@ -361,52 +362,53 @@ func frontPositionAt(units []string, target int) *FrontPos {
 	frontPositionCacheMu.Lock()
 	defer frontPositionCacheMu.Unlock()
 
-	if !frontSameUnits(frontPositionCache.units, units) || target < frontPositionCache.target {
+	if !frontSameUnits(frontPositionCache.units, units) {
+		positions := make([]FrontPos, len(units)+1)
+		positions[0] = FrontPos{offset: 0, line: 1, column: 1}
 		frontPositionCache = frontPositionCacheState{
-			units:  units,
-			target: 0,
-			offset: 0,
-			line:   1,
-			column: 1,
-			skipLf: false,
+			units:     units,
+			positions: positions,
+			computed:  0,
+			skipLf:    false,
 		}
 	}
 
-	offset := frontPositionCache.offset
-	line := frontPositionCache.line
-	column := frontPositionCache.column
-	skipLf := frontPositionCache.skipLf
-	for idx := frontPositionCache.target; idx < target; idx++ {
-		unit := units[idx]
-		next := ""
-		if idx+1 < len(units) {
-			next = units[idx+1]
-		}
-		if skipLf {
-			skipLf = false
-			offset = offset + 1
-		} else if unit == "\r" {
-			line = line + 1
-			column = 1
-			offset = offset + 1
-			if next == "\n" {
-				skipLf = true
+	if target > frontPositionCache.computed {
+		skipLf := frontPositionCache.skipLf
+		for idx := frontPositionCache.computed; idx < target; idx++ {
+			prev := frontPositionCache.positions[idx]
+			offset := prev.offset
+			line := prev.line
+			column := prev.column
+			unit := units[idx]
+			next := ""
+			if idx+1 < len(units) {
+				next = units[idx+1]
 			}
-		} else if unit == "\n" {
-			line = line + 1
-			column = 1
-			offset = offset + 1
-		} else {
-			column = column + 1
-			offset = offset + 1
+			if skipLf {
+				skipLf = false
+				offset = offset + 1
+			} else if unit == "\r" {
+				line = line + 1
+				column = 1
+				offset = offset + 1
+				if next == "\n" {
+					skipLf = true
+				}
+			} else if unit == "\n" {
+				line = line + 1
+				column = 1
+				offset = offset + 1
+			} else {
+				column = column + 1
+				offset = offset + 1
+			}
+			frontPositionCache.positions[idx+1] = FrontPos{offset: offset, line: line, column: column}
 		}
+		frontPositionCache.computed = target
+		frontPositionCache.skipLf = skipLf
 	}
-	frontPositionCache.target = target
-	frontPositionCache.offset = offset
-	frontPositionCache.line = line
-	frontPositionCache.column = column
-	frontPositionCache.skipLf = skipLf
-	return frontPos(offset, line, column)
+	return &frontPositionCache.positions[target]
 }
 `
 
@@ -627,8 +629,45 @@ const frontInterpolationTokenAtReplacement = `func frontInterpolationTokenAt(str
 }
 `
 
+const frontLexemeFromUnitsReplacement = `func frontLexemeFromUnits(units []string, start int, length int) string {
+	if length <= 0 || len(units) == 0 {
+		return ""
+	}
+	if length > 0 && start > math.MaxInt-length {
+		panic("integer overflow")
+	}
+	end := start + length
+	if end <= 0 || start >= len(units) {
+		return ""
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end > len(units) {
+		end = len(units)
+	}
+	if end <= start {
+		return ""
+	}
+	return strings.Join(units[start:end], "")
+}
+`
+
 const stringUnitCountReplacement = `func stringUnitCount(text string) int {
-	return len(strings.Split(text, ""))
+	return countStringUnits(text)
+}
+`
+
+const frontUnitsMatchAtReplacement = `func frontUnitsMatchAt(units []string, start int, text string) bool {
+	return matchTextUnits(units, start, text)
+}
+`
+
+const frontUnitsMatchReplacement = `func frontUnitsMatch(units []string, start int, consumed int, text string) bool {
+	if consumed != stringUnitCount(text) {
+		return false
+	}
+	return matchTextUnits(units, start, text)
 }
 `
 
