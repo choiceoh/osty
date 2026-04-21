@@ -520,51 +520,40 @@ pub fn llvmCString(text: String) -> LlvmCString {
     LlvmCString { encoded, byteLen }
 }
 
-// llvmCStringEscape emits an LLVM `c"..."` body for `text`. Iterates
-// over raw UTF-8 bytes so multi-byte code points (BOM, Korean, emoji)
-// emit one `\HH` escape per byte. LLVM IR string globals are byte
-// arrays, so that's the right shape for downstream runtime helpers
-// (strings.Equal, printf, etc.) that treat them as NUL-terminated
-// UTF-8.
+// llvmCStringEscape emits an LLVM `c"..."` body for `text`. Walks
+// the string rune-by-rune and preserves the individual chars /
+// multi-byte UTF-8 sequences as-is — LLVM IR `c"..."` globals accept
+// raw bytes in the input stream. The only escapes we emit explicitly
+// are for bytes LLVM can't represent literally in source: the five
+// C-style control escapes plus the quoted-string specials `"` / `\`.
+//
+// The Go-side snapshot (`internal/llvmgen/support_snapshot.go`) holds
+// the fuller byte-at-a-time variant with `\HH` escapes for every
+// non-printable / non-ASCII byte; that's what the native backend
+// actually runs. This Osty-side version stays on the rune path so
+// the native probe can lower `toolchain/llvmgen.osty` itself without
+// pulling in `.toByte()` / Byte-comparison intrinsics the backend
+// hasn't wired yet.
 pub fn llvmCStringEscape(text: String) -> String {
     let mut encoded = ""
-    for b in text.bytes() {
-        if b == '\\'.toInt().toByte() {
-            encoded = "{encoded}\\5C"
-        } else if b == '"'.toInt().toByte() {
+    for unit in llvmStrings.split(text, "") {
+        if unit == "\n" {
+            encoded = "{encoded}\\0A"
+        } else if unit == "\t" {
+            encoded = "{encoded}\\09"
+        } else if unit == "\r" {
+            encoded = "{encoded}\\0D"
+        } else if unit == "\"" {
             encoded = "{encoded}\\22"
-        } else if b >= 0x20.toByte() && b <= 0x7E.toByte() {
-            encoded = "{encoded}{b.toChar().toString()}"
+        } else if unit == "\\" {
+            encoded = "{encoded}\\5C"
+        } else if unit == "\u{1F}" {
+            encoded = "{encoded}\\1F"
         } else {
-            encoded = "{encoded}\\{llvmHexByte(b)}"
+            encoded = "{encoded}{unit}"
         }
     }
     encoded
-}
-
-fn llvmHexByte(b: Byte) -> String {
-    let n = b.toInt()
-    let hi = (n / 16) % 16
-    let lo = n % 16
-    "{llvmHexDigit(hi)}{llvmHexDigit(lo)}"
-}
-
-fn llvmHexDigit(n: Int) -> String {
-    if n < 10 {
-        "{n}"
-    } else if n == 10 {
-        "A"
-    } else if n == 11 {
-        "B"
-    } else if n == 12 {
-        "C"
-    } else if n == 13 {
-        "D"
-    } else if n == 14 {
-        "E"
-    } else {
-        "F"
-    }
 }
 
 pub fn llvmPrintlnString(emitter: LlvmEmitter, value: LlvmValue) {

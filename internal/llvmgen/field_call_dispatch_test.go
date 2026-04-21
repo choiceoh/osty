@@ -164,6 +164,43 @@ func TestGenerateIndexedNestedListLenMethodDispatch(t *testing.T) {
 	}
 }
 
+// TestGenerateReturnedListOfStringsLiteralPreservesStringHint verifies
+// that a function returning `List<String>` with a bare list-of-literals
+// body propagates the `listElemString=true` hint through
+// `emitReturningBlock` and into `emitListExprWithHint`. Before this
+// wiring, the return-stmt path hardcoded `false` for the isString
+// flag, so the first element of the literal inherited that and then
+// every subsequent element's `isStringElem=true` tripped the
+// heterogeneous-ptr check. This is the concrete shape in
+// `toolchain/llvmgen.osty:llvmGcRuntimeDeclarations`.
+func TestGenerateReturnedListOfStringsLiteralPreservesStringHint(t *testing.T) {
+	file := parseLLVMGenFile(t, `pub fn declarations() -> List<String> {
+    [
+        "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)",
+        "declare void @osty.gc.pre_write_v1(ptr, ptr, i64)",
+        "declare void @osty.gc.post_write_v1(ptr, ptr, i64)",
+    ]
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/return_list_of_strings.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_list_new()",
+		"call void @osty_rt_list_push_ptr(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateNonAsciiStringLiteralLowersAsByteEscapes verifies plain
 // String literals containing multi-byte UTF-8 code points (BOM,
 // Korean, emoji) now lower through `llvmCStringEscape` as one `\HH`

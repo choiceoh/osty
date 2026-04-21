@@ -23,9 +23,21 @@ As of 2026-04-21:
 - the whole-toolchain merged LLVM probe still first-walls on the
   bootstrap-only `runtime.golegacy.astbridge` bridge
 - the native-only merged LLVM probe (with bootstrap-only files skipped)
-  now first-walls on `LLVM013 expression: match arm must be a
-  payload-free enum variant` — a separate match-expression lowering
-  gap. The earlier `LLVM011 [string_non_ascii]` wall is closed: plain
+  now first-walls on `LLVM011 [other] type-system: String.bytes
+  requires Byte/List<Byte> lowering in legacy llvmgen` — a separate
+  `String.bytes()` intrinsic gap. The earlier `LLVM013 match arm must
+  be a payload-free enum variant` wall was a **source inconsistency**:
+  `lexer.osty` (3 sites) and `lossless_lex.osty` (3 sites) matched on
+  `FrontDiagBadNumericSeparator`, but the `FrontLexDiagnosticCode`
+  enum in `frontend.osty` never declared that variant. Adding it to
+  the enum closed all six sites. Unblocking that wall uncovered a
+  second latent gap: the return-stmt path in `emitReturningBlock` and
+  `emitReturn` hardcoded `false` for every `listElemString` /
+  `mapKeyString` / `setElemString` hint, so `pub fn foo() ->
+  List<String> { [literals...] }` tripped `list_mixed_ptr` even
+  though the list was fully typed. Fixed by widening
+  `emitReturningBlock`'s signature and storing the flags on the
+  generator so `emitReturn` can read them back. The earlier `LLVM011 [string_non_ascii]` wall is closed: plain
   String literals with multi-byte UTF-8 content (BOM `\u{FEFF}` at
   `frontend.osty:600`, Unit Separator `\u{1F}` at the monomorph key
   builder, Korean / emoji in user text) now lower through
@@ -91,7 +103,7 @@ Current-tree observations from the code re-audit:
 |---|---|---|
 | CLI wiring | universal LLVM entry wedge | **resolved** — hello-world `osty gen --backend=llvm` exits 0 and writes `.ll` output |
 | Bootstrap bridge | merged whole-toolchain probe | first wall is still `LLVM002 runtime-ffi` on `runtime.golegacy.astbridge`; this is a bootstrap artifact, not yet a native backend parity claim |
-| Native backend surface | merged native-only probe | first wall is `LLVM013` (match arm must be a payload-free enum variant — a separate match-expression lowering gap) after skipping 4 bootstrap-only files. Closed walls (in order): `LLVM011 [fn_param_struct_type]` Char on `lspUtf16UnitsForChar`; `LLVM012 *ast.MatchExpr is not a call` (match-as-statement lowering); `LLVM012 field assignment base *ast.FieldExpr` (nested `a.b.c = x` via `llvmInsertValue` rebuild chain); parser precedence `(!x).y` / `!(x.y)` hoisted at stable-AST lowering; `LLVM011 [list_mixed_ptr]` source-type propagation (stdlib strings alias calls, bare `""` literals, if-expr phi branches — `staticStdStringsCallSourceType` + literal sourceType tagging + mergeContainerMetadata sameSourceType); `LLVM011 [string_non_ascii]` multi-byte UTF-8 literals (BOM / Unit Separator / Korean / emoji) now byte-escaped via `\HH` in `llvmCStringEscape`, with `llvmCString` counting UTF-8 bytes instead of runes. List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites also closed |
+| Native backend surface | merged native-only probe | first wall is `LLVM011 [other] String.bytes requires Byte/List<Byte> lowering` (separate `String.bytes()` intrinsic gap) after skipping 4 bootstrap-only files. Closed walls (in order): `LLVM011 [fn_param_struct_type]` Char on `lspUtf16UnitsForChar`; `LLVM012 *ast.MatchExpr is not a call` (match-as-statement lowering); `LLVM012 field assignment base *ast.FieldExpr` (nested `a.b.c = x` via `llvmInsertValue` rebuild chain); parser precedence `(!x).y` / `!(x.y)` hoisted at stable-AST lowering; `LLVM011 [list_mixed_ptr]` source-type propagation (stdlib strings alias calls, bare `""` literals, if-expr phi branches — `staticStdStringsCallSourceType` + literal sourceType tagging + mergeContainerMetadata sameSourceType); `LLVM011 [string_non_ascii]` multi-byte UTF-8 literals (BOM / Unit Separator / Korean / emoji) now byte-escaped via `\HH` in `llvmCStringEscape`, with `llvmCString` counting UTF-8 bytes instead of runes; `LLVM013 match arm must be a payload-free enum variant` was a source inconsistency (missing `FrontDiagBadNumericSeparator` enum variant) + a latent return-path gap (hardcoded `listElemString=false` in `emitReturningBlock` / `emitReturn`). List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites also closed |
 | Checker boundary | `internal/check` / `internal/toolchain` | host still manages an external `osty-native-checker` artifact and falls back to the embedded selfhost checker when it cannot be prepared |
 | Toolchain package health | `osty check --airepair=false toolchain` | current CLI surface is still an aggregate `E0700` summary (`949 error(s)`, `26811 / 27501` accepted) rather than a clean self-compile pass |
 | Stdlib / string surface | `internal/llvmgen/stdlib_shim.go`, `expr.go` | a subset of `std.strings` is shimmed through runtime helpers. `Char` and `Byte` parameters/returns, literals, comparisons, and width conversions now lower; `String.chars` / `String.bytes` still block the pure native path because `List<Char>` / `List<Byte>` collection lowering is separate work |

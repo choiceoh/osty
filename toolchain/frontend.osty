@@ -108,6 +108,7 @@ pub enum FrontLexDiagnosticCode {
     FrontDiagUnknownEscape,
     FrontDiagEmptyChar,
     FrontDiagEmptyByte,
+    FrontDiagBadNumericSeparator,
 }
 
 pub enum FrontStringPartKind {

@@ -1115,6 +1115,12 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 	g.returnType = sig.ret
 	g.returnSourceType = sig.returnSourceType
 	g.returnListElemTyp = sig.retListElemTyp
+	g.returnListElemString = sig.retListString
+	g.returnMapKeyTyp = sig.retMapKeyTyp
+	g.returnMapValueTyp = sig.retMapValueTyp
+	g.returnMapKeyString = sig.retMapKeyString
+	g.returnSetElemTyp = sig.retSetElemTyp
+	g.returnSetElemString = sig.retSetElemString
 	for _, p := range sig.params {
 		v := value{
 			typ:            p.typ,
@@ -1165,7 +1171,7 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 			g.takeOstyEmitter(emitter)
 		}
 	} else {
-		if err := g.emitReturningBlock(sig.decl.Body.Stmts, sig.ret, sig.returnSourceType, sig.retListElemTyp, sig.retMapKeyTyp, sig.retMapValueTyp, sig.retSetElemTyp); err != nil {
+		if err := g.emitReturningBlock(sig.decl.Body.Stmts, sig.ret, sig.returnSourceType, sig.retListElemTyp, sig.retListString, sig.retMapKeyTyp, sig.retMapValueTyp, sig.retMapKeyString, sig.retSetElemTyp, sig.retSetElemString); err != nil {
 			return "", err
 		}
 	}
