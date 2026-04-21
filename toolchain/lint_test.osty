@@ -764,6 +764,67 @@ fn testSelfLintCountsMethodCallAsUsed() {
     testing.assertEq(selfLintCodeCount(report, "L0006"), 0)
 }
 
+fn testSelfLintFindsIgnoredResultViaTypeHints() {
+    let source =
+        r"""
+            fn risky() -> Result<Int, Error> { Ok(1) }
+
+            fn caller() {
+                risky()
+            }
+            """
+    let file = astParse(source)
+    let resolved = selfResolveAstFile(file)
+    let checked = frontendCheckAstStructured(file)
+    let report = selfLintCheckedAstSource(source, file, resolved, checked)
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0007"), 1)
+}
+
+fn testSelfLintSkipsL0007WithoutTypeHints() {
+    let report = selfLintSource(
+        r"""
+            fn risky() -> Result<Int, Error> { Ok(1) }
+
+            fn caller() {
+                risky()
+            }
+            """,
+    )
+    // L0007 gated behind the type-hint bridge; plain entry point does not fire it.
+    testing.assertEq(selfLintCodeCount(report, "L0007"), 0)
+}
+
+fn testSelfLintPackageScopeSuppressesCrossFileMemberWarnings() {
+    let defSrc =
+        r"""
+            struct Counter {
+                value: Int,
+
+                fn bump(self) -> Int { self.value + 1 }
+            }
+            """
+    let useSrc =
+        r"""
+            fn run(c: Counter) -> Int {
+                c.bump() + c.value
+            }
+            """
+    let singleReport = selfLintSource(defSrc)
+    testing.assertEq(singleReport.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(singleReport, "L0006"), 1)
+    testing.assertEq(selfLintCodeCount(singleReport, "L0005"), 1)
+
+    let reports = selfLintPackageSources([defSrc, useSrc])
+    let mut total = 0
+    for r in reports {
+        testing.assertEq(r.parseErrors, 0)
+        total = total + selfLintCodeCount(r, "L0005") + selfLintCodeCount(r, "L0006")
+    }
+    testing.assertEq(total, 0)
+}
+
 fn assertLintFirstFix(
     report: SelfLintReport,
     code: String,
