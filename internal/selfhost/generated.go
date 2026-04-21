@@ -39723,24 +39723,27 @@ func elabInferClosure(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 	var paramTys []int = make([]int, 0, 1)
 	_ = paramTys
 	// Osty: /tmp/selfhost_merged.osty:18409:5
+	var prefixLets []int = make([]int, 0, 1)
+	_ = prefixLets
+	// Osty: /tmp/selfhost_merged.osty:18410:5
 	i := 0
 	_ = i
-	// Osty: /tmp/selfhost_merged.osty:18410:5
+	// Osty: /tmp/selfhost_merged.osty:18411:5
 	for _, paramIdx := range paramIdxs {
-		// Osty: /tmp/selfhost_merged.osty:18411:9
+		// Osty: /tmp/selfhost_merged.osty:18412:9
 		paramNode := astArenaNodeAt(cx.ast.arena, paramIdx)
 		_ = paramNode
-		// Osty: /tmp/selfhost_merged.osty:18412:9
+		// Osty: /tmp/selfhost_merged.osty:18413:9
 		declaredTy := astTypeToTy(cx, paramNode.right)
 		_ = declaredTy
-		// Osty: /tmp/selfhost_merged.osty:18413:9
+		// Osty: /tmp/selfhost_merged.osty:18414:9
 		paramTy := func() int {
 			if declaredTy >= 0 {
 				return declaredTy
 			} else if expectedIsFn && i < checkIntListLenHelper(expectedParams) {
 				return checkIntListAt(expectedParams, i)
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:18418:13
+				// Osty: /tmp/selfhost_merged.osty:18419:13
 				func() struct{} {
 					cx.env.diagnostics = append(cx.env.diagnostics, diagClosureAnnotationRequired(paramNode.start, paramNode.end))
 					return struct{}{}
@@ -39749,22 +39752,65 @@ func elabInferClosure(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 			}
 		}()
 		_ = paramTy
-		// Osty: /tmp/selfhost_merged.osty:18421:9
+		// Osty: /tmp/selfhost_merged.osty:18422:9
 		paramName := paramNode.text
 		_ = paramName
-		// Osty: /tmp/selfhost_merged.osty:18422:9
-		if paramName != "" {
-			// Osty: /tmp/selfhost_merged.osty:18423:13
-			checkBindSpan(cx.env, paramName, paramTy, true, paramNode.start, paramNode.end)
+		// Osty: /tmp/selfhost_merged.osty:18423:9
+		hasPattern := paramNode.left >= 0 && paramName == ""
+		_ = hasPattern
+		// Osty: /tmp/selfhost_merged.osty:18424:9
+		storedParamName := func() string {
+			if hasPattern {
+				// Osty: /tmp/selfhost_merged.osty:18425:13
+				fresh := fmt.Sprintf("__closure_param%s", ostyToString(i))
+				_ = fresh
+				return func() string {
+					if checkLookup(cx.env, fresh) < 0 {
+						return fresh
+					} else {
+						return fmt.Sprintf("__closure_param%s_%s", ostyToString(i), ostyToString(paramNode.start))
+					}
+				}()
+			} else {
+				return paramName
+			}
+		}()
+		_ = storedParamName
+		// Osty: /tmp/selfhost_merged.osty:18434:9
+		if storedParamName != "" {
+			// Osty: /tmp/selfhost_merged.osty:18435:13
+			checkBindSpan(cx.env, storedParamName, paramTy, true, paramNode.start, paramNode.end)
 		}
-		// Osty: /tmp/selfhost_merged.osty:18425:9
+		// Osty: /tmp/selfhost_merged.osty:18437:9
+		if hasPattern {
+			// Osty: /tmp/selfhost_merged.osty:18438:13
+			if !(tyIsBad(tys, paramTy)) && !(patIsIrrefutable(cx, paramNode.left, paramTy)) {
+				// Osty: /tmp/selfhost_merged.osty:18439:17
+				func() struct{} {
+					cx.env.diagnostics = append(cx.env.diagnostics, diagRefutablePattern("closure parameter", paramNode.start, paramNode.end))
+					return struct{}{}
+				}()
+			}
+			// Osty: /tmp/selfhost_merged.osty:18441:13
+			patNode := elabBindPattern(cx, paramNode.left, paramTy, true)
+			_ = patNode
+			// Osty: /tmp/selfhost_merged.osty:18442:13
+			tempRef := coreIdent(cx.core, storedParamName, IdentKind(&IdentKind_IkParam{}), paramTy, paramNode.start, paramNode.end)
+			_ = tempRef
+			// Osty: /tmp/selfhost_merged.osty:18443:13
+			func() struct{} {
+				prefixLets = append(prefixLets, coreLetStmt(cx.core, patNode, tempRef, false, paramTy, paramNode.start, paramNode.end))
+				return struct{}{}
+			}()
+		}
+		// Osty: /tmp/selfhost_merged.osty:18445:9
 		func() struct{} { paramTys = append(paramTys, paramTy); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:18426:9
+		// Osty: /tmp/selfhost_merged.osty:18446:9
 		func() struct{} {
-			coreParams = append(coreParams, coreParam(cx.core, paramName, paramTy, -1, paramNode.start, paramNode.end))
+			coreParams = append(coreParams, coreParam(cx.core, storedParamName, paramTy, -1, paramNode.start, paramNode.end))
 			return struct{}{}
 		}()
-		// Osty: /tmp/selfhost_merged.osty:18427:9
+		// Osty: /tmp/selfhost_merged.osty:18447:9
 		func() {
 			var _cur2178 int = i
 			var _rhs2179 int = 1
@@ -39792,21 +39838,60 @@ func elabInferClosure(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 		}
 	}()
 	_ = body
-	// Osty: /tmp/selfhost_merged.osty:18444:5
+	// Osty: /tmp/selfhost_merged.osty:18464:5
 	retTy := body.ty
 	_ = retTy
-	// Osty: /tmp/selfhost_merged.osty:18446:5
+	// Osty: /tmp/selfhost_merged.osty:18465:5
+	bodyCore := elabClosureBodyWithPrefix(cx, body, prefixLets, node.start, node.end)
+	_ = bodyCore
+	// Osty: /tmp/selfhost_merged.osty:18467:5
 	checkScopeDrop(cx.env, mark)
-	// Osty: /tmp/selfhost_merged.osty:18448:5
+	// Osty: /tmp/selfhost_merged.osty:18469:5
 	closureTy := tyFn(tys, paramTys, retTy)
 	_ = closureTy
-	// Osty: /tmp/selfhost_merged.osty:18449:5
-	coreIdx := coreClosure(cx.core, coreParams, body.node, closureTy, node.start, node.end)
+	// Osty: /tmp/selfhost_merged.osty:18470:5
+	coreIdx := coreClosure(cx.core, coreParams, bodyCore, closureTy, node.start, node.end)
 	_ = coreIdx
 	return &ElabResult{node: coreIdx, ty: closureTy}
 }
 
-// Osty: /tmp/selfhost_merged.osty:18457:1
+// Osty: /tmp/selfhost_merged.osty:18474:1
+func elabClosureBodyWithPrefix(cx *ElabCx, body *ElabResult, prefixLets []int, start int, end int) int {
+	// Osty: /tmp/selfhost_merged.osty:18475:5
+	if checkIntListLenHelper(prefixLets) == 0 {
+		// Osty: /tmp/selfhost_merged.osty:18476:9
+		return body.node
+	}
+	// Osty: /tmp/selfhost_merged.osty:18478:5
+	if body.node >= 0 {
+		// Osty: /tmp/selfhost_merged.osty:18479:9
+		bodyNode := coreArenaNodeAt(cx.core, body.node)
+		_ = bodyNode
+		// Osty: /tmp/selfhost_merged.osty:18480:9
+		if ostyEqual(bodyNode.kind, CoreKind(&CoreKind_CkBlock{})) {
+			// Osty: /tmp/selfhost_merged.osty:18481:13
+			var stmts []int = make([]int, 0, 1)
+			_ = stmts
+			// Osty: /tmp/selfhost_merged.osty:18482:13
+			for _, stmt := range prefixLets {
+				// Osty: /tmp/selfhost_merged.osty:18483:17
+				func() struct{} { stmts = append(stmts, stmt); return struct{}{} }()
+			}
+			// Osty: /tmp/selfhost_merged.osty:18485:13
+			for _, stmt := range bodyNode.children {
+				// Osty: /tmp/selfhost_merged.osty:18486:17
+				func() struct{} { stmts = append(stmts, stmt); return struct{}{} }()
+			}
+			// Osty: /tmp/selfhost_merged.osty:18488:13
+			return coreBlock(cx.core, stmts, bodyNode.left, body.ty, bodyNode.start, bodyNode.end)
+		}
+		// Osty: /tmp/selfhost_merged.osty:18490:9
+		return coreBlock(cx.core, prefixLets, body.node, body.ty, bodyNode.start, bodyNode.end)
+	}
+	return coreBlock(cx.core, prefixLets, -1, body.ty, start, end)
+}
+
+// Osty: /tmp/selfhost_merged.osty:18499:1
 func elabInferRange(cx *ElabCx, node *AstNode) *ElabResult {
 	// Osty: /tmp/selfhost_merged.osty:18458:5
 	tys := cx.env.tys

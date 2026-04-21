@@ -2298,6 +2298,7 @@ fn elabInferClosure(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     let mark = checkScopeMark(cx.env)
     let mut coreParams: List<Int> = []
     let mut paramTys: List<Int> = []
+    let mut prefixLets: List<Int> = []
     let mut i = 0
     for paramIdx in paramIdxs {
         let paramNode = astArenaNodeAt(cx.ast.arena, paramIdx)
@@ -2311,11 +2312,30 @@ fn elabInferClosure(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
             tErr(tys)
         }
         let paramName = paramNode.text
-        if paramName != "" {
-            checkBindSpan(cx.env, paramName, paramTy, true, paramNode.start, paramNode.end)
+        let hasPattern = paramNode.left >= 0 && paramName == ""
+        let storedParamName = if hasPattern {
+            let fresh = "__closure_param{i}"
+            if checkLookup(cx.env, fresh) < 0 {
+                fresh
+            } else {
+                "__closure_param{i}_{paramNode.start}"
+            }
+        } else {
+            paramName
+        }
+        if storedParamName != "" {
+            checkBindSpan(cx.env, storedParamName, paramTy, true, paramNode.start, paramNode.end)
+        }
+        if hasPattern {
+            if !(tyIsBad(tys, paramTy)) && !(patIsIrrefutable(cx, paramNode.left, paramTy)) {
+                cx.env.diagnostics.push(diagRefutablePattern("closure parameter", paramNode.start, paramNode.end))
+            }
+            let patNode = elabBindPattern(cx, paramNode.left, paramTy, true)
+            let tempRef = coreIdent(cx.core, storedParamName, IkParam, paramTy, paramNode.start, paramNode.end)
+            prefixLets.push(coreLetStmt(cx.core, patNode, tempRef, false, paramTy, paramNode.start, paramNode.end))
         }
         paramTys.push(paramTy)
-        coreParams.push(coreParam(cx.core, paramName, paramTy, -1, paramNode.start, paramNode.end))
+        coreParams.push(coreParam(cx.core, storedParamName, paramTy, -1, paramNode.start, paramNode.end))
         i = i + 1
     }
 
@@ -2334,12 +2354,34 @@ fn elabInferClosure(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         elabInfer(cx, bodyIdx)
     }
     let retTy = body.ty
+    let bodyCore = elabClosureBodyWithPrefix(cx, body, prefixLets, node.start, node.end)
 
     checkScopeDrop(cx.env, mark)
 
     let closureTy = tyFn(tys, paramTys, retTy)
-    let coreIdx = coreClosure(cx.core, coreParams, body.node, closureTy, node.start, node.end)
+    let coreIdx = coreClosure(cx.core, coreParams, bodyCore, closureTy, node.start, node.end)
     ElabResult { node: coreIdx, ty: closureTy }
+}
+
+fn elabClosureBodyWithPrefix(cx: ElabCx, body: ElabResult, prefixLets: List<Int>, start: Int, end: Int) -> Int {
+    if checkIntListLenHelper(prefixLets) == 0 {
+        return body.node
+    }
+    if body.node >= 0 {
+        let bodyNode = coreArenaNodeAt(cx.core, body.node)
+        if bodyNode.kind == CkBlock {
+            let mut stmts: List<Int> = []
+            for stmt in prefixLets {
+                stmts.push(stmt)
+            }
+            for stmt in bodyNode.children {
+                stmts.push(stmt)
+            }
+            return coreBlock(cx.core, stmts, bodyNode.left, body.ty, bodyNode.start, bodyNode.end)
+        }
+        return coreBlock(cx.core, prefixLets, body.node, body.ty, bodyNode.start, bodyNode.end)
+    }
+    coreBlock(cx.core, prefixLets, -1, body.ty, start, end)
 }
 
 // ---------------------------------------------------------------------
