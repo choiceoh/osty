@@ -276,9 +276,8 @@ fn mirRewriteRValueOperands(rv: MirRValue, known: List<MirConst>) -> Bool {
 /// form to a constant-indexed form. `proj` is a function parameter, so
 /// field assignments here lower through the parameter path rather
 /// than the chained-IndexExpr path the LLVM codegen rejects (LLVM012).
-fn mirProjFoldIndexToConst(target: MirProjection, constIndex: Int) {
-    target.indexLocal = -1
-    target.indexConst = constIndex
+fn mirProjFoldIndexToConst(target: MirProjection, constIndex: Int) -> MirProjection {
+    mirIndexProjConst(constIndex, target.typ)
 }
 
 /// mirRewritePlaceProjections rewrites IndexProj operands in a place's
@@ -293,7 +292,7 @@ fn mirRewritePlaceProjections(p: MirPlace, known: List<MirConst>) -> Bool {
             if proj.indexLocal < known.len() {
                 let bound = known[proj.indexLocal]
                 if bound.kind == MirConstInt {
-                    mirProjFoldIndexToConst(p.projections[i], bound.intValue)
+                    p.projections[i] = mirProjFoldIndexToConst(proj, bound.intValue)
                     changed = true
                 }
             }
@@ -430,8 +429,8 @@ fn mirCollapseEmptyGotos(func: MirFunction) -> Bool {
 /// Factored into a helper for the same reason as `mirInstrClearDest`:
 /// LLVM codegen rejects field assignments whose base is a chained
 /// IndexExpr.
-fn mirSwitchCaseSetTarget(c: MirSwitchCase, tgt: Int) {
-    c.target = tgt
+fn mirSwitchCaseSetTarget(c: MirSwitchCase, tgt: Int) -> MirSwitchCase {
+    mirSwitchCase(c.value, tgt, c.label)
 }
 
 /// mirCollapseBlockEdges rewrites one block's outgoing edges so they
@@ -474,7 +473,7 @@ fn mirCollapseBlockEdges(bb: MirBasicBlock, func: MirFunction) -> Bool {
                 let curTarget = bb.term.cases[ci].target
                 let newTarget = mirResolveEmptyGoto(func, curTarget)
                 if newTarget != curTarget {
-                    mirSwitchCaseSetTarget(bb.term.cases[ci], newTarget)
+                    bb.term.cases[ci] = mirSwitchCaseSetTarget(bb.term.cases[ci], newTarget)
                     changed = true
                 }
                 ci = ci + 1
@@ -558,9 +557,11 @@ fn mirDeadAssignElim(func: MirFunction) -> Bool {
 /// not yet lower field assignments whose base is an IndexExpr (e.g.
 /// `list[i].field = x`) — callers pass the indexed element as an
 /// argument, and mutation happens through the parameter (addressable).
-fn mirInstrClearDest(instr: MirInstr) {
-    instr.hasDest = false
-    instr.dest = mirPlace(-1)
+fn mirInstrClearDest(instr: MirInstr) -> MirInstr {
+    let mut out = instr
+    out.hasDest = false
+    out.dest = mirPlace(-1)
+    out
 }
 
 /// mirDeadAssignElimBlock runs the dead-assign pass on one block. `bb`
@@ -587,7 +588,7 @@ fn mirDeadAssignElimBlock(bb: MirBasicBlock, func: MirFunction, reads: List<Int>
                 let destLocal = bb.instrs[ii].dest.local
                 let hasProj = mirPlaceHasProjections(bb.instrs[ii].dest)
                 if hasDest && !(hasProj) && mirLocalIsDead(func, destLocal, reads) {
-                    mirInstrClearDest(bb.instrs[ii])
+                    bb.instrs[ii] = mirInstrClearDest(bb.instrs[ii])
                     changed = true
                 }
             },
@@ -596,7 +597,7 @@ fn mirDeadAssignElimBlock(bb: MirBasicBlock, func: MirFunction, reads: List<Int>
                 let destLocal = bb.instrs[ii].dest.local
                 let hasProj = mirPlaceHasProjections(bb.instrs[ii].dest)
                 if hasDest && !(hasProj) && mirLocalIsDead(func, destLocal, reads) {
-                    mirInstrClearDest(bb.instrs[ii])
+                    bb.instrs[ii] = mirInstrClearDest(bb.instrs[ii])
                     changed = true
                 }
             },
