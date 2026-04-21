@@ -30,6 +30,27 @@ fn validatorFixtureOK() -> MirModule {
     m
 }
 
+fn validatorFixtureWithGlobalInit() -> MirModule {
+    let m = validatorFixtureOK()
+    let initFn = mirFunction("pkg.answer$init", "Unit", mirNoSpan())
+
+    let retId = mirFunctionNewLocal(initFn, "ret", "Unit", false, mirNoSpan())
+    initFn.locals[retId].isReturn = true
+    initFn.returnLocal = retId
+
+    let entry = mirFunctionNewBlock(initFn, mirNoSpan())
+    initFn.entry = entry
+    mirFunctionTerminate(initFn, entry, mirReturnTerm(mirNoSpan()))
+
+    m.functions.push(initFn)
+
+    let g = mirGlobal("answer", "Int", false, mirNoSpan())
+    g.hasInit = true
+    g.initSymbol = "pkg.answer$init"
+    m.globals.push(g)
+    m
+}
+
 // ==== Positive paths ================================================
 
 fn testValidatorAcceptsWellFormedModule() {
@@ -54,6 +75,12 @@ fn testValidatorAcceptsIntrinsicFunctionWithoutBlocks() {
     func.isIntrinsic = true
     m.functions.push(func)
 
+    let errs = mirValidateModule(m)
+    testing.assertEq(errs.len(), 0)
+}
+
+fn testValidatorAcceptsGlobalInitSymbol() {
+    let m = validatorFixtureWithGlobalInit()
     let errs = mirValidateModule(m)
     testing.assertEq(errs.len(), 0)
 }
@@ -88,6 +115,31 @@ fn testValidatorRejectsEmptyFunctionName() {
 
     let errs = mirValidateModule(m)
     testing.assert(mirValidatorTestHas(errs, "empty name"))
+}
+
+fn testValidatorRejectsGlobalInitWithoutSymbol() {
+    let m = validatorFixtureWithGlobalInit()
+    m.globals[0].initSymbol = ""
+
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "hasInit but empty initSymbol"))
+}
+
+fn testValidatorRejectsGlobalInitMissingFunction() {
+    let m = validatorFixtureWithGlobalInit()
+    m.globals[0].initSymbol = "pkg.missing$init"
+
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "initSymbol"))
+    testing.assert(mirValidatorTestHas(errs, "not found"))
+}
+
+fn testValidatorRejectsInitSymbolWithoutHasInit() {
+    let m = validatorFixtureWithGlobalInit()
+    m.globals[0].hasInit = false
+
+    let errs = mirValidateModule(m)
+    testing.assert(mirValidatorTestHas(errs, "initSymbol set without hasInit"))
 }
 
 // ==== Function / local invariants ===================================
