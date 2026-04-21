@@ -218,16 +218,11 @@ pub fn emptyCoreArena() -> CoreArena {
 }
 
 pub fn coreArenaNodeCount(arena: CoreArena) -> Int {
-    let mut count = 0
-    for n in arena.nodes {
-        let _ = n
-        count = count + 1
-    }
-    count
+    arena.nodes.len()
 }
 
 fn coreArenaAdd(arena: CoreArena, node: CoreNode) -> Int {
-    let idx = coreArenaNodeCount(arena)
+    let idx = arena.nodes.len()
     arena.nodes.push(node)
     idx
 }
