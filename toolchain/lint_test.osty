@@ -842,3 +842,108 @@ fn assertLintFirstFix(
     }
     testing.fail("expected lint fix for {code}")
 }
+
+fn testSelfLintRegistryListsEveryRule() {
+    let rules = selfLintAllRules()
+    // Sanity spot-checks over a handful of well-known codes.
+    let codes = ["L0001", "L0005", "L0007", "L0010", "L0020", "L0070"]
+    for code in codes {
+        let info = selfLintExplainRule(code)
+        if info.code != code {
+            testing.fail("rule registry missing {code}")
+        }
+        testing.assert(info.name != "")
+        testing.assert(info.category != "")
+        testing.assert(info.summary != "")
+    }
+    testing.assert(rules.len() >= 27)
+}
+
+fn testSelfLintAllowSuppressesSpecificCode() {
+    let withoutAllow = selfLintSource(
+        r"""
+            fn noisy(unusedParam: Int) -> Int {
+                let unusedValue = 1
+                42
+            }
+            """,
+    )
+    testing.assertEq(withoutAllow.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(withoutAllow, "L0001"), 1)
+    testing.assertEq(selfLintCodeCount(withoutAllow, "L0002"), 1)
+
+    let withAllow = selfLintSource(
+        r"""
+            #[allow(L0001)]
+            fn noisy(unusedParam: Int) -> Int {
+                let unusedValue = 1
+                42
+            }
+            """,
+    )
+    testing.assertEq(withAllow.parseErrors, 0)
+    // L0001 suppressed; L0002 still fires — the allow list is scoped to the listed codes only.
+    testing.assertEq(selfLintCodeCount(withAllow, "L0001"), 0)
+    testing.assertEq(selfLintCodeCount(withAllow, "L0002"), 1)
+}
+
+fn testSelfLintAllowAcceptsRuleAlias() {
+    let report = selfLintSource(
+        r"""
+            #[allow(unused_let)]
+            fn noisy() {
+                let unusedValue = 1
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0001"), 0)
+}
+
+fn testSelfLintAllowAcceptsCategoryAlias() {
+    let report = selfLintSource(
+        r"""
+            #[allow(unused)]
+            fn noisy(unusedParam: Int) -> Int {
+                let unusedValue = 1
+                42
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0001"), 0)
+    testing.assertEq(selfLintCodeCount(report, "L0002"), 0)
+}
+
+fn testSelfLintAllowWildcardSuppressesEverything() {
+    let report = selfLintSource(
+        r"""
+            #[allow(all)]
+            fn noisy(unusedParam: Int) -> Int {
+                let unusedValue = 1
+                42
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0001"), 0)
+    testing.assertEq(selfLintCodeCount(report, "L0002"), 0)
+}
+
+fn testSelfLintAllowIsDeclScoped() {
+    let report = selfLintSource(
+        r"""
+            #[allow(L0001)]
+            fn quiet() {
+                let unusedValue = 1
+            }
+
+            fn noisy() {
+                let alsoUnused = 2
+            }
+            """,
+    )
+    testing.assertEq(report.parseErrors, 0)
+    // Only the second fn should still emit L0001 — the first is suppressed.
+    testing.assertEq(selfLintCodeCount(report, "L0001"), 1)
+}
