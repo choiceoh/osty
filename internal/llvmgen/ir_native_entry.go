@@ -7,6 +7,21 @@ import (
 	ostyir "github.com/osty/osty/internal/ir"
 )
 
+type nativeStructFieldInfo struct {
+	name     string
+	llvmType string
+	index    int
+}
+
+type nativeStructInfo struct {
+	def    *llvmNativeStruct
+	byName map[string]nativeStructFieldInfo
+}
+
+type nativeProjectionCtx struct {
+	structsByName map[string]*nativeStructInfo
+}
+
 // tryNativeOwnedModule projects the IR module into the native-owned
 // primitive/control-flow slice mirrored from toolchain/llvmgen.osty.
 // ok=false means "shape not covered yet" and callers should fall back to the
@@ -23,9 +38,11 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 	if mod == nil {
 		return nil, false
 	}
+	ctx := &nativeProjectionCtx{structsByName: map[string]*nativeStructInfo{}}
 	out := &llvmNativeModule{
 		sourcePath: firstNonEmpty(opts.SourcePath, "<unknown>"),
 		target:     opts.Target,
+		structs:    make([]*llvmNativeStruct, 0, len(mod.Decls)),
 		functions:  make([]*llvmNativeFunction, 0, len(mod.Decls)+1),
 	}
 	hasMain := false
@@ -37,8 +54,30 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 			if d.IsFFI() {
 				return nil, false
 			}
+		case *ostyir.StructDecl:
+			info, ok := nativeRegisterStructDecl(d)
+			if !ok {
+				return nil, false
+			}
+			if _, exists := ctx.structsByName[d.Name]; exists {
+				return nil, false
+			}
+			ctx.structsByName[d.Name] = info
+			out.structs = append(out.structs, info.def)
+		}
+	}
+	for _, decl := range mod.Decls {
+		switch d := decl.(type) {
+		case nil:
+			continue
+		case *ostyir.UseDecl:
+			continue
+		case *ostyir.StructDecl:
+			if !nativePopulateStructDecl(ctx, d) {
+				return nil, false
+			}
 		case *ostyir.FnDecl:
-			fn, ok := nativeFunctionFromIR(d)
+			fn, ok := nativeFunctionFromIR(ctx, d)
 			if !ok {
 				return nil, false
 			}
@@ -54,7 +93,7 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 		if hasMain {
 			return nil, false
 		}
-		mainBody, ok := nativeBlockFromStmts(mod.Script, "i32")
+		mainBody, ok := nativeBlockFromStmts(ctx, mod.Script, "i32")
 		if !ok {
 			return nil, false
 		}
@@ -67,11 +106,57 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 	return out, true
 }
 
-func nativeFunctionFromIR(fn *ostyir.FnDecl) (*llvmNativeFunction, bool) {
+func nativeRegisterStructDecl(decl *ostyir.StructDecl) (*nativeStructInfo, bool) {
+	if decl == nil || decl.Name == "" || len(decl.Generics) != 0 || len(decl.Methods) != 0 {
+		return nil, false
+	}
+	return &nativeStructInfo{
+		def: &llvmNativeStruct{
+			name:     decl.Name,
+			llvmType: llvmStructTypeName(decl.Name),
+			fields:   make([]*llvmNativeStructField, 0, len(decl.Fields)),
+		},
+		byName: map[string]nativeStructFieldInfo{},
+	}, true
+}
+
+func nativePopulateStructDecl(ctx *nativeProjectionCtx, decl *ostyir.StructDecl) bool {
+	if ctx == nil || decl == nil {
+		return false
+	}
+	info := ctx.structsByName[decl.Name]
+	if info == nil || len(info.def.fields) != 0 {
+		return info != nil
+	}
+	for i, field := range decl.Fields {
+		if field == nil || field.Name == "" || field.Default != nil {
+			return false
+		}
+		if _, exists := info.byName[field.Name]; exists {
+			return false
+		}
+		llvmType, ok := nativeLLVMTypeFromIR(ctx, field.Type)
+		if !ok || llvmType == "void" || llvmType == info.def.llvmType {
+			return false
+		}
+		info.def.fields = append(info.def.fields, &llvmNativeStructField{
+			name:     field.Name,
+			llvmType: llvmType,
+		})
+		info.byName[field.Name] = nativeStructFieldInfo{
+			name:     field.Name,
+			llvmType: llvmType,
+			index:    i,
+		}
+	}
+	return true
+}
+
+func nativeFunctionFromIR(ctx *nativeProjectionCtx, fn *ostyir.FnDecl) (*llvmNativeFunction, bool) {
 	if fn == nil || len(fn.Generics) != 0 || fn.IsIntrinsic || fn.Body == nil {
 		return nil, false
 	}
-	retType, ok := nativeFunctionReturnType(fn)
+	retType, ok := nativeFunctionReturnType(ctx, fn)
 	if !ok {
 		return nil, false
 	}
@@ -84,7 +169,7 @@ func nativeFunctionFromIR(fn *ostyir.FnDecl) (*llvmNativeFunction, bool) {
 		if param == nil || param.IsDestructured() || param.Default != nil {
 			return nil, false
 		}
-		llvmType, ok := nativeLLVMTypeFromIR(param.Type)
+		llvmType, ok := nativeLLVMTypeFromIR(ctx, param.Type)
 		if !ok || llvmType == "void" {
 			return nil, false
 		}
@@ -93,7 +178,7 @@ func nativeFunctionFromIR(fn *ostyir.FnDecl) (*llvmNativeFunction, bool) {
 			llvmType: llvmType,
 		})
 	}
-	body, ok := nativeBlockFromIR(fn.Body, retType)
+	body, ok := nativeBlockFromIR(ctx, fn.Body, retType)
 	if !ok {
 		return nil, false
 	}
@@ -101,17 +186,17 @@ func nativeFunctionFromIR(fn *ostyir.FnDecl) (*llvmNativeFunction, bool) {
 	return out, true
 }
 
-func nativeFunctionReturnType(fn *ostyir.FnDecl) (string, bool) {
+func nativeFunctionReturnType(ctx *nativeProjectionCtx, fn *ostyir.FnDecl) (string, bool) {
 	if fn == nil {
 		return "", false
 	}
 	if fn.Name == "main" && len(fn.Params) == 0 && nativeIsUnitType(fn.Return) {
 		return "i32", true
 	}
-	return nativeLLVMTypeFromIR(fn.Return)
+	return nativeLLVMTypeFromIR(ctx, fn.Return)
 }
 
-func nativeBlockFromIR(block *ostyir.Block, fnReturnType string) (*llvmNativeBlock, bool) {
+func nativeBlockFromIR(ctx *nativeProjectionCtx, block *ostyir.Block, fnReturnType string) (*llvmNativeBlock, bool) {
 	if block == nil {
 		return &llvmNativeBlock{}, true
 	}
@@ -119,7 +204,7 @@ func nativeBlockFromIR(block *ostyir.Block, fnReturnType string) (*llvmNativeBlo
 		stmts: make([]*llvmNativeStmt, 0, len(block.Stmts)),
 	}
 	for _, stmt := range block.Stmts {
-		nativeStmt, ok := nativeStmtFromIR(stmt, fnReturnType)
+		nativeStmt, ok := nativeStmtFromIR(ctx, stmt, fnReturnType)
 		if !ok {
 			return nil, false
 		}
@@ -128,7 +213,7 @@ func nativeBlockFromIR(block *ostyir.Block, fnReturnType string) (*llvmNativeBlo
 		}
 	}
 	if block.Result != nil {
-		result, ok := nativeExprFromIR(block.Result)
+		result, ok := nativeExprFromIR(ctx, block.Result)
 		if !ok {
 			return nil, false
 		}
@@ -138,12 +223,12 @@ func nativeBlockFromIR(block *ostyir.Block, fnReturnType string) (*llvmNativeBlo
 	return out, true
 }
 
-func nativeBlockFromStmts(stmts []ostyir.Stmt, fnReturnType string) (*llvmNativeBlock, bool) {
+func nativeBlockFromStmts(ctx *nativeProjectionCtx, stmts []ostyir.Stmt, fnReturnType string) (*llvmNativeBlock, bool) {
 	out := &llvmNativeBlock{
 		stmts: make([]*llvmNativeStmt, 0, len(stmts)),
 	}
 	for _, stmt := range stmts {
-		nativeStmt, ok := nativeStmtFromIR(stmt, fnReturnType)
+		nativeStmt, ok := nativeStmtFromIR(ctx, stmt, fnReturnType)
 		if !ok {
 			return nil, false
 		}
@@ -154,7 +239,7 @@ func nativeBlockFromStmts(stmts []ostyir.Stmt, fnReturnType string) (*llvmNative
 	return out, true
 }
 
-func nativeStmtFromIR(stmt ostyir.Stmt, fnReturnType string) (*llvmNativeStmt, bool) {
+func nativeStmtFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType string) (*llvmNativeStmt, bool) {
 	switch s := stmt.(type) {
 	case nil:
 		return nil, true
@@ -162,7 +247,7 @@ func nativeStmtFromIR(stmt ostyir.Stmt, fnReturnType string) (*llvmNativeStmt, b
 		if s.Pattern != nil || s.Value == nil {
 			return nil, false
 		}
-		value, ok := nativeExprFromIR(s.Value)
+		value, ok := nativeExprFromIR(ctx, s.Value)
 		if !ok {
 			return nil, false
 		}
@@ -176,7 +261,7 @@ func nativeStmtFromIR(stmt ostyir.Stmt, fnReturnType string) (*llvmNativeStmt, b
 			childExprs: []*llvmNativeExpr{value},
 		}, true
 	case *ostyir.ExprStmt:
-		expr, ok := nativeExprFromIR(s.X)
+		expr, ok := nativeExprFromIR(ctx, s.X)
 		if !ok {
 			return nil, false
 		}
@@ -192,7 +277,7 @@ func nativeStmtFromIR(stmt ostyir.Stmt, fnReturnType string) (*llvmNativeStmt, b
 		if !ok {
 			return nil, false
 		}
-		value, ok := nativeExprFromIR(s.Value)
+		value, ok := nativeExprFromIR(ctx, s.Value)
 		if !ok {
 			return nil, false
 		}
@@ -208,7 +293,7 @@ func nativeStmtFromIR(stmt ostyir.Stmt, fnReturnType string) (*llvmNativeStmt, b
 			llvmType: fnReturnType,
 		}
 		if s.Value != nil {
-			value, ok := nativeExprFromIR(s.Value)
+			value, ok := nativeExprFromIR(ctx, s.Value)
 			if !ok {
 				return nil, false
 			}
@@ -216,11 +301,11 @@ func nativeStmtFromIR(stmt ostyir.Stmt, fnReturnType string) (*llvmNativeStmt, b
 		}
 		return out, true
 	case *ostyir.IfStmt:
-		cond, ok := nativeExprFromIR(s.Cond)
+		cond, ok := nativeExprFromIR(ctx, s.Cond)
 		if !ok {
 			return nil, false
 		}
-		thenBlock, ok := nativeBlockFromIR(s.Then, fnReturnType)
+		thenBlock, ok := nativeBlockFromIR(ctx, s.Then, fnReturnType)
 		if !ok {
 			return nil, false
 		}
@@ -230,7 +315,7 @@ func nativeStmtFromIR(stmt ostyir.Stmt, fnReturnType string) (*llvmNativeStmt, b
 			childBlocks: []*llvmNativeBlock{thenBlock},
 		}
 		if s.Else != nil {
-			elseBlock, ok := nativeBlockFromIR(s.Else, fnReturnType)
+			elseBlock, ok := nativeBlockFromIR(ctx, s.Else, fnReturnType)
 			if !ok {
 				return nil, false
 			}
@@ -240,11 +325,11 @@ func nativeStmtFromIR(stmt ostyir.Stmt, fnReturnType string) (*llvmNativeStmt, b
 	case *ostyir.ForStmt:
 		switch s.Kind {
 		case ostyir.ForWhile:
-			cond, ok := nativeExprFromIR(s.Cond)
+			cond, ok := nativeExprFromIR(ctx, s.Cond)
 			if !ok {
 				return nil, false
 			}
-			body, ok := nativeBlockFromIR(s.Body, fnReturnType)
+			body, ok := nativeBlockFromIR(ctx, s.Body, fnReturnType)
 			if !ok {
 				return nil, false
 			}
@@ -257,15 +342,15 @@ func nativeStmtFromIR(stmt ostyir.Stmt, fnReturnType string) (*llvmNativeStmt, b
 			if s.IsDestructured() || s.Var == "" {
 				return nil, false
 			}
-			start, ok := nativeExprFromIR(s.Start)
+			start, ok := nativeExprFromIR(ctx, s.Start)
 			if !ok {
 				return nil, false
 			}
-			end, ok := nativeExprFromIR(s.End)
+			end, ok := nativeExprFromIR(ctx, s.End)
 			if !ok {
 				return nil, false
 			}
-			body, ok := nativeBlockFromIR(s.Body, fnReturnType)
+			body, ok := nativeBlockFromIR(ctx, s.Body, fnReturnType)
 			if !ok {
 				return nil, false
 			}
@@ -284,7 +369,7 @@ func nativeStmtFromIR(stmt ostyir.Stmt, fnReturnType string) (*llvmNativeStmt, b
 	}
 }
 
-func nativeExprFromIR(expr ostyir.Expr) (*llvmNativeExpr, bool) {
+func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeExpr, bool) {
 	switch e := expr.(type) {
 	case nil:
 		return nil, false
@@ -293,13 +378,13 @@ func nativeExprFromIR(expr ostyir.Expr) (*llvmNativeExpr, bool) {
 		if !ok {
 			return nil, false
 		}
-		llvmType, ok := nativeLLVMTypeFromIR(e.Type())
+		llvmType, ok := nativeLLVMTypeFromIR(ctx, e.Type())
 		if !ok {
 			return nil, false
 		}
 		return &llvmNativeExpr{kind: llvmNativeExprInt, llvmType: llvmType, text: text}, true
 	case *ostyir.FloatLit:
-		llvmType, ok := nativeLLVMTypeFromIR(e.Type())
+		llvmType, ok := nativeLLVMTypeFromIR(ctx, e.Type())
 		if !ok {
 			return nil, false
 		}
@@ -317,17 +402,80 @@ func nativeExprFromIR(expr ostyir.Expr) (*llvmNativeExpr, bool) {
 		}
 		return &llvmNativeExpr{kind: llvmNativeExprString, llvmType: "ptr", text: text}, true
 	case *ostyir.Ident:
-		llvmType, ok := nativeLLVMTypeFromIR(e.Type())
+		llvmType, ok := nativeLLVMTypeFromIR(ctx, e.Type())
 		if !ok {
 			return nil, false
 		}
 		return &llvmNativeExpr{kind: llvmNativeExprIdent, llvmType: llvmType, name: e.Name}, true
-	case *ostyir.UnaryExpr:
-		inner, ok := nativeExprFromIR(e.X)
+	case *ostyir.StructLit:
+		info, ok := nativeStructInfoFromType(ctx, e.Type())
+		if !ok || e.Spread != nil {
+			return nil, false
+		}
+		fieldsByName := make(map[string]ostyir.StructLitField, len(e.Fields))
+		for _, field := range e.Fields {
+			if field.Name == "" {
+				return nil, false
+			}
+			if _, exists := fieldsByName[field.Name]; exists {
+				return nil, false
+			}
+			fieldsByName[field.Name] = field
+		}
+		out := &llvmNativeExpr{
+			kind:       llvmNativeExprStructLit,
+			llvmType:   info.def.llvmType,
+			childExprs: make([]*llvmNativeExpr, 0, len(info.def.fields)),
+		}
+		for _, field := range info.def.fields {
+			entry, ok := fieldsByName[field.name]
+			if !ok {
+				return nil, false
+			}
+			if entry.Value == nil {
+				out.childExprs = append(out.childExprs, &llvmNativeExpr{
+					kind:     llvmNativeExprIdent,
+					llvmType: field.llvmType,
+					name:     field.name,
+				})
+				continue
+			}
+			value, ok := nativeExprFromIR(ctx, entry.Value)
+			if !ok || value.llvmType != field.llvmType {
+				return nil, false
+			}
+			out.childExprs = append(out.childExprs, value)
+		}
+		return out, true
+	case *ostyir.FieldExpr:
+		if e.Optional {
+			return nil, false
+		}
+		info, ok := nativeStructInfoFromType(ctx, e.X.Type())
 		if !ok {
 			return nil, false
 		}
-		llvmType, ok := nativeLLVMTypeFromIR(e.Type())
+		field, ok := info.byName[e.Name]
+		if !ok {
+			return nil, false
+		}
+		base, ok := nativeExprFromIR(ctx, e.X)
+		if !ok {
+			return nil, false
+		}
+		return &llvmNativeExpr{
+			kind:       llvmNativeExprField,
+			llvmType:   field.llvmType,
+			name:       field.name,
+			fieldIndex: field.index,
+			childExprs: []*llvmNativeExpr{base},
+		}, true
+	case *ostyir.UnaryExpr:
+		inner, ok := nativeExprFromIR(ctx, e.X)
+		if !ok {
+			return nil, false
+		}
+		llvmType, ok := nativeLLVMTypeFromIR(ctx, e.Type())
 		if !ok {
 			return nil, false
 		}
@@ -338,15 +486,15 @@ func nativeExprFromIR(expr ostyir.Expr) (*llvmNativeExpr, bool) {
 			childExprs: []*llvmNativeExpr{inner},
 		}, true
 	case *ostyir.BinaryExpr:
-		left, ok := nativeExprFromIR(e.Left)
+		left, ok := nativeExprFromIR(ctx, e.Left)
 		if !ok {
 			return nil, false
 		}
-		right, ok := nativeExprFromIR(e.Right)
+		right, ok := nativeExprFromIR(ctx, e.Right)
 		if !ok {
 			return nil, false
 		}
-		llvmType, ok := nativeLLVMTypeFromIR(e.Type())
+		llvmType, ok := nativeLLVMTypeFromIR(ctx, e.Type())
 		if !ok {
 			return nil, false
 		}
@@ -361,7 +509,7 @@ func nativeExprFromIR(expr ostyir.Expr) (*llvmNativeExpr, bool) {
 		if !ok || len(e.TypeArgs) != 0 {
 			return nil, false
 		}
-		llvmType, ok := nativeLLVMTypeFromIR(e.Type())
+		llvmType, ok := nativeLLVMTypeFromIR(ctx, e.Type())
 		if !ok {
 			return nil, false
 		}
@@ -375,7 +523,7 @@ func nativeExprFromIR(expr ostyir.Expr) (*llvmNativeExpr, bool) {
 			if arg.IsKeyword() {
 				return nil, false
 			}
-			value, ok := nativeExprFromIR(arg.Value)
+			value, ok := nativeExprFromIR(ctx, arg.Value)
 			if !ok {
 				return nil, false
 			}
@@ -386,7 +534,7 @@ func nativeExprFromIR(expr ostyir.Expr) (*llvmNativeExpr, bool) {
 		if e.Kind != ostyir.IntrinsicPrintln || len(e.Args) != 1 || e.Args[0].IsKeyword() {
 			return nil, false
 		}
-		value, ok := nativeExprFromIR(e.Args[0].Value)
+		value, ok := nativeExprFromIR(ctx, e.Args[0].Value)
 		if !ok {
 			return nil, false
 		}
@@ -396,19 +544,19 @@ func nativeExprFromIR(expr ostyir.Expr) (*llvmNativeExpr, bool) {
 			childExprs: []*llvmNativeExpr{value},
 		}, true
 	case *ostyir.IfExpr:
-		cond, ok := nativeExprFromIR(e.Cond)
+		cond, ok := nativeExprFromIR(ctx, e.Cond)
 		if !ok {
 			return nil, false
 		}
-		thenBlock, ok := nativeBlockFromIR(e.Then, "")
+		thenBlock, ok := nativeBlockFromIR(ctx, e.Then, "")
 		if !ok {
 			return nil, false
 		}
-		elseBlock, ok := nativeBlockFromIR(e.Else, "")
+		elseBlock, ok := nativeBlockFromIR(ctx, e.Else, "")
 		if !ok {
 			return nil, false
 		}
-		llvmType, ok := nativeLLVMTypeFromIR(e.Type())
+		llvmType, ok := nativeLLVMTypeFromIR(ctx, e.Type())
 		if !ok {
 			return nil, false
 		}
@@ -423,7 +571,19 @@ func nativeExprFromIR(expr ostyir.Expr) (*llvmNativeExpr, bool) {
 	}
 }
 
-func nativeLLVMTypeFromIR(t ostyir.Type) (string, bool) {
+func nativeStructInfoFromType(ctx *nativeProjectionCtx, t ostyir.Type) (*nativeStructInfo, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	named, ok := t.(*ostyir.NamedType)
+	if !ok || named == nil || named.Builtin || named.Package != "" || len(named.Args) != 0 {
+		return nil, false
+	}
+	info := ctx.structsByName[named.Name]
+	return info, info != nil
+}
+
+func nativeLLVMTypeFromIR(ctx *nativeProjectionCtx, t ostyir.Type) (string, bool) {
 	switch tt := t.(type) {
 	case nil:
 		return "void", true
@@ -439,6 +599,12 @@ func nativeLLVMTypeFromIR(t ostyir.Type) (string, bool) {
 			llvmType := llvmBuiltinType(name)
 			return llvmType, llvmType != ""
 		}
+	case *ostyir.NamedType:
+		info, ok := nativeStructInfoFromType(ctx, tt)
+		if !ok {
+			return "", false
+		}
+		return info.def.llvmType, true
 	default:
 		return "", false
 	}

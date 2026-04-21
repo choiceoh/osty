@@ -77,7 +77,7 @@ fn main() {
 	}
 }
 
-func TestNativeOwnedModuleEntryFallsBackForStructs(t *testing.T) {
+func TestNativeOwnedModuleEntryStructSlice(t *testing.T) {
 	src := `struct Pair { left: Int, right: Int }
 
 fn main() {
@@ -87,8 +87,42 @@ fn main() {
 `
 	mod := lowerNativeEntryModule(t, src)
 	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_script.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for plain struct slice")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"%Pair = type { i64, i64 }",
+		"insertvalue %Pair",
+		"extractvalue %Pair",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned struct IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned struct entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryFallsBackForStructFieldAssign(t *testing.T) {
+	src := `struct Pair { left: Int, right: Int }
+
+fn main() {
+    let mut pair = Pair { left: 1, right: 2 }
+    pair.left = 3
+    println(pair.left)
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_struct_assign.osty"}
 	if nativeMod, ok := nativeModuleFromIR(mod, opts); ok {
-		t.Fatalf("nativeModuleFromIR unexpectedly accepted struct-bearing module: %#v", nativeMod)
+		t.Fatalf("nativeModuleFromIR unexpectedly accepted struct field assignment: %#v", nativeMod)
 	}
 	out, err := GenerateModule(mod, opts)
 	if err != nil {

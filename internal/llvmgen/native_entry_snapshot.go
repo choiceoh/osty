@@ -16,6 +16,8 @@ const (
 	llvmNativeExprBool
 	llvmNativeExprString
 	llvmNativeExprIdent
+	llvmNativeExprStructLit
+	llvmNativeExprField
 	llvmNativeExprUnary
 	llvmNativeExprBinary
 	llvmNativeExprCall
@@ -43,6 +45,7 @@ type llvmNativeExpr struct {
 	text        string
 	name        string
 	op          string
+	fieldIndex  int
 	boolValue   bool
 	inclusive   bool
 	childExprs  []*llvmNativeExpr
@@ -70,6 +73,17 @@ type llvmNativeParam struct {
 	llvmType string
 }
 
+type llvmNativeStructField struct {
+	name     string
+	llvmType string
+}
+
+type llvmNativeStruct struct {
+	name     string
+	llvmType string
+	fields   []*llvmNativeStructField
+}
+
 type llvmNativeFunction struct {
 	name       string
 	returnType string
@@ -80,6 +94,7 @@ type llvmNativeFunction struct {
 type llvmNativeModule struct {
 	sourcePath string
 	target     string
+	structs    []*llvmNativeStruct
 	functions  []*llvmNativeFunction
 }
 
@@ -98,16 +113,27 @@ func llvmNativeEmitModule(mod *llvmNativeModule) string {
 	if mod == nil {
 		return llvmRenderModule("", "", nil)
 	}
+	typeDefs := make([]string, 0, len(mod.structs))
 	definitions := make([]string, 0, len(mod.functions))
 	stringGlobals := make([]*LlvmStringGlobal, 0)
 	nextStringID := 0
+	for _, st := range mod.structs {
+		if st == nil {
+			continue
+		}
+		fieldTypes := make([]string, 0, len(st.fields))
+		for _, field := range st.fields {
+			fieldTypes = append(fieldTypes, field.llvmType)
+		}
+		typeDefs = append(typeDefs, llvmStructTypeDef(strings.TrimPrefix(st.llvmType, "%"), fieldTypes))
+	}
 	for _, fn := range mod.functions {
 		rendered := llvmNativeEmitFunction(fn, nextStringID)
 		nextStringID = rendered.nextStringID
 		definitions = append(definitions, rendered.definition)
 		stringGlobals = append(stringGlobals, rendered.stringGlobals...)
 	}
-	return llvmRenderModuleWithGlobals(mod.sourcePath, mod.target, stringGlobals, definitions)
+	return llvmRenderModuleWithGlobalsAndTypes(mod.sourcePath, mod.target, typeDefs, stringGlobals, definitions)
 }
 
 func llvmNativeEmitFunction(fn *llvmNativeFunction, startStringID int) llvmNativeRenderedFunction {
@@ -259,6 +285,18 @@ func llvmNativeEvalExpr(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
 		return llvmStringLiteral(emitter, expr.text)
 	case llvmNativeExprIdent:
 		return llvmIdent(emitter, expr.name)
+	case llvmNativeExprStructLit:
+		fields := make([]*LlvmValue, 0, len(expr.childExprs))
+		for _, child := range expr.childExprs {
+			fields = append(fields, llvmNativeEvalExpr(emitter, child))
+		}
+		return llvmStructLiteral(emitter, expr.llvmType, fields)
+	case llvmNativeExprField:
+		if len(expr.childExprs) == 0 {
+			return llvmNativeZeroValue(expr.llvmType)
+		}
+		base := llvmNativeEvalExpr(emitter, expr.childExprs[0])
+		return llvmExtractValue(emitter, base, expr.llvmType, expr.fieldIndex)
 	case llvmNativeExprUnary:
 		return llvmNativeEvalUnary(emitter, expr)
 	case llvmNativeExprBinary:
