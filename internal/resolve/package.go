@@ -39,6 +39,9 @@ type Package struct {
 	// when a cycle is detected mid-load. The resolver emits
 	// CodeCyclicImport against the use site that completed the cycle.
 	isCycleMarker bool
+	// nativeResolve caches the read-only selfhost resolve projection so
+	// host-side tools can reuse one native run across several queries.
+	nativeResolve nativeResolveCache
 }
 
 // PackageFile bundles one parsed source file with the resolver outputs

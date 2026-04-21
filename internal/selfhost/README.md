@@ -9,9 +9,11 @@ Today the public entrypoints are:
 - `internal/lexer` — thin Go facade over selfhost tokenization
 - `internal/parser` — thin Go facade over selfhost parsing plus Go-side
   compatibility lowerings
-- `internal/selfhost` — `FormatSource` / `FormatCheck` expose stable Go
-  adapters over the bootstrap-generated pure-Osty formatter for parity tests
-  and self-host drift detection without changing the CLI formatter contract
+- `internal/selfhost` — `FormatSource` / `FormatCheck` plus
+  `ResolveSourceStructured` / `ResolvePackageStructured` expose stable Go
+  adapters over the bootstrap-generated pure-Osty formatter and resolver for
+  parity tests and self-host drift detection without changing the CLI
+  formatter contract
 - `internal/check` — prefers the external native checker binary and uses the
   embedded selfhost bridge as the fallback / adaptation boundary
 
