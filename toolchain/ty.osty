@@ -870,7 +870,11 @@ fn splitTopLevel(text: String) -> List<String> {
             buf.push(unit)
         } else if unit == "," && angle == 0 && paren == 0 {
             out.push(strings.trimSpace(strings.join(buf, "")))
-            buf = []
+            // `buf = []` loses bootstrap-gen's type inference for the
+            // fresh empty list (emitted as `make([]any, 0, 1)` instead
+            // of `make([]string, 0, 1)`), so regen fails to compile on
+            // Windows. Clear in place to keep the element type.
+            buf.clear()
         } else {
             buf.push(unit)
         }

@@ -1707,6 +1707,41 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         paramNames: [], paramTys: [],
         generics: ["K", "V"], genericBounds: [],
     })
+    // Map helpers backed by runtime intrinsics in `osty_runtime.c`
+    // (see PR #470). `get` is already registered above; these five
+    // surface the matching checker signatures so user code can call
+    // `m.getOr(...)`, `m.update(...)`, etc. without E0703.
+    let tR_map = tyNamed(tys, "R", [])
+    let tMapKR = tyNamed(tys, "Map", [tK, tR_map])
+    let tFnOptV_V = tyFn(tys, [tOptV], tV)
+    let tFnKV_Bool = tyFn(tys, [tK, tV], tBool(tys))
+    let tFnVV_V = tyFn(tys, [tV, tV], tV)
+    let tFnV_R_map = tyFn(tys, [tV], tR_map)
+    checkRegisterFn(env, CheckFnSig {
+        name: "getOr", owner: "Map", receiverTy: tMapKV, retTy: tV,
+        paramNames: ["key", "default"], paramTys: [tK, tV],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "update", owner: "Map", receiverTy: tMapKV, retTy: tUnit(tys),
+        paramNames: ["key", "f"], paramTys: [tK, tFnOptV_V],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "retainIf", owner: "Map", receiverTy: tMapKV, retTy: tUnit(tys),
+        paramNames: ["pred"], paramTys: [tFnKV_Bool],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "mergeWith", owner: "Map", receiverTy: tMapKV, retTy: tMapKV,
+        paramNames: ["other", "combine"], paramTys: [tMapKV, tFnVV_V],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "mapValues", owner: "Map", receiverTy: tMapKV, retTy: tMapKR,
+        paramNames: ["f"], paramTys: [tFnV_R_map],
+        generics: ["K", "V", "R"], genericBounds: [],
+    })
 
     // ----- Set<T> intrinsics (spec §10.6) -----
     let tSetT = tyNamed(tys, "Set", [tT])

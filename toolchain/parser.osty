@@ -2082,32 +2082,32 @@ pub fn astPrettyPrint(file: AstFile) -> String {
 }
 
 fn astPPNode(arena: AstArena, idx: Int, depth: Int, lines: List<String>) -> List<String> {
-    // `lines` is an immutable parameter; shadow it with a mutable
-    // binding so we can thread the recursive-call return values
-    // through without reassigning a `let`-bound name. The List is
-    // heap-managed so both `push` in place and the return value pass
-    // through the same identity.
-    let mut lines = lines
+    // Rename the mutable alias away from `lines` so bootstrap-gen
+    // doesn't emit `lines := lines` (Go compile error: "no new
+    // variables on left side of :=" when the parameter shares the
+    // identifier). The List is heap-managed so `push` in place and
+    // the return value carry the same identity either way.
+    let mut out = lines
     if idx < 0 {
-        return lines
+        return out
     }
     let node = astArenaNodeAt(arena, idx)
     let indent = strings.repeat("  ", depth)
     let kindName = astNodeKindName(node.kind)
-    if node.text != "" { lines.push("{indent}{kindName} \"{node.text}\"") } else { lines.push("{indent}{kindName}") }
+    if node.text != "" { out.push("{indent}{kindName} \"{node.text}\"") } else { out.push("{indent}{kindName}") }
     if node.left >= 0 {
-        lines = astPPNode(arena, node.left, depth + 1, lines)
+        out = astPPNode(arena, node.left, depth + 1, out)
     }
     if node.right >= 0 {
-        lines = astPPNode(arena, node.right, depth + 1, lines)
+        out = astPPNode(arena, node.right, depth + 1, out)
     }
     for child in node.children {
-        lines = astPPNode(arena, child, depth + 1, lines)
+        out = astPPNode(arena, child, depth + 1, out)
     }
     for child in node.children2 {
-        lines = astPPNode(arena, child, depth + 1, lines)
+        out = astPPNode(arena, child, depth + 1, out)
     }
-    lines
+    out
 }
 
 pub fn astNodeKindName(kind: AstNodeKind) -> String {

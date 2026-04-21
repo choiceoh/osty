@@ -92,6 +92,9 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("read patched selfhost code: %w", err)
 	}
+	if dbg := os.Getenv("OSTY_BOOTSTRAP_DEBUG_DUMP"); dbg != "" {
+		_ = os.WriteFile(dbg, data, 0o644)
+	}
 	return installWithBuildGate(root, outPath, data)
 }
 
