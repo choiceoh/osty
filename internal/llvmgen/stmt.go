@@ -2964,14 +2964,16 @@ func (g *generator) emitOptionalUserCallStmt(call *ast.CallExpr) (bool, error) {
 		return true, err
 	}
 	if err := g.emitOptionalPtrStmt(baseValue, func() error {
-		emitter := g.toOstyEmitter()
-		g.emitGCSafepointKind(emitter, safepointKindCall)
-		g.takeOstyEmitter(emitter)
+		if g.hasVisibleSafepointRoots() {
+			emitter := g.toOstyEmitter()
+			g.emitGCSafepointKind(emitter, safepointKindCall)
+			g.takeOstyEmitter(emitter)
+		}
 		args, err := g.optionalUserCallArgs(sig, innerSource, baseValue, call)
 		if err != nil {
 			return err
 		}
-		emitter = g.toOstyEmitter()
+		emitter := g.toOstyEmitter()
 		if sig.ret == "void" {
 			emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(%s)", sig.irName, llvmCallArgs(args)))
 		} else {
@@ -2993,16 +2995,18 @@ func (g *generator) emitUserCallStmt(call *ast.CallExpr) (bool, error) {
 	if !found {
 		return false, nil
 	}
-	emitter := g.toOstyEmitter()
-	g.emitGCSafepointKind(emitter, safepointKindCall)
-	g.takeOstyEmitter(emitter)
+	if g.hasVisibleSafepointRoots() {
+		emitter := g.toOstyEmitter()
+		g.emitGCSafepointKind(emitter, safepointKindCall)
+		g.takeOstyEmitter(emitter)
+	}
 	g.pushScope()
 	args, err := g.userCallArgs(sig, receiverExpr, call)
 	if err != nil {
 		g.popScope()
 		return true, err
 	}
-	emitter = g.toOstyEmitter()
+	emitter := g.toOstyEmitter()
 	if sig.ret == "void" {
 		emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(%s)", sig.irName, llvmCallArgs(args)))
 	} else {

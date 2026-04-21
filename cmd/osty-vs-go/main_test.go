@@ -32,9 +32,9 @@ func mkRun(ts time.Time, score float64, results ...benchResult) runRecord {
 
 func TestCompositeIsGeomeanOfRatios(t *testing.T) {
 	rows := []benchResult{
-		mkResult("p1", "a", 1, 2),   // 2
-		mkResult("p1", "b", 1, 8),   // 8
-		mkResult("p2", "c", 1, 16),  // 16
+		mkResult("p1", "a", 1, 2),  // 2
+		mkResult("p1", "b", 1, 8),  // 8
+		mkResult("p2", "c", 1, 16), // 16
 	}
 	got := composite(rows)
 	// geomean(2, 8, 16) = cbrt(256) ≈ 6.3496.
@@ -47,9 +47,9 @@ func TestCompositeIsGeomeanOfRatios(t *testing.T) {
 func TestCompositeSkipsRowsMissingASide(t *testing.T) {
 	rows := []benchResult{
 		mkResult("p1", "a", 1, 2),
-		mkResult("p1", "b", math.NaN(), 8),   // Go missing
-		mkResult("p1", "c", 1, math.NaN()),   // Osty missing
-		mkResult("p1", "d", 0, 16),           // Go ≤ 0: skip (would div-by-zero)
+		mkResult("p1", "b", math.NaN(), 8), // Go missing
+		mkResult("p1", "c", 1, math.NaN()), // Osty missing
+		mkResult("p1", "d", 0, 16),         // Go ≤ 0: skip (would div-by-zero)
 	}
 	got := composite(rows)
 	if got != 2 {
@@ -66,13 +66,63 @@ func TestCompositeIsNaNWhenNoQualifyingPair(t *testing.T) {
 	}
 }
 
+func TestMedianFiniteOddCount(t *testing.T) {
+	got := medianFinite([]float64{9, 1, 5})
+	if got != 5 {
+		t.Fatalf("medianFinite odd = %v, want 5", got)
+	}
+}
+
+func TestMedianFiniteEvenCount(t *testing.T) {
+	got := medianFinite([]float64{10, 4, 2, 8})
+	if got != 6 {
+		t.Fatalf("medianFinite even = %v, want 6", got)
+	}
+}
+
+func TestMedianFiniteEmpty(t *testing.T) {
+	if got := medianFinite(nil); !math.IsNaN(got) {
+		t.Fatalf("medianFinite empty = %v, want NaN", got)
+	}
+}
+
+func TestAggregateGoBenchRunsUsesMedianPerMetric(t *testing.T) {
+	runs := [][]benchResult{
+		{
+			{Pair: "word_freq", Name: "WordFreqTop10", GoNs: 120, GoBytes: 90, GoAllocs: 4, OsNs: math.NaN(), OsBytes: math.NaN(), OsAllocs: math.NaN()},
+			{Pair: "word_freq", Name: "Helper", GoNs: 40, GoBytes: math.NaN(), GoAllocs: 1, OsNs: math.NaN(), OsBytes: math.NaN(), OsAllocs: math.NaN()},
+		},
+		{
+			{Pair: "word_freq", Name: "WordFreqTop10", GoNs: 100, GoBytes: 70, GoAllocs: 2, OsNs: math.NaN(), OsBytes: math.NaN(), OsAllocs: math.NaN()},
+			{Pair: "word_freq", Name: "Helper", GoNs: 30, GoBytes: math.NaN(), GoAllocs: 3, OsNs: math.NaN(), OsBytes: math.NaN(), OsAllocs: math.NaN()},
+		},
+		{
+			{Pair: "word_freq", Name: "WordFreqTop10", GoNs: 140, GoBytes: 110, GoAllocs: 6, OsNs: math.NaN(), OsBytes: math.NaN(), OsAllocs: math.NaN()},
+			{Pair: "word_freq", Name: "Helper", GoNs: 50, GoBytes: math.NaN(), GoAllocs: 5, OsNs: math.NaN(), OsBytes: math.NaN(), OsAllocs: math.NaN()},
+		},
+	}
+	rows := aggregateGoBenchRuns("word_freq", runs)
+	if len(rows) != 2 {
+		t.Fatalf("aggregateGoBenchRuns len = %d, want 2", len(rows))
+	}
+	if rows[0].Name != "Helper" || rows[1].Name != "WordFreqTop10" {
+		t.Fatalf("aggregateGoBenchRuns order = %+v", rows)
+	}
+	if rows[0].GoNs != 40 || !math.IsNaN(rows[0].GoBytes) || rows[0].GoAllocs != 3 {
+		t.Fatalf("Helper median row = %+v", rows[0])
+	}
+	if rows[1].GoNs != 120 || rows[1].GoBytes != 90 || rows[1].GoAllocs != 4 {
+		t.Fatalf("WordFreqTop10 median row = %+v", rows[1])
+	}
+}
+
 func TestBestRunPicksLowestScore(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	runs := []runRecord{
 		mkRun(base.Add(1*time.Minute), 3.0),
 		mkRun(base.Add(2*time.Minute), 1.5),
 		mkRun(base.Add(3*time.Minute), 2.0),
-		mkRun(base.Add(4*time.Minute), 1.5),   // tie with #2 — earlier wins
+		mkRun(base.Add(4*time.Minute), 1.5), // tie with #2 — earlier wins
 	}
 	best, ok := bestRun(runs)
 	if !ok {

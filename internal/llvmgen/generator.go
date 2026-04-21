@@ -1040,6 +1040,10 @@ func (g *generator) visibleSafepointRoots() []gcSafepointRoot {
 	return out
 }
 
+func (g *generator) hasVisibleSafepointRoots() bool {
+	return len(g.visibleSafepointRoots()) != 0
+}
+
 func (g *generator) safepointRootAddress(emitter *LlvmEmitter, root gcSafepointRoot) string {
 	if len(root.path) == 0 {
 		return root.slot.ref

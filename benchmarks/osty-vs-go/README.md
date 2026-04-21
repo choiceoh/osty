@@ -13,6 +13,9 @@ benchmarks/osty-vs-go/
 ├── arith/
 │   ├── go/      # package arithbench — BenchmarkAdd
 │   └── osty/    # benchAdd
+├── word_freq/
+│   ├── go/      # package wordfreqbench — BenchmarkCorpusIndex
+│   └── osty/    # benchCorpusIndex
 ├── loop_sum/
 │   ├── go/      # package loopsumbench — BenchmarkSumTo100
 │   └── osty/    # benchSumTo100
@@ -42,6 +45,11 @@ Useful flags:
   history listing; good for marking `main`, `branch-x`, etc.).
 - `--osty <path>` / `--go <path>` — override the binaries. The default
   prefers `$PWD/.bin/osty` (from `just build`) and the `go` on `PATH`.
+- `--go-count <N>` — run each Go pair `N` times and publish the median
+  per metric. Default `3`; this trades a bit of wall time for a much
+  steadier Go baseline.
+- `--go-cpu <list>` — forwarded to `go test -cpu`. Default `1`, which
+  reduces scheduler noise for very short Go benches.
 - `--pairs-dir <path>` — defaults to `benchmarks/osty-vs-go`.
 - `--history <N>` — skip running and render the last N recorded runs
   as an ASCII trend graph (see below).
@@ -57,23 +65,25 @@ Useful flags:
 Sample output of one run:
 
 ```
-# osty-vs-go run #3 (baseline) — benchtime=500ms, pairs=3
+# osty-vs-go run #3 (baseline) — benchtime=500ms, pairs=4, go-count=3, go-cpu=1
 
 pair      bench     go ns/op  osty ns/op  ns osty/go  go B/op  osty B/op  go allocs/op
 --------  --------  --------  ----------  ----------  -------  ---------  ------------
 arith     Add       1.20      161.0       134.17x     0        0          0
 fib       Fib15     13002.00  38195.0     2.94x       0        0          0
 loop_sum  SumTo100  205.50    2001.0      9.74x       0        0          0
+word_freq CorpusIndex   4012.00  18944.0  4.72x      4096     3584       12
 
-geomean ns osty/go: 10.90x  (over 3 benches)
+geomean ns osty/go: 7.17x  (over 4 benches)
 ```
 
 ## Metrics
 
 Per bench the tool collects:
 
-- **ns/op** (both sides). Go's is `testing.B` time-per-op after
-  auto-tuned `b.N`. Osty's is the `avg=…ns` field from
+- **ns/op** (both sides). Go's is the median `testing.B` time-per-op
+  across `--go-count` independent sweeps after auto-tuned `b.N`.
+  Osty's is the `avg=…ns` field from
   `testing.benchmark(N, …)` with per-iteration clock sampling.
 - **B/op** (both sides). Go's comes from `-benchmem`. Osty's comes
   from a runtime-side delta on `osty_gc_allocated_bytes_total`
