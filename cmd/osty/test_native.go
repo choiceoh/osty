@@ -34,6 +34,20 @@ type nativeTestCase struct {
 	Path string
 }
 
+func pluralKindLabel(benchMode bool) string {
+	if benchMode {
+		return "benchmarks"
+	}
+	return "tests"
+}
+
+func singularKindLabel(benchMode bool) string {
+	if benchMode {
+		return "benchmark"
+	}
+	return "test"
+}
+
 func runTest(args []string, flags cliFlags) {
 	os.Exit(runTestMain(args, flags, os.Stdout, os.Stderr))
 }
@@ -42,7 +56,7 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: osty test [--offline | --locked | --frozen] [--backend NAME] [--emit MODE] [--airepair=false] [--airepair-mode MODE] [--seed HEX] [--serial] [--jobs N] [--doc] [PATH|FILTER...]")
+		fmt.Fprintln(stderr, "usage: osty test [--offline | --locked | --frozen] [--backend NAME] [--emit MODE] [--airepair=false] [--airepair-mode MODE] [--seed HEX] [--serial] [--jobs N] [--doc] [--bench] [PATH|FILTER...]")
 	}
 	var offline, locked, frozen bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
@@ -62,6 +76,8 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	fs.IntVar(&jobs, "jobs", 0, "max concurrent tests when parallel (0 = runtime.NumCPU())")
 	var docTests bool
 	fs.BoolVar(&docTests, "doc", false, "v0.5 G32: extract `osty-fenced examples from /// doc comments and run each as an additional test")
+	var benchMode bool
+	fs.BoolVar(&benchMode, "bench", false, "spec §11.4: run `bench*` functions (discovered like tests) instead of `test*`; each bench prints its timing summary")
 	var pf profileFlags
 	pf.register(fs)
 	if err := fs.Parse(args); err != nil {
@@ -102,12 +118,16 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	tests, err := discoverNativeTests(pkg, filters)
+	tests, err := discoverNativeTests(pkg, filters, benchMode)
 	if err != nil {
 		fmt.Fprintf(stderr, "osty test: %v\n", err)
 		return 1
 	}
 	if docTests {
+		if benchMode {
+			fmt.Fprintln(stderr, "osty test: --doc and --bench cannot be combined")
+			return 2
+		}
 		doc, err := appendDoctestCases(pkg, filters)
 		if err != nil {
 			fmt.Fprintf(stderr, "osty test --doc: %v\n", err)
@@ -115,8 +135,9 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 		}
 		tests = append(tests, doc...)
 	}
+	kindLabel := pluralKindLabel(benchMode)
 	if len(tests) == 0 {
-		fmt.Fprintln(stdout, "running 0 tests")
+		fmt.Fprintf(stdout, "running 0 %s\n", kindLabel)
 		return 0
 	}
 
@@ -138,16 +159,16 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	}
 	defer os.RemoveAll(tmpRoot)
 
-	fmt.Fprintf(stdout, "running %d tests (seed %s)\n", len(tests), formatTestSeed(seed))
+	fmt.Fprintf(stdout, "running %d %s (seed %s)\n", len(tests), kindLabel, formatTestSeed(seed))
 	started := time.Now()
 	workers := resolveTestWorkers(serial, jobs, len(tests))
-	failures := executeNativeTests(context.Background(), b, emitMode, tmpRoot, pkg, tests, workers, seed, stdout, stderr)
+	failures := executeNativeTests(context.Background(), b, emitMode, tmpRoot, pkg, tests, workers, seed, stdout, stderr, benchMode)
 	elapsed := time.Since(started)
 	if failures > 0 {
-		fmt.Fprintf(stdout, "FAIL\t%d/%d tests failed in %s (seed %s)\n", failures, len(tests), formatTestDuration(elapsed), formatTestSeed(seed))
+		fmt.Fprintf(stdout, "FAIL\t%d/%d %s failed in %s (seed %s)\n", failures, len(tests), kindLabel, formatTestDuration(elapsed), formatTestSeed(seed))
 		return 1
 	}
-	fmt.Fprintf(stdout, "ok\t%d tests passed in %s (seed %s)\n", len(tests), formatTestDuration(elapsed), formatTestSeed(seed))
+	fmt.Fprintf(stdout, "ok\t%d %s passed in %s (seed %s)\n", len(tests), kindLabel, formatTestDuration(elapsed), formatTestSeed(seed))
 	return 0
 }
 
@@ -158,11 +179,11 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 // results are printed in completion order — still reproducible because
 // the *set* of executed tests and the failure verdict do not depend on
 // scheduling.
-func executeNativeTests(ctx context.Context, b backend.Backend, emitMode backend.EmitMode, tmpRoot string, pkg *resolve.Package, tests []nativeTestCase, workers int, seed uint64, stdout, stderr io.Writer) int {
+func executeNativeTests(ctx context.Context, b backend.Backend, emitMode backend.EmitMode, tmpRoot string, pkg *resolve.Package, tests []nativeTestCase, workers int, seed uint64, stdout, stderr io.Writer, benchMode bool) int {
 	if workers <= 1 {
 		failures := 0
 		for _, tc := range tests {
-			if reportNativeTestResult(runSingleNativeTest(ctx, b, emitMode, tmpRoot, pkg, tc), stdout, stderr) {
+			if reportNativeTestResult(runSingleNativeTest(ctx, b, emitMode, tmpRoot, pkg, tc), stdout, stderr, benchMode) {
 				failures++
 			}
 		}
@@ -187,7 +208,7 @@ func executeNativeTests(ctx context.Context, b backend.Backend, emitMode backend
 	}()
 	failures := 0
 	for outcome := range resultsCh {
-		if reportNativeTestResult(outcome, stdout, stderr) {
+		if reportNativeTestResult(outcome, stdout, stderr, benchMode) {
 			failures++
 		}
 	}
@@ -210,7 +231,13 @@ func runSingleNativeTest(ctx context.Context, b backend.Backend, emitMode backen
 // reportNativeTestResult emits the per-test status line and any captured
 // child-process output. Returns true iff the test failed, so callers can
 // tally the failure count without re-inspecting the outcome.
-func reportNativeTestResult(o nativeTestOutcome, stdout, stderr io.Writer) bool {
+//
+// In bench mode the child's stdout is always surfaced — each benchmark
+// prints its own `bench <path>:<line> iter=… total=…ns avg=…ns` summary
+// from the LLVM timing harness (internal/llvmgen/stmt.go:
+// emitTestingBenchmarkStmt), and swallowing that would defeat the whole
+// point of running `--bench`.
+func reportNativeTestResult(o nativeTestOutcome, stdout, stderr io.Writer, benchMode bool) bool {
 	dur := formatTestDuration(o.Elapsed)
 	if o.Err != nil {
 		fmt.Fprintf(stdout, "FAIL\t%s\t%s\n", o.Test.Name, dur)
@@ -230,6 +257,12 @@ func reportNativeTestResult(o nativeTestOutcome, stdout, stderr io.Writer) bool 
 		return true
 	}
 	fmt.Fprintf(stdout, "ok\t%s\t%s\n", o.Test.Name, dur)
+	if benchMode && strings.TrimSpace(o.Run.Stdout) != "" {
+		fmt.Fprintf(stdout, "%s", o.Run.Stdout)
+		if !strings.HasSuffix(o.Run.Stdout, "\n") {
+			fmt.Fprintln(stdout)
+		}
+	}
 	return false
 }
 
@@ -323,7 +356,7 @@ func packageParseDiags(pkg *resolve.Package) []*diag.Diagnostic {
 	return out
 }
 
-func discoverNativeTests(pkg *resolve.Package, filters []string) ([]nativeTestCase, error) {
+func discoverNativeTests(pkg *resolve.Package, filters []string, benchMode bool) ([]nativeTestCase, error) {
 	if pkg == nil {
 		return nil, fmt.Errorf("missing package for test discovery")
 	}
@@ -344,17 +377,29 @@ func discoverNativeTests(pkg *resolve.Package, filters []string) ([]nativeTestCa
 			if fn.Name == "main" {
 				return nil, fmt.Errorf("package %s already defines main; native test runner currently requires a library-style package", pkg.Dir)
 			}
-			// A function is a test when either:
-			//   - its name starts with `test` (legacy convention from
-			//     v0.4, kept for backward compatibility), or
-			//   - it carries `#[test]` (v0.5 G32 inline annotation).
-			// The `testing` function in `std.testing` is explicitly
-			// excluded to avoid colliding with the assertion helper.
+			// `testing` is the stdlib module helper name; skip it in
+			// either mode so it can't shadow a real test.
 			if fn.Name == "testing" {
 				continue
 			}
-			if !strings.HasPrefix(fn.Name, "test") && !hasTestAnnotation(fn) {
-				continue
+			// Selection rules:
+			//   test mode   — names starting with `test` *or* functions
+			//                 carrying `#[test]` (v0.5 G32); bench names
+			//                 are skipped.
+			//   bench mode  — spec §11.4: names starting with `bench`,
+			//                 zero params, no return. No annotation
+			//                 surface yet.
+			if benchMode {
+				if !strings.HasPrefix(fn.Name, "bench") {
+					continue
+				}
+			} else {
+				if strings.HasPrefix(fn.Name, "bench") {
+					continue
+				}
+				if !strings.HasPrefix(fn.Name, "test") && !hasTestAnnotation(fn) {
+					continue
+				}
 			}
 			if len(fn.Params) != 0 || fn.ReturnType != nil || fn.Body == nil {
 				continue
@@ -363,7 +408,7 @@ func discoverNativeTests(pkg *resolve.Package, filters []string) ([]nativeTestCa
 				continue
 			}
 			if prev, exists := seen[fn.Name]; exists {
-				return nil, fmt.Errorf("duplicate test function %q in %s and %s", fn.Name, prev, pf.Path)
+				return nil, fmt.Errorf("duplicate %s function %q in %s and %s", singularKindLabel(benchMode), fn.Name, prev, pf.Path)
 			}
 			seen[fn.Name] = pf.Path
 			tests = append(tests, nativeTestCase{Name: fn.Name, Path: pf.Path})

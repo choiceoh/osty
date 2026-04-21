@@ -109,8 +109,28 @@ fn benchParseJson() {
 }
 ```
 
-`testing.benchmark(iterations, body)` runs the body and reports timing
-statistics.
+`testing.benchmark(iterations, body)` runs the closure `iterations`
+times and prints one summary line per call site:
+
+```
+bench <abs-path>:<line> iter=<N> total=<T>ns avg=<A>ns
+```
+
+`T` is the monotonic-clock elapsed time around the loop, `A` is
+`T / N` (or `0` when `N <= 0`). Values are nanoseconds throughout.
+`<abs-path>` is the source file containing the `testing.benchmark(...)`
+call (`<bench>` when the compiler has no source path), and `<line>` is
+that call's 1-based line number.
+
+In bench mode:
+
+- Only `bench*`-named, zero-arity functions are discovered. `#[test]`
+  annotations have no effect on bench discovery, and `test*` functions
+  are skipped.
+- `--bench` and `--doc` are mutually exclusive.
+- Assertion failures inside the closure abort the bench with the
+  normal `testing.*` diagnostic; no summary line is printed for a
+  failed bench.
 
 ### 11.5 Snapshots
 

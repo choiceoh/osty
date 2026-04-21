@@ -46,6 +46,17 @@ bodies exist so the stub checker accepts imports.
 - **Inline `#[test]`** discovery rejects `#[test]` on parameterised
   functions (silently skipped) and on a function literally named
   `testing`.
+- **`osty test --bench`** (spec §11.4) — discovers `bench*`-prefixed,
+  zero-arity functions and runs each through the LLVM backend. Bodies
+  call `testing.benchmark(N, || { ...; Ok(()) })`, which the emitter
+  lowers to a range loop bracketed by `osty_rt_bench_now_nanos()`
+  samples. Each call prints one line —
+  `bench <abs-path>:<line> iter=N total=Tns avg=Ans` — and the CLI
+  always surfaces it. `--bench` and `--doc` are mutually exclusive
+  (exit 2). In default test mode `bench*` functions are skipped so an
+  errant benchmark never runs as a regular test. Closure bodies must
+  be a Block; the trailing `Ok(())` required by the stdlib signature
+  is stripped inline, and `?` inside the closure is unsupported.
 
 ### Diagnostic codes
 

@@ -2503,6 +2503,15 @@ const char *osty_rt_int_to_string(int64_t value) {
     return osty_rt_string_dup_site(buffer, (size_t)written, "runtime.int.to_string");
 }
 
+/* Monotonic-clock sample in nanoseconds, exported for the benchmark
+ * harness (`testing.benchmark(N, || { ... })`). Signed int64 so it
+ * round-trips through Osty's `Int` without truncation surprises when
+ * subtracting two samples; wall-clock sources are intentionally not
+ * exposed because bench timings must be immune to NTP adjustments. */
+int64_t osty_rt_bench_now_nanos(void) {
+    return (int64_t)osty_rt_monotonic_ns();
+}
+
 const char *osty_rt_bool_to_string(bool value) {
     if (value) {
         return osty_rt_string_dup_site("true", 4, "runtime.bool.to_string");

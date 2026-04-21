@@ -896,6 +896,8 @@ func (g *generator) emitTestingCallStmt(call *ast.CallExpr) (bool, error) {
 		return true, nil
 	case "context":
 		return true, g.emitTestingContextStmt(call)
+	case "benchmark":
+		return true, g.emitTestingBenchmarkStmt(call)
 	case "expectOk":
 		_, err := g.emitTestingExpect(call, false)
 		return true, err
@@ -1033,6 +1035,150 @@ func (g *generator) emitTestingClosureBody(body ast.Expr) error {
 	}
 }
 
+// emitTestingBenchmarkStmt inlines `testing.benchmark(N, || {...})` as
+// a timing loop — spec §11.4. The trailing expression of the closure
+// body (the required `Ok(())` terminator) is dropped on inline; `?` in
+// the closure is unsupported because inlined `?` would return from the
+// enclosing test main, not the closure.
+func (g *generator) emitTestingBenchmarkStmt(call *ast.CallExpr) error {
+	if len(call.Args) != 2 || call.Args[0] == nil || call.Args[1] == nil ||
+		call.Args[0].Name != "" || call.Args[1].Name != "" ||
+		call.Args[0].Value == nil || call.Args[1].Value == nil {
+		return unsupported("call", "testing.benchmark requires two positional arguments (iterations, closure)")
+	}
+	closure, ok := call.Args[1].Value.(*ast.ClosureExpr)
+	if !ok {
+		return unsupported("call", "testing.benchmark requires a closure literal as its second argument")
+	}
+	if len(closure.Params) != 0 || closure.Body == nil {
+		return unsupported("call", "testing.benchmark requires a zero-arg closure body")
+	}
+	block, ok := closure.Body.(*ast.Block)
+	if !ok {
+		return unsupported("call", "testing.benchmark requires a block-bodied closure")
+	}
+
+	iters, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return err
+	}
+	if iters.typ != "i64" {
+		return unsupportedf("type-system", "testing.benchmark iterations type %s, want i64", iters.typ)
+	}
+
+	g.declareRuntimeSymbol(benchClockRuntimeSymbol(), "i64", nil)
+	emitter := g.toOstyEmitter()
+	startTemp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", startTemp, benchClockRuntimeSymbol()))
+
+	zeroV := &LlvmValue{name: "0", typ: "i64"}
+	stopV := &LlvmValue{name: iters.ref, typ: "i64"}
+	loop := llvmRangeStart(emitter, g.hiddenBenchIterName(), zeroV, stopV, false)
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop.bodyLabel)
+	continueLabel := g.nextNamedLabel("bench.cont")
+	g.pushLoop(loopContext{
+		continueLabel: continueLabel,
+		breakLabel:    loop.endLabel,
+		scopeDepth:    len(g.locals),
+	})
+	scopeDepth := len(g.locals)
+	g.pushScope()
+
+	stmts := block.Stmts
+	if n := len(stmts); n > 0 {
+		if _, ok := stmts[n-1].(*ast.ExprStmt); ok {
+			stmts = stmts[:n-1]
+		}
+	}
+	if err := g.emitBlock(stmts); err != nil {
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
+		return err
+	}
+	if len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+	g.popLoop()
+	if g.currentReachable {
+		g.branchTo(continueLabel)
+	}
+
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
+	llvmRangeEnd(emitter, loop)
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop.endLabel)
+
+	// iters.ref and startTemp are SSA values defined in a block that
+	// dominates loop.endLabel, so they're valid here without a reload.
+	emitter = g.toOstyEmitter()
+	endTemp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", endTemp, benchClockRuntimeSymbol()))
+	totalTemp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sub i64 %s, %s", totalTemp, endTemp, startTemp))
+	nonZero := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp sgt i64 %s, 0", nonZero, iters.ref))
+	divLabel := llvmNextLabel(emitter, "bench.div")
+	skipLabel := llvmNextLabel(emitter, "bench.skip")
+	joinLabel := llvmNextLabel(emitter, "bench.join")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", nonZero, divLabel, skipLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", divLabel))
+	divTemp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sdiv i64 %s, %s", divTemp, totalTemp, iters.ref))
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", joinLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", skipLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", joinLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", joinLabel))
+	avgTemp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi i64 [ %s, %%%s ], [ 0, %%%s ]", avgTemp, divTemp, divLabel, skipLabel))
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = joinLabel
+	g.currentReachable = true
+
+	itersStr, err := g.emitRuntimeIntToString(iters)
+	if err != nil {
+		return err
+	}
+	totalStr, err := g.emitRuntimeIntToString(value{typ: "i64", ref: totalTemp})
+	if err != nil {
+		return err
+	}
+	avgStr, err := g.emitRuntimeIntToString(value{typ: "i64", ref: avgTemp})
+	if err != nil {
+		return err
+	}
+	prefix := fmt.Sprintf("bench %s", g.sourceLineLabel(call, "<bench>"))
+	msg, err := g.foldAssertionMessage(
+		staticAssertPart(prefix+" iter="),
+		dynamicAssertPart(itersStr),
+		staticAssertPart(" total="),
+		dynamicAssertPart(totalStr),
+		staticAssertPart("ns avg="),
+		dynamicAssertPart(avgStr),
+		staticAssertPart("ns"),
+	)
+	if err != nil {
+		return err
+	}
+	emitter = g.toOstyEmitter()
+	llvmPrintlnString(emitter, toOstyValue(msg))
+	g.takeOstyEmitter(emitter)
+	return nil
+}
+
+func benchClockRuntimeSymbol() string { return "osty_rt_bench_now_nanos" }
+
+// hiddenBenchIterName allocates a loop-counter name that can't shadow a
+// user identifier; llvmRangeStart needs somewhere to bind `%current`.
+func (g *generator) hiddenBenchIterName() string {
+	g.hiddenLocalID++
+	return fmt.Sprintf("__bench_i_%d", g.hiddenLocalID)
+}
+
 func (g *generator) emitTestingAssertion(cond value, message string) error {
 	if cond.typ != "i1" {
 		return unsupportedf("type-system", "testing assertion condition type %s, want i1", cond.typ)
@@ -1066,9 +1212,16 @@ func (g *generator) emitTestingAbortWithEmitter(emitter *LlvmEmitter, message st
 }
 
 func (g *generator) testingFailureMessage(call *ast.CallExpr, name string) string {
+	return fmt.Sprintf("testing.%s failed at %s", name, g.sourceLineLabel(call, "<test>"))
+}
+
+// sourceLineLabel renders `<abs-path>:<line>` for a call site. When the
+// source path is unset (happens in some in-memory test paths) `fallback`
+// stands in so output stays scrapeable.
+func (g *generator) sourceLineLabel(call *ast.CallExpr, fallback string) string {
 	source := g.sourcePath
 	if source == "" {
-		source = "<test>"
+		source = fallback
 	} else if abs, err := filepath.Abs(source); err == nil {
 		source = abs
 	}
@@ -1076,7 +1229,7 @@ func (g *generator) testingFailureMessage(call *ast.CallExpr, name string) strin
 	if call != nil {
 		line = call.Pos().Line
 	}
-	return fmt.Sprintf("testing.%s failed at %s:%d", name, source, line)
+	return fmt.Sprintf("%s:%d", source, line)
 }
 
 // emitTestingAssertionLazy mirrors emitTestingAssertion but builds the
