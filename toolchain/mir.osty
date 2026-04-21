@@ -1340,18 +1340,18 @@ pub fn mirPrintModule(m: MirModule) -> String {
 /// mirPrintFunction renders one function using the same format as
 /// mirPrintModule.
 pub fn mirPrintFunction(func: MirFunction) -> String {
-    let mut out = ""
-    out = out + "fn " + func.name + "("
+    let mut parts: List<String> = []
+    parts.push("fn {func.name}(")
     let mut first = true
     for paramId in func.params {
         if !(first) {
-            out = out + ", "
+            parts.push(", ")
         }
         first = false
         let loc = mirFunctionLocal(func, paramId)
-        out = out + "_" + mirIntToString(loc.id) + ": " + loc.typ
+        parts.push("_{mirIntToString(loc.id)}: {loc.typ}")
     }
-    out = out + ") -> " + func.returnType + " \{\n"
+    parts.push(") -> {func.returnType} \{\n")
     // Locals declaration block (skip parameters; they are in the signature)
     for loc in func.locals {
         if loc.isParam {
@@ -1359,17 +1359,15 @@ pub fn mirPrintFunction(func: MirFunction) -> String {
         }
         let annot = mirLocalAnnotation(loc)
         let displayName = if loc.name == "" { "_" } else { loc.name }
-        out = out + mirIndent(1) + "let" + annot + " _"
-            + mirIntToString(loc.id) + ": " + loc.typ
-            + "  // " + displayName + "\n"
+        parts.push("{mirIndent(1)}let{annot} _{mirIntToString(loc.id)}: {loc.typ}  // {displayName}\n")
     }
     if !(func.isExternal) {
         for bb in func.blocks {
-            out = out + "\n" + mirPrintBlock(bb, func)
+            parts.push("\n{mirPrintBlock(bb, func)}")
         }
     }
-    out = out + "\}\n"
-    out
+    parts.push("\}\n")
+    strings.join(parts, "")
 }
 
 fn mirLocalAnnotation(loc: MirLocal) -> String {
@@ -1404,16 +1402,17 @@ fn mirPrintGlobal(g: MirGlobal) -> String {
 }
 
 fn mirPrintBlock(bb: MirBasicBlock, func: MirFunction) -> String {
-    let mut out = mirIndent(1) + "bb" + mirIntToString(bb.id) + ":\n"
+    let mut parts: List<String> = []
+    parts.push("{mirIndent(1)}bb{mirIntToString(bb.id)}:\n")
     for instr in bb.instrs {
-        out = out + mirIndent(2) + mirPrintInstr(instr, func) + "\n"
+        parts.push("{mirIndent(2)}{mirPrintInstr(instr, func)}\n")
     }
     if bb.hasTerm {
-        out = out + mirIndent(2) + mirPrintTerm(bb.term, func) + "\n"
+        parts.push("{mirIndent(2)}{mirPrintTerm(bb.term, func)}\n")
     } else {
-        out = out + mirIndent(2) + "<missing terminator>\n"
+        parts.push("{mirIndent(2)}<missing terminator>\n")
     }
-    out
+    strings.join(parts, "")
 }
 
 fn mirPrintInstr(i: MirInstr, func: MirFunction) -> String {
@@ -1450,21 +1449,14 @@ fn mirPrintTerm(t: MirTerm, func: MirFunction) -> String {
             + " -> [true: bb" + mirIntToString(t.thenBlock)
             + ", false: bb" + mirIntToString(t.elseBlock) + "]",
         MirTermSwitchInt -> {
-            let mut arms = ""
-            let mut first = true
+            let mut armParts: List<String> = []
             for c in t.cases {
-                if !(first) {
-                    arms = arms + ", "
-                }
-                first = false
                 let label = if c.label == "" { mirIntToString(c.value) } else { c.label }
-                arms = arms + label + " -> bb" + mirIntToString(c.target)
+                armParts.push("{label} -> bb{mirIntToString(c.target)}")
             }
-            if !(first) {
-                arms = arms + ", "
-            }
-            arms = arms + "_ -> bb" + mirIntToString(t.target)
-            "switchInt " + mirPrintOperand(t.cond, func) + " -> [" + arms + "]"
+            armParts.push("_ -> bb{mirIntToString(t.target)}")
+            let arms = strings.join(armParts, ", ")
+            "switchInt {mirPrintOperand(t.cond, func)} -> [{arms}]"
         },
         MirTermReturn -> "return",
         MirTermUnreachable -> "unreachable",
@@ -1473,11 +1465,12 @@ fn mirPrintTerm(t: MirTerm, func: MirFunction) -> String {
 }
 
 fn mirPrintPlace(p: MirPlace, func: MirFunction) -> String {
-    let mut out = "_" + mirIntToString(p.local)
+    let mut parts: List<String> = []
+    parts.push("_{mirIntToString(p.local)}")
     for proj in p.projections {
-        out = out + mirPrintProjection(proj, func)
+        parts.push(mirPrintProjection(proj, func))
     }
-    out
+    strings.join(parts, "")
 }
 
 fn mirPrintProjection(proj: MirProjection, func: MirFunction) -> String {
@@ -1519,16 +1512,11 @@ fn mirPrintOperand(op: MirOperand, func: MirFunction) -> String {
 }
 
 fn mirPrintOperandList(ops: List<MirOperand>, func: MirFunction) -> String {
-    let mut out = ""
-    let mut first = true
+    let mut parts: List<String> = []
     for op in ops {
-        if !(first) {
-            out = out + ", "
-        }
-        first = false
-        out = out + mirPrintOperand(op, func)
+        parts.push(mirPrintOperand(op, func))
     }
-    out
+    strings.join(parts, ", ")
 }
 
 fn mirPrintConst(c: MirConst) -> String {
