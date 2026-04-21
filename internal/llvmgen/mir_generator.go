@@ -2169,7 +2169,39 @@ func (g *mirGen) emitConcurrencyHelperIntrinsic(i *mir.IntrinsicInstr) error {
 		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, i64, ptr)")
 		return g.emitSimpleCall(i, sym, "ptr", []string{"ptr " + items, "i64 " + conc, "ptr " + f})
 	case mir.IntrinsicRace:
-		return g.emitSimpleConcurrencyCall(i, "osty_rt_task_race", "ptr", nil)
+		// Returns Result<T, Error> — runtime uses the `{i64, i64}` enum
+		// layout matching chan_recv / check_cancelled.
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "race arity")
+		}
+		body, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_task_race"
+		g.declareRuntime(sym, "declare { i64, i64 } @"+sym+"(ptr)")
+		if i.Dest == nil {
+			g.fnBuf.WriteString("  call { i64, i64 } @")
+			g.fnBuf.WriteString(sym)
+			g.fnBuf.WriteString("(ptr ")
+			g.fnBuf.WriteString(body)
+			g.fnBuf.WriteString(")\n")
+			return nil
+		}
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = call { i64, i64 } @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(body)
+		g.fnBuf.WriteString(")\n")
+		g.fnBuf.WriteString("  store { i64, i64 } ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
+		g.fnBuf.WriteByte('\n')
+		return nil
 	case mir.IntrinsicCollectAll:
 		return g.emitSimpleConcurrencyCall(i, "osty_rt_task_collect_all", "ptr", nil)
 	}

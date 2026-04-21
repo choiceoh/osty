@@ -4289,20 +4289,269 @@ void osty_rt_select(void *body_env) {
     }
 }
 
-void *osty_rt_task_race(void *body) {
-    (void)body;
-    osty_sched_unimplemented("race");
-    return NULL;
+/* ---- Concurrency helpers: collectAll / race / parallel --------------
+ *
+ * Closure ABI: the body's env slot 0 holds the fn pointer.
+ *   - collectAll / race: body shape is
+ *       `void *body(void *env, void *group)`
+ *     returning a raw `List<Handle<T>>` pointer (i.e. the user's
+ *     `fn(Group) -> List<Handle<T>>`).
+ *   - parallel: items is a `List<T>` with elem_size == 8; f's env
+ *     slot 0 holds a fn with signature
+ *       `int64_t f(void *env, int64_t item_bits)`.
+ *
+ * Result layout: `{ i64 disc, i64 payload }` per §mir enum layout,
+ * with Ok = 1 and Err = 0 (lowerer's variantIndexByName contract).
+ * Output lists therefore carry elem_size = 16 and NULL trace_elem —
+ * the conservative choice that matches `List<Result<scalar-T, Error>>`
+ * for the 8-byte-wide T the rest of the Phase 1B/2 scheduler already
+ * restricts itself to. Pointer-payload T relies on the returned list
+ * being held via a regular GC root while the payload survives; this
+ * matches the existing handle_join ABI assumption.
+ */
+
+#define OSTY_RT_RESULT_OK_DISC  1
+#define OSTY_RT_RESULT_ERR_DISC 0
+
+typedef struct osty_rt_result_enum_v1 {
+    int64_t disc;
+    int64_t payload;
+} osty_rt_result_enum_v1;
+
+typedef int64_t (*osty_rt_parallel_body_fn)(void *env, int64_t item);
+
+static void osty_rt_group_init(osty_rt_task_group_impl *g) {
+    g->cancelled = 0;
+    g->cause = NULL;
+    g->children = NULL;
+    if (osty_rt_mu_init(&g->children_mu) != 0) {
+        osty_rt_abort("concurrency helper: mutex init failed");
+    }
 }
 
-void *osty_rt_task_collect_all(void *body) {
-    (void)body;
-    osty_sched_unimplemented("collectAll");
-    return NULL;
+/* collectAll: run body in a fresh group, join every handle the body
+ * returned, package each join result as Ok(v), and return the
+ * resulting List<Result<T, Error>>. Stray children (spawned into the
+ * group but not surfaced in the returned list) are reaped on exit. */
+void *osty_rt_task_collect_all(void *body_env) {
+    if (body_env == NULL) {
+        osty_rt_abort("collectAll: null body env");
+    }
+    osty_rt_task_group_impl group;
+    osty_rt_group_init(&group);
+
+    osty_rt_task_group_impl *prev = osty_sched_current_group;
+    osty_sched_current_group = &group;
+
+    osty_task_group_body_fn fn = (osty_task_group_body_fn)(*(void **)body_env);
+    void *handles_list = (void *)(intptr_t)fn(body_env, (void *)&group);
+
+    void *out = osty_rt_list_new();
+    int64_t n = handles_list != NULL ? osty_rt_list_len(handles_list) : 0;
+    for (int64_t i = 0; i < n; i++) {
+        void *handle = NULL;
+        memcpy(&handle,
+               osty_rt_list_get_raw(handles_list, i, sizeof(handle), NULL),
+               sizeof(handle));
+        osty_rt_result_enum_v1 r;
+        r.disc = OSTY_RT_RESULT_OK_DISC;
+        r.payload = osty_rt_task_handle_join(handle);
+        osty_rt_list_push_raw(out, &r, sizeof(r), NULL);
+    }
+
+    /* Any child the body spawned into the group but did not surface
+     * in the returned list (spec §8.1 structured lifetime). */
+    osty_rt_task_group_reap(&group);
+    osty_rt_mu_destroy(&group.children_mu);
+
+    osty_sched_current_group = prev;
+    return out;
 }
 
-void *osty_rt_parallel(void *items, int64_t concurrency, void *f) {
-    (void)items; (void)concurrency; (void)f;
-    osty_sched_unimplemented("parallel");
-    return NULL;
+/* race: run body in a fresh group, poll handle done flags, cancel
+ * the group on first completion, reap stragglers cooperatively, and
+ * return Ok(winner's result). Polling runs at a 500μs cadence (same
+ * as select's recv loop) — real per-handle semaphore parking lands
+ * with Phase 1B fibers. */
+osty_rt_result_enum_v1 osty_rt_task_race(void *body_env) {
+    if (body_env == NULL) {
+        osty_rt_abort("race: null body env");
+    }
+    osty_rt_task_group_impl group;
+    osty_rt_group_init(&group);
+
+    osty_rt_task_group_impl *prev = osty_sched_current_group;
+    osty_sched_current_group = &group;
+
+    osty_task_group_body_fn fn = (osty_task_group_body_fn)(*(void **)body_env);
+    void *handles_list = (void *)(intptr_t)fn(body_env, (void *)&group);
+
+    int64_t n = handles_list != NULL ? osty_rt_list_len(handles_list) : 0;
+    if (n <= 0) {
+        osty_rt_task_group_reap(&group);
+        osty_rt_mu_destroy(&group.children_mu);
+        osty_sched_current_group = prev;
+        osty_rt_abort("race: body returned no handles");
+    }
+
+    /* Snapshot the handle array — the list is GC-visible and we
+     * don't want to re-read it in the polling loop. */
+    osty_rt_task_handle_impl **handles =
+        (osty_rt_task_handle_impl **)calloc((size_t)n, sizeof(*handles));
+    if (handles == NULL) {
+        osty_rt_abort("race: out of memory");
+    }
+    for (int64_t i = 0; i < n; i++) {
+        void *h = NULL;
+        memcpy(&h,
+               osty_rt_list_get_raw(handles_list, i, sizeof(h), NULL),
+               sizeof(h));
+        handles[i] = (osty_rt_task_handle_impl *)h;
+    }
+
+    int64_t winner_idx = -1;
+    while (winner_idx < 0) {
+        for (int64_t i = 0; i < n; i++) {
+            osty_rt_task_handle_impl *h = handles[i];
+            if (h != NULL && __atomic_load_n(&h->done, __ATOMIC_ACQUIRE)) {
+                winner_idx = i;
+                break;
+            }
+        }
+        if (winner_idx < 0) {
+            osty_rt_sleep_ns(500000ULL);
+        }
+    }
+
+    /* Broadcast cancel: siblings observe at the next cooperative
+     * yield (channel op, sleep, explicit checkCancelled, join). */
+    __atomic_store_n(&group.cancelled, 1, __ATOMIC_RELEASE);
+
+    osty_rt_result_enum_v1 winner;
+    winner.disc = OSTY_RT_RESULT_OK_DISC;
+    winner.payload = osty_rt_task_handle_join((void *)handles[winner_idx]);
+
+    /* Reap reaps via pthread_join — guarantees no sibling outlives
+     * the race() scope even if it ignores cancellation. */
+    osty_rt_task_group_reap(&group);
+    free(handles);
+    osty_rt_mu_destroy(&group.children_mu);
+
+    osty_sched_current_group = prev;
+    return winner;
+}
+
+typedef struct osty_rt_parallel_ctx {
+    void *items;                 /* raw List<T>, elem_size == 8 */
+    void *out;                   /* raw List<Result<R, Error>>, elem_size 16 */
+    void *f_env;                 /* closure env for f: fn(T) -> R */
+    volatile int64_t next_index;
+    int64_t total;
+} osty_rt_parallel_ctx;
+
+typedef struct osty_rt_parallel_worker_env {
+    void *fn;                    /* osty_rt_parallel_worker_body */
+    osty_rt_parallel_ctx *ctx;
+} osty_rt_parallel_worker_env;
+
+static int64_t osty_rt_parallel_worker_body(void *env) {
+    osty_rt_parallel_worker_env *we = (osty_rt_parallel_worker_env *)env;
+    osty_rt_parallel_ctx *ctx = we->ctx;
+    osty_rt_parallel_body_fn f =
+        (osty_rt_parallel_body_fn)(*(void **)ctx->f_env);
+    for (;;) {
+        /* Cooperative cancellation: if the enclosing group cancelled,
+         * stop claiming work. Slots we skipped keep their zero sentinel
+         * (disc=0 = Err, payload=0) so the caller sees an unfinished
+         * entry rather than random memory. */
+        if (osty_rt_cancel_is_cancelled()) {
+            return 0;
+        }
+        int64_t idx = __atomic_fetch_add(&ctx->next_index, 1, __ATOMIC_ACQ_REL);
+        if (idx >= ctx->total) {
+            return 0;
+        }
+        int64_t item = 0;
+        memcpy(&item,
+               osty_rt_list_get_raw(ctx->items, idx, sizeof(item), NULL),
+               sizeof(item));
+        int64_t result_bits = f(ctx->f_env, item);
+        osty_rt_result_enum_v1 r;
+        r.disc = OSTY_RT_RESULT_OK_DISC;
+        r.payload = result_bits;
+        /* Concurrent set_raw at distinct indices is safe: ensure_layout
+         * is a no-op after pre-fill, the data buffer is stable (no
+         * reserve during set), and the writes don't overlap. */
+        osty_rt_list_set_raw(ctx->out, idx, &r, sizeof(r), NULL);
+    }
+}
+
+/* parallel(items, concurrency, f): bounded-concurrency map. Workers
+ * pull indices from a shared atomic counter and write Ok(f(item)) into
+ * a pre-sized output list. Restrictions: items' element size must be
+ * <= 8 bytes (same constraint the rest of the Phase 1B/2 scheduler
+ * carries via the int64_t task body ABI). */
+void *osty_rt_parallel(void *items, int64_t concurrency, void *f_env) {
+    if (items == NULL) {
+        osty_rt_abort("parallel: null items list");
+    }
+    if (f_env == NULL) {
+        osty_rt_abort("parallel: null closure env");
+    }
+    osty_rt_list *items_list = (osty_rt_list *)items;
+    if (items_list->elem_size != 0 && items_list->elem_size != sizeof(int64_t)) {
+        osty_rt_abort("parallel: element size > 8 bytes not supported yet");
+    }
+    int64_t n = items_list->len;
+
+    void *out = osty_rt_list_new();
+    osty_rt_result_enum_v1 zero = {0, 0};
+    for (int64_t i = 0; i < n; i++) {
+        osty_rt_list_push_raw(out, &zero, sizeof(zero), NULL);
+    }
+    if (n == 0) {
+        return out;
+    }
+
+    int64_t workers = concurrency;
+    if (workers <= 0) {
+        workers = 1;
+    }
+    if (workers > n) {
+        workers = n;
+    }
+
+    osty_rt_parallel_ctx ctx;
+    ctx.items = items;
+    ctx.out = out;
+    ctx.f_env = f_env;
+    ctx.next_index = 0;
+    ctx.total = n;
+
+    osty_rt_parallel_worker_env *envs =
+        (osty_rt_parallel_worker_env *)calloc((size_t)workers, sizeof(*envs));
+    void **handles = (void **)calloc((size_t)workers, sizeof(*handles));
+    if (envs == NULL || handles == NULL) {
+        free(envs);
+        free(handles);
+        osty_rt_abort("parallel: out of memory");
+    }
+
+    /* Workers inherit the caller's current group so that if parallel
+     * runs inside a taskGroup / race / collectAll, cancellation from
+     * that outer scope reaches them via osty_rt_cancel_is_cancelled.
+     * NULL (caller is top-level) degrades to a detached spawn. */
+    osty_rt_task_group_impl *inherited = osty_sched_current_group;
+    for (int64_t i = 0; i < workers; i++) {
+        envs[i].fn = (void *)osty_rt_parallel_worker_body;
+        envs[i].ctx = &ctx;
+        handles[i] = osty_rt_task_spawn_internal(inherited, &envs[i]);
+    }
+    for (int64_t i = 0; i < workers; i++) {
+        (void)osty_rt_task_handle_join(handles[i]);
+    }
+
+    free(envs);
+    free(handles);
+    return out;
 }
