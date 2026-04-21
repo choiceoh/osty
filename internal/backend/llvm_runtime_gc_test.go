@@ -2287,3 +2287,313 @@ int main(void) {
 		t.Fatalf("final validate_heap = %d, want 0; out=%q", validate, out)
 	}
 }
+
+// TestBundledRuntimeIncrementalMarkStepByStep covers Phase C1/C2 —
+// the state machine transitions (IDLE → MARK_INCREMENTAL → IDLE), the
+// budget step drains a bounded number of greys per call, and a full
+// cycle sweeps unreferenced objects.
+func TestBundledRuntimeIncrementalMarkStepByStep(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_incremental_step_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_incremental_step_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count);
+bool osty_gc_collect_incremental_step(int64_t budget);
+void osty_gc_collect_incremental_finish(void);
+
+int64_t osty_gc_debug_state(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_major_count(void);
+int64_t osty_gc_debug_incremental_steps_total(void);
+int64_t osty_gc_debug_incremental_work_total(void);
+int64_t osty_gc_debug_validate_heap(void);
+
+enum { STATE_IDLE = 0, STATE_MARK = 1, STATE_SWEEP = 2 };
+
+int main(void) {
+    /* Three live objects: one rooted, two dangling. */
+    void *keep = osty_gc_alloc_v1(7, 32, "keep");
+    void *drop1 = osty_gc_alloc_v1(7, 32, "drop1");
+    void *drop2 = osty_gc_alloc_v1(7, 32, "drop2");
+    (void)drop1; (void)drop2;
+    osty_gc_root_bind_v1(keep);
+
+    /* Baseline state. */
+    printf("%lld\n", (long long)osty_gc_debug_state());
+
+    osty_gc_collect_incremental_start_with_stack_roots(NULL, 0);
+    /* Now in MARK_INCREMENTAL; validate tolerates non-WHITE headers. */
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_state(),
+        (long long)osty_gc_debug_validate_heap());
+
+    /* Drive the mark in small steps. The only grey at this point is
+     * 'keep', so a single step drains it and returns false. */
+    bool more = osty_gc_collect_incremental_step(100);
+    printf("%d %lld\n", more, (long long)osty_gc_debug_incremental_work_total());
+
+    /* Finish: sweeps drop1 and drop2, resets state to IDLE. */
+    osty_gc_collect_incremental_finish();
+    printf("%lld %lld %lld %lld\n",
+        (long long)osty_gc_debug_state(),
+        (long long)osty_gc_debug_live_count(),
+        (long long)osty_gc_debug_major_count(),
+        (long long)osty_gc_debug_incremental_steps_total());
+    printf("%lld\n", (long long)osty_gc_debug_validate_heap());
+
+    osty_gc_root_release_v1(keep);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	/* Expected:
+	 *  0                 — state IDLE at rest
+	 *  1 0               — state MARK_INCREMENTAL, validate still 0
+	 *                      (tolerates non-WHITE under active mark)
+	 *  0 1               — step returned false (no more work), work_total = 1
+	 *  0 1 1 1           — state IDLE, live=1, major_count=1, steps_total=1
+	 *  0                 — validate green
+	 */
+	if got, want := string(runOutput), "0\n1 0\n0 1\n0 1 1 1\n0\n"; got != want {
+		t.Fatalf("incremental step harness stdout = %q, want %q", got, want)
+	}
+}
+
+// TestBundledRuntimeIncrementalBudgetDrainsLongChain covers the
+// budget-step half of C2: a long transitive graph forces multiple
+// step calls before the queue empties. Each step caps the work at
+// the supplied budget, not the remaining queue size.
+func TestBundledRuntimeIncrementalBudgetDrainsLongChain(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_incremental_budget_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_incremental_budget_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
+void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count);
+bool osty_gc_collect_incremental_step(int64_t budget);
+void osty_gc_collect_incremental_finish(void);
+
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_incremental_steps_total(void);
+int64_t osty_gc_debug_incremental_work_total(void);
+void *osty_rt_list_new(void);
+void osty_rt_list_push_ptr(void *list, void *value);
+
+int main(void) {
+    /* A rooted list with 50 children — reachable only through the
+     * list's trace callback. Incremental mark enqueues the list at
+     * seed time; the first step pops list → enqueues 50 children.
+     * With budget 10 the caller needs ≥6 steps to drain. */
+    enum { N = 50 };
+    void *list = osty_rt_list_new();
+    osty_gc_root_bind_v1(list);
+    for (int i = 0; i < N; i++) {
+        void *child = osty_gc_alloc_v1(7, 16, "child");
+        osty_gc_pre_write_v1(list, NULL, 0);
+        osty_rt_list_push_ptr(list, child);
+        osty_gc_post_write_v1(list, child, 0);
+    }
+
+    osty_gc_collect_incremental_start_with_stack_roots(NULL, 0);
+    int step_count = 0;
+    bool more = true;
+    while (more) {
+        more = osty_gc_collect_incremental_step(10);
+        step_count += 1;
+        if (step_count > 100) break;  /* runaway guard */
+    }
+    osty_gc_collect_incremental_finish();
+
+    /* Expected steps: the mark drain is list (1) + 50 children = 51
+     * work units. Budget 10 → ceil(51/10) = 6 steps before the queue
+     * empties; the sixth step drains the last unit and reports false.
+     * The counter incremental_steps_total counts successful step
+     * entries, so 6. */
+    printf("%d %lld %lld\n",
+        step_count,
+        (long long)osty_gc_debug_incremental_steps_total(),
+        (long long)osty_gc_debug_incremental_work_total());
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+
+    osty_gc_root_release_v1(list);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	/* Expected:
+	 *   6 6 51  — six steps; each called osty_gc_collect_incremental_step
+	 *             returned successfully. work_total = 51 (list + 50 kids)
+	 *   51      — all 51 objects survive since the list stays rooted
+	 */
+	if got, want := string(runOutput), "6 6 51\n51\n"; got != want {
+		t.Fatalf("incremental budget harness stdout = %q, want %q", got, want)
+	}
+}
+
+// TestBundledRuntimeIncrementalSATBBarrierGreysOldValue covers C5 —
+// during MARK_INCREMENTAL, if the mutator overwrites a reachable-but-
+// unmarked pointer, the SATB pre-write barrier must grey the old
+// value so the mark pass does not lose it. This is the correctness
+// test that makes the Phase A write-barrier log a live input instead
+// of passive recording.
+func TestBundledRuntimeIncrementalSATBBarrierGreysOldValue(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_incremental_satb_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_incremental_satb_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
+void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count);
+bool osty_gc_collect_incremental_step(int64_t budget);
+void osty_gc_collect_incremental_finish(void);
+
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_color_of(void *payload);
+int64_t osty_gc_debug_satb_barrier_greyed_total(void);
+void *osty_rt_list_new(void);
+void osty_rt_list_push_ptr(void *list, void *value);
+void osty_rt_list_set_ptr(void *list, int64_t index, void *value);
+
+enum { WHITE = 0, GREY = 1, BLACK = 2 };
+
+int main(void) {
+    /* Build a small reachable graph: list -> child. Both managed. */
+    void *list = osty_rt_list_new();
+    osty_gc_root_bind_v1(list);
+    void *child = osty_gc_alloc_v1(7, 32, "child");
+    osty_gc_pre_write_v1(list, NULL, 0);
+    osty_rt_list_push_ptr(list, child);
+    osty_gc_post_write_v1(list, child, 0);
+
+    /* Start incremental; seeds the list as GREY but hasn't yet
+     * traced into it — so child is still WHITE at this point. */
+    osty_gc_collect_incremental_start_with_stack_roots(NULL, 0);
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_color_of(list),
+        (long long)osty_gc_debug_color_of(child));
+
+    /* Mutator phase BETWEEN seed and step: overwrite the only slot
+     * pointing at child with a fresh payload. Without SATB, the
+     * upcoming mark step would trace an empty list and child would be
+     * swept at finish. With SATB, the pre_write greys child so it
+     * survives. */
+    void *replacement = osty_gc_alloc_v1(7, 32, "replacement");
+    osty_gc_pre_write_v1(list, child, 0);        /* barrier captures child */
+    osty_rt_list_set_ptr(list, 0, replacement);  /* slot now points to replacement */
+    osty_gc_post_write_v1(list, replacement, 0);
+
+    /* SATB counter bumped; child is now GREY. */
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_satb_barrier_greyed_total(),
+        (long long)osty_gc_debug_color_of(child));
+
+    /* Drain and finish. child + replacement both survive. */
+    while (osty_gc_collect_incremental_step(100)) {}
+    osty_gc_collect_incremental_finish();
+
+    /* live_count = list + child + replacement = 3. */
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+
+    osty_gc_root_release_v1(list);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	/* Expected:
+	 *   1 0   — list is GREY (seeded), child still WHITE (not traced)
+	 *   1 1   — SATB counter bumped once; child is now GREY
+	 *   3     — all three objects survive (list rooted; child via SATB;
+	 *           replacement via trace through list)
+	 */
+	if got, want := string(runOutput), "1 0\n1 1\n3\n"; got != want {
+		t.Fatalf("incremental SATB harness stdout = %q, want %q", got, want)
+	}
+}

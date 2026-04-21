@@ -267,6 +267,32 @@ typedef void (*osty_gc_trace_fn)(void *payload);
 typedef void (*osty_gc_destroy_fn)(void *payload);
 typedef void (*osty_rt_trace_slot_fn)(void *slot_addr);
 
+/* Phase C tri-colour marking (RUNTIME_GC_DELTA §4.1).
+ *
+ * Up through Phase B the mark pass used a single `marked` bit that
+ * implicitly encoded grey + black: setting it meant "on mark stack or
+ * already traced". Phase C splits the states explicitly so the
+ * incremental collector can reason about them:
+ *
+ *   WHITE — not yet reached this cycle. Swept if the mark pass ends
+ *           and this is still the colour.
+ *   GREY  — reached but children not traced. On the mark stack.
+ *   BLACK — reached AND children enqueued. Off the mark stack.
+ *
+ * Within a STW collection the transition is bounded: enqueue → GREY,
+ * pop + trace → BLACK. Under the incremental collector, mutator
+ * activity between step calls can create BLACK→WHITE edges (a freshly
+ * stored value that would otherwise be swept). The SATB barrier in
+ * `osty_gc_pre_write_v1` catches the old value and colours it GREY
+ * before it can escape; this is what turns the Phase A passive
+ * recording into a live collector input.
+ */
+enum {
+    OSTY_GC_COLOR_WHITE = 0,
+    OSTY_GC_COLOR_GREY = 1,
+    OSTY_GC_COLOR_BLACK = 2,
+};
+
 /* Phase B generation tags (RUNTIME_GC_DELTA §5.1-5.5).
  *
  * Every managed allocation is born YOUNG. A minor collection promotes
@@ -305,6 +331,11 @@ typedef struct osty_gc_header {
     int64_t object_kind;
     int64_t byte_size;
     int64_t root_count;
+    /* Phase C: explicit tri-colour (`OSTY_GC_COLOR_*`). `marked` is
+     * retained as a convenience alias — `marked == true` iff
+     * `color != WHITE`. The sweep loop reads `color` directly; the
+     * mark loop transitions GREY (on push) → BLACK (on drain). */
+    uint8_t color;
     bool marked;
     /* Phase B: per-object generation and survival counter. `age` is a
      * u8 because promotion thresholds above ~8 defeat the point of
@@ -483,6 +514,43 @@ static bool osty_gc_minor_in_progress = false;
  * or live_bytes above major threshold). The dispatcher at the next
  * safepoint turns this into an immediate major. */
 static bool osty_gc_collection_requested_major = false;
+
+/* Phase C incremental collection state (RUNTIME_GC_DELTA §4.3).
+ *
+ * IDLE        — no collection in progress. Headers colour WHITE at
+ *               rest (sweep resets BLACK → WHITE before exit).
+ * MARK_INCR   — mark phase is running across multiple step calls.
+ *               The mark stack may be non-empty between steps; any
+ *               SATB pre_write during this window greys the old
+ *               value. Mutator allocations land WHITE and will be
+ *               treated as unreachable unless a subsequent step
+ *               reaches them — the allocation-is-grey alternative
+ *               would require every alloc site to be barriered.
+ * SWEEPING    — mark queue is drained, sweep is running; transitional
+ *               state so a concurrent safepoint call can abort
+ *               cleanly.
+ *
+ * Transitions are driven by the three public entry points:
+ *   `osty_gc_collect_incremental_start`  — IDLE → MARK_INCR, seeds.
+ *   `osty_gc_collect_incremental_step`   — drains N; stays MARK_INCR
+ *                                          or transitions MARK_INCR →
+ *                                          SWEEPING when the queue
+ *                                          empties.
+ *   `osty_gc_collect_incremental_finish` — sweep + final reset, any
+ *                                          state → IDLE.
+ *
+ * The STW major / minor paths own the IDLE state entirely and assert
+ * on it at entry — incremental and STW cycles do not overlap.
+ */
+enum {
+    OSTY_GC_STATE_IDLE = 0,
+    OSTY_GC_STATE_MARK_INCREMENTAL = 1,
+    OSTY_GC_STATE_SWEEPING = 2,
+};
+static int osty_gc_state = OSTY_GC_STATE_IDLE;
+static int64_t osty_gc_incremental_steps_total = 0;
+static int64_t osty_gc_incremental_work_total = 0;
+static int64_t osty_gc_satb_barrier_greyed_total = 0;
 
 /* Phase A2 collection timing (RUNTIME_GC_DELTA §9.3 depth follow-up).
  *
@@ -1190,10 +1258,10 @@ static void osty_gc_mark_stack_push(osty_gc_header *header) {
 
 static void osty_gc_mark_header(osty_gc_header *header) {
     /* Enqueue only — the actual trace happens in `osty_gc_mark_drain`.
-     * Setting `marked` before pushing prevents duplicate entries when the
-     * same header is reached via multiple edges (the second call short
-     * circuits on the `marked` check). */
-    if (header == NULL || header->marked) {
+     * Phase C: the tri-colour check `color != WHITE` short-circuits
+     * both already-enqueued (GREY) and already-traced (BLACK) cases
+     * so repeated reach via different edges pushes at most once. */
+    if (header == NULL || header->color != OSTY_GC_COLOR_WHITE) {
         return;
     }
     /* Phase B: during a minor collection, OLD headers are treated as
@@ -1205,6 +1273,7 @@ static void osty_gc_mark_header(osty_gc_header *header) {
     if (osty_gc_minor_in_progress && header->generation == OSTY_GC_GEN_OLD) {
         return;
     }
+    header->color = OSTY_GC_COLOR_GREY;
     header->marked = true;
     osty_gc_mark_stack_push(header);
 }
@@ -1213,16 +1282,29 @@ static void osty_gc_mark_payload(void *payload) {
     osty_gc_mark_header(osty_gc_find_header(payload));
 }
 
-static void osty_gc_mark_drain(void) {
-    while (osty_gc_mark_stack_count > 0) {
+/* Phase C: drain up to `budget` grey headers. Budget of 0 or negative
+ * means "drain everything" (the pre-Phase-C semantics, still used by
+ * STW major/minor). Returns the number of headers actually traced so
+ * the incremental scheduler can pace future steps. */
+static int64_t osty_gc_mark_drain_budget(int64_t budget) {
+    int64_t done = 0;
+    bool unlimited = budget <= 0;
+    while (osty_gc_mark_stack_count > 0 && (unlimited || done < budget)) {
         osty_gc_header *header = osty_gc_mark_stack[--osty_gc_mark_stack_count];
+        header->color = OSTY_GC_COLOR_BLACK;
         if (header->trace != NULL) {
-            /* Trace callbacks re-enter `osty_gc_mark_*` for children, which
-             * just push more work onto this stack — the C call stack stays
-             * bounded regardless of object graph depth. */
+            /* Trace callbacks re-enter `osty_gc_mark_*` for children,
+             * which push more GREY work onto this stack — the C call
+             * stack stays bounded regardless of object graph depth. */
             header->trace(header->payload);
         }
+        done += 1;
     }
+    return done;
+}
+
+static void osty_gc_mark_drain(void) {
+    (void)osty_gc_mark_drain_budget(0);
 }
 
 static void osty_gc_mark_root_slot(void *slot_addr) {
@@ -1320,12 +1402,13 @@ static void osty_gc_collect_major_with_stack_roots(void *const *root_slots, int6
     }
     /* 4. Drain the work queue iteratively. */
     osty_gc_mark_drain();
-    /* 5. Sweep unreachable across both generations. Survivors get their
-     *    colour cleared on the way out. */
+    /* 5. Sweep unreachable across both generations. Survivors get
+     *    their colour reset to WHITE so the next cycle starts from a
+     *    clean slate. */
     header = osty_gc_objects;
     while (header != NULL) {
         next = header->next;
-        if (!header->marked) {
+        if (header->color == OSTY_GC_COLOR_WHITE) {
             osty_gc_swept_count_total += 1;
             osty_gc_swept_bytes_total += header->byte_size;
             if (header->destroy != NULL) {
@@ -1334,6 +1417,7 @@ static void osty_gc_collect_major_with_stack_roots(void *const *root_slots, int6
             osty_gc_unlink(header);
             free(header);
         } else {
+            header->color = OSTY_GC_COLOR_WHITE;
             header->marked = false;
         }
         header = next;
@@ -1417,7 +1501,7 @@ static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int6
     header = osty_gc_young_head;
     while (header != NULL) {
         next = header->next_gen;
-        if (!header->marked) {
+        if (header->color == OSTY_GC_COLOR_WHITE) {
             osty_gc_swept_count_total += 1;
             osty_gc_swept_bytes_total += header->byte_size;
             if (header->destroy != NULL) {
@@ -1426,6 +1510,7 @@ static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int6
             osty_gc_unlink(header);
             free(header);
         } else {
+            header->color = OSTY_GC_COLOR_WHITE;
             header->marked = false;
             if ((int64_t)header->age + 1 >= promote_age) {
                 osty_gc_promote_header(header);
@@ -1502,6 +1587,140 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
 
 static void osty_gc_collect_now(void) {
     osty_gc_collect_major_with_stack_roots(NULL, 0);
+}
+
+/* Phase C incremental major collection (RUNTIME_GC_DELTA §4.3).
+ *
+ * Splits the Phase B STW major into three callable phases:
+ *
+ *   1. `start`  — seeds roots (pinned + stack + global). State goes
+ *                 IDLE → MARK_INCREMENTAL. Call exactly once per
+ *                 cycle.
+ *   2. `step`   — drains up to `budget` grey headers; each popped
+ *                 header transitions GREY → BLACK and its children
+ *                 get enqueued as GREY. Returns true while more work
+ *                 is pending.
+ *   3. `finish` — drains the remainder of the mark queue, runs the
+ *                 sweep, and resets state to IDLE.
+ *
+ * Between step calls the mutator may allocate and execute write
+ * barriers. `osty_gc_pre_write_v1` observes MARK_INCREMENTAL and
+ * greys any managed pointer about to be overwritten so the mark is
+ * not lost (SATB).
+ *
+ * The incremental path is additive — STW major and minor remain and
+ * are preferred by the auto-dispatcher. Tests and future adaptive
+ * triggers drive the incremental path directly. */
+static void osty_gc_incremental_seed_roots(void *const *root_slots, int64_t root_slot_count) {
+    osty_gc_header *header;
+    int64_t i;
+    header = osty_gc_objects;
+    while (header != NULL) {
+        if (header->root_count > 0) {
+            osty_gc_mark_header(header);
+        }
+        header = header->next;
+    }
+    for (i = 0; i < root_slot_count; i++) {
+        osty_gc_mark_root_slot((void *)root_slots[i]);
+    }
+    for (i = 0; i < osty_gc_global_root_count; i++) {
+        osty_gc_mark_root_slot(osty_gc_global_root_slots[i]);
+    }
+}
+
+static void osty_gc_incremental_sweep(void) {
+    osty_gc_header *header;
+    osty_gc_header *next;
+    header = osty_gc_objects;
+    while (header != NULL) {
+        next = header->next;
+        if (header->color == OSTY_GC_COLOR_WHITE) {
+            osty_gc_swept_count_total += 1;
+            osty_gc_swept_bytes_total += header->byte_size;
+            if (header->destroy != NULL) {
+                header->destroy(header->payload);
+            }
+            osty_gc_unlink(header);
+            free(header);
+        } else {
+            header->color = OSTY_GC_COLOR_WHITE;
+            header->marked = false;
+        }
+        header = next;
+    }
+}
+
+/* Public incremental entry points. The `_with_stack_roots` variant is
+ * the real worker; the no-arg `osty_gc_collect_incremental_start`
+ * calls it with an empty stack-slot array so tests / callers without
+ * visible frame descriptors can still drive the machinery. */
+void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
+    osty_gc_acquire();
+    if (osty_gc_state != OSTY_GC_STATE_IDLE) {
+        osty_gc_release();
+        osty_rt_abort("incremental start called while collection already in progress");
+    }
+    if (osty_concurrent_workers > 0) {
+        osty_gc_release();
+        return;
+    }
+    osty_gc_state = OSTY_GC_STATE_MARK_INCREMENTAL;
+    osty_gc_incremental_seed_roots(root_slots, root_slot_count);
+    osty_gc_release();
+}
+
+/* Returns true if more mark work remains; false when the queue is
+ * empty and the caller should transition to sweep via
+ * `osty_gc_collect_incremental_finish`. */
+bool osty_gc_collect_incremental_step(int64_t budget) {
+    bool has_more = false;
+    osty_gc_acquire();
+    if (osty_gc_state != OSTY_GC_STATE_MARK_INCREMENTAL) {
+        osty_gc_release();
+        return false;
+    }
+    int64_t done = osty_gc_mark_drain_budget(budget);
+    osty_gc_incremental_steps_total += 1;
+    osty_gc_incremental_work_total += done;
+    has_more = osty_gc_mark_stack_count > 0;
+    osty_gc_release();
+    return has_more;
+}
+
+void osty_gc_collect_incremental_finish(void) {
+    int64_t t_start = osty_gc_now_nanos();
+    osty_gc_acquire();
+    if (osty_gc_state == OSTY_GC_STATE_IDLE) {
+        osty_gc_release();
+        return;
+    }
+    /* Drain any remaining greys so the sweep sees a consistent
+     * colouring. The incremental barrier (SATB pre_write) could have
+     * dropped new greys on us between the last step and this call. */
+    (void)osty_gc_mark_drain_budget(0);
+    osty_gc_state = OSTY_GC_STATE_SWEEPING;
+    osty_gc_incremental_sweep();
+    osty_gc_collection_count += 1;
+    osty_gc_major_count += 1;
+    osty_gc_allocated_since_collect = 0;
+    osty_gc_allocated_since_minor = 0;
+    osty_gc_collection_requested = false;
+    osty_gc_collection_requested_major = false;
+    osty_gc_barrier_logs_clear();
+    osty_gc_state = OSTY_GC_STATE_IDLE;
+    osty_gc_release();
+
+    int64_t t_end = osty_gc_now_nanos();
+    if (t_start != 0 && t_end >= t_start) {
+        int64_t elapsed = t_end - t_start;
+        osty_gc_collection_nanos_last = elapsed;
+        osty_gc_collection_nanos_total += elapsed;
+        osty_gc_major_nanos_total += elapsed;
+        if (elapsed > osty_gc_collection_nanos_max) {
+            osty_gc_collection_nanos_max = elapsed;
+        }
+    }
 }
 
 static bool osty_gc_safepoint_stress_enabled_now(void) {
@@ -3372,6 +3591,7 @@ static void osty_gc_barrier_logs_clear(void) {
 
 void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) {
     osty_gc_header *owner_header;
+    osty_gc_header *old_header;
 
     (void)slot_kind;
     osty_gc_acquire();
@@ -3380,12 +3600,29 @@ void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) {
         osty_gc_release();
         return;
     }
-    if (osty_gc_find_header(old_value) == NULL) {
+    old_header = osty_gc_find_header(old_value);
+    if (old_header == NULL) {
         osty_gc_release();
         return;
     }
     osty_gc_pre_write_managed_count += 1;
     osty_gc_satb_log_append(old_value);
+    /* Phase C (RUNTIME_GC_DELTA §2.7, §4.3): SATB consumption. While
+     * the incremental collector is in MARK_INCREMENTAL the mutator can
+     * overwrite a slot whose old value has not been reached yet — a
+     * classic "lost object" hazard for any non-STW marker. Greying the
+     * old value here preserves the snapshot-at-the-beginning guarantee:
+     * every pointer that was live at start-of-mark survives to the
+     * end, even if the mutator rewrites the slot mid-cycle. Outside
+     * MARK_INCREMENTAL the barrier is a no-op (STW cycles don't need
+     * SATB). */
+    if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL &&
+        old_header->color == OSTY_GC_COLOR_WHITE) {
+        old_header->color = OSTY_GC_COLOR_GREY;
+        old_header->marked = true;
+        osty_gc_mark_stack_push(old_header);
+        osty_gc_satb_barrier_greyed_total += 1;
+    }
     owner_header = osty_gc_find_header(owner);
     if (owner_header != NULL && owner_header->root_count > 0) {
         osty_gc_collection_requested = true;
@@ -3636,6 +3873,36 @@ int64_t osty_gc_debug_promoted_bytes_total(void) {
 
 int64_t osty_gc_debug_nursery_limit_bytes(void) {
     return osty_gc_nursery_limit_now();
+}
+
+/* Phase C incremental / tri-colour accessors. */
+
+int64_t osty_gc_debug_state(void) {
+    return (int64_t)osty_gc_state;
+}
+
+int64_t osty_gc_debug_mark_stack_count(void) {
+    return osty_gc_mark_stack_count;
+}
+
+int64_t osty_gc_debug_incremental_steps_total(void) {
+    return osty_gc_incremental_steps_total;
+}
+
+int64_t osty_gc_debug_incremental_work_total(void) {
+    return osty_gc_incremental_work_total;
+}
+
+int64_t osty_gc_debug_satb_barrier_greyed_total(void) {
+    return osty_gc_satb_barrier_greyed_total;
+}
+
+int64_t osty_gc_debug_color_of(void *payload) {
+    osty_gc_header *header = osty_gc_find_header(payload);
+    if (header == NULL) {
+        return -1;
+    }
+    return (int64_t)header->color;
 }
 
 int64_t osty_gc_debug_promote_age(void) {
@@ -4134,6 +4401,10 @@ enum {
     /* Phase B2 depth — segregated list consistency. */
     OSTY_GC_VALIDATE_GEN_LIST_COUNT_MISMATCH = -15,
     OSTY_GC_VALIDATE_GEN_LIST_MEMBERSHIP = -16,
+    /* Phase C tri-colour coherence. */
+    OSTY_GC_VALIDATE_INVALID_COLOR = -17,
+    OSTY_GC_VALIDATE_COLOR_MARKED_MISMATCH = -18,
+    OSTY_GC_VALIDATE_NONWHITE_OUTSIDE_MARK = -19,
 };
 
 int64_t osty_gc_debug_validate_heap(void) {
@@ -4167,8 +4438,38 @@ int64_t osty_gc_debug_validate_heap(void) {
             status = OSTY_GC_VALIDATE_NEGATIVE_ROOT_COUNT;
             goto done;
         }
-        if (header->marked) {
+        /* Phase C tri-colour coherence. Ordered so the legacy Phase A1
+         * stale-mark shape (marked=true flipped without touching
+         * color, state=IDLE) keeps returning -9 and older corruption
+         * harnesses don't need to know about the new codes:
+         *   - legacy -9: marked=true, color=WHITE, state=IDLE
+         *   - -17 INVALID_COLOR: `color` is out of range
+         *   - -18 COLOR_MARKED_MISMATCH: color/marked desynchronised
+         *     in any other way
+         *   - -19 NONWHITE_OUTSIDE_MARK: both fields agree but the
+         *     header is non-WHITE while no mark phase is running
+         */
+        if (header->marked && header->color == OSTY_GC_COLOR_WHITE &&
+            osty_gc_state == OSTY_GC_STATE_IDLE) {
             status = OSTY_GC_VALIDATE_STALE_MARK;
+            goto done;
+        }
+        if (header->color != OSTY_GC_COLOR_WHITE &&
+            header->color != OSTY_GC_COLOR_GREY &&
+            header->color != OSTY_GC_COLOR_BLACK) {
+            status = OSTY_GC_VALIDATE_INVALID_COLOR;
+            goto done;
+        }
+        {
+            bool expected_marked = header->color != OSTY_GC_COLOR_WHITE;
+            if (header->marked != expected_marked) {
+                status = OSTY_GC_VALIDATE_COLOR_MARKED_MISMATCH;
+                goto done;
+            }
+        }
+        if (osty_gc_state == OSTY_GC_STATE_IDLE &&
+            header->color != OSTY_GC_COLOR_WHITE) {
+            status = OSTY_GC_VALIDATE_NONWHITE_OUTSIDE_MARK;
             goto done;
         }
         if (header->generation == OSTY_GC_GEN_YOUNG) {
@@ -4234,7 +4535,11 @@ int64_t osty_gc_debug_validate_heap(void) {
             goto done;
         }
     }
-    if (osty_gc_mark_stack_count != 0) {
+    /* Phase C: mark stack is expected to be empty only at rest.
+     * During MARK_INCREMENTAL the stack is the live grey set; during
+     * SWEEPING it has been drained but state hasn't flipped yet. */
+    if (osty_gc_state == OSTY_GC_STATE_IDLE &&
+        osty_gc_mark_stack_count != 0) {
         status = OSTY_GC_VALIDATE_MARK_STACK_NON_EMPTY;
         goto done;
     }

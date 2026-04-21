@@ -55,7 +55,7 @@ a spec. New implementation effort should land in the LLVM lowering/runtime path;
 | 2.4 | Closure capture root                | ✅   | 🟡 | capture struct은 일반 alloc, slot descriptor 없음 | P2 | `lib.osty:618-622`          |
 | 2.5 | Async frame root                    | ✅   | ❌  | async 구현 전까지 대기                    | P3 | `lib.osty:624-631`                |
 | 2.6 | Derived-base root pair              | ✅   | ❌  | inner pointer 대응                        | P3 | `lib.osty:582-600`                |
-| 2.7 | Incremental shade-on-add            | ✅   | ❌  | concurrent marking 전제                   | P3 | `lib.osty:1011-1019`              |
+| 2.7 | ~~Incremental shade-on-add~~        | ✅   | ✅  | `pre_write_v1` greys old value during MARK_INCREMENTAL (Phase C5) | ✅ C5 | `osty_runtime.c:osty_gc_pre_write_v1` |
 
 ## 3. 쓰기 / 읽기 배리어
 
@@ -78,11 +78,11 @@ a spec. New implementation effort should land in the LLVM lowering/runtime path;
 
 | #   | 기능                                        | 시뮬 | 실  | 델타                                       | P  | 참조                          |
 | --- | ------------------------------------------- | ---- | --- | ------------------------------------------ | -- | ----------------------------- |
-| 4.1 | 트라이-컬러 (White / Grey / Black)          | ✅   | 🟡 | binary `marked` bit + 재귀                 | P2 | `osty_runtime.c:343-368`      |
-| 4.2 | Work queue (스택-안전)                      | ✅   | ❌  | 재귀 — 깊은 그래프에서 stack overflow 위험  | P2 | `osty_runtime.c:219-334`      |
-| 4.3 | Incremental marking (budget step)           | ✅   | ❌  | STW 단일 pass                              | P3 | `lib.osty:1143-1159`          |
-| 4.4 | Mostly-concurrent mark + final remark       | ✅   | ❌  | —                                          | P3 | `lib.osty:252-262`            |
-| 4.5 | 타입 descriptor 기반 ref 투영               | ✅   | ✅  | —                                          | —  | `osty_runtime.c:219-334`      |
+| 4.1 | ~~트라이-컬러 (White / Grey / Black)~~      | ✅   | ✅  | `osty_gc_header.color` 명시 필드 + `marked` legacy alias (Phase C1) | ✅ C1 | `osty_runtime.c:osty_gc_mark_header` |
+| 4.2 | ~~Work queue (스택-안전)~~                  | ✅   | ✅  | Phase A3에서 completed (explicit mark_stack) | ✅ A3 | `osty_runtime.c:osty_gc_mark_stack` |
+| 4.3 | ~~Incremental marking (budget step)~~       | ✅   | ✅  | state machine (IDLE/MARK_INCR/SWEEPING) + `_step(budget)` API (Phase C2) | ✅ C2 | `osty_runtime.c:osty_gc_collect_incremental_*` |
+| 4.4 | Mostly-concurrent mark + final remark       | ✅   | ❌  | 단일 스레드 incremental만; 실제 concurrent는 스레드 추가 시 | P3 | `lib.osty:252-262`            |
+| 4.5 | 타입 descriptor 기반 ref 투영               | ✅   | ✅  | —                                          | —  | `osty_runtime.c:trace callbacks` |
 
 ## 5. 세대
 
@@ -272,11 +272,62 @@ OLD로 **in-place 승격** (주소 보존, compaction은 Phase D에서).
 - 다음 예정: Phase C (incremental marking). SATB log가 처음으로 소비처를 얻는
   단계. A3 mark work queue 위에 budget step을 얹는 형태.
 
+## Phase C 진행 상태 (incremental marking)
+
+Phase A SATB log가 passive recording에서 **live consumer**로 승격. 마킹
+페이즈가 여러 step 호출로 쪼개져 STW 대체 가능.
+
+- ✅ **§4.1 C1 tri-color 명시** — `osty_gc_header.color` (WHITE/GREY/BLACK)
+  + `marked` legacy alias. mark_header가 GREY로 push, drain이 BLACK으로
+  마무리. sweep이 survivor를 WHITE로 리셋.
+- ✅ **§4.3 C2 incremental mark** — 상태 머신 3단계 (IDLE → MARK_INCREMENTAL
+  → SWEEPING → IDLE). 3개 entry point:
+  `osty_gc_collect_incremental_start_with_stack_roots` (seed roots),
+  `osty_gc_collect_incremental_step(budget)` (drain N greys, returns
+  has_more), `osty_gc_collect_incremental_finish` (final drain + sweep).
+- ✅ **§2.7 C5 SATB consume** — `pre_write_v1`이 MARK_INCREMENTAL 상태일 때
+  old_value를 GREY로 칠한다. snapshot-at-the-beginning 보장: mark 시작
+  시점에 live했던 포인터는 mark 완료 시점까지 생존. `satb_barrier_greyed_total`
+  관측.
+- ✅ **Validate 확장** — 3개 새 invariant: `-17 INVALID_COLOR`,
+  `-18 COLOR_MARKED_MISMATCH`, `-19 NONWHITE_OUTSIDE_MARK`. `mark_stack_count`
+  검사는 IDLE 상태에서만 (MARK_INCREMENTAL은 live grey set 보유).
+- ✅ **테스트 3건**:
+  - `TestBundledRuntimeIncrementalMarkStepByStep` — 상태 머신 + 단일 step
+    으로 단순 sweep.
+  - `TestBundledRuntimeIncrementalBudgetDrainsLongChain` — 51 work units
+    을 budget=10으로 6 step에 완주.
+  - `TestBundledRuntimeIncrementalSATBBarrierGreysOldValue` — mark 시작 후
+    child을 list에서 제거(overwrite)했을 때 SATB가 GREY로 칠해서 생존.
+    `satb_barrier_greyed_total = 1`.
+
+### Phase C 경계 / 후속 (C 깊이 남은 구멍)
+
+- **§4.4 mostly-concurrent** — 여전히 ❌. 지금은 단일 스레드 incremental만
+  — mutator가 step 사이에만 활동. 진짜 concurrent는 GC 스레드를 띄우는
+  작업으로 Phase D 근처.
+- **§9.2 mutator assist** — 여전히 ❌. allocation debt 추적해서 alloc 경로
+  에서 mark 작업 보조하는 메커니즘 없음. adaptive 트리거 없이는 큰 힙에서
+  budget step이 느리게 소화될 수 있음.
+- **Auto-dispatcher 연결 안 됨** — 현재 safepoint는 여전히 STW major/minor
+  만 사용. incremental은 명시적 `_start` / `_step` / `_finish` API로만 호출.
+  자동 dispatch에 편입하려면 budget 정책 설계 필요.
+- **Minor + incremental 상호작용** — incremental은 major 경로만; minor는
+  여전히 STW. 혼합 워크로드 (long-running OLD scan + 빠른 YOUNG churn)는
+  미탐색.
+- **Go 측 위반 남아있음** — Phase A5/A6/A4 깊이 패스의 llvmgen 변경이
+  `generator.go`/`fn_value.go`에 Go로 들어가 있음. CLAUDE.md는 이걸
+  `toolchain/*.osty` + `support_snapshot.go` 재생성으로 가야 한다고 명시.
+  별도 cleanup task 필요.
+
 ## 다음 단계
 
-Phase C 진입 순서: §4.1 tri-color 확장 (White/Grey/Black 명시) → §4.3 incremental
-mark budget step → SATB log 소비 경로 연결 → §9.2 mutator assist → §4.4 mostly-
-concurrent mark + final remark → §2.7 shade-on-add.
+Phase C 깊이 패스 또는 Phase D (compaction). Phase C 깊이로 가면:
+§9.2 mutator assist → §4.4 concurrent thread → auto-dispatcher에 incremental
+편입 → minor + incremental 혼합.
+
+Phase D는 §1.7 stable ID → §6.2-6.3 forwarding + evacuation → §8.1-8.2 pin
+API → §1.3-1.6 region heap (bump/freelist/TLAB/size class).
 
 ## 유지 규칙
 
