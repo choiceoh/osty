@@ -957,6 +957,83 @@ void *osty_rt_list_sorted_string(void *raw_list) {
     return out;
 }
 
+// osty_rt_list_slice returns a new List<T> containing elements at
+// indices [start, end) of src. Bounds are saturating — negative start
+// clamps to 0, end past len clamps to len, end < start yields an empty
+// result. This matches the String.slice semantics (s[a..b]).
+void *osty_rt_list_slice(void *raw_list, int64_t start, int64_t end) {
+    osty_rt_list *src = osty_rt_list_cast(raw_list);
+    int64_t len = src->len;
+    int64_t count;
+    void *out_raw;
+    osty_rt_list *out;
+
+    if (start < 0) {
+        start = 0;
+    }
+    if (end > len) {
+        end = len;
+    }
+    if (end < start) {
+        end = start;
+    }
+    count = end - start;
+
+    out_raw = osty_rt_list_new();
+    out = osty_rt_list_cast(out_raw);
+
+    // Propagate layout even for empty slices so downstream len/push/get
+    // calls see the same element ABI as the source list.
+    if (src->elem_size != 0) {
+        osty_rt_list_ensure_layout(out, src->elem_size, src->trace_elem);
+        if (src->gc_offset_count > 0) {
+            osty_rt_list_ensure_gc_offsets(out, src->gc_offsets, src->gc_offset_count);
+        }
+    }
+
+    if (count == 0) {
+        return out_raw;
+    }
+
+    osty_rt_list_reserve(out, count);
+    memcpy(out->data,
+           src->data + (size_t)start * src->elem_size,
+           (size_t)count * src->elem_size);
+    out->len = count;
+
+    // Emit write barriers for each embedded pointer we copied in, so
+    // incremental / generational GC tracks the new list correctly.
+    if (out->elem_size == sizeof(void *) && src->trace_elem != NULL) {
+        int64_t i;
+        for (i = 0; i < count; i++) {
+            void *child = NULL;
+            memcpy(&child,
+                   out->data + (size_t)i * out->elem_size,
+                   sizeof(child));
+            if (child != NULL) {
+                osty_gc_post_write_v1(out_raw, child, OSTY_GC_KIND_LIST);
+            }
+        }
+    } else if (out->gc_offset_count > 0) {
+        int64_t i;
+        int64_t j;
+        for (i = 0; i < count; i++) {
+            unsigned char *elem = out->data + (size_t)i * out->elem_size;
+            for (j = 0; j < out->gc_offset_count; j++) {
+                void *child = NULL;
+                memcpy(&child,
+                       elem + (size_t)out->gc_offsets[j],
+                       sizeof(child));
+                if (child != NULL) {
+                    osty_gc_post_write_v1(out_raw, child, OSTY_GC_KIND_LIST);
+                }
+            }
+        }
+    }
+
+    return out_raw;
+}
+
 bool osty_rt_strings_Equal(const char *left, const char *right) {
     if (left == NULL || right == NULL) {
         return left == right;

@@ -5,8 +5,19 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 )
+
+// ostyEvaluatedHint applies the Osty string-literal escape rules that
+// matter for the diagnostic-hint parity check: `\{` / `\}` collapse to
+// literal `{` / `}` so an Osty source written with escaped braces (the
+// only safe way to embed `{ ... }` in a non-interpolated message)
+// compares equal to a Go snapshot that uses bare braces.
+func ostyEvaluatedHint(raw string) string {
+	r := strings.NewReplacer(`\{`, `{`, `\}`, `}`)
+	return r.Replace(raw)
+}
 
 // TestUnsupportedDiagnosticOstySnapshotParity pins the kind → (code, hint)
 // mapping agreement across the three places it lives:
@@ -76,7 +87,7 @@ func TestUnsupportedDiagnosticOstySnapshotParity(t *testing.T) {
 				t.Errorf("kind %q: %s has code %q, Go snapshot has %q",
 					kind, rel, br[0], snap.Code)
 			}
-			if br[1] != snap.Hint {
+			if ostyEvaluatedHint(br[1]) != snap.Hint {
 				t.Errorf("kind %q: %s hint drift\n  osty:     %q\n  snapshot: %q",
 					kind, rel, br[1], snap.Hint)
 			}
