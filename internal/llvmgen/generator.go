@@ -17,8 +17,17 @@ import (
 )
 
 type generator struct {
-	sourcePath        string
-	source            []byte
+	sourcePath string
+	source     []byte
+	// target is the canonical LLVM target triple for this emission.
+	// Canonicalization happens once at the Options boundary (see
+	// CanonicalLLVMTarget in target.go): empty input becomes the host
+	// triple, Osty-profile short form expands to LLVM's
+	// `<arch>-<vendor>-<sys>` shape, and anything already in LLVM
+	// shape is preserved. LLVM derives pointer size, alignment, and
+	// the generic address-space contract from this value — see
+	// dataLayoutFor / withDataLayout for the matching `target
+	// datalayout` directive emitted alongside the triple.
 	target            string
 	functions         map[string]*fnSig
 	methods           map[string]map[string]*fnSig
@@ -407,10 +416,13 @@ func (g *generator) render(defs []string) []byte {
 	if g.needsGCRuntime {
 		runtimeDecls = append(llvmGcRuntimeDeclarations(), runtimeDecls...)
 	}
+	var out []byte
 	if len(runtimeDecls) > 0 {
-		return []byte(llvmRenderModuleWithRuntimeDeclarations(g.sourcePath, g.target, typeDefs, g.stringDefs, runtimeDecls, allDefs))
+		out = []byte(llvmRenderModuleWithRuntimeDeclarations(g.sourcePath, g.target, typeDefs, g.stringDefs, runtimeDecls, allDefs))
+	} else {
+		out = []byte(llvmRenderModuleWithGlobalsAndTypes(g.sourcePath, g.target, typeDefs, g.stringDefs, allDefs))
 	}
-	return []byte(llvmRenderModuleWithGlobalsAndTypes(g.sourcePath, g.target, typeDefs, g.stringDefs, allDefs))
+	return withDataLayout(out, g.target)
 }
 
 // renderInterfaceVtables builds the LLVM IR for the interface
