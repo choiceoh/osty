@@ -1,4 +1,9 @@
 // std.http — minimal HTTP client/server signature surface.
+//
+// Transport primitives (`request`, `get`, `serve`) are body-less — the
+// backend routes each to the HTTP runtime. `post`, `Response.text`,
+// and `Response.json` keep real bodies since they derive from the
+// primitives.
 
 use std.json
 
@@ -36,13 +41,9 @@ pub struct Response {
     }
 }
 
-pub fn request(req: Request) -> Result<Response, Error> {
-    request(req)
-}
+pub fn request(req: Request) -> Result<Response, Error>
 
-pub fn get(url: String, headers: Headers = {:}) -> Result<Response, Error> {
-    get(url, headers)
-}
+pub fn get(url: String, headers: Headers = {:}) -> Result<Response, Error>
 
 pub fn post(url: String, body: Bytes, headers: Headers = {:}) -> Result<Response, Error> {
     request(Request {
@@ -53,6 +54,4 @@ pub fn post(url: String, body: Bytes, headers: Headers = {:}) -> Result<Response
     })
 }
 
-pub fn serve(addr: String, handler: Handler) -> Result<(), Error> {
-    Ok(())
-}
+pub fn serve(addr: String, handler: Handler) -> Result<(), Error>

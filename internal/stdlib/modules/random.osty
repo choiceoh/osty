@@ -1,14 +1,16 @@
-// std.random — non-cryptographic pseudorandom numbers.
+// std.random — non-cryptographic pseudorandom numbers (spec §10.14).
 //
-// This is the checker-visible signature surface for spec §10.14. The
-// generator supplies the executable Go bridge for the basic RNG runtime.
+// Primitive methods and constructors are body-less; the backend lowers
+// them to the runtime RNG bridge. `choice` is a derived helper with a
+// real Osty body that composes over the primitive surface.
 
 pub struct Rng {
-    pub fn int(self, min: Int, max: Int) -> Int { 0 }
-    pub fn intInclusive(self, min: Int, max: Int) -> Int { 0 }
-    pub fn float(self) -> Float { 0.0 }
-    pub fn bool(self) -> Bool { false }
-    pub fn bytes(self, n: Int) -> Bytes { self.bytes(n) }
+    pub fn int(self, min: Int, max: Int) -> Int
+    pub fn intInclusive(self, min: Int, max: Int) -> Int
+    pub fn float(self) -> Float
+    pub fn bool(self) -> Bool
+    pub fn bytes(self, n: Int) -> Bytes
+
     pub fn choice<T>(self, items: List<T>) -> T? {
         if items.isEmpty() {
             None
@@ -16,13 +18,10 @@ pub struct Rng {
             Some(items[self.int(0, items.len())])
         }
     }
-    pub fn shuffle<T>(self, items: List<T>) {}
+
+    pub fn shuffle<T>(self, items: List<T>)
 }
 
-pub fn default() -> Rng {
-    Rng {}
-}
+pub fn default() -> Rng
 
-pub fn seeded(seed: Int64) -> Rng {
-    Rng {}
-}
+pub fn seeded(seed: Int64) -> Rng

@@ -1,11 +1,15 @@
 // std.sync — synchronization primitives.
+//
+// Lock-acquire entries (`Mutex.lock`, `RwLock.read`, `RwLock.write`)
+// are body-less; the backend lowers each to the real acquire runtime.
+// Per-guard accessors (`get`, `set`, `unlock`) keep Osty bodies:
+// `unlock` is a no-op so dropping a guard is always safe at the Osty
+// level while the backend overlays the release call.
 
 pub struct Mutex<T> {
     value: T,
 
-    pub fn lock(self) -> Locked<T> {
-        self.lock()
-    }
+    pub fn lock(self) -> Locked<T>
 }
 
 pub struct Locked<T> {
@@ -21,13 +25,9 @@ pub struct Locked<T> {
 pub struct RwLock<T> {
     value: T,
 
-    pub fn read(self) -> ReadLocked<T> {
-        self.read()
-    }
+    pub fn read(self) -> ReadLocked<T>
 
-    pub fn write(self) -> WriteLocked<T> {
-        self.write()
-    }
+    pub fn write(self) -> WriteLocked<T>
 }
 
 pub struct ReadLocked<T> {

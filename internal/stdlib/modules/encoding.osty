@@ -1,24 +1,30 @@
-// std.encoding — binary-to-text encodings.
+// std.encoding — binary-to-text encodings (spec §10.11).
+//
+// Body-less signature stubs: the backend lowers each call to the real
+// codec runtime. A pure-Osty implementation is gated on the native
+// checker learning the `Bytes.len/get/from` primitive surface — today
+// those methods aren't visible to the selfhost type-checker, so any
+// Osty body would fail to type-check cleanly.
 
 pub struct Base64Url {
-    pub fn encode(self, data: Bytes) -> String { "" }
-    pub fn decode(self, text: String) -> Result<Bytes, Error> { self.decode(text) }
+    pub fn encode(self, data: Bytes) -> String
+    pub fn decode(self, text: String) -> Result<Bytes, Error>
 }
 
 pub struct Base64 {
     pub url: Base64Url
-    pub fn encode(self, data: Bytes) -> String { "" }
-    pub fn decode(self, text: String) -> Result<Bytes, Error> { self.decode(text) }
+    pub fn encode(self, data: Bytes) -> String
+    pub fn decode(self, text: String) -> Result<Bytes, Error>
 }
 
 pub struct Hex {
-    pub fn encode(self, data: Bytes) -> String { "" }
-    pub fn decode(self, text: String) -> Result<Bytes, Error> { self.decode(text) }
+    pub fn encode(self, data: Bytes) -> String
+    pub fn decode(self, text: String) -> Result<Bytes, Error>
 }
 
 pub struct UrlEncoding {
-    pub fn encode(self, text: String) -> String { text }
-    pub fn decode(self, text: String) -> Result<String, Error> { Ok(text) }
+    pub fn encode(self, text: String) -> String
+    pub fn decode(self, text: String) -> Result<String, Error>
 }
 
 pub let base64: Base64 = Base64 { url: Base64Url {} }

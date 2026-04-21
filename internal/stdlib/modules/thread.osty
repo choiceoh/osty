@@ -1,17 +1,18 @@
 // std.thread — task, channel, cancellation, and select surface.
+//
+// Scheduler primitives (spawn / race / channel / sleep / cancellation
+// queries) are body-less; the backend lowers them to the scheduler
+// runtime. `collectAll` is a real Osty helper over `Group.spawn` +
+// `Handle.join`.
 
 pub struct Duration {}
 
 pub struct Group {
-    pub fn spawn<T>(self, body: fn() -> T) -> Handle<T> {
-        thread.spawn(body)
-    }
+    pub fn spawn<T>(self, body: fn() -> T) -> Handle<T>
 
     pub fn cancel(self) {}
 
-    pub fn isCancelled(self) -> Bool {
-        false
-    }
+    pub fn isCancelled(self) -> Bool
 }
 
 pub struct Select {
@@ -32,9 +33,7 @@ pub struct Select {
     }
 }
 
-pub fn spawn<T>(body: fn() -> T) -> Handle<T> {
-    spawn(body)
-}
+pub fn spawn<T>(body: fn() -> T) -> Handle<T>
 
 pub fn collectAll<T>(body: fn(Group) -> List<Handle<T>>) -> List<Result<T, Error>> {
     let handles = body(Group {})
@@ -45,26 +44,16 @@ pub fn collectAll<T>(body: fn(Group) -> List<Handle<T>>) -> List<Result<T, Error
     out
 }
 
-pub fn race<T>(body: fn(Group) -> List<Handle<T>>) -> Result<T, Error> {
-    race::<T>(body)
-}
+pub fn race<T>(body: fn(Group) -> List<Handle<T>>) -> Result<T, Error>
 
-pub fn chan<T>(capacity: Int = 0) -> Channel<T> {
-    thread.chan::<T>(capacity)
-}
+pub fn chan<T>(capacity: Int = 0) -> Channel<T>
 
-pub fn sleep(duration: Duration) -> Result<(), Error> {
-    Ok(())
-}
+pub fn sleep(duration: Duration) -> Result<(), Error>
 
 pub fn yield() {}
 
-pub fn isCancelled() -> Bool {
-    false
-}
+pub fn isCancelled() -> Bool
 
-pub fn checkCancelled() -> Result<(), Error> {
-    Ok(())
-}
+pub fn checkCancelled() -> Result<(), Error>
 
 pub fn select(body: fn(Select) -> ()) {}

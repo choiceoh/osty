@@ -3,8 +3,7 @@
 // `same(a, b)` reports whether two values refer to the same allocation.
 // Primitives and small immutable values are always considered distinct
 // by identity; the comparison is only meaningful for reference-typed
-// values (strings, collections, structs).
+// values (strings, collections, structs). Body-less — the backend
+// lowers the call to the runtime identity-compare.
 
-pub fn same<T>(a: T, b: T) -> Bool {
-    false
-}
+pub fn same<T>(a: T, b: T) -> Bool

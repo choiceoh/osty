@@ -1,4 +1,9 @@
 // std.time — instants, durations, zones, and formatting constants.
+//
+// Wall-clock access, zone lookup, calendar decomposition, and string
+// formatting are body-less; the backend lowers each call to the time
+// runtime. Pure arithmetic on `Instant` / `Duration` stays as Osty
+// code.
 
 pub let ISO_8601: String = "2006-01-02T15:04:05Z07:00"
 pub let RFC_3339: String = "2006-01-02T15:04:05Z07:00"
@@ -7,13 +12,9 @@ pub let RFC_2822: String = "Mon, 02 Jan 2006 15:04:05 -0700"
 pub struct Duration {
     pub nanoseconds: Int64,
 
-    pub fn abs(self) -> Duration {
-        self
-    }
+    pub fn abs(self) -> Duration
 
-    pub fn toString(self) -> String {
-        ""
-    }
+    pub fn toString(self) -> String
 }
 
 pub struct Instant {
@@ -27,9 +28,7 @@ pub struct Instant {
         Duration { nanoseconds: self.unixNanos - other.unixNanos }
     }
 
-    pub fn format(self, layout: String) -> String {
-        self.unixNanos.toString()
-    }
+    pub fn format(self, layout: String) -> String
 
     pub fn inZone(self, zone: Zone) -> ZonedTime {
         ZonedTime { instant: self, zone: zone }
@@ -56,71 +55,35 @@ pub struct ZonedTime {
     pub instant: Instant,
     pub zone: Zone,
 
-    pub fn year(self) -> Int {
-        0
-    }
+    pub fn year(self) -> Int
 
-    pub fn month(self) -> Int {
-        0
-    }
+    pub fn month(self) -> Int
 
-    pub fn day(self) -> Int {
-        0
-    }
+    pub fn day(self) -> Int
 
-    pub fn hour(self) -> Int {
-        0
-    }
+    pub fn hour(self) -> Int
 
-    pub fn minute(self) -> Int {
-        0
-    }
+    pub fn minute(self) -> Int
 
-    pub fn second(self) -> Int {
-        0
-    }
+    pub fn second(self) -> Int
 
-    pub fn nanosecond(self) -> Int {
-        0
-    }
+    pub fn nanosecond(self) -> Int
 
-    pub fn weekday(self) -> Weekday {
-        Mon
-    }
+    pub fn weekday(self) -> Weekday
 
     pub fn format(self, layout: String) -> String {
         self.instant.format(layout)
     }
 }
 
-pub fn now() -> Instant {
-    Instant { unixNanos: 0 }
-}
+pub fn now() -> Instant
 
-pub fn parse(text: String, layout: String) -> Result<Instant, Error> {
-    Ok(Instant { unixNanos: 0 })
-}
+pub fn parse(text: String, layout: String) -> Result<Instant, Error>
 
-pub fn sleep(duration: Duration) -> Result<(), Error> {
-    Ok(())
-}
+pub fn sleep(duration: Duration) -> Result<(), Error>
 
-pub fn zone(name: String) -> Result<Zone, Error> {
-    Ok(Zone { name: name, offset: Duration { nanoseconds: 0 }, isFixed: true })
-}
+pub fn zone(name: String) -> Result<Zone, Error>
 
-pub fn local() -> Zone {
-    Zone {
-        name: "local",
-        offset: Duration { nanoseconds: 0 },
-        isFixed: false,
-    }
-}
+pub fn local() -> Zone
 
-pub fn utc() -> Zone {
-    Zone {
-        name: "UTC",
-        offset: Duration { nanoseconds: 0 },
-        isFixed: true,
-    }
-}
+pub fn utc() -> Zone
