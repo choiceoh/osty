@@ -57,6 +57,9 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 	case "compare":
 		v, err := g.emitStdStringsBinary(call, "compare", "i64", llvmStringRuntimeCompareSymbol())
 		return v, true, err
+	case "count":
+		v, err := g.emitStdStringsBinary(call, "count", "i64", llvmStringRuntimeCountSymbol())
+		return v, true, err
 	case "concat":
 		v, err := g.emitStdStringsBinaryString(call, "concat", llvmStringRuntimeConcatSymbol())
 		return v, true, err
@@ -72,11 +75,20 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 	case "join":
 		v, err := g.emitStdStringsJoin(call)
 		return v, true, err
+	case "repeat":
+		v, err := g.emitStdStringsRepeat(call)
+		return v, true, err
+	case "replaceAll":
+		v, err := g.emitStdStringsReplaceAll(call)
+		return v, true, err
 	case "split":
 		v, err := g.emitStdStringsSplit(call)
 		return v, true, err
 	case "splitN":
 		v, err := g.emitStdStringsSplitN(call)
+		return v, true, err
+	case "slice":
+		v, err := g.emitStdStringsSlice(call)
 		return v, true, err
 	case "trimPrefix":
 		v, err := g.emitStdStringsBinaryString(call, "trimPrefix", llvmStringRuntimeTrimPrefixSymbol())
@@ -111,9 +123,11 @@ func (g *generator) stdStringsCallStaticResult(call *ast.CallExpr) (value, bool)
 	switch field.Name {
 	case "compare":
 		return value{typ: "i64"}, true
+	case "count":
+		return value{typ: "i64"}, true
 	case "contains", "hasPrefix", "hasSuffix":
 		return value{typ: "i1"}, true
-	case "concat", "join", "trim", "trimSpace", "trimPrefix", "trimSuffix":
+	case "concat", "join", "repeat", "replaceAll", "slice", "trim", "trimSpace", "trimPrefix", "trimSuffix":
 		return value{typ: "ptr", gcManaged: true}, true
 	case "split", "splitN":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true}, true
@@ -239,6 +253,80 @@ func (g *generator) emitStdStringsJoin(call *ast.CallExpr) (value, error) {
 	return joined, nil
 }
 
+func (g *generator) emitStdStringsRepeat(call *ast.CallExpr) (value, error) {
+	if len(call.Args) != 2 {
+		return value{}, unsupportedf("call", "strings.repeat expects 2 arguments, got %d", len(call.Args))
+	}
+	s, err := g.emitStdStringsArg(call.Args[0], "repeat", 0)
+	if err != nil {
+		return value{}, err
+	}
+	n, err := g.emitStdStringsIntArg(call.Args[1], "repeat", 1)
+	if err != nil {
+		return value{}, err
+	}
+	symbol := llvmStringRuntimeRepeatSymbol()
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(s), toOstyValue(n)})
+	g.takeOstyEmitter(emitter)
+	repeated := fromOstyValue(out)
+	repeated.gcManaged = true
+	return repeated, nil
+}
+
+func (g *generator) emitStdStringsReplaceAll(call *ast.CallExpr) (value, error) {
+	if len(call.Args) != 3 {
+		return value{}, unsupportedf("call", "strings.replaceAll expects 3 arguments, got %d", len(call.Args))
+	}
+	s, err := g.emitStdStringsArg(call.Args[0], "replaceAll", 0)
+	if err != nil {
+		return value{}, err
+	}
+	old, err := g.emitStdStringsArg(call.Args[1], "replaceAll", 1)
+	if err != nil {
+		return value{}, err
+	}
+	newValue, err := g.emitStdStringsArg(call.Args[2], "replaceAll", 2)
+	if err != nil {
+		return value{}, err
+	}
+	symbol := llvmStringRuntimeReplaceAllSymbol()
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(s), toOstyValue(old), toOstyValue(newValue)})
+	g.takeOstyEmitter(emitter)
+	replaced := fromOstyValue(out)
+	replaced.gcManaged = true
+	return replaced, nil
+}
+
+func (g *generator) emitStdStringsSlice(call *ast.CallExpr) (value, error) {
+	if len(call.Args) != 3 {
+		return value{}, unsupportedf("call", "strings.slice expects 3 arguments, got %d", len(call.Args))
+	}
+	s, err := g.emitStdStringsArg(call.Args[0], "slice", 0)
+	if err != nil {
+		return value{}, err
+	}
+	start, err := g.emitStdStringsIntArg(call.Args[1], "slice", 1)
+	if err != nil {
+		return value{}, err
+	}
+	end, err := g.emitStdStringsIntArg(call.Args[2], "slice", 2)
+	if err != nil {
+		return value{}, err
+	}
+	symbol := llvmStringRuntimeSliceSymbol()
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "i64"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(s), toOstyValue(start), toOstyValue(end)})
+	g.takeOstyEmitter(emitter)
+	sliced := fromOstyValue(out)
+	sliced.gcManaged = true
+	return sliced, nil
+}
+
 func (g *generator) emitStdStringsBinary(call *ast.CallExpr, name, retTyp, symbol string) (value, error) {
 	if len(call.Args) != 2 {
 		return value{}, unsupportedf("call", "strings.%s expects 2 arguments, got %d", name, len(call.Args))
@@ -281,6 +369,24 @@ func (g *generator) emitStdStringsArg(arg *ast.Arg, name string, index int) (val
 	}
 	if loaded.typ != "ptr" {
 		return value{}, unsupportedf("type-system", "strings.%s arg %d type %s, want String", name, index+1, loaded.typ)
+	}
+	return loaded, nil
+}
+
+func (g *generator) emitStdStringsIntArg(arg *ast.Arg, name string, index int) (value, error) {
+	if arg == nil || arg.Name != "" || arg.Value == nil {
+		return value{}, unsupportedf("call", "strings.%s requires positional arguments", name)
+	}
+	v, err := g.emitExpr(arg.Value)
+	if err != nil {
+		return value{}, err
+	}
+	loaded, err := g.loadIfPointer(v)
+	if err != nil {
+		return value{}, err
+	}
+	if loaded.typ != "i64" {
+		return value{}, unsupportedf("type-system", "strings.%s arg %d type %s, want Int", name, index+1, loaded.typ)
 	}
 	return loaded, nil
 }

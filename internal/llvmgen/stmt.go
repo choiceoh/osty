@@ -153,6 +153,13 @@ func (g *generator) emitLet(stmt *ast.LetStmt) error {
 	if stmt.Value == nil {
 		return unsupported("statement", "let has no value")
 	}
+	if stmt.Type == nil {
+		if _, ok := stmt.Pattern.(*ast.WildcardPat); ok {
+			if _, ok := stmt.Value.(*ast.CallExpr); ok {
+				return g.emitExprStmt(stmt.Value)
+			}
+		}
+	}
 	hintedListElemTyp := ""
 	hintedListElemString := false
 	hintedMapKeyTyp := ""
@@ -1577,11 +1584,8 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if !found {
 		return false, nil
 	}
-	if field.Name != "push" {
+	if field.Name != "push" && field.Name != "pop" {
 		return false, nil
-	}
-	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
-		return true, unsupported("call", "list.push requires one positional argument")
 	}
 	g.pushScope()
 	defer g.popScope()
@@ -1596,16 +1600,33 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 		return true, unsupportedf("type-system", "list receiver type %s", base.typ)
 	}
 	base = g.protectManagedTemporary("list.base", base)
+	baseValue, err := g.loadIfPointer(base)
+	if err != nil {
+		return true, err
+	}
+	if field.Name == "pop" {
+		if len(call.Args) != 0 {
+			return true, unsupported("call", "list.pop requires no arguments")
+		}
+		g.declareRuntimeSymbol(listRuntimePopDiscardSymbol(), "void", []paramInfo{{typ: "ptr"}})
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			listRuntimePopDiscardSymbol(),
+			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue)}),
+		))
+		g.takeOstyEmitter(emitter)
+		return true, nil
+	}
+	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
+		return true, unsupported("call", "list.push requires one positional argument")
+	}
 	arg, err := g.emitExpr(call.Args[0].Value)
 	if err != nil {
 		return true, err
 	}
 	if arg.typ != elemTyp {
 		return true, unsupportedf("type-system", "list.push arg type %s, want %s", arg.typ, elemTyp)
-	}
-	baseValue, err := g.loadIfPointer(base)
-	if err != nil {
-		return true, err
 	}
 	argValue, err := g.loadIfPointer(arg)
 	if err != nil {

@@ -699,6 +699,10 @@ func TestGeneratedStringRuntimeSymbolsAreOstyOwned(t *testing.T) {
 		{"float_to_string", llvmFloatRuntimeToStringSymbol(), "osty_rt_float_to_string"},
 		{"bool_to_string", llvmBoolRuntimeToStringSymbol(), "osty_rt_bool_to_string"},
 		{"byteLen", llvmStringRuntimeByteLenSymbol(), "osty_rt_strings_ByteLen"},
+		{"count", llvmStringRuntimeCountSymbol(), "osty_rt_strings_Count"},
+		{"repeat", llvmStringRuntimeRepeatSymbol(), "osty_rt_strings_Repeat"},
+		{"replaceAll", llvmStringRuntimeReplaceAllSymbol(), "osty_rt_strings_ReplaceAll"},
+		{"slice", llvmStringRuntimeSliceSymbol(), "osty_rt_strings_Slice"},
 		{"trimPrefix", llvmStringRuntimeTrimPrefixSymbol(), "osty_rt_strings_TrimPrefix"},
 		{"trimSuffix", llvmStringRuntimeTrimSuffixSymbol(), "osty_rt_strings_TrimSuffix"},
 	}
@@ -722,6 +726,10 @@ func TestGeneratedStringRuntimeDeclarationsAreOstyOwned(t *testing.T) {
 		"declare ptr @osty_rt_float_to_string(double)",
 		"declare ptr @osty_rt_bool_to_string(i1)",
 		"declare i64 @osty_rt_strings_ByteLen(ptr)",
+		"declare i64 @osty_rt_strings_Count(ptr, ptr)",
+		"declare ptr @osty_rt_strings_Repeat(ptr, i64)",
+		"declare ptr @osty_rt_strings_ReplaceAll(ptr, ptr, ptr)",
+		"declare ptr @osty_rt_strings_Slice(ptr, i64, i64)",
 		"declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)",
 		"declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)",
 	}

@@ -330,9 +330,13 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
 static void osty_gc_mark_payload(void *payload);
 bool osty_rt_strings_Equal(const char *left, const char *right);
 int64_t osty_rt_strings_Compare(const char *left, const char *right);
+int64_t osty_rt_strings_Count(const char *value, const char *substr);
 bool osty_rt_strings_Contains(const char *value, const char *substr);
 bool osty_rt_strings_HasSuffix(const char *value, const char *suffix);
 const char *osty_rt_strings_Join(void *raw_parts, const char *sep);
+const char *osty_rt_strings_Repeat(const char *value, int64_t n);
+const char *osty_rt_strings_ReplaceAll(const char *value, const char *old, const char *new_value);
+const char *osty_rt_strings_Slice(const char *value, int64_t start, int64_t end);
 const char *osty_rt_strings_TrimPrefix(const char *value, const char *prefix);
 const char *osty_rt_strings_TrimSuffix(const char *value, const char *suffix);
 const char *osty_rt_strings_TrimSpace(const char *value);
@@ -704,6 +708,14 @@ int64_t osty_rt_list_len(void *raw_list) {
     return list->len;
 }
 
+void osty_rt_list_pop_discard(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    if (list == NULL || list->len <= 0) {
+        osty_rt_abort("list.pop on empty list");
+    }
+    list->len -= 1;
+}
+
 void osty_rt_list_push_i64(void *raw_list, int64_t value) {
     osty_rt_list_push_raw(raw_list, &value, sizeof(value), NULL);
 }
@@ -1017,6 +1029,30 @@ int64_t osty_rt_strings_Compare(const char *left, const char *right) {
     return 0;
 }
 
+int64_t osty_rt_strings_Count(const char *value, const char *substr) {
+    const char *cursor;
+    const char *next;
+    size_t value_len;
+    size_t substr_len;
+    int64_t total;
+
+    value = (value == NULL) ? "" : value;
+    substr = (substr == NULL) ? "" : substr;
+    value_len = strlen(value);
+    substr_len = strlen(substr);
+    if (substr_len == 0) {
+        return (int64_t)value_len + 1;
+    }
+
+    total = 0;
+    cursor = value;
+    while ((next = strstr(cursor, substr)) != NULL) {
+        total += 1;
+        cursor = next + substr_len;
+    }
+    return total;
+}
+
 int64_t osty_rt_strings_ByteLen(const char *value) {
     if (value == NULL) {
         return 0;
@@ -1203,6 +1239,132 @@ const char *osty_rt_strings_Join(void *raw_parts, const char *sep) {
     }
     *cursor = '\0';
     return out;
+}
+
+const char *osty_rt_strings_Repeat(const char *value, int64_t n) {
+    size_t value_len;
+    size_t total;
+    char *out;
+    char *cursor;
+    int64_t i;
+
+    value = (value == NULL) ? "" : value;
+    if (n <= 0) {
+        return osty_rt_string_dup_site("", 0, "runtime.strings.repeat.empty");
+    }
+    value_len = strlen(value);
+    if (value_len == 0) {
+        return osty_rt_string_dup_site("", 0, "runtime.strings.repeat.empty");
+    }
+    if ((uint64_t)n > (uint64_t)SIZE_MAX / (uint64_t)value_len) {
+        osty_rt_abort("runtime.strings.repeat: size overflow");
+    }
+    total = value_len * (size_t)n;
+    out = (char *)osty_gc_allocate_managed(total + 1, OSTY_GC_KIND_STRING, "runtime.strings.repeat", NULL, NULL);
+    cursor = out;
+    for (i = 0; i < n; i++) {
+        memcpy(cursor, value, value_len);
+        cursor += value_len;
+    }
+    *cursor = '\0';
+    return out;
+}
+
+const char *osty_rt_strings_ReplaceAll(const char *value, const char *old, const char *new_value) {
+    const char *cursor;
+    const char *next;
+    size_t value_len;
+    size_t old_len;
+    size_t new_len;
+    size_t total;
+    int64_t count;
+    char *out;
+    char *dst;
+
+    value = (value == NULL) ? "" : value;
+    old = (old == NULL) ? "" : old;
+    new_value = (new_value == NULL) ? "" : new_value;
+    value_len = strlen(value);
+    old_len = strlen(old);
+    new_len = strlen(new_value);
+
+    if (old_len == 0) {
+        if (new_len != 0 && value_len + 1 > SIZE_MAX / new_len) {
+            osty_rt_abort("runtime.strings.replace_all: size overflow");
+        }
+        total = value_len + (value_len + 1) * new_len;
+        out = (char *)osty_gc_allocate_managed(total + 1, OSTY_GC_KIND_STRING, "runtime.strings.replace_all", NULL, NULL);
+        dst = out;
+        if (new_len != 0) {
+            memcpy(dst, new_value, new_len);
+            dst += new_len;
+        }
+        for (size_t i = 0; i < value_len; i++) {
+            *dst++ = value[i];
+            if (new_len != 0) {
+                memcpy(dst, new_value, new_len);
+                dst += new_len;
+            }
+        }
+        *dst = '\0';
+        return out;
+    }
+
+    count = 0;
+    cursor = value;
+    while ((next = strstr(cursor, old)) != NULL) {
+        count += 1;
+        cursor = next + old_len;
+    }
+    if (count == 0) {
+        return osty_rt_string_dup_site(value, value_len, "runtime.strings.replace_all.copy");
+    }
+    total = value_len;
+    if (new_len >= old_len) {
+        size_t extra = new_len - old_len;
+        if (extra != 0 && (uint64_t)count > (uint64_t)SIZE_MAX / (uint64_t)extra) {
+            osty_rt_abort("runtime.strings.replace_all: size overflow");
+        }
+        total += (size_t)count * extra;
+    } else {
+        total -= (size_t)count * (old_len - new_len);
+    }
+    out = (char *)osty_gc_allocate_managed(total + 1, OSTY_GC_KIND_STRING, "runtime.strings.replace_all", NULL, NULL);
+    dst = out;
+    cursor = value;
+    while ((next = strstr(cursor, old)) != NULL) {
+        size_t prefix_len = (size_t)(next - cursor);
+        if (prefix_len != 0) {
+            memcpy(dst, cursor, prefix_len);
+            dst += prefix_len;
+        }
+        if (new_len != 0) {
+            memcpy(dst, new_value, new_len);
+            dst += new_len;
+        }
+        cursor = next + old_len;
+    }
+    if (*cursor != '\0') {
+        size_t tail_len = strlen(cursor);
+        memcpy(dst, cursor, tail_len);
+        dst += tail_len;
+    }
+    *dst = '\0';
+    return out;
+}
+
+const char *osty_rt_strings_Slice(const char *value, int64_t start, int64_t end) {
+    size_t value_len;
+
+    value = (value == NULL) ? "" : value;
+    value_len = strlen(value);
+    if (start < 0 || end < start) {
+        osty_rt_abort("runtime.strings.slice: invalid bounds");
+    }
+    if ((uint64_t)end > (uint64_t)value_len) {
+        osty_rt_abort("runtime.strings.slice: end out of range");
+    }
+    return osty_rt_string_dup_site(value + start, (size_t)(end - start), "runtime.strings.slice");
 }
 
 const char *osty_rt_strings_TrimPrefix(const char *value, const char *prefix) {

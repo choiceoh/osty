@@ -447,6 +447,29 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 				return field.sourceType, true
 			}
 		}
+	case *ast.IndexExpr:
+		baseSource, ok := g.staticExprSourceType(e.X)
+		if !ok {
+			return nil, false
+		}
+		resolved, err := llvmResolveAliasType(baseSource, g.typeEnv(), map[string]bool{})
+		if err != nil {
+			return nil, false
+		}
+		named, ok := resolved.(*ast.NamedType)
+		if !ok || len(named.Path) != 1 {
+			return nil, false
+		}
+		switch named.Path[0] {
+		case "List":
+			if len(named.Args) == 1 {
+				return named.Args[0], true
+			}
+		case "Map":
+			if len(named.Args) == 2 {
+				return named.Args[1], true
+			}
+		}
 	}
 	return nil, false
 }
@@ -595,13 +618,38 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 		if baseInfo, ok := g.staticExprInfo(e.X); ok {
 			switch {
 			case baseInfo.listElemTyp != "":
-				return value{typ: baseInfo.listElemTyp, gcManaged: baseInfo.listElemTyp == "ptr", rootPaths: g.rootPathsForType(baseInfo.listElemTyp)}, true
+				out := value{typ: baseInfo.listElemTyp, gcManaged: baseInfo.listElemTyp == "ptr", rootPaths: g.rootPathsForType(baseInfo.listElemTyp)}
+				return g.decorateStaticValueFromSourceType(out, e), true
 			case baseInfo.mapKeyTyp != "":
-				return value{typ: baseInfo.mapValueTyp, gcManaged: baseInfo.mapValueTyp == "ptr", rootPaths: g.rootPathsForType(baseInfo.mapValueTyp)}, true
+				out := value{typ: baseInfo.mapValueTyp, gcManaged: baseInfo.mapValueTyp == "ptr", rootPaths: g.rootPathsForType(baseInfo.mapValueTyp)}
+				return g.decorateStaticValueFromSourceType(out, e), true
 			}
 		}
 	}
 	return value{}, false
+}
+
+func (g *generator) decorateStaticValueFromSourceType(out value, expr ast.Expr) value {
+	sourceType, ok := g.staticExprSourceType(expr)
+	if !ok {
+		return out
+	}
+	out.sourceType = sourceType
+	if listElemTyp, listElemString, ok, err := llvmListElementInfo(sourceType, g.typeEnv()); err == nil && ok {
+		out.listElemTyp = listElemTyp
+		out.listElemString = listElemString
+	}
+	if mapKeyTyp, mapValueTyp, mapKeyString, ok, err := llvmMapTypes(sourceType, g.typeEnv()); err == nil && ok {
+		out.mapKeyTyp = mapKeyTyp
+		out.mapValueTyp = mapValueTyp
+		out.mapKeyString = mapKeyString
+	}
+	if setElemTyp, setElemString, ok, err := llvmSetElementType(sourceType, g.typeEnv()); err == nil && ok {
+		out.setElemTyp = setElemTyp
+		out.setElemString = setElemString
+	}
+	out.gcManaged = valueNeedsManagedRoot(out)
+	return out
 }
 
 func (g *generator) staticListLiteralElementInfo(expr *ast.ListExpr) (string, bool, bool) {
@@ -855,7 +903,7 @@ func (g *generator) listMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, 
 		return nil, "", false, false
 	}
 	switch field.Name {
-	case "len", "push", "sorted", "toSet":
+	case "len", "pop", "push", "sorted", "toSet":
 	default:
 		return nil, "", false, false
 	}
