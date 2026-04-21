@@ -896,6 +896,8 @@ func (g *generator) emitTestingCallStmt(call *ast.CallExpr) (bool, error) {
 		return true, nil
 	case "context":
 		return true, g.emitTestingContextStmt(call)
+	case "benchmark":
+		return true, g.emitTestingBenchmarkStmt(call)
 	case "expectOk":
 		_, err := g.emitTestingExpect(call, false)
 		return true, err
@@ -1081,6 +1083,338 @@ func (g *generator) emitTestingClosureBody(body ast.Expr) error {
 	}
 }
 
+// emitTestingBenchmarkStmt inlines `testing.benchmark(N, || {...})` as
+// a timing loop — spec §11.4. The trailing expression of the closure
+// body (the required `Ok(())` terminator) is dropped on inline; `?` in
+// the closure is unsupported because inlined `?` would return from the
+// enclosing test main, not the closure.
+func (g *generator) emitTestingBenchmarkStmt(call *ast.CallExpr) error {
+	if len(call.Args) != 2 || call.Args[0] == nil || call.Args[1] == nil ||
+		call.Args[0].Name != "" || call.Args[1].Name != "" ||
+		call.Args[0].Value == nil || call.Args[1].Value == nil {
+		return unsupported("call", "testing.benchmark requires two positional arguments (iterations, closure)")
+	}
+	closure, ok := call.Args[1].Value.(*ast.ClosureExpr)
+	if !ok {
+		return unsupported("call", "testing.benchmark requires a closure literal as its second argument")
+	}
+	if len(closure.Params) != 0 || closure.Body == nil {
+		return unsupported("call", "testing.benchmark requires a zero-arg closure body")
+	}
+	block, ok := closure.Body.(*ast.Block)
+	if !ok {
+		return unsupported("call", "testing.benchmark requires a block-bodied closure")
+	}
+
+	iters, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return err
+	}
+	if iters.typ != "i64" {
+		return unsupportedf("type-system", "testing.benchmark iterations type %s, want i64", iters.typ)
+	}
+
+	stmts := block.Stmts
+	if n := len(stmts); n > 0 {
+		if _, ok := stmts[n-1].(*ast.ExprStmt); ok {
+			stmts = stmts[:n-1]
+		}
+	}
+
+	// Auto-tune probe: when OSTY_BENCH_TIME_NS > 0 we ignore the user's
+	// declared N and estimate a new N from a short probe. The env var is
+	// set by `osty test --bench --benchtime <dur>`. Probe overhead (~10
+	// body invocations + 2 clock samples) is charged on top of the final
+	// bench like warmup.
+	g.declareRuntimeSymbol(benchClockRuntimeSymbol(), "i64", nil)
+	g.declareRuntimeSymbol(benchTargetRuntimeSymbol(), "i64", nil)
+	nslot, err := g.emitBenchAutoTuneN(stmts, iters.ref)
+	if err != nil {
+		return err
+	}
+
+	emitter := g.toOstyEmitter()
+	effectiveN := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load i64, ptr %s", effectiveN, nslot))
+	// Warmup: clamp(N/10, 1, 1000). Cold-cache / branch-predictor misses
+	// get amortized before the first clock sample.
+	warmupDiv := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sdiv i64 %s, 10", warmupDiv, effectiveN))
+	warmupGE1Cond := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp sgt i64 %s, 0", warmupGE1Cond, warmupDiv))
+	warmupGE1 := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 %s, i64 1", warmupGE1, warmupGE1Cond, warmupDiv))
+	warmupCapCond := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp slt i64 %s, 1000", warmupCapCond, warmupGE1))
+	warmupTemp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 %s, i64 1000", warmupTemp, warmupCapCond, warmupGE1))
+	g.takeOstyEmitter(emitter)
+
+	if err := g.emitBenchInlineLoop(stmts, value{typ: "i64", ref: warmupTemp}, "bench.warm", ""); err != nil {
+		return err
+	}
+
+	// Allocate per-iter samples buffer. The runtime returns NULL when N
+	// <= 0, so osty_rt_bench_samples_report is a no-op for that case
+	// and the summary line still emits with avg=0.
+	g.declareRuntimeSymbol(benchSamplesNewSymbol(), "ptr", []paramInfo{{typ: "i64"}})
+	g.declareRuntimeSymbol(benchSamplesRecordSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "i64"}})
+	g.declareRuntimeSymbol(benchSamplesReportSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+	g.declareRuntimeSymbol(benchSamplesFreeSymbol(), "void", []paramInfo{{typ: "ptr"}})
+	emitter = g.toOstyEmitter()
+	finalN := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load i64, ptr %s", finalN, nslot))
+	samplesPtr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call ptr @%s(i64 %s)", samplesPtr, benchSamplesNewSymbol(), finalN))
+	startTemp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", startTemp, benchClockRuntimeSymbol()))
+	g.takeOstyEmitter(emitter)
+
+	if err := g.emitBenchInlineLoop(stmts, value{typ: "i64", ref: finalN}, "bench.run", samplesPtr); err != nil {
+		return err
+	}
+
+	emitter = g.toOstyEmitter()
+	endTemp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", endTemp, benchClockRuntimeSymbol()))
+	totalTemp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sub i64 %s, %s", totalTemp, endTemp, startTemp))
+	finalNReload := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load i64, ptr %s", finalNReload, nslot))
+	nonZero := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp sgt i64 %s, 0", nonZero, finalNReload))
+	divLabel := llvmNextLabel(emitter, "bench.div")
+	skipLabel := llvmNextLabel(emitter, "bench.skip")
+	joinLabel := llvmNextLabel(emitter, "bench.join")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", nonZero, divLabel, skipLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", divLabel))
+	divTemp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sdiv i64 %s, %s", divTemp, totalTemp, finalNReload))
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", joinLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", skipLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", joinLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", joinLabel))
+	avgTemp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi i64 [ %s, %%%s ], [ 0, %%%s ]", avgTemp, divTemp, divLabel, skipLabel))
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = joinLabel
+	g.currentReachable = true
+
+	itersStr, err := g.emitRuntimeIntToString(value{typ: "i64", ref: finalNReload})
+	if err != nil {
+		return err
+	}
+	totalStr, err := g.emitRuntimeIntToString(value{typ: "i64", ref: totalTemp})
+	if err != nil {
+		return err
+	}
+	avgStr, err := g.emitRuntimeIntToString(value{typ: "i64", ref: avgTemp})
+	if err != nil {
+		return err
+	}
+	var callLine int
+	if call != nil {
+		callLine = call.Pos().Line
+	}
+	prefix := fmt.Sprintf("bench %s", g.sourceLineLabel(callLine, "<bench>"))
+	msg, err := g.foldAssertionMessage(
+		staticAssertPart(prefix+" iter="),
+		dynamicAssertPart(itersStr),
+		staticAssertPart(" total="),
+		dynamicAssertPart(totalStr),
+		staticAssertPart("ns avg="),
+		dynamicAssertPart(avgStr),
+		staticAssertPart("ns"),
+	)
+	if err != nil {
+		return err
+	}
+	emitter = g.toOstyEmitter()
+	llvmPrintlnString(emitter, toOstyValue(msg))
+	emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(ptr %s, i64 %s)", benchSamplesReportSymbol(), samplesPtr, finalNReload))
+	emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(ptr %s)", benchSamplesFreeSymbol(), samplesPtr))
+	g.takeOstyEmitter(emitter)
+	return nil
+}
+
+func benchClockRuntimeSymbol() string  { return "osty_rt_bench_now_nanos" }
+func benchTargetRuntimeSymbol() string { return "osty_rt_bench_target_ns" }
+
+// emitBenchAutoTuneN probes the body when --benchtime is active and
+// picks N from that sample. Returns an alloca that downstream code
+// loads whenever it needs the effective iteration count.
+//
+// Algorithm:
+//
+//	target := osty_rt_bench_target_ns()      // 0 when --benchtime unset
+//	if target == 0:
+//	    N := user_declared_N
+//	else:
+//	    run body probe_iters times; measure elapsed
+//	    est := target * probe_iters / max(elapsed, 1)
+//	    est := est * 6 / 5                   // 20% headroom
+//	    N   := clamp(est, 10, 100_000_000)
+//
+// The probe body runs through the same bench-closure context as the
+// timing run, so a `?` failure during probing still aborts cleanly.
+func (g *generator) emitBenchAutoTuneN(stmts []ast.Stmt, declaredN string) (string, error) {
+	emitter := g.toOstyEmitter()
+	nslot := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca i64", nslot))
+	emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", declaredN, nslot))
+	target := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", target, benchTargetRuntimeSymbol()))
+	autoCond := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp sgt i64 %s, 0", autoCond, target))
+	probeLabel := llvmNextLabel(emitter, "bench.probe")
+	afterLabel := llvmNextLabel(emitter, "bench.after_probe")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", autoCond, probeLabel, afterLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", probeLabel))
+	probeStart := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", probeStart, benchClockRuntimeSymbol()))
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = probeLabel
+
+	const probeIters int64 = 10
+	probeCount := value{typ: "i64", ref: fmt.Sprintf("%d", probeIters)}
+	if err := g.emitBenchInlineLoop(stmts, probeCount, "bench.probe", ""); err != nil {
+		return "", err
+	}
+
+	emitter = g.toOstyEmitter()
+	probeEnd := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", probeEnd, benchClockRuntimeSymbol()))
+	probeElapsed := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sub i64 %s, %s", probeElapsed, probeEnd, probeStart))
+	// Guard against 0-ns elapsed (clock resolution floor): treat as 1ns
+	// so the subsequent sdiv can't trap or explode.
+	elapsedPos := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp sgt i64 %s, 0", elapsedPos, probeElapsed))
+	elapsedSafe := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 %s, i64 1", elapsedSafe, elapsedPos, probeElapsed))
+	targetScaled := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = mul i64 %s, %d", targetScaled, target, probeIters))
+	estRaw := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sdiv i64 %s, %s", estRaw, targetScaled, elapsedSafe))
+	estHead := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = mul i64 %s, 6", estHead, estRaw))
+	estAdj := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sdiv i64 %s, 5", estAdj, estHead))
+	estFloorCond := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp slt i64 %s, 10", estFloorCond, estAdj))
+	estFloored := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 10, i64 %s", estFloored, estFloorCond, estAdj))
+	estCapCond := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp sgt i64 %s, 100000000", estCapCond, estFloored))
+	estFinal := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 100000000, i64 %s", estFinal, estCapCond, estFloored))
+	emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", estFinal, nslot))
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", afterLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", afterLabel))
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = afterLabel
+	g.currentReachable = true
+	return nslot, nil
+}
+
+// emitBenchInlineLoop emits `for _ in 0..count { stmts }` with the same
+// loop/scope/GC-safepoint plumbing as the primary bench timing loop.
+// The closure body is re-inlined on each call so warmup and the timing
+// loop share one AST source while getting fresh SSA temps / scopes.
+//
+// When samplesPtr is non-empty, the loop brackets the body with two
+// osty_rt_bench_now_nanos() calls and records `end-start` at
+// samples[i]. Per-iter sampling roughly doubles the clock overhead so
+// it's only wired in from the stats path, never in warmup.
+func (g *generator) emitBenchInlineLoop(stmts []ast.Stmt, count value, labelPrefix, samplesPtr string) error {
+	emitter := g.toOstyEmitter()
+	var iterStartSlot string
+	if samplesPtr != "" {
+		// Alloca lives in the block that calls into the loop, never in
+		// the loop body — LLVM treats alloca-in-loop as an explicit
+		// stack-growing op and mem2reg won't promote it.
+		iterStartSlot = llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca i64", iterStartSlot))
+	}
+	zeroV := &LlvmValue{name: "0", typ: "i64"}
+	stopV := &LlvmValue{name: count.ref, typ: "i64"}
+	loop := llvmRangeStart(emitter, g.hiddenBenchIterName(), zeroV, stopV, false)
+	if samplesPtr != "" {
+		tstart := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", tstart, benchClockRuntimeSymbol()))
+		emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", tstart, iterStartSlot))
+	}
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop.bodyLabel)
+	continueLabel := g.nextNamedLabel(labelPrefix + ".cont")
+	g.pushLoop(loopContext{
+		continueLabel: continueLabel,
+		breakLabel:    loop.endLabel,
+		scopeDepth:    len(g.locals),
+	})
+	scopeDepth := len(g.locals)
+	g.pushScope()
+	g.benchClosureDepth++
+	err := g.emitBlock(stmts)
+	g.benchClosureDepth--
+	if err != nil {
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
+		return err
+	}
+	if len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+	g.popLoop()
+	if samplesPtr != "" && g.currentReachable {
+		emitter = g.toOstyEmitter()
+		tstart := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = load i64, ptr %s", tstart, iterStartSlot))
+		tend := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", tend, benchClockRuntimeSymbol()))
+		delta := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = sub i64 %s, %s", delta, tend, tstart))
+		emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(ptr %s, i64 %s, i64 %s)", benchSamplesRecordSymbol(), samplesPtr, loop.current, delta))
+		g.takeOstyEmitter(emitter)
+	}
+	if g.currentReachable {
+		g.branchTo(continueLabel)
+	}
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
+	llvmRangeEnd(emitter, loop)
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop.endLabel)
+	return nil
+}
+
+func benchSamplesNewSymbol() string    { return "osty_rt_bench_samples_new" }
+func benchSamplesRecordSymbol() string { return "osty_rt_bench_samples_record" }
+func benchSamplesReportSymbol() string { return "osty_rt_bench_samples_report" }
+func benchSamplesFreeSymbol() string   { return "osty_rt_bench_samples_free" }
+
+// benchQuestionFailMessage is the runtime message printed when `?`
+// inside a bench closure sees Err / None. The shape mirrors
+// testingFailureMessage so `osty test --bench` failure output stays
+// uniform with the rest of the testing surface.
+func (g *generator) benchQuestionFailMessage(expr *ast.QuestionExpr) string {
+	var line int
+	if expr != nil {
+		line = expr.Pos().Line
+	}
+	return fmt.Sprintf("bench `?` propagated failure at %s", g.sourceLineLabel(line, "<bench>"))
+}
+
+// hiddenBenchIterName allocates a loop-counter name that can't shadow a
+// user identifier; llvmRangeStart needs somewhere to bind `%current`.
+func (g *generator) hiddenBenchIterName() string {
+	g.hiddenLocalID++
+	return fmt.Sprintf("__bench_i_%d", g.hiddenLocalID)
+}
+
 func (g *generator) emitTestingAssertion(cond value, message string) error {
 	if cond.typ != "i1" {
 		return unsupportedf("type-system", "testing assertion condition type %s, want i1", cond.typ)
@@ -1114,17 +1448,24 @@ func (g *generator) emitTestingAbortWithEmitter(emitter *LlvmEmitter, message st
 }
 
 func (g *generator) testingFailureMessage(call *ast.CallExpr, name string) string {
-	source := g.sourcePath
-	if source == "" {
-		source = "<test>"
-	} else if abs, err := filepath.Abs(source); err == nil {
-		source = abs
-	}
-	line := 0
+	var line int
 	if call != nil {
 		line = call.Pos().Line
 	}
-	return fmt.Sprintf("testing.%s failed at %s:%d", name, source, line)
+	return fmt.Sprintf("testing.%s failed at %s", name, g.sourceLineLabel(line, "<test>"))
+}
+
+// sourceLineLabel renders `<abs-path>:<line>` for a diagnostic site.
+// When the source path is unset (happens in some in-memory test paths)
+// `fallback` stands in so output stays scrapeable.
+func (g *generator) sourceLineLabel(line int, fallback string) string {
+	source := g.sourcePath
+	if source == "" {
+		source = fallback
+	} else if abs, err := filepath.Abs(source); err == nil {
+		source = abs
+	}
+	return fmt.Sprintf("%s:%d", source, line)
 }
 
 // emitTestingAssertionLazy mirrors emitTestingAssertion but builds the

@@ -1217,7 +1217,8 @@ func (g *generator) emitQuestionExpr(expr *ast.QuestionExpr) (value, error) {
 	if err != nil {
 		return value{}, err
 	}
-	if g.returnType != "ptr" {
+	inBench := g.benchClosureDepth > 0
+	if !inBench && g.returnType != "ptr" {
 		return value{}, unsupportedf("control-flow", "optional propagation currently requires a ptr-backed return type, got %s", g.returnType)
 	}
 	base, err := g.emitExpr(expr.X)
@@ -1233,9 +1234,13 @@ func (g *generator) emitQuestionExpr(expr *ast.QuestionExpr) (value, error) {
 	contLabel := llvmNextLabel(emitter, "optional.cont")
 	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil.name, nilLabel, contLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", nilLabel))
-	g.releaseGCRoots(emitter)
-	emitter.body = append(emitter.body, "  ret ptr null")
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", contLabel))
+	if inBench {
+		g.emitTestingAbortWithEmitter(emitter, g.benchQuestionFailMessage(expr), contLabel)
+	} else {
+		g.releaseGCRoots(emitter)
+		emitter.body = append(emitter.body, "  ret ptr null")
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", contLabel))
+	}
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(contLabel)
 	if innerTyp == "ptr" {
@@ -1258,12 +1263,17 @@ func (g *generator) emitQuestionExpr(expr *ast.QuestionExpr) (value, error) {
 // re-packaged into the return Result with tag=1 and `ok` zeroed, then
 // returned immediately.
 func (g *generator) emitQuestionExprResult(expr *ast.QuestionExpr, info builtinResultType, sourceType ast.Type) (value, error) {
-	returnInfo, ok := g.resultTypes[g.returnType]
-	if !ok {
-		return value{}, unsupported("control-flow", "? on Result<T, E> requires the enclosing function to return Result<_, E>")
-	}
-	if returnInfo.errTyp != info.errTyp {
-		return value{}, unsupportedf("type-system", "? propagates err %s, function returns err %s", info.errTyp, returnInfo.errTyp)
+	inBench := g.benchClosureDepth > 0
+	var returnInfo builtinResultType
+	if !inBench {
+		ri, ok := g.resultTypes[g.returnType]
+		if !ok {
+			return value{}, unsupported("control-flow", "? on Result<T, E> requires the enclosing function to return Result<_, E>")
+		}
+		if ri.errTyp != info.errTyp {
+			return value{}, unsupportedf("type-system", "? propagates err %s, function returns err %s", info.errTyp, ri.errTyp)
+		}
+		returnInfo = ri
 	}
 	base, err := g.emitExpr(expr.X)
 	if err != nil {
@@ -1279,22 +1289,24 @@ func (g *generator) emitQuestionExprResult(expr *ast.QuestionExpr, info builtinR
 	okLabel := llvmNextLabel(emitter, "result.ok")
 	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isErr.name, errLabel, okLabel))
 
-	// Err branch: repackage into the enclosing function's Result<T2, E>
-	// struct and return immediately. GC roots are released just before
-	// `ret` to mirror the bare-return path.
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", errLabel))
-	errSlot := llvmExtractValue(emitter, toOstyValue(base), info.errTyp, 2)
-	retFields := []*LlvmValue{
-		toOstyValue(value{typ: "i64", ref: "1"}),
-		toOstyValue(llvmZeroValue(returnInfo.okTyp)),
-		errSlot,
+	if inBench {
+		g.emitTestingAbortWithEmitter(emitter, g.benchQuestionFailMessage(expr), okLabel)
+	} else {
+		// Err branch: repackage into the enclosing function's Result<T2, E>
+		// struct and return immediately. GC roots are released just before
+		// `ret` to mirror the bare-return path.
+		errSlot := llvmExtractValue(emitter, toOstyValue(base), info.errTyp, 2)
+		retFields := []*LlvmValue{
+			toOstyValue(value{typ: "i64", ref: "1"}),
+			toOstyValue(llvmZeroValue(returnInfo.okTyp)),
+			errSlot,
+		}
+		retStruct := llvmStructLiteral(emitter, returnInfo.typ, retFields)
+		g.releaseGCRoots(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  ret %s %s", returnInfo.typ, retStruct.name))
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", okLabel))
 	}
-	retStruct := llvmStructLiteral(emitter, returnInfo.typ, retFields)
-	g.releaseGCRoots(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  ret %s %s", returnInfo.typ, retStruct.name))
-
-	// Ok branch: extract the ok field and let the caller continue with it.
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", okLabel))
 	okSlot := llvmExtractValue(emitter, toOstyValue(base), info.okTyp, 1)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(okLabel)

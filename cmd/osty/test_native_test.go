@@ -333,6 +333,246 @@ func TestRunTestMainAIRepairAllowsForeignSyntaxBeforeDiscovery(t *testing.T) {
 	}
 }
 
+func TestRunTestMainBenchModeRunsBenchmark(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `pub fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+`)
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+
+fn benchAdd() {
+    testing.benchmark(50, || {
+        let _ = add(1, 2)
+        Ok(())
+    })
+}
+
+fn testShouldBeSkippedInBenchMode() {
+    testing.assertEq(1, 2)
+}
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	// Serial execution keeps stdout ordering stable so we can match
+	// against the bench summary verbatim; the timing harness writes one
+	// `bench …` line per call-site, and we want that line ordered after
+	// its `ok` status line, not interleaved with a sibling benchmark.
+	code := runTestMain([]string{"--bench", "--serial", dir}, cliFlags{}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runTestMain() --bench exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	got := stdout.String()
+	// The prefix tells us discovery kicked the right bucket. Bench mode
+	// must NOT run the failing testShouldBeSkippedInBenchMode — if it
+	// had, the code would be 1 and we'd already be in the Fatal branch.
+	if !strings.Contains(got, "running 1 benchmarks") {
+		t.Fatalf("stdout = %q, want bench-mode discovery header", got)
+	}
+	if !strings.Contains(got, "ok\tbenchAdd") {
+		t.Fatalf("stdout = %q, want benchAdd in ok list", got)
+	}
+	if !strings.Contains(got, "ok\t1 benchmarks passed") {
+		t.Fatalf("stdout = %q, want benchmarks-passed summary", got)
+	}
+	// The bench harness emits a single summary line per testing.benchmark
+	// call; prefix `bench ` and the `iter=/total=/avg=` keys are the
+	// contract the CLI promises (§11.4). Numeric values are non-zero for
+	// a 50-iteration loop on any clock with ns resolution.
+	if !strings.Contains(got, "bench ") || !strings.Contains(got, "iter=50") ||
+		!strings.Contains(got, "total=") || !strings.Contains(got, "avg=") ||
+		!strings.Contains(got, "ns") {
+		t.Fatalf("stdout = %q, want `bench … iter=50 total=…ns avg=…ns` summary", got)
+	}
+	if got := stderr.String(); strings.TrimSpace(got) != "" {
+		t.Fatalf("stderr = %q, want empty stderr", got)
+	}
+}
+
+func TestRunTestMainBenchModePrintsDistributionLine(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `pub fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+`)
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+
+fn benchAdd() {
+    testing.benchmark(30, || {
+        let _ = add(1, 2)
+        Ok(())
+    })
+}
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runTestMain([]string{"--bench", "--serial", dir}, cliFlags{}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runTestMain() --bench exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	got := stdout.String()
+	// Per-iter sampling feeds the distribution line. Values can all be
+	// zero on coarse clocks, but the four keys are contractually
+	// present whenever the bench ran.
+	if !strings.Contains(got, "min=") || !strings.Contains(got, "p50=") ||
+		!strings.Contains(got, "p99=") || !strings.Contains(got, "max=") {
+		t.Fatalf("stdout = %q, want min=/p50=/p99=/max= distribution line", got)
+	}
+}
+
+func TestRunTestMainBenchModeQuestionMarkOkPath(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `pub enum MyErr { Bad }
+
+pub fn wrapped(x: Int) -> Result<Int, MyErr> {
+    Ok(x + 1)
+}
+`)
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+
+fn benchWithTry() {
+    testing.benchmark(20, || {
+        let v = wrapped(5)?
+        let _ = v
+        Ok(())
+    })
+}
+`)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runTestMain([]string{"--bench", "--serial", dir}, cliFlags{}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runTestMain() --bench Ok-path exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "ok\tbenchWithTry") {
+		t.Fatalf("stdout = %q, want benchWithTry to pass on Ok path", stdout.String())
+	}
+}
+
+func TestRunTestMainBenchModeQuestionMarkErrPathFails(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `pub enum MyErr { Bad }
+
+pub fn wrapped(x: Int) -> Result<Int, MyErr> {
+    Err(Bad)
+}
+`)
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+
+fn benchFailing() {
+    testing.benchmark(20, || {
+        let v = wrapped(5)?
+        let _ = v
+        Ok(())
+    })
+}
+`)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runTestMain([]string{"--bench", "--serial", dir}, cliFlags{}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("runTestMain() --bench Err-path exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	combined := stdout.String() + stderr.String()
+	if !strings.Contains(combined, "bench `?` propagated failure at") {
+		t.Fatalf("output missing bench ? failure message:\nstdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunTestMainBenchTimeAutoTunes(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `pub fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+`)
+	// The body declares N=5 but --benchtime overrides it. A 50ms
+	// target on add(1,2) produces a final N of thousands, so `iter=5`
+	// in the output would mean auto-tune didn't fire.
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+
+fn benchScaled() {
+    testing.benchmark(5, || {
+        let _ = add(1, 2)
+        Ok(())
+    })
+}
+`)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runTestMain([]string{"--bench", "--serial", "--benchtime", "50ms", dir}, cliFlags{}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runTestMain() --benchtime exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	got := stdout.String()
+	if strings.Contains(got, "iter=5 ") {
+		t.Fatalf("auto-tune did not fire, bench still ran 5 iters:\nstdout:\n%s", got)
+	}
+	if !strings.Contains(got, "iter=") {
+		t.Fatalf("stdout = %q, want iter= summary", got)
+	}
+}
+
+func TestRunTestMainBenchTimeRequiresBenchMode(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runTestMain([]string{"--benchtime", "100ms"}, cliFlags{}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("runTestMain() --benchtime alone exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--benchtime requires --bench") {
+		t.Fatalf("stderr = %q, want --benchtime / --bench dependency diagnostic", stderr.String())
+	}
+}
+
+func TestRunTestMainSkipsBenchInTestMode(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `pub fn noop() {
+}
+`)
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+
+fn testOk() {
+    testing.assertEq(1, 1)
+}
+
+// Deliberately invalid: if bench mode discovery leaks into plain test
+// mode this would run and fail because the naked 1 in a Result-returning
+// closure doesn't typecheck. The correct behavior is to skip the bench
+// entirely when --bench is absent.
+fn benchShouldNotRun() {
+    testing.assertEq(99, 0)
+}
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runTestMain([]string{dir}, cliFlags{}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runTestMain() default exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "running 1 tests") || !strings.Contains(got, "ok\ttestOk") {
+		t.Fatalf("stdout = %q, want only testOk in default mode", got)
+	}
+	if strings.Contains(got, "benchShouldNotRun") {
+		t.Fatalf("stdout = %q, bench should not run in default test mode", got)
+	}
+}
+
 func requireClangForNativeTest(t *testing.T) {
 	t.Helper()
 	if _, err := exec.LookPath("clang"); err != nil {

@@ -33,7 +33,7 @@ fn notATest() -> Int {
 }
 `)
 	pkg := mustResolveSingleFilePackage(t, "inline_test.osty", src)
-	tests, err := discoverNativeTests(pkg, nil)
+	tests, err := discoverNativeTests(pkg, nil, false)
 	if err != nil {
 		t.Fatalf("discoverNativeTests: %v", err)
 	}
@@ -70,7 +70,7 @@ fn testReal() {
 }
 `)
 	pkg := mustResolveSingleFilePackage(t, "testing_skip_test.osty", src)
-	tests, err := discoverNativeTests(pkg, nil)
+	tests, err := discoverNativeTests(pkg, nil, false)
 	if err != nil {
 		t.Fatalf("discoverNativeTests: %v", err)
 	}
@@ -96,7 +96,7 @@ fn goodTest() {
 }
 `)
 	pkg := mustResolveSingleFilePackage(t, "param_test.osty", src)
-	tests, _ := discoverNativeTests(pkg, nil)
+	tests, _ := discoverNativeTests(pkg, nil, false)
 	for _, tc := range tests {
 		if tc.Name == "withParam" {
 			t.Error("#[test] on a function with parameters must be skipped, not discovered")
@@ -110,6 +110,51 @@ fn goodTest() {
 	}
 	if !foundGood {
 		t.Error("goodTest should be discovered")
+	}
+}
+
+func TestDiscoverNativeTestsSplitsTestAndBench(t *testing.T) {
+	src := []byte(`fn testAlpha() { let _ = 1 }
+
+fn benchAlpha() { let _ = 1 }
+
+#[test]
+fn inline_case() { let _ = 1 }
+`)
+	pkg := mustResolveSingleFilePackage(t, "mix_test.osty", src)
+
+	// Default (test) mode: bench-prefixed functions are ignored so the
+	// runner never accidentally invokes a benchmark harness as a plain
+	// test. `#[test]` annotation is picked up regardless of name prefix.
+	testMode, err := discoverNativeTests(pkg, nil, false)
+	if err != nil {
+		t.Fatalf("discoverNativeTests(test): %v", err)
+	}
+	names := map[string]bool{}
+	for _, tc := range testMode {
+		names[tc.Name] = true
+	}
+	if !names["testAlpha"] || !names["inline_case"] {
+		t.Errorf("test-mode missing expected names: %v", names)
+	}
+	if names["benchAlpha"] {
+		t.Error("test-mode must not pick up bench-prefixed functions")
+	}
+
+	// Bench mode (spec §11.4): only `bench*` names are discovered.
+	benchMode, err := discoverNativeTests(pkg, nil, true)
+	if err != nil {
+		t.Fatalf("discoverNativeTests(bench): %v", err)
+	}
+	benchNames := map[string]bool{}
+	for _, tc := range benchMode {
+		benchNames[tc.Name] = true
+	}
+	if !benchNames["benchAlpha"] {
+		t.Errorf("bench-mode should discover benchAlpha, got %v", benchNames)
+	}
+	if benchNames["testAlpha"] || benchNames["inline_case"] {
+		t.Errorf("bench-mode must not pull test-prefixed / #[test] functions, got %v", benchNames)
 	}
 }
 

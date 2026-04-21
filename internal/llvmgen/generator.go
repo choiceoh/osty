@@ -79,6 +79,11 @@ type generator struct {
 	nextSafepoint  int
 	hiddenLocalID  int
 	loopStack      []loopContext
+	// benchClosureDepth > 0 while emitting a `testing.benchmark` closure
+	// body. `?` inside that region redirects to `emitTestingAbortWithEmitter`
+	// (print location + exit 1) instead of a Result/Option return, because
+	// the enclosing test main returns unit and `?` has nowhere to go.
+	benchClosureDepth int
 	// deferStack parallels g.locals: each scope owns a list of deferred
 	// statement bodies, executed in LIFO order when the scope exits
 	// (popScope) or when control unwinds through it (break / continue /
