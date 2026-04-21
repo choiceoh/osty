@@ -1334,12 +1334,15 @@ pub fn checkInstallPrelude(env: CheckEnv) {
     checkRegisterInterface(env, "Hashable")
 
     // Register stdlib types that carry generics so alias/bound
-    // substitution has the arity information it needs.
+    // substitution has the arity information it needs. Primitive
+    // namespaces with static helpers (`Bytes.from(...)`) also need a
+    // type entry so type-qualified calls can resolve the owner name.
     checkRegisterType(env, CheckTypeSig { name: "List", generics: ["T"], genericBounds: [], kind: "struct" })
     checkRegisterType(env, CheckTypeSig { name: "Map", generics: ["K", "V"], genericBounds: [], kind: "struct" })
     checkRegisterType(env, CheckTypeSig { name: "Option", generics: ["T"], genericBounds: [], kind: "enum" })
     checkRegisterType(env, CheckTypeSig { name: "Result", generics: ["T", "E"], genericBounds: [], kind: "enum" })
     checkRegisterType(env, CheckTypeSig { name: "Range", generics: ["T"], genericBounds: [], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "Bytes", generics: [], genericBounds: [], kind: "struct" })
 
     // Option / Result variants.
     checkRegisterVariant(env, CheckVariantSig {
@@ -1641,7 +1644,7 @@ fn checkInstallChannelIntrinsics(env: CheckEnv) {
 }
 
 /// checkInstallBuiltinMethods registers the intrinsic methods spec
-/// §10.6 gives `List<T>` / `Map<K, V>` / `String`. These are not
+/// §10.6 gives `List<T>` / `Map<K, V>` / `String` / `Bytes`. These are not
 /// user-written — the backend lowers them directly — but the checker
 /// still needs a signature to type the call.
 ///
@@ -1662,6 +1665,7 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
     let tListChar = tyNamed(tys, "List", [tChar(tys)])
     let tListByte = tyNamed(tys, "List", [tByte(tys)])
     let tMapKV = tyNamed(tys, "Map", [tK, tV])
+    let tBytes_ = tBytes(tys)
     let tOptT = tyOptional(tys, tT)
     let tOptV = tyOptional(tys, tV)
 
@@ -2037,6 +2041,28 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         name: "toInt", owner: "String", receiverTy: tString_,
         retTy: tyNamed(tys, "Result", [tInt(tys), tyNamed(tys, "Error", [])]),
         paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+
+    // ----- Bytes intrinsics -----
+    checkRegisterFn(env, CheckFnSig {
+        name: "from", owner: "Bytes", receiverTy: -1, retTy: tBytes_,
+        paramNames: ["items"], paramTys: [tListByte],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "len", owner: "Bytes", receiverTy: tBytes_, retTy: tInt(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "isEmpty", owner: "Bytes", receiverTy: tBytes_, retTy: tBool(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "get", owner: "Bytes", receiverTy: tBytes_, retTy: tyOptional(tys, tByte(tys)),
+        paramNames: ["index"], paramTys: [tInt(tys)],
         generics: [], genericBounds: [],
     })
 

@@ -1372,7 +1372,87 @@ fn elabInferStaticMethodCall(
     explicitArgs: List<Int>,
     expected: Int,
 ) -> ElabResult {
-    let _ = ownerName
+    if sig.receiverTy != -1 {
+        let totalArgs = checkIntListLenHelper(argIdxs)
+        if totalArgs == 0 {
+            cx.env.diagnostics.push(diagArgCount(
+                "{ownerName}.{sig.name}",
+                1 + checkIntListLenHelper(sig.paramTys),
+                totalArgs,
+                node.start,
+                node.end,
+            ))
+            return elabPoisonResult(cx, node.start, node.end)
+        }
+        let recv = elabInfer(cx, checkIntListAt(argIdxs, 0))
+        let recvResolved = checkResolveAliasDeep(cx.env, recv.ty)
+        if tyIsBad(cx.env.tys, recvResolved) {
+            return elabPoisonResult(cx, node.start, node.end)
+        }
+        let _ = checkExpectAssignable(cx.env, sig.receiverTy, recvResolved, node.start, node.end)
+
+        let mut methodArgIdxs: List<Int> = []
+        let mut i = 0
+        for argIdx in argIdxs {
+            if i > 0 {
+                methodArgIdxs.push(argIdx)
+            }
+            i = i + 1
+        }
+
+        if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
+            let coreArgs = elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, methodArgIdxs, node.start, node.end)
+            let retTy = sig.retTy
+            if !(tyIsBad(cx.env.tys, expected)) {
+                let _ = checkExpectAssignable(cx.env, expected, retTy, node.start, node.end)
+            }
+            let mcall = coreMethodCall(
+                cx.core,
+                recv.node,
+                sig.name,
+                ownerName,
+                coreArgs,
+                [],
+                retTy,
+                node.start,
+                node.end,
+            )
+            return ElabResult { node: mcall, ty: retTy }
+        }
+
+        let inst = instBegin(cx, sig.generics, "{ownerName}.{sig.name}")
+        let typeSig = checkLookupType(cx.env, ownerName)
+        let ownerArgs = tyArgsAt(cx.env.tys, recvResolved)
+        instSeedOwnerArgs(cx, inst, typeSig.generics, ownerArgs)
+        instSeedExpectedRet(cx, inst, sig.retTy, expected)
+        instSeedPositionalArgs(cx, inst, explicitArgs)
+
+        let coreArgs = elabCallArgs(cx, inst.solver, sig, inst.freshs, methodArgIdxs, node.start, node.end)
+        let retSubstituted = instSubstitute(cx, inst, sig.retTy)
+        let retTy = instZonk(cx, inst, retSubstituted)
+
+        elabReportUnresolvedGenerics(cx, inst.solver, sig, inst.freshs, node.start, node.end)
+        instCheckBounds(cx, inst, sig.genericBounds, node.start, node.end)
+
+        let typeArgsConcrete = instConcreteArgs(cx, inst)
+        if checkIntListLenHelper(typeArgsConcrete) > 0 {
+            checkRecordInstantiation(cx.env, callIdx, "{ownerName}.{sig.name}", typeArgsConcrete, retTy, node.start, node.end)
+        }
+
+        let mcall = coreMethodCall(
+            cx.core,
+            recv.node,
+            sig.name,
+            ownerName,
+            coreArgs,
+            typeArgsConcrete,
+            retTy,
+            node.start,
+            node.end,
+        )
+        return ElabResult { node: mcall, ty: retTy }
+    }
+
     if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
         let coreFn = coreIdent(cx.core, sig.name, IkFn, fnSigToTy(cx.env, sig), fieldNode.start, fieldNode.end)
         let coreArgs = elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, argIdxs, node.start, node.end)

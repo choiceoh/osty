@@ -34569,6 +34569,8 @@ func checkInstallPrelude(env *CheckEnv) {
 	checkRegisterType(env, &CheckTypeSig{name: "Result", generics: []string{"T", "E"}, genericBounds: make([]*CheckGenericBound, 0, 1), kind: "enum"})
 	// Osty: /tmp/selfhost_merged.osty:14979:5
 	checkRegisterType(env, &CheckTypeSig{name: "Range", generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1), kind: "struct"})
+	// Osty: /tmp/selfhost_merged.osty:14980:5
+	checkRegisterType(env, &CheckTypeSig{name: "Bytes", generics: make([]string, 0), genericBounds: make([]*CheckGenericBound, 0, 1), kind: "struct"})
 	// Osty: /tmp/selfhost_merged.osty:14982:5
 	checkRegisterVariant(env, &CheckVariantSig{owner: "Option", name: "Some", fieldTys: []int{tyNamed(env.tys, "T", make([]int, 0, 1))}, generics: []string{"T"}})
 	// Osty: /tmp/selfhost_merged.osty:14988:5
@@ -35016,6 +35018,14 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "trimSuffix", owner: "String", receiverTy: tString_, retTy: tString_, paramNames: []string{"suffix"}, paramTys: []int{tString_}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:15673:5
 	checkRegisterFn(env, &CheckFnSig{name: "toInt", owner: "String", receiverTy: tString_, retTy: tyNamed(tys, "Result", []int{tInt(tys), tyNamed(tys, "Error", make([]int, 0, 1))}), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// Osty: /tmp/selfhost_merged.osty:15674:5
+	checkRegisterFn(env, &CheckFnSig{name: "from", owner: "Bytes", receiverTy: -1, retTy: tBytes_, paramNames: []string{"items"}, paramTys: []int{tListByte}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// Osty: /tmp/selfhost_merged.osty:15675:5
+	checkRegisterFn(env, &CheckFnSig{name: "len", owner: "Bytes", receiverTy: tBytes_, retTy: tInt(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// Osty: /tmp/selfhost_merged.osty:15676:5
+	checkRegisterFn(env, &CheckFnSig{name: "isEmpty", owner: "Bytes", receiverTy: tBytes_, retTy: tBool(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// Osty: /tmp/selfhost_merged.osty:15677:5
+	checkRegisterFn(env, &CheckFnSig{name: "get", owner: "Bytes", receiverTy: tBytes_, retTy: tyOptional(tys, tByte(tys)), paramNames: []string{"index"}, paramTys: []int{tInt(tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:15681:5
 	checkRegisterFn(env, &CheckFnSig{name: "toInt", owner: "Char", receiverTy: tChar(tys), retTy: tInt(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:15686:5
@@ -38002,62 +38012,103 @@ func elabInferVariantCall(cx *ElabCx, callIdx int, node *AstNode, baseCallee *As
 
 // Osty: /tmp/selfhost_merged.osty:17500:1
 func elabInferStaticMethodCall(cx *ElabCx, callIdx int, node *AstNode, fieldNode *AstNode, argIdxs []int, ownerName string, sig *CheckFnSig, explicitArgs []int, expected int) *ElabResult {
-	// Osty: /tmp/selfhost_merged.osty:17511:5
+	if sig.receiverTy != -1 {
+		totalArgs := checkIntListLenHelper(argIdxs)
+		_ = totalArgs
+		if totalArgs == 0 {
+			cx.env.diagnostics = append(cx.env.diagnostics, diagArgCount(fmt.Sprintf("%s.%s", ostyToString(ownerName), ostyToString(sig.name)), 1+checkIntListLenHelper(sig.paramTys), totalArgs, node.start, node.end))
+			return elabPoisonResult(cx, node.start, node.end)
+		}
+		recv := elabInfer(cx, checkIntListAt(argIdxs, 0))
+		_ = recv
+		recvResolved := checkResolveAliasDeep(cx.env, recv.ty)
+		_ = recvResolved
+		if tyIsBad(cx.env.tys, recvResolved) {
+			return elabPoisonResult(cx, node.start, node.end)
+		}
+		_ = checkExpectAssignable(cx.env, sig.receiverTy, recvResolved, node.start, node.end)
+		methodArgIdxs := make([]int, 0, 1)
+		_ = methodArgIdxs
+		i := 0
+		_ = i
+		for _, argIdx := range argIdxs {
+			if i > 0 {
+				methodArgIdxs = append(methodArgIdxs, argIdx)
+			}
+			i = i + 1
+		}
+		if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
+			coreArgs := elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, methodArgIdxs, node.start, node.end)
+			_ = coreArgs
+			retTy := sig.retTy
+			_ = retTy
+			if !(tyIsBad(cx.env.tys, expected)) {
+				_ = checkExpectAssignable(cx.env, expected, retTy, node.start, node.end)
+			}
+			mcall := coreMethodCall(cx.core, recv.node, sig.name, ownerName, coreArgs, make([]int, 0, 1), retTy, node.start, node.end)
+			_ = mcall
+			return &ElabResult{node: mcall, ty: retTy}
+		}
+		inst := instBegin(cx, sig.generics, fmt.Sprintf("%s.%s", ostyToString(ownerName), ostyToString(sig.name)))
+		_ = inst
+		typeSig := checkLookupType(cx.env, ownerName)
+		_ = typeSig
+		ownerArgs := tyArgsAt(cx.env.tys, recvResolved)
+		_ = ownerArgs
+		instSeedOwnerArgs(cx, inst, typeSig.generics, ownerArgs)
+		instSeedExpectedRet(cx, inst, sig.retTy, expected)
+		instSeedPositionalArgs(cx, inst, explicitArgs)
+		coreArgs := elabCallArgs(cx, inst.solver, sig, inst.freshs, methodArgIdxs, node.start, node.end)
+		_ = coreArgs
+		retSubstituted := instSubstitute(cx, inst, sig.retTy)
+		_ = retSubstituted
+		retTy := instZonk(cx, inst, retSubstituted)
+		_ = retTy
+		elabReportUnresolvedGenerics(cx, inst.solver, sig, inst.freshs, node.start, node.end)
+		instCheckBounds(cx, inst, sig.genericBounds, node.start, node.end)
+		typeArgsConcrete := instConcreteArgs(cx, inst)
+		_ = typeArgsConcrete
+		if checkIntListLenHelper(typeArgsConcrete) > 0 {
+			checkRecordInstantiation(cx.env, callIdx, fmt.Sprintf("%s.%s", ostyToString(ownerName), ostyToString(sig.name)), typeArgsConcrete, retTy, node.start, node.end)
+		}
+		mcall := coreMethodCall(cx.core, recv.node, sig.name, ownerName, coreArgs, typeArgsConcrete, retTy, node.start, node.end)
+		_ = mcall
+		return &ElabResult{node: mcall, ty: retTy}
+	}
 	_ = ownerName
-	// Osty: /tmp/selfhost_merged.osty:17512:5
 	if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
-		// Osty: /tmp/selfhost_merged.osty:17513:9
 		coreFn := coreIdent(cx.core, sig.name, IdentKind(&IdentKind_IkFn{}), fnSigToTy(cx.env, sig), fieldNode.start, fieldNode.end)
 		_ = coreFn
-		// Osty: /tmp/selfhost_merged.osty:17514:9
 		coreArgs := elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, argIdxs, node.start, node.end)
 		_ = coreArgs
-		// Osty: /tmp/selfhost_merged.osty:17515:9
 		retTy := sig.retTy
 		_ = retTy
-		// Osty: /tmp/selfhost_merged.osty:17516:9
 		if !(tyIsBad(cx.env.tys, expected)) {
-			// Osty: /tmp/selfhost_merged.osty:17517:13
 			_ = checkExpectAssignable(cx.env, expected, retTy, node.start, node.end)
 		}
-		// Osty: /tmp/selfhost_merged.osty:17519:9
 		coreCallNode := coreCall(cx.core, coreFn, coreArgs, make([]int, 0, 1), retTy, node.start, node.end)
 		_ = coreCallNode
-		// Osty: /tmp/selfhost_merged.osty:17520:9
 		return &ElabResult{node: coreCallNode, ty: retTy}
 	}
-	// Osty: /tmp/selfhost_merged.osty:17523:5
 	inst := instBegin(cx, sig.generics, sig.name)
 	_ = inst
-	// Osty: /tmp/selfhost_merged.osty:17524:5
 	instSeedExpectedRet(cx, inst, sig.retTy, expected)
-	// Osty: /tmp/selfhost_merged.osty:17525:5
 	instSeedPositionalArgs(cx, inst, explicitArgs)
-	// Osty: /tmp/selfhost_merged.osty:17527:5
 	coreFn := coreIdent(cx.core, sig.name, IdentKind(&IdentKind_IkFn{}), fnSigToTy(cx.env, sig), fieldNode.start, fieldNode.end)
 	_ = coreFn
-	// Osty: /tmp/selfhost_merged.osty:17528:5
 	coreArgs := elabCallArgs(cx, inst.solver, sig, inst.freshs, argIdxs, node.start, node.end)
 	_ = coreArgs
-	// Osty: /tmp/selfhost_merged.osty:17530:5
 	retSubstituted := instSubstitute(cx, inst, sig.retTy)
 	_ = retSubstituted
-	// Osty: /tmp/selfhost_merged.osty:17531:5
 	retTy := instZonk(cx, inst, retSubstituted)
 	_ = retTy
-	// Osty: /tmp/selfhost_merged.osty:17533:5
 	elabReportUnresolvedGenerics(cx, inst.solver, sig, inst.freshs, node.start, node.end)
-	// Osty: /tmp/selfhost_merged.osty:17534:5
 	instCheckBounds(cx, inst, sig.genericBounds, node.start, node.end)
-	// Osty: /tmp/selfhost_merged.osty:17536:5
 	typeArgsConcrete := instConcreteArgs(cx, inst)
 	_ = typeArgsConcrete
-	// Osty: /tmp/selfhost_merged.osty:17537:5
 	if checkIntListLenHelper(typeArgsConcrete) > 0 {
-		// Osty: /tmp/selfhost_merged.osty:17538:9
 		checkRecordInstantiation(cx.env, callIdx, sig.name, typeArgsConcrete, retTy, node.start, node.end)
 	}
-	// Osty: /tmp/selfhost_merged.osty:17541:5
 	coreCallNode := coreCall(cx.core, coreFn, coreArgs, typeArgsConcrete, retTy, node.start, node.end)
 	_ = coreCallNode
 	return &ElabResult{node: coreCallNode, ty: retTy}
