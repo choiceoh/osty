@@ -596,57 +596,45 @@ func llvmStringLiteral(emitter *LlvmEmitter, text string) *LlvmValue {
 }
 
 // Osty: examples/selfhost-core/llvmgen.osty:383:5
+//
+// `byteLen` counts bytes (not runes) so LLVM IR globals sized as
+// `[N x i8]` stay correct for multi-byte UTF-8 text. The previous
+// `strings.Split(text, "")` path returned rune count, which was a
+// silent truncation for anything above U+007F.
 func llvmCString(text string) *LlvmCString {
-	// Osty: examples/selfhost-core/llvmgen.osty:384:5
 	encoded := fmt.Sprintf("%s\\00", ostyToString(llvmCStringEscape(text)))
 	_ = encoded
-	// Osty: examples/selfhost-core/llvmgen.osty:385:5
-	byteLen := func() int {
-		var _p5 int = len(llvmStrings.Split(text, ""))
-		var _rhs6 int = 1
-		if _rhs6 > 0 && _p5 > math.MaxInt-_rhs6 {
-			panic("integer overflow")
-		}
-		if _rhs6 < 0 && _p5 < math.MinInt-_rhs6 {
-			panic("integer overflow")
-		}
-		return _p5 + _rhs6
-	}()
+	byteLen := len(text) + 1
 	_ = byteLen
 	return &LlvmCString{encoded: encoded, byteLen: byteLen}
 }
 
 // Osty: examples/selfhost-core/llvmgen.osty:389:5
+//
+// Encodes `text` for an LLVM `c"..."` constant. Iterates over raw
+// bytes (not runes) so multi-byte UTF-8 code points emit one `\HH`
+// escape per byte — LLVM IR string globals are byte arrays, so that's
+// the right shape for downstream `getelementptr` + `printf`/runtime
+// helpers. Printable ASCII passes through verbatim; `"` and `\`
+// always escape; everything else (including 0x00–0x1F, 0x7F, and all
+// high bytes 0x80–0xFF) goes through `\HH`.
 func llvmCStringEscape(text string) string {
-	// Osty: examples/selfhost-core/llvmgen.osty:390:5
-	encoded := ""
-	_ = encoded
-	// Osty: examples/selfhost-core/llvmgen.osty:391:5
-	for _, unit := range llvmStrings.Split(text, "") {
-		// Osty: examples/selfhost-core/llvmgen.osty:392:9
-		if unit == "\n" {
-			// Osty: examples/selfhost-core/llvmgen.osty:393:13
-			encoded = fmt.Sprintf("%s\\0A", ostyToString(encoded))
-		} else if unit == "\t" {
-			// Osty: examples/selfhost-core/llvmgen.osty:395:13
-			encoded = fmt.Sprintf("%s\\09", ostyToString(encoded))
-		} else if unit == "\r" {
-			// Osty: examples/selfhost-core/llvmgen.osty:397:13
-			encoded = fmt.Sprintf("%s\\0D", ostyToString(encoded))
-		} else if unit == "\"" {
-			// Osty: examples/selfhost-core/llvmgen.osty:399:13
-			encoded = fmt.Sprintf("%s\\22", ostyToString(encoded))
-		} else if unit == "\\" {
-			// Osty: examples/selfhost-core/llvmgen.osty:401:13
-			encoded = fmt.Sprintf("%s\\5C", ostyToString(encoded))
-		} else if unit == "\x1f" {
-			encoded = fmt.Sprintf("%s\\1F", ostyToString(encoded))
-		} else {
-			// Osty: examples/selfhost-core/llvmgen.osty:403:13
-			encoded = fmt.Sprintf("%s%s", ostyToString(encoded), ostyToString(unit))
+	var b llvmStrings.Builder
+	b.Grow(len(text))
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		switch {
+		case c == '"':
+			b.WriteString(`\22`)
+		case c == '\\':
+			b.WriteString(`\5C`)
+		case c >= 0x20 && c <= 0x7E:
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, `\%02X`, c)
 		}
 	}
-	return encoded
+	return b.String()
 }
 
 // Osty: examples/selfhost-core/llvmgen.osty:409:5
@@ -1373,15 +1361,16 @@ func llvmLogicalInstruction(op string) string {
 	}
 }
 
+// llvmIsAsciiStringText gates which plain String literals the
+// LLVM backend accepts directly. Since `llvmCStringEscape` now
+// byte-escapes any non-printable / non-ASCII character via `\HH`,
+// the gate only needs to reject text that can't be encoded as a
+// byte sequence at all — i.e. nothing; every Go `string` is a
+// byte sequence. The legacy name is kept for call-site stability;
+// a future rename to `llvmCanEmitStringLiteral` or similar is a
+// pure-cleanup follow-up.
 func llvmIsAsciiStringText(text string) bool {
-	for _, c := range text {
-		if c == '\n' || c == '\t' || c == '\r' || c == '\x1f' {
-			continue
-		}
-		if c < ' ' || c > '~' {
-			return false
-		}
-	}
+	_ = text
 	return true
 }
 

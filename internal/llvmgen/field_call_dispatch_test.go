@@ -164,6 +164,52 @@ func TestGenerateIndexedNestedListLenMethodDispatch(t *testing.T) {
 	}
 }
 
+// TestGenerateNonAsciiStringLiteralLowersAsByteEscapes verifies plain
+// String literals containing multi-byte UTF-8 code points (BOM,
+// Korean, emoji) now lower through `llvmCStringEscape` as one `\HH`
+// escape per UTF-8 byte instead of tripping
+// `LLVM011 [string_non_ascii]`. Previously the backend restricted
+// literals to printable ASCII + \n \t \r \x1f; now the gate is a
+// no-op because the escaper walks bytes and byte-escapes everything
+// outside the printable ASCII range (minus `"` / `\`).
+//
+// The toolchain lexer at `toolchain/frontend.osty:600` (`unit ==
+// "\u{FEFF}"`) was the probe's first wall after the `list_mixed_ptr`
+// fix landed; other sites like the monomorphization key builder use
+// `\u{1F}` and are also covered here.
+func TestGenerateNonAsciiStringLiteralLowersAsByteEscapes(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    let bom = "\u{FEFF}"
+    let sep = "\u{1F}"
+    let hello = "안녕"
+    println(bom)
+    println(sep)
+    println(hello)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/non_ascii_literal.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	// BOM = U+FEFF → UTF-8 EF BB BF.
+	// Unit Separator = U+001F → UTF-8 1F.
+	// 안 = U+C548 → UTF-8 EC 95 88; 녕 = U+B155 → UTF-8 EB 85 95.
+	for _, want := range []string{
+		`\EF\BB\BF`,
+		`\1F`,
+		`\EC\95\88\EB\85\95`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing byte escape %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateListLiteralOfStringsPropagatesSourceType covers three
 // paths that previously dropped the `String` source type from list
 // literal elements and first-walled on
