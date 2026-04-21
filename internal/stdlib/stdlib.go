@@ -420,6 +420,56 @@ func (r *Registry) LookupFnDecl(module, name string) *ast.FnDecl {
 	return nil
 }
 
+// LookupMethodDecl returns the method declaration named methodName on
+// the type typeName inside the stdlib module, or nil if any of the
+// module / type / method is missing.
+//
+// Looks at struct, enum, and interface declarations — any of them can
+// own methods. Interface default methods are returned just like
+// concrete methods, since the backend distinguishes by receiver shape
+// rather than by where the method was declared.
+//
+// Returns the shared immutable registry copy; callers must not mutate
+// it. Mirrors LookupFnDecl in style and lookup contract so a future
+// stdlib body injector can drive both surfaces uniformly.
+func (r *Registry) LookupMethodDecl(module, typeName, methodName string) *ast.FnDecl {
+	if r == nil || module == "" || typeName == "" || methodName == "" {
+		return nil
+	}
+	mod, ok := r.Modules[module]
+	if !ok || mod == nil || mod.File == nil {
+		return nil
+	}
+	for _, decl := range mod.File.Decls {
+		var methods []*ast.FnDecl
+		switch d := decl.(type) {
+		case *ast.StructDecl:
+			if d.Name != typeName {
+				continue
+			}
+			methods = d.Methods
+		case *ast.EnumDecl:
+			if d.Name != typeName {
+				continue
+			}
+			methods = d.Methods
+		case *ast.InterfaceDecl:
+			if d.Name != typeName {
+				continue
+			}
+			methods = d.Methods
+		default:
+			continue
+		}
+		for _, m := range methods {
+			if m != nil && m.Name == methodName {
+				return m
+			}
+		}
+	}
+	return nil
+}
+
 // collectStubPaths walks the embedded file system and returns every
 // .osty path in lexical order. Deterministic ordering keeps diagnostic
 // output stable across runs.
