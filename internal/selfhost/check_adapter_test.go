@@ -65,3 +65,40 @@ func TestCheckSourceStructuredRegistersPreludeFunctions(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckSourceStructuredAcceptsAliasQualifiedGoUseBodyTypes(t *testing.T) {
+	src := []byte(`use go "example.com/host" as host {
+    struct Item {
+        Name: String
+    }
+
+    fn Make() -> Item
+    fn All() -> List<Item>
+}
+
+fn main() {
+    let item: host.Item = host.Make()
+    let items: List<host.Item> = host.All()
+    let name: String = item.Name
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails)
+	}
+
+	got := map[string]string{}
+	for _, binding := range checked.Bindings {
+		got[binding.Name] = binding.TypeName
+	}
+	if got["item"] != "host.Item" {
+		t.Fatalf("binding type for item = %q, want host.Item (all=%v)", got["item"], got)
+	}
+	if got["items"] != "List<host.Item>" {
+		t.Fatalf("binding type for items = %q, want List<host.Item> (all=%v)", got["items"], got)
+	}
+	if got["name"] != "String" {
+		t.Fatalf("binding type for name = %q, want String (all=%v)", got["name"], got)
+	}
+}

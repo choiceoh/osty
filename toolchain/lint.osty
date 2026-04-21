@@ -2459,10 +2459,11 @@ fn selfLintIsLowerCamel(name: String) -> Bool {
 }
 
 fn selfLintFirstUnit(name: String) -> String {
-    if name.isEmpty() {
+    let units = strings.split(name, "")
+    if selfLintStringListLen(units) == 0 {
         return ""
     }
-    strings.slice(name, 0, 1)
+    units[0]
 }
 
 /// selfLintAstCheckMissingDocs walks every decl (and every `pub` method
@@ -3385,7 +3386,8 @@ fn selfLintIsLintCode(name: String) -> Bool {
         return false
     }
     let mut i = 1
-    for i < units.len() {
+    let n = selfLintStringListLen(units)
+    for i < n {
         let u = units[i]
         if u < "0" || u > "9" {
             return false
@@ -3901,7 +3903,7 @@ fn selfLintIsTestFnName(name: String) -> Bool {
     if name.len() <= 4 {
         return false
     }
-    let fifth = strings.slice(name, 4, 5)
+    let fifth = selfLintStringUnitAt(name, 4)
     if fifth == "_" {
         return true
     }
@@ -3910,6 +3912,18 @@ fn selfLintIsTestFnName(name: String) -> Bool {
         return true
     }
     false
+}
+
+fn selfLintStringUnitAt(text: String, idx: Int) -> String {
+    let units = strings.split(text, "")
+    if idx < 0 || idx >= selfLintStringListLen(units) {
+        return ""
+    }
+    units[idx]
+}
+
+fn selfLintStringListLen(xs: List<String>) -> Int {
+    xs.len()
 }
 
 fn selfLintBodyUsesTestingModule(file: AstFile, idx: Int) -> Bool {

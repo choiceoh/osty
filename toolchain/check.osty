@@ -177,15 +177,15 @@ fn collectUseDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     checkBindSpan(env, alias, moduleTy, false, node.start, node.end)
     checkRecordSymbol(env, declIdx, "use", alias, "", moduleTy, node.start, node.end)
 
-    // Only register fn members for now. Struct / type-alias bodies
-    // would need to be stored under `<alias>.<Name>` to match the
-    // dotted forms used in type annotations outside the block
-    // (`astbridge.Pos` vs `Pos`) — wiring that into the whole
-    // alias-resolution + unification path is a separate fix.
     for bodyIdx in node.children {
         let body = astArenaNodeAt(cx.ast.arena, bodyIdx)
-        if body.kind == AstNFnDecl {
-            collectFnDecl(cx, bodyIdx, body, alias, [], [])
+        match body.kind {
+            AstNFnDecl -> collectFnDecl(cx, bodyIdx, body, alias, [], []),
+            AstNStructDecl -> collectUseDeclTypeBody(cx, bodyIdx, body, alias),
+            AstNEnumDecl -> collectUseDeclTypeBody(cx, bodyIdx, body, alias),
+            AstNInterfaceDecl -> collectUseDeclTypeBody(cx, bodyIdx, body, alias),
+            AstNTypeAlias -> collectUseDeclTypeBody(cx, bodyIdx, body, alias),
+            _ -> {},
         }
     }
 
@@ -212,6 +212,41 @@ fn collectUseDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     if node.text == "std.io" {
         registerStdIoAliasFns(env, alias)
     }
+}
+
+fn collectUseDeclTypeBody(cx: ElabCx, declIdx: Int, node: AstNode, alias: String) {
+    let generics = collectGenericNames(cx, node.children2)
+    if node.kind == AstNStructDecl {
+        collectStructDecl(cx, declIdx, node)
+    } else if node.kind == AstNEnumDecl {
+        collectEnumDecl(cx, declIdx, node)
+    } else if node.kind == AstNInterfaceDecl {
+        collectInterfaceDecl(cx, declIdx, node)
+    } else if node.kind == AstNTypeAlias {
+        collectTypeAlias(cx, declIdx, node)
+    } else {
+        return
+    }
+    registerUseDeclQualifiedTypeAlias(cx, alias, node.text, generics)
+}
+
+fn registerUseDeclQualifiedTypeAlias(cx: ElabCx, alias: String, name: String, generics: List<String>) {
+    let qualified = useDeclQualifiedTypeName(alias, name)
+    if qualified == "" || qualified == name {
+        return
+    }
+    checkRegisterAlias(cx.env, CheckAliasSig {
+        name: qualified,
+        ty: tyNamed(cx.env.tys, name, genericListToTyArgs(cx, generics)),
+        generics,
+    })
+}
+
+fn useDeclQualifiedTypeName(alias: String, name: String) -> String {
+    if alias == "" || name == "" {
+        return ""
+    }
+    "{alias}.{name}"
 }
 
 /// registerStdStringsAliasFns registers the hot subset of std.strings
