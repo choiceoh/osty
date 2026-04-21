@@ -35058,7 +35058,7 @@ func elabInferCall(cx *ElabCx, callIdx int, node *AstNode, expected int) *ElabRe
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15068:5
 	if ostyEqual(callee.kind, AstNodeKind(&AstNodeKind_AstNField{})) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15069:9
-		return elabInferMethodCall(cx, node, callee, expected)
+		return elabInferMethodCall(cx, node, callee, expected, make([]int, 0, 1))
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15073:5
 	var explicitArgs []int = make([]int, 0, 1)
@@ -35080,6 +35080,12 @@ func elabInferCall(cx *ElabCx, callIdx int, node *AstNode, expected int) *ElabRe
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15080:13
 			baseCallee = astArenaNodeAt(cx.ast.arena, baseIdx)
 		}
+	}
+	// Turbofish over a Field callee — `raw.read::<Int>(p)` etc. Route
+	// through the method-call path, forwarding the explicit type
+	// arguments. Mirrored from toolchain/elab.osty pending a regen fix.
+	if ostyEqual(baseCallee.kind, AstNodeKind(&AstNodeKind_AstNField{})) {
+		return elabInferMethodCall(cx, node, baseCallee, expected, explicitArgs)
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15084:5
 	if !ostyEqual(baseCallee.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
@@ -35180,7 +35186,10 @@ func elabInferVariantCall(cx *ElabCx, callIdx int, node *AstNode, baseCallee *As
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15137:1
-func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expected int) *ElabResult {
+// explicitArgs carries turbofish type arguments for `recv.method::<T>(args)`
+// forms; pass an empty slice for plain calls. Mirrored from
+// toolchain/elab.osty pending a regen fix.
+func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expected int, explicitArgs []int) *ElabResult {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15138:5
 	recv := elabInfer(cx, fieldNode.left)
 	_ = recv
@@ -35230,6 +35239,10 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 	_ = ownerArgs
 	instSeedOwnerArgs(cx, inst, typeSig.generics, ownerArgs)
 	instSeedExpectedRet(cx, inst, sig.retTy, expected)
+	// Turbofish: bind explicit method-level type args. Strict-match
+	// seeder short-circuits when receiver generics are in play; package
+	// aliases (`raw`) have no receiver generics so the seed lands.
+	instSeedPositionalArgs(cx, inst, explicitArgs)
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15170:5
 	coreArgs := elabCallArgs(cx, inst.solver, sig, inst.freshs, callNode.children, callNode.start, callNode.end)
 	_ = coreArgs
