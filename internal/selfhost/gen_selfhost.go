@@ -253,13 +253,40 @@ func patchGenerated(path string) error {
 }
 
 func normalizeGeneratedSourceComment(src string) string {
-	const prefix = "// Osty source: "
+	// bootstrap-gen embeds the merged-source path into both the
+	// file-level `// Osty source:` banner and every inline `// Osty:`
+	// map comment. Those paths include a platform-specific temp dir
+	// (`/var/folders/...` on macOS, `C:\...\AppData\Local\Temp\...` on
+	// Windows) plus a random suffix — committing them as-is turns
+	// every regen into a huge platform-dependent diff. Rewrite both
+	// forms to a stable `/tmp/selfhost_merged.osty` so the checked-in
+	// file is reproducible regardless of the host that ran the regen.
+	const headerPrefix = "// Osty source: "
+	const inlineMarker = "// Osty: "
+	const pathMarker = "selfhost_merged.osty"
+	const canonical = "/tmp/selfhost_merged.osty"
 	lines := strings.Split(src, "\n")
 	for i, line := range lines {
-		if strings.HasPrefix(line, prefix) && strings.HasSuffix(line, "selfhost_merged.osty") {
-			lines[i] = prefix + "/tmp/selfhost_merged.osty"
-			break
+		if strings.HasPrefix(line, headerPrefix) && strings.HasSuffix(line, pathMarker) {
+			lines[i] = headerPrefix + canonical
+			continue
 		}
+		// Inline `// Osty:` comments appear at top level and also
+		// indented inside function bodies — allow leading whitespace.
+		markerAt := strings.Index(line, inlineMarker)
+		if markerAt < 0 {
+			continue
+		}
+		pre := line[:markerAt]
+		if strings.TrimLeft(pre, " \t") != "" {
+			continue
+		}
+		body := line[markerAt+len(inlineMarker):]
+		pathAt := strings.Index(body, pathMarker)
+		if pathAt < 0 {
+			continue
+		}
+		lines[i] = pre + inlineMarker + canonical + body[pathAt+len(pathMarker):]
 	}
 	return strings.Join(lines, "\n")
 }
@@ -410,6 +437,10 @@ const coreArenaNodeCountReplacement = `func coreArenaNodeCount(arena *CoreArena)
 }
 `
 
+// coreArenaNodeAtReplacement keeps the defensive upper-bound guard
+// (`idx >= len(arena.nodes)`) that the Osty source omits. Removing
+// the patch would let out-of-bounds callers Go-panic instead of
+// returning the sentinel `CkErr` node, a silent behavioral change.
 const coreArenaNodeAtReplacement = `func coreArenaNodeAt(arena *CoreArena, idx int) *CoreNode {
 	if idx < 0 || idx >= len(arena.nodes) {
 		return emptyCoreNode(CoreKind(&CoreKind_CkErr{}))
