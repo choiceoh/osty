@@ -164,6 +164,74 @@ pub fn violator() -> Int { 42 }
 	}
 }
 
+func TestCheckSourceStructuredClosurePatternParam(t *testing.T) {
+	src := canonicalSelfhostSource(t, []byte(`fn main() {
+    let f: fn((Int, Int)) -> Int = |(a, b): (Int, Int)| a + b
+    let total = f((1, 2))
+}
+`))
+	checked := selfhost.CheckSourceStructured(src)
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+	if got := findCheckedBindingType(checked, "a"); got != "Int" {
+		t.Fatalf("binding type for a = %q, want Int", got)
+	}
+	if got := findCheckedBindingType(checked, "b"); got != "Int" {
+		t.Fatalf("binding type for b = %q, want Int", got)
+	}
+	if got := findCheckedBindingType(checked, "total"); got != "Int" {
+		t.Fatalf("binding type for total = %q, want Int", got)
+	}
+}
+
+func TestCheckPackageStructuredClosurePatternParamASTNative(t *testing.T) {
+	input := canonicalSelfhostInput(t, []byte(`fn main() {
+    let f: fn((Int, Int)) -> Int = |(a, b): (Int, Int)| a + b
+    let total = f((1, 2))
+}
+`), 0)
+	checked, err := selfhost.CheckPackageStructured(selfhost.PackageCheckInput{
+		Files: []selfhost.PackageCheckFile{input},
+	})
+	if err != nil {
+		t.Fatalf("CheckPackageStructured: %v", err)
+	}
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+	if got := findCheckedBindingType(checked, "a"); got != "Int" {
+		t.Fatalf("binding type for a = %q, want Int", got)
+	}
+	if got := findCheckedBindingType(checked, "b"); got != "Int" {
+		t.Fatalf("binding type for b = %q, want Int", got)
+	}
+	if got := findCheckedBindingType(checked, "total"); got != "Int" {
+		t.Fatalf("binding type for total = %q, want Int", got)
+	}
+}
+
+func TestCheckPackageStructuredScriptTopLevelLetsASTNative(t *testing.T) {
+	input := canonicalSelfhostInput(t, []byte(`let seed = 1
+let total = seed
+`), 0)
+	checked, err := selfhost.CheckPackageStructured(selfhost.PackageCheckInput{
+		Files: []selfhost.PackageCheckFile{input},
+	})
+	if err != nil {
+		t.Fatalf("CheckPackageStructured: %v", err)
+	}
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+	if got := findCheckedBindingType(checked, "seed"); got != "UntypedInt" {
+		t.Fatalf("binding type for seed = %q, want UntypedInt", got)
+	}
+	if got := findCheckedBindingType(checked, "total"); got != "UntypedInt" {
+		t.Fatalf("binding type for total = %q, want UntypedInt", got)
+	}
+}
+
 func TestCheckPackageStructuredReportsIntrinsicBodyViolationWithPath(t *testing.T) {
 	dir := t.TempDir()
 	goodPath := filepath.Join(dir, "good.osty")

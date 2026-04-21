@@ -221,11 +221,59 @@ func (l *selfhostPackageFileLowerer) lowerFile(file *ast.File) error {
 	if file == nil {
 		return nil
 	}
-	if len(file.Stmts) > 0 {
-		return &selfhostLoweringUnsupported{reason: "script top-level statements"}
-	}
+	items := make([]struct {
+		pos  int
+		ord  int
+		decl ast.Decl
+		stmt ast.Stmt
+	}, 0, len(file.Decls)+len(file.Stmts))
+	ord := 0
 	for _, decl := range file.Decls {
-		idx, err := l.lowerDecl(decl)
+		if decl == nil {
+			continue
+		}
+		items = append(items, struct {
+			pos  int
+			ord  int
+			decl ast.Decl
+			stmt ast.Stmt
+		}{
+			pos:  decl.Pos().Offset,
+			ord:  ord,
+			decl: decl,
+		})
+		ord++
+	}
+	for _, stmt := range file.Stmts {
+		if stmt == nil {
+			continue
+		}
+		items = append(items, struct {
+			pos  int
+			ord  int
+			decl ast.Decl
+			stmt ast.Stmt
+		}{
+			pos:  stmt.Pos().Offset,
+			ord:  ord,
+			stmt: stmt,
+		})
+		ord++
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].pos != items[j].pos {
+			return items[i].pos < items[j].pos
+		}
+		return items[i].ord < items[j].ord
+	})
+	for _, item := range items {
+		idx := -1
+		var err error
+		if item.decl != nil {
+			idx, err = l.lowerDecl(item.decl)
+		} else {
+			idx, err = l.lowerStmt(item.stmt)
+		}
 		if err != nil {
 			return err
 		}
@@ -459,12 +507,23 @@ func (l *selfhostPackageFileLowerer) lowerParam(param *ast.Param) (int, error) {
 	if param == nil {
 		return -1, nil
 	}
-	if param.Pattern != nil {
-		return -1, &selfhostLoweringUnsupported{reason: "closure destructuring params"}
-	}
 	node, err := l.nodeForPublic(AstNodeKind(&AstNodeKind_AstNParam{}), param)
 	if err != nil {
 		return -1, err
+	}
+	if param.Pattern != nil {
+		if param.Default != nil {
+			return -1, &selfhostLoweringUnsupported{reason: "closure pattern param default"}
+		}
+		node.left, err = l.lowerPattern(param.Pattern)
+		if err != nil {
+			return -1, err
+		}
+		node.right, err = l.lowerType(param.Type)
+		if err != nil {
+			return -1, err
+		}
+		return astArenaAdd(l.arena, node), nil
 	}
 	node.text = param.Name
 	node.right, err = l.lowerType(param.Type)
