@@ -45,6 +45,14 @@ Useful flags:
 - `--pairs-dir <path>` — defaults to `benchmarks/osty-vs-go`.
 - `--history <N>` — skip running and render the last N recorded runs
   as an ASCII trend graph (see below).
+- `--research` — skip running and print the research journal: current
+  champion, latest run, verdict, and per-bench deltas (see
+  [Autoresearch](#autoresearch-one-metric-one-loop-keep-the-best)).
+- `--loop <dur>` — keep re-running on a fixed cadence until Ctrl-C;
+  every tick prints a vs-best verdict so you can iterate on the
+  compiler in a tight edit → measure → decide loop.
+- `--noise <frac>` — band under which a vs-best delta is classified
+  as "within noise" rather than a regression. Default `0.02` (±2%).
 
 Sample output of one run:
 
@@ -111,6 +119,104 @@ slow bench both fill the column independently. Missing measurements
 shifting the column alignment.
 
 Delete `.osty-vs-go-history.jsonl` to reset history.
+
+## Autoresearch: one metric, one loop, keep the best
+
+Inspired by [karpathy/autoresearch][karpathy] (2026). The original is
+an AI agent that edits training code, runs a 5-minute experiment,
+keeps changes that beat the previous best score, and repeats overnight.
+Here we borrow the **keep-the-best / one-metric** discipline without
+the LLM agent — the human (or an outer-loop agent) is the one editing
+the compiler between runs; the tool's job is to make every edit land
+with a clear one-line verdict.
+
+The one metric: `geomean(ns_osty / ns_go)` across every bench pair
+with both sides present. **Lower is better.** It's persisted on the
+run record (`"score"` in the JSON) and the current git HEAD is
+captured too, so you can correlate scores with commits even if the
+working tree has moved on.
+
+### On every run
+
+Each `osty-vs-go` invocation compares its score against the best
+score seen in prior history and prints one of:
+
+```
+-> NEW BEST: score 17.260  (prev champion 18.754 at run #2; -7.97%)
+   top per-bench deltas (osty ns/op, vs champion):
+     ↓ fib.Fib15          16462.0 -> 9643.0     (-41.42%)
+     ↓ loop_sum.SumTo100    829.0 -> 496.0      (-40.17%)
+     ↓ arith.Add             65.0 -> 56.0       (-13.85%)
+```
+
+```
+-> regression: score 18.614 vs best 17.260 at run #3 (+7.84%)
+   top per-bench deltas …
+```
+
+```
+-> within noise: score 17.339 vs best 17.260 at run #3 (+0.46%)
+```
+
+```
+-> first run: score 19.360 (no prior data)
+```
+
+The `--noise` flag controls the band. Default ±2% — tight enough to
+catch real regressions, loose enough that normal clock jitter on
+short benches doesn't cry wolf.
+
+### `--research` — just the journal
+
+Skip the bench run and print the current state of the research:
+
+```
+$ go run ./cmd/osty-vs-go --research
+# osty-vs-go research journal — 6 run(s)
+
+  champion: run #3 third @ b0c6cd06-dirty  (score 17.260, 2026-04-22 00:55:07)
+  latest: run #6 variance-3 @ b0c6cd06-dirty  (score 21.177, 2026-04-22 00:55:39)
+
+  verdict: regression  (+22.69% vs champion)
+   top per-bench deltas (osty ns/op, vs champion):
+     ↑ arith.Add             56.0 -> 75.0   (+33.93%)
+     ↑ loop_sum.SumTo100    496.0 -> 632.0  (+27.42%)
+     ↓ fib.Fib15          9643.0 -> 9130.0  (-5.32%)
+
+  3 run(s) since the champion was set (run #3 -> run #6)
+```
+
+### `--loop` — continuous feedback
+
+Runs forever until Ctrl-C, sleeping `--loop <dur>` between sweeps.
+Edit the Osty compiler / runtime in another terminal; every tick
+re-measures, prints the vs-best verdict, and appends to history.
+Pairs naturally with an AI coding agent as the outer loop: the agent
+proposes a compiler tweak, you or CI run the sweep, the verdict
+decides whether to keep the edit.
+
+```sh
+go run ./cmd/osty-vs-go --loop 5m --benchtime 500ms --label "inline-probe"
+# run #7 — score 17.260 … -> NEW BEST (-4.1%)
+# (waiting 5m before next sweep; Ctrl-C to stop)
+# run #8 — score 17.183 … -> NEW BEST (-0.4%)
+# …
+```
+
+### Caveats
+
+- Git HEAD capture appends `-dirty` when the tree has uncommitted
+  edits, so runs against an in-progress branch stay honest in the
+  journal.
+- The composite is geomean over **every pair that has both sides**.
+  A pair added mid-history contributes to later scores but not
+  earlier ones, which shifts the comparison basis. When you add a
+  new pair, expect a step change on the next run's score.
+- Noise bands are set low by default. For microbenches (arith-style)
+  prefer `--benchtime 2s` or longer to quiet jitter before trusting
+  verdicts.
+
+[karpathy]: https://github.com/karpathy/autoresearch
 
 ## How the numbers compose (and when to distrust them)
 
