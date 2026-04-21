@@ -1,5 +1,6 @@
 use runtime.strings as strings {
     fn split(s: String, sep: String) -> List<String>
+    fn join(parts: List<String>, sep: String) -> String
 }
 
 /// LspSemanticToken is the self-hosted policy shape for one LSP semantic
@@ -1143,16 +1144,7 @@ fn lspUtf16UnitsForChar(ch: Char) -> Int {
 }
 
 fn lspJoinPath(path: List<String>) -> String {
-    let mut out = ""
-    let mut idx = 0
-    for part in path {
-        if idx > 0 {
-            out = "{out}."
-        }
-        out = "{out}{part}"
-        idx = idx + 1
-    }
-    return out
+    return strings.join(path, ".")
 }
 
 fn lspGroupDigit(group: Int) -> String {
