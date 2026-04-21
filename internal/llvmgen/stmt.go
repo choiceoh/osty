@@ -468,18 +468,8 @@ func (g *generator) emitFieldAssign(target *ast.FieldExpr, rhs ast.Expr) error {
 	// Rebuild: innermost insert first, then propagate back up.
 	next := v
 	for i := len(steps) - 1; i >= 0; i-- {
-		tmp := llvmNextTemp(emitter)
-		parent := levels[i]
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  %s = insertvalue %s %s, %s %s, %d",
-			tmp,
-			parent.typ,
-			parent.ref,
-			next.typ,
-			next.ref,
-			steps[i].index,
-		))
-		next = value{typ: parent.typ, ref: tmp}
+		rebuilt := llvmInsertValue(emitter, toOstyValue(levels[i]), toOstyValue(next), steps[i].index)
+		next = fromOstyValue(rebuilt)
 	}
 	llvmStore(emitter, toOstyValue(slot), toOstyValue(next))
 	g.takeOstyEmitter(emitter)

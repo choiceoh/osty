@@ -513,6 +513,17 @@ func llvmExtractValue(emitter *LlvmEmitter, aggregate *LlvmValue, fieldType stri
 }
 
 // Osty: examples/selfhost-core/llvmgen.osty:363:5
+func llvmInsertValue(emitter *LlvmEmitter, aggregate *LlvmValue, field *LlvmValue, fieldIndex int) *LlvmValue {
+	tmp := llvmNextTemp(emitter)
+	_ = tmp
+	func() struct{} {
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %s %s, %s %s, %s", ostyToString(tmp), ostyToString(aggregate.typ), ostyToString(aggregate.name), ostyToString(field.typ), ostyToString(field.name), ostyToString(fieldIndex)))
+		return struct{}{}
+	}()
+	return &LlvmValue{typ: aggregate.typ, name: tmp, pointer: false}
+}
+
+// Osty: examples/selfhost-core/llvmgen.osty:376:5
 func llvmPrintlnI64(emitter *LlvmEmitter, value *LlvmValue) {
 	// Osty: examples/selfhost-core/llvmgen.osty:364:5
 	tmp := llvmNextTemp(emitter)

@@ -106,3 +106,47 @@ fn main() {
 		t.Fatalf("expected insertvalue %%P for single-level assign:\n%s", got)
 	}
 }
+
+// Mirrors the canonical toolchain shape that first provoked the
+// `LLVM012 field assignment base *ast.FieldExpr` wall — a context
+// struct carrying a mutable environment holding a scalar slot, written
+// from a sibling struct's field. `toolchain/check.osty:547` is the
+// real site (`cx.env.returnTy = sig.retTy`); this test uses the same
+// shape with just enough scaffolding for the LLVM backend to lower it.
+func TestNestedFieldAssignToolchainEnvPattern(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct Env {
+    returnTy: Int,
+    fnName: Int,
+}
+
+struct Ctx {
+    env: Env,
+}
+
+struct Sig {
+    retTy: Int,
+    name: Int,
+}
+
+fn main() {
+    let mut cx: Ctx = Ctx { env: Env { returnTy: 0, fnName: 0 } }
+    let sig: Sig = Sig { retTy: 7, name: 1 }
+    cx.env.returnTy = sig.retTy
+    println(cx.env.returnTy)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/toolchain_env_pattern.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	if !strings.Contains(got, "store %Ctx") {
+		t.Fatalf("expected final store %%Ctx after rebuild chain:\n%s", got)
+	}
+	if !strings.Contains(got, "insertvalue %Ctx") {
+		t.Fatalf("expected outer insertvalue %%Ctx in rebuild chain:\n%s", got)
+	}
+	if !strings.Contains(got, "insertvalue %Env") {
+		t.Fatalf("expected inner insertvalue %%Env in rebuild chain:\n%s", got)
+	}
+}

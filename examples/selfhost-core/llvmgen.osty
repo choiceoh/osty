@@ -265,6 +265,19 @@ pub fn llvmExtractValue(
     LlvmValue { typ: fieldType, name: tmp, pointer: false }
 }
 
+pub fn llvmInsertValue(
+    emitter: LlvmEmitter,
+    aggregate: LlvmValue,
+    field: LlvmValue,
+    fieldIndex: Int,
+) -> LlvmValue {
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push(
+        "  {tmp} = insertvalue {aggregate.typ} {aggregate.name}, {field.typ} {field.name}, {fieldIndex}",
+    )
+    LlvmValue { typ: aggregate.typ, name: tmp, pointer: false }
+}
+
 pub fn llvmPrintlnI64(emitter: LlvmEmitter, value: LlvmValue) {
     let tmp = llvmNextTemp(emitter)
     emitter.body.push("  {tmp} = call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64 {value.name})")

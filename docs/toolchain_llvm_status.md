@@ -42,26 +42,17 @@ As of 2026-04-19:
   go through the `osty_rt_list_pop_discard` helper; nested `IndexExpr`
   propagates List / Map / Set element shapes via
   `decorateStaticValueFromSourceType`.
-  The LLVM012 statement-form category has been cleared for the
-  toolchain's actual shape: `LLVM011 [fn_param_struct_type]` Char wall
-  at `lspUtf16UnitsForChar` fell first (Char→i32 / Byte→i8 lowering),
-  then `LLVM012 *ast.MatchExpr is not a call` (match-as-statement for
-  tag enums), and most recently `LLVM012 field assignment base
-  *ast.FieldExpr` (nested field chain like `cx.env.returnTy = ...`)
-  now first-walls on `LLVM012 statement: field assignment base *ast.FieldExpr`
-  (nested field assignment like `a.b.c = x`). The previous
-  `LLVM011 [fn_param_struct_type]` Char wall at `lspUtf16UnitsForChar`
-  was resolved by lowering `Char` to `i32` and `Byte` to `i8` together
-  with `Char.toInt()` / `Byte.toInt()` / `Int.toChar()` width
-  conversions and unsigned compare predicates. The subsequent
-  `LLVM012 statement: *ast.MatchExpr is not a call` wall was resolved
-  by adding a `MatchExpr` statement-position lowering for tag-enum
-  scrutinees with bare-variant / wildcard arms
-  now first-walls on `LLVM012` (statement-form restriction); the previous
-  `LLVM011 [fn_param_struct_type]` Char wall at `lspUtf16UnitsForChar`
-  has been resolved by lowering `Char` to `i32` and `Byte` to `i8`
-  together with `Char.toInt()` / `Byte.toInt()` / `Int.toChar()` width
-  conversions and unsigned compare predicates
+  The LLVM012 statement-form category is cleared for the toolchain's
+  actual shape. The historical wall chain, each entry closed in order:
+  `LLVM011 [fn_param_struct_type]` Char at `lspUtf16UnitsForChar`
+  (Char→i32 / Byte→i8 lowering plus `Char.toInt()` / `Byte.toInt()` /
+  `Int.toChar()` width conversions + unsigned compare predicates);
+  `LLVM012 statement: *ast.MatchExpr is not a call` (match-as-statement
+  lowering for tag-enum scrutinees with bare-variant / wildcard arms);
+  `LLVM012 statement: field assignment base *ast.FieldExpr` (nested
+  field chain like `cx.env.returnTy = sig.retTy` — inside-out extractvalue
+  descent + innermost-first `llvmInsertValue` rebuild in
+  `stmt.go:emitFieldAssign`)
 - the current `osty check --airepair=false toolchain` surface is an
   aggregate native-checker summary of `3846 error(s)` with
   `20657 / 20749` assignment/return/call checks accepted
@@ -80,9 +71,7 @@ Current-tree observations from the code re-audit:
 |---|---|---|
 | CLI wiring | universal LLVM entry wedge | **resolved** — hello-world `osty gen --backend=llvm` exits 0 and writes `.ll` output |
 | Bootstrap bridge | merged whole-toolchain probe | first wall is still `LLVM002 runtime-ffi` on `runtime.golegacy.astbridge`; this is a bootstrap artifact, not yet a native backend parity claim |
-| Native backend surface | merged native-only probe | first wall is now `LLVM011 [list_mixed_ptr] list literal mixes String and non-String ptr-backed values` (heterogeneous ptr element types in a single `[...]` literal) after skipping 4 bootstrap-only files; the earlier `logical not on %PmCheckOutcome` wall was a parser precedence bug — `!x.y` was emitted as `(!x).y` instead of `!(x.y)` by the self-hosted front-end, now hoisted at stable-AST lowering time; List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites all remain closed |
-| Native backend surface | merged native-only probe | first wall is now `LLVM012 statement: field assignment base *ast.FieldExpr` (nested field assignment) after skipping 4 bootstrap-only files; the earlier `LLVM011 [fn_param_struct_type]` Char wall and the subsequent `LLVM012 *ast.MatchExpr is not a call` wall are both closed |
-| Native backend surface | merged native-only probe | first wall is now `LLVM012` (statement form) after skipping 4 bootstrap-only files; the earlier `LLVM011 [fn_param_struct_type]` Char wall is closed |
+| Native backend surface | merged native-only probe | first wall is `LLVM011 [list_mixed_ptr]` (heterogeneous ptr element types in a single `[...]` literal) after skipping 4 bootstrap-only files. Closed walls (in order): `LLVM011 [fn_param_struct_type]` Char on `lspUtf16UnitsForChar`; `LLVM012 *ast.MatchExpr is not a call` (match-as-statement lowering); `LLVM012 field assignment base *ast.FieldExpr` (nested `a.b.c = x` via `llvmInsertValue` rebuild chain); parser precedence `(!x).y` / `!(x.y)` hoisted at stable-AST lowering. List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites also closed |
 | Checker boundary | `internal/check` / `internal/toolchain` | host still manages an external `osty-native-checker` artifact and falls back to the embedded selfhost checker when it cannot be prepared |
 | Toolchain package health | `osty check --airepair=false toolchain` | current CLI surface is still an aggregate `E0700` summary (`3846 error(s)`) rather than a clean self-compile pass |
 | Stdlib / string surface | `internal/llvmgen/stdlib_shim.go`, `expr.go` | a subset of `std.strings` is shimmed through runtime helpers. `Char` and `Byte` parameters/returns, literals, comparisons, and width conversions now lower; `String.chars` / `String.bytes` still block the pure native path because `List<Char>` / `List<Byte>` collection lowering is separate work |
@@ -116,10 +105,11 @@ Observed in the 2026-04-19 refresh:
 - `TestProbeWholeToolchainMerged` reported
   `LLVM002 runtime-ffi: ... runtime.golegacy.astbridge ...`
 - `TestProbeNativeToolchainMerged` skipped
-  `ast_lower.osty, ci.osty, docgen.osty, manifest_validation.osty`. After the
-  `Char`/`Byte` lowering landed the probe first-walls on `LLVM012`
-  (statement form), not the previous `LLVM011 [fn_param_struct_type]` on
-  `Char` at `lspUtf16UnitsForChar`
+  `ast_lower.osty, ci.osty, docgen.osty, manifest_validation.osty`. The
+  probe now first-walls on `LLVM011 [list_mixed_ptr]`; the earlier
+  `LLVM011 [fn_param_struct_type]` Char wall, the `LLVM012 MatchExpr is
+  not a call` statement-form wall, and the `LLVM012 field assignment
+  base *ast.FieldExpr` nested-write wall are all closed
 - `/tmp/osty check --airepair=false toolchain` exited with the aggregate
   summary
   `native checker reported type errors: 3846 error(s)` plus
