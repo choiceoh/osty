@@ -1,3 +1,5 @@
+use std.strings as strings
+
 // check_gates.osty — post-elaboration policy gates for the front-end.
 //
 // These gates enforce LANG_SPEC §19 privilege + shape rules that live

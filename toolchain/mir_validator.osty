@@ -318,9 +318,6 @@ fn mirValidateCallee(func: MirFunction, bb: MirBasicBlock, instr: MirInstr) -> L
             let oErrs = mirValidateOperand(func, bb, instr.calleeOperand, "indirectCall.callee")
             for e in oErrs { errs.push(e) }
         },
-        _ -> {
-            errs.push("function \"{func.name}\" bb{bb.id}: unknown callee kind")
-        },
     }
     errs
 }
