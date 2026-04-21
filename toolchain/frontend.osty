@@ -108,6 +108,7 @@ pub enum FrontLexDiagnosticCode {
     FrontDiagUnknownEscape,
     FrontDiagEmptyChar,
     FrontDiagEmptyByte,
+    FrontDiagBadNumericSeparator,
 }
 
 pub enum FrontStringPartKind {
@@ -3023,6 +3024,7 @@ pub fn frontLexDiagnosticCodeName(code: FrontLexDiagnosticCode) -> String {
         FrontDiagUnknownEscape -> "E_LEX_UNKNOWN_ESCAPE",
         FrontDiagEmptyChar -> "E_LEX_EMPTY_CHAR",
         FrontDiagEmptyByte -> "E_LEX_EMPTY_BYTE",
+        FrontDiagBadNumericSeparator -> "E_LEX_BAD_NUMERIC_SEPARATOR",
     }
 }
 

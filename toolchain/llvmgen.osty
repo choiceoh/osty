@@ -511,31 +511,60 @@ pub fn llvmStringLiteral(emitter: LlvmEmitter, text: String) -> LlvmValue {
 }
 
 pub fn llvmCString(text: String) -> LlvmCString {
+    // byteLen counts UTF-8 bytes (not runes) because LLVM IR globals
+    // are sized as `[N x i8]`. `text.bytes().len()` preserves multi-
+    // byte sequences whereas `llvmStrings.split("")` returns rune
+    // count — silently truncating for anything above U+007F.
     let encoded = "{llvmCStringEscape(text)}\\00"
-    let byteLen = llvmStrings.split(text, "").len() + 1
+    let byteLen = text.bytes().len() + 1
     LlvmCString { encoded, byteLen }
 }
 
+// llvmCStringEscape emits an LLVM `c"..."` body for `text`. Every
+// byte is escaped as `\HH` — verbose but portable: LLVM IR accepts
+// the hex form for any 8-bit value and we don't depend on
+// `Char.toString()` / byte-literal passthrough, both of which the
+// native backend can't lower yet (`emitPrimitiveToStringCall` covers
+// i64 / double / i1 only; Char is i32). The Go-side snapshot
+// (`internal/llvmgen/support_snapshot.go`) uses a more compact
+// printable-ASCII-passthrough variant; this Osty version stays
+// uniform so the merged-toolchain probe can lower the compiler's
+// own source.
+//
+// Byte values route through `b.toInt()` (zext i8→i64, already wired
+// in emitCharByteConversionCall) rather than `.toByte()` / direct
+// Byte comparisons, which would pull in intrinsics the backend
+// hasn't wired.
 pub fn llvmCStringEscape(text: String) -> String {
     let mut encoded = ""
-    for unit in llvmStrings.split(text, "") {
-        if unit == "\n" {
-            encoded = "{encoded}\\0A"
-        } else if unit == "\t" {
-            encoded = "{encoded}\\09"
-        } else if unit == "\r" {
-            encoded = "{encoded}\\0D"
-        } else if unit == "\"" {
-            encoded = "{encoded}\\22"
-        } else if unit == "\\" {
-            encoded = "{encoded}\\5C"
-        } else if unit == "\u{1F}" {
-            encoded = "{encoded}\\1F"
-        } else {
-            encoded = "{encoded}{unit}"
-        }
+    for b in text.bytes() {
+        encoded = "{encoded}\\{llvmHexByte(b.toInt())}"
     }
     encoded
+}
+
+fn llvmHexByte(n: Int) -> String {
+    let hi = (n / 16) % 16
+    let lo = n % 16
+    "{llvmHexDigit(hi)}{llvmHexDigit(lo)}"
+}
+
+fn llvmHexDigit(n: Int) -> String {
+    if n < 10 {
+        "{n}"
+    } else if n == 10 {
+        "A"
+    } else if n == 11 {
+        "B"
+    } else if n == 12 {
+        "C"
+    } else if n == 13 {
+        "D"
+    } else if n == 14 {
+        "E"
+    } else {
+        "F"
+    }
 }
 
 pub fn llvmPrintlnString(emitter: LlvmEmitter, value: LlvmValue) {
@@ -1061,6 +1090,14 @@ pub fn llvmUnsupportedDiagnostic(kind: String, detail: String) -> LlvmUnsupporte
             "use non-generic functions with identifier parameters and Int/Bool types",
         )
     }
+    if kind == "stdlib-body" {
+        return llvmUnsupportedDiagnosticWith(
+            "LLVM018",
+            kind,
+            detail,
+            "call stdlib functions whose bodies the LLVM backend can currently lower, or add a runtime shim for this symbol",
+        )
+    }
 
     let mut reason = detail
     if reason == "" {
@@ -1230,15 +1267,17 @@ pub fn llvmLogicalInstruction(op: String) -> String {
     ""
 }
 
+// llvmIsAsciiStringText gates which plain String literals the LLVM
+// backend accepts directly. Since `llvmCStringEscape` now byte-escapes
+// any non-printable / non-ASCII character via `\HH`, the gate only
+// needs to reject text that can't be encoded as a byte sequence at
+// all — and every `String` is already a valid UTF-8 byte sequence by
+// construction. Kept as a pure `true` stub for call-site stability
+// (formatter_ast / stdlib_shim / decl all fan in here); a future
+// rename to `llvmCanEmitStringLiteral` or inlining into callers is a
+// cleanup follow-up.
 pub fn llvmIsAsciiStringText(text: String) -> Bool {
-    for c in text.chars() {
-        if c == '\n' || c == '\t' || c == '\r' || c == '\u{1F}' {
-            continue
-        }
-        if c < ' ' || c > '~' {
-            return false
-        }
-    }
+    let _ = text
     true
 }
 
@@ -2323,6 +2362,14 @@ pub fn llvmStringRuntimeTrimSpaceSymbol() -> String {
     "osty_rt_strings_TrimSpace"
 }
 
+pub fn llvmStringRuntimeCharsSymbol() -> String {
+    "osty_rt_strings_Chars"
+}
+
+pub fn llvmStringRuntimeBytesSymbol() -> String {
+    "osty_rt_strings_Bytes"
+}
+
 /// LLVM forward declarations for the string runtime surface plus the
 /// scalar `Int`/`Float` -> `String` helpers used by interpolation.
 /// All string values cross the ABI as null-terminated `ptr`, and
@@ -2346,6 +2393,8 @@ pub fn llvmStringRuntimeDeclarations() -> List<String> {
         "declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)",
         "declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)",
         "declare ptr @osty_rt_strings_TrimSpace(ptr)",
+        "declare ptr @osty_rt_strings_Chars(ptr)",
+        "declare ptr @osty_rt_strings_Bytes(ptr)",
     ]
 }
 
@@ -2435,6 +2484,14 @@ pub fn llvmStringRuntimeTrimSuffix(
 
 pub fn llvmStringRuntimeTrimSpace(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
     llvmCall(emitter, "ptr", "osty_rt_strings_TrimSpace", [value])
+}
+
+pub fn llvmStringChars(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_Chars", [value])
+}
+
+pub fn llvmStringBytes(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_Bytes", [value])
 }
 
 pub fn llvmBuiltinType(name: String) -> String {

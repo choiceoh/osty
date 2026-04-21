@@ -19270,6 +19270,21 @@ func opParseExpr(p *OstyParser) int {
 	return opParseExprBP(p, 0)
 }
 
+// opApplyPostfix greedily applies every postfix operator (field, call,
+// index, `?.`, `?`, turbofish, struct literal) to `expr`. Mirrored from
+// toolchain/parser.osty pending a regen fix.
+func opApplyPostfix(p *OstyParser, expr int) int {
+	left := expr
+	for {
+		postfix := opTryParsePostfix(p, left)
+		if postfix < 0 {
+			break
+		}
+		left = postfix
+	}
+	return left
+}
+
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7092:1
 func opParseExprBP(p *OstyParser, minBP int) int {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7093:5
@@ -19389,13 +19404,17 @@ func opParsePrefix(p *OstyParser) int {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7144:9
 		x := opParsePrefix(p)
 		_ = x
+		// Prefix unary binds tighter than infix but looser than
+		// postfix — `!s.ok` must parse as `!(s.ok)`. Mirrored from
+		// toolchain/parser.osty pending a regen fix.
+		operand := opApplyPostfix(p, x)
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7145:9
 		node := emptyAstNode(AstNodeKind(&AstNodeKind_AstNUnary{}))
 		_ = node
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7146:13
 		node.op = tok.kind
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7147:13
-		node.left = x
+		node.left = operand
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7148:13
 		node.start = start
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:7149:13
@@ -32070,6 +32089,21 @@ func checkIsAssignable(env *CheckEnv, dst int, src int) bool {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13479:9
 		return checkIsAssignable(env, tyInnerAt(env.tys, d), tyInnerAt(env.tys, s))
 	}
+	// `T?` (TkOptional) and `Option<T>` (TkNamed "Option") are the
+	// same type spelled two ways. Mirrored from
+	// toolchain/check_env.osty pending a regen fix.
+	if ostyEqual(dk, TyKind(&TyKind_TkOptional{})) && ostyEqual(sk, TyKind(&TyKind_TkNamed{})) && tyHeadAt(env.tys, s) == "Option" {
+		sa := tyArgsAt(env.tys, s)
+		if checkIntListLen(sa) == 1 {
+			return checkIsAssignable(env, tyInnerAt(env.tys, d), sa[0])
+		}
+	}
+	if ostyEqual(dk, TyKind(&TyKind_TkNamed{})) && tyHeadAt(env.tys, d) == "Option" && ostyEqual(sk, TyKind(&TyKind_TkOptional{})) {
+		da := tyArgsAt(env.tys, d)
+		if checkIntListLen(da) == 1 {
+			return checkIsAssignable(env, da[0], tyInnerAt(env.tys, s))
+		}
+	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13481:5
 	if ostyEqual(dk, TyKind(&TyKind_TkNamed{})) && checkIsInterface(env, tyHeadAt(env.tys, d)) {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13482:9
@@ -32434,6 +32468,15 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "trimPrefix", owner: "String", receiverTy: tString_, retTy: tString_, paramNames: []string{"prefix"}, paramTys: []int{tString_}, generics: empty(), genericBounds: bounds()})
 	checkRegisterFn(env, &CheckFnSig{name: "trimSuffix", owner: "String", receiverTy: tString_, retTy: tString_, paramNames: []string{"suffix"}, paramTys: []int{tString_}, generics: empty(), genericBounds: bounds()})
 	checkRegisterFn(env, &CheckFnSig{name: "toInt", owner: "String", receiverTy: tString_, retTy: tyNamed(tys, "Result", []int{tInt(tys), tyNamed(tys, "Error", nil)}), paramNames: empty(), paramTys: []int{}, generics: empty(), genericBounds: bounds()})
+
+	// Char/Byte/Int/Bool scalar conversions (spec §10.5).
+	checkRegisterFn(env, &CheckFnSig{name: "toInt", owner: "Char", receiverTy: tChar(tys), retTy: tInt(tys), paramNames: empty(), paramTys: []int{}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "toByte", owner: "Char", receiverTy: tChar(tys), retTy: tByte(tys), paramNames: empty(), paramTys: []int{}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "toInt", owner: "Byte", receiverTy: tByte(tys), retTy: tInt(tys), paramNames: empty(), paramTys: []int{}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "toChar", owner: "Int", receiverTy: tInt(tys), retTy: tChar(tys), paramNames: empty(), paramTys: []int{}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "toByte", owner: "Int", receiverTy: tInt(tys), retTy: tByte(tys), paramNames: empty(), paramTys: []int{}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "toString", owner: "Int", receiverTy: tInt(tys), retTy: tString_, paramNames: empty(), paramTys: []int{}, generics: empty(), genericBounds: bounds()})
+	checkRegisterFn(env, &CheckFnSig{name: "toString", owner: "Bool", receiverTy: tBool(tys), retTy: tString_, paramNames: empty(), paramTys: []int{}, generics: empty(), genericBounds: bounds()})
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:13708:5
@@ -33316,21 +33359,65 @@ func elabCheckImpl(cx *ElabCx, idx int, expected int) *ElabResult {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14275:1
 func elabCheckViaInfer(cx *ElabCx, idx int, expected int) *ElabResult {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14276:5
 	r := elabInferImpl(cx, idx)
-	_ = r
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14277:5
-	if !(tyIsBad(cx.env.tys, r.ty)) {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14278:9
+	// Propagate expected into payload-free variant idents (`None`)
+	// whose inferred type is `Enum<fresh>` with no solver binding.
+	// Mirrored from toolchain/elab.osty pending a regen fix.
+	unified := elabPropagateExpectedToVariantIdent(cx, idx, r.ty, expected)
+	actual := r.ty
+	if unified >= 0 {
+		actual = unified
+	}
+	if !(tyIsBad(cx.env.tys, actual)) {
 		start := coreStartAt(cx.core, r.node)
-		_ = start
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14279:9
 		end := coreEndAt(cx.core, r.node)
-		_ = end
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14280:9
-		_ = checkExpectAssignable(cx.env, expected, r.ty, start, end)
+		_ = checkExpectAssignable(cx.env, expected, actual, start, end)
+	}
+	if unified >= 0 {
+		return &ElabResult{node: r.node, ty: unified}
 	}
 	return r
+}
+
+// elabPropagateExpectedToVariantIdent — mirror of toolchain/elab.osty.
+func elabPropagateExpectedToVariantIdent(cx *ElabCx, idx int, inferred int, expected int) int {
+	if idx < 0 {
+		return -1
+	}
+	node := astArenaNodeAt(cx.ast.arena, idx)
+	if _, ok := node.kind.(*AstNodeKind_AstNIdent); !ok {
+		return -1
+	}
+	variant := checkLookupVariant(cx.env, node.text)
+	if variant.name == "" {
+		return -1
+	}
+	if checkIntListLenHelper(variant.fieldTys) != 0 {
+		return -1
+	}
+	tys := cx.env.tys
+	inferredResolved := checkResolveAliasDeep(cx.env, inferred)
+	expectedResolved := checkResolveAliasDeep(cx.env, expected)
+	if tyIsBad(tys, inferredResolved) || tyIsBad(tys, expectedResolved) {
+		return -1
+	}
+	if !ostyEqual(tyKindAt(tys, inferredResolved), TyKind(&TyKind_TkNamed{})) {
+		return -1
+	}
+	expectedCanonical := expectedResolved
+	if ostyEqual(tyKindAt(tys, expectedResolved), TyKind(&TyKind_TkOptional{})) && tyHeadAt(tys, inferredResolved) == "Option" {
+		expectedCanonical = tyNamed(tys, "Option", []int{tyInnerAt(tys, expectedResolved)})
+	}
+	if !ostyEqual(tyKindAt(tys, expectedCanonical), TyKind(&TyKind_TkNamed{})) {
+		return -1
+	}
+	if tyHeadAt(tys, inferredResolved) != tyHeadAt(tys, expectedCanonical) {
+		return -1
+	}
+	if checkIntListLenHelper(tyArgsAt(tys, inferredResolved)) != checkIntListLenHelper(tyArgsAt(tys, expectedCanonical)) {
+		return -1
+	}
+	return expectedCanonical
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14289:1
@@ -33712,6 +33799,11 @@ func binOpResultType(env *CheckEnv, op BinOp, left int, right int, start int, en
 			return binIntCommon(env, left, right, start, end)
 		}
 		if func() bool { _, ok := _m2109.(*BinOp_BoAdd); return ok }() {
+			// Mirrored from toolchain/elab.osty: `+` is numeric
+			// addition or String concatenation (spec §4.6).
+			if tyIsPrim(tys, left, PrimKind(&PrimKind_PkString{})) && tyIsPrim(tys, right, PrimKind(&PrimKind_PkString{})) {
+				return tString(tys)
+			}
 			return binNumericCommon(env, left, right, start, end)
 		}
 		if func() bool { _, ok := _m2109.(*BinOp_BoSub); return ok }() {
@@ -33933,9 +34025,14 @@ func elabInferBlock(cx *ElabCx, idx int, node *AstNode) *ElabResult {
 		}()
 		_ = isTail
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14597:9
-		if isTail && astIsExprKindAt(cx.ast, stmtIdx) {
+		// Unwrap AstNExprStmt before testing `astIsExprKindAt` so a
+		// trailing expression used as a statement (parser.osty:1099)
+		// still contributes its type to the block's tail. Mirrored from
+		// toolchain/elab.osty pending a regen fix.
+		tailExprIdx := blockTailExprIdx(cx.ast, stmtIdx)
+		if isTail && tailExprIdx >= 0 && astIsExprKindAt(cx.ast, tailExprIdx) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14598:13
-			tail := elabInfer(cx, stmtIdx)
+			tail := elabInfer(cx, tailExprIdx)
 			_ = tail
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14599:13
 			tailNode = tail.node
@@ -33972,6 +34069,19 @@ func elabInferBlock(cx *ElabCx, idx int, node *AstNode) *ElabResult {
 	return &ElabResult{node: coreIdx, ty: tailTy}
 }
 
+// blockTailExprIdx unwraps AstNExprStmt for the last-stmt-as-tail path.
+// Mirrored from toolchain/elab.osty pending a regen fix.
+func blockTailExprIdx(ast *AstFile, stmtIdx int) int {
+	if stmtIdx < 0 {
+		return stmtIdx
+	}
+	node := astArenaNodeAt(ast.arena, stmtIdx)
+	if _, ok := node.kind.(*AstNodeKind_AstNExprStmt); ok {
+		return node.left
+	}
+	return stmtIdx
+}
+
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14616:1
 func elabCheckBlock(cx *ElabCx, idx int, node *AstNode, expected int) *ElabResult {
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14617:5
@@ -33997,6 +34107,9 @@ func elabCheckBlock(cx *ElabCx, idx int, node *AstNode, expected int) *ElabResul
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14625:5
 	i := 0
 	_ = i
+	// When expected is `()` the tail expression runs as a statement so
+	// its type is discarded. Mirrored from toolchain/elab.osty.
+	tailAsStmt := !tyIsBad(cx.env.tys, expected) && tyIsPrim(cx.env.tys, expected, PrimKind(&PrimKind_PkUnit{}))
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14626:5
 	for _, stmtIdx := range stmtIdxs {
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14627:9
@@ -34013,9 +34126,11 @@ func elabCheckBlock(cx *ElabCx, idx int, node *AstNode, expected int) *ElabResul
 		}()
 		_ = isTail
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14628:9
-		if isTail && astIsExprKindAt(cx.ast, stmtIdx) {
+		// Unwrap AstNExprStmt for the tail (mirror of elabInferBlock).
+		tailExprIdx := blockTailExprIdx(cx.ast, stmtIdx)
+		if isTail && !tailAsStmt && tailExprIdx >= 0 && astIsExprKindAt(cx.ast, tailExprIdx) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14629:13
-			tail := elabCheck(cx, stmtIdx, expected)
+			tail := elabCheck(cx, tailExprIdx, expected)
 			_ = tail
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14630:13
 			tailNode = tail.node
@@ -35185,6 +35300,60 @@ func elabInferVariantCall(cx *ElabCx, callIdx int, node *AstNode, baseCallee *As
 	return &ElabResult{node: coreCallNode, ty: retTy}
 }
 
+// elabOwnerNameForReceiver maps a receiver type to the owner key used
+// by checkLookupMethod. Primitives intern canonical indices with an
+// empty head, so recv.method() on a String/Int/Char value needs an
+// explicit mapping back to "String"/"Int"/"Char" for the intrinsics
+// registered under those owners to resolve. Mirrored from
+// toolchain/elab.osty pending a regen fix.
+func elabOwnerNameForReceiver(tys *TyArena, ty int) string {
+	head := tyHeadAt(tys, ty)
+	if head != "" {
+		return head
+	}
+	if !ostyEqual(tyKindAt(tys, ty), TyKind(&TyKind_TkPrim{})) {
+		return ""
+	}
+	prim := tyPrimAt(tys, ty)
+	switch prim.(type) {
+	case *PrimKind_PkInt:
+		return "Int"
+	case *PrimKind_PkInt8:
+		return "Int8"
+	case *PrimKind_PkInt16:
+		return "Int16"
+	case *PrimKind_PkInt32:
+		return "Int32"
+	case *PrimKind_PkInt64:
+		return "Int64"
+	case *PrimKind_PkUInt8:
+		return "UInt8"
+	case *PrimKind_PkUInt16:
+		return "UInt16"
+	case *PrimKind_PkUInt32:
+		return "UInt32"
+	case *PrimKind_PkUInt64:
+		return "UInt64"
+	case *PrimKind_PkByte:
+		return "Byte"
+	case *PrimKind_PkFloat:
+		return "Float"
+	case *PrimKind_PkFloat32:
+		return "Float32"
+	case *PrimKind_PkFloat64:
+		return "Float64"
+	case *PrimKind_PkBool:
+		return "Bool"
+	case *PrimKind_PkChar:
+		return "Char"
+	case *PrimKind_PkString:
+		return "String"
+	case *PrimKind_PkBytes:
+		return "Bytes"
+	}
+	return ""
+}
+
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15137:1
 // explicitArgs carries turbofish type arguments for `recv.method::<T>(args)`
 // forms; pass an empty slice for plain calls. Mirrored from
@@ -35202,7 +35371,7 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 		return elabPoisonResult(cx, callNode.start, callNode.end)
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15140:5
-	ownerName := tyHeadAt(cx.env.tys, recvResolved)
+	ownerName := elabOwnerNameForReceiver(cx.env.tys, recvResolved)
 	_ = ownerName
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15141:5
 	methodName := fieldNode.text
@@ -36018,6 +36187,15 @@ func elabInferIndex(cx *ElabCx, node *AstNode) *ElabResult {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15499:13
 			elem := checkIntListAt(args, 0)
 			_ = elem
+			// List<T>[Range<_>] → List<T> (slice). Mirrored from
+			// toolchain/elab.osty pending a regen fix.
+			{
+				idxResolved := checkResolveAliasDeep(cx.env, idx.ty)
+				if tyIsNamedHead(tys, idxResolved, "Range") {
+					coreIdx := coreIndex(cx.core, recv.node, idx.node, recvTy, node.start, node.end)
+					return &ElabResult{node: coreIdx, ty: recvTy}
+				}
+			}
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15500:13
 			if !(checkIsAssignable(cx.env, tInt(tys), idx.ty)) {
 				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15501:17
@@ -36057,6 +36235,15 @@ func elabInferIndex(cx *ElabCx, node *AstNode) *ElabResult {
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15519:5
 	if tyIsPrim(tys, recvTy, PrimKind(&PrimKind_PkString{})) {
+		// String[Range<_>] → String (slice). Mirrored from
+		// toolchain/elab.osty pending a regen fix.
+		{
+			idxResolved := checkResolveAliasDeep(cx.env, idx.ty)
+			if tyIsNamedHead(tys, idxResolved, "Range") {
+				coreIdx := coreIndex(cx.core, recv.node, idx.node, tString(tys), node.start, node.end)
+				return &ElabResult{node: coreIdx, ty: tString(tys)}
+			}
+		}
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15520:9
 		if !(checkIsAssignable(cx.env, tInt(tys), idx.ty)) {
 			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15521:13
@@ -37323,8 +37510,14 @@ func elabVariantPattern(cx *ElabCx, node *AstNode, scrutTy int, mutable bool, re
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16170:5
 	variantName := node.text
 	_ = variantName
+	// Normalise `T?` → `Option<T>` for variant pattern matching.
+	// Mirrored from toolchain/elab.osty pending a regen fix.
+	scrutCanon := scrutTy
+	if ostyEqual(tyKindAt(tys, scrutTy), TyKind(&TyKind_TkOptional{})) {
+		scrutCanon = tyNamed(tys, "Option", []int{tyInnerAt(tys, scrutTy)})
+	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16171:5
-	scrutHead := tyHeadAt(tys, scrutTy)
+	scrutHead := tyHeadAt(tys, scrutCanon)
 	_ = scrutHead
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16172:5
 	variant := checkLookupVariantInOwner(cx.env, scrutHead, variantName)
@@ -37349,7 +37542,7 @@ func elabVariantPattern(cx *ElabCx, node *AstNode, scrutTy int, mutable bool, re
 		return corePatErr(cx.core, node.start, node.end)
 	}
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16182:5
-	scrutArgs := tyArgsAt(tys, scrutTy)
+	scrutArgs := tyArgsAt(tys, scrutCanon)
 	_ = scrutArgs
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16183:5
 	fieldTys := func() []int {
@@ -41201,6 +41394,9 @@ func registerStdStringsAliasFns(env *CheckEnv, alias string) {
 	s1("toUpper", tString_)
 	s1("toLower", tString_)
 	add("compare", tInt_, []string{"a", "b"}, []int{tString_, tString_})
+	add("repeat", tString_, []string{"s", "count"}, []int{tString_, tInt_})
+	add("replaceAll", tString_, []string{"s", "old", "new"}, []int{tString_, tString_, tString_})
+	add("slice", tString_, []string{"s", "start", "end"}, []int{tString_, tInt_, tInt_})
 }
 
 func useDeclAliasName(cx *ElabCx, node *AstNode) string {
@@ -41399,22 +41595,17 @@ func collectEnumDecl(cx *ElabCx, declIdx int, node *AstNode) {
 					// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18360:21
 					f := astArenaNodeAt(cx.ast.arena, fIdx)
 					_ = f
-					// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18361:21
-					if ostyEqual(f.kind, AstNodeKind(&AstNodeKind_AstNField_{})) {
-						// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18362:25
-						ty := astTypeToTyInCollect(cx, f.right)
-						_ = ty
-						// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18363:25
-						func() struct{} {
-							fieldTys = append(fieldTys, func() int {
-								if ty >= 0 {
-									return ty
-								} else {
-									return tErr(cx.env.tys)
-								}
-							}())
-							return struct{}{}
-						}()
+					// Accept variant payload as bare AstNType or as
+					// AstNField_. Mirrored from toolchain/check.osty
+					// pending a regen fix.
+					ty := -1
+					if ostyEqual(f.kind, AstNodeKind(&AstNodeKind_AstNType{})) {
+						ty = astTypeToTyInCollect(cx, fIdx)
+					} else if ostyEqual(f.kind, AstNodeKind(&AstNodeKind_AstNField_{})) {
+						ty = astTypeToTyInCollect(cx, f.right)
+					}
+					if ty >= 0 {
+						fieldTys = append(fieldTys, ty)
 					}
 				}
 				// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18366:17

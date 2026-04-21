@@ -22,20 +22,22 @@ pub enum DiagnosticFamily {
     FamilyScaffold,
     FamilyLint,
     FamilyWarning,
+    FamilyBackend,
     FamilyUnknown,
 }
 
 /// diagnosticSeverity classifies a stable code by prefix.
 ///
 /// Codes follow a simple range convention: `E0000-E9999` errors,
-/// `W0000-W9999` warnings, `L0000-L9999` lints. Anything outside
-/// these ranges is `SeverityUnknown` so unknown codes never silently
-/// pass as errors.
+/// `W0000-W9999` warnings, `L0000-L9999` lints, `LLVM000-LLVM999`
+/// backend errors. Anything outside these ranges is `SeverityUnknown`
+/// so unknown codes never silently pass as errors.
 ///
 /// ```osty
 /// testing.assertEq(diagnosticSeverityName(diagnosticSeverity("E0001")), "error")
 /// testing.assertEq(diagnosticSeverityName(diagnosticSeverity("W0100")), "warning")
 /// testing.assertEq(diagnosticSeverityName(diagnosticSeverity("L0002")), "lint")
+/// testing.assertEq(diagnosticSeverityName(diagnosticSeverity("LLVM011")), "error")
 /// testing.assertEq(diagnosticSeverityName(diagnosticSeverity("X9999")), "unknown")
 /// testing.assertEq(diagnosticSeverityName(diagnosticSeverity("")), "unknown")
 /// ```
@@ -46,6 +48,8 @@ pub fn diagnosticSeverity(code: String) -> DiagnosticSeverity {
         SeverityWarning
     } else if code >= "L0000" && code <= "L9999" {
         SeverityLint
+    } else if code >= "LLVM000" && code <= "LLVM999" {
+        SeverityError
     } else {
         SeverityUnknown
     }
@@ -62,8 +66,12 @@ pub fn diagnosticSeverityName(severity: DiagnosticSeverity) -> String {
 }
 
 /// diagnosticFamily classifies a stable code into the phase family that
-/// owns it. The body delegates to the generated manifest so adding a
-/// new code in internal/diag/codes.go is a one-file change.
+/// owns it. E/W/L codes delegate to the generated manifest so adding a
+/// new Go-side code in internal/diag/codes.go is a one-file change.
+/// Backend codes (`LLVM000-LLVM999`) short-circuit to `FamilyBackend`
+/// because they are populated by the self-hosted LLVM backend in
+/// toolchain/llvmgen.osty, outside the diag_manifest.osty generator's
+/// scope.
 ///
 /// ```osty
 /// testing.assertEq(diagnosticFamilyName(diagnosticFamily("E0001")), "lexical")
@@ -73,9 +81,14 @@ pub fn diagnosticSeverityName(severity: DiagnosticSeverity) -> String {
 /// testing.assertEq(diagnosticFamilyName(diagnosticFamily("E2000")), "manifest")
 /// testing.assertEq(diagnosticFamilyName(diagnosticFamily("L0001")), "lint")
 /// testing.assertEq(diagnosticFamilyName(diagnosticFamily("W0750")), "warning")
+/// testing.assertEq(diagnosticFamilyName(diagnosticFamily("LLVM001")), "backend")
+/// testing.assertEq(diagnosticFamilyName(diagnosticFamily("LLVM018")), "backend")
 /// testing.assertEq(diagnosticFamilyName(diagnosticFamily("E9999")), "unknown")
 /// ```
 pub fn diagnosticFamily(code: String) -> DiagnosticFamily {
+    if code >= "LLVM000" && code <= "LLVM999" {
+        return FamilyBackend
+    }
     diagnosticFamilyForCode(code)
 }
 
@@ -94,6 +107,7 @@ pub fn diagnosticFamilyName(family: DiagnosticFamily) -> String {
         FamilyScaffold -> "scaffold",
         FamilyLint -> "lint",
         FamilyWarning -> "warning",
+        FamilyBackend -> "backend",
         FamilyUnknown -> "unknown",
     }
 }

@@ -21,7 +21,7 @@ import (
 	"github.com/osty/osty/internal/token"
 )
 
-func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string, retSourceType ast.Type, retListElemTyp string, retMapKeyTyp string, retMapValueTyp string, retSetElemTyp string) error {
+func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string, retSourceType ast.Type, retListElemTyp string, retListElemString bool, retMapKeyTyp string, retMapValueTyp string, retMapKeyString bool, retSetElemTyp string, retSetElemString bool) error {
 	if len(stmts) == 0 {
 		return unsupported("function-signature", "function body has no return value")
 	}
@@ -40,7 +40,7 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string, retSour
 			if s.Value == nil {
 				return unsupported("function-signature", "bare return in value-returning function")
 			}
-			v, err := g.emitExprWithHintAndSourceType(s.Value, retSourceType, retListElemTyp, false, retMapKeyTyp, retMapValueTyp, false, retSetElemTyp, false)
+			v, err := g.emitExprWithHintAndSourceType(s.Value, retSourceType, retListElemTyp, retListElemString, retMapKeyTyp, retMapValueTyp, retMapKeyString, retSetElemTyp, retSetElemString)
 			if err != nil {
 				return err
 			}
@@ -69,7 +69,7 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string, retSour
 			g.leaveBlock()
 			return nil
 		case *ast.ExprStmt:
-			v, err := g.emitExprWithHintAndSourceType(s.X, retSourceType, retListElemTyp, false, retMapKeyTyp, retMapValueTyp, false, retSetElemTyp, false)
+			v, err := g.emitExprWithHintAndSourceType(s.X, retSourceType, retListElemTyp, retListElemString, retMapKeyTyp, retMapValueTyp, retMapKeyString, retSetElemTyp, retSetElemString)
 			if err != nil {
 				return err
 			}
@@ -762,7 +762,7 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 	case g.returnType == "" || g.returnType == "void":
 		return unsupported("function-signature", "return with value in void-returning function")
 	default:
-		ret, err = g.emitExprWithHintAndSourceType(stmt.Value, g.returnSourceType, g.returnListElemTyp, false, "", "", false, "", false)
+		ret, err = g.emitExprWithHintAndSourceType(stmt.Value, g.returnSourceType, g.returnListElemTyp, g.returnListElemString, g.returnMapKeyTyp, g.returnMapValueTyp, g.returnMapKeyString, g.returnSetElemTyp, g.returnSetElemString)
 		if err != nil {
 			return err
 		}

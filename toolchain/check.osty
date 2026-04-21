@@ -327,6 +327,21 @@ fn registerStdStringsAliasFns(env: CheckEnv, alias: String) {
         paramNames: ["a", "b"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
+    checkRegisterFn(env, CheckFnSig {
+        name: "repeat", owner: alias, receiverTy: -1, retTy: tString_,
+        paramNames: ["s", "count"], paramTys: [tString_, tInt_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "replaceAll", owner: alias, receiverTy: -1, retTy: tString_,
+        paramNames: ["s", "old", "new"], paramTys: [tString_, tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "slice", owner: alias, receiverTy: -1, retTy: tString_,
+        paramNames: ["s", "start", "end"], paramTys: [tString_, tInt_, tInt_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
 }
 
 /// useDeclAliasName returns the declared alias (`as X`) or "" when the
@@ -449,9 +464,19 @@ fn collectEnumDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
                 let mut fieldTys: List<Int> = []
                 for fIdx in member.children {
                     let f = astArenaNodeAt(cx.ast.arena, fIdx)
-                    if f.kind == AstNField_ {
-                        let ty = astTypeToTyInCollect(cx, f.right)
-                        fieldTys.push(if ty >= 0 { ty } else { tErr(cx.env.tys) })
+                    // Selfhost parser stores variant payloads as bare
+                    // AstNType nodes (opParseEnumDecl line 1850); the
+                    // Go-side lowerer wraps each as AstNField_ with
+                    // the type on `.right`. Handle both shapes.
+                    let ty = if f.kind == AstNType {
+                        astTypeToTyInCollect(cx, fIdx)
+                    } else if f.kind == AstNField_ {
+                        astTypeToTyInCollect(cx, f.right)
+                    } else {
+                        -1
+                    }
+                    if ty >= 0 {
+                        fieldTys.push(ty)
                     }
                 }
                 checkRegisterVariant(cx.env, CheckVariantSig {

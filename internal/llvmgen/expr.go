@@ -90,7 +90,14 @@ func (g *generator) emitStringLiteral(lit *ast.StringLit) (value, error) {
 		v.sourceType = &ast.NamedType{Path: []string{"String"}}
 		return v, nil
 	}
-	return g.emitInterpolatedString(lit)
+	v, err := g.emitInterpolatedString(lit)
+	if err != nil {
+		return v, err
+	}
+	if v.sourceType == nil {
+		v.sourceType = &ast.NamedType{Path: []string{"String"}}
+	}
+	return v, nil
 }
 
 func (g *generator) emitInterpolatedString(lit *ast.StringLit) (value, error) {
@@ -1130,6 +1137,7 @@ func (g *generator) emitRuntimeStringConcat(left, right value) (value, error) {
 	g.takeOstyEmitter(emitter)
 	joined := fromOstyValue(out)
 	joined.gcManaged = true
+	joined.sourceType = &ast.NamedType{Path: []string{"String"}}
 	return joined, nil
 }
 
@@ -1141,6 +1149,7 @@ func (g *generator) emitRuntimeIntToString(v value) (value, error) {
 	g.takeOstyEmitter(emitter)
 	text := fromOstyValue(out)
 	text.gcManaged = true
+	text.sourceType = &ast.NamedType{Path: []string{"String"}}
 	return text, nil
 }
 
@@ -1152,6 +1161,7 @@ func (g *generator) emitRuntimeFloatToString(v value) (value, error) {
 	g.takeOstyEmitter(emitter)
 	text := fromOstyValue(out)
 	text.gcManaged = true
+	text.sourceType = &ast.NamedType{Path: []string{"String"}}
 	return text, nil
 }
 
@@ -1163,6 +1173,7 @@ func (g *generator) emitRuntimeBoolToString(v value) (value, error) {
 	g.takeOstyEmitter(emitter)
 	text := fromOstyValue(out)
 	text.gcManaged = true
+	text.sourceType = &ast.NamedType{Path: []string{"String"}}
 	return text, nil
 }
 
@@ -2331,9 +2342,29 @@ func (g *generator) emitStringMethodCall(call *ast.CallExpr) (value, bool, error
 		base.gcManaged = true
 		return base, true, nil
 	case "chars":
-		return value{}, true, unsupported("type-system", "String.chars requires Char/List<Char> lowering in legacy llvmgen")
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "String.chars requires no arguments")
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeCharsSymbol(), "ptr", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmStringChars(emitter, toOstyValue(base))
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = true
+		v.listElemTyp = "i32"
+		return v, true, nil
 	case "bytes":
-		return value{}, true, unsupported("type-system", "String.bytes requires Byte/List<Byte> lowering in legacy llvmgen")
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "String.bytes requires no arguments")
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeBytesSymbol(), "ptr", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmStringBytes(emitter, toOstyValue(base))
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = true
+		v.listElemTyp = "i8"
+		return v, true, nil
 	default:
 		return value{}, true, unsupportedf("call", "String.%s is not supported by legacy llvmgen yet", field.Name)
 	}

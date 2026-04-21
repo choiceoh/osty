@@ -492,6 +492,23 @@ fn opParseGenericParams(p: OstyParser) -> List<Int> {
 
 fn opParseExpr(p: OstyParser) -> Int { opParseExprBP(p, 0) }
 
+/// opApplyPostfix greedily applies every postfix operator that can
+/// follow an expression (field access, call, index, `?.`, `?`,
+/// turbofish, struct literal). Shared by `opParsePrefix` (so prefix
+/// unary binds tighter than infix but looser than postfix) and the
+/// main BP loop in `opParseExprBP`.
+fn opApplyPostfix(p: OstyParser, expr: Int) -> Int {
+    let mut left = expr
+    for {
+        let postfix = opTryParsePostfix(p, left)
+        if postfix < 0 {
+            break
+        }
+        left = postfix
+    }
+    left
+}
+
 fn opParseExprBP(p: OstyParser, minBP: Int) -> Int {
     let mut left = opParsePrefix(p)
     for {
@@ -545,9 +562,13 @@ fn opParsePrefix(p: OstyParser) -> Int {
         let start = p.pos
         opAdvance(p)
         let x = opParsePrefix(p)
+        // Prefix unary binds tighter than infix but LOOSER than
+        // postfix — `!s.ok` parses as `!(s.ok)`, not `(!s).ok`.
+        // Mirrors the Go-side parser hoist from #434.
+        let operand = opApplyPostfix(p, x)
         let mut node = emptyAstNode(AstNUnary)
         node.op = tok.kind
-        node.left = x
+        node.left = operand
         node.start = start
         node.end = p.pos
         return opAddNode(p, node)

@@ -152,15 +152,77 @@ fn elabCheckImpl(cx: ElabCx, idx: Int, expected: Int) -> ElabResult {
 
 /// elabCheckViaInfer is the default `check(e, T)` rule: elaborate as
 /// infer, then subtype against `T` and emit a mismatch diagnostic if
-/// needed.
+/// needed. For payload-free variant idents (`None`, `Err(?)` the bare
+/// form, …) whose inferred type is `Enum<fresh args>`, first propagate
+/// the expected args back into the fresh slots so
+/// `let x: String? = None` types `None` as `Option<String>` rather
+/// than leaking the unbound TyVar.
 fn elabCheckViaInfer(cx: ElabCx, idx: Int, expected: Int) -> ElabResult {
     let r = elabInferImpl(cx, idx)
-    if !(tyIsBad(cx.env.tys, r.ty)) {
+    let unified = elabPropagateExpectedToVariantIdent(cx, idx, r.ty, expected)
+    let actual = if unified >= 0 { unified } else { r.ty }
+    if !(tyIsBad(cx.env.tys, actual)) {
         let start = coreStartAt(cx.core, r.node)
         let end = coreEndAt(cx.core, r.node)
-        let _ = checkExpectAssignable(cx.env, expected, r.ty, start, end)
+        let _ = checkExpectAssignable(cx.env, expected, actual, start, end)
+    }
+    if unified >= 0 {
+        return ElabResult { node: r.node, ty: unified }
     }
     r
+}
+
+/// elabPropagateExpectedToVariantIdent handles the bare-variant
+/// `check(None, Option<String>)` case. `elabInferIdent` allocates a
+/// fresh TyVar per enum generic with no solver attached, so the
+/// generic stays unbound and `checkIsAssignable(Option<String>,
+/// Option<?T>)` fails. Here we detect the shape and just rewrite the
+/// inferred type into the expected type when the heads match.
+fn elabPropagateExpectedToVariantIdent(cx: ElabCx, idx: Int, inferred: Int, expected: Int) -> Int {
+    if idx < 0 {
+        return -1
+    }
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    if node.kind != AstNIdent {
+        return -1
+    }
+    let variant = checkLookupVariant(cx.env, node.text)
+    if variant.name == "" {
+        return -1
+    }
+    if checkIntListLenHelper(variant.fieldTys) != 0 {
+        return -1
+    }
+    let tys = cx.env.tys
+    let inferredResolved = checkResolveAliasDeep(cx.env, inferred)
+    let expectedResolved = checkResolveAliasDeep(cx.env, expected)
+    if tyIsBad(tys, inferredResolved) || tyIsBad(tys, expectedResolved) {
+        return -1
+    }
+    if tyKindAt(tys, inferredResolved) != TkNamed {
+        return -1
+    }
+    // `String?` interns as `tyOptional(String)` (kind TkOptional),
+    // whereas `None`'s inferred type is `tyNamed("Option", [?T])`.
+    // Normalise the expected side so the Option case still unifies.
+    let expectedCanonical = if tyKindAt(tys, expectedResolved) == TkOptional
+        && tyHeadAt(tys, inferredResolved) == "Option" {
+        tyNamed(tys, "Option", [tyInnerAt(tys, expectedResolved)])
+    } else {
+        expectedResolved
+    }
+    if tyKindAt(tys, expectedCanonical) != TkNamed {
+        return -1
+    }
+    if tyHeadAt(tys, inferredResolved) != tyHeadAt(tys, expectedCanonical) {
+        return -1
+    }
+    let inferredArgs = tyArgsAt(tys, inferredResolved)
+    let expectedArgs = tyArgsAt(tys, expectedCanonical)
+    if checkIntListLenHelper(inferredArgs) != checkIntListLenHelper(expectedArgs) {
+        return -1
+    }
+    expectedCanonical
 }
 
 // ---------------------------------------------------------------------
@@ -399,7 +461,7 @@ fn binOpResultType(env: CheckEnv, op: BinOp, left: Int, right: Int, start: Int, 
         BoBitXor -> binIntCommon(env, left, right, start, end),
         BoShl -> binIntCommon(env, left, right, start, end),
         BoShr -> binIntCommon(env, left, right, start, end),
-        BoAdd -> binNumericCommon(env, left, right, start, end),
+        BoAdd -> binAddOrConcat(env, left, right, start, end),
         BoSub -> binNumericCommon(env, left, right, start, end),
         BoMul -> binNumericCommon(env, left, right, start, end),
         BoDiv -> binNumericCommon(env, left, right, start, end),
@@ -465,6 +527,17 @@ fn binNumericCommon(env: CheckEnv, left: Int, right: Int, start: Int, end: Int) 
     tUntypedInt(tys)
 }
 
+/// binAddOrConcat handles `+` which is **numeric addition** or
+/// **String concatenation** depending on operand type — the only
+/// arithmetic operator Osty overloads (spec §4.6).
+fn binAddOrConcat(env: CheckEnv, left: Int, right: Int, start: Int, end: Int) -> Int {
+    let tys = env.tys
+    if tyIsPrim(tys, left, PkString) && tyIsPrim(tys, right, PkString) {
+        return tString(tys)
+    }
+    binNumericCommon(env, left, right, start, end)
+}
+
 fn binOpIsCoalesce(op: BinOp) -> Bool {
     match op {
         BoInvalid -> false,
@@ -511,8 +584,9 @@ fn elabInferBlock(cx: ElabCx, idx: Int, node: AstNode) -> ElabResult {
     let mut i = 0
     for stmtIdx in stmtIdxs {
         let isTail = i == n - 1
-        if isTail && astIsExprKindAt(cx.ast, stmtIdx) {
-            let tail = elabInfer(cx, stmtIdx)
+        let tailExprIdx = blockTailExprIdx(cx.ast, stmtIdx)
+        if isTail && tailExprIdx >= 0 && astIsExprKindAt(cx.ast, tailExprIdx) {
+            let tail = elabInfer(cx, tailExprIdx)
             tailNode = tail.node
             tailTy = tail.ty
         } else {
@@ -530,6 +604,25 @@ fn elabInferBlock(cx: ElabCx, idx: Int, node: AstNode) -> ElabResult {
     ElabResult { node: coreIdx, ty: tailTy }
 }
 
+/// blockTailExprIdx unwraps an `AstNExprStmt` wrapper when it appears
+/// as the last statement of a block. The parser wraps every
+/// expression-used-as-statement in that wrapper (parser.osty:1099);
+/// without this unwrap, `astIsExprKindAt` (which has no `AstNExprStmt`
+/// arm) rejects the tail, elabInferBlock falls into the statement
+/// path, and every block-expression silently reports type `()` —
+/// forcing the enclosing `if cond { ... } else { ... }` to join with
+/// the synthesized Unit else-branch back to `()`.
+fn blockTailExprIdx(ast: AstFile, stmtIdx: Int) -> Int {
+    if stmtIdx < 0 {
+        return stmtIdx
+    }
+    let node = astArenaNodeAt(ast.arena, stmtIdx)
+    if node.kind == AstNExprStmt {
+        return node.left
+    }
+    stmtIdx
+}
+
 fn elabCheckBlock(cx: ElabCx, idx: Int, node: AstNode, expected: Int) -> ElabResult {
     let mark = checkScopeMark(cx.env)
     let mut stmts: List<Int> = []
@@ -540,10 +633,16 @@ fn elabCheckBlock(cx: ElabCx, idx: Int, node: AstNode, expected: Int) -> ElabRes
     let stmtIdxs = node.children
     let n = checkIntListLenHelper(stmtIdxs)
     let mut i = 0
+    // When the whole block is expected to produce `()`, let the tail
+    // expression run in statement mode — an `opExpect(...)` that
+    // happens to return `FrontToken` is deliberately discarded, same
+    // as any other expr-statement earlier in the block.
+    let tailAsStmt = !(tyIsBad(cx.env.tys, expected)) && tyIsPrim(cx.env.tys, expected, PkUnit)
     for stmtIdx in stmtIdxs {
         let isTail = i == n - 1
-        if isTail && astIsExprKindAt(cx.ast, stmtIdx) {
-            let tail = elabCheck(cx, stmtIdx, expected)
+        let tailExprIdx = blockTailExprIdx(cx.ast, stmtIdx)
+        if isTail && !(tailAsStmt) && tailExprIdx >= 0 && astIsExprKindAt(cx.ast, tailExprIdx) {
+            let tail = elabCheck(cx, tailExprIdx, expected)
             tailNode = tail.node
             tailTy = tail.ty
         } else {
@@ -1244,6 +1343,44 @@ fn elabInferVariantCall(
     ElabResult { node: coreCallNode, ty: retTy }
 }
 
+/// elabOwnerNameForReceiver returns the method-owner key for a
+/// receiver type. Named types ship their head directly, but
+/// primitives (`tyPrim`) store an empty `head` because they intern
+/// canonical indices — `String.chars()` / `Int.toString()` needed
+/// that empty receiver-head mapped back to "String" / "Int" for
+/// `checkLookupMethod` to find the intrinsics registered under those
+/// owner names. Without this mapping every `text.bytes()` on a
+/// `text: String` param reported "no method `bytes` on type ``" with
+/// an empty owner.
+fn elabOwnerNameForReceiver(tys: TyArena, ty: Int) -> String {
+    let head = tyHeadAt(tys, ty)
+    if head != "" {
+        return head
+    }
+    if tyKindAt(tys, ty) != TkPrim {
+        return ""
+    }
+    let prim = tyPrimAt(tys, ty)
+    if prim == PkInt { return "Int" }
+    if prim == PkInt8 { return "Int8" }
+    if prim == PkInt16 { return "Int16" }
+    if prim == PkInt32 { return "Int32" }
+    if prim == PkInt64 { return "Int64" }
+    if prim == PkUInt8 { return "UInt8" }
+    if prim == PkUInt16 { return "UInt16" }
+    if prim == PkUInt32 { return "UInt32" }
+    if prim == PkUInt64 { return "UInt64" }
+    if prim == PkByte { return "Byte" }
+    if prim == PkFloat { return "Float" }
+    if prim == PkFloat32 { return "Float32" }
+    if prim == PkFloat64 { return "Float64" }
+    if prim == PkBool { return "Bool" }
+    if prim == PkChar { return "Char" }
+    if prim == PkString { return "String" }
+    if prim == PkBytes { return "Bytes" }
+    ""
+}
+
 /// elabInferMethodCall handles `recv.method(args)` and the turbofish
 /// form `recv.method::<T>(args)`. Relies on `checkLookupMethod` with
 /// the receiver's head type. `explicitArgs` carries any turbofish type
@@ -1254,7 +1391,7 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     if tyIsBad(cx.env.tys, recvResolved) {
         return elabPoisonResult(cx, callNode.start, callNode.end)
     }
-    let ownerName = tyHeadAt(cx.env.tys, recvResolved)
+    let ownerName = elabOwnerNameForReceiver(cx.env.tys, recvResolved)
     let methodName = fieldNode.text
     let sig = checkLookupMethod(cx.env, ownerName, methodName)
     if sig.name == "" {
@@ -1739,11 +1876,16 @@ fn elabInferIndex(cx: ElabCx, node: AstNode) -> ElabResult {
     if tyIsBad(tys, recvTy) || tyIsBad(tys, idx.ty) {
         return elabPoisonResult(cx, node.start, node.end)
     }
-    // List<T>[Int] → T
+    // List<T>[Int] → T, List<T>[Range<Int>] → List<T> (slice)
     if tyIsNamedHead(tys, recvTy, "List") {
         let args = tyArgsAt(tys, recvTy)
         if checkIntListLenHelper(args) == 1 {
             let elem = checkIntListAt(args, 0)
+            let idxResolved = checkResolveAliasDeep(cx.env, idx.ty)
+            if tyIsNamedHead(tys, idxResolved, "Range") {
+                let coreIdx = coreIndex(cx.core, recv.node, idx.node, recvTy, node.start, node.end)
+                return ElabResult { node: coreIdx, ty: recvTy }
+            }
             if !(checkIsAssignable(cx.env, tInt(tys), idx.ty)) {
                 cx.env.diagnostics.push(diagMismatch("Int", tyToString(tys, idx.ty), node.start, node.end))
             }
@@ -1762,8 +1904,13 @@ fn elabInferIndex(cx: ElabCx, node: AstNode) -> ElabResult {
             return ElabResult { node: coreIdx, ty: valTy }
         }
     }
-    // String[Int] → Char
+    // String[Int] → Char, String[Range<Int>] → String (slice)
     if tyIsPrim(tys, recvTy, PkString) {
+        let idxResolved = checkResolveAliasDeep(cx.env, idx.ty)
+        if tyIsNamedHead(tys, idxResolved, "Range") {
+            let coreIdx = coreIndex(cx.core, recv.node, idx.node, tString(tys), node.start, node.end)
+            return ElabResult { node: coreIdx, ty: tString(tys) }
+        }
         if !(checkIsAssignable(cx.env, tInt(tys), idx.ty)) {
             cx.env.diagnostics.push(diagMismatch("Int", tyToString(tys, idx.ty), node.start, node.end))
         }
@@ -2422,7 +2569,15 @@ fn elabRangePattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
 fn elabVariantPattern(cx: ElabCx, node: AstNode, scrutTy: Int, mutable: Bool, recordBinding: Bool) -> Int {
     let tys = cx.env.tys
     let variantName = node.text
-    let scrutHead = tyHeadAt(tys, scrutTy)
+    // `T?` (TkOptional) and `Option<T>` (TkNamed) are the same type
+    // spelled two ways — normalise optional scrutinees so the variant
+    // lookup sees "Option" and the generic substitution sees [T].
+    let scrutCanon = if tyKindAt(tys, scrutTy) == TkOptional {
+        tyNamed(tys, "Option", [tyInnerAt(tys, scrutTy)])
+    } else {
+        scrutTy
+    }
+    let scrutHead = tyHeadAt(tys, scrutCanon)
     let variant = checkLookupVariantInOwner(cx.env, scrutHead, variantName)
     let resolved = if variant.name != "" {
         variant
@@ -2439,7 +2594,7 @@ fn elabVariantPattern(cx: ElabCx, node: AstNode, scrutTy: Int, mutable: Bool, re
         ))
         return corePatErr(cx.core, node.start, node.end)
     }
-    let scrutArgs = tyArgsAt(tys, scrutTy)
+    let scrutArgs = tyArgsAt(tys, scrutCanon)
     let fieldTys = if checkStringListLenHelper(resolved.generics) == checkIntListLenHelper(scrutArgs) {
         let mut subs: List<Int> = []
         for ft in resolved.fieldTys {

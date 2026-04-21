@@ -107,8 +107,13 @@ func TestGeneratedComparePoliciesAreOstyOwned(t *testing.T) {
 	if !llvmIsAsciiStringText("line one\n") {
 		t.Fatal(`llvmIsAsciiStringText("line one\n") = false, want true`)
 	}
-	if llvmIsAsciiStringText("bad €") {
-		t.Fatal(`llvmIsAsciiStringText("bad €") = true, want false`)
+	// Non-ASCII text is now accepted — llvmCStringEscape byte-escapes
+	// every non-printable / high byte via `\HH`, so the gate is a
+	// no-op. The earlier `"bad €" => false` assertion was the legacy
+	// ASCII-only behaviour; see commit history / PR on the
+	// string_non_ascii wall for context.
+	if !llvmIsAsciiStringText("bom \ufeff ok") {
+		t.Fatal(`llvmIsAsciiStringText("bom \ufeff ok") = false, want true`)
 	}
 	if !llvmIsIdent("value2") {
 		t.Fatal(`llvmIsIdent("value2") = false, want true`)
@@ -705,6 +710,8 @@ func TestGeneratedStringRuntimeSymbolsAreOstyOwned(t *testing.T) {
 		{"slice", llvmStringRuntimeSliceSymbol(), "osty_rt_strings_Slice"},
 		{"trimPrefix", llvmStringRuntimeTrimPrefixSymbol(), "osty_rt_strings_TrimPrefix"},
 		{"trimSuffix", llvmStringRuntimeTrimSuffixSymbol(), "osty_rt_strings_TrimSuffix"},
+		{"chars", llvmStringRuntimeCharsSymbol(), "osty_rt_strings_Chars"},
+		{"bytes", llvmStringRuntimeBytesSymbol(), "osty_rt_strings_Bytes"},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
@@ -732,6 +739,8 @@ func TestGeneratedStringRuntimeDeclarationsAreOstyOwned(t *testing.T) {
 		"declare ptr @osty_rt_strings_Slice(ptr, i64, i64)",
 		"declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)",
 		"declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)",
+		"declare ptr @osty_rt_strings_Chars(ptr)",
+		"declare ptr @osty_rt_strings_Bytes(ptr)",
 	}
 	for _, w := range want {
 		assertGeneratedIRContains(t, decls, w)

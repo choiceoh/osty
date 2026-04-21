@@ -164,6 +164,89 @@ func TestGenerateIndexedNestedListLenMethodDispatch(t *testing.T) {
 	}
 }
 
+// TestGenerateReturnedListOfStringsLiteralPreservesStringHint verifies
+// that a function returning `List<String>` with a bare list-of-literals
+// body propagates the `listElemString=true` hint through
+// `emitReturningBlock` and into `emitListExprWithHint`. Before this
+// wiring, the return-stmt path hardcoded `false` for the isString
+// flag, so the first element of the literal inherited that and then
+// every subsequent element's `isStringElem=true` tripped the
+// heterogeneous-ptr check. This is the concrete shape in
+// `toolchain/llvmgen.osty:llvmGcRuntimeDeclarations`.
+func TestGenerateReturnedListOfStringsLiteralPreservesStringHint(t *testing.T) {
+	file := parseLLVMGenFile(t, `pub fn declarations() -> List<String> {
+    [
+        "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)",
+        "declare void @osty.gc.pre_write_v1(ptr, ptr, i64)",
+        "declare void @osty.gc.post_write_v1(ptr, ptr, i64)",
+    ]
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/return_list_of_strings.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_list_new()",
+		"call void @osty_rt_list_push_ptr(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateNonAsciiStringLiteralLowersAsByteEscapes verifies plain
+// String literals containing multi-byte UTF-8 code points (BOM,
+// Korean, emoji) now lower through `llvmCStringEscape` as one `\HH`
+// escape per UTF-8 byte instead of tripping
+// `LLVM011 [string_non_ascii]`. Previously the backend restricted
+// literals to printable ASCII + \n \t \r \x1f; now the gate is a
+// no-op because the escaper walks bytes and byte-escapes everything
+// outside the printable ASCII range (minus `"` / `\`).
+//
+// The toolchain lexer at `toolchain/frontend.osty:600` (`unit ==
+// "\u{FEFF}"`) was the probe's first wall after the `list_mixed_ptr`
+// fix landed; other sites like the monomorphization key builder use
+// `\u{1F}` and are also covered here.
+func TestGenerateNonAsciiStringLiteralLowersAsByteEscapes(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    let bom = "\u{FEFF}"
+    let sep = "\u{1F}"
+    let hello = "안녕"
+    println(bom)
+    println(sep)
+    println(hello)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/non_ascii_literal.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	// BOM = U+FEFF → UTF-8 EF BB BF.
+	// Unit Separator = U+001F → UTF-8 1F.
+	// 안 = U+C548 → UTF-8 EC 95 88; 녕 = U+B155 → UTF-8 EB 85 95.
+	for _, want := range []string{
+		`\EF\BB\BF`,
+		`\1F`,
+		`\EC\95\88\EB\85\95`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing byte escape %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateListLiteralOfStringsPropagatesSourceType covers three
 // paths that previously dropped the `String` source type from list
 // literal elements and first-walled on
@@ -304,22 +387,137 @@ fn main() {
 	}
 }
 
-func TestGenerateStringCharsNoLongerTripsLLVM015(t *testing.T) {
+// TestGenerateStringCharsLowersToRuntimeCall verifies String.chars()
+// dispatches to osty_rt_strings_Chars and yields a GC-managed list whose
+// element width is i32 (the Char lowering). `chars.len()` must keep
+// working through the untyped osty_rt_list_len symbol.
+func TestGenerateStringCharsLowersToRuntimeCall(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn main() {
     let chars = "abc".chars()
     println(chars.len())
 }
 `)
 
-	_, err := generateFromAST(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/string_chars_dispatch.osty",
 	})
-	if err == nil {
-		t.Fatal("Generate succeeded unexpectedly; wanted the next non-LLVM015 limitation")
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
 	}
-	if strings.Contains(err.Error(), "LLVM015") {
-		t.Fatalf("String.chars still failed in FieldExpr call dispatch: %v", err)
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Chars(ptr)",
+		"call ptr @osty_rt_strings_Chars(",
+		"declare i64 @osty_rt_list_len(ptr)",
+		"call i64 @osty_rt_list_len(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected IR to contain %q, got:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateStringCharsIterationUsesBytesV1 verifies that iterating a
+// list produced by String.chars() goes through the non-typed runtime
+// path (osty_rt_list_get_bytes) with a 4-byte slot — matching the
+// Char → i32 lowering — rather than falling into the typed i64/ptr
+// symbol set.
+func TestGenerateStringCharsIterationUsesBytesV1(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    for c in "abc".chars() {
+        println(c.toInt())
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/string_chars_for_in.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_strings_Chars(",
+		// for-in over i32 elements routes through the _v1 bytes helper with a 4-byte slot.
+		"call void @osty_rt_list_get_bytes_v1(",
+		"alloca i32",
+		"load i32, ptr %t",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected IR to contain %q, got:\n%s", want, got)
+		}
+	}
+	// The typed i64/ptr paths are for other element types — they must not
+	// fire for a List<Char>.
+	if strings.Contains(got, "call i64 @osty_rt_list_get_i64(") ||
+		strings.Contains(got, "call ptr @osty_rt_list_get_ptr(") {
+		t.Fatalf("chars() iteration wrongly hit typed runtime:\n%s", got)
+	}
+}
+
+// TestGenerateStringBytesLowersToRuntimeCall verifies String.bytes()
+// dispatches to osty_rt_strings_Bytes and produces a byte-width list.
+func TestGenerateStringBytesLowersToRuntimeCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    let bs = "abc".bytes()
+    println(bs.len())
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/string_bytes_dispatch.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Bytes(ptr)",
+		"call ptr @osty_rt_strings_Bytes(",
+		"declare i64 @osty_rt_list_len(ptr)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected IR to contain %q, got:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateStringBytesIterationUsesBytesV1 mirrors the chars()
+// iteration check for bytes(): for-in over i8 elements must use the
+// _v1 bytes helper with a 1-byte slot — not the typed i64/i1/ptr path.
+func TestGenerateStringBytesIterationUsesBytesV1(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    for b in "abc".bytes() {
+        println(b.toInt())
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/string_bytes_for_in.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_strings_Bytes(",
+		"call void @osty_rt_list_get_bytes_v1(",
+		"alloca i8",
+		"load i8, ptr %t",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected IR to contain %q, got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "call i64 @osty_rt_list_get_i64(") ||
+		strings.Contains(got, "call ptr @osty_rt_list_get_ptr(") {
+		t.Fatalf("bytes() iteration wrongly hit typed runtime:\n%s", got)
 	}
 }
 
