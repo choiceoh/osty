@@ -7,27 +7,13 @@ import (
 	"strings"
 )
 
-var generatedFiles = []string{
-	"examples/selfhost-core/semver.osty",
-	"examples/selfhost-core/semver_parse.osty",
-	"examples/selfhost-core/frontend.osty",
-	"toolchain/lexer.osty",
-	"toolchain/parser.osty",
-	"examples/selfhost-core/formatter_ast.osty",
-	"examples/selfhost-core/check_bridge.osty",
-	"examples/selfhost-core/check.osty",
-	"examples/selfhost-core/resolve.osty",
-	"examples/selfhost-core/lint.osty",
-	"internal/selfhost/ast_lower.osty",
-}
-
 var toolchainCheckerFiles = []string{
-	"examples/selfhost-core/semver.osty",
-	"examples/selfhost-core/semver_parse.osty",
+	"toolchain/semver.osty",
+	"toolchain/semver_parse.osty",
 	"toolchain/frontend.osty",
 	"toolchain/lexer.osty",
 	"toolchain/parser.osty",
-	"examples/selfhost-core/formatter_ast.osty",
+	"toolchain/formatter_ast.osty",
 	"toolchain/check_bridge.osty",
 	"toolchain/diag_manifest.osty",
 	"toolchain/diag_examples.osty",
@@ -40,12 +26,14 @@ var toolchainCheckerFiles = []string{
 	"toolchain/elab.osty",
 	"toolchain/check.osty",
 	"toolchain/check_gates.osty",
-	"examples/selfhost-core/resolve.osty",
-	"examples/selfhost-core/lint.osty",
+	"toolchain/resolve.osty",
+	"toolchain/lint.osty",
 	"internal/selfhost/ast_lower.osty",
 }
 
 const stringsPrelude = `use go "strings" as strings {
+    fn Compare(a: String, b: String) -> Int
+    fn Contains(s: String, substr: String) -> Bool
     fn Count(s: String, substr: String) -> Int
     fn Fields(s: String) -> List<String>
     fn HasPrefix(s: String, prefix: String) -> Bool
@@ -64,16 +52,8 @@ fn ostyStringsConcat(a: String, b: String) -> String { a + b }
 fn ostyStringsChars(s: String) -> List<Char> { s.chars() }
 `
 
-func GeneratedFiles() []string {
-	return append([]string(nil), generatedFiles...)
-}
-
 func ToolchainCheckerFiles() []string {
 	return append([]string(nil), toolchainCheckerFiles...)
-}
-
-func MergeSelfhostGenerated(root string) ([]byte, error) {
-	return MergeFiles(root, generatedFiles)
 }
 
 func MergeToolchainChecker(root string) ([]byte, error) {
@@ -134,6 +114,8 @@ func normalizeStdStringsCalls(src string) string {
 	for _, pair := range [][2]string{
 		{"strings.split(", "strings.Split("},
 		{"strings.join(", "strings.Join("},
+		{"strings.compare(", "strings.Compare("},
+		{"strings.contains(", "strings.Contains("},
 		{"strings.hasPrefix(", "strings.HasPrefix("},
 		{"strings.hasSuffix(", "strings.HasSuffix("},
 		{"strings.trimSpace(", "strings.TrimSpace("},

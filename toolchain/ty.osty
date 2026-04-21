@@ -86,9 +86,15 @@ pub struct TyNode {
 /// TyArena owns every `TyNode` produced during elaboration. Canonical
 /// primitive indices are pre-populated by `emptyTyArena` so callers
 /// never allocate a fresh node for `Int`, `Bool`, ...
+///
+/// `internHashes` is a parallel fingerprint array: `tyInternNode` /
+/// `tyLookupInterned` reject non-matching keys on a cheap `Int`
+/// comparison before falling back to the full `==` string compare, so
+/// the intern table degrades from O(N × keyLen) to O(N × 1) on miss.
 pub struct TyArena {
     pub nodes: List<TyNode>,
     pub internKeys: List<String>,
+    pub internHashes: List<Int>,
     pub internValues: List<Int>,
 
     pub idxErr: Int,
@@ -139,6 +145,7 @@ pub fn emptyTyArena() -> TyArena {
     let mut arena = TyArena {
         nodes: [],
         internKeys: [],
+        internHashes: [],
         internValues: [],
         idxErr: -1,
         idxPoison: -1,
@@ -341,22 +348,24 @@ pub fn tySelf(arena: TyArena, owner: String) -> Int {
 }
 
 fn tyInternNode(arena: TyArena, key: String, node: TyNode) -> Int {
-    let existing = tyLookupInterned(arena, key)
+    let keyHash = checkHashKey(key)
+    let existing = tyLookupInterned(arena, key, keyHash)
     if existing >= 0 {
         return existing
     }
     let idx = tyNodeCount(arena)
     arena.nodes.push(node)
     arena.internKeys.push(key)
+    arena.internHashes.push(keyHash)
     arena.internValues.push(idx)
     idx
 }
 
-fn tyLookupInterned(arena: TyArena, key: String) -> Int {
+fn tyLookupInterned(arena: TyArena, key: String, hash: Int) -> Int {
     let mut i = 0
     let n = arena.internKeys.len()
     for i < n {
-        if arena.internKeys[i] == key {
+        if arena.internHashes[i] == hash && arena.internKeys[i] == key {
             return arena.internValues[i]
         }
         i = i + 1
@@ -836,33 +845,43 @@ fn tyArgsFromString(arena: TyArena, text: String) -> List<Int> {
 /// splitTopLevel splits a comma-separated type-argument text at the top
 /// nesting level. Mirrors `frontCheckSplitTopLevel` so the bridge stays
 /// format-compatible during migration.
+///
+/// The accumulator is a `List<String>` of single units rather than a
+/// `String` rebuilt via interpolation: the previous `cur = "{cur}{unit}"`
+/// form allocated and copied the entire buffer on every character, so a
+/// generic type of length N cost O(N²) per split.
 fn splitTopLevel(text: String) -> List<String> {
     let mut out: List<String> = []
-    let mut cur = ""
+    let mut buf: List<String> = []
     let mut angle = 0
     let mut paren = 0
     for unit in strings.split(text, "") {
         if unit == "<" {
             angle = angle + 1
-            cur = "{cur}{unit}"
+            buf.push(unit)
         } else if unit == ">" {
             angle = angle - 1
-            cur = "{cur}{unit}"
+            buf.push(unit)
         } else if unit == "(" {
             paren = paren + 1
-            cur = "{cur}{unit}"
+            buf.push(unit)
         } else if unit == ")" {
             paren = paren - 1
-            cur = "{cur}{unit}"
+            buf.push(unit)
         } else if unit == "," && angle == 0 && paren == 0 {
-            out.push(strings.trimSpace(cur))
-            cur = ""
+            out.push(strings.trimSpace(strings.join(buf, "")))
+            // `buf = []` loses bootstrap-gen's type inference for the
+            // fresh empty list (emitted as `make([]any, 0, 1)` instead
+            // of `make([]string, 0, 1)`), so regen fails to compile on
+            // Windows. Clear in place to keep the element type.
+            buf.clear()
         } else {
-            cur = "{cur}{unit}"
+            buf.push(unit)
         }
     }
-    if strings.trimSpace(cur) != "" {
-        out.push(strings.trimSpace(cur))
+    let tail = strings.trimSpace(strings.join(buf, ""))
+    if tail != "" {
+        out.push(tail)
     }
     out
 }

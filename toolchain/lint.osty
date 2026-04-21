@@ -143,6 +143,12 @@ fn selfLintDiagnosticWithFixAtNode(
 
 /// selfLintSource runs the self-hosting lexer/parser and emits a conservative
 /// style/correctness lint report from the parsed AST plus resolver references.
+///
+/// This is the single-file entry point; L0005/L0006 (unused field / method)
+/// therefore only see accesses inside this one file. For multi-file
+/// packages use [selfLintPackageSources] — it aggregates member-access
+/// names across every sibling so a `pub struct` field read from a
+/// neighbouring file does not trip a false unused-member warning.
 pub fn selfLintSource(source: String) -> SelfLintReport {
     selfLintAstSource(source, astParse(source))
 }
@@ -157,20 +163,110 @@ pub fn selfLintResolvedAstSource(
     file: AstFile,
     resolved: SelfResolveResult,
 ) -> SelfLintReport {
+    let access = selfLintCollectMemberAccess(file)
+    selfLintResolvedAstSourceWithAccess(source, file, resolved, access)
+}
+
+fn selfLintResolvedAstSourceWithAccess(
+    source: String,
+    file: AstFile,
+    resolved: SelfResolveResult,
+    access: SelfLintMemberAccess,
+) -> SelfLintReport {
+    selfLintFullPipeline(source, file, resolved, access, selfLintNoTypeHints())
+}
+
+/// selfLintCheckedAstSource lints a file with the help of a
+/// `FrontCheckResult` from the type checker. Type-informed rules
+/// (currently L0007 IgnoredResult) consult `checked.typedNodes` to look
+/// up each expression's inferred type; non-typed rules run as usual. Pass
+/// `selfLintNoTypeHints()` when you do not have checker results.
+pub fn selfLintCheckedAstSource(
+    source: String,
+    file: AstFile,
+    resolved: SelfResolveResult,
+    checked: FrontCheckResult,
+) -> SelfLintReport {
+    let access = selfLintCollectMemberAccess(file)
+    selfLintFullPipeline(source, file, resolved, access, selfLintTypeHintsFromChecked(checked))
+}
+
+fn selfLintFullPipeline(
+    source: String,
+    file: AstFile,
+    resolved: SelfResolveResult,
+    access: SelfLintMemberAccess,
+    hints: SelfLintTypeHints,
+) -> SelfLintReport {
     let stream = frontendLexStream(source)
     let mut report = emptySelfLintReport(frontLexDiagnosticCount(stream) + astFileErrorCount(file))
     report.resolveErrors = selfResolveDiagnosticCount(resolved)
     report = selfLintAstFile(file, resolved, report)
-    selfLintAstCheckMissingDocs(file, stream, report)
+    report = selfLintAstCheckUnusedMembersWith(file, access, report)
+    report = selfLintAstCheckUnnecessaryWrap(file, report)
+    report = selfLintAstCheckLetReturn(file, report)
+    report = selfLintAstCheckNeedlessParens(file, report)
+    report = selfLintAstCheckInfiniteLoopLiteral(file, report)
+    report = selfLintAstCheckMissingTestAssertion(file, report)
+    if hints.enabled {
+        report = selfLintAstCheckIgnoredResult(file, hints, report)
+    }
+    report = selfLintAstCheckMissingDocs(file, stream, report)
+    selfLintFilterByAllow(file, report)
+}
+
+/// selfLintPackageSources lints every file in a package under a shared
+/// member-access index. Returns one SelfLintReport per input source, in
+/// the same order. A pub method defined in file A and only called from
+/// file B no longer trips L0006 under this entry point.
+pub fn selfLintPackageSources(sources: List<String>) -> List<SelfLintReport> {
+    let mut files: List<AstFile> = []
+    for src in sources {
+        files.push(astParse(src))
+    }
+    let mut resolveds: List<SelfResolveResult> = []
+    for f in files {
+        resolveds.push(selfResolveAstFile(f))
+    }
+    let mut access = selfLintEmptyMemberAccess()
+    for f in files {
+        access = selfLintCollectMemberAccessInto(f, access)
+    }
+    let mut reports: List<SelfLintReport> = []
+    let mut idx = 0
+    for src in sources {
+        let file = selfLintFileAt(files, idx)
+        let resolved = selfLintResolvedAt(resolveds, idx)
+        reports.push(selfLintResolvedAstSourceWithAccess(src, file, resolved, access))
+        idx = idx + 1
+    }
+    reports
+}
+
+fn selfLintFileAt(files: List<AstFile>, target: Int) -> AstFile {
+    let mut idx = 0
+    for f in files {
+        if idx == target {
+            return f
+        }
+        idx = idx + 1
+    }
+    astParse("")
+}
+
+fn selfLintResolvedAt(results: List<SelfResolveResult>, target: Int) -> SelfResolveResult {
+    let mut idx = 0
+    for r in results {
+        if idx == target {
+            return r
+        }
+        idx = idx + 1
+    }
+    selfResolveAstFile(astParse(""))
 }
 
 pub fn selfLintDiagnosticCount(report: SelfLintReport) -> Int {
-    let mut count = 0
-    for diag in report.diagnostics {
-        let _ = diag
-        count = count + 1
-    }
-    count
+    report.diagnostics.len()
 }
 
 pub fn selfLintCodeCount(report: SelfLintReport, code: String) -> Int {
@@ -191,12 +287,7 @@ pub fn selfLintFirstDiagnostic(report: SelfLintReport) -> SelfLintDiagnostic {
 }
 
 pub fn selfLintFixCount(diag: SelfLintDiagnostic) -> Int {
-    let mut count = 0
-    for fix in diag.fixes {
-        let _ = fix
-        count = count + 1
-    }
-    count
+    diag.fixes.len()
 }
 
 pub fn selfLintFirstFix(diag: SelfLintDiagnostic) -> SelfLintFix {
@@ -341,23 +432,12 @@ fn selfLintInvalidEdit() -> SelfLintEdit {
 }
 
 fn selfLintEditListCount(edits: List<SelfLintEdit>) -> Int {
-    let mut count = 0
-    for edit in edits {
-        let _ = edit
-        count = count + 1
-    }
-    count
+    edits.len()
 }
 
 fn selfLintEditAt(edits: List<SelfLintEdit>, target: Int) -> SelfLintEdit {
-    let mut idx = 0
-    for edit in edits {
-        if idx == target {
-            return edit
-        }
-        idx = idx + 1
-    }
-    selfLintInvalidEdit()
+    if target < 0 || target >= edits.len() { return selfLintInvalidEdit() }
+    edits[target]
 }
 
 fn selfLintHighestStartEditIndex(edits: List<SelfLintEdit>) -> Int {
@@ -1907,11 +1987,11 @@ fn selfLintAstPatternNames(
         return out
     }
     if selfLintAstPatternIsIdent(node) {
-        out.push(selfLintNameAtNode(node.text, node.start, node.end, idx))
-    } else if node.extra == selfLintAstPatternBindingKind() {
-        out.push(selfLintNameAtNode(node.text, node.start, node.start + 1, idx))
+        out.push(selfLintNameAtNode(selfLintAstPatternName(node.text, "ident:"), node.start, node.end, idx))
+    } else if node.extra == selfLintAstPatternBindingKind() || strings.hasPrefix(node.text, "binding:") {
+        out.push(selfLintNameAtNode(selfLintAstPatternName(node.text, "binding:"), node.start, node.start + 1, idx))
         out = selfLintAstPatternNames(file, node.left, out)
-    } else if node.extra == selfLintAstPatternFieldKind() {
+    } else if node.extra == selfLintAstPatternFieldKind() || (node.extra == 0 && node.text != "" && node.left >= 0) {
         if node.left >= 0 {
             out = selfLintAstPatternNames(file, node.left, out)
         } else {
@@ -1928,7 +2008,7 @@ fn selfLintAstPatternNames(
 }
 
 fn selfLintAstPatternIsIdent(node: AstNode) -> Bool {
-    node.extra == selfLintAstPatternIdentKind()
+    node.extra == selfLintAstPatternIdentKind() || strings.hasPrefix(node.text, "ident:")
 }
 
 fn selfLintAstPatternIdentKind() -> Int { 3 }
@@ -1936,6 +2016,18 @@ fn selfLintAstPatternIdentKind() -> Int { 3 }
 fn selfLintAstPatternBindingKind() -> Int { 9 }
 
 fn selfLintAstPatternFieldKind() -> Int { 10 }
+
+/// selfLintAstPatternName handles both AST encodings: the current parser
+/// stores the pattern's source name in `node.text` unprefixed, while some
+/// legacy paths (see `internal/docgen/ast_lower.go`) emit `"ident:name"`
+/// or `"binding:name"`. Strip the `prefix` when present so downstream
+/// resolver/linter lookups see a bare identifier either way.
+fn selfLintAstPatternName(text: String, prefix: String) -> String {
+    if strings.hasPrefix(text, prefix) {
+        return strings.trimPrefix(text, prefix)
+    }
+    text
+}
 
 fn selfLintAstCountWritesAfter(
     file: AstFile,
@@ -2496,4 +2588,1362 @@ fn selfLintIsDeclPrefixTokenKind(kind: FrontTokenKind) -> Bool {
         || kind == FrontNewline
         || kind == FrontLParen
         || kind == FrontRParen
+}
+
+/// SelfLintMemberAccess is the name-level index of every field read and
+/// method call reachable from the file's top-level declarations. It drives
+/// L0005 (unused field) and L0006 (unused method) — a conservative,
+/// name-only heuristic mirroring the Go-side linter: two structs sharing a
+/// field name are both treated as used if either is referenced, and
+/// reflection / FFI accesses are not modelled.
+struct SelfLintMemberAccess {
+    fields: List<String>,
+    methods: List<String>,
+}
+
+fn selfLintEmptyMemberAccess() -> SelfLintMemberAccess {
+    SelfLintMemberAccess { fields: [], methods: [] }
+}
+
+fn selfLintMemberAccessAddField(
+    acc: SelfLintMemberAccess,
+    name: String,
+) -> SelfLintMemberAccess {
+    if name == "" {
+        return acc
+    }
+    if selfLintStringListContains(acc.fields, name) {
+        return acc
+    }
+    let mut out = acc
+    out.fields.push(name)
+    out
+}
+
+fn selfLintMemberAccessAddMethod(
+    acc: SelfLintMemberAccess,
+    name: String,
+) -> SelfLintMemberAccess {
+    if name == "" {
+        return acc
+    }
+    if selfLintStringListContains(acc.methods, name) {
+        return acc
+    }
+    let mut out = acc
+    out.methods.push(name)
+    out
+}
+
+/// selfLintCollectMemberAccess walks every top-level declaration in `file`
+/// and records the names of fields read and methods called. The walk
+/// descends into function bodies, struct/enum/interface method bodies, and
+/// top-level `let` initializers.
+fn selfLintCollectMemberAccess(file: AstFile) -> SelfLintMemberAccess {
+    selfLintCollectMemberAccessInto(file, selfLintEmptyMemberAccess())
+}
+
+/// selfLintCollectMemberAccessInto appends `file`'s member references to
+/// an existing accumulator. Package-mode entry points use this to fold
+/// every sibling file into one index before running L0005/L0006.
+fn selfLintCollectMemberAccessInto(
+    file: AstFile,
+    acc: SelfLintMemberAccess,
+) -> SelfLintMemberAccess {
+    let mut out = acc
+    for declIdx in file.arena.decls {
+        out = selfLintMemberAccessDecl(file, declIdx, out)
+    }
+    out
+}
+
+fn selfLintMemberAccessDecl(
+    file: AstFile,
+    idx: Int,
+    acc: SelfLintMemberAccess,
+) -> SelfLintMemberAccess {
+    if idx < 0 {
+        return acc
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNFnDecl {
+        return selfLintMemberAccessAny(file, node.right, acc)
+    }
+    if node.kind == AstNStructDecl
+        || node.kind == AstNEnumDecl
+        || node.kind == AstNInterfaceDecl {
+        let mut out = acc
+        for memberIdx in node.children {
+            let member = selfLintAstNode(file, memberIdx)
+            if member.kind == AstNFnDecl && member.right >= 0 {
+                out = selfLintMemberAccessAny(file, member.right, out)
+            }
+        }
+        return out
+    }
+    if node.kind == AstNLet && node.right >= 0 {
+        return selfLintMemberAccessAny(file, node.right, acc)
+    }
+    acc
+}
+
+/// selfLintMemberAccessAny is the recursive walker that records member
+/// references. It special-cases a handful of node shapes so method calls
+/// (`x.m(args)`) do not also get counted as field reads on `m`, and so
+/// struct literal / struct pattern field names are recorded without
+/// double-walking the surrounding tuple helpers.
+fn selfLintMemberAccessAny(
+    file: AstFile,
+    idx: Int,
+    acc: SelfLintMemberAccess,
+) -> SelfLintMemberAccess {
+    if idx < 0 {
+        return acc
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = acc
+    if node.kind == AstNCall {
+        if node.left >= 0 {
+            let callee = selfLintAstNode(file, node.left)
+            if callee.kind == AstNField {
+                out = selfLintMemberAccessAddMethod(out, callee.text)
+                out = selfLintMemberAccessAny(file, callee.left, out)
+            } else {
+                out = selfLintMemberAccessAny(file, node.left, out)
+            }
+        }
+        for child in node.children {
+            out = selfLintMemberAccessAny(file, child, out)
+        }
+        return out
+    }
+    if node.kind == AstNField {
+        out = selfLintMemberAccessAddField(out, node.text)
+        return selfLintMemberAccessAny(file, node.left, out)
+    }
+    if node.kind == AstNStructLit {
+        out = selfLintMemberAccessAny(file, node.left, out)
+        out = selfLintMemberAccessAny(file, node.right, out)
+        for child in node.children {
+            let fNode = selfLintAstNode(file, child)
+            if fNode.kind == AstNField_ {
+                out = selfLintMemberAccessAddField(out, fNode.text)
+                out = selfLintMemberAccessAny(file, fNode.left, out)
+            } else {
+                out = selfLintMemberAccessAny(file, child, out)
+            }
+        }
+        return out
+    }
+    if node.kind == AstNPattern && node.extra == selfLintAstPatternFieldKind() {
+        out = selfLintMemberAccessAddField(out, node.text)
+        return selfLintMemberAccessAny(file, node.left, out)
+    }
+    out = selfLintMemberAccessAny(file, node.left, out)
+    out = selfLintMemberAccessAny(file, node.right, out)
+    for child in node.children {
+        out = selfLintMemberAccessAny(file, child, out)
+    }
+    for child in node.children2 {
+        out = selfLintMemberAccessAny(file, child, out)
+    }
+    out
+}
+
+/// selfLintAstCheckUnusedMembers emits L0005 for non-pub struct fields and
+/// L0006 for non-pub struct/enum methods whose names never appear anywhere
+/// in the file's member-access index. Public types and public members are
+/// exempt (external consumers are assumed).
+fn selfLintAstCheckUnusedMembers(
+    file: AstFile,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    selfLintAstCheckUnusedMembersWith(file, selfLintCollectMemberAccess(file), report)
+}
+
+/// selfLintAstCheckUnusedMembersWith runs the same L0005/L0006 checks but
+/// consults a caller-supplied access index — use this when the index is
+/// the union of every file in a package so cross-file usages suppress the
+/// warning.
+fn selfLintAstCheckUnusedMembersWith(
+    file: AstFile,
+    access: SelfLintMemberAccess,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let mut out = report
+    for declIdx in file.arena.decls {
+        out = selfLintAstCheckUnusedMembersDecl(file, declIdx, access, out)
+    }
+    out
+}
+
+fn selfLintAstCheckUnusedMembersDecl(
+    file: AstFile,
+    idx: Int,
+    access: SelfLintMemberAccess,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let typePub = node.flags == 1
+    let mut out = report
+    if node.kind == AstNStructDecl {
+        for memberIdx in node.children {
+            let member = selfLintAstNode(file, memberIdx)
+            if member.kind == AstNField_ {
+                out = selfLintMaybeEmitUnusedField(member, memberIdx, typePub, access, out)
+            } else if member.kind == AstNFnDecl {
+                out = selfLintMaybeEmitUnusedMethod(member, memberIdx, typePub, access, out)
+            }
+        }
+        return out
+    }
+    if node.kind == AstNEnumDecl {
+        for memberIdx in node.children {
+            let member = selfLintAstNode(file, memberIdx)
+            if member.kind == AstNFnDecl {
+                out = selfLintMaybeEmitUnusedMethod(member, memberIdx, typePub, access, out)
+            }
+        }
+        return out
+    }
+    out
+}
+
+fn selfLintMaybeEmitUnusedField(
+    member: AstNode,
+    idx: Int,
+    typePub: Bool,
+    access: SelfLintMemberAccess,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if member.text == "" || selfLintIsIntentionalDiscard(member.text) {
+        return report
+    }
+    if typePub || member.flags == 1 {
+        return report
+    }
+    if selfLintStringListContains(access.fields, member.text) {
+        return report
+    }
+    selfLintEmitAtNode(
+        report,
+        "L0005",
+        "field is never read",
+        member.text,
+        member.start,
+        member.end,
+        idx,
+    )
+}
+
+fn selfLintMaybeEmitUnusedMethod(
+    member: AstNode,
+    idx: Int,
+    typePub: Bool,
+    access: SelfLintMemberAccess,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if member.text == "" || selfLintIsIntentionalDiscard(member.text) {
+        return report
+    }
+    if typePub || member.flags == 1 {
+        return report
+    }
+    if selfLintStringListContains(access.methods, member.text) {
+        return report
+    }
+    selfLintEmitAtNode(
+        report,
+        "L0006",
+        "method is never called",
+        member.text,
+        member.start,
+        member.end,
+        idx,
+    )
+}
+
+/// SelfLintTypeHints is the linter-side projection of the checker's
+/// typed-node table. It is the thin bridge that unlocks type-aware lints
+/// (currently only L0007) without coupling the linter to the full
+/// `ElabCx` / `TyArena`. `enabled == false` means the caller did not run
+/// the checker, so type-gated rules stay silent.
+struct SelfLintTypeHints {
+    pub enabled: Bool,
+    pub nodes: List<Int>,
+    pub types: List<String>,
+}
+
+fn selfLintNoTypeHints() -> SelfLintTypeHints {
+    SelfLintTypeHints { enabled: false, nodes: [], types: [] }
+}
+
+fn selfLintTypeHintsFromChecked(checked: FrontCheckResult) -> SelfLintTypeHints {
+    let mut nodes: List<Int> = []
+    let mut types: List<String> = []
+    for tn in checked.typedNodes {
+        nodes.push(tn.node)
+        types.push(tn.typeName)
+    }
+    SelfLintTypeHints { enabled: true, nodes, types }
+}
+
+fn selfLintTypeAt(hints: SelfLintTypeHints, nodeIdx: Int) -> String {
+    if nodeIdx < 0 || !(hints.enabled) {
+        return ""
+    }
+    let mut i = 0
+    for target in hints.nodes {
+        if target == nodeIdx {
+            return selfLintStringAt(hints.types, i)
+        }
+        i = i + 1
+    }
+    ""
+}
+
+fn selfLintStringAt(items: List<String>, target: Int) -> String {
+    let mut idx = 0
+    for item in items {
+        if idx == target {
+            return item
+        }
+        idx = idx + 1
+    }
+    ""
+}
+
+/// selfLintTypeIsMustUse mirrors `internal/lint/typebased.go`'s
+/// `isIgnoredMustUse` using the checker's stringified type. Matches
+/// `Result<...>`, `Option<...>`, the shorthand `T?`, and the bare
+/// generic heads.
+fn selfLintTypeIsMustUse(typeName: String) -> Bool {
+    if typeName == "" || typeName == "Invalid" || typeName == "Poison" {
+        return false
+    }
+    if typeName == "Result" || typeName == "Option" {
+        return true
+    }
+    if strings.hasPrefix(typeName, "Result<") || strings.hasPrefix(typeName, "Option<") {
+        return true
+    }
+    strings.hasSuffix(typeName, "?")
+}
+
+/// selfLintAstCheckIgnoredResult — L0007. Flags statement-level
+/// expressions whose inferred type is `Result<...>`, `Option<...>`, or
+/// `T?`: discarding them silently loses error / missing-value signals.
+/// Tail expressions of a function that declares a matching return type
+/// are NOT flagged (they *are* the return value). Script-top-level
+/// statements have no declared return type, so their tail IS treated as
+/// discarded.
+fn selfLintAstCheckIgnoredResult(
+    file: AstFile,
+    hints: SelfLintTypeHints,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let mut out = report
+    for declIdx in file.arena.decls {
+        out = selfLintIgnoredResultDecl(file, declIdx, hints, out)
+    }
+    out
+}
+
+fn selfLintIgnoredResultDecl(
+    file: AstFile,
+    idx: Int,
+    hints: SelfLintTypeHints,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNFnDecl {
+        let tailIsValue = node.left >= 0
+        return selfLintIgnoredResultBlockBody(file, node.right, hints, tailIsValue, report)
+    }
+    if node.kind == AstNStructDecl || node.kind == AstNEnumDecl || node.kind == AstNInterfaceDecl {
+        let mut out = report
+        for memberIdx in node.children {
+            let member = selfLintAstNode(file, memberIdx)
+            if member.kind == AstNFnDecl && member.right >= 0 {
+                let tailIsValue = member.left >= 0
+                out = selfLintIgnoredResultBlockBody(file, member.right, hints, tailIsValue, out)
+            }
+        }
+        return out
+    }
+    report
+}
+
+fn selfLintIgnoredResultBlockBody(
+    file: AstFile,
+    blockIdx: Int,
+    hints: SelfLintTypeHints,
+    tailIsValue: Bool,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if blockIdx < 0 {
+        return report
+    }
+    let block = selfLintAstNode(file, blockIdx)
+    if block.kind != AstNBlock {
+        return report
+    }
+    let last = block.children.len() - 1
+    let mut out = report
+    let mut i = 0
+    for stmtIdx in block.children {
+        let isTail = i == last
+        out = selfLintIgnoredResultStmt(file, stmtIdx, hints, isTail && tailIsValue, out)
+        i = i + 1
+    }
+    out
+}
+
+fn selfLintIgnoredResultStmt(
+    file: AstFile,
+    idx: Int,
+    hints: SelfLintTypeHints,
+    tailIsValue: Bool,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = report
+    if node.kind == AstNExprStmt {
+        let exprIdx = node.left
+        if !(tailIsValue) {
+            let typeName = selfLintTypeAt(hints, exprIdx)
+            if selfLintTypeIsMustUse(typeName) {
+                out = selfLintEmitAtNode(
+                    out,
+                    "L0007",
+                    "discarded must-use value — handle the error or assign to `_`",
+                    typeName,
+                    node.start,
+                    node.end,
+                    exprIdx,
+                )
+            }
+        }
+        return selfLintIgnoredResultExpr(file, exprIdx, hints, out)
+    }
+    if node.kind == AstNLet {
+        return selfLintIgnoredResultExpr(file, node.right, hints, out)
+    }
+    if node.kind == AstNAssign || node.kind == AstNChanSend {
+        out = selfLintIgnoredResultExpr(file, node.left, hints, out)
+        return selfLintIgnoredResultExpr(file, node.right, hints, out)
+    }
+    if node.kind == AstNReturn || node.kind == AstNDefer {
+        return selfLintIgnoredResultExpr(file, node.left, hints, out)
+    }
+    if node.kind == AstNFor {
+        let iterIdx = selfLintAstChildAt(node.children, 1)
+        if iterIdx >= 0 {
+            out = selfLintIgnoredResultExpr(file, iterIdx, hints, out)
+        }
+        return selfLintIgnoredResultBlockBody(file, node.right, hints, false, out)
+    }
+    if node.kind == AstNBlock {
+        return selfLintIgnoredResultBlockBody(file, idx, hints, false, out)
+    }
+    out
+}
+
+fn selfLintIgnoredResultExpr(
+    file: AstFile,
+    idx: Int,
+    hints: SelfLintTypeHints,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = report
+    if node.kind == AstNBlock {
+        return selfLintIgnoredResultBlockBody(file, idx, hints, true, out)
+    }
+    if node.kind == AstNIf {
+        out = selfLintIgnoredResultExpr(file, node.left, hints, out)
+        out = selfLintIgnoredResultBlockBody(file, node.right, hints, true, out)
+        let elseIdx = selfLintAstChildAt(node.children, 0)
+        if elseIdx >= 0 {
+            out = selfLintIgnoredResultExpr(file, elseIdx, hints, out)
+        }
+        return out
+    }
+    if node.kind == AstNMatch {
+        out = selfLintIgnoredResultExpr(file, node.left, hints, out)
+        for armIdx in node.children {
+            let arm = selfLintAstNode(file, armIdx)
+            out = selfLintIgnoredResultExpr(file, arm.right, hints, out)
+            let guardIdx = selfLintAstChildAt(arm.children, 0)
+            if guardIdx >= 0 {
+                out = selfLintIgnoredResultExpr(file, guardIdx, hints, out)
+            }
+        }
+        return out
+    }
+    if node.kind == AstNClosure {
+        return selfLintIgnoredResultExpr(file, node.left, hints, out)
+    }
+    out
+}
+
+// ============================================================
+// RULE REGISTRY
+// ============================================================
+
+/// SelfLintRuleInfo is the queryable metadata for one self-hosted lint
+/// rule. Mirrors `internal/lint/registry.go` on the Go side. The
+/// authoritative list is [selfLintAllRules]. Use [selfLintExplainRule]
+/// for code-based lookup; `osty explain Lxxxx` goes through the Go
+/// registry today but the selfhost list is the source of truth when the
+/// linter runs entirely in Osty.
+pub struct SelfLintRuleInfo {
+    pub code: String,
+    pub name: String,
+    pub category: String,
+    pub summary: String,
+    pub fixable: Bool,
+}
+
+pub fn selfLintAllRules() -> List<SelfLintRuleInfo> {
+    let mut rules: List<SelfLintRuleInfo> = []
+    rules.push(selfLintMakeRule("L0001", "unused_let", "unused", "let binding is never read", true))
+    rules.push(selfLintMakeRule("L0002", "unused_param", "unused", "function parameter is never used", true))
+    rules.push(selfLintMakeRule("L0003", "unused_import", "unused", "use alias is never referenced", true))
+    rules.push(selfLintMakeRule("L0004", "unused_mut", "unused", "let mut binding is never reassigned", true))
+    rules.push(selfLintMakeRule("L0005", "unused_field", "unused", "struct field is never read", false))
+    rules.push(selfLintMakeRule("L0006", "unused_method", "unused", "struct or enum method is never called", false))
+    rules.push(selfLintMakeRule("L0007", "ignored_result", "unused", "discarded Result/Option value", false))
+    rules.push(selfLintMakeRule("L0008", "dead_store", "unused", "assignment is dead — no intervening read", true))
+    rules.push(selfLintMakeRule("L0010", "shadowed_binding", "shadowing", "binding shadows an earlier binding", false))
+    rules.push(selfLintMakeRule("L0020", "dead_code", "dead_code", "statement is unreachable", false))
+    rules.push(selfLintMakeRule("L0021", "redundant_else", "simplify", "redundant else after unconditional return", false))
+    rules.push(selfLintMakeRule("L0022", "constant_condition", "simplify", "condition is a constant boolean", false))
+    rules.push(selfLintMakeRule("L0023", "empty_branch", "simplify", "if or else branch body is empty", false))
+    rules.push(selfLintMakeRule("L0024", "needless_return", "simplify", "tail return is redundant", true))
+    rules.push(selfLintMakeRule("L0025", "identical_branches", "simplify", "if/else arms are identical", false))
+    rules.push(selfLintMakeRule("L0026", "empty_loop_body", "simplify", "loop body is empty", false))
+    rules.push(selfLintMakeRule("L0030", "naming_type", "naming", "type name should be UpperCamelCase", false))
+    rules.push(selfLintMakeRule("L0031", "naming_value", "naming", "binding or function name should be lowerCamelCase", false))
+    rules.push(selfLintMakeRule("L0032", "naming_variant", "naming", "enum variant should be UpperCamelCase", false))
+    rules.push(selfLintMakeRule("L0040", "redundant_bool", "simplify", "if cond { true } else { false } simplifies to cond", true))
+    rules.push(selfLintMakeRule("L0041", "self_compare", "simplify", "expression compared to itself", false))
+    rules.push(selfLintMakeRule("L0042", "self_assign", "simplify", "assignment has no effect (self-assign)", true))
+    rules.push(selfLintMakeRule("L0043", "double_negation", "simplify", "!! collapses to the inner expression", true))
+    rules.push(selfLintMakeRule("L0044", "bool_literal_compare", "simplify", "compare against bool literal can be simplified", true))
+    rules.push(selfLintMakeRule("L0045", "negated_bool_literal", "simplify", "!true / !false can be written directly", false))
+    rules.push(selfLintMakeRule("L0046", "unnecessary_wrap", "simplify", "function returns Result/Option but never errors", false))
+    rules.push(selfLintMakeRule("L0047", "let_return_simplify", "simplify", "let + tail return rebinds only to return", true))
+    rules.push(selfLintMakeRule("L0048", "needless_parens_condition", "simplify", "parentheses around an if/for condition are redundant", true))
+    rules.push(selfLintMakeRule("L0049", "infinite_loop_literal", "simplify", "`for true \{ ... \}` is just `for \{ ... \}`", true))
+    rules.push(selfLintMakeRule("L0050", "too_many_params", "complexity", "function takes too many parameters", false))
+    rules.push(selfLintMakeRule("L0052", "function_too_long", "complexity", "function body is too long", false))
+    rules.push(selfLintMakeRule("L0053", "deep_nesting", "complexity", "control flow is nested too deeply", false))
+    rules.push(selfLintMakeRule("L0070", "missing_doc", "docs", "public declaration has no doc comment", false))
+    rules.push(selfLintMakeRule("L0080", "missing_test_assertion", "docs", "test function has no testing.* assertion", false))
+    rules
+}
+
+fn selfLintMakeRule(
+    code: String,
+    name: String,
+    category: String,
+    summary: String,
+    fixable: Bool,
+) -> SelfLintRuleInfo {
+    SelfLintRuleInfo { code, name, category, summary, fixable }
+}
+
+pub fn selfLintExplainRule(code: String) -> SelfLintRuleInfo {
+    for r in selfLintAllRules() {
+        if r.code == code {
+            return r
+        }
+    }
+    SelfLintRuleInfo { code: "", name: "", category: "", summary: "", fixable: false }
+}
+
+// ============================================================
+// #[allow(...)] SUPPRESSION
+// ============================================================
+//
+// Mirrors `internal/lint/allow.go`. A user can opt out of specific lint
+// warnings by tagging a declaration with `#[allow(CODE, ...)]` where
+// CODE is either a concrete `Lxxxx` number, a category alias (`unused`,
+// `shadowing`, `dead_code`, `naming`, `simplify`, `complexity`, `docs`),
+// a rule alias (`unused_let`, `unused_param`, …), or the wildcards
+// `lint` / `all` (also the bare `#[allow]` form).
+//
+// Coverage is positional: the annotation suppresses lint diagnostics
+// whose primary token index lies inside the annotated decl's
+// `[start, end)` range, which covers the decl itself plus every nested
+// node. Methods on an annotated struct inherit the parent scope; they
+// can also carry their own `#[allow]` for a narrower override.
+
+struct SelfLintAllowScope {
+    start: Int,
+    end: Int,
+    codes: List<String>,
+    wildcard: Bool,
+}
+
+fn selfLintFilterByAllow(file: AstFile, report: SelfLintReport) -> SelfLintReport {
+    let scopes = selfLintBuildAllowScopes(file)
+    if scopes.len() == 0 {
+        return report
+    }
+    let mut kept: List<SelfLintDiagnostic> = []
+    for diag in report.diagnostics {
+        if !(selfLintDiagIsAllowed(diag, scopes)) {
+            kept.push(diag)
+        }
+    }
+    let mut out = report
+    out.diagnostics = kept
+    out
+}
+
+fn selfLintBuildAllowScopes(file: AstFile) -> List<SelfLintAllowScope> {
+    let mut scopes: List<SelfLintAllowScope> = []
+    for declIdx in file.arena.decls {
+        scopes = selfLintCollectAllowAtDecl(file, declIdx, scopes)
+    }
+    scopes
+}
+
+fn selfLintCollectAllowAtDecl(
+    file: AstFile,
+    idx: Int,
+    acc: List<SelfLintAllowScope>,
+) -> List<SelfLintAllowScope> {
+    if idx < 0 {
+        return acc
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = selfLintMaybePushAllow(file, node, acc)
+    if node.kind == AstNStructDecl
+        || node.kind == AstNEnumDecl
+        || node.kind == AstNInterfaceDecl {
+        for memberIdx in node.children {
+            let member = selfLintAstNode(file, memberIdx)
+            if member.kind == AstNFnDecl || member.kind == AstNField_ || member.kind == AstNVariant {
+                out = selfLintMaybePushAllow(file, member, out)
+            }
+        }
+    }
+    out
+}
+
+fn selfLintMaybePushAllow(
+    file: AstFile,
+    node: AstNode,
+    acc: List<SelfLintAllowScope>,
+) -> List<SelfLintAllowScope> {
+    let scope = selfLintExtractAllowScope(file, node)
+    if !(scope.wildcard) && scope.codes.len() == 0 {
+        return acc
+    }
+    let mut out = acc
+    out.push(scope)
+    out
+}
+
+fn selfLintExtractAllowScope(file: AstFile, node: AstNode) -> SelfLintAllowScope {
+    let annExtra = node.extra
+    if annExtra < 0 {
+        return SelfLintAllowScope { start: -1, end: -1, codes: [], wildcard: false }
+    }
+    let ann = selfLintAstNode(file, annExtra)
+    if ann.kind != AstNAnnotation {
+        return SelfLintAllowScope { start: -1, end: -1, codes: [], wildcard: false }
+    }
+    let mut scope = SelfLintAllowScope { start: node.start, end: node.end, codes: [], wildcard: false }
+    if ann.text == "__group" {
+        for child in ann.children {
+            let childAnn = selfLintAstNode(file, child)
+            scope = selfLintAccumulateAllowArgs(file, childAnn, scope)
+        }
+    } else {
+        scope = selfLintAccumulateAllowArgs(file, ann, scope)
+    }
+    scope
+}
+
+fn selfLintAccumulateAllowArgs(
+    file: AstFile,
+    ann: AstNode,
+    acc: SelfLintAllowScope,
+) -> SelfLintAllowScope {
+    if ann.kind != AstNAnnotation || ann.text != "allow" {
+        return acc
+    }
+    let mut out = acc
+    // Bare `#[allow]` with no args — wildcard.
+    if ann.children.len() == 0 {
+        out.wildcard = true
+        return out
+    }
+    for argIdx in ann.children {
+        let arg = selfLintAstNode(file, argIdx)
+        let name = selfLintAllowArgName(arg)
+        if name == "" {
+            continue
+        }
+        if name == "lint" || name == "all" {
+            out.wildcard = true
+            continue
+        }
+        for c in selfLintResolveAllowName(name) {
+            out.codes.push(c)
+        }
+    }
+    out
+}
+
+fn selfLintAllowArgName(arg: AstNode) -> String {
+    if arg.kind == AstNIdent {
+        return arg.text
+    }
+    // `#[allow(L0001)]` or `#[allow(unused_let)]` may also show up as
+    // AstNField_ when the parser interprets the bare name as key=value
+    // during recovery; fall back to its text field in that case.
+    if arg.kind == AstNField_ && arg.text != "" {
+        return arg.text
+    }
+    ""
+}
+
+fn selfLintResolveAllowName(name: String) -> List<String> {
+    if selfLintIsLintCode(name) {
+        let mut out: List<String> = []
+        out.push(name)
+        return out
+    }
+    let expanded = selfLintAllowCategoryCodes(name)
+    if expanded.len() > 0 {
+        return expanded
+    }
+    let rule = selfLintFindRuleByName(name)
+    let mut out: List<String> = []
+    if rule.code != "" {
+        out.push(rule.code)
+    }
+    out
+}
+
+fn selfLintFindRuleByName(name: String) -> SelfLintRuleInfo {
+    for r in selfLintAllRules() {
+        if r.name == name {
+            return r
+        }
+    }
+    SelfLintRuleInfo { code: "", name: "", category: "", summary: "", fixable: false }
+}
+
+fn selfLintAllowCategoryCodes(name: String) -> List<String> {
+    let rules = selfLintAllRules()
+    let mut out: List<String> = []
+    let mut category = ""
+    if name == "unused" {
+        category = "unused"
+    } else if name == "shadow" || name == "shadowing" {
+        category = "shadowing"
+    } else if name == "dead_code" || name == "unreachable" {
+        category = "dead_code"
+    } else if name == "naming" {
+        category = "naming"
+    } else if name == "simplify" || name == "suspicious" {
+        category = "simplify"
+    } else if name == "complexity" {
+        category = "complexity"
+    } else if name == "docs" {
+        category = "docs"
+    }
+    if category == "" {
+        return out
+    }
+    for r in rules {
+        if r.category == category {
+            out.push(r.code)
+        }
+    }
+    out
+}
+
+fn selfLintIsLintCode(name: String) -> Bool {
+    if name.len() < 2 {
+        return false
+    }
+    let units = strings.split(name, "")
+    if frontUnitAt(units, 0) != "L" {
+        return false
+    }
+    let mut i = 1
+    for i < name.len() {
+        let u = frontUnitAt(units, i)
+        if u < "0" || u > "9" {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+fn selfLintDiagIsAllowed(diag: SelfLintDiagnostic, scopes: List<SelfLintAllowScope>) -> Bool {
+    for scope in scopes {
+        if diag.start < scope.start || diag.start >= scope.end {
+            continue
+        }
+        if scope.wildcard {
+            return true
+        }
+        if selfLintStringListContains(scope.codes, diag.code) {
+            return true
+        }
+    }
+    false
+}
+
+// ============================================================
+// L0046 unnecessary_wrap
+// ============================================================
+//
+// A fn declared `-> Result<T, E>` or `-> Option<T>` whose body cannot
+// return `Err(...)` / `None` and does not propagate via `?` is wrapping
+// for no reason — every caller has to unwrap. Flag it so the author can
+// drop the wrapper and declare the plain return type.
+//
+// Heuristic (AST-only): skip when the body uses `?` or directly
+// constructs `Err(...)` / `None`; emit only when at least one exit path
+// actually wraps via `Ok(...)` / `Some(...)`. Callers that never reach
+// the end of the body (e.g. `for {}` infinite loop) never show a wrap
+// and therefore never trip the rule.
+
+fn selfLintAstCheckUnnecessaryWrap(
+    file: AstFile,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let mut out = report
+    for declIdx in file.arena.decls {
+        out = selfLintUnnecessaryWrapDecl(file, declIdx, out)
+    }
+    out
+}
+
+fn selfLintUnnecessaryWrapDecl(
+    file: AstFile,
+    idx: Int,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNFnDecl {
+        return selfLintUnnecessaryWrapCheckFn(file, idx, node, report)
+    }
+    if node.kind == AstNStructDecl
+        || node.kind == AstNEnumDecl
+        || node.kind == AstNInterfaceDecl {
+        let mut out = report
+        for memberIdx in node.children {
+            let member = selfLintAstNode(file, memberIdx)
+            if member.kind == AstNFnDecl {
+                out = selfLintUnnecessaryWrapCheckFn(file, memberIdx, member, out)
+            }
+        }
+        return out
+    }
+    report
+}
+
+fn selfLintUnnecessaryWrapCheckFn(
+    file: AstFile,
+    idx: Int,
+    node: AstNode,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if node.right < 0 || node.left < 0 {
+        return report
+    }
+    let retType = selfLintAstNode(file, node.left)
+    let kind = selfLintReturnWrapKind(retType)
+    if kind == "" {
+        return report
+    }
+    if selfLintBodyHasFallibleExit(file, node.right, kind) {
+        return report
+    }
+    if !(selfLintBodyWrapsExit(file, node.right, kind)) {
+        return report
+    }
+    let mut message = "function always returns Some(...) — drop the Option wrapping"
+    if kind == "result" {
+        message = "function always returns Ok(...) — drop the Result wrapping"
+    }
+    selfLintEmitAtNode(
+        report,
+        "L0046",
+        message,
+        node.text,
+        node.start,
+        node.end,
+        idx,
+    )
+}
+
+fn selfLintReturnWrapKind(typeNode: AstNode) -> String {
+    if typeNode.kind != AstNType {
+        return ""
+    }
+    if typeNode.text == "Result" {
+        return "result"
+    }
+    if typeNode.text == "Option" || typeNode.text == "optional" {
+        return "option"
+    }
+    ""
+}
+
+fn selfLintBodyHasFallibleExit(file: AstFile, idx: Int, kind: String) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNQuestion {
+        return true
+    }
+    if node.kind == AstNCall && node.left >= 0 {
+        let callee = selfLintAstNode(file, node.left)
+        if callee.kind == AstNIdent {
+            if kind == "result" && callee.text == "Err" {
+                return true
+            }
+            if kind == "option" && callee.text == "None" {
+                return true
+            }
+        }
+    }
+    if node.kind == AstNIdent {
+        if kind == "option" && node.text == "None" {
+            return true
+        }
+    }
+    if selfLintBodyHasFallibleExit(file, node.left, kind) {
+        return true
+    }
+    if selfLintBodyHasFallibleExit(file, node.right, kind) {
+        return true
+    }
+    for child in node.children {
+        if selfLintBodyHasFallibleExit(file, child, kind) {
+            return true
+        }
+    }
+    for child in node.children2 {
+        if selfLintBodyHasFallibleExit(file, child, kind) {
+            return true
+        }
+    }
+    false
+}
+
+fn selfLintBodyWrapsExit(file: AstFile, idx: Int, kind: String) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNCall && node.left >= 0 {
+        let callee = selfLintAstNode(file, node.left)
+        if callee.kind == AstNIdent {
+            if kind == "result" && callee.text == "Ok" {
+                return true
+            }
+            if kind == "option" && callee.text == "Some" {
+                return true
+            }
+        }
+    }
+    if selfLintBodyWrapsExit(file, node.left, kind) {
+        return true
+    }
+    if selfLintBodyWrapsExit(file, node.right, kind) {
+        return true
+    }
+    for child in node.children {
+        if selfLintBodyWrapsExit(file, child, kind) {
+            return true
+        }
+    }
+    for child in node.children2 {
+        if selfLintBodyWrapsExit(file, child, kind) {
+            return true
+        }
+    }
+    false
+}
+
+// ============================================================
+// L0047 let_return_simplify
+// ============================================================
+//
+// `let x = expr; x` at the tail of a block introduces a throwaway
+// binding only to return it unchanged. Flag it so the author can
+// collapse the block to the bare expression.
+//
+// Conservative shape: the block's penultimate statement is an immutable
+// `let NAME = expr`, and the final statement is a bare-ident reference
+// to that same NAME. We require the let to sit immediately before the
+// tail so no intermediate reads exist and rewriting is sound.
+
+fn selfLintAstCheckLetReturn(file: AstFile, report: SelfLintReport) -> SelfLintReport {
+    let mut out = report
+    for declIdx in file.arena.decls {
+        out = selfLintLetReturnDecl(file, declIdx, out)
+    }
+    out
+}
+
+fn selfLintLetReturnDecl(
+    file: AstFile,
+    idx: Int,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNFnDecl {
+        return selfLintLetReturnScan(file, node.right, report)
+    }
+    if node.kind == AstNStructDecl
+        || node.kind == AstNEnumDecl
+        || node.kind == AstNInterfaceDecl {
+        let mut out = report
+        for memberIdx in node.children {
+            let member = selfLintAstNode(file, memberIdx)
+            if member.kind == AstNFnDecl {
+                out = selfLintLetReturnScan(file, member.right, out)
+            }
+        }
+        return out
+    }
+    report
+}
+
+fn selfLintLetReturnScan(
+    file: AstFile,
+    idx: Int,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = report
+    if node.kind == AstNBlock {
+        out = selfLintMaybeEmitLetReturn(file, node, out)
+    }
+    out = selfLintLetReturnScan(file, node.left, out)
+    out = selfLintLetReturnScan(file, node.right, out)
+    for child in node.children {
+        out = selfLintLetReturnScan(file, child, out)
+    }
+    for child in node.children2 {
+        out = selfLintLetReturnScan(file, child, out)
+    }
+    out
+}
+
+fn selfLintMaybeEmitLetReturn(
+    file: AstFile,
+    block: AstNode,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let count = block.children.len()
+    if count < 2 {
+        return report
+    }
+    let letIdx = selfLintAstChildAt(block.children, count - 2)
+    let tailIdx = selfLintAstChildAt(block.children, count - 1)
+    if letIdx < 0 || tailIdx < 0 {
+        return report
+    }
+    let letStmt = selfLintAstNode(file, letIdx)
+    if letStmt.kind != AstNLet || letStmt.flags == 1 {
+        // Not a `let`, or it was `let mut` — don't simplify a mutable
+        // binding, its declaration may be load-bearing elsewhere.
+        return report
+    }
+    let tailStmt = selfLintAstNode(file, tailIdx)
+    let tailExpr = if tailStmt.kind == AstNExprStmt {
+        selfLintAstNode(file, tailStmt.left)
+    } else {
+        tailStmt
+    }
+    if tailExpr.kind != AstNIdent || tailExpr.text == "" {
+        return report
+    }
+    let pattern = selfLintAstNode(file, letStmt.left)
+    if !(selfLintAstPatternIsIdent(pattern)) {
+        return report
+    }
+    let patternName = selfLintAstPatternName(pattern.text, "ident:")
+    if patternName != tailExpr.text {
+        return report
+    }
+    selfLintEmitAtNode(
+        report,
+        "L0047",
+        "useless `let` before tail return",
+        patternName,
+        letStmt.start,
+        tailStmt.end,
+        letIdx,
+    )
+}
+
+// ============================================================
+// L0048 needless_parens_condition
+// ============================================================
+//
+// Parens around an `if` / `for`-condition / `match` scrutinee are
+// redundant — drop the outer `(` / `)`. Matches on the AstNParen node
+// living at the scrutinee position, so chained selectors like
+// `(x).foo()` that contain a deliberate outer paren are unaffected.
+
+fn selfLintAstCheckNeedlessParens(
+    file: AstFile,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let mut out = report
+    for declIdx in file.arena.decls {
+        out = selfLintNeedlessParensScan(file, declIdx, out)
+    }
+    out
+}
+
+fn selfLintNeedlessParensScan(
+    file: AstFile,
+    idx: Int,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = report
+    if node.kind == AstNIf {
+        out = selfLintMaybeEmitNeedlessParens(file, node.left, "if", out)
+    }
+    if node.kind == AstNFor && node.text == "cond" {
+        out = selfLintMaybeEmitNeedlessParens(file, node.left, "for", out)
+    }
+    if node.kind == AstNMatch {
+        out = selfLintMaybeEmitNeedlessParens(file, node.left, "match", out)
+    }
+    out = selfLintNeedlessParensScan(file, node.left, out)
+    out = selfLintNeedlessParensScan(file, node.right, out)
+    for child in node.children {
+        out = selfLintNeedlessParensScan(file, child, out)
+    }
+    for child in node.children2 {
+        out = selfLintNeedlessParensScan(file, child, out)
+    }
+    out
+}
+
+fn selfLintMaybeEmitNeedlessParens(
+    file: AstFile,
+    exprIdx: Int,
+    keyword: String,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if exprIdx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, exprIdx)
+    if node.kind != AstNParen {
+        return report
+    }
+    let message = "parens around `{keyword}` condition are redundant"
+    selfLintEmitAtNode(report, "L0048", message, "", node.start, node.end, exprIdx)
+}
+
+// ============================================================
+// L0049 infinite_loop_literal
+// ============================================================
+//
+// `for true { ... }` is semantically the same as `for { ... }`; the
+// literal is purely noise. (The parser stores this shape as a `cond`-kind
+// AstNFor whose condition is AstNBoolLit with flags==1.)
+
+fn selfLintAstCheckInfiniteLoopLiteral(
+    file: AstFile,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let mut out = report
+    for declIdx in file.arena.decls {
+        out = selfLintInfiniteLoopScan(file, declIdx, out)
+    }
+    out
+}
+
+fn selfLintInfiniteLoopScan(
+    file: AstFile,
+    idx: Int,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    let mut out = report
+    if node.kind == AstNFor && node.text == "cond" && node.left >= 0 {
+        let cond = selfLintAstNode(file, node.left)
+        if cond.kind == AstNBoolLit && cond.flags == 1 {
+            out = selfLintEmitAtNode(
+                out,
+                "L0049",
+                "`for true \{ ... \}` is just `for \{ ... \}`",
+                "",
+                cond.start,
+                cond.end,
+                node.left,
+            )
+        }
+    }
+    out = selfLintInfiniteLoopScan(file, node.left, out)
+    out = selfLintInfiniteLoopScan(file, node.right, out)
+    for child in node.children {
+        out = selfLintInfiniteLoopScan(file, child, out)
+    }
+    for child in node.children2 {
+        out = selfLintInfiniteLoopScan(file, child, out)
+    }
+    out
+}
+
+// ============================================================
+// L0080 missing_test_assertion
+// ============================================================
+//
+// A `test_*` / `testCamel` function with no call into the `testing`
+// module passes vacuously — the runner reports green regardless of what
+// the code under test does. Detection is name-based (the test-runner
+// discovers tests by prefix) plus a body scan for any `testing.*` field
+// access. Fns taking parameters, or anything wrapping the test behind a
+// helper, don't qualify — we only flag what the runner would actually
+// dispatch as a leaf test.
+
+fn selfLintAstCheckMissingTestAssertion(
+    file: AstFile,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    let mut out = report
+    for declIdx in file.arena.decls {
+        out = selfLintMissingTestDecl(file, declIdx, out)
+    }
+    out
+}
+
+fn selfLintMissingTestDecl(
+    file: AstFile,
+    idx: Int,
+    report: SelfLintReport,
+) -> SelfLintReport {
+    if idx < 0 {
+        return report
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind != AstNFnDecl {
+        return report
+    }
+    if !(selfLintIsTestFnName(node.text)) {
+        return report
+    }
+    // Tests are conventionally zero-arg. Parametric helpers named
+    // testFoo(x: Int) don't get flagged.
+    if node.children.len() > 0 {
+        return report
+    }
+    if node.right < 0 {
+        return report
+    }
+    let block = selfLintAstNode(file, node.right)
+    if block.kind != AstNBlock || block.children.len() == 0 {
+        return report
+    }
+    if selfLintBodyUsesTestingModule(file, node.right) {
+        return report
+    }
+    selfLintEmitAtNode(
+        report,
+        "L0080",
+        "test function has no testing.* assertion — this test passes vacuously",
+        node.text,
+        node.start,
+        node.end,
+        idx,
+    )
+}
+
+fn selfLintIsTestFnName(name: String) -> Bool {
+    if !(strings.hasPrefix(name, "test")) {
+        return false
+    }
+    if name.len() <= 4 {
+        return false
+    }
+    let fifth = frontUnitAt(strings.split(name, ""), 4)
+    if fifth == "_" {
+        return true
+    }
+    // Upper-camel continuation: testX, testParsesEmpty, ...
+    if fifth >= "A" && fifth <= "Z" {
+        return true
+    }
+    false
+}
+
+fn selfLintBodyUsesTestingModule(file: AstFile, idx: Int) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let node = selfLintAstNode(file, idx)
+    if node.kind == AstNField && node.left >= 0 {
+        let base = selfLintAstNode(file, node.left)
+        if base.kind == AstNIdent && base.text == "testing" {
+            return true
+        }
+    }
+    if selfLintBodyUsesTestingModule(file, node.left) {
+        return true
+    }
+    if selfLintBodyUsesTestingModule(file, node.right) {
+        return true
+    }
+    for child in node.children {
+        if selfLintBodyUsesTestingModule(file, child) {
+            return true
+        }
+    }
+    for child in node.children2 {
+        if selfLintBodyUsesTestingModule(file, child) {
+            return true
+        }
+    }
+    false
 }

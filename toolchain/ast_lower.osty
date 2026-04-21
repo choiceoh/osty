@@ -309,12 +309,7 @@ fn astLowerPublicFile(arena: AstArena, toks: List<astbridge.Token>) -> astbridge
 }
 
 fn astLowerTokenCount(toks: List<astbridge.Token>) -> Int {
-    let mut count = 0
-    for tok in toks {
-        let _ = tok
-        count = count + 1
-    }
-    count
+    toks.len()
 }
 
 fn astLowerInterpolatedTokensToExpr(toks: List<astbridge.Token>) -> astbridge.Expr {
@@ -993,23 +988,23 @@ fn astLowerUseDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> 
 }
 
 fn astLowerUseRawPath(toks: List<astbridge.Token>, n: AstNode) -> String {
-    let mut out = ""
+    let mut parts: List<String> = []
     let mut i = n.start + 1
     for i < n.end {
         let tok = astLowerTok(toks, i)
         if astbridge.TokenIsIdent(tok) {
             if astbridge.TokenValue(tok) == "as" {
-                return out
+                return strings.join(parts, "")
             }
-            out = "{out}{astbridge.TokenValue(tok)}"
+            parts.push(astbridge.TokenValue(tok))
         } else if astbridge.TokenIsDot(tok) || astbridge.TokenIsSlash(tok) || astbridge.TokenIsColon(tok) {
-            out = "{out}{astbridge.TokenKindString(tok)}"
+            parts.push(astbridge.TokenKindString(tok))
         } else {
-            return out
+            return strings.join(parts, "")
         }
         i = i + 1
     }
-    out
+    strings.join(parts, "")
 }
 
 fn astLowerUseGoRawPath(toks: List<astbridge.Token>, n: AstNode) -> String {
@@ -1668,21 +1663,10 @@ fn astLowerLiteralPatternExpr(toks: List<astbridge.Token>, n: AstNode) -> astbri
 }
 
 fn astLowerIntListCount(xs: List<Int>) -> Int {
-    let mut count = 0
-    for x in xs {
-        let _ = x
-        count = count + 1
-    }
-    count
+    xs.len()
 }
 
 fn astLowerIntListAt(xs: List<Int>, target: Int) -> Int {
-    let mut i = 0
-    for x in xs {
-        if i == target {
-            return x
-        }
-        i = i + 1
-    }
-    -1
+    if target < 0 || target >= xs.len() { return -1 }
+    xs[target]
 }

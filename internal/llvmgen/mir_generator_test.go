@@ -1946,8 +1946,9 @@ func TestGenerateFromMIREmitGCManagedParam(t *testing.T) {
 		"declare void @osty.gc.root_bind_v1(ptr)",
 		"declare void @osty.gc.root_release_v1(ptr)",
 		"declare void @osty.gc.safepoint_v1(i64, ptr, i64)",
-		// Entry safepoint with numeric id 0.
-		"call void @osty.gc.safepoint_v1(i64 0, ptr null, i64 0)",
+		// Entry safepoint carries kind=ENTRY (1) in the high byte and
+		// serial 0 in the low 56 bits → 1<<56.
+		"call void @osty.gc.safepoint_v1(i64 72057594037927936, ptr null, i64 0)",
 		// Param slot is bound as a root.
 		"call void @osty.gc.root_bind_v1(ptr %p",
 		// Release on the return path.
@@ -2115,12 +2116,14 @@ func TestGenerateFromMIREmitGCLoopSafepoint(t *testing.T) {
 	if safepoints < 2 {
 		t.Fatalf("expected ≥2 safepoints (entry + back-edge), got %d in:\n%s", safepoints, got)
 	}
-	// Safepoint ids must be strictly increasing per emission site.
-	if !strings.Contains(got, "safepoint_v1(i64 0,") {
-		t.Fatalf("expected safepoint id 0 in:\n%s", got)
+	// Entry safepoint encodes kind=ENTRY (1<<56) | serial=0, loop
+	// back-edge encodes kind=LOOP (3<<56) | serial=1. See
+	// encodeSafepointID + safepointKind* in generator.go.
+	if !strings.Contains(got, "safepoint_v1(i64 72057594037927936,") {
+		t.Fatalf("expected entry safepoint (kind=ENTRY, serial 0) in:\n%s", got)
 	}
-	if !strings.Contains(got, "safepoint_v1(i64 1,") {
-		t.Fatalf("expected safepoint id 1 in:\n%s", got)
+	if !strings.Contains(got, "safepoint_v1(i64 216172782113783809,") {
+		t.Fatalf("expected loop-backedge safepoint (kind=LOOP, serial 1) in:\n%s", got)
 	}
 }
 
@@ -2365,6 +2368,140 @@ func TestGenerateFromMIRBytesLen(t *testing.T) {
 	for _, want := range []string{
 		"declare i64 @osty_rt_bytes_len(ptr)",
 		"call i64 @osty_rt_bytes_len(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRStringChars verifies String.chars() dispatches
+// through `osty_rt_strings_Chars(ptr) -> ptr` — matching the legacy
+// emitter's routing so `.chars()` participates in MIR-direct object /
+// binary emission instead of forcing fallback on `mir-backend`.
+func TestGenerateFromMIRStringChars(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "toChars",
+		Return: &ir.NamedType{Name: "List", Args: []ir.Type{ir.TChar}, Builtin: true},
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+				Name:     "chars",
+				T:        &ir.NamedType{Name: "List", Args: []ir.Type{ir.TChar}, Builtin: true},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/string_chars.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Chars(ptr)",
+		"call ptr @osty_rt_strings_Chars(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRStringBytes — same as StringChars but for the
+// bytes family; the runtime symbol is `osty_rt_strings_Bytes`.
+func TestGenerateFromMIRStringBytes(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "toBytes",
+		Return: &ir.NamedType{Name: "List", Args: []ir.Type{ir.TByte}, Builtin: true},
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+				Name:     "bytes",
+				T:        &ir.NamedType{Name: "List", Args: []ir.Type{ir.TByte}, Builtin: true},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/string_bytes.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Bytes(ptr)",
+		"call ptr @osty_rt_strings_Bytes(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRStringLen verifies String.len() dispatches
+// through `osty_rt_strings_ByteLen(ptr) -> i64` (matching
+// `llvmStringRuntimeByteLenSymbol()` the legacy emitter already uses).
+func TestGenerateFromMIRStringLen(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "sz",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+				Name:     "len",
+				T:        ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/string_len.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i64 @osty_rt_strings_ByteLen(ptr)",
+		"call i64 @osty_rt_strings_ByteLen(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRStringIsEmpty — `.isEmpty()` composes
+// `byte_len == 0` instead of a dedicated runtime symbol, matching the
+// legacy emitter in expr.go. That gives two artifacts the test can
+// lock in: the `ByteLen` call and an `icmp eq i64 %..., 0`.
+func TestGenerateFromMIRStringIsEmpty(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "blank",
+		Return: ir.TBool,
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+				Name:     "isEmpty",
+				T:        ir.TBool,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/string_empty.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i64 @osty_rt_strings_ByteLen(ptr)",
+		"call i64 @osty_rt_strings_ByteLen(",
+		"icmp eq i64",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)

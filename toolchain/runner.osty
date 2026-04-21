@@ -176,10 +176,15 @@ fn envOverridesEmpty(overrides: List<EnvEntry>) -> Bool {
 }
 
 fn envEntryKey(kv: String) -> String {
-    match strings.indexOf(kv, "=") {
-        Some(at) -> strings.slice(kv, 0, at),
-        None -> "",
+    // Use split instead of indexOf to avoid Option<Int> — the native
+    // backend has no boxed Option<scalar> yet. Semantics are
+    // equivalent: if "=" is absent return "", else return the prefix
+    // before the first "=".
+    if !strings.contains(kv, "=") {
+        return ""
     }
+    let parts = strings.split(kv, "=")
+    parts[0]
 }
 
 fn envSeen(seen: List<String>, key: String) -> Bool {

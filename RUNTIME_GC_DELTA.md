@@ -37,8 +37,8 @@ a spec. New implementation effort should land in the LLVM lowering/runtime path;
 
 | #   | 기능                                         | 시뮬 | 실  | 델타                                                 | P  | 참조                                                 |
 | --- | -------------------------------------------- | ---- | --- | ---------------------------------------------------- | -- | ---------------------------------------------------- |
-| 1.1 | 오브젝트 헤더                                | ✅   | ✅  | 시뮬엔 age/pin/forwarding/remembered bit 추가        | P2 | `lib.osty:94-108` vs `osty_runtime.c:15-26`          |
-| 1.2 | 지역별 힙 (Eden/Survivor/Old/Humongous/Pinned) | ✅ | ❌ | 단일 heap                                            | P2 | `lib.osty:27-33`                                     |
+| 1.1 | ~~오브젝트 헤더~~                            | ✅   | ✅  | age + generation 추가 (Phase B1). pin/forwarding은 Phase D에서 | ✅ B1 | `osty_runtime.c:osty_gc_header`              |
+| 1.2 | 지역별 힙 (Eden/Survivor/Old/Humongous/Pinned) | ✅ | 🟡 | YOUNG/OLD 논리 구분 완료 (Phase B2), 물리적 분리는 Phase D | P3 | `osty_runtime.c:osty_gc_link` (generation 분기)      |
 | 1.3 | Bump allocator                               | ✅   | ❌  | `calloc()` 직접                                      | P3 | `lib.osty:127-147`                                   |
 | 1.4 | Free list (tenured / humongous)              | ✅   | ❌  | `free()` → OS                                        | P3 | `lib.osty:122-147`                                   |
 | 1.5 | Size class / large object threshold          | ✅   | 🟡 | `object_kind`는 있으나 할당 전략 동일                | P3 | `lib.osty:709-764`                                   |
@@ -55,7 +55,7 @@ a spec. New implementation effort should land in the LLVM lowering/runtime path;
 | 2.4 | Closure capture root                | ✅   | 🟡 | capture struct은 일반 alloc, slot descriptor 없음 | P2 | `lib.osty:618-622`          |
 | 2.5 | Async frame root                    | ✅   | ❌  | async 구현 전까지 대기                    | P3 | `lib.osty:624-631`                |
 | 2.6 | Derived-base root pair              | ✅   | ❌  | inner pointer 대응                        | P3 | `lib.osty:582-600`                |
-| 2.7 | Incremental shade-on-add            | ✅   | ❌  | concurrent marking 전제                   | P3 | `lib.osty:1011-1019`              |
+| 2.7 | ~~Incremental shade-on-add~~        | ✅   | ✅  | `pre_write_v1` greys old value during MARK_INCREMENTAL (Phase C5) | ✅ C5 | `osty_runtime.c:osty_gc_pre_write_v1` |
 
 ## 3. 쓰기 / 읽기 배리어
 
@@ -65,8 +65,8 @@ a spec. New implementation effort should land in the LLVM lowering/runtime path;
 | 3.2 | ~~`post_write_v1` (generational / incremental)~~  | ✅   | ✅  | `osty_gc_remembered_edges` — dedup된 (owner, value) 로그. 세대 구현 시 region 필터로 소비 | ✅ done | `osty_runtime.c:osty_gc_remembered_edges*` |
 | 3.3 | `load_v1` (relocation-ready)                      | ✅   | 🟡 | identity return                            | P3     | `osty_runtime.c:1580-1586`          |
 | 3.4 | `mark_slot_v1` (aggregate trace)                  | ✅   | ✅  | —                                          | —      | `osty_runtime.c:1588-1590`          |
-| 3.5 | 카드 테이블 (dirty card bitmap)                   | ✅   | ❌  | generational 전제                          | P2     | `lib.osty:183-189`                  |
-| 3.6 | Remembered set (old→young 정확 집합)              | ✅   | ❌  | generational 전제                          | P2     | `lib.osty:689, 1093-1114`           |
+| 3.5 | 카드 테이블 (dirty card bitmap)                   | ✅   | 🟡 | Phase B는 per-edge log로 우회. card bitmap은 write-heavy 워크로드에서 Phase D 고려 | P3     | `osty_runtime.c:osty_gc_remembered_edges`  |
+| 3.6 | ~~Remembered set (old→young 정확 집합)~~          | ✅   | ✅  | post_write log → minor GC compact (Phase B4). dedup + per-cycle rebuild | ✅ B4     | `osty_runtime.c:osty_gc_remembered_edges_compact_after_minor` |
 | 3.7 | ~~필드 / 원소별 store site 배리어 hookup~~        | ✅   | ✅  | lowering의 기존 call들이 이제 실 log 생성. 동일 emit 경로, 의미론만 채워짐 | ✅ done | `osty_runtime.c:osty_gc_pre_write_v1` / `post_write_v1` |
 
 §3.1 / §3.2 / §3.7은 lowering은 그대로 두고 런타임 쪽에 실 log 구조를 붙여
@@ -78,24 +78,24 @@ a spec. New implementation effort should land in the LLVM lowering/runtime path;
 
 | #   | 기능                                        | 시뮬 | 실  | 델타                                       | P  | 참조                          |
 | --- | ------------------------------------------- | ---- | --- | ------------------------------------------ | -- | ----------------------------- |
-| 4.1 | 트라이-컬러 (White / Grey / Black)          | ✅   | 🟡 | binary `marked` bit + 재귀                 | P2 | `osty_runtime.c:343-368`      |
-| 4.2 | Work queue (스택-안전)                      | ✅   | ❌  | 재귀 — 깊은 그래프에서 stack overflow 위험  | P2 | `osty_runtime.c:219-334`      |
-| 4.3 | Incremental marking (budget step)           | ✅   | ❌  | STW 단일 pass                              | P3 | `lib.osty:1143-1159`          |
-| 4.4 | Mostly-concurrent mark + final remark       | ✅   | ❌  | —                                          | P3 | `lib.osty:252-262`            |
-| 4.5 | 타입 descriptor 기반 ref 투영               | ✅   | ✅  | —                                          | —  | `osty_runtime.c:219-334`      |
+| 4.1 | ~~트라이-컬러 (White / Grey / Black)~~      | ✅   | ✅  | `osty_gc_header.color` 명시 필드 + `marked` legacy alias (Phase C1) | ✅ C1 | `osty_runtime.c:osty_gc_mark_header` |
+| 4.2 | ~~Work queue (스택-안전)~~                  | ✅   | ✅  | Phase A3에서 completed (explicit mark_stack) | ✅ A3 | `osty_runtime.c:osty_gc_mark_stack` |
+| 4.3 | ~~Incremental marking (budget step)~~       | ✅   | ✅  | state machine (IDLE/MARK_INCR/SWEEPING) + `_step(budget)` API (Phase C2) | ✅ C2 | `osty_runtime.c:osty_gc_collect_incremental_*` |
+| 4.4 | Mostly-concurrent mark + final remark       | ✅   | ❌  | 단일 스레드 incremental만; 실제 concurrent는 스레드 추가 시 | P3 | `lib.osty:252-262`            |
+| 4.5 | 타입 descriptor 기반 ref 투영               | ✅   | ✅  | —                                          | —  | `osty_runtime.c:trace callbacks` |
 
 ## 5. 세대
 
 | #   | 기능                                  | 시뮬 | 실  | 델타 | P  |
 | --- | ------------------------------------- | ---- | --- | ---- | -- |
-| 5.1 | Nursery / Eden                        | ✅   | ❌  | 전부 | P2 |
-| 5.2 | Survivor space + budget               | ✅   | ❌  | 전부 | P2 |
-| 5.3 | Tenured (old)                         | ✅   | ❌  | 전부 | P2 |
-| 5.4 | 승격 정책 (age 비트, 임계)            | ✅   | ❌  | 전부 | P2 |
-| 5.5 | Minor GC 트리거 (nurseryLimit)        | ✅   | ❌  | 전부 | P2 |
+| 5.1 | ~~Nursery / Eden~~                    | ✅   | 🟡  | 논리 구분만 (물리적 Eden/Survivor 분리는 Phase D), YOUNG 할당 경로는 완성 | ✅ B2 |
+| 5.2 | Survivor space + budget               | ✅   | ❌  | age 기반 in-place 승격으로 대체 — from/to 분리는 compaction 시 | P3 |
+| 5.3 | ~~Tenured (old)~~                     | ✅   | ✅  | OLD bucket + 카운터 + in-place 승격 | ✅ B2/B3 |
+| 5.4 | ~~승격 정책 (age 비트, 임계)~~         | ✅   | ✅  | `OSTY_GC_PROMOTE_AGE_DEFAULT=3`, env override, age는 u8 | ✅ B3 |
+| 5.5 | ~~Minor GC 트리거 (nurseryLimit)~~    | ✅   | ✅  | `OSTY_GC_NURSERY_BYTES` + dispatcher 2-tier 선택 | ✅ B3/B5 |
 
-세대 도입은 §3.1 – §3.2 (실 write barrier)가 먼저. barrier 없이 세대 올리면
-old→young edge를 놓친다.
+B3/B4는 A의 write barrier log 위에 그대로 올려졌다 — old→young edge는
+post_write log가 소유하고, minor GC가 일관되게 소비한다.
 
 ## 6. 스윕 · 재활용
 
@@ -128,11 +128,11 @@ old→young edge를 놓친다.
 
 | #   | 기능                                                  | 시뮬 | 실  | 델타                                 | P  | 참조                          |
 | --- | ----------------------------------------------------- | ---- | --- | ------------------------------------ | -- | ----------------------------- |
-| 9.1 | Allocation pressure threshold                         | ✅   | ✅  | 실은 단일 tier (`OSTY_GC_THRESHOLD_BYTES`) | P2 | `osty_runtime.c:84-88`   |
-| 9.2 | Mutator assist (allocation debt)                      | ✅   | ❌  | incremental 전제                     | P3 | `lib.osty:242-250`            |
-| 9.3 | `GcStats` 구조체 (cycle / promoted / compacted / …)   | ✅   | 🟡 | debug counter 수 개                  | P2 | `lib.osty:71-92`              |
-| 9.4 | Collection trace 6종 (Minor / Full / Evac / Remap / Incr / Concurrent) | ✅ | ❌ | 진단 커버리지       | P3 | `lib.osty:191-262`            |
-| 9.5 | `validateHeap()` 헬퍼                                 | ✅   | ❌  | 테스트 오라클로 유용                 | P2 | `lib.osty:264-294`            |
+| 9.1 | ~~Allocation pressure threshold~~                     | ✅   | ✅  | 2-tier: nursery (`OSTY_GC_NURSERY_BYTES`) + heap (`OSTY_GC_THRESHOLD_BYTES`) | ✅ B5 | `osty_runtime.c:osty_gc_note_allocation` |
+| 9.2 | ~~Mutator assist (allocation debt)~~                  | ✅   | ✅  | Phase C3 depth: alloc당 `bytes/N` units drain, `OSTY_GC_ASSIST_BYTES_PER_UNIT` 튜닝 | ✅ C3 | `osty_runtime.c:osty_gc_allocate_managed` |
+| 9.3 | ~~`GcStats` 구조체 (cycle / promoted / compacted / …)~~ | ✅ | ✅  | Phase A2 + B6: timing / index / minor / major / promoted / young / old 집합 | ✅ A2/B6 | `osty_runtime.c:osty_gc_debug_stats` |
+| 9.4 | Collection trace 6종 (Minor / Full / Evac / Remap / Incr / Concurrent) | ✅ | 🟡 | Minor + Full 구분 + timing per tier 완료 (B6); Evac/Remap은 Phase D, Incr/Concurrent은 Phase C | P3 | `osty_runtime.c:osty_gc_debug_minor_count` |
+| 9.5 | ~~`validateHeap()` 헬퍼~~                             | ✅   | ✅  | Phase A1 + B 세대 일관성 invariant (코드 -12..-14)  | ✅ A1/B | `osty_runtime.c:osty_gc_debug_validate_heap` |
 
 ## 10. Safepoint · 동시성
 
@@ -153,8 +153,200 @@ old→young edge를 놓친다.
   `TestBundledRuntimeWriteBarriersLogEdges`. 현재 STW에선 passive recording,
   §5 (세대) / §4.3 (incremental) 때 소비.
 
-P1 완료. 다음 단계는 §5 (세대) → §4.3 (incremental) → §6.2-6.3 (compaction,
-§1.7 stable ID 포함) 순으로 열린다.
+P1 완료.
+
+## Phase A 진행 상태 (관측·안정화 기반)
+
+A1–A3는 런타임 내부 구조 보강, A4는 Phase 4 (closure capture) 핸드오프,
+A5–A6는 safepoint ABI 주변 분류·가드.
+
+- ✅ **§9.5 A1 validateHeap 오라클** — `osty_gc_debug_validate_heap()`.
+  doubly-linked 리스트 무결성 / live_count·live_bytes 일치 / root_count
+  음수 없음 / stale mark 없음 / SATB·remembered edge payload가 힙 안에
+  존재 / 글로벌 slot non-NULL / 누적 카운터 음수 없음. 위반 시 stable
+  negative 코드 반환. 테스트 `TestBundledRuntimeValidateHeapInvariants`.
+- ✅ **§9.3 A2 GcStats 집계** — `osty_gc_stats` 구조체 + 스칼라 accessor +
+  `osty_gc_debug_stats_dump`. 누적 `allocated_bytes_total`,
+  `swept_count_total`, `swept_bytes_total`, `mark_stack_max_depth` 추가.
+  테스트 `TestBundledRuntimeStatsSnapshot`.
+- ✅ **§4.2 A3 Mark work queue** — 재귀 trace 제거, explicit
+  `osty_gc_mark_stack` + `osty_gc_mark_drain`. 깊은 그래프(100k 체인)도
+  C 스택 안전. Sweep이 marked를 clear해 "outside collection == no marks"
+  invariant 성립. 테스트 `TestBundledRuntimeMarkWorkQueueDeepGraph`.
+- ✅ **§2.4 A4 Closure env kind 예약** — `OSTY_GC_KIND_CLOSURE_ENV = 1029`.
+  Phase 1 closure env는 여전히 1-field · trace=NULL이지만 heap dump와
+  `osty_gc_stats`에서 일반 `osty.gc.alloc_v1` 객체와 분리 추적 가능.
+  Phase 4 capture 랜딩 시 이 kind 태그로 분기하여 per-capture trace를
+  등록한다. 호출 지점: `internal/llvmgen/fn_value.go:fnValueEnvKind`.
+- ✅ **§10.1 A5 Safepoint kind taxonomy** — safepoint id high byte에 kind
+  인코딩 (`UNSPECIFIED/ENTRY/CALL/LOOP/ALLOC/YIELD`), 저 56비트에 per-module
+  serial. 런타임이 kind별 카운터 집계 + `osty_gc_debug_safepoint_count_by_kind`.
+  legacy + MIR 양쪽 emitter 15+ 호출 지점 전부 분류 (entry / call / loop).
+  테스트 `TestBundledRuntimeSafepointKindCounters` +
+  `TestGenerateFromMIREmitGCLoopSafepoint` 외 회귀.
+- ✅ **§10.2 A6 Stackmap overflow guard** — `OSTY_GC_SAFEPOINT_MAX_ROOTS = 65536`
+  상한. 런타임이 safepoint 폴마다 `root_slot_count` 확인, 초과 시 kind
+  포함한 메시지로 abort. `osty_gc_debug_safepoint_max_roots_seen`로 peak
+  관측. LLVM-side alloca 자체는 그대로 — 이는 crash early / crash loud
+  backstop. 테스트 `TestBundledRuntimeSafepointRootSlotHighWaterMark`.
+
+### Phase A 심화 보강 (2차 패스)
+
+초기 Phase A 랜딩에서 얕았던 부분들이 아래와 같이 정밀화되었다:
+
+- **A1 심화** — `osty_gc_debug_unsafe_*` corruption injector 11종. fork 기반
+  하네스가 invariant별 네거티브 케이스를 실행하고, 각 에러 코드(−1…−11)가
+  정확히 매칭되는지 확인. `TestBundledRuntimeValidateHeapNegativeInvariants`.
+- **A2 심화** — `clock_gettime(CLOCK_MONOTONIC)` 기반 collection 타이밍.
+  `nanos_total` / `nanos_last` / `nanos_max`를 `osty_gc_stats`에 추가, 누적·
+  최악 사이클·마지막 사이클 관측. `TestBundledRuntimeCollectionTimingRecorded`.
+- **A3 심화** — `osty_gc_find_header`의 O(n) 선형 스캔을 open-addressing +
+  linear probing 해시 테이블로 교체 (SplitMix64 믹싱, load factor 0.75
+  유지, 초기 cap 128, tombstone 기반 삭제). deep-mark 테스트 28s → <1s.
+  capacity / count / tombstones / find_ops 관측.
+  `TestBundledRuntimeFindHeaderHashIndex`.
+- **A4 심화** — Phase 1 태그 swap을 넘어 `osty.rt.closure_env_alloc_v1`
+  전용 allocator + `osty_rt_closure_env_trace` 콜백을 런타임에 구현.
+  capture slot array를 직접 순회하는 self-describing 레이아웃
+  (`{ ptr fn, i64 capture_count, ptr captures[] }`). llvmgen
+  `emitFnValueEnv`가 dedicated 엔트리로 전환 — 현재는 capture_count=0이지만
+  Phase 4가 값만 바꿔끼우면 된다. 3개 캡처 보유한 env로 trace 경로 검증:
+  `TestBundledRuntimeClosureEnvTracesCaptures`.
+- **A5 심화** — E2E 테스트 `TestGenerateFromASTSafepointKindMixCallAndLoop`:
+  legacy 에미터가 lower한 IR을 정규식으로 파싱해 kind 분포를 복원,
+  CALL + LOOP 존재와 UNSPECIFIED 부재를 검증. MIR 측 ENTRY + LOOP는
+  기존 `TestGenerateFromMIREmitGCLoopSafepoint`가 literal serial id로 커버.
+- **A6 심화** — `safepointRootChunkSize` (default 4096) 기반 프레임 분할.
+  visible root 수가 청크를 넘으면 단일 poll이 여러 `safepoint_v1` 호출로
+  쪼개져, 각 `alloca ptr, i64 N`이 bounded 크기 유지. 테스트에서 청크를
+  3으로 낮추고 7개의 managed List를 가진 프레임을 lower하여 3/3/1 분할을
+  확인: `TestGenerateFromASTSafepointSplitsLargeFrames`. 런타임 abort
+  path는 fork 하네스로 exit code + stderr 메시지 검증:
+  `TestBundledRuntimeSafepointOverflowAborts`.
+
+Phase A의 열린 items는 없다. Phase B (세대 GC) 진입 준비 완료 — 세대 구현
+단계에서 §9.3 누적 카운터 + 타이밍 + §10.1 kind 분류를 즉시 활용 가능하고,
+§4.2 work queue는 concurrent marker가 재사용하며, §2.4 closure trace는
+Phase 4 capture 랜딩 시 capture_count만 채우면 된다.
+
+## Phase B 진행 상태 (세대 GC)
+
+Phase A의 passive recording (SATB / remembered edge)이 이제 minor GC의 실제
+입력으로 사용된다. 모든 할당은 YOUNG으로 시작, 지정된 age에 도달한 survivor는
+OLD로 **in-place 승격** (주소 보존, compaction은 Phase D에서).
+
+- ✅ **§1.1 B1 header 확장** — `osty_gc_header`에 `generation` / `age` 추가.
+  validate_heap이 세대별 카운트·바이트 일치까지 검증 (-12, -13, -14 invariant).
+- ✅ **§5.1-5.3 B2 nursery/tenured 구분** — 단일 heap 유지, 링크/언링크 경로에서
+  per-generation 카운터 (`young_count` / `young_bytes` / `old_count` /
+  `old_bytes`) 갱신. 할당은 무조건 YOUNG.
+- ✅ **§5.4-5.5 B3 minor GC + 승격** — `osty_gc_collect_minor_with_stack_roots`
+  가 YOUNG만 스캔. mark_header가 `osty_gc_minor_in_progress` 플래그로 OLD 헤더를
+  enqueue에서 제외. survivor는 age++ → `promote_age` 도달시 `promote_header`로
+  OLD로 이전. `OSTY_GC_PROMOTE_AGE` env로 튜닝.
+- ✅ **§3.5-3.6 B4 remembered set 소비** — minor 단계 4에서 (owner=OLD) edge의
+  value를 mark root로 seed. minor 완료 후
+  `osty_gc_remembered_edges_compact_after_minor`가 (OLD,YOUNG) 페어만 남겨 재작성.
+- ✅ **§9.1 B5 pressure tier** — 2-tier. `OSTY_GC_NURSERY_BYTES` (기본 8192B) /
+  `OSTY_GC_THRESHOLD_BYTES`. safepoint dispatcher: heap 한계 초과 → major, 그 외 →
+  minor. `osty_gc_debug_collect`는 Phase A 호환을 위해 강제 major 유지; 신규
+  `_collect_minor` / `_collect_major`로 명시 tier 지정.
+- ✅ **§9.4 B6 minor/full 카운터** — `minor_count` / `major_count` / `*_nanos_total`
+  / `promoted_*_total` / `allocated_since_minor`를 `osty_gc_stats`에 추가.
+- ✅ **B7 통합 테스트** — 4건:
+  - `TestBundledRuntimeMinorCollectSweepsYoungOnly` — minor 한 번으로 YOUNG
+    garbage 청소 + survivor age++, major 카운터 0 유지.
+  - `TestBundledRuntimePromotesAfterAgeThreshold` — `PROMOTE_AGE=2`에서 2회 minor
+    후 YOUNG→OLD 승격, 주소 불변, `promoted_count_total=1`.
+  - `TestBundledRuntimeMinorUsesRememberedSetForOldToYoung` — OLD owner에 YOUNG
+    child을 post_write로 설치 후 minor에서 child 생존. 추가 minor에서 child 승격
+    시 rem set이 0으로 compact.
+  - `TestBundledRuntimeNurseryLimitTriggersMinor` — nursery=1KB, heap=1MB 환경에서
+    단일 safepoint가 minor만 발동, major=0.
+
+### Phase B 경계 / 후속
+
+- OLD-heavy 워크로드는 결국 major에 의존 — Phase C (incremental) + Phase D
+  (compaction) 필요. remembered set 소비 경로가 고정된 덕에 C/D 랜딩 시 minor
+  경로는 수정 없음.
+- 다음 예정: Phase C (incremental marking). SATB log가 처음으로 소비처를 얻는
+  단계. A3 mark work queue 위에 budget step을 얹는 형태.
+
+## Phase C 진행 상태 (incremental marking)
+
+Phase A SATB log가 passive recording에서 **live consumer**로 승격. 마킹
+페이즈가 여러 step 호출로 쪼개져 STW 대체 가능.
+
+- ✅ **§4.1 C1 tri-color 명시** — `osty_gc_header.color` (WHITE/GREY/BLACK)
+  + `marked` legacy alias. mark_header가 GREY로 push, drain이 BLACK으로
+  마무리. sweep이 survivor를 WHITE로 리셋.
+- ✅ **§4.3 C2 incremental mark** — 상태 머신 3단계 (IDLE → MARK_INCREMENTAL
+  → SWEEPING → IDLE). 3개 entry point:
+  `osty_gc_collect_incremental_start_with_stack_roots` (seed roots),
+  `osty_gc_collect_incremental_step(budget)` (drain N greys, returns
+  has_more), `osty_gc_collect_incremental_finish` (final drain + sweep).
+- ✅ **§2.7 C5 SATB consume** — `pre_write_v1`이 MARK_INCREMENTAL 상태일 때
+  old_value를 GREY로 칠한다. snapshot-at-the-beginning 보장: mark 시작
+  시점에 live했던 포인터는 mark 완료 시점까지 생존. `satb_barrier_greyed_total`
+  관측.
+- ✅ **Validate 확장** — 3개 새 invariant: `-17 INVALID_COLOR`,
+  `-18 COLOR_MARKED_MISMATCH`, `-19 NONWHITE_OUTSIDE_MARK`. `mark_stack_count`
+  검사는 IDLE 상태에서만 (MARK_INCREMENTAL은 live grey set 보유).
+- ✅ **테스트 3건**:
+  - `TestBundledRuntimeIncrementalMarkStepByStep` — 상태 머신 + 단일 step
+    으로 단순 sweep.
+  - `TestBundledRuntimeIncrementalBudgetDrainsLongChain` — 51 work units
+    을 budget=10으로 6 step에 완주.
+  - `TestBundledRuntimeIncrementalSATBBarrierGreysOldValue` — mark 시작 후
+    child을 list에서 제거(overwrite)했을 때 SATB가 GREY로 칠해서 생존.
+    `satb_barrier_greyed_total = 1`.
+
+### Phase C 깊이 패스 (2차 랜딩)
+
+초기 Phase C가 얕았던 부분들을 메꿨다:
+
+- ✅ **C1 깊이** — `-17 INVALID_COLOR`, `-18 COLOR_MARKED_MISMATCH`,
+  `-19 NONWHITE_OUTSIDE_MARK` 각각에 대한 corruption injector + fork 하네스
+  네거티브 테스트 (`TestBundledRuntimeValidateHeapNegativeInvariantsPhaseC`).
+- ✅ **C2 깊이 — STW guard** — `osty_gc_collect_major_with_stack_roots`와
+  `osty_gc_collect_minor_with_stack_roots`가 MARK_INCREMENTAL/SWEEPING
+  상태에서 호출되면 즉시 abort. mark stack 실수 stomp 방지.
+- ✅ **C3 §9.2 mutator assist** — `osty_gc_allocate_managed`가
+  MARK_INCREMENTAL 동안 `payload_size / bytes_per_unit` units 만큼 grey
+  queue 드레인. `OSTY_GC_ASSIST_BYTES_PER_UNIT` 환경 변수 (기본 128).
+  `mutator_assist_work_total` / `mutator_assist_calls_total` 관측.
+- ✅ **Auto-dispatcher 편입** — `OSTY_GC_INCREMENTAL=1` 시 safepoint가
+  major 대신 incremental로 라우팅. `OSTY_GC_INCREMENTAL_BUDGET` (기본 64)
+  units per safepoint. queue 드레인 시 자동으로 finish + IDLE 복귀.
+- ✅ **C5 깊이 — SATB 시나리오 3종** — `TestBundledRuntimeSATBBarrierScenarios`:
+  (a) MARK 이전 barrier = no-op, (b) 같은 slot 연속 overwrite시 각
+  old_value 개별 grey, (c) finish 이후 barrier = no-op.
+- ✅ **Incremental stress test** — `TestBundledRuntimeIncrementalStress`:
+  15 cycle × 랜덤 budget + 랜덤 alloc + 배리어 write 조합, 각 quiescent
+  point에서 validate_heap 체크, deterministic srand(7).
+
+### Phase C 경계 / 후속
+
+- **§4.4 mostly-concurrent** — 여전히 ❌. 지금은 단일 스레드 incremental만
+  — mutator가 step 사이에만 활동. 진짜 concurrent는 GC 스레드를 띄우는
+  작업으로 Phase D 근처.
+- **Minor + incremental 상호작용** — 두 cycle이 동시에 돌 수 없도록 abort
+  guard는 추가됐지만, 혼합 워크로드 (긴 OLD scan + 빠른 YOUNG churn)에서
+  가장 좋은 선택 (incremental vs STW minor)을 결정하는 정책은 아직 없음.
+  단순한 tier 분리만.
+- **Go 측 위반 여전** — Phase A5/A6/A4 깊이 패스의 llvmgen 변경이
+  `generator.go`/`fn_value.go`에 Go로 들어가 있음. CLAUDE.md는 이걸
+  `toolchain/*.osty` + `support_snapshot.go` 재생성으로 가야 한다고 명시.
+  별도 cleanup task 필요.
+
+## 다음 단계
+
+Phase C 깊이 패스 또는 Phase D (compaction). Phase C 깊이로 가면:
+§9.2 mutator assist → §4.4 concurrent thread → auto-dispatcher에 incremental
+편입 → minor + incremental 혼합.
+
+Phase D는 §1.7 stable ID → §6.2-6.3 forwarding + evacuation → §8.1-8.2 pin
+API → §1.3-1.6 region heap (bump/freelist/TLAB/size class).
 
 ## 유지 규칙
 

@@ -542,6 +542,17 @@ fn registerStdThreadAliasFns(env: CheckEnv, alias: String) {
         paramNames: [], paramTys: [],
         generics: [], genericBounds: [],
     })
+    // thread.select(body: fn(SelectBuilder) -> T) -> T — spec §B.6
+    // canonical form. SelectBuilder takes care of recv/send/timeout/
+    // default branches; here we only need the outer signature to
+    // satisfy the checker. The builder type name is registered
+    // inside checkInstallChannelIntrinsics so `s.recv(...)` dispatches.
+    let tSelectBuilder = tyNamed(tys, "SelectBuilder", [])
+    checkRegisterFn(env, CheckFnSig {
+        name: "select", owner: alias, receiverTy: -1, retTy: tT,
+        paramNames: ["body"], paramTys: [tyFn(tys, [tSelectBuilder], tT)],
+        generics: gT, genericBounds: [],
+    })
 }
 
 /// registerStdIoAliasFns — print helpers when imported via alias.
@@ -632,7 +643,14 @@ fn collectFnDecl(
         if paramNode.text == "self" {
             continue
         }
-        paramNames.push(paramNode.text)
+        // Prefix default-carrying params with "?" so the arity check
+        // (see paramDefaultCount in elab.osty) can count trailing
+        // defaults without threading a parallel List<Bool> through
+        // every CheckFnSig constructor.
+        let hasDefault = paramNode.left >= 0
+        let rawName = paramNode.text
+        let storedName = if hasDefault { "?" + rawName } else { rawName }
+        paramNames.push(storedName)
         let declared = astTypeToTyInCollect(cx, paramNode.right)
         paramTys.push(if declared >= 0 { declared } else { tErr(cx.env.tys) })
     }
@@ -940,23 +958,12 @@ fn astTypeToTyInCollect(cx: ElabCx, idx: Int) -> Int {
 }
 
 fn checkIntListLenLocal(xs: List<Int>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn checkIntListAtLocal(xs: List<Int>, idx: Int) -> Int {
-    let mut i = 0
-    for x in xs {
-        if i == idx {
-            return x
-        }
-        i = i + 1
-    }
-    -1
+    if idx < 0 || idx >= xs.len() { return -1 }
+    xs[idx]
 }
 
 fn topLevelLetBindingName(cx: ElabCx, node: AstNode) -> String {
@@ -1095,12 +1102,7 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
 // ---------------------------------------------------------------------
 
 pub fn frontCheckResultTypedNodeCount(result: FrontCheckResult) -> Int {
-    let mut n = 0
-    for x in result.typedNodes {
-        let _ = x
-        n = n + 1
-    }
-    n
+    result.typedNodes.len()
 }
 
 pub fn frontCheckResultBindingType(result: FrontCheckResult, name: String) -> String {
@@ -1124,10 +1126,5 @@ pub fn frontCheckResultSymbolCount(result: FrontCheckResult, kind: String) -> In
 }
 
 pub fn frontCheckResultInstantiationCount(result: FrontCheckResult) -> Int {
-    let mut n = 0
-    for x in result.instantiations {
-        let _ = x
-        n = n + 1
-    }
-    n
+    result.instantiations.len()
 }

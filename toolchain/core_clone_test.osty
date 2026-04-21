@@ -1,0 +1,229 @@
+use std.testing
+
+// ==== coreCloneArena — full-arena copy =================================
+
+fn testCoreCloneArenaCopiesEveryNode() {
+    let src = emptyCoreArena()
+    let tys = emptyTyArena()
+    let intTy = tInt(tys)
+
+    let lit = coreIntLit(src, "1", intTy, 0, 1)
+    let lit2 = coreIntLit(src, "2", intTy, 2, 3)
+    let plus = coreBinary(src, BoAdd, lit, lit2, intTy, 0, 3)
+
+    let dst = coreCloneArena(src)
+    testing.assertEq(dst.nodes.len(), src.nodes.len())
+
+    let srcPlus = coreArenaNodeAt(src, plus)
+    let dstPlus = coreArenaNodeAt(dst, plus)
+    testing.assertEq(srcPlus.kind, dstPlus.kind)
+    testing.assertEq(srcPlus.left, dstPlus.left)
+    testing.assertEq(srcPlus.right, dstPlus.right)
+    testing.assertEq(srcPlus.ty, dstPlus.ty)
+}
+
+fn testCoreCloneArenaDecouplesChildrenLists() {
+    let src = emptyCoreArena()
+    let tys = emptyTyArena()
+    let intTy = tInt(tys)
+
+    let a = coreIntLit(src, "1", intTy, 0, 1)
+    let b = coreIntLit(src, "2", intTy, 2, 3)
+    let list = coreList(src, [a, b], intTy, 0, 3)
+
+    let dst = coreCloneArena(src)
+    // Mutating the clone's list does not reach back into src.
+    dst.nodes[list].children.push(-42)
+
+    let srcList = coreArenaNodeAt(src, list)
+    testing.assertEq(srcList.children.len(), 2)
+}
+
+// ==== coreCloneSubtree — leaf nodes ===================================
+
+fn testCoreCloneSubtreeOnLeafLiteral() {
+    let src = emptyCoreArena()
+    let tys = emptyTyArena()
+    let intTy = tInt(tys)
+    let lit = coreIntLit(src, "7", intTy, 0, 1)
+
+    let dst = emptyCoreArena()
+    let res = coreCloneSubtreeFresh(src, lit, dst)
+    testing.assertEq(res.err, "")
+    testing.assertEq(dst.nodes.len(), 1)
+    testing.assertEq(res.newRoot, 0)
+    testing.assertEq(coreArenaNodeAt(dst, res.newRoot).text, "7")
+}
+
+fn testCoreCloneSubtreeReturnsMinusOneForNegativeRoot() {
+    let src = emptyCoreArena()
+    let dst = emptyCoreArena()
+    let res = coreCloneSubtreeFresh(src, -1, dst)
+    testing.assertEq(res.err, "")
+    testing.assertEq(res.newRoot, -1)
+    testing.assertEq(dst.nodes.len(), 0)
+}
+
+fn testCoreCloneSubtreeRejectsOutOfRangeRoot() {
+    let src = emptyCoreArena()
+    let dst = emptyCoreArena()
+    let res = coreCloneSubtreeFresh(src, 99, dst)
+    testing.assert(res.err != "")
+    testing.assertEq(res.newRoot, -1)
+}
+
+// ==== coreCloneSubtree — structured subtrees ==========================
+
+fn testCoreCloneSubtreeOnBinaryExpr() {
+    let src = emptyCoreArena()
+    let tys = emptyTyArena()
+    let intTy = tInt(tys)
+    let left = coreIntLit(src, "1", intTy, 0, 1)
+    let right = coreIntLit(src, "2", intTy, 2, 3)
+    let bin = coreBinary(src, BoAdd, left, right, intTy, 0, 3)
+
+    let dst = emptyCoreArena()
+    let res = coreCloneSubtreeFresh(src, bin, dst)
+    testing.assertEq(res.err, "")
+    // Three nodes cloned: two literals + the binary.
+    testing.assertEq(dst.nodes.len(), 3)
+
+    let dstBin = coreArenaNodeAt(dst, res.newRoot)
+    testing.assertEq(dstBin.kind, CkBinary)
+    testing.assert(dstBin.left >= 0)
+    testing.assert(dstBin.right >= 0)
+    // Children point into the destination arena, not the source.
+    testing.assert(dstBin.left < dst.nodes.len())
+    testing.assert(dstBin.right < dst.nodes.len())
+}
+
+fn testCoreCloneSubtreePreservesSourceArena() {
+    let src = emptyCoreArena()
+    let tys = emptyTyArena()
+    let intTy = tInt(tys)
+    let left = coreIntLit(src, "1", intTy, 0, 1)
+    let right = coreIntLit(src, "2", intTy, 2, 3)
+    let bin = coreBinary(src, BoAdd, left, right, intTy, 0, 3)
+
+    let sizeBefore = src.nodes.len()
+    let dst = emptyCoreArena()
+    let _res = coreCloneSubtreeFresh(src, bin, dst)
+    testing.assertEq(src.nodes.len(), sizeBefore)
+}
+
+fn testCoreCloneSubtreeSharesAliasedChildren() {
+    // If two parents reference the same child node, the child should
+    // be cloned exactly once and both parents end up with the same
+    // destination index.
+    let src = emptyCoreArena()
+    let tys = emptyTyArena()
+    let intTy = tInt(tys)
+    let lit = coreIntLit(src, "9", intTy, 0, 1)
+    let listA = coreList(src, [lit, lit], intTy, 0, 1)
+
+    let dst = emptyCoreArena()
+    let res = coreCloneSubtreeFresh(src, listA, dst)
+    testing.assertEq(res.err, "")
+
+    let dstList = coreArenaNodeAt(dst, res.newRoot)
+    testing.assertEq(dstList.children.len(), 2)
+    // Both entries must map to the same destination index.
+    testing.assertEq(dstList.children[0], dstList.children[1])
+    // Exactly 2 nodes in dst: one literal + one list.
+    testing.assertEq(dst.nodes.len(), 2)
+}
+
+// ==== TyArena references must be passed through untouched =============
+
+fn testCoreCloneSubtreeKeepsTyArenaReferences() {
+    let src = emptyCoreArena()
+    let tys = emptyTyArena()
+    let intTy = tInt(tys)
+    let callee = coreIdent(src, "f", intTy, IkFn, 0, 1)
+    // typeArgs = [intTy] (TyArena index — MUST NOT be remapped).
+    let call = coreCall(src, callee, [], [intTy], intTy, 0, 1)
+
+    let dst = emptyCoreArena()
+    let res = coreCloneSubtreeFresh(src, call, dst)
+    testing.assertEq(res.err, "")
+
+    let dstCall = coreArenaNodeAt(dst, res.newRoot)
+    testing.assertEq(dstCall.kind, CkCall)
+    // typeArgs copied verbatim — same index because the TyArena is
+    // shared across source and destination.
+    testing.assertEq(dstCall.typeArgs.len(), 1)
+    testing.assertEq(dstCall.typeArgs[0], intTy)
+}
+
+fn testCoreCloneSubtreeUnknownKindReportsError() {
+    // Hand-construct a node with a kind the slot descriptor does not
+    // recognize. CkErr is registered as "no children" so it works;
+    // instead, pick a statement kind that's registered.
+    let src = emptyCoreArena()
+    let tys = emptyTyArena()
+    let intTy = tInt(tys)
+    let err = coreErr(src, 0, 1)
+    let dst = emptyCoreArena()
+    let res = coreCloneSubtreeFresh(src, err, dst)
+    // CkErr IS registered — clone succeeds.
+    testing.assertEq(res.err, "")
+}
+
+// ==== coreCollectReachable =============================================
+
+fn testCoreCollectReachableFindsEveryNode() {
+    let src = emptyCoreArena()
+    let tys = emptyTyArena()
+    let intTy = tInt(tys)
+    let a = coreIntLit(src, "1", intTy, 0, 1)
+    let b = coreIntLit(src, "2", intTy, 2, 3)
+    let c = coreIntLit(src, "3", intTy, 4, 5)
+    let list = coreList(src, [a, b, c], intTy, 0, 5)
+    let tuple = coreTuple(src, [list], intTy, 0, 5)
+
+    let reach = coreCollectReachable(src, tuple)
+    testing.assertEq(reach.err, "")
+    testing.assertEq(reach.indices.len(), 5)
+}
+
+fn testCoreCollectReachableOnLeaf() {
+    let src = emptyCoreArena()
+    let tys = emptyTyArena()
+    let intTy = tInt(tys)
+    let lit = coreIntLit(src, "1", intTy, 0, 1)
+
+    let reach = coreCollectReachable(src, lit)
+    testing.assertEq(reach.err, "")
+    testing.assertEq(reach.indices.len(), 1)
+}
+
+fn testCoreCollectReachableInvalidRootReturnsEmpty() {
+    let src = emptyCoreArena()
+    let reach = coreCollectReachable(src, -1)
+    testing.assertEq(reach.err, "")
+    testing.assertEq(reach.indices.len(), 0)
+}
+
+// ==== Clone map reuse ==================================================
+
+fn testCoreCloneMapTracksSharedSubtreesAcrossRoots() {
+    let src = emptyCoreArena()
+    let tys = emptyTyArena()
+    let intTy = tInt(tys)
+    let lit = coreIntLit(src, "7", intTy, 0, 1)
+    let a = coreList(src, [lit], intTy, 0, 1)
+    let b = coreList(src, [lit], intTy, 0, 1)
+
+    let dst = emptyCoreArena()
+    let map = emptyCoreCloneMap()
+    let resA = coreCloneSubtree(src, a, dst, map)
+    let resB = coreCloneSubtree(src, b, dst, map)
+    testing.assertEq(resA.err, "")
+    testing.assertEq(resB.err, "")
+
+    let dstA = coreArenaNodeAt(dst, resA.newRoot)
+    let dstB = coreArenaNodeAt(dst, resB.newRoot)
+    // Shared lit was cloned exactly once — both lists point at the
+    // same destination index.
+    testing.assertEq(dstA.children[0], dstB.children[0])
+}

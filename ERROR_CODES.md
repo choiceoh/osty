@@ -142,7 +142,7 @@ let c = 'ab'           // multiple scalars
 
 ---
 
-## Declarations & statements (E0100–E0106)
+## Declarations & statements (E0100–E0109)
 
 ### E0100 — `CodeExpectedDecl`
 
@@ -227,9 +227,51 @@ fn connect(t: Int = computeTimeout()) {}  // rejected
 
 **Fix**: use a literal default, or move the computation into the body.
 
+### E0107 — `CodeExpectedStructMember`
+
+A token that cannot begin a struct member appeared inside a struct body.
+
+Struct bodies accept field declarations (`name: Type`) and method declarations (`fn name(...)` / `pub fn ...`). Any other token is a recovery error.
+
+```osty
+pub struct S {
+    123,   // rejected -- field or method declaration required
+}
+```
+
+**Fix**: provide a field or method declaration.
+
+### E0108 — `CodeExpectedEnumMember`
+
+A token that cannot begin an enum member appeared inside an enum body.
+
+Enum bodies accept variant declarations (`Ident(T, U)` / `Ident`) and method declarations. Any other token is a recovery error.
+
+```osty
+pub enum E {
+    123,   // rejected
+}
+```
+
+**Fix**: provide a variant or method declaration.
+
+### E0109 — `CodeExpectedInterfaceMember`
+
+A token that cannot begin an interface member appeared inside an interface body.
+
+Interface bodies accept method signatures (`fn name(self) -> T`) and associated type references (identifiers). Any other token is a recovery error.
+
+```osty
+pub interface I {
+    123,   // rejected
+}
+```
+
+**Fix**: provide a method signature or an associated type name.
+
 ---
 
-## Expressions (E0200–E0204)
+## Expressions (E0200–E0205)
 
 ### E0200 — `CodeNonAssocChain`
 
@@ -284,6 +326,19 @@ let f = |x: Int| -> Int { x * 2 }   // ok
 Fallback for expression-position tokens that don't begin a valid primary expression.
 
 **Fix**: check for a missing operand, operator, or brace.
+
+### E0205 — `CodeExpectedClosureParam`
+
+A token that cannot begin a closure parameter appeared between `|...|`.
+
+A closure parameter is an identifier, an irrefutable pattern (tuple `(a, b)`, struct `User { name }`, variant `Some(x)`), or `_` for a discarded binding.
+
+```osty
+let f = |123| x           // rejected
+let g = |a, _, (k, v)| v  // ok
+```
+
+**Fix**: use an identifier, `_`, or a destructuring pattern.
 
 ---
 
@@ -1461,7 +1516,7 @@ enum Color { red, Green }   // warning on `red`
 
 ---
 
-## Lint — redundant forms (L0040–L0045)
+## Lint — redundant forms (L0040–L0049)
 
 ### L0040 — `CodeRedundantBool`
 
@@ -1513,6 +1568,54 @@ let x = !true      // warning: use `false` directly
 
 **Fix**: replace with the opposite literal.
 
+### L0046 — `CodeUnnecessaryWrap`
+
+A function declared `-> Result<T, E>` or `-> Option<T>` whose body only ever exits via `Ok(...)` or `Some(...)` — the wrapping is pure noise at every call site.
+
+fn parse(s: String) -> Int { s.len() }
+
+```osty
+fn parse(s: String) -> Result<Int, Error> {
+    Ok(s.len())              // warning: fn never returns Err
+}
+```
+
+**Fix**: drop the wrapping and declare the plain return type:
+
+### L0047 — `CodeLetReturnSimplify`
+
+`let x = expr; x` at the tail of a block is a useless round-trip. The binding is introduced and immediately returned with no other uses — the block can just be `expr`.
+
+```osty
+fn double(n: Int) -> Int {
+    let out = n * 2     // warning: useless binding before tail return
+    out
+}
+```
+
+**Fix**: drop the let and return the expression directly.
+
+### L0048 — `CodeNeedlessParens`
+
+Parentheses wrapping an `if` / `for` / `match` condition are pure noise — they add nothing syntactic and clippy-style convention keeps conditions bare.
+
+```osty
+if (ready) { ... }        // warning: drop the parens
+for (i in 0..n) { ... }   // warning: drop the parens
+```
+
+**Fix**: unwrap the outer `(` / `)`.
+
+### L0049 — `CodeInfiniteLoopLiteral`
+
+`for true { ... }` is just `for { ... }` — an infinite loop whose literal condition adds nothing.
+
+```osty
+for true { tick() }   // warning: redundant `true`
+```
+
+**Fix**: drop the `true`.
+
 ---
 
 ## Lint — complexity (L0050–L0053)
@@ -1545,7 +1648,7 @@ extract inner branches into helpers.
 
 ---
 
-## Lint — documentation (L0070)
+## Lint — documentation (L0070–L0080)
 
 ### L0070 — `CodeMissingDoc`
 
@@ -1558,6 +1661,20 @@ pub fn hashPassword(p: String) -> String { ... }   // warning: missing doc
 ```
 
 **Fix**: add a doc comment, or drop `pub` if the item is internal.
+
+### L0080 — `CodeMissingTestAssertion`
+
+A `test_*` function has no `testing.*` call in its body — the test silently passes no matter what the code under test does. Almost certainly a scaffolding leftover or a typo in an assertion helper name.
+
+call, or rename the function so it isn't auto-discovered.
+
+```osty
+fn test_parsesEmpty() {
+    let r = parse("")          // warning: no testing assertion
+}
+```
+
+**Fix**: add a `testing.assertEq` / `testing.assert` / `testing.fail`
 
 ---
 

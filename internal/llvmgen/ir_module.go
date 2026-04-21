@@ -31,8 +31,22 @@ func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
 	}
 	file, err := legacyFileFromModule(mod)
 	if err != nil {
+		// legacyFileFromModule populated the specialized-builtin
+		// side channel but we're bailing early; clear it so a
+		// subsequent unrelated GenerateModule call doesn't see
+		// stale state.
+		currentSpecializedBuiltinSurfaces = nil
+		currentSpecializedBuiltinMeta = nil
 		return nil, err
 	}
+	// Defer cleanup until AFTER generateASTFile consumes the side
+	// channel. Nulling it at legacyFileFromModule return would clear
+	// the map before signatureOf and staticExprInfo (called from
+	// generateASTFile) can read it.
+	defer func() {
+		currentSpecializedBuiltinSurfaces = nil
+		currentSpecializedBuiltinMeta = nil
+	}()
 	out, err := generateASTFile(file, opts)
 	if err != nil {
 		return nil, err
@@ -204,7 +218,222 @@ func moduleUnsupportedDiagnostic(mod *ostyir.Module) (UnsupportedDiagnostic, boo
 	return UnsupportedDiagnostic{}, false
 }
 
+// specializedBuiltinSurface holds the {source name, concrete args}
+// recovered from a monomorphized built-in specialization's
+// BuiltinSource / BuiltinSourceArgs fields. The AST bridge uses this
+// per-module index to re-synthesize a `Map<String, Int>` surface
+// NamedType whenever it encounters a reference to a `_ZTS…` mangled
+// built-in struct/enum, so the legacy LLVM emitter's intrinsic
+// dispatch (keyed on Path[0] == "Map" / "Option" / …) keeps working.
+type specializedBuiltinSurface struct {
+	Source string
+	Args   []ostyir.Type
+}
+
+// specializedBuiltinMeta is the llvmgen-side shape of a specialized
+// built-in's surface-level identity. Used by signatureOf's `self`
+// binding and by staticExprInfo to tag receiver values with the map /
+// list / set metadata the intrinsic dispatch reads.
+type specializedBuiltinMeta struct {
+	sourceType     ast.Type
+	listElemTyp    string
+	listElemString bool
+	mapKeyTyp      string
+	mapValueTyp    string
+	mapKeyString   bool
+	setElemTyp     string
+	setElemString  bool
+}
+
+// currentSpecializedBuiltinMeta maps mangled owner names (the
+// `ownerName` passed into signatureOf) to their surface-level map /
+// list / set metadata. Populated alongside
+// currentSpecializedBuiltinSurfaces at the start of each bridge
+// conversion; read by llvmgen's signatureOf to populate `self`
+// paramInfo.
+var currentSpecializedBuiltinMeta map[string]specializedBuiltinMeta
+
+// specializedBuiltinMetaFor returns the metadata for a specialized
+// built-in owner name, or (zero, false) if the name is unknown or
+// unregistered.
+func specializedBuiltinMetaFor(ownerName string) (specializedBuiltinMeta, bool) {
+	if currentSpecializedBuiltinMeta == nil {
+		return specializedBuiltinMeta{}, false
+	}
+	info, ok := currentSpecializedBuiltinMeta[ownerName]
+	return info, ok
+}
+
+// specializedBuiltinMangledForSurface returns the mangled struct/enum
+// name (the monomorphizer's `_ZTS…` key) matching a surface AST
+// NamedType like `Map<String, Int>`. Used by userCallTarget to
+// dispatch user-level method calls (`m.forEach(f)`, `m.getOr(...)`)
+// to the specialized method set — Phase 2c's surface re-association
+// leaves baseInfo.typ = "ptr" for runtime containers, so the usual
+// `methodsByType[baseInfo.typ]` lookup misses. Returns (ownerLLVMType,
+// true) so callers can index directly into g.methods.
+func specializedBuiltinMangledForSurface(surface ast.Type) (string, bool) {
+	if currentSpecializedBuiltinSurfaces == nil || surface == nil {
+		return "", false
+	}
+	surfaceNamed, ok := surface.(*ast.NamedType)
+	if !ok || len(surfaceNamed.Path) != 1 {
+		return "", false
+	}
+	sourceName := surfaceNamed.Path[0]
+	for mangled, surf := range currentSpecializedBuiltinSurfaces {
+		if surf.Source != sourceName {
+			continue
+		}
+		if len(surf.Args) != len(surfaceNamed.Args) {
+			continue
+		}
+		if !surfaceBuiltinArgsMatch(surf.Args, surfaceNamed.Args) {
+			continue
+		}
+		return "%" + mangled, true
+	}
+	return "", false
+}
+
+// surfaceBuiltinArgsMatch compares IR-level type args (carried on the
+// specialized struct) against an AST-level args list (pulled from the
+// user-side surface reference). A name-level match is sufficient for
+// the built-in shapes we care about (primitive idents like `Int` /
+// `String` / `Bool`, plus nested NamedType references). Nested
+// generic args recurse so Map<String, List<Int>> round-trips cleanly.
+func surfaceBuiltinArgsMatch(irArgs []ostyir.Type, astArgs []ast.Type) bool {
+	if len(irArgs) != len(astArgs) {
+		return false
+	}
+	for i := range irArgs {
+		irName := ostyirTypeName(irArgs[i])
+		astNamed, ok := astArgs[i].(*ast.NamedType)
+		if !ok || len(astNamed.Path) != 1 {
+			return false
+		}
+		if irName != astNamed.Path[0] {
+			return false
+		}
+		// Recurse into nested generics (e.g. List<Int> in Map<String, List<Int>>).
+		irNested := ostyirTypeArgs(irArgs[i])
+		if !surfaceBuiltinArgsMatch(irNested, astNamed.Args) {
+			return false
+		}
+	}
+	return true
+}
+
+// ostyirTypeName extracts the source-level name from an IR type for
+// surface comparison. Primitives come through as *ostyir.PrimType
+// (mapped via its String()), named refs via *ostyir.NamedType.
+func ostyirTypeName(t ostyir.Type) string {
+	switch x := t.(type) {
+	case *ostyir.PrimType:
+		return x.String()
+	case *ostyir.NamedType:
+		return x.Name
+	}
+	return ""
+}
+
+// ostyirTypeArgs returns the nested type-args of an IR type, or nil
+// for types without args (primitives, optional wrappers, etc.).
+func ostyirTypeArgs(t ostyir.Type) []ostyir.Type {
+	if named, ok := t.(*ostyir.NamedType); ok {
+		return named.Args
+	}
+	return nil
+}
+
+// buildSpecializedBuiltinMeta projects each mangled surface entry
+// into an llvmgen-side metadata shape. Uses the legacy type bridge to
+// turn IR type args into AST types, then classifies per source name:
+// Map<K, V> populates mapKeyTyp / mapValueTyp, List<T> populates
+// listElemTyp, etc. Callers pass the surface map produced by
+// collectSpecializedBuiltinSurfaces.
+func buildSpecializedBuiltinMeta(surfaces map[string]specializedBuiltinSurface) map[string]specializedBuiltinMeta {
+	out := map[string]specializedBuiltinMeta{}
+	for mangled, surf := range surfaces {
+		if surf.Source == "" {
+			continue
+		}
+		astArgs := make([]ast.Type, 0, len(surf.Args))
+		for _, a := range surf.Args {
+			astArgs = append(astArgs, legacyTypeFromIR(a))
+		}
+		meta := specializedBuiltinMeta{
+			sourceType: &ast.NamedType{Path: []string{surf.Source}, Args: astArgs},
+		}
+		switch surf.Source {
+		case "Map":
+			if len(astArgs) == 2 {
+				if k, err := llvmRuntimeABIType(astArgs[0], typeEnv{}); err == nil {
+					meta.mapKeyTyp = k
+				}
+				if v, err := llvmRuntimeABIType(astArgs[1], typeEnv{}); err == nil {
+					meta.mapValueTyp = v
+				}
+				meta.mapKeyString = llvmNamedTypeIsString(astArgs[0])
+			}
+		case "List":
+			if len(astArgs) == 1 {
+				if e, err := llvmRuntimeABIType(astArgs[0], typeEnv{}); err == nil {
+					meta.listElemTyp = e
+				}
+				meta.listElemString = llvmNamedTypeIsString(astArgs[0])
+			}
+		case "Set":
+			if len(astArgs) == 1 {
+				if e, err := llvmRuntimeABIType(astArgs[0], typeEnv{}); err == nil {
+					meta.setElemTyp = e
+				}
+				meta.setElemString = llvmNamedTypeIsString(astArgs[0])
+			}
+		}
+		out[mangled] = meta
+	}
+	return out
+}
+
+func collectSpecializedBuiltinSurfaces(mod *ostyir.Module) map[string]specializedBuiltinSurface {
+	out := map[string]specializedBuiltinSurface{}
+	if mod == nil {
+		return out
+	}
+	for _, decl := range mod.Decls {
+		switch d := decl.(type) {
+		case *ostyir.StructDecl:
+			if d == nil || d.BuiltinSource == "" {
+				continue
+			}
+			out[d.Name] = specializedBuiltinSurface{Source: d.BuiltinSource, Args: d.BuiltinSourceArgs}
+		case *ostyir.EnumDecl:
+			if d == nil || d.BuiltinSource == "" {
+				continue
+			}
+			out[d.Name] = specializedBuiltinSurface{Source: d.BuiltinSource, Args: d.BuiltinSourceArgs}
+		}
+	}
+	return out
+}
+
+// currentSpecializedBuiltinSurfaces is set by legacyFileFromModule at
+// the start of each conversion and consulted by legacyTypeFromIR when
+// a NamedType's name matches a specialized built-in. Keeping it as a
+// local (reset on each call) avoids threading the map through every
+// IR-to-AST visitor helper, while still giving the bridge the lookup
+// context it needs.
+var currentSpecializedBuiltinSurfaces map[string]specializedBuiltinSurface
+
 func legacyFileFromModule(mod *ostyir.Module) (*ast.File, error) {
+	currentSpecializedBuiltinSurfaces = collectSpecializedBuiltinSurfaces(mod)
+	currentSpecializedBuiltinMeta = buildSpecializedBuiltinMeta(currentSpecializedBuiltinSurfaces)
+	// NOTE: callers (GenerateModule) are responsible for clearing
+	// currentSpecializedBuiltinSurfaces / currentSpecializedBuiltinMeta
+	// after `generateASTFile` consumes them. A deferred clear here
+	// would nil them before the downstream signatureOf /
+	// staticExprInfo paths can read the metadata off the built AST.
 	start, end := legacySpan(mod.At())
 	file := &ast.File{PosV: start, EndV: end}
 	for _, decl := range mod.Decls {
@@ -380,7 +609,19 @@ func legacyStructDeclFromIR(sd *ostyir.StructDecl) (*ast.StructDecl, error) {
 		}
 		out.Fields = append(out.Fields, legacyField)
 	}
+	specializedBuiltin := isSpecializedBuiltinStructName(sd.Name)
 	for _, method := range sd.Methods {
+		// Option B Phase 2: specialized built-in structs (Map$String$Int,
+		// Option$Int, …) inherit bodyless intrinsic methods from the
+		// stdlib template (Map.len / Map.get / Map.insert / …). These
+		// are served by runtime helpers (osty_rt_map_len etc.), not by
+		// user-level LLVM functions. Dropping them here avoids LLVM010
+		// "function has no body" at emit time; the method-call
+		// dispatch in emitMapMethodCall still routes to the runtime
+		// via the original source-type intrinsic recognition.
+		if specializedBuiltin && method != nil && method.Body == nil {
+			continue
+		}
 		legacyMethod, err := legacyFnDeclFromIR(method, true)
 		if err != nil {
 			return nil, err
@@ -388,6 +629,17 @@ func legacyStructDeclFromIR(sd *ostyir.StructDecl) (*ast.StructDecl, error) {
 		out.Methods = append(out.Methods, legacyMethod)
 	}
 	return out, nil
+}
+
+// isSpecializedBuiltinStructName reports whether name is an
+// Itanium-mangled specialization produced by the monomorphizer for a
+// stdlib built-in template (Map, List, Set, Option, Result). All such
+// names start with the `_ZTS` Itanium type-info prefix; user structs
+// keep their source name unless explicitly specialized via the same
+// mangler, and in that case they are equally free of bodyless
+// methods (user structs don't carry intrinsic placeholders).
+func isSpecializedBuiltinStructName(name string) bool {
+	return strings.HasPrefix(name, "_ZTS")
 }
 
 func legacyFieldFromIR(field *ostyir.Field) (*ast.Field, error) {
@@ -535,6 +787,17 @@ func legacyTypeFromIR(typ ostyir.Type) ast.Type {
 		}
 		return &ast.NamedType{Path: []string{name}}
 	case *ostyir.NamedType:
+		// Phase 2c: if the name is a `_ZTS…` mangled built-in
+		// specialization, rebuild the surface `Map<String, Int>` /
+		// `Option<T>` form so the legacy emitter's intrinsic
+		// dispatch (keyed on Path[0] == "Map" / …) still fires.
+		if surf, ok := currentSpecializedBuiltinSurfaces[t.Name]; ok && surf.Source != "" {
+			out := &ast.NamedType{Path: []string{surf.Source}}
+			for _, arg := range surf.Args {
+				out.Args = append(out.Args, legacyTypeFromIR(arg))
+			}
+			return out
+		}
 		path := splitQualifiedName(t.Package)
 		path = append(path, t.Name)
 		out := &ast.NamedType{Path: path}
@@ -1177,9 +1440,22 @@ func legacyMethodCallFromIR(expr *ostyir.MethodCall) (ast.Expr, error) {
 		X:    receiver,
 		Name: expr.Name,
 	})
-	if len(expr.TypeArgs) != 0 {
+	typeArgs := expr.TypeArgs
+	// Option B Phase 2c: method calls inside a specialized built-in
+	// body (Map$String$Int.containsKey's body calling self.get(key),
+	// etc.) still carry the struct-level K/V TypeArgs after
+	// monomorph's SubstituteTypes — they're semantically redundant
+	// (already encoded by the specialized receiver type) but trip
+	// the legacy emitter with LLVM015 when wrapped in TurbofishExpr.
+	// Drop them here when the receiver is a specialized built-in.
+	if len(typeArgs) != 0 && expr.Receiver != nil {
+		if named, ok := expr.Receiver.Type().(*ostyir.NamedType); ok && strings.HasPrefix(named.Name, "_ZTS") {
+			typeArgs = nil
+		}
+	}
+	if len(typeArgs) != 0 {
 		tf := &ast.TurbofishExpr{PosV: start, EndV: end, Base: fn}
-		for _, arg := range expr.TypeArgs {
+		for _, arg := range typeArgs {
 			tf.Args = append(tf.Args, legacyTypeFromIR(arg))
 		}
 		fn = tf

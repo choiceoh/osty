@@ -1,0 +1,1859 @@
+// mir.osty — self-hosted MIR data model + printer + CFG helpers.
+//
+// This is the Osty port of `internal/mir/mir.go`. It intentionally
+// mirrors Go's layout (modules → functions → basic blocks → instrs +
+// terminator, places/projections/operands/rvalues) but uses the self-
+// host convention of flat structs carrying a `kind` tag and `Int`
+// handles (LocalID / BlockID) instead of Go-style interfaces.
+//
+// Stage 1 scope: data model + constructors + printer + CFG helpers.
+// HIR → MIR lowering is NOT in this file; it lands as a follow-up
+// (`toolchain/mir_lower.osty`) once the self-hosted IR reaches the
+// typed/monomorphic shape that Go's `internal/ir` offers.
+//
+// Relation to Go:
+//   - LocalID / BlockID       ↔ Int aliases (dense, contiguous)
+//   - MirConst                ↔ mir.Const (tagged union)
+//   - MirOperand              ↔ mir.Operand
+//   - MirProjection/MirPlace  ↔ mir.Projection / mir.Place
+//   - MirRValue               ↔ mir.RValue
+//   - MirInstr                ↔ mir.Instr (Assign/Call/Intrinsic/Storage)
+//   - MirTerm                 ↔ mir.Terminator (Goto/Branch/Switch/Return/Unreachable)
+//   - MirFunction             ↔ mir.Function (locals + blocks + entry)
+//   - MirModule               ↔ mir.Module
+//
+// All enum kinds are bare (no variant payload); payload fields live on
+// the flat struct keyed by the kind. Readers must check `kind` before
+// interpreting kind-specific fields.
+
+// ====================================================================
+// Enum kinds
+// ====================================================================
+
+pub enum MirOperandKind {
+    MirOpInvalid,
+    MirOpCopy,
+    MirOpMove,
+    MirOpConst,
+}
+
+pub enum MirConstKind {
+    MirConstInvalid,
+    MirConstInt,
+    MirConstBool,
+    MirConstFloat,
+    MirConstString,
+    MirConstChar,
+    MirConstByte,
+    MirConstUnit,
+    MirConstNull,
+    MirConstFn,
+}
+
+pub enum MirProjectionKind {
+    MirProjInvalid,
+    MirProjField,
+    MirProjTuple,
+    MirProjVariant,
+    MirProjIndex,
+    MirProjDeref,
+}
+
+pub enum MirRValueKind {
+    MirRVInvalid,
+    MirRVUse,
+    MirRVUnary,
+    MirRVBinary,
+    MirRVAggregate,
+    MirRVDiscriminant,
+    MirRVLen,
+    MirRVCast,
+    MirRVRef,
+    MirRVAddressOf,
+    MirRVGlobalRef,
+    MirRVNullary,
+}
+
+pub enum MirInstrKind {
+    MirInstrInvalid,
+    MirInstrAssign,
+    MirInstrCall,
+    MirInstrIntrinsic,
+    MirInstrStorageLive,
+    MirInstrStorageDead,
+}
+
+pub enum MirCalleeKind {
+    MirCalleeNone,
+    MirCalleeFn,
+    MirCalleeIndirect,
+}
+
+pub enum MirTermKind {
+    MirTermInvalid,
+    MirTermGoto,
+    MirTermBranch,
+    MirTermSwitchInt,
+    MirTermReturn,
+    MirTermUnreachable,
+}
+
+pub enum MirUnaryOp {
+    MirUnInvalid,
+    MirUnNeg,
+    MirUnPlus,
+    MirUnNot,
+    MirUnBitNot,
+}
+
+pub enum MirBinaryOp {
+    MirBinInvalid,
+    MirBinAdd,
+    MirBinSub,
+    MirBinMul,
+    MirBinDiv,
+    MirBinMod,
+    MirBinEq,
+    MirBinNeq,
+    MirBinLt,
+    MirBinLeq,
+    MirBinGt,
+    MirBinGeq,
+    MirBinAnd,
+    MirBinOr,
+    MirBinBitAnd,
+    MirBinBitOr,
+    MirBinBitXor,
+    MirBinShl,
+    MirBinShr,
+}
+
+pub enum MirAggregateKind {
+    MirAggInvalid,
+    MirAggTuple,
+    MirAggStruct,
+    MirAggEnumVariant,
+    MirAggList,
+    MirAggMap,
+    MirAggClosure,
+}
+
+pub enum MirCastKind {
+    MirCastInvalid,
+    MirCastIntResize,
+    MirCastIntToFloat,
+    MirCastFloatToInt,
+    MirCastFloatResize,
+    MirCastOptionalWrap,
+    MirCastOptionalUnwrap,
+    MirCastBitcast,
+}
+
+pub enum MirNullaryRVKind {
+    MirNullaryInvalid,
+    MirNullaryNone,
+}
+
+/// MirIntrinsicKind enumerates MIR-visible intrinsics. The ordering
+/// matches `mir.IntrinsicKind` in `internal/mir/mir.go`; keep them in
+/// sync so the Go side and self-hosted emitters agree on names.
+pub enum MirIntrinsicKind {
+    MirIntrinsicInvalid,
+    // print family
+    MirIntrinsicPrint,
+    MirIntrinsicPrintln,
+    MirIntrinsicEprint,
+    MirIntrinsicEprintln,
+    MirIntrinsicAbort,
+    MirIntrinsicStringConcat,
+    // concurrency: channels
+    MirIntrinsicChanMake,
+    MirIntrinsicChanSend,
+    MirIntrinsicChanRecv,
+    MirIntrinsicChanClose,
+    MirIntrinsicChanIsClosed,
+    // concurrency: structured tasks
+    MirIntrinsicTaskGroup,
+    MirIntrinsicSpawn,
+    MirIntrinsicHandleJoin,
+    MirIntrinsicGroupCancel,
+    MirIntrinsicGroupIsCancelled,
+    // concurrency: high-level helpers
+    MirIntrinsicParallel,
+    MirIntrinsicRace,
+    MirIntrinsicCollectAll,
+    // concurrency: select
+    MirIntrinsicSelect,
+    MirIntrinsicSelectRecv,
+    MirIntrinsicSelectSend,
+    MirIntrinsicSelectTimeout,
+    MirIntrinsicSelectDefault,
+    // concurrency: cancellation
+    MirIntrinsicIsCancelled,
+    MirIntrinsicCheckCancelled,
+    MirIntrinsicYield,
+    MirIntrinsicSleep,
+    // collections: List<T>
+    MirIntrinsicListPush,
+    MirIntrinsicListLen,
+    MirIntrinsicListGet,
+    MirIntrinsicListIsEmpty,
+    MirIntrinsicListFirst,
+    MirIntrinsicListLast,
+    MirIntrinsicListSorted,
+    MirIntrinsicListContains,
+    MirIntrinsicListIndexOf,
+    MirIntrinsicListToSet,
+    // collections: Map<K,V>
+    MirIntrinsicMapNew,
+    MirIntrinsicMapGet,
+    MirIntrinsicMapSet,
+    MirIntrinsicMapContains,
+    MirIntrinsicMapLen,
+    MirIntrinsicMapKeys,
+    MirIntrinsicMapValues,
+    MirIntrinsicMapRemove,
+    // collections: Set<T>
+    MirIntrinsicSetNew,
+    MirIntrinsicSetInsert,
+    MirIntrinsicSetContains,
+    MirIntrinsicSetLen,
+    MirIntrinsicSetToList,
+    MirIntrinsicSetRemove,
+    // String
+    MirIntrinsicStringLen,
+    MirIntrinsicStringIsEmpty,
+    MirIntrinsicStringContains,
+    MirIntrinsicStringStartsWith,
+    MirIntrinsicStringEndsWith,
+    MirIntrinsicStringIndexOf,
+    MirIntrinsicStringSplit,
+    MirIntrinsicStringTrim,
+    MirIntrinsicStringToUpper,
+    MirIntrinsicStringToLower,
+    MirIntrinsicStringReplace,
+    MirIntrinsicStringChars,
+    MirIntrinsicStringBytes,
+    // Bytes
+    MirIntrinsicBytesLen,
+    MirIntrinsicBytesIsEmpty,
+    MirIntrinsicBytesGet,
+    // Option / Result
+    MirIntrinsicOptionIsSome,
+    MirIntrinsicOptionIsNone,
+    MirIntrinsicOptionUnwrap,
+    MirIntrinsicOptionUnwrapOr,
+    MirIntrinsicResultIsOk,
+    MirIntrinsicResultIsErr,
+    MirIntrinsicResultUnwrap,
+    MirIntrinsicResultUnwrapOr,
+    // runtime sublanguage (LANG_SPEC §19)
+    MirIntrinsicRawNull,
+}
+
+// ====================================================================
+// Spans and primitives
+// ====================================================================
+
+/// MirSpan is a half-open [start, end) byte range in the original source.
+/// Every MIR node carries one so diagnostics can anchor back.
+pub struct MirSpan {
+    pub start: Int,
+    pub end: Int,
+}
+
+pub fn mirSpan(start: Int, end: Int) -> MirSpan {
+    MirSpan { start, end }
+}
+
+pub fn mirNoSpan() -> MirSpan {
+    MirSpan { start: 0, end: 0 }
+}
+
+// ====================================================================
+// Constants
+// ====================================================================
+
+/// MirConst is a compile-time value. `kind` selects which of the
+/// payload fields below is live. `typ` is the canonical type name
+/// string (e.g. "Int", "String", "Option<Int>") — MIR operates on
+/// name-level types and defers layout decisions to the backend.
+pub struct MirConst {
+    pub kind: MirConstKind,
+    pub intValue: Int,
+    pub boolValue: Bool,
+    pub floatText: String,
+    pub strValue: String,
+    pub charValue: Int,
+    pub byteValue: Int,
+    pub fnSymbol: String,
+    pub typ: String,
+}
+
+pub fn mirConstInvalid() -> MirConst {
+    MirConst {
+        kind: MirConstInvalid,
+        intValue: 0,
+        boolValue: false,
+        floatText: "",
+        strValue: "",
+        charValue: 0,
+        byteValue: 0,
+        fnSymbol: "",
+        typ: "",
+    }
+}
+
+pub fn mirConstInt(value: Int, typ: String) -> MirConst {
+    let mut c = mirConstInvalid()
+    c.kind = MirConstInt
+    c.intValue = value
+    c.typ = typ
+    c
+}
+
+pub fn mirConstBool(value: Bool) -> MirConst {
+    let mut c = mirConstInvalid()
+    c.kind = MirConstBool
+    c.boolValue = value
+    c.typ = "Bool"
+    c
+}
+
+pub fn mirConstFloat(text: String, typ: String) -> MirConst {
+    let mut c = mirConstInvalid()
+    c.kind = MirConstFloat
+    c.floatText = text
+    c.typ = typ
+    c
+}
+
+pub fn mirConstString(value: String) -> MirConst {
+    let mut c = mirConstInvalid()
+    c.kind = MirConstString
+    c.strValue = value
+    c.typ = "String"
+    c
+}
+
+pub fn mirConstChar(codePoint: Int) -> MirConst {
+    let mut c = mirConstInvalid()
+    c.kind = MirConstChar
+    c.charValue = codePoint
+    c.typ = "Char"
+    c
+}
+
+pub fn mirConstByte(value: Int) -> MirConst {
+    let mut c = mirConstInvalid()
+    c.kind = MirConstByte
+    c.byteValue = value
+    c.typ = "Byte"
+    c
+}
+
+pub fn mirConstUnit() -> MirConst {
+    let mut c = mirConstInvalid()
+    c.kind = MirConstUnit
+    c.typ = "Unit"
+    c
+}
+
+pub fn mirConstNull(typ: String) -> MirConst {
+    let mut c = mirConstInvalid()
+    c.kind = MirConstNull
+    c.typ = typ
+    c
+}
+
+pub fn mirConstFn(symbol: String, typ: String) -> MirConst {
+    let mut c = mirConstInvalid()
+    c.kind = MirConstFn
+    c.fnSymbol = symbol
+    c.typ = typ
+    c
+}
+
+// ====================================================================
+// Projections and Places
+// ====================================================================
+
+/// MirProjection is one step refining a Place:
+///   - Field    : struct field by (index, name, type)
+///   - Tuple    : tuple element by index + type
+///   - Variant  : enum payload slice; fieldIdx == -1 selects the whole
+///                payload tuple, otherwise one payload element.
+///   - Index    : array-style index. `indexLocal >= 0` references a
+///                local holding the value; when indexLocal < 0 the
+///                constant `indexConst` is used. This avoids a
+///                mutually-recursive type graph between projections
+///                and operands.
+///   - Deref    : pointer / optional unwrap (reserved for future).
+pub struct MirProjection {
+    pub kind: MirProjectionKind,
+    pub index: Int,         // Field/Tuple/Variant: index
+    pub name: String,       // Field/Variant: name (empty for Tuple)
+    pub variantField: Int,  // Variant only: -1 = whole payload
+    pub indexLocal: Int,    // Index only: local id (-1 if constant path)
+    pub indexConst: Int,    // Index only: constant index (when indexLocal < 0)
+    pub typ: String,
+}
+
+pub fn mirProjInvalid() -> MirProjection {
+    MirProjection {
+        kind: MirProjInvalid,
+        index: 0,
+        name: "",
+        variantField: -1,
+        indexLocal: -1,
+        indexConst: 0,
+        typ: "",
+    }
+}
+
+pub fn mirFieldProj(index: Int, name: String, typ: String) -> MirProjection {
+    let mut p = mirProjInvalid()
+    p.kind = MirProjField
+    p.index = index
+    p.name = name
+    p.typ = typ
+    p
+}
+
+pub fn mirTupleProj(index: Int, typ: String) -> MirProjection {
+    let mut p = mirProjInvalid()
+    p.kind = MirProjTuple
+    p.index = index
+    p.typ = typ
+    p
+}
+
+pub fn mirVariantProj(variantIndex: Int, name: String, fieldIdx: Int, typ: String) -> MirProjection {
+    let mut p = mirProjInvalid()
+    p.kind = MirProjVariant
+    p.index = variantIndex
+    p.name = name
+    p.variantField = fieldIdx
+    p.typ = typ
+    p
+}
+
+pub fn mirIndexProjLocal(localId: Int, elemTyp: String) -> MirProjection {
+    let mut p = mirProjInvalid()
+    p.kind = MirProjIndex
+    p.indexLocal = localId
+    p.typ = elemTyp
+    p
+}
+
+pub fn mirIndexProjConst(value: Int, elemTyp: String) -> MirProjection {
+    let mut p = mirProjInvalid()
+    p.kind = MirProjIndex
+    p.indexLocal = -1
+    p.indexConst = value
+    p.typ = elemTyp
+    p
+}
+
+pub fn mirDerefProj(typ: String) -> MirProjection {
+    let mut p = mirProjInvalid()
+    p.kind = MirProjDeref
+    p.typ = typ
+    p
+}
+
+/// MirPlace identifies a storage location: a local, optionally refined
+/// by a chain of projections.
+pub struct MirPlace {
+    pub local: Int,
+    pub projections: List<MirProjection>,
+}
+
+pub fn mirPlace(local: Int) -> MirPlace {
+    MirPlace { local, projections: [] }
+}
+
+/// mirPlaceProject returns a new Place extending `p` with `proj`.
+pub fn mirPlaceProject(p: MirPlace, proj: MirProjection) -> MirPlace {
+    let mut next: List<MirProjection> = []
+    for existing in p.projections {
+        next.push(existing)
+    }
+    next.push(proj)
+    MirPlace { local: p.local, projections: next }
+}
+
+pub fn mirPlaceHasProjections(p: MirPlace) -> Bool {
+    p.projections.len() > 0
+}
+
+pub fn mirPlaceBase(p: MirPlace) -> MirPlace {
+    mirPlace(p.local)
+}
+
+// ====================================================================
+// Operands
+// ====================================================================
+
+/// MirOperand is a read-only value feed: either a Place read
+/// (Copy/Move) or a compile-time Const.
+pub struct MirOperand {
+    pub kind: MirOperandKind,
+    pub place: MirPlace,
+    pub const: MirConst,
+    pub typ: String,
+}
+
+pub fn mirOperandInvalid() -> MirOperand {
+    MirOperand {
+        kind: MirOpInvalid,
+        place: mirPlace(-1),
+        const: mirConstInvalid(),
+        typ: "",
+    }
+}
+
+pub fn mirOperandCopy(place: MirPlace, typ: String) -> MirOperand {
+    let mut op = mirOperandInvalid()
+    op.kind = MirOpCopy
+    op.place = place
+    op.typ = typ
+    op
+}
+
+pub fn mirOperandMove(place: MirPlace, typ: String) -> MirOperand {
+    let mut op = mirOperandInvalid()
+    op.kind = MirOpMove
+    op.place = place
+    op.typ = typ
+    op
+}
+
+pub fn mirOperandConst(c: MirConst) -> MirOperand {
+    let mut op = mirOperandInvalid()
+    op.kind = MirOpConst
+    op.const = c
+    op.typ = c.typ
+    op
+}
+
+// ====================================================================
+// RValues
+// ====================================================================
+
+/// MirRValue is the right-hand side of an Assign instruction. RValues
+/// never have side effects on their own; side-effectful operations
+/// become Call or Intrinsic instructions.
+///
+/// `kind` selects which payload fields are live. `typ` is the type of
+/// the value produced.
+pub struct MirRValue {
+    pub kind: MirRValueKind,
+    pub typ: String,
+
+    // Use / unary / binary operands
+    pub unaryOp: MirUnaryOp,
+    pub binaryOp: MirBinaryOp,
+    pub arg: MirOperand,     // Use / Unary: the source operand
+    pub right: MirOperand,   // Binary: the right-hand operand
+
+    // Aggregate construction
+    pub aggKind: MirAggregateKind,
+    pub aggFields: List<MirOperand>,
+    pub aggVariantIdx: Int,
+    pub aggVariantTag: String,
+
+    // Place-carrying forms (Discriminant / Len / Ref / AddressOf)
+    pub place: MirPlace,
+    pub hasPlace: Bool,
+
+    // Cast
+    pub castKind: MirCastKind,
+    pub castFrom: String,
+    pub castTo: String,
+
+    // GlobalRef / Nullary
+    pub globalName: String,
+    pub nullaryKind: MirNullaryRVKind,
+}
+
+pub fn mirRValueInvalid() -> MirRValue {
+    MirRValue {
+        kind: MirRVInvalid,
+        typ: "",
+        unaryOp: MirUnInvalid,
+        binaryOp: MirBinInvalid,
+        arg: mirOperandInvalid(),
+        right: mirOperandInvalid(),
+        aggKind: MirAggInvalid,
+        aggFields: [],
+        aggVariantIdx: 0,
+        aggVariantTag: "",
+        place: mirPlace(-1),
+        hasPlace: false,
+        castKind: MirCastInvalid,
+        castFrom: "",
+        castTo: "",
+        globalName: "",
+        nullaryKind: MirNullaryInvalid,
+    }
+}
+
+pub fn mirRVUse(op: MirOperand) -> MirRValue {
+    let mut rv = mirRValueInvalid()
+    rv.kind = MirRVUse
+    rv.arg = op
+    rv.typ = op.typ
+    rv
+}
+
+pub fn mirRVUnary(op: MirUnaryOp, arg: MirOperand, typ: String) -> MirRValue {
+    let mut rv = mirRValueInvalid()
+    rv.kind = MirRVUnary
+    rv.unaryOp = op
+    rv.arg = arg
+    rv.typ = typ
+    rv
+}
+
+pub fn mirRVBinary(op: MirBinaryOp, left: MirOperand, right: MirOperand, typ: String) -> MirRValue {
+    let mut rv = mirRValueInvalid()
+    rv.kind = MirRVBinary
+    rv.binaryOp = op
+    rv.arg = left
+    rv.right = right
+    rv.typ = typ
+    rv
+}
+
+pub fn mirRVAggregate(kind: MirAggregateKind, fields: List<MirOperand>, typ: String) -> MirRValue {
+    let mut rv = mirRValueInvalid()
+    rv.kind = MirRVAggregate
+    rv.aggKind = kind
+    rv.aggFields = fields
+    rv.typ = typ
+    rv
+}
+
+pub fn mirRVVariant(
+    variantIdx: Int,
+    variantTag: String,
+    fields: List<MirOperand>,
+    typ: String,
+) -> MirRValue {
+    let mut rv = mirRVAggregate(MirAggEnumVariant, fields, typ)
+    rv.aggVariantIdx = variantIdx
+    rv.aggVariantTag = variantTag
+    rv
+}
+
+pub fn mirRVDiscriminant(place: MirPlace, typ: String) -> MirRValue {
+    let mut rv = mirRValueInvalid()
+    rv.kind = MirRVDiscriminant
+    rv.place = place
+    rv.hasPlace = true
+    rv.typ = typ
+    rv
+}
+
+pub fn mirRVLen(place: MirPlace, typ: String) -> MirRValue {
+    let mut rv = mirRValueInvalid()
+    rv.kind = MirRVLen
+    rv.place = place
+    rv.hasPlace = true
+    rv.typ = typ
+    rv
+}
+
+pub fn mirRVCast(kind: MirCastKind, arg: MirOperand, from: String, to: String) -> MirRValue {
+    let mut rv = mirRValueInvalid()
+    rv.kind = MirRVCast
+    rv.castKind = kind
+    rv.arg = arg
+    rv.castFrom = from
+    rv.castTo = to
+    rv.typ = to
+    rv
+}
+
+pub fn mirRVRef(place: MirPlace, typ: String) -> MirRValue {
+    let mut rv = mirRValueInvalid()
+    rv.kind = MirRVRef
+    rv.place = place
+    rv.hasPlace = true
+    rv.typ = typ
+    rv
+}
+
+pub fn mirRVAddressOf(place: MirPlace, typ: String) -> MirRValue {
+    let mut rv = mirRValueInvalid()
+    rv.kind = MirRVAddressOf
+    rv.place = place
+    rv.hasPlace = true
+    rv.typ = typ
+    rv
+}
+
+pub fn mirRVGlobalRef(name: String, typ: String) -> MirRValue {
+    let mut rv = mirRValueInvalid()
+    rv.kind = MirRVGlobalRef
+    rv.globalName = name
+    rv.typ = typ
+    rv
+}
+
+pub fn mirRVNullary(kind: MirNullaryRVKind, typ: String) -> MirRValue {
+    let mut rv = mirRValueInvalid()
+    rv.kind = MirRVNullary
+    rv.nullaryKind = kind
+    rv.typ = typ
+    rv
+}
+
+// ====================================================================
+// Instructions
+// ====================================================================
+
+/// MirInstr is one instruction inside a basic block. The `kind` field
+/// selects which payload fields are live:
+///
+///   Assign         : dest, src
+///   Call           : dest (optional, hasDest), callee, args
+///   Intrinsic      : dest (optional, hasDest), intrinsicKind, args
+///   StorageLive    : storageLocal
+///   StorageDead    : storageLocal
+///
+/// Callee is encoded inline: calleeKind selects either a direct FnRef
+/// (calleeSymbol non-empty) or an indirect operand (calleeOperand).
+pub struct MirInstr {
+    pub kind: MirInstrKind,
+    pub span: MirSpan,
+
+    // Dest place (Assign always has one; Call/Intrinsic optional via hasDest)
+    pub dest: MirPlace,
+    pub hasDest: Bool,
+
+    // Assign payload
+    pub src: MirRValue,
+
+    // Call payload
+    pub calleeKind: MirCalleeKind,
+    pub calleeSymbol: String,
+    pub calleeOperand: MirOperand,
+    pub calleeType: String,
+
+    // Intrinsic payload
+    pub intrinsic: MirIntrinsicKind,
+
+    // Shared args list (Call + Intrinsic)
+    pub args: List<MirOperand>,
+
+    // Storage Live/Dead payload
+    pub storageLocal: Int,
+}
+
+pub fn mirInstrInvalid() -> MirInstr {
+    MirInstr {
+        kind: MirInstrInvalid,
+        span: mirNoSpan(),
+        dest: mirPlace(-1),
+        hasDest: false,
+        src: mirRValueInvalid(),
+        calleeKind: MirCalleeNone,
+        calleeSymbol: "",
+        calleeOperand: mirOperandInvalid(),
+        calleeType: "",
+        intrinsic: MirIntrinsicInvalid,
+        args: [],
+        storageLocal: -1,
+    }
+}
+
+pub fn mirAssignInstr(dest: MirPlace, src: MirRValue, span: MirSpan) -> MirInstr {
+    let mut i = mirInstrInvalid()
+    i.kind = MirInstrAssign
+    i.dest = dest
+    i.hasDest = true
+    i.src = src
+    i.span = span
+    i
+}
+
+pub fn mirCallInstr(
+    hasDest: Bool,
+    dest: MirPlace,
+    calleeSymbol: String,
+    calleeType: String,
+    args: List<MirOperand>,
+    span: MirSpan,
+) -> MirInstr {
+    let mut i = mirInstrInvalid()
+    i.kind = MirInstrCall
+    i.hasDest = hasDest
+    i.dest = dest
+    i.calleeKind = MirCalleeFn
+    i.calleeSymbol = calleeSymbol
+    i.calleeType = calleeType
+    i.args = args
+    i.span = span
+    i
+}
+
+pub fn mirIndirectCallInstr(
+    hasDest: Bool,
+    dest: MirPlace,
+    callee: MirOperand,
+    args: List<MirOperand>,
+    span: MirSpan,
+) -> MirInstr {
+    let mut i = mirInstrInvalid()
+    i.kind = MirInstrCall
+    i.hasDest = hasDest
+    i.dest = dest
+    i.calleeKind = MirCalleeIndirect
+    i.calleeOperand = callee
+    i.calleeType = callee.typ
+    i.args = args
+    i.span = span
+    i
+}
+
+pub fn mirIntrinsicInstr(
+    hasDest: Bool,
+    dest: MirPlace,
+    intrinsic: MirIntrinsicKind,
+    args: List<MirOperand>,
+    span: MirSpan,
+) -> MirInstr {
+    let mut i = mirInstrInvalid()
+    i.kind = MirInstrIntrinsic
+    i.hasDest = hasDest
+    i.dest = dest
+    i.intrinsic = intrinsic
+    i.args = args
+    i.span = span
+    i
+}
+
+pub fn mirStorageLiveInstr(local: Int, span: MirSpan) -> MirInstr {
+    let mut i = mirInstrInvalid()
+    i.kind = MirInstrStorageLive
+    i.storageLocal = local
+    i.span = span
+    i
+}
+
+pub fn mirStorageDeadInstr(local: Int, span: MirSpan) -> MirInstr {
+    let mut i = mirInstrInvalid()
+    i.kind = MirInstrStorageDead
+    i.storageLocal = local
+    i.span = span
+    i
+}
+
+// ====================================================================
+// Terminators
+// ====================================================================
+
+/// MirSwitchCase is one arm of a SwitchInt terminator.
+pub struct MirSwitchCase {
+    pub value: Int,
+    pub target: Int,
+    pub label: String,
+}
+
+pub fn mirSwitchCase(value: Int, target: Int, label: String) -> MirSwitchCase {
+    MirSwitchCase { value, target, label }
+}
+
+/// MirTerm is the control-flow edge leaving a basic block. Every block
+/// has exactly one after lowering is complete.
+pub struct MirTerm {
+    pub kind: MirTermKind,
+    pub span: MirSpan,
+
+    // Goto / Branch / SwitchInt targets
+    pub target: Int,         // Goto; SwitchInt default
+    pub thenBlock: Int,      // Branch
+    pub elseBlock: Int,      // Branch
+    pub cases: List<MirSwitchCase>, // SwitchInt
+
+    // Branch / SwitchInt scrutinee
+    pub cond: MirOperand,
+}
+
+pub fn mirTermInvalid() -> MirTerm {
+    MirTerm {
+        kind: MirTermInvalid,
+        span: mirNoSpan(),
+        target: -1,
+        thenBlock: -1,
+        elseBlock: -1,
+        cases: [],
+        cond: mirOperandInvalid(),
+    }
+}
+
+pub fn mirGotoTerm(target: Int, span: MirSpan) -> MirTerm {
+    let mut t = mirTermInvalid()
+    t.kind = MirTermGoto
+    t.target = target
+    t.span = span
+    t
+}
+
+pub fn mirBranchTerm(cond: MirOperand, thenB: Int, elseB: Int, span: MirSpan) -> MirTerm {
+    let mut t = mirTermInvalid()
+    t.kind = MirTermBranch
+    t.cond = cond
+    t.thenBlock = thenB
+    t.elseBlock = elseB
+    t.span = span
+    t
+}
+
+pub fn mirSwitchIntTerm(
+    scrutinee: MirOperand,
+    cases: List<MirSwitchCase>,
+    default: Int,
+    span: MirSpan,
+) -> MirTerm {
+    let mut t = mirTermInvalid()
+    t.kind = MirTermSwitchInt
+    t.cond = scrutinee
+    t.cases = cases
+    t.target = default
+    t.span = span
+    t
+}
+
+pub fn mirReturnTerm(span: MirSpan) -> MirTerm {
+    let mut t = mirTermInvalid()
+    t.kind = MirTermReturn
+    t.span = span
+    t
+}
+
+pub fn mirUnreachableTerm(span: MirSpan) -> MirTerm {
+    let mut t = mirTermInvalid()
+    t.kind = MirTermUnreachable
+    t.span = span
+    t
+}
+
+// ====================================================================
+// Locals, Basic blocks, Functions
+// ====================================================================
+
+/// MirLocal is one slot in a function's frame — parameter, return, or
+/// user/synthetic binding. `name` is empty for synthetic temporaries.
+pub struct MirLocal {
+    pub id: Int,
+    pub name: String,
+    pub typ: String,
+    pub mutable: Bool,
+    pub isParam: Bool,
+    pub isReturn: Bool,
+    pub span: MirSpan,
+}
+
+pub fn mirLocal(id: Int, name: String, typ: String, mutable: Bool, span: MirSpan) -> MirLocal {
+    MirLocal {
+        id,
+        name,
+        typ,
+        mutable,
+        isParam: false,
+        isReturn: false,
+        span,
+    }
+}
+
+/// MirBasicBlock is a straight-line run of instructions followed by
+/// exactly one terminator (post-lowering).
+pub struct MirBasicBlock {
+    pub id: Int,
+    pub instrs: List<MirInstr>,
+    pub term: MirTerm,
+    pub hasTerm: Bool,
+    pub span: MirSpan,
+}
+
+pub fn mirBasicBlock(id: Int, span: MirSpan) -> MirBasicBlock {
+    MirBasicBlock {
+        id,
+        instrs: [],
+        term: mirTermInvalid(),
+        hasTerm: false,
+        span,
+    }
+}
+
+pub fn mirBlockAppend(block: MirBasicBlock, instr: MirInstr) {
+    block.instrs.push(instr)
+}
+
+pub fn mirBlockSetTerminator(block: MirBasicBlock, t: MirTerm) {
+    block.term = t
+    block.hasTerm = true
+}
+
+/// MirFunction is one lowered function: parameters, return slot, locals
+/// and a CFG of basic blocks. `entry` is the entry block ID (usually 0).
+pub struct MirFunction {
+    pub name: String,
+    pub params: List<Int>,
+    pub returnType: String,
+    pub returnLocal: Int,
+    pub locals: List<MirLocal>,
+    pub blocks: List<MirBasicBlock>,
+    pub entry: Int,
+    pub isExternal: Bool,
+    pub isIntrinsic: Bool,
+    pub exported: Bool,
+    pub exportSymbol: String,
+    pub cAbi: Bool,
+    pub span: MirSpan,
+}
+
+pub fn mirFunction(name: String, returnType: String, span: MirSpan) -> MirFunction {
+    MirFunction {
+        name,
+        params: [],
+        returnType,
+        returnLocal: -1,
+        locals: [],
+        blocks: [],
+        entry: 0,
+        isExternal: false,
+        isIntrinsic: false,
+        exported: false,
+        exportSymbol: "",
+        cAbi: false,
+        span,
+    }
+}
+
+/// mirFunctionNewLocal appends a fresh local and returns its ID.
+pub fn mirFunctionNewLocal(
+    func: MirFunction,
+    name: String,
+    typ: String,
+    mutable: Bool,
+    span: MirSpan,
+) -> Int {
+    let id = func.locals.len()
+    let local = mirLocal(id, name, typ, mutable, span)
+    func.locals.push(local)
+    id
+}
+
+/// mirFunctionNewBlock appends a fresh block with no instructions and no
+/// terminator. Callers must install a terminator before printing.
+pub fn mirFunctionNewBlock(func: MirFunction, span: MirSpan) -> Int {
+    let id = func.blocks.len()
+    let block = mirBasicBlock(id, span)
+    func.blocks.push(block)
+    id
+}
+
+pub fn mirFunctionAppend(func: MirFunction, blockId: Int, instr: MirInstr) {
+    if blockId < 0 || blockId >= func.blocks.len() {
+        return
+    }
+    mirBlockAppend(func.blocks[blockId], instr)
+}
+
+pub fn mirFunctionTerminate(func: MirFunction, blockId: Int, term: MirTerm) {
+    if blockId < 0 || blockId >= func.blocks.len() {
+        return
+    }
+    mirBlockSetTerminator(func.blocks[blockId], term)
+}
+
+pub fn mirFunctionLocal(func: MirFunction, id: Int) -> MirLocal {
+    if id < 0 || id >= func.locals.len() {
+        return mirLocal(-1, "", "", false, mirNoSpan())
+    }
+    func.locals[id]
+}
+
+pub fn mirFunctionBlock(func: MirFunction, id: Int) -> MirBasicBlock {
+    if id < 0 || id >= func.blocks.len() {
+        return mirBasicBlock(-1, mirNoSpan())
+    }
+    func.blocks[id]
+}
+
+// ====================================================================
+// Globals, Uses, Layouts, Modules
+// ====================================================================
+
+pub struct MirGlobal {
+    pub name: String,
+    pub typ: String,
+    pub mutable: Bool,
+    pub hasInit: Bool,
+    pub initSymbol: String,   // name of the init MIR function, empty when none
+    pub span: MirSpan,
+}
+
+pub fn mirGlobal(name: String, typ: String, mutable: Bool, span: MirSpan) -> MirGlobal {
+    MirGlobal {
+        name,
+        typ,
+        mutable,
+        hasInit: false,
+        initSymbol: "",
+        span,
+    }
+}
+
+pub struct MirUse {
+    pub rawPath: String,
+    pub alias: String,
+    pub isGoFFI: Bool,
+    pub isRuntimeFFI: Bool,
+    pub goPath: String,
+    pub runtimePath: String,
+    pub span: MirSpan,
+}
+
+pub fn mirUse(rawPath: String, alias: String, span: MirSpan) -> MirUse {
+    MirUse {
+        rawPath,
+        alias,
+        isGoFFI: false,
+        isRuntimeFFI: false,
+        goPath: "",
+        runtimePath: "",
+        span,
+    }
+}
+
+pub struct MirFieldLayout {
+    pub index: Int,
+    pub name: String,
+    pub typ: String,
+}
+
+pub struct MirStructLayout {
+    pub name: String,
+    pub mangled: String,
+    pub fields: List<MirFieldLayout>,
+    pub size: Int,
+    pub align: Int,
+}
+
+pub struct MirVariantLayout {
+    pub index: Int,
+    pub name: String,
+    pub payload: List<MirFieldLayout>,
+}
+
+pub struct MirEnumLayout {
+    pub name: String,
+    pub mangled: String,
+    pub discriminant: String,
+    pub variants: List<MirVariantLayout>,
+}
+
+pub struct MirTupleLayout {
+    pub key: String,
+    pub mangled: String,
+    pub fields: List<MirFieldLayout>,
+}
+
+pub struct MirLayoutTable {
+    pub structs: List<MirStructLayout>,
+    pub enums: List<MirEnumLayout>,
+    pub tuples: List<MirTupleLayout>,
+}
+
+pub fn mirLayoutTable() -> MirLayoutTable {
+    MirLayoutTable {
+        structs: [],
+        enums: [],
+        tuples: [],
+    }
+}
+
+/// MirModule is the MIR form of one compilation unit. It is always
+/// monomorphic: no type variable reaches a MIR node.
+pub struct MirModule {
+    pub packageName: String,
+    pub functions: List<MirFunction>,
+    pub globals: List<MirGlobal>,
+    pub uses: List<MirUse>,
+    pub layouts: MirLayoutTable,
+    pub span: MirSpan,
+}
+
+pub fn mirModule(packageName: String) -> MirModule {
+    MirModule {
+        packageName,
+        functions: [],
+        globals: [],
+        uses: [],
+        layouts: mirLayoutTable(),
+        span: mirNoSpan(),
+    }
+}
+
+pub fn mirModuleLookupFunction(m: MirModule, symbol: String) -> Int {
+    let mut i = 0
+    for func in m.functions {
+        if func.name == symbol {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+// ====================================================================
+// CFG helpers
+// ====================================================================
+
+/// mirSuccessors returns the successor block IDs of a terminator in
+/// source order. Returns [] for Return / Unreachable / Invalid.
+pub fn mirSuccessors(t: MirTerm) -> List<Int> {
+    let mut out: List<Int> = []
+    match t.kind {
+        MirTermGoto -> {
+            out.push(t.target)
+        },
+        MirTermBranch -> {
+            out.push(t.thenBlock)
+            out.push(t.elseBlock)
+        },
+        MirTermSwitchInt -> {
+            for c in t.cases {
+                out.push(c.target)
+            }
+            out.push(t.target)
+        },
+        _ -> {},
+    }
+    out
+}
+
+/// mirReachableBlocks returns the set of block IDs reachable from
+/// `func.entry` by walking terminator successors. The result is encoded
+/// as a List<Bool> parallel to `func.blocks`; unreachable blocks map to
+/// `false`. Returns [] when `func` has no blocks.
+pub fn mirReachableBlocks(func: MirFunction) -> List<Bool> {
+    let n = func.blocks.len()
+    let mut seen: List<Bool> = []
+    for _unused in func.blocks {
+        seen.push(false)
+    }
+    if n == 0 {
+        return seen
+    }
+    if func.entry < 0 || func.entry >= n {
+        return seen
+    }
+    let mut stack: List<Int> = []
+    stack.push(func.entry)
+    for _step in 0..100000 {
+        if stack.isEmpty() {
+            break
+        }
+        let top = stack[stack.len() - 1]
+        stack = mirListPopLast(stack)
+        if top < 0 || top >= n {
+            continue
+        }
+        if seen[top] {
+            continue
+        }
+        seen[top] = true
+        let bb = func.blocks[top]
+        if !(bb.hasTerm) {
+            continue
+        }
+        let succs = mirSuccessors(bb.term)
+        for s in succs {
+            if s >= 0 && s < n && !(seen[s]) {
+                stack.push(s)
+            }
+        }
+    }
+    seen
+}
+
+/// mirListPopLast returns the list with its last element removed. Used
+/// by CFG helpers to avoid requiring a List<T>.pop() stdlib method.
+fn mirListPopLast(xs: List<Int>) -> List<Int> {
+    let mut out: List<Int> = []
+    let n = xs.len()
+    if n <= 1 {
+        return out
+    }
+    let mut i = 0
+    for x in xs {
+        if i < n - 1 {
+            out.push(x)
+        }
+        i = i + 1
+    }
+    out
+}
+
+/// mirCountReachable returns the number of reachable blocks in `func`.
+pub fn mirCountReachable(func: MirFunction) -> Int {
+    let seen = mirReachableBlocks(func)
+    let mut count = 0
+    for live in seen {
+        if live {
+            count = count + 1
+        }
+    }
+    count
+}
+
+// ====================================================================
+// Printer
+// ====================================================================
+
+/// mirPrintModule renders a MIR module in a stable, human-readable form
+/// close to Rust MIR dumps. Used by tests and when inspecting backend
+/// output during development.
+pub fn mirPrintModule(m: MirModule) -> String {
+    let mut out = ""
+    out = out + "module \"" + m.packageName + "\"\n"
+    for u in m.uses {
+        out = out + mirIndent(1) + mirPrintUse(u) + "\n"
+    }
+    for g in m.globals {
+        out = out + "\n" + mirPrintGlobal(g)
+    }
+    for func in m.functions {
+        out = out + "\n" + mirPrintFunction(func)
+    }
+    out
+}
+
+/// mirPrintFunction renders one function using the same format as
+/// mirPrintModule.
+pub fn mirPrintFunction(func: MirFunction) -> String {
+    let mut out = ""
+    out = out + "fn " + func.name + "("
+    let mut first = true
+    for paramId in func.params {
+        if !(first) {
+            out = out + ", "
+        }
+        first = false
+        let loc = mirFunctionLocal(func, paramId)
+        out = out + "_" + mirIntToString(loc.id) + ": " + loc.typ
+    }
+    out = out + ") -> " + func.returnType + " \{\n"
+    // Locals declaration block (skip parameters; they are in the signature)
+    for loc in func.locals {
+        if loc.isParam {
+            continue
+        }
+        let annot = mirLocalAnnotation(loc)
+        let displayName = if loc.name == "" { "_" } else { loc.name }
+        out = out + mirIndent(1) + "let" + annot + " _"
+            + mirIntToString(loc.id) + ": " + loc.typ
+            + "  // " + displayName + "\n"
+    }
+    if !(func.isExternal) {
+        for bb in func.blocks {
+            out = out + "\n" + mirPrintBlock(bb, func)
+        }
+    }
+    out = out + "\}\n"
+    out
+}
+
+fn mirLocalAnnotation(loc: MirLocal) -> String {
+    if loc.isReturn {
+        return " return"
+    }
+    if loc.mutable {
+        return " mut"
+    }
+    ""
+}
+
+fn mirPrintUse(u: MirUse) -> String {
+    if u.isGoFFI {
+        return "use go \"" + u.goPath + "\" as " + u.alias
+    }
+    if u.isRuntimeFFI {
+        return "use runtime \"" + u.runtimePath + "\" as " + u.alias
+    }
+    "use " + u.rawPath + " as " + u.alias
+}
+
+fn mirPrintGlobal(g: MirGlobal) -> String {
+    let mut out = "global " + g.name + ": " + g.typ
+    if g.mutable {
+        out = out + " (mut)"
+    }
+    if g.hasInit {
+        out = out + " init=" + g.initSymbol
+    }
+    out + "\n"
+}
+
+fn mirPrintBlock(bb: MirBasicBlock, func: MirFunction) -> String {
+    let mut out = mirIndent(1) + "bb" + mirIntToString(bb.id) + ":\n"
+    for instr in bb.instrs {
+        out = out + mirIndent(2) + mirPrintInstr(instr, func) + "\n"
+    }
+    if bb.hasTerm {
+        out = out + mirIndent(2) + mirPrintTerm(bb.term, func) + "\n"
+    } else {
+        out = out + mirIndent(2) + "<missing terminator>\n"
+    }
+    out
+}
+
+fn mirPrintInstr(i: MirInstr, func: MirFunction) -> String {
+    match i.kind {
+        MirInstrAssign -> mirPrintPlace(i.dest, func) + " = " + mirPrintRValue(i.src, func),
+        MirInstrCall -> {
+            let head = if i.hasDest { mirPrintPlace(i.dest, func) + " = " } else { "" }
+            let callee = mirPrintCallee(i, func)
+            head + "call " + callee + "(" + mirPrintOperandList(i.args, func) + ")"
+        },
+        MirInstrIntrinsic -> {
+            let head = if i.hasDest { mirPrintPlace(i.dest, func) + " = " } else { "" }
+            head + "intrinsic " + mirIntrinsicName(i.intrinsic)
+                + "(" + mirPrintOperandList(i.args, func) + ")"
+        },
+        MirInstrStorageLive -> "storage_live _" + mirIntToString(i.storageLocal),
+        MirInstrStorageDead -> "storage_dead _" + mirIntToString(i.storageLocal),
+        _ -> "(invalid instr)",
+    }
+}
+
+fn mirPrintCallee(i: MirInstr, func: MirFunction) -> String {
+    match i.calleeKind {
+        MirCalleeFn -> i.calleeSymbol,
+        MirCalleeIndirect -> "*" + mirPrintOperand(i.calleeOperand, func),
+        _ -> "(?)",
+    }
+}
+
+fn mirPrintTerm(t: MirTerm, func: MirFunction) -> String {
+    match t.kind {
+        MirTermGoto -> "goto -> bb" + mirIntToString(t.target),
+        MirTermBranch -> "branch " + mirPrintOperand(t.cond, func)
+            + " -> [true: bb" + mirIntToString(t.thenBlock)
+            + ", false: bb" + mirIntToString(t.elseBlock) + "]",
+        MirTermSwitchInt -> {
+            let mut arms = ""
+            let mut first = true
+            for c in t.cases {
+                if !(first) {
+                    arms = arms + ", "
+                }
+                first = false
+                let label = if c.label == "" { mirIntToString(c.value) } else { c.label }
+                arms = arms + label + " -> bb" + mirIntToString(c.target)
+            }
+            if !(first) {
+                arms = arms + ", "
+            }
+            arms = arms + "_ -> bb" + mirIntToString(t.target)
+            "switchInt " + mirPrintOperand(t.cond, func) + " -> [" + arms + "]"
+        },
+        MirTermReturn -> "return",
+        MirTermUnreachable -> "unreachable",
+        _ -> "(invalid terminator)",
+    }
+}
+
+fn mirPrintPlace(p: MirPlace, func: MirFunction) -> String {
+    let mut out = "_" + mirIntToString(p.local)
+    for proj in p.projections {
+        out = out + mirPrintProjection(proj, func)
+    }
+    out
+}
+
+fn mirPrintProjection(proj: MirProjection, func: MirFunction) -> String {
+    match proj.kind {
+        MirProjField -> {
+            if proj.name == "" {
+                ".field" + mirIntToString(proj.index)
+            } else {
+                "." + proj.name
+            }
+        },
+        MirProjTuple -> "." + mirIntToString(proj.index),
+        MirProjVariant -> {
+            if proj.variantField < 0 {
+                "@" + proj.name
+            } else {
+                "@" + proj.name + "." + mirIntToString(proj.variantField)
+            }
+        },
+        MirProjIndex -> {
+            if proj.indexLocal < 0 {
+                "[" + mirIntToString(proj.indexConst) + "]"
+            } else {
+                "[_" + mirIntToString(proj.indexLocal) + "]"
+            }
+        },
+        MirProjDeref -> ".*",
+        _ -> "(?)",
+    }
+}
+
+fn mirPrintOperand(op: MirOperand, func: MirFunction) -> String {
+    match op.kind {
+        MirOpCopy -> mirPrintPlace(op.place, func),
+        MirOpMove -> "move " + mirPrintPlace(op.place, func),
+        MirOpConst -> mirPrintConst(op.const),
+        _ -> "(?)",
+    }
+}
+
+fn mirPrintOperandList(ops: List<MirOperand>, func: MirFunction) -> String {
+    let mut out = ""
+    let mut first = true
+    for op in ops {
+        if !(first) {
+            out = out + ", "
+        }
+        first = false
+        out = out + mirPrintOperand(op, func)
+    }
+    out
+}
+
+fn mirPrintConst(c: MirConst) -> String {
+    match c.kind {
+        MirConstInt -> "const " + mirIntToString(c.intValue) + " " + c.typ,
+        MirConstBool -> {
+            if c.boolValue { "const true" } else { "const false" }
+        },
+        MirConstFloat -> "const " + c.floatText + " " + c.typ,
+        MirConstString -> "const \"" + c.strValue + "\"",
+        MirConstChar -> "const char(" + mirIntToString(c.charValue) + ")",
+        MirConstByte -> "const byte(" + mirIntToString(c.byteValue) + ")",
+        MirConstUnit -> "const ()",
+        MirConstNull -> "const none " + c.typ,
+        MirConstFn -> "const fn " + c.fnSymbol,
+        _ -> "(?)",
+    }
+}
+
+fn mirPrintRValue(rv: MirRValue, func: MirFunction) -> String {
+    match rv.kind {
+        MirRVUse -> "use " + mirPrintOperand(rv.arg, func),
+        MirRVUnary -> mirUnaryOpName(rv.unaryOp) + " " + mirPrintOperand(rv.arg, func),
+        MirRVBinary -> mirPrintOperand(rv.arg, func) + " "
+            + mirBinaryOpName(rv.binaryOp) + " "
+            + mirPrintOperand(rv.right, func),
+        MirRVAggregate -> {
+            if rv.aggKind == MirAggEnumVariant {
+                let tag = if rv.aggVariantTag == "" {
+                    mirIntToString(rv.aggVariantIdx)
+                } else {
+                    rv.aggVariantTag
+                }
+                "aggregate " + mirAggregateKindName(rv.aggKind) + " "
+                    + tag + "(" + mirPrintOperandList(rv.aggFields, func) + ")"
+            } else {
+                "aggregate " + mirAggregateKindName(rv.aggKind)
+                    + "(" + mirPrintOperandList(rv.aggFields, func) + ")"
+            }
+        },
+        MirRVDiscriminant -> "discriminant " + mirPrintPlace(rv.place, func),
+        MirRVLen -> "len " + mirPrintPlace(rv.place, func),
+        MirRVCast -> "cast " + mirCastKindName(rv.castKind) + " "
+            + mirPrintOperand(rv.arg, func) + " as " + rv.castTo,
+        MirRVRef -> "ref " + mirPrintPlace(rv.place, func),
+        MirRVAddressOf -> "&" + mirPrintPlace(rv.place, func),
+        MirRVGlobalRef -> "global " + rv.globalName + " " + rv.typ,
+        MirRVNullary -> mirNullaryKindName(rv.nullaryKind) + " " + rv.typ,
+        _ -> "(?)",
+    }
+}
+
+// ====================================================================
+// Enum name helpers (for printer)
+// ====================================================================
+
+fn mirUnaryOpName(op: MirUnaryOp) -> String {
+    match op {
+        MirUnNeg -> "-",
+        MirUnPlus -> "+",
+        MirUnNot -> "!",
+        MirUnBitNot -> "~",
+        _ -> "(?)",
+    }
+}
+
+fn mirBinaryOpName(op: MirBinaryOp) -> String {
+    match op {
+        MirBinAdd -> "+",
+        MirBinSub -> "-",
+        MirBinMul -> "*",
+        MirBinDiv -> "/",
+        MirBinMod -> "%",
+        MirBinEq -> "==",
+        MirBinNeq -> "!=",
+        MirBinLt -> "<",
+        MirBinLeq -> "<=",
+        MirBinGt -> ">",
+        MirBinGeq -> ">=",
+        MirBinAnd -> "&&",
+        MirBinOr -> "||",
+        MirBinBitAnd -> "&",
+        MirBinBitOr -> "|",
+        MirBinBitXor -> "^",
+        MirBinShl -> "<<",
+        MirBinShr -> ">>",
+        _ -> "(?)",
+    }
+}
+
+fn mirAggregateKindName(k: MirAggregateKind) -> String {
+    match k {
+        MirAggTuple -> "Tuple",
+        MirAggStruct -> "Struct",
+        MirAggEnumVariant -> "EnumVariant",
+        MirAggList -> "List",
+        MirAggMap -> "Map",
+        MirAggClosure -> "Closure",
+        _ -> "(?)",
+    }
+}
+
+fn mirCastKindName(k: MirCastKind) -> String {
+    match k {
+        MirCastIntResize -> "int_resize",
+        MirCastIntToFloat -> "int_to_float",
+        MirCastFloatToInt -> "float_to_int",
+        MirCastFloatResize -> "float_resize",
+        MirCastOptionalWrap -> "optional_wrap",
+        MirCastOptionalUnwrap -> "optional_unwrap",
+        MirCastBitcast -> "bitcast",
+        _ -> "(?)",
+    }
+}
+
+fn mirNullaryKindName(k: MirNullaryRVKind) -> String {
+    match k {
+        MirNullaryNone -> "none",
+        _ -> "(?)",
+    }
+}
+
+/// mirIntrinsicName returns the canonical printable name of a MIR
+/// intrinsic. Kept in sync with the Stringer-like behaviour of the Go
+/// IntrinsicKind; callers that need a stable on-disk encoding should
+/// use this rather than the raw enum tag.
+pub fn mirIntrinsicName(k: MirIntrinsicKind) -> String {
+    match k {
+        MirIntrinsicPrint -> "print",
+        MirIntrinsicPrintln -> "println",
+        MirIntrinsicEprint -> "eprint",
+        MirIntrinsicEprintln -> "eprintln",
+        MirIntrinsicAbort -> "abort",
+        MirIntrinsicStringConcat -> "string_concat",
+        MirIntrinsicChanMake -> "chan_make",
+        MirIntrinsicChanSend -> "chan_send",
+        MirIntrinsicChanRecv -> "chan_recv",
+        MirIntrinsicChanClose -> "chan_close",
+        MirIntrinsicChanIsClosed -> "chan_is_closed",
+        MirIntrinsicTaskGroup -> "task_group",
+        MirIntrinsicSpawn -> "spawn",
+        MirIntrinsicHandleJoin -> "handle_join",
+        MirIntrinsicGroupCancel -> "group_cancel",
+        MirIntrinsicGroupIsCancelled -> "group_is_cancelled",
+        MirIntrinsicParallel -> "parallel",
+        MirIntrinsicRace -> "race",
+        MirIntrinsicCollectAll -> "collect_all",
+        MirIntrinsicSelect -> "select",
+        MirIntrinsicSelectRecv -> "select_recv",
+        MirIntrinsicSelectSend -> "select_send",
+        MirIntrinsicSelectTimeout -> "select_timeout",
+        MirIntrinsicSelectDefault -> "select_default",
+        MirIntrinsicIsCancelled -> "is_cancelled",
+        MirIntrinsicCheckCancelled -> "check_cancelled",
+        MirIntrinsicYield -> "yield",
+        MirIntrinsicSleep -> "sleep",
+        MirIntrinsicListPush -> "list_push",
+        MirIntrinsicListLen -> "list_len",
+        MirIntrinsicListGet -> "list_get",
+        MirIntrinsicListIsEmpty -> "list_is_empty",
+        MirIntrinsicListFirst -> "list_first",
+        MirIntrinsicListLast -> "list_last",
+        MirIntrinsicListSorted -> "list_sorted",
+        MirIntrinsicListContains -> "list_contains",
+        MirIntrinsicListIndexOf -> "list_index_of",
+        MirIntrinsicListToSet -> "list_to_set",
+        MirIntrinsicMapNew -> "map_new",
+        MirIntrinsicMapGet -> "map_get",
+        MirIntrinsicMapSet -> "map_set",
+        MirIntrinsicMapContains -> "map_contains",
+        MirIntrinsicMapLen -> "map_len",
+        MirIntrinsicMapKeys -> "map_keys",
+        MirIntrinsicMapValues -> "map_values",
+        MirIntrinsicMapRemove -> "map_remove",
+        MirIntrinsicSetNew -> "set_new",
+        MirIntrinsicSetInsert -> "set_insert",
+        MirIntrinsicSetContains -> "set_contains",
+        MirIntrinsicSetLen -> "set_len",
+        MirIntrinsicSetToList -> "set_to_list",
+        MirIntrinsicSetRemove -> "set_remove",
+        MirIntrinsicStringLen -> "string_len",
+        MirIntrinsicStringIsEmpty -> "string_is_empty",
+        MirIntrinsicStringContains -> "string_contains",
+        MirIntrinsicStringStartsWith -> "string_starts_with",
+        MirIntrinsicStringEndsWith -> "string_ends_with",
+        MirIntrinsicStringIndexOf -> "string_index_of",
+        MirIntrinsicStringSplit -> "string_split",
+        MirIntrinsicStringTrim -> "string_trim",
+        MirIntrinsicStringToUpper -> "string_to_upper",
+        MirIntrinsicStringToLower -> "string_to_lower",
+        MirIntrinsicStringReplace -> "string_replace",
+        MirIntrinsicStringChars -> "string_chars",
+        MirIntrinsicStringBytes -> "string_bytes",
+        MirIntrinsicBytesLen -> "bytes_len",
+        MirIntrinsicBytesIsEmpty -> "bytes_is_empty",
+        MirIntrinsicBytesGet -> "bytes_get",
+        MirIntrinsicOptionIsSome -> "option_is_some",
+        MirIntrinsicOptionIsNone -> "option_is_none",
+        MirIntrinsicOptionUnwrap -> "option_unwrap",
+        MirIntrinsicOptionUnwrapOr -> "option_unwrap_or",
+        MirIntrinsicResultIsOk -> "result_is_ok",
+        MirIntrinsicResultIsErr -> "result_is_err",
+        MirIntrinsicResultUnwrap -> "result_unwrap",
+        MirIntrinsicResultUnwrapOr -> "result_unwrap_or",
+        MirIntrinsicRawNull -> "raw_null",
+        _ -> "invalid",
+    }
+}
+
+// ====================================================================
+// Formatting helpers
+// ====================================================================
+
+fn mirIndent(level: Int) -> String {
+    let mut out = ""
+    for _i in 0..level {
+        out = out + "    "
+    }
+    out
+}
+
+/// mirIntToString formats an integer using base-10 digits. Kept as a
+/// local helper so the MIR printer does not depend on any stdlib
+/// conversion that may not be available in early bootstrap.
+fn mirIntToString(n: Int) -> String {
+    if n == 0 {
+        return "0"
+    }
+    let mut value = n
+    let mut negative = false
+    if value < 0 {
+        negative = true
+        value = -value
+    }
+    let mut digits: List<Int> = []
+    for _d in 0..40 {
+        if value == 0 {
+            break
+        }
+        digits.push(value % 10)
+        value = value / 10
+    }
+    let mut out = ""
+    if negative {
+        out = "-"
+    }
+    let mut i = digits.len() - 1
+    for _j in 0..digits.len() {
+        if i < 0 {
+            break
+        }
+        out = out + mirDigitChar(digits[i])
+        i = i - 1
+    }
+    out
+}
+
+fn mirDigitChar(d: Int) -> String {
+    match d {
+        0 -> "0",
+        1 -> "1",
+        2 -> "2",
+        3 -> "3",
+        4 -> "4",
+        5 -> "5",
+        6 -> "6",
+        7 -> "7",
+        8 -> "8",
+        9 -> "9",
+        _ -> "?",
+    }
+}
+
+// ====================================================================
+// Enum name exports (useful for diagnostics / test assertions)
+// ====================================================================
+
+pub fn mirInstrKindName(k: MirInstrKind) -> String {
+    match k {
+        MirInstrAssign -> "assign",
+        MirInstrCall -> "call",
+        MirInstrIntrinsic -> "intrinsic",
+        MirInstrStorageLive -> "storage_live",
+        MirInstrStorageDead -> "storage_dead",
+        _ -> "invalid",
+    }
+}
+
+pub fn mirTermKindName(k: MirTermKind) -> String {
+    match k {
+        MirTermGoto -> "goto",
+        MirTermBranch -> "branch",
+        MirTermSwitchInt -> "switch_int",
+        MirTermReturn -> "return",
+        MirTermUnreachable -> "unreachable",
+        _ -> "invalid",
+    }
+}
+
+pub fn mirRValueKindName(k: MirRValueKind) -> String {
+    match k {
+        MirRVUse -> "use",
+        MirRVUnary -> "unary",
+        MirRVBinary -> "binary",
+        MirRVAggregate -> "aggregate",
+        MirRVDiscriminant -> "discriminant",
+        MirRVLen -> "len",
+        MirRVCast -> "cast",
+        MirRVRef -> "ref",
+        MirRVAddressOf -> "address_of",
+        MirRVGlobalRef -> "global_ref",
+        MirRVNullary -> "nullary",
+        _ -> "invalid",
+    }
+}
+
+pub fn mirConstKindName(k: MirConstKind) -> String {
+    match k {
+        MirConstInt -> "int",
+        MirConstBool -> "bool",
+        MirConstFloat -> "float",
+        MirConstString -> "string",
+        MirConstChar -> "char",
+        MirConstByte -> "byte",
+        MirConstUnit -> "unit",
+        MirConstNull -> "null",
+        MirConstFn -> "fn",
+        _ -> "invalid",
+    }
+}

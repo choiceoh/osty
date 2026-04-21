@@ -1156,23 +1156,12 @@ fn elabPoisonResult(cx: ElabCx, start: Int, end: Int) -> ElabResult {
 }
 
 fn checkIntListLenHelper(xs: List<Int>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn checkIntListAt(xs: List<Int>, idx: Int) -> Int {
-    let mut i = 0
-    for x in xs {
-        if i == idx {
-            return x
-        }
-        i = i + 1
-    }
-    return -1
+    if idx < 0 || idx >= xs.len() { return -1 }
+    xs[idx]
 }
 
 // =====================================================================
@@ -1200,6 +1189,29 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
     }
     let callee = astArenaNodeAt(cx.ast.arena, calleeIdx)
     if callee.kind == AstNField {
+        // `Expr.Num(1)` / `Value.newInt(n)` — type-qualified call at call
+        // position. The LHS is an enum/struct name (not a value), so
+        // the ordinary method-call path would emit E0745 on the LHS.
+        // Try variant constructor first, then static/instance method
+        // registered under that type name. Mirrors the dotted-variant
+        // prefix stripping elabVariantPattern does for pattern-side
+        // uses.
+        if callee.left >= 0 {
+            let fieldLhs = astArenaNodeAt(cx.ast.arena, callee.left)
+            if fieldLhs.kind == AstNIdent {
+                let variant = checkLookupVariantInOwner(cx.env, fieldLhs.text, callee.text)
+                if variant.name != "" {
+                    return elabInferVariantCall(cx, callIdx, node, callee, argIdxs, variant, [], expected)
+                }
+                let typeSig = checkLookupType(cx.env, fieldLhs.text)
+                if typeSig.name != "" {
+                    let staticSig = checkLookupMethod(cx.env, fieldLhs.text, callee.text)
+                    if staticSig.name != "" {
+                        return elabInferStaticMethodCall(cx, callIdx, node, callee, argIdxs, fieldLhs.text, staticSig, [], expected)
+                    }
+                }
+            }
+        }
         return elabInferMethodCall(cx, node, callee, expected, [])
     }
 
@@ -1251,7 +1263,7 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
 
     if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
         let coreFn = coreIdent(cx.core, baseCallee.text, IkFn, fnSigToTy(cx.env, sig), baseCallee.start, baseCallee.end)
-        let coreArgs = elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, argIdxs, node.start, node.end)
+        let coreArgs = elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, argIdxs, node.start, node.end)
         let retTy = sig.retTy
         if !(tyIsBad(cx.env.tys, expected)) {
             let _ = checkExpectAssignable(cx.env, expected, retTy, node.start, node.end)
@@ -1343,6 +1355,57 @@ fn elabInferVariantCall(
     ElabResult { node: coreCallNode, ty: retTy }
 }
 
+/// elabInferStaticMethodCall handles `Value.newInt(n)` — a call
+/// where the callee is an enum/struct type name dotted with a
+/// method that takes no self receiver. Mirrors the fn-call path
+/// (instSeedExpectedRet + elabCallArgs + zonk) but skips the
+/// receiver-value inference the ordinary elabInferMethodCall path
+/// would attempt on the LHS ident.
+fn elabInferStaticMethodCall(
+    cx: ElabCx,
+    callIdx: Int,
+    node: AstNode,
+    fieldNode: AstNode,
+    argIdxs: List<Int>,
+    ownerName: String,
+    sig: CheckFnSig,
+    explicitArgs: List<Int>,
+    expected: Int,
+) -> ElabResult {
+    let _ = ownerName
+    if checkStringListLenHelper(sig.generics) == 0 && checkIntListLenHelper(explicitArgs) == 0 {
+        let coreFn = coreIdent(cx.core, sig.name, IkFn, fnSigToTy(cx.env, sig), fieldNode.start, fieldNode.end)
+        let coreArgs = elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, argIdxs, node.start, node.end)
+        let retTy = sig.retTy
+        if !(tyIsBad(cx.env.tys, expected)) {
+            let _ = checkExpectAssignable(cx.env, expected, retTy, node.start, node.end)
+        }
+        let coreCallNode = coreCall(cx.core, coreFn, coreArgs, [], retTy, node.start, node.end)
+        return ElabResult { node: coreCallNode, ty: retTy }
+    }
+
+    let inst = instBegin(cx, sig.generics, sig.name)
+    instSeedExpectedRet(cx, inst, sig.retTy, expected)
+    instSeedPositionalArgs(cx, inst, explicitArgs)
+
+    let coreFn = coreIdent(cx.core, sig.name, IkFn, fnSigToTy(cx.env, sig), fieldNode.start, fieldNode.end)
+    let coreArgs = elabCallArgs(cx, inst.solver, sig, inst.freshs, argIdxs, node.start, node.end)
+
+    let retSubstituted = instSubstitute(cx, inst, sig.retTy)
+    let retTy = instZonk(cx, inst, retSubstituted)
+
+    elabReportUnresolvedGenerics(cx, inst.solver, sig, inst.freshs, node.start, node.end)
+    instCheckBounds(cx, inst, sig.genericBounds, node.start, node.end)
+
+    let typeArgsConcrete = instConcreteArgs(cx, inst)
+    if checkIntListLenHelper(typeArgsConcrete) > 0 {
+        checkRecordInstantiation(cx.env, callIdx, sig.name, typeArgsConcrete, retTy, node.start, node.end)
+    }
+
+    let coreCallNode = coreCall(cx.core, coreFn, coreArgs, typeArgsConcrete, retTy, node.start, node.end)
+    ElabResult { node: coreCallNode, ty: retTy }
+}
+
 /// elabOwnerNameForReceiver returns the method-owner key for a
 /// receiver type. Named types ship their head directly, but
 /// primitives (`tyPrim`) store an empty `head` because they intern
@@ -1411,7 +1474,7 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     }
 
     if checkStringListLenHelper(sig.generics) == 0 {
-        let coreArgs = elabCallArgsMonomorphic(cx, sig.name, sig.paramTys, callNode.children, callNode.start, callNode.end)
+        let coreArgs = elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, callNode.children, callNode.start, callNode.end)
         let retTy = sig.retTy
         if !(tyIsBad(cx.env.tys, expected)) {
             let _ = checkExpectAssignable(cx.env, expected, retTy, callNode.start, callNode.end)
@@ -1524,7 +1587,13 @@ fn elabCallArgs(
 ) -> List<Int> {
     let wantCount = checkIntListLenHelper(sig.paramTys)
     let gotCount = checkIntListLenHelper(argIdxs)
-    if wantCount != gotCount {
+    // Trailing params whose names start with "?" are marked as having
+    // defaults (encoded by selfhostBuildImportedFn for imported fns).
+    // An under-arity call with `gotCount >= wantCount - defaultCount`
+    // is satisfied by defaults and does NOT emit E0701.
+    let defaultCount = paramDefaultCount(sig.paramNames)
+    let minArity = wantCount - defaultCount
+    if gotCount > wantCount || gotCount < minArity {
         cx.env.diagnostics.push(diagArgCount(sig.name, wantCount, gotCount, start, end))
     }
     let mut coreArgs: List<Int> = []
@@ -1539,7 +1608,18 @@ fn elabCallArgs(
         let rawWant = checkIntListAt(sig.paramTys, i)
         let specialisedWant = checkSubstituteTy(cx.env, rawWant, sig.generics, freshs)
         let hint = zonk(cx.env, solver, specialisedWant)
-        let r = if isFullyResolved(cx.env, solver, hint) {
+        // Closure arguments: if the hint is `fn(P..) -> R` with params
+        // fully resolved (even if R is still open), pass it so the
+        // closure can seed its param slots from P. `results.map(|r| ..)`
+        // is the canonical case: T is bound from the receiver, so P is
+        // concrete, but R is still open until the body is inferred.
+        // Arity mismatches with unresolved param TyVars stay on the
+        // elabInfer path — the outer unify still flags a failure but
+        // without a spurious closure-arity diag against a TyVar-based
+        // shape.
+        let hintIsFnWithConcreteParams = tyKindAt(cx.env.tys, hint) == TkFn
+            && allFullyResolved(cx.env, solver, tyArgsAt(cx.env.tys, hint))
+        let r = if isFullyResolved(cx.env, solver, hint) || hintIsFnWithConcreteParams {
             elabCheck(cx, argIdx, hint)
         } else {
             elabInfer(cx, argIdx)
@@ -1549,6 +1629,28 @@ fn elabCallArgs(
         i = i + 1
     }
     coreArgs
+}
+
+/// paramDefaultCount counts trailing paramNames whose text starts with
+/// a "?" marker. The `?` prefix is injected by the Osty→selfhost import
+/// surface for params that carry default expressions; it lets the
+/// arity check treat missing trailing args as satisfied without
+/// threading a List<Bool> through every CheckFnSig constructor.
+///
+/// Forward-walk with reset-on-break: every non-"?" name resets the
+/// running total, so the final value is the length of the contiguous
+/// "?"-prefixed suffix. This avoids needing reverse indexing on
+/// List<String>.
+fn paramDefaultCount(names: List<String>) -> Int {
+    let mut running = 0
+    for name in names {
+        if name.startsWith("?") {
+            running = running + 1
+        } else {
+            running = 0
+        }
+    }
+    running
 }
 
 /// elabIsToStringFormatter returns true when `callee` is one of the
@@ -1568,9 +1670,23 @@ fn elabCallArgsMonomorphic(
     start: Int,
     end: Int,
 ) -> List<Int> {
+    elabCallArgsMonomorphicWithNames(cx, callee, [], paramTys, argIdxs, start, end)
+}
+
+fn elabCallArgsMonomorphicWithNames(
+    cx: ElabCx,
+    callee: String,
+    paramNames: List<String>,
+    paramTys: List<Int>,
+    argIdxs: List<Int>,
+    start: Int,
+    end: Int,
+) -> List<Int> {
     let wantCount = checkIntListLenHelper(paramTys)
     let gotCount = checkIntListLenHelper(argIdxs)
-    if wantCount != gotCount {
+    let defaultCount = paramDefaultCount(paramNames)
+    let minArity = wantCount - defaultCount
+    if gotCount > wantCount || gotCount < minArity {
         cx.env.diagnostics.push(diagArgCount(callee, wantCount, gotCount, start, end))
     }
     let skipParamCheck = elabIsToStringFormatter(callee)
@@ -1771,6 +1887,23 @@ fn elabInferTurbofish(cx: ElabCx, node: AstNode) -> ElabResult {
 // ---------------------------------------------------------------------
 
 fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
+    // `EvalError.DivByZero` — enum-qualified bare variant used as a
+    // value expression (no call parens). The LHS is the enum name,
+    // not a runtime value, so the ordinary receiver-inference below
+    // would emit E0745. If LHS resolves to a registered type and the
+    // field text names a payload-free variant, synthesize the variant
+    // reference directly.
+    if node.left >= 0 {
+        let lhs = astArenaNodeAt(cx.ast.arena, node.left)
+        if lhs.kind == AstNIdent {
+            let variant = checkLookupVariantInOwner(cx.env, lhs.text, node.text)
+            if variant.name != "" && checkIntListLenHelper(variant.fieldTys) == 0 {
+                let variantTy = elabVariantOwnerType(cx, variant)
+                let coreIdx = coreIdent(cx.core, node.text, IkVariant, variantTy, node.start, node.end)
+                return ElabResult { node: coreIdx, ty: variantTy }
+            }
+        }
+    }
     let recv = elabInfer(cx, node.left)
     let recvTy = checkResolveAliasDeep(cx.env, recv.ty)
     if tyIsBad(cx.env.tys, recvTy) {
@@ -1832,12 +1965,7 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
 }
 
 fn checkStringListLenHelper(xs: List<String>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn parseTupleIndex(text: String) -> Int {
@@ -2201,7 +2329,15 @@ fn elabInferClosure(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     }
 
     let bodyIdx = node.left
-    let body = if !(tyIsBad(tys, expectedRet)) {
+    // When expected is `fn(T) -> TyVar(R)` — e.g. `xs.map(|r| body)`
+    // with the outer solver still open — using elabCheck on the body
+    // would route through elabCheckViaInfer's `checkExpectAssignable`
+    // which does not treat TyVar as a wildcard and would emit a
+    // spurious mismatch. Fall back to elabInfer when the expected
+    // return is a bare TyVar; the outer elabCallArgs `unify` still
+    // binds R from the closure's inferred type.
+    let expectedRetIsVar = tyKindAt(tys, expectedRet) == TkVar
+    let body = if !(tyIsBad(tys, expectedRet)) && !expectedRetIsVar {
         elabCheck(cx, bodyIdx, expectedRet)
     } else {
         elabInfer(cx, bodyIdx)
@@ -2257,11 +2393,21 @@ fn elabInferIf(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     } else {
         elabInfer(cx, node.right)
     }
-    let else_ = if node.extra >= 0 {
+    // Parser stores the else branch at children[0] (patIdx at children[1]
+    // for `if let`); node.extra stays at the default -1. Reading
+    // node.extra would skip every else / else-if arm and leave the
+    // subtree untyped — including `n.kind` in `else if n.kind == …`,
+    // which then regens to a raw `==` instead of `ostyEqual`.
+    let elseIdx = if checkIntListLen(node.children) > 0 {
+        checkIntListAt(node.children, 0)
+    } else {
+        -1
+    }
+    let else_ = if elseIdx >= 0 {
         if hasExpected {
-            elabCheck(cx, node.extra, expected)
+            elabCheck(cx, elseIdx, expected)
         } else {
-            elabCheck(cx, node.extra, then_.ty)
+            elabCheck(cx, elseIdx, then_.ty)
         }
     } else {
         // Missing else branch — synthesize a unit expression.
@@ -2275,7 +2421,7 @@ fn elabInferIf(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         joinTypes(cx.env, then_.ty, else_.ty)
     }
 
-    let elseNode = if node.extra >= 0 { else_.node } else { -1 }
+    let elseNode = if elseIdx >= 0 { else_.node } else { -1 }
     let coreIdx = coreIf(cx.core, cond.node, then_.node, elseNode, resultTy, node.start, node.end)
     ElabResult { node: coreIdx, ty: resultTy }
 }
@@ -3436,12 +3582,7 @@ fn allVariantsForOwner(env: CheckEnv, owner: String) -> List<CheckVariantSig> {
 }
 
 fn checkVariantListLen(xs: List<CheckVariantSig>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn lastPathSegment(s: String) -> String {
@@ -3806,12 +3947,7 @@ fn pmExhaustivenessWitnessAt(cx: ElabCx, rows: List<List<Int>>, colTys: List<Int
 }
 
 fn pmWitnessesCount(xs: List<String>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn pmPrependWitnesses(prefix: String, ws: List<String>, startSeen: Int) -> List<String> {
@@ -4047,12 +4183,7 @@ fn pmStructFieldsForOwner(env: CheckEnv, owner: String) -> List<CheckFieldSig> {
 }
 
 fn checkFieldListLen(xs: List<CheckFieldSig>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn pmVariantCtor(cx: ElabCx, v: CheckVariantSig, colTy: Int) -> PmCtor {
@@ -4335,21 +4466,11 @@ fn intListConcat(a: List<Int>, b: List<Int>) -> List<Int> {
 }
 
 fn checkListOfRowsLen(xs: List<List<Int>>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn checkCtorListLen(xs: List<PmCtor>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 // =====================================================================

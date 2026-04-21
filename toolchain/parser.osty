@@ -152,29 +152,20 @@ pub fn astUseDeclIsGroup(n: AstNode) -> Bool {
 }
 
 pub fn astArenaAdd(arena: AstArena, node: AstNode) -> Int {
-    let idx = astArenaNodeCount(arena)
+    let idx = arena.nodes.len()
     arena.nodes.push(node)
     idx
 }
 
 pub fn astArenaNodeCount(arena: AstArena) -> Int {
-    let mut count = 0
-    for n in arena.nodes {
-        let _ = n
-        count = count + 1
-    }
-    count
+    arena.nodes.len()
 }
 
 pub fn astArenaNodeAt(arena: AstArena, idx: Int) -> AstNode {
-    let mut i = 0
-    for n in arena.nodes {
-        if i == idx {
-            return n
-        }
-        i = i + 1
+    if idx < 0 || idx >= arena.nodes.len() {
+        return emptyAstNode(AstNError)
     }
-    emptyAstNode(AstNError)
+    arena.nodes[idx]
 }
 
 // ===================================================================
@@ -310,26 +301,15 @@ fn opErrorFull(p: OstyParser, msg: String, hint: String, note: String, code: Str
     p.arena.errors.push(AstParseError { message: msg, tokenIndex: p.pos, hint, note, code })
 }
 
-fn opError(p: OstyParser, msg: String) { opErrorFull(p, msg, "", "", "") }
-
 fn opAddNode(p: OstyParser, node: AstNode) -> Int { astArenaAdd(p.arena, node) }
 
 fn opIntListCount(xs: List<Int>) -> Int {
-    let mut c = 0
-    for x in xs {
-        let _ = x
-        c = c + 1
-    }
-    c
+    xs.len()
 }
 
 fn opIntListAt(xs: List<Int>, target: Int) -> Int {
-    let mut i = 0
-    for x in xs {
-        if i == target { return x }
-        i = i + 1
-    }
-    -1
+    if target < 0 || target >= xs.len() { return -1 }
+    xs[target]
 }
 
 fn opIsLiteralDefaultAt(p: OstyParser, idx: Int) -> Bool {
@@ -394,17 +374,12 @@ fn opSyncStmt(p: OstyParser) {
 }
 
 fn opErrorCount(p: OstyParser) -> Int {
-    let mut c = 0
-    for e in p.arena.errors { let _ = e
-    c = c + 1 }
-    c
+    p.arena.errors.len()
 }
 
 fn opTruncateErrors(p: OstyParser, target: Int) {
-    let mut cur = opErrorCount(p)
-    for cur > target {
+    for p.arena.errors.len() > target {
         let _ = p.arena.errors.pop()
-        cur = cur - 1
     }
 }
 
@@ -892,7 +867,7 @@ fn opParseClosure(p: OstyParser) -> Int {
                 paramNode.text = opAdvance(p).text
             }
         } else {
-            opError(p, "expected closure parameter")
+            opErrorFull(p, "expected closure parameter", "use an identifier, `_`, or a destructuring pattern like `(a, b)` or `User \{ name \}`", "", "E0205")
             let _ = opAdvance(p)
         }
         if opEat(p, FrontColon) { paramNode.right = opParseType(p) }
@@ -960,7 +935,12 @@ fn opTryParsePostfix(p: OstyParser, lhs: Int) -> Int {
         n.end = p.pos
         return opAddNode(p, n)
     }
-    if tok.kind == FrontColonColon && opPeekAt(p, 1).kind == FrontLt { return opParseTurbofish(p, lhs) }
+    if tok.kind == FrontColonColon {
+        if opPeekAt(p, 1).kind == FrontLt { return opParseTurbofish(p, lhs) }
+        opErrorFull(p, "`::` must be followed by `<`", "`::` is reserved for turbofish type arguments; use `.` for member access", "", "E0201")
+        opAdvance(p)
+        return 0 - 1
+    }
     if tok.kind == FrontLBrace && !(p.noStructLit) && lhs >= 0 {
         let leftNode = astArenaNodeAt(p.arena, lhs)
         if leftNode.kind == AstNIdent && astIsUpperName(leftNode.text) { return opParseStructLit(p, lhs) }
@@ -1479,7 +1459,7 @@ fn opParsePatternOneAlt(p: OstyParser) -> Int {
         n.end = p.pos
         return opAddNode(p, n)
     }
-    opError(p, "expected pattern")
+    opErrorFull(p, "expected pattern", "supply a literal, variant, struct, tuple, or `_` pattern", "", "E0301")
     opAdvance(p)
     let mut n = emptyAstNode(AstNPattern)
     n.extra = astPatternErrorKind()
@@ -1493,14 +1473,26 @@ fn opParsePatternOneAlt(p: OstyParser) -> Int {
 
 fn opParseType(p: OstyParser) -> Int {
     let mut ty = opParseTypeAtom(p)
-    for opAt(p, FrontQuestion) { let s = p.pos
-    opAdvance(p)
-    let mut n = emptyAstNode(AstNType)
-    n.text = "optional"
-    n.left = ty
-    n.start = s
-    n.end = p.pos
-    ty = opAddNode(p, n) }
+    for opAt(p, FrontQuestion) || opAt(p, FrontQQ) {
+        let s = p.pos
+        let isDouble = opAt(p, FrontQQ)
+        opAdvance(p)
+        let mut n = emptyAstNode(AstNType)
+        n.text = "optional"
+        n.left = ty
+        n.start = s
+        n.end = p.pos
+        ty = opAddNode(p, n)
+        if isDouble {
+            let s2 = p.pos
+            let mut n2 = emptyAstNode(AstNType)
+            n2.text = "optional"
+            n2.left = ty
+            n2.start = s2
+            n2.end = p.pos
+            ty = opAddNode(p, n2)
+        }
+    }
     ty
 }
 
@@ -1724,8 +1716,20 @@ fn opParseDecl(p: OstyParser) -> Int {
     if tok.kind == FrontEnum { return opParseEnumDecl(p, isPub, anns) }
     if tok.kind == FrontInterface { return opParseInterfaceDecl(p, isPub, anns) }
     if tok.kind == FrontType { return opParseTypeAliasDecl(p, isPub, anns) }
-    if opIsUseHead(tok) { return opParseUseDecl(p, isPub) }
+    if opIsUseHead(tok) {
+        if opIntListCount(anns) > 0 {
+            opErrorFull(p, "annotation on the wrong kind of declaration", "annotations are not permitted on `use` statements", "", "E0607")
+        }
+        return opParseUseDecl(p, isPub)
+    }
     if tok.kind == FrontLet { return opParseLetStmt(p, anns) }
+    if tok.kind == FrontDefer {
+        opErrorFull(p, "`defer` is not allowed at the top level of a script", "move this `defer` inside a function body — it binds to the enclosing function's return", "", "E0608")
+        opSyncDecl(p)
+        let mut n = emptyAstNode(AstNError)
+        n.start = p.pos
+        return opAddNode(p, n)
+    }
     let errKindName = frontTokenKindName(tok.kind)
     opErrorFull(p, "expected declaration, got {errKindName}", "a declaration starts with `fn`, `struct`, `enum`, `interface`, `type`, `use`, or `let`", "", "E0100")
     opSyncDecl(p)
@@ -1810,7 +1814,7 @@ fn opParseStructDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
             fNode.extra = opPackAnnotations(p, memberAnns)
             members.push(opAddNode(p, fNode))
         } else {
-            opError(p, "expected field or method in struct")
+            opErrorFull(p, "expected field or method in struct", "a struct body accepts `name: Type` fields and `fn name(...)` methods", "", "E0107")
             let _ = opAdvance(p)
         }
         opSkipNewlines(p)
@@ -1859,7 +1863,7 @@ fn opParseEnumDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
             vNode.extra = opPackAnnotations(p, memberAnns)
             members.push(opAddNode(p, vNode))
         } else {
-            opError(p, "expected variant or method in enum")
+            opErrorFull(p, "expected variant or method in enum", "an enum body accepts `VariantName` / `VariantName(T, U)` variants and `fn name(...)` methods", "", "E0108")
             let _ = opAdvance(p)
         }
         opSkipNewlines(p)
@@ -1894,7 +1898,7 @@ fn opParseInterfaceDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
         } else if opAt(p, FrontIdent) {
             members.push(opParseType(p))
         } else {
-            opError(p, "expected method or type in interface")
+            opErrorFull(p, "expected method or type in interface", "an interface body accepts `fn name(self) -> T` method signatures and associated type names", "", "E0109")
             let _ = opAdvance(p)
         }
         opSkipNewlines(p)
@@ -1968,7 +1972,14 @@ fn opParseUseDecl(p: OstyParser, isPub: Bool) -> Int {
         for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
             let bodyAnns = opParseAnnotations(p)
             if opAt(p, FrontFn) {
-                goItems.push(opParseFnDecl(p, false, bodyAnns))
+                let fnIdx = opParseFnDecl(p, false, bodyAnns)
+                if isGo {
+                    let fnNode = astArenaNodeAt(p.arena, fnIdx)
+                    if fnNode.right >= 0 {
+                        opErrorFull(p, "`use go` functions must not have a body", "declare only the signature: `fn Name(...) -> Ret`", "", "E0101")
+                    }
+                }
+                goItems.push(fnIdx)
             } else if opAt(p, FrontStruct) {
                 goItems.push(opParseStructDecl(p, false, bodyAnns))
             } else if opAt(p, FrontType) {
@@ -2061,16 +2072,25 @@ fn opParseUsePath(p: OstyParser) -> String {
     if !(opAt(p, FrontIdent)) {
         return ""
     }
-    let mut out = opAdvance(p).text
+    let mut parts: List<String> = []
+    let mut sawSlash = false
+    let mut mixedReported = false
+    parts.push(opAdvance(p).text)
     for {
         let sep = opUsePathSep(p)
         if sep == "" || opPeekAt(p, 1).kind != FrontIdent {
             break
         }
+        if sep == "/" { sawSlash = true }
+        if sep == "." && sawSlash && !mixedReported {
+            opErrorFull(p, "mixed `.` and `/` separators in use path", "registry paths may only use `.` before the first `/` (`github.com/user/lib`)", "", "E0104")
+            mixedReported = true
+        }
         let _ = opAdvance(p)
-        out = "{out}{sep}{opAdvance(p).text}"
+        parts.push(sep)
+        parts.push(opAdvance(p).text)
     }
-    out
+    strings.join(parts, "")
 }
 
 fn opUsePathSep(p: OstyParser) -> String {
@@ -2105,26 +2125,32 @@ pub fn astPrettyPrint(file: AstFile) -> String {
 }
 
 fn astPPNode(arena: AstArena, idx: Int, depth: Int, lines: List<String>) -> List<String> {
+    // Rename the mutable alias away from `lines` so bootstrap-gen
+    // doesn't emit `lines := lines` (Go compile error: "no new
+    // variables on left side of :=" when the parameter shares the
+    // identifier). The List is heap-managed so `push` in place and
+    // the return value carry the same identity either way.
+    let mut out = lines
     if idx < 0 {
-        return lines
+        return out
     }
     let node = astArenaNodeAt(arena, idx)
     let indent = strings.repeat("  ", depth)
     let kindName = astNodeKindName(node.kind)
-    if node.text != "" { lines.push("{indent}{kindName} \"{node.text}\"") } else { lines.push("{indent}{kindName}") }
+    if node.text != "" { out.push("{indent}{kindName} \"{node.text}\"") } else { out.push("{indent}{kindName}") }
     if node.left >= 0 {
-        lines = astPPNode(arena, node.left, depth + 1, lines)
+        out = astPPNode(arena, node.left, depth + 1, out)
     }
     if node.right >= 0 {
-        lines = astPPNode(arena, node.right, depth + 1, lines)
+        out = astPPNode(arena, node.right, depth + 1, out)
     }
     for child in node.children {
-        lines = astPPNode(arena, child, depth + 1, lines)
+        out = astPPNode(arena, child, depth + 1, out)
     }
     for child in node.children2 {
-        lines = astPPNode(arena, child, depth + 1, lines)
+        out = astPPNode(arena, child, depth + 1, out)
     }
-    lines
+    out
 }
 
 pub fn astNodeKindName(kind: AstNodeKind) -> String {
@@ -2172,28 +2198,22 @@ pub fn astParse(source: String) -> AstFile {
 pub fn astParseSummary(source: String) -> FrontParseSummary { let file = astParse(source)
 astCountSummary(file) }
 
-pub fn astFileDeclCount(file: AstFile) -> Int { let mut c = 0
-for d in file.arena.decls { let _ = d
-c = c + 1 }
-c }
+pub fn astFileDeclCount(file: AstFile) -> Int { file.arena.decls.len() }
 pub fn astFileNodeCount(file: AstFile) -> Int { astArenaNodeCount(file.arena) }
-pub fn astFileErrorCount(file: AstFile) -> Int { let mut c = 0
-for e in file.arena.errors { let _ = e
-c = c + 1 }
-c }
+pub fn astFileErrorCount(file: AstFile) -> Int { file.arena.errors.len() }
 
 pub fn astFileDeclAt(file: AstFile, idx: Int) -> AstNode {
-    let mut i = 0
-    for d in file.arena.decls { if i == idx { return astArenaNodeAt(file.arena, d) }
-    i = i + 1 }
-    emptyAstNode(AstNError)
+    if idx < 0 || idx >= file.arena.decls.len() {
+        return emptyAstNode(AstNError)
+    }
+    astArenaNodeAt(file.arena, file.arena.decls[idx])
 }
 
 pub fn astFileErrorAt(file: AstFile, idx: Int) -> AstParseError {
-    let mut i = 0
-    for e in file.arena.errors { if i == idx { return e }
-    i = i + 1 }
-    AstParseError { message: "", tokenIndex: 0, hint: "", note: "", code: "" }
+    if idx < 0 || idx >= file.arena.errors.len() {
+        return AstParseError { message: "", tokenIndex: 0, hint: "", note: "", code: "" }
+    }
+    file.arena.errors[idx]
 }
 
 pub fn astCountNodeKind(file: AstFile, kind: AstNodeKind) -> Int { let mut c = 0

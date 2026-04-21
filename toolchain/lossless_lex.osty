@@ -285,12 +285,7 @@ fn losslessLexemeFromUnits(units: List<String>, start: Int, length: Int) -> Stri
 }
 
 fn losslessUnitCountOfList(units: List<String>) -> Int {
-    let mut count = 0
-    for u in units {
-        let _ = u
-        count = count + 1
-    }
-    count
+    units.len()
 }
 
 // -------------------------------------------------------------------
@@ -498,34 +493,17 @@ fn losslessBuildTokens(
 }
 
 fn losslessTriviaCount(trivia: List<LosslessTrivia>) -> Int {
-    let mut count = 0
-    for t in trivia {
-        let _ = t
-        count = count + 1
-    }
-    count
+    trivia.len()
 }
 
 fn losslessStringAt(items: List<String>, target: Int) -> String {
-    let mut idx = 0
-    for item in items {
-        if idx == target {
-            return item
-        }
-        idx = idx + 1
-    }
-    ""
+    if target < 0 || target >= items.len() { return "" }
+    items[target]
 }
 
 fn losslessIntAt(items: List<Int>, target: Int) -> Int {
-    let mut idx = 0
-    for item in items {
-        if idx == target {
-            return item
-        }
-        idx = idx + 1
-    }
-    0
+    if target < 0 || target >= items.len() { return 0 }
+    items[target]
 }
 
 // -------------------------------------------------------------------
@@ -1069,12 +1047,7 @@ pub fn losslessTokenAt(stream: LosslessStream, target: Int) -> LosslessToken {
 }
 
 pub fn losslessDiagnosticCount(stream: LosslessStream) -> Int {
-    let mut c = 0
-    for d in stream.diagnostics {
-        let _ = d
-        c = c + 1
-    }
-    c
+    stream.diagnostics.len()
 }
 
 pub fn losslessLeadingTrivia(stream: LosslessStream, tokenIdx: Int) -> List<LosslessTrivia> {

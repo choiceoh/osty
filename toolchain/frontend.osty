@@ -1760,103 +1760,48 @@ pub fn frontLineHasIndent(units: List<String>, start: Int, end: Int, indent: Int
 }
 
 pub fn frontLexTokenCount(stream: FrontLexStream) -> Int {
-    let mut count = 0
-    for tok in stream.tokens {
-        let _ = tok
-        count = count + 1
-    }
-    count
+    stream.tokens.len()
 }
 
 pub fn frontLexDiagnosticCount(stream: FrontLexStream) -> Int {
-    let mut count = 0
-    for diag in stream.diagnostics {
-        let _ = diag
-        count = count + 1
-    }
-    count
+    stream.diagnostics.len()
 }
 
 pub fn frontCommentCount(stream: FrontLexStream) -> Int {
-    let mut count = 0
-    for comment in stream.comments {
-        let _ = comment
-        count = count + 1
-    }
-    count
+    stream.comments.len()
 }
 
 pub fn frontStringPartCount(stream: FrontLexStream) -> Int {
-    let mut count = 0
-    for part in stream.stringParts {
-        let _ = part
-        count = count + 1
-    }
-    count
+    stream.stringParts.len()
 }
 
 pub fn frontInterpolationTokenCount(stream: FrontLexStream) -> Int {
-    let mut count = 0
-    for token in stream.interpolationTokens {
-        let _ = token
-        count = count + 1
-    }
-    count
+    stream.interpolationTokens.len()
 }
 
 pub fn frontLexTokenAt(stream: FrontLexStream, target: Int) -> FrontLexToken {
-    let mut idx = 0
-    for tok in stream.tokens {
-        if idx == target {
-            return tok
-        }
-        idx = idx + 1
-    }
-    emptyFrontLexToken()
+    if target < 0 || target >= stream.tokens.len() { return emptyFrontLexToken() }
+    stream.tokens[target]
 }
 
 pub fn frontLexDiagnosticAt(stream: FrontLexStream, target: Int) -> FrontLexDiagnostic {
-    let mut idx = 0
-    for diag in stream.diagnostics {
-        if idx == target {
-            return diag
-        }
-        idx = idx + 1
-    }
-    emptyFrontLexDiagnostic()
+    if target < 0 || target >= stream.diagnostics.len() { return emptyFrontLexDiagnostic() }
+    stream.diagnostics[target]
 }
 
 pub fn frontCommentAt(stream: FrontLexStream, target: Int) -> FrontComment {
-    let mut idx = 0
-    for comment in stream.comments {
-        if idx == target {
-            return comment
-        }
-        idx = idx + 1
-    }
-    emptyFrontComment()
+    if target < 0 || target >= stream.comments.len() { return emptyFrontComment() }
+    stream.comments[target]
 }
 
 pub fn frontStringPartAt(stream: FrontLexStream, target: Int) -> FrontStringPart {
-    let mut idx = 0
-    for part in stream.stringParts {
-        if idx == target {
-            return part
-        }
-        idx = idx + 1
-    }
-    emptyFrontStringPart()
+    if target < 0 || target >= stream.stringParts.len() { return emptyFrontStringPart() }
+    stream.stringParts[target]
 }
 
 pub fn frontInterpolationTokenAt(stream: FrontLexStream, target: Int) -> FrontInterpolationToken {
-    let mut idx = 0
-    for token in stream.interpolationTokens {
-        if idx == target {
-            return token
-        }
-        idx = idx + 1
-    }
-    emptyFrontInterpolationToken()
+    if target < 0 || target >= stream.interpolationTokens.len() { return emptyFrontInterpolationToken() }
+    stream.interpolationTokens[target]
 }
 
 pub fn frontendParseLexedSummary(source: String) -> FrontParseSummary {
@@ -3296,23 +3241,12 @@ pub fn frontendParseRichSummary(source: String) -> FrontParseSummary {
 }
 
 pub fn frontTokenListCount(tokens: List<FrontToken>) -> Int {
-    let mut count = 0
-    for tok in tokens {
-        let _ = tok
-        count = count + 1
-    }
-    count
+    tokens.len()
 }
 
 pub fn frontTokenAtList(tokens: List<FrontToken>, target: Int) -> FrontToken {
-    let mut idx = 0
-    for tok in tokens {
-        if idx == target {
-            return tok
-        }
-        idx = idx + 1
-    }
-    frontEOF()
+    if target < 0 || target >= tokens.len() { return frontEOF() }
+    tokens[target]
 }
 
 pub fn frontLeadingDocAttachmentCount(stream: FrontLexStream) -> Int {

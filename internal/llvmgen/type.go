@@ -394,6 +394,9 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		if src, ok := g.staticStdStringsCallSourceType(e); ok {
 			return src, true
 		}
+		if src, ok := g.staticMapMethodSourceType(e); ok {
+			return src, true
+		}
 		if id, ok := e.Fn.(*ast.Ident); ok {
 			if sig := g.functions[id.Name]; sig != nil && sig.returnSourceType != nil {
 				return sig.returnSourceType, true
@@ -785,6 +788,59 @@ func (g *generator) staticStdStringsCallSourceType(call *ast.CallExpr) (ast.Type
 	return nil, false
 }
 
+// staticMapMethodSourceType recovers the source-level return type of
+// a Map intrinsic method call so downstream passes (notably the
+// `??` coalesce emitter that demands an Option<V> source type)
+// can reason about `self.get(k) ?? default` inside specialized
+// Map method bodies. Returns `(nil, false)` unless the call is a
+// FieldExpr on a receiver with mapKey/mapValue metadata.
+//
+// Method → source-type map:
+//
+//	len              → Int
+//	isEmpty          → Bool
+//	containsKey(K)   → Bool
+//	get(K)           → V?           (Option<V>, what feeds `??`)
+//	keys()           → List<K>
+//
+// Other map methods (getOr / update / retainIf / mergeWith /
+// mapValues / …) are either bodied (their source type flows from the
+// body) or not yet exercised at this layer.
+func (g *generator) staticMapMethodSourceType(call *ast.CallExpr) (ast.Type, bool) {
+	field, keyTyp, valTyp, _, found := g.mapMethodInfo(call)
+	if !found {
+		return nil, false
+	}
+	_ = keyTyp
+	_ = valTyp
+	baseSrc, ok := g.staticExprSourceType(field.X)
+	if !ok {
+		return nil, false
+	}
+	resolved, err := llvmResolveAliasType(baseSrc, g.typeEnv(), map[string]bool{})
+	if err != nil {
+		return nil, false
+	}
+	named, ok := resolved.(*ast.NamedType)
+	if !ok || len(named.Path) != 1 || named.Path[0] != "Map" || len(named.Args) != 2 {
+		return nil, false
+	}
+	keyAST := named.Args[0]
+	valAST := named.Args[1]
+	switch field.Name {
+	case "len":
+		return &ast.NamedType{Path: []string{"Int"}}, true
+	case "isEmpty", "containsKey":
+		return &ast.NamedType{Path: []string{"Bool"}}, true
+	case "get":
+		// V? — wraps the Map's value type.
+		return &ast.OptionalType{Inner: valAST}, true
+	case "keys":
+		return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{keyAST}}, true
+	}
+	return nil, false
+}
+
 func (g *generator) staticStringMethodSourceType(call *ast.CallExpr) (ast.Type, bool) {
 	field, ok := g.stringMethodInfo(call)
 	if !ok {
@@ -793,14 +849,14 @@ func (g *generator) staticStringMethodSourceType(call *ast.CallExpr) (ast.Type, 
 	switch field.Name {
 	case "len":
 		return &ast.NamedType{Path: []string{"Int"}}, true
-	case "isEmpty", "startsWith":
+	case "isEmpty", "startsWith", "endsWith", "contains":
 		return &ast.NamedType{Path: []string{"Bool"}}, true
 	case "split":
 		return &ast.NamedType{
 			Path: []string{"List"},
 			Args: []ast.Type{&ast.NamedType{Path: []string{"String"}}},
 		}, true
-	case "trim", "toString":
+	case "trim", "trimPrefix", "trimSuffix", "toString":
 		return &ast.NamedType{Path: []string{"String"}}, true
 	case "chars":
 		return &ast.NamedType{
@@ -864,12 +920,12 @@ func (g *generator) staticStringMethodResult(call *ast.CallExpr) (value, bool) {
 	switch field.Name {
 	case "len":
 		return value{typ: "i64"}, true
-	case "isEmpty", "startsWith":
+	case "isEmpty", "startsWith", "endsWith", "contains":
 		return value{typ: "i1"}, true
 	case "split":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true}, true
-	case "trim", "toString":
-		return value{typ: "ptr", gcManaged: true}, true
+	case "trim", "trimPrefix", "trimSuffix", "toString":
+		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"String"}}}, true
 	case "chars":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "i32"}, true
 	case "bytes":
@@ -893,7 +949,9 @@ func (g *generator) stringMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, bool) 
 		return nil, false
 	}
 	switch field.Name {
-	case "len", "isEmpty", "startsWith", "split", "trim", "toString", "chars", "bytes":
+	case "len", "isEmpty", "startsWith", "endsWith", "contains",
+		"trimPrefix", "trimSuffix",
+		"split", "trim", "toString", "chars", "bytes":
 		return field, true
 	default:
 		return nil, false
@@ -915,8 +973,8 @@ func (g *generator) staticCollectionMethodResult(call *ast.CallExpr) (value, boo
 			return value{}, true, false
 		}
 	}
-	if _, keyTyp, _, keyString, found := g.mapMethodInfo(call); found {
-		switch field := call.Fn.(*ast.FieldExpr); field.Name {
+	if field, keyTyp, _, keyString, found := g.mapMethodInfo(call); found {
+		switch field.Name {
 		case "len":
 			return value{typ: "i64"}, true, true
 		case "isEmpty":
@@ -931,8 +989,8 @@ func (g *generator) staticCollectionMethodResult(call *ast.CallExpr) (value, boo
 			return value{}, true, false
 		}
 	}
-	if _, elemTyp, elemString, found := g.setMethodInfo(call); found {
-		switch field := call.Fn.(*ast.FieldExpr); field.Name {
+	if field, elemTyp, elemString, found := g.setMethodInfo(call); found {
+		switch field.Name {
 		case "len":
 			return value{typ: "i64"}, true, true
 		case "isEmpty":
@@ -981,7 +1039,7 @@ func (g *generator) listMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, 
 		return nil, "", false, false
 	}
 	switch field.Name {
-	case "len", "isEmpty", "pop", "push", "sorted", "toSet":
+	case "len", "isEmpty", "pop", "push", "insert", "sorted", "toSet", "clear":
 	default:
 		return nil, "", false, false
 	}
@@ -998,7 +1056,7 @@ func (g *generator) mapMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, s
 		return nil, "", "", false, false
 	}
 	switch field.Name {
-	case "containsKey", "insert", "remove", "keys", "len", "isEmpty":
+	case "containsKey", "insert", "remove", "keys", "len", "isEmpty", "get", "getOr", "update", "retainIf", "mergeWith", "mapValues", "clear":
 	default:
 		return nil, "", "", false, false
 	}

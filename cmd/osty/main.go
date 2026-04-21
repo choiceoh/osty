@@ -92,6 +92,12 @@ type cliFlags struct {
 	// once the native-checker boundary has been invoked. Off by default;
 	// nil-safe when the native checker was unavailable.
 	dumpNativeDiags bool
+	// suppressSummary silences the `N error(s), M warning(s)` trailer
+	// inside a single printDiags call. The package-diagnostic walker sets
+	// this per-file bucket and then prints one consolidated summary
+	// afterwards, so multi-file failures don't emit a summary line per
+	// file. Never surfaced as a CLI flag.
+	suppressSummary bool
 }
 
 func main() {
@@ -457,7 +463,7 @@ func main() {
 		parsed := parser.ParseDetailed(src)
 		file, diags := parsed.File, parsed.Diagnostics
 		res := resolveFile(file)
-		chk := check.File(file, res, checkOptsForSource(canonical.Source(src, file)))
+		chk := check.File(file, res, checkOptsForFile(path, canonical.Source(src, file)))
 		all := append(append(append([]*diag.Diagnostic{}, diags...), res.Diags...), chk.Diags...)
 		printDiags(formatter, all, flags)
 		if flags.inspect {
@@ -473,7 +479,7 @@ func main() {
 		parsed := parser.ParseDetailed(src)
 		file, diags := parsed.File, parsed.Diagnostics
 		res := resolveFile(file)
-		chk := check.File(file, res, checkOptsForSource(canonical.Source(src, file)))
+		chk := check.File(file, res, checkOptsForFile(path, canonical.Source(src, file)))
 		all := append(append(append([]*diag.Diagnostic{}, diags...), res.Diags...), chk.Diags...)
 		printDiags(formatter, all, flags)
 		printTypes(chk)
@@ -516,7 +522,7 @@ func main() {
 		parsed := parser.ParseDetailed(src)
 		file, parseDiags := parsed.File, parsed.Diagnostics
 		res := resolveFile(file)
-		chk := check.File(file, res, checkOptsForSource(canonical.Source(src, file)))
+		chk := check.File(file, res, checkOptsForFile(path, canonical.Source(src, file)))
 		lr := runLintEngine(file, res, chk)
 		if cfg, ok := loadLintConfigNear(path); ok {
 			lr = cfg.Apply(lr)
@@ -791,7 +797,74 @@ func runLintLoadedPackage(
 	}
 	all := append(append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...), lr.Diags...)
 	printPackageDiags(pkg, all, flags)
+	if flags.fix || flags.fixDryRun {
+		applyPackageFixes(pkg, lr.Diags, flags)
+	}
 	return lintPackageOutcome{anyErr: hasError(all), anyWarn: hasWarning(all)}
+}
+
+// applyPackageFixes runs lint.ApplyFixes on each file in the package
+// using only diagnostics stamped for that file, then either rewrites the
+// files in place (--fix) or dumps a concatenated dry-run preview
+// (--fix-dry-run). Emits a final summary line counting fixes applied
+// and overlaps skipped across the whole package.
+//
+// Diagnostics whose File is empty are attached to the package's first
+// file — package-mode lint.Package does stamp File on every lint diag,
+// but the fallback keeps this robust against downstream regressions.
+func applyPackageFixes(pkg *resolve.Package, diags []*diag.Diagnostic, flags cliFlags) {
+	if pkg == nil || len(pkg.Files) == 0 {
+		return
+	}
+	byFile := map[string][]*diag.Diagnostic{}
+	for _, d := range diags {
+		path := d.File
+		if path == "" {
+			path = pkg.Files[0].Path
+		}
+		byFile[path] = append(byFile[path], d)
+	}
+	totalApplied, totalSkipped := 0, 0
+	mode := "osty lint"
+	for _, f := range pkg.Files {
+		ds := byFile[f.Path]
+		if len(ds) == 0 {
+			continue
+		}
+		newSrc, applied, skipped := lint.ApplyFixes(f.Source, ds)
+		totalApplied += applied
+		totalSkipped += skipped
+		switch {
+		case flags.fixDryRun:
+			if applied == 0 {
+				continue
+			}
+			// Prefix each file's post-fix content with a header so the
+			// user can diff it against the original per file.
+			fmt.Fprintf(os.Stdout, "// ==== %s ====\n", f.Path)
+			if _, err := os.Stdout.Write(newSrc); err != nil {
+				fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %v\n", mode, err)
+				os.Exit(1)
+			}
+			if len(newSrc) > 0 && newSrc[len(newSrc)-1] != '\n' {
+				fmt.Fprintln(os.Stdout)
+			}
+		case flags.fix:
+			if applied == 0 {
+				continue
+			}
+			if err := os.WriteFile(f.Path, newSrc, 0o644); err != nil {
+				fmt.Fprintf(os.Stderr, "%s --fix: %v\n", mode, err)
+				os.Exit(1)
+			}
+		}
+	}
+	switch {
+	case flags.fixDryRun:
+		fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %d fix(es) would apply, %d overlap(s) would be skipped\n", mode, totalApplied, totalSkipped)
+	case flags.fix:
+		fmt.Fprintf(os.Stderr, "%s --fix: applied %d fix(es), skipped %d overlap(s)\n", mode, totalApplied, totalSkipped)
+	}
 }
 
 // runResolvePackage is runCheckPackage plus a resolution dump per file.
@@ -829,15 +902,11 @@ func printPackageDiags(pkg *resolve.Package, diags []*diag.Diagnostic, flags cli
 	if len(diags) == 0 {
 		return
 	}
-	// Map line-origin positions back to files by offset ranges. The
-	// simplest approach: bucket each diagnostic into the file whose path
-	// matches where its source came from. Since we don't carry a
-	// file-id on Pos, we fall back to routing every diagnostic through
-	// each file's formatter in turn — diagnostics that don't match the
-	// file's source will just show no snippet, which is acceptable.
-	//
-	// For accurate rendering we need the actual source, so we group by
-	// comparing token offsets to each file's length.
+	// Bucket diagnostics by their owning file. Diagnostics stamped with
+	// d.File land directly; unstamped ones fall back to text-based
+	// disambiguation (see pickFile). pickFile's result is written back
+	// onto d.File so downstream consumers (JSON output, LSP, tooling)
+	// see a stamped diagnostic regardless of which subsystem emitted it.
 	byFile := make([][]*diag.Diagnostic, len(pkg.Files))
 	var noCtx []*diag.Diagnostic
 	for _, d := range diags {
@@ -846,34 +915,87 @@ func printPackageDiags(pkg *resolve.Package, diags []*diag.Diagnostic, flags cli
 			noCtx = append(noCtx, d)
 			continue
 		}
+		if d.File == "" {
+			d.File = pkg.Files[fi].Path
+		}
 		byFile[fi] = append(byFile[fi], d)
 	}
+	// Per-file rendering uses each file's own source for snippet accuracy,
+	// but the summary is printed once across the whole package so a
+	// multi-file failure doesn't spam `N error(s)` lines per file.
+	pkgFlags := flags
+	pkgFlags.suppressSummary = true
 	for i, f := range pkg.Files {
 		if len(byFile[i]) == 0 {
 			continue
 		}
 		fmter := newFormatter(f.Path, f.Source, flags)
-		printDiags(fmter, byFile[i], flags)
+		printDiags(fmter, byFile[i], pkgFlags)
 	}
 	if len(noCtx) > 0 {
 		fmter := &diag.Formatter{}
-		printDiags(fmter, noCtx, flags)
+		printDiags(fmter, noCtx, pkgFlags)
+	}
+	printSummary(diags, flags)
+}
+
+// printSummary emits the `N error(s), M warning(s)` tail line and the
+// optional explain block, using the same formatting rules as printDiags
+// but without re-printing any diagnostics. Called once per package so
+// multi-file failures don't emit a summary per file.
+func printSummary(diags []*diag.Diagnostic, flags cliFlags) {
+	if flags.jsonOutput {
+		return
+	}
+	errs, warns := 0, 0
+	for _, d := range diags {
+		switch d.Severity {
+		case diag.Error:
+			errs++
+		case diag.Warning:
+			warns++
+		}
+	}
+	if errs == 0 && warns == 0 {
+		return
+	}
+	if flags.maxErrors > 0 && len(diags) > flags.maxErrors {
+		fmt.Fprintf(os.Stderr, "  %d error(s), %d warning(s) (showing first %d)\n",
+			errs, warns, flags.maxErrors)
+	} else {
+		fmt.Fprintf(os.Stderr, "  %d error(s), %d warning(s)\n", errs, warns)
+	}
+	if flags.explain {
+		printExplainBlock(diags)
 	}
 }
 
 // pickFile returns the index of the package file the diagnostic belongs
-// to, based on byte offset. A return of -1 means no file matched
-// (unusual — typically only for synthetic diagnostics).
+// to. A return of -1 means no file matched (unusual — typically only
+// for synthetic diagnostics).
+//
+// Priority:
+//  1. Honor d.File when a package walker has stamped it.
+//  2. ParseDiags slice identity — parser diagnostics already carry a
+//     pointer identity that ties them to their file.
+//  3. Verify the primary span's position actually covers one of the
+//     backticked identifiers in the message. Accept a file only when
+//     the match is unique; ambiguous matches fall through so we never
+//     guess wrong.
+//  4. Fall back to the legacy "first file whose source is ≥ offset"
+//     heuristic for diagnostics with no way to disambiguate.
 func pickFile(pkg *resolve.Package, d *diag.Diagnostic) int {
 	pos := d.PrimaryPos()
 	if pos.Line == 0 {
 		return -1
 	}
-	// Our positions are per-file (each parser starts at line 1), so
-	// line + column aren't sufficient to disambiguate. Use the ParseDiags
-	// slice identity: if this diagnostic is in a file's ParseDiags, that
-	// file is the one. Otherwise, attribute resolver diagnostics by
-	// scanning each file's Refs/TypeRefs for the position's byte offset.
+	if d.File != "" {
+		for i, f := range pkg.Files {
+			if f.Path == d.File {
+				return i
+			}
+		}
+	}
 	for i, f := range pkg.Files {
 		for _, pd := range f.ParseDiags {
 			if pd == d {
@@ -881,17 +1003,86 @@ func pickFile(pkg *resolve.Package, d *diag.Diagnostic) int {
 			}
 		}
 	}
-	// Resolver-origin diagnostic: match by byte offset falling in the
-	// file's source length, biased toward the first file whose source
-	// is at least as large as the offset. This is a heuristic but works
-	// in practice because positions originate from tokens the lexer
-	// produced for exactly one input buffer.
+	if idx := pickFileByName(pkg, pos, d.Message); idx >= 0 {
+		return idx
+	}
 	for i, f := range pkg.Files {
 		if pos.Offset <= len(f.Source) {
 			return i
 		}
 	}
 	return -1
+}
+
+// pickFileByName scans every backticked identifier in msg and checks
+// whether the primary offset in each package file actually contains one
+// of them. Returns the unique matching file index, or -1 when zero or
+// more than one file matches (so the caller can fall back).
+//
+// Using ALL backticks (not just the first) handles messages like
+// "cannot assign `Int` to `String`" where the offset may hit either
+// side. Uniqueness protects against false positives when multiple
+// files happen to have the same byte pattern at the same offset.
+func pickFileByName(pkg *resolve.Package, pos token.Pos, msg string) int {
+	names := backtickedIdents(msg)
+	if len(names) == 0 {
+		return -1
+	}
+	match := -1
+	for i, f := range pkg.Files {
+		if fileOffsetMatchesAny(f.Source, pos, names) {
+			if match >= 0 {
+				return -1
+			}
+			match = i
+		}
+	}
+	return match
+}
+
+// backtickedIdents returns every `identifier` substring of msg, in
+// left-to-right order. An unterminated backtick pair is ignored. Never
+// returns duplicates — if the same name appears twice, it is kept once
+// (we only care whether the bytes at the offset match any of them).
+func backtickedIdents(msg string) []string {
+	var out []string
+	seen := map[string]bool{}
+	rest := msg
+	for {
+		start := strings.IndexByte(rest, '`')
+		if start < 0 {
+			return out
+		}
+		rest = rest[start+1:]
+		end := strings.IndexByte(rest, '`')
+		if end < 0 {
+			return out
+		}
+		name := rest[:end]
+		rest = rest[end+1:]
+		if name != "" && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+}
+
+// fileOffsetMatchesAny reports whether src starting at pos.Offset
+// contains any of the candidate names.
+func fileOffsetMatchesAny(src []byte, pos token.Pos, names []string) bool {
+	if pos.Offset < 0 || pos.Offset >= len(src) {
+		return false
+	}
+	tail := src[pos.Offset:]
+	for _, n := range names {
+		if len(n) == 0 || len(n) > len(tail) {
+			continue
+		}
+		if string(tail[:len(n)]) == n {
+			return true
+		}
+	}
+	return false
 }
 
 // printResolutionRefs dumps one file's resolved identifiers. Broken out
@@ -959,6 +1150,9 @@ func printDiags(f *diag.Formatter, diags []*diag.Diagnostic, flags cliFlags) {
 	} else {
 		out := f.FormatAll(shown)
 		fmt.Fprintln(os.Stderr, out)
+	}
+	if flags.suppressSummary {
+		return
 	}
 	// Summary (counts all, not just shown).
 	errs, warns := 0, 0
@@ -1063,6 +1257,15 @@ func checkOpts() check.Opts {
 func checkOptsForSource(src []byte) check.Opts {
 	opts := checkOpts()
 	opts.Source = src
+	return opts
+}
+
+// checkOptsForFile is checkOptsForSource plus the file path, so the
+// checker can stamp d.File on diagnostics it emits. Used by the
+// single-file CLI entry points (osty check FILE / osty typecheck FILE).
+func checkOptsForFile(path string, src []byte) check.Opts {
+	opts := checkOptsForSource(src)
+	opts.Path = path
 	return opts
 }
 

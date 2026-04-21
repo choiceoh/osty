@@ -218,16 +218,11 @@ pub fn emptyCoreArena() -> CoreArena {
 }
 
 pub fn coreArenaNodeCount(arena: CoreArena) -> Int {
-    let mut count = 0
-    for n in arena.nodes {
-        let _ = n
-        count = count + 1
-    }
-    count
+    arena.nodes.len()
 }
 
 fn coreArenaAdd(arena: CoreArena, node: CoreNode) -> Int {
-    let idx = coreArenaNodeCount(arena)
+    let idx = arena.nodes.len()
     arena.nodes.push(node)
     idx
 }
@@ -1769,19 +1764,9 @@ fn corePrintTypeArgs(tys: TyArena, args: List<Int>) -> String {
 }
 
 fn coreIntLen(xs: List<Int>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn coreDiagCount(xs: List<CheckDiagnostic>) -> Int {
-    let mut n = 0
-    for d in xs {
-        let _ = d
-        n = n + 1
-    }
-    n
+    xs.len()
 }

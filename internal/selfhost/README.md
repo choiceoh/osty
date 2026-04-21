@@ -15,13 +15,12 @@ Today the public entrypoints are:
 The exact merged Osty inputs live in
 [`internal/selfhost/bundle/bundle.go`](./bundle/bundle.go):
 
-- `GeneratedFiles()` feeds `internal/selfhost/generated.go`
-- `ToolchainCheckerFiles()` feeds the broader checker/bootstrap regeneration path
+- `ToolchainCheckerFiles()` feeds both the native checker binary and the
+  `internal/selfhost/generated.go` regeneration path (via `gen_selfhost.go`)
 
 Notable inputs currently include:
 
-- `examples/selfhost-core/{semver,semver_parse,frontend,formatter_ast,check_bridge,check,resolve,lint}.osty`
-- `toolchain/{frontend,lexer,parser,check_bridge,diagnostic,check_diag,ty,core,check_env,solve,elab,check}.osty`
+- `toolchain/{semver,semver_parse,frontend,lexer,parser,formatter_ast,check_bridge,diagnostic,check_diag,diag_manifest,diag_examples,ty,core,check_env,solve,elab,check,resolve,lint}.osty`
 - `internal/selfhost/ast_lower.osty`
 
 Regenerate the Go bridge with:

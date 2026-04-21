@@ -7,18 +7,15 @@ import (
 	"testing"
 )
 
-func TestBundleRoutesFrontendSourcesByConsumer(t *testing.T) {
-	generated := GeneratedFiles()
+func TestToolchainCheckerBundleIsToolchainOnly(t *testing.T) {
 	toolchain := ToolchainCheckerFiles()
-
-	if !contains(generated, "examples/selfhost-core/frontend.osty") {
-		t.Fatalf("generated bundle missing selfhost-core frontend: %#v", generated)
-	}
-	if contains(generated, "toolchain/frontend.osty") {
-		t.Fatalf("generated bundle unexpectedly routes through toolchain frontend: %#v", generated)
-	}
 	if !contains(toolchain, "toolchain/frontend.osty") {
 		t.Fatalf("toolchain checker bundle missing toolchain frontend: %#v", toolchain)
+	}
+	for _, entry := range toolchain {
+		if strings.HasPrefix(entry, "examples/selfhost-core/") {
+			t.Fatalf("toolchain checker bundle unexpectedly references legacy selfhost-core path %q: %#v", entry, toolchain)
+		}
 	}
 }
 

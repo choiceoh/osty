@@ -20,7 +20,7 @@ package llvmgen
 //     RawPtr) -> T` arrived as `fn read(p: RawPtr) -> T` with `T`
 //     undeclared. Fixed by adding `selfhostGenericParams` helper
 //     and emitting `<T: Pod>` on the boundary `fn` line.
-//  3. `examples/selfhost-core/check.osty` /
+//  3. `toolchain/check.osty` /
 //     `internal/selfhost/generated.go` — `frontCheckTurbofishCall`
 //     handled `pkg.method::<T>(args)` only as a method call (with
 //     a special-case for `thread.chan`); for other packages it

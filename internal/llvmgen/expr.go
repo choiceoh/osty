@@ -221,8 +221,25 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 	case *ast.MatchExpr:
 		return g.emitMatchExprValue(e)
 	default:
-		return value{}, unsupportedf("expression", "expression %T", expr)
+		return value{}, unsupportedf("expression", "expression %T %s", expr, exprPosLabel(expr))
 	}
+}
+
+// exprPosLabel formats the AST node's source line/column and byte
+// offset for LLVMXXX wall messages. The merged-toolchain probes
+// synthesize paths like /tmp/toolchain_native_merged.osty, so file is
+// usually not useful — but line:col plus byte-offset plus `%T` lets
+// the investigator grep the merge buffer and pinpoint the offending
+// expression immediately.
+func exprPosLabel(node ast.Node) string {
+	if node == nil {
+		return ""
+	}
+	p := node.Pos()
+	if p.Line == 0 && p.Column == 0 && p.Offset == 0 {
+		return ""
+	}
+	return fmt.Sprintf("at %s (offset %d)", p, p.Offset)
 }
 
 func (g *generator) emitIdent(name string) (value, error) {
@@ -545,7 +562,7 @@ func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
 		return value{}, unsupported("expression", "nil index expression")
 	}
 	if rng, ok := expr.Index.(*ast.RangeExpr); ok {
-		return g.emitStringSliceIndex(expr, rng)
+		return g.emitSliceIndex(expr, rng)
 	}
 	base, err := g.emitExpr(expr.X)
 	if err != nil {
@@ -614,19 +631,21 @@ func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
 	}
 }
 
-// emitStringSliceIndex lowers `s[start..end]` and `s[start..=end]` on a
-// String receiver to `osty_rt_strings_Slice`. Missing bounds default to
-// 0 and the string's byte-length respectively. Used by the toolchain's
-// string slicing in parser.osty (`raw[1..n - 1]`, `raw[0..1]`, ...).
-// Non-String index-range targets fall through to the generic index
-// path, which will surface a more specific error.
-func (g *generator) emitStringSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr) (value, error) {
+// emitSliceIndex lowers `base[a..b]` and `base[a..=b]` for both String
+// and List<T> receivers. Dispatch is driven by the base's static source
+// type — String routes to osty_rt_strings_Slice (byte-level), List
+// routes to osty_rt_list_slice (elem_size-level memcpy). Non-slicable
+// receivers surface a type-system diagnostic.
+func (g *generator) emitSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr) (value, error) {
 	base, err := g.emitExpr(expr.X)
 	if err != nil {
 		return value{}, err
 	}
+	if base.listElemTyp != "" {
+		return g.emitListSliceIndex(expr, rng, base)
+	}
 	if base.typ != "ptr" {
-		return value{}, unsupportedf("type-system", "slice indexing on %s, want String (ptr)", base.typ)
+		return value{}, unsupportedf("type-system", "slice indexing on %s, want String (ptr) or List<T>", base.typ)
 	}
 	baseIsString := false
 	if sourceType, ok := g.staticExprSourceType(expr.X); ok {
@@ -635,7 +654,7 @@ func (g *generator) emitStringSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr
 		}
 	}
 	if !baseIsString {
-		return value{}, unsupported("type-system", "slice indexing is only supported on String receivers")
+		return value{}, unsupported("type-system", "slice indexing is only supported on String or List<T> receivers")
 	}
 	base, err = g.loadIfPointer(base)
 	if err != nil {
@@ -688,6 +707,68 @@ func (g *generator) emitStringSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr
 	sliced := fromOstyValue(out)
 	sliced.gcManaged = true
 	sliced.sourceType = &ast.NamedType{Path: []string{"String"}}
+	return sliced, nil
+}
+
+// emitListSliceIndex lowers `list[a..b]` and `list[a..=b]` on a List<T>
+// receiver to osty_rt_list_slice. Bounds default to 0 and list.len —
+// runtime applies saturating clamps, matching String.slice semantics.
+// Inclusive `..=` adds 1 to the end operand before the call.
+func (g *generator) emitListSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr, base value) (value, error) {
+	baseLoaded, err := g.loadIfPointer(base)
+	if err != nil {
+		return value{}, err
+	}
+
+	var startVal value
+	if rng.Start == nil {
+		startVal = value{typ: "i64", ref: "0"}
+	} else {
+		v, err := g.emitExpr(rng.Start)
+		if err != nil {
+			return value{}, err
+		}
+		if v.typ != "i64" {
+			return value{}, unsupportedf("type-system", "slice start type %s, want Int", v.typ)
+		}
+		startVal = v
+	}
+
+	var endVal value
+	if rng.Stop == nil {
+		g.declareRuntimeSymbol(listRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		lenVal := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(baseLoaded)})
+		g.takeOstyEmitter(emitter)
+		endVal = fromOstyValue(lenVal)
+	} else {
+		v, err := g.emitExpr(rng.Stop)
+		if err != nil {
+			return value{}, err
+		}
+		if v.typ != "i64" {
+			return value{}, unsupportedf("type-system", "slice end type %s, want Int", v.typ)
+		}
+		endVal = v
+		if rng.Inclusive {
+			emitter := g.toOstyEmitter()
+			tmp := llvmNextTemp(emitter)
+			emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", tmp, endVal.ref))
+			g.takeOstyEmitter(emitter)
+			endVal = value{typ: "i64", ref: tmp}
+		}
+	}
+
+	g.declareRuntimeSymbol(listRuntimeSliceSymbol(), "ptr", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "i64"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", listRuntimeSliceSymbol(), []*LlvmValue{toOstyValue(baseLoaded), toOstyValue(startVal), toOstyValue(endVal)})
+	g.takeOstyEmitter(emitter)
+	sliced := fromOstyValue(out)
+	sliced.gcManaged = true
+	sliced.listElemTyp = base.listElemTyp
+	sliced.listElemString = base.listElemString
+	sliced.sourceType = base.sourceType
+	sliced.rootPaths = g.rootPathsForType(base.listElemTyp)
 	return sliced, nil
 }
 
@@ -1089,6 +1170,23 @@ func (g *generator) emitCompare(op token.Kind, left, right value, isString bool)
 	case "ptr":
 		g.takeOstyEmitter(emitter)
 		if !isString {
+			// `==` / `!=` between two opaque managed pointers fall back
+			// to identity comparison — the same `icmp eq/ne ptr` shape
+			// LLVM uses for null checks. This is the only sensible
+			// semantics for non-String ptr values until structural
+			// equality is wired in. Ordering ops stay rejected; they
+			// have no meaning for identities.
+			opStr := op.String()
+			if opStr == "==" || opStr == "!=" {
+				pred := "eq"
+				if opStr == "!=" {
+					pred = "ne"
+				}
+				emitter := g.toOstyEmitter()
+				out := llvmCompare(emitter, pred, toOstyValue(left), toOstyValue(right))
+				g.takeOstyEmitter(emitter)
+				return fromOstyValue(out), nil
+			}
 			return value{}, unsupportedf("type-system", "comparison operator %q on non-String ptr values is not yet lowered", op)
 		}
 		return g.emitRuntimeStringCompare(op, left, right)
@@ -2258,6 +2356,44 @@ func (g *generator) emitListAggregatePush(listValue, elem value) error {
 	return nil
 }
 
+// emitListAggregateInsert mirrors emitListAggregatePush but for an
+// arbitrary index — the underlying runtime memmoves the tail right by
+// one slot and copies the value bytes into slot `index`. Pointer-bearing
+// struct fields go through the *_roots variant so GC sees the new edges.
+func (g *generator) emitListAggregateInsert(listValue, idx, elem value) error {
+	emitter := g.toOstyEmitter()
+	slot := g.emitAggregateScratchSlot(emitter, elem.typ, elem.ref)
+	size := g.emitAggregateByteSize(emitter, elem.typ)
+	offsetsPtr, offsetCount, err := g.emitAggregateRootOffsets(emitter, elem.typ)
+	if err != nil {
+		return err
+	}
+	if offsetCount == 0 {
+		g.declareRuntimeSymbol(listRuntimeInsertBytesV1Symbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			listRuntimeInsertBytesV1Symbol(),
+			llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(idx), toOstyValue(value{typ: "ptr", ref: slot.ref}), toOstyValue(size)}),
+		))
+	} else {
+		g.declareRuntimeSymbol(listRuntimeInsertBytesRootsSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			listRuntimeInsertBytesRootsSymbol(),
+			llvmCallArgs([]*LlvmValue{
+				toOstyValue(listValue),
+				toOstyValue(idx),
+				toOstyValue(value{typ: "ptr", ref: slot.ref}),
+				toOstyValue(size),
+				toOstyValue(offsetsPtr),
+				toOstyValue(value{typ: "i64", ref: strconv.Itoa(offsetCount)}),
+			}),
+		))
+	}
+	g.takeOstyEmitter(emitter)
+	return nil
+}
+
 func (g *generator) emitListAggregateGet(listValue value, index value, elemTyp string) (value, error) {
 	g.declareRuntimeSymbol(listRuntimeGetBytesV1Symbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}})
 	emitter := g.toOstyEmitter()
@@ -2626,6 +2762,64 @@ func (g *generator) emitStringMethodCall(call *ast.CallExpr) (value, bool, error
 		out := llvmStringHasPrefix(emitter, toOstyValue(base), toOstyValue(prefix))
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), true, nil
+	case "endsWith":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "String.endsWith requires one positional argument")
+		}
+		suffix, err := g.emitStdStringsArg(call.Args[0], "endsWith", 0)
+		if err != nil {
+			return value{}, true, err
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeHasSuffixSymbol(), "i1", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "i1", llvmStringRuntimeHasSuffixSymbol(), []*LlvmValue{toOstyValue(base), toOstyValue(suffix)})
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "contains":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "String.contains requires one positional argument")
+		}
+		needle, err := g.emitStdStringsArg(call.Args[0], "contains", 0)
+		if err != nil {
+			return value{}, true, err
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeContainsSymbol(), "i1", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "i1", llvmStringRuntimeContainsSymbol(), []*LlvmValue{toOstyValue(base), toOstyValue(needle)})
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "trimPrefix":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "String.trimPrefix requires one positional argument")
+		}
+		prefix, err := g.emitStdStringsArg(call.Args[0], "trimPrefix", 0)
+		if err != nil {
+			return value{}, true, err
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeTrimPrefixSymbol(), "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "ptr", llvmStringRuntimeTrimPrefixSymbol(), []*LlvmValue{toOstyValue(base), toOstyValue(prefix)})
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = true
+		v.sourceType = &ast.NamedType{Path: []string{"String"}}
+		return v, true, nil
+	case "trimSuffix":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "String.trimSuffix requires one positional argument")
+		}
+		suffix, err := g.emitStdStringsArg(call.Args[0], "trimSuffix", 0)
+		if err != nil {
+			return value{}, true, err
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeTrimSuffixSymbol(), "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "ptr", llvmStringRuntimeTrimSuffixSymbol(), []*LlvmValue{toOstyValue(base), toOstyValue(suffix)})
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = true
+		v.sourceType = &ast.NamedType{Path: []string{"String"}}
+		return v, true, nil
 	case "split":
 		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
 			return value{}, true, unsupported("call", "String.split requires one positional argument")
@@ -2792,6 +2986,14 @@ func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i64 %s, 0", cmp, lenVal.name))
 		g.takeOstyEmitter(emitter)
 		return value{typ: "i1", ref: cmp}, true, nil
+	case "get":
+		return g.emitMapGet(call, base, keyTyp, keyString)
+	case "getOr":
+		return g.emitMapGetOr(call, base, keyTyp, keyString)
+	case "mergeWith":
+		return g.emitMapMergeWith(call, base, keyTyp, keyString)
+	case "mapValues":
+		return g.emitMapMapValues(call, base, keyTyp, keyString)
 	case "containsKey":
 		if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 			return value{}, true, unsupported("call", "map.containsKey requires one positional argument")
@@ -2850,6 +3052,592 @@ func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
 	default:
 		return value{}, false, nil
 	}
+}
+
+// mapScalarValueByteSize returns the GC-alloc byte size for a scalar V
+// box used by `Map.get` / `Map.getOr` when V is not already ptr. Only
+// the set of V types supported by the map-key runtime macros is
+// recognised; anything else routes to the unsupported diagnostic.
+func mapScalarValueByteSize(valTyp string) (int, bool) {
+	switch valTyp {
+	case "i64", "double":
+		return 8, true
+	case "i1":
+		return 1, true
+	}
+	return 0, false
+}
+
+// emitMapGet lowers `m.get(key) -> V?` as the real Option-returning
+// intrinsic. This replaces the "contains + get_or_abort" special cases
+// that every bodied helper used to reimplement, so once `get` lands,
+// stdlib bodies like `self.get(key) ?? default` (getOr) and
+// `self.get(key).isSome()` (containsKey) can compose naturally.
+//
+// ABI: the C runtime helper is
+//   bool osty_rt_map_get_<K>(void *map, K key, void *out_slot)
+// It returns true and memcpys V into *out_slot when the key is present;
+// otherwise returns false and leaves *out_slot alone.
+//
+// Option<V> at the LLVM layer is always a ptr:
+//   - V = ptr  →  the map value slot holds a pointer; we pre-zero the
+//                 slot and rely on `load ptr` producing null on miss and
+//                 the stored payload on hit. No branch needed.
+//   - V = scalar (i64 / i1 / double) →  GC-alloc a box in the present
+//                 branch and phi ptr-to-box vs null. Matches the
+//                 boxed-Option ABI consumed by `??`.
+func (g *generator) emitMapGet(call *ast.CallExpr, base value, keyTyp string, keyString bool) (value, bool, error) {
+	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
+		return value{}, true, unsupported("call", "map.get requires one positional argument")
+	}
+	key, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	if key.typ != keyTyp {
+		return value{}, true, unsupportedf("type-system", "map.get key type %s, want %s", key.typ, keyTyp)
+	}
+	loadedKey, err := g.loadIfPointer(key)
+	if err != nil {
+		return value{}, true, err
+	}
+	out, err := g.emitMapGetCore(base, loadedKey, keyTyp, keyString)
+	if err != nil {
+		return value{}, true, err
+	}
+	return out, true, nil
+}
+
+// emitMapGetCore is the pre-emitted-args variant of emitMapGet. Used
+// by getOr/update which already lowered the base and key and need to
+// reuse the same Option<V> materialisation without re-evaluating the
+// receiver expression.
+func (g *generator) emitMapGetCore(base value, loadedKey value, keyTyp string, keyString bool) (value, error) {
+	getSym := mapRuntimeGetSymbol(keyTyp, keyString)
+	g.declareRuntimeSymbol(getSym, "i1", []paramInfo{{typ: "ptr"}, {typ: keyTyp}, {typ: "ptr"}})
+
+	valTyp := base.mapValueTyp
+	if valTyp == "ptr" {
+		// Fast path: V is already ptr. Pre-zero the slot so a miss
+		// produces null (= None), a hit overwrites with the payload
+		// ptr (= Some). No branch needed.
+		emitter := g.toOstyEmitter()
+		slot := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca ptr", slot))
+		emitter.body = append(emitter.body, fmt.Sprintf("  store ptr null, ptr %s", slot))
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  %s = call i1 @%s(%s)",
+			llvmNextTemp(emitter),
+			getSym,
+			llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(loadedKey), {typ: "ptr", name: slot}}),
+		))
+		out := g.loadValueFromAddress(emitter, "ptr", slot)
+		g.takeOstyEmitter(emitter)
+		out.gcManaged = true
+		out.rootPaths = g.rootPathsForType("ptr")
+		return out, nil
+	}
+
+	byteSize, ok := mapScalarValueByteSize(valTyp)
+	if !ok {
+		return value{}, unsupportedf(
+			"call",
+			"map.get on Map<%s, %s>: Option<%s> lowering not yet wired for this V (scalar V supports i64/i1/double; V=ptr is direct)",
+			keyTyp, valTyp, valTyp,
+		)
+	}
+
+	// Scalar V: alloca temp slot, call helper, branch on present.
+	//   present=true  → GC-alloc a V-sized box, copy slot→box, Some = box ptr
+	//   present=false → null ptr (None)
+	// Merged via phi at end; result is the boxed-Option ptr consumed
+	// unchanged by ?? / match / .isSome().
+	emitter := g.toOstyEmitter()
+	slot := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, valTyp))
+	present := llvmCall(emitter, "i1", getSym, []*LlvmValue{
+		toOstyValue(base),
+		toOstyValue(loadedKey),
+		{typ: "ptr", name: slot},
+	})
+	labels := llvmIfExprStart(emitter, present)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.thenLabel
+
+	// Present branch: GC-alloc box + copy payload.
+	emitter = g.toOstyEmitter()
+	box := llvmGcAlloc(emitter, 1, byteSize, "map.get.box."+valTyp)
+	payload := llvmLoad(emitter, &LlvmValue{typ: valTyp, name: slot, pointer: true})
+	emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", valTyp, payload.name, box.name))
+	g.takeOstyEmitter(emitter)
+	g.needsGCRuntime = true
+	someVal := value{typ: "ptr", ref: box.name, gcManaged: true}
+	thenPred := g.currentBlock
+
+	// Absent branch: null ptr.
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+	noneVal := value{typ: "ptr", ref: "null"}
+	elsePred := g.currentBlock
+
+	out, err := g.emitIfExprPhi(labels, thenPred, elsePred, someVal, noneVal)
+	if err != nil {
+		return value{}, err
+	}
+	out.gcManaged = true
+	out.rootPaths = g.rootPathsForType("ptr")
+	return out, nil
+}
+
+// emitMapIterate emits a snapshot-based walk: it first calls
+// `osty_rt_map_keys(m)` to freeze the K set at the moment of the call
+// (that runtime helper copies all current keys into a fresh List<K>
+// under the per-map lock), then iterates that list, calling
+// `m.get(k)` per key to fetch the current V. If the key was removed
+// by a concurrent mutator since the snapshot, get returns None and
+// the body is skipped; if the value was replaced, body sees the new
+// V. This is the weakly-consistent iteration semantics (a la Go's
+// sync.Map.Range): no out-of-bounds panic under mutation, no
+// guarantee of seeing entries added after the snapshot.
+//
+// `labelPrefix` keeps temp names distinct when callers compose
+// multiple iterations back-to-back. body MUST handle the case where
+// iterating over self while self is mutated (e.g. retainIf collects
+// victim keys and defers removal to a second pass).
+func (g *generator) emitMapIterate(mapVal value, keyTyp, valTyp string, keyString bool, labelPrefix string, body func(k, v value) error) error {
+	// Snapshot keys under the per-map lock — this returns a
+	// freshly-allocated List<K>.
+	g.declareRuntimeSymbol(mapRuntimeKeysSymbol(), "ptr", []paramInfo{{typ: "ptr"}})
+	mapLoaded, err := g.loadIfPointer(mapVal)
+	if err != nil {
+		return err
+	}
+	emitter := g.toOstyEmitter()
+	keysList := llvmCall(emitter, "ptr", mapRuntimeKeysSymbol(), []*LlvmValue{toOstyValue(mapLoaded)})
+	g.takeOstyEmitter(emitter)
+	keysVal := fromOstyValue(keysList)
+	keysVal.gcManaged = true
+	keysVal.listElemTyp = keyTyp
+	keysVal.listElemString = keyString
+	keysVal = g.protectManagedTemporary(labelPrefix+".keys", keysVal)
+
+	g.declareRuntimeSymbol(listRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+	keysLoaded, err := g.loadIfPointer(keysVal)
+	if err != nil {
+		return err
+	}
+	emitter = g.toOstyEmitter()
+	keysLen := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(keysLoaded)})
+	loop := llvmRangeStart(emitter, labelPrefix+"_i", llvmIntLiteral(0), keysLen, false)
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop.bodyLabel)
+	cont := g.nextNamedLabel(labelPrefix + ".cont")
+	g.pushLoop(loopContext{continueLabel: cont, breakLabel: loop.endLabel, scopeDepth: len(g.locals)})
+
+	keysLoaded, err = g.loadIfPointer(keysVal)
+	if err != nil {
+		g.popLoop()
+		return err
+	}
+	mapLoaded, err = g.loadIfPointer(mapVal)
+	if err != nil {
+		g.popLoop()
+		return err
+	}
+
+	// k = keysList[i]
+	listGetSym := listRuntimeGetSymbol(keyTyp)
+	g.declareRuntimeSymbol(listGetSym, keyTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+	emitter = g.toOstyEmitter()
+	kCall := llvmCall(emitter, keyTyp, listGetSym, []*LlvmValue{toOstyValue(keysLoaded), llvmI64(loop.current)})
+	g.takeOstyEmitter(emitter)
+	kVal := fromOstyValue(kCall)
+	kVal.gcManaged = keyTyp == "ptr"
+	kVal.rootPaths = g.rootPathsForType(keyTyp)
+
+	// opt_v = map.get(k) — returns Option<V> (ptr). If null, the key
+	// was removed between snapshot and here; skip the body.
+	kLoaded, err := g.loadIfPointer(kVal)
+	if err != nil {
+		g.popLoop()
+		return err
+	}
+	optV, err := g.emitMapGetCore(mapVal, kLoaded, keyTyp, keyString)
+	if err != nil {
+		g.popLoop()
+		return err
+	}
+	// if opt is null → skip; else → unwrap and run body.
+	emitter = g.toOstyEmitter()
+	isNil := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNil, optV.ref))
+	labels := llvmIfExprStart(emitter, &LlvmValue{typ: "i1", name: isNil})
+	g.takeOstyEmitter(emitter)
+	// then = none (skip)
+	g.currentBlock = labels.thenLabel
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	// else = some (body)
+	g.currentBlock = labels.elseLabel
+	var vUnwrapped value
+	if valTyp == "ptr" {
+		vUnwrapped = optV
+	} else {
+		emitter = g.toOstyEmitter()
+		payload := llvmLoad(emitter, &LlvmValue{typ: valTyp, name: optV.ref, pointer: true})
+		g.takeOstyEmitter(emitter)
+		vUnwrapped = value{typ: valTyp, ref: payload.name}
+	}
+	vUnwrapped.gcManaged = valTyp == "ptr"
+	vUnwrapped.rootPaths = g.rootPathsForType(valTyp)
+
+	if err := body(kVal, vUnwrapped); err != nil {
+		g.popLoop()
+		return err
+	}
+
+	// Merge branches at labels.endLabel.
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.endLabel
+
+	g.popLoop()
+	if g.currentReachable {
+		g.branchTo(cont)
+	}
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", cont))
+	g.emitGCSafepoint(emitter)
+	llvmRangeEnd(emitter, loop)
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop.endLabel)
+	return nil
+}
+
+// emitMapNewFor constructs an empty map with the given K/V types,
+// wiring the ABI kind tags + value size + GC trace callback exactly
+// like the `{:}` literal path.
+func (g *generator) emitMapNewFor(keyTyp, valTyp string, keyString bool) (value, error) {
+	traceSymbol := g.traceCallbackSymbol(valTyp, g.rootPathsForType(valTyp))
+	g.declareRuntimeSymbol(mapRuntimeNewSymbol(), "ptr", []paramInfo{{typ: "i64"}, {typ: "i64"}, {typ: "i64"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	valueSize := g.emitTypeSize(emitter, valTyp)
+	out := llvmCall(emitter, "ptr", mapRuntimeNewSymbol(), []*LlvmValue{
+		llvmI64(strconv.Itoa(containerAbiKind(keyTyp, keyString))),
+		llvmI64(strconv.Itoa(containerAbiKind(valTyp, false))),
+		valueSize,
+		{typ: "ptr", name: llvmPointerOperand(traceSymbol)},
+	})
+	g.takeOstyEmitter(emitter)
+	mapValue := fromOstyValue(out)
+	mapValue.gcManaged = true
+	mapValue.mapKeyTyp = keyTyp
+	mapValue.mapValueTyp = valTyp
+	mapValue.mapKeyString = keyString
+	mapValue.rootPaths = g.rootPathsForType("ptr")
+	return mapValue, nil
+}
+
+// emitMapMergeWith lowers `m.mergeWith(other, combine) -> Map<K, V>`.
+// Stdlib bodied form: `out = {:}; copy self; for other entries either
+// insert or combine(existing, v) + insert`. All three operations
+// compose on the intrinsic stack (map iter + map get + map insert +
+// fn-value indirect call).
+func (g *generator) emitMapMergeWith(call *ast.CallExpr, base value, keyTyp string, keyString bool) (value, bool, error) {
+	if len(call.Args) != 2 ||
+		call.Args[0].Name != "" || call.Args[1].Name != "" ||
+		call.Args[0].Value == nil || call.Args[1].Value == nil {
+		return value{}, true, unsupported("call", "map.mergeWith requires two positional arguments")
+	}
+	valTyp := base.mapValueTyp
+	other, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	if other.typ != "ptr" || other.mapKeyTyp != keyTyp || other.mapValueTyp != valTyp {
+		return value{}, true, unsupportedf("type-system", "map.mergeWith 'other' map types don't match receiver")
+	}
+	combine, err := g.emitExpr(call.Args[1].Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	if combine.typ != "ptr" || combine.fnSigRef == nil {
+		return value{}, true, unsupportedf("call", "map.mergeWith combine must be a fn value")
+	}
+	sig := combine.fnSigRef
+	if len(sig.params) != 2 || sig.ret != valTyp {
+		return value{}, true, unsupportedf("call", "map.mergeWith combine must be fn(V, V) -> V")
+	}
+
+	base = g.protectManagedTemporary("mergewith.self", base)
+	other = g.protectManagedTemporary("mergewith.other", other)
+	combineHeld := g.protectManagedTemporary("mergewith.combine", combine)
+
+	outMap, err := g.emitMapNewFor(keyTyp, valTyp, keyString)
+	if err != nil {
+		return value{}, true, err
+	}
+	outMap = g.protectManagedTemporary("mergewith.out", outMap)
+
+	// Pass 1: copy every (k, v) from self into out.
+	if err := g.emitMapIterate(base, keyTyp, valTyp, keyString, "mw1", func(k, v value) error {
+		return g.emitMapInsert(outMap, k, v)
+	}); err != nil {
+		return value{}, true, err
+	}
+
+	// Pass 2: iterate other; if key exists in out call combine.
+	err = g.emitMapIterate(other, keyTyp, valTyp, keyString, "mw2", func(k, v value) error {
+		loadedKey, err := g.loadIfPointer(k)
+		if err != nil {
+			return err
+		}
+		existingOpt, err := g.emitMapGetCore(outMap, loadedKey, keyTyp, keyString)
+		if err != nil {
+			return err
+		}
+		// branch on opt null-ness
+		emitter := g.toOstyEmitter()
+		isNil := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNil, existingOpt.ref))
+		labels := llvmIfExprStart(emitter, &LlvmValue{typ: "i1", name: isNil})
+		g.takeOstyEmitter(emitter)
+
+		// then = no existing: insert v directly
+		g.currentBlock = labels.thenLabel
+		if err := g.emitMapInsert(outMap, k, v); err != nil {
+			return err
+		}
+		emitter = g.toOstyEmitter()
+		llvmIfExprElse(emitter, labels)
+		g.takeOstyEmitter(emitter)
+
+		// else = existing: combine(existing, v) → insert
+		g.currentBlock = labels.elseLabel
+		var existing value
+		if valTyp == "ptr" {
+			existing = existingOpt
+		} else {
+			emitter = g.toOstyEmitter()
+			payload := llvmLoad(emitter, &LlvmValue{typ: valTyp, name: existingOpt.ref, pointer: true})
+			g.takeOstyEmitter(emitter)
+			existing = value{typ: valTyp, ref: payload.name}
+		}
+		combineLoaded, err := g.loadIfPointer(combineHeld)
+		if err != nil {
+			return err
+		}
+		combined, err := g.emitFnValueIndirectCall(combineLoaded, sig, []*LlvmValue{
+			{typ: valTyp, name: existing.ref},
+			{typ: valTyp, name: v.ref},
+		})
+		if err != nil {
+			return err
+		}
+		if err := g.emitMapInsert(outMap, k, combined); err != nil {
+			return err
+		}
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+		g.takeOstyEmitter(emitter)
+		g.currentBlock = labels.endLabel
+		return nil
+	})
+	if err != nil {
+		return value{}, true, err
+	}
+
+	outLoaded, err := g.loadIfPointer(outMap)
+	if err != nil {
+		return value{}, true, err
+	}
+	return outLoaded, true, nil
+}
+
+// emitMapMapValues lowers `m.mapValues(f) -> Map<K, R>` where
+// R = f's return type. Builds a fresh Map<K, R> and inserts f(v) per
+// entry. Simpler than mergeWith because there's no per-key combine —
+// each entry goes through f once.
+func (g *generator) emitMapMapValues(call *ast.CallExpr, base value, keyTyp string, keyString bool) (value, bool, error) {
+	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
+		return value{}, true, unsupported("call", "map.mapValues requires one positional argument")
+	}
+	f, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	if f.typ != "ptr" || f.fnSigRef == nil {
+		return value{}, true, unsupportedf("call", "map.mapValues f must be a fn value")
+	}
+	sig := f.fnSigRef
+	if len(sig.params) != 1 || sig.params[0].typ != base.mapValueTyp {
+		return value{}, true, unsupportedf("call", "map.mapValues f must take single V argument")
+	}
+	rTyp := sig.ret
+	if rTyp == "" {
+		return value{}, true, unsupportedf("call", "map.mapValues f must return a value")
+	}
+
+	base = g.protectManagedTemporary("mapvalues.self", base)
+	fHeld := g.protectManagedTemporary("mapvalues.f", f)
+
+	outMap, err := g.emitMapNewFor(keyTyp, rTyp, keyString)
+	if err != nil {
+		return value{}, true, err
+	}
+	outMap = g.protectManagedTemporary("mapvalues.out", outMap)
+
+	err = g.emitMapIterate(base, keyTyp, base.mapValueTyp, keyString, "mv", func(k, v value) error {
+		fLoaded, err := g.loadIfPointer(fHeld)
+		if err != nil {
+			return err
+		}
+		rVal, err := g.emitFnValueIndirectCall(fLoaded, sig, []*LlvmValue{{typ: v.typ, name: v.ref}})
+		if err != nil {
+			return err
+		}
+		return g.emitMapInsert(outMap, k, rVal)
+	})
+	if err != nil {
+		return value{}, true, err
+	}
+
+	outLoaded, err := g.loadIfPointer(outMap)
+	if err != nil {
+		return value{}, true, err
+	}
+	return outLoaded, true, nil
+}
+
+// emitMapGetOr lowers `m.getOr(key, default) -> V` as the stdlib bodied
+// form `self.get(key) ?? default`. It composes the real `get` intrinsic
+// (Option<V>) with the ptr-backed coalesce shape: icmp eq ptr null →
+// branch → phi. For scalar V the some branch also loads the payload
+// out of the boxed Option so the phi produces V, not ptr.
+func (g *generator) emitMapGetOr(call *ast.CallExpr, base value, keyTyp string, keyString bool) (value, bool, error) {
+	if len(call.Args) != 2 ||
+		call.Args[0].Name != "" || call.Args[1].Name != "" ||
+		call.Args[0].Value == nil || call.Args[1].Value == nil {
+		return value{}, true, unsupported("call", "map.getOr requires two positional arguments")
+	}
+	key, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	if key.typ != keyTyp {
+		return value{}, true, unsupportedf("type-system", "map.getOr key type %s, want %s", key.typ, keyTyp)
+	}
+	loadedKey, err := g.loadIfPointer(key)
+	if err != nil {
+		return value{}, true, err
+	}
+	optVal, err := g.emitMapGetCore(base, loadedKey, keyTyp, keyString)
+	if err != nil {
+		return value{}, true, err
+	}
+
+	def, err := g.emitExpr(call.Args[1].Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	valTyp := base.mapValueTyp
+	if def.typ != valTyp {
+		return value{}, true, unsupportedf("type-system", "map.getOr default type %s, want %s", def.typ, valTyp)
+	}
+
+	emitter := g.toOstyEmitter()
+	isNil := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNil, optVal.ref))
+	labels := llvmIfExprStart(emitter, &LlvmValue{typ: "i1", name: isNil})
+	g.takeOstyEmitter(emitter)
+
+	// then = none: fall back to default.
+	g.currentBlock = labels.thenLabel
+	nonePred := g.currentBlock
+	noneVal := def
+
+	// else = some: for V=ptr the opt value IS the payload; for scalar
+	// V we load it out of the GC box.
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+	var someVal value
+	if valTyp == "ptr" {
+		someVal = optVal
+	} else {
+		emitter = g.toOstyEmitter()
+		payload := llvmLoad(emitter, &LlvmValue{typ: valTyp, name: optVal.ref, pointer: true})
+		g.takeOstyEmitter(emitter)
+		someVal = value{typ: valTyp, ref: payload.name}
+	}
+	somePred := g.currentBlock
+
+	out, err := g.emitIfExprPhi(labels, nonePred, somePred, noneVal, someVal)
+	if err != nil {
+		return value{}, true, err
+	}
+	out.gcManaged = valTyp == "ptr"
+	out.rootPaths = g.rootPathsForType(valTyp)
+	return out, true, nil
+}
+
+// emitOptionMethodCall lowers `opt.isSome()` and `opt.isNone()` as a
+// ptr-null check when `opt` statically resolves to an Option<T>
+// value (i.e. the receiver's source type is `*ast.OptionalType`, or
+// the expression returns one — e.g. `self.get(k).isSome()` inside
+// a specialized Map method body, where `self.get(k)` advertises
+// `V?` as its source type via staticMapMethodSourceType).
+//
+// This is the Phase 2f intrinsic that lets `Map.containsKey`'s
+// stdlib body compose through the specialized stack without needing
+// a monomorphized Option<V> enum with its own isSome method
+// dispatch. At the LLVM layer, Option<T> for every T is already
+// represented as `ptr` (null = None, non-null = Some), so the
+// check is uniformly a null-comparison regardless of V.
+func (g *generator) emitOptionMethodCall(call *ast.CallExpr) (value, bool, error) {
+	if call == nil {
+		return value{}, false, nil
+	}
+	field, ok := fieldExprOfCallFn(call)
+	if !ok || field.IsOptional {
+		return value{}, false, nil
+	}
+	if field.Name != "isSome" && field.Name != "isNone" {
+		return value{}, false, nil
+	}
+	if len(call.Args) != 0 {
+		return value{}, false, nil
+	}
+	baseSrc, ok := g.staticExprSourceType(field.X)
+	if !ok {
+		return value{}, false, nil
+	}
+	if _, isOpt := baseSrc.(*ast.OptionalType); !isOpt {
+		return value{}, false, nil
+	}
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	if base.typ != "ptr" {
+		return value{}, true, unsupportedf("type-system", "Option.%s receiver type %s, want ptr", field.Name, base.typ)
+	}
+	emitter := g.toOstyEmitter()
+	cmp := llvmNextTemp(emitter)
+	op := "ne"
+	if field.Name == "isNone" {
+		op = "eq"
+	}
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp %s ptr %s, null", cmp, op, base.ref))
+	g.takeOstyEmitter(emitter)
+	return value{typ: "i1", ref: cmp}, true, nil
 }
 
 func (g *generator) emitSetMethodCall(call *ast.CallExpr) (value, bool, error) {
@@ -3242,6 +4030,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitSetMethodCall(call); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitOptionMethodCall(call); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.emitPrimitiveToStringCall(call); found || err != nil {
 		return v, err
 	}
@@ -3284,7 +4075,7 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return value{}, unsupportedf("call", "function %q has no return value", sig.name)
 	}
 	emitter := g.toOstyEmitter()
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindCall)
 	g.takeOstyEmitter(emitter)
 	g.pushScope()
 	args, err := g.userCallArgs(sig, receiverExpr, call)
@@ -3582,7 +4373,7 @@ func (g *generator) emitOptionalUserCall(call *ast.CallExpr) (value, bool, error
 	}
 	out, err := g.emitOptionalPtrExpr(baseValue, func() (value, error) {
 		emitter := g.toOstyEmitter()
-		g.emitGCSafepoint(emitter)
+		g.emitGCSafepointKind(emitter, safepointKindCall)
 		g.takeOstyEmitter(emitter)
 		args, err := g.optionalUserCallArgs(sig, innerSource, baseValue, call)
 		if err != nil {
@@ -3723,7 +4514,22 @@ func (g *generator) userCallTarget(call *ast.CallExpr) (*fnSig, ast.Expr, bool, 
 		}
 		methods := g.methods[baseInfo.typ]
 		if methods == nil {
-			return nil, nil, false, nil
+			// Phase 2g: built-in container method dispatch.
+			// Surface-level receivers (Map<K, V>, List<T>, …)
+			// carry baseInfo.typ == "ptr" because Phase 2c
+			// re-associates the mangled specialization back to the
+			// surface form for intrinsic dispatch. That leaves the
+			// plain `methodsByType[baseInfo.typ]` lookup missing the
+			// specialized struct's bodied methods (forEach, getOr,
+			// update, …). Try the specialized owner type next.
+			if baseSrc, srcOk := g.staticExprSourceType(fn.X); srcOk {
+				if mangledTyp, ok := specializedBuiltinMangledForSurface(baseSrc); ok {
+					methods = g.methods[mangledTyp]
+				}
+			}
+			if methods == nil {
+				return nil, nil, false, nil
+			}
 		}
 		sig := methods[fn.Name]
 		if sig == nil {

@@ -70,18 +70,65 @@ jobs:
         run: |
           "$OSTY_BIN" ci .
 
-      - name: Verify generated selfhost front end
+      - name: Verify selfhost snapshot parity
         run: |
-          go generate ./toolchain
-          git diff --exit-code -- toolchain/generated.go
-
-      - name: Verify generated selfhost CI core
-        run: |
-          go generate ./internal/ci
-          git diff --exit-code -- internal/ci/osty_generated.go
+          go test -count=1 -vet=off -run 'SnapshotParity|CoreSnapshotParity' \
+            ./internal/ci ./internal/runner
 
       - name: Vet
         run: go vet ./...
 
       - name: Test
         run: go test -vet=off ./...
+
+  cross-compile:
+    name: Cross-compile (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: self-hosted
+    needs: go
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+    env:
+      GOFLAGS: -mod=readonly
+      CGO_ENABLED: "0"
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build osty CLI
+        run: |
+          out="$RUNNER_TEMP/osty-${{ matrix.goos }}-${{ matrix.goarch }}"
+          mkdir -p "$out"
+          suffix=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then suffix=".exe"; fi
+          go build -o "$out/osty$suffix" ./cmd/osty
+
+      - name: Build osty-native-checker
+        run: |
+          out="$RUNNER_TEMP/osty-${{ matrix.goos }}-${{ matrix.goarch }}"
+          suffix=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then suffix=".exe"; fi
+          go build -o "$out/osty-native-checker$suffix" ./cmd/osty-native-checker

@@ -25,9 +25,6 @@ import (
 //
 // Empty waiver list = the file must parse with zero errors.
 var positiveWaivers = map[string][]string{
-	// §2 types: trailing decl list in struct body parser gap. Codeless
-	// recovery error ("expected field or method in struct") at 37:14.
-	"02-types.osty": {""},
 	// §6 scripts: top-level expression statements are still rejected at
 	// parse time instead of being wrapped in an implicit main.
 	"06-scripts.osty": {"E0100"},
@@ -47,14 +44,7 @@ var positiveWaivers = map[string][]string{
 // declared code the test will fail, prompting waiver removal. This map
 // is intentionally churn-friendly: adding or deleting entries is the
 // normal way to track Exxxx migration work.
-var negativeWaivers = map[string][]string{
-	"E0101/`use go` fn with body":           {"warning:L0003"},
-	"E0104/mixed dot/slash in use path":     {"error:E0505", "warning:L0003"},
-	"E0201/`::` not followed by `<`":        {"error:E0204", "warning:L0001"},
-	"E0400/unknown annotation":              {"warning:L0070"},
-	"E0607/annotation on a `use` statement": {"warning:L0003"},
-	"E0608/top-level `defer` in script":     {"error:E0100", "warning:L0001"},
-}
+var negativeWaivers = map[string][]string{}
 
 // TestSpecPositive enforces that every file under
 // testdata/spec/positive/ parses with the expected diagnostic set. New

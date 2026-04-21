@@ -353,9 +353,11 @@ fn main() {
 		"define private i64 @__osty_closure_thunk_identity(ptr %env, i64 %arg0)",
 		// Thunk body delegates to real symbol.
 		"call i64 @identity(i64 %arg0)",
-		// Env allocated on the GC heap (not stack) so the value can
-		// outlive the enclosing frame.
-		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
+		// Env allocated on the GC heap via the Phase A4 dedicated
+		// closure allocator (RUNTIME_GC_DELTA §2.4), so the trace
+		// callback for captures is installed at construction even
+		// though Phase 1 passes 0 captures.
+		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
 		"store ptr @__osty_closure_thunk_identity, ptr",
 		// Indirect call at the use site: load fn ptr from env[0],
 		// invoke through the loaded ptr with env as implicit arg 0.
@@ -576,8 +578,11 @@ fn main() {
 		"%Hook = type { ptr }",
 		// Thunk for inc so the value form has the env-first ABI.
 		"define private i64 @__osty_closure_thunk_inc(ptr %env, i64 %arg0)",
-		// The env is GC-allocated rather than stack-allocated.
-		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
+		// Phase A4 (RUNTIME_GC_DELTA §2.4): closure env goes through
+		// the dedicated runtime allocator so its capture-tracing
+		// callback is installed at construction. Phase 1 passes 0
+		// captures; Phase 4 will grow the count.
+		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
 		// The FieldExpr call path loads the fn ptr from env and
 		// dispatches through it.
 		"= call i64 (ptr, i64)",
@@ -616,9 +621,455 @@ fn main() {
 		"define i64 @apply(ptr %f, i64 %x)",
 		// The call-site inside apply loads fn ptr from env and dispatches.
 		"= call i64 (ptr, i64)",
-		// main materialises a GC-heap env for `inc` and passes it to apply.
-		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
+		// main materialises a GC-heap env for inc and passes it to
+		// apply via the Phase A4 closure-dedicated allocator.
+		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
 		"define private i64 @__osty_closure_thunk_inc(ptr %env, i64 %arg0)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateMapGetLowersAsOptionReturningIntrinsic locks the root-cause
+// fix: Map.get(key) -> V? now goes through the real
+// osty_rt_map_get_<K> runtime helper (bool return + out-param), with
+// V=ptr using the pre-zeroed-slot fast path so a miss yields a null
+// Option without branching. This is the intrinsic future bodied
+// helpers (getOr, containsKey, update, ...) compose on top of.
+func TestGenerateMapGetLowersAsOptionReturningIntrinsic(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn lookup(m: Map<String, String>, k: String) -> String? {
+    m.get(k)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_get.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)",
+		"alloca ptr",
+		"store ptr null, ptr",
+		"call i1 @osty_rt_map_get_string(",
+		"load ptr, ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	// The old contains+get_or_abort special case must not reappear.
+	if strings.Contains(got, "osty_rt_map_contains_string") ||
+		strings.Contains(got, "osty_rt_map_get_or_abort_string") {
+		t.Fatalf("map.get wrongly routed through legacy contains/get_or_abort helpers:\n%s", got)
+	}
+}
+
+// TestGenerateMapGetOrComposesOnGetAndCoalesce verifies Map.getOr is now
+// lowered as the stdlib bodied shape: `self.get(key) ?? default` — i.e.
+// Map.get intrinsic producing Option<V>, then a ptr-backed coalesce.
+// Replaces the earlier contains+get_or_abort+phi hack so future
+// canonical helpers (update, mergeWith, ...) inherit the same
+// composable stack.
+func TestGenerateMapGetOrComposesOnGetAndCoalesce(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn lookup(m: Map<String, String>, k: String, d: String) -> String {
+    m.getOr(k, d)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_getor.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)",
+		"call i1 @osty_rt_map_get_string(",
+		"icmp eq ptr",
+		"br i1 ",
+		"= phi ptr [",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "osty_rt_map_contains_string") ||
+		strings.Contains(got, "osty_rt_map_get_or_abort_string") {
+		t.Fatalf("map.getOr still routes through legacy helpers:\n%s", got)
+	}
+}
+
+// TestGenerateMapGetScalarValueBoxLowering verifies the V=scalar path
+// of Map.get: the helper writes i64 into a stack slot, the present
+// branch GC-allocs a box, copies the payload in, and the phi merges
+// ptr-to-box vs null. Consumers see the boxed-Option ABI (ptr) with
+// a valid `load i64, ptr` in the unwrap path — confirmed later by
+// the getOr scalar test.
+func TestGenerateMapGetScalarValueBoxLowering(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn lookup(m: Map<String, Int>, k: String) -> Int? {
+    m.get(k)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_get_int.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)",
+		"alloca i64",
+		"call i1 @osty_rt_map_get_string(",
+		// Present branch GC-allocs an 8-byte box for i64.
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
+		"store i64 ",
+		"= phi ptr [",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateMapGetOrScalarValueUnwrapsBox verifies Map.getOr for
+// scalar V: the getOr composition loads the i64 payload out of the
+// boxed Option in the some branch and phis it against the scalar
+// default, producing `phi i64` (not `phi ptr`).
+func TestGenerateMapGetOrScalarValueUnwrapsBox(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn count(m: Map<String, Int>, k: String) -> Int {
+    m.getOr(k, 0)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_getor_int.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call i1 @osty_rt_map_get_string(",
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
+		"icmp eq ptr",
+		"load i64, ptr",
+		"= phi i64 [",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "osty_rt_map_contains_string") ||
+		strings.Contains(got, "osty_rt_map_get_or_abort_string") {
+		t.Fatalf("scalar getOr still routes through legacy helpers:\n%s", got)
+	}
+}
+
+// TestGenerateMapUpdateComposesOnGetAndInsert covers the most-used
+// canonical helper (CLAUDE.md §B.9.1.64.1): `m.update(k, f)` with
+// f: fn(V?) -> V. The lowering is get intrinsic + fn-value indirect
+// call + insert intrinsic — no iteration, no special-case inline.
+// Using a top-level fn as f keeps the test focused on the composition
+// rather than closure capture.
+func TestGenerateMapUpdateComposesOnGetAndInsert(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn bump(n: Int?) -> Int {
+    (n ?? 0) + 1
+}
+
+fn tally(m: Map<String, Int>, k: String) {
+    m.update(k, bump)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_update.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call i1 @osty_rt_map_get_string(",
+		// fn-value thunk for `bump`.
+		"define private i64 @__osty_closure_thunk_bump(ptr %env, ptr %arg0)",
+		// Indirect call ABI: ret (ptr, arg-type) through loaded fn ptr.
+		"= call i64 (ptr, ptr)",
+		// Insert after callback returns new V.
+		"call void @osty_rt_map_insert_string(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "osty_rt_map_get_or_abort_string") {
+		t.Fatalf("update wrongly routed through legacy get_or_abort:\n%s", got)
+	}
+}
+
+// TestGenerateMapMergeWithCombinesOnCollision locks the mergeWith
+// shape: new map allocation, two-pass snapshot iteration (copy self,
+// then merge other with combine-on-collision), and the get+branch-on-
+// null per-key decision. combine is called only on collision.
+// Iteration goes through osty_rt_map_keys (snapshot) + per-key get —
+// NOT the raw key_at/value_at walk, so concurrent mutation of self
+// or other can't trip out-of-bounds.
+func TestGenerateMapMergeWithCombinesOnCollision(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn addCombine(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fn merge(a: Map<String, Int>, b: Map<String, Int>) -> Map<String, Int> {
+    a.mergeWith(b, addCombine)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_mergewith.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_map_new(",
+		"call ptr @osty_rt_map_keys(",      // snapshot keys, not key_at index walk
+		"call i1 @osty_rt_map_get_string(", // per-key get (atomic under lock)
+		"= call i64 (ptr, i64, i64)",       // combine indirect call
+		"call void @osty_rt_map_insert_string(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	// Snapshot iteration must NOT use key_at/value_at (index walk is
+	// unsafe under concurrent mutation).
+	if strings.Contains(got, "osty_rt_map_key_at_string") ||
+		strings.Contains(got, "osty_rt_map_value_at") {
+		t.Fatalf("mergeWith still uses index walk key_at/value_at — snapshot regressed:\n%s", got)
+	}
+}
+
+// TestGenerateMapMapValuesRebuildsWithNewValueType verifies mapValues
+// constructs a new map whose V type is the callback's return type
+// (R), routes every entry through the indirect fn call, and uses the
+// snapshot iterator so concurrent mutation is safe.
+func TestGenerateMapMapValuesRebuildsWithNewValueType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn stringify(n: Int) -> String {
+    "{n}"
+}
+
+fn labels(m: Map<String, Int>) -> Map<String, String> {
+    m.mapValues(stringify)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_mapvalues.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_map_new(",
+		"call ptr @osty_rt_map_keys(",      // snapshot, not index walk
+		"call i1 @osty_rt_map_get_string(", // per-key lookup
+		// fn-value indirect call: (ptr env, i64 v) -> ptr
+		"= call ptr (ptr, i64)",
+		"call void @osty_rt_map_insert_string(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "osty_rt_map_key_at_string") ||
+		strings.Contains(got, "osty_rt_map_value_at") {
+		t.Fatalf("mapValues regressed to index walk:\n%s", got)
+	}
+}
+
+// TestGenerateMapUpdateRunsUnderLock verifies the update composition
+// (get + callback + insert) is wrapped in a per-map lock/unlock pair.
+// The lock is the root-cause fix for the "observation-then-mutation"
+// race — without it, a concurrent insert could slip between the get
+// and the insert, silently losing data.
+func TestGenerateMapUpdateRunsUnderLock(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn bump(n: Int?) -> Int {
+    (n ?? 0) + 1
+}
+
+fn tally(m: Map<String, Int>, k: String) {
+    m.update(k, bump)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_update_locked.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare void @osty_rt_map_lock(ptr)",
+		"declare void @osty_rt_map_unlock(ptr)",
+		"call void @osty_rt_map_lock(",
+		"call void @osty_rt_map_unlock(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("update must be wrapped in map_lock/unlock, missing %q:\n%s", want, got)
+		}
+	}
+	// Sanity: lock must precede unlock in the IR stream.
+	lockIdx := strings.Index(got, "call void @osty_rt_map_lock(")
+	unlockIdx := strings.Index(got, "call void @osty_rt_map_unlock(")
+	if lockIdx < 0 || unlockIdx < 0 || unlockIdx < lockIdx {
+		t.Fatalf("unlock (%d) must appear after lock (%d):\n%s", unlockIdx, lockIdx, got)
+	}
+}
+
+// TestGenerateMapRetainIfUsesSnapshotIteration verifies retainIf no
+// longer uses index-based key_at/value_at (which races against
+// concurrent mutators that could change map length mid-walk). It
+// iterates the keys snapshot returned by osty_rt_map_keys + per-key
+// get, matching the stdlib body's safe semantics.
+func TestGenerateMapRetainIfUsesSnapshotIteration(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn keepPositive(k: String, v: Int) -> Bool {
+    v > 0
+}
+
+fn prune(m: Map<String, Int>) {
+    m.retainIf(keepPositive)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_retainif_snapshot.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_map_keys(",
+		"call i1 @osty_rt_map_get_string(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("retainIf should iterate snapshot, missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "osty_rt_map_key_at_string") ||
+		strings.Contains(got, "osty_rt_map_value_at") {
+		t.Fatalf("retainIf still uses index walk key_at/value_at:\n%s", got)
+	}
+}
+
+// TestGenerateMapRetainIfTwoPass verifies `m.retainIf(pred)` emits the
+// collect-then-remove shape: pass 1 walks a frozen keys snapshot,
+// invokes pred, and pushes failing keys into a victim List<K>; pass
+// 2 iterates victims and calls map_remove. Two passes because map
+// mutation during iteration is undefined; snapshot iteration because
+// a concurrent mutator can't be allowed to break the walk.
+func TestGenerateMapRetainIfTwoPass(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn keepPositive(k: String, v: Int) -> Bool {
+    v > 0
+}
+
+fn prune(m: Map<String, Int>) {
+    m.retainIf(keepPositive)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_retainif.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_map_keys(",      // snapshot keys for pass 1
+		"call i1 @osty_rt_map_get_string(", // per-key get under lock
+		// fn-value thunk for pred.
+		"define private i1 @__osty_closure_thunk_keepPositive(ptr %env, ptr %arg0, i64 %arg1)",
+		"= call i1 (ptr, ptr, i64)",
+		"call ptr @osty_rt_list_new()",
+		"call void @osty_rt_list_push_ptr(",
+		// Second pass calls map_remove per victim.
+		"call i1 @osty_rt_map_remove_string(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateMapForInLowersAsIndexedWalk locks map iteration
+// infrastructure: `for (k, v) in m` over Map<String, Int> lowers as
+// map_len + index loop + key_at + value_at slot accessors. This is the
+// primitive `retainIf`/`mergeWith`/`mapValues` compose on top of — it
+// MUST work on arbitrary user code, not just stdlib helpers.
+func TestGenerateMapForInLowersAsIndexedWalk(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn sum(m: Map<String, Int>) -> Int {
+    let mut total = 0
+    for (k, v) in m {
+        total = total + v
+    }
+    total
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_for_in.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare i64 @osty_rt_map_len(ptr)",
+		"declare ptr @osty_rt_map_key_at_string(ptr, i64)",
+		"declare void @osty_rt_map_value_at(ptr, i64, ptr)",
+		"call i64 @osty_rt_map_len(",
+		"call ptr @osty_rt_map_key_at_string(",
+		"call void @osty_rt_map_value_at(",
+		"alloca i64",
+		"load i64, ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateMapGetBoolValueUses1ByteBox exercises i1 V: byte size
+// drops to 1, but otherwise the same branch+box shape applies.
+func TestGenerateMapGetBoolValueUses1ByteBox(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn flag(m: Map<String, Bool>, k: String) -> Bool {
+    m.getOr(k, false)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_getor_bool.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 1,",
+		"alloca i1",
+		"load i1, ptr",
+		"= phi i1 [",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)

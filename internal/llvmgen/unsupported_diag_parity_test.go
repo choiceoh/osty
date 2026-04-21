@@ -5,22 +5,32 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 )
+
+// ostyEvaluatedHint applies the Osty string-literal escape rules that
+// matter for the diagnostic-hint parity check: `\{` / `\}` collapse to
+// literal `{` / `}` so an Osty source written with escaped braces (the
+// only safe way to embed `{ ... }` in a non-interpolated message)
+// compares equal to a Go snapshot that uses bare braces.
+func ostyEvaluatedHint(raw string) string {
+	r := strings.NewReplacer(`\{`, `{`, `\}`, `}`)
+	return r.Replace(raw)
+}
 
 // TestUnsupportedDiagnosticOstySnapshotParity pins the kind → (code, hint)
 // mapping agreement across the three places it lives:
 //
 //   - toolchain/llvmgen.osty              (declared source of truth; see
 //     llvmgen.go header + toolchain/llvmgen.osty:1325 comment)
-//   - examples/selfhost-core/llvmgen.osty (bootstrap seed mirror)
 //   - support_snapshot.go                 (hand-maintained Go snapshot,
 //     exported via UnsupportedDiagnosticFor)
 //
 // Without this gate a branch added to one file and forgotten in the
-// others silently drifts. That is how LLVM018 (stdlib-body) ended up
-// present in examples/selfhost-core + the Go snapshot but absent from
-// toolchain/llvmgen.osty between commits 3b23c72 and the follow-up fix.
+// other silently drifts. That is how LLVM018 (stdlib-body) ended up
+// present in the Go snapshot but absent from toolchain/llvmgen.osty
+// between commits 3b23c72 and the follow-up fix.
 //
 // Both branch shapes are covered:
 //   - uniform call form: `llvmUnsupportedDiagnosticWith("LLVMNNN", ...)`
@@ -39,7 +49,7 @@ func TestUnsupportedDiagnosticOstySnapshotParity(t *testing.T) {
 	}
 	sources := []string{
 		"toolchain/llvmgen.osty",
-		"examples/selfhost-core/llvmgen.osty",
+		"toolchain/llvmgen.osty",
 	}
 	extracted := make(map[string]map[string][2]string) // rel path → kind → [code, hint]
 	for _, rel := range sources {
@@ -76,7 +86,7 @@ func TestUnsupportedDiagnosticOstySnapshotParity(t *testing.T) {
 				t.Errorf("kind %q: %s has code %q, Go snapshot has %q",
 					kind, rel, br[0], snap.Code)
 			}
-			if br[1] != snap.Hint {
+			if ostyEvaluatedHint(br[1]) != snap.Hint {
 				t.Errorf("kind %q: %s hint drift\n  osty:     %q\n  snapshot: %q",
 					kind, rel, br[1], snap.Hint)
 			}

@@ -217,6 +217,8 @@ func resolveAllowName(name string) []string {
 	case "simplify", "suspicious":
 		return []string{
 			diag.CodeRedundantBool, diag.CodeSelfCompare, diag.CodeSelfAssign,
+			diag.CodeUnnecessaryWrap, diag.CodeLetReturnSimplify,
+			diag.CodeNeedlessParens, diag.CodeInfiniteLoopLiteral,
 		}
 	}
 	// Individual rule aliases.
@@ -249,6 +251,16 @@ func resolveAllowName(name string) []string {
 		return []string{diag.CodeSelfCompare}
 	case "self_assign":
 		return []string{diag.CodeSelfAssign}
+	case "unnecessary_wrap":
+		return []string{diag.CodeUnnecessaryWrap}
+	case "let_return_simplify":
+		return []string{diag.CodeLetReturnSimplify}
+	case "needless_parens_condition":
+		return []string{diag.CodeNeedlessParens}
+	case "infinite_loop_literal":
+		return []string{diag.CodeInfiniteLoopLiteral}
+	case "missing_test_assertion":
+		return []string{diag.CodeMissingTestAssertion}
 	}
 	return nil
 }

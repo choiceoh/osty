@@ -136,12 +136,7 @@ pub fn selfResolveAstFile(file: AstFile) -> SelfResolveResult {
 }
 
 pub fn selfResolveDiagnosticCount(result: SelfResolveResult) -> Int {
-    let mut count = 0
-    for diag in result.diagnostics {
-        let _ = diag
-        count = count + 1
-    }
-    count
+    result.diagnostics.len()
 }
 
 pub fn selfResolveCodeCount(result: SelfResolveResult, code: String) -> Int {
@@ -259,32 +254,33 @@ pub fn selfResolveRefNodesSameTarget(
     leftNode: Int,
     rightNode: Int,
 ) -> Bool {
+    // Fused single-pass scan: the previous version walked `refNodes`
+    // twice, once to find each side. Merging both checks into one
+    // traversal halves the work and the early `break` lets us leave
+    // as soon as both sides are resolved.
     let mut leftFound = false
     let mut leftTarget = -1
     let mut leftStart = -1
     let mut leftEnd = -1
-    let mut idx = 0
-    for node in result.refNodes {
-        if node == leftNode {
-            leftFound = true
-            leftTarget = srIntListAt(result.refTargets, idx)
-            leftStart = srIntListAt(result.refTargetStarts, idx)
-            leftEnd = srIntListAt(result.refTargetEnds, idx)
-        }
-        idx = idx + 1
-    }
-
     let mut rightFound = false
     let mut rightTarget = -1
     let mut rightStart = -1
     let mut rightEnd = -1
-    idx = 0
+    let mut idx = 0
     for node in result.refNodes {
-        if node == rightNode {
+        if node == leftNode && !(leftFound) {
+            leftFound = true
+            leftTarget = srIntListAt(result.refTargets, idx)
+            leftStart = srIntListAt(result.refTargetStarts, idx)
+            leftEnd = srIntListAt(result.refTargetEnds, idx)
+        } else if node == rightNode && !(rightFound) {
             rightFound = true
             rightTarget = srIntListAt(result.refTargets, idx)
             rightStart = srIntListAt(result.refTargetStarts, idx)
             rightEnd = srIntListAt(result.refTargetEnds, idx)
+        }
+        if leftFound && rightFound {
+            break
         }
         idx = idx + 1
     }
@@ -1524,45 +1520,22 @@ fn srAstNode(file: AstFile, idx: Int) -> AstNode {
 }
 
 fn srAstChildAt(children: List<Int>, target: Int) -> Int {
-    let mut idx = 0
-    for child in children {
-        if idx == target {
-            return child
-        }
-        idx = idx + 1
-    }
-    -1
+    if target < 0 || target >= children.len() { return -1 }
+    children[target]
 }
 
 fn srAstListCount(items: List<Int>) -> Int {
-    let mut count = 0
-    for item in items {
-        let _ = item
-        count = count + 1
-    }
-    count
+    items.len()
 }
 
 fn srIntListAt(items: List<Int>, target: Int) -> Int {
-    let mut idx = 0
-    for item in items {
-        if idx == target {
-            return item
-        }
-        idx = idx + 1
-    }
-    -1
+    if target < 0 || target >= items.len() { return -1 }
+    items[target]
 }
 
 fn srStringListAt(items: List<String>, target: Int) -> String {
-    let mut idx = 0
-    for item in items {
-        if idx == target {
-            return item
-        }
-        idx = idx + 1
-    }
-    ""
+    if target < 0 || target >= items.len() { return "" }
+    items[target]
 }
 
 fn srSymbolListCopy(items: List<SelfSymbol>) -> List<SelfSymbol> {

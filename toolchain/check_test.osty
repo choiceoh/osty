@@ -399,3 +399,50 @@ fn testSelfCheckerChecksInterfaceSatisfaction() {
     testing.assertEq(good.errors, 0)
     testing.assert(bad.errors > 0)
 }
+
+fn testSelfCheckerAcceptsCollectionMethodSurfaceUsedByGcModel() {
+    let checked = frontendCheckSource(
+        r"""
+            fn snapshot(objects: Map<Int, String>, roots: Set<Int>) -> List<Int> {
+                let rootList: List<Int> = roots.toList()
+                let sortedIds: List<Int> = objects.keys().sorted()
+                let rebuilt: Set<Int> = rootList.toSet()
+                let hasRoot: Bool = rebuilt.contains(1)
+                let rootCount: Int = rebuilt.len()
+                let empty: Bool = rebuilt.isEmpty()
+                rebuilt.insert(rootCount)
+                let removed: Bool = rebuilt.remove(0)
+                if hasRoot && removed == false && empty == false {
+                    return sortedIds
+                }
+                sortedIds
+            }
+            """,
+    )
+
+    testing.assertEq(checked.errors, 0)
+}
+
+fn testSelfCheckerBindsTuplePatternsWhenIteratingMaps() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            struct Obj {
+                generation: Int,
+            }
+
+            fn total(objects: Map<Int, Obj>) -> Int {
+                let mut sum = 0
+                for (id, obj) in objects {
+                    if obj.generation > 0 {
+                        sum = sum + id
+                    }
+                }
+                sum
+            }
+            """,
+    )
+
+    testing.assertEq(checked.summary.errors, 0)
+    testing.assertEq(frontCheckResultBindingType(checked, "id"), "Int")
+    testing.assertEq(frontCheckResultBindingType(checked, "obj"), "Obj")
+}

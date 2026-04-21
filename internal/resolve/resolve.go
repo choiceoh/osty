@@ -115,7 +115,12 @@ func newPkgResolver(pkg *Package, prelude *Scope) *resolver {
 		owningPkg: pkg,
 	}
 	for _, f := range pkg.Files {
-		r.diags = append(r.diags, f.ParseDiags...)
+		for _, pd := range f.ParseDiags {
+			if pd.File == "" {
+				pd.File = f.Path
+			}
+			r.diags = append(r.diags, pd)
+		}
 	}
 	return r
 }
@@ -129,10 +134,12 @@ func (r *resolver) declarePass(pkg *Package) {
 	merged := map[string]*mergedDecl{}
 	for _, f := range pkg.Files {
 		r.current = r.pkgScope
+		r.filePath = f.Path
 		for _, d := range f.File.Decls {
 			r.declareTopLevelPackage(d, merged)
 		}
 	}
+	r.filePath = ""
 }
 
 // bodyPass walks each file's declarations and top-level statements in
@@ -150,6 +157,7 @@ func (r *resolver) bodyPass(pkg *Package) {
 		r.refs = f.Refs
 		r.typeRefs = f.TypeRefs
 		r.file = f.File
+		r.filePath = f.Path
 
 		for _, u := range f.File.Uses {
 			r.declareUse(u)
@@ -182,6 +190,7 @@ func (r *resolver) bodyPass(pkg *Package) {
 // re-pointed at the current file's state before Pass 2 begins.
 type resolver struct {
 	file     *ast.File
+	filePath string // filesystem path of the current file; stamped onto emitted diagnostics
 	refs     map[*ast.Ident]*Symbol
 	typeRefs map[*ast.NamedType]*Symbol
 	current  *Scope // the scope being populated/resolved
@@ -241,13 +250,22 @@ type methodCtx struct {
 // ---- Diagnostic helpers ----
 
 func (r *resolver) errorf(pos token.Pos, code, format string, args ...any) {
-	r.diags = append(r.diags, diag.New(diag.Error, fmt.Sprintf(format, args...)).
+	d := diag.New(diag.Error, fmt.Sprintf(format, args...)).
 		Code(code).
 		PrimaryPos(pos, "").
-		Build())
+		Build()
+	if d.File == "" {
+		d.File = r.filePath
+	}
+	r.diags = append(r.diags, d)
 }
 
-func (r *resolver) emit(d *diag.Diagnostic) { r.diags = append(r.diags, d) }
+func (r *resolver) emit(d *diag.Diagnostic) {
+	if d.File == "" {
+		d.File = r.filePath
+	}
+	r.diags = append(r.diags, d)
+}
 
 // ---- Pass 0: use declarations ----
 
@@ -476,7 +494,7 @@ func topLevelAnnotations(d ast.Decl) []*ast.Annotation {
 // checkAnnotations validates the annotations on a declaration against
 // v0.2 R26 and v0.4 §18.1:
 //
-//   - unknown names are flagged by the parser (E0400) and skipped here;
+//   - unknown names are flagged with E0400 here;
 //   - the annotation's target kind must be permitted (E0607);
 //   - the same annotation name may not appear twice on one target — for
 //     example `#[deprecated] #[deprecated] fn …` is rejected (E0609).
@@ -484,6 +502,13 @@ func (r *resolver) checkAnnotations(annots []*ast.Annotation, target ast.Annotat
 	var seen map[string]*ast.Annotation
 	for _, a := range annots {
 		if !ast.IsAllowedAnnotation(a.Name) {
+			r.emit(diag.New(diag.Error,
+				fmt.Sprintf("unknown annotation `#[%s]`", a.Name)).
+				Code(diag.CodeUnknownAnnotation).
+				Primary(diag.Span{Start: a.PosV, End: a.EndV},
+					"this annotation name is not recognized").
+				Note("v0.4 §18.1: only `#[json]`, `#[deprecated]`, `#[allow]`, `#[cfg]`, `#[op]`, `#[test]`, and the runtime sublanguage annotations are permitted").
+				Build())
 			continue
 		}
 		if !ast.AnnotationAllowedAt(a.Name, target) {

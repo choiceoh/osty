@@ -173,11 +173,23 @@ func clangCompileCObjectArgs(target, sourcePath, objectPath string) []string {
 	if target != "" {
 		args = append(args, "-target", target)
 	}
-	// `-pthread` enables _REENTRANT for the threading and channel
-	// implementations bundled in `runtime/osty_runtime.c`. The matching
-	// link flag is injected in `llvmClangLinkBinaryArgs`.
-	args = append(args, "-std=c11", "-pthread", "-c", sourcePath, "-o", objectPath)
+	// `-pthread` enables _REENTRANT for the POSIX threading surface in
+	// `runtime/osty_runtime.c`. The Windows branch of the runtime uses
+	// Win32 primitives directly (SRWLOCK / CONDITION_VARIABLE / ...)
+	// and does not need pthread, so omit the flag for Windows targets;
+	// clang-cl / clang-msvc would otherwise warn or fail on it.
+	if !isWindowsTarget(target) {
+		args = append(args, "-pthread")
+	}
+	args = append(args, "-std=c11", "-c", sourcePath, "-o", objectPath)
 	return args
+}
+
+// isWindowsTarget reports whether the LLVM target triple names a
+// Windows OS component. Empty triples mean "host"; the caller passes
+// the runtime.GOOS-derived default in that case.
+func isWindowsTarget(target string) bool {
+	return strings.Contains(target, "windows")
 }
 
 func runClang(ctx context.Context, action string, args []string) error {

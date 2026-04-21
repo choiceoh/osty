@@ -20,7 +20,7 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E0007" { return FamilyLexical }
     if code == "E0008" { return FamilyLexical }
     if code == "E0009" { return FamilyLexical }
-    // Declarations & statements (E0100–E0106)
+    // Declarations & statements (E0100–E0109)
     if code == "E0100" { return FamilyDeclaration }
     if code == "E0101" { return FamilyDeclaration }
     if code == "E0102" { return FamilyDeclaration }
@@ -28,12 +28,16 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E0104" { return FamilyDeclaration }
     if code == "E0105" { return FamilyDeclaration }
     if code == "E0106" { return FamilyDeclaration }
-    // Expressions (E0200–E0204)
+    if code == "E0107" { return FamilyDeclaration }
+    if code == "E0108" { return FamilyDeclaration }
+    if code == "E0109" { return FamilyDeclaration }
+    // Expressions (E0200–E0205)
     if code == "E0200" { return FamilyExpression }
     if code == "E0201" { return FamilyExpression }
     if code == "E0202" { return FamilyExpression }
     if code == "E0203" { return FamilyExpression }
     if code == "E0204" { return FamilyExpression }
+    if code == "E0205" { return FamilyExpression }
     // Types & patterns (E0300–E0301)
     if code == "E0300" { return FamilyTypePattern }
     if code == "E0301" { return FamilyTypePattern }
@@ -192,18 +196,23 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "L0030" { return FamilyLint }
     if code == "L0031" { return FamilyLint }
     if code == "L0032" { return FamilyLint }
-    // Lint — redundant forms (L0040–L0045)
+    // Lint — redundant forms (L0040–L0049)
     if code == "L0040" { return FamilyLint }
     if code == "L0041" { return FamilyLint }
     if code == "L0042" { return FamilyLint }
     if code == "L0043" { return FamilyLint }
     if code == "L0044" { return FamilyLint }
     if code == "L0045" { return FamilyLint }
+    if code == "L0046" { return FamilyLint }
+    if code == "L0047" { return FamilyLint }
+    if code == "L0048" { return FamilyLint }
+    if code == "L0049" { return FamilyLint }
     // Lint — complexity (L0050–L0053)
     if code == "L0050" { return FamilyLint }
     if code == "L0052" { return FamilyLint }
     if code == "L0053" { return FamilyLint }
-    // Lint — documentation (L0070)
+    // Lint — documentation (L0070–L0080)
     if code == "L0070" { return FamilyLint }
+    if code == "L0080" { return FamilyLint }
     FamilyUnknown
 }

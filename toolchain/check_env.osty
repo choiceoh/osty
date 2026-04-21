@@ -122,35 +122,50 @@ pub struct CheckEnv {
 
     // Lexical stack; binding operations push to the tail and `checkScopeDrop`
     // truncates to a previously captured mark.
+    //
+    // Each `*Index*` table is backed by parallel arrays: `Keys` holds
+    // the string key, `Values` holds the slot payload, and `Hashes`
+    // caches a 30-bit fingerprint computed by `checkHashKey`. Lookups
+    // iterate backwards and compare the cheap Int hash first so most
+    // misses are rejected without a full string comparison.
     pub bindings: List<CheckBinding>,
     pub bindingIndexNames: List<String>,
+    pub bindingIndexHashes: List<Int>,
     pub bindingIndexStacks: List<List<CheckBinding>>,
 
     // Module-level signatures.
     pub fns: List<CheckFnSig>,
     pub fnIndexKeys: List<String>,
+    pub fnIndexHashes: List<Int>,
     pub fnIndexValues: List<Int>,
     pub fields: List<CheckFieldSig>,
     pub fieldIndexKeys: List<String>,
+    pub fieldIndexHashes: List<Int>,
     pub fieldIndexValues: List<Int>,
     pub variants: List<CheckVariantSig>,
     pub variantIndexKeys: List<String>,
+    pub variantIndexHashes: List<Int>,
     pub variantIndexValues: List<Int>,
     pub variantOwnerIndexKeys: List<String>,
+    pub variantOwnerIndexHashes: List<Int>,
     pub variantOwnerIndexValues: List<Int>,
     pub aliases: List<CheckAliasSig>,
     pub aliasIndexKeys: List<String>,
+    pub aliasIndexHashes: List<Int>,
     pub aliasIndexValues: List<Int>,
     pub types: List<CheckTypeSig>,
     pub typeIndexKeys: List<String>,
+    pub typeIndexHashes: List<Int>,
     pub typeIndexValues: List<Int>,
     pub interfaces: List<String>,
     pub interfaceIndexKeys: List<String>,
+    pub interfaceIndexHashes: List<Int>,
     pub interfaceExtends: List<CheckInterfaceExt>,
 
     // Generic bounds currently in scope (owner fn / struct / impl).
     pub genericBounds: List<CheckGenericBound>,
     pub genericBoundIndexNames: List<String>,
+    pub genericBoundIndexHashes: List<Int>,
     pub genericBoundIndexStacks: List<List<Int>>,
 
     // Memoized type rewrites. `aliasDeepCache` is indexed directly by
@@ -158,6 +173,7 @@ pub struct CheckEnv {
     // environment because the same type can be specialised many ways.
     pub aliasDeepCache: List<Int>,
     pub substCacheKeys: List<String>,
+    pub substCacheHashes: List<Int>,
     pub substCacheValues: List<Int>,
 
     // Flow context.
@@ -182,32 +198,42 @@ pub fn emptyCheckEnv(tys: TyArena) -> CheckEnv {
         tys,
         bindings: [],
         bindingIndexNames: [],
+        bindingIndexHashes: [],
         bindingIndexStacks: [],
         fns: [],
         fnIndexKeys: [],
+        fnIndexHashes: [],
         fnIndexValues: [],
         fields: [],
         fieldIndexKeys: [],
+        fieldIndexHashes: [],
         fieldIndexValues: [],
         variants: [],
         variantIndexKeys: [],
+        variantIndexHashes: [],
         variantIndexValues: [],
         variantOwnerIndexKeys: [],
+        variantOwnerIndexHashes: [],
         variantOwnerIndexValues: [],
         aliases: [],
         aliasIndexKeys: [],
+        aliasIndexHashes: [],
         aliasIndexValues: [],
         types: [],
         typeIndexKeys: [],
+        typeIndexHashes: [],
         typeIndexValues: [],
         interfaces: [],
         interfaceIndexKeys: [],
+        interfaceIndexHashes: [],
         interfaceExtends: [],
         genericBounds: [],
         genericBoundIndexNames: [],
+        genericBoundIndexHashes: [],
         genericBoundIndexStacks: [],
         aliasDeepCache: [],
         substCacheKeys: [],
+        substCacheHashes: [],
         substCacheValues: [],
         returnTy: tErr(tys),
         fnName: "",
@@ -291,7 +317,7 @@ pub fn checkBindSpan(env: CheckEnv, name: String, ty: Int, mutable: Bool, start:
 /// the most recent binding for `name`. Returns `-1` (no type) when
 /// `name` is not in scope.
 pub fn checkLookup(env: CheckEnv, name: String) -> Int {
-    let slot = checkNameIndex(env.bindingIndexNames, name)
+    let slot = checkNameIndex(env.bindingIndexNames, env.bindingIndexHashes, name, checkHashKey(name))
     if slot < 0 {
         return -1
     }
@@ -303,7 +329,7 @@ pub fn checkLookup(env: CheckEnv, name: String) -> Int {
 }
 
 pub fn checkLookupMutable(env: CheckEnv, name: String) -> Bool {
-    let slot = checkNameIndex(env.bindingIndexNames, name)
+    let slot = checkNameIndex(env.bindingIndexNames, env.bindingIndexHashes, name, checkHashKey(name))
     if slot < 0 {
         return false
     }
@@ -322,9 +348,11 @@ pub fn checkRegisterFn(env: CheckEnv, sig: CheckFnSig) {
     let idx = env.fns.len()
     env.fns.push(sig)
     let key = checkFnKey(sig.name, sig.owner)
-    let slot = checkNameIndex(env.fnIndexKeys, key)
+    let keyHash = checkHashKey(key)
+    let slot = checkNameIndex(env.fnIndexKeys, env.fnIndexHashes, key, keyHash)
     if slot < 0 {
         env.fnIndexKeys.push(key)
+        env.fnIndexHashes.push(keyHash)
         env.fnIndexValues.push(idx)
     } else {
         env.fnIndexValues[slot] = idx
@@ -332,7 +360,8 @@ pub fn checkRegisterFn(env: CheckEnv, sig: CheckFnSig) {
 }
 
 pub fn checkLookupFn(env: CheckEnv, name: String, owner: String) -> CheckFnSig {
-    let idx = checkLookupExactIndex(env.fnIndexKeys, env.fnIndexValues, checkFnKey(name, owner))
+    let key = checkFnKey(name, owner)
+    let idx = checkLookupExactIndex(env.fnIndexKeys, env.fnIndexHashes, env.fnIndexValues, key, checkHashKey(key))
     if idx >= 0 {
         return env.fns[idx]
     }
@@ -375,9 +404,11 @@ pub fn checkRegisterField(env: CheckEnv, field: CheckFieldSig) {
     let idx = env.fields.len()
     env.fields.push(field)
     let key = checkOwnerKey(field.owner, field.name)
-    let slot = checkNameIndex(env.fieldIndexKeys, key)
+    let keyHash = checkHashKey(key)
+    let slot = checkNameIndex(env.fieldIndexKeys, env.fieldIndexHashes, key, keyHash)
     if slot < 0 {
         env.fieldIndexKeys.push(key)
+        env.fieldIndexHashes.push(keyHash)
         env.fieldIndexValues.push(idx)
     } else {
         env.fieldIndexValues[slot] = idx
@@ -385,7 +416,8 @@ pub fn checkRegisterField(env: CheckEnv, field: CheckFieldSig) {
 }
 
 pub fn checkLookupField(env: CheckEnv, owner: String, name: String) -> CheckFieldSig {
-    let idx = checkLookupExactIndex(env.fieldIndexKeys, env.fieldIndexValues, checkOwnerKey(owner, name))
+    let key = checkOwnerKey(owner, name)
+    let idx = checkLookupExactIndex(env.fieldIndexKeys, env.fieldIndexHashes, env.fieldIndexValues, key, checkHashKey(key))
     if idx >= 0 {
         return env.fields[idx]
     }
@@ -395,17 +427,21 @@ pub fn checkLookupField(env: CheckEnv, owner: String, name: String) -> CheckFiel
 pub fn checkRegisterVariant(env: CheckEnv, variant: CheckVariantSig) {
     let idx = env.variants.len()
     env.variants.push(variant)
-    let nameSlot = checkNameIndex(env.variantIndexKeys, variant.name)
+    let nameHash = checkHashKey(variant.name)
+    let nameSlot = checkNameIndex(env.variantIndexKeys, env.variantIndexHashes, variant.name, nameHash)
     if nameSlot < 0 {
         env.variantIndexKeys.push(variant.name)
+        env.variantIndexHashes.push(nameHash)
         env.variantIndexValues.push(idx)
     } else {
         env.variantIndexValues[nameSlot] = idx
     }
     let ownerKey = checkOwnerKey(variant.owner, variant.name)
-    let ownerSlot = checkNameIndex(env.variantOwnerIndexKeys, ownerKey)
+    let ownerHash = checkHashKey(ownerKey)
+    let ownerSlot = checkNameIndex(env.variantOwnerIndexKeys, env.variantOwnerIndexHashes, ownerKey, ownerHash)
     if ownerSlot < 0 {
         env.variantOwnerIndexKeys.push(ownerKey)
+        env.variantOwnerIndexHashes.push(ownerHash)
         env.variantOwnerIndexValues.push(idx)
     } else {
         env.variantOwnerIndexValues[ownerSlot] = idx
@@ -413,7 +449,7 @@ pub fn checkRegisterVariant(env: CheckEnv, variant: CheckVariantSig) {
 }
 
 pub fn checkLookupVariant(env: CheckEnv, name: String) -> CheckVariantSig {
-    let idx = checkLookupExactIndex(env.variantIndexKeys, env.variantIndexValues, name)
+    let idx = checkLookupExactIndex(env.variantIndexKeys, env.variantIndexHashes, env.variantIndexValues, name, checkHashKey(name))
     if idx >= 0 {
         return env.variants[idx]
     }
@@ -421,7 +457,8 @@ pub fn checkLookupVariant(env: CheckEnv, name: String) -> CheckVariantSig {
 }
 
 pub fn checkLookupVariantInOwner(env: CheckEnv, owner: String, name: String) -> CheckVariantSig {
-    let idx = checkLookupExactIndex(env.variantOwnerIndexKeys, env.variantOwnerIndexValues, checkOwnerKey(owner, name))
+    let key = checkOwnerKey(owner, name)
+    let idx = checkLookupExactIndex(env.variantOwnerIndexKeys, env.variantOwnerIndexHashes, env.variantOwnerIndexValues, key, checkHashKey(key))
     if idx >= 0 {
         return env.variants[idx]
     }
@@ -431,9 +468,11 @@ pub fn checkLookupVariantInOwner(env: CheckEnv, owner: String, name: String) -> 
 pub fn checkRegisterAlias(env: CheckEnv, alias: CheckAliasSig) {
     let idx = env.aliases.len()
     env.aliases.push(alias)
-    let slot = checkNameIndex(env.aliasIndexKeys, alias.name)
+    let nameHash = checkHashKey(alias.name)
+    let slot = checkNameIndex(env.aliasIndexKeys, env.aliasIndexHashes, alias.name, nameHash)
     if slot < 0 {
         env.aliasIndexKeys.push(alias.name)
+        env.aliasIndexHashes.push(nameHash)
         env.aliasIndexValues.push(idx)
     } else {
         env.aliasIndexValues[slot] = idx
@@ -442,7 +481,7 @@ pub fn checkRegisterAlias(env: CheckEnv, alias: CheckAliasSig) {
 }
 
 pub fn checkLookupAlias(env: CheckEnv, name: String) -> CheckAliasSig {
-    let idx = checkLookupExactIndex(env.aliasIndexKeys, env.aliasIndexValues, name)
+    let idx = checkLookupExactIndex(env.aliasIndexKeys, env.aliasIndexHashes, env.aliasIndexValues, name, checkHashKey(name))
     if idx >= 0 {
         return env.aliases[idx]
     }
@@ -452,9 +491,11 @@ pub fn checkLookupAlias(env: CheckEnv, name: String) -> CheckAliasSig {
 pub fn checkRegisterType(env: CheckEnv, sig: CheckTypeSig) {
     let idx = env.types.len()
     env.types.push(sig)
-    let slot = checkNameIndex(env.typeIndexKeys, sig.name)
+    let nameHash = checkHashKey(sig.name)
+    let slot = checkNameIndex(env.typeIndexKeys, env.typeIndexHashes, sig.name, nameHash)
     if slot < 0 {
         env.typeIndexKeys.push(sig.name)
+        env.typeIndexHashes.push(nameHash)
         env.typeIndexValues.push(idx)
     } else {
         env.typeIndexValues[slot] = idx
@@ -462,7 +503,7 @@ pub fn checkRegisterType(env: CheckEnv, sig: CheckTypeSig) {
 }
 
 pub fn checkLookupType(env: CheckEnv, name: String) -> CheckTypeSig {
-    let idx = checkLookupExactIndex(env.typeIndexKeys, env.typeIndexValues, name)
+    let idx = checkLookupExactIndex(env.typeIndexKeys, env.typeIndexHashes, env.typeIndexValues, name, checkHashKey(name))
     if idx >= 0 {
         return env.types[idx]
     }
@@ -481,13 +522,15 @@ pub fn checkDeclaredTypeExists(env: CheckEnv, name: String) -> Bool {
 
 pub fn checkRegisterInterface(env: CheckEnv, name: String) {
     env.interfaces.push(name)
-    if checkNameIndex(env.interfaceIndexKeys, name) < 0 {
+    let nameHash = checkHashKey(name)
+    if checkNameIndex(env.interfaceIndexKeys, env.interfaceIndexHashes, name, nameHash) < 0 {
         env.interfaceIndexKeys.push(name)
+        env.interfaceIndexHashes.push(nameHash)
     }
 }
 
 pub fn checkIsInterface(env: CheckEnv, name: String) -> Bool {
-    checkNameIndex(env.interfaceIndexKeys, name) >= 0
+    checkNameIndex(env.interfaceIndexKeys, env.interfaceIndexHashes, name, checkHashKey(name)) >= 0
 }
 
 pub fn checkRegisterInterfaceExtends(env: CheckEnv, ext: CheckInterfaceExt) {
@@ -514,7 +557,7 @@ pub fn checkAddGenericBound(env: CheckEnv, bound: CheckGenericBound) {
 }
 
 pub fn checkLookupGenericBound(env: CheckEnv, tyParam: String) -> Int {
-    let slot = checkNameIndex(env.genericBoundIndexNames, tyParam)
+    let slot = checkNameIndex(env.genericBoundIndexNames, env.genericBoundIndexHashes, tyParam, checkHashKey(tyParam))
     if slot < 0 {
         return -1
     }
@@ -526,7 +569,7 @@ pub fn checkLookupGenericBound(env: CheckEnv, tyParam: String) -> Int {
 }
 
 pub fn checkGenericBoundsFor(env: CheckEnv, tyParam: String) -> List<Int> {
-    let slot = checkNameIndex(env.genericBoundIndexNames, tyParam)
+    let slot = checkNameIndex(env.genericBoundIndexNames, env.genericBoundIndexHashes, tyParam, checkHashKey(tyParam))
     if slot < 0 {
         return []
     }
@@ -552,9 +595,11 @@ fn checkGenericBoundCount(env: CheckEnv) -> Int {
 }
 
 fn checkBindingIndexPush(env: CheckEnv, binding: CheckBinding) {
-    let slot = checkNameIndex(env.bindingIndexNames, binding.name)
+    let nameHash = checkHashKey(binding.name)
+    let slot = checkNameIndex(env.bindingIndexNames, env.bindingIndexHashes, binding.name, nameHash)
     if slot < 0 {
         env.bindingIndexNames.push(binding.name)
+        env.bindingIndexHashes.push(nameHash)
         env.bindingIndexStacks.push([binding])
         return
     }
@@ -562,7 +607,7 @@ fn checkBindingIndexPush(env: CheckEnv, binding: CheckBinding) {
 }
 
 fn checkBindingIndexPop(env: CheckEnv, name: String) {
-    let slot = checkNameIndex(env.bindingIndexNames, name)
+    let slot = checkNameIndex(env.bindingIndexNames, env.bindingIndexHashes, name, checkHashKey(name))
     if slot < 0 {
         return
     }
@@ -572,9 +617,11 @@ fn checkBindingIndexPop(env: CheckEnv, name: String) {
 }
 
 fn checkGenericBoundIndexPush(env: CheckEnv, name: String, iface: Int) {
-    let slot = checkNameIndex(env.genericBoundIndexNames, name)
+    let nameHash = checkHashKey(name)
+    let slot = checkNameIndex(env.genericBoundIndexNames, env.genericBoundIndexHashes, name, nameHash)
     if slot < 0 {
         env.genericBoundIndexNames.push(name)
+        env.genericBoundIndexHashes.push(nameHash)
         env.genericBoundIndexStacks.push([iface])
         return
     }
@@ -582,7 +629,7 @@ fn checkGenericBoundIndexPush(env: CheckEnv, name: String, iface: Int) {
 }
 
 fn checkGenericBoundIndexPop(env: CheckEnv, name: String) {
-    let slot = checkNameIndex(env.genericBoundIndexNames, name)
+    let slot = checkNameIndex(env.genericBoundIndexNames, env.genericBoundIndexHashes, name, checkHashKey(name))
     if slot < 0 {
         return
     }
@@ -591,10 +638,25 @@ fn checkGenericBoundIndexPop(env: CheckEnv, name: String) {
     }
 }
 
-fn checkNameIndex(names: List<String>, name: String) -> Int {
+/// checkHashKey computes a 30-bit djb2-style fingerprint over the
+/// UTF-8 bytes of `key`. The result is used as a fast pre-filter in
+/// the parallel `*IndexHashes` arrays — lookups reject a non-matching
+/// slot after a single `Int` compare and only fall back to the full
+/// `==` string compare when the hash matches. Bounded by
+/// 1_073_741_789 (largest prime below 2^30) so `h * 33` stays well
+/// under Int.MAX.
+fn checkHashKey(key: String) -> Int {
+    let mut h = 5381
+    for b in key.bytes() {
+        h = (h * 33 + b.toInt()) % 1073741789
+    }
+    h
+}
+
+fn checkNameIndex(names: List<String>, hashes: List<Int>, name: String, hash: Int) -> Int {
     let mut i = names.len() - 1
     for i >= 0 {
-        if names[i] == name {
+        if hashes[i] == hash && names[i] == name {
             return i
         }
         i = i - 1
@@ -602,10 +664,10 @@ fn checkNameIndex(names: List<String>, name: String) -> Int {
     -1
 }
 
-fn checkLookupExactIndex(keys: List<String>, values: List<Int>, key: String) -> Int {
+fn checkLookupExactIndex(keys: List<String>, hashes: List<Int>, values: List<Int>, key: String, hash: Int) -> Int {
     let mut i = keys.len() - 1
     for i >= 0 {
-        if keys[i] == key {
+        if hashes[i] == hash && keys[i] == key {
             return values[i]
         }
         i = i - 1
@@ -825,12 +887,13 @@ fn checkAliasDeepCacheSet(env: CheckEnv, ty: Int, resolved: Int) {
 
 fn checkSubstCacheGet(env: CheckEnv, ty: Int, generics: List<String>, args: List<Int>) -> Int {
     let key = checkSubstCacheKey(ty, generics, args)
-    checkLookupExactIndex(env.substCacheKeys, env.substCacheValues, key)
+    checkLookupExactIndex(env.substCacheKeys, env.substCacheHashes, env.substCacheValues, key, checkHashKey(key))
 }
 
 fn checkSubstCacheSet(env: CheckEnv, ty: Int, generics: List<String>, args: List<Int>, resolved: Int) {
     let key = checkSubstCacheKey(ty, generics, args)
     env.substCacheKeys.push(key)
+    env.substCacheHashes.push(checkHashKey(key))
     env.substCacheValues.push(resolved)
 }
 
@@ -1122,31 +1185,27 @@ fn checkIndexOfString(xs: List<String>, needle: String) -> Int {
 }
 
 fn checkIntKey(xs: List<Int>) -> String {
-    if xs.len() == 0 {
+    // Accumulate into a `List<String>` and `strings.join` once at the
+    // end — the former `out = "{out},{xs[i]}"` rebuilt the buffer per
+    // element, turning every substCache key render into O(n^2).
+    let n = xs.len()
+    if n == 0 {
         return ""
     }
-    let mut out = "{xs[0]}"
-    let mut i = 1
-    let n = xs.len()
+    let mut parts: List<String> = []
+    let mut i = 0
     for i < n {
-        out = "{out},{xs[i]}"
+        parts.push("{xs[i]}")
         i = i + 1
     }
-    out
+    strings.join(parts, ",")
 }
 
 fn checkStringKey(xs: List<String>) -> String {
     if xs.len() == 0 {
         return ""
     }
-    let mut out = xs[0]
-    let mut i = 1
-    let n = xs.len()
-    for i < n {
-        out = "{out},{xs[i]}"
-        i = i + 1
-    }
-    out
+    strings.join(xs, ",")
 }
 
 fn checkStringListContainsLocal(xs: List<String>, needle: String) -> Bool {
@@ -1379,10 +1438,12 @@ pub fn checkInstallPrelude(env: CheckEnv) {
     let tT = tyNamed(env.tys, "T", [])
     let tGroup = tyNamed(env.tys, "Group", [])
     let tHandleT = tyNamed(env.tys, "Handle", [tT])
-    let tListHandleT = tyNamed(env.tys, "List", [tHandleT])
     let tListItemT = tyNamed(env.tys, "List", [tT])
     let tResultT = tyNamed(env.tys, "Result", [tT, tyNamed(env.tys, "Error", [])])
-    let tFnGroupListHandle = tyFn(env.tys, [tGroup], tListHandleT)
+    // Spec §B.6 canonical shape: `taskGroup(|g| { ...; Ok(value) })`.
+    // Body returns `Result<T, Error>`, and `taskGroup` passes it through
+    // so T flows from the final Ok expression to the outer return.
+    let tFnGroupResult = tyFn(env.tys, [tGroup], tResultT)
     let tFnT = tyFn(env.tys, [], tT)
     let tFnTToR = tyFn(env.tys, [tT], tyNamed(env.tys, "R", []))
     let _ = tFnTToR
@@ -1390,7 +1451,7 @@ pub fn checkInstallPrelude(env: CheckEnv) {
     checkRegisterFn(env, CheckFnSig {
         name: "taskGroup", owner: "", receiverTy: -1,
         retTy: tResultT,
-        paramNames: ["body"], paramTys: [tFnGroupListHandle],
+        paramNames: ["body"], paramTys: [tFnGroupResult],
         generics: gT, genericBounds: [],
     })
     checkRegisterFn(env, CheckFnSig {
@@ -1409,32 +1470,148 @@ pub fn checkInstallPrelude(env: CheckEnv) {
 
     checkInstallBuiltinMethods(env)
     checkInstallChannelIntrinsics(env)
+    checkInstallErrorIntrinsics(env)
     checkInstallImplicitModules(env)
 }
 
 /// checkInstallImplicitModules registers a `thread` / `debug` /
-/// `fmt` binding as if it were implicitly imported, matching how
-/// spec examples use `thread.chan::<T>(...)` and `dbg(...)` without
-/// an explicit `use` line.
+/// `fmt` / `time` binding as if it were implicitly imported,
+/// matching how spec examples use `thread.chan::<T>(...)`,
+/// `dbg(...)`, and `time.sleep(...)` without an explicit `use` line.
 fn checkInstallImplicitModules(env: CheckEnv) {
     let pos = 0
     let tys = env.tys
-    for name in ["thread", "debug", "fmt"] {
+    for name in ["thread", "debug", "fmt", "time"] {
         let ty = tyNamed(tys, name, [])
         checkBindSpan(env, name, ty, false, pos, pos)
     }
     registerStdThreadAliasFns(env, "thread")
     registerStdDebugAliasFns(env, "debug")
+    registerStdTimeAliasFns(env, "time")
+}
+
+/// registerStdTimeAliasFns — `time.sleep(Duration)` and related
+/// bindings spec examples reach for. The Duration type is also
+/// registered so the checker can resolve `time.sleep(1.ms)` shape
+/// calls without E0500 on the argument type.
+fn registerStdTimeAliasFns(env: CheckEnv, alias: String) {
+    let tys = env.tys
+    let tUnit_ = tUnit(tys)
+    let tDuration = tyNamed(tys, "Duration", [])
+    checkRegisterFn(env, CheckFnSig {
+        name: "sleep", owner: alias, receiverTy: -1, retTy: tUnit_,
+        paramNames: ["duration"], paramTys: [tDuration],
+        generics: [], genericBounds: [],
+    })
+}
+
+/// checkInstallErrorIntrinsics registers the built-in `Error` type
+/// plus its two canonical methods: `Error.new(msg)` constructor and
+/// `err.downcast::<T>()` recovery helper. Spec §A.6.
+fn checkInstallErrorIntrinsics(env: CheckEnv) {
+    let tys = env.tys
+    let tError = tyNamed(tys, "Error", [])
+    let tString_ = tString(tys)
+    let tT = tyNamed(tys, "T", [])
+    let tOptT = tyOptional(tys, tT)
+    checkRegisterType(env, CheckTypeSig {
+        name: "Error", generics: [], genericBounds: [], kind: "interface",
+    })
+    checkRegisterInterface(env, "Error")
+    // Error.new(msg: String) -> Error — synthetic constructor so
+    // `Err(Error.new("..."))` resolves. Spec doesn't mandate a
+    // specific name but this is the canonical form in demos.
+    checkRegisterFn(env, CheckFnSig {
+        name: "new", owner: "Error", receiverTy: tError, retTy: tError,
+        paramNames: ["message"], paramTys: [tString_],
+        generics: [], genericBounds: [],
+    })
+    // err.downcast::<T>() -> Option<T> — spec §A.6 nominal recovery.
+    checkRegisterFn(env, CheckFnSig {
+        name: "downcast", owner: "Error", receiverTy: tError, retTy: tOptT,
+        paramNames: [], paramTys: [],
+        generics: ["T"], genericBounds: [],
+    })
 }
 
 /// checkInstallChannelIntrinsics registers the intrinsic methods on
 /// the `Channel<T>` runtime type that `thread.chan::<T>(buf)` yields.
+/// Also registers `Channel` and `Handle` as types so receiver-based
+/// generic seeding (`ch.close()` binds T from the `Channel<Int>`
+/// receiver) works without per-site turbofish.
 fn checkInstallChannelIntrinsics(env: CheckEnv) {
     let tys = env.tys
     let tT = tyNamed(tys, "T", [])
     let tChanT = tyNamed(tys, "Channel", [tT])
+    let tHandleT = tyNamed(tys, "Handle", [tT])
     let tOptT = tyOptional(tys, tT)
     let gT: List<String> = ["T"]
+    checkRegisterType(env, CheckTypeSig { name: "Channel", generics: ["T"], genericBounds: [], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "Handle", generics: ["T"], genericBounds: [], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "Group", generics: [], genericBounds: [], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "SelectBuilder", generics: [], genericBounds: [], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "Duration", generics: [], genericBounds: [], kind: "struct" })
+    // SelectBuilder.recv/send/timeout/default — spec §B.6 canonical
+    // `thread.select(|s| { s.recv(...); s.timeout(...); s.default(...) })`.
+    let tSelectBuilder = tyNamed(env.tys, "SelectBuilder", [])
+    let tDuration_ = tyNamed(env.tys, "Duration", [])
+    let tFnResT = tyFn(env.tys, [tT], tT)
+    let tFnUnitT = tyFn(env.tys, [], tT)
+    checkRegisterFn(env, CheckFnSig {
+        name: "recv", owner: "SelectBuilder", receiverTy: tSelectBuilder,
+        retTy: tUnit(env.tys),
+        paramNames: ["ch", "handler"],
+        paramTys: [tyNamed(env.tys, "Channel", [tT]), tFnResT],
+        generics: gT, genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "send", owner: "SelectBuilder", receiverTy: tSelectBuilder,
+        retTy: tUnit(env.tys),
+        paramNames: ["ch", "value", "handler"],
+        paramTys: [tyNamed(env.tys, "Channel", [tT]), tT, tyFn(env.tys, [], tT)],
+        generics: gT, genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "timeout", owner: "SelectBuilder", receiverTy: tSelectBuilder,
+        retTy: tUnit(env.tys),
+        paramNames: ["duration", "handler"],
+        paramTys: [tDuration_, tFnUnitT],
+        generics: gT, genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "default", owner: "SelectBuilder", receiverTy: tSelectBuilder,
+        retTy: tUnit(env.tys),
+        paramNames: ["handler"],
+        paramTys: [tFnUnitT],
+        generics: gT, genericBounds: [],
+    })
+    // Int duration suffixes: `5.s`, `30.ms`, `100.us`, `1000.ns`.
+    // Spec exercises these as postfix-dot property chains; register
+    // them as zero-arg methods on Int returning Duration.
+    let tIntTy = tInt(env.tys)
+    let durationFromInt = CheckFnSig {
+        name: "s", owner: "Int", receiverTy: tIntTy, retTy: tDuration_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    }
+    let _ = durationFromInt
+    for suffix in ["s", "ms", "us", "ns"] {
+        checkRegisterFn(env, CheckFnSig {
+            name: suffix, owner: "Int", receiverTy: tIntTy, retTy: tDuration_,
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+    }
+    // Group.spawn(body: fn() -> T) -> Handle<T> — structural concurrency
+    // helper that spawns a scoped task inside a `taskGroup(|g| { ... })`
+    // body. Spec §B.6 canonical pattern.
+    let tGroupTy = tyNamed(env.tys, "Group", [])
+    checkRegisterFn(env, CheckFnSig {
+        name: "spawn", owner: "Group", receiverTy: tGroupTy,
+        retTy: tHandleT,
+        paramNames: ["body"], paramTys: [tyFn(env.tys, [], tT)],
+        generics: gT, genericBounds: [],
+    })
     checkRegisterFn(env, CheckFnSig {
         name: "close", owner: "Channel", receiverTy: tChanT, retTy: tUnit(tys),
         paramNames: [], paramTys: [],
@@ -1457,6 +1634,16 @@ fn checkInstallChannelIntrinsics(env: CheckEnv) {
     })
     checkRegisterFn(env, CheckFnSig {
         name: "isClosed", owner: "Channel", receiverTy: tChanT, retTy: tBool(tys),
+        paramNames: [], paramTys: [],
+        generics: gT, genericBounds: [],
+    })
+    // Handle<T> intrinsic: `h.join()` blocks on the task and yields T.
+    // Spec §B.6 shows both `h.join()?` (Result-style) and `a.join() + b.join()`
+    // (plain-value style). We pick the plain-value signature so the
+    // latter arithmetic form typechecks; the former still compiles when
+    // T itself is a Result.
+    checkRegisterFn(env, CheckFnSig {
+        name: "join", owner: "Handle", receiverTy: tHandleT, retTy: tT,
         paramNames: [], paramTys: [],
         generics: gT, genericBounds: [],
     })
@@ -1575,6 +1762,96 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         paramNames: [], paramTys: [],
         generics: ["K", "V"], genericBounds: [],
     })
+    // Map helpers backed by runtime intrinsics in `osty_runtime.c`
+    // (see PR #470). `get` is already registered above; these five
+    // surface the matching checker signatures so user code can call
+    // `m.getOr(...)`, `m.update(...)`, etc. without E0703.
+    let tR_map = tyNamed(tys, "R", [])
+    let tMapKR = tyNamed(tys, "Map", [tK, tR_map])
+    let tFnOptV_V = tyFn(tys, [tOptV], tV)
+    let tFnKV_Bool = tyFn(tys, [tK, tV], tBool(tys))
+    let tFnVV_V = tyFn(tys, [tV, tV], tV)
+    let tFnV_R_map = tyFn(tys, [tV], tR_map)
+    checkRegisterFn(env, CheckFnSig {
+        name: "getOr", owner: "Map", receiverTy: tMapKV, retTy: tV,
+        paramNames: ["key", "default"], paramTys: [tK, tV],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "update", owner: "Map", receiverTy: tMapKV, retTy: tUnit(tys),
+        paramNames: ["key", "f"], paramTys: [tK, tFnOptV_V],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "retainIf", owner: "Map", receiverTy: tMapKV, retTy: tUnit(tys),
+        paramNames: ["pred"], paramTys: [tFnKV_Bool],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "mergeWith", owner: "Map", receiverTy: tMapKV, retTy: tMapKV,
+        paramNames: ["other", "combine"], paramTys: [tMapKV, tFnVV_V],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "mapValues", owner: "Map", receiverTy: tMapKV, retTy: tMapKR,
+        paramNames: ["f"], paramTys: [tFnV_R_map],
+        generics: ["K", "V", "R"], genericBounds: [],
+    })
+    // Pure-Osty Map helpers (collections.osty §B.9.1) not covered by
+    // the #470 intrinsic set. These are Osty-bodied today but become
+    // real IR functions once Option B Phase 1 (#483) graduates their
+    // stdlib template through `injectReachableStdlibTypes`. Register
+    // the signatures now so callers type-check; backend lowering
+    // flips from "no method" to "stdlib body" as the pipeline fills in.
+    let tPairKV = tyTuple(tys, [tK, tV])
+    let tListPairKV = tyNamed(tys, "List", [tPairKV])
+    let tOptPairKV = tyOptional(tys, tPairKV)
+    let tFnKV_Unit = tyFn(tys, [tK, tV], tUnit(tys))
+    checkRegisterFn(env, CheckFnSig {
+        name: "entries", owner: "Map", receiverTy: tMapKV, retTy: tListPairKV,
+        paramNames: [], paramTys: [],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "forEach", owner: "Map", receiverTy: tMapKV, retTy: tUnit(tys),
+        paramNames: ["f"], paramTys: [tFnKV_Unit],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "any", owner: "Map", receiverTy: tMapKV, retTy: tBool(tys),
+        paramNames: ["pred"], paramTys: [tFnKV_Bool],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "all", owner: "Map", receiverTy: tMapKV, retTy: tBool(tys),
+        paramNames: ["pred"], paramTys: [tFnKV_Bool],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "count", owner: "Map", receiverTy: tMapKV, retTy: tInt(tys),
+        paramNames: ["pred"], paramTys: [tFnKV_Bool],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "find", owner: "Map", receiverTy: tMapKV, retTy: tOptPairKV,
+        paramNames: ["pred"], paramTys: [tFnKV_Bool],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "filter", owner: "Map", receiverTy: tMapKV, retTy: tMapKV,
+        paramNames: ["pred"], paramTys: [tFnKV_Bool],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "merge", owner: "Map", receiverTy: tMapKV, retTy: tMapKV,
+        paramNames: ["other"], paramTys: [tMapKV],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "insertAll", owner: "Map", receiverTy: tMapKV, retTy: tUnit(tys),
+        paramNames: ["other"], paramTys: [tMapKV],
+        generics: ["K", "V"], genericBounds: [],
+    })
 
     // ----- Set<T> intrinsics (spec §10.6) -----
     let tSetT = tyNamed(tys, "Set", [tT])
@@ -1611,6 +1888,22 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
     checkRegisterFn(env, CheckFnSig {
         name: "toList", owner: "Set", receiverTy: tSetT, retTy: tListT,
         paramNames: [], paramTys: [],
+        generics: ["T"], genericBounds: [],
+    })
+    // Pure-Osty Set helpers (collections.osty §B.9.1).
+    checkRegisterFn(env, CheckFnSig {
+        name: "union", owner: "Set", receiverTy: tSetT, retTy: tSetT,
+        paramNames: ["other"], paramTys: [tSetT],
+        generics: ["T"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "intersect", owner: "Set", receiverTy: tSetT, retTy: tSetT,
+        paramNames: ["other"], paramTys: [tSetT],
+        generics: ["T"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "difference", owner: "Set", receiverTy: tSetT, retTy: tSetT,
+        paramNames: ["other"], paramTys: [tSetT],
         generics: ["T"], genericBounds: [],
     })
 

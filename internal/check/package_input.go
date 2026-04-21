@@ -133,7 +133,16 @@ func selfhostBuildImportSurface(alias string, pkg *resolve.Package) selfhost.Pac
 			switch d := decl.(type) {
 			case *ast.FnDecl:
 				if d.Pub && d.Recv == nil {
+					// Register twice: once as a free function (owner=""), once
+					// as an alias-method (owner=alias) so `core.badge(sig)`
+					// dispatches through checkLookupMethod with receiver type
+					// `core`. The alias-method form has no receiver parameter —
+					// matching the stdlib registration style where
+					// `fs.readToString` is keyed by owner but takes no `self`.
 					surface.Functions = append(surface.Functions, selfhostBuildImportedFn(alias, localTypes, "", nil, nil, d))
+					aliasFn := selfhostBuildImportedFn(alias, localTypes, "", nil, nil, d)
+					aliasFn.Owner = alias
+					surface.Functions = append(surface.Functions, aliasFn)
 					surface.Fields = append(surface.Fields, selfhost.PackageCheckField{
 						Owner:      alias,
 						Name:       d.Name,
@@ -292,6 +301,7 @@ func selfhostBuildImportedFn(
 	scopeGenerics := selfhostGenericSet(combinedGenerics)
 	paramNames := make([]string, 0, len(fn.Params))
 	paramTypes := make([]string, 0, len(fn.Params))
+	paramDefaults := make([]bool, 0, len(fn.Params))
 	for i, param := range fn.Params {
 		if param == nil {
 			continue
@@ -300,8 +310,16 @@ func selfhostBuildImportedFn(
 		if name == "" {
 			name = fmt.Sprintf("arg%d", i)
 		}
+		// Encode default-availability into the name with a leading "?"
+		// so the checker's arity check can treat missing trailing args as
+		// satisfied by defaults without threading a parallel List<Bool>
+		// through every CheckFnSig constructor.
+		if param.Default != nil {
+			name = "?" + name
+		}
 		paramNames = append(paramNames, name)
 		paramTypes = append(paramTypes, selfhostImportedTypeSource(localTypes, scopeGenerics, param.Type))
+		paramDefaults = append(paramDefaults, param.Default != nil)
 	}
 	bounds := append([]selfhost.PackageCheckGenericBound(nil), ownerBounds...)
 	bounds = append(bounds, selfhostGenericBounds(localTypes, combinedGenerics, fn.Generics)...)
@@ -316,6 +334,7 @@ func selfhostBuildImportedFn(
 		ReturnType:    selfhostImportedTypeSource(localTypes, scopeGenerics, fn.ReturnType),
 		ParamNames:    paramNames,
 		ParamTypes:    paramTypes,
+		ParamDefaults: paramDefaults,
 		Generics:      combinedGenerics,
 		GenericBounds: bounds,
 	}

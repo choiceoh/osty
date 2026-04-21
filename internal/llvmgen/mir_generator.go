@@ -452,6 +452,13 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		return true
 	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty:
 		return true
+	// Stage 5 prep — string → List<Char> / List<Byte> expansions that
+	// the legacy emitter routes through `osty_rt_strings_*`. Accepting
+	// them here lets `.chars()` / `.bytes()` reach the MIR emitter on
+	// `mir-backend` object/binary emission instead of falling back.
+	case mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
+		mir.IntrinsicStringLen, mir.IntrinsicStringIsEmpty:
+		return true
 	// Concurrency — channels / tasks / select / cancellation / helpers.
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
 		mir.IntrinsicChanClose, mir.IntrinsicChanIsClosed:
@@ -485,6 +492,14 @@ func mirIntrinsicLabel(k mir.IntrinsicKind) string {
 		return "eprint"
 	case mir.IntrinsicEprintln:
 		return "eprintln"
+	case mir.IntrinsicStringChars:
+		return "string_chars"
+	case mir.IntrinsicStringBytes:
+		return "string_bytes"
+	case mir.IntrinsicStringLen:
+		return "string_len"
+	case mir.IntrinsicStringIsEmpty:
+		return "string_is_empty"
 	case mir.IntrinsicRawNull:
 		return "raw.null"
 	}
@@ -953,7 +968,7 @@ func (g *mirGen) emitGCEntry(fn *mir.Function) {
 	if len(g.gcRoots) == 0 {
 		// Still emit an entry safepoint so cancellation / GC polls
 		// fire even on pointer-free functions.
-		g.emitGCSafepoint()
+		g.emitGCSafepointKind(safepointKindEntry)
 		return
 	}
 	// Zero non-param managed slots before binding. Param slots
@@ -975,7 +990,7 @@ func (g *mirGen) emitGCEntry(fn *mir.Function) {
 		g.fnBuf.WriteString(")\n")
 	}
 	// Entry safepoint.
-	g.emitGCSafepoint()
+	g.emitGCSafepointKind(safepointKindEntry)
 }
 
 // emitGCReleaseRoots releases every bound root in reverse bind order.
@@ -993,18 +1008,30 @@ func (g *mirGen) emitGCReleaseRoots() {
 	}
 }
 
-// emitGCSafepoint emits a single safepoint poll. The ABI matches the
-// legacy emitter: `safepoint_v1(i64 id, ptr roots, i64 nroots)` — we
-// pass null/0 because root_bind_v1 already registered the live set.
+// emitGCSafepoint emits a single safepoint poll at an unclassified site.
+// Kept for callers that predate the Phase A5 kind taxonomy; new sites
+// should reach for `emitGCSafepointKind` with a specific kind so the
+// runtime's per-kind counters stay meaningful.
 func (g *mirGen) emitGCSafepoint() {
+	g.emitGCSafepointKind(safepointKindUnspecified)
+}
+
+// emitGCSafepointKind emits a safepoint poll tagged with the given kind.
+// The kind is packed into the high byte of the id the runtime receives;
+// the low 56 bits hold the per-module serial (see encodeSafepointID in
+// the legacy emitter). The ABI remains `safepoint_v1(i64 id, ptr roots,
+// i64 nroots)` — roots stay null/0 because root_bind_v1 already
+// registered the live set.
+func (g *mirGen) emitGCSafepointKind(kind safepointKind) {
 	if !g.opts.EmitGC {
 		return
 	}
 	g.declareSafepoint()
-	id := g.nextSafepoint
+	serial := g.nextSafepoint
 	g.nextSafepoint++
+	id := encodeSafepointID(kind, serial)
 	g.fnBuf.WriteString("  call void @osty.gc.safepoint_v1(i64 ")
-	g.fnBuf.WriteString(strconv.Itoa(id))
+	g.fnBuf.WriteString(strconv.FormatInt(id, 10))
 	g.fnBuf.WriteString(", ptr null, i64 0)\n")
 }
 
@@ -1402,6 +1429,9 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitSetIntrinsic(i)
 	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty:
 		return g.emitBytesIntrinsic(i)
+	case mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
+		mir.IntrinsicStringLen, mir.IntrinsicStringIsEmpty:
+		return g.emitStringIntrinsic(i)
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
 		mir.IntrinsicChanClose, mir.IntrinsicChanIsClosed:
 		return g.emitChannelIntrinsic(i)
@@ -1819,6 +1849,60 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 	return unsupported("mir-mvp", fmt.Sprintf("bytes intrinsic kind %d", i.Kind))
 }
 
+// emitStringIntrinsic dispatches String receiver intrinsics that the
+// MIR lowerer emits for stdlib method calls (`.chars()`, `.bytes()`,
+// `.len()`, `.isEmpty()`). Each maps to a runtime symbol in
+// `osty_runtime.c`'s strings family.
+//
+// The Stage 5 prep here mirrors the legacy `expr.go` dispatch: `.len`
+// calls `osty_rt_strings_ByteLen`; `.isEmpty` composes a `byte_len == 0`
+// compare instead of a dedicated runtime symbol; `.chars` / `.bytes`
+// call the list-building helpers that the runtime already ships.
+func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
+	if len(i.Args) < 1 {
+		return unsupported("mir-mvp", "string intrinsic with no receiver")
+	}
+	strOp := i.Args[0]
+	strReg, err := g.evalOperand(strOp, strOp.Type())
+	if err != nil {
+		return err
+	}
+	switch i.Kind {
+	case mir.IntrinsicStringChars:
+		sym := "osty_rt_strings_Chars"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicStringBytes:
+		sym := "osty_rt_strings_Bytes"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicStringLen:
+		sym := "osty_rt_strings_ByteLen"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		em := g.ostyEmitter()
+		result := llvmCall(em, "i64", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicStringIsEmpty:
+		// Runtime has no `_IsEmpty`; reuse `ByteLen` and emit an eq-0
+		// compare, matching the legacy emitter's shape.
+		sym := "osty_rt_strings_ByteLen"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		em := g.ostyEmitter()
+		size := llvmCall(em, "i64", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
+		result := llvmCompare(em, "eq", size, llvmIntLiteral(0))
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	}
+	return unsupported("mir-mvp", fmt.Sprintf("string intrinsic kind %d", i.Kind))
+}
+
 // ==== concurrency intrinsics ====
 //
 // The concurrency family lowers to a stable-but-pending Osty runtime
@@ -2063,13 +2147,92 @@ func (g *mirGen) emitSelectIntrinsic(i *mir.IntrinsicInstr) error {
 	case mir.IntrinsicSelectRecv:
 		return g.emitSimpleConcurrencyCall(i, "osty_rt_select_recv", "void", nil)
 	case mir.IntrinsicSelectSend:
-		return g.emitSimpleConcurrencyCall(i, "osty_rt_select_send", "void", nil)
+		return g.emitSelectSend(i)
 	case mir.IntrinsicSelectTimeout:
 		return g.emitSimpleConcurrencyCall(i, "osty_rt_select_timeout", "void", nil)
 	case mir.IntrinsicSelectDefault:
 		return g.emitSimpleConcurrencyCall(i, "osty_rt_select_default", "void", nil)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("select intrinsic kind %d", i.Kind))
+}
+
+// emitSelectSend lowers `s.send(ch, value, arm)` — a send arm on a
+// select builder. Args are [select_builder, channel, value, arm_env];
+// the channel element type determines which typed runtime variant we
+// dispatch to, mirroring the plain `IntrinsicChanSend` lane (scalar
+// i64/i1/f64/ptr go straight, composites spill through the bytes_v1
+// surface). The arm closure is invoked after the enqueue succeeds —
+// the moral equivalent of `case ch <- v: arm()` in Go select.
+func (g *mirGen) emitSelectSend(i *mir.IntrinsicInstr) error {
+	if len(i.Args) != 4 {
+		return unsupported("mir-mvp", fmt.Sprintf("select_send arity: got %d args", len(i.Args)))
+	}
+	builderOp := i.Args[0]
+	chOp := i.Args[1]
+	valOp := i.Args[2]
+	armOp := i.Args[3]
+	builderReg, err := g.evalOperand(builderOp, builderOp.Type())
+	if err != nil {
+		return err
+	}
+	chReg, err := g.evalOperand(chOp, chOp.Type())
+	if err != nil {
+		return err
+	}
+	elemT := channelElementType(chOp.Type())
+	if elemT == nil {
+		return unsupported("mir-mvp", "select_send: missing element type")
+	}
+	valReg, err := g.evalOperand(valOp, elemT)
+	if err != nil {
+		return err
+	}
+	armReg, err := g.evalOperand(armOp, armOp.Type())
+	if err != nil {
+		return err
+	}
+	elemLLVM := g.llvmType(elemT)
+	if listUsesTypedRuntime(elemLLVM) {
+		suffix := llvmListElementSuffix(elemLLVM)
+		sym := "osty_rt_select_send_" + suffix
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr, ptr, "+elemLLVM+", ptr)")
+		g.fnBuf.WriteString("  call void @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(builderReg)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(chReg)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(elemLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(valReg)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(armReg)
+		g.fnBuf.WriteString(")\n")
+		return nil
+	}
+	// Composite element — bytes_v1 route. Spill value to a stack slot,
+	// hand the runtime a (ptr, size) pair; it copies into GC storage.
+	sym := "osty_rt_select_send_bytes_v1"
+	g.declareRuntime(sym, "declare void @"+sym+"(ptr, ptr, ptr, i64, ptr)")
+	em := g.ostyEmitter()
+	slot := llvmSpillToSlot(em, &LlvmValue{typ: elemLLVM, name: valReg})
+	size := llvmSizeOf(em, elemLLVM)
+	g.flushOstyEmitter(em)
+	g.fnBuf.WriteString("  call void @")
+	g.fnBuf.WriteString(sym)
+	g.fnBuf.WriteString("(ptr ")
+	g.fnBuf.WriteString(builderReg)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(chReg)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(slot.name)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(size.name)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(armReg)
+	g.fnBuf.WriteString(")\n")
+	return nil
 }
 
 // emitCancelIntrinsic handles the cancellation + yield + sleep
@@ -2157,7 +2320,39 @@ func (g *mirGen) emitConcurrencyHelperIntrinsic(i *mir.IntrinsicInstr) error {
 		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, i64, ptr)")
 		return g.emitSimpleCall(i, sym, "ptr", []string{"ptr " + items, "i64 " + conc, "ptr " + f})
 	case mir.IntrinsicRace:
-		return g.emitSimpleConcurrencyCall(i, "osty_rt_task_race", "ptr", nil)
+		// Returns Result<T, Error> — runtime uses the `{i64, i64}` enum
+		// layout matching chan_recv / check_cancelled.
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "race arity")
+		}
+		body, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_task_race"
+		g.declareRuntime(sym, "declare { i64, i64 } @"+sym+"(ptr)")
+		if i.Dest == nil {
+			g.fnBuf.WriteString("  call { i64, i64 } @")
+			g.fnBuf.WriteString(sym)
+			g.fnBuf.WriteString("(ptr ")
+			g.fnBuf.WriteString(body)
+			g.fnBuf.WriteString(")\n")
+			return nil
+		}
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = call { i64, i64 } @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(body)
+		g.fnBuf.WriteString(")\n")
+		g.fnBuf.WriteString("  store { i64, i64 } ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
+		g.fnBuf.WriteByte('\n')
+		return nil
 	case mir.IntrinsicCollectAll:
 		return g.emitSimpleConcurrencyCall(i, "osty_rt_task_collect_all", "ptr", nil)
 	}
@@ -2407,7 +2602,7 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 		// not need extra polls because the function already took
 		// one at entry.
 		if g.opts.EmitGC && x.Target <= g.curBlockID {
-			g.emitGCSafepoint()
+			g.emitGCSafepointKind(safepointKindLoop)
 		}
 		g.fnBuf.WriteString("  br label %")
 		g.fnBuf.WriteString(g.blockLabels[x.Target])
@@ -2417,7 +2612,7 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 		// covers `while cond { ... }` style loops where the cond
 		// block has a conditional branch back to its own body.
 		if g.opts.EmitGC && (x.Then <= g.curBlockID || x.Else <= g.curBlockID) {
-			g.emitGCSafepoint()
+			g.emitGCSafepointKind(safepointKindLoop)
 		}
 		cond, err := g.evalOperand(x.Cond, mir.TBool)
 		if err != nil {

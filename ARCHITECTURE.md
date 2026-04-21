@@ -1,7 +1,7 @@
 # Architecture
 
 High-level map of the Osty front-end. For spec decisions see
-`OSTY_GRAMMAR_v0.4.md`; this document covers **implementation** layout.
+`OSTY_GRAMMAR_v0.5.md`; this document covers **implementation** layout.
 
 ## Pipeline
 
@@ -25,8 +25,9 @@ High-level map of the Osty front-end. For spec decisions see
                                                                        │   check  │ ───┐
                                                                        └──────────┘    │
                                                                                        ▼
-                                                                                ┌──────────┐   Go source
-                                                                                │   gen    │   warnings (L0xxx)
+                                                                                ┌──────────┐   LLVM IR / object / binary
+                                                                                │ ir / mir │   warnings (L0xxx)
+                                                                                │ llvmgen  │   Osty-hosted diag policy
                                                                                 │   lint   │
                                                                                 └──────────┘
 ```
@@ -125,16 +126,21 @@ Structured diagnostics plus the renderer.
 Name resolution. Three entry points: `File` (single-file), `Package`
 (directory of files sharing a namespace, loaded via `LoadPackage` +
 `ResolvePackage`), and `Workspace` (tree of packages connected by `use`
-edges, driven by `NewWorkspace` + `ResolveAll`). Each file goes through
-a 3-pass design:
+edges, driven by `NewWorkspace` + `ResolveAll`). These are scope
+boundaries, not temporal passes — the resolver runs **two passes** over
+whichever scope the caller chose, and `Workspace.ResolveAll` fans the
+same two passes across every package so cross-package lookups always
+see populated scopes:
 
-1. **`declareUse`** registers `use` aliases.
-2. **`declareTopLevel`** inserts every top-level `fn`/`struct`/
-   `enum`/`interface`/`type`/`pub let` symbol, enabling forward
-   references between them.
-3. **`resolveDecl`** walks each body, opening child scopes for
-   generics, parameters, let bindings, closure params, and match
-   arms.
+1. **`declarePass`** (`resolve.go:133`) — walks every file, registers
+   `use` aliases into the file scope, and inserts every top-level
+   `fn`/`struct`/`enum`/`interface`/`type`/`pub let` symbol into the
+   package scope. Forward references and cross-package lookups both
+   work after this pass.
+2. **`bodyPass`** (`resolve.go:149`) — walks declaration bodies and
+   top-level statements, opening child scopes for generics,
+   parameters, let bindings, closure params, and match arms. Circular
+   imports are detected before this pass runs and reported as E0506.
 
 `methodCtx{selfType, inMethod, selfSym}` bundles the three related
 bits of state that control `self` / `Self`. Callers push a new context
@@ -167,7 +173,8 @@ bodies producing per-expression types in `Result.Types` plus
 per-symbol types in `Result.SymTypes`. Entry points mirror
 `resolve`: `File`, `Package`, `Workspace`.
 
-The main v0.4 front-end static guarantee hooks are wired here:
+The main front-end static guarantee hooks (v0.4 baseline + v0.5
+additions) are wired here:
 
 - generic call sites are recorded in `Result.Instantiations`; the IR
   lowerer forwards these onto `ir.CallExpr.TypeArgs` and leaves struct
@@ -194,8 +201,15 @@ The main v0.4 front-end static guarantee hooks are wired here:
 - structural interface satisfaction checks composed interfaces,
   `Self`-typed signatures, generic receiver substitution, params, and
   generic bounds,
-- match exhaustiveness emits `E0731` and synthesizes witnesses for
-  closed product/sum shapes, with `E0740` for unreachable arms,
+- match exhaustiveness runs a Maranget usefulness pass
+  (`pmCheckMatch` / `pmUseful` / `pmExhaustivenessWitness` in
+  `toolchain/elab.osty`) that emits `E0731` with up to three concrete
+  missing witnesses (including nested tuple / struct / enum payload
+  shapes, depth-capped at 6 for recursive ADTs) and flags unreachable
+  arms as `E0740`; G14 generic-value references are rejected as
+  `E0742` with focus tests, and G15 function-value calls are pinned
+  positional + exact-arity (`E0701`) so defaults / keywords never
+  survive erasure,
 - auto-derived `default()`, `builder()`, `toBuilder()`, setter chains,
   and `build()` obligations are checked in `builder.go`,
 - method references (`obj.method` as a value) lower to receiver-free
@@ -206,9 +220,12 @@ The main v0.4 front-end static guarantee hooks are wired here:
 - closure parameter destructuring binds irrefutable tuple/struct
   patterns and rejects refutable patterns with a stable diagnostic.
 
-The v0.4 language-decision sweep is closed in `SPEC_GAPS.md`; remaining
-work is implementation backlog rather than broad checker architecture
-gaps.
+The v0.4 and v0.5 language-decision sweeps are closed in
+`SPEC_GAPS.md` (zero open G-numbers); remaining work is implementation
+backlog — the host-side legacy checker boundary
+(`internal/check/host_boundary.go`) still acts as a fallback under the
+native checker, and retiring it is the main architectural cleanup
+tracked outside spec gaps.
 
 #### Type inference algorithm
 
@@ -234,9 +251,14 @@ switches the output to NDJSON.
 Built-in prelude symbols injected into every file before resolution.
 `NewPrelude` returns the root scope; individual modules are Osty
 source files under `modules/` with primitive method stubs under
-`primitives/`. Tier 1 is loadable by the front-end; the v0.4 sweep is
-about moving more §10 protocol prose into checked `.osty` stubs and
-pinning any edge cases that fall out of that exercise.
+`primitives/`. Tier 1 is loadable by the front-end; Tier 2 stubs are
+checked `.osty` bodies that parse / resolve / check cleanly. 36
+modules ship today (fs, json, io, strings, fmt, thread, time, url,
+uuid, collections, …), and the Map helper family (`update`, `getOr`,
+`mergeWith`, `groupBy`, `mapValues`, `retainIf`) ships as bodied Osty
+per the §B.9.1 contract — runtime execution of those bodied helpers
+currently blocks on the `LLVM015` Map-method lowering gap documented
+in `docs/toolchain_llvm_status.md`.
 
 ### `internal/format`
 Canonical-style formatter. `format.Source` reparses → pretty-prints →
@@ -249,23 +271,48 @@ per spec §13.3. Wired as `osty fmt` with `--check` / `--write`.
 ### `internal/lint`
 Style and correctness warnings over a resolved tree. Every diagnostic
 is `diag.Warning` severity with an `Lxxxx` code; nothing blocks
-compilation. Rules implemented today:
+compilation. Rules implemented today (28 codes, grouped by category):
 
 | Code | Rule |
 |---|---|
 | L0001 | unused `let` binding |
 | L0002 | unused fn / closure parameter |
 | L0003 | unused `use` alias (package-aware) |
+| L0004 | unused `mut` annotation |
+| L0005 | unused struct field |
+| L0006 | unused method |
+| L0007 | ignored `Result` / `Option` return |
+| L0008 | dead store (write never read) |
 | L0010 | inner binding shadows outer |
 | L0020 | statement after terminating return/break/continue |
+| L0021 | redundant `else` after early return |
+| L0022 | constant condition |
+| L0023 | empty `if` / `else` branch |
+| L0024 | needless `return` on last expression |
+| L0025 | identical branches |
+| L0026 | empty loop body |
 | L0030 | type name not UpperCamelCase |
 | L0031 | fn / let / param name not lowerCamelCase |
 | L0032 | enum variant name not UpperCamelCase |
+| L0040 | redundant boolean expression |
+| L0041 | self-comparison (`x == x`) |
+| L0042 | self-assignment (`x = x`) |
+| L0043 | double negation (`!!x`) |
+| L0044 | comparison against boolean literal |
+| L0045 | negated boolean literal |
+| L0050 | function takes too many parameters |
+| L0052 | function body too long |
+| L0053 | nesting too deep |
+| L0070 | missing doc comment on `pub` declaration |
 
-`File`, `Package`, and workspace-driven usage are all supported so
-cross-file references to a `use` alias don't look unused locally.
-Wired as `osty lint` with `--strict` (CI mode: exit 1 on any
-warning).
+Policy (allow / deny / exclude per code, rule alias, category alias,
+or wildcard) is sourced from `[lint]` in `osty.toml`; `deny` always
+wins over `allow`. Machine-applicable fixes are emitted for the unused
+/ simplify families and consumed by `osty lint --fix` /
+`--fix-dry-run`. `File`, `Package`, and workspace-driven usage are all
+supported so cross-file references to a `use` alias don't look unused
+locally. Wired as `osty lint` with `--strict` (CI mode: exit 1 on any
+warning). Rule-level policy logic lives in `toolchain/diag_policy.osty`.
 
 ### `internal/bootstrap/gen`
 Developer-only Osty→Go transpiler used exclusively to regenerate
@@ -292,11 +339,15 @@ outline/workspace symbol kind selection and sorting, cursor/range checks,
 signature-label rendering, diagnostic payload projection, code-action
 filtering, URI/reference-location ordering, organize-import helper policy, and
 fix-all overlap resolution is authored in
-`toolchain/lsp.osty` and exposed through the checked-in host boundary. Each
-document change re-runs the full front-end (`parser.ParseDiagnostics` →
-`resolve.File` → `check.File`); caching is by source identity, not incremental
-— the front-end is fast enough that re-analysis is cheaper than
-change-tracking at this stage. Wired as `osty lsp`.
+`toolchain/lsp.osty` and exposed through the checked-in host boundary.
+File-mode analysis flows through a Salsa-style incremental query engine
+(`internal/query/osty`, exposed as `ostyquery.Engine`): the server's
+default path for a single dirty buffer is `analyzeSingleFileViaEngine`,
+so repeated edits to the same file benefit from query-level reuse of
+parse / resolve / check results. Package- and workspace-mode analysis
+still re-runs the eager per-file path while that migration catches up,
+so cross-file refactors read fresh state on each request. Wired as
+`osty lsp`.
 
 ### `internal/manifest`
 Project manifest (`osty.toml`) reader, validator, and writer (spec
@@ -392,7 +443,14 @@ Cross-file resolution used to live here as a gap; it's now done via
 cross-file partial-method name collisions are covered by package tests.
 
 Spec-level open items are tracked in `SPEC_GAPS.md` (currently: zero
-open gaps for v0.4). Structured-concurrency escape rules, generic
+open gaps for v0.5). Structured-concurrency escape rules, generic
 method turbofish semantics, callable arity after function/default
-metadata erasure, closure parameter patterns, nested witness policy, and
-stdlib protocol stubs were closed as v0.4 decisions.
+metadata erasure, closure parameter patterns, and nested witness
+policy were closed as v0.4 decisions; v0.5 layered on 16 additive
+surface extensions (G20–G35) plus implementation closes for G14
+generic callable reference (`E0742`), G15 function-value arity lock,
+struct spread correctness, and the `std.strings` chapter. G17
+exhaustiveness is now implemented as a full Maranget usefulness pass
+(`pmCheckMatch` / `pmUseful` / `pmExhaustivenessWitness` in
+`toolchain/elab.osty`) with up to three witnesses per match and a
+depth cap of six for recursive ADTs.

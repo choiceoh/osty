@@ -522,7 +522,31 @@ func (g *gen) emitCheckedIntegerShift(op token.Kind, left, right ast.Expr, leftK
 }
 
 func (g *gen) needsOstyEqual(left, right ast.Expr) bool {
-	return needsOstyEqualType(g.typeOf(left)) || needsOstyEqualType(g.typeOf(right))
+	if needsOstyEqualType(g.typeOf(left)) || needsOstyEqualType(g.typeOf(right)) {
+		return true
+	}
+	// Fallback: an `x == Variant` comparison where Variant is an enum
+	// variant constructor must go through ostyEqual because variants
+	// lower to distinct pointer-struct allocations that Go's `==`
+	// would compare by identity. The checker drops per-expression
+	// type info on some nested boolean contexts (&& chains inside
+	// else-if arms), leaving both sides' typeOf as nil. Recognising
+	// the variant symbol through the resolver is reliable even
+	// without checker types — this is a name-resolution fact, not a
+	// type-inference one.
+	if g.identResolvesToVariant(left) || g.identResolvesToVariant(right) {
+		return true
+	}
+	return false
+}
+
+func (g *gen) identResolvesToVariant(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	sym := g.symbolFor(id)
+	return sym != nil && sym.Kind == resolve.SymVariant
 }
 
 func needsOstyEqualType(t types.Type) bool {
@@ -3622,6 +3646,15 @@ func (g *gen) emitRangeExpr(r *ast.RangeExpr) {
 // whole tuple (the common case) we decompose its Tuple.Elems so each
 // field gets the same Go type every sibling sees, even when a bool
 // literal or variable in one arm is left individually untyped.
+//
+// When the checker dropped both the outer tuple type and per-element
+// types (happens for `return (false, zero)` in the deeply nested else
+// arm of an outer if/else when the then-arm terminates with its own
+// early return), we consult retHintType — emitReturn sets it to the
+// enclosing function's declared return type. If that is a TupleType
+// with matching arity, we lower each field through goTypeExpr so the
+// Go struct shape matches the sibling tuples that the checker did
+// type.
 func (g *gen) emitTupleExpr(tup *ast.TupleExpr) {
 	types_ := make([]string, len(tup.Elems))
 	var tupleElemTypes []types.Type
@@ -3630,11 +3663,19 @@ func (g *gen) emitTupleExpr(tup *ast.TupleExpr) {
 			tupleElemTypes = tt.Elems
 		}
 	}
+	var hintElems []ast.Type
+	if tupleElemTypes == nil {
+		if tt, ok := g.retHintType.(*ast.TupleType); ok && len(tt.Elems) == len(tup.Elems) {
+			hintElems = tt.Elems
+		}
+	}
 	for i, e := range tup.Elems {
 		if t := g.typeOf(e); t != nil {
 			types_[i] = g.goType(t)
 		} else if i < len(tupleElemTypes) && tupleElemTypes[i] != nil {
 			types_[i] = g.goType(tupleElemTypes[i])
+		} else if i < len(hintElems) && hintElems[i] != nil {
+			types_[i] = g.goTypeExpr(hintElems[i])
 		} else {
 			types_[i] = "any"
 		}

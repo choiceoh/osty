@@ -8,7 +8,6 @@ package diag
 //
 //go:generate go run ../../cmd/codesdoc -in codes.go -w ../../ERROR_CODES.md
 //go:generate go run ../../cmd/codesdoc -in codes.go -manifest ../../toolchain/diag_manifest.osty
-//go:generate go run ../../cmd/codesdoc -in codes.go -manifest ../../examples/selfhost-core/diag_manifest.osty
 //go:generate go run ../../cmd/codesdoc -in codes.go -harvest-cases ../../toolchain/diag_examples.osty
 
 const (
@@ -173,6 +172,45 @@ const (
 	// Fix: use a literal default, or move the computation into the body.
 	CodeDefaultExprNotLiteral = "E0106"
 
+	// A token that cannot begin a struct member appeared inside a struct body.
+	//
+	// Struct bodies accept field declarations (`name: Type`) and method
+	// declarations (`fn name(...)` / `pub fn ...`). Any other token is a
+	// recovery error.
+	//
+	// Example:
+	//   pub struct S {
+	//       123,   // rejected -- field or method declaration required
+	//   }
+	// Fix: provide a field or method declaration.
+	CodeExpectedStructMember = "E0107"
+
+	// A token that cannot begin an enum member appeared inside an enum body.
+	//
+	// Enum bodies accept variant declarations (`Ident(T, U)` / `Ident`)
+	// and method declarations. Any other token is a recovery error.
+	//
+	// Example:
+	//   pub enum E {
+	//       123,   // rejected
+	//   }
+	// Fix: provide a variant or method declaration.
+	CodeExpectedEnumMember = "E0108"
+
+	// A token that cannot begin an interface member appeared inside an
+	// interface body.
+	//
+	// Interface bodies accept method signatures (`fn name(self) -> T`)
+	// and associated type references (identifiers). Any other token is a
+	// recovery error.
+	//
+	// Example:
+	//   pub interface I {
+	//       123,   // rejected
+	//   }
+	// Fix: provide a method signature or an associated type name.
+	CodeExpectedInterfaceMember = "E0109"
+
 	// Expressions.
 
 	// Comparison or range operators are non-associative.
@@ -213,6 +251,18 @@ const (
 	//
 	// Fix: check for a missing operand, operator, or brace.
 	CodeUnexpectedToken = "E0204"
+
+	// A token that cannot begin a closure parameter appeared between `|...|`.
+	//
+	// A closure parameter is an identifier, an irrefutable pattern
+	// (tuple `(a, b)`, struct `User { name }`, variant `Some(x)`), or
+	// `_` for a discarded binding.
+	//
+	// Example:
+	//   let f = |123| x           // rejected
+	//   let g = |a, _, (k, v)| v  // ok
+	// Fix: use an identifier, `_`, or a destructuring pattern.
+	CodeExpectedClosureParam = "E0205"
 
 	// Types & patterns.
 
@@ -1325,6 +1375,48 @@ const (
 	// Fix: replace with the opposite literal.
 	CodeNegatedBoolLiteral = "L0045"
 
+	// A function declared `-> Result<T, E>` or `-> Option<T>` whose body
+	// only ever exits via `Ok(...)` or `Some(...)` — the wrapping is
+	// pure noise at every call site.
+	//
+	// Example:
+	//   fn parse(s: String) -> Result<Int, Error> {
+	//       Ok(s.len())              // warning: fn never returns Err
+	//   }
+	// Fix: drop the wrapping and declare the plain return type:
+	//   fn parse(s: String) -> Int { s.len() }
+	CodeUnnecessaryWrap = "L0046"
+
+	// `let x = expr; x` at the tail of a block is a useless round-trip.
+	// The binding is introduced and immediately returned with no other
+	// uses — the block can just be `expr`.
+	//
+	// Example:
+	//   fn double(n: Int) -> Int {
+	//       let out = n * 2     // warning: useless binding before tail return
+	//       out
+	//   }
+	// Fix: drop the let and return the expression directly.
+	CodeLetReturnSimplify = "L0047"
+
+	// Parentheses wrapping an `if` / `for` / `match` condition are
+	// pure noise — they add nothing syntactic and clippy-style
+	// convention keeps conditions bare.
+	//
+	// Example:
+	//   if (ready) { ... }        // warning: drop the parens
+	//   for (i in 0..n) { ... }   // warning: drop the parens
+	// Fix: unwrap the outer `(` / `)`.
+	CodeNeedlessParens = "L0048"
+
+	// `for true { ... }` is just `for { ... }` — an infinite loop
+	// whose literal condition adds nothing.
+	//
+	// Example:
+	//   for true { tick() }   // warning: redundant `true`
+	// Fix: drop the `true`.
+	CodeInfiniteLoopLiteral = "L0049"
+
 	// Lint — complexity.
 
 	// A function declares too many parameters (> 7 by default).
@@ -1362,4 +1454,17 @@ const (
 	//   pub fn hashPassword(p: String) -> String { ... }   // warning: missing doc
 	// Fix: add a doc comment, or drop `pub` if the item is internal.
 	CodeMissingDoc = "L0070"
+
+	// A `test_*` function has no `testing.*` call in its body — the
+	// test silently passes no matter what the code under test does.
+	// Almost certainly a scaffolding leftover or a typo in an
+	// assertion helper name.
+	//
+	// Example:
+	//   fn test_parsesEmpty() {
+	//       let r = parse("")          // warning: no testing assertion
+	//   }
+	// Fix: add a `testing.assertEq` / `testing.assert` / `testing.fail`
+	// call, or rename the function so it isn't auto-discovered.
+	CodeMissingTestAssertion = "L0080"
 )
