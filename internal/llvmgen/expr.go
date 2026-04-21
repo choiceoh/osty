@@ -1550,7 +1550,7 @@ func (g *generator) emitTagEnumMatchSelectValue(scrutinee value, arms []*ast.Mat
 			return value{}, err
 		}
 		if !ok {
-			return value{}, unsupported("expression", "match arm must be a payload-free enum variant")
+			return value{}, unsupportedf("expression", "match arm must be a payload-free enum variant (got %s)", debugPatternShape(arm.Pattern))
 		}
 		armValue, err := g.emitMatchArmBodyValue(arm.Body)
 		if err != nil {
@@ -1591,7 +1591,7 @@ func (g *generator) emitTagEnumMatchChainValue(scrutinee value, arms []*ast.Matc
 			if _, ok, err := g.matchEnumTag(arm.Pattern); err != nil {
 				return value{}, err
 			} else if !ok {
-				return value{}, unsupported("expression", "match arm must be a payload-free enum variant")
+				return value{}, unsupportedf("expression", "match arm must be a payload-free enum variant (got %s)", debugPatternShape(arm.Pattern))
 			}
 		}
 		return g.emitMatchArmBodyValue(arm.Body)
@@ -1604,7 +1604,7 @@ func (g *generator) emitTagEnumMatchChainValue(scrutinee value, arms []*ast.Matc
 		return value{}, err
 	}
 	if !ok {
-		return value{}, unsupported("expression", "match arm must be a payload-free enum variant")
+		return value{}, unsupportedf("expression", "match arm must be a payload-free enum variant (got %s)", debugPatternShape(arm.Pattern))
 	}
 	emitter := g.toOstyEmitter()
 	cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(value{typ: "i64", ref: strconv.Itoa(tag)}))
@@ -1751,7 +1751,7 @@ func (g *generator) emitTagEnumMatchIfExprValue(scrutinee value, first, second *
 		return value{}, err
 	}
 	if !ok {
-		return value{}, unsupported("expression", "first match arm must be a payload-free enum variant")
+		return value{}, unsupportedf("expression", "first match arm must be a payload-free enum variant (got %s)", debugPatternShape(first.Pattern))
 	}
 	if _, catchAll := second.Pattern.(*ast.WildcardPat); !catchAll {
 		if _, _, err := g.matchEnumTag(second.Pattern); err != nil {
@@ -2953,6 +2953,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		if field, ok := call.Fn.(*ast.FieldExpr); ok {
 			return value{}, unsupportedf("call", "call target %T (%s)", call.Fn, debugFieldCallTarget(field))
 		}
+		if id, ok := call.Fn.(*ast.Ident); ok {
+			return value{}, unsupportedf("call", "call target *ast.Ident (%s) — not a known fn, fn-value binding, or recognized intrinsic", id.Name)
+		}
 		return value{}, unsupportedf("call", "call target %T", call.Fn)
 	}
 	if sig.ret == "" {
@@ -2993,6 +2996,42 @@ func debugFieldCallTarget(field *ast.FieldExpr) string {
 		return "<nil>"
 	}
 	return debugFieldBase(field.X) + "." + field.Name
+}
+
+// debugPatternShape returns a short human label for a match pattern so
+// "match arm must be a payload-free enum variant" diagnostics can name
+// the offending arm. The shape is intentionally compact: the most useful
+// signal is the variant or ident name (so the reader can grep), not a
+// faithful pretty-printing of the whole AST node.
+func debugPatternShape(pattern ast.Pattern) string {
+	switch p := pattern.(type) {
+	case nil:
+		return "<nil>"
+	case *ast.IdentPat:
+		return fmt.Sprintf("ident %q", p.Name)
+	case *ast.VariantPat:
+		path := strings.Join(p.Path, ".")
+		if len(p.Args) == 0 {
+			return fmt.Sprintf("variant %s (no args)", path)
+		}
+		return fmt.Sprintf("variant %s with %d arg(s)", path, len(p.Args))
+	case *ast.WildcardPat:
+		return "wildcard"
+	case *ast.LiteralPat:
+		return "literal"
+	case *ast.RangePat:
+		return "range"
+	case *ast.OrPat:
+		return "or-pattern"
+	case *ast.BindingPat:
+		return "binding"
+	case *ast.TuplePat:
+		return fmt.Sprintf("tuple of %d", len(p.Elems))
+	case *ast.StructPat:
+		return fmt.Sprintf("struct %s", strings.Join(p.Type, "."))
+	default:
+		return fmt.Sprintf("%T", pattern)
+	}
 }
 
 func debugFieldBase(expr ast.Expr) string {
