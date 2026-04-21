@@ -1385,3 +1385,90 @@ fn testLlvmEmitClosureEnvAllocRuntimeIsOstyOwned() {
     assertLlvmContains(ir, "%t0 = call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr @.str0)")
     assertLlvmContains(ir, "store ptr @__osty_closure_thunk_foo, ptr %t0")
 }
+
+fn testLlvmEmitSafepointChunkedEmptyRootsEmitsSinglePoll() {
+    let emitter = llvmEmitter()
+    let next = llvmEmitSafepointChunked(emitter, llvmSafepointKindCall(), 5, [], 4096)
+    let ir = llvmTestStrings.join(emitter.body, "\n")
+
+    testing.assertEq(next, 6)
+    assertLlvmContains(
+        ir,
+        "call void @osty.gc.safepoint_v1(i64 {llvmEncodeSafepointId(llvmSafepointKindCall(), 5)}, ptr null, i64 0)",
+    )
+}
+
+fn testLlvmEmitSafepointChunkedSplitsByChunkSize() {
+    // 7 roots with chunk=3 → 3 polls (sizes 3, 3, 1), serials 10..=12.
+    let emitter = llvmEmitter()
+    let addresses = ["%r0", "%r1", "%r2", "%r3", "%r4", "%r5", "%r6"]
+    let next = llvmEmitSafepointChunked(emitter, llvmSafepointKindLoop(), 10, addresses, 3)
+    let ir = llvmTestStrings.join(emitter.body, "\n")
+
+    testing.assertEq(next, 13)
+    assertLlvmContains(ir, "alloca ptr, i64 3")
+    assertLlvmContains(ir, "alloca ptr, i64 1")
+    assertLlvmContains(
+        ir,
+        "call void @osty.gc.safepoint_v1(i64 {llvmEncodeSafepointId(llvmSafepointKindLoop(), 10)}, ",
+    )
+    assertLlvmContains(
+        ir,
+        "call void @osty.gc.safepoint_v1(i64 {llvmEncodeSafepointId(llvmSafepointKindLoop(), 11)}, ",
+    )
+    assertLlvmContains(
+        ir,
+        "call void @osty.gc.safepoint_v1(i64 {llvmEncodeSafepointId(llvmSafepointKindLoop(), 12)}, ",
+    )
+}
+
+fn testLlvmEmitSafepointChunkedNonPositiveChunkFoldsIntoOne() {
+    // chunkSize=0 legacy fallback: "one chunk for everything".
+    let emitter = llvmEmitter()
+    let addresses = ["%r0", "%r1", "%r2"]
+    let next = llvmEmitSafepointChunked(emitter, llvmSafepointKindEntry(), 0, addresses, 0)
+    let ir = llvmTestStrings.join(emitter.body, "\n")
+
+    testing.assertEq(next, 1)
+    assertLlvmContains(ir, "alloca ptr, i64 3")
+}
+
+fn testLlvmEmitFnValueIndirectCallValueReturn() {
+    let emitter = llvmEmitter()
+    let result = llvmEmitFnValueIndirectCall(
+        emitter,
+        "%env",
+        "i64",
+        ["i64", "i64"],
+        ["i64 %arg0", "i64 %arg1"],
+    )
+    let ir = llvmTestStrings.join(emitter.body, "\n")
+
+    testing.assertEq(result, "%t1")
+    assertLlvmContains(ir, "%t0 = load ptr, ptr %env")
+    assertLlvmContains(
+        ir,
+        "%t1 = call i64 (ptr, i64, i64) %t0(ptr %env, i64 %arg0, i64 %arg1)",
+    )
+}
+
+fn testLlvmEmitFnValueIndirectCallVoidReturnNoResult() {
+    let emitter = llvmEmitter()
+    let result = llvmEmitFnValueIndirectCall(emitter, "%env", "void", ["ptr"], ["ptr %arg0"])
+    let ir = llvmTestStrings.join(emitter.body, "\n")
+
+    testing.assertEq(result, "")
+    assertLlvmContains(ir, "%t0 = load ptr, ptr %env")
+    assertLlvmContains(ir, "call void (ptr, ptr) %t0(ptr %env, ptr %arg0)")
+}
+
+fn testLlvmEmitFnValueIndirectCallEmptyRetNormalisesToVoid() {
+    // Checker hands empty retType for unit-return sigs; must collapse
+    // to `void` so the call-type string is well-formed.
+    let emitter = llvmEmitter()
+    let result = llvmEmitFnValueIndirectCall(emitter, "%env", "", [], [])
+    let ir = llvmTestStrings.join(emitter.body, "\n")
+
+    testing.assertEq(result, "")
+    assertLlvmContains(ir, "call void (ptr) %t0(ptr %env)")
+}

@@ -496,6 +496,31 @@ func llvmEmitClosureEnvAllocRuntime(emitter *LlvmEmitter, captureCount int, site
 	return &LlvmValue{typ: "ptr", name: envTemp, pointer: false}
 }
 
+// Osty: toolchain/llvmgen.osty:547:5
+func llvmEmitFnValueIndirectCall(emitter *LlvmEmitter, envRef string, retType string, paramTypes []string, argOperands []string) string {
+	ret := retType
+	if ret == "" {
+		ret = "void"
+	}
+	fnPtr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load ptr, ptr %s", fnPtr, envRef))
+
+	callParamTypes := append([]string{"ptr"}, paramTypes...)
+	paramList := llvmStrings.Join(callParamTypes, ", ")
+	callType := fmt.Sprintf("%s (%s)", ret, paramList)
+
+	argParts := append([]string{fmt.Sprintf("ptr %s", envRef)}, argOperands...)
+	args := llvmStrings.Join(argParts, ", ")
+
+	if ret == "void" {
+		emitter.body = append(emitter.body, fmt.Sprintf("  call %s %s(%s)", callType, fnPtr, args))
+		return ""
+	}
+	result := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call %s %s(%s)", result, callType, fnPtr, args))
+	return result
+}
+
 // Osty: toolchain/llvmgen.osty:513:5
 func llvmRenderSafepointEmpty(id int64) string {
 	return fmt.Sprintf("  call void @osty.gc.safepoint_v1(i64 %d, ptr null, i64 0)", id)
@@ -518,6 +543,31 @@ func llvmEmitSafepointWithRoots(emitter *LlvmEmitter, id int64, rootAddresses []
 		emitter.body = append(emitter.body, fmt.Sprintf("  store ptr %s, ptr %s", addr, slotPtr))
 	}
 	emitter.body = append(emitter.body, fmt.Sprintf("  call void @osty.gc.safepoint_v1(i64 %d, ptr %s, i64 %d)", id, slotsPtr, count))
+}
+
+// Osty: toolchain/llvmgen.osty:552:5
+func llvmEmitSafepointChunked(emitter *LlvmEmitter, kindCode int, startSerial int, rootAddresses []string, chunkSize int) int {
+	count := len(rootAddresses)
+	if count == 0 {
+		llvmEmitSafepointEmpty(emitter, llvmEncodeSafepointId(kindCode, startSerial))
+		return startSerial + 1
+	}
+	effectiveChunk := chunkSize
+	if effectiveChunk <= 0 {
+		effectiveChunk = count
+	}
+	chunkCount := (count + effectiveChunk - 1) / effectiveChunk
+	for chunkIndex := 0; chunkIndex < chunkCount; chunkIndex++ {
+		start := chunkIndex * effectiveChunk
+		end := start + effectiveChunk
+		if end > count {
+			end = count
+		}
+		chunk := rootAddresses[start:end]
+		id := llvmEncodeSafepointId(kindCode, startSerial+chunkIndex)
+		llvmEmitSafepointWithRoots(emitter, id, chunk)
+	}
+	return startSerial + chunkCount
 }
 
 // Osty: toolchain/llvmgen.osty:327:5
