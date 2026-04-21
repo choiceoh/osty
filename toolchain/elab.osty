@@ -2332,11 +2332,21 @@ fn elabInferIf(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     } else {
         elabInfer(cx, node.right)
     }
-    let else_ = if node.extra >= 0 {
+    // Parser stores the else branch at children[0] (patIdx at children[1]
+    // for `if let`); node.extra stays at the default -1. Reading
+    // node.extra would skip every else / else-if arm and leave the
+    // subtree untyped — including `n.kind` in `else if n.kind == …`,
+    // which then regens to a raw `==` instead of `ostyEqual`.
+    let elseIdx = if checkIntListLen(node.children) > 0 {
+        checkIntListAt(node.children, 0)
+    } else {
+        -1
+    }
+    let else_ = if elseIdx >= 0 {
         if hasExpected {
-            elabCheck(cx, node.extra, expected)
+            elabCheck(cx, elseIdx, expected)
         } else {
-            elabCheck(cx, node.extra, then_.ty)
+            elabCheck(cx, elseIdx, then_.ty)
         }
     } else {
         // Missing else branch — synthesize a unit expression.
@@ -2350,7 +2360,7 @@ fn elabInferIf(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         joinTypes(cx.env, then_.ty, else_.ty)
     }
 
-    let elseNode = if node.extra >= 0 { else_.node } else { -1 }
+    let elseNode = if elseIdx >= 0 { else_.node } else { -1 }
     let coreIdx = coreIf(cx.core, cond.node, then_.node, elseNode, resultTy, node.start, node.end)
     ElabResult { node: coreIdx, ty: resultTy }
 }
