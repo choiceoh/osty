@@ -165,12 +165,7 @@ pub fn selfLintResolvedAstSource(
 }
 
 pub fn selfLintDiagnosticCount(report: SelfLintReport) -> Int {
-    let mut count = 0
-    for diag in report.diagnostics {
-        let _ = diag
-        count = count + 1
-    }
-    count
+    report.diagnostics.len()
 }
 
 pub fn selfLintCodeCount(report: SelfLintReport, code: String) -> Int {
@@ -191,12 +186,7 @@ pub fn selfLintFirstDiagnostic(report: SelfLintReport) -> SelfLintDiagnostic {
 }
 
 pub fn selfLintFixCount(diag: SelfLintDiagnostic) -> Int {
-    let mut count = 0
-    for fix in diag.fixes {
-        let _ = fix
-        count = count + 1
-    }
-    count
+    diag.fixes.len()
 }
 
 pub fn selfLintFirstFix(diag: SelfLintDiagnostic) -> SelfLintFix {
@@ -341,23 +331,12 @@ fn selfLintInvalidEdit() -> SelfLintEdit {
 }
 
 fn selfLintEditListCount(edits: List<SelfLintEdit>) -> Int {
-    let mut count = 0
-    for edit in edits {
-        let _ = edit
-        count = count + 1
-    }
-    count
+    edits.len()
 }
 
 fn selfLintEditAt(edits: List<SelfLintEdit>, target: Int) -> SelfLintEdit {
-    let mut idx = 0
-    for edit in edits {
-        if idx == target {
-            return edit
-        }
-        idx = idx + 1
-    }
-    selfLintInvalidEdit()
+    if target < 0 || target >= edits.len() { return selfLintInvalidEdit() }
+    edits[target]
 }
 
 fn selfLintHighestStartEditIndex(edits: List<SelfLintEdit>) -> Int {

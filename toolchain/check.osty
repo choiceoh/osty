@@ -939,23 +939,12 @@ fn astTypeToTyInCollect(cx: ElabCx, idx: Int) -> Int {
 }
 
 fn checkIntListLenLocal(xs: List<Int>) -> Int {
-    let mut n = 0
-    for x in xs {
-        let _ = x
-        n = n + 1
-    }
-    n
+    xs.len()
 }
 
 fn checkIntListAtLocal(xs: List<Int>, idx: Int) -> Int {
-    let mut i = 0
-    for x in xs {
-        if i == idx {
-            return x
-        }
-        i = i + 1
-    }
-    -1
+    if idx < 0 || idx >= xs.len() { return -1 }
+    xs[idx]
 }
 
 fn topLevelLetBindingName(cx: ElabCx, node: AstNode) -> String {
@@ -1094,12 +1083,7 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
 // ---------------------------------------------------------------------
 
 pub fn frontCheckResultTypedNodeCount(result: FrontCheckResult) -> Int {
-    let mut n = 0
-    for x in result.typedNodes {
-        let _ = x
-        n = n + 1
-    }
-    n
+    result.typedNodes.len()
 }
 
 pub fn frontCheckResultBindingType(result: FrontCheckResult, name: String) -> String {
@@ -1123,10 +1107,5 @@ pub fn frontCheckResultSymbolCount(result: FrontCheckResult, kind: String) -> In
 }
 
 pub fn frontCheckResultInstantiationCount(result: FrontCheckResult) -> Int {
-    let mut n = 0
-    for x in result.instantiations {
-        let _ = x
-        n = n + 1
-    }
-    n
+    result.instantiations.len()
 }

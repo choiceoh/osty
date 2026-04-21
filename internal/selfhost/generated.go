@@ -854,29 +854,7 @@ func allAsciiDigits(text string) bool {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:354:5
-func stringUnitCount(text string) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:355:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:356:5
-	for _, unit := range strings.Split(text, "") {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:357:9
-		_ = unit
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:358:9
-		func() {
-			var _cur26 int = count
-			var _rhs27 int = 1
-			if _rhs27 > 0 && _cur26 > math.MaxInt-_rhs27 {
-				panic("integer overflow")
-			}
-			if _rhs27 < 0 && _cur26 < math.MinInt-_rhs27 {
-				panic("integer overflow")
-			}
-			count = _cur26 + _rhs27
-		}()
-	}
-	return count
-}
+func stringUnitCount(text string) int { return len(strings.Split(text, "")) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:364:5
 func isSemIdentUnit(unit string) bool {
@@ -5085,127 +5063,27 @@ func frontLineHasIndent(units []string, start int, end int, indent int) bool {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2143:5
 func frontLexTokenCount(stream *FrontLexStream) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2144:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2145:5
-	for _, tok := range stream.tokens {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2146:9
-		_ = tok
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2147:9
-		func() {
-			var _cur386 int = count
-			var _rhs387 int = 1
-			if _rhs387 > 0 && _cur386 > math.MaxInt-_rhs387 {
-				panic("integer overflow")
-			}
-			if _rhs387 < 0 && _cur386 < math.MinInt-_rhs387 {
-				panic("integer overflow")
-			}
-			count = _cur386 + _rhs387
-		}()
-	}
-	return count
+	return len(stream.tokens)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2152:5
 func frontLexDiagnosticCount(stream *FrontLexStream) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2153:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2154:5
-	for _, diag := range stream.diagnostics {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2155:9
-		_ = diag
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2156:9
-		func() {
-			var _cur388 int = count
-			var _rhs389 int = 1
-			if _rhs389 > 0 && _cur388 > math.MaxInt-_rhs389 {
-				panic("integer overflow")
-			}
-			if _rhs389 < 0 && _cur388 < math.MinInt-_rhs389 {
-				panic("integer overflow")
-			}
-			count = _cur388 + _rhs389
-		}()
-	}
-	return count
+	return len(stream.diagnostics)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2161:5
 func frontCommentCount(stream *FrontLexStream) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2162:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2163:5
-	for _, comment := range stream.comments {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2164:9
-		_ = comment
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2165:9
-		func() {
-			var _cur390 int = count
-			var _rhs391 int = 1
-			if _rhs391 > 0 && _cur390 > math.MaxInt-_rhs391 {
-				panic("integer overflow")
-			}
-			if _rhs391 < 0 && _cur390 < math.MinInt-_rhs391 {
-				panic("integer overflow")
-			}
-			count = _cur390 + _rhs391
-		}()
-	}
-	return count
+	return len(stream.comments)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2170:5
 func frontStringPartCount(stream *FrontLexStream) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2171:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2172:5
-	for _, part := range stream.stringParts {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2173:9
-		_ = part
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2174:9
-		func() {
-			var _cur392 int = count
-			var _rhs393 int = 1
-			if _rhs393 > 0 && _cur392 > math.MaxInt-_rhs393 {
-				panic("integer overflow")
-			}
-			if _rhs393 < 0 && _cur392 < math.MinInt-_rhs393 {
-				panic("integer overflow")
-			}
-			count = _cur392 + _rhs393
-		}()
-	}
-	return count
+	return len(stream.stringParts)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2179:5
 func frontInterpolationTokenCount(stream *FrontLexStream) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2180:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2181:5
-	for _, token := range stream.interpolationTokens {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2182:9
-		_ = token
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2183:9
-		func() {
-			var _cur394 int = count
-			var _rhs395 int = 1
-			if _rhs395 > 0 && _cur394 > math.MaxInt-_rhs395 {
-				panic("integer overflow")
-			}
-			if _rhs395 < 0 && _cur394 < math.MinInt-_rhs395 {
-				panic("integer overflow")
-			}
-			count = _cur394 + _rhs395
-		}()
-	}
-	return count
+	return len(stream.interpolationTokens)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:2188:5
@@ -17905,81 +17783,17 @@ func ostyDropSuffixUnits(text string, count int) string {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6536:1
-func ostyLexStringPartCount(parts []*OstyLexStringPart) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6537:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6538:5
-	for _, part := range parts {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6539:9
-		_ = part
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6540:9
-		func() {
-			var _cur1733 int = count
-			var _rhs1734 int = 1
-			if _rhs1734 > 0 && _cur1733 > math.MaxInt-_rhs1734 {
-				panic("integer overflow")
-			}
-			if _rhs1734 < 0 && _cur1733 < math.MinInt-_rhs1734 {
-				panic("integer overflow")
-			}
-			count = _cur1733 + _rhs1734
-		}()
-	}
-	return count
-}
+func ostyLexStringPartCount(parts []*OstyLexStringPart) int { return len(parts) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6545:1
-func ostyStringListCount(items []string) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6546:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6547:5
-	for _, item := range items {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6548:9
-		_ = item
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6549:9
-		func() {
-			var _cur1735 int = count
-			var _rhs1736 int = 1
-			if _rhs1736 > 0 && _cur1735 > math.MaxInt-_rhs1736 {
-				panic("integer overflow")
-			}
-			if _rhs1736 < 0 && _cur1735 < math.MinInt-_rhs1736 {
-				panic("integer overflow")
-			}
-			count = _cur1735 + _rhs1736
-		}()
-	}
-	return count
-}
+func ostyStringListCount(items []string) int { return len(items) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6554:1
 func ostyStringAt(items []string, target int) string {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6555:5
-	idx := 0
-	_ = idx
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6556:5
-	for _, item := range items {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6557:9
-		if idx == target {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6558:13
-			return item
-		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6560:9
-		func() {
-			var _cur1737 int = idx
-			var _rhs1738 int = 1
-			if _rhs1738 > 0 && _cur1737 > math.MaxInt-_rhs1738 {
-				panic("integer overflow")
-			}
-			if _rhs1738 < 0 && _cur1737 < math.MinInt-_rhs1738 {
-				panic("integer overflow")
-			}
-			idx = _cur1737 + _rhs1738
-		}()
+	if target < 0 || target >= len(items) {
+		return ""
 	}
-	return ""
+	return items[target]
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6571:5
@@ -18049,106 +17863,23 @@ func ostyJoinDocLines(units []string, stream *FrontLexStream, tok *FrontLexToken
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6602:5
-func ostyLexResultTokenCount(result *OstyLexResult) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6603:5
-	c := 0
-	_ = c
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6604:5
-	for _, t := range result.tokens {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6605:9
-		_ = t
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6606:9
-		func() {
-			var _cur1743 int = c
-			var _rhs1744 int = 1
-			if _rhs1744 > 0 && _cur1743 > math.MaxInt-_rhs1744 {
-				panic("integer overflow")
-			}
-			if _rhs1744 < 0 && _cur1743 < math.MinInt-_rhs1744 {
-				panic("integer overflow")
-			}
-			c = _cur1743 + _rhs1744
-		}()
-	}
-	return c
-}
+func ostyLexResultTokenCount(result *OstyLexResult) int { return len(result.tokens) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6611:5
-func ostyLexResultErrorCount(result *OstyLexResult) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6612:5
-	c := 0
-	_ = c
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6613:5
-	for _, e := range result.errors {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6614:9
-		_ = e
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6615:9
-		func() {
-			var _cur1745 int = c
-			var _rhs1746 int = 1
-			if _rhs1746 > 0 && _cur1745 > math.MaxInt-_rhs1746 {
-				panic("integer overflow")
-			}
-			if _rhs1746 < 0 && _cur1745 < math.MinInt-_rhs1746 {
-				panic("integer overflow")
-			}
-			c = _cur1745 + _rhs1746
-		}()
-	}
-	return c
-}
+func ostyLexResultErrorCount(result *OstyLexResult) int { return len(result.errors) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6620:5
-func ostyLexResultCommentCount(result *OstyLexResult) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6621:5
-	c := 0
-	_ = c
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6622:5
-	for _, co := range result.comments {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6623:9
-		_ = co
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6624:9
-		func() {
-			var _cur1747 int = c
-			var _rhs1748 int = 1
-			if _rhs1748 > 0 && _cur1747 > math.MaxInt-_rhs1748 {
-				panic("integer overflow")
-			}
-			if _rhs1748 < 0 && _cur1747 < math.MinInt-_rhs1748 {
-				panic("integer overflow")
-			}
-			c = _cur1747 + _rhs1748
-		}()
-	}
-	return c
-}
+func ostyLexResultCommentCount(result *OstyLexResult) int { return len(result.comments) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6629:5
 func ostyLexResultTokenAt(result *OstyLexResult, idx int) *OstyRichToken {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6630:5
-	i := 0
-	_ = i
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6631:5
-	for _, t := range result.tokens {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6632:9
-		if i == idx {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6633:13
-			return t
+	if idx < 0 || idx >= len(result.tokens) {
+		return &OstyRichToken{
+			kind: FrontTokenKind(&FrontTokenKind_FrontEOF{}), text: "", startOffset: 0, startLine: 0, startCol: 0,
+			endOffset: 0, endLine: 0, endCol: 0, leadingDoc: "", triple: false, partCount: 0,
 		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6635:9
-		func() {
-			var _cur1749 int = i
-			var _rhs1750 int = 1
-			if _rhs1750 > 0 && _cur1749 > math.MaxInt-_rhs1750 {
-				panic("integer overflow")
-			}
-			if _rhs1750 < 0 && _cur1749 < math.MinInt-_rhs1750 {
-				panic("integer overflow")
-			}
-			i = _cur1749 + _rhs1750
-		}()
 	}
-	return &OstyRichToken{kind: FrontTokenKind(&FrontTokenKind_FrontEOF{}), text: "", startOffset: 0, startLine: 0, startCol: 0, endOffset: 0, endLine: 0, endCol: 0, leadingDoc: "", triple: false, partCount: 0}
+	return result.tokens[idx]
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:6647:5
@@ -22938,29 +22669,7 @@ func astParseSummary(source string) *FrontParseSummary {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8622:5
-func astFileDeclCount(file *AstFile) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8622:49
-	c := 0
-	_ = c
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8623:1
-	for _, d := range file.arena.decls {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8623:29
-		_ = d
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8624:1
-		func() {
-			var _cur1792 int = c
-			var _rhs1793 int = 1
-			if _rhs1793 > 0 && _cur1792 > math.MaxInt-_rhs1793 {
-				panic("integer overflow")
-			}
-			if _rhs1793 < 0 && _cur1792 < math.MinInt-_rhs1793 {
-				panic("integer overflow")
-			}
-			c = _cur1792 + _rhs1793
-		}()
-	}
-	return c
-}
+func astFileDeclCount(file *AstFile) int { return len(file.arena.decls) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8626:5
 func astFileNodeCount(file *AstFile) int {
@@ -22968,84 +22677,22 @@ func astFileNodeCount(file *AstFile) int {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8627:5
-func astFileErrorCount(file *AstFile) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8627:50
-	c := 0
-	_ = c
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8628:1
-	for _, e := range file.arena.errors {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8628:30
-		_ = e
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8629:1
-		func() {
-			var _cur1794 int = c
-			var _rhs1795 int = 1
-			if _rhs1795 > 0 && _cur1794 > math.MaxInt-_rhs1795 {
-				panic("integer overflow")
-			}
-			if _rhs1795 < 0 && _cur1794 < math.MinInt-_rhs1795 {
-				panic("integer overflow")
-			}
-			c = _cur1794 + _rhs1795
-		}()
-	}
-	return c
-}
+func astFileErrorCount(file *AstFile) int { return len(file.arena.errors) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8632:5
 func astFileDeclAt(file *AstFile, idx int) *AstNode {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8633:5
-	i := 0
-	_ = i
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8634:5
-	for _, d := range file.arena.decls {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8634:33
-		if i == idx {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8634:47
-			return astArenaNodeAt(file.arena, d)
-		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8635:5
-		func() {
-			var _cur1796 int = i
-			var _rhs1797 int = 1
-			if _rhs1797 > 0 && _cur1796 > math.MaxInt-_rhs1797 {
-				panic("integer overflow")
-			}
-			if _rhs1797 < 0 && _cur1796 < math.MinInt-_rhs1797 {
-				panic("integer overflow")
-			}
-			i = _cur1796 + _rhs1797
-		}()
+	if idx < 0 || idx >= len(file.arena.decls) {
+		return emptyAstNode(AstNodeKind(&AstNodeKind_AstNError{}))
 	}
-	return emptyAstNode(AstNodeKind(&AstNodeKind_AstNError{}))
+	return astArenaNodeAt(file.arena, file.arena.decls[idx])
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8639:5
 func astFileErrorAt(file *AstFile, idx int) *AstParseError {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8640:5
-	i := 0
-	_ = i
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8641:5
-	for _, e := range file.arena.errors {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8641:34
-		if i == idx {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8641:48
-			return e
-		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8642:5
-		func() {
-			var _cur1798 int = i
-			var _rhs1799 int = 1
-			if _rhs1799 > 0 && _cur1798 > math.MaxInt-_rhs1799 {
-				panic("integer overflow")
-			}
-			if _rhs1799 < 0 && _cur1798 < math.MinInt-_rhs1799 {
-				panic("integer overflow")
-			}
-			i = _cur1798 + _rhs1799
-		}()
+	if idx < 0 || idx >= len(file.arena.errors) {
+		return &AstParseError{message: "", tokenIndex: 0, hint: "", note: "", code: ""}
 	}
-	return &AstParseError{message: "", tokenIndex: 0, hint: "", note: "", code: ""}
+	return file.arena.errors[idx]
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:8646:5
@@ -25913,29 +25560,7 @@ func checkDiagCountErrors(xs []*CheckDiagnostic) int {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10081:5
-func checkDiagCount(xs []*CheckDiagnostic) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10082:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10083:5
-	for _, d := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10084:9
-		_ = d
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10085:9
-		func() {
-			var _cur1955 int = n
-			var _rhs1956 int = 1
-			if _rhs1956 > 0 && _cur1955 > math.MaxInt-_rhs1956 {
-				panic("integer overflow")
-			}
-			if _rhs1956 < 0 && _cur1955 < math.MinInt-_rhs1956 {
-				panic("integer overflow")
-			}
-			n = _cur1955 + _rhs1956
-		}()
-	}
-	return n
-}
+func checkDiagCount(xs []*CheckDiagnostic) int { return len(xs) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:10092:5
 func checkDiagRender(d *CheckDiagnostic) string {
@@ -30726,54 +30351,10 @@ func corePrintTypeArgs(tys *TyArena, args []int) string {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12685:1
-func coreIntLen(xs []int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12686:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12687:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12688:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12689:9
-		func() {
-			var _cur2034 int = n
-			var _rhs2035 int = 1
-			if _rhs2035 > 0 && _cur2034 > math.MaxInt-_rhs2035 {
-				panic("integer overflow")
-			}
-			if _rhs2035 < 0 && _cur2034 < math.MinInt-_rhs2035 {
-				panic("integer overflow")
-			}
-			n = _cur2034 + _rhs2035
-		}()
-	}
-	return n
-}
+func coreIntLen(xs []int) int { return len(xs) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12694:1
-func coreDiagCount(xs []*CheckDiagnostic) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12695:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12696:5
-	for _, d := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12697:9
-		_ = d
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12698:9
-		func() {
-			var _cur2036 int = n
-			var _rhs2037 int = 1
-			if _rhs2037 > 0 && _cur2036 > math.MaxInt-_rhs2037 {
-				panic("integer overflow")
-			}
-			if _rhs2037 < 0 && _cur2036 < math.MinInt-_rhs2037 {
-				panic("integer overflow")
-			}
-			n = _cur2036 + _rhs2037
-		}()
-	}
-	return n
-}
+func coreDiagCount(xs []*CheckDiagnostic) int { return len(xs) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:12727:5
 type CheckBinding struct {
@@ -33171,29 +32752,7 @@ func checkGenericBoundSatisfied(env *CheckEnv, solver *Solver, concreteTy int, i
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14117:1
-func solveIntLen(xs []int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14118:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14119:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14120:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14121:9
-		func() {
-			var _cur2104 int = n
-			var _rhs2105 int = 1
-			if _rhs2105 > 0 && _cur2104 > math.MaxInt-_rhs2105 {
-				panic("integer overflow")
-			}
-			if _rhs2105 < 0 && _cur2104 < math.MinInt-_rhs2105 {
-				panic("integer overflow")
-			}
-			n = _cur2104 + _rhs2105
-		}()
-	}
-	return n
-}
+func solveIntLen(xs []int) int { return len(xs) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:14166:5
 type ElabResult struct {
@@ -35143,57 +34702,14 @@ func elabPoisonResult(cx *ElabCx, start int, end int) *ElabResult {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15024:1
-func checkIntListLenHelper(xs []int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15025:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15026:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15027:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15028:9
-		func() {
-			var _cur2121 int = n
-			var _rhs2122 int = 1
-			if _rhs2122 > 0 && _cur2121 > math.MaxInt-_rhs2122 {
-				panic("integer overflow")
-			}
-			if _rhs2122 < 0 && _cur2121 < math.MinInt-_rhs2122 {
-				panic("integer overflow")
-			}
-			n = _cur2121 + _rhs2122
-		}()
-	}
-	return n
-}
+func checkIntListLenHelper(xs []int) int { return len(xs) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15033:1
 func checkIntListAt(xs []int, idx int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15034:5
-	i := 0
-	_ = i
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15035:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15036:9
-		if i == idx {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15037:13
-			return x
-		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15039:9
-		func() {
-			var _cur2123 int = i
-			var _rhs2124 int = 1
-			if _rhs2124 > 0 && _cur2123 > math.MaxInt-_rhs2124 {
-				panic("integer overflow")
-			}
-			if _rhs2124 < 0 && _cur2123 < math.MinInt-_rhs2124 {
-				panic("integer overflow")
-			}
-			i = _cur2123 + _rhs2124
-		}()
+	if idx < 0 || idx >= len(xs) {
+		return -1
 	}
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15041:5
-	return -1
+	return xs[idx]
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15056:1
@@ -36052,29 +35568,7 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15448:1
-func checkStringListLenHelper(xs []string) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15449:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15450:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15451:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15452:9
-		func() {
-			var _cur2144 int = n
-			var _rhs2145 int = 1
-			if _rhs2145 > 0 && _cur2144 > math.MaxInt-_rhs2145 {
-				panic("integer overflow")
-			}
-			if _rhs2145 < 0 && _cur2144 < math.MinInt-_rhs2145 {
-				panic("integer overflow")
-			}
-			n = _cur2144 + _rhs2145
-		}()
-	}
-	return n
-}
+func checkStringListLenHelper(xs []string) int { return len(xs) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15457:1
 func parseTupleIndex(text string) int {
@@ -39027,29 +38521,7 @@ func allVariantsForOwner(env *CheckEnv, owner string) []*CheckVariantSig {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16996:1
-func checkVariantListLen(xs []*CheckVariantSig) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16997:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16998:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16999:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17000:9
-		func() {
-			var _cur2176 int = n
-			var _rhs2177 int = 1
-			if _rhs2177 > 0 && _cur2176 > math.MaxInt-_rhs2177 {
-				panic("integer overflow")
-			}
-			if _rhs2177 < 0 && _cur2176 < math.MinInt-_rhs2177 {
-				panic("integer overflow")
-			}
-			n = _cur2176 + _rhs2177
-		}()
-	}
-	return n
-}
+func checkVariantListLen(xs []*CheckVariantSig) int { return len(xs) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17005:1
 func lastPathSegment(s string) string {
@@ -39551,29 +39023,7 @@ func pmExhaustivenessWitnessAt(cx *ElabCx, rows [][]int, colTys []int, depth int
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17346:1
-func pmWitnessesCount(xs []string) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17347:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17348:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17349:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17350:9
-		func() {
-			var _cur2182 int = n
-			var _rhs2183 int = 1
-			if _rhs2183 > 0 && _cur2182 > math.MaxInt-_rhs2183 {
-				panic("integer overflow")
-			}
-			if _rhs2183 < 0 && _cur2182 < math.MinInt-_rhs2183 {
-				panic("integer overflow")
-			}
-			n = _cur2182 + _rhs2183
-		}()
-	}
-	return n
-}
+func pmWitnessesCount(xs []string) int { return len(xs) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17355:1
 func pmPrependWitnesses(prefix string, ws []string, startSeen int) []string {
@@ -39991,29 +39441,7 @@ func pmStructFieldsForOwner(env *CheckEnv, owner string) []*CheckFieldSig {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17587:1
-func checkFieldListLen(xs []*CheckFieldSig) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17588:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17589:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17590:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17591:9
-		func() {
-			var _cur2186 int = n
-			var _rhs2187 int = 1
-			if _rhs2187 > 0 && _cur2186 > math.MaxInt-_rhs2187 {
-				panic("integer overflow")
-			}
-			if _rhs2187 < 0 && _cur2186 < math.MinInt-_rhs2187 {
-				panic("integer overflow")
-			}
-			n = _cur2186 + _rhs2187
-		}()
-	}
-	return n
-}
+func checkFieldListLen(xs []*CheckFieldSig) int { return len(xs) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17596:1
 func pmVariantCtor(cx *ElabCx, v *CheckVariantSig, colTy int) *PmCtor {
@@ -40599,54 +40027,10 @@ func intListConcat(a []int, b []int) []int {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17875:1
-func checkListOfRowsLen(xs [][]int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17876:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17877:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17878:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17879:9
-		func() {
-			var _cur2204 int = n
-			var _rhs2205 int = 1
-			if _rhs2205 > 0 && _cur2204 > math.MaxInt-_rhs2205 {
-				panic("integer overflow")
-			}
-			if _rhs2205 < 0 && _cur2204 < math.MinInt-_rhs2205 {
-				panic("integer overflow")
-			}
-			n = _cur2204 + _rhs2205
-		}()
-	}
-	return n
-}
+func checkListOfRowsLen(xs [][]int) int { return len(xs) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17884:1
-func checkCtorListLen(xs []*PmCtor) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17885:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17886:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17887:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17888:9
-		func() {
-			var _cur2206 int = n
-			var _rhs2207 int = 1
-			if _rhs2207 > 0 && _cur2206 > math.MaxInt-_rhs2207 {
-				panic("integer overflow")
-			}
-			if _rhs2207 < 0 && _cur2206 < math.MinInt-_rhs2207 {
-				panic("integer overflow")
-			}
-			n = _cur2206 + _rhs2207
-		}()
-	}
-	return n
-}
+func checkCtorListLen(xs []*PmCtor) int { return len(xs) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:17898:5
 type PmIntParse struct {
@@ -42194,56 +41578,14 @@ func astTypeToTyInCollect(cx *ElabCx, idx int) int {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18592:1
-func checkIntListLenLocal(xs []int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18593:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18594:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18595:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18596:9
-		func() {
-			var _cur2238 int = n
-			var _rhs2239 int = 1
-			if _rhs2239 > 0 && _cur2238 > math.MaxInt-_rhs2239 {
-				panic("integer overflow")
-			}
-			if _rhs2239 < 0 && _cur2238 < math.MinInt-_rhs2239 {
-				panic("integer overflow")
-			}
-			n = _cur2238 + _rhs2239
-		}()
-	}
-	return n
-}
+func checkIntListLenLocal(xs []int) int { return len(xs) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18601:1
 func checkIntListAtLocal(xs []int, idx int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18602:5
-	i := 0
-	_ = i
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18603:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18604:9
-		if i == idx {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18605:13
-			return x
-		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18607:9
-		func() {
-			var _cur2240 int = i
-			var _rhs2241 int = 1
-			if _rhs2241 > 0 && _cur2240 > math.MaxInt-_rhs2241 {
-				panic("integer overflow")
-			}
-			if _rhs2241 < 0 && _cur2240 < math.MinInt-_rhs2241 {
-				panic("integer overflow")
-			}
-			i = _cur2240 + _rhs2241
-		}()
+	if idx < 0 || idx >= len(xs) {
+		return -1
 	}
-	return -1
+	return xs[idx]
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18612:1
@@ -42437,29 +41779,7 @@ func serializeCheckResult(cx *ElabCx) *FrontCheckResult {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18747:5
-func frontCheckResultTypedNodeCount(result *FrontCheckResult) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18748:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18749:5
-	for _, x := range result.typedNodes {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18750:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18751:9
-		func() {
-			var _cur2243 int = n
-			var _rhs2244 int = 1
-			if _rhs2244 > 0 && _cur2243 > math.MaxInt-_rhs2244 {
-				panic("integer overflow")
-			}
-			if _rhs2244 < 0 && _cur2243 < math.MinInt-_rhs2244 {
-				panic("integer overflow")
-			}
-			n = _cur2243 + _rhs2244
-		}()
-	}
-	return n
-}
+func frontCheckResultTypedNodeCount(result *FrontCheckResult) int { return len(result.typedNodes) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18756:5
 func frontCheckResultBindingType(result *FrontCheckResult, name string) string {
@@ -42505,27 +41825,7 @@ func frontCheckResultSymbolCount(result *FrontCheckResult, kind string) int {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18776:5
 func frontCheckResultInstantiationCount(result *FrontCheckResult) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18777:5
-	n := 0
-	_ = n
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18778:5
-	for _, x := range result.instantiations {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18779:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18780:9
-		func() {
-			var _cur2247 int = n
-			var _rhs2248 int = 1
-			if _rhs2248 > 0 && _cur2247 > math.MaxInt-_rhs2248 {
-				panic("integer overflow")
-			}
-			if _rhs2248 < 0 && _cur2247 < math.MinInt-_rhs2248 {
-				panic("integer overflow")
-			}
-			n = _cur2247 + _rhs2248
-		}()
-	}
-	return n
+	return len(result.instantiations)
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18788:5
@@ -42620,29 +41920,7 @@ func selfResolveAstFile(file *AstFile) *SelfResolveResult {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18922:5
-func selfResolveDiagnosticCount(result *SelfResolveResult) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18923:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18924:5
-	for _, diag := range result.diagnostics {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18925:9
-		_ = diag
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18926:9
-		func() {
-			var _cur2249 int = count
-			var _rhs2250 int = 1
-			if _rhs2250 > 0 && _cur2249 > math.MaxInt-_rhs2250 {
-				panic("integer overflow")
-			}
-			if _rhs2250 < 0 && _cur2249 < math.MinInt-_rhs2250 {
-				panic("integer overflow")
-			}
-			count = _cur2249 + _rhs2250
-		}()
-	}
-	return count
-}
+func selfResolveDiagnosticCount(result *SelfResolveResult) int { return len(result.diagnostics) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:18931:5
 func selfResolveCodeCount(result *SelfResolveResult, code string) int {
@@ -44785,111 +44063,29 @@ func srAstNode(file *AstFile, idx int) *AstNode {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20314:1
 func srAstChildAt(children []int, target int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20315:5
-	idx := 0
-	_ = idx
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20316:5
-	for _, child := range children {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20317:9
-		if idx == target {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20318:13
-			return child
-		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20320:9
-		func() {
-			var _cur2291 int = idx
-			var _rhs2292 int = 1
-			if _rhs2292 > 0 && _cur2291 > math.MaxInt-_rhs2292 {
-				panic("integer overflow")
-			}
-			if _rhs2292 < 0 && _cur2291 < math.MinInt-_rhs2292 {
-				panic("integer overflow")
-			}
-			idx = _cur2291 + _rhs2292
-		}()
+	if target < 0 || target >= len(children) {
+		return -1
 	}
-	return -1
+	return children[target]
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20325:1
-func srAstListCount(items []int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20326:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20327:5
-	for _, item := range items {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20328:9
-		_ = item
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20329:9
-		func() {
-			var _cur2293 int = count
-			var _rhs2294 int = 1
-			if _rhs2294 > 0 && _cur2293 > math.MaxInt-_rhs2294 {
-				panic("integer overflow")
-			}
-			if _rhs2294 < 0 && _cur2293 < math.MinInt-_rhs2294 {
-				panic("integer overflow")
-			}
-			count = _cur2293 + _rhs2294
-		}()
-	}
-	return count
-}
+func srAstListCount(items []int) int { return len(items) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20334:1
 func srIntListAt(items []int, target int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20335:5
-	idx := 0
-	_ = idx
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20336:5
-	for _, item := range items {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20337:9
-		if idx == target {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20338:13
-			return item
-		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20340:9
-		func() {
-			var _cur2295 int = idx
-			var _rhs2296 int = 1
-			if _rhs2296 > 0 && _cur2295 > math.MaxInt-_rhs2296 {
-				panic("integer overflow")
-			}
-			if _rhs2296 < 0 && _cur2295 < math.MinInt-_rhs2296 {
-				panic("integer overflow")
-			}
-			idx = _cur2295 + _rhs2296
-		}()
+	if target < 0 || target >= len(items) {
+		return -1
 	}
-	return -1
+	return items[target]
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20345:1
 func srStringListAt(items []string, target int) string {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20346:5
-	idx := 0
-	_ = idx
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20347:5
-	for _, item := range items {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20348:9
-		if idx == target {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20349:13
-			return item
-		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20351:9
-		func() {
-			var _cur2297 int = idx
-			var _rhs2298 int = 1
-			if _rhs2298 > 0 && _cur2297 > math.MaxInt-_rhs2298 {
-				panic("integer overflow")
-			}
-			if _rhs2298 < 0 && _cur2297 < math.MinInt-_rhs2298 {
-				panic("integer overflow")
-			}
-			idx = _cur2297 + _rhs2298
-		}()
+	if target < 0 || target >= len(items) {
+		return ""
 	}
-	return ""
+	return items[target]
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20356:1
@@ -45607,29 +44803,7 @@ func selfLintResolvedAstSource(source string, file *AstFile, resolved *SelfResol
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20749:5
-func selfLintDiagnosticCount(report *SelfLintReport) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20750:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20751:5
-	for _, diag := range report.diagnostics {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20752:9
-		_ = diag
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20753:9
-		func() {
-			var _cur2349 int = count
-			var _rhs2350 int = 1
-			if _rhs2350 > 0 && _cur2349 > math.MaxInt-_rhs2350 {
-				panic("integer overflow")
-			}
-			if _rhs2350 < 0 && _cur2349 < math.MinInt-_rhs2350 {
-				panic("integer overflow")
-			}
-			count = _cur2349 + _rhs2350
-		}()
-	}
-	return count
-}
+func selfLintDiagnosticCount(report *SelfLintReport) int { return len(report.diagnostics) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20758:5
 func selfLintCodeCount(report *SelfLintReport, code string) int {
@@ -45668,29 +44842,7 @@ func selfLintFirstDiagnostic(report *SelfLintReport) *SelfLintDiagnostic {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20775:5
-func selfLintFixCount(diag *SelfLintDiagnostic) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20776:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20777:5
-	for _, fix := range diag.fixes {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20778:9
-		_ = fix
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20779:9
-		func() {
-			var _cur2353 int = count
-			var _rhs2354 int = 1
-			if _rhs2354 > 0 && _cur2353 > math.MaxInt-_rhs2354 {
-				panic("integer overflow")
-			}
-			if _rhs2354 < 0 && _cur2353 < math.MinInt-_rhs2354 {
-				panic("integer overflow")
-			}
-			count = _cur2353 + _rhs2354
-		}()
-	}
-	return count
-}
+func selfLintFixCount(diag *SelfLintDiagnostic) int { return len(diag.fixes) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20784:5
 func selfLintFirstFix(diag *SelfLintDiagnostic) *SelfLintFix {
@@ -46031,56 +45183,14 @@ func selfLintInvalidEdit() *SelfLintEdit {
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20925:1
-func selfLintEditListCount(edits []*SelfLintEdit) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20926:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20927:5
-	for _, edit := range edits {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20928:9
-		_ = edit
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20929:9
-		func() {
-			var _cur2375 int = count
-			var _rhs2376 int = 1
-			if _rhs2376 > 0 && _cur2375 > math.MaxInt-_rhs2376 {
-				panic("integer overflow")
-			}
-			if _rhs2376 < 0 && _cur2375 < math.MinInt-_rhs2376 {
-				panic("integer overflow")
-			}
-			count = _cur2375 + _rhs2376
-		}()
-	}
-	return count
-}
+func selfLintEditListCount(edits []*SelfLintEdit) int { return len(edits) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20934:1
 func selfLintEditAt(edits []*SelfLintEdit, target int) *SelfLintEdit {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20935:5
-	idx := 0
-	_ = idx
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20936:5
-	for _, edit := range edits {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20937:9
-		if idx == target {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20938:13
-			return edit
-		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20940:9
-		func() {
-			var _cur2377 int = idx
-			var _rhs2378 int = 1
-			if _rhs2378 > 0 && _cur2377 > math.MaxInt-_rhs2378 {
-				panic("integer overflow")
-			}
-			if _rhs2378 < 0 && _cur2377 < math.MinInt-_rhs2378 {
-				panic("integer overflow")
-			}
-			idx = _cur2377 + _rhs2378
-		}()
+	if target < 0 || target >= len(edits) {
+		return selfLintInvalidEdit()
 	}
-	return selfLintInvalidEdit()
+	return edits[target]
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:20945:1
@@ -49055,29 +48165,7 @@ func astLowerUseDecls(arena *AstArena, toks []astbridge.Token, n *AstNode) []ast
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23257:1
-func astLowerTokenCount(toks []astbridge.Token) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23258:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23259:5
-	for _, tok := range toks {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23260:9
-		_ = tok
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23261:9
-		func() {
-			var _cur2441 int = count
-			var _rhs2442 int = 1
-			if _rhs2442 > 0 && _cur2441 > math.MaxInt-_rhs2442 {
-				panic("integer overflow")
-			}
-			if _rhs2442 < 0 && _cur2441 < math.MinInt-_rhs2442 {
-				panic("integer overflow")
-			}
-			count = _cur2441 + _rhs2442
-		}()
-	}
-	return count
-}
+func astLowerTokenCount(toks []astbridge.Token) int { return len(toks) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:23266:1
 func astLowerInterpolatedTokensToExpr(toks []astbridge.Token) astbridge.Expr {
@@ -52421,54 +51509,12 @@ func astLowerLiteralPatternExpr(toks []astbridge.Token, n *AstNode) astbridge.Ex
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:24674:1
-func astLowerIntListCount(xs []int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:24675:5
-	count := 0
-	_ = count
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:24676:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:24677:9
-		_ = x
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:24678:9
-		func() {
-			var _cur2601 int = count
-			var _rhs2602 int = 1
-			if _rhs2602 > 0 && _cur2601 > math.MaxInt-_rhs2602 {
-				panic("integer overflow")
-			}
-			if _rhs2602 < 0 && _cur2601 < math.MinInt-_rhs2602 {
-				panic("integer overflow")
-			}
-			count = _cur2601 + _rhs2602
-		}()
-	}
-	return count
-}
+func astLowerIntListCount(xs []int) int { return len(xs) }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:24683:1
 func astLowerIntListAt(xs []int, target int) int {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:24684:5
-	i := 0
-	_ = i
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:24685:5
-	for _, x := range xs {
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:24686:9
-		if i == target {
-			// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:24687:13
-			return x
-		}
-		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:24689:9
-		func() {
-			var _cur2603 int = i
-			var _rhs2604 int = 1
-			if _rhs2604 > 0 && _cur2603 > math.MaxInt-_rhs2604 {
-				panic("integer overflow")
-			}
-			if _rhs2604 < 0 && _cur2603 < math.MinInt-_rhs2604 {
-				panic("integer overflow")
-			}
-			i = _cur2603 + _rhs2604
-		}()
+	if target < 0 || target >= len(xs) {
+		return -1
 	}
-	return -1
+	return xs[target]
 }

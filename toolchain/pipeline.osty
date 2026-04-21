@@ -88,12 +88,7 @@ pub fn toolchainPipelineBlockingErrorCount(report: ToolchainPipelineReport) -> I
 }
 
 fn toolchainPipelineSymbolCount(result: SelfResolveResult) -> Int {
-    let mut count = 0
-    for symbol in result.symbols {
-        let _ = symbol
-        count = count + 1
-    }
-    count
+    result.symbols.len()
 }
 
 fn toolchainPipelineDiagnosticOutput(

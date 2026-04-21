@@ -2149,28 +2149,22 @@ pub fn astParse(source: String) -> AstFile {
 pub fn astParseSummary(source: String) -> FrontParseSummary { let file = astParse(source)
 astCountSummary(file) }
 
-pub fn astFileDeclCount(file: AstFile) -> Int { let mut c = 0
-for d in file.arena.decls { let _ = d
-c = c + 1 }
-c }
+pub fn astFileDeclCount(file: AstFile) -> Int { file.arena.decls.len() }
 pub fn astFileNodeCount(file: AstFile) -> Int { astArenaNodeCount(file.arena) }
-pub fn astFileErrorCount(file: AstFile) -> Int { let mut c = 0
-for e in file.arena.errors { let _ = e
-c = c + 1 }
-c }
+pub fn astFileErrorCount(file: AstFile) -> Int { file.arena.errors.len() }
 
 pub fn astFileDeclAt(file: AstFile, idx: Int) -> AstNode {
-    let mut i = 0
-    for d in file.arena.decls { if i == idx { return astArenaNodeAt(file.arena, d) }
-    i = i + 1 }
-    emptyAstNode(AstNError)
+    if idx < 0 || idx >= file.arena.decls.len() {
+        return emptyAstNode(AstNError)
+    }
+    astArenaNodeAt(file.arena, file.arena.decls[idx])
 }
 
 pub fn astFileErrorAt(file: AstFile, idx: Int) -> AstParseError {
-    let mut i = 0
-    for e in file.arena.errors { if i == idx { return e }
-    i = i + 1 }
-    AstParseError { message: "", tokenIndex: 0, hint: "", note: "", code: "" }
+    if idx < 0 || idx >= file.arena.errors.len() {
+        return AstParseError { message: "", tokenIndex: 0, hint: "", note: "", code: "" }
+    }
+    file.arena.errors[idx]
 }
 
 pub fn astCountNodeKind(file: AstFile, kind: AstNodeKind) -> Int { let mut c = 0

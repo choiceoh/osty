@@ -203,12 +203,7 @@ pub fn allAsciiDigits(text: String) -> Bool {
 
 /// stringUnitCount counts ASCII-oriented split units.
 pub fn stringUnitCount(text: String) -> Int {
-    let mut count = 0
-    for unit in strings.split(text, "") {
-        let _ = unit
-        count = count + 1
-    }
-    count
+    strings.split(text, "").len()
 }
 
 /// isSemIdentUnit accepts the SemVer identifier character class.

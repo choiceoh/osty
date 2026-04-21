@@ -591,30 +591,15 @@ pub fn selfDocPackageHasDecl(pkg: SelfDocPackage, name: String, kind: String) ->
 }
 
 pub fn selfDocFieldCount(fields: List<SelfDocField>) -> Int {
-    let mut count = 0
-    for field in fields {
-        let _ = field
-        count = count + 1
-    }
-    count
+    fields.len()
 }
 
 pub fn selfDocMethodCount(methods: List<SelfDocMethod>) -> Int {
-    let mut count = 0
-    for method in methods {
-        let _ = method
-        count = count + 1
-    }
-    count
+    methods.len()
 }
 
 pub fn selfDocVariantCount(variants: List<SelfDocVariant>) -> Int {
-    let mut count = 0
-    for variant in variants {
-        let _ = variant
-        count = count + 1
-    }
-    count
+    variants.len()
 }
 
 pub fn selfDocPackageDeclNamed(pkg: SelfDocPackage, name: String) -> SelfDocDecl {
@@ -1665,48 +1650,23 @@ fn selfDocHTMLStylesheet() -> String {
 }
 
 fn selfDocDeclListCount(decls: List<SelfDocDecl>) -> Int {
-    let mut count = 0
-    for decl in decls {
-        let _ = decl
-        count = count + 1
-    }
-    count
+    decls.len()
 }
 
 fn selfDocPackageListCount(packages: List<SelfDocPackage>) -> Int {
-    let mut count = 0
-    for pkg in packages {
-        let _ = pkg
-        count = count + 1
-    }
-    count
+    packages.len()
 }
 
 fn selfDocParamDocCount(params: List<SelfDocParamDoc>) -> Int {
-    let mut count = 0
-    for param in params {
-        let _ = param
-        count = count + 1
-    }
-    count
+    params.len()
 }
 
 fn selfDocStringListCount(items: List<String>) -> Int {
-    let mut count = 0
-    for item in items {
-        let _ = item
-        count = count + 1
-    }
-    count
+    items.len()
 }
 
 fn selfDocIntListCount(items: List<Int>) -> Int {
-    let mut count = 0
-    for item in items {
-        let _ = item
-        count = count + 1
-    }
-    count
+    items.len()
 }
 
 fn selfDocEmptyInfo() -> SelfDocInfo {
