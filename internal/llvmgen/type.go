@@ -983,7 +983,7 @@ func (g *generator) listMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, 
 		return nil, "", false, false
 	}
 	switch field.Name {
-	case "len", "isEmpty", "pop", "push", "insert", "sorted", "toSet":
+	case "len", "isEmpty", "pop", "push", "insert", "sorted", "toSet", "clear":
 	default:
 		return nil, "", false, false
 	}

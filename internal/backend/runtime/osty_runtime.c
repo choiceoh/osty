@@ -1679,6 +1679,19 @@ void osty_rt_list_pop_discard(void *raw_list) {
     list->len -= 1;
 }
 
+// osty_rt_list_clear truncates the list to length 0. The backing storage
+// (data/capacity/elem_size/trace metadata) is preserved so subsequent
+// pushes keep the same element type and re-use the allocation. Pointer
+// slots past len are no longer traced (osty_rt_list_trace bounds by len),
+// so cleared elements become unreachable from this list.
+void osty_rt_list_clear(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    if (list == NULL) {
+        osty_rt_abort("list.clear on nil receiver");
+    }
+    list->len = 0;
+}
+
 void osty_rt_list_push_i64(void *raw_list, int64_t value) {
     osty_rt_list_push_raw(raw_list, &value, sizeof(value), NULL);
 }

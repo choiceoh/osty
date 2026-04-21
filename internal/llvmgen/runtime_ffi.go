@@ -303,6 +303,10 @@ func listRuntimePopDiscardSymbol() string {
 	return "osty_rt_list_pop_discard"
 }
 
+func listRuntimeClearSymbol() string {
+	return "osty_rt_list_clear"
+}
+
 func listRuntimePushBytesV1Symbol() string {
 	return "osty_rt_list_push_bytes_v1"
 }
