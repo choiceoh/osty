@@ -6,7 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/osty/osty/internal/check"
+	"github.com/osty/osty/internal/ir"
+	"github.com/osty/osty/internal/mir"
 	"github.com/osty/osty/internal/parser"
+	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 )
 
 // mergeToolchainSources concatenates toolchain files in order into a
@@ -210,6 +215,95 @@ func TestProbeNativeToolchainMerged(t *testing.T) {
 	}
 	_, err = generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/toolchain_native_merged.osty"})
 	t.Logf("NATIVE TOOLCHAIN first wall: %s", formatWall(err))
+}
+
+// TestProbeNativeToolchainMergedMIR is the MIR-path twin of
+// TestProbeNativeToolchainMerged. The AST-only probe uses
+// `generateFromAST`, which bypasses the IR→MIR lowering and measures the
+// legacy HIR→AST bridge surface. The real backend
+// (internal/backend/llvm.go) dispatches MIR-first and only falls back to
+// the legacy path on ErrUnsupported, so the AST probe's wall is
+// systematically more pessimistic than the self-host critical path.
+//
+// This probe runs the merged native toolchain through the full
+// parse → resolve → check → ir.Lower → ir.Monomorphize → mir.Lower →
+// GenerateFromMIR pipeline and reports the first stage that walls
+// (along with its message). Info-only.
+//
+// NOTE: the toolchain currently has ~949 checker errors, so ir.Lower /
+// Monomorphize will produce issues; the probe logs the count and keeps
+// going so we can see where the MIR emitter itself walls.
+func TestProbeNativeToolchainMergedMIR(t *testing.T) {
+	if testing.Short() {
+		t.Skip("info-only; slow; skipped in -short")
+	}
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	dir := filepath.Join(root, "toolchain")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read toolchain: %v", err)
+	}
+	var files []string
+	var skipped []string
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
+			continue
+		}
+		src, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		if isBootstrapOnlyOstyFile(src) {
+			skipped = append(skipped, name)
+			continue
+		}
+		files = append(files, name)
+	}
+	if len(skipped) > 0 {
+		t.Logf("bootstrap-only files skipped (%d): %s", len(skipped), strings.Join(skipped, ", "))
+	}
+	merged := mergeToolchainSources(t, root, files)
+	file, _ := parser.ParseDiagnostics(merged)
+	if file == nil {
+		t.Fatalf("native-toolchain merged parse returned nil (%d files, %d bytes)", len(files), len(merged))
+	}
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.File(file, res, check.Opts{
+		UseGolegacy:   true,
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        merged,
+		Privileged:    true,
+	})
+	if chk != nil {
+		t.Logf("check: %d diag(s)", len(chk.Diags))
+	}
+	mod, irIssues := ir.Lower("main", file, res, chk)
+	if len(irIssues) > 0 {
+		t.Logf("ir.Lower: %d issue(s); first = %v", len(irIssues), irIssues[0])
+	}
+	if mod == nil {
+		t.Fatalf("ir.Lower returned nil module")
+	}
+	monoMod, monoErrs := ir.Monomorphize(mod)
+	if len(monoErrs) > 0 {
+		t.Logf("ir.Monomorphize: %d err(s); first = %v", len(monoErrs), monoErrs[0])
+	}
+	if monoMod == nil {
+		t.Fatalf("ir.Monomorphize returned nil module")
+	}
+	mirMod := mir.Lower(monoMod)
+	if mirMod == nil {
+		t.Fatalf("mir.Lower returned nil module")
+	}
+	_, err = GenerateFromMIR(mirMod, Options{PackageName: "main", SourcePath: "/tmp/toolchain_native_merged_mir.osty"})
+	t.Logf("NATIVE TOOLCHAIN (MIR) first wall: %s", formatWall(err))
 }
 
 // TestProbeDiagnosticMergedWithLexer checks whether the LLVM011 wall on

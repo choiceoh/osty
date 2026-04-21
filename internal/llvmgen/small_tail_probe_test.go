@@ -38,7 +38,13 @@ func TestProbeSmallTailLower(t *testing.T) {
 		{"toolchain/scaffold_policy.osty", ""},
 		{"toolchain/semver.osty", ""},
 		{"toolchain/test_runner.osty", ""},
-		{"toolchain/ty.osty", ""},
+		// ty.osty calls checkHashKey (defined in check_env.osty), so a
+		// single-file probe walls on LLVM015 cross-module scope. The
+		// previous "clean" status was a false positive from CRLF
+		// mis-lexing; once selfhost.Lex / Run normalize \r\n the call
+		// appears with its real *ast.Ident shape and the emitter
+		// reports the unresolved callee honestly.
+		{"toolchain/ty.osty", "LLVM015"},
 	}
 	for _, tc := range cases {
 		tc := tc
