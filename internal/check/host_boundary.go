@@ -202,6 +202,18 @@ var ensureManagedNativeChecker = func() (string, error) {
 	return toolchain.EnsureNativeChecker(".")
 }
 
+// UseEmbeddedNativeChecker forces the in-process selfhost checker for the
+// remainder of the process. Use only in developer tooling (bootstrap-gen)
+// where the exec + JSON boundary around the managed checker binary is
+// pure overhead — the embedded path calls selfhost.CheckSourceStructured
+// directly, avoiding the subprocess build step, fork/exec cost, and
+// marshal/unmarshal of the checker payload.
+func UseEmbeddedNativeChecker() {
+	nativeCheckerFactory = func() (nativeChecker, string) {
+		return embeddedNativeChecker{}, ""
+	}
+}
+
 func defaultNativeChecker() (nativeChecker, string) {
 	path := strings.TrimSpace(os.Getenv(nativeCheckerEnv))
 	if path != "" {

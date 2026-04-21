@@ -46,6 +46,12 @@ func main() {
 }
 
 func run(sourcePath, pkgName, outPath string) error {
+	// Force the embedded selfhost checker for regen: the exec+JSON
+	// boundary around osty-native-checker is pure overhead here — we
+	// already link the same selfhost package into this binary, so
+	// calling it in-process avoids a subprocess build, a fork, and
+	// marshal/unmarshal of a ~1 MB payload.
+	check.UseEmbeddedNativeChecker()
 	absPath, err := filepath.Abs(sourcePath)
 	if err != nil {
 		return err

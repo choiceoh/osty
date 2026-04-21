@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/osty/osty/internal/selfhost/bundle"
@@ -48,17 +47,11 @@ func run() error {
 		return fmt.Errorf("write merged selfhost source: %w", err)
 	}
 	tmpOutPath := filepath.Join(tmpDir, "generated.go")
-	checkerName := "osty-native-checker"
-	if runtime.GOOS == "windows" {
-		checkerName += ".exe"
-	}
-	checkerPath := filepath.Join(tmpDir, checkerName)
-	if override := strings.TrimSpace(os.Getenv("OSTY_NATIVE_CHECKER_BIN")); override != "" {
-		checkerPath = override
-	} else if err := buildNativeChecker(root, checkerPath); err != nil {
-		return err
-	}
-
+	// bootstrap-gen links selfhost directly and forces the embedded
+	// checker, so we no longer build osty-native-checker for regen.
+	// That dropped ~15s of JSON + subprocess overhead on the checker
+	// call. OSTY_NATIVE_CHECKER_BIN is still honoured only as an
+	// explicit debug override.
 	cmd := exec.Command(
 		"go", "run", "./cmd/osty-bootstrap-gen",
 		"--package", "selfhost",
@@ -66,7 +59,11 @@ func run() error {
 		mergedPath,
 	)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "OSTY_NATIVE_CHECKER_BIN="+checkerPath)
+	if override := strings.TrimSpace(os.Getenv("OSTY_NATIVE_CHECKER_BIN")); override != "" {
+		cmd.Env = append(os.Environ(), "OSTY_NATIVE_CHECKER_BIN="+override)
+	} else {
+		cmd.Env = os.Environ()
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("generate selfhost parser: %w\n%s", err, bytes.TrimSpace(output))
@@ -126,16 +123,6 @@ func installWithBuildGate(root, outPath string, data []byte) error {
 		outPath,
 		bytes.TrimSpace(output),
 	)
-}
-
-func buildNativeChecker(root, outPath string) error {
-	cmd := exec.Command("go", "build", "-o", outPath, "./cmd/osty-native-checker")
-	cmd.Dir = root
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("build native checker: %w\n%s", err, bytes.TrimSpace(output))
-	}
-	return nil
 }
 
 func bootstrapGenMissingTypes(output []byte) bool {
