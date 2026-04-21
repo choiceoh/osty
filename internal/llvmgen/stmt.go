@@ -1234,6 +1234,18 @@ func (g *generator) emitAssertArgToString(v value, isString bool) (value, bool) 
 			return value{}, false
 		}
 		return out, true
+	case "i32":
+		out, err := g.emitRuntimeCharToString(v)
+		if err != nil {
+			return value{}, false
+		}
+		return out, true
+	case "i8":
+		out, err := g.emitRuntimeByteToString(v)
+		if err != nil {
+			return value{}, false
+		}
+		return out, true
 	case "ptr":
 		if isString {
 			return v, true

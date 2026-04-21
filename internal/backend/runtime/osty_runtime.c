@@ -980,6 +980,43 @@ const char *osty_rt_bool_to_string(bool value) {
     return osty_rt_string_dup_site("false", 5, "runtime.bool.to_string");
 }
 
+const char *osty_rt_char_to_string(int32_t codepoint) {
+    uint32_t cp = (uint32_t)codepoint;
+    unsigned char buffer[4];
+    size_t len;
+    if (cp < 0x80U) {
+        buffer[0] = (unsigned char)cp;
+        len = 1;
+    } else if (cp < 0x800U) {
+        buffer[0] = (unsigned char)(0xC0U | (cp >> 6));
+        buffer[1] = (unsigned char)(0x80U | (cp & 0x3FU));
+        len = 2;
+    } else if (cp < 0x10000U) {
+        buffer[0] = (unsigned char)(0xE0U | (cp >> 12));
+        buffer[1] = (unsigned char)(0x80U | ((cp >> 6) & 0x3FU));
+        buffer[2] = (unsigned char)(0x80U | (cp & 0x3FU));
+        len = 3;
+    } else if (cp < 0x110000U) {
+        buffer[0] = (unsigned char)(0xF0U | (cp >> 18));
+        buffer[1] = (unsigned char)(0x80U | ((cp >> 12) & 0x3FU));
+        buffer[2] = (unsigned char)(0x80U | ((cp >> 6) & 0x3FU));
+        buffer[3] = (unsigned char)(0x80U | (cp & 0x3FU));
+        len = 4;
+    } else {
+        /* U+FFFD REPLACEMENT CHARACTER */
+        buffer[0] = 0xEFU;
+        buffer[1] = 0xBFU;
+        buffer[2] = 0xBDU;
+        len = 3;
+    }
+    return osty_rt_string_dup_site((const char *)buffer, len, "runtime.char.to_string");
+}
+
+const char *osty_rt_byte_to_string(int8_t value) {
+    unsigned char byte = (unsigned char)value;
+    return osty_rt_string_dup_site((const char *)&byte, 1, "runtime.byte.to_string");
+}
+
 const char *osty_rt_float_to_string(double value) {
     char buffer[64];
     int precision;

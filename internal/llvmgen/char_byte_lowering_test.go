@@ -144,3 +144,113 @@ fn main() {
 		t.Fatalf("lspUtf16UnitsForChar still errors: %v", err)
 	}
 }
+
+// Int.toByte() is spec'd as Result<Byte, Error> but the toolchain uses it
+// as an infallible trunc at sites like `'\\'.toInt().toByte()`. Verify we
+// lower it as `trunc i64 to i8` rather than failing with LLVM015.
+func TestIntToByteLowersAsTrunc(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn cmpBackslash(b: Byte) -> Bool {
+    b == '\\'.toInt().toByte()
+}
+
+fn main() {
+    if cmpBackslash(b'\\') {
+        println(1)
+    } else {
+        println(0)
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/int_to_byte.osty"})
+	if err != nil {
+		t.Fatalf("Int.toByte() chain still errors: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"trunc i64",
+		"icmp eq i8",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// Byte.toChar() widens a Byte (i8) receiver to a Char (i32) code point.
+// Supports the `b.toChar().toString()` pattern the self-host emitter uses
+// to materialise a one-byte UTF-8 string for printable ASCII.
+func TestByteToCharLowersAsZext(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn byteAsChar(b: Byte) -> Char {
+    b.toChar()
+}
+
+fn main() {
+    if byteAsChar(b'A') == 'A' {
+        println(1)
+    } else {
+        println(0)
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/byte_to_char.osty"})
+	if err != nil {
+		t.Fatalf("Byte.toChar() still errors: %v", err)
+	}
+	got := string(ir)
+	if !strings.Contains(got, "zext i8") {
+		t.Fatalf("generated IR missing zext i8 widening:\n%s", got)
+	}
+}
+
+// Char.toString() calls the osty_rt_char_to_string runtime helper to
+// materialise a UTF-8-encoded single-char String. The toolchain relies
+// on this for `b.toChar().toString()` in `llvmCStringEscape`.
+func TestCharToStringCallsRuntimeHelper(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn describe(c: Char) -> String {
+    c.toString()
+}
+
+fn main() {
+    println(describe('x'))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/char_to_string.osty"})
+	if err != nil {
+		t.Fatalf("Char.toString() still errors: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_char_to_string",
+		"declare ptr @osty_rt_char_to_string(i32)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// Byte.toString() calls the osty_rt_byte_to_string runtime helper to
+// materialise a single-byte String. Useful for raw-byte display paths.
+func TestByteToStringCallsRuntimeHelper(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn describeByte(b: Byte) -> String {
+    b.toString()
+}
+
+fn main() {
+    println(describeByte(b'M'))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/byte_to_string.osty"})
+	if err != nil {
+		t.Fatalf("Byte.toString() still errors: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_byte_to_string",
+		"declare ptr @osty_rt_byte_to_string(i8)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
