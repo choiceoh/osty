@@ -42,7 +42,7 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: osty test [--offline | --locked | --frozen] [--backend NAME] [--emit MODE] [--airepair=false] [--airepair-mode MODE] [--seed HEX] [--serial] [--jobs N] [--doc] [PATH|FILTER...]")
+		fmt.Fprintln(stderr, "usage: osty test [--offline | --locked | --frozen] [--backend NAME] [--emit MODE] [--airepair=false] [--airepair-mode MODE] [--seed HEX] [--serial] [--jobs N] [--doc] [--update-snapshots] [PATH|FILTER...]")
 	}
 	var offline, locked, frozen bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
@@ -62,6 +62,8 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	fs.IntVar(&jobs, "jobs", 0, "max concurrent tests when parallel (0 = runtime.NumCPU())")
 	var docTests bool
 	fs.BoolVar(&docTests, "doc", false, "v0.5 G32: extract `osty-fenced examples from /// doc comments and run each as an additional test")
+	var updateSnapshots bool
+	fs.BoolVar(&updateSnapshots, "update-snapshots", false, "accept current `testing.snapshot` output by overwriting each golden file (sets OSTY_UPDATE_SNAPSHOTS for the test child processes)")
 	var pf profileFlags
 	pf.register(fs)
 	if err := fs.Parse(args); err != nil {
@@ -82,6 +84,19 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	_ = locked
 	_ = frozen
 	_ = pf
+
+	// --update-snapshots propagates to the emitted test binaries via
+	// the environment, since osty_rt_test_snapshot reads it with
+	// getenv. Setting it on the parent is sufficient because the
+	// exec.Command children inherit the parent's env by default. The
+	// Go process itself ignores the var — it only controls the C
+	// runtime's behavior inside the compiled test binaries.
+	if updateSnapshots {
+		if err := os.Setenv("OSTY_UPDATE_SNAPSHOTS", "1"); err != nil {
+			fmt.Fprintf(stderr, "osty test: %v\n", err)
+			return 2
+		}
+	}
 
 	backendID, emitMode := resolveBackendAndEmitFlags("test", backendName, emitName)
 	pkgDir, filters, err := resolveTestTarget(fs.Args())

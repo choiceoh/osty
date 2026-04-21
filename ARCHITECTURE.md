@@ -430,6 +430,15 @@ markers, common package/import explanations, and a rerunnable Go command.
 - **Fuzz** (`FuzzLex`, `FuzzParse`) both seeded with real Osty
   snippets and malformed inputs.
 - **Golden snapshots** for diagnostic rendering.
+- **User-visible snapshot tests** (`testing.snapshot(name, output)`
+  per LANG_SPEC §11.5) intercepted by
+  [`internal/llvmgen/stmt.go`](internal/llvmgen/stmt.go) and lowered
+  to a runtime helper in
+  [`internal/backend/runtime/osty_runtime.c`](internal/backend/runtime/osty_runtime.c).
+  Goldens live at `<source_dir>/__snapshots__/<name>.snap`;
+  `osty test --update-snapshots` accepts the current output. Golden
+  mismatches surface as a trim-prefix / trim-suffix line diff that
+  reuses the same runtime helper as `assertEq` on `String` values.
 
 ## Open questions
 
