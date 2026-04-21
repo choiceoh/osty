@@ -363,6 +363,40 @@ func mapRuntimeGetOrAbortSymbol(keyTyp string, keyString bool) string {
 	return llvmMapRuntimeGetOrAbortSymbol(keyTyp, keyString)
 }
 
+// mapRuntimeGetSymbol backs the Option-returning `Map.get(key) -> V?`
+// intrinsic. The runtime helper returns i1 (present) and writes V into
+// an out-param, so the backend can lift it into the Option<V> ABI
+// (null ptr = None, boxed payload ptr = Some) without inlining the
+// stdlib body per callsite.
+func mapRuntimeGetSymbol(keyTyp string, keyString bool) string {
+	return "osty_rt_map_get_" + llvmMapKeySuffix(keyTyp, keyString)
+}
+
+// mapRuntimeKeyAtSymbol returns the K-at-slot accessor used by
+// `for (k, v) in m` iteration. `osty_rt_map_key_at_<ksuf>(map, i) -> K`.
+func mapRuntimeKeyAtSymbol(keyTyp string, keyString bool) string {
+	return "osty_rt_map_key_at_" + llvmMapKeySuffix(keyTyp, keyString)
+}
+
+// mapRuntimeValueAtSymbol returns the V-at-slot accessor — V-agnostic,
+// takes an out-pointer. `osty_rt_map_value_at(map, i, out_ptr)`.
+func mapRuntimeValueAtSymbol() string {
+	return "osty_rt_map_value_at"
+}
+
+// mapRuntimeLockSymbol / mapRuntimeUnlockSymbol expose the per-map
+// recursive mutex as a pair. Emitted by `update` so the get + callback
+// + insert composition is a single critical section; recursive so the
+// callback can re-enter the same map (e.g. read self.len()) without
+// self-deadlock.
+func mapRuntimeLockSymbol() string {
+	return "osty_rt_map_lock"
+}
+
+func mapRuntimeUnlockSymbol() string {
+	return "osty_rt_map_unlock"
+}
+
 func mapRuntimeKeysSymbol() string {
 	return llvmMapRuntimeKeysSymbol()
 }

@@ -998,7 +998,7 @@ func (g *generator) mapMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, s
 		return nil, "", "", false, false
 	}
 	switch field.Name {
-	case "containsKey", "insert", "remove", "keys", "len", "isEmpty":
+	case "containsKey", "insert", "remove", "keys", "len", "isEmpty", "get", "getOr", "update", "retainIf", "mergeWith", "mapValues":
 	default:
 		return nil, "", "", false, false
 	}

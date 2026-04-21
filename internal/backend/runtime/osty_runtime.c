@@ -300,6 +300,14 @@ typedef struct osty_rt_map {
     osty_rt_trace_slot_fn value_trace;
     unsigned char *keys;
     unsigned char *values;
+    // Per-map recursive mutex. Guarantees that all public map ops are
+    // mutually exclusive on a single instance so concurrent mutation
+    // can't realloc the slot arrays mid-read, drop the len mid-walk,
+    // or interleave an insert's memmove. Recursive so that `update`
+    // callbacks that touch the same map from within the lock don't
+    // self-deadlock.
+    pthread_mutex_t mu;
+    int mu_init;
 } osty_rt_map;
 
 typedef struct osty_rt_set {
@@ -670,6 +678,10 @@ static void osty_rt_map_destroy(void *payload) {
     if (map != NULL) {
         free(map->keys);
         free(map->values);
+        if (map->mu_init) {
+            pthread_mutex_destroy(&map->mu);
+            map->mu_init = 0;
+        }
     }
 }
 
@@ -1958,7 +1970,37 @@ void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, 
     map->value_kind = value_kind;
     map->value_size = (size_t)value_size;
     map->value_trace = value_trace;
+    {
+        pthread_mutexattr_t attr;
+        if (pthread_mutexattr_init(&attr) != 0) {
+            osty_rt_abort("map lock: mutexattr_init failed");
+        }
+        if (pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) != 0) {
+            osty_rt_abort("map lock: mutexattr_settype failed");
+        }
+        if (pthread_mutex_init(&map->mu, &attr) != 0) {
+            osty_rt_abort("map lock: mutex_init failed");
+        }
+        pthread_mutexattr_destroy(&attr);
+        map->mu_init = 1;
+    }
     return map;
+}
+
+// Public lock/unlock for composite ops (update) that must hold the
+// lock across get + callback + insert. Recursive mutex so calls from
+// a user callback into the same map (e.g. counts.len()) re-acquire
+// instead of self-deadlocking.
+void osty_rt_map_lock(void *raw_map) {
+    osty_rt_map *map = (osty_rt_map *)raw_map;
+    if (map == NULL || !map->mu_init) return;
+    pthread_mutex_lock(&map->mu);
+}
+
+void osty_rt_map_unlock(void *raw_map) {
+    osty_rt_map *map = (osty_rt_map *)raw_map;
+    if (map == NULL || !map->mu_init) return;
+    pthread_mutex_unlock(&map->mu);
 }
 
 static bool osty_rt_map_contains_raw(void *raw_map, const void *key) {
@@ -2019,12 +2061,53 @@ static void osty_rt_map_get_or_abort_raw(void *raw_map, const void *key, void *o
     memcpy(out_value, osty_rt_map_value_slot(map, index), map->value_size);
 }
 
+// Option-returning get: fills *out_value and returns true when the key
+// is present, returns false otherwise (and leaves out_value untouched).
+// This is the real intrinsic backing `Map.get(key) -> V?` — callers at
+// the LLVM layer use the return to construct an Option<V>, then feed
+// it into `??`, `match`, `.isSome()`, etc. without needing per-helper
+// special-case lowering.
+static bool osty_rt_map_get_raw(void *raw_map, const void *key, void *out_value) {
+    osty_rt_map *map = (osty_rt_map *)raw_map;
+    int64_t index;
+    if (map == NULL || key == NULL || out_value == NULL) {
+        return false;
+    }
+    index = osty_rt_map_find_index(map, key);
+    if (index < 0) {
+        return false;
+    }
+    memcpy(out_value, osty_rt_map_value_slot(map, index), map->value_size);
+    return true;
+}
+
+// Value-at-slot (V-type-agnostic): memcpy the V stored at slot i
+// into *out_value. Backs the for-(k, v)-in-m iteration path — key
+// accessors are macro-generated per K suffix below.
+void osty_rt_map_value_at(void *raw_map, int64_t index, void *out_value) {
+    osty_rt_map *map = (osty_rt_map *)raw_map;
+    if (map == NULL || out_value == NULL) {
+        osty_rt_abort("invalid map value_at");
+    }
+    osty_rt_map_lock(raw_map);
+    if (index < 0 || index >= map->len) {
+        osty_rt_map_unlock(raw_map);
+        osty_rt_abort("map value_at index out of bounds");
+    }
+    memcpy(out_value, osty_rt_map_value_slot(map, index), map->value_size);
+    osty_rt_map_unlock(raw_map);
+}
+
 int64_t osty_rt_map_len(void *raw_map) {
     osty_rt_map *map = (osty_rt_map *)raw_map;
+    int64_t n;
     if (map == NULL) {
         osty_rt_abort("map is null");
     }
-    return map->len;
+    osty_rt_map_lock(raw_map);
+    n = map->len;
+    osty_rt_map_unlock(raw_map);
+    return n;
 }
 
 void *osty_rt_map_keys(void *raw_map) {
@@ -2034,6 +2117,7 @@ void *osty_rt_map_keys(void *raw_map) {
     if (map == NULL) {
         osty_rt_abort("map is null");
     }
+    osty_rt_map_lock(raw_map);
     for (i = 0; i < map->len; i++) {
         switch (map->key_kind) {
         case OSTY_RT_ABI_I64: {
@@ -2065,14 +2149,60 @@ void *osty_rt_map_keys(void *raw_map) {
             osty_rt_abort("unsupported map key list kind");
         }
     }
+    osty_rt_map_unlock(raw_map);
     return out;
 }
 
+// Every public keyed op takes the per-map lock, runs the raw op, and
+// releases. Recursive so that `update`'s outer lock + a re-entrant op
+// from a user callback (e.g. counts.len() inside f) don't deadlock.
+// key_at snapshots the key under the lock — the return is by-value so
+// the caller doesn't hold any reference past unlock.
 #define OSTY_RT_DEFINE_MAP_KEY_OPS(suffix, ctype) \
-bool osty_rt_map_contains_##suffix(void *raw_map, ctype key) { return osty_rt_map_contains_raw(raw_map, &key); } \
-void osty_rt_map_insert_##suffix(void *raw_map, ctype key, const void *value) { osty_rt_map_insert_raw(raw_map, &key, value); } \
-bool osty_rt_map_remove_##suffix(void *raw_map, ctype key) { return osty_rt_map_remove_raw(raw_map, &key); } \
-void osty_rt_map_get_or_abort_##suffix(void *raw_map, ctype key, void *out_value) { osty_rt_map_get_or_abort_raw(raw_map, &key, out_value); }
+bool osty_rt_map_contains_##suffix(void *raw_map, ctype key) { \
+    bool r; \
+    osty_rt_map_lock(raw_map); \
+    r = osty_rt_map_contains_raw(raw_map, &key); \
+    osty_rt_map_unlock(raw_map); \
+    return r; \
+} \
+void osty_rt_map_insert_##suffix(void *raw_map, ctype key, const void *value) { \
+    osty_rt_map_lock(raw_map); \
+    osty_rt_map_insert_raw(raw_map, &key, value); \
+    osty_rt_map_unlock(raw_map); \
+} \
+bool osty_rt_map_remove_##suffix(void *raw_map, ctype key) { \
+    bool r; \
+    osty_rt_map_lock(raw_map); \
+    r = osty_rt_map_remove_raw(raw_map, &key); \
+    osty_rt_map_unlock(raw_map); \
+    return r; \
+} \
+void osty_rt_map_get_or_abort_##suffix(void *raw_map, ctype key, void *out_value) { \
+    osty_rt_map_lock(raw_map); \
+    osty_rt_map_get_or_abort_raw(raw_map, &key, out_value); \
+    osty_rt_map_unlock(raw_map); \
+} \
+bool osty_rt_map_get_##suffix(void *raw_map, ctype key, void *out_value) { \
+    bool r; \
+    osty_rt_map_lock(raw_map); \
+    r = osty_rt_map_get_raw(raw_map, &key, out_value); \
+    osty_rt_map_unlock(raw_map); \
+    return r; \
+} \
+ctype osty_rt_map_key_at_##suffix(void *raw_map, int64_t index) { \
+    osty_rt_map *map = (osty_rt_map *)raw_map; \
+    ctype out; \
+    if (map == NULL) osty_rt_abort("map is null"); \
+    osty_rt_map_lock(raw_map); \
+    if (index < 0 || index >= map->len) { \
+        osty_rt_map_unlock(raw_map); \
+        osty_rt_abort("map key_at out of bounds"); \
+    } \
+    memcpy(&out, osty_rt_map_key_slot(map, index), sizeof(ctype)); \
+    osty_rt_map_unlock(raw_map); \
+    return out; \
+}
 
 OSTY_RT_DEFINE_MAP_KEY_OPS(i64, int64_t)
 OSTY_RT_DEFINE_MAP_KEY_OPS(i1, bool)
