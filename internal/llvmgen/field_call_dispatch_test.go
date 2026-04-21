@@ -130,6 +130,36 @@ func TestGenerateIndexedNestedListLenMethodDispatch(t *testing.T) {
 	}
 }
 
+func TestGenerateNestedFieldListIsEmptyMethodDispatch(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct DiagHarvestOutcome {
+    emittedCodes: List<String>
+}
+
+fn main() {
+    let outcome = DiagHarvestOutcome { emittedCodes: ["LLVM015"] }
+    println(outcome.emittedCodes.isEmpty())
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/nested_field_is_empty.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"call i64 @osty_rt_list_len",
+		"icmp eq i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // Phase 1 of the first-class fn value lowering: a top-level fn used
 // in value position materialises a closure env + thunk, and the
 // subsequent call through the bound name dispatches indirectly.

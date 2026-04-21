@@ -859,6 +859,8 @@ func (g *generator) staticCollectionMethodResult(call *ast.CallExpr) (value, boo
 		switch field.Name {
 		case "len":
 			return value{typ: "i64"}, true, true
+		case "isEmpty":
+			return value{typ: "i1"}, true, true
 		case "sorted":
 			return value{typ: "ptr", gcManaged: true, listElemTyp: elemTyp, listElemString: elemString}, true, true
 		case "toSet":
@@ -869,6 +871,8 @@ func (g *generator) staticCollectionMethodResult(call *ast.CallExpr) (value, boo
 	}
 	if _, keyTyp, _, keyString, found := g.mapMethodInfo(call); found {
 		switch field := call.Fn.(*ast.FieldExpr); field.Name {
+		case "isEmpty":
+			return value{typ: "i1"}, true, true
 		case "containsKey":
 			return value{typ: "i1"}, true, true
 		case "keys":
@@ -883,6 +887,8 @@ func (g *generator) staticCollectionMethodResult(call *ast.CallExpr) (value, boo
 		switch field := call.Fn.(*ast.FieldExpr); field.Name {
 		case "len":
 			return value{typ: "i64"}, true, true
+		case "isEmpty":
+			return value{typ: "i1"}, true, true
 		case "contains", "remove":
 			return value{typ: "i1"}, true, true
 		case "toList":
@@ -903,7 +909,7 @@ func (g *generator) listMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, 
 		return nil, "", false, false
 	}
 	switch field.Name {
-	case "len", "pop", "push", "sorted", "toSet":
+	case "len", "isEmpty", "pop", "push", "sorted", "toSet":
 	default:
 		return nil, "", false, false
 	}
@@ -923,7 +929,7 @@ func (g *generator) mapMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, s
 		return nil, "", "", false, false
 	}
 	switch field.Name {
-	case "containsKey", "insert", "remove", "keys":
+	case "isEmpty", "containsKey", "insert", "remove", "keys":
 	default:
 		return nil, "", "", false, false
 	}
@@ -943,7 +949,7 @@ func (g *generator) setMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, b
 		return nil, "", false, false
 	}
 	switch field.Name {
-	case "len", "contains", "insert", "remove", "toList":
+	case "len", "isEmpty", "contains", "insert", "remove", "toList":
 	default:
 		return nil, "", false, false
 	}

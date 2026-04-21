@@ -2353,6 +2353,12 @@ func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) 
 		out := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), true, nil
+	case "isEmpty":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "list.isEmpty requires no arguments")
+		}
+		out, err := g.emitLenBackedIsEmpty(listRuntimeLenSymbol(), base)
+		return out, true, err
 	case "sorted":
 		symbol := listRuntimeSortedSymbol(elemTyp, elemString)
 		if len(call.Args) != 0 || symbol == "" {
@@ -2399,6 +2405,12 @@ func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
 		return value{}, true, err
 	}
 	switch field.Name {
+	case "isEmpty":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "map.isEmpty requires no arguments")
+		}
+		out, err := g.emitLenBackedIsEmpty(llvmMapRuntimeLenSymbol(), base)
+		return out, true, err
 	case "containsKey":
 		if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 			return value{}, true, unsupported("call", "map.containsKey requires one positional argument")
@@ -2478,6 +2490,12 @@ func (g *generator) emitSetMethodCall(call *ast.CallExpr) (value, bool, error) {
 		out := llvmCall(emitter, "i64", setRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), true, nil
+	case "isEmpty":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "set.isEmpty requires no arguments")
+		}
+		out, err := g.emitLenBackedIsEmpty(setRuntimeLenSymbol(), base)
+		return out, true, err
 	case "contains", "remove":
 		if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 			return value{}, true, unsupportedf("call", "set.%s requires one positional argument", field.Name)
@@ -2518,6 +2536,15 @@ func (g *generator) emitSetMethodCall(call *ast.CallExpr) (value, bool, error) {
 	default:
 		return value{}, false, nil
 	}
+}
+
+func (g *generator) emitLenBackedIsEmpty(lenSymbol string, base value) (value, error) {
+	g.declareRuntimeSymbol(lenSymbol, "i64", []paramInfo{{typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	size := llvmCall(emitter, "i64", lenSymbol, []*LlvmValue{toOstyValue(base)})
+	out := llvmCompare(emitter, "eq", size, llvmIntLiteral(0))
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
 }
 
 func matchArmBodyIsSelectSafe(expr ast.Expr) bool {
