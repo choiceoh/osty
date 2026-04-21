@@ -72,6 +72,36 @@ fn main() {}
 	}
 }
 
+// TestPhase2eCoalesceSourceTypeRecoveredForMapGet locks the Phase
+// 2e fix: `self.get(k) ?? default` inside specialized Map method
+// bodies (notably Map.getOr) now reports `Option<V>` as the left
+// source type through the new staticMapMethodSourceType pathway.
+// Before this, the coalesce emitter walled on
+// `LLVM011 ?? left source type unknown` because `self.get(k)`'s
+// return type wasn't visible through `staticExprSourceType`'s
+// CallExpr dispatch — Map's intrinsic methods aren't registered in
+// `g.methods` the way user-defined ones are.
+func TestPhase2eCoalesceSourceTypeRecoveredForMapGet(t *testing.T) {
+	src := `fn touch(m: Map<String, Int>, k: String) -> Int { m.getOr(k, 0) }
+fn main() {}
+`
+	monoMod := pipelineThroughMonomorph(t, src)
+	opts := llvmgen.Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/phase2e_coalesce.osty",
+		Source:      []byte(src),
+	}
+	_, err := llvmgen.GenerateModule(monoMod, opts)
+	// Phase 2e turns the outermost wall from LLVM011 ?? source-type
+	// into LLVM015 *ast.CallExpr.isSome (next Phase 2f concern).
+	if err != nil && strings.Contains(err.Error(), "?? left source type unknown") {
+		t.Fatalf("`??` source-type recovery regressed for Map.get(k): %v", err)
+	}
+	if err != nil {
+		t.Logf("Phase 2 pipeline still incomplete past the coalesce wall (expected): %v", err)
+	}
+}
+
 // TestPhase2dSelfBindingRoutesIntrinsicDispatch locks the Phase 2d
 // fix: inside a specialized Map method body, `self.len()` / `self.get(k)`
 // / `self.insert(k, v)` intrinsic dispatch now fires via the

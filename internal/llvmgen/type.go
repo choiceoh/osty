@@ -394,6 +394,9 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		if src, ok := g.staticStdStringsCallSourceType(e); ok {
 			return src, true
 		}
+		if src, ok := g.staticMapMethodSourceType(e); ok {
+			return src, true
+		}
 		if id, ok := e.Fn.(*ast.Ident); ok {
 			if sig := g.functions[id.Name]; sig != nil && sig.returnSourceType != nil {
 				return sig.returnSourceType, true
@@ -781,6 +784,59 @@ func (g *generator) staticStdStringsCallSourceType(call *ast.CallExpr) (ast.Type
 		return stringT, true
 	case "split", "splitN":
 		return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{stringT}}, true
+	}
+	return nil, false
+}
+
+// staticMapMethodSourceType recovers the source-level return type of
+// a Map intrinsic method call so downstream passes (notably the
+// `??` coalesce emitter that demands an Option<V> source type)
+// can reason about `self.get(k) ?? default` inside specialized
+// Map method bodies. Returns `(nil, false)` unless the call is a
+// FieldExpr on a receiver with mapKey/mapValue metadata.
+//
+// Method → source-type map:
+//
+//	len              → Int
+//	isEmpty          → Bool
+//	containsKey(K)   → Bool
+//	get(K)           → V?           (Option<V>, what feeds `??`)
+//	keys()           → List<K>
+//
+// Other map methods (getOr / update / retainIf / mergeWith /
+// mapValues / …) are either bodied (their source type flows from the
+// body) or not yet exercised at this layer.
+func (g *generator) staticMapMethodSourceType(call *ast.CallExpr) (ast.Type, bool) {
+	field, keyTyp, valTyp, _, found := g.mapMethodInfo(call)
+	if !found {
+		return nil, false
+	}
+	_ = keyTyp
+	_ = valTyp
+	baseSrc, ok := g.staticExprSourceType(field.X)
+	if !ok {
+		return nil, false
+	}
+	resolved, err := llvmResolveAliasType(baseSrc, g.typeEnv(), map[string]bool{})
+	if err != nil {
+		return nil, false
+	}
+	named, ok := resolved.(*ast.NamedType)
+	if !ok || len(named.Path) != 1 || named.Path[0] != "Map" || len(named.Args) != 2 {
+		return nil, false
+	}
+	keyAST := named.Args[0]
+	valAST := named.Args[1]
+	switch field.Name {
+	case "len":
+		return &ast.NamedType{Path: []string{"Int"}}, true
+	case "isEmpty", "containsKey":
+		return &ast.NamedType{Path: []string{"Bool"}}, true
+	case "get":
+		// V? — wraps the Map's value type.
+		return &ast.OptionalType{Inner: valAST}, true
+	case "keys":
+		return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{keyAST}}, true
 	}
 	return nil, false
 }
