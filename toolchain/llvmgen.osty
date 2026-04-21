@@ -536,11 +536,15 @@ pub fn llvmCString(text: String) -> LlvmCString {
 // Byte comparisons, which would pull in intrinsics the backend
 // hasn't wired.
 pub fn llvmCStringEscape(text: String) -> String {
-    let mut encoded = ""
+    // O(n) accumulator: the previous `encoded = "{encoded}\\..."` form
+    // re-copied the whole buffer on every byte, so emitting a constant
+    // string of length N cost O(N^2).
+    let mut parts: List<String> = []
     for b in text.bytes() {
-        encoded = "{encoded}\\{llvmHexByte(b.toInt())}"
+        parts.push("\\")
+        parts.push(llvmHexByte(b.toInt()))
     }
-    encoded
+    llvmStrings.join(parts, "")
 }
 
 fn llvmHexByte(n: Int) -> String {
