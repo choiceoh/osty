@@ -1569,7 +1569,11 @@ func (g *generator) emitMatchArmBodyAsStmt(body ast.Expr) error {
 func (g *generator) emitPrintln(call *ast.CallExpr) error {
 	id, ok := call.Fn.(*ast.Ident)
 	if !ok || id.Name != "println" {
-		return unsupportedf("call", "only println calls are supported (got %T at %s)", call.Fn, call.Pos().String())
+		// Tag with the offending call's source position + Fn type so
+		// merged-toolchain probes can grep the buffer immediately.
+		// Without a category like FieldExpr/Ident the bare wall is
+		// invisible in the histogram (see classifyLLVM015 → "other").
+		return unsupportedf("call", "only println calls are supported (got %T %s)", call.Fn, exprPosLabel(call))
 	}
 	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 		return unsupported("call", "println requires one positional argument")
@@ -1601,7 +1605,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if !found {
 		return false, nil
 	}
-	if field.Name != "push" && field.Name != "pop" {
+	if field.Name != "push" && field.Name != "pop" && field.Name != "insert" {
 		return false, nil
 	}
 	g.pushScope()
@@ -1631,6 +1635,49 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 			"  call void @%s(%s)",
 			listRuntimePopDiscardSymbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue)}),
+		))
+		g.takeOstyEmitter(emitter)
+		return true, nil
+	}
+	if field.Name == "insert" {
+		if len(call.Args) != 2 || call.Args[0].Name != "" || call.Args[1].Name != "" || call.Args[0].Value == nil || call.Args[1].Value == nil {
+			return true, unsupported("call", "list.insert requires two positional arguments (index, value)")
+		}
+		idx, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return true, err
+		}
+		if idx.typ != "i64" {
+			return true, unsupportedf("type-system", "list.insert index type %s, want Int", idx.typ)
+		}
+		idxValue, err := g.loadIfPointer(idx)
+		if err != nil {
+			return true, err
+		}
+		arg, err := g.emitExpr(call.Args[1].Value)
+		if err != nil {
+			return true, err
+		}
+		if arg.typ != elemTyp {
+			return true, unsupportedf("type-system", "list.insert value type %s, want %s", arg.typ, elemTyp)
+		}
+		argValue, err := g.loadIfPointer(arg)
+		if err != nil {
+			return true, err
+		}
+		if g.usesAggregateListABI(elemTyp) {
+			return true, g.emitListAggregateInsert(baseValue, idxValue, argValue)
+		}
+		if !listUsesTypedRuntime(elemTyp) {
+			return true, unsupportedf("call", "list.insert is currently supported on List<T> with typed-runtime or aggregate element ABI; got element type %s", elemTyp)
+		}
+		insertSymbol := listRuntimeInsertSymbol(elemTyp)
+		g.declareRuntimeSymbol(insertSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: elemTyp}})
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			insertSymbol,
+			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue), toOstyValue(idxValue), toOstyValue(argValue)}),
 		))
 		g.takeOstyEmitter(emitter)
 		return true, nil

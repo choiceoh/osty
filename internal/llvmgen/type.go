@@ -793,14 +793,14 @@ func (g *generator) staticStringMethodSourceType(call *ast.CallExpr) (ast.Type, 
 	switch field.Name {
 	case "len":
 		return &ast.NamedType{Path: []string{"Int"}}, true
-	case "isEmpty", "startsWith":
+	case "isEmpty", "startsWith", "endsWith", "contains":
 		return &ast.NamedType{Path: []string{"Bool"}}, true
 	case "split":
 		return &ast.NamedType{
 			Path: []string{"List"},
 			Args: []ast.Type{&ast.NamedType{Path: []string{"String"}}},
 		}, true
-	case "trim", "toString":
+	case "trim", "trimPrefix", "trimSuffix", "toString":
 		return &ast.NamedType{Path: []string{"String"}}, true
 	case "chars":
 		return &ast.NamedType{
@@ -864,12 +864,12 @@ func (g *generator) staticStringMethodResult(call *ast.CallExpr) (value, bool) {
 	switch field.Name {
 	case "len":
 		return value{typ: "i64"}, true
-	case "isEmpty", "startsWith":
+	case "isEmpty", "startsWith", "endsWith", "contains":
 		return value{typ: "i1"}, true
 	case "split":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true}, true
-	case "trim", "toString":
-		return value{typ: "ptr", gcManaged: true}, true
+	case "trim", "trimPrefix", "trimSuffix", "toString":
+		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"String"}}}, true
 	case "chars":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "i32"}, true
 	case "bytes":
@@ -893,7 +893,9 @@ func (g *generator) stringMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, bool) 
 		return nil, false
 	}
 	switch field.Name {
-	case "len", "isEmpty", "startsWith", "split", "trim", "toString", "chars", "bytes":
+	case "len", "isEmpty", "startsWith", "endsWith", "contains",
+		"trimPrefix", "trimSuffix",
+		"split", "trim", "toString", "chars", "bytes":
 		return field, true
 	default:
 		return nil, false
@@ -981,7 +983,7 @@ func (g *generator) listMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, 
 		return nil, "", false, false
 	}
 	switch field.Name {
-	case "len", "isEmpty", "pop", "push", "sorted", "toSet":
+	case "len", "isEmpty", "pop", "push", "insert", "sorted", "toSet":
 	default:
 		return nil, "", false, false
 	}

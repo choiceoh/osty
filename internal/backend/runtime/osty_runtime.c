@@ -1279,6 +1279,43 @@ void osty_rt_list_push_i64(void *raw_list, int64_t value) {
     osty_rt_list_push_raw(raw_list, &value, sizeof(value), NULL);
 }
 
+// osty_rt_list_insert_raw shifts list[index..len] right by one slot
+// and writes value into slot `index`. Bounds: index in [0, len].
+// Mirrors osty_rt_list_push_raw's layout/reserve discipline so the
+// element ABI stays consistent.
+static void osty_rt_list_insert_raw(void *raw_list, int64_t index, const void *value, size_t elem_size, osty_rt_trace_slot_fn trace_elem) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    if (index < 0 || index > list->len) {
+        osty_rt_abort("list.insert index out of range");
+    }
+    osty_rt_list_ensure_layout(list, elem_size, trace_elem);
+    osty_rt_list_reserve(list, list->len + 1);
+    if (index < list->len) {
+        memmove(list->data + (size_t)(index + 1) * elem_size,
+                list->data + (size_t)index * elem_size,
+                (size_t)(list->len - index) * elem_size);
+    }
+    memcpy(list->data + (size_t)index * elem_size, value, elem_size);
+    list->len += 1;
+}
+
+void osty_rt_list_insert_i64(void *raw_list, int64_t index, int64_t value) {
+    osty_rt_list_insert_raw(raw_list, index, &value, sizeof(value), NULL);
+}
+
+void osty_rt_list_insert_i1(void *raw_list, int64_t index, bool value) {
+    osty_rt_list_insert_raw(raw_list, index, &value, sizeof(value), NULL);
+}
+
+void osty_rt_list_insert_f64(void *raw_list, int64_t index, double value) {
+    osty_rt_list_insert_raw(raw_list, index, &value, sizeof(value), NULL);
+}
+
+void osty_rt_list_insert_ptr(void *raw_list, int64_t index, void *value) {
+    osty_rt_list_insert_raw(raw_list, index, &value, sizeof(value), osty_gc_mark_slot_v1);
+    osty_gc_post_write_v1(raw_list, value, OSTY_GC_KIND_LIST);
+}
+
 void osty_rt_list_push_i1(void *raw_list, bool value) {
     osty_rt_list_push_raw(raw_list, &value, sizeof(value), NULL);
 }
@@ -1322,6 +1359,39 @@ void osty_rt_list_push_bytes_roots_v1(void *raw_list, const void *value, int64_t
     osty_rt_list_ensure_layout(list, (size_t)elem_size, NULL);
     osty_rt_list_ensure_gc_offsets(list, gc_offsets, gc_offset_count);
     osty_rt_list_push_bytes(raw_list, value, (size_t)elem_size, NULL);
+    for (i = 0; i < gc_offset_count; i++) {
+        void *child = NULL;
+        memcpy(&child, ((const unsigned char *)value) + (size_t)gc_offsets[i], sizeof(child));
+        if (child != NULL) {
+            osty_gc_post_write_v1(raw_list, child, OSTY_GC_KIND_LIST);
+        }
+    }
+}
+
+// osty_rt_list_insert_bytes_v1 mirrors push_bytes_v1 but at an
+// arbitrary index — shifts list[index..len] right by one slot and
+// writes the byte payload into slot `index`. Used by the aggregate /
+// struct list-insert path; pointer-element struct fields go through
+// the *_roots variant below so GC sees the new edges.
+void osty_rt_list_insert_bytes_v1(void *raw_list, int64_t index, const void *value, int64_t elem_size) {
+    if (elem_size < 0) {
+        osty_rt_abort("negative list element size");
+    }
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    osty_rt_list_ensure_layout(list, (size_t)elem_size, NULL);
+    osty_rt_list_ensure_gc_offsets(list, NULL, 0);
+    osty_rt_list_insert_raw(raw_list, index, value, (size_t)elem_size, NULL);
+}
+
+void osty_rt_list_insert_bytes_roots_v1(void *raw_list, int64_t index, const void *value, int64_t elem_size, const int64_t *gc_offsets, int64_t gc_offset_count) {
+    if (elem_size < 0) {
+        osty_rt_abort("negative list element size");
+    }
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    osty_rt_list_ensure_layout(list, (size_t)elem_size, NULL);
+    osty_rt_list_ensure_gc_offsets(list, gc_offsets, gc_offset_count);
+    osty_rt_list_insert_raw(raw_list, index, value, (size_t)elem_size, NULL);
+    int64_t i;
     for (i = 0; i < gc_offset_count; i++) {
         void *child = NULL;
         memcpy(&child, ((const unsigned char *)value) + (size_t)gc_offsets[i], sizeof(child));

@@ -1485,6 +1485,10 @@ func llvmListRuntimeSetSymbol(suffix string) string {
 	return "osty_rt_list_set_" + suffix
 }
 
+func llvmListRuntimeInsertSymbol(suffix string) string {
+	return "osty_rt_list_insert_" + suffix
+}
+
 func llvmListRuntimeSortedSymbol(elemTyp string, isString bool) string {
 	if isString {
 		return "osty_rt_list_sorted_string"
