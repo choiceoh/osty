@@ -32,7 +32,7 @@ compiler path is now native-only through the LLVM backend.
 | Name resolution (single + multi-file, workspace, typo suggestions) | done |
 | Formatter (`internal/format`) | done |
 | Type checker (`internal/check`) | done for the shipped v0.4 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params. Algorithm: bidirectional + local unification, spec in [`LANG_SPEC_v0.5/02a-type-inference.md`](./LANG_SPEC_v0.5/02a-type-inference.md); `osty check --inspect` observes it at runtime |
-| Linter (`internal/lint`, L0001–L0042, `--fix` / `--fix-dry-run`) | done |
+| Linter (`internal/lint`, 28 codes across L0001–L0070 spanning unused / dead-code / naming / simplify / complexity / docs, `--fix` / `--fix-dry-run`, policy via `[lint]` in `osty.toml`) | done |
 | Multi-file packages (`resolve` loader/package/workspace) | done |
 | LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by toolchain sources |
 | Native LLVM backend (`internal/backend`, `internal/llvmgen`) | public backend path; scalar/control-flow/string smoke subset emits LLVM IR/object/binary, later phase 64-73 value/control-flow smoke expansion is documented, unsupported shapes report Osty-authored LLVM diagnostics |
@@ -46,7 +46,7 @@ compiler path is now native-only through the LLVM backend.
 | CI quality tooling (`internal/ci`, `osty ci`) | done — Osty-authored generated CI core, signature-aware snapshots, workspace coverage, JSON reports |
 | Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, backend-aware gen, baseline diff, LSP trace, `--explain` |
 | Profiles / targets / features / cache (`internal/profile`, `osty profiles` / `targets` / `features` / `cache`) | done — built-in and manifest profiles, cross-target env, feature closure + file pragmas, backend-aware fingerprints |
-| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | early executable slice — textual IR/object/binary for scalar/control-flow/Bool/String and `Float`/String payload enum smoke programs, plus simple struct aggregates and enum matches (payload-free + single-`Int` and phase-54-63 payload generalization), then phase 64-73 value/control-flow smoke expansion, host `clang` driver, inspectable skeleton + categorized diagnostics for unsupported source shapes |
+| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | executable — textual IR / object / binary through `clang` for scalar / control-flow / Bool / String (ASCII + multi-byte UTF-8), all four payload-free/single-scalar/struct/enum-payload `Result<T, E>` shapes with `?` propagation (phase 54-63 + phase 74 closed), match-as-expression and match-as-statement over bare-variant and wildcard arms, nested field assignment, `Char`/`Byte` parameter + return lowering with width/sign conversions, interface vtable dispatch with generic monomorphization, list / map / set literals and intrinsics (`isEmpty`, `pop` discard, nested `IndexExpr`, source-type tracked list literals), payload-free enum match and `Float` / String payload enums, simple struct aggregates and method calls, host `clang` driver, and categorized `LLVM00x` / `LLVM01x` Osty-authored diagnostics for source shapes that still skeletonize (currently the `String.bytes` / `String.chars` → `List<Byte>` / `List<Char>` lowering path and heterogeneous `list_mixed_ptr` literals outside the tracked-source-type path) |
 | Package registry backend / `osty registry serve` | done — file-backed HTTP server for index/search/download/publish/yank, with ETag index responses and bearer-token write auth |
 | Package registry / `osty add` / `osty update` / `osty run` | done (resolve + vendor + lockfile-honoring re-resolves, ETag-cached registry index, copy fallback for symlink-less filesystems; CLI: `add`, `remove`/`rm`, `update`, `run`, `fetch`, `publish`, `search`, `info`, `yank`/`unyank`, `login`/`logout`; `--locked` / `--frozen` CI guards) |
 | Package manager (`osty add` / `osty update`, path + git + registry sources, SemVer resolver, deterministic lockfile) | wired — `add` mutates `osty.toml` and re-vendors; `update` re-resolves selectively or in full |
@@ -69,10 +69,18 @@ unavailable, and `go generate ./internal/selfhost` still shells out to
 `cmd/osty-bootstrap-gen` to refresh `internal/selfhost/generated.go`. The
 whole-toolchain LLVM probe still first-walls on the bootstrap-only
 `runtime.golegacy.astbridge` bridge; when those bootstrap-only files are
-excluded, the current native probe first-walls on `Char` parameter lowering
-(`lspUtf16UnitsForChar`). Collections, `Result<T, E>` propagation, and MIR
-closure env emission are partially implemented today, so the remaining work is
-uneven runtime/backend surface coverage rather than a single missing subsystem.
+excluded, the current native probe first-walls on `LLVM011 [other]
+String.bytes requires Byte/List<Byte> lowering`. The earlier `Char` parameter
+lowering (`lspUtf16UnitsForChar`), `list_mixed_ptr`, non-ASCII string literal,
+match-as-statement, and nested-field assignment walls are all closed. The C
+runtime already ships `osty_rt_strings_Chars` / `osty_rt_strings_Bytes` with
+full UTF-8 coverage (including maximal-subpart recovery on ill-formed input);
+what remains is wiring `String.chars()` / `String.bytes()` lowering to those
+symbols so pure Osty `std.strings` bodies no longer depend on the runtime
+shim. `Result<T, E>` `?` propagation is wired; collection literals and a
+substantial slice of collection methods lower; MIR capturing-closure env
+emission has landed with tests — so the remaining work is a narrow
+runtime/backend parity queue rather than a single missing subsystem.
 
 The front-end (lex → parse → resolve → type-check) is **coverage-complete
 for the v0.4 core**: spec blocks parse, package/workspace resolution is
@@ -378,14 +386,24 @@ newline-separated `else`.
 - `-o PATH` / `--out PATH` — write the generated artifact to `PATH` instead of stdout
 - `--package NAME` — backend package/module name for the emitted file (default: `main`)
 - `--backend NAME` — code generation backend (`llvm`; default: `llvm`;
-  `llvm` emits textual `.ll` for the early scalar/control-flow/plain/escaped
-  string subset, including immutable/mutable string locals and simple String
-  function boundaries plus simple struct aggregate values and enum
-  tags/match expressions (payload-free + single-`Int` with `{ i64, i64 }`
-  payload), plus Phase 54-63 payload enum generalization (`Float` return/param/mut/reversed/wildcard,
-  String payload return/param/mut/reversed/wildcard). Unsupported shapes still
-  prepare skeleton artifacts and report structured diagnostics from the
-  toolchain backend policy)
+  `llvm` emits textual `.ll` covering scalar / control-flow / String
+  (ASCII + multi-byte UTF-8 via per-byte `\HH` escapes) / immutable and
+  mutable String locals / simple String function boundaries / simple
+  struct aggregate values and fields / enum tags and match expressions
+  (payload-free + single-scalar + struct payload + tag-and-ptr payload)
+  with `?` propagation over any shape (phase 54-63 + phase 74 closed),
+  match-as-statement with bare-variant/wildcard arms, nested field
+  assignment, `Char`/`Byte` parameter and return lowering with width
+  and sign conversions, interface vtable dispatch under generic
+  monomorphization, list / map / set literals plus intrinsics
+  (`isEmpty`, `pop` discard, nested `IndexExpr`), source-type tagged
+  list literals, and a root-tracked native runtime that provides
+  String / List / Map / Set / GC / scheduler / channel ABIs.
+  Unsupported shapes still prepare skeleton artifacts and report
+  `LLVM00x` / `LLVM01x` diagnostics authored by the toolchain backend
+  policy — the current first-walls are `String.bytes` / `String.chars`
+  → `List<Byte>` / `List<Char>` lowering and heterogeneous
+  `list_mixed_ptr` literals outside the tracked source-type path)
 - `--emit MODE` — requested text artifact. `llvm-ir` emits LLVM IR.
 
 `pipeline --gen` accepts the same source-artifact backend selection:
@@ -439,17 +457,18 @@ pins `edition = "0.4"`.
 `build` / `run` / `test` backend flags (after the subcommand):
 
 - `--backend NAME` — code generation backend (`llvm`; default: `llvm`;
-  `llvm` can write textual IR for the early scalar/control-flow/plain/escaped
-  string subset, including immutable/mutable string locals and simple String
-  function boundaries plus simple struct aggregate values and enum tags/match
-  expressions (payload-free + single-`Int` with `{ i64, i64 }` payload), plus
-  the Phase 54-63 payload enum generalization (`Float` return/param/mut/reversed/wildcard,
-  String payload return/param/mut/reversed/wildcard) path. `clang`-driven
-  object/binary emission now bundles a root-tracked LLVM native runtime for
-  String/List/GC ABI symbols, including explicit-collect managed-heap smoke
-  coverage, and generated-source diagnostics are available for supported programs;
-  unsupported shapes still prepare skeleton artifacts and report missing lowering
-  through structured diagnostics from the toolchain backend policy.
+  `llvm` writes textual IR / object / binary through `clang` covering
+  the scalar / control-flow / String (ASCII + multi-byte UTF-8) /
+  struct / enum / `Result<T, E>` with `?` propagation (phase 54-63 +
+  phase 74 closed) / match-as-expression and match-as-statement /
+  nested field assignment / `Char`/`Byte` width+sign conversions /
+  interface vtable dispatch under generic monomorphization / list /
+  map / set literal and intrinsic surface described above, bundling a
+  root-tracked LLVM native runtime that supplies String / List / Map /
+  Set / GC / scheduler / channel ABIs; unsupported shapes still
+  prepare skeleton artifacts and report missing lowering through
+  `LLVM00x` / `LLVM01x` diagnostics from the Osty-authored backend
+  policy.
 - `--emit MODE` — requested artifact mode (`llvm-ir`, `object`, or
   `binary`). `build --backend llvm --emit object|binary` uses `clang`; `run`
   requires `binary` because it executes the result. `osty test` uses the same

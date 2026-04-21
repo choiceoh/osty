@@ -51,7 +51,7 @@ source → lexer → parser → resolve → check → (format / lint / ir / back
 - `internal/ast` — 모든 노드가 `ast.Node` 인터페이스 구현 (`Pos()`, `End()`)
 - `internal/parser` — recursive-descent + Pratt. 에러 복구 (`syncStmt`, `syncDecl`)
 - `internal/diag` — `Diagnostic{Severity, Code, Message, Spans, Notes, Hint}` + 렌더러
-- `internal/resolve` — 3-pass 네임 리졸루션 (`File` / `Package` / `Workspace`)
+- `internal/resolve` — 2-pass 네임 리졸루션 (`declarePass` → `bodyPass`, 워크스페이스 전역으로 확산). `File` / `Package` / `Workspace` 는 scope 단위이지 pass 가 아님
 - `internal/types` — 시맨틱 타입. 순수 데이터, 로직은 `compat.go`만
 - `internal/check` — 2-pass 타입체커 (collect → expr/stmt)
 - `internal/stdlib` — prelude + `modules/*.osty` + `primitives/`
