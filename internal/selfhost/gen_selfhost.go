@@ -226,6 +226,115 @@ func patchGenerated(path string) error {
 	// scoped to the local temp variable name so diag example strings like
 	// `Ok(s.len())` stay untouched.
 	src = strings.ReplaceAll(src, "units.len()", "len(units)")
+	for _, snippet := range []struct {
+		name string
+		old  string
+		new  string
+	}{
+		{
+			name: "FrontLexStream units field",
+			old: `type FrontLexStream struct {
+	tokens                []*FrontLexToken
+	diagnostics           []*FrontLexDiagnostic
+	comments              []*FrontComment
+	stringParts           []*FrontStringPart
+	interpolationTokens   []*FrontInterpolationToken
+	shebangs              int
+	bomStripped           int
+	sourceUnits           int
+	normalizedTripleUnits int
+	tripleIndentErrors    int
+	escapeErrors          int
+}`,
+			new: `type FrontLexStream struct {
+	tokens                []*FrontLexToken
+	diagnostics           []*FrontLexDiagnostic
+	comments              []*FrontComment
+	stringParts           []*FrontStringPart
+	interpolationTokens   []*FrontInterpolationToken
+	shebangs              int
+	bomStripped           int
+	sourceUnits           int
+	normalizedTripleUnits int
+	tripleIndentErrors    int
+	escapeErrors          int
+	units                 []string
+}`,
+		},
+		{
+			name: "frontendLexStream cached units",
+			old: `func frontendLexStream(source string) *FrontLexStream {
+	// Osty: /tmp/selfhost_merged.osty:1067:5
+	units := strings.Split(source, "")
+	_ = units
+	// Osty: /tmp/selfhost_merged.osty:1069:5
+	unitCount := stringUnitCount(source)
+	_ = unitCount`,
+			new: `func frontendLexStream(source string) *FrontLexStream {
+	// Osty: /tmp/selfhost_merged.osty:1067:5
+	units := strings.Split(source, "")
+	_ = units
+	// Osty: /tmp/selfhost_merged.osty:1069:5
+	unitCount := len(units)
+	_ = unitCount`,
+		},
+		{
+			name: "frontendLexStream return units",
+			old:  `return &FrontLexStream{tokens: tokens, diagnostics: diagnostics, comments: comments, stringParts: stringParts, interpolationTokens: interpolationTokens, shebangs: shebangs, bomStripped: bomStripped, sourceUnits: unitCount, normalizedTripleUnits: normalizedTripleUnits, tripleIndentErrors: tripleIndentErrors, escapeErrors: escapeErrors}`,
+			new:  `return &FrontLexStream{tokens: tokens, diagnostics: diagnostics, comments: comments, stringParts: stringParts, interpolationTokens: interpolationTokens, shebangs: shebangs, bomStripped: bomStripped, sourceUnits: unitCount, normalizedTripleUnits: normalizedTripleUnits, tripleIndentErrors: tripleIndentErrors, escapeErrors: escapeErrors, units: units}`,
+		},
+		{
+			name: "ostyLexFactsFromStream cached units",
+			old: `func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts {
+	// Osty: /tmp/selfhost_merged.osty:6240:5
+	units := strings.Split(source, "")
+	_ = units`,
+			new: `func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts {
+	// Osty: /tmp/selfhost_merged.osty:6240:5
+	units := stream.units
+	if units == nil {
+		units = strings.Split(source, "")
+	}
+	_ = units`,
+		},
+		{
+			name: "ostyLexFactsFromStream leading docs",
+			old: `	// Osty: /tmp/selfhost_merged.osty:6284:5
+	var leadingDocs []string = make([]string, 0, 1)
+	_ = leadingDocs
+	// Osty: /tmp/selfhost_merged.osty:6285:5
+	li := 0
+	_ = li
+	// Osty: /tmp/selfhost_merged.osty:6286:5
+	for li < tokenCount {
+		// Osty: /tmp/selfhost_merged.osty:6287:9
+		func() struct{} {
+			leadingDocs = append(leadingDocs, ostyJoinDocLines(units, stream, frontLexTokenAt(stream, li)))
+			return struct{}{}
+		}()
+		// Osty: /tmp/selfhost_merged.osty:6288:9
+		func() {
+			var _cur1635 int = li
+			var _rhs1636 int = 1
+			if _rhs1636 > 0 && _cur1635 > math.MaxInt-_rhs1636 {
+				panic("integer overflow")
+			}
+			if _rhs1636 < 0 && _cur1635 < math.MinInt-_rhs1636 {
+				panic("integer overflow")
+			}
+			li = _cur1635 + _rhs1636
+		}()
+	}`,
+			new: `	// Osty: /tmp/selfhost_merged.osty:6284:5
+	leadingDocs := collectLeadingDocs(units, stream)
+	_ = leadingDocs`,
+		},
+	} {
+		src, err = replaceGeneratedSnippet(src, snippet.name, snippet.old, snippet.new)
+		if err != nil {
+			return err
+		}
+	}
 	for _, fn := range []struct {
 		name string
 		body string
@@ -326,6 +435,13 @@ func normalizeGeneratedSourceComment(src string) string {
 
 func replaceGeneratedFunction(src, name, replacement string) (string, error) {
 	return genpatch.ReplaceGeneratedFunction(src, name, replacement)
+}
+
+func replaceGeneratedSnippet(src, name, old, replacement string) (string, error) {
+	if !strings.Contains(src, old) {
+		return "", fmt.Errorf("replace %s: snippet not found", name)
+	}
+	return strings.Replace(src, old, replacement, 1), nil
 }
 
 const frontPositionAtReplacement = `type frontPositionCacheState struct {
