@@ -301,8 +301,18 @@ func (r *resolver) declareUse(u *ast.UseDecl) {
 	// scope definition above still serves the lexical lookup inside
 	// this file.
 	if u.IsPub && r.pkgScope != nil && r.pkgScope != r.current {
-		pkgSym := *sym // copy so package- and file-scope symbols don't alias identity
-		if _, ok := r.pkgScope.Define(&pkgSym); !ok {
+		// Fresh Symbol instead of `*sym` copy so package- and file-scope
+		// symbols don't alias identity — and so sync.Once (idOnce) isn't
+		// byte-copied (vet's copylocks check).
+		pkgSym := &Symbol{
+			Name:    sym.Name,
+			Kind:    sym.Kind,
+			Pos:     sym.Pos,
+			Decl:    sym.Decl,
+			Pub:     sym.Pub,
+			Package: sym.Package,
+		}
+		if _, ok := r.pkgScope.Define(pkgSym); !ok {
 			// Collision against an already-declared pkg-scope symbol
 			// is a re-export-over-existing conflict. Surface via the
 			// duplicate reporter using the existing symbol's location.
@@ -311,7 +321,6 @@ func (r *resolver) declareUse(u *ast.UseDecl) {
 			// refining the re-export-specific message (E0553) is
 			// Phase 2.2+ follow-up when the full cycle / visibility
 			// checker lands.
-			_ = pkgSym
 		}
 	}
 }
