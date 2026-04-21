@@ -4514,7 +4514,22 @@ func (g *generator) userCallTarget(call *ast.CallExpr) (*fnSig, ast.Expr, bool, 
 		}
 		methods := g.methods[baseInfo.typ]
 		if methods == nil {
-			return nil, nil, false, nil
+			// Phase 2g: built-in container method dispatch.
+			// Surface-level receivers (Map<K, V>, List<T>, …)
+			// carry baseInfo.typ == "ptr" because Phase 2c
+			// re-associates the mangled specialization back to the
+			// surface form for intrinsic dispatch. That leaves the
+			// plain `methodsByType[baseInfo.typ]` lookup missing the
+			// specialized struct's bodied methods (forEach, getOr,
+			// update, …). Try the specialized owner type next.
+			if baseSrc, srcOk := g.staticExprSourceType(fn.X); srcOk {
+				if mangledTyp, ok := specializedBuiltinMangledForSurface(baseSrc); ok {
+					methods = g.methods[mangledTyp]
+				}
+			}
+			if methods == nil {
+				return nil, nil, false, nil
+			}
 		}
 		sig := methods[fn.Name]
 		if sig == nil {

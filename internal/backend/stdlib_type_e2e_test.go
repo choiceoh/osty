@@ -72,6 +72,42 @@ fn main() {}
 	}
 }
 
+// TestPhase2gUserCallsiteDispatchesToSpecializedMethod locks the
+// Phase 2g fix: when user code calls `m.forEach(f)` /
+// `m.getOr(k, d)` / etc. on a `Map<String, Int>` receiver,
+// `userCallTarget` now consults `specializedBuiltinMangledForSurface`
+// to find the specialized method registered under the `_ZTSN…`
+// mangled owner type — instead of walling at the surface-typed
+// `ptr` receiver with "no methods registered". The inner wall
+// from the specialized body (f(key, value) → Ident call) is a
+// separate Phase 2h concern.
+func TestPhase2gUserCallsiteDispatchesToSpecializedMethod(t *testing.T) {
+	src := `fn printEntry(k: String, v: Int) { println(v) }
+fn walk(m: Map<String, Int>) {
+    m.forEach(printEntry)
+}
+fn main() {}
+`
+	monoMod := pipelineThroughMonomorph(t, src)
+	opts := llvmgen.Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/phase2g_foreach.osty",
+		Source:      []byte(src),
+	}
+	_, err := llvmgen.GenerateModule(monoMod, opts)
+	// Phase 2g advances the wall past the user-side `m.forEach(…)`
+	// callsite (which previously failed at `got *ast.FieldExpr at
+	// 3:5`) into the specialized forEach body's indirect call
+	// (`got *ast.Ident at 346:13`). A regression would surface the
+	// earlier form.
+	if err != nil && strings.Contains(err.Error(), "got *ast.FieldExpr") {
+		t.Fatalf("user callsite m.forEach(f) regressed to FieldExpr wall — specialized dispatch broken: %v", err)
+	}
+	if err != nil {
+		t.Logf("Phase 2 pipeline still incomplete past user callsite (expected): %v", err)
+	}
+}
+
 // TestPhase2fOptionIsSomeLowersAsNullCheck locks the Phase 2f fix:
 // `.isSome()` / `.isNone()` calls on a receiver whose source type
 // is `T?` (OptionalType) now lower directly to an LLVM null check,
