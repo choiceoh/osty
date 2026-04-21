@@ -35091,6 +35091,12 @@ func elabInferCall(cx *ElabCx, callIdx int, node *AstNode, expected int) *ElabRe
 	_ = sig
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15091:5
 	if sig.name == "" {
+		// Try a variant constructor (`Ok(x)`, `Err(e)`, `Some(v)`,
+		// user-defined payload-ful variants). Mirrored from
+		// toolchain/elab.osty pending a regen fix.
+		if variant := checkLookupVariant(cx.env, baseCallee.text); variant.name != "" {
+			return elabInferVariantCall(cx, callIdx, node, baseCallee, argIdxs, variant, explicitArgs, expected)
+		}
 		// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15092:9
 		return elabInferFnValueCall(cx, node, argIdxs, expected)
 	}
@@ -35135,6 +35141,41 @@ func elabInferCall(cx *ElabCx, callIdx int, node *AstNode, expected int) *ElabRe
 	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:15131:5
 	coreCallNode := coreCall(cx.core, coreFn, coreArgs, typeArgsConcrete, retTy, node.start, node.end)
 	_ = coreCallNode
+	return &ElabResult{node: coreCallNode, ty: retTy}
+}
+
+// elabInferVariantCall handles payload-ful variant constructors used
+// at call position (`Ok(x)`, `Err(e)`, `Some(v)`, user-defined enum
+// variants with fields). Reuses the fn-call instantiation machinery
+// by synthesising a CheckFnSig whose params are the variant's
+// fieldTys. Mirrored from toolchain/elab.osty pending a regen fix.
+func elabInferVariantCall(cx *ElabCx, callIdx int, node *AstNode, baseCallee *AstNode, argIdxs []int, variant *CheckVariantSig, explicitArgs []int, expected int) *ElabResult {
+	tys := cx.env.tys
+	constructorSig := &CheckFnSig{
+		name:          variant.name,
+		owner:         "",
+		receiverTy:    -1,
+		retTy:         tyNamed(tys, variant.owner, genericListToTyArgs(cx, variant.generics)),
+		paramNames:    make([]string, 0),
+		paramTys:      variant.fieldTys,
+		generics:      variant.generics,
+		genericBounds: make([]*CheckGenericBound, 0),
+	}
+	inst := instBegin(cx, constructorSig.generics, variant.owner)
+	instSeedExpectedRet(cx, inst, constructorSig.retTy, expected)
+	instSeedPositionalArgs(cx, inst, explicitArgs)
+
+	coreFn := coreIdent(cx.core, variant.name, IdentKind(&IdentKind_IkVariant{}), fnSigToTy(cx.env, constructorSig), baseCallee.start, baseCallee.end)
+	coreArgs := elabCallArgs(cx, inst.solver, constructorSig, inst.freshs, argIdxs, node.start, node.end)
+
+	retSubstituted := instSubstitute(cx, inst, constructorSig.retTy)
+	retTy := instZonk(cx, inst, retSubstituted)
+
+	typeArgsConcrete := instConcreteArgs(cx, inst)
+	if checkIntListLenHelper(typeArgsConcrete) > 0 {
+		checkRecordInstantiation(cx.env, callIdx, variant.name, typeArgsConcrete, retTy, node.start, node.end)
+	}
+	coreCallNode := coreCall(cx.core, coreFn, coreArgs, typeArgsConcrete, retTy, node.start, node.end)
 	return &ElabResult{node: coreCallNode, ty: retTy}
 }
 
@@ -37511,10 +37552,16 @@ func patKindOf(n *AstNode) int {
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16288:1
 func armGuarded(cx *ElabCx, armIdx int) bool {
-	// Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16289:5
+	// `opParseMatchStmt` stores the body in `arm.right` and the guard
+	// expression index in `arm.children[0]` (-1 if absent); the earlier
+	// `arm.right >= 0` check therefore flagged every arm as guarded,
+	// disabling exhaustiveness entirely. Mirrored from
+	// toolchain/elab.osty pending a regen fix.
 	arm := astArenaNodeAt(cx.ast.arena, armIdx)
-	_ = arm
-	return arm.right >= 0
+	if checkIntListLenHelper(arm.children) == 0 {
+		return false
+	}
+	return checkIntListAt(arm.children, 0) >= 0
 }
 
 // Osty: /var/folders/v6/9b6yvrb973q8xs8yynkdchyr0000gn/T/osty-bootstrap-gen-2859141425/selfhost_merged.osty:16298:1

@@ -42,20 +42,17 @@ As of 2026-04-21:
   go through the `osty_rt_list_pop_discard` helper; nested `IndexExpr`
   propagates List / Map / Set element shapes via
   `decorateStaticValueFromSourceType`.
-  The LLVM012 statement-form category is now fully cleared for the
-  toolchain's actual shape. The sequence: `LLVM011 [fn_param_struct_type]`
-  Char wall at `lspUtf16UnitsForChar` fell first (Char→i32 / Byte→i8
-  lowering with `Char.toInt()` / `Byte.toInt()` / `Int.toChar()` width
-  conversions + unsigned compare predicates), then
-  `LLVM012 *ast.MatchExpr is not a call` (match-as-statement for
-  tag enums, resolved by adding a `MatchExpr` statement-position
-  lowering for tag-enum scrutinees with bare-variant / wildcard arms),
-  and most recently `LLVM012 field assignment base *ast.FieldExpr`
-  (nested field chain like `cx.env.returnTy = ...` / `a.b.c = x`,
-  resolved in [internal/llvmgen/stmt.go](../internal/llvmgen/stmt.go)
-  by walking the field chain inside-out, extracting each intermediate
-  struct and rebuilding with insertvalue from the innermost outward
-  before a single `store` at the root slot)
+  The LLVM012 statement-form category is cleared for the toolchain's
+  actual shape. The historical wall chain, each entry closed in order:
+  `LLVM011 [fn_param_struct_type]` Char at `lspUtf16UnitsForChar`
+  (Char→i32 / Byte→i8 lowering plus `Char.toInt()` / `Byte.toInt()` /
+  `Int.toChar()` width conversions + unsigned compare predicates);
+  `LLVM012 statement: *ast.MatchExpr is not a call` (match-as-statement
+  lowering for tag-enum scrutinees with bare-variant / wildcard arms);
+  `LLVM012 statement: field assignment base *ast.FieldExpr` (nested
+  field chain like `cx.env.returnTy = sig.retTy` — inside-out extractvalue
+  descent + innermost-first `llvmInsertValue` rebuild in
+  `stmt.go:emitFieldAssign`)
 - the current `osty check --airepair=false toolchain` surface is an
   aggregate native-checker summary of `949 error(s)` with
   `26811 / 27501` assignment/return/call checks accepted
@@ -74,7 +71,7 @@ Current-tree observations from the code re-audit:
 |---|---|---|
 | CLI wiring | universal LLVM entry wedge | **resolved** — hello-world `osty gen --backend=llvm` exits 0 and writes `.ll` output |
 | Bootstrap bridge | merged whole-toolchain probe | first wall is still `LLVM002 runtime-ffi` on `runtime.golegacy.astbridge`; this is a bootstrap artifact, not yet a native backend parity claim |
-| Native backend surface | merged native-only probe | first wall is now `LLVM011 [list_mixed_ptr] list literal mixes String and non-String ptr-backed values` (heterogeneous ptr element types in a single `[...]` literal) after skipping 4 bootstrap-only files. Previously cleared in this chain: the `logical not on %PmCheckOutcome` wall (parser precedence bug — `!x.y` now parses as `!(x.y)`); the `LLVM011 [fn_param_struct_type]` Char wall (Char→i32, Byte→i8 lowering); `LLVM012 *ast.MatchExpr is not a call` (statement-position match for tag enums); and `LLVM012 field assignment base *ast.FieldExpr` (nested `a.b.c = x` via inside-out extractvalue + outside-in insertvalue rebuild). List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites also remain closed |
+| Native backend surface | merged native-only probe | first wall is `LLVM011 [list_mixed_ptr]` (heterogeneous ptr element types in a single `[...]` literal) after skipping 4 bootstrap-only files. Closed walls (in order): `LLVM011 [fn_param_struct_type]` Char on `lspUtf16UnitsForChar`; `LLVM012 *ast.MatchExpr is not a call` (match-as-statement lowering); `LLVM012 field assignment base *ast.FieldExpr` (nested `a.b.c = x` via `llvmInsertValue` rebuild chain); parser precedence `(!x).y` / `!(x.y)` hoisted at stable-AST lowering. List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites also closed |
 | Checker boundary | `internal/check` / `internal/toolchain` | host still manages an external `osty-native-checker` artifact and falls back to the embedded selfhost checker when it cannot be prepared |
 | Toolchain package health | `osty check --airepair=false toolchain` | current CLI surface is still an aggregate `E0700` summary (`949 error(s)`, `26811 / 27501` accepted) rather than a clean self-compile pass |
 | Stdlib / string surface | `internal/llvmgen/stdlib_shim.go`, `expr.go` | a subset of `std.strings` is shimmed through runtime helpers. `Char` and `Byte` parameters/returns, literals, comparisons, and width conversions now lower; `String.chars` / `String.bytes` still block the pure native path because `List<Char>` / `List<Byte>` collection lowering is separate work |
@@ -109,12 +106,11 @@ Observed in the 2026-04-21 refresh:
 - `TestProbeWholeToolchainMerged` reported
   `LLVM002 runtime-ffi: ... runtime.golegacy.astbridge ...`
 - `TestProbeNativeToolchainMerged` skipped
-  `ast_lower.osty, ci.osty, docgen.osty, manifest_validation.osty` and
-  first-walled on `LLVM011 [list_mixed_ptr]` (heterogeneous ptr-backed
-  elements in a single `[...]` literal). Previously walled on `LLVM012`
-  statement-form cases — nested field assignment and match-as-statement —
-  both now closed; before that on `LLVM011 [fn_param_struct_type]` Char
-  at `lspUtf16UnitsForChar`, closed by `Char`/`Byte` lowering
+  `ast_lower.osty, ci.osty, docgen.osty, manifest_validation.osty`. The
+  probe now first-walls on `LLVM011 [list_mixed_ptr]`; the earlier
+  `LLVM011 [fn_param_struct_type]` Char wall, the `LLVM012 MatchExpr is
+  not a call` statement-form wall, and the `LLVM012 field assignment
+  base *ast.FieldExpr` nested-write wall are all closed
 - `/tmp/osty check --airepair=false toolchain` exited with the aggregate
   summary
   `native checker reported type errors: 949 error(s)` plus

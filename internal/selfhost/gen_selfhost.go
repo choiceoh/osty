@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/osty/osty/internal/selfhost/bundle"
@@ -47,7 +48,11 @@ func run() error {
 		return fmt.Errorf("write merged selfhost source: %w", err)
 	}
 	tmpOutPath := filepath.Join(tmpDir, "generated.go")
-	checkerPath := filepath.Join(tmpDir, "osty-native-checker")
+	checkerName := "osty-native-checker"
+	if runtime.GOOS == "windows" {
+		checkerName += ".exe"
+	}
+	checkerPath := filepath.Join(tmpDir, checkerName)
 	if override := strings.TrimSpace(os.Getenv("OSTY_NATIVE_CHECKER_BIN")); override != "" {
 		checkerPath = override
 	} else if err := buildNativeChecker(root, checkerPath); err != nil {
