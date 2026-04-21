@@ -380,7 +380,19 @@ func legacyStructDeclFromIR(sd *ostyir.StructDecl) (*ast.StructDecl, error) {
 		}
 		out.Fields = append(out.Fields, legacyField)
 	}
+	specializedBuiltin := isSpecializedBuiltinStructName(sd.Name)
 	for _, method := range sd.Methods {
+		// Option B Phase 2: specialized built-in structs (Map$String$Int,
+		// Option$Int, …) inherit bodyless intrinsic methods from the
+		// stdlib template (Map.len / Map.get / Map.insert / …). These
+		// are served by runtime helpers (osty_rt_map_len etc.), not by
+		// user-level LLVM functions. Dropping them here avoids LLVM010
+		// "function has no body" at emit time; the method-call
+		// dispatch in emitMapMethodCall still routes to the runtime
+		// via the original source-type intrinsic recognition.
+		if specializedBuiltin && method != nil && method.Body == nil {
+			continue
+		}
 		legacyMethod, err := legacyFnDeclFromIR(method, true)
 		if err != nil {
 			return nil, err
@@ -388,6 +400,17 @@ func legacyStructDeclFromIR(sd *ostyir.StructDecl) (*ast.StructDecl, error) {
 		out.Methods = append(out.Methods, legacyMethod)
 	}
 	return out, nil
+}
+
+// isSpecializedBuiltinStructName reports whether name is an
+// Itanium-mangled specialization produced by the monomorphizer for a
+// stdlib built-in template (Map, List, Set, Option, Result). All such
+// names start with the `_ZTS` Itanium type-info prefix; user structs
+// keep their source name unless explicitly specialized via the same
+// mangler, and in that case they are equally free of bodyless
+// methods (user structs don't carry intrinsic placeholders).
+func isSpecializedBuiltinStructName(name string) bool {
+	return strings.HasPrefix(name, "_ZTS")
 }
 
 func legacyFieldFromIR(field *ostyir.Field) (*ast.Field, error) {
