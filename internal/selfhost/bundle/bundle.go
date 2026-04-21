@@ -26,11 +26,12 @@ var toolchainCheckerFiles = []string{
 	"toolchain/elab.osty",
 	"toolchain/check.osty",
 	"examples/selfhost-core/resolve.osty",
-	"examples/selfhost-core/lint.osty",
+	"toolchain/lint.osty",
 	"internal/selfhost/ast_lower.osty",
 }
 
 const stringsPrelude = `use go "strings" as strings {
+    fn Contains(s: String, substr: String) -> Bool
     fn Count(s: String, substr: String) -> Int
     fn Fields(s: String) -> List<String>
     fn HasPrefix(s: String, prefix: String) -> Bool
@@ -111,6 +112,7 @@ func normalizeStdStringsCalls(src string) string {
 	for _, pair := range [][2]string{
 		{"strings.split(", "strings.Split("},
 		{"strings.join(", "strings.Join("},
+		{"strings.contains(", "strings.Contains("},
 		{"strings.hasPrefix(", "strings.HasPrefix("},
 		{"strings.hasSuffix(", "strings.HasSuffix("},
 		{"strings.trimSpace(", "strings.TrimSpace("},
