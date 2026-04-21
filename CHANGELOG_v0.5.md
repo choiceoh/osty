@@ -50,13 +50,20 @@ bodies exist so the stub checker accepts imports.
   zero-arity functions and runs each through the LLVM backend. Bodies
   call `testing.benchmark(N, || { ...; Ok(()) })`, which the emitter
   lowers to a range loop bracketed by `osty_rt_bench_now_nanos()`
-  samples. Each call prints one line —
-  `bench <abs-path>:<line> iter=N total=Tns avg=Ans` — and the CLI
-  always surfaces it. `--bench` and `--doc` are mutually exclusive
+  samples. Each call prints two lines —
+  `bench <abs-path>:<line> iter=N total=Tns avg=Ans` followed by
+  `  min=…ns p50=…ns p99=…ns max=…ns` — and the CLI always surfaces
+  them. Distribution stats come from per-iteration sampling; a
+  compiler-inserted warmup of `clamp(N/10, 1, 1000)` iterations runs
+  before the first clock sample. `?` inside the closure is supported
+  and, on `Err` / `None`, prints
+  `bench \`?\` propagated failure at <abs-path>:<line>` and exits the
+  bench with failure status. `--benchtime <dur>` (Go-style duration,
+  requires `--bench`) activates auto-tuning: a 10-iteration probe
+  estimates the iteration count that fills the duration, clamped to
+  `[10, 100_000_000]`. `--bench` and `--doc` are mutually exclusive
   (exit 2). In default test mode `bench*` functions are skipped so an
-  errant benchmark never runs as a regular test. Closure bodies must
-  be a Block; the trailing `Ok(())` required by the stdlib signature
-  is stripped inline, and `?` inside the closure is unsupported.
+  errant benchmark never runs as a regular test.
 
 ### Diagnostic codes
 

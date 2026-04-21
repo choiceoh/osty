@@ -109,18 +109,29 @@ fn benchParseJson() {
 }
 ```
 
-`testing.benchmark(iterations, body)` runs the closure `iterations`
-times and prints one summary line per call site:
+`testing.benchmark(iterations, body)` runs the closure and prints two
+lines per call site:
 
 ```
 bench <abs-path>:<line> iter=<N> total=<T>ns avg=<A>ns
+  min=<Mn>ns p50=<M50>ns p99=<M99>ns max=<Mx>ns
 ```
 
 `T` is the monotonic-clock elapsed time around the loop, `A` is
 `T / N` (or `0` when `N <= 0`). Values are nanoseconds throughout.
+The distribution line is computed from per-iteration samples.
 `<abs-path>` is the source file containing the `testing.benchmark(...)`
 call (`<bench>` when the compiler has no source path), and `<line>` is
 that call's 1-based line number.
+
+Before the timed loop the compiler inserts a warmup pass of
+`clamp(N/10, 1, 1000)` iterations that is **not** counted in `iter=`;
+this reduces cold-cache / branch-predictor noise on short bodies.
+
+`?` inside the closure body is allowed. If it sees `Err(e)` or `None`
+on any iteration the benchmark prints `bench \`?\` propagated failure
+at <abs-path>:<line>` to stdout and exits the bench with failure
+status; the summary line is not emitted for that benchmark.
 
 In bench mode:
 
@@ -131,6 +142,12 @@ In bench mode:
 - Assertion failures inside the closure abort the bench with the
   normal `testing.*` diagnostic; no summary line is printed for a
   failed bench.
+- `osty test --bench --benchtime <duration>` activates auto-tuning:
+  the declared `N` is replaced by the output of a 10-iteration probe
+  scaled to hit `<duration>` (clamped to `[10, 100_000_000]` with 20%
+  headroom). Without the flag the declared `N` is authoritative. The
+  flag uses Go-style durations (`500ms`, `2s`, `1m`) and requires
+  `--bench`.
 
 ### 11.5 Snapshots
 

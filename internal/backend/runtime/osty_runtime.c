@@ -2512,6 +2512,86 @@ int64_t osty_rt_bench_now_nanos(void) {
     return (int64_t)osty_rt_monotonic_ns();
 }
 
+/* Per-iteration timing samples for the benchmark harness. The codegen
+ * side allocates one buffer per testing.benchmark(...) call, records a
+ * nanosecond delta each iteration, then hands the buffer to
+ * osty_rt_bench_samples_report which sorts in place, prints the
+ * distribution line, and frees. Allocation failure aborts the
+ * benchmark rather than producing bogus stats. */
+int64_t *osty_rt_bench_samples_new(int64_t count) {
+    if (count <= 0) {
+        return NULL;
+    }
+    size_t bytes = (size_t)count * sizeof(int64_t);
+    int64_t *buf = (int64_t *)malloc(bytes);
+    if (buf == NULL) {
+        osty_rt_abort("bench: failed to allocate sample buffer");
+    }
+    return buf;
+}
+
+void osty_rt_bench_samples_record(int64_t *samples, int64_t idx, int64_t value) {
+    if (samples == NULL) {
+        return;
+    }
+    samples[idx] = value;
+}
+
+static int osty_rt_bench_i64_compare(const void *a, const void *b) {
+    int64_t ai = *(const int64_t *)a;
+    int64_t bi = *(const int64_t *)b;
+    if (ai < bi) return -1;
+    if (ai > bi) return 1;
+    return 0;
+}
+
+/* Sort samples, compute min/p50/p99/max, and print the distribution
+ * follow-up line the bench summary references. Indentation matches the
+ * leading `bench …` line so scrapers keyed on `min=` don't need a
+ * regex — they can grep for two-space indent. */
+void osty_rt_bench_samples_report(int64_t *samples, int64_t count) {
+    if (samples == NULL || count <= 0) {
+        return;
+    }
+    qsort(samples, (size_t)count, sizeof(int64_t), osty_rt_bench_i64_compare);
+    int64_t min_v = samples[0];
+    int64_t max_v = samples[count - 1];
+    int64_t p50_idx = (count - 1) / 2;
+    int64_t p99_idx = (count * 99) / 100;
+    if (p99_idx >= count) {
+        p99_idx = count - 1;
+    }
+    int64_t p50_v = samples[p50_idx];
+    int64_t p99_v = samples[p99_idx];
+    printf("  min=%lldns p50=%lldns p99=%lldns max=%lldns\n",
+           (long long)min_v, (long long)p50_v,
+           (long long)p99_v, (long long)max_v);
+}
+
+void osty_rt_bench_samples_free(int64_t *samples) {
+    if (samples != NULL) {
+        free(samples);
+    }
+}
+
+/* Auto-tune target: the CLI sets OSTY_BENCH_TIME_NS when the user passes
+ * `--benchtime <dur>`. A positive value switches the codegen path from
+ * fixed-N to probe-and-estimate mode. 0 / unset means the user-declared
+ * N is authoritative. Parsing is restricted to a non-negative decimal
+ * so unexpected values silently fall back to fixed-N. */
+int64_t osty_rt_bench_target_ns(void) {
+    const char *raw = getenv("OSTY_BENCH_TIME_NS");
+    if (raw == NULL || raw[0] == '\0') {
+        return 0;
+    }
+    char *end = NULL;
+    long long v = strtoll(raw, &end, 10);
+    if (end == NULL || *end != '\0' || v < 0) {
+        return 0;
+    }
+    return (int64_t)v;
+}
+
 const char *osty_rt_bool_to_string(bool value) {
     if (value) {
         return osty_rt_string_dup_site("true", 4, "runtime.bool.to_string");

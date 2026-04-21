@@ -56,7 +56,7 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: osty test [--offline | --locked | --frozen] [--backend NAME] [--emit MODE] [--airepair=false] [--airepair-mode MODE] [--seed HEX] [--serial] [--jobs N] [--doc] [--bench] [PATH|FILTER...]")
+		fmt.Fprintln(stderr, "usage: osty test [--offline | --locked | --frozen] [--backend NAME] [--emit MODE] [--airepair=false] [--airepair-mode MODE] [--seed HEX] [--serial] [--jobs N] [--doc] [--bench] [--benchtime DUR] [PATH|FILTER...]")
 	}
 	var offline, locked, frozen bool
 	fs.BoolVar(&offline, "offline", false, "do not fetch dependencies; fail if caches are missing")
@@ -78,6 +78,8 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	fs.BoolVar(&docTests, "doc", false, "v0.5 G32: extract `osty-fenced examples from /// doc comments and run each as an additional test")
 	var benchMode bool
 	fs.BoolVar(&benchMode, "bench", false, "spec §11.4: run `bench*` functions (discovered like tests) instead of `test*`; each bench prints its timing summary")
+	var benchTime string
+	fs.StringVar(&benchTime, "benchtime", "", "auto-tune each benchmark's iteration count to run for at least this Go-style duration (e.g. 500ms, 2s); overrides the N argument in testing.benchmark(N, …). Only meaningful with --bench.")
 	var pf profileFlags
 	pf.register(fs)
 	if err := fs.Parse(args); err != nil {
@@ -101,6 +103,11 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 
 	backendID, emitMode := resolveBackendAndEmitFlags("test", backendName, emitName)
 	pkgDir, filters, err := resolveTestTarget(fs.Args())
+	if err != nil {
+		fmt.Fprintf(stderr, "osty test: %v\n", err)
+		return 2
+	}
+	benchTimeNs, err := resolveBenchTime(benchTime, benchMode)
 	if err != nil {
 		fmt.Fprintf(stderr, "osty test: %v\n", err)
 		return 2
@@ -162,7 +169,7 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "running %d %s (seed %s)\n", len(tests), kindLabel, formatTestSeed(seed))
 	started := time.Now()
 	workers := resolveTestWorkers(serial, jobs, len(tests))
-	failures := executeNativeTests(context.Background(), b, emitMode, tmpRoot, pkg, tests, workers, seed, stdout, stderr, benchMode)
+	failures := executeNativeTests(context.Background(), b, emitMode, tmpRoot, pkg, tests, workers, seed, stdout, stderr, benchMode, benchTimeNs)
 	elapsed := time.Since(started)
 	if failures > 0 {
 		fmt.Fprintf(stdout, "FAIL\t%d/%d %s failed in %s (seed %s)\n", failures, len(tests), kindLabel, formatTestDuration(elapsed), formatTestSeed(seed))
@@ -179,11 +186,11 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 // results are printed in completion order — still reproducible because
 // the *set* of executed tests and the failure verdict do not depend on
 // scheduling.
-func executeNativeTests(ctx context.Context, b backend.Backend, emitMode backend.EmitMode, tmpRoot string, pkg *resolve.Package, tests []nativeTestCase, workers int, seed uint64, stdout, stderr io.Writer, benchMode bool) int {
+func executeNativeTests(ctx context.Context, b backend.Backend, emitMode backend.EmitMode, tmpRoot string, pkg *resolve.Package, tests []nativeTestCase, workers int, seed uint64, stdout, stderr io.Writer, benchMode bool, benchTimeNs int64) int {
 	if workers <= 1 {
 		failures := 0
 		for _, tc := range tests {
-			if reportNativeTestResult(runSingleNativeTest(ctx, b, emitMode, tmpRoot, pkg, tc), stdout, stderr, benchMode) {
+			if reportNativeTestResult(runSingleNativeTest(ctx, b, emitMode, tmpRoot, pkg, tc, benchTimeNs), stdout, stderr, benchMode) {
 				failures++
 			}
 		}
@@ -199,7 +206,7 @@ func executeNativeTests(ctx context.Context, b backend.Backend, emitMode backend
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			resultsCh <- runSingleNativeTest(ctx, b, emitMode, tmpRoot, pkg, tc)
+			resultsCh <- runSingleNativeTest(ctx, b, emitMode, tmpRoot, pkg, tc, benchTimeNs)
 		}()
 	}
 	go func() {
@@ -222,9 +229,9 @@ type nativeTestOutcome struct {
 	Elapsed time.Duration
 }
 
-func runSingleNativeTest(ctx context.Context, b backend.Backend, emitMode backend.EmitMode, tmpRoot string, pkg *resolve.Package, tc nativeTestCase) nativeTestOutcome {
+func runSingleNativeTest(ctx context.Context, b backend.Backend, emitMode backend.EmitMode, tmpRoot string, pkg *resolve.Package, tc nativeTestCase, benchTimeNs int64) nativeTestOutcome {
 	start := time.Now()
-	run, err := compileAndRunNativeTest(ctx, b, emitMode, tmpRoot, pkg, tc)
+	run, err := compileAndRunNativeTest(ctx, b, emitMode, tmpRoot, pkg, tc, benchTimeNs)
 	return nativeTestOutcome{Test: tc, Run: run, Err: err, Elapsed: time.Since(start)}
 }
 
@@ -264,6 +271,28 @@ func reportNativeTestResult(o nativeTestOutcome, stdout, stderr io.Writer, bench
 		}
 	}
 	return false
+}
+
+// resolveBenchTime parses --benchtime into nanoseconds. Empty / unset
+// returns 0 (meaning "use the user's declared N"). --benchtime without
+// --bench is rejected so users aren't surprised when it silently no-ops
+// in test mode.
+func resolveBenchTime(raw string, benchMode bool) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	if !benchMode {
+		return 0, fmt.Errorf("--benchtime requires --bench")
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid --benchtime %q: %w", raw, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("--benchtime must be positive, got %q", raw)
+	}
+	return d.Nanoseconds(), nil
 }
 
 // resolveTestSeed parses the --seed flag. The empty string produces a
@@ -449,7 +478,7 @@ type nativeTestRun struct {
 	Stderr string
 }
 
-func compileAndRunNativeTest(ctx context.Context, b backend.Backend, emitMode backend.EmitMode, tmpRoot string, pkg *resolve.Package, tc nativeTestCase) (nativeTestRun, error) {
+func compileAndRunNativeTest(ctx context.Context, b backend.Backend, emitMode backend.EmitMode, tmpRoot string, pkg *resolve.Package, tc nativeTestCase, benchTimeNs int64) (nativeTestRun, error) {
 	file, src, sourcePath, err := parseNativeTestEntry(pkg, tc)
 	if err != nil {
 		return nativeTestRun{}, err
@@ -480,7 +509,7 @@ func compileAndRunNativeTest(ctx context.Context, b backend.Backend, emitMode ba
 	if err != nil {
 		return nativeTestRun{}, err
 	}
-	return runNativeTestBinary(result.Artifacts.Binary)
+	return runNativeTestBinary(result.Artifacts.Binary, benchTimeNs)
 }
 
 func parseNativeTestEntry(pkg *resolve.Package, tc nativeTestCase) (*ast.File, []byte, string, error) {
@@ -519,7 +548,7 @@ func sanitizeNativeTestName(name string) string {
 	return runner.SanitizeNativeTestName(name)
 }
 
-func runNativeTestBinary(binPath string) (nativeTestRun, error) {
+func runNativeTestBinary(binPath string, benchTimeNs int64) (nativeTestRun, error) {
 	if binPath == "" {
 		return nativeTestRun{}, fmt.Errorf("native backend did not produce a binary")
 	}
@@ -528,6 +557,13 @@ func runNativeTestBinary(binPath string) (nativeTestRun, error) {
 		return nativeTestRun{}, err
 	}
 	cmd := exec.Command(absBin)
+	// OSTY_BENCH_TIME_NS is read by osty_rt_bench_target_ns. Only set
+	// it when non-zero so unrelated child processes (e.g. the test
+	// runner invoked without --bench) don't inherit a stale value from
+	// ambient environment.
+	if benchTimeNs > 0 {
+		cmd.Env = append(os.Environ(), fmt.Sprintf("OSTY_BENCH_TIME_NS=%d", benchTimeNs))
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
