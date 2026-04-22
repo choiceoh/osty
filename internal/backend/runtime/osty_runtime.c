@@ -8917,6 +8917,146 @@ void osty_rt_gc_collect_concurrent_v1(void *const *caller_roots,
     osty_rt_sched_concurrent_stop_release_v1();
 }
 
+/* Phase 3 step 2b — concurrent incremental collection driver.
+ *
+ * Upgrade of `osty_rt_gc_collect_concurrent_v1` that lets the MARK
+ * phase overlap with mutator execution. The pause windows shrink to
+ * just root-scan (start) and final-drain (finish); the bulk of the
+ * cycle (actually walking the heap via the mark stack) happens
+ * while mutators keep running.
+ *
+ * Phases, each numbered to match the existing `osty_gc_state` enum:
+ *
+ *   Phase A — STW START → MARK_INCREMENTAL
+ *     stop_request + kick + wait_all_parked.
+ *     Union parked roots + caller roots into a flat array.
+ *     Under gc_lock: transition state IDLE → MARK_INCREMENTAL and
+ *     seed the mark stack with all roots.
+ *     stop_release. Mutators resume; SATB write barrier
+ *     (`osty_gc_pre_write_v1`) is now active and greys any
+ *     overwritten white value.
+ *
+ *   Phase B — concurrent MARK drain
+ *     Loop calling `osty_gc_collect_incremental_step(budget)`
+ *     until it reports the stack empty. The step function takes
+ *     gc_lock for each drain batch, so mutators that take
+ *     gc_lock (allocations, write barriers, root bind) interleave
+ *     naturally. Mutator-assist in the allocator also pays down
+ *     the queue in proportion to allocation pressure.
+ *
+ *   Phase C — STW FINISH → SWEEPING → IDLE
+ *     stop_request + kick + wait_all_parked. The parked window
+ *     is important: it closes the SATB "last drop" race where a
+ *     mutator could grey one last value between our final step
+ *     and the sweep.
+ *     Call `osty_gc_collect_incremental_finish` which drains
+ *     residual greys, flips state to SWEEPING, sweeps, returns
+ *     to IDLE. Then stop_release.
+ *
+ * If the concurrent cycle has a reason to abort mid-flight (e.g.
+ * another collect_concurrent request arrives from a different
+ * thread), `osty_gc_collect_incremental_finish` is idempotent
+ * enough to clean up from any MARK_INCREMENTAL state.
+ */
+void osty_rt_gc_collect_concurrent_incremental_v1(
+    void *const *caller_roots, int64_t caller_count) {
+    if (caller_count < 0) {
+        caller_count = 0;
+    }
+
+    /* ---- Phase A: STW start ---- */
+    osty_rt_sched_concurrent_stop_request_v1();
+    osty_rt_sched_kick_worker_v1(-1);
+
+    osty_rt_mu_lock(&osty_gc_stop_mu);
+    for (;;) {
+        int64_t inflight =
+            __atomic_load_n(&osty_concurrent_workers, __ATOMIC_ACQUIRE);
+        if (osty_gc_parked_mutator_count >= inflight) {
+            break;
+        }
+        osty_rt_cond_wait(&osty_gc_stop_cv, &osty_gc_stop_mu);
+    }
+    int64_t total = caller_count;
+    for (osty_gc_parked_roots_entry *e = osty_gc_parked_roots_head;
+         e != NULL; e = e->next) {
+        total += e->count;
+    }
+    void **flat = NULL;
+    if (total > 0) {
+        flat = (void **)calloc((size_t)total, sizeof(void *));
+        if (flat == NULL) {
+            osty_rt_mu_unlock(&osty_gc_stop_mu);
+            osty_rt_sched_concurrent_stop_release_v1();
+            osty_rt_abort("gc.collect_concurrent_incremental: flat union OOM");
+        }
+        int64_t idx = 0;
+        for (int64_t i = 0; i < caller_count; i++) {
+            flat[idx++] = (void *)caller_roots[i];
+        }
+        for (osty_gc_parked_roots_entry *e = osty_gc_parked_roots_head;
+             e != NULL; e = e->next) {
+            for (int64_t i = 0; i < e->count; i++) {
+                flat[idx++] = (void *)e->slots[i];
+            }
+        }
+    }
+    osty_rt_mu_unlock(&osty_gc_stop_mu);
+
+    /* Seed the mark — deliberately bypasses the
+     * `osty_concurrent_workers > 0` gate inside
+     * `osty_gc_collect_incremental_start_with_stack_roots`, because
+     * the stop handshake above already guarantees no mutator is
+     * observing state. */
+    osty_gc_acquire();
+    if (osty_gc_state != OSTY_GC_STATE_IDLE) {
+        /* Another concurrent cycle is mid-flight. Back off: we
+         * cannot start a second. Release everything and return so
+         * the caller can retry. */
+        osty_gc_release();
+        if (flat != NULL) free(flat);
+        osty_rt_sched_concurrent_stop_release_v1();
+        return;
+    }
+    osty_gc_state = OSTY_GC_STATE_MARK_INCREMENTAL;
+    osty_gc_incremental_seed_roots((void *const *)flat, total);
+    osty_gc_release();
+    if (flat != NULL) free(flat);
+
+    osty_rt_sched_concurrent_stop_release_v1();
+
+    /* ---- Phase B: concurrent mark drain ----
+     *
+     * Mutators are running again; SATB greys overwrites; mutator
+     * assist drains at allocation time. We drain in budgeted
+     * steps, yielding between each so mutators make progress. */
+    const int64_t mark_budget = 1024;
+    for (int64_t safety = 0; safety < (int64_t)1 << 30; safety++) {
+        bool more = osty_gc_collect_incremental_step(mark_budget);
+        if (!more) break;
+        osty_rt_plat_yield();
+    }
+
+    /* ---- Phase C: STW finish + sweep ---- */
+    osty_rt_sched_concurrent_stop_request_v1();
+    osty_rt_sched_kick_worker_v1(-1);
+
+    osty_rt_mu_lock(&osty_gc_stop_mu);
+    for (;;) {
+        int64_t inflight =
+            __atomic_load_n(&osty_concurrent_workers, __ATOMIC_ACQUIRE);
+        if (osty_gc_parked_mutator_count >= inflight) {
+            break;
+        }
+        osty_rt_cond_wait(&osty_gc_stop_cv, &osty_gc_stop_mu);
+    }
+    osty_rt_mu_unlock(&osty_gc_stop_mu);
+
+    osty_gc_collect_incremental_finish();
+
+    osty_rt_sched_concurrent_stop_release_v1();
+}
+
 /* Async preemption kick. Sends SIGURG to pool worker `worker_id`
  * (or to every pool worker when `worker_id < 0`). The handler sets
  * a per-thread flag that the next safepoint observes and yields on.
