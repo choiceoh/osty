@@ -8917,6 +8917,19 @@ void osty_rt_gc_collect_concurrent_v1(void *const *caller_roots,
     osty_rt_sched_concurrent_stop_release_v1();
 }
 
+/* Per-phase pause instrumentation for the concurrent-incremental
+ * cycle. Updated on each call to `collect_concurrent_incremental_v1`;
+ * accessors below expose them to tests and to future metrics sinks
+ * (tracing, benchmarks). The "pause" figures are what user-visible
+ * latency sees: Phase A (start) + Phase C (finish + sweep). Phase B
+ * is concurrent so it doesn't count toward stop-the-world time even
+ * when the collector is running. Default zero until the first cycle
+ * completes. */
+static volatile int64_t osty_gc_concurrent_incremental_start_nanos = 0;
+static volatile int64_t osty_gc_concurrent_incremental_mark_nanos = 0;
+static volatile int64_t osty_gc_concurrent_incremental_finish_nanos = 0;
+static volatile int64_t osty_gc_concurrent_incremental_cycles = 0;
+
 /* Phase 3 step 2b — concurrent incremental collection driver.
  *
  * Upgrade of `osty_rt_gc_collect_concurrent_v1` that lets the MARK
@@ -8965,6 +8978,7 @@ void osty_rt_gc_collect_concurrent_incremental_v1(
     }
 
     /* ---- Phase A: STW start ---- */
+    int64_t t_phase_a_start = osty_gc_now_nanos();
     osty_rt_sched_concurrent_stop_request_v1();
     osty_rt_sched_kick_worker_v1(-1);
 
@@ -9024,6 +9038,7 @@ void osty_rt_gc_collect_concurrent_incremental_v1(
     if (flat != NULL) free(flat);
 
     osty_rt_sched_concurrent_stop_release_v1();
+    int64_t t_phase_a_end = osty_gc_now_nanos();
 
     /* ---- Phase B: concurrent mark drain ----
      *
@@ -9036,8 +9051,10 @@ void osty_rt_gc_collect_concurrent_incremental_v1(
         if (!more) break;
         osty_rt_plat_yield();
     }
+    int64_t t_phase_b_end = osty_gc_now_nanos();
 
     /* ---- Phase C: STW finish + sweep ---- */
+    int64_t t_phase_c_start = osty_gc_now_nanos();
     osty_rt_sched_concurrent_stop_request_v1();
     osty_rt_sched_kick_worker_v1(-1);
 
@@ -9055,6 +9072,46 @@ void osty_rt_gc_collect_concurrent_incremental_v1(
     osty_gc_collect_incremental_finish();
 
     osty_rt_sched_concurrent_stop_release_v1();
+    int64_t t_phase_c_end = osty_gc_now_nanos();
+
+    /* Publish per-phase timings. Overflows are impossible in
+     * practice (int64 nanoseconds = ~292 years) so plain subtraction
+     * is safe. Phase A + Phase C is the user-visible pause; Phase B
+     * is the concurrent mark duration. */
+    __atomic_store_n(&osty_gc_concurrent_incremental_start_nanos,
+                     t_phase_a_end - t_phase_a_start,
+                     __ATOMIC_RELEASE);
+    __atomic_store_n(&osty_gc_concurrent_incremental_mark_nanos,
+                     t_phase_b_end - t_phase_a_end,
+                     __ATOMIC_RELEASE);
+    __atomic_store_n(&osty_gc_concurrent_incremental_finish_nanos,
+                     t_phase_c_end - t_phase_c_start,
+                     __ATOMIC_RELEASE);
+    __atomic_fetch_add(&osty_gc_concurrent_incremental_cycles, 1,
+                       __ATOMIC_RELEASE);
+}
+
+/* Phase 3 step 2b — per-phase timing accessors.
+ *
+ * Return the nanoseconds spent in each phase of the *most recent*
+ * concurrent-incremental cycle. Zero before the first cycle has
+ * run; updated atomically at cycle end so a test can sample
+ * outside the cycle safely. */
+int64_t osty_gc_debug_concurrent_incremental_start_nanos(void) {
+    return __atomic_load_n(&osty_gc_concurrent_incremental_start_nanos,
+                           __ATOMIC_ACQUIRE);
+}
+int64_t osty_gc_debug_concurrent_incremental_mark_nanos(void) {
+    return __atomic_load_n(&osty_gc_concurrent_incremental_mark_nanos,
+                           __ATOMIC_ACQUIRE);
+}
+int64_t osty_gc_debug_concurrent_incremental_finish_nanos(void) {
+    return __atomic_load_n(&osty_gc_concurrent_incremental_finish_nanos,
+                           __ATOMIC_ACQUIRE);
+}
+int64_t osty_gc_debug_concurrent_incremental_cycles(void) {
+    return __atomic_load_n(&osty_gc_concurrent_incremental_cycles,
+                           __ATOMIC_ACQUIRE);
 }
 
 /* Async preemption kick. Sends SIGURG to pool worker `worker_id`
