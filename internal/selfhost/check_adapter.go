@@ -1,92 +1,23 @@
 package selfhost
 
-import "github.com/osty/osty/internal/diag"
+import (
+	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/selfhost/api"
+)
 
-// CheckSummary is the exported Go shape for the bootstrapped Osty checker.
-//
-// The self-hosted checker is authoritative for mainstream checker diagnostics
-// and supplies structured expression, binding, declaration-symbol, and
-// instantiation facts to the Go check.Result bridge.
-type CheckSummary struct {
-	Assignments int
-	Accepted    int
-	Errors      int
-	// ErrorsByContext buckets error-severity diagnostics by the native
-	// checker's stable bucket key. For the typed checker this is usually
-	// the diagnostic code (for example E0700); consumed by
-	// `osty check --dump-native-diags`.
-	ErrorsByContext map[string]int
-	// ErrorDetails optionally holds a second-level split under a given
-	// bucket. For the typed checker this is the rendered diagnostic
-	// message histogram underneath a code bucket.
-	ErrorDetails map[string]map[string]int
-}
-
-// CheckedNode records a checked expression node and its inferred type name.
-type CheckedNode struct {
-	Node     int
-	Kind     string
-	TypeName string
-	Start    int
-	End      int
-}
-
-// CheckedBinding records a local binding that the bootstrapped checker typed.
-type CheckedBinding struct {
-	Node     int
-	Name     string
-	TypeName string
-	Mutable  bool
-	Start    int
-	End      int
-}
-
-// CheckedSymbol records a declaration collected by the bootstrapped checker.
-type CheckedSymbol struct {
-	Node     int
-	Kind     string
-	Name     string
-	Owner    string
-	TypeName string
-	Start    int
-	End      int
-}
-
-// CheckInstantiation records a generic function or method instantiation.
-type CheckInstantiation struct {
-	Node       int
-	Callee     string
-	TypeArgs   []string
-	ResultType string
-	Start      int
-	End        int
-}
-
-// CheckDiagnosticRecord is a structured diagnostic produced by the
-// bootstrapped Osty checker (see toolchain/check_diag.osty). The host
-// bridge lifts each record into a `*diag.Diagnostic` so policy gates
-// authored in Osty surface through the ordinary `check.Result.Diags`
-// channel. Start/End are token indices; the Go bridge converts to byte
-// offsets via the lex stream.
-type CheckDiagnosticRecord struct {
-	Code     string
-	Severity string
-	Message  string
-	Start    int
-	End      int
-	File     string
-	Notes    []string
-}
-
-// CheckResult is the structured Go-facing surface for the bootstrapped checker.
-type CheckResult struct {
-	Summary        CheckSummary
-	TypedNodes     []CheckedNode
-	Bindings       []CheckedBinding
-	Symbols        []CheckedSymbol
-	Instantiations []CheckInstantiation
-	Diagnostics    []CheckDiagnosticRecord
-}
+// Type aliases re-export the cross-boundary shapes from
+// internal/selfhost/api so existing `selfhost.CheckResult` callers
+// continue to compile. Future work can switch consumers (cmd/osty,
+// internal/check) to `api.CheckResult` directly.
+type (
+	CheckSummary          = api.CheckSummary
+	CheckedNode           = api.CheckedNode
+	CheckedBinding        = api.CheckedBinding
+	CheckedSymbol         = api.CheckedSymbol
+	CheckInstantiation    = api.CheckInstantiation
+	CheckDiagnosticRecord = api.CheckDiagnosticRecord
+	CheckResult           = api.CheckResult
+)
 
 // CheckSource runs the bootstrapped Osty checker over one source string.
 // The returned Summary carries ErrorsByContext so lightweight telemetry

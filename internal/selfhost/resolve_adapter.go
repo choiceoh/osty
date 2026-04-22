@@ -2,6 +2,7 @@ package selfhost
 
 import (
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/selfhost/api"
 )
 
 // PackageResolveFile is the per-file input shape accepted by the structured
@@ -126,78 +127,16 @@ func (c *CfgEnv) toSelf() *SelfResolveCfgEnv {
 	return selfResolveCfgEnv(c.OS, c.Arch, c.Target, features)
 }
 
-// ResolveSummary is the exported Go summary for the bootstrapped Osty
-// resolver.
-type ResolveSummary struct {
-	Symbols           int
-	Refs              int
-	TypeRefs          int
-	Diagnostics       int
-	Unresolved        int
-	Duplicates        int
-	SymbolsByKind     map[string]int
-	DiagnosticsByCode map[string]int
-}
-
-// ResolvedSymbol records one symbol declared by the self-host resolver.
-type ResolvedSymbol struct {
-	Node     int
-	Name     string
-	Kind     string
-	TypeName string
-	Arity    int
-	Depth    int
-	Start    int
-	End      int
-	Public   bool
-	File     string
-}
-
-// ResolvedRef records one value/name reference plus its resolved target span
-// when available.
-type ResolvedRef struct {
-	Name        string
-	Node        int
-	Start       int
-	End         int
-	File        string
-	TargetNode  int
-	TargetStart int
-	TargetEnd   int
-	TargetFile  string
-}
-
-// ResolvedTypeRef records one resolved type-name reference.
-type ResolvedTypeRef struct {
-	Name  string
-	Node  int
-	Start int
-	End   int
-	File  string
-}
-
-// ResolveDiagnosticRecord is one structured diagnostic produced by the
-// self-host resolver.
-type ResolveDiagnosticRecord struct {
-	Code    string
-	Message string
-	Name    string
-	Hint    string
-	Node    int
-	Start   int
-	End     int
-	File    string
-}
-
-// ResolveResult is the structured Go-facing surface for the bootstrapped
-// resolver.
-type ResolveResult struct {
-	Summary     ResolveSummary
-	Symbols     []ResolvedSymbol
-	Refs        []ResolvedRef
-	TypeRefs    []ResolvedTypeRef
-	Diagnostics []ResolveDiagnosticRecord
-}
+// Resolver types are re-exported from internal/selfhost/api via
+// type aliases; see selfhost/api/types.go for definitions.
+type (
+	ResolveSummary          = api.ResolveSummary
+	ResolvedSymbol          = api.ResolvedSymbol
+	ResolvedRef             = api.ResolvedRef
+	ResolvedTypeRef         = api.ResolvedTypeRef
+	ResolveDiagnosticRecord = api.ResolveDiagnosticRecord
+	ResolveResult           = api.ResolveResult
+)
 
 // ResolveSource runs the bootstrapped Osty resolver over one source string and
 // returns only the summary counters.
