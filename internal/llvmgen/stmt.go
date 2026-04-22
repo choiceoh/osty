@@ -564,6 +564,15 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	if iterInfo, ok := g.staticExprInfo(stmt.Iter); ok && iterInfo.typ == "ptr" && iterInfo.listElemTyp != "" {
 		return g.emitListFor(stmt, iterName, iterInfo.listElemTyp)
 	}
+	// `for x in set` — snapshot the Set<T> into a List<T> via
+	// `osty_rt_set_to_list` and iterate that list. Matches Map's
+	// snapshot-then-walk shape: weakly-consistent under concurrent
+	// mutation, no out-of-bounds panic. Reaches the injected
+	// Set<T>.union / intersect / difference bodies which walk `self`
+	// once injection lands those specializations.
+	if iterInfo, ok := g.staticExprInfo(stmt.Iter); ok && iterInfo.typ == "ptr" && iterInfo.setElemTyp != "" {
+		return g.emitSetFor(stmt, iterName, iterInfo.setElemTyp, iterInfo.setElemString)
+	}
 	rng, ok := stmt.Iter.(*ast.RangeExpr)
 	if !ok {
 		return unsupported("control-flow", "only range for-loops are supported")
@@ -2918,6 +2927,117 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 			"  call void @%s(%s)",
 			listRuntimeGetBytesSymbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(iterableValue), llvmI64(loop.current), {typ: "ptr", name: slot}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
+		))
+		g.takeOstyEmitter(emitter)
+		emitter = g.toOstyEmitter()
+		loaded := g.loadValueFromAddress(emitter, elemTyp, slot)
+		g.takeOstyEmitter(emitter)
+		loaded.rootPaths = g.rootPathsForType(elemTyp)
+		loaded.sourceType = elemSource
+		g.bindLocal(iterName, loaded)
+	}
+	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
+		return err
+	}
+	if len(g.locals) > scopeDepth {
+		g.popScope()
+	}
+	g.popLoop()
+	if g.currentReachable {
+		g.branchTo(continueLabel)
+	}
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	g.emitLoopSafepoint(emitter, loopSafepointSlot)
+	llvmRangeEnd(emitter, loop)
+	g.attachVectorizeMD(emitter, loop.condLabel)
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop.endLabel)
+	return nil
+}
+
+// emitSetFor lowers `for x in set` by snapshoting the Set<T> into a
+// List<T> via `osty_rt_set_to_list` and then walking the list with
+// the same typed-get helpers emitListFor uses. The snapshot matches
+// Map iteration's weakly-consistent semantics: concurrent mutations
+// during the loop don't trip out-of-bounds, and entries added after
+// the snapshot won't be visited.
+func (g *generator) emitSetFor(stmt *ast.ForStmt, iterName, elemTyp string, elemString bool) error {
+	g.pushScope()
+	defer g.popScope()
+	setVal, err := g.emitExpr(stmt.Iter)
+	if err != nil {
+		return err
+	}
+	setVal = g.protectManagedTemporary("for.set", setVal)
+	setLoaded, err := g.loadIfPointer(setVal)
+	if err != nil {
+		return err
+	}
+	g.declareRuntimeSymbol(setRuntimeToListSymbol(), "ptr", []paramInfo{{typ: "ptr"}})
+	g.declareRuntimeSymbol(listRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	snapshot := llvmCall(emitter, "ptr", setRuntimeToListSymbol(), []*LlvmValue{toOstyValue(setLoaded)})
+	g.takeOstyEmitter(emitter)
+	snapshotV := fromOstyValue(snapshot)
+	snapshotV.gcManaged = true
+	snapshotV.listElemTyp = elemTyp
+	snapshotV.listElemString = elemString
+	snapshotV = g.protectManagedTemporary("for.set.list", snapshotV)
+
+	useAggregateABI := g.usesAggregateListABI(elemTyp)
+	emitter = g.toOstyEmitter()
+	loopSafepointSlot := g.allocLoopSafepointCounter(emitter)
+	lenValue := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(snapshotV)})
+	loop := llvmRangeStart(emitter, iterName+"_idx", llvmIntLiteral(0), lenValue, false)
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(loop.bodyLabel)
+	continueLabel := g.nextNamedLabel("for.cont")
+	g.pushLoop(loopContext{
+		continueLabel: continueLabel,
+		breakLabel:    loop.endLabel,
+		scopeDepth:    len(g.locals),
+	})
+	scopeDepth := len(g.locals)
+	g.pushScope()
+
+	indexValue := value{typ: "i64", ref: loop.current}
+	elemSource, _ := g.iterableElemSourceType(stmt.Iter)
+	if useAggregateABI {
+		item, err := g.emitListAggregateGet(snapshotV, indexValue, elemTyp)
+		if err != nil {
+			g.popScope()
+			g.popLoop()
+			return err
+		}
+		item.sourceType = elemSource
+		g.bindLocal(iterName, item)
+	} else if listUsesTypedRuntime(elemTyp) {
+		getSymbol := listRuntimeGetSymbol(elemTyp)
+		g.declareRuntimeSymbol(getSymbol, elemTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+		emitter = g.toOstyEmitter()
+		item := llvmCall(emitter, elemTyp, getSymbol, []*LlvmValue{toOstyValue(snapshotV), llvmI64(loop.current)})
+		g.takeOstyEmitter(emitter)
+		loaded := fromOstyValue(item)
+		loaded.gcManaged = elemTyp == "ptr"
+		loaded.rootPaths = g.rootPathsForType(elemTyp)
+		loaded.sourceType = elemSource
+		g.bindLocal(iterName, loaded)
+	} else {
+		traceSymbol := g.traceCallbackSymbol(elemTyp, g.rootPathsForType(elemTyp))
+		emitter = g.toOstyEmitter()
+		slot := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, elemTyp))
+		sizeValue := g.emitTypeSize(emitter, elemTyp)
+		g.declareRuntimeSymbol(listRuntimeGetBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  call void @%s(%s)",
+			listRuntimeGetBytesSymbol(),
+			llvmCallArgs([]*LlvmValue{toOstyValue(snapshotV), llvmI64(loop.current), {typ: "ptr", name: slot}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
 		))
 		g.takeOstyEmitter(emitter)
 		emitter = g.toOstyEmitter()
