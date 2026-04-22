@@ -2871,8 +2871,7 @@ func (g *generator) emitSetMethodCallStmt(call *ast.CallExpr) (bool, error) {
 //
 //	%len = call i64 @osty_rt_map_len(%m)
 //	for %i = 0; %i < %len; %i++:
-//	  %k = call <K> @osty_rt_map_key_at_<ksuf>(%m, %i)
-//	  alloca %vslot (width by V), call @osty_rt_map_value_at(%m, %i, %vslot), load
+//	  alloca %vslot (width by V), %k = call <K> @osty_rt_map_entry_at_<ksuf>(%m, %i, %vslot), load
 //	  body(k, v)
 //
 // This is the infra piece that unlocks `retainIf`, `mergeWith`,
@@ -2920,29 +2919,22 @@ func (g *generator) emitMapFor(stmt *ast.ForStmt, kName, vName, keyTyp, valTyp s
 	}
 	indexValue := value{typ: "i64", ref: loop.current}
 
-	// Load the key via typed accessor.
-	keyAtSym := mapRuntimeKeyAtSymbol(keyTyp, keyString)
-	g.declareRuntimeSymbol(keyAtSym, keyTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+	// Snapshot key and value under the same map lock.
+	entryAtSym := mapRuntimeEntryAtSymbol(keyTyp, keyString)
+	g.declareRuntimeSymbol(entryAtSym, keyTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
 	emitter = g.toOstyEmitter()
-	keyLoaded := llvmCall(emitter, keyTyp, keyAtSym, []*LlvmValue{toOstyValue(iterableValue), toOstyValue(indexValue)})
+	vslot := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", vslot, valTyp))
+	keyLoaded := llvmCall(emitter, keyTyp, entryAtSym, []*LlvmValue{
+		toOstyValue(iterableValue),
+		toOstyValue(indexValue),
+		{typ: "ptr", name: vslot},
+	})
 	g.takeOstyEmitter(emitter)
 	keyVal := fromOstyValue(keyLoaded)
 	keyVal.gcManaged = keyTyp == "ptr"
 	keyVal.rootPaths = g.rootPathsForType(keyTyp)
 	g.bindLocal(kName, keyVal)
-
-	// Load the value via V-agnostic slot accessor + load.
-	valueAtSym := mapRuntimeValueAtSymbol()
-	g.declareRuntimeSymbol(valueAtSym, "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
-	emitter = g.toOstyEmitter()
-	vslot := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", vslot, valTyp))
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  call void @%s(%s)",
-		valueAtSym,
-		llvmCallArgs([]*LlvmValue{toOstyValue(iterableValue), toOstyValue(indexValue), {typ: "ptr", name: vslot}}),
-	))
-	g.takeOstyEmitter(emitter)
 	emitter = g.toOstyEmitter()
 	valLoaded := g.loadValueFromAddress(emitter, valTyp, vslot)
 	g.takeOstyEmitter(emitter)

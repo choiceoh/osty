@@ -400,6 +400,14 @@ func mapRuntimeValueAtSymbol() string {
 	return "osty_rt_map_value_at"
 }
 
+// mapRuntimeEntryAtSymbol returns the combined K+V accessor used by
+// generic `for (k, v) in m` lowering. The helper snapshots the key
+// under the map lock and memcpy-writes the value into the caller's
+// out-slot in the same critical section.
+func mapRuntimeEntryAtSymbol(keyTyp string, keyString bool) string {
+	return "osty_rt_map_entry_at_" + llvmMapKeySuffix(keyTyp, keyString)
+}
+
 // mapRuntimeLockSymbol / mapRuntimeUnlockSymbol expose the per-map
 // recursive mutex as a pair. Emitted by `update` so the get + callback
 // + insert composition is a single critical section; recursive so the
