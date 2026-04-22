@@ -866,7 +866,7 @@ func runOstyBench(ostyBin, pairsDir, pair, benchTime string) ([]benchResult, err
 // keeps that ordering stable.
 var (
 	ostyOkLineRE   = regexp.MustCompile(`^ok\t(bench[A-Za-z0-9_]+)\t`)
-	ostyBenchSumRE = regexp.MustCompile(`^bench\s+\S+\s+iter=\d+\s+total=\d+ns\s+avg=(\d+)ns(?:\s+bytes/op=(\d+))?`)
+	ostyBenchSumRE = regexp.MustCompile(`^bench\s+.+?\s+iter=\d+\s+total=\d+ns\s+avg=(\d+)ns(?:\s+bytes/op=(\d+))?`)
 )
 
 func parseOstyBenchOutput(pair, out string) []benchResult {
