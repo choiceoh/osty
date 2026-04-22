@@ -64,6 +64,69 @@ fn main() {
 	}
 }
 
+// TestRunResolvePackageHappyPathIsAstbridgeFree is the DIR sibling of
+// TestRunResolveFileHappyPathIsAstbridgeFree. A two-file clean
+// package should round-trip through runResolvePackageInner with zero
+// astbridge lowerings — LoadPackageForNative gives us FrontendRuns
+// per file, native diagnostics + native rows don't need *ast.File,
+// and the EnsureFiles fallback should never fire on this input
+// (native rows are always available for resolvable refs).
+//
+// Any non-zero count means the DIR CLI body regressed: either a
+// fallback triggered unnecessarily (ensureGoResolve ran when it
+// shouldn't), or a new call site leaked run.File() in. Pairs with
+// the library-level TestLoadPackageForNativeMultiFileIsAstbridgeFree
+// to cover the entire stack from loader to printer.
+func TestRunResolvePackageHappyPathIsAstbridgeFree(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.osty")
+	bPath := filepath.Join(dir, "b.osty")
+	if err := os.WriteFile(aPath, []byte(`pub fn helper() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte(`fn main() {
+    let value = helper()
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	origStdout := os.Stdout
+	origStderr := os.Stderr
+	rout, wout, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stdout: %v", err)
+	}
+	rerr, werr, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stderr: %v", err)
+	}
+	os.Stdout = wout
+	os.Stderr = werr
+	t.Cleanup(func() {
+		os.Stdout = origStdout
+		os.Stderr = origStderr
+	})
+	drained := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
+	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
+
+	selfhost.ResetAstbridgeLowerCount()
+	exit := runResolvePackageInner(dir, cliFlags{noColor: true})
+	_ = wout.Close()
+	_ = werr.Close()
+	<-drained
+	<-drained
+
+	if exit != 0 {
+		t.Fatalf("runResolvePackageInner exit = %d, want 0", exit)
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("AstbridgeLowerCount after runResolvePackageInner = %d, want 0 (DIR resolve CLI body regressed into a *ast.File fallback)", got)
+	}
+}
+
 func TestResolveCLISingleFilePrintsNativeResolutionRows(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
