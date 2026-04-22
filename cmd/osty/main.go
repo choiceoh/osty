@@ -523,19 +523,7 @@ func main() {
 			}
 			return
 		}
-		parsed := parser.ParseDetailed(src)
-		file, diags := parsed.File, parsed.Diagnostics
-		res := resolveFile(file)
-		chk := check.File(file, res, checkOptsForFile(path, canonical.Source(src, file)))
-		all := append(append(append([]*diag.Diagnostic{}, diags...), res.Diags...), chk.Diags...)
-		printDiags(formatter, all, flags)
-		if flags.inspect {
-			runInspect(file, chk, flags)
-		}
-		if flags.dumpNativeDiags {
-			dumpNativeDiagsFor(path, chk)
-		}
-		if hasError(all) {
+		if runCheckFileLegacy(path, src, formatter, flags) != 0 {
 			os.Exit(1)
 		}
 	case "typecheck":
@@ -549,14 +537,7 @@ func main() {
 			}
 			return
 		}
-		parsed := parser.ParseDetailed(src)
-		file, diags := parsed.File, parsed.Diagnostics
-		res := resolveFile(file)
-		chk := check.File(file, res, checkOptsForFile(path, canonical.Source(src, file)))
-		all := append(append(append([]*diag.Diagnostic{}, diags...), res.Diags...), chk.Diags...)
-		printDiags(formatter, all, flags)
-		printTypes(chk)
-		if hasError(all) {
+		if runTypecheckFileLegacy(path, src, formatter, flags) != 0 {
 			os.Exit(1)
 		}
 	case "resolve":
@@ -1222,6 +1203,51 @@ func byteOffsetLineCol(src []byte, offset int) (int, int) {
 		col++
 	}
 	return line, col
+}
+
+// runCheckFileLegacy is the extracted `osty check FILE` body (the
+// path taken when --native is NOT set). It calls parser.ParseDetailed
+// (which lowers *ast.File via astbridge — one AstbridgeLowerCount
+// bump per call), then runs the Go-native resolver + check.File
+// pair, renders diagnostics, and optionally runs --inspect /
+// --dump-native-diags. Extracted alongside runCheckFileNative so
+// baseline counter tests can exercise the legacy path in-process
+// and pin its current astbridge cost as a regression floor.
+func runCheckFileLegacy(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
+	parsed := parser.ParseDetailed(src)
+	file, diags := parsed.File, parsed.Diagnostics
+	res := resolveFile(file)
+	chk := check.File(file, res, checkOptsForFile(path, canonical.Source(src, file)))
+	all := append(append(append([]*diag.Diagnostic{}, diags...), res.Diags...), chk.Diags...)
+	printDiags(formatter, all, flags)
+	if flags.inspect {
+		runInspect(file, chk, flags)
+	}
+	if flags.dumpNativeDiags {
+		dumpNativeDiagsFor(path, chk)
+	}
+	if hasError(all) {
+		return 1
+	}
+	return 0
+}
+
+// runTypecheckFileLegacy is the extracted `osty typecheck FILE` body
+// (non-native path). Same astbridge cost profile as
+// runCheckFileLegacy — one bump from parser.ParseDetailed — plus the
+// Go-native printTypes pass over check.Result.Types.
+func runTypecheckFileLegacy(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
+	parsed := parser.ParseDetailed(src)
+	file, diags := parsed.File, parsed.Diagnostics
+	res := resolveFile(file)
+	chk := check.File(file, res, checkOptsForFile(path, canonical.Source(src, file)))
+	all := append(append(append([]*diag.Diagnostic{}, diags...), res.Diags...), chk.Diags...)
+	printDiags(formatter, all, flags)
+	printTypes(chk)
+	if hasError(all) {
+		return 1
+	}
+	return 0
 }
 
 // runCheckFileNative drives `osty check --native FILE` end-to-end on
