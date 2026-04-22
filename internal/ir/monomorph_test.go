@@ -132,6 +132,50 @@ func TestMonomorphizeSingleFreeFnSpecialization(t *testing.T) {
 	}
 }
 
+func TestMonomorphizeQualifiedCallClearsResidualTypeArgs(t *testing.T) {
+	// Package-qualified generic helpers like `testing.assertEq` do not
+	// participate in user-code monomorphization. Their concrete
+	// argument/result types already live on the call node, so any
+	// leftover TypeArgs are just stale checker metadata that would make
+	// the IR->AST bridge emit a TurbofishExpr wrapper.
+	call := &CallExpr{
+		Callee: &FieldExpr{
+			X:    &Ident{Name: "testing"},
+			Name: "assertEq",
+			T: &FnType{
+				Params: []Type{TInt, TInt},
+				Return: TUnit,
+			},
+		},
+		TypeArgs: []Type{TInt},
+		Args: []Arg{
+			{Value: intLit("1")},
+			{Value: intLit("1")},
+		},
+		T: TUnit,
+	}
+	in := &Module{
+		Package: "main",
+		Decls: []Decl{&FnDecl{
+			Name:   "main",
+			Return: TUnit,
+			Body:   &Block{Stmts: []Stmt{&ExprStmt{X: call}}},
+		}},
+	}
+
+	out, errs := Monomorphize(in)
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	callCp := out.Decls[0].(*FnDecl).Body.Stmts[0].(*ExprStmt).X.(*CallExpr)
+	if len(callCp.TypeArgs) != 0 {
+		t.Fatalf("qualified call should shed stale TypeArgs after monomorph, got %+v", callCp.TypeArgs)
+	}
+	if _, ok := callCp.Callee.(*FieldExpr); !ok {
+		t.Fatalf("qualified callee shape changed: got %T, want *FieldExpr", callCp.Callee)
+	}
+}
+
 // ==== Dedup ====
 
 func TestMonomorphizeDedupesSameTypeArgs(t *testing.T) {

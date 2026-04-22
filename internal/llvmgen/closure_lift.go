@@ -125,10 +125,18 @@ func liftClosuresFromModule(mod *ostyir.Module) []ast.Decl {
 	if mod == nil {
 		return nil
 	}
+	keepLiteral := testingInlineClosuresFromModule(mod)
 	var lifted []ast.Decl
 	ostyir.Walk(ostyir.VisitorFunc(func(n ostyir.Node) bool {
 		c, ok := n.(*ostyir.Closure)
 		if !ok || c == nil {
+			return true
+		}
+		if _, ok := keepLiteral[c]; ok {
+			// `testing.context` / `testing.benchmark` inline the closure
+			// body directly, so those sites must keep a literal
+			// ClosureExpr through the IR->AST bridge instead of being
+			// rewritten to a lifted function value.
 			return true
 		}
 		captures, ok := captureSlotsFromIR(c.Captures)
@@ -160,6 +168,66 @@ func liftClosuresFromModule(mod *ostyir.Module) []ast.Decl {
 		return true
 	}), mod)
 	return lifted
+}
+
+func testingInlineClosuresFromModule(mod *ostyir.Module) map[*ostyir.Closure]struct{} {
+	out := map[*ostyir.Closure]struct{}{}
+	if mod == nil {
+		return out
+	}
+	aliases := testingAliasesFromModule(mod)
+	if len(aliases) == 0 {
+		return out
+	}
+	ostyir.Walk(ostyir.VisitorFunc(func(n ostyir.Node) bool {
+		call, ok := n.(*ostyir.CallExpr)
+		if !ok || call == nil {
+			return true
+		}
+		if len(call.Args) < 2 || call.Args[1].Name != "" || call.Args[1].Value == nil {
+			return true
+		}
+		field, ok := call.Callee.(*ostyir.FieldExpr)
+		if !ok || field == nil || field.Optional {
+			return true
+		}
+		alias, ok := field.X.(*ostyir.Ident)
+		if !ok || alias == nil || !aliases[alias.Name] {
+			return true
+		}
+		switch field.Name {
+		case "context", "benchmark":
+			if closure, ok := call.Args[1].Value.(*ostyir.Closure); ok && closure != nil {
+				out[closure] = struct{}{}
+			}
+		}
+		return true
+	}), mod)
+	return out
+}
+
+func testingAliasesFromModule(mod *ostyir.Module) map[string]bool {
+	out := map[string]bool{}
+	if mod == nil {
+		return out
+	}
+	for _, decl := range mod.Decls {
+		use, ok := decl.(*ostyir.UseDecl)
+		if !ok || use == nil || use.IsFFI() {
+			continue
+		}
+		if use.RawPath != "std.testing" {
+			continue
+		}
+		alias := use.Alias
+		if alias == "" && len(use.Path) > 0 {
+			alias = use.Path[len(use.Path)-1]
+		}
+		if alias != "" {
+			out[alias] = true
+		}
+	}
+	return out
 }
 
 // captureSlotsFromIR projects an IR closure's Captures into the

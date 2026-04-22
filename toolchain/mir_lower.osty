@@ -1,0 +1,1628 @@
+// mir_lower.osty — self-hosted HIR → MIR lowering (Stage 4a).
+//
+// This is the Osty port of `internal/mir/lower.go`. It consumes a
+// monomorphic `HirModule` (see `hir.osty`) and produces a `MirModule`
+// (see `mir.osty`). Callers are expected to have already run a future
+// `toolchain/monomorph.osty` equivalent — the lowerer rejects generic
+// declarations and records them as issues.
+//
+// Scope splits so the Osty port can land incrementally (matching how
+// the Go side grew):
+//
+//   Stage 4a (this file): entry + signatures + layouts + use
+//                         passthrough + function shell (empty body)
+//                         + global shell (initialiser stub).
+//                         No stmt / expr lowering yet.
+//   Stage 4b: body lowerer state + lowerStmt for simple kinds
+//             (Block / Let / ExprStmt / Return / Break / Continue).
+//   Stage 4c: control flow (If / For / Match / Defer).
+//   Stage 4d: expression lowering into places / operands / rvalues.
+//   Stage 4e: concurrency + stdlib intrinsics + closures.
+//   Stage 4f: projection walk + variant/struct layout lookup.
+//
+// Until 4b lands, every emitted function carries an empty body — the
+// returned MIR is structurally valid (it has a return local + entry
+// block + a placeholder terminator) but cannot yet be fed through
+// `mir.Validate` / the MIR emitter. Callers that need an end-to-end
+// probe should keep using Go's `mir.Lower` via the Go-side bridge;
+// this file is the Osty surface that future stages extend.
+//
+// Type representation: MIR operates on name-level type strings
+// (`MirLocal.typ: String` etc.), so this lowerer emits MIR-facing
+// types via `hirTypeString(t)` rather than threading HirType values
+// through the MIR API. This matches how `internal/mir/lower.go` uses
+// `t.String()` at every MIR construction site.
+
+use std.strings as strings
+
+// ====================================================================
+// Lookup tables
+// ====================================================================
+
+/// MirLowerFnSignature carries the collected-pass-1 view of a fn or
+/// method. `owner` is empty for free fns; for methods it is the owning
+/// struct / enum name. `symbol` is the mangled MIR symbol name (pass
+/// through `mangleMethodSymbol` for methods, bare `name` for free fns).
+///
+/// Stage 4d will use `params` + `retType` to order call arguments
+/// (keyword → positional), resolve default values, and check arities.
+pub struct MirLowerFnSignature {
+    pub name: String,
+    pub owner: String,
+    pub symbol: String,
+    pub params: List<HirParam>,
+    pub retType: HirType,
+    pub isMethod: Bool,
+    pub span: HirSpan,
+}
+
+pub fn mirLowerFnSignature(
+    name: String,
+    params: List<HirParam>,
+    retType: HirType,
+    span: HirSpan,
+) -> MirLowerFnSignature {
+    MirLowerFnSignature {
+        name,
+        owner: "",
+        symbol: name,
+        params,
+        retType,
+        isMethod: false,
+        span,
+    }
+}
+
+pub fn mirLowerMethodSignature(
+    owner: String,
+    name: String,
+    params: List<HirParam>,
+    retType: HirType,
+    span: HirSpan,
+) -> MirLowerFnSignature {
+    MirLowerFnSignature {
+        name,
+        owner,
+        symbol: mangleMethodSymbol(owner, name),
+        params,
+        retType,
+        isMethod: true,
+        span,
+    }
+}
+
+/// mangleMethodSymbol is the MIR symbol mangling for methods. Must
+/// stay in sync with Go's `mangleMethodSymbol` (`Type__method`); the
+/// LLVM emitter and this lowerer both depend on the exact string
+/// shape.
+pub fn mangleMethodSymbol(owner: String, method: String) -> String {
+    owner + "__" + method
+}
+
+/// methodKey is the lookup key for the method signature table.
+/// Format: `owner::method` (matches Go's `methodKey`).
+pub fn methodKey(owner: String, method: String) -> String {
+    owner + "::" + method
+}
+
+/// mirLowerSignatureDropReceiver returns a copy of `sig` without its
+/// leading receiver parameter. Used at call sites where positional
+/// args never include `self`.
+pub fn mirLowerSignatureDropReceiver(sig: MirLowerFnSignature) -> MirLowerFnSignature {
+    if sig.params.len() == 0 {
+        return sig
+    }
+    let mut tail: List<HirParam> = []
+    let mut i = 0
+    for p in sig.params {
+        if i > 0 {
+            tail.push(p)
+        }
+        i = i + 1
+    }
+    MirLowerFnSignature {
+        name: sig.name,
+        owner: sig.owner,
+        symbol: sig.symbol,
+        params: tail,
+        retType: sig.retType,
+        isMethod: sig.isMethod,
+        span: sig.span,
+    }
+}
+
+// ====================================================================
+// Lowerer state
+// ====================================================================
+
+/// MirLowerer is the per-module lowering context. Pass 1 fills the
+/// lookup tables (`fnSigs` / `methodSigs` / `structs` / `enums` /
+/// `globals` / `useAliases`); pass 2 iterates `src.fns` / `src.structs`
+/// / `src.enums` / `src.lets` again and emits MIR into `out`.
+///
+/// `issues` is an append-only slush pile — non-fatal lowering problems
+/// (e.g. "generic decl reached MIR") get pushed here and the final
+/// MirModule also carries a copy so callers can decide whether to
+/// retry, fall back to the Go pipeline, or report the issue.
+pub struct MirLowerer {
+    pub src: HirModule,
+    pub out: MirModule,
+
+    // Pass-1 lookup tables. Keys are source names (no mangling).
+    pub fnSigs: List<MirLowerFnSignature>,
+    pub fnSigNames: List<String>,
+
+    pub methodSigs: List<MirLowerFnSignature>,
+    pub methodSigKeys: List<String>,
+
+    pub structs: List<HirStructDecl>,
+    pub structNames: List<String>,
+
+    pub enums: List<HirEnumDecl>,
+    pub enumNames: List<String>,
+
+    pub globals: List<HirLetDecl>,
+    pub globalNames: List<String>,
+
+    pub useAliases: List<HirUseDecl>,
+    pub useAliasKeys: List<String>,
+
+    pub issues: List<String>,
+
+    // Monotonically-growing counter used to mint fresh symbols for
+    // synthetic closures (Stage 4e). Kept on the lowerer so multiple
+    // closures in the same compilation unit do not collide.
+    pub closureSeq: Int,
+}
+
+pub fn mirLowerer(src: HirModule) -> MirLowerer {
+    MirLowerer {
+        src,
+        out: mirModule(src.packageName),
+        fnSigs: [],
+        fnSigNames: [],
+        methodSigs: [],
+        methodSigKeys: [],
+        structs: [],
+        structNames: [],
+        enums: [],
+        enumNames: [],
+        globals: [],
+        globalNames: [],
+        useAliases: [],
+        useAliasKeys: [],
+        issues: [],
+        closureSeq: 0,
+    }
+}
+
+/// mirLowerNoteIssue records a non-fatal lowering issue. Issues are
+/// surfaced to callers through `MirModule.Issues` after `run()`.
+pub fn mirLowerNoteIssue(l: MirLowerer, msg: String) {
+    l.issues.push(msg)
+}
+
+// ---- Lookup helpers -------------------------------------------------
+
+/// mirLowerSignatureForFn returns the signature index for the named
+/// free fn or -1 when unknown.
+pub fn mirLowerSignatureForFn(l: MirLowerer, name: String) -> Int {
+    let mut i = 0
+    for n in l.fnSigNames {
+        if n == name {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+/// mirLowerSignatureForMethod returns the signature index for the
+/// named method on `typeName`, or -1 when unknown.
+pub fn mirLowerSignatureForMethod(l: MirLowerer, typeName: String, method: String) -> Int {
+    let key = methodKey(typeName, method)
+    let mut i = 0
+    for k in l.methodSigKeys {
+        if k == key {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+/// mirLowerLookupStruct returns the struct decl index or -1.
+pub fn mirLowerLookupStruct(l: MirLowerer, name: String) -> Int {
+    let mut i = 0
+    for n in l.structNames {
+        if n == name {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+/// mirLowerLookupEnum returns the enum decl index or -1.
+pub fn mirLowerLookupEnum(l: MirLowerer, name: String) -> Int {
+    let mut i = 0
+    for n in l.enumNames {
+        if n == name {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+/// mirLowerLookupGlobal returns the global let decl index or -1.
+pub fn mirLowerLookupGlobal(l: MirLowerer, name: String) -> Int {
+    let mut i = 0
+    for n in l.globalNames {
+        if n == name {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+/// mirLowerLookupUseAlias returns the use decl index by alias or -1.
+pub fn mirLowerLookupUseAlias(l: MirLowerer, alias: String) -> Int {
+    let mut i = 0
+    for k in l.useAliasKeys {
+        if k == alias {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+// ====================================================================
+// Entry point + high-level pipeline
+// ====================================================================
+
+/// mirLowerModule is the public entry: HIR → MIR. The returned
+/// MirModule is always non-nil (even on heavy input errors); non-fatal
+/// issues surface via `out.issues`. Callers that want structural
+/// validation should follow up with `mirValidateModule` once Stage 4b
+/// fills in function bodies.
+pub fn mirLowerModule(src: HirModule) -> MirModule {
+    let l = mirLowerer(src)
+    mirLowerRun(l)
+    // copy issues onto the output module so downstream consumers
+    // can decide fallback policy without touching the lowerer state.
+    for msg in l.issues {
+        hirModuleAddIssue(l.out, msg)
+    }
+    l.out
+}
+
+/// mirLowerRun drives the two-pass lowering. Split out from
+/// `mirLowerModule` so tests can seed a lowerer with a partial HIR and
+/// probe intermediate state.
+pub fn mirLowerRun(l: MirLowerer) {
+    mirLowerCollectSignatures(l)
+    mirLowerBuildLayouts(l)
+    mirLowerEmitDeclarations(l)
+    mirLowerEmitScript(l)
+}
+
+// ====================================================================
+// Pass 1: collect signatures + lookup tables
+// ====================================================================
+
+/// mirLowerCollectSignatures walks every top-level decl on the HIR
+/// module and seeds the lowerer's lookup tables. Generic decls
+/// (non-empty `generics`) are skipped with an issue so the pipeline
+/// can flag that monomorphization was missed.
+pub fn mirLowerCollectSignatures(l: MirLowerer) {
+    // Free fns
+    for decl in l.src.fns {
+        if decl.generics.len() > 0 {
+            mirLowerNoteIssue(
+                l,
+                "generic free fn \"" + decl.name + "\" reached MIR (monomorphize first)",
+            )
+        } else {
+            let sig = mirLowerFnSignature(decl.name, decl.params, decl.ret, decl.span)
+            l.fnSigs.push(sig)
+            l.fnSigNames.push(decl.name)
+        }
+    }
+
+    // Struct methods
+    for s in l.src.structs {
+        if s.generics.len() > 0 {
+            mirLowerNoteIssue(
+                l,
+                "generic struct \"" + s.name + "\" reached MIR (monomorphize first)",
+            )
+        } else {
+            l.structs.push(s)
+            l.structNames.push(s.name)
+            for m in s.methods {
+                let sig = mirLowerMethodSignature(s.name, m.name, m.params, m.ret, m.span)
+                l.methodSigs.push(sig)
+                l.methodSigKeys.push(methodKey(s.name, m.name))
+            }
+        }
+    }
+
+    // Enum methods
+    for e in l.src.enums {
+        if e.generics.len() > 0 {
+            mirLowerNoteIssue(
+                l,
+                "generic enum \"" + e.name + "\" reached MIR (monomorphize first)",
+            )
+        } else {
+            l.enums.push(e)
+            l.enumNames.push(e.name)
+            for m in e.methods {
+                let sig = mirLowerMethodSignature(e.name, m.name, m.params, m.ret, m.span)
+                l.methodSigs.push(sig)
+                l.methodSigKeys.push(methodKey(e.name, m.name))
+            }
+        }
+    }
+
+    // Globals
+    for g in l.src.lets {
+        l.globals.push(g)
+        l.globalNames.push(g.name)
+    }
+
+    // Uses (alias table + MIR passthrough)
+    for u in l.src.uses {
+        if u.alias != "" {
+            l.useAliases.push(u)
+            l.useAliasKeys.push(u.alias)
+        }
+        mirLowerEmitUse(l, u)
+    }
+}
+
+/// mirLowerEmitUse copies a HIR use decl into the MIR module's use
+/// list. Keeps FFI metadata (goPath / runtimePath / isGoFFI /
+/// isRuntimeFFI) so downstream backends can route FFI calls without
+/// re-reading the HIR.
+pub fn mirLowerEmitUse(l: MirLowerer, u: HirUseDecl) {
+    let mut mu = mirUse(u.rawPath, u.alias, mirSpanFromHir(u.span))
+    mu.isGoFFI = u.isGoFFI
+    mu.isRuntimeFFI = u.isRuntimeFFI
+    mu.goPath = u.goPath
+    mu.runtimePath = u.runtimePath
+    l.out.uses.push(mu)
+}
+
+// ====================================================================
+// Pass 1b: layout tables
+// ====================================================================
+
+/// mirLowerBuildLayouts emits layout entries for every collected
+/// struct and enum. Layouts carry the field / variant / payload
+/// information backends need to compile aggregate loads, variant
+/// projections, and tag-based discrimination without re-reading HIR.
+pub fn mirLowerBuildLayouts(l: MirLowerer) {
+    for s in l.structs {
+        let sl = mirLowerBuildStructLayout(s)
+        l.out.layouts.structs.push(sl)
+    }
+    for e in l.enums {
+        let el = mirLowerBuildEnumLayout(e)
+        l.out.layouts.enums.push(el)
+    }
+}
+
+fn mirLowerBuildStructLayout(s: HirStructDecl) -> MirStructLayout {
+    let mut fields: List<MirFieldLayout> = []
+    let mut i = 0
+    for f in s.fields {
+        fields.push(MirFieldLayout {
+            index: i,
+            name: f.name,
+            typ: hirTypeString(f.typ),
+        })
+        i = i + 1
+    }
+    MirStructLayout {
+        name: s.name,
+        mangled: s.name,
+        fields,
+        size: 0,
+        align: 0,
+    }
+}
+
+fn mirLowerBuildEnumLayout(e: HirEnumDecl) -> MirEnumLayout {
+    let mut variants: List<MirVariantLayout> = []
+    let mut vi = 0
+    for v in e.variants {
+        let mut payload: List<MirFieldLayout> = []
+        let mut fi = 0
+        for pt in v.payload {
+            payload.push(MirFieldLayout {
+                index: fi,
+                name: mirLowerSyntheticFieldName(fi),
+                typ: hirTypeString(pt),
+            })
+            fi = fi + 1
+        }
+        variants.push(MirVariantLayout {
+            index: vi,
+            name: v.name,
+            payload,
+        })
+        vi = vi + 1
+    }
+    MirEnumLayout {
+        name: e.name,
+        mangled: e.name,
+        discriminant: "Int",
+        variants,
+    }
+}
+
+/// mirLowerSyntheticFieldName returns the positional field name the
+/// layout builder uses for enum-variant payloads without named fields.
+/// Mirrors Go's `fmt.Sprintf("_%d", j)` pattern.
+pub fn mirLowerSyntheticFieldName(i: Int) -> String {
+    "_" + mirLowerIntToString(i)
+}
+
+/// mirLowerIntToString converts a non-negative integer to its decimal
+/// representation. Self-host stdlib exposes no `Int.toString` yet, so
+/// the lowerer walks digits manually.
+pub fn mirLowerIntToString(n: Int) -> String {
+    if n == 0 {
+        return "0"
+    }
+    let mut negative = false
+    let mut value = n
+    if value < 0 {
+        negative = true
+        value = 0 - value
+    }
+    let mut digits: List<String> = []
+    for value > 0 {
+        let d = value % 10
+        digits.push(mirLowerDigitChar(d))
+        value = value / 10
+    }
+    let mut parts: List<String> = []
+    if negative {
+        parts.push("-")
+    }
+    let mut j = digits.len() - 1
+    for j >= 0 {
+        parts.push(digits[j])
+        j = j - 1
+    }
+    strings.join(parts, "")
+}
+
+fn mirLowerDigitChar(d: Int) -> String {
+    match d {
+        0 -> "0",
+        1 -> "1",
+        2 -> "2",
+        3 -> "3",
+        4 -> "4",
+        5 -> "5",
+        6 -> "6",
+        7 -> "7",
+        8 -> "8",
+        9 -> "9",
+        _ -> "?",
+    }
+}
+
+// ====================================================================
+// Span bridging
+// ====================================================================
+
+/// mirSpanFromHir lowers a HirSpan into a MIR span. MIR spans are
+/// byte-offset ranges only; HirSpan's line/column info is dropped.
+pub fn mirSpanFromHir(s: HirSpan) -> MirSpan {
+    mirSpan(s.start.offset, s.end.offset)
+}
+
+// ====================================================================
+// Pass 2: emit declarations (function + global shells)
+// ====================================================================
+
+/// mirLowerEmitDeclarations walks every top-level non-generic decl
+/// and hands control to the per-decl emitters. Method emission walks
+/// struct / enum methods.
+pub fn mirLowerEmitDeclarations(l: MirLowerer) {
+    for decl in l.src.fns {
+        if decl.generics.len() == 0 {
+            let emitted = mirLowerFunction(l, decl, "", false)
+            l.out.functions.push(emitted)
+        }
+    }
+    for s in l.src.structs {
+        if s.generics.len() == 0 {
+            for m in s.methods {
+                let emitted = mirLowerFunction(l, m, s.name, true)
+                l.out.functions.push(emitted)
+            }
+        }
+    }
+    for e in l.src.enums {
+        if e.generics.len() == 0 {
+            for m in e.methods {
+                let emitted = mirLowerFunction(l, m, e.name, true)
+                l.out.functions.push(emitted)
+            }
+        }
+    }
+    for g in l.src.lets {
+        let emitted = mirLowerGlobal(l, g)
+        l.out.globals.push(emitted)
+    }
+}
+
+/// mirLowerEmitScript lowers the module's top-level script (if any)
+/// as the body of a synthetic `main()`. Matches Go's `emitScript`
+/// policy — backends conventionally do the same thing.
+pub fn mirLowerEmitScript(l: MirLowerer) {
+    if l.src.script.len() == 0 {
+        return
+    }
+    let span = mirSpanFromHir(l.src.span)
+    let mut main = mirFunction("main", "()", span)
+    // Entry block + return slot are stamped by mirLowerSeedFunction.
+    mirLowerSeedFunction(main, [], hirTUnit(), span)
+    // Run script statements through the body-state pipeline so any
+    // simple stmt kinds land instructions; unsupported kinds record
+    // an issue and fall through to an implicit unit return.
+    let bs = mirLowerBodyState(l, main, hirTUnit())
+    for s in l.src.script {
+        mirLowerStmt(bs, s)
+    }
+    mirLowerFinishNoReturn(bs, span)
+    l.out.functions.push(main)
+}
+
+// ====================================================================
+// Pass 2: per-function lowering (shell only for Stage 4a)
+// ====================================================================
+
+/// mirLowerFunction emits a MIR function shell from one HIR FnDecl.
+/// Stage 4a creates the return slot, parameter locals, entry block,
+/// and an `Unreachable` placeholder terminator; Stage 4b replaces the
+/// placeholder with real body lowering.
+///
+/// External stubs (functions with an empty body AND no scripted
+/// content — used for FFI `use go` decls) set `isExternal = true`
+/// and carry zero blocks, matching the MIR validator's shape
+/// requirement.
+pub fn mirLowerFunction(
+    l: MirLowerer,
+    decl: HirFnDecl,
+    owner: String,
+    asMethod: Bool,
+) -> MirFunction {
+    let retT = if hirTypeIsValid(decl.ret) {
+        decl.ret
+    } else {
+        hirTUnit()
+    }
+
+    let mut symbol = decl.name
+    let mut params = decl.params
+    if asMethod {
+        symbol = mangleMethodSymbol(owner, decl.name)
+        // Synthesise a self parameter at position 0 so downstream
+        // paramLocals[0] is well-defined.
+        let selfParam = hirParam("self", hirTypeNamed(owner, []), decl.span)
+        let mut withSelf: List<HirParam> = []
+        withSelf.push(selfParam)
+        for p in decl.params {
+            withSelf.push(p)
+        }
+        params = withSelf
+    }
+
+    let span = mirSpanFromHir(decl.span)
+    let mut out = mirFunction(symbol, hirTypeString(retT), span)
+    mirLowerCopyFnAnnotations(out, decl)
+
+    out.isIntrinsic = decl.isIntrinsic
+    if decl.isIntrinsic {
+        // Intrinsic fns carry a placeholder body; backends supply the
+        // real IR sequence at each call site (see v0.6 §19.5/§19.7).
+        mirLowerSeedFunction(out, params, retT, span)
+        mirLowerFinishPlaceholder(out, span)
+        return out
+    }
+
+    // Emit a shell. Stage 4b replaces the placeholder terminator with
+    // real body lowering. External fns (empty body, no script) keep
+    // zero blocks per MIR validator rules.
+    if mirLowerFunctionIsExternal(decl) {
+        out.isExternal = true
+        return out
+    }
+
+    mirLowerSeedFunction(out, params, retT, span)
+    mirLowerFunctionBody(l, out, decl, retT, asMethod, span)
+    out
+}
+
+/// mirLowerFunctionBody drives the real body lowering. Stage 4b wires
+/// simple statement kinds (Block / Let / ExprStmt / Return / Break /
+/// Continue / Defer); the rest (If / For / Match / ChanSend / full
+/// expression lowering) land in subsequent stages and fall through to
+/// `mirLowerNoteIssue` with a "Stage 4x TODO" message.
+///
+/// On exit, if the cursor block has no terminator the lowerer runs
+/// any outstanding defers and either emits Return (unit-returning
+/// fns) or Unreachable (non-unit fns whose body fell through — the
+/// checker already forbids this so the terminator is defensive
+/// poison).
+pub fn mirLowerFunctionBody(
+    l: MirLowerer,
+    out: MirFunction,
+    decl: HirFnDecl,
+    retT: HirType,
+    asMethod: Bool,
+    span: MirSpan,
+) {
+    let bs = mirLowerBodyState(l, out, retT)
+    if asMethod && bs.paramLocals.len() > 0 {
+        bs.self.hasOwner = true
+        bs.self.typeName = mirLowerSelfOwnerName(decl)
+        bs.self.localId = bs.paramLocals[0]
+    }
+    for s in decl.body.stmts {
+        mirLowerStmt(bs, s)
+    }
+    if decl.body.hasResult {
+        // Trailing expression — lower into the return slot and return.
+        mirLowerExprInto(bs, decl.body.result, out.returnLocal, retT)
+        mirLowerRunDefers(bs, span)
+        mirLowerTerminate(bs, mirReturnTerm(span))
+        return
+    }
+    mirLowerFinishNoReturn(bs, span)
+}
+
+/// mirLowerSelfOwnerName recovers the owning type for a method body.
+/// The synthetic self param's type is `HirTypeNamed{Name: owner}`
+/// under the convention used by mirLowerFunction.
+fn mirLowerSelfOwnerName(decl: HirFnDecl) -> String {
+    if decl.params.len() == 0 {
+        return ""
+    }
+    let first = decl.params[0]
+    hirTypeNameOf(first.typ)
+}
+
+/// mirLowerFunctionIsExternal reports whether the fn has no body and
+/// therefore should emit as an external stub. FFI-sourced fns arrive
+/// with empty bodies after the collector.
+fn mirLowerFunctionIsExternal(decl: HirFnDecl) -> Bool {
+    decl.body.stmts.len() == 0 && !decl.body.hasResult
+}
+
+/// mirLowerCopyFnAnnotations copies HIR annotation metadata onto the
+/// MIR function. The MIR side currently stores a subset (export
+/// symbol, C ABI) but the rest of v0.6 A5–A13 annotations are
+/// downstream concerns tracked in `LLVM_MIGRATION_PLAN.md`.
+fn mirLowerCopyFnAnnotations(out: MirFunction, decl: HirFnDecl) {
+    out.exported = decl.exported
+    out.exportSymbol = decl.exportSymbol
+    out.cAbi = decl.cAbi
+}
+
+/// mirLowerSeedFunction stamps the return slot + parameter locals +
+/// entry block onto an otherwise bare `MirFunction`. Matches Go's
+/// `newFunction`. Must run before any body lowering.
+pub fn mirLowerSeedFunction(
+    out: MirFunction,
+    params: List<HirParam>,
+    retT: HirType,
+    span: MirSpan,
+) {
+    // _0 is always the return slot.
+    let retLocal = mirFunctionNewLocal(out, "_return", hirTypeString(retT), true, span)
+    out.returnLocal = retLocal
+
+    // Parameters become subsequent locals.
+    let mut idx = 0
+    for p in params {
+        let paramName = if p.name == "" {
+            "arg" + mirLowerIntToString(idx)
+        } else {
+            p.name
+        }
+        let paramTypeText = hirTypeString(p.typ)
+        let paramSpan = mirSpanFromHir(p.span)
+        let id = mirFunctionNewLocal(out, paramName, paramTypeText, true, paramSpan)
+        out.params.push(id)
+        idx = idx + 1
+    }
+
+    // Entry block.
+    let entry = mirFunctionNewBlock(out, span)
+    out.entry = entry
+}
+
+/// mirLowerFinishPlaceholder installs an Unreachable terminator on the
+/// entry block so the function shell passes the MIR validator's
+/// "every block has a terminator" check before Stage 4b fills in
+/// proper control flow.
+pub fn mirLowerFinishPlaceholder(out: MirFunction, span: MirSpan) {
+    if out.blocks.len() == 0 {
+        return
+    }
+    mirFunctionTerminate(out, out.entry, mirUnreachableTerm(span))
+}
+
+// ====================================================================
+// Pass 2: globals
+// ====================================================================
+
+/// mirLowerGlobal emits a MIR global entry. When the source carried
+/// an initialiser, a zero-arg `_init_<name>` MIR function is minted
+/// alongside (Stage 4b fills its body; Stage 4a leaves it as a
+/// placeholder `Unreachable`).
+pub fn mirLowerGlobal(l: MirLowerer, let_: HirLetDecl) -> MirGlobal {
+    let typ = if hirTypeIsValid(let_.typ) {
+        let_.typ
+    } else if let_.hasValue {
+        let_.value.typ
+    } else {
+        hirTypeInvalid()
+    }
+
+    let span = mirSpanFromHir(let_.span)
+    let mut g = mirGlobal(let_.name, hirTypeString(typ), let_.mutable, span)
+
+    if !hirTypeIsValid(typ) {
+        mirLowerNoteIssue(l, "global \"" + let_.name + "\": unknown type")
+        return g
+    }
+
+    if let_.hasValue {
+        let initName = "_init_" + let_.name
+        let mut initFn = mirFunction(initName, hirTypeString(typ), span)
+        mirLowerSeedFunction(initFn, [], typ, span)
+        // Lower the initialiser into the return slot and terminate
+        // with Return. The expression lowerer currently emits a
+        // unit-const placeholder (Stage 4d); once real expr lowering
+        // lands, this path produces the actual initialiser value.
+        let bs = mirLowerBodyState(l, initFn, typ)
+        mirLowerExprInto(bs, let_.value, initFn.returnLocal, typ)
+        mirLowerRunDefers(bs, span)
+        mirLowerTerminate(bs, mirReturnTerm(span))
+        l.out.functions.push(initFn)
+        g.hasInit = true
+        g.initSymbol = initName
+    }
+
+    g
+}
+
+// ====================================================================
+// Type bridging helpers (HirType → MIR type strings)
+// ====================================================================
+
+/// hirTypeNameOf returns the source-level bare name of a HIR type, or
+/// the empty string for types with no canonical name. Convenience for
+/// call-site dispatch (e.g. distinguishing stdlib intrinsics from
+/// user calls).
+pub fn hirTypeNameOf(t: HirType) -> String {
+    match t.kind {
+        HirTypeNamed -> t.namedName,
+        _ -> "",
+    }
+}
+
+/// hirTypeIsList reports whether `t` is a `List<_>` builtin type.
+pub fn hirTypeIsList(t: HirType) -> Bool {
+    match t.kind {
+        HirTypeNamed -> {
+            if t.namedName == "List" {
+                true
+            } else {
+                false
+            }
+        },
+        _ -> false,
+    }
+}
+
+/// hirTypeIsMap reports whether `t` is a `Map<_, _>` builtin type.
+pub fn hirTypeIsMap(t: HirType) -> Bool {
+    match t.kind {
+        HirTypeNamed -> {
+            if t.namedName == "Map" {
+                true
+            } else {
+                false
+            }
+        },
+        _ -> false,
+    }
+}
+
+/// hirTypeIsSet reports whether `t` is a `Set<_>` builtin type.
+pub fn hirTypeIsSet(t: HirType) -> Bool {
+    match t.kind {
+        HirTypeNamed -> {
+            if t.namedName == "Set" {
+                true
+            } else {
+                false
+            }
+        },
+        _ -> false,
+    }
+}
+
+/// hirTypeIsChannel reports whether `t` is a channel (`thread.Chan<_>`).
+/// Stage 4e tightens this once concurrency lowering lands.
+pub fn hirTypeIsChannel(t: HirType) -> Bool {
+    match t.kind {
+        HirTypeNamed -> {
+            if t.namedName == "Chan" {
+                true
+            } else {
+                false
+            }
+        },
+        _ -> false,
+    }
+}
+
+/// hirTypeFirstArg returns the first type argument of a generic named
+/// type, or an invalid HirType when `t` has no arguments.
+pub fn hirTypeFirstArg(t: HirType) -> HirType {
+    match t.kind {
+        HirTypeNamed -> {
+            if t.namedArgs.len() > 0 {
+                t.namedArgs[0]
+            } else {
+                hirTypeInvalid()
+            }
+        },
+        _ -> hirTypeInvalid(),
+    }
+}
+
+/// hirTypeSecondArg returns the second type argument of a generic
+/// named type (e.g. `Map<K, V>.V`), or an invalid HirType when absent.
+pub fn hirTypeSecondArg(t: HirType) -> HirType {
+    match t.kind {
+        HirTypeNamed -> {
+            if t.namedArgs.len() >= 2 {
+                t.namedArgs[1]
+            } else {
+                hirTypeInvalid()
+            }
+        },
+        _ -> hirTypeInvalid(),
+    }
+}
+
+// ====================================================================
+// Operator bridging (HIR ops → MIR ops)
+// ====================================================================
+//
+// Stage 4d will route HIR Unary/Binary expressions through these
+// converters when lowering to MIR RValue. They are defined here so
+// Stage 4b can install them for simple passthrough cases earlier.
+
+/// hirUnOpToMir maps HIR unary-op kinds to MIR's enum. Returns
+/// `MirUnInvalid` for the Osty-side `HirUnInvalid`.
+pub fn hirUnOpToMir(op: HirUnOp) -> MirUnaryOp {
+    match op {
+        HirUnInvalid -> MirUnInvalid,
+        HirUnNeg -> MirUnNeg,
+        HirUnPlus -> MirUnPlus,
+        HirUnNot -> MirUnNot,
+        HirUnBitNot -> MirUnBitNot,
+    }
+}
+
+/// hirBinOpToMir maps HIR binary-op kinds to MIR's enum.
+pub fn hirBinOpToMir(op: HirBinOp) -> MirBinaryOp {
+    match op {
+        HirBinInvalid -> MirBinInvalid,
+        HirBinAdd -> MirBinAdd,
+        HirBinSub -> MirBinSub,
+        HirBinMul -> MirBinMul,
+        HirBinDiv -> MirBinDiv,
+        HirBinMod -> MirBinMod,
+        HirBinEq -> MirBinEq,
+        HirBinNeq -> MirBinNeq,
+        HirBinLt -> MirBinLt,
+        HirBinLeq -> MirBinLeq,
+        HirBinGt -> MirBinGt,
+        HirBinGeq -> MirBinGeq,
+        HirBinAnd -> MirBinAnd,
+        HirBinOr -> MirBinOr,
+        HirBinBitAnd -> MirBinBitAnd,
+        HirBinBitOr -> MirBinBitOr,
+        HirBinBitXor -> MirBinBitXor,
+        HirBinShl -> MirBinShl,
+        HirBinShr -> MirBinShr,
+    }
+}
+
+/// hirAssignOpToBinOp maps a compound-assign operator to its
+/// equivalent binary op for lowering `x op= y` into `x = x op y`.
+/// Returns `MirBinInvalid` for plain `=` (no underlying binary op).
+pub fn hirAssignOpToBinOp(op: HirAssignOp) -> MirBinaryOp {
+    match op {
+        HirAssignInvalid -> MirBinInvalid,
+        HirAssignEq -> MirBinInvalid,
+        HirAssignAdd -> MirBinAdd,
+        HirAssignSub -> MirBinSub,
+        HirAssignMul -> MirBinMul,
+        HirAssignDiv -> MirBinDiv,
+        HirAssignMod -> MirBinMod,
+        HirAssignAnd -> MirBinBitAnd,
+        HirAssignOr -> MirBinBitOr,
+        HirAssignXor -> MirBinBitXor,
+        HirAssignShl -> MirBinShl,
+        HirAssignShr -> MirBinShr,
+    }
+}
+
+// ====================================================================
+// Body lowering infrastructure (Stage 4b)
+// ====================================================================
+//
+// `MirLowerBodyState` is the per-function cursor + scope + defer
+// stack. Every statement or expression lowering routine mutates one
+// bodyState in place — Go's lower.go uses a method receiver for the
+// same purpose; Osty's convention is to pass the state explicitly.
+//
+// Scope name lookup uses parallel `List<String>` + `List<Int>` arrays
+// per frame (not a Map) so the file stays independent of Map
+// intrinsic codegen status. Lookups are O(n) within a frame but `n`
+// is small (one scope frame per block) and the linear-scan cost is
+// dominated by the per-stmt lowering work.
+//
+// Defer frames are `List<List<HirBlock>>`. Each block push creates a
+// new frame; on fall-through we replay + pop the top, and at
+// return / ? / fall-through we replay every frame in LIFO. Matches
+// Go's `deferFrames` exactly.
+
+/// MirLowerOwnerContext carries the method-receiver info for body
+/// lowering. `hasOwner` gates the field payload so free functions
+/// don't need to invent a type name.
+pub struct MirLowerOwnerContext {
+    pub hasOwner: Bool,
+    pub typeName: String,
+    pub localId: Int,
+}
+
+pub fn mirLowerOwnerNone() -> MirLowerOwnerContext {
+    MirLowerOwnerContext {
+        hasOwner: false,
+        typeName: "",
+        localId: -1,
+    }
+}
+
+/// MirLowerScopeFrame is one lexical scope. `names` + `values` are
+/// parallel arrays that map HIR-visible identifiers to MIR local IDs.
+/// `locals` is the list of locals that should receive StorageDead on
+/// scope exit (params + return slot are excluded — they live for the
+/// whole function).
+pub struct MirLowerScopeFrame {
+    pub names: List<String>,
+    pub values: List<Int>,
+    pub locals: List<Int>,
+}
+
+pub fn mirLowerScopeFrame() -> MirLowerScopeFrame {
+    MirLowerScopeFrame {
+        names: [],
+        values: [],
+        locals: [],
+    }
+}
+
+/// MirLowerLoopFrame is one active loop's break/continue targets +
+/// the defer / scope depth captured at loop entry. Used by Stage 4c
+/// when For / While lowerers push frames; defined here so break and
+/// continue can land in 4b without a second source edit.
+pub struct MirLowerLoopFrame {
+    pub breakBlock: Int,
+    pub continueBlock: Int,
+    pub deferDepth: Int,
+    pub scopeDepth: Int,
+}
+
+pub fn mirLowerLoopFrame(breakBlock: Int, continueBlock: Int, deferDepth: Int, scopeDepth: Int) -> MirLowerLoopFrame {
+    MirLowerLoopFrame {
+        breakBlock,
+        continueBlock,
+        deferDepth,
+        scopeDepth,
+    }
+}
+
+/// MirLowerBodyState is the per-function cursor. All statement /
+/// expression lowerers take it as the first argument and mutate it
+/// in place.
+pub struct MirLowerBodyState {
+    pub l: MirLowerer,
+    pub fn_: MirFunction,
+    pub retType: HirType,
+
+    // Current block id for emission. Instructions and terminators
+    // always target this block.
+    pub cur: Int,
+
+    // Lexical scope stack. `scopes[0]` is the function-level frame
+    // seeded with parameter names.
+    pub scopes: List<MirLowerScopeFrame>,
+
+    // Quick access to parameter locals by positional index.
+    pub paramLocals: List<Int>,
+
+    // Method receiver context. `hasOwner` is false for free fns.
+    pub self: MirLowerOwnerContext,
+
+    // Break/continue target stack. Empty outside loops.
+    pub loopStack: List<MirLowerLoopFrame>,
+
+    // Defer frames. Index 0 is the function-level frame (seeded by
+    // the constructor); each block push adds a new frame on top.
+    pub deferFrames: List<List<HirBlock>>,
+}
+
+/// mirLowerBodyState constructs a bodyState seeded from `out`'s
+/// parameter locals. The function-level scope frame and defer frame
+/// are pushed here so callers can start lowering stmts immediately.
+pub fn mirLowerBodyState(
+    l: MirLowerer,
+    out: MirFunction,
+    retType: HirType,
+) -> MirLowerBodyState {
+    let mut bs = MirLowerBodyState {
+        l,
+        fn_: out,
+        retType,
+        cur: out.entry,
+        scopes: [],
+        paramLocals: [],
+        self: mirLowerOwnerNone(),
+        loopStack: [],
+        deferFrames: [],
+    }
+    // Function-level scope.
+    bs.scopes.push(mirLowerScopeFrame())
+    // Function-level defer frame.
+    let emptyFrame: List<HirBlock> = []
+    bs.deferFrames.push(emptyFrame)
+    // Seed parameter bindings. Parameter locals are already minted by
+    // mirLowerSeedFunction; we just re-index their names here.
+    for pid in out.params {
+        let loc = mirFunctionLocal(out, pid)
+        if loc.name != "" {
+            mirLowerBindName(bs, loc.name, pid)
+        }
+        bs.paramLocals.push(pid)
+    }
+    bs
+}
+
+// ---- Scope helpers -------------------------------------------------
+
+pub fn mirLowerPushScope(bs: MirLowerBodyState) {
+    bs.scopes.push(mirLowerScopeFrame())
+}
+
+/// mirLowerPopScope retires the top scope frame. Before dropping,
+/// StorageDead instructions are emitted for every local registered
+/// to the frame (params + return slot excluded by construction).
+pub fn mirLowerPopScope(bs: MirLowerBodyState) {
+    if bs.scopes.len() == 0 {
+        return
+    }
+    let topIdx = bs.scopes.len() - 1
+    mirLowerEmitStorageDeadForScope(bs, bs.scopes[topIdx])
+    // Drop the frame. Osty's List has no `pop()` intrinsic yet; we
+    // rebuild the list without the last element.
+    let mut kept: List<MirLowerScopeFrame> = []
+    let mut i = 0
+    for f in bs.scopes {
+        if i < topIdx {
+            kept.push(f)
+        }
+        i = i + 1
+    }
+    bs.scopes = kept
+}
+
+/// mirLowerBindName records a `name → localId` binding in the top
+/// scope frame. The empty string is a no-op (matches Go's `bind`).
+pub fn mirLowerBindName(bs: MirLowerBodyState, name: String, id: Int) {
+    if name == "" {
+        return
+    }
+    if bs.scopes.len() == 0 {
+        return
+    }
+    let topIdx = bs.scopes.len() - 1
+    bs.scopes[topIdx].names.push(name)
+    bs.scopes[topIdx].values.push(id)
+}
+
+/// mirLowerLookupName searches every scope frame LIFO for `name`.
+/// Returns -1 when not found.
+pub fn mirLowerLookupName(bs: MirLowerBodyState, name: String) -> Int {
+    let mut i = bs.scopes.len() - 1
+    for i >= 0 {
+        let frame = bs.scopes[i]
+        let mut j = frame.names.len() - 1
+        for j >= 0 {
+            if frame.names[j] == name {
+                return frame.values[j]
+            }
+            j = j - 1
+        }
+        i = i - 1
+    }
+    -1
+}
+
+/// mirLowerRegisterScopeLocal marks `id` as owned by the top scope
+/// so that `mirLowerPopScope` emits a StorageDead for it. Skips
+/// parameters and the return slot — those live for the whole fn.
+pub fn mirLowerRegisterScopeLocal(bs: MirLowerBodyState, id: Int) {
+    if bs.scopes.len() == 0 {
+        return
+    }
+    let loc = mirFunctionLocal(bs.fn_, id)
+    // Skip the return slot (id 0 by convention in mirLowerSeedFunction).
+    if id == bs.fn_.returnLocal {
+        return
+    }
+    // Skip params.
+    for p in bs.paramLocals {
+        if p == id {
+            return
+        }
+    }
+    let _ = loc
+    let topIdx = bs.scopes.len() - 1
+    bs.scopes[topIdx].locals.push(id)
+}
+
+/// mirLowerCurrentScopeDepth returns the current frame count minus 1
+/// (the function-level frame is depth 0). Used by loop frames when
+/// recording the scope depth at loop entry.
+pub fn mirLowerCurrentScopeDepth(bs: MirLowerBodyState) -> Int {
+    bs.scopes.len() - 1
+}
+
+/// mirLowerEmitStorageDeadFromDepth replays StorageDead for every
+/// frame from the top down to `depth` (inclusive). Used by break /
+/// continue before the terminator goto.
+pub fn mirLowerEmitStorageDeadFromDepth(bs: MirLowerBodyState, depth: Int) {
+    let mut d = depth
+    if d < 0 {
+        d = 0
+    }
+    let mut i = bs.scopes.len() - 1
+    for i >= d {
+        mirLowerEmitStorageDeadForScope(bs, bs.scopes[i])
+        i = i - 1
+    }
+}
+
+fn mirLowerEmitStorageDeadForScope(bs: MirLowerBodyState, scope: MirLowerScopeFrame) {
+    if scope.locals.len() == 0 {
+        return
+    }
+    let bb = mirFunctionBlock(bs.fn_, bs.cur)
+    if bb.hasTerm {
+        // Already terminated — StorageDead emission would go into a
+        // dead code region. Drop silently, matching Go's behaviour.
+        return
+    }
+    // Emit in reverse registration order (LIFO).
+    let mut i = scope.locals.len() - 1
+    for i >= 0 {
+        let id = scope.locals[i]
+        let loc = mirFunctionLocal(bs.fn_, id)
+        let instr = mirStorageDeadInstr(id, loc.span)
+        mirLowerEmitInstr(bs, instr)
+        i = i - 1
+    }
+}
+
+/// mirLowerNewLocal mints a fresh local on the enclosing function
+/// and registers it with the current scope frame.
+pub fn mirLowerNewLocal(
+    bs: MirLowerBodyState,
+    name: String,
+    typ: HirType,
+    mutable: Bool,
+    span: MirSpan,
+) -> Int {
+    let id = mirFunctionNewLocal(bs.fn_, name, hirTypeString(typ), mutable, span)
+    mirLowerRegisterScopeLocal(bs, id)
+    id
+}
+
+// ---- Cursor + block helpers ----------------------------------------
+
+/// mirLowerCurrentBlock returns the MIR block the cursor is pointing
+/// at. Returns a sentinel block (id=-1) when the function has no
+/// blocks — this is defensive; seeded functions always have at least
+/// the entry block.
+pub fn mirLowerCurrentBlock(bs: MirLowerBodyState) -> MirBasicBlock {
+    mirFunctionBlock(bs.fn_, bs.cur)
+}
+
+/// mirLowerEmitInstr appends `instr` to the cursor block. When the
+/// block is already terminated, a fresh orphan block is spun up and
+/// becomes the new cursor (matches Go's "unreachable after terminator"
+/// escape hatch so the module still validates).
+pub fn mirLowerEmitInstr(bs: MirLowerBodyState, instr: MirInstr) {
+    let bb = mirLowerCurrentBlock(bs)
+    if bb.hasTerm {
+        let orphan = mirFunctionNewBlock(bs.fn_, instr.span)
+        bs.cur = orphan
+    }
+    mirFunctionAppend(bs.fn_, bs.cur, instr)
+}
+
+/// mirLowerTerminate installs a terminator on the cursor block. If a
+/// terminator is already installed, this is a no-op (Go's behaviour).
+pub fn mirLowerTerminate(bs: MirLowerBodyState, t: MirTerm) {
+    let bb = mirLowerCurrentBlock(bs)
+    if bb.hasTerm {
+        return
+    }
+    mirFunctionTerminate(bs.fn_, bs.cur, t)
+}
+
+/// mirLowerSwitchTo installs a new cursor block and returns the
+/// previous id.
+pub fn mirLowerSwitchTo(bs: MirLowerBodyState, id: Int) -> Int {
+    let prev = bs.cur
+    bs.cur = id
+    prev
+}
+
+/// mirLowerNewBlock allocates a fresh block without switching the
+/// cursor. Returns the new block id.
+pub fn mirLowerNewBlock(bs: MirLowerBodyState, span: MirSpan) -> Int {
+    mirFunctionNewBlock(bs.fn_, span)
+}
+
+/// mirLowerGotoBlock terminates the current block with a goto and
+/// switches the cursor to `target`.
+pub fn mirLowerGotoBlock(bs: MirLowerBodyState, target: Int, span: MirSpan) {
+    mirLowerTerminate(bs, mirGotoTerm(target, span))
+    bs.cur = target
+}
+
+// ---- Defer helpers -------------------------------------------------
+
+pub fn mirLowerPushDeferScope(bs: MirLowerBodyState) {
+    let emptyFrame: List<HirBlock> = []
+    bs.deferFrames.push(emptyFrame)
+}
+
+pub fn mirLowerPopDeferScope(bs: MirLowerBodyState) {
+    if bs.deferFrames.len() == 0 {
+        return
+    }
+    let topIdx = bs.deferFrames.len() - 1
+    let mut kept: List<List<HirBlock>> = []
+    let mut i = 0
+    for f in bs.deferFrames {
+        if i < topIdx {
+            kept.push(f)
+        }
+        i = i + 1
+    }
+    bs.deferFrames = kept
+}
+
+/// mirLowerAddDefer registers a deferred body with the innermost
+/// defer frame. No-op when `body` carries no statements and no
+/// result (empty block).
+pub fn mirLowerAddDefer(bs: MirLowerBodyState, body: HirBlock) {
+    if bs.deferFrames.len() == 0 {
+        return
+    }
+    if body.stmts.len() == 0 && !body.hasResult {
+        return
+    }
+    let topIdx = bs.deferFrames.len() - 1
+    bs.deferFrames[topIdx].push(body)
+}
+
+/// mirLowerReplayTopFrame inlines only the innermost defer frame.
+/// Used for normal block fall-through before popping.
+pub fn mirLowerReplayTopFrame(bs: MirLowerBodyState, span: MirSpan) {
+    if bs.deferFrames.len() == 0 {
+        return
+    }
+    let bb = mirLowerCurrentBlock(bs)
+    if bb.hasTerm {
+        return
+    }
+    let topIdx = bs.deferFrames.len() - 1
+    mirLowerReplayDeferFrame(bs, bs.deferFrames[topIdx], span)
+}
+
+/// mirLowerReplayDefersFromDepth inlines defer frames from the top
+/// down to `depth` inclusive (LIFO). `depth=0` replays everything.
+pub fn mirLowerReplayDefersFromDepth(bs: MirLowerBodyState, depth: Int, span: MirSpan) {
+    let mut d = depth
+    if d < 0 {
+        d = 0
+    }
+    let bb = mirLowerCurrentBlock(bs)
+    if bb.hasTerm {
+        return
+    }
+    let mut i = bs.deferFrames.len() - 1
+    for i >= d {
+        mirLowerReplayDeferFrame(bs, bs.deferFrames[i], span)
+        i = i - 1
+    }
+}
+
+/// mirLowerReplayDeferFrame inlines one defer frame's blocks in LIFO
+/// order. Each body runs in its own pushed scope so cleanup names
+/// don't leak into the surrounding block.
+pub fn mirLowerReplayDeferFrame(bs: MirLowerBodyState, frame: List<HirBlock>, span: MirSpan) {
+    let mut i = frame.len() - 1
+    for i >= 0 {
+        let body = frame[i]
+        mirLowerPushScope(bs)
+        for s in body.stmts {
+            mirLowerStmt(bs, s)
+        }
+        if body.hasResult {
+            let _ = mirLowerExprAsOperand(bs, body.result)
+        }
+        mirLowerPopScope(bs)
+        i = i - 1
+    }
+    let _ = span
+}
+
+/// mirLowerRunDefers replays every defer frame (function-level + all
+/// inner frames) at the cursor. Called at return / ? / fall-through.
+pub fn mirLowerRunDefers(bs: MirLowerBodyState, span: MirSpan) {
+    mirLowerReplayDefersFromDepth(bs, 0, span)
+}
+
+pub fn mirLowerCurrentDeferDepth(bs: MirLowerBodyState) -> Int {
+    bs.deferFrames.len()
+}
+
+// ---- Terminal handling ---------------------------------------------
+
+/// mirLowerFinishNoReturn emits the fall-through epilogue: run all
+/// defers, then terminate with Return (unit-returning fns) or
+/// Unreachable (non-unit fns whose body fell through — the checker
+/// already forbids this so the terminator is defensive poison).
+pub fn mirLowerFinishNoReturn(bs: MirLowerBodyState, span: MirSpan) {
+    let bb = mirLowerCurrentBlock(bs)
+    if bb.hasTerm {
+        return
+    }
+    mirLowerRunDefers(bs, span)
+    if hirTypeIsUnit(bs.retType) || hirTypeIsNever(bs.retType) {
+        mirLowerTerminate(bs, mirReturnTerm(span))
+    } else {
+        mirLowerTerminate(bs, mirUnreachableTerm(span))
+    }
+}
+
+// ====================================================================
+// Expression lowering stubs (Stage 4b)
+// ====================================================================
+//
+// Real expression lowering lands in Stage 4d. For now, every
+// operand/place/into path emits a conservative placeholder (unit
+// const operand, no-op Into) and records a one-shot issue so the
+// output module flags the shape the caller tried to lower. Once 4d
+// lands, these stubs get replaced with a full operand/place/rvalue
+// dispatcher driven by HirExprKind.
+
+/// mirLowerExprAsOperand is the placeholder operand producer. Every
+/// call currently returns a unit-const operand and notes a
+/// "Stage 4d TODO" issue with the expression kind that was asked.
+///
+/// When `e` is already the invalid default (HirExprInvalid) no issue
+/// is emitted — this is the "nothing to lower" path used by bare
+/// returns and similar.
+pub fn mirLowerExprAsOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
+    if !hirExprIsValid(e) {
+        return mirOperandConst(mirConstUnit())
+    }
+    mirLowerNoteIssue(
+        bs.l,
+        "mir_lower Stage 4d TODO: expr kind " + hirExprKindName(e.kind)
+            + " — returning unit-const placeholder operand",
+    )
+    mirOperandConst(mirConstUnit())
+}
+
+/// mirLowerExprInto is the placeholder "lower into dest local"
+/// routine. Stage 4d wires the full RValue-producing dispatcher;
+/// Stage 4b emits a conservative Assign of unit-const into `dest`
+/// and records an issue.
+pub fn mirLowerExprInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: Int,
+    destT: HirType,
+) {
+    if !hirExprIsValid(e) {
+        return
+    }
+    mirLowerNoteIssue(
+        bs.l,
+        "mir_lower Stage 4d TODO: expr kind " + hirExprKindName(e.kind)
+            + " — emitting unit-const Assign into dest",
+    )
+    let destPlace = mirPlace(dest)
+    let rv = mirRVUse(mirOperandConst(mirConstUnit()))
+    let instr = mirAssignInstr(destPlace, rv, mirSpanFromHir(e.span))
+    let _ = destT
+    mirLowerEmitInstr(bs, instr)
+}
+
+// ====================================================================
+// Statement lowering (Stage 4b)
+// ====================================================================
+
+/// mirLowerStmt dispatches on HirStmtKind and routes to the
+/// appropriate handler. Kinds not yet covered by Stage 4b/4c record
+/// a `"Stage 4c TODO: <kind>"` issue and fall through without
+/// emitting instructions.
+pub fn mirLowerStmt(bs: MirLowerBodyState, s: HirStmt) {
+    match s.kind {
+        HirStmtInvalid -> {},
+        HirStmtBlock -> mirLowerBlockStmt(bs, s.block),
+        HirStmtLet -> mirLowerLetStmt(bs, s),
+        HirStmtExpr -> mirLowerExprStmtInner(bs, s),
+        HirStmtReturn -> mirLowerReturnStmt(bs, s),
+        HirStmtBreak -> mirLowerBreakStmt(bs, s),
+        HirStmtContinue -> mirLowerContinueStmt(bs, s),
+        HirStmtDefer -> mirLowerAddDefer(bs, s.deferBody),
+        HirStmtError -> mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: error stmt reached MIR: " + s.errorNote,
+        ),
+        HirStmtAssign -> mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4c TODO: HirStmtAssign — skipped",
+        ),
+        HirStmtIf -> mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4c TODO: HirStmtIf — skipped",
+        ),
+        HirStmtFor -> mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4c TODO: HirStmtFor — skipped",
+        ),
+        HirStmtMatch -> mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4c TODO: HirStmtMatch — skipped",
+        ),
+        HirStmtChanSend -> mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4e TODO: HirStmtChanSend — skipped",
+        ),
+    }
+}
+
+/// mirLowerBlockStmt lowers a block used in statement position
+/// (e.g. a bare `{ ... }` scope). Pushes a scope + defer frame,
+/// lowers each inner stmt, runs the top defer frame on fall-through,
+/// then pops both frames.
+pub fn mirLowerBlockStmt(bs: MirLowerBodyState, b: HirBlock) {
+    mirLowerPushScope(bs)
+    mirLowerPushDeferScope(bs)
+    for s in b.stmts {
+        mirLowerStmt(bs, s)
+    }
+    if b.hasResult {
+        // Block used in statement position — discard the value but
+        // still run the expression's side effects.
+        let _ = mirLowerExprAsOperand(bs, b.result)
+    }
+    mirLowerReplayTopFrame(bs, mirSpanFromHir(b.span))
+    mirLowerPopDeferScope(bs)
+    mirLowerPopScope(bs)
+}
+
+/// mirLowerLetStmt handles `let NAME [: T] = value` + `let mut ...`.
+/// Destructuring-pattern lets are deferred to Stage 4c.
+pub fn mirLowerLetStmt(bs: MirLowerBodyState, s: HirStmt) {
+    // Pick the binding type: declared → value-type → ErrType fallback.
+    let mut t = s.letTyp
+    if !hirTypeIsValid(t) && s.letHasValue {
+        t = s.letValue.typ
+    }
+    if !hirTypeIsValid(t) {
+        t = hirTypeErr()
+    }
+    let span = mirSpanFromHir(s.span)
+    if s.letHasPattern {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4c TODO: destructuring let — pattern kind "
+                + hirPatternKindName(s.letPattern.kind),
+        )
+        return
+    }
+    if s.letName == "" {
+        mirLowerNoteIssue(bs.l, "mir_lower: let stmt with neither name nor pattern")
+        return
+    }
+    let id = mirLowerNewLocal(bs, s.letName, t, s.letMut, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(id, span))
+    if s.letHasValue {
+        mirLowerExprInto(bs, s.letValue, id, t)
+    }
+    mirLowerBindName(bs, s.letName, id)
+}
+
+/// mirLowerExprStmtInner handles expressions used as statements. The
+/// value is discarded; side effects survive via operand lowering.
+pub fn mirLowerExprStmtInner(bs: MirLowerBodyState, s: HirStmt) {
+    let _ = mirLowerExprAsOperand(bs, s.exprValue)
+}
+
+/// mirLowerReturnStmt lowers `return` / `return value`. Values are
+/// lowered into the function's return slot; bare returns skip the
+/// value-lowering step. Defers always run before the terminator.
+pub fn mirLowerReturnStmt(bs: MirLowerBodyState, s: HirStmt) {
+    let span = mirSpanFromHir(s.span)
+    if s.returnHasValue {
+        mirLowerExprInto(bs, s.returnValue, bs.fn_.returnLocal, bs.retType)
+    }
+    mirLowerRunDefers(bs, span)
+    mirLowerTerminate(bs, mirReturnTerm(span))
+}
+
+/// mirLowerBreakStmt lowers `break` inside a loop. Replays defer
+/// frames owned by the loop body, retires loop-body locals, then
+/// jumps to the recorded break block. Records an issue when invoked
+/// outside any loop.
+pub fn mirLowerBreakStmt(bs: MirLowerBodyState, s: HirStmt) {
+    if bs.loopStack.len() == 0 {
+        mirLowerNoteIssue(bs.l, "mir_lower: break outside loop")
+        return
+    }
+    let span = mirSpanFromHir(s.span)
+    let top = bs.loopStack[bs.loopStack.len() - 1]
+    mirLowerReplayDefersFromDepth(bs, top.deferDepth, span)
+    mirLowerEmitStorageDeadFromDepth(bs, top.scopeDepth)
+    mirLowerTerminate(bs, mirGotoTerm(top.breakBlock, span))
+}
+
+pub fn mirLowerContinueStmt(bs: MirLowerBodyState, s: HirStmt) {
+    if bs.loopStack.len() == 0 {
+        mirLowerNoteIssue(bs.l, "mir_lower: continue outside loop")
+        return
+    }
+    let span = mirSpanFromHir(s.span)
+    let top = bs.loopStack[bs.loopStack.len() - 1]
+    mirLowerReplayDefersFromDepth(bs, top.deferDepth, span)
+    mirLowerEmitStorageDeadFromDepth(bs, top.scopeDepth)
+    mirLowerTerminate(bs, mirGotoTerm(top.continueBlock, span))
+}

@@ -406,12 +406,12 @@ typedef struct osty_rt_map {
     int64_t index_len;
     int64_t *index_slots;
     int64_t index_inline[OSTY_RT_MAP_INLINE_INDEX_CAP];
-    // Per-map recursive mutex. Guarantees that all public map ops are
-    // mutually exclusive on a single instance so concurrent mutation
-    // can't realloc the slot arrays mid-read, drop the len mid-walk,
-    // or interleave an insert's memmove. Recursive so that `update`
-    // callbacks that touch the same map from within the lock don't
-    // self-deadlock.
+    // Per-map recursive mutex. Public ops elide it while the runtime
+    // is still single-threaded, then enable it permanently on first
+    // task spawn so concurrent mutation can't realloc the slot arrays
+    // mid-read, drop the len mid-walk, or interleave an insert's
+    // memmove. Recursive so that `update` callbacks that touch the
+    // same map from within the lock don't self-deadlock.
     osty_rt_rmu_t mu;
     int mu_init;
 } osty_rt_map;
@@ -947,6 +947,20 @@ static uint64_t osty_gc_allocate_stable_id(void) {
 static osty_rt_once_t osty_gc_lock_once = OSTY_RT_ONCE_INIT;
 static osty_rt_rmu_t osty_gc_lock;
 static int64_t osty_concurrent_workers = 0;
+static int osty_runtime_has_concurrency = 0;
+
+static inline int64_t osty_rt_concurrent_workers_load(void) {
+    return __atomic_load_n(&osty_concurrent_workers, __ATOMIC_ACQUIRE);
+}
+
+static inline bool osty_rt_runtime_has_concurrency(void) {
+    return __atomic_load_n(&osty_runtime_has_concurrency,
+                           __ATOMIC_ACQUIRE) != 0;
+}
+
+static inline void osty_rt_enable_concurrency_runtime(void) {
+    __atomic_store_n(&osty_runtime_has_concurrency, 1, __ATOMIC_RELEASE);
+}
 
 static void osty_gc_lock_init(void) {
     if (osty_rt_rmu_init(&osty_gc_lock) != 0) {
@@ -965,17 +979,17 @@ static void osty_gc_release(void) {
 
 static void osty_sched_workers_inc(void) {
     osty_gc_acquire();
-    osty_concurrent_workers += 1;
+    (void)__atomic_add_fetch(&osty_concurrent_workers, 1, __ATOMIC_ACQ_REL);
     osty_gc_release();
 }
 
 static void osty_sched_workers_dec(void) {
     osty_gc_acquire();
-    if (osty_concurrent_workers <= 0) {
+    if (osty_rt_concurrent_workers_load() <= 0) {
         osty_gc_release();
         osty_rt_abort("scheduler: worker counter underflow");
     }
-    osty_concurrent_workers -= 1;
+    (void)__atomic_sub_fetch(&osty_concurrent_workers, 1, __ATOMIC_ACQ_REL);
     osty_gc_release();
 }
 
@@ -2470,14 +2484,94 @@ static uint64_t osty_rt_hash_mix64(uint64_t h) {
     return h;
 }
 
-static size_t osty_rt_hash_bytes(const unsigned char *bytes, size_t len) {
-    uint64_t h = 1469598103934665603ULL;
-    size_t i;
-    for (i = 0; i < len; i++) {
-        h ^= (uint64_t)bytes[i];
-        h *= 1099511628211ULL;
+#define OSTY_RT_STRING_CACHE_SLOTS 256
+
+typedef struct osty_rt_string_cache_entry {
+    const char *value;
+    size_t len;
+    size_t hash;
+} osty_rt_string_cache_entry;
+
+static OSTY_RT_TLS osty_rt_string_cache_entry
+    osty_rt_string_cache[OSTY_RT_STRING_CACHE_SLOTS];
+
+static void osty_rt_string_measure(const char *value,
+                                   size_t *len_out,
+                                   size_t *hash_out) {
+    size_t len = 0;
+    size_t hash = (size_t)osty_rt_hash_mix64(0ULL);
+    if (value != NULL) {
+        size_t idx = (size_t)osty_rt_hash_mix64(
+                         ((uint64_t)(uintptr_t)value) >> 4) &
+                     (OSTY_RT_STRING_CACHE_SLOTS - 1);
+        osty_rt_string_cache_entry *entry = &osty_rt_string_cache[idx];
+        if (entry->value == value) {
+            len = entry->len;
+            hash = entry->hash;
+        } else {
+            const unsigned char *cursor = (const unsigned char *)value;
+            uint64_t h = 1469598103934665603ULL;
+            while (*cursor != '\0') {
+                h ^= (uint64_t)(*cursor++);
+                h *= 1099511628211ULL;
+                len += 1;
+            }
+            hash = (size_t)osty_rt_hash_mix64(h);
+            entry->value = value;
+            entry->len = len;
+            entry->hash = hash;
+        }
     }
-    return (size_t)osty_rt_hash_mix64(h);
+    if (len_out != NULL) {
+        *len_out = len;
+    }
+    if (hash_out != NULL) {
+        *hash_out = hash;
+    }
+}
+
+static inline size_t osty_rt_string_len(const char *value) {
+    size_t len = 0;
+    osty_rt_string_measure(value, &len, NULL);
+    return len;
+}
+
+static inline size_t osty_rt_string_hash(const char *value) {
+    size_t hash = (size_t)osty_rt_hash_mix64(0ULL);
+    osty_rt_string_measure(value, NULL, &hash);
+    return hash;
+}
+
+static int osty_rt_string_compare_bytes(const char *left, const char *right) {
+    size_t left_len = 0;
+    size_t right_len = 0;
+    size_t common = 0;
+    int cmp = 0;
+    if (left == right) {
+        return 0;
+    }
+    if (left == NULL) {
+        return (right == NULL) ? 0 : -1;
+    }
+    if (right == NULL) {
+        return 1;
+    }
+    osty_rt_string_measure(left, &left_len, NULL);
+    osty_rt_string_measure(right, &right_len, NULL);
+    common = (left_len < right_len) ? left_len : right_len;
+    if (common != 0) {
+        cmp = memcmp(left, right, common);
+        if (cmp != 0) {
+            return cmp;
+        }
+    }
+    if (left_len < right_len) {
+        return -1;
+    }
+    if (left_len > right_len) {
+        return 1;
+    }
+    return 0;
 }
 
 static size_t osty_rt_map_key_hash(int64_t kind, const void *key) {
@@ -2501,10 +2595,7 @@ static size_t osty_rt_map_key_hash(int64_t kind, const void *key) {
     case OSTY_RT_ABI_STRING: {
         const char *value = NULL;
         memcpy(&value, key, sizeof(value));
-        if (value == NULL) {
-            return (size_t)osty_rt_hash_mix64(0ULL);
-        }
-        return osty_rt_hash_bytes((const unsigned char *)value, strlen(value));
+        return osty_rt_string_hash(value);
     }
     default:
         osty_rt_abort("unsupported map key hash kind");
@@ -3744,7 +3835,7 @@ void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots,
         osty_gc_release();
         osty_rt_abort("incremental start called while collection already in progress");
     }
-    if (osty_concurrent_workers > 0) {
+    if (osty_rt_concurrent_workers_load() > 0) {
         osty_gc_release();
         return;
     }
@@ -4361,16 +4452,7 @@ static int osty_rt_compare_f64_ascending(const void *left, const void *right) {
 static int osty_rt_compare_string_ascending(const void *left, const void *right) {
     const char *left_value = *(const char * const *)left;
     const char *right_value = *(const char * const *)right;
-    if (left_value == NULL || right_value == NULL) {
-        if (left_value == right_value) {
-            return 0;
-        }
-        if (left_value == NULL) {
-            return -1;
-        }
-        return 1;
-    }
-    return strcmp(left_value, right_value);
+    return osty_rt_string_compare_bytes(left_value, right_value);
 }
 
 void *osty_rt_list_sorted_i64(void *raw_list) {
@@ -4489,10 +4571,23 @@ void *osty_rt_list_slice(void *raw_list, int64_t start, int64_t end) {
 }
 
 bool osty_rt_strings_Equal(const char *left, const char *right) {
-    if (left == NULL || right == NULL) {
-        return left == right;
+    size_t left_len = 0;
+    size_t right_len = 0;
+    if (left == right) {
+        return true;
     }
-    return strcmp(left, right) == 0;
+    if (left == NULL || right == NULL) {
+        return false;
+    }
+    osty_rt_string_measure(left, &left_len, NULL);
+    osty_rt_string_measure(right, &right_len, NULL);
+    if (left_len != right_len) {
+        return false;
+    }
+    if (left_len == 0) {
+        return true;
+    }
+    return memcmp(left, right, left_len) == 0;
 }
 
 const char *osty_rt_int_to_string(int64_t value) {
@@ -4687,7 +4782,7 @@ int64_t osty_rt_strings_Compare(const char *left, const char *right) {
     if (right == NULL) {
         return left[0] == '\0' ? 0 : 1;
     }
-    result = strcmp(left, right);
+    result = osty_rt_string_compare_bytes(left, right);
     if (result < 0) {
         return -1;
     }
@@ -4737,15 +4832,12 @@ int64_t osty_rt_strings_IndexOf(const char *value, const char *substr) {
 }
 
 int64_t osty_rt_strings_ByteLen(const char *value) {
-    if (value == NULL) {
-        return 0;
-    }
-    return (int64_t)strlen(value);
+    return (int64_t)osty_rt_string_len(value);
 }
 
 const char *osty_rt_strings_Concat(const char *left, const char *right) {
-    size_t left_len = (left == NULL) ? 0 : strlen(left);
-    size_t right_len = (right == NULL) ? 0 : strlen(right);
+    size_t left_len = osty_rt_string_len(left);
+    size_t right_len = osty_rt_string_len(right);
     char *out = (char *)osty_gc_allocate_managed(left_len + right_len + 1, OSTY_GC_KIND_STRING, "runtime.strings.concat", NULL, NULL);
     if (left_len != 0) {
         memcpy(out, left, left_len);
@@ -4771,7 +4863,7 @@ const char *osty_rt_strings_ConcatN(int64_t count, const char *const *parts) {
     if (count > 0 && parts != NULL) {
         for (i = 0; i < count; i++) {
             if (parts[i] != NULL) {
-                total += strlen(parts[i]);
+                total += osty_rt_string_len(parts[i]);
             }
         }
     }
@@ -4782,7 +4874,7 @@ const char *osty_rt_strings_ConcatN(int64_t count, const char *const *parts) {
             if (parts[i] == NULL) {
                 continue;
             }
-            size_t n = strlen(parts[i]);
+            size_t n = osty_rt_string_len(parts[i]);
             if (n != 0) {
                 memcpy(cursor, parts[i], n);
                 cursor += n;
@@ -4808,7 +4900,7 @@ bool osty_rt_strings_HasPrefix(const char *value, const char *prefix) {
     if (value == NULL || prefix == NULL) {
         return false;
     }
-    prefix_len = strlen(prefix);
+    prefix_len = osty_rt_string_len(prefix);
     return strncmp(value, prefix, prefix_len) == 0;
 }
 
@@ -4818,8 +4910,8 @@ bool osty_rt_strings_HasSuffix(const char *value, const char *suffix) {
     if (value == NULL || suffix == NULL) {
         return false;
     }
-    value_len = strlen(value);
-    suffix_len = strlen(suffix);
+    value_len = osty_rt_string_len(value);
+    suffix_len = osty_rt_string_len(suffix);
     if (suffix_len > value_len) {
         return false;
     }
@@ -5065,7 +5157,7 @@ void *osty_rt_strings_Bytes(const char *value) {
         return out;
     }
     cursor = (const unsigned char *)value;
-    n = strlen(value);
+    n = osty_rt_string_len(value);
     for (i = 0; i < n; i++) {
         item = (int8_t)cursor[i];
         osty_rt_list_push_bytes_v1(out, &item, (int64_t)sizeof(item));
@@ -5091,12 +5183,12 @@ const char *osty_rt_strings_Join(void *raw_parts, const char *sep) {
         return out;
     }
     count = parts->len;
-    sep_len = (sep == NULL) ? 0 : strlen(sep);
+    sep_len = osty_rt_string_len(sep);
     total = 0;
     for (i = 0; i < count; i++) {
         piece = ((const char **)parts->data)[i];
         if (piece != NULL) {
-            total += strlen(piece);
+            total += osty_rt_string_len(piece);
         }
         if (i + 1 < count) {
             total += sep_len;
@@ -5107,7 +5199,7 @@ const char *osty_rt_strings_Join(void *raw_parts, const char *sep) {
     for (i = 0; i < count; i++) {
         piece = ((const char **)parts->data)[i];
         if (piece != NULL) {
-            piece_len = strlen(piece);
+            piece_len = osty_rt_string_len(piece);
             if (piece_len != 0) {
                 memcpy(cursor, piece, piece_len);
                 cursor += piece_len;
@@ -5133,7 +5225,7 @@ const char *osty_rt_strings_Repeat(const char *value, int64_t n) {
     if (n <= 0) {
         return osty_rt_string_dup_site("", 0, "runtime.strings.repeat.empty");
     }
-    value_len = strlen(value);
+    value_len = osty_rt_string_len(value);
     if (value_len == 0) {
         return osty_rt_string_dup_site("", 0, "runtime.strings.repeat.empty");
     }
@@ -5693,15 +5785,40 @@ void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, 
 // lock across get + callback + insert. Recursive mutex so calls from
 // a user callback into the same map (e.g. counts.len()) re-acquire
 // instead of self-deadlocking.
+//
+// Single-threaded fast path: when `osty_concurrent_workers == 0`
+// there are no other threads that could observe partial state, so
+// both lock and unlock become no-ops. This is safe because:
+//   - The counter is incremented by the spawning thread BEFORE the
+//     new worker thread starts (see osty_rt_task_spawn), so a live
+//     worker always has workers >= 1 from every reader's view.
+//   - The counter is decremented only when workers join, which can
+//     only happen AFTER the current thread already observed > 0.
+//   - Readers on the spawning thread that see == 0 know the runtime
+//     is single-threaded at that moment; another thread cannot
+//     concurrently appear without this thread first incrementing
+//     the counter (which only happens via taskGroup → spawn), so
+//     the decision is stable for the duration of the op.
+//
+// The saving is substantial: every keyed op currently pays one
+// CRITICAL_SECTION enter/leave pair (Windows) or pthread_mutex
+// lock/unlock pair (POSIX) whether or not another thread exists.
+// In pure-main-thread programs that's 100% overhead on every
+// Map op — common case for CLI tools, build workloads, and the
+// whole osty-vs-go benchmark suite.
 void osty_rt_map_lock(void *raw_map) {
+    if (!osty_rt_runtime_has_concurrency()) return;
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     if (map == NULL || !map->mu_init) return;
+    if (osty_concurrent_workers == 0) return;
     osty_rt_rmu_lock(&map->mu);
 }
 
 void osty_rt_map_unlock(void *raw_map) {
+    if (!osty_rt_runtime_has_concurrency()) return;
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     if (map == NULL || !map->mu_init) return;
+    if (osty_concurrent_workers == 0) return;
     osty_rt_rmu_unlock(&map->mu);
 }
 
@@ -5956,6 +6073,34 @@ OSTY_RT_DEFINE_MAP_KEY_OPS(i1, bool)
 OSTY_RT_DEFINE_MAP_KEY_OPS(f64, double)
 OSTY_RT_DEFINE_MAP_KEY_OPS(ptr, void *)
 OSTY_RT_DEFINE_MAP_KEY_OPS(string, const char *)
+
+// `osty_rt_map_incr_i64_<suffix>(map, key, delta)`: perform
+// `map[key] = (map.get(key) ?? 0) + delta` as a single atomic
+// operation under one lock acquire/release. Replaces the common
+// `containsKey + getOr + insert` 3-op pattern for Map<K, Int>
+// counters — one hash lookup instead of three, one lock-pair
+// instead of three.
+//
+// Returns the new value. Used by Map<K, Int>.incrBy stdlib method
+// and by the compiler pattern-matcher that recognises the
+// legacy anti-pattern in user code.
+#define OSTY_RT_DEFINE_MAP_INCR_I64_OPS(suffix, ctype) \
+int64_t osty_rt_map_incr_i64_##suffix(void *raw_map, ctype key, int64_t delta) { \
+    int64_t current = 0; \
+    int64_t next; \
+    osty_rt_map_lock(raw_map); \
+    osty_rt_map_get_raw(raw_map, &key, &current); \
+    next = current + delta; \
+    osty_rt_map_insert_raw(raw_map, &key, &next); \
+    osty_rt_map_unlock(raw_map); \
+    return next; \
+}
+
+OSTY_RT_DEFINE_MAP_INCR_I64_OPS(i64, int64_t)
+OSTY_RT_DEFINE_MAP_INCR_I64_OPS(i1, bool)
+OSTY_RT_DEFINE_MAP_INCR_I64_OPS(f64, double)
+OSTY_RT_DEFINE_MAP_INCR_I64_OPS(ptr, void *)
+OSTY_RT_DEFINE_MAP_INCR_I64_OPS(string, const char *)
 
 static void osty_rt_set_reserve(osty_rt_set *set, int64_t min_cap) {
     int64_t next_cap = set->cap;
@@ -7611,7 +7756,7 @@ void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t
      * threads still reference. Defer until workers drain; a concurrent
      * collector is Phase 3. */
     osty_gc_acquire();
-    if (osty_concurrent_workers > 0) {
+    if (osty_rt_concurrent_workers_load() > 0) {
         osty_gc_release();
         return;
     }
@@ -7621,7 +7766,7 @@ void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t
 
 void osty_gc_debug_collect(void) {
     osty_gc_acquire();
-    if (osty_concurrent_workers > 0) {
+    if (osty_rt_concurrent_workers_load() > 0) {
         /* Same cross-thread root safety gate as safepoint_v1. */
         osty_gc_release();
         return;
@@ -7637,7 +7782,7 @@ void osty_gc_debug_collect(void) {
  * the tier explicitly regardless of pressure state. */
 void osty_gc_debug_collect_minor(void) {
     osty_gc_acquire();
-    if (osty_concurrent_workers > 0) {
+    if (osty_rt_concurrent_workers_load() > 0) {
         osty_gc_release();
         return;
     }
@@ -7647,7 +7792,7 @@ void osty_gc_debug_collect_minor(void) {
 
 void osty_gc_debug_collect_major(void) {
     osty_gc_acquire();
-    if (osty_concurrent_workers > 0) {
+    if (osty_rt_concurrent_workers_load() > 0) {
         osty_gc_release();
         return;
     }
@@ -9737,6 +9882,7 @@ static void *osty_rt_task_spawn_internal(void *group, void *body_env) {
     if (body_env == NULL) {
         osty_rt_abort("task_spawn: null body env");
     }
+    osty_rt_enable_concurrency_runtime();
     osty_sched_pool_lazy_init();
 
     osty_rt_task_handle_impl *h = osty_sched_alloc_handle();

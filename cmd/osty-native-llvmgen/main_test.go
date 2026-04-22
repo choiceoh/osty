@@ -7,6 +7,23 @@ import (
 	"testing"
 )
 
+func runLLVMGenSource(t *testing.T, path string, source string) llvmgenResponse {
+	t.Helper()
+	reqBody, err := json.Marshal(llvmgenRequest{Path: path, Source: source})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := run(bytes.NewReader(reqBody), &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp llvmgenResponse
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return resp
+}
+
 func TestRunEmitsNativeOwnedLLVMIRForSource(t *testing.T) {
 	var stdout bytes.Buffer
 	stdin := strings.NewReader(`{"path":"main.osty","source":"fn pick(flag: Bool) -> Int { if flag { 42 } else { 0 } }\nfn main() { let mut i = 0 let mut sum = 0 for i < 3 { sum = sum + pick(i == 2) i = i + 1 } println(sum) }\n"}`)
@@ -146,6 +163,95 @@ func TestRunUsesNativeOwnedExportAndCABIShape(t *testing.T) {
 	}
 	if !strings.Contains(resp.LLVMIR, "@osty.gc.native_entry_v1 = dso_local alias ptr, ptr @native_entry_v1") {
 		t.Fatalf("llvmIr missing export alias:\n%s", resp.LLVMIR)
+	}
+}
+
+func TestRunCoversRuntimeStringsSplitAndListToSet(t *testing.T) {
+	resp := runLLVMGenSource(t, "main.osty", `use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+
+fn main() {
+    let items = strings.Split("pear,apple", ",")
+    let seen = items.toSet()
+    println(seen.contains("pear"))
+}
+`)
+	if !resp.Covered {
+		t.Fatalf("covered = false, want true")
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
+		"call ptr @osty_rt_strings_Split(",
+		"declare ptr @osty_rt_list_to_set_string(ptr)",
+		"call i1 @osty_rt_set_contains_string(",
+	} {
+		if !strings.Contains(resp.LLVMIR, want) {
+			t.Fatalf("llvmIr missing %q:\n%s", want, resp.LLVMIR)
+		}
+	}
+}
+
+func TestRunCoversStdTestingHelpers(t *testing.T) {
+	resp := runLLVMGenSource(t, "main.osty", `use std.testing
+
+enum CalcError {
+    DivideByZero,
+}
+
+fn div(a: Int, b: Int) -> Result<Int, CalcError> {
+    if b == 0 { Err(DivideByZero) } else { Ok(a / b) }
+}
+
+fn main() {
+    let q = testing.expectOk(div(10, 2))
+    testing.assertEq(q, 5)
+    testing.expectError(div(1, 0))
+}
+`)
+	if !resp.Covered {
+		t.Fatalf("covered = false, want true")
+	}
+	for _, want := range []string{
+		"declare void @exit(i32)",
+		"extractvalue %Result.",
+		"testing.expectOk failed",
+		"testing.expectError failed",
+		"testing.assertEq failed",
+	} {
+		if !strings.Contains(resp.LLVMIR, want) {
+			t.Fatalf("llvmIr missing %q:\n%s", want, resp.LLVMIR)
+		}
+	}
+}
+
+func TestRunCoversNestedStructBindingPattern(t *testing.T) {
+	resp := runLLVMGenSource(t, "main.osty", `struct Inner {
+    x: Int
+}
+
+struct Outer {
+    inner: Inner
+}
+
+fn main() {
+    let outer @ Outer { inner: Inner { x } } = Outer { inner: Inner { x: 7 } }
+    println(x)
+    println(outer.inner.x)
+}
+`)
+	if !resp.Covered {
+		t.Fatalf("covered = false, want true")
+	}
+	for _, want := range []string{
+		"%Inner = type { i64 }",
+		"%Outer = type { %Inner }",
+		"extractvalue %Outer",
+		"extractvalue %Inner",
+	} {
+		if !strings.Contains(resp.LLVMIR, want) {
+			t.Fatalf("llvmIr missing %q:\n%s", want, resp.LLVMIR)
+		}
 	}
 }
 

@@ -64,6 +64,8 @@ pub fn checkCodeCannotInferTyParam() -> String { "E0748" }
 pub fn checkCodeGenericBoundViolation() -> String { "E0749" }
 pub fn checkCodeInterfaceNotSatisfied() -> String { "E0751" }
 pub fn checkCodeAsQuestionBadType() -> String { "E0757" }
+pub fn checkCodeUndefinedLabel() -> String { "E0763" }
+pub fn checkCodeLabelShadow() -> String { "E0764" }
 pub fn checkCodeClosureAnnotationRequired() -> String { "E0752" }
 pub fn checkCodePatternShapeMismatch() -> String { "E0753" }
 pub fn checkCodeRuntimePrivilegeViolation() -> String { "E0770" }
@@ -307,6 +309,24 @@ pub fn diagAsQuestionBadType(ty: String, start: Int, end: Int) -> CheckDiagnosti
     checkDiag(
         checkCodeAsQuestionBadType(),
         "`as?` target type `{ty}` must implement `Error`",
+        start,
+        end,
+    )
+}
+
+pub fn diagUndefinedLabel(label: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeUndefinedLabel(),
+        "label `'{label}` is not in scope; no enclosing loop carries this name",
+        start,
+        end,
+    )
+}
+
+pub fn diagLabelShadow(label: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeLabelShadow(),
+        "label `'{label}` shadows an outer label of the same name",
         start,
         end,
     )

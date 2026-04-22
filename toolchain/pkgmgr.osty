@@ -940,9 +940,24 @@ fn emptySelfPkgGraphNode() -> SelfPkgGraphNode {
 }
 
 /// selfPkgResolveRegistryGraph resolves direct registry dependencies into a
-/// graph. The input dependency table is pure; a host shim supplies candidates
-/// and their dependency lists after reading registry metadata.
+/// graph. Delegates to the PubGrub solver in `pkgmgr_sat.osty`; that
+/// path handles diamond conflicts and backtracking that the earlier
+/// greedy walk could not. The greedy implementation is preserved as
+/// `selfPkgResolveRegistryGraphGreedy` for comparison / regression
+/// bisection.
 pub fn selfPkgResolveRegistryGraph(
+    deps: List<SelfPkgDependency>,
+    candidates: List<SelfPkgCandidate>,
+    candidateDeps: List<SelfPkgCandidateDeps>,
+    locked: List<SelfPkgLockPackage>,
+) -> SelfPkgGraph {
+    selfPkgResolveRegistryGraphPubGrub(deps, candidates, candidateDeps, locked)
+}
+
+/// selfPkgResolveRegistryGraphGreedy is the original "first-match-wins"
+/// DFS resolver. Kept for diagnostic / comparison use — the public
+/// `selfPkgResolveRegistryGraph` now routes through PubGrub.
+pub fn selfPkgResolveRegistryGraphGreedy(
     deps: List<SelfPkgDependency>,
     candidates: List<SelfPkgCandidate>,
     candidateDeps: List<SelfPkgCandidateDeps>,

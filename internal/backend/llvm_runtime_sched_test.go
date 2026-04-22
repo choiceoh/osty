@@ -2265,3 +2265,100 @@ int main(void) {
 		t.Fatalf("STW total regressed beyond 1s: start=%d finish=%d", startNs, finishNs)
 	}
 }
+
+func TestBundledRuntimeMapLockElidesUntilConcurrencyAndProtectsAfterSpawn(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_map_lock_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_map_lock_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, void *value_trace);
+void osty_rt_map_insert_i64(void *raw_map, int64_t key, const void *value);
+void osty_rt_map_get_or_abort_i64(void *raw_map, int64_t key, void *out_value);
+void osty_rt_map_lock(void *raw_map);
+void osty_rt_map_unlock(void *raw_map);
+
+void *osty_rt_task_spawn(void *body_env);
+int64_t osty_rt_task_handle_join(void *handle);
+void osty_rt_thread_yield(void);
+
+enum {
+    OSTY_RT_ABI_I64 = 1,
+    N_WORKERS = 4,
+    N_ITERS = 4000,
+};
+
+typedef struct map_inc_env {
+    void *fn;
+    void *map;
+    int64_t iters;
+} map_inc_env;
+
+static int64_t body_increment_shared_map(void *env) {
+    map_inc_env *e = (map_inc_env *)env;
+    for (int64_t i = 0; i < e->iters; i++) {
+        int64_t value = 0;
+        osty_rt_map_lock(e->map);
+        osty_rt_map_get_or_abort_i64(e->map, 1, &value);
+        value += 1;
+        osty_rt_map_insert_i64(e->map, 1, &value);
+        osty_rt_map_unlock(e->map);
+        if ((i & 63) == 0) {
+            osty_rt_thread_yield();
+        }
+    }
+    return 0;
+}
+
+int main(void) {
+    void *map = osty_rt_map_new(OSTY_RT_ABI_I64, OSTY_RT_ABI_I64,
+                                (int64_t)sizeof(int64_t), NULL);
+    int64_t zero = 0;
+    int64_t total = 0;
+    void *handles[N_WORKERS];
+    map_inc_env envs[N_WORKERS];
+    map_inc_env main_env = { (void *)body_increment_shared_map, map, N_ITERS };
+
+    /* Single-threaded fast path: lock/unlock should be a safe no-op
+     * before concurrency has ever been activated. */
+    osty_rt_map_lock(map);
+    osty_rt_map_insert_i64(map, 1, &zero);
+    osty_rt_map_unlock(map);
+
+    for (int i = 0; i < N_WORKERS; i++) {
+        envs[i].fn = (void *)body_increment_shared_map;
+        envs[i].map = map;
+        envs[i].iters = N_ITERS;
+        handles[i] = osty_rt_task_spawn((void *)&envs[i]);
+    }
+    (void)body_increment_shared_map((void *)&main_env);
+    for (int i = 0; i < N_WORKERS; i++) {
+        (void)osty_rt_task_handle_join(handles[i]);
+    }
+
+    osty_rt_map_get_or_abort_i64(map, 1, &total);
+    printf("%lld\n", (long long)total);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-O2", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, out)
+	}
+	out, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, out)
+	}
+	if got, want := string(out), "20000\n"; got != want {
+		t.Fatalf("runtime map-lock harness stdout = %q, want %q", got, want)
+	}
+}

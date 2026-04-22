@@ -176,15 +176,15 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 	unrollEnable, unrollCount := extractUnrollArgs(fn.Annotations)
 	noVec := hasNamedAnnotation(fn.Annotations, "no_vectorize")
 	out := &FnDecl{
-		Name:               fn.Name,
-		Return:             l.lowerType(fn.ReturnType),
-		ReceiverMut:        fn.Recv != nil && fn.Recv.Mut,
-		Exported:           fn.Pub,
-		SpanV:              nodeSpan(fn),
-		ExportSymbol:       extractExportSymbol(fn.Annotations),
-		CABI:               hasNamedAnnotation(fn.Annotations, "c_abi"),
-		IsIntrinsic:        hasNamedAnnotation(fn.Annotations, "intrinsic"),
-		NoAlloc:            hasNamedAnnotation(fn.Annotations, "no_alloc"),
+		Name:         fn.Name,
+		Return:       l.lowerType(fn.ReturnType),
+		ReceiverMut:  fn.Recv != nil && fn.Recv.Mut,
+		Exported:     fn.Pub,
+		SpanV:        nodeSpan(fn),
+		ExportSymbol: extractExportSymbol(fn.Annotations),
+		CABI:         hasNamedAnnotation(fn.Annotations, "c_abi"),
+		IsIntrinsic:  hasNamedAnnotation(fn.Annotations, "intrinsic"),
+		NoAlloc:      hasNamedAnnotation(fn.Annotations, "no_alloc"),
 		// v0.6 A5.2: vectorize is default-on. `#[no_vectorize]` is
 		// the sole way to opt out.
 		Vectorize:          !noVec,
@@ -704,6 +704,12 @@ func (l *lowerer) lowerNamedType(nt *ast.NamedType) Type {
 	}
 
 	// No resolver data available — best effort on the source name.
+	if pkg == "" {
+		switch name {
+		case "List", "Map", "Set", "Option", "Result":
+			return &NamedType{Package: "", Name: name, Args: args, Builtin: true}
+		}
+	}
 	return &NamedType{Package: pkg, Name: name, Args: args}
 }
 
@@ -1140,9 +1146,24 @@ func assignOp(k token.Kind) AssignOp {
 func (l *lowerer) lowerExpr(e ast.Expr) Expr {
 	switch e := e.(type) {
 	case *ast.IntLit:
-		return &IntLit{Text: e.Text, T: l.exprType(e), SpanV: nodeSpan(e)}
+		t := l.exprType(e)
+		if t == ErrTypeVal {
+			// Default int-literal type when the checker didn't
+			// populate Types[e] — covers literals nested inside
+			// contexts the Go-hosted checker skips (string interp
+			// parts, match arm bodies, etc.). Without this, a
+			// stray `+ 1` poisons the enclosing BinaryExpr to
+			// ErrType, which cascades to every consumer of the
+			// match / block result.
+			t = TInt
+		}
+		return &IntLit{Text: e.Text, T: t, SpanV: nodeSpan(e)}
 	case *ast.FloatLit:
-		return &FloatLit{Text: e.Text, T: l.exprType(e), SpanV: nodeSpan(e)}
+		t := l.exprType(e)
+		if t == ErrTypeVal {
+			t = TFloat
+		}
+		return &FloatLit{Text: e.Text, T: t, SpanV: nodeSpan(e)}
 	case *ast.BoolLit:
 		return &BoolLit{Value: e.Value, SpanV: nodeSpan(e)}
 	case *ast.CharLit:
@@ -1463,11 +1484,11 @@ func recoverBinaryType(op BinOp, left, right Expr) Type {
 //
 //   - List<T>[i]      → T    (direct element access, the dominant case)
 //   - Map<K, V>[k]    → V    (index form that panics on miss; matches
-//                              the native backend's intrinsic dispatch)
+//     the native backend's intrinsic dispatch)
 //   - Bytes[i]        → Byte
 //   - String[i]       → Char (semantically a code-point read, though
-//                              real Osty source uses .chars() / .bytes()
-//                              and almost never String[i] directly)
+//     real Osty source uses .chars() / .bytes()
+//     and almost never String[i] directly)
 //
 // Returns ErrTypeVal when the base itself is un-typed or non-indexable
 // — leaving the cascade behaviour from before the recovery.
@@ -1698,6 +1719,20 @@ func recoverCallReturnType(callee Expr) Type {
 	return ErrTypeVal
 }
 
+// recoverMethodCallType patches the one method-call shape that the
+// generic callee-return recovery cannot see: `recv.downcast::<T>()`.
+// The IR method form stores only the receiver + method name, so the
+// synthetic checker signature (`Error.downcast::<T>() -> T?`) is not
+// available as a first-class FnType on the lowered node. When the
+// checker/native-checker boundary drops the call's own type but still
+// records the turbofish args, recover the spec-mandated `T?` surface.
+func recoverMethodCallType(name string, typeArgs []Type) Type {
+	if name == "downcast" && len(typeArgs) == 1 && typeArgs[0] != nil && typeArgs[0] != ErrTypeVal {
+		return &OptionalType{Inner: typeArgs[0]}
+	}
+	return ErrTypeVal
+}
+
 // lowerArg lowers a single call argument, preserving its keyword name
 // when present.
 func (l *lowerer) lowerArg(a *ast.Arg) Arg {
@@ -1769,6 +1804,31 @@ func (l *lowerer) lowerQualifiedCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArg
 	if t == ErrTypeVal {
 		t = recoverCallReturnType(callee)
 	}
+	// The Go-hosted checker doesn't register `use X { fn Y(...) -> R
+	// }` member signatures on the package symbol, so `host.Y` ends up
+	// as <error> in both the checker types map and the callee's
+	// FnType. Fall back to reading the UseDecl body (for inline FFI
+	// signatures) or the resolved package scope (for stdlib /
+	// workspace modules) directly: the AST already has the signature,
+	// we just need to lower it. Without this, MIR's typeSupported
+	// rejects the synthetic result temp with `unsupported local type
+	// <error>` for every runtime / stdlib module call site.
+	if t == ErrTypeVal || t == nil {
+		if id, ok := fx.X.(*ast.Ident); ok {
+			if sym := l.symbol(id); sym != nil && sym.Kind == resolve.SymPackage {
+				if ud, ok := sym.Decl.(*ast.UseDecl); ok && ud != nil {
+					if ret := l.lookupUseDeclFnReturn(ud, fx.Name); ret != nil {
+						t = ret
+					}
+				}
+				if (t == ErrTypeVal || t == nil) && sym.Package != nil {
+					if ret := l.lookupPackageFnReturn(sym.Package, fx.Name); ret != nil {
+						t = ret
+					}
+				}
+			}
+		}
+	}
 	out := &CallExpr{
 		Callee:   callee,
 		TypeArgs: typeArgs,
@@ -1781,21 +1841,148 @@ func (l *lowerer) lowerQualifiedCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArg
 	return out
 }
 
+// lookupUseDeclFnReturn scans a `use X { ... }` body for an fn named
+// fnName and returns its lowered return type (TUnit when the source
+// declared no return type). Returns nil when no matching fn is found.
+// This is the fallback path used by lowerQualifiedCall when the
+// checker left the call's result type as <error>.
+func (l *lowerer) lookupUseDeclFnReturn(ud *ast.UseDecl, fnName string) Type {
+	if ud == nil {
+		return nil
+	}
+	for _, d := range ud.GoBody {
+		fn, ok := d.(*ast.FnDecl)
+		if !ok || fn == nil || fn.Name != fnName {
+			continue
+		}
+		if fn.ReturnType == nil {
+			return TUnit
+		}
+		return l.lowerType(fn.ReturnType)
+	}
+	return nil
+}
+
+// lookupPackageFnReturn finds a top-level public fn named fnName in
+// the resolved package and returns its lowered return type. Used by
+// lowerQualifiedCall as the fallback when the UseDecl is a bare
+// `use std.strings as X` (no inline FFI body) — the fn lives in the
+// package's PkgScope, and its AST is on the resolved package file.
+func (l *lowerer) lookupPackageFnReturn(pkg *resolve.Package, fnName string) Type {
+	if pkg == nil {
+		return nil
+	}
+	for _, pf := range pkg.Files {
+		if pf == nil || pf.File == nil {
+			continue
+		}
+		for _, decl := range pf.File.Decls {
+			fn, ok := decl.(*ast.FnDecl)
+			if !ok || fn == nil || fn.Name != fnName {
+				continue
+			}
+			if fn.ReturnType == nil {
+				return TUnit
+			}
+			return l.lowerType(fn.ReturnType)
+		}
+	}
+	return nil
+}
+
 func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs []Type) Expr {
 	if len(typeArgs) == 0 {
 		typeArgs = l.instantiationArgs(e)
 	}
+	recv := l.lowerExpr(fx.X)
+	t := l.exprType(e)
+	if t == ErrTypeVal || t == nil {
+		if recovered := recoverMethodCallType(fx.Name, typeArgs); recovered != ErrTypeVal {
+			t = recovered
+		}
+		// Recover from builtin method signatures when the checker
+		// left the call type unpopulated. Covers the common shapes
+		// from List / Map / Set / String / Bytes: `.len()`, `.isEmpty()`,
+		// `.contains(x)`, `.startsWith(s)`, etc. Without this, one
+		// `.len()` call with a checker-skipped receiver poisons
+		// every enclosing expression to ErrType and blocks MIR.
+		if recovered := recoverMethodReturnType(fx.Name, recv); (t == nil || t == ErrTypeVal) && recovered != nil {
+			t = recovered
+		}
+	}
 	out := &MethodCall{
-		Receiver: l.lowerExpr(fx.X),
+		Receiver: recv,
 		Name:     fx.Name,
 		TypeArgs: typeArgs,
-		T:        l.exprType(e),
+		T:        t,
 		SpanV:    nodeSpan(e),
 	}
 	for _, a := range e.Args {
 		out.Args = append(out.Args, l.lowerArg(a))
 	}
 	return out
+}
+
+// recoverMethodReturnType derives the return type of a receiver-and-
+// method pair for the subset of stdlib intrinsics where the return
+// shape is fixed by the name alone. Used as a fallback when the
+// Go-hosted checker didn't populate `Types[e]` for the call. Mirrors
+// the routing in internal/mir/lower.go:methodToIntrinsic.
+func recoverMethodReturnType(name string, recv Expr) Type {
+	if recv == nil {
+		return nil
+	}
+	rt := recv.Type()
+	if rt == nil || rt == ErrTypeVal {
+		return nil
+	}
+	// Common name-based shortcuts that don't depend on the receiver's
+	// concrete generic args.
+	switch name {
+	case "len":
+		if isBuiltinContainer(rt) || isPrim(rt, PrimString) || isPrim(rt, PrimBytes) {
+			return TInt
+		}
+	case "isEmpty":
+		if isBuiltinContainer(rt) || isPrim(rt, PrimString) || isPrim(rt, PrimBytes) {
+			return TBool
+		}
+	case "contains", "hasPrefix", "hasSuffix", "startsWith", "endsWith":
+		if isPrim(rt, PrimString) || isPrim(rt, PrimBytes) || isBuiltinContainer(rt) {
+			return TBool
+		}
+	case "toUpper", "toLower", "trim", "trimSpace", "trimLeft", "trimRight":
+		if isPrim(rt, PrimString) {
+			return TString
+		}
+	}
+	// Element-type returns: List<T>.first / .last / .get → T?, .push → Unit.
+	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "List" && len(nt.Args) == 1 {
+		switch name {
+		case "first", "last":
+			return &OptionalType{Inner: nt.Args[0]}
+		case "push":
+			return TUnit
+		case "sorted":
+			return nt
+		}
+	}
+	return nil
+}
+
+// isBuiltinContainer reports whether t is one of the builtin
+// homogeneous collections whose len/isEmpty/contains return types
+// can be derived from the method name alone.
+func isBuiltinContainer(t Type) bool {
+	nt, ok := t.(*NamedType)
+	if !ok || !nt.Builtin {
+		return false
+	}
+	switch nt.Name {
+	case "List", "Map", "Set":
+		return true
+	}
+	return false
 }
 
 // lowerVariantCall builds a VariantLit from a call whose callee is a
@@ -2014,13 +2201,60 @@ func (l *lowerer) lowerFieldExpr(e *ast.FieldExpr) Expr {
 			SpanV: nodeSpan(e),
 		}
 	}
+	x := l.lowerExpr(e.X)
+	t := l.exprType(e)
+	if t == ErrTypeVal || t == nil {
+		// Recover from the struct declaration when the checker didn't
+		// record a type for this field access. Without this, a single
+		// checker-skipped FieldExpr propagates ErrType to every
+		// `.locals.len()` or `.name + something` chain downstream.
+		if recovered := l.recoverFieldType(x.Type(), e.Name); recovered != nil {
+			t = recovered
+		}
+	}
 	return &FieldExpr{
-		X:        l.lowerExpr(e.X),
+		X:        x,
 		Name:     e.Name,
 		Optional: e.IsOptional,
-		T:        l.exprType(e),
+		T:        t,
 		SpanV:    nodeSpan(e),
 	}
+}
+
+// recoverFieldType resolves a field access `receiverType.fieldName`
+// back to the declared field type by consulting the resolver's type
+// decl for receiverType. Only handles user structs today —
+// enums/interfaces/tuples use different access shapes that do not
+// flow through lowerFieldExpr in the same way.
+func (l *lowerer) recoverFieldType(receiverType Type, fieldName string) Type {
+	if receiverType == nil || receiverType == ErrTypeVal {
+		return nil
+	}
+	nt, ok := receiverType.(*NamedType)
+	if !ok || nt.Builtin {
+		return nil
+	}
+	if l.res == nil {
+		return nil
+	}
+	sym := l.res.FileScope.Lookup(nt.Name)
+	if sym == nil || sym.Decl == nil {
+		return nil
+	}
+	sd, ok := sym.Decl.(*ast.StructDecl)
+	if !ok || sd == nil {
+		return nil
+	}
+	for _, f := range sd.Fields {
+		if f == nil || f.Name != fieldName {
+			continue
+		}
+		if f.Type == nil {
+			return nil
+		}
+		return l.lowerType(f.Type)
+	}
+	return nil
 }
 
 // tupleIndex parses a field name like "0" or "12" as a tuple index.
@@ -2175,9 +2409,100 @@ func (l *lowerer) lowerMatchExpr(m *ast.MatchExpr) Expr {
 		SpanV:     nodeSpan(m),
 	}
 	out.Arms = l.lowerMatchArms(m.Arms)
+	// Recover the match type from its arm bodies when the checker
+	// left it as <error>. The checker's type inference for match
+	// expressions across large arm sets sometimes loses the common
+	// arm type (observed on toolchain/core.osty `corePrintNodeBody`
+	// and similar dispatch tables), which then poisons every
+	// downstream operation consuming the match result. Unifying from
+	// arm bodies keeps the MIR fast path live as long as every arm
+	// resolved to the same concrete type.
+	if out.T == nil || out.T == ErrTypeVal {
+		if recovered := recoverMatchType(out.Arms); recovered != nil && recovered != ErrTypeVal {
+			out.T = recovered
+		}
+	}
 	// Compile a decision tree when the arm shapes are specialisable.
 	out.Tree = CompileDecisionTree(out.Scrutinee.Type(), out.Arms)
 	return out
+}
+
+// recoverMatchType returns the common body type across a set of
+// match arms, or ErrTypeVal when arms disagree / are not available.
+// Used as a fallback when the checker didn't record a type for the
+// enclosing match expression. A Block's yielded type is its Result
+// expression's type (or TUnit when Result is nil).
+func recoverMatchType(arms []*MatchArm) Type {
+	var candidate Type
+	for _, arm := range arms {
+		if arm == nil || arm.Body == nil {
+			continue
+		}
+		t := blockResultType(arm.Body)
+		if t == nil || t == ErrTypeVal {
+			continue
+		}
+		if candidate == nil {
+			candidate = t
+			continue
+		}
+		if !typesEquivalent(candidate, t) {
+			return ErrTypeVal
+		}
+	}
+	if candidate == nil {
+		return ErrTypeVal
+	}
+	return candidate
+}
+
+// typesEquivalent is a narrow equality suitable for match-arm
+// unification. It's intentionally strict: primitive kinds must match
+// exactly, named types compare by (package, name, builtin) tuple.
+// Structural types (tuples, optionals, fn types) recurse. Anything
+// involving ErrType short-circuits to false so recovery doesn't
+// silently accept a poisoned arm.
+func typesEquivalent(a, b Type) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if a == ErrTypeVal || b == ErrTypeVal {
+		return false
+	}
+	switch ax := a.(type) {
+	case *PrimType:
+		bx, ok := b.(*PrimType)
+		return ok && ax.Kind == bx.Kind
+	case *NamedType:
+		bx, ok := b.(*NamedType)
+		if !ok || ax.Name != bx.Name || ax.Package != bx.Package || ax.Builtin != bx.Builtin {
+			return false
+		}
+		if len(ax.Args) != len(bx.Args) {
+			return false
+		}
+		for i := range ax.Args {
+			if !typesEquivalent(ax.Args[i], bx.Args[i]) {
+				return false
+			}
+		}
+		return true
+	case *OptionalType:
+		bx, ok := b.(*OptionalType)
+		return ok && typesEquivalent(ax.Inner, bx.Inner)
+	case *TupleType:
+		bx, ok := b.(*TupleType)
+		if !ok || len(ax.Elems) != len(bx.Elems) {
+			return false
+		}
+		for i := range ax.Elems {
+			if !typesEquivalent(ax.Elems[i], bx.Elems[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (l *lowerer) lowerMatchArms(arms []*ast.MatchArm) []*MatchArm {

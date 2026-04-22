@@ -845,12 +845,12 @@ var builtinNonGenericMethods = map[string]map[string]bool{
 		"len":     true,
 		"isEmpty": true,
 		"get":     true,
-		"push":   true,
-		"pop":    true,
-		"insert": true,
-		"sorted": true,
-		"toSet":  true,
-		"clear":  true,
+		"push":    true,
+		"pop":     true,
+		"insert":  true,
+		"sorted":  true,
+		"toSet":   true,
+		"clear":   true,
 	},
 	"Map": {
 		"len":         true,
@@ -893,22 +893,22 @@ var builtinNonGenericMethods = map[string]map[string]bool{
 		"isNone": true,
 	},
 	"Result": {
-		"isOk":       true,
-		"isErr":      true,
-		"contains":   true,
+		"isOk":        true,
+		"isErr":       true,
+		"contains":    true,
 		"containsErr": true,
-		"unwrap":     true,
-		"expect":     true,
-		"unwrapErr":  true,
-		"expectErr":  true,
-		"unwrapOr":   true,
-		"ok":         true,
-		"err":        true,
-		"and":        true,
-		"or":         true,
-		"inspect":    true,
-		"inspectErr": true,
-		"toString":   true,
+		"unwrap":      true,
+		"expect":      true,
+		"unwrapErr":   true,
+		"expectErr":   true,
+		"unwrapOr":    true,
+		"ok":          true,
+		"err":         true,
+		"and":         true,
+		"or":          true,
+		"inspect":     true,
+		"inspectErr":  true,
+		"toString":    true,
 	},
 }
 
@@ -1764,6 +1764,16 @@ func (s *monoState) scanExpr(e Expr) {
 		// Rewrite generic call to mangled specialization.
 		if len(e.TypeArgs) > 0 {
 			s.rewriteGenericCall(e)
+			// After monomorphization the backend contract is fully
+			// concrete: any remaining CallExpr.TypeArgs are just
+			// checker-side instantiation metadata on a call shape the
+			// monomorphizer does not specialize itself (for example a
+			// module-qualified stdlib helper like `testing.assertEq`).
+			// Keeping them around makes the IR->AST bridge wrap the
+			// callee in a TurbofishExpr, which downstream LLVM testing /
+			// stdlib dispatch does not expect. Retain the concrete
+			// result/arg types, but strip the stale type-arg wrapper.
+			e.TypeArgs = nil
 		}
 		s.scanExpr(e.Callee)
 		for i := range e.Args {

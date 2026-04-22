@@ -112,11 +112,12 @@ fn main() {
 	}
 }
 
-// TestNativeLetStructDestructureRejectsNestedPattern — stage-1
-// coverage only handles plain-ident sub-patterns. Nested struct
-// pattern bindings (`let Foo { inner: Bar { x } } = ...`) must
-// defer to the legacy bridge.
-func TestNativeLetStructDestructureRejectsNestedPattern(t *testing.T) {
+// TestTryGenerateNativeOwnedModuleCoversNestedStructBindingPattern
+// locks the recursive pattern lowering shape:
+// `let outer @ Outer { inner: Inner { x } } = ...` must cover the
+// top-level binding alias and the nested field destructure without
+// falling back to the legacy bridge.
+func TestTryGenerateNativeOwnedModuleCoversNestedStructBindingPattern(t *testing.T) {
 	src := `struct Inner {
     x: Int,
 }
@@ -126,20 +127,29 @@ struct Outer {
 }
 
 fn main() {
-    let o = Outer { inner: Inner { x: 7 } }
-    let Outer { inner: Inner { x } } = o
+    let outer @ Outer { inner: Inner { x } } = Outer { inner: Inner { x: 7 } }
     println(x)
+    println(outer.inner.x)
 }
 `
 	mod := lowerNativeEntryModule(t, src)
-	_, ok, err := TryGenerateNativeOwnedModule(mod, Options{
+	out, ok, err := TryGenerateNativeOwnedModule(mod, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/native_struct_destructure_nested.osty",
 	})
 	if err != nil {
 		t.Fatalf("TryGenerateNativeOwnedModule errored: %v", err)
 	}
-	if ok {
-		t.Fatal("TryGenerateNativeOwnedModule unexpectedly covered nested struct destructure — stage-1 should defer")
+	if !ok {
+		t.Fatal("TryGenerateNativeOwnedModule reported uncovered for nested struct destructure + binding")
+	}
+	got := string(out)
+	for _, want := range []string{
+		"extractvalue %Outer",
+		"extractvalue %Inner",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("native-owned IR missing %q:\n%s", want, got)
+		}
 	}
 }

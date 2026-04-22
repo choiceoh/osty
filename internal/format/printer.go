@@ -1015,6 +1015,30 @@ func (p *printer) printExprInner(e ast.Expr) {
 				return
 			}
 		}
+		if n.HasTrailingClosure && len(n.Args) > 0 {
+			// G23 §A.2: restore the trailing-closure surface
+			// `f(a, b) |x| { body }`. The parser appended the closure
+			// as the last positional arg; split it back out here. A
+			// keyword last arg disqualifies the sugar form (the
+			// parser wouldn't set the flag in that case).
+			lastArg := n.Args[len(n.Args)-1]
+			if lastArg != nil && lastArg.Name == "" {
+				if closure, ok := lastArg.Value.(*ast.ClosureExpr); ok {
+					p.printExpr(n.Fn)
+					innerArgs := n.Args[:len(n.Args)-1]
+					printBracketedList(p, "(", ")", innerArgs, spanMultiline(innerArgs), func(a *ast.Arg) {
+						if a.Name != "" {
+							p.write(a.Name)
+							p.write(": ")
+						}
+						p.printExpr(a.Value)
+					})
+					p.write(" ")
+					p.printExpr(closure)
+					return
+				}
+			}
+		}
 		if base, segs := collectChain(n); !p.inlineOnly && shouldBreakChain(base, segs) {
 			p.printMethodChain(base, segs)
 			return

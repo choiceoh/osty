@@ -1,0 +1,3055 @@
+// hir.osty — self-hosted HIR data model (Stage 3a/3b: types, decls, stmts).
+//
+// This is the Osty port of `internal/ir/ir.go` — the typed, monomorphic
+// High-level IR that sits between the checker and MIR. It intentionally
+// mirrors Go's layout (Module → Decls + Script → Stmts/Exprs/Patterns)
+// but uses the self-host convention of flat structs carrying a `kind`
+// tag (the same convention mir.osty uses for MirRValue / MirInstr).
+//
+// Stage 3a (landed): enum kinds + Pos/Span + Type + Module shell +
+// Decl nodes (FnDecl, StructDecl, EnumDecl, LetDecl, UseDecl,
+// InterfaceDecl, TypeAliasDecl).
+// Stage 3b (this file): HirStmt variant payload fields + constructors
+// for all 13 statement kinds (Block/Let/Expr/Assign/Return/Break/
+// Continue/If/For/Match/Defer/ChanSend/Error) + HirMatchArm.
+// Stage 3c (follow-up): HirExpr variant fields + Pattern + DecisionNode.
+//
+// Relation to Go:
+//   - HirPos / HirSpan    ↔ ir.Pos / ir.Span
+//   - HirType             ↔ ir.Type interface (flattened: PrimType,
+//                             NamedType, OptionalType, TupleType,
+//                             FnType, TypeVar, ErrType all encoded on
+//                             one struct, selected by `kind`)
+//   - HirModule           ↔ *ir.Module
+//   - HirFnDecl           ↔ *ir.FnDecl
+//   - HirStructDecl       ↔ *ir.StructDecl
+//   - HirField            ↔ *ir.Field
+//   - HirEnumDecl         ↔ *ir.EnumDecl
+//   - HirVariant          ↔ *ir.Variant
+//   - HirLetDecl          ↔ *ir.LetDecl
+//   - HirInterfaceDecl    ↔ *ir.InterfaceDecl
+//   - HirTypeAliasDecl    ↔ *ir.TypeAliasDecl
+//   - HirUseDecl          ↔ *ir.UseDecl
+//   - HirParam            ↔ *ir.Param
+//   - HirTypeParam        ↔ *ir.TypeParam
+//   - HirBlock/Stmt/Expr/Pattern — skeleton shells, filled in Stage 3b/3c.
+//
+// All polymorphic enums use the `Hir*Kind` naming prefix. Readers must
+// check `kind` before interpreting kind-specific fields.
+
+use std.strings as strings
+
+// ====================================================================
+// Enum kinds
+// ====================================================================
+
+/// HirTypeKind selects which payload of HirType is live.
+///
+///   HirTypeInvalid     — default-zero / uninitialised
+///   HirTypePrim        — scalar (Int, Bool, Float, ...) — `primKind`
+///   HirTypeNamed       — user/stdlib nominal — `namedPkg`, `namedName`,
+///                          `namedArgs`, `namedBuiltin`
+///   HirTypeOptional    — `T?` — `inner` (via child index; see helpers)
+///   HirTypeTuple       — `(T1, T2, ...)` — `elems`
+///   HirTypeFn          — `fn(A, B) -> R` — `fnParams`, `fnReturn`
+///   HirTypeVar         — generic param — `varName`, `varOwner`
+///   HirTypeErr         — poisoned ("<error>") marker
+pub enum HirTypeKind {
+    HirTypeInvalid,
+    HirTypePrim,
+    HirTypeNamed,
+    HirTypeOptional,
+    HirTypeTuple,
+    HirTypeFn,
+    HirTypeVar,
+    HirTypeErr,
+}
+
+/// HirPrimKind mirrors ir.PrimKind. Ordering matters — must stay in
+/// sync with Go's enum so cross-checks on external dumps line up.
+pub enum HirPrimKind {
+    HirPrimInvalid,
+    HirPrimInt,
+    HirPrimInt8,
+    HirPrimInt16,
+    HirPrimInt32,
+    HirPrimInt64,
+    HirPrimUInt8,
+    HirPrimUInt16,
+    HirPrimUInt32,
+    HirPrimUInt64,
+    HirPrimByte,
+    HirPrimFloat,
+    HirPrimFloat32,
+    HirPrimFloat64,
+    HirPrimBool,
+    HirPrimChar,
+    HirPrimString,
+    HirPrimBytes,
+    HirPrimRawPtr,
+    HirPrimUnit,
+    HirPrimNever,
+}
+
+/// HirDeclKind tags a declaration variant. Top-level `HirModule`
+/// already splits decls into per-kind lists so this tag is only used
+/// when a decl needs to appear in a mixed list (e.g. `UseDecl.GoBody`).
+pub enum HirDeclKind {
+    HirDeclInvalid,
+    HirDeclFn,
+    HirDeclStruct,
+    HirDeclEnum,
+    HirDeclLet,
+    HirDeclUse,
+    HirDeclInterface,
+    HirDeclTypeAlias,
+}
+
+/// HirStmtKind enumerates statement variants. Filled in Stage 3b.
+pub enum HirStmtKind {
+    HirStmtInvalid,
+    HirStmtBlock,
+    HirStmtLet,
+    HirStmtExpr,
+    HirStmtAssign,
+    HirStmtReturn,
+    HirStmtBreak,
+    HirStmtContinue,
+    HirStmtIf,
+    HirStmtFor,
+    HirStmtMatch,
+    HirStmtDefer,
+    HirStmtChanSend,
+    HirStmtError,
+}
+
+/// HirExprKind enumerates expression variants. Filled in Stage 3b.
+pub enum HirExprKind {
+    HirExprInvalid,
+    HirExprIntLit,
+    HirExprFloatLit,
+    HirExprBoolLit,
+    HirExprCharLit,
+    HirExprByteLit,
+    HirExprStringLit,
+    HirExprUnitLit,
+    HirExprIdent,
+    HirExprUnary,
+    HirExprBinary,
+    HirExprCall,
+    HirExprIntrinsic,
+    HirExprList,
+    HirExprBlock,
+    HirExprIf,
+    HirExprField,
+    HirExprIndex,
+    HirExprMethod,
+    HirExprStructLit,
+    HirExprTupleLit,
+    HirExprMapLit,
+    HirExprRange,
+    HirExprQuestion,
+    HirExprCoalesce,
+    HirExprClosure,
+    HirExprVariantLit,
+    HirExprMatch,
+    HirExprIfLet,
+    HirExprTupleAccess,
+    HirExprError,
+}
+
+/// HirPatternKind enumerates pattern variants. Filled in Stage 3c.
+pub enum HirPatternKind {
+    HirPatInvalid,
+    HirPatWild,
+    HirPatIdent,
+    HirPatLit,
+    HirPatTuple,
+    HirPatStruct,
+    HirPatVariant,
+    HirPatRange,
+    HirPatOr,
+    HirPatBinding,
+    HirPatError,
+}
+
+/// HirUnOp mirrors ir.UnOp.
+pub enum HirUnOp {
+    HirUnInvalid,
+    HirUnNeg,
+    HirUnPlus,
+    HirUnNot,
+    HirUnBitNot,
+}
+
+/// HirBinOp mirrors ir.BinOp.
+pub enum HirBinOp {
+    HirBinInvalid,
+    HirBinAdd,
+    HirBinSub,
+    HirBinMul,
+    HirBinDiv,
+    HirBinMod,
+    HirBinEq,
+    HirBinNeq,
+    HirBinLt,
+    HirBinLeq,
+    HirBinGt,
+    HirBinGeq,
+    HirBinAnd,
+    HirBinOr,
+    HirBinBitAnd,
+    HirBinBitOr,
+    HirBinBitXor,
+    HirBinShl,
+    HirBinShr,
+}
+
+/// HirAssignOp mirrors ir.AssignOp.
+pub enum HirAssignOp {
+    HirAssignInvalid,
+    HirAssignEq,
+    HirAssignAdd,
+    HirAssignSub,
+    HirAssignMul,
+    HirAssignDiv,
+    HirAssignMod,
+    HirAssignAnd,
+    HirAssignOr,
+    HirAssignXor,
+    HirAssignShl,
+    HirAssignShr,
+}
+
+/// HirForKind mirrors ir.ForKind.
+pub enum HirForKind {
+    HirForInvalid,
+    HirForInfinite,
+    HirForWhile,
+    HirForRange,
+    HirForIn,
+}
+
+/// HirIdentKind mirrors ir.IdentKind. Populated by lowering so
+/// backends do not have to re-resolve names.
+pub enum HirIdentKind {
+    HirIdentUnknown,
+    HirIdentLocal,
+    HirIdentParam,
+    HirIdentFn,
+    HirIdentVariant,
+    HirIdentTypeName,
+    HirIdentGlobal,
+    HirIdentBuiltin,
+}
+
+/// HirCaptureKind mirrors ir.CaptureKind. Classifies how a name
+/// becomes available inside a closure without being a parameter.
+pub enum HirCaptureKind {
+    HirCaptureUnknown,
+    HirCaptureLocal,
+    HirCaptureParam,
+    HirCaptureGlobal,
+    HirCaptureFn,
+    HirCaptureSelf,
+}
+
+/// HirIntrinsicKind enumerates the print-family intrinsics HIR
+/// recognises directly (mirrors ir.IntrinsicKind).
+pub enum HirIntrinsicKind {
+    HirIntrinsicInvalid,
+    HirIntrinsicPrint,
+    HirIntrinsicPrintln,
+    HirIntrinsicEprint,
+    HirIntrinsicEprintln,
+}
+
+/// HirInlineMode mirrors ir.InlineNone / Soft / Always / Never. Lifted
+/// off the `#[inline(...)]` annotation family (v0.6 A8).
+pub enum HirInlineMode {
+    HirInlineNone,
+    HirInlineSoft,
+    HirInlineAlways,
+    HirInlineNever,
+}
+
+// ====================================================================
+// Source positions
+// ====================================================================
+
+/// HirPos is a 1-based line/column pair plus a byte offset into the
+/// source. Mirrors ir.Pos.
+pub struct HirPos {
+    pub offset: Int,
+    pub line: Int,
+    pub column: Int,
+}
+
+pub fn hirPos(offset: Int, line: Int, column: Int) -> HirPos {
+    HirPos { offset, line, column }
+}
+
+pub fn hirZeroPos() -> HirPos {
+    HirPos { offset: 0, line: 0, column: 0 }
+}
+
+/// HirSpan is a half-open source range `[start, end)`.
+pub struct HirSpan {
+    pub start: HirPos,
+    pub end: HirPos,
+}
+
+pub fn hirSpan(start: HirPos, end: HirPos) -> HirSpan {
+    HirSpan { start, end }
+}
+
+pub fn hirNoSpan() -> HirSpan {
+    HirSpan { start: hirZeroPos(), end: hirZeroPos() }
+}
+
+/// hirSpanFromOffsets is a convenience for common diagnostic paths
+/// that only have byte offsets (no line/column resolution yet).
+pub fn hirSpanFromOffsets(start: Int, end: Int) -> HirSpan {
+    HirSpan {
+        start: hirPos(start, 0, 0),
+        end: hirPos(end, 0, 0),
+    }
+}
+
+// ====================================================================
+// Types
+// ====================================================================
+
+/// HirType is the flat encoding of ir.Type. The `kind` field selects
+/// which payload is live. Equality is structural (the Go side performs
+/// deep `reflect.DeepEqual`-style comparison through `typeString`; we
+/// provide `hirTypeString` for the same role).
+///
+/// Payload layout by kind:
+///
+///   HirTypePrim      — primKind
+///   HirTypeNamed     — namedPkg, namedName, namedArgs, namedBuiltin
+///   HirTypeOptional  — optionalInner (single-element inner list)
+///   HirTypeTuple     — tupleElems
+///   HirTypeFn        — fnParams, fnReturn (single-element outer list)
+///   HirTypeVar       — varName, varOwner
+///   HirTypeErr       — (no payload)
+///
+/// Because Osty lacks Go-style boxing over an interface, nested types
+/// (Optional.Inner, Fn.Return, NamedType.Args) are themselves HirType
+/// values threaded through `List<HirType>` — callers read index 0 for
+/// the single-slot fields. The helper accessors below keep call sites
+/// tidy.
+pub struct HirType {
+    pub kind: HirTypeKind,
+    pub primKind: HirPrimKind,
+    pub namedPkg: String,
+    pub namedName: String,
+    pub namedArgs: List<HirType>,
+    pub namedBuiltin: Bool,
+    pub optionalInner: List<HirType>,   // 0 or 1 element
+    pub tupleElems: List<HirType>,
+    pub fnParams: List<HirType>,
+    pub fnReturn: List<HirType>,        // 0 or 1 element
+    pub varName: String,
+    pub varOwner: String,
+}
+
+pub fn hirTypeInvalid() -> HirType {
+    HirType {
+        kind: HirTypeInvalid,
+        primKind: HirPrimInvalid,
+        namedPkg: "",
+        namedName: "",
+        namedArgs: [],
+        namedBuiltin: false,
+        optionalInner: [],
+        tupleElems: [],
+        fnParams: [],
+        fnReturn: [],
+        varName: "",
+        varOwner: "",
+    }
+}
+
+pub fn hirTypePrim(primKind: HirPrimKind) -> HirType {
+    let mut t = hirTypeInvalid()
+    t.kind = HirTypePrim
+    t.primKind = primKind
+    t
+}
+
+pub fn hirTypeNamed(name: String, args: List<HirType>) -> HirType {
+    let mut t = hirTypeInvalid()
+    t.kind = HirTypeNamed
+    t.namedName = name
+    t.namedArgs = args
+    t
+}
+
+pub fn hirTypeNamedQualified(pkg: String, name: String, args: List<HirType>) -> HirType {
+    let mut t = hirTypeNamed(name, args)
+    t.namedPkg = pkg
+    t
+}
+
+pub fn hirTypeBuiltin(name: String, args: List<HirType>) -> HirType {
+    let mut t = hirTypeNamed(name, args)
+    t.namedBuiltin = true
+    t
+}
+
+pub fn hirTypeOptional(inner: HirType) -> HirType {
+    let mut t = hirTypeInvalid()
+    t.kind = HirTypeOptional
+    t.optionalInner.push(inner)
+    t
+}
+
+pub fn hirTypeTuple(elems: List<HirType>) -> HirType {
+    let mut t = hirTypeInvalid()
+    t.kind = HirTypeTuple
+    t.tupleElems = elems
+    t
+}
+
+pub fn hirTypeFn(params: List<HirType>, ret: HirType) -> HirType {
+    let mut t = hirTypeInvalid()
+    t.kind = HirTypeFn
+    t.fnParams = params
+    t.fnReturn.push(ret)
+    t
+}
+
+pub fn hirTypeVar(name: String, owner: String) -> HirType {
+    let mut t = hirTypeInvalid()
+    t.kind = HirTypeVar
+    t.varName = name
+    t.varOwner = owner
+    t
+}
+
+pub fn hirTypeErr() -> HirType {
+    let mut t = hirTypeInvalid()
+    t.kind = HirTypeErr
+    t
+}
+
+// ---- Canonical primitive singletons (constructors, not globals) ----
+
+pub fn hirTInt() -> HirType { hirTypePrim(HirPrimInt) }
+pub fn hirTInt8() -> HirType { hirTypePrim(HirPrimInt8) }
+pub fn hirTInt16() -> HirType { hirTypePrim(HirPrimInt16) }
+pub fn hirTInt32() -> HirType { hirTypePrim(HirPrimInt32) }
+pub fn hirTInt64() -> HirType { hirTypePrim(HirPrimInt64) }
+pub fn hirTUInt8() -> HirType { hirTypePrim(HirPrimUInt8) }
+pub fn hirTUInt16() -> HirType { hirTypePrim(HirPrimUInt16) }
+pub fn hirTUInt32() -> HirType { hirTypePrim(HirPrimUInt32) }
+pub fn hirTUInt64() -> HirType { hirTypePrim(HirPrimUInt64) }
+pub fn hirTByte() -> HirType { hirTypePrim(HirPrimByte) }
+pub fn hirTFloat() -> HirType { hirTypePrim(HirPrimFloat) }
+pub fn hirTFloat32() -> HirType { hirTypePrim(HirPrimFloat32) }
+pub fn hirTFloat64() -> HirType { hirTypePrim(HirPrimFloat64) }
+pub fn hirTBool() -> HirType { hirTypePrim(HirPrimBool) }
+pub fn hirTChar() -> HirType { hirTypePrim(HirPrimChar) }
+pub fn hirTString() -> HirType { hirTypePrim(HirPrimString) }
+pub fn hirTBytes() -> HirType { hirTypePrim(HirPrimBytes) }
+pub fn hirTRawPtr() -> HirType { hirTypePrim(HirPrimRawPtr) }
+pub fn hirTUnit() -> HirType { hirTypePrim(HirPrimUnit) }
+pub fn hirTNever() -> HirType { hirTypePrim(HirPrimNever) }
+
+// ---- Accessors -----------------------------------------------------
+
+/// hirTypeIsValid reports whether `t` has a non-invalid kind.
+pub fn hirTypeIsValid(t: HirType) -> Bool {
+    match t.kind {
+        HirTypeInvalid -> false,
+        _ -> true,
+    }
+}
+
+/// hirTypeIsErr reports whether `t` is the poisoned ErrType.
+pub fn hirTypeIsErr(t: HirType) -> Bool {
+    match t.kind {
+        HirTypeErr -> true,
+        _ -> false,
+    }
+}
+
+/// hirTypeIsUnit reports whether `t` is the `()` primitive.
+pub fn hirTypeIsUnit(t: HirType) -> Bool {
+    match t.kind {
+        HirTypePrim -> {
+            match t.primKind {
+                HirPrimUnit -> true,
+                _ -> false,
+            }
+        },
+        _ -> false,
+    }
+}
+
+/// hirTypeIsNever reports whether `t` is the `!` primitive.
+pub fn hirTypeIsNever(t: HirType) -> Bool {
+    match t.kind {
+        HirTypePrim -> {
+            match t.primKind {
+                HirPrimNever -> true,
+                _ -> false,
+            }
+        },
+        _ -> false,
+    }
+}
+
+/// hirTypeIsOptional reports whether `t` is a `T?` wrapper.
+pub fn hirTypeIsOptional(t: HirType) -> Bool {
+    match t.kind {
+        HirTypeOptional -> true,
+        _ -> false,
+    }
+}
+
+/// hirTypeOptionalInner returns the inner type of a `T?` or an invalid
+/// HirType when `t` is not an optional.
+pub fn hirTypeOptionalInner(t: HirType) -> HirType {
+    match t.kind {
+        HirTypeOptional -> {
+            if t.optionalInner.len() > 0 {
+                t.optionalInner[0]
+            } else {
+                hirTypeInvalid()
+            }
+        },
+        _ -> hirTypeInvalid(),
+    }
+}
+
+/// hirTypeFnReturn returns the return type of an fn type or an invalid
+/// HirType when `t` is not an fn.
+pub fn hirTypeFnReturn(t: HirType) -> HirType {
+    match t.kind {
+        HirTypeFn -> {
+            if t.fnReturn.len() > 0 {
+                t.fnReturn[0]
+            } else {
+                hirTypeInvalid()
+            }
+        },
+        _ -> hirTypeInvalid(),
+    }
+}
+
+/// hirTypeQualifiedName is the `pkg.Name` form of a named type. Returns
+/// the bare name when no package qualifier is present; empty for
+/// non-named types.
+pub fn hirTypeQualifiedName(t: HirType) -> String {
+    match t.kind {
+        HirTypeNamed -> {
+            if t.namedPkg == "" {
+                t.namedName
+            } else {
+                t.namedPkg + "." + t.namedName
+            }
+        },
+        _ -> "",
+    }
+}
+
+// ---- Printing ------------------------------------------------------
+
+/// hirPrimKindString returns the canonical source-level name for a
+/// primitive kind. Mirrors PrimType.String in Go.
+pub fn hirPrimKindString(k: HirPrimKind) -> String {
+    match k {
+        HirPrimInt -> "Int",
+        HirPrimInt8 -> "Int8",
+        HirPrimInt16 -> "Int16",
+        HirPrimInt32 -> "Int32",
+        HirPrimInt64 -> "Int64",
+        HirPrimUInt8 -> "UInt8",
+        HirPrimUInt16 -> "UInt16",
+        HirPrimUInt32 -> "UInt32",
+        HirPrimUInt64 -> "UInt64",
+        HirPrimByte -> "Byte",
+        HirPrimFloat -> "Float",
+        HirPrimFloat32 -> "Float32",
+        HirPrimFloat64 -> "Float64",
+        HirPrimBool -> "Bool",
+        HirPrimChar -> "Char",
+        HirPrimString -> "String",
+        HirPrimBytes -> "Bytes",
+        HirPrimRawPtr -> "RawPtr",
+        HirPrimUnit -> "()",
+        HirPrimNever -> "Never",
+        HirPrimInvalid -> "?",
+    }
+}
+
+/// hirTypeString returns a source-level rendering of `t`. Safe for
+/// diagnostics; invalid / error types render as `<error>` / `<nil>`.
+pub fn hirTypeString(t: HirType) -> String {
+    match t.kind {
+        HirTypeInvalid -> "<nil>",
+        HirTypeErr -> "<error>",
+        HirTypePrim -> hirPrimKindString(t.primKind),
+        HirTypeVar -> t.varName,
+        HirTypeOptional -> {
+            let inner = if t.optionalInner.len() > 0 {
+                hirTypeString(t.optionalInner[0])
+            } else {
+                "<nil>"
+            }
+            inner + "?"
+        },
+        HirTypeTuple -> hirTypeTupleString(t.tupleElems),
+        HirTypeFn -> hirTypeFnString(t),
+        HirTypeNamed -> hirTypeNamedString(t),
+    }
+}
+
+fn hirTypeTupleString(elems: List<HirType>) -> String {
+    let mut parts: List<String> = []
+    parts.push("(")
+    let mut i = 0
+    for e in elems {
+        if i > 0 {
+            parts.push(", ")
+        }
+        parts.push(hirTypeString(e))
+        i = i + 1
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirTypeFnString(t: HirType) -> String {
+    let mut parts: List<String> = []
+    parts.push("fn(")
+    let mut i = 0
+    for p in t.fnParams {
+        if i > 0 {
+            parts.push(", ")
+        }
+        parts.push(hirTypeString(p))
+        i = i + 1
+    }
+    parts.push(")")
+    if t.fnReturn.len() > 0 {
+        let ret = t.fnReturn[0]
+        if !hirTypeIsUnit(ret) {
+            parts.push(" -> ")
+            parts.push(hirTypeString(ret))
+        }
+    }
+    strings.join(parts, "")
+}
+
+fn hirTypeNamedString(t: HirType) -> String {
+    let mut parts: List<String> = []
+    if t.namedPkg != "" {
+        parts.push(t.namedPkg)
+        parts.push(".")
+    }
+    parts.push(t.namedName)
+    if t.namedArgs.len() > 0 {
+        parts.push("<")
+        let mut i = 0
+        for a in t.namedArgs {
+            if i > 0 {
+                parts.push(", ")
+            }
+            parts.push(hirTypeString(a))
+            i = i + 1
+        }
+        parts.push(">")
+    }
+    strings.join(parts, "")
+}
+
+// ====================================================================
+// Declaration-level nodes
+// ====================================================================
+
+/// HirTypeParam is a generic type parameter with optional bounds.
+/// Bounds are interface NamedTypes already lowered to HirType.
+pub struct HirTypeParam {
+    pub name: String,
+    pub bounds: List<HirType>,
+    pub span: HirSpan,
+}
+
+pub fn hirTypeParam(name: String, span: HirSpan) -> HirTypeParam {
+    HirTypeParam {
+        name,
+        bounds: [],
+        span,
+    }
+}
+
+/// HirParam is one function/method parameter. `pattern` is a valid
+/// HirPattern (non-invalid kind) for destructured parameters; bare
+/// name-bound params leave it at the default invalid state and use
+/// `name` instead.
+///
+/// `hasDefault` gates `defaultValue` — Osty's flat-struct convention
+/// treats uninitialised expressions as "no default" even when the
+/// expr body zero-values to HirExprInvalid.
+pub struct HirParam {
+    pub name: String,
+    pub pattern: HirPattern,
+    pub typ: HirType,
+    pub hasDefault: Bool,
+    pub defaultValue: HirExpr,
+    pub span: HirSpan,
+}
+
+pub fn hirParam(name: String, typ: HirType, span: HirSpan) -> HirParam {
+    HirParam {
+        name,
+        pattern: hirPatternInvalid(),
+        typ,
+        hasDefault: false,
+        defaultValue: hirExprInvalid(),
+        span,
+    }
+}
+
+pub fn hirParamDestructured(pattern: HirPattern, typ: HirType, span: HirSpan) -> HirParam {
+    HirParam {
+        name: "",
+        pattern,
+        typ,
+        hasDefault: false,
+        defaultValue: hirExprInvalid(),
+        span,
+    }
+}
+
+/// hirParamIsDestructured reports whether the param uses a pattern.
+pub fn hirParamIsDestructured(p: HirParam) -> Bool {
+    match p.pattern.kind {
+        HirPatInvalid -> false,
+        _ -> true,
+    }
+}
+
+/// HirField is one struct field. JSON-related flags are lifted off
+/// `#[json(...)]` annotations by the IR lowerer; backends read them
+/// without re-parsing the annotation list.
+pub struct HirField {
+    pub name: String,
+    pub typ: HirType,
+    pub hasDefault: Bool,
+    pub defaultValue: HirExpr,
+    pub exported: Bool,
+    pub jsonKey: String,
+    pub jsonSkip: Bool,
+    pub jsonOptional: Bool,
+    pub span: HirSpan,
+}
+
+pub fn hirField(name: String, typ: HirType, span: HirSpan) -> HirField {
+    HirField {
+        name,
+        typ,
+        hasDefault: false,
+        defaultValue: hirExprInvalid(),
+        exported: false,
+        jsonKey: "",
+        jsonSkip: false,
+        jsonOptional: false,
+        span,
+    }
+}
+
+/// HirVariant is one enum case.
+pub struct HirVariant {
+    pub name: String,
+    pub payload: List<HirType>,
+    pub jsonTag: String,
+    pub jsonSkip: Bool,
+    pub span: HirSpan,
+}
+
+pub fn hirVariant(name: String, span: HirSpan) -> HirVariant {
+    HirVariant {
+        name,
+        payload: [],
+        jsonTag: "",
+        jsonSkip: false,
+        span,
+    }
+}
+
+/// HirFnDecl is a top-level function or method.
+///
+/// `receiverMut` is true when the declaration wrote `mut self`; free
+/// functions leave it false. `exported` reflects the leading `pub`.
+/// The body block is unconditional — `isIntrinsic` true yields an
+/// empty block that backends replace with their own implementation
+/// at the call site.
+///
+/// The annotation-sourced fields (vectorize, parallel, unroll, inline
+/// mode, hot/cold, target features, noalias, pure) mirror v0.6 A5–A13
+/// verbatim; see ir.FnDecl for per-field semantics.
+pub struct HirFnDecl {
+    pub name: String,
+    pub params: List<HirParam>,
+    pub ret: HirType,
+    pub body: HirBlock,
+    pub receiverMut: Bool,
+    pub exported: Bool,
+    pub generics: List<HirTypeParam>,
+    pub span: HirSpan,
+
+    // Annotation-sourced metadata.
+    pub exportSymbol: String,
+    pub cAbi: Bool,
+    pub isIntrinsic: Bool,
+    pub noAlloc: Bool,
+    pub vectorize: Bool,
+    pub noVectorize: Bool,
+    pub vectorizeWidth: Int,
+    pub vectorizeScalable: Bool,
+    pub vectorizePredicate: Bool,
+    pub parallel: Bool,
+    pub unroll: Bool,
+    pub unrollCount: Int,
+    pub inlineMode: HirInlineMode,
+    pub hot: Bool,
+    pub cold: Bool,
+    pub targetFeatures: List<String>,
+    pub noaliasAll: Bool,
+    pub noaliasParams: List<String>,
+    pub pure: Bool,
+}
+
+pub fn hirFnDecl(name: String, ret: HirType, span: HirSpan) -> HirFnDecl {
+    HirFnDecl {
+        name,
+        params: [],
+        ret,
+        body: hirBlock(span),
+        receiverMut: false,
+        exported: false,
+        generics: [],
+        span,
+        exportSymbol: "",
+        cAbi: false,
+        isIntrinsic: false,
+        noAlloc: false,
+        vectorize: false,
+        noVectorize: false,
+        vectorizeWidth: 0,
+        vectorizeScalable: false,
+        vectorizePredicate: false,
+        parallel: false,
+        unroll: false,
+        unrollCount: 0,
+        inlineMode: HirInlineNone,
+        hot: false,
+        cold: false,
+        targetFeatures: [],
+        noaliasAll: false,
+        noaliasParams: [],
+        pure: false,
+    }
+}
+
+/// HirStructDecl is a struct declaration with its fields and methods.
+/// BuiltinSource / BuiltinSourceArgs carry the stdlib generic template
+/// identity after monomorphization (Map / List / Option / Result etc.);
+/// empty for user structs.
+pub struct HirStructDecl {
+    pub name: String,
+    pub fields: List<HirField>,
+    pub methods: List<HirFnDecl>,
+    pub generics: List<HirTypeParam>,
+    pub exported: Bool,
+    pub span: HirSpan,
+
+    pub builtinSource: String,
+    pub builtinSourceArgs: List<HirType>,
+    pub pod: Bool,
+    pub reprC: Bool,
+    pub builderDerivable: Bool,
+    pub builderRequiredFields: List<String>,
+}
+
+pub fn hirStructDecl(name: String, span: HirSpan) -> HirStructDecl {
+    HirStructDecl {
+        name,
+        fields: [],
+        methods: [],
+        generics: [],
+        exported: false,
+        span,
+        builtinSource: "",
+        builtinSourceArgs: [],
+        pod: false,
+        reprC: false,
+        builderDerivable: false,
+        builderRequiredFields: [],
+    }
+}
+
+/// HirEnumDecl is an enum declaration with variants and methods.
+pub struct HirEnumDecl {
+    pub name: String,
+    pub variants: List<HirVariant>,
+    pub methods: List<HirFnDecl>,
+    pub generics: List<HirTypeParam>,
+    pub exported: Bool,
+    pub span: HirSpan,
+
+    pub builtinSource: String,
+    pub builtinSourceArgs: List<HirType>,
+}
+
+pub fn hirEnumDecl(name: String, span: HirSpan) -> HirEnumDecl {
+    HirEnumDecl {
+        name,
+        variants: [],
+        methods: [],
+        generics: [],
+        exported: false,
+        span,
+        builtinSource: "",
+        builtinSourceArgs: [],
+    }
+}
+
+/// HirLetDecl is a top-level `let` or `pub let`.
+pub struct HirLetDecl {
+    pub name: String,
+    pub typ: HirType,
+    pub hasValue: Bool,
+    pub value: HirExpr,
+    pub mutable: Bool,
+    pub exported: Bool,
+    pub span: HirSpan,
+}
+
+pub fn hirLetDecl(name: String, typ: HirType, span: HirSpan) -> HirLetDecl {
+    HirLetDecl {
+        name,
+        typ,
+        hasValue: false,
+        value: hirExprInvalid(),
+        mutable: false,
+        exported: false,
+        span,
+    }
+}
+
+/// HirInterfaceDecl is an interface with its required methods. Extends
+/// lists composed interfaces (each a NamedType).
+pub struct HirInterfaceDecl {
+    pub name: String,
+    pub methods: List<HirFnDecl>,
+    pub extends: List<HirType>,
+    pub generics: List<HirTypeParam>,
+    pub exported: Bool,
+    pub span: HirSpan,
+}
+
+pub fn hirInterfaceDecl(name: String, span: HirSpan) -> HirInterfaceDecl {
+    HirInterfaceDecl {
+        name,
+        methods: [],
+        extends: [],
+        generics: [],
+        exported: false,
+        span,
+    }
+}
+
+/// HirTypeAliasDecl is `type Name<T> = Target`.
+pub struct HirTypeAliasDecl {
+    pub name: String,
+    pub generics: List<HirTypeParam>,
+    pub target: HirType,
+    pub exported: Bool,
+    pub span: HirSpan,
+}
+
+pub fn hirTypeAliasDecl(name: String, target: HirType, span: HirSpan) -> HirTypeAliasDecl {
+    HirTypeAliasDecl {
+        name,
+        generics: [],
+        target,
+        exported: false,
+        span,
+    }
+}
+
+/// HirUseDecl is a `use` import or FFI declaration.
+///
+/// `path` is the dotted source path (["std","io"]); `rawPath` is the
+/// verbatim form from the source for diagnostics. `alias` is the
+/// binding name (last segment when no `as alias` was written).
+///
+/// For FFI (`use go "..."` / `use runtime ...`), `isGoFFI` or
+/// `isRuntimeFFI` is set and the qualified target lives in `goPath` /
+/// `runtimePath`. `goBodyFns` carries inline fn decls from a Go FFI
+/// body; extending it to cover inline structs/enums is open work.
+pub struct HirUseDecl {
+    pub path: List<String>,
+    pub rawPath: String,
+    pub alias: String,
+    pub isGoFFI: Bool,
+    pub isRuntimeFFI: Bool,
+    pub goPath: String,
+    pub runtimePath: String,
+    pub goBodyFns: List<HirFnDecl>,
+    pub span: HirSpan,
+}
+
+pub fn hirUseDecl(alias: String, rawPath: String, span: HirSpan) -> HirUseDecl {
+    HirUseDecl {
+        path: [],
+        rawPath,
+        alias,
+        isGoFFI: false,
+        isRuntimeFFI: false,
+        goPath: "",
+        runtimePath: "",
+        goBodyFns: [],
+        span,
+    }
+}
+
+/// hirUseIsFFI reports whether the use decl describes an FFI binding.
+pub fn hirUseIsFFI(u: HirUseDecl) -> Bool {
+    u.isGoFFI || u.isRuntimeFFI
+}
+
+// ====================================================================
+// Module
+// ====================================================================
+
+/// HirModule is the HIR form of one compilation unit. Mirrors
+/// ir.Module but splits decls into per-kind lists so downstream
+/// consumers do not need a sum-type discriminator.
+///
+/// `script` carries top-level statements for files with a script
+/// entrypoint (e.g. executables whose body sits outside any `fn`).
+///
+/// `issues` is a diagnostic slush pile — messages accumulated during
+/// lowering that the caller surfaces through the normal diag channel.
+pub struct HirModule {
+    pub packageName: String,
+    pub fns: List<HirFnDecl>,
+    pub structs: List<HirStructDecl>,
+    pub enums: List<HirEnumDecl>,
+    pub lets: List<HirLetDecl>,
+    pub uses: List<HirUseDecl>,
+    pub interfaces: List<HirInterfaceDecl>,
+    pub aliases: List<HirTypeAliasDecl>,
+    pub script: List<HirStmt>,
+    pub issues: List<String>,
+    pub span: HirSpan,
+}
+
+pub fn hirModule(packageName: String) -> HirModule {
+    HirModule {
+        packageName,
+        fns: [],
+        structs: [],
+        enums: [],
+        lets: [],
+        uses: [],
+        interfaces: [],
+        aliases: [],
+        script: [],
+        issues: [],
+        span: hirNoSpan(),
+    }
+}
+
+/// hirModuleAddIssue records a non-fatal lowering issue on the module.
+pub fn hirModuleAddIssue(m: HirModule, msg: String) {
+    m.issues.push(msg)
+}
+
+/// hirModuleLookupFn returns the index of the named fn or -1 when
+/// absent. Mirrors mirModuleLookupFunction for symmetry.
+pub fn hirModuleLookupFn(m: HirModule, name: String) -> Int {
+    let mut i = 0
+    for f in m.fns {
+        if f.name == name {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+/// hirModuleLookupStruct returns the index of the named struct or -1.
+pub fn hirModuleLookupStruct(m: HirModule, name: String) -> Int {
+    let mut i = 0
+    for s in m.structs {
+        if s.name == name {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+/// hirModuleLookupEnum returns the index of the named enum or -1.
+pub fn hirModuleLookupEnum(m: HirModule, name: String) -> Int {
+    let mut i = 0
+    for e in m.enums {
+        if e.name == name {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+/// hirModuleLookupUseAlias returns the index of the use decl with the
+/// given alias or -1 when absent.
+pub fn hirModuleLookupUseAlias(m: HirModule, alias: String) -> Int {
+    let mut i = 0
+    for u in m.uses {
+        if u.alias == alias {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+// ====================================================================
+// Stmt / Expr / Pattern skeletons
+// ====================================================================
+//
+// Stage 3a only commits the kind tags + span so decls can reference
+// block / stmt / expr / pattern types at their expected positions.
+// Stage 3b fills per-variant payload fields + constructors for each
+// HirStmtKind and HirExprKind; Stage 3c does the same for
+// HirPatternKind + adds HirDecisionNode for the match decision tree.
+//
+// The `typ` field on HirExpr is always present so the module can carry
+// the checker's type information through lowering; Stage 3b will
+// populate it from literal-specific constructors.
+
+/// HirBlock is a scoped sequence of statements with an optional final
+/// expression (the block's "result"). Mirrors ir.Block.
+pub struct HirBlock {
+    pub stmts: List<HirStmt>,
+    pub hasResult: Bool,
+    pub result: HirExpr,
+    pub span: HirSpan,
+}
+
+pub fn hirBlock(span: HirSpan) -> HirBlock {
+    HirBlock {
+        stmts: [],
+        hasResult: false,
+        result: hirExprInvalid(),
+        span,
+    }
+}
+
+/// hirBlockAppend adds `s` to the block's statement list.
+pub fn hirBlockAppend(b: HirBlock, s: HirStmt) {
+    b.stmts.push(s)
+}
+
+/// hirBlockSetResult installs the block's final expression.
+pub fn hirBlockSetResult(b: HirBlock, e: HirExpr) {
+    b.result = e
+    b.hasResult = true
+}
+
+/// HirStmt is the flat statement node. `kind` selects which payload
+/// fields are live — readers must always check `kind` before touching
+/// a variant-specific field. The shape mirrors the statement surface
+/// of `internal/ir/ir.go`:
+///
+///   Block       — `block`
+///   Let         — `letName` / `letPattern` (has*) / `letTyp` /
+///                 `letValue` (hasLetValue) / `letMut`
+///   ExprStmt    — `exprValue`
+///   Assign      — `assignOp` / `assignTargets` / `assignValue`
+///   Return      — `returnValue` (returnHasValue)
+///   Break       — (no payload beyond span)
+///   Continue    — (no payload beyond span)
+///   If          — `ifCond` / `ifThen` / `ifElse` (ifHasElse)
+///   For         — `forKind` / `forVar` / `forPattern` (forHasPattern)
+///                 / `forCond` (forHasCond) / `forIter` (forHasIter)
+///                 / `forStart` (forHasStart) / `forEnd` (forHasEnd)
+///                 / `forInclusive` / `forBody`
+///   Match       — `matchScrutinee` / `matchArms`
+///                 (pre-compiled decision tree lands in Stage 3c)
+///   Defer       — `deferBody`
+///   ChanSend    — `chanChannel` / `chanValue`
+///   Error       — `errorNote`
+///
+/// The flat-struct convention means every HirStmt instance carries
+/// storage for every variant's fields. This is deliberate — it keeps
+/// HirStmt values passable by value without boxing, matches mir.osty's
+/// approach for MirInstr, and avoids the need for a parallel pointer
+/// table.
+pub struct HirStmt {
+    pub kind: HirStmtKind,
+    pub span: HirSpan,
+
+    // Block
+    pub block: HirBlock,
+
+    // Let
+    pub letName: String,
+    pub letPattern: HirPattern,
+    pub letHasPattern: Bool,
+    pub letTyp: HirType,
+    pub letHasType: Bool,
+    pub letValue: HirExpr,
+    pub letHasValue: Bool,
+    pub letMut: Bool,
+
+    // ExprStmt
+    pub exprValue: HirExpr,
+
+    // Assign
+    pub assignOp: HirAssignOp,
+    pub assignTargets: List<HirExpr>,
+    pub assignValue: HirExpr,
+
+    // Return
+    pub returnValue: HirExpr,
+    pub returnHasValue: Bool,
+
+    // If
+    pub ifCond: HirExpr,
+    pub ifThen: HirBlock,
+    pub ifElse: HirBlock,
+    pub ifHasElse: Bool,
+
+    // For — multiple variants share one struct; payload is gated by
+    // `forKind` and the `forHas*` flags.
+    pub forKind: HirForKind,
+    pub forVar: String,
+    pub forPattern: HirPattern,
+    pub forHasPattern: Bool,
+    pub forCond: HirExpr,
+    pub forHasCond: Bool,
+    pub forIter: HirExpr,
+    pub forHasIter: Bool,
+    pub forStart: HirExpr,
+    pub forHasStart: Bool,
+    pub forEnd: HirExpr,
+    pub forHasEnd: Bool,
+    pub forInclusive: Bool,
+    pub forBody: HirBlock,
+
+    // Match
+    pub matchScrutinee: HirExpr,
+    pub matchArms: List<HirMatchArm>,
+
+    // Defer
+    pub deferBody: HirBlock,
+
+    // ChanSend
+    pub chanChannel: HirExpr,
+    pub chanValue: HirExpr,
+
+    // Error
+    pub errorNote: String,
+}
+
+pub fn hirStmtInvalid() -> HirStmt {
+    HirStmt {
+        kind: HirStmtInvalid,
+        span: hirNoSpan(),
+
+        block: hirBlock(hirNoSpan()),
+
+        letName: "",
+        letPattern: hirPatternInvalid(),
+        letHasPattern: false,
+        letTyp: hirTypeInvalid(),
+        letHasType: false,
+        letValue: hirExprInvalid(),
+        letHasValue: false,
+        letMut: false,
+
+        exprValue: hirExprInvalid(),
+
+        assignOp: HirAssignInvalid,
+        assignTargets: [],
+        assignValue: hirExprInvalid(),
+
+        returnValue: hirExprInvalid(),
+        returnHasValue: false,
+
+        ifCond: hirExprInvalid(),
+        ifThen: hirBlock(hirNoSpan()),
+        ifElse: hirBlock(hirNoSpan()),
+        ifHasElse: false,
+
+        forKind: HirForInvalid,
+        forVar: "",
+        forPattern: hirPatternInvalid(),
+        forHasPattern: false,
+        forCond: hirExprInvalid(),
+        forHasCond: false,
+        forIter: hirExprInvalid(),
+        forHasIter: false,
+        forStart: hirExprInvalid(),
+        forHasStart: false,
+        forEnd: hirExprInvalid(),
+        forHasEnd: false,
+        forInclusive: false,
+        forBody: hirBlock(hirNoSpan()),
+
+        matchScrutinee: hirExprInvalid(),
+        matchArms: [],
+
+        deferBody: hirBlock(hirNoSpan()),
+
+        chanChannel: hirExprInvalid(),
+        chanValue: hirExprInvalid(),
+
+        errorNote: "",
+    }
+}
+
+// ---- Stmt constructors ---------------------------------------------
+
+/// hirBlockStmt wraps a block as a statement (e.g. a bare scope).
+pub fn hirBlockStmt(b: HirBlock, span: HirSpan) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtBlock
+    s.block = b
+    s.span = span
+    s
+}
+
+/// hirLetStmt builds a simple name-bound let. Use hirLetStmtPattern
+/// for destructuring binds and hirLetStmtNoValue when there is no
+/// initialiser.
+pub fn hirLetStmt(
+    name: String,
+    typ: HirType,
+    value: HirExpr,
+    mutable: Bool,
+    span: HirSpan,
+) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtLet
+    s.letName = name
+    s.letTyp = typ
+    s.letHasType = hirTypeIsValid(typ)
+    s.letValue = value
+    s.letHasValue = true
+    s.letMut = mutable
+    s.span = span
+    s
+}
+
+pub fn hirLetStmtPattern(
+    pattern: HirPattern,
+    typ: HirType,
+    value: HirExpr,
+    mutable: Bool,
+    span: HirSpan,
+) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtLet
+    s.letPattern = pattern
+    s.letHasPattern = true
+    s.letTyp = typ
+    s.letHasType = hirTypeIsValid(typ)
+    s.letValue = value
+    s.letHasValue = true
+    s.letMut = mutable
+    s.span = span
+    s
+}
+
+pub fn hirLetStmtNoValue(
+    name: String,
+    typ: HirType,
+    mutable: Bool,
+    span: HirSpan,
+) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtLet
+    s.letName = name
+    s.letTyp = typ
+    s.letHasType = hirTypeIsValid(typ)
+    s.letMut = mutable
+    s.span = span
+    s
+}
+
+pub fn hirExprStmt(e: HirExpr, span: HirSpan) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtExpr
+    s.exprValue = e
+    s.span = span
+    s
+}
+
+/// hirAssignStmt is a single-target assignment `target op= value`.
+/// Multi-target tuple destructuring uses hirAssignStmtMulti.
+pub fn hirAssignStmt(
+    op: HirAssignOp,
+    target: HirExpr,
+    value: HirExpr,
+    span: HirSpan,
+) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtAssign
+    s.assignOp = op
+    s.assignTargets = [target]
+    s.assignValue = value
+    s.span = span
+    s
+}
+
+pub fn hirAssignStmtMulti(
+    op: HirAssignOp,
+    targets: List<HirExpr>,
+    value: HirExpr,
+    span: HirSpan,
+) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtAssign
+    s.assignOp = op
+    s.assignTargets = targets
+    s.assignValue = value
+    s.span = span
+    s
+}
+
+/// hirReturnStmt builds `return value`.
+pub fn hirReturnStmt(value: HirExpr, span: HirSpan) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtReturn
+    s.returnValue = value
+    s.returnHasValue = true
+    s.span = span
+    s
+}
+
+/// hirReturnStmtUnit is the bare `return` for unit-returning fns.
+pub fn hirReturnStmtUnit(span: HirSpan) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtReturn
+    s.returnHasValue = false
+    s.span = span
+    s
+}
+
+pub fn hirBreakStmt(span: HirSpan) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtBreak
+    s.span = span
+    s
+}
+
+pub fn hirContinueStmt(span: HirSpan) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtContinue
+    s.span = span
+    s
+}
+
+/// hirIfStmt builds an if-without-else in statement position. Use
+/// hirIfStmtElse when an `else` branch is present.
+pub fn hirIfStmt(
+    cond: HirExpr,
+    thenBlock: HirBlock,
+    span: HirSpan,
+) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtIf
+    s.ifCond = cond
+    s.ifThen = thenBlock
+    s.ifHasElse = false
+    s.span = span
+    s
+}
+
+pub fn hirIfStmtElse(
+    cond: HirExpr,
+    thenBlock: HirBlock,
+    elseBlock: HirBlock,
+    span: HirSpan,
+) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtIf
+    s.ifCond = cond
+    s.ifThen = thenBlock
+    s.ifElse = elseBlock
+    s.ifHasElse = true
+    s.span = span
+    s
+}
+
+// ---- For constructors: one per ForKind variant ---------------------
+
+pub fn hirForInfiniteStmt(body: HirBlock, span: HirSpan) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtFor
+    s.forKind = HirForInfinite
+    s.forBody = body
+    s.span = span
+    s
+}
+
+pub fn hirForWhileStmt(cond: HirExpr, body: HirBlock, span: HirSpan) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtFor
+    s.forKind = HirForWhile
+    s.forCond = cond
+    s.forHasCond = true
+    s.forBody = body
+    s.span = span
+    s
+}
+
+/// hirForRangeStmt builds `for var in start..end` (exclusive=false).
+/// `start` / `end` may be an HirExprInvalid for unbounded sides.
+pub fn hirForRangeStmt(
+    varName: String,
+    start: HirExpr,
+    end: HirExpr,
+    inclusive: Bool,
+    body: HirBlock,
+    span: HirSpan,
+) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtFor
+    s.forKind = HirForRange
+    s.forVar = varName
+    s.forStart = start
+    s.forHasStart = hirExprIsValid(start)
+    s.forEnd = end
+    s.forHasEnd = hirExprIsValid(end)
+    s.forInclusive = inclusive
+    s.forBody = body
+    s.span = span
+    s
+}
+
+/// hirForRangeStmtPattern is the destructuring variant of ForRange.
+/// Kept distinct so bare-name heads do not pay pattern-dispatch cost.
+pub fn hirForRangeStmtPattern(
+    pat: HirPattern,
+    start: HirExpr,
+    end: HirExpr,
+    inclusive: Bool,
+    body: HirBlock,
+    span: HirSpan,
+) -> HirStmt {
+    let mut s = hirForRangeStmt("", start, end, inclusive, body, span)
+    s.forPattern = pat
+    s.forHasPattern = true
+    s
+}
+
+/// hirForInStmt builds `for var in iter`.
+pub fn hirForInStmt(
+    varName: String,
+    iter: HirExpr,
+    body: HirBlock,
+    span: HirSpan,
+) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtFor
+    s.forKind = HirForIn
+    s.forVar = varName
+    s.forIter = iter
+    s.forHasIter = true
+    s.forBody = body
+    s.span = span
+    s
+}
+
+pub fn hirForInStmtPattern(
+    pat: HirPattern,
+    iter: HirExpr,
+    body: HirBlock,
+    span: HirSpan,
+) -> HirStmt {
+    let mut s = hirForInStmt("", iter, body, span)
+    s.forPattern = pat
+    s.forHasPattern = true
+    s
+}
+
+/// hirMatchStmt builds a match used in statement position (side-effect
+/// only, no value produced). The decision tree is set separately via
+/// hirStmtSetDecisionTree once Stage 3c adds it.
+pub fn hirMatchStmt(
+    scrutinee: HirExpr,
+    arms: List<HirMatchArm>,
+    span: HirSpan,
+) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtMatch
+    s.matchScrutinee = scrutinee
+    s.matchArms = arms
+    s.span = span
+    s
+}
+
+pub fn hirDeferStmt(body: HirBlock, span: HirSpan) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtDefer
+    s.deferBody = body
+    s.span = span
+    s
+}
+
+pub fn hirChanSendStmt(channel: HirExpr, value: HirExpr, span: HirSpan) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtChanSend
+    s.chanChannel = channel
+    s.chanValue = value
+    s.span = span
+    s
+}
+
+/// hirErrorStmt is the poisoned statement emitted when lowering fails.
+/// The note is surfaced through the module's issue list so downstream
+/// stages can decide whether to continue or bail.
+pub fn hirErrorStmt(note: String, span: HirSpan) -> HirStmt {
+    let mut s = hirStmtInvalid()
+    s.kind = HirStmtError
+    s.errorNote = note
+    s.span = span
+    s
+}
+
+// ---- Match arms ----------------------------------------------------
+
+/// HirMatchArm is one match case. `guard` is active iff `hasGuard`.
+/// The arm body is always a block — Go's `*ir.MatchArm.Body` is
+/// always present and Stage 3b preserves that invariant. The body's
+/// final expression (block.result) carries the arm's produced value
+/// when the enclosing match is used in expression position.
+pub struct HirMatchArm {
+    pub pattern: HirPattern,
+    pub hasGuard: Bool,
+    pub guard: HirExpr,
+    pub body: HirBlock,
+    pub span: HirSpan,
+}
+
+pub fn hirMatchArm(pattern: HirPattern, body: HirBlock, span: HirSpan) -> HirMatchArm {
+    HirMatchArm {
+        pattern,
+        hasGuard: false,
+        guard: hirExprInvalid(),
+        body,
+        span,
+    }
+}
+
+pub fn hirMatchArmGuarded(
+    pattern: HirPattern,
+    guard: HirExpr,
+    body: HirBlock,
+    span: HirSpan,
+) -> HirMatchArm {
+    HirMatchArm {
+        pattern,
+        hasGuard: true,
+        guard,
+        body,
+        span,
+    }
+}
+
+/// HirExpr is the skeleton expression form. Every expression carries
+/// its inferred HIR type so backends do not need a side table.
+///
+/// HirArg is one argument inside a call, method call, intrinsic call,
+/// or variant constructor. `name` is empty for positional args; for
+/// keyword args it carries the parameter name written at the call
+/// site (`greet(name: "Ada")` yields `HirArg{name:"name", value:…}`).
+pub struct HirArg {
+    pub name: String,
+    pub value: HirExpr,
+    pub span: HirSpan,
+}
+
+pub fn hirArg(value: HirExpr, span: HirSpan) -> HirArg {
+    HirArg { name: "", value, span }
+}
+
+pub fn hirArgKeyword(name: String, value: HirExpr, span: HirSpan) -> HirArg {
+    HirArg { name, value, span }
+}
+
+/// hirArgIsKeyword reports whether the arg was written with a `name:`
+/// prefix at the call site.
+pub fn hirArgIsKeyword(a: HirArg) -> Bool {
+    a.name != ""
+}
+
+/// HirStringPart is one chunk inside an interpolated StringLit. When
+/// `isLit` is true, `lit` carries the literal text. Otherwise
+/// `expr` (via its list slot) carries the embedded expression; the
+/// list form threads the recursion through a heap pointer so HirExpr
+/// can reference itself through List<HirStringPart>.
+pub struct HirStringPart {
+    pub isLit: Bool,
+    pub lit: String,
+    pub expr: List<HirExpr>,
+}
+
+pub fn hirStringPartLit(text: String) -> HirStringPart {
+    HirStringPart { isLit: true, lit: text, expr: [] }
+}
+
+pub fn hirStringPartExpr(e: HirExpr) -> HirStringPart {
+    let mut children: List<HirExpr> = []
+    children.push(e)
+    HirStringPart { isLit: false, lit: "", expr: children }
+}
+
+/// HirStructLitField is one `name: value` entry inside a StructLit.
+/// When `hasValue` is false, the field used shorthand syntax (`{ name }`)
+/// and lowering will bind it from a local of the same name.
+pub struct HirStructLitField {
+    pub name: String,
+    pub hasValue: Bool,
+    pub value: HirExpr,
+    pub span: HirSpan,
+}
+
+pub fn hirStructLitField(name: String, value: HirExpr, span: HirSpan) -> HirStructLitField {
+    HirStructLitField { name, hasValue: true, value, span }
+}
+
+pub fn hirStructLitFieldShorthand(name: String, span: HirSpan) -> HirStructLitField {
+    HirStructLitField {
+        name,
+        hasValue: false,
+        value: hirExprInvalid(),
+        span,
+    }
+}
+
+/// HirMapEntry is one `key: value` entry inside a MapLit.
+pub struct HirMapEntry {
+    pub key: HirExpr,
+    pub value: HirExpr,
+    pub span: HirSpan,
+}
+
+pub fn hirMapEntry(key: HirExpr, value: HirExpr, span: HirSpan) -> HirMapEntry {
+    HirMapEntry { key, value, span }
+}
+
+/// HirCapture is one free variable referenced by a closure body.
+pub struct HirCapture {
+    pub name: String,
+    pub kind: HirCaptureKind,
+    pub typ: HirType,
+    pub mutable: Bool,
+    pub span: HirSpan,
+}
+
+pub fn hirCapture(name: String, kind: HirCaptureKind, typ: HirType, span: HirSpan) -> HirCapture {
+    HirCapture {
+        name,
+        kind,
+        typ,
+        mutable: false,
+        span,
+    }
+}
+
+/// HirExpr is the flat expression node. `kind` selects which payload
+/// fields are live; every expression carries its inferred HIR type
+/// (`typ`) so downstream consumers never need a side table.
+///
+/// Child expressions are threaded through `List<HirExpr>` with length
+/// 0 or 1 (for single-child fields) or the exact number of children
+/// (for list-shaped fields). This threads the recursive reference
+/// through a heap pointer so HirExpr has a fixed structural size;
+/// direct self-containment would be an infinite type. Child blocks
+/// (BlockExpr / IfExpr / IfLetExpr / Closure) use the same pattern
+/// via `List<HirBlock>`.
+///
+/// Payload layout by kind:
+///
+///   IntLit     — numText
+///   FloatLit   — numText
+///   BoolLit    — boolValue
+///   CharLit    — charValue (Unicode code point as Int)
+///   ByteLit    — byteValue
+///   StringLit  — strParts / strIsRaw / strIsTriple
+///   UnitLit    — (no payload)
+///   Ident      — identName / identKind / identTypeArgs
+///   Unary      — unaryOp / unaryChild
+///   Binary     — binaryOp / binaryLeft / binaryRight
+///   Call       — callCallee / callTypeArgs / callArgs
+///   Intrinsic  — intrinsicKind / intrinsicArgs
+///   List       — listElems / listElem
+///   BlockExpr  — blockBody
+///   IfExpr     — ifExprCond / ifExprThen / ifExprElse
+///   Field      — fieldTarget / fieldName / fieldOptional
+///   Index      — indexTarget / indexIndex
+///   Method     — methodReceiver / methodName / methodTypeArgs /
+///                methodArgs
+///   StructLit  — structTypeName / structFields / structSpread (len
+///                0 or 1) / structHasSpread
+///   TupleLit   — tupleElems
+///   MapLit     — mapEntries / mapKeyT / mapValT
+///   Range      — rangeStart (0/1) / rangeEnd (0/1) / rangeInclusive
+///   Question   — questionChild
+///   Coalesce   — coalesceLeft / coalesceRight
+///   Closure    — closureParams / closureReturn / closureBody /
+///                closureCaptures
+///   VariantLit — variantEnum / variantName / variantArgs
+///   MatchExpr  — matchScrutinee / matchArms
+///                (decision tree lands in Stage 3d)
+///   IfLet      — ifLetPattern / ifLetScrutinee / ifLetThen /
+///                ifLetElse / ifLetHasElse
+///   TupleAccess— tupleAccessTarget / tupleAccessIndex
+///   Error      — errorNote
+pub struct HirExpr {
+    pub kind: HirExprKind,
+    pub typ: HirType,
+    pub span: HirSpan,
+
+    // IntLit / FloatLit — source text (preserves radix / underscores)
+    pub numText: String,
+
+    // BoolLit
+    pub boolValue: Bool,
+
+    // CharLit — Unicode code point
+    pub charValue: Int,
+
+    // ByteLit (0..=255)
+    pub byteValue: Int,
+
+    // StringLit
+    pub strParts: List<HirStringPart>,
+    pub strIsRaw: Bool,
+    pub strIsTriple: Bool,
+
+    // Ident
+    pub identName: String,
+    pub identKind: HirIdentKind,
+    pub identTypeArgs: List<HirType>,
+
+    // Unary
+    pub unaryOp: HirUnOp,
+    pub unaryChild: List<HirExpr>,
+
+    // Binary
+    pub binaryOp: HirBinOp,
+    pub binaryLeft: List<HirExpr>,
+    pub binaryRight: List<HirExpr>,
+
+    // Call / Intrinsic shared callee + args
+    pub callCallee: List<HirExpr>,
+    pub callTypeArgs: List<HirType>,
+    pub callArgs: List<HirArg>,
+    pub intrinsicKind: HirIntrinsicKind,
+    pub intrinsicArgs: List<HirArg>,
+
+    // List literal
+    pub listElems: List<HirExpr>,
+    pub listElem: HirType,
+
+    // BlockExpr
+    pub blockBody: List<HirBlock>,
+
+    // IfExpr
+    pub ifExprCond: List<HirExpr>,
+    pub ifExprThen: List<HirBlock>,
+    pub ifExprElse: List<HirBlock>,
+
+    // FieldExpr
+    pub fieldTarget: List<HirExpr>,
+    pub fieldName: String,
+    pub fieldOptional: Bool,
+
+    // IndexExpr
+    pub indexTarget: List<HirExpr>,
+    pub indexIndex: List<HirExpr>,
+
+    // MethodCall
+    pub methodReceiver: List<HirExpr>,
+    pub methodName: String,
+    pub methodTypeArgs: List<HirType>,
+    pub methodArgs: List<HirArg>,
+
+    // StructLit
+    pub structTypeName: String,
+    pub structFields: List<HirStructLitField>,
+    pub structSpread: List<HirExpr>,
+    pub structHasSpread: Bool,
+
+    // TupleLit
+    pub tupleElems: List<HirExpr>,
+
+    // MapLit
+    pub mapEntries: List<HirMapEntry>,
+    pub mapKeyT: HirType,
+    pub mapValT: HirType,
+
+    // RangeLit
+    pub rangeStart: List<HirExpr>,
+    pub rangeEnd: List<HirExpr>,
+    pub rangeInclusive: Bool,
+
+    // QuestionExpr
+    pub questionChild: List<HirExpr>,
+
+    // CoalesceExpr
+    pub coalesceLeft: List<HirExpr>,
+    pub coalesceRight: List<HirExpr>,
+
+    // Closure
+    pub closureParams: List<HirParam>,
+    pub closureReturn: HirType,
+    pub closureBody: List<HirBlock>,
+    pub closureCaptures: List<HirCapture>,
+
+    // VariantLit
+    pub variantEnum: String,
+    pub variantName: String,
+    pub variantArgs: List<HirArg>,
+
+    // MatchExpr
+    pub matchExprScrutinee: List<HirExpr>,
+    pub matchExprArms: List<HirMatchArm>,
+
+    // IfLetExpr
+    pub ifLetPattern: HirPattern,
+    pub ifLetScrutinee: List<HirExpr>,
+    pub ifLetThen: List<HirBlock>,
+    pub ifLetElse: List<HirBlock>,
+    pub ifLetHasElse: Bool,
+
+    // TupleAccess
+    pub tupleAccessTarget: List<HirExpr>,
+    pub tupleAccessIndex: Int,
+
+    // ErrorExpr
+    pub errorNote: String,
+}
+
+pub fn hirExprInvalid() -> HirExpr {
+    HirExpr {
+        kind: HirExprInvalid,
+        typ: hirTypeInvalid(),
+        span: hirNoSpan(),
+
+        numText: "",
+        boolValue: false,
+        charValue: 0,
+        byteValue: 0,
+
+        strParts: [],
+        strIsRaw: false,
+        strIsTriple: false,
+
+        identName: "",
+        identKind: HirIdentUnknown,
+        identTypeArgs: [],
+
+        unaryOp: HirUnInvalid,
+        unaryChild: [],
+
+        binaryOp: HirBinInvalid,
+        binaryLeft: [],
+        binaryRight: [],
+
+        callCallee: [],
+        callTypeArgs: [],
+        callArgs: [],
+        intrinsicKind: HirIntrinsicInvalid,
+        intrinsicArgs: [],
+
+        listElems: [],
+        listElem: hirTypeInvalid(),
+
+        blockBody: [],
+
+        ifExprCond: [],
+        ifExprThen: [],
+        ifExprElse: [],
+
+        fieldTarget: [],
+        fieldName: "",
+        fieldOptional: false,
+
+        indexTarget: [],
+        indexIndex: [],
+
+        methodReceiver: [],
+        methodName: "",
+        methodTypeArgs: [],
+        methodArgs: [],
+
+        structTypeName: "",
+        structFields: [],
+        structSpread: [],
+        structHasSpread: false,
+
+        tupleElems: [],
+
+        mapEntries: [],
+        mapKeyT: hirTypeInvalid(),
+        mapValT: hirTypeInvalid(),
+
+        rangeStart: [],
+        rangeEnd: [],
+        rangeInclusive: false,
+
+        questionChild: [],
+
+        coalesceLeft: [],
+        coalesceRight: [],
+
+        closureParams: [],
+        closureReturn: hirTypeInvalid(),
+        closureBody: [],
+        closureCaptures: [],
+
+        variantEnum: "",
+        variantName: "",
+        variantArgs: [],
+
+        matchExprScrutinee: [],
+        matchExprArms: [],
+
+        ifLetPattern: hirPatternInvalid(),
+        ifLetScrutinee: [],
+        ifLetThen: [],
+        ifLetElse: [],
+        ifLetHasElse: false,
+
+        tupleAccessTarget: [],
+        tupleAccessIndex: 0,
+
+        errorNote: "",
+    }
+}
+
+/// hirExprIsValid reports whether `e` is a real expression (not the
+/// default-zero placeholder).
+pub fn hirExprIsValid(e: HirExpr) -> Bool {
+    match e.kind {
+        HirExprInvalid -> false,
+        _ -> true,
+    }
+}
+
+// ---- Expression constructors ---------------------------------------
+
+pub fn hirIntLit(text: String, typ: HirType, span: HirSpan) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprIntLit
+    e.numText = text
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirFloatLit(text: String, typ: HirType, span: HirSpan) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprFloatLit
+    e.numText = text
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirBoolLit(value: Bool, span: HirSpan) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprBoolLit
+    e.boolValue = value
+    e.typ = hirTBool()
+    e.span = span
+    e
+}
+
+pub fn hirCharLit(codePoint: Int, span: HirSpan) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprCharLit
+    e.charValue = codePoint
+    e.typ = hirTChar()
+    e.span = span
+    e
+}
+
+pub fn hirByteLit(value: Int, span: HirSpan) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprByteLit
+    e.byteValue = value
+    e.typ = hirTByte()
+    e.span = span
+    e
+}
+
+pub fn hirStringLit(parts: List<HirStringPart>, span: HirSpan) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprStringLit
+    e.strParts = parts
+    e.typ = hirTString()
+    e.span = span
+    e
+}
+
+/// hirStringLitRaw / hirStringLitTriple adjust the literal flags for
+/// raw and triple-quoted forms respectively.
+pub fn hirStringLitRaw(parts: List<HirStringPart>, span: HirSpan) -> HirExpr {
+    let mut e = hirStringLit(parts, span)
+    e.strIsRaw = true
+    e
+}
+
+pub fn hirStringLitTriple(parts: List<HirStringPart>, span: HirSpan) -> HirExpr {
+    let mut e = hirStringLit(parts, span)
+    e.strIsTriple = true
+    e
+}
+
+pub fn hirUnitLit(span: HirSpan) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprUnitLit
+    e.typ = hirTUnit()
+    e.span = span
+    e
+}
+
+pub fn hirIdent(name: String, kind: HirIdentKind, typ: HirType, span: HirSpan) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprIdent
+    e.identName = name
+    e.identKind = kind
+    e.typ = typ
+    e.span = span
+    e
+}
+
+/// hirIdentTyped attaches turbofish type arguments to an ident (for
+/// value-position `f::<Int>` uses). Call-site turbofish lowers to
+/// CallExpr.TypeArgs instead.
+pub fn hirIdentTyped(
+    name: String,
+    kind: HirIdentKind,
+    typeArgs: List<HirType>,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirIdent(name, kind, typ, span)
+    e.identTypeArgs = typeArgs
+    e
+}
+
+pub fn hirUnary(op: HirUnOp, x: HirExpr, typ: HirType, span: HirSpan) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprUnary
+    e.unaryOp = op
+    e.unaryChild.push(x)
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirBinary(
+    op: HirBinOp,
+    left: HirExpr,
+    right: HirExpr,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprBinary
+    e.binaryOp = op
+    e.binaryLeft.push(left)
+    e.binaryRight.push(right)
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirCall(
+    callee: HirExpr,
+    args: List<HirArg>,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprCall
+    e.callCallee.push(callee)
+    e.callArgs = args
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirCallTyped(
+    callee: HirExpr,
+    typeArgs: List<HirType>,
+    args: List<HirArg>,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirCall(callee, args, typ, span)
+    e.callTypeArgs = typeArgs
+    e
+}
+
+pub fn hirIntrinsic(
+    kind: HirIntrinsicKind,
+    args: List<HirArg>,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprIntrinsic
+    e.intrinsicKind = kind
+    e.intrinsicArgs = args
+    e.typ = hirTUnit()
+    e.span = span
+    e
+}
+
+pub fn hirListLit(
+    elems: List<HirExpr>,
+    elem: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprList
+    e.listElems = elems
+    e.listElem = elem
+    let mut args: List<HirType> = []
+    args.push(elem)
+    e.typ = hirTypeBuiltin("List", args)
+    e.span = span
+    e
+}
+
+pub fn hirBlockExpr(body: HirBlock, typ: HirType, span: HirSpan) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprBlock
+    e.blockBody.push(body)
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirIfExpr(
+    cond: HirExpr,
+    thenBlock: HirBlock,
+    elseBlock: HirBlock,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprIf
+    e.ifExprCond.push(cond)
+    e.ifExprThen.push(thenBlock)
+    e.ifExprElse.push(elseBlock)
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirFieldExpr(
+    x: HirExpr,
+    name: String,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprField
+    e.fieldTarget.push(x)
+    e.fieldName = name
+    e.typ = typ
+    e.span = span
+    e
+}
+
+/// hirFieldExprOptional is the `x?.name` chained-access form.
+pub fn hirFieldExprOptional(
+    x: HirExpr,
+    name: String,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirFieldExpr(x, name, typ, span)
+    e.fieldOptional = true
+    e
+}
+
+pub fn hirIndexExpr(
+    x: HirExpr,
+    idx: HirExpr,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprIndex
+    e.indexTarget.push(x)
+    e.indexIndex.push(idx)
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirMethodCall(
+    receiver: HirExpr,
+    name: String,
+    args: List<HirArg>,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprMethod
+    e.methodReceiver.push(receiver)
+    e.methodName = name
+    e.methodArgs = args
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirMethodCallTyped(
+    receiver: HirExpr,
+    name: String,
+    typeArgs: List<HirType>,
+    args: List<HirArg>,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirMethodCall(receiver, name, args, typ, span)
+    e.methodTypeArgs = typeArgs
+    e
+}
+
+pub fn hirStructLit(
+    typeName: String,
+    fields: List<HirStructLitField>,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprStructLit
+    e.structTypeName = typeName
+    e.structFields = fields
+    e.typ = typ
+    e.span = span
+    e
+}
+
+/// hirStructLitSpread adds a `..spread` expression to a struct literal
+/// built with hirStructLit. Mirrors Go's `{ ..x, field: v }` form.
+pub fn hirStructLitSpread(
+    typeName: String,
+    fields: List<HirStructLitField>,
+    spread: HirExpr,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirStructLit(typeName, fields, typ, span)
+    e.structSpread.push(spread)
+    e.structHasSpread = true
+    e
+}
+
+pub fn hirTupleLit(elems: List<HirExpr>, typ: HirType, span: HirSpan) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprTupleLit
+    e.tupleElems = elems
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirMapLit(
+    entries: List<HirMapEntry>,
+    keyT: HirType,
+    valT: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprMapLit
+    e.mapEntries = entries
+    e.mapKeyT = keyT
+    e.mapValT = valT
+    let mut args: List<HirType> = []
+    args.push(keyT)
+    args.push(valT)
+    e.typ = hirTypeBuiltin("Map", args)
+    e.span = span
+    e
+}
+
+/// hirRangeLit builds a range expression used in value position.
+/// `hasStart` / `hasEnd` are encoded via the corresponding list being
+/// non-empty; callers use hirRangeLitBounded, hirRangeLitFrom, or
+/// hirRangeLitTo for the common shapes.
+pub fn hirRangeLitBounded(
+    start: HirExpr,
+    end: HirExpr,
+    inclusive: Bool,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprRange
+    e.rangeStart.push(start)
+    e.rangeEnd.push(end)
+    e.rangeInclusive = inclusive
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirRangeLitFrom(
+    start: HirExpr,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprRange
+    e.rangeStart.push(start)
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirRangeLitTo(
+    end: HirExpr,
+    inclusive: Bool,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprRange
+    e.rangeEnd.push(end)
+    e.rangeInclusive = inclusive
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirQuestion(x: HirExpr, typ: HirType, span: HirSpan) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprQuestion
+    e.questionChild.push(x)
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirCoalesce(
+    left: HirExpr,
+    right: HirExpr,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprCoalesce
+    e.coalesceLeft.push(left)
+    e.coalesceRight.push(right)
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirClosure(
+    params: List<HirParam>,
+    returnType: HirType,
+    body: HirBlock,
+    captures: List<HirCapture>,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprClosure
+    e.closureParams = params
+    e.closureReturn = returnType
+    e.closureBody.push(body)
+    e.closureCaptures = captures
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirVariantLit(
+    enumName: String,
+    variant: String,
+    args: List<HirArg>,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprVariantLit
+    e.variantEnum = enumName
+    e.variantName = variant
+    e.variantArgs = args
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirMatchExpr(
+    scrutinee: HirExpr,
+    arms: List<HirMatchArm>,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprMatch
+    e.matchExprScrutinee.push(scrutinee)
+    e.matchExprArms = arms
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirIfLetExpr(
+    pattern: HirPattern,
+    scrutinee: HirExpr,
+    thenBlock: HirBlock,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprIfLet
+    e.ifLetPattern = pattern
+    e.ifLetScrutinee.push(scrutinee)
+    e.ifLetThen.push(thenBlock)
+    e.ifLetHasElse = false
+    e.typ = typ
+    e.span = span
+    e
+}
+
+pub fn hirIfLetExprElse(
+    pattern: HirPattern,
+    scrutinee: HirExpr,
+    thenBlock: HirBlock,
+    elseBlock: HirBlock,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirIfLetExpr(pattern, scrutinee, thenBlock, typ, span)
+    e.ifLetElse.push(elseBlock)
+    e.ifLetHasElse = true
+    e
+}
+
+pub fn hirTupleAccess(
+    x: HirExpr,
+    index: Int,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprTupleAccess
+    e.tupleAccessTarget.push(x)
+    e.tupleAccessIndex = index
+    e.typ = typ
+    e.span = span
+    e
+}
+
+/// hirErrorExpr is the poisoned expression emitted when lowering fails
+/// on a subexpression. `typ` defaults to HirTypeErr when callers pass
+/// the invalid type.
+pub fn hirErrorExpr(note: String, typ: HirType, span: HirSpan) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprError
+    e.errorNote = note
+    e.typ = if hirTypeIsValid(typ) {
+        typ
+    } else {
+        hirTypeErr()
+    }
+    e.span = span
+    e
+}
+
+/// HirStructPatField is one entry inside a StructPat. When
+/// `hasPattern` is false the field used the shorthand binding form
+/// (`User { name }` matches `name` to the field of the same name).
+pub struct HirStructPatField {
+    pub name: String,
+    pub hasPattern: Bool,
+    pub pattern: HirPattern,
+    pub span: HirSpan,
+}
+
+pub fn hirStructPatField(name: String, pattern: HirPattern, span: HirSpan) -> HirStructPatField {
+    HirStructPatField {
+        name,
+        hasPattern: true,
+        pattern,
+        span,
+    }
+}
+
+pub fn hirStructPatFieldShorthand(name: String, span: HirSpan) -> HirStructPatField {
+    HirStructPatField {
+        name,
+        hasPattern: false,
+        pattern: hirPatternInvalid(),
+        span,
+    }
+}
+
+/// HirPattern is the flat destructuring-pattern node. `kind` selects
+/// which payload fields are live. Patterns appear in `let` bindings,
+/// `match` arms, `if let` / `for let` heads, and closure parameter
+/// lists. Child patterns and embedded expressions are threaded through
+/// `List<HirPattern>` / `List<HirExpr>` to break self-containment.
+///
+/// Payload layout by kind:
+///
+///   Wild       — (no payload)
+///   Ident      — identName / identMut
+///   Lit        — litValue (length 1, always a primitive-literal Expr)
+///   Tuple      — tupleElems
+///   Struct     — structTypeName / structFields / structRest
+///   Variant    — variantEnum / variantName / variantArgs
+///   Range      — rangeLow (0/1) / rangeHigh (0/1) / rangeInclusive
+///   Or         — orAlts
+///   Binding    — bindingName / bindingChild (length 1)
+///   Error      — errorNote
+pub struct HirPattern {
+    pub kind: HirPatternKind,
+    pub span: HirSpan,
+
+    // Ident
+    pub identName: String,
+    pub identMut: Bool,
+
+    // Lit
+    pub litValue: List<HirExpr>,
+
+    // Tuple
+    pub tupleElems: List<HirPattern>,
+
+    // Struct
+    pub structTypeName: String,
+    pub structFields: List<HirStructPatField>,
+    pub structRest: Bool,
+
+    // Variant
+    pub variantEnum: String,
+    pub variantName: String,
+    pub variantArgs: List<HirPattern>,
+
+    // Range — Low/High may be absent for `..=N` / `N..` forms
+    pub rangeLow: List<HirExpr>,
+    pub rangeHigh: List<HirExpr>,
+    pub rangeInclusive: Bool,
+
+    // Or
+    pub orAlts: List<HirPattern>,
+
+    // Binding (`name @ pattern`)
+    pub bindingName: String,
+    pub bindingChild: List<HirPattern>,
+
+    // Error
+    pub errorNote: String,
+}
+
+pub fn hirPatternInvalid() -> HirPattern {
+    HirPattern {
+        kind: HirPatInvalid,
+        span: hirNoSpan(),
+
+        identName: "",
+        identMut: false,
+
+        litValue: [],
+
+        tupleElems: [],
+
+        structTypeName: "",
+        structFields: [],
+        structRest: false,
+
+        variantEnum: "",
+        variantName: "",
+        variantArgs: [],
+
+        rangeLow: [],
+        rangeHigh: [],
+        rangeInclusive: false,
+
+        orAlts: [],
+
+        bindingName: "",
+        bindingChild: [],
+
+        errorNote: "",
+    }
+}
+
+/// hirPatternIsValid reports whether `p` is a real pattern (not the
+/// default-zero placeholder).
+pub fn hirPatternIsValid(p: HirPattern) -> Bool {
+    match p.kind {
+        HirPatInvalid -> false,
+        _ -> true,
+    }
+}
+
+// ---- Pattern constructors ------------------------------------------
+
+pub fn hirWildPat(span: HirSpan) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatWild
+    p.span = span
+    p
+}
+
+pub fn hirIdentPat(name: String, span: HirSpan) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatIdent
+    p.identName = name
+    p.span = span
+    p
+}
+
+pub fn hirIdentPatMut(name: String, span: HirSpan) -> HirPattern {
+    let mut p = hirIdentPat(name, span)
+    p.identMut = true
+    p
+}
+
+/// hirLitPat builds a literal pattern. `value` must be a primitive
+/// literal expression (IntLit / FloatLit / StringLit / CharLit /
+/// BoolLit / ByteLit); enforcement is caller-side.
+pub fn hirLitPat(value: HirExpr, span: HirSpan) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatLit
+    p.litValue.push(value)
+    p.span = span
+    p
+}
+
+pub fn hirTuplePat(elems: List<HirPattern>, span: HirSpan) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatTuple
+    p.tupleElems = elems
+    p.span = span
+    p
+}
+
+/// hirStructPat builds a struct pattern with an exact field list (no
+/// `..` rest). Use hirStructPatRest when the pattern ends with `..`.
+pub fn hirStructPat(
+    typeName: String,
+    fields: List<HirStructPatField>,
+    span: HirSpan,
+) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatStruct
+    p.structTypeName = typeName
+    p.structFields = fields
+    p.span = span
+    p
+}
+
+pub fn hirStructPatRest(
+    typeName: String,
+    fields: List<HirStructPatField>,
+    span: HirSpan,
+) -> HirPattern {
+    let mut p = hirStructPat(typeName, fields, span)
+    p.structRest = true
+    p
+}
+
+pub fn hirVariantPat(
+    enumName: String,
+    variant: String,
+    args: List<HirPattern>,
+    span: HirSpan,
+) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatVariant
+    p.variantEnum = enumName
+    p.variantName = variant
+    p.variantArgs = args
+    p.span = span
+    p
+}
+
+/// hirRangePatBounded is `low..=high` / `low..high`.
+pub fn hirRangePatBounded(
+    low: HirExpr,
+    high: HirExpr,
+    inclusive: Bool,
+    span: HirSpan,
+) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatRange
+    p.rangeLow.push(low)
+    p.rangeHigh.push(high)
+    p.rangeInclusive = inclusive
+    p.span = span
+    p
+}
+
+/// hirRangePatFrom is `low..` (unbounded above).
+pub fn hirRangePatFrom(low: HirExpr, span: HirSpan) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatRange
+    p.rangeLow.push(low)
+    p.span = span
+    p
+}
+
+/// hirRangePatTo is `..high` or `..=high`.
+pub fn hirRangePatTo(
+    high: HirExpr,
+    inclusive: Bool,
+    span: HirSpan,
+) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatRange
+    p.rangeHigh.push(high)
+    p.rangeInclusive = inclusive
+    p.span = span
+    p
+}
+
+pub fn hirOrPat(alts: List<HirPattern>, span: HirSpan) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatOr
+    p.orAlts = alts
+    p.span = span
+    p
+}
+
+pub fn hirBindingPat(
+    name: String,
+    inner: HirPattern,
+    span: HirSpan,
+) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatBinding
+    p.bindingName = name
+    p.bindingChild.push(inner)
+    p.span = span
+    p
+}
+
+pub fn hirErrorPat(note: String, span: HirSpan) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatError
+    p.errorNote = note
+    p.span = span
+    p
+}
+
+// ====================================================================
+// Enum-kind stringification
+// ====================================================================
+
+/// hirStmtKindName returns the source-level name of a stmt kind. Used
+/// by the HIR printer (Stage 3b) and diagnostics.
+pub fn hirStmtKindName(k: HirStmtKind) -> String {
+    match k {
+        HirStmtInvalid -> "<invalid>",
+        HirStmtBlock -> "Block",
+        HirStmtLet -> "Let",
+        HirStmtExpr -> "ExprStmt",
+        HirStmtAssign -> "Assign",
+        HirStmtReturn -> "Return",
+        HirStmtBreak -> "Break",
+        HirStmtContinue -> "Continue",
+        HirStmtIf -> "If",
+        HirStmtFor -> "For",
+        HirStmtMatch -> "Match",
+        HirStmtDefer -> "Defer",
+        HirStmtChanSend -> "ChanSend",
+        HirStmtError -> "<error>",
+    }
+}
+
+pub fn hirExprKindName(k: HirExprKind) -> String {
+    match k {
+        HirExprInvalid -> "<invalid>",
+        HirExprIntLit -> "IntLit",
+        HirExprFloatLit -> "FloatLit",
+        HirExprBoolLit -> "BoolLit",
+        HirExprCharLit -> "CharLit",
+        HirExprByteLit -> "ByteLit",
+        HirExprStringLit -> "StringLit",
+        HirExprUnitLit -> "UnitLit",
+        HirExprIdent -> "Ident",
+        HirExprUnary -> "Unary",
+        HirExprBinary -> "Binary",
+        HirExprCall -> "Call",
+        HirExprIntrinsic -> "Intrinsic",
+        HirExprList -> "List",
+        HirExprBlock -> "BlockExpr",
+        HirExprIf -> "IfExpr",
+        HirExprField -> "Field",
+        HirExprIndex -> "Index",
+        HirExprMethod -> "Method",
+        HirExprStructLit -> "StructLit",
+        HirExprTupleLit -> "TupleLit",
+        HirExprMapLit -> "MapLit",
+        HirExprRange -> "Range",
+        HirExprQuestion -> "Question",
+        HirExprCoalesce -> "Coalesce",
+        HirExprClosure -> "Closure",
+        HirExprVariantLit -> "VariantLit",
+        HirExprMatch -> "MatchExpr",
+        HirExprIfLet -> "IfLet",
+        HirExprTupleAccess -> "TupleAccess",
+        HirExprError -> "<error>",
+    }
+}
+
+pub fn hirPatternKindName(k: HirPatternKind) -> String {
+    match k {
+        HirPatInvalid -> "<invalid>",
+        HirPatWild -> "Wild",
+        HirPatIdent -> "Ident",
+        HirPatLit -> "Lit",
+        HirPatTuple -> "Tuple",
+        HirPatStruct -> "Struct",
+        HirPatVariant -> "Variant",
+        HirPatRange -> "Range",
+        HirPatOr -> "Or",
+        HirPatBinding -> "Binding",
+        HirPatError -> "<error>",
+    }
+}
+
+pub fn hirUnOpName(k: HirUnOp) -> String {
+    match k {
+        HirUnInvalid -> "<invalid>",
+        HirUnNeg -> "-",
+        HirUnPlus -> "+",
+        HirUnNot -> "!",
+        HirUnBitNot -> "~",
+    }
+}
+
+pub fn hirBinOpName(k: HirBinOp) -> String {
+    match k {
+        HirBinInvalid -> "<invalid>",
+        HirBinAdd -> "+",
+        HirBinSub -> "-",
+        HirBinMul -> "*",
+        HirBinDiv -> "/",
+        HirBinMod -> "%",
+        HirBinEq -> "==",
+        HirBinNeq -> "!=",
+        HirBinLt -> "<",
+        HirBinLeq -> "<=",
+        HirBinGt -> ">",
+        HirBinGeq -> ">=",
+        HirBinAnd -> "&&",
+        HirBinOr -> "||",
+        HirBinBitAnd -> "&",
+        HirBinBitOr -> "|",
+        HirBinBitXor -> "^",
+        HirBinShl -> "<<",
+        HirBinShr -> ">>",
+    }
+}
+
+pub fn hirAssignOpName(k: HirAssignOp) -> String {
+    match k {
+        HirAssignInvalid -> "<invalid>",
+        HirAssignEq -> "=",
+        HirAssignAdd -> "+=",
+        HirAssignSub -> "-=",
+        HirAssignMul -> "*=",
+        HirAssignDiv -> "/=",
+        HirAssignMod -> "%=",
+        HirAssignAnd -> "&=",
+        HirAssignOr -> "|=",
+        HirAssignXor -> "^=",
+        HirAssignShl -> "<<=",
+        HirAssignShr -> ">>=",
+    }
+}
+
+pub fn hirForKindName(k: HirForKind) -> String {
+    match k {
+        HirForInvalid -> "<invalid>",
+        HirForInfinite -> "Infinite",
+        HirForWhile -> "While",
+        HirForRange -> "Range",
+        HirForIn -> "In",
+    }
+}
+
+pub fn hirIdentKindName(k: HirIdentKind) -> String {
+    match k {
+        HirIdentUnknown -> "unknown",
+        HirIdentLocal -> "local",
+        HirIdentParam -> "param",
+        HirIdentFn -> "fn",
+        HirIdentVariant -> "variant",
+        HirIdentTypeName -> "typeName",
+        HirIdentGlobal -> "global",
+        HirIdentBuiltin -> "builtin",
+    }
+}
+
+pub fn hirCaptureKindName(k: HirCaptureKind) -> String {
+    match k {
+        HirCaptureUnknown -> "unknown",
+        HirCaptureLocal -> "local",
+        HirCaptureParam -> "param",
+        HirCaptureGlobal -> "global",
+        HirCaptureFn -> "fn",
+        HirCaptureSelf -> "self",
+    }
+}
+
+pub fn hirIntrinsicKindName(k: HirIntrinsicKind) -> String {
+    match k {
+        HirIntrinsicInvalid -> "<invalid>",
+        HirIntrinsicPrint -> "print",
+        HirIntrinsicPrintln -> "println",
+        HirIntrinsicEprint -> "eprint",
+        HirIntrinsicEprintln -> "eprintln",
+    }
+}
+
+pub fn hirInlineModeName(k: HirInlineMode) -> String {
+    match k {
+        HirInlineNone -> "none",
+        HirInlineSoft -> "soft",
+        HirInlineAlways -> "always",
+        HirInlineNever -> "never",
+    }
+}
+
+pub fn hirTypeKindName(k: HirTypeKind) -> String {
+    match k {
+        HirTypeInvalid -> "<invalid>",
+        HirTypePrim -> "Prim",
+        HirTypeNamed -> "Named",
+        HirTypeOptional -> "Optional",
+        HirTypeTuple -> "Tuple",
+        HirTypeFn -> "Fn",
+        HirTypeVar -> "Var",
+        HirTypeErr -> "<error>",
+    }
+}

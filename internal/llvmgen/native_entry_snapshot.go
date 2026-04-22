@@ -44,6 +44,25 @@ const (
 	// Emits: spill concrete to slot, then two insertvalue calls to
 	// build the (data_ptr, vtable_ptr) fat pointer.
 	llvmNativeExprInterfaceBox
+	// llvmNativeExprClosureEnvAlloc materializes the env pointer for
+	// a no-capture closure literal:
+	//
+	//   %site = <string literal ptr>
+	//   %env  = call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr %site)
+	//   store ptr <thunk_sym>, ptr %env
+	//
+	// `name` carries the thunk symbol (e.g. "@__osty_closure_thunk___osty_closure_1"),
+	// `text` carries the site label string (e.g. "runtime.closure.env.ptr").
+	// `llvmType` is always "ptr".
+	llvmNativeExprClosureEnvAlloc
+	// llvmNativeExprFnValueCall dispatches a call through a
+	// fn-value env pointer. The first childExpr is the env ptr
+	// (evaluated to produce an i8* / ptr); subsequent childExprs are
+	// the non-env args. `text` carries the comma-separated LLVM
+	// types of the non-env args so the indirect call signature
+	// matches the thunk's ABI. `llvmType` is the call's return
+	// type (use "void" for unit-returning fns).
+	llvmNativeExprFnValueCall
 	// llvmNativeExprInterfaceCall dispatches a method call through
 	// an `%osty.iface` fat pointer:
 	//
@@ -188,6 +207,12 @@ type llvmNativeModule struct {
 	needsMapRuntime    bool
 	needsSetRuntime    bool
 	needsStringRuntime bool
+	// projectionCtx is a Go-only handle the finalizer reads to
+	// emit per-module post-processing surfaces (closure thunks,
+	// future batches). Not present in the Osty mirror — the
+	// snapshot regen script drops unknown fields anyway.
+	projectionCtx     *nativeProjectionCtx
+	extraRuntimeDecls []string
 }
 
 type llvmNativeRenderedFunction struct {
@@ -285,6 +310,7 @@ func llvmNativeRuntimeDeclarations(mod *llvmNativeModule) []string {
 	if mod.needsStringRuntime {
 		out = append(out, llvmStringRuntimeDeclarations()...)
 	}
+	out = append(out, mod.extraRuntimeDecls...)
 	return out
 }
 
@@ -1061,6 +1087,10 @@ func llvmNativeEvalExpr(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
 		return llvmNativeEvalInterfaceBox(emitter, expr)
 	case llvmNativeExprInterfaceCall:
 		return llvmNativeEvalInterfaceCall(emitter, expr)
+	case llvmNativeExprClosureEnvAlloc:
+		return llvmNativeEvalClosureEnvAlloc(emitter, expr)
+	case llvmNativeExprFnValueCall:
+		return llvmNativeEvalFnValueCall(emitter, expr)
 	default:
 		return llvmNativeZeroValue(expr.llvmType)
 	}
@@ -1131,6 +1161,96 @@ func llvmNativeEvalInterfaceCall(emitter *LlvmEmitter, expr *llvmNativeExpr) *Ll
 		}
 		argList.WriteString(" ")
 		argList.WriteString(argVal.name)
+	}
+
+	ret := expr.llvmType
+	if ret == "" {
+		ret = "void"
+	}
+	if ret == "void" {
+		emitter.body = append(emitter.body, fmt.Sprintf("  call void %s(%s)", fnPtr, argList.String()))
+		return llvmNativeZeroValue("void")
+	}
+	res := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call %s %s(%s)", res, ret, fnPtr, argList.String()))
+	return &LlvmValue{typ: ret, name: res}
+}
+
+// llvmNativeEvalClosureEnvAlloc emits the env-alloc + store-thunk
+// sequence used by a closure literal, plus (for capturing closures)
+// per-capture stores into env slots at offset 16 + i*8.
+//
+//	%site = <ptr to string literal>
+//	%env  = call ptr @osty.rt.closure_env_alloc_v1(i64 <N>, ptr %site)
+//	store ptr <thunkSym>, ptr %env
+//	; for each capture i:
+//	%cap<i>_slot = getelementptr i8, ptr %env, i64 <16 + i*8>
+//	store <capType> <capVal>, ptr %cap<i>_slot
+//
+// `expr.text` has shape "<site>;<capType0>,<capType1>,..." — the
+// site label up to the first semicolon, then comma-separated
+// capture LLVM types (empty for no-capture). The capture values
+// are `expr.childExprs` in declaration order.
+func llvmNativeEvalClosureEnvAlloc(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
+	if emitter == nil || expr == nil {
+		return llvmNativeZeroValue("ptr")
+	}
+	siteLabel, capTypesRaw := expr.text, ""
+	if idx := strings.Index(expr.text, ";"); idx >= 0 {
+		siteLabel = expr.text[:idx]
+		capTypesRaw = expr.text[idx+1:]
+	}
+	capTypes := splitArgTypes(capTypesRaw)
+	site := llvmStringLiteral(emitter, siteLabel)
+	env := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call ptr @osty.rt.closure_env_alloc_v1(i64 %d, ptr %s)", env, len(capTypes), site.name))
+	emitter.body = append(emitter.body, fmt.Sprintf("  store ptr %s, ptr %s", expr.name, env))
+	// Store each capture value into its env slot at offset 16 + i*8.
+	for i, child := range expr.childExprs {
+		val := llvmNativeEvalExpr(emitter, child)
+		typ := "i64"
+		if i < len(capTypes) && capTypes[i] != "" {
+			typ = capTypes[i]
+		}
+		slot := fmt.Sprintf("%%cap%d_slot", i)
+		// Use raw-named slot (matches legacy shape so tests can lock it).
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr i8, ptr %s, i64 %d", slot, env, 16+i*8))
+		emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", typ, val.name, slot))
+	}
+	return &LlvmValue{typ: "ptr", name: env}
+}
+
+// llvmNativeEvalFnValueCall dispatches through a fn-value env. The
+// trampoline fn ptr lives at env slot 0; loading it and calling
+// with (env, args...) mirrors the legacy HIR emit shape:
+//
+//	%fn  = load ptr, ptr %env
+//	%ret = call <ret> %fn(ptr %env, <typed args...>)
+//
+// Arg LLVM types come from `expr.text` (comma-separated). Return
+// type is `expr.llvmType`; "void" suppresses the `%res =` lhs.
+func llvmNativeEvalFnValueCall(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
+	if emitter == nil || expr == nil || len(expr.childExprs) == 0 {
+		return llvmNativeZeroValue(expr.llvmType)
+	}
+	env := llvmNativeEvalExpr(emitter, expr.childExprs[0])
+	fnPtr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load ptr, ptr %s", fnPtr, env.name))
+
+	var argList strings.Builder
+	argList.WriteString("ptr ")
+	argList.WriteString(env.name)
+	argTypes := splitArgTypes(expr.text)
+	for i := 1; i < len(expr.childExprs); i++ {
+		arg := llvmNativeEvalExpr(emitter, expr.childExprs[i])
+		argList.WriteString(", ")
+		if i-1 < len(argTypes) && argTypes[i-1] != "" {
+			argList.WriteString(argTypes[i-1])
+		} else {
+			argList.WriteString(arg.typ)
+		}
+		argList.WriteString(" ")
+		argList.WriteString(arg.name)
 	}
 
 	ret := expr.llvmType

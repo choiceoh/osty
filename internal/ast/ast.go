@@ -931,12 +931,18 @@ func (e *QuestionExpr) End() token.Pos { return e.EndV }
 // flag so the checker can enforce the §7.4 Error-bound rules specific to
 // the sugar form (E0757) without mis-attributing plain `.downcast::<T>()`
 // calls.
+//
+// HasTrailingClosure marks the call as coming from trailing-closure sugar
+// `f(a) |x| { ... }` (G23, §A.2). The parser appends the closure to the
+// positional arg list; this flag lets the formatter restore the surface
+// form by splitting the last arg out of the parenthesized list.
 type CallExpr struct {
-	PosV          token.Pos
-	EndV          token.Pos
-	Fn            Expr
-	Args          []*Arg
-	IsAsQuestion  bool
+	PosV               token.Pos
+	EndV               token.Pos
+	Fn                 Expr
+	Args               []*Arg
+	IsAsQuestion       bool
+	HasTrailingClosure bool
 }
 
 // Arg is either positional (Name == "") or keyword (Name != "").
