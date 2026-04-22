@@ -672,6 +672,13 @@ pub fn llvmPrintlnF64(emitter: LlvmEmitter, value: LlvmValue) {
     emitter.body.push("  {tmp} = call i32 (ptr, ...) @printf(ptr @.fmt_f64, double {value.name})")
 }
 
+pub fn llvmPrintlnBool(emitter: LlvmEmitter, value: LlvmValue) {
+    let text = llvmNextTemp(emitter)
+    emitter.body.push("  {text} = select i1 {value.name}, ptr @.bool_true, ptr @.bool_false")
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr {text})")
+}
+
 pub fn llvmStringLiteral(emitter: LlvmEmitter, text: String) -> LlvmValue {
     let name = "@.str{emitter.stringId}"
     emitter.stringId = emitter.stringId + 1
@@ -2093,6 +2100,10 @@ pub fn llvmListRuntimeSetSymbol(suffix: String) -> String {
     "osty_rt_list_set_{suffix}"
 }
 
+pub fn llvmListRuntimeInsertSymbol(suffix: String) -> String {
+    "osty_rt_list_insert_{suffix}"
+}
+
 /// Pick the `osty_rt_list_sorted_*` entry point for an element LLVM
 /// type. Returns `""` when no typed runtime exists — callers use the
 /// empty string as the "unsupported element type" signal and emit a
@@ -3054,6 +3065,10 @@ pub fn llvmStringRuntimeSplitSymbol() -> String {
     "osty_rt_strings_Split"
 }
 
+pub fn llvmStringRuntimeSplitNSymbol() -> String {
+    "osty_rt_strings_SplitN"
+}
+
 pub fn llvmStringRuntimeConcatSymbol() -> String {
     "osty_rt_strings_Concat"
 }
@@ -3074,12 +3089,44 @@ pub fn llvmStringRuntimeByteLenSymbol() -> String {
     "osty_rt_strings_ByteLen"
 }
 
+pub fn llvmStringRuntimeCountSymbol() -> String {
+    "osty_rt_strings_Count"
+}
+
+pub fn llvmStringRuntimeIndexOfSymbol() -> String {
+    "osty_rt_strings_IndexOf"
+}
+
 pub fn llvmStringRuntimeCompareSymbol() -> String {
     "osty_rt_strings_Compare"
 }
 
 pub fn llvmStringRuntimeJoinSymbol() -> String {
     "osty_rt_strings_Join"
+}
+
+pub fn llvmStringRuntimeRepeatSymbol() -> String {
+    "osty_rt_strings_Repeat"
+}
+
+pub fn llvmStringRuntimeReplaceSymbol() -> String {
+    "osty_rt_strings_Replace"
+}
+
+pub fn llvmStringRuntimeReplaceAllSymbol() -> String {
+    "osty_rt_strings_ReplaceAll"
+}
+
+pub fn llvmStringRuntimeSliceSymbol() -> String {
+    "osty_rt_strings_Slice"
+}
+
+pub fn llvmStringRuntimeTrimStartSymbol() -> String {
+    "osty_rt_strings_TrimStart"
+}
+
+pub fn llvmStringRuntimeTrimEndSymbol() -> String {
+    "osty_rt_strings_TrimEnd"
 }
 
 pub fn llvmStringRuntimeTrimPrefixSymbol() -> String {
@@ -3102,6 +3149,10 @@ pub fn llvmStringRuntimeBytesSymbol() -> String {
     "osty_rt_strings_Bytes"
 }
 
+pub fn llvmStringRuntimeToBytesSymbol() -> String {
+    "osty_rt_strings_ToBytes"
+}
+
 /// LLVM forward declarations for the string runtime surface plus the
 /// scalar `Int`/`Float` -> `String` helpers used by interpolation.
 /// All string values cross the ABI as null-terminated `ptr`, and
@@ -3120,13 +3171,22 @@ pub fn llvmStringRuntimeDeclarations() -> List<String> {
         "declare ptr @osty_rt_float_to_string(double)",
         "declare ptr @osty_rt_bool_to_string(i1)",
         "declare i64 @osty_rt_strings_ByteLen(ptr)",
+        "declare i64 @osty_rt_strings_Count(ptr, ptr)",
+        "declare i64 @osty_rt_strings_IndexOf(ptr, ptr)",
         "declare i64 @osty_rt_strings_Compare(ptr, ptr)",
         "declare ptr @osty_rt_strings_Join(ptr, ptr)",
+        "declare ptr @osty_rt_strings_Repeat(ptr, i64)",
+        "declare ptr @osty_rt_strings_Replace(ptr, ptr, ptr)",
+        "declare ptr @osty_rt_strings_ReplaceAll(ptr, ptr, ptr)",
+        "declare ptr @osty_rt_strings_Slice(ptr, i64, i64)",
+        "declare ptr @osty_rt_strings_TrimStart(ptr)",
+        "declare ptr @osty_rt_strings_TrimEnd(ptr)",
         "declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)",
         "declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)",
         "declare ptr @osty_rt_strings_TrimSpace(ptr)",
         "declare ptr @osty_rt_strings_Chars(ptr)",
         "declare ptr @osty_rt_strings_Bytes(ptr)",
+        "declare ptr @osty_rt_strings_ToBytes(ptr)",
     ]
 }
 
@@ -3182,6 +3242,22 @@ pub fn llvmStringByteLen(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
     llvmCall(emitter, "i64", "osty_rt_strings_ByteLen", [value])
 }
 
+pub fn llvmStringRuntimeCount(
+    emitter: LlvmEmitter,
+    value: LlvmValue,
+    substr: LlvmValue,
+) -> LlvmValue {
+    llvmCall(emitter, "i64", "osty_rt_strings_Count", [value, substr])
+}
+
+pub fn llvmStringRuntimeIndexOf(
+    emitter: LlvmEmitter,
+    value: LlvmValue,
+    substr: LlvmValue,
+) -> LlvmValue {
+    llvmCall(emitter, "i64", "osty_rt_strings_IndexOf", [value, substr])
+}
+
 pub fn llvmStringRuntimeCompare(
     emitter: LlvmEmitter,
     left: LlvmValue,
@@ -3196,6 +3272,49 @@ pub fn llvmStringRuntimeJoin(
     sep: LlvmValue,
 ) -> LlvmValue {
     llvmCall(emitter, "ptr", "osty_rt_strings_Join", [parts, sep])
+}
+
+pub fn llvmStringRuntimeRepeat(
+    emitter: LlvmEmitter,
+    value: LlvmValue,
+    n: LlvmValue,
+) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_Repeat", [value, n])
+}
+
+pub fn llvmStringRuntimeReplace(
+    emitter: LlvmEmitter,
+    value: LlvmValue,
+    old: LlvmValue,
+    newValue: LlvmValue,
+) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_Replace", [value, old, newValue])
+}
+
+pub fn llvmStringRuntimeReplaceAll(
+    emitter: LlvmEmitter,
+    value: LlvmValue,
+    old: LlvmValue,
+    newValue: LlvmValue,
+) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_ReplaceAll", [value, old, newValue])
+}
+
+pub fn llvmStringRuntimeSlice(
+    emitter: LlvmEmitter,
+    value: LlvmValue,
+    start: LlvmValue,
+    end: LlvmValue,
+) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_Slice", [value, start, end])
+}
+
+pub fn llvmStringRuntimeTrimStart(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_TrimStart", [value])
+}
+
+pub fn llvmStringRuntimeTrimEnd(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_TrimEnd", [value])
 }
 
 pub fn llvmStringRuntimeTrimPrefix(
@@ -3224,6 +3343,10 @@ pub fn llvmStringChars(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
 
 pub fn llvmStringBytes(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
     llvmCall(emitter, "ptr", "osty_rt_strings_Bytes", [value])
+}
+
+pub fn llvmStringToBytes(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_ToBytes", [value])
 }
 
 pub fn llvmBuiltinType(name: String) -> String {

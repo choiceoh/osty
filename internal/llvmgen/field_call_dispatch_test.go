@@ -1092,9 +1092,11 @@ func TestGenerateMapForInLowersAsIndexedWalk(t *testing.T) {
 	}
 }
 
-// TestGenerateMapGetBoolValueUses1ByteBox exercises i1 V: byte size
-// drops to 1, but otherwise the same branch+box shape applies.
-func TestGenerateMapGetBoolValueUses1ByteBox(t *testing.T) {
+// TestGenerateMapGetBoolValueUses1ByteStackSlot exercises the scalar
+// getOr fast path for i1 V: the lookup writes into a 1-byte stack slot,
+// the hit branch loads the bool, and the miss branch falls back to the
+// literal default without allocating an Option box.
+func TestGenerateMapGetBoolValueUses1ByteStackSlot(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn flag(m: Map<String, Bool>, k: String) -> Bool {
     m.getOr(k, false)
 }
@@ -1108,7 +1110,7 @@ func TestGenerateMapGetBoolValueUses1ByteBox(t *testing.T) {
 	}
 	got := string(ir)
 	for _, want := range []string{
-		"call ptr @osty.gc.alloc_v1(i64 1, i64 1,",
+		"call i1 @osty_rt_map_get_string(",
 		"alloca i1",
 		"load i1, ptr",
 		"= phi i1 [",
@@ -1116,5 +1118,12 @@ func TestGenerateMapGetBoolValueUses1ByteBox(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "call ptr @osty.gc.alloc_v1") {
+		t.Fatalf("bool getOr should not allocate an Option box:\n%s", got)
+	}
+	if strings.Contains(got, "osty_rt_map_contains_string") ||
+		strings.Contains(got, "osty_rt_map_get_or_abort_string") {
+		t.Fatalf("bool getOr still routes through legacy helpers:\n%s", got)
 	}
 }

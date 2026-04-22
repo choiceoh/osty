@@ -1,6 +1,8 @@
 package llvmgen
 
 import (
+	"strings"
+
 	"github.com/osty/osty/internal/selfhost/bundle"
 )
 
@@ -12,9 +14,29 @@ func ToolchainSupportFiles() []string {
 	return bundle.ToolchainLLVMGenFiles()
 }
 
-// MergeToolchainSupport prepends the minimal Go-hosted strings surface the
-// bootstrap transpiler needs, then concatenates the llvmgen helper sources into
-// one standalone .osty file.
+// MergeToolchainSupport reuses the shared llvmgen support merger, then strips
+// the native-owned entry slice so the transpiled support bundle does not
+// redeclare helpers that already live in native_entry_snapshot.go.
 func MergeToolchainSupport(root string) ([]byte, error) {
-	return bundle.MergeToolchainLLVMGen(root)
+	merged, err := bundle.MergeToolchainLLVMGen(root)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(stripLlvmNativeEntrySlice(string(merged))), nil
+}
+
+func stripLlvmNativeEntrySlice(src string) string {
+	const startMarker = "pub enum LlvmNativeExprKind {"
+	const endMarker = "/// Phase A4 fn-value thunk template."
+
+	start := strings.Index(src, startMarker)
+	if start < 0 {
+		return src
+	}
+	end := strings.Index(src[start:], endMarker)
+	if end < 0 {
+		return src
+	}
+	end += start
+	return src[:start] + src[end:]
 }

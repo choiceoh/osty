@@ -112,7 +112,7 @@ type LlvmUnsupportedDiagnostic struct {
 type LlvmSafepointChunk struct {
 	start int
 	end   int
-	id    int64
+	id    int
 }
 
 // Osty: toolchain/llvmgen.osty:92:5
@@ -481,9 +481,9 @@ func llvmSafepointKindAlloc() int { return 4 }
 func llvmSafepointKindYield() int { return 5 }
 
 // Osty: toolchain/llvmgen.osty:472:5
-func llvmEncodeSafepointId(kind int, serial int) int64 {
+func llvmEncodeSafepointId(kind int, serial int) int {
 	const mask int64 = (int64(1) << 56) - 1
-	return (int64(kind) << 56) | (int64(serial) & mask)
+	return int((int64(kind) << 56) | (int64(serial) & mask))
 }
 
 // Osty: toolchain/llvmgen.osty:487:5
@@ -533,17 +533,17 @@ func llvmEmitClosureEnvAllocRuntime(emitter *LlvmEmitter, captureCount int, site
 }
 
 // Osty: toolchain/llvmgen.osty:550:5
-func llvmRenderSafepointEmpty(id int64) string {
+func llvmRenderSafepointEmpty(id int) string {
 	return fmt.Sprintf("  call void @osty.gc.safepoint_v1(i64 %d, ptr null, i64 0)", id)
 }
 
 // Osty: toolchain/llvmgen.osty:558:5
-func llvmEmitSafepointEmpty(emitter *LlvmEmitter, id int64) {
+func llvmEmitSafepointEmpty(emitter *LlvmEmitter, id int) {
 	emitter.body = append(emitter.body, llvmRenderSafepointEmpty(id))
 }
 
 // Osty: toolchain/llvmgen.osty:560:5
-func llvmEmitSafepointWithRoots(emitter *LlvmEmitter, id int64, rootAddresses []string) {
+func llvmEmitSafepointWithRoots(emitter *LlvmEmitter, id int, rootAddresses []string) {
 	count := len(rootAddresses)
 	slotsPtr := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca ptr, i64 %d", slotsPtr, count))
