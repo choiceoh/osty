@@ -655,25 +655,25 @@ func TestLLVMBackendEmitBinaryPrefersNativeOwnedFastPathForListIndex(t *testing.
 func TestEmitLLVMIRTextFallsBackWhenNativeOwnedUncovered(t *testing.T) {
 	t.Parallel()
 
-	req := newBackendRequest(t, EmitLLVMIR, `struct Pair { left: Int, right: Int }
+	req := newBackendRequest(t, EmitLLVMIR, `fn resolve(name: String?) -> String {
+    name ?? "anonymous"
+}
 
 fn main() {
-    let xs = [Pair { left: 1, right: 2 }]
-    println(xs[0].left)
 }
 `)
 
 	if _, ok, _, err := TryEmitNativeOwnedLLVMIRText(req.Entry, ""); err != nil {
 		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
 	} else if ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText unexpectedly covered composite list index")
+		t.Fatal("TryEmitNativeOwnedLLVMIRText unexpectedly covered coalesce fallback")
 	}
 	got, warnings, err := EmitLLVMIRText(req.Entry, "", nil)
 	if err != nil {
 		t.Fatalf("EmitLLVMIRText returned error: %v", err)
 	}
-	if !strings.Contains(string(got), "@osty_rt_list_get_bytes_v1") {
-		t.Fatalf("EmitLLVMIRText fallback IR missing bytes list get runtime call:\n%s", got)
+	if !strings.Contains(string(got), "coalesce.none") || !strings.Contains(string(got), "phi ptr") {
+		t.Fatalf("EmitLLVMIRText fallback IR missing coalesce shape:\n%s", got)
 	}
 	if len(warnings) != len(req.Entry.IRIssues) {
 		t.Fatalf("warning count = %d, want %d", len(warnings), len(req.Entry.IRIssues))
@@ -685,18 +685,18 @@ func TestLLVMBackendEmitBinaryFallsBackWhenNativeOwnedUncovered(t *testing.T) {
 
 	tc := &fakeLLVMToolchain{}
 	backend := LLVMBackend{toolchain: tc}
-	req := newBackendRequest(t, EmitBinary, `struct Pair { left: Int, right: Int }
+	req := newBackendRequest(t, EmitBinary, `fn resolve(name: String?) -> String {
+    name ?? "anonymous"
+}
 
 fn main() {
-    let xs = [Pair { left: 1, right: 2 }]
-    println(xs[0].left)
 }
 `)
 
 	if _, ok, _, err := TryEmitNativeOwnedLLVMIRText(req.Entry, ""); err != nil {
 		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
 	} else if ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText unexpectedly covered composite list index")
+		t.Fatal("TryEmitNativeOwnedLLVMIRText unexpectedly covered coalesce fallback")
 	}
 	result, err := backend.Emit(context.Background(), req)
 	if err != nil {
@@ -706,8 +706,8 @@ fn main() {
 	if readErr != nil {
 		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
 	}
-	if !strings.Contains(string(got), "@osty_rt_list_get_bytes") {
-		t.Fatalf("Emit binary fallback IR missing bytes list get runtime call:\n%s", got)
+	if !strings.Contains(string(got), "coalesce.none") || !strings.Contains(string(got), "phi ptr") {
+		t.Fatalf("Emit binary fallback IR missing coalesce shape:\n%s", got)
 	}
 }
 

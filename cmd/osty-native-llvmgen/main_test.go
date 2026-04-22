@@ -112,7 +112,7 @@ func TestRunEmitsNativeOwnedLLVMIRForListIndex(t *testing.T) {
 
 func TestRunReportsNotCoveredForUnsupportedSource(t *testing.T) {
 	var stdout bytes.Buffer
-	stdin := strings.NewReader(`{"path":"main.osty","source":"struct Pair { left: Int, right: Int }\nfn main() { let xs = [Pair { left: 1, right: 2 }] println(xs[0].left) }\n"}`)
+	stdin := strings.NewReader(`{"path":"main.osty","source":"fn resolve(name: String?) -> String {\n    name ?? \"anonymous\"\n}\n\nfn main() {}\n"}`)
 	if err := run(stdin, &stdout); err != nil {
 		t.Fatalf("run error: %v", err)
 	}
