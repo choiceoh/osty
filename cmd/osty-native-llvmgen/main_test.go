@@ -127,7 +127,7 @@ func TestRunEmitsNativeOwnedLLVMIRForListIndex(t *testing.T) {
 	}
 }
 
-func TestRunReportsNotCoveredForUnsupportedSource(t *testing.T) {
+func TestRunReportsCoveredForOptionalCoalesceSource(t *testing.T) {
 	var stdout bytes.Buffer
 	stdin := strings.NewReader(`{"path":"main.osty","source":"fn resolve(name: String?) -> String {\n    name ?? \"anonymous\"\n}\n\nfn main() {}\n"}`)
 	if err := run(stdin, &stdout); err != nil {
@@ -137,11 +137,18 @@ func TestRunReportsNotCoveredForUnsupportedSource(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.Covered {
-		t.Fatalf("covered = true, want false\nllvmIr:\n%s", resp.LLVMIR)
+	if !resp.Covered {
+		t.Fatalf("covered = false, want true")
 	}
-	if resp.LLVMIR != "" {
-		t.Fatalf("llvmIr = %q, want empty output for uncovered source", resp.LLVMIR)
+	for _, want := range []string{
+		"define ptr @resolve(ptr %name)",
+		"coalesce.some",
+		"coalesce.none",
+		"phi ptr",
+	} {
+		if !strings.Contains(resp.LLVMIR, want) {
+			t.Fatalf("llvmIr missing %q:\n%s", want, resp.LLVMIR)
+		}
 	}
 }
 

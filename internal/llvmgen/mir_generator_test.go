@@ -2958,8 +2958,15 @@ func TestGenerateFromMIRStringInterpolationRecoversFieldExprTypes(t *testing.T) 
 	if err != nil {
 		t.Fatalf("GenerateFromMIR: %v", err)
 	}
-	if strings.Count(string(out), "call ptr @osty_rt_strings_Concat(") != 2 {
-		t.Fatalf("expected two concat calls in:\n%s", out)
+	got := string(out)
+	if !strings.Contains(got, "declare ptr @osty_rt_strings_ConcatN(i64, ptr)") {
+		t.Fatalf("missing concat_n decl in:\n%s", got)
+	}
+	if strings.Count(got, "call ptr @osty_rt_strings_ConcatN(") != 1 {
+		t.Fatalf("expected one concat_n call in:\n%s", got)
+	}
+	if strings.Contains(got, "call ptr @osty_rt_strings_Concat(") {
+		t.Fatalf("did not expect chained concat calls in:\n%s", got)
 	}
 }
 

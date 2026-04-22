@@ -1328,7 +1328,8 @@ func TestNativeOwnedModuleEntryOptionalQuestionScalarBatch(t *testing.T) {
 		"define ptr @requireScore(ptr %score)",
 		"ret ptr null",
 		"load i64, ptr %t",
-		"call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64",
+		"call ptr @osty_rt_int_to_string(i64",
+		"call void @osty_rt_io_write(ptr",
 	} {
 		if !strings.Contains(direct, want) {
 			t.Fatalf("native-owned optional-scalar-question IR missing %q:\n%s", want, direct)

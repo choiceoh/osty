@@ -343,13 +343,22 @@ func TestEmitGenArtifactUsesNativeOwnedFastPathForListIndex(t *testing.T) {
 	}
 }
 
-func TestEmitGenArtifactFallsBackForUncoveredNativeOwnedModule(t *testing.T) {
+func TestEmitGenArtifactFallsBackForStdTestingMIRBackend(t *testing.T) {
 	dir := t.TempDir()
-	target := writeGenTestFile(t, dir, "main.osty", `fn resolve(name: String?) -> String {
-    name ?? "anonymous"
+	target := writeGenTestFile(t, dir, "main.osty", `use std.testing
+
+enum CalcError {
+    DivideByZero,
+}
+
+fn div(a: Int, b: Int) -> Result<Int, CalcError> {
+    if b == 0 { Err(DivideByZero) } else { Ok(a / b) }
 }
 
 fn main() {
+    let q = testing.expectOk(div(10, 2))
+    testing.assertEq(q, 5)
+    testing.expectError(div(1, 0))
 }
 `)
 
@@ -369,7 +378,7 @@ fn main() {
 	if _, ok, _, err := backend.TryEmitNativeOwnedLLVMIRText(backendEntry, ""); err != nil {
 		t.Fatalf("TryEmitNativeOwnedLLVMIRText() error = %v", err)
 	} else if ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText() unexpectedly covered coalesce fallback")
+		t.Fatal("TryEmitNativeOwnedLLVMIRText() unexpectedly covered std.testing fallback")
 	}
 
 	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
@@ -379,8 +388,16 @@ fn main() {
 	if result == nil {
 		t.Fatal("emitGenArtifact() result is nil")
 	}
-	if !strings.Contains(string(got), "coalesce.none") || !strings.Contains(string(got), "phi ptr") {
-		t.Fatalf("fallback llvm-ir missing coalesce shape:\n%s", got)
+	for _, want := range []string{
+		"declare void @exit(i32)",
+		"extractvalue %Result.",
+		"testing.expectOk failed",
+		"testing.expectError failed",
+		"testing.assertEq failed",
+	} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("fallback llvm-ir missing %q:\n%s", want, got)
+		}
 	}
 }
 

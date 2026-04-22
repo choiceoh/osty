@@ -305,19 +305,29 @@ func llvmNativeRuntimeDeclarations(mod *llvmNativeModule) []string {
 		return nil
 	}
 	out := make([]string, 0, 32)
+	seen := map[string]bool{}
+	appendUnique := func(decls []string) {
+		for _, decl := range decls {
+			if decl == "" || seen[decl] {
+				continue
+			}
+			seen[decl] = true
+			out = append(out, decl)
+		}
+	}
 	if mod.needsListRuntime {
-		out = append(out, llvmListRuntimeDeclarations()...)
+		appendUnique(llvmListRuntimeDeclarations())
 	}
 	if mod.needsMapRuntime {
-		out = append(out, llvmMapRuntimeDeclarations()...)
+		appendUnique(llvmMapRuntimeDeclarations())
 	}
 	if mod.needsSetRuntime {
-		out = append(out, llvmSetRuntimeDeclarations()...)
+		appendUnique(llvmSetRuntimeDeclarations())
 	}
 	if mod.needsStringRuntime {
-		out = append(out, llvmStringRuntimeDeclarations()...)
+		appendUnique(llvmStringRuntimeDeclarations())
 	}
-	out = append(out, mod.extraRuntimeDecls...)
+	appendUnique(mod.extraRuntimeDecls)
 	return out
 }
 
