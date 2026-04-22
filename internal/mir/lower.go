@@ -2490,6 +2490,19 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 				bs.emitRuntimeIntrinsic(kind, c.Args, dest, destT, c.SpanV)
 				return
 			}
+			// Route `std.strings.fn(x, ...)` to the equivalent
+			// String-method intrinsic with x as the receiver. Without
+			// this, the merged native-toolchain MIR probe would hit
+			// "call to unresolved symbol std.strings.split" (and
+			// friends) because the probe doesn't run stdlib body
+			// injection. The intrinsic path always works — the
+			// `osty_rt_strings_*` runtime symbols it targets don't
+			// care whether the call came from `s.split(sep)` or
+			// `strings.split(s, sep)`.
+			if kind := stdlibStringFreeFnToIntrinsic(qualifierOf(use), fx.Name); kind != IntrinsicInvalid {
+				bs.emitStringFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+				return
+			}
 		}
 	}
 	args, callee := bs.resolveCall(c)
@@ -3320,6 +3333,66 @@ func bytesIntrinsicForMethod(name string) IntrinsicKind {
 		return IntrinsicBytesSlice
 	}
 	return IntrinsicInvalid
+}
+
+// stdlibStringFreeFnToIntrinsic maps `std.strings.Y` free-function
+// calls to the receiver-based String intrinsic of the same name.
+// `std.strings.split(s, sep)` goes to IntrinsicStringSplit with
+// args = [s, sep], matching the shape the method-call path already
+// produces via `s.split(sep)`. Used by the merged native-toolchain
+// MIR probe (which skips stdlib body injection) and by anyone else
+// calling stdlib strings helpers through the module qualifier.
+func stdlibStringFreeFnToIntrinsic(qualifier, name string) IntrinsicKind {
+	if qualifier != "std.strings" {
+		return IntrinsicInvalid
+	}
+	switch name {
+	case "len":
+		return IntrinsicStringLen
+	case "isEmpty":
+		return IntrinsicStringIsEmpty
+	case "contains":
+		return IntrinsicStringContains
+	case "hasPrefix", "startsWith":
+		return IntrinsicStringStartsWith
+	case "hasSuffix", "endsWith":
+		return IntrinsicStringEndsWith
+	case "indexOf":
+		return IntrinsicStringIndexOf
+	case "split":
+		return IntrinsicStringSplit
+	case "trim":
+		return IntrinsicStringTrim
+	case "toUpper":
+		return IntrinsicStringToUpper
+	case "toLower":
+		return IntrinsicStringToLower
+	case "chars":
+		return IntrinsicStringChars
+	case "bytes":
+		return IntrinsicStringBytes
+	case "replace":
+		return IntrinsicStringReplace
+	}
+	return IntrinsicInvalid
+}
+
+// emitStringFreeFnIntrinsic lowers each arg in source order and
+// emits an IntrinsicInstr with the given String-family kind. All
+// String intrinsics put the receiver in Args[0] and any extra args
+// after it, so this is a straight pass-through — the method-call
+// path (lowerMethodCallInto) and the free-fn path share the same
+// operand layout.
+func (bs *bodyState) emitStringFreeFnIntrinsic(kind IntrinsicKind, args []ir.Arg, dest *Place, destT Type, sp Span) {
+	out := make([]Operand, len(args))
+	for i, a := range args {
+		out[i] = bs.lowerExprAsOperand(a.Value)
+	}
+	destPtr := dest
+	if destPtr != nil && isUnit(destT) {
+		destPtr = nil
+	}
+	bs.emit(&IntrinsicInstr{Dest: destPtr, Kind: kind, Args: out, SpanV: sp})
 }
 
 // qualifierOf extracts the package qualifier from a Use decl, or ""
