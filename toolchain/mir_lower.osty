@@ -2434,10 +2434,10 @@ fn mirLowerExprIntoPlaceImpl(
         HirExprStructLit -> mirLowerStructLitInto(bs, e, dest, destT),
         HirExprVariantLit -> mirLowerVariantLitInto(bs, e, dest, destT),
         HirExprRange -> mirLowerRangeLitInto(bs, e, dest, destT),
-        // Kinds deferred to Stage 4e-2 / 4f:
-        HirExprIfLet -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "IfLetExpr"),
+        HirExprQuestion -> mirLowerQuestionInto(bs, e, dest, destT),
+        HirExprIfLet -> mirLowerIfLetExprInto(bs, e, dest, destT),
+        // Kinds deferred to Stage 4e-3 / 4f:
         HirExprMatch -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "MatchExpr"),
-        HirExprQuestion -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "QuestionExpr"),
         HirExprMethod -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "MethodCall"),
         HirExprMapLit -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "MapLit"),
         HirExprClosure -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "Closure"),
@@ -3307,4 +3307,515 @@ pub fn mirLowerChanSendStmt(bs: MirLowerBodyState, s: HirStmt) {
         span,
     )
     mirLowerEmitInstr(bs, instr)
+}
+
+// ====================================================================
+// Stage 4e-2: Question propagation + IfLet variant destructure
+// ====================================================================
+
+// ---- qShape: classify Option/Result-shaped types ------------------
+
+/// HirQShape classifies a type for `?` propagation. None / Err paths
+/// synthesise a matching error value in the enclosing function's
+/// return type. Matches Go's `classifyQShape` / `qShape` enum.
+pub enum HirQShape {
+    HirQShapeUnknown,
+    HirQShapeOption,
+    HirQShapeResult,
+}
+
+pub fn mirLowerClassifyQShape(t: HirType) -> HirQShape {
+    match t.kind {
+        HirTypeOptional -> HirQShapeOption,
+        HirTypeNamed -> {
+            let name = t.namedName
+            if name == "Option" || name == "Maybe" {
+                HirQShapeOption
+            } else if name == "Result" {
+                HirQShapeResult
+            } else {
+                HirQShapeUnknown
+            }
+        },
+        _ -> HirQShapeUnknown,
+    }
+}
+
+/// mirLowerResultErrType extracts the error type of a Result<T, E>.
+/// Returns an error HirType for non-Result inputs.
+pub fn mirLowerResultErrType(t: HirType) -> HirType {
+    match t.kind {
+        HirTypeNamed -> {
+            if t.namedName == "Result" && t.namedArgs.len() >= 2 {
+                t.namedArgs[1]
+            } else {
+                hirTypeErr()
+            }
+        },
+        _ -> hirTypeErr(),
+    }
+}
+
+/// mirLowerOptionInnerType extracts the inner T from T? / Option<T>.
+pub fn mirLowerOptionInnerType(t: HirType) -> HirType {
+    match t.kind {
+        HirTypeOptional -> {
+            if t.optionalInner.len() > 0 {
+                t.optionalInner[0]
+            } else {
+                hirTypeErr()
+            }
+        },
+        HirTypeNamed -> {
+            if t.namedArgs.len() >= 1 {
+                t.namedArgs[0]
+            } else {
+                hirTypeErr()
+            }
+        },
+        _ -> hirTypeErr(),
+    }
+}
+
+/// mirLowerOkTagOf returns the discriminant of the "happy" arm for a
+/// `?`-able enum. Current LLVM layout uses 1 for both Some and Ok.
+pub fn mirLowerOkTagOf(t: HirType) -> Int {
+    let _ = t
+    1
+}
+
+/// mirLowerSomeTagOf is an alias of mirLowerOkTagOf for readability
+/// at the Option-specific call sites.
+pub fn mirLowerSomeTagOf(t: HirType) -> Int {
+    mirLowerOkTagOf(t)
+}
+
+/// mirLowerErrTagOf returns the discriminant of the error arm
+/// (None / Err). Both are 0 in the current layout.
+pub fn mirLowerErrTagOf(t: HirType) -> Int {
+    let _ = t
+    0
+}
+
+/// mirLowerOkVariantName returns the source-level name of the happy
+/// arm. `Some` for Option / T?, `Ok` for Result, fallback `Ok`.
+pub fn mirLowerOkVariantName(t: HirType) -> String {
+    match t.kind {
+        HirTypeOptional -> "Some",
+        HirTypeNamed -> {
+            let n = t.namedName
+            if n == "Option" || n == "Maybe" {
+                "Some"
+            } else if n == "Result" {
+                "Ok"
+            } else {
+                "Ok"
+            }
+        },
+        _ -> "Ok",
+    }
+}
+
+/// mirLowerTypesMatch is a cheap structural check used to decide when
+/// a `?` propagation can copy the receiver into the return slot
+/// without re-wrapping. Uses the canonical type-string printer —
+/// post-monomorphisation this is equal iff the types are equal.
+pub fn mirLowerTypesMatch(a: HirType, b: HirType) -> Bool {
+    if !hirTypeIsValid(a) || !hirTypeIsValid(b) {
+        return hirTypeIsValid(a) == hirTypeIsValid(b)
+    }
+    hirTypeString(a) == hirTypeString(b)
+}
+
+// ---- Question (`?`) propagation -----------------------------------
+
+/// mirLowerQuestionInto lowers `e?`. The receiver must be Option<T>
+/// or Result<T, E>. On the OK path we extract the payload into dest;
+/// on the error path we rebuild the None/Err value in the enclosing
+/// function's return type and early-return. Matches Go's
+/// `lowerQuestionInto` exactly.
+pub fn mirLowerQuestionInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    if e.questionChild.len() == 0 {
+        mirLowerNoteIssue(bs.l, "mir_lower: question expr with no child")
+        return
+    }
+    let span = mirSpanFromHir(e.span)
+    mirLowerPushScope(bs)
+
+    let child = e.questionChild[0]
+    let xT = if hirTypeIsValid(child.typ) {
+        child.typ
+    } else {
+        hirTypeErr()
+    }
+    let tmp = mirLowerNewLocal(bs, "_q", xT, false, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(tmp, span))
+    mirLowerExprInto(bs, child, tmp, xT)
+
+    // Read discriminant.
+    let disc = mirLowerFreshTemp(bs, hirTInt(), span)
+    let discRV = mirRVDiscriminant(mirPlace(tmp), "Int")
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(disc), discRV, span))
+
+    let okBB = mirLowerNewBlock(bs, span)
+    let errBB = mirLowerNewBlock(bs, span)
+
+    let discOp = mirOperandCopy(mirPlace(disc), "Int")
+    let okTag = mirLowerOkTagOf(xT)
+    let okName = mirLowerOkVariantName(xT)
+    let mut cases: List<MirSwitchCase> = []
+    cases.push(mirSwitchCase(okTag, okBB, okName))
+    mirLowerTerminate(bs, mirSwitchIntTerm(discOp, cases, errBB, span))
+
+    // Error path: rebuild in return type + return.
+    bs.cur = errBB
+    mirLowerRebuildErrorIntoReturn(bs, tmp, xT, span)
+    mirLowerRunDefers(bs, span)
+    mirLowerTerminate(bs, mirReturnTerm(span))
+
+    // OK path: extract payload into dest.
+    bs.cur = okBB
+    let destTypeText = hirTypeString(destT)
+    let payloadProj = mirVariantProj(okTag, okName, 0, destTypeText)
+    let payloadPlace = mirPlaceProject(mirPlace(tmp), payloadProj)
+    let payloadOp = mirOperandCopy(payloadPlace, destTypeText)
+    mirLowerEmitInstr(bs, mirAssignInstr(dest, mirRVUse(payloadOp), span))
+
+    mirLowerPopScope(bs)
+}
+
+/// mirLowerRebuildErrorIntoReturn materialises the error value for a
+/// `?` propagation in the shape of the enclosing function's return
+/// type. `operand` holds the Option/Result the user wrote; `operandT`
+/// is its type. Writes into the function's return local.
+pub fn mirLowerRebuildErrorIntoReturn(
+    bs: MirLowerBodyState,
+    operand: Int,
+    operandT: HirType,
+    span: MirSpan,
+) {
+    let retT = bs.retType
+    let retTypeText = hirTypeString(retT)
+    let operandTypeText = hirTypeString(operandT)
+
+    // Fast path: types match exactly — just copy the whole operand
+    // into the return slot.
+    if mirLowerTypesMatch(operandT, retT) {
+        let srcOp = mirOperandCopy(mirPlace(operand), operandTypeText)
+        mirLowerEmitInstr(
+            bs,
+            mirAssignInstr(
+                mirPlace(bs.fn_.returnLocal),
+                mirRVUse(srcOp),
+                span,
+            ),
+        )
+        return
+    }
+    match mirLowerClassifyQShape(operandT) {
+        HirQShapeOption -> {
+            // Option<A> → any Option<B> / B?. Error arm is None of
+            // return type — emit via NullaryRV{None}.
+            let rv = mirRVNullary(MirNullaryNone, retTypeText)
+            mirLowerEmitInstr(
+                bs,
+                mirAssignInstr(
+                    mirPlace(bs.fn_.returnLocal),
+                    rv,
+                    span,
+                ),
+            )
+        },
+        HirQShapeResult -> {
+            // Result<A, E> → Result<B, E>. Extract Err payload from
+            // the operand, rewrap as Err(payload) in return type.
+            let errT = mirLowerResultErrType(operandT)
+            let errTypeText = hirTypeString(errT)
+            let errProj = mirVariantProj(
+                mirLowerErrTagOf(operandT),
+                "Err",
+                0,
+                errTypeText,
+            )
+            let errPayloadPlace = mirPlaceProject(mirPlace(operand), errProj)
+            let errPayloadOp = mirOperandCopy(errPayloadPlace, errTypeText)
+            let mut fields: List<MirOperand> = []
+            fields.push(errPayloadOp)
+            let rv = mirRVVariant(
+                mirLowerErrTagOf(retT),
+                "Err",
+                fields,
+                retTypeText,
+            )
+            mirLowerEmitInstr(
+                bs,
+                mirAssignInstr(
+                    mirPlace(bs.fn_.returnLocal),
+                    rv,
+                    span,
+                ),
+            )
+        },
+        HirQShapeUnknown -> {
+            // Conservative: log + raw copy. Callers should avoid this
+            // shape since the checker ought to reject it.
+            mirLowerNoteIssue(
+                bs.l,
+                "mir_lower: ? propagation with unknown qShape — copying receiver into return",
+            )
+            let srcOp = mirOperandCopy(mirPlace(operand), operandTypeText)
+            mirLowerEmitInstr(
+                bs,
+                mirAssignInstr(
+                    mirPlace(bs.fn_.returnLocal),
+                    mirRVUse(srcOp),
+                    span,
+                ),
+            )
+        },
+    }
+}
+
+// ---- IfLet variant destructure ------------------------------------
+
+/// mirLowerIfLetExprInto handles `if let pat = scrut { then } else
+/// { else }`. Stage 4e-2 supports variant patterns (the only
+/// refutable shape the lowerer currently handles via a discriminant
+/// switch); non-variant patterns record a Stage 4f TODO issue and
+/// always take the else branch.
+pub fn mirLowerIfLetExprInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    let span = mirSpanFromHir(e.span)
+    mirLowerPushScope(bs)
+
+    // Lower scrutinee into a scratch.
+    let scrutT = if e.ifLetScrutinee.len() > 0 && hirTypeIsValid(e.ifLetScrutinee[0].typ) {
+        e.ifLetScrutinee[0].typ
+    } else {
+        hirTypeErr()
+    }
+    let scrutLocal = mirLowerNewLocal(bs, "_iflet", scrutT, false, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(scrutLocal, span))
+    if e.ifLetScrutinee.len() > 0 {
+        mirLowerExprInto(bs, e.ifLetScrutinee[0], scrutLocal, scrutT)
+    }
+
+    // Only variant patterns flow through the discriminant-switch path;
+    // other shapes always fall to the else branch with a TODO note.
+    match e.ifLetPattern.kind {
+        HirPatVariant -> mirLowerIfLetVariant(bs, e, scrutLocal, scrutT, dest, destT, span),
+        _ -> mirLowerIfLetUnsupported(bs, e, dest, destT, span),
+    }
+
+    mirLowerPopScope(bs)
+}
+
+fn mirLowerIfLetVariant(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    scrutLocal: Int,
+    scrutT: HirType,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) {
+    let pat = e.ifLetPattern
+    let enumName = if pat.variantEnum != "" {
+        pat.variantEnum
+    } else {
+        hirTypeNameOf(scrutT)
+    }
+    let varIdx = mirLowerFindVariantIndex(bs.l, enumName, pat.variantName)
+
+    // Discriminant + SwitchInt.
+    let disc = mirLowerFreshTemp(bs, hirTInt(), span)
+    let discRV = mirRVDiscriminant(mirPlace(scrutLocal), "Int")
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(disc), discRV, span))
+
+    let thenBB = mirLowerNewBlock(bs, span)
+    let elseBB = mirLowerNewBlock(bs, span)
+    let merge = mirLowerNewBlock(bs, span)
+
+    let discOp = mirOperandCopy(mirPlace(disc), "Int")
+    let mut cases: List<MirSwitchCase> = []
+    // varIdx may be -1 when the layout table didn't see the enum;
+    // emit the switch anyway — the default branch handles it.
+    let switchIdx = if varIdx >= 0 {
+        varIdx
+    } else {
+        0
+    }
+    cases.push(mirSwitchCase(switchIdx, thenBB, pat.variantName))
+    mirLowerTerminate(bs, mirSwitchIntTerm(discOp, cases, elseBB, span))
+
+    // Then arm: bind payload positions, lower body, goto merge.
+    bs.cur = thenBB
+    mirLowerPushScope(bs)
+    mirLowerPushDeferScope(bs)
+    mirLowerBindVariantPayload(bs, pat, scrutLocal, span)
+    if e.ifLetThen.len() > 0 {
+        let body = e.ifLetThen[0]
+        for s in body.stmts {
+            mirLowerStmt(bs, s)
+        }
+        if body.hasResult {
+            mirLowerExprIntoPlace(bs, body.result, dest, destT)
+        }
+        mirLowerReplayTopFrame(bs, mirSpanFromHir(body.span))
+    }
+    mirLowerPopDeferScope(bs)
+    mirLowerPopScope(bs)
+    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+
+    // Else arm: lower body (if any), goto merge.
+    bs.cur = elseBB
+    if e.ifLetHasElse && e.ifLetElse.len() > 0 {
+        let body = e.ifLetElse[0]
+        mirLowerPushScope(bs)
+        mirLowerPushDeferScope(bs)
+        for s in body.stmts {
+            mirLowerStmt(bs, s)
+        }
+        if body.hasResult {
+            mirLowerExprIntoPlace(bs, body.result, dest, destT)
+        }
+        mirLowerReplayTopFrame(bs, mirSpanFromHir(body.span))
+        mirLowerPopDeferScope(bs)
+        mirLowerPopScope(bs)
+    }
+    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+
+    bs.cur = merge
+}
+
+fn mirLowerIfLetUnsupported(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) {
+    mirLowerNoteIssue(
+        bs.l,
+        "mir_lower Stage 4f TODO: if-let with non-variant pattern ("
+            + hirPatternKindName(e.ifLetPattern.kind) + ") — always taking else",
+    )
+    // Emit the else body (if any) unconditionally; otherwise a
+    // unit-const Assign keeps `dest` well-formed.
+    if e.ifLetHasElse && e.ifLetElse.len() > 0 {
+        let body = e.ifLetElse[0]
+        mirLowerPushScope(bs)
+        mirLowerPushDeferScope(bs)
+        for s in body.stmts {
+            mirLowerStmt(bs, s)
+        }
+        if body.hasResult {
+            mirLowerExprIntoPlace(bs, body.result, dest, destT)
+        }
+        mirLowerReplayTopFrame(bs, mirSpanFromHir(body.span))
+        mirLowerPopDeferScope(bs)
+        mirLowerPopScope(bs)
+        return
+    }
+    mirLowerEmitInstr(
+        bs,
+        mirAssignInstr(dest, mirRVUse(mirOperandConst(mirConstUnit())), span),
+    )
+    let _ = destT
+}
+
+/// mirLowerBindVariantPayload binds the positional args of a
+/// VariantPat to fresh locals after a successful discriminant check.
+/// Only handles the "flat" shape (payload positions are IdentPat /
+/// WildPat) — nested patterns route through a Stage 4f TODO note so
+/// the shape at least lands.
+fn mirLowerBindVariantPayload(
+    bs: MirLowerBodyState,
+    pat: HirPattern,
+    scrutLocal: Int,
+    span: MirSpan,
+) {
+    let varIdx = mirLowerFindVariantIndex(bs.l, pat.variantEnum, pat.variantName)
+    let mut i = 0
+    for arg in pat.variantArgs {
+        let payloadT = mirLowerVariantPayloadType(bs.l, pat.variantEnum, pat.variantName, i)
+        let payloadTypeText = hirTypeString(payloadT)
+        let proj = mirVariantProj(
+            if varIdx >= 0 { varIdx } else { 0 },
+            pat.variantName,
+            i,
+            payloadTypeText,
+        )
+        let childPlace = mirPlaceProject(mirPlace(scrutLocal), proj)
+        mirLowerBindIrrefutable(bs, arg, childPlace, payloadT, span)
+        i = i + 1
+    }
+}
+
+/// mirLowerBindIrrefutable binds an irrefutable sub-pattern (IdentPat /
+/// WildPat) reachable after a successful discriminant branch. Nested
+/// refutable patterns record a TODO issue.
+fn mirLowerBindIrrefutable(
+    bs: MirLowerBodyState,
+    pat: HirPattern,
+    scrutinee: MirPlace,
+    scrutT: HirType,
+    span: MirSpan,
+) {
+    match pat.kind {
+        HirPatWild -> {},
+        HirPatIdent -> {
+            let id = mirLowerNewLocal(bs, pat.identName, scrutT, pat.identMut, span)
+            mirLowerEmitInstr(bs, mirStorageLiveInstr(id, span))
+            let srcOp = mirOperandCopy(scrutinee, hirTypeString(scrutT))
+            mirLowerEmitInstr(
+                bs,
+                mirAssignInstr(mirPlace(id), mirRVUse(srcOp), span),
+            )
+            mirLowerBindName(bs, pat.identName, id)
+        },
+        _ -> mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4f TODO: nested pattern kind "
+                + hirPatternKindName(pat.kind) + " in variant payload binding",
+        ),
+    }
+}
+
+/// mirLowerVariantPayloadType returns the declared type of a variant
+/// payload position by index, via the pass-1b enum layout. Falls
+/// back to ErrType when the enum / variant / index isn't in the
+/// table.
+pub fn mirLowerVariantPayloadType(
+    l: MirLowerer,
+    enumName: String,
+    variant: String,
+    idx: Int,
+) -> HirType {
+    if enumName == "" {
+        return hirTypeErr()
+    }
+    for e in l.enums {
+        if e.name == enumName {
+            for v in e.variants {
+                if v.name == variant {
+                    if idx >= 0 && idx < v.payload.len() {
+                        return v.payload[idx]
+                    }
+                    return hirTypeErr()
+                }
+            }
+            return hirTypeErr()
+        }
+    }
+    hirTypeErr()
 }
