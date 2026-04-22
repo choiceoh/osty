@@ -1547,6 +1547,15 @@ func (bs *bodyState) lowerMatch(scrutinee ir.Expr, arms []*ir.MatchArm, tree ir.
 		_ = arm
 	}
 
+	// Monomorph clones drop Tree (cloneMatchStmt / cloneMatchExpr leave
+	// it nil) — recompile on demand so the post-mono MIR path still sees
+	// a specialised decision tree instead of the goto-armBlocks[0]
+	// fallback, which silently collapses every match on Result / enum
+	// payload bindings to "always take arm 0".
+	if tree == nil && scrutinee.Type() != nil {
+		tree = ir.CompileDecisionTree(scrutinee.Type(), arms)
+	}
+
 	// If we have a decision tree, use it.
 	if tree != nil {
 		ctx := &matchContext{
