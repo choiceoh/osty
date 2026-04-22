@@ -433,10 +433,10 @@ func (g *mirGen) checkSupported() error {
 			}
 			if !g.typeSupported(loc.Type) {
 				hint := localDefiningSiteHint(fn, loc.ID)
-			if hint != "" {
-				return unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s (local %s id=%d; %s)", mirTypeString(loc.Type), fn.Name, localDisplayName(loc), loc.ID, hint))
-			}
-			return unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s (local %s id=%d)", mirTypeString(loc.Type), fn.Name, localDisplayName(loc), loc.ID))
+				if hint != "" {
+					return unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s (local %s id=%d; %s)", mirTypeString(loc.Type), fn.Name, localDisplayName(loc), loc.ID, hint))
+				}
+				return unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s (local %s id=%d)", mirTypeString(loc.Type), fn.Name, localDisplayName(loc), loc.ID))
 			}
 		}
 		if fn.ReturnType != nil && !g.typeSupported(fn.ReturnType) {
@@ -4116,9 +4116,7 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		if len(i.Args) == 0 {
 			return unsupported("mir-mvp", "string_concat with no args")
 		}
-		sym := llvmStringRuntimeConcatSymbol()
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, ptr)")
-		var acc *LlvmValue
+		parts := make([]*LlvmValue, 0, len(i.Args))
 		for idx, op := range i.Args {
 			if !isStringLLVMType(op.Type()) {
 				// String interpolation embeds non-String values
@@ -4133,31 +4131,30 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 				if boxed == nil {
 					return unsupported("mir-mvp", fmt.Sprintf("string_concat arg %d type %s", idx+1, mirTypeString(op.Type())))
 				}
-				if acc == nil {
-					acc = boxed
-					continue
-				}
-				em := g.ostyEmitter()
-				acc = llvmStringConcat(em, acc, boxed)
-				g.flushOstyEmitter(em)
+				parts = append(parts, boxed)
 				continue
 			}
 			partReg, err := g.evalOperand(op, op.Type())
 			if err != nil {
 				return err
 			}
-			part := &LlvmValue{typ: "ptr", name: partReg}
-			if acc == nil {
-				acc = part
-				continue
-			}
-			em := g.ostyEmitter()
-			acc = llvmStringConcat(em, acc, part)
-			g.flushOstyEmitter(em)
+			parts = append(parts, &LlvmValue{typ: "ptr", name: partReg})
 		}
-		if acc == nil {
+		if len(parts) == 0 {
 			return unsupported("mir-mvp", "string_concat produced no value")
 		}
+		if len(parts) >= 3 {
+			return g.storeIntrinsicResult(i, g.emitStringConcatN(parts))
+		}
+		if len(parts) == 2 {
+			sym := llvmStringRuntimeConcatSymbol()
+			g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, ptr)")
+			em := g.ostyEmitter()
+			out := llvmStringConcat(em, parts[0], parts[1])
+			g.flushOstyEmitter(em)
+			return g.storeIntrinsicResult(i, out)
+		}
+		acc := parts[0]
 		return g.storeIntrinsicResult(i, acc)
 	}
 	if len(i.Args) < 1 {
@@ -4290,6 +4287,23 @@ func (g *mirGen) emitStringJoin(i *mir.IntrinsicInstr, partsReg string) error {
 	result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: partsReg}, {typ: "ptr", name: sepReg}})
 	g.flushOstyEmitter(em)
 	return g.storeIntrinsicResult(i, result)
+}
+
+func (g *mirGen) emitStringConcatN(parts []*LlvmValue) *LlvmValue {
+	sym := "osty_rt_strings_ConcatN"
+	g.declareRuntime(sym, "declare ptr @"+sym+"(i64, ptr)")
+	em := g.ostyEmitter()
+	arr := llvmNextTemp(em)
+	em.body = append(em.body, fmt.Sprintf("  %s = alloca [%d x ptr]", arr, len(parts)))
+	for i, part := range parts {
+		slot := llvmNextTemp(em)
+		em.body = append(em.body, fmt.Sprintf("  %s = getelementptr [%d x ptr], ptr %s, i64 0, i64 %d", slot, len(parts), arr, i))
+		em.body = append(em.body, fmt.Sprintf("  store ptr %s, ptr %s", part.name, slot))
+	}
+	out := llvmNextTemp(em)
+	em.body = append(em.body, fmt.Sprintf("  %s = call ptr @%s(i64 %d, ptr %s)", out, sym, len(parts), arr))
+	g.flushOstyEmitter(em)
+	return &LlvmValue{typ: "ptr", name: out}
 }
 
 // emitStringConcatBoxed converts a non-String operand into a String
