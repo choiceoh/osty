@@ -458,3 +458,84 @@ fn testSelfResolverAcceptsReturnInClosure() {
     testing.assertEq(selfResolveCodeCount(result, "E0602"), 0)
     testing.assertEq(selfResolveCodeCount(result, "E0603"), 0)
 }
+
+fn testSelfResolverRejectsUnknownAnnotation() {
+    let result = selfResolveSource(
+        r"""
+            #[bogus]
+            fn main() {}
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0400"), 1)
+}
+
+fn testSelfResolverRejectsAnnotationOnWrongTarget() {
+    // `#[json]` attaches only to struct fields and enum variants. Putting
+    // it on a top-level fn is E0607. The name is valid (no E0400).
+    let result = selfResolveSource(
+        r"""
+            #[json(key = "x")]
+            fn main() {}
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0400"), 0)
+    testing.assertEq(selfResolveCodeCount(result, "E0607"), 1)
+}
+
+fn testSelfResolverRejectsDuplicateAnnotation() {
+    let result = selfResolveSource(
+        r"""
+            #[deprecated]
+            #[deprecated]
+            fn main() {}
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0609"), 1)
+}
+
+fn testSelfResolverAcceptsValidAnnotations() {
+    // Structural sanity: a well-formed decl with one valid annotation per
+    // target class produces no annotation diagnostics.
+    let result = selfResolveSource(
+        r"""
+            #[deprecated(since = "0.5")]
+            pub fn legacy() {}
+
+            #[cfg(os = "linux")]
+            struct Linux {
+                #[json(key = "id")]
+                id: Int,
+            }
+
+            enum Color {
+                #[json(key = "r")]
+                Red,
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0400"), 0)
+    testing.assertEq(selfResolveCodeCount(result, "E0607"), 0)
+    testing.assertEq(selfResolveCodeCount(result, "E0609"), 0)
+}
+
+fn testSelfResolverChecksAnnotationsOnStructMembers() {
+    // `#[json]` on a method is wrong target (methods aren't in json's
+    // allow-set). `#[op]` on a field is wrong target too.
+    let result = selfResolveSource(
+        r"""
+            struct Bad {
+                #[op]
+                value: Int,
+
+                #[json(key = "x")]
+                fn get(self) -> Int { self.value }
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0607"), 2)
+}
