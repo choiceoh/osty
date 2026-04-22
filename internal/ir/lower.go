@@ -688,6 +688,17 @@ func (l *lowerer) lowerNamedType(nt *ast.NamedType) Type {
 			return &NamedType{Package: pkg, Name: sym.Name, Args: args, Builtin: true}
 		case resolve.SymGeneric:
 			return &TypeVar{Name: sym.Name, Owner: ""}
+		case resolve.SymTypeAlias:
+			// Unwrap the alias at IR construction time. Without this,
+			// downstream passes (MIR generator's typeSupported,
+			// mono's substitution) see the user-declared name as an
+			// opaque NamedType with no layout, and fail with
+			// `unsupported local type <alias>`. Aliases are pure
+			// syntactic sugar in Osty (§3.A type system), so the
+			// target type is semantically identical — follow it.
+			if aliasDecl, ok := sym.Decl.(*ast.TypeAliasDecl); ok && aliasDecl != nil && aliasDecl.Target != nil {
+				return l.lowerType(aliasDecl.Target)
+			}
 		}
 		return &NamedType{Package: pkg, Name: sym.Name, Args: args}
 	}
@@ -803,6 +814,19 @@ func (l *lowerer) fromCheckerType(t types.Type) Type {
 			builtin = t.Sym.Kind == resolve.SymBuiltin
 			if t.Sym.Package != nil {
 				pkg = t.Sym.Package.Name
+			}
+			// Unwrap type aliases at checker → IR boundary. Mirrors the
+			// same unwrap in lowerNamedType (AST → IR): without it, any
+			// expression whose checker-inferred type is a user alias
+			// (e.g. `CheckName = String`) produces a NamedType that
+			// MIR's typeSupported rejects with
+			// `unsupported local type <alias>`. Aliases are pure
+			// syntactic sugar — the target type is semantically
+			// identical.
+			if t.Sym.Kind == resolve.SymTypeAlias {
+				if aliasDecl, ok := t.Sym.Decl.(*ast.TypeAliasDecl); ok && aliasDecl != nil && aliasDecl.Target != nil {
+					return l.lowerType(aliasDecl.Target)
+				}
 			}
 		}
 		args := make([]Type, len(t.Args))

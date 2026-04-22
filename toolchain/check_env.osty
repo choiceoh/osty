@@ -1188,6 +1188,13 @@ fn checkIntKey(xs: List<Int>) -> String {
     // Accumulate into a `List<String>` and `strings.join` once at the
     // end — the former `out = "{out},{xs[i]}"` rebuilt the buffer per
     // element, turning every substCache key render into O(n^2).
+    //
+    // The intermediate `v: Int` binding is not cosmetic: without it,
+    // the MIR lowering leaves a temporary at `<error>` type for the
+    // implicit `xs[i]` → String-interp coercion path, tripping
+    // `unsupported local type <error>` in mir_generator.go.
+    // Materializing the Int first gives the checker a concrete
+    // source type and keeps the whole function on the MIR fast path.
     let n = xs.len()
     if n == 0 {
         return ""
@@ -1195,7 +1202,8 @@ fn checkIntKey(xs: List<Int>) -> String {
     let mut parts: List<String> = []
     let mut i = 0
     for i < n {
-        parts.push("{xs[i]}")
+        let v: Int = xs[i]
+        parts.push("{v}")
         i = i + 1
     }
     strings.join(parts, ",")
