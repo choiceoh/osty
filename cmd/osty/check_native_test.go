@@ -356,3 +356,112 @@ func TestRunCheckFileNativeIsAstbridgeFree(t *testing.T) {
 		t.Fatalf("AstbridgeLowerCount after runCheckFileNative = %d, want 0 (--native CLI path regressed into a *ast.File detour)", got)
 	}
 }
+
+// TestCheckCLIDefaultPathUsesSelfhostArena is the production-default
+// companion to TestRunCheckFileNativeIsAstbridgeFree: after the
+// 1c.1 flip (SELFHOST_PORT_MATRIX.md), `osty check FILE` with no
+// flag at all must route through the self-host arena pipeline the
+// same way `--native` does. Run the subprocess CLI so the default
+// actually goes through parseFlags/dispatch, then verify exit 0 on
+// a well-typed input. Paired regression: any future attempt to
+// re-route the default through runCheckFileLegacy must either
+// update this test or add a --legacy-gated wrapper.
+func TestCheckCLIDefaultPathExitsZero(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	if err := os.WriteFile(path, []byte(`fn main() {
+    let x = 1
+    let y = x + 2
+    y
+}
+`), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	got := runOstyCLI(t, "check", path)
+	if got.exit != 0 {
+		t.Fatalf("osty check (default) exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if strings.Contains(got.stderr, "error[") {
+		t.Fatalf("stderr contained error output on clean source:\n%s", got.stderr)
+	}
+}
+
+// TestCheckCLILegacyOptOutStillWorks pins the 1c.1 escape hatch:
+// even after the default flip, `osty check --legacy FILE` must
+// still route through runCheckFileLegacy so the Go-hosted resolve +
+// check.File pair remains a reachable fallback until Phase 1c.5
+// removes both sides.
+func TestCheckCLILegacyOptOutStillWorks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	if err := os.WriteFile(path, []byte(`fn main() {
+    let x = 1
+    let y = x + 2
+    y
+}
+`), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	got := runOstyCLI(t, "check", "--legacy", path)
+	if got.exit != 0 {
+		t.Fatalf("osty check --legacy exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if strings.Contains(got.stderr, "error[") {
+		t.Fatalf("stderr contained error output on clean source:\n%s", got.stderr)
+	}
+}
+
+// TestRunCheckFileDefaultPathIsAstbridgeFree is the in-process
+// counter assertion for the default flip. A default-flag-set
+// cliFlags{} now has native=true (set by parseFlags), so running
+// runCheckFileNative from it is the production happy path; confirm
+// zero astbridge lowerings end-to-end.
+func TestRunCheckFileDefaultPathIsAstbridgeFree(t *testing.T) {
+	src := []byte(`fn main() {
+    let x = 1
+    let y = x + 2
+    y
+}
+`)
+	path := filepath.Join(t.TempDir(), "main.osty")
+	if err := os.WriteFile(path, src, 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	// parseFlags sets native=true by default; mirror that here so the
+	// test reflects the on-CLI behavior without touching the global
+	// flag package.
+	flags := cliFlags{noColor: true, native: true}
+	formatter := newFormatter(path, src, flags)
+
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = origStdout })
+	origStderr := os.Stderr
+	re, we, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stderr: %v", err)
+	}
+	os.Stderr = we
+	t.Cleanup(func() { os.Stderr = origStderr })
+	drained := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(io.Discard, r); drained <- struct{}{} }()
+	go func() { _, _ = io.Copy(io.Discard, re); drained <- struct{}{} }()
+
+	selfhost.ResetAstbridgeLowerCount()
+	exit := runCheckFileNative(path, src, formatter, flags)
+	_ = w.Close()
+	_ = we.Close()
+	<-drained
+	<-drained
+
+	if exit != 0 {
+		t.Fatalf("runCheckFileNative (default) exit = %d, want 0", exit)
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("AstbridgeLowerCount after default runCheckFileNative = %d, want 0", got)
+	}
+}
