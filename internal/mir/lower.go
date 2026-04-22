@@ -3183,6 +3183,14 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 			return stringIntrinsicForMethod(name)
 		case ir.PrimBytes:
 			return bytesIntrinsicForMethod(name)
+		case ir.PrimByte:
+			if name == "toInt" {
+				return IntrinsicByteToInt
+			}
+		case ir.PrimChar:
+			if name == "toInt" {
+				return IntrinsicCharToInt
+			}
 		}
 		return IntrinsicInvalid
 	}
@@ -3301,6 +3309,8 @@ func stringIntrinsicForMethod(name string) IntrinsicKind {
 		return IntrinsicStringSplit
 	case "join":
 		return IntrinsicStringJoin
+	case "substring", "slice":
+		return IntrinsicStringSubstring
 	case "trim":
 		return IntrinsicStringTrim
 	case "toUpper":
@@ -3401,6 +3411,8 @@ func stdlibStringFreeFnToIntrinsic(qualifier, name string) IntrinsicKind {
 		return IntrinsicStringSplit
 	case "join":
 		return IntrinsicStringJoin
+	case "substring", "slice":
+		return IntrinsicStringSubstring
 	case "trim":
 		return IntrinsicStringTrim
 	case "toUpper":

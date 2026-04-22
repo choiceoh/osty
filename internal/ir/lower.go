@@ -1955,6 +1955,19 @@ func recoverMethodReturnType(name string, recv Expr) Type {
 		if isPrim(rt, PrimString) {
 			return TString
 		}
+	case "substring", "slice", "replace", "repeat":
+		if isPrim(rt, PrimString) {
+			return TString
+		}
+	case "split":
+		if isPrim(rt, PrimString) {
+			return &NamedType{Name: "List", Builtin: true, Args: []Type{TString}}
+		}
+	case "join":
+		// `parts.join(sep)` on List<String> returns String.
+		if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "List" {
+			return TString
+		}
 	}
 	// Element-type returns: List<T>.first / .last / .get → T?, .push → Unit.
 	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "List" && len(nt.Args) == 1 {

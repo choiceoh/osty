@@ -650,6 +650,25 @@ const (
 	// value is acceptable until a typed `osty_rt_list_pop_<suffix>`
 	// runtime family arrives.
 	IntrinsicListPop
+
+	// IntrinsicStringSubstring returns the byte-level slice
+	// `s[start..end]`. Args: [s, start, end]. Routed by both the
+	// `.substring(a, b)` method-call form and the `s[a..b]` slice
+	// sugar when the base is String.
+	IntrinsicStringSubstring
+
+	// IntrinsicByteToInt widens a Byte value (i8) to Int (i64).
+	// Args: [byte]. Used for `.toInt()` method calls on Byte —
+	// `b.toInt()` in toolchain sources pulls a byte into arithmetic
+	// context (hash folds, pack/unpack helpers). Lowers to a plain
+	// `zext i8 to i64` at the LLVM level, no runtime call.
+	IntrinsicByteToInt
+
+	// IntrinsicCharToInt widens a Char value (i32) to Int (i64).
+	// Args: [char]. Used for `.toInt()` method calls on Char to
+	// get the code point in numeric context. Lowers to
+	// `zext i32 to i64`.
+	IntrinsicCharToInt
 )
 
 // StorageLiveInstr marks a local as alive. Optional; backends that do
@@ -1586,6 +1605,12 @@ func (k IntrinsicKind) String() string {
 		return "string_join"
 	case IntrinsicListPop:
 		return "list_pop"
+	case IntrinsicStringSubstring:
+		return "string_substring"
+	case IntrinsicByteToInt:
+		return "byte_to_int"
+	case IntrinsicCharToInt:
+		return "char_to_int"
 	}
 	return "invalid"
 }

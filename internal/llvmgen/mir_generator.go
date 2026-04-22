@@ -1074,7 +1074,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
 		mir.IntrinsicStringEndsWith, mir.IntrinsicStringSplit,
-		mir.IntrinsicStringJoin:
+		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring:
 		return true
 	// Concurrency — channels / tasks / select / cancellation / helpers.
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
@@ -1093,6 +1093,10 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		return true
 	// LANG_SPEC §19 runtime sublanguage.
 	case mir.IntrinsicRawNull:
+		return true
+	// Numeric widening from sub-word primitives to Int. Lowered as
+	// LLVM zext — no runtime call needed.
+	case mir.IntrinsicByteToInt, mir.IntrinsicCharToInt:
 		return true
 	}
 	return false
@@ -2592,7 +2596,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
 		mir.IntrinsicStringEndsWith, mir.IntrinsicStringSplit,
-		mir.IntrinsicStringJoin:
+		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring:
 		return g.emitStringIntrinsic(i)
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
 		mir.IntrinsicChanClose, mir.IntrinsicChanIsClosed:
@@ -2610,8 +2614,38 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitConcurrencyHelperIntrinsic(i)
 	case mir.IntrinsicRawNull:
 		return g.emitRuntimeRawNull(i)
+	case mir.IntrinsicByteToInt:
+		return g.emitIntegerWidenIntrinsic(i, "i8", "i64")
+	case mir.IntrinsicCharToInt:
+		return g.emitIntegerWidenIntrinsic(i, "i32", "i64")
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("intrinsic %s", mirIntrinsicLabel(i.Kind)))
+}
+
+// emitIntegerWidenIntrinsic emits a `zext` from the source-width type
+// to the destination-width type. Used for `Byte.toInt()` and
+// `Char.toInt()` — lossless widening to i64 without any runtime
+// helper. Stores the result into the intrinsic's Dest if present.
+func (g *mirGen) emitIntegerWidenIntrinsic(i *mir.IntrinsicInstr, fromLLVM, toLLVM string) error {
+	if len(i.Args) < 1 {
+		return unsupported("mir-mvp", fmt.Sprintf("%s with no arg", mirIntrinsicLabel(i.Kind)))
+	}
+	arg := i.Args[0]
+	reg, err := g.evalOperand(arg, arg.Type())
+	if err != nil {
+		return err
+	}
+	next := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(next)
+	g.fnBuf.WriteString(" = zext ")
+	g.fnBuf.WriteString(fromLLVM)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(reg)
+	g.fnBuf.WriteString(" to ")
+	g.fnBuf.WriteString(toLLVM)
+	g.fnBuf.WriteByte('\n')
+	return g.storeIntrinsicResult(i, &LlvmValue{typ: toLLVM, name: next})
 }
 
 // ==== list / map / set intrinsics ====
@@ -3813,8 +3847,39 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		// right shape — just pass it on to the runtime with the
 		// separator arg.
 		return g.emitStringJoin(i, strReg)
+	case mir.IntrinsicStringSubstring:
+		return g.emitStringSubstring(i, strReg)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("string intrinsic kind %d", i.Kind))
+}
+
+// emitStringSubstring emits `s.substring(start, end)` / `s[a..b]`
+// (when s is String) as a call to
+// `osty_rt_strings_Slice(ptr s, i64 start, i64 end) -> ptr`. Args:
+// [s, start, end]. start/end are byte offsets; the runtime handles
+// clamping and allocation of a fresh managed String.
+func (g *mirGen) emitStringSubstring(i *mir.IntrinsicInstr, strReg string) error {
+	if len(i.Args) < 3 {
+		return unsupported("mir-mvp", "string_substring arity")
+	}
+	startReg, err := g.evalOperand(i.Args[1], mir.TInt)
+	if err != nil {
+		return err
+	}
+	endReg, err := g.evalOperand(i.Args[2], mir.TInt)
+	if err != nil {
+		return err
+	}
+	sym := "osty_rt_strings_Slice"
+	g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, i64, i64)")
+	em := g.ostyEmitter()
+	result := llvmCall(em, "ptr", sym, []*LlvmValue{
+		{typ: "ptr", name: strReg},
+		{typ: "i64", name: startReg},
+		{typ: "i64", name: endReg},
+	})
+	g.flushOstyEmitter(em)
+	return g.storeIntrinsicResult(i, result)
 }
 
 // emitStringJoin emits `strings.join(parts, sep)` / `parts.join(sep)`
