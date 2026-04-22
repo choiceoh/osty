@@ -1,0 +1,1546 @@
+// pkgmgr_sat.osty — PubGrub-style dependency version solver.
+//
+// The current package manager (`selfPkgResolveRegistryGraph` in
+// `pkgmgr.osty`) picks versions greedily: highest candidate that
+// matches the direct requirement wins, children inherit that choice.
+// That fails when two branches of the dep graph need incompatible
+// versions of a shared transitive dep — a greedy walk commits to the
+// first branch and cannot back out.
+//
+// This file implements the PubGrub algorithm (Dart `pub` / Rust
+// `pubgrub-rs`) on top of the existing `SemVersion` / `SemReq` /
+// `SelfPkgCandidate` / `SelfPkgCandidateDeps` shapes. It is self-
+// contained: no host I/O, no new external types. Everything the
+// solver needs is passed in; the result is a list of resolved
+// decisions that can be converted back into `SelfPkgResolvePlan`.
+//
+// Module layout:
+//   1. VersionSet           — sorted interval list over `SemVersion`
+//   2. Term                 — `(package, VersionSet, positive)`
+//   3. Incompatibility      — conjunction of terms that must be false
+//   4. Assignment / PartialSolution
+//   5. Registry view        — candidates grouped by package + version
+//   6. Unit propagation, conflict resolution, decision making
+//   7. Public entry         — `selfPkgSolvePubGrub(...)`
+//
+// The algorithm is scoped to one resolve event: callers construct a
+// fresh `SatState`, seed root requirements, run `satSolve`, read the
+// plan, discard the state. There is no global cache.
+
+use std.strings as satStrings
+
+// ---------------------------------------------------------------------
+// 1. VersionSet — sorted, non-overlapping list of intervals.
+// ---------------------------------------------------------------------
+
+/// SatBoundKind distinguishes inclusive/exclusive/unbounded interval endpoints.
+pub enum SatBoundKind {
+    SatUnbounded,
+    SatInclusive,
+    SatExclusive,
+}
+
+/// SatBound pairs a kind with a version. The version slot is unused for
+/// `SatUnbounded` bounds; callers must check the kind first.
+pub struct SatBound {
+    pub kind: SatBoundKind,
+    pub version: SemVersion,
+}
+
+/// SatInterval is `[low, high]` with kind-controlled inclusivity.
+/// Invariant: `low` is either `SatUnbounded` or `SatInclusive`/`SatExclusive`
+/// with `version` ≤ `high`'s version (when `high` is bounded).
+pub struct SatInterval {
+    pub low: SatBound,
+    pub high: SatBound,
+}
+
+/// SatVersionSet is a sorted list of disjoint intervals (ascending by
+/// low bound). Empty list means the empty set; one `[-∞, +∞]` interval
+/// is the full set.
+pub struct SatVersionSet {
+    pub intervals: List<SatInterval>,
+}
+
+/// satBoundUnbounded is the ±∞ endpoint sentinel.
+pub fn satBoundUnbounded() -> SatBound {
+    SatBound { kind: SatUnbounded, version: stableVersion(0, 0, 0) }
+}
+
+/// satBoundInclusive constructs a `[v, ...` / `..., v]` endpoint.
+pub fn satBoundInclusive(v: SemVersion) -> SatBound {
+    SatBound { kind: SatInclusive, version: v }
+}
+
+/// satBoundExclusive constructs a `(v, ...` / `..., v)` endpoint.
+pub fn satBoundExclusive(v: SemVersion) -> SatBound {
+    SatBound { kind: SatExclusive, version: v }
+}
+
+/// satInterval constructs an interval with the given bounds.
+pub fn satInterval(low: SatBound, high: SatBound) -> SatInterval {
+    SatInterval { low, high }
+}
+
+/// vsEmpty returns the empty version set.
+pub fn vsEmpty() -> SatVersionSet {
+    SatVersionSet { intervals: [] }
+}
+
+/// vsFull returns the universe (matches every version).
+pub fn vsFull() -> SatVersionSet {
+    SatVersionSet {
+        intervals: [satInterval(satBoundUnbounded(), satBoundUnbounded())],
+    }
+}
+
+/// vsPoint returns the singleton set `{v}`.
+pub fn vsPoint(v: SemVersion) -> SatVersionSet {
+    SatVersionSet {
+        intervals: [satInterval(satBoundInclusive(v), satBoundInclusive(v))],
+    }
+}
+
+/// vsIsEmpty reports whether the set has no members.
+pub fn vsIsEmpty(vs: SatVersionSet) -> Bool {
+    vs.intervals.len() == 0
+}
+
+/// vsIsFull reports whether the set is the full universe.
+pub fn vsIsFull(vs: SatVersionSet) -> Bool {
+    if vs.intervals.len() != 1 {
+        return false
+    }
+    let iv = vs.intervals[0]
+    satBoundIsUnbounded(iv.low) && satBoundIsUnbounded(iv.high)
+}
+
+fn satBoundIsUnbounded(b: SatBound) -> Bool {
+    match b.kind {
+        SatUnbounded -> true,
+        SatInclusive -> false,
+        SatExclusive -> false,
+    }
+}
+
+/// satCompareLowBounds compares two low-side bounds. Lower bound is
+/// "smaller" when it reaches further into the negatives (−∞ is least).
+/// Ties: inclusive low is smaller than exclusive low.
+fn satCompareLowBounds(a: SatBound, b: SatBound) -> Int {
+    let aUn = satBoundIsUnbounded(a)
+    let bUn = satBoundIsUnbounded(b)
+    if aUn && bUn { return 0 }
+    if aUn { return -1 }
+    if bUn { return 1 }
+    let cmp = compareSemVersion(a.version, b.version)
+    if cmp != 0 { return cmp }
+    satLowInclusiveRank(a) - satLowInclusiveRank(b)
+}
+
+fn satLowInclusiveRank(b: SatBound) -> Int {
+    match b.kind {
+        SatUnbounded -> 0,
+        SatInclusive -> 0,
+        SatExclusive -> 1,
+    }
+}
+
+/// satCompareHighBounds compares two high-side bounds. Higher is
+/// "bigger" when it reaches further into the positives (+∞ is biggest).
+/// Ties: inclusive high is bigger than exclusive high.
+fn satCompareHighBounds(a: SatBound, b: SatBound) -> Int {
+    let aUn = satBoundIsUnbounded(a)
+    let bUn = satBoundIsUnbounded(b)
+    if aUn && bUn { return 0 }
+    if aUn { return 1 }
+    if bUn { return -1 }
+    let cmp = compareSemVersion(a.version, b.version)
+    if cmp != 0 { return cmp }
+    satHighInclusiveRank(a) - satHighInclusiveRank(b)
+}
+
+fn satHighInclusiveRank(b: SatBound) -> Int {
+    match b.kind {
+        SatUnbounded -> 1,
+        SatInclusive -> 1,
+        SatExclusive -> 0,
+    }
+}
+
+/// satIntervalContains reports whether `v` lies inside interval `iv`.
+pub fn satIntervalContains(iv: SatInterval, v: SemVersion) -> Bool {
+    if !(satBoundIsUnbounded(iv.low)) {
+        let cmp = compareSemVersion(v, iv.low.version)
+        match iv.low.kind {
+            SatUnbounded -> true,
+            SatInclusive -> if cmp < 0 { return false },
+            SatExclusive -> if cmp <= 0 { return false },
+        }
+    }
+    if !(satBoundIsUnbounded(iv.high)) {
+        let cmp = compareSemVersion(v, iv.high.version)
+        match iv.high.kind {
+            SatUnbounded -> true,
+            SatInclusive -> if cmp > 0 { return false },
+            SatExclusive -> if cmp >= 0 { return false },
+        }
+    }
+    true
+}
+
+/// vsContains reports whether `v` lies in any interval of the set.
+pub fn vsContains(vs: SatVersionSet, v: SemVersion) -> Bool {
+    for iv in vs.intervals {
+        if satIntervalContains(iv, v) {
+            return true
+        }
+    }
+    false
+}
+
+/// satBoundIntersectLow returns the tighter (larger) of two low bounds.
+fn satBoundIntersectLow(a: SatBound, b: SatBound) -> SatBound {
+    if satCompareLowBounds(a, b) >= 0 { a } else { b }
+}
+
+/// satBoundIntersectHigh returns the tighter (smaller) of two high bounds.
+fn satBoundIntersectHigh(a: SatBound, b: SatBound) -> SatBound {
+    if satCompareHighBounds(a, b) <= 0 { a } else { b }
+}
+
+/// satIntervalOverlapOrTouch reports whether two intervals overlap.
+/// Touching with compatible endpoints (one's high.inclusive == other's
+/// low.inclusive) also counts so we can merge them in `vsUnion`.
+fn satIntervalOverlaps(a: SatInterval, b: SatInterval) -> Bool {
+    // Disjoint if a.high < b.low or b.high < a.low.
+    if satBoundLessThanLow(a.high, b.low) { return false }
+    if satBoundLessThanLow(b.high, a.low) { return false }
+    true
+}
+
+/// satBoundLessThanLow: is this high-side bound strictly less than the
+/// given low-side bound? (disjointness predicate)
+fn satBoundLessThanLow(high: SatBound, low: SatBound) -> Bool {
+    if satBoundIsUnbounded(high) { return false }
+    if satBoundIsUnbounded(low) { return false }
+    let cmp = compareSemVersion(high.version, low.version)
+    if cmp < 0 { return true }
+    if cmp > 0 { return false }
+    // Equal versions: disjoint only if at least one side is exclusive.
+    let highExcl = isSatBoundExclusive(high)
+    let lowExcl = isSatBoundExclusive(low)
+    highExcl || lowExcl
+}
+
+fn isSatBoundExclusive(b: SatBound) -> Bool {
+    match b.kind {
+        SatUnbounded -> false,
+        SatInclusive -> false,
+        SatExclusive -> true,
+    }
+}
+
+/// satIntervalIntersect returns the overlap of two intervals, or an
+/// empty set if they are disjoint.
+fn satIntervalIntersect(a: SatInterval, b: SatInterval) -> SatVersionSet {
+    if !(satIntervalOverlaps(a, b)) {
+        return vsEmpty()
+    }
+    let lo = satBoundIntersectLow(a.low, b.low)
+    let hi = satBoundIntersectHigh(a.high, b.high)
+    if satBoundLessThanLow(hi, lo) {
+        return vsEmpty()
+    }
+    // Equal endpoints with mixed inclusivity collapse to a point or empty.
+    if !(satBoundIsUnbounded(lo)) && !(satBoundIsUnbounded(hi)) {
+        let cmp = compareSemVersion(lo.version, hi.version)
+        if cmp == 0 && (isSatBoundExclusive(lo) || isSatBoundExclusive(hi)) {
+            return vsEmpty()
+        }
+    }
+    SatVersionSet { intervals: [satInterval(lo, hi)] }
+}
+
+/// vsIntersect returns `a ∩ b`.
+pub fn vsIntersect(a: SatVersionSet, b: SatVersionSet) -> SatVersionSet {
+    let mut out: List<SatInterval> = []
+    for ia in a.intervals {
+        for ib in b.intervals {
+            let piece = satIntervalIntersect(ia, ib)
+            for p in piece.intervals {
+                out.push(p)
+            }
+        }
+    }
+    vsNormalize(SatVersionSet { intervals: out })
+}
+
+/// vsUnion returns `a ∪ b`.
+pub fn vsUnion(a: SatVersionSet, b: SatVersionSet) -> SatVersionSet {
+    let mut combined: List<SatInterval> = []
+    for iv in a.intervals {
+        combined.push(iv)
+    }
+    for iv in b.intervals {
+        combined.push(iv)
+    }
+    vsNormalize(SatVersionSet { intervals: combined })
+}
+
+/// vsNormalize sorts intervals by low bound and merges overlapping /
+/// touching ranges. Used to restore the VersionSet invariant after
+/// any producer that may introduce overlap.
+pub fn vsNormalize(vs: SatVersionSet) -> SatVersionSet {
+    if vs.intervals.len() <= 1 { return vs }
+    let sorted = satSortIntervals(vs.intervals)
+    let mut merged: List<SatInterval> = []
+    for iv in sorted {
+        if merged.len() == 0 {
+            merged.push(iv)
+        } else {
+            let last = merged[merged.len() - 1]
+            if satIntervalsMergeable(last, iv) {
+                merged[merged.len() - 1] = satIntervalMerge(last, iv)
+            } else {
+                merged.push(iv)
+            }
+        }
+    }
+    SatVersionSet { intervals: merged }
+}
+
+fn satSortIntervals(xs: List<SatInterval>) -> List<SatInterval> {
+    // Insertion sort — interval lists are small in practice (one per
+    // clause, bounded by the number of concrete dep requirements).
+    let mut out: List<SatInterval> = []
+    for iv in xs {
+        let mut inserted = false
+        let mut i = 0
+        for existing in out {
+            if satCompareLowBounds(iv.low, existing.low) < 0 {
+                out.insert(i, iv)
+                inserted = true
+                break
+            }
+            i = i + 1
+        }
+        if !(inserted) { out.push(iv) }
+    }
+    out
+}
+
+fn satIntervalsMergeable(a: SatInterval, b: SatInterval) -> Bool {
+    // Overlap or touch. We treat `(...,v] ∪ [v,...)` as mergeable
+    // (touching at an inclusive point) and `(...,v) ∪ (v,...)` as not.
+    if satIntervalOverlaps(a, b) { return true }
+    if satBoundIsUnbounded(a.high) || satBoundIsUnbounded(b.low) { return false }
+    if compareSemVersion(a.high.version, b.low.version) != 0 { return false }
+    // Same version: mergeable iff at least one side is inclusive.
+    !(isSatBoundExclusive(a.high)) || !(isSatBoundExclusive(b.low))
+}
+
+fn satIntervalMerge(a: SatInterval, b: SatInterval) -> SatInterval {
+    let lo = if satCompareLowBounds(a.low, b.low) <= 0 { a.low } else { b.low }
+    let hi = if satCompareHighBounds(a.high, b.high) >= 0 { a.high } else { b.high }
+    satInterval(lo, hi)
+}
+
+/// vsComplement returns the universe minus `vs`.
+pub fn vsComplement(vs: SatVersionSet) -> SatVersionSet {
+    if vsIsEmpty(vs) { return vsFull() }
+    if vsIsFull(vs) { return vsEmpty() }
+    let sorted = vsNormalize(vs)
+    let mut out: List<SatInterval> = []
+    let mut cursor: SatBound = satBoundUnbounded()
+    for iv in sorted.intervals {
+        if !(satBoundIsUnbounded(iv.low)) {
+            let hi = satFlipBoundHigh(iv.low)
+            if satCompareLowBoundAgainstHigh(cursor, hi) <= 0 {
+                out.push(satInterval(cursor, hi))
+            }
+        }
+        cursor = satFlipBoundLow(iv.high)
+        if satBoundIsUnbounded(iv.high) {
+            // Already reached +∞; remainder is empty.
+            return SatVersionSet { intervals: out }
+        }
+    }
+    out.push(satInterval(cursor, satBoundUnbounded()))
+    SatVersionSet { intervals: out }
+}
+
+fn satFlipBoundHigh(low: SatBound) -> SatBound {
+    // For complement: a low endpoint becomes the opposite-inclusivity
+    // high endpoint of the preceding hole. `[v, ...)` becomes `..., v)`.
+    match low.kind {
+        SatUnbounded -> satBoundUnbounded(),
+        SatInclusive -> satBoundExclusive(low.version),
+        SatExclusive -> satBoundInclusive(low.version),
+    }
+}
+
+fn satFlipBoundLow(high: SatBound) -> SatBound {
+    match high.kind {
+        SatUnbounded -> satBoundUnbounded(),
+        SatInclusive -> satBoundExclusive(high.version),
+        SatExclusive -> satBoundInclusive(high.version),
+    }
+}
+
+fn satCompareLowBoundAgainstHigh(lo: SatBound, hi: SatBound) -> Int {
+    if satBoundIsUnbounded(lo) || satBoundIsUnbounded(hi) { return -1 }
+    compareSemVersion(lo.version, hi.version)
+}
+
+/// vsSubset reports whether `a ⊆ b`.
+pub fn vsSubset(a: SatVersionSet, b: SatVersionSet) -> Bool {
+    vsIsEmpty(vsIntersect(a, vsComplement(b)))
+}
+
+/// vsEqual reports whether `a` and `b` denote the same set.
+pub fn vsEqual(a: SatVersionSet, b: SatVersionSet) -> Bool {
+    vsSubset(a, b) && vsSubset(b, a)
+}
+
+/// vsFromReq converts a `SemReq` conjunction into a VersionSet. The
+/// prerelease filter is modelled by further intersecting with the
+/// "stable only" set when `allowPre` is false — we approximate that
+/// by filtering the caller's candidate list downstream; the set itself
+/// still represents the numeric interval.
+pub fn vsFromReq(req: SemReq) -> SatVersionSet {
+    let mut vs = vsFull()
+    for clause in req.clauses {
+        vs = vsIntersect(vs, vsFromClause(clause))
+        if vsIsEmpty(vs) { return vs }
+    }
+    vs
+}
+
+fn vsFromClause(c: SemReqClause) -> SatVersionSet {
+    match c.op {
+        ReqEQ -> vsPoint(c.version),
+        ReqGE -> SatVersionSet {
+            intervals: [satInterval(satBoundInclusive(c.version), satBoundUnbounded())],
+        },
+        ReqGT -> SatVersionSet {
+            intervals: [satInterval(satBoundExclusive(c.version), satBoundUnbounded())],
+        },
+        ReqLE -> SatVersionSet {
+            intervals: [satInterval(satBoundUnbounded(), satBoundInclusive(c.version))],
+        },
+        ReqLT -> SatVersionSet {
+            intervals: [satInterval(satBoundUnbounded(), satBoundExclusive(c.version))],
+        },
+    }
+}
+
+// ---------------------------------------------------------------------
+// 2. Term — `(package, VersionSet, positive)`.
+//
+// A positive term `pkg ∈ S` says "pkg must be assigned to some version
+// in S". A negative term `pkg ∈ ¬S` (stored as `{pkg, S, positive=false}`)
+// says "pkg, if assigned, must not be in S"; it is vacuously true when
+// pkg is unassigned.
+// ---------------------------------------------------------------------
+
+/// SatTerm is one PubGrub term.
+pub struct SatTerm {
+    pub pkg: String,
+    pub set: SatVersionSet,
+    pub positive: Bool,
+}
+
+/// termPositive constructs a positive term `pkg ∈ set`.
+pub fn termPositive(pkg: String, set: SatVersionSet) -> SatTerm {
+    SatTerm { pkg, set, positive: true }
+}
+
+/// termNegative constructs a negative term `pkg ∉ set`.
+pub fn termNegative(pkg: String, set: SatVersionSet) -> SatTerm {
+    SatTerm { pkg, set, positive: false }
+}
+
+/// termNegate flips the polarity.
+pub fn termNegate(t: SatTerm) -> SatTerm {
+    SatTerm { pkg: t.pkg, set: t.set, positive: !(t.positive) }
+}
+
+/// termNormalizedSet returns the positive-form set: the set of versions
+/// this term allows. A positive term allows `t.set`; a negative term
+/// allows everything outside `t.set`.
+pub fn termNormalizedSet(t: SatTerm) -> SatVersionSet {
+    if t.positive { t.set } else { vsComplement(t.set) }
+}
+
+/// termIsPositiveEmpty reports whether the term is positively empty —
+/// `positive ∈ ∅`, which no assignment can satisfy.
+pub fn termIsPositiveEmpty(t: SatTerm) -> Bool {
+    t.positive && vsIsEmpty(t.set)
+}
+
+/// termIntersect merges two terms about the same package.
+/// Returns an inconclusive-empty flag plus the combined term.
+pub fn termIntersect(a: SatTerm, b: SatTerm) -> SatTerm {
+    // Canonicalize to positive form for intersection.
+    let aSet = termNormalizedSet(a)
+    let bSet = termNormalizedSet(b)
+    let intersected = vsIntersect(aSet, bSet)
+    termPositive(a.pkg, intersected)
+}
+
+/// termSubset reports whether everything allowed by `a` is also allowed
+/// by `b` (positive-form containment).
+pub fn termSubset(a: SatTerm, b: SatTerm) -> Bool {
+    vsSubset(termNormalizedSet(a), termNormalizedSet(b))
+}
+
+/// termSatisfiedBy: does the partial-solution derived term `derived`
+/// (a positive-form version set describing what versions are still
+/// allowed for the package) satisfy `t`?
+///
+/// A term `t` is satisfied iff every version allowed by `derived` is
+/// also allowed by `t`.
+pub fn termSatisfiedBy(t: SatTerm, derived: SatVersionSet) -> Bool {
+    if vsIsEmpty(derived) { return false }
+    vsSubset(derived, termNormalizedSet(t))
+}
+
+/// termContradictedBy: is `t` outright incompatible with `derived`?
+/// True iff their allowed sets have empty intersection.
+pub fn termContradictedBy(t: SatTerm, derived: SatVersionSet) -> Bool {
+    vsIsEmpty(vsIntersect(derived, termNormalizedSet(t)))
+}
+
+/// termDifference returns the part of `a`'s allowed set that is NOT in
+/// `b`'s allowed set, phrased as a positive term. Used during conflict
+/// resolution to compute "almost satisfier" terms.
+pub fn termDifference(a: SatTerm, b: SatTerm) -> SatTerm {
+    let keep = vsIntersect(termNormalizedSet(a), vsComplement(termNormalizedSet(b)))
+    termPositive(a.pkg, keep)
+}
+
+// ---------------------------------------------------------------------
+// 3. Incompatibility — a conjunction of terms that must not all hold.
+// ---------------------------------------------------------------------
+
+/// SatCauseKind records *why* an incompatibility exists. Used by the
+/// reporter to turn UNSAT into a readable derivation tree.
+pub enum SatCauseKind {
+    SatCauseRoot,
+    SatCauseDependency,
+    SatCauseNoVersions,
+    SatCauseNotRoot,
+    SatCauseUnavailable,
+    SatCauseDerived,
+}
+
+/// SatIncompat is `{terms} ⇒ false`. `causeKind` + `causeLhs`/`causeRhs`
+/// carry the provenance so reporting can print a tree. `causeLhs` /
+/// `causeRhs` are indices into the solver's incompat store or -1.
+pub struct SatIncompat {
+    pub terms: List<SatTerm>,
+    pub causeKind: SatCauseKind,
+    pub causeLhs: Int,
+    pub causeRhs: Int,
+}
+
+pub fn satIncompat(
+    terms: List<SatTerm>,
+    causeKind: SatCauseKind,
+    causeLhs: Int,
+    causeRhs: Int,
+) -> SatIncompat {
+    SatIncompat { terms, causeKind, causeLhs, causeRhs }
+}
+
+/// satIncompatRoot encodes "the root depends on pkg with this req".
+pub fn satIncompatRoot(rootName: String, dep: SatTerm) -> SatIncompat {
+    let rootTerm = termPositive(rootName, vsFull())
+    let notDep = termNegate(dep)
+    satIncompat([rootTerm, notDep], SatCauseRoot, -1, -1)
+}
+
+/// satIncompatDependency encodes "selecting pkg in `parent` requires
+/// `child`". Written as `{parent positive, ¬child}`.
+pub fn satIncompatDependency(parent: SatTerm, child: SatTerm) -> SatIncompat {
+    satIncompat([parent, termNegate(child)], SatCauseDependency, -1, -1)
+}
+
+/// satIncompatNoVersions encodes "no versions of pkg match this req".
+pub fn satIncompatNoVersions(pkg: SatTerm) -> SatIncompat {
+    satIncompat([pkg], SatCauseNoVersions, -1, -1)
+}
+
+/// satIncompatPkgTerm finds the term about `pkg` inside an incompat,
+/// returning (found, term).
+pub fn satIncompatPkgTerm(inc: SatIncompat, pkg: String) -> SatTermLookup {
+    for t in inc.terms {
+        if t.pkg == pkg {
+            return SatTermLookup { found: true, term: t }
+        }
+    }
+    SatTermLookup { found: false, term: termPositive("", vsEmpty()) }
+}
+
+pub struct SatTermLookup {
+    pub found: Bool,
+    pub term: SatTerm,
+}
+
+// ---------------------------------------------------------------------
+// 4. Assignment + PartialSolution.
+// ---------------------------------------------------------------------
+
+/// SatAssign is one entry in the partial solution. A decision assigns
+/// the package to a specific version; a derivation narrows its allowed
+/// set with a cause (an incompat that forced the narrowing).
+pub struct SatAssign {
+    pub pkg: String,
+    pub term: SatTerm,
+    pub isDecision: Bool,
+    pub decisionLevel: Int,
+    pub causeIncompat: Int,
+}
+
+pub fn satDecision(pkg: String, version: SemVersion, level: Int) -> SatAssign {
+    SatAssign {
+        pkg,
+        term: termPositive(pkg, vsPoint(version)),
+        isDecision: true,
+        decisionLevel: level,
+        causeIncompat: -1,
+    }
+}
+
+pub fn satDerivation(pkg: String, term: SatTerm, level: Int, cause: Int) -> SatAssign {
+    SatAssign {
+        pkg,
+        term,
+        isDecision: false,
+        decisionLevel: level,
+        causeIncompat: cause,
+    }
+}
+
+/// SatState holds the full solver state: assignments (partial solution,
+/// in insertion order), incompatibility store, current decision level,
+/// and the registry view.
+pub struct SatState {
+    pub assigns: List<SatAssign>,
+    pub incompats: List<SatIncompat>,
+    pub decisionLevel: Int,
+    pub registry: SatRegistry,
+    pub rootName: String,
+    pub errors: List<String>,
+    pub unsat: Bool,
+    pub unsatRoot: Int,
+}
+
+// ---------------------------------------------------------------------
+// 5. Registry view — indexed candidates.
+// ---------------------------------------------------------------------
+
+/// SatRegPkg is one package's candidate set. Versions are sorted
+/// descending (newest first) so decision making can take the head.
+pub struct SatRegPkg {
+    pub name: String,
+    pub versions: List<SemVersion>,
+    pub checksums: List<String>,
+    pub yanked: List<Bool>,
+    pub deps: List<SatRegVer>,
+}
+
+/// SatRegVer attaches the dependency list of a single (pkg, version).
+pub struct SatRegVer {
+    pub version: SemVersion,
+    pub deps: List<SelfPkgDependency>,
+}
+
+/// SatRegistry is a list of per-package entries keyed by canonical name.
+pub struct SatRegistry {
+    pub pkgs: List<SatRegPkg>,
+}
+
+pub fn satEmptyRegistry() -> SatRegistry {
+    SatRegistry { pkgs: [] }
+}
+
+/// satRegistryFromPkgmgr builds a registry view from the package-manager
+/// pure-data shapes. Candidates are grouped by package name, sorted
+/// newest-first, and paired with their dep lists from `candidateDeps`.
+pub fn satRegistryFromPkgmgr(
+    candidates: List<SelfPkgCandidate>,
+    candidateDeps: List<SelfPkgCandidateDeps>,
+) -> SatRegistry {
+    let mut reg = satEmptyRegistry()
+    for c in candidates {
+        if c.yanked { continue }
+        reg = satRegistryInsertCandidate(reg, c, candidateDeps)
+    }
+    reg = satRegistrySortDesc(reg)
+    reg
+}
+
+fn satRegistryInsertCandidate(
+    reg: SatRegistry,
+    c: SelfPkgCandidate,
+    cdeps: List<SelfPkgCandidateDeps>,
+) -> SatRegistry {
+    let deps = satLookupCandidateDeps(c.packageName, c.version, cdeps)
+    let mut pkgs = reg.pkgs
+    let mut found = false
+    let mut i = 0
+    for pkg in pkgs {
+        if pkg.name == c.packageName {
+            found = true
+            let mut vs = pkg.versions
+            let mut cs = pkg.checksums
+            let mut ys = pkg.yanked
+            let mut ds = pkg.deps
+            vs.push(c.version)
+            cs.push(c.checksum)
+            ys.push(c.yanked)
+            ds.push(SatRegVer { version: c.version, deps })
+            pkgs[i] = SatRegPkg {
+                name: pkg.name,
+                versions: vs,
+                checksums: cs,
+                yanked: ys,
+                deps: ds,
+            }
+            break
+        }
+        i = i + 1
+    }
+    if !(found) {
+        pkgs.push(SatRegPkg {
+            name: c.packageName,
+            versions: [c.version],
+            checksums: [c.checksum],
+            yanked: [c.yanked],
+            deps: [SatRegVer { version: c.version, deps }],
+        })
+    }
+    SatRegistry { pkgs }
+}
+
+fn satLookupCandidateDeps(
+    pkg: String,
+    v: SemVersion,
+    cdeps: List<SelfPkgCandidateDeps>,
+) -> List<SelfPkgDependency> {
+    for cd in cdeps {
+        if cd.packageName == pkg && compareSemVersion(cd.version, v) == 0 {
+            return cd.dependencies
+        }
+    }
+    []
+}
+
+fn satRegistrySortDesc(reg: SatRegistry) -> SatRegistry {
+    let mut pkgs = reg.pkgs
+    let mut i = 0
+    for pkg in pkgs {
+        pkgs[i] = satRegPkgSorted(pkg)
+        i = i + 1
+    }
+    SatRegistry { pkgs }
+}
+
+fn satRegPkgSorted(pkg: SatRegPkg) -> SatRegPkg {
+    let n = pkg.versions.len()
+    if n <= 1 { return pkg }
+    // Selection sort descending — small N, simpler than manual swaps
+    // inside a generic sort helper.
+    let mut vs = pkg.versions
+    let mut cs = pkg.checksums
+    let mut ys = pkg.yanked
+    let mut ds = pkg.deps
+    let mut i = 0
+    for i < n - 1 {
+        let mut best = i
+        let mut j = i + 1
+        for j < n {
+            if compareSemVersion(vs[j], vs[best]) > 0 {
+                best = j
+            }
+            j = j + 1
+        }
+        if best != i {
+            let tv = vs[i]
+            vs[i] = vs[best]
+            vs[best] = tv
+            let tc = cs[i]
+            cs[i] = cs[best]
+            cs[best] = tc
+            let ty = ys[i]
+            ys[i] = ys[best]
+            ys[best] = ty
+            let td = ds[i]
+            ds[i] = ds[best]
+            ds[best] = td
+        }
+        i = i + 1
+    }
+    SatRegPkg { name: pkg.name, versions: vs, checksums: cs, yanked: ys, deps: ds }
+}
+
+/// satRegistryVersions returns the descending version list for `pkg`,
+/// or an empty list when the package is not in the registry.
+pub fn satRegistryVersions(reg: SatRegistry, pkg: String) -> List<SemVersion> {
+    for p in reg.pkgs {
+        if p.name == pkg { return p.versions }
+    }
+    []
+}
+
+/// satRegistryChecksum returns the checksum recorded for (pkg, v),
+/// or "" when absent.
+pub fn satRegistryChecksum(reg: SatRegistry, pkg: String, v: SemVersion) -> String {
+    for p in reg.pkgs {
+        if p.name == pkg {
+            let mut i = 0
+            for cand in p.versions {
+                if compareSemVersion(cand, v) == 0 {
+                    return p.checksums[i]
+                }
+                i = i + 1
+            }
+        }
+    }
+    ""
+}
+
+/// satRegistryDeps returns the dependency list of (pkg, v), or empty.
+pub fn satRegistryDeps(reg: SatRegistry, pkg: String, v: SemVersion) -> List<SelfPkgDependency> {
+    for p in reg.pkgs {
+        if p.name == pkg {
+            for rv in p.deps {
+                if compareSemVersion(rv.version, v) == 0 {
+                    return rv.deps
+                }
+            }
+        }
+    }
+    []
+}
+
+// ---------------------------------------------------------------------
+// 6. PartialSolution queries.
+// ---------------------------------------------------------------------
+
+/// psDerivedTerm returns the positive-form VersionSet describing
+/// what versions of `pkg` are still allowed by the partial solution
+/// (intersection of every assignment's allowed set). Returns the full
+/// universe when no assignment mentions `pkg`.
+pub fn psDerivedTerm(state: SatState, pkg: String) -> SatVersionSet {
+    let mut vs = vsFull()
+    let mut any = false
+    for a in state.assigns {
+        if a.pkg == pkg {
+            vs = vsIntersect(vs, termNormalizedSet(a.term))
+            any = true
+        }
+    }
+    if !(any) { return vsFull() }
+    vs
+}
+
+/// psHasDecision reports whether `pkg` has been positively decided.
+pub fn psHasDecision(state: SatState, pkg: String) -> Bool {
+    for a in state.assigns {
+        if a.pkg == pkg && a.isDecision { return true }
+    }
+    false
+}
+
+/// psDecidedVersion returns the decided version for `pkg` if any.
+pub struct SatVersionLookup {
+    pub found: Bool,
+    pub version: SemVersion,
+}
+
+pub fn psDecidedVersion(state: SatState, pkg: String) -> SatVersionLookup {
+    for a in state.assigns {
+        if a.pkg == pkg && a.isDecision {
+            if a.term.positive && a.term.set.intervals.len() == 1 {
+                let iv = a.term.set.intervals[0]
+                if !(satBoundIsUnbounded(iv.low)) && !(satBoundIsUnbounded(iv.high)) {
+                    let lv = iv.low.version
+                    let hv = iv.high.version
+                    if compareSemVersion(lv, hv) == 0 {
+                        return SatVersionLookup { found: true, version: lv }
+                    }
+                }
+            }
+        }
+    }
+    SatVersionLookup { found: false, version: stableVersion(0, 0, 0) }
+}
+
+// ---------------------------------------------------------------------
+// 7. Incompatibility relation to the partial solution.
+//
+//   - "satisfied":      every term holds in the partial solution
+//   - "contradicted":   at least one term is strictly false
+//   - "almost satisfied": exactly one term is not yet satisfied
+//                        (unit propagation target)
+//   - "inconclusive":   more than one term undetermined
+// ---------------------------------------------------------------------
+
+pub enum SatIncompatRel {
+    SatIncSat,
+    SatIncContra,
+    SatIncAlmost,
+    SatIncInconc,
+}
+
+pub struct SatIncompatRelation {
+    pub rel: SatIncompatRel,
+    pub unsatisfied: Int,  // index into incompat.terms when rel == SatIncAlmost
+}
+
+pub fn satRelation(state: SatState, inc: SatIncompat) -> SatIncompatRelation {
+    let mut unsatisfiedIdx = -1
+    let mut unsatisfiedCount = 0
+    let mut i = 0
+    for t in inc.terms {
+        let derived = psDerivedTerm(state, t.pkg)
+        if termContradictedBy(t, derived) {
+            return SatIncompatRelation { rel: SatIncContra, unsatisfied: -1 }
+        }
+        if !(termSatisfiedBy(t, derived)) {
+            unsatisfiedIdx = i
+            unsatisfiedCount = unsatisfiedCount + 1
+        }
+        i = i + 1
+    }
+    if unsatisfiedCount == 0 {
+        return SatIncompatRelation { rel: SatIncSat, unsatisfied: -1 }
+    }
+    if unsatisfiedCount == 1 {
+        return SatIncompatRelation { rel: SatIncAlmost, unsatisfied: unsatisfiedIdx }
+    }
+    SatIncompatRelation { rel: SatIncInconc, unsatisfied: -1 }
+}
+
+// ---------------------------------------------------------------------
+// 8. Unit propagation.
+//
+// Repeatedly scan all incompats involving the "changed" package set.
+// For each:
+//   - Satisfied → conflict.
+//   - Almost satisfied → add derivation `¬(unsatisfied term)` at the
+//     current decision level, with the incompat as cause.
+//   - Contradicted / inconclusive → skip.
+// Loop until no new derivations are produced.
+// ---------------------------------------------------------------------
+
+pub struct SatPropResult {
+    pub conflict: Bool,
+    pub conflictIdx: Int,
+}
+
+pub fn satPropagate(state: SatState, seedPkg: String) -> SatPropResult {
+    let mut changed: List<String> = [seedPkg]
+    for changed.len() > 0 {
+        let pkg = changed[changed.len() - 1]
+        changed = satPopLast(changed)
+        let n = state.incompats.len()
+        let mut i = 0
+        for i < n {
+            let inc = state.incompats[i]
+            if !(satIncompatMentions(inc, pkg)) {
+                i = i + 1
+                continue
+            }
+            let rel = satRelation(state, inc)
+            match rel.rel {
+                SatIncSat -> {
+                    return SatPropResult { conflict: true, conflictIdx: i }
+                },
+                SatIncAlmost -> {
+                    let t = inc.terms[rel.unsatisfied]
+                    let derived = termNegate(t)
+                    state.assigns.push(
+                        satDerivation(t.pkg, derived, state.decisionLevel, i),
+                    )
+                    if !(satListContains(changed, t.pkg)) {
+                        changed.push(t.pkg)
+                    }
+                },
+                SatIncContra -> {},
+                SatIncInconc -> {},
+            }
+            i = i + 1
+        }
+    }
+    SatPropResult { conflict: false, conflictIdx: -1 }
+}
+
+fn satPopLast(xs: List<String>) -> List<String> {
+    if xs.len() == 0 { return xs }
+    let mut out: List<String> = []
+    let n = xs.len()
+    let mut i = 0
+    for i < n - 1 {
+        out.push(xs[i])
+        i = i + 1
+    }
+    out
+}
+
+fn satIncompatMentions(inc: SatIncompat, pkg: String) -> Bool {
+    for t in inc.terms {
+        if t.pkg == pkg { return true }
+    }
+    false
+}
+
+fn satListContains(xs: List<String>, pkg: String) -> Bool {
+    for s in xs {
+        if s == pkg { return true }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------
+// 9. Conflict resolution — compute a learned incompat and backjump.
+//
+// Implements the textbook PubGrub conflict resolution loop:
+//   incompat := the satisfied incompat
+//   loop:
+//     find "most recent satisfier" A — the last partial-solution
+//     assignment that satisfies a term of incompat
+//     let term = that term
+//     let previousSatLevel =
+//         highest decision level in incompat other than A's level
+//         (or 0 if there is no such term)
+//     if A is a decision OR previousSatLevel < A's level:
+//         backtrack to previousSatLevel
+//         return (incompat, previousSatLevel)
+//     else:
+//         // A was a derivation; resolve through its cause
+//         let priorCause = incompats[A.causeIncompat]
+//         incompat :=
+//             union of (incompat \ {term}) and (priorCause \ {inverse(term)})
+//             with the terms about the same package intersected
+//         repeat
+// ---------------------------------------------------------------------
+
+pub struct SatConflictResult {
+    pub learnedIdx: Int,
+    pub backLevel: Int,
+    pub unsolvable: Bool,
+}
+
+pub fn satResolveConflict(state: SatState, conflictIdx: Int) -> SatConflictResult {
+    let mut current = state.incompats[conflictIdx]
+    let mut currentIdx = conflictIdx
+    let mut iterations = 0
+    for iterations < 1024 {
+        iterations = iterations + 1
+        if satIncompatIsFailure(current) {
+            state.unsat = true
+            state.unsatRoot = currentIdx
+            return SatConflictResult { learnedIdx: currentIdx, backLevel: 0, unsolvable: true }
+        }
+        let sat = satMostRecentSatisfier(state, current)
+        if !(sat.found) {
+            state.unsat = true
+            state.unsatRoot = currentIdx
+            return SatConflictResult { learnedIdx: currentIdx, backLevel: 0, unsolvable: true }
+        }
+        let previousLevel = satPreviousSatisfierLevel(state, current, sat)
+        if sat.assign.isDecision || previousLevel < sat.assign.decisionLevel {
+            satBackjump(state, previousLevel)
+            return SatConflictResult {
+                learnedIdx: currentIdx,
+                backLevel: previousLevel,
+                unsolvable: false,
+            }
+        }
+        let prior = state.incompats[sat.assign.causeIncompat]
+        let merged = satMergeIncompats(current, prior, sat.term)
+        state.incompats.push(
+            satIncompat(merged, SatCauseDerived, currentIdx, sat.assign.causeIncompat),
+        )
+        currentIdx = state.incompats.len() - 1
+        current = state.incompats[currentIdx]
+    }
+    state.unsat = true
+    state.unsatRoot = currentIdx
+    SatConflictResult { learnedIdx: currentIdx, backLevel: 0, unsolvable: true }
+}
+
+fn satIncompatIsFailure(inc: SatIncompat) -> Bool {
+    // The "root incompat" — the signal to report UNSAT — is the empty
+    // conjunction or a single positive-empty term about root.
+    if inc.terms.len() == 0 { return true }
+    if inc.terms.len() == 1 {
+        let t = inc.terms[0]
+        if t.positive && vsIsEmpty(t.set) { return true }
+    }
+    false
+}
+
+pub struct SatSatisfier {
+    pub found: Bool,
+    pub assign: SatAssign,
+    pub assignIdx: Int,
+    pub term: SatTerm,
+}
+
+/// satMostRecentSatisfier finds the last assignment that makes some
+/// term of `inc` satisfied, given the prefix of assigns up to that point.
+fn satMostRecentSatisfier(state: SatState, inc: SatIncompat) -> SatSatisfier {
+    // For each term, find the minimum prefix length at which the
+    // partial solution starts satisfying it. The "most recent
+    // satisfier" is the term whose minimum-prefix is largest (i.e.,
+    // latest in the assignment order).
+    let mut bestFound = false
+    let mut bestIdx = -1
+    let mut bestTerm = termPositive("", vsEmpty())
+    for t in inc.terms {
+        let sat = satFirstSatisfierIndex(state, t)
+        if !(sat.found) {
+            // This term is never satisfied — but the incompat is
+            // reported as Satisfied, so one of the other terms must be.
+            continue
+        }
+        if !(bestFound) || sat.index > bestIdx {
+            bestFound = true
+            bestIdx = sat.index
+            bestTerm = t
+        }
+    }
+    if !(bestFound) {
+        return SatSatisfier {
+            found: false,
+            assign: satDecision("", stableVersion(0, 0, 0), 0),
+            assignIdx: -1,
+            term: termPositive("", vsEmpty()),
+        }
+    }
+    SatSatisfier {
+        found: true,
+        assign: state.assigns[bestIdx],
+        assignIdx: bestIdx,
+        term: bestTerm,
+    }
+}
+
+pub struct SatFirstIdx {
+    pub found: Bool,
+    pub index: Int,
+}
+
+fn satFirstSatisfierIndex(state: SatState, t: SatTerm) -> SatFirstIdx {
+    let mut accumulated = vsFull()
+    let mut i = 0
+    for a in state.assigns {
+        if a.pkg == t.pkg {
+            accumulated = vsIntersect(accumulated, termNormalizedSet(a.term))
+            if termSatisfiedBy(t, accumulated) {
+                return SatFirstIdx { found: true, index: i }
+            }
+        }
+        i = i + 1
+    }
+    SatFirstIdx { found: false, index: -1 }
+}
+
+fn satPreviousSatisfierLevel(
+    state: SatState,
+    inc: SatIncompat,
+    sat: SatSatisfier,
+) -> Int {
+    let mut best = 0
+    for t in inc.terms {
+        if t.pkg == sat.term.pkg && satTermEqual(t, sat.term) { continue }
+        let sat2 = satFirstSatisfierIndex(state, t)
+        if !(sat2.found) { continue }
+        let level = state.assigns[sat2.index].decisionLevel
+        if level > best && level < sat.assign.decisionLevel {
+            best = level
+        }
+    }
+    best
+}
+
+fn satTermEqual(a: SatTerm, b: SatTerm) -> Bool {
+    if a.pkg != b.pkg { return false }
+    if a.positive != b.positive { return false }
+    vsEqual(a.set, b.set)
+}
+
+fn satBackjump(state: SatState, level: Int) {
+    let mut kept: List<SatAssign> = []
+    for a in state.assigns {
+        if a.decisionLevel <= level { kept.push(a) }
+    }
+    state.assigns = kept
+    state.decisionLevel = level
+}
+
+fn satMergeIncompats(
+    current: SatIncompat,
+    prior: SatIncompat,
+    satTerm: SatTerm,
+) -> List<SatTerm> {
+    // Start with current minus satTerm; fold in prior terms, merging
+    // by package (intersect normalized sets).
+    let mut merged: List<SatTerm> = []
+    for t in current.terms {
+        if !(satTermEqual(t, satTerm)) { merged.push(t) }
+    }
+    let invSatTerm = termNegate(satTerm)
+    for t in prior.terms {
+        if satTermEqual(t, invSatTerm) { continue }
+        let mut found = false
+        let mut i = 0
+        for existing in merged {
+            if existing.pkg == t.pkg {
+                merged[i] = termIntersectPositive(existing, t)
+                found = true
+                break
+            }
+            i = i + 1
+        }
+        if !(found) { merged.push(t) }
+    }
+    merged
+}
+
+fn termIntersectPositive(a: SatTerm, b: SatTerm) -> SatTerm {
+    let combined = vsIntersect(termNormalizedSet(a), termNormalizedSet(b))
+    termPositive(a.pkg, combined)
+}
+
+// ---------------------------------------------------------------------
+// 10. Decision making.
+//
+// Pick the next package with a positive derived term (must be assigned
+// but no decision yet) and choose a concrete version. The strategy is
+// "highest version allowed by the derived term, that doesn't yanked-
+// away, with its deps adding any new incompats".
+// ---------------------------------------------------------------------
+
+pub struct SatDecisionOutcome {
+    pub pkg: String,
+    pub decided: Bool,
+    pub versionFound: Bool,
+    pub version: SemVersion,
+    pub addedNoVersions: Bool,
+    pub done: Bool,
+}
+
+pub fn satNextDecision(state: SatState) -> SatDecisionOutcome {
+    let pkg = satPickPackage(state)
+    if pkg == "" {
+        return SatDecisionOutcome {
+            pkg: "",
+            decided: false,
+            versionFound: false,
+            version: stableVersion(0, 0, 0),
+            addedNoVersions: false,
+            done: true,
+        }
+    }
+    let allowed = psDerivedTerm(state, pkg)
+    let versions = satRegistryVersions(state.registry, pkg)
+    if versions.len() == 0 {
+        let term = termPositive(pkg, allowed)
+        state.incompats.push(satIncompatNoVersions(term))
+        return SatDecisionOutcome {
+            pkg,
+            decided: false,
+            versionFound: false,
+            version: stableVersion(0, 0, 0),
+            addedNoVersions: true,
+            done: false,
+        }
+    }
+    let mut chosen: SemVersion = stableVersion(0, 0, 0)
+    let mut foundVer = false
+    for v in versions {
+        if vsContains(allowed, v) {
+            chosen = v
+            foundVer = true
+            break
+        }
+    }
+    if !(foundVer) {
+        let term = termPositive(pkg, allowed)
+        state.incompats.push(satIncompatNoVersions(term))
+        return SatDecisionOutcome {
+            pkg,
+            decided: false,
+            versionFound: false,
+            version: stableVersion(0, 0, 0),
+            addedNoVersions: true,
+            done: false,
+        }
+    }
+    // Seed dep incompats for (pkg, chosen).
+    let parentTerm = termPositive(pkg, vsPoint(chosen))
+    let deps = satRegistryDeps(state.registry, pkg, chosen)
+    for dep in deps {
+        let depTerm = termPositive(dep.packageName, vsFromReq(dep.versionReq))
+        state.incompats.push(satIncompatDependency(parentTerm, depTerm))
+    }
+    state.decisionLevel = state.decisionLevel + 1
+    state.assigns.push(satDecision(pkg, chosen, state.decisionLevel))
+    SatDecisionOutcome {
+        pkg,
+        decided: true,
+        versionFound: true,
+        version: chosen,
+        addedNoVersions: false,
+        done: false,
+    }
+}
+
+fn satPickPackage(state: SatState) -> String {
+    // Pick a package that has a positive derived term but no decision,
+    // preferring ones with the fewest candidate versions (smallest
+    // branching factor first — classic MRV heuristic).
+    let mut bestName = ""
+    let mut bestCount = -1
+    let mut seen: List<String> = []
+    for a in state.assigns {
+        if satListContains(seen, a.pkg) { continue }
+        seen.push(a.pkg)
+        let derived = psDerivedTerm(state, a.pkg)
+        if vsIsEmpty(derived) { continue }
+        // Is there a positive constraint forcing the package?
+        if !(satAnyPositiveConstraint(state, a.pkg)) { continue }
+        if psHasDecision(state, a.pkg) { continue }
+        let versions = satRegistryVersions(state.registry, a.pkg)
+        let mut count = 0
+        for v in versions {
+            if vsContains(derived, v) { count = count + 1 }
+        }
+        if count == 0 {
+            // Force the decision path to handle the no-match case.
+            return a.pkg
+        }
+        if bestCount < 0 || count < bestCount {
+            bestName = a.pkg
+            bestCount = count
+        }
+    }
+    bestName
+}
+
+fn satAnyPositiveConstraint(state: SatState, pkg: String) -> Bool {
+    for a in state.assigns {
+        if a.pkg == pkg && a.term.positive { return true }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------
+// 11. Main solve loop.
+// ---------------------------------------------------------------------
+
+/// SatSolveOutcome is the pure-data result of solving.
+pub struct SatSolveOutcome {
+    pub success: Bool,
+    pub decisions: List<SelfPkgResolveDecision>,
+    pub error: String,
+}
+
+/// satSolve drives the PubGrub loop until a full solution or UNSAT.
+pub fn satSolve(state: SatState) -> SatSolveOutcome {
+    let mut seedPkg = state.rootName
+    let mut steps = 0
+    for steps < 4096 {
+        steps = steps + 1
+        let prop = satPropagate(state, seedPkg)
+        if prop.conflict {
+            let resolved = satResolveConflict(state, prop.conflictIdx)
+            if resolved.unsolvable {
+                return SatSolveOutcome {
+                    success: false,
+                    decisions: [],
+                    error: satRenderConflict(state, resolved.learnedIdx),
+                }
+            }
+            // After backjump the learned incompat is at state.incompats[resolved.learnedIdx];
+            // re-seed propagation with its "almost satisfied" term's pkg.
+            seedPkg = satLearnedSeed(state, resolved.learnedIdx)
+            continue
+        }
+        let decision = satNextDecision(state)
+        if decision.done {
+            return SatSolveOutcome {
+                success: true,
+                decisions: satRenderPlan(state),
+                error: "",
+            }
+        }
+        if decision.addedNoVersions {
+            seedPkg = decision.pkg
+            continue
+        }
+        seedPkg = decision.pkg
+    }
+    SatSolveOutcome {
+        success: false,
+        decisions: [],
+        error: "sat: step limit exceeded",
+    }
+}
+
+fn satLearnedSeed(state: SatState, incIdx: Int) -> String {
+    // Pick any term in the learned incompat whose current relation is
+    // "almost"; its unsatisfied term's package is the one to propagate
+    // from next. Fallback: root.
+    let inc = state.incompats[incIdx]
+    let rel = satRelation(state, inc)
+    match rel.rel {
+        SatIncAlmost -> inc.terms[rel.unsatisfied].pkg,
+        SatIncSat -> state.rootName,
+        SatIncContra -> state.rootName,
+        SatIncInconc -> state.rootName,
+    }
+}
+
+// ---------------------------------------------------------------------
+// 12. Rendering — turn decisions into SelfPkgResolveDecision records
+// and UNSAT into a human-readable message.
+// ---------------------------------------------------------------------
+
+fn satRenderPlan(state: SatState) -> List<SelfPkgResolveDecision> {
+    let mut out: List<SelfPkgResolveDecision> = []
+    let mut seen: List<String> = []
+    for a in state.assigns {
+        if !(a.isDecision) { continue }
+        if a.pkg == state.rootName { continue }
+        if satListContains(seen, a.pkg) { continue }
+        seen.push(a.pkg)
+        let v = psDecidedVersion(state, a.pkg)
+        if !(v.found) { continue }
+        let checksum = satRegistryChecksum(state.registry, a.pkg, v.version)
+        out.push(SelfPkgResolveDecision {
+            found: true,
+            name: a.pkg,
+            packageName: a.pkg,
+            version: v.version,
+            source: "registry+default",
+            checksum,
+            fromLock: false,
+            message: "pubgrub",
+        })
+    }
+    out
+}
+
+fn satRenderConflict(state: SatState, incIdx: Int) -> String {
+    let inc = state.incompats[incIdx]
+    let mut parts: List<String> = []
+    for t in inc.terms {
+        parts.push(satRenderTerm(t))
+    }
+    "pubgrub: unsolvable — " + satStrings.join(parts, " ∧ ")
+}
+
+fn satRenderTerm(t: SatTerm) -> String {
+    let prefix = if t.positive { "" } else { "¬" }
+    prefix + t.pkg + " ∈ " + satRenderSet(t.set)
+}
+
+fn satRenderSet(vs: SatVersionSet) -> String {
+    if vsIsEmpty(vs) { return "∅" }
+    if vsIsFull(vs) { return "*" }
+    let mut parts: List<String> = []
+    for iv in vs.intervals {
+        parts.push(satRenderInterval(iv))
+    }
+    satStrings.join(parts, " ∪ ")
+}
+
+fn satRenderInterval(iv: SatInterval) -> String {
+    let lo = satRenderBoundLow(iv.low)
+    let hi = satRenderBoundHigh(iv.high)
+    lo + ", " + hi
+}
+
+fn satRenderBoundLow(b: SatBound) -> String {
+    match b.kind {
+        SatUnbounded -> "(-∞",
+        SatInclusive -> "[" + semVersionText(b.version),
+        SatExclusive -> "(" + semVersionText(b.version),
+    }
+}
+
+fn satRenderBoundHigh(b: SatBound) -> String {
+    match b.kind {
+        SatUnbounded -> "+∞)",
+        SatInclusive -> semVersionText(b.version) + "]",
+        SatExclusive -> semVersionText(b.version) + ")",
+    }
+}
+
+// ---------------------------------------------------------------------
+// 13. Public entry.
+// ---------------------------------------------------------------------
+
+/// selfPkgSolvePubGrub is the drop-in PubGrub replacement for the
+/// greedy `selfPkgResolveRegistryGraph`. The root manifest's direct
+/// dependencies are encoded as incompatibilities and the solver is
+/// driven to a full assignment.
+///
+/// Inputs are the same pure-data shapes the rest of `pkgmgr.osty`
+/// works with. Output is a `SelfPkgResolvePlan`: one decision per
+/// transitive package. `missing` is non-zero only if the solver could
+/// not find a solution — in that case `decisions` is empty and the
+/// caller can consult the outcome for diagnostic text.
+pub fn selfPkgSolvePubGrub(
+    rootName: String,
+    roots: List<SelfPkgDependency>,
+    candidates: List<SelfPkgCandidate>,
+    candidateDeps: List<SelfPkgCandidateDeps>,
+    locked: List<SelfPkgLockPackage>,
+) -> SelfPkgResolvePlan {
+    let outcome = selfPkgSolvePubGrubOutcome(rootName, roots, candidates, candidateDeps, locked)
+    let mut missing = 0
+    if !(outcome.success) { missing = missing + 1 }
+    SelfPkgResolvePlan { decisions: outcome.decisions, missing }
+}
+
+/// selfPkgSolvePubGrubOutcome exposes the full outcome (success flag,
+/// decisions, error message) for callers that want to plumb conflicts
+/// through a diagnostic.
+pub fn selfPkgSolvePubGrubOutcome(
+    rootName: String,
+    roots: List<SelfPkgDependency>,
+    candidates: List<SelfPkgCandidate>,
+    candidateDeps: List<SelfPkgCandidateDeps>,
+    locked: List<SelfPkgLockPackage>,
+) -> SatSolveOutcome {
+    let _ = locked
+    let effectiveRoot = if rootName == "" { "$root" } else { rootName }
+    let registry = satRegistryFromPkgmgr(candidates, candidateDeps)
+    let mut state = SatState {
+        assigns: [],
+        incompats: [],
+        decisionLevel: 0,
+        registry,
+        rootName: effectiveRoot,
+        errors: [],
+        unsat: false,
+        unsatRoot: -1,
+    }
+    // Seed root as a positive decision at level 0 so propagation can
+    // reason about it symbolically; register each direct dep as a
+    // dependency incompat from root.
+    state.assigns.push(satDecision(effectiveRoot, stableVersion(0, 0, 0), 0))
+    let rootTerm = termPositive(effectiveRoot, vsFull())
+    for d in roots {
+        let depTerm = termPositive(d.packageName, vsFromReq(d.versionReq))
+        state.incompats.push(satIncompatDependency(rootTerm, depTerm))
+    }
+    satSolve(state)
+}

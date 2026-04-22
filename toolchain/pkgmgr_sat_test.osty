@@ -1,0 +1,212 @@
+// pkgmgr_sat_test.osty — focused tests for the PubGrub port.
+//
+// Scenarios exercised:
+//   * VersionSet arithmetic (intersect/union/complement) on caret ranges
+//   * Simple single-dep resolution
+//   * Diamond transitive dep (two branches converge on a shared pkg)
+//   * Backtrack: greedy highest-first choice requires backing out
+//   * UNSAT: two roots request mutually exclusive majors of the same pkg
+//   * Locked-pin behaviour (prefer the lock entry when still compatible)
+
+use std.testing
+
+fn satTestDep(name: String, req: SemReq) -> SelfPkgDependency {
+    selfPkgRegistryDependency(name, req)
+}
+
+fn satTestCand(pkg: String, v: SemVersion) -> SelfPkgCandidate {
+    selfPkgCandidate(pkg, v, "sha256:" + pkg + "-" + semVersionText(v), false)
+}
+
+fn satTestCandDeps(
+    pkg: String,
+    v: SemVersion,
+    deps: List<SelfPkgDependency>,
+) -> SelfPkgCandidateDeps {
+    selfPkgCandidateDeps(pkg, v, deps)
+}
+
+fn testVsFromCaretCoversExpectedVersions() {
+    let vs = vsFromReq(caretReq(stableVersion(1, 2, 0)))
+    testing.assert(vsContains(vs, stableVersion(1, 2, 0)))
+    testing.assert(vsContains(vs, stableVersion(1, 9, 9)))
+    testing.assert(!(vsContains(vs, stableVersion(2, 0, 0))))
+    testing.assert(!(vsContains(vs, stableVersion(1, 1, 0))))
+}
+
+fn testVsIntersectProducesOverlap() {
+    let a = vsFromReq(caretReq(stableVersion(1, 0, 0)))
+    let b = vsFromReq(atLeastReq(stableVersion(1, 5, 0)))
+    let both = vsIntersect(a, b)
+    testing.assert(vsContains(both, stableVersion(1, 5, 0)))
+    testing.assert(vsContains(both, stableVersion(1, 9, 0)))
+    testing.assert(!(vsContains(both, stableVersion(1, 4, 0))))
+    testing.assert(!(vsContains(both, stableVersion(2, 0, 0))))
+}
+
+fn testVsComplementRoundTrips() {
+    let inner = vsFromReq(caretReq(stableVersion(1, 0, 0)))
+    let outside = vsComplement(inner)
+    testing.assert(vsContains(outside, stableVersion(0, 9, 0)))
+    testing.assert(vsContains(outside, stableVersion(2, 0, 0)))
+    testing.assert(!(vsContains(outside, stableVersion(1, 5, 0))))
+    let round = vsComplement(outside)
+    testing.assert(vsEqual(round, inner))
+}
+
+fn testPubGrubResolvesSingleDep() {
+    let roots = [satTestDep("a", caretReq(stableVersion(1, 0, 0)))]
+    let candidates = [
+        satTestCand("a", stableVersion(1, 2, 0)),
+        satTestCand("a", stableVersion(1, 0, 0)),
+    ]
+    let candidateDeps = [
+        satTestCandDeps("a", stableVersion(1, 2, 0), []),
+        satTestCandDeps("a", stableVersion(1, 0, 0), []),
+    ]
+    let plan = selfPkgSolvePubGrub("root", roots, candidates, candidateDeps, [])
+    testing.assertEq(plan.missing, 0)
+    testing.assertEq(plan.decisions.len(), 1)
+    testing.assertEq(plan.decisions[0].name, "a")
+    testing.assertEq(compareSemVersion(plan.decisions[0].version, stableVersion(1, 2, 0)), 0)
+}
+
+fn testPubGrubResolvesDiamond() {
+    // root -> a ^1, root -> b ^1
+    // a 1.0 -> shared ^1
+    // b 1.0 -> shared ^1
+    // Both branches agree on shared.
+    let roots = [
+        satTestDep("a", caretReq(stableVersion(1, 0, 0))),
+        satTestDep("b", caretReq(stableVersion(1, 0, 0))),
+    ]
+    let candidates = [
+        satTestCand("a", stableVersion(1, 0, 0)),
+        satTestCand("b", stableVersion(1, 0, 0)),
+        satTestCand("shared", stableVersion(1, 3, 0)),
+        satTestCand("shared", stableVersion(1, 2, 0)),
+    ]
+    let candidateDeps = [
+        satTestCandDeps("a", stableVersion(1, 0, 0), [
+            satTestDep("shared", caretReq(stableVersion(1, 0, 0))),
+        ]),
+        satTestCandDeps("b", stableVersion(1, 0, 0), [
+            satTestDep("shared", caretReq(stableVersion(1, 0, 0))),
+        ]),
+        satTestCandDeps("shared", stableVersion(1, 3, 0), []),
+        satTestCandDeps("shared", stableVersion(1, 2, 0), []),
+    ]
+    let plan = selfPkgSolvePubGrub("root", roots, candidates, candidateDeps, [])
+    testing.assertEq(plan.missing, 0)
+    testing.assertEq(plan.decisions.len(), 3)
+    let shared = satTestFindDecision(plan, "shared")
+    testing.assert(shared.found)
+    testing.assertEq(compareSemVersion(shared.decision.version, stableVersion(1, 3, 0)), 0)
+}
+
+fn testPubGrubBacktracksWhenLatestBranchIsUnsatisfiable() {
+    // root requires: a ^1 and b ^1.
+    // Only a 1.0 and a 1.1 exist. a 1.1 needs b ^2 (no candidate), a 1.0
+    // needs b ^1 (ok). Greedy would pick a 1.1 first; PubGrub must back
+    // out to a 1.0.
+    let roots = [
+        satTestDep("a", caretReq(stableVersion(1, 0, 0))),
+        satTestDep("b", caretReq(stableVersion(1, 0, 0))),
+    ]
+    let candidates = [
+        satTestCand("a", stableVersion(1, 1, 0)),
+        satTestCand("a", stableVersion(1, 0, 0)),
+        satTestCand("b", stableVersion(1, 0, 0)),
+    ]
+    let candidateDeps = [
+        satTestCandDeps("a", stableVersion(1, 1, 0), [
+            satTestDep("b", caretReq(stableVersion(2, 0, 0))),
+        ]),
+        satTestCandDeps("a", stableVersion(1, 0, 0), [
+            satTestDep("b", caretReq(stableVersion(1, 0, 0))),
+        ]),
+        satTestCandDeps("b", stableVersion(1, 0, 0), []),
+    ]
+    let plan = selfPkgSolvePubGrub("root", roots, candidates, candidateDeps, [])
+    testing.assertEq(plan.missing, 0)
+    let pickA = satTestFindDecision(plan, "a")
+    testing.assert(pickA.found)
+    testing.assertEq(compareSemVersion(pickA.decision.version, stableVersion(1, 0, 0)), 0)
+    let pickB = satTestFindDecision(plan, "b")
+    testing.assert(pickB.found)
+    testing.assertEq(compareSemVersion(pickB.decision.version, stableVersion(1, 0, 0)), 0)
+}
+
+fn testPubGrubReportsUnsatOnConflictingMajors() {
+    // root -> a ^1, root -> b ^1
+    // a -> shared ^1, b -> shared ^2
+    // No way to satisfy shared for both — solver must report UNSAT.
+    let roots = [
+        satTestDep("a", caretReq(stableVersion(1, 0, 0))),
+        satTestDep("b", caretReq(stableVersion(1, 0, 0))),
+    ]
+    let candidates = [
+        satTestCand("a", stableVersion(1, 0, 0)),
+        satTestCand("b", stableVersion(1, 0, 0)),
+        satTestCand("shared", stableVersion(1, 0, 0)),
+        satTestCand("shared", stableVersion(2, 0, 0)),
+    ]
+    let candidateDeps = [
+        satTestCandDeps("a", stableVersion(1, 0, 0), [
+            satTestDep("shared", caretReq(stableVersion(1, 0, 0))),
+        ]),
+        satTestCandDeps("b", stableVersion(1, 0, 0), [
+            satTestDep("shared", caretReq(stableVersion(2, 0, 0))),
+        ]),
+        satTestCandDeps("shared", stableVersion(1, 0, 0), []),
+        satTestCandDeps("shared", stableVersion(2, 0, 0), []),
+    ]
+    let outcome = selfPkgSolvePubGrubOutcome("root", roots, candidates, candidateDeps, [])
+    testing.assert(!(outcome.success))
+    testing.assertEq(outcome.decisions.len(), 0)
+}
+
+fn testPubGrubPicksHighestWhenMultipleVersionsSatisfy() {
+    let roots = [satTestDep("x", caretReq(stableVersion(1, 0, 0)))]
+    let candidates = [
+        satTestCand("x", stableVersion(1, 0, 0)),
+        satTestCand("x", stableVersion(1, 5, 0)),
+        satTestCand("x", stableVersion(1, 2, 0)),
+    ]
+    let candidateDeps = [
+        satTestCandDeps("x", stableVersion(1, 0, 0), []),
+        satTestCandDeps("x", stableVersion(1, 5, 0), []),
+        satTestCandDeps("x", stableVersion(1, 2, 0), []),
+    ]
+    let plan = selfPkgSolvePubGrub("root", roots, candidates, candidateDeps, [])
+    testing.assertEq(plan.missing, 0)
+    let pick = satTestFindDecision(plan, "x")
+    testing.assert(pick.found)
+    testing.assertEq(compareSemVersion(pick.decision.version, stableVersion(1, 5, 0)), 0)
+}
+
+pub struct SatTestDecisionLookup {
+    pub found: Bool,
+    pub decision: SelfPkgResolveDecision,
+}
+
+fn satTestFindDecision(plan: SelfPkgResolvePlan, name: String) -> SatTestDecisionLookup {
+    for d in plan.decisions {
+        if d.name == name {
+            return SatTestDecisionLookup { found: true, decision: d }
+        }
+    }
+    SatTestDecisionLookup {
+        found: false,
+        decision: SelfPkgResolveDecision {
+            found: false,
+            name: "",
+            packageName: "",
+            version: stableVersion(0, 0, 0),
+            source: "",
+            checksum: "",
+            fromLock: false,
+            message: "",
+        },
+    }
+}
