@@ -24,15 +24,16 @@
 //     pre-bound by `applyClosureCaptureBindings` after the parameter
 //     binding loop in `emitUserFunction`.
 //
-// Capture support is intentionally limited to scalar IR primitives
-// (Int / Bool / Char / Byte / Float and their typed cousins) — the
-// LLVM types those lower to (i64 / i1 / i32 / i8 / double) all fit
-// in a single machine word and the env layout stores them inline.
-// Pointer-typed captures (String, List<T>, struct) require a GC
-// trace callback so the env keeps captured managed pointers
-// reachable from mark; that's a follow-up. Closures with any
-// non-supported capture are skipped and fall through to the existing
-// LLVM013 wall.
+// Capture support covers scalar IR primitives (Int / Bool / Char /
+// Byte / Float and their typed cousins) that fit in a single machine
+// word, plus managed pointer-typed captures (String / Bytes / List /
+// Map / Set) that lower to `ptr`. The runtime side is already set up
+// for this: `osty.rt.closure_env_alloc_v1` installs
+// `osty_rt_closure_env_trace`, which walks every capture slot via
+// `osty_gc_mark_slot_v1` — that helper filters through `find_header`,
+// so scalar bit patterns in a slot are safely skipped and real managed
+// pointers get marked. User struct captures and other ptr-by-value
+// shapes still fall through to the existing LLVM013 wall.
 package llvmgen
 
 import (
@@ -166,13 +167,13 @@ func liftClosuresFromModule(mod *ostyir.Module) []ast.Decl {
 // capture is unsupported (Kind, type, or shape) — the caller treats
 // that as a signal to skip the lift entirely.
 //
-// Supported shapes for this PR:
+// Supported shapes:
 //   - Kind: CaptureLocal / CaptureParam (bare reads of names from
 //     the enclosing fn's scope). CaptureGlobal / CaptureFn /
 //     CaptureSelf still bail.
-//   - LLVM type: scalar primitives only (i64 / i1 / i32 / i8 /
-//     double). Pointer-typed captures need a GC trace callback;
-//     deferred to a follow-up.
+//   - LLVM type: scalar primitives (i64 / i1 / i32 / i8 / double /
+//     float) or managed pointer types (String / Bytes / List / Map /
+//     Set → ptr). User struct captures still bail.
 func captureSlotsFromIR(captures []*ostyir.Capture) ([]closureCapture, bool) {
 	if len(captures) == 0 {
 		return nil, true
@@ -189,7 +190,10 @@ func captureSlotsFromIR(captures []*ostyir.Capture) ([]closureCapture, bool) {
 		}
 		llvmTyp, ok := scalarLLVMTypeForIR(c.T)
 		if !ok {
-			return nil, false
+			llvmTyp, ok = managedPtrLLVMTypeForIR(c.T)
+			if !ok {
+				return nil, false
+			}
 		}
 		astTyp := legacyTypeFromIR(c.T)
 		if astTyp == nil {
@@ -202,6 +206,40 @@ func captureSlotsFromIR(captures []*ostyir.Capture) ([]closureCapture, bool) {
 		})
 	}
 	return out, true
+}
+
+// managedPtrLLVMTypeForIR returns `"ptr"` for IR types the GC traces
+// as managed pointers — String, Bytes, and the prelude containers
+// List / Map / Set. The env slot stores the pointer verbatim; the
+// runtime's `osty_rt_closure_env_trace` walks each slot through
+// `mark_slot_v1`, which filters to real heap headers, so storing a
+// managed payload pointer keeps the captured value alive while the
+// env is reachable.
+//
+// User structs and other pointer-shaped aggregates return ok=false
+// for now: they can appear by-value or by-pointer depending on where
+// they're sourced, and the lifter can't safely assume the capture
+// site loaded a canonical ptr. That distinction is the follow-up.
+func managedPtrLLVMTypeForIR(t ostyir.Type) (string, bool) {
+	switch typed := t.(type) {
+	case *ostyir.PrimType:
+		if typed == nil {
+			return "", false
+		}
+		switch typed.Kind {
+		case ostyir.PrimString, ostyir.PrimBytes:
+			return "ptr", true
+		}
+	case *ostyir.NamedType:
+		if typed == nil || !typed.Builtin {
+			return "", false
+		}
+		switch typed.Name {
+		case "List", "Map", "Set":
+			return "ptr", true
+		}
+	}
+	return "", false
 }
 
 // scalarLLVMTypeForIR returns the LLVM IR type string for a scalar

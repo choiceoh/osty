@@ -160,6 +160,56 @@ fn main() {
 	}
 }
 
+// A closure capturing a managed pointer (String) survives GC because
+// the env's trace callback (`osty_rt_closure_env_trace`) walks every
+// capture slot through `mark_slot_v1`, which filters to live heap
+// headers. The lifter now lowers String/Bytes/List/Map/Set captures
+// as `ptr` — the runtime side was already prepared during Phase A4.
+//
+// Locks:
+//   - lifted fn signature appends `msg: String` after the `n` param
+//   - capturing thunk loads the capture as `ptr` (not `i64`)
+//   - maker call site stores `ptr` into the env slot at offset 16
+func TestClosureLiftCapturingStringLocal(t *testing.T) {
+	src := `fn apply(f: fn(Int) -> String, x: Int) -> String {
+    f(x)
+}
+
+fn main() {
+    let msg = "hi"
+    let _ = apply(|n| msg, 5)
+}
+`
+	mod := lowerSrcLLVM(t, src)
+	ir, err := GenerateModule(mod, Options{PackageName: "main", SourcePath: "/tmp/closure_lift_capture_string.osty"})
+	if err != nil {
+		t.Fatalf("string-capturing closure errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		// Lifted fn appends `msg` after `n`. LLVM String lowers to `ptr`.
+		"(i64 %n, ptr %msg)",
+		// Capturing thunk loads the capture as ptr from offset 16.
+		"%cap0_slot = getelementptr i8, ptr %env, i64 16",
+		"%cap0 = load ptr",
+		// Maker call site allocates env with capture_count=1, stores
+		// the thunk at slot 0 and a ptr capture at offset 16.
+		"call ptr @osty.rt.closure_env_alloc_v1(i64 1",
+		"store ptr @__osty_closure_thunk___osty_closure_",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("string-capturing closure missing %q in IR:\n%s", want, got)
+		}
+	}
+	// Locate the slot at offset 16 and check the store that lands
+	// there is a `store ptr`, not a `store i64` (which would leave
+	// the upper 4 bytes of a managed pointer undefined). This is the
+	// invariant that makes GC tracing correct for pointer captures.
+	if !strings.Contains(got, "store ptr %") || !strings.Contains(got, "= getelementptr i8, ptr %env, i64 16") {
+		t.Fatalf("expected `store ptr %%…` into env slot, got:\n%s", got)
+	}
+}
+
 // Multiple captures of different types in the same closure lay out
 // in env slots 1..N at 8-byte stride, and the thunk loads them in
 // declaration order before the call.
