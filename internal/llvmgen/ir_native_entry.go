@@ -2,6 +2,7 @@ package llvmgen
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -46,9 +47,49 @@ type nativeTupleInfo struct {
 	elemLLVMTypes []string
 }
 
+// nativeInterfaceMethod captures a single interface method's
+// calling-convention-level shape: the LLVM return type and parameter
+// types *excluding* the receiver (self). The receiver is always
+// projected as a `ptr` in the vtable shim — the shim loads the
+// concrete struct value before calling the underlying method.
+type nativeInterfaceMethod struct {
+	name       string
+	returnLLVM string
+	paramLLVMs []string
+}
+
+// nativeInterfaceInfo tracks a non-generic interface declaration so
+// the finalization pass can scan for structural impls and emit the
+// vtable + shim pair per (interface, concrete struct) match.
+type nativeInterfaceInfo struct {
+	name    string
+	methods []*nativeInterfaceMethod
+}
+
+// nativeInterfaceImpl records a (concrete struct, interface) pair
+// that structurally matches: the struct exposes every method the
+// interface demands, with identical return and non-self parameter
+// LLVM types. The finalization pass turns each record into a
+// `@osty.vtable.<struct>__<iface>` global plus one
+// `@osty.shim.<struct>__<iface>__<method>` thunk per method.
+type nativeInterfaceImpl struct {
+	structName string
+	structLLVM string
+	ifaceName  string
+	methods    []nativeInterfaceImplMethod
+}
+
+type nativeInterfaceImplMethod struct {
+	ifaceMethod  *nativeInterfaceMethod
+	structMethod nativeMethodInfo
+}
+
 type nativeProjectionCtx struct {
 	structsByName         map[string]*nativeStructInfo
 	enumsByName           map[string]*nativeEnumInfo
+	interfacesByName      map[string]*nativeInterfaceInfo
+	interfaceOrder        []string // declaration order for deterministic emission
+	structOrder           []string // declaration order for deterministic emission
 	tuplesByLLVMType      map[string]*nativeTupleInfo
 	tupleOrder            []string
 	methodsByOwner        map[string]map[string]nativeMethodInfo
@@ -184,7 +225,9 @@ func tryNativeOwnedModule(mod *ostyir.Module, opts Options) ([]byte, bool, error
 	if !ok {
 		return nil, false, nil
 	}
-	return []byte(llvmNativeEmitModule(nativeMod)), true, nil
+	out := []byte(llvmNativeEmitModule(nativeMod))
+	out = appendNativeInterfaceSurface(out, mod, nativeMod)
+	return out, true, nil
 }
 
 func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bool) {
@@ -194,6 +237,7 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 	ctx := &nativeProjectionCtx{
 		structsByName:    map[string]*nativeStructInfo{},
 		enumsByName:      map[string]*nativeEnumInfo{},
+		interfacesByName: map[string]*nativeInterfaceInfo{},
 		tuplesByLLVMType: map[string]*nativeTupleInfo{},
 		methodsByOwner:   map[string]map[string]nativeMethodInfo{},
 		globalConsts:     map[string]nativeConstValue{},
@@ -226,10 +270,31 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 				return nil, false
 			}
 			ctx.structsByName[d.Name] = info
+			ctx.structOrder = append(ctx.structOrder, d.Name)
 			out.structs = append(out.structs, info.def)
 			if !nativeRegisterStructMethodHeaders(ctx, d) {
 				return nil, false
 			}
+		case *ostyir.InterfaceDecl:
+			if d == nil {
+				continue
+			}
+			// Generic interfaces are vtable-templated by
+			// specialization; we only accept the non-generic surface
+			// today. `Extends` inheritance would need flattening and
+			// is deferred alongside interface generics.
+			if len(d.Generics) != 0 || len(d.Extends) != 0 {
+				return nil, false
+			}
+			info, ok := nativeRegisterInterfaceDecl(ctx, d)
+			if !ok {
+				return nil, false
+			}
+			if _, exists := ctx.interfacesByName[d.Name]; exists {
+				return nil, false
+			}
+			ctx.interfacesByName[d.Name] = info
+			ctx.interfaceOrder = append(ctx.interfaceOrder, d.Name)
 		case *ostyir.EnumDecl:
 			if d == nil {
 				continue
@@ -288,6 +353,12 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 			// The explicit case keeps enum decls from falling into
 			// the default arm that rejects the whole module.
 			continue
+		case *ostyir.InterfaceDecl:
+			// Interface decls are pure signatures — the projection
+			// layer already registered them. Vtable + shim
+			// emission happens in the finalization pass after all
+			// concrete structs are known.
+			continue
 		case *ostyir.FnDecl:
 			fn, ok := nativeFunctionFromIR(ctx, d)
 			if !ok {
@@ -331,6 +402,405 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 	out.needsSetRuntime = ctx.needsSetRT
 	out.needsStringRuntime = ctx.needsStringRT
 	return out, true
+}
+
+// appendNativeInterfaceSurface scans the IR module for every
+// (non-generic interface, concrete struct) pair where the struct's
+// method set structurally satisfies the interface signature, and
+// appends the `%osty.iface` fat-pointer type def + the
+// `@osty.vtable.<struct>__<iface>` constant globals + the
+// `@osty.shim.<struct>__<iface>__<method>` ABI-adapter fns to the
+// emitted LLVM IR.
+//
+// The shim performs the interface-to-concrete ABI conversion: the
+// vtable slot takes a `ptr` receiver (the boxed data pointer), but
+// the underlying `@<Struct>__<method>` symbol takes the struct by
+// value. The shim loads the struct through the pointer, calls the
+// concrete method, and forwards the result. Call-site boxing and
+// indirect dispatch through the vtable lands in a follow-up.
+//
+// Emission lives in Go — we walk the original IR module rather than
+// thread extra state through `nativeModuleFromIR` — because the
+// matching is fully declarative over the IR shape. Osty-side
+// llvmNativeEmitModule stays untouched.
+func appendNativeInterfaceSurface(out []byte, mod *ostyir.Module, _ *llvmNativeModule) []byte {
+	if mod == nil {
+		return out
+	}
+	impls := collectNativeInterfaceImpls(mod)
+	if len(impls) == 0 {
+		return out
+	}
+	if len(out) > 0 && out[len(out)-1] != '\n' {
+		out = append(out, '\n')
+	}
+	out = append(out, "%osty.iface = type { ptr, ptr }\n"...)
+	for _, impl := range impls {
+		out = append(out, emitNativeInterfaceVtable(impl)...)
+		for _, m := range impl.methods {
+			out = append(out, emitNativeInterfaceShim(impl, m)...)
+		}
+	}
+	return out
+}
+
+// collectNativeInterfaceImpls walks the IR module and produces an
+// ordered list of (struct, interface) structural impls. Each impl
+// is deterministic — struct iteration is in declaration order and
+// interface iteration also in declaration order — so vtable /
+// shim symbols emit in a stable sequence across runs.
+//
+// A struct "implements" an interface when, for every interface
+// method, the struct declares a method with the same name whose
+// return + non-self parameter LLVM-ABI types match exactly.
+// Struct methods beyond the interface requirement are fine.
+// Receivers must be non-`mut` (the shim loads by-value through
+// the data ptr — a `mut self` method would need the data ptr
+// threaded end-to-end and is deferred).
+func collectNativeInterfaceImpls(mod *ostyir.Module) []nativeInterfaceImpl {
+	if mod == nil {
+		return nil
+	}
+	ctx := &nativeProjectionCtx{
+		structsByName:    map[string]*nativeStructInfo{},
+		enumsByName:      map[string]*nativeEnumInfo{},
+		interfacesByName: map[string]*nativeInterfaceInfo{},
+		tuplesByLLVMType: map[string]*nativeTupleInfo{},
+		methodsByOwner:   map[string]map[string]nativeMethodInfo{},
+	}
+	structOrder := make([]string, 0)
+	structDecls := map[string]*ostyir.StructDecl{}
+	ifaceOrder := make([]string, 0)
+	ifaceDecls := map[string]*ostyir.InterfaceDecl{}
+	for _, decl := range mod.Decls {
+		switch d := decl.(type) {
+		case *ostyir.StructDecl:
+			if d == nil || len(d.Generics) != 0 {
+				continue
+			}
+			info, ok := nativeRegisterStructDecl(d)
+			if !ok {
+				continue
+			}
+			if _, exists := ctx.structsByName[d.Name]; exists {
+				continue
+			}
+			ctx.structsByName[d.Name] = info
+			structOrder = append(structOrder, d.Name)
+			structDecls[d.Name] = d
+		case *ostyir.InterfaceDecl:
+			if d == nil || len(d.Generics) != 0 || len(d.Extends) != 0 {
+				continue
+			}
+			ifaceOrder = append(ifaceOrder, d.Name)
+			ifaceDecls[d.Name] = d
+		}
+	}
+	// Populate struct fields (needed for any interface param typed as
+	// another struct in the same module) and header-level method
+	// metadata (receiverMut / irName).
+	for _, name := range structOrder {
+		d := structDecls[name]
+		if d == nil {
+			continue
+		}
+		_ = nativePopulateStructDecl(ctx, d)
+		_ = nativeRegisterStructMethodHeaders(ctx, d)
+	}
+	// Build interface infos after structs are populated so
+	// interface methods referring to those structs resolve.
+	for _, name := range ifaceOrder {
+		d := ifaceDecls[name]
+		if d == nil {
+			continue
+		}
+		info, ok := nativeRegisterInterfaceDecl(ctx, d)
+		if !ok {
+			continue
+		}
+		ctx.interfacesByName[d.Name] = info
+	}
+	var impls []nativeInterfaceImpl
+	for _, structName := range structOrder {
+		sDecl := structDecls[structName]
+		sInfo := ctx.structsByName[structName]
+		if sDecl == nil || sInfo == nil {
+			continue
+		}
+		structMethodSigs := collectNativeStructMethodSigs(ctx, sDecl)
+		for _, ifaceName := range ifaceOrder {
+			iface := ctx.interfacesByName[ifaceName]
+			if iface == nil {
+				continue
+			}
+			impl, ok := buildNativeInterfaceImpl(sInfo, structMethodSigs, iface)
+			if !ok {
+				continue
+			}
+			impls = append(impls, impl)
+		}
+	}
+	return impls
+}
+
+// nativeStructMethodSig captures just enough of a struct method to
+// compare against an interface method signature: the LLVM return
+// and non-self parameter types, plus the receiver mutability flag.
+// Body / intrinsic / export attributes are irrelevant here —
+// structural matching only cares about the call-shape.
+type nativeStructMethodSig struct {
+	returnLLVM  string
+	paramLLVMs  []string
+	receiverMut bool
+	irName      string
+}
+
+func collectNativeStructMethodSigs(ctx *nativeProjectionCtx, decl *ostyir.StructDecl) map[string]*nativeStructMethodSig {
+	out := map[string]*nativeStructMethodSig{}
+	if ctx == nil || decl == nil {
+		return out
+	}
+	for _, m := range decl.Methods {
+		if m == nil || m.Name == "" || m.IsIntrinsic || m.Body == nil || len(m.Generics) != 0 {
+			continue
+		}
+		retLLVM, ok := nativeLLVMTypeFromIR(ctx, m.Return)
+		if !ok {
+			continue
+		}
+		paramLLVMs := make([]string, 0, len(m.Params))
+		brokenParam := false
+		for _, p := range m.Params {
+			if p == nil || p.IsDestructured() || p.Default != nil {
+				brokenParam = true
+				break
+			}
+			typ, ok := nativeLLVMTypeFromIR(ctx, p.Type)
+			if !ok || typ == "void" {
+				brokenParam = true
+				break
+			}
+			paramLLVMs = append(paramLLVMs, typ)
+		}
+		if brokenParam {
+			continue
+		}
+		out[m.Name] = &nativeStructMethodSig{
+			returnLLVM:  retLLVM,
+			paramLLVMs:  paramLLVMs,
+			receiverMut: m.ReceiverMut,
+			irName:      llvmMethodIRName(decl.Name, m.Name),
+		}
+	}
+	return out
+}
+
+// buildNativeInterfaceImpl succeeds iff every interface method has
+// a structurally compatible struct method — same name, same return
+// LLVM type, same non-self param LLVM types, non-`mut` receiver.
+func buildNativeInterfaceImpl(
+	sInfo *nativeStructInfo,
+	structSigs map[string]*nativeStructMethodSig,
+	iface *nativeInterfaceInfo,
+) (nativeInterfaceImpl, bool) {
+	methods := make([]nativeInterfaceImplMethod, 0, len(iface.methods))
+	for _, im := range iface.methods {
+		sig, ok := structSigs[im.name]
+		if !ok || sig == nil {
+			return nativeInterfaceImpl{}, false
+		}
+		if sig.receiverMut {
+			return nativeInterfaceImpl{}, false
+		}
+		if sig.returnLLVM != im.returnLLVM {
+			return nativeInterfaceImpl{}, false
+		}
+		if len(sig.paramLLVMs) != len(im.paramLLVMs) {
+			return nativeInterfaceImpl{}, false
+		}
+		for i := range im.paramLLVMs {
+			if sig.paramLLVMs[i] != im.paramLLVMs[i] {
+				return nativeInterfaceImpl{}, false
+			}
+		}
+		methods = append(methods, nativeInterfaceImplMethod{
+			ifaceMethod: im,
+			structMethod: nativeMethodInfo{
+				irName:      sig.irName,
+				receiverMut: sig.receiverMut,
+			},
+		})
+	}
+	return nativeInterfaceImpl{
+		structName: sInfo.def.name,
+		structLLVM: sInfo.def.llvmType,
+		ifaceName:  iface.name,
+		methods:    methods,
+	}, true
+}
+
+// emitNativeInterfaceVtable emits
+// `@osty.vtable.<struct>__<iface> = internal constant { ptr, ptr, ... } { ptr @osty.shim...., ... }`
+// — one slot per interface method, in declaration order.
+func emitNativeInterfaceVtable(impl nativeInterfaceImpl) []byte {
+	if len(impl.methods) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString("@osty.vtable.")
+	b.WriteString(impl.structName)
+	b.WriteString("__")
+	b.WriteString(impl.ifaceName)
+	b.WriteString(" = internal constant { ")
+	for i := range impl.methods {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("ptr")
+	}
+	b.WriteString(" } { ")
+	for i, m := range impl.methods {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("ptr @osty.shim.")
+		b.WriteString(impl.structName)
+		b.WriteString("__")
+		b.WriteString(impl.ifaceName)
+		b.WriteString("__")
+		b.WriteString(m.ifaceMethod.name)
+	}
+	b.WriteString(" }\n")
+	return []byte(b.String())
+}
+
+// emitNativeInterfaceShim emits the ABI adapter:
+//
+//	define <ret> @osty.shim.<S>__<I>__<M>(ptr %self_data, <params...>) {
+//	  %self = load %<S>, ptr %self_data, align 8
+//	  %res = call <ret> @<S>__<M>(%<S> %self, <params...>)
+//	  ret <ret> %res
+//	}
+//
+// For unit-returning methods (ret == "void") the shim ends with
+// `ret void` without capturing a result value.
+func emitNativeInterfaceShim(impl nativeInterfaceImpl, m nativeInterfaceImplMethod) []byte {
+	var b strings.Builder
+	ret := m.ifaceMethod.returnLLVM
+	if ret == "" {
+		ret = "void"
+	}
+	b.WriteString("define ")
+	b.WriteString(ret)
+	b.WriteString(" @osty.shim.")
+	b.WriteString(impl.structName)
+	b.WriteString("__")
+	b.WriteString(impl.ifaceName)
+	b.WriteString("__")
+	b.WriteString(m.ifaceMethod.name)
+	b.WriteString("(ptr %self_data")
+	for i, pt := range m.ifaceMethod.paramLLVMs {
+		b.WriteString(", ")
+		b.WriteString(pt)
+		b.WriteString(" %arg")
+		b.WriteString(strconv.Itoa(i))
+	}
+	b.WriteString(") {\nentry:\n")
+	b.WriteString("  %self = load ")
+	b.WriteString(impl.structLLVM)
+	b.WriteString(", ptr %self_data, align 8\n")
+	callLHS := ""
+	if ret != "void" {
+		callLHS = "  %res = "
+	} else {
+		callLHS = "  "
+	}
+	b.WriteString(callLHS)
+	b.WriteString("call ")
+	b.WriteString(ret)
+	b.WriteString(" @")
+	b.WriteString(m.structMethod.irName)
+	b.WriteString("(")
+	b.WriteString(impl.structLLVM)
+	b.WriteString(" %self")
+	for i, pt := range m.ifaceMethod.paramLLVMs {
+		b.WriteString(", ")
+		b.WriteString(pt)
+		b.WriteString(" %arg")
+		b.WriteString(strconv.Itoa(i))
+	}
+	b.WriteString(")\n")
+	if ret == "void" {
+		b.WriteString("  ret void\n")
+	} else {
+		b.WriteString("  ret ")
+		b.WriteString(ret)
+		b.WriteString(" %res\n")
+	}
+	b.WriteString("}\n")
+	return []byte(b.String())
+}
+
+// sortedStringKeys returns the keys of a string-keyed map in sorted
+// order — gives the vtable / shim emission a stable output shape.
+func sortedStringKeys[V any](m map[string]V) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// nativeRegisterInterfaceDecl captures a non-generic interface's
+// method shape set. Each method signature is reduced to its
+// LLVM-level return + non-self parameter types so the finalization
+// pass can test structural impl compatibility against concrete
+// struct methods without re-walking IR type nodes.
+//
+// Interfaces with default method bodies, generics, or `extends`
+// clauses are rejected by the caller — stage-1 coverage only
+// handles the flat, signature-only shape the Phase 6a vtable test
+// exercises.
+func nativeRegisterInterfaceDecl(ctx *nativeProjectionCtx, decl *ostyir.InterfaceDecl) (*nativeInterfaceInfo, bool) {
+	if ctx == nil || decl == nil || decl.Name == "" {
+		return nil, false
+	}
+	methods := make([]*nativeInterfaceMethod, 0, len(decl.Methods))
+	for _, m := range decl.Methods {
+		if m == nil || m.Name == "" {
+			return nil, false
+		}
+		if m.Body != nil || len(m.Generics) != 0 {
+			// Default-method bodies and per-method generics
+			// require codegen we don't emit yet.
+			return nil, false
+		}
+		retLLVM, ok := nativeLLVMTypeFromIR(ctx, m.Return)
+		if !ok {
+			return nil, false
+		}
+		paramLLVMs := make([]string, 0, len(m.Params))
+		for _, p := range m.Params {
+			if p == nil || p.IsDestructured() || p.Default != nil {
+				return nil, false
+			}
+			typ, ok := nativeLLVMTypeFromIR(ctx, p.Type)
+			if !ok || typ == "void" {
+				return nil, false
+			}
+			paramLLVMs = append(paramLLVMs, typ)
+		}
+		methods = append(methods, &nativeInterfaceMethod{
+			name:       m.Name,
+			returnLLVM: retLLVM,
+			paramLLVMs: paramLLVMs,
+		})
+	}
+	return &nativeInterfaceInfo{name: decl.Name, methods: methods}, true
 }
 
 func nativeRegisterStructDecl(decl *ostyir.StructDecl) (*nativeStructInfo, bool) {
