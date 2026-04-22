@@ -1,0 +1,781 @@
+// hir_validate.osty — structural validation for self-hosted HIR.
+//
+// Counterpart to `internal/ir/validate.go`. HIR's flat structs mean the
+// validation surface is "invalid kind / missing child list / empty required
+// field" rather than Go IR's nil pointers, but the public contract is the same:
+// catch internal lowering/rewriting bugs without re-running type checking.
+
+pub fn hirValidateModule(m: HirModule) -> List<String> {
+    let v = hirValidator()
+    hirValidateWalkModule(v, m)
+    v.errs
+}
+
+pub fn hirValidateDecisionTree(n: HirDecisionNode, armCount: Int) -> List<String> {
+    let v = hirDecisionValidator(armCount)
+    hirValidateWalkDecision(v, n)
+    v.errs
+}
+
+struct HirValidator {
+    errs: List<String>,
+    inInterface: Bool,
+}
+
+fn hirValidator() -> HirValidator {
+    HirValidator { errs: [], inInterface: false }
+}
+
+fn hirValidateAdd(v: HirValidator, msg: String) {
+    v.errs.push(msg)
+}
+
+fn hirValidateWalkModule(v: HirValidator, m: HirModule) {
+    if m.packageName == "" {
+        hirValidateAdd(v, "module: empty packageName")
+    }
+    for decl in m.fns {
+        hirValidateFnDecl(v, decl, false)
+    }
+    for decl in m.structs {
+        hirValidateStructDecl(v, decl)
+    }
+    for decl in m.enums {
+        hirValidateEnumDecl(v, decl)
+    }
+    for decl in m.interfaces {
+        hirValidateInterfaceDecl(v, decl)
+    }
+    for decl in m.aliases {
+        hirValidateTypeAliasDecl(v, decl)
+    }
+    for decl in m.lets {
+        hirValidateLetDecl(v, decl)
+    }
+    for decl in m.uses {
+        hirValidateUseDecl(v, decl)
+    }
+    let mut i = 0
+    for stmt in m.script {
+        hirValidateStmt(v, stmt, "script[" + hirValidateIntToString(i) + "]")
+        i = i + 1
+    }
+}
+
+fn hirValidateFnDecl(v: HirValidator, fn_: HirFnDecl, allowNoBody: Bool) {
+    if fn_.name == "" {
+        hirValidateAdd(v, "fn: empty name")
+    }
+    hirValidateType(fn_.ret, "fn " + fn_.name + " return", v)
+    hirValidateTypeParams(v, "fn " + fn_.name, fn_.generics)
+    let mut i = 0
+    for p in fn_.params {
+        hirValidateParam(v, p, "fn " + fn_.name + " param[" + hirValidateIntToString(i) + "]")
+        i = i + 1
+    }
+    if !(allowNoBody) || fn_.body.stmts.len() > 0 || fn_.body.hasResult {
+        hirValidateBlock(v, fn_.body, "fn " + fn_.name + " body")
+    }
+}
+
+fn hirValidateStructDecl(v: HirValidator, decl: HirStructDecl) {
+    hirValidateTypeParams(v, "struct " + decl.name, decl.generics)
+    let mut i = 0
+    for f in decl.fields {
+        if f.name == "" {
+            hirValidateAdd(v, "struct " + decl.name + ": field[" + hirValidateIntToString(i) + "] empty name")
+        }
+        hirValidateType(f.typ, "struct " + decl.name + " field " + f.name, v)
+        if f.hasDefault {
+            hirValidateExpr(v, f.defaultValue, "struct " + decl.name + " field " + f.name + " default")
+        }
+        i = i + 1
+    }
+    for method in decl.methods {
+        hirValidateFnDecl(v, method, decl.builtinSource != "")
+    }
+}
+
+fn hirValidateEnumDecl(v: HirValidator, decl: HirEnumDecl) {
+    hirValidateTypeParams(v, "enum " + decl.name, decl.generics)
+    let mut seen: List<String> = []
+    let mut i = 0
+    for vr in decl.variants {
+        if vr.name == "" {
+            hirValidateAdd(v, "enum " + decl.name + ": variant[" + hirValidateIntToString(i) + "] empty name")
+        }
+        if hirValidateListContainsString(seen, vr.name) {
+            hirValidateAdd(v, "enum " + decl.name + ": duplicate variant " + vr.name)
+        } else {
+            seen.push(vr.name)
+        }
+        let mut j = 0
+        for p in vr.payload {
+            hirValidateType(
+                p,
+                "enum " + decl.name + " variant " + vr.name + " payload[" + hirValidateIntToString(j) + "]",
+                v,
+            )
+            j = j + 1
+        }
+        i = i + 1
+    }
+    for method in decl.methods {
+        hirValidateFnDecl(v, method, decl.builtinSource != "")
+    }
+}
+
+fn hirValidateInterfaceDecl(v: HirValidator, decl: HirInterfaceDecl) {
+    hirValidateTypeParams(v, "interface " + decl.name, decl.generics)
+    let mut i = 0
+    for ext in decl.extends {
+        hirValidateType(ext, "interface " + decl.name + " extends[" + hirValidateIntToString(i) + "]", v)
+        i = i + 1
+    }
+    let old = v.inInterface
+    v.inInterface = true
+    for method in decl.methods {
+        hirValidateFnDecl(v, method, true)
+    }
+    v.inInterface = old
+}
+
+fn hirValidateTypeAliasDecl(v: HirValidator, decl: HirTypeAliasDecl) {
+    hirValidateTypeParams(v, "alias " + decl.name, decl.generics)
+    hirValidateType(decl.target, "alias " + decl.name, v)
+}
+
+fn hirValidateLetDecl(v: HirValidator, decl: HirLetDecl) {
+    if decl.name == "" {
+        hirValidateAdd(v, "top-level let: empty name")
+    }
+    hirValidateType(decl.typ, "top-level let " + decl.name, v)
+    if !(decl.hasValue) {
+        hirValidateAdd(v, "top-level let " + decl.name + ": missing value")
+        return
+    }
+    hirValidateExpr(v, decl.value, "top-level let " + decl.name + " value")
+}
+
+fn hirValidateUseDecl(v: HirValidator, decl: HirUseDecl) {
+    if !(hirUseIsFFI(decl)) && decl.alias == "" {
+        hirValidateAdd(v, "use: empty alias")
+    }
+    for bodyFn in decl.goBodyFns {
+        hirValidateFnDecl(v, bodyFn, false)
+    }
+}
+
+fn hirValidateBlock(v: HirValidator, b: HirBlock, where: String) {
+    let mut i = 0
+    for s in b.stmts {
+        hirValidateStmt(v, s, where + " stmt[" + hirValidateIntToString(i) + "]")
+        i = i + 1
+    }
+    if b.hasResult {
+        hirValidateExpr(v, b.result, where + " result")
+    }
+}
+
+fn hirValidateStmt(v: HirValidator, s: HirStmt, where: String) {
+    match s.kind {
+        HirStmtInvalid -> hirValidateAdd(v, where + ": invalid stmt"),
+        HirStmtBlock -> hirValidateBlock(v, s.block, where + " block"),
+        HirStmtLet -> {
+            if s.letName == "" && !(s.letHasPattern) {
+                hirValidateAdd(v, where + ": let has neither name nor pattern")
+            }
+            if s.letHasPattern {
+                hirValidatePattern(v, s.letPattern, where + " pattern")
+            }
+            if s.letHasType {
+                hirValidateType(s.letTyp, where + " type", v)
+            }
+            if s.letHasValue {
+                hirValidateExpr(v, s.letValue, where + " value")
+            }
+        },
+        HirStmtExpr -> hirValidateExpr(v, s.exprValue, where + " expr"),
+        HirStmtAssign -> {
+            if s.assignTargets.len() == 0 {
+                hirValidateAdd(v, where + ": assign has no targets")
+            }
+            let mut i = 0
+            for t in s.assignTargets {
+                hirValidateExpr(v, t, where + " target[" + hirValidateIntToString(i) + "]")
+                i = i + 1
+            }
+            hirValidateExpr(v, s.assignValue, where + " value")
+        },
+        HirStmtReturn -> {
+            if s.returnHasValue {
+                hirValidateExpr(v, s.returnValue, where + " return")
+            }
+        },
+        HirStmtBreak -> {},
+        HirStmtContinue -> {},
+        HirStmtIf -> {
+            hirValidateExpr(v, s.ifCond, where + " cond")
+            hirValidateBlock(v, s.ifThen, where + " then")
+            if s.ifHasElse {
+                hirValidateBlock(v, s.ifElse, where + " else")
+            }
+        },
+        HirStmtFor -> {
+            if s.forVar != "" && s.forHasPattern {
+                hirValidateAdd(v, where + ": for has both var and pattern")
+            }
+            if s.forHasPattern {
+                hirValidatePattern(v, s.forPattern, where + " for-pattern")
+            }
+            hirValidateBlock(v, s.forBody, where + " body")
+            match s.forKind {
+                HirForInfinite -> {},
+                HirForWhile -> {
+                    if !(s.forHasCond) {
+                        hirValidateAdd(v, where + ": while-for missing cond")
+                    } else {
+                        hirValidateExpr(v, s.forCond, where + " cond")
+                    }
+                },
+                HirForIn -> {
+                    if !(s.forHasIter) {
+                        hirValidateAdd(v, where + ": in-for missing iter")
+                    } else {
+                        hirValidateExpr(v, s.forIter, where + " iter")
+                    }
+                    if s.forVar == "" && !(s.forHasPattern) {
+                        hirValidateAdd(v, where + ": in-for missing binding")
+                    }
+                },
+                HirForRange -> {
+                    if s.forHasStart {
+                        hirValidateExpr(v, s.forStart, where + " start")
+                    }
+                    if s.forHasEnd {
+                        hirValidateExpr(v, s.forEnd, where + " end")
+                    }
+                    if !(s.forHasStart) && !(s.forHasEnd) {
+                        hirValidateAdd(v, where + ": range-for missing both start and end")
+                    }
+                    if s.forVar == "" && !(s.forHasPattern) {
+                        hirValidateAdd(v, where + ": range-for missing binding")
+                    }
+                },
+                HirForInvalid -> hirValidateAdd(v, where + ": invalid for kind"),
+            }
+        },
+        HirStmtMatch -> {
+            hirValidateExpr(v, s.matchScrutinee, where + " scrutinee")
+            let mut i = 0
+            for arm in s.matchArms {
+                hirValidateMatchArm(v, arm, where + " arm[" + hirValidateIntToString(i) + "]")
+                i = i + 1
+            }
+            if s.matchHasTree {
+                let errs = hirValidateDecisionTree(s.matchTree, s.matchArms.len())
+                for err in errs {
+                    hirValidateAdd(v, where + " tree: " + err)
+                }
+            }
+        },
+        HirStmtDefer -> hirValidateBlock(v, s.deferBody, where + " defer"),
+        HirStmtChanSend -> {
+            hirValidateExpr(v, s.chanChannel, where + " channel")
+            hirValidateExpr(v, s.chanValue, where + " value")
+        },
+        HirStmtError -> {},
+    }
+}
+
+fn hirValidateExpr(v: HirValidator, e: HirExpr, where: String) {
+    if e.kind == HirExprInvalid {
+        hirValidateAdd(v, where + ": invalid expr")
+        return
+    }
+    hirValidateType(e.typ, where + " type", v)
+    match e.kind {
+        HirExprUnary -> hirValidateExpr(v, hirValidateFirstExpr(e.unaryChild), where + " unary"),
+        HirExprBinary -> {
+            hirValidateExpr(v, hirValidateFirstExpr(e.binaryLeft), where + " left")
+            hirValidateExpr(v, hirValidateFirstExpr(e.binaryRight), where + " right")
+        },
+        HirExprIdent -> {
+            let mut i = 0
+            for ta in e.identTypeArgs {
+                hirValidateType(ta, where + " typeArg[" + hirValidateIntToString(i) + "]", v)
+                i = i + 1
+            }
+        },
+        HirExprCall -> {
+            hirValidateExpr(v, hirValidateFirstExpr(e.callCallee), where + " callee")
+            let mut i = 0
+            for ta in e.callTypeArgs {
+                hirValidateType(ta, where + " typeArg[" + hirValidateIntToString(i) + "]", v)
+                i = i + 1
+            }
+            hirValidateArgs(v, e.callArgs, where)
+        },
+        HirExprIntrinsic -> hirValidateArgs(v, e.intrinsicArgs, where),
+        HirExprMethod -> {
+            hirValidateExpr(v, hirValidateFirstExpr(e.methodReceiver), where + " receiver")
+            if e.methodName == "" {
+                hirValidateAdd(v, where + ": empty method name")
+            }
+            let mut i = 0
+            for ta in e.methodTypeArgs {
+                hirValidateType(ta, where + " typeArg[" + hirValidateIntToString(i) + "]", v)
+                i = i + 1
+            }
+            hirValidateArgs(v, e.methodArgs, where)
+        },
+        HirExprList -> {
+            hirValidateType(e.listElem, where + " listElem", v)
+            let mut i = 0
+            for el in e.listElems {
+                hirValidateExpr(v, el, where + " elem[" + hirValidateIntToString(i) + "]")
+                i = i + 1
+            }
+        },
+        HirExprMapLit -> {
+            hirValidateType(e.mapKeyT, where + " mapKeyT", v)
+            hirValidateType(e.mapValT, where + " mapValT", v)
+            let mut i = 0
+            for en in e.mapEntries {
+                hirValidateExpr(v, en.key, where + " entry[" + hirValidateIntToString(i) + "].key")
+                hirValidateExpr(v, en.value, where + " entry[" + hirValidateIntToString(i) + "].value")
+                i = i + 1
+            }
+        },
+        HirExprTupleLit -> {
+            let mut i = 0
+            for el in e.tupleElems {
+                hirValidateExpr(v, el, where + " elem[" + hirValidateIntToString(i) + "]")
+                i = i + 1
+            }
+        },
+        HirExprStructLit -> {
+            if e.structTypeName == "" {
+                hirValidateAdd(v, where + ": empty structTypeName")
+            }
+            let mut i = 0
+            for f in e.structFields {
+                if f.name == "" {
+                    hirValidateAdd(v, where + ": field[" + hirValidateIntToString(i) + "] empty name")
+                }
+                if f.hasValue {
+                    hirValidateExpr(v, f.value, where + " field[" + hirValidateIntToString(i) + "]")
+                }
+                i = i + 1
+            }
+            if e.structHasSpread {
+                hirValidateExpr(v, hirValidateFirstExpr(e.structSpread), where + " spread")
+            }
+        },
+        HirExprRange -> {
+            if e.rangeStart.len() > 0 {
+                hirValidateExpr(v, e.rangeStart[0], where + " start")
+            }
+            if e.rangeEnd.len() > 0 {
+                hirValidateExpr(v, e.rangeEnd[0], where + " end")
+            }
+        },
+        HirExprQuestion -> hirValidateExpr(v, hirValidateFirstExpr(e.questionChild), where + " question"),
+        HirExprCoalesce -> {
+            hirValidateExpr(v, hirValidateFirstExpr(e.coalesceLeft), where + " left")
+            hirValidateExpr(v, hirValidateFirstExpr(e.coalesceRight), where + " right")
+        },
+        HirExprField -> hirValidateExpr(v, hirValidateFirstExpr(e.fieldTarget), where + " field-target"),
+        HirExprTupleAccess -> hirValidateExpr(v, hirValidateFirstExpr(e.tupleAccessTarget), where + " tuple-target"),
+        HirExprIndex -> {
+            hirValidateExpr(v, hirValidateFirstExpr(e.indexTarget), where + " index-target")
+            hirValidateExpr(v, hirValidateFirstExpr(e.indexIndex), where + " index")
+        },
+        HirExprClosure -> {
+            hirValidateType(e.closureReturn, where + " closureReturn", v)
+            let mut i = 0
+            for c in e.closureCaptures {
+                if c.name == "" {
+                    hirValidateAdd(v, where + ": capture[" + hirValidateIntToString(i) + "] empty name")
+                }
+                hirValidateType(c.typ, where + " capture[" + hirValidateIntToString(i) + "]", v)
+                i = i + 1
+            }
+            let mut j = 0
+            for p in e.closureParams {
+                hirValidateParam(v, p, where + " param[" + hirValidateIntToString(j) + "]")
+                j = j + 1
+            }
+            hirValidateBlock(v, hirValidateFirstBlock(e.closureBody), where + " body")
+        },
+        HirExprVariantLit -> {
+            if e.variantName == "" {
+                hirValidateAdd(v, where + ": empty variantName")
+            }
+            hirValidateArgs(v, e.variantArgs, where)
+        },
+        HirExprBlock -> hirValidateBlock(v, hirValidateFirstBlock(e.blockBody), where + " block"),
+        HirExprIf -> {
+            hirValidateExpr(v, hirValidateFirstExpr(e.ifExprCond), where + " cond")
+            hirValidateBlock(v, hirValidateFirstBlock(e.ifExprThen), where + " then")
+            if e.ifExprElse.len() == 0 {
+                hirValidateAdd(v, where + ": if-expr missing else")
+            } else {
+                hirValidateBlock(v, e.ifExprElse[0], where + " else")
+            }
+        },
+        HirExprIfLet -> {
+            hirValidatePattern(v, e.ifLetPattern, where + " pattern")
+            hirValidateExpr(v, hirValidateFirstExpr(e.ifLetScrutinee), where + " scrutinee")
+            hirValidateBlock(v, hirValidateFirstBlock(e.ifLetThen), where + " then")
+            if e.ifLetHasElse {
+                hirValidateBlock(v, hirValidateFirstBlock(e.ifLetElse), where + " else")
+            }
+        },
+        HirExprMatch -> {
+            hirValidateExpr(v, hirValidateFirstExpr(e.matchExprScrutinee), where + " scrutinee")
+            let mut i = 0
+            for arm in e.matchExprArms {
+                hirValidateMatchArm(v, arm, where + " arm[" + hirValidateIntToString(i) + "]")
+                i = i + 1
+            }
+            if e.matchExprHasTree {
+                let errs = hirValidateDecisionTree(e.matchExprTree, e.matchExprArms.len())
+                for err in errs {
+                    hirValidateAdd(v, where + " tree: " + err)
+                }
+            }
+        },
+        HirExprStringLit -> {
+            let mut i = 0
+            for part in e.strParts {
+                if !(part.isLit) {
+                    hirValidateExpr(v, hirValidateFirstExpr(part.expr), where + " part[" + hirValidateIntToString(i) + "]")
+                }
+                i = i + 1
+            }
+        },
+        _ -> {},
+    }
+}
+
+fn hirValidateParam(v: HirValidator, p: HirParam, where: String) {
+    hirValidateType(p.typ, where + " type", v)
+    let destructured = hirParamIsDestructured(p)
+    if p.name == "" && !(destructured) {
+        hirValidateAdd(v, where + ": param has neither name nor pattern")
+    }
+    if p.name != "" && destructured {
+        hirValidateAdd(v, where + ": param has both name and pattern")
+    }
+    if destructured {
+        hirValidatePattern(v, p.pattern, where + " pattern")
+    }
+    if p.hasDefault {
+        hirValidateExpr(v, p.defaultValue, where + " default")
+    }
+}
+
+fn hirValidateArgs(v: HirValidator, args: List<HirArg>, where: String) {
+    let mut i = 0
+    for a in args {
+        hirValidateExpr(v, a.value, where + " arg[" + hirValidateIntToString(i) + "]")
+        i = i + 1
+    }
+}
+
+fn hirValidatePattern(v: HirValidator, p: HirPattern, where: String) {
+    if p.kind == HirPatInvalid {
+        hirValidateAdd(v, where + ": invalid pattern")
+        return
+    }
+    match p.kind {
+        HirPatLit -> hirValidateExpr(v, hirValidateFirstExpr(p.litValue), where + " lit"),
+        HirPatTuple -> {
+            let mut i = 0
+            for el in p.tupleElems {
+                hirValidatePattern(v, el, where + " elem[" + hirValidateIntToString(i) + "]")
+                i = i + 1
+            }
+        },
+        HirPatStruct -> {
+            if p.structTypeName == "" {
+                hirValidateAdd(v, where + ": empty structTypeName")
+            }
+            let mut i = 0
+            for f in p.structFields {
+                if f.name == "" {
+                    hirValidateAdd(v, where + ": field[" + hirValidateIntToString(i) + "] empty name")
+                }
+                if f.hasPattern {
+                    hirValidatePattern(v, f.pattern, where + " field[" + hirValidateIntToString(i) + "]")
+                }
+                i = i + 1
+            }
+        },
+        HirPatVariant -> {
+            if p.variantName == "" {
+                hirValidateAdd(v, where + ": empty variantName")
+            }
+            let mut i = 0
+            for arg in p.variantArgs {
+                hirValidatePattern(v, arg, where + " arg[" + hirValidateIntToString(i) + "]")
+                i = i + 1
+            }
+        },
+        HirPatRange -> {
+            if p.rangeLow.len() > 0 {
+                hirValidateExpr(v, p.rangeLow[0], where + " low")
+            }
+            if p.rangeHigh.len() > 0 {
+                hirValidateExpr(v, p.rangeHigh[0], where + " high")
+            }
+        },
+        HirPatOr -> {
+            let mut i = 0
+            for alt in p.orAlts {
+                hirValidatePattern(v, alt, where + " alt[" + hirValidateIntToString(i) + "]")
+                i = i + 1
+            }
+        },
+        HirPatBinding -> hirValidatePattern(v, hirValidateFirstPattern(p.bindingChild), where + " binding"),
+        _ -> {},
+    }
+}
+
+fn hirValidateTypeParams(v: HirValidator, owner: String, params: List<HirTypeParam>) {
+    let mut seen: List<String> = []
+    let mut i = 0
+    for p in params {
+        if p.name == "" {
+            hirValidateAdd(v, owner + ": generic[" + hirValidateIntToString(i) + "] empty name")
+        } else if hirValidateListContainsString(seen, p.name) {
+            hirValidateAdd(v, owner + ": duplicate generic " + p.name)
+        } else {
+            seen.push(p.name)
+        }
+        let mut j = 0
+        for b in p.bounds {
+            hirValidateType(
+                b,
+                owner + " generic " + p.name + " bound[" + hirValidateIntToString(j) + "]",
+                v,
+            )
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+fn hirValidateType(t: HirType, where: String, v: HirValidator) {
+    match t.kind {
+        HirTypeInvalid -> hirValidateAdd(v, where + ": invalid type"),
+        HirTypePrim -> {
+            if t.primKind == HirPrimInvalid {
+                hirValidateAdd(v, where + ": invalid primitive type")
+            }
+        },
+        HirTypeNamed -> {
+            if t.namedName == "" {
+                hirValidateAdd(v, where + ": named type empty name")
+            }
+            let mut i = 0
+            for a in t.namedArgs {
+                hirValidateType(a, where + " arg[" + hirValidateIntToString(i) + "]", v)
+                i = i + 1
+            }
+        },
+        HirTypeOptional -> {
+            if t.optionalInner.len() == 0 {
+                hirValidateAdd(v, where + ": optional type missing inner")
+            } else {
+                hirValidateType(t.optionalInner[0], where + " inner", v)
+            }
+        },
+        HirTypeTuple -> {
+            let mut i = 0
+            for e in t.tupleElems {
+                hirValidateType(e, where + " elem[" + hirValidateIntToString(i) + "]", v)
+                i = i + 1
+            }
+        },
+        HirTypeFn -> {
+            let mut i = 0
+            for p in t.fnParams {
+                hirValidateType(p, where + " param[" + hirValidateIntToString(i) + "]", v)
+                i = i + 1
+            }
+            if t.fnReturn.len() > 0 {
+                hirValidateType(t.fnReturn[0], where + " return", v)
+            }
+        },
+        HirTypeVar -> {
+            if t.varName == "" {
+                hirValidateAdd(v, where + ": type var empty name")
+            }
+        },
+        HirTypeErr -> {},
+    }
+}
+
+fn hirValidateMatchArm(v: HirValidator, arm: HirMatchArm, where: String) {
+    hirValidatePattern(v, arm.pattern, where + " pattern")
+    if arm.hasGuard {
+        hirValidateExpr(v, arm.guard, where + " guard")
+    }
+    hirValidateBlock(v, arm.body, where + " body")
+}
+
+// ====================================================================
+// Decision tree validator
+// ====================================================================
+
+struct HirDecisionValidator {
+    armCount: Int,
+    errs: List<String>,
+}
+
+fn hirDecisionValidator(armCount: Int) -> HirDecisionValidator {
+    HirDecisionValidator { armCount, errs: [] }
+}
+
+fn hirValidateDecisionAdd(v: HirDecisionValidator, msg: String) {
+    v.errs.push(msg)
+}
+
+fn hirValidateWalkDecision(v: HirDecisionValidator, n: HirDecisionNode) {
+    match n.kind {
+        HirDecisionInvalid -> hirValidateDecisionAdd(v, "invalid node"),
+        HirDecisionLeaf -> {
+            if n.leafArm < 0 || n.leafArm >= v.armCount {
+                hirValidateDecisionAdd(
+                    v,
+                    "leaf: arm " + hirValidateIntToString(n.leafArm)
+                        + " out of range [0," + hirValidateIntToString(v.armCount) + ")",
+                )
+            }
+        },
+        HirDecisionFail -> {},
+        HirDecisionBind -> {
+            if n.bindNext.len() == 0 {
+                hirValidateDecisionAdd(v, "bind: missing next")
+            } else {
+                hirValidateWalkDecision(v, n.bindNext[0])
+            }
+        },
+        HirDecisionGuard -> {
+            if n.guardThen.len() == 0 {
+                hirValidateDecisionAdd(v, "guard: missing then")
+            } else {
+                hirValidateWalkDecision(v, n.guardThen[0])
+            }
+            if n.guardElse.len() == 0 {
+                hirValidateDecisionAdd(v, "guard: missing else")
+            } else {
+                hirValidateWalkDecision(v, n.guardElse[0])
+            }
+        },
+        HirDecisionSwitch -> {
+            if n.switchDefault.len() == 0 {
+                hirValidateDecisionAdd(v, "switch: missing default")
+            } else {
+                hirValidateWalkDecision(v, n.switchDefault[0])
+            }
+            let mut i = 0
+            for c in n.switchCases {
+                if c.body.kind == HirDecisionInvalid {
+                    hirValidateDecisionAdd(v, "switch: case[" + hirValidateIntToString(i) + "] invalid body")
+                } else {
+                    hirValidateWalkDecision(v, c.body)
+                }
+                i = i + 1
+            }
+        },
+    }
+}
+
+// ====================================================================
+// Small helpers
+// ====================================================================
+
+fn hirValidateFirstExpr(xs: List<HirExpr>) -> HirExpr {
+    if xs.len() > 0 {
+        xs[0]
+    } else {
+        hirExprInvalid()
+    }
+}
+
+fn hirValidateFirstBlock(xs: List<HirBlock>) -> HirBlock {
+    if xs.len() > 0 {
+        xs[0]
+    } else {
+        hirBlock(hirNoSpan())
+    }
+}
+
+fn hirValidateFirstPattern(xs: List<HirPattern>) -> HirPattern {
+    if xs.len() > 0 {
+        xs[0]
+    } else {
+        hirPatternInvalid()
+    }
+}
+
+fn hirValidateListContainsString(xs: List<String>, target: String) -> Bool {
+    for x in xs {
+        if x == target {
+            return true
+        }
+    }
+    false
+}
+
+fn hirValidateIntToString(n: Int) -> String {
+    if n == 0 {
+        return "0"
+    }
+    let mut value = n
+    let mut negative = false
+    if value < 0 {
+        negative = true
+        value = -value
+    }
+    let mut digits: List<Int> = []
+    for _d in 0..40 {
+        if value == 0 {
+            break
+        }
+        digits.push(value % 10)
+        value = value / 10
+    }
+    let mut out = ""
+    if negative {
+        out = "-"
+    }
+    let mut i = digits.len() - 1
+    for _j in 0..digits.len() {
+        if i < 0 {
+            break
+        }
+        out = out + hirValidateDigitChar(digits[i])
+        i = i - 1
+    }
+    out
+}
+
+fn hirValidateDigitChar(d: Int) -> String {
+    match d {
+        0 -> "0",
+        1 -> "1",
+        2 -> "2",
+        3 -> "3",
+        4 -> "4",
+        5 -> "5",
+        6 -> "6",
+        7 -> "7",
+        8 -> "8",
+        9 -> "9",
+        _ -> "?",
+    }
+}

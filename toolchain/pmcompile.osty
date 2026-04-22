@@ -225,11 +225,11 @@ pub fn pmTryCompileLitSwitch(
         let arm = arms[i]
         match arm.pattern.kind {
             HirPatLit -> {
-                let litValue = if arm.pattern.litValue.len() > 0 {
-                    arm.pattern.litValue[0]
-                } else {
+                let litValues = arm.pattern.litValue
+                if litValues.len() == 0 {
                     return hirDecisionInvalid()
                 }
+                let litValue = litValues[0]
                 let k = pmSwitchKindOfLit(litValue)
                 let kIsUnknown = match k {
                     HirSwitchUnknown -> true,
@@ -411,6 +411,9 @@ fn pmAsciiChar(cp: Int) -> String {
     // manually unrolled table keeps this free of intrinsic
     // dependencies. Only printable ASCII (0x20..0x7E) is populated;
     // outside that range pmCodePointChar already routed to "...".
+    if cp == 123 { return "\{" }
+    if cp == 124 { return "|" }
+    if cp == 125 { return "\}" }
     match cp {
         32 -> " ", 33 -> "!", 34 -> "\"", 35 -> "#", 36 -> "$",
         37 -> "%", 38 -> "&", 39 -> "'", 40 -> "(", 41 -> ")",
@@ -430,7 +433,7 @@ fn pmAsciiChar(cp: Int) -> String {
         107 -> "k", 108 -> "l", 109 -> "m", 110 -> "n", 111 -> "o",
         112 -> "p", 113 -> "q", 114 -> "r", 115 -> "s", 116 -> "t",
         117 -> "u", 118 -> "v", 119 -> "w", 120 -> "x", 121 -> "y",
-        122 -> "z", 123 -> "{", 124 -> "|", 125 -> "}", 126 -> "~",
+        122 -> "z", 126 -> "~",
         _ -> "?",
     }
 }

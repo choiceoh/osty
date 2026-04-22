@@ -1,32 +1,27 @@
-// hir_lower.osty — self-hosted AST → HIR lowerer (Stage 5a scaffold).
+// hir_lower.osty — self-hosted AST → HIR lowerer.
 //
-// Osty port of `internal/ir/lower.go`. The Go side is 2625 lines
-// depending on four separate packages (ast / resolve / check /
-// types); porting it as a single blob isn't practical, so this
-// stage lands the plumbing first:
+// Self-hosted port of `internal/ir/lower.go`, adapted to the Osty
+// frontend pipeline:
 //
-//   - HirLowerer state struct (mirrors Go's `lowerer`)
-//   - Issue/diagnostic note buffer
-//   - TyArena → HirType bridge (equivalent of Go's
-//     `fromCheckerType` — the authoritative path for expression
-//     types, since the checker already typed every expression)
-//   - Primitive name / PrimKind → HirType helpers
-//     (`primitiveByName` / `primitiveByKind` equivalents)
-//   - joinDottedPath utility
-//   - hirLowerModule entry that seeds an empty HirModule
+//   - source is parsed into the arena-based `AstFile`
+//   - `elab.osty` provides typed Core nodes + `TyArena` types
+//   - `selfResolveAstFile` provides the name-resolution side tables
+//   - this file rebuilds typed `HirDecl` / `HirStmt` / `HirExpr`
+//     nodes from that combined view
 //
-// Stage 5b+ fills in AST-walking decl / stmt / expr lowerers once
-// the toolchain's AST / resolver shape is threaded into the bridge.
-// In the Osty self-host the "AST" input is the arena-based
-// `FrontParseTree` from `lexer.osty` / `parser.osty`, and the
-// "checker result" is `elab.osty` + `ty.osty`'s `TyArena`, so the
-// straight 1:1 port isn't meaningful — the real task is building
-// an adapter from those Osty-native shapes to `HirType` / `HirExpr`
-// / `HirStmt` nodes defined in `hir.osty`. That adapter is the
-// subject of Stage 5b/5c/5d.
+// The port is intentionally hybrid:
+//
+//   - declarations, blocks, patterns, annotations, and surface-only
+//     constructs come from AST so we keep source shape and spans
+//   - expression types come from `TyArena`
+//   - most expression lowering comes from typed Core so overload
+//     resolution and operator lowering match the checker
+//   - a few source-only details (for example optional field access,
+//     struct-literal shorthand/spread, and some match-arm shape) are
+//     recovered from AST origins recorded on Core nodes
 //
 // Relation to Go:
-//   - Go `lowerer`                        ↔ HirLowerer
+//   - Go `lowerer`                        ↔ HirLowerer / HirLowerContext
 //   - Go `fromCheckerType(t types.Type)`  ↔ hirLowerTyToHirType(arena, idx)
 //   - Go `primitiveByName(name)`          ↔ hirLowerPrimByName(name)
 //   - Go `primitiveByKind(k)`             ↔ hirLowerPrimByPk(pk)
@@ -72,17 +67,110 @@ pub fn hirLowerFinish(l: HirLowerer) -> HirModule {
     l.out
 }
 
-/// hirLowerModule is the entry public signature future stages will
-/// fill in. For Stage 5a it seeds an empty HirModule carrying the
-/// package name and any pre-registered issues — Stage 5b+ will thread
-/// the AST / resolver / checker inputs through and populate decls.
+pub struct HirLowerContext {
+    pub l: HirLowerer,
+    pub ast: AstFile,
+    pub elab: ElabCx,
+    pub resolved: SelfResolveResult,
+}
+
+pub struct HirLowerTypeScope {
+    pub genericNames: List<String>,
+    pub genericOwners: List<String>,
+    pub selfOwner: String,
+}
+
+pub struct HirLowerStmtScope {
+    pub loopResultName: String,
+    pub loopResultType: HirType,
+}
+
+fn hirLowerTypeScope(selfOwner: String) -> HirLowerTypeScope {
+    HirLowerTypeScope {
+        genericNames: [],
+        genericOwners: [],
+        selfOwner,
+    }
+}
+
+fn hirLowerStmtScope() -> HirLowerStmtScope {
+    HirLowerStmtScope {
+        loopResultName: "",
+        loopResultType: hirTypeInvalid(),
+    }
+}
+
+/// hirLowerModule remains as the zero-input wrapper used by the
+/// self-host transpile smoke tests. Real lowering flows through
+/// `hirLowerSource` / `hirLowerAstFile`.
 pub fn hirLowerModule(packageName: String) -> HirModule {
-    let l = hirLowerer(packageName)
-    hirLowerNote(
-        l,
-        "hir_lower Stage 5a scaffold: AST → HIR lowering not yet implemented",
-    )
-    hirLowerFinish(l)
+    hirLowerAstFile(packageName, astParse(""))
+}
+
+pub fn hirLowerSource(packageName: String, source: String) -> HirModule {
+    hirLowerAstFile(packageName, astParse(source))
+}
+
+pub fn hirLowerAstFile(packageName: String, ast: AstFile) -> HirModule {
+    let tys = emptyTyArena()
+    let elab = newElabCx(ast, tys)
+    elabFile(elab)
+    let resolved = selfResolveAstFile(ast)
+    let cx = HirLowerContext {
+        l: hirLowerer(packageName),
+        ast,
+        elab,
+        resolved,
+    }
+    hirLowerSeedModuleSpan(cx)
+    hirLowerCollectDiagnostics(cx)
+    for declIdx in cx.ast.arena.decls {
+        hirLowerTopLevel(cx, declIdx, hirLowerTypeScope(""))
+    }
+    hirLowerFinish(cx.l)
+}
+
+fn hirLowerSeedModuleSpan(cx: HirLowerContext) {
+    let decls = cx.ast.arena.decls
+    if decls.len() == 0 {
+        return
+    }
+    let firstIdx = decls[0]
+    let lastIdx = decls[decls.len() - 1]
+    let first = astArenaNodeAt(cx.ast.arena, firstIdx)
+    let last = astArenaNodeAt(cx.ast.arena, lastIdx)
+    cx.l.out.span = hirSpanFromOffsets(first.start, last.end)
+}
+
+fn hirLowerCollectDiagnostics(cx: HirLowerContext) {
+    for e in cx.ast.arena.errors {
+        let mut msg = if e.code != "" {
+            "parse[" + e.code + "] " + e.message
+        } else {
+            "parse: " + e.message
+        }
+        if e.note != "" {
+            msg = msg + " — note: " + e.note
+        }
+        if e.hint != "" {
+            msg = msg + " — hint: " + e.hint
+        }
+        hirLowerNote(cx.l, msg)
+    }
+    for d in cx.resolved.diagnostics {
+        let mut msg = if d.code != "" {
+            "resolve[" + d.code + "] " + d.message
+        } else {
+            "resolve: " + d.message
+        }
+        if d.hint != "" {
+            msg = msg + " — hint: " + d.hint
+        }
+        hirLowerNote(cx.l, msg)
+    }
+    for d in cx.elab.env.diagnostics {
+        hirLowerNote(cx.l, checkDiagRender(d))
+    }
 }
 
 // ====================================================================
@@ -2232,4 +2320,1999 @@ pub fn hirLowerAssembleErrorExpr(
 
 pub fn hirLowerAssembleErrorStmt(note: String, span: HirSpan) -> HirStmt {
     hirErrorStmt(note, span)
+}
+
+// ====================================================================
+// AST -> HIR lowering
+// ====================================================================
+
+fn hirLowerTopLevel(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) {
+    if idx < 0 {
+        return
+    }
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    if node.kind == AstNUseDecl {
+        hirLowerTopLevelUse(cx, idx, typeScope)
+        return
+    }
+    if node.kind == AstNFnDecl {
+        hirLowerAddFnDecl(cx.l, hirLowerFnDecl(cx, idx, "", typeScope))
+        return
+    }
+    if node.kind == AstNStructDecl {
+        hirLowerAddStructDecl(cx.l, hirLowerStructDecl(cx, idx, typeScope))
+        return
+    }
+    if node.kind == AstNEnumDecl {
+        hirLowerAddEnumDecl(cx.l, hirLowerEnumDecl(cx, idx, typeScope))
+        return
+    }
+    if node.kind == AstNInterfaceDecl {
+        hirLowerAddInterfaceDecl(cx.l, hirLowerInterfaceDecl(cx, idx, typeScope))
+        return
+    }
+    if node.kind == AstNTypeAlias {
+        hirLowerAddTypeAliasDecl(cx.l, hirLowerTypeAliasDecl(cx, idx, typeScope))
+        return
+    }
+    if node.kind == AstNLet || node.kind == AstNLetDecl {
+        let decl = hirLowerTopLevelLetDecl(cx, idx, typeScope)
+        if decl.name != "" {
+            hirLowerAddLetDecl(cx.l, decl)
+        }
+        return
+    }
+    let stmt = hirLowerStmt(cx, idx, hirLowerStmtScope(), typeScope)
+    if stmt.kind != HirStmtInvalid {
+        cx.l.out.script.push(stmt)
+    }
+}
+
+fn hirLowerTopLevelUse(cx: HirLowerContext, idx: Int, typeScope: HirLowerTypeScope) {
+    let _ = typeScope
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    if astUseDeclIsGroup(node) {
+        for childIdx in node.children {
+            hirLowerTopLevelUse(cx, childIdx, hirLowerTypeScope(""))
+        }
+        return
+    }
+    hirLowerAddUseDecl(cx.l, hirLowerUseDecl(cx, idx))
+}
+
+fn hirLowerFnDecl(
+    cx: HirLowerContext,
+    idx: Int,
+    owner: String,
+    parentScope: HirLowerTypeScope,
+) -> HirFnDecl {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    let genericScope = hirLowerTypeScopeWithGenerics(
+        cx.ast,
+        node.children2,
+        node.text,
+        parentScope.selfOwner,
+        parentScope,
+    )
+    let generics = hirLowerGenericParams(cx, node.children2, genericScope)
+    let annotations = hirLowerAnnotations(cx, node.extra, genericScope)
+    let mut params: List<HirParam> = []
+    let mut receiverMut = false
+    let mut i = 0
+    for paramIdx in node.children {
+        let param = astArenaNodeAt(cx.ast.arena, paramIdx)
+        if owner != "" && i == 0 && param.text == "self" && param.left < 0 {
+            receiverMut = param.flags == 1
+        } else {
+            params.push(hirLowerParam(cx, paramIdx, genericScope))
+        }
+        i = i + 1
+    }
+    let ret = hirLowerTypeFromAst(cx.ast, node.left, genericScope)
+    let body = if node.right >= 0 {
+        hirLowerBlockLike(cx, node.right, hirLowerStmtScope(), genericScope)
+    } else {
+        hirBlock(span)
+    }
+    hirLowerAssembleFnDecl(
+        node.text,
+        params,
+        ret,
+        generics,
+        body,
+        annotations,
+        receiverMut,
+        node.flags == 1,
+        span,
+    )
+}
+
+fn hirLowerStructDecl(
+    cx: HirLowerContext,
+    idx: Int,
+    parentScope: HirLowerTypeScope,
+) -> HirStructDecl {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    let scope = hirLowerTypeScopeWithGenerics(cx.ast, node.children2, node.text, node.text, parentScope)
+    let generics = hirLowerGenericParams(cx, node.children2, scope)
+    let annotations = hirLowerAnnotations(cx, node.extra, scope)
+    let mut fields: List<HirField> = []
+    let mut methods: List<HirFnDecl> = []
+    for memberIdx in node.children {
+        let member = astArenaNodeAt(cx.ast.arena, memberIdx)
+        if member.kind == AstNField_ {
+            fields.push(hirLowerStructFieldDecl(cx, memberIdx, scope))
+        } else if member.kind == AstNFnDecl {
+            methods.push(hirLowerFnDecl(cx, memberIdx, node.text, scope))
+        }
+    }
+    hirLowerAssembleStructDecl(
+        node.text,
+        fields,
+        methods,
+        generics,
+        node.flags == 1,
+        annotations,
+        span,
+    )
+}
+
+fn hirLowerEnumDecl(
+    cx: HirLowerContext,
+    idx: Int,
+    parentScope: HirLowerTypeScope,
+) -> HirEnumDecl {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    let scope = hirLowerTypeScopeWithGenerics(cx.ast, node.children2, node.text, node.text, parentScope)
+    let generics = hirLowerGenericParams(cx, node.children2, scope)
+    let mut variants: List<HirVariant> = []
+    let mut methods: List<HirFnDecl> = []
+    for memberIdx in node.children {
+        let member = astArenaNodeAt(cx.ast.arena, memberIdx)
+        if member.kind == AstNVariant {
+            variants.push(hirLowerEnumVariantDecl(cx, memberIdx, scope))
+        } else if member.kind == AstNFnDecl {
+            methods.push(hirLowerFnDecl(cx, memberIdx, node.text, scope))
+        }
+    }
+    hirLowerAssembleEnumDecl(
+        node.text,
+        variants,
+        methods,
+        generics,
+        node.flags == 1,
+        span,
+    )
+}
+
+fn hirLowerInterfaceDecl(
+    cx: HirLowerContext,
+    idx: Int,
+    parentScope: HirLowerTypeScope,
+) -> HirInterfaceDecl {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    let scope = hirLowerTypeScopeWithGenerics(cx.ast, node.children2, node.text, node.text, parentScope)
+    let generics = hirLowerGenericParams(cx, node.children2, scope)
+    let mut methods: List<HirFnDecl> = []
+    let mut extends: List<HirType> = []
+    for memberIdx in node.children {
+        let member = astArenaNodeAt(cx.ast.arena, memberIdx)
+        if member.kind == AstNFnDecl {
+            methods.push(hirLowerFnDecl(cx, memberIdx, node.text, scope))
+        } else if member.kind == AstNType {
+            extends.push(hirLowerTypeFromAst(cx.ast, memberIdx, scope))
+        }
+    }
+    hirLowerAssembleInterfaceDecl(
+        node.text,
+        methods,
+        extends,
+        generics,
+        node.flags == 1,
+        span,
+    )
+}
+
+fn hirLowerTypeAliasDecl(
+    cx: HirLowerContext,
+    idx: Int,
+    parentScope: HirLowerTypeScope,
+) -> HirTypeAliasDecl {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    let scope = hirLowerTypeScopeWithGenerics(
+        cx.ast,
+        node.children,
+        node.text,
+        parentScope.selfOwner,
+        parentScope,
+    )
+    let generics = hirLowerGenericParams(cx, node.children, scope)
+    let target = hirLowerTypeFromAst(cx.ast, node.left, scope)
+    hirLowerAssembleTypeAliasDecl(
+        node.text,
+        target,
+        generics,
+        node.flags == 1,
+        span,
+    )
+}
+
+fn hirLowerTopLevelLetDecl(
+    cx: HirLowerContext,
+    idx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirLetDecl {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    let name = hirLowerTopLevelLetName(cx.ast, node.left)
+    if name == "" {
+        hirLowerNote(
+            cx.l,
+            "hir_lower: unsupported top-level destructuring let at " + hirLowerSpanText(span),
+        )
+        return hirLetDecl("", hirTypeInvalid(), span)
+    }
+    let typeIdx = hirLowerAstFirst(node.children)
+    let typ = hirLowerTypeFromAst(cx.ast, typeIdx, typeScope)
+    let hasValue = node.right >= 0
+    let value = if hasValue {
+        hirLowerExpr(cx, node.right, typeScope)
+    } else {
+        hirExprInvalid()
+    }
+    hirLowerAssembleLetDecl(name, typ, hasValue, value, node.flags == 1, false, span)
+}
+
+fn hirLowerUseDecl(cx: HirLowerContext, idx: Int) -> HirUseDecl {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    let alias = hirLowerUseAlias(cx.ast, node)
+    if astUseDeclIsGo(node) {
+        let mut fns: List<HirFnDecl> = []
+        for bodyIdx in node.children {
+            let body = astArenaNodeAt(cx.ast.arena, bodyIdx)
+            if body.kind == AstNFnDecl {
+                fns.push(hirLowerFnDecl(cx, bodyIdx, "", hirLowerTypeScope("")))
+            } else {
+                hirLowerNote(
+                    cx.l,
+                    "hir_lower: use go body item not representable in HIR use decl: "
+                        + astNodeKindName(body.kind),
+                )
+            }
+        }
+        return hirLowerAssembleUseDeclGo(
+            alias,
+            node.text,
+            hirLowerDecodeStringToken(node.text).body,
+            fns,
+            span,
+        )
+    }
+    if hirLowerPathStartsWithRuntime(node.text) {
+        return hirLowerAssembleUseDeclRuntime(alias, node.text, node.text, span)
+    }
+    hirLowerAssembleUseDecl(hirLowerUsePathSegments(node.text), alias, node.text, span)
+}
+
+fn hirLowerStructFieldDecl(
+    cx: HirLowerContext,
+    idx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirField {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    let annotations = hirLowerAnnotations(cx, node.extra, typeScope)
+    let typ = hirLowerTypeFromAst(cx.ast, node.right, typeScope)
+    let hasDefault = node.left >= 0
+    let defaultValue = if hasDefault {
+        hirLowerExpr(cx, node.left, typeScope)
+    } else {
+        hirExprInvalid()
+    }
+    hirLowerAssembleField(
+        node.text,
+        typ,
+        hasDefault,
+        defaultValue,
+        node.flags == 1,
+        annotations,
+        span,
+    )
+}
+
+fn hirLowerEnumVariantDecl(
+    cx: HirLowerContext,
+    idx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirVariant {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    let annotations = hirLowerAnnotations(cx, node.extra, typeScope)
+    let mut payload: List<HirType> = []
+    for childIdx in node.children {
+        payload.push(hirLowerTypeFromAst(cx.ast, childIdx, typeScope))
+    }
+    hirLowerAssembleVariant(node.text, payload, annotations, span)
+}
+
+fn hirLowerParam(
+    cx: HirLowerContext,
+    idx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirParam {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    let typ = if node.right >= 0 {
+        hirLowerTypeFromAst(cx.ast, node.right, typeScope)
+    } else {
+        hirTypeErr()
+    }
+    let hasDefault = node.left >= 0 && node.text != ""
+    let defaultValue = if hasDefault {
+        hirLowerExpr(cx, node.left, typeScope)
+    } else {
+        hirExprInvalid()
+    }
+    if node.text != "" {
+        return hirLowerAssembleParam(node.text, typ, hasDefault, defaultValue, span)
+    }
+    let pattern = if node.left >= 0 {
+        hirLowerPattern(cx, node.left, typeScope)
+    } else {
+        hirPatternInvalid()
+    }
+    hirLowerAssembleParamDestructured(pattern, typ, span)
+}
+
+fn hirLowerClosureParam(
+    cx: HirLowerContext,
+    idx: Int,
+    closureTy: HirType,
+    paramPos: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirParam {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let inferred = hirLowerFnParamTypeAt(closureTy, paramPos)
+    let typ = if node.right >= 0 {
+        hirLowerTypeFromAst(cx.ast, node.right, typeScope)
+    } else {
+        inferred
+    }
+    let span = hirLowerSpanFromNode(node)
+    if node.text != "" {
+        return hirLowerAssembleParam(node.text, typ, false, hirExprInvalid(), span)
+    }
+    let pattern = hirLowerPattern(cx, node.left, typeScope)
+    hirLowerAssembleParamDestructured(pattern, typ, span)
+}
+
+fn hirLowerStmt(
+    cx: HirLowerContext,
+    idx: Int,
+    stmtScope: HirLowerStmtScope,
+    typeScope: HirLowerTypeScope,
+) -> HirStmt {
+    if idx < 0 {
+        return hirStmtInvalid()
+    }
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    if node.kind == AstNLet {
+        let pattern = hirLowerPattern(cx, node.left, typeScope)
+        let typ = hirLowerTypeFromAst(cx.ast, hirLowerAstFirst(node.children), typeScope)
+        let hasValue = node.right >= 0
+        let value = if hasValue {
+            hirLowerExpr(cx, node.right, typeScope)
+        } else {
+            hirExprInvalid()
+        }
+        return hirLowerAssembleLetStmt(pattern, typ, hasValue, value, node.flags == 1, span)
+    }
+    if node.kind == AstNAssign {
+        let target = hirLowerExpr(cx, node.left, typeScope)
+        let value = hirLowerExpr(cx, node.right, typeScope)
+        return hirLowerAssembleAssignStmt(
+            hirLowerAssignOpFromFrontToken(node.op),
+            [target],
+            value,
+            span,
+        )
+    }
+    if node.kind == AstNReturn {
+        if node.left >= 0 {
+            return hirReturnStmt(hirLowerExpr(cx, node.left, typeScope), span)
+        }
+        return hirReturnStmtUnit(span)
+    }
+    if node.kind == AstNBreak {
+        if node.extra >= 0 {
+            hirLowerNote(cx.l, "hir_lower: labeled break lowered as unlabeled break")
+        }
+        if node.left >= 0 {
+            if stmtScope.loopResultName != "" {
+                let mut block = hirBlock(span)
+                let target = hirIdent(
+                    stmtScope.loopResultName,
+                    HirIdentLocal,
+                    stmtScope.loopResultType,
+                    span,
+                )
+                let assign = hirAssignStmt(
+                    HirAssignEq,
+                    target,
+                    hirLowerExpr(cx, node.left, typeScope),
+                    span,
+                )
+                hirBlockAppend(block, assign)
+                hirBlockAppend(block, hirBreakStmt(span))
+                return hirBlockStmt(block, span)
+            }
+            hirLowerNote(cx.l, "hir_lower: break with value is not representable in HIR statement form")
+            return hirLowerAssembleErrorStmt("break with value is unsupported here", span)
+        }
+        return hirBreakStmt(span)
+    }
+    if node.kind == AstNContinue {
+        if node.extra >= 0 {
+            hirLowerNote(cx.l, "hir_lower: labeled continue lowered as unlabeled continue")
+        }
+        return hirContinueStmt(span)
+    }
+    if node.kind == AstNDefer {
+        return hirDeferStmt(
+            hirLowerDeferredBlock(cx, node.left, typeScope),
+            span,
+        )
+    }
+    if node.kind == AstNFor {
+        return hirLowerForStmt(cx, idx, stmtScope, typeScope)
+    }
+    if node.kind == AstNChanSend {
+        return hirChanSendStmt(
+            hirLowerExpr(cx, node.left, typeScope),
+            hirLowerExpr(cx, node.right, typeScope),
+            span,
+        )
+    }
+    if node.kind == AstNExprStmt {
+        let e = hirLowerExpr(cx, node.left, typeScope)
+        if e.kind == HirExprBlock && e.blockBody.len() > 0 {
+            return hirBlockStmt(e.blockBody[0], span)
+        }
+        let ifStmt = hirLowerPromoteIfExprToStmt(e)
+        if ifStmt.promoted {
+            return ifStmt.stmt
+        }
+        let matchStmt = hirLowerPromoteMatchExprToStmt(e)
+        if matchStmt.promoted {
+            return matchStmt.stmt
+        }
+        return hirExprStmt(e, span)
+    }
+    if node.kind == AstNBlock {
+        return hirBlockStmt(hirLowerBlockFromAst(cx, idx, stmtScope, typeScope), span)
+    }
+    hirExprStmt(hirLowerExpr(cx, idx, typeScope), span)
+}
+
+fn hirLowerForStmt(
+    cx: HirLowerContext,
+    idx: Int,
+    stmtScope: HirLowerStmtScope,
+    typeScope: HirLowerTypeScope,
+) -> HirStmt {
+    let _ = stmtScope
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    if node.extra >= 0 {
+        hirLowerNote(cx.l, "hir_lower: loop labels are not preserved in HIR")
+    }
+    let patIdx = hirLowerAstChildAt(node.children, 0)
+    let iterIdx = hirLowerAstChildAt(node.children, 1)
+    let body = hirLowerBlockFromAst(cx, node.right, hirLowerStmtScope(), typeScope)
+    if node.text == "infinite" {
+        return hirForInfiniteStmt(body, span)
+    }
+    if node.text == "cond" {
+        return hirForWhileStmt(hirLowerExpr(cx, node.left, typeScope), body, span)
+    }
+    if node.text == "forlet" {
+        let pattern = hirLowerPattern(cx, patIdx, typeScope)
+        let scrutinee = hirLowerExpr(cx, node.left, typeScope)
+        let mut elseBlock = hirBlock(span)
+        hirBlockAppend(elseBlock, hirBreakStmt(span))
+        let ifLetExpr = hirLowerAssembleIfLetExpr(
+            pattern,
+            scrutinee,
+            body,
+            true,
+            elseBlock,
+            hirTUnit(),
+            span,
+        )
+        let mut loopBody = hirBlock(span)
+        hirBlockAppend(loopBody, hirExprStmt(ifLetExpr, span))
+        return hirForInfiniteStmt(loopBody, span)
+    }
+    if node.text == "forin" {
+        let pattern = hirLowerPattern(cx, patIdx, typeScope)
+        if iterIdx >= 0 {
+            let iterNode = astArenaNodeAt(cx.ast.arena, iterIdx)
+            if iterNode.kind == AstNRange {
+                if hirLowerAstRangeHasStep(iterNode) {
+                    hirLowerNote(cx.l, "hir_lower: range step is not representable in HIR and will be ignored")
+                }
+                let start = if iterNode.left >= 0 {
+                    hirLowerExpr(cx, iterNode.left, typeScope)
+                } else {
+                    hirExprInvalid()
+                }
+                let end = if iterNode.right >= 0 {
+                    hirLowerExpr(cx, iterNode.right, typeScope)
+                } else {
+                    hirExprInvalid()
+                }
+                return hirLowerAssembleForStmt(
+                    true,
+                    pattern,
+                    false,
+                    hirExprInvalid(),
+                    false,
+                    hirExprInvalid(),
+                    true,
+                    start,
+                    end,
+                    hirLowerAstRangeInclusive(iterNode),
+                    body,
+                    span,
+                )
+            }
+        }
+        let iter = hirLowerExpr(cx, iterIdx, typeScope)
+        return hirLowerAssembleForStmt(
+            true,
+            pattern,
+            false,
+            hirExprInvalid(),
+            true,
+            iter,
+            false,
+            hirExprInvalid(),
+            hirExprInvalid(),
+            false,
+            body,
+            span,
+        )
+    }
+    hirForInfiniteStmt(body, span)
+}
+
+fn hirLowerBlockFromAst(
+    cx: HirLowerContext,
+    idx: Int,
+    stmtScope: HirLowerStmtScope,
+    typeScope: HirLowerTypeScope,
+) -> HirBlock {
+    if idx < 0 {
+        return hirBlock(hirNoSpan())
+    }
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    if node.kind != AstNBlock {
+        return hirLowerBlockLike(cx, idx, stmtScope, typeScope)
+    }
+    let mut out = hirBlock(span)
+    let lastIdx = if node.children.len() > 0 {
+        node.children[node.children.len() - 1]
+    } else {
+        -1
+    }
+    for stmtIdx in node.children {
+        let stmt = astArenaNodeAt(cx.ast.arena, stmtIdx)
+        if stmtIdx == lastIdx && stmt.kind == AstNExprStmt {
+            hirBlockSetResult(out, hirLowerExpr(cx, stmt.left, typeScope))
+        } else {
+            hirBlockAppend(out, hirLowerStmt(cx, stmtIdx, stmtScope, typeScope))
+        }
+    }
+    out
+}
+
+fn hirLowerBlockLike(
+    cx: HirLowerContext,
+    idx: Int,
+    stmtScope: HirLowerStmtScope,
+    typeScope: HirLowerTypeScope,
+) -> HirBlock {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    if node.kind == AstNBlock {
+        return hirLowerBlockFromAst(cx, idx, stmtScope, typeScope)
+    }
+    let mut out = hirBlock(hirLowerSpanFromNode(node))
+    hirBlockSetResult(out, hirLowerExpr(cx, idx, typeScope))
+    out
+}
+
+fn hirLowerDeferredBlock(
+    cx: HirLowerContext,
+    exprIdx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirBlock {
+    let span = hirLowerSpanFromAst(cx.ast, exprIdx)
+    let node = astArenaNodeAt(cx.ast.arena, exprIdx)
+    if node.kind == AstNBlock {
+        return hirLowerBlockFromAst(cx, exprIdx, hirLowerStmtScope(), typeScope)
+    }
+    let mut block = hirBlock(span)
+    let e = hirLowerExpr(cx, exprIdx, typeScope)
+    let ifStmt = hirLowerPromoteIfExprToStmt(e)
+    if ifStmt.promoted {
+        hirBlockAppend(block, ifStmt.stmt)
+        return block
+    }
+    let matchStmt = hirLowerPromoteMatchExprToStmt(e)
+    if matchStmt.promoted {
+        hirBlockAppend(block, matchStmt.stmt)
+        return block
+    }
+    hirBlockAppend(block, hirExprStmt(e, span))
+    block
+}
+
+fn hirLowerExpr(
+    cx: HirLowerContext,
+    idx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirExpr {
+    if idx < 0 {
+        return hirExprInvalid()
+    }
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    if node.kind == AstNParen {
+        return hirLowerExpr(cx, node.left, typeScope)
+    }
+    if node.kind == AstNClosure {
+        return hirLowerClosureExpr(cx, idx, typeScope)
+    }
+    if node.kind == AstNFor && node.text == "loopexpr" {
+        return hirLowerLoopExpr(cx, idx, typeScope)
+    }
+    let coreIdx = hirLowerExprCoreIdx(cx, idx)
+    if coreIdx < 0 {
+        let span = hirLowerSpanFromNode(node)
+        hirLowerNote(
+            cx.l,
+            "hir_lower: expression did not elaborate to Core: " + astNodeKindName(node.kind),
+        )
+        return hirLowerAssembleErrorExpr("expression did not elaborate", hirTypeErr(), span)
+    }
+    hirLowerExprFromCore(cx, coreIdx, typeScope)
+}
+
+fn hirLowerLoopExpr(
+    cx: HirLowerContext,
+    idx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirExpr {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    let loopTy = hirLowerExprType(cx, idx)
+    let mut outer = hirBlock(span)
+    let resultName = "__loop_result_" + hirLowerIntToString(idx)
+    let stmtScope = HirLowerStmtScope {
+        loopResultName: resultName,
+        loopResultType: loopTy,
+    }
+    if !hirTypeIsNever(loopTy) {
+        hirBlockAppend(outer, hirLetStmtNoValue(resultName, loopTy, true, span))
+    }
+    let loopBody = hirLowerBlockFromAst(cx, node.right, stmtScope, typeScope)
+    hirBlockAppend(outer, hirForInfiniteStmt(loopBody, span))
+    if !hirTypeIsNever(loopTy) {
+        hirBlockSetResult(
+            outer,
+            hirIdent(resultName, HirIdentLocal, loopTy, span),
+        )
+    }
+    hirLowerAssembleBlockExpr(outer, loopTy, span)
+}
+
+fn hirLowerClosureExpr(
+    cx: HirLowerContext,
+    idx: Int,
+    parentScope: HirLowerTypeScope,
+) -> HirExpr {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    let closureTy = hirLowerExprType(cx, idx)
+    let scope = parentScope
+    let mut params: List<HirParam> = []
+    let mut i = 0
+    for paramIdx in node.children {
+        params.push(hirLowerClosureParam(cx, paramIdx, closureTy, i, scope))
+        i = i + 1
+    }
+    let returnType = if node.right >= 0 {
+        hirLowerTypeFromAst(cx.ast, node.right, scope)
+    } else {
+        hirLowerFnReturnType(closureTy)
+    }
+    let body = hirLowerBlockLike(cx, node.left, hirLowerStmtScope(), scope)
+    let captures = hirLowerClosureCaptures(cx, idx)
+    hirLowerAssembleClosure(params, returnType, body, captures, closureTy, span)
+}
+
+fn hirLowerClosureCaptures(
+    cx: HirLowerContext,
+    closureIdx: Int,
+) -> List<HirCapture> {
+    let node = astArenaNodeAt(cx.ast.arena, closureIdx)
+    let mut names: List<String> = []
+    let mut out: List<HirCapture> = []
+    let mut i = 0
+    for refNode in cx.resolved.refNodes {
+        let target = hirLowerIntListAt(cx.resolved.refTargets, i)
+        let name = hirLowerStringListAt(cx.resolved.refNames, i)
+        if !(hirLowerNodeInsideClosure(cx.ast, closureIdx, refNode, true)) {
+            i = i + 1
+            continue
+        }
+        if target >= 0 && hirLowerNodeInsideClosure(cx.ast, closureIdx, target, false) {
+            i = i + 1
+            continue
+        }
+        let coreIdx = hirLowerExprCoreIdx(cx, refNode)
+        let identKind = hirLowerCoreIdentCaptureKind(cx, coreIdx, name)
+        let shouldCapture = match identKind {
+            HirCaptureLocal -> true,
+            HirCaptureParam -> true,
+            HirCaptureSelf -> true,
+            _ -> false,
+        }
+        if shouldCapture && !(hirLowerContainsString(names, name)) {
+            names.push(name)
+            let typ = if refNode >= 0 {
+                hirLowerExprType(cx, refNode)
+            } else {
+                hirTypeErr()
+            }
+            let targetNode = if target >= 0 {
+                astArenaNodeAt(cx.ast.arena, target)
+            } else {
+                node
+            }
+            out.push(
+                hirLowerAssembleCapture(
+                    name,
+                    identKind,
+                    typ,
+                    hirLowerBindingMutable(targetNode),
+                    hirLowerSpanFromAst(cx.ast, refNode),
+                ),
+            )
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn hirLowerExprFromCore(
+    cx: HirLowerContext,
+    coreIdx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirExpr {
+    let node = coreArenaNodeAt(cx.elab.core, coreIdx)
+    let span = hirLowerSpanFromCore(cx.elab.core, coreIdx)
+    let typ = hirLowerTyToHirType(cx.elab.env.tys, node.ty)
+    let origin = node.originAst
+    if node.kind == CkIntLit {
+        return hirIntLit(hirLowerNormalizeIntText(node.text), typ, span)
+    }
+    if node.kind == CkFloatLit {
+        return hirFloatLit(hirLowerNormalizeFloatText(node.text), typ, span)
+    }
+    if node.kind == CkBoolLit {
+        return hirBoolLit(coreBoolLitValueAt(cx.elab.core, coreIdx), span)
+    }
+    if node.kind == CkCharLit {
+        return hirCharLit(node.value, span)
+    }
+    if node.kind == CkByteLit {
+        return hirByteLit(node.value, span)
+    }
+    if node.kind == CkStringLit {
+        return hirLowerStringExprFromCore(cx, coreIdx, span)
+    }
+    if node.kind == CkUnitLit {
+        return hirUnitLit(span)
+    }
+    if node.kind == CkIdent {
+        return hirIdent(node.text, hirLowerIdentKindFromCore(coreIdentKindAt(cx.elab.core, coreIdx)), typ, span)
+    }
+    if node.kind == CkUnary {
+        return hirUnary(
+            hirLowerUnaryOpFromCore(coreUnaryOpAt(cx.elab.core, coreIdx)),
+            hirLowerExprFromCore(cx, node.left, typeScope),
+            typ,
+            span,
+        )
+    }
+    if node.kind == CkBinary {
+        return hirBinary(
+            hirLowerBinaryOpFromCore(coreBinaryOpAt(cx.elab.core, coreIdx)),
+            hirLowerExprFromCore(cx, node.left, typeScope),
+            hirLowerExprFromCore(cx, node.right, typeScope),
+            typ,
+            span,
+        )
+    }
+    if node.kind == CkCoalesce {
+        return hirCoalesce(
+            hirLowerExprFromCore(cx, node.left, typeScope),
+            hirLowerExprFromCore(cx, node.right, typeScope),
+            typ,
+            span,
+        )
+    }
+    if node.kind == CkQuestion {
+        return hirQuestion(hirLowerExprFromCore(cx, node.left, typeScope), typ, span)
+    }
+    if node.kind == CkCall {
+        return hirLowerCallExprFromCore(cx, coreIdx, typeScope)
+    }
+    if node.kind == CkMethodCall {
+        return hirLowerMethodCallExprFromCore(cx, coreIdx, typeScope)
+    }
+    if node.kind == CkIntrinsic {
+        return hirLowerIntrinsicExprFromCore(cx, coreIdx, typeScope)
+    }
+    if node.kind == CkVariantLit {
+        return hirLowerVariantExprFromCore(cx, coreIdx, typeScope)
+    }
+    if node.kind == CkField {
+        let target = hirLowerExprFromCore(cx, node.left, typeScope)
+        if origin >= 0 {
+            let ast = astArenaNodeAt(cx.ast.arena, origin)
+            if ast.flags == 1 {
+                return hirFieldExprOptional(target, node.text, typ, span)
+            }
+        }
+        return hirFieldExpr(target, node.text, typ, span)
+    }
+    if node.kind == CkTupleAccess {
+        return hirTupleAccess(
+            hirLowerExprFromCore(cx, node.left, typeScope),
+            node.value,
+            typ,
+            span,
+        )
+    }
+    if node.kind == CkIndex {
+        return hirIndexExpr(
+            hirLowerExprFromCore(cx, node.left, typeScope),
+            hirLowerExprFromCore(cx, node.right, typeScope),
+            typ,
+            span,
+        )
+    }
+    if node.kind == CkList {
+        return hirLowerListExprFromCore(cx, coreIdx, typeScope, typ, span)
+    }
+    if node.kind == CkMap {
+        return hirLowerMapExprFromCore(cx, coreIdx, typeScope, typ, span)
+    }
+    if node.kind == CkTuple {
+        let mut elems: List<HirExpr> = []
+        for childIdx in node.children {
+            elems.push(hirLowerExprFromCore(cx, childIdx, typeScope))
+        }
+        return hirTupleLit(elems, typ, span)
+    }
+    if node.kind == CkStruct {
+        if origin >= 0 {
+            return hirLowerStructExprFromAst(cx, origin, typeScope, typ)
+        }
+    }
+    if node.kind == CkRange {
+        if origin >= 0 {
+            let ast = astArenaNodeAt(cx.ast.arena, origin)
+            if hirLowerAstRangeHasStep(ast) {
+                hirLowerNote(cx.l, "hir_lower: range step is not representable in HIR and will be ignored")
+            }
+        }
+        let hasStart = node.left >= 0
+        let hasEnd = node.right >= 0
+        let start = if hasStart {
+            hirLowerExprFromCore(cx, node.left, typeScope)
+        } else {
+            hirExprInvalid()
+        }
+        let end = if hasEnd {
+            hirLowerExprFromCore(cx, node.right, typeScope)
+        } else {
+            hirExprInvalid()
+        }
+        let inclusive = node.flags == 1
+        let shape = hirLowerClassifyRange(hasStart, hasEnd)
+        if shape == HirRangeShapeBounded {
+            return hirRangeLitBounded(start, end, inclusive, typ, span)
+        }
+        if shape == HirRangeShapeFrom {
+            return hirRangeLitFrom(start, typ, span)
+        }
+        if shape == HirRangeShapeTo {
+            return hirRangeLitTo(end, inclusive, typ, span)
+        }
+        hirLowerNote(cx.l, "hir_lower: empty range expression is invalid")
+        return hirLowerAssembleErrorExpr("empty range", typ, span)
+    }
+    if node.kind == CkBlock {
+        if origin >= 0 {
+            return hirLowerAssembleBlockExpr(
+                hirLowerBlockFromAst(cx, origin, hirLowerStmtScope(), typeScope),
+                typ,
+                span,
+            )
+        }
+        hirLowerNote(cx.l, "hir_lower: synthetic Core block without AST origin")
+        return hirLowerAssembleBlockExpr(hirBlock(span), typ, span)
+    }
+    if node.kind == CkIf {
+        return hirLowerIfExprFromAst(cx, origin, typeScope, typ, span)
+    }
+    if node.kind == CkIfLet {
+        return hirLowerIfLetExprFromAst(cx, origin, typeScope, typ, span)
+    }
+    if node.kind == CkMatch {
+        return hirLowerMatchExprFromAst(cx, origin, typeScope, typ, span)
+    }
+    if node.kind == CkErr {
+        return hirLowerAssembleErrorExpr("poisoned expression", typ, span)
+    }
+    hirLowerNote(
+        cx.l,
+        "hir_lower: unsupported Core expr kind " + coreKindName(node.kind),
+    )
+    hirLowerAssembleErrorExpr("unsupported Core expr", typ, span)
+}
+
+fn hirLowerIfExprFromAst(
+    cx: HirLowerContext,
+    origin: Int,
+    typeScope: HirLowerTypeScope,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    if origin < 0 {
+        return hirLowerAssembleErrorExpr("if expression lost AST origin", typ, span)
+    }
+    let node = astArenaNodeAt(cx.ast.arena, origin)
+    let cond = hirLowerExpr(cx, node.left, typeScope)
+    let thenBlock = hirLowerBlockFromAst(cx, node.right, hirLowerStmtScope(), typeScope)
+    let elseIdx = hirLowerAstChildAt(node.children, 0)
+    let elseBlock = if elseIdx >= 0 {
+        hirLowerBlockLike(cx, elseIdx, hirLowerStmtScope(), typeScope)
+    } else {
+        hirBlock(span)
+    }
+    hirLowerAssembleIfExpr(cond, thenBlock, elseBlock, typ, span)
+}
+
+fn hirLowerIfLetExprFromAst(
+    cx: HirLowerContext,
+    origin: Int,
+    typeScope: HirLowerTypeScope,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    if origin < 0 {
+        return hirLowerAssembleErrorExpr("if-let expression lost AST origin", typ, span)
+    }
+    let node = astArenaNodeAt(cx.ast.arena, origin)
+    let patternIdx = hirLowerAstChildAt(node.children, 1)
+    let pattern = hirLowerPattern(cx, patternIdx, typeScope)
+    let scrutinee = hirLowerExpr(cx, node.left, typeScope)
+    let thenBlock = hirLowerBlockFromAst(cx, node.right, hirLowerStmtScope(), typeScope)
+    let elseIdx = hirLowerAstChildAt(node.children, 0)
+    if elseIdx >= 0 {
+        return hirLowerAssembleIfLetExpr(
+            pattern,
+            scrutinee,
+            thenBlock,
+            true,
+            hirLowerBlockLike(cx, elseIdx, hirLowerStmtScope(), typeScope),
+            typ,
+            span,
+        )
+    }
+    hirLowerAssembleIfLetExpr(pattern, scrutinee, thenBlock, false, hirBlock(span), typ, span)
+}
+
+fn hirLowerMatchExprFromAst(
+    cx: HirLowerContext,
+    origin: Int,
+    typeScope: HirLowerTypeScope,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    if origin < 0 {
+        return hirLowerAssembleErrorExpr("match expression lost AST origin", typ, span)
+    }
+    let node = astArenaNodeAt(cx.ast.arena, origin)
+    let scrutinee = hirLowerExpr(cx, node.left, typeScope)
+    let mut arms: List<HirMatchArm> = []
+    for armIdx in node.children {
+        arms.push(hirLowerMatchArmFromAst(cx, armIdx, typeScope))
+    }
+    let tree = if hirTypeIsValid(scrutinee.typ) {
+        pmCompileDecisionTree(scrutinee.typ, arms)
+    } else {
+        hirDecisionInvalid()
+    }
+    hirLowerAssembleMatchExpr(scrutinee, arms, tree, typ, span)
+}
+
+fn hirLowerMatchArmFromAst(
+    cx: HirLowerContext,
+    idx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirMatchArm {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    let pattern = hirLowerPattern(cx, node.left, typeScope)
+    let guardIdx = hirLowerAstChildAt(node.children, 0)
+    let hasGuard = guardIdx >= 0
+    let guard = if hasGuard {
+        hirLowerExpr(cx, guardIdx, typeScope)
+    } else {
+        hirExprInvalid()
+    }
+    let body = hirLowerBlockLike(cx, node.right, hirLowerStmtScope(), typeScope)
+    hirLowerAssembleMatchArm(pattern, hasGuard, guard, body, span)
+}
+
+fn hirLowerCallExprFromCore(
+    cx: HirLowerContext,
+    coreIdx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirExpr {
+    let node = coreArenaNodeAt(cx.elab.core, coreIdx)
+    let span = hirLowerSpanFromCore(cx.elab.core, coreIdx)
+    let typ = hirLowerTyToHirType(cx.elab.env.tys, node.ty)
+    let callee = hirLowerExprFromCore(cx, node.left, typeScope)
+    let mut args: List<HirArg> = []
+    for argIdx in node.children {
+        args.push(hirArg(hirLowerExprFromCore(cx, argIdx, typeScope), hirLowerSpanFromCore(cx.elab.core, argIdx)))
+    }
+    let typeArgs = hirLowerTypeArgs(cx.elab.env.tys, node.typeArgs)
+    hirLowerAssembleCall(callee, typeArgs, args, typ, span)
+}
+
+fn hirLowerMethodCallExprFromCore(
+    cx: HirLowerContext,
+    coreIdx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirExpr {
+    let node = coreArenaNodeAt(cx.elab.core, coreIdx)
+    let span = hirLowerSpanFromCore(cx.elab.core, coreIdx)
+    let typ = hirLowerTyToHirType(cx.elab.env.tys, node.ty)
+    let recv = hirLowerExprFromCore(cx, node.left, typeScope)
+    let mut args: List<HirArg> = []
+    for argIdx in node.children {
+        args.push(hirArg(hirLowerExprFromCore(cx, argIdx, typeScope), hirLowerSpanFromCore(cx.elab.core, argIdx)))
+    }
+    let typeArgs = hirLowerTypeArgs(cx.elab.env.tys, node.typeArgs)
+    hirLowerAssembleMethodCall(recv, node.name, typeArgs, args, typ, span)
+}
+
+fn hirLowerIntrinsicExprFromCore(
+    cx: HirLowerContext,
+    coreIdx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirExpr {
+    let node = coreArenaNodeAt(cx.elab.core, coreIdx)
+    let span = hirLowerSpanFromCore(cx.elab.core, coreIdx)
+    let kind = hirLowerIntrinsicFromIdent(node.name)
+    let mut args: List<HirArg> = []
+    for argIdx in node.children {
+        args.push(hirArg(hirLowerExprFromCore(cx, argIdx, typeScope), hirLowerSpanFromCore(cx.elab.core, argIdx)))
+    }
+    hirLowerAssembleIntrinsicCall(kind, args, span)
+}
+
+fn hirLowerVariantExprFromCore(
+    cx: HirLowerContext,
+    coreIdx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirExpr {
+    let node = coreArenaNodeAt(cx.elab.core, coreIdx)
+    let span = hirLowerSpanFromCore(cx.elab.core, coreIdx)
+    let typ = hirLowerTyToHirType(cx.elab.env.tys, node.ty)
+    let mut args: List<HirArg> = []
+    for argIdx in node.children {
+        args.push(hirArg(hirLowerExprFromCore(cx, argIdx, typeScope), hirLowerSpanFromCore(cx.elab.core, argIdx)))
+    }
+    hirLowerAssembleVariantLit(node.owner, node.name, args, typ, span)
+}
+
+fn hirLowerStructExprFromAst(
+    cx: HirLowerContext,
+    idx: Int,
+    typeScope: HirLowerTypeScope,
+    typ: HirType,
+) -> HirExpr {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    let mut fields: List<HirStructLitField> = []
+    for fieldIdx in node.children {
+        let field = astArenaNodeAt(cx.ast.arena, fieldIdx)
+        let fieldSpan = hirLowerSpanFromNode(field)
+        if field.left >= 0 {
+            fields.push(hirStructLitField(field.text, hirLowerExpr(cx, field.left, typeScope), fieldSpan))
+        } else {
+            fields.push(hirStructLitFieldShorthand(field.text, fieldSpan))
+        }
+    }
+    let typeName = hirLowerStructLitTypeName(cx.ast, node, typ)
+    let hasSpread = node.right >= 0
+    let spread = if hasSpread {
+        hirLowerExpr(cx, node.right, typeScope)
+    } else {
+        hirExprInvalid()
+    }
+    hirLowerAssembleStructLit(typeName, fields, hasSpread, spread, typ, span)
+}
+
+fn hirLowerStringExprFromCore(
+    cx: HirLowerContext,
+    coreIdx: Int,
+    span: HirSpan,
+) -> HirExpr {
+    let node = coreArenaNodeAt(cx.elab.core, coreIdx)
+    let decoded = hirLowerDecodeStringToken(node.text)
+    let parts = [hirStringPartLit(decoded.body)]
+    hirLowerAssembleStringLit(parts, decoded.raw, decoded.triple, span)
+}
+
+fn hirLowerListExprFromCore(
+    cx: HirLowerContext,
+    coreIdx: Int,
+    typeScope: HirLowerTypeScope,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let node = coreArenaNodeAt(cx.elab.core, coreIdx)
+    let mut elems: List<HirExpr> = []
+    for childIdx in node.children {
+        elems.push(hirLowerExprFromCore(cx, childIdx, typeScope))
+    }
+    let elemT = hirLowerListElemType(typ, elems)
+    hirListLit(elems, elemT, span)
+}
+
+fn hirLowerMapExprFromCore(
+    cx: HirLowerContext,
+    coreIdx: Int,
+    typeScope: HirLowerTypeScope,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let node = coreArenaNodeAt(cx.elab.core, coreIdx)
+    let kv = hirLowerMapTypes(typ)
+    let mut entries: List<HirMapEntry> = []
+    for entryIdx in node.children {
+        let entry = coreArenaNodeAt(cx.elab.core, entryIdx)
+        entries.push(
+            hirMapEntry(
+                hirLowerExprFromCore(cx, entry.left, typeScope),
+                hirLowerExprFromCore(cx, entry.right, typeScope),
+                hirLowerSpanFromCore(cx.elab.core, entryIdx),
+            ),
+        )
+    }
+    hirMapLit(entries, kv.keyT, kv.valT, span)
+}
+
+fn hirLowerPattern(
+    cx: HirLowerContext,
+    idx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirPattern {
+    if idx < 0 {
+        return hirPatternInvalid()
+    }
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    if node.kind != AstNPattern {
+        return hirErrorPat("non-pattern node", span)
+    }
+    if node.extra == astPatternWildcardKind() {
+        return hirWildPat(span)
+    }
+    if node.extra == astPatternLiteralKind() {
+        return hirLitPat(hirLowerPatternLiteralExpr(cx, idx, typeScope), span)
+    }
+    if node.extra == astPatternIdentKind() {
+        return hirLowerAssemblePatternIdent(node.text, false, span)
+    }
+    if node.extra == astPatternTupleKind() {
+        let mut elems: List<HirPattern> = []
+        for childIdx in node.children {
+            elems.push(hirLowerPattern(cx, childIdx, typeScope))
+        }
+        return hirTuplePat(elems, span)
+    }
+    if node.extra == astPatternStructKind() {
+        let mut fields: List<HirStructPatField> = []
+        for childIdx in node.children {
+            let child = astArenaNodeAt(cx.ast.arena, childIdx)
+            if child.kind == AstNPattern && child.extra == astPatternFieldKind() {
+                let hasPattern = child.left >= 0
+                let pattern = if hasPattern {
+                    hirLowerPattern(cx, child.left, typeScope)
+                } else {
+                    hirPatternInvalid()
+                }
+                fields.push(hirLowerAssemblePatternStructField(child.text, hasPattern, pattern, hirLowerSpanFromNode(child)))
+            }
+        }
+        return hirLowerAssemblePatternStruct(node.text, fields, node.flags == 1, span)
+    }
+    if node.extra == astPatternVariantKind() {
+        let split = hirLowerSplitQualifiedName(node.text)
+        let mut args: List<HirPattern> = []
+        for childIdx in node.children {
+            args.push(hirLowerPattern(cx, childIdx, typeScope))
+        }
+        return hirVariantPat(split.owner, split.leaf, args, span)
+    }
+    if node.extra == astPatternRangeKind() {
+        let low = if node.left >= 0 {
+            hirLowerPatternLiteralExpr(cx, node.left, typeScope)
+        } else {
+            hirExprInvalid()
+        }
+        let high = if node.right >= 0 {
+            hirLowerPatternLiteralExpr(cx, node.right, typeScope)
+        } else {
+            hirExprInvalid()
+        }
+        return hirLowerAssemblePatternRange(
+            node.left >= 0,
+            low,
+            node.right >= 0,
+            high,
+            node.flags == 1,
+            span,
+        )
+    }
+    if node.extra == astPatternOrKind() {
+        let mut alts: List<HirPattern> = []
+        if node.left >= 0 {
+            alts.push(hirLowerPattern(cx, node.left, typeScope))
+        }
+        if node.right >= 0 {
+            alts.push(hirLowerPattern(cx, node.right, typeScope))
+        }
+        for childIdx in node.children {
+            alts.push(hirLowerPattern(cx, childIdx, typeScope))
+        }
+        return hirOrPat(alts, span)
+    }
+    if node.extra == astPatternBindingKind() {
+        return hirBindingPat(node.text, hirLowerPattern(cx, node.left, typeScope), span)
+    }
+    if node.extra == astPatternErrorKind() {
+        return hirErrorPat("invalid pattern", span)
+    }
+    hirErrorPat("unsupported pattern", span)
+}
+
+fn hirLowerPatternLiteralExpr(
+    cx: HirLowerContext,
+    idx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirExpr {
+    if idx < 0 {
+        return hirExprInvalid()
+    }
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    if node.kind == AstNIntLit {
+        return hirIntLit(hirLowerNormalizeIntText(node.text), hirLowerExprType(cx, idx), span)
+    }
+    if node.kind == AstNFloatLit {
+        return hirFloatLit(hirLowerNormalizeFloatText(node.text), hirLowerExprType(cx, idx), span)
+    }
+    if node.kind == AstNStringLit {
+        let decoded = hirLowerDecodeStringToken(node.text)
+        return hirLowerAssembleStringLit([hirStringPartLit(decoded.body)], decoded.raw, decoded.triple, span)
+    }
+    if node.kind == AstNBoolLit {
+        return hirBoolLit(node.text == "true", span)
+    }
+    if node.kind == AstNCharLit {
+        return hirCharLit(hirLowerCharValue(node.text), span)
+    }
+    if node.kind == AstNByteLit {
+        return hirByteLit(hirLowerByteValue(node.text), span)
+    }
+    if node.kind == AstNPattern {
+        if node.extra == astPatternLiteralKind() {
+            if node.text == "-" && node.left >= 0 {
+                let inner = hirLowerPatternLiteralExpr(cx, node.left, typeScope)
+                if inner.kind == HirExprIntLit {
+                    return hirIntLit("-" + inner.numText, inner.typ, span)
+                }
+                if inner.kind == HirExprFloatLit {
+                    return hirFloatLit("-" + inner.numText, inner.typ, span)
+                }
+            }
+            let mut fake = node
+            if fake.op == FrontIdent && (fake.text == "true" || fake.text == "false") {
+                return hirBoolLit(fake.text == "true", span)
+            }
+            if fake.op == FrontInt {
+                return hirIntLit(hirLowerNormalizeIntText(fake.text), hirTInt(), span)
+            }
+            if fake.op == FrontFloat {
+                return hirFloatLit(hirLowerNormalizeFloatText(fake.text), hirTFloat(), span)
+            }
+            if fake.op == FrontString || fake.op == FrontRawString {
+                let decoded = hirLowerDecodeStringToken(fake.text)
+                return hirLowerAssembleStringLit([hirStringPartLit(decoded.body)], decoded.raw, decoded.triple, span)
+            }
+            if fake.op == FrontChar {
+                return hirCharLit(hirLowerCharValue(fake.text), span)
+            }
+            if fake.op == FrontByte {
+                return hirByteLit(hirLowerByteValue(fake.text), span)
+            }
+        }
+        if node.extra == astPatternRangeKind() {
+            return hirExprInvalid()
+        }
+    }
+    hirLowerExpr(cx, idx, typeScope)
+}
+
+fn hirLowerAnnotations(
+    cx: HirLowerContext,
+    idx: Int,
+    typeScope: HirLowerTypeScope,
+) -> List<HirAnnotation> {
+    let mut out: List<HirAnnotation> = []
+    if idx < 0 {
+        return out
+    }
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    if node.kind == AstNAnnotation && node.text == "__group" {
+        for childIdx in node.children {
+            out.push(hirLowerOneAnnotation(cx, childIdx, typeScope))
+        }
+        return out
+    }
+    out.push(hirLowerOneAnnotation(cx, idx, typeScope))
+    out
+}
+
+fn hirLowerOneAnnotation(
+    cx: HirLowerContext,
+    idx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirAnnotation {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let mut ann = hirAnnotation(node.text, hirLowerSpanFromNode(node))
+    for argIdx in node.children {
+        ann.args.push(hirLowerAnnotationArg(cx, argIdx, typeScope))
+    }
+    ann
+}
+
+fn hirLowerAnnotationArg(
+    cx: HirLowerContext,
+    idx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirAnnotationArg {
+    let node = astArenaNodeAt(cx.ast.arena, idx)
+    let span = hirLowerSpanFromNode(node)
+    if node.kind == AstNField_ {
+        return hirAnnotationArgKeyValue(node.text, hirLowerExpr(cx, node.left, typeScope), span)
+    }
+    if node.kind == AstNIdent {
+        return hirAnnotationArgFlag(node.text, span)
+    }
+    hirAnnotationArgPositional(hirLowerExpr(cx, idx, typeScope), span)
+}
+
+fn hirLowerTypeScopeWithGenerics(
+    ast: AstFile,
+    genericIdxs: List<Int>,
+    genericOwner: String,
+    selfOwner: String,
+    parent: HirLowerTypeScope,
+) -> HirLowerTypeScope {
+    let mut out = parent
+    if selfOwner != "" {
+        out.selfOwner = selfOwner
+    }
+    for genericIdx in genericIdxs {
+        let node = astArenaNodeAt(ast.arena, genericIdx)
+        if node.kind == AstNGenericParam {
+            out.genericNames.push(node.text)
+            out.genericOwners.push(genericOwner)
+        }
+    }
+    out
+}
+
+fn hirLowerGenericParams(
+    cx: HirLowerContext,
+    idxs: List<Int>,
+    typeScope: HirLowerTypeScope,
+) -> List<HirTypeParam> {
+    let mut out: List<HirTypeParam> = []
+    for idx in idxs {
+        let node = astArenaNodeAt(cx.ast.arena, idx)
+        if node.kind != AstNGenericParam {
+            continue
+        }
+        let mut bounds: List<HirType> = []
+        for boundIdx in node.children {
+            bounds.push(hirLowerTypeFromAst(cx.ast, boundIdx, typeScope))
+        }
+        out.push(hirLowerAssembleTypeParam(node.text, bounds, hirLowerSpanFromNode(node)))
+    }
+    out
+}
+
+fn hirLowerTypeFromAst(
+    ast: AstFile,
+    idx: Int,
+    typeScope: HirLowerTypeScope,
+) -> HirType {
+    if idx < 0 {
+        return hirTypeInvalid()
+    }
+    let node = astArenaNodeAt(ast.arena, idx)
+    if node.kind != AstNType {
+        return hirTypeInvalid()
+    }
+    if node.text == "optional" {
+        return hirTypeOptional(hirLowerTypeFromAst(ast, node.left, typeScope))
+    }
+    if node.text == "tuple" {
+        let mut elems: List<HirType> = []
+        for childIdx in node.children {
+            elems.push(hirLowerTypeFromAst(ast, childIdx, typeScope))
+        }
+        return hirTypeTuple(elems)
+    }
+    if node.text == "fn" {
+        let mut params: List<HirType> = []
+        for childIdx in node.children {
+            params.push(hirLowerTypeFromAst(ast, childIdx, typeScope))
+        }
+        let ret = if node.right >= 0 {
+            hirLowerTypeFromAst(ast, node.right, typeScope)
+        } else {
+            hirTUnit()
+        }
+        return hirTypeFn(params, ret)
+    }
+    if node.text == "Self" && typeScope.selfOwner != "" {
+        return hirTypeVar("Self", typeScope.selfOwner)
+    }
+    let genericOwner = hirLowerTypeScopeLookup(typeScope, node.text)
+    if genericOwner != "" {
+        return hirTypeVar(node.text, genericOwner)
+    }
+    let mut args: List<HirType> = []
+    for childIdx in node.children {
+        args.push(hirLowerTypeFromAst(ast, childIdx, typeScope))
+    }
+    if args.len() == 0 {
+        let prim = hirLowerPrimByName(node.text)
+        let isPrim = match prim.kind {
+            HirTypeInvalid -> false,
+            _ -> true,
+        }
+        if isPrim {
+            return prim
+        }
+    }
+    if hirLowerIsBuiltinGenericName(node.text) {
+        return hirTypeBuiltin(node.text, args)
+    }
+    let parts = strings.split(node.text, ".")
+    if parts.len() > 1 {
+        let pkg = hirLowerJoinDottedPath(hirLowerDropLast(parts))
+        let leaf = hirLowerLast(parts)
+        return hirTypeNamedQualified(pkg, leaf, args)
+    }
+    hirTypeNamed(node.text, args)
+}
+
+fn hirLowerTypeScopeLookup(scope: HirLowerTypeScope, name: String) -> String {
+    let mut i = scope.genericNames.len() - 1
+    for i >= 0 {
+        if scope.genericNames[i] == name {
+            return scope.genericOwners[i]
+        }
+        i = i - 1
+    }
+    ""
+}
+
+fn hirLowerTypeArgs(tys: TyArena, idxs: List<Int>) -> List<HirType> {
+    let mut out: List<HirType> = []
+    for idx in idxs {
+        out.push(hirLowerTyToHirType(tys, idx))
+    }
+    out
+}
+
+fn hirLowerSpanFromNode(node: AstNode) -> HirSpan {
+    hirSpanFromOffsets(node.start, node.end)
+}
+
+fn hirLowerSpanFromAst(ast: AstFile, idx: Int) -> HirSpan {
+    if idx < 0 {
+        return hirNoSpan()
+    }
+    hirLowerSpanFromNode(astArenaNodeAt(ast.arena, idx))
+}
+
+fn hirLowerSpanFromCore(core: CoreArena, idx: Int) -> HirSpan {
+    if idx < 0 {
+        return hirNoSpan()
+    }
+    hirSpanFromOffsets(coreStartAt(core, idx), coreEndAt(core, idx))
+}
+
+fn hirLowerSpanText(span: HirSpan) -> String {
+    hirLowerIntToString(span.start.offset) + ".." + hirLowerIntToString(span.end.offset)
+}
+
+fn hirLowerExprCoreIdx(cx: HirLowerContext, idx: Int) -> Int {
+    let mapped = elabTypedExprCoreAt(cx.elab, idx)
+    if mapped >= 0 {
+        return mapped
+    }
+    if idx < 0 {
+        return -1
+    }
+    elabInfer(cx.elab, idx).node
+}
+
+fn hirLowerExprType(cx: HirLowerContext, idx: Int) -> HirType {
+    let mapped = elabTypedExprTyAt(cx.elab, idx)
+    if mapped >= 0 {
+        return hirLowerTyToHirType(cx.elab.env.tys, mapped)
+    }
+    if idx < 0 {
+        return hirTypeErr()
+    }
+    let r = elabInfer(cx.elab, idx)
+    hirLowerTyToHirType(cx.elab.env.tys, r.ty)
+}
+
+fn hirLowerUseAlias(ast: AstFile, node: AstNode) -> String {
+    let aliasIdx = hirLowerAstChildAt(node.children2, 0)
+    if aliasIdx >= 0 {
+        let alias = astArenaNodeAt(ast.arena, aliasIdx)
+        if alias.text != "" {
+            return alias.text
+        }
+    }
+    hirLowerPathLastSegment(node.text)
+}
+
+fn hirLowerUsePathSegments(path: String) -> List<String> {
+    let raw = hirLowerDecodeStringToken(path).body
+    let source = if raw != "" { raw } else { path }
+    let mut out: List<String> = []
+    for slash in strings.split(source, "/") {
+        for dot in strings.split(slash, ".") {
+            for colon in strings.split(dot, ":") {
+                if colon != "" {
+                    out.push(colon)
+                }
+            }
+        }
+    }
+    out
+}
+
+fn hirLowerPathLastSegment(path: String) -> String {
+    let parts = hirLowerUsePathSegments(path)
+    hirLowerLast(parts)
+}
+
+fn hirLowerPathStartsWithRuntime(path: String) -> Bool {
+    path.startsWith("runtime.") || path.startsWith("runtime/") || path.startsWith("runtime:")
+}
+
+pub struct HirLowerDecodedString {
+    pub body: String,
+    pub raw: Bool,
+    pub triple: Bool,
+}
+
+fn hirLowerDecodeStringToken(text: String) -> HirLowerDecodedString {
+    let n = text.len()
+    if n >= 7 && text[0..4] == "r\"\"\"" && text[n - 3..n] == "\"\"\"" {
+        return HirLowerDecodedString {
+            body: text[4..n - 3],
+            raw: true,
+            triple: true,
+        }
+    }
+    if n >= 6 && text[0..3] == "\"\"\"" && text[n - 3..n] == "\"\"\"" {
+        return HirLowerDecodedString {
+            body: text[3..n - 3],
+            raw: false,
+            triple: true,
+        }
+    }
+    if n >= 3 && text[0..2] == "r\"" && text[n - 1..n] == "\"" {
+        return HirLowerDecodedString {
+            body: text[2..n - 1],
+            raw: true,
+            triple: false,
+        }
+    }
+    if n >= 2 && text[0..1] == "\"" && text[n - 1..n] == "\"" {
+        return HirLowerDecodedString {
+            body: text[1..n - 1],
+            raw: false,
+            triple: false,
+        }
+    }
+    HirLowerDecodedString { body: text, raw: false, triple: false }
+}
+
+pub struct HirLowerQualifiedName {
+    pub owner: String,
+    pub leaf: String,
+}
+
+fn hirLowerSplitQualifiedName(name: String) -> HirLowerQualifiedName {
+    let parts = strings.split(name, ".")
+    if parts.len() <= 1 {
+        return HirLowerQualifiedName { owner: "", leaf: name }
+    }
+    HirLowerQualifiedName {
+        owner: hirLowerJoinDottedPath(hirLowerDropLast(parts)),
+        leaf: hirLowerLast(parts),
+    }
+}
+
+fn hirLowerStructLitTypeName(ast: AstFile, node: AstNode, typ: HirType) -> String {
+    if node.flags == 1 {
+        return hirTypeString(typ)
+    }
+    if node.left >= 0 {
+        return astArenaNodeAt(ast.arena, node.left).text
+    }
+    hirTypeString(typ)
+}
+
+fn hirLowerTopLevelLetName(ast: AstFile, patIdx: Int) -> String {
+    if patIdx < 0 {
+        return ""
+    }
+    let node = astArenaNodeAt(ast.arena, patIdx)
+    if node.kind != AstNPattern {
+        return ""
+    }
+    if node.extra == astPatternIdentKind() || node.extra == astPatternBindingKind() {
+        return node.text
+    }
+    ""
+}
+
+fn hirLowerFnParamTypeAt(fnTy: HirType, idx: Int) -> HirType {
+    if fnTy.kind != HirTypeFn {
+        return hirTypeErr()
+    }
+    if idx < 0 || idx >= fnTy.fnParams.len() {
+        return hirTypeErr()
+    }
+    fnTy.fnParams[idx]
+}
+
+fn hirLowerFnReturnType(fnTy: HirType) -> HirType {
+    if fnTy.kind != HirTypeFn || fnTy.fnReturn.len() == 0 {
+        return hirTypeErr()
+    }
+    fnTy.fnReturn[0]
+}
+
+fn hirLowerListElemType(typ: HirType, elems: List<HirExpr>) -> HirType {
+    if typ.kind == HirTypeNamed && typ.namedName == "List" && typ.namedArgs.len() > 0 {
+        return typ.namedArgs[0]
+    }
+    if elems.len() > 0 {
+        return elems[0].typ
+    }
+    hirTypeErr()
+}
+
+pub struct HirLowerMapTypeInfo {
+    pub keyT: HirType,
+    pub valT: HirType,
+}
+
+fn hirLowerMapTypes(typ: HirType) -> HirLowerMapTypeInfo {
+    if typ.kind == HirTypeNamed && typ.namedName == "Map" && typ.namedArgs.len() >= 2 {
+        return HirLowerMapTypeInfo {
+            keyT: typ.namedArgs[0],
+            valT: typ.namedArgs[1],
+        }
+    }
+    HirLowerMapTypeInfo { keyT: hirTypeErr(), valT: hirTypeErr() }
+}
+
+fn hirLowerAstFirst(xs: List<Int>) -> Int {
+    if xs.len() == 0 {
+        return -1
+    }
+    xs[0]
+}
+
+fn hirLowerAstChildAt(xs: List<Int>, idx: Int) -> Int {
+    if idx < 0 || idx >= xs.len() {
+        return -1
+    }
+    xs[idx]
+}
+
+fn hirLowerStringListAt(xs: List<String>, idx: Int) -> String {
+    if idx < 0 || idx >= xs.len() {
+        return ""
+    }
+    xs[idx]
+}
+
+fn hirLowerIntListAt(xs: List<Int>, idx: Int) -> Int {
+    if idx < 0 || idx >= xs.len() {
+        return -1
+    }
+    xs[idx]
+}
+
+fn hirLowerContainsString(xs: List<String>, needle: String) -> Bool {
+    for x in xs {
+        if x == needle {
+            return true
+        }
+    }
+    false
+}
+
+fn hirLowerAssignOpFromFrontToken(op: FrontTokenKind) -> HirAssignOp {
+    if op == FrontAssign { return HirAssignEq }
+    if op == FrontPlusEq { return HirAssignAdd }
+    if op == FrontMinusEq { return HirAssignSub }
+    if op == FrontStarEq { return HirAssignMul }
+    if op == FrontSlashEq { return HirAssignDiv }
+    if op == FrontPercentEq { return HirAssignMod }
+    if op == FrontBitAndEq { return HirAssignAnd }
+    if op == FrontBitOrEq { return HirAssignOr }
+    if op == FrontBitXorEq { return HirAssignXor }
+    if op == FrontShlEq { return HirAssignShl }
+    if op == FrontShrEq { return HirAssignShr }
+    HirAssignInvalid
+}
+
+fn hirLowerUnaryOpFromCore(op: UnOp) -> HirUnOp {
+    match op {
+        UoNeg -> HirUnNeg,
+        UoPlus -> HirUnPlus,
+        UoNot -> HirUnNot,
+        UoBitNot -> HirUnBitNot,
+        _ -> HirUnInvalid,
+    }
+}
+
+fn hirLowerBinaryOpFromCore(op: BinOp) -> HirBinOp {
+    match op {
+        BoAdd -> HirBinAdd,
+        BoSub -> HirBinSub,
+        BoMul -> HirBinMul,
+        BoDiv -> HirBinDiv,
+        BoMod -> HirBinMod,
+        BoEq -> HirBinEq,
+        BoNe -> HirBinNeq,
+        BoLt -> HirBinLt,
+        BoLe -> HirBinLeq,
+        BoGt -> HirBinGt,
+        BoGe -> HirBinGeq,
+        BoAnd -> HirBinAnd,
+        BoOr -> HirBinOr,
+        BoBitAnd -> HirBinBitAnd,
+        BoBitOr -> HirBinBitOr,
+        BoBitXor -> HirBinBitXor,
+        BoShl -> HirBinShl,
+        BoShr -> HirBinShr,
+        _ -> HirBinInvalid,
+    }
+}
+
+fn hirLowerIdentKindFromCore(kind: IdentKind) -> HirIdentKind {
+    match kind {
+        IkLocal -> HirIdentLocal,
+        IkParam -> HirIdentParam,
+        IkFn -> HirIdentFn,
+        IkVariant -> HirIdentVariant,
+        IkTypeName -> HirIdentTypeName,
+        IkGlobal -> HirIdentGlobal,
+        IkBuiltin -> HirIdentBuiltin,
+        _ -> HirIdentUnknown,
+    }
+}
+
+fn hirLowerCoreIdentCaptureKind(
+    cx: HirLowerContext,
+    coreIdx: Int,
+    name: String,
+) -> HirCaptureKind {
+    let _ = cx
+    if name == "self" {
+        return HirCaptureSelf
+    }
+    if coreIdx < 0 {
+        return HirCaptureUnknown
+    }
+    match coreIdentKindAt(cx.elab.core, coreIdx) {
+        IkLocal -> HirCaptureLocal,
+        IkParam -> HirCaptureParam,
+        IkFn -> HirCaptureFn,
+        IkGlobal -> HirCaptureGlobal,
+        _ -> HirCaptureUnknown,
+    }
+}
+
+fn hirLowerBindingMutable(node: AstNode) -> Bool {
+    if node.kind == AstNLet {
+        return node.flags == 1
+    }
+    if node.kind == AstNParam {
+        return node.flags == 1
+    }
+    if node.kind == AstNPattern && node.extra == astPatternIdentKind() {
+        return false
+    }
+    false
+}
+
+fn hirLowerNodeInsideClosure(
+    ast: AstFile,
+    closureIdx: Int,
+    targetIdx: Int,
+    skipNestedClosures: Bool,
+) -> Bool {
+    if closureIdx < 0 || targetIdx < 0 {
+        return false
+    }
+    let closure = astArenaNodeAt(ast.arena, closureIdx)
+    for paramIdx in closure.children {
+        if hirLowerNodeInsideAstSubtree(ast, paramIdx, targetIdx, skipNestedClosures, false) {
+            return true
+        }
+    }
+    hirLowerNodeInsideAstSubtree(ast, closure.left, targetIdx, skipNestedClosures, false)
+}
+
+fn hirLowerNodeInsideAstSubtree(
+    ast: AstFile,
+    rootIdx: Int,
+    targetIdx: Int,
+    skipNestedClosures: Bool,
+    nested: Bool,
+) -> Bool {
+    if rootIdx < 0 {
+        return false
+    }
+    if rootIdx == targetIdx {
+        return true
+    }
+    let node = astArenaNodeAt(ast.arena, rootIdx)
+    let nextNested = nested || (node.kind == AstNClosure)
+    if nextNested && skipNestedClosures && rootIdx != targetIdx && nested {
+        return false
+    }
+    if hirLowerNodeInsideAstSubtree(ast, node.left, targetIdx, skipNestedClosures, nextNested) {
+        return true
+    }
+    if hirLowerNodeInsideAstSubtree(ast, node.right, targetIdx, skipNestedClosures, nextNested) {
+        return true
+    }
+    if hirLowerNodeInsideAstSubtree(ast, node.extra, targetIdx, skipNestedClosures, nextNested) {
+        return true
+    }
+    for childIdx in node.children {
+        if hirLowerNodeInsideAstSubtree(ast, childIdx, targetIdx, skipNestedClosures, nextNested) {
+            return true
+        }
+    }
+    for childIdx in node.children2 {
+        if hirLowerNodeInsideAstSubtree(ast, childIdx, targetIdx, skipNestedClosures, nextNested) {
+            return true
+        }
+    }
+    false
+}
+
+fn hirLowerAstRangeInclusive(node: AstNode) -> Bool {
+    node.flags == 1 || node.flags == 3
+}
+
+fn hirLowerAstRangeHasStep(node: AstNode) -> Bool {
+    node.flags == 2 || node.flags == 3 || node.children.len() > 0
+}
+
+fn hirLowerIntToString(n: Int) -> String {
+    if n == 0 {
+        return "0"
+    }
+    let negative = n < 0
+    let mut value = if negative { 0 - n } else { n }
+    let mut digits: List<String> = []
+    for value > 0 {
+        let digit = value % 10
+        digits.push(hirLowerDigitText(digit))
+        value = value / 10
+    }
+    let mut out = ""
+    let mut i = digits.len() - 1
+    for i >= 0 {
+        out = out + digits[i]
+        i = i - 1
+    }
+    if negative {
+        return "-" + out
+    }
+    out
+}
+
+fn hirLowerDigitText(d: Int) -> String {
+    if d == 0 { return "0" }
+    if d == 1 { return "1" }
+    if d == 2 { return "2" }
+    if d == 3 { return "3" }
+    if d == 4 { return "4" }
+    if d == 5 { return "5" }
+    if d == 6 { return "6" }
+    if d == 7 { return "7" }
+    if d == 8 { return "8" }
+    if d == 9 { return "9" }
+    "0"
+}
+
+fn hirLowerCharValue(text: String) -> Int {
+    if text.len() >= 3 {
+        let inner = text[1..text.len() - 1]
+        if inner.len() == 1 {
+            return inner.chars()[0].toInt()
+        }
+    }
+    0
+}
+
+fn hirLowerByteValue(text: String) -> Int {
+    if text.startsWith("b'") && text.len() >= 4 {
+        let inner = text[2..text.len() - 1]
+        if inner.len() == 1 {
+            return inner.chars()[0].toInt()
+        }
+    }
+    0
 }

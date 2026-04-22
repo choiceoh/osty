@@ -104,7 +104,8 @@ pub fn mirValidateFunction(func: MirFunction) -> List<String> {
     let mut pi = 0
     for pid in func.params {
         if pid < 0 || pid >= func.locals.len() {
-            errs.push("function \"{func.name}\": params[{pi}]={pid} out of range (locals={func.locals.len()})")
+            let localCount = func.locals.len()
+            errs.push("function \"{func.name}\": params[{pi}]={pid} out of range (locals={localCount})")
             pi = pi + 1
             continue
         }
@@ -159,7 +160,8 @@ pub fn mirValidateFunction(func: MirFunction) -> List<String> {
         return errs
     }
     if func.entry < 0 || func.entry >= func.blocks.len() {
-        errs.push("function \"{func.name}\": entry={func.entry} out of range (blocks={func.blocks.len()})")
+        let blockCount = func.blocks.len()
+        errs.push("function \"{func.name}\": entry={func.entry} out of range (blocks={blockCount})")
     }
 
     let mut bi = 0
@@ -574,7 +576,8 @@ fn mirValidateBlockRef(
 ) -> List<String> {
     let mut errs: List<String> = []
     if target < 0 || target >= func.blocks.len() {
-        errs.push("function \"{func.name}\" bb{bb.id} {ctx}: target bb{target} out of range (blocks={func.blocks.len()})")
+        let blockCount = func.blocks.len()
+        errs.push("function \"{func.name}\" bb{bb.id} {ctx}: target bb{target} out of range (blocks={blockCount})")
     }
     errs
 }

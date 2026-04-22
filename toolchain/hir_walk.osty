@@ -1,0 +1,432 @@
+// hir_walk.osty — preorder traversal helpers for self-hosted HIR.
+//
+// Go IR exposes `Walk(v, n)` with an interface-based visitor. Self-hosted HIR
+// is flat-struct based, so the portable utility here is a collector that records
+// nodes in preorder by category. Consumers that just need "visit every expr /
+// stmt / pattern in source order" can reuse this without inventing their own
+// recursive descent.
+
+pub struct HirWalkOrder {
+    pub fns: List<HirFnDecl>,
+    pub structs: List<HirStructDecl>,
+    pub enums: List<HirEnumDecl>,
+    pub lets: List<HirLetDecl>,
+    pub uses: List<HirUseDecl>,
+    pub interfaces: List<HirInterfaceDecl>,
+    pub aliases: List<HirTypeAliasDecl>,
+    pub params: List<HirParam>,
+    pub fields: List<HirField>,
+    pub variants: List<HirVariant>,
+    pub blocks: List<HirBlock>,
+    pub stmts: List<HirStmt>,
+    pub exprs: List<HirExpr>,
+    pub patterns: List<HirPattern>,
+    pub matchArms: List<HirMatchArm>,
+    pub typeParams: List<HirTypeParam>,
+    pub captures: List<HirCapture>,
+}
+
+pub fn hirWalkModule(m: HirModule) -> HirWalkOrder {
+    let out = hirWalkOrder()
+    hirWalkVisitModule(out, m)
+    out
+}
+
+fn hirWalkOrder() -> HirWalkOrder {
+    HirWalkOrder {
+        fns: [],
+        structs: [],
+        enums: [],
+        lets: [],
+        uses: [],
+        interfaces: [],
+        aliases: [],
+        params: [],
+        fields: [],
+        variants: [],
+        blocks: [],
+        stmts: [],
+        exprs: [],
+        patterns: [],
+        matchArms: [],
+        typeParams: [],
+        captures: [],
+    }
+}
+
+fn hirWalkVisitModule(out: HirWalkOrder, m: HirModule) {
+    for d in m.fns {
+        hirWalkVisitFn(out, d)
+    }
+    for d in m.structs {
+        hirWalkVisitStruct(out, d)
+    }
+    for d in m.enums {
+        hirWalkVisitEnum(out, d)
+    }
+    for d in m.lets {
+        hirWalkVisitLetDecl(out, d)
+    }
+    for d in m.uses {
+        hirWalkVisitUseDecl(out, d)
+    }
+    for d in m.interfaces {
+        hirWalkVisitInterface(out, d)
+    }
+    for d in m.aliases {
+        hirWalkVisitAlias(out, d)
+    }
+    for s in m.script {
+        hirWalkVisitStmt(out, s)
+    }
+}
+
+fn hirWalkVisitFn(out: HirWalkOrder, d: HirFnDecl) {
+    out.fns.push(d)
+    for tp in d.generics {
+        out.typeParams.push(tp)
+    }
+    for p in d.params {
+        hirWalkVisitParam(out, p)
+    }
+    hirWalkVisitBlock(out, d.body)
+}
+
+fn hirWalkVisitStruct(out: HirWalkOrder, d: HirStructDecl) {
+    out.structs.push(d)
+    for tp in d.generics {
+        out.typeParams.push(tp)
+    }
+    for f in d.fields {
+        hirWalkVisitField(out, f)
+    }
+    for m in d.methods {
+        hirWalkVisitFn(out, m)
+    }
+}
+
+fn hirWalkVisitEnum(out: HirWalkOrder, d: HirEnumDecl) {
+    out.enums.push(d)
+    for tp in d.generics {
+        out.typeParams.push(tp)
+    }
+    for vr in d.variants {
+        out.variants.push(vr)
+    }
+    for m in d.methods {
+        hirWalkVisitFn(out, m)
+    }
+}
+
+fn hirWalkVisitLetDecl(out: HirWalkOrder, d: HirLetDecl) {
+    out.lets.push(d)
+    if d.hasValue {
+        hirWalkVisitExpr(out, d.value)
+    }
+}
+
+fn hirWalkVisitUseDecl(out: HirWalkOrder, d: HirUseDecl) {
+    out.uses.push(d)
+    for bodyFn in d.goBodyFns {
+        hirWalkVisitFn(out, bodyFn)
+    }
+}
+
+fn hirWalkVisitInterface(out: HirWalkOrder, d: HirInterfaceDecl) {
+    out.interfaces.push(d)
+    for tp in d.generics {
+        out.typeParams.push(tp)
+    }
+    for m in d.methods {
+        hirWalkVisitFn(out, m)
+    }
+}
+
+fn hirWalkVisitAlias(out: HirWalkOrder, d: HirTypeAliasDecl) {
+    out.aliases.push(d)
+    for tp in d.generics {
+        out.typeParams.push(tp)
+    }
+}
+
+fn hirWalkVisitParam(out: HirWalkOrder, p: HirParam) {
+    out.params.push(p)
+    if hirParamIsDestructured(p) {
+        hirWalkVisitPattern(out, p.pattern)
+    }
+    if p.hasDefault {
+        hirWalkVisitExpr(out, p.defaultValue)
+    }
+}
+
+fn hirWalkVisitField(out: HirWalkOrder, f: HirField) {
+    out.fields.push(f)
+    if f.hasDefault {
+        hirWalkVisitExpr(out, f.defaultValue)
+    }
+}
+
+fn hirWalkVisitBlock(out: HirWalkOrder, b: HirBlock) {
+    out.blocks.push(b)
+    for s in b.stmts {
+        hirWalkVisitStmt(out, s)
+    }
+    if b.hasResult {
+        hirWalkVisitExpr(out, b.result)
+    }
+}
+
+fn hirWalkVisitStmt(out: HirWalkOrder, s: HirStmt) {
+    out.stmts.push(s)
+    match s.kind {
+        HirStmtBlock -> hirWalkVisitBlock(out, s.block),
+        HirStmtLet -> {
+            if s.letHasPattern {
+                hirWalkVisitPattern(out, s.letPattern)
+            }
+            if s.letHasValue {
+                hirWalkVisitExpr(out, s.letValue)
+            }
+        },
+        HirStmtExpr -> hirWalkVisitExpr(out, s.exprValue),
+        HirStmtAssign -> {
+            for t in s.assignTargets {
+                hirWalkVisitExpr(out, t)
+            }
+            hirWalkVisitExpr(out, s.assignValue)
+        },
+        HirStmtReturn -> {
+            if s.returnHasValue {
+                hirWalkVisitExpr(out, s.returnValue)
+            }
+        },
+        HirStmtIf -> {
+            hirWalkVisitExpr(out, s.ifCond)
+            hirWalkVisitBlock(out, s.ifThen)
+            if s.ifHasElse {
+                hirWalkVisitBlock(out, s.ifElse)
+            }
+        },
+        HirStmtFor -> {
+            if s.forHasPattern {
+                hirWalkVisitPattern(out, s.forPattern)
+            }
+            if s.forHasCond {
+                hirWalkVisitExpr(out, s.forCond)
+            }
+            if s.forHasIter {
+                hirWalkVisitExpr(out, s.forIter)
+            }
+            if s.forHasStart {
+                hirWalkVisitExpr(out, s.forStart)
+            }
+            if s.forHasEnd {
+                hirWalkVisitExpr(out, s.forEnd)
+            }
+            hirWalkVisitBlock(out, s.forBody)
+        },
+        HirStmtMatch -> {
+            hirWalkVisitExpr(out, s.matchScrutinee)
+            for arm in s.matchArms {
+                hirWalkVisitMatchArm(out, arm)
+            }
+        },
+        HirStmtDefer -> hirWalkVisitBlock(out, s.deferBody),
+        HirStmtChanSend -> {
+            hirWalkVisitExpr(out, s.chanChannel)
+            hirWalkVisitExpr(out, s.chanValue)
+        },
+        _ -> {},
+    }
+}
+
+fn hirWalkVisitExpr(out: HirWalkOrder, e: HirExpr) {
+    out.exprs.push(e)
+    match e.kind {
+        HirExprUnary -> hirWalkVisitExpr(out, hirWalkFirstExpr(e.unaryChild)),
+        HirExprBinary -> {
+            hirWalkVisitExpr(out, hirWalkFirstExpr(e.binaryLeft))
+            hirWalkVisitExpr(out, hirWalkFirstExpr(e.binaryRight))
+        },
+        HirExprCall -> {
+            hirWalkVisitExpr(out, hirWalkFirstExpr(e.callCallee))
+            for a in e.callArgs {
+                hirWalkVisitExpr(out, a.value)
+            }
+        },
+        HirExprIntrinsic -> {
+            for a in e.intrinsicArgs {
+                hirWalkVisitExpr(out, a.value)
+            }
+        },
+        HirExprList -> {
+            for el in e.listElems {
+                hirWalkVisitExpr(out, el)
+            }
+        },
+        HirExprBlock -> hirWalkVisitBlock(out, hirWalkFirstBlock(e.blockBody)),
+        HirExprIf -> {
+            hirWalkVisitExpr(out, hirWalkFirstExpr(e.ifExprCond))
+            hirWalkVisitBlock(out, hirWalkFirstBlock(e.ifExprThen))
+            if e.ifExprElse.len() > 0 {
+                hirWalkVisitBlock(out, e.ifExprElse[0])
+            }
+        },
+        HirExprField -> hirWalkVisitExpr(out, hirWalkFirstExpr(e.fieldTarget)),
+        HirExprIndex -> {
+            hirWalkVisitExpr(out, hirWalkFirstExpr(e.indexTarget))
+            hirWalkVisitExpr(out, hirWalkFirstExpr(e.indexIndex))
+        },
+        HirExprMethod -> {
+            hirWalkVisitExpr(out, hirWalkFirstExpr(e.methodReceiver))
+            for a in e.methodArgs {
+                hirWalkVisitExpr(out, a.value)
+            }
+        },
+        HirExprStructLit -> {
+            for f in e.structFields {
+                if f.hasValue {
+                    hirWalkVisitExpr(out, f.value)
+                }
+            }
+            if e.structHasSpread && e.structSpread.len() > 0 {
+                hirWalkVisitExpr(out, e.structSpread[0])
+            }
+        },
+        HirExprTupleLit -> {
+            for el in e.tupleElems {
+                hirWalkVisitExpr(out, el)
+            }
+        },
+        HirExprMapLit -> {
+            for en in e.mapEntries {
+                hirWalkVisitExpr(out, en.key)
+                hirWalkVisitExpr(out, en.value)
+            }
+        },
+        HirExprRange -> {
+            if e.rangeStart.len() > 0 {
+                hirWalkVisitExpr(out, e.rangeStart[0])
+            }
+            if e.rangeEnd.len() > 0 {
+                hirWalkVisitExpr(out, e.rangeEnd[0])
+            }
+        },
+        HirExprQuestion -> hirWalkVisitExpr(out, hirWalkFirstExpr(e.questionChild)),
+        HirExprCoalesce -> {
+            hirWalkVisitExpr(out, hirWalkFirstExpr(e.coalesceLeft))
+            hirWalkVisitExpr(out, hirWalkFirstExpr(e.coalesceRight))
+        },
+        HirExprClosure -> {
+            for p in e.closureParams {
+                hirWalkVisitParam(out, p)
+            }
+            for c in e.closureCaptures {
+                out.captures.push(c)
+            }
+            if e.closureBody.len() > 0 {
+                hirWalkVisitBlock(out, e.closureBody[0])
+            }
+        },
+        HirExprVariantLit -> {
+            for a in e.variantArgs {
+                hirWalkVisitExpr(out, a.value)
+            }
+        },
+        HirExprMatch -> {
+            hirWalkVisitExpr(out, hirWalkFirstExpr(e.matchExprScrutinee))
+            for arm in e.matchExprArms {
+                hirWalkVisitMatchArm(out, arm)
+            }
+        },
+        HirExprIfLet -> {
+            hirWalkVisitPattern(out, e.ifLetPattern)
+            hirWalkVisitExpr(out, hirWalkFirstExpr(e.ifLetScrutinee))
+            hirWalkVisitBlock(out, hirWalkFirstBlock(e.ifLetThen))
+            if e.ifLetHasElse && e.ifLetElse.len() > 0 {
+                hirWalkVisitBlock(out, e.ifLetElse[0])
+            }
+        },
+        HirExprTupleAccess -> hirWalkVisitExpr(out, hirWalkFirstExpr(e.tupleAccessTarget)),
+        HirExprStringLit -> {
+            for part in e.strParts {
+                if !(part.isLit) && part.expr.len() > 0 {
+                    hirWalkVisitExpr(out, part.expr[0])
+                }
+            }
+        },
+        _ -> {},
+    }
+}
+
+fn hirWalkVisitPattern(out: HirWalkOrder, p: HirPattern) {
+    out.patterns.push(p)
+    match p.kind {
+        HirPatLit -> {
+            if p.litValue.len() > 0 {
+                hirWalkVisitExpr(out, p.litValue[0])
+            }
+        },
+        HirPatTuple -> {
+            for el in p.tupleElems {
+                hirWalkVisitPattern(out, el)
+            }
+        },
+        HirPatStruct -> {
+            for f in p.structFields {
+                if f.hasPattern {
+                    hirWalkVisitPattern(out, f.pattern)
+                }
+            }
+        },
+        HirPatVariant -> {
+            for arg in p.variantArgs {
+                hirWalkVisitPattern(out, arg)
+            }
+        },
+        HirPatRange -> {
+            if p.rangeLow.len() > 0 {
+                hirWalkVisitExpr(out, p.rangeLow[0])
+            }
+            if p.rangeHigh.len() > 0 {
+                hirWalkVisitExpr(out, p.rangeHigh[0])
+            }
+        },
+        HirPatOr -> {
+            for alt in p.orAlts {
+                hirWalkVisitPattern(out, alt)
+            }
+        },
+        HirPatBinding -> {
+            if p.bindingChild.len() > 0 {
+                hirWalkVisitPattern(out, p.bindingChild[0])
+            }
+        },
+        _ -> {},
+    }
+}
+
+fn hirWalkVisitMatchArm(out: HirWalkOrder, arm: HirMatchArm) {
+    out.matchArms.push(arm)
+    hirWalkVisitPattern(out, arm.pattern)
+    if arm.hasGuard {
+        hirWalkVisitExpr(out, arm.guard)
+    }
+    hirWalkVisitBlock(out, arm.body)
+}
+
+fn hirWalkFirstExpr(xs: List<HirExpr>) -> HirExpr {
+    if xs.len() > 0 {
+        xs[0]
+    } else {
+        hirExprInvalid()
+    }
+}
+
+fn hirWalkFirstBlock(xs: List<HirBlock>) -> HirBlock {
+    if xs.len() > 0 {
+        xs[0]
+    } else {
+        hirBlock(hirNoSpan())
+    }
+}

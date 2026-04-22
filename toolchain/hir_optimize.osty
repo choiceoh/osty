@@ -1,0 +1,788 @@
+use std.strings as strings
+
+// hir_optimize.osty — conservative cleanup passes for self-hosted HIR.
+//
+// Counterpart to `internal/ir/optimize.go`. The optimiser mutates the module in
+// place and returns it for chaining.
+
+pub struct HirOptimizeOptions {
+    pub disableConstFold: Bool,
+    pub disableDeadCode: Bool,
+    pub disableBranch: Bool,
+    pub disableSimplify: Bool,
+}
+
+pub fn hirOptimizeOptions() -> HirOptimizeOptions {
+    HirOptimizeOptions {
+        disableConstFold: false,
+        disableDeadCode: false,
+        disableBranch: false,
+        disableSimplify: false,
+    }
+}
+
+pub fn hirOptimize(m: HirModule, opts: HirOptimizeOptions) -> HirModule {
+    let o = hirOptimizer(opts)
+    hirOptimizeVisitModule(o, m)
+    m
+}
+
+struct HirOptimizer {
+    opts: HirOptimizeOptions,
+}
+
+fn hirOptimizer(opts: HirOptimizeOptions) -> HirOptimizer {
+    HirOptimizer { opts }
+}
+
+fn hirOptimizeVisitModule(o: HirOptimizer, m: HirModule) {
+    let fnCount = m.fns.len()
+    for i in 0..fnCount {
+        let decl = m.fns[i]
+        hirOptimizeVisitBlock(o, decl.body)
+    }
+    let structCount = m.structs.len()
+    for i in 0..structCount {
+        let decl = m.structs[i]
+        let fieldCount = decl.fields.len()
+        for j in 0..fieldCount {
+            let field = decl.fields[j]
+            if field.hasDefault {
+                field.defaultValue = hirOptimizeVisitExpr(o, field.defaultValue)
+            }
+        }
+        let methodCount = decl.methods.len()
+        for j in 0..methodCount {
+            let method = decl.methods[j]
+            hirOptimizeVisitBlock(o, method.body)
+        }
+    }
+    let enumCount = m.enums.len()
+    for i in 0..enumCount {
+        let decl = m.enums[i]
+        let methodCount = decl.methods.len()
+        for j in 0..methodCount {
+            let method = decl.methods[j]
+            hirOptimizeVisitBlock(o, method.body)
+        }
+    }
+    let ifaceCount = m.interfaces.len()
+    for i in 0..ifaceCount {
+        let decl = m.interfaces[i]
+        let methodCount = decl.methods.len()
+        for j in 0..methodCount {
+            let method = decl.methods[j]
+            hirOptimizeVisitBlock(o, method.body)
+        }
+    }
+    let letCount = m.lets.len()
+    for i in 0..letCount {
+        let decl = m.lets[i]
+        if decl.hasValue {
+            decl.value = hirOptimizeVisitExpr(o, decl.value)
+        }
+    }
+    let scriptCount = m.script.len()
+    for i in 0..scriptCount {
+        m.script[i] = hirOptimizeVisitStmt(o, m.script[i])
+    }
+    m.script = hirOptimizeSimplifyStmts(o, m.script)
+}
+
+fn hirOptimizeVisitBlock(o: HirOptimizer, b: HirBlock) {
+    let stmtCount = b.stmts.len()
+    for i in 0..stmtCount {
+        b.stmts[i] = hirOptimizeVisitStmt(o, b.stmts[i])
+    }
+    if b.hasResult {
+        b.result = hirOptimizeVisitExpr(o, b.result)
+    }
+    b.stmts = hirOptimizeSimplifyStmts(o, b.stmts)
+}
+
+fn hirOptimizeSimplifyStmts(o: HirOptimizer, stmts: List<HirStmt>) -> List<HirStmt> {
+    if o.opts.disableDeadCode {
+        return stmts
+    }
+    let mut out: List<HirStmt> = []
+    for s in stmts {
+        out.push(s)
+        if hirOptimizeIsTerminator(s) {
+            return out
+        }
+    }
+    out
+}
+
+fn hirOptimizeIsTerminator(s: HirStmt) -> Bool {
+    match s.kind {
+        HirStmtReturn -> true,
+        HirStmtBreak -> true,
+        HirStmtContinue -> true,
+        _ -> false,
+    }
+}
+
+fn hirOptimizeVisitStmt(o: HirOptimizer, s: HirStmt) -> HirStmt {
+    match s.kind {
+        HirStmtInvalid -> s,
+        HirStmtBlock -> {
+            hirOptimizeVisitBlock(o, s.block)
+            s
+        },
+        HirStmtLet -> {
+            if s.letHasValue {
+                s.letValue = hirOptimizeVisitExpr(o, s.letValue)
+            }
+            s
+        },
+        HirStmtExpr -> {
+            s.exprValue = hirOptimizeVisitExpr(o, s.exprValue)
+            s
+        },
+        HirStmtAssign -> {
+            let targetCount = s.assignTargets.len()
+            for i in 0..targetCount {
+                s.assignTargets[i] = hirOptimizeVisitExpr(o, s.assignTargets[i])
+            }
+            s.assignValue = hirOptimizeVisitExpr(o, s.assignValue)
+            s
+        },
+        HirStmtReturn -> {
+            if s.returnHasValue {
+                s.returnValue = hirOptimizeVisitExpr(o, s.returnValue)
+            }
+            s
+        },
+        HirStmtIf -> {
+            s.ifCond = hirOptimizeVisitExpr(o, s.ifCond)
+            hirOptimizeVisitBlock(o, s.ifThen)
+            if s.ifHasElse {
+                hirOptimizeVisitBlock(o, s.ifElse)
+            }
+            if !(o.opts.disableBranch) && s.ifCond.kind == HirExprBoolLit {
+                if s.ifCond.boolValue {
+                    return hirBlockStmt(s.ifThen, s.span)
+                }
+                if s.ifHasElse {
+                    return hirBlockStmt(s.ifElse, s.span)
+                }
+                return hirBlockStmt(hirBlock(s.span), s.span)
+            }
+            s
+        },
+        HirStmtFor -> {
+            if s.forHasCond {
+                s.forCond = hirOptimizeVisitExpr(o, s.forCond)
+            }
+            if s.forHasIter {
+                s.forIter = hirOptimizeVisitExpr(o, s.forIter)
+            }
+            if s.forHasStart {
+                s.forStart = hirOptimizeVisitExpr(o, s.forStart)
+            }
+            if s.forHasEnd {
+                s.forEnd = hirOptimizeVisitExpr(o, s.forEnd)
+            }
+            hirOptimizeVisitBlock(o, s.forBody)
+            s
+        },
+        HirStmtDefer -> {
+            hirOptimizeVisitBlock(o, s.deferBody)
+            s
+        },
+        HirStmtChanSend -> {
+            s.chanChannel = hirOptimizeVisitExpr(o, s.chanChannel)
+            s.chanValue = hirOptimizeVisitExpr(o, s.chanValue)
+            s
+        },
+        HirStmtMatch -> {
+            s.matchScrutinee = hirOptimizeVisitExpr(o, s.matchScrutinee)
+            let armCount = s.matchArms.len()
+            for i in 0..armCount {
+                hirOptimizeVisitMatchArm(o, s.matchArms[i])
+            }
+            s
+        },
+        _ -> s,
+    }
+}
+
+fn hirOptimizeVisitMatchArm(o: HirOptimizer, arm: HirMatchArm) {
+    if arm.hasGuard {
+        arm.guard = hirOptimizeVisitExpr(o, arm.guard)
+    }
+    hirOptimizeVisitBlock(o, arm.body)
+}
+
+fn hirOptimizeVisitExpr(o: HirOptimizer, e: HirExpr) -> HirExpr {
+    match e.kind {
+        HirExprUnary -> {
+            if e.unaryChild.len() > 0 {
+                e.unaryChild[0] = hirOptimizeVisitExpr(o, e.unaryChild[0])
+            }
+            let folded = hirOptimizeFoldUnary(o, e)
+            if folded.kind != HirExprInvalid {
+                return folded
+            }
+            e
+        },
+        HirExprBinary -> {
+            if e.binaryLeft.len() > 0 {
+                e.binaryLeft[0] = hirOptimizeVisitExpr(o, e.binaryLeft[0])
+            }
+            if e.binaryRight.len() > 0 {
+                e.binaryRight[0] = hirOptimizeVisitExpr(o, e.binaryRight[0])
+            }
+            let folded = hirOptimizeFoldBinary(o, e)
+            if folded.kind != HirExprInvalid {
+                return folded
+            }
+            let simplified = hirOptimizeSimplifyBinary(o, e)
+            if simplified.kind != HirExprInvalid {
+                return simplified
+            }
+            e
+        },
+        HirExprCall -> {
+            if e.callCallee.len() > 0 {
+                e.callCallee[0] = hirOptimizeVisitExpr(o, e.callCallee[0])
+            }
+            let argCount = e.callArgs.len()
+            for i in 0..argCount {
+                e.callArgs[i].value = hirOptimizeVisitExpr(o, e.callArgs[i].value)
+            }
+            e
+        },
+        HirExprIntrinsic -> {
+            let argCount = e.intrinsicArgs.len()
+            for i in 0..argCount {
+                e.intrinsicArgs[i].value = hirOptimizeVisitExpr(o, e.intrinsicArgs[i].value)
+            }
+            e
+        },
+        HirExprMethod -> {
+            if e.methodReceiver.len() > 0 {
+                e.methodReceiver[0] = hirOptimizeVisitExpr(o, e.methodReceiver[0])
+            }
+            let argCount = e.methodArgs.len()
+            for i in 0..argCount {
+                e.methodArgs[i].value = hirOptimizeVisitExpr(o, e.methodArgs[i].value)
+            }
+            e
+        },
+        HirExprList -> {
+            let elemCount = e.listElems.len()
+            for i in 0..elemCount {
+                e.listElems[i] = hirOptimizeVisitExpr(o, e.listElems[i])
+            }
+            e
+        },
+        HirExprMapLit -> {
+            let entryCount = e.mapEntries.len()
+            for i in 0..entryCount {
+                e.mapEntries[i].key = hirOptimizeVisitExpr(o, e.mapEntries[i].key)
+                e.mapEntries[i].value = hirOptimizeVisitExpr(o, e.mapEntries[i].value)
+            }
+            e
+        },
+        HirExprTupleLit -> {
+            let elemCount = e.tupleElems.len()
+            for i in 0..elemCount {
+                e.tupleElems[i] = hirOptimizeVisitExpr(o, e.tupleElems[i])
+            }
+            e
+        },
+        HirExprStructLit -> {
+            let fieldCount = e.structFields.len()
+            for i in 0..fieldCount {
+                if e.structFields[i].hasValue {
+                    e.structFields[i].value = hirOptimizeVisitExpr(o, e.structFields[i].value)
+                }
+            }
+            if e.structHasSpread && e.structSpread.len() > 0 {
+                e.structSpread[0] = hirOptimizeVisitExpr(o, e.structSpread[0])
+            }
+            e
+        },
+        HirExprRange -> {
+            if e.rangeStart.len() > 0 {
+                e.rangeStart[0] = hirOptimizeVisitExpr(o, e.rangeStart[0])
+            }
+            if e.rangeEnd.len() > 0 {
+                e.rangeEnd[0] = hirOptimizeVisitExpr(o, e.rangeEnd[0])
+            }
+            e
+        },
+        HirExprQuestion -> {
+            if e.questionChild.len() > 0 {
+                e.questionChild[0] = hirOptimizeVisitExpr(o, e.questionChild[0])
+            }
+            e
+        },
+        HirExprCoalesce -> {
+            if e.coalesceLeft.len() > 0 {
+                e.coalesceLeft[0] = hirOptimizeVisitExpr(o, e.coalesceLeft[0])
+            }
+            if e.coalesceRight.len() > 0 {
+                e.coalesceRight[0] = hirOptimizeVisitExpr(o, e.coalesceRight[0])
+            }
+            e
+        },
+        HirExprField -> {
+            if e.fieldTarget.len() > 0 {
+                e.fieldTarget[0] = hirOptimizeVisitExpr(o, e.fieldTarget[0])
+            }
+            e
+        },
+        HirExprTupleAccess -> {
+            if e.tupleAccessTarget.len() > 0 {
+                e.tupleAccessTarget[0] = hirOptimizeVisitExpr(o, e.tupleAccessTarget[0])
+                if !(o.opts.disableSimplify) {
+                    let base = e.tupleAccessTarget[0]
+                    if base.kind == HirExprTupleLit
+                        && e.tupleAccessIndex >= 0
+                        && e.tupleAccessIndex < base.tupleElems.len() {
+                        return base.tupleElems[e.tupleAccessIndex]
+                    }
+                }
+            }
+            e
+        },
+        HirExprIndex -> {
+            if e.indexTarget.len() > 0 {
+                e.indexTarget[0] = hirOptimizeVisitExpr(o, e.indexTarget[0])
+            }
+            if e.indexIndex.len() > 0 {
+                e.indexIndex[0] = hirOptimizeVisitExpr(o, e.indexIndex[0])
+            }
+            e
+        },
+        HirExprClosure -> {
+            let paramCount = e.closureParams.len()
+            for i in 0..paramCount {
+                if e.closureParams[i].hasDefault {
+                    e.closureParams[i].defaultValue = hirOptimizeVisitExpr(o, e.closureParams[i].defaultValue)
+                }
+            }
+            if e.closureBody.len() > 0 {
+                hirOptimizeVisitBlock(o, e.closureBody[0])
+            }
+            e
+        },
+        HirExprVariantLit -> {
+            let argCount = e.variantArgs.len()
+            for i in 0..argCount {
+                e.variantArgs[i].value = hirOptimizeVisitExpr(o, e.variantArgs[i].value)
+            }
+            e
+        },
+        HirExprBlock -> {
+            if e.blockBody.len() > 0 {
+                hirOptimizeVisitBlock(o, e.blockBody[0])
+                if !(o.opts.disableSimplify) && e.blockBody[0].stmts.len() == 0 && e.blockBody[0].hasResult {
+                    return e.blockBody[0].result
+                }
+            }
+            e
+        },
+        HirExprIf -> {
+            if e.ifExprCond.len() > 0 {
+                e.ifExprCond[0] = hirOptimizeVisitExpr(o, e.ifExprCond[0])
+            }
+            if e.ifExprThen.len() > 0 {
+                hirOptimizeVisitBlock(o, e.ifExprThen[0])
+            }
+            if e.ifExprElse.len() > 0 {
+                hirOptimizeVisitBlock(o, e.ifExprElse[0])
+            }
+            if !(o.opts.disableBranch)
+                && e.ifExprCond.len() > 0
+                && e.ifExprCond[0].kind == HirExprBoolLit {
+                if e.ifExprCond[0].boolValue {
+                    return hirOptimizeBlockResult(hirOptimizeFirstBlock(e.ifExprThen), e.typ, e.span)
+                }
+                return hirOptimizeBlockResult(hirOptimizeFirstBlock(e.ifExprElse), e.typ, e.span)
+            }
+            e
+        },
+        HirExprIfLet -> {
+            if e.ifLetScrutinee.len() > 0 {
+                e.ifLetScrutinee[0] = hirOptimizeVisitExpr(o, e.ifLetScrutinee[0])
+            }
+            if e.ifLetThen.len() > 0 {
+                hirOptimizeVisitBlock(o, e.ifLetThen[0])
+            }
+            if e.ifLetElse.len() > 0 {
+                hirOptimizeVisitBlock(o, e.ifLetElse[0])
+            }
+            e
+        },
+        HirExprMatch -> {
+            if e.matchExprScrutinee.len() > 0 {
+                e.matchExprScrutinee[0] = hirOptimizeVisitExpr(o, e.matchExprScrutinee[0])
+            }
+            let armCount = e.matchExprArms.len()
+            for i in 0..armCount {
+                hirOptimizeVisitMatchArm(o, e.matchExprArms[i])
+            }
+            e
+        },
+        HirExprStringLit -> {
+            let partCount = e.strParts.len()
+            for i in 0..partCount {
+                if !(e.strParts[i].isLit) && e.strParts[i].expr.len() > 0 {
+                    e.strParts[i].expr[0] = hirOptimizeVisitExpr(o, e.strParts[i].expr[0])
+                }
+            }
+            e
+        },
+        _ -> e,
+    }
+}
+
+fn hirOptimizeBlockResult(b: HirBlock, t: HirType, span: HirSpan) -> HirExpr {
+    if b.stmts.len() == 0 {
+        if b.hasResult {
+            return b.result
+        }
+        return hirUnitLit(span)
+    }
+    hirBlockExpr(b, t, span)
+}
+
+// ====================================================================
+// Constant folding
+// ====================================================================
+
+fn hirOptimizeFoldUnary(o: HirOptimizer, e: HirExpr) -> HirExpr {
+    if o.opts.disableConstFold {
+        return hirExprInvalid()
+    }
+    if e.unaryChild.len() == 0 {
+        return hirExprInvalid()
+    }
+    let child = e.unaryChild[0]
+    match e.unaryOp {
+        HirUnNeg -> {
+            if child.kind == HirExprIntLit {
+                let v = 0 - hirOptimizeParseIntLit(child.numText)
+                return hirIntLit(hirOptimizeIntToString(v), e.typ, e.span)
+            }
+        },
+        HirUnPlus -> {
+            if child.kind == HirExprIntLit || child.kind == HirExprFloatLit {
+                return child
+            }
+        },
+        HirUnNot -> {
+            if child.kind == HirExprBoolLit {
+                return hirBoolLit(!(child.boolValue), e.span)
+            }
+        },
+        HirUnBitNot -> {
+            if child.kind == HirExprIntLit {
+                let v = hirOptimizeParseIntLit(child.numText)
+                return hirIntLit(hirOptimizeIntToString(~v), e.typ, e.span)
+            }
+        },
+        _ -> {},
+    }
+    hirExprInvalid()
+}
+
+fn hirOptimizeFoldBinary(o: HirOptimizer, e: HirExpr) -> HirExpr {
+    if o.opts.disableConstFold || e.binaryLeft.len() == 0 || e.binaryRight.len() == 0 {
+        return hirExprInvalid()
+    }
+    let left = e.binaryLeft[0]
+    let right = e.binaryRight[0]
+    if left.kind == HirExprIntLit && right.kind == HirExprIntLit {
+        let lv = hirOptimizeParseIntLit(left.numText)
+        let rv = hirOptimizeParseIntLit(right.numText)
+        return hirOptimizeFoldIntBinary(e, lv, rv)
+    }
+    if left.kind == HirExprBoolLit && right.kind == HirExprBoolLit {
+        return hirOptimizeFoldBoolBinary(e, left.boolValue, right.boolValue)
+    }
+    if e.binaryOp == HirBinAnd && left.kind == HirExprBoolLit {
+        if !(left.boolValue) {
+            return hirBoolLit(false, e.span)
+        }
+        return right
+    }
+    if e.binaryOp == HirBinOr && left.kind == HirExprBoolLit {
+        if left.boolValue {
+            return hirBoolLit(true, e.span)
+        }
+        return right
+    }
+    if e.binaryOp == HirBinAdd
+        && hirOptimizePureStringLit(left)
+        && hirOptimizePureStringLit(right) {
+        let parts = [hirStringPartLit(hirOptimizeStringText(left) + hirOptimizeStringText(right))]
+        let mut out = hirStringLit(parts, e.span)
+        out.strIsRaw = left.strIsRaw && right.strIsRaw
+        out.strIsTriple = false
+        return out
+    }
+    hirExprInvalid()
+}
+
+fn hirOptimizeSimplifyBinary(o: HirOptimizer, e: HirExpr) -> HirExpr {
+    if o.opts.disableSimplify || e.binaryLeft.len() == 0 || e.binaryRight.len() == 0 {
+        return hirExprInvalid()
+    }
+    let left = e.binaryLeft[0]
+    let right = e.binaryRight[0]
+    if e.binaryOp == HirBinAdd {
+        if hirOptimizeIsIntLiteralZero(right) {
+            return left
+        }
+        if hirOptimizeIsIntLiteralZero(left) {
+            return right
+        }
+    }
+    if e.binaryOp == HirBinSub && hirOptimizeIsIntLiteralZero(right) {
+        return left
+    }
+    if e.binaryOp == HirBinMul {
+        if hirOptimizeIsIntLiteralOne(right) {
+            return left
+        }
+        if hirOptimizeIsIntLiteralOne(left) {
+            return right
+        }
+        if hirOptimizeIsIntLiteralZero(right) || hirOptimizeIsIntLiteralZero(left) {
+            return hirIntLit("0", e.typ, e.span)
+        }
+    }
+    if e.binaryOp == HirBinDiv && hirOptimizeIsIntLiteralOne(right) {
+        return left
+    }
+    hirExprInvalid()
+}
+
+fn hirOptimizeFoldIntBinary(e: HirExpr, lv: Int, rv: Int) -> HirExpr {
+    match e.binaryOp {
+        HirBinAdd -> hirIntLit(hirOptimizeIntToString(lv + rv), e.typ, e.span),
+        HirBinSub -> hirIntLit(hirOptimizeIntToString(lv - rv), e.typ, e.span),
+        HirBinMul -> hirIntLit(hirOptimizeIntToString(lv * rv), e.typ, e.span),
+        HirBinDiv -> {
+            if rv == 0 {
+                return hirExprInvalid()
+            }
+            hirIntLit(hirOptimizeIntToString(lv / rv), e.typ, e.span)
+        },
+        HirBinMod -> {
+            if rv == 0 {
+                return hirExprInvalid()
+            }
+            hirIntLit(hirOptimizeIntToString(lv % rv), e.typ, e.span)
+        },
+        HirBinBitAnd -> hirIntLit(hirOptimizeIntToString(lv & rv), e.typ, e.span),
+        HirBinBitOr -> hirIntLit(hirOptimizeIntToString(lv | rv), e.typ, e.span),
+        HirBinBitXor -> hirIntLit(hirOptimizeIntToString(lv ^ rv), e.typ, e.span),
+        HirBinShl -> {
+            if rv < 0 || rv > 1024 {
+                return hirExprInvalid()
+            }
+            hirIntLit(hirOptimizeIntToString(lv << rv), e.typ, e.span)
+        },
+        HirBinShr -> {
+            if rv < 0 || rv > 1024 {
+                return hirExprInvalid()
+            }
+            hirIntLit(hirOptimizeIntToString(lv >> rv), e.typ, e.span)
+        },
+        HirBinEq -> hirBoolLit(lv == rv, e.span),
+        HirBinNeq -> hirBoolLit(lv != rv, e.span),
+        HirBinLt -> hirBoolLit(lv < rv, e.span),
+        HirBinLeq -> hirBoolLit(lv <= rv, e.span),
+        HirBinGt -> hirBoolLit(lv > rv, e.span),
+        HirBinGeq -> hirBoolLit(lv >= rv, e.span),
+        _ -> hirExprInvalid(),
+    }
+}
+
+fn hirOptimizeFoldBoolBinary(e: HirExpr, left: Bool, right: Bool) -> HirExpr {
+    match e.binaryOp {
+        HirBinAnd -> hirBoolLit(left && right, e.span),
+        HirBinOr -> hirBoolLit(left || right, e.span),
+        HirBinEq -> hirBoolLit(left == right, e.span),
+        HirBinNeq -> hirBoolLit(left != right, e.span),
+        _ -> hirExprInvalid(),
+    }
+}
+
+fn hirOptimizeIsIntLiteralZero(e: HirExpr) -> Bool {
+    e.kind == HirExprIntLit && hirOptimizeParseIntLit(e.numText) == 0
+}
+
+fn hirOptimizeIsIntLiteralOne(e: HirExpr) -> Bool {
+    e.kind == HirExprIntLit && hirOptimizeParseIntLit(e.numText) == 1
+}
+
+fn hirOptimizePureStringLit(e: HirExpr) -> Bool {
+    if e.kind != HirExprStringLit {
+        return false
+    }
+    for p in e.strParts {
+        if !(p.isLit) {
+            return false
+        }
+    }
+    true
+}
+
+fn hirOptimizeStringText(e: HirExpr) -> String {
+    let mut out = ""
+    for p in e.strParts {
+        if p.isLit {
+            out = out + p.lit
+        }
+    }
+    out
+}
+
+// ====================================================================
+// Integer literal parsing
+// ====================================================================
+
+fn hirOptimizeParseIntLit(text: String) -> Int {
+    let stripped = strings.replaceAll(text, "_", "")
+    let trimmed = hirOptimizeStripSign(stripped)
+    let negative = stripped.len() > 0 && stripped.startsWith("-")
+    let value = hirOptimizeParseIntDigits(trimmed)
+    if negative {
+        0 - value
+    } else {
+        value
+    }
+}
+
+fn hirOptimizeStripSign(text: String) -> String {
+    if text.startsWith("+") || text.startsWith("-") {
+        strings.slice(text, 1, text.len())
+    } else {
+        text
+    }
+}
+
+fn hirOptimizeParseIntDigits(text: String) -> Int {
+    if text.len() == 0 {
+        return 0
+    }
+    if text.startsWith("0x") || text.startsWith("0X") {
+        return hirOptimizeParseRadix(strings.slice(text, 2, text.len()), 16)
+    }
+    if text.startsWith("0b") || text.startsWith("0B") {
+        return hirOptimizeParseRadix(strings.slice(text, 2, text.len()), 2)
+    }
+    if text.startsWith("0o") || text.startsWith("0O") {
+        return hirOptimizeParseRadix(strings.slice(text, 2, text.len()), 8)
+    }
+    hirOptimizeParseRadix(text, 10)
+}
+
+fn hirOptimizeParseRadix(text: String, radix: Int) -> Int {
+    let mut acc = 0
+    let chars = text.chars()
+    for ch in chars {
+        let d = hirOptimizeCharToDigit(ch)
+        if d < 0 || d >= radix {
+            return acc
+        }
+        acc = acc * radix + d
+    }
+    acc
+}
+
+fn hirOptimizeCharToDigit(ch: Char) -> Int {
+    match ch {
+        '0' -> 0,
+        '1' -> 1,
+        '2' -> 2,
+        '3' -> 3,
+        '4' -> 4,
+        '5' -> 5,
+        '6' -> 6,
+        '7' -> 7,
+        '8' -> 8,
+        '9' -> 9,
+        'a' -> 10,
+        'b' -> 11,
+        'c' -> 12,
+        'd' -> 13,
+        'e' -> 14,
+        'f' -> 15,
+        'A' -> 10,
+        'B' -> 11,
+        'C' -> 12,
+        'D' -> 13,
+        'E' -> 14,
+        'F' -> 15,
+        _ -> -1,
+    }
+}
+
+// ====================================================================
+// Misc helpers
+// ====================================================================
+
+fn hirOptimizeFirstBlock(xs: List<HirBlock>) -> HirBlock {
+    if xs.len() > 0 {
+        xs[0]
+    } else {
+        hirBlock(hirNoSpan())
+    }
+}
+
+fn hirOptimizeIntToString(n: Int) -> String {
+    if n == 0 {
+        return "0"
+    }
+    let mut value = n
+    let mut negative = false
+    if value < 0 {
+        negative = true
+        value = -value
+    }
+    let mut digits: List<Int> = []
+    for _d in 0..40 {
+        if value == 0 {
+            break
+        }
+        digits.push(value % 10)
+        value = value / 10
+    }
+    let mut out = ""
+    if negative {
+        out = "-"
+    }
+    let mut i = digits.len() - 1
+    for _j in 0..digits.len() {
+        if i < 0 {
+            break
+        }
+        out = out + hirOptimizeDigitChar(digits[i])
+        i = i - 1
+    }
+    out
+}
+
+fn hirOptimizeDigitChar(d: Int) -> String {
+    match d {
+        0 -> "0",
+        1 -> "1",
+        2 -> "2",
+        3 -> "3",
+        4 -> "4",
+        5 -> "5",
+        6 -> "6",
+        7 -> "7",
+        8 -> "8",
+        9 -> "9",
+        _ -> "?",
+    }
+}

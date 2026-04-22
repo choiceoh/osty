@@ -574,7 +574,8 @@ pub fn mirLowerEmitDeclarations(l: MirLowerer) {
 /// as the body of a synthetic `main()`. Matches Go's `emitScript`
 /// policy — backends conventionally do the same thing.
 pub fn mirLowerEmitScript(l: MirLowerer) {
-    if l.src.script.len() == 0 {
+    let script = l.src.script
+    if script.len() == 0 {
         return
     }
     let span = mirSpanFromHir(l.src.span)
@@ -585,7 +586,7 @@ pub fn mirLowerEmitScript(l: MirLowerer) {
     // simple stmt kinds land instructions; unsupported kinds record
     // an issue and fall through to an implicit unit return.
     let bs = mirLowerBodyState(l, main, hirTUnit())
-    for s in l.src.script {
+    for s in script {
         mirLowerStmt(bs, s)
     }
     mirLowerFinishNoReturn(bs, span)
@@ -711,7 +712,8 @@ fn mirLowerSelfOwnerName(decl: HirFnDecl) -> String {
 /// therefore should emit as an external stub. FFI-sourced fns arrive
 /// with empty bodies after the collector.
 fn mirLowerFunctionIsExternal(decl: HirFnDecl) -> Bool {
-    decl.body.stmts.len() == 0 && !decl.body.hasResult
+    let stmts = decl.body.stmts
+    stmts.len() == 0 && !decl.body.hasResult
 }
 
 /// mirLowerCopyFnAnnotations copies HIR annotation metadata onto the
