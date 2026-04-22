@@ -359,10 +359,9 @@ fn testLocateTokenSpan() {
     testing.assertEq(loc.column, 1)
 }
 
-// Property-based tests (v0.5 G33). Stubs in std.testing.gen make
-// these no-ops at runtime today. The invariant reconstruct(lex(s))
-// == s is the strongest safety net for lossless_lex.osty — once the
-// runner lands these will cover shapes example tests miss.
+// Property-based tests (v0.5 G33). The current LLVM lowering exercises
+// the `asciiString` / `oneOf` subset directly from the property call
+// site, so these run today and cover shapes example tests miss.
 
 fn testRoundTripPropAsciiStringsRoundTrip() {
     testing.property(
