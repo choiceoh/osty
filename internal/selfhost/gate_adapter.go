@@ -3,7 +3,6 @@ package selfhost
 import (
 	"strings"
 
-	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 )
 
@@ -17,11 +16,15 @@ func selfhostAppendIntrinsicBodyGateForSource(result *CheckResult, src []byte) {
 	if result == nil || len(src) == 0 {
 		return
 	}
-	file, parseDiags := Parse(src)
-	if file == nil || selfhostHasErrorDiagnostics(parseDiags) {
+	run := Run(src)
+	if selfhostHasErrorDiagnostics(run.Diagnostics()) {
 		return
 	}
-	selfhostMergeDiagnosticRecords(result, selfhostIntrinsicBodyDiagnostics(file, 0, "")...)
+	if run.parser == nil || run.parser.arena == nil {
+		return
+	}
+	records := selfhostIntrinsicBodyDiagnosticsFromArena(run.parser.arena, run.rt, run.stream, 0, "")
+	selfhostMergeDiagnosticRecords(result, records...)
 }
 
 // selfhostAppendIntrinsicBodyGateForRun is the FrontendRun-aware
@@ -185,11 +188,14 @@ func selfhostAppendIntrinsicBodyGateForPackage(result *CheckResult, input Packag
 		if len(file.Source) == 0 {
 			continue
 		}
-		parsed, parseDiags := Parse(file.Source)
-		if parsed == nil || selfhostHasErrorDiagnostics(parseDiags) {
+		run := Run(file.Source)
+		if selfhostHasErrorDiagnostics(run.Diagnostics()) {
 			continue
 		}
-		records = append(records, selfhostIntrinsicBodyDiagnostics(parsed, file.Base, file.Path)...)
+		if run.parser == nil || run.parser.arena == nil {
+			continue
+		}
+		records = append(records, selfhostIntrinsicBodyDiagnosticsFromArena(run.parser.arena, run.rt, run.stream, file.Base, file.Path)...)
 	}
 	selfhostMergeDiagnosticRecords(result, records...)
 }
@@ -197,85 +203,6 @@ func selfhostAppendIntrinsicBodyGateForPackage(result *CheckResult, input Packag
 func selfhostHasErrorDiagnostics(diags []*diag.Diagnostic) bool {
 	for _, d := range diags {
 		if d != nil && d.Severity == diag.Error {
-			return true
-		}
-	}
-	return false
-}
-
-func selfhostIntrinsicBodyDiagnostics(file *ast.File, base int, path string) []CheckDiagnosticRecord {
-	if file == nil {
-		return nil
-	}
-	var out []CheckDiagnosticRecord
-	for _, decl := range file.Decls {
-		switch d := decl.(type) {
-		case *ast.FnDecl:
-			if rec := selfhostIntrinsicBodyRecord(d, base, path); rec != nil {
-				out = append(out, *rec)
-			}
-		case *ast.StructDecl:
-			selfhostAppendIntrinsicBodyMethodRecords(&out, d.Methods, base, path)
-		case *ast.EnumDecl:
-			selfhostAppendIntrinsicBodyMethodRecords(&out, d.Methods, base, path)
-		case *ast.UseDecl:
-			for _, member := range d.GoBody {
-				switch m := member.(type) {
-				case *ast.FnDecl:
-					if rec := selfhostIntrinsicBodyRecord(m, base, path); rec != nil {
-						out = append(out, *rec)
-					}
-				case *ast.StructDecl:
-					selfhostAppendIntrinsicBodyMethodRecords(&out, m.Methods, base, path)
-				case *ast.EnumDecl:
-					selfhostAppendIntrinsicBodyMethodRecords(&out, m.Methods, base, path)
-				}
-			}
-		}
-	}
-	return out
-}
-
-func selfhostAppendIntrinsicBodyMethodRecords(out *[]CheckDiagnosticRecord, methods []*ast.FnDecl, base int, path string) {
-	if out == nil {
-		return
-	}
-	for _, method := range methods {
-		if rec := selfhostIntrinsicBodyRecord(method, base, path); rec != nil {
-			*out = append(*out, *rec)
-		}
-	}
-}
-
-func selfhostIntrinsicBodyRecord(fn *ast.FnDecl, base int, path string) *CheckDiagnosticRecord {
-	if fn == nil || !selfhostHasAnnotation(fn.Annotations, "intrinsic") {
-		return nil
-	}
-	if fn.Body == nil || len(fn.Body.Stmts) == 0 {
-		return nil
-	}
-	start := base + fn.Body.Pos().Offset
-	end := base + fn.Body.End().Offset
-	if end < start {
-		end = start
-	}
-	return &CheckDiagnosticRecord{
-		Code:     diag.CodeIntrinsicNonEmptyBody,
-		Severity: "error",
-		Message:  "`#[intrinsic]` function `" + fn.Name + "` must have an empty body",
-		Start:    start,
-		End:      end,
-		File:     path,
-		Notes: []string{
-			"LANG_SPEC §19.6: intrinsic implementations are supplied by the lowering layer; the source body is ignored",
-			"hint: keep the signature and drop the body, or use `{}`",
-		},
-	}
-}
-
-func selfhostHasAnnotation(annots []*ast.Annotation, name string) bool {
-	for _, annot := range annots {
-		if annot != nil && annot.Name == name {
 			return true
 		}
 	}
