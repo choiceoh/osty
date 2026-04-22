@@ -2439,7 +2439,7 @@ fn mirLowerExprIntoPlaceImpl(
         HirExprMethod -> mirLowerMethodCallInto(bs, e, dest, destT),
         HirExprMapLit -> mirLowerMapLitInto(bs, e, dest, destT),
         // Kinds deferred to Stage 4f:
-        HirExprMatch -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "MatchExpr"),
+        HirExprMatch -> mirLowerMatchExprInto(bs, e, dest, destT),
         _ -> mirLowerExprIntoPlaceRValue(bs, e, dest, destT),
     }
 }
@@ -3319,51 +3319,119 @@ pub fn mirLowerRangeLitInto(
 
 // ---- Match ---------------------------------------------------------
 
-/// mirLowerMatchStmt lowers a statement-position match. Since the
-/// self-hosted HIR doesn't yet carry a pre-compiled decision tree
-/// (Stage 3d deferred `HirDecisionNode` to a future turn), every
-/// match currently takes the tree-less fallback path: lower the
-/// scrutinee into a scratch, route unconditionally to arm 0's block,
-/// and record an issue so callers know to keep the Go pipeline until
-/// Stage 4f lands the decision tree.
+/// mirLowerMatchStmt lowers a statement-position match. Delegates
+/// to mirLowerMatchCore with dest=invalid (value discarded).
 pub fn mirLowerMatchStmt(bs: MirLowerBodyState, s: HirStmt) {
-    let span = mirSpanFromHir(s.span)
-    let scrutT = if hirTypeIsValid(s.matchScrutinee.typ) {
-        s.matchScrutinee.typ
+    mirLowerMatchCore(
+        bs,
+        s.matchScrutinee,
+        s.matchArms,
+        s.matchHasTree,
+        s.matchTree,
+        mirSpanFromHir(s.span),
+        mirPlace(-1),
+        hirTUnit(),
+        false,
+    )
+}
+
+/// mirLowerMatchExprInto lowers an expression-position match: arms'
+/// trailing expressions write into `dest`. Delegates to the shared
+/// core with writeToDest=true.
+pub fn mirLowerMatchExprInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    // Expr-match stores scrutinee in a list slot (self-reference
+    // break) — extract before delegating.
+    let scrutinee = if e.matchExprScrutinee.len() > 0 {
+        e.matchExprScrutinee[0]
+    } else {
+        hirExprInvalid()
+    }
+    mirLowerMatchCore(
+        bs,
+        scrutinee,
+        e.matchExprArms,
+        e.matchExprHasTree,
+        e.matchExprTree,
+        mirSpanFromHir(e.span),
+        dest,
+        destT,
+        true,
+    )
+}
+
+/// mirLowerMatchCore is the shared match-lowering routine. When
+/// `hasTree` is true the decision tree drives dispatch (Stage 4f);
+/// otherwise we fall back to the tree-less "goto arm 0" shape (Stage
+/// 4c) that matches Go's `lowerMatch` when `Tree == nil`.
+///
+/// `writeToDest` toggles trailing-expression handling: true (expr
+/// match) writes arm bodies' trailing expr into `dest`; false (stmt
+/// match) evaluates the expr for side effects only.
+fn mirLowerMatchCore(
+    bs: MirLowerBodyState,
+    scrutinee: HirExpr,
+    arms: List<HirMatchArm>,
+    hasTree: Bool,
+    tree: HirDecisionNode,
+    span: MirSpan,
+    dest: MirPlace,
+    destT: HirType,
+    writeToDest: Bool,
+) {
+    let scrutT = if hirTypeIsValid(scrutinee.typ) {
+        scrutinee.typ
     } else {
         hirTypeErr()
     }
     mirLowerPushScope(bs)
     let scrutLocal = mirLowerNewLocal(bs, "_scrut", scrutT, false, span)
     mirLowerEmitInstr(bs, mirStorageLiveInstr(scrutLocal, span))
-    mirLowerExprInto(bs, s.matchScrutinee, scrutLocal, scrutT)
+    mirLowerExprInto(bs, scrutinee, scrutLocal, scrutT)
 
     let merge = mirLowerNewBlock(bs, span)
     let mut armBlocks: List<Int> = []
-    for arm in s.matchArms {
+    for arm in arms {
         armBlocks.push(mirLowerNewBlock(bs, mirSpanFromHir(arm.span)))
     }
 
-    mirLowerNoteIssue(
-        bs.l,
-        "mir_lower Stage 4f TODO: match without decision tree — routing to arm 0",
-    )
-    if armBlocks.len() > 0 {
-        mirLowerTerminate(bs, mirGotoTerm(armBlocks[0], span))
+    if hasTree && hirDecisionIsValid(tree) {
+        let ctx = mirLowerMatchContext(bs, scrutLocal, scrutT, armBlocks, merge, span)
+        mirLowerDecisionTree(ctx, tree)
     } else {
-        mirLowerTerminate(bs, mirUnreachableTerm(span))
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: match without decision tree — routing to arm 0",
+        )
+        if armBlocks.len() > 0 {
+            mirLowerTerminate(bs, mirGotoTerm(armBlocks[0], span))
+        } else {
+            mirLowerTerminate(bs, mirUnreachableTerm(span))
+        }
     }
 
+    // Lower each arm body into its block.
     let mut i = 0
-    for arm in s.matchArms {
+    for arm in arms {
         bs.cur = armBlocks[i]
         mirLowerPushScope(bs)
         mirLowerPushDeferScope(bs)
+        // The decision tree has already emitted name bindings via
+        // MIR Assigns + mirLowerBindName. Tree-less fallback would
+        // need to destructure here; we leave that gap alone.
         for stmt in arm.body.stmts {
             mirLowerStmt(bs, stmt)
         }
         if arm.body.hasResult {
-            let _ = mirLowerExprAsOperand(bs, arm.body.result)
+            if writeToDest {
+                mirLowerExprIntoPlace(bs, arm.body.result, dest, destT)
+            } else {
+                let _ = mirLowerExprAsOperand(bs, arm.body.result)
+            }
         }
         mirLowerReplayTopFrame(bs, mirSpanFromHir(arm.body.span))
         mirLowerPopDeferScope(bs)
@@ -4826,4 +4894,444 @@ pub fn mirLowerNextClosureSymbol(l: MirLowerer, parent: String) -> String {
         return "closure_" + suffix
     }
     parent + "__closure" + suffix
+}
+
+// ====================================================================
+// Stage 4f: Decision tree walker
+// ====================================================================
+//
+// `mirLowerDecisionTree` translates a HirDecisionNode cascade into
+// MIR control flow that converges on the appropriate arm block. The
+// cursor at entry is the block where the cascade should begin; each
+// recursive step either terminates (Leaf / Fail) or emits branching
+// terminators (Guard / Switch) + continues into sub-blocks.
+//
+// Matches Go's `matchContext` + `lowerTree` + `lowerSwitch` verbatim
+// in algorithmic structure. Stage 4f-1 covers Leaf / Fail / Bind /
+// Guard and Variant / Bool switches; Lit + Tuple switches record a
+// Stage 4f-2 TODO and fall through to an Unreachable terminator.
+
+/// MirLowerMatchContext carries the match-specific state that the
+/// decision-tree walker threads through each recursive call.
+pub struct MirLowerMatchContext {
+    pub bs: MirLowerBodyState,
+    pub scrutLocal: Int,
+    pub scrutT: HirType,
+    pub armBlocks: List<Int>,
+    pub merge: Int,
+    pub span: MirSpan,
+}
+
+pub fn mirLowerMatchContext(
+    bs: MirLowerBodyState,
+    scrutLocal: Int,
+    scrutT: HirType,
+    armBlocks: List<Int>,
+    merge: Int,
+    span: MirSpan,
+) -> MirLowerMatchContext {
+    MirLowerMatchContext {
+        bs,
+        scrutLocal,
+        scrutT,
+        armBlocks,
+        merge,
+        span,
+    }
+}
+
+/// mirLowerDecisionTree walks a decision-tree node. Assumes the
+/// cursor is currently the block where the cascade should begin.
+pub fn mirLowerDecisionTree(mc: MirLowerMatchContext, node: HirDecisionNode) {
+    match node.kind {
+        HirDecisionInvalid -> {
+            mirLowerNoteIssue(mc.bs.l, "mir_lower: decision tree with invalid node")
+            mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
+        },
+        HirDecisionLeaf -> mirLowerDecisionLeaf(mc, node),
+        HirDecisionFail -> mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span)),
+        HirDecisionBind -> mirLowerDecisionBind(mc, node),
+        HirDecisionGuard -> mirLowerDecisionGuard(mc, node),
+        HirDecisionSwitch -> mirLowerDecisionSwitch(mc, node),
+    }
+}
+
+fn mirLowerDecisionLeaf(mc: MirLowerMatchContext, node: HirDecisionNode) {
+    let idx = node.leafArm
+    if idx < 0 || idx >= mc.armBlocks.len() {
+        mirLowerNoteIssue(
+            mc.bs.l,
+            "mir_lower: decision leaf arm index " + mirLowerIntToString(idx) + " out of range",
+        )
+        mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
+        return
+    }
+    mirLowerTerminate(mc.bs, mirGotoTerm(mc.armBlocks[idx], mc.span))
+}
+
+fn mirLowerDecisionBind(mc: MirLowerMatchContext, node: HirDecisionNode) {
+    // Type: prefer the node's explicit bindType; else derive from
+    // projection walk.
+    let projType = if hirTypeIsValid(node.bindType) {
+        node.bindType
+    } else if node.bindHasProj {
+        mirLowerProjectionResultType(mc.bs.l, mc.scrutT, node.bindProj)
+    } else {
+        mc.scrutT
+    }
+    let place = if node.bindHasProj {
+        mirLowerProjectionToPlace(mc.bs.l, mc.scrutLocal, mc.scrutT, node.bindProj)
+    } else {
+        mirPlace(mc.scrutLocal)
+    }
+    let id = mirLowerNewLocal(mc.bs, node.bindName, projType, false, mc.span)
+    mirLowerEmitInstr(mc.bs, mirStorageLiveInstr(id, mc.span))
+    let srcOp = mirOperandCopy(place, hirTypeString(projType))
+    mirLowerEmitInstr(
+        mc.bs,
+        mirAssignInstr(mirPlace(id), mirRVUse(srcOp), mc.span),
+    )
+    mirLowerBindName(mc.bs, node.bindName, id)
+    if node.bindNext.len() > 0 {
+        mirLowerDecisionTree(mc, node.bindNext[0])
+    } else {
+        mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
+    }
+}
+
+fn mirLowerDecisionGuard(mc: MirLowerMatchContext, node: HirDecisionNode) {
+    if !hirExprIsValid(node.guardCond) {
+        // Unconditional edge to Then (matches Go's `n.Cond == nil`).
+        if node.guardThen.len() > 0 {
+            mirLowerDecisionTree(mc, node.guardThen[0])
+        }
+        return
+    }
+    let cond = mirLowerExprAsOperand(mc.bs, node.guardCond)
+    let thenBB = mirLowerNewBlock(mc.bs, mc.span)
+    let elseBB = mirLowerNewBlock(mc.bs, mc.span)
+    mirLowerTerminate(mc.bs, mirBranchTerm(cond, thenBB, elseBB, mc.span))
+    mc.bs.cur = thenBB
+    if node.guardThen.len() > 0 {
+        mirLowerDecisionTree(mc, node.guardThen[0])
+    } else {
+        mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
+    }
+    mc.bs.cur = elseBB
+    if node.guardElse.len() > 0 {
+        mirLowerDecisionTree(mc, node.guardElse[0])
+    } else {
+        mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
+    }
+}
+
+fn mirLowerDecisionSwitch(mc: MirLowerMatchContext, node: HirDecisionNode) {
+    match node.switchKind {
+        HirSwitchVariant -> mirLowerSwitchVariant(mc, node),
+        HirSwitchBool -> mirLowerSwitchBool(mc, node),
+        HirSwitchLit -> mirLowerSwitchLitStub(mc, node),
+        HirSwitchTuple -> mirLowerSwitchTupleStub(mc, node),
+        HirSwitchUnknown -> {
+            mirLowerNoteIssue(mc.bs.l, "mir_lower: decision switch with unknown kind")
+            mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
+        },
+    }
+}
+
+fn mirLowerSwitchVariant(mc: MirLowerMatchContext, node: HirDecisionNode) {
+    let projType = mirLowerProjectionResultType(mc.bs.l, mc.scrutT, node.switchProj)
+    let projPlace = mirLowerProjectionToPlace(mc.bs.l, mc.scrutLocal, mc.scrutT, node.switchProj)
+
+    // Read discriminant.
+    let disc = mirLowerFreshTemp(mc.bs, hirTInt(), mc.span)
+    let discRV = mirRVDiscriminant(projPlace, "Int")
+    mirLowerEmitInstr(mc.bs, mirAssignInstr(mirPlace(disc), discRV, mc.span))
+
+    // Allocate one block per case + a default block.
+    let mut caseBlocks: List<Int> = []
+    for _c in node.switchCases {
+        caseBlocks.push(mirLowerNewBlock(mc.bs, mc.span))
+    }
+    let defaultBB = mirLowerNewBlock(mc.bs, mc.span)
+
+    // Build the case table.
+    let mut cases: List<MirSwitchCase> = []
+    let mut i = 0
+    for c in node.switchCases {
+        let varIdx = mirLowerVariantIndexByName(mc.bs.l, projType, c.variant)
+        cases.push(mirSwitchCase(varIdx, caseBlocks[i], c.variant))
+        i = i + 1
+    }
+    let discOp = mirOperandCopy(mirPlace(disc), "Int")
+    mirLowerTerminate(mc.bs, mirSwitchIntTerm(discOp, cases, defaultBB, mc.span))
+
+    // Lower each case's subtree.
+    let mut j = 0
+    for c in node.switchCases {
+        mc.bs.cur = caseBlocks[j]
+        mirLowerDecisionTree(mc, c.body)
+        j = j + 1
+    }
+    // Default subtree.
+    mc.bs.cur = defaultBB
+    if node.switchDefault.len() > 0 {
+        mirLowerDecisionTree(mc, node.switchDefault[0])
+    } else {
+        mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
+    }
+}
+
+fn mirLowerSwitchBool(mc: MirLowerMatchContext, node: HirDecisionNode) {
+    let projPlace = mirLowerProjectionToPlace(mc.bs.l, mc.scrutLocal, mc.scrutT, node.switchProj)
+    let thenBB = mirLowerNewBlock(mc.bs, mc.span)
+    let elseBB = mirLowerNewBlock(mc.bs, mc.span)
+    let condOp = mirOperandCopy(projPlace, "Bool")
+    mirLowerTerminate(mc.bs, mirBranchTerm(condOp, thenBB, elseBB, mc.span))
+
+    // Route each case by its label ("true"/"false") to the
+    // appropriate arm; record which arms were handled so the
+    // unhandled arm falls through to the default.
+    let mut trueHandled = false
+    let mut falseHandled = false
+    for c in node.switchCases {
+        if mirLowerIsLabelTrue(c.label) {
+            mc.bs.cur = thenBB
+            mirLowerDecisionTree(mc, c.body)
+            trueHandled = true
+        } else {
+            mc.bs.cur = elseBB
+            mirLowerDecisionTree(mc, c.body)
+            falseHandled = true
+        }
+    }
+    if !trueHandled {
+        mc.bs.cur = thenBB
+        if node.switchDefault.len() > 0 {
+            mirLowerDecisionTree(mc, node.switchDefault[0])
+        } else {
+            mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
+        }
+    }
+    if !falseHandled {
+        mc.bs.cur = elseBB
+        if node.switchDefault.len() > 0 {
+            mirLowerDecisionTree(mc, node.switchDefault[0])
+        } else {
+            mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
+        }
+    }
+}
+
+fn mirLowerIsLabelTrue(label: String) -> Bool {
+    // Case-insensitive "true" check (matches Go's strings.EqualFold).
+    if label == "true" || label == "True" || label == "TRUE" {
+        return true
+    }
+    false
+}
+
+fn mirLowerSwitchLitStub(mc: MirLowerMatchContext, node: HirDecisionNode) {
+    mirLowerNoteIssue(
+        mc.bs.l,
+        "mir_lower Stage 4f-2 TODO: Lit switch in decision tree — falling through to default",
+    )
+    if node.switchDefault.len() > 0 {
+        mirLowerDecisionTree(mc, node.switchDefault[0])
+    } else {
+        mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
+    }
+}
+
+fn mirLowerSwitchTupleStub(mc: MirLowerMatchContext, node: HirDecisionNode) {
+    mirLowerNoteIssue(
+        mc.bs.l,
+        "mir_lower Stage 4f-2 TODO: Tuple switch in decision tree — falling through to first case",
+    )
+    if node.switchCases.len() > 0 {
+        mirLowerDecisionTree(mc, node.switchCases[0].body)
+    } else if node.switchDefault.len() > 0 {
+        mirLowerDecisionTree(mc, node.switchDefault[0])
+    } else {
+        mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
+    }
+}
+
+// ---- Projection walk -----------------------------------------------
+
+/// mirLowerProjectionToPlace turns a HirProjection chain (leaf → root)
+/// into a MirPlace rooted at the scrutinee local. The projection is
+/// flattened into root→leaf order, then each hop appends a matching
+/// MirProjection onto the place.
+pub fn mirLowerProjectionToPlace(
+    l: MirLowerer,
+    scrutLocal: Int,
+    scrutT: HirType,
+    proj: HirProjection,
+) -> MirPlace {
+    let chain = mirLowerFlattenProjection(proj)
+    let mut out = mirPlace(scrutLocal)
+    let mut curT = scrutT
+    for hop in chain {
+        match hop.kind {
+            HirProjScrutinee -> {},
+            HirProjTuple -> {
+                let elemT = mirLowerTupleElementTypeAt(curT, hop.index)
+                let elemTypeText = hirTypeString(elemT)
+                out = mirPlaceProject(out, mirTupleProj(hop.index, elemTypeText))
+                curT = elemT
+            },
+            HirProjField -> {
+                let structName = hirTypeNameOf(curT)
+                let fieldIdx = mirLowerStructFieldIndex(l, structName, hop.field)
+                let fieldT = mirLowerStructFieldType(l, structName, hop.field)
+                out = mirPlaceProject(
+                    out,
+                    mirFieldProj(fieldIdx, hop.field, hirTypeString(fieldT)),
+                )
+                curT = fieldT
+            },
+            HirProjVariant -> {
+                let enumName = hirTypeNameOf(curT)
+                let variantIdx = mirLowerFindVariantIndex(l, enumName, hop.variant)
+                // Whole-payload projection: use fieldIdx = -1 sentinel
+                // (matches mir.osty's mirVariantProj convention).
+                let typeText = hirTypeString(curT)
+                out = mirPlaceProject(
+                    out,
+                    mirVariantProj(variantIdx, hop.variant, -1, typeText),
+                )
+                // curT does not change at the whole-variant step — nested
+                // VariantN hops re-read the variant name to pick a payload.
+            },
+            HirProjVariantN -> {
+                let enumName = hirTypeNameOf(curT)
+                let variantIdx = mirLowerFindVariantIndex(l, enumName, hop.variant)
+                let payloadT = mirLowerVariantPayloadType(l, enumName, hop.variant, hop.index)
+                out = mirPlaceProject(
+                    out,
+                    mirVariantProj(
+                        variantIdx,
+                        hop.variant,
+                        hop.index,
+                        hirTypeString(payloadT),
+                    ),
+                )
+                curT = payloadT
+            },
+        }
+    }
+    out
+}
+
+/// mirLowerProjectionResultType infers the MIR-facing type at the
+/// tip of a projection chain. Used when a DecisionBind node omits an
+/// explicit type annotation.
+pub fn mirLowerProjectionResultType(
+    l: MirLowerer,
+    scrutT: HirType,
+    proj: HirProjection,
+) -> HirType {
+    let chain = mirLowerFlattenProjection(proj)
+    let mut curT = scrutT
+    for hop in chain {
+        match hop.kind {
+            HirProjScrutinee -> {},
+            HirProjTuple -> {
+                curT = mirLowerTupleElementTypeAt(curT, hop.index)
+            },
+            HirProjField -> {
+                let structName = hirTypeNameOf(curT)
+                curT = mirLowerStructFieldType(l, structName, hop.field)
+            },
+            HirProjVariant -> {},
+            HirProjVariantN -> {
+                let enumName = hirTypeNameOf(curT)
+                curT = mirLowerVariantPayloadType(l, enumName, hop.variant, hop.index)
+            },
+        }
+    }
+    curT
+}
+
+/// mirLowerFlattenProjection reverses the projection's linked-list
+/// (leaf → root) into a root → leaf slice for straight-line walking.
+pub fn mirLowerFlattenProjection(proj: HirProjection) -> List<HirProjection> {
+    // Walk leaf → root pushing onto a stack, then pop into a list.
+    let mut stack: List<HirProjection> = []
+    let mut cur = proj
+    let mut done = false
+    for !done {
+        stack.push(cur)
+        if cur.base.len() > 0 {
+            cur = cur.base[0]
+        } else {
+            done = true
+        }
+    }
+    // Reverse: pop last → first.
+    let mut out: List<HirProjection> = []
+    let mut i = stack.len() - 1
+    for i >= 0 {
+        out.push(stack[i])
+        i = i - 1
+    }
+    out
+}
+
+/// mirLowerTupleElementTypeAt picks an element type from a tuple
+/// HirType by index. Returns ErrType for out-of-range / non-tuple
+/// inputs so callers get a consistent poisoned value.
+pub fn mirLowerTupleElementTypeAt(t: HirType, idx: Int) -> HirType {
+    match t.kind {
+        HirTypeTuple -> {
+            if idx >= 0 && idx < t.tupleElems.len() {
+                t.tupleElems[idx]
+            } else {
+                hirTypeErr()
+            }
+        },
+        _ -> hirTypeErr(),
+    }
+}
+
+/// mirLowerStructFieldType looks up a field's declared type on a
+/// struct layout by name. Falls back to ErrType when the struct /
+/// field isn't in the layout table.
+pub fn mirLowerStructFieldType(l: MirLowerer, structName: String, fieldName: String) -> HirType {
+    if structName == "" {
+        return hirTypeErr()
+    }
+    // The layout table stores type-*strings* per field, not HirType
+    // values; consult the source struct decl instead so callers get
+    // a structured HirType they can re-project on.
+    let idx = mirLowerLookupStruct(l, structName)
+    if idx < 0 {
+        return hirTypeErr()
+    }
+    for f in l.structs[idx].fields {
+        if f.name == fieldName {
+            return f.typ
+        }
+    }
+    hirTypeErr()
+}
+
+/// mirLowerVariantIndexByName resolves a variant name to its index on
+/// a scrutinee type. Well-known builtins (None/Some, Err/Ok) get
+/// constant values; other enums consult the pass-1b layout table.
+/// Matches Go's `variantIndexByName`.
+pub fn mirLowerVariantIndexByName(l: MirLowerer, t: HirType, variantName: String) -> Int {
+    if variantName == "None" { return 0 }
+    if variantName == "Some" { return 1 }
+    if variantName == "Err" { return 0 }
+    if variantName == "Ok" { return 1 }
+    let typeName = hirTypeNameOf(t)
+    if typeName == "" {
+        return 0
+    }
+    let idx = mirLowerFindVariantIndex(l, typeName, variantName)
+    if idx < 0 {
+        return 0
+    }
+    idx
 }
