@@ -103,13 +103,19 @@ fn main() {
 	}
 }
 
-// Closures with captures are out of scope for this PR — they need a
-// Phase 4 capture-env layout (see MIR's emitClosureEnv). The lift
-// pre-pass deliberately skips them, leaving the legacy emitter to
-// trip the existing LLVM013 wall with its original message. Locks
-// the boundary so a future capture-aware lifter can flip it
-// confidently.
-func TestClosureLiftSkipsCapturingClosure(t *testing.T) {
+// A capturing closure (`|n| n + outer` where `outer` is from
+// enclosing scope) lifts to an env-backed fn with the capture
+// appended to the parameter list, plus a Phase 4 capturing thunk
+// that loads the capture from env at runtime and reorders args.
+// Locks the round-trip end-to-end:
+//
+//   - lifted fn signature appends the capture as `outer: Int`
+//   - capturing thunk emits `getelementptr i8, ptr %env, i64 16` +
+//     `load i64, ptr %cap0_slot` and calls the lifted fn with
+//     `(orig_args..., cap0)`
+//   - maker call site stores the thunk symbol at env slot 0 and
+//     the captured value at offset 16
+func TestClosureLiftCapturingIntLocal(t *testing.T) {
 	src := `fn apply(f: fn(Int) -> Int, x: Int) -> Int {
     f(x)
 }
@@ -120,11 +126,67 @@ fn main() {
 }
 `
 	mod := lowerSrcLLVM(t, src)
-	_, err := GenerateModule(mod, Options{PackageName: "main", SourcePath: "/tmp/closure_lift_capture.osty"})
-	if err == nil {
-		t.Fatalf("capturing closure expected to wall (LLVM013 or LLVM015) for this PR")
+	ir, err := GenerateModule(mod, Options{PackageName: "main", SourcePath: "/tmp/closure_lift_capture.osty"})
+	if err != nil {
+		t.Fatalf("capturing closure errored: %v", err)
 	}
-	if !strings.Contains(err.Error(), "LLVM01") && !strings.Contains(err.Error(), "Closure") {
-		t.Fatalf("capturing closure walled with unexpected error: %v", err)
+	got := string(ir)
+	// Counter is process-monotonic so the exact closure id varies
+	// across test runs; check for the structural patterns instead
+	// of pinning to a specific id.
+	for _, want := range []string{
+		// Lifted fn appends `outer` after the original `n` param.
+		"(i64 %n, i64 %outer)",
+		// Capturing thunk loads the capture from env at offset 16
+		// and reorders args.
+		"%cap0_slot = getelementptr i8, ptr %env, i64 16",
+		"%cap0 = load i64",
+		"call i64 @__osty_closure_",
+		// Maker call site allocates env, stores thunk + capture.
+		"call ptr @osty.rt.closure_env_alloc_v1(i64 1",
+		"store ptr @__osty_closure_thunk___osty_closure_",
+		"store i64 ", // capture value store
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("capturing closure missing %q in IR:\n%s", want, got)
+		}
+	}
+	// Verify the thunk reorders args correctly: the call site
+	// passes (env, n) but the lifted fn expects (n, outer), so the
+	// thunk should call lifted with `(arg0, cap0)` not the other
+	// way around.
+	if !strings.Contains(got, "call i64 @__osty_closure_") || !strings.Contains(got, "(i64 %arg0, i64 %cap0)") {
+		t.Fatalf("thunk does not reorder args as (%%arg0, %%cap0):\n%s", got)
+	}
+}
+
+// Multiple captures of different types in the same closure lay out
+// in env slots 1..N at 8-byte stride, and the thunk loads them in
+// declaration order before the call.
+func TestClosureLiftCapturingMultipleTypes(t *testing.T) {
+	src := `fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+    f(x)
+}
+
+fn main() {
+    let outerInt = 10
+    let outerBool = true
+    let _ = apply(|n| if outerBool { n + outerInt } else { n }, 5)
+}
+`
+	mod := lowerSrcLLVM(t, src)
+	ir, err := GenerateModule(mod, Options{PackageName: "main", SourcePath: "/tmp/closure_lift_multi.osty"})
+	if err != nil {
+		t.Fatalf("multi-capture closure errored: %v", err)
+	}
+	got := string(ir)
+	// Two capture loads at offsets 16 and 24.
+	for _, want := range []string{
+		"= getelementptr i8, ptr %env, i64 16",
+		"= getelementptr i8, ptr %env, i64 24",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("multi-capture closure missing %q in IR:\n%s", want, got)
+		}
 	}
 }

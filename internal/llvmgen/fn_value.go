@@ -14,6 +14,7 @@ package llvmgen
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/osty/osty/internal/ast"
 )
@@ -232,6 +233,196 @@ func requireFnValueSignature(v value, label string) (*fnSig, error) {
 		return nil, unsupportedf("call", "%s must be a fn value (got typ=%s, sig=%v)", label, v.typ, v.fnSigRef != nil)
 	}
 	return sig, nil
+}
+
+// emitClosureMakerCall recognises calls to the synthesized
+// `__osty_make_closure_<n>` markers the IR→AST bridge stamps in
+// place of capturing-closure literals (see closure_lift.go) and
+// materialises the closure env:
+//
+//   - register a Phase 4 capturing thunk for the lifted fn that
+//     loads each capture from env at runtime and reorders args
+//     before calling the lifted fn
+//   - allocate env via `osty.rt.closure_env_alloc_v1(N, site, thunk)`;
+//     the helper writes the supplied symbol at slot 0
+//   - eval each capture in the call site's lexical scope and
+//     store the result at env's capture slot i+1
+//
+// The resulting value is a `ptr` tagged with a synthesised fnSig
+// covering only the closure's *original* params (not the captures
+// the lifted fn appends), so downstream `emitIndirectUserCall`
+// passes the right argument count when the user later calls the
+// fn-value.
+//
+// Returns (_, false, _) when the call's name doesn't match a
+// registered maker — the dispatcher falls through to the regular
+// fn-value or direct-call paths.
+func (g *generator) emitClosureMakerCall(call *ast.CallExpr) (value, bool, error) {
+	if call == nil {
+		return value{}, false, nil
+	}
+	id, ok := call.Fn.(*ast.Ident)
+	if !ok || id == nil || !strings.HasPrefix(id.Name, closureMakerNamePrefix) {
+		return value{}, false, nil
+	}
+	rec := liftedClosureByMaker(id.Name)
+	if rec == nil {
+		return value{}, true, unsupportedf("call", "unknown closure maker %q", id.Name)
+	}
+	if len(call.Args) != len(rec.captures) {
+		return value{}, true, unsupportedf("call", "closure maker %q expects %d capture(s), got %d", id.Name, len(rec.captures), len(call.Args))
+	}
+	sig, ok := g.functions[rec.name]
+	if !ok || sig == nil {
+		return value{}, true, unsupportedf("call", "lifted closure %q missing fnSig", rec.name)
+	}
+	// origParamCount = len(sig.params) - len(captures). The lifted
+	// fn appends each capture as an extra param (see
+	// buildLiftedClosureFnDecl), so the original closure params
+	// occupy the prefix.
+	origParamCount := len(sig.params) - len(rec.captures)
+	if origParamCount < 0 {
+		return value{}, true, unsupportedf("call", "lifted closure %q sig param count mismatch", rec.name)
+	}
+	// The fn-value the user's code sees only takes the original
+	// closure params — the thunk hides the capture extraction. Tag
+	// the env value with a sig that exposes only that prefix so
+	// indirect-call arg counts match.
+	thunkSig := &fnSig{
+		ret:              sig.ret,
+		params:           append([]paramInfo(nil), sig.params[:origParamCount]...),
+		retListElemTyp:   sig.retListElemTyp,
+		retListString:    sig.retListString,
+		retMapKeyTyp:     sig.retMapKeyTyp,
+		retMapValueTyp:   sig.retMapValueTyp,
+		retMapKeyString:  sig.retMapKeyString,
+		retSetElemTyp:    sig.retSetElemTyp,
+		retSetElemString: sig.retSetElemString,
+		returnSourceType: sig.returnSourceType,
+	}
+	captureVals := make([]value, len(rec.captures))
+	for i, cap := range rec.captures {
+		raw, err := g.emitExpr(call.Args[i].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		loaded, err := g.loadIfPointer(raw)
+		if err != nil {
+			return value{}, true, err
+		}
+		if loaded.typ != cap.llvmTyp {
+			return value{}, true, unsupportedf("type-system", "closure capture %q expected %s, got %s", cap.name, cap.llvmTyp, loaded.typ)
+		}
+		captureVals[i] = loaded
+	}
+	thunkSym := g.ensureCapturingClosureThunk(rec, origParamCount, sig)
+	g.declareRuntimeSymbol("osty.rt.closure_env_alloc_v1", "ptr", []paramInfo{
+		{typ: "i64"},
+		{typ: "ptr"},
+	})
+	emitter := g.toOstyEmitter()
+	site := llvmStringLiteral(emitter, "runtime.closure.env.captures")
+	env := llvmEmitClosureEnvAllocRuntime(emitter, len(rec.captures), site.name, thunkSym)
+	g.takeOstyEmitter(emitter)
+	g.needsGCRuntime = true
+	// Store each capture at offset 16 + i*8. Header is
+	// `{ ptr fn, i64 cap_count }` (16 bytes); captures payload
+	// follows. The 8-byte stride keeps slot indexing uniform across
+	// scalar widths.
+	emitter = g.toOstyEmitter()
+	for i, cv := range captureVals {
+		offset := 16 + i*8
+		slotPtr := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr i8, ptr %s, i64 %d", slotPtr, env.name, offset))
+		emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", cv.typ, cv.ref, slotPtr))
+	}
+	g.takeOstyEmitter(emitter)
+	return value{
+		typ:       "ptr",
+		ref:       env.name,
+		fnSigRef:  thunkSig,
+		gcManaged: true,
+	}, true, nil
+}
+
+// ensureCapturingClosureThunk registers a Phase 4 capturing thunk
+// for the lifted fn `sig.irName` and returns its symbol name.
+//
+//	define private RET @__osty_closure_thunk_<sym>(ptr %env, P0 %arg0, ...) {
+//	  %cap0_slot = getelementptr i8, ptr %env, i64 16
+//	  %cap0 = load <CT0>, ptr %cap0_slot
+//	  ...
+//	  (%ret = )? call RET @<sym>(P0 %arg0, ..., <CT0> %cap0, ...)
+//	  ret RET %ret
+//	}
+//
+// Memoised on `g.fnValueThunkDefs` keyed by the same
+// `__osty_closure_thunk_<symbol>` name Phase 1 uses, so the two
+// thunk shapes share the storage map but never collide (different
+// lifted fns ⇒ different symbols).
+func (g *generator) ensureCapturingClosureThunk(rec *liftedClosure, origParamCount int, sig *fnSig) string {
+	symbol := llvmClosureThunkName(sig.irName)
+	if g.fnValueThunkDefs == nil {
+		g.fnValueThunkDefs = map[string]string{}
+	}
+	if _, ok := g.fnValueThunkDefs[symbol]; ok {
+		return symbol
+	}
+	origParamTypes := make([]string, origParamCount)
+	for i := 0; i < origParamCount; i++ {
+		origParamTypes[i] = llvmParamIRType(sig.params[i])
+	}
+	captureTypes := make([]string, 0, len(rec.captures))
+	for _, cap := range rec.captures {
+		captureTypes = append(captureTypes, cap.llvmTyp)
+	}
+	g.fnValueThunkDefs[symbol] = llvmCapturingClosureThunkDefinition(
+		sig.irName, sig.ret, origParamTypes, captureTypes,
+	)
+	g.fnValueThunkOrder = append(g.fnValueThunkOrder, symbol)
+	return symbol
+}
+
+// llvmCapturingClosureThunkDefinition emits the LLVM IR for a
+// Phase 4 capturing thunk. See ensureCapturingClosureThunk for the
+// shape and call ABI.
+func llvmCapturingClosureThunkDefinition(symbol string, returnType string, origParamTypes []string, captureTypes []string) string {
+	ret := returnType
+	if ret == "" {
+		ret = "void"
+	}
+	headerParts := []string{"ptr %env"}
+	origArgParts := make([]string, 0, len(origParamTypes))
+	for i, p := range origParamTypes {
+		headerParts = append(headerParts, fmt.Sprintf("%s %%arg%d", p, i))
+		origArgParts = append(origArgParts, fmt.Sprintf("%s %%arg%d", p, i))
+	}
+	header := strings.Join(headerParts, ", ")
+	thunk := llvmClosureThunkName(symbol)
+	lines := []string{
+		fmt.Sprintf("define private %s @%s(%s) {", ret, thunk, header),
+		"entry:",
+	}
+	captureArgParts := make([]string, 0, len(captureTypes))
+	for i, ct := range captureTypes {
+		offset := 16 + i*8
+		slotName := fmt.Sprintf("%%cap%d_slot", i)
+		valName := fmt.Sprintf("%%cap%d", i)
+		lines = append(lines, fmt.Sprintf("  %s = getelementptr i8, ptr %%env, i64 %d", slotName, offset))
+		lines = append(lines, fmt.Sprintf("  %s = load %s, ptr %s", valName, ct, slotName))
+		captureArgParts = append(captureArgParts, fmt.Sprintf("%s %s", ct, valName))
+	}
+	allArgs := append(origArgParts, captureArgParts...)
+	callArgs := strings.Join(allArgs, ", ")
+	if ret == "void" {
+		lines = append(lines, fmt.Sprintf("  call void @%s(%s)", symbol, callArgs))
+		lines = append(lines, "  ret void")
+	} else {
+		lines = append(lines, fmt.Sprintf("  %%ret = call %s @%s(%s)", ret, symbol, callArgs))
+		lines = append(lines, fmt.Sprintf("  ret %s %%ret", ret))
+	}
+	lines = append(lines, "}")
+	return strings.Join(lines, "\n")
 }
 
 // emitIndirectUserCall attempts to dispatch `call` as an indirect call

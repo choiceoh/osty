@@ -36,6 +36,8 @@ func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
 		currentSpecializedBuiltinSurfaces = nil
 		currentSpecializedBuiltinMeta = nil
 		currentLiftedClosures = nil
+		currentLiftedClosuresByName = nil
+		currentLiftedClosuresByMaker = nil
 		return nil, err
 	}
 	// Defer cleanup until AFTER generateASTFile consumes the side
@@ -46,6 +48,8 @@ func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
 		currentSpecializedBuiltinSurfaces = nil
 		currentSpecializedBuiltinMeta = nil
 		currentLiftedClosures = nil
+		currentLiftedClosuresByName = nil
+		currentLiftedClosuresByMaker = nil
 	}()
 	out, err := generateASTFile(file, opts)
 	if err != nil {
@@ -1720,14 +1724,43 @@ func legacyCoalesceExprFromIR(expr *ostyir.CoalesceExpr) (ast.Expr, error) {
 func legacyClosureFromIR(expr *ostyir.Closure) (ast.Expr, error) {
 	start, end := legacySpan(expr.At())
 	// If the lift pre-pass scheduled this closure as a top-level fn,
-	// substitute a bare Ident reference. The existing emitIdent path
-	// (expr.go:259) materialises the fn-value env automatically.
-	// See closure_lift.go for the contract.
+	// substitute either a bare Ident (no captures, Phase 1 thunk
+	// path) or a synthesized maker CallExpr (with captures, Phase 4
+	// env-first path). See closure_lift.go for the contract.
 	if lifted := liftedClosureFor(expr); lifted != nil {
-		return &ast.Ident{
+		if lifted.makerName == "" {
+			return &ast.Ident{
+				PosV: start,
+				EndV: end,
+				Name: lifted.name,
+			}, nil
+		}
+		// Capturing closure: emit `__osty_make_closure_<n>(<cap0>, <cap1>, ...)`
+		// where each arg is a bare Ident with the captured name. The
+		// args evaluate at the call site in the original lexical
+		// scope (which still has those bindings live) so the env
+		// constructor sees the same values the closure body would
+		// have read directly.
+		args := make([]*ast.Arg, 0, len(lifted.captures))
+		for _, cap := range lifted.captures {
+			args = append(args, &ast.Arg{
+				PosV: start,
+				Value: &ast.Ident{
+					PosV: start,
+					EndV: end,
+					Name: cap.name,
+				},
+			})
+		}
+		return &ast.CallExpr{
 			PosV: start,
 			EndV: end,
-			Name: lifted.name,
+			Fn: &ast.Ident{
+				PosV: start,
+				EndV: end,
+				Name: lifted.makerName,
+			},
+			Args: args,
 		}, nil
 	}
 	out := &ast.ClosureExpr{
