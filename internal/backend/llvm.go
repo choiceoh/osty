@@ -166,10 +166,10 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	// for entry.File — the AST is a front-end artifact that the LLVM
 	// backend does not consume directly any more.
 	//
-	// After the native-owned fast path declines coverage, raw `llvm-ir`
-	// still prefers MIR by default, and `mir-backend` can force MIR on
-	// every emit mode. On MIR-emitter refusal we still fall back
-	// automatically, so enabling the new path cannot reduce coverage.
+	// After the native-owned fast path declines coverage, every emit
+	// mode — raw `llvm-ir`, object, binary — prefers the MIR-direct
+	// emitter. On MIR-emitter refusal we fall back automatically to
+	// the HIR path, so MIR-first cannot reduce coverage.
 	var (
 		irOut  []byte
 		genErr error
@@ -272,16 +272,11 @@ func runClang(ctx context.Context, action string, args []string) error {
 }
 
 // useMIRBackend reports whether LLVM emission should prefer the
-// MIR-direct path. Raw `llvm-ir` emission is MIR-first by default;
-// callers can opt further in on object/binary emission with
-// `mir-backend` while parity stabilizes.
-func useMIRBackend(features []string, emit EmitMode) bool {
-	for _, f := range features {
-		if f == "mir-backend" {
-			return true
-		}
-	}
-	return emit == EmitLLVMIR
+// MIR-direct path. Every emit mode — raw `llvm-ir`, object, binary —
+// is MIR-first; the dispatcher falls back to the HIR emitter on
+// `ErrUnsupported`, so coverage never regresses.
+func useMIRBackend(_ []string, _ EmitMode) bool {
+	return true
 }
 
 func useNativeOwnedLLVMIR(features []string, emit EmitMode) bool {

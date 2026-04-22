@@ -946,7 +946,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 	// Stage 5 prep — string → List<Char> / List<Byte> expansions that
 	// the legacy emitter routes through `osty_rt_strings_*`. Accepting
 	// them here lets `.chars()` / `.bytes()` reach the MIR emitter on
-	// `mir-backend` object/binary emission instead of falling back.
+	// object/binary emission instead of falling back.
 	case mir.IntrinsicStringConcat, mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
 		mir.IntrinsicStringLen, mir.IntrinsicStringIsEmpty,
 		mir.IntrinsicStringToUpper, mir.IntrinsicStringToLower,
