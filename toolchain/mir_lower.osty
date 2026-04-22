@@ -176,6 +176,10 @@ pub struct MirLowerer {
 }
 
 pub fn mirLowerer(src: HirModule) -> MirLowerer {
+    let mut issues: List<String> = []
+    for msg in src.issues {
+        issues.push(msg)
+    }
     MirLowerer {
         src,
         out: mirModule(src.packageName),
@@ -191,7 +195,7 @@ pub fn mirLowerer(src: HirModule) -> MirLowerer {
         globalNames: [],
         useAliases: [],
         useAliasKeys: [],
-        issues: [],
+        issues,
         closureSeq: 0,
     }
 }
@@ -289,7 +293,8 @@ pub fn mirLowerLookupUseAlias(l: MirLowerer, alias: String) -> Int {
 /// validation should follow up with `mirValidateModule` once Stage 4b
 /// fills in function bodies.
 pub fn mirLowerModule(src: HirModule) -> MirModule {
-    let l = mirLowerer(src)
+    let mono = hirMonomorphizeModule(src)
+    let l = mirLowerer(mono)
     mirLowerRun(l)
     // Lowering issues live on the lowerer (`l.issues`) — downstream
     // consumers read them there. MirModule has no `issues` field,

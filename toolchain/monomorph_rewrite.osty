@@ -342,15 +342,15 @@ pub fn hirRewriteStringPartTypes(parts: List<HirStringPart>, env: HirSubstEnv) {
 
 /// hirSpecializeFnDecl clones a HirFnDecl, applies the given subst
 /// env via hirRewriteFnDeclTypes, and returns the clone. The clone
-/// shares subtree references with the original — Stage C's full
-/// body walker replaces any subtrees it mutates, so this shallow
-/// sharing is safe.
+/// is fully detached from the original HIR so later scanners can
+/// rewrite nested expressions / blocks without mutating templates or
+/// the caller-owned input module.
 ///
 /// Primary use: emit a specialization that a Stage D worklist has
 /// requested. Callers then rename the clone (mangle the symbol)
 /// and append it to the module's decl list.
 pub fn hirSpecializeFnDecl(decl: HirFnDecl, env: HirSubstEnv) -> HirFnDecl {
-    let mut clone = decl
+    let mut clone = hirCloneFnDecl(decl)
     hirRewriteFnDeclTypes(clone, env)
     clone
 }
@@ -359,7 +359,7 @@ pub fn hirSpecializeFnDecl(decl: HirFnDecl, env: HirSubstEnv) -> HirFnDecl {
 /// field + method signature types. Method bodies are not fully
 /// walked here — Stage C's recursive scanner visits them.
 pub fn hirSpecializeStructDecl(decl: HirStructDecl, env: HirSubstEnv) -> HirStructDecl {
-    let mut clone = decl
+    let mut clone = hirCloneStructDecl(decl)
     clone.fields = hirRewriteFieldTypes(clone.fields, env)
     // Method signatures (params + return) are rewritten; bodies
     // are walked by the scanner.
@@ -384,7 +384,7 @@ pub fn hirSpecializeStructDecl(decl: HirStructDecl, env: HirSubstEnv) -> HirStru
 /// hirSpecializeEnumDecl clones a HirEnumDecl and rewrites variant
 /// payloads + method signature types.
 pub fn hirSpecializeEnumDecl(decl: HirEnumDecl, env: HirSubstEnv) -> HirEnumDecl {
-    let mut clone = decl
+    let mut clone = hirCloneEnumDecl(decl)
     clone.variants = hirRewriteVariantPayload(clone.variants, env)
     let mut rewrittenMethods: List<HirFnDecl> = []
     for m in clone.methods {
