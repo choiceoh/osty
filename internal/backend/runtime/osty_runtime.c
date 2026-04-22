@@ -58,6 +58,7 @@
 #  endif
 #  include <windows.h>
 #  include <process.h>
+#  include <signal.h>         /* sig_atomic_t for SIGURG TLS flag */
 #  define OSTY_RT_TLS __declspec(thread)
 typedef HANDLE             osty_rt_thread_t;
 typedef SRWLOCK            osty_rt_mu_t;
@@ -69,6 +70,7 @@ typedef INIT_ONCE          osty_rt_once_t;
 #  define OSTY_RT_PLATFORM_POSIX 1
 #  include <pthread.h>
 #  include <sched.h>
+#  include <signal.h>
 #  if defined(__STDC_NO_THREADS__) || defined(__APPLE__)
 #    define OSTY_RT_TLS __thread
 #  else
@@ -7300,6 +7302,15 @@ static void *osty_sched_worker_main(void *arg);
 static void *osty_sched_elastic_main(void *arg);
 static void osty_sched_shutdown_atexit(void);
 static void osty_sched_spawn_elastic(void);
+/* Concurrent-collector stop handshake + SIGURG preemption. Defined
+ * further down alongside `osty_rt_sched_preempt_observe` but
+ * forward-declared here so `osty_sched_pool_init` can initialise
+ * them without a reordering headache. */
+static osty_rt_mu_t osty_gc_stop_mu;
+static osty_rt_cond_t osty_gc_stop_cv;
+static volatile int osty_gc_stop_mu_live;
+static volatile int osty_gc_concurrent_stop_requested;
+static void osty_rt_install_sigurg_handler(void);
 
 static int osty_sched_default_worker_count(void) {
     const char *env = getenv("OSTY_SCHED_WORKERS");
@@ -7339,6 +7350,19 @@ static void osty_sched_pool_init(void) {
         osty_rt_cond_init(&osty_sched_pool_cv) != 0) {
         osty_rt_abort("scheduler: pool mutex/cv init failed");
     }
+    /* Concurrent-collector stop handshake primitives. Initialised
+     * here because they share the pool's lifetime: preempt_observe
+     * can be called from any thread after pool init, and atexit
+     * tears down after all workers are joined. */
+    if (osty_rt_mu_init(&osty_gc_stop_mu) != 0 ||
+        osty_rt_cond_init(&osty_gc_stop_cv) != 0) {
+        osty_rt_abort("scheduler: stop handshake mutex/cv init failed");
+    }
+    osty_gc_stop_mu_live = 1;
+    /* Install the SIGURG handler once. `kick_worker_v1` uses it to
+     * nudge compute-bound workers to their next safepoint without
+     * waiting for the safepoint stride to roll over on its own. */
+    osty_rt_install_sigurg_handler();
     osty_sched_inject.head = NULL;
     osty_sched_inject.tail = NULL;
     osty_sched_inject.count = 0;
@@ -7472,7 +7496,7 @@ static void osty_sched_notify_blocking_wait(void) {
 /* Phase 3 — cooperative preemption hook.
  *
  * Called from `osty_gc_safepoint_v1` on every safepoint (entry / loop
- * backedge / alloc / call / yield). Does three cheap things, in order
+ * backedge / alloc / call / yield). Does four cheap things, in order
  * of observability:
  *
  *   1. Observes the current group's cancel flag and yields the OS
@@ -7481,15 +7505,20 @@ static void osty_sched_notify_blocking_wait(void) {
  *      yield point get a fast turnaround; tasks that don't still
  *      benefit from the OS yield.
  *
- *   2. Observes the concurrent-collector `stop_requested` flag. When
- *      set, the mutator is obliged to park until the collector
- *      releases it (root scan + stack flush window). Phase 3 ships
- *      the flag + park path; the collector itself that drives
- *      stop_requested stays Phase-3-future work but the ABI lands
- *      now so future concurrent-collector work doesn't re-break
- *      every safepoint emission.
+ *   2. Observes a thread-local SIGURG async-preemption flag. Set by
+ *      `osty_rt_sigurg_handler` (installed from `osty_sched_pool_init`
+ *      on POSIX). The flag is reset when we arrive at the safepoint,
+ *      so external kicks from `osty_rt_sched_kick_worker` take effect
+ *      here rather than crashing inside the async-signal handler.
  *
- *   3. When the pool is saturated (no parked worker) *and* the
+ *   3. Observes the concurrent-collector `stop_requested` flag. When
+ *      set, the mutator parks on `osty_gc_stop_cv` until the
+ *      collector releases it — proper cv/broadcast wake-up rather
+ *      than busy-wait so a 50ms STW window doesn't burn 50ms of CPU.
+ *      Collector itself is Phase-3-future work, but mutator side of
+ *      the handshake is complete.
+ *
+ *   4. When the pool is saturated (no parked worker) *and* the
  *      inject queue has pending tasks, spawn an elastic worker to
  *      drain them. A pure-CPU task in a tight loop can otherwise
  *      starve queued siblings on a pool sized smaller than the
@@ -7499,19 +7528,25 @@ static void osty_sched_notify_blocking_wait(void) {
  *      loop-backedge granularity (stride-scaled by the emitter, so
  *      not per-iteration) rather than per-block.
  */
-static volatile int osty_gc_concurrent_stop_requested = 0;
+/* The three globals above are forward-declared near the other
+ * scheduler forward decls so pool_init can initialise them. Keep
+ * this comment block as the anchor for the documentation without
+ * re-declaring them (that would be a duplicate definition with
+ * the forward decls). */
+
+/* Thread-local SIGURG preemption flag. Set by the handler (async-
+ * signal context), cleared at the safepoint. Using `sig_atomic_t`
+ * keeps writes from the handler well-defined per POSIX; cleared as
+ * a relaxed atomic so the compiler doesn't hoist the load. */
+static OSTY_RT_TLS volatile sig_atomic_t osty_rt_sigurg_flag = 0;
 
 static void osty_rt_sched_preempt_park_for_collector(void) {
-    /* Placeholder for the Phase-3-concurrent-collector STW window.
-     * Today there is no concurrent collector that flips this flag;
-     * when there is, parking here lets the collector observe a
-     * stable mutator-stack snapshot. Park implementation is a
-     * busy-wait on the flag — a proper cv/sem wake-up wants the
-     * collector's signal path, which lands with the collector. */
+    osty_rt_mu_lock(&osty_gc_stop_mu);
     while (__atomic_load_n(&osty_gc_concurrent_stop_requested,
                            __ATOMIC_ACQUIRE)) {
-        osty_rt_plat_yield();
+        osty_rt_cond_wait(&osty_gc_stop_cv, &osty_gc_stop_mu);
     }
+    osty_rt_mu_unlock(&osty_gc_stop_mu);
 }
 
 static void osty_rt_sched_preempt_observe(void) {
@@ -7527,13 +7562,21 @@ static void osty_rt_sched_preempt_observe(void) {
         __atomic_load_n(&g->cancelled, __ATOMIC_RELAXED) != 0) {
         osty_rt_plat_yield();
     }
-    /* (2) Concurrent-collector handshake. Cheap relaxed-load gate;
-     * park only on the slow path. */
+    /* (2) SIGURG async-preemption flag. TLS so the load is a plain
+     * memory access; the handler's store is sig_atomic_t which is
+     * well-defined across async delivery on POSIX. Clear-on-observe
+     * so one kick == one preempt tick. */
+    if (osty_rt_sigurg_flag) {
+        osty_rt_sigurg_flag = 0;
+        osty_rt_plat_yield();
+    }
+    /* (3) Concurrent-collector handshake. Cheap relaxed-load gate;
+     * park on the cv only on the slow path. */
     if (__atomic_load_n(&osty_gc_concurrent_stop_requested,
                         __ATOMIC_RELAXED)) {
         osty_rt_sched_preempt_park_for_collector();
     }
-    /* (3) Elastic drain. Only enter the pool mutex when an elastic
+    /* (4) Elastic drain. Only enter the pool mutex when an elastic
      * is warranted — fast path is a single atomic-less count read,
      * which is safe to race (the mutex-guarded recheck catches
      * stale observations). */
@@ -7552,6 +7595,32 @@ static void osty_rt_sched_preempt_observe(void) {
         osty_sched_spawn_elastic();
     }
 }
+
+#if !defined(OSTY_RT_PLATFORM_WIN32)
+/* SIGURG handler. Async-signal-safe: writes only to `sig_atomic_t`
+ * TLS. The next safepoint (or explicit preempt_check_v1) observes
+ * the flag and yields cooperatively — we deliberately do NOT do
+ * any real preemption work here (no mutex, no malloc, no stdio)
+ * because async-signal context forbids most libc. */
+static void osty_rt_sigurg_handler(int signo) {
+    (void)signo;
+    osty_rt_sigurg_flag = 1;
+}
+
+static void osty_rt_install_sigurg_handler(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = osty_rt_sigurg_handler;
+    sigemptyset(&sa.sa_mask);
+    /* SA_RESTART so a blocked syscall (e.g. nanosleep) resumes after
+     * the handler returns rather than failing with EINTR, which the
+     * existing sleep/park paths would have to special-case. */
+    sa.sa_flags = SA_RESTART;
+    (void)sigaction(SIGURG, &sa, NULL);
+}
+#else
+static void osty_rt_install_sigurg_handler(void) { /* Windows: no SIGURG */ }
+#endif
 
 /* Try to steal from a random non-self victim. Caller retries via the
  * outer take-work loop; a single pass is "good enough" per iteration. */
@@ -7947,13 +8016,67 @@ void osty_rt_sched_preempt_check_v1(void) {
 }
 
 void osty_rt_sched_concurrent_stop_request_v1(void) {
+    /* Flag flip under the stop mutex so parking mutators can't race
+     * on the acquire-load → cond_wait interlock. The atomic store is
+     * kept for the relaxed fast-path in preempt_observe, but the
+     * broadcast requires the lock anyway. */
+    if (!osty_gc_stop_mu_live) {
+        /* Pool not yet started — no mutators can be parking. Set the
+         * flag so future safepoints see it; no cv signalling needed. */
+        __atomic_store_n(&osty_gc_concurrent_stop_requested, 1,
+                         __ATOMIC_RELEASE);
+        return;
+    }
+    osty_rt_mu_lock(&osty_gc_stop_mu);
     __atomic_store_n(&osty_gc_concurrent_stop_requested, 1,
                      __ATOMIC_RELEASE);
+    osty_rt_mu_unlock(&osty_gc_stop_mu);
 }
 
 void osty_rt_sched_concurrent_stop_release_v1(void) {
+    if (!osty_gc_stop_mu_live) {
+        __atomic_store_n(&osty_gc_concurrent_stop_requested, 0,
+                         __ATOMIC_RELEASE);
+        return;
+    }
+    osty_rt_mu_lock(&osty_gc_stop_mu);
     __atomic_store_n(&osty_gc_concurrent_stop_requested, 0,
                      __ATOMIC_RELEASE);
+    osty_rt_cond_broadcast(&osty_gc_stop_cv);
+    osty_rt_mu_unlock(&osty_gc_stop_mu);
+}
+
+/* Async preemption kick. Sends SIGURG to pool worker `worker_id`
+ * (or to every pool worker when `worker_id < 0`). The handler sets
+ * a per-thread flag that the next safepoint observes and yields on.
+ * Useful when a concurrent collector (or any external controller)
+ * wants to force a fleet of busy workers to reach a safepoint
+ * sooner than the emitter's stride would naturally allow — e.g. the
+ * STW root-scan window wants every mutator parked as quickly as
+ * possible.
+ *
+ * POSIX-only; Windows falls back to a no-op because there is no
+ * SIGURG analogue. Windows builds can still rely on the normal
+ * safepoint cadence to observe `stop_requested`; the mutators just
+ * take up to `loopSafepointStride` extra iterations to notice. */
+void osty_rt_sched_kick_worker_v1(int64_t worker_id) {
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    (void)worker_id;
+#else
+    if (osty_sched_worker_threads == NULL) {
+        return;
+    }
+    if (worker_id < 0) {
+        for (int i = 0; i < osty_sched_worker_count; i++) {
+            pthread_kill(osty_sched_worker_threads[i], SIGURG);
+        }
+        return;
+    }
+    if ((int)worker_id >= osty_sched_worker_count) {
+        return;
+    }
+    pthread_kill(osty_sched_worker_threads[worker_id], SIGURG);
+#endif
 }
 
 void osty_rt_thread_sleep(int64_t nanos) {
