@@ -135,10 +135,19 @@ Phase 1A는 `osty_rt_task_*` / `osty_rt_thread_*` 심볼 집합을 먼저 링크
   - `osty_rt_sched_concurrent_stop_request_v1()` / `osty_rt_sched_concurrent_stop_release_v1()` — concurrent collector (또는 테스트) 가 STW window 진입/이탈을 announce. mutator 는 다음 safepoint 에서 park / resume.
 - **Handle join 경로 GC-safe.** Phase 3 이전 `osty_rt_task_handle_join` 이 raw pointer 로 handle 을 dereference 했는데, main 의 `osty_gc_load_v1` read-barrier 통합과 merge conflict 를 해결하면서 Phase 2 의 join-helping 경로도 `osty_gc_load_v1(handle)` 경유로 전환 (forwarding-address invariant 유지).
 
-**Phase 3 step 2 (미착수, 대규모):** concurrent collector 본체.
-- Tri-color marking + mutator write-barrier (pre/post_write 이미 존재, §19.8) 의 concurrent 버전.
-- STW pause 는 root scan + stack flush 윈도우에만. 현재 collector 는 allocator-triggered 일괄 sweep 이라 대규모 refactor 필요.
-- Preempt-observe 에서 mutator park 경로는 **이미 준비됨** — concurrent collector 가 stop_request 를 플립하기만 하면 동작. 컬렉터 자체는 별도 패치.
+**Phase 3 step 2a (현재, 착륙):** STW-during-workers collection.
+- 이전: `osty_gc_collect_*` 는 `osty_concurrent_workers > 0` 이면 무조건 조기 리턴 → 워커가 항상 살아있는 장기 프로그램은 GC 가 절대 발화 안 함.
+- 이제: 새 public ABI `osty_rt_gc_collect_concurrent_v1(caller_roots, caller_count)` — (1) `stop_request_v1` 플립 → (2) `kick_worker_v1(-1)` 로 SIGURG 킥 → (3) `osty_gc_parked_mutator_count >= osty_concurrent_workers` 될 때까지 cv_wait → (4) parked mutator 들의 published root 들을 linked-list 에서 flat array 로 unioning → (5) `osty_gc_collect_now_with_stack_roots` 로 STW major/minor → (6) `stop_release_v1` 로 broadcast 해서 mutator 깨움.
+- **Root publication**: mutator 가 `preempt_park_for_collector(roots, count)` 에 들어갈 때 `osty_gc_parked_roots_entry` 를 stop_mu 아래 linked list 에 push. Park 중 스택 프레임이 살아있으므로 `slots` 포인터가 가리키는 safepoint 의 root 배열이 안전. 해제 시 리스트에서 splice out.
+- **아직 STW** — pause 는 mark + sweep 시간 전체. Step 2b 는 이 infra 위에서 concurrent marker 로 발전 (start/finish 만 stop window, 중간 mark 는 mutator 와 동시).
+- 수용 테스트 `ConcurrentCollectDrivesMutators` — 4 worker × compute-loop + 200 × 4KB garbage 할당 → `collect_concurrent_v1` → live_count 205 → 1 (204 reclaimed, worker 크래시 없음).
+
+**Phase 3 step 2b (미착수):** 진짜 concurrent marking.
+- Step 2a 의 root publication + stop handshake infra 재사용.
+- Start (STW): stop request + root scan + state = MARK_INCREMENTAL + stop release.
+- Concurrent mark: collector 스레드가 mark stack 을 drain; mutator 는 실행 재개 (SATB write barrier 가 이미 state gate 됨, line 5771 check).
+- Finish (STW): stop request + 남은 grey / remembered set drain + state = SWEEPING + stop release.
+- Sweep: concurrent or short STW.
 
 **Phase 3 step 3 (미착수):** SIGURG 비동기 preemption.
 - `preempt_check` 가 없는 C FFI 블록 / 매우 긴 단일 instruction stream 을 signal-based 로 중단. Go 1.14+ SIGURG 참고. `preempt_check_v1` 의 safepoint 슬롯 커버리지가 낮은 라이브러리 코드에서만 필요.
@@ -209,6 +218,10 @@ void osty_rt_sched_preempt_check_v1(void);              // compiler emit point
 void osty_rt_sched_concurrent_stop_request_v1(void);    // concurrent-collector STW enter (cv-backed)
 void osty_rt_sched_concurrent_stop_release_v1(void);    // concurrent-collector STW exit (broadcasts cv)
 void osty_rt_sched_kick_worker_v1(int64_t worker_id);   // SIGURG-based async preempt (POSIX; Windows no-op)
+
+// Phase 3 step 2a — concurrent GC driver
+void osty_rt_gc_collect_concurrent_v1(void *const *caller_roots,
+                                      int64_t caller_count);   // STW-during-workers
 ```
 
 **계약.** 백엔드는 이 시그니처에 맞춰 lower한다 ([mir_generator.go:1749](internal/llvmgen/mir_generator.go:1749) 이하). 런타임이 단계 이전되어도 **프로그램 재컴파일 불필요**.
@@ -257,4 +270,5 @@ void osty_rt_sched_kick_worker_v1(int64_t worker_id);   // SIGURG-based async pr
 - 2026-04-22 (follow-up 3): Chase-Lev deque 슬롯 publication 을 release/acquire atomic 으로 승격 (기존 store + separate `__atomic_thread_fence(RELEASE)` 조합은 ThreadSanitizer 가 인식 못 함). `__atomic_store_n(slot, task, RELEASE)` → `__atomic_load_n(slot, ACQUIRE)` 로 task_item 필드 publication 명시적. `-fsanitize=thread -O1` 빌드 + 4-worker × 1000-child stress harness TSan warning 0 확인.
 - 2026-04-22 (follow-up 4): `race` / `collectAll` 의 handles_list 리드 경로가 `osty_rt_list_get_raw(..., trace_elem=NULL)` 로 호출해 ensure_layout 의 trace-kind mismatch 에서 abort (main 에서 존재하던 issue). 해당 list 는 `osty_rt_list_push_ptr` 로 빌드되어 `trace_elem = osty_gc_mark_slot_v1` 이므로 read 측도 동일 함수 포인터 전달하도록 수정. `TestBundledRuntimeSchedulerRace` / `TestBundledRuntimeSchedulerCollectAll` green. (이후 merge 에서 main 의 `osty_rt_list_get_ptr` helper 로 대체 — 같은 목적, 더 깔끔.)
 - 2026-04-22 (follow-up 5): **Phase 3 step 1 착수**. `osty_rt_sched_preempt_observe` 를 `osty_gc_safepoint_v1` 선행으로 추가 — (a) current group `cancelled` relaxed-load 후 OS yield, (b) `osty_gc_concurrent_stop_requested` relaxed-load 후 해당 시 `osty_rt_sched_preempt_park_for_collector` 로 진입, (c) `is_worker && inject.count > 0 && parked == 0` 이면 saturation elastic spawn (compute-loop 가 queued task 를 starve 하는 Phase 2 갭 닫음). 공개 ABI 3종 추가: `osty_rt_sched_preempt_check_v1`, `osty_rt_sched_concurrent_stop_request_v1`, `osty_rt_sched_concurrent_stop_release_v1`. 수용 테스트 2종 (`PreemptionDrainsQueueUnderComputeLoop`, `ConcurrentStopHandshake`) green. TSan clean. Concurrent collector 본체 + SIGURG 는 Phase 3 step 2/3 로 후속.
+- 2026-04-22 (follow-up 7): **Phase 3 step 2a 착륙 — STW-during-workers GC.** `osty_rt_gc_collect_concurrent_v1(caller_roots, caller_count)` public API 추가. Stop handshake 를 사용한 워커 파킹 + 각 mutator 의 safepoint root 배열을 linked-list 레지스트리에 publish → collector 가 parked roots 를 flat array 로 union → 기존 `osty_gc_collect_now_with_stack_roots` 로 STW major/minor. `osty_concurrent_workers > 0` 게이트 우회의 첫 길 — 장기 프로그램이 워커-live 상태에서도 GC 를 발화 가능. 수용 테스트 `ConcurrentCollectDrivesMutators`: 4-worker × compute-loop + 200 × 4KB garbage → live 205→1. TSan clean. 아직 STW 전체 pause; step 2b (진짜 concurrent marking with mutator-active mark loop) 은 이 infra 위에서 후속.
 - 2026-04-22 (follow-up 6): **Phase 3 step 1 완결.** (a) Stop handshake park 를 busy-wait 에서 cv-based 로 전환 — `osty_gc_stop_mu` + `osty_gc_stop_cv` 추가, `stop_request` 가 mutex 아래 플래그 플립, `stop_release` 가 `cond_broadcast` 로 park 된 mutator 들을 일괄 기상. 50ms STW 윈도우가 50ms CPU 를 태우지 않음. (b) **SIGURG 비동기 preemption** — pool_init 에서 `sigaction(SIGURG, ...)` 으로 핸들러 등록, `sig_atomic_t` TLS 플래그가 async-signal-safe 로 설정되고 다음 safepoint 에서 clear-on-observe. 공개 ABI `osty_rt_sched_kick_worker_v1(int64_t worker_id)` (음수면 전체 풀) — concurrent collector / 외부 제어가 stride 롤오버 기다리지 않고 mutator 들을 safepoint 로 유도. POSIX-only (Windows 는 no-op; 일반 safepoint cadence 로 관찰). 수용 테스트 `SigurgKick` 통과 (100 kicks, worker 이터레이션 1.99M 델타). (c) **GC pause 베이스라인** — `GcPauseBaseline` 테스트가 1K rooted × 4KB + 9K garbage × 4KB = 40MB heap 위에서 STW major 를 측정, 현재 M-class HW 에서 ~6.5ms. Phase 3 step 2 (concurrent collector) 가 < 1ms 목표를 달성할 때 비교 기준. (d) `#[vectorize]` 루프에 대한 compiler-emit preempt_check 는 **의도적으로 안 함** — 루프 내 call 은 LLVM auto-vectorizer 를 죽임. Vectorized 핫 루프의 preemption 경로는 SIGURG 만 — handler 가 OS-level preempt 를 가져오므로 flag 자체가 안 관찰되어도 mutator 스레드가 잠시 off-CPU 되어 다른 스레드가 진행. 설계 문서에 trade-off 기록.

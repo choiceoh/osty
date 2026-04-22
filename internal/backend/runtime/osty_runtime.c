@@ -6557,8 +6557,11 @@ void osty_gc_global_root_unregister_v1(void *slot) {
 
 /* Forward declaration — definition ships with the scheduler block
  * further down. Kept here so `osty_gc_safepoint_v1` (above the
- * scheduler) can invoke the preemption hook. */
-static void osty_rt_sched_preempt_observe(void);
+ * scheduler) can invoke the preemption hook. Phase 3 step 2 passes
+ * the caller's root slots through so a collector-induced park can
+ * publish them for cross-thread scan. */
+static void osty_rt_sched_preempt_observe(void *const *root_slots,
+                                          int64_t root_slot_count);
 
 void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) {
     /* Phase 3 cooperative preemption: every safepoint participates in
@@ -6567,7 +6570,7 @@ void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t
      * starved queue). The cost is dominated by the existing safepoint
      * kind decode + allocation check below, so the added cycles are
      * in the noise for programs without pool saturation. */
-    osty_rt_sched_preempt_observe();
+    osty_rt_sched_preempt_observe(root_slots, root_slot_count);
 
     /* Phase A5: decode the kind from the high byte. Legacy callers pass
      * pure serial ids (kind byte == 0 == UNSPECIFIED) so the dispatch is
@@ -8236,16 +8239,72 @@ static void osty_sched_notify_blocking_wait(void) {
  * a relaxed atomic so the compiler doesn't hoist the load. */
 static OSTY_RT_TLS volatile sig_atomic_t osty_rt_sigurg_flag = 0;
 
-static void osty_rt_sched_preempt_park_for_collector(void) {
+/* Phase 3 step 2 — root publication for concurrent GC.
+ *
+ * When a mutator parks for a stop-request window, it publishes its
+ * current safepoint root array to a shared registry so the collector
+ * can scan every parked mutator's stack without racing with the
+ * mutators themselves. The registry is a linked list under
+ * `osty_gc_stop_mu`; each parked mutator appends its entry on park
+ * and removes it on resume. The slot pointer remains stable for the
+ * lifetime of the park because the caller's safepoint frame is
+ * blocked in `osty_rt_cond_wait` — the stack memory backing the
+ * root array cannot move or be reclaimed while we hold the park.
+ *
+ * The collector side (`osty_rt_gc_collect_concurrent_v1`) sets the
+ * stop flag, kicks every worker to accelerate safepoint arrival,
+ * waits until the parked-mutator count matches the in-flight-task
+ * count, then walks the registry unioning root arrays into a single
+ * stack-root snapshot and drives a standard STW collection over it.
+ * Release clears the stop flag and broadcasts; mutators wake and
+ * unpublish. */
+typedef struct osty_gc_parked_roots_entry {
+    void *const *slots;
+    int64_t count;
+    struct osty_gc_parked_roots_entry *next;
+} osty_gc_parked_roots_entry;
+
+static osty_gc_parked_roots_entry *osty_gc_parked_roots_head = NULL;
+static int64_t osty_gc_parked_mutator_count = 0;  /* guarded by osty_gc_stop_mu */
+
+static void osty_rt_sched_preempt_park_for_collector(void *const *roots,
+                                                     int64_t count) {
+    /* Publish + park atomically under the stop mutex. The collector
+     * reads the registry under the same mutex, so the publication
+     * is observable by the time parked_mutator_count is bumped. */
+    osty_gc_parked_roots_entry entry;
+    entry.slots = roots;
+    entry.count = (count < 0) ? 0 : count;
+
     osty_rt_mu_lock(&osty_gc_stop_mu);
+    entry.next = osty_gc_parked_roots_head;
+    osty_gc_parked_roots_head = &entry;
+    osty_gc_parked_mutator_count += 1;
+    /* Broadcast so a collector blocked on "all mutators parked"
+     * observes this arrival. */
+    osty_rt_cond_broadcast(&osty_gc_stop_cv);
     while (__atomic_load_n(&osty_gc_concurrent_stop_requested,
                            __ATOMIC_ACQUIRE)) {
         osty_rt_cond_wait(&osty_gc_stop_cv, &osty_gc_stop_mu);
     }
+    /* Unpublish on the way out. Walk the list and splice our entry.
+     * The list is tiny (bounded by parked mutator count, i.e. at
+     * most `osty_concurrent_workers`) so the O(n) removal is
+     * cheaper than any per-entry indirection. */
+    osty_gc_parked_roots_entry **pp = &osty_gc_parked_roots_head;
+    while (*pp != NULL && *pp != &entry) {
+        pp = &(*pp)->next;
+    }
+    if (*pp == &entry) {
+        *pp = entry.next;
+    }
+    osty_gc_parked_mutator_count -= 1;
+    osty_rt_cond_broadcast(&osty_gc_stop_cv);
     osty_rt_mu_unlock(&osty_gc_stop_mu);
 }
 
-static void osty_rt_sched_preempt_observe(void) {
+static void osty_rt_sched_preempt_observe(void *const *roots,
+                                          int64_t count) {
     if (!osty_sched_is_worker) {
         return;
     }
@@ -8267,10 +8326,11 @@ static void osty_rt_sched_preempt_observe(void) {
         osty_rt_plat_yield();
     }
     /* (3) Concurrent-collector handshake. Cheap relaxed-load gate;
-     * park on the cv only on the slow path. */
+     * park on the cv only on the slow path. Roots-passthrough lets
+     * the collector scan parked mutators' live references. */
     if (__atomic_load_n(&osty_gc_concurrent_stop_requested,
                         __ATOMIC_RELAXED)) {
-        osty_rt_sched_preempt_park_for_collector();
+        osty_rt_sched_preempt_park_for_collector(roots, count);
     }
     /* (4) Elastic drain. Only enter the pool mutex when an elastic
      * is warranted — fast path is a single atomic-less count read,
@@ -8708,7 +8768,13 @@ void osty_rt_thread_yield(void) {
  * these from its STW windows; tests can drive them directly to
  * exercise the park path. */
 void osty_rt_sched_preempt_check_v1(void) {
-    osty_rt_sched_preempt_observe();
+    /* No-arg preempt entry: cancel + SIGURG + elastic signals only.
+     * We deliberately pass NULL roots: a collector-induced park
+     * would otherwise publish a rootless slot and leak reachable
+     * objects. Call sites that need collector-safe parking must go
+     * through the full `osty_gc_safepoint_v1` (which threads the
+     * live root array). */
+    osty_rt_sched_preempt_observe(NULL, 0);
 }
 
 void osty_rt_sched_concurrent_stop_request_v1(void) {
@@ -8740,6 +8806,115 @@ void osty_rt_sched_concurrent_stop_release_v1(void) {
                      __ATOMIC_RELEASE);
     osty_rt_cond_broadcast(&osty_gc_stop_cv);
     osty_rt_mu_unlock(&osty_gc_stop_mu);
+}
+
+/* Phase 3 step 2 — concurrent collection driver.
+ *
+ * Runs a full STW collection while mutator workers are live, using
+ * the stop-request handshake + SIGURG kick to bring every mutator
+ * to a safepoint and publish its stack roots. This is a "STW
+ * during workers" path rather than a true concurrent marker — the
+ * pause window is bounded by mark + sweep duration — but it
+ * unblocks the biggest Phase 2 limitation: `osty_gc_collect_*`
+ * was hard-gated to return early whenever `osty_concurrent_workers
+ * > 0`, meaning long-running programs with always-live workers
+ * could never collect.
+ *
+ * The concurrent-marker full-fat variant is Phase 3 step 2b: it
+ * would reuse this same handshake for the start (root scan) and
+ * finish (final drain) phases, with marking running between them
+ * while mutators keep executing. The infrastructure here — root
+ * publication registry + parked-mutator counter + cv broadcast
+ * — is exactly what step 2b needs; the delta is a new collector
+ * path that yields the gc_lock during the mark loop.
+ *
+ * `caller_roots` / `caller_count` come from the caller's own
+ * safepoint array (main-thread root scan, typically empty if the
+ * caller pins everything via `osty_gc_root_bind_v1`).
+ */
+/* Forward decl: kick_worker_v1 is defined just below but called from
+ * collect_concurrent_v1 so C's single-pass compile needs a hint. */
+void osty_rt_sched_kick_worker_v1(int64_t worker_id);
+
+void osty_rt_gc_collect_concurrent_v1(void *const *caller_roots,
+                                      int64_t caller_count) {
+    if (caller_count < 0) {
+        caller_count = 0;
+    }
+    /* 1. Request stop. This also takes the stop_mu, but we release
+     *    it before observing the parked count so mutators can
+     *    acquire it to publish roots. */
+    osty_rt_sched_concurrent_stop_request_v1();
+
+    /* 2. Kick every pool worker so they reach a safepoint fast
+     *    (compute-bound workers otherwise wait for the 1024-stride
+     *    to roll over on their own). No-op on Windows. */
+    osty_rt_sched_kick_worker_v1(-1);
+
+    /* 3. Wait for all in-flight tasks to park. `osty_concurrent_workers`
+     *    is the number of active bodies; `osty_gc_parked_mutator_count`
+     *    is how many are currently blocked in park_for_collector.
+     *    Both are read under the same mutex so the condition is
+     *    consistent. A task body that completes between signal and
+     *    park decrements `osty_concurrent_workers`; we handle that
+     *    by re-reading the counter each iteration. */
+    osty_rt_mu_lock(&osty_gc_stop_mu);
+    for (;;) {
+        int64_t inflight = __atomic_load_n(&osty_concurrent_workers,
+                                           __ATOMIC_ACQUIRE);
+        if (osty_gc_parked_mutator_count >= inflight) {
+            break;
+        }
+        osty_rt_cond_wait(&osty_gc_stop_cv, &osty_gc_stop_mu);
+    }
+
+    /* 4. Build a flat union of all parked mutators' root slots
+     *    plus the caller's own roots. We copy into a heap buffer
+     *    rather than chasing the linked list from inside the
+     *    collector because the collect path re-enters gc_lock and
+     *    we don't want to hold stop_mu across it (deadlock risk
+     *    if the collector's own traces need stop_mu transitively). */
+    int64_t total = caller_count;
+    for (osty_gc_parked_roots_entry *e = osty_gc_parked_roots_head;
+         e != NULL; e = e->next) {
+        total += e->count;
+    }
+    void **flat = NULL;
+    if (total > 0) {
+        flat = (void **)calloc((size_t)total, sizeof(void *));
+        if (flat == NULL) {
+            osty_rt_mu_unlock(&osty_gc_stop_mu);
+            osty_rt_sched_concurrent_stop_release_v1();
+            osty_rt_abort("gc.collect_concurrent: flat union OOM");
+        }
+        int64_t idx = 0;
+        for (int64_t i = 0; i < caller_count; i++) {
+            flat[idx++] = (void *)caller_roots[i];
+        }
+        for (osty_gc_parked_roots_entry *e = osty_gc_parked_roots_head;
+             e != NULL; e = e->next) {
+            for (int64_t i = 0; i < e->count; i++) {
+                flat[idx++] = (void *)e->slots[i];
+            }
+        }
+    }
+    osty_rt_mu_unlock(&osty_gc_stop_mu);
+
+    /* 5. Run the collection against the unioned snapshot. The
+     *    gc_lock serializes against mutator write barriers, but
+     *    all mutators are parked at safepoints so the barriers
+     *    are not firing. */
+    osty_gc_acquire();
+    osty_gc_collect_now_with_stack_roots((void *const *)flat, total);
+    osty_gc_release();
+
+    if (flat != NULL) {
+        free(flat);
+    }
+
+    /* 6. Release the stop. Mutators unpublish their roots and
+     *    resume execution from the next line of the park. */
+    osty_rt_sched_concurrent_stop_release_v1();
 }
 
 /* Async preemption kick. Sends SIGURG to pool worker `worker_id`
