@@ -447,7 +447,7 @@ func (g *gen) typeRefSym(n *ast.NamedType) *resolve.Symbol {
 	if g.res == nil || n == nil {
 		return nil
 	}
-	return g.res.TypeRefs[n]
+	return g.res.TypeRefsByID[n.ID]
 }
 
 func (g *gen) goFnTypeAST(f *ast.FnType) string {

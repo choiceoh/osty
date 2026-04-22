@@ -36,6 +36,12 @@ type Result struct {
 	// off *ast.CallExpr pointer identity. Self-host ports key on this.
 	InstantiationsByID map[ast.NodeID][]types.Type
 
+	// InstantiationCalls enumerates the call sites behind
+	// InstantiationsByID, for callers that need to walk all
+	// monomorphized call expressions without relying on pointer-keyed
+	// map iteration.
+	InstantiationCalls []*ast.CallExpr
+
 	// Diags aggregates the diagnostics produced during checking.
 	Diags []*diag.Diagnostic
 
@@ -466,11 +472,13 @@ func perFileResolveResult(pf *resolve.PackageFile) *resolve.Result {
 		return nil
 	}
 	return &resolve.Result{
-		Refs:         pf.Refs,
-		TypeRefs:     pf.TypeRefs,
-		RefsByID:     pf.RefsByID,
-		TypeRefsByID: pf.TypeRefsByID,
-		FileScope:    pf.FileScope,
+		Refs:          pf.Refs,
+		TypeRefs:      pf.TypeRefs,
+		RefsByID:      pf.RefsByID,
+		TypeRefsByID:  pf.TypeRefsByID,
+		RefIdents:     pf.RefIdents,
+		TypeRefIdents: pf.TypeRefIdents,
+		FileScope:     pf.FileScope,
 	}
 }
 

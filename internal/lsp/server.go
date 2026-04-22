@@ -336,12 +336,12 @@ func buildIdentIndex(r *resolve.Result) map[int]*resolve.Symbol {
 	if r == nil {
 		return nil
 	}
-	out := make(map[int]*resolve.Symbol, len(r.Refs)+len(r.TypeRefs))
-	for id, sym := range r.Refs {
-		out[id.PosV.Offset] = sym
+	out := make(map[int]*resolve.Symbol, len(r.RefIdents)+len(r.TypeRefIdents))
+	for _, id := range r.RefIdents {
+		out[id.PosV.Offset] = r.RefsByID[id.ID]
 	}
-	for nt, sym := range r.TypeRefs {
-		out[nt.PosV.Offset] = sym
+	for _, nt := range r.TypeRefIdents {
+		out[nt.PosV.Offset] = r.TypeRefsByID[nt.ID]
 	}
 	return out
 }
@@ -598,11 +598,13 @@ func analysisForFileInPackage(
 		return nil
 	}
 	fileRes := &resolve.Result{
-		Refs:         pf.Refs,
-		TypeRefs:     pf.TypeRefs,
-		RefsByID:     pf.RefsByID,
-		TypeRefsByID: pf.TypeRefsByID,
-		FileScope:    pf.FileScope,
+		Refs:          pf.Refs,
+		TypeRefs:      pf.TypeRefs,
+		RefsByID:      pf.RefsByID,
+		TypeRefsByID:  pf.TypeRefsByID,
+		RefIdents:     pf.RefIdents,
+		TypeRefIdents: pf.TypeRefIdents,
+		FileScope:     pf.FileScope,
 	}
 	all := collectDiagsForFile(pr, chk, lr, pf)
 	return &docAnalysis{

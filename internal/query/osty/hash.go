@@ -265,9 +265,9 @@ func hashFileRefs(h *stableHasher, pf *resolve.PackageFile) {
 		name string
 		sym  *resolve.Symbol
 	}
-	refs := make([]refEntry, 0, len(pf.Refs))
-	for id, sym := range pf.Refs {
-		refs = append(refs, refEntry{off: id.Pos().Offset, name: id.Name, sym: sym})
+	refs := make([]refEntry, 0, len(pf.RefIdents))
+	for _, id := range pf.RefIdents {
+		refs = append(refs, refEntry{off: id.Pos().Offset, name: id.Name, sym: pf.RefsByID[id.ID]})
 	}
 	sort.Slice(refs, func(i, j int) bool {
 		if refs[i].off != refs[j].off {
@@ -287,9 +287,9 @@ func hashFileRefs(h *stableHasher, pf *resolve.PackageFile) {
 		off int
 		sym *resolve.Symbol
 	}
-	tr := make([]typeRefEntry, 0, len(pf.TypeRefs))
-	for nt, sym := range pf.TypeRefs {
-		tr = append(tr, typeRefEntry{off: nt.Pos().Offset, sym: sym})
+	tr := make([]typeRefEntry, 0, len(pf.TypeRefIdents))
+	for _, nt := range pf.TypeRefIdents {
+		tr = append(tr, typeRefEntry{off: nt.Pos().Offset, sym: pf.TypeRefsByID[nt.ID]})
 	}
 	sort.Slice(tr, func(i, j int) bool { return tr[i].off < tr[j].off })
 	h.u32(uint32(len(tr)))
@@ -469,12 +469,12 @@ func hashCheckResult(r *check.Result) [32]byte {
 		off  int
 		args []types.Type
 	}
-	iEntries := make([]instEntry, 0, len(r.Instantiations))
-	for call, args := range r.Instantiations {
+	iEntries := make([]instEntry, 0, len(r.InstantiationCalls))
+	for _, call := range r.InstantiationCalls {
 		if call == nil {
 			continue
 		}
-		iEntries = append(iEntries, instEntry{off: call.Pos().Offset, args: args})
+		iEntries = append(iEntries, instEntry{off: call.Pos().Offset, args: r.InstantiationsByID[call.ID]})
 	}
 	sort.Slice(iEntries, func(i, j int) bool { return iEntries[i].off < iEntries[j].off })
 	h.u32(uint32(len(iEntries)))

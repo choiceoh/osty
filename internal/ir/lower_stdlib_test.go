@@ -25,11 +25,13 @@ func TestLowerFnDeclLowersStdlibStringsCompare(t *testing.T) {
 	}
 	pf := mod.Package.Files[0]
 	res := &resolve.Result{
-		Refs:         pf.Refs,
-		TypeRefs:     pf.TypeRefs,
-		RefsByID:     pf.RefsByID,
-		TypeRefsByID: pf.TypeRefsByID,
-		FileScope:    pf.FileScope,
+		Refs:          pf.Refs,
+		TypeRefs:      pf.TypeRefs,
+		RefsByID:      pf.RefsByID,
+		TypeRefsByID:  pf.TypeRefsByID,
+		RefIdents:     pf.RefIdents,
+		TypeRefIdents: pf.TypeRefIdents,
+		FileScope:     pf.FileScope,
 	}
 
 	out, issues := LowerFnDecl("stdlib_strings", fn, res, nil)

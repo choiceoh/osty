@@ -498,7 +498,7 @@ func (i *inspector) callNotes(n *ast.CallExpr) []string {
 	if _, ok := n.Fn.(*ast.FieldExpr); ok {
 		notes = append(notes, "method call")
 	}
-	if args, ok := i.chk.Instantiations[n]; ok && len(args) > 0 {
+	if args, ok := i.chk.InstantiationsByID[n.ID]; ok && len(args) > 0 {
 		names := make([]string, 0, len(args))
 		for _, a := range args {
 			if a == nil {

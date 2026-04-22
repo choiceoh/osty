@@ -247,6 +247,9 @@ func rebindPreludeBuiltinTypes(pkg *resolve.Package, prelude *resolve.Scope, mod
 			}
 			if builtin := builtins[sym.Name]; builtin != nil {
 				pf.TypeRefs[nt] = builtin
+				if nt.ID != 0 && pf.TypeRefsByID != nil {
+					pf.TypeRefsByID[nt.ID] = builtin
+				}
 			}
 		}
 	}

@@ -59,12 +59,13 @@ func TestResolveBreakValueExpression(t *testing.T) {
 	if len(res.Diags) != 0 {
 		t.Fatalf("unexpected resolve diagnostics: %#v", res.Diags)
 	}
-	for id, sym := range res.Refs {
+	for _, id := range res.RefIdents {
+		sym := res.RefsByID[id.ID]
 		if id.Name == "value" && sym != nil && sym.Name == "value" {
 			return
 		}
 	}
-	t.Fatalf("break value reference to `value` was not resolved: %#v", res.Refs)
+	t.Fatalf("break value reference to `value` was not resolved: %#v", res.RefsByID)
 }
 
 func hasResolveCode(diags []*diag.Diagnostic, code string) bool {

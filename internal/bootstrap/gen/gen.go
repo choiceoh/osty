@@ -2215,10 +2215,10 @@ func runParallelMap[T any, R any](items []T, concurrency int, fn func(T) R) []R 
 
 // symbolFor returns the resolver Symbol for an Ident, or nil.
 func (g *gen) symbolFor(id *ast.Ident) *resolve.Symbol {
-	if g.res == nil {
+	if g.res == nil || id == nil {
 		return nil
 	}
-	return g.res.Refs[id]
+	return g.res.RefsByID[id.ID]
 }
 
 // typeOf returns the checked type of an expression, or nil when the

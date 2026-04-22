@@ -100,6 +100,13 @@ type PackageFile struct {
 	// without losing the Refs snapshot. Self-host ports rely on these.
 	RefsByID     map[ast.NodeID]*Symbol
 	TypeRefsByID map[ast.NodeID]*Symbol
+	// RefIdents and TypeRefIdents enumerate the node references the
+	// resolver observed, in no particular order. They let callers that
+	// previously iterated Refs-map keys keep doing so without relying
+	// on pointer hashability. Self-host ports map these to
+	// List<&Ident> / List<&NamedType>.
+	RefIdents     []*ast.Ident
+	TypeRefIdents []*ast.NamedType
 }
 
 func (pf *PackageFile) CheckerSource() []byte {

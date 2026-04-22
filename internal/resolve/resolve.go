@@ -27,6 +27,12 @@ type Result struct {
 	// pointer identity incrementally.
 	RefsByID     map[ast.NodeID]*Symbol
 	TypeRefsByID map[ast.NodeID]*Symbol
+	// RefIdents / TypeRefIdents enumerate the nodes behind RefsByID /
+	// TypeRefsByID, in no particular order. For callers that need to
+	// walk the resolved identifiers without the legacy pointer-keyed
+	// map.
+	RefIdents     []*ast.Ident
+	TypeRefIdents []*ast.NamedType
 	// FileScope is the file-level scope (children of the prelude). All
 	// top-level declarations live here.
 	FileScope *Scope
@@ -59,12 +65,14 @@ func FileWithStdlib(file *ast.File, prelude *Scope, stdlib StdlibProvider) *Resu
 	pr := ResolvePackage(pkg, prelude)
 	pf := pkg.Files[0]
 	return &Result{
-		Refs:         pf.Refs,
-		TypeRefs:     pf.TypeRefs,
-		RefsByID:     pf.RefsByID,
-		TypeRefsByID: pf.TypeRefsByID,
-		FileScope:    pf.FileScope,
-		Diags:        pr.Diags,
+		Refs:          pf.Refs,
+		TypeRefs:      pf.TypeRefs,
+		RefsByID:      pf.RefsByID,
+		TypeRefsByID:  pf.TypeRefsByID,
+		RefIdents:     pf.RefIdents,
+		TypeRefIdents: pf.TypeRefIdents,
+		FileScope:     pf.FileScope,
+		Diags:         pr.Diags,
 	}
 }
 
@@ -190,40 +198,45 @@ func (r *resolver) bodyPass(pkg *Package) {
 			}
 			restore()
 		}
-		f.RefsByID = projectRefsByID(f.Refs)
-		f.TypeRefsByID = projectTypeRefsByID(f.TypeRefs)
+		f.RefsByID, f.RefIdents = projectRefsByID(f.Refs)
+		f.TypeRefsByID, f.TypeRefIdents = projectTypeRefsByID(f.TypeRefs)
 	}
 }
 
-// projectRefsByID rekeys Refs by ast.NodeID. Idents with ID == 0
-// (synthetic, never stamped by the parser) are skipped; downstream
-// consumers that key on NodeID treat zero as unassigned.
-func projectRefsByID(refs map[*ast.Ident]*Symbol) map[ast.NodeID]*Symbol {
+// projectRefsByID rekeys Refs by ast.NodeID and emits the backing
+// ident list. Idents with ID == 0 (synthetic, never stamped by the
+// parser) are skipped; downstream consumers that key on NodeID treat
+// zero as unassigned.
+func projectRefsByID(refs map[*ast.Ident]*Symbol) (map[ast.NodeID]*Symbol, []*ast.Ident) {
 	if len(refs) == 0 {
-		return map[ast.NodeID]*Symbol{}
+		return map[ast.NodeID]*Symbol{}, nil
 	}
-	out := make(map[ast.NodeID]*Symbol, len(refs))
+	byID := make(map[ast.NodeID]*Symbol, len(refs))
+	idents := make([]*ast.Ident, 0, len(refs))
 	for n, sym := range refs {
 		if n == nil || n.ID == 0 {
 			continue
 		}
-		out[n.ID] = sym
+		byID[n.ID] = sym
+		idents = append(idents, n)
 	}
-	return out
+	return byID, idents
 }
 
-func projectTypeRefsByID(refs map[*ast.NamedType]*Symbol) map[ast.NodeID]*Symbol {
+func projectTypeRefsByID(refs map[*ast.NamedType]*Symbol) (map[ast.NodeID]*Symbol, []*ast.NamedType) {
 	if len(refs) == 0 {
-		return map[ast.NodeID]*Symbol{}
+		return map[ast.NodeID]*Symbol{}, nil
 	}
-	out := make(map[ast.NodeID]*Symbol, len(refs))
+	byID := make(map[ast.NodeID]*Symbol, len(refs))
+	nts := make([]*ast.NamedType, 0, len(refs))
 	for n, sym := range refs {
 		if n == nil || n.ID == 0 {
 			continue
 		}
-		out[n.ID] = sym
+		byID[n.ID] = sym
+		nts = append(nts, n)
 	}
-	return out
+	return byID, nts
 }
 
 // resolver is the working state during one pass over a package. Each

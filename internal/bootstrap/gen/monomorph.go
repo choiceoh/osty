@@ -113,10 +113,10 @@ func (g *gen) calleeSymbol(fn ast.Expr) *resolve.Symbol {
 // a generic fn's body is visited once per outer monomorph, and each
 // inner generic call is re-specialized under that monomorph's subst.
 func (g *gen) callMonoName(c *ast.CallExpr) string {
-	if g.chk == nil {
+	if g.chk == nil || c == nil {
 		return ""
 	}
-	args, ok := g.chk.Instantiations[c]
+	args, ok := g.chk.InstantiationsByID[c.ID]
 	if !ok || len(args) == 0 {
 		return ""
 	}

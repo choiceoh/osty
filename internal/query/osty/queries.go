@@ -55,12 +55,14 @@ func (rp *ResolvedPackage) FileResult(path string) *resolve.Result {
 			continue
 		}
 		return &resolve.Result{
-			Refs:         pf.Refs,
-			TypeRefs:     pf.TypeRefs,
-			RefsByID:     pf.RefsByID,
-			TypeRefsByID: pf.TypeRefsByID,
-			FileScope:    pf.FileScope,
-			Diags:        rp.res.Diags,
+			Refs:          pf.Refs,
+			TypeRefs:      pf.TypeRefs,
+			RefsByID:      pf.RefsByID,
+			TypeRefsByID:  pf.TypeRefsByID,
+			RefIdents:     pf.RefIdents,
+			TypeRefIdents: pf.TypeRefIdents,
+			FileScope:     pf.FileScope,
+			Diags:         rp.res.Diags,
 		}
 	}
 	return nil
@@ -311,12 +313,12 @@ func buildIdentIndex(r *resolve.Result) map[int]*resolve.Symbol {
 	if r == nil {
 		return map[int]*resolve.Symbol{}
 	}
-	out := make(map[int]*resolve.Symbol, len(r.Refs)+len(r.TypeRefs))
-	for id, sym := range r.Refs {
-		out[id.Pos().Offset] = sym
+	out := make(map[int]*resolve.Symbol, len(r.RefIdents)+len(r.TypeRefIdents))
+	for _, id := range r.RefIdents {
+		out[id.Pos().Offset] = r.RefsByID[id.ID]
 	}
-	for nt, sym := range r.TypeRefs {
-		out[nt.Pos().Offset] = sym
+	for _, nt := range r.TypeRefIdents {
+		out[nt.Pos().Offset] = r.TypeRefsByID[nt.ID]
 	}
 	return out
 }

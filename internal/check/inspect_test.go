@@ -212,6 +212,9 @@ fn main() {
 		Instantiations: map[*ast.CallExpr][]types.Type{
 			call: {types.Int},
 		},
+		InstantiationsByID: map[ast.NodeID][]types.Type{
+			call.ID: {types.Int},
+		},
 	}
 	recs := Inspect(file, chk)
 

@@ -2133,10 +2133,8 @@ func loadLintConfigNear(startPath string) (lint.Config, bool) {
 // `line:col  Name  Kind  def-pos`. Useful for sanity-checking the
 // resolver's output without a debugger.
 func printResolution(_ *ast.File, res *resolve.Result) {
-	idents := make([]*ast.Ident, 0, len(res.Refs))
-	for id := range res.Refs {
-		idents = append(idents, id)
-	}
+	idents := make([]*ast.Ident, 0, len(res.RefIdents))
+	idents = append(idents, res.RefIdents...)
 	sort.Slice(idents, func(i, j int) bool {
 		a, b := idents[i].PosV, idents[j].PosV
 		if a.Line != b.Line {
@@ -2145,7 +2143,7 @@ func printResolution(_ *ast.File, res *resolve.Result) {
 		return a.Column < b.Column
 	})
 	for _, id := range idents {
-		s := res.Refs[id]
+		s := res.RefsByID[id.ID]
 		def := "<builtin>"
 		if s.Pos.Line > 0 {
 			def = fmt.Sprintf("%d:%d", s.Pos.Line, s.Pos.Column)

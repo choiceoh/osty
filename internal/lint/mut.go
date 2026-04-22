@@ -583,7 +583,7 @@ func markReadsForDeadStore(e ast.Expr, pending map[ast.Node]*deadStoreEntry, rr 
 		}
 		switch n := e.(type) {
 		case *ast.Ident:
-			if sym, ok := rr.Refs[n]; ok && sym != nil && sym.Decl != nil {
+			if sym := rr.RefsByID[n.ID]; sym != nil && sym.Decl != nil {
 				if t, ok := pending[sym.Decl]; ok {
 					t.pending = false
 				}
@@ -649,7 +649,7 @@ func exprReadsDecl(e ast.Expr, decl ast.Node, rr *resolve.Result) bool {
 			return
 		}
 		if id, ok := e.(*ast.Ident); ok {
-			if sym := rr.Refs[id]; sym != nil && sym.Decl == decl {
+			if sym := rr.RefsByID[id.ID]; sym != nil && sym.Decl == decl {
 				found = true
 				return
 			}
@@ -715,7 +715,7 @@ func (l *linter) rootIdentDecl(e ast.Expr) ast.Node {
 			if l.resolved == nil {
 				return nil
 			}
-			if sym := l.resolved.Refs[n]; sym != nil {
+			if sym := l.resolved.RefsByID[n.ID]; sym != nil {
 				return sym.Decl
 			}
 			return nil

@@ -48,14 +48,14 @@ func (r *Result) SymbolAt(pos token.Pos, rr *resolve.Result) *resolve.Symbol {
 	if rr == nil {
 		return nil
 	}
-	for id, sym := range rr.Refs {
+	for _, id := range rr.RefIdents {
 		if spanContains(id.PosV, id.EndV, pos) {
-			return sym
+			return rr.RefsByID[id.ID]
 		}
 	}
-	for id, sym := range rr.TypeRefs {
-		if spanContains(id.PosV, id.EndV, pos) {
-			return sym
+	for _, nt := range rr.TypeRefIdents {
+		if spanContains(nt.PosV, nt.EndV, pos) {
+			return rr.TypeRefsByID[nt.ID]
 		}
 	}
 	return nil
