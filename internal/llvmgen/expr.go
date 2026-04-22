@@ -1617,7 +1617,124 @@ func (g *generator) emitMatchExprValue(expr *ast.MatchExpr) (value, error) {
 	if info, ok := g.resultTypes[scrutinee.typ]; ok {
 		return g.emitResultMatchExprValue(scrutinee, info, expr.Arms)
 	}
+	// Optional match-as-expression: `match opt { Some(x) -> a, None -> b }`
+	// where opt has source type T?. The scrutinee LLVM type is "ptr"
+	// (boxed Option ABI: null = None, non-null = Some(x)), which the
+	// generic enum-tag fallback can't distinguish from a raw pointer.
+	// Mirrors the optional-source-type detection used by emitMatchStmt.
+	if scrutinee.typ == "ptr" {
+		if sourceType, ok := g.staticExprSourceType(expr.Scrutinee); ok {
+			resolved, resolveErr := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{})
+			if resolveErr == nil {
+				if opt, ok := resolved.(*ast.OptionalType); ok {
+					return g.emitOptionalMatchExprValue(scrutinee, opt.Inner, expr.Arms)
+				}
+			}
+		}
+	}
 	return value{}, unsupportedf("type-system", "match scrutinee type %s, want enum tag", scrutinee.typ)
+}
+
+// emitOptionalMatchExprValue lowers `match opt { Some(x) -> a, None -> b }`
+// in value position. Mirrors emitOptionalMatchStmt's branch shape but
+// uses emitIfExprPhi to merge the two arm values, so the match
+// participates as an expression in let / fn-return / nested call
+// position.
+//
+// Constraints (deliberately tight, matching the statement path):
+//   - exactly two productive arms covering Some + None (a wildcard
+//     fills in for either)
+//   - no guards (those still wall — same as the statement path)
+//   - both arms produce the same LLVM type (emitIfExprPhi enforces)
+//
+// The Some payload is bound via bindOptionalMatchPayload, which
+// already handles ptr / scalar / aggregate via loadValueFromAddress,
+// so this routine doesn't touch the boxing/unboxing surface.
+func (g *generator) emitOptionalMatchExprValue(scrutinee value, innerSource ast.Type, arms []*ast.MatchArm) (value, error) {
+	if len(arms) == 0 {
+		return value{}, unsupported("expression", "optional match has no arms")
+	}
+	type optionalArmExpr struct {
+		pat  optionalMatchPatternInfo
+		body ast.Expr
+	}
+	parsed := make([]optionalArmExpr, 0, len(arms))
+	for _, arm := range arms {
+		if arm == nil {
+			return value{}, unsupported("expression", "nil match arm")
+		}
+		if arm.Guard != nil {
+			return value{}, unsupported("expression", "guarded optional match arms not yet supported in expression position")
+		}
+		pat, ok, err := matchOptionalPattern(arm.Pattern)
+		if err != nil {
+			return value{}, err
+		}
+		if !ok {
+			return value{}, unsupportedf("expression", "optional match arm must be Some/None/wildcard, got %T", arm.Pattern)
+		}
+		parsed = append(parsed, optionalArmExpr{pat: pat, body: arm.Body})
+	}
+	// Resolve which parsed arm covers Some and which covers None, with
+	// a wildcard filling in either slot. The first matching arm wins
+	// (mirrors source-order arm preference).
+	var someArm, noneArm, wildcardArm *optionalArmExpr
+	for i := range parsed {
+		switch {
+		case parsed[i].pat.isSome && someArm == nil:
+			someArm = &parsed[i]
+		case parsed[i].pat.isNone && noneArm == nil:
+			noneArm = &parsed[i]
+		case parsed[i].pat.isWildcard && wildcardArm == nil:
+			wildcardArm = &parsed[i]
+		}
+	}
+	if someArm == nil {
+		someArm = wildcardArm
+	}
+	if noneArm == nil {
+		noneArm = wildcardArm
+	}
+	if someArm == nil || noneArm == nil {
+		return value{}, unsupported("expression", "optional match must cover both Some and None (a wildcard counts for the missing side)")
+	}
+
+	emitter := g.toOstyEmitter()
+	isNil := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNil, scrutinee.ref))
+	// `cond=true` selects the then-label per llvmIfExprStart; isNil=true
+	// → the None arm runs in `then`, the Some arm in `else`.
+	labels := llvmIfExprStart(emitter, &LlvmValue{typ: "i1", name: isNil})
+	g.takeOstyEmitter(emitter)
+
+	g.currentBlock = labels.thenLabel
+	g.pushScope()
+	noneValue, err := g.emitMatchArmBodyValue(noneArm.body)
+	g.popScope()
+	if err != nil {
+		return value{}, err
+	}
+	nonePred := g.currentBlock
+
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+	g.pushScope()
+	if someArm.pat.isSome {
+		if err := g.bindOptionalMatchPayload(scrutinee, innerSource, someArm.pat); err != nil {
+			g.popScope()
+			return value{}, err
+		}
+	}
+	someValue, err := g.emitMatchArmBodyValue(someArm.body)
+	g.popScope()
+	if err != nil {
+		return value{}, err
+	}
+	somePred := g.currentBlock
+
+	return g.emitIfExprPhi(labels, nonePred, somePred, noneValue, someValue)
 }
 
 // resultPatternInfo describes a single arm of a Result match: which
