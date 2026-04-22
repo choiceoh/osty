@@ -7,7 +7,6 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost"
@@ -68,40 +67,6 @@ func NativeDiagnostics(pkg *Package) ([]*diag.Diagnostic, error) {
 	return nativeResolveDiagnosticsFromArtifacts(result, files), nil
 }
 
-// NativeResolutionRowsForSource wraps one parsed source file in a synthetic
-// package and returns the selfhost resolve rows for that file.
-func NativeResolutionRowsForSource(path string, src []byte, file *ast.File) ([]NativeResolutionRow, error) {
-	if file == nil {
-		return nil, fmt.Errorf("native resolve: missing parsed file")
-	}
-	pkg := &Package{
-		Name: "<file>",
-		Files: []*PackageFile{{
-			Path:   path,
-			Source: append([]byte(nil), src...),
-			File:   file,
-		}},
-	}
-	return NativeResolutionRows(pkg, path)
-}
-
-// NativeDiagnosticsForSource wraps one parsed source file in a synthetic
-// package and returns the selfhost resolve diagnostics for that file.
-func NativeDiagnosticsForSource(path string, src []byte, file *ast.File) ([]*diag.Diagnostic, error) {
-	if file == nil {
-		return nil, fmt.Errorf("native resolve: missing parsed file")
-	}
-	pkg := &Package{
-		Name: "<file>",
-		Files: []*PackageFile{{
-			Path:   path,
-			Source: append([]byte(nil), src...),
-			File:   file,
-		}},
-	}
-	return NativeDiagnostics(pkg)
-}
-
 func nativeResolveArtifacts(pkg *Package) (selfhost.ResolveResult, []nativeResolveFileInfo, error) {
 	if pkg == nil {
 		return selfhost.ResolveResult{}, nil, fmt.Errorf("native resolve: nil package")
@@ -140,9 +105,12 @@ func nativeResolveInput(pkg *Package) (selfhost.PackageResolveInput, []nativeRes
 		if len(src) == 0 {
 			continue
 		}
-		if pf.File == nil {
-			return selfhost.PackageResolveInput{}, nil, fmt.Errorf("native resolve: package file %s missing AST", pf.Path)
-		}
+		// File is required by the Direct lowering path in
+		// selfhostBuildPackageAstDirect. When pf was loaded via
+		// LoadPackageForNative it is nil; passing nil here makes
+		// ResolvePackageStructured take the non-Direct path, which
+		// re-parses Source via the self-host lexer + parser (no
+		// astbridge).
 		input.Files = append(input.Files, selfhost.PackageResolveFile{
 			Source:    append([]byte(nil), src...),
 			File:      pf.File,
@@ -174,7 +142,13 @@ func nativeResolveSourceForFile(pf *PackageFile) ([]byte, error) {
 		return nil, nil
 	}
 	if pf.File == nil {
-		return nil, fmt.Errorf("native resolve: package file %s missing AST", pf.Path)
+		// LoadPackageForNative-loaded files carry raw Source only
+		// (no canonicalization). parser.osty accepts the same
+		// grammar as the canonical form, so the native resolver's
+		// re-parse in selfhostBuildPackageAst handles the input
+		// identically. Return a defensive copy so downstream
+		// mutation of input.Files does not corrupt pf.Source.
+		return append([]byte(nil), pf.Source...), nil
 	}
 	src, _ := canonical.SourceWithMap(pf.Source, pf.File)
 	return src, nil

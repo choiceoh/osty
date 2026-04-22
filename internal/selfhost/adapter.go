@@ -1,14 +1,40 @@
 package selfhost
 
 import (
-	"github.com/osty/osty/internal/ast"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 
+	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/token"
 )
+
+// astbridgeLowerCount records every time a FrontendRun materializes
+// the *ast.File via the astbridge-based astLowerPublicFile adapter.
+// It is the single source of truth for "did this code path touch the
+// runtime.golegacy.astbridge bootstrap bridge?" — tests use it to pin
+// astbridge-free code paths (e.g., the native resolve wedge) and to
+// detect regressions when a would-be-native path silently falls back
+// to the Go AST. Counter is package-global because FrontendRun.File()
+// is the only astbridge entry point for the resolve/check/llvmgen
+// callers. See ResolveStructuredFromRun / cmd/osty case "resolve" for
+// the intended zero-bump usage.
+var astbridgeLowerCount int64
+
+// AstbridgeLowerCount returns the total number of astbridge-based
+// *ast.File lowerings performed since process start (or since the
+// last ResetAstbridgeLowerCount call).
+func AstbridgeLowerCount() int64 {
+	return atomic.LoadInt64(&astbridgeLowerCount)
+}
+
+// ResetAstbridgeLowerCount zeros the counter. Intended for tests that
+// want to measure astbridge activity over a specific code window.
+func ResetAstbridgeLowerCount() {
+	atomic.StoreInt64(&astbridgeLowerCount, 0)
+}
 
 // Lex runs the bootstrapped pure-Osty lexer and adapts its stream to the
 // compiler's public token surface.
@@ -172,12 +198,31 @@ func (r *FrontendRun) Comments() []token.Comment {
 }
 
 // File returns the lowered semantic AST for this front-end pass.
+//
+// First call materializes the *ast.File via astLowerPublicFile — the
+// single astbridge (`runtime.golegacy.astbridge`) entry point on the
+// resolve / check / llvmgen side of the compiler. Subsequent calls
+// return the cached result without touching astbridge again, so each
+// FrontendRun contributes at most one lowering to
+// AstbridgeLowerCount regardless of how many callers poke it.
 func (r *FrontendRun) File() *ast.File {
 	if r.file != nil {
 		return r.file
 	}
+	atomic.AddInt64(&astbridgeLowerCount, 1)
 	r.file = astLowerPublicFile(r.parser.arena, r.Tokens())
 	return r.file
+}
+
+// astFile wraps the parser arena in the self-host AstFile handle without
+// going through the astbridge *ast.File round-trip. Downstream native passes
+// (resolve/check/llvmgen) consume AstArena directly, so this is the
+// no-detour entry point.
+func (r *FrontendRun) astFile() *AstFile {
+	if r.parser == nil {
+		return nil
+	}
+	return &AstFile{arena: r.parser.arena}
 }
 
 // LexDiagnostics returns lexer-only diagnostics.

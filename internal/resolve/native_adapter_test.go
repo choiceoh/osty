@@ -4,7 +4,87 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/osty/osty/internal/selfhost"
 )
+
+// TestLoadPackageForNativeMultiFileIsAstbridgeFree pins the PR6 wedge:
+// running the package resolve path via LoadPackageForNative +
+// NativeResolutionRows / NativeDiagnostics over a multi-file package
+// must not trigger the astbridge-based *ast.File lowering. The counter
+// stays at zero throughout; calling EnsureFiles afterwards bumps it by
+// exactly one per file, proving the lazy lowering is wired correctly
+// for the fallback paths (--show-scopes, printResolutionRefs).
+func TestLoadPackageForNativeMultiFileIsAstbridgeFree(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.osty")
+	bPath := filepath.Join(dir, "b.osty")
+	if err := os.WriteFile(aPath, []byte(`pub fn helper() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte(`fn main() {
+    let value = helper()
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	selfhost.ResetAstbridgeLowerCount()
+
+	pkg, err := LoadPackageForNative(dir)
+	if err != nil {
+		t.Fatalf("LoadPackageForNative: %v", err)
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("after LoadPackageForNative: AstbridgeLowerCount = %d, want 0", got)
+	}
+	for _, pf := range pkg.Files {
+		if pf.File != nil {
+			t.Fatalf("LoadPackageForNative populated pf.File for %s (expected nil until EnsureFile)", pf.Path)
+		}
+		if pf.Run == nil {
+			t.Fatalf("LoadPackageForNative left pf.Run nil for %s", pf.Path)
+		}
+	}
+
+	diags, err := NativeDiagnostics(pkg)
+	if err != nil {
+		t.Fatalf("NativeDiagnostics: %v", err)
+	}
+	if len(diags) != 0 {
+		t.Fatalf("clean package produced diagnostics: %#v", diags)
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("after NativeDiagnostics: AstbridgeLowerCount = %d, want 0", got)
+	}
+
+	rows, err := NativeResolutionRows(pkg, bPath)
+	if err != nil {
+		t.Fatalf("NativeResolutionRows: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatalf("expected helper ref rows from b.osty, got none")
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("after NativeResolutionRows: AstbridgeLowerCount = %d, want 0", got)
+	}
+
+	pkg.EnsureFiles()
+	if got := selfhost.AstbridgeLowerCount(); got != int64(len(pkg.Files)) {
+		t.Fatalf("after EnsureFiles: AstbridgeLowerCount = %d, want %d (one lowering per file)", got, len(pkg.Files))
+	}
+	for _, pf := range pkg.Files {
+		if pf.File == nil {
+			t.Fatalf("EnsureFiles did not materialize pf.File for %s", pf.Path)
+		}
+	}
+
+	pkg.EnsureFiles()
+	if got := selfhost.AstbridgeLowerCount(); got != int64(len(pkg.Files)) {
+		t.Fatalf("second EnsureFiles re-lowered: AstbridgeLowerCount = %d, want %d (cached)", got, len(pkg.Files))
+	}
+}
 
 func TestNativeResolutionRowsCrossFile(t *testing.T) {
 	dir := t.TempDir()

@@ -2,6 +2,7 @@ package selfhost_test
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/osty/osty/internal/selfhost"
@@ -151,6 +152,109 @@ func TestResolvePackageStructuredDuplicateUsesOwningFilePath(t *testing.T) {
 	}
 	if resolved.Summary.Duplicates != 1 {
 		t.Fatalf("duplicates = %d, want 1 (summary=%#v)", resolved.Summary.Duplicates, resolved.Summary)
+	}
+}
+
+// TestResolveStructuredFromRunIsAstbridgeFree pins the core wedge
+// promise: calling Run + Diagnostics + ResolveStructuredFromRun on a
+// clean single-file source must not trigger astLowerPublicFile, i.e.
+// AstbridgeLowerCount stays at zero. The same test then calls
+// run.File() and verifies the counter bumps exactly once, confirming
+// that astbridge is still reachable for fallbacks (for example the
+// --show-scopes path in `osty resolve`) and that the counter is wired
+// to the right site. This is the regression net for future wedges:
+// any new native path that accidentally re-introduces an *ast.File
+// detour will bump the counter and fail this test.
+func TestResolveStructuredFromRunIsAstbridgeFree(t *testing.T) {
+	src := []byte(`fn helper(x: Int) -> Int {
+    x
+}
+
+fn main() {
+    let value = helper(1)
+}
+`)
+	selfhost.ResetAstbridgeLowerCount()
+
+	run := selfhost.Run(src)
+	_ = run.Diagnostics()
+	resolved := selfhost.ResolveStructuredFromRun(run)
+
+	if resolved.Summary.Diagnostics != 0 {
+		t.Fatalf("clean source produced diagnostics: %#v", resolved.Diagnostics)
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("AstbridgeLowerCount after Run + Diagnostics + ResolveStructuredFromRun = %d, want 0 (the arena path must not touch astbridge)", got)
+	}
+
+	if file := run.File(); file == nil {
+		t.Fatalf("run.File() returned nil")
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 1 {
+		t.Fatalf("AstbridgeLowerCount after run.File() = %d, want 1 (counter should be wired to the sole astbridge entry point)", got)
+	}
+
+	_ = run.File()
+	if got := selfhost.AstbridgeLowerCount(); got != 1 {
+		t.Fatalf("AstbridgeLowerCount after cached run.File() = %d, want 1 (re-calling File() should not re-lower)", got)
+	}
+}
+
+// TestResolveStructuredFromRunMatchesResolveSourceStructured pins the
+// invariant that feeds the astbridge removal wedge: running the native
+// resolver on a FrontendRun's parser arena directly must produce the
+// same ResolveResult as the legacy path that re-lexes/re-parses the
+// source. When this holds, downstream CLI call sites can switch from
+// ResolveSourceStructured / ResolvePackageStructured (both of which
+// still participate in the *ast.File round-trip for multi-file inputs)
+// to ResolveStructuredFromRun without any observable change.
+func TestResolveStructuredFromRunMatchesResolveSourceStructured(t *testing.T) {
+	cases := []struct {
+		name string
+		src  []byte
+	}{
+		{
+			name: "helper+main with ref",
+			src: []byte(`fn helper(x: Int) -> Int {
+    x
+}
+
+fn main() {
+    let value = helper(1)
+}
+`),
+		},
+		{
+			name: "use body with struct decl",
+			src: []byte(`use std.fs as fs
+
+pub struct User {
+    pub name: String,
+    pub age: Int,
+}
+
+fn main() {
+    let u = User { name: "a", age: 1 }
+}
+`),
+		},
+		{
+			name: "unresolved ref produces diagnostic",
+			src: []byte(`fn main() {
+    let x = missing()
+}
+`),
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			legacy := selfhost.ResolveSourceStructured(tc.src)
+			fresh := selfhost.ResolveStructuredFromRun(selfhost.Run(tc.src))
+			if !reflect.DeepEqual(legacy, fresh) {
+				t.Fatalf("ResolveStructuredFromRun diverges from ResolveSourceStructured\nlegacy=%#v\nfresh=%#v", legacy, fresh)
+			}
+		})
 	}
 }
 
