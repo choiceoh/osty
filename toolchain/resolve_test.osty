@@ -972,3 +972,76 @@ fn testSelfResolverCfgDisabledStillEmitsShapeDiags() {
     // Env disabled → decl survives despite the bad cfg.
     testing.assert(selfResolveHasSymbol(result, "bad", "fn"))
 }
+
+fn testSelfDetectImportCyclesEmptyGraphHasNoDiags() {
+    let input = SelfWorkspaceUses { packages: [] }
+    let diags = selfDetectImportCycles(input)
+    testing.assertEq(diags.len(), 0)
+}
+
+fn testSelfDetectImportCyclesDagEmitsNoDiag() {
+    // a → b → c; no cycle.
+    let input = SelfWorkspaceUses {
+        packages: [
+            SelfPackageUses {
+                path: "a",
+                uses: [SelfUseEdge { target: "b", pos: 10, endPos: 11, file: "" }],
+            },
+            SelfPackageUses {
+                path: "b",
+                uses: [SelfUseEdge { target: "c", pos: 20, endPos: 21, file: "" }],
+            },
+            SelfPackageUses { path: "c", uses: [] },
+        ],
+    }
+    let diags = selfDetectImportCycles(input)
+    testing.assertEq(diags.len(), 0)
+}
+
+fn testSelfDetectImportCyclesTwoCycleEmitsOneDiag() {
+    let input = SelfWorkspaceUses {
+        packages: [
+            SelfPackageUses {
+                path: "a",
+                uses: [SelfUseEdge { target: "b", pos: 10, endPos: 11, file: "a.osty" }],
+            },
+            SelfPackageUses {
+                path: "b",
+                uses: [SelfUseEdge { target: "a", pos: 20, endPos: 21, file: "b.osty" }],
+            },
+        ],
+    }
+    let diags = selfDetectImportCycles(input)
+    testing.assertEq(diags.len(), 1)
+    let first = diags[0]
+    testing.assertEq(first.importer, "b")
+    testing.assertEq(first.target, "a")
+    testing.assertEq(first.pos, 20)
+}
+
+fn testSelfDetectImportCyclesSelfLoop() {
+    let input = SelfWorkspaceUses {
+        packages: [
+            SelfPackageUses {
+                path: "a",
+                uses: [SelfUseEdge { target: "a", pos: 5, endPos: 6, file: "a.osty" }],
+            },
+        ],
+    }
+    let diags = selfDetectImportCycles(input)
+    testing.assertEq(diags.len(), 1)
+}
+
+fn testSelfDetectImportCyclesUnknownTargetIgnored() {
+    // Edge pointing at a package not in the input (e.g. std / external).
+    let input = SelfWorkspaceUses {
+        packages: [
+            SelfPackageUses {
+                path: "a",
+                uses: [SelfUseEdge { target: "std.fs", pos: 10, endPos: 11, file: "a.osty" }],
+            },
+        ],
+    }
+    let diags = selfDetectImportCycles(input)
+    testing.assertEq(diags.len(), 0)
+}

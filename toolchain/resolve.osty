@@ -209,6 +209,114 @@ pub fn selfResolveAstFileWithCfg(file: AstFile, cfg: SelfResolveCfgEnv) -> SelfR
     result
 }
 
+/// SelfUseEdge is one `use target.path` edge in the workspace import
+/// graph. `pos` / `endPos` are source offsets pointing at the use site
+/// that introduced the edge — cycle diagnostics anchor on them.
+pub struct SelfUseEdge {
+    pub target: String,
+    pub pos: Int,
+    pub endPos: Int,
+    pub file: String,
+}
+
+/// SelfPackageUses groups every non-FFI `use` edge emitted by one
+/// package. `path` is the dotted package key (same format as `UseKey`
+/// in internal/resolve).
+pub struct SelfPackageUses {
+    pub path: String,
+    pub uses: List<SelfUseEdge>,
+}
+
+/// SelfWorkspaceUses is the cross-package input accepted by
+/// `selfDetectImportCycles`. Callers should pre-sort `packages` by
+/// `path` so the diagnostic emission order is deterministic — the
+/// algorithm respects the given order.
+pub struct SelfWorkspaceUses {
+    pub packages: List<SelfPackageUses>,
+}
+
+/// SelfCycleDiag is one `E0506` cyclic-import diagnostic carrying the
+/// edge that closed the cycle. The rendered message matches the Go
+/// resolver's existing wording (v0.2 §5.4) so golden snapshots stay
+/// stable whether the diag is produced by Go or Osty.
+pub struct SelfCycleDiag {
+    pub importer: String,
+    pub target: String,
+    pub pos: Int,
+    pub endPos: Int,
+    pub file: String,
+    pub message: String,
+}
+
+struct SelfCycleState {
+    colors: List<Int>,
+    out: List<SelfCycleDiag>,
+}
+
+/// selfDetectImportCycles walks the workspace import graph and emits one
+/// SelfCycleDiag per edge that completes a cycle. Mirrors
+/// internal/resolve/workspace.go::detectCycles — DFS with a tri-state
+/// colour array (0=unvisited, 1=on-stack, 2=done). Targets absent from
+/// `input.packages` are ignored (matches the Go behaviour: stub and
+/// external-dep packages contribute no edges).
+pub fn selfDetectImportCycles(input: SelfWorkspaceUses) -> List<SelfCycleDiag> {
+    let mut paths: List<String> = []
+    let mut usesLists: List<List<SelfUseEdge>> = []
+    for pkg in input.packages {
+        paths.push(pkg.path)
+        usesLists.push(pkg.uses)
+    }
+    let mut colors: List<Int> = []
+    for p in paths {
+        let _keep = p
+        colors.push(0)
+    }
+    let mut state = SelfCycleState { colors, out: [] }
+    let mut idx = 0
+    for p in paths {
+        let _keep = p
+        state = selfCycleDfs(idx, paths, usesLists, state)
+        idx = idx + 1
+    }
+    state.out
+}
+
+fn selfCycleDfs(
+    idx: Int,
+    paths: List<String>,
+    usesLists: List<List<SelfUseEdge>>,
+    state: SelfCycleState,
+) -> SelfCycleState {
+    if state.colors[idx] == 2 {
+        return state
+    }
+    let mut out = state
+    out.colors[idx] = 1
+    for edge in usesLists[idx] {
+        let targetIdx = srStringListIndex(paths, edge.target)
+        if targetIdx < 0 {
+            continue
+        }
+        if out.colors[targetIdx] == 1 {
+            let message = "cyclic import: `" + paths[idx] + "` imports `" + edge.target + "` which (transitively) imports `" + paths[idx] + "`"
+            out.out.push(SelfCycleDiag {
+                importer: paths[idx],
+                target: edge.target,
+                pos: edge.pos,
+                endPos: edge.endPos,
+                file: edge.file,
+                message,
+            })
+            continue
+        }
+        if out.colors[targetIdx] == 0 {
+            out = selfCycleDfs(targetIdx, paths, usesLists, out)
+        }
+    }
+    out.colors[idx] = 2
+    out
+}
+
 pub fn selfResolveDiagnosticCount(result: SelfResolveResult) -> Int {
     result.diagnostics.len()
 }

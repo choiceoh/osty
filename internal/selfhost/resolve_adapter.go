@@ -16,6 +16,89 @@ type PackageResolveInput struct {
 	Cfg *CfgEnv `json:"cfg,omitempty"`
 }
 
+// UseEdge is one `use <target>` edge in the workspace import graph.
+// Pos / EndPos are source offsets pointing at the use site; callers
+// render them into line/column via their own source-map when emitting
+// diagnostics.
+type UseEdge struct {
+	Target string
+	Pos    int
+	EndPos int
+	File   string
+}
+
+// PackageUses groups every non-FFI use edge emitted by one package.
+// Path is the dotted package key (same format as
+// internal/resolve::UseKey).
+type PackageUses struct {
+	Path string
+	Uses []UseEdge
+}
+
+// WorkspaceUses is the cross-package input accepted by
+// DetectImportCycles. Callers should sort Packages lexicographically
+// by Path so the diagnostic emission order stays deterministic — the
+// detector respects the given order verbatim.
+type WorkspaceUses struct {
+	Packages []PackageUses
+}
+
+// CycleDiag is one cyclic-import diagnostic record carrying the edge
+// that closed the cycle. Callers convert this to a rich
+// diag.Diagnostic by rendering Pos / EndPos through their source map.
+type CycleDiag struct {
+	Importer string
+	Target   string
+	Pos      int
+	EndPos   int
+	File     string
+	Message  string
+}
+
+// DetectImportCycles walks the given workspace graph and returns one
+// CycleDiag per edge that completes a cycle. Targets absent from
+// Packages are ignored (matches the Go resolver's existing
+// behaviour: stub / external-dep packages contribute no edges). The
+// underlying DFS lives in toolchain/resolve.osty; callers on the Go
+// side build the graph, dispatch here, and translate the returned
+// diagnostics back into the host's diag.Diagnostic format.
+func DetectImportCycles(input WorkspaceUses) []CycleDiag {
+	self := toSelfWorkspaceUses(input)
+	diags := selfDetectImportCycles(self)
+	out := make([]CycleDiag, 0, len(diags))
+	for _, d := range diags {
+		out = append(out, CycleDiag{
+			Importer: d.importer,
+			Target:   d.target,
+			Pos:      d.pos,
+			EndPos:   d.endPos,
+			File:     d.file,
+			Message:  d.message,
+		})
+	}
+	return out
+}
+
+func toSelfWorkspaceUses(w WorkspaceUses) *SelfWorkspaceUses {
+	packages := make([]*SelfPackageUses, 0, len(w.Packages))
+	for _, p := range w.Packages {
+		uses := make([]*SelfUseEdge, 0, len(p.Uses))
+		for _, e := range p.Uses {
+			uses = append(uses, &SelfUseEdge{
+				target: e.Target,
+				pos:    e.Pos,
+				endPos: e.EndPos,
+				file:   e.File,
+			})
+		}
+		packages = append(packages, &SelfPackageUses{
+			path: p.Path,
+			uses: uses,
+		})
+	}
+	return &SelfWorkspaceUses{packages: packages}
+}
+
 // CfgEnv carries the values that `#[cfg(...)]` predicates compare against.
 // Mirrors toolchain/resolve.osty::SelfResolveCfgEnv and the internal/resolve
 // Go-side CfgEnv — kept as a separate type so the selfhost package has no
