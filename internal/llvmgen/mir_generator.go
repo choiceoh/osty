@@ -528,6 +528,18 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 			switch x.Name {
 			case "List", "Map", "Set", "ClosureEnv":
 				return true
+			case "Range":
+				// Range<Int> values only materialize via the
+				// placeholder UseRV(UnitConst) path in
+				// internal/mir/lower.go — there's no real value-
+				// position handling yet. Accepting the type here
+				// lets the MIR generator walk past functions that
+				// assign `0..n` to a temp (e.g. the string-slice
+				// receivers in parser.osty's opStripUseCQuotes)
+				// without tripping the supported-type check. When
+				// backends grow real Range lowering the payload
+				// shape (start/end/inclusive) can take over.
+				return true
 			}
 		}
 		// Concurrency runtime types are opaque pointers — the emitter
@@ -535,6 +547,16 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 		// the runtime ABI hands back from chan_make / spawn / etc.
 		switch x.Name {
 		case "Channel", "Handle", "Group", "TaskGroup", "Select", "Duration":
+			return true
+		case "Range":
+			// Range<T> is a prelude type but the Go-side resolver
+			// doesn't always flag its Symbol as SymBuiltin (the
+			// self-host checker's prelude registers Range, but the
+			// Go resolver isn't always in sync on the same Sym
+			// pointer). Accept it here whether Builtin is set or
+			// not — the MIR lowerer emits RangeLit as a placeholder
+			// UseRV(UnitConst) anyway, so the concrete shape is
+			// irrelevant until real lowering arrives.
 			return true
 		}
 		if g.mod != nil && g.mod.Layouts != nil {
