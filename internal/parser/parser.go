@@ -5,6 +5,7 @@ package parser
 import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 // Error is retained as an alias for back-compat. New code should use
@@ -58,4 +59,15 @@ func ParseCanonical(src []byte) (*ast.File, []*diag.Diagnostic) {
 func ParseDiagnostics(src []byte) (*ast.File, []*diag.Diagnostic) {
 	result := ParseDetailed(src)
 	return result.File, result.Diagnostics
+}
+
+// ParseRun lexes and parses src and returns the underlying selfhost
+// FrontendRun without lowering the result to the *ast.File semantic AST.
+// Callers that only need the Osty-native parser arena (native resolver,
+// native checker, native llvmgen) should use this entry point so the
+// astbridge-based *ast.File lowering is not triggered. Calling
+// run.File() afterwards remains valid if the *ast.File is eventually
+// needed — it is computed lazily on first access.
+func ParseRun(src []byte) *selfhost.FrontendRun {
+	return selfhost.Run(src)
 }

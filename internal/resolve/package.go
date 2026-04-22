@@ -4,6 +4,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/sourcemap"
 )
 
@@ -60,9 +61,22 @@ type PackageFile struct {
 	// spans carried by the parsed AST. Nil when the canonical source is a direct
 	// passthrough or no map was produced.
 	CanonicalMap *sourcemap.Map
-	// File is the parsed AST. Never nil, even when Parse reported errors;
-	// best-effort partial trees support multi-error reporting.
+	// File is the parsed AST. Normally non-nil, even when Parse reported
+	// errors (best-effort partial trees support multi-error reporting).
+	// Packages loaded via LoadPackageForNative defer File materialization
+	// — they populate Run instead and leave this nil until EnsureFile is
+	// called. All Go-native passes (resolve.ResolvePackage,
+	// check.File, lint, bootstrap/gen) still require File, so callers
+	// that may hit those paths should EnsureFile first.
 	File *ast.File
+	// Run is the self-host FrontendRun that produced this file's
+	// arena. Populated by LoadPackageForNative (and by
+	// LoadPackageWithTransform when File is also eagerly computed) so
+	// the native resolver / checker / llvmgen can consume the arena
+	// directly, skipping the astbridge *ast.File round-trip. Nil on
+	// synthetic packages built from already-parsed ASTs that were not
+	// produced by the self-host front end.
+	Run *selfhost.FrontendRun
 	// ParseDiags are diagnostics produced during lex + parse of this
 	// file. They are merged with resolver diagnostics by the package
 	// walker.
@@ -90,6 +104,36 @@ func (pf *PackageFile) CheckerSource() []byte {
 		return pf.CanonicalSource
 	}
 	return pf.Source
+}
+
+// EnsureFile materializes the *ast.File for this PackageFile. Packages
+// loaded via LoadPackageForNative populate Run but leave File nil to
+// skip the astbridge-based lowering; calling EnsureFile triggers that
+// lowering on demand (exactly one astLowerPublicFile per file, cached
+// thereafter). Returns the File, or nil if neither File nor Run is set.
+func (pf *PackageFile) EnsureFile() *ast.File {
+	if pf == nil {
+		return nil
+	}
+	if pf.File != nil {
+		return pf.File
+	}
+	if pf.Run != nil {
+		pf.File = pf.Run.File()
+	}
+	return pf.File
+}
+
+// EnsureFiles forces File materialization on every PackageFile in pkg.
+// Call this before any code path that reads pf.File directly (the
+// Go-native resolver, checker, linter, bootstrap/gen).
+func (pkg *Package) EnsureFiles() {
+	if pkg == nil {
+		return
+	}
+	for _, pf := range pkg.Files {
+		pf.EnsureFile()
+	}
 }
 
 // PackageResult is returned by ResolvePackage. It contains one

@@ -112,6 +112,62 @@ func ResolveSourceStructured(src []byte) ResolveResult {
 	)
 }
 
+// ResolveStructuredFromRun runs the self-host resolver directly on the
+// arena produced by an existing FrontendRun, skipping both the secondary
+// lex/parse pass done by ResolveSourceStructured and the *ast.File →
+// AstArena round-trip done by ResolvePackageStructured. Output matches
+// ResolveSourceStructured(src) for the same source. Callers that already
+// hold a FrontendRun should prefer this entry point so the astbridge
+// detour becomes dead code for the resolve pass.
+func ResolveStructuredFromRun(run *FrontendRun) ResolveResult {
+	if run == nil {
+		return ResolveResult{}
+	}
+	file := run.astFile()
+	if file == nil {
+		return ResolveResult{}
+	}
+	rt := run.rt
+	stream := run.stream
+	return adaptResolveResult(
+		selfResolveAstFile(file),
+		file,
+		func(start, end int) (int, int) {
+			return checkNodeOffsets(rt, stream, start, end)
+		},
+	)
+}
+
+// ResolveStructuredFromRunForPath is ResolveStructuredFromRun plus
+// single-file annotation: Symbols / Refs / TypeRefs / Diagnostics all
+// carry path, and each Ref's TargetFile is set to path when the resolver
+// found a declared (non-builtin) target. Use this when the caller
+// already knows the source file path and wants the same File /
+// TargetFile fields that ResolvePackageStructured produces for the
+// single-file case, without going through the *ast.File round-trip.
+func ResolveStructuredFromRunForPath(run *FrontendRun, path string) ResolveResult {
+	result := ResolveStructuredFromRun(run)
+	if path == "" {
+		return result
+	}
+	for i := range result.Symbols {
+		result.Symbols[i].File = path
+	}
+	for i := range result.Refs {
+		result.Refs[i].File = path
+		if result.Refs[i].TargetNode >= 0 {
+			result.Refs[i].TargetFile = path
+		}
+	}
+	for i := range result.TypeRefs {
+		result.TypeRefs[i].File = path
+	}
+	for i := range result.Diagnostics {
+		result.Diagnostics[i].File = path
+	}
+	return result
+}
+
 // ResolvePackageStructured lowers one structured package input into a
 // synthetic selfhost AST and runs the self-host resolver over the merged
 // package namespace.

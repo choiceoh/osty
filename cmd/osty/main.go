@@ -493,37 +493,52 @@ func main() {
 			os.Exit(1)
 		}
 	case "resolve":
-		parsed := parser.ParseDetailed(src)
-		file, parseDiags := parsed.File, parsed.Diagnostics
-		var res *resolve.Result
-		all := append([]*diag.Diagnostic{}, parseDiags...)
-		if nativeDiags, err := nativeResolveSingleFileDiagnostics(path, src, file); err == nil {
-			all = append(all, nativeDiags...)
-		} else {
-			res = resolveFile(file)
-			all = append(all, res.Diags...)
+		// Happy path: parse into a FrontendRun and drive resolve
+		// entirely through the self-host arena. The *ast.File lowering
+		// (and therefore the astbridge adapter) is only triggered when
+		// a fallback path needs it — --show-scopes still walks the Go
+		// resolver's Scope tree, so it lazily lowers via run.File()
+		// when asked.
+		run := parser.ParseRun(src)
+		parseDiags := run.Diagnostics()
+		var (
+			res  *resolve.Result
+			file *ast.File
+		)
+		ensureLoweredFile := func() *ast.File {
+			if file == nil {
+				file = run.File()
+			}
+			return file
 		}
+		ensureGoResolve := func() *resolve.Result {
+			if res == nil {
+				res = resolveFile(ensureLoweredFile())
+			}
+			return res
+		}
+		all := append([]*diag.Diagnostic{}, parseDiags...)
+		nativeDiags := nativeResolveFromRunDiagnostics(run, src, path)
+		all = append(all, nativeDiags...)
 		printDiags(formatter, all, flags)
-		if rows, err := nativeResolveSingleFileRows(path, src, file); err == nil && len(rows) > 0 {
+		if rows := nativeResolveFromRunRows(run, src, path); len(rows) > 0 {
 			printNativeResolutionRows(rows)
 		} else {
-			if res == nil {
-				res = resolveFile(file)
-			}
-			printResolution(file, res)
+			// Native pass produced no rows — fall back to the Go
+			// resolver for printResolution so empty-source or
+			// resolver-disagreement cases stay visible.
+			printResolution(ensureLoweredFile(), ensureGoResolve())
 		}
 		if flags.showScopes {
-			if res == nil {
-				res = resolveFile(file)
-			}
+			r := ensureGoResolve()
 			// File scope's parent is the package scope (a child of the
 			// prelude). Rooting the dump at the package scope hides
 			// noisy prelude builtins while still showing every
 			// user-declared symbol.
-			if pkgScope := res.FileScope.Parent(); pkgScope != nil {
+			if pkgScope := r.FileScope.Parent(); pkgScope != nil {
 				printScopeTree(pkgScope)
 			} else {
-				printScopeTree(res.FileScope)
+				printScopeTree(r.FileScope)
 			}
 		}
 		if hasError(all) {
@@ -902,27 +917,43 @@ func applyPackageFixes(pkg *resolve.Package, diags []*diag.Diagnostic, flags cli
 
 // runResolvePackage is runCheckPackage plus a resolution dump per file.
 func runResolvePackage(dir string, flags cliFlags) {
-	pkg, err := resolve.LoadPackageWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("resolve"), os.Stderr, flags))
+	// Happy path: LoadPackageForNative produces selfhost FrontendRuns
+	// per file and leaves pf.File nil, so the astbridge-based *ast.File
+	// lowering is not triggered unless a fallback explicitly needs it
+	// (--show-scopes, or the Go-native resolver printing branch). The
+	// Go-native fallback is kept so that printResolutionRefs /
+	// printScopeTree still work when callers rely on them — each
+	// EnsureFile*() call materializes the *ast.File lazily and caches
+	// it for subsequent passes.
+	pkg, err := resolve.LoadPackageForNativeWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("resolve"), os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
 	var res *resolve.PackageResult
+	ensureGoResolve := func() *resolve.PackageResult {
+		if res != nil {
+			return res
+		}
+		// Go-native resolver reads pf.File directly; materialize
+		// before calling so Run-only loaded files are lowered once.
+		pkg.EnsureFiles()
+		res = resolve.ResolvePackage(pkg, resolve.NewPrelude())
+		return res
+	}
 	diags := []*diag.Diagnostic(nil)
 	if nativeDiags, err := nativeResolvePackageDiagnostics(pkg); err == nil {
 		diags = append(packageParseDiags(pkg), nativeDiags...)
 	} else {
-		res = resolve.ResolvePackage(pkg, resolve.NewPrelude())
-		diags = res.Diags
+		r := ensureGoResolve()
+		diags = r.Diags
 	}
 	printPackageDiags(pkg, diags, flags)
 	if nativeRowsUsed := false; true {
 		for _, f := range pkg.Files {
 			rows, err := nativeResolvePackageRows(pkg, f.Path)
 			if err != nil || len(rows) == 0 {
-				if res == nil {
-					res = resolve.ResolvePackage(pkg, resolve.NewPrelude())
-				}
+				ensureGoResolve()
 				if len(f.Refs) == 0 {
 					continue
 				}
@@ -945,9 +976,7 @@ func runResolvePackage(dir string, flags cliFlags) {
 		}
 	}
 	if flags.showScopes {
-		if res == nil {
-			res = resolve.ResolvePackage(pkg, resolve.NewPrelude())
-		}
+		ensureGoResolve()
 		// Package scope's children are the file scopes, which in turn
 		// host fn / block / closure / match-arm scopes — the full
 		// nested tree for every file in the package.
