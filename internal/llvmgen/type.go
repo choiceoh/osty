@@ -69,6 +69,9 @@ func llvmRuntimeABIType(t ast.Type, env typeEnv) (string, error) {
 	case nil:
 		return "void", nil
 	case *ast.NamedType:
+		if info, ok := builtinRangeTypeFromAST(tt, env); ok {
+			return info.typ, nil
+		}
 		name := ""
 		structType := ""
 		enumType := ""
@@ -420,6 +423,8 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		return g.staticListLiteralSourceType(e)
 	case *ast.MapExpr:
 		return g.staticMapLiteralSourceType(e)
+	case *ast.RangeExpr:
+		return g.staticRangeExprSourceType(e)
 	case *ast.QuestionExpr:
 		src, ok := g.staticExprSourceType(e.X)
 		if !ok {
@@ -490,6 +495,12 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		if !ok {
 			return nil, false
 		}
+		if field, ok := g.builtinRangeFieldInfo(baseSource, e.Name); ok {
+			if e.IsOptional {
+				return wrapOptionalSourceType(field.sourceType), true
+			}
+			return field.sourceType, true
+		}
 		ownerSource := baseSource
 		if e.IsOptional {
 			var hasInner bool
@@ -535,6 +546,73 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		}
 	}
 	return nil, false
+}
+
+func (g *generator) staticRangeExprSourceType(expr *ast.RangeExpr) (ast.Type, bool) {
+	if expr == nil {
+		return nil, false
+	}
+	elem := ast.Type(&ast.NamedType{Path: []string{"Int"}})
+	var candidates []ast.Type
+	for _, part := range []ast.Expr{expr.Start, expr.Stop, expr.Step} {
+		if part == nil {
+			continue
+		}
+		src, ok := g.staticExprSourceType(part)
+		if !ok || src == nil {
+			continue
+		}
+		candidates = append(candidates, src)
+	}
+	if len(candidates) > 0 {
+		elem = candidates[0]
+		for _, candidate := range candidates[1:] {
+			if sameSourceType(elem, candidate) {
+				continue
+			}
+			elem = &ast.NamedType{Path: []string{"Int"}}
+			break
+		}
+	}
+	return &ast.NamedType{Path: []string{"Range"}, Args: []ast.Type{elem}}, true
+}
+
+type builtinRangeField struct {
+	index      int
+	typ        string
+	sourceType ast.Type
+}
+
+func (g *generator) builtinRangeFieldInfo(sourceType ast.Type, name string) (builtinRangeField, bool) {
+	if sourceType == nil {
+		return builtinRangeField{}, false
+	}
+	resolved, err := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{})
+	if err != nil {
+		return builtinRangeField{}, false
+	}
+	named, ok := resolved.(*ast.NamedType)
+	if !ok || len(named.Path) != 1 || named.Path[0] != "Range" || len(named.Args) != 1 {
+		return builtinRangeField{}, false
+	}
+	info, ok := builtinRangeTypeFromAST(named, g.typeEnv())
+	if !ok {
+		return builtinRangeField{}, false
+	}
+	switch name {
+	case "start":
+		return builtinRangeField{index: 0, typ: info.elemTyp, sourceType: named.Args[0]}, true
+	case "stop":
+		return builtinRangeField{index: 1, typ: info.elemTyp, sourceType: named.Args[0]}, true
+	case "hasStart":
+		return builtinRangeField{index: 2, typ: "i1", sourceType: &ast.NamedType{Path: []string{"Bool"}}}, true
+	case "hasStop":
+		return builtinRangeField{index: 3, typ: "i1", sourceType: &ast.NamedType{Path: []string{"Bool"}}}, true
+	case "inclusive":
+		return builtinRangeField{index: 4, typ: "i1", sourceType: &ast.NamedType{Path: []string{"Bool"}}}, true
+	default:
+		return builtinRangeField{}, false
+	}
 }
 
 func fnSourceTypeFromSignature(sig *fnSig) ast.Type {
@@ -783,6 +861,16 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 		}
 	case *ast.MapExpr:
 		return value{}, false
+	case *ast.RangeExpr:
+		sourceType, ok := g.staticRangeExprSourceType(e)
+		if !ok {
+			return value{}, false
+		}
+		info, ok := builtinRangeTypeFromAST(sourceType, g.typeEnv())
+		if !ok {
+			return value{}, false
+		}
+		return value{typ: info.typ, sourceType: sourceType}, true
 	case *ast.CallExpr:
 		if out, ok := g.staticStringMethodResult(e); ok {
 			return out, true
@@ -851,6 +939,12 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 	case *ast.FieldExpr:
 		if e.IsOptional {
 			return value{}, false
+		}
+		if baseSource, ok := g.staticExprSourceType(e.X); ok {
+			if field, ok := g.builtinRangeFieldInfo(baseSource, e.Name); ok {
+				out := value{typ: field.typ, sourceType: field.sourceType}
+				return g.decorateStaticValueFromSourceType(out, e), true
+			}
 		}
 		baseInfo, ok := g.staticExprInfo(e.X)
 		if !ok {
@@ -1816,6 +1910,9 @@ func llvmType(t ast.Type, env typeEnv) (string, error) {
 	t = resolved
 	switch tt := t.(type) {
 	case *ast.NamedType:
+		if info, ok := builtinRangeTypeFromAST(tt, env); ok {
+			return info.typ, nil
+		}
 		if len(tt.Path) == 1 && tt.Path[0] == "Result" && len(tt.Args) == 2 {
 			okTyp, err := llvmType(tt.Args[0], env)
 			if err != nil {

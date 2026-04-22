@@ -3,42 +3,32 @@ package llvmgen
 import (
 	"strings"
 	"testing"
-
-	"github.com/osty/osty/internal/parser"
 )
 
-// TestEmitExprDefaultWallCarriesSourcePos locks in that the emitExpr
-// fallthrough wall (LLVM013 "expression: expression %T") is tagged
-// with the offending node's line:col. The native-toolchain probe
-// (TestProbeNativeToolchainMerged) relies on this tag to point
-// investigators at the exact Tier A blocker in the merged buffer
-// without re-running a second diagnostic pass.
-//
-// Positive-position reproduction: a value-position RangeExpr. For
-// the synthetic source below the RangeExpr literal starts at line 2,
-// column 13 (`0..10`), so the wall must include `at 2:13` and the
-// corresponding byte offset.
-func TestEmitExprDefaultWallCarriesSourcePos(t *testing.T) {
-	src := []byte("fn main() {\n    let r = 0..10\n    println(r)\n}\n")
-	file, _ := parser.ParseDiagnostics(src)
-	if file == nil {
-		t.Fatalf("parse returned nil file")
+// TestRangeExprValuePositionLowers locks the fix for the
+// value-position `RangeExpr` wall that used to stop the merged
+// toolchain probe at LLVM013. The exact shape mirrors the probe's
+// motivating formatter case: an `if` expression on the left of `..`.
+func TestRangeExprValuePositionLowers(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn build(ok: Bool) -> Range<Int> {
+    if ok { 0 } else { 1 }..10
+}
+
+fn main() {
+    let _ = build(true)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/range_expr_value.osty"})
+	if err != nil {
+		t.Fatalf("range value lowering errored: %v", err)
 	}
-	_, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/pos_probe.osty"})
-	if err == nil {
-		t.Fatalf("expected LLVM013 wall for value-position RangeExpr; got nil")
-	}
-	msg := err.Error()
-	if !strings.Contains(msg, "LLVM013") {
-		t.Fatalf("expected LLVM013 wall; got: %s", msg)
-	}
-	if !strings.Contains(msg, "*ast.RangeExpr") {
-		t.Fatalf("expected wall to mention *ast.RangeExpr; got: %s", msg)
-	}
-	if !strings.Contains(msg, "at 2:13") {
-		t.Fatalf("expected wall to pin `at 2:13`; got: %s", msg)
-	}
-	if !strings.Contains(msg, "offset ") {
-		t.Fatalf("expected wall to include byte offset; got: %s", msg)
+	got := string(ir)
+	for _, want := range []string{
+		"%Range.i64 = type { i64, i64, i1, i1, i1 }",
+		"insertvalue %Range.i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
 	}
 }

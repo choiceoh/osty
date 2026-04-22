@@ -256,6 +256,7 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 		traceHelpers:    map[string]string{},
 		tupleTypes:      map[string]tupleTypeInfo{},
 		resultTypes:     map[string]builtinResultType{},
+		rangeTypes:      map[string]builtinRangeType{},
 	}
 	if len(file.Stmts) > 0 {
 		if len(file.Decls) > 0 {
@@ -266,6 +267,7 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 		g.runtimeFFI = collectRuntimeFFI(file, env)
 		g.runtimeFFIPaths = collectRuntimeFFIPaths(file)
 		g.resultTypes = collectBuiltinResultTypes(file, env)
+		g.rangeTypes = collectBuiltinRangeTypes(file, env)
 		g.testingAliases = collectStdTestingAliases(file)
 		g.stdBytesAliases = collectStdBytesAliases(file)
 		g.stdStringsAliases = collectStdStringsAliases(file)
@@ -294,6 +296,7 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 	g.globalConsts = map[string]constValue{}
 	g.tupleTypes = collectTupleTypes(file, g.typeEnv())
 	g.resultTypes = collectBuiltinResultTypes(file, g.typeEnv())
+	g.rangeTypes = collectBuiltinRangeTypes(file, g.typeEnv())
 	g.runtimeFFI = collectRuntimeFFI(file, g.typeEnv())
 	g.runtimeFFIPaths = collectRuntimeFFIPaths(file)
 	g.testingAliases = collectStdTestingAliases(file)
