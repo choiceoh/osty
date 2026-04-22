@@ -190,6 +190,91 @@ func newMIRGen(m *mir.Module, opts Options) *mirGen {
 	}
 }
 
+// formatFnAttrs renders the v0.6 A8/A9/A10 function-level LLVM
+// attributes for a MIR function into a single space-joined string
+// suitable for splicing between the parameter list and the body
+// brace of a `define`/`declare` line. Returns "" when no attribute
+// applies.
+//
+// The set handled here is the exact mirror of the IR FnDecl fields
+// ir.Lower populates from annotations — InlineMode, Hot, Cold,
+// TargetFeatures. Shared across MIR and HIR emitters via the legacy
+// bridge's reified annotation list on the HIR side.
+func formatFnAttrs(fn *mir.Function) string {
+	parts := make([]string, 0, 5)
+	switch fn.InlineMode {
+	case 1: // InlineSoft
+		parts = append(parts, "inlinehint")
+	case 2: // InlineAlways
+		parts = append(parts, "alwaysinline")
+	case 3: // InlineNever
+		parts = append(parts, "noinline")
+	}
+	if fn.Hot {
+		parts = append(parts, "hot")
+	}
+	if fn.Cold {
+		parts = append(parts, "cold")
+	}
+	if fn.Pure {
+		// v0.6 A13 `#[pure]` → LLVM `readnone`: function reads no
+		// memory and has no side effects. Enables caller-side CSE.
+		parts = append(parts, "readnone")
+	}
+	if len(fn.TargetFeatures) > 0 {
+		prefixed := make([]string, len(fn.TargetFeatures))
+		for i, f := range fn.TargetFeatures {
+			// LLVM's target-features string expects each feature
+			// prefixed with `+` for enable or `-` for disable. The
+			// v0.6 annotation set only supports enable, so we
+			// always prepend `+`. Features the user typed with a
+			// leading `+` are tolerated by stripping it first.
+			prefixed[i] = "+" + strings.TrimPrefix(f, "+")
+		}
+		parts = append(parts,
+			fmt.Sprintf(`"target-features"="%s"`, strings.Join(prefixed, ",")))
+	}
+	return strings.Join(parts, " ")
+}
+
+// noaliasNameSet builds a lookup set of parameter names that should
+// receive the LLVM `noalias` attribute. Bare `#[noalias]` is encoded
+// as NoaliasAll, producing a nil set that the per-param check treats
+// as "yes for every pointer param". The explicit list form produces
+// a populated set and the all-flag is false.
+func noaliasNameSet(fn *mir.Function) map[string]struct{} {
+	if fn.NoaliasAll || len(fn.NoaliasParams) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(fn.NoaliasParams))
+	for _, n := range fn.NoaliasParams {
+		set[n] = struct{}{}
+	}
+	return set
+}
+
+// paramIsNoalias decides whether a single parameter should receive
+// the `noalias` attribute on the LLVM signature line. LLVM rejects
+// the attribute on non-pointer types, so we gate on the LLVM-level
+// type being `ptr`. The lookup uses the parameter's source-level
+// name (from mir.Local.Name), not the emitted `%argN` symbol.
+func paramIsNoalias(fn *mir.Function, loc *mir.Local, llvmT string, names map[string]struct{}) bool {
+	if llvmT != "ptr" {
+		return false
+	}
+	if fn.NoaliasAll {
+		return true
+	}
+	if names == nil {
+		return false
+	}
+	if loc == nil {
+		return false
+	}
+	_, ok := names[loc.Name]
+	return ok
+}
+
 func firstNonEmpty(xs ...string) string {
 	for _, x := range xs {
 		if x != "" {
@@ -935,6 +1020,13 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 		cconv = "ccc "
 	}
 
+	// v0.6 A8/A9/A10: function-level LLVM attributes go between the
+	// closing paren of the param list and the `{` that opens the body.
+	// `declare` lines accept the same set. Keyword attrs (`noinline`,
+	// `alwaysinline`, `inlinehint`, `hot`, `cold`) are bare; string
+	// attrs (`"target-features"="+f1,+f2"`) take the key=value form.
+	attrs := formatFnAttrs(fn)
+
 	if fn.IsExternal {
 		// External stub: just a declare.
 		sig := g.functionTypes[fn.Name]
@@ -945,7 +1037,12 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 		g.out.WriteString(emitName)
 		g.out.WriteByte('(')
 		g.out.WriteString(strings.Join(sig.paramLLVM, ", "))
-		g.out.WriteString(")\n\n")
+		g.out.WriteByte(')')
+		if attrs != "" {
+			g.out.WriteByte(' ')
+			g.out.WriteString(attrs)
+		}
+		g.out.WriteString("\n\n")
 		return nil
 	}
 
@@ -963,6 +1060,12 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 
 	// Signature line.
 	sig := g.functionTypes[fn.Name]
+	// v0.6 A11: decide per-param whether the `noalias` attribute
+	// applies. Bare `#[noalias]` stamps every pointer param;
+	// `#[noalias(p1, p2)]` stamps only the named ones. Non-pointer
+	// params (i64, double, etc.) ignore the attribute — LLVM rejects
+	// `noalias` on non-pointer types.
+	noaliasNames := noaliasNameSet(fn)
 	g.fnBuf.WriteString("define ")
 	g.fnBuf.WriteString(cconv)
 	g.fnBuf.WriteString(sig.retLLVM)
@@ -974,11 +1077,20 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 			g.fnBuf.WriteString(", ")
 		}
 		loc := fn.Local(pid)
-		g.fnBuf.WriteString(g.llvmType(loc.Type))
+		llvmT := g.llvmType(loc.Type)
+		g.fnBuf.WriteString(llvmT)
+		if paramIsNoalias(fn, loc, llvmT, noaliasNames) {
+			g.fnBuf.WriteString(" noalias")
+		}
 		g.fnBuf.WriteString(" %arg")
 		g.fnBuf.WriteString(strconv.Itoa(i))
 	}
-	g.fnBuf.WriteString(") {\n")
+	g.fnBuf.WriteByte(')')
+	if attrs != "" {
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(attrs)
+	}
+	g.fnBuf.WriteString(" {\n")
 
 	// Entry-block preamble: alloca one slot per non-parameter local,
 	// and store incoming params into their alloca slots.

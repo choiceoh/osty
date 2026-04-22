@@ -190,6 +190,42 @@ var annotationRules = map[string]AnnotationTarget{
 	// Composes with `#[vectorize]` (unroll × width ≈ effective
 	// throughput). §3.8.6.
 	"unroll": TargetTopLevelDecl | TargetMethod,
+	// v0.6 A8. Inlining hint family. Bare `#[inline]` emits LLVM's
+	// `inlinehint` fn attribute, a soft suggestion. `#[inline(always)]`
+	// / `#[inline(never)]` emit the hard `alwaysinline` / `noinline`
+	// attributes which the inliner honors mechanically. §3.8.7.
+	"inline": TargetTopLevelDecl | TargetMethod,
+	// v0.6 A9. Function frequency hints. `#[hot]` emits the LLVM
+	// `hot` fn attribute (aggressive optimization, `.text.hot`
+	// section); `#[cold]` emits `cold` (size-optimize, move to
+	// `.text.cold`, bias branch prediction away from calls). Bare
+	// flags. §3.8.8.
+	"hot":  TargetTopLevelDecl | TargetMethod,
+	"cold": TargetTopLevelDecl | TargetMethod,
+	// v0.6 A10. Per-function target feature override. Each bare-ident
+	// argument names a CPU feature the backend should enable while
+	// compiling this function; the LLVM emitter materialises them as
+	// a single `target-features="+f1,+f2"` fn attribute. Lets a
+	// library ship one SIMD-heavy function compiled for AVX-512 /
+	// SVE without forcing the whole program onto that baseline.
+	// §3.8.9.
+	"target_feature": TargetTopLevelDecl | TargetMethod,
+	// v0.6 A11. Promise that pointer-typed parameters do not alias.
+	// Bare `#[noalias]` marks every pointer param; `#[noalias(p1, p2)]`
+	// marks only the listed params. The LLVM emitter inserts the
+	// `noalias` parameter attribute on matching params so the LLVM
+	// alias analyzer can assume the pointers point at disjoint
+	// memory — unlocks SROA, loop vectorization, and LICM that would
+	// otherwise bail on potential aliasing. §3.8.11.
+	"noalias": TargetTopLevelDecl | TargetMethod,
+	// v0.6 A13. Asserts the function has no observable side effects
+	// (no writes to memory the caller can see, no I/O, no calls to
+	// impure functions). The LLVM emitter sets the `readnone` fn
+	// attribute so callers can CSE / hoist repeated calls to the same
+	// arguments. Lenient in v0.6 — the compiler trusts the
+	// annotation; a checker-level enforcement pass is tracked under
+	// SPEC_GAPS `pure-enforce`. §3.8.12.
+	"pure": TargetTopLevelDecl | TargetMethod,
 }
 
 // IsAllowedAnnotation reports whether an annotation name is part of the

@@ -402,7 +402,49 @@ type FnDecl struct {
 	// emits `llvm.loop.unroll.count, i32 N` instead of the bare
 	// enable flag. Only meaningful when `Unroll == true`.
 	UnrollCount int
+	// InlineMode captures the v0.6 A8 `#[inline]` family:
+	//   0 = InlineNone   — no annotation, let the inliner decide
+	//   1 = InlineSoft   — `#[inline]` bare; emits `inlinehint`
+	//   2 = InlineAlways — `#[inline(always)]`; emits `alwaysinline`
+	//   3 = InlineNever  — `#[inline(never)]`; emits `noinline`
+	InlineMode int
+	// Hot is true iff `#[hot]` is set. v0.6 A9. Emits LLVM's `hot` fn
+	// attribute (aggressive optimization + `.text.hot` section).
+	Hot bool
+	// Cold is true iff `#[cold]` is set. Opposite of `Hot`.
+	Cold bool
+	// TargetFeatures carries every bare-identifier argument from
+	// `#[target_feature(...)]` (v0.6 A10) in source order. The LLVM
+	// emitter renders them as `target-features="+f1,+f2"` with a `+`
+	// prefix per feature. Empty means "inherit module default".
+	TargetFeatures []string
+	// NoaliasAll is set by bare `#[noalias]` (v0.6 A11). When true,
+	// every pointer-typed parameter receives the LLVM `noalias`
+	// parameter attribute.
+	NoaliasAll bool
+	// NoaliasParams carries the explicit parameter name list from
+	// `#[noalias(p1, p2)]`. When non-empty, only the named pointer
+	// parameters get the `noalias` attribute; other pointer params
+	// stay potentially-aliasing. Mutually exclusive in practice with
+	// NoaliasAll (the resolver treats bare `#[noalias]` as the
+	// all-params form and the list form as surgical).
+	NoaliasParams []string
+	// Pure is set by `#[pure]` (v0.6 A13). The LLVM emitter attaches
+	// the `readnone` fn attribute so callers can CSE repeated calls
+	// with the same arguments. v0.6 trusts the annotation; a checker
+	// pass that verifies absence of side effects is open work tracked
+	// under SPEC_GAPS `pure-enforce`.
+	Pure bool
 }
+
+// Inline-hint enum values for FnDecl.InlineMode. Exported so
+// downstream tooling can switch on them without guessing integers.
+const (
+	InlineNone = iota
+	InlineSoft
+	InlineAlways
+	InlineNever
+)
 
 func (*FnDecl) declNode()          {}
 func (f *FnDecl) At() Span         { return f.SpanV }

@@ -529,6 +529,229 @@ pub struct Vec {
 	}
 }
 
+// --- #[inline] family (v0.6 A8) ---
+
+func TestInlineAcceptsBareFlag(t *testing.T) {
+	src := `
+#[inline]
+pub fn tiny(n: Int) -> Int { n + 1 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on bare #[inline], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestInlineAcceptsAlways(t *testing.T) {
+	src := `
+#[inline(always)]
+pub fn tiny(n: Int) -> Int { n + 1 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on #[inline(always)], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestInlineAcceptsNever(t *testing.T) {
+	src := `
+#[inline(never)]
+pub fn big(n: Int) -> Int { n + 1 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on #[inline(never)], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestInlineRejectsUnknownFlag(t *testing.T) {
+	src := `
+#[inline(sometimes)]
+pub fn mid(n: Int) -> Int { n + 1 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on unknown #[inline] flag, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+// --- #[hot] / #[cold] (v0.6 A9) ---
+
+func TestHotAcceptsBareFlag(t *testing.T) {
+	src := `
+#[hot]
+pub fn f() -> Int { 1 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on #[hot], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestColdAcceptsBareFlag(t *testing.T) {
+	src := `
+#[cold]
+pub fn errPath() -> Int { -1 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on #[cold], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestHotRejectsArgs(t *testing.T) {
+	src := `
+#[hot(level = 3)]
+pub fn f() -> Int { 1 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on #[hot(...)], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+// --- #[target_feature(...)] (v0.6 A10) ---
+
+func TestTargetFeatureAcceptsSingleFeature(t *testing.T) {
+	src := `
+#[target_feature(avx512f)]
+pub fn hot() -> Int { 1 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on single-feature target_feature, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestTargetFeatureAcceptsMultipleFeatures(t *testing.T) {
+	src := `
+#[target_feature(avx512f, avx512bw, avx512vl)]
+pub fn hot() -> Int { 1 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on multi-feature target_feature, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestTargetFeatureRejectsEmpty(t *testing.T) {
+	src := `
+#[target_feature()]
+pub fn hot() -> Int { 1 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on empty target_feature, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestTargetFeatureRejectsDuplicate(t *testing.T) {
+	src := `
+#[target_feature(avx512f, avx512f)]
+pub fn hot() -> Int { 1 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on duplicate feature, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+// --- #[noalias] (v0.6 A11) ---
+
+func TestNoaliasAcceptsBareFlag(t *testing.T) {
+	src := `
+#[noalias]
+pub fn copy(xs: List<Int>, ys: List<Int>) -> Int { 0 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on bare #[noalias], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestNoaliasAcceptsParamList(t *testing.T) {
+	src := `
+#[noalias(xs, ys)]
+pub fn copy(xs: List<Int>, ys: List<Int>) -> Int { 0 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on #[noalias(xs, ys)], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestNoaliasRejectsKeyValue(t *testing.T) {
+	src := `
+#[noalias(xs = 1)]
+pub fn copy(xs: List<Int>) -> Int { 0 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on key=value noalias, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestNoaliasRejectsDuplicate(t *testing.T) {
+	src := `
+#[noalias(xs, xs)]
+pub fn copy(xs: List<Int>) -> Int { 0 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on duplicate param, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestNoaliasRejectsOnField(t *testing.T) {
+	src := `
+pub struct Bad {
+    #[noalias]
+    pub xs: List<Int>,
+}
+`
+	if got := countBadTarget(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0607 on noalias-on-field, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+// --- #[pure] (v0.6 A13) ---
+
+func TestPureAcceptsBareFlag(t *testing.T) {
+	src := `
+#[pure]
+pub fn hash(a: Int, b: Int) -> Int { a * 31 + b }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on bare #[pure], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestPureRejectsArgs(t *testing.T) {
+	src := `
+#[pure(strict)]
+pub fn hash(a: Int, b: Int) -> Int { a * 31 + b }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on #[pure(...)], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestPureRejectsOnField(t *testing.T) {
+	src := `
+pub struct Bad {
+    #[pure]
+    pub n: Int,
+}
+`
+	if got := countBadTarget(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0607 on pure-on-field, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
 // --- combined: full canonical runtime annotation stack ---
 
 func TestCanonicalRuntimeStackValidates(t *testing.T) {
