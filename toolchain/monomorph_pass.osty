@@ -761,8 +761,10 @@ pub fn hirTypeCodeList(ts: List<HirType>, pkg: String) -> List<String> {
 /// into the call expression's callee — Stage C's scanner does that.
 /// Stage B only guarantees enqueue + mangling + dedup.
 pub fn monoRequestFn(state: MonoState, fnDecl: HirFnDecl, typeArgs: List<HirType>) -> String {
-    if !monomorphShouldInstantiate(typeArgs.len(), fnDecl.generics.len()) {
-        monoAddErr(state, "monomorph: arity mismatch for {fnDecl.name}: {typeArgs.len()} type args vs {fnDecl.generics.len()} generics")
+    let typeArgCount = typeArgs.len()
+    let genericCount = fnDecl.generics.len()
+    if !monomorphShouldInstantiate(typeArgCount, genericCount) {
+        monoAddErr(state, "monomorph: arity mismatch for {fnDecl.name}: {typeArgCount} type args vs {genericCount} generics")
         return ""
     }
     if monoCheckConcreteArgs(state, "fn", fnDecl.name, typeArgs) {
@@ -809,8 +811,10 @@ pub fn monoRequestFn(state: MonoState, fnDecl: HirFnDecl, typeArgs: List<HirType
 /// Phase 4 method rewriting that runs before the struct is emitted
 /// still resolves the template.
 pub fn monoRequestStructType(state: MonoState, decl: HirStructDecl, typeArgs: List<HirType>) -> String {
-    if !monomorphShouldInstantiate(typeArgs.len(), decl.generics.len()) {
-        monoAddErr(state, "monomorph: arity mismatch for struct {decl.name}: {typeArgs.len()} type args vs {decl.generics.len()} generics")
+    let typeArgCount = typeArgs.len()
+    let genericCount = decl.generics.len()
+    if !monomorphShouldInstantiate(typeArgCount, genericCount) {
+        monoAddErr(state, "monomorph: arity mismatch for struct {decl.name}: {typeArgCount} type args vs {genericCount} generics")
         return ""
     }
     if monoCheckConcreteArgs(state, "struct", decl.name, typeArgs) {
@@ -849,8 +853,10 @@ pub fn monoRequestStructType(state: MonoState, decl: HirStructDecl, typeArgs: Li
 
 /// monoRequestEnumType is the enum counterpart of monoRequestStructType.
 pub fn monoRequestEnumType(state: MonoState, decl: HirEnumDecl, typeArgs: List<HirType>) -> String {
-    if !monomorphShouldInstantiate(typeArgs.len(), decl.generics.len()) {
-        monoAddErr(state, "monomorph: arity mismatch for enum {decl.name}: {typeArgs.len()} type args vs {decl.generics.len()} generics")
+    let typeArgCount = typeArgs.len()
+    let genericCount = decl.generics.len()
+    if !monomorphShouldInstantiate(typeArgCount, genericCount) {
+        monoAddErr(state, "monomorph: arity mismatch for enum {decl.name}: {typeArgCount} type args vs {genericCount} generics")
         return ""
     }
     if monoCheckConcreteArgs(state, "enum", decl.name, typeArgs) {
@@ -888,8 +894,10 @@ pub fn monoRequestEnumType(state: MonoState, decl: HirEnumDecl, typeArgs: List<H
 /// interfaces have no instance-method dispatch site to route, so Phase
 /// 4 bookkeeping skips them.
 pub fn monoRequestInterfaceType(state: MonoState, decl: HirInterfaceDecl, typeArgs: List<HirType>) -> String {
-    if !monomorphShouldInstantiate(typeArgs.len(), decl.generics.len()) {
-        monoAddErr(state, "monomorph: arity mismatch for interface {decl.name}: {typeArgs.len()} type args vs {decl.generics.len()} generics")
+    let typeArgCount = typeArgs.len()
+    let genericCount = decl.generics.len()
+    if !monomorphShouldInstantiate(typeArgCount, genericCount) {
+        monoAddErr(state, "monomorph: arity mismatch for interface {decl.name}: {typeArgCount} type args vs {genericCount} generics")
         return ""
     }
     if monoCheckConcreteArgs(state, "interface", decl.name, typeArgs) {
@@ -939,8 +947,10 @@ pub fn monoRequestMethodSpecialization(
     method: HirFnDecl,
     typeArgs: List<HirType>,
 ) -> String {
-    if !monomorphShouldInstantiate(typeArgs.len(), method.generics.len()) {
-        monoAddErr(state, "monomorph: arity mismatch for method {ownerMangled}.{method.name}: {typeArgs.len()} type args vs {method.generics.len()} generics")
+    let typeArgCount = typeArgs.len()
+    let genericCount = method.generics.len()
+    if !monomorphShouldInstantiate(typeArgCount, genericCount) {
+        monoAddErr(state, "monomorph: arity mismatch for method {ownerMangled}.{method.name}: {typeArgCount} type args vs {genericCount} generics")
         return ""
     }
     if monoCheckConcreteArgs(state, "method", method.name, typeArgs) {
@@ -1028,7 +1038,10 @@ pub fn monoDrain(state: MonoState) {
         monoDrainTypeQueue(state)
         monoDrainMethodQueue(state)
     }
-    monoAddErr(state, "monomorph: drain exceeded {maxPasses} passes; likely an emitter is enqueuing without discharging (current queue sizes: fn={state.queue.len()}, type={state.typeQueue.len()}, method={state.methodQueue.len()})")
+    let fnQueueLen = state.queue.len()
+    let typeQueueLen = state.typeQueue.len()
+    let methodQueueLen = state.methodQueue.len()
+    monoAddErr(state, "monomorph: drain exceeded {maxPasses} passes; likely an emitter is enqueuing without discharging (current queue sizes: fn={fnQueueLen}, type={typeQueueLen}, method={methodQueueLen})")
 }
 
 /// monoDrainFnQueue pops every currently-queued free-fn specialization

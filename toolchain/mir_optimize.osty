@@ -725,7 +725,8 @@ fn mirCollapseBlockEdges(bb: MirBasicBlock, func: MirFunction) -> Bool {
             }
         },
         MirTermSwitchInt -> {
-            let nCases = bb.term.cases.len()
+            let cases = bb.term.cases
+            let nCases = cases.len()
             let mut ci = 0
             for _iter in 0..nCases {
                 let curTarget = bb.term.cases[ci].target

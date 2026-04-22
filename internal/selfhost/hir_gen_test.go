@@ -12,9 +12,9 @@ import (
 )
 
 // TestToolchainHirSourcesTranspile verifies the HIR bundle (ty +
-// hir + hir_clone + hir_lower) goes through the bootstrap seedgen
-// transpiler and the resulting Go compiles. Mirrors the llvmgen
-// smoke test so regressions in any HIR file surface here.
+// hir + hir_clone + pmcompile + hir_lower) goes through the bootstrap
+// seedgen transpiler and the resulting Go compiles. Mirrors the
+// llvmgen smoke test so regressions in any HIR file surface here.
 func TestToolchainHirSourcesTranspile(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping self-host hir transpile smoke test in short mode")

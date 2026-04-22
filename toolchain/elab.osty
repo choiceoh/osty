@@ -56,6 +56,11 @@ pub struct ElabCx {
     pub ast: AstFile,
     pub core: CoreArena,
     pub env: CheckEnv,
+    pub typedExprNodes: List<Int>,
+    pub typedExprCoreNodes: List<Int>,
+    pub typedExprTypes: List<Int>,
+    pub typedStmtNodes: List<Int>,
+    pub typedStmtCoreNodes: List<Int>,
 }
 
 pub struct InstSession {
@@ -71,6 +76,11 @@ pub fn newElabCx(ast: AstFile, tys: TyArena) -> ElabCx {
         ast,
         core: emptyCoreArena(),
         env,
+        typedExprNodes: [],
+        typedExprCoreNodes: [],
+        typedExprTypes: [],
+        typedStmtNodes: [],
+        typedStmtCoreNodes: [],
     }
 }
 
@@ -672,7 +682,7 @@ pub fn elabStmt(cx: ElabCx, idx: Int) -> Int {
         return -1
     }
     let node = astArenaNodeAt(cx.ast.arena, idx)
-    match node.kind {
+    let out = match node.kind {
         AstNLet -> elabLetStmt(cx, node),
         AstNAssign -> elabAssignStmt(cx, node),
         AstNReturn -> elabReturnStmt(cx, node),
@@ -684,6 +694,8 @@ pub fn elabStmt(cx: ElabCx, idx: Int) -> Int {
         AstNContinue -> coreContinueStmt(cx.core, node.start, node.end),
         _ -> elabExprAsStmt(cx, idx, node),
     }
+    elabRecordTypedStmt(cx, idx, out)
+    out
 }
 
 fn elabExprAsStmt(cx: ElabCx, idx: Int, node: AstNode) -> Int {
@@ -1043,7 +1055,51 @@ fn elabRecordTypedExpr(cx: ElabCx, idx: Int, out: ElabResult) {
     if idx < 0 || out.node < 0 || tyIsBad(cx.env.tys, out.ty) {
         return
     }
+    cx.typedExprNodes.push(idx)
+    cx.typedExprCoreNodes.push(out.node)
+    cx.typedExprTypes.push(out.ty)
     coreSetOrigin(cx.core, out.node, idx)
+}
+
+fn elabRecordTypedStmt(cx: ElabCx, idx: Int, coreIdx: Int) {
+    if idx < 0 || coreIdx < 0 {
+        return
+    }
+    cx.typedStmtNodes.push(idx)
+    cx.typedStmtCoreNodes.push(coreIdx)
+}
+
+pub fn elabTypedExprCoreAt(cx: ElabCx, idx: Int) -> Int {
+    let mut i = cx.typedExprNodes.len() - 1
+    for i >= 0 {
+        if cx.typedExprNodes[i] == idx {
+            return cx.typedExprCoreNodes[i]
+        }
+        i = i - 1
+    }
+    -1
+}
+
+pub fn elabTypedExprTyAt(cx: ElabCx, idx: Int) -> Int {
+    let mut i = cx.typedExprNodes.len() - 1
+    for i >= 0 {
+        if cx.typedExprNodes[i] == idx {
+            return cx.typedExprTypes[i]
+        }
+        i = i - 1
+    }
+    -1
+}
+
+pub fn elabTypedStmtCoreAt(cx: ElabCx, idx: Int) -> Int {
+    let mut i = cx.typedStmtNodes.len() - 1
+    for i >= 0 {
+        if cx.typedStmtNodes[i] == idx {
+            return cx.typedStmtCoreNodes[i]
+        }
+        i = i - 1
+    }
+    -1
 }
 
 /// astTypeToTy materialises an AST type node into the typed arena.

@@ -16,8 +16,9 @@ package bundle
 // checker bundle to make the HIR tier transpile cleanly. `hir.osty`
 // defines the HIR node algebra; `hir_clone.osty` supplies deep-clone
 // helpers; `monomorph_pass.osty` provides the `hirCloneType` /
-// `hirCloneTypeList` primitives the clone layer calls; `hir_lower.osty`
-// is the AST → HIR lowerer plus annotation extractors.
+// `hirCloneTypeList` primitives the clone layer calls; `pmcompile.osty`
+// provides the match decision-tree compiler used by `hir_lower.osty`;
+// `hir_lower.osty` is the AST → HIR lowerer plus annotation extractors.
 //
 // `ty.osty` (the arena-based type surface HIR lowering consumes) is
 // already in the checker bundle, so we don't re-declare it here — the
@@ -28,6 +29,7 @@ var hirExtensionFiles = []string{
 	"toolchain/monomorph.osty",
 	"toolchain/monomorph_rewrite.osty",
 	"toolchain/monomorph_pass.osty",
+	"toolchain/pmcompile.osty",
 	"toolchain/hir_lower.osty",
 }
 

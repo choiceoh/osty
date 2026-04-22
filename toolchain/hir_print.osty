@@ -1,0 +1,984 @@
+use std.strings as strings
+
+// hir_print.osty — stable debug rendering helpers for self-hosted HIR.
+//
+// This is the HIR-side counterpart to `internal/ir/print.go` plus
+// `internal/ir/pattern.go`'s PatternString helper. HIR is not interface-
+// based like Go IR, so the entry points are per-shape (`hirPrintModule`,
+// `hirPrintStmt`, `hirPrintExpr`, `hirPatternString`) rather than a single
+// `PrintNode(any)` API.
+
+// ====================================================================
+// Public entry points
+// ====================================================================
+
+pub fn hirPrintModule(m: HirModule) -> String {
+    let mut parts: List<String> = []
+    parts.push("(module \"{hirPrintEscapeString(m.packageName)}\"")
+
+    for decl in m.fns {
+        parts.push("\n")
+        parts.push(hirPrintIndent(1))
+        parts.push(hirPrintFnDecl(decl, 1))
+    }
+    for decl in m.structs {
+        parts.push("\n")
+        parts.push(hirPrintIndent(1))
+        parts.push(hirPrintStructDecl(decl, 1))
+    }
+    for decl in m.enums {
+        parts.push("\n")
+        parts.push(hirPrintIndent(1))
+        parts.push(hirPrintEnumDecl(decl, 1))
+    }
+    for decl in m.interfaces {
+        parts.push("\n")
+        parts.push(hirPrintIndent(1))
+        parts.push(hirPrintInterfaceDecl(decl, 1))
+    }
+    for decl in m.aliases {
+        parts.push("\n")
+        parts.push(hirPrintIndent(1))
+        parts.push(hirPrintTypeAliasDecl(decl))
+    }
+    for decl in m.lets {
+        parts.push("\n")
+        parts.push(hirPrintIndent(1))
+        parts.push(hirPrintLetDecl(decl))
+    }
+    for decl in m.uses {
+        parts.push("\n")
+        parts.push(hirPrintIndent(1))
+        parts.push(hirPrintUseDecl(decl))
+    }
+
+    if m.script.len() > 0 {
+        parts.push("\n")
+        parts.push(hirPrintIndent(1))
+        parts.push("(script")
+        for stmt in m.script {
+            parts.push("\n")
+            parts.push(hirPrintIndent(2))
+            parts.push(hirPrintStmt(stmt, 2))
+        }
+        parts.push(")")
+    }
+
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+pub fn hirPrintBlock(b: HirBlock, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(block")
+    for stmt in b.stmts {
+        parts.push("\n")
+        parts.push(hirPrintIndent(indent + 1))
+        parts.push(hirPrintStmt(stmt, indent + 1))
+    }
+    if b.hasResult {
+        parts.push("\n")
+        parts.push(hirPrintIndent(indent + 1))
+        parts.push("(result ")
+        parts.push(hirPrintExpr(b.result, indent + 1))
+        parts.push(")")
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+pub fn hirPrintStmt(s: HirStmt, indent: Int) -> String {
+    match s.kind {
+        HirStmtInvalid -> "(stmt <invalid>)",
+        HirStmtBlock -> hirPrintBlock(s.block, indent),
+        HirStmtLet -> hirPrintLetStmt(s, indent),
+        HirStmtExpr -> "(stmt " + hirPrintExpr(s.exprValue, indent) + ")",
+        HirStmtAssign -> hirPrintAssignStmt(s, indent),
+        HirStmtReturn -> hirPrintReturnStmt(s, indent),
+        HirStmtBreak -> "(break)",
+        HirStmtContinue -> "(continue)",
+        HirStmtIf -> hirPrintIfStmt(s, indent),
+        HirStmtFor -> hirPrintForStmt(s, indent),
+        HirStmtMatch -> hirPrintMatchStmt(s, indent),
+        HirStmtDefer -> "(defer " + hirPrintBlock(s.deferBody, indent) + ")",
+        HirStmtChanSend -> "(send " + hirPrintExpr(s.chanChannel, indent) + " "
+            + hirPrintExpr(s.chanValue, indent) + ")",
+        HirStmtError -> "(err-stmt \"" + hirPrintEscapeString(s.errorNote) + "\")",
+    }
+}
+
+pub fn hirPrintExpr(e: HirExpr, indent: Int) -> String {
+    match e.kind {
+        HirExprInvalid -> "nil",
+        HirExprIntLit -> e.numText,
+        HirExprFloatLit -> e.numText,
+        HirExprBoolLit -> if e.boolValue { "true" } else { "false" },
+        HirExprCharLit -> "'" + hirPrintEscapeChar(e.charValue) + "'",
+        HirExprByteLit -> "b" + hirPrintIntToString(e.byteValue),
+        HirExprStringLit -> hirPrintStringLit(e),
+        HirExprUnitLit -> "()",
+        HirExprIdent -> hirPrintIdentExpr(e),
+        HirExprUnary -> "(" + hirUnOpName(e.unaryOp) + " "
+            + hirPrintExpr(hirPrintFirstExpr(e.unaryChild), indent) + ")",
+        HirExprBinary -> "(" + hirBinOpName(e.binaryOp) + " "
+            + hirPrintExpr(hirPrintFirstExpr(e.binaryLeft), indent) + " "
+            + hirPrintExpr(hirPrintFirstExpr(e.binaryRight), indent) + ")",
+        HirExprCall -> hirPrintCallExpr(e, indent),
+        HirExprIntrinsic -> hirPrintIntrinsicExpr(e, indent),
+        HirExprList -> hirPrintListExpr(e, indent),
+        HirExprBlock -> hirPrintBlock(hirPrintFirstBlock(e.blockBody), indent),
+        HirExprIf -> hirPrintIfExpr(e, indent),
+        HirExprField -> "(" + if e.fieldOptional { "?." } else { "." } + " "
+            + hirPrintExpr(hirPrintFirstExpr(e.fieldTarget), indent) + " "
+            + e.fieldName + ")",
+        HirExprIndex -> "(idx " + hirPrintExpr(hirPrintFirstExpr(e.indexTarget), indent)
+            + " " + hirPrintExpr(hirPrintFirstExpr(e.indexIndex), indent) + ")",
+        HirExprMethod -> hirPrintMethodExpr(e, indent),
+        HirExprStructLit -> hirPrintStructLitExpr(e, indent),
+        HirExprTupleLit -> hirPrintTupleExpr(e, indent),
+        HirExprMapLit -> hirPrintMapExpr(e, indent),
+        HirExprRange -> hirPrintRangeExpr(e, indent),
+        HirExprQuestion -> "(? " + hirPrintExpr(hirPrintFirstExpr(e.questionChild), indent) + ")",
+        HirExprCoalesce -> "(?? " + hirPrintExpr(hirPrintFirstExpr(e.coalesceLeft), indent)
+            + " " + hirPrintExpr(hirPrintFirstExpr(e.coalesceRight), indent) + ")",
+        HirExprClosure -> hirPrintClosureExpr(e, indent),
+        HirExprVariantLit -> hirPrintVariantLitExpr(e, indent),
+        HirExprMatch -> hirPrintMatchExpr(e, indent),
+        HirExprIfLet -> hirPrintIfLetExpr(e, indent),
+        HirExprTupleAccess -> "(." + hirPrintIntToString(e.tupleAccessIndex) + " "
+            + hirPrintExpr(hirPrintFirstExpr(e.tupleAccessTarget), indent) + ")",
+        HirExprError -> "(err \"" + hirPrintEscapeString(e.errorNote) + "\")",
+    }
+}
+
+pub fn hirPatternString(p: HirPattern) -> String {
+    match p.kind {
+        HirPatInvalid -> "<nil>",
+        HirPatWild -> "_",
+        HirPatIdent -> {
+            if p.identMut {
+                "mut " + p.identName
+            } else {
+                p.identName
+            }
+        },
+        HirPatLit -> hirExprLiteralText(hirPrintFirstExpr(p.litValue)),
+        HirPatTuple -> hirPrintTuplePattern(p),
+        HirPatStruct -> hirPrintStructPattern(p),
+        HirPatVariant -> hirPrintVariantPattern(p),
+        HirPatRange -> hirPrintRangePattern(p),
+        HirPatOr -> hirPrintOrPattern(p),
+        HirPatBinding -> p.bindingName + " @ " + hirPatternString(hirPrintFirstPattern(p.bindingChild)),
+        HirPatError -> "<error:" + p.errorNote + ">",
+    }
+}
+
+// ====================================================================
+// Decl printers
+// ====================================================================
+
+fn hirPrintFnDecl(d: HirFnDecl, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(fn ")
+    parts.push(d.name)
+    if d.exported {
+        parts.push(" pub")
+    }
+    if d.generics.len() > 0 {
+        parts.push(" [")
+        let mut i = 0
+        for g in d.generics {
+            if i > 0 {
+                parts.push(" ")
+            }
+            parts.push(g.name)
+            i = i + 1
+        }
+        parts.push("]")
+    }
+    parts.push(" (")
+    let mut i = 0
+    for pm in d.params {
+        if i > 0 {
+            parts.push(" ")
+        }
+        parts.push(hirPrintParam(pm))
+        i = i + 1
+    }
+    parts.push(") -> ")
+    parts.push(hirTypeString(d.ret))
+    parts.push("\n")
+    parts.push(hirPrintIndent(indent + 1))
+    parts.push(hirPrintBlock(d.body, indent + 1))
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintStructDecl(d: HirStructDecl, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(struct ")
+    parts.push(d.name)
+    if d.exported {
+        parts.push(" pub")
+    }
+    if d.builderDerivable {
+        parts.push(" builder-derivable")
+    }
+    if d.builderRequiredFields.len() > 0 {
+        parts.push(" builder-required=[")
+        let mut i = 0
+        for name in d.builderRequiredFields {
+            if i > 0 {
+                parts.push(",")
+            }
+            parts.push(name)
+            i = i + 1
+        }
+        parts.push("]")
+    }
+    for field in d.fields {
+        parts.push("\n")
+        parts.push(hirPrintIndent(indent + 1))
+        parts.push("(field ")
+        parts.push(field.name)
+        parts.push(" ")
+        parts.push(hirTypeString(field.typ))
+        if field.jsonKey != "" {
+            parts.push(" json-key=\"")
+            parts.push(hirPrintEscapeString(field.jsonKey))
+            parts.push("\"")
+        }
+        if field.jsonSkip {
+            parts.push(" json-skip")
+        }
+        if field.jsonOptional {
+            parts.push(" json-optional")
+        }
+        parts.push(")")
+    }
+    for method in d.methods {
+        parts.push("\n")
+        parts.push(hirPrintIndent(indent + 1))
+        parts.push(hirPrintFnDecl(method, indent + 1))
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintEnumDecl(d: HirEnumDecl, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(enum ")
+    parts.push(d.name)
+    for vr in d.variants {
+        parts.push("\n")
+        parts.push(hirPrintIndent(indent + 1))
+        parts.push("(variant ")
+        parts.push(vr.name)
+        for pl in vr.payload {
+            parts.push(" ")
+            parts.push(hirTypeString(pl))
+        }
+        if vr.jsonTag != "" {
+            parts.push(" json-tag=\"")
+            parts.push(hirPrintEscapeString(vr.jsonTag))
+            parts.push("\"")
+        }
+        if vr.jsonSkip {
+            parts.push(" json-skip")
+        }
+        parts.push(")")
+    }
+    for method in d.methods {
+        parts.push("\n")
+        parts.push(hirPrintIndent(indent + 1))
+        parts.push(hirPrintFnDecl(method, indent + 1))
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintInterfaceDecl(d: HirInterfaceDecl, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(interface ")
+    parts.push(d.name)
+    for method in d.methods {
+        parts.push("\n")
+        parts.push(hirPrintIndent(indent + 1))
+        parts.push(hirPrintFnDecl(method, indent + 1))
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintTypeAliasDecl(d: HirTypeAliasDecl) -> String {
+    "(alias " + d.name + " " + hirTypeString(d.target) + ")"
+}
+
+fn hirPrintLetDecl(d: HirLetDecl) -> String {
+    let mut out = "(let " + d.name + " " + hirTypeString(d.typ) + " "
+    if d.hasValue {
+        out = out + hirPrintExpr(d.value, 0)
+    } else {
+        out = out + "nil"
+    }
+    out + ")"
+}
+
+fn hirPrintUseDecl(d: HirUseDecl) -> String {
+    let path = if d.isGoFFI {
+        d.goPath
+    } else if d.isRuntimeFFI {
+        d.runtimePath
+    } else {
+        strings.join(d.path, ".")
+    }
+    let mut out = "(use " + path
+    if d.alias != "" && (d.path.len() == 0 || d.alias != d.path[d.path.len() - 1]) {
+        out = out + " as=" + d.alias
+    }
+    out + ")"
+}
+
+// ====================================================================
+// Statement printers
+// ====================================================================
+
+fn hirPrintLetStmt(s: HirStmt, indent: Int) -> String {
+    let mut out = ""
+    if s.letHasPattern {
+        out = "(let-pat " + hirPatternString(s.letPattern) + " "
+    } else {
+        out = "(let " + s.letName + " "
+    }
+    if s.letHasType {
+        out = out + hirTypeString(s.letTyp) + " "
+    } else {
+        out = out + "<nil> "
+    }
+    if s.letHasValue {
+        out = out + hirPrintExpr(s.letValue, indent)
+    } else {
+        out = out + "nil"
+    }
+    out + ")"
+}
+
+fn hirPrintAssignStmt(s: HirStmt, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(assign ")
+    parts.push(hirAssignOpName(s.assignOp))
+    for t in s.assignTargets {
+        parts.push(" ")
+        parts.push(hirPrintExpr(t, indent))
+    }
+    parts.push(" := ")
+    parts.push(hirPrintExpr(s.assignValue, indent))
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintReturnStmt(s: HirStmt, indent: Int) -> String {
+    let mut out = "(return"
+    if s.returnHasValue {
+        out = out + " " + hirPrintExpr(s.returnValue, indent)
+    }
+    out + ")"
+}
+
+fn hirPrintIfStmt(s: HirStmt, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(if ")
+    parts.push(hirPrintExpr(s.ifCond, indent))
+    parts.push("\n")
+    parts.push(hirPrintIndent(indent + 1))
+    parts.push(hirPrintBlock(s.ifThen, indent + 1))
+    if s.ifHasElse {
+        parts.push("\n")
+        parts.push(hirPrintIndent(indent + 1))
+        parts.push("else ")
+        parts.push(hirPrintBlock(s.ifElse, indent + 1))
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintForStmt(s: HirStmt, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(for ")
+    parts.push(hirForKindName(s.forKind))
+    if s.forVar != "" {
+        parts.push(" ")
+        parts.push(s.forVar)
+    } else if s.forHasPattern {
+        parts.push(" ")
+        parts.push(hirPatternString(s.forPattern))
+    }
+    if s.forHasCond {
+        parts.push("\n")
+        parts.push(hirPrintIndent(indent + 1))
+        parts.push("cond=")
+        parts.push(hirPrintExpr(s.forCond, indent + 1))
+    }
+    if s.forHasIter {
+        parts.push("\n")
+        parts.push(hirPrintIndent(indent + 1))
+        parts.push("iter=")
+        parts.push(hirPrintExpr(s.forIter, indent + 1))
+    }
+    if s.forHasStart {
+        parts.push("\n")
+        parts.push(hirPrintIndent(indent + 1))
+        parts.push("start=")
+        parts.push(hirPrintExpr(s.forStart, indent + 1))
+    }
+    if s.forHasEnd {
+        parts.push("\n")
+        parts.push(hirPrintIndent(indent + 1))
+        parts.push("end=")
+        parts.push(hirPrintExpr(s.forEnd, indent + 1))
+    }
+    parts.push("\n")
+    parts.push(hirPrintIndent(indent + 1))
+    parts.push(hirPrintBlock(s.forBody, indent + 1))
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintMatchStmt(s: HirStmt, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(match-stmt ")
+    parts.push(hirPrintExpr(s.matchScrutinee, indent))
+    for arm in s.matchArms {
+        parts.push("\n")
+        parts.push(hirPrintIndent(indent + 1))
+        parts.push(hirPrintMatchArm(arm, indent + 1))
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+// ====================================================================
+// Expression printers
+// ====================================================================
+
+fn hirPrintIdentExpr(e: HirExpr) -> String {
+    let mut out = e.identName
+    if e.identKind != HirIdentUnknown {
+        out = out + "#" + hirIdentKindName(e.identKind)
+    }
+    if e.identTypeArgs.len() > 0 {
+        out = out + "::<"
+        let mut i = 0
+        for ta in e.identTypeArgs {
+            if i > 0 {
+                out = out + ","
+            }
+            out = out + hirTypeString(ta)
+            i = i + 1
+        }
+        out = out + ">"
+    }
+    out
+}
+
+fn hirPrintCallExpr(e: HirExpr, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(call ")
+    parts.push(hirPrintExpr(hirPrintFirstExpr(e.callCallee), indent))
+    if e.callTypeArgs.len() > 0 {
+        parts.push(" ::<")
+        let mut i = 0
+        for ta in e.callTypeArgs {
+            if i > 0 {
+                parts.push(",")
+            }
+            parts.push(hirTypeString(ta))
+            i = i + 1
+        }
+        parts.push(">")
+    }
+    for a in e.callArgs {
+        parts.push(" ")
+        parts.push(hirPrintArg(a, indent))
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintIntrinsicExpr(e: HirExpr, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(intrinsic ")
+    parts.push(hirIntrinsicKindName(e.intrinsicKind))
+    for a in e.intrinsicArgs {
+        parts.push(" ")
+        parts.push(hirPrintArg(a, indent))
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintMethodExpr(e: HirExpr, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(mcall ")
+    parts.push(hirPrintExpr(hirPrintFirstExpr(e.methodReceiver), indent))
+    parts.push(" ")
+    parts.push(e.methodName)
+    if e.methodTypeArgs.len() > 0 {
+        parts.push(" ::<")
+        let mut i = 0
+        for ta in e.methodTypeArgs {
+            if i > 0 {
+                parts.push(",")
+            }
+            parts.push(hirTypeString(ta))
+            i = i + 1
+        }
+        parts.push(">")
+    }
+    for a in e.methodArgs {
+        parts.push(" ")
+        parts.push(hirPrintArg(a, indent))
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintListExpr(e: HirExpr, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("[")
+    let mut i = 0
+    for el in e.listElems {
+        if i > 0 {
+            parts.push(" ")
+        }
+        parts.push(hirPrintExpr(el, indent))
+        i = i + 1
+    }
+    parts.push("]")
+    strings.join(parts, "")
+}
+
+fn hirPrintTupleExpr(e: HirExpr, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(")
+    let mut i = 0
+    for el in e.tupleElems {
+        if i > 0 {
+            parts.push(", ")
+        }
+        parts.push(hirPrintExpr(el, indent))
+        i = i + 1
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintMapExpr(e: HirExpr, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("{")
+    let mut i = 0
+    for en in e.mapEntries {
+        if i > 0 {
+            parts.push(", ")
+        }
+        parts.push(hirPrintExpr(en.key, indent))
+        parts.push(":")
+        parts.push(hirPrintExpr(en.value, indent))
+        i = i + 1
+    }
+    parts.push("}")
+    strings.join(parts, "")
+}
+
+fn hirPrintStructLitExpr(e: HirExpr, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(")
+    parts.push(e.structTypeName)
+    parts.push(" {")
+    let mut i = 0
+    for f in e.structFields {
+        if i > 0 {
+            parts.push(", ")
+        }
+        parts.push(f.name)
+        parts.push(":")
+        if f.hasValue {
+            parts.push(hirPrintExpr(f.value, indent))
+        } else {
+            parts.push(f.name)
+        }
+        i = i + 1
+    }
+    if e.structHasSpread && e.structSpread.len() > 0 {
+        parts.push(" ..")
+        parts.push(hirPrintExpr(e.structSpread[0], indent))
+    }
+    parts.push("})")
+    strings.join(parts, "")
+}
+
+fn hirPrintRangeExpr(e: HirExpr, indent: Int) -> String {
+    let mut out = ""
+    if e.rangeStart.len() > 0 {
+        out = out + hirPrintExpr(e.rangeStart[0], indent)
+    }
+    if e.rangeInclusive {
+        out = out + "..="
+    } else {
+        out = out + ".."
+    }
+    if e.rangeEnd.len() > 0 {
+        out = out + hirPrintExpr(e.rangeEnd[0], indent)
+    }
+    out
+}
+
+fn hirPrintClosureExpr(e: HirExpr, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(\\(")
+    let mut i = 0
+    for pm in e.closureParams {
+        if i > 0 {
+            parts.push(" ")
+        }
+        parts.push(hirPrintParam(pm))
+        i = i + 1
+    }
+    parts.push(") -> ")
+    parts.push(hirTypeString(e.closureReturn))
+    if e.closureCaptures.len() > 0 {
+        parts.push(" captures=[")
+        let mut j = 0
+        for c in e.closureCaptures {
+            if j > 0 {
+                parts.push(" ")
+            }
+            parts.push(c.name)
+            parts.push(":")
+            parts.push(hirTypeString(c.typ))
+            j = j + 1
+        }
+        parts.push("]")
+    }
+    parts.push(" ")
+    parts.push(hirPrintBlock(hirPrintFirstBlock(e.closureBody), indent))
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintVariantLitExpr(e: HirExpr, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(")
+    if e.variantEnum != "" {
+        parts.push(e.variantEnum)
+        parts.push(".")
+    }
+    parts.push(e.variantName)
+    for a in e.variantArgs {
+        parts.push(" ")
+        parts.push(hirPrintArg(a, indent))
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintIfExpr(e: HirExpr, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(if-expr ")
+    parts.push(hirPrintExpr(hirPrintFirstExpr(e.ifExprCond), indent))
+    parts.push(" ")
+    parts.push(hirPrintBlock(hirPrintFirstBlock(e.ifExprThen), indent))
+    if e.ifExprElse.len() > 0 {
+        parts.push(" else ")
+        parts.push(hirPrintBlock(hirPrintFirstBlock(e.ifExprElse), indent))
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintIfLetExpr(e: HirExpr, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(if-let ")
+    parts.push(hirPatternString(e.ifLetPattern))
+    parts.push(" ")
+    parts.push(hirPrintExpr(hirPrintFirstExpr(e.ifLetScrutinee), indent))
+    parts.push(" ")
+    parts.push(hirPrintBlock(hirPrintFirstBlock(e.ifLetThen), indent))
+    if e.ifLetHasElse && e.ifLetElse.len() > 0 {
+        parts.push(" else ")
+        parts.push(hirPrintBlock(hirPrintFirstBlock(e.ifLetElse), indent))
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintMatchExpr(e: HirExpr, indent: Int) -> String {
+    let mut parts: List<String> = []
+    parts.push("(match ")
+    parts.push(hirPrintExpr(hirPrintFirstExpr(e.matchExprScrutinee), indent))
+    for arm in e.matchExprArms {
+        parts.push("\n")
+        parts.push(hirPrintIndent(indent + 1))
+        parts.push(hirPrintMatchArm(arm, indent + 1))
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintStringLit(e: HirExpr) -> String {
+    let mut out = "\""
+    for part in e.strParts {
+        if part.isLit {
+            out = out + hirPrintEscapeString(part.lit)
+        } else if part.expr.len() > 0 {
+            out = out + "{"
+            out = out + hirPrintExpr(part.expr[0], 0)
+            out = out + "}"
+        }
+    }
+    out + "\""
+}
+
+// ====================================================================
+// Shared leaf printers
+// ====================================================================
+
+fn hirPrintParam(pm: HirParam) -> String {
+    if hirParamIsDestructured(pm) {
+        hirPatternString(pm.pattern) + ":" + hirTypeString(pm.typ)
+    } else {
+        pm.name + ":" + hirTypeString(pm.typ)
+    }
+}
+
+fn hirPrintArg(a: HirArg, indent: Int) -> String {
+    if a.name != "" {
+        a.name + ":" + hirPrintExpr(a.value, indent)
+    } else {
+        hirPrintExpr(a.value, indent)
+    }
+}
+
+fn hirPrintMatchArm(a: HirMatchArm, indent: Int) -> String {
+    let mut out = "(arm " + hirPatternString(a.pattern)
+    if a.hasGuard {
+        out = out + " if=" + hirPrintExpr(a.guard, indent)
+    }
+    out = out + " " + hirPrintBlock(a.body, indent)
+    out + ")"
+}
+
+fn hirPrintTuplePattern(p: HirPattern) -> String {
+    let mut parts: List<String> = []
+    parts.push("(")
+    let mut i = 0
+    for el in p.tupleElems {
+        if i > 0 {
+            parts.push(", ")
+        }
+        parts.push(hirPatternString(el))
+        i = i + 1
+    }
+    parts.push(")")
+    strings.join(parts, "")
+}
+
+fn hirPrintStructPattern(p: HirPattern) -> String {
+    let mut parts: List<String> = []
+    parts.push(p.structTypeName)
+    parts.push(" { ")
+    let mut i = 0
+    for f in p.structFields {
+        if i > 0 {
+            parts.push(", ")
+        }
+        parts.push(f.name)
+        if f.hasPattern {
+            parts.push(": ")
+            parts.push(hirPatternString(f.pattern))
+        }
+        i = i + 1
+    }
+    if p.structRest {
+        if p.structFields.len() > 0 {
+            parts.push(", ")
+        }
+        parts.push("..")
+    }
+    parts.push(" }")
+    strings.join(parts, "")
+}
+
+fn hirPrintVariantPattern(p: HirPattern) -> String {
+    let mut parts: List<String> = []
+    if p.variantEnum != "" {
+        parts.push(p.variantEnum)
+        parts.push(".")
+    }
+    parts.push(p.variantName)
+    if p.variantArgs.len() > 0 {
+        parts.push("(")
+        let mut i = 0
+        for a in p.variantArgs {
+            if i > 0 {
+                parts.push(", ")
+            }
+            parts.push(hirPatternString(a))
+            i = i + 1
+        }
+        parts.push(")")
+    }
+    strings.join(parts, "")
+}
+
+fn hirPrintRangePattern(p: HirPattern) -> String {
+    let mut out = ""
+    if p.rangeLow.len() > 0 {
+        out = out + hirExprLiteralText(p.rangeLow[0])
+    }
+    if p.rangeInclusive {
+        out = out + "..="
+    } else {
+        out = out + ".."
+    }
+    if p.rangeHigh.len() > 0 {
+        out = out + hirExprLiteralText(p.rangeHigh[0])
+    }
+    out
+}
+
+fn hirPrintOrPattern(p: HirPattern) -> String {
+    let mut parts: List<String> = []
+    let mut i = 0
+    for a in p.orAlts {
+        if i > 0 {
+            parts.push(" | ")
+        }
+        parts.push(hirPatternString(a))
+        i = i + 1
+    }
+    strings.join(parts, "")
+}
+
+fn hirExprLiteralText(e: HirExpr) -> String {
+    match e.kind {
+        HirExprIntLit -> e.numText,
+        HirExprFloatLit -> e.numText,
+        HirExprBoolLit -> if e.boolValue { "true" } else { "false" },
+        HirExprCharLit -> "'" + hirPrintEscapeChar(e.charValue) + "'",
+        HirExprByteLit -> "b" + hirPrintIntToString(e.byteValue),
+        HirExprStringLit -> {
+            let mut out = "\""
+            for part in e.strParts {
+                if part.isLit {
+                    out = out + part.lit
+                } else {
+                    out = out + "{expr}"
+                }
+            }
+            out + "\""
+        },
+        HirExprIdent -> e.identName,
+        _ -> "<expr>",
+    }
+}
+
+// ====================================================================
+// Small helpers
+// ====================================================================
+
+fn hirPrintFirstExpr(xs: List<HirExpr>) -> HirExpr {
+    if xs.len() > 0 {
+        xs[0]
+    } else {
+        hirExprInvalid()
+    }
+}
+
+fn hirPrintFirstBlock(xs: List<HirBlock>) -> HirBlock {
+    if xs.len() > 0 {
+        xs[0]
+    } else {
+        hirBlock(hirNoSpan())
+    }
+}
+
+fn hirPrintFirstPattern(xs: List<HirPattern>) -> HirPattern {
+    if xs.len() > 0 {
+        xs[0]
+    } else {
+        hirPatternInvalid()
+    }
+}
+
+fn hirPrintEscapeString(text: String) -> String {
+    let slash = strings.replaceAll(text, "\\", "\\\\")
+    let quote = strings.replaceAll(slash, "\"", "\\\"")
+    let newline = strings.replaceAll(quote, "\n", "\\n")
+    strings.replaceAll(newline, "\t", "\\t")
+}
+
+fn hirPrintEscapeChar(value: Char) -> String {
+    if value == '\'' {
+        "\\'"
+    } else {
+        "{value}"
+    }
+}
+
+fn hirPrintIndent(depth: Int) -> String {
+    let mut out = ""
+    for _i in 0..depth {
+        out = out + "  "
+    }
+    out
+}
+
+fn hirPrintIntToString(n: Int) -> String {
+    if n == 0 {
+        return "0"
+    }
+    let mut value = n
+    let mut negative = false
+    if value < 0 {
+        negative = true
+        value = -value
+    }
+    let mut digits: List<Int> = []
+    for _d in 0..40 {
+        if value == 0 {
+            break
+        }
+        digits.push(value % 10)
+        value = value / 10
+    }
+    let mut out = ""
+    if negative {
+        out = "-"
+    }
+    let mut i = digits.len() - 1
+    for _j in 0..digits.len() {
+        if i < 0 {
+            break
+        }
+        out = out + hirPrintDigitChar(digits[i])
+        i = i - 1
+    }
+    out
+}
+
+fn hirPrintDigitChar(d: Int) -> String {
+    match d {
+        0 -> "0",
+        1 -> "1",
+        2 -> "2",
+        3 -> "3",
+        4 -> "4",
+        5 -> "5",
+        6 -> "6",
+        7 -> "7",
+        8 -> "8",
+        9 -> "9",
+        _ -> "?",
+    }
+}

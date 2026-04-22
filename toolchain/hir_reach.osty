@@ -1,0 +1,680 @@
+// hir_reach.osty — reachability scans over self-hosted HIR.
+//
+// Counterpart to `internal/ir/reach.go`. HIR uses flat structs instead of
+// interface-based nodes, so the public result is a deduplicated List rather
+// than a Go map-set keyed by struct values.
+
+pub struct HirQualifiedRef {
+    pub qualifier: String,
+    pub name: String,
+}
+
+pub fn hirQualifiedRef(qualifier: String, name: String) -> HirQualifiedRef {
+    HirQualifiedRef { qualifier, name }
+}
+
+pub struct HirMethodRef {
+    pub module: String,
+    pub typeName: String,
+    pub method: String,
+}
+
+pub fn hirMethodRef(module: String, typeName: String, method: String) -> HirMethodRef {
+    HirMethodRef { module, typeName, method }
+}
+
+pub fn hirReach(m: HirModule) -> List<HirQualifiedRef> {
+    let mut out: List<HirQualifiedRef> = []
+    hirReachModule(out, m)
+    out
+}
+
+pub fn hirReachMethods(m: HirModule) -> List<HirMethodRef> {
+    let mut out: List<HirMethodRef> = []
+    hirReachMethodsModule(out, m)
+    out
+}
+
+// ====================================================================
+// Reach: free-function / module-qualified calls
+// ====================================================================
+
+fn hirReachModule(out: List<HirQualifiedRef>, m: HirModule) {
+    for d in m.fns {
+        hirReachBlock(out, d.body)
+    }
+    for d in m.structs {
+        for field in d.fields {
+            if field.hasDefault {
+                hirReachExpr(out, field.defaultValue)
+            }
+        }
+        for method in d.methods {
+            hirReachBlock(out, method.body)
+        }
+    }
+    for d in m.enums {
+        for method in d.methods {
+            hirReachBlock(out, method.body)
+        }
+    }
+    for d in m.interfaces {
+        for method in d.methods {
+            hirReachBlock(out, method.body)
+        }
+    }
+    for d in m.lets {
+        if d.hasValue {
+            hirReachExpr(out, d.value)
+        }
+    }
+    for d in m.uses {
+        for bodyFn in d.goBodyFns {
+            hirReachBlock(out, bodyFn.body)
+        }
+    }
+    for s in m.script {
+        hirReachStmt(out, s)
+    }
+}
+
+fn hirReachBlock(out: List<HirQualifiedRef>, b: HirBlock) {
+    for s in b.stmts {
+        hirReachStmt(out, s)
+    }
+    if b.hasResult {
+        hirReachExpr(out, b.result)
+    }
+}
+
+fn hirReachStmt(out: List<HirQualifiedRef>, s: HirStmt) {
+    match s.kind {
+        HirStmtBlock -> hirReachBlock(out, s.block),
+        HirStmtLet -> {
+            if s.letHasPattern {
+                hirReachPattern(out, s.letPattern)
+            }
+            if s.letHasValue {
+                hirReachExpr(out, s.letValue)
+            }
+        },
+        HirStmtExpr -> hirReachExpr(out, s.exprValue),
+        HirStmtAssign -> {
+            for t in s.assignTargets {
+                hirReachExpr(out, t)
+            }
+            hirReachExpr(out, s.assignValue)
+        },
+        HirStmtReturn -> {
+            if s.returnHasValue {
+                hirReachExpr(out, s.returnValue)
+            }
+        },
+        HirStmtIf -> {
+            hirReachExpr(out, s.ifCond)
+            hirReachBlock(out, s.ifThen)
+            if s.ifHasElse {
+                hirReachBlock(out, s.ifElse)
+            }
+        },
+        HirStmtFor -> {
+            if s.forHasPattern {
+                hirReachPattern(out, s.forPattern)
+            }
+            if s.forHasCond {
+                hirReachExpr(out, s.forCond)
+            }
+            if s.forHasIter {
+                hirReachExpr(out, s.forIter)
+            }
+            if s.forHasStart {
+                hirReachExpr(out, s.forStart)
+            }
+            if s.forHasEnd {
+                hirReachExpr(out, s.forEnd)
+            }
+            hirReachBlock(out, s.forBody)
+        },
+        HirStmtMatch -> {
+            hirReachExpr(out, s.matchScrutinee)
+            for arm in s.matchArms {
+                hirReachMatchArm(out, arm)
+            }
+            if s.matchHasTree {
+                hirReachDecision(out, s.matchTree)
+            }
+        },
+        HirStmtDefer -> hirReachBlock(out, s.deferBody),
+        HirStmtChanSend -> {
+            hirReachExpr(out, s.chanChannel)
+            hirReachExpr(out, s.chanValue)
+        },
+        _ -> {},
+    }
+}
+
+fn hirReachExpr(out: List<HirQualifiedRef>, e: HirExpr) {
+    match e.kind {
+        HirExprCall -> {
+            if e.callCallee.len() > 0 {
+                let callee = e.callCallee[0]
+                if callee.kind == HirExprField && callee.fieldTarget.len() > 0 {
+                    let recv = callee.fieldTarget[0]
+                    if recv.kind == HirExprIdent && recv.identName != "" && callee.fieldName != "" {
+                        hirReachAdd(out, hirQualifiedRef(recv.identName, callee.fieldName))
+                    }
+                }
+                hirReachExpr(out, callee)
+            }
+            for a in e.callArgs {
+                hirReachExpr(out, a.value)
+            }
+        },
+        HirExprMethod -> {
+            if e.methodReceiver.len() > 0 {
+                let recv = e.methodReceiver[0]
+                if recv.kind == HirExprIdent && recv.identName != "" && e.methodName != "" {
+                    hirReachAdd(out, hirQualifiedRef(recv.identName, e.methodName))
+                }
+                hirReachExpr(out, recv)
+            }
+            for a in e.methodArgs {
+                hirReachExpr(out, a.value)
+            }
+        },
+        HirExprIntrinsic -> {
+            for a in e.intrinsicArgs {
+                hirReachExpr(out, a.value)
+            }
+        },
+        HirExprUnary -> hirReachExpr(out, hirReachFirstExpr(e.unaryChild)),
+        HirExprBinary -> {
+            hirReachExpr(out, hirReachFirstExpr(e.binaryLeft))
+            hirReachExpr(out, hirReachFirstExpr(e.binaryRight))
+        },
+        HirExprList -> {
+            for el in e.listElems {
+                hirReachExpr(out, el)
+            }
+        },
+        HirExprBlock -> hirReachBlock(out, hirReachFirstBlock(e.blockBody)),
+        HirExprIf -> {
+            hirReachExpr(out, hirReachFirstExpr(e.ifExprCond))
+            hirReachBlock(out, hirReachFirstBlock(e.ifExprThen))
+            if e.ifExprElse.len() > 0 {
+                hirReachBlock(out, e.ifExprElse[0])
+            }
+        },
+        HirExprField -> hirReachExpr(out, hirReachFirstExpr(e.fieldTarget)),
+        HirExprIndex -> {
+            hirReachExpr(out, hirReachFirstExpr(e.indexTarget))
+            hirReachExpr(out, hirReachFirstExpr(e.indexIndex))
+        },
+        HirExprStructLit -> {
+            for f in e.structFields {
+                if f.hasValue {
+                    hirReachExpr(out, f.value)
+                }
+            }
+            if e.structHasSpread && e.structSpread.len() > 0 {
+                hirReachExpr(out, e.structSpread[0])
+            }
+        },
+        HirExprTupleLit -> {
+            for el in e.tupleElems {
+                hirReachExpr(out, el)
+            }
+        },
+        HirExprMapLit -> {
+            for entry in e.mapEntries {
+                hirReachExpr(out, entry.key)
+                hirReachExpr(out, entry.value)
+            }
+        },
+        HirExprRange -> {
+            if e.rangeStart.len() > 0 {
+                hirReachExpr(out, e.rangeStart[0])
+            }
+            if e.rangeEnd.len() > 0 {
+                hirReachExpr(out, e.rangeEnd[0])
+            }
+        },
+        HirExprQuestion -> hirReachExpr(out, hirReachFirstExpr(e.questionChild)),
+        HirExprCoalesce -> {
+            hirReachExpr(out, hirReachFirstExpr(e.coalesceLeft))
+            hirReachExpr(out, hirReachFirstExpr(e.coalesceRight))
+        },
+        HirExprClosure -> {
+            for pm in e.closureParams {
+                if hirParamIsDestructured(pm) {
+                    hirReachPattern(out, pm.pattern)
+                }
+                if pm.hasDefault {
+                    hirReachExpr(out, pm.defaultValue)
+                }
+            }
+            if e.closureBody.len() > 0 {
+                hirReachBlock(out, e.closureBody[0])
+            }
+        },
+        HirExprVariantLit -> {
+            for a in e.variantArgs {
+                hirReachExpr(out, a.value)
+            }
+        },
+        HirExprMatch -> {
+            hirReachExpr(out, hirReachFirstExpr(e.matchExprScrutinee))
+            for arm in e.matchExprArms {
+                hirReachMatchArm(out, arm)
+            }
+            if e.matchExprHasTree {
+                hirReachDecision(out, e.matchExprTree)
+            }
+        },
+        HirExprIfLet -> {
+            hirReachPattern(out, e.ifLetPattern)
+            hirReachExpr(out, hirReachFirstExpr(e.ifLetScrutinee))
+            hirReachBlock(out, hirReachFirstBlock(e.ifLetThen))
+            if e.ifLetHasElse && e.ifLetElse.len() > 0 {
+                hirReachBlock(out, e.ifLetElse[0])
+            }
+        },
+        HirExprTupleAccess -> hirReachExpr(out, hirReachFirstExpr(e.tupleAccessTarget)),
+        HirExprStringLit -> {
+            for part in e.strParts {
+                if !(part.isLit) && part.expr.len() > 0 {
+                    hirReachExpr(out, part.expr[0])
+                }
+            }
+        },
+        _ -> {},
+    }
+}
+
+fn hirReachPattern(out: List<HirQualifiedRef>, p: HirPattern) {
+    match p.kind {
+        HirPatLit -> {
+            if p.litValue.len() > 0 {
+                hirReachExpr(out, p.litValue[0])
+            }
+        },
+        HirPatTuple -> {
+            for el in p.tupleElems {
+                hirReachPattern(out, el)
+            }
+        },
+        HirPatStruct -> {
+            for f in p.structFields {
+                if f.hasPattern {
+                    hirReachPattern(out, f.pattern)
+                }
+            }
+        },
+        HirPatVariant -> {
+            for arg in p.variantArgs {
+                hirReachPattern(out, arg)
+            }
+        },
+        HirPatRange -> {
+            if p.rangeLow.len() > 0 {
+                hirReachExpr(out, p.rangeLow[0])
+            }
+            if p.rangeHigh.len() > 0 {
+                hirReachExpr(out, p.rangeHigh[0])
+            }
+        },
+        HirPatOr -> {
+            for alt in p.orAlts {
+                hirReachPattern(out, alt)
+            }
+        },
+        HirPatBinding -> {
+            if p.bindingChild.len() > 0 {
+                hirReachPattern(out, p.bindingChild[0])
+            }
+        },
+        _ -> {},
+    }
+}
+
+fn hirReachMatchArm(out: List<HirQualifiedRef>, arm: HirMatchArm) {
+    hirReachPattern(out, arm.pattern)
+    if arm.hasGuard {
+        hirReachExpr(out, arm.guard)
+    }
+    hirReachBlock(out, arm.body)
+}
+
+fn hirReachDecision(out: List<HirQualifiedRef>, n: HirDecisionNode) {
+    match n.kind {
+        HirDecisionBind -> {
+            if n.bindHasProj {
+                hirReachProjection(out, n.bindProj)
+            }
+            if n.bindNext.len() > 0 {
+                hirReachDecision(out, n.bindNext[0])
+            }
+        },
+        HirDecisionGuard -> {
+            hirReachExpr(out, n.guardCond)
+            if n.guardThen.len() > 0 {
+                hirReachDecision(out, n.guardThen[0])
+            }
+            if n.guardElse.len() > 0 {
+                hirReachDecision(out, n.guardElse[0])
+            }
+        },
+        HirDecisionSwitch -> {
+            hirReachProjection(out, n.switchProj)
+            for c in n.switchCases {
+                if c.hasLit {
+                    hirReachExpr(out, c.lit)
+                }
+                hirReachDecision(out, c.body)
+            }
+            if n.switchDefault.len() > 0 {
+                hirReachDecision(out, n.switchDefault[0])
+            }
+        },
+        _ -> {},
+    }
+}
+
+fn hirReachProjection(out: List<HirQualifiedRef>, p: HirProjection) {
+    if p.base.len() > 0 {
+        hirReachProjection(out, p.base[0])
+    }
+}
+
+fn hirReachAdd(out: List<HirQualifiedRef>, ref: HirQualifiedRef) {
+    if hirReachContains(out, ref) {
+        return
+    }
+    out.push(ref)
+}
+
+fn hirReachContains(xs: List<HirQualifiedRef>, target: HirQualifiedRef) -> Bool {
+    for x in xs {
+        if x.qualifier == target.qualifier && x.name == target.name {
+            return true
+        }
+    }
+    false
+}
+
+// ====================================================================
+// ReachMethods: stdlib-owned receiver method calls
+// ====================================================================
+
+fn hirReachMethodsModule(out: List<HirMethodRef>, m: HirModule) {
+    for d in m.fns {
+        hirReachMethodsBlock(out, d.body)
+    }
+    for d in m.structs {
+        for field in d.fields {
+            if field.hasDefault {
+                hirReachMethodsExpr(out, field.defaultValue)
+            }
+        }
+        for method in d.methods {
+            hirReachMethodsBlock(out, method.body)
+        }
+    }
+    for d in m.enums {
+        for method in d.methods {
+            hirReachMethodsBlock(out, method.body)
+        }
+    }
+    for d in m.interfaces {
+        for method in d.methods {
+            hirReachMethodsBlock(out, method.body)
+        }
+    }
+    for d in m.lets {
+        if d.hasValue {
+            hirReachMethodsExpr(out, d.value)
+        }
+    }
+    for d in m.uses {
+        for bodyFn in d.goBodyFns {
+            hirReachMethodsBlock(out, bodyFn.body)
+        }
+    }
+    for s in m.script {
+        hirReachMethodsStmt(out, s)
+    }
+}
+
+fn hirReachMethodsBlock(out: List<HirMethodRef>, b: HirBlock) {
+    for s in b.stmts {
+        hirReachMethodsStmt(out, s)
+    }
+    if b.hasResult {
+        hirReachMethodsExpr(out, b.result)
+    }
+}
+
+fn hirReachMethodsStmt(out: List<HirMethodRef>, s: HirStmt) {
+    match s.kind {
+        HirStmtBlock -> hirReachMethodsBlock(out, s.block),
+        HirStmtLet -> {
+            if s.letHasValue {
+                hirReachMethodsExpr(out, s.letValue)
+            }
+        },
+        HirStmtExpr -> hirReachMethodsExpr(out, s.exprValue),
+        HirStmtAssign -> {
+            for t in s.assignTargets {
+                hirReachMethodsExpr(out, t)
+            }
+            hirReachMethodsExpr(out, s.assignValue)
+        },
+        HirStmtReturn -> {
+            if s.returnHasValue {
+                hirReachMethodsExpr(out, s.returnValue)
+            }
+        },
+        HirStmtIf -> {
+            hirReachMethodsExpr(out, s.ifCond)
+            hirReachMethodsBlock(out, s.ifThen)
+            if s.ifHasElse {
+                hirReachMethodsBlock(out, s.ifElse)
+            }
+        },
+        HirStmtFor -> {
+            if s.forHasCond {
+                hirReachMethodsExpr(out, s.forCond)
+            }
+            if s.forHasIter {
+                hirReachMethodsExpr(out, s.forIter)
+            }
+            if s.forHasStart {
+                hirReachMethodsExpr(out, s.forStart)
+            }
+            if s.forHasEnd {
+                hirReachMethodsExpr(out, s.forEnd)
+            }
+            hirReachMethodsBlock(out, s.forBody)
+        },
+        HirStmtMatch -> {
+            hirReachMethodsExpr(out, s.matchScrutinee)
+            for arm in s.matchArms {
+                hirReachMethodsMatchArm(out, arm)
+            }
+        },
+        HirStmtDefer -> hirReachMethodsBlock(out, s.deferBody),
+        HirStmtChanSend -> {
+            hirReachMethodsExpr(out, s.chanChannel)
+            hirReachMethodsExpr(out, s.chanValue)
+        },
+        _ -> {},
+    }
+}
+
+fn hirReachMethodsExpr(out: List<HirMethodRef>, e: HirExpr) {
+    if e.kind == HirExprMethod && e.methodReceiver.len() > 0 && e.methodName != "" {
+        let recv = e.methodReceiver[0]
+        let recvT = recv.typ
+        if recvT.kind == HirTypeNamed && recvT.namedPkg != "" && recvT.namedName != "" {
+            hirReachMethodsAdd(out, hirMethodRef(recvT.namedPkg, recvT.namedName, e.methodName))
+        }
+    }
+    hirReachExprAsMethods(out, e)
+}
+
+fn hirReachExprAsMethods(out: List<HirMethodRef>, e: HirExpr) {
+    match e.kind {
+        HirExprUnary -> hirReachMethodsExpr(out, hirReachFirstExpr(e.unaryChild)),
+        HirExprBinary -> {
+            hirReachMethodsExpr(out, hirReachFirstExpr(e.binaryLeft))
+            hirReachMethodsExpr(out, hirReachFirstExpr(e.binaryRight))
+        },
+        HirExprCall -> {
+            if e.callCallee.len() > 0 {
+                hirReachMethodsExpr(out, e.callCallee[0])
+            }
+            for a in e.callArgs {
+                hirReachMethodsExpr(out, a.value)
+            }
+        },
+        HirExprIntrinsic -> {
+            for a in e.intrinsicArgs {
+                hirReachMethodsExpr(out, a.value)
+            }
+        },
+        HirExprMethod -> {
+            hirReachMethodsExpr(out, hirReachFirstExpr(e.methodReceiver))
+            for a in e.methodArgs {
+                hirReachMethodsExpr(out, a.value)
+            }
+        },
+        HirExprList -> {
+            for el in e.listElems {
+                hirReachMethodsExpr(out, el)
+            }
+        },
+        HirExprBlock -> hirReachMethodsBlock(out, hirReachFirstBlock(e.blockBody)),
+        HirExprIf -> {
+            hirReachMethodsExpr(out, hirReachFirstExpr(e.ifExprCond))
+            hirReachMethodsBlock(out, hirReachFirstBlock(e.ifExprThen))
+            if e.ifExprElse.len() > 0 {
+                hirReachMethodsBlock(out, e.ifExprElse[0])
+            }
+        },
+        HirExprField -> hirReachMethodsExpr(out, hirReachFirstExpr(e.fieldTarget)),
+        HirExprIndex -> {
+            hirReachMethodsExpr(out, hirReachFirstExpr(e.indexTarget))
+            hirReachMethodsExpr(out, hirReachFirstExpr(e.indexIndex))
+        },
+        HirExprStructLit -> {
+            for f in e.structFields {
+                if f.hasValue {
+                    hirReachMethodsExpr(out, f.value)
+                }
+            }
+            if e.structHasSpread && e.structSpread.len() > 0 {
+                hirReachMethodsExpr(out, e.structSpread[0])
+            }
+        },
+        HirExprTupleLit -> {
+            for el in e.tupleElems {
+                hirReachMethodsExpr(out, el)
+            }
+        },
+        HirExprMapLit -> {
+            for en in e.mapEntries {
+                hirReachMethodsExpr(out, en.key)
+                hirReachMethodsExpr(out, en.value)
+            }
+        },
+        HirExprRange -> {
+            if e.rangeStart.len() > 0 {
+                hirReachMethodsExpr(out, e.rangeStart[0])
+            }
+            if e.rangeEnd.len() > 0 {
+                hirReachMethodsExpr(out, e.rangeEnd[0])
+            }
+        },
+        HirExprQuestion -> hirReachMethodsExpr(out, hirReachFirstExpr(e.questionChild)),
+        HirExprCoalesce -> {
+            hirReachMethodsExpr(out, hirReachFirstExpr(e.coalesceLeft))
+            hirReachMethodsExpr(out, hirReachFirstExpr(e.coalesceRight))
+        },
+        HirExprClosure -> {
+            for pm in e.closureParams {
+                if pm.hasDefault {
+                    hirReachMethodsExpr(out, pm.defaultValue)
+                }
+            }
+            if e.closureBody.len() > 0 {
+                hirReachMethodsBlock(out, e.closureBody[0])
+            }
+        },
+        HirExprVariantLit -> {
+            for a in e.variantArgs {
+                hirReachMethodsExpr(out, a.value)
+            }
+        },
+        HirExprMatch -> {
+            hirReachMethodsExpr(out, hirReachFirstExpr(e.matchExprScrutinee))
+            for arm in e.matchExprArms {
+                hirReachMethodsMatchArm(out, arm)
+            }
+        },
+        HirExprIfLet -> {
+            hirReachMethodsExpr(out, hirReachFirstExpr(e.ifLetScrutinee))
+            hirReachMethodsBlock(out, hirReachFirstBlock(e.ifLetThen))
+            if e.ifLetHasElse && e.ifLetElse.len() > 0 {
+                hirReachMethodsBlock(out, e.ifLetElse[0])
+            }
+        },
+        HirExprTupleAccess -> hirReachMethodsExpr(out, hirReachFirstExpr(e.tupleAccessTarget)),
+        HirExprStringLit -> {
+            for part in e.strParts {
+                if !(part.isLit) && part.expr.len() > 0 {
+                    hirReachMethodsExpr(out, part.expr[0])
+                }
+            }
+        },
+        _ -> {},
+    }
+}
+
+fn hirReachMethodsMatchArm(out: List<HirMethodRef>, arm: HirMatchArm) {
+    if arm.hasGuard {
+        hirReachMethodsExpr(out, arm.guard)
+    }
+    hirReachMethodsBlock(out, arm.body)
+}
+
+fn hirReachMethodsAdd(out: List<HirMethodRef>, ref: HirMethodRef) {
+    if hirReachMethodsContains(out, ref) {
+        return
+    }
+    out.push(ref)
+}
+
+fn hirReachMethodsContains(xs: List<HirMethodRef>, target: HirMethodRef) -> Bool {
+    for x in xs {
+        if x.module == target.module && x.typeName == target.typeName && x.method == target.method {
+            return true
+        }
+    }
+    false
+}
+
+fn hirReachFirstExpr(xs: List<HirExpr>) -> HirExpr {
+    if xs.len() > 0 {
+        xs[0]
+    } else {
+        hirExprInvalid()
+    }
+}
+
+fn hirReachFirstBlock(xs: List<HirBlock>) -> HirBlock {
+    if xs.len() > 0 {
+        xs[0]
+    } else {
+        hirBlock(hirNoSpan())
+    }
+}
