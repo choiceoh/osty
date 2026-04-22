@@ -450,6 +450,9 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		if src, ok := g.staticStdEnvCallSourceType(e); ok {
 			return src, true
 		}
+		if src, ok := g.staticPtrBackedErrorCallSourceType(e); ok {
+			return src, true
+		}
 		if src, ok := g.staticCollectionMethodSourceType(e); ok {
 			return src, true
 		}

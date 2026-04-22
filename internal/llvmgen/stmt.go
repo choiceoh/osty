@@ -2491,6 +2491,9 @@ func (g *generator) bindResultMatchPayload(scrutinee value, info resultPatternIn
 	payloadValue := fromOstyValue(payload)
 	payloadValue.gcManaged = info.payloadType == "ptr"
 	payloadValue.rootPaths = g.rootPathsForType(info.payloadType)
+	if err := g.decorateValueFromSourceType(&payloadValue, builtinResultPayloadSourceType(scrutinee.sourceType, resultVariantName(info.tag))); err != nil {
+		return err
+	}
 	g.bindNamedLocal(info.payloadName, payloadValue, false)
 	return nil
 }

@@ -87,6 +87,9 @@ typedef INIT_ONCE          osty_rt_once_t;
 #  include <pthread.h>
 #  include <sched.h>
 #  include <signal.h>
+#  if defined(__APPLE__)
+#    include <crt_externs.h>
+#  endif
 #  if defined(__STDC_NO_THREADS__) || defined(__APPLE__)
 #    define OSTY_RT_TLS __thread
 #  else
@@ -11847,14 +11850,26 @@ void osty_rt_test_snapshot(const char *name, const char *output, const char *sou
 /* std.env command-line argument surface.
  *
  * The emitter (see internal/llvmgen/stdlib_env_shim.go) routes the Osty
- * call `env.args()` to `osty_rt_env_args`, and when a script/binary's
- * package imports `std.env` the generated `main` is widened to
- * (i32 argc, ptr argv) and begins with a call to `osty_rt_env_args_init`.
+ * call `env.args()` to `osty_rt_env_args`, `env.get(name)` to
+ * `osty_rt_env_get`, `env.vars()` to `osty_rt_env_vars`, and when a
+ * script/binary's package imports `std.env` the generated `main` is
+ * widened to (i32 argc, ptr argv) and begins with a call to
+ * `osty_rt_env_args_init`.
+ *
  * The init call hands us the raw C argv; each `env.args()` invocation
  * materializes a fresh GC-managed List<String> by duplicating every
  * argv entry through the string allocator. Freshness matters because
  * the returned list is mutable from Osty and must not alias process
- * argv storage. */
+ * argv storage.
+ *
+ * `env.get(name)` similarly duplicates the C library getenv result so
+ * the returned Osty String owns its own managed storage. Missing keys
+ * surface as NULL, matching the ptr-backed `String?` lowering.
+ *
+ * `env.vars()` snapshots the current environment into a fresh
+ * `Map<String, String>`. Keys beginning with '=' are skipped on
+ * Windows to avoid the drive-current-directory pseudo-entries the CRT
+ * exposes through GetEnvironmentStringsA. */
 static int64_t osty_rt_env_stored_argc = 0;
 static char *const *osty_rt_env_stored_argv = NULL;
 
@@ -11876,5 +11891,97 @@ void *osty_rt_env_args(void) {
         char *copy = osty_rt_string_dup_site(raw, strlen(raw), "runtime.env.args.entry");
         osty_rt_list_push_ptr(out, copy);
     }
+    return out;
+}
+
+void *osty_rt_env_get(const char *name) {
+    const char *raw;
+    if (name == NULL) {
+        return NULL;
+    }
+    raw = getenv(name);
+    if (raw == NULL) {
+        return NULL;
+    }
+    return osty_rt_string_dup_site(raw, strlen(raw), "runtime.env.get");
+}
+
+#if defined(OSTY_RT_PLATFORM_WIN32)
+static LPCH osty_rt_env_entries_block(void) {
+    return GetEnvironmentStringsA();
+}
+#else
+static char *const *osty_rt_env_entries_posix(void) {
+#  if defined(__APPLE__)
+    char ***envp = _NSGetEnviron();
+    return envp == NULL ? NULL : (char *const *)(*envp);
+#  else
+    extern char **environ;
+    return (char *const *)environ;
+#  endif
+}
+#endif
+
+void *osty_rt_env_vars(void) {
+    void *out = osty_rt_map_new(OSTY_RT_ABI_STRING, OSTY_RT_ABI_PTR,
+                                (int64_t)sizeof(void *), NULL);
+    osty_gc_root_bind_v1(out);
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    LPCH block = osty_rt_env_entries_block();
+    LPCH cursor;
+    if (block != NULL) {
+        for (cursor = block; cursor[0] != '\0'; cursor += strlen(cursor) + 1) {
+            const char *entry = (const char *)cursor;
+            const char *eq = strchr(entry, '=');
+            size_t key_len;
+            const char *value_text;
+            char *key_copy;
+            char *value_copy;
+            if (eq == NULL || eq == entry) {
+                continue;
+            }
+            key_len = (size_t)(eq - entry);
+            value_text = eq + 1;
+            key_copy = osty_rt_string_dup_site(entry, key_len, "runtime.env.vars.key");
+            osty_gc_root_bind_v1(key_copy);
+            value_copy = osty_rt_string_dup_site(value_text, strlen(value_text), "runtime.env.vars.value");
+            osty_gc_root_bind_v1(value_copy);
+            osty_rt_map_insert_string(out, key_copy, &value_copy);
+            osty_gc_root_release_v1(value_copy);
+            osty_gc_root_release_v1(key_copy);
+        }
+        FreeEnvironmentStringsA(block);
+    }
+#else
+    char *const *entries = osty_rt_env_entries_posix();
+    if (entries != NULL) {
+        char *const *cursor;
+        for (cursor = entries; *cursor != NULL; cursor++) {
+            const char *entry = *cursor;
+            const char *eq;
+            size_t key_len;
+            const char *value_text;
+            char *key_copy;
+            char *value_copy;
+            if (entry == NULL) {
+                continue;
+            }
+            eq = strchr(entry, '=');
+            if (eq == NULL || eq == entry) {
+                continue;
+            }
+            key_len = (size_t)(eq - entry);
+            value_text = eq + 1;
+            key_copy = osty_rt_string_dup_site(entry, key_len, "runtime.env.vars.key");
+            osty_gc_root_bind_v1(key_copy);
+            value_copy = osty_rt_string_dup_site(value_text, strlen(value_text), "runtime.env.vars.value");
+            osty_gc_root_bind_v1(value_copy);
+            osty_rt_map_insert_string(out, key_copy, &value_copy);
+            osty_gc_root_release_v1(value_copy);
+            osty_gc_root_release_v1(key_copy);
+        }
+    }
+#endif
+    osty_gc_root_release_v1(out);
     return out;
 }
