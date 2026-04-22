@@ -84,10 +84,10 @@ pub fn usesFrontEndAIRepair(cmd: String) -> Bool {
 /// captures unconditionally (for corpus collection).
 pub fn shouldCaptureAiRepair(captureMode: String, changed: Bool, totalErrorsAfter: Int) -> Bool {
     if captureMode == "always" {
-        return true
+        true
+    } else if captureMode == "changed" {
+        changed
+    } else {
+        totalErrorsAfter > 0
     }
-    if captureMode == "changed" {
-        return changed
-    }
-    totalErrorsAfter > 0
 }

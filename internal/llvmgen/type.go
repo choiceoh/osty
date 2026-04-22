@@ -1308,7 +1308,7 @@ func (g *generator) staticStringMethodSourceType(call *ast.CallExpr) (ast.Type, 
 		return stringToFloatResultSourceType(), true
 	case "toBytes":
 		return &ast.NamedType{Path: []string{"Bytes"}}, true
-	case "trim", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toString", "join", "replace", "repeat", "toUpper", "toLower":
+	case "trim", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toString", "join", "replace", "repeat", "substring", "slice", "toUpper", "toLower":
 		return &ast.NamedType{Path: []string{"String"}}, true
 	case "chars":
 		return &ast.NamedType{
@@ -1432,7 +1432,7 @@ func (g *generator) staticStringMethodResult(call *ast.CallExpr) (value, bool) {
 		return value{}, false
 	case "toBytes":
 		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"Bytes"}}}, true
-	case "trim", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toString", "join", "replace", "repeat", "toUpper", "toLower":
+	case "trim", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toString", "join", "replace", "repeat", "substring", "slice", "toUpper", "toLower":
 		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"String"}}}, true
 	case "chars":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "i32"}, true
@@ -1461,7 +1461,7 @@ func (g *generator) stringMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, bool) 
 		"indexOf",
 		"get",
 		"trimStart", "trimEnd", "trimPrefix", "trimSuffix",
-		"split", "lines", "join", "trim", "replace", "repeat", "toUpper", "toLower", "toInt", "toFloat", "toString", "chars", "bytes", "toBytes":
+		"split", "lines", "join", "trim", "replace", "repeat", "substring", "slice", "toUpper", "toLower", "toInt", "toFloat", "toString", "chars", "bytes", "toBytes":
 		return field, true
 	default:
 		return nil, false

@@ -2609,8 +2609,7 @@ pub fn mirLowerParseIntLit(text: String) -> Int {
 }
 
 fn mirLowerStripUnderscores(text: String) -> String {
-    // §1.6.1 numeric separators
-    strings.replaceAll(text, "_", "")
+    strings.join(text.split("_"), "")
 }
 
 fn mirLowerStripSign(text: String) -> String {
