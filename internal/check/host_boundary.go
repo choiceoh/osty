@@ -1035,6 +1035,9 @@ func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked na
 		}
 		if len(args) == len(inst.TypeArgs) {
 			result.Instantiations[call] = args
+			if call.ID != 0 && result.InstantiationsByID != nil {
+				result.InstantiationsByID[call.ID] = args
+			}
 		}
 	}
 }

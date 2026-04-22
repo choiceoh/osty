@@ -31,6 +31,11 @@ type Result struct {
 	// callee per distinct argument list.
 	Instantiations map[*ast.CallExpr][]types.Type
 
+	// InstantiationsByID mirrors Instantiations keyed by ast.NodeID.
+	// Populated in parallel with Instantiations so callers can migrate
+	// off *ast.CallExpr pointer identity. Self-host ports key on this.
+	InstantiationsByID map[ast.NodeID][]types.Type
+
 	// Diags aggregates the diagnostics produced during checking.
 	Diags []*diag.Diagnostic
 
@@ -289,19 +294,21 @@ func Workspace(
 
 func newResult() *Result {
 	return &Result{
-		Types:          map[ast.Expr]types.Type{},
-		LetTypes:       map[ast.Node]types.Type{},
-		SymTypes:       map[*resolve.Symbol]types.Type{},
-		Instantiations: map[*ast.CallExpr][]types.Type{},
+		Types:              map[ast.Expr]types.Type{},
+		LetTypes:           map[ast.Node]types.Type{},
+		SymTypes:           map[*resolve.Symbol]types.Type{},
+		Instantiations:     map[*ast.CallExpr][]types.Type{},
+		InstantiationsByID: map[ast.NodeID][]types.Type{},
 	}
 }
 
 func resultWithSharedMaps(shared *Result) *Result {
 	return &Result{
-		Types:          shared.Types,
-		LetTypes:       shared.LetTypes,
-		SymTypes:       shared.SymTypes,
-		Instantiations: shared.Instantiations,
+		Types:              shared.Types,
+		LetTypes:           shared.LetTypes,
+		SymTypes:           shared.SymTypes,
+		Instantiations:     shared.Instantiations,
+		InstantiationsByID: shared.InstantiationsByID,
 	}
 }
 
