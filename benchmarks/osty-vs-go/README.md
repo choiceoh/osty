@@ -67,6 +67,9 @@ Useful flags:
 - `--go-count <N>` — run each Go pair `N` times and publish the median
   per metric. Default `3`; this trades a bit of wall time for a much
   steadier Go baseline.
+  In `--loop` / `--autoresearch`, unchanged Go workloads are cached
+  per session, so long pairs such as `record_pipeline` and
+  `simd_stats` don't keep re-running the same Go baseline every tick.
 - `--go-cpu <list>` — forwarded to `go test -cpu`. Default `1`, which
   reduces scheduler noise for very short Go benches.
 - `--pairs-dir <path>` — defaults to `benchmarks/osty-vs-go`.
@@ -78,6 +81,8 @@ Useful flags:
 - `--loop <dur>` — keep re-running on a fixed cadence until Ctrl-C;
   every tick prints a vs-best verdict so you can iterate on the
   compiler in a tight edit → measure → decide loop.
+  The session reuses Go-side results until the pair's `go/` inputs or
+  module files change.
 - `--noise <frac>` — band under which a vs-best delta is classified
   as "within noise" rather than a regression. Default `0.02` (±2%).
 
@@ -236,6 +241,9 @@ go run ./cmd/osty-vs-go --loop 5m --benchtime 500ms --label "inline-probe"
 This is the closest port of Karpathy's actual loop: the caller plugs
 a **mutator** (any executable that edits the working tree), the
 orchestrator runs mutate → bench → keep-or-revert without asking.
+Go baseline sweeps are memoized within the autoresearch session and
+are refreshed automatically if the workload's Go sources or module
+files change, which keeps long-workload search loops much faster.
 
 ```sh
 just build

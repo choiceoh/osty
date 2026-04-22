@@ -2,6 +2,8 @@ package main
 
 import (
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -113,6 +115,86 @@ func TestAggregateGoBenchRunsUsesMedianPerMetric(t *testing.T) {
 	}
 	if rows[1].GoNs != 120 || rows[1].GoBytes != 90 || rows[1].GoAllocs != 4 {
 		t.Fatalf("WordFreqTop10 median row = %+v", rows[1])
+	}
+}
+
+func TestRunGoBenchCachedReusesGoBaselineWhenInputsStayStable(t *testing.T) {
+	root := t.TempDir()
+	pairsDir := filepath.Join(root, "benchmarks")
+	pairDir := filepath.Join(pairsDir, "simd_stats", "go")
+	if err := os.MkdirAll(pairDir, 0o755); err != nil {
+		t.Fatalf("mkdir pair dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/bench\n\ngo 1.26.2\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pairDir, "simd_stats_test.go"), []byte("package simdstatsbench\n"), 0o644); err != nil {
+		t.Fatalf("write pair file: %v", err)
+	}
+
+	cache := newGoBenchCache()
+	calls := 0
+	runner := func(goBin, pairsDir, pair, benchTime string, goCount int, goCPU string) ([]benchResult, error) {
+		calls++
+		return []benchResult{mkResult(pair, "SimdStats", float64(calls), math.NaN())}, nil
+	}
+
+	first, err := runGoBenchCached(cache, runner, "go", pairsDir, "simd_stats", "2s", 3, "1")
+	if err != nil {
+		t.Fatalf("first cached run: %v", err)
+	}
+	second, err := runGoBenchCached(cache, runner, "go", pairsDir, "simd_stats", "2s", 3, "1")
+	if err != nil {
+		t.Fatalf("second cached run: %v", err)
+	}
+
+	if calls != 1 {
+		t.Fatalf("runner calls = %d, want 1 (cache hit on second run)", calls)
+	}
+	if len(second) != 1 || second[0].GoNs != first[0].GoNs {
+		t.Fatalf("cached rows = %+v, want %+v", second, first)
+	}
+}
+
+func TestRunGoBenchCachedInvalidatesWhenGoInputsChange(t *testing.T) {
+	root := t.TempDir()
+	pairsDir := filepath.Join(root, "benchmarks")
+	pairDir := filepath.Join(pairsDir, "record_pipeline", "go")
+	if err := os.MkdirAll(pairDir, 0o755); err != nil {
+		t.Fatalf("mkdir pair dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/bench\n\ngo 1.26.2\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	goFile := filepath.Join(pairDir, "record_pipeline_test.go")
+	if err := os.WriteFile(goFile, []byte("package recordpipelinebench\n"), 0o644); err != nil {
+		t.Fatalf("write pair file: %v", err)
+	}
+
+	cache := newGoBenchCache()
+	calls := 0
+	runner := func(goBin, pairsDir, pair, benchTime string, goCount int, goCPU string) ([]benchResult, error) {
+		calls++
+		return []benchResult{mkResult(pair, "RecordPipeline", float64(calls), math.NaN())}, nil
+	}
+
+	first, err := runGoBenchCached(cache, runner, "go", pairsDir, "record_pipeline", "2s", 3, "1")
+	if err != nil {
+		t.Fatalf("first cached run: %v", err)
+	}
+	if err := os.WriteFile(goFile, []byte("package recordpipelinebench\n// change\n"), 0o644); err != nil {
+		t.Fatalf("rewrite pair file: %v", err)
+	}
+	second, err := runGoBenchCached(cache, runner, "go", pairsDir, "record_pipeline", "2s", 3, "1")
+	if err != nil {
+		t.Fatalf("second cached run after change: %v", err)
+	}
+
+	if calls != 2 {
+		t.Fatalf("runner calls = %d, want 2 after input change", calls)
+	}
+	if len(second) != 1 || len(first) != 1 || second[0].GoNs == first[0].GoNs {
+		t.Fatalf("invalidated rows = %+v, first = %+v", second, first)
 	}
 }
 

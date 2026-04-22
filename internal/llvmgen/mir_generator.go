@@ -5143,6 +5143,15 @@ func (g *mirGen) aggregateElementTypes(aggT mir.Type, rv *mir.AggregateRV) ([]mi
 	case mir.AggTuple:
 		tt, ok := aggT.(*ir.TupleType)
 		if !ok {
+			if isUnitType(aggT) {
+				// MIR still models some unit-producing paths (notably
+				// bench/test Result<(), E> helpers) as AggTuple over the
+				// unit type. That's a real MIR coverage gap, not an
+				// internal correctness failure; surface it as
+				// ErrUnsupported so the LLVM backend can fall back to the
+				// HIR path, which already handles the shape.
+				return nil, unsupportedf("mir-mvp", "tuple aggregate type %s", mirTypeString(aggT))
+			}
 			return nil, fmt.Errorf("mir-mvp: tuple aggregate type %s", mirTypeString(aggT))
 		}
 		return append([]mir.Type(nil), tt.Elems...), nil

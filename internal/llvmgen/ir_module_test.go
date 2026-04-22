@@ -261,6 +261,7 @@ fn main() {
 //   - a `@osty.vtable.<impl>__<iface>` constant global whose function
 //     pointers reference the concrete methods in interface-declaration
 //     order.
+//
 // Boxing and method-dispatch paths stay out of scope for this phase —
 // the smoke only verifies that the vtable *exists*.
 func TestGenerateModuleInterfaceVtableEmitted(t *testing.T) {
@@ -550,10 +551,10 @@ func TestRenderInterfaceShimVoidReturn(t *testing.T) {
 	}
 	m := interfaceMethodSig{name: "clear", slot: 0}
 	sig := &fnSig{
-		name:    "clear",
-		irName:  "Bin__clear",
-		ret:     "void",
-		params:  []paramInfo{{name: "self", typ: "%Bin"}},
+		name:   "clear",
+		irName: "Bin__clear",
+		ret:    "void",
+		params: []paramInfo{{name: "self", typ: "%Bin"}},
 	}
 	sym, def := renderInterfaceShim(iface, impl, m, sig, "%Bin")
 	if sym == "" || def == "" {
@@ -739,6 +740,55 @@ fn main() {
 		"%Result.i64.i64 = type { i64, i64, i64 }",
 		"extractvalue %Result.i64.i64",
 		"call %Result.i64.i64 @div(i64 10, i64 2)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateModuleStdTestingContextClosureCompat(t *testing.T) {
+	src := `use std.testing as t
+
+fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fn main() {
+    t.context("simple", || {
+        t.assertEq(add(1, 2), 3)
+    })
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase2_testing_context_ir.osty")
+	for _, want := range []string{
+		"call i64 @add(i64 1, i64 2)",
+		"define i32 @main()",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateModuleStdTestingBenchmarkClosureCompat(t *testing.T) {
+	src := `use std.testing
+
+fn add(a: Int, b: Int) -> Int {
+    a + b
+}
+
+fn main() {
+    testing.benchmark(5, || {
+        let _ = add(1, 2)
+        Ok(())
+    })
+}
+`
+	got := runMonoLowerPipeline(t, src, "/tmp/phase2_testing_benchmark_ir.osty")
+	for _, want := range []string{
+		"call i64 @add(i64 1, i64 2)",
+		"@osty_rt_bench_target_ns",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)
