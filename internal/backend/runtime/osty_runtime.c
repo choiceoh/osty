@@ -3620,6 +3620,14 @@ static void osty_gc_auto_drive_incremental(void *const *root_slots, int64_t root
             /* Cycle done — finish it inline. */
             osty_gc_state = OSTY_GC_STATE_SWEEPING;
             osty_gc_incremental_sweep();
+            /* Phase D: after sweep, evacuate movable survivors and
+             * remap stack/global/object slots so an incremental major
+             * delivers the same forwarding semantics as the STW major
+             * path at line 3388. Without this, OSTY_GC_INCREMENTAL=1
+             * silently bypasses Phase D compaction — a regression the
+             * doc-claim ✅ did not actually deliver. */
+            (void)osty_gc_compact_major_with_stack_roots(
+                root_slots, root_slot_count);
             osty_gc_collection_count += 1;
             osty_gc_major_count += 1;
             osty_gc_allocated_since_collect = 0;
@@ -3763,19 +3771,36 @@ bool osty_gc_collect_incremental_step(int64_t budget) {
     return has_more;
 }
 
-void osty_gc_collect_incremental_finish(void) {
-    int64_t t_start = osty_gc_now_nanos();
-    osty_gc_acquire();
-    if (osty_gc_state == OSTY_GC_STATE_IDLE) {
-        osty_gc_release();
-        return;
-    }
+/* Shared finish body for the incremental major path. Drains any leftover
+ * greys, runs the sweep, and (when `compact` is true) evacuates movable
+ * survivors with the caller-supplied stack roots for remap. Runs under
+ * `osty_gc_lock`.
+ *
+ * Why the `compact` flag exists: the concurrent scheduler drives a
+ * finish without exposing the mutators' frame descriptors (they are
+ * parked at safepoints across many threads). Remapping global / object
+ * slots without also remapping those stack frames would leave dangling
+ * pointers on every parked thread's stack. Compaction is therefore only
+ * safe when the caller knows every live managed stack slot — today that
+ * means the single-threaded test / LLVM-emitted path via
+ * `osty_gc_collect_incremental_finish_with_stack_roots`. */
+static void osty_gc_collect_incremental_finish_locked(
+    void *const *root_slots, int64_t root_slot_count, bool compact) {
     /* Drain any remaining greys so the sweep sees a consistent
      * colouring. The incremental barrier (SATB pre_write) could have
      * dropped new greys on us between the last step and this call. */
     (void)osty_gc_mark_drain_budget(0);
     osty_gc_state = OSTY_GC_STATE_SWEEPING;
     osty_gc_incremental_sweep();
+    if (compact) {
+        /* Phase D: incremental major matches STW major — evacuate
+         * movable survivors and remap every slot the STW path would
+         * remap. Safety: SWEEPING state plus the lock, no mutator
+         * barrier mid-flight, compact_major never re-enters the
+         * mark queue. */
+        (void)osty_gc_compact_major_with_stack_roots(
+            root_slots, root_slot_count);
+    }
     osty_gc_collection_count += 1;
     osty_gc_major_count += 1;
     osty_gc_allocated_since_collect = 0;
@@ -3784,6 +3809,48 @@ void osty_gc_collect_incremental_finish(void) {
     osty_gc_collection_requested_major = false;
     osty_gc_barrier_logs_clear();
     osty_gc_state = OSTY_GC_STATE_IDLE;
+}
+
+void osty_gc_collect_incremental_finish(void) {
+    int64_t t_start = osty_gc_now_nanos();
+    osty_gc_acquire();
+    if (osty_gc_state == OSTY_GC_STATE_IDLE) {
+        osty_gc_release();
+        return;
+    }
+    /* No-stack-roots path: skip compaction (see rationale in
+     * `osty_gc_collect_incremental_finish_locked`). Callers that own
+     * their frame descriptors should prefer the `_with_stack_roots`
+     * variant so Phase D compaction runs. */
+    osty_gc_collect_incremental_finish_locked(NULL, 0, false);
+    osty_gc_release();
+
+    int64_t t_end = osty_gc_now_nanos();
+    if (t_start != 0 && t_end >= t_start) {
+        int64_t elapsed = t_end - t_start;
+        osty_gc_collection_nanos_last = elapsed;
+        osty_gc_collection_nanos_total += elapsed;
+        osty_gc_major_nanos_total += elapsed;
+        if (elapsed > osty_gc_collection_nanos_max) {
+            osty_gc_collection_nanos_max = elapsed;
+        }
+    }
+}
+
+/* Phase D addition: callers that have live managed stack slots at the
+ * finish point can drive an incremental major that also compacts and
+ * remaps those slots, matching `osty_gc_collect_major_with_stack_roots`.
+ * Symmetrical to `osty_gc_collect_incremental_start_with_stack_roots`. */
+void osty_gc_collect_incremental_finish_with_stack_roots(
+    void *const *root_slots, int64_t root_slot_count) {
+    int64_t t_start = osty_gc_now_nanos();
+    osty_gc_acquire();
+    if (osty_gc_state == OSTY_GC_STATE_IDLE) {
+        osty_gc_release();
+        return;
+    }
+    osty_gc_collect_incremental_finish_locked(
+        root_slots, root_slot_count, true);
     osty_gc_release();
 
     int64_t t_end = osty_gc_now_nanos();
