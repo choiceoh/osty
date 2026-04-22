@@ -51,8 +51,8 @@
 /// initialiser of `m` and returns the same module. Mutates `m` in
 /// place; the return value is for fluent chaining.
 pub fn mirOptimize(m: MirModule) -> MirModule {
-    for func in m.functions {
-        mirOptimizeFunction(func)
+    for f in m.functions {
+        mirOptimizeFunction(f)
     }
     // Self-host MIR stores global initialisers by symbol instead of a
     // direct function pointer. Follow those edges explicitly too so the
