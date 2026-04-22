@@ -121,6 +121,28 @@ type llvmNativeStruct struct {
 	fields   []*llvmNativeStructField
 }
 
+// llvmNativeEnumVariant mirrors toolchain/llvmgen.osty's
+// `LlvmNativeEnumVariant`. `tag` is the 0-based discriminant in
+// declaration order; `payloadType` is the LLVM type string of the
+// single payload slot (empty for payload-free variants).
+type llvmNativeEnumVariant struct {
+	name        string
+	tag         int
+	payloadType string
+}
+
+// llvmNativeEnum mirrors toolchain/llvmgen.osty's `LlvmNativeEnum`.
+// Storage layout is `{ i64 tag, <payloadSlotType> }` or `{ i64 tag }`.
+// By convention `name` is the bare mangled identifier (e.g.
+// "_ZTSN4main5MaybeIlEE") and `llvmType` is the same with a leading
+// `%`. The IR projection layer owns that invariant.
+type llvmNativeEnum struct {
+	name            string
+	llvmType        string
+	payloadSlotType string
+	variants        []*llvmNativeEnumVariant
+}
+
 type llvmNativeFunction struct {
 	name       string
 	returnType string
@@ -134,6 +156,7 @@ type llvmNativeModule struct {
 	target             string
 	globals            []*llvmNativeGlobal
 	structs            []*llvmNativeStruct
+	enums              []*llvmNativeEnum
 	stringGlobals      []*LlvmStringGlobal
 	functions          []*llvmNativeFunction
 	needsListRuntime   bool
@@ -171,6 +194,12 @@ func llvmNativeEmitModule(mod *llvmNativeModule) string {
 		}
 		typeDefs = append(typeDefs, llvmStructTypeDef(strings.TrimPrefix(st.llvmType, "%"), fieldTypes))
 	}
+	for _, en := range mod.enums {
+		if en == nil {
+			continue
+		}
+		typeDefs = append(typeDefs, llvmNativeEmitEnumTypeDef(en))
+	}
 	for _, global := range mod.globals {
 		if global == nil {
 			continue
@@ -195,6 +224,23 @@ func llvmNativeEmitModule(mod *llvmNativeModule) string {
 		llvmNativeRuntimeDeclarations(mod),
 		definitions,
 	)
+}
+
+// llvmNativeEmitEnumTypeDef mirrors the Osty-side helper in
+// toolchain/llvmgen.osty. Enums lower to tagged-union structs:
+// `{ i64 tag, <payload> }`. Variant construction/destruction reuses
+// the existing struct machinery (llvmStructLiteral / llvmExtractValue)
+// in the projection layer, so the emit path has no variant-literal
+// primitive of its own.
+func llvmNativeEmitEnumTypeDef(en *llvmNativeEnum) string {
+	if en == nil {
+		return ""
+	}
+	fieldTypes := []string{"i64"}
+	if en.payloadSlotType != "" {
+		fieldTypes = append(fieldTypes, en.payloadSlotType)
+	}
+	return llvmStructTypeDef(en.name, fieldTypes)
 }
 
 func llvmNativeRuntimeDeclarations(mod *llvmNativeModule) []string {

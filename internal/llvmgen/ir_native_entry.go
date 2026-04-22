@@ -20,6 +20,27 @@ type nativeStructInfo struct {
 	byName map[string]nativeStructFieldInfo
 }
 
+// nativeEnumVariantInfo captures the resolved payload type for a
+// single monomorphized enum variant. `payloadLLVMType` is "" for
+// payload-free variants (e.g. `None`).
+type nativeEnumVariantInfo struct {
+	name            string
+	tag             int
+	payloadLLVMType string
+	payloadIRTypes  []ostyir.Type
+}
+
+// nativeEnumInfo mirrors nativeStructInfo but for tagged-union
+// enums. The `def` is kept on the module side under
+// `llvmNativeModule.enums`, and projection state is carried here
+// so the IR projection layer (populated in a follow-up session)
+// can route variant construction and pattern matches back to the
+// same storage.
+type nativeEnumInfo struct {
+	def             *llvmNativeEnum
+	variantsByName  map[string]*nativeEnumVariantInfo
+}
+
 type nativeTupleInfo struct {
 	def           *llvmNativeStruct
 	elemLLVMTypes []string
@@ -27,6 +48,7 @@ type nativeTupleInfo struct {
 
 type nativeProjectionCtx struct {
 	structsByName         map[string]*nativeStructInfo
+	enumsByName           map[string]*nativeEnumInfo
 	tuplesByLLVMType      map[string]*nativeTupleInfo
 	tupleOrder            []string
 	methodsByOwner        map[string]map[string]nativeMethodInfo
@@ -40,6 +62,24 @@ type nativeProjectionCtx struct {
 	stringGlobals         []*LlvmStringGlobal
 	nextStringID          int
 	currentReturnLLVMType string
+	// tempCounter mints monotone fresh names for synthetic locals
+	// spilled from one-to-many statement expansions (e.g. tuple
+	// destructuring, for-in over a list). The name prefix is
+	// `__osty_native_t` to avoid colliding with user bindings —
+	// Osty identifiers cannot start with a double underscore.
+	tempCounter int
+}
+
+// freshTempName returns a new synthetic local name scoped to this
+// projection context. Used by the statement-fan-out helpers (tuple
+// destructure let, for-in loop) to spill intermediates without
+// clashing with user identifiers.
+func (ctx *nativeProjectionCtx) freshTempName(prefix string) string {
+	if ctx == nil {
+		return prefix
+	}
+	ctx.tempCounter++
+	return prefix + strconv.Itoa(ctx.tempCounter)
 }
 
 type nativeExprInfoKind int
@@ -153,6 +193,7 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 	}
 	ctx := &nativeProjectionCtx{
 		structsByName:    map[string]*nativeStructInfo{},
+		enumsByName:      map[string]*nativeEnumInfo{},
 		tuplesByLLVMType: map[string]*nativeTupleInfo{},
 		methodsByOwner:   map[string]map[string]nativeMethodInfo{},
 		globalConsts:     map[string]nativeConstValue{},
@@ -163,6 +204,7 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 		target:        opts.Target,
 		globals:       make([]*llvmNativeGlobal, 0, len(mod.Decls)),
 		structs:       make([]*llvmNativeStruct, 0, len(mod.Decls)),
+		enums:         make([]*llvmNativeEnum, 0, len(mod.Decls)),
 		stringGlobals: make([]*LlvmStringGlobal, 0),
 		functions:     make([]*llvmNativeFunction, 0, len(mod.Decls)+1),
 	}
@@ -188,6 +230,31 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 			if !nativeRegisterStructMethodHeaders(ctx, d) {
 				return nil, false
 			}
+		case *ostyir.EnumDecl:
+			if d == nil {
+				continue
+			}
+			// Generic templates survive monomorphization alongside
+			// their specializations in the output module. The
+			// specializations carry the mangled `_ZTS…` names and
+			// hold the concrete payload types we actually lower;
+			// the templates are unreachable post-mono so we skip
+			// them here rather than refusing the whole module.
+			if len(d.Generics) != 0 {
+				continue
+			}
+			info, ok := nativeRegisterEnumDecl(ctx, d)
+			if !ok {
+				return nil, false
+			}
+			if _, exists := ctx.enumsByName[d.Name]; exists {
+				return nil, false
+			}
+			if len(d.Methods) != 0 {
+				return nil, false
+			}
+			ctx.enumsByName[d.Name] = info
+			out.enums = append(out.enums, info.def)
 		case *ostyir.LetDecl:
 			ctx.mutableGlobals[d.Name] = d.Mut
 		}
@@ -215,6 +282,12 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 				}
 				out.functions = append(out.functions, fn)
 			}
+		case *ostyir.EnumDecl:
+			// Enum declarations are fully projected during the
+			// registration phase above; nothing to populate here.
+			// The explicit case keeps enum decls from falling into
+			// the default arm that rejects the whole module.
+			continue
 		case *ostyir.FnDecl:
 			fn, ok := nativeFunctionFromIR(ctx, d)
 			if !ok {
@@ -271,6 +344,82 @@ func nativeRegisterStructDecl(decl *ostyir.StructDecl) (*nativeStructInfo, bool)
 			fields:   make([]*llvmNativeStructField, 0, len(decl.Fields)),
 		},
 		byName: map[string]nativeStructFieldInfo{},
+	}, true
+}
+
+// nativeRegisterEnumDecl projects a monomorphized enum declaration
+// into the native projection context. The resulting `*nativeEnumInfo`
+// owns a `*llvmNativeEnum` that the emitter turns into a
+// `{ i64 tag, <payload> }` storage struct, plus a
+// variant-name-to-tag/payload index the IR projection layer reads
+// when lowering variant construction (`Maybe.Some(42)`) and
+// pattern matches (`if let Maybe.Some(x) = m`).
+//
+// The routing (calling this from `nativeModuleFromIR` and wiring
+// the variant-construction / pattern-match expression lowering
+// paths) lives in a follow-up session — this helper exists so the
+// data-model half can land first. It is intentionally not yet
+// invoked; the `nativeModuleFromIR` switch still returns `nil,
+// false` for `*ostyir.EnumDecl`.
+//
+// Returns (nil, false) for generic templates: only monomorphized
+// specializations are projectable. The payload slot type is
+// synthesized from the widest variant payload — today that is
+// trivially the single `Int`-shaped slot used by `Option<Int>` /
+// `Maybe<Int>`; the follow-up session will extend this to handle
+// multi-typed and multi-field payloads by spilling into a union-
+// shaped struct.
+func nativeRegisterEnumDecl(ctx *nativeProjectionCtx, decl *ostyir.EnumDecl) (*nativeEnumInfo, bool) {
+	if ctx == nil || decl == nil || decl.Name == "" || len(decl.Generics) != 0 {
+		return nil, false
+	}
+	variants := make([]*llvmNativeEnumVariant, 0, len(decl.Variants))
+	variantInfos := make(map[string]*nativeEnumVariantInfo, len(decl.Variants))
+	payloadSlot := ""
+	for i, variant := range decl.Variants {
+		if variant == nil || variant.Name == "" {
+			return nil, false
+		}
+		payloadLLVM := ""
+		if len(variant.Payload) == 1 {
+			llvmType, ok := nativeLLVMTypeFromIR(ctx, variant.Payload[0])
+			if !ok || llvmType == "void" {
+				return nil, false
+			}
+			payloadLLVM = llvmType
+			if payloadSlot == "" {
+				payloadSlot = llvmType
+			} else if payloadSlot != llvmType {
+				// Mixed payload shapes need a union-sized slot the
+				// follow-up session will model. Bail so the legacy
+				// bridge keeps handling this case for now.
+				return nil, false
+			}
+		} else if len(variant.Payload) > 1 {
+			// Multi-field payloads require a synthesized tuple
+			// struct. Defer to the follow-up session.
+			return nil, false
+		}
+		variants = append(variants, &llvmNativeEnumVariant{
+			name:        variant.Name,
+			tag:         i,
+			payloadType: payloadLLVM,
+		})
+		variantInfos[variant.Name] = &nativeEnumVariantInfo{
+			name:            variant.Name,
+			tag:             i,
+			payloadLLVMType: payloadLLVM,
+			payloadIRTypes:  append([]ostyir.Type(nil), variant.Payload...),
+		}
+	}
+	return &nativeEnumInfo{
+		def: &llvmNativeEnum{
+			name:            decl.Name,
+			llvmType:        llvmStructTypeName(decl.Name),
+			payloadSlotType: payloadSlot,
+			variants:        variants,
+		},
+		variantsByName: variantInfos,
 	}, true
 }
 
@@ -465,21 +614,28 @@ func nativeBlockFromIR(ctx *nativeProjectionCtx, block *ostyir.Block, fnReturnTy
 	var tailResult ostyir.Expr
 	if block.Result == nil && fnReturnType != "" && fnReturnType != "void" && len(stmts) != 0 {
 		if exprStmt, ok := stmts[len(stmts)-1].(*ostyir.ExprStmt); ok && exprStmt != nil && exprStmt.X != nil {
-			tailResult = exprStmt.X
-			stmts = stmts[:len(stmts)-1]
+			// Don't promote a unit-typed tail expression to the
+			// block result — the function-emission terminator
+			// fallback (notably the `main` -> `ret i32 0` path)
+			// fills in the actual return. Promoting would force
+			// an unsupported value-coercion path for shapes like
+			// `if let` that produce unit but live as the trailing
+			// statement of `fn main()`.
+			if !nativeIsUnitType(exprStmt.X.Type()) {
+				tailResult = exprStmt.X
+				stmts = stmts[:len(stmts)-1]
+			}
 		}
 	}
 	out := &llvmNativeBlock{
 		stmts: make([]*llvmNativeStmt, 0, len(stmts)),
 	}
 	for _, stmt := range stmts {
-		nativeStmt, ok := nativeStmtFromIR(ctx, stmt, fnReturnType)
+		nativeStmts, ok := nativeStmtsFromIR(ctx, stmt, fnReturnType)
 		if !ok {
 			return nil, false
 		}
-		if nativeStmt != nil {
-			out.stmts = append(out.stmts, nativeStmt)
-		}
+		out.stmts = append(out.stmts, nativeStmts...)
 	}
 	resultExpr := block.Result
 	if resultExpr == nil {
@@ -503,13 +659,224 @@ func nativeBlockFromStmts(ctx *nativeProjectionCtx, stmts []ostyir.Stmt, fnRetur
 		stmts: make([]*llvmNativeStmt, 0, len(stmts)),
 	}
 	for _, stmt := range stmts {
-		nativeStmt, ok := nativeStmtFromIR(ctx, stmt, fnReturnType)
+		nativeStmts, ok := nativeStmtsFromIR(ctx, stmt, fnReturnType)
 		if !ok {
 			return nil, false
 		}
-		if nativeStmt != nil {
-			out.stmts = append(out.stmts, nativeStmt)
+		out.stmts = append(out.stmts, nativeStmts...)
+	}
+	return out, true
+}
+
+// nativeStmtsFromIR is the one-to-many wrapper around nativeStmtFromIR.
+// A small set of IR-level shapes (tuple-destructuring `let`, for-in
+// loops) expand into several native statements; everything else passes
+// through as a single-element slice. The block iterator calls this so
+// fan-out emissions land contiguously in the produced native block.
+func nativeStmtsFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType string) ([]*llvmNativeStmt, bool) {
+	switch s := stmt.(type) {
+	case *ostyir.LetStmt:
+		if _, ok := s.Pattern.(*ostyir.TuplePat); ok {
+			return nativeLetTupleDestructureStmts(ctx, s)
 		}
+	case *ostyir.ForStmt:
+		if s != nil && s.Kind == ostyir.ForIn {
+			return nativeForInListStmts(ctx, s, fnReturnType)
+		}
+	}
+	one, ok := nativeStmtFromIR(ctx, stmt, fnReturnType)
+	if !ok {
+		return nil, false
+	}
+	if one == nil {
+		return nil, true
+	}
+	return []*llvmNativeStmt{one}, true
+}
+
+// nativeForInListStmts lowers `for x in listExpr { body }` into a
+// RangeStmt bounded by 0..listExpr.len() with the element
+// extraction (`let x = listExpr[i]`) prepended to the body. The
+// iter expression is spilled to a synthesized `__osty_native_list<N>`
+// temp when it is not already a bare ident, so side-effects fire
+// once. Only covers `ForIn` with a plain loop-variable name;
+// destructuring heads defer to the legacy bridge until follow-up
+// coverage lands.
+func nativeForInListStmts(ctx *nativeProjectionCtx, s *ostyir.ForStmt, fnReturnType string) ([]*llvmNativeStmt, bool) {
+	if ctx == nil || s == nil || s.Kind != ostyir.ForIn {
+		return nil, false
+	}
+	if s.IsDestructured() || s.Var == "" || s.Iter == nil {
+		return nil, false
+	}
+	iterInfo, ok := nativeExprTypeInfo(ctx, s.Iter)
+	if !ok || iterInfo.kind != nativeExprInfoList || iterInfo.listElemType == "" {
+		return nil, false
+	}
+	iterExpr, ok := nativeExprFromIR(ctx, s.Iter)
+	if !ok || iterExpr.llvmType != "ptr" {
+		return nil, false
+	}
+	var listName string
+	var out []*llvmNativeStmt
+	if iterExpr.kind == llvmNativeExprIdent && iterExpr.name != "" {
+		listName = iterExpr.name
+	} else {
+		listName = ctx.freshTempName("__osty_native_list")
+		out = append(out, &llvmNativeStmt{
+			kind:       llvmNativeStmtLet,
+			name:       listName,
+			childExprs: []*llvmNativeExpr{iterExpr},
+		})
+		ctx.bindScopeName(listName, iterInfo)
+	}
+	indexName := ctx.freshTempName("__osty_native_i")
+
+	// Bind loop-index and element names in the current scope so the
+	// body's IR lowering resolves them correctly. nativeBlockFromIR
+	// pushes its own inner scope on top, so these outer bindings
+	// shadow nothing the body might introduce.
+	ctx.pushScope()
+	ctx.bindScopeName(indexName, nativeExprInfoFromLLVMType("i64"))
+	elemInfo, ok := nativeForInElemInfo(ctx, s.Iter, iterInfo)
+	if !ok {
+		ctx.popScope()
+		return nil, false
+	}
+	ctx.bindScopeName(s.Var, elemInfo)
+	bodyBlock, ok := nativeBlockFromIR(ctx, s.Body, fnReturnType)
+	ctx.popScope()
+	if !ok {
+		return nil, false
+	}
+
+	// Prepend `let s.Var = listName[indexName]` to the body.
+	listIdent := func() *llvmNativeExpr {
+		return &llvmNativeExpr{kind: llvmNativeExprIdent, llvmType: "ptr", name: listName}
+	}
+	indexIdent := &llvmNativeExpr{kind: llvmNativeExprIdent, llvmType: "i64", name: indexName}
+	elemExpr := &llvmNativeExpr{
+		kind:         llvmNativeExprListIndex,
+		llvmType:     iterInfo.listElemType,
+		elemLLVMType: iterInfo.listElemType,
+		childExprs:   []*llvmNativeExpr{listIdent(), indexIdent},
+	}
+	extractStmt := &llvmNativeStmt{
+		kind:       llvmNativeStmtLet,
+		name:       s.Var,
+		childExprs: []*llvmNativeExpr{elemExpr},
+	}
+	bodyBlock.stmts = append([]*llvmNativeStmt{extractStmt}, bodyBlock.stmts...)
+
+	// Build Range 0..listName.len().
+	startExpr := &llvmNativeExpr{kind: llvmNativeExprInt, llvmType: "i64", text: "0"}
+	ctx.needsListRT = true
+	endExpr := nativeRuntimeCallExpr("i64", llvmListRuntimeLenSymbol(), listIdent())
+	out = append(out, &llvmNativeStmt{
+		kind:        llvmNativeStmtRange,
+		name:        indexName,
+		inclusive:   false,
+		childExprs:  []*llvmNativeExpr{startExpr, endExpr},
+		childBlocks: []*llvmNativeBlock{bodyBlock},
+	})
+	return out, true
+}
+
+// nativeForInElemInfo derives the element's native expr-info from
+// the iter's list info. For scalar element lists the list info's
+// llvm type lookup suffices; for tuple / struct elements we
+// reach through to the registered info by resolving the iter's
+// IR element type.
+func nativeForInElemInfo(ctx *nativeProjectionCtx, iter ostyir.Expr, iterInfo nativeExprInfo) (nativeExprInfo, bool) {
+	if iter == nil {
+		return nativeExprInfoFromLLVMType(iterInfo.listElemType), iterInfo.listElemType != ""
+	}
+	named, ok := iter.Type().(*ostyir.NamedType)
+	if ok && named != nil && named.Builtin && named.Name == "List" && len(named.Args) == 1 {
+		if info, ok := nativeExprInfoFromType(ctx, named.Args[0]); ok {
+			return info, true
+		}
+	}
+	if iterInfo.listElemType == "" {
+		return nativeExprInfo{}, false
+	}
+	return nativeExprInfoFromLLVMType(iterInfo.listElemType), true
+}
+
+// nativeLetTupleDestructureStmts lowers `let (a, b, c, ...) = rhs`
+// into a sequence of native `let` statements — one for the spilled
+// tuple temp (when the RHS is not already a bare ident) and one per
+// destructured element. Element patterns must be plain `IdentPat`
+// bindings; nested patterns, wildcards, and mut bindings defer to
+// the legacy bridge until follow-up work extends coverage.
+func nativeLetTupleDestructureStmts(ctx *nativeProjectionCtx, s *ostyir.LetStmt) ([]*llvmNativeStmt, bool) {
+	if ctx == nil || s == nil || s.Value == nil {
+		return nil, false
+	}
+	pat, ok := s.Pattern.(*ostyir.TuplePat)
+	if !ok || pat == nil {
+		return nil, false
+	}
+	info, ok := nativeTupleInfoFromType(ctx, s.Value.Type())
+	if !ok {
+		return nil, false
+	}
+	if len(pat.Elems) != len(info.elemLLVMTypes) {
+		return nil, false
+	}
+	// Collect the element binder names up-front so we can reject any
+	// non-trivial sub-pattern before emitting partial output.
+	elemNames := make([]string, 0, len(pat.Elems))
+	for _, elem := range pat.Elems {
+		id, ok := elem.(*ostyir.IdentPat)
+		if !ok || id == nil || id.Name == "" || id.Mut {
+			return nil, false
+		}
+		elemNames = append(elemNames, id.Name)
+	}
+	value, ok := nativeExprFromIR(ctx, s.Value)
+	if !ok {
+		return nil, false
+	}
+	if value.llvmType != info.def.llvmType {
+		return nil, false
+	}
+	out := make([]*llvmNativeStmt, 0, len(elemNames)+1)
+	// If the RHS is already a plain ident we can skip the spill and
+	// reuse the source ident directly for each field access. Complex
+	// expressions spill to a synthesized temp so side-effects fire
+	// exactly once.
+	var baseName string
+	if value.kind == llvmNativeExprIdent && value.name != "" {
+		baseName = value.name
+	} else {
+		baseName = ctx.freshTempName("__osty_native_t")
+		out = append(out, &llvmNativeStmt{
+			kind:       llvmNativeStmtLet,
+			name:       baseName,
+			childExprs: []*llvmNativeExpr{value},
+		})
+		ctx.bindScopeName(baseName, nativeExprInfoFromLLVMType(info.def.llvmType))
+	}
+	for i, name := range elemNames {
+		elemLLVM := info.elemLLVMTypes[i]
+		base := &llvmNativeExpr{
+			kind:     llvmNativeExprIdent,
+			llvmType: info.def.llvmType,
+			name:     baseName,
+		}
+		field := &llvmNativeExpr{
+			kind:       llvmNativeExprField,
+			llvmType:   elemLLVM,
+			fieldIndex: i,
+			childExprs: []*llvmNativeExpr{base},
+		}
+		out = append(out, &llvmNativeStmt{
+			kind:       llvmNativeStmtLet,
+			name:       name,
+			childExprs: []*llvmNativeExpr{field},
+		})
+		ctx.bindScopeName(name, nativeExprInfoFromLLVMType(elemLLVM))
 	}
 	return out, true
 }
@@ -543,6 +910,11 @@ func nativeStmtFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType s
 			childExprs: []*llvmNativeExpr{value},
 		}, true
 	case *ostyir.ExprStmt:
+		if ifLet, ok := s.X.(*ostyir.IfLetExpr); ok {
+			if stmt, ok := nativeIfLetVariantStmt(ctx, ifLet, fnReturnType); ok {
+				return stmt, true
+			}
+		}
 		expr, ok := nativeExprFromIR(ctx, s.X)
 		if !ok {
 			return nil, false
@@ -655,6 +1027,120 @@ func nativeStmtFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType s
 	default:
 		return nil, false
 	}
+}
+
+// nativeIfLetVariantStmt lowers `if let Enum.Variant(<bindings>) =
+// scrutinee { then } else { else }` (wrapped as
+// `ExprStmt{IfLetExpr}`) into a native if statement that compares
+// the enum's tag field against the variant's discriminant and, on
+// the then-branch, synthesizes let bindings for any payload idents
+// the pattern named.
+//
+// Today the helper only covers `VariantPat` with at most one
+// `IdentPat` binding and a single-typed payload slot — the tests
+// lock the `Maybe<Int>` / `Maybe.Some(x)` / `Maybe.None` shapes.
+// Multi-binding patterns, wildcard payloads, and nested patterns
+// return (nil, false) so the caller falls back to the legacy
+// bridge (still wired via `GenerateModule`) until a follow-up
+// extends this coverage.
+func nativeIfLetVariantStmt(
+	ctx *nativeProjectionCtx,
+	ifLet *ostyir.IfLetExpr,
+	fnReturnType string,
+) (*llvmNativeStmt, bool) {
+	if ctx == nil || ifLet == nil {
+		return nil, false
+	}
+	varPat, ok := ifLet.Pattern.(*ostyir.VariantPat)
+	if !ok {
+		return nil, false
+	}
+	info, ok := nativeEnumInfoFromType(ctx, ifLet.Scrutinee.Type())
+	if !ok {
+		return nil, false
+	}
+	variant, ok := info.variantsByName[varPat.Variant]
+	if !ok {
+		return nil, false
+	}
+	// Pattern arg count must match the variant's payload arity
+	// exactly; mixed shapes defer to the legacy bridge.
+	if len(varPat.Args) != len(variant.payloadIRTypes) {
+		return nil, false
+	}
+	scrutinee, ok := nativeExprFromIR(ctx, ifLet.Scrutinee)
+	if !ok {
+		return nil, false
+	}
+	if scrutinee.llvmType != info.def.llvmType {
+		return nil, false
+	}
+	tagExpr := &llvmNativeExpr{
+		kind:       llvmNativeExprField,
+		llvmType:   "i64",
+		fieldIndex: 0,
+		childExprs: []*llvmNativeExpr{scrutinee},
+	}
+	tagConst := &llvmNativeExpr{
+		kind:     llvmNativeExprInt,
+		llvmType: "i64",
+		text:     strconv.Itoa(variant.tag),
+	}
+	cond := &llvmNativeExpr{
+		kind:       llvmNativeExprBinary,
+		llvmType:   "i1",
+		op:         "==",
+		childExprs: []*llvmNativeExpr{tagExpr, tagConst},
+	}
+
+	var bindingStmts []*llvmNativeStmt
+	ctx.pushScope()
+	if len(varPat.Args) == 1 && variant.payloadLLVMType != "" {
+		idPat, ok := varPat.Args[0].(*ostyir.IdentPat)
+		if !ok || idPat.Name == "" || idPat.Mut {
+			ctx.popScope()
+			return nil, false
+		}
+		scrutineeCopy, ok := nativeExprFromIR(ctx, ifLet.Scrutinee)
+		if !ok {
+			ctx.popScope()
+			return nil, false
+		}
+		payloadExpr := &llvmNativeExpr{
+			kind:       llvmNativeExprField,
+			llvmType:   variant.payloadLLVMType,
+			fieldIndex: 1,
+			childExprs: []*llvmNativeExpr{scrutineeCopy},
+		}
+		bindingStmts = append(bindingStmts, &llvmNativeStmt{
+			kind:       llvmNativeStmtLet,
+			name:       idPat.Name,
+			childExprs: []*llvmNativeExpr{payloadExpr},
+		})
+		ctx.bindScopeName(idPat.Name, nativeExprInfoFromLLVMType(variant.payloadLLVMType))
+	}
+	thenBlock, ok := nativeBlockFromIR(ctx, ifLet.Then, fnReturnType)
+	ctx.popScope()
+	if !ok {
+		return nil, false
+	}
+	if len(bindingStmts) != 0 {
+		thenBlock.stmts = append(bindingStmts, thenBlock.stmts...)
+	}
+
+	out := &llvmNativeStmt{
+		kind:        llvmNativeStmtIf,
+		childExprs:  []*llvmNativeExpr{cond},
+		childBlocks: []*llvmNativeBlock{thenBlock},
+	}
+	if ifLet.Else != nil {
+		elseBlock, ok := nativeBlockFromIR(ctx, ifLet.Else, fnReturnType)
+		if !ok {
+			return nil, false
+		}
+		out.childBlocks = append(out.childBlocks, elseBlock)
+	}
+	return out, true
 }
 
 func nativeFieldAssignStmtFromIR(
@@ -1135,7 +1621,20 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 			out.childExprs = append(out.childExprs, value)
 		}
 		return out, true
+	case *ostyir.VariantLit:
+		return nativeVariantLitFromIR(ctx, e)
 	case *ostyir.FieldExpr:
+		// Bare variant access on an enum type name — `Maybe.None` —
+		// lowers to a VariantLit-equivalent zero-argument variant
+		// construction. The IR represents this as
+		// `FieldExpr{X: Ident{Kind: IdentTypeName, Name: <enum>},
+		// Name: <variant>}` rather than a `VariantLit` because the
+		// surface syntax has no parens to disambiguate from a field
+		// access. Detect the shape up front and route to the same
+		// variant projector that handles `Maybe.Some(x)`.
+		if expr, ok := nativeBareVariantAccessFromIR(ctx, e); ok {
+			return expr, true
+		}
 		if e.Optional {
 			baseInfo, ok := nativeExprTypeInfo(ctx, e.X)
 			if !ok || baseInfo.kind != nativeExprInfoOptional {
@@ -1992,6 +2491,22 @@ func nativeStructInfoFromType(ctx *nativeProjectionCtx, t ostyir.Type) (*nativeS
 	return info, info != nil
 }
 
+// nativeEnumInfoFromType resolves a monomorphized enum NamedType
+// (its `Name` is the mangled `_ZTS…` form post-monomorphization)
+// back to the projection-side info registered by
+// `nativeRegisterEnumDecl`.
+func nativeEnumInfoFromType(ctx *nativeProjectionCtx, t ostyir.Type) (*nativeEnumInfo, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	named, ok := t.(*ostyir.NamedType)
+	if !ok || named == nil || named.Builtin || named.Package != "" || len(named.Args) != 0 {
+		return nil, false
+	}
+	info := ctx.enumsByName[named.Name]
+	return info, info != nil
+}
+
 func nativeTupleInfoFromType(ctx *nativeProjectionCtx, t ostyir.Type) (*nativeTupleInfo, bool) {
 	if ctx == nil {
 		return nil, false
@@ -2539,6 +3054,128 @@ func nativeExprFromIRWithHint(ctx *nativeProjectionCtx, expr ostyir.Expr, hintLL
 	}
 }
 
+// nativeVariantLitFromIR lowers `Maybe.Some(42)` / `Maybe.None` into
+// a native struct literal over the monomorphized enum's storage
+// type `{ i64 tag, <payloadSlotType> }`. The emitter reuses the
+// struct-lit insertvalue machinery — enums have no variant-literal
+// primitive of their own.
+//
+// Payload rules:
+//
+//   - All-payload-free enums (payloadSlotType == ""): storage is
+//     `{ i64 }`; the struct lit carries only the tag.
+//   - Single-payload variant: storage is `{ i64, <payload> }`;
+//     construct with `(tag, arg)`.
+//   - Payload-free variant in a with-payload enum: pad the slot
+//     with a zero of `payloadSlotType` so the storage width is
+//     uniform and pattern matching on the payload slot remains
+//     well-typed.
+func nativeVariantLitFromIR(ctx *nativeProjectionCtx, lit *ostyir.VariantLit) (*llvmNativeExpr, bool) {
+	if ctx == nil || lit == nil {
+		return nil, false
+	}
+	info, ok := nativeEnumInfoFromType(ctx, lit.Type())
+	if !ok {
+		return nil, false
+	}
+	variant, ok := info.variantsByName[lit.Variant]
+	if !ok {
+		return nil, false
+	}
+	if len(lit.Args) != len(variant.payloadIRTypes) {
+		return nil, false
+	}
+	children := make([]*llvmNativeExpr, 0, 2)
+	children = append(children, &llvmNativeExpr{
+		kind:     llvmNativeExprInt,
+		llvmType: "i64",
+		text:     strconv.Itoa(variant.tag),
+	})
+	if info.def.payloadSlotType != "" {
+		if variant.payloadLLVMType != "" {
+			if variant.payloadLLVMType != info.def.payloadSlotType {
+				return nil, false
+			}
+			arg := lit.Args[0]
+			if arg.Name != "" {
+				return nil, false
+			}
+			value, ok := nativeExprFromIRWithHint(ctx, arg.Value, variant.payloadLLVMType)
+			if !ok || value.llvmType != variant.payloadLLVMType {
+				return nil, false
+			}
+			children = append(children, value)
+		} else {
+			children = append(children, nativeZeroExprForLLVMType(info.def.payloadSlotType))
+		}
+	}
+	return &llvmNativeExpr{
+		kind:       llvmNativeExprStructLit,
+		llvmType:   info.def.llvmType,
+		childExprs: children,
+	}, true
+}
+
+// nativeBareVariantAccessFromIR matches the `Enum.Variant` field
+// access shape (no parens) and projects it as if the surface had
+// written `Enum.Variant()` — a zero-argument variant construction.
+// Returns (nil, false) when the field-expr does not name a known
+// enum variant so the caller falls through to the regular field
+// access path.
+func nativeBareVariantAccessFromIR(ctx *nativeProjectionCtx, e *ostyir.FieldExpr) (*llvmNativeExpr, bool) {
+	if ctx == nil || e == nil || e.Optional {
+		return nil, false
+	}
+	id, ok := e.X.(*ostyir.Ident)
+	if !ok || id == nil || id.Kind != ostyir.IdentTypeName {
+		return nil, false
+	}
+	info, ok := ctx.enumsByName[id.Name]
+	if !ok {
+		return nil, false
+	}
+	variant, ok := info.variantsByName[e.Name]
+	if !ok {
+		return nil, false
+	}
+	if len(variant.payloadIRTypes) != 0 {
+		// A payload-bearing variant referenced without parens is a
+		// function-value form (the constructor as a callable). Bail
+		// — only the zero-arg construction case lowers cleanly here.
+		return nil, false
+	}
+	children := []*llvmNativeExpr{{
+		kind:     llvmNativeExprInt,
+		llvmType: "i64",
+		text:     strconv.Itoa(variant.tag),
+	}}
+	if info.def.payloadSlotType != "" {
+		children = append(children, nativeZeroExprForLLVMType(info.def.payloadSlotType))
+	}
+	return &llvmNativeExpr{
+		kind:       llvmNativeExprStructLit,
+		llvmType:   info.def.llvmType,
+		childExprs: children,
+	}, true
+}
+
+// nativeZeroExprForLLVMType produces a native literal expression
+// for the zero value of a given LLVM type — used to pad the
+// enum payload slot when a payload-free variant lands inside a
+// with-payload enum.
+func nativeZeroExprForLLVMType(llvmType string) *llvmNativeExpr {
+	switch llvmType {
+	case "i1":
+		return &llvmNativeExpr{kind: llvmNativeExprBool, llvmType: "i1", boolValue: false}
+	case "double":
+		return &llvmNativeExpr{kind: llvmNativeExprFloat, llvmType: "double", text: "0.0"}
+	case "ptr":
+		return &llvmNativeExpr{kind: llvmNativeExprInt, llvmType: "ptr", text: "null"}
+	default:
+		return &llvmNativeExpr{kind: llvmNativeExprInt, llvmType: llvmType, text: "0"}
+	}
+}
+
 func nativeRuntimeCallExpr(llvmType string, name string, args ...*llvmNativeExpr) *llvmNativeExpr {
 	return &llvmNativeExpr{
 		kind:       llvmNativeExprCall,
@@ -2692,11 +3329,13 @@ func nativeLLVMTypeFromIR(ctx *nativeProjectionCtx, t ostyir.Type) (string, bool
 			}
 			return "", false
 		}
-		info, ok := nativeStructInfoFromType(ctx, tt)
-		if !ok {
-			return "", false
+		if info, ok := nativeStructInfoFromType(ctx, tt); ok {
+			return info.def.llvmType, true
 		}
-		return info.def.llvmType, true
+		if info, ok := nativeEnumInfoFromType(ctx, tt); ok {
+			return info.def.llvmType, true
+		}
+		return "", false
 	case *ostyir.OptionalType:
 		if _, ok := nativeLLVMTypeFromIR(ctx, tt.Inner); !ok {
 			return "", false

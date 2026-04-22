@@ -1239,6 +1239,32 @@ pub struct LlvmNativeStruct {
     pub fields: List<LlvmNativeStructField>,
 }
 
+// A single enum variant after monomorphization. `tag` is the
+// 0-based discriminant assigned in declaration order. `payloadType`
+// is the LLVM type string of the single payload slot (empty if the
+// variant carries no payload — e.g. `None`). Multi-payload variants
+// are handled by the IR projection layer: it synthesizes a helper
+// struct type to hold the tuple and stores its LLVM type here.
+pub struct LlvmNativeEnumVariant {
+    pub name: String,
+    pub tag: Int,
+    pub payloadType: String,
+}
+
+// Monomorphized tagged-union enum. `llvmType` carries the mangled
+// specialization name (e.g. "%_ZTSN4main5MaybeIlEE") so the emitter
+// can round-trip it verbatim. `payloadSlotType` is the unified
+// payload slot's LLVM type — empty when every variant is
+// payload-free, otherwise sized to fit the largest variant payload
+// selected by the IR projection layer. Storage layout is
+// `{ i64 tag, <payloadSlotType> }` or `{ i64 tag }`.
+pub struct LlvmNativeEnum {
+    pub name: String,
+    pub llvmType: String,
+    pub payloadSlotType: String,
+    pub variants: List<LlvmNativeEnumVariant>,
+}
+
 pub struct LlvmNativeFunction {
     pub name: String,
     pub returnType: String,
@@ -1251,6 +1277,7 @@ pub struct LlvmNativeModule {
     pub target: String,
     pub globals: List<LlvmNativeGlobal>,
     pub structs: List<LlvmNativeStruct>,
+    pub enums: List<LlvmNativeEnum>,
     pub stringGlobals: List<LlvmStringGlobal>,
     pub functions: List<LlvmNativeFunction>,
     pub needsListRuntime: Bool,
@@ -1281,6 +1308,9 @@ pub fn llvmNativeEmitModule(module: LlvmNativeModule) -> String {
             fieldTypes.push(field.llvmType)
         }
         typeDefs.push(llvmStructTypeDef(st.name, fieldTypes))
+    }
+    for en in module.enums {
+        typeDefs.push(llvmNativeEmitEnumTypeDef(en))
     }
     for global in module.globals {
         let kind = if global.mutable { "global" } else { "constant" }
@@ -1329,6 +1359,23 @@ fn llvmNativeRuntimeDeclarations(module: LlvmNativeModule) -> List<String> {
         }
     }
     out
+}
+
+// Emit a monomorphized enum's storage type definition. Enums lower
+// to a tagged-union struct: `{ i64 tag, <payload> }`. Variant
+// construction/destruction reuses the existing struct machinery —
+// `llvmStructLiteral` for construction, `llvmExtractValue` for
+// tag/payload access — so the emit path never needs a dedicated
+// variant-literal primitive. Convention: `name` is the bare
+// identifier (e.g. "_ZTSN4main5MaybeIlEE"), `llvmType` is the
+// same with a leading `%`. The IR projection layer is responsible
+// for keeping the two in sync when populating the struct.
+fn llvmNativeEmitEnumTypeDef(en: LlvmNativeEnum) -> String {
+    let mut fieldTypes: List<String> = ["i64"]
+    if en.payloadSlotType != "" {
+        fieldTypes.push(en.payloadSlotType)
+    }
+    llvmStructTypeDef(en.name, fieldTypes)
 }
 
 pub fn llvmNativeEmitFunction(
