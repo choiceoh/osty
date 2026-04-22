@@ -5942,7 +5942,20 @@ void osty_gc_global_root_unregister_v1(void *slot) {
     }
 }
 
+/* Forward declaration — definition ships with the scheduler block
+ * further down. Kept here so `osty_gc_safepoint_v1` (above the
+ * scheduler) can invoke the preemption hook. */
+static void osty_rt_sched_preempt_observe(void);
+
 void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) {
+    /* Phase 3 cooperative preemption: every safepoint participates in
+     * scheduler-level yield. Does a handful of relaxed atomic loads
+     * and bails on the common case (no cancel, no collector stop, no
+     * starved queue). The cost is dominated by the existing safepoint
+     * kind decode + allocation check below, so the added cycles are
+     * in the noise for programs without pool saturation. */
+    osty_rt_sched_preempt_observe();
+
     /* Phase A5: decode the kind from the high byte. Legacy callers pass
      * pure serial ids (kind byte == 0 == UNSPECIFIED) so the dispatch is
      * backwards compatible. Unknown kinds fall through to UNSPECIFIED
@@ -7456,6 +7469,90 @@ static void osty_sched_notify_blocking_wait(void) {
     }
 }
 
+/* Phase 3 — cooperative preemption hook.
+ *
+ * Called from `osty_gc_safepoint_v1` on every safepoint (entry / loop
+ * backedge / alloc / call / yield). Does three cheap things, in order
+ * of observability:
+ *
+ *   1. Observes the current group's cancel flag and yields the OS
+ *      scheduler slot so a sibling worker can make progress. Tasks
+ *      that check `osty_rt_cancel_is_cancelled` at the next user
+ *      yield point get a fast turnaround; tasks that don't still
+ *      benefit from the OS yield.
+ *
+ *   2. Observes the concurrent-collector `stop_requested` flag. When
+ *      set, the mutator is obliged to park until the collector
+ *      releases it (root scan + stack flush window). Phase 3 ships
+ *      the flag + park path; the collector itself that drives
+ *      stop_requested stays Phase-3-future work but the ABI lands
+ *      now so future concurrent-collector work doesn't re-break
+ *      every safepoint emission.
+ *
+ *   3. When the pool is saturated (no parked worker) *and* the
+ *      inject queue has pending tasks, spawn an elastic worker to
+ *      drain them. A pure-CPU task in a tight loop can otherwise
+ *      starve queued siblings on a pool sized smaller than the
+ *      workload: the worker never reaches a blocking cv_wait, so
+ *      `osty_sched_notify_blocking_wait` never fires. This is the
+ *      compute-bound analogue, paying for the elastic spawn at
+ *      loop-backedge granularity (stride-scaled by the emitter, so
+ *      not per-iteration) rather than per-block.
+ */
+static volatile int osty_gc_concurrent_stop_requested = 0;
+
+static void osty_rt_sched_preempt_park_for_collector(void) {
+    /* Placeholder for the Phase-3-concurrent-collector STW window.
+     * Today there is no concurrent collector that flips this flag;
+     * when there is, parking here lets the collector observe a
+     * stable mutator-stack snapshot. Park implementation is a
+     * busy-wait on the flag — a proper cv/sem wake-up wants the
+     * collector's signal path, which lands with the collector. */
+    while (__atomic_load_n(&osty_gc_concurrent_stop_requested,
+                           __ATOMIC_ACQUIRE)) {
+        osty_rt_plat_yield();
+    }
+}
+
+static void osty_rt_sched_preempt_observe(void) {
+    if (!osty_sched_is_worker) {
+        return;
+    }
+    /* (1) Cancel observation + OS yield. Relaxed load — we don't
+     * need acquire because cancel is a liveness hint, not a
+     * memory-ordering gate: the worker will see the store at the
+     * latest on the next pool_mu acquire. */
+    osty_rt_task_group_impl *g = osty_sched_current_group;
+    if (g != NULL &&
+        __atomic_load_n(&g->cancelled, __ATOMIC_RELAXED) != 0) {
+        osty_rt_plat_yield();
+    }
+    /* (2) Concurrent-collector handshake. Cheap relaxed-load gate;
+     * park only on the slow path. */
+    if (__atomic_load_n(&osty_gc_concurrent_stop_requested,
+                        __ATOMIC_RELAXED)) {
+        osty_rt_sched_preempt_park_for_collector();
+    }
+    /* (3) Elastic drain. Only enter the pool mutex when an elastic
+     * is warranted — fast path is a single atomic-less count read,
+     * which is safe to race (the mutex-guarded recheck catches
+     * stale observations). */
+    if (osty_sched_inject.count == 0) {
+        return;
+    }
+    osty_rt_mu_lock(&osty_sched_pool_mu);
+    int want = (osty_sched_inject.count > 0 &&
+                osty_sched_pool_parked == 0 &&
+                osty_sched_elastic_count < OSTY_SCHED_ELASTIC_MAX);
+    if (want) {
+        osty_sched_elastic_count += 1;
+    }
+    osty_rt_mu_unlock(&osty_sched_pool_mu);
+    if (want) {
+        osty_sched_spawn_elastic();
+    }
+}
+
 /* Try to steal from a random non-self victim. Caller retries via the
  * outer take-work loop; a single pass is "good enough" per iteration. */
 static osty_rt_task_item *osty_sched_try_steal(int self_id) {
@@ -7827,6 +7924,36 @@ bool osty_rt_cancel_is_cancelled(void) {
 void osty_rt_thread_yield(void) {
     /* Hand the OS scheduler a chance to run other threads. */
     osty_rt_plat_yield();
+}
+
+/* Phase 3 public entry points.
+ *
+ * `osty_rt_sched_preempt_check_v1` is the compiler-emittable name for
+ * the preemption safepoint. The GC safepoint already calls
+ * `osty_rt_sched_preempt_observe` transitively, so emitters that
+ * already use `osty.gc.safepoint_v1` get preemption for free; this
+ * symbol is for sites that need preemption without the full GC
+ * safepoint (e.g. hot inner loops where the allocator check +
+ * root-slot walk is too expensive). ABI is intentionally minimal —
+ * no args, no return — so the compiler emits a single bare call.
+ *
+ * `osty_rt_sched_concurrent_stop_request_v1` /
+ * `osty_rt_sched_concurrent_stop_release_v1` flip the flag the
+ * preempt hook parks on. A Phase-3 concurrent collector drives
+ * these from its STW windows; tests can drive them directly to
+ * exercise the park path. */
+void osty_rt_sched_preempt_check_v1(void) {
+    osty_rt_sched_preempt_observe();
+}
+
+void osty_rt_sched_concurrent_stop_request_v1(void) {
+    __atomic_store_n(&osty_gc_concurrent_stop_requested, 1,
+                     __ATOMIC_RELEASE);
+}
+
+void osty_rt_sched_concurrent_stop_release_v1(void) {
+    __atomic_store_n(&osty_gc_concurrent_stop_requested, 0,
+                     __ATOMIC_RELEASE);
 }
 
 void osty_rt_thread_sleep(int64_t nanos) {
