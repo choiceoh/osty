@@ -522,8 +522,8 @@ fn main() {
 	// `Point` Ident in `Point.builder()`. We don't remove the local
 	// table entry (that would require constructing a throwaway
 	// File), but we do verify the Refs path is at least consulted.
-	if rr.Refs == nil {
-		t.Fatal("resolver should populate Refs map")
+	if rr.RefsByID == nil {
+		t.Fatal("resolver should populate RefsByID map")
 	}
 	diags := DesugarBuildersInFile(f, rr)
 	if len(diags) != 0 {

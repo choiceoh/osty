@@ -88,23 +88,19 @@ type PackageFile struct {
 	// aliases). Populated by ResolvePackage. Its parent is the package
 	// scope; the resolver walks per-file expression bodies rooted here.
 	FileScope *Scope
-	// Refs and TypeRefs record where each identifier / type-named node
-	// resolved to, once ResolvePackage finishes. Together with File they
-	// let downstream passes (type checker, code generator) traverse the
-	// AST with name resolution already applied.
-	Refs     map[*ast.Ident]*Symbol
-	TypeRefs map[*ast.NamedType]*Symbol
-	// RefsByID and TypeRefsByID project the same bindings keyed by
-	// ast.NodeID instead of Go pointer identity. Populated alongside
-	// Refs/TypeRefs so downstream passes can migrate off pointer keys
-	// without losing the Refs snapshot. Self-host ports rely on these.
+	// RefsByID and TypeRefsByID record where each identifier /
+	// type-named node resolved to, once ResolvePackage finishes. Keys
+	// are NodeIDs assigned by the parser; values are the resolver's
+	// symbol table entries. Together with File these let downstream
+	// passes (type checker, code generator) traverse the AST with name
+	// resolution already applied.
 	RefsByID     map[ast.NodeID]*Symbol
 	TypeRefsByID map[ast.NodeID]*Symbol
 	// RefIdents and TypeRefIdents enumerate the node references the
-	// resolver observed, in no particular order. They let callers that
-	// previously iterated Refs-map keys keep doing so without relying
-	// on pointer hashability. Self-host ports map these to
-	// List<&Ident> / List<&NamedType>.
+	// resolver observed, in no particular order. Callers that need to
+	// walk resolved identifiers iterate these (not the maps) so the
+	// pattern maps cleanly onto List<&Ident> / List<&NamedType> when
+	// the pass is ported to the self-hosted compiler.
 	RefIdents     []*ast.Ident
 	TypeRefIdents []*ast.NamedType
 }

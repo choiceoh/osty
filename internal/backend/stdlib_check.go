@@ -42,8 +42,6 @@ func stdlibCheckResult(reg *stdlib.Registry, module string) *check.Result {
 	entry.once.Do(func() {
 		pf := mod.Package.Files[0]
 		rr := &resolve.Result{
-			Refs:          pf.Refs,
-			TypeRefs:      pf.TypeRefs,
 			RefsByID:      pf.RefsByID,
 			TypeRefsByID:  pf.TypeRefsByID,
 			RefIdents:     pf.RefIdents,

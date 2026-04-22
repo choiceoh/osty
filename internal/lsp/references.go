@@ -94,9 +94,9 @@ func (s *Server) targetSymbolAt(doc *document, lspPos Position) *resolve.Symbol 
 // (same URI + same start position) are collapsed before return.
 func (s *Server) findReferences(doc *document, target *resolve.Symbol, includeDecl bool) []Location {
 	var out []Location
-	visit := func(uri string, src []byte, li *lineIndex, refs map[*ast.Ident]*resolve.Symbol, typeRefs map[*ast.NamedType]*resolve.Symbol) {
-		for id, sym := range refs {
-			if sym != target {
+	visit := func(uri string, src []byte, li *lineIndex, refIdents []*ast.Ident, typeRefIdents []*ast.NamedType, refs map[ast.NodeID]*resolve.Symbol, typeRefs map[ast.NodeID]*resolve.Symbol) {
+		for _, id := range refIdents {
+			if refs[id.ID] != target {
 				continue
 			}
 			out = append(out, Location{
@@ -104,8 +104,8 @@ func (s *Server) findReferences(doc *document, target *resolve.Symbol, includeDe
 				Range: li.ostyRange(diag.Span{Start: id.Pos(), End: id.End()}),
 			})
 		}
-		for nt, sym := range typeRefs {
-			if sym != target {
+		for _, nt := range typeRefIdents {
+			if typeRefs[nt.ID] != target {
 				continue
 			}
 			// `auth.User` is a single NamedType whose head reference
@@ -127,13 +127,15 @@ func (s *Server) findReferences(doc *document, target *resolve.Symbol, includeDe
 	}
 
 	if len(doc.analysis.packages) == 0 {
-		visit(doc.uri, doc.src, doc.analysis.lines, doc.analysis.resolve.Refs, doc.analysis.resolve.TypeRefs)
+		visit(doc.uri, doc.src, doc.analysis.lines,
+			doc.analysis.resolve.RefIdents, doc.analysis.resolve.TypeRefIdents,
+			doc.analysis.resolve.RefsByID, doc.analysis.resolve.TypeRefsByID)
 	} else {
 		for _, pkg := range doc.analysis.packages {
 			for _, pf := range pkg.Files {
 				uri := pathToURI(pf.Path)
 				li := newLineIndex(pf.Source)
-				visit(uri, pf.Source, li, pf.Refs, pf.TypeRefs)
+				visit(uri, pf.Source, li, pf.RefIdents, pf.TypeRefIdents, pf.RefsByID, pf.TypeRefsByID)
 			}
 		}
 	}

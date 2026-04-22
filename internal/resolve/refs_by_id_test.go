@@ -6,12 +6,11 @@ import (
 	"github.com/osty/osty/internal/parser"
 )
 
-// TestRefsByIDMatchesRefs verifies that the NodeID-keyed projection of
-// Refs / TypeRefs agrees with the pointer-keyed maps for every entry
-// whose Ident / NamedType has a nonzero NodeID. This is the parity
-// guarantee downstream passes rely on when migrating off *ast.Ident
-// keys.
-func TestRefsByIDMatchesRefs(t *testing.T) {
+// TestRefsByIDCoveredByIdentList verifies every RefsByID / TypeRefsByID
+// entry has a matching RefIdents / TypeRefIdents entry. This is the
+// structural guarantee downstream passes rely on when walking resolved
+// identifiers without a pointer-keyed map.
+func TestRefsByIDCoveredByIdentList(t *testing.T) {
 	src := []byte(`
 fn greet(name: String) -> String {
 	let prefix = "hi, "
@@ -33,30 +32,25 @@ fn main() {
 		t.Fatal("RefsByID / TypeRefsByID not populated")
 	}
 
-	for ident, sym := range res.Refs {
+	seenRef := map[uint32]bool{}
+	for _, ident := range res.RefIdents {
 		if ident == nil || ident.ID == 0 {
+			t.Errorf("RefIdents contains unstamped ident %v", ident)
 			continue
 		}
-		got, ok := res.RefsByID[ident.ID]
+		sym, ok := res.RefsByID[ident.ID]
 		if !ok {
-			t.Errorf("RefsByID missing entry for %q (ID=%d)", ident.Name, ident.ID)
+			t.Errorf("RefIdents entry %q (ID=%d) has no RefsByID match", ident.Name, ident.ID)
 			continue
 		}
-		if got != sym {
-			t.Errorf("RefsByID[%d] = %v, want %v", ident.ID, got, sym)
+		if sym == nil {
+			t.Errorf("RefsByID[%d] is nil for ident %q", ident.ID, ident.Name)
 		}
+		seenRef[uint32(ident.ID)] = true
 	}
-	for nt, sym := range res.TypeRefs {
-		if nt == nil || nt.ID == 0 {
-			continue
-		}
-		got, ok := res.TypeRefsByID[nt.ID]
-		if !ok {
-			t.Errorf("TypeRefsByID missing entry for ID=%d", nt.ID)
-			continue
-		}
-		if got != sym {
-			t.Errorf("TypeRefsByID[%d] = %v, want %v", nt.ID, got, sym)
+	for id := range res.RefsByID {
+		if !seenRef[uint32(id)] {
+			t.Errorf("RefsByID entry ID=%d not in RefIdents", id)
 		}
 	}
 

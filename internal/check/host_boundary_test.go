@@ -166,10 +166,10 @@ fn main() {
 	if got := chk.LookupSymType(res.FileScope.Lookup("id")); got == nil || got.String() != "fn(T) -> T" {
 		t.Fatalf("symbol type = %v, want fn(T) -> T", got)
 	}
-	if len(chk.Instantiations) != 1 {
-		t.Fatalf("instantiations = %#v, want one entry", chk.Instantiations)
+	if len(chk.InstantiationsByID) != 1 {
+		t.Fatalf("instantiations = %#v, want one entry", chk.InstantiationsByID)
 	}
-	if got := chk.Instantiations[call]; len(got) != 1 || got[0].String() != "Int" {
+	if got := chk.InstantiationsByID[call.ID]; len(got) != 1 || got[0].String() != "Int" {
 		t.Fatalf("call instantiation = %#v, want [Int]", got)
 	}
 }

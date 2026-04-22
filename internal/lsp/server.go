@@ -598,8 +598,6 @@ func analysisForFileInPackage(
 		return nil
 	}
 	fileRes := &resolve.Result{
-		Refs:          pf.Refs,
-		TypeRefs:      pf.TypeRefs,
 		RefsByID:      pf.RefsByID,
 		TypeRefsByID:  pf.TypeRefsByID,
 		RefIdents:     pf.RefIdents,

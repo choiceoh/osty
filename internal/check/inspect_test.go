@@ -53,8 +53,8 @@ fn main() {
 			letAnswer: types.Int,
 			letTotal:  types.Int,
 		},
-		SymTypes:       map[*resolve.Symbol]types.Type{},
-		Instantiations: map[*ast.CallExpr][]types.Type{},
+		SymTypes:           map[*resolve.Symbol]types.Type{},
+		InstantiationsByID: map[ast.NodeID][]types.Type{},
 	}
 
 	recs := Inspect(file, chk)
@@ -209,9 +209,6 @@ fn main() {
 			letAnswer: types.Int,
 		},
 		SymTypes: map[*resolve.Symbol]types.Type{},
-		Instantiations: map[*ast.CallExpr][]types.Type{
-			call: {types.Int},
-		},
 		InstantiationsByID: map[ast.NodeID][]types.Type{
 			call.ID: {types.Int},
 		},

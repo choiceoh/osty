@@ -25,8 +25,6 @@ func TestLowerFnDeclLowersStdlibStringsCompare(t *testing.T) {
 	}
 	pf := mod.Package.Files[0]
 	res := &resolve.Result{
-		Refs:          pf.Refs,
-		TypeRefs:      pf.TypeRefs,
 		RefsByID:      pf.RefsByID,
 		TypeRefsByID:  pf.TypeRefsByID,
 		RefIdents:     pf.RefIdents,

@@ -241,15 +241,16 @@ func rebindPreludeBuiltinTypes(pkg *resolve.Package, prelude *resolve.Scope, mod
 		if pf == nil {
 			continue
 		}
-		for nt, sym := range pf.TypeRefs {
-			if nt == nil || sym == nil {
+		for _, nt := range pf.TypeRefIdents {
+			if nt == nil || nt.ID == 0 {
+				continue
+			}
+			sym := pf.TypeRefsByID[nt.ID]
+			if sym == nil {
 				continue
 			}
 			if builtin := builtins[sym.Name]; builtin != nil {
-				pf.TypeRefs[nt] = builtin
-				if nt.ID != 0 && pf.TypeRefsByID != nil {
-					pf.TypeRefsByID[nt.ID] = builtin
-				}
+				pf.TypeRefsByID[nt.ID] = builtin
 			}
 		}
 	}

@@ -13,24 +13,20 @@ import (
 
 // Result is the output of resolving one Osty file.
 type Result struct {
-	// Refs maps each Ident node that the resolver examined to the symbol
-	// it refers to. Idents that failed resolution are not present in the
+	// RefsByID maps each resolved Ident's NodeID to the symbol it
+	// refers to. Idents that failed resolution are not present in the
 	// map (a corresponding diagnostic is emitted instead).
-	Refs map[*ast.Ident]*Symbol
-	// TypeRefs maps each NamedType node to the symbol the head name
-	// refers to (e.g. for `Map<String, Int>` it records the ref for
-	// `Map`). Only the head symbol is recorded; type arguments are
-	// resolved recursively and stored under their own NamedType keys.
-	TypeRefs map[*ast.NamedType]*Symbol
-	// RefsByID / TypeRefsByID mirror Refs / TypeRefs keyed by
-	// ast.NodeID. Populated in parallel so callers can migrate off
-	// pointer identity incrementally.
-	RefsByID     map[ast.NodeID]*Symbol
+	RefsByID map[ast.NodeID]*Symbol
+	// TypeRefsByID maps each NamedType's NodeID to the symbol the head
+	// name refers to (e.g. for `Map<String, Int>` it records the ref
+	// for `Map`). Only the head symbol is recorded; type arguments are
+	// resolved recursively under their own NamedType keys.
 	TypeRefsByID map[ast.NodeID]*Symbol
 	// RefIdents / TypeRefIdents enumerate the nodes behind RefsByID /
-	// TypeRefsByID, in no particular order. For callers that need to
-	// walk the resolved identifiers without the legacy pointer-keyed
-	// map.
+	// TypeRefsByID, in no particular order. Callers that need to walk
+	// every resolved identifier iterate these instead of the maps so
+	// ports to the self-hosted compiler map cleanly onto
+	// List<&Ident> / List<&NamedType>.
 	RefIdents     []*ast.Ident
 	TypeRefIdents []*ast.NamedType
 	// FileScope is the file-level scope (children of the prelude). All
@@ -65,8 +61,6 @@ func FileWithStdlib(file *ast.File, prelude *Scope, stdlib StdlibProvider) *Resu
 	pr := ResolvePackage(pkg, prelude)
 	pf := pkg.Files[0]
 	return &Result{
-		Refs:          pf.Refs,
-		TypeRefs:      pf.TypeRefs,
 		RefsByID:      pf.RefsByID,
 		TypeRefsByID:  pf.TypeRefsByID,
 		RefIdents:     pf.RefIdents,
@@ -166,12 +160,10 @@ func (r *resolver) bodyPass(pkg *Package) {
 	for _, f := range pkg.Files {
 		fileScope := NewScope(r.pkgScope, "file:"+f.Path)
 		f.FileScope = fileScope
-		f.Refs = map[*ast.Ident]*Symbol{}
-		f.TypeRefs = map[*ast.NamedType]*Symbol{}
 
 		r.current = fileScope
-		r.refs = f.Refs
-		r.typeRefs = f.TypeRefs
+		r.refs = map[*ast.Ident]*Symbol{}
+		r.typeRefs = map[*ast.NamedType]*Symbol{}
 		r.file = f.File
 		r.filePath = f.Path
 
@@ -198,8 +190,8 @@ func (r *resolver) bodyPass(pkg *Package) {
 			}
 			restore()
 		}
-		f.RefsByID, f.RefIdents = projectRefsByID(f.Refs)
-		f.TypeRefsByID, f.TypeRefIdents = projectTypeRefsByID(f.TypeRefs)
+		f.RefsByID, f.RefIdents = projectRefsByID(r.refs)
+		f.TypeRefsByID, f.TypeRefIdents = projectTypeRefsByID(r.typeRefs)
 	}
 }
 

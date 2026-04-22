@@ -362,8 +362,6 @@ func stdlibResolveResult(reg *stdlib.Registry, module string) *resolve.Result {
 	}
 	pf := mod.Package.Files[0]
 	return &resolve.Result{
-		Refs:          pf.Refs,
-		TypeRefs:      pf.TypeRefs,
 		RefsByID:      pf.RefsByID,
 		TypeRefsByID:  pf.TypeRefsByID,
 		RefIdents:     pf.RefIdents,

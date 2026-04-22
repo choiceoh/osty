@@ -394,7 +394,12 @@ func hashResolveFileResult(r *resolve.Result) [32]byte {
 	}
 	// Build an ephemeral PackageFile-like shape so we can reuse the
 	// file ref hashing.
-	pf := &resolve.PackageFile{Refs: r.Refs, TypeRefs: r.TypeRefs}
+	pf := &resolve.PackageFile{
+		RefsByID:      r.RefsByID,
+		TypeRefsByID:  r.TypeRefsByID,
+		RefIdents:     r.RefIdents,
+		TypeRefIdents: r.TypeRefIdents,
+	}
 	hashFileRefs(h, pf)
 	hashDiagsList(h, r.Diags)
 	return h.sum()

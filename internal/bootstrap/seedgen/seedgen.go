@@ -105,8 +105,6 @@ func Generate(cfg Config) ([]byte, error) {
 	}
 
 	fileRes := &resolve.Result{
-		Refs:      entryFile.Refs,
-		TypeRefs:  entryFile.TypeRefs,
 		FileScope: entryFile.FileScope,
 		Diags:     res.Diags,
 	}

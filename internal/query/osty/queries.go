@@ -55,8 +55,6 @@ func (rp *ResolvedPackage) FileResult(path string) *resolve.Result {
 			continue
 		}
 		return &resolve.Result{
-			Refs:          pf.Refs,
-			TypeRefs:      pf.TypeRefs,
 			RefsByID:      pf.RefsByID,
 			TypeRefsByID:  pf.TypeRefsByID,
 			RefIdents:     pf.RefIdents,

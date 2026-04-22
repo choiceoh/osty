@@ -106,8 +106,10 @@ func (e *selectedPackageEntry) fileResult() *resolve.Result {
 		return nil
 	}
 	return &resolve.Result{
-		Refs:      e.file.Refs,
-		TypeRefs:  e.file.TypeRefs,
-		FileScope: e.file.FileScope,
+		RefsByID:      e.file.RefsByID,
+		TypeRefsByID:  e.file.TypeRefsByID,
+		RefIdents:     e.file.RefIdents,
+		TypeRefIdents: e.file.TypeRefIdents,
+		FileScope:     e.file.FileScope,
 	}
 }

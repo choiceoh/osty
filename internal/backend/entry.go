@@ -107,8 +107,6 @@ func PreparePackage(packageName, sourcePath string, pkg *resolve.Package, entryF
 		entry.File = entryFile.File
 		entry.Source = entryFile.Source
 		entry.Resolve = &resolve.Result{
-			Refs:      entryFile.Refs,
-			TypeRefs:  entryFile.TypeRefs,
 			FileScope: entryFile.FileScope,
 		}
 	}
