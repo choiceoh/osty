@@ -216,12 +216,14 @@ pub struct Runner {
             rep.Checks.push(skipped(CheckSemver))
         }
 
+        let mut i = 0
         for c in rep.Checks {
             if c.Skipped {
                 let _ = c
             } else {
-                c.Passed = ciCheckHostPassed(c.Diags, self.Opts.Strict)
+                rep.Checks[i] = Check { ..c, Passed: ciCheckHostPassed(c.Diags, self.Opts.Strict) }
             }
+            i = i + 1
         }
         rep.FinishedAt = host.NowUTC()
         rep
