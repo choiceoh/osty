@@ -2366,15 +2366,14 @@ func llvmListElementSuffix(typ string) string {
 
 // Osty: toolchain/llvmgen.osty:1819:5
 func llvmListRuntimeDeclarations() []string {
-	// List runtime ops. `osty_rt_list_len` is a pure read of the
-	// list's `len` field — annotated `memory(read)` so LLVM LICMs
-	// the call and CSEs repeated reads on the same list.
-	//
-	// Mutating ops (push / insert / set / sorted / to_set / get_*
-	// / data_*) are marked `nounwind willreturn` — they may write
-	// but never throw and always return. That's enough for LLVM to
-	// speculate around them and simplify control flow, without
-	// claiming they're pure.
+	// List runtime ops. `osty_rt_list_len` / typed `get_*` / typed
+	// `data_*` are pure reads of the list header — annotated
+	// `memory(read)` so LLVM's LICM can hoist them out of non-mutating
+	// loops and LoopVectorizer can keep scalar reduction loops
+	// vectorizable. The `ensure_layout` side effect inside these is
+	// idempotent after first call, so CSE/hoist/elim are semantically
+	// safe. Mutating ops (push / insert / set / sorted / to_set) stay
+	// on `nounwind willreturn` — they may realloc the backing buffer.
 	return []string{
 		"declare ptr @osty_rt_list_new() nounwind willreturn",
 		"declare i64 @osty_rt_list_len(ptr) nounwind willreturn memory(read)",
@@ -2387,13 +2386,13 @@ func llvmListRuntimeDeclarations() []string {
 		"declare void @osty_rt_list_insert_i1(ptr, i64, i1) nounwind willreturn",
 		"declare void @osty_rt_list_insert_f64(ptr, i64, double) nounwind willreturn",
 		"declare void @osty_rt_list_insert_ptr(ptr, i64, ptr) nounwind willreturn",
-		"declare i64 @osty_rt_list_get_i64(ptr, i64) nounwind willreturn",
-		"declare i1 @osty_rt_list_get_i1(ptr, i64) nounwind willreturn",
-		"declare double @osty_rt_list_get_f64(ptr, i64) nounwind willreturn",
-		"declare ptr @osty_rt_list_get_ptr(ptr, i64) nounwind willreturn",
-		"declare ptr @osty_rt_list_data_i64(ptr) nounwind willreturn",
-		"declare ptr @osty_rt_list_data_i1(ptr) nounwind willreturn",
-		"declare ptr @osty_rt_list_data_f64(ptr) nounwind willreturn",
+		"declare i64 @osty_rt_list_get_i64(ptr, i64) nounwind willreturn memory(read)",
+		"declare i1 @osty_rt_list_get_i1(ptr, i64) nounwind willreturn memory(read)",
+		"declare double @osty_rt_list_get_f64(ptr, i64) nounwind willreturn memory(read)",
+		"declare ptr @osty_rt_list_get_ptr(ptr, i64) nounwind willreturn memory(read)",
+		"declare ptr @osty_rt_list_data_i64(ptr) nounwind willreturn memory(read)",
+		"declare ptr @osty_rt_list_data_i1(ptr) nounwind willreturn memory(read)",
+		"declare ptr @osty_rt_list_data_f64(ptr) nounwind willreturn memory(read)",
 		"declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64) nounwind willreturn",
 		"declare void @osty_rt_list_set_i64(ptr, i64, i64) nounwind willreturn",
 		"declare void @osty_rt_list_set_i1(ptr, i64, i1) nounwind willreturn",

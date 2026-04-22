@@ -2726,37 +2726,52 @@ pub fn llvmListElementSuffix(typ: String) -> String {
 /// LLVM forward declarations for the `osty_rt_list_*` C runtime surface
 /// used by the scalar List<T> codegen path. The native backend emits
 /// these once per module that touches typed lists.
+///
+/// Attribute conventions:
+/// - `memory(read)` on len / typed get / typed data — pure reads of the
+///   list header. `ensure_layout` is idempotent after first call, so
+///   LLVM is free to CSE / hoist / eliminate these across iterations.
+///   This is what lets the LoopVectorizer keep scalar List<T> reduction
+///   loops vectorizable even when the typed slow-path call is the only
+///   branch that stays live. See internal/llvmgen/mir_generator.go
+///   `snapshotVectorListLocal` + `emitVectorListFastLoad` for the
+///   lazy-snapshot consumer of these attributes.
+/// - Mutating ops (push / insert / set / sorted / to_set) stay on just
+///   `nounwind willreturn` — they may realloc the backing buffer.
 pub fn llvmListRuntimeDeclarations() -> List<String> {
     [
-        "declare ptr @osty_rt_list_new()",
-        "declare i64 @osty_rt_list_len(ptr)",
-        "declare void @osty_rt_list_push_i64(ptr, i64)",
-        "declare void @osty_rt_list_push_i1(ptr, i1)",
-        "declare void @osty_rt_list_push_f64(ptr, double)",
-        "declare void @osty_rt_list_push_ptr(ptr, ptr)",
-        "declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64)",
-        "declare void @osty_rt_list_insert_i64(ptr, i64, i64)",
-        "declare void @osty_rt_list_insert_i1(ptr, i64, i1)",
-        "declare void @osty_rt_list_insert_f64(ptr, i64, double)",
-        "declare void @osty_rt_list_insert_ptr(ptr, i64, ptr)",
-        "declare i64 @osty_rt_list_get_i64(ptr, i64)",
-        "declare i1 @osty_rt_list_get_i1(ptr, i64)",
-        "declare double @osty_rt_list_get_f64(ptr, i64)",
-        "declare ptr @osty_rt_list_get_ptr(ptr, i64)",
-        "declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64)",
-        "declare void @osty_rt_list_set_i64(ptr, i64, i64)",
-        "declare void @osty_rt_list_set_i1(ptr, i64, i1)",
-        "declare void @osty_rt_list_set_f64(ptr, i64, double)",
-        "declare void @osty_rt_list_set_ptr(ptr, i64, ptr)",
-        "declare ptr @osty_rt_list_sorted_i64(ptr)",
-        "declare ptr @osty_rt_list_sorted_i1(ptr)",
-        "declare ptr @osty_rt_list_sorted_f64(ptr)",
-        "declare ptr @osty_rt_list_sorted_string(ptr)",
-        "declare ptr @osty_rt_list_to_set_i64(ptr)",
-        "declare ptr @osty_rt_list_to_set_i1(ptr)",
-        "declare ptr @osty_rt_list_to_set_f64(ptr)",
-        "declare ptr @osty_rt_list_to_set_ptr(ptr)",
-        "declare ptr @osty_rt_list_to_set_string(ptr)",
+        "declare ptr @osty_rt_list_new() nounwind willreturn",
+        "declare i64 @osty_rt_list_len(ptr) nounwind willreturn memory(read)",
+        "declare void @osty_rt_list_push_i64(ptr, i64) nounwind willreturn",
+        "declare void @osty_rt_list_push_i1(ptr, i1) nounwind willreturn",
+        "declare void @osty_rt_list_push_f64(ptr, double) nounwind willreturn",
+        "declare void @osty_rt_list_push_ptr(ptr, ptr) nounwind willreturn",
+        "declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64) nounwind willreturn",
+        "declare void @osty_rt_list_insert_i64(ptr, i64, i64) nounwind willreturn",
+        "declare void @osty_rt_list_insert_i1(ptr, i64, i1) nounwind willreturn",
+        "declare void @osty_rt_list_insert_f64(ptr, i64, double) nounwind willreturn",
+        "declare void @osty_rt_list_insert_ptr(ptr, i64, ptr) nounwind willreturn",
+        "declare i64 @osty_rt_list_get_i64(ptr, i64) nounwind willreturn memory(read)",
+        "declare i1 @osty_rt_list_get_i1(ptr, i64) nounwind willreturn memory(read)",
+        "declare double @osty_rt_list_get_f64(ptr, i64) nounwind willreturn memory(read)",
+        "declare ptr @osty_rt_list_get_ptr(ptr, i64) nounwind willreturn memory(read)",
+        "declare ptr @osty_rt_list_data_i64(ptr) nounwind willreturn memory(read)",
+        "declare ptr @osty_rt_list_data_i1(ptr) nounwind willreturn memory(read)",
+        "declare ptr @osty_rt_list_data_f64(ptr) nounwind willreturn memory(read)",
+        "declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64) nounwind willreturn",
+        "declare void @osty_rt_list_set_i64(ptr, i64, i64) nounwind willreturn",
+        "declare void @osty_rt_list_set_i1(ptr, i64, i1) nounwind willreturn",
+        "declare void @osty_rt_list_set_f64(ptr, i64, double) nounwind willreturn",
+        "declare void @osty_rt_list_set_ptr(ptr, i64, ptr) nounwind willreturn",
+        "declare ptr @osty_rt_list_sorted_i64(ptr) nounwind willreturn",
+        "declare ptr @osty_rt_list_sorted_i1(ptr) nounwind willreturn",
+        "declare ptr @osty_rt_list_sorted_f64(ptr) nounwind willreturn",
+        "declare ptr @osty_rt_list_sorted_string(ptr) nounwind willreturn",
+        "declare ptr @osty_rt_list_to_set_i64(ptr) nounwind willreturn",
+        "declare ptr @osty_rt_list_to_set_i1(ptr) nounwind willreturn",
+        "declare ptr @osty_rt_list_to_set_f64(ptr) nounwind willreturn",
+        "declare ptr @osty_rt_list_to_set_ptr(ptr) nounwind willreturn",
+        "declare ptr @osty_rt_list_to_set_string(ptr) nounwind willreturn",
     ]
 }
 
