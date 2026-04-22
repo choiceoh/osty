@@ -1146,6 +1146,10 @@ func assignOp(k token.Kind) AssignOp {
 // ==== Expressions ====
 
 func (l *lowerer) lowerExpr(e ast.Expr) Expr {
+	if e == nil {
+		l.note("unsupported nil expression")
+		return &ErrorExpr{Note: "nil expr", T: ErrTypeVal}
+	}
 	switch e := e.(type) {
 	case *ast.IntLit:
 		t := l.exprType(e)
