@@ -156,14 +156,40 @@ var annotationRules = map[string]AnnotationTarget{
 	// `_test.osty` files; production builds exclude them. No
 	// arguments.
 	"test": TargetTopLevelDecl,
-	// v0.6 A5 (SIMD track). Requests the LLVM backend to attach
-	// `!llvm.loop !{..., !"llvm.loop.vectorize.enable", i1 true}`
-	// metadata to every loop lowered inside the annotated function
-	// body. A hint only: LLVM's loop vectorizer still performs legality
-	// and profitability analysis, and GC safepoint polls in the latch
-	// may inhibit vectorization in practice — see SPEC_GAPS.md entry
-	// "vectorize-hint". No arguments.
+	// v0.6 A5 / A5.1 (SIMD track). As of v0.6 the vectorize hint is ON
+	// by default — every function's loops get `!llvm.loop.vectorize.enable`
+	// metadata and opt out of the per-iteration GC safepoint poll
+	// without the user writing anything. `#[vectorize(...)]` with args
+	// stays valid as the tuning knob:
+	//   - `scalable`       — prefer SVE/RVV over fixed-width NEON
+	//   - `predicate`      — enable tail folding (masked tail ops)
+	//   - `width = N`      — force vectorization factor; unlocks
+	//                        AVX-512 ZMM on Intel.
+	// Bare `#[vectorize]` is accepted as a no-op (documents intent;
+	// redundant with default). Use `#[no_vectorize]` to opt out.
+	// §3.8.3, SPEC_GAPS `vectorize-hint`.
 	"vectorize": TargetTopLevelDecl | TargetMethod,
+	// v0.6 A5.2. Opt-out of the default vectorize treatment. Bare
+	// flag. The annotated function's loops keep per-iteration safepoint
+	// polls and receive no `!llvm.loop.vectorize.enable` metadata —
+	// useful for long-running worker loops that must yield to GC
+	// mid-loop. §3.8.3.
+	"no_vectorize": TargetTopLevelDecl | TargetMethod,
+	// v0.6 A6. Declares that memory accesses inside the annotated
+	// function's loops are parallel (no loop-carried memory
+	// dependencies). The LLVM backend emits a `!llvm.access.group`
+	// metadata node and tags every load/store + loop-backedge with
+	// `llvm.loop.parallel_accesses`, which lets the vectorizer bypass
+	// its default aliasing analysis. Soundness is the programmer's
+	// responsibility. §3.8.5. No arguments.
+	"parallel": TargetTopLevelDecl | TargetMethod,
+	// v0.6 A7. Requests LLVM loop unrolling for every loop lowered in
+	// the body. Bare form (`#[unroll]`) emits
+	// `llvm.loop.unroll.enable`; `#[unroll(N)]` emits
+	// `llvm.loop.unroll.count, i32 N` for a fixed unroll factor.
+	// Composes with `#[vectorize]` (unroll × width ≈ effective
+	// throughput). §3.8.6.
+	"unroll": TargetTopLevelDecl | TargetMethod,
 }
 
 // IsAllowedAnnotation reports whether an annotation name is part of the

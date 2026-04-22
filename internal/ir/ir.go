@@ -359,12 +359,49 @@ type FnDecl struct {
 	// codegen behavior is currently attached.
 	NoAlloc bool
 
-	// Vectorize is set when the function carries `#[vectorize]`
-	// (v0.6 A5 SIMD track, §3.8.3). When true, the LLVM backend
-	// attaches `!llvm.loop.vectorize.enable` metadata to every loop
-	// backedge it lowers inside the function body. Pure hint — the
-	// LLVM vectorizer makes the final legality/profitability call.
+	// Vectorize is true iff this function wants the LLVM backend to
+	// attach `!llvm.loop.vectorize.enable` metadata to its loops and
+	// to opt out of per-iteration GC safepoint polls. v0.6 flipped
+	// this to default-true — every function is vectorize-eligible
+	// unless `#[no_vectorize]` is present. The `#[vectorize(...)]`
+	// annotation with args remains valid for tuning (width, scalable,
+	// predicate) and is orthogonal to the enable flag.
 	Vectorize bool
+	// NoVectorize is set by `#[no_vectorize]` (v0.6 A5.2). When true,
+	// `Vectorize` is forced to false regardless of any `#[vectorize]`
+	// annotation the user may have typed. Preserved as a distinct
+	// field (rather than just flipping Vectorize) so the backend can
+	// tell "user explicitly opted out" from "user said nothing".
+	NoVectorize bool
+	// VectorizeWidth is the forced vectorization factor requested by
+	// `#[vectorize(width = N)]`. Zero means "compiler chooses"; a
+	// positive value emits `llvm.loop.vectorize.width, i32 N`. Only
+	// meaningful when `Vectorize == true`.
+	VectorizeWidth int
+	// VectorizeScalable is set by `#[vectorize(scalable)]`. Emits
+	// `llvm.loop.vectorize.scalable.enable` so the backend prefers
+	// scalable ISAs (SVE, RVV) over fixed-width (NEON) on targets
+	// that support both.
+	VectorizeScalable bool
+	// VectorizePredicate is set by `#[vectorize(predicate)]`. Emits
+	// `llvm.loop.vectorize.predicate.enable` to request tail folding
+	// via masked ops on SVE / AVX-512 / RVV.
+	VectorizePredicate bool
+	// Parallel is set by `#[parallel]` (v0.6 A6). The LLVM backend
+	// allocates a per-function `!llvm.access.group` metadata node,
+	// attaches it to every load/store via `!llvm.access`, and adds a
+	// `llvm.loop.parallel_accesses` property to every loop so the
+	// vectorizer can bypass alias analysis for those accesses.
+	Parallel bool
+	// Unroll is set by `#[unroll]` / `#[unroll(N)]` (v0.6 A7). The
+	// backend emits `llvm.loop.unroll.enable` on every loop in the
+	// body.
+	Unroll bool
+	// UnrollCount is the exact unroll factor requested by
+	// `#[unroll(N)]`. Zero means "bare `#[unroll]`"; a positive value
+	// emits `llvm.loop.unroll.count, i32 N` instead of the bare
+	// enable flag. Only meaningful when `Unroll == true`.
+	UnrollCount int
 }
 
 func (*FnDecl) declNode()          {}

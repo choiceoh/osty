@@ -13,29 +13,45 @@
 
 ## Open Gaps
 
-### `vectorize-hint` — `#[vectorize]` backend 전제조건 (v0.6 A5)
+### `vectorize-hint` — Vectorize 계열 backend 전제조건 (v0.6 A5 / A5.1 / A5.2 / A6 / A7)
 
-**상태:** hint 착륙 + safepoint poll blocker 해소 완료 (§3.8.3 GC
-contract). 남은 한 건: iterator-protocol 루프. 언어 surface 변경 없이
-backend 구현 개선만 필요하므로 G 번호 미부여.
+**상태:** v0.6 Vectorize 트랙 전체 착륙. A5.2 에서 기본값을 뒤집어
+vectorize 가 default-ON 이 됐고, `#[no_vectorize]` 로만 opt-out.
+`#[vectorize(width=N, scalable, predicate)]` 는 tuning args, `#[parallel]`
+와 `#[unroll]` 은 별개 opt-in 힌트. Safepoint poll blocker 해소됨
+(§3.8.6 공통 GC contract). 남은 gap 은 iterator-protocol 루프 커버리지와
+AVX-512 cost model 우회 문서화.
 
-1. ~~**Safepoint poll hoisting.**~~ **해소됨.** `#[vectorize]` 함수는
+1. ~~**Safepoint poll hoisting.**~~ **해소됨 (A5).** `#[vectorize]` /
+   `#[parallel]` / `#[unroll]` 중 하나라도 붙은 함수는
    `emitLoopSafepoint` (HIR) / `emitLoopSafepointKind` (MIR) 호출을
    스킵한다. 함수 entry 의 safepoint 와 caller 의 safepoint 사이에
-   루프가 bracketed 되므로 GC liveness 는 유지되고, 루프 body 는
-   call-free 가 되어 LLVM 의 loop vectorizer 가 countable 분석을
-   통과한다. 실측: XOR reduction 1M × 200 iterations 벤치에서 scalar
-   0.28s vs vectorized 0.06s = **4.7× 속도 향상**, ARM NEON `eor.16b`
-   / `add.2d` 명령 emission 확인 (`vectorization width: 2, interleaved
-   count: 4`). Trade-off 는 GC latency — §3.8.3 GC contract 참조.
+   루프가 bracketed 되어 GC liveness 는 유지. 실측: XOR reduction 1M
+   × 200 iterations — scalar 0.28s vs vectorized 0.06s = **4.7× 속도
+   향상**, ARM NEON `eor.16b` / `add.2d` emission 확인.
 2. **Iterator-protocol loops.** `for x in iter` (iter 가 `List<T>` /
    range / `Map<K, V>` 가 아닌 경우) 는 callback-driven shape 로
    lower 되어 LLVM 이 trip count 를 볼 수 없다. 해결 경로는
    `Iterable<T>` 프로토콜을 구현하는 타입들 중 countable 가능한 것들
    (예: `Array`, `Slice`) 에 한해 index-driven lowering 으로 전환하는
    것. 언어 쪽 스펙은 그대로 둔다 — 어디까지나 backend 구현 선택지.
+3. **AVX-512 cost model 우회.** `#[vectorize(width = 8)]` 가 i64 loop
+   에 걸려도 LLVM 의 x86 cost model 이 historically downclocking
+   penalty 때문에 256-bit YMM 만 선택하는 경우가 있다 (실측: width=8
+   요청했으나 vectorizer 가 width=4 선택, ZMM 미사용). 사용자가
+   `-mllvm -force-vector-width=8` build-time flag 로 override 할 수
+   있으며 §3.8.3 표 각주에 명시. 향후 `osty build` 가 target profile
+   (예: `--target x86_64-avx512-server`) 에서 이 flag 를 자동 주입하는
+   manifest 단축키를 제공하는 것이 이 gap 의 자연스러운 해소.
+4. **SVE on Linux aarch64.** `#[vectorize(scalable)]` + `-mcpu=neoverse-v1`
+   조합이 `vscale x 8` SVE 루프 + 45 개 `z<N>.d` 명령을 생성하는 것을
+   실측 확인. 그러나 **macOS/iOS aarch64 는 SVE 를 ISA 로 노출하지
+   않으므로** (Apple Silicon 은 NEON 만) scalable hint 가 NEON 2-wide
+   로 폴백한다. 이건 hardware 한계이지 gap 이 아니므로 별도 작업
+   항목 없음. 문서화만 필요 — §3.8.3 표의 scalable 행에 "Apple
+   Silicon 은 NEON 폴백" 각주 추가.
 
-향후 이 gap 을 닫을 때 같은 entry 에 해결 요지 + 관련 PR 을 기록한다.
+향후 gap 을 닫을 때 같은 entry 에 해결 요지 + 관련 PR 을 기록한다.
 
 **운영 정책.** 새 gap 은 기존 처리 절차대로 G 번호를 부여해 `Open Gaps`
 섹션에서 추적. 버그 수정 / 명확화 / 성능 최적화 / 의미 중립 변경은

@@ -283,6 +283,13 @@ func (l *lowerer) lowerFunction(fn *ir.FnDecl, owner string, asMethod bool) *Fun
 	out.ExportSymbol = fn.ExportSymbol
 	out.CABI = fn.CABI
 	out.Vectorize = fn.Vectorize
+	out.NoVectorize = fn.NoVectorize
+	out.VectorizeWidth = fn.VectorizeWidth
+	out.VectorizeScalable = fn.VectorizeScalable
+	out.VectorizePredicate = fn.VectorizePredicate
+	out.Parallel = fn.Parallel
+	out.Unroll = fn.Unroll
+	out.UnrollCount = fn.UnrollCount
 	out.IsIntrinsic = fn.IsIntrinsic
 	if fn.Body == nil {
 		out.IsExternal = true

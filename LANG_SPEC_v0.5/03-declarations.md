@@ -418,7 +418,10 @@ mechanism. The complete set is:
 |---|---|---|
 | `#[json(...)]` | struct fields, enum variants | Customize JSON encoding/decoding (§10.8) |
 | `#[deprecated(...)]` | `fn`, `struct`, `enum`, `interface`, `type`, top-level `let`, struct/enum methods, struct fields, enum variants | Emit a warning when the item is referenced |
-| `#[vectorize]` | top-level `fn` declarations, struct/enum methods | Hint: LLVM backend attaches `!llvm.loop.vectorize.enable` metadata to every loop lowered in the body (v0.6 A5 SIMD track) |
+| `#[vectorize]` | top-level `fn` declarations, struct/enum methods | **Default-on as of v0.6** — no annotation needed for the hint. Bare `#[vectorize]` is a no-op; `#[vectorize(scalable, predicate, width = N)]` refines strategy (§3.8.3) |
+| `#[no_vectorize]` | top-level `fn` declarations, struct/enum methods | Opt out of the default vectorize hint. Restores per-iteration safepoint polls (v0.6 A5.2) |
+| `#[parallel]` | top-level `fn` declarations, struct/enum methods | Hint: every load/store in the body tagged with `!llvm.access.group`, every loop's metadata references it via `llvm.loop.parallel_accesses` to bypass alias analysis (v0.6 A6) |
+| `#[unroll]` | top-level `fn` declarations, struct/enum methods | Hint: `llvm.loop.unroll.enable` on every loop in the body; `#[unroll(count = N)]` forces a specific unroll factor (v0.6 A7) |
 
 **Runtime-only annotations** (privileged packages only — see §19.2 and §19.6).
 
@@ -528,25 +531,41 @@ transitively: annotating a type as `#[deprecated]` does not deprecate
 its methods, its fields, or types that reference it. Each target
 carries its own annotation.
 
-#### 3.8.3 `#[vectorize]`
+#### 3.8.3 Vectorize (default on)
 
-Valid on top-level `fn` declarations and on struct/enum methods. Bare
-flag — no arguments are permitted. Status: **v0.6 A5 (SIMD track)**;
-semantics are defined here so the annotation is accepted by the v0.5
-front end alongside the existing v0.5 set.
+**v0.6 A5.2 flip: vectorize is the default.** Every function's user-
+written `for` loops receive `!llvm.loop !N` metadata with
+`!"llvm.loop.vectorize.enable", i1 true`, and every function opts out
+of the per-iteration GC loop safepoint poll, *without* the user typing
+anything. This applies across the whole program — the stdlib, user
+code, even compiler-synthesized surface (see §3.8.6 for the GC
+contract that makes this safe).
 
-`#[vectorize]` is a *hint*, not a guarantee. The LLVM backend attaches
-`!llvm.loop !N` metadata to every user-written `for` loop lowered
-inside the annotated function body, where `!N` is a `distinct`
-self-referential node whose property list contains
-`!"llvm.loop.vectorize.enable", i1 true`. LLVM's loop vectorizer then
-decides legality and profitability per loop. The annotation does not
-introduce new syntax, does not change the type of the function, and
-does not affect observable behavior on correct programs — an
-unvectorized build produces the same outputs as a vectorized one.
+The user types an annotation only to deviate from the default:
+
+- `#[no_vectorize]` — opt out entirely. Restores per-iteration safepoint
+  polls and suppresses the loop metadata. For long-running worker
+  loops that must yield to GC mid-loop.
+- `#[vectorize(scalable, predicate, width = N)]` — keep the default
+  but refine the strategy. Bare `#[vectorize]` is accepted as a no-op
+  (documents intent) and is equivalent to typing nothing.
+
+Vectorize is a *hint*, not a guarantee. LLVM's loop vectorizer still
+performs legality and profitability analysis; loops the cost model
+rejects simply run scalar. The annotation set does not introduce new
+syntax, does not change function types, and does not affect observable
+behavior on correct programs — an unvectorized build produces the
+same outputs as a vectorized one.
+
+| Arg | Form | Default | LLVM property | Effect |
+|---|---|---|---|---|
+| `scalable` | flag | absent | `llvm.loop.vectorize.scalable.enable=true` | Prefer scalable vector ISAs (ARM SVE, RISC-V RVV) over fixed-width (NEON) on targets that support both |
+| `predicate` | flag | absent | `llvm.loop.vectorize.predicate.enable=true` | Enable tail folding — process trip counts that are not a multiple of the vector width via masked ops instead of a scalar tail loop. Biggest win on SVE / AVX-512 / RVV with native mask registers |
+| `width` | `width = <1..1024>` | compiler chooses | `llvm.loop.vectorize.width, i32 N` | Force a specific vectorization factor. Unlocks AVX-512 ZMM registers on Intel, where the default cost model otherwise prefers 256-bit YMM because of historical downclocking. Note: the LLVM cost model may still override this hint; use `-mllvm -force-vector-width=N` at the build-time flag level when the override is required |
 
 ```osty
-#[vectorize]
+// Default: no annotation needed. Every loop gets vectorize metadata
+// and the function opts out of per-iteration safepoints.
 pub fn sumTo(n: Int) -> Int {
     let mut acc = 0
     for i in 0..n {
@@ -554,7 +573,30 @@ pub fn sumTo(n: Int) -> Int {
     }
     acc
 }
+
+// Power-user override: prefer scalable ISA, fold the tail, and hint
+// a wide fixed factor for AVX-512 / wide SVE targets.
+#[vectorize(scalable, predicate, width = 8)]
+pub fn xorTo(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc ^ i
+    }
+    acc
+}
+
+// Explicit opt-out: long-running worker loop that needs to yield to
+// a concurrent STW request mid-loop.
+#[no_vectorize]
+pub fn drain(queue: Queue) {
+    for job in queue {
+        process(job)
+    }
+}
 ```
+
+Unknown keys, duplicate keys, and out-of-range widths are rejected
+with `E0739` (`CodeAnnotationBadArg`).
 
 Scope rules:
 
@@ -571,24 +613,101 @@ Scope rules:
   attached but the vectorizer will reject them. This is documented in
   `SPEC_GAPS.md` under `vectorize-hint`.
 
-**GC contract.** To make the vectorizer's legality analysis succeed
-on countable loops, `#[vectorize]` functions **opt out of the
-per-iteration GC loop safepoint poll**. The function-entry safepoint
-still fires, and the caller resumes its own safepoint cadence on
-return — so the function is bracketed by polls on both sides. But
-inside the function, a long-running vectorized loop does not yield
-to a concurrent STW request until it completes.
+**GC contract.** Shared by `#[vectorize]`, `#[parallel]`, and
+`#[unroll]`. See §3.8.6.
 
-This is an explicit tradeoff: SIMD execution in exchange for GC
-latency across the function body. Callers that need mid-loop
+#### 3.8.4 `#[parallel]`
+
+Valid on top-level `fn` declarations and on struct/enum methods. Bare
+flag. Status: **v0.6 A6**.
+
+Asserts that memory accesses inside every loop in the annotated
+function body are parallel — that is, iterations do not read and
+write the same memory location in a way that creates loop-carried
+dependencies. The LLVM backend materialises this promise as:
+
+1. One per-function `!llvm.access.group` metadata node: `!N = distinct !{}`.
+2. Every load and store instruction in the body tagged with
+   `!llvm.access.group !N`.
+3. A `!"llvm.loop.parallel_accesses", !N` property on every loop's
+   back-edge metadata, letting the vectorizer bypass its default
+   alias analysis for accesses tagged with the same group.
+
+Composes with `#[vectorize(...)]` — in fact `#[parallel]` is often the
+prerequisite for `#[vectorize]` to fire on real code, because the
+loop vectorizer conservatively refuses to vectorize when it can't
+prove absence of aliasing.
+
+```osty
+#[parallel]
+#[vectorize(scalable)]
+pub fn addInto(dst: List<Int>, src: List<Int>) {
+    for i in 0..dst.len() {
+        dst[i] = dst[i] + src[i]
+    }
+}
+```
+
+**Soundness is the programmer's responsibility.** If the loop body
+actually does have loop-carried dependencies, the resulting code may
+produce different values than the scalar version. The annotation is a
+contract with the compiler, not a check. Use it only on loops whose
+iteration order genuinely does not matter for the computed result.
+
+No arguments are permitted; any argument is rejected with `E0739`.
+
+#### 3.8.5 `#[unroll]`
+
+Valid on top-level `fn` declarations and on struct/enum methods.
+Status: **v0.6 A7**.
+
+Emits `llvm.loop.unroll.enable` on every loop in the body (bare form)
+or `llvm.loop.unroll.count, i32 N` with an explicit factor. Independent
+of `#[vectorize]` — unrolling controls how many original iterations
+are inlined into the body, separately from the vectorizer's
+vectorization factor. The two hints compose: an annotated function
+can be both vectorized and unrolled (effective throughput ≈ width ×
+unroll count).
+
+| Form | LLVM property | Effect |
+|---|---|---|
+| `#[unroll]` | `llvm.loop.unroll.enable=true` | Request unrolling; compiler picks factor based on target |
+| `#[unroll(count = N)]` | `llvm.loop.unroll.count, i32 N` | Force an exact unroll factor (1..1024) |
+
+```osty
+#[vectorize]
+#[unroll(count = 4)]
+pub fn sumSquares(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc + i * i
+    }
+    acc
+}
+```
+
+Unknown keys, negative or zero counts, and out-of-range values are
+rejected with `E0739` (`CodeAnnotationBadArg`).
+
+#### 3.8.6 GC contract for loop-optimization annotations
+
+`#[vectorize]`, `#[parallel]`, and `#[unroll]` all require that the
+loop latch be free of side-effecting calls for LLVM's loop analyses
+to see a well-formed countable loop. To honor this, **functions that
+carry any of these three annotations opt out of the per-iteration GC
+loop safepoint poll**. The function-entry safepoint still fires, and
+the caller resumes its own safepoint cadence on return — so the
+function is bracketed by polls on both sides. But inside the
+function, a long-running optimized loop does not yield to a
+concurrent STW request until it completes.
+
+This is an explicit tradeoff: optimized execution in exchange for
+GC latency across the function body. Callers that need mid-loop
 responsiveness should drive the work in smaller chunks from an
-unannotated outer loop. The author opts in knowingly by typing
-`#[vectorize]`; the compiler does not second-guess.
+unannotated outer loop. The author opts in knowingly; the compiler
+does not second-guess.
 
-Rejecting the annotation with arguments is `E0739`
-(`CodeAnnotationBadArg`).
-
-#### 3.8.4 Positioning Rules
+#### 3.8.7 Positioning Rules
 
 - Annotations may appear only before a named declaration. They cannot
   be attached to:

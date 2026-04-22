@@ -257,15 +257,202 @@ pub fn hot(n: Int) -> Int {
 	}
 }
 
-func TestVectorizeRejectsArgs(t *testing.T) {
+func TestVectorizeAcceptsWidth(t *testing.T) {
 	src := `
-#[vectorize(width = 4)]
-pub fn hot(n: Int) -> Int {
-    n
+#[vectorize(width = 8)]
+pub fn hot(n: Int) -> Int { n }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on `#[vectorize(width = 8)]`, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
 }
+
+func TestVectorizeAcceptsAllThreeTuning(t *testing.T) {
+	src := `
+#[vectorize(scalable, predicate, width = 8)]
+pub fn hot(n: Int) -> Int { n }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on full tuning combo, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestVectorizeRejectsUnknownKey(t *testing.T) {
+	src := `
+#[vectorize(foo = 1)]
+pub fn hot(n: Int) -> Int { n }
 `
 	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
-		t.Fatalf("expected 1 E0739 on #[vectorize(...)], got %d:\n%s",
+		t.Fatalf("expected 1 E0739 on unknown key, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestVectorizeRejectsWidthZero(t *testing.T) {
+	src := `
+#[vectorize(width = 0)]
+pub fn hot(n: Int) -> Int { n }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on width = 0, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestVectorizeRejectsWidthTooLarge(t *testing.T) {
+	src := `
+#[vectorize(width = 99999)]
+pub fn hot(n: Int) -> Int { n }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on width out of range, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestVectorizeRejectsDuplicateScalable(t *testing.T) {
+	src := `
+#[vectorize(scalable, scalable)]
+pub fn hot(n: Int) -> Int { n }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on duplicate scalable, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+// --- #[no_vectorize] (v0.6 A5.2) ---
+
+func TestNoVectorizeAcceptsBareFlag(t *testing.T) {
+	src := `
+#[no_vectorize]
+pub fn cold(n: Int) -> Int { n }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on bare #[no_vectorize], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestNoVectorizeRejectsArgs(t *testing.T) {
+	src := `
+#[no_vectorize(reason = "gc-cooperation")]
+pub fn cold(n: Int) -> Int { n }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on #[no_vectorize(...)], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestNoVectorizeRejectsOnField(t *testing.T) {
+	src := `
+pub struct Bad {
+    #[no_vectorize]
+    pub count: Int,
+}
+`
+	if got := countBadTarget(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0607 on `#[no_vectorize]` over struct field, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+// --- #[parallel] (v0.6 A6) ---
+
+func TestParallelAcceptsBareFlag(t *testing.T) {
+	src := `
+#[parallel]
+pub fn hot(n: Int) -> Int { n }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on bare #[parallel], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestParallelRejectsArgs(t *testing.T) {
+	src := `
+#[parallel(level = 2)]
+pub fn hot(n: Int) -> Int { n }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on #[parallel(...)], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestParallelRejectsOnStructField(t *testing.T) {
+	src := `
+pub struct Bad {
+    #[parallel]
+    pub n: Int,
+}
+`
+	if got := countBadTarget(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0607 on `#[parallel]` over struct field, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+// --- #[unroll] / #[unroll(count = N)] (v0.6 A7) ---
+
+func TestUnrollAcceptsBareFlag(t *testing.T) {
+	src := `
+#[unroll]
+pub fn hot(n: Int) -> Int { n }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on bare #[unroll], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestUnrollAcceptsCount(t *testing.T) {
+	src := `
+#[unroll(count = 4)]
+pub fn hot(n: Int) -> Int { n }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on `#[unroll(count = 4)]`, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestUnrollRejectsUnknownKey(t *testing.T) {
+	src := `
+#[unroll(factor = 4)]
+pub fn hot(n: Int) -> Int { n }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on unknown `factor` key, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestUnrollRejectsCountZero(t *testing.T) {
+	src := `
+#[unroll(count = 0)]
+pub fn hot(n: Int) -> Int { n }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on count = 0, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+// Retained for historical context — the v0.6 A5 bare-flag form is
+// still the one that appears throughout the stdlib, so losing the
+// "bare form stays legal" signal would be a regression.
+func TestVectorizeRejectsPositional(t *testing.T) {
+	src := `
+#[vectorize(foobar)]
+pub fn hot(n: Int) -> Int { n }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on unknown positional, got %d:\n%s",
 			got, renderDiags(runAnnotArgs(t, src)))
 	}
 }

@@ -492,12 +492,23 @@ fn normalizeUrl(u: String) -> String { ... }
 
 - `#[json(...)]` — struct field / enum variant
 - `#[deprecated(...)]` — 모든 선언, W0750 경고
-- `#[vectorize]` — top-level fn / method 에만 허용 (v0.6 A5). LLVM 백엔드가
-  바디 안의 각 user-written `for` 루프 backedge 에 `!llvm.loop` +
-  `llvm.loop.vectorize.enable=true` metadata 를 부착한다. **힌트**: vectorizer 가
-  legality/profitability 를 따지고, 현재는 GC safepoint poll 과 non-countable
-  iterator 루프가 걸림돌 (SPEC_GAPS.md `vectorize-hint`). 인자 없는 bare flag;
-  `#[vectorize(...)]` 은 E0739.
+- **Vectorize 는 기본 ON** (v0.6 A5.2). 어노테이션 없이 모든 함수의 루프에
+  `!llvm.loop.vectorize.enable` + per-iteration safepoint 스킵이 적용됨.
+  `#[vectorize(scalable, predicate, width = N)]` — default 유지하고 tuning
+  args 만 지정. `#[no_vectorize]` — 기본 동작 opt-out (GC 협력 필요한
+  long-running loop 용).
+- `#[parallel]` — top-level fn / method, bare flag. 바디 내 모든 load/store
+  에 `!llvm.access.group` 을 붙이고 각 루프 metadata 에
+  `llvm.loop.parallel_accesses` 를 참조시켜 vectorizer 가 alias analysis
+  를 우회하게 한다 (v0.6 A6). **Soundness 는 프로그래머 책임** —
+  loop-carried memory dependency 가 실제로 없을 때만 사용.
+- `#[unroll]` / `#[unroll(count = N)]` — top-level fn / method. 루프를
+  unroll 하게 한다. Bare form 은 compiler 가 factor 선택, count form 은
+  정확한 factor 강제 (1..1024). v0.6 A7.
+- **v0.6 A5.2 flip**: 모든 함수가 기본적으로 per-iteration GC loop
+  safepoint poll 을 **스킵**한다 (§3.8.6). entry safepoint + caller-return
+  safepoint 로 bracketing 되지만 루프 중간에 STW 에 응답하지 않음 — 의도된
+  trade-off. mid-loop GC 협력이 필요하면 `#[no_vectorize]`.
 - 값은 **리터럴만** (key=literal 또는 bare flag), 표현식 불가
 
 ```osty
@@ -798,7 +809,9 @@ fn parseTokens(tokens: List<Token>) -> Result<Config, Error> { ... }
 | 61 | `#[json(...)]` | struct field / variant |
 | 62 | `#[deprecated(...)]` | W0750 |
 | 63 | 값 = 리터럴 전용 | 검증 용이 |
-| 63.1 | `#[vectorize]` | v0.6 A5. LLVM `!llvm.loop.vectorize.enable` 메타데이터 부착. hint only — safepoint poll / non-countable iterator 로 인한 실패는 SPEC_GAPS `vectorize-hint` 에 기록. bare flag. |
+| 63.1 | **기본 ON** + `#[vectorize(scalable, predicate, width = N)]` + `#[no_vectorize]` | v0.6 A5/A5.1/A5.2. 기본은 모든 함수에서 `vectorize.enable` + safepoint 스킵. tuning args 로 strategy 지정; opt-out 은 `#[no_vectorize]`. |
+| 63.2 | `#[parallel]` | v0.6 A6. `!llvm.access.group` + `loop.parallel_accesses` 로 alias analysis 우회. soundness는 프로그래머 책임. |
+| 63.3 | `#[unroll]` / `#[unroll(count = N)]` | v0.6 A7. `loop.unroll.enable` 또는 `loop.unroll.count`. vectorize와 독립적. |
 
 **전형 패턴** — 직렬화 키 매핑 + 내부 필드 숨김:
 
@@ -813,10 +826,10 @@ pub struct ApiUser {
 }
 ```
 
-**전형 패턴** — 내부 tight loop 에 `#[vectorize]` 부착 (v0.6 A5):
+**전형 패턴** — **어노테이션 없이** 기본 vectorize (v0.6 A5.2):
 
 ```osty
-#[vectorize]
+// 자동으로 vectorize — 타이핑 필요 없음.
 pub fn dotProduct(xs: List<Float64>, ys: List<Float64>) -> Float64 {
     let mut acc = 0.0
     for i in 0..xs.len() {
@@ -824,10 +837,36 @@ pub fn dotProduct(xs: List<Float64>, ys: List<Float64>) -> Float64 {
     }
     acc
 }
+
+// GC 협력이 필요한 long-running worker 만 opt-out.
+#[no_vectorize]
+pub fn drainForever(q: Queue) {
+    for job in q {
+        process(job)
+    }
+}
 ```
 
-호출 사이트 변경 없음. LLVM 이 vectorize 실패해도 프로그램 의미는 동일하므로
-측정 → 적용 순서가 안전. 상세 제약은 §3.8.3 + SPEC_GAPS `vectorize-hint`.
+**고급 패턴** — SIMD 최대 활용 (v0.6 A5.1/A6/A7 조합). SVE/RVV + AVX-512
+타겟에서 최대 throughput:
+
+```osty
+#[vectorize(scalable, predicate, width = 8)]
+#[parallel]
+#[unroll(count = 4)]
+pub fn xorReduce(xs: List<Int>) -> Int {
+    let mut acc = 0
+    for i in 0..xs.len() {
+        acc = acc ^ xs[i]
+    }
+    acc
+}
+```
+
+실측: 1M × 200 iter XOR reduction 에서 scalar 0.28s → combined 0.05s =
+**5.6× 속도 향상**. scalar-identical 결과 보장. 호출 사이트 변경 없음.
+LLVM cost model 이 힌트 무시해도 프로그램 의미는 동일하므로 측정 →
+적용 순서가 안전. §3.8.3–3.8.6.
 
 ## B.9 FFI
 

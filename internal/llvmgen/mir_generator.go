@@ -142,13 +142,29 @@ type mirGen struct {
 	thunkDefs  map[string]string // symbol → full thunk IR
 	thunkOrder []string
 
-	// v0.6 A5: vectorize hint. vectorizeHint mirrors fn.Vectorize and
-	// is set at function entry; it drives `!llvm.loop !N` metadata
-	// emission on loop back-edge terminators. loopMDDefs accumulates
-	// the self-referential metadata node definitions for the entire
-	// module, flushed at module tail in GenerateFromMIR.
-	vectorizeHint bool
-	loopMDDefs    []string
+	// v0.6 A5/A5.1/A6/A7: per-function loop-optimization hints,
+	// captured at `emitFunction` entry and cleared between functions.
+	// The set mirrors `mir.Function` so later emission sites (loop
+	// backedge terminators, load/store tagging) don't have to re-walk
+	// the function struct.
+	vectorizeHint      bool
+	vectorizeWidth     int
+	vectorizeScalable  bool
+	vectorizePredicate bool
+	parallelHint       bool
+	unrollHint         bool
+	unrollCount        int
+	// parallelAccessGroupRef is the `!N` reference of the per-function
+	// `!llvm.access.group` metadata node. Allocated lazily on first
+	// load/store emission inside a `#[parallel]` function; attached
+	// to that load/store as `!llvm.access !N` and referenced from the
+	// loop-level `!"llvm.loop.parallel_accesses", !N` property.
+	parallelAccessGroupRef string
+	// loopMDDefs accumulates every metadata-node definition (loop
+	// hint chains + access groups) for the whole translation unit.
+	// Module-scoped numbering keeps IDs unique; flushed at module
+	// tail via emitLoopMetadata.
+	loopMDDefs []string
 }
 
 // mirFnSig caches a function's LLVM signature so call sites can render
@@ -182,23 +198,86 @@ func firstNonEmpty(xs ...string) string {
 	return ""
 }
 
-// nextLoopVectorizeMD allocates a fresh distinct self-referential
-// `!llvm.loop` metadata node whose property list enables LLVM's loop
-// vectorizer, records its textual definition, and returns the node
-// reference (e.g. `!4`). Module-scoped numbering keeps IDs unique
-// across every loop in the translation unit. Kept in sync with the
-// legacy HIR emitter's counterpart in `generator.go` — both paths now
-// honor `#[vectorize]` so the backend dispatcher's MIR-first default
-// does not drop the hint on the floor.
-func (g *mirGen) nextLoopVectorizeMD() string {
-	base := len(g.loopMDDefs)
-	loopRef := fmt.Sprintf("!%d", base)
-	enableRef := fmt.Sprintf("!%d", base+1)
+// nextLoopMD allocates a fresh distinct self-referential `!llvm.loop`
+// metadata node whose property list reflects the current function's
+// combined loop-optimization hints (`#[vectorize(...)]`, `#[parallel]`,
+// `#[unroll(...)]`). Returns the node reference (`!N`) suitable for
+// appending to a back-edge terminator as `!llvm.loop !N`.
+//
+// The property node is always self-referential on its first slot per
+// LLVM's loop metadata convention. Remaining slots are the property
+// children — each is also an interned `!M` node carrying one
+// `llvm.loop.*` key/value pair. Children that correspond to unset
+// hints are simply omitted.
+//
+// Module-scoped numbering keeps all IDs unique across every loop and
+// every metadata attachment in the translation unit; the HIR emitter
+// in `generator.go` uses the identical layout so the two paths remain
+// interchangeable from the LLVM verifier's perspective.
+func (g *mirGen) nextLoopMD() string {
+	var propRefs []string
+
+	alloc := func(line string) string {
+		ref := fmt.Sprintf("!%d", len(g.loopMDDefs))
+		g.loopMDDefs = append(g.loopMDDefs, fmt.Sprintf("%s = %s", ref, line))
+		return ref
+	}
+
+	if g.vectorizeHint {
+		propRefs = append(propRefs, alloc(`!{!"llvm.loop.vectorize.enable", i1 true}`))
+		if g.vectorizeWidth > 0 {
+			propRefs = append(propRefs, alloc(
+				fmt.Sprintf(`!{!"llvm.loop.vectorize.width", i32 %d}`, g.vectorizeWidth)))
+		}
+		if g.vectorizeScalable {
+			propRefs = append(propRefs, alloc(`!{!"llvm.loop.vectorize.scalable.enable", i1 true}`))
+		}
+		if g.vectorizePredicate {
+			propRefs = append(propRefs, alloc(`!{!"llvm.loop.vectorize.predicate.enable", i1 true}`))
+		}
+	}
+	if g.parallelHint && g.parallelAccessGroupRef != "" {
+		propRefs = append(propRefs, alloc(
+			fmt.Sprintf(`!{!"llvm.loop.parallel_accesses", %s}`, g.parallelAccessGroupRef)))
+	}
+	if g.unrollHint {
+		if g.unrollCount > 0 {
+			propRefs = append(propRefs, alloc(
+				fmt.Sprintf(`!{!"llvm.loop.unroll.count", i32 %d}`, g.unrollCount)))
+		} else {
+			propRefs = append(propRefs, alloc(`!{!"llvm.loop.unroll.enable", i1 true}`))
+		}
+	}
+	if len(propRefs) == 0 {
+		// Nothing to attach — caller should not have invoked us.
+		return ""
+	}
+
+	loopRef := fmt.Sprintf("!%d", len(g.loopMDDefs))
+	children := append([]string{loopRef}, propRefs...)
 	g.loopMDDefs = append(g.loopMDDefs,
-		fmt.Sprintf("%s = distinct !{%s, %s}", loopRef, loopRef, enableRef),
-		fmt.Sprintf(`%s = !{!"llvm.loop.vectorize.enable", i1 true}`, enableRef),
-	)
+		fmt.Sprintf("%s = distinct !{%s}", loopRef, strings.Join(children, ", ")))
 	return loopRef
+}
+
+// nextAccessGroupMD allocates a fresh empty `!llvm.access.group`
+// metadata node (the LLVM convention for a parallel-accesses group is
+// a distinct empty tuple) and returns its reference. Used once per
+// `#[parallel]` function at emitFunction entry; the same reference
+// then appears both on load/store attachments (`!llvm.access !N`) and
+// inside each loop's `llvm.loop.parallel_accesses` property.
+func (g *mirGen) nextAccessGroupMD() string {
+	ref := fmt.Sprintf("!%d", len(g.loopMDDefs))
+	g.loopMDDefs = append(g.loopMDDefs, fmt.Sprintf("%s = distinct !{}", ref))
+	return ref
+}
+
+// loopHintsActive reports whether the currently emitting function
+// carries any hint that should trigger `!llvm.loop` emission on its
+// back-edges. Covers vectorize/parallel/unroll without re-listing the
+// individual field names at every call site.
+func (g *mirGen) loopHintsActive() bool {
+	return g.vectorizeHint || g.parallelHint || g.unrollHint
 }
 
 // emitLoopMetadata appends every `!llvm.loop` node + vectorize-enable
@@ -821,7 +900,24 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	g.localSlots = map[mir.LocalID]string{}
 	g.fnBuf.Reset()
 	g.gcRoots = g.gcRoots[:0]
+	// v0.6 A5.2: fn.Vectorize is already default-true unless
+	// `#[no_vectorize]` was present (ir.Lower sets it). Mirror here
+	// verbatim — the per-fn state machine doesn't need to re-derive
+	// the default, just forward what MIR says.
 	g.vectorizeHint = fn.Vectorize
+	g.vectorizeWidth = fn.VectorizeWidth
+	g.vectorizeScalable = fn.VectorizeScalable
+	g.vectorizePredicate = fn.VectorizePredicate
+	g.parallelHint = fn.Parallel
+	g.unrollHint = fn.Unroll
+	g.unrollCount = fn.UnrollCount
+	g.parallelAccessGroupRef = ""
+	if g.parallelHint {
+		// Allocate the per-function access group eagerly so every
+		// load/store site can reference it without branching on lazy
+		// init inside hot emission paths.
+		g.parallelAccessGroupRef = g.nextAccessGroupMD()
+	}
 
 	emitName := fn.Name
 	if fn.ExportSymbol != "" {
@@ -914,8 +1010,61 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	}
 
 	g.fnBuf.WriteString("}\n\n")
-	g.out.WriteString(g.fnBuf.String())
+
+	// v0.6 A6: if `#[parallel]` is in effect, annotate every load/store
+	// we just emitted inside this function body with `!llvm.access.group
+	// !N` so the loop-level `llvm.loop.parallel_accesses` reference has
+	// something to point at. We post-process `fnBuf` rather than
+	// threading the attachment through ~30 emission sites — the pattern
+	// is mechanical (lines starting with `  store ` or containing ` = load `
+	// in the leader) and the cost is one linear scan per parallel
+	// function.
+	if g.parallelHint && g.parallelAccessGroupRef != "" {
+		g.out.WriteString(tagParallelAccesses(g.fnBuf.String(), g.parallelAccessGroupRef))
+	} else {
+		g.out.WriteString(g.fnBuf.String())
+	}
 	return nil
+}
+
+// tagParallelAccesses appends `, !llvm.access.group !N` to every
+// load/store line in a function body that does not already carry a
+// metadata attachment. Lines outside memory-access shape (branches,
+// arithmetic, calls, labels, the function header / closing brace) are
+// passed through verbatim. The attachment kind is LLVM's
+// `llvm.access.group`, which is what `llvm.loop.parallel_accesses`
+// refers to.
+func tagParallelAccesses(body string, groupRef string) string {
+	var b strings.Builder
+	b.Grow(len(body) + len(groupRef)*8)
+	suffix := ", !llvm.access.group " + groupRef
+	for _, line := range strings.SplitAfter(body, "\n") {
+		trimmedNL := strings.TrimRight(line, "\n")
+		trailing := line[len(trimmedNL):]
+		if isMemoryAccessLine(trimmedNL) && !strings.Contains(trimmedNL, "!llvm.access.group") {
+			b.WriteString(trimmedNL)
+			b.WriteString(suffix)
+			b.WriteString(trailing)
+			continue
+		}
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+// isMemoryAccessLine recognises the two textual shapes the MIR emitter
+// produces for loads and stores. Everything else — branches, icmp,
+// select, call, br, alloca, GEP, phi, labels, arithmetic — is left
+// unannotated.
+func isMemoryAccessLine(line string) bool {
+	trimmed := strings.TrimLeft(line, " ")
+	if strings.HasPrefix(trimmed, "store ") {
+		return true
+	}
+	// `%tmp = load ...`: leading `%<ident> = load ` marker after any
+	// indent. The `= load ` substring anywhere on a line is a safe
+	// proxy since LLVM IR has no other instruction spelled that way.
+	return strings.Contains(line, " = load ")
 }
 
 func (g *mirGen) emitAllocaPreamble(fn *mir.Function) {
@@ -3030,9 +3179,11 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 		}
 		g.fnBuf.WriteString("  br label %")
 		g.fnBuf.WriteString(g.blockLabels[x.Target])
-		if isBackedge && g.vectorizeHint {
-			g.fnBuf.WriteString(", !llvm.loop ")
-			g.fnBuf.WriteString(g.nextLoopVectorizeMD())
+		if isBackedge && g.loopHintsActive() {
+			if ref := g.nextLoopMD(); ref != "" {
+				g.fnBuf.WriteString(", !llvm.loop ")
+				g.fnBuf.WriteString(ref)
+			}
 		}
 		g.fnBuf.WriteByte('\n')
 	case *mir.BranchTerm:
@@ -3055,9 +3206,11 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 		g.fnBuf.WriteString(g.blockLabels[x.Then])
 		g.fnBuf.WriteString(", label %")
 		g.fnBuf.WriteString(g.blockLabels[x.Else])
-		if isBackedge && g.vectorizeHint {
-			g.fnBuf.WriteString(", !llvm.loop ")
-			g.fnBuf.WriteString(g.nextLoopVectorizeMD())
+		if isBackedge && g.loopHintsActive() {
+			if ref := g.nextLoopMD(); ref != "" {
+				g.fnBuf.WriteString(", !llvm.loop ")
+				g.fnBuf.WriteString(ref)
+			}
 		}
 		g.fnBuf.WriteByte('\n')
 	case *mir.SwitchIntTerm:

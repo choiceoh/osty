@@ -152,12 +152,37 @@ type Function struct {
 	// the platform's C calling convention.
 	CABI bool
 
-	// Vectorize is set when the function carries `#[vectorize]` (v0.6
-	// A5 §3.8.3). The LLVM emitter attaches `!llvm.loop !N` metadata
-	// with `llvm.loop.vectorize.enable=true` to every loop backedge
-	// lowered in the body. Pure hint — the LLVM vectorizer makes the
-	// final legality + profitability decision.
+	// Vectorize is true iff the LLVM emitter should attach vectorize
+	// metadata to this function's loops (and opt out of per-iteration
+	// safepoints). As of v0.6 the default is true — `#[no_vectorize]`
+	// is the sole way to flip it off. §3.8.3.
 	Vectorize bool
+	// NoVectorize captures the explicit `#[no_vectorize]` opt-out so
+	// tooling can distinguish "user explicitly said no" from "default
+	// off" in the future.
+	NoVectorize bool
+
+	// VectorizeWidth / VectorizeScalable / VectorizePredicate carry
+	// the v0.6 A5.1 tuning args (`width=N`, `scalable`, `predicate`).
+	// Width = 0 means "compiler chooses", >0 forces the factor; the
+	// flags opt into scalable ISAs (SVE/RVV) and tail folding via
+	// masked ops respectively.
+	VectorizeWidth     int
+	VectorizeScalable  bool
+	VectorizePredicate bool
+
+	// Parallel is set by `#[parallel]` (v0.6 A6). The LLVM emitter
+	// allocates a single `!llvm.access.group` node per parallel
+	// function, tags every load/store with `!llvm.access`, and
+	// references it from `llvm.loop.parallel_accesses` on each loop
+	// backedge so the vectorizer can bypass alias analysis.
+	Parallel bool
+
+	// Unroll / UnrollCount carry `#[unroll]` / `#[unroll(N)]` (v0.6
+	// A7). Count = 0 emits the bare `llvm.loop.unroll.enable`; Count
+	// > 0 emits `llvm.loop.unroll.count, i32 N` instead.
+	Unroll      bool
+	UnrollCount int
 }
 
 // At returns the function's source span.

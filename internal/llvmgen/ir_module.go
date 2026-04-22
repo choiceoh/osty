@@ -544,6 +544,32 @@ func legacyUseDeclFromIR(d *ostyir.UseDecl) (ast.Decl, error) {
 	return out, nil
 }
 
+// legacyVectorizeArgs reconstructs the `#[vectorize(...)]` argument
+// list from the reified IR flags so the HIR emitter's annotation
+// reader sees the same shape the source carried. Keeps parity with
+// the MIR emitter, which reads the flags directly off `mir.Function`.
+func legacyVectorizeArgs(pos token.Pos, fn *ostyir.FnDecl) []*ast.AnnotationArg {
+	var args []*ast.AnnotationArg
+	if fn.VectorizeScalable {
+		args = append(args, &ast.AnnotationArg{PosV: pos, Key: "scalable"})
+	}
+	if fn.VectorizePredicate {
+		args = append(args, &ast.AnnotationArg{PosV: pos, Key: "predicate"})
+	}
+	if fn.VectorizeWidth > 0 {
+		args = append(args, &ast.AnnotationArg{
+			PosV: pos,
+			Key:  "width",
+			Value: &ast.IntLit{
+				PosV: pos,
+				EndV: pos,
+				Text: strconv.Itoa(fn.VectorizeWidth),
+			},
+		})
+	}
+	return args
+}
+
 func legacyFnDeclFromIR(fn *ostyir.FnDecl, asMethod bool) (*ast.FnDecl, error) {
 	if fn == nil {
 		return nil, nil
@@ -564,11 +590,50 @@ func legacyFnDeclFromIR(fn *ostyir.FnDecl, asMethod bool) (*ast.FnDecl, error) {
 	// codegen-behavior flags get reconstituted, and only as bare-flag
 	// placeholders; their semantics are carried by the IR fields, the
 	// annotation names here are just the signal the emitter checks for.
-	if fn.Vectorize {
+	// v0.6 A5.2: vectorize is default-on. The legacy bridge needs to
+	// surface only the explicit opt-out + any tuning args the user
+	// actually typed, not the default state itself (otherwise every
+	// reified fn would carry a redundant synthetic `#[vectorize]`
+	// annotation that the HIR emitter then has to undo).
+	if fn.NoVectorize {
+		out.Annotations = append(out.Annotations, &ast.Annotation{
+			PosV: start,
+			EndV: start,
+			Name: "no_vectorize",
+		})
+	} else if args := legacyVectorizeArgs(start, fn); len(args) > 0 {
 		out.Annotations = append(out.Annotations, &ast.Annotation{
 			PosV: start,
 			EndV: start,
 			Name: "vectorize",
+			Args: args,
+		})
+	}
+	if fn.Parallel {
+		out.Annotations = append(out.Annotations, &ast.Annotation{
+			PosV: start,
+			EndV: start,
+			Name: "parallel",
+		})
+	}
+	if fn.Unroll {
+		var args []*ast.AnnotationArg
+		if fn.UnrollCount > 0 {
+			args = []*ast.AnnotationArg{{
+				PosV: start,
+				Key:  "count",
+				Value: &ast.IntLit{
+					PosV: start,
+					EndV: start,
+					Text: strconv.Itoa(fn.UnrollCount),
+				},
+			}}
+		}
+		out.Annotations = append(out.Annotations, &ast.Annotation{
+			PosV: start,
+			EndV: start,
+			Name: "unroll",
+			Args: args,
 		})
 	}
 	if asMethod {

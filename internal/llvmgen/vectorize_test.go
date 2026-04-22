@@ -54,7 +54,7 @@ fn main() {
 // TestVectorizeAnnotationAbsentEmitsNoLoopMetadata is the negative
 // control: without the annotation, no loop metadata should be emitted
 // and the IR should be byte-identical to today's baseline shape.
-func TestVectorizeAnnotationAbsentEmitsNoLoopMetadata(t *testing.T) {
+func TestVectorizeIsDefaultOn(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn hot(n: Int) -> Int {
     let mut acc = 0
     for i in 0..n {
@@ -70,28 +70,70 @@ fn main() {
 
 	irBytes, err := generateFromAST(file, Options{
 		PackageName: "main",
-		SourcePath:  "/tmp/vectorize_absent.osty",
+		SourcePath:  "/tmp/vectorize_default_on.osty",
 	})
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	got := string(irBytes)
 
-	if strings.Contains(got, "!llvm.loop") {
-		t.Fatalf("expected no loop metadata without #[vectorize], got:\n%s", got)
+	// v0.6 A5.2 flip: every function's loops get the vectorize hint
+	// unless the function carries `#[no_vectorize]`. Typing no
+	// annotation is the fast path now.
+	if !strings.Contains(got, "!llvm.loop") {
+		t.Fatalf("v0.6 default should emit !llvm.loop metadata; got:\n%s", got)
 	}
-	if strings.Contains(got, "llvm.loop.vectorize.enable") {
-		t.Fatalf("expected no vectorize property without annotation, got:\n%s", got)
+	if !strings.Contains(got, `!"llvm.loop.vectorize.enable", i1 true`) {
+		t.Fatalf("v0.6 default should emit vectorize.enable; got:\n%s", got)
 	}
 }
 
-// TestVectorizeAnnotationScopedToAnnotatedFunction asserts that a
-// vectorize hint is function-local: a loop in an unannotated sibling
-// fn receives no metadata even when another fn in the same module is
-// annotated.
-func TestVectorizeAnnotationScopedToAnnotatedFunction(t *testing.T) {
-	file := parseLLVMGenFile(t, `#[vectorize]
-fn hot(n: Int) -> Int {
+// TestNoVectorizeAnnotationOptsOut covers the opt-out: `#[no_vectorize]`
+// suppresses both the loop metadata and the safepoint skip, giving
+// back the pre-v0.6 GC-cooperative shape for functions that need
+// mid-loop yielding.
+func TestNoVectorizeAnnotationOptsOut(t *testing.T) {
+	file := parseLLVMGenFile(t, `#[no_vectorize]
+fn cold(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc + i
+    }
+    acc
+}
+
+fn main() {
+    let _ = cold(1024)
+}
+`)
+
+	irBytes, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/vectorize_opt_out.osty",
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	got := string(irBytes)
+
+	cold, ok := extractFunctionBody(got, "cold")
+	if !ok {
+		t.Fatalf("cold function not found in IR:\n%s", got)
+	}
+	if strings.Contains(cold, "!llvm.loop") {
+		t.Fatalf("`#[no_vectorize]` should suppress !llvm.loop; got:\n%s", cold)
+	}
+	if !strings.Contains(cold, "osty.gc.safepoint_v1") {
+		t.Fatalf("`#[no_vectorize]` should restore per-iteration safepoint polls; got:\n%s", cold)
+	}
+}
+
+// TestNoVectorizeScopedToAnnotatedFunction asserts that `#[no_vectorize]`
+// is function-local: a loop in an unannotated sibling fn still gets
+// the default vectorize hint, while the opt-out fn keeps its
+// scalar-with-safepoint shape.
+func TestNoVectorizeScopedToAnnotatedFunction(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn hot(n: Int) -> Int {
     let mut a = 0
     for i in 0..n {
         a = a + i
@@ -99,6 +141,7 @@ fn hot(n: Int) -> Int {
     a
 }
 
+#[no_vectorize]
 fn cold(n: Int) -> Int {
     let mut b = 0
     for j in 0..n {
@@ -115,17 +158,15 @@ fn main() {
 
 	irBytes, err := generateFromAST(file, Options{
 		PackageName: "main",
-		SourcePath:  "/tmp/vectorize_scoped.osty",
+		SourcePath:  "/tmp/no_vectorize_scoped.osty",
 	})
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	got := string(irBytes)
 
-	// Exactly one loop should carry the hint — exactly one `!llvm.loop !`
-	// occurrence on a branch instruction. Metadata defs contribute a
-	// different substring ("distinct !{"), so counting the branch-site
-	// suffix isolates loop attachments.
+	// Default-on + one opt-out => exactly one `!llvm.loop` attachment
+	// (on `hot`). `cold` carries safepoint, no metadata.
 	attachments := strings.Count(got, ", !llvm.loop !")
 	if attachments != 1 {
 		t.Fatalf("expected exactly 1 loop metadata attachment, got %d:\n%s", attachments, got)
