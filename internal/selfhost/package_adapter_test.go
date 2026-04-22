@@ -316,6 +316,62 @@ fn main() {
 	}
 }
 
+func TestCheckPackageStructuredImportedDefaultMethodBoundsASTNative(t *testing.T) {
+	input := canonicalSelfhostInput(t, []byte(`use dep
+
+struct User {
+    name: String
+
+    fn name(self) -> String {
+        self.name
+    }
+}
+
+fn display<T: dep.Named>(value: T) -> String {
+    value.label()
+}
+
+fn main() {
+    let label = display(User { name: "Ada" })
+}
+`), 0)
+	checked, err := selfhost.CheckPackageStructured(selfhost.PackageCheckInput{
+		Files: []selfhost.PackageCheckFile{input},
+		Imports: []selfhost.PackageCheckImport{{
+			Alias: "dep",
+			TypeDecls: []selfhost.PackageCheckType{{
+				Name: "dep.Named",
+				Kind: "interface",
+			}},
+			RegisterAsIface: []string{"dep.Named"},
+			Functions: []selfhost.PackageCheckFn{
+				{
+					Name:         "name",
+					Owner:        "dep.Named",
+					ReceiverType: "dep.Named",
+					ReturnType:   "String",
+				},
+				{
+					Name:         "label",
+					Owner:        "dep.Named",
+					ReceiverType: "dep.Named",
+					ReturnType:   "String",
+					HasBody:      true,
+				},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CheckPackageStructured: %v", err)
+	}
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+	if got := findCheckedBindingType(checked, "label"); got != "String" {
+		t.Fatalf("binding type for label = %q, want String", got)
+	}
+}
+
 func findCheckedBindingType(result selfhost.CheckResult, name string) string {
 	for _, binding := range result.Bindings {
 		if binding.Name == name {

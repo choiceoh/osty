@@ -999,19 +999,45 @@ func (g *gen) emitErrorNew(args []*ast.Arg) {
 }
 
 func (g *gen) emitErrorMethodCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
-	if len(c.Args) != 0 || !isErrorType(g.typeOf(f.X)) {
+	if !g.isErrorMethodReceiverType(g.typeOf(f.X)) {
 		return false
 	}
 	switch f.Name {
 	case "message":
+		if len(c.Args) != 0 {
+			return false
+		}
 		g.needErrorRuntime = true
 		g.body.write("ostyErrorMessage(")
 		g.emitExpr(f.X)
 		g.body.write(")")
 		return true
 	case "source":
+		if len(c.Args) != 0 {
+			return false
+		}
 		g.needErrorRuntime = true
 		g.body.write("ostyErrorSource(")
+		g.emitExpr(f.X)
+		g.body.write(")")
+		return true
+	case "wrap":
+		if len(c.Args) != 1 {
+			return false
+		}
+		g.needErrorRuntime = true
+		g.body.write("ostyErrorWrap(")
+		g.emitExpr(f.X)
+		g.body.write(", ")
+		g.emitExpr(c.Args[0].Value)
+		g.body.write(")")
+		return true
+	case "chain":
+		if len(c.Args) != 0 {
+			return false
+		}
+		g.needErrorRuntime = true
+		g.body.write("ostyErrorChain(")
 		g.emitExpr(f.X)
 		g.body.write(")")
 		return true
@@ -1021,7 +1047,7 @@ func (g *gen) emitErrorMethodCall(c *ast.CallExpr, f *ast.FieldExpr) bool {
 
 func (g *gen) emitErrorDowncastCall(c *ast.CallExpr, tf *ast.TurbofishExpr) bool {
 	f, ok := tf.Base.(*ast.FieldExpr)
-	if !ok || f.Name != "downcast" || len(tf.Args) != 1 || len(c.Args) != 0 || !isErrorType(g.typeOf(f.X)) {
+	if !ok || f.Name != "downcast" || len(tf.Args) != 1 || len(c.Args) != 0 || !g.isErrorMethodReceiverType(g.typeOf(f.X)) {
 		return false
 	}
 	g.needErrorRuntime = true
@@ -1110,6 +1136,24 @@ func (g *gen) isPreludeErrorTypeExpr(e ast.Expr) bool {
 func isErrorType(t types.Type) bool {
 	n, ok := t.(*types.Named)
 	return ok && n.Sym != nil && n.Sym.Name == "Error"
+}
+
+func (g *gen) isErrorMethodReceiverType(t types.Type) bool {
+	if isErrorType(t) {
+		return true
+	}
+	n, ok := t.(*types.Named)
+	if !ok || n.Sym == nil {
+		return false
+	}
+	switch decl := n.Sym.Decl.(type) {
+	case *ast.StructDecl:
+		return receiverMethodNamed(decl.Methods, "message") != nil
+	case *ast.EnumDecl:
+		return receiverMethodNamed(decl.Methods, "message") != nil
+	}
+	methods := g.methodNames[n.Sym.Name]
+	return methods != nil && methods["message"]
 }
 
 func (g *gen) emitStdlibRefCall(c *ast.CallExpr, f *ast.FieldExpr) bool {

@@ -800,3 +800,107 @@ fn main() {
 		t.Fatalf("summary errors = %d, want 1 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
 	}
 }
+
+func TestCheckSourceStructuredAcceptsDefaultBodiedInterfaceBoundsAndConcreteErrorHelpers(t *testing.T) {
+	src := []byte(`interface Named {
+    fn name(self) -> String
+    fn label(self) -> String { self.name() + "!" }
+}
+
+struct User {
+    name: String
+
+    fn name(self) -> String {
+        self.name
+    }
+}
+
+enum FsError {
+    NotFound(String)
+
+    fn message(self) -> String {
+        match self {
+            NotFound(path) -> "missing {path}",
+        }
+    }
+}
+
+fn display<T: Named>(value: T) -> String {
+    value.label()
+}
+
+fn main() {
+    let user = User { name: "Ada" }
+    let label: String = display(user)
+
+    let err = FsError.NotFound("settings.osty")
+    let parent: Error? = err.source()
+    let wrapped: Error = err.wrap("load")
+    let chain: List<Error> = err.chain()
+    let exact: FsError? = err.downcast::<FsError>()
+    let _ = (label, parent, wrapped, chain, exact)
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+
+	got := map[string]string{}
+	for _, binding := range checked.Bindings {
+		got[binding.Name] = binding.TypeName
+	}
+	if got["label"] != "String" {
+		t.Fatalf("binding type for label = %q, want %q (all=%v)", got["label"], "String", got)
+	}
+	if got["parent"] != "Error?" {
+		t.Fatalf("binding type for parent = %q, want %q (all=%v)", got["parent"], "Error?", got)
+	}
+	if got["wrapped"] != "Error" {
+		t.Fatalf("binding type for wrapped = %q, want %q (all=%v)", got["wrapped"], "Error", got)
+	}
+	if got["chain"] != "List<Error>" {
+		t.Fatalf("binding type for chain = %q, want %q (all=%v)", got["chain"], "List<Error>", got)
+	}
+	if got["exact"] != "FsError?" {
+		t.Fatalf("binding type for exact = %q, want %q (all=%v)", got["exact"], "FsError?", got)
+	}
+}
+
+func TestCheckSourceStructuredRejectsInvalidDefaultMethodOverrideBounds(t *testing.T) {
+	src := []byte(`interface Named {
+    fn name(self) -> String
+    fn label(self) -> String { self.name() + "!" }
+}
+
+struct User {
+    name: String
+
+    fn name(self) -> String {
+        self.name
+    }
+
+    fn label(self) -> Int {
+        1
+    }
+}
+
+fn display<T: Named>(value: T) -> String {
+    value.label()
+}
+
+fn main() {
+    let user = User { name: "Ada" }
+    let _ = display(user)
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if got := checked.Summary.ErrorsByContext["E0749"]; got != 1 {
+		t.Fatalf("E0749 count = %d, want 1 (summary=%#v details=%v diagnostics=%#v)", got, checked.Summary, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+	if checked.Summary.Errors != 1 {
+		t.Fatalf("summary errors = %d, want 1 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+}

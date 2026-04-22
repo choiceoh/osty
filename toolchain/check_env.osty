@@ -138,6 +138,8 @@ pub struct CheckEnv {
     pub fnIndexKeys: List<String>,
     pub fnIndexHashes: List<Int>,
     pub fnIndexValues: List<Int>,
+    pub fnBodyKeys: List<String>,
+    pub fnBodyHashes: List<Int>,
     pub fields: List<CheckFieldSig>,
     pub fieldIndexKeys: List<String>,
     pub fieldIndexHashes: List<Int>,
@@ -204,6 +206,8 @@ pub fn emptyCheckEnv(tys: TyArena) -> CheckEnv {
         fnIndexKeys: [],
         fnIndexHashes: [],
         fnIndexValues: [],
+        fnBodyKeys: [],
+        fnBodyHashes: [],
         fields: [],
         fieldIndexKeys: [],
         fieldIndexHashes: [],
@@ -359,6 +363,21 @@ pub fn checkRegisterFn(env: CheckEnv, sig: CheckFnSig) {
     }
 }
 
+pub fn checkMarkFnHasBody(env: CheckEnv, name: String, owner: String) {
+    let key = checkFnKey(name, owner)
+    let keyHash = checkHashKey(key)
+    if checkNameIndex(env.fnBodyKeys, env.fnBodyHashes, key, keyHash) >= 0 {
+        return
+    }
+    env.fnBodyKeys.push(key)
+    env.fnBodyHashes.push(keyHash)
+}
+
+pub fn checkFnHasBody(env: CheckEnv, name: String, owner: String) -> Bool {
+    let key = checkFnKey(name, owner)
+    checkNameIndex(env.fnBodyKeys, env.fnBodyHashes, key, checkHashKey(key)) >= 0
+}
+
 pub fn checkLookupFn(env: CheckEnv, name: String, owner: String) -> CheckFnSig {
     let key = checkFnKey(name, owner)
     let idx = checkLookupExactIndex(env.fnIndexKeys, env.fnIndexHashes, env.fnIndexValues, key, checkHashKey(key))
@@ -401,7 +420,7 @@ pub fn checkLookupMethodForReceiver(env: CheckEnv, recvTy: Int, owner: String, n
     if direct.name != "" {
         return direct
     }
-    for ifaceHead in checkDirectBuiltinMethodInterfaces(name) {
+    for ifaceHead in checkReceiverFallbackInterfaces(name) {
         let ifaceTy = tyNamed(env.tys, ifaceHead, [])
         if checkTypeSatisfiesInterface(env, recvTy, ifaceTy) {
             let found = checkLookupMethod(env, ifaceHead, name)
@@ -1122,19 +1141,22 @@ fn checkTypeSatisfiesInterfaceSeen(env: CheckEnv, concrete: Int, iface: Int, see
                 return true
             }
         }
-        let required = checkInterfaceMethodSet(env, ifaceHead)
+        let methods = checkInterfaceMethodSet(env, ifaceHead)
+        let required = checkInterfaceRequiredMethodSet(env, ifaceHead)
         for req in required {
-            let found = checkLookupMethod(env, concreteHead, req.name)
-            if found.name == "" {
-                return false
-            }
-            let wantTy = checkConcreteMethodTy(env, req, ifaceResolved, concreteResolved)
-            let gotTy = checkConcreteMethodTy(env, found, concreteResolved, concreteResolved)
-            if !(checkIsAssignable(env, wantTy, gotTy)) {
+            if !(checkConcreteMethodSatisfiesInterfaceMethod(env, concreteResolved, concreteHead, ifaceResolved, req, true)) {
                 return false
             }
         }
-        return checkFnListLen(required) > 0
+        for req in methods {
+            if !(checkFnHasBody(env, req.name, req.owner)) {
+                continue
+            }
+            if !(checkConcreteMethodSatisfiesInterfaceMethod(env, concreteResolved, concreteHead, ifaceResolved, req, false)) {
+                return false
+            }
+        }
+        return checkFnListLen(methods) > 0
     }
     false
 }
@@ -1158,10 +1180,6 @@ fn checkBuiltinInterfaceInstance(env: CheckEnv, concrete: Int, ifaceHead: String
     if kind != TkNamed {
         return false
     }
-    if ifaceHead == "Error" {
-        return checkBuiltinErrorInterfaceInstance(env, concrete)
-    }
-
     let head = tyHeadAt(tys, concrete)
     let args = tyArgsAt(tys, concrete)
     if head == "Option" && checkIntListLen(args) == 1 {
@@ -1177,37 +1195,6 @@ fn checkBuiltinInterfaceInstance(env: CheckEnv, concrete: Int, ifaceHead: String
         return checkBuiltinBinaryCollectionInterfaceInstance(env, args[0], args[1], ifaceHead, seen)
     }
     checkDerivedNominalInterfaceInstance(env, concrete, ifaceHead, seen)
-}
-
-fn checkBuiltinErrorInterfaceInstance(env: CheckEnv, concrete: Int) -> Bool {
-    if tyKindAt(env.tys, concrete) != TkNamed {
-        return false
-    }
-    let concreteResolved = checkResolveAliasDeep(env, concrete)
-    let concreteHead = tyHeadAt(env.tys, concreteResolved)
-    let messageSig = checkLookupFn(env, "message", concreteHead)
-    if messageSig.name == "" {
-        return false
-    }
-
-    let ifaceTy = tyNamed(env.tys, "Error", [])
-    let wantMessage = checkLookupFn(env, "message", "Error")
-    let wantMessageTy = checkConcreteMethodTy(env, wantMessage, ifaceTy, concreteResolved)
-    let gotMessageTy = checkConcreteMethodTy(env, messageSig, concreteResolved, concreteResolved)
-    if !(checkIsAssignable(env, wantMessageTy, gotMessageTy)) {
-        return false
-    }
-
-    let sourceSig = checkLookupFn(env, "source", concreteHead)
-    if sourceSig.name != "" {
-        let wantSource = checkLookupFn(env, "source", "Error")
-        let wantSourceTy = checkConcreteMethodTy(env, wantSource, ifaceTy, concreteResolved)
-        let gotSourceTy = checkConcreteMethodTy(env, sourceSig, concreteResolved, concreteResolved)
-        if !(checkIsAssignable(env, wantSourceTy, gotSourceTy)) {
-            return false
-        }
-    }
-    true
 }
 
 fn checkBuiltinPrimitiveInterfaceInstance(tys: TyArena, concrete: Int, ifaceHead: String) -> Bool {
@@ -1351,7 +1338,14 @@ fn checkBuiltinInterfaceMethodNames(ifaceHead: String) -> List<String> {
     []
 }
 
-fn checkDirectBuiltinMethodInterfaces(name: String) -> List<String> {
+fn checkReceiverFallbackMethodNames(ifaceHead: String) -> List<String> {
+    if ifaceHead == "Error" {
+        return ["source", "wrap", "chain", "downcast"]
+    }
+    checkBuiltinInterfaceMethodNames(ifaceHead)
+}
+
+fn checkReceiverFallbackInterfaces(name: String) -> List<String> {
     if name == "eq" || name == "ne" {
         return ["Equal"]
     }
@@ -1360,6 +1354,9 @@ fn checkDirectBuiltinMethodInterfaces(name: String) -> List<String> {
     }
     if name == "hash" {
         return ["Hashable"]
+    }
+    if name == "source" || name == "wrap" || name == "chain" || name == "downcast" {
+        return ["Error"]
     }
     []
 }
@@ -1370,6 +1367,33 @@ fn checkFnListLen(xs: List<CheckFnSig>) -> Int {
 
 fn checkInterfaceMethodSet(env: CheckEnv, owner: String) -> List<CheckFnSig> {
     checkCollectInterfaceMethods(env, owner, [], [])
+}
+
+fn checkInterfaceRequiredMethodSet(env: CheckEnv, owner: String) -> List<CheckFnSig> {
+    let mut out: List<CheckFnSig> = []
+    for sig in checkInterfaceMethodSet(env, owner) {
+        if !(checkFnHasBody(env, sig.name, sig.owner)) {
+            out.push(sig)
+        }
+    }
+    out
+}
+
+fn checkConcreteMethodSatisfiesInterfaceMethod(
+    env: CheckEnv,
+    concreteResolved: Int,
+    concreteHead: String,
+    ifaceResolved: Int,
+    req: CheckFnSig,
+    required: Bool,
+) -> Bool {
+    let found = checkLookupMethod(env, concreteHead, req.name)
+    if found.name == "" {
+        return !(required)
+    }
+    let wantTy = checkConcreteMethodTy(env, req, ifaceResolved, concreteResolved)
+    let gotTy = checkConcreteMethodTy(env, found, concreteResolved, concreteResolved)
+    checkIsAssignable(env, wantTy, gotTy)
 }
 
 fn checkCollectInterfaceMethods(env: CheckEnv, owner: String, out: List<CheckFnSig>, seen: List<String>) -> List<CheckFnSig> {
@@ -1580,12 +1604,12 @@ pub fn checkMethodNamesOf(env: CheckEnv, owner: String) -> List<String> {
 
 pub fn checkMethodNamesForReceiver(env: CheckEnv, recvTy: Int, owner: String) -> List<String> {
     let mut out = checkMethodNamesOf(env, owner)
-    for ifaceHead in ["Equal", "Ordered", "Hashable"] {
+    for ifaceHead in ["Equal", "Ordered", "Hashable", "Error"] {
         let ifaceTy = tyNamed(env.tys, ifaceHead, [])
         if !(checkTypeSatisfiesInterface(env, recvTy, ifaceTy)) {
             continue
         }
-        for name in checkBuiltinInterfaceMethodNames(ifaceHead) {
+        for name in checkReceiverFallbackMethodNames(ifaceHead) {
             if !(listContainsString(out, name)) {
                 out.push(name)
             }
@@ -1950,16 +1974,19 @@ fn checkInstallErrorIntrinsics(env: CheckEnv) {
         paramNames: [], paramTys: [],
         generics: [], genericBounds: [],
     })
+    checkMarkFnHasBody(env, "source", "Error")
     checkRegisterFn(env, CheckFnSig {
         name: "wrap", owner: "Error", receiverTy: tError, retTy: tError,
         paramNames: ["context"], paramTys: [tString_],
         generics: [], genericBounds: [],
     })
+    checkMarkFnHasBody(env, "wrap", "Error")
     checkRegisterFn(env, CheckFnSig {
         name: "chain", owner: "Error", receiverTy: tError, retTy: tListError,
         paramNames: [], paramTys: [],
         generics: [], genericBounds: [],
     })
+    checkMarkFnHasBody(env, "chain", "Error")
     // Error.new(msg: String) -> Error — synthetic constructor so
     // `Err(Error.new("..."))` resolves. Spec doesn't mandate a
     // specific name but this is the canonical form in demos.
@@ -1968,12 +1995,14 @@ fn checkInstallErrorIntrinsics(env: CheckEnv) {
         paramNames: ["message"], paramTys: [tString_],
         generics: [], genericBounds: [],
     })
+    checkMarkFnHasBody(env, "new", "Error")
     // err.downcast::<T>() -> Option<T> — spec §A.6 nominal recovery.
     checkRegisterFn(env, CheckFnSig {
         name: "downcast", owner: "Error", receiverTy: tError, retTy: tOptT,
         paramNames: [], paramTys: [],
         generics: ["T"], genericBounds: [],
     })
+    checkMarkFnHasBody(env, "downcast", "Error")
 }
 
 /// checkInstallChannelIntrinsics registers the intrinsic methods on

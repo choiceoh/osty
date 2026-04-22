@@ -35,6 +35,7 @@ type PackageCheckFn struct {
 	Owner         string                     `json:"owner,omitempty"`
 	ReceiverType  string                     `json:"receiverType,omitempty"`
 	ReturnType    string                     `json:"returnType,omitempty"`
+	HasBody       bool                       `json:"hasBody,omitempty"`
 	ParamNames    []string                   `json:"paramNames,omitempty"`
 	ParamTypes    []string                   `json:"paramTypes,omitempty"`
 	ParamDefaults []bool                     `json:"paramDefaults,omitempty"`
@@ -496,6 +497,9 @@ func selfhostInstallImportSurfaces(env *CheckEnv, imports []PackageCheckImport) 
 				generics:      append([]string(nil), fn.Generics...),
 				genericBounds: selfhostMaterializeBounds(env, fn.GenericBounds),
 			})
+			if fn.HasBody {
+				checkMarkFnHasBody(env, fn.Name, fn.Owner)
+			}
 		}
 	}
 }
