@@ -100,6 +100,8 @@ pub fn llvmEmitter() -> LlvmEmitter {
         body: [],
         locals: [],
         stringGlobals: [],
+        nativeBoundedLens: {:},
+        nativeSafeIndices: {:},
     }
 }
 
