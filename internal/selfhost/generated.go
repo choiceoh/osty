@@ -60291,7 +60291,7 @@ func astLowerDecodedLiteral(s string) string {
 	raw := s
 	_ = raw
 	// Osty: /tmp/selfhost_merged.osty:31883:5
-	if strings.HasPrefix(raw, "b") {
+	if strings.HasPrefix(raw, "b'") {
 		// Osty: /tmp/selfhost_merged.osty:31884:9
 		raw = strings.TrimPrefix(raw, "b")
 	}
