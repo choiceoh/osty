@@ -1956,7 +1956,7 @@ func llvmIsKnownRuntimeFfiPath(path string) bool {
 		// Osty: toolchain/llvmgen.osty:1549:9
 		return true
 	}
-	return path == "runtime.strings" || path == "runtime.path.filepath"
+	return path == "runtime.strings" || path == "runtime.path.filepath" || path == "runtime.cihost"
 }
 
 // Osty: toolchain/llvmgen.osty:1554:5
