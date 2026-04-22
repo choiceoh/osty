@@ -1929,22 +1929,21 @@ func nativeStdIoCallMethod(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (str
 }
 
 func nativeStdIoStringExpr(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeExpr, bool) {
-	if ctx == nil || expr == nil || expr.Type() == nil {
-		return nil, false
-	}
-	if nativeTypeIsString(expr.Type()) {
-		return nativeExprFromIR(ctx, expr)
-	}
-	prim, ok := expr.Type().(*ostyir.PrimType)
-	if !ok {
+	if ctx == nil || expr == nil {
 		return nil, false
 	}
 	value, ok := nativeExprFromIR(ctx, expr)
 	if !ok {
 		return nil, false
 	}
-	switch prim.Kind {
-	case ostyir.PrimInt, ostyir.PrimInt64:
+	if info, ok := nativeExprTypeInfo(ctx, expr); ok && info.kind == nativeExprInfoString {
+		return value, true
+	}
+	if expr.Type() != nil && nativeTypeIsString(expr.Type()) {
+		return value, true
+	}
+	switch value.llvmType {
+	case "i64":
 		ctx.addRuntimeDecl("declare ptr @osty_rt_int_to_string(i64)")
 		return &llvmNativeExpr{
 			kind:       llvmNativeExprCall,
@@ -1952,7 +1951,7 @@ func nativeStdIoStringExpr(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNat
 			name:       llvmIntRuntimeToStringSymbol(),
 			childExprs: []*llvmNativeExpr{value},
 		}, true
-	case ostyir.PrimFloat, ostyir.PrimFloat64:
+	case "double":
 		ctx.addRuntimeDecl("declare ptr @osty_rt_float_to_string(double)")
 		return &llvmNativeExpr{
 			kind:       llvmNativeExprCall,
@@ -1960,7 +1959,7 @@ func nativeStdIoStringExpr(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNat
 			name:       llvmFloatRuntimeToStringSymbol(),
 			childExprs: []*llvmNativeExpr{value},
 		}, true
-	case ostyir.PrimBool:
+	case "i1":
 		ctx.addRuntimeDecl("declare ptr @osty_rt_bool_to_string(i1)")
 		return &llvmNativeExpr{
 			kind:       llvmNativeExprCall,
@@ -1968,7 +1967,7 @@ func nativeStdIoStringExpr(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNat
 			name:       llvmBoolRuntimeToStringSymbol(),
 			childExprs: []*llvmNativeExpr{value},
 		}, true
-	case ostyir.PrimChar:
+	case "i32":
 		ctx.addRuntimeDecl("declare ptr @osty_rt_char_to_string(i32)")
 		return &llvmNativeExpr{
 			kind:       llvmNativeExprCall,
@@ -1976,7 +1975,7 @@ func nativeStdIoStringExpr(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNat
 			name:       "osty_rt_char_to_string",
 			childExprs: []*llvmNativeExpr{value},
 		}, true
-	case ostyir.PrimByte:
+	case "i8":
 		ctx.addRuntimeDecl("declare ptr @osty_rt_byte_to_string(i8)")
 		return &llvmNativeExpr{
 			kind:       llvmNativeExprCall,
