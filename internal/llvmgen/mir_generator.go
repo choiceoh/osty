@@ -1810,14 +1810,6 @@ func (g *mirGen) prepareGCSafepointRootChunks() {
 	}
 }
 
-// emitGCSafepoint emits a single safepoint poll at an unclassified site.
-// Kept for callers that predate the Phase A5 kind taxonomy; new sites
-// should reach for `emitGCSafepointKind` with a specific kind so the
-// runtime's per-kind counters stay meaningful.
-func (g *mirGen) emitGCSafepoint() {
-	g.emitGCSafepointKind(safepointKindUnspecified)
-}
-
 // emitGCSafepointKind emits a safepoint poll tagged with the given kind.
 // The kind is packed into the high byte of the id the runtime receives;
 // the low 56 bits hold the per-module serial (see encodeSafepointID in

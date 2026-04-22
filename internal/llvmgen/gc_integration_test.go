@@ -341,6 +341,45 @@ fn main() {
 	}
 }
 
+// TestGenerateFromASTMapForEntriesTagsLoopKind covers the Phase A5
+// audit follow-up for `for (k, v) in m` — the legacy emitter's
+// emitMapFor post-loop continuation safepoint used to emit
+// UNSPECIFIED, now tagged LOOP. `emitMapIterate` (functional map
+// traversal) and `emitMapRetainIfStmt` share the same classification
+// pattern. Lowering this fixture must round-trip with zero
+// UNSPECIFIED — the dead unclassified helper has been removed but
+// the runtime kind counter still distinguishes loop continuations
+// from back-edge polls.
+func TestGenerateFromASTMapForEntriesTagsLoopKind(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn total(m: Map<String, Int>) -> Int {
+    let mut acc = 0
+    for (k, v) in m {
+        acc = acc + v + k.len()
+    }
+    acc
+}
+
+fn main() {
+    let m: Map<String, Int> = {:}
+    let _ = total(m)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_for_kind.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	mix := safepointKindMix(t, string(ir))
+	if mix[safepointKindLoop] == 0 {
+		t.Fatalf("expected ≥1 LOOP-kind safepoint from map for-loop continuation, mix=%v, IR:\n%s", mix, ir)
+	}
+	if mix[safepointKindUnspecified] != 0 {
+		t.Fatalf("UNSPECIFIED safepoint leaked through a map for-loop path, mix=%v, IR:\n%s", mix, ir)
+	}
+}
+
 func TestGenerateFromASTDirectUserCallSkipsEmptyCallSafepoint(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn work() -> Int {
     1
