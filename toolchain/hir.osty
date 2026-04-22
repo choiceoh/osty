@@ -2582,20 +2582,282 @@ pub fn hirErrorExpr(note: String, typ: HirType, span: HirSpan) -> HirExpr {
     e
 }
 
-/// HirPattern is the skeleton pattern form. Stage 3c fills in the
-/// per-variant payload fields (ident name, literal values, tuple/
-/// struct/variant children, range bounds, or alternates, binding
-/// sub-pattern) and constructors.
+/// HirStructPatField is one entry inside a StructPat. When
+/// `hasPattern` is false the field used the shorthand binding form
+/// (`User { name }` matches `name` to the field of the same name).
+pub struct HirStructPatField {
+    pub name: String,
+    pub hasPattern: Bool,
+    pub pattern: HirPattern,
+    pub span: HirSpan,
+}
+
+pub fn hirStructPatField(name: String, pattern: HirPattern, span: HirSpan) -> HirStructPatField {
+    HirStructPatField {
+        name,
+        hasPattern: true,
+        pattern,
+        span,
+    }
+}
+
+pub fn hirStructPatFieldShorthand(name: String, span: HirSpan) -> HirStructPatField {
+    HirStructPatField {
+        name,
+        hasPattern: false,
+        pattern: hirPatternInvalid(),
+        span,
+    }
+}
+
+/// HirPattern is the flat destructuring-pattern node. `kind` selects
+/// which payload fields are live. Patterns appear in `let` bindings,
+/// `match` arms, `if let` / `for let` heads, and closure parameter
+/// lists. Child patterns and embedded expressions are threaded through
+/// `List<HirPattern>` / `List<HirExpr>` to break self-containment.
+///
+/// Payload layout by kind:
+///
+///   Wild       — (no payload)
+///   Ident      — identName / identMut
+///   Lit        — litValue (length 1, always a primitive-literal Expr)
+///   Tuple      — tupleElems
+///   Struct     — structTypeName / structFields / structRest
+///   Variant    — variantEnum / variantName / variantArgs
+///   Range      — rangeLow (0/1) / rangeHigh (0/1) / rangeInclusive
+///   Or         — orAlts
+///   Binding    — bindingName / bindingChild (length 1)
+///   Error      — errorNote
 pub struct HirPattern {
     pub kind: HirPatternKind,
     pub span: HirSpan,
+
+    // Ident
+    pub identName: String,
+    pub identMut: Bool,
+
+    // Lit
+    pub litValue: List<HirExpr>,
+
+    // Tuple
+    pub tupleElems: List<HirPattern>,
+
+    // Struct
+    pub structTypeName: String,
+    pub structFields: List<HirStructPatField>,
+    pub structRest: Bool,
+
+    // Variant
+    pub variantEnum: String,
+    pub variantName: String,
+    pub variantArgs: List<HirPattern>,
+
+    // Range — Low/High may be absent for `..=N` / `N..` forms
+    pub rangeLow: List<HirExpr>,
+    pub rangeHigh: List<HirExpr>,
+    pub rangeInclusive: Bool,
+
+    // Or
+    pub orAlts: List<HirPattern>,
+
+    // Binding (`name @ pattern`)
+    pub bindingName: String,
+    pub bindingChild: List<HirPattern>,
+
+    // Error
+    pub errorNote: String,
 }
 
 pub fn hirPatternInvalid() -> HirPattern {
     HirPattern {
         kind: HirPatInvalid,
         span: hirNoSpan(),
+
+        identName: "",
+        identMut: false,
+
+        litValue: [],
+
+        tupleElems: [],
+
+        structTypeName: "",
+        structFields: [],
+        structRest: false,
+
+        variantEnum: "",
+        variantName: "",
+        variantArgs: [],
+
+        rangeLow: [],
+        rangeHigh: [],
+        rangeInclusive: false,
+
+        orAlts: [],
+
+        bindingName: "",
+        bindingChild: [],
+
+        errorNote: "",
     }
+}
+
+/// hirPatternIsValid reports whether `p` is a real pattern (not the
+/// default-zero placeholder).
+pub fn hirPatternIsValid(p: HirPattern) -> Bool {
+    match p.kind {
+        HirPatInvalid -> false,
+        _ -> true,
+    }
+}
+
+// ---- Pattern constructors ------------------------------------------
+
+pub fn hirWildPat(span: HirSpan) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatWild
+    p.span = span
+    p
+}
+
+pub fn hirIdentPat(name: String, span: HirSpan) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatIdent
+    p.identName = name
+    p.span = span
+    p
+}
+
+pub fn hirIdentPatMut(name: String, span: HirSpan) -> HirPattern {
+    let mut p = hirIdentPat(name, span)
+    p.identMut = true
+    p
+}
+
+/// hirLitPat builds a literal pattern. `value` must be a primitive
+/// literal expression (IntLit / FloatLit / StringLit / CharLit /
+/// BoolLit / ByteLit); enforcement is caller-side.
+pub fn hirLitPat(value: HirExpr, span: HirSpan) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatLit
+    p.litValue.push(value)
+    p.span = span
+    p
+}
+
+pub fn hirTuplePat(elems: List<HirPattern>, span: HirSpan) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatTuple
+    p.tupleElems = elems
+    p.span = span
+    p
+}
+
+/// hirStructPat builds a struct pattern with an exact field list (no
+/// `..` rest). Use hirStructPatRest when the pattern ends with `..`.
+pub fn hirStructPat(
+    typeName: String,
+    fields: List<HirStructPatField>,
+    span: HirSpan,
+) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatStruct
+    p.structTypeName = typeName
+    p.structFields = fields
+    p.span = span
+    p
+}
+
+pub fn hirStructPatRest(
+    typeName: String,
+    fields: List<HirStructPatField>,
+    span: HirSpan,
+) -> HirPattern {
+    let mut p = hirStructPat(typeName, fields, span)
+    p.structRest = true
+    p
+}
+
+pub fn hirVariantPat(
+    enumName: String,
+    variant: String,
+    args: List<HirPattern>,
+    span: HirSpan,
+) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatVariant
+    p.variantEnum = enumName
+    p.variantName = variant
+    p.variantArgs = args
+    p.span = span
+    p
+}
+
+/// hirRangePatBounded is `low..=high` / `low..high`.
+pub fn hirRangePatBounded(
+    low: HirExpr,
+    high: HirExpr,
+    inclusive: Bool,
+    span: HirSpan,
+) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatRange
+    p.rangeLow.push(low)
+    p.rangeHigh.push(high)
+    p.rangeInclusive = inclusive
+    p.span = span
+    p
+}
+
+/// hirRangePatFrom is `low..` (unbounded above).
+pub fn hirRangePatFrom(low: HirExpr, span: HirSpan) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatRange
+    p.rangeLow.push(low)
+    p.span = span
+    p
+}
+
+/// hirRangePatTo is `..high` or `..=high`.
+pub fn hirRangePatTo(
+    high: HirExpr,
+    inclusive: Bool,
+    span: HirSpan,
+) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatRange
+    p.rangeHigh.push(high)
+    p.rangeInclusive = inclusive
+    p.span = span
+    p
+}
+
+pub fn hirOrPat(alts: List<HirPattern>, span: HirSpan) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatOr
+    p.orAlts = alts
+    p.span = span
+    p
+}
+
+pub fn hirBindingPat(
+    name: String,
+    inner: HirPattern,
+    span: HirSpan,
+) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatBinding
+    p.bindingName = name
+    p.bindingChild.push(inner)
+    p.span = span
+    p
+}
+
+pub fn hirErrorPat(note: String, span: HirSpan) -> HirPattern {
+    let mut p = hirPatternInvalid()
+    p.kind = HirPatError
+    p.errorNote = note
+    p.span = span
+    p
 }
 
 // ====================================================================
