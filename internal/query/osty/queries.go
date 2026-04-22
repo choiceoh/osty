@@ -55,10 +55,12 @@ func (rp *ResolvedPackage) FileResult(path string) *resolve.Result {
 			continue
 		}
 		return &resolve.Result{
-			Refs:      pf.Refs,
-			TypeRefs:  pf.TypeRefs,
-			FileScope: pf.FileScope,
-			Diags:     rp.res.Diags,
+			Refs:         pf.Refs,
+			TypeRefs:     pf.TypeRefs,
+			RefsByID:     pf.RefsByID,
+			TypeRefsByID: pf.TypeRefsByID,
+			FileScope:    pf.FileScope,
+			Diags:        rp.res.Diags,
 		}
 	}
 	return nil

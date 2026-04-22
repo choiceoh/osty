@@ -80,9 +80,11 @@ func LowerPackage(pkgName string, pkg *resolve.Package, chk *check.Result) (*Mod
 			continue
 		}
 		res := &resolve.Result{
-			Refs:      pf.Refs,
-			TypeRefs:  pf.TypeRefs,
-			FileScope: pf.FileScope,
+			Refs:         pf.Refs,
+			TypeRefs:     pf.TypeRefs,
+			RefsByID:     pf.RefsByID,
+			TypeRefsByID: pf.TypeRefsByID,
+			FileScope:    pf.FileScope,
 		}
 		l := &lowerer{pkgName: pkgName, file: pf.File, res: res, chk: chk}
 		fileMod, fileIssues := l.run()

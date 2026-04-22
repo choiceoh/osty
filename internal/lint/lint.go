@@ -119,9 +119,11 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, chk *check.Result)
 			continue
 		}
 		rr := &resolve.Result{
-			Refs:      pf.Refs,
-			TypeRefs:  pf.TypeRefs,
-			FileScope: pf.FileScope,
+			Refs:         pf.Refs,
+			TypeRefs:     pf.TypeRefs,
+			RefsByID:     pf.RefsByID,
+			TypeRefsByID: pf.TypeRefsByID,
+			FileScope:    pf.FileScope,
 		}
 		// Each file gets its own local Result so that filterSuppressed
 		// only considers this file's #[allow(...)] regions against this

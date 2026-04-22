@@ -94,6 +94,12 @@ type PackageFile struct {
 	// AST with name resolution already applied.
 	Refs     map[*ast.Ident]*Symbol
 	TypeRefs map[*ast.NamedType]*Symbol
+	// RefsByID and TypeRefsByID project the same bindings keyed by
+	// ast.NodeID instead of Go pointer identity. Populated alongside
+	// Refs/TypeRefs so downstream passes can migrate off pointer keys
+	// without losing the Refs snapshot. Self-host ports rely on these.
+	RefsByID     map[ast.NodeID]*Symbol
+	TypeRefsByID map[ast.NodeID]*Symbol
 }
 
 func (pf *PackageFile) CheckerSource() []byte {

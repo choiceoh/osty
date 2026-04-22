@@ -598,9 +598,11 @@ func analysisForFileInPackage(
 		return nil
 	}
 	fileRes := &resolve.Result{
-		Refs:      pf.Refs,
-		TypeRefs:  pf.TypeRefs,
-		FileScope: pf.FileScope,
+		Refs:         pf.Refs,
+		TypeRefs:     pf.TypeRefs,
+		RefsByID:     pf.RefsByID,
+		TypeRefsByID: pf.TypeRefsByID,
+		FileScope:    pf.FileScope,
 	}
 	all := collectDiagsForFile(pr, chk, lr, pf)
 	return &docAnalysis{

@@ -682,9 +682,11 @@ func RunLoadedPackage(pkg *resolve.Package, stream io.Writer, cfg Config) Result
 	var lintDiags []*diag.Diagnostic
 	for _, pf := range pkg.Files {
 		fileRes := &resolve.Result{
-			Refs:      pf.Refs,
-			TypeRefs:  pf.TypeRefs,
-			FileScope: pf.FileScope,
+			Refs:         pf.Refs,
+			TypeRefs:     pf.TypeRefs,
+			RefsByID:     pf.RefsByID,
+			TypeRefsByID: pf.TypeRefsByID,
+			FileScope:    pf.FileScope,
 		}
 		lr := lint.File(pf.File, fileRes, chk)
 		lintDiags = append(lintDiags, lr.Diags...)
@@ -906,9 +908,11 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 		}
 		for _, pf := range pkg.Files {
 			fileRes := &resolve.Result{
-				Refs:      pf.Refs,
-				TypeRefs:  pf.TypeRefs,
-				FileScope: pf.FileScope,
+				Refs:         pf.Refs,
+				TypeRefs:     pf.TypeRefs,
+				RefsByID:     pf.RefsByID,
+				TypeRefsByID: pf.TypeRefsByID,
+				FileScope:    pf.FileScope,
 			}
 			lr := lint.File(pf.File, fileRes, cr)
 			lintDiags = append(lintDiags, lr.Diags...)

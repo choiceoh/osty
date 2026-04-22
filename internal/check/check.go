@@ -458,7 +458,13 @@ func perFileResolveResult(pf *resolve.PackageFile) *resolve.Result {
 	if pf == nil || pf.Refs == nil {
 		return nil
 	}
-	return &resolve.Result{Refs: pf.Refs, TypeRefs: pf.TypeRefs, FileScope: pf.FileScope}
+	return &resolve.Result{
+		Refs:         pf.Refs,
+		TypeRefs:     pf.TypeRefs,
+		RefsByID:     pf.RefsByID,
+		TypeRefsByID: pf.TypeRefsByID,
+		FileScope:    pf.FileScope,
+	}
 }
 
 func isProviderStdlibPackage(ws *resolve.Workspace, path string, pkg *resolve.Package) bool {

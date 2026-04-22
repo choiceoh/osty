@@ -22,6 +22,11 @@ type Result struct {
 	// `Map`). Only the head symbol is recorded; type arguments are
 	// resolved recursively and stored under their own NamedType keys.
 	TypeRefs map[*ast.NamedType]*Symbol
+	// RefsByID / TypeRefsByID mirror Refs / TypeRefs keyed by
+	// ast.NodeID. Populated in parallel so callers can migrate off
+	// pointer identity incrementally.
+	RefsByID     map[ast.NodeID]*Symbol
+	TypeRefsByID map[ast.NodeID]*Symbol
 	// FileScope is the file-level scope (children of the prelude). All
 	// top-level declarations live here.
 	FileScope *Scope
@@ -54,10 +59,12 @@ func FileWithStdlib(file *ast.File, prelude *Scope, stdlib StdlibProvider) *Resu
 	pr := ResolvePackage(pkg, prelude)
 	pf := pkg.Files[0]
 	return &Result{
-		Refs:      pf.Refs,
-		TypeRefs:  pf.TypeRefs,
-		FileScope: pf.FileScope,
-		Diags:     pr.Diags,
+		Refs:         pf.Refs,
+		TypeRefs:     pf.TypeRefs,
+		RefsByID:     pf.RefsByID,
+		TypeRefsByID: pf.TypeRefsByID,
+		FileScope:    pf.FileScope,
+		Diags:        pr.Diags,
 	}
 }
 
@@ -183,7 +190,40 @@ func (r *resolver) bodyPass(pkg *Package) {
 			}
 			restore()
 		}
+		f.RefsByID = projectRefsByID(f.Refs)
+		f.TypeRefsByID = projectTypeRefsByID(f.TypeRefs)
 	}
+}
+
+// projectRefsByID rekeys Refs by ast.NodeID. Idents with ID == 0
+// (synthetic, never stamped by the parser) are skipped; downstream
+// consumers that key on NodeID treat zero as unassigned.
+func projectRefsByID(refs map[*ast.Ident]*Symbol) map[ast.NodeID]*Symbol {
+	if len(refs) == 0 {
+		return map[ast.NodeID]*Symbol{}
+	}
+	out := make(map[ast.NodeID]*Symbol, len(refs))
+	for n, sym := range refs {
+		if n == nil || n.ID == 0 {
+			continue
+		}
+		out[n.ID] = sym
+	}
+	return out
+}
+
+func projectTypeRefsByID(refs map[*ast.NamedType]*Symbol) map[ast.NodeID]*Symbol {
+	if len(refs) == 0 {
+		return map[ast.NodeID]*Symbol{}
+	}
+	out := make(map[ast.NodeID]*Symbol, len(refs))
+	for n, sym := range refs {
+		if n == nil || n.ID == 0 {
+			continue
+		}
+		out[n.ID] = sym
+	}
+	return out
 }
 
 // resolver is the working state during one pass over a package. Each

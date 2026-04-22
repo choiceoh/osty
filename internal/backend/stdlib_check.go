@@ -42,9 +42,11 @@ func stdlibCheckResult(reg *stdlib.Registry, module string) *check.Result {
 	entry.once.Do(func() {
 		pf := mod.Package.Files[0]
 		rr := &resolve.Result{
-			Refs:      pf.Refs,
-			TypeRefs:  pf.TypeRefs,
-			FileScope: pf.FileScope,
+			Refs:         pf.Refs,
+			TypeRefs:     pf.TypeRefs,
+			RefsByID:     pf.RefsByID,
+			TypeRefsByID: pf.TypeRefsByID,
+			FileScope:    pf.FileScope,
 		}
 		// Source bytes are required — the native checker boundary reads
 		// them to drive its parse + type inference pipeline. Without
