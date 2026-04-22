@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -259,7 +260,8 @@ func UseEmbeddedNativeChecker() {
 // with `cat`; no schema migration is attempted, so bump validity if the
 // nativeCheckResult shape changes.
 func UseCachedEmbeddedNativeChecker(cacheDir, validity string) {
-	checker := cachedEmbeddedChecker{
+	checker := cachedNativeChecker{
+		backing:  embeddedNativeChecker{},
 		dir:      filepath.Join(cacheDir, validity),
 		validity: validity,
 	}
@@ -268,24 +270,69 @@ func UseCachedEmbeddedNativeChecker(cacheDir, validity string) {
 	}
 }
 
-type cachedEmbeddedChecker struct {
+// UseCachedDefaultNativeChecker wraps whichever checker `defaultNativeChecker`
+// would return (managed subprocess, or embedded fallback) in the on-disk
+// cache layer. First-time builds pay the full check cost; second-and-later
+// builds with unchanged package inputs short-circuit to a JSON read
+// (~microseconds) instead of re-running the checker. Unchanged-package
+// granularity gives multi-second wins on incremental `osty check` / `osty
+// build` iterations where only one or two packages change per edit.
+//
+// Calling this from cmd/osty build.go / run.go / query.go activates the
+// cache for the lifetime of the process; fingerprint validity is the
+// caller's responsibility (typically a digest of internal/selfhost/
+// generated.go so a checker-binary update invalidates every entry).
+func UseCachedDefaultNativeChecker(cacheDir, validity string) {
+	backing, note := defaultNativeChecker()
+	if backing == nil {
+		// Preserve the error note so callers see the same diagnostic as
+		// the uncached path when the managed checker can't start.
+		nativeCheckerFactory = func() (nativeChecker, string) {
+			return nil, note
+		}
+		return
+	}
+	checker := cachedNativeChecker{
+		backing:  backing,
+		dir:      filepath.Join(cacheDir, validity),
+		validity: validity,
+	}
+	nativeCheckerFactory = func() (nativeChecker, string) {
+		return checker, note
+	}
+}
+
+// cachedNativeChecker wraps any nativeChecker (embedded, managed exec,
+// or future backends) with an on-disk JSON cache keyed by the
+// fingerprint of the input. First-time inputs pay the full cost of
+// `backing.CheckSourceStructured` / `backing.CheckPackageStructured`;
+// subsequent identical inputs hit the cache and return in
+// microseconds, which turns `osty check` / `osty build` on a clean
+// incremental edit from multi-second into near-zero.
+//
+// The on-disk entry is validity-scoped: callers pass a version tag
+// (typically a hex digest of internal/selfhost/generated.go) so a
+// checker-binary update transparently invalidates every entry without
+// explicit migration.
+type cachedNativeChecker struct {
+	backing  nativeChecker
 	dir      string
 	validity string
 }
 
-func (c cachedEmbeddedChecker) CheckSourceStructured(src []byte) (nativeCheckResult, error) {
+func (c cachedNativeChecker) CheckSourceStructured(src []byte) (nativeCheckResult, error) {
 	key := cachedEmbeddedKey("src", src)
 	if res, ok := c.read(key); ok {
 		return res, nil
 	}
-	res, err := embeddedNativeChecker{}.CheckSourceStructured(src)
+	res, err := c.backing.CheckSourceStructured(src)
 	if err == nil {
 		c.write(key, res)
 	}
 	return res, err
 }
 
-func (c cachedEmbeddedChecker) CheckPackageStructured(input selfhost.PackageCheckInput) (nativeCheckResult, error) {
+func (c cachedNativeChecker) CheckPackageStructured(input selfhost.PackageCheckInput) (nativeCheckResult, error) {
 	// Key on the raw source + a stable subset of the import surface.
 	// Hashing the full PackageCheckInput through json.Marshal would
 	// traverse the entire parsed AST — multi-second for the regen
@@ -296,7 +343,30 @@ func (c cachedEmbeddedChecker) CheckPackageStructured(input selfhost.PackageChec
 	if res, ok := c.read(key); ok {
 		return res, nil
 	}
-	res, err := embeddedNativeChecker{}.CheckPackageStructured(input)
+	// The backing checker may or may not implement the package path;
+	// embedded does, the subprocess exec does, and anything else
+	// falls through to the single-source entry. We pick the package
+	// path explicitly so the subprocess round-trip isn't bypassed.
+	var (
+		res nativeCheckResult
+		err error
+	)
+	if pc, ok := c.backing.(nativePackageChecker); ok {
+		res, err = pc.CheckPackageStructured(input)
+	} else {
+		// Backing doesn't implement the package path; fall back to
+		// concatenating file sources so the single-source entry sees
+		// a coherent snapshot. This mirrors how the managed checker
+		// exec splices the package together pre-subprocess.
+		var buf bytes.Buffer
+		for _, f := range input.Files {
+			buf.Write(f.Source)
+			if len(f.Source) > 0 && f.Source[len(f.Source)-1] != '\n' {
+				buf.WriteByte('\n')
+			}
+		}
+		res, err = c.backing.CheckSourceStructured(buf.Bytes())
+	}
 	if err == nil {
 		c.write(key, res)
 	}
@@ -338,7 +408,7 @@ func packageCheckFingerprint(input selfhost.PackageCheckInput) []byte {
 	return sum[:]
 }
 
-func (c cachedEmbeddedChecker) read(key string) (nativeCheckResult, bool) {
+func (c cachedNativeChecker) read(key string) (nativeCheckResult, bool) {
 	data, err := os.ReadFile(filepath.Join(c.dir, key+".json"))
 	if err != nil {
 		return nativeCheckResult{}, false
@@ -350,7 +420,7 @@ func (c cachedEmbeddedChecker) read(key string) (nativeCheckResult, bool) {
 	return res, true
 }
 
-func (c cachedEmbeddedChecker) write(key string, res nativeCheckResult) {
+func (c cachedNativeChecker) write(key string, res nativeCheckResult) {
 	data, err := json.Marshal(res)
 	if err != nil {
 		return
@@ -539,14 +609,136 @@ func applySelfhostWorkspaceResults(ws *resolve.Workspace, _ map[string]*resolve.
 	if ws == nil {
 		return
 	}
+	// Per-package native checker calls are the slowest stage of
+	// `osty check` / `osty build` on multi-package workspaces: each
+	// CheckPackageStructured round-trip either forks a subprocess
+	// (managed checker) or runs the embedded self-host checker, both
+	// O(tens of ms) per package and trivially CPU-independent across
+	// packages since the input is a read-only view of the resolved
+	// workspace. Run them in parallel across a bounded worker pool
+	// and fold each result back into the shared type maps under a
+	// single mutex — the overlay writes are cheap next to the
+	// checker itself, so contention is not a bottleneck.
+	//
+	// Opt-out via OSTY_CHECK_PARALLEL=0 for debugging ordering-
+	// dependent bugs. Cap at GOMAXPROCS so we don't oversubscribe
+	// when embedded; subprocess workers scale down gracefully via
+	// the OS scheduler.
+	type pkgJob struct {
+		path       string
+		pkg        *resolve.Package
+		result     *Result
+		privileged bool
+	}
+	var jobs []pkgJob
 	for path, result := range results {
 		pkg := ws.Packages[path]
 		if isProviderStdlibPackage(ws, path, pkg) {
 			continue
 		}
 		privileged := isPrivilegedPackagePath(path) || isPrivilegedPackage(pkg)
-		applySelfhostPackageResult(result, pkg, nil, ws, stdlib, privileged)
+		jobs = append(jobs, pkgJob{path: path, pkg: pkg, result: result, privileged: privileged})
 	}
+	if len(jobs) == 0 {
+		return
+	}
+	if len(jobs) == 1 || os.Getenv("OSTY_CHECK_PARALLEL") == "0" {
+		for _, j := range jobs {
+			applySelfhostPackageResult(j.result, j.pkg, nil, ws, stdlib, j.privileged)
+		}
+		return
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(jobs) {
+		workers = len(jobs)
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	ch := make(chan pkgJob)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range ch {
+				runSelfhostPackageResultLocked(j.result, j.pkg, ws, stdlib, j.privileged, &mu)
+			}
+		}()
+	}
+	for _, j := range jobs {
+		ch <- j
+	}
+	close(ch)
+	wg.Wait()
+}
+
+// runSelfhostPackageResultLocked performs the native checker call
+// outside the lock (thread-safe: the input is a read-only view of the
+// resolved workspace, and each runner.CheckPackageStructured call
+// carries its own state) and then serializes the overlay writes to
+// the shared type maps under `mu`. This is the parallel variant of
+// applySelfhostPackageResult; the single-threaded fast path in
+// applySelfhostWorkspaceResults still calls the non-locked version.
+func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool, mu *sync.Mutex) {
+	if result == nil || pkg == nil {
+		return
+	}
+	runner, note := nativeCheckerFactory()
+	if runner == nil {
+		mu.Lock()
+		result.Diags = append(result.Diags, checkerUnavailableDiag(
+			"package",
+			"no Osty-native checker executable is configured",
+			note,
+		))
+		mu.Unlock()
+		return
+	}
+	src := selfhostPackageSource(pkg, ws, stdlib)
+	if dump := os.Getenv("OSTY_NATIVE_CHECKER_SOURCE_DUMP"); dump != "" {
+		_ = os.WriteFile(dump, src.source, 0o644)
+	}
+	if len(src.source) == 0 {
+		mu.Lock()
+		result.Diags = append(result.Diags, checkerUnavailableDiag(
+			"package",
+			"package source bytes were not available to the native checker boundary",
+		))
+		mu.Unlock()
+		return
+	}
+	var (
+		checked nativeCheckResult
+		err     error
+	)
+	input := selfhostPackageCheckInput(pkg, ws, stdlib, src)
+	switch r := runner.(type) {
+	case nativePackageChecker:
+		checked, err = r.CheckPackageStructured(input)
+	default:
+		checked, err = runner.CheckSourceStructured(src.source)
+	}
+	if err != nil {
+		mu.Lock()
+		result.Diags = append(result.Diags, checkerUnavailableDiag(
+			"package",
+			"the Osty-native checker executable failed",
+			err.Error(),
+		))
+		mu.Unlock()
+		return
+	}
+	policy := nativeDiagPolicy{privileged: privileged}
+	diags := nativeCheckerDiags(src.source, checked, policy)
+	telemetry := nativeCheckerTelemetry(checked, policy)
+
+	mu.Lock()
+	defer mu.Unlock()
+	result.Diags = append(result.Diags, diags...)
+	result.NativeCheckerTelemetry = telemetry
+	overlaySelfhostResult(result, src, checked)
 }
 
 type nativeDiagPolicy struct {

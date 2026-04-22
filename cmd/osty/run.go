@@ -115,6 +115,10 @@ func runRun(args []string, cliF cliFlags) {
 	}
 	deps := pkgmgr.NewDepProvider(m, graph, env)
 
+	// Turn on the native-checker cache so repeated `osty run` cycles
+	// during development don't re-check packages that haven't changed.
+	enableCheckerCacheForRoot(root)
+
 	// Step 2: pick the entry file. A binary project uses main.osty
 	// at the project root unless [bin].path overrides it. The rule
 	// lives in toolchain/runner.osty; cross-platform separator is
