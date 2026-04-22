@@ -2561,7 +2561,8 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 	// mirrors that dispatch in-place instead of trying to resolve the
 	// symbol as an ordinary user function. Scope stays narrow: only the
 	// shapes the LLVM compat tests exercise (assertEq/assertNe/assert/
-	// assertTrue/assertFalse/fail/context/benchmark/expectOk/expectError).
+	// assertTrue/assertFalse/fail/context/benchmark/expectOk/expectError/
+	// snapshot).
 	if strings.HasPrefix(fnRef.Symbol, "std.testing.") {
 		if handled, err := g.emitStdTestingCall(c, fnRef); handled {
 			return err
@@ -2818,6 +2819,8 @@ func (g *mirGen) emitStdTestingCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, e
 		return true, g.emitTestingContextMIR(c)
 	case "benchmark":
 		return true, g.emitTestingBenchmarkMIR(c)
+	case "snapshot":
+		return true, g.emitTestingSnapshotMIR(c)
 	}
 	return false, nil
 }
@@ -2864,6 +2867,42 @@ func (g *mirGen) emitTestingContextMIR(c *mir.CallInstr) error {
 	if err := g.invokeClosureOperand(c.Args[1]); err != nil {
 		return err
 	}
+	return g.storeUnitDestIfAny(c)
+}
+
+// emitTestingSnapshotMIR lowers `testing.snapshot(name, output)` to the
+// same runtime helper the legacy AST path uses. `g.source` carries the
+// compile-time source path so snapshot lookup stays independent of the
+// process working directory.
+func (g *mirGen) emitTestingSnapshotMIR(c *mir.CallInstr) error {
+	if len(c.Args) != 2 {
+		return unsupported("mir-mvp", "std.testing.snapshot requires (name, output)")
+	}
+	nameT := c.Args[0].Type()
+	if g.llvmType(nameT) != "ptr" {
+		return unsupportedf("mir-mvp", "std.testing.snapshot name type %s, want String", mirTypeString(nameT))
+	}
+	name, err := g.evalOperand(c.Args[0], nameT)
+	if err != nil {
+		return err
+	}
+	outputT := c.Args[1].Type()
+	if g.llvmType(outputT) != "ptr" {
+		return unsupportedf("mir-mvp", "std.testing.snapshot output type %s, want String", mirTypeString(outputT))
+	}
+	output, err := g.evalOperand(c.Args[1], outputT)
+	if err != nil {
+		return err
+	}
+	g.declareRuntime("osty_rt_test_snapshot", "declare void @osty_rt_test_snapshot(ptr, ptr, ptr)")
+	sourceSym := g.stringLiteral(g.source)
+	g.fnBuf.WriteString("  call void @osty_rt_test_snapshot(ptr ")
+	g.fnBuf.WriteString(name)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(output)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(sourceSym)
+	g.fnBuf.WriteString(")\n")
 	return g.storeUnitDestIfAny(c)
 }
 

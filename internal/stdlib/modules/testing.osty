@@ -5,46 +5,29 @@
 // take no arguments are discovered and run by `osty test`; functions
 // whose names begin with `bench` are benchmarks (§11.4).
 //
-// Bodies below are placeholders sized to satisfy the type checker. The
-// `osty test` runner supplies real behavior at run time — assertion
-// failures are converted into recorded test results via panic / recover
-// in the generated Go harness, so these stubs are never actually called
-// in the happy path of a passing test.
+// Core assertion/runner helpers are declaration-only: both LLVM codegen
+// paths intercept these call sites and lower them to the real test
+// runtime / harness behavior.
 
-pub fn assert(cond: Bool) {
-}
+pub fn assert(cond: Bool)
 
-pub fn assertTrue(cond: Bool) {
-}
+pub fn assertTrue(cond: Bool)
 
-pub fn assertFalse(cond: Bool) {
-}
+pub fn assertFalse(cond: Bool)
 
-pub fn assertEq<T: Equal>(actual: T, expected: T) {
-}
+pub fn assertEq<T: Equal>(actual: T, expected: T)
 
-pub fn assertNe<T: Equal>(actual: T, expected: T) {
-}
+pub fn assertNe<T: Equal>(actual: T, expected: T)
 
-pub fn expectOk<T, E>(result: Result<T, E>) -> T {
-    result.unwrap()
-}
+pub fn expectOk<T, E>(result: Result<T, E>) -> T
 
-pub fn expectError<T, E>(result: Result<T, E>) -> E {
-    result.unwrapErr()
-}
+pub fn expectError<T, E>(result: Result<T, E>) -> E
 
-pub fn fail(msg: String) -> Never {
-    fail(msg)
-}
+pub fn fail(msg: String) -> Never
 
-pub fn context(msg: String, body: fn() -> ()) {
-    body()
-}
+pub fn context(msg: String, body: fn() -> ())
 
-pub fn benchmark(iterations: Int, body: fn() -> Result<(), Error>) {
-    body()
-}
+pub fn benchmark(iterations: Int, body: fn() -> Result<(), Error>)
 
 /// `snapshot(name, output)` compares `output` against a golden file
 /// stored at `<source_dir>/__snapshots__/<sanitize(name)>.snap`.
@@ -58,13 +41,9 @@ pub fn benchmark(iterations: Int, body: fn() -> Result<(), Error>) {
 ///
 /// Re-run `osty test --update-snapshots` (or set
 /// `OSTY_UPDATE_SNAPSHOTS=1`) to accept the new output and overwrite
-/// every golden in the run. The LLVM backend intercepts this call
-/// and emits a direct runtime helper — the stub body below exists
-/// only to satisfy the type checker.
-pub fn snapshot(name: String, output: String) {
-    let _ = name
-    let _ = output
-}
+/// every golden in the run. Both LLVM codegen paths intercept this
+/// call and emit a direct runtime helper.
+pub fn snapshot(name: String, output: String)
 
 // ---------- property-based testing (v0.5 G33) ----------
 

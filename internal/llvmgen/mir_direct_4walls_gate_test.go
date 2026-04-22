@@ -13,17 +13,22 @@ import (
 )
 
 // TestMIRDirectCoversFormerFallbackWalls is the regression gate for
-// four MIR-direct walls that previously forced GenerateFromMIR to
+// five MIR-direct walls that previously forced GenerateFromMIR to
 // surface ErrUnsupported and delegate to the legacy HIR→AST emitter:
 //
 //   - Downcast        : `recv.downcast::<T>()` on an interface value
-//                       — rejected with "unsupported local type <Iface>".
+//     — rejected with "unsupported local type <Iface>".
 //   - EnumWiden       : a user enum used as `Result<_, E>` Err payload
-//                       — rejected with "cannot widen %<Enum> to i64".
+//     — rejected with "cannot widen %<Enum> to i64".
 //   - TestingContext  : `std.testing.context(label, closure)`
-//                       — rejected with "unresolved symbol std.testing.*".
+//     — rejected with "unresolved symbol std.testing.*".
 //   - TestingBenchmark: `std.testing.benchmark(n, closure)` with `Ok(())`
-//                       — rejected with "tuple aggregate type ()".
+//     — rejected with "tuple aggregate type ()".
+//   - TestingSnapshot : `std.testing.snapshot(name, output)` —
+//     previously fell through to an unresolved
+//     `std.testing.*` symbol because the MIR
+//     dispatcher did not forward it to the runtime
+//     helper.
 //
 // Each sub-test calls GenerateFromMIR ONLY (no legacy fallback) and
 // asserts that the MIR emitter now produces the shape-critical IR
@@ -94,6 +99,19 @@ fn main() {
 `,
 			want: []string{
 				"call i64 @add(i64 1, i64 2)",
+			},
+		},
+		{
+			name: "TestingSnapshot",
+			src: `use std.testing as testing
+fn main() {
+    testing.snapshot("golden", "hello\nworld\n")
+}
+`,
+			want: []string{
+				"declare void @osty_rt_test_snapshot(ptr, ptr, ptr)",
+				"call void @osty_rt_test_snapshot(",
+				"/tmp/probe_4walls.osty",
 			},
 		},
 	}
