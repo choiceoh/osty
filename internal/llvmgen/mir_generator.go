@@ -2635,21 +2635,497 @@ func (g *mirGen) emitTestingContextMIR(c *mir.CallInstr) error {
 	return g.storeUnitDestIfAny(c)
 }
 
-// emitTestingBenchmarkMIR evaluates the iteration-count argument for
-// side-effects and invokes the closure body exactly once. The legacy
-// AST path loops N times; a single invocation is sufficient for the
-// MIR compat tests, which assert on the user-fn call appearing inside
-// the lifted closure (emitted regardless of loop count).
+// emitTestingBenchmarkMIR lowers `testing.benchmark(N, closure)` into
+// the full timing harness: auto-tune probe, warmup loop, timed loop
+// with per-iteration samples, and the scrapeable
+// `bench <label> iter=N total=Tns avg=Ans` summary line that the
+// osty-vs-go runner parses. The MIR closure has already been lifted
+// into a top-level fn by mir.Lower; we invoke it through the uniform
+// closure ABI `load fn; call fn(env)` once per iteration. Return
+// values (typically `%Result.unit.Error`) are discarded — matching the
+// AST inline-body path which also drops the trailing `Ok(())`.
+//
+// Previously the MIR lowering invoked the closure exactly once, which
+// short-circuited both the N-iteration loop and the summary emission:
+// osty-vs-go saw zero iterations, no `avg=…ns` line, and the per-pair
+// geomean was dominated by compile+link startup. Porting the full
+// timing loop restores parity with the legacy AST path and unblocks
+// accurate perf comparisons with Go.
 func (g *mirGen) emitTestingBenchmarkMIR(c *mir.CallInstr) error {
 	if len(c.Args) != 2 {
 		return unsupported("mir-mvp", "std.testing.benchmark requires (iters, closure)")
 	}
-	if _, err := g.evalOperand(c.Args[0], c.Args[0].Type()); err != nil {
+	itersRef, err := g.evalOperand(c.Args[0], c.Args[0].Type())
+	if err != nil {
 		return err
 	}
-	if err := g.invokeClosureOperand(c.Args[1]); err != nil {
+	envPtr, err := g.evalOperand(c.Args[1], c.Args[1].Type())
+	if err != nil {
 		return err
 	}
+
+	fnT, _ := c.Args[1].Type().(*ir.FnType)
+	retLLVM := "void"
+	paramParts := []string{"ptr"}
+	if fnT != nil {
+		if fnT.Return != nil && !isUnitType(fnT.Return) {
+			retLLVM = g.llvmType(fnT.Return)
+		}
+		for _, p := range fnT.Params {
+			paramParts = append(paramParts, g.llvmType(p))
+		}
+	}
+	callType := retLLVM + " (" + strings.Join(paramParts, ", ") + ")"
+
+	// Runtime declarations for the bench timing plumbing. These live in
+	// osty_rt_bench_* in the C runtime; each declare is idempotent so
+	// repeat benches reuse a single signature line.
+	g.declareRuntime("osty_rt_bench_now_nanos",
+		"declare i64 @osty_rt_bench_now_nanos()")
+	g.declareRuntime("osty_rt_bench_target_ns",
+		"declare i64 @osty_rt_bench_target_ns()")
+	g.declareRuntime("osty_rt_bench_samples_new",
+		"declare ptr @osty_rt_bench_samples_new(i64)")
+	g.declareRuntime("osty_rt_bench_samples_record",
+		"declare void @osty_rt_bench_samples_record(ptr, i64, i64)")
+	g.declareRuntime("osty_rt_bench_samples_report",
+		"declare void @osty_rt_bench_samples_report(ptr, i64)")
+	g.declareRuntime("osty_rt_bench_samples_free",
+		"declare void @osty_rt_bench_samples_free(ptr)")
+	g.declareRuntime("osty_rt_bench_print_summary_v1",
+		"declare void @osty_rt_bench_print_summary_v1(ptr, i64, i64, i64)")
+	g.declareRuntime("osty_rt_bench_fail_question_v1",
+		"declare void @osty_rt_bench_fail_question_v1(ptr)")
+	g.declareRuntime("exit",
+		"declare void @exit(i32)")
+
+	// Source label used by osty-vs-go to identify the pair+line. MIR
+	// carries the call's span; the legacy emitter uses absolute path +
+	// line, so mirror that shape.
+	source := g.source
+	if source == "" {
+		source = "<bench>"
+	} else if abs, absErr := filepath.Abs(source); absErr == nil {
+		source = abs
+	}
+	labelSym := g.stringLiteral(fmt.Sprintf("%s:%d", source, c.SpanV.Start.Line))
+
+	// Allocate the per-bench N slot up front so both the fixed-N and
+	// auto-tuned paths share one join point.
+	nSlot := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(nSlot)
+	g.fnBuf.WriteString(" = alloca i64\n")
+	g.fnBuf.WriteString("  store i64 ")
+	g.fnBuf.WriteString(itersRef)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(nSlot)
+	g.fnBuf.WriteByte('\n')
+
+	// Load the closure fn pointer once outside the loops. Closures
+	// never rebind their fn slot, so hoisting this load saves a load
+	// per iteration under -O3.
+	fnPtr := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(fnPtr)
+	g.fnBuf.WriteString(" = load ptr, ptr ")
+	g.fnBuf.WriteString(envPtr)
+	g.fnBuf.WriteByte('\n')
+
+	// Result<Unit, Error>-shape returns carry the Err tag in field 0 (0
+	// = Err, 1 = Ok). When the closure ended up returning Err — i.e. a
+	// `?` inside the body propagated a failure — we bail early with the
+	// same diagnostic shape the legacy AST bench path emits so bench
+	// golden tests stay backend-agnostic. Other return types are
+	// ignored; the spec promises `Ok(())` at bench closure tail, so any
+	// non-Result return already means nothing is propagated.
+	checkResultTag := strings.HasPrefix(retLLVM, "%Result.")
+
+	// Helper closures — these emit an invocation and a simple counted
+	// loop over `countRef` using the closure we already resolved above.
+	invokeClosure := func() {
+		if retLLVM == "void" {
+			g.fnBuf.WriteString("  call ")
+			g.fnBuf.WriteString(callType)
+			g.fnBuf.WriteByte(' ')
+			g.fnBuf.WriteString(fnPtr)
+			g.fnBuf.WriteString("(ptr ")
+			g.fnBuf.WriteString(envPtr)
+			g.fnBuf.WriteString(")\n")
+			return
+		}
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = call ")
+		g.fnBuf.WriteString(callType)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(fnPtr)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(envPtr)
+		g.fnBuf.WriteString(")\n")
+		if !checkResultTag {
+			return
+		}
+		tag := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tag)
+		g.fnBuf.WriteString(" = extractvalue ")
+		g.fnBuf.WriteString(retLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(", 0\n")
+		isErr := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(isErr)
+		g.fnBuf.WriteString(" = icmp ne i64 ")
+		g.fnBuf.WriteString(tag)
+		g.fnBuf.WriteString(", 1\n")
+		failLbl := g.freshLabel("bench.fail")
+		contLbl := g.freshLabel("bench.ok")
+		g.fnBuf.WriteString("  br i1 ")
+		g.fnBuf.WriteString(isErr)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(failLbl)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(contLbl)
+		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(failLbl)
+		g.fnBuf.WriteString(":\n")
+		g.fnBuf.WriteString("  call void @osty_rt_bench_fail_question_v1(ptr ")
+		g.fnBuf.WriteString(labelSym)
+		g.fnBuf.WriteString(")\n")
+		g.fnBuf.WriteString("  call void @exit(i32 1)\n")
+		g.fnBuf.WriteString("  unreachable\n")
+		g.fnBuf.WriteString(contLbl)
+		g.fnBuf.WriteString(":\n")
+	}
+
+	emitCountedLoop := func(prefix, countRef string, recordSamples bool, samplesRef string) {
+		idxSlot := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(idxSlot)
+		g.fnBuf.WriteString(" = alloca i64\n")
+		g.fnBuf.WriteString("  store i64 0, ptr ")
+		g.fnBuf.WriteString(idxSlot)
+		g.fnBuf.WriteByte('\n')
+		cond := g.freshLabel(prefix + ".cond")
+		body := g.freshLabel(prefix + ".body")
+		done := g.freshLabel(prefix + ".done")
+		g.fnBuf.WriteString("  br label %")
+		g.fnBuf.WriteString(cond)
+		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(cond)
+		g.fnBuf.WriteString(":\n")
+		iv := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(iv)
+		g.fnBuf.WriteString(" = load i64, ptr ")
+		g.fnBuf.WriteString(idxSlot)
+		g.fnBuf.WriteByte('\n')
+		cmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(cmp)
+		g.fnBuf.WriteString(" = icmp slt i64 ")
+		g.fnBuf.WriteString(iv)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(countRef)
+		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString("  br i1 ")
+		g.fnBuf.WriteString(cmp)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(body)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(done)
+		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(body)
+		g.fnBuf.WriteString(":\n")
+		var startT string
+		if recordSamples {
+			startT = g.fresh()
+			g.fnBuf.WriteString("  ")
+			g.fnBuf.WriteString(startT)
+			g.fnBuf.WriteString(" = call i64 @osty_rt_bench_now_nanos()\n")
+		}
+		invokeClosure()
+		if recordSamples {
+			endT := g.fresh()
+			g.fnBuf.WriteString("  ")
+			g.fnBuf.WriteString(endT)
+			g.fnBuf.WriteString(" = call i64 @osty_rt_bench_now_nanos()\n")
+			delta := g.fresh()
+			g.fnBuf.WriteString("  ")
+			g.fnBuf.WriteString(delta)
+			g.fnBuf.WriteString(" = sub i64 ")
+			g.fnBuf.WriteString(endT)
+			g.fnBuf.WriteString(", ")
+			g.fnBuf.WriteString(startT)
+			g.fnBuf.WriteByte('\n')
+			g.fnBuf.WriteString("  call void @osty_rt_bench_samples_record(ptr ")
+			g.fnBuf.WriteString(samplesRef)
+			g.fnBuf.WriteString(", i64 ")
+			g.fnBuf.WriteString(iv)
+			g.fnBuf.WriteString(", i64 ")
+			g.fnBuf.WriteString(delta)
+			g.fnBuf.WriteString(")\n")
+		}
+		ivNext := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(ivNext)
+		g.fnBuf.WriteString(" = add i64 ")
+		g.fnBuf.WriteString(iv)
+		g.fnBuf.WriteString(", 1\n")
+		g.fnBuf.WriteString("  store i64 ")
+		g.fnBuf.WriteString(ivNext)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(idxSlot)
+		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString("  br label %")
+		g.fnBuf.WriteString(cond)
+		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(done)
+		g.fnBuf.WriteString(":\n")
+	}
+
+	// Auto-tune: if OSTY_BENCH_TIME_NS > 0 we run a 10-iteration probe
+	// and estimate a new N. Otherwise `declared_n` rides through.
+	target := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(target)
+	g.fnBuf.WriteString(" = call i64 @osty_rt_bench_target_ns()\n")
+	autoCmp := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(autoCmp)
+	g.fnBuf.WriteString(" = icmp sgt i64 ")
+	g.fnBuf.WriteString(target)
+	g.fnBuf.WriteString(", 0\n")
+	probeLbl := g.freshLabel("bench.probe")
+	afterProbeLbl := g.freshLabel("bench.after_probe")
+	g.fnBuf.WriteString("  br i1 ")
+	g.fnBuf.WriteString(autoCmp)
+	g.fnBuf.WriteString(", label %")
+	g.fnBuf.WriteString(probeLbl)
+	g.fnBuf.WriteString(", label %")
+	g.fnBuf.WriteString(afterProbeLbl)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(probeLbl)
+	g.fnBuf.WriteString(":\n")
+	probeStart := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(probeStart)
+	g.fnBuf.WriteString(" = call i64 @osty_rt_bench_now_nanos()\n")
+	emitCountedLoop("bench.probe", "10", false, "")
+	probeEnd := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(probeEnd)
+	g.fnBuf.WriteString(" = call i64 @osty_rt_bench_now_nanos()\n")
+	elapsed := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(elapsed)
+	g.fnBuf.WriteString(" = sub i64 ")
+	g.fnBuf.WriteString(probeEnd)
+	g.fnBuf.WriteString(", ")
+	g.fnBuf.WriteString(probeStart)
+	g.fnBuf.WriteByte('\n')
+	elGt0 := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(elGt0)
+	g.fnBuf.WriteString(" = icmp sgt i64 ")
+	g.fnBuf.WriteString(elapsed)
+	g.fnBuf.WriteString(", 0\n")
+	elClamp := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(elClamp)
+	g.fnBuf.WriteString(" = select i1 ")
+	g.fnBuf.WriteString(elGt0)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(elapsed)
+	g.fnBuf.WriteString(", i64 1\n")
+	prod := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(prod)
+	g.fnBuf.WriteString(" = mul i64 ")
+	g.fnBuf.WriteString(target)
+	g.fnBuf.WriteString(", 10\n")
+	est0 := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(est0)
+	g.fnBuf.WriteString(" = sdiv i64 ")
+	g.fnBuf.WriteString(prod)
+	g.fnBuf.WriteString(", ")
+	g.fnBuf.WriteString(elClamp)
+	g.fnBuf.WriteByte('\n')
+	est6 := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(est6)
+	g.fnBuf.WriteString(" = mul i64 ")
+	g.fnBuf.WriteString(est0)
+	g.fnBuf.WriteString(", 6\n")
+	est := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(est)
+	g.fnBuf.WriteString(" = sdiv i64 ")
+	g.fnBuf.WriteString(est6)
+	g.fnBuf.WriteString(", 5\n")
+	gt10 := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(gt10)
+	g.fnBuf.WriteString(" = icmp sgt i64 ")
+	g.fnBuf.WriteString(est)
+	g.fnBuf.WriteString(", 10\n")
+	estLo := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(estLo)
+	g.fnBuf.WriteString(" = select i1 ")
+	g.fnBuf.WriteString(gt10)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(est)
+	g.fnBuf.WriteString(", i64 10\n")
+	ltMax := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(ltMax)
+	g.fnBuf.WriteString(" = icmp slt i64 ")
+	g.fnBuf.WriteString(estLo)
+	g.fnBuf.WriteString(", 100000000\n")
+	estHi := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(estHi)
+	g.fnBuf.WriteString(" = select i1 ")
+	g.fnBuf.WriteString(ltMax)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(estLo)
+	g.fnBuf.WriteString(", i64 100000000\n")
+	g.fnBuf.WriteString("  store i64 ")
+	g.fnBuf.WriteString(estHi)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(nSlot)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString("  br label %")
+	g.fnBuf.WriteString(afterProbeLbl)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(afterProbeLbl)
+	g.fnBuf.WriteString(":\n")
+
+	nFinal := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(nFinal)
+	g.fnBuf.WriteString(" = load i64, ptr ")
+	g.fnBuf.WriteString(nSlot)
+	g.fnBuf.WriteByte('\n')
+
+	// Warmup: clamp(N/10, 1, 1000). Branch-predictor / cold-cache effects
+	// get amortized before the first timed sample.
+	warmDiv := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(warmDiv)
+	g.fnBuf.WriteString(" = sdiv i64 ")
+	g.fnBuf.WriteString(nFinal)
+	g.fnBuf.WriteString(", 10\n")
+	warmGe1 := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(warmGe1)
+	g.fnBuf.WriteString(" = icmp sgt i64 ")
+	g.fnBuf.WriteString(warmDiv)
+	g.fnBuf.WriteString(", 0\n")
+	warmLo := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(warmLo)
+	g.fnBuf.WriteString(" = select i1 ")
+	g.fnBuf.WriteString(warmGe1)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(warmDiv)
+	g.fnBuf.WriteString(", i64 1\n")
+	warmLt1k := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(warmLt1k)
+	g.fnBuf.WriteString(" = icmp slt i64 ")
+	g.fnBuf.WriteString(warmLo)
+	g.fnBuf.WriteString(", 1000\n")
+	warmCount := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(warmCount)
+	g.fnBuf.WriteString(" = select i1 ")
+	g.fnBuf.WriteString(warmLt1k)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(warmLo)
+	g.fnBuf.WriteString(", i64 1000\n")
+	emitCountedLoop("bench.warm", warmCount, false, "")
+
+	// Samples buffer + start clock for the timed region. With N <= 0 the
+	// runtime returns NULL and samples_record/report become no-ops.
+	samples := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(samples)
+	g.fnBuf.WriteString(" = call ptr @osty_rt_bench_samples_new(i64 ")
+	g.fnBuf.WriteString(nFinal)
+	g.fnBuf.WriteString(")\n")
+	runStart := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(runStart)
+	g.fnBuf.WriteString(" = call i64 @osty_rt_bench_now_nanos()\n")
+	emitCountedLoop("bench.run", nFinal, true, samples)
+	runEnd := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(runEnd)
+	g.fnBuf.WriteString(" = call i64 @osty_rt_bench_now_nanos()\n")
+	total := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(total)
+	g.fnBuf.WriteString(" = sub i64 ")
+	g.fnBuf.WriteString(runEnd)
+	g.fnBuf.WriteString(", ")
+	g.fnBuf.WriteString(runStart)
+	g.fnBuf.WriteByte('\n')
+	nz := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(nz)
+	g.fnBuf.WriteString(" = icmp sgt i64 ")
+	g.fnBuf.WriteString(nFinal)
+	g.fnBuf.WriteString(", 0\n")
+	// Guard the divisor so sdiv never sees a zero — select picks 1 when
+	// N is zero, producing avg=0 after the outer select.
+	safeDivisor := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(safeDivisor)
+	g.fnBuf.WriteString(" = select i1 ")
+	g.fnBuf.WriteString(nz)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(nFinal)
+	g.fnBuf.WriteString(", i64 1\n")
+	avgRaw := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(avgRaw)
+	g.fnBuf.WriteString(" = sdiv i64 ")
+	g.fnBuf.WriteString(total)
+	g.fnBuf.WriteString(", ")
+	g.fnBuf.WriteString(safeDivisor)
+	g.fnBuf.WriteByte('\n')
+	avg := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(avg)
+	g.fnBuf.WriteString(" = select i1 ")
+	g.fnBuf.WriteString(nz)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(avgRaw)
+	g.fnBuf.WriteString(", i64 0\n")
+	g.fnBuf.WriteString("  call void @osty_rt_bench_print_summary_v1(ptr ")
+	g.fnBuf.WriteString(labelSym)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(nFinal)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(total)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(avg)
+	g.fnBuf.WriteString(")\n")
+	g.fnBuf.WriteString("  call void @osty_rt_bench_samples_report(ptr ")
+	g.fnBuf.WriteString(samples)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(nFinal)
+	g.fnBuf.WriteString(")\n")
+	g.fnBuf.WriteString("  call void @osty_rt_bench_samples_free(ptr ")
+	g.fnBuf.WriteString(samples)
+	g.fnBuf.WriteString(")\n")
+
 	return g.storeUnitDestIfAny(c)
 }
 

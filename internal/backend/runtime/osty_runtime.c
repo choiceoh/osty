@@ -4670,6 +4670,32 @@ void osty_rt_bench_samples_free(int64_t *samples) {
     }
 }
 
+/* Summary line used by the MIR bench lowering. The shape matches the
+ * osty-vs-go scraper regex
+ *     `^bench\s+.+?\s+iter=\d+\s+total=\d+ns\s+avg=\d+ns`
+ * exactly so the harness can parse avg ns/op from the `.+?` label field. */
+void osty_rt_bench_print_summary_v1(const char *label, int64_t iter,
+                                    int64_t total_ns, int64_t avg_ns) {
+    if (label == NULL) {
+        label = "<bench>";
+    }
+    printf("bench %s iter=%lld total=%lldns avg=%lldns\n",
+           label, (long long)iter, (long long)total_ns, (long long)avg_ns);
+}
+
+/* Error-path exit used by the MIR bench lowering when a `?` inside the
+ * bench closure propagated an Err/None. The shape matches the legacy
+ * AST emitter's `benchQuestionFailMessage` so `--bench` golden tests
+ * don't have to case-split on which backend lowered the bench. */
+void osty_rt_bench_fail_question_v1(const char *label) {
+    if (label == NULL) {
+        label = "<bench>";
+    }
+    printf("bench `?` propagated failure at %s\n", label);
+    fflush(stdout);
+    exit(1);
+}
+
 /* Auto-tune target: the CLI sets OSTY_BENCH_TIME_NS when the user passes
  * `--benchtime <dur>`. A positive value switches the codegen path from
  * fixed-N to probe-and-estimate mode. 0 / unset means the user-declared
