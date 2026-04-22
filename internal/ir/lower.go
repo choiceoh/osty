@@ -1179,10 +1179,18 @@ func (l *lowerer) lowerExpr(e ast.Expr) Expr {
 	case *ast.FieldExpr:
 		return l.lowerFieldExpr(e)
 	case *ast.IndexExpr:
+		loweredX := l.lowerExpr(e.X)
+		loweredIndex := l.lowerExpr(e.Index)
+		t := l.exprType(e)
+		if t == ErrTypeVal {
+			if rec := recoverIndexType(loweredX); rec != ErrTypeVal {
+				t = rec
+			}
+		}
 		return &IndexExpr{
-			X:     l.lowerExpr(e.X),
-			Index: l.lowerExpr(e.Index),
-			T:     l.exprType(e),
+			X:     loweredX,
+			Index: loweredIndex,
+			T:     t,
 			SpanV: nodeSpan(e),
 		}
 	case *ast.StructLit:
@@ -1247,21 +1255,66 @@ func (l *lowerer) lowerStringLit(s *ast.StringLit) Expr {
 
 func (l *lowerer) lowerIdent(id *ast.Ident) Expr {
 	out := &Ident{Name: id.Name, SpanV: nodeSpan(id), T: ErrTypeVal}
+	var sym *resolve.Symbol
 	if l.res != nil {
-		if sym := l.res.Refs[id]; sym != nil {
-			out.Kind = identKind(sym)
+		if s := l.res.Refs[id]; s != nil {
+			sym = s
+			out.Kind = identKind(s)
 		}
 	}
 	if l.chk != nil {
 		if t := l.chk.Types[id]; t != nil {
 			out.T = l.fromCheckerType(t)
-		} else if sym := l.symbol(id); sym != nil {
+		} else if sym != nil {
 			if st := l.chk.SymTypes[sym]; st != nil {
 				out.T = l.fromCheckerType(st)
 			}
 		}
 	}
+	// Last-resort operand-based recovery: when neither the per-node
+	// Types map nor the SymTypes map covers this ident (the native
+	// checker skips expressions nested inside string interpolation
+	// parts, for instance), pull the declared type straight off the
+	// resolved symbol's declaration node. Today's callers only need
+	// the param / local-let shapes — the anchors that feed an
+	// IndexExpr inside a `"{xs[i]}"` interpolation — so we keep the
+	// match narrow and bail to ErrTypeVal for anything else, which
+	// preserves the pre-recovery cascade behaviour for unfamiliar
+	// decl forms.
+	if (out.T == nil || out.T == ErrTypeVal) && sym != nil {
+		if t := identTypeFromDecl(sym.Decl); t != nil {
+			out.T = l.lowerType(t)
+		}
+	}
 	return out
+}
+
+// identTypeFromDecl extracts the declared AST type from a symbol's
+// introducing declaration. Handles the subset of decl shapes that a
+// plain ident can resolve to: function / closure param (with or
+// without destructuring pattern), and an immutable / mutable `let`
+// binding carrying an explicit type annotation. Returns nil for
+// every other kind — the caller treats that as "no recovery
+// available" and leaves Ident.T at its prior value.
+func identTypeFromDecl(decl ast.Node) ast.Type {
+	switch d := decl.(type) {
+	case *ast.Param:
+		if d == nil {
+			return nil
+		}
+		return d.Type
+	case *ast.LetStmt:
+		if d == nil {
+			return nil
+		}
+		return d.Type
+	case *ast.LetDecl:
+		if d == nil {
+			return nil
+		}
+		return d.Type
+	}
+	return nil
 }
 
 func (l *lowerer) symbol(id *ast.Ident) *resolve.Symbol {
@@ -1394,6 +1447,56 @@ func recoverBinaryType(op BinOp, left, right Expr) Type {
 		}
 		if isIntegral(rt) {
 			return rt
+		}
+	}
+	return ErrTypeVal
+}
+
+// recoverIndexType derives an index expression's element type from
+// the base receiver's type when the checker did not populate
+// Types[e]. Mirrors the other operand-based recovery helpers
+// (recoverBinaryType / recoverBlockType / recoverCallReturnType)
+// and targets the concrete shapes `xs[i]` appears in across the
+// toolchain:
+//
+//   - List<T>[i]      → T    (direct element access, the dominant case)
+//   - Map<K, V>[k]    → V    (index form that panics on miss; matches
+//                              the native backend's intrinsic dispatch)
+//   - Bytes[i]        → Byte
+//   - String[i]       → Char (semantically a code-point read, though
+//                              real Osty source uses .chars() / .bytes()
+//                              and almost never String[i] directly)
+//
+// Returns ErrTypeVal when the base itself is un-typed or non-indexable
+// — leaving the cascade behaviour from before the recovery.
+func recoverIndexType(base Expr) Type {
+	if base == nil {
+		return ErrTypeVal
+	}
+	bt := base.Type()
+	if bt == nil || bt == ErrTypeVal {
+		return ErrTypeVal
+	}
+	switch t := bt.(type) {
+	case *NamedType:
+		if t.Builtin {
+			switch t.Name {
+			case "List":
+				if len(t.Args) == 1 && t.Args[0] != nil {
+					return t.Args[0]
+				}
+			case "Map":
+				if len(t.Args) == 2 && t.Args[1] != nil {
+					return t.Args[1]
+				}
+			}
+		}
+	case *PrimType:
+		switch t.Kind {
+		case PrimBytes:
+			return &PrimType{Kind: PrimByte}
+		case PrimString:
+			return &PrimType{Kind: PrimChar}
 		}
 	}
 	return ErrTypeVal
