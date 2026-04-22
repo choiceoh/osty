@@ -1293,7 +1293,7 @@ func printTable(rows []benchResult, baselineNs float64) {
 	header := []string{
 		"pair", "bench",
 		"go ns/op", "go ±CV", "osty ns/op", "osty ±CV", "ns osty/go",
-		"go B/op", "osty B/op",
+		"go B/op", "osty B/op", "B osty/go",
 		"go allocs/op",
 	}
 	lines := make([][]string, 0, len(rows))
@@ -1314,6 +1314,7 @@ func printTable(rows []benchResult, baselineNs float64) {
 			formatRatio(osDisplay, r.GoNs),
 			formatFloat(r.GoBytes, 0),
 			formatFloat(r.OsBytes, 0),
+			formatBytesRatio(r.OsBytes, r.GoBytes),
 			formatFloat(r.GoAllocs, 0),
 		})
 	}
@@ -1367,6 +1368,33 @@ func printTable(rows []benchResult, baselineNs float64) {
 	if n > 0 {
 		fmt.Printf("\ngeomean ns osty/go: %.2fx  (over %d benches)\n", math.Exp(logSum/float64(n)), n)
 	}
+
+	// Memory geomean: same structure as ns ratio, but we skip pairs
+	// where either side allocated zero bytes. A 0-alloc bench gives
+	// a 0/X or X/0 ratio that doesn't fold into a log geomean. Pairs
+	// where both sides are zero contribute no information either way.
+	var bytesLogSum float64
+	var bytesN int
+	var osTotalBytes, goTotalBytes float64
+	for _, r := range rows {
+		if r.Pair == baselinePairName {
+			continue
+		}
+		if math.IsNaN(r.GoBytes) || math.IsNaN(r.OsBytes) {
+			continue
+		}
+		osTotalBytes += r.OsBytes
+		goTotalBytes += r.GoBytes
+		if r.GoBytes > 0 && r.OsBytes > 0 {
+			bytesLogSum += math.Log(r.OsBytes / r.GoBytes)
+			bytesN++
+		}
+	}
+	if bytesN > 0 {
+		fmt.Printf("geomean B osty/go:  %.2fx  (over %d benches; sum %.0f vs %.0f bytes)\n",
+			math.Exp(bytesLogSum/float64(bytesN)), bytesN, osTotalBytes, goTotalBytes)
+	}
+
 	if baselineNs > 0 {
 		fmt.Printf("baseline subtracted: %.1fns per Osty iteration (from `baseline_empty` pair)\n", baselineNs)
 	}
@@ -1394,6 +1422,24 @@ func formatRatio(osNs, goNs float64) string {
 		return "—"
 	}
 	return fmt.Sprintf("%.2fx", osNs/goNs)
+}
+
+// formatBytesRatio renders osty_bytes/go_bytes. Separate from formatRatio
+// because `0 B/op` on Go side is a legitimate zero (not just missing
+// data) — a pair where neither side allocates should render "1.00x"
+// not "—". We only treat the ratio as missing when a side is literally
+// absent (NaN), which happens when a pair didn't run at all.
+func formatBytesRatio(osBytes, goBytes float64) string {
+	if math.IsNaN(osBytes) || math.IsNaN(goBytes) {
+		return "—"
+	}
+	if goBytes == 0 {
+		if osBytes == 0 {
+			return "1.00x"
+		}
+		return "∞"
+	}
+	return fmt.Sprintf("%.2fx", osBytes/goBytes)
 }
 
 // bestRun picks the history entry with the lowest composite score.

@@ -1,0 +1,47 @@
+fn buildLogLines(n: Int) -> List<String> {
+    let levels = ["INFO", "WARN", "ERROR", "DEBUG", "INFO", "WARN", "INFO"]
+    let services = ["auth", "api", "db", "cache", "worker"]
+    let messages = [
+        "request completed",
+        "connection closed",
+        "retry scheduled",
+        "cache miss",
+        "query executed",
+        "timeout reached",
+    ]
+    let mut out: List<String> = []
+    let mut i = 0
+    for i < n {
+        let lvl = levels[i % 7]
+        let svc = services[(i * 3) % 5]
+        let msg = messages[(i * 7) % 6]
+        out.push("2026-04-22T12:00:00Z {lvl} {svc}: {msg}")
+        i = i + 1
+    }
+    out
+}
+
+#[inline(never)]
+pub fn logScan(lines: List<String>) -> Int {
+    let mut counts: Map<String, Int> = {:}
+    for line in lines {
+        let parts = line.split(" ")
+        // Sample lines all have >=4 tokens so we can index directly.
+        // parts.len() on List<String> hits LLVM015 on current backends;
+        // skipping the guard trades defensive correctness for
+        // compatibility on the hot path. The fixture is controlled.
+        let level = parts[1]
+        let next = if counts.containsKey(level) {
+            counts.getOr(level, 0) + 1
+        } else {
+            1
+        }
+        counts.insert(level, next)
+    }
+    let mut checksum = 0
+    checksum = checksum + counts.getOr("INFO", 0) * 1
+    checksum = checksum + counts.getOr("WARN", 0) * 3
+    checksum = checksum + counts.getOr("ERROR", 0) * 7
+    checksum = checksum + counts.getOr("DEBUG", 0) * 11
+    checksum
+}

@@ -1,0 +1,10 @@
+use std.testing
+use std.hint
+
+fn benchFnvHash() {
+    let input = buildFnvInput(4096)
+    testing.benchmark(200, || {
+        let _ = hint.black_box(fnvHash(input))
+        Ok(())
+    })
+}
