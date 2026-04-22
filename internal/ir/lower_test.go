@@ -4,7 +4,10 @@ import (
 	"testing"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/check"
+	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 )
 
 func TestLowerClassifiesTopLevelLetRefsAsGlobal(t *testing.T) {
@@ -147,5 +150,144 @@ func TestLowerStatementMatchBecomesMatchStmt(t *testing.T) {
 	}
 	if got := len(stmt.Arms); got != 2 {
 		t.Fatalf("match arms = %d, want 2", got)
+	}
+}
+
+func TestLowerMethodCallRecoversDowncastOptionalType(t *testing.T) {
+	src := `interface Printable {
+    fn show(self) -> String
+}
+
+struct Note {
+    pub msg: String,
+
+    pub fn show(self) -> String {
+        self.msg
+    }
+}
+
+fn probe(p: Printable) -> Note? {
+    return p.downcast::<Note>()
+}
+`
+	file, parseDiags := parser.ParseDiagnostics([]byte(src))
+	if len(parseDiags) != 0 {
+		t.Fatalf("parse: %v", parseDiags)
+	}
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.File(file, res, check.Opts{
+		UseGolegacy:   true,
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+	})
+
+	probe, ok := file.Decls[len(file.Decls)-1].(*ast.FnDecl)
+	if !ok || probe == nil || probe.Body == nil {
+		t.Fatalf("probe decl = %T, want *ast.FnDecl with body", file.Decls[len(file.Decls)-1])
+	}
+	if len(probe.Body.Stmts) != 1 {
+		t.Fatalf("probe body stmts = %d, want 1", len(probe.Body.Stmts))
+	}
+	retStmt, ok := probe.Body.Stmts[0].(*ast.ReturnStmt)
+	if !ok || retStmt == nil {
+		t.Fatalf("probe stmt = %T, want *ast.ReturnStmt", probe.Body.Stmts[0])
+	}
+	call, ok := retStmt.Value.(*ast.CallExpr)
+	if !ok || call == nil {
+		t.Fatalf("probe return value = %T, want *ast.CallExpr", retStmt.Value)
+	}
+	delete(chk.Types, call)
+
+	mod, issues := Lower("main", file, res, chk)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+
+	var irProbe *FnDecl
+	for _, decl := range mod.Decls {
+		if fn, ok := decl.(*FnDecl); ok && fn.Name == "probe" {
+			irProbe = fn
+			break
+		}
+	}
+	if irProbe == nil || irProbe.Body == nil {
+		t.Fatal("lowered probe function missing body")
+	}
+	if len(irProbe.Body.Stmts) != 1 {
+		t.Fatalf("lowered probe stmts = %d, want 1", len(irProbe.Body.Stmts))
+	}
+	irRet, ok := irProbe.Body.Stmts[0].(*ReturnStmt)
+	if !ok || irRet == nil {
+		t.Fatalf("lowered probe stmt = %T, want *ReturnStmt", irProbe.Body.Stmts[0])
+	}
+	mc, ok := irRet.Value.(*MethodCall)
+	if !ok {
+		t.Fatalf("probe return value = %T, want *MethodCall", irRet.Value)
+	}
+	opt, ok := mc.T.(*OptionalType)
+	if !ok {
+		t.Fatalf("method call type = %T (%v), want *OptionalType", mc.T, mc.T)
+	}
+	named, ok := opt.Inner.(*NamedType)
+	if !ok {
+		t.Fatalf("optional inner = %T (%v), want *NamedType", opt.Inner, opt.Inner)
+	}
+	if named.Name != "Note" {
+		t.Fatalf("optional inner name = %q, want %q", named.Name, "Note")
+	}
+}
+
+func TestLowerUseDeclRecoversBuiltinGenericTypesWithoutResolverTypeRefs(t *testing.T) {
+	src := `use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+`
+	file, parseDiags := parser.ParseDiagnostics([]byte(src))
+	if len(parseDiags) != 0 {
+		t.Fatalf("parse: %v", parseDiags)
+	}
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.File(file, res, check.Opts{
+		UseGolegacy:   true,
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+	})
+
+	mod, issues := Lower("main", file, res, chk)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	if len(mod.Decls) != 1 {
+		t.Fatalf("decls = %d, want 1", len(mod.Decls))
+	}
+	use, ok := mod.Decls[0].(*UseDecl)
+	if !ok || use == nil {
+		t.Fatalf("decl = %T, want *UseDecl", mod.Decls[0])
+	}
+	if got, want := len(use.GoBody), 1; got != want {
+		t.Fatalf("use.GoBody len = %d, want %d", got, want)
+	}
+	fn, ok := use.GoBody[0].(*FnDecl)
+	if !ok || fn == nil {
+		t.Fatalf("use.GoBody[0] = %T, want *FnDecl", use.GoBody[0])
+	}
+	ret, ok := fn.Return.(*NamedType)
+	if !ok || ret == nil {
+		t.Fatalf("fn return = %T (%v), want *NamedType", fn.Return, fn.Return)
+	}
+	if !ret.Builtin || ret.Name != "List" {
+		t.Fatalf("fn return = %#v, want builtin List", ret)
+	}
+	if got, want := len(ret.Args), 1; got != want {
+		t.Fatalf("return args = %d, want %d", got, want)
+	}
+	if ret.Args[0] != TString {
+		t.Fatalf("return inner = %v, want TString", ret.Args[0])
 	}
 }

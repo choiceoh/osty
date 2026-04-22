@@ -176,15 +176,15 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 	unrollEnable, unrollCount := extractUnrollArgs(fn.Annotations)
 	noVec := hasNamedAnnotation(fn.Annotations, "no_vectorize")
 	out := &FnDecl{
-		Name:               fn.Name,
-		Return:             l.lowerType(fn.ReturnType),
-		ReceiverMut:        fn.Recv != nil && fn.Recv.Mut,
-		Exported:           fn.Pub,
-		SpanV:              nodeSpan(fn),
-		ExportSymbol:       extractExportSymbol(fn.Annotations),
-		CABI:               hasNamedAnnotation(fn.Annotations, "c_abi"),
-		IsIntrinsic:        hasNamedAnnotation(fn.Annotations, "intrinsic"),
-		NoAlloc:            hasNamedAnnotation(fn.Annotations, "no_alloc"),
+		Name:         fn.Name,
+		Return:       l.lowerType(fn.ReturnType),
+		ReceiverMut:  fn.Recv != nil && fn.Recv.Mut,
+		Exported:     fn.Pub,
+		SpanV:        nodeSpan(fn),
+		ExportSymbol: extractExportSymbol(fn.Annotations),
+		CABI:         hasNamedAnnotation(fn.Annotations, "c_abi"),
+		IsIntrinsic:  hasNamedAnnotation(fn.Annotations, "intrinsic"),
+		NoAlloc:      hasNamedAnnotation(fn.Annotations, "no_alloc"),
 		// v0.6 A5.2: vectorize is default-on. `#[no_vectorize]` is
 		// the sole way to opt out.
 		Vectorize:          !noVec,
@@ -704,6 +704,12 @@ func (l *lowerer) lowerNamedType(nt *ast.NamedType) Type {
 	}
 
 	// No resolver data available — best effort on the source name.
+	if pkg == "" {
+		switch name {
+		case "List", "Map", "Set", "Option", "Result":
+			return &NamedType{Package: "", Name: name, Args: args, Builtin: true}
+		}
+	}
 	return &NamedType{Package: pkg, Name: name, Args: args}
 }
 
@@ -1476,11 +1482,11 @@ func recoverBinaryType(op BinOp, left, right Expr) Type {
 //
 //   - List<T>[i]      → T    (direct element access, the dominant case)
 //   - Map<K, V>[k]    → V    (index form that panics on miss; matches
-//                              the native backend's intrinsic dispatch)
+//     the native backend's intrinsic dispatch)
 //   - Bytes[i]        → Byte
 //   - String[i]       → Char (semantically a code-point read, though
-//                              real Osty source uses .chars() / .bytes()
-//                              and almost never String[i] directly)
+//     real Osty source uses .chars() / .bytes()
+//     and almost never String[i] directly)
 //
 // Returns ErrTypeVal when the base itself is un-typed or non-indexable
 // — leaving the cascade behaviour from before the recovery.
@@ -1711,6 +1717,20 @@ func recoverCallReturnType(callee Expr) Type {
 	return ErrTypeVal
 }
 
+// recoverMethodCallType patches the one method-call shape that the
+// generic callee-return recovery cannot see: `recv.downcast::<T>()`.
+// The IR method form stores only the receiver + method name, so the
+// synthetic checker signature (`Error.downcast::<T>() -> T?`) is not
+// available as a first-class FnType on the lowered node. When the
+// checker/native-checker boundary drops the call's own type but still
+// records the turbofish args, recover the spec-mandated `T?` surface.
+func recoverMethodCallType(name string, typeArgs []Type) Type {
+	if name == "downcast" && len(typeArgs) == 1 && typeArgs[0] != nil && typeArgs[0] != ErrTypeVal {
+		return &OptionalType{Inner: typeArgs[0]}
+	}
+	return ErrTypeVal
+}
+
 // lowerArg lowers a single call argument, preserving its keyword name
 // when present.
 func (l *lowerer) lowerArg(a *ast.Arg) Arg {
@@ -1875,13 +1895,16 @@ func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs [
 	recv := l.lowerExpr(fx.X)
 	t := l.exprType(e)
 	if t == ErrTypeVal || t == nil {
+		if recovered := recoverMethodCallType(fx.Name, typeArgs); recovered != ErrTypeVal {
+			t = recovered
+		}
 		// Recover from builtin method signatures when the checker
 		// left the call type unpopulated. Covers the common shapes
 		// from List / Map / Set / String / Bytes: `.len()`, `.isEmpty()`,
 		// `.contains(x)`, `.startsWith(s)`, etc. Without this, one
 		// `.len()` call with a checker-skipped receiver poisons
 		// every enclosing expression to ErrType and blocks MIR.
-		if recovered := recoverMethodReturnType(fx.Name, recv); recovered != nil {
+		if recovered := recoverMethodReturnType(fx.Name, recv); (t == nil || t == ErrTypeVal) && recovered != nil {
 			t = recovered
 		}
 	}
@@ -2430,7 +2453,6 @@ func recoverMatchType(arms []*MatchArm) Type {
 	}
 	return candidate
 }
-
 
 // typesEquivalent is a narrow equality suitable for match-arm
 // unification. It's intentionally strict: primitive kinds must match

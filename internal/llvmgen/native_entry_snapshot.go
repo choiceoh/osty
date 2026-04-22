@@ -211,7 +211,8 @@ type llvmNativeModule struct {
 	// emit per-module post-processing surfaces (closure thunks,
 	// future batches). Not present in the Osty mirror — the
 	// snapshot regen script drops unknown fields anyway.
-	projectionCtx *nativeProjectionCtx
+	projectionCtx     *nativeProjectionCtx
+	extraRuntimeDecls []string
 }
 
 type llvmNativeRenderedFunction struct {
@@ -309,6 +310,7 @@ func llvmNativeRuntimeDeclarations(mod *llvmNativeModule) []string {
 	if mod.needsStringRuntime {
 		out = append(out, llvmStringRuntimeDeclarations()...)
 	}
+	out = append(out, mod.extraRuntimeDecls...)
 	return out
 }
 

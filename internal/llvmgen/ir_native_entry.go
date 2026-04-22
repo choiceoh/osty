@@ -38,8 +38,8 @@ type nativeEnumVariantInfo struct {
 // can route variant construction and pattern matches back to the
 // same storage.
 type nativeEnumInfo struct {
-	def             *llvmNativeEnum
-	variantsByName  map[string]*nativeEnumVariantInfo
+	def            *llvmNativeEnum
+	variantsByName map[string]*nativeEnumVariantInfo
 }
 
 type nativeTupleInfo struct {
@@ -51,25 +51,25 @@ type nativeTupleInfo struct {
 // captures. `liftedName` is the synthesized top-level fn
 // (`@__osty_closure_<N>`); `thunkName` is its env-ABI trampoline
 // (`@__osty_closure_thunk_<liftedName>`). Capture params are
-// appended after the original closure params on the lifted fn —
+// appended after the original closure params on the lifted fn -
 // the thunk loads them from env slots and forwards everything.
 //
 // Env layout: `ptr` fn slot at offset 0, `ptr` GC-trace slot at
 // offset 8, captures in declaration order at offset 16 + i*8 (each
 // capture occupies one 8-byte slot, even when the LLVM type is
-// smaller — matches legacy emit).
+// smaller - matches legacy emit).
 type nativeClosureInfo struct {
-	id            int
-	liftedName    string
-	thunkName     string
-	paramNames    []string
-	paramLLVMs    []string
-	captureNames  []string
-	captureLLVMs  []string
-	returnLLVM    string
-	body          *ostyir.Block
-	params        []*ostyir.Param
-	returnIR      ostyir.Type
+	id           int
+	liftedName   string
+	thunkName    string
+	paramNames   []string
+	paramLLVMs   []string
+	captureNames []string
+	captureLLVMs []string
+	returnLLVM   string
+	body         *ostyir.Block
+	params       []*ostyir.Param
+	returnIR     ostyir.Type
 }
 
 // nativeResultInfo records one specialization of the built-in
@@ -86,6 +86,17 @@ type nativeResultInfo struct {
 	llvmType  string
 	okIRType  ostyir.Type
 	errIRType ostyir.Type
+	okType    string
+	errType   string
+	okIR      ostyir.Type
+	errIR     ostyir.Type
+}
+
+type nativeRuntimeFFIFunction struct {
+	path     string
+	symbol   string
+	retType  string
+	paramTys []string
 }
 
 // nativeInterfaceMethod captures a single interface method's
@@ -129,11 +140,12 @@ type nativeProjectionCtx struct {
 	structsByName         map[string]*nativeStructInfo
 	enumsByName           map[string]*nativeEnumInfo
 	interfacesByName      map[string]*nativeInterfaceInfo
+	resultsByName         map[string]*nativeResultInfo
+	resultsByLLVMType     map[string]*nativeResultInfo
 	interfaceOrder        []string // declaration order for deterministic emission
 	structOrder           []string // declaration order for deterministic emission
 	tuplesByLLVMType      map[string]*nativeTupleInfo
 	tupleOrder            []string
-	resultsByLLVMType     map[string]*nativeResultInfo
 	resultOrder           []string
 	closures              map[*ostyir.Closure]*nativeClosureInfo
 	closuresByID          []*nativeClosureInfo
@@ -142,6 +154,10 @@ type nativeProjectionCtx struct {
 	methodsByOwner        map[string]map[string]nativeMethodInfo
 	globalConsts          map[string]nativeConstValue
 	mutableGlobals        map[string]bool
+	runtimeFFI            map[string]map[string]*nativeRuntimeFFIFunction
+	testingAliases        map[string]bool
+	runtimeDecls          []string
+	runtimeDeclSet        map[string]bool
 	scopes                []map[string]nativeExprInfo
 	needsListRT           bool
 	needsMapRT            bool
@@ -150,6 +166,8 @@ type nativeProjectionCtx struct {
 	stringGlobals         []*LlvmStringGlobal
 	nextStringID          int
 	currentReturnLLVMType string
+	sourcePath            string
+	source                []byte
 	// tempCounter mints monotone fresh names for synthetic locals
 	// spilled from one-to-many statement expansions (e.g. tuple
 	// destructuring, for-in over a list). The name prefix is
@@ -235,6 +253,20 @@ func (ctx *nativeProjectionCtx) lookupScopeName(name string) (nativeExprInfo, bo
 	return nativeExprInfo{}, false
 }
 
+func (ctx *nativeProjectionCtx) addRuntimeDecl(decl string) {
+	if ctx == nil || decl == "" {
+		return
+	}
+	if ctx.runtimeDeclSet == nil {
+		ctx.runtimeDeclSet = map[string]bool{}
+	}
+	if ctx.runtimeDeclSet[decl] {
+		return
+	}
+	ctx.runtimeDeclSet[decl] = true
+	ctx.runtimeDecls = append(ctx.runtimeDecls, decl)
+}
+
 type nativeMethodInfo struct {
 	irName      string
 	receiverMut bool
@@ -286,12 +318,18 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 		structsByName:     map[string]*nativeStructInfo{},
 		enumsByName:       map[string]*nativeEnumInfo{},
 		interfacesByName:  map[string]*nativeInterfaceInfo{},
-		tuplesByLLVMType:  map[string]*nativeTupleInfo{},
+		resultsByName:     map[string]*nativeResultInfo{},
 		resultsByLLVMType: map[string]*nativeResultInfo{},
+		tuplesByLLVMType:  map[string]*nativeTupleInfo{},
 		closures:          map[*ostyir.Closure]*nativeClosureInfo{},
 		methodsByOwner:    map[string]map[string]nativeMethodInfo{},
 		globalConsts:      map[string]nativeConstValue{},
 		mutableGlobals:    map[string]bool{},
+		runtimeFFI:        map[string]map[string]*nativeRuntimeFFIFunction{},
+		testingAliases:    map[string]bool{},
+		runtimeDeclSet:    map[string]bool{},
+		sourcePath:        firstNonEmpty(opts.SourcePath, "<unknown>"),
+		source:            append([]byte(nil), opts.Source...),
 	}
 	out := &llvmNativeModule{
 		sourcePath:    firstNonEmpty(opts.SourcePath, "<unknown>"),
@@ -308,8 +346,17 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 		case nil:
 			continue
 		case *ostyir.UseDecl:
-			if d.IsFFI() {
+			if d.IsGoFFI {
 				return nil, false
+			}
+			if d.IsRuntimeFFI {
+				if !llvmIsKnownRuntimeFfiPath(d.RuntimePath) || !nativeRegisterRuntimeFFIUse(ctx, d) {
+					return nil, false
+				}
+				continue
+			}
+			if nativeIsStdTestingUse(d) {
+				ctx.testingAliases[nativeUseAlias(d)] = true
 			}
 		case *ostyir.StructDecl:
 			info, ok := nativeRegisterStructDecl(d)
@@ -347,6 +394,12 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 			ctx.interfaceOrder = append(ctx.interfaceOrder, d.Name)
 		case *ostyir.EnumDecl:
 			if d == nil {
+				continue
+			}
+			if d.BuiltinSource == "Result" {
+				if _, ok := nativeRegisterBuiltinResultDecl(ctx, d); !ok {
+					return nil, false
+				}
 				continue
 			}
 			// Generic templates survive monomorphization alongside
@@ -398,6 +451,9 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 				out.functions = append(out.functions, fn)
 			}
 		case *ostyir.EnumDecl:
+			if d.BuiltinSource == "Result" {
+				continue
+			}
 			// Enum declarations are fully projected during the
 			// registration phase above; nothing to populate here.
 			// The explicit case keeps enum decls from falling into
@@ -464,6 +520,7 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 	out.needsSetRuntime = ctx.needsSetRT
 	out.needsStringRuntime = ctx.needsStringRT
 	out.projectionCtx = ctx
+	out.extraRuntimeDecls = append(out.extraRuntimeDecls, ctx.runtimeDecls...)
 	return out, true
 }
 
@@ -530,7 +587,7 @@ func collectNativeInterfaceImpls(mod *ostyir.Module) []nativeInterfaceImpl {
 		interfacesByName:  map[string]*nativeInterfaceInfo{},
 		tuplesByLLVMType:  map[string]*nativeTupleInfo{},
 		resultsByLLVMType: map[string]*nativeResultInfo{},
-		methodsByOwner:   map[string]map[string]nativeMethodInfo{},
+		methodsByOwner:    map[string]map[string]nativeMethodInfo{},
 	}
 	structOrder := make([]string, 0)
 	structDecls := map[string]*ostyir.StructDecl{}
@@ -925,6 +982,147 @@ func sortedStringKeys[V any](m map[string]V) []string {
 	return out
 }
 
+func nativeUseAlias(use *ostyir.UseDecl) string {
+	if use == nil {
+		return ""
+	}
+	if use.Alias != "" {
+		return use.Alias
+	}
+	if n := len(use.Path); n != 0 {
+		return use.Path[n-1]
+	}
+	return ""
+}
+
+func nativeIsStdTestingUse(use *ostyir.UseDecl) bool {
+	return use != nil && !use.IsFFI() && len(use.Path) == 2 && use.Path[0] == "std" && use.Path[1] == "testing"
+}
+
+func nativeRegisterRuntimeFFIUse(ctx *nativeProjectionCtx, use *ostyir.UseDecl) bool {
+	if ctx == nil || use == nil || !use.IsRuntimeFFI {
+		return false
+	}
+	alias := nativeUseAlias(use)
+	if alias == "" {
+		return false
+	}
+	funcs := ctx.runtimeFFI[alias]
+	if funcs == nil {
+		funcs = map[string]*nativeRuntimeFFIFunction{}
+		ctx.runtimeFFI[alias] = funcs
+	}
+	for _, decl := range use.GoBody {
+		fn, ok := decl.(*ostyir.FnDecl)
+		if !ok || fn == nil || fn.Name == "" || fn.ReceiverMut || len(fn.Generics) != 0 {
+			continue
+		}
+		retType, ok := nativeLLVMTypeFromIR(ctx, fn.Return)
+		if !ok {
+			return false
+		}
+		sig := &nativeRuntimeFFIFunction{
+			path:     use.RuntimePath,
+			symbol:   llvmRuntimeFfiSymbol(use.RuntimePath, fn.Name),
+			retType:  retType,
+			paramTys: make([]string, 0, len(fn.Params)),
+		}
+		for _, param := range fn.Params {
+			if param == nil || param.IsDestructured() || param.Default != nil {
+				return false
+			}
+			typ, ok := nativeLLVMTypeFromIR(ctx, param.Type)
+			if !ok || typ == "void" {
+				return false
+			}
+			sig.paramTys = append(sig.paramTys, typ)
+		}
+		funcs[fn.Name] = sig
+	}
+	return true
+}
+
+func nativeRegisterBuiltinResultDecl(ctx *nativeProjectionCtx, decl *ostyir.EnumDecl) (*nativeResultInfo, bool) {
+	if ctx == nil || decl == nil || decl.BuiltinSource != "Result" || len(decl.BuiltinSourceArgs) != 2 {
+		return nil, false
+	}
+	return nativeRegisterBuiltinResultType(ctx, decl.Name, decl.BuiltinSourceArgs[0], decl.BuiltinSourceArgs[1])
+}
+
+func nativeRegisterBuiltinResultType(ctx *nativeProjectionCtx, name string, okIR, errIR ostyir.Type) (*nativeResultInfo, bool) {
+	if ctx == nil || okIR == nil || errIR == nil {
+		return nil, false
+	}
+	okType, ok := nativeLLVMTypeFromIR(ctx, okIR)
+	if !ok || okType == "void" {
+		return nil, false
+	}
+	errType, ok := nativeLLVMTypeFromIR(ctx, errIR)
+	if !ok || errType == "void" {
+		return nil, false
+	}
+	llvmType := llvmResultTypeName(okType, errType)
+	if info := ctx.resultsByLLVMType[llvmType]; info != nil {
+		if info.okType == "" {
+			info.okType = okType
+			info.errType = errType
+			info.okIR = okIR
+			info.errIR = errIR
+		}
+		if info.okLLVM == "" {
+			info.okLLVM = okType
+			info.errLLVM = errType
+			info.llvmType = llvmType
+			info.okIRType = okIR
+			info.errIRType = errIR
+		}
+		if name != "" {
+			ctx.resultsByName[name] = info
+		}
+		return info, true
+	}
+	if name == "" {
+		name = strings.TrimPrefix(llvmType, "%")
+	}
+	info := &nativeResultInfo{
+		def: &llvmNativeStruct{
+			name:     name,
+			llvmType: llvmType,
+			fields: []*llvmNativeStructField{
+				{name: "disc", llvmType: "i64"},
+				{name: "ok", llvmType: okType},
+				{name: "err", llvmType: errType},
+			},
+		},
+		okLLVM:    okType,
+		errLLVM:   errType,
+		llvmType:  llvmType,
+		okIRType:  okIR,
+		errIRType: errIR,
+		okType:    okType,
+		errType:   errType,
+		okIR:      okIR,
+		errIR:     errIR,
+	}
+	ctx.resultsByName[name] = info
+	ctx.resultsByLLVMType[llvmType] = info
+	ctx.resultOrder = append(ctx.resultOrder, llvmType)
+	return info, true
+}
+
+func nativeResultInfoFromType(ctx *nativeProjectionCtx, t ostyir.Type) (*nativeResultInfo, bool) {
+	named, ok := t.(*ostyir.NamedType)
+	if !ok || named == nil {
+		return nil, false
+	}
+	if named.Builtin && named.Name == "Result" && len(named.Args) == 2 {
+		info, ok := nativeRegisterBuiltinResultType(ctx, "", named.Args[0], named.Args[1])
+		return info, ok
+	}
+	info := ctx.resultsByName[named.Name]
+	return info, info != nil
+}
+
 // nativeRegisterInterfaceDecl captures a non-generic interface's
 // method shape set. Each method signature is reduced to its
 // LLVM-level return + non-self parameter types so the finalization
@@ -1316,10 +1514,13 @@ func nativeBlockFromStmts(ctx *nativeProjectionCtx, stmts []ostyir.Stmt, fnRetur
 func nativeStmtsFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType string) ([]*llvmNativeStmt, bool) {
 	switch s := stmt.(type) {
 	case *ostyir.LetStmt:
+		if testing, ok := nativeTestingExpectLetStmts(ctx, s); ok {
+			return testing, true
+		}
 		switch s.Pattern.(type) {
 		case *ostyir.TuplePat:
 			return nativeLetTupleDestructureStmts(ctx, s)
-		case *ostyir.StructPat:
+		case *ostyir.StructPat, *ostyir.BindingPat:
 			return nativeLetStructDestructureStmts(ctx, s)
 		}
 	case *ostyir.ForStmt:
@@ -1524,20 +1725,129 @@ func nativeLetTupleDestructureStmts(ctx *nativeProjectionCtx, s *ostyir.LetStmt)
 	return out, true
 }
 
-// nativeLetStructDestructureStmts lowers
-// `let Foo { name, age, .. } = rhs` (and the rename shorthand
-// `let Foo { name: n, age }`) into a sequence of native `let`s —
-// one optional spill for the RHS, one per named field. Only
-// plain-ident field bindings are covered; nested sub-patterns,
-// wildcards, and mut bindings defer to the legacy bridge. The
-// pattern must name every field the emitted destructure extracts;
-// `Rest = true` (trailing `..`) is fine and means the struct has
-// more fields we don't read.
+func nativeBindScopedName(ctx *nativeProjectionCtx, name string, irType ostyir.Type, llvmType string) {
+	if ctx == nil || name == "" {
+		return
+	}
+	if info, ok := nativeExprInfoFromType(ctx, irType); ok {
+		ctx.bindScopeName(name, info)
+		return
+	}
+	ctx.bindScopeName(name, nativeExprInfoFromLLVMType(llvmType))
+}
+
+func nativeUnwrapStructPattern(p ostyir.Pattern, aliases *[]string) (*ostyir.StructPat, bool) {
+	switch pat := p.(type) {
+	case *ostyir.StructPat:
+		return pat, pat != nil
+	case *ostyir.BindingPat:
+		if pat == nil || pat.Name == "" {
+			return nil, false
+		}
+		*aliases = append(*aliases, pat.Name)
+		return nativeUnwrapStructPattern(pat.Pattern, aliases)
+	default:
+		return nil, false
+	}
+}
+
+func nativeStructPatternBindings(
+	ctx *nativeProjectionCtx,
+	pat *ostyir.StructPat,
+	baseName string,
+	info *nativeStructInfo,
+	baseType ostyir.Type,
+) ([]*llvmNativeStmt, bool) {
+	if ctx == nil || pat == nil || baseName == "" || info == nil {
+		return nil, false
+	}
+	out := make([]*llvmNativeStmt, 0, len(pat.Fields))
+	for _, f := range pat.Fields {
+		if f.Name == "" {
+			return nil, false
+		}
+		structField, ok := info.byName[f.Name]
+		if !ok {
+			return nil, false
+		}
+		base := &llvmNativeExpr{kind: llvmNativeExprIdent, llvmType: info.def.llvmType, name: baseName}
+		fieldExpr := &llvmNativeExpr{
+			kind:       llvmNativeExprField,
+			llvmType:   structField.llvmType,
+			fieldIndex: structField.index,
+			childExprs: []*llvmNativeExpr{base},
+		}
+		switch sub := f.Pattern.(type) {
+		case nil:
+			out = append(out, &llvmNativeStmt{
+				kind:       llvmNativeStmtLet,
+				name:       f.Name,
+				childExprs: []*llvmNativeExpr{fieldExpr},
+			})
+			nativeBindScopedName(ctx, f.Name, structField.irType, structField.llvmType)
+		case *ostyir.IdentPat:
+			if sub == nil || sub.Name == "" || sub.Mut {
+				return nil, false
+			}
+			out = append(out, &llvmNativeStmt{
+				kind:       llvmNativeStmtLet,
+				name:       sub.Name,
+				childExprs: []*llvmNativeExpr{fieldExpr},
+			})
+			nativeBindScopedName(ctx, sub.Name, structField.irType, structField.llvmType)
+		case *ostyir.BindingPat, *ostyir.StructPat:
+			nestedAliases := []string{}
+			nestedPat, ok := nativeUnwrapStructPattern(sub, &nestedAliases)
+			if !ok {
+				return nil, false
+			}
+			nestedInfo, ok := nativeStructInfoFromType(ctx, structField.irType)
+			if !ok && nestedPat.TypeName != "" {
+				nestedInfo = ctx.structsByName[nestedPat.TypeName]
+				ok = nestedInfo != nil
+			}
+			if !ok || nestedInfo == nil {
+				return nil, false
+			}
+			tempName := ctx.freshTempName("__osty_native_s")
+			out = append(out, &llvmNativeStmt{
+				kind:       llvmNativeStmtLet,
+				name:       tempName,
+				childExprs: []*llvmNativeExpr{fieldExpr},
+			})
+			nativeBindScopedName(ctx, tempName, structField.irType, structField.llvmType)
+			tempIdent := &llvmNativeExpr{kind: llvmNativeExprIdent, llvmType: structField.llvmType, name: tempName}
+			for _, alias := range nestedAliases {
+				out = append(out, &llvmNativeStmt{
+					kind:       llvmNativeStmtLet,
+					name:       alias,
+					childExprs: []*llvmNativeExpr{tempIdent},
+				})
+				nativeBindScopedName(ctx, alias, structField.irType, structField.llvmType)
+			}
+			nested, ok := nativeStructPatternBindings(ctx, nestedPat, tempName, nestedInfo, structField.irType)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, nested...)
+		default:
+			return nil, false
+		}
+	}
+	return out, true
+}
+
+// nativeLetStructDestructureStmts lowers struct-shaped let patterns,
+// including `binding @ Foo { ... }` and nested struct sub-patterns.
+// Complex leaves still defer to the legacy bridge; covered leaves are
+// shorthand binds, explicit ident binds, and nested struct/binding
+// patterns.
 func nativeLetStructDestructureStmts(ctx *nativeProjectionCtx, s *ostyir.LetStmt) ([]*llvmNativeStmt, bool) {
 	if ctx == nil || s == nil || s.Value == nil {
 		return nil, false
 	}
-	pat, ok := s.Pattern.(*ostyir.StructPat)
+	rootAliases := []string{}
+	pat, ok := nativeUnwrapStructPattern(s.Pattern, &rootAliases)
 	if !ok || pat == nil {
 		return nil, false
 	}
@@ -1549,46 +1859,12 @@ func nativeLetStructDestructureStmts(ctx *nativeProjectionCtx, s *ostyir.LetStmt
 	if !ok || info == nil {
 		return nil, false
 	}
-	// Resolve each pattern field to a bare binder name and the
-	// struct field it maps to. Field-level shorthand (`{ name }`)
-	// binds to a local with the same name; `name: n` binds to `n`.
-	type binding struct {
-		binderName string
-		fieldIdx   int
-		fieldLLVM  string
-	}
-	bindings := make([]binding, 0, len(pat.Fields))
-	for _, f := range pat.Fields {
-		if f.Name == "" {
-			return nil, false
-		}
-		structField, ok := info.byName[f.Name]
-		if !ok {
-			return nil, false
-		}
-		binderName := f.Name
-		if f.Pattern != nil {
-			id, ok := f.Pattern.(*ostyir.IdentPat)
-			if !ok || id == nil || id.Name == "" || id.Mut {
-				return nil, false
-			}
-			binderName = id.Name
-		}
-		bindings = append(bindings, binding{
-			binderName: binderName,
-			fieldIdx:   structField.index,
-			fieldLLVM:  structField.llvmType,
-		})
-	}
 	value, ok := nativeExprFromIR(ctx, s.Value)
-	if !ok {
+	if !ok || value.llvmType != info.def.llvmType {
 		return nil, false
 	}
-	if value.llvmType != info.def.llvmType {
-		return nil, false
-	}
-	out := make([]*llvmNativeStmt, 0, len(bindings)+1)
-	var baseName string
+	out := make([]*llvmNativeStmt, 0, len(pat.Fields)+1+len(rootAliases))
+	baseName := ""
 	if value.kind == llvmNativeExprIdent && value.name != "" {
 		baseName = value.name
 	} else {
@@ -1598,28 +1874,306 @@ func nativeLetStructDestructureStmts(ctx *nativeProjectionCtx, s *ostyir.LetStmt
 			name:       baseName,
 			childExprs: []*llvmNativeExpr{value},
 		})
-		ctx.bindScopeName(baseName, nativeExprInfoFromLLVMType(info.def.llvmType))
+		nativeBindScopedName(ctx, baseName, s.Value.Type(), info.def.llvmType)
 	}
-	for _, b := range bindings {
-		base := &llvmNativeExpr{
-			kind:     llvmNativeExprIdent,
-			llvmType: info.def.llvmType,
-			name:     baseName,
-		}
-		field := &llvmNativeExpr{
-			kind:       llvmNativeExprField,
-			llvmType:   b.fieldLLVM,
-			fieldIndex: b.fieldIdx,
-			childExprs: []*llvmNativeExpr{base},
-		}
+	baseIdent := &llvmNativeExpr{kind: llvmNativeExprIdent, llvmType: info.def.llvmType, name: baseName}
+	for _, alias := range rootAliases {
 		out = append(out, &llvmNativeStmt{
 			kind:       llvmNativeStmtLet,
-			name:       b.binderName,
-			childExprs: []*llvmNativeExpr{field},
+			name:       alias,
+			childExprs: []*llvmNativeExpr{baseIdent},
 		})
-		ctx.bindScopeName(b.binderName, nativeExprInfoFromLLVMType(b.fieldLLVM))
+		nativeBindScopedName(ctx, alias, s.Value.Type(), info.def.llvmType)
 	}
+	fields, ok := nativeStructPatternBindings(ctx, pat, baseName, info, s.Value.Type())
+	if !ok {
+		return nil, false
+	}
+	out = append(out, fields...)
 	return out, true
+}
+
+func nativeTestingCallMethod(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (string, bool) {
+	alias, name, ok := nativeQualifiedAliasCall(call)
+	if !ok || ctx == nil || !ctx.testingAliases[alias] {
+		return "", false
+	}
+	return name, true
+}
+
+func nativeSourceSpanText(ctx *nativeProjectionCtx, n ostyir.Node) string {
+	if ctx == nil || n == nil || len(ctx.source) == 0 {
+		return ""
+	}
+	span := n.At()
+	start, end := span.Start.Offset, span.End.Offset
+	if start < 0 || end < start || end > len(ctx.source) {
+		return ""
+	}
+	return strings.TrimSpace(string(ctx.source[start:end]))
+}
+
+func nativeTestingFailureMessage(ctx *nativeProjectionCtx, method string, n ostyir.Node, exprText string) string {
+	label := firstNonEmpty(ctx.sourcePath, "<test>")
+	if n != nil && n.At().Start.Line > 0 {
+		label = fmt.Sprintf("%s:%d", label, n.At().Start.Line)
+	}
+	msg := fmt.Sprintf("testing.%s failed at %s", method, label)
+	if exprText != "" && (method == "expectOk" || method == "expectError") {
+		msg += fmt.Sprintf("; expr=`%s`", exprText)
+	}
+	return msg
+}
+
+func nativeTestingFailureBlock(ctx *nativeProjectionCtx, message string) *llvmNativeBlock {
+	ctx.addRuntimeDecl("declare void @exit(i32)")
+	return &llvmNativeBlock{
+		stmts: []*llvmNativeStmt{
+			{
+				kind: llvmNativeStmtExpr,
+				childExprs: []*llvmNativeExpr{{
+					kind:       llvmNativeExprPrintln,
+					llvmType:   "void",
+					childExprs: []*llvmNativeExpr{nativeStringLiteralExpr(message)},
+				}},
+			},
+			{
+				kind: llvmNativeStmtExpr,
+				childExprs: []*llvmNativeExpr{{
+					kind:     llvmNativeExprCall,
+					llvmType: "void",
+					name:     "exit",
+					childExprs: []*llvmNativeExpr{{
+						kind:     llvmNativeExprInt,
+						llvmType: "i32",
+						text:     "1",
+					}},
+				}},
+			},
+		},
+	}
+}
+
+func nativeTestingFailureValueBlock(ctx *nativeProjectionCtx, message string, llvmType string) *llvmNativeBlock {
+	block := nativeTestingFailureBlock(ctx, message)
+	if block == nil {
+		return nil
+	}
+	block.hasResult = true
+	block.result = nativeZeroExprForLLVMType(llvmType)
+	return block
+}
+
+func nativeTestingResultExprFromIR(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (*llvmNativeExpr, bool) {
+	method, ok := nativeTestingCallMethod(ctx, call)
+	if !ok || (method != "expectOk" && method != "expectError") {
+		return nil, false
+	}
+	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
+		return nil, false
+	}
+	resultInfo, ok := nativeResultInfoFromType(ctx, call.Args[0].Value.Type())
+	if !ok {
+		return nil, false
+	}
+	resultExpr, ok := nativeExprFromIR(ctx, call.Args[0].Value)
+	if !ok || resultExpr.llvmType != resultInfo.def.llvmType {
+		return nil, false
+	}
+	wantTag := "0"
+	payloadIndex := 1
+	payloadType := resultInfo.okType
+	if method == "expectError" {
+		wantTag = "1"
+		payloadIndex = 2
+		payloadType = resultInfo.errType
+	}
+	cond := &llvmNativeExpr{
+		kind:     llvmNativeExprBinary,
+		llvmType: "i1",
+		op:       "==",
+		childExprs: []*llvmNativeExpr{
+			{kind: llvmNativeExprField, llvmType: "i64", fieldIndex: 0, childExprs: []*llvmNativeExpr{resultExpr}},
+			{kind: llvmNativeExprInt, llvmType: "i64", text: wantTag},
+		},
+	}
+	payload := &llvmNativeExpr{
+		kind:       llvmNativeExprField,
+		llvmType:   payloadType,
+		fieldIndex: payloadIndex,
+		childExprs: []*llvmNativeExpr{resultExpr},
+	}
+	return &llvmNativeExpr{
+		kind:     llvmNativeExprIf,
+		llvmType: payloadType,
+		childExprs: []*llvmNativeExpr{
+			cond,
+		},
+		childBlocks: []*llvmNativeBlock{
+			{hasResult: true, result: payload},
+			nativeTestingFailureValueBlock(ctx, nativeTestingFailureMessage(ctx, method, call, nativeSourceSpanText(ctx, call.Args[0].Value)), payloadType),
+		},
+	}, true
+}
+
+func nativeTestingExpectLetStmts(ctx *nativeProjectionCtx, s *ostyir.LetStmt) ([]*llvmNativeStmt, bool) {
+	if ctx == nil || s == nil || s.Pattern != nil || s.Value == nil {
+		return nil, false
+	}
+	call, ok := s.Value.(*ostyir.CallExpr)
+	if !ok {
+		return nil, false
+	}
+	method, ok := nativeTestingCallMethod(ctx, call)
+	if !ok || (method != "expectOk" && method != "expectError") {
+		return nil, false
+	}
+	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
+		return nil, false
+	}
+	resultInfo, ok := nativeResultInfoFromType(ctx, call.Args[0].Value.Type())
+	if !ok {
+		return nil, false
+	}
+	resultExpr, ok := nativeExprFromIR(ctx, call.Args[0].Value)
+	if !ok || resultExpr.llvmType != resultInfo.def.llvmType {
+		return nil, false
+	}
+	tempName := ctx.freshTempName("__osty_native_result")
+	out := []*llvmNativeStmt{{
+		kind:       llvmNativeStmtLet,
+		name:       tempName,
+		childExprs: []*llvmNativeExpr{resultExpr},
+	}}
+	nativeBindScopedName(ctx, tempName, call.Args[0].Value.Type(), resultInfo.def.llvmType)
+	wantTag := "0"
+	payloadIndex := 1
+	payloadType := resultInfo.okType
+	payloadIR := resultInfo.okIR
+	if method == "expectError" {
+		wantTag = "1"
+		payloadIndex = 2
+		payloadType = resultInfo.errType
+		payloadIR = resultInfo.errIR
+	}
+	tempIdent := &llvmNativeExpr{kind: llvmNativeExprIdent, llvmType: resultInfo.def.llvmType, name: tempName}
+	cond := &llvmNativeExpr{
+		kind:     llvmNativeExprBinary,
+		llvmType: "i1",
+		op:       "==",
+		childExprs: []*llvmNativeExpr{
+			{kind: llvmNativeExprField, llvmType: "i64", fieldIndex: 0, childExprs: []*llvmNativeExpr{tempIdent}},
+			{kind: llvmNativeExprInt, llvmType: "i64", text: wantTag},
+		},
+	}
+	out = append(out, &llvmNativeStmt{
+		kind:       llvmNativeStmtIf,
+		childExprs: []*llvmNativeExpr{cond},
+		childBlocks: []*llvmNativeBlock{
+			{},
+			nativeTestingFailureBlock(ctx, nativeTestingFailureMessage(ctx, method, call, nativeSourceSpanText(ctx, call.Args[0].Value))),
+		},
+	})
+	payload := &llvmNativeExpr{
+		kind:       llvmNativeExprField,
+		llvmType:   payloadType,
+		fieldIndex: payloadIndex,
+		childExprs: []*llvmNativeExpr{tempIdent},
+	}
+	kind := llvmNativeStmtLet
+	if s.Mut {
+		kind = llvmNativeStmtMutLet
+	}
+	out = append(out, &llvmNativeStmt{
+		kind:       kind,
+		name:       s.Name,
+		childExprs: []*llvmNativeExpr{payload},
+	})
+	nativeBindScopedName(ctx, s.Name, firstNonNilType(s.Type, payloadIR), payloadType)
+	return out, true
+}
+
+func nativeTestingCallStmtFromIR(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (*llvmNativeStmt, bool) {
+	method, ok := nativeTestingCallMethod(ctx, call)
+	if !ok {
+		return nil, false
+	}
+	switch method {
+	case "expectOk", "expectError":
+		if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return nil, false
+		}
+		resultInfo, ok := nativeResultInfoFromType(ctx, call.Args[0].Value.Type())
+		if !ok {
+			return nil, false
+		}
+		resultExpr, ok := nativeExprFromIR(ctx, call.Args[0].Value)
+		if !ok || resultExpr.llvmType != resultInfo.def.llvmType {
+			return nil, false
+		}
+		wantTag := "0"
+		if method == "expectError" {
+			wantTag = "1"
+		}
+		cond := &llvmNativeExpr{
+			kind:     llvmNativeExprBinary,
+			llvmType: "i1",
+			op:       "==",
+			childExprs: []*llvmNativeExpr{
+				{kind: llvmNativeExprField, llvmType: "i64", fieldIndex: 0, childExprs: []*llvmNativeExpr{resultExpr}},
+				{kind: llvmNativeExprInt, llvmType: "i64", text: wantTag},
+			},
+		}
+		return &llvmNativeStmt{
+			kind:       llvmNativeStmtIf,
+			childExprs: []*llvmNativeExpr{cond},
+			childBlocks: []*llvmNativeBlock{
+				{},
+				nativeTestingFailureBlock(ctx, nativeTestingFailureMessage(ctx, method, call, nativeSourceSpanText(ctx, call.Args[0].Value))),
+			},
+		}, true
+	case "assertEq":
+		if len(call.Args) != 2 || call.Args[0].Name != "" || call.Args[1].Name != "" || call.Args[0].Value == nil || call.Args[1].Value == nil {
+			return nil, false
+		}
+		leftInfo, ok := nativeExprTypeInfo(ctx, call.Args[0].Value)
+		if !ok {
+			return nil, false
+		}
+		rightInfo, ok := nativeExprTypeInfo(ctx, call.Args[1].Value)
+		if !ok || leftInfo.kind != nativeExprInfoScalar || rightInfo.kind != nativeExprInfoScalar || leftInfo.llvmType != rightInfo.llvmType {
+			return nil, false
+		}
+		switch leftInfo.llvmType {
+		case "i1", "i8", "i32", "i64", "double":
+		default:
+			return nil, false
+		}
+		left, ok := nativeExprFromIR(ctx, call.Args[0].Value)
+		if !ok {
+			return nil, false
+		}
+		right, ok := nativeExprFromIR(ctx, call.Args[1].Value)
+		if !ok {
+			return nil, false
+		}
+		cond := &llvmNativeExpr{
+			kind:       llvmNativeExprBinary,
+			llvmType:   "i1",
+			op:         "==",
+			childExprs: []*llvmNativeExpr{left, right},
+		}
+		return &llvmNativeStmt{
+			kind:       llvmNativeStmtIf,
+			childExprs: []*llvmNativeExpr{cond},
+			childBlocks: []*llvmNativeBlock{
+				{},
+				nativeTestingFailureBlock(ctx, nativeTestingFailureMessage(ctx, method, call, "")),
+			},
+		}, true
+	default:
+		return nil, false
+	}
 }
 
 func nativeStmtFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType string) (*llvmNativeStmt, bool) {
@@ -1691,6 +2245,11 @@ func nativeStmtFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType s
 			childExprs: []*llvmNativeExpr{value},
 		}, true
 	case *ostyir.ExprStmt:
+		if call, ok := s.X.(*ostyir.CallExpr); ok {
+			if testing, ok := nativeTestingCallStmtFromIR(ctx, call); ok {
+				return testing, true
+			}
+		}
 		if ifLet, ok := s.X.(*ostyir.IfLetExpr); ok {
 			if stmt, ok := nativeIfLetVariantStmt(ctx, ifLet, fnReturnType); ok {
 				return stmt, true
@@ -2635,6 +3194,12 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 			childExprs:          []*llvmNativeExpr{left, right},
 		}, true
 	case *ostyir.CallExpr:
+		if testingExpr, ok := nativeTestingResultExprFromIR(ctx, e); ok {
+			return testingExpr, true
+		}
+		if runtimeCall, ok := nativeRuntimeFFICallExprFromIR(ctx, e); ok {
+			return runtimeCall, true
+		}
 		callee, ok := e.Callee.(*ostyir.Ident)
 		if !ok || len(e.TypeArgs) != 0 {
 			return nil, false
@@ -3048,9 +3613,18 @@ func nativeExprInfoFromType(ctx *nativeProjectionCtx, t ostyir.Type) (nativeExpr
 					return nativeExprInfo{}, false
 				}
 				return nativeExprInfoWithSource(nativeSetExprInfo(elemType, nativeTypeIsString(tt.Args[0])), t), true
+			case "Result":
+				llvmType, ok := nativeLLVMTypeFromIR(ctx, tt)
+				if !ok {
+					return nativeExprInfo{}, false
+				}
+				return nativeExprInfoWithSource(nativeExprInfoFromLLVMType(llvmType), t), true
 			default:
 				return nativeExprInfo{}, false
 			}
+		}
+		if info := ctx.resultsByName[tt.Name]; info != nil {
+			return nativeExprInfoWithSource(nativeExprInfoFromLLVMType(info.def.llvmType), t), true
 		}
 		info, ok := nativeStructInfoFromType(ctx, tt)
 		if !ok {
@@ -3453,14 +4027,14 @@ func nativeResultConstructorExprFromIR(ctx *nativeProjectionCtx, e *ostyir.Metho
 		return nil, false
 	}
 	var (
-		tag          = "0"
-		payloadLLVM  = info.okLLVM
-		zeroLLVM     = info.errLLVM
-		okChild      *llvmNativeExpr
-		errChild     *llvmNativeExpr
-		payloadSlot  = 1
-		zeroSlot     = 2
-		payloadIR    = info.okIRType
+		tag         = "0"
+		payloadLLVM = info.okLLVM
+		zeroLLVM    = info.errLLVM
+		okChild     *llvmNativeExpr
+		errChild    *llvmNativeExpr
+		payloadSlot = 1
+		zeroSlot    = 2
+		payloadIR   = info.okIRType
 	)
 	if e.Name == "Err" {
 		tag = "1"
@@ -4277,6 +4851,49 @@ func nativeExprFromIRWithHint(ctx *nativeProjectionCtx, expr ostyir.Expr, hintLL
 	}
 }
 
+func nativeQualifiedAliasCall(call *ostyir.CallExpr) (alias string, name string, ok bool) {
+	if call == nil {
+		return "", "", false
+	}
+	field, ok := call.Callee.(*ostyir.FieldExpr)
+	if !ok || field == nil || field.Optional {
+		return "", "", false
+	}
+	base, ok := field.X.(*ostyir.Ident)
+	if !ok || base == nil {
+		return "", "", false
+	}
+	return base.Name, field.Name, true
+}
+
+func nativeRuntimeFFICallExprFromIR(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (*llvmNativeExpr, bool) {
+	alias, name, ok := nativeQualifiedAliasCall(call)
+	if !ok {
+		return nil, false
+	}
+	funcs := ctx.runtimeFFI[alias]
+	if funcs == nil {
+		return nil, false
+	}
+	sig := funcs[name]
+	if sig == nil {
+		return nil, false
+	}
+	args, ok := nativePositionalArgsFromIRWithHints(ctx, call.Args, sig.paramTys)
+	if !ok {
+		return nil, false
+	}
+	if sig.path == "runtime.strings" {
+		ctx.needsStringRT = true
+	}
+	return &llvmNativeExpr{
+		kind:       llvmNativeExprCall,
+		llvmType:   sig.retType,
+		name:       sig.symbol,
+		childExprs: args,
+	}, true
+}
+
 // nativeVariantLitFromIR lowers `Maybe.Some(42)` / `Maybe.None` into
 // a native struct literal over the monomorphized enum's storage
 // type `{ i64 tag, <payloadSlotType> }`. The emitter reuses the
@@ -4296,6 +4913,38 @@ func nativeExprFromIRWithHint(ctx *nativeProjectionCtx, expr ostyir.Expr, hintLL
 func nativeVariantLitFromIR(ctx *nativeProjectionCtx, lit *ostyir.VariantLit) (*llvmNativeExpr, bool) {
 	if ctx == nil || lit == nil {
 		return nil, false
+	}
+	if resultInfo, ok := nativeResultInfoFromType(ctx, lit.Type()); ok {
+		if len(lit.Args) != 1 || lit.Args[0].Name != "" {
+			return nil, false
+		}
+		fields := []*llvmNativeExpr{
+			nativeIntLiteralExpr("0"),
+			nativeZeroExprForLLVMType(resultInfo.okType),
+			nativeZeroExprForLLVMType(resultInfo.errType),
+		}
+		payloadIndex := 1
+		payloadType := resultInfo.okType
+		switch lit.Variant {
+		case "Ok":
+			fields[0] = nativeIntLiteralExpr("0")
+		case "Err":
+			fields[0] = nativeIntLiteralExpr("1")
+			payloadIndex = 2
+			payloadType = resultInfo.errType
+		default:
+			return nil, false
+		}
+		value, ok := nativeExprFromIRWithHint(ctx, lit.Args[0].Value, payloadType)
+		if !ok || value.llvmType != payloadType {
+			return nil, false
+		}
+		fields[payloadIndex] = value
+		return &llvmNativeExpr{
+			kind:       llvmNativeExprStructLit,
+			llvmType:   resultInfo.def.llvmType,
+			childExprs: fields,
+		}, true
 	}
 	info, ok := nativeEnumInfoFromType(ctx, lit.Type())
 	if !ok {
@@ -4395,6 +5044,9 @@ func nativeZeroExprForLLVMType(llvmType string) *llvmNativeExpr {
 	case "ptr":
 		return &llvmNativeExpr{kind: llvmNativeExprInt, llvmType: "ptr", text: "null"}
 	default:
+		if strings.HasPrefix(llvmType, "%") {
+			return &llvmNativeExpr{kind: llvmNativeExprInt, llvmType: llvmType, text: "zeroinitializer"}
+		}
 		return &llvmNativeExpr{kind: llvmNativeExprInt, llvmType: llvmType, text: "0"}
 	}
 }
@@ -4550,16 +5202,21 @@ func nativeLLVMTypeFromIR(ctx *nativeProjectionCtx, t ostyir.Type) (string, bool
 			case "List", "Map", "Set":
 				return "ptr", true
 			case "Result":
-				if len(tt.Args) == 2 {
-					if name, ok := nativeRegisterResultType(ctx, tt.Args[0], tt.Args[1]); ok {
-						return name, true
-					}
+				if len(tt.Args) != 2 {
+					return "", false
 				}
-				return "", false
+				info, ok := nativeRegisterBuiltinResultType(ctx, "", tt.Args[0], tt.Args[1])
+				if !ok {
+					return "", false
+				}
+				return info.def.llvmType, true
 			}
 			return "", false
 		}
 		if info, ok := nativeStructInfoFromType(ctx, tt); ok {
+			return info.def.llvmType, true
+		}
+		if info := ctx.resultsByName[tt.Name]; info != nil {
 			return info.def.llvmType, true
 		}
 		if info, ok := nativeEnumInfoFromType(ctx, tt); ok {
