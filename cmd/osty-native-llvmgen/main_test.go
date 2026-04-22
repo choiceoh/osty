@@ -192,7 +192,7 @@ fn main() {
 	}
 }
 
-func TestRunCoversStdTestingHelpers(t *testing.T) {
+func TestRunDefersStdTestingHelpersToMIRBackend(t *testing.T) {
 	resp := runLLVMGenSource(t, "main.osty", `use std.testing
 
 enum CalcError {
@@ -209,19 +209,8 @@ fn main() {
     testing.expectError(div(1, 0))
 }
 `)
-	if !resp.Covered {
-		t.Fatalf("covered = false, want true")
-	}
-	for _, want := range []string{
-		"declare void @exit(i32)",
-		"extractvalue %Result.",
-		"testing.expectOk failed",
-		"testing.expectError failed",
-		"testing.assertEq failed",
-	} {
-		if !strings.Contains(resp.LLVMIR, want) {
-			t.Fatalf("llvmIr missing %q:\n%s", want, resp.LLVMIR)
-		}
+	if resp.Covered {
+		t.Fatalf("covered = true, want false (std.testing should route to MIR backend)")
 	}
 }
 

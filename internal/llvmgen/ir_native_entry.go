@@ -361,7 +361,13 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 				continue
 			}
 			if nativeIsStdTestingUse(d) {
-				ctx.testingAliases[nativeUseAlias(d)] = true
+				// The native-owned fast path intentionally defers
+				// `std.testing` to the MIR backend, which now owns the
+				// richer assertion payloads / structural diff surface.
+				// Keeping testing in one lowering path avoids splitting
+				// parity work across two code generators while the AST
+				// bridge is retired.
+				return nil, false
 			}
 			if nativeIsStdIoUse(d) {
 				ctx.stdIoAliases[nativeUseAlias(d)] = true

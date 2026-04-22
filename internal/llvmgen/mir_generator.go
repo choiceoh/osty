@@ -92,6 +92,7 @@ type mirGen struct {
 	mod    *mir.Module
 	opts   Options
 	source string
+	src    []byte
 
 	out strings.Builder
 
@@ -208,6 +209,7 @@ func newMIRGen(m *mir.Module, opts Options) *mirGen {
 		mod:           m,
 		opts:          opts,
 		source:        filepath.ToSlash(firstNonEmpty(opts.SourcePath, "<unknown>")),
+		src:           append([]byte(nil), opts.Source...),
 		functionTypes: map[string]mirFnSig{},
 		thunkDefs:     map[string]string{},
 		declares:      map[string]string{},
@@ -2894,32 +2896,455 @@ func (g *mirGen) emitStdIoStringOperandMIR(op mir.Operand, method string) (strin
 	return "", unsupported("mir-mvp", fmt.Sprintf("std.io.%s arg type %s", method, mirTypeString(op.Type())))
 }
 
-// emitTestingAssertMIR evaluates each argument for side-effects and
-// discards the result. This is the minimal contract the MIR tests
-// require: the user-level call inside the assertion (e.g. `add(1,2)`)
-// must still be lowered as a normal call.
 func (g *mirGen) emitTestingAssertMIR(c *mir.CallInstr, method string) error {
-	for _, op := range c.Args {
-		if _, err := g.evalOperand(op, op.Type()); err != nil {
+	switch method {
+	case "fail":
+		if len(c.Args) != 1 {
+			return unsupported("mir-mvp", "std.testing.fail requires one positional argument")
+		}
+		msg := g.testingFailureMessage(c.SpanV.Start.Line, method)
+		g.emitTestingAbortString(g.testingStringLiteral(msg), g.freshLabel("test.dead"))
+		return nil
+	case "assert", "assertTrue":
+		if len(c.Args) != 1 {
+			return unsupported("mir-mvp", "std.testing.assertTrue requires one positional argument")
+		}
+		cond, err := g.evalOperand(c.Args[0], c.Args[0].Type())
+		if err != nil {
 			return err
 		}
+		exprText := g.operandSourceText(c.Args[0])
+		if err := g.emitTestingFailureCheck(cond, false, func() (*LlvmValue, error) {
+			return g.buildAssertCondMessageMIR(c.SpanV.Start.Line, method, exprText), nil
+		}); err != nil {
+			return err
+		}
+		return g.storeUnitDestIfAny(c)
+	case "assertFalse":
+		if len(c.Args) != 1 {
+			return unsupported("mir-mvp", "std.testing.assertFalse requires one positional argument")
+		}
+		cond, err := g.evalOperand(c.Args[0], c.Args[0].Type())
+		if err != nil {
+			return err
+		}
+		exprText := g.operandSourceText(c.Args[0])
+		if err := g.emitTestingFailureCheck(cond, true, func() (*LlvmValue, error) {
+			return g.buildAssertCondMessageMIR(c.SpanV.Start.Line, method, exprText), nil
+		}); err != nil {
+			return err
+		}
+		return g.storeUnitDestIfAny(c)
+	case "assertEq", "assertNe":
+		if len(c.Args) != 2 {
+			return unsupported("mir-mvp", "std.testing.assertEq/assertNe requires two positional arguments")
+		}
+		left, err := g.evalOperand(c.Args[0], c.Args[0].Type())
+		if err != nil {
+			return err
+		}
+		right, err := g.evalOperand(c.Args[1], c.Args[1].Type())
+		if err != nil {
+			return err
+		}
+		op := mir.BinEq
+		if method == "assertNe" {
+			op = mir.BinNeq
+		}
+		cond, err := g.emitBinary(op, left, right, c.Args[0].Type(), mir.TBool)
+		if err != nil {
+			return err
+		}
+		leftText := g.operandSourceText(c.Args[0])
+		rightText := g.operandSourceText(c.Args[1])
+		if err := g.emitTestingFailureCheck(cond, false, func() (*LlvmValue, error) {
+			return g.buildAssertCompareMessageMIR(c.SpanV.Start.Line, method, leftText, rightText, left, c.Args[0].Type(), right, c.Args[1].Type())
+		}); err != nil {
+			return err
+		}
+		return g.storeUnitDestIfAny(c)
+	default:
+		return unsupported("mir-mvp", "std.testing."+method+" assertion helper")
 	}
-	_ = method
-	return g.storeUnitDestIfAny(c)
 }
 
-// emitTestingExpectMIR evaluates the Result<T,E> argument for its
-// side-effects and stores a zero value into the dest slot when the
-// checker demands the unwrapped payload type. We keep the shape simple
-// — full tag discrimination lives in the legacy AST path.
 func (g *mirGen) emitTestingExpectMIR(c *mir.CallInstr, method string) error {
-	for _, op := range c.Args {
-		if _, err := g.evalOperand(op, op.Type()); err != nil {
-			return err
+	if len(c.Args) != 1 {
+		return unsupported("mir-mvp", "std.testing."+method+" requires one positional argument")
+	}
+	resultT, ok := testingResultType(c.Args[0].Type())
+	if !ok {
+		return unsupported("mir-mvp", "std.testing."+method+" requires a Result<T, E> value")
+	}
+	resultReg, err := g.evalOperand(c.Args[0], c.Args[0].Type())
+	if err != nil {
+		return err
+	}
+	wantTag := int64(1)
+	payloadT := resultT.ok
+	if method == "expectError" {
+		wantTag = 0
+		payloadT = resultT.err
+	}
+	resultLLVM := g.llvmType(c.Args[0].Type())
+	tag := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(tag)
+	g.fnBuf.WriteString(" = extractvalue ")
+	g.fnBuf.WriteString(resultLLVM)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(resultReg)
+	g.fnBuf.WriteString(", 0\n")
+	cond := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(cond)
+	g.fnBuf.WriteString(" = icmp eq i64 ")
+	g.fnBuf.WriteString(tag)
+	g.fnBuf.WriteString(", ")
+	g.fnBuf.WriteString(strconv.FormatInt(wantTag, 10))
+	g.fnBuf.WriteByte('\n')
+	exprText := g.operandSourceText(c.Args[0])
+	if err := g.emitTestingFailureCheck(cond, false, func() (*LlvmValue, error) {
+		return g.buildAssertCondMessageMIR(c.SpanV.Start.Line, method, exprText), nil
+	}); err != nil {
+		return err
+	}
+	if c.Dest == nil {
+		return nil
+	}
+	destLoc := g.fn.Local(c.Dest.Local)
+	if destLoc == nil || isUnitType(destLoc.Type) {
+		return nil
+	}
+	payloadSlot := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(payloadSlot)
+	g.fnBuf.WriteString(" = extractvalue ")
+	g.fnBuf.WriteString(resultLLVM)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(resultReg)
+	g.fnBuf.WriteString(", 1\n")
+	payloadReg, err := g.fromI64Slot(payloadSlot, payloadT)
+	if err != nil {
+		return err
+	}
+	g.fnBuf.WriteString("  store ")
+	g.fnBuf.WriteString(g.llvmType(destLoc.Type))
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(payloadReg)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(g.localSlots[c.Dest.Local])
+	g.fnBuf.WriteByte('\n')
+	return nil
+}
+
+type testingResultTypes struct {
+	ok  mir.Type
+	err mir.Type
+}
+
+func testingResultType(t mir.Type) (testingResultTypes, bool) {
+	nt, ok := t.(*ir.NamedType)
+	if !ok || nt.Name != "Result" || len(nt.Args) < 2 {
+		return testingResultTypes{}, false
+	}
+	return testingResultTypes{ok: nt.Args[0], err: nt.Args[1]}, true
+}
+
+func (g *mirGen) emitTestingFailureCheck(cond string, failWhenTrue bool, buildMessage func() (*LlvmValue, error)) error {
+	okLabel := g.freshLabel("test.ok")
+	failLabel := g.freshLabel("test.fail")
+	g.fnBuf.WriteString("  br i1 ")
+	g.fnBuf.WriteString(cond)
+	if failWhenTrue {
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(failLabel)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(okLabel)
+	} else {
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(okLabel)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(failLabel)
+	}
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(failLabel)
+	g.fnBuf.WriteString(":\n")
+	msg, err := buildMessage()
+	if err != nil {
+		return err
+	}
+	g.emitTestingAbortString(msg, okLabel)
+	return nil
+}
+
+func (g *mirGen) emitTestingAbortString(message *LlvmValue, nextLabel string) {
+	g.declareRuntime("printf", "declare i32 @printf(ptr, ...)")
+	g.declareRuntime("exit", "declare void @exit(i32)")
+	fmtPtr := g.stringLiteral("%s\n")
+	g.fnBuf.WriteString("  call i32 (ptr, ...) @printf(ptr ")
+	g.fnBuf.WriteString(fmtPtr)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(message.name)
+	g.fnBuf.WriteString(")\n")
+	g.fnBuf.WriteString("  call void @exit(i32 1)\n")
+	g.fnBuf.WriteString("  unreachable\n")
+	g.fnBuf.WriteString(nextLabel)
+	g.fnBuf.WriteString(":\n")
+}
+
+func (g *mirGen) testingFailureMessage(line int, method string) string {
+	return fmt.Sprintf("testing.%s failed at %s", method, g.testingSourceLineLabel(line, "<test>"))
+}
+
+func (g *mirGen) testingSourceLineLabel(line int, fallback string) string {
+	source := g.source
+	if source == "" {
+		source = fallback
+	} else if abs, err := filepath.Abs(source); err == nil {
+		source = filepath.ToSlash(abs)
+	}
+	return fmt.Sprintf("%s:%d", source, line)
+}
+
+func (g *mirGen) operandSourceText(op mir.Operand) string {
+	switch x := op.(type) {
+	case *mir.ConstOp:
+		return testingConstSourceText(x.Const)
+	case *mir.CopyOp:
+		return g.placeSourceText(x.Place)
+	case *mir.MoveOp:
+		return g.placeSourceText(x.Place)
+	default:
+		return ""
+	}
+}
+
+func testingConstSourceText(c mir.Const) string {
+	switch x := c.(type) {
+	case *mir.IntConst:
+		return strconv.FormatInt(x.Value, 10)
+	case *mir.BoolConst:
+		if x.Value {
+			return "true"
+		}
+		return "false"
+	case *mir.FloatConst:
+		return strconv.FormatFloat(x.Value, 'g', -1, 64)
+	case *mir.StringConst:
+		return strconv.Quote(x.Value)
+	case *mir.CharConst:
+		return strconv.QuoteRune(x.Value)
+	case *mir.ByteConst:
+		return strconv.FormatInt(int64(x.Value), 10)
+	case *mir.UnitConst:
+		return "()"
+	case *mir.FnConst:
+		return x.Symbol
+	default:
+		return ""
+	}
+}
+
+func (g *mirGen) placeSourceText(p mir.Place) string {
+	if g.fn == nil {
+		return ""
+	}
+	loc := g.fn.Local(p.Local)
+	if loc == nil {
+		return ""
+	}
+	if loc.Name != "" && !strings.HasPrefix(loc.Name, "_") {
+		return loc.Name
+	}
+	if text := g.spanSourceText(loc.SpanV); text != "" {
+		return text
+	}
+	return loc.Name
+}
+
+func (g *mirGen) spanSourceText(span mir.Span) string {
+	if len(g.src) == 0 {
+		return ""
+	}
+	start := span.Start.Offset
+	end := span.End.Offset
+	if start < 0 || end <= start || end > len(g.src) {
+		return ""
+	}
+	return normalizeAssertExprText(string(g.src[start:end]))
+}
+
+func (g *mirGen) buildAssertCondMessageMIR(line int, method, exprText string) *LlvmValue {
+	base := g.testingFailureMessage(line, method)
+	if exprText == "" {
+		return g.testingStringLiteral(base)
+	}
+	label := "cond"
+	if method == "expectOk" || method == "expectError" {
+		label = "expr"
+	}
+	return g.testingStringLiteral(fmt.Sprintf("%s: %s=`%s`", base, label, exprText))
+}
+
+func (g *mirGen) buildAssertCompareMessageMIR(line int, method, leftText, rightText, leftReg string, leftT mir.Type, rightReg string, rightT mir.Type) (*LlvmValue, error) {
+	base := g.testingFailureMessage(line, method)
+	leftStr, leftHas, err := g.emitAssertValueToStringMIR(leftReg, leftT)
+	if err != nil {
+		return nil, err
+	}
+	rightStr, rightHas, err := g.emitAssertValueToStringMIR(rightReg, rightT)
+	if err != nil {
+		return nil, err
+	}
+	parts := make([]*LlvmValue, 0, 8)
+	if leftText == "" && rightText == "" && !leftHas && !rightHas {
+		return g.testingStringLiteral(base), nil
+	}
+	parts = append(parts, g.testingStringLiteral(fmt.Sprintf("%s: left=`%s`", base, leftText)))
+	if leftHas {
+		parts = append(parts, g.testingStringLiteral(" = "), leftStr)
+	}
+	parts = append(parts, g.testingStringLiteral(fmt.Sprintf(" right=`%s`", rightText)))
+	if rightHas {
+		parts = append(parts, g.testingStringLiteral(" = "), rightStr)
+	}
+	if method == "assertEq" {
+		leftDiff, rightDiff, ok, err := g.stringifyForStructuralDiffMIR(leftReg, leftT, rightReg, rightT)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			diff, err := g.emitRuntimeStringDiffMIR(leftDiff, rightDiff)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, g.testingStringLiteral("\ndiff (- left, + right):\n"), diff)
 		}
 	}
-	_ = method
-	return g.storeUnitDestIfAny(c)
+	return g.concatTestingStrings(parts), nil
+}
+
+func (g *mirGen) emitAssertValueToStringMIR(reg string, t mir.Type) (*LlvmValue, bool, error) {
+	llvmT := g.llvmType(t)
+	switch llvmT {
+	case "i64":
+		g.declareRuntime("osty_rt_int_to_string", "declare ptr @osty_rt_int_to_string(i64)")
+		em := g.ostyEmitter()
+		out := llvmIntRuntimeToString(em, &LlvmValue{typ: "i64", name: reg})
+		g.flushOstyEmitter(em)
+		return out, true, nil
+	case "double":
+		g.declareRuntime("osty_rt_float_to_string", "declare ptr @osty_rt_float_to_string(double)")
+		em := g.ostyEmitter()
+		out := llvmFloatRuntimeToString(em, &LlvmValue{typ: "double", name: reg})
+		g.flushOstyEmitter(em)
+		return out, true, nil
+	case "i1":
+		g.declareRuntime("osty_rt_bool_to_string", "declare ptr @osty_rt_bool_to_string(i1)")
+		em := g.ostyEmitter()
+		out := llvmBoolRuntimeToString(em, &LlvmValue{typ: "i1", name: reg})
+		g.flushOstyEmitter(em)
+		return out, true, nil
+	case "i32":
+		g.declareRuntime("osty_rt_char_to_string", "declare ptr @osty_rt_char_to_string(i32)")
+		em := g.ostyEmitter()
+		out := llvmCall(em, "ptr", "osty_rt_char_to_string", []*LlvmValue{{typ: "i32", name: reg}})
+		g.flushOstyEmitter(em)
+		return out, true, nil
+	case "i8":
+		g.declareRuntime("osty_rt_byte_to_string", "declare ptr @osty_rt_byte_to_string(i8)")
+		em := g.ostyEmitter()
+		out := llvmCall(em, "ptr", "osty_rt_byte_to_string", []*LlvmValue{{typ: "i8", name: reg}})
+		g.flushOstyEmitter(em)
+		return out, true, nil
+	case "ptr":
+		if isStringPrimType(t) {
+			return &LlvmValue{typ: "ptr", name: reg}, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+func (g *mirGen) stringifyForStructuralDiffMIR(leftReg string, leftT mir.Type, rightReg string, rightT mir.Type) (*LlvmValue, *LlvmValue, bool, error) {
+	if isStringPrimType(leftT) && isStringPrimType(rightT) {
+		return &LlvmValue{typ: "ptr", name: leftReg}, &LlvmValue{typ: "ptr", name: rightReg}, true, nil
+	}
+	leftKind := testingListPrimitiveKind(leftT)
+	rightKind := testingListPrimitiveKind(rightT)
+	if leftKind == 0 || rightKind == 0 || leftKind != rightKind {
+		return nil, nil, false, nil
+	}
+	leftStr, err := g.emitRuntimeListPrimitiveToStringMIR(leftReg, leftKind)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	rightStr, err := g.emitRuntimeListPrimitiveToStringMIR(rightReg, rightKind)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return leftStr, rightStr, true, nil
+}
+
+func testingListPrimitiveKind(t mir.Type) int {
+	nt, ok := t.(*ir.NamedType)
+	if !ok || nt.Name != "List" || len(nt.Args) != 1 {
+		return 0
+	}
+	switch inner := nt.Args[0].(type) {
+	case *ir.PrimType:
+		switch inner.Kind {
+		case ir.PrimInt, ir.PrimInt64, ir.PrimUInt64:
+			return 1
+		case ir.PrimFloat, ir.PrimFloat64:
+			return 2
+		case ir.PrimBool:
+			return 3
+		case ir.PrimString:
+			return 4
+		}
+	}
+	return 0
+}
+
+func (g *mirGen) emitRuntimeListPrimitiveToStringMIR(reg string, kind int) (*LlvmValue, error) {
+	g.declareRuntime("osty_rt_list_primitive_to_string", "declare ptr @osty_rt_list_primitive_to_string(ptr, i64)")
+	em := g.ostyEmitter()
+	out := llvmCall(em, "ptr", "osty_rt_list_primitive_to_string", []*LlvmValue{
+		{typ: "ptr", name: reg},
+		llvmIntLiteral(kind),
+	})
+	g.flushOstyEmitter(em)
+	return out, nil
+}
+
+func (g *mirGen) emitRuntimeStringDiffMIR(left, right *LlvmValue) (*LlvmValue, error) {
+	g.declareRuntime("osty_rt_strings_DiffLines", "declare ptr @osty_rt_strings_DiffLines(ptr, ptr)")
+	em := g.ostyEmitter()
+	out := llvmCall(em, "ptr", "osty_rt_strings_DiffLines", []*LlvmValue{left, right})
+	g.flushOstyEmitter(em)
+	return out, nil
+}
+
+func (g *mirGen) concatTestingStrings(parts []*LlvmValue) *LlvmValue {
+	coalesced := parts[:0]
+	for _, part := range parts {
+		if part == nil {
+			continue
+		}
+		coalesced = append(coalesced, part)
+	}
+	if len(coalesced) == 0 {
+		return g.testingStringLiteral("")
+	}
+	if len(coalesced) == 1 {
+		return coalesced[0]
+	}
+	return g.emitStringConcatN(coalesced)
+}
+
+func (g *mirGen) testingStringLiteral(s string) *LlvmValue {
+	return &LlvmValue{typ: "ptr", name: g.stringLiteral(s)}
 }
 
 // emitTestingContextMIR emits `evaluate label; invoke closure`. The
@@ -7497,6 +7922,13 @@ func (g *mirGen) emitUnary(op mir.UnaryOp, arg string, t mir.Type) (string, erro
 }
 
 func (g *mirGen) emitBinary(op mir.BinaryOp, left, right string, argT, resT mir.Type) (string, error) {
+	if op == mir.BinAdd && isStringPrimType(argT) {
+		g.declareRuntime("osty_rt_strings_Concat", "declare ptr @osty_rt_strings_Concat(ptr, ptr)")
+		em := g.ostyEmitter()
+		out := llvmStringConcat(em, &LlvmValue{typ: "ptr", name: left}, &LlvmValue{typ: "ptr", name: right})
+		g.flushOstyEmitter(em)
+		return out.name, nil
+	}
 	if (op == mir.BinEq || op == mir.BinNeq) && isHeapEqualityType(argT) {
 		return g.emitHeapEquality(op, left, right)
 	}
