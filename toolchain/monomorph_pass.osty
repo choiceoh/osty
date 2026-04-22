@@ -1,0 +1,369 @@
+// monomorph_pass.osty — Stage A of the self-hosted port of
+// `internal/ir/monomorph.go`.
+//
+// `toolchain/monomorph.osty` already owns the Itanium-ABI mangling
+// surface (MonomorphMangleFn / MonomorphMangleType / dedupe keys).
+// Its contract is "no IR references escape this module" — pure string
+// manipulation.
+//
+// This file is the counterpart that *does* talk in HIR: it owns the
+// generic type environment (`HirSubstEnv`), deep-clones HIR types, and
+// applies type-variable substitution through the shapes declared in
+// `toolchain/hir.osty`. It is the foundation on which later stages
+// (worklist drainer, scanner, emitter) build the full specialization
+// pass.
+//
+// Port mapping:
+//
+//   internal/ir/subst.go:6         -> HirSubstEnv
+//   internal/ir/subst.go:26        -> hirSubstType
+//   internal/ir/monomorph.go:1910  -> hirBuildSubstEnv
+//   internal/ir/monomorph.go:1930  -> hirContainsTypeVar
+//   internal/ir/clone.go (type part) -> hirCloneType
+//   internal/ir/monomorph.go:1624  -> hirTypeEqual
+//
+// Stage A is deliberately type-only — no declaration clones, no
+// worklist, no module traversal. Later stages will reuse these
+// primitives.
+
+// ====================================================================
+// HirSubstEnv — generic-parameter → concrete-type binding
+// ====================================================================
+
+/// HirSubstEnv maps a generic type-parameter's source name to the
+/// concrete HirType it has been bound to for one specialization.
+///
+/// Backed by parallel `List<String>` + `List<HirType>` arrays rather
+/// than an intrinsic Map<String, HirType>: (a) the expected entry
+/// count is tiny (typically 1–3 generic params per fn/type), so linear
+/// scan wins on cache locality and avoids the Map intrinsic's
+/// per-entry overhead; (b) iteration order is stable, which keeps
+/// downstream dedupe keys deterministic when an env is printed or
+/// hashed; (c) parallels Go's `SubstEnv = map[string]Type` in spirit
+/// while sidestepping Osty backend constraints on nested
+/// Map<String, Struct-with-List-fields>.
+pub struct HirSubstEnv {
+    pub names: List<String>,
+    pub types: List<HirType>,
+}
+
+/// hirEmptySubstEnv returns a fresh empty binding set.
+pub fn hirEmptySubstEnv() -> HirSubstEnv {
+    HirSubstEnv { names: [], types: [] }
+}
+
+/// hirSubstEnvLen returns the number of bindings currently recorded.
+pub fn hirSubstEnvLen(env: HirSubstEnv) -> Int {
+    env.names.len()
+}
+
+/// hirSubstEnvIndex returns the array index of `name` in env, or -1
+/// when absent. Callers that already need the index (e.g. to update
+/// the associated type in place) should use this over `has` + `lookup`
+/// to avoid a double scan.
+pub fn hirSubstEnvIndex(env: HirSubstEnv, name: String) -> Int {
+    let mut i = 0
+    for n in env.names {
+        if n == name {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+/// hirSubstEnvHas reports whether `name` is bound in env.
+pub fn hirSubstEnvHas(env: HirSubstEnv, name: String) -> Bool {
+    hirSubstEnvIndex(env, name) >= 0
+}
+
+/// hirSubstEnvLookup returns the bound type for `name`. When `name`
+/// is not in env the caller is handed a fresh `hirTypeInvalid()` so
+/// downstream code that forgets to gate on `Has` still gets an
+/// inert-but-valid HirType rather than a crash. The returned value is
+/// freshly cloned so the caller may mutate it without disturbing the
+/// env's copy.
+pub fn hirSubstEnvLookup(env: HirSubstEnv, name: String) -> HirType {
+    let idx = hirSubstEnvIndex(env, name)
+    if idx < 0 {
+        return hirTypeInvalid()
+    }
+    hirCloneType(env.types[idx])
+}
+
+/// hirSubstEnvBind installs `name -> t` in env. Duplicate binds
+/// overwrite the previous mapping (mirrors Go's `map[name] = t`),
+/// which matches the Go monomorphizer's expectation that later
+/// recursive binds win — `bindInferredTypeArgs` relies on this.
+/// The passed-in `t` is *not* cloned; callers that need to sever
+/// sharing with the source tree should pre-clone.
+pub fn hirSubstEnvBind(env: HirSubstEnv, name: String, t: HirType) {
+    let idx = hirSubstEnvIndex(env, name)
+    if idx >= 0 {
+        env.types[idx] = t
+        return
+    }
+    env.names.push(name)
+    env.types.push(t)
+}
+
+/// hirCloneSubstEnv returns a structural copy. Used when a caller
+/// needs to layer a receiver's env underneath a method's without
+/// mutating the owner record (Phase 4 method specialization merges
+/// receiver + method envs in a fresh copy — see `mergeEnv` in the Go
+/// source).
+pub fn hirCloneSubstEnv(env: HirSubstEnv) -> HirSubstEnv {
+    let mut names: List<String> = []
+    let mut types: List<HirType> = []
+    let mut i = 0
+    for n in env.names {
+        names.push(n)
+        types.push(hirCloneType(env.types[i]))
+        i = i + 1
+    }
+    HirSubstEnv { names, types }
+}
+
+/// hirMergeSubstEnv returns receiver + method's bindings layered
+/// together. Method bindings win on conflict, matching Go's
+/// `mergeEnv(receiver, method)` in monomorph.go:812. Neither input
+/// is mutated.
+pub fn hirMergeSubstEnv(receiver: HirSubstEnv, method: HirSubstEnv) -> HirSubstEnv {
+    let mut merged = hirCloneSubstEnv(receiver)
+    let mut i = 0
+    for n in method.names {
+        hirSubstEnvBind(merged, n, hirCloneType(method.types[i]))
+        i = i + 1
+    }
+    merged
+}
+
+/// hirBuildSubstEnv pairs `params` (declaration order) with `args`
+/// (concrete types) and stops on the shorter list. Mirrors Go's
+/// `buildSubstEnv(params, args)` in monomorph.go:1910.
+///
+/// An arity mismatch is the caller's responsibility to flag through a
+/// diagnostic — `hirBuildSubstEnv` silently truncates because the
+/// monomorph scan already emits E0706 / E0707 on mismatched arities
+/// before it ever reaches substitution.
+pub fn hirBuildSubstEnv(params: List<HirTypeParam>, args: List<HirType>) -> HirSubstEnv {
+    let mut env = hirEmptySubstEnv()
+    let paramCount = params.len()
+    let argCount = args.len()
+    let pairs = if paramCount < argCount { paramCount } else { argCount }
+    for i in 0..pairs {
+        hirSubstEnvBind(env, params[i].name, args[i])
+    }
+    env
+}
+
+// ====================================================================
+// Deep clone over HirType
+// ====================================================================
+
+/// hirCloneType returns a deep structural copy of `t`. Every nested
+/// `List<HirType>` is rebuilt so downstream mutation on a substituted
+/// copy cannot bleed into the original HIR (the Go side gets the same
+/// property via `CloneType` in `internal/ir/clone.go`).
+///
+/// `HirType` is a flat struct with payload fields for every variant
+/// (see `hir.osty:377`). The `kind` discriminator tells us which
+/// fields are semantically live, but because unused fields always hold
+/// empty lists / empty strings, we can clone all of them
+/// unconditionally without dragging invalid payloads along.
+pub fn hirCloneType(t: HirType) -> HirType {
+    let mut out = hirTypeInvalid()
+    out.kind = t.kind
+    out.primKind = t.primKind
+    out.namedPkg = t.namedPkg
+    out.namedName = t.namedName
+    out.namedArgs = hirCloneTypeList(t.namedArgs)
+    out.namedBuiltin = t.namedBuiltin
+    out.optionalInner = hirCloneTypeList(t.optionalInner)
+    out.tupleElems = hirCloneTypeList(t.tupleElems)
+    out.fnParams = hirCloneTypeList(t.fnParams)
+    out.fnReturn = hirCloneTypeList(t.fnReturn)
+    out.varName = t.varName
+    out.varOwner = t.varOwner
+    out
+}
+
+/// hirCloneTypeList applies hirCloneType to each element. Kept
+/// separate so List-valued payloads can share the recursion without
+/// re-inventing the push loop in every caller.
+fn hirCloneTypeList(src: List<HirType>) -> List<HirType> {
+    let mut out: List<HirType> = []
+    for t in src {
+        out.push(hirCloneType(t))
+    }
+    out
+}
+
+// ====================================================================
+// Type substitution
+// ====================================================================
+
+/// hirSubstType produces a substituted copy of `t` under env. Unlike
+/// Go's `substType` (which mutates in place), this always clones
+/// first: the Osty-side monomorph engine threads HirSubstEnv through
+/// many independent scans and we cannot afford the in-place
+/// variant's implicit sharing (two call sites substituting the same
+/// shared subtree with different envs would corrupt each other's
+/// output). The cost is a full deep copy per call — acceptable
+/// because `HirType` is shallow on the dominant shapes (primitive,
+/// single-arg named, tuple-2) and specialization is a once-per-
+/// instantiation expense anyway.
+///
+/// An empty env is a fast pass-through via `hirCloneType` — the env
+/// cannot touch anything so we skip the recursive walk's per-node
+/// discriminator branches.
+///
+/// Behaviour by kind:
+///
+///   HirTypeVar       — if env binds the var's name, returns a fresh
+///                      clone of that binding; else returns an
+///                      unmodified clone of `t` so the caller keeps a
+///                      fresh tree (consistent with the cloning
+///                      contract; the Go side's in-place variant
+///                      returns `t` directly, but we cannot here).
+///   HirTypeNamed     — recurse into namedArgs.
+///   HirTypeOptional  — recurse into optionalInner[0].
+///   HirTypeTuple     — recurse into tupleElems.
+///   HirTypeFn        — recurse into fnParams and fnReturn[0].
+///   HirTypePrim / HirTypeErr / HirTypeInvalid — clone-only.
+pub fn hirSubstType(t: HirType, env: HirSubstEnv) -> HirType {
+    if hirSubstEnvLen(env) == 0 {
+        return hirCloneType(t)
+    }
+    match t.kind {
+        HirTypeVar -> {
+            if hirSubstEnvHas(env, t.varName) {
+                return hirSubstEnvLookup(env, t.varName)
+            }
+            hirCloneType(t)
+        },
+        HirTypeNamed -> {
+            let mut out = hirCloneType(t)
+            out.namedArgs = hirSubstTypeList(t.namedArgs, env)
+            out
+        },
+        HirTypeOptional -> {
+            let mut out = hirCloneType(t)
+            out.optionalInner = hirSubstTypeList(t.optionalInner, env)
+            out
+        },
+        HirTypeTuple -> {
+            let mut out = hirCloneType(t)
+            out.tupleElems = hirSubstTypeList(t.tupleElems, env)
+            out
+        },
+        HirTypeFn -> {
+            let mut out = hirCloneType(t)
+            out.fnParams = hirSubstTypeList(t.fnParams, env)
+            out.fnReturn = hirSubstTypeList(t.fnReturn, env)
+            out
+        },
+        _ -> hirCloneType(t),
+    }
+}
+
+/// hirSubstTypeList substitutes each element and returns a fresh
+/// list. Never mutates the input.
+fn hirSubstTypeList(src: List<HirType>, env: HirSubstEnv) -> List<HirType> {
+    let mut out: List<HirType> = []
+    for t in src {
+        out.push(hirSubstType(t, env))
+    }
+    out
+}
+
+// ====================================================================
+// Queries
+// ====================================================================
+
+/// hirContainsTypeVar reports whether `t` still contains an
+/// unresolved HirTypeVar anywhere in its subtree. Used post-
+/// substitution to detect "the env did not cover every var that
+/// appeared" — a stable signal the monomorph scan has escaped its
+/// generics bounds and should surface a diagnostic rather than
+/// propagate a half-specialized type. Mirrors Go's
+/// `containsTypeVar` in monomorph.go:1930.
+pub fn hirContainsTypeVar(t: HirType) -> Bool {
+    match t.kind {
+        HirTypeVar -> true,
+        HirTypeNamed -> hirContainsTypeVarList(t.namedArgs),
+        HirTypeOptional -> hirContainsTypeVarList(t.optionalInner),
+        HirTypeTuple -> hirContainsTypeVarList(t.tupleElems),
+        HirTypeFn -> {
+            if hirContainsTypeVarList(t.fnParams) {
+                return true
+            }
+            hirContainsTypeVarList(t.fnReturn)
+        },
+        _ -> false,
+    }
+}
+
+fn hirContainsTypeVarList(src: List<HirType>) -> Bool {
+    for t in src {
+        if hirContainsTypeVar(t) {
+            return true
+        }
+    }
+    false
+}
+
+/// hirTypeEqual answers structural equality between two HirTypes.
+/// Used by dedup (same type-arg tuple → same specialization) and by
+/// the Osty-side equivalent of Go's `typesEqual` in
+/// monomorph.go:1624.
+///
+/// NamedType comparison intentionally ignores the `namedBuiltin`
+/// tag: the same source name always has the same builtin status
+/// inside a well-formed HIR, and allowing the tag to diverge would
+/// make two structurally identical type references compare unequal
+/// when one was lifted through the stdlib injector and the other
+/// was not.
+pub fn hirTypeEqual(a: HirType, b: HirType) -> Bool {
+    if a.kind != b.kind {
+        return false
+    }
+    match a.kind {
+        HirTypePrim -> a.primKind == b.primKind,
+        HirTypeNamed -> {
+            if a.namedPkg != b.namedPkg {
+                return false
+            }
+            if a.namedName != b.namedName {
+                return false
+            }
+            hirTypeListEqual(a.namedArgs, b.namedArgs)
+        },
+        HirTypeOptional -> hirTypeListEqual(a.optionalInner, b.optionalInner),
+        HirTypeTuple -> hirTypeListEqual(a.tupleElems, b.tupleElems),
+        HirTypeFn -> {
+            if !hirTypeListEqual(a.fnParams, b.fnParams) {
+                return false
+            }
+            hirTypeListEqual(a.fnReturn, b.fnReturn)
+        },
+        HirTypeVar -> a.varName == b.varName && a.varOwner == b.varOwner,
+        HirTypeErr -> true,
+        HirTypeInvalid -> true,
+        _ -> false,
+    }
+}
+
+fn hirTypeListEqual(a: List<HirType>, b: List<HirType>) -> Bool {
+    if a.len() != b.len() {
+        return false
+    }
+    let mut i = 0
+    for t in a {
+        if !hirTypeEqual(t, b[i]) {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
