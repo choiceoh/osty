@@ -2213,6 +2213,16 @@ func builtinResultPayloadSourceType(sourceType ast.Type, constructor string) ast
 	return named.Args[0]
 }
 
+func bytesToStringResultSourceType() ast.Type {
+	return &ast.NamedType{
+		Path: []string{"Result"},
+		Args: []ast.Type{
+			&ast.NamedType{Path: []string{"String"}},
+			&ast.NamedType{Path: []string{"Error"}},
+		},
+	}
+}
+
 func (g *generator) emitExprWithHintAndSourceType(expr ast.Expr, sourceType ast.Type, listElemTyp string, listElemString bool, mapKeyTyp string, mapValueTyp string, mapKeyString bool, setElemTyp string, setElemString bool) (value, error) {
 	if sourceType != nil {
 		if elemTyp, elemString, ok, err := llvmListElementInfo(sourceType, g.typeEnv()); err != nil {
@@ -3061,6 +3071,18 @@ func (g *generator) emitStringMethodCall(call *ast.CallExpr) (value, bool, error
 		v.gcManaged = true
 		v.listElemTyp = "i8"
 		return v, true, nil
+	case "toBytes":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "String.toBytes requires no arguments")
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeToBytesSymbol(), "ptr", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmStringToBytes(emitter, toOstyValue(base))
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = true
+		v.sourceType = &ast.NamedType{Path: []string{"Bytes"}}
+		return v, true, nil
 	default:
 		return value{}, true, unsupportedf("call", "String.%s is not supported by legacy llvmgen yet", field.Name)
 	}
@@ -3119,6 +3141,630 @@ func (g *generator) emitStringReplaceRuntime(base value, old value, newValue val
 	replaced.gcManaged = true
 	replaced.sourceType = &ast.NamedType{Path: []string{"String"}}
 	return replaced, nil
+}
+
+func (g *generator) emitBytesMethodCall(call *ast.CallExpr) (value, bool, error) {
+	field, ok := g.bytesMethodInfo(call)
+	if !ok {
+		return value{}, false, nil
+	}
+	if field.X == nil {
+		return value{}, true, unsupported("call", "Bytes method receiver is missing")
+	}
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	base, err = g.loadIfPointer(base)
+	if err != nil {
+		return value{}, true, err
+	}
+	if base.typ != "ptr" {
+		return value{}, true, unsupportedf("type-system", "Bytes receiver type %s, want ptr", base.typ)
+	}
+
+	switch field.Name {
+	case "len":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "Bytes.len requires no arguments")
+		}
+		symbol := "osty_rt_bytes_len"
+		g.declareRuntimeSymbol(symbol, "i64", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "i64", symbol, []*LlvmValue{toOstyValue(base)})
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "isEmpty":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "Bytes.isEmpty requires no arguments")
+		}
+		symbol := "osty_rt_bytes_is_empty"
+		g.declareRuntimeSymbol(symbol, "i1", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "i1", symbol, []*LlvmValue{toOstyValue(base)})
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "get":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.get requires one positional argument")
+		}
+		index, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		index, err = g.loadIfPointer(index)
+		if err != nil {
+			return value{}, true, err
+		}
+		if index.typ != "i64" {
+			return value{}, true, unsupportedf("type-system", "Bytes.get arg 1 type %s, want Int", index.typ)
+		}
+		out, err := g.emitBytesGetRuntime(base, index)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	case "contains":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.contains requires one positional argument")
+		}
+		needle, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		needle, err = g.loadIfPointer(needle)
+		if err != nil {
+			return value{}, true, err
+		}
+		if needle.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.contains arg 1 type %s, want Bytes", needle.typ)
+		}
+		out, err := g.emitBytesContainsRuntime(base, needle)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	case "startsWith":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.startsWith requires one positional argument")
+		}
+		prefix, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		prefix, err = g.loadIfPointer(prefix)
+		if err != nil {
+			return value{}, true, err
+		}
+		if prefix.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.startsWith arg 1 type %s, want Bytes", prefix.typ)
+		}
+		out, err := g.emitBytesStartsWithRuntime(base, prefix)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	case "indexOf":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.indexOf requires one positional argument")
+		}
+		needle, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		needle, err = g.loadIfPointer(needle)
+		if err != nil {
+			return value{}, true, err
+		}
+		if needle.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.indexOf arg 1 type %s, want Bytes", needle.typ)
+		}
+		out, err := g.emitBytesIndexOfRuntime(base, needle)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	case "concat":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.concat requires one positional argument")
+		}
+		other, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		other, err = g.loadIfPointer(other)
+		if err != nil {
+			return value{}, true, err
+		}
+		if other.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.concat arg 1 type %s, want Bytes", other.typ)
+		}
+		out, err := g.emitBytesConcatRuntime(base, other)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	case "repeat":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.repeat requires one positional argument")
+		}
+		n, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		n, err = g.loadIfPointer(n)
+		if err != nil {
+			return value{}, true, err
+		}
+		if n.typ != "i64" {
+			return value{}, true, unsupportedf("type-system", "Bytes.repeat arg 1 type %s, want Int", n.typ)
+		}
+		out, err := g.emitBytesRepeatRuntime(base, n)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	case "toString":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "Bytes.toString requires no arguments")
+		}
+		out, err := g.emitBytesToStringResult(base)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	default:
+		return value{}, true, unsupportedf("call", "Bytes.%s is not supported by legacy llvmgen yet", field.Name)
+	}
+}
+
+func (g *generator) emitBytesGetRuntime(base, index value) (value, error) {
+	lenSymbol := "osty_rt_bytes_len"
+	getSymbol := "osty_rt_bytes_get"
+	g.declareRuntimeSymbol(lenSymbol, "i64", []paramInfo{{typ: "ptr"}})
+	g.declareRuntimeSymbol(getSymbol, "i8", []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+	emitter := g.toOstyEmitter()
+	length := llvmCall(emitter, "i64", lenSymbol, []*LlvmValue{toOstyValue(base)})
+	nonNegative := llvmCompare(emitter, "sge", toOstyValue(index), llvmIntLiteral(0))
+	beforeEnd := llvmCompare(emitter, "slt", toOstyValue(index), length)
+	inRange := llvmLogicalI1(emitter, "and", nonNegative, beforeEnd)
+	labels := llvmIfExprStart(emitter, inRange)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.thenLabel
+
+	emitter = g.toOstyEmitter()
+	item := llvmCall(emitter, "i8", getSymbol, []*LlvmValue{toOstyValue(base), toOstyValue(index)})
+	box := llvmGcAlloc(emitter, 1, 1, "bytes.get.byte")
+	emitter.body = append(emitter.body, fmt.Sprintf("  store i8 %s, ptr %s", item.name, box.name))
+	g.takeOstyEmitter(emitter)
+	g.needsGCRuntime = true
+	someVal := value{typ: "ptr", ref: box.name, gcManaged: true}
+	thenPred := g.currentBlock
+
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+	noneVal := value{typ: "ptr", ref: "null"}
+	elsePred := g.currentBlock
+
+	out, err := g.emitIfExprPhi(labels, thenPred, elsePred, someVal, noneVal)
+	if err != nil {
+		return value{}, err
+	}
+	out.gcManaged = true
+	out.rootPaths = g.rootPathsForType("ptr")
+	out.sourceType = &ast.OptionalType{Inner: &ast.NamedType{Path: []string{"Byte"}}}
+	return out, nil
+}
+
+func (g *generator) emitBytesIndexOfRuntime(base, needle value) (value, error) {
+	symbol := "osty_rt_bytes_index_of"
+	g.declareRuntimeSymbol(symbol, "i64", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	index := llvmCall(emitter, "i64", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(needle)})
+	g.takeOstyEmitter(emitter)
+	return g.emitOptionalBoxedI64(fromOstyValue(index), "bytes.index_of.int")
+}
+
+func (g *generator) emitBytesContainsRuntime(base, needle value) (value, error) {
+	symbol := "osty_rt_bytes_index_of"
+	g.declareRuntimeSymbol(symbol, "i64", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	index := llvmCall(emitter, "i64", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(needle)})
+	out := llvmCompare(emitter, "sge", index, llvmIntLiteral(0))
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
+}
+
+func (g *generator) emitBytesStartsWithRuntime(base, prefix value) (value, error) {
+	symbol := "osty_rt_bytes_index_of"
+	g.declareRuntimeSymbol(symbol, "i64", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	index := llvmCall(emitter, "i64", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(prefix)})
+	out := llvmCompare(emitter, "eq", index, llvmIntLiteral(0))
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
+}
+
+func (g *generator) emitBytesFromListRuntime(items value) (value, error) {
+	symbol := "osty_rt_bytes_from_list"
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(items)})
+	g.takeOstyEmitter(emitter)
+	v := fromOstyValue(out)
+	v.gcManaged = true
+	v.sourceType = &ast.NamedType{Path: []string{"Bytes"}}
+	return v, nil
+}
+
+func (g *generator) emitBytesConcatRuntime(left, right value) (value, error) {
+	symbol := "osty_rt_bytes_concat"
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(left), toOstyValue(right)})
+	g.takeOstyEmitter(emitter)
+	v := fromOstyValue(out)
+	v.gcManaged = true
+	v.sourceType = &ast.NamedType{Path: []string{"Bytes"}}
+	return v, nil
+}
+
+func (g *generator) emitBytesRepeatRuntime(base, n value) (value, error) {
+	symbol := "osty_rt_bytes_repeat"
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(n)})
+	g.takeOstyEmitter(emitter)
+	v := fromOstyValue(out)
+	v.gcManaged = true
+	v.sourceType = &ast.NamedType{Path: []string{"Bytes"}}
+	return v, nil
+}
+
+func (g *generator) emitBytesToStringResult(base value) (value, error) {
+	sourceType := bytesToStringResultSourceType()
+	info, ok := builtinResultTypeFromAST(sourceType, g.typeEnv())
+	if !ok {
+		return value{}, unsupported("type-system", "Bytes.toString Result<String, Error> type is unavailable")
+	}
+	validateSymbol := "osty_rt_bytes_is_valid_utf8"
+	toStringSymbol := "osty_rt_bytes_to_string"
+	g.declareRuntimeSymbol(validateSymbol, "i1", []paramInfo{{typ: "ptr"}})
+	g.declareRuntimeSymbol(toStringSymbol, "ptr", []paramInfo{{typ: "ptr"}})
+
+	emitter := g.toOstyEmitter()
+	valid := llvmCall(emitter, "i1", validateSymbol, []*LlvmValue{toOstyValue(base)})
+	labels := llvmIfExprStart(emitter, valid)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.thenLabel
+
+	emitter = g.toOstyEmitter()
+	text := llvmCall(emitter, "ptr", toStringSymbol, []*LlvmValue{toOstyValue(base)})
+	okResult := llvmStructLiteral(emitter, info.typ, []*LlvmValue{
+		toOstyValue(value{typ: "i64", ref: "0"}),
+		text,
+		toOstyValue(llvmZeroValue(info.errTyp)),
+	})
+	g.takeOstyEmitter(emitter)
+	thenValue := value{
+		typ:        info.typ,
+		ref:        okResult.name,
+		sourceType: sourceType,
+		rootPaths:  g.rootPathsForType(info.typ),
+	}
+	thenPred := g.currentBlock
+
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+
+	emitter = g.toOstyEmitter()
+	errResult := llvmStructLiteral(emitter, info.typ, []*LlvmValue{
+		toOstyValue(value{typ: "i64", ref: "1"}),
+		toOstyValue(llvmZeroValue(info.okTyp)),
+		toOstyValue(llvmZeroValue(info.errTyp)),
+	})
+	g.takeOstyEmitter(emitter)
+	elseValue := value{
+		typ:        info.typ,
+		ref:        errResult.name,
+		sourceType: sourceType,
+		rootPaths:  g.rootPathsForType(info.typ),
+	}
+	elsePred := g.currentBlock
+
+	out, err := g.emitIfExprPhi(labels, thenPred, elsePred, thenValue, elseValue)
+	if err != nil {
+		return value{}, err
+	}
+	out.sourceType = sourceType
+	out.rootPaths = g.rootPathsForType(info.typ)
+	return out, nil
+}
+
+func (g *generator) emitBytesNamespaceCall(call *ast.CallExpr) (value, bool, error) {
+	field, ok := g.bytesNamespaceCallInfo(call)
+	if !ok {
+		return value{}, false, nil
+	}
+	switch field.Name {
+	case "from":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.from requires one positional argument")
+		}
+		if !g.staticExprListElemIsByte(call.Args[0].Value) {
+			return value{}, true, unsupported("type-system", "Bytes.from arg 1 must be List<Byte>")
+		}
+		items, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		items, err = g.loadIfPointer(items)
+		if err != nil {
+			return value{}, true, err
+		}
+		if items.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.from arg 1 type %s, want List<Byte>", items.typ)
+		}
+		out, err := g.emitBytesFromListRuntime(items)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	case "len":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.len requires one positional argument")
+		}
+		base, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		base, err = g.loadIfPointer(base)
+		if err != nil {
+			return value{}, true, err
+		}
+		if base.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.len arg 1 type %s, want Bytes", base.typ)
+		}
+		symbol := "osty_rt_bytes_len"
+		g.declareRuntimeSymbol(symbol, "i64", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "i64", symbol, []*LlvmValue{toOstyValue(base)})
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "isEmpty":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.isEmpty requires one positional argument")
+		}
+		base, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		base, err = g.loadIfPointer(base)
+		if err != nil {
+			return value{}, true, err
+		}
+		if base.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.isEmpty arg 1 type %s, want Bytes", base.typ)
+		}
+		symbol := "osty_rt_bytes_is_empty"
+		g.declareRuntimeSymbol(symbol, "i1", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "i1", symbol, []*LlvmValue{toOstyValue(base)})
+		g.takeOstyEmitter(emitter)
+		return fromOstyValue(out), true, nil
+	case "get":
+		if len(call.Args) != 2 || call.Args[0] == nil || call.Args[1] == nil || call.Args[0].Name != "" || call.Args[1].Name != "" || call.Args[0].Value == nil || call.Args[1].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.get requires two positional arguments")
+		}
+		base, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		base, err = g.loadIfPointer(base)
+		if err != nil {
+			return value{}, true, err
+		}
+		if base.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.get arg 1 type %s, want Bytes", base.typ)
+		}
+		index, err := g.emitExpr(call.Args[1].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		index, err = g.loadIfPointer(index)
+		if err != nil {
+			return value{}, true, err
+		}
+		if index.typ != "i64" {
+			return value{}, true, unsupportedf("type-system", "Bytes.get arg 2 type %s, want Int", index.typ)
+		}
+		out, err := g.emitBytesGetRuntime(base, index)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	case "contains":
+		if len(call.Args) != 2 || call.Args[0] == nil || call.Args[1] == nil || call.Args[0].Name != "" || call.Args[1].Name != "" || call.Args[0].Value == nil || call.Args[1].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.contains requires two positional arguments")
+		}
+		base, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		base, err = g.loadIfPointer(base)
+		if err != nil {
+			return value{}, true, err
+		}
+		if base.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.contains arg 1 type %s, want Bytes", base.typ)
+		}
+		needle, err := g.emitExpr(call.Args[1].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		needle, err = g.loadIfPointer(needle)
+		if err != nil {
+			return value{}, true, err
+		}
+		if needle.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.contains arg 2 type %s, want Bytes", needle.typ)
+		}
+		out, err := g.emitBytesContainsRuntime(base, needle)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	case "startsWith":
+		if len(call.Args) != 2 || call.Args[0] == nil || call.Args[1] == nil || call.Args[0].Name != "" || call.Args[1].Name != "" || call.Args[0].Value == nil || call.Args[1].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.startsWith requires two positional arguments")
+		}
+		base, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		base, err = g.loadIfPointer(base)
+		if err != nil {
+			return value{}, true, err
+		}
+		if base.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.startsWith arg 1 type %s, want Bytes", base.typ)
+		}
+		prefix, err := g.emitExpr(call.Args[1].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		prefix, err = g.loadIfPointer(prefix)
+		if err != nil {
+			return value{}, true, err
+		}
+		if prefix.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.startsWith arg 2 type %s, want Bytes", prefix.typ)
+		}
+		out, err := g.emitBytesStartsWithRuntime(base, prefix)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	case "indexOf":
+		if len(call.Args) != 2 || call.Args[0] == nil || call.Args[1] == nil || call.Args[0].Name != "" || call.Args[1].Name != "" || call.Args[0].Value == nil || call.Args[1].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.indexOf requires two positional arguments")
+		}
+		base, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		base, err = g.loadIfPointer(base)
+		if err != nil {
+			return value{}, true, err
+		}
+		if base.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.indexOf arg 1 type %s, want Bytes", base.typ)
+		}
+		needle, err := g.emitExpr(call.Args[1].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		needle, err = g.loadIfPointer(needle)
+		if err != nil {
+			return value{}, true, err
+		}
+		if needle.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.indexOf arg 2 type %s, want Bytes", needle.typ)
+		}
+		out, err := g.emitBytesIndexOfRuntime(base, needle)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	case "concat":
+		if len(call.Args) != 2 || call.Args[0] == nil || call.Args[1] == nil || call.Args[0].Name != "" || call.Args[1].Name != "" || call.Args[0].Value == nil || call.Args[1].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.concat requires two positional arguments")
+		}
+		left, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		left, err = g.loadIfPointer(left)
+		if err != nil {
+			return value{}, true, err
+		}
+		if left.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.concat arg 1 type %s, want Bytes", left.typ)
+		}
+		right, err := g.emitExpr(call.Args[1].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		right, err = g.loadIfPointer(right)
+		if err != nil {
+			return value{}, true, err
+		}
+		if right.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.concat arg 2 type %s, want Bytes", right.typ)
+		}
+		out, err := g.emitBytesConcatRuntime(left, right)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	case "repeat":
+		if len(call.Args) != 2 || call.Args[0] == nil || call.Args[1] == nil || call.Args[0].Name != "" || call.Args[1].Name != "" || call.Args[0].Value == nil || call.Args[1].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.repeat requires two positional arguments")
+		}
+		base, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		base, err = g.loadIfPointer(base)
+		if err != nil {
+			return value{}, true, err
+		}
+		if base.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.repeat arg 1 type %s, want Bytes", base.typ)
+		}
+		n, err := g.emitExpr(call.Args[1].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		n, err = g.loadIfPointer(n)
+		if err != nil {
+			return value{}, true, err
+		}
+		if n.typ != "i64" {
+			return value{}, true, unsupportedf("type-system", "Bytes.repeat arg 2 type %s, want Int", n.typ)
+		}
+		out, err := g.emitBytesRepeatRuntime(base, n)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	case "toString":
+		if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+			return value{}, true, unsupported("call", "Bytes.toString requires one positional argument")
+		}
+		base, err := g.emitExpr(call.Args[0].Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		base, err = g.loadIfPointer(base)
+		if err != nil {
+			return value{}, true, err
+		}
+		if base.typ != "ptr" {
+			return value{}, true, unsupportedf("type-system", "Bytes.toString arg 1 type %s, want Bytes", base.typ)
+		}
+		out, err := g.emitBytesToStringResult(base)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	default:
+		return value{}, true, unsupportedf("call", "Bytes.%s is not supported by legacy llvmgen yet", field.Name)
+	}
 }
 
 func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) {
@@ -4412,10 +5058,16 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitEnumVariantCall(call); found || err != nil {
 		return v, err
 	}
-	// Alias-qualified dispatchers (std.strings / runtime.*) — run before
+	// Alias-qualified dispatchers (std.bytes / std.strings / runtime.*) — run before
 	// emitInterfaceMethodCall and the *MethodCall family, which eagerly
 	// lower the receiver via emitExpr and would otherwise fail with
 	// LLVM016 when the receiver is a module alias rather than a binding.
+	if v, found, err := g.emitStdBytesCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitBytesNamespaceCall(call); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.emitStdStringsCall(call); found || err != nil {
 		return v, err
 	}
@@ -4448,6 +5100,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return v, err
 	}
 	if v, found, err := g.emitOptionMethodCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitBytesMethodCall(call); found || err != nil {
 		return v, err
 	}
 	if v, found, err := g.emitPrimitiveToStringCall(call); found || err != nil {

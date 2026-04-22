@@ -497,7 +497,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
 		return true
-	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty:
+	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat:
 		return true
 	// Stage 5 prep — string → List<Char> / List<Byte> expansions that
 	// the legacy emitter routes through `osty_rt_strings_*`. Accepting
@@ -1544,7 +1544,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
 		return g.emitSetIntrinsic(i)
-	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty:
+	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat:
 		return g.emitBytesIntrinsic(i)
 	case mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
 		mir.IntrinsicStringLen, mir.IntrinsicStringIsEmpty:
@@ -1960,6 +1960,300 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr)")
 		em := g.ostyEmitter()
 		result := llvmCall(em, "i1", sym, []*LlvmValue{{typ: "ptr", name: bytesReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicBytesGet:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "bytes_get arity")
+		}
+		if i.Dest == nil {
+			return nil
+		}
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return fmt.Errorf("mir-mvp: bytes_get dest %d", i.Dest.Local)
+		}
+		optT, ok := destLoc.Type.(*ir.OptionalType)
+		if !ok {
+			return unsupported("mir-mvp", "bytes_get dest is not optional")
+		}
+		idxReg, err := g.evalOperand(i.Args[1], mir.TInt)
+		if err != nil {
+			return err
+		}
+		lenSym := "osty_rt_bytes_len"
+		getSym := "osty_rt_bytes_get"
+		g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr)")
+		g.declareRuntime(getSym, "declare i8 @"+getSym+"(ptr, i64)")
+		em := g.ostyEmitter()
+		length := llvmCall(em, "i64", lenSym, []*LlvmValue{{typ: "ptr", name: bytesReg}})
+		nonNegative := llvmCompare(em, "sge", &LlvmValue{typ: "i64", name: idxReg}, llvmIntLiteral(0))
+		beforeEnd := llvmCompare(em, "slt", &LlvmValue{typ: "i64", name: idxReg}, length)
+		inRange := llvmLogicalI1(em, "and", nonNegative, beforeEnd)
+		g.flushOstyEmitter(em)
+
+		someLabel := g.freshLabel("bytes.get.some")
+		noneLabel := g.freshLabel("bytes.get.none")
+		mergeLabel := g.freshLabel("bytes.get.merge")
+		g.fnBuf.WriteString("  br i1 ")
+		g.fnBuf.WriteString(inRange.name)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(someLabel)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(noneLabel)
+		g.fnBuf.WriteByte('\n')
+
+		optLLVM := g.llvmType(optT)
+
+		g.fnBuf.WriteString(someLabel)
+		g.fnBuf.WriteString(":\n")
+		em = g.ostyEmitter()
+		item := llvmCall(em, "i8", getSym, []*LlvmValue{{typ: "ptr", name: bytesReg}, {typ: "i64", name: idxReg}})
+		g.flushOstyEmitter(em)
+		payload, err := g.toI64Slot(item.name, optT.Inner)
+		if err != nil {
+			return err
+		}
+		someStep1 := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(someStep1)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteString(" undef, i64 1, 0\n")
+		someValue := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(someValue)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(someStep1)
+		g.fnBuf.WriteString(", i64 ")
+		g.fnBuf.WriteString(payload)
+		g.fnBuf.WriteString(", 1\n")
+		g.fnBuf.WriteString("  br label %")
+		g.fnBuf.WriteString(mergeLabel)
+		g.fnBuf.WriteByte('\n')
+
+		g.fnBuf.WriteString(noneLabel)
+		g.fnBuf.WriteString(":\n")
+		noneStep1 := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(noneStep1)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteString(" undef, i64 0, 0\n")
+		noneValue := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(noneValue)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(noneStep1)
+		g.fnBuf.WriteString(", i64 0, 1\n")
+		g.fnBuf.WriteString("  br label %")
+		g.fnBuf.WriteString(mergeLabel)
+		g.fnBuf.WriteByte('\n')
+
+		g.fnBuf.WriteString(mergeLabel)
+		g.fnBuf.WriteString(":\n")
+		result := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(result)
+		g.fnBuf.WriteString(" = phi ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteString(" [ ")
+		g.fnBuf.WriteString(someValue)
+		g.fnBuf.WriteString(", %")
+		g.fnBuf.WriteString(someLabel)
+		g.fnBuf.WriteString(" ], [ ")
+		g.fnBuf.WriteString(noneValue)
+		g.fnBuf.WriteString(", %")
+		g.fnBuf.WriteString(noneLabel)
+		g.fnBuf.WriteString(" ]\n")
+		g.fnBuf.WriteString("  store ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(result)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
+		g.fnBuf.WriteByte('\n')
+		return nil
+	case mir.IntrinsicBytesContains:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "bytes_contains arity")
+		}
+		needleReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_bytes_index_of"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr, ptr)")
+		em := g.ostyEmitter()
+		index := llvmCall(em, "i64", sym, []*LlvmValue{
+			{typ: "ptr", name: bytesReg},
+			{typ: "ptr", name: needleReg},
+		})
+		result := llvmCompare(em, "sge", index, llvmIntLiteral(0))
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicBytesStartsWith:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "bytes_starts_with arity")
+		}
+		prefixReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_bytes_index_of"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr, ptr)")
+		em := g.ostyEmitter()
+		index := llvmCall(em, "i64", sym, []*LlvmValue{
+			{typ: "ptr", name: bytesReg},
+			{typ: "ptr", name: prefixReg},
+		})
+		result := llvmCompare(em, "eq", index, llvmIntLiteral(0))
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicBytesIndexOf:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "bytes_index_of arity")
+		}
+		if i.Dest == nil {
+			return nil
+		}
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return fmt.Errorf("mir-mvp: bytes_index_of dest %d", i.Dest.Local)
+		}
+		optT, ok := destLoc.Type.(*ir.OptionalType)
+		if !ok {
+			return unsupported("mir-mvp", "bytes_index_of dest is not optional")
+		}
+		needleReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_bytes_index_of"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr, ptr)")
+		em := g.ostyEmitter()
+		index := llvmCall(em, "i64", sym, []*LlvmValue{
+			{typ: "ptr", name: bytesReg},
+			{typ: "ptr", name: needleReg},
+		})
+		present := llvmCompare(em, "sge", index, llvmIntLiteral(0))
+		g.flushOstyEmitter(em)
+
+		someLabel := g.freshLabel("bytes.index_of.some")
+		noneLabel := g.freshLabel("bytes.index_of.none")
+		mergeLabel := g.freshLabel("bytes.index_of.merge")
+		g.fnBuf.WriteString("  br i1 ")
+		g.fnBuf.WriteString(present.name)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(someLabel)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(noneLabel)
+		g.fnBuf.WriteByte('\n')
+
+		optLLVM := g.llvmType(optT)
+
+		g.fnBuf.WriteString(someLabel)
+		g.fnBuf.WriteString(":\n")
+		someStep1 := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(someStep1)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteString(" undef, i64 1, 0\n")
+		someValue := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(someValue)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(someStep1)
+		g.fnBuf.WriteString(", i64 ")
+		g.fnBuf.WriteString(index.name)
+		g.fnBuf.WriteString(", 1\n")
+		g.fnBuf.WriteString("  br label %")
+		g.fnBuf.WriteString(mergeLabel)
+		g.fnBuf.WriteByte('\n')
+
+		g.fnBuf.WriteString(noneLabel)
+		g.fnBuf.WriteString(":\n")
+		noneStep1 := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(noneStep1)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteString(" undef, i64 0, 0\n")
+		noneValue := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(noneValue)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(noneStep1)
+		g.fnBuf.WriteString(", i64 0, 1\n")
+		g.fnBuf.WriteString("  br label %")
+		g.fnBuf.WriteString(mergeLabel)
+		g.fnBuf.WriteByte('\n')
+
+		g.fnBuf.WriteString(mergeLabel)
+		g.fnBuf.WriteString(":\n")
+		result := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(result)
+		g.fnBuf.WriteString(" = phi ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteString(" [ ")
+		g.fnBuf.WriteString(someValue)
+		g.fnBuf.WriteString(", %")
+		g.fnBuf.WriteString(someLabel)
+		g.fnBuf.WriteString(" ], [ ")
+		g.fnBuf.WriteString(noneValue)
+		g.fnBuf.WriteString(", %")
+		g.fnBuf.WriteString(noneLabel)
+		g.fnBuf.WriteString(" ]\n")
+		g.fnBuf.WriteString("  store ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(result)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
+		g.fnBuf.WriteByte('\n')
+		return nil
+	case mir.IntrinsicBytesConcat:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "bytes_concat arity")
+		}
+		rightReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_bytes_concat"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, ptr)")
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{
+			{typ: "ptr", name: bytesReg},
+			{typ: "ptr", name: rightReg},
+		})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicBytesRepeat:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "bytes_repeat arity")
+		}
+		countReg, err := g.evalOperand(i.Args[1], mir.TInt)
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_bytes_repeat"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, i64)")
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{
+			{typ: "ptr", name: bytesReg},
+			{typ: "i64", name: countReg},
+		})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	}

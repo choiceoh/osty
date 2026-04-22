@@ -3159,6 +3159,16 @@ func bytesIntrinsicForMethod(name string) IntrinsicKind {
 		return IntrinsicBytesIsEmpty
 	case "get":
 		return IntrinsicBytesGet
+	case "contains":
+		return IntrinsicBytesContains
+	case "startsWith":
+		return IntrinsicBytesStartsWith
+	case "indexOf":
+		return IntrinsicBytesIndexOf
+	case "concat":
+		return IntrinsicBytesConcat
+	case "repeat":
+		return IntrinsicBytesRepeat
 	}
 	return IntrinsicInvalid
 }

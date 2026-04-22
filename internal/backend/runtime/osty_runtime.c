@@ -1204,8 +1204,16 @@ const char *osty_rt_strings_TrimEnd(const char *value);
 const char *osty_rt_strings_TrimPrefix(const char *value, const char *prefix);
 const char *osty_rt_strings_TrimSuffix(const char *value, const char *suffix);
 const char *osty_rt_strings_TrimSpace(const char *value);
+void *osty_rt_strings_ToBytes(const char *value);
 void *osty_rt_strings_Chars(const char *value);
 void *osty_rt_strings_Bytes(const char *value);
+void *osty_rt_bytes_from_list(void *raw_list);
+void *osty_rt_bytes_concat(void *raw_left, void *raw_right);
+void *osty_rt_bytes_repeat(void *raw_bytes, int64_t n);
+int64_t osty_rt_bytes_index_of(void *raw_bytes, void *raw_sub);
+bool osty_rt_bytes_is_valid_utf8(void *raw_bytes);
+const char *osty_rt_bytes_to_string(void *raw_bytes);
+uint8_t osty_rt_bytes_get(void *raw_bytes, int64_t index);
 bool osty_rt_set_insert_i64(void *raw_set, int64_t item);
 bool osty_rt_set_insert_i1(void *raw_set, bool item);
 bool osty_rt_set_insert_f64(void *raw_set, double item);
@@ -3413,6 +3421,28 @@ const char *osty_rt_strings_TrimSpace(const char *value) {
     return out;
 }
 
+void *osty_rt_strings_ToBytes(const char *value) {
+    size_t len;
+    size_t total;
+    osty_rt_bytes *out;
+    unsigned char *data;
+
+    value = (value == NULL) ? "" : value;
+    len = strlen(value);
+    if (len > SIZE_MAX - sizeof(osty_rt_bytes)) {
+        osty_rt_abort("runtime.strings.to_bytes: size overflow");
+    }
+    total = sizeof(osty_rt_bytes) + len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, "runtime.strings.to_bytes", NULL, NULL);
+    data = (unsigned char *)(out + 1);
+    out->data = data;
+    out->len = (int64_t)len;
+    if (len != 0) {
+        memcpy(data, value, len);
+    }
+    return out;
+}
+
 static void *osty_rt_map_value_slot(osty_rt_map *map, int64_t index) {
     return (void *)(map->values + ((size_t)index * map->value_size));
 }
@@ -4038,11 +4068,235 @@ OSTY_RT_DEFINE_SET_KEY_OPS(string, const char *)
 
 /*
  * Bytes primitive ABI. Values flow as `osty_rt_bytes *` — an opaque
- * pointer to a `{unsigned char *data; int64_t len}` struct. Only the
- * length / emptiness queries are wired up at the LLVM layer right now;
- * construction (literals, string.bytes(), etc.) is not yet surfaced,
- * but the ABI is fixed so future call sites can link against it.
+ * pointer to a `{unsigned char *data; int64_t len}` struct. Length /
+ * emptiness queries, concatenation, indexed loads, and UTF-8
+ * String-conversion helpers are wired up at the LLVM layer.
+ * String.toBytes() constructs the value through the strings runtime
+ * family, and Bytes.from(List<Byte>) copies the list payload into the
+ * same owned layout.
  */
+static bool osty_rt_bytes_validate_utf8_data(const unsigned char *data, size_t len) {
+    size_t i = 0;
+
+    while (i < len) {
+        unsigned char b1 = data[i];
+        int continuations = 0;
+        unsigned char min2 = 0x80;
+        unsigned char max2 = 0xBF;
+
+        /* Osty Strings are NUL-terminated C strings, so embedded NUL
+         * bytes would truncate the value if we accepted them here. */
+        if (b1 == 0) {
+            return false;
+        }
+        if (b1 < 0x80) {
+            i++;
+            continue;
+        }
+
+        if (b1 >= 0xC2 && b1 <= 0xDF) {
+            continuations = 1;
+        } else if (b1 == 0xE0) {
+            continuations = 2;
+            min2 = 0xA0;
+        } else if ((b1 >= 0xE1 && b1 <= 0xEC) || b1 == 0xEE || b1 == 0xEF) {
+            continuations = 2;
+        } else if (b1 == 0xED) {
+            continuations = 2;
+            max2 = 0x9F;
+        } else if (b1 == 0xF0) {
+            continuations = 3;
+            min2 = 0x90;
+        } else if (b1 >= 0xF1 && b1 <= 0xF3) {
+            continuations = 3;
+        } else if (b1 == 0xF4) {
+            continuations = 3;
+            max2 = 0x8F;
+        } else {
+            return false;
+        }
+
+        if ((size_t)continuations > len - i - 1) {
+            return false;
+        }
+        for (int j = 0; j < continuations; j++) {
+            unsigned char bn = data[i + 1 + (size_t)j];
+            unsigned char lo = (j == 0) ? min2 : 0x80;
+            unsigned char hi = (j == 0) ? max2 : 0xBF;
+            if (bn < lo || bn > hi) {
+                return false;
+            }
+        }
+        i += (size_t)(continuations + 1);
+    }
+
+    return true;
+}
+
+void *osty_rt_bytes_from_list(void *raw_list) {
+    osty_rt_list *list = (osty_rt_list *)raw_list;
+    size_t len;
+    size_t total;
+    osty_rt_bytes *out;
+    unsigned char *data;
+
+    if (list == NULL || list->len <= 0) {
+        len = 0;
+    } else {
+        if (list->len < 0) {
+            osty_rt_abort("runtime.bytes.from_list: negative length");
+        }
+        if (list->elem_size != 0 && list->elem_size != sizeof(uint8_t)) {
+            osty_rt_abort("runtime.bytes.from_list: list element size is not Byte");
+        }
+        len = (size_t)list->len;
+    }
+    if (len > SIZE_MAX - sizeof(osty_rt_bytes)) {
+        osty_rt_abort("runtime.bytes.from_list: size overflow");
+    }
+    total = sizeof(osty_rt_bytes) + len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, "runtime.bytes.from_list", NULL, NULL);
+    data = (unsigned char *)(out + 1);
+    out->data = data;
+    out->len = (int64_t)len;
+    if (len != 0) {
+        if (list->data == NULL) {
+            osty_rt_abort("runtime.bytes.from_list: missing list storage");
+        }
+        memcpy(data, list->data, len);
+    }
+    return out;
+}
+
+void *osty_rt_bytes_concat(void *raw_left, void *raw_right) {
+    osty_rt_bytes *left = (osty_rt_bytes *)raw_left;
+    osty_rt_bytes *right = (osty_rt_bytes *)raw_right;
+    size_t left_len = 0;
+    size_t right_len = 0;
+    size_t total_len;
+    size_t total;
+    osty_rt_bytes *out;
+    unsigned char *data;
+
+    if (left != NULL) {
+        if (left->len < 0) {
+            osty_rt_abort("runtime.bytes.concat: negative left length");
+        }
+        left_len = (size_t)left->len;
+    }
+    if (right != NULL) {
+        if (right->len < 0) {
+            osty_rt_abort("runtime.bytes.concat: negative right length");
+        }
+        right_len = (size_t)right->len;
+    }
+    if (left_len > SIZE_MAX - right_len || left_len + right_len > SIZE_MAX - sizeof(osty_rt_bytes)) {
+        osty_rt_abort("runtime.bytes.concat: size overflow");
+    }
+    total_len = left_len + right_len;
+    total = sizeof(osty_rt_bytes) + total_len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, "runtime.bytes.concat", NULL, NULL);
+    data = (unsigned char *)(out + 1);
+    out->data = data;
+    out->len = (int64_t)total_len;
+    if (left_len != 0) {
+        if (left->data == NULL) {
+            osty_rt_abort("runtime.bytes.concat: missing left storage");
+        }
+        memcpy(data, left->data, left_len);
+    }
+    if (right_len != 0) {
+        if (right->data == NULL) {
+            osty_rt_abort("runtime.bytes.concat: missing right storage");
+        }
+        memcpy(data + left_len, right->data, right_len);
+    }
+    return out;
+}
+
+void *osty_rt_bytes_repeat(void *raw_bytes, int64_t n) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    size_t value_len = 0;
+    size_t total_len;
+    size_t total;
+    osty_rt_bytes *out;
+    unsigned char *data;
+    unsigned char *cursor;
+    int64_t i;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.repeat: negative length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (n <= 0 || value_len == 0) {
+        total_len = 0;
+    } else {
+        if (b->data == NULL) {
+            osty_rt_abort("runtime.bytes.repeat: missing storage");
+        }
+        if ((uint64_t)n > (uint64_t)(SIZE_MAX - sizeof(osty_rt_bytes)) / (uint64_t)value_len) {
+            osty_rt_abort("runtime.bytes.repeat: size overflow");
+        }
+        total_len = value_len * (size_t)n;
+    }
+
+    total = sizeof(osty_rt_bytes) + total_len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, "runtime.bytes.repeat", NULL, NULL);
+    data = (unsigned char *)(out + 1);
+    out->data = data;
+    out->len = (int64_t)total_len;
+    if (total_len == 0) {
+        return out;
+    }
+    cursor = data;
+    for (i = 0; i < n; i++) {
+        memcpy(cursor, b->data, value_len);
+        cursor += value_len;
+    }
+    return out;
+}
+
+int64_t osty_rt_bytes_index_of(void *raw_bytes, void *raw_sub) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    osty_rt_bytes *sub = (osty_rt_bytes *)raw_sub;
+    size_t value_len = 0;
+    size_t sub_len = 0;
+    size_t i;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.index_of: negative value length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (sub != NULL) {
+        if (sub->len < 0) {
+            osty_rt_abort("runtime.bytes.index_of: negative sub length");
+        }
+        sub_len = (size_t)sub->len;
+    }
+    if (sub_len == 0) {
+        return 0;
+    }
+    if (sub_len > value_len) {
+        return -1;
+    }
+    if (b->data == NULL) {
+        osty_rt_abort("runtime.bytes.index_of: missing value storage");
+    }
+    if (sub->data == NULL) {
+        osty_rt_abort("runtime.bytes.index_of: missing sub storage");
+    }
+    for (i = 0; i + sub_len <= value_len; i++) {
+        if (memcmp(b->data + i, sub->data, sub_len) == 0) {
+            return (int64_t)i;
+        }
+    }
+    return -1;
+}
+
 int64_t osty_rt_bytes_len(void *raw_bytes) {
     osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
     if (b == NULL) {
@@ -4057,6 +4311,67 @@ bool osty_rt_bytes_is_empty(void *raw_bytes) {
         return true;
     }
     return b->len == 0;
+}
+
+bool osty_rt_bytes_is_valid_utf8(void *raw_bytes) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    size_t len = 0;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.is_valid_utf8: negative length");
+        }
+        len = (size_t)b->len;
+    }
+    if (len == 0) {
+        return true;
+    }
+    if (b->data == NULL) {
+        osty_rt_abort("runtime.bytes.is_valid_utf8: missing storage");
+    }
+    return osty_rt_bytes_validate_utf8_data(b->data, len);
+}
+
+const char *osty_rt_bytes_to_string(void *raw_bytes) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    size_t len = 0;
+    char *out;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.to_string: negative length");
+        }
+        len = (size_t)b->len;
+    }
+    if (len == 0) {
+        out = (char *)osty_gc_allocate_managed(1, OSTY_GC_KIND_STRING, "runtime.bytes.to_string.empty", NULL, NULL);
+        out[0] = '\0';
+        return out;
+    }
+    if (b->data == NULL) {
+        osty_rt_abort("runtime.bytes.to_string: missing storage");
+    }
+    if (!osty_rt_bytes_validate_utf8_data(b->data, len)) {
+        osty_rt_abort("runtime.bytes.to_string: invalid UTF-8");
+    }
+    if (len == SIZE_MAX) {
+        osty_rt_abort("runtime.bytes.to_string: size overflow");
+    }
+    out = (char *)osty_gc_allocate_managed(len + 1, OSTY_GC_KIND_STRING, "runtime.bytes.to_string", NULL, NULL);
+    memcpy(out, b->data, len);
+    out[len] = '\0';
+    return out;
+}
+
+uint8_t osty_rt_bytes_get(void *raw_bytes, int64_t index) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    if (b == NULL) {
+        osty_rt_abort("runtime.bytes.get: nil bytes");
+    }
+    if (index < 0 || index >= b->len) {
+        osty_rt_abort("runtime.bytes.get: index out of range");
+    }
+    return b->data[index];
 }
 
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));

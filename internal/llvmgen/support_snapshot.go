@@ -2380,6 +2380,10 @@ func llvmStringRuntimeBytesSymbol() string {
 	return "osty_rt_strings_Bytes"
 }
 
+func llvmStringRuntimeToBytesSymbol() string {
+	return "osty_rt_strings_ToBytes"
+}
+
 func llvmStringRuntimeDeclarations() []string {
 	return []string{
 		"declare i1 @osty_rt_strings_Equal(ptr, ptr)",
@@ -2407,6 +2411,7 @@ func llvmStringRuntimeDeclarations() []string {
 		"declare ptr @osty_rt_strings_TrimSpace(ptr)",
 		"declare ptr @osty_rt_strings_Chars(ptr)",
 		"declare ptr @osty_rt_strings_Bytes(ptr)",
+		"declare ptr @osty_rt_strings_ToBytes(ptr)",
 	}
 }
 
@@ -2515,6 +2520,10 @@ func llvmStringChars(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
 
 func llvmStringBytes(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
 	return llvmCall(emitter, "ptr", "osty_rt_strings_Bytes", []*LlvmValue{value})
+}
+
+func llvmStringToBytes(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_strings_ToBytes", []*LlvmValue{value})
 }
 
 func llvmBuiltinType(name string) string {
