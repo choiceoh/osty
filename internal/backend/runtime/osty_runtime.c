@@ -11845,6 +11845,16 @@ void osty_rt_test_snapshot(const char *name, const char *output, const char *sou
     exit(1);
 }
 
+void osty_rt_io_write(const char *text, bool newline, bool to_stderr) {
+    FILE *out = to_stderr ? stderr : stdout;
+    const char *safe = text != NULL ? text : "";
+    fputs(safe, out);
+    if (newline) {
+        fputc('\n', out);
+    }
+    fflush(out);
+}
+
 /* std.env command-line argument surface.
  *
  * The emitter (see internal/llvmgen/stdlib_env_shim.go) routes the Osty
