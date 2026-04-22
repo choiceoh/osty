@@ -1752,24 +1752,11 @@ fn srUndefinedHint(scope: SelfResolveScope, name: String) -> String {
 }
 
 fn srSuggestSimilar(scope: SelfResolveScope, name: String) -> String {
-    let mut best = ""
-    let mut bestDist = 3
-    let nameLen = srStringUnitCount(name)
+    let mut names: List<String> = []
     for sym in scope.symbols {
-        let diff = srStringUnitCount(sym.name) - nameLen
-        if diff > bestDist - 1 || 0 - diff > bestDist - 1 {
-            continue
-        }
-        let dist = srLevenshteinBounded(name, sym.name, bestDist)
-        if dist < bestDist {
-            best = sym.name
-            bestDist = dist
-            if bestDist == 1 {
-                return best
-            }
-        }
+        names.push(sym.name)
     }
-    best
+    srSuggestFromList(name, names)
 }
 
 fn srLevenshteinBounded(left: String, right: String, limit: Int) -> Int {
@@ -2017,7 +2004,7 @@ fn srCollectAnnotationNodes(file: AstFile, extraIdx: Int) -> List<AstNode> {
 
 /// srCheckDeclAnnotations validates the annotations attached to a single
 /// declaration (or member) against v0.4 §18.1:
-///   - unknown names → E0400
+///   - unknown names → E0400 (with did-you-mean hint)
 ///   - wrong target kind → E0607
 ///   - same name twice on one target → E0609
 fn srCheckDeclAnnotations(
@@ -2037,12 +2024,14 @@ fn srCheckDeclAnnotations(
     for ann in anns {
         let name = ann.text
         if !srIsAllowedAnnotation(name) {
-            out.diagnostics.push(selfResolveDiagnostic(
+            out.diagnostics.push(selfResolveDiagnosticHintAtNode(
                 "E0400",
                 "unknown annotation `#[" + name + "]`",
                 name,
                 ann.start,
                 ann.end,
+                -1,
+                srDidYouMeanHint(name, srAnnotationNameList()),
             ))
             continue
         }
@@ -2074,6 +2063,322 @@ fn srCheckDeclAnnotations(
             continue
         }
         seen.push(name)
+        out = srCheckAnnotationArgs(file, ann, target, out)
     }
     out
+}
+
+/// SrAnnotArgView normalizes the three shapes the parser emits for
+/// annotation args into one record. `#[json(key = "x")]` produces
+/// AstNField_ (keyed value); `#[json(skip)]` produces AstNIdent (bare
+/// flag); `#[export("name")]` produces the raw expression. See
+/// toolchain/parser.osty:1647 `opParseAnnotationArg`.
+struct SrAnnotArgView {
+    key: String,
+    valueIdx: Int,
+    isFlag: Bool,
+    start: Int,
+    end: Int,
+}
+
+fn srAnnotArgView(file: AstFile, argIdx: Int) -> SrAnnotArgView {
+    let arg = srAstNode(file, argIdx)
+    if arg.kind == AstNField_ {
+        return SrAnnotArgView { key: arg.text, valueIdx: arg.left, isFlag: false, start: arg.start, end: arg.end }
+    }
+    if arg.kind == AstNIdent {
+        return SrAnnotArgView { key: arg.text, valueIdx: -1, isFlag: true, start: arg.start, end: arg.end }
+    }
+    SrAnnotArgView { key: "", valueIdx: argIdx, isFlag: false, start: arg.start, end: arg.end }
+}
+
+fn srIsStringLitAtIdx(file: AstFile, idx: Int) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    srAstNode(file, idx).kind == AstNStringLit
+}
+
+fn srIsFlagOrTrue(file: AstFile, view: SrAnnotArgView) -> Bool {
+    if view.isFlag {
+        return true
+    }
+    if view.valueIdx < 0 {
+        return true
+    }
+    let v = srAstNode(file, view.valueIdx)
+    v.kind == AstNBoolLit && v.flags == 1
+}
+
+fn srPushBadArg(
+    result: SelfResolveResult,
+    message: String,
+    start: Int,
+    end: Int,
+) -> SelfResolveResult {
+    let mut out = result
+    out.diagnostics.push(selfResolveDiagnostic("E0739", message, "", start, end))
+    out
+}
+
+fn srPushUnknownArg(
+    result: SelfResolveResult,
+    message: String,
+    name: String,
+    start: Int,
+    end: Int,
+    hint: String,
+) -> SelfResolveResult {
+    // Matches the Go resolver's quirk: unknown annotation-arg keys are
+    // emitted as E0400 (CodeUnknownAnnotation), not E0739. See
+    // internal/resolve/resolve.go:711. The `hint` field carries the
+    // did-you-mean suggestion (empty if none) — this is a strict
+    // improvement over Go, which emits no suggestion.
+    let mut out = result
+    out.diagnostics.push(selfResolveDiagnosticHintAtNode(
+        "E0400",
+        message,
+        name,
+        start,
+        end,
+        -1,
+        hint,
+    ))
+    out
+}
+
+/// srCheckAnnotationArgs dispatches to the per-annotation argument
+/// validator. Only runs on allowed + non-duplicate annotations. Mirrors
+/// the Go resolver's `checkAnnotationArgs` (internal/resolve/resolve.go:546).
+fn srCheckAnnotationArgs(
+    file: AstFile,
+    ann: AstNode,
+    target: Int,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if ann.text == "json" { return srCheckJSONArgs(file, ann, target, result) }
+    if ann.text == "deprecated" { return srCheckDeprecatedArgs(file, ann, result) }
+    if ann.text == "repr" { return srCheckReprArgs(file, ann, result) }
+    if ann.text == "export" { return srCheckExportArgs(file, ann, result) }
+    if ann.text == "intrinsic" || ann.text == "pod" || ann.text == "c_abi" || ann.text == "no_alloc" {
+        return srCheckNoArgsRuntime(file, ann, result)
+    }
+    result
+}
+
+fn srCheckJSONArgs(
+    file: AstFile,
+    ann: AstNode,
+    target: Int,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    let mut hasKey = false
+    let mut hasSkip = false
+    let mut hasOptional = false
+    for argIdx in ann.children {
+        let view = srAnnotArgView(file, argIdx)
+        if view.key == "key" {
+            hasKey = true
+            if !srIsStringLitAtIdx(file, view.valueIdx) {
+                out = srPushBadArg(out, "`#[json(key = ...)]` requires a string literal", view.start, view.end)
+            }
+        } else if view.key == "skip" {
+            hasSkip = true
+            if !srIsFlagOrTrue(file, view) {
+                out = srPushBadArg(out, "`#[json(skip)]` takes no value or `skip = true`", view.start, view.end)
+            }
+        } else if view.key == "optional" {
+            hasOptional = true
+            if target != srAnnotTargetField() {
+                out = srPushBadArg(out, "`#[json(optional)]` is only valid on struct fields", view.start, view.end)
+            }
+            if !srIsFlagOrTrue(file, view) {
+                out = srPushBadArg(out, "`#[json(optional)]` takes no value or `optional = true`", view.start, view.end)
+            }
+        } else {
+            out = srPushUnknownArg(
+                out,
+                "`#[json]` does not accept argument `" + view.key + "`",
+                view.key,
+                view.start,
+                view.end,
+                srDidYouMeanHint(view.key, srJSONArgKeys()),
+            )
+        }
+    }
+    if hasSkip && (hasKey || hasOptional) {
+        out = srPushBadArg(out, "`skip` is mutually exclusive with `key` and `optional`", ann.start, ann.end)
+    }
+    out
+}
+
+fn srCheckDeprecatedArgs(
+    file: AstFile,
+    ann: AstNode,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    for argIdx in ann.children {
+        let view = srAnnotArgView(file, argIdx)
+        if view.key == "since" || view.key == "use" || view.key == "message" {
+            if view.valueIdx < 0 || !srIsStringLitAtIdx(file, view.valueIdx) {
+                out = srPushUnknownArg(
+                    out,
+                    "`#[deprecated(" + view.key + " = ...)]` requires a string literal",
+                    view.key,
+                    view.start,
+                    view.end,
+                    "",
+                )
+            }
+        } else {
+            out = srPushUnknownArg(
+                out,
+                "`#[deprecated]` does not accept argument `" + view.key + "`",
+                view.key,
+                view.start,
+                view.end,
+                srDidYouMeanHint(view.key, srDeprecatedArgKeys()),
+            )
+        }
+    }
+    out
+}
+
+fn srCheckReprArgs(
+    file: AstFile,
+    ann: AstNode,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    let args = ann.children
+    let n = args.len()
+    if n == 0 {
+        return srPushBadArg(out, "`#[repr]` requires a layout argument", ann.start, ann.end)
+    }
+    if n > 1 {
+        let extra = srAnnotArgView(file, args[1])
+        out = srPushBadArg(out, "`#[repr]` accepts exactly one argument", extra.start, extra.end)
+    }
+    let view = srAnnotArgView(file, args[0])
+    if !view.isFlag {
+        return srPushBadArg(out, "`#[repr]` takes a bare-flag argument, not a value", view.start, view.end)
+    }
+    if view.key != "c" {
+        out = srPushBadArg(out, "`#[repr(" + view.key + ")]` is not a recognized layout", view.start, view.end)
+    }
+    out
+}
+
+fn srCheckExportArgs(
+    file: AstFile,
+    ann: AstNode,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    let args = ann.children
+    let n = args.len()
+    if n == 0 {
+        return srPushBadArg(out, "`#[export]` requires a symbol-name argument", ann.start, ann.end)
+    }
+    if n > 1 {
+        let extra = srAnnotArgView(file, args[1])
+        out = srPushBadArg(out, "`#[export]` accepts exactly one argument", extra.start, extra.end)
+    }
+    let view = srAnnotArgView(file, args[0])
+    if view.key != "" {
+        return srPushBadArg(
+            out,
+            "`#[export]` takes a positional string literal, not a key-value argument",
+            view.start,
+            view.end,
+        )
+    }
+    if !srIsStringLitAtIdx(file, view.valueIdx) {
+        return srPushBadArg(out, "`#[export]` requires a string literal argument", view.start, view.end)
+    }
+    out
+}
+
+fn srCheckNoArgsRuntime(
+    file: AstFile,
+    ann: AstNode,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if ann.children.len() == 0 {
+        return result
+    }
+    let first = srAnnotArgView(file, ann.children[0])
+    srPushBadArg(
+        result,
+        "`#[" + ann.text + "]` does not take arguments",
+        first.start,
+        first.end,
+    )
+}
+
+/// srAnnotationNameList returns the 14 permitted annotation names as a
+/// flat list for did-you-mean suggestions. Keep in sync with the
+/// `srAnnotAllowedTargets` switch.
+fn srAnnotationNameList() -> List<String> {
+    [
+        "json",
+        "deprecated",
+        "allow",
+        "intrinsic_methods",
+        "requires",
+        "no_alloc",
+        "intrinsic",
+        "c_abi",
+        "export",
+        "pod",
+        "repr",
+        "cfg",
+        "op",
+        "test",
+    ]
+}
+
+fn srJSONArgKeys() -> List<String> {
+    ["key", "skip", "optional"]
+}
+
+fn srDeprecatedArgKeys() -> List<String> {
+    ["since", "use", "message"]
+}
+
+/// srSuggestFromList finds the closest candidate (Levenshtein distance
+/// < 3) from a fixed list. Returns "" if nothing is within reach. This
+/// is the typo-suggestion primitive for annotation names and arg keys —
+/// unlike Go's resolver, which emits unknown-annotation errors with no
+/// spelling hints, the self-hosted version nudges the user toward the
+/// right spelling.
+fn srSuggestFromList(name: String, candidates: List<String>) -> String {
+    let mut best = ""
+    let mut bestDist = 3
+    let nameLen = srStringUnitCount(name)
+    for candidate in candidates {
+        let diff = srStringUnitCount(candidate) - nameLen
+        if diff > bestDist - 1 || 0 - diff > bestDist - 1 {
+            continue
+        }
+        let dist = srLevenshteinBounded(name, candidate, bestDist)
+        if dist < bestDist {
+            best = candidate
+            bestDist = dist
+            if bestDist == 1 {
+                return best
+            }
+        }
+    }
+    best
+}
+
+fn srDidYouMeanHint(name: String, candidates: List<String>) -> String {
+    let suggestion = srSuggestFromList(name, candidates)
+    if suggestion == "" {
+        return ""
+    }
+    "did you mean `{suggestion}`?"
 }
