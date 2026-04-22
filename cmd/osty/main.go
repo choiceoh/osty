@@ -673,6 +673,19 @@ func runCheckPackage(dir string, flags cliFlags) {
 		runCheckWorkspace(dir, flags)
 		return
 	}
+	if code := runCheckPackageLegacy(dir, flags); code != 0 {
+		os.Exit(code)
+	}
+}
+
+// runCheckPackageLegacy is the extracted single-package body of
+// runCheckPackage (the non-native branch, after manifest + workspace
+// dispatching). Returns an exit code instead of calling os.Exit so
+// the legacy DIR path is exercisable in-process alongside
+// runCheckPackageNative — symmetric to runCheckFileLegacy (#639).
+// Callers that previously relied on os.Exit semantics should
+// propagate the returned code.
+func runCheckPackageLegacy(dir string, flags cliFlags) int {
 	// Single-package path: enable the native-checker cache anchored
 	// at the best manifest root we can find, falling back to dir.
 	cacheRoot := dir
@@ -683,7 +696,7 @@ func runCheckPackage(dir string, flags cliFlags) {
 	pkg, err := resolve.LoadPackageWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("check"), os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 	chk := check.Package(pkg, res, checkOpts())
@@ -696,8 +709,9 @@ func runCheckPackage(dir string, flags cliFlags) {
 		dumpNativeDiagsFor(dir, chk)
 	}
 	if hasError(diags) {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // manifestLookupNear reports whether an osty.toml is reachable from

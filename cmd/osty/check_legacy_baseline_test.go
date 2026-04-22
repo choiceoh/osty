@@ -99,6 +99,56 @@ func TestRunCheckFileLegacyAstbridgeBaseline(t *testing.T) {
 	}
 }
 
+// TestRunCheckPackageLegacyAstbridgeBaseline is the DIR sibling of
+// TestRunCheckFileLegacyAstbridgeBaseline: every file in the package
+// gets its *ast.File materialized during resolve.LoadPackage, so the
+// warm-path cost scales linearly with file count. A two-file package
+// bumps the counter exactly twice. Any change here (caching,
+// deferred lowering, batched parsing) will flag a shift in the
+// legacy DIR pipeline's per-file cost.
+//
+// Pair with TestRunCheckPackageNativeIsAstbridgeFree (which asserts
+// 0 for the same two-file shape) to measure the delta between the
+// legacy and native DIR paths.
+func TestRunCheckPackageLegacyAstbridgeBaseline(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.osty")
+	bPath := filepath.Join(dir, "b.osty")
+	if err := os.WriteFile(aPath, []byte(`pub fn helper() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte(`fn main() {
+    let x = 1
+    let y = x + 2
+    y
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	flags := cliFlags{noColor: true}
+
+	// Warm the stdlib/canonical/checker caches once so the
+	// measurement reflects per-invocation cost only (same rationale
+	// as warmStdlibCachesForBaseline for the FILE path).
+	captureStdouterr(t, func() {
+		_ = runCheckPackageLegacy(dir, flags)
+	})
+
+	selfhost.ResetAstbridgeLowerCount()
+	var exit int
+	captureStdouterr(t, func() {
+		exit = runCheckPackageLegacy(dir, flags)
+	})
+	if exit != 0 {
+		t.Fatalf("runCheckPackageLegacy exit = %d, want 0", exit)
+	}
+	const want = 2 // two source files, one *ast.File lowering each
+	if got := selfhost.AstbridgeLowerCount(); got != want {
+		t.Fatalf("AstbridgeLowerCount after warm runCheckPackageLegacy = %d, want %d (one *ast.File per package file via resolve.LoadPackageWithTransform)", got, want)
+	}
+}
+
 // TestRunTypecheckFileLegacyAstbridgeBaseline is the typecheck
 // sibling. Same warm-cache expectation as the check baseline — one
 // bump for the user file, zero for stdlib because those are
