@@ -24,16 +24,11 @@ func printNativeResolutionRows(rows []resolve.NativeResolutionRow) {
 	}
 }
 
-// nativeResolveFromRunRows is the astbridge-free single-file resolve
-// row builder. Given a parsed FrontendRun and the raw source, it runs
-// the native resolver directly on the parser arena (no *ast.File
-// round-trip) and formats the result into the same
-// resolve.NativeResolutionRow shape printNativeResolutionRows expects.
-func nativeResolveFromRunRows(run *selfhost.FrontendRun, src []byte, path string) []resolve.NativeResolutionRow {
-	if run == nil {
-		return nil
-	}
-	resolved := selfhost.ResolveStructuredFromRunForPath(run, path)
+// nativeResolveRowsFromResolved formats an already-produced native
+// resolve result into printNativeResolutionRows input. Pair with
+// selfhost.ResolveFromSource so the caller never threads a
+// *selfhost.FrontendRun through the CLI layer.
+func nativeResolveRowsFromResolved(resolved selfhost.ResolveResult, src []byte, path string) []resolve.NativeResolutionRow {
 	lineStarts := computeLineStartsBytes(src)
 	kindByNode := map[int]string{}
 	for _, sym := range resolved.Symbols {
@@ -78,15 +73,11 @@ func nativeResolveFromRunRows(run *selfhost.FrontendRun, src []byte, path string
 	return rows
 }
 
-// nativeResolveFromRunDiagnostics converts the native resolver's
-// structured diagnostics into *diag.Diagnostic, preserving the code +
-// primary span + hint shape callers expect. Pair with ParseRun to keep
-// the resolve pass free of the astbridge *ast.File lowering.
-func nativeResolveFromRunDiagnostics(run *selfhost.FrontendRun, src []byte, path string) []*diag.Diagnostic {
-	if run == nil {
-		return nil
-	}
-	resolved := selfhost.ResolveStructuredFromRunForPath(run, path)
+// nativeResolveDiagnosticsFromResolved converts an already-produced
+// native resolver's structured diagnostics into *diag.Diagnostic,
+// preserving the code + primary span + hint shape callers expect.
+// Pair with selfhost.ResolveFromSource for the astbridge-free path.
+func nativeResolveDiagnosticsFromResolved(resolved selfhost.ResolveResult, src []byte, path string) []*diag.Diagnostic {
 	lineStarts := computeLineStartsBytes(src)
 	out := make([]*diag.Diagnostic, 0, len(resolved.Diagnostics))
 	for _, record := range resolved.Diagnostics {
