@@ -2436,10 +2436,10 @@ fn mirLowerExprIntoPlaceImpl(
         HirExprRange -> mirLowerRangeLitInto(bs, e, dest, destT),
         HirExprQuestion -> mirLowerQuestionInto(bs, e, dest, destT),
         HirExprIfLet -> mirLowerIfLetExprInto(bs, e, dest, destT),
-        // Kinds deferred to Stage 4e-3 / 4f:
+        HirExprMethod -> mirLowerMethodCallInto(bs, e, dest, destT),
+        HirExprMapLit -> mirLowerMapLitInto(bs, e, dest, destT),
+        // Kinds deferred to Stage 4e-4 / 4f:
         HirExprMatch -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "MatchExpr"),
-        HirExprMethod -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "MethodCall"),
-        HirExprMapLit -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "MapLit"),
         HirExprClosure -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "Closure"),
         _ -> mirLowerExprIntoPlaceRValue(bs, e, dest, destT),
     }
@@ -3818,4 +3818,242 @@ pub fn mirLowerVariantPayloadType(
         }
     }
     hirTypeErr()
+}
+
+// ====================================================================
+// Stage 4e-3: MethodCall + MapLit
+// ====================================================================
+
+/// mirLowerMethodCallInto lowers `receiver.method(args)`.
+///
+/// Stage 4e-3 scope:
+///   1. Use-alias qualified calls (`pkg.fn(...)` where receiver is a
+///      package alias) → direct FnRef with the qualified symbol. No
+///      synthetic `self` is inserted.
+///   2. User method via pass-1 method signature table → direct
+///      CallInstr with mangled `TypeName__method` symbol + receiver
+///      as first arg. Signature-driven keyword/default arg ordering
+///      is deferred to Stage 4e-4 (positional only for now).
+///   3. Method with no signature → best-effort mangled symbol
+///      (`TypeName__method` via receiver type name), receiver as
+///      first arg. Unknown-type receivers fall through to a TODO.
+///
+/// Concurrency / runtime / stdlib intrinsic fast paths (e.g.
+/// `ch.recv()`, `xs.len()`, `s.split(sep)`) stay on the Stage 4e-4
+/// backlog — they need the full intrinsic-dispatch table and are
+/// orthogonal to the core dispatch shape this PR establishes.
+pub fn mirLowerMethodCallInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    let span = mirSpanFromHir(e.span)
+    if e.methodReceiver.len() == 0 {
+        mirLowerNoteIssue(bs.l, "mir_lower: method call with no receiver")
+        mirLowerEmitInstr(
+            bs,
+            mirAssignInstr(dest, mirRVUse(mirOperandConst(mirConstUnit())), span),
+        )
+        return
+    }
+    let recv = e.methodReceiver[0]
+    // 1. Use-alias qualifier fast path.
+    let useIdx = mirLowerUseAliasIndexForReceiver(bs.l, recv)
+    if useIdx >= 0 {
+        mirLowerMethodCallQualified(bs, e, bs.l.useAliases[useIdx], dest, destT, span)
+        return
+    }
+    // 2/3. Regular method call.
+    mirLowerMethodCallUser(bs, e, recv, dest, destT, span)
+}
+
+/// mirLowerUseAliasIndexForReceiver returns the index into
+/// `l.useAliases` when `recv` is a bare Ident referencing an imported
+/// package alias, or -1 otherwise. Matches Go's `useAliasFor`.
+fn mirLowerUseAliasIndexForReceiver(l: MirLowerer, recv: HirExpr) -> Int {
+    match recv.kind {
+        HirExprIdent -> mirLowerLookupUseAlias(l, recv.identName),
+        _ -> -1,
+    }
+}
+
+/// mirLowerMethodCallQualified handles `pkg.fn(args)` shaped as a
+/// MethodCall where the receiver is a use alias (not a value). Emits
+/// a direct Fn call against the qualified symbol `pkg__fn` — no
+/// synthetic `self` argument is inserted.
+///
+/// Concurrency / runtime intrinsic detection is deferred to Stage
+/// 4e-4; qualified calls land here as plain FnRef calls for now.
+fn mirLowerMethodCallQualified(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    use_: HirUseDecl,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) {
+    if mirLowerCallArgsHaveKeyword(e.methodArgs) {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4e-4 TODO: keyword args in qualified call to \""
+                + use_.alias + "." + e.methodName + "\"",
+        )
+    }
+    let symbol = mirLowerQualifiedSymbol(use_, e.methodName)
+    let operands = mirLowerLowerCallArgs(bs, e.methodArgs)
+    let hasDest = !hirTypeIsUnit(destT)
+    let calleeTypeText = hirTypeString(e.typ)
+    let instr = mirCallInstr(
+        hasDest,
+        dest,
+        symbol,
+        calleeTypeText,
+        operands,
+        span,
+    )
+    mirLowerEmitInstr(bs, instr)
+}
+
+/// mirLowerQualifiedSymbol renders a package-qualified call target.
+/// Matches Go's `qualifiedSymbol`: the use decl's qualifier joined
+/// by `__` with the method name. Use decls from `use go "..."`
+/// forms route through the goPath; ordinary imports use the alias.
+fn mirLowerQualifiedSymbol(use_: HirUseDecl, name: String) -> String {
+    let qualifier = if use_.isGoFFI && use_.goPath != "" {
+        use_.goPath
+    } else if use_.isRuntimeFFI && use_.runtimePath != "" {
+        use_.runtimePath
+    } else if use_.alias != "" {
+        use_.alias
+    } else {
+        use_.rawPath
+    }
+    if qualifier == "" {
+        return name
+    }
+    qualifier + "__" + name
+}
+
+/// mirLowerMethodCallUser handles user-defined methods on named
+/// types. Looks up the method signature table populated by pass 1
+/// (`mirLowerCollectSignatures`) — the mangled symbol lives there
+/// and matches the LLVM emitter's convention.
+fn mirLowerMethodCallUser(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    recv: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) {
+    if mirLowerCallArgsHaveKeyword(e.methodArgs) {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4e-4 TODO: keyword args in method call \"" + e.methodName + "\"",
+        )
+    }
+    let recvOp = mirLowerExprAsOperand(bs, recv)
+    let typeName = hirTypeNameOf(recv.typ)
+    let sigIdx = if typeName != "" {
+        mirLowerSignatureForMethod(bs.l, typeName, e.methodName)
+    } else {
+        -1
+    }
+    let symbol = if sigIdx >= 0 {
+        bs.l.methodSigs[sigIdx].symbol
+    } else if typeName != "" {
+        mangleMethodSymbol(typeName, e.methodName)
+    } else {
+        e.methodName
+    }
+    if sigIdx < 0 && typeName != "" {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: method \"" + typeName + "." + e.methodName
+                + "\" not in signature table — using mangled fallback",
+        )
+    }
+    let mut operands: List<MirOperand> = []
+    operands.push(recvOp)
+    for a in e.methodArgs {
+        operands.push(mirLowerExprAsOperand(bs, a.value))
+    }
+    let hasDest = !hirTypeIsUnit(destT)
+    let calleeTypeText = hirTypeString(e.typ)
+    let instr = mirCallInstr(
+        hasDest,
+        dest,
+        symbol,
+        calleeTypeText,
+        operands,
+        span,
+    )
+    mirLowerEmitInstr(bs, instr)
+}
+
+// ---- MapLit --------------------------------------------------------
+
+/// mirLowerMapLitInto emits `{k: v, ...}` as a MapNew intrinsic
+/// followed by one MapSet per entry. Matches Go's `lowerMapLitInto`.
+///
+/// The produced MIR mirrors the runtime ABI exactly — MapNew is
+/// dest-producing, MapSet is void and takes the map as its first arg.
+pub fn mirLowerMapLitInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    let span = mirSpanFromHir(e.span)
+    let mapT = if hirTypeIsValid(destT) {
+        destT
+    } else if hirTypeIsValid(e.typ) {
+        e.typ
+    } else {
+        let mut args: List<HirType> = []
+        args.push(e.mapKeyT)
+        args.push(e.mapValT)
+        hirTypeBuiltin("Map", args)
+    }
+
+    // MapNew produces the fresh map into dest.
+    let newHasDest = !hirTypeIsUnit(mapT)
+    let emptyArgs: List<MirOperand> = []
+    let newInstr = mirIntrinsicInstr(
+        newHasDest,
+        dest,
+        MirIntrinsicMapNew,
+        emptyArgs,
+        span,
+    )
+    mirLowerEmitInstr(bs, newInstr)
+
+    if e.mapEntries.len() == 0 {
+        let _ = mapT
+        return
+    }
+
+    // Each entry: MapSet(dest, key, value). dest is read from the
+    // same Place we just MapNew'd into; MIR's Copy operand carries
+    // the Map type text so the runtime ABI sees the right shape.
+    let mapTypeText = hirTypeString(mapT)
+    for entry in e.mapEntries {
+        let mapOp = mirOperandCopy(dest, mapTypeText)
+        let keyOp = mirLowerExprAsOperand(bs, entry.key)
+        let valOp = mirLowerExprAsOperand(bs, entry.value)
+        let mut setArgs: List<MirOperand> = []
+        setArgs.push(mapOp)
+        setArgs.push(keyOp)
+        setArgs.push(valOp)
+        // MapSet is void — no dest.
+        let setInstr = mirIntrinsicInstr(
+            false,
+            mirPlace(-1),
+            MirIntrinsicMapSet,
+            setArgs,
+            mirSpanFromHir(entry.span),
+        )
+        mirLowerEmitInstr(bs, setInstr)
+    }
 }
