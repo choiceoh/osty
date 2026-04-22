@@ -238,7 +238,11 @@ func clangCompileCObjectArgs(target, sourcePath, objectPath string) []string {
 	if !isWindowsTarget(target) {
 		args = append(args, "-pthread")
 	}
-	args = append(args, "-std=c11", "-c", sourcePath, "-o", objectPath)
+	// -O2 keeps the GC/scheduler runtime in the same optimization tier
+	// as the IR compile path (see llvmClangCompileObjectArgs); -O0
+	// here would leave hot runtime helpers like osty_rt_list_get_i64
+	// unoptimized and cap the win from the IR-side fast paths.
+	args = append(args, "-O2", "-std=c11", "-c", sourcePath, "-o", objectPath)
 	return args
 }
 
