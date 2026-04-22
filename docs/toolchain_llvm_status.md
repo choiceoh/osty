@@ -143,8 +143,8 @@ Current-tree observations from the code re-audit:
 | Layer | Where | What blocks |
 |---|---|---|
 | CLI wiring | universal LLVM entry wedge | **resolved** — hello-world `osty gen --backend=llvm` exits 0 and writes `.ll` output |
-| Bootstrap bridge | merged whole-toolchain probe | first wall is still `LLVM002 runtime-ffi` on `runtime.golegacy.astbridge`; this is a bootstrap artifact, not yet a native backend parity claim |
-| Native backend surface | merged native-only probe | **CLEAN** after skipping 4 bootstrap-only files (`#486`, verified 2026-04-21 via `TestNativeToolchainMergedIsClean` + `TestProbeNativeToolchainMerged`). Most recently closed: `LLVM015 [method_call_field]` on `buf.clear()` in `ty.osty` — `List<T>.clear()` now dispatches through `osty_rt_list_clear` in `emitListMethodCallStmt`, with the symbol added to `listMethodInfo`'s whitelist. Preceding `String.bytes()`/`String.chars()` intrinsic gap also closed (lowers to `osty_rt_strings_Chars` / `osty_rt_strings_Bytes` with `listElemTyp` tagged `i32` / `i8`). Earlier closed walls (in order): `LLVM011 [fn_param_struct_type]` Char on `lspUtf16UnitsForChar`; `LLVM012 *ast.MatchExpr is not a call` (match-as-statement lowering); `LLVM012 field assignment base *ast.FieldExpr` (nested `a.b.c = x` via `llvmInsertValue` rebuild chain); parser precedence `(!x).y` / `!(x.y)` hoisted at stable-AST lowering; `LLVM011 [list_mixed_ptr]` source-type propagation (stdlib strings alias calls, bare `""` literals, if-expr phi branches — `staticStdStringsCallSourceType` + literal sourceType tagging + mergeContainerMetadata sameSourceType); `LLVM011 [string_non_ascii]` multi-byte UTF-8 literals (BOM / Unit Separator / Korean / emoji) now byte-escaped via `\HH` in `llvmCStringEscape`, with `llvmCString` counting UTF-8 bytes instead of runes; `LLVM013 match arm must be a payload-free enum variant` was a source inconsistency (missing `FrontDiagBadNumericSeparator` enum variant) + a latent return-path gap (hardcoded `listElemString=false` in `emitReturningBlock` / `emitReturn`). List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites also closed |
+| Bootstrap bridge | merged whole-toolchain probe | first wall is `LLVM001 foreign-ffi` on `ci.osty`'s `use go "github.com/osty/osty/internal/cihost"`. `toolchain/ast_lower.osty` (dead duplicate of `internal/selfhost/ast_lower.osty`, 1672 LOC) was deleted 2026-04-22, and `toolchain/docgen.osty` + `toolchain/manifest_validation.osty` were ported from `use go "strings"` to `use std.strings as strings` on the same day (including a new `strings.fields` backend shim — runtime `osty_rt_strings_Fields` + `stdStringsCallStaticResult`/`staticStdStringsCallSourceType` entries — to close the AST-emitter static-type gap that was blocking `for part in strings.fields(text)` iteration). Only `ci.osty` remains with `use go "..."`; it must be ported to `runtime.cabi.*` / `runtime.<surface>` bindings (LANG_SPEC_v0.5 §12.8) before the whole probe reports CLEAN |
+| Native backend surface | merged native-only probe | **CLEAN** after skipping 1 bootstrap-only file (`#486`, verified 2026-04-21 via `TestNativeToolchainMergedIsClean` + `TestProbeNativeToolchainMerged`). Most recently closed: `LLVM015 [method_call_field]` on `buf.clear()` in `ty.osty` — `List<T>.clear()` now dispatches through `osty_rt_list_clear` in `emitListMethodCallStmt`, with the symbol added to `listMethodInfo`'s whitelist. Preceding `String.bytes()`/`String.chars()` intrinsic gap also closed (lowers to `osty_rt_strings_Chars` / `osty_rt_strings_Bytes` with `listElemTyp` tagged `i32` / `i8`). Earlier closed walls (in order): `LLVM011 [fn_param_struct_type]` Char on `lspUtf16UnitsForChar`; `LLVM012 *ast.MatchExpr is not a call` (match-as-statement lowering); `LLVM012 field assignment base *ast.FieldExpr` (nested `a.b.c = x` via `llvmInsertValue` rebuild chain); parser precedence `(!x).y` / `!(x.y)` hoisted at stable-AST lowering; `LLVM011 [list_mixed_ptr]` source-type propagation (stdlib strings alias calls, bare `""` literals, if-expr phi branches — `staticStdStringsCallSourceType` + literal sourceType tagging + mergeContainerMetadata sameSourceType); `LLVM011 [string_non_ascii]` multi-byte UTF-8 literals (BOM / Unit Separator / Korean / emoji) now byte-escaped via `\HH` in `llvmCStringEscape`, with `llvmCString` counting UTF-8 bytes instead of runes; `LLVM013 match arm must be a payload-free enum variant` was a source inconsistency (missing `FrontDiagBadNumericSeparator` enum variant) + a latent return-path gap (hardcoded `listElemString=false` in `emitReturningBlock` / `emitReturn`). List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites also closed |
 | Public runtime scheduler | `osty_rt_*` task/thread/select | `#496` complete. Select-send arm landed as typed entry points `osty_rt_select_send_{i64,i1,f64,ptr,bytes_v1}` (scalar packing into channel ring slot, bytes via GC-managed copy). The public LLVM runtime now has zero `osty_sched_unimplemented` call sites — concurrency spec §8 (taskGroup / spawn / join / cancel / chan / select / parallel / race / collectAll) is fully covered. See RUNTIME_SCHEDULER.md |
 | MIR Osty port | `toolchain/mir.osty` | `#503` — MIR core (intrinsic kinds, printer, operand/instr shapes) now has an Osty-native mirror in `toolchain/mir.osty`; Go remains authoritative while the Osty side participates in the spec corpus |
 | Checker boundary | `internal/check` / `internal/toolchain` | host still manages an external `osty-native-checker` artifact and falls back to the embedded selfhost checker when it cannot be prepared |
@@ -185,9 +185,14 @@ Observed in the 2026-04-21 refresh:
 - the targeted `internal/llvmgen` regression set returned
   `ok github.com/osty/osty/internal/llvmgen`
 - `TestProbeWholeToolchainMerged` reported
-  `LLVM002 runtime-ffi: ... runtime.golegacy.astbridge ...`
+  `LLVM002 runtime-ffi: ... runtime.golegacy.astbridge ...` (at the 2026-04-21
+  snapshot; after the 2026-04-22 deletion of `toolchain/ast_lower.osty` the
+  first wall shifted to `LLVM001 foreign-ffi` on `ci.osty`'s `internal/cihost`
+  import)
 - `TestProbeNativeToolchainMerged` skipped
-  `ast_lower.osty, ci.osty, docgen.osty, manifest_validation.osty` and
+  `ci.osty` only (the 2026-04-22 port of `docgen.osty` + `manifest_validation.osty`
+  from `use go "strings"` to `use std.strings as strings`, plus the
+  `ast_lower.osty` deletion, trimmed the skip list from 4 to 1) and
   reported `NATIVE TOOLCHAIN first wall: CLEAN`. The authoritative
   regression gate `TestNativeToolchainMergedIsClean`
   (`internal/llvmgen/native_toolchain_clean_test.go`) passed,
@@ -395,12 +400,25 @@ rewire the remaining Go-hosted boundaries."
    있는 건 Go로 짜지 마" rule.
 
 5. **Retire the bootstrap-only bridge files from the critical path.**
-   Whole-toolchain merged lowering still first-walls on
-   `runtime.golegacy.astbridge` (`LLVM002 runtime-ffi`), so the
-   self-hosting story stays incomplete until the CLI is rewired away
-   from those files or they remain explicitly outside the native path.
-   With the native-only probe CLEAN, this is the last backend-adjacent
-   wedge on the merged surface.
+   Three of the original four bootstrap-only files are gone as of
+   2026-04-22: `toolchain/ast_lower.osty` was deleted (dead duplicate
+   of `internal/selfhost/ast_lower.osty`), and `toolchain/docgen.osty`
+   + `toolchain/manifest_validation.osty` were ported from
+   `use go "strings"` to `use std.strings as strings` after closing
+   the `strings.fields` AST-emitter gap (new `osty_rt_strings_Fields`
+   runtime helper + `stdStringsCallStaticResult` /
+   `staticStdStringsCallSourceType` entries in
+   `internal/llvmgen/{stdlib_shim.go,type.go}`). The remaining
+   bootstrap-only file is `toolchain/ci.osty`, whose
+   `use go "github.com/osty/osty/internal/cihost"` must be ported to
+   `runtime.cabi.<lib>` / `runtime.<surface>` with matching `osty_rt_*`
+   runtime ABI helpers (real host I/O — FS / process — can't fold
+   into `std.strings`). With the native-only probe CLEAN, this is
+   the last backend-adjacent wedge on the merged surface. Also
+   outstanding: the Go CLI is still wired through
+   `internal/selfhost/ast_lower.osty` + `internal/selfhost/astbridge/`
+   — both become dead code once `cmd/osty` consumes
+   `parser.osty`'s `AstArena` directly.
 
 6. **Then re-run `osty check toolchain` and per-file `osty gen
    --backend=llvm` probes.** Once the checker summary, stdlib-body,

@@ -1116,7 +1116,7 @@ func (g *generator) staticStdStringsCallSourceType(call *ast.CallExpr) (ast.Type
 		return &ast.NamedType{Path: []string{"Bool"}}, true
 	case "concat", "join", "repeat", "replace", "replaceAll", "slice", "trim", "trimSpace", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toUpper", "toLower":
 		return stringT, true
-	case "split", "splitN":
+	case "split", "splitN", "fields":
 		return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{stringT}}, true
 	}
 	return nil, false

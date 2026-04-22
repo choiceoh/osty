@@ -4875,6 +4875,39 @@ void *osty_rt_strings_SplitN(const char *value, const char *sep, int64_t n) {
     return out;
 }
 
+// osty_rt_strings_Fields splits `value` on runs of ASCII whitespace
+// (space, tab, newline, carriage return, vertical tab, form feed),
+// skipping empty tokens. Mirrors Go's `strings.Fields` and the
+// pure-Osty `internal/stdlib/modules/strings.osty:fields` body.
+// Byte-level, consistent with the rest of the std.strings shim.
+void *osty_rt_strings_Fields(const char *value) {
+    osty_rt_list *out = (osty_rt_list *)osty_rt_list_new();
+    const char *cursor;
+    const char *start;
+
+    if (value == NULL) {
+        return out;
+    }
+    cursor = value;
+    while (*cursor != '\0') {
+        while (*cursor == ' ' || *cursor == '\t' || *cursor == '\n' ||
+               *cursor == '\r' || *cursor == '\v' || *cursor == '\f') {
+            cursor += 1;
+        }
+        if (*cursor == '\0') {
+            break;
+        }
+        start = cursor;
+        while (*cursor != '\0' && *cursor != ' ' && *cursor != '\t' &&
+               *cursor != '\n' && *cursor != '\r' && *cursor != '\v' &&
+               *cursor != '\f') {
+            cursor += 1;
+        }
+        osty_rt_list_push_ptr(out, osty_rt_string_dup_range(start, (size_t)(cursor - start)));
+    }
+    return out;
+}
+
 // osty_rt_strings_Chars decodes `value` as UTF-8 and pushes each code
 // point into the returned list as an i32 (Osty `Char`). Ill-formed
 // sequences follow the Unicode 15.0.0 §3.9 "maximal subpart of an

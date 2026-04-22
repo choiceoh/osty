@@ -1,12 +1,4 @@
-use go "strings" as strings {
-    fn contains(s: String, substr: String) -> Bool
-    fn fields(s: String) -> List<String>
-    fn hasPrefix(s: String, prefix: String) -> Bool
-    fn join(elems: List<String>, sep: String) -> String
-    fn split(s: String, sep: String) -> List<String>
-    fn splitN(s: String, sep: String, n: Int) -> List<String>
-    fn trimSpace(s: String) -> String
-}
+use std.strings as strings
 
 /// ManifestPackageSpec is the self-hosted subset of a [package] table.
 pub struct ManifestPackageSpec {

@@ -715,16 +715,21 @@ match 분해)를 추가한다.
 
 ## Bootstrap-only 호스트 어댑터 (astbridge 포함)
 
-**요약**: 현재 `toolchain/*.osty`의 4개 파일은 Go 호스트 바인딩을 통과하는 **bootstrap-only 어댑터**다. 이들은 LLVM 셀프-컴파일 경로 밖에 있고, whole-toolchain LLVM probe에서 자동으로 스킵된다. 이 구조 덕분에 sub-wall 히스토그램과 probe가 "셀프호스팅 시 진짜 남는 벽"만 보여준다.
+**요약**: 현재 `toolchain/*.osty`의 1개 파일만 Go 호스트 바인딩을 통과하는 **bootstrap-only 어댑터**다. LLVM 셀프-컴파일 경로 밖에 있고, whole-toolchain LLVM probe에서 자동으로 스킵된다. 이 구조 덕분에 sub-wall 히스토그램과 probe가 "셀프호스팅 시 진짜 남는 벽"만 보여준다.
 
-### 4개 bootstrap-only 파일
+2026-04-22 이전엔 4개 파일이 bootstrap-only 였다. 같은 날 3개가 제거/포팅됨:
+
+1. `toolchain/ast_lower.osty` — 코드 경로에서 한 번도 로드되지 않는 `internal/selfhost/ast_lower.osty`의 dead duplicate (1672 LOC, `use runtime.golegacy.astbridge` 가상 스탠자) → 삭제.
+2. `toolchain/docgen.osty` — `use go "strings"` → `use std.strings as strings` 치환. 순수 문자열 조작은 전부 Osty-native.
+3. `toolchain/manifest_validation.osty` — 동상. `strings.fields` 백엔드 shim (`osty_rt_strings_Fields` 런타임 + `stdStringsCallStaticResult`/`staticStdStringsCallSourceType` 엔트리) 추가 후 `for part in strings.fields(text)` iteration 이 AST 제너레이터에서 `List<String>` element type 을 정적으로 회수 가능.
+
+실제 Go-bridge 는 여전히 `internal/selfhost/ast_lower.osty` + `internal/selfhost/astbridge/` 경로이며, 이쪽은 CLI 재배선 완료 전까지 남아 있다 (아래 § astbridge 제거 경로 참고).
+
+### 1개 bootstrap-only 파일
 
 | 파일 | FFI | 역할 | native 대체 경로 |
 |---|---|---|---|
-| `toolchain/ast_lower.osty` | `use runtime.golegacy.astbridge` | parser.osty AstArena → Go `*ast.File` 변환 | CLI가 Osty-native check/llvmgen을 호출하도록 재배선되면 dead code |
-| `toolchain/ci.osty` | `use go "github.com/osty/osty/internal/cihost"` | CI 드라이버 (format/lint/snapshot/manifest 호스트 호출) | native runtime ABI의 fs/process primitive 정의 후 포팅 |
-| `toolchain/docgen.osty` | `use go` | 문서 생성기 (파일 I/O + HTML emit) | 동상 |
-| `toolchain/manifest_validation.osty` | `use go` | manifest/lockfile 검증 (파일 해시, 경로 검사) | 동상 |
+| `toolchain/ci.osty` | `use go "github.com/osty/osty/internal/cihost"` | CI 드라이버 (format/lint/snapshot/manifest 호스트 호출) | 실제 호스트 I/O(FS/process)라 `std.strings`로 접힐 수 없음. `runtime.cabi.<lib>` 또는 새 `runtime.ci.*` 서페이스 정의 + `osty_rt_ci_*` 런타임 ABI 추가 후 포팅 |
 
 ### 분류 규칙
 
@@ -737,17 +742,17 @@ match 분해)를 추가한다.
 
 ### Probe 쌍
 
-- `TestProbeWholeToolchainMerged` — 모든 파일 포함. 현재 첫 wall **LLVM002 `runtime.golegacy.astbridge`** (bootstrap artifact).
+- `TestProbeWholeToolchainMerged` — 모든 파일 포함. 현재 첫 wall **LLVM001 `foreign-ffi`** on `ci.osty`'s `use go "github.com/osty/osty/internal/cihost"` (2026-04-22: `toolchain/ast_lower.osty` 제거 + `docgen.osty` / `manifest_validation.osty`의 `use go "strings"` → `std.strings` 포팅으로 `LLVM002 runtime.golegacy.astbridge` → 현재 첫 wall 로 이동). 마지막 남은 `use go` 파일인 `ci.osty`가 `runtime.*`로 포팅될 때까지 CLEAN 되지 않는다.
 - `TestProbeNativeToolchainMerged` — bootstrap-only 파일 제외. 현재 첫 wall **LLVM011 `[list_mixed_ptr]`** (list literal 이 String / non-String ptr-backed value 를 섞어 담는 shape). 지금까지 닫힌 벽(순서대로): (1) **LLVM011 `fn_param_struct_type: Char`** (`lspUtf16UnitsForChar`) → Char→i32 / Byte→i8 lowering + `.toInt()` / `.toChar()` 폭 변환 + 부호 없는 비교 서술어. (2) **LLVM012 `*ast.MatchExpr is not a call`** → tag-enum scrutinee + bare-variant / wildcard arm match-as-statement lowering. (3) **LLVM012 `field assignment base *ast.FieldExpr`** (중첩 필드 대입 `a.b.c = x`, 토큰체인 `cx.env.returnTy = sig.retTy`) → `stmt.go:emitFieldAssign` 의 inside-out extractvalue descent + innermost-first `llvmInsertValue` rebuild 체인. `llvmInsertValue` 는 `toolchain/llvmgen.osty` 에 pub helper 로 존재하며 Go 쪽은 `support_snapshot.go` 에 스냅샷되어 AST walker 가 inline `fmt.Sprintf` 대신 이 helper 를 호출한다. (4) parser precedence — `!x.y` 가 `(!x).y` 가 아닌 `!(x.y)` 로 파싱되도록 stable-AST lowering 단계에서 hoist.
 
 두 probe의 첫-wall 차이 = bootstrap 브릿지가 히스토그램에 주입하는 노이즈 양. migration 진전은 native probe의 first-wall 이동으로 측정한다.
 
 ### astbridge 제거 경로
 
-astbridge는 한 방에 제거하지 않고 **CLI 재배선이 완료되면 자동 dead code**가 되는 구조다:
+astbridge는 한 방에 제거하지 않고 **CLI 재배선이 완료되면 자동 dead code**가 되는 구조다. `toolchain/ast_lower.osty`는 2026-04-22 시점에 dead duplicate로 제거됐지만, 실제 bridge인 `internal/selfhost/ast_lower.osty`는 아직 bundle.go 경로에서 참조되므로 다음 단계가 남아있다:
 
-1. **현재 상태**: Go CLI (`cmd/osty`) → `internal/selfhost/parse.go:Parse` → `ast_lower.osty`가 `*ast.File` 생성 → Go `internal/check` / `internal/resolve` / `internal/llvmgen` 소비.
-2. **목표 상태**: Go CLI → Osty-native `check.osty`/`llvmgen.osty`/`resolve.osty` 직접 호출 → 이들은 이미 parser.osty `AstArena` + `AstNodeKind`를 네이티브 소비. `ast_lower.osty`와 `internal/selfhost/astbridge/` 둘 다 unused → 삭제.
+1. **현재 상태**: Go CLI (`cmd/osty`) → `internal/selfhost/parse.go:Parse` → `internal/selfhost/ast_lower.osty`가 `*ast.File` 생성 → Go `internal/check` / `internal/resolve` / `internal/llvmgen` 소비.
+2. **목표 상태**: Go CLI → Osty-native `check.osty`/`llvmgen.osty`/`resolve.osty` 직접 호출 → 이들은 이미 parser.osty `AstArena` + `AstNodeKind`를 네이티브 소비. `internal/selfhost/ast_lower.osty`와 `internal/selfhost/astbridge/` 둘 다 unused → 삭제.
 3. **전제 조건**: Osty-native downstream을 Go CLI에서 호출할 수 있는 ABI. 이는 Phase 4 runtime ABI 작업과 연결된다.
 
 중요: **`toolchain/ast.osty` 같은 신규 네이티브 AST 타입을 도입하지 않는다.** parser.osty의 `AstArena`가 이미 네이티브 AST 역할을 하고 있고, native downstream 모듈 전부 이를 이미 소비 중. 신규 AST 타입 도입은 순수 중복 작업이며 불필요하다 (이 결정은 PR #372에서 확정).
