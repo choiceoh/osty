@@ -786,8 +786,11 @@ func TestUseMIRBackendDefaultsEnabled(t *testing.T) {
 	if !useMIRBackend(nil, EmitLLVMIR) {
 		t.Fatal("useMIRBackend(nil, EmitLLVMIR) = false, want true")
 	}
-	if useMIRBackend(nil, EmitBinary) {
-		t.Fatal("useMIRBackend(nil, EmitBinary) = true, want false")
+	if !useMIRBackend(nil, EmitObject) {
+		t.Fatal("useMIRBackend(nil, EmitObject) = false, want true")
+	}
+	if !useMIRBackend(nil, EmitBinary) {
+		t.Fatal("useMIRBackend(nil, EmitBinary) = false, want true")
 	}
 	if !useMIRBackend([]string{"mir-backend"}, EmitBinary) {
 		t.Fatal("useMIRBackend(mir-backend, EmitBinary) = false, want true")
@@ -897,7 +900,7 @@ func TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics(t *testing.T) {
 }
 
 // TestLLVMBackendBinaryMIRBackendStringCharsBytes — Stage 5 prep
-// parity check. With `mir-backend` opted in on object/binary emission,
+// parity check. On binary emission (MIR-first by default),
 // `.chars()` / `.bytes()` / `.len()` / `.isEmpty()` on a String must
 // lower through the MIR-direct emitter (no silent fallback to the
 // legacy AST bridge). The emitted IR header is the only stable tell of

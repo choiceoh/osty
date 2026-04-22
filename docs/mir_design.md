@@ -711,11 +711,10 @@ MIR tests isolated from front-end churn.
     and emits textual LLVM IR via an alloca-per-local SSA scheme
     (LLVM's mem2reg pass promotes to register form during opt).
   - **Dispatcher gate.** `llvmgen.Options.UseMIR` selects the path.
-    The backend dispatcher (`internal/backend/llvm.go`) now prefers
-    `GenerateFromMIR(entry.MIR, opts)` by default on raw `llvm-ir`
-    emission, and still allows explicit opt-in on object/binary
-    emission via `mir-backend`. On `ErrUnsupported` the dispatcher
-    catches the sentinel and falls back to
+    The backend dispatcher (`internal/backend/llvm.go`) prefers
+    `GenerateFromMIR(entry.MIR, opts)` by default on every emit
+    mode — raw `llvm-ir`, object, binary. On `ErrUnsupported` the
+    dispatcher catches the sentinel and falls back to
     `GenerateModule(entry.IR, opts)` automatically, so coverage
     regressions are impossible while parity lands.
   - **MVP coverage.** Primitive types (Int / UInt / Byte / Bool /
@@ -915,10 +914,9 @@ MIR tests isolated from front-end churn.
     / map-style callbacks consumed in-frame) work without heap.
 
 - **Stage 4 (partially landed — MIR-first IR emission).** The LLVM
-  backend now prefers the MIR-direct emitter by default for raw
-  `llvm-ir` output. Object/binary emission can still opt in explicitly
-  with `mir-backend`, and the dispatcher falls back automatically on
-  `ErrUnsupported`.
+  backend prefers the MIR-direct emitter by default on every emit
+  mode — raw `llvm-ir`, object, binary. The dispatcher falls back
+  automatically on `ErrUnsupported`, so coverage never regresses.
 
 - **Stage 3.9 (landed — concurrency intrinsic runtime mapping).**
   All MIR concurrency intrinsics emitted by the MIR lowerer now
