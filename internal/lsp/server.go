@@ -682,7 +682,7 @@ func (s *Server) analyzeSingleFile(src []byte) *docAnalysis {
 	res := resolve.File(parsed.File, s.prelude)
 	canonicalSrc, _ := canonical.SourceWithMap(src, parsed.File)
 	chk := check.File(parsed.File, res, lspCheckOpts(canonicalSrc))
-	lr := lint.File(parsed.File, res, chk)
+	lr := lint.File(parsed.File, src, res, chk)
 	all := make([]*diag.Diagnostic, 0,
 		len(parsed.Diagnostics)+len(res.Diags)+len(chk.Diags)+len(lr.Diags))
 	all = append(all, parsed.Diagnostics...)
