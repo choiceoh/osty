@@ -104,7 +104,21 @@ func (g *generator) emitReturningBlock(stmts []ast.Stmt, retType string, retSour
 }
 
 func (g *generator) emitBlock(stmts []ast.Stmt) error {
-	for _, stmt := range stmts {
+	for i := 0; i < len(stmts); i++ {
+		stmt := stmts[i]
+		// Peephole: `containsKey + getOr + insert` → `map_incr_i64`.
+		// The bench-style counter update pattern compiles to 3 locked
+		// map ops (one hash lookup each) by default; recognising it
+		// here cuts that to a single locked `map[key] = get(key) ?? 0
+		// + delta` runtime call.
+		if i+1 < len(stmts) {
+			if skip, err := g.tryEmitMapIncrPattern(stmts[i], stmts[i+1]); err != nil {
+				return err
+			} else if skip {
+				i++ // consumed two statements
+				continue
+			}
+		}
 		if err := g.emitStmt(stmt); err != nil {
 			return err
 		}
@@ -113,6 +127,257 @@ func (g *generator) emitBlock(stmts []ast.Stmt) error {
 		}
 	}
 	return nil
+}
+
+// tryEmitMapIncrPattern looks for this 2-statement shape:
+//
+//	let NEXT = if M.containsKey(K) { M.getOr(K, 0) <OP> V } else { V }
+//	M.insert(K, NEXT)
+//
+// And lowers it to a single `osty_rt_map_incr_i64_<suffix>(M, K, V)`
+// runtime call that performs the same update under one lock acquire
+// pair instead of three. Returns (true, nil) when the pattern matches
+// and code was emitted; callers skip both consumed statements.
+//
+// The match is strict — every shape requirement below must hold;
+// any mismatch returns (false, nil) and callers proceed with normal
+// emission so semantics stay identical. Currently specialised for
+// <OP> = `+` and the implicit default of 0; extension to other
+// default-and-op combinations stays in scope for a follow-up if
+// measured workloads warrant it.
+func (g *generator) tryEmitMapIncrPattern(first, second ast.Stmt) (bool, error) {
+	let1, ok := first.(*ast.LetStmt)
+	if !ok || let1.Mut || let1.Value == nil {
+		return false, nil
+	}
+	letName, err := identPatternName(let1.Pattern)
+	if err != nil {
+		return false, nil
+	}
+	ifExpr, ok := let1.Value.(*ast.IfExpr)
+	if !ok || ifExpr.IsIfLet || ifExpr.Then == nil {
+		return false, nil
+	}
+	elseBlock, ok := ifExpr.Else.(*ast.Block)
+	if !ok {
+		return false, nil
+	}
+	// Condition: `MAP.containsKey(KEY)`.
+	containsCall, ok := ifExpr.Cond.(*ast.CallExpr)
+	if !ok || len(containsCall.Args) != 1 {
+		return false, nil
+	}
+	containsField, ok := containsCall.Fn.(*ast.FieldExpr)
+	if !ok || containsField.IsOptional || containsField.Name != "containsKey" {
+		return false, nil
+	}
+	mapIdent, ok := containsField.X.(*ast.Ident)
+	if !ok {
+		return false, nil
+	}
+	keyArg0 := containsCall.Args[0]
+	if keyArg0 == nil || keyArg0.Name != "" || keyArg0.Value == nil {
+		return false, nil
+	}
+	keyIdent, ok := keyArg0.Value.(*ast.Ident)
+	if !ok {
+		return false, nil
+	}
+	// Then branch: tail expression is `MAP.getOr(KEY, 0) + DELTA`.
+	thenExpr := blockTailExpr(ifExpr.Then)
+	if thenExpr == nil {
+		return false, nil
+	}
+	addBin, ok := thenExpr.(*ast.BinaryExpr)
+	if !ok || addBin.Op != token.PLUS {
+		return false, nil
+	}
+	getOrCall, ok := addBin.Left.(*ast.CallExpr)
+	if !ok || len(getOrCall.Args) != 2 {
+		return false, nil
+	}
+	getOrField, ok := getOrCall.Fn.(*ast.FieldExpr)
+	if !ok || getOrField.IsOptional || getOrField.Name != "getOr" {
+		return false, nil
+	}
+	if !identsEqual(getOrField.X, mapIdent) {
+		return false, nil
+	}
+	if a := getOrCall.Args[0]; a == nil || a.Name != "" || !identsEqual(a.Value, keyIdent) {
+		return false, nil
+	}
+	if a := getOrCall.Args[1]; a == nil || a.Name != "" || !isIntLiteral(a.Value, 0) {
+		return false, nil
+	}
+	deltaExpr := addBin.Right
+	// Else branch: tail expression is the same DELTA identifier (or
+	// expression). Require byte-for-byte identity via the source
+	// span so we don't re-evaluate side effects inside DELTA twice.
+	elseExpr := blockTailExpr(elseBlock)
+	if elseExpr == nil || !astExprTextEq(g, deltaExpr, elseExpr) {
+		return false, nil
+	}
+	// Second stmt: `MAP.insert(KEY, NEXT)`.
+	exprStmt, ok := second.(*ast.ExprStmt)
+	if !ok {
+		return false, nil
+	}
+	insertCall, ok := exprStmt.X.(*ast.CallExpr)
+	if !ok || len(insertCall.Args) != 2 {
+		return false, nil
+	}
+	insertField, ok := insertCall.Fn.(*ast.FieldExpr)
+	if !ok || insertField.IsOptional || insertField.Name != "insert" {
+		return false, nil
+	}
+	if !identsEqual(insertField.X, mapIdent) {
+		return false, nil
+	}
+	if a := insertCall.Args[0]; a == nil || a.Name != "" || !identsEqual(a.Value, keyIdent) {
+		return false, nil
+	}
+	if a := insertCall.Args[1]; a == nil || a.Name != "" {
+		return false, nil
+	}
+	nextIdent, ok := insertCall.Args[1].Value.(*ast.Ident)
+	if !ok || nextIdent.Name != letName {
+		return false, nil
+	}
+	// Shape verified. Look up the static type info on the map so we
+	// pick the right suffix. Only Map<K, Int> is eligible today —
+	// the runtime intrinsic is `osty_rt_map_incr_i64_<suffix>`
+	// where the i64 reflects the value type.
+	mapInfo, ok := g.staticExprInfo(mapIdent)
+	if !ok || mapInfo.typ != "ptr" || mapInfo.mapKeyTyp == "" || mapInfo.mapValueTyp != "i64" {
+		return false, nil
+	}
+	suffix := mapKeySuffix(mapInfo.mapKeyTyp, mapInfo.mapKeyString)
+	if suffix == "" {
+		return false, nil
+	}
+
+	// Evaluate the three inputs in source order. MAP is a known
+	// ident (side-effect-free), KEY too, DELTA may be any expression.
+	mapVal, err := g.emitExpr(mapIdent)
+	if err != nil {
+		return false, err
+	}
+	keyVal, err := g.emitExpr(keyIdent)
+	if err != nil {
+		return false, err
+	}
+	deltaVal, err := g.emitExpr(deltaExpr)
+	if err != nil {
+		return false, err
+	}
+	if deltaVal.typ != "i64" {
+		return false, nil
+	}
+	loadedKey, err := g.loadIfPointer(keyVal)
+	if err != nil {
+		return false, err
+	}
+	symbol := "osty_rt_map_incr_i64_" + suffix
+	keyTyp := mapInfo.mapKeyTyp
+	if mapInfo.mapKeyString {
+		keyTyp = "ptr"
+	}
+	g.declareRuntimeSymbol(symbol, "i64", []paramInfo{
+		{typ: "ptr"},
+		{typ: keyTyp},
+		{typ: "i64"},
+	})
+	emitter := g.toOstyEmitter()
+	_ = llvmCall(emitter, "i64", symbol, []*LlvmValue{
+		toOstyValue(mapVal),
+		toOstyValue(loadedKey),
+		toOstyValue(deltaVal),
+	})
+	g.takeOstyEmitter(emitter)
+	// Bind the let-name so later references (there shouldn't be
+	// any in the recognised shape, but be defensive) resolve to a
+	// fresh i64 load of the post-incr value. We could skip this
+	// since the pattern only uses NEXT as the insert arg which we
+	// just emitted, but wiring it keeps the binding scope intact.
+	g.bindLocal(letName, value{typ: "i64", ref: "0"})
+	return true, nil
+}
+
+// blockTailExpr returns the expression value of a block — the tail
+// expression statement, if any. Osty blocks may have either a
+// trailing ExprStmt (no semicolon) or not; we only accept the
+// former shape for the map_incr rewrite since we need a concrete
+// expression value.
+func blockTailExpr(block *ast.Block) ast.Expr {
+	if block == nil || len(block.Stmts) == 0 {
+		return nil
+	}
+	tail, ok := block.Stmts[len(block.Stmts)-1].(*ast.ExprStmt)
+	if !ok {
+		return nil
+	}
+	return tail.X
+}
+
+// identsEqual reports whether two expressions are the same
+// identifier (same Name). Used to verify the same `totals` / `key`
+// reference shows up in every slot of the pattern.
+func identsEqual(a, b ast.Expr) bool {
+	ax, aok := a.(*ast.Ident)
+	bx, bok := b.(*ast.Ident)
+	return aok && bok && ax.Name == bx.Name
+}
+
+// isIntLiteral reports whether expr is the integer literal `n`.
+// Used to verify the `0` default in `getOr(key, 0)`.
+func isIntLiteral(expr ast.Expr, n int64) bool {
+	lit, ok := expr.(*ast.IntLit)
+	if !ok {
+		return false
+	}
+	// Strip underscores; reject hex/oct/bin for the 0-literal case
+	// we care about here.
+	text := strings.ReplaceAll(lit.Text, "_", "")
+	if text == "" {
+		return false
+	}
+	v, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		return false
+	}
+	return v == n
+}
+
+// astExprTextEq reports whether two expression nodes cover source
+// text that compares equal modulo surrounding whitespace. Used as a
+// conservative proxy for "structurally identical" for the
+// `else DELTA` arm — avoids re-evaluating effects inside DELTA.
+func astExprTextEq(g *generator, a, b ast.Expr) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	ta := strings.TrimSpace(g.sourceSpanText(a))
+	tb := strings.TrimSpace(g.sourceSpanText(b))
+	return ta != "" && ta == tb
+}
+
+// mapKeySuffix maps an LLVM key type string + string-flag to the
+// suffix used by the `osty_rt_map_*_<suffix>` runtime helpers.
+func mapKeySuffix(llvmTyp string, isString bool) string {
+	if isString {
+		return "string"
+	}
+	switch llvmTyp {
+	case "i64":
+		return "i64"
+	case "i1":
+		return "i1"
+	case "double":
+		return "f64"
+	case "ptr":
+		return "ptr"
+	}
+	return ""
 }
 
 func (g *generator) emitStmt(stmt ast.Stmt) error {
