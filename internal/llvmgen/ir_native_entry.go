@@ -586,6 +586,7 @@ func collectNativeInterfaceImpls(mod *ostyir.Module) []nativeInterfaceImpl {
 		enumsByName:       map[string]*nativeEnumInfo{},
 		interfacesByName:  map[string]*nativeInterfaceInfo{},
 		tuplesByLLVMType:  map[string]*nativeTupleInfo{},
+		resultsByName:     map[string]*nativeResultInfo{},
 		resultsByLLVMType: map[string]*nativeResultInfo{},
 		methodsByOwner:    map[string]map[string]nativeMethodInfo{},
 	}
