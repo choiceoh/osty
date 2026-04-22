@@ -418,6 +418,7 @@ mechanism. The complete set is:
 |---|---|---|
 | `#[json(...)]` | struct fields, enum variants | Customize JSON encoding/decoding (§10.8) |
 | `#[deprecated(...)]` | `fn`, `struct`, `enum`, `interface`, `type`, top-level `let`, struct/enum methods, struct fields, enum variants | Emit a warning when the item is referenced |
+| `#[vectorize]` | top-level `fn` declarations, struct/enum methods | Hint: LLVM backend attaches `!llvm.loop.vectorize.enable` metadata to every loop lowered in the body (v0.6 A5 SIMD track) |
 
 **Runtime-only annotations** (privileged packages only — see §19.2 and §19.6).
 
@@ -527,7 +528,67 @@ transitively: annotating a type as `#[deprecated]` does not deprecate
 its methods, its fields, or types that reference it. Each target
 carries its own annotation.
 
-#### 3.8.3 Positioning Rules
+#### 3.8.3 `#[vectorize]`
+
+Valid on top-level `fn` declarations and on struct/enum methods. Bare
+flag — no arguments are permitted. Status: **v0.6 A5 (SIMD track)**;
+semantics are defined here so the annotation is accepted by the v0.5
+front end alongside the existing v0.5 set.
+
+`#[vectorize]` is a *hint*, not a guarantee. The LLVM backend attaches
+`!llvm.loop !N` metadata to every user-written `for` loop lowered
+inside the annotated function body, where `!N` is a `distinct`
+self-referential node whose property list contains
+`!"llvm.loop.vectorize.enable", i1 true`. LLVM's loop vectorizer then
+decides legality and profitability per loop. The annotation does not
+introduce new syntax, does not change the type of the function, and
+does not affect observable behavior on correct programs — an
+unvectorized build produces the same outputs as a vectorized one.
+
+```osty
+#[vectorize]
+pub fn sumTo(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc + i
+    }
+    acc
+}
+```
+
+Scope rules:
+
+- The hint is **function-scoped**. A loop in an unannotated sibling
+  function receives no metadata even when the two functions live in
+  the same module.
+- Only loops originating from a user-written `for` statement carry the
+  hint. Loops synthesized by the compiler (e.g. the per-iteration
+  scaffold inside `testing.benchmark`, or the key-snapshot traversal
+  inside map-mutating helpers) do not.
+- Iterator-protocol loops (`for x in iter` where `iter` is not a
+  `List<T>`, range, or `Map<K, V>`) currently lower through a
+  callback-driven shape that LLVM cannot prove countable; the hint is
+  attached but the vectorizer will reject them. This is documented in
+  `SPEC_GAPS.md` under `vectorize-hint`.
+
+**GC contract.** To make the vectorizer's legality analysis succeed
+on countable loops, `#[vectorize]` functions **opt out of the
+per-iteration GC loop safepoint poll**. The function-entry safepoint
+still fires, and the caller resumes its own safepoint cadence on
+return — so the function is bracketed by polls on both sides. But
+inside the function, a long-running vectorized loop does not yield
+to a concurrent STW request until it completes.
+
+This is an explicit tradeoff: SIMD execution in exchange for GC
+latency across the function body. Callers that need mid-loop
+responsiveness should drive the work in smaller chunks from an
+unannotated outer loop. The author opts in knowingly by typing
+`#[vectorize]`; the compiler does not second-guess.
+
+Rejecting the annotation with arguments is `E0739`
+(`CodeAnnotationBadArg`).
+
+#### 3.8.4 Positioning Rules
 
 - Annotations may appear only before a named declaration. They cannot
   be attached to:

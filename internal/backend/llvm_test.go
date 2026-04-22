@@ -257,6 +257,36 @@ func TestLLVMBackendEmitLLVMIRFromIRWithoutASTFallback(t *testing.T) {
 	}
 }
 
+func TestEmitLLVMIRTextMatchesBackendArtifactOutput(t *testing.T) {
+	t.Parallel()
+
+	tc := &fakeLLVMToolchain{}
+	backend := LLVMBackend{toolchain: tc}
+	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
+    println(1)
+}
+`)
+
+	got, warnings, err := EmitLLVMIRText(req.Entry, "", nil)
+	if err != nil {
+		t.Fatalf("EmitLLVMIRText returned error: %v", err)
+	}
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	want, readErr := os.ReadFile(result.Artifacts.LLVMIR)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("direct llvm-ir text did not match artifact output\n--- direct ---\n%s\n--- artifact ---\n%s", got, want)
+	}
+	if len(warnings) != len(result.Warnings) {
+		t.Fatalf("warning count = %d, want %d", len(warnings), len(result.Warnings))
+	}
+}
+
 func TestUseMIRBackendDefaultsEnabled(t *testing.T) {
 	t.Parallel()
 
@@ -350,6 +380,8 @@ func TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics(t *testing.T) {
 		"@osty_rt_strings_Chars",
 		"@osty_rt_strings_Bytes",
 		"@osty_rt_strings_ByteLen",
+		"define i32 @main()",
+		"ret i32 0",
 	} {
 		if !strings.Contains(ir, want) {
 			t.Fatalf("expected IR to contain %q, got:\n%s", want, ir)

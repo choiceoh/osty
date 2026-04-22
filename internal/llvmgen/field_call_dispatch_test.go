@@ -632,6 +632,44 @@ fn main() {
 	}
 }
 
+// Statement-position twin of the higher-order path above: a fn-typed
+// parameter returning unit still has to dispatch through the indirect
+// call ABI. This is the exact shape specialized Map.forEach bodies hit
+// after monomorphization (`f(key, value)`).
+func TestGenerateFnTypedParameterStmtIndirectCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn apply2(f: fn(Int, Int)) {
+    f(1, 2)
+}
+
+fn printPair(a: Int, b: Int) {
+    println(a)
+    println(b)
+}
+
+fn main() {
+    apply2(printPair)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_typed_param_stmt.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"define void @apply2(ptr %f)",
+		"call void (ptr, i64, i64)",
+		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
+		"define private void @__osty_closure_thunk_printPair(ptr %env, i64 %arg0, i64 %arg1)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateMapGetLowersAsOptionReturningIntrinsic locks the root-cause
 // fix: Map.get(key) -> V? now goes through the real
 // osty_rt_map_get_<K> runtime helper (bool return + out-param), with
@@ -739,10 +777,11 @@ func TestGenerateMapGetScalarValueBoxLowering(t *testing.T) {
 	}
 }
 
-// TestGenerateMapGetOrScalarValueUnwrapsBox verifies Map.getOr for
-// scalar V: the getOr composition loads the i64 payload out of the
-// boxed Option in the some branch and phis it against the scalar
-// default, producing `phi i64` (not `phi ptr`).
+// TestGenerateMapGetOrScalarValueUsesDirectLookup verifies Map.getOr
+// for scalar V uses the bool-returning map_get runtime directly: a
+// stack slot receives the payload on hit, the hit branch loads it, and
+// the miss branch falls back to the scalar default without allocating
+// an Option box.
 func TestGenerateMapGetOrScalarValueUnwrapsBox(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn count(m: Map<String, Int>, k: String) -> Int {
     m.getOr(k, 0)
@@ -758,14 +797,17 @@ func TestGenerateMapGetOrScalarValueUnwrapsBox(t *testing.T) {
 	got := string(ir)
 	for _, want := range []string{
 		"call i1 @osty_rt_map_get_string(",
-		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
-		"icmp eq ptr",
+		"alloca i64",
+		"br i1 ",
 		"load i64, ptr",
 		"= phi i64 [",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "call ptr @osty.gc.alloc_v1") {
+		t.Fatalf("scalar getOr should not allocate an Option box:\n%s", got)
 	}
 	if strings.Contains(got, "osty_rt_map_contains_string") ||
 		strings.Contains(got, "osty_rt_map_get_or_abort_string") {

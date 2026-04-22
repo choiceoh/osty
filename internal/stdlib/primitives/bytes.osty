@@ -8,6 +8,10 @@ pub struct __BytesMethods {
     pub fn len(self) -> Int { 0 }
     pub fn isEmpty(self) -> Bool { false }
     pub fn get(self, i: Int) -> Byte? { None }
+    pub fn contains(self, sub: Bytes) -> Bool { false }
+    pub fn startsWith(self, prefix: Bytes) -> Bool { false }
+    pub fn indexOf(self, sub: Bytes) -> Int? { None }
     pub fn concat(self, other: Bytes) -> Bytes { self.concat(other) }
+    pub fn repeat(self, n: Int) -> Bytes { self.repeat(n) }
     pub fn toString(self) -> Result<String, Error> { Ok("") }
 }

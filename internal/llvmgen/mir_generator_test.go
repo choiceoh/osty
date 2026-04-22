@@ -164,9 +164,9 @@ func TestGenerateFromMIRWhileLoop(t *testing.T) {
 				Body: &ir.Block{
 					Stmts: []ir.Stmt{
 						&ir.LetStmt{
-							Name: "i",
-							Type: ir.TInt,
-							Mut:  true,
+							Name:  "i",
+							Type:  ir.TInt,
+							Mut:   true,
 							Value: &ir.IntLit{Text: "0", T: ir.TInt},
 						},
 						&ir.ForStmt{
@@ -388,13 +388,12 @@ func TestMIRDualEmitFromSource(t *testing.T) {
 		t.Fatalf("GenerateFromMIR: %v", mirErr)
 	}
 
-	// Both outputs should contain the program's semantic core. The
-	// exact signature for `main` differs between the paths (the HIR
-	// emitter wraps it in a `i32 @main()` C shim while the MIR MVP
-	// emits `void @main()`), so we only assert that SOME `@main`
-	// definition is present and that the core instructions show up.
+	// Both outputs should contain the program's semantic core and a
+	// C-entry-compatible `i32 @main()` so linked binaries exit through
+	// a defined status code instead of inheriting an undefined `void`
+	// main ABI.
 	for name, got := range map[string]string{"HIR": string(hirOut), "MIR": string(mirOut)} {
-		if !strings.Contains(got, "@main") || !strings.Contains(got, "define ") {
+		if !strings.Contains(got, "define i32 @main()") {
 			t.Fatalf("[%s] missing main definition:\n%s", name, got)
 		}
 		if !strings.Contains(got, "icmp") {
@@ -405,6 +404,9 @@ func TestMIRDualEmitFromSource(t *testing.T) {
 		}
 		if !strings.Contains(got, "@printf") {
 			t.Fatalf("[%s] missing printf call:\n%s", name, got)
+		}
+		if !strings.Contains(got, "ret i32 0") {
+			t.Fatalf("[%s] missing C-entry return 0:\n%s", name, got)
 		}
 	}
 }
@@ -2534,6 +2536,231 @@ func TestGenerateFromMIRBytesIsEmpty(t *testing.T) {
 	for _, want := range []string{
 		"declare i1 @osty_rt_bytes_is_empty(ptr)",
 		"call i1 @osty_rt_bytes_is_empty(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRBytesGet verifies Bytes.get() lowers through the
+// bytes runtime helpers and rebuilds `Byte?` as the standard optional
+// aggregate shape.
+func TestGenerateFromMIRBytesGet(t *testing.T) {
+	optByte := &ir.OptionalType{Inner: ir.TByte}
+	fn := &ir.FnDecl{
+		Name:   "second",
+		Return: optByte,
+		Params: []*ir.Param{{Name: "b", Type: ir.TBytes}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TBytes},
+				Name:     "get",
+				Args:     []ir.Arg{{Value: &ir.IntLit{Text: "1", T: ir.TInt}}},
+				T:        optByte,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/bytes_get.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i64 @osty_rt_bytes_len(ptr)",
+		"declare i8 @osty_rt_bytes_get(ptr, i64)",
+		"call i8 @osty_rt_bytes_get(",
+		"%Option.i8 = type { i64, i64 }",
+		"phi %Option.i8",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRBytesContains verifies Bytes.contains() lowers
+// through `osty_rt_bytes_index_of(ptr, ptr) -> i64` plus a `>= 0`
+// comparison to produce Bool.
+func TestGenerateFromMIRBytesContains(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "has",
+		Return: ir.TBool,
+		Params: []*ir.Param{
+			{Name: "a", Type: ir.TBytes},
+			{Name: "b", Type: ir.TBytes},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "a", Kind: ir.IdentParam, T: ir.TBytes},
+				Name:     "contains",
+				Args:     []ir.Arg{{Value: &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TBytes}}},
+				T:        ir.TBool,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/bytes_contains.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i64 @osty_rt_bytes_index_of(ptr, ptr)",
+		"call i64 @osty_rt_bytes_index_of(",
+		"icmp sge i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRBytesStartsWith verifies Bytes.startsWith()
+// lowers through `osty_rt_bytes_index_of(ptr, ptr) -> i64` plus an
+// `== 0` comparison to produce Bool.
+func TestGenerateFromMIRBytesStartsWith(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "hasPrefix",
+		Return: ir.TBool,
+		Params: []*ir.Param{
+			{Name: "a", Type: ir.TBytes},
+			{Name: "b", Type: ir.TBytes},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "a", Kind: ir.IdentParam, T: ir.TBytes},
+				Name:     "startsWith",
+				Args:     []ir.Arg{{Value: &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TBytes}}},
+				T:        ir.TBool,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/bytes_starts_with.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i64 @osty_rt_bytes_index_of(ptr, ptr)",
+		"call i64 @osty_rt_bytes_index_of(",
+		"icmp eq i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRBytesIndexOf verifies Bytes.indexOf() lowers
+// through `osty_rt_bytes_index_of(ptr, ptr) -> i64` and rebuilds the
+// standard `Int?` aggregate.
+func TestGenerateFromMIRBytesIndexOf(t *testing.T) {
+	optInt := &ir.OptionalType{Inner: ir.TInt}
+	fn := &ir.FnDecl{
+		Name:   "find",
+		Return: optInt,
+		Params: []*ir.Param{
+			{Name: "a", Type: ir.TBytes},
+			{Name: "b", Type: ir.TBytes},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "a", Kind: ir.IdentParam, T: ir.TBytes},
+				Name:     "indexOf",
+				Args:     []ir.Arg{{Value: &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TBytes}}},
+				T:        optInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/bytes_index_of.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i64 @osty_rt_bytes_index_of(ptr, ptr)",
+		"call i64 @osty_rt_bytes_index_of(",
+		"%Option.i64 = type { i64, i64 }",
+		"phi %Option.i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRBytesConcat verifies Bytes.concat() dispatches
+// through `osty_rt_bytes_concat(ptr, ptr) -> ptr`.
+func TestGenerateFromMIRBytesConcat(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "join",
+		Return: ir.TBytes,
+		Params: []*ir.Param{
+			{Name: "a", Type: ir.TBytes},
+			{Name: "b", Type: ir.TBytes},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "a", Kind: ir.IdentParam, T: ir.TBytes},
+				Name:     "concat",
+				Args:     []ir.Arg{{Value: &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TBytes}}},
+				T:        ir.TBytes,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/bytes_concat.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_bytes_concat(ptr, ptr)",
+		"call ptr @osty_rt_bytes_concat(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRBytesRepeat verifies Bytes.repeat() dispatches
+// through `osty_rt_bytes_repeat(ptr, i64) -> ptr`.
+func TestGenerateFromMIRBytesRepeat(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "echo",
+		Return: ir.TBytes,
+		Params: []*ir.Param{
+			{Name: "a", Type: ir.TBytes},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "a", Kind: ir.IdentParam, T: ir.TBytes},
+				Name:     "repeat",
+				Args:     []ir.Arg{{Value: &ir.IntLit{Text: "3", T: ir.TInt}}},
+				T:        ir.TBytes,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/bytes_repeat.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_bytes_repeat(ptr, i64)",
+		"call ptr @osty_rt_bytes_repeat(",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)

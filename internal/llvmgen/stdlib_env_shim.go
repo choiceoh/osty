@@ -51,7 +51,7 @@ func (g *generator) emitStdEnvCall(call *ast.CallExpr) (value, bool, error) {
 	}
 	g.declareRuntimeSymbol(ostyRtEnvArgsSymbol, "ptr", nil)
 	emitter := g.toOstyEmitter()
-	g.emitGCSafepointKind(emitter, safepointKindCall)
+	g.emitCallSafepointIfNeeded(emitter)
 	out := llvmCall(emitter, "ptr", ostyRtEnvArgsSymbol, nil)
 	g.takeOstyEmitter(emitter)
 	v := fromOstyValue(out)

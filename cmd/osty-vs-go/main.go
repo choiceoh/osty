@@ -53,22 +53,24 @@ import (
 )
 
 type benchResult struct {
-	Pair         string
-	Name         string
-	GoNs         float64 // ns/op; NaN when absent
-	GoBytes      float64
-	GoAllocs     float64
-	OsNs         float64
-	OsBytes      float64
-	OsAllocs     float64 // always NaN today — kept for a future Osty accessor
+	Pair     string
+	Name     string
+	GoNs     float64 // ns/op; NaN when absent
+	GoBytes  float64
+	GoAllocs float64
+	OsNs     float64
+	OsBytes  float64
+	OsAllocs float64 // always NaN today — kept for a future Osty accessor
 }
 
 type runRecord struct {
-	Timestamp time.Time     `json:"timestamp"`
-	BenchTime string        `json:"bench_time"`
-	PairsDir  string        `json:"pairs_dir"`
-	Label     string        `json:"label,omitempty"`
-	GitHead   string        `json:"git_head,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
+	BenchTime string    `json:"bench_time"`
+	PairsDir  string    `json:"pairs_dir"`
+	Label     string    `json:"label,omitempty"`
+	GitHead   string    `json:"git_head,omitempty"`
+	GoCount   int       `json:"go_count,omitempty"`
+	GoCPU     string    `json:"go_cpu,omitempty"`
 	// Score is the geomean of osty_ns/go_ns across benches with both
 	// sides present. Lower = Osty closer to Go. NaN when no pair
 	// contributes. Persisted so the research/loop paths don't have to
@@ -159,11 +161,11 @@ func (r benchResult) MarshalJSON() ([]byte, error) {
 		"name": r.Name,
 	}
 	for k, v := range map[string]float64{
-		"go_ns":     r.GoNs,
-		"go_bytes":  r.GoBytes,
-		"go_allocs": r.GoAllocs,
-		"osty_ns":   r.OsNs,
-		"osty_bytes": r.OsBytes,
+		"go_ns":       r.GoNs,
+		"go_bytes":    r.GoBytes,
+		"go_allocs":   r.GoAllocs,
+		"osty_ns":     r.OsNs,
+		"osty_bytes":  r.OsBytes,
 		"osty_allocs": r.OsAllocs,
 	} {
 		if !math.IsNaN(v) {
@@ -175,14 +177,14 @@ func (r benchResult) MarshalJSON() ([]byte, error) {
 
 func (r *benchResult) UnmarshalJSON(data []byte) error {
 	var m struct {
-		Pair       string   `json:"pair"`
-		Name       string   `json:"name"`
-		GoNs       *float64 `json:"go_ns"`
-		GoBytes    *float64 `json:"go_bytes"`
-		GoAllocs   *float64 `json:"go_allocs"`
-		OsNs       *float64 `json:"osty_ns"`
-		OsBytes    *float64 `json:"osty_bytes"`
-		OsAllocs   *float64 `json:"osty_allocs"`
+		Pair     string   `json:"pair"`
+		Name     string   `json:"name"`
+		GoNs     *float64 `json:"go_ns"`
+		GoBytes  *float64 `json:"go_bytes"`
+		GoAllocs *float64 `json:"go_allocs"`
+		OsNs     *float64 `json:"osty_ns"`
+		OsBytes  *float64 `json:"osty_bytes"`
+		OsAllocs *float64 `json:"osty_allocs"`
 	}
 	if err := json.Unmarshal(data, &m); err != nil {
 		return err
@@ -213,6 +215,8 @@ func main() {
 	pairsDir := fs.String("pairs-dir", "benchmarks/osty-vs-go", "root containing <pair>/go/ and <pair>/osty/ subdirs")
 	ostyBin := fs.String("osty", "", "path to the osty binary (default: $PWD/.bin/osty if present, else `osty` from PATH)")
 	goBin := fs.String("go", "go", "path to the go binary used for `go test -bench`")
+	goCount := fs.Int("go-count", 3, "number of independent Go bench sweeps per pair; the runner records the median to reduce scheduler jitter")
+	goCPU := fs.String("go-cpu", "1", "value forwarded to `go test -cpu` for stable Go-side scheduling (default 1)")
 	filter := fs.String("filter", "", "optional regex over pair names; only matching pairs run")
 	historyN := fs.Int("history", 0, "if >0, skip running and render the last N runs from "+historyFile+" as an ASCII trend graph")
 	label := fs.String("label", "", "optional short label stored with this run (shown in history output)")
@@ -239,6 +243,10 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	}
+	if *goCount <= 0 {
+		fmt.Fprintln(os.Stderr, "osty-vs-go: --go-count must be > 0")
+		os.Exit(2)
 	}
 
 	osty := resolveOstyBin(*ostyBin)
@@ -273,6 +281,8 @@ func main() {
 			PairsDir:       *pairsDir,
 			OstyBin:        osty,
 			GoBin:          *goBin,
+			GoCount:        *goCount,
+			GoCPU:          *goCPU,
 			Label:          *label,
 			NoiseFrac:      *noiseFrac,
 			PairRE:         pairRE,
@@ -286,11 +296,11 @@ func main() {
 	}
 
 	if *loopInterval > 0 {
-		runLoop(*loopInterval, *benchTime, *pairsDir, osty, *goBin, *label, *noiseFrac, pairRE)
+		runLoop(*loopInterval, *benchTime, *pairsDir, osty, *goBin, *goCount, *goCPU, *label, *noiseFrac, pairRE)
 		return
 	}
 
-	if _, err := runOnce(*benchTime, *pairsDir, osty, *goBin, *label, *noiseFrac, pairRE); err != nil {
+	if _, err := runOnce(*benchTime, *pairsDir, osty, *goBin, *goCount, *goCPU, *label, *noiseFrac, pairRE); err != nil {
 		fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
 		os.Exit(1)
 	}
@@ -300,7 +310,7 @@ func main() {
 // side, print the table, append to history, print the vs-best verdict.
 // Returns the new record so `--loop` can stream verdicts without
 // re-reading history.
-func runOnce(benchTime, pairsDir, ostyBin, goBin, label string, noiseFrac float64, pairRE *regexp.Regexp) (runRecord, error) {
+func runOnce(benchTime, pairsDir, ostyBin, goBin string, goCount int, goCPU, label string, noiseFrac float64, pairRE *regexp.Regexp) (runRecord, error) {
 	pairs, err := discoverPairs(pairsDir)
 	if err != nil {
 		return runRecord{}, err
@@ -331,11 +341,11 @@ func runOnce(benchTime, pairsDir, ostyBin, goBin, label string, noiseFrac float6
 	if head != "" {
 		headPart = " @ " + head
 	}
-	fmt.Printf("# osty-vs-go run #%d%s%s — benchtime=%s, pairs=%d\n\n", seq, labelPart, headPart, benchTime, len(pairs))
+	fmt.Printf("# osty-vs-go run #%d%s%s — benchtime=%s, pairs=%d, go-count=%d, go-cpu=%s\n\n", seq, labelPart, headPart, benchTime, len(pairs), goCount, goCPU)
 
 	var rows []benchResult
 	for _, pair := range pairs {
-		goRows, err := runGoBench(goBin, pairsDir, pair, benchTime)
+		goRows, err := runGoBench(goBin, pairsDir, pair, benchTime, goCount, goCPU)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty-vs-go: go bench %s: %v\n", pair, err)
 		}
@@ -354,6 +364,8 @@ func runOnce(benchTime, pairsDir, ostyBin, goBin, label string, noiseFrac float6
 		PairsDir:  pairsDir,
 		Label:     label,
 		GitHead:   head,
+		GoCount:   goCount,
+		GoCPU:     goCPU,
 		Score:     composite(rows),
 		Results:   rows,
 	}
@@ -375,7 +387,7 @@ func runOnce(benchTime, pairsDir, ostyBin, goBin, label string, noiseFrac float6
 // the user (or an outer agent) edits Osty sources; each tick's verdict
 // tells them whether the edit was an improvement, a regression, or
 // noise. Ctrl-C exits cleanly.
-func runLoop(interval time.Duration, benchTime, pairsDir, ostyBin, goBin, label string, noiseFrac float64, pairRE *regexp.Regexp) {
+func runLoop(interval time.Duration, benchTime, pairsDir, ostyBin, goBin string, goCount int, goCPU, label string, noiseFrac float64, pairRE *regexp.Regexp) {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sig)
@@ -385,7 +397,7 @@ func runLoop(interval time.Duration, benchTime, pairsDir, ostyBin, goBin, label 
 	// Run immediately rather than waiting `interval` for the first
 	// tick — the user just launched it and expects feedback.
 	for {
-		if _, err := runOnce(benchTime, pairsDir, ostyBin, goBin, label, noiseFrac, pairRE); err != nil {
+		if _, err := runOnce(benchTime, pairsDir, ostyBin, goBin, goCount, goCPU, label, noiseFrac, pairRE); err != nil {
 			fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
 		}
 		fmt.Printf("\n(waiting %s before next sweep; Ctrl-C to stop)\n\n", interval)
@@ -409,6 +421,8 @@ type autoresearchConfig struct {
 	PairsDir       string
 	OstyBin        string
 	GoBin          string
+	GoCount        int
+	GoCPU          string
 	Label          string
 	NoiseFrac      float64
 	PairRE         *regexp.Regexp
@@ -516,7 +530,7 @@ func runAutoresearchIter(cfg autoresearchConfig, iter int, stats *autoresearchSt
 
 	// Phase 2: run the bench sweep. runOnce already writes the history
 	// file and prints the verdict relative to all-time history.
-	rec, err := runOnce(cfg.BenchTime, cfg.PairsDir, cfg.OstyBin, cfg.GoBin, cfg.Label, cfg.NoiseFrac, cfg.PairRE)
+	rec, err := runOnce(cfg.BenchTime, cfg.PairsDir, cfg.OstyBin, cfg.GoBin, cfg.GoCount, cfg.GoCPU, cfg.Label, cfg.NoiseFrac, cfg.PairRE)
 	if err != nil {
 		// Bench failure shouldn't leave the mutator's changes on HEAD.
 		_, _ = gitRun("reset", "--hard", "HEAD")
@@ -688,17 +702,26 @@ func discoverPairs(root string) ([]string, error) {
 }
 
 // runGoBench invokes `go test -run=^$ -bench=. -benchmem -benchtime=<t>`
-// on the pair's go/ subdir. -run=^$ filters out regular tests; -benchmem
-// opts into the B/op + allocs/op columns that `testing` only reports
-// on request.
-func runGoBench(goBin, pairsDir, pair, benchTime string) ([]benchResult, error) {
+// on the pair's go/ subdir. Multiple independent sweeps can be
+// requested via goCount; the runner records the median per metric so a
+// noisy Go-side outlier does not dominate the published ratio.
+func runGoBench(goBin, pairsDir, pair, benchTime string, goCount int, goCPU string) ([]benchResult, error) {
 	pkg := goPackageArg(filepath.Join(pairsDir, pair, "go"))
-	cmd := exec.Command(goBin, "test", "-run=^$", "-bench=.", "-benchmem", "-benchtime="+benchTime, pkg)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("%s test: %w\n%s", goBin, err, out)
+	runs := make([][]benchResult, 0, goCount)
+	for i := 0; i < goCount; i++ {
+		args := []string{"test", "-count=1", "-run=^$", "-bench=.", "-benchmem"}
+		if goCPU != "" {
+			args = append(args, "-cpu="+goCPU)
+		}
+		args = append(args, "-benchtime="+benchTime, pkg)
+		cmd := exec.Command(goBin, args...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return nil, fmt.Errorf("%s test run %d/%d: %w\n%s", goBin, i+1, goCount, err, out)
+		}
+		runs = append(runs, parseGoBenchOutput(pair, string(out)))
 	}
-	return parseGoBenchOutput(pair, string(out)), nil
+	return aggregateGoBenchRuns(pair, runs), nil
 }
 
 // goPackageArg formats a filesystem path for the `go test` argv. Relative
@@ -760,6 +783,67 @@ func parseGoBenchOutput(pair, out string) []benchResult {
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+func aggregateGoBenchRuns(pair string, runs [][]benchResult) []benchResult {
+	type series struct {
+		ns     []float64
+		bytes  []float64
+		allocs []float64
+	}
+	byName := map[string]*series{}
+	for _, rows := range runs {
+		for _, row := range rows {
+			s := byName[row.Name]
+			if s == nil {
+				s = &series{}
+				byName[row.Name] = s
+			}
+			s.ns = appendFinite(s.ns, row.GoNs)
+			s.bytes = appendFinite(s.bytes, row.GoBytes)
+			s.allocs = appendFinite(s.allocs, row.GoAllocs)
+		}
+	}
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]benchResult, 0, len(names))
+	for _, name := range names {
+		s := byName[name]
+		out = append(out, benchResult{
+			Pair:     pair,
+			Name:     name,
+			GoNs:     medianFinite(s.ns),
+			GoBytes:  medianFinite(s.bytes),
+			GoAllocs: medianFinite(s.allocs),
+			OsNs:     math.NaN(),
+			OsBytes:  math.NaN(),
+			OsAllocs: math.NaN(),
+		})
+	}
+	return out
+}
+
+func appendFinite(dst []float64, v float64) []float64 {
+	if math.IsNaN(v) {
+		return dst
+	}
+	return append(dst, v)
+}
+
+func medianFinite(values []float64) float64 {
+	if len(values) == 0 {
+		return math.NaN()
+	}
+	sorted := append([]float64(nil), values...)
+	sort.Float64s(sorted)
+	mid := len(sorted) / 2
+	if len(sorted)%2 == 1 {
+		return sorted[mid]
+	}
+	return (sorted[mid-1] + sorted[mid]) / 2
 }
 
 func runOstyBench(ostyBin, pairsDir, pair, benchTime string) ([]benchResult, error) {

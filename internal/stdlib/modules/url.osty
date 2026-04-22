@@ -44,14 +44,14 @@ pub struct Url {
     }
 }
 
-pub fn parse(text: String) -> Result<Url, Error> {
+pub fn parse(text: String) -> Result<Url, error.BasicError> {
     let schemeParts = strings.splitN(text, "://", 2)
     if schemeParts.len() != 2 {
-        return Err(error.new("url: missing scheme in {text}"))
+        return Err(urlError("url: missing scheme in {text}"))
     }
     let scheme = schemeParts[0]
     if scheme.isEmpty() {
-        return Err(error.new("url: empty scheme in {text}"))
+        return Err(urlError("url: empty scheme in {text}"))
     }
     let rest = schemeParts[1]
 
@@ -83,7 +83,7 @@ pub fn parse(text: String) -> Result<Url, Error> {
     })
 }
 
-pub fn join(base: String, relative: String) -> Result<String, Error> {
+pub fn join(base: String, relative: String) -> Result<String, error.BasicError> {
     if relative.isEmpty() {
         return Ok(base)
     }
@@ -115,7 +115,7 @@ pub fn join(base: String, relative: String) -> Result<String, Error> {
     Ok(merged.toString())
 }
 
-fn parseAuthority(authority: String) -> Result<(String, Int?), Error> {
+fn parseAuthority(authority: String) -> Result<(String, Int?), error.BasicError> {
     if authority.isEmpty() {
         return Ok(("", None))
     }
@@ -132,9 +132,9 @@ fn parseAuthority(authority: String) -> Result<(String, Int?), Error> {
     Ok((host, Some(port)))
 }
 
-fn parsePort(s: String) -> Result<Int, Error> {
+fn parsePort(s: String) -> Result<Int, error.BasicError> {
     if s.isEmpty() {
-        return Err(error.new("url: empty port"))
+        return Err(urlError("url: empty port"))
     }
     let chars = s.chars()
     let mut n = 0
@@ -144,14 +144,18 @@ fn parsePort(s: String) -> Result<Int, Error> {
         if c >= '0' && c <= '9' {
             n = n * 10 + (c.toInt() - '0'.toInt())
         } else {
-            return Err(error.new("url: invalid port {s}"))
+            return Err(urlError("url: invalid port {s}"))
         }
         i = i + 1
     }
     if n > 65535 {
-        return Err(error.new("url: port out of range: {s}"))
+        return Err(urlError("url: port out of range: {s}"))
     }
     Ok(n)
+}
+
+fn urlError(message: String) -> error.BasicError {
+    error.BasicError { message: message }
 }
 
 fn parseQuery(s: String) -> Map<String, String> {

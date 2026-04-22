@@ -1,0 +1,35 @@
+fn sortedWords(words: List<String>) -> List<String> {
+    words.sorted()
+}
+
+fn buildIndex(words: List<String>, base: Int) -> Map<String, Int> {
+    let mut index: Map<String, Int> = {:}
+    let mut next = base
+    for word in words {
+        if index.containsKey(word) {
+            continue
+        }
+        index.insert(word, next)
+        next = next + 1
+    }
+    index
+}
+
+fn sortedKeys(index: Map<String, Int>) -> List<String> {
+    index.keys().sorted()
+}
+
+pub fn analyzeCorpusIndex(left: List<String>, right: List<String>) -> Int {
+    let leftIndex = buildIndex(sortedWords(left), 0)
+    let rightIndex = buildIndex(sortedWords(right), leftIndex.len())
+    let leftKeys = sortedKeys(leftIndex)
+    let rightKeys = sortedKeys(rightIndex)
+    let mut total = leftIndex.len() + rightIndex.len()
+    for key in leftKeys {
+        total = total + leftIndex.getOr(key, 0)
+    }
+    for key in rightKeys {
+        total = total + rightIndex.getOr(key, 0)
+    }
+    total
+}

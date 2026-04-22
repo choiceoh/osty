@@ -358,6 +358,13 @@ type FnDecl struct {
 	// allocation-free contract without re-reading annotations. No
 	// codegen behavior is currently attached.
 	NoAlloc bool
+
+	// Vectorize is set when the function carries `#[vectorize]`
+	// (v0.6 A5 SIMD track, §3.8.3). When true, the LLVM backend
+	// attaches `!llvm.loop.vectorize.enable` metadata to every loop
+	// backedge it lowers inside the function body. Pure hint — the
+	// LLVM vectorizer makes the final legality/profitability call.
+	Vectorize bool
 }
 
 func (*FnDecl) declNode()          {}

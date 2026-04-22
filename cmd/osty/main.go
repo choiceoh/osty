@@ -38,7 +38,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -399,8 +398,15 @@ func main() {
 				}
 				return
 			case "resolve":
-				printPackageDiags(selected.pkg, selected.res.Diags, flags)
-				if len(selected.file.Refs) > 0 {
+				diags := selected.res.Diags
+				if nativeDiags, err := nativeResolvePackageDiagnostics(selected.pkg); err == nil {
+					diags = append(packageParseDiags(selected.pkg), nativeDiags...)
+				}
+				printPackageDiags(selected.pkg, diags, flags)
+				if rows, err := nativeResolvePackageRows(selected.pkg, selected.file.Path); err == nil && len(rows) > 0 {
+					fmt.Printf("# %s\n", selected.file.Path)
+					printNativeResolutionRows(rows)
+				} else if len(selected.file.Refs) > 0 {
 					fmt.Printf("# %s\n", selected.file.Path)
 					printResolutionRefs(selected.file.Refs)
 				}
@@ -411,7 +417,7 @@ func main() {
 						printScopeTree(selected.file.FileScope)
 					}
 				}
-				if hasError(selected.res.Diags) {
+				if hasError(diags) {
 					os.Exit(1)
 				}
 				return
@@ -489,11 +495,27 @@ func main() {
 	case "resolve":
 		parsed := parser.ParseDetailed(src)
 		file, parseDiags := parsed.File, parsed.Diagnostics
-		res := resolveFile(file)
-		all := append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...)
+		var res *resolve.Result
+		all := append([]*diag.Diagnostic{}, parseDiags...)
+		if nativeDiags, err := nativeResolveSingleFileDiagnostics(path, src, file); err == nil {
+			all = append(all, nativeDiags...)
+		} else {
+			res = resolveFile(file)
+			all = append(all, res.Diags...)
+		}
 		printDiags(formatter, all, flags)
-		printResolution(file, res)
+		if rows, err := nativeResolveSingleFileRows(path, src, file); err == nil && len(rows) > 0 {
+			printNativeResolutionRows(rows)
+		} else {
+			if res == nil {
+				res = resolveFile(file)
+			}
+			printResolution(file, res)
+		}
 		if flags.showScopes {
+			if res == nil {
+				res = resolveFile(file)
+			}
 			// File scope's parent is the package scope (a child of the
 			// prelude). Rooting the dump at the package scope hides
 			// noisy prelude builtins while still showing every
@@ -885,22 +907,53 @@ func runResolvePackage(dir string, flags cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
-	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
-	printPackageDiags(pkg, res.Diags, flags)
-	for _, f := range pkg.Files {
-		if len(f.Refs) == 0 {
-			continue
+	var res *resolve.PackageResult
+	diags := []*diag.Diagnostic(nil)
+	if nativeDiags, err := nativeResolvePackageDiagnostics(pkg); err == nil {
+		diags = append(packageParseDiags(pkg), nativeDiags...)
+	} else {
+		res = resolve.ResolvePackage(pkg, resolve.NewPrelude())
+		diags = res.Diags
+	}
+	printPackageDiags(pkg, diags, flags)
+	if nativeRowsUsed := false; true {
+		for _, f := range pkg.Files {
+			rows, err := nativeResolvePackageRows(pkg, f.Path)
+			if err != nil || len(rows) == 0 {
+				if res == nil {
+					res = resolve.ResolvePackage(pkg, resolve.NewPrelude())
+				}
+				if len(f.Refs) == 0 {
+					continue
+				}
+				fmt.Printf("# %s\n", f.Path)
+				printResolutionRefs(f.Refs)
+				continue
+			}
+			nativeRowsUsed = true
+			fmt.Printf("# %s\n", f.Path)
+			printNativeResolutionRows(rows)
 		}
-		fmt.Printf("# %s\n", f.Path)
-		printResolutionRefs(f.Refs)
+		if !nativeRowsUsed {
+			for _, f := range pkg.Files {
+				if len(f.Refs) == 0 {
+					continue
+				}
+				fmt.Printf("# %s\n", f.Path)
+				printResolutionRefs(f.Refs)
+			}
+		}
 	}
 	if flags.showScopes {
+		if res == nil {
+			res = resolve.ResolvePackage(pkg, resolve.NewPrelude())
+		}
 		// Package scope's children are the file scopes, which in turn
 		// host fn / block / closure / match-arm scopes — the full
 		// nested tree for every file in the package.
 		printScopeTree(pkg.PkgScope)
 	}
-	if hasError(res.Diags) {
+	if hasError(diags) {
 		os.Exit(1)
 	}
 }
@@ -1844,13 +1897,7 @@ func runGen(args []string, flags cliFlags) {
 	if len(deferredCheckDiags) > 0 {
 		reportDeferredGenCheck(path, deferredCheckDiags)
 	}
-	file, _, err := parseGenEmitFile(entry.pkg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty gen: %v\n", err)
-		os.Exit(1)
-	}
-
-	out, result, emitErr := emitGenArtifact(backendID, emitMode, pkgName, entry.sourcePath, file, entry.fileResult(), entry.chk)
+	out, result, emitErr := emitGenArtifact(backendID, emitMode, pkgName, entry)
 	if out == nil && emitErr != nil {
 		exitBackendEmitError("gen", result, emitErr)
 	}
@@ -1871,46 +1918,6 @@ func runGen(args []string, flags cliFlags) {
 		adjustGenResultForUserOutput(result, backendID, outPath)
 		exitBackendEmitError("gen", result, emitErr)
 	}
-}
-
-func emitGenArtifact(name backend.Name, mode backend.EmitMode, pkgName, sourcePath string, file *ast.File, res *resolve.Result, chk *check.Result) ([]byte, *backend.Result, error) {
-	b := backendFromCLI("gen", name)
-	tmpRoot, err := os.MkdirTemp("", "osty-gen-*")
-	if err != nil {
-		return nil, nil, err
-	}
-	defer os.RemoveAll(tmpRoot)
-	entry, err := backend.PrepareEntry(pkgName, sourcePath, file, res, chk)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	result, emitErr := b.Emit(context.Background(), backend.Request{
-		Layout: backend.Layout{
-			Root:    tmpRoot,
-			Profile: "gen",
-		},
-		Emit:  mode,
-		Entry: entry,
-	})
-	if result == nil {
-		return nil, nil, emitErr
-	}
-	artifact := result.Artifacts.SourcePath()
-	if artifact == "" {
-		if emitErr != nil {
-			return nil, result, emitErr
-		}
-		return nil, result, fmt.Errorf("backend %q did not produce a source artifact", name)
-	}
-	data, readErr := os.ReadFile(artifact)
-	if readErr != nil {
-		if emitErr != nil {
-			return nil, result, emitErr
-		}
-		return nil, result, readErr
-	}
-	return data, result, emitErr
 }
 
 func adjustGenResultForUserOutput(result *backend.Result, name backend.Name, outPath string) {

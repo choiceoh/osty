@@ -395,3 +395,147 @@ fn testSelfResolverSuggestsNearbyNames() {
     testing.assertEq(selfResolveCodeCount(result, "E0500"), 1)
     testing.assertEq(result.diagnostics[0].hint, "did you mean `value`?")
 }
+
+fn testSelfResolverAcceptsControlFlowInContext() {
+    let result = selfResolveSource(
+        r"""
+            fn work(xs: List<Int>) -> Int {
+                defer cleanup()
+                for x in xs {
+                    if x < 0 { continue }
+                    if x > 100 { break }
+                }
+                return 0
+            }
+
+            fn cleanup() {}
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0600"), 0)
+    testing.assertEq(selfResolveCodeCount(result, "E0601"), 0)
+    testing.assertEq(selfResolveCodeCount(result, "E0602"), 0)
+    testing.assertEq(selfResolveCodeCount(result, "E0603"), 0)
+}
+
+fn testSelfResolverRejectsBreakContinueInClosure() {
+    // A closure starts a fresh fn context; the enclosing loop doesn't
+    // leak through. This matches the Go resolver's enterFn(false) reset
+    // and is what prevents users from smuggling `break` across a `||`.
+    let result = selfResolveSource(
+        r"""
+            fn run() {
+                for x in [1, 2, 3] {
+                    let f = || { break }
+                    let g = || { continue }
+                    f()
+                    g()
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0600"), 1)
+    testing.assertEq(selfResolveCodeCount(result, "E0601"), 1)
+}
+
+fn testSelfResolverAcceptsReturnInClosure() {
+    // `return` inside a closure is legal — the closure body IS a function
+    // body. Only `break`/`continue` care about `inLoop`.
+    let result = selfResolveSource(
+        r"""
+            fn run() {
+                let f = || { return 42 }
+                let g = || { defer teardown() }
+                f()
+                g()
+            }
+
+            fn teardown() {}
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0602"), 0)
+    testing.assertEq(selfResolveCodeCount(result, "E0603"), 0)
+}
+
+fn testSelfResolverRejectsUnknownAnnotation() {
+    let result = selfResolveSource(
+        r"""
+            #[bogus]
+            fn main() {}
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0400"), 1)
+}
+
+fn testSelfResolverRejectsAnnotationOnWrongTarget() {
+    // `#[json]` attaches only to struct fields and enum variants. Putting
+    // it on a top-level fn is E0607. The name is valid (no E0400).
+    let result = selfResolveSource(
+        r"""
+            #[json(key = "x")]
+            fn main() {}
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0400"), 0)
+    testing.assertEq(selfResolveCodeCount(result, "E0607"), 1)
+}
+
+fn testSelfResolverRejectsDuplicateAnnotation() {
+    let result = selfResolveSource(
+        r"""
+            #[deprecated]
+            #[deprecated]
+            fn main() {}
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0609"), 1)
+}
+
+fn testSelfResolverAcceptsValidAnnotations() {
+    // Structural sanity: a well-formed decl with one valid annotation per
+    // target class produces no annotation diagnostics.
+    let result = selfResolveSource(
+        r"""
+            #[deprecated(since = "0.5")]
+            pub fn legacy() {}
+
+            #[cfg(os = "linux")]
+            struct Linux {
+                #[json(key = "id")]
+                id: Int,
+            }
+
+            enum Color {
+                #[json(key = "r")]
+                Red,
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0400"), 0)
+    testing.assertEq(selfResolveCodeCount(result, "E0607"), 0)
+    testing.assertEq(selfResolveCodeCount(result, "E0609"), 0)
+}
+
+fn testSelfResolverChecksAnnotationsOnStructMembers() {
+    // `#[json]` on a method is wrong target (methods aren't in json's
+    // allow-set). `#[op]` on a field is wrong target too.
+    let result = selfResolveSource(
+        r"""
+            struct Bad {
+                #[op]
+                value: Int,
+
+                #[json(key = "x")]
+                fn get(self) -> Int { self.value }
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0607"), 2)
+}

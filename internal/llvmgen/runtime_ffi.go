@@ -159,7 +159,7 @@ func (g *generator) emitRuntimeFFICall(call *ast.CallExpr) (value, bool, error) 
 		return value{}, true, unsupportedf("call", "runtime FFI %s.%s has no return value", fn.path, fn.sourceName)
 	}
 	emitter := g.toOstyEmitter()
-	g.emitGCSafepointKind(emitter, safepointKindCall)
+	g.emitCallSafepointIfNeeded(emitter)
 	g.takeOstyEmitter(emitter)
 	g.pushScope()
 	args, err := g.runtimeFFICallArgs(fn, call.Args)
@@ -186,7 +186,7 @@ func (g *generator) emitRuntimeFFICallStmt(call *ast.CallExpr) (bool, error) {
 		return found, err
 	}
 	emitter := g.toOstyEmitter()
-	g.emitGCSafepointKind(emitter, safepointKindCall)
+	g.emitCallSafepointIfNeeded(emitter)
 	g.takeOstyEmitter(emitter)
 	g.pushScope()
 	args, err := g.runtimeFFICallArgs(fn, call.Args)

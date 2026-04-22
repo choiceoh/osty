@@ -207,16 +207,284 @@ func lowerStdlibTypesFromRegistry(reg *stdlib.Registry) map[string]ir.Decl {
 			switch x := d.(type) {
 			case *ir.StructDecl:
 				if len(x.Generics) > 0 && isInjectableTypeName(x.Name) {
-					out[x.Name] = x
+					out[x.Name] = stripMethodsForInjection(x)
 				}
 			case *ir.EnumDecl:
 				if len(x.Generics) > 0 && isInjectableTypeName(x.Name) {
-					out[x.Name] = x
+					out[x.Name] = stripMethodsForInjection(x)
 				}
 			}
 		}
 	}
 	return out
+}
+
+// stripMethodsForInjection drops methods whose signatures would drive
+// monomorphization into an unbounded spec chain. The culprit shape is
+// any `owner<X>` reference in a param or return type where X is not
+// exactly the owner's own generic parameters (as TypeVars) — once X
+// differs, specializing `owner<Foo>` queues `owner<F(Foo)>`, whose own
+// method queues `owner<F(F(Foo))>`, ad infinitum.
+//
+// Canonical triggers from stdlib collections:
+//
+//   - `List<T>.chunked(self) -> List<List<T>>`
+//     Args [List<T>] ≠ [T] → strip.
+//   - `List<T>.enumerate(self) -> List<(Int, T)>`
+//     Args [(Int, T)] ≠ [T] → strip.
+//   - `List<T>.windowed(...) -> List<List<T>>`, same shape as chunked.
+//
+// Safe shapes: methods whose every `owner<...>` occurrence has Args
+// that match the owner's declared generics verbatim (TypeVars by name
+// in order) — `filter(pred) -> List<T>`, `concat(other: List<T>) ->
+// List<T>`, `len() -> Int`, `Map.containsKey(k: K) -> Bool`, … all
+// survive, so the backend's bodied-helper specialization path keeps
+// working for them.
+//
+// Generic methods (`List<T>.map<R>`) are preserved here unchanged;
+// monomorphize's `keepNonGenericMethods` skips generic methods anyway,
+// deferring their specialization to actual call sites.
+//
+// Making monomorphize demand-driven per method would let the skipped
+// methods come back; that's a larger refactor than required to unblock
+// stdlib-body injection for user code that does not touch the
+// structurally-recursive helpers.
+func stripMethodsForInjection(d ir.Decl) ir.Decl {
+	switch x := d.(type) {
+	case *ir.StructDecl:
+		x.Methods = filterMethodsAvoidingOwnerRecursion(x.Name, genericParamNames(x.Generics), x.Methods)
+	case *ir.EnumDecl:
+		x.Methods = filterMethodsAvoidingOwnerRecursion(x.Name, genericParamNames(x.Generics), x.Methods)
+	}
+	return d
+}
+
+func genericParamNames(params []*ir.TypeParam) []string {
+	if len(params) == 0 {
+		return nil
+	}
+	out := make([]string, len(params))
+	for i, p := range params {
+		if p != nil {
+			out[i] = p.Name
+		}
+	}
+	return out
+}
+
+// filterMethodsAvoidingOwnerRecursion drops methods the backend cannot
+// safely specialize from an injected template:
+//
+//  1. Owner-recursive sigs (`List<T>.chunked(self) -> List<List<T>>`) —
+//     eagerly specialising the owner would queue `List<List<Foo>>` and
+//     diverge. See methodRecursesOwner for the exact shape test.
+//
+//  2. **Dispatch cascade:** bodied methods that call a body-less
+//     intrinsic method on `self` whose dispatch the backend has not
+//     whitelisted. Their bodies would survive into the specialization
+//     but the `self.<missing>(...)` site has no lowering target, so
+//     the legacy llvmgen bridge walls on `*ast.TurbofishExpr` /
+//     `self.<missing>` when it later tries to emit them. The canonical
+//     List example: `List<T>.contains { self.indexOf(item).isSome() }`
+//     — `indexOf` is body-less and not in `listMethodInfo`, so the
+//     specialized `contains` can never resolve the call and the
+//     enclosing `.isSome()` chain loses its source type. Map's shape
+//     is the same but `mapMethodInfo` whitelists every body-less
+//     intrinsic (`get`, `insert`, …), so its bodied helpers all
+//     survive.
+//
+// Body-less declarations themselves are preserved on the specialized
+// struct — ir.Validate is loosened to allow them for builtin-source
+// specializations — so source-type propagation stays intact for any
+// remaining caller. Only the bodied methods whose emission is
+// guaranteed to fail get dropped.
+//
+// Generic methods (`List<T>.map<R>`) are preserved here unchanged;
+// monomorphize's `keepNonGenericMethods` skips generic methods anyway
+// and defers their specialization to actual call sites.
+func filterMethodsAvoidingOwnerRecursion(owner string, generics []string, methods []*ir.FnDecl) []*ir.FnDecl {
+	if len(methods) == 0 {
+		return methods
+	}
+	// Pass 1: strip owner-recursive methods. Body-less declarations stay
+	// so their signatures remain visible for source-type propagation
+	// (e.g. `self.get(k) -> V?` feeding a later `.isSome()` dispatch).
+	ownerUndispatchable := ownerUndispatchableMethodSet(owner)
+	droppedSelfCall := map[string]bool{}
+	survived := make([]*ir.FnDecl, 0, len(methods))
+	for _, m := range methods {
+		if m == nil {
+			continue
+		}
+		if m.Body != nil && len(m.Generics) == 0 && methodRecursesOwner(owner, generics, m) {
+			droppedSelfCall[m.Name] = true
+			continue
+		}
+		survived = append(survived, m)
+	}
+	// Pass 2: cascade-drop bodied methods whose body calls any
+	// owner-undispatchable (or already-dropped) method on `self`.
+	// Repeat until the set is stable — a bodied helper may only touch
+	// an undispatchable intrinsic via another bodied helper that we
+	// strip in this pass.
+	for {
+		before := len(droppedSelfCall)
+		next := survived[:0:0]
+		for _, m := range survived {
+			if m == nil {
+				continue
+			}
+			if m.Body != nil && methodBodyCallsUndispatchableSelfMethod(m, ownerUndispatchable, droppedSelfCall) {
+				droppedSelfCall[m.Name] = true
+				continue
+			}
+			next = append(next, m)
+		}
+		survived = next
+		if len(droppedSelfCall) == before {
+			break
+		}
+	}
+	return survived
+}
+
+// ownerUndispatchableMethodSet returns the set of **body-less
+// intrinsic** method names the backend cannot lower from a bare
+// `self.<name>(...)` call site on a specialization of `owner`. The
+// cascade only uses these as starting points — bodied methods that
+// only call dispatched intrinsics stay.
+//
+// Kept in sync with the backend's `listMethodInfo` / `mapMethodInfo` /
+// `setMethodInfo` whitelists in `internal/llvmgen/type.go`. When a new
+// dispatch lands there, drop the corresponding name here so its
+// callers stop getting cascade-stripped.
+func ownerUndispatchableMethodSet(owner string) map[string]bool {
+	switch owner {
+	case "List":
+		// Body-less declarations on List<T> (see
+		// `internal/stdlib/modules/collections.osty`): len, get,
+		// indexOf, sorted, push, pop, insert, removeAt, sort,
+		// reverse, clear. listMethodInfo whitelist covers all except
+		// indexOf / removeAt / sort / reverse.
+		return map[string]bool{
+			"indexOf":  true,
+			"removeAt": true,
+			"sort":     true,
+			"reverse":  true,
+		}
+	}
+	// Map: every body-less intrinsic (get, insert, remove, keys,
+	// entries, len, isEmpty, clear) is in mapMethodInfo.
+	// Set: every body-less intrinsic (len, isEmpty, contains, insert,
+	// remove, toList) is in setMethodInfo.
+	// Option / Result: isSome / isNone are handled via
+	// emitOptionMethodCall directly off ptr source types.
+	return nil
+}
+
+// methodBodyCallsUndispatchableSelfMethod walks m.Body for any
+// `self.<name>(...)` call whose name is in either `undispatchable`
+// (hard-coded owner gap) or `cascade` (already-dropped by a previous
+// pass). Returns true on the first match. Non-self receivers are
+// ignored; this is about the specialized owner's own dispatch surface
+// only.
+func methodBodyCallsUndispatchableSelfMethod(m *ir.FnDecl, undispatchable, cascade map[string]bool) bool {
+	if m == nil || m.Body == nil {
+		return false
+	}
+	if len(undispatchable) == 0 && len(cascade) == 0 {
+		return false
+	}
+	missing := func(name string) bool {
+		return undispatchable[name] || cascade[name]
+	}
+	found := false
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		if found {
+			return false
+		}
+		switch x := n.(type) {
+		case *ir.MethodCall:
+			if id, ok := x.Receiver.(*ir.Ident); ok && id.Name == "self" && missing(x.Name) {
+				found = true
+				return false
+			}
+		case *ir.CallExpr:
+			if fx, ok := x.Callee.(*ir.FieldExpr); ok {
+				if id, ok := fx.X.(*ir.Ident); ok && id.Name == "self" && missing(fx.Name) {
+					found = true
+					return false
+				}
+			}
+		}
+		return true
+	}), m.Body)
+	return found
+}
+
+// methodRecursesOwner reports whether any param or return type of m
+// contains a `owner<...>` occurrence whose type args are not the
+// identity form `<T, U, …>` for owner's declared generics.
+func methodRecursesOwner(owner string, generics []string, m *ir.FnDecl) bool {
+	if m == nil {
+		return false
+	}
+	for _, p := range m.Params {
+		if p != nil && typeRecursesOwner(p.Type, owner, generics) {
+			return true
+		}
+	}
+	return typeRecursesOwner(m.Return, owner, generics)
+}
+
+func typeRecursesOwner(t ir.Type, owner string, generics []string) bool {
+	switch x := t.(type) {
+	case *ir.NamedType:
+		if x.Name == owner && !argsAreIdentityGenerics(x.Args, generics) {
+			return true
+		}
+		for _, a := range x.Args {
+			if typeRecursesOwner(a, owner, generics) {
+				return true
+			}
+		}
+		return false
+	case *ir.OptionalType:
+		return typeRecursesOwner(x.Inner, owner, generics)
+	case *ir.TupleType:
+		for _, e := range x.Elems {
+			if typeRecursesOwner(e, owner, generics) {
+				return true
+			}
+		}
+		return false
+	case *ir.FnType:
+		for _, p := range x.Params {
+			if typeRecursesOwner(p, owner, generics) {
+				return true
+			}
+		}
+		return typeRecursesOwner(x.Return, owner, generics)
+	}
+	return false
+}
+
+// argsAreIdentityGenerics reports whether args is exactly the identity
+// form for the owner's declared generics: each Args[i] is a TypeVar
+// whose Name matches generics[i]. A match means the `owner<...>`
+// reference is just the method's self-type, which specializes to the
+// already-queued concrete owner and terminates.
+func argsAreIdentityGenerics(args []ir.Type, generics []string) bool {
+	if len(args) != len(generics) {
+		return false
+	}
+	for i, a := range args {
+		tv, ok := a.(*ir.TypeVar)
+		if !ok || tv.Name != generics[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // lowerStdlibModule runs ir.Lower on one stdlib module's file, reusing

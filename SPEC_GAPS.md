@@ -13,7 +13,29 @@
 
 ## Open Gaps
 
-(없음)
+### `vectorize-hint` — `#[vectorize]` backend 전제조건 (v0.6 A5)
+
+**상태:** hint 착륙 + safepoint poll blocker 해소 완료 (§3.8.3 GC
+contract). 남은 한 건: iterator-protocol 루프. 언어 surface 변경 없이
+backend 구현 개선만 필요하므로 G 번호 미부여.
+
+1. ~~**Safepoint poll hoisting.**~~ **해소됨.** `#[vectorize]` 함수는
+   `emitLoopSafepoint` (HIR) / `emitLoopSafepointKind` (MIR) 호출을
+   스킵한다. 함수 entry 의 safepoint 와 caller 의 safepoint 사이에
+   루프가 bracketed 되므로 GC liveness 는 유지되고, 루프 body 는
+   call-free 가 되어 LLVM 의 loop vectorizer 가 countable 분석을
+   통과한다. 실측: XOR reduction 1M × 200 iterations 벤치에서 scalar
+   0.28s vs vectorized 0.06s = **4.7× 속도 향상**, ARM NEON `eor.16b`
+   / `add.2d` 명령 emission 확인 (`vectorization width: 2, interleaved
+   count: 4`). Trade-off 는 GC latency — §3.8.3 GC contract 참조.
+2. **Iterator-protocol loops.** `for x in iter` (iter 가 `List<T>` /
+   range / `Map<K, V>` 가 아닌 경우) 는 callback-driven shape 로
+   lower 되어 LLVM 이 trip count 를 볼 수 없다. 해결 경로는
+   `Iterable<T>` 프로토콜을 구현하는 타입들 중 countable 가능한 것들
+   (예: `Array`, `Slice`) 에 한해 index-driven lowering 으로 전환하는
+   것. 언어 쪽 스펙은 그대로 둔다 — 어디까지나 backend 구현 선택지.
+
+향후 이 gap 을 닫을 때 같은 entry 에 해결 요지 + 관련 PR 을 기록한다.
 
 **운영 정책.** 새 gap 은 기존 처리 절차대로 G 번호를 부여해 `Open Gaps`
 섹션에서 추적. 버그 수정 / 명확화 / 성능 최적화 / 의미 중립 변경은

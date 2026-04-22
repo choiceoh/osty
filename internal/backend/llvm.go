@@ -49,51 +49,17 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 	if artifacts.LLVMIR == "" {
 		return nil, fmt.Errorf("llvm backend: missing LLVM IR artifact path")
 	}
-	if req.Entry.IR == nil {
-		return nil, fmt.Errorf("llvm backend: missing lowered IR entry")
+	irOut, warnings, genErr := generateLLVMIR(req.Entry, req.Layout.Target, req.Features, req.Emit)
+	if err := os.WriteFile(artifacts.LLVMIR, irOut, 0o644); err != nil {
+		return nil, err
 	}
-	opts := llvmgen.Options{
-		PackageName: req.Entry.PackageName,
-		SourcePath:  req.Entry.SourcePath,
-		Source:      req.Entry.Source,
-		Target:      req.Layout.Target,
-		UseMIR:      useMIRBackend(req.Features, req.Emit),
-	}
-	// IR is the sole input contract. The backend dispatcher never reaches
-	// for req.Entry.File — the AST is a front-end artifact that the LLVM
-	// backend does not consume directly any more.
-	//
-	// MIR-first dispatch now defaults on the raw `llvm-ir` emission
-	// path. Requests can opt back into the legacy HIR→AST bridge with
-	// the `legacy-llvmgen` feature, or opt further in with
-	// `mir-backend` on object/binary emission while parity continues to
-	// grow. On MIR-emitter refusal we still fall back automatically, so
-	// enabling the new path cannot reduce coverage.
-	var (
-		irOut  []byte
-		genErr error
-	)
-	if opts.UseMIR && req.Entry.MIR != nil {
-		irOut, genErr = llvmgen.GenerateFromMIR(req.Entry.MIR, opts)
-		if genErr != nil && errors.Is(genErr, llvmgen.ErrUnsupported) {
-			// MIR emitter refused — fall back to the HIR path.
-			opts.UseMIR = false
-			irOut, genErr = llvmgen.GenerateModule(req.Entry.IR, opts)
-		}
-	} else {
-		irOut, genErr = llvmgen.GenerateModule(req.Entry.IR, opts)
+	out := &Result{
+		Backend:   NameLLVM,
+		Emit:      req.Emit,
+		Artifacts: artifacts,
+		Warnings:  warnings,
 	}
 	if genErr == nil {
-		if err := os.WriteFile(artifacts.LLVMIR, irOut, 0o644); err != nil {
-			return nil, err
-		}
-		warnings := append([]error(nil), req.Entry.IRIssues...)
-		out := &Result{
-			Backend:   NameLLVM,
-			Emit:      req.Emit,
-			Artifacts: artifacts,
-			Warnings:  warnings,
-		}
 		if !llvmgen.NeedsObjectArtifact(req.Emit.String()) {
 			return out, nil
 		}
@@ -120,28 +86,65 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 		}
 		return out, nil
 	}
+	return out, genErr
+}
 
-	diag := llvmgen.UnsupportedDiagnosticForError(genErr)
-	skeleton := llvmgen.RenderSkeleton(
-		req.Entry.PackageName,
-		req.Entry.SourcePath,
-		string(req.Emit),
-		req.Layout.Target,
-		errors.New(llvmgen.UnsupportedSummary(diag)),
-	)
-	if err := os.WriteFile(artifacts.LLVMIR, skeleton, 0o644); err != nil {
-		return nil, err
+// EmitLLVMIRText runs the LLVM lowering pipeline for one prepared entry and
+// returns the textual IR bytes directly, without creating artifact paths.
+func EmitLLVMIRText(entry Entry, target string, features []string) ([]byte, []error, error) {
+	return generateLLVMIR(entry, target, features, EmitLLVMIR)
+}
+
+func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode) ([]byte, []error, error) {
+	if entry.IR == nil {
+		return nil, nil, fmt.Errorf("llvm backend: missing lowered IR entry")
 	}
-	return &Result{
-		Backend:   NameLLVM,
-		Emit:      req.Emit,
-		Artifacts: artifacts,
-		Warnings: append(
-			append([]error(nil), req.Entry.IRIssues...),
+	opts := llvmgen.Options{
+		PackageName: entry.PackageName,
+		SourcePath:  entry.SourcePath,
+		Source:      entry.Source,
+		Target:      target,
+		UseMIR:      useMIRBackend(features, emit),
+	}
+	// IR is the sole input contract. The backend dispatcher never reaches
+	// for entry.File — the AST is a front-end artifact that the LLVM
+	// backend does not consume directly any more.
+	//
+	// MIR-first dispatch now defaults on the raw `llvm-ir` emission
+	// path. Requests can opt back into the legacy HIR→AST bridge with
+	// the `legacy-llvmgen` feature, or opt further in with
+	// `mir-backend` on object/binary emission while parity continues to
+	// grow. On MIR-emitter refusal we still fall back automatically, so
+	// enabling the new path cannot reduce coverage.
+	var (
+		irOut  []byte
+		genErr error
+	)
+	if opts.UseMIR && entry.MIR != nil {
+		irOut, genErr = llvmgen.GenerateFromMIR(entry.MIR, opts)
+		if genErr != nil && errors.Is(genErr, llvmgen.ErrUnsupported) {
+			// MIR emitter refused — fall back to the HIR path.
+			opts.UseMIR = false
+			irOut, genErr = llvmgen.GenerateModule(entry.IR, opts)
+		}
+	} else {
+		irOut, genErr = llvmgen.GenerateModule(entry.IR, opts)
+	}
+	warnings := append([]error(nil), entry.IRIssues...)
+	if genErr == nil {
+		return irOut, warnings, nil
+	}
+	diag := llvmgen.UnsupportedDiagnosticForError(genErr)
+	return llvmgen.RenderSkeleton(
+			entry.PackageName,
+			entry.SourcePath,
+			string(emit),
+			target,
+			errors.New(llvmgen.UnsupportedSummary(diag)),
+		), append(warnings,
 			errors.New(llvmgen.UnsupportedSummary(diag)),
 			ErrLLVMNotImplemented,
-		),
-	}, ErrLLVMNotImplemented
+		), ErrLLVMNotImplemented
 }
 
 func (b LLVMBackend) llvmToolchain() llvmToolchain {

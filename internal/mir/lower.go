@@ -282,6 +282,7 @@ func (l *lowerer) lowerFunction(fn *ir.FnDecl, owner string, asMethod bool) *Fun
 	out.Exported = fn.Exported
 	out.ExportSymbol = fn.ExportSymbol
 	out.CABI = fn.CABI
+	out.Vectorize = fn.Vectorize
 	out.IsIntrinsic = fn.IsIntrinsic
 	if fn.Body == nil {
 		out.IsExternal = true
@@ -3158,6 +3159,16 @@ func bytesIntrinsicForMethod(name string) IntrinsicKind {
 		return IntrinsicBytesIsEmpty
 	case "get":
 		return IntrinsicBytesGet
+	case "contains":
+		return IntrinsicBytesContains
+	case "startsWith":
+		return IntrinsicBytesStartsWith
+	case "indexOf":
+		return IntrinsicBytesIndexOf
+	case "concat":
+		return IntrinsicBytesConcat
+	case "repeat":
+		return IntrinsicBytesRepeat
 	}
 	return IntrinsicInvalid
 }

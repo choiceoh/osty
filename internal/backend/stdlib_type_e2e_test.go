@@ -2,6 +2,7 @@ package backend
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -12,6 +13,14 @@ import (
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
 )
+
+func requireIRCallsSpecializedMethod(t *testing.T, irText, method string) {
+	t.Helper()
+	pattern := regexp.MustCompile(`call [^@]+@[^[:space:]]*__` + regexp.QuoteMeta(method) + `[^[:space:]]*\(`)
+	if !pattern.MatchString(irText) {
+		t.Fatalf("expected a call to specialized method %q in generated IR:\n%s", method, irText)
+	}
+}
 
 // TestPhase2MangledNamesAreValidLLVMIdentifiers locks in the Phase 2
 // fix for LLVM016: `Map<String, V>` now mangles to a name built from
@@ -105,6 +114,107 @@ fn main() {}
 	}
 	if err != nil {
 		t.Logf("Phase 2 pipeline still incomplete past user callsite (expected): %v", err)
+	}
+}
+
+// TestPhase2gContainsKeyUserCallsiteUsesSpecializedMethod locks the
+// follow-up to Phase 2g: once a specialized Map.containsKey body is
+// available, the user callsite should no longer hit the legacy
+// `osty_rt_map_contains_*` shortcut. Instead it must dispatch to the
+// specialized method body (`self.get(key).isSome()`), which keeps the
+// monomorphized helper stack authoritative end-to-end.
+func TestPhase2gContainsKeyUserCallsiteUsesSpecializedMethod(t *testing.T) {
+	src := `fn touch(m: Map<String, Int>, k: String) -> Bool {
+    m.containsKey(k)
+}
+fn main() {}
+`
+	monoMod := pipelineThroughMonomorph(t, src)
+	opts := llvmgen.Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/phase2g_containskey.osty",
+		Source:      []byte(src),
+	}
+	irOut, err := llvmgen.GenerateModule(monoMod, opts)
+	if err != nil {
+		t.Fatalf("containsKey specialized dispatch failed: %v", err)
+	}
+	got := string(irOut)
+	if strings.Contains(got, "osty_rt_map_contains_") {
+		t.Fatalf("containsKey user callsite still routed through legacy intrinsic:\n%s", got)
+	}
+	requireIRCallsSpecializedMethod(t, got, "containsKey")
+}
+
+func TestPhase2gGetOrUserCallsiteUsesSpecializedMethod(t *testing.T) {
+	src := `fn touch(m: Map<String, Int>, k: String) -> Int {
+    m.getOr(k, 0)
+}
+fn main() {}
+`
+	monoMod := pipelineThroughMonomorph(t, src)
+	opts := llvmgen.Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/phase2g_getor.osty",
+		Source:      []byte(src),
+	}
+	irOut, err := llvmgen.GenerateModule(monoMod, opts)
+	if err != nil {
+		t.Fatalf("getOr specialized dispatch failed: %v", err)
+	}
+	requireIRCallsSpecializedMethod(t, string(irOut), "getOr")
+}
+
+func TestPhase2gMapValuesUserCallsiteUsesSpecializedMethod(t *testing.T) {
+	src := `fn stringify(n: Int) -> String { "{n}" }
+fn touch(m: Map<String, Int>) -> Map<String, String> {
+    m.mapValues(stringify)
+}
+fn main() {}
+`
+	monoMod := pipelineThroughMonomorph(t, src)
+	opts := llvmgen.Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/phase2g_mapvalues.osty",
+		Source:      []byte(src),
+	}
+	irOut, err := llvmgen.GenerateModule(monoMod, opts)
+	if err != nil {
+		t.Fatalf("mapValues specialized dispatch failed: %v", err)
+	}
+	requireIRCallsSpecializedMethod(t, string(irOut), "mapValues")
+}
+
+// Statement-position mutators intentionally keep their dedicated
+// lowering even when a specialized stdlib body exists: update's
+// hand-emit wraps get + callback + insert in one recursive per-map
+// critical section so no concurrent mutator can slip between the read
+// and the write. Specialized user-call dispatch must not bypass that.
+func TestPhase2gUpdateUserCallsiteKeepsLockedLowering(t *testing.T) {
+	src := `fn bump(n: Int?) -> Int { (n ?? 0) + 1 }
+fn touch(m: Map<String, Int>, k: String) {
+    m.update(k, bump)
+}
+fn main() {}
+`
+	monoMod := pipelineThroughMonomorph(t, src)
+	opts := llvmgen.Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/phase2g_update.osty",
+		Source:      []byte(src),
+	}
+	irOut, err := llvmgen.GenerateModule(monoMod, opts)
+	if err != nil {
+		t.Fatalf("update lowering failed: %v", err)
+	}
+	got := string(irOut)
+	for _, want := range []string{
+		"call void @osty_rt_map_lock(",
+		"call void @osty_rt_map_unlock(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("update must preserve locked lowering, missing %q:\n%s", want, got)
+		}
 	}
 }
 
@@ -307,8 +417,9 @@ fn main() {}
 		for _, o := range offenders {
 			t.Logf("  - %s", o)
 		}
+		t.Fatalf("stale TypeArgs leaked past monomorph; expected 0 offenders")
 	} else {
-		t.Logf("no stale TypeArgs — TurbofishExpr must arise from a different AST bridge path")
+		t.Logf("no stale TypeArgs remain after monomorph")
 	}
 }
 

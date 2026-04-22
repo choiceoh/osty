@@ -411,8 +411,8 @@ func TestAIRepairTriageSummarizesCapturedReports(t *testing.T) {
 		"repaired_clean",
 		"repaired_residual",
 		"foreign_function_keyword",
-		"E0700",
-		"foreign_function_keyword -> E0700",
+		"E0702",
+		"foreign_function_keyword -> E0702",
 		"foreign_fn_tuple_index_case",
 		"learning priorities:",
 		"action=promote_and_fix_check",
@@ -488,7 +488,7 @@ func TestAIRepairLearnJSONRanksCoveredResidualPriority(t *testing.T) {
 		t.Fatalf("len(priorities) = %d, want 1", len(report.Priorities))
 	}
 	priority := report.Priorities[0]
-	if got, want := priority.Key, "foreign_function_keyword -> E0700"; got != want {
+	if got, want := priority.Key, "foreign_function_keyword -> E0702"; got != want {
 		t.Fatalf("priority key = %q, want %q", got, want)
 	}
 	if got, want := priority.Stage, "check"; got != want {

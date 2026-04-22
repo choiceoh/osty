@@ -42,3 +42,74 @@ func TestLookupFnDeclNilReceiver(t *testing.T) {
 		t.Fatalf("nil.LookupFnDecl = %v, want nil", got)
 	}
 }
+
+func TestLookupMethodDeclFindsStructMethod(t *testing.T) {
+	reg := LoadCached()
+	fn := reg.LookupMethodDecl("encoding", "Hex", "encode")
+	if fn == nil {
+		t.Fatalf("LookupMethodDecl(encoding, Hex, encode) = nil, want *ast.FnDecl")
+	}
+	if fn.Name != "encode" {
+		t.Fatalf("fn.Name = %q, want encode", fn.Name)
+	}
+	if len(fn.Params) != 1 {
+		t.Fatalf("fn.Params = %d, want 1 (the `data` param; self is implicit)", len(fn.Params))
+	}
+}
+
+func TestLookupMethodDeclFindsEnumMethod(t *testing.T) {
+	reg := LoadCached()
+	fn := reg.LookupMethodDecl("option", "Option", "isSome")
+	if fn == nil {
+		t.Fatalf("LookupMethodDecl(option, Option, isSome) = nil, want *ast.FnDecl")
+	}
+	if fn.Name != "isSome" {
+		t.Fatalf("fn.Name = %q, want isSome", fn.Name)
+	}
+	if fn.Body == nil {
+		t.Fatalf("fn.Body = nil, want bodied enum method")
+	}
+}
+
+func TestLookupMethodDeclUnknownReturnsNil(t *testing.T) {
+	reg := LoadCached()
+	cases := []struct {
+		module, typeName, methodName string
+	}{
+		{"encoding", "Hex", "no_such_method"},
+		{"encoding", "NoSuchType", "encode"},
+		{"no_such_module", "Hex", "encode"},
+		{"", "Hex", "encode"},
+		{"encoding", "", "encode"},
+		{"encoding", "Hex", ""},
+	}
+	for _, tc := range cases {
+		if got := reg.LookupMethodDecl(tc.module, tc.typeName, tc.methodName); got != nil {
+			t.Errorf("LookupMethodDecl(%q, %q, %q) = %v, want nil",
+				tc.module, tc.typeName, tc.methodName, got)
+		}
+	}
+}
+
+func TestLookupMethodDeclNilReceiver(t *testing.T) {
+	var reg *Registry
+	if got := reg.LookupMethodDecl("encoding", "Hex", "encode"); got != nil {
+		t.Fatalf("nil.LookupMethodDecl = %v, want nil", got)
+	}
+}
+
+// TestLookupMethodDeclAndFnAreDistinctSurfaces guards against the
+// regression where a future refactor collapses methods and free fns
+// into one lookup that treats `LookupFnDecl(module, methodName)` as
+// hitting struct methods. Methods must remain hidden from the free-fn
+// surface so existing callers don't accidentally route a method body
+// through the free-fn injection path that does not pass a receiver.
+func TestLookupMethodDeclAndFnAreDistinctSurfaces(t *testing.T) {
+	reg := LoadCached()
+	if got := reg.LookupFnDecl("encoding", "encode"); got != nil {
+		t.Fatalf("LookupFnDecl(encoding, encode) = %v, want nil — encode is a struct method, not a free fn", got)
+	}
+	if got := reg.LookupMethodDecl("encoding", "Hex", "encode"); got == nil {
+		t.Fatalf("LookupMethodDecl(encoding, Hex, encode) = nil, want non-nil")
+	}
+}

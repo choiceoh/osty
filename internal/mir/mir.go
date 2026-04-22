@@ -151,6 +151,13 @@ type Function struct {
 	// keyword in the `define`/`declare` line so the function uses
 	// the platform's C calling convention.
 	CABI bool
+
+	// Vectorize is set when the function carries `#[vectorize]` (v0.6
+	// A5 §3.8.3). The LLVM emitter attaches `!llvm.loop !N` metadata
+	// with `llvm.loop.vectorize.enable=true` to every loop backedge
+	// lowered in the body. Pure hint — the LLVM vectorizer makes the
+	// final legality + profitability decision.
+	Vectorize bool
 }
 
 // At returns the function's source span.
@@ -257,8 +264,8 @@ type AssignInstr struct {
 	SpanV Span
 }
 
-func (*AssignInstr) instrNode()  {}
-func (a *AssignInstr) At() Span  { return a.SpanV }
+func (*AssignInstr) instrNode() {}
+func (a *AssignInstr) At() Span { return a.SpanV }
 
 // CallInstr is a direct or indirect call. Dest is nil when the return
 // value is discarded or when the function returns unit.
@@ -495,6 +502,16 @@ const (
 	IntrinsicBytesIsEmpty
 	// IntrinsicBytesGet returns Byte?. Args: [bytes, idx].
 	IntrinsicBytesGet
+	// IntrinsicBytesContains returns Bool. Args: [bytes, needle].
+	IntrinsicBytesContains
+	// IntrinsicBytesStartsWith returns Bool. Args: [bytes, prefix].
+	IntrinsicBytesStartsWith
+	// IntrinsicBytesIndexOf returns Int?. Args: [bytes, needle].
+	IntrinsicBytesIndexOf
+	// IntrinsicBytesConcat returns Bytes. Args: [left, right].
+	IntrinsicBytesConcat
+	// IntrinsicBytesRepeat returns Bytes. Args: [bytes, n].
+	IntrinsicBytesRepeat
 
 	// ---- stdlib: Option / Result ----
 
@@ -592,7 +609,7 @@ type BranchTerm struct {
 	SpanV Span
 }
 
-func (*BranchTerm) termNode() {}
+func (*BranchTerm) termNode()  {}
 func (b *BranchTerm) At() Span { return b.SpanV }
 
 // SwitchIntTerm dispatches on an integer scrutinee. Cases are tried
@@ -604,7 +621,7 @@ type SwitchIntTerm struct {
 	SpanV     Span
 }
 
-func (*SwitchIntTerm) termNode() {}
+func (*SwitchIntTerm) termNode()  {}
 func (s *SwitchIntTerm) At() Span { return s.SpanV }
 
 // SwitchCase is one match arm of a SwitchIntTerm.
@@ -630,7 +647,7 @@ type UnreachableTerm struct {
 	SpanV Span
 }
 
-func (*UnreachableTerm) termNode() {}
+func (*UnreachableTerm) termNode()  {}
 func (u *UnreachableTerm) At() Span { return u.SpanV }
 
 // ==== Places / projections ====
@@ -723,8 +740,8 @@ type CopyOp struct {
 	T     Type
 }
 
-func (*CopyOp) operandNode()   {}
-func (o *CopyOp) Type() Type   { return o.T }
+func (*CopyOp) operandNode() {}
+func (o *CopyOp) Type() Type { return o.T }
 
 // MoveOp is a destructive read. Under the current GC-managed runtime
 // MoveOp and CopyOp behave identically; the distinction exists for
@@ -948,8 +965,8 @@ func (*LenRV) rvalueNode() {}
 type CastKind int
 
 const (
-	CastInvalid     CastKind = iota
-	CastIntResize            // widen/narrow between integer widths
+	CastInvalid   CastKind = iota
+	CastIntResize          // widen/narrow between integer widths
 	CastIntToFloat
 	CastFloatToInt
 	CastFloatResize
@@ -1392,6 +1409,16 @@ func (k IntrinsicKind) String() string {
 		return "bytes_is_empty"
 	case IntrinsicBytesGet:
 		return "bytes_get"
+	case IntrinsicBytesContains:
+		return "bytes_contains"
+	case IntrinsicBytesStartsWith:
+		return "bytes_starts_with"
+	case IntrinsicBytesIndexOf:
+		return "bytes_index_of"
+	case IntrinsicBytesConcat:
+		return "bytes_concat"
+	case IntrinsicBytesRepeat:
+		return "bytes_repeat"
 	case IntrinsicOptionIsSome:
 		return "option_is_some"
 	case IntrinsicOptionIsNone:

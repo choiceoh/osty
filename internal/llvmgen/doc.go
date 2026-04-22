@@ -13,7 +13,7 @@
 // only in-package tests can reach it. All external callers route
 // through IR.
 //
-// Supported source shapes
+// # Supported source shapes
 //
 // The current implementation is deliberately small: no-arg main
 // functions or script files, integer println expressions, plain ASCII
@@ -33,13 +33,13 @@
 //
 // Implementation note (transitional)
 //
-// GenerateModule currently bridges the IR back to an AST (see
-// ir_module.go) and then routes through the long-standing AST-driven
-// emitter. This bridge is an implementation detail that the public
-// API does not expose — callers neither construct nor observe the
-// intermediate AST. Follow-on work will rewrite the emitter to consume
-// IR directly and delete the bridge; once that lands the AST is no
-// longer present inside the package at all.
+// GenerateModule now first tries a native-owned primitive/control-flow
+// slice mirrored from `toolchain/llvmgen.osty` and falls back to the
+// legacy IR -> AST bridge only for shapes still outside that slice
+// (see ir_module.go). The bridge remains an implementation detail that
+// the public API does not expose — callers neither construct nor
+// observe the intermediate AST. Follow-on work will keep growing the
+// native path until the fallback disappears entirely.
 //
 // The active GC implementation path paired with this lowering lives
 // in `internal/backend/runtime/osty_runtime.c`.

@@ -2,9 +2,9 @@
 // emitter. Mirrors the MIR closure ABI so fn values have a single
 // uniform representation regardless of which emitter produced them:
 //
-//   fn value  ≡  `ptr` to env struct
-//   env       ≡  { ptr fn_or_thunk, cap0, cap1, ... }
-//   call      ≡  `load ptr from env[0]; call ret (ptr, P...) %fn(env, args)`
+//	fn value  ≡  `ptr` to env struct
+//	env       ≡  { ptr fn_or_thunk, cap0, cap1, ... }
+//	call      ≡  `load ptr from env[0]; call ret (ptr, P...) %fn(env, args)`
 //
 // Top-level fn references (no captures) are wrapped in a thunk that
 // takes env as an implicit first arg and delegates to the real symbol.
@@ -14,7 +14,6 @@ package llvmgen
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/osty/osty/internal/ast"
 )
@@ -30,10 +29,6 @@ func closureThunkParamTypes(sig *fnSig) []string {
 	return out
 }
 
-func fnValueThunkSymbol(realSymbol string) string {
-	return "__osty_closure_thunk_" + realSymbol
-}
-
 // ensureFnValueThunk registers a closure thunk for `sig` if not yet
 // seen and returns its LLVM symbol name. The thunk is
 // `define private <ret> @__osty_closure_thunk_<sym>(ptr %env, P0, P1, ...)`
@@ -42,28 +37,19 @@ func fnValueThunkSymbol(realSymbol string) string {
 // The thunk IR is accumulated on the generator and flushed at module
 // render time — see generator.render().
 func (g *generator) ensureFnValueThunk(sig *fnSig) string {
-	symbol := fnValueThunkSymbol(sig.irName)
+	symbol := llvmClosureThunkName(sig.irName)
 	if g.fnValueThunkDefs == nil {
 		g.fnValueThunkDefs = map[string]string{}
 	}
 	if _, ok := g.fnValueThunkDefs[symbol]; ok {
 		return symbol
 	}
-	g.fnValueThunkDefs[symbol] = llvmRenderClosureThunk(
-		sig.ret, symbol, closureThunkParamTypes(sig), sig.irName,
+	g.fnValueThunkDefs[symbol] = llvmClosureThunkDefinition(
+		sig.irName, sig.ret, closureThunkParamTypes(sig),
 	)
 	g.fnValueThunkOrder = append(g.fnValueThunkOrder, symbol)
 	return symbol
 }
-
-// fnValueEnvKind is the GC kind tag for closure envs. Points at the
-// dedicated `OSTY_GC_KIND_CLOSURE_ENV = 1029` reservation in
-// `internal/backend/runtime/osty_runtime.c` (Phase A4,
-// RUNTIME_GC_DELTA §2.4). Retained as documentation / a pivot for
-// future direct `osty.gc.alloc_v1` callers; the closure allocation
-// path itself uses `osty.rt.closure_env_alloc_v1` which installs the
-// capture-tracing callback at construction.
-var fnValueEnvKind = llvmClosureEnvGcKind()
 
 // fnValuePhase1CaptureCount is the capture count the current lowering
 // emits for every closure env. Phase 1 closures have no captures yet;
@@ -123,8 +109,8 @@ func (g *generator) emitFnValueEnv(sig *fnSig) (value, error) {
 //
 // Emitted sequence:
 //
-//   %fn = load ptr, ptr %env
-//   (%result = )? call <ret> (ptr, P...) %fn(ptr %env, args...)
+//	%fn = load ptr, ptr %env
+//	(%result = )? call <ret> (ptr, P...) %fn(ptr %env, args...)
 //
 // Returns the call's LLVM result value (or an empty value when the
 // fn has no return).
@@ -139,34 +125,19 @@ func (g *generator) emitFnValueIndirectCall(envVal value, sig *fnSig, args []*Ll
 	if retLLVM == "" {
 		retLLVM = "void"
 	}
-	// Build the LLVM call-type string: `ret (ptr, P0, P1, ...)`.
-	paramParts := make([]string, 0, 1+len(sig.params))
-	paramParts = append(paramParts, "ptr")
-	for _, p := range sig.params {
-		paramParts = append(paramParts, llvmParamIRType(p))
-	}
-	callType := retLLVM + " (" + strings.Join(paramParts, ", ") + ")"
 
 	emitter := g.toOstyEmitter()
-	fnPtr := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load ptr, ptr %s", fnPtr, envVal.ref))
-
-	// Assemble argument list with env prefix.
-	argStrs := make([]string, 0, 1+len(args))
-	argStrs = append(argStrs, fmt.Sprintf("ptr %s", envVal.ref))
-	for _, a := range args {
-		argStrs = append(argStrs, fmt.Sprintf("%s %s", a.typ, a.name))
-	}
-
-	if retLLVM == "void" {
-		emitter.body = append(emitter.body, fmt.Sprintf("  call %s %s(%s)", callType, fnPtr, strings.Join(argStrs, ", ")))
-		g.takeOstyEmitter(emitter)
+	outValue := llvmFnValueCallIndirect(
+		emitter,
+		retLLVM,
+		&LlvmValue{typ: "ptr", name: envVal.ref, pointer: false},
+		args,
+	)
+	g.takeOstyEmitter(emitter)
+	if outValue.typ == "void" {
 		return value{}, nil
 	}
-	result := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call %s %s(%s)", result, callType, fnPtr, strings.Join(argStrs, ", ")))
-	g.takeOstyEmitter(emitter)
-	out := value{typ: retLLVM, ref: result}
+	out := value{typ: outValue.typ, ref: outValue.name}
 	out.listElemTyp = sig.retListElemTyp
 	out.listElemString = sig.retListString
 	out.mapKeyTyp = sig.retMapKeyTyp
@@ -204,31 +175,16 @@ func synthFnSigFromFnType(ft *ast.FnType, env typeEnv) (*fnSig, error) {
 		if err != nil {
 			return nil, err
 		}
+		meta, err := containerMetadataFromSourceType(pt, env)
+		if err != nil {
+			return nil, err
+		}
 		info := paramInfo{
-			name:       fmt.Sprintf("arg%d", i),
-			typ:        typ,
-			irTyp:      typ,
-			sourceType: pt,
+			name:  fmt.Sprintf("arg%d", i),
+			typ:   typ,
+			irTyp: typ,
 		}
-		if listElemTyp, listElemString, ok, err := llvmListElementInfo(pt, env); err != nil {
-			return nil, err
-		} else if ok {
-			info.listElemTyp = listElemTyp
-			info.listElemString = listElemString
-		}
-		if mapKeyTyp, mapValueTyp, mapKeyString, ok, err := llvmMapTypes(pt, env); err != nil {
-			return nil, err
-		} else if ok {
-			info.mapKeyTyp = mapKeyTyp
-			info.mapValueTyp = mapValueTyp
-			info.mapKeyString = mapKeyString
-		}
-		if setElemTyp, setElemString, ok, err := llvmSetElementType(pt, env); err != nil {
-			return nil, err
-		} else if ok {
-			info.setElemTyp = setElemTyp
-			info.setElemString = setElemString
-		}
+		meta.applyToParam(&info)
 		params = append(params, info)
 	}
 	retLLVM := "void"
@@ -240,30 +196,40 @@ func synthFnSigFromFnType(ft *ast.FnType, env typeEnv) (*fnSig, error) {
 		retLLVM = typ
 	}
 	sig := &fnSig{
-		ret:              retLLVM,
-		returnSourceType: ft.ReturnType,
-		params:           params,
+		ret:    retLLVM,
+		params: params,
 	}
-	if ft.ReturnType != nil {
-		if listElemTyp, listElemString, ok, err := llvmListElementInfo(ft.ReturnType, env); err != nil {
-			return nil, err
-		} else if ok {
-			sig.retListElemTyp = listElemTyp
-			sig.retListString = listElemString
-		}
-		if mapKeyTyp, mapValueTyp, mapKeyString, ok, err := llvmMapTypes(ft.ReturnType, env); err != nil {
-			return nil, err
-		} else if ok {
-			sig.retMapKeyTyp = mapKeyTyp
-			sig.retMapValueTyp = mapValueTyp
-			sig.retMapKeyString = mapKeyString
-		}
-		if setElemTyp, setElemString, ok, err := llvmSetElementType(ft.ReturnType, env); err != nil {
-			return nil, err
-		} else if ok {
-			sig.retSetElemTyp = setElemTyp
-			sig.retSetElemString = setElemString
-		}
+	retMeta, err := containerMetadataFromSourceType(ft.ReturnType, env)
+	if err != nil {
+		return nil, err
+	}
+	retMeta.applyToReturn(sig)
+	return sig, nil
+}
+
+func synthFnSigFromSourceType(sourceType ast.Type, env typeEnv) (*fnSig, bool, error) {
+	ft, ok := sourceType.(*ast.FnType)
+	if !ok {
+		return nil, false, nil
+	}
+	sig, err := synthFnSigFromFnType(ft, env)
+	if err != nil {
+		return nil, true, err
+	}
+	return sig, true, nil
+}
+
+func fnValueSignature(v value) (*fnSig, bool) {
+	if v.typ != "ptr" || v.fnSigRef == nil {
+		return nil, false
+	}
+	return v.fnSigRef, true
+}
+
+func requireFnValueSignature(v value, label string) (*fnSig, error) {
+	sig, ok := fnValueSignature(v)
+	if !ok {
+		return nil, unsupportedf("call", "%s must be a fn value (got typ=%s, sig=%v)", label, v.typ, v.fnSigRef != nil)
 	}
 	return sig, nil
 }
@@ -298,7 +264,7 @@ func (g *generator) emitIndirectUserCall(call *ast.CallExpr) (value, bool, error
 	// roots coming out of arg evaluation are released at the same
 	// cadence.
 	emitter := g.toOstyEmitter()
-	g.emitGCSafepointKind(emitter, safepointKindCall)
+	g.emitCallSafepointIfNeeded(emitter)
 	g.takeOstyEmitter(emitter)
 	g.pushScope()
 	ret, callErr := g.emitFnValueIndirectCall(envVal, sig, args)
@@ -315,51 +281,65 @@ func (g *generator) emitIndirectUserCall(call *ast.CallExpr) (value, bool, error
 func (g *generator) indirectCallCallee(call *ast.CallExpr) (value, *fnSig, bool, error) {
 	switch fn := call.Fn.(type) {
 	case *ast.Ident:
-		slot, ok := g.lookupBinding(fn.Name)
-		if !ok || slot.fnSigRef == nil {
-			return value{}, nil, false, nil
-		}
-		envVal, err := g.loadIfPointer(slot)
-		if err != nil {
-			return value{}, nil, true, err
-		}
-		return envVal, slot.fnSigRef, true, nil
+		return g.indirectIdentCallCallee(fn)
 	case *ast.FieldExpr:
-		if fn.IsOptional {
-			return value{}, nil, false, nil
-		}
-		// Only attempt this path when the receiver's static type is
-		// a known struct and the field's source type is an FnType.
-		// Everything else (method calls, optional chains, module
-		// aliases) remains owned by the upstream hooks.
-		baseInfo, ok := g.staticExprInfo(fn.X)
-		if !ok {
-			return value{}, nil, false, nil
-		}
-		structInfo := g.structsByType[baseInfo.typ]
-		if structInfo == nil {
-			return value{}, nil, false, nil
-		}
-		field, ok := structInfo.byName[fn.Name]
-		if !ok {
-			return value{}, nil, false, nil
-		}
-		ft, ok := field.sourceType.(*ast.FnType)
-		if !ok {
-			return value{}, nil, false, nil
-		}
-		sig, err := synthFnSigFromFnType(ft, g.typeEnv())
-		if err != nil {
-			return value{}, nil, true, err
-		}
-		envVal, err := g.emitFieldExpr(fn)
-		if err != nil {
-			return value{}, nil, true, err
-		}
-		if envVal.typ != "ptr" {
-			return value{}, nil, true, unsupportedf("type-system", "fn-typed field %q.%s expected ptr env, got %s", structInfo.name, fn.Name, envVal.typ)
-		}
-		return envVal, sig, true, nil
+		return g.indirectFieldCallCallee(fn)
 	}
 	return value{}, nil, false, nil
+}
+
+func (g *generator) indirectIdentCallCallee(fn *ast.Ident) (value, *fnSig, bool, error) {
+	if fn == nil {
+		return value{}, nil, false, nil
+	}
+	slot, ok := g.lookupBinding(fn.Name)
+	if !ok {
+		return value{}, nil, false, nil
+	}
+	sig, ok := fnValueSignature(slot)
+	if !ok {
+		return value{}, nil, false, nil
+	}
+	envVal, err := g.loadIfPointer(slot)
+	if err != nil {
+		return value{}, nil, true, err
+	}
+	return envVal, sig, true, nil
+}
+
+func (g *generator) indirectFieldCallCallee(fn *ast.FieldExpr) (value, *fnSig, bool, error) {
+	if fn == nil || fn.IsOptional {
+		return value{}, nil, false, nil
+	}
+	// Only attempt this path when the receiver's static type is a
+	// known struct and the field's source type is an FnType.
+	// Everything else (method calls, optional chains, module aliases)
+	// remains owned by the upstream hooks.
+	baseInfo, ok := g.staticExprInfo(fn.X)
+	if !ok {
+		return value{}, nil, false, nil
+	}
+	structInfo := g.structsByType[baseInfo.typ]
+	if structInfo == nil {
+		return value{}, nil, false, nil
+	}
+	field, ok := structInfo.byName[fn.Name]
+	if !ok {
+		return value{}, nil, false, nil
+	}
+	sig, ok, err := synthFnSigFromSourceType(field.sourceType, g.typeEnv())
+	if err != nil {
+		return value{}, nil, true, err
+	}
+	if !ok {
+		return value{}, nil, false, nil
+	}
+	envVal, err := g.emitFieldExpr(fn)
+	if err != nil {
+		return value{}, nil, true, err
+	}
+	if envVal.typ != "ptr" {
+		return value{}, nil, true, unsupportedf("type-system", "fn-typed field %q.%s expected ptr env, got %s", structInfo.name, fn.Name, envVal.typ)
+	}
+	return envVal, sig, true, nil
 }

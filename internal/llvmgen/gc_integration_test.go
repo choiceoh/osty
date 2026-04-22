@@ -303,19 +303,22 @@ fn main() {
 
 // TestGenerateFromASTSafepointKindMixCallAndLoop covers the A5 depth
 // follow-up for the legacy emitter — lowering a function whose body
-// is a `while` loop with a user-level call inside must produce both
-// CALL and LOOP safepoint kinds, and zero UNSPECIFIED (meaning every
-// emit site has been classified).
+// is a `while` loop with an indirect user-level call inside must
+// produce both CALL and LOOP safepoint kinds, and zero UNSPECIFIED
+// (meaning every emit site has been classified).
 func TestGenerateFromASTSafepointKindMixCallAndLoop(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn work() -> Int {
     1
 }
 
 fn main() {
+    let values: List<Int> = [1]
+    let f = work
     let mut i = 0
     while i < 3 {
-        i = i + work()
+        i = i + f()
     }
+    println(values.len())
     println(i)
 }
 `)
@@ -335,5 +338,64 @@ fn main() {
 	}
 	if mix[safepointKindUnspecified] != 0 {
 		t.Fatalf("UNSPECIFIED safepoint leaked through a classified path, mix=%v, IR:\n%s", mix, ir)
+	}
+}
+
+func TestGenerateFromASTDirectUserCallSkipsEmptyCallSafepoint(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn work() -> Int {
+    1
+}
+
+fn main() {
+    let mut i = 0
+    while i < 3 {
+        i = i + work()
+    }
+    println(i)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/direct_call_entry_safepoint.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	mix := safepointKindMix(t, string(ir))
+	if mix[safepointKindCall] != 0 {
+		t.Fatalf("expected no CALL-kind safepoint for direct user call, mix=%v, IR:\n%s", mix, ir)
+	}
+	if mix[safepointKindLoop] == 0 {
+		t.Fatalf("expected ≥1 LOOP-kind safepoint, mix=%v, IR:\n%s", mix, ir)
+	}
+}
+
+func TestGenerateFromASTRootlessIndirectCallSkipsCallSafepoint(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn work() -> Int {
+    1
+}
+
+fn main() {
+    let f = work
+    let mut i = 0
+    while i < 3 {
+        i = i + f()
+    }
+    println(i)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/rootless_indirect_call_safepoint.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	mix := safepointKindMix(t, string(ir))
+	if mix[safepointKindCall] != 0 {
+		t.Fatalf("expected no CALL-kind safepoint for rootless indirect call, mix=%v, IR:\n%s", mix, ir)
+	}
+	if mix[safepointKindLoop] == 0 {
+		t.Fatalf("expected ≥1 LOOP-kind safepoint, mix=%v, IR:\n%s", mix, ir)
 	}
 }

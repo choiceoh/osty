@@ -583,6 +583,7 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 		return unsupported("type-system", "range bounds must be Int")
 	}
 	emitter := g.toOstyEmitter()
+	loopSafepointSlot := g.allocLoopSafepointCounter(emitter)
 	loop := llvmRangeStart(emitter, iterName, toOstyValue(start), toOstyValue(stop), rng.Inclusive)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.bodyLabel)
@@ -611,8 +612,9 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	}
 	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
-	g.emitGCSafepointKind(emitter, safepointKindLoop)
+	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	llvmRangeEnd(emitter, loop)
+	g.attachVectorizeMD(emitter, loop.condLabel)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.endLabel)
 	return nil
@@ -620,6 +622,7 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 
 func (g *generator) emitWhileFor(stmt *ast.ForStmt) error {
 	emitter := g.toOstyEmitter()
+	loopSafepointSlot := g.allocLoopSafepointCounter(emitter)
 	condLabel := llvmNextLabel(emitter, "for.cond")
 	bodyLabel := llvmNextLabel(emitter, "for.body")
 	continueLabel := llvmNextLabel(emitter, "for.cont")
@@ -681,8 +684,9 @@ func (g *generator) emitWhileFor(stmt *ast.ForStmt) error {
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(continueLabel)
 	emitter = g.toOstyEmitter()
-	g.emitGCSafepointKind(emitter, safepointKindLoop)
+	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
+	g.attachVectorizeMD(emitter, condLabel)
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
@@ -700,6 +704,7 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 		return unsupported("control-flow", "for-let requires an iterator expression")
 	}
 	emitter := g.toOstyEmitter()
+	loopSafepointSlot := g.allocLoopSafepointCounter(emitter)
 	condLabel := llvmNextLabel(emitter, "for.cond")
 	bodyLabel := llvmNextLabel(emitter, "for.body")
 	continueLabel := llvmNextLabel(emitter, "for.cont")
@@ -758,8 +763,9 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(continueLabel)
 	emitter = g.toOstyEmitter()
-	g.emitGCSafepointKind(emitter, safepointKindLoop)
+	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
+	g.attachVectorizeMD(emitter, condLabel)
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
@@ -844,6 +850,12 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 	}
 	if emitted, err := g.emitUserCallStmt(call); emitted || err != nil {
 		return err
+	}
+	if emitted, err := g.emitIndirectUserCallStmt(call); emitted || err != nil {
+		return err
+	}
+	if id, ok := call.Fn.(*ast.Ident); ok && id.Name == "println" {
+		return g.emitPrintln(call)
 	}
 	return g.emitPrintln(call)
 }
@@ -1950,10 +1962,189 @@ func (g *generator) emitMatchStmt(expr *ast.MatchExpr) error {
 	if err != nil {
 		return err
 	}
+	if sourceType, ok := g.staticExprSourceType(expr.Scrutinee); ok {
+		resolved, resolveErr := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{})
+		if resolveErr == nil {
+			if opt, ok := resolved.(*ast.OptionalType); ok && scrutinee.typ == "ptr" {
+				return g.emitOptionalMatchStmt(scrutinee, opt.Inner, expr.Arms)
+			}
+		}
+	}
 	if scrutinee.typ != "i64" {
 		return unsupportedf("statement", "match statement scrutinee type %s (only tag-enum i64 supported as statement for now)", scrutinee.typ)
 	}
 	return g.emitTagEnumMatchStmt(scrutinee, expr.Arms)
+}
+
+type optionalMatchPatternInfo struct {
+	isSome      bool
+	isNone      bool
+	isWildcard  bool
+	payloadName string
+}
+
+func matchOptionalPattern(pattern ast.Pattern) (optionalMatchPatternInfo, bool, error) {
+	switch p := pattern.(type) {
+	case *ast.WildcardPat:
+		return optionalMatchPatternInfo{isWildcard: true}, true, nil
+	case *ast.IdentPat:
+		switch p.Name {
+		case "None":
+			return optionalMatchPatternInfo{isNone: true}, true, nil
+		case "Some":
+			return optionalMatchPatternInfo{}, true, unsupported("statement", "optional Some arm must bind or wildcard its payload")
+		default:
+			return optionalMatchPatternInfo{}, false, nil
+		}
+	case *ast.VariantPat:
+		if len(p.Path) == 0 || len(p.Path) > 2 {
+			return optionalMatchPatternInfo{}, false, nil
+		}
+		name := p.Path[len(p.Path)-1]
+		switch name {
+		case "None":
+			if len(p.Args) != 0 {
+				return optionalMatchPatternInfo{}, true, unsupported("statement", "None arm cannot bind a payload")
+			}
+			return optionalMatchPatternInfo{isNone: true}, true, nil
+		case "Some":
+			if len(p.Args) != 1 {
+				return optionalMatchPatternInfo{}, true, unsupported("statement", "Some arm must bind exactly one payload")
+			}
+			switch arg := p.Args[0].(type) {
+			case *ast.IdentPat:
+				return optionalMatchPatternInfo{isSome: true, payloadName: arg.Name}, true, nil
+			case *ast.WildcardPat:
+				return optionalMatchPatternInfo{isSome: true}, true, nil
+			default:
+				return optionalMatchPatternInfo{}, true, unsupportedf("statement", "optional Some payload pattern %T", arg)
+			}
+		default:
+			return optionalMatchPatternInfo{}, false, nil
+		}
+	default:
+		return optionalMatchPatternInfo{}, false, nil
+	}
+}
+
+func (g *generator) bindOptionalMatchPayload(scrutinee value, innerSource ast.Type, pattern optionalMatchPatternInfo) error {
+	if pattern.payloadName == "" {
+		return nil
+	}
+	innerTyp, err := llvmType(innerSource, g.typeEnv())
+	if err != nil {
+		return err
+	}
+	payload := value{typ: innerTyp}
+	if innerTyp == "ptr" {
+		payload.ref = scrutinee.ref
+	} else {
+		emitter := g.toOstyEmitter()
+		payload = g.loadValueFromAddress(emitter, innerTyp, scrutinee.ref)
+		g.takeOstyEmitter(emitter)
+	}
+	payload.sourceType = innerSource
+	if listElemTyp, listElemString, ok, err := llvmListElementInfo(innerSource, g.typeEnv()); err == nil && ok {
+		payload.listElemTyp = listElemTyp
+		payload.listElemString = listElemString
+	}
+	if mapKeyTyp, mapValueTyp, mapKeyString, ok, err := llvmMapTypes(innerSource, g.typeEnv()); err == nil && ok {
+		payload.mapKeyTyp = mapKeyTyp
+		payload.mapValueTyp = mapValueTyp
+		payload.mapKeyString = mapKeyString
+	}
+	if setElemTyp, setElemString, ok, err := llvmSetElementType(innerSource, g.typeEnv()); err == nil && ok {
+		payload.setElemTyp = setElemTyp
+		payload.setElemString = setElemString
+	}
+	payload.gcManaged = valueNeedsManagedRoot(payload)
+	payload.rootPaths = g.rootPathsForType(payload.typ)
+	g.bindNamedLocal(pattern.payloadName, payload, false)
+	return nil
+}
+
+func (g *generator) emitOptionalMatchStmt(scrutinee value, innerSource ast.Type, arms []*ast.MatchArm) error {
+	emitter := g.toOstyEmitter()
+	endLabel := llvmNextLabel(emitter, "match.end")
+	isNil := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNil, scrutinee.ref))
+	g.takeOstyEmitter(emitter)
+
+	anyReached := false
+	for i, arm := range arms {
+		if arm == nil {
+			return unsupported("statement", "nil match arm")
+		}
+		if arm.Guard != nil {
+			return unsupported("statement", "guarded optional match arms are not yet supported as statements")
+		}
+		pattern, ok, err := matchOptionalPattern(arm.Pattern)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return unsupportedf("statement", "optional match arm must be Some/None/wildcard, got %T", arm.Pattern)
+		}
+		isLast := i == len(arms)-1
+		if pattern.isWildcard {
+			if !isLast {
+				return unsupported("statement", "wildcard match arm must be last")
+			}
+			baseState := g.captureScopeState()
+			if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
+				return err
+			}
+			if g.currentReachable {
+				g.branchTo(endLabel)
+				anyReached = true
+			}
+			g.restoreScopeState(baseState)
+			continue
+		}
+
+		emitter := g.toOstyEmitter()
+		armLabel := llvmNextLabel(emitter, "match.arm")
+		nextLabel := llvmNextLabel(emitter, "match.next")
+		if pattern.isSome {
+			emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil, nextLabel, armLabel))
+		} else {
+			emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil, armLabel, nextLabel))
+		}
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", armLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(armLabel)
+
+		baseState := g.captureScopeState()
+		if pattern.isSome {
+			if err := g.bindOptionalMatchPayload(scrutinee, innerSource, pattern); err != nil {
+				return err
+			}
+		}
+		if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
+			return err
+		}
+		if g.currentReachable {
+			g.branchTo(endLabel)
+			anyReached = true
+		}
+		g.restoreScopeState(baseState)
+
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", nextLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(nextLabel)
+	}
+
+	if g.currentReachable {
+		g.branchTo(endLabel)
+		anyReached = true
+	}
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(endLabel)
+	g.currentReachable = anyReached
+	return nil
 }
 
 func (g *generator) emitTagEnumMatchStmt(scrutinee value, arms []*ast.MatchArm) error {
@@ -2100,7 +2291,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	g.pushScope()
 	defer g.popScope()
 	emitter := g.toOstyEmitter()
-	g.emitGCSafepointKind(emitter, safepointKindCall)
+	g.emitCallSafepointIfNeeded(emitter)
 	g.takeOstyEmitter(emitter)
 	base, err := g.emitExpr(field.X)
 	if err != nil {
@@ -2109,6 +2300,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if base.typ != "ptr" || elemTyp == "" {
 		return true, unsupportedf("type-system", "list receiver type %s", base.typ)
 	}
+	elemSourceType, _ := g.iterableElemSourceType(field.X)
 	base = g.protectManagedTemporary("list.base", base)
 	baseValue, err := g.loadIfPointer(base)
 	if err != nil {
@@ -2157,7 +2349,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		arg, err := g.emitExpr(call.Args[1].Value)
+		arg, err := g.emitExprWithHintAndSourceType(call.Args[1].Value, elemSourceType, "", false, "", "", false, "", false)
 		if err != nil {
 			return true, err
 		}
@@ -2188,7 +2380,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 		return true, unsupported("call", "list.push requires one positional argument")
 	}
-	arg, err := g.emitExpr(call.Args[0].Value)
+	arg, err := g.emitExprWithHintAndSourceType(call.Args[0].Value, elemSourceType, "", false, "", "", false, "", false)
 	if err != nil {
 		return true, err
 	}
@@ -2303,8 +2495,10 @@ func (g *generator) emitMapMethodCallStmt(call *ast.CallExpr) (bool, error) {
 }
 
 // emitMapUpdateStmt lowers `m.update(key, f)` — stdlib bodied form is
-//   let current = self.get(key)
-//   self.insert(key, f(current))
+//
+//	let current = self.get(key)
+//	self.insert(key, f(current))
+//
 // The three steps run inside a single `osty_rt_map_lock/unlock`
 // critical section so concurrent mutators can't race between read and
 // write. The per-map mutex is recursive (see osty_runtime.c), so the
@@ -2331,10 +2525,10 @@ func (g *generator) emitMapUpdateStmt(call *ast.CallExpr, base value, keyTyp str
 	if err != nil {
 		return err
 	}
-	if fnVal.typ != "ptr" || fnVal.fnSigRef == nil {
-		return unsupportedf("call", "map.update callback must be a fn value (got typ=%s, sig=%v)", fnVal.typ, fnVal.fnSigRef != nil)
+	sig, err := requireFnValueSignature(fnVal, "map.update callback")
+	if err != nil {
+		return err
 	}
-	sig := fnVal.fnSigRef
 	if len(sig.params) != 1 {
 		return unsupportedf("call", "map.update callback arity must be 1 (got %d)", len(sig.params))
 	}
@@ -2396,10 +2590,10 @@ func (g *generator) emitMapRetainIfStmt(call *ast.CallExpr, base value, keyTyp s
 	if err != nil {
 		return err
 	}
-	if predVal.typ != "ptr" || predVal.fnSigRef == nil {
-		return unsupportedf("call", "map.retainIf callback must be a fn value")
+	sig, err := requireFnValueSignature(predVal, "map.retainIf callback")
+	if err != nil {
+		return err
 	}
-	sig := predVal.fnSigRef
 	if len(sig.params) != 2 || sig.ret != "i1" {
 		return unsupportedf("call", "map.retainIf pred arity/ret mismatch (want fn(K,V)->Bool)")
 	}
@@ -2548,11 +2742,11 @@ func (g *generator) emitSetMethodCallStmt(call *ast.CallExpr) (bool, error) {
 
 // emitMapFor lowers `for (k, v) in m { body }` as an index-based walk:
 //
-//   %len = call i64 @osty_rt_map_len(%m)
-//   for %i = 0; %i < %len; %i++:
-//     %k = call <K> @osty_rt_map_key_at_<ksuf>(%m, %i)
-//     alloca %vslot (width by V), call @osty_rt_map_value_at(%m, %i, %vslot), load
-//     body(k, v)
+//	%len = call i64 @osty_rt_map_len(%m)
+//	for %i = 0; %i < %len; %i++:
+//	  %k = call <K> @osty_rt_map_key_at_<ksuf>(%m, %i)
+//	  alloca %vslot (width by V), call @osty_rt_map_value_at(%m, %i, %vslot), load
+//	  body(k, v)
 //
 // This is the infra piece that unlocks `retainIf`, `mergeWith`,
 // `mapValues`, and any user-written map iteration. Matches the stdlib
@@ -2647,6 +2841,7 @@ func (g *generator) emitMapFor(stmt *ast.ForStmt, kName, vName, keyTyp, valTyp s
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
 	g.emitGCSafepoint(emitter)
 	llvmRangeEnd(emitter, loop)
+	g.attachVectorizeMD(emitter, loop.condLabel)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.endLabel)
 	return nil
@@ -2670,6 +2865,7 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 		return err
 	}
 	emitter := g.toOstyEmitter()
+	loopSafepointSlot := g.allocLoopSafepointCounter(emitter)
 	lenValue := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(iterableValue)})
 	loop := llvmRangeStart(emitter, iterName+"_idx", llvmIntLiteral(0), lenValue, false)
 	g.takeOstyEmitter(emitter)
@@ -2747,8 +2943,9 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	}
 	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
-	g.emitGCSafepointKind(emitter, safepointKindLoop)
+	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	llvmRangeEnd(emitter, loop)
+	g.attachVectorizeMD(emitter, loop.condLabel)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.endLabel)
 	return nil
@@ -2772,14 +2969,16 @@ func (g *generator) emitOptionalUserCallStmt(call *ast.CallExpr) (bool, error) {
 		return true, err
 	}
 	if err := g.emitOptionalPtrStmt(baseValue, func() error {
-		emitter := g.toOstyEmitter()
-		g.emitGCSafepointKind(emitter, safepointKindCall)
-		g.takeOstyEmitter(emitter)
+		if g.hasVisibleSafepointRoots() {
+			emitter := g.toOstyEmitter()
+			g.emitGCSafepointKind(emitter, safepointKindCall)
+			g.takeOstyEmitter(emitter)
+		}
 		args, err := g.optionalUserCallArgs(sig, innerSource, baseValue, call)
 		if err != nil {
 			return err
 		}
-		emitter = g.toOstyEmitter()
+		emitter := g.toOstyEmitter()
 		if sig.ret == "void" {
 			emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(%s)", sig.irName, llvmCallArgs(args)))
 		} else {
@@ -2801,16 +3000,18 @@ func (g *generator) emitUserCallStmt(call *ast.CallExpr) (bool, error) {
 	if !found {
 		return false, nil
 	}
-	emitter := g.toOstyEmitter()
-	g.emitGCSafepointKind(emitter, safepointKindCall)
-	g.takeOstyEmitter(emitter)
+	if g.hasVisibleSafepointRoots() {
+		emitter := g.toOstyEmitter()
+		g.emitGCSafepointKind(emitter, safepointKindCall)
+		g.takeOstyEmitter(emitter)
+	}
 	g.pushScope()
 	args, err := g.userCallArgs(sig, receiverExpr, call)
 	if err != nil {
 		g.popScope()
 		return true, err
 	}
-	emitter = g.toOstyEmitter()
+	emitter := g.toOstyEmitter()
 	if sig.ret == "void" {
 		emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(%s)", sig.irName, llvmCallArgs(args)))
 	} else {
@@ -2819,4 +3020,9 @@ func (g *generator) emitUserCallStmt(call *ast.CallExpr) (bool, error) {
 	g.takeOstyEmitter(emitter)
 	g.popScope()
 	return true, nil
+}
+
+func (g *generator) emitIndirectUserCallStmt(call *ast.CallExpr) (bool, error) {
+	_, found, err := g.emitIndirectUserCall(call)
+	return found, err
 }

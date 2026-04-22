@@ -280,6 +280,11 @@ typedef void (*osty_gc_trace_fn)(void *payload);
 typedef void (*osty_gc_destroy_fn)(void *payload);
 typedef void (*osty_rt_trace_slot_fn)(void *slot_addr);
 
+typedef enum osty_gc_trace_slot_mode {
+    OSTY_GC_TRACE_SLOT_MODE_MARK = 0,
+    OSTY_GC_TRACE_SLOT_MODE_REMAP = 1,
+} osty_gc_trace_slot_mode;
+
 /* Phase C tri-colour marking (RUNTIME_GC_DELTA §4.1).
  *
  * Up through Phase B the mark pass used a single `marked` bit that
@@ -344,6 +349,7 @@ typedef struct osty_gc_header {
     int64_t object_kind;
     int64_t byte_size;
     int64_t root_count;
+    int64_t pin_count;
     /* Phase C: explicit tri-colour (`OSTY_GC_COLOR_*`). `marked` is
      * retained as a convenience alias — `marked == true` iff
      * `color != WHITE`. The sweep loop reads `color` directly; the
@@ -356,6 +362,11 @@ typedef struct osty_gc_header {
      * young-space was supposed to smooth. */
     uint8_t age;
     uint8_t generation;
+    uint8_t storage_kind;
+    /* Phase D groundwork: stable logical identity. Payload pointers are
+     * still the operational handles today, but this id stays attached to
+     * the object even once future compaction starts moving addresses. */
+    uint64_t stable_id;
     osty_gc_trace_fn trace;
     osty_gc_destroy_fn destroy;
     const char *site;
@@ -373,6 +384,8 @@ typedef struct osty_rt_list {
     unsigned char *data;
 } osty_rt_list;
 
+#define OSTY_RT_MAP_INLINE_INDEX_CAP 64
+
 typedef struct osty_rt_map {
     int64_t len;
     int64_t cap;
@@ -382,13 +395,21 @@ typedef struct osty_rt_map {
     osty_rt_trace_slot_fn value_trace;
     unsigned char *keys;
     unsigned char *values;
+    // Lookup side index: open-addressed hash table storing slot+1 so
+    // `Map` keeps its insertion-ordered key/value arrays while get /
+    // contains / insert avoid an O(n) scan once the map grows past the
+    // tiny-list regime.
+    int64_t index_cap;
+    int64_t index_len;
+    int64_t *index_slots;
+    int64_t index_inline[OSTY_RT_MAP_INLINE_INDEX_CAP];
     // Per-map recursive mutex. Guarantees that all public map ops are
     // mutually exclusive on a single instance so concurrent mutation
     // can't realloc the slot arrays mid-read, drop the len mid-walk,
     // or interleave an insert's memmove. Recursive so that `update`
     // callbacks that touch the same map from within the lock don't
     // self-deadlock.
-    pthread_mutex_t mu;
+    osty_rt_rmu_t mu;
     int mu_init;
 } osty_rt_map;
 
@@ -403,6 +424,41 @@ typedef struct osty_rt_bytes {
     unsigned char *data;
     int64_t len;
 } osty_rt_bytes;
+
+typedef struct osty_rt_chan_impl {
+    osty_rt_mu_t mu;
+    osty_rt_cond_t not_full;
+    osty_rt_cond_t not_empty;
+    int64_t cap;
+    int64_t head;
+    int64_t tail;
+    int64_t count;
+    int64_t elem_kind;
+    int closed;
+    int sync_init;
+    int64_t *slots;
+} osty_rt_chan_impl;
+
+typedef struct osty_gc_free_chunk {
+    struct osty_gc_free_chunk *next;
+    size_t total_size;
+    uint8_t storage_kind;
+} osty_gc_free_chunk;
+
+#define OSTY_GC_SIZE_CLASS_ALIGN 16
+#define OSTY_GC_BUMP_BLOCK_BYTES 65536
+#define OSTY_GC_HUMONGOUS_THRESHOLD_BYTES 1024
+#define OSTY_GC_FREE_LIST_BIN_COUNT \
+    (OSTY_GC_HUMONGOUS_THRESHOLD_BYTES / OSTY_GC_SIZE_CLASS_ALIGN)
+
+typedef struct osty_gc_bump_block {
+    struct osty_gc_bump_block *next;
+    size_t size;
+    size_t used;
+    int64_t live_alloc_count;
+    unsigned char *data;
+    unsigned char storage[];
+} osty_gc_bump_block;
 
 #if defined(__APPLE__)
 #define OSTY_GC_SYMBOL(name) "_" name
@@ -422,12 +478,19 @@ enum {
      * callback (`osty_rt_closure_env_trace`) that walks the capture
      * slots so any managed pointer captured by a closure stays
      * reachable across GC cycles. Layout below in `osty_rt_closure_env`.
-     * Allocation is dedicated: `osty.rt.closure_env_alloc_v1` rather
+    * Allocation is dedicated: `osty.rt.closure_env_alloc_v1` rather
      * than the generic `osty.gc.alloc_v1`, so the trace is installed
      * at construction and not as a post-alloc mutation. Phase 1 still
      * emits envs with `capture_count = 0`, exercising the allocation
      * ABI while captures themselves are lowered in Phase 4. */
     OSTY_GC_KIND_CLOSURE_ENV = 1029,
+    OSTY_GC_KIND_CHANNEL = 1030,
+};
+
+enum {
+    OSTY_GC_STORAGE_DIRECT = 0,
+    OSTY_GC_STORAGE_BUMP_YOUNG = 1,
+    OSTY_GC_STORAGE_BUMP_OLD = 2,
 };
 
 /* Closure environment payload. The thunk ABI is preserved — the LLVM
@@ -470,6 +533,7 @@ static int64_t osty_gc_post_write_count = 0;
 static int64_t osty_gc_post_write_managed_count = 0;
 static int64_t osty_gc_load_count = 0;
 static int64_t osty_gc_load_managed_count = 0;
+static int64_t osty_gc_load_forwarded_count = 0;
 
 /* Phase A2 cumulative counters (RUNTIME_GC_DELTA §9.3).
  *
@@ -480,6 +544,30 @@ static int64_t osty_gc_load_managed_count = 0;
 static int64_t osty_gc_allocated_bytes_total = 0;
 static int64_t osty_gc_swept_count_total = 0;
 static int64_t osty_gc_swept_bytes_total = 0;
+static osty_gc_free_chunk *osty_gc_free_list_bins[OSTY_GC_FREE_LIST_BIN_COUNT];
+static int64_t osty_gc_free_list_count = 0;
+static int64_t osty_gc_free_list_bytes = 0;
+static int64_t osty_gc_free_list_reused_count_total = 0;
+static int64_t osty_gc_free_list_reused_bytes_total = 0;
+static osty_gc_bump_block *osty_gc_bump_blocks = NULL;
+static osty_gc_bump_block *osty_gc_bump_current = NULL;
+static int64_t osty_gc_bump_block_count = 0;
+static int64_t osty_gc_bump_block_bytes_total = 0;
+static int64_t osty_gc_bump_alloc_count_total = 0;
+static int64_t osty_gc_bump_alloc_bytes_total = 0;
+static int64_t osty_gc_tlab_refill_count_total = 0;
+static osty_gc_bump_block *osty_gc_old_bump_blocks = NULL;
+static osty_gc_bump_block *osty_gc_old_bump_current = NULL;
+static int64_t osty_gc_old_bump_block_count = 0;
+static int64_t osty_gc_old_bump_block_bytes_total = 0;
+static int64_t osty_gc_old_bump_alloc_count_total = 0;
+static int64_t osty_gc_old_bump_alloc_bytes_total = 0;
+static int64_t osty_gc_old_bump_recycled_block_count_total = 0;
+static int64_t osty_gc_old_bump_recycled_bytes_total = 0;
+static int64_t osty_gc_humongous_alloc_count_total = 0;
+static int64_t osty_gc_humongous_alloc_bytes_total = 0;
+static int64_t osty_gc_humongous_swept_count_total = 0;
+static int64_t osty_gc_humongous_swept_bytes_total = 0;
 
 /* Phase B generational bookkeeping (RUNTIME_GC_DELTA §5, §9.1, §9.4).
  *
@@ -500,6 +588,8 @@ static int64_t osty_gc_young_count = 0;
 static int64_t osty_gc_young_bytes = 0;
 static int64_t osty_gc_old_count = 0;
 static int64_t osty_gc_old_bytes = 0;
+static int64_t osty_gc_pinned_count = 0;
+static int64_t osty_gc_pinned_bytes = 0;
 /* Per-generation list heads (Phase B2 depth). Populated by link /
  * unlink / promote. The global `osty_gc_objects` list remains the
  * authoritative iteration order for major collection and heap
@@ -513,6 +603,9 @@ static int64_t osty_gc_promoted_count_total = 0;
 static int64_t osty_gc_promoted_bytes_total = 0;
 static int64_t osty_gc_minor_nanos_total = 0;
 static int64_t osty_gc_major_nanos_total = 0;
+static int64_t osty_gc_compaction_count_total = 0;
+static int64_t osty_gc_forwarded_objects_last = 0;
+static int64_t osty_gc_forwarded_bytes_last = 0;
 static bool osty_gc_nursery_limit_loaded = false;
 static int64_t osty_gc_nursery_limit_bytes = OSTY_GC_NURSERY_LIMIT_DEFAULT;
 static bool osty_gc_promote_age_loaded = false;
@@ -527,6 +620,7 @@ static bool osty_gc_minor_in_progress = false;
  * or live_bytes above major threshold). The dispatcher at the next
  * safepoint turns this into an immediate major. */
 static bool osty_gc_collection_requested_major = false;
+static OSTY_RT_TLS osty_gc_bump_block *osty_gc_tlab_current = NULL;
 
 /* Phase C incremental collection state (RUNTIME_GC_DELTA §4.3).
  *
@@ -630,6 +724,48 @@ static int64_t osty_gc_index_capacity = 0;
 static int64_t osty_gc_index_count = 0;
 static int64_t osty_gc_index_tombstones = 0;
 static int64_t osty_gc_index_find_ops_total = 0;
+
+/* Phase D groundwork: stable-id → header index. This lets the runtime
+ * keep a logical identity that is distinct from the current payload
+ * address, which is the prerequisite for any future forwarding /
+ * relocation path. Like the payload index it uses open addressing with
+ * tombstones and a ≤ 0.75 combined load factor. */
+typedef struct osty_gc_identity_slot {
+    uint64_t stable_id;
+    osty_gc_header *header;
+} osty_gc_identity_slot;
+
+#define OSTY_GC_IDENTITY_TOMBSTONE UINT64_MAX
+
+static osty_gc_identity_slot *osty_gc_identity_slots = NULL;
+static int64_t osty_gc_identity_capacity = 0;
+static int64_t osty_gc_identity_count = 0;
+static int64_t osty_gc_identity_tombstones = 0;
+static uint64_t osty_gc_next_stable_id = 1;
+
+/* Phase D: old-payload → new-header forwarding table. Entries persist
+ * after compaction so `osty.gc.load_v1` can canonicalize stale payload
+ * pointers to the current evacuated object. Later compactions retain
+ * historical aliases for still-live stable ids, so a payload from two
+ * or more moves ago still resolves to the newest header. */
+typedef struct osty_gc_forwarding_slot {
+    void *from_payload;
+    osty_gc_header *to_header;
+    uint64_t stable_id;
+    int64_t byte_size;
+} osty_gc_forwarding_slot;
+
+typedef struct osty_gc_forwarding_snapshot {
+    void *from_payload;
+    uint64_t stable_id;
+} osty_gc_forwarding_snapshot;
+
+#define OSTY_GC_FORWARDING_TOMBSTONE ((void *)(uintptr_t)1)
+
+static osty_gc_forwarding_slot *osty_gc_forwarding_slots = NULL;
+static int64_t osty_gc_forwarding_capacity = 0;
+static int64_t osty_gc_forwarding_count = 0;
+static int64_t osty_gc_forwarding_tombstones = 0;
 
 /* Phase A6 stackmap overflow guard (RUNTIME_GC_DELTA §10.2).
  *
@@ -741,6 +877,8 @@ static int64_t osty_gc_global_root_cap = 0;
 static void **osty_gc_satb_log = NULL;
 static int64_t osty_gc_satb_log_count = 0;
 static int64_t osty_gc_satb_log_cap = 0;
+static osty_gc_trace_slot_mode osty_gc_trace_slot_mode_current =
+    OSTY_GC_TRACE_SLOT_MODE_MARK;
 
 typedef struct osty_gc_remembered_edge {
     void *owner;
@@ -760,6 +898,15 @@ void osty_gc_mark_slot_v1(void *slot_addr) __asm__(OSTY_GC_SYMBOL("osty.gc.mark_
 static void osty_rt_abort(const char *message) {
     fprintf(stderr, "osty llvm runtime: %s\n", message);
     abort();
+}
+
+static uint64_t osty_gc_allocate_stable_id(void) {
+    uint64_t id = osty_gc_next_stable_id;
+    if (id == 0 || id == OSTY_GC_IDENTITY_TOMBSTONE) {
+        osty_rt_abort("GC stable id overflow");
+    }
+    osty_gc_next_stable_id = id + 1;
+    return id;
 }
 
 /* GC + runtime-wide lock. Recursive so that collection (invoked from
@@ -815,7 +962,24 @@ static size_t osty_gc_index_hash(void *payload) {
     return (size_t)h;
 }
 
+static osty_gc_header *osty_gc_find_header(void *payload);
 static void osty_gc_index_insert(void *payload, osty_gc_header *header);
+static void osty_gc_identity_insert(uint64_t stable_id, osty_gc_header *header);
+static void osty_gc_forwarding_insert(void *from_payload, osty_gc_header *to_header);
+
+static size_t osty_gc_identity_hash(uint64_t stable_id) {
+    uint64_t h = stable_id;
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
+    return (size_t)h;
+}
+
+static size_t osty_gc_forwarding_hash(void *payload) {
+    return osty_gc_index_hash(payload);
+}
 
 static void osty_gc_index_grow(int64_t new_capacity) {
     osty_gc_index_slot *old_slots = osty_gc_index_slots;
@@ -904,6 +1068,268 @@ static void osty_gc_index_remove(void *payload) {
     }
 }
 
+static void osty_gc_identity_grow(int64_t new_capacity) {
+    osty_gc_identity_slot *old_slots = osty_gc_identity_slots;
+    int64_t old_cap = osty_gc_identity_capacity;
+    int64_t i;
+    osty_gc_identity_slots = (osty_gc_identity_slot *)calloc(
+        (size_t)new_capacity, sizeof(osty_gc_identity_slot));
+    if (osty_gc_identity_slots == NULL) {
+        osty_rt_abort("out of memory (gc identity index)");
+    }
+    osty_gc_identity_capacity = new_capacity;
+    osty_gc_identity_count = 0;
+    osty_gc_identity_tombstones = 0;
+    if (old_slots != NULL) {
+        for (i = 0; i < old_cap; i++) {
+            uint64_t id = old_slots[i].stable_id;
+            if (id != 0 && id != OSTY_GC_IDENTITY_TOMBSTONE) {
+                osty_gc_identity_insert(id, old_slots[i].header);
+            }
+        }
+        free(old_slots);
+    }
+}
+
+static void osty_gc_identity_insert(uint64_t stable_id, osty_gc_header *header) {
+    size_t mask;
+    size_t idx;
+
+    if (stable_id == 0 || stable_id == OSTY_GC_IDENTITY_TOMBSTONE) {
+        osty_rt_abort("invalid GC stable id");
+    }
+    if (osty_gc_identity_slots == NULL ||
+        (osty_gc_identity_count + osty_gc_identity_tombstones + 1) * 4 >=
+            osty_gc_identity_capacity * 3) {
+        int64_t new_cap = osty_gc_identity_capacity == 0
+                              ? 128
+                              : osty_gc_identity_capacity * 2;
+        osty_gc_identity_grow(new_cap);
+    }
+    mask = (size_t)(osty_gc_identity_capacity - 1);
+    idx = osty_gc_identity_hash(stable_id) & mask;
+    while (osty_gc_identity_slots[idx].stable_id != 0 &&
+           osty_gc_identity_slots[idx].stable_id != OSTY_GC_IDENTITY_TOMBSTONE) {
+        if (osty_gc_identity_slots[idx].stable_id == stable_id) {
+            osty_gc_identity_slots[idx].header = header;
+            return;
+        }
+        idx = (idx + 1) & mask;
+    }
+    if (osty_gc_identity_slots[idx].stable_id == OSTY_GC_IDENTITY_TOMBSTONE) {
+        osty_gc_identity_tombstones -= 1;
+    }
+    osty_gc_identity_slots[idx].stable_id = stable_id;
+    osty_gc_identity_slots[idx].header = header;
+    osty_gc_identity_count += 1;
+}
+
+static osty_gc_header *osty_gc_identity_lookup(uint64_t stable_id) {
+    size_t mask;
+    size_t idx;
+
+    if (osty_gc_identity_slots == NULL || stable_id == 0 ||
+        stable_id == OSTY_GC_IDENTITY_TOMBSTONE) {
+        return NULL;
+    }
+    mask = (size_t)(osty_gc_identity_capacity - 1);
+    idx = osty_gc_identity_hash(stable_id) & mask;
+    while (osty_gc_identity_slots[idx].stable_id != 0) {
+        if (osty_gc_identity_slots[idx].stable_id == stable_id) {
+            return osty_gc_identity_slots[idx].header;
+        }
+        idx = (idx + 1) & mask;
+    }
+    return NULL;
+}
+
+static void osty_gc_identity_remove(uint64_t stable_id) {
+    size_t mask;
+    size_t idx;
+
+    if (osty_gc_identity_slots == NULL || stable_id == 0 ||
+        stable_id == OSTY_GC_IDENTITY_TOMBSTONE) {
+        return;
+    }
+    mask = (size_t)(osty_gc_identity_capacity - 1);
+    idx = osty_gc_identity_hash(stable_id) & mask;
+    while (osty_gc_identity_slots[idx].stable_id != 0) {
+        if (osty_gc_identity_slots[idx].stable_id == stable_id) {
+            osty_gc_identity_slots[idx].stable_id =
+                OSTY_GC_IDENTITY_TOMBSTONE;
+            osty_gc_identity_slots[idx].header = NULL;
+            osty_gc_identity_count -= 1;
+            osty_gc_identity_tombstones += 1;
+            return;
+        }
+        idx = (idx + 1) & mask;
+    }
+}
+
+static void osty_gc_forwarding_grow(int64_t new_capacity) {
+    osty_gc_forwarding_slot *old_slots = osty_gc_forwarding_slots;
+    int64_t old_cap = osty_gc_forwarding_capacity;
+    int64_t i;
+
+    osty_gc_forwarding_slots = (osty_gc_forwarding_slot *)calloc(
+        (size_t)new_capacity, sizeof(osty_gc_forwarding_slot));
+    if (osty_gc_forwarding_slots == NULL) {
+        osty_rt_abort("out of memory (gc forwarding table)");
+    }
+    osty_gc_forwarding_capacity = new_capacity;
+    osty_gc_forwarding_count = 0;
+    osty_gc_forwarding_tombstones = 0;
+    if (old_slots != NULL) {
+        for (i = 0; i < old_cap; i++) {
+            void *from_payload = old_slots[i].from_payload;
+            if (from_payload != NULL &&
+                from_payload != OSTY_GC_FORWARDING_TOMBSTONE) {
+                osty_gc_forwarding_insert(from_payload,
+                                          old_slots[i].to_header);
+            }
+        }
+        free(old_slots);
+    }
+}
+
+static void osty_gc_forwarding_insert(void *from_payload,
+                                      osty_gc_header *to_header) {
+    size_t mask;
+    size_t idx;
+
+    if (from_payload == NULL ||
+        from_payload == OSTY_GC_FORWARDING_TOMBSTONE ||
+        to_header == NULL) {
+        osty_rt_abort("invalid GC forwarding entry");
+    }
+    if (osty_gc_forwarding_slots == NULL ||
+        (osty_gc_forwarding_count + osty_gc_forwarding_tombstones + 1) * 4 >=
+            osty_gc_forwarding_capacity * 3) {
+        int64_t new_cap = osty_gc_forwarding_capacity == 0
+                              ? 128
+                              : osty_gc_forwarding_capacity * 2;
+        osty_gc_forwarding_grow(new_cap);
+    }
+    mask = (size_t)(osty_gc_forwarding_capacity - 1);
+    idx = osty_gc_forwarding_hash(from_payload) & mask;
+    while (osty_gc_forwarding_slots[idx].from_payload != NULL &&
+           osty_gc_forwarding_slots[idx].from_payload !=
+               OSTY_GC_FORWARDING_TOMBSTONE) {
+        if (osty_gc_forwarding_slots[idx].from_payload == from_payload) {
+            osty_gc_forwarding_slots[idx].to_header = to_header;
+            osty_gc_forwarding_slots[idx].stable_id = to_header->stable_id;
+            osty_gc_forwarding_slots[idx].byte_size = to_header->byte_size;
+            return;
+        }
+        idx = (idx + 1) & mask;
+    }
+    if (osty_gc_forwarding_slots[idx].from_payload ==
+        OSTY_GC_FORWARDING_TOMBSTONE) {
+        osty_gc_forwarding_tombstones -= 1;
+    }
+    osty_gc_forwarding_slots[idx].from_payload = from_payload;
+    osty_gc_forwarding_slots[idx].to_header = to_header;
+    osty_gc_forwarding_slots[idx].stable_id = to_header->stable_id;
+    osty_gc_forwarding_slots[idx].byte_size = to_header->byte_size;
+    osty_gc_forwarding_count += 1;
+}
+
+static osty_gc_header *osty_gc_forwarding_lookup(void *from_payload) {
+    size_t mask;
+    size_t idx;
+
+    if (osty_gc_forwarding_slots == NULL || from_payload == NULL ||
+        from_payload == OSTY_GC_FORWARDING_TOMBSTONE) {
+        return NULL;
+    }
+    mask = (size_t)(osty_gc_forwarding_capacity - 1);
+    idx = osty_gc_forwarding_hash(from_payload) & mask;
+    while (osty_gc_forwarding_slots[idx].from_payload != NULL) {
+        if (osty_gc_forwarding_slots[idx].from_payload == from_payload) {
+            return osty_gc_forwarding_slots[idx].to_header;
+        }
+        idx = (idx + 1) & mask;
+    }
+    return NULL;
+}
+
+static void osty_gc_forwarding_clear(void) {
+    free(osty_gc_forwarding_slots);
+    osty_gc_forwarding_slots = NULL;
+    osty_gc_forwarding_capacity = 0;
+    osty_gc_forwarding_count = 0;
+    osty_gc_forwarding_tombstones = 0;
+}
+
+static osty_gc_forwarding_snapshot *osty_gc_forwarding_snapshot_take(
+    int64_t *out_count) {
+    osty_gc_forwarding_snapshot *snapshots = NULL;
+    int64_t count = 0;
+    int64_t i;
+
+    if (out_count == NULL) {
+        osty_rt_abort("null GC forwarding snapshot count");
+    }
+    if (osty_gc_forwarding_count > 0) {
+        snapshots = (osty_gc_forwarding_snapshot *)calloc(
+            (size_t)osty_gc_forwarding_count, sizeof(*snapshots));
+        if (snapshots == NULL) {
+            osty_rt_abort("out of memory (gc forwarding snapshot)");
+        }
+    }
+    if (osty_gc_forwarding_slots != NULL) {
+        for (i = 0; i < osty_gc_forwarding_capacity; i++) {
+            void *from_payload = osty_gc_forwarding_slots[i].from_payload;
+            if (from_payload != NULL &&
+                from_payload != OSTY_GC_FORWARDING_TOMBSTONE) {
+                snapshots[count].from_payload = from_payload;
+                snapshots[count].stable_id =
+                    osty_gc_forwarding_slots[i].stable_id;
+                count += 1;
+            }
+        }
+    }
+    *out_count = count;
+    return snapshots;
+}
+
+static void osty_gc_forwarding_retain_history(
+    const osty_gc_forwarding_snapshot *snapshots, int64_t snapshot_count) {
+    int64_t i;
+
+    if (snapshots == NULL || snapshot_count <= 0) {
+        return;
+    }
+    for (i = 0; i < snapshot_count; i++) {
+        osty_gc_header *header =
+            osty_gc_identity_lookup(snapshots[i].stable_id);
+        if (header != NULL) {
+            osty_gc_forwarding_insert(snapshots[i].from_payload, header);
+        }
+    }
+}
+
+static void *osty_gc_forward_payload(void *payload) {
+    osty_gc_header *header;
+
+    if (payload == NULL) {
+        return NULL;
+    }
+    header = osty_gc_forwarding_lookup(payload);
+    if (header != NULL) {
+        return header->payload;
+    }
+    return payload;
+}
+
+static osty_gc_header *osty_gc_find_header_or_forwarded(void *payload) {
+    osty_gc_header *header = osty_gc_find_header(payload);
+    if (header != NULL) {
+        return header;
+    }
+    return osty_gc_forwarding_lookup(payload);
+}
+
 /* Per-gen list helpers (Phase B2 depth). Both lists use `next_gen` /
  * `prev_gen` — a header is on exactly one gen list at a time. */
 static void osty_gc_gen_list_prepend(osty_gc_header **head, osty_gc_header *header) {
@@ -947,6 +1373,7 @@ static void osty_gc_link(osty_gc_header *header) {
         osty_gc_gen_list_prepend(&osty_gc_old_head, header);
     }
     osty_gc_index_insert(header->payload, header);
+    osty_gc_identity_insert(header->stable_id, header);
 }
 
 static void osty_gc_unlink(osty_gc_header *header) {
@@ -970,6 +1397,54 @@ static void osty_gc_unlink(osty_gc_header *header) {
         osty_gc_gen_list_remove(&osty_gc_old_head, header);
     }
     osty_gc_index_remove(header->payload);
+    osty_gc_identity_remove(header->stable_id);
+}
+
+static bool osty_gc_header_is_pinned(const osty_gc_header *header) {
+    return header != NULL &&
+           (header->root_count > 0 || header->pin_count > 0);
+}
+
+static bool osty_gc_map_payload_is_movable(const osty_rt_map *map) {
+    return map != NULL;
+}
+
+static bool osty_gc_chan_elem_kind_is_managed(int64_t elem_kind) {
+    return elem_kind == OSTY_RT_ABI_PTR || elem_kind == OSTY_RT_ABI_STRING;
+}
+
+static bool osty_gc_header_is_movable(const osty_gc_header *header) {
+    if (header == NULL || osty_gc_header_is_pinned(header)) {
+        return false;
+    }
+    if (header->object_kind == OSTY_GC_KIND_MAP) {
+        return osty_gc_map_payload_is_movable((const osty_rt_map *)header->payload);
+    }
+    if (header->object_kind == OSTY_GC_KIND_CHANNEL) {
+        return true;
+    }
+    if (header->object_kind == OSTY_GC_KIND_LIST ||
+        header->object_kind == OSTY_GC_KIND_STRING ||
+        header->object_kind == OSTY_GC_KIND_SET ||
+        header->object_kind == OSTY_GC_KIND_BYTES ||
+        header->object_kind == OSTY_GC_KIND_CLOSURE_ENV) {
+        return true;
+    }
+    return header->destroy == NULL;
+}
+
+static void osty_gc_note_pin_acquire(osty_gc_header *header) {
+    if (header != NULL && header->pin_count == 1) {
+        osty_gc_pinned_count += 1;
+        osty_gc_pinned_bytes += header->byte_size;
+    }
+}
+
+static void osty_gc_note_pin_release(osty_gc_header *header) {
+    if (header != NULL && header->pin_count == 0) {
+        osty_gc_pinned_count -= 1;
+        osty_gc_pinned_bytes -= header->byte_size;
+    }
 }
 
 /* Phase B promotion: move `header` from YOUNG to OLD in place. Only the
@@ -1084,6 +1559,313 @@ static int64_t osty_gc_promote_age_now(void) {
     return osty_gc_promote_age;
 }
 
+static size_t osty_gc_total_size_for_payload_size(size_t payload_size) {
+    if (payload_size == 0) {
+        payload_size = 1;
+    }
+    if (payload_size > SIZE_MAX - sizeof(osty_gc_header)) {
+        osty_rt_abort("GC allocation overflow");
+    }
+    return sizeof(osty_gc_header) + payload_size;
+}
+
+static size_t osty_gc_header_total_size(const osty_gc_header *header) {
+    if (header == NULL || header->byte_size <= 0) {
+        osty_rt_abort("invalid GC header size");
+    }
+    if ((size_t)header->byte_size > SIZE_MAX - sizeof(osty_gc_header)) {
+        osty_rt_abort("GC header size overflow");
+    }
+    return sizeof(osty_gc_header) + (size_t)header->byte_size;
+}
+
+static size_t osty_gc_align_up(size_t value, size_t align) {
+    if (align == 0) {
+        return value;
+    }
+    if (value > SIZE_MAX - (align - 1)) {
+        osty_rt_abort("GC align overflow");
+    }
+    return ((value + align - 1) / align) * align;
+}
+
+static bool osty_gc_total_size_is_humongous(size_t total_size) {
+    return total_size > (size_t)OSTY_GC_HUMONGOUS_THRESHOLD_BYTES;
+}
+
+static int64_t osty_gc_size_class_index_for_total_size(size_t total_size) {
+    size_t aligned_size;
+
+    if (total_size == 0 || osty_gc_total_size_is_humongous(total_size)) {
+        return -1;
+    }
+    aligned_size =
+        ((total_size + OSTY_GC_SIZE_CLASS_ALIGN - 1) /
+         OSTY_GC_SIZE_CLASS_ALIGN) *
+        OSTY_GC_SIZE_CLASS_ALIGN;
+    if (aligned_size == 0 ||
+        aligned_size > (size_t)OSTY_GC_HUMONGOUS_THRESHOLD_BYTES) {
+        return -1;
+    }
+    return (int64_t)(aligned_size / OSTY_GC_SIZE_CLASS_ALIGN) - 1;
+}
+
+static bool osty_gc_old_bump_release_header(osty_gc_header *header);
+
+static void osty_gc_free_list_push(osty_gc_header *header) {
+    osty_gc_free_chunk *chunk;
+    size_t total_size;
+    int64_t class_index;
+
+    if (header == NULL) {
+        return;
+    }
+    total_size = osty_gc_header_total_size(header);
+    if (total_size > (size_t)INT64_MAX) {
+        osty_rt_abort("GC free-list size overflow");
+    }
+    class_index = osty_gc_size_class_index_for_total_size(total_size);
+    if (class_index < 0) {
+        osty_gc_humongous_swept_count_total += 1;
+        osty_gc_humongous_swept_bytes_total += header->byte_size;
+        free(header);
+        return;
+    }
+    chunk = (osty_gc_free_chunk *)header;
+    chunk->next = osty_gc_free_list_bins[class_index];
+    chunk->total_size = total_size;
+    chunk->storage_kind = header->storage_kind;
+    osty_gc_free_list_bins[class_index] = chunk;
+    osty_gc_free_list_count += 1;
+    osty_gc_free_list_bytes += (int64_t)total_size;
+}
+
+static osty_gc_header *osty_gc_free_list_take(size_t total_size,
+                                              size_t *out_chunk_size,
+                                              uint8_t *out_storage_kind) {
+    osty_gc_free_chunk *prev = NULL;
+    osty_gc_free_chunk *chunk;
+    int64_t class_index;
+
+    if (out_chunk_size == NULL) {
+        osty_rt_abort("null GC free-list size out-param");
+    }
+    if (out_storage_kind == NULL) {
+        osty_rt_abort("null GC free-list storage-kind out-param");
+    }
+    class_index = osty_gc_size_class_index_for_total_size(total_size);
+    if (class_index < 0) {
+        *out_chunk_size = 0;
+        *out_storage_kind = OSTY_GC_STORAGE_DIRECT;
+        return NULL;
+    }
+    chunk = osty_gc_free_list_bins[class_index];
+    while (chunk != NULL) {
+        if (chunk->total_size >= total_size) {
+            if (prev != NULL) {
+                prev->next = chunk->next;
+            } else {
+                osty_gc_free_list_bins[class_index] = chunk->next;
+            }
+            osty_gc_free_list_count -= 1;
+            osty_gc_free_list_bytes -= (int64_t)chunk->total_size;
+            osty_gc_free_list_reused_count_total += 1;
+            osty_gc_free_list_reused_bytes_total +=
+                (int64_t)chunk->total_size;
+            *out_chunk_size = chunk->total_size;
+            *out_storage_kind = chunk->storage_kind;
+            return (osty_gc_header *)chunk;
+        }
+        prev = chunk;
+        chunk = chunk->next;
+    }
+    *out_chunk_size = 0;
+    *out_storage_kind = OSTY_GC_STORAGE_DIRECT;
+    return NULL;
+}
+
+/* Reclaim only sweep-dead headers. Compaction-replaced live headers keep
+ * their old payload addresses in the forwarding table, so reusing them
+ * would alias a stale logical identity to a new object. */
+static void osty_gc_reclaim_swept_header(osty_gc_header *header) {
+    if (osty_gc_old_bump_release_header(header)) {
+        return;
+    }
+    osty_gc_free_list_push(header);
+}
+
+static void osty_gc_release_replaced_header(osty_gc_header *header) {
+    if (header == NULL) {
+        return;
+    }
+    if (osty_gc_old_bump_release_header(header)) {
+        return;
+    }
+    if (header->storage_kind == OSTY_GC_STORAGE_DIRECT) {
+        free(header);
+    }
+}
+
+static osty_gc_bump_block *osty_gc_bump_block_new(
+    size_t min_size,
+    osty_gc_bump_block **blocks_head,
+    osty_gc_bump_block **current,
+    int64_t *count_total,
+    int64_t *bytes_total) {
+    osty_gc_bump_block *block;
+    size_t block_size;
+    size_t total_bytes;
+    uintptr_t raw;
+    uintptr_t aligned;
+
+    block_size = min_size > (size_t)OSTY_GC_BUMP_BLOCK_BYTES
+                     ? min_size
+                     : (size_t)OSTY_GC_BUMP_BLOCK_BYTES;
+    if (block_size > SIZE_MAX - sizeof(*block) - OSTY_GC_SIZE_CLASS_ALIGN) {
+        osty_rt_abort("GC bump block size overflow");
+    }
+    total_bytes = sizeof(*block) + block_size + OSTY_GC_SIZE_CLASS_ALIGN;
+    block = (osty_gc_bump_block *)calloc(1, total_bytes);
+    if (block == NULL) {
+        osty_rt_abort("out of memory (gc bump block)");
+    }
+    raw = (uintptr_t)block->storage;
+    aligned = (raw + (uintptr_t)OSTY_GC_SIZE_CLASS_ALIGN - 1u) &
+              ~((uintptr_t)OSTY_GC_SIZE_CLASS_ALIGN - 1u);
+    block->data = (unsigned char *)aligned;
+    block->size = block_size;
+    block->used = 0;
+    block->next = *blocks_head;
+    *blocks_head = block;
+    *current = block;
+    *count_total += 1;
+    *bytes_total += (int64_t)block_size;
+    return block;
+}
+
+static osty_gc_header *osty_gc_bump_take_from_region(
+    size_t total_size,
+    uint8_t storage_kind,
+    osty_gc_bump_block **blocks_head,
+    osty_gc_bump_block **current,
+    int64_t *block_count_total,
+    int64_t *block_bytes_total,
+    int64_t *alloc_count_total,
+    int64_t *alloc_bytes_total) {
+    osty_gc_bump_block *block = *current;
+    size_t aligned_size = osty_gc_align_up(total_size, OSTY_GC_SIZE_CLASS_ALIGN);
+    size_t offset;
+    osty_gc_header *header;
+
+    if (osty_gc_total_size_is_humongous(total_size)) {
+        return NULL;
+    }
+    if (block == NULL) {
+        block = osty_gc_bump_block_new(aligned_size, blocks_head, current,
+                                       block_count_total, block_bytes_total);
+    }
+    offset = osty_gc_align_up(block->used, OSTY_GC_SIZE_CLASS_ALIGN);
+    if (offset > block->size || aligned_size > block->size - offset) {
+        block = osty_gc_bump_block_new(aligned_size, blocks_head, current,
+                                       block_count_total, block_bytes_total);
+        offset = 0;
+    }
+    header = (osty_gc_header *)(void *)(block->data + offset);
+    block->used = offset + aligned_size;
+    block->live_alloc_count += 1;
+    header->storage_kind = storage_kind;
+    *alloc_count_total += 1;
+    *alloc_bytes_total += (int64_t)aligned_size;
+    return header;
+}
+
+static osty_gc_header *osty_gc_tlab_take(size_t total_size) {
+    osty_gc_header *header = osty_gc_bump_take_from_region(
+        total_size, OSTY_GC_STORAGE_BUMP_YOUNG,
+        &osty_gc_bump_blocks, &osty_gc_tlab_current,
+        &osty_gc_bump_block_count, &osty_gc_bump_block_bytes_total,
+        &osty_gc_bump_alloc_count_total, &osty_gc_bump_alloc_bytes_total);
+
+    if (header != NULL) {
+        osty_gc_bump_current = osty_gc_tlab_current;
+        if (header == (osty_gc_header *)(void *)osty_gc_tlab_current->data) {
+            osty_gc_tlab_refill_count_total += 1;
+        }
+    }
+    return header;
+}
+
+static osty_gc_bump_block *osty_gc_bump_block_find_owner(
+    osty_gc_bump_block *blocks_head, const void *ptr) {
+    const unsigned char *addr = (const unsigned char *)ptr;
+    osty_gc_bump_block *block = blocks_head;
+
+    while (block != NULL) {
+        const unsigned char *start = block->data;
+        const unsigned char *end = block->data + block->size;
+        if (addr >= start && addr < end) {
+            return block;
+        }
+        block = block->next;
+    }
+    return NULL;
+}
+
+static void osty_gc_bump_block_release(
+    osty_gc_bump_block *target,
+    osty_gc_bump_block **blocks_head,
+    osty_gc_bump_block **current,
+    int64_t *block_count,
+    int64_t *recycled_count_total,
+    int64_t *recycled_bytes_total) {
+    osty_gc_bump_block *prev = NULL;
+    osty_gc_bump_block *block = *blocks_head;
+
+    while (block != NULL && block != target) {
+        prev = block;
+        block = block->next;
+    }
+    if (block == NULL) {
+        osty_rt_abort("GC bump block release target missing");
+    }
+    if (prev != NULL) {
+        prev->next = block->next;
+    } else {
+        *blocks_head = block->next;
+    }
+    if (*current == block) {
+        *current = *blocks_head;
+    }
+    *block_count -= 1;
+    *recycled_count_total += 1;
+    *recycled_bytes_total += (int64_t)block->size;
+    free(block);
+}
+
+static bool osty_gc_old_bump_release_header(osty_gc_header *header) {
+    osty_gc_bump_block *block;
+
+    if (header == NULL || header->storage_kind != OSTY_GC_STORAGE_BUMP_OLD) {
+        return false;
+    }
+    block = osty_gc_bump_block_find_owner(osty_gc_old_bump_blocks, header);
+    if (block == NULL) {
+        osty_rt_abort("GC old bump owner missing");
+    }
+    if (block->live_alloc_count <= 0) {
+        osty_rt_abort("GC old bump live count underflow");
+    }
+    block->live_alloc_count -= 1;
+    if (block->live_alloc_count == 0) {
+        osty_gc_bump_block_release(
+            block, &osty_gc_old_bump_blocks, &osty_gc_old_bump_current,
+            &osty_gc_old_bump_block_count,
+            &osty_gc_old_bump_recycled_block_count_total,
+            &osty_gc_old_bump_recycled_bytes_total);
+    }
+    return true;
+}
+
 /* Phase B pressure split: `allocated_since_collect` still tracks the
  * major-tier pressure (set by heap limit), while
  * `allocated_since_minor` tracks the finer nursery tier. Minor is
@@ -1124,17 +1906,37 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
     osty_gc_header *header;
     size_t payload_size = byte_size;
     size_t total_size;
+    size_t chunk_size = 0;
+    bool humongous;
+    bool reused = false;
+    uint8_t storage_kind = OSTY_GC_STORAGE_DIRECT;
 
-    if (payload_size == 0) {
-        payload_size = 1;
+    total_size = osty_gc_total_size_for_payload_size(payload_size);
+    payload_size = total_size - sizeof(osty_gc_header);
+    humongous = osty_gc_total_size_is_humongous(total_size);
+    header = NULL;
+    if (!humongous) {
+        osty_gc_acquire();
+        header = osty_gc_free_list_take(total_size, &chunk_size, &storage_kind);
+        if (header != NULL) {
+            reused = true;
+        } else {
+            header = osty_gc_tlab_take(total_size);
+            if (header != NULL) {
+                storage_kind = OSTY_GC_STORAGE_BUMP_YOUNG;
+            }
+        }
+        osty_gc_release();
     }
-    if (payload_size > SIZE_MAX - sizeof(osty_gc_header)) {
-        osty_rt_abort("GC allocation overflow");
-    }
-    total_size = sizeof(osty_gc_header) + payload_size;
-    header = (osty_gc_header *)calloc(1, total_size);
-    if (header == NULL) {
-        osty_rt_abort("out of memory");
+    if (reused && header != NULL) {
+        memset(header, 0, chunk_size);
+    } else {
+        if (header == NULL) {
+            header = (osty_gc_header *)calloc(1, total_size);
+            if (header == NULL) {
+                osty_rt_abort("out of memory");
+            }
+        }
     }
     header->object_kind = object_kind;
     header->byte_size = (int64_t)payload_size;
@@ -1142,6 +1944,7 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
     header->destroy = destroy;
     header->site = site;
     header->payload = (void *)(header + 1);
+    header->storage_kind = storage_kind;
     /* Phase B: every new allocation enters the nursery. Promotion to
      * OLD happens inside a minor collection after
      * `osty_gc_promote_age` survivals. */
@@ -1156,6 +1959,11 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
     header->color = OSTY_GC_COLOR_WHITE;
     header->marked = false;
     osty_gc_acquire();
+    if (humongous) {
+        osty_gc_humongous_alloc_count_total += 1;
+        osty_gc_humongous_alloc_bytes_total += (int64_t)payload_size;
+    }
+    header->stable_id = osty_gc_allocate_stable_id();
     osty_gc_link(header);
     osty_gc_note_allocation(payload_size);
     /* Phase C3 mutator assist: if an incremental major is active,
@@ -1178,20 +1986,38 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
 }
 
 static void osty_gc_mark_payload(void *payload);
+static size_t osty_rt_kind_size(int64_t kind);
+static void osty_rt_chan_sync_init_or_abort(osty_rt_chan_impl *ch,
+                                            const char *op);
+static void osty_rt_chan_ensure_elem_kind(osty_rt_chan_impl *ch,
+                                          int64_t elem_kind,
+                                          const char *op);
 bool osty_rt_strings_Equal(const char *left, const char *right);
 int64_t osty_rt_strings_Compare(const char *left, const char *right);
 int64_t osty_rt_strings_Count(const char *value, const char *substr);
+int64_t osty_rt_strings_IndexOf(const char *value, const char *substr);
 bool osty_rt_strings_Contains(const char *value, const char *substr);
 bool osty_rt_strings_HasSuffix(const char *value, const char *suffix);
 const char *osty_rt_strings_Join(void *raw_parts, const char *sep);
 const char *osty_rt_strings_Repeat(const char *value, int64_t n);
+const char *osty_rt_strings_Replace(const char *value, const char *old, const char *new_value);
 const char *osty_rt_strings_ReplaceAll(const char *value, const char *old, const char *new_value);
 const char *osty_rt_strings_Slice(const char *value, int64_t start, int64_t end);
+const char *osty_rt_strings_TrimStart(const char *value);
+const char *osty_rt_strings_TrimEnd(const char *value);
 const char *osty_rt_strings_TrimPrefix(const char *value, const char *prefix);
 const char *osty_rt_strings_TrimSuffix(const char *value, const char *suffix);
 const char *osty_rt_strings_TrimSpace(const char *value);
+void *osty_rt_strings_ToBytes(const char *value);
 void *osty_rt_strings_Chars(const char *value);
 void *osty_rt_strings_Bytes(const char *value);
+void *osty_rt_bytes_from_list(void *raw_list);
+void *osty_rt_bytes_concat(void *raw_left, void *raw_right);
+void *osty_rt_bytes_repeat(void *raw_bytes, int64_t n);
+int64_t osty_rt_bytes_index_of(void *raw_bytes, void *raw_sub);
+bool osty_rt_bytes_is_valid_utf8(void *raw_bytes);
+const char *osty_rt_bytes_to_string(void *raw_bytes);
+uint8_t osty_rt_bytes_get(void *raw_bytes, int64_t index);
 bool osty_rt_set_insert_i64(void *raw_set, int64_t item);
 bool osty_rt_set_insert_i1(void *raw_set, bool item);
 bool osty_rt_set_insert_f64(void *raw_set, double item);
@@ -1245,12 +2071,31 @@ static void osty_rt_list_destroy(void *payload) {
     }
 }
 
+static void osty_rt_map_mutex_init_or_abort(osty_rt_map *map) {
+    if (map == NULL) {
+        osty_rt_abort("map lock: null map");
+    }
+    if (osty_rt_rmu_init(&map->mu) != 0) {
+        osty_rt_abort("map lock: mutex_init failed");
+    }
+    map->mu_init = 1;
+}
+
 static bool osty_rt_value_equals(const void *left, const void *right, size_t size, int64_t kind) {
+    if (kind == OSTY_RT_ABI_PTR) {
+        void *left_value = NULL;
+        void *right_value = NULL;
+        memcpy(&left_value, left, sizeof(left_value));
+        memcpy(&right_value, right, sizeof(right_value));
+        return osty_gc_load_v1(left_value) == osty_gc_load_v1(right_value);
+    }
     if (kind == OSTY_RT_ABI_STRING) {
         const char *left_value = NULL;
         const char *right_value = NULL;
         memcpy(&left_value, left, sizeof(left_value));
         memcpy(&right_value, right, sizeof(right_value));
+        left_value = (const char *)osty_gc_load_v1((void *)left_value);
+        right_value = (const char *)osty_gc_load_v1((void *)right_value);
         return osty_rt_strings_Equal(left_value, right_value);
     }
     return memcmp(left, right, size) == 0;
@@ -1268,6 +2113,57 @@ static size_t osty_rt_kind_size(int64_t kind) {
         return sizeof(bool);
     default:
         osty_rt_abort("unsupported runtime ABI kind");
+        return 0;
+    }
+}
+
+static uint64_t osty_rt_hash_mix64(uint64_t h) {
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
+    return h;
+}
+
+static size_t osty_rt_hash_bytes(const unsigned char *bytes, size_t len) {
+    uint64_t h = 1469598103934665603ULL;
+    size_t i;
+    for (i = 0; i < len; i++) {
+        h ^= (uint64_t)bytes[i];
+        h *= 1099511628211ULL;
+    }
+    return (size_t)osty_rt_hash_mix64(h);
+}
+
+static size_t osty_rt_map_key_hash(int64_t kind, const void *key) {
+    switch (kind) {
+    case OSTY_RT_ABI_I64:
+    case OSTY_RT_ABI_F64: {
+        uint64_t bits = 0;
+        memcpy(&bits, key, sizeof(bits));
+        return (size_t)osty_rt_hash_mix64(bits);
+    }
+    case OSTY_RT_ABI_I1: {
+        bool value = false;
+        memcpy(&value, key, sizeof(value));
+        return (size_t)osty_rt_hash_mix64(value ? 0x9e3779b97f4a7c15ULL : 0ULL);
+    }
+    case OSTY_RT_ABI_PTR: {
+        void *value = NULL;
+        memcpy(&value, key, sizeof(value));
+        return (size_t)osty_rt_hash_mix64((uint64_t)(uintptr_t)value);
+    }
+    case OSTY_RT_ABI_STRING: {
+        const char *value = NULL;
+        memcpy(&value, key, sizeof(value));
+        if (value == NULL) {
+            return (size_t)osty_rt_hash_mix64(0ULL);
+        }
+        return osty_rt_hash_bytes((const unsigned char *)value, strlen(value));
+    }
+    default:
+        osty_rt_abort("unsupported map key hash kind");
         return 0;
     }
 }
@@ -1296,10 +2192,13 @@ static void osty_rt_map_trace(void *payload) {
 static void osty_rt_map_destroy(void *payload) {
     osty_rt_map *map = (osty_rt_map *)payload;
     if (map != NULL) {
+        if (map->index_slots != NULL && map->index_slots != map->index_inline) {
+            free(map->index_slots);
+        }
         free(map->keys);
         free(map->values);
         if (map->mu_init) {
-            pthread_mutex_destroy(&map->mu);
+            osty_rt_rmu_destroy(&map->mu);
             map->mu_init = 0;
         }
     }
@@ -1406,7 +2305,398 @@ static void osty_gc_mark_root_slot(void *slot_addr) {
     if (payload == NULL) {
         return;
     }
+    payload = osty_gc_forward_payload(payload);
+    memcpy(slot_addr, &payload, sizeof(payload));
     osty_gc_mark_payload(payload);
+}
+
+static void osty_gc_trace_slot_with_mode(osty_rt_trace_slot_fn trace,
+                                         void *slot_addr,
+                                         osty_gc_trace_slot_mode mode) {
+    osty_gc_trace_slot_mode previous_mode;
+
+    if (trace == NULL) {
+        return;
+    }
+    previous_mode = osty_gc_trace_slot_mode_current;
+    osty_gc_trace_slot_mode_current = mode;
+    trace(slot_addr);
+    osty_gc_trace_slot_mode_current = previous_mode;
+}
+
+static void osty_gc_remap_slot(void *slot_addr) {
+    void *payload = NULL;
+    void *forwarded = NULL;
+
+    if (slot_addr == NULL) {
+        return;
+    }
+    memcpy(&payload, slot_addr, sizeof(payload));
+    if (payload == NULL) {
+        return;
+    }
+    forwarded = osty_gc_forward_payload(payload);
+    if (forwarded != payload) {
+        memcpy(slot_addr, &forwarded, sizeof(forwarded));
+    }
+}
+
+static void osty_gc_remap_list_payload(osty_rt_list *list) {
+    int64_t i;
+    int64_t j;
+
+    if (list == NULL || list->data == NULL) {
+        return;
+    }
+    if (list->trace_elem == osty_gc_mark_slot_v1) {
+        for (i = 0; i < list->len; i++) {
+            osty_gc_remap_slot((void *)(list->data +
+                                        ((size_t)i * list->elem_size)));
+        }
+        return;
+    }
+    if (list->pointer_elems) {
+        for (i = 0; i < list->len; i++) {
+            osty_gc_remap_slot((void *)(list->data +
+                                        ((size_t)i * list->elem_size)));
+        }
+        return;
+    }
+    if (list->gc_offset_count <= 0 || list->gc_offsets == NULL) {
+        return;
+    }
+    for (i = 0; i < list->len; i++) {
+        unsigned char *elem = list->data + ((size_t)i * list->elem_size);
+        for (j = 0; j < list->gc_offset_count; j++) {
+            osty_gc_remap_slot((void *)(elem + (size_t)list->gc_offsets[j]));
+        }
+    }
+}
+
+static void osty_gc_remap_map_payload(osty_rt_map *map) {
+    int64_t i;
+
+    if (map == NULL) {
+        return;
+    }
+    for (i = 0; i < map->len; i++) {
+        unsigned char *key_slot =
+            map->keys + ((size_t)i * osty_rt_kind_size(map->key_kind));
+        unsigned char *value_slot =
+            map->values + ((size_t)i * map->value_size);
+        if (map->key_kind == OSTY_RT_ABI_STRING ||
+            map->key_kind == OSTY_RT_ABI_PTR) {
+            osty_gc_remap_slot((void *)key_slot);
+        }
+        if (map->value_kind == OSTY_RT_ABI_STRING ||
+            map->value_kind == OSTY_RT_ABI_PTR) {
+            osty_gc_remap_slot((void *)value_slot);
+        } else if (map->value_trace != NULL) {
+            osty_gc_trace_slot_with_mode(
+                map->value_trace, (void *)value_slot,
+                OSTY_GC_TRACE_SLOT_MODE_REMAP);
+        }
+    }
+}
+
+static void osty_gc_remap_set_payload(osty_rt_set *set) {
+    int64_t i;
+    size_t elem_size;
+
+    if (set == NULL) {
+        return;
+    }
+    if (set->elem_kind != OSTY_RT_ABI_PTR &&
+        set->elem_kind != OSTY_RT_ABI_STRING) {
+        return;
+    }
+    elem_size = osty_rt_kind_size(set->elem_kind);
+    for (i = 0; i < set->len; i++) {
+        osty_gc_remap_slot((void *)(set->items + ((size_t)i * elem_size)));
+    }
+}
+
+static void osty_gc_remap_closure_env_payload(osty_rt_closure_env *env) {
+    int64_t i;
+
+    if (env == NULL) {
+        return;
+    }
+    for (i = 0; i < env->capture_count; i++) {
+        osty_gc_remap_slot((void *)&env->captures[i]);
+    }
+}
+
+static void osty_gc_remap_chan_payload(osty_rt_chan_impl *ch) {
+    int64_t i;
+
+    if (ch == NULL || ch->slots == NULL ||
+        !osty_gc_chan_elem_kind_is_managed(ch->elem_kind)) {
+        return;
+    }
+    for (i = 0; i < ch->count; i++) {
+        int64_t idx = (ch->head + i) % ch->cap;
+        void *payload = (void *)(uintptr_t)ch->slots[idx];
+        void *forwarded = osty_gc_forward_payload(payload);
+        if (forwarded != payload) {
+            ch->slots[idx] = (int64_t)(uintptr_t)forwarded;
+        }
+    }
+}
+
+static void osty_gc_remap_header_payload(osty_gc_header *header) {
+    if (header == NULL) {
+        return;
+    }
+    switch (header->object_kind) {
+    case OSTY_GC_KIND_LIST:
+        osty_gc_remap_list_payload((osty_rt_list *)header->payload);
+        return;
+    case OSTY_GC_KIND_MAP:
+        osty_gc_remap_map_payload((osty_rt_map *)header->payload);
+        return;
+    case OSTY_GC_KIND_SET:
+        osty_gc_remap_set_payload((osty_rt_set *)header->payload);
+        return;
+    case OSTY_GC_KIND_CLOSURE_ENV:
+        osty_gc_remap_closure_env_payload(
+            (osty_rt_closure_env *)header->payload);
+        return;
+    case OSTY_GC_KIND_CHANNEL:
+        osty_gc_remap_chan_payload((osty_rt_chan_impl *)header->payload);
+        return;
+    default:
+        break;
+    }
+    if (header->trace != NULL && header->byte_size == (int64_t)sizeof(void *)) {
+        osty_gc_remap_slot(header->payload);
+    }
+}
+
+static osty_gc_header *osty_gc_clone_header_storage(osty_gc_header *header) {
+    osty_gc_header *clone;
+    uint8_t clone_storage_kind = OSTY_GC_STORAGE_DIRECT;
+    size_t total_size;
+
+    if (header == NULL) {
+        return NULL;
+    }
+    if (header->byte_size < 0 ||
+        (size_t)header->byte_size > SIZE_MAX - sizeof(osty_gc_header)) {
+        osty_rt_abort("GC clone size overflow");
+    }
+    total_size = sizeof(osty_gc_header) + (size_t)header->byte_size;
+    if (!osty_gc_total_size_is_humongous(total_size)) {
+        clone = osty_gc_bump_take_from_region(
+            total_size, OSTY_GC_STORAGE_BUMP_OLD,
+            &osty_gc_old_bump_blocks, &osty_gc_old_bump_current,
+            &osty_gc_old_bump_block_count,
+            &osty_gc_old_bump_block_bytes_total,
+            &osty_gc_old_bump_alloc_count_total,
+            &osty_gc_old_bump_alloc_bytes_total);
+        if (clone != NULL) {
+            clone_storage_kind = OSTY_GC_STORAGE_BUMP_OLD;
+        }
+    } else {
+        clone = NULL;
+    }
+    if (clone == NULL) {
+        clone = (osty_gc_header *)calloc(1, total_size);
+        if (clone == NULL) {
+            osty_rt_abort("out of memory (gc compaction clone)");
+        }
+    }
+    memcpy(clone, header, sizeof(osty_gc_header));
+    clone->next = NULL;
+    clone->prev = NULL;
+    clone->next_gen = NULL;
+    clone->prev_gen = NULL;
+    clone->payload = (void *)(clone + 1);
+    clone->storage_kind = clone_storage_kind;
+    return clone;
+}
+
+static osty_gc_header *osty_gc_clone_map_header(osty_gc_header *header) {
+    osty_gc_header *clone = osty_gc_clone_header_storage(header);
+    osty_rt_map *old_map;
+    osty_rt_map *new_map;
+
+    if (clone == NULL) {
+        return NULL;
+    }
+    old_map = (osty_rt_map *)header->payload;
+    new_map = (osty_rt_map *)clone->payload;
+    memset(new_map, 0, sizeof(*new_map));
+    new_map->len = old_map->len;
+    new_map->cap = old_map->cap;
+    new_map->key_kind = old_map->key_kind;
+    new_map->value_kind = old_map->value_kind;
+    new_map->value_size = old_map->value_size;
+    new_map->value_trace = old_map->value_trace;
+    new_map->keys = old_map->keys;
+    new_map->values = old_map->values;
+    if (old_map->mu_init) {
+        osty_rt_map_mutex_init_or_abort(new_map);
+        osty_rt_rmu_destroy(&old_map->mu);
+        old_map->mu_init = 0;
+    }
+    old_map->keys = NULL;
+    old_map->values = NULL;
+    return clone;
+}
+
+static osty_gc_header *osty_gc_clone_chan_header(osty_gc_header *header) {
+    osty_gc_header *clone = osty_gc_clone_header_storage(header);
+    osty_rt_chan_impl *old_ch;
+    osty_rt_chan_impl *new_ch;
+
+    if (clone == NULL) {
+        return NULL;
+    }
+    old_ch = (osty_rt_chan_impl *)header->payload;
+    new_ch = (osty_rt_chan_impl *)clone->payload;
+    memset(new_ch, 0, sizeof(*new_ch));
+    new_ch->cap = old_ch->cap;
+    new_ch->head = old_ch->head;
+    new_ch->tail = old_ch->tail;
+    new_ch->count = old_ch->count;
+    new_ch->elem_kind = old_ch->elem_kind;
+    new_ch->closed = old_ch->closed;
+    new_ch->slots = old_ch->slots;
+    if (old_ch->sync_init) {
+        osty_rt_chan_sync_init_or_abort(new_ch, "gc channel clone");
+        osty_rt_mu_destroy(&old_ch->mu);
+        osty_rt_cond_destroy(&old_ch->not_full);
+        osty_rt_cond_destroy(&old_ch->not_empty);
+        old_ch->sync_init = 0;
+    }
+    old_ch->slots = NULL;
+    return clone;
+}
+
+static osty_gc_header *osty_gc_clone_header(osty_gc_header *header) {
+    osty_gc_header *clone;
+
+    if (header == NULL) {
+        return NULL;
+    }
+    if (header->object_kind == OSTY_GC_KIND_MAP) {
+        return osty_gc_clone_map_header(header);
+    }
+    if (header->object_kind == OSTY_GC_KIND_CHANNEL) {
+        return osty_gc_clone_chan_header(header);
+    }
+    clone = osty_gc_clone_header_storage(header);
+
+    if (clone == NULL) {
+        return NULL;
+    }
+    memcpy(clone->payload, header->payload, (size_t)header->byte_size);
+    return clone;
+}
+
+static void osty_gc_replace_header(osty_gc_header *old_header,
+                                   osty_gc_header *new_header) {
+    if (old_header == NULL || new_header == NULL) {
+        return;
+    }
+
+    new_header->next = old_header->next;
+    new_header->prev = old_header->prev;
+    if (new_header->prev != NULL) {
+        new_header->prev->next = new_header;
+    } else {
+        osty_gc_objects = new_header;
+    }
+    if (new_header->next != NULL) {
+        new_header->next->prev = new_header;
+    }
+
+    new_header->next_gen = old_header->next_gen;
+    new_header->prev_gen = old_header->prev_gen;
+    if (new_header->prev_gen != NULL) {
+        new_header->prev_gen->next_gen = new_header;
+    } else if (new_header->generation == OSTY_GC_GEN_YOUNG) {
+        osty_gc_young_head = new_header;
+    } else {
+        osty_gc_old_head = new_header;
+    }
+    if (new_header->next_gen != NULL) {
+        new_header->next_gen->prev_gen = new_header;
+    }
+
+    osty_gc_index_remove(old_header->payload);
+    osty_gc_index_insert(new_header->payload, new_header);
+    osty_gc_identity_insert(new_header->stable_id, new_header);
+}
+
+static int64_t osty_gc_compact_major_with_stack_roots(
+    void *const *root_slots, int64_t root_slot_count) {
+    osty_gc_header *header;
+    osty_gc_header *next;
+    osty_gc_forwarding_snapshot *snapshots;
+    int64_t snapshot_count = 0;
+    int64_t i;
+    int64_t moved = 0;
+    int64_t moved_bytes = 0;
+
+    snapshots = osty_gc_forwarding_snapshot_take(&snapshot_count);
+    osty_gc_forwarding_clear();
+    header = osty_gc_objects;
+    while (header != NULL) {
+        if (osty_gc_header_is_movable(header)) {
+            osty_gc_header *clone = osty_gc_clone_header(header);
+            osty_gc_forwarding_insert(header->payload, clone);
+            moved += 1;
+            moved_bytes += header->byte_size;
+        }
+        header = header->next;
+    }
+    if (moved == 0) {
+        osty_gc_forwarding_retain_history(snapshots, snapshot_count);
+        free(snapshots);
+        osty_gc_forwarded_objects_last = 0;
+        osty_gc_forwarded_bytes_last = 0;
+        return 0;
+    }
+
+    for (i = 0; i < root_slot_count; i++) {
+        osty_gc_remap_slot((void *)root_slots[i]);
+    }
+    for (i = 0; i < osty_gc_global_root_count; i++) {
+        osty_gc_remap_slot(osty_gc_global_root_slots[i]);
+    }
+
+    header = osty_gc_objects;
+    while (header != NULL) {
+        osty_gc_header *current = osty_gc_forwarding_lookup(header->payload);
+        if (current == NULL) {
+            current = header;
+        }
+        osty_gc_remap_header_payload(current);
+        header = header->next;
+    }
+
+    header = osty_gc_objects;
+    while (header != NULL) {
+        next = header->next;
+        {
+            osty_gc_header *replacement =
+                osty_gc_forwarding_lookup(header->payload);
+            if (replacement != NULL) {
+                osty_gc_replace_header(header, replacement);
+                osty_gc_release_replaced_header(header);
+            }
+        }
+        header = next;
+    }
+    osty_gc_forwarding_retain_history(snapshots, snapshot_count);
+    free(snapshots);
+
+    osty_gc_compaction_count_total += 1;
+    osty_gc_forwarded_objects_last = moved;
+    osty_gc_forwarded_bytes_last = moved_bytes;
+    return moved;
 }
 
 /* Phase A2 depth: monotonic timing helper. Falls back to 0 on systems
@@ -1462,8 +2752,10 @@ static void osty_gc_remembered_edges_compact_after_minor(void) {
 }
 
 /* Phase B major (full) collection. Scans every header regardless of
- * generation. Roots = pinned + stack + global. Clears all barrier logs
- * on exit because the post-sweep heap is a fresh baseline. */
+ * generation. Roots = manual root-binds + explicit pins + stack +
+ * global. Phase D adds STW evacuation after sweep: movable survivors
+ * are cloned, roots/object slots remapped, and `load_v1` retains a
+ * forwarding table so stale payload pointers can still resolve. */
 static void osty_gc_collect_major_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
     osty_gc_header *header;
     osty_gc_header *next;
@@ -1481,10 +2773,10 @@ static void osty_gc_collect_major_with_stack_roots(void *const *root_slots, int6
     }
     t_start = osty_gc_now_nanos();
 
-    /* 1. Seed from pinned roots. */
+    /* 1. Seed from manual root binds + explicit pins. */
     header = osty_gc_objects;
     while (header != NULL) {
-        if (header->root_count > 0) {
+        if (osty_gc_header_is_pinned(header)) {
             osty_gc_mark_header(header);
         }
         header = header->next;
@@ -1512,13 +2804,14 @@ static void osty_gc_collect_major_with_stack_roots(void *const *root_slots, int6
                 header->destroy(header->payload);
             }
             osty_gc_unlink(header);
-            free(header);
+            osty_gc_reclaim_swept_header(header);
         } else {
             header->color = OSTY_GC_COLOR_WHITE;
             header->marked = false;
         }
         header = next;
     }
+    (void)osty_gc_compact_major_with_stack_roots(root_slots, root_slot_count);
     osty_gc_collection_count += 1;
     osty_gc_major_count += 1;
     osty_gc_allocated_since_collect = 0;
@@ -1562,7 +2855,7 @@ static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int6
     t_start = osty_gc_now_nanos();
     osty_gc_minor_in_progress = true;
 
-    /* 1. Pinned YOUNG roots only. OLD pinned objects are "live by
+    /* 1. Pinned/manual-rooted YOUNG headers only. OLD pinned objects are "live by
      *    assumption" for the minor and do not need to enter the work
      *    queue — any OLD→YOUNG reference they hold is captured by the
      *    remembered set below. Iterating the young list (not the full
@@ -1570,7 +2863,7 @@ static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int6
      *    nursery size, not total heap size. */
     header = osty_gc_young_head;
     while (header != NULL) {
-        if (header->root_count > 0) {
+        if (osty_gc_header_is_pinned(header)) {
             osty_gc_mark_header(header);
         }
         header = header->next_gen;
@@ -1611,7 +2904,7 @@ static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int6
                 header->destroy(header->payload);
             }
             osty_gc_unlink(header);
-            free(header);
+            osty_gc_reclaim_swept_header(header);
         } else {
             header->color = OSTY_GC_COLOR_WHITE;
             header->marked = false;
@@ -1819,7 +3112,7 @@ static void osty_gc_incremental_seed_roots(void *const *root_slots, int64_t root
     int64_t i;
     header = osty_gc_objects;
     while (header != NULL) {
-        if (header->root_count > 0) {
+        if (osty_gc_header_is_pinned(header)) {
             osty_gc_mark_header(header);
         }
         header = header->next;
@@ -1845,7 +3138,7 @@ static void osty_gc_incremental_sweep(void) {
                 header->destroy(header->payload);
             }
             osty_gc_unlink(header);
-            free(header);
+            osty_gc_reclaim_swept_header(header);
         } else {
             header->color = OSTY_GC_COLOR_WHITE;
             header->marked = false;
@@ -1946,7 +3239,7 @@ static osty_rt_list *osty_rt_list_cast(void *raw_list) {
     if (raw_list == NULL) {
         osty_rt_abort("list is null");
     }
-    return (osty_rt_list *)raw_list;
+    return (osty_rt_list *)osty_gc_load_v1(raw_list);
 }
 
 static void osty_rt_list_ensure_layout(osty_rt_list *list, size_t elem_size, osty_rt_trace_slot_fn trace_elem) {
@@ -2733,6 +4026,21 @@ int64_t osty_rt_strings_Count(const char *value, const char *substr) {
     return total;
 }
 
+int64_t osty_rt_strings_IndexOf(const char *value, const char *substr) {
+    const char *next;
+
+    value = (value == NULL) ? "" : value;
+    substr = (substr == NULL) ? "" : substr;
+    if (substr[0] == '\0') {
+        return 0;
+    }
+    next = strstr(value, substr);
+    if (next == NULL) {
+        return -1;
+    }
+    return (int64_t)(next - value);
+}
+
 int64_t osty_rt_strings_ByteLen(const char *value) {
     if (value == NULL) {
         return 0;
@@ -3079,6 +4387,64 @@ const char *osty_rt_strings_Repeat(const char *value, int64_t n) {
     return out;
 }
 
+const char *osty_rt_strings_Replace(const char *value, const char *old, const char *new_value) {
+    const char *next;
+    size_t value_len;
+    size_t old_len;
+    size_t new_len;
+    size_t prefix_len;
+    size_t suffix_len;
+    size_t total;
+    char *out;
+
+    value = (value == NULL) ? "" : value;
+    old = (old == NULL) ? "" : old;
+    new_value = (new_value == NULL) ? "" : new_value;
+    value_len = strlen(value);
+    old_len = strlen(old);
+    new_len = strlen(new_value);
+
+    if (old_len == 0) {
+        if (new_len > SIZE_MAX - value_len) {
+            osty_rt_abort("runtime.strings.replace: size overflow");
+        }
+        total = new_len + value_len;
+        out = (char *)osty_gc_allocate_managed(total + 1, OSTY_GC_KIND_STRING, "runtime.strings.replace", NULL, NULL);
+        if (new_len != 0) {
+            memcpy(out, new_value, new_len);
+        }
+        if (value_len != 0) {
+            memcpy(out + new_len, value, value_len);
+        }
+        out[total] = '\0';
+        return out;
+    }
+
+    next = strstr(value, old);
+    if (next == NULL) {
+        return osty_rt_string_dup_site(value, value_len, "runtime.strings.replace.copy");
+    }
+
+    prefix_len = (size_t)(next - value);
+    suffix_len = value_len - prefix_len - old_len;
+    if (prefix_len > SIZE_MAX - new_len || prefix_len + new_len > SIZE_MAX - suffix_len) {
+        osty_rt_abort("runtime.strings.replace: size overflow");
+    }
+    total = prefix_len + new_len + suffix_len;
+    out = (char *)osty_gc_allocate_managed(total + 1, OSTY_GC_KIND_STRING, "runtime.strings.replace", NULL, NULL);
+    if (prefix_len != 0) {
+        memcpy(out, value, prefix_len);
+    }
+    if (new_len != 0) {
+        memcpy(out + prefix_len, new_value, new_len);
+    }
+    if (suffix_len != 0) {
+        memcpy(out + prefix_len + new_len, next + old_len, suffix_len);
+    }
+    out[total] = '\0';
+    return out;
+}
+
 const char *osty_rt_strings_ReplaceAll(const char *value, const char *old, const char *new_value) {
     const char *cursor;
     const char *next;
@@ -3208,6 +4574,38 @@ const char *osty_rt_strings_TrimSuffix(const char *value, const char *suffix) {
     return osty_rt_string_dup_site(value, value_len, "runtime.strings.trim_suffix");
 }
 
+const char *osty_rt_strings_TrimStart(const char *value) {
+    const char *start;
+
+    if (value == NULL) {
+        return osty_rt_string_dup_site("", 0, "runtime.strings.trim_start.empty");
+    }
+    start = value;
+    while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r' || *start == '\v' || *start == '\f') {
+        start++;
+    }
+    return osty_rt_string_dup_site(start, strlen(start), "runtime.strings.trim_start");
+}
+
+const char *osty_rt_strings_TrimEnd(const char *value) {
+    const char *end;
+    size_t len;
+
+    if (value == NULL) {
+        return osty_rt_string_dup_site("", 0, "runtime.strings.trim_end.empty");
+    }
+    end = value + strlen(value);
+    while (end > value) {
+        char c = *(end - 1);
+        if (c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != '\v' && c != '\f') {
+            break;
+        }
+        end--;
+    }
+    len = (size_t)(end - value);
+    return osty_rt_string_dup_site(value, len, "runtime.strings.trim_end");
+}
+
 const char *osty_rt_strings_TrimSpace(const char *value) {
     const char *start;
     const char *end;
@@ -3240,12 +4638,98 @@ const char *osty_rt_strings_TrimSpace(const char *value) {
     return out;
 }
 
+void *osty_rt_strings_ToBytes(const char *value) {
+    size_t len;
+    size_t total;
+    osty_rt_bytes *out;
+    unsigned char *data;
+
+    value = (value == NULL) ? "" : value;
+    len = strlen(value);
+    if (len > SIZE_MAX - sizeof(osty_rt_bytes)) {
+        osty_rt_abort("runtime.strings.to_bytes: size overflow");
+    }
+    total = sizeof(osty_rt_bytes) + len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, "runtime.strings.to_bytes", NULL, NULL);
+    data = (unsigned char *)(out + 1);
+    out->data = data;
+    out->len = (int64_t)len;
+    if (len != 0) {
+        memcpy(data, value, len);
+    }
+    return out;
+}
+
 static void *osty_rt_map_value_slot(osty_rt_map *map, int64_t index) {
     return (void *)(map->values + ((size_t)index * map->value_size));
 }
 
 static void *osty_rt_map_key_slot(osty_rt_map *map, int64_t index) {
     return (void *)(map->keys + ((size_t)index * osty_rt_kind_size(map->key_kind)));
+}
+
+static void osty_rt_map_index_clear(osty_rt_map *map) {
+    if (map->index_slots != NULL && map->index_slots != map->index_inline) {
+        free(map->index_slots);
+    }
+    map->index_slots = NULL;
+    map->index_cap = 0;
+    map->index_len = 0;
+}
+
+static void osty_rt_map_index_insert_slot(osty_rt_map *map, int64_t slot) {
+    uint64_t mask = (uint64_t)(map->index_cap - 1);
+    uint64_t idx = (uint64_t)osty_rt_map_key_hash(map->key_kind, osty_rt_map_key_slot(map, slot)) & mask;
+    while (map->index_slots[idx] != 0) {
+        idx = (idx + 1) & mask;
+    }
+    map->index_slots[idx] = slot + 1;
+    map->index_len += 1;
+}
+
+static void osty_rt_map_index_rebuild(osty_rt_map *map, int64_t live_len) {
+    int64_t cap = 8;
+    int64_t i;
+
+    if (live_len < 8) {
+        osty_rt_map_index_clear(map);
+        return;
+    }
+    while (cap < live_len * 2) {
+        if (cap > INT64_MAX / 2) {
+            cap = live_len * 2;
+            break;
+        }
+        cap *= 2;
+    }
+    if (cap <= 0) {
+        osty_rt_abort("map index capacity overflow");
+    }
+    if (cap <= OSTY_RT_MAP_INLINE_INDEX_CAP) {
+        if (map->index_slots != NULL && map->index_slots != map->index_inline) {
+            free(map->index_slots);
+        }
+        map->index_slots = map->index_inline;
+        memset(map->index_slots, 0, (size_t)cap * sizeof(int64_t));
+        map->index_cap = cap;
+    } else {
+        if (map->index_cap != cap || map->index_slots == NULL || map->index_slots == map->index_inline) {
+            if (map->index_slots != NULL && map->index_slots != map->index_inline) {
+                free(map->index_slots);
+            }
+            map->index_slots = (int64_t *)calloc((size_t)cap, sizeof(int64_t));
+            if (map->index_slots == NULL) {
+                osty_rt_abort("out of memory");
+            }
+            map->index_cap = cap;
+        } else {
+            memset(map->index_slots, 0, (size_t)map->index_cap * sizeof(int64_t));
+        }
+    }
+    map->index_len = 0;
+    for (i = 0; i < map->len; i++) {
+        osty_rt_map_index_insert_slot(map, i);
+    }
 }
 
 static void osty_rt_map_reserve(osty_rt_map *map, int64_t min_cap) {
@@ -3276,7 +4760,7 @@ static void osty_rt_map_reserve(osty_rt_map *map, int64_t min_cap) {
     map->cap = next_cap;
 }
 
-static int64_t osty_rt_map_find_index(osty_rt_map *map, const void *key) {
+static int64_t osty_rt_map_find_index_linear(osty_rt_map *map, const void *key) {
     int64_t i;
     size_t key_size = osty_rt_kind_size(map->key_kind);
     for (i = 0; i < map->len; i++) {
@@ -3285,6 +4769,40 @@ static int64_t osty_rt_map_find_index(osty_rt_map *map, const void *key) {
         }
     }
     return -1;
+}
+
+static int64_t osty_rt_map_find_index_indexed(osty_rt_map *map, const void *key) {
+    size_t key_size = osty_rt_kind_size(map->key_kind);
+    uint64_t mask = (uint64_t)(map->index_cap - 1);
+    uint64_t idx = (uint64_t)osty_rt_map_key_hash(map->key_kind, key) & mask;
+
+    for (;;) {
+        int64_t entry = map->index_slots[idx];
+        int64_t slot;
+        if (entry == 0) {
+            return -1;
+        }
+        slot = entry - 1;
+        if (slot >= 0 && slot < map->len &&
+            osty_rt_value_equals(osty_rt_map_key_slot(map, slot), key, key_size, map->key_kind)) {
+            return slot;
+        }
+        idx = (idx + 1) & mask;
+    }
+}
+
+static int64_t osty_rt_map_find_index(osty_rt_map *map, const void *key) {
+    if (map->index_cap > 0 && map->index_slots != NULL) {
+        return osty_rt_map_find_index_indexed(map, key);
+    }
+    return osty_rt_map_find_index_linear(map, key);
+}
+
+static osty_rt_map *osty_rt_map_cast(void *raw_map) {
+    if (raw_map == NULL) {
+        osty_rt_abort("map is null");
+    }
+    return (osty_rt_map *)osty_gc_load_v1(raw_map);
 }
 
 void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, osty_rt_trace_slot_fn value_trace) {
@@ -3300,20 +4818,10 @@ void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, 
     map->value_kind = value_kind;
     map->value_size = (size_t)value_size;
     map->value_trace = value_trace;
-    {
-        pthread_mutexattr_t attr;
-        if (pthread_mutexattr_init(&attr) != 0) {
-            osty_rt_abort("map lock: mutexattr_init failed");
-        }
-        if (pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE) != 0) {
-            osty_rt_abort("map lock: mutexattr_settype failed");
-        }
-        if (pthread_mutex_init(&map->mu, &attr) != 0) {
-            osty_rt_abort("map lock: mutex_init failed");
-        }
-        pthread_mutexattr_destroy(&attr);
-        map->mu_init = 1;
-    }
+    map->index_cap = 0;
+    map->index_len = 0;
+    map->index_slots = NULL;
+    osty_rt_map_mutex_init_or_abort(map);
     return map;
 }
 
@@ -3322,26 +4830,27 @@ void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, 
 // a user callback into the same map (e.g. counts.len()) re-acquire
 // instead of self-deadlocking.
 void osty_rt_map_lock(void *raw_map) {
-    osty_rt_map *map = (osty_rt_map *)raw_map;
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
     if (map == NULL || !map->mu_init) return;
-    pthread_mutex_lock(&map->mu);
+    osty_rt_rmu_lock(&map->mu);
 }
 
 void osty_rt_map_unlock(void *raw_map) {
-    osty_rt_map *map = (osty_rt_map *)raw_map;
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
     if (map == NULL || !map->mu_init) return;
-    pthread_mutex_unlock(&map->mu);
+    osty_rt_rmu_unlock(&map->mu);
 }
 
 static bool osty_rt_map_contains_raw(void *raw_map, const void *key) {
-    osty_rt_map *map = (osty_rt_map *)raw_map;
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
     return map != NULL && osty_rt_map_find_index(map, key) >= 0;
 }
 
 static void osty_rt_map_insert_raw(void *raw_map, const void *key, const void *value) {
-    osty_rt_map *map = (osty_rt_map *)raw_map;
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
     int64_t index;
     size_t key_size;
+    bool inserted = false;
     if (map == NULL || key == NULL || value == NULL) {
         osty_rt_abort("invalid map insert");
     }
@@ -3351,13 +4860,24 @@ static void osty_rt_map_insert_raw(void *raw_map, const void *key, const void *v
         osty_rt_map_reserve(map, map->len + 1);
         index = map->len;
         map->len += 1;
+        inserted = true;
     }
     memcpy(osty_rt_map_key_slot(map, index), key, key_size);
     memcpy(osty_rt_map_value_slot(map, index), value, map->value_size);
+    if (inserted) {
+        if (map->len >= 8) {
+            if (map->index_cap == 0 || map->index_slots == NULL ||
+                (map->index_len + 1) * 10 >= map->index_cap * 7) {
+                osty_rt_map_index_rebuild(map, map->len);
+            } else {
+                osty_rt_map_index_insert_slot(map, index);
+            }
+        }
+    }
 }
 
 static bool osty_rt_map_remove_raw(void *raw_map, const void *key) {
-    osty_rt_map *map = (osty_rt_map *)raw_map;
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
     int64_t index;
     size_t key_size;
     size_t value_size;
@@ -3375,11 +4895,14 @@ static bool osty_rt_map_remove_raw(void *raw_map, const void *key) {
         memmove(osty_rt_map_value_slot(map, index), osty_rt_map_value_slot(map, index + 1), (size_t)(map->len - index - 1) * value_size);
     }
     map->len -= 1;
+    if (map->index_cap != 0 || map->index_slots != NULL) {
+        osty_rt_map_index_rebuild(map, map->len);
+    }
     return true;
 }
 
 static void osty_rt_map_get_or_abort_raw(void *raw_map, const void *key, void *out_value) {
-    osty_rt_map *map = (osty_rt_map *)raw_map;
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
     int64_t index;
     if (map == NULL || key == NULL || out_value == NULL) {
         osty_rt_abort("invalid map get");
@@ -3398,7 +4921,7 @@ static void osty_rt_map_get_or_abort_raw(void *raw_map, const void *key, void *o
 // it into `??`, `match`, `.isSome()`, etc. without needing per-helper
 // special-case lowering.
 static bool osty_rt_map_get_raw(void *raw_map, const void *key, void *out_value) {
-    osty_rt_map *map = (osty_rt_map *)raw_map;
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
     int64_t index;
     if (map == NULL || key == NULL || out_value == NULL) {
         return false;
@@ -3415,7 +4938,7 @@ static bool osty_rt_map_get_raw(void *raw_map, const void *key, void *out_value)
 // into *out_value. Backs the for-(k, v)-in-m iteration path — key
 // accessors are macro-generated per K suffix below.
 void osty_rt_map_value_at(void *raw_map, int64_t index, void *out_value) {
-    osty_rt_map *map = (osty_rt_map *)raw_map;
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
     if (map == NULL || out_value == NULL) {
         osty_rt_abort("invalid map value_at");
     }
@@ -3429,7 +4952,7 @@ void osty_rt_map_value_at(void *raw_map, int64_t index, void *out_value) {
 }
 
 int64_t osty_rt_map_len(void *raw_map) {
-    osty_rt_map *map = (osty_rt_map *)raw_map;
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
     int64_t n;
     if (map == NULL) {
         osty_rt_abort("map is null");
@@ -3448,17 +4971,18 @@ int64_t osty_rt_map_len(void *raw_map) {
 // Runs under the map's recursive mutex so the zero-out is atomic with
 // respect to concurrent readers / iterators.
 void osty_rt_map_clear(void *raw_map) {
-    osty_rt_map *map = (osty_rt_map *)raw_map;
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
     if (map == NULL) {
         osty_rt_abort("map.clear on nil receiver");
     }
     osty_rt_map_lock(raw_map);
     map->len = 0;
+    osty_rt_map_index_clear(map);
     osty_rt_map_unlock(raw_map);
 }
 
 void *osty_rt_map_keys(void *raw_map) {
-    osty_rt_map *map = (osty_rt_map *)raw_map;
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
     void *out = osty_rt_list_new();
     int64_t i;
     if (map == NULL) {
@@ -3538,7 +5062,7 @@ bool osty_rt_map_get_##suffix(void *raw_map, ctype key, void *out_value) { \
     return r; \
 } \
 ctype osty_rt_map_key_at_##suffix(void *raw_map, int64_t index) { \
-    osty_rt_map *map = (osty_rt_map *)raw_map; \
+    osty_rt_map *map = osty_rt_map_cast(raw_map); \
     ctype out; \
     if (map == NULL) osty_rt_abort("map is null"); \
     osty_rt_map_lock(raw_map); \
@@ -3602,8 +5126,15 @@ void *osty_rt_set_new(int64_t elem_kind) {
     return set;
 }
 
+static osty_rt_set *osty_rt_set_cast(void *raw_set) {
+    if (raw_set == NULL) {
+        osty_rt_abort("set is null");
+    }
+    return (osty_rt_set *)osty_gc_load_v1(raw_set);
+}
+
 int64_t osty_rt_set_len(void *raw_set) {
-    osty_rt_set *set = (osty_rt_set *)raw_set;
+    osty_rt_set *set = osty_rt_set_cast(raw_set);
     if (set == NULL) {
         osty_rt_abort("set is null");
     }
@@ -3611,7 +5142,7 @@ int64_t osty_rt_set_len(void *raw_set) {
 }
 
 void *osty_rt_set_to_list(void *raw_set) {
-    osty_rt_set *set = (osty_rt_set *)raw_set;
+    osty_rt_set *set = osty_rt_set_cast(raw_set);
     void *out = osty_rt_list_new();
     int64_t i;
     if (set == NULL) {
@@ -3718,11 +5249,11 @@ void *osty_rt_list_to_set_string(void *raw_list) {
 
 #define OSTY_RT_DEFINE_SET_KEY_OPS(suffix, ctype) \
 bool osty_rt_set_contains_##suffix(void *raw_set, ctype item) { \
-    osty_rt_set *set = (osty_rt_set *)raw_set; \
+    osty_rt_set *set = osty_rt_set_cast(raw_set); \
     return set != NULL && osty_rt_set_find_index(set, &item) >= 0; \
 } \
 bool osty_rt_set_insert_##suffix(void *raw_set, ctype item) { \
-    osty_rt_set *set = (osty_rt_set *)raw_set; \
+    osty_rt_set *set = osty_rt_set_cast(raw_set); \
     size_t elem_size; \
     if (set == NULL) { osty_rt_abort("set is null"); } \
     if (osty_rt_set_find_index(set, &item) >= 0) { return false; } \
@@ -3733,7 +5264,7 @@ bool osty_rt_set_insert_##suffix(void *raw_set, ctype item) { \
     return true; \
 } \
 bool osty_rt_set_remove_##suffix(void *raw_set, ctype item) { \
-    osty_rt_set *set = (osty_rt_set *)raw_set; \
+    osty_rt_set *set = osty_rt_set_cast(raw_set); \
     int64_t index; \
     size_t elem_size; \
     if (set == NULL) { osty_rt_abort("set is null"); } \
@@ -3755,11 +5286,235 @@ OSTY_RT_DEFINE_SET_KEY_OPS(string, const char *)
 
 /*
  * Bytes primitive ABI. Values flow as `osty_rt_bytes *` — an opaque
- * pointer to a `{unsigned char *data; int64_t len}` struct. Only the
- * length / emptiness queries are wired up at the LLVM layer right now;
- * construction (literals, string.bytes(), etc.) is not yet surfaced,
- * but the ABI is fixed so future call sites can link against it.
+ * pointer to a `{unsigned char *data; int64_t len}` struct. Length /
+ * emptiness queries, concatenation, indexed loads, and UTF-8
+ * String-conversion helpers are wired up at the LLVM layer.
+ * String.toBytes() constructs the value through the strings runtime
+ * family, and Bytes.from(List<Byte>) copies the list payload into the
+ * same owned layout.
  */
+static bool osty_rt_bytes_validate_utf8_data(const unsigned char *data, size_t len) {
+    size_t i = 0;
+
+    while (i < len) {
+        unsigned char b1 = data[i];
+        int continuations = 0;
+        unsigned char min2 = 0x80;
+        unsigned char max2 = 0xBF;
+
+        /* Osty Strings are NUL-terminated C strings, so embedded NUL
+         * bytes would truncate the value if we accepted them here. */
+        if (b1 == 0) {
+            return false;
+        }
+        if (b1 < 0x80) {
+            i++;
+            continue;
+        }
+
+        if (b1 >= 0xC2 && b1 <= 0xDF) {
+            continuations = 1;
+        } else if (b1 == 0xE0) {
+            continuations = 2;
+            min2 = 0xA0;
+        } else if ((b1 >= 0xE1 && b1 <= 0xEC) || b1 == 0xEE || b1 == 0xEF) {
+            continuations = 2;
+        } else if (b1 == 0xED) {
+            continuations = 2;
+            max2 = 0x9F;
+        } else if (b1 == 0xF0) {
+            continuations = 3;
+            min2 = 0x90;
+        } else if (b1 >= 0xF1 && b1 <= 0xF3) {
+            continuations = 3;
+        } else if (b1 == 0xF4) {
+            continuations = 3;
+            max2 = 0x8F;
+        } else {
+            return false;
+        }
+
+        if ((size_t)continuations > len - i - 1) {
+            return false;
+        }
+        for (int j = 0; j < continuations; j++) {
+            unsigned char bn = data[i + 1 + (size_t)j];
+            unsigned char lo = (j == 0) ? min2 : 0x80;
+            unsigned char hi = (j == 0) ? max2 : 0xBF;
+            if (bn < lo || bn > hi) {
+                return false;
+            }
+        }
+        i += (size_t)(continuations + 1);
+    }
+
+    return true;
+}
+
+void *osty_rt_bytes_from_list(void *raw_list) {
+    osty_rt_list *list = (osty_rt_list *)raw_list;
+    size_t len;
+    size_t total;
+    osty_rt_bytes *out;
+    unsigned char *data;
+
+    if (list == NULL || list->len <= 0) {
+        len = 0;
+    } else {
+        if (list->len < 0) {
+            osty_rt_abort("runtime.bytes.from_list: negative length");
+        }
+        if (list->elem_size != 0 && list->elem_size != sizeof(uint8_t)) {
+            osty_rt_abort("runtime.bytes.from_list: list element size is not Byte");
+        }
+        len = (size_t)list->len;
+    }
+    if (len > SIZE_MAX - sizeof(osty_rt_bytes)) {
+        osty_rt_abort("runtime.bytes.from_list: size overflow");
+    }
+    total = sizeof(osty_rt_bytes) + len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, "runtime.bytes.from_list", NULL, NULL);
+    data = (unsigned char *)(out + 1);
+    out->data = data;
+    out->len = (int64_t)len;
+    if (len != 0) {
+        if (list->data == NULL) {
+            osty_rt_abort("runtime.bytes.from_list: missing list storage");
+        }
+        memcpy(data, list->data, len);
+    }
+    return out;
+}
+
+void *osty_rt_bytes_concat(void *raw_left, void *raw_right) {
+    osty_rt_bytes *left = (osty_rt_bytes *)raw_left;
+    osty_rt_bytes *right = (osty_rt_bytes *)raw_right;
+    size_t left_len = 0;
+    size_t right_len = 0;
+    size_t total_len;
+    size_t total;
+    osty_rt_bytes *out;
+    unsigned char *data;
+
+    if (left != NULL) {
+        if (left->len < 0) {
+            osty_rt_abort("runtime.bytes.concat: negative left length");
+        }
+        left_len = (size_t)left->len;
+    }
+    if (right != NULL) {
+        if (right->len < 0) {
+            osty_rt_abort("runtime.bytes.concat: negative right length");
+        }
+        right_len = (size_t)right->len;
+    }
+    if (left_len > SIZE_MAX - right_len || left_len + right_len > SIZE_MAX - sizeof(osty_rt_bytes)) {
+        osty_rt_abort("runtime.bytes.concat: size overflow");
+    }
+    total_len = left_len + right_len;
+    total = sizeof(osty_rt_bytes) + total_len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, "runtime.bytes.concat", NULL, NULL);
+    data = (unsigned char *)(out + 1);
+    out->data = data;
+    out->len = (int64_t)total_len;
+    if (left_len != 0) {
+        if (left->data == NULL) {
+            osty_rt_abort("runtime.bytes.concat: missing left storage");
+        }
+        memcpy(data, left->data, left_len);
+    }
+    if (right_len != 0) {
+        if (right->data == NULL) {
+            osty_rt_abort("runtime.bytes.concat: missing right storage");
+        }
+        memcpy(data + left_len, right->data, right_len);
+    }
+    return out;
+}
+
+void *osty_rt_bytes_repeat(void *raw_bytes, int64_t n) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    size_t value_len = 0;
+    size_t total_len;
+    size_t total;
+    osty_rt_bytes *out;
+    unsigned char *data;
+    unsigned char *cursor;
+    int64_t i;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.repeat: negative length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (n <= 0 || value_len == 0) {
+        total_len = 0;
+    } else {
+        if (b->data == NULL) {
+            osty_rt_abort("runtime.bytes.repeat: missing storage");
+        }
+        if ((uint64_t)n > (uint64_t)(SIZE_MAX - sizeof(osty_rt_bytes)) / (uint64_t)value_len) {
+            osty_rt_abort("runtime.bytes.repeat: size overflow");
+        }
+        total_len = value_len * (size_t)n;
+    }
+
+    total = sizeof(osty_rt_bytes) + total_len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, "runtime.bytes.repeat", NULL, NULL);
+    data = (unsigned char *)(out + 1);
+    out->data = data;
+    out->len = (int64_t)total_len;
+    if (total_len == 0) {
+        return out;
+    }
+    cursor = data;
+    for (i = 0; i < n; i++) {
+        memcpy(cursor, b->data, value_len);
+        cursor += value_len;
+    }
+    return out;
+}
+
+int64_t osty_rt_bytes_index_of(void *raw_bytes, void *raw_sub) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    osty_rt_bytes *sub = (osty_rt_bytes *)raw_sub;
+    size_t value_len = 0;
+    size_t sub_len = 0;
+    size_t i;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.index_of: negative value length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (sub != NULL) {
+        if (sub->len < 0) {
+            osty_rt_abort("runtime.bytes.index_of: negative sub length");
+        }
+        sub_len = (size_t)sub->len;
+    }
+    if (sub_len == 0) {
+        return 0;
+    }
+    if (sub_len > value_len) {
+        return -1;
+    }
+    if (b->data == NULL) {
+        osty_rt_abort("runtime.bytes.index_of: missing value storage");
+    }
+    if (sub->data == NULL) {
+        osty_rt_abort("runtime.bytes.index_of: missing sub storage");
+    }
+    for (i = 0; i + sub_len <= value_len; i++) {
+        if (memcmp(b->data + i, sub->data, sub_len) == 0) {
+            return (int64_t)i;
+        }
+    }
+    return -1;
+}
+
 int64_t osty_rt_bytes_len(void *raw_bytes) {
     osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
     if (b == NULL) {
@@ -3776,12 +5531,75 @@ bool osty_rt_bytes_is_empty(void *raw_bytes) {
     return b->len == 0;
 }
 
+bool osty_rt_bytes_is_valid_utf8(void *raw_bytes) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    size_t len = 0;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.is_valid_utf8: negative length");
+        }
+        len = (size_t)b->len;
+    }
+    if (len == 0) {
+        return true;
+    }
+    if (b->data == NULL) {
+        osty_rt_abort("runtime.bytes.is_valid_utf8: missing storage");
+    }
+    return osty_rt_bytes_validate_utf8_data(b->data, len);
+}
+
+const char *osty_rt_bytes_to_string(void *raw_bytes) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    size_t len = 0;
+    char *out;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.to_string: negative length");
+        }
+        len = (size_t)b->len;
+    }
+    if (len == 0) {
+        out = (char *)osty_gc_allocate_managed(1, OSTY_GC_KIND_STRING, "runtime.bytes.to_string.empty", NULL, NULL);
+        out[0] = '\0';
+        return out;
+    }
+    if (b->data == NULL) {
+        osty_rt_abort("runtime.bytes.to_string: missing storage");
+    }
+    if (!osty_rt_bytes_validate_utf8_data(b->data, len)) {
+        osty_rt_abort("runtime.bytes.to_string: invalid UTF-8");
+    }
+    if (len == SIZE_MAX) {
+        osty_rt_abort("runtime.bytes.to_string: size overflow");
+    }
+    out = (char *)osty_gc_allocate_managed(len + 1, OSTY_GC_KIND_STRING, "runtime.bytes.to_string", NULL, NULL);
+    memcpy(out, b->data, len);
+    out[len] = '\0';
+    return out;
+}
+
+uint8_t osty_rt_bytes_get(void *raw_bytes, int64_t index) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    if (b == NULL) {
+        osty_rt_abort("runtime.bytes.get: nil bytes");
+    }
+    if (index < 0 || index >= b->len) {
+        osty_rt_abort("runtime.bytes.get: index out of range");
+    }
+    return b->data[index];
+}
+
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
 void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
 void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
 void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
 void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
 void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+void osty_gc_pin_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.pin_v1"));
+void osty_gc_unpin_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.unpin_v1"));
 void osty_gc_global_root_register_v1(void *slot) __asm__(OSTY_GC_SYMBOL("osty.gc.global_root_register_v1"));
 void osty_gc_global_root_unregister_v1(void *slot) __asm__(OSTY_GC_SYMBOL("osty.gc.global_root_unregister_v1"));
 void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) __asm__(OSTY_GC_SYMBOL("osty.gc.safepoint_v1"));
@@ -3931,12 +5749,13 @@ void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) {
         osty_gc_release();
         return;
     }
-    old_header = osty_gc_find_header(old_value);
+    old_header = osty_gc_find_header_or_forwarded(old_value);
     if (old_header == NULL) {
         osty_gc_release();
         return;
     }
     osty_gc_pre_write_managed_count += 1;
+    old_value = old_header->payload;
     osty_gc_satb_log_append(old_value);
     /* Phase C (RUNTIME_GC_DELTA §2.7, §4.3): SATB consumption. While
      * the incremental collector is in MARK_INCREMENTAL the mutator can
@@ -3954,8 +5773,8 @@ void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) {
         osty_gc_mark_stack_push(old_header);
         osty_gc_satb_barrier_greyed_total += 1;
     }
-    owner_header = osty_gc_find_header(owner);
-    if (owner_header != NULL && owner_header->root_count > 0) {
+    owner_header = osty_gc_find_header_or_forwarded(owner);
+    if (owner_header != NULL && osty_gc_header_is_pinned(owner_header)) {
         osty_gc_collection_requested = true;
     }
     osty_gc_release();
@@ -3971,44 +5790,56 @@ void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) {
         osty_gc_release();
         return;
     }
-    owner_header = osty_gc_find_header(owner);
+    owner_header = osty_gc_find_header_or_forwarded(owner);
     if (owner_header == NULL) {
         osty_gc_release();
         return;
     }
+    value = osty_gc_forward_payload(value);
     if (osty_gc_find_header(value) == NULL) {
         osty_gc_release();
         return;
     }
     osty_gc_post_write_managed_count += 1;
-    osty_gc_remembered_edges_append(owner, value);
-    if (owner_header->root_count > 0) {
+    osty_gc_remembered_edges_append(owner_header->payload, value);
+    if (osty_gc_header_is_pinned(owner_header)) {
         osty_gc_collection_requested = true;
     }
     osty_gc_release();
 }
 
 void *osty_gc_load_v1(void *value) {
+    void *out = value;
     osty_gc_acquire();
     osty_gc_load_count += 1;
     if (osty_gc_find_header(value) != NULL) {
         osty_gc_load_managed_count += 1;
+    } else {
+        out = osty_gc_forward_payload(value);
+        if (out != value) {
+            osty_gc_load_managed_count += 1;
+            osty_gc_load_forwarded_count += 1;
+        }
     }
     osty_gc_release();
-    return value;
+    return out;
 }
 
 void osty_gc_mark_slot_v1(void *slot_addr) {
     /* Only reachable inside `osty_gc_collect_now_with_stack_roots`,
      * which runs under `osty_gc_lock` (see safepoint / debug collect).
      * No additional lock required. */
+    if (osty_gc_trace_slot_mode_current == OSTY_GC_TRACE_SLOT_MODE_REMAP) {
+        osty_gc_remap_slot(slot_addr);
+        return;
+    }
     osty_gc_mark_root_slot(slot_addr);
 }
 
 void osty_gc_root_bind_v1(void *root) {
     osty_gc_header *header;
     osty_gc_acquire();
-    header = osty_gc_find_header(root);
+    header = osty_gc_find_header_or_forwarded(root);
     if (header == NULL) {
         osty_gc_release();
         return;
@@ -4024,7 +5855,7 @@ void osty_gc_root_bind_v1(void *root) {
 void osty_gc_root_release_v1(void *root) {
     osty_gc_header *header;
     osty_gc_acquire();
-    header = osty_gc_find_header(root);
+    header = osty_gc_find_header_or_forwarded(root);
     if (header == NULL) {
         osty_gc_release();
         return;
@@ -4034,6 +5865,40 @@ void osty_gc_root_release_v1(void *root) {
         osty_rt_abort("GC root release underflow");
     }
     header->root_count -= 1;
+    osty_gc_release();
+}
+
+void osty_gc_pin_v1(void *root) {
+    osty_gc_header *header;
+    osty_gc_acquire();
+    header = osty_gc_find_header_or_forwarded(root);
+    if (header == NULL) {
+        osty_gc_release();
+        return;
+    }
+    if (header->pin_count == INT64_MAX) {
+        osty_gc_release();
+        osty_rt_abort("GC pin count overflow");
+    }
+    header->pin_count += 1;
+    osty_gc_note_pin_acquire(header);
+    osty_gc_release();
+}
+
+void osty_gc_unpin_v1(void *root) {
+    osty_gc_header *header;
+    osty_gc_acquire();
+    header = osty_gc_find_header_or_forwarded(root);
+    if (header == NULL) {
+        osty_gc_release();
+        return;
+    }
+    if (header->pin_count <= 0) {
+        osty_gc_release();
+        osty_rt_abort("GC pin release underflow");
+    }
+    header->pin_count -= 1;
+    osty_gc_note_pin_release(header);
     osty_gc_release();
 }
 
@@ -4258,7 +6123,7 @@ int64_t osty_gc_debug_promote_age(void) {
  * on promotion semantics directly. Returns -1 if the payload is not
  * managed. */
 int64_t osty_gc_debug_generation_of(void *payload) {
-    osty_gc_header *header = osty_gc_find_header(payload);
+    osty_gc_header *header = osty_gc_find_header_or_forwarded(payload);
     if (header == NULL) {
         return -1;
     }
@@ -4266,7 +6131,7 @@ int64_t osty_gc_debug_generation_of(void *payload) {
 }
 
 int64_t osty_gc_debug_age_of(void *payload) {
-    osty_gc_header *header = osty_gc_find_header(payload);
+    osty_gc_header *header = osty_gc_find_header_or_forwarded(payload);
     if (header == NULL) {
         return -1;
     }
@@ -4309,6 +6174,42 @@ int64_t osty_gc_debug_load_managed_count(void) {
     return osty_gc_load_managed_count;
 }
 
+int64_t osty_gc_debug_load_forwarded_count(void) {
+    return osty_gc_load_forwarded_count;
+}
+
+int64_t osty_gc_debug_forwarding_count(void) {
+    return osty_gc_forwarding_count;
+}
+
+int64_t osty_gc_debug_pinned_count(void) {
+    return osty_gc_pinned_count;
+}
+
+int64_t osty_gc_debug_pinned_bytes(void) {
+    return osty_gc_pinned_bytes;
+}
+
+int64_t osty_gc_debug_pin_count_of(void *payload) {
+    osty_gc_header *header = osty_gc_find_header_or_forwarded(payload);
+    if (header == NULL) {
+        return -1;
+    }
+    return header->pin_count;
+}
+
+int64_t osty_gc_debug_compaction_count_total(void) {
+    return osty_gc_compaction_count_total;
+}
+
+int64_t osty_gc_debug_forwarded_objects_last(void) {
+    return osty_gc_forwarded_objects_last;
+}
+
+int64_t osty_gc_debug_forwarded_bytes_last(void) {
+    return osty_gc_forwarded_bytes_last;
+}
+
 int64_t osty_gc_debug_global_root_count(void) {
     return osty_gc_global_root_count;
 }
@@ -4347,6 +6248,90 @@ int64_t osty_gc_debug_swept_count_total(void) {
 
 int64_t osty_gc_debug_swept_bytes_total(void) {
     return osty_gc_swept_bytes_total;
+}
+
+int64_t osty_gc_debug_free_list_count(void) {
+    return osty_gc_free_list_count;
+}
+
+int64_t osty_gc_debug_free_list_bytes(void) {
+    return osty_gc_free_list_bytes;
+}
+
+int64_t osty_gc_debug_free_list_reused_count_total(void) {
+    return osty_gc_free_list_reused_count_total;
+}
+
+int64_t osty_gc_debug_free_list_reused_bytes_total(void) {
+    return osty_gc_free_list_reused_bytes_total;
+}
+
+int64_t osty_gc_debug_bump_block_bytes(void) {
+    return OSTY_GC_BUMP_BLOCK_BYTES;
+}
+
+int64_t osty_gc_debug_bump_block_count(void) {
+    return osty_gc_bump_block_count;
+}
+
+int64_t osty_gc_debug_bump_block_bytes_total(void) {
+    return osty_gc_bump_block_bytes_total;
+}
+
+int64_t osty_gc_debug_bump_alloc_count_total(void) {
+    return osty_gc_bump_alloc_count_total;
+}
+
+int64_t osty_gc_debug_bump_alloc_bytes_total(void) {
+    return osty_gc_bump_alloc_bytes_total;
+}
+
+int64_t osty_gc_debug_tlab_refill_count_total(void) {
+    return osty_gc_tlab_refill_count_total;
+}
+
+int64_t osty_gc_debug_old_bump_block_count(void) {
+    return osty_gc_old_bump_block_count;
+}
+
+int64_t osty_gc_debug_old_bump_block_bytes_total(void) {
+    return osty_gc_old_bump_block_bytes_total;
+}
+
+int64_t osty_gc_debug_old_bump_alloc_count_total(void) {
+    return osty_gc_old_bump_alloc_count_total;
+}
+
+int64_t osty_gc_debug_old_bump_alloc_bytes_total(void) {
+    return osty_gc_old_bump_alloc_bytes_total;
+}
+
+int64_t osty_gc_debug_old_bump_recycled_block_count_total(void) {
+    return osty_gc_old_bump_recycled_block_count_total;
+}
+
+int64_t osty_gc_debug_old_bump_recycled_bytes_total(void) {
+    return osty_gc_old_bump_recycled_bytes_total;
+}
+
+int64_t osty_gc_debug_humongous_threshold_bytes(void) {
+    return OSTY_GC_HUMONGOUS_THRESHOLD_BYTES;
+}
+
+int64_t osty_gc_debug_humongous_alloc_count_total(void) {
+    return osty_gc_humongous_alloc_count_total;
+}
+
+int64_t osty_gc_debug_humongous_alloc_bytes_total(void) {
+    return osty_gc_humongous_alloc_bytes_total;
+}
+
+int64_t osty_gc_debug_humongous_swept_count_total(void) {
+    return osty_gc_humongous_swept_count_total;
+}
+
+int64_t osty_gc_debug_humongous_swept_bytes_total(void) {
+    return osty_gc_humongous_swept_bytes_total;
 }
 
 int64_t osty_gc_debug_allocated_since_collect(void) {
@@ -4398,6 +6383,39 @@ int64_t osty_gc_debug_index_tombstones(void) {
 
 int64_t osty_gc_debug_index_find_ops(void) {
     return osty_gc_index_find_ops_total;
+}
+
+/* Phase D observability. `stable_id` is the logical object identity
+ * preserved across relocation; the forwarding table and pin counters
+ * let tests assert that major collection actually evacuated movable
+ * objects and skipped explicitly pinned ones. */
+int64_t osty_gc_debug_stable_id(void *payload) {
+    osty_gc_header *header;
+    int64_t out = 0;
+
+    osty_gc_acquire();
+    header = osty_gc_find_header_or_forwarded(payload);
+    if (header != NULL && header->stable_id <= INT64_MAX) {
+        out = (int64_t)header->stable_id;
+    }
+    osty_gc_release();
+    return out;
+}
+
+void *osty_gc_debug_payload_for_stable_id(int64_t stable_id) {
+    osty_gc_header *header;
+    void *payload = NULL;
+
+    if (stable_id <= 0) {
+        return NULL;
+    }
+    osty_gc_acquire();
+    header = osty_gc_identity_lookup((uint64_t)stable_id);
+    if (header != NULL) {
+        payload = header->payload;
+    }
+    osty_gc_release();
+    return payload;
 }
 
 /* Phase A5 per-kind safepoint counters. `kind` values map to the
@@ -4686,6 +6704,20 @@ void osty_gc_debug_unsafe_nonwhite_at_rest(void) {
     }
 }
 
+/* Phase D groundwork — stable identity invariants. */
+
+void osty_gc_debug_unsafe_zero_stable_id(void) {
+    if (osty_gc_objects != NULL) {
+        osty_gc_objects->stable_id = 0;
+    }
+}
+
+void osty_gc_debug_unsafe_remove_identity_index_live(void) {
+    if (osty_gc_objects != NULL) {
+        osty_gc_identity_remove(osty_gc_objects->stable_id);
+    }
+}
+
 void osty_gc_debug_stats_dump(FILE *out) {
     osty_gc_stats s;
     if (out == NULL) {
@@ -4783,6 +6815,9 @@ enum {
     OSTY_GC_VALIDATE_INVALID_COLOR = -17,
     OSTY_GC_VALIDATE_COLOR_MARKED_MISMATCH = -18,
     OSTY_GC_VALIDATE_NONWHITE_OUTSIDE_MARK = -19,
+    /* Phase D groundwork — stable identity table coherence. */
+    OSTY_GC_VALIDATE_INVALID_STABLE_ID = -20,
+    OSTY_GC_VALIDATE_IDENTITY_INDEX_MISMATCH = -21,
 };
 
 int64_t osty_gc_debug_validate_heap(void) {
@@ -4814,6 +6849,15 @@ int64_t osty_gc_debug_validate_heap(void) {
         }
         if (header->root_count < 0) {
             status = OSTY_GC_VALIDATE_NEGATIVE_ROOT_COUNT;
+            goto done;
+        }
+        if (header->stable_id == 0 ||
+            header->stable_id == OSTY_GC_IDENTITY_TOMBSTONE) {
+            status = OSTY_GC_VALIDATE_INVALID_STABLE_ID;
+            goto done;
+        }
+        if (osty_gc_identity_lookup(header->stable_id) != header) {
+            status = OSTY_GC_VALIDATE_IDENTITY_INDEX_MISMATCH;
             goto done;
         }
         /* Phase C tri-colour coherence. Ordered so the legacy Phase A1
@@ -4870,6 +6914,10 @@ int64_t osty_gc_debug_validate_heap(void) {
     }
     if (walked_bytes != osty_gc_live_bytes) {
         status = OSTY_GC_VALIDATE_LIVE_BYTES_MISMATCH;
+        goto done;
+    }
+    if (osty_gc_identity_count != osty_gc_live_count) {
+        status = OSTY_GC_VALIDATE_IDENTITY_INDEX_MISMATCH;
         goto done;
     }
     if (walked_young_count != osty_gc_young_count ||
@@ -4945,6 +6993,25 @@ int64_t osty_gc_debug_validate_heap(void) {
         osty_gc_major_count < 0 ||
         osty_gc_promoted_count_total < 0 ||
         osty_gc_promoted_bytes_total < 0 ||
+        osty_gc_free_list_count < 0 ||
+        osty_gc_free_list_bytes < 0 ||
+        osty_gc_free_list_reused_count_total < 0 ||
+        osty_gc_free_list_reused_bytes_total < 0 ||
+        osty_gc_bump_block_count < 0 ||
+        osty_gc_bump_block_bytes_total < 0 ||
+        osty_gc_bump_alloc_count_total < 0 ||
+        osty_gc_bump_alloc_bytes_total < 0 ||
+        osty_gc_tlab_refill_count_total < 0 ||
+        osty_gc_old_bump_block_count < 0 ||
+        osty_gc_old_bump_block_bytes_total < 0 ||
+        osty_gc_old_bump_alloc_count_total < 0 ||
+        osty_gc_old_bump_alloc_bytes_total < 0 ||
+        osty_gc_old_bump_recycled_block_count_total < 0 ||
+        osty_gc_old_bump_recycled_bytes_total < 0 ||
+        osty_gc_humongous_alloc_count_total < 0 ||
+        osty_gc_humongous_alloc_bytes_total < 0 ||
+        osty_gc_humongous_swept_count_total < 0 ||
+        osty_gc_humongous_swept_bytes_total < 0 ||
         osty_gc_young_count < 0 ||
         osty_gc_young_bytes < 0 ||
         osty_gc_old_count < 0 ||
@@ -5722,7 +7789,13 @@ int64_t osty_rt_task_handle_join(void *handle) {
     if (handle == NULL) {
         osty_rt_abort("task_handle_join: null handle");
     }
-    osty_rt_task_handle_impl *h = (osty_rt_task_handle_impl *)handle;
+    /* Handles are GC-managed; `osty_gc_load_v1` is the read barrier
+     * that mirrors the handle's tracing obligations (Phase 2 pool
+     * uses the barrier for the same reason the earlier pthread path
+     * did — the forwarding address is valid for the scope of this
+     * call, not the raw pointer stored on the caller's stack). */
+    osty_rt_task_handle_impl *h =
+        (osty_rt_task_handle_impl *)osty_gc_load_v1(handle);
     osty_rt_task_handle_wait(h);
     return h->result;
 }
@@ -5772,22 +7845,59 @@ void osty_rt_thread_sleep(int64_t nanos) {
  * the slot layout is uniform.
  */
 
-typedef struct osty_rt_chan_impl {
-    osty_rt_mu_t mu;
-    osty_rt_cond_t not_full;
-    osty_rt_cond_t not_empty;
-    int64_t cap;
-    int64_t head;
-    int64_t tail;
-    int64_t count;
-    int closed;
-    int64_t *slots;
-} osty_rt_chan_impl;
-
 typedef struct osty_rt_chan_recv_result {
     int64_t value;
     int64_t ok;
 } osty_rt_chan_recv_result;
+
+static void osty_rt_chan_sync_init_or_abort(osty_rt_chan_impl *ch,
+                                            const char *op) {
+    if (ch == NULL) {
+        osty_rt_abort("thread.chan: null channel");
+    }
+    if (osty_rt_mu_init(&ch->mu) != 0 ||
+        osty_rt_cond_init(&ch->not_full) != 0 ||
+        osty_rt_cond_init(&ch->not_empty) != 0) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "%s: sync init failed", op);
+        osty_rt_abort(buf);
+    }
+    ch->sync_init = 1;
+}
+
+static void osty_rt_chan_ensure_elem_kind(osty_rt_chan_impl *ch,
+                                          int64_t elem_kind,
+                                          const char *op) {
+    if (ch == NULL) {
+        osty_rt_abort("thread.chan: null channel");
+    }
+    if (ch->elem_kind == 0) {
+        ch->elem_kind = elem_kind;
+        return;
+    }
+    if (ch->elem_kind != elem_kind) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "%s: element kind mismatch", op);
+        osty_rt_abort(buf);
+    }
+}
+
+static void osty_rt_chan_trace(void *payload) {
+    osty_rt_chan_impl *ch = (osty_rt_chan_impl *)payload;
+    int64_t i;
+
+    if (ch == NULL || ch->slots == NULL ||
+        !osty_gc_chan_elem_kind_is_managed(ch->elem_kind)) {
+        return;
+    }
+    for (i = 0; i < ch->count; i++) {
+        int64_t idx = (ch->head + i) % ch->cap;
+        void *child = (void *)(uintptr_t)ch->slots[idx];
+        if (child != NULL) {
+            osty_gc_mark_payload(child);
+        }
+    }
+}
 
 static osty_rt_chan_impl *osty_rt_chan_cast(void *ch, const char *op) {
     if (ch == NULL) {
@@ -5795,7 +7905,7 @@ static osty_rt_chan_impl *osty_rt_chan_cast(void *ch, const char *op) {
         snprintf(buf, sizeof(buf), "%s: null channel", op);
         osty_rt_abort(buf);
     }
-    return (osty_rt_chan_impl *)ch;
+    return (osty_rt_chan_impl *)osty_gc_load_v1(ch);
 }
 
 static void osty_rt_chan_destroy(void *payload) {
@@ -5806,9 +7916,12 @@ static void osty_rt_chan_destroy(void *payload) {
     if (ch == NULL) {
         return;
     }
-    osty_rt_mu_destroy(&ch->mu);
-    osty_rt_cond_destroy(&ch->not_full);
-    osty_rt_cond_destroy(&ch->not_empty);
+    if (ch->sync_init) {
+        osty_rt_mu_destroy(&ch->mu);
+        osty_rt_cond_destroy(&ch->not_full);
+        osty_rt_cond_destroy(&ch->not_empty);
+        ch->sync_init = 0;
+    }
     free(ch->slots);
     ch->slots = NULL;
 }
@@ -5827,20 +7940,14 @@ void *osty_rt_thread_chan_make(int64_t capacity) {
      * The `slots` buffer and the pthread sync objects are owned by
      * the channel and freed by osty_rt_chan_destroy on sweep. */
     osty_rt_chan_impl *ch = (osty_rt_chan_impl *)osty_gc_allocate_managed(
-        sizeof(osty_rt_chan_impl), OSTY_GC_KIND_GENERIC,
-        "runtime.thread.chan", NULL, osty_rt_chan_destroy);
+        sizeof(osty_rt_chan_impl), OSTY_GC_KIND_CHANNEL,
+        "runtime.thread.chan", osty_rt_chan_trace, osty_rt_chan_destroy);
     ch->slots = (int64_t *)calloc((size_t)capacity, sizeof(int64_t));
     if (ch->slots == NULL) {
         osty_rt_abort("thread.chan.make: out of memory");
     }
     ch->cap = capacity;
-    if (osty_rt_mu_init(&ch->mu) != 0 ||
-        osty_rt_cond_init(&ch->not_full) != 0 ||
-        osty_rt_cond_init(&ch->not_empty) != 0) {
-        free(ch->slots);
-        ch->slots = NULL;
-        osty_rt_abort("thread.chan.make: sync init failed");
-    }
+    osty_rt_chan_sync_init_or_abort(ch, "thread.chan.make");
     return ch;
 }
 
@@ -5911,26 +8018,33 @@ static osty_rt_chan_recv_result osty_rt_chan_recv_raw(osty_rt_chan_impl *ch) {
 }
 
 void osty_rt_thread_chan_send_i64(void *raw, int64_t value) {
-    osty_rt_chan_send_raw(osty_rt_chan_cast(raw, "thread.chan.send"), value);
+    osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.send");
+    osty_rt_chan_ensure_elem_kind(ch, OSTY_RT_ABI_I64, "thread.chan.send");
+    osty_rt_chan_send_raw(ch, value);
 }
 
 void osty_rt_thread_chan_send_i1(void *raw, bool value) {
-    osty_rt_chan_send_raw(osty_rt_chan_cast(raw, "thread.chan.send"),
-                          (int64_t)(value ? 1 : 0));
+    osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.send");
+    osty_rt_chan_ensure_elem_kind(ch, OSTY_RT_ABI_I1, "thread.chan.send");
+    osty_rt_chan_send_raw(ch, (int64_t)(value ? 1 : 0));
 }
 
 void osty_rt_thread_chan_send_f64(void *raw, double value) {
     int64_t bits = 0;
+    osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.send");
     memcpy(&bits, &value, sizeof(bits));
-    osty_rt_chan_send_raw(osty_rt_chan_cast(raw, "thread.chan.send"), bits);
+    osty_rt_chan_ensure_elem_kind(ch, OSTY_RT_ABI_F64, "thread.chan.send");
+    osty_rt_chan_send_raw(ch, bits);
 }
 
 void osty_rt_thread_chan_send_ptr(void *raw, void *value) {
-    osty_rt_chan_send_raw(osty_rt_chan_cast(raw, "thread.chan.send"),
-                          (int64_t)(uintptr_t)value);
+    osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.send");
+    osty_rt_chan_ensure_elem_kind(ch, OSTY_RT_ABI_PTR, "thread.chan.send");
+    osty_rt_chan_send_raw(ch, (int64_t)(uintptr_t)value);
 }
 
 void osty_rt_thread_chan_send_bytes_v1(void *raw, const void *src, int64_t sz) {
+    osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.send");
     if (sz < 0) {
         osty_rt_abort("thread.chan.send: negative byte size");
     }
@@ -5942,17 +8056,20 @@ void osty_rt_thread_chan_send_bytes_v1(void *raw, const void *src, int64_t sz) {
     if (sz > 0 && src != NULL) {
         memcpy(copy, src, (size_t)sz);
     }
-    osty_rt_chan_send_raw(osty_rt_chan_cast(raw, "thread.chan.send"),
-                          (int64_t)(uintptr_t)copy);
+    osty_rt_chan_ensure_elem_kind(ch, OSTY_RT_ABI_PTR, "thread.chan.send");
+    osty_rt_chan_send_raw(ch, (int64_t)(uintptr_t)copy);
 }
 
 osty_rt_chan_recv_result osty_rt_thread_chan_recv_i64(void *raw) {
-    return osty_rt_chan_recv_raw(osty_rt_chan_cast(raw, "thread.chan.recv"));
+    osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.recv");
+    osty_rt_chan_ensure_elem_kind(ch, OSTY_RT_ABI_I64, "thread.chan.recv");
+    return osty_rt_chan_recv_raw(ch);
 }
 
 osty_rt_chan_recv_result osty_rt_thread_chan_recv_i1(void *raw) {
-    osty_rt_chan_recv_result r = osty_rt_chan_recv_raw(
-        osty_rt_chan_cast(raw, "thread.chan.recv"));
+    osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.recv");
+    osty_rt_chan_ensure_elem_kind(ch, OSTY_RT_ABI_I1, "thread.chan.recv");
+    osty_rt_chan_recv_result r = osty_rt_chan_recv_raw(ch);
     if (r.ok) {
         r.value = r.value != 0 ? 1 : 0;
     }
@@ -5960,15 +8077,31 @@ osty_rt_chan_recv_result osty_rt_thread_chan_recv_i1(void *raw) {
 }
 
 osty_rt_chan_recv_result osty_rt_thread_chan_recv_f64(void *raw) {
-    return osty_rt_chan_recv_raw(osty_rt_chan_cast(raw, "thread.chan.recv"));
+    osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.recv");
+    osty_rt_chan_ensure_elem_kind(ch, OSTY_RT_ABI_F64, "thread.chan.recv");
+    return osty_rt_chan_recv_raw(ch);
 }
 
 osty_rt_chan_recv_result osty_rt_thread_chan_recv_ptr(void *raw) {
-    return osty_rt_chan_recv_raw(osty_rt_chan_cast(raw, "thread.chan.recv"));
+    osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.recv");
+    osty_rt_chan_recv_result r;
+    osty_rt_chan_ensure_elem_kind(ch, OSTY_RT_ABI_PTR, "thread.chan.recv");
+    r = osty_rt_chan_recv_raw(ch);
+    if (r.ok) {
+        r.value = (int64_t)(uintptr_t)osty_gc_load_v1((void *)(uintptr_t)r.value);
+    }
+    return r;
 }
 
 osty_rt_chan_recv_result osty_rt_thread_chan_recv_bytes_v1(void *raw) {
-    return osty_rt_chan_recv_raw(osty_rt_chan_cast(raw, "thread.chan.recv"));
+    osty_rt_chan_impl *ch = osty_rt_chan_cast(raw, "thread.chan.recv");
+    osty_rt_chan_recv_result r;
+    osty_rt_chan_ensure_elem_kind(ch, OSTY_RT_ABI_PTR, "thread.chan.recv");
+    r = osty_rt_chan_recv_raw(ch);
+    if (r.ok) {
+        r.value = (int64_t)(uintptr_t)osty_gc_load_v1((void *)(uintptr_t)r.value);
+    }
+    return r;
 }
 
 /* ---- Select: polling builder with recv / send / timeout / default arms.
@@ -6066,30 +8199,35 @@ void osty_rt_select_recv(void *s, void *ch, void *arm) {
 }
 
 static void osty_rt_select_send_common(void *s, void *ch, int64_t value,
-                                       void *arm) {
+                                       int64_t elem_kind, void *arm) {
     osty_rt_select_impl *sel = osty_rt_select_cast(s, "thread.select.send");
+    osty_rt_chan_impl *chan;
     if (ch == NULL) {
         osty_rt_abort("thread.select.send: null channel");
     }
+    chan = osty_rt_chan_cast(ch, "thread.select.send");
+    osty_rt_chan_ensure_elem_kind(chan, elem_kind, "thread.select.send");
     osty_rt_select_arm_push(sel, OSTY_RT_SELECT_ARM_SEND, ch, 0, value, arm);
 }
 
 void osty_rt_select_send_i64(void *s, void *ch, int64_t value, void *arm) {
-    osty_rt_select_send_common(s, ch, value, arm);
+    osty_rt_select_send_common(s, ch, value, OSTY_RT_ABI_I64, arm);
 }
 
 void osty_rt_select_send_i1(void *s, void *ch, bool value, void *arm) {
-    osty_rt_select_send_common(s, ch, (int64_t)(value ? 1 : 0), arm);
+    osty_rt_select_send_common(s, ch, (int64_t)(value ? 1 : 0),
+                               OSTY_RT_ABI_I1, arm);
 }
 
 void osty_rt_select_send_f64(void *s, void *ch, double value, void *arm) {
     int64_t bits = 0;
     memcpy(&bits, &value, sizeof(bits));
-    osty_rt_select_send_common(s, ch, bits, arm);
+    osty_rt_select_send_common(s, ch, bits, OSTY_RT_ABI_F64, arm);
 }
 
 void osty_rt_select_send_ptr(void *s, void *ch, void *value, void *arm) {
-    osty_rt_select_send_common(s, ch, (int64_t)(uintptr_t)value, arm);
+    osty_rt_select_send_common(s, ch, (int64_t)(uintptr_t)value,
+                               OSTY_RT_ABI_PTR, arm);
 }
 
 void osty_rt_select_send_bytes_v1(void *s, void *ch, const void *src,
@@ -6105,7 +8243,8 @@ void osty_rt_select_send_bytes_v1(void *s, void *ch, const void *src,
     if (sz > 0 && src != NULL) {
         memcpy(copy, src, (size_t)sz);
     }
-    osty_rt_select_send_common(s, ch, (int64_t)(uintptr_t)copy, arm);
+    osty_rt_select_send_common(s, ch, (int64_t)(uintptr_t)copy,
+                               OSTY_RT_ABI_PTR, arm);
 }
 
 void osty_rt_select_timeout(void *s, int64_t ns, void *arm) {
@@ -6324,15 +8463,10 @@ void *osty_rt_task_collect_all(void *body_env) {
     void *out = osty_rt_list_new();
     int64_t n = handles_list != NULL ? osty_rt_list_len(handles_list) : 0;
     for (int64_t i = 0; i < n; i++) {
-        void *handle = NULL;
-        /* handles_list was built via osty_rt_list_push_ptr, which
-         * tags the list with trace_elem = osty_gc_mark_slot_v1.
-         * Passing NULL here would trip ensure_layout's trace-kind
-         * check; the read must announce the same trace function. */
-        memcpy(&handle,
-               osty_rt_list_get_raw(handles_list, i, sizeof(handle),
-                                    osty_gc_mark_slot_v1),
-               sizeof(handle));
+        /* `osty_rt_list_get_ptr` folds the trace-kind check +
+         * GC read barrier into a single helper; it replaces the
+         * earlier memcpy/list_get_raw/mark_slot_v1 incantation. */
+        void *handle = osty_rt_list_get_ptr(handles_list, i);
         osty_rt_result_enum_v1 r;
         r.disc = OSTY_RT_RESULT_OK_DISC;
         r.payload = osty_rt_task_handle_join(handle);
@@ -6382,14 +8516,8 @@ osty_rt_result_enum_v1 osty_rt_task_race(void *body_env) {
         osty_rt_abort("race: out of memory");
     }
     for (int64_t i = 0; i < n; i++) {
-        void *h = NULL;
-        /* Same trace-kind rule as collect_all: the handles list was
-         * built with push_ptr so its trace_elem is mark_slot_v1. */
-        memcpy(&h,
-               osty_rt_list_get_raw(handles_list, i, sizeof(h),
-                                    osty_gc_mark_slot_v1),
-               sizeof(h));
-        handles[i] = (osty_rt_task_handle_impl *)h;
+        handles[i] =
+            (osty_rt_task_handle_impl *)osty_rt_list_get_ptr(handles_list, i);
     }
 
     int64_t winner_idx = -1;

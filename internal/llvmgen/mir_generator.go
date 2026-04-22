@@ -48,6 +48,10 @@ func GenerateFromMIR(m *mir.Module, opts Options) ([]byte, error) {
 	if m == nil {
 		return nil, unsupported("source-layout", "nil MIR module")
 	}
+	// Canonicalize the requested target once up front so the header
+	// line and every downstream consumer see the same LLVM-format
+	// triple. See internal/llvmgen/target.go for the mapping rules.
+	opts.Target = CanonicalLLVMTarget(opts.Target)
 	g := newMIRGen(m, opts)
 	if err := g.checkSupported(); err != nil {
 		return nil, err
@@ -78,7 +82,8 @@ func GenerateFromMIR(m *mir.Module, opts Options) ([]byte, error) {
 	g.emitGlobalVars()
 	g.emitStringPool()
 	g.emitRuntimeDeclarations()
-	return []byte(g.out.String()), nil
+	g.emitLoopMetadata()
+	return withDataLayout([]byte(g.out.String()), opts.Target), nil
 }
 
 // ==== generator state ====
@@ -104,8 +109,9 @@ type mirGen struct {
 	// curBlockID tracks the block we're currently emitting so
 	// GotoTerm can detect loop back-edges (goto whose target block
 	// ID is <= the current block's ID) and emit a safepoint.
-	gcRoots    []mir.LocalID
-	curBlockID mir.BlockID
+	gcRoots           []mir.LocalID
+	curBlockID        mir.BlockID
+	loopSafepointSlot string
 
 	// Module-scoped safepoint counter — matches the AST emitter's
 	// safepoint-v1 ABI so each call site has a stable numeric id.
@@ -133,8 +139,16 @@ type mirGen struct {
 	// Under the uniform env ABI every closure call takes an env as
 	// implicit first arg; top-level fns have no env, so the thunk
 	// ignores env and delegates to the real fn.
-	thunkDefs map[string]string // symbol → full thunk IR
+	thunkDefs  map[string]string // symbol → full thunk IR
 	thunkOrder []string
+
+	// v0.6 A5: vectorize hint. vectorizeHint mirrors fn.Vectorize and
+	// is set at function entry; it drives `!llvm.loop !N` metadata
+	// emission on loop back-edge terminators. loopMDDefs accumulates
+	// the self-referential metadata node definitions for the entire
+	// module, flushed at module tail in GenerateFromMIR.
+	vectorizeHint bool
+	loopMDDefs    []string
 }
 
 // mirFnSig caches a function's LLVM signature so call sites can render
@@ -166,6 +180,39 @@ func firstNonEmpty(xs ...string) string {
 		}
 	}
 	return ""
+}
+
+// nextLoopVectorizeMD allocates a fresh distinct self-referential
+// `!llvm.loop` metadata node whose property list enables LLVM's loop
+// vectorizer, records its textual definition, and returns the node
+// reference (e.g. `!4`). Module-scoped numbering keeps IDs unique
+// across every loop in the translation unit. Kept in sync with the
+// legacy HIR emitter's counterpart in `generator.go` — both paths now
+// honor `#[vectorize]` so the backend dispatcher's MIR-first default
+// does not drop the hint on the floor.
+func (g *mirGen) nextLoopVectorizeMD() string {
+	base := len(g.loopMDDefs)
+	loopRef := fmt.Sprintf("!%d", base)
+	enableRef := fmt.Sprintf("!%d", base+1)
+	g.loopMDDefs = append(g.loopMDDefs,
+		fmt.Sprintf("%s = distinct !{%s, %s}", loopRef, loopRef, enableRef),
+		fmt.Sprintf(`%s = !{!"llvm.loop.vectorize.enable", i1 true}`, enableRef),
+	)
+	return loopRef
+}
+
+// emitLoopMetadata appends every `!llvm.loop` node + vectorize-enable
+// property collected during function emission to the module tail. No
+// module footer is emitted when no `#[vectorize]` function ran.
+func (g *mirGen) emitLoopMetadata() {
+	if len(g.loopMDDefs) == 0 {
+		return
+	}
+	g.out.WriteByte('\n')
+	for _, def := range g.loopMDDefs {
+		g.out.WriteString(def)
+		g.out.WriteByte('\n')
+	}
 }
 
 // ==== support check ====
@@ -450,7 +497,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
 		return true
-	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty:
+	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat:
 		return true
 	// Stage 5 prep — string → List<Char> / List<Byte> expansions that
 	// the legacy emitter routes through `osty_rt_strings_*`. Accepting
@@ -531,7 +578,7 @@ func (g *mirGen) discoverFunctions() {
 		if fn == nil {
 			continue
 		}
-		sig := mirFnSig{retLLVM: g.llvmType(fn.ReturnType), returnType: fn.ReturnType}
+		sig := mirFnSig{retLLVM: g.functionReturnLLVM(fn), returnType: fn.ReturnType}
 		for _, pid := range fn.Params {
 			loc := fn.Local(pid)
 			if loc == nil {
@@ -549,9 +596,16 @@ func (g *mirGen) discoverFunctions() {
 			continue
 		}
 		fn := glob.Init
-		sig := mirFnSig{retLLVM: g.llvmType(fn.ReturnType), returnType: fn.ReturnType}
+		sig := mirFnSig{retLLVM: g.functionReturnLLVM(fn), returnType: fn.ReturnType}
 		g.functionTypes[fn.Name] = sig
 	}
+}
+
+func (g *mirGen) functionReturnLLVM(fn *mir.Function) string {
+	if fn != nil && fn.Name == "main" && len(fn.Params) == 0 && isUnitType(fn.ReturnType) {
+		return "i32"
+	}
+	return g.llvmType(fn.ReturnType)
 }
 
 // emitGlobalVars writes `@<name> = global <T> zeroinitializer` lines
@@ -767,6 +821,7 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	g.localSlots = map[mir.LocalID]string{}
 	g.fnBuf.Reset()
 	g.gcRoots = g.gcRoots[:0]
+	g.vectorizeHint = fn.Vectorize
 
 	emitName := fn.Name
 	if fn.ExportSymbol != "" {
@@ -912,6 +967,17 @@ func (g *mirGen) emitAllocaPreamble(fn *mir.Function) {
 		g.fnBuf.WriteString(slot)
 		g.fnBuf.WriteByte('\n')
 	}
+	if g.opts.EmitGC && loopSafepointStride > 1 {
+		g.loopSafepointSlot = "%gc.loop.poll"
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(g.loopSafepointSlot)
+		g.fnBuf.WriteString(" = alloca i64\n")
+		g.fnBuf.WriteString("  store i64 0, ptr ")
+		g.fnBuf.WriteString(g.loopSafepointSlot)
+		g.fnBuf.WriteByte('\n')
+	} else {
+		g.loopSafepointSlot = ""
+	}
 }
 
 // ==== GC instrumentation ====
@@ -1031,6 +1097,66 @@ func (g *mirGen) emitGCSafepointKind(kind safepointKind) {
 	g.nextSafepoint++
 	g.fnBuf.WriteString(llvmRenderSafepointEmpty(encodeSafepointID(kind, serial)))
 	g.fnBuf.WriteByte('\n')
+}
+
+func (g *mirGen) emitLoopSafepointKind() {
+	if !g.opts.EmitGC {
+		return
+	}
+	if g.loopSafepointSlot == "" || loopSafepointStride <= 1 {
+		g.emitGCSafepointKind(safepointKindLoop)
+		return
+	}
+	count := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(count)
+	g.fnBuf.WriteString(" = load i64, ptr ")
+	g.fnBuf.WriteString(g.loopSafepointSlot)
+	g.fnBuf.WriteByte('\n')
+	next := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(next)
+	g.fnBuf.WriteString(" = add i64 ")
+	g.fnBuf.WriteString(count)
+	g.fnBuf.WriteString(", 1\n")
+	shouldPoll := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(shouldPoll)
+	g.fnBuf.WriteString(" = icmp eq i64 ")
+	g.fnBuf.WriteString(next)
+	g.fnBuf.WriteString(", ")
+	g.fnBuf.WriteString(strconv.FormatInt(loopSafepointStride, 10))
+	g.fnBuf.WriteByte('\n')
+	stored := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(stored)
+	g.fnBuf.WriteString(" = select i1 ")
+	g.fnBuf.WriteString(shouldPoll)
+	g.fnBuf.WriteString(", i64 0, i64 ")
+	g.fnBuf.WriteString(next)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString("  store i64 ")
+	g.fnBuf.WriteString(stored)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(g.loopSafepointSlot)
+	g.fnBuf.WriteByte('\n')
+	pollLabel := g.freshLabel("gc.loop.poll")
+	afterLabel := g.freshLabel("gc.loop.after")
+	g.fnBuf.WriteString("  br i1 ")
+	g.fnBuf.WriteString(shouldPoll)
+	g.fnBuf.WriteString(", label %")
+	g.fnBuf.WriteString(pollLabel)
+	g.fnBuf.WriteString(", label %")
+	g.fnBuf.WriteString(afterLabel)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(pollLabel)
+	g.fnBuf.WriteString(":\n")
+	g.emitGCSafepointKind(safepointKindLoop)
+	g.fnBuf.WriteString("  br label %")
+	g.fnBuf.WriteString(afterLabel)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(afterLabel)
+	g.fnBuf.WriteString(":\n")
 }
 
 // declareSafepoint registers @osty.gc.safepoint_v1 — split from
@@ -1425,7 +1551,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
 		return g.emitSetIntrinsic(i)
-	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty:
+	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat:
 		return g.emitBytesIntrinsic(i)
 	case mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
 		mir.IntrinsicStringLen, mir.IntrinsicStringIsEmpty:
@@ -1841,6 +1967,300 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr)")
 		em := g.ostyEmitter()
 		result := llvmCall(em, "i1", sym, []*LlvmValue{{typ: "ptr", name: bytesReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicBytesGet:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "bytes_get arity")
+		}
+		if i.Dest == nil {
+			return nil
+		}
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return fmt.Errorf("mir-mvp: bytes_get dest %d", i.Dest.Local)
+		}
+		optT, ok := destLoc.Type.(*ir.OptionalType)
+		if !ok {
+			return unsupported("mir-mvp", "bytes_get dest is not optional")
+		}
+		idxReg, err := g.evalOperand(i.Args[1], mir.TInt)
+		if err != nil {
+			return err
+		}
+		lenSym := "osty_rt_bytes_len"
+		getSym := "osty_rt_bytes_get"
+		g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr)")
+		g.declareRuntime(getSym, "declare i8 @"+getSym+"(ptr, i64)")
+		em := g.ostyEmitter()
+		length := llvmCall(em, "i64", lenSym, []*LlvmValue{{typ: "ptr", name: bytesReg}})
+		nonNegative := llvmCompare(em, "sge", &LlvmValue{typ: "i64", name: idxReg}, llvmIntLiteral(0))
+		beforeEnd := llvmCompare(em, "slt", &LlvmValue{typ: "i64", name: idxReg}, length)
+		inRange := llvmLogicalI1(em, "and", nonNegative, beforeEnd)
+		g.flushOstyEmitter(em)
+
+		someLabel := g.freshLabel("bytes.get.some")
+		noneLabel := g.freshLabel("bytes.get.none")
+		mergeLabel := g.freshLabel("bytes.get.merge")
+		g.fnBuf.WriteString("  br i1 ")
+		g.fnBuf.WriteString(inRange.name)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(someLabel)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(noneLabel)
+		g.fnBuf.WriteByte('\n')
+
+		optLLVM := g.llvmType(optT)
+
+		g.fnBuf.WriteString(someLabel)
+		g.fnBuf.WriteString(":\n")
+		em = g.ostyEmitter()
+		item := llvmCall(em, "i8", getSym, []*LlvmValue{{typ: "ptr", name: bytesReg}, {typ: "i64", name: idxReg}})
+		g.flushOstyEmitter(em)
+		payload, err := g.toI64Slot(item.name, optT.Inner)
+		if err != nil {
+			return err
+		}
+		someStep1 := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(someStep1)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteString(" undef, i64 1, 0\n")
+		someValue := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(someValue)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(someStep1)
+		g.fnBuf.WriteString(", i64 ")
+		g.fnBuf.WriteString(payload)
+		g.fnBuf.WriteString(", 1\n")
+		g.fnBuf.WriteString("  br label %")
+		g.fnBuf.WriteString(mergeLabel)
+		g.fnBuf.WriteByte('\n')
+
+		g.fnBuf.WriteString(noneLabel)
+		g.fnBuf.WriteString(":\n")
+		noneStep1 := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(noneStep1)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteString(" undef, i64 0, 0\n")
+		noneValue := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(noneValue)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(noneStep1)
+		g.fnBuf.WriteString(", i64 0, 1\n")
+		g.fnBuf.WriteString("  br label %")
+		g.fnBuf.WriteString(mergeLabel)
+		g.fnBuf.WriteByte('\n')
+
+		g.fnBuf.WriteString(mergeLabel)
+		g.fnBuf.WriteString(":\n")
+		result := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(result)
+		g.fnBuf.WriteString(" = phi ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteString(" [ ")
+		g.fnBuf.WriteString(someValue)
+		g.fnBuf.WriteString(", %")
+		g.fnBuf.WriteString(someLabel)
+		g.fnBuf.WriteString(" ], [ ")
+		g.fnBuf.WriteString(noneValue)
+		g.fnBuf.WriteString(", %")
+		g.fnBuf.WriteString(noneLabel)
+		g.fnBuf.WriteString(" ]\n")
+		g.fnBuf.WriteString("  store ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(result)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
+		g.fnBuf.WriteByte('\n')
+		return nil
+	case mir.IntrinsicBytesContains:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "bytes_contains arity")
+		}
+		needleReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_bytes_index_of"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr, ptr)")
+		em := g.ostyEmitter()
+		index := llvmCall(em, "i64", sym, []*LlvmValue{
+			{typ: "ptr", name: bytesReg},
+			{typ: "ptr", name: needleReg},
+		})
+		result := llvmCompare(em, "sge", index, llvmIntLiteral(0))
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicBytesStartsWith:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "bytes_starts_with arity")
+		}
+		prefixReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_bytes_index_of"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr, ptr)")
+		em := g.ostyEmitter()
+		index := llvmCall(em, "i64", sym, []*LlvmValue{
+			{typ: "ptr", name: bytesReg},
+			{typ: "ptr", name: prefixReg},
+		})
+		result := llvmCompare(em, "eq", index, llvmIntLiteral(0))
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicBytesIndexOf:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "bytes_index_of arity")
+		}
+		if i.Dest == nil {
+			return nil
+		}
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return fmt.Errorf("mir-mvp: bytes_index_of dest %d", i.Dest.Local)
+		}
+		optT, ok := destLoc.Type.(*ir.OptionalType)
+		if !ok {
+			return unsupported("mir-mvp", "bytes_index_of dest is not optional")
+		}
+		needleReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_bytes_index_of"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr, ptr)")
+		em := g.ostyEmitter()
+		index := llvmCall(em, "i64", sym, []*LlvmValue{
+			{typ: "ptr", name: bytesReg},
+			{typ: "ptr", name: needleReg},
+		})
+		present := llvmCompare(em, "sge", index, llvmIntLiteral(0))
+		g.flushOstyEmitter(em)
+
+		someLabel := g.freshLabel("bytes.index_of.some")
+		noneLabel := g.freshLabel("bytes.index_of.none")
+		mergeLabel := g.freshLabel("bytes.index_of.merge")
+		g.fnBuf.WriteString("  br i1 ")
+		g.fnBuf.WriteString(present.name)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(someLabel)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(noneLabel)
+		g.fnBuf.WriteByte('\n')
+
+		optLLVM := g.llvmType(optT)
+
+		g.fnBuf.WriteString(someLabel)
+		g.fnBuf.WriteString(":\n")
+		someStep1 := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(someStep1)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteString(" undef, i64 1, 0\n")
+		someValue := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(someValue)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(someStep1)
+		g.fnBuf.WriteString(", i64 ")
+		g.fnBuf.WriteString(index.name)
+		g.fnBuf.WriteString(", 1\n")
+		g.fnBuf.WriteString("  br label %")
+		g.fnBuf.WriteString(mergeLabel)
+		g.fnBuf.WriteByte('\n')
+
+		g.fnBuf.WriteString(noneLabel)
+		g.fnBuf.WriteString(":\n")
+		noneStep1 := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(noneStep1)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteString(" undef, i64 0, 0\n")
+		noneValue := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(noneValue)
+		g.fnBuf.WriteString(" = insertvalue ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(noneStep1)
+		g.fnBuf.WriteString(", i64 0, 1\n")
+		g.fnBuf.WriteString("  br label %")
+		g.fnBuf.WriteString(mergeLabel)
+		g.fnBuf.WriteByte('\n')
+
+		g.fnBuf.WriteString(mergeLabel)
+		g.fnBuf.WriteString(":\n")
+		result := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(result)
+		g.fnBuf.WriteString(" = phi ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteString(" [ ")
+		g.fnBuf.WriteString(someValue)
+		g.fnBuf.WriteString(", %")
+		g.fnBuf.WriteString(someLabel)
+		g.fnBuf.WriteString(" ], [ ")
+		g.fnBuf.WriteString(noneValue)
+		g.fnBuf.WriteString(", %")
+		g.fnBuf.WriteString(noneLabel)
+		g.fnBuf.WriteString(" ]\n")
+		g.fnBuf.WriteString("  store ")
+		g.fnBuf.WriteString(optLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(result)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
+		g.fnBuf.WriteByte('\n')
+		return nil
+	case mir.IntrinsicBytesConcat:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "bytes_concat arity")
+		}
+		rightReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_bytes_concat"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, ptr)")
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{
+			{typ: "ptr", name: bytesReg},
+			{typ: "ptr", name: rightReg},
+		})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicBytesRepeat:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "bytes_repeat arity")
+		}
+		countReg, err := g.evalOperand(i.Args[1], mir.TInt)
+		if err != nil {
+			return err
+		}
+		sym := "osty_rt_bytes_repeat"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, i64)")
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{
+			{typ: "ptr", name: bytesReg},
+			{typ: "i64", name: countReg},
+		})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	}
@@ -2593,24 +3013,37 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 	switch x := t.(type) {
 	case *mir.GotoTerm:
 		// Loop back-edges — a goto whose target is at or before the
-		// current block in CFG order — get a safepoint poll. This
-		// matches the legacy emitter's "safepoint at loop headers"
-		// convention and keeps cancellation responsive in tight
-		// loops. Forward gotos (if/else joins, fall-throughs) do
-		// not need extra polls because the function already took
-		// one at entry.
-		if g.opts.EmitGC && x.Target <= g.curBlockID {
-			g.emitGCSafepointKind(safepointKindLoop)
+		// current block in CFG order — advance the throttled loop
+		// safepoint counter. This matches the legacy emitter's
+		// loop-header polling convention while avoiding a full runtime
+		// call on every tight-loop iteration. Forward gotos (if/else
+		// joins, fall-throughs) do not need extra polls because the
+		// function already took one at entry.
+		//
+		// v0.6 A5: `#[vectorize]` functions opt out of per-iteration
+		// polls — the vectorizer cannot analyse a latch with a
+		// side-effecting call, and the entry safepoint + post-return
+		// safepoint in the caller bracket the window. See §3.8.3.
+		isBackedge := x.Target <= g.curBlockID
+		if g.opts.EmitGC && isBackedge && !g.vectorizeHint {
+			g.emitLoopSafepointKind()
 		}
 		g.fnBuf.WriteString("  br label %")
 		g.fnBuf.WriteString(g.blockLabels[x.Target])
+		if isBackedge && g.vectorizeHint {
+			g.fnBuf.WriteString(", !llvm.loop ")
+			g.fnBuf.WriteString(g.nextLoopVectorizeMD())
+		}
 		g.fnBuf.WriteByte('\n')
 	case *mir.BranchTerm:
-		// Same back-edge rule applied to conditional branches —
-		// covers `while cond { ... }` style loops where the cond
-		// block has a conditional branch back to its own body.
-		if g.opts.EmitGC && (x.Then <= g.curBlockID || x.Else <= g.curBlockID) {
-			g.emitGCSafepointKind(safepointKindLoop)
+		// Same throttled back-edge rule applied to conditional
+		// branches — covers `while cond { ... }` style loops where
+		// the cond block has a conditional branch back to its own
+		// body.
+		isBackedge := x.Then <= g.curBlockID || x.Else <= g.curBlockID
+		// v0.6 A5 — same vectorize-hint opt-out as the GotoTerm case.
+		if g.opts.EmitGC && isBackedge && !g.vectorizeHint {
+			g.emitLoopSafepointKind()
 		}
 		cond, err := g.evalOperand(x.Cond, mir.TBool)
 		if err != nil {
@@ -2622,6 +3055,10 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 		g.fnBuf.WriteString(g.blockLabels[x.Then])
 		g.fnBuf.WriteString(", label %")
 		g.fnBuf.WriteString(g.blockLabels[x.Else])
+		if isBackedge && g.vectorizeHint {
+			g.fnBuf.WriteString(", !llvm.loop ")
+			g.fnBuf.WriteString(g.nextLoopVectorizeMD())
+		}
 		g.fnBuf.WriteByte('\n')
 	case *mir.SwitchIntTerm:
 		scrutT := x.Scrutinee.Type()
@@ -2648,6 +3085,11 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 		}
 		g.fnBuf.WriteString("  ]\n")
 	case *mir.ReturnTerm:
+		if g.fn != nil && g.fn.Name == "main" && len(g.fn.Params) == 0 && isUnitType(g.fn.ReturnType) {
+			g.emitGCReleaseRoots()
+			g.fnBuf.WriteString("  ret i32 0\n")
+			return nil
+		}
 		if g.fn.ReturnType == nil || isUnitType(g.fn.ReturnType) {
 			// Release bound roots BEFORE ret so the GC doesn't
 			// scan dead slots for in-flight tail calls on other
@@ -4367,6 +4809,12 @@ func (g *mirGen) fresh() string {
 	name := fmt.Sprintf("%%t%d", g.tempSeq)
 	g.tempSeq++
 	return name
+}
+
+func (g *mirGen) freshLabel(prefix string) string {
+	label := fmt.Sprintf("%s.%d", prefix, g.tempSeq)
+	g.tempSeq++
+	return label
 }
 
 // ostyEmitter returns an LlvmEmitter whose temp counter is seeded from

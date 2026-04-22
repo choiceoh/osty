@@ -507,7 +507,7 @@ func (r *resolver) checkAnnotations(annots []*ast.Annotation, target ast.Annotat
 				Code(diag.CodeUnknownAnnotation).
 				Primary(diag.Span{Start: a.PosV, End: a.EndV},
 					"this annotation name is not recognized").
-				Note("v0.4 §18.1: only `#[json]`, `#[deprecated]`, `#[allow]`, `#[cfg]`, `#[op]`, `#[test]`, and the runtime sublanguage annotations are permitted").
+				Note("v0.4 §18.1: only `#[json]`, `#[deprecated]`, `#[allow]`, `#[cfg]`, `#[op]`, `#[test]`, `#[vectorize]`, and the runtime sublanguage annotations are permitted").
 				Build())
 			continue
 		}
@@ -555,6 +555,8 @@ func (r *resolver) checkAnnotationArgs(a *ast.Annotation, target ast.AnnotationT
 		r.checkExportArgs(a)
 	case "intrinsic", "pod", "c_abi", "no_alloc":
 		r.checkNoArgsRuntime(a)
+	case "vectorize":
+		r.checkVectorizeArgs(a)
 	}
 }
 
@@ -658,6 +660,20 @@ func (r *resolver) checkNoArgsRuntime(a *ast.Annotation) {
 		Code(diag.CodeAnnotationBadArg).
 		PrimaryPos(a.Args[0].PosV, "unexpected argument").
 		Note("LANG_SPEC §19.6: this annotation is a bare flag").
+		Build())
+}
+
+// checkVectorizeArgs validates `#[vectorize]`, which is a bare-flag
+// hint with no arguments (v0.6 A5). Any argument is rejected.
+func (r *resolver) checkVectorizeArgs(a *ast.Annotation) {
+	if len(a.Args) == 0 {
+		return
+	}
+	r.emit(diag.New(diag.Error,
+		"`#[vectorize]` does not take arguments").
+		Code(diag.CodeAnnotationBadArg).
+		PrimaryPos(a.Args[0].PosV, "unexpected argument").
+		Note("v0.6 A5: `#[vectorize]` is a bare flag — the compiler chooses the concrete vectorization strategy").
 		Build())
 }
 

@@ -17,8 +17,17 @@ import (
 )
 
 type generator struct {
-	sourcePath        string
-	source            []byte
+	sourcePath string
+	source     []byte
+	// target is the canonical LLVM target triple for this emission.
+	// Canonicalization happens once at the Options boundary (see
+	// CanonicalLLVMTarget in target.go): empty input becomes the host
+	// triple, Osty-profile short form expands to LLVM's
+	// `<arch>-<vendor>-<sys>` shape, and anything already in LLVM
+	// shape is preserved. LLVM derives pointer size, alignment, and
+	// the generic address-space contract from this value — see
+	// dataLayoutFor / withDataLayout for the matching `target
+	// datalayout` directive emitted alongside the triple.
 	target            string
 	functions         map[string]*fnSig
 	methods           map[string]map[string]*fnSig
@@ -38,6 +47,7 @@ type generator struct {
 	runtimeFFI        map[string]map[string]*runtimeFFIFunction
 	runtimeFFIPaths   map[string]string
 	testingAliases    map[string]bool
+	stdBytesAliases   map[string]bool
 	stdStringsAliases map[string]bool
 	stdEnvAliases     map[string]bool
 	runtimeDecls      map[string]runtimeDecl
@@ -54,10 +64,10 @@ type generator struct {
 	fnValueThunkDefs  map[string]string
 	fnValueThunkOrder []string
 
-	temp              int
-	label             int
-	stringID          int
-	stringDefs        []*LlvmStringGlobal
+	temp                 int
+	label                int
+	stringID             int
+	stringDefs           []*LlvmStringGlobal
 	body                 []string
 	locals               []map[string]value
 	returnType           string
@@ -70,9 +80,9 @@ type generator struct {
 	returnSetElemTyp     string
 	returnSetElemString  bool
 	currentBlock         string
-	currentReachable  bool
-	resultContexts    []builtinResultContext
-	optionContexts    []builtinOptionContext
+	currentReachable     bool
+	resultContexts       []builtinResultContext
+	optionContexts       []builtinOptionContext
 
 	needsGCRuntime bool
 	gcRootSlots    []value
@@ -92,6 +102,18 @@ type generator struct {
 	// backend currently supports; `?`/panic integration stays behind the
 	// stdlib-body work tracked under LLVM018.
 	deferStack [][]*ast.DeferStmt
+
+	// vectorizeHint is true while lowering the body of a function or
+	// method annotated with `#[vectorize]`. When set, each loop backedge
+	// branch emitted inside the body carries `!llvm.loop !N` metadata
+	// requesting LLVM's loop vectorizer to consider the loop. The hint
+	// is reset at every function boundary by beginFunction.
+	vectorizeHint bool
+	// loopMDDefs accumulates the module-level metadata node definitions
+	// that the loop vectorize hint attaches to. Module-scoped so IDs
+	// stay unique across all loops in the translation unit; rendered at
+	// the tail of the module via render().
+	loopMDDefs []string
 }
 
 type loopContext struct {
@@ -167,6 +189,49 @@ func (g *generator) beginFunction() {
 	g.resultContexts = nil
 	g.optionContexts = nil
 	g.deferStack = [][]*ast.DeferStmt{nil}
+	g.vectorizeHint = false
+}
+
+// attachVectorizeMD rewrites the most recently emitted `br label %cond`
+// line in emitter.body to carry `!llvm.loop !N` metadata, allocating a
+// fresh self-referential metadata node in the process. No-op when the
+// current function is not annotated `#[vectorize]`.
+//
+// The caller provides the cond label explicitly so the scan anchors on
+// the exact backedge — this avoids misidentifying an earlier `br label`
+// inside a nested safepoint poll block as the backedge.
+func (g *generator) attachVectorizeMD(emitter *LlvmEmitter, condLabel string) {
+	if !g.vectorizeHint || emitter == nil {
+		return
+	}
+	target := fmt.Sprintf("  br label %%%s", condLabel)
+	for i := len(emitter.body) - 1; i >= 0; i-- {
+		if emitter.body[i] == target {
+			mdID := g.nextLoopVectorizeMD()
+			emitter.body[i] = target + fmt.Sprintf(", !llvm.loop %s", mdID)
+			return
+		}
+	}
+}
+
+// nextLoopVectorizeMD allocates a fresh LLVM metadata node for the loop
+// vectorize hint and records its textual definition in loopMDDefs. The
+// returned string is the node reference (e.g. `!0`) suitable for
+// appending to a branch terminator as `!llvm.loop !0`. The node is
+// `distinct` and self-referential per LLVM's loop metadata convention,
+// with one named-string child naming the vectorize-enable property.
+// Module-scoped numbering keeps IDs unique across every loop in the
+// translation unit; the starting space is reserved because Osty does
+// not otherwise emit numeric metadata today.
+func (g *generator) nextLoopVectorizeMD() string {
+	base := len(g.loopMDDefs)
+	loopRef := fmt.Sprintf("!%d", base)
+	enableRef := fmt.Sprintf("!%d", base+1)
+	g.loopMDDefs = append(g.loopMDDefs,
+		fmt.Sprintf("%s = distinct !{%s, %s}", loopRef, loopRef, enableRef),
+		fmt.Sprintf(`%s = !{!"llvm.loop.vectorize.enable", i1 true}`, enableRef),
+	)
+	return loopRef
 }
 
 func (g *generator) bindGCRootIfManagedPointer(emitter *LlvmEmitter, slot value) {
@@ -230,12 +295,25 @@ func encodeSafepointID(kind safepointKind, serial int) int64 {
 // the splitting path on modest fixtures.
 var safepointRootChunkSize = llvmSafepointDefaultRootChunkSize()
 
+// loopSafepointStride throttles loop back-edge polls so tight
+// pointer-free arithmetic loops do not pay a full runtime call on every
+// iteration. The runtime still sees LOOP-kind safepoints regularly for
+// cancellation / GC progress; setting the stride to 1 restores the
+// historical "poll every back-edge" behavior.
+var loopSafepointStride int64 = 1024
+
 // emitGCSafepoint emits a safepoint poll at an unspecified site — kept
 // for callers that have not been classified yet. New call sites should
 // invoke `emitGCSafepointKind` directly with a specific kind so Phase
 // A5 observability stays accurate.
 func (g *generator) emitGCSafepoint(emitter *LlvmEmitter) {
 	g.emitGCSafepointKind(emitter, safepointKindUnspecified)
+}
+
+func (g *generator) emitCallSafepointIfNeeded(emitter *LlvmEmitter) {
+	if g.hasVisibleSafepointRoots() {
+		g.emitGCSafepointKind(emitter, safepointKindCall)
+	}
 }
 
 func (g *generator) emitGCSafepointKind(emitter *LlvmEmitter, kind safepointKind) {
@@ -259,25 +337,68 @@ func (g *generator) emitGCSafepointKind(emitter *LlvmEmitter, kind safepointKind
 	 * tag but bumps the serial, so per-kind counters in the runtime
 	 * still reflect the logical event count without losing the
 	 * classification. */
-	chunkSize := safepointRootChunkSize
-	if chunkSize <= 0 {
-		chunkSize = len(roots)
-	}
-	for start := 0; start < len(roots); start += chunkSize {
-		end := start + chunkSize
-		if end > len(roots) {
-			end = len(roots)
-		}
-		chunk := roots[start:end]
-		addresses := make([]string, len(chunk))
-		for i, root := range chunk {
+	plan := llvmPlanSafepointChunks(int(kind), g.nextSafepoint, len(roots), safepointRootChunkSize)
+	g.nextSafepoint += len(plan)
+	for _, chunk := range plan {
+		window := roots[chunk.start:chunk.end]
+		addresses := make([]string, len(window))
+		for i, root := range window {
 			addresses[i] = g.safepointRootAddress(emitter, root)
 		}
-		serial := g.nextSafepoint
-		g.nextSafepoint++
-		llvmEmitSafepointWithRoots(emitter, encodeSafepointID(kind, serial), addresses)
+		llvmEmitSafepointWithRoots(emitter, chunk.id, addresses)
 	}
 	g.needsGCRuntime = true
+}
+
+func (g *generator) allocLoopSafepointCounter(emitter *LlvmEmitter) string {
+	// v0.6 A5 contract: `#[vectorize]` functions opt out of per-iteration
+	// GC safepoint polls so LLVM's loop vectorizer sees a call-free
+	// latch. The counter slot is never consulted under this mode, so we
+	// avoid allocating it in the first place (saves one alloca + one
+	// store in every loop preheader). The function-entry safepoint from
+	// `emitGCEntry` and any safepoints after the loop exits still
+	// participate in STW coordination; the contract is documented in
+	// LANG_SPEC §3.8.3.
+	if g.vectorizeHint {
+		return ""
+	}
+	if loopSafepointStride <= 1 {
+		return ""
+	}
+	slot := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca i64", slot))
+	emitter.body = append(emitter.body, fmt.Sprintf("  store i64 0, ptr %s", slot))
+	return slot
+}
+
+func (g *generator) emitLoopSafepoint(emitter *LlvmEmitter, counterSlot string) {
+	// v0.6 A5 contract — matching allocLoopSafepointCounter above: when
+	// the enclosing function is `#[vectorize]`, no per-iteration poll is
+	// emitted at all. The loop body therefore stays call-free and the
+	// LLVM loop vectorizer can analyse it as a countable loop.
+	if g.vectorizeHint {
+		return
+	}
+	if counterSlot == "" || loopSafepointStride <= 1 {
+		g.emitGCSafepointKind(emitter, safepointKindLoop)
+		return
+	}
+	count := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load i64, ptr %s", count, counterSlot))
+	next := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", next, count))
+	shouldPoll := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i64 %s, %d", shouldPoll, next, loopSafepointStride))
+	stored := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 0, i64 %s", stored, shouldPoll, next))
+	emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", stored, counterSlot))
+	pollLabel := llvmNextLabel(emitter, "gc.loop.poll")
+	afterLabel := llvmNextLabel(emitter, "gc.loop.after")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", shouldPoll, pollLabel, afterLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", pollLabel))
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", afterLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", afterLabel))
 }
 
 func llvmZeroValue(typ string) value {
@@ -371,14 +492,23 @@ func (g *generator) render(defs []string) []byte {
 		typeDefs = append(typeDefs, vtableTypeDef)
 		allDefs = append(allDefs, vtableDefs...)
 	}
+	// v0.6 A5: loop-vectorize hint metadata. `#[vectorize]` functions
+	// deposit one entry pair per loop; flushing at module tail keeps the
+	// IR top layout unchanged when no such annotation is in use.
+	if len(g.loopMDDefs) > 0 {
+		allDefs = append(allDefs, strings.Join(g.loopMDDefs, "\n"))
+	}
 	runtimeDecls := g.runtimeDeclarationIR()
 	if g.needsGCRuntime {
 		runtimeDecls = append(llvmGcRuntimeDeclarations(), runtimeDecls...)
 	}
+	var out []byte
 	if len(runtimeDecls) > 0 {
-		return []byte(llvmRenderModuleWithRuntimeDeclarations(g.sourcePath, g.target, typeDefs, g.stringDefs, runtimeDecls, allDefs))
+		out = []byte(llvmRenderModuleWithRuntimeDeclarations(g.sourcePath, g.target, typeDefs, g.stringDefs, runtimeDecls, allDefs))
+	} else {
+		out = []byte(llvmRenderModuleWithGlobalsAndTypes(g.sourcePath, g.target, typeDefs, g.stringDefs, allDefs))
 	}
-	return []byte(llvmRenderModuleWithGlobalsAndTypes(g.sourcePath, g.target, typeDefs, g.stringDefs, allDefs))
+	return withDataLayout(out, g.target)
 }
 
 // renderInterfaceVtables builds the LLVM IR for the interface
@@ -994,6 +1124,10 @@ func (g *generator) visibleSafepointRoots() []gcSafepointRoot {
 		}
 	}
 	return out
+}
+
+func (g *generator) hasVisibleSafepointRoots() bool {
+	return len(g.visibleSafepointRoots()) != 0
 }
 
 func (g *generator) safepointRootAddress(emitter *LlvmEmitter, root gcSafepointRoot) string {

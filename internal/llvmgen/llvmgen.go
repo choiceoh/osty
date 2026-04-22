@@ -14,8 +14,8 @@
 //   - ffi.go             — Go FFI / unknown runtime-FFI detection
 //   - runtime_ffi.go     — Osty runtime C ABI surface + symbol tables
 //   - ir_module.go       — IR → AST bridge (transitional; see doc.go)
-//   - support_snapshot.go — Osty-authored `llvm*` helpers (hand-maintained
-//     snapshot of toolchain/llvmgen.osty)
+//   - support_snapshot.go — generated snapshot of the Osty-authored
+//     `llvm*` helpers in toolchain/llvmgen.osty
 //
 // Keep this file small: it is the contract with external callers.
 package llvmgen
@@ -100,7 +100,9 @@ func RenderSkeleton(packageName, sourcePath, emit, target string, reason error) 
 	if reason != nil {
 		unsupported = reason.Error()
 	}
-	return []byte(llvmRenderSkeleton(packageName, filepath.ToSlash(sourcePath), emit, target, unsupported))
+	canonical := CanonicalLLVMTarget(target)
+	ir := []byte(llvmRenderSkeleton(packageName, filepath.ToSlash(sourcePath), emit, canonical, unsupported))
+	return withDataLayout(ir, canonical)
 }
 
 // NeedsObjectArtifact reports whether an LLVM emit mode should continue past
@@ -118,15 +120,18 @@ func NeedsBinaryArtifact(emit string) bool {
 }
 
 // ClangCompileObjectArgs returns the argv shape for `.ll -> .o`, generated
-// from the Osty-authored backend core.
+// from the Osty-authored backend core. The target is canonicalized so
+// Osty-profile triples (e.g. `amd64-linux`) reach clang as the full
+// LLVM triple it expects (e.g. `x86_64-unknown-linux-gnu`).
 func ClangCompileObjectArgs(target, irPath, objectPath string) []string {
-	return llvmClangCompileObjectArgs(target, irPath, objectPath)
+	return llvmClangCompileObjectArgs(CanonicalLLVMTarget(target), irPath, objectPath)
 }
 
 // ClangLinkBinaryArgs returns the argv shape for `.o -> binary`, generated
-// from the Osty-authored backend core.
+// from the Osty-authored backend core. See ClangCompileObjectArgs for
+// the target canonicalization contract.
 func ClangLinkBinaryArgs(target string, objectPaths []string, binaryPath string) []string {
-	return llvmClangLinkBinaryArgs(target, objectPaths, binaryPath)
+	return llvmClangLinkBinaryArgs(CanonicalLLVMTarget(target), objectPaths, binaryPath)
 }
 
 func MissingClangMessage() string {
@@ -244,7 +249,7 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 	g := &generator{
 		sourcePath:      filepath.ToSlash(llvmFirstNonEmpty(opts.SourcePath, "<unknown>")),
 		source:          opts.Source,
-		target:          opts.Target,
+		target:          CanonicalLLVMTarget(opts.Target),
 		runtimeFFI:      map[string]map[string]*runtimeFFIFunction{},
 		runtimeFFIPaths: map[string]string{},
 		runtimeDecls:    map[string]runtimeDecl{},
@@ -262,6 +267,7 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 		g.runtimeFFIPaths = collectRuntimeFFIPaths(file)
 		g.resultTypes = collectBuiltinResultTypes(file, env)
 		g.testingAliases = collectStdTestingAliases(file)
+		g.stdBytesAliases = collectStdBytesAliases(file)
 		g.stdStringsAliases = collectStdStringsAliases(file)
 		g.stdEnvAliases = collectStdEnvAliases(file)
 		mainIR, err := g.emitScriptMain(file.Stmts)
@@ -291,6 +297,7 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 	g.runtimeFFI = collectRuntimeFFI(file, g.typeEnv())
 	g.runtimeFFIPaths = collectRuntimeFFIPaths(file)
 	g.testingAliases = collectStdTestingAliases(file)
+	g.stdBytesAliases = collectStdBytesAliases(file)
 	g.stdStringsAliases = collectStdStringsAliases(file)
 	g.stdEnvAliases = collectStdEnvAliases(file)
 	if err := g.emitGlobalLets(decls.globalsOrdered); err != nil {
