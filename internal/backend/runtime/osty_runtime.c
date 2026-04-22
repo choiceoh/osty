@@ -47,6 +47,7 @@
 #else
 #  include <sys/stat.h>
 #  include <sys/types.h>
+#  include <unistd.h>
 #  define OSTY_RT_MKDIR_ONE(path) mkdir((path), 0755)
 #endif
 
@@ -9104,9 +9105,6 @@ done:
  * ABI pass.
  * ====================================================================== */
 
-#if !defined(OSTY_RT_PLATFORM_WIN32)
-#  include <unistd.h>    /* sysconf(_SC_NPROCESSORS_ONLN) */
-#endif
 #if defined(__APPLE__)
 /* Forward-declare the sysctl entry we need instead of pulling in
  * <sys/sysctl.h>, which on macOS transitively requires BSD types
@@ -11851,9 +11849,11 @@ void osty_rt_test_snapshot(const char *name, const char *output, const char *sou
  *
  * The emitter (see internal/llvmgen/stdlib_env_shim.go) routes the Osty
  * call `env.args()` to `osty_rt_env_args`, `env.get(name)` to
- * `osty_rt_env_get`, `env.vars()` to `osty_rt_env_vars`, and when a
- * script/binary's package imports `std.env` the generated `main` is
- * widened to (i32 argc, ptr argv) and begins with a call to
+ * `osty_rt_env_get`, `env.vars()` to `osty_rt_env_vars`,
+ * `env.currentDir()` to `osty_rt_env_current_dir`,
+ * `env.setCurrentDir(path)` to `osty_rt_env_set_current_dir`, and
+ * when a script/binary's package imports `std.env` the generated
+ * `main` is widened to (i32 argc, ptr argv) and begins with a call to
  * `osty_rt_env_args_init`.
  *
  * The init call hands us the raw C argv; each `env.args()` invocation
@@ -11869,9 +11869,36 @@ void osty_rt_test_snapshot(const char *name, const char *output, const char *sou
  * `env.vars()` snapshots the current environment into a fresh
  * `Map<String, String>`. Keys beginning with '=' are skipped on
  * Windows to avoid the drive-current-directory pseudo-entries the CRT
- * exposes through GetEnvironmentStringsA. */
+ * exposes through GetEnvironmentStringsA.
+ *
+ * `env.currentDir()` duplicates the process working directory into a
+ * fresh managed String on success. On failure the helper returns NULL
+ * and leaves the platform error intact so `osty_rt_env_current_dir_error`
+ * can materialize a human-readable Error message.
+ *
+ * `env.setCurrentDir(path)` returns NULL on success and a freshly
+ * allocated error String on failure so the emitter can materialize
+ * `Result<(), Error>` without relying on process-global errno state
+ * after the runtime call returns. */
 static int64_t osty_rt_env_stored_argc = 0;
 static char *const *osty_rt_env_stored_argv = NULL;
+
+static void *osty_rt_env_error_message(const char *prefix, const char *detail, const char *site) {
+    const char *lhs = prefix == NULL ? "environment error" : prefix;
+    const char *rhs = (detail != NULL && detail[0] != '\0') ? detail : "unknown error";
+    size_t lhs_len = strlen(lhs);
+    size_t rhs_len = strlen(rhs);
+    size_t total = lhs_len + 2 + rhs_len;
+    char *buf = (char *)osty_rt_xmalloc(total + 1, site);
+    memcpy(buf, lhs, lhs_len);
+    buf[lhs_len] = ':';
+    buf[lhs_len + 1] = ' ';
+    memcpy(buf + lhs_len + 2, rhs, rhs_len);
+    buf[total] = '\0';
+    void *out = osty_rt_string_dup_site(buf, total, site);
+    free(buf);
+    return out;
+}
 
 void osty_rt_env_args_init(int64_t argc, void *argv) {
     osty_rt_env_stored_argc = argc < 0 ? 0 : argc;
@@ -11984,4 +12011,100 @@ void *osty_rt_env_vars(void) {
 #endif
     osty_gc_root_release_v1(out);
     return out;
+}
+
+void *osty_rt_env_current_dir(void) {
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    DWORD need = GetCurrentDirectoryA(0, NULL);
+    if (need == 0) {
+        return NULL;
+    }
+    char *buf = (char *)osty_rt_xmalloc((size_t)need + 1, "runtime.env.current_dir.buf");
+    DWORD written = GetCurrentDirectoryA(need + 1, buf);
+    if (written == 0 || written > need) {
+        DWORD code = GetLastError();
+        free(buf);
+        SetLastError(code);
+        return NULL;
+    }
+    void *out = osty_rt_string_dup_site(buf, (size_t)written, "runtime.env.current_dir");
+    free(buf);
+    return out;
+#else
+    size_t cap = 256;
+    for (;;) {
+        char *buf = (char *)osty_rt_xmalloc(cap, "runtime.env.current_dir.buf");
+        errno = 0;
+        if (getcwd(buf, cap) != NULL) {
+            void *out = osty_rt_string_dup_site(buf, strlen(buf), "runtime.env.current_dir");
+            free(buf);
+            return out;
+        }
+        int err = errno;
+        free(buf);
+        if (err != ERANGE) {
+            errno = err;
+            return NULL;
+        }
+        if (cap > ((size_t)-1) / 2) {
+            errno = ERANGE;
+            return NULL;
+        }
+        cap *= 2;
+    }
+#endif
+}
+
+void *osty_rt_env_current_dir_error(void) {
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    DWORD code = GetLastError();
+    char buf[96];
+    int written;
+    if (code == 0) {
+        return osty_rt_env_error_message("failed to get current directory", "unknown error", "runtime.env.current_dir.error");
+    }
+    written = snprintf(buf, sizeof(buf), "win32 error %lu", (unsigned long)code);
+    if (written < 0) {
+        return osty_rt_env_error_message("failed to get current directory", "win32 error", "runtime.env.current_dir.error");
+    }
+    return osty_rt_env_error_message("failed to get current directory", buf, "runtime.env.current_dir.error");
+#else
+    int err = errno;
+    if (err == 0) {
+        return osty_rt_env_error_message("failed to get current directory", "unknown error", "runtime.env.current_dir.error");
+    }
+    return osty_rt_env_error_message("failed to get current directory", strerror(err), "runtime.env.current_dir.error");
+#endif
+}
+
+void *osty_rt_env_set_current_dir(const char *path) {
+    if (path == NULL) {
+        return osty_rt_env_error_message("failed to set current directory", "path is null", "runtime.env.set_current_dir.error");
+    }
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    if (SetCurrentDirectoryA(path)) {
+        return NULL;
+    }
+    DWORD code = GetLastError();
+    char buf[96];
+    int written;
+    if (code == 0) {
+        return osty_rt_env_error_message("failed to set current directory", "unknown error", "runtime.env.set_current_dir.error");
+    }
+    written = snprintf(buf, sizeof(buf), "win32 error %lu", (unsigned long)code);
+    if (written < 0) {
+        return osty_rt_env_error_message("failed to set current directory", "win32 error", "runtime.env.set_current_dir.error");
+    }
+    return osty_rt_env_error_message("failed to set current directory", buf, "runtime.env.set_current_dir.error");
+#else
+    errno = 0;
+    if (chdir(path) == 0) {
+        return NULL;
+    }
+    int err = errno;
+    if (err == 0) {
+        return osty_rt_env_error_message("failed to set current directory", "unknown error", "runtime.env.set_current_dir.error");
+    }
+    return osty_rt_env_error_message("failed to set current directory", strerror(err), "runtime.env.set_current_dir.error");
+#endif
 }

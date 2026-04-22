@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1123,6 +1124,116 @@ fn main() {
 	}
 	if got, want := string(output), "environment variable not set: OSTY_ENV_REQUIRE_TEST\nnone\n"; got != want {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLLVMBackendBinaryStdEnvCurrentDirReadsProcessWorkingDir(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use std.env
+
+fn main() {
+    match env.currentDir() {
+        Ok(dir) -> println(dir),
+        Err(err) -> println(err.message()),
+    }
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	wantDir := filepath.Clean(t.TempDir())
+	cmd := exec.Command(result.Artifacts.Binary)
+	cmd.Dir = wantDir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	got := string(output)
+	want := wantDir + "\n"
+	if got == want {
+		return
+	}
+	if resolved, err := filepath.EvalSymlinks(wantDir); err == nil && got == filepath.Clean(resolved)+"\n" {
+		return
+	}
+	t.Fatalf("binary stdout = %q, want %q (or symlink-resolved equivalent)", got, want)
+}
+
+func TestLLVMBackendBinaryStdEnvSetCurrentDirChangesProcessWorkingDir(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	targetDir := filepath.Join(t.TempDir(), "target")
+	if err := os.Mkdir(targetDir, 0o755); err != nil {
+		t.Fatalf("Mkdir(%q): %v", targetDir, err)
+	}
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, fmt.Sprintf(`use std.env
+
+fn main() {
+    match env.setCurrentDir(%q) {
+        Ok(_) -> {
+            match env.currentDir() {
+                Ok(dir) -> println(dir),
+                Err(err) -> println(err.message()),
+            }
+        },
+        Err(err) -> println(err.message()),
+    }
+}
+`, targetDir))
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	got := string(output)
+	want := filepath.Clean(targetDir) + "\n"
+	if got == want {
+		return
+	}
+	if resolved, err := filepath.EvalSymlinks(targetDir); err == nil && got == filepath.Clean(resolved)+"\n" {
+		return
+	}
+	t.Fatalf("binary stdout = %q, want %q (or symlink-resolved equivalent)", got, want)
+}
+
+func TestLLVMBackendBinaryStdEnvSetCurrentDirReportsMissingPath(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	missingDir := filepath.Join(t.TempDir(), "missing")
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, fmt.Sprintf(`use std.env
+
+fn main() {
+    match env.setCurrentDir(%q) {
+        Ok(_) -> println("ok"),
+        Err(err) -> println(err.message()),
+    }
+}
+`, missingDir))
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	got := string(output)
+	if !strings.HasPrefix(got, "failed to set current directory: ") {
+		t.Fatalf("binary stdout = %q, want prefix %q", got, "failed to set current directory: ")
 	}
 }
 

@@ -159,3 +159,69 @@ fn main() {
 		}
 	}
 }
+
+// `env.currentDir()` should lower to the runtime helpers and preserve
+// the Result<String, Error> source type so `match` keeps compiling.
+func TestStdEnvCurrentDirRoutesToRuntimeAndKeepsResultSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.env as osenv
+
+fn main() {
+    match osenv.currentDir() {
+        Ok(dir) -> println(dir),
+        Err(err) -> println(err.message()),
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_env_current_dir.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_env_current_dir()",
+		"call ptr @osty_rt_env_current_dir()",
+		"declare ptr @osty_rt_env_current_dir_error()",
+		"call ptr @osty_rt_env_current_dir_error()",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// `env.setCurrentDir(path)` should lower to the runtime helper and
+// preserve the Result<(), Error> source type so `match` keeps compiling.
+func TestStdEnvSetCurrentDirRoutesToRuntimeAndKeepsResultSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.env as osenv
+
+fn main() {
+    match osenv.setCurrentDir("/tmp") {
+        Ok(_) -> println("ok"),
+        Err(err) -> println(err.message()),
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_env_set_current_dir.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_env_set_current_dir(ptr)",
+		"call ptr @osty_rt_env_set_current_dir(ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
