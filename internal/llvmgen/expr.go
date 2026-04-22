@@ -1652,6 +1652,14 @@ func (g *generator) emitMatchExprValue(expr *ast.MatchExpr) (value, error) {
 	if len(expr.Arms) == 0 {
 		return value{}, unsupported("expression", "match with no arms")
 	}
+	// Pre-scan arms for a typed List<T> source so a sibling bare `[]` arm
+	// body inherits the element type instead of walling on LLVM013. Push
+	// once here and every sub-emitter (tag / payload / result / optional /
+	// guarded) inherits the hint through g.matchArmListHints.
+	if hint, ok := g.inferMatchArmsListHint(expr.Arms); ok {
+		g.pushMatchArmListHint(hint)
+		defer g.popMatchArmListHint()
+	}
 	scrutinee, err := g.emitExpr(expr.Scrutinee)
 	if err != nil {
 		return value{}, err
@@ -6626,6 +6634,64 @@ func (g *generator) matchPayloadEnumPattern(info *enumInfo, pattern ast.Pattern)
 	}
 }
 
+// listElemHint carries the LLVM-level element type + String-pointer flag
+// for a List<T> shape inferred from surrounding context. Pushed on
+// g.matchArmListHints during match-expression arm emission so a bare
+// empty-list arm body can pick up its element type from a sibling arm
+// (or from an outer expected-type hint), instead of walling on LLVM013
+// "empty list literal requires explicit List<T>".
+type listElemHint struct {
+	elemTyp    string
+	elemString bool
+}
+
+func (g *generator) pushMatchArmListHint(hint listElemHint) {
+	g.matchArmListHints = append(g.matchArmListHints, hint)
+}
+
+func (g *generator) popMatchArmListHint() {
+	if n := len(g.matchArmListHints); n > 0 {
+		g.matchArmListHints = g.matchArmListHints[:n-1]
+	}
+}
+
+func (g *generator) currentMatchArmListHint() (listElemHint, bool) {
+	if n := len(g.matchArmListHints); n > 0 {
+		h := g.matchArmListHints[n-1]
+		if h.elemTyp == "" {
+			return listElemHint{}, false
+		}
+		return h, true
+	}
+	return listElemHint{}, false
+}
+
+// inferMatchArmsListHint scans arm bodies for a ListExpr whose source
+// type resolves to `List<T>` with a known element IR type. Returns the
+// first hint found; siblings with bare `[]` can then adopt it via
+// pushMatchArmListHint on the surrounding match-expr emitter.
+func (g *generator) inferMatchArmsListHint(arms []*ast.MatchArm) (listElemHint, bool) {
+	for _, arm := range arms {
+		if arm == nil {
+			continue
+		}
+		body := arm.Body
+		if block, ok := body.(*ast.Block); ok && len(block.Stmts) > 0 {
+			if tail, ok := block.Stmts[len(block.Stmts)-1].(*ast.ExprStmt); ok && tail != nil {
+				body = tail.X
+			}
+		}
+		src, ok := g.staticExprSourceType(body)
+		if !ok || src == nil {
+			continue
+		}
+		if elemTyp, elemString, ok, err := llvmListElementInfo(src, g.typeEnv()); err == nil && ok && elemTyp != "" {
+			return listElemHint{elemTyp: elemTyp, elemString: elemString}, true
+		}
+	}
+	return listElemHint{}, false
+}
+
 func (g *generator) emitMatchArmBodyValue(expr ast.Expr) (value, error) {
 	switch e := expr.(type) {
 	case *ast.Block:
@@ -6633,6 +6699,14 @@ func (g *generator) emitMatchArmBodyValue(expr ast.Expr) (value, error) {
 		defer g.popScope()
 		return g.emitBlockValue(e)
 	default:
+		// Empty-list arm body: adopt the sibling hint (if a push has been
+		// done by the enclosing match-expr emitter) so the LLVM013 wall
+		// on `_ -> []` against a typed List<T> arm stays closed.
+		if list, ok := expr.(*ast.ListExpr); ok && len(list.Elems) == 0 {
+			if hint, ok := g.currentMatchArmListHint(); ok {
+				return g.emitListExprWithHint(list, nil, hint.elemTyp, hint.elemString)
+			}
+		}
 		return g.emitExpr(expr)
 	}
 }

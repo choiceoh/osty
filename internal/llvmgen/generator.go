@@ -83,6 +83,12 @@ type generator struct {
 	currentReachable     bool
 	resultContexts       []builtinResultContext
 	optionContexts       []builtinOptionContext
+	// matchArmListHints is the push/pop stack of list-element hints active
+	// during match-expression arm emission. Sibling arms that return a
+	// typed list (e.g. `rhsT.tupleElems: List<HirType>`) seed the hint so
+	// a bare `[]` in another arm picks up the same element type instead of
+	// walling on LLVM013 "empty list literal requires explicit List<T>".
+	matchArmListHints []listElemHint
 
 	needsGCRuntime bool
 	gcRootSlots    []value
@@ -210,6 +216,7 @@ func (g *generator) beginFunction() {
 	g.loopStack = nil
 	g.resultContexts = nil
 	g.optionContexts = nil
+	g.matchArmListHints = nil
 	g.deferStack = [][]*ast.DeferStmt{nil}
 	g.vectorizeHint = false
 	g.vectorizeWidth = 0
