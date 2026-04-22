@@ -1093,3 +1093,216 @@ pub fn monoEmitMethodSpecialization(state: MonoState, rec: MonoMethodInstance) {
     let _ = rec
 }
 
+// ====================================================================
+// Stage C — Pass 1 indexer + Pass 2 copy + pass entry point
+// ====================================================================
+//
+// Port mapping:
+//
+//   internal/ir/monomorph.go:36   (Monomorphize entry)     -> hirMonomorphize
+//   internal/ir/monomorph.go:59   (Pass 1 indexer)         -> monoIndexGenerics
+//   internal/ir/monomorph.go:90   (Pass 2 copy + scan)     -> monoCopyNonGenericDecls + monoCopyScript
+//   internal/ir/monomorph.go:152  (isGenericTopLevel)      -> monoIsGenericFn/Struct/Enum/Interface
+//
+// Stage C focuses on setup: it walks the input module, indexes every
+// generic top-level declaration into MonoState's parallel arrays, and
+// copies every non-generic declaration onto state.out. Scanning
+// (which discovers call sites and enqueues specialization requests)
+// and real emitter bodies stay in Stage D.
+//
+// This is enough for the pass to be invoked end-to-end on modules
+// that contain no generic references — Pass 1 indexes nothing, Pass 2
+// copies everything, the drain finds all queues empty, and the output
+// equals the input. Modules *with* generic references still get their
+// non-generic declarations copied correctly; the generic references
+// pass through unrewritten until Stage D lands the scanner and the
+// real emitter bodies.
+
+// --------------------------------------------------------------------
+// Generic-decl predicates (monomorph.go:152)
+// --------------------------------------------------------------------
+
+/// monoIsGenericFn reports whether a HirFnDecl declares at least one
+/// type parameter and therefore must be replaced by concrete
+/// specializations rather than copied verbatim into the output.
+pub fn monoIsGenericFn(fnDecl: HirFnDecl) -> Bool {
+    fnDecl.generics.len() > 0
+}
+
+/// monoIsGenericStruct — struct-decl counterpart.
+pub fn monoIsGenericStruct(decl: HirStructDecl) -> Bool {
+    decl.generics.len() > 0
+}
+
+/// monoIsGenericEnum — enum-decl counterpart.
+pub fn monoIsGenericEnum(decl: HirEnumDecl) -> Bool {
+    decl.generics.len() > 0
+}
+
+/// monoIsGenericInterface — interface-decl counterpart.
+pub fn monoIsGenericInterface(decl: HirInterfaceDecl) -> Bool {
+    decl.generics.len() > 0
+}
+
+// --------------------------------------------------------------------
+// Pass 1 — index every generic top-level declaration (monomorph.go:59)
+// --------------------------------------------------------------------
+
+/// monoIndexGenerics walks `module` and populates MonoState's generic
+/// declaration indexes. Generic free fns go into genericFnNames /
+/// genericFns; generic structs / enums / interfaces land in their
+/// respective parallel arrays. Every struct and enum is *also*
+/// registered in structNames / structs / enumNames / enums
+/// regardless of genericness, because Phase 4 method-specialization
+/// needs to resolve an owner from a bare source name even when the
+/// owner is non-generic (see receiver-env lookup in Stage D's method
+/// emitter).
+///
+/// Duplicate names overwrite prior entries — the checker enforces
+/// unique-decl-per-package upstream so a dup at this point is a
+/// checker invariant violation, not a monomorph concern.
+///
+/// Mirrors the switch in monomorph.go:67–88 case-for-case; the Osty
+/// side splits the dispatch across four loops (fns / structs / enums
+/// / interfaces) because HirModule already separates decls by variant
+/// (hir.osty:1075) — no interface boxing or runtime type-switch
+/// needed.
+pub fn monoIndexGenerics(state: MonoState, module: HirModule) {
+    for fnDecl in module.fns {
+        if monoIsGenericFn(fnDecl) {
+            state.genericFnNames.push(fnDecl.name)
+            state.genericFns.push(fnDecl)
+        }
+    }
+    for decl in module.structs {
+        state.structNames.push(decl.name)
+        state.structs.push(decl)
+        if monoIsGenericStruct(decl) {
+            state.genericStructNames.push(decl.name)
+            state.genericStructs.push(decl)
+        }
+    }
+    for decl in module.enums {
+        state.enumNames.push(decl.name)
+        state.enums.push(decl)
+        if monoIsGenericEnum(decl) {
+            state.genericEnumNames.push(decl.name)
+            state.genericEnums.push(decl)
+        }
+    }
+    for decl in module.interfaces {
+        if monoIsGenericInterface(decl) {
+            state.genericInterfaceNames.push(decl.name)
+            state.genericInterfaces.push(decl)
+        }
+    }
+}
+
+// --------------------------------------------------------------------
+// Pass 2 — copy non-generic decls + script onto state.out (monomorph.go:90)
+// --------------------------------------------------------------------
+
+/// monoCopyNonGenericDecls appends every non-generic top-level
+/// declaration from `module` onto state.out. Generic decls are
+/// dropped — their specializations will be appended later by the
+/// Stage D emitters via the worklist drain.
+///
+/// Copy semantics: Stage C appends the declaration *by reference*
+/// (HirFnDecl and friends are reference types in Osty, so a push
+/// shares the underlying struct). This is safe as long as nothing
+/// mutates the copied decl; Stage D's scanner and emitters will swap
+/// in proper deep clones when they start rewriting fn signatures and
+/// method bodies. Until that lands, the output module aliases the
+/// input for non-generic decls — which is fine, because the pass
+/// produces identical output in that case anyway.
+///
+/// `use` declarations, type aliases, and top-level lets are copied
+/// verbatim regardless of genericness: they cannot carry type
+/// parameters in the surface language (type aliases *can* but their
+/// Pass 2 semantics are "inline at reference sites", which Stage D's
+/// scanner will address; for now they pass through).
+pub fn monoCopyNonGenericDecls(state: MonoState, module: HirModule) {
+    for fnDecl in module.fns {
+        if monoIsGenericFn(fnDecl) {
+            continue
+        }
+        state.out.fns.push(fnDecl)
+    }
+    for decl in module.structs {
+        if monoIsGenericStruct(decl) {
+            continue
+        }
+        state.out.structs.push(decl)
+    }
+    for decl in module.enums {
+        if monoIsGenericEnum(decl) {
+            continue
+        }
+        state.out.enums.push(decl)
+    }
+    for decl in module.interfaces {
+        if monoIsGenericInterface(decl) {
+            continue
+        }
+        state.out.interfaces.push(decl)
+    }
+    for decl in module.lets {
+        state.out.lets.push(decl)
+    }
+    for decl in module.uses {
+        state.out.uses.push(decl)
+    }
+    for decl in module.aliases {
+        state.out.aliases.push(decl)
+    }
+}
+
+/// monoCopyScript appends every top-level script statement from
+/// `module` onto state.out.script. Script statements cannot declare
+/// generic parameters (only fn/struct/enum/interface/alias can), so
+/// there is no filter — every statement is a verbatim copy.
+///
+/// Matches the script-copy loop at monomorph.go:112–117; the
+/// surrounding `pushLocalTypeScope` / `popLocalTypeScope` bracket
+/// belongs to Stage D's scanner and is skipped here.
+pub fn monoCopyScript(state: MonoState, module: HirModule) {
+    for stmt in module.script {
+        state.out.script.push(stmt)
+    }
+}
+
+// --------------------------------------------------------------------
+// Pass entry point — orchestrates Passes 1 + 2 + drain (monomorph.go:36)
+// --------------------------------------------------------------------
+
+/// hirMonomorphize runs the full monomorphization pass on `module`
+/// and returns a populated MonoState. Caller reads `state.out` for
+/// the specialized module and `state.errs` for non-fatal issues.
+///
+/// Stage C wires Passes 1 + 2 + the drain loop. Scanning (which
+/// discovers generic call sites) stays in Stage D; until that lands,
+/// modules that contain generic references pass through with those
+/// references unrewritten. Modules that contain no generics produce
+/// byte-identical output to their input (non-generic decls are
+/// copied verbatim, drain is a no-op).
+///
+/// Comparable to Go's `Monomorphize(mod)` at monomorph.go:36 except:
+///
+///   - The return shape is a MonoState rather than `(*Module, []error)`.
+///     Callers that want the Go-shaped return can use `state.out` and
+///     `state.errs`. Returning the full state lets test callers poke at
+///     the dedup tables directly, which the Go side achieves via an
+///     exported helper but costs an extra function there.
+///   - `pushLocalTypeScope` / `popLocalTypeScope` around the script
+///     copy are dropped — they belong to Stage D's scanner.
+///   - `dropPreservedGenericMethods` (Pass 6) is dropped — it belongs
+///     to Stage E (cleanup) once Phase 4 method specialization starts
+///     leaving generic templates on output owners.
+pub fn hirMonomorphize(module: HirModule) -> MonoState {
+    let state = monoNewState(module.packageName)
+    monoIndexGenerics(state, module)
+    monoCopyNonGenericDecls(state, module)
+    monoCopyScript(state, module)
+    monoDrain(state)
+    state
+}
