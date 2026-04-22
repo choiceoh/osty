@@ -24,6 +24,158 @@ func selfhostAppendIntrinsicBodyGateForSource(result *CheckResult, src []byte) {
 	selfhostMergeDiagnosticRecords(result, selfhostIntrinsicBodyDiagnostics(file, 0, "")...)
 }
 
+// selfhostAppendIntrinsicBodyGateForRun is the FrontendRun-aware
+// sibling of selfhostAppendIntrinsicBodyGateForSource. It walks the
+// run's AstArena directly via selfhostIntrinsicBodyDiagnosticsFromArena
+// instead of forcing an astbridge *ast.File lowering, so
+// CheckStructuredFromRun produces zero astbridge bumps on the happy
+// path.
+func selfhostAppendIntrinsicBodyGateForRun(result *CheckResult, run *FrontendRun) {
+	if result == nil || run == nil {
+		return
+	}
+	diags := run.Diagnostics()
+	if selfhostHasErrorDiagnostics(diags) {
+		return
+	}
+	if run.parser == nil || run.parser.arena == nil {
+		return
+	}
+	records := selfhostIntrinsicBodyDiagnosticsFromArena(run.parser.arena, run.rt, run.stream, 0, "")
+	selfhostMergeDiagnosticRecords(result, records...)
+}
+
+// selfhostIntrinsicBodyDiagnosticsFromArena is the arena-native
+// sibling of selfhostIntrinsicBodyDiagnostics. It iterates the
+// self-host parser's AstArena, flagging every `#[intrinsic]` function
+// whose body is non-empty (LANG_SPEC §19.6). Body offsets are mapped
+// from token indices back to byte offsets via checkNodeOffsets using
+// the caller-supplied runeTable + FrontLexStream, matching exactly
+// what the *ast.File walker produces.
+func selfhostIntrinsicBodyDiagnosticsFromArena(arena *AstArena, rt runeTable, stream *FrontLexStream, base int, path string) []CheckDiagnosticRecord {
+	if arena == nil {
+		return nil
+	}
+	var out []CheckDiagnosticRecord
+	for _, declIdx := range arena.decls {
+		selfhostGateWalkArenaDecl(arena, declIdx, rt, stream, base, path, &out)
+	}
+	return out
+}
+
+func selfhostGateWalkArenaDecl(arena *AstArena, idx int, rt runeTable, stream *FrontLexStream, base int, path string, out *[]CheckDiagnosticRecord) {
+	if out == nil || idx < 0 || idx >= len(arena.nodes) {
+		return
+	}
+	n := arena.nodes[idx]
+	if n == nil {
+		return
+	}
+	switch n.kind.(type) {
+	case *AstNodeKind_AstNFnDecl:
+		if rec := selfhostGateArenaFnRecord(arena, n, rt, stream, base, path); rec != nil {
+			*out = append(*out, *rec)
+		}
+	case *AstNodeKind_AstNStructDecl, *AstNodeKind_AstNEnumDecl:
+		for _, childIdx := range n.children {
+			if childIdx < 0 || childIdx >= len(arena.nodes) {
+				continue
+			}
+			child := arena.nodes[childIdx]
+			if child == nil {
+				continue
+			}
+			if _, ok := child.kind.(*AstNodeKind_AstNFnDecl); !ok {
+				continue
+			}
+			if rec := selfhostGateArenaFnRecord(arena, child, rt, stream, base, path); rec != nil {
+				*out = append(*out, *rec)
+			}
+		}
+	case *AstNodeKind_AstNUseDecl:
+		for _, childIdx := range n.children {
+			selfhostGateWalkArenaDecl(arena, childIdx, rt, stream, base, path, out)
+		}
+	}
+}
+
+func selfhostGateArenaFnRecord(arena *AstArena, fn *AstNode, rt runeTable, stream *FrontLexStream, base int, path string) *CheckDiagnosticRecord {
+	if fn == nil {
+		return nil
+	}
+	if !selfhostArenaHasAnnotation(arena, fn.extra, "intrinsic") {
+		return nil
+	}
+	if fn.right < 0 || fn.right >= len(arena.nodes) {
+		return nil
+	}
+	body := arena.nodes[fn.right]
+	if body == nil {
+		return nil
+	}
+	if _, ok := body.kind.(*AstNodeKind_AstNBlock); !ok {
+		return nil
+	}
+	if len(body.children) == 0 {
+		return nil
+	}
+	bodyStart, bodyEnd := checkNodeOffsets(rt, stream, body.start, body.end)
+	start := base + bodyStart
+	end := base + bodyEnd
+	if end < start {
+		end = start
+	}
+	return &CheckDiagnosticRecord{
+		Code:     diag.CodeIntrinsicNonEmptyBody,
+		Severity: "error",
+		Message:  "`#[intrinsic]` function `" + fn.text + "` must have an empty body",
+		Start:    start,
+		End:      end,
+		File:     path,
+		Notes: []string{
+			"LANG_SPEC §19.6: intrinsic implementations are supplied by the lowering layer; the source body is ignored",
+			"hint: keep the signature and drop the body, or use `{}`",
+		},
+	}
+}
+
+// selfhostArenaHasAnnotation resolves the packed annotation extra
+// slot produced by opPackAnnotations: -1 for none, a single
+// annotation node index when count==1, or a synthetic "__group"
+// Annotation node whose children list holds the individual
+// annotation indices when count>1.
+func selfhostArenaHasAnnotation(arena *AstArena, extra int, name string) bool {
+	if extra < 0 || extra >= len(arena.nodes) {
+		return false
+	}
+	n := arena.nodes[extra]
+	if n == nil {
+		return false
+	}
+	if _, ok := n.kind.(*AstNodeKind_AstNAnnotation); !ok {
+		return false
+	}
+	if n.text == "__group" {
+		for _, childIdx := range n.children {
+			if childIdx < 0 || childIdx >= len(arena.nodes) {
+				continue
+			}
+			child := arena.nodes[childIdx]
+			if child == nil {
+				continue
+			}
+			if _, ok := child.kind.(*AstNodeKind_AstNAnnotation); !ok {
+				continue
+			}
+			if child.text == name {
+				return true
+			}
+		}
+		return false
+	}
+	return n.text == name
+}
+
 func selfhostAppendIntrinsicBodyGateForPackage(result *CheckResult, input PackageCheckInput) {
 	if result == nil || len(input.Files) == 0 {
 		return
