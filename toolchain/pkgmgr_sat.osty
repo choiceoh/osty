@@ -624,12 +624,14 @@ pub fn satDerivation(pkg: String, term: SatTerm, level: Int, cause: Int) -> SatA
 
 /// SatState holds the full solver state: assignments (partial solution,
 /// in insertion order), incompatibility store, current decision level,
-/// and the registry view.
+/// the registry view, and any lockfile pins the caller wants the
+/// decision heuristic to prefer.
 pub struct SatState {
     pub assigns: List<SatAssign>,
     pub incompats: List<SatIncompat>,
     pub decisionLevel: Int,
     pub registry: SatRegistry,
+    pub locked: List<SelfPkgLockPackage>,
     pub rootName: String,
     pub errors: List<String>,
     pub unsat: Bool,
@@ -823,6 +825,31 @@ pub fn satRegistryDeps(reg: SatRegistry, pkg: String, v: SemVersion) -> List<Sel
         }
     }
     []
+}
+
+/// satRegistryHas reports whether the registry carries `(pkg, v)`.
+pub fn satRegistryHas(reg: SatRegistry, pkg: String, v: SemVersion) -> Bool {
+    for p in reg.pkgs {
+        if p.name == pkg {
+            for cand in p.versions {
+                if compareSemVersion(cand, v) == 0 { return true }
+            }
+        }
+    }
+    false
+}
+
+/// satPinnedVersion looks up a lockfile pin for `pkg`. Returned only
+/// when a lock entry exists; the caller is responsible for verifying
+/// the pin is still compatible with the current derived term (locks
+/// are *preferences*, never force a contradiction).
+pub fn satPinnedVersion(state: SatState, pkg: String) -> SatVersionLookup {
+    for entry in state.locked {
+        if entry.name == pkg {
+            return SatVersionLookup { found: true, version: entry.version }
+        }
+    }
+    SatVersionLookup { found: false, version: stableVersion(0, 0, 0) }
 }
 
 // ---------------------------------------------------------------------
@@ -1263,11 +1290,22 @@ pub fn satNextDecision(state: SatState) -> SatDecisionOutcome {
     }
     let mut chosen: SemVersion = stableVersion(0, 0, 0)
     let mut foundVer = false
-    for v in versions {
-        if vsContains(allowed, v) {
-            chosen = v
-            foundVer = true
-            break
+    // Prefer a lock-pinned version when it is still in `allowed` —
+    // keeps `osty.lock` stable across re-resolves that don't widen
+    // the requirement. Falls through to the default newest-first
+    // search when no pin exists or the pin has drifted out of range.
+    let pinned = satPinnedVersion(state, pkg)
+    if pinned.found && vsContains(allowed, pinned.version) && satRegistryHas(state.registry, pkg, pinned.version) {
+        chosen = pinned.version
+        foundVer = true
+    }
+    if !(foundVer) {
+        for v in versions {
+            if vsContains(allowed, v) {
+                chosen = v
+                foundVer = true
+                break
+            }
         }
     }
     if !(foundVer) {
@@ -1423,6 +1461,9 @@ fn satRenderPlan(state: SatState) -> List<SelfPkgResolveDecision> {
         let v = psDecidedVersion(state, a.pkg)
         if !(v.found) { continue }
         let checksum = satRegistryChecksum(state.registry, a.pkg, v.version)
+        let pin = satPinnedVersion(state, a.pkg)
+        let fromLock = pin.found && compareSemVersion(pin.version, v.version) == 0
+        let message = if fromLock { "locked" } else { "pubgrub" }
         out.push(SelfPkgResolveDecision {
             found: true,
             name: a.pkg,
@@ -1430,8 +1471,8 @@ fn satRenderPlan(state: SatState) -> List<SelfPkgResolveDecision> {
             version: v.version,
             source: "registry+default",
             checksum,
-            fromLock: false,
-            message: "pubgrub",
+            fromLock,
+            message,
         })
     }
     out
@@ -1520,7 +1561,6 @@ pub fn selfPkgSolvePubGrubOutcome(
     candidateDeps: List<SelfPkgCandidateDeps>,
     locked: List<SelfPkgLockPackage>,
 ) -> SatSolveOutcome {
-    let _ = locked
     let effectiveRoot = if rootName == "" { "$root" } else { rootName }
     let registry = satRegistryFromPkgmgr(candidates, candidateDeps)
     let mut state = SatState {
@@ -1528,6 +1568,7 @@ pub fn selfPkgSolvePubGrubOutcome(
         incompats: [],
         decisionLevel: 0,
         registry,
+        locked,
         rootName: effectiveRoot,
         errors: [],
         unsat: false,
@@ -1543,4 +1584,46 @@ pub fn selfPkgSolvePubGrubOutcome(
         state.incompats.push(satIncompatDependency(rootTerm, depTerm))
     }
     satSolve(state)
+}
+
+// ---------------------------------------------------------------------
+// 14. Graph assembly — drop-in replacement for the greedy
+// `selfPkgResolveRegistryGraph`. Runs PubGrub, then builds a
+// `SelfPkgGraph` with transitive edges + deterministic topological
+// order (leaves first, same contract as the greedy resolver).
+// ---------------------------------------------------------------------
+
+/// selfPkgResolveRegistryGraphPubGrub resolves `deps` through the
+/// PubGrub solver and packages the result as a `SelfPkgGraph`. The
+/// registry + lock inputs are the same pure-data shapes the rest of
+/// `pkgmgr.osty` consumes.
+pub fn selfPkgResolveRegistryGraphPubGrub(
+    deps: List<SelfPkgDependency>,
+    candidates: List<SelfPkgCandidate>,
+    candidateDeps: List<SelfPkgCandidateDeps>,
+    locked: List<SelfPkgLockPackage>,
+) -> SelfPkgGraph {
+    let outcome = selfPkgSolvePubGrubOutcome("", deps, candidates, candidateDeps, locked)
+    if !(outcome.success) {
+        return SelfPkgGraph { nodes: [], order: [], errors: [outcome.error] }
+    }
+    let registry = satRegistryFromPkgmgr(candidates, candidateDeps)
+    let mut nodes: List<SelfPkgGraphNode> = []
+    for decision in outcome.decisions {
+        let childDeps = satRegistryDeps(registry, decision.packageName, decision.version)
+        let mut childNames: List<String> = []
+        for cd in childDeps {
+            childNames.push(cd.name)
+        }
+        nodes.push(selfPkgGraphNode(
+            decision.name,
+            decision.packageName,
+            decision.version,
+            decision.source,
+            decision.checksum,
+            childNames,
+        ))
+    }
+    let order = selfPkgTopoOrder(nodes)
+    SelfPkgGraph { nodes, order, errors: [] }
 }

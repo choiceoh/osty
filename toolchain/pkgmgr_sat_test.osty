@@ -185,6 +185,163 @@ fn testPubGrubPicksHighestWhenMultipleVersionsSatisfy() {
     testing.assertEq(compareSemVersion(pick.decision.version, stableVersion(1, 5, 0)), 0)
 }
 
+fn testPubGrubHonorsLockedPinWhenStillCompatible() {
+    // Registry has x 1.5.0 (newest) and x 1.2.0. Lock pins 1.2.0 and
+    // the caret req still admits it, so PubGrub must honour the pin.
+    let roots = [satTestDep("x", caretReq(stableVersion(1, 0, 0)))]
+    let candidates = [
+        satTestCand("x", stableVersion(1, 5, 0)),
+        satTestCand("x", stableVersion(1, 2, 0)),
+    ]
+    let candidateDeps = [
+        satTestCandDeps("x", stableVersion(1, 5, 0), []),
+        satTestCandDeps("x", stableVersion(1, 2, 0), []),
+    ]
+    let locked = [
+        selfPkgLockPackage(
+            "x",
+            stableVersion(1, 2, 0),
+            "registry+default",
+            "sha256:x-1.2.0",
+            [],
+        ),
+    ]
+    let plan = selfPkgSolvePubGrub("root", roots, candidates, candidateDeps, locked)
+    testing.assertEq(plan.missing, 0)
+    let pick = satTestFindDecision(plan, "x")
+    testing.assert(pick.found)
+    testing.assertEq(compareSemVersion(pick.decision.version, stableVersion(1, 2, 0)), 0)
+    testing.assert(pick.decision.fromLock)
+}
+
+fn testPubGrubIgnoresIncompatibleLockPin() {
+    // Lock pins 1.2.0 but the caret req has moved past it (>=1.4.0).
+    // The pin must be dropped and the newest allowed version chosen.
+    let roots = [
+        satTestDep(
+            "x",
+            semReq(false, [reqClause(ReqGE, stableVersion(1, 4, 0))]),
+        ),
+    ]
+    let candidates = [
+        satTestCand("x", stableVersion(1, 5, 0)),
+        satTestCand("x", stableVersion(1, 2, 0)),
+    ]
+    let candidateDeps = [
+        satTestCandDeps("x", stableVersion(1, 5, 0), []),
+        satTestCandDeps("x", stableVersion(1, 2, 0), []),
+    ]
+    let locked = [
+        selfPkgLockPackage(
+            "x",
+            stableVersion(1, 2, 0),
+            "registry+default",
+            "sha256:x-1.2.0",
+            [],
+        ),
+    ]
+    let plan = selfPkgSolvePubGrub("root", roots, candidates, candidateDeps, locked)
+    testing.assertEq(plan.missing, 0)
+    let pick = satTestFindDecision(plan, "x")
+    testing.assert(pick.found)
+    testing.assertEq(compareSemVersion(pick.decision.version, stableVersion(1, 5, 0)), 0)
+    testing.assert(!(pick.decision.fromLock))
+}
+
+fn testPubGrubGraphWrapperProducesLeafFirstOrder() {
+    // app 1.0 -> util ^0.2 -> leaf ^0.1. Graph wrapper must produce
+    // [leaf, util, app] in topological (leaves-first) order.
+    let deps = [satTestDep("app", caretReq(stableVersion(1, 0, 0)))]
+    let candidates = [
+        satTestCand("app", stableVersion(1, 0, 0)),
+        satTestCand("util", stableVersion(0, 2, 0)),
+        satTestCand("leaf", stableVersion(0, 1, 0)),
+    ]
+    let candidateDeps = [
+        satTestCandDeps("app", stableVersion(1, 0, 0), [
+            satTestDep("util", caretReq(stableVersion(0, 2, 0))),
+        ]),
+        satTestCandDeps("util", stableVersion(0, 2, 0), [
+            satTestDep("leaf", caretReq(stableVersion(0, 1, 0))),
+        ]),
+        satTestCandDeps("leaf", stableVersion(0, 1, 0), []),
+    ]
+    let graph = selfPkgResolveRegistryGraph(deps, candidates, candidateDeps, [])
+    testing.assertEq(selfPkgGraphErrorCount(graph), 0)
+    testing.assertEq(selfPkgGraphNodeCount(graph), 3)
+    testing.assertEq(graph.order[0], "leaf")
+    testing.assertEq(graph.order[1], "util")
+    testing.assertEq(graph.order[2], "app")
+}
+
+fn testPubGrubGraphWrapperBacktracksUnderDiamond() {
+    // Same backtrack case as the plan-level test, but exercised via the
+    // graph wrapper so regressions in the assembly path are caught too.
+    let deps = [
+        satTestDep("a", caretReq(stableVersion(1, 0, 0))),
+        satTestDep("b", caretReq(stableVersion(1, 0, 0))),
+    ]
+    let candidates = [
+        satTestCand("a", stableVersion(1, 1, 0)),
+        satTestCand("a", stableVersion(1, 0, 0)),
+        satTestCand("b", stableVersion(1, 0, 0)),
+    ]
+    let candidateDeps = [
+        satTestCandDeps("a", stableVersion(1, 1, 0), [
+            satTestDep("b", caretReq(stableVersion(2, 0, 0))),
+        ]),
+        satTestCandDeps("a", stableVersion(1, 0, 0), [
+            satTestDep("b", caretReq(stableVersion(1, 0, 0))),
+        ]),
+        satTestCandDeps("b", stableVersion(1, 0, 0), []),
+    ]
+    let graph = selfPkgResolveRegistryGraph(deps, candidates, candidateDeps, [])
+    testing.assertEq(selfPkgGraphErrorCount(graph), 0)
+    testing.assertEq(selfPkgGraphNodeCount(graph), 2)
+    let node = satTestFindGraphNode(graph, "a")
+    testing.assert(node.found)
+    testing.assertEq(compareSemVersion(node.node.version, stableVersion(1, 0, 0)), 0)
+}
+
+fn testPubGrubGreedyBackendStillCallable() {
+    // `selfPkgResolveRegistryGraphGreedy` is preserved for diagnostic
+    // comparisons. Sanity-check it still returns an acyclic graph for
+    // the simple chain.
+    let deps = [satTestDep("app", caretReq(stableVersion(1, 0, 0)))]
+    let candidates = [
+        satTestCand("app", stableVersion(1, 0, 0)),
+        satTestCand("leaf", stableVersion(0, 1, 0)),
+    ]
+    let candidateDeps = [
+        satTestCandDeps("app", stableVersion(1, 0, 0), [
+            satTestDep("leaf", caretReq(stableVersion(0, 1, 0))),
+        ]),
+        satTestCandDeps("leaf", stableVersion(0, 1, 0), []),
+    ]
+    let graph = selfPkgResolveRegistryGraphGreedy(deps, candidates, candidateDeps, [])
+    testing.assertEq(selfPkgGraphErrorCount(graph), 0)
+    testing.assertEq(selfPkgGraphNodeCount(graph), 2)
+    testing.assertEq(graph.order[0], "leaf")
+    testing.assertEq(graph.order[1], "app")
+}
+
+fn satTestFindGraphNode(graph: SelfPkgGraph, name: String) -> SatTestGraphNodeLookup {
+    for node in graph.nodes {
+        if node.name == name {
+            return SatTestGraphNodeLookup { found: true, node }
+        }
+    }
+    SatTestGraphNodeLookup {
+        found: false,
+        node: selfPkgGraphNode("", "", stableVersion(0, 0, 0), "", "", []),
+    }
+}
+
+pub struct SatTestGraphNodeLookup {
+    pub found: Bool,
+    pub node: SelfPkgGraphNode,
+}
+
 pub struct SatTestDecisionLookup {
     pub found: Bool,
     pub decision: SelfPkgResolveDecision,
