@@ -662,3 +662,141 @@ fn main() {
 		}
 	}
 }
+
+func TestCheckSourceStructuredAcceptsDirectDerivedInterfaceMethods(t *testing.T) {
+	src := []byte(`struct Point {
+    x: Int
+    y: Int
+}
+
+fn main() {
+    let point = Point { x: 1, y: 2 }
+    let samePoint: Bool = point.eq(point)
+    let pointHash: Int = point.hash()
+
+    let ints: List<Int> = [1, 2, 3]
+    let sameInts: Bool = ints.eq([1, 2, 3])
+    let intsHash: Int = ints.hash()
+
+    let maybe: Int? = Some(1)
+    let sameMaybe: Bool = maybe.eq(Some(1))
+    let _ = (samePoint, pointHash, sameInts, intsHash, sameMaybe)
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+
+	got := map[string]string{}
+	for _, binding := range checked.Bindings {
+		got[binding.Name] = binding.TypeName
+	}
+	want := map[string]string{
+		"samePoint": "Bool",
+		"pointHash": "Int",
+		"sameInts":  "Bool",
+		"intsHash":  "Int",
+		"sameMaybe": "Bool",
+	}
+	for name, wantType := range want {
+		if got[name] != wantType {
+			t.Fatalf("binding type for %s = %q, want %q (all=%v)", name, got[name], wantType, got)
+		}
+	}
+}
+
+func TestCheckSourceStructuredRejectsDirectDerivedInterfaceMethodsWhenUnavailable(t *testing.T) {
+	src := []byte(`struct BadBox {
+    f: fn() -> Int
+}
+
+fn one() -> Int {
+    1
+}
+
+fn main() {
+    let bad = BadBox { f: one }
+    let floats: List<Float> = [1.0, 2.0]
+
+    let _ = bad.eq(bad)
+    let _ = bad.hash()
+    let _ = floats.hash()
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if got := checked.Summary.ErrorsByContext["E0703"]; got != 3 {
+		t.Fatalf("E0703 count = %d, want 3 (summary=%#v details=%v diagnostics=%#v)", got, checked.Summary, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+	if checked.Summary.Errors != 3 {
+		t.Fatalf("summary errors = %d, want 3 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+}
+
+func TestCheckSourceStructuredAcceptsErrorBoundsWithDefaultSource(t *testing.T) {
+	src := []byte(`enum FsError {
+    NotFound(String)
+
+    fn message(self) -> String {
+        match self {
+            NotFound(path) -> "missing {path}",
+        }
+    }
+}
+
+fn describe<T: Error>(value: T) -> (String, Error?) {
+    let msg: String = value.message()
+    let parent: Error? = value.source()
+    (msg, parent)
+}
+
+fn main() {
+    let err = FsError.NotFound("settings.osty")
+    let described: (String, Error?) = describe(err)
+    let _ = described
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+
+	got := map[string]string{}
+	for _, binding := range checked.Bindings {
+		got[binding.Name] = binding.TypeName
+	}
+	if got["described"] != "(String, Error?)" {
+		t.Fatalf("binding type for described = %q, want %q (all=%v)", got["described"], "(String, Error?)", got)
+	}
+}
+
+func TestCheckSourceStructuredRejectsInvalidErrorBounds(t *testing.T) {
+	src := []byte(`struct WrongError {
+    code: Int
+
+    fn message(self) -> Int {
+        self.code
+    }
+}
+
+fn describe<T: Error>(value: T) -> String {
+    value.message()
+}
+
+fn main() {
+    let err = WrongError { code: 7 }
+    let _ = describe(err)
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if got := checked.Summary.ErrorsByContext["E0749"]; got != 1 {
+		t.Fatalf("E0749 count = %d, want 1 (summary=%#v details=%v diagnostics=%#v)", got, checked.Summary, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+	if checked.Summary.Errors != 1 {
+		t.Fatalf("summary errors = %d, want 1 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+}
