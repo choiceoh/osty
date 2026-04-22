@@ -646,7 +646,7 @@ func (bs *bodyState) lowerBlockStmt(b *ir.Block) {
 
 func (bs *bodyState) lowerLet(let *ir.LetStmt) {
 	t := let.Type
-	if t == nil && let.Value != nil {
+	if isPoisonType(t) && let.Value != nil {
 		t = let.Value.Type()
 	}
 	if t == nil {
@@ -665,6 +665,14 @@ func (bs *bodyState) lowerLet(let *ir.LetStmt) {
 	default:
 		bs.l.noteIssue("let stmt with neither name nor pattern")
 	}
+}
+
+func isPoisonType(t Type) bool {
+	if t == nil {
+		return true
+	}
+	_, ok := t.(*ir.ErrType)
+	return ok
 }
 
 func (bs *bodyState) lowerLetPattern(pat ir.Pattern, value ir.Expr, valueType Type, sp Span) {
@@ -1780,6 +1788,23 @@ func (bs *bodyState) lowerExprAsOperand(e ir.Expr) Operand {
 		return &ConstOp{Const: &UnitConst{}, T: TUnit}
 	case *ir.StringLit:
 		return bs.lowerStringLit(x)
+	case *ir.FieldExpr:
+		if !x.Optional {
+			recvPlace, ok := bs.lowerExprToPlace(x.X)
+			if !ok {
+				t := x.X.Type()
+				tmp := bs.freshTemp(t, exprSpan(x.X))
+				bs.lowerExprInto(x.X, tmp, t)
+				recvPlace = Place{Local: tmp}
+			}
+			info := bs.l.structFromType(x.X.Type(), "")
+			fieldT := bs.fieldExprType(x)
+			idx := bs.l.fieldIndex(info, x.Name)
+			return &CopyOp{
+				Place: recvPlace.Project(&FieldProj{Index: idx, Name: x.Name, Type: fieldT}),
+				T:     fieldT,
+			}
+		}
 	case *ir.Ident:
 		return bs.lowerIdent(x)
 	}
@@ -1826,8 +1851,9 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 			}
 			info := bs.l.structFromType(x.X.Type(), "")
 			idx := bs.l.fieldIndex(info, x.Name)
-			proj := &FieldProj{Index: idx, Name: x.Name, Type: x.T}
-			return &UseRV{Op: &CopyOp{Place: recvPlace.Project(proj), T: x.T}}
+			fieldT := bs.fieldExprType(x)
+			proj := &FieldProj{Index: idx, Name: x.Name, Type: fieldT}
+			return &UseRV{Op: &CopyOp{Place: recvPlace.Project(proj), T: fieldT}}
 		}
 		// Optional field — handled via lowerOptionalFieldInto (the
 		// caller should have routed us through lowerExprIntoPlace).
@@ -3898,6 +3924,23 @@ func hasInterpolation(s *ir.StringLit) bool {
 		}
 	}
 	return false
+}
+
+func (bs *bodyState) fieldExprType(x *ir.FieldExpr) Type {
+	if x == nil {
+		return ir.ErrTypeVal
+	}
+	if !isPoisonType(x.T) {
+		return x.T
+	}
+	info := bs.l.structFromType(x.X.Type(), "")
+	if info == nil {
+		return x.T
+	}
+	if ft := bs.l.fieldType(info, x.Name); ft != nil {
+		return ft
+	}
+	return x.T
 }
 
 func mapUnaryOp(op ir.UnOp) UnaryOp {

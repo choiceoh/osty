@@ -409,6 +409,9 @@ func (g *mirGen) checkSupported() error {
 			if loc == nil {
 				continue
 			}
+			if allowUnusedErrLocal(fn, loc) {
+				continue
+			}
 			if !g.typeSupported(loc.Type) {
 				return unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s", mirTypeString(loc.Type), fn.Name))
 			}
@@ -460,6 +463,9 @@ func (g *mirGen) checkFunctionSupported(fn *mir.Function) error {
 	}
 	for _, loc := range fn.Locals {
 		if loc == nil {
+			continue
+		}
+		if allowUnusedErrLocal(fn, loc) {
 			continue
 		}
 		if !g.typeSupported(loc.Type) {
@@ -547,6 +553,149 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 	return false
 }
 
+func allowUnusedErrLocal(fn *mir.Function, loc *mir.Local) bool {
+	if fn == nil || loc == nil || loc.IsParam || loc.IsReturn {
+		return false
+	}
+	if _, ok := loc.Type.(*ir.ErrType); !ok {
+		return false
+	}
+	// The checker / lowerer can leave a dead temporary at ErrType even
+	// when the live value path is still compilable. Keep MIR on the fast
+	// path for those pure bookkeeping locals, but continue to fall back
+	// when poisoned values participate in real operations or signatures.
+	return !localReferenced(fn, loc.ID)
+}
+
+func localReferenced(fn *mir.Function, id mir.LocalID) bool {
+	if fn == nil {
+		return false
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, inst := range bb.Instrs {
+			if instrReferencesLocal(inst, id) {
+				return true
+			}
+		}
+		if termReferencesLocal(bb.Term, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func instrReferencesLocal(inst mir.Instr, id mir.LocalID) bool {
+	switch x := inst.(type) {
+	case *mir.AssignInstr:
+		return placeReferencesLocal(x.Dest, id) || rvalueReferencesLocal(x.Src, id)
+	case *mir.CallInstr:
+		if x.Dest != nil && placeReferencesLocal(*x.Dest, id) {
+			return true
+		}
+		if calleeReferencesLocal(x.Callee, id) {
+			return true
+		}
+		for _, arg := range x.Args {
+			if operandReferencesLocal(arg, id) {
+				return true
+			}
+		}
+	case *mir.IntrinsicInstr:
+		if x.Dest != nil && placeReferencesLocal(*x.Dest, id) {
+			return true
+		}
+		for _, arg := range x.Args {
+			if operandReferencesLocal(arg, id) {
+				return true
+			}
+		}
+	case *mir.StorageLiveInstr:
+		return x.Local == id
+	case *mir.StorageDeadInstr:
+		return x.Local == id
+	}
+	return false
+}
+
+func rvalueReferencesLocal(rv mir.RValue, id mir.LocalID) bool {
+	switch x := rv.(type) {
+	case *mir.UseRV:
+		return operandReferencesLocal(x.Op, id)
+	case *mir.UnaryRV:
+		return operandReferencesLocal(x.Arg, id)
+	case *mir.BinaryRV:
+		return operandReferencesLocal(x.Left, id) || operandReferencesLocal(x.Right, id)
+	case *mir.AggregateRV:
+		for _, field := range x.Fields {
+			if operandReferencesLocal(field, id) {
+				return true
+			}
+		}
+	case *mir.DiscriminantRV:
+		return placeReferencesLocal(x.Place, id)
+	case *mir.LenRV:
+		return placeReferencesLocal(x.Place, id)
+	case *mir.CastRV:
+		return operandReferencesLocal(x.Arg, id)
+	case *mir.AddressOfRV:
+		return placeReferencesLocal(x.Place, id)
+	case *mir.RefRV:
+		return placeReferencesLocal(x.Place, id)
+	}
+	return false
+}
+
+func calleeReferencesLocal(c mir.Callee, id mir.LocalID) bool {
+	switch x := c.(type) {
+	case *mir.IndirectCall:
+		return operandReferencesLocal(x.Callee, id)
+	}
+	return false
+}
+
+func operandReferencesLocal(op mir.Operand, id mir.LocalID) bool {
+	switch x := op.(type) {
+	case *mir.CopyOp:
+		return placeReferencesLocal(x.Place, id)
+	case *mir.MoveOp:
+		return placeReferencesLocal(x.Place, id)
+	}
+	return false
+}
+
+func termReferencesLocal(t mir.Terminator, id mir.LocalID) bool {
+	switch x := t.(type) {
+	case *mir.BranchTerm:
+		return operandReferencesLocal(x.Cond, id)
+	case *mir.SwitchIntTerm:
+		return operandReferencesLocal(x.Scrutinee, id)
+	}
+	return false
+}
+
+func placeReferencesLocal(p mir.Place, id mir.LocalID) bool {
+	if p.Local == id {
+		return true
+	}
+	for _, proj := range p.Projections {
+		if projReferencesLocal(proj, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func projReferencesLocal(proj mir.Projection, id mir.LocalID) bool {
+	switch x := proj.(type) {
+	case *mir.IndexProj:
+		return operandReferencesLocal(x.Index, id)
+	}
+	return false
+}
+
 func (g *mirGen) checkInstrSupported(fn *mir.Function, inst mir.Instr) error {
 	switch x := inst.(type) {
 	case *mir.AssignInstr:
@@ -597,7 +746,7 @@ func (g *mirGen) checkProjectionsSupported(fn *mir.Function, p mir.Place, ctx st
 			// previous projection's type.
 			var baseT mir.Type
 			if i == 0 {
-				baseT = g.localType(p.Local)
+				baseT = localTypeIn(fn, p.Local)
 			} else {
 				baseT = projectionType(p.Projections[i-1])
 			}
@@ -631,6 +780,13 @@ func isMapPtrType(t mir.Type) bool {
 	return false
 }
 
+func isSetPtrType(t mir.Type) bool {
+	if nt, ok := t.(*ir.NamedType); ok {
+		return nt.Name == "Set" && nt.Builtin
+	}
+	return false
+}
+
 func (g *mirGen) checkRValueSupported(fn *mir.Function, rv mir.RValue) error {
 	switch r := rv.(type) {
 	case *mir.UseRV, *mir.UnaryRV, *mir.BinaryRV,
@@ -643,6 +799,14 @@ func (g *mirGen) checkRValueSupported(fn *mir.Function, rv mir.RValue) error {
 			return nil
 		}
 		return unsupported("mir-mvp", fmt.Sprintf("aggregate kind %d not yet supported in %s", r.Kind, fn.Name))
+	case *mir.LenRV:
+		if err := g.checkProjectionsSupported(fn, r.Place, "LenRV.Place"); err != nil {
+			return err
+		}
+		if placeTypeIn(fn, r.Place) == nil {
+			return unsupported("mir-mvp", fmt.Sprintf("LenRV on place with unknown type in %s", fn.Name))
+		}
+		return nil
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("rvalue %T not yet supported in %s", rv, fn.Name))
 }
@@ -677,7 +841,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 	// the legacy emitter routes through `osty_rt_strings_*`. Accepting
 	// them here lets `.chars()` / `.bytes()` reach the MIR emitter on
 	// `mir-backend` object/binary emission instead of falling back.
-	case mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
+	case mir.IntrinsicStringConcat, mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
 		mir.IntrinsicStringLen, mir.IntrinsicStringIsEmpty,
 		mir.IntrinsicStringToUpper, mir.IntrinsicStringToLower,
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat:
@@ -715,6 +879,8 @@ func mirIntrinsicLabel(k mir.IntrinsicKind) string {
 		return "eprint"
 	case mir.IntrinsicEprintln:
 		return "eprintln"
+	case mir.IntrinsicStringConcat:
+		return "string_concat"
 	case mir.IntrinsicStringChars:
 		return "string_chars"
 	case mir.IntrinsicStringBytes:
@@ -1898,7 +2064,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitSetIntrinsic(i)
 	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesEndsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesLastIndexOf, mir.IntrinsicBytesSplit, mir.IntrinsicBytesJoin, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat, mir.IntrinsicBytesReplace, mir.IntrinsicBytesReplaceAll, mir.IntrinsicBytesTrimLeft, mir.IntrinsicBytesTrimRight, mir.IntrinsicBytesTrim, mir.IntrinsicBytesTrimSpace, mir.IntrinsicBytesToUpper, mir.IntrinsicBytesToLower, mir.IntrinsicBytesToHex, mir.IntrinsicBytesSlice:
 		return g.emitBytesIntrinsic(i)
-	case mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
+	case mir.IntrinsicStringConcat, mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
 		mir.IntrinsicStringLen, mir.IntrinsicStringIsEmpty,
 		mir.IntrinsicStringToUpper, mir.IntrinsicStringToLower,
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat:
@@ -2961,6 +3127,35 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 // MIR `{i64 disc, i64 payload}` Result layout after validating the
 // parse at the runtime boundary.
 func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
+	if i.Kind == mir.IntrinsicStringConcat {
+		if len(i.Args) == 0 {
+			return unsupported("mir-mvp", "string_concat with no args")
+		}
+		sym := llvmStringRuntimeConcatSymbol()
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, ptr)")
+		var acc *LlvmValue
+		for idx, op := range i.Args {
+			if !isStringLLVMType(op.Type()) {
+				return unsupported("mir-mvp", fmt.Sprintf("string_concat arg %d type %s", idx+1, mirTypeString(op.Type())))
+			}
+			partReg, err := g.evalOperand(op, op.Type())
+			if err != nil {
+				return err
+			}
+			part := &LlvmValue{typ: "ptr", name: partReg}
+			if acc == nil {
+				acc = part
+				continue
+			}
+			em := g.ostyEmitter()
+			acc = llvmStringConcat(em, acc, part)
+			g.flushOstyEmitter(em)
+		}
+		if acc == nil {
+			return unsupported("mir-mvp", "string_concat produced no value")
+		}
+		return g.storeIntrinsicResult(i, acc)
+	}
 	if len(i.Args) < 1 {
 		return unsupported("mir-mvp", "string intrinsic with no receiver")
 	}
@@ -3721,6 +3916,13 @@ func isStringLLVMType(t mir.Type) bool {
 	return false
 }
 
+func isBytesType(t mir.Type) bool {
+	if p, ok := t.(*ir.PrimType); ok {
+		return p.Kind == ir.PrimBytes
+	}
+	return false
+}
+
 // emitPrintlnLike prints a single primitive value using printf. The
 // runtime isn't used here — printf is declared directly.
 func (g *mirGen) emitPrintlnLike(op mir.Operand, newline bool) error {
@@ -3970,6 +4172,8 @@ func (g *mirGen) evalRValue(rv mir.RValue, hintT mir.Type) (string, error) {
 		return g.emitAggregate(r, hintT)
 	case *mir.DiscriminantRV:
 		return g.emitDiscriminantRV(r)
+	case *mir.LenRV:
+		return g.emitLenRV(r)
 	case *mir.NullaryRV:
 		return g.emitNullaryRV(r, hintT)
 	case *mir.CastRV:
@@ -4023,6 +4227,56 @@ func (g *mirGen) emitDiscriminantRV(rv *mir.DiscriminantRV) (string, error) {
 	g.fnBuf.WriteString(agg)
 	g.fnBuf.WriteString(", 0\n")
 	return tmp, nil
+}
+
+// emitLenRV lowers MIR's direct length query on a place to the same
+// runtime entrypoints used by the intrinsic path. This is the shape
+// lowerForIn emits for list iteration, so supporting it keeps those
+// loops on the MIR path instead of forcing a legacy fallback.
+func (g *mirGen) emitLenRV(rv *mir.LenRV) (string, error) {
+	placeT := g.placeType(rv.Place)
+	if placeT == nil {
+		return "", unsupported("mir-mvp", "LenRV place type is unknown")
+	}
+	valueReg, err := g.emitLoad(rv.Place, placeT)
+	if err != nil {
+		return "", err
+	}
+	em := g.ostyEmitter()
+	switch {
+	case isListPtrType(placeT):
+		sym := listRuntimeLenSymbol()
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		result := llvmListLen(em, &LlvmValue{typ: "ptr", name: valueReg})
+		g.flushOstyEmitter(em)
+		return result.name, nil
+	case isMapPtrType(placeT):
+		sym := mapRuntimeLenSymbol()
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		result := llvmMapLen(em, &LlvmValue{typ: "ptr", name: valueReg})
+		g.flushOstyEmitter(em)
+		return result.name, nil
+	case isSetPtrType(placeT):
+		sym := setRuntimeLenSymbol()
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		result := llvmSetLen(em, &LlvmValue{typ: "ptr", name: valueReg})
+		g.flushOstyEmitter(em)
+		return result.name, nil
+	case isStringLLVMType(placeT):
+		sym := llvmStringRuntimeByteLenSymbol()
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		result := llvmStringByteLen(em, &LlvmValue{typ: "ptr", name: valueReg})
+		g.flushOstyEmitter(em)
+		return result.name, nil
+	case isBytesType(placeT):
+		sym := "osty_rt_bytes_len"
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		result := llvmCall(em, "i64", sym, []*LlvmValue{{typ: "ptr", name: valueReg}})
+		g.flushOstyEmitter(em)
+		return result.name, nil
+	default:
+		return "", unsupported("mir-mvp", "LenRV on unsupported type "+mirTypeString(placeT))
+	}
 }
 
 // emitNullaryRV materialises nullary values — currently only
@@ -5025,10 +5279,41 @@ func projectionType(p mir.Projection) mir.Type {
 
 // localType returns the MIR type of a local by id.
 func (g *mirGen) localType(id mir.LocalID) mir.Type {
-	if loc := g.fn.Local(id); loc != nil {
+	return localTypeIn(g.fn, id)
+}
+
+func localTypeIn(fn *mir.Function, id mir.LocalID) mir.Type {
+	if fn == nil {
+		return nil
+	}
+	if loc := fn.Local(id); loc != nil {
 		return loc.Type
 	}
 	return nil
+}
+
+func (g *mirGen) placeType(place mir.Place) mir.Type {
+	return placeTypeIn(g.fn, place)
+}
+
+func placeTypeIn(fn *mir.Function, place mir.Place) mir.Type {
+	t := localTypeIn(fn, place.Local)
+	if t == nil {
+		return nil
+	}
+	for _, proj := range place.Projections {
+		if next := projectionType(proj); next != nil {
+			t = next
+			continue
+		}
+		switch x := proj.(type) {
+		case *mir.DerefProj:
+			t = x.Type
+		default:
+			return nil
+		}
+	}
+	return t
 }
 
 // renderConst emits a literal as an LLVM immediate. The receiver is
