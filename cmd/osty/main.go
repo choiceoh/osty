@@ -617,6 +617,24 @@ func parseFlags() cliFlags {
 // Diagnostics are rendered with each file's own formatter so source
 // snippets point at the right lines even when spanning packages.
 func runCheckPackage(dir string, flags cliFlags) {
+	if flags.native {
+		if flags.inspect || flags.dumpNativeDiags {
+			fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect / --dump-native-diags\n")
+			os.Exit(2)
+		}
+		// Workspace support under --native is deferred: it requires
+		// threading stdlib + cross-package imports into
+		// CheckPackageStructured's import surface. Single-package
+		// directories get the astbridge-free path immediately.
+		if isWorkspace(dir) {
+			fmt.Fprintf(os.Stderr, "osty: --native does not yet support workspace directories; run against a single package\n")
+			os.Exit(2)
+		}
+		if runCheckPackageNative(dir, flags) != 0 {
+			os.Exit(1)
+		}
+		return
+	}
 	// When dir (or any ancestor) contains osty.toml, validate it first:
 	// manifest errors (bad edition, empty workspace, etc.) surface
 	// before we descend into source files. A workspace manifest also
@@ -907,6 +925,101 @@ func applyPackageFixes(pkg *resolve.Package, diags []*diag.Diagnostic, flags cli
 // surfaces. Extracting this keeps the subcommand body testable in-
 // process so the astbridge counter can pin the end-to-end CLI
 // invariant (not just the library primitives).
+// runCheckPackageNative is the DIR sibling of runCheckFileNative.
+// Loads the package via LoadPackageForNative (no eager *ast.File
+// materialization), runs selfhost.CheckPackageStructured over the
+// arena, and converts the resulting CheckDiagnosticRecord slice into
+// per-file *diag.Diagnostic values so printPackageDiags keeps its
+// file-bucketed rendering. Workspace directories and import-surface
+// threading are not yet supported — the single-package happy path
+// runs astbridge-free end-to-end. Returns the subcommand exit code.
+func runCheckPackageNative(dir string, flags cliFlags) int {
+	pkg, err := resolve.LoadPackageForNativeWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("check"), os.Stderr, flags))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
+		return 1
+	}
+	input := selfhost.PackageCheckInput{
+		Files: make([]selfhost.PackageCheckFile, 0, len(pkg.Files)),
+	}
+	base := 0
+	for _, pf := range pkg.Files {
+		if pf == nil || len(pf.Source) == 0 {
+			continue
+		}
+		name := filepath.Base(pf.Path)
+		input.Files = append(input.Files, selfhost.PackageCheckFile{
+			Source: append([]byte(nil), pf.Source...),
+			Base:   base,
+			Name:   name,
+			Path:   pf.Path,
+		})
+		base += len(pf.Source) + 1
+	}
+	checked, err := selfhost.CheckPackageStructured(input)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
+		return 1
+	}
+	diags := packageParseDiags(pkg)
+	diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
+	printPackageDiags(pkg, diags, flags)
+	if hasError(diags) {
+		return 1
+	}
+	return 0
+}
+
+// nativePackageCheckDiags buckets records by owning file (using the
+// layout bases CheckPackageStructured emitted against), relativizes
+// their offsets into each file's own source, and runs the per-file
+// converter so line/column numbers print against the right file —
+// not the concatenated bundle. Records that don't land inside any
+// file range (should not happen for well-formed output) are dropped
+// with their bundle offsets preserved as a defensive fallback.
+func nativePackageCheckDiags(records []selfhost.CheckDiagnosticRecord, files []selfhost.PackageCheckFile) []*diag.Diagnostic {
+	if len(records) == 0 || len(files) == 0 {
+		return nil
+	}
+	buckets := make(map[int][]selfhost.CheckDiagnosticRecord, len(files))
+	for _, rec := range records {
+		idx := findOwningFile(files, rec.Start)
+		if idx < 0 {
+			continue
+		}
+		rel := rec
+		rel.File = files[idx].Path
+		rel.Start -= files[idx].Base
+		rel.End -= files[idx].Base
+		if rel.Start < 0 {
+			rel.Start = 0
+		}
+		if rel.End < rel.Start {
+			rel.End = rel.Start
+		}
+		buckets[idx] = append(buckets[idx], rel)
+	}
+	out := make([]*diag.Diagnostic, 0, len(records))
+	for i := range files {
+		bucket, ok := buckets[i]
+		if !ok {
+			continue
+		}
+		out = append(out, selfhost.CheckDiagnosticsAsDiag(files[i].Source, bucket)...)
+	}
+	return out
+}
+
+func findOwningFile(files []selfhost.PackageCheckFile, offset int) int {
+	for i, f := range files {
+		end := f.Base + len(f.Source)
+		if offset >= f.Base && offset <= end {
+			return i
+		}
+	}
+	return -1
+}
+
 // runCheckFileNative drives `osty check --native FILE` end-to-end on
 // the self-host arena pipeline: parser.ParseRun produces the
 // FrontendRun without lowering *ast.File, selfhost.CheckStructuredFromRun

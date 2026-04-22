@@ -91,6 +91,128 @@ func TestCheckCLINativeRejectsInspectAndDumpFlags(t *testing.T) {
 	}
 }
 
+// TestCheckCLINativePackageCleanSourceExitsZero is the DIR sibling
+// of the single-file happy-path test. A two-file package (no cross-
+// file references) should pass `osty check --native DIR` with exit
+// 0 and no stderr error output.
+func TestCheckCLINativePackageCleanSourceExitsZero(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.osty")
+	bPath := filepath.Join(dir, "b.osty")
+	if err := os.WriteFile(aPath, []byte(`pub fn helper() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte(`fn main() {
+    let x = 1
+    let y = x + 2
+    y
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := runOstyCLI(t, "check", "--native", dir)
+	if got.exit != 0 {
+		t.Fatalf("osty check --native DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if strings.Contains(got.stderr, "error[") {
+		t.Fatalf("stderr contained error output on clean package:\n%s", got.stderr)
+	}
+}
+
+// TestCheckCLINativePackageSurfacesPerFileIntrinsic confirms the
+// per-file diagnostic bucketing: an `#[intrinsic]` violation in the
+// second file must surface with E0773 and a span whose rendered path
+// points at b.osty (not the first file and not the bundled buffer).
+func TestCheckCLINativePackageSurfacesPerFileIntrinsic(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.osty")
+	bPath := filepath.Join(dir, "b.osty")
+	if err := os.WriteFile(aPath, []byte(`pub fn helper() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte(`#[intrinsic]
+fn bad() -> Int {
+    42
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := runOstyCLI(t, "check", "--native", dir)
+	if got.exit != 1 {
+		t.Fatalf("exit = %d, want 1\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "error[E0773]") {
+		t.Fatalf("stderr missing E0773:\n%s", got.stderr)
+	}
+	// printPackageDiags emits the file path in its rendered output.
+	// The intrinsic lives in b.osty only; a.osty is clean.
+	if !strings.Contains(got.stderr, "b.osty") {
+		t.Fatalf("stderr missing b.osty in diagnostic:\n%s", got.stderr)
+	}
+	if strings.Contains(got.stderr, "error[E0773]") && strings.Contains(got.stderr, "a.osty:") {
+		t.Fatalf("stderr incorrectly attributed E0773 to a.osty:\n%s", got.stderr)
+	}
+}
+
+// TestRunCheckPackageNativeIsAstbridgeFree is the DIR in-process
+// counter test. LoadPackageForNative + CheckPackageStructured +
+// nativePackageCheckDiags + CheckDiagnosticsAsDiag must all leave
+// AstbridgeLowerCount at zero for a clean multi-file package. Pairs
+// with TestLoadPackageForNativeMultiFileIsAstbridgeFree (which only
+// covered the resolve side).
+func TestRunCheckPackageNativeIsAstbridgeFree(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.osty")
+	bPath := filepath.Join(dir, "b.osty")
+	if err := os.WriteFile(aPath, []byte(`pub fn helper() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte(`fn main() {
+    let x = 1
+    let y = x + 2
+    y
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origStdout := os.Stdout
+	origStderr := os.Stderr
+	rout, wout, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stdout: %v", err)
+	}
+	rerr, werr, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stderr: %v", err)
+	}
+	os.Stdout = wout
+	os.Stderr = werr
+	t.Cleanup(func() {
+		os.Stdout = origStdout
+		os.Stderr = origStderr
+	})
+	drained := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
+	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
+
+	selfhost.ResetAstbridgeLowerCount()
+	exit := runCheckPackageNative(dir, cliFlags{noColor: true, native: true})
+	_ = wout.Close()
+	_ = werr.Close()
+	<-drained
+	<-drained
+
+	if exit != 0 {
+		t.Fatalf("runCheckPackageNative exit = %d, want 0", exit)
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("AstbridgeLowerCount after runCheckPackageNative = %d, want 0 (DIR path regressed into *ast.File detour)", got)
+	}
+}
+
 // TestRunCheckFileNativeIsAstbridgeFree is the in-process counter
 // test analog of TestRunResolveFileHappyPathIsAstbridgeFree. Proves
 // the --native CLI path produces zero astLowerPublicFile calls
