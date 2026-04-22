@@ -1052,7 +1052,8 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 	case mir.IntrinsicPrintln, mir.IntrinsicPrint:
 		return true
 	case mir.IntrinsicListPush, mir.IntrinsicListLen, mir.IntrinsicListGet,
-		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet:
+		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
+		mir.IntrinsicListPop:
 		return true
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapSet,
 		mir.IntrinsicMapContains, mir.IntrinsicMapLen, mir.IntrinsicMapKeys,
@@ -1072,7 +1073,8 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicStringToUpper, mir.IntrinsicStringToLower,
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
-		mir.IntrinsicStringEndsWith, mir.IntrinsicStringSplit:
+		mir.IntrinsicStringEndsWith, mir.IntrinsicStringSplit,
+		mir.IntrinsicStringJoin:
 		return true
 	// Concurrency — channels / tasks / select / cancellation / helpers.
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
@@ -2070,13 +2072,11 @@ func (g *mirGen) emitStorageDead(dead *mir.StorageDeadInstr) error {
 	return nil
 }
 
-// emitIndexedWrite lowers a single-IndexProj AssignInstr — the
-// `xs[i] = v` / `m[k] = v` shape. Routes through the runtime list /
-// map setter so the heap representation stays in sync with what the
-// typed reads expect. Called from emitAssign when Dest has exactly
-// one projection and it's an IndexProj; anything more complex still
-// falls through to the aggregate-insertvalue path (which doesn't yet
-// support IndexProj in the middle of a chain).
+// emitIndexedWrite lowers an AssignInstr whose Dest projection chain
+// ends in an IndexProj — `xs[i] = v` / `m[k] = v` / `env.field[i] = v`.
+// The chain up to (but not including) the final IndexProj is walked
+// with extractvalue to reach the container pointer. The IndexProj
+// itself dispatches to the list / map runtime setter.
 func (g *mirGen) emitIndexedWrite(a *mir.AssignInstr, destLoc *mir.Local, ip *mir.IndexProj) error {
 	localT := destLoc.Type
 	slot := g.localSlots[a.Dest.Local]
@@ -2089,6 +2089,41 @@ func (g *mirGen) emitIndexedWrite(a *mir.AssignInstr, destLoc *mir.Local, ip *mi
 	g.fnBuf.WriteString(", ptr ")
 	g.fnBuf.WriteString(slot)
 	g.fnBuf.WriteByte('\n')
+
+	// Walk field/tuple/variant projections preceding the final
+	// IndexProj, extractvalue-ing into the next aggregate each step.
+	// This lets `env.fnIndexValues[slot] = v` reach the List<Int>
+	// pointer stored inside env (CheckEnv struct) before handing off
+	// to the list-set runtime.
+	projs := a.Dest.Projections
+	containerT := localT
+	containerLLVM := localLLVM
+	for i := 0; i < len(projs)-1; i++ {
+		idx, ok := projectionIndex(projs[i])
+		if !ok {
+			return unsupported("mir-mvp", fmt.Sprintf("indexed write preceding projection %T not yet supported in %s", projs[i], g.fn.Name))
+		}
+		nextT := projectionType(projs[i])
+		if nextT == nil {
+			return unsupported("mir-mvp", "indexed write preceding projection missing type")
+		}
+		nextLLVM := g.llvmType(nextT)
+		next := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(next)
+		g.fnBuf.WriteString(" = extractvalue ")
+		g.fnBuf.WriteString(containerLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(contReg)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(fmt.Sprint(idx))
+		g.fnBuf.WriteByte('\n')
+		contReg = next
+		containerLLVM = nextLLVM
+		containerT = nextT
+	}
+	localT = containerT
+	_ = containerLLVM
 
 	elemT := ip.ElemType
 	if elemT == nil {
@@ -2199,15 +2234,16 @@ func (g *mirGen) emitAssign(a *mir.AssignInstr) error {
 		g.fnBuf.WriteByte('\n')
 		return nil
 	}
-	// Single-IndexProj write (`xs[i] = v`, `m[k] = v`) — route to the
-	// runtime setter. This is the common shape used by Osty's
-	// list-rebuild / map-update patterns (e.g. `xs[i] = T { ..old, ...
-	// }` from CLAUDE.md's for-loop copy rule). Multi-projection writes
-	// with an IndexProj in the middle still fall through to the
-	// aggregate-insertvalue path below, which currently rejects IndexProj
-	// mid-chain.
-	if len(a.Dest.Projections) == 1 {
-		if ip, ok := a.Dest.Projections[0].(*mir.IndexProj); ok {
+	// IndexProj-tail write (`xs[i] = v`, `m[k] = v`, or a struct-field
+	// chain ending in an index like `env.fnIndexValues[slot] = v`) —
+	// route to the runtime setter. The chain up to (but not including)
+	// the final IndexProj extracts a container pointer out of the
+	// local; the final IndexProj delegates to the list / map write.
+	// Anything with an IndexProj *before* the last position still
+	// falls through to the aggregate-insertvalue rebuild below, which
+	// rejects IndexProj mid-chain.
+	if projs := a.Dest.Projections; len(projs) > 0 {
+		if ip, ok := projs[len(projs)-1].(*mir.IndexProj); ok {
 			return g.emitIndexedWrite(a, destLoc, ip)
 		}
 	}
@@ -2250,7 +2286,7 @@ func (g *mirGen) emitAssign(a *mir.AssignInstr) error {
 	for i, proj := range projs {
 		idx, ok := projectionIndex(proj)
 		if !ok {
-			return unsupported("mir-mvp", fmt.Sprintf("projection %T on write", proj))
+			return unsupported("mir-mvp", fmt.Sprintf("projection %T on write in %s (projs=%d, pos=%d)", proj, g.fn.Name, len(projs), i))
 		}
 		nextT := projectionType(proj)
 		if nextT == nil {
@@ -2538,7 +2574,8 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		}
 		return g.emitPrintlnLike(i.Args[0], i.Kind == mir.IntrinsicPrintln)
 	case mir.IntrinsicListPush, mir.IntrinsicListLen, mir.IntrinsicListGet,
-		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet:
+		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
+		mir.IntrinsicListPop:
 		return g.emitListIntrinsic(i)
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapSet,
 		mir.IntrinsicMapContains, mir.IntrinsicMapLen, mir.IntrinsicMapKeys,
@@ -2554,7 +2591,8 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicStringToUpper, mir.IntrinsicStringToLower,
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
-		mir.IntrinsicStringEndsWith, mir.IntrinsicStringSplit:
+		mir.IntrinsicStringEndsWith, mir.IntrinsicStringSplit,
+		mir.IntrinsicStringJoin:
 		return g.emitStringIntrinsic(i)
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
 		mir.IntrinsicChanClose, mir.IntrinsicChanIsClosed:
@@ -2670,6 +2708,36 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: listReg}})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicListPop:
+		// Runtime exposes `osty_rt_list_pop_discard` — drops the last
+		// element without returning it. All toolchain uses of
+		// `xs.pop()` currently discard the result (`let _ = xs.pop()`
+		// or bare-statement form), so the dest gets a zero-initialized
+		// Option<T> placeholder. A future typed-pop runtime family can
+		// replace this with real Some(T) returns.
+		sym := "osty_rt_list_pop_discard"
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr)")
+		g.fnBuf.WriteString("  call void @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(listReg)
+		g.fnBuf.WriteString(")\n")
+		if i.Dest == nil {
+			return nil
+		}
+		// Zero-init the dest (None for Option<T>).
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return nil
+		}
+		destLLVM := g.llvmType(destLoc.Type)
+		destSlot := g.localSlots[i.Dest.Local]
+		g.fnBuf.WriteString("  store ")
+		g.fnBuf.WriteString(destLLVM)
+		g.fnBuf.WriteString(" zeroinitializer, ptr ")
+		g.fnBuf.WriteString(destSlot)
+		g.fnBuf.WriteByte('\n')
+		return nil
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("list intrinsic kind %d", i.Kind))
 }
@@ -3738,8 +3806,39 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitStringBinaryBoolIntrinsic(i, strReg, llvmStringRuntimeContainsSymbol())
 	case mir.IntrinsicStringSplit:
 		return g.emitStringSplit(i, strReg)
+	case mir.IntrinsicStringJoin:
+		// `strReg` was evaluated above as Args[0] — for join this is
+		// the List<String> parts pointer, not a String. Both map to
+		// LLVM `ptr`, so the evalOperand call we already did is the
+		// right shape — just pass it on to the runtime with the
+		// separator arg.
+		return g.emitStringJoin(i, strReg)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("string intrinsic kind %d", i.Kind))
+}
+
+// emitStringJoin emits `strings.join(parts, sep)` / `parts.join(sep)`
+// as a call to `osty_rt_strings_Join(ptr parts, ptr sep) -> ptr`.
+// Args: [parts List<String>, sep String]. Runtime signature mirrors
+// what the legacy Go-backend emitter calls.
+func (g *mirGen) emitStringJoin(i *mir.IntrinsicInstr, partsReg string) error {
+	if len(i.Args) < 2 {
+		return unsupported("mir-mvp", "string_join without sep arg")
+	}
+	sep := i.Args[1]
+	if !isStringLLVMType(sep.Type()) {
+		return unsupported("mir-mvp", fmt.Sprintf("string_join sep type %s", mirTypeString(sep.Type())))
+	}
+	sepReg, err := g.evalOperand(sep, sep.Type())
+	if err != nil {
+		return err
+	}
+	sym := llvmStringRuntimeJoinSymbol()
+	g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, ptr)")
+	em := g.ostyEmitter()
+	result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: partsReg}, {typ: "ptr", name: sepReg}})
+	g.flushOstyEmitter(em)
+	return g.storeIntrinsicResult(i, result)
 }
 
 // emitStringConcatBoxed converts a non-String operand into a String

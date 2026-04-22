@@ -396,6 +396,23 @@ pub fn checkLookupMethod(env: CheckEnv, owner: String, name: String) -> CheckFnS
     emptyCheckFnSig()
 }
 
+pub fn checkLookupMethodForReceiver(env: CheckEnv, recvTy: Int, owner: String, name: String) -> CheckFnSig {
+    let direct = checkLookupMethod(env, owner, name)
+    if direct.name != "" {
+        return direct
+    }
+    for ifaceHead in checkDirectBuiltinMethodInterfaces(name) {
+        let ifaceTy = tyNamed(env.tys, ifaceHead, [])
+        if checkTypeSatisfiesInterface(env, recvTy, ifaceTy) {
+            let found = checkLookupMethod(env, ifaceHead, name)
+            if found.name != "" {
+                return found
+            }
+        }
+    }
+    emptyCheckFnSig()
+}
+
 pub fn checkFnExists(env: CheckEnv, name: String, owner: String) -> Bool {
     checkLookupFn(env, name, owner).name != ""
 }
@@ -1141,6 +1158,9 @@ fn checkBuiltinInterfaceInstance(env: CheckEnv, concrete: Int, ifaceHead: String
     if kind != TkNamed {
         return false
     }
+    if ifaceHead == "Error" {
+        return checkBuiltinErrorInterfaceInstance(env, concrete)
+    }
 
     let head = tyHeadAt(tys, concrete)
     let args = tyArgsAt(tys, concrete)
@@ -1157,6 +1177,37 @@ fn checkBuiltinInterfaceInstance(env: CheckEnv, concrete: Int, ifaceHead: String
         return checkBuiltinBinaryCollectionInterfaceInstance(env, args[0], args[1], ifaceHead, seen)
     }
     checkDerivedNominalInterfaceInstance(env, concrete, ifaceHead, seen)
+}
+
+fn checkBuiltinErrorInterfaceInstance(env: CheckEnv, concrete: Int) -> Bool {
+    if tyKindAt(env.tys, concrete) != TkNamed {
+        return false
+    }
+    let concreteResolved = checkResolveAliasDeep(env, concrete)
+    let concreteHead = tyHeadAt(env.tys, concreteResolved)
+    let messageSig = checkLookupFn(env, "message", concreteHead)
+    if messageSig.name == "" {
+        return false
+    }
+
+    let ifaceTy = tyNamed(env.tys, "Error", [])
+    let wantMessage = checkLookupFn(env, "message", "Error")
+    let wantMessageTy = checkConcreteMethodTy(env, wantMessage, ifaceTy, concreteResolved)
+    let gotMessageTy = checkConcreteMethodTy(env, messageSig, concreteResolved, concreteResolved)
+    if !(checkIsAssignable(env, wantMessageTy, gotMessageTy)) {
+        return false
+    }
+
+    let sourceSig = checkLookupFn(env, "source", concreteHead)
+    if sourceSig.name != "" {
+        let wantSource = checkLookupFn(env, "source", "Error")
+        let wantSourceTy = checkConcreteMethodTy(env, wantSource, ifaceTy, concreteResolved)
+        let gotSourceTy = checkConcreteMethodTy(env, sourceSig, concreteResolved, concreteResolved)
+        if !(checkIsAssignable(env, wantSourceTy, gotSourceTy)) {
+            return false
+        }
+    }
+    true
 }
 
 fn checkBuiltinPrimitiveInterfaceInstance(tys: TyArena, concrete: Int, ifaceHead: String) -> Bool {
@@ -1296,6 +1347,19 @@ fn checkBuiltinInterfaceMethodNames(ifaceHead: String) -> List<String> {
     }
     if ifaceHead == "Hashable" {
         return ["eq", "ne", "hash"]
+    }
+    []
+}
+
+fn checkDirectBuiltinMethodInterfaces(name: String) -> List<String> {
+    if name == "eq" || name == "ne" {
+        return ["Equal"]
+    }
+    if name == "lt" || name == "le" || name == "gt" || name == "ge" {
+        return ["Ordered"]
+    }
+    if name == "hash" {
+        return ["Hashable"]
     }
     []
 }
@@ -1512,6 +1576,22 @@ pub fn checkFieldNamesOf(env: CheckEnv, owner: String) -> List<String> {
 pub fn checkMethodNamesOf(env: CheckEnv, owner: String) -> List<String> {
     let mut seen: List<String> = []
     checkCollectMethodNames(env, owner, seen)
+}
+
+pub fn checkMethodNamesForReceiver(env: CheckEnv, recvTy: Int, owner: String) -> List<String> {
+    let mut out = checkMethodNamesOf(env, owner)
+    for ifaceHead in ["Equal", "Ordered", "Hashable"] {
+        let ifaceTy = tyNamed(env.tys, ifaceHead, [])
+        if !(checkTypeSatisfiesInterface(env, recvTy, ifaceTy)) {
+            continue
+        }
+        for name in checkBuiltinInterfaceMethodNames(ifaceHead) {
+            if !(listContainsString(out, name)) {
+                out.push(name)
+            }
+        }
+    }
+    out
 }
 
 fn checkCollectMethodNames(env: CheckEnv, owner: String, acc: List<String>) -> List<String> {

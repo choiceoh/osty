@@ -2426,20 +2426,21 @@ fn mirLowerExprIntoPlaceImpl(
         return
     }
     match e.kind {
-        HirExprIf -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "IfExpr"),
+        HirExprIf -> mirLowerIfExprInto(bs, e, dest, destT),
+        HirExprBlock -> mirLowerBlockExprInto(bs, e, dest, destT),
+        HirExprCoalesce -> mirLowerCoalesceExprInto(bs, e, dest, destT),
+        HirExprCall -> mirLowerCallExprInto(bs, e, dest, destT),
+        HirExprIntrinsic -> mirLowerIntrinsicCallInto(bs, e, dest, destT),
+        HirExprStructLit -> mirLowerStructLitInto(bs, e, dest, destT),
+        HirExprVariantLit -> mirLowerVariantLitInto(bs, e, dest, destT),
+        HirExprRange -> mirLowerRangeLitInto(bs, e, dest, destT),
+        // Kinds deferred to Stage 4e-2 / 4f:
         HirExprIfLet -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "IfLetExpr"),
-        HirExprBlock -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "BlockExpr"),
         HirExprMatch -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "MatchExpr"),
-        HirExprCoalesce -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "CoalesceExpr"),
         HirExprQuestion -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "QuestionExpr"),
-        HirExprCall -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "CallExpr"),
         HirExprMethod -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "MethodCall"),
-        HirExprIntrinsic -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "IntrinsicCall"),
         HirExprMapLit -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "MapLit"),
         HirExprClosure -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "Closure"),
-        HirExprStructLit -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "StructLit"),
-        HirExprVariantLit -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "VariantLit"),
-        HirExprRange -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "RangeLit"),
         _ -> mirLowerExprIntoPlaceRValue(bs, e, dest, destT),
     }
 }
@@ -2673,6 +2674,557 @@ fn mirLowerCharToDigit(ch: String) -> Int {
         "f" -> 15, "F" -> 15,
         _ -> -1,
     }
+}
+
+// ====================================================================
+// Stage 4e-1: IfExpr / BlockExpr / Coalesce
+// ====================================================================
+
+/// mirLowerIfExprInto lowers `if cond { … } else { … }` in
+/// expression position — each arm's trailing expression writes into
+/// `dest`. Mirrors Go's `lowerIfExprInto`.
+pub fn mirLowerIfExprInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    let span = mirSpanFromHir(e.span)
+    let cond = if e.ifExprCond.len() > 0 {
+        mirLowerExprAsOperand(bs, e.ifExprCond[0])
+    } else {
+        mirOperandConst(mirConstBool(false))
+    }
+    let thenBB = mirLowerNewBlock(bs, span)
+    let elseBB = mirLowerNewBlock(bs, span)
+    let merge = mirLowerNewBlock(bs, span)
+    mirLowerTerminate(bs, mirBranchTerm(cond, thenBB, elseBB, span))
+
+    // Then arm
+    bs.cur = thenBB
+    if e.ifExprThen.len() > 0 {
+        mirLowerIfExprArm(bs, e.ifExprThen[0], dest, destT)
+    }
+    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+
+    // Else arm
+    bs.cur = elseBB
+    if e.ifExprElse.len() > 0 {
+        mirLowerIfExprArm(bs, e.ifExprElse[0], dest, destT)
+    }
+    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+
+    bs.cur = merge
+}
+
+fn mirLowerIfExprArm(
+    bs: MirLowerBodyState,
+    body: HirBlock,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    mirLowerPushScope(bs)
+    mirLowerPushDeferScope(bs)
+    for s in body.stmts {
+        mirLowerStmt(bs, s)
+    }
+    if body.hasResult {
+        mirLowerExprIntoPlace(bs, body.result, dest, destT)
+    }
+    mirLowerReplayTopFrame(bs, mirSpanFromHir(body.span))
+    mirLowerPopDeferScope(bs)
+    mirLowerPopScope(bs)
+}
+
+/// mirLowerBlockExprInto lowers `{ stmt; stmt; tail_expr }` in
+/// expression position — the tail expression writes into `dest`.
+pub fn mirLowerBlockExprInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    if e.blockBody.len() == 0 {
+        return
+    }
+    let body = e.blockBody[0]
+    mirLowerPushScope(bs)
+    mirLowerPushDeferScope(bs)
+    for s in body.stmts {
+        mirLowerStmt(bs, s)
+    }
+    if body.hasResult {
+        mirLowerExprIntoPlace(bs, body.result, dest, destT)
+    }
+    mirLowerReplayTopFrame(bs, mirSpanFromHir(body.span))
+    mirLowerPopDeferScope(bs)
+    mirLowerPopScope(bs)
+}
+
+/// mirLowerCoalesceExprInto lowers `lhs ?? rhs` (Option fallback).
+/// Reads the discriminant of lhs, branches:
+///   - Some tag (1) → extract payload, Assign to dest
+///   - None tag (0) / default → lower rhs into dest
+///
+/// Matches Go's `lowerCoalesceInto`. Some/None tag ordering follows
+/// Option's variant order (None=0, Some=1) — same constants the
+/// rebuildErrorIntoReturn / discriminant emitter use elsewhere.
+pub fn mirLowerCoalesceExprInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    let span = mirSpanFromHir(e.span)
+    mirLowerPushScope(bs)
+
+    // Lower the left-hand side into a scratch. The LHS type is the
+    // optional form; the destination type is the unwrapped inner.
+    let leftT = if e.coalesceLeft.len() > 0 && hirTypeIsValid(e.coalesceLeft[0].typ) {
+        e.coalesceLeft[0].typ
+    } else {
+        hirTypeInvalid()
+    }
+    let leftLocal = mirLowerNewLocal(bs, "_coalesce", leftT, false, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(leftLocal, span))
+    if e.coalesceLeft.len() > 0 {
+        mirLowerExprInto(bs, e.coalesceLeft[0], leftLocal, leftT)
+    }
+
+    // Read discriminant.
+    let disc = mirLowerFreshTemp(bs, hirTInt(), span)
+    let discRV = mirRVDiscriminant(mirPlace(leftLocal), "Int")
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(disc), discRV, span))
+
+    let someBB = mirLowerNewBlock(bs, span)
+    let noneBB = mirLowerNewBlock(bs, span)
+    let merge = mirLowerNewBlock(bs, span)
+
+    // Branch on disc — Some = 1 routes to someBB, everything else to
+    // noneBB. Matches mirSwitchIntTerm's case+default shape.
+    let discOp = mirOperandCopy(mirPlace(disc), "Int")
+    let mut cases: List<MirSwitchCase> = []
+    cases.push(mirSwitchCase(1, someBB, "Some"))
+    mirLowerTerminate(bs, mirSwitchIntTerm(discOp, cases, noneBB, span))
+
+    // Some path: extract the payload, Assign to dest.
+    bs.cur = someBB
+    let destTypeText = hirTypeString(destT)
+    let payloadProj = mirVariantProj(1, "Some", 0, destTypeText)
+    let payloadPlace = mirPlaceProject(mirPlace(leftLocal), payloadProj)
+    let payloadOp = mirOperandCopy(payloadPlace, destTypeText)
+    mirLowerEmitInstr(bs, mirAssignInstr(dest, mirRVUse(payloadOp), span))
+    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+
+    // None path: lower the rhs into dest.
+    bs.cur = noneBB
+    if e.coalesceRight.len() > 0 {
+        mirLowerExprIntoPlace(bs, e.coalesceRight[0], dest, destT)
+    }
+    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+
+    bs.cur = merge
+    mirLowerPopScope(bs)
+}
+
+// ====================================================================
+// Stage 4e-1: CallExpr / IntrinsicCall
+// ====================================================================
+
+/// mirLowerCallExprInto lowers a free-function call. Stage 4e-1
+/// scope:
+///   - Bare Ident callee with IdentFn → direct FnRef call
+///   - Bare Ident callee with IdentLocal / IdentParam → indirect call
+///     against an operand holding the callable value
+///   - Bare Ident callee with IdentVariant → route to variant lit
+///     (Call-as-variant-ctor syntax)
+///   - Keyword / default / use-alias-qualified / method-via-field
+///     calls → Stage 4e-2 TODO (record issue, emit placeholder)
+///
+/// Concurrency / runtime / stdlib intrinsic dispatch is left for
+/// Stage 4e-2 / 4g to keep this PR focused on the call shape itself.
+pub fn mirLowerCallExprInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    let span = mirSpanFromHir(e.span)
+    if e.callCallee.len() == 0 {
+        mirLowerNoteIssue(bs.l, "mir_lower: call with no callee")
+        mirLowerEmitInstr(
+            bs,
+            mirAssignInstr(dest, mirRVUse(mirOperandConst(mirConstUnit())), span),
+        )
+        return
+    }
+    let callee = e.callCallee[0]
+    // Ident callee paths
+    match callee.kind {
+        HirExprIdent -> mirLowerCallIdent(bs, e, callee, dest, destT, span),
+        _ -> mirLowerCallUnsupported(bs, e, dest, destT, span, "non-ident callee"),
+    }
+}
+
+fn mirLowerCallIdent(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    callee: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) {
+    match callee.identKind {
+        HirIdentFn -> mirLowerDirectFnCall(bs, e, callee, dest, destT, span),
+        HirIdentLocal -> mirLowerIndirectCall(bs, e, callee, dest, destT, span),
+        HirIdentParam -> mirLowerIndirectCall(bs, e, callee, dest, destT, span),
+        HirIdentVariant -> mirLowerCallUnsupported(
+            bs, e, dest, destT, span,
+            "variant-ctor call (routed through VariantLit; Stage 4e-2)",
+        ),
+        _ -> mirLowerCallUnsupported(
+            bs, e, dest, destT, span,
+            "ident kind " + hirIdentKindName(callee.identKind),
+        ),
+    }
+}
+
+/// mirLowerDirectFnCall emits `CallInstr` with a FnRef callee. Only
+/// positional args are supported at Stage 4e-1 — keyword / default
+/// args record a Stage 4e-2 TODO.
+fn mirLowerDirectFnCall(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    callee: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) {
+    if mirLowerCallArgsHaveKeyword(e.callArgs) {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4e-2 TODO: keyword args in call to \"" + callee.identName + "\"",
+        )
+    }
+    let operands = mirLowerLowerCallArgs(bs, e.callArgs)
+    let calleeTypeText = hirTypeString(callee.typ)
+    let hasDest = !hirTypeIsUnit(destT)
+    let instr = mirCallInstr(
+        hasDest,
+        dest,
+        callee.identName,
+        calleeTypeText,
+        operands,
+        span,
+    )
+    mirLowerEmitInstr(bs, instr)
+}
+
+fn mirLowerIndirectCall(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    callee: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) {
+    if mirLowerCallArgsHaveKeyword(e.callArgs) {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4e-2 TODO: keyword args in indirect call",
+        )
+    }
+    let calleeOp = mirLowerExprAsOperand(bs, callee)
+    let operands = mirLowerLowerCallArgs(bs, e.callArgs)
+    let hasDest = !hirTypeIsUnit(destT)
+    let instr = mirIndirectCallInstr(
+        hasDest,
+        dest,
+        calleeOp,
+        operands,
+        span,
+    )
+    mirLowerEmitInstr(bs, instr)
+}
+
+fn mirLowerCallUnsupported(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+    reason: String,
+) {
+    mirLowerNoteIssue(
+        bs.l,
+        "mir_lower Stage 4e-2 TODO: CallExpr — " + reason,
+    )
+    mirLowerEmitInstr(
+        bs,
+        mirAssignInstr(dest, mirRVUse(mirOperandConst(mirConstUnit())), span),
+    )
+    let _ = destT
+}
+
+fn mirLowerCallArgsHaveKeyword(args: List<HirArg>) -> Bool {
+    for a in args {
+        if hirArgIsKeyword(a) {
+            return true
+        }
+    }
+    false
+}
+
+fn mirLowerLowerCallArgs(bs: MirLowerBodyState, args: List<HirArg>) -> List<MirOperand> {
+    let mut out: List<MirOperand> = []
+    for a in args {
+        out.push(mirLowerExprAsOperand(bs, a.value))
+    }
+    out
+}
+
+/// mirLowerIntrinsicCallInto lowers an `IntrinsicCall` HIR node into
+/// a MIR `IntrinsicInstr`. HIR's IntrinsicKind enum only covers the
+/// print family (print / println / eprint / eprintln); extend this
+/// map when HIR grows additional intrinsics.
+pub fn mirLowerIntrinsicCallInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    let span = mirSpanFromHir(e.span)
+    let kind = hirIntrinsicToMir(e.intrinsicKind)
+    let mut operands: List<MirOperand> = []
+    for a in e.intrinsicArgs {
+        operands.push(mirLowerExprAsOperand(bs, a.value))
+    }
+    // Print family intrinsics are always void. We still pass dest
+    // through the instruction builder (via hasDest) so callers that
+    // accidentally route through here with a non-unit destT see the
+    // placeholder Assign rather than a silent drop.
+    let instr = mirIntrinsicInstr(false, mirPlace(-1), kind, operands, span)
+    mirLowerEmitInstr(bs, instr)
+    if !hirTypeIsUnit(destT) {
+        mirLowerEmitInstr(
+            bs,
+            mirAssignInstr(dest, mirRVUse(mirOperandConst(mirConstUnit())), span),
+        )
+    }
+}
+
+fn hirIntrinsicToMir(k: HirIntrinsicKind) -> MirIntrinsicKind {
+    match k {
+        HirIntrinsicInvalid -> MirIntrinsicInvalid,
+        HirIntrinsicPrint -> MirIntrinsicPrint,
+        HirIntrinsicPrintln -> MirIntrinsicPrintln,
+        HirIntrinsicEprint -> MirIntrinsicEprint,
+        HirIntrinsicEprintln -> MirIntrinsicEprintln,
+    }
+}
+
+// ====================================================================
+// Stage 4e-1: StructLit / VariantLit / RangeLit
+// ====================================================================
+
+/// mirLowerStructLitInto lowers `Type { field: value, ... }`. Stage
+/// 4e-1 supports the exact-fields form; `..spread` adds a Stage 4e-2
+/// TODO (the spread base is still lowered as a side effect). Field
+/// ordering follows the declared struct layout from pass 1b; missing
+/// fields record an issue but do not short-circuit (so we still
+/// produce a structural Aggregate RV).
+pub fn mirLowerStructLitInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    let span = mirSpanFromHir(e.span)
+    if e.structHasSpread {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4e-2 TODO: struct literal spread — omitting spread base",
+        )
+    }
+    let typeName = if e.structTypeName != "" {
+        e.structTypeName
+    } else {
+        hirTypeNameOf(e.typ)
+    }
+    let fieldOps = mirLowerBuildStructLitFields(bs, e, typeName)
+    let rv = mirRVAggregate(MirAggStruct, fieldOps, hirTypeString(e.typ))
+    mirLowerEmitInstr(bs, mirAssignInstr(dest, rv, span))
+    let _ = destT
+}
+
+fn mirLowerBuildStructLitFields(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    typeName: String,
+) -> List<MirOperand> {
+    // Walk the layout's declared field order. For each layout field,
+    // find the matching HirStructLitField and lower it. Missing
+    // fields fall back to a unit-const placeholder (defer default /
+    // spread resolution to 4e-2).
+    let layoutIdx = mirLowerFindStructLayoutIndex(bs.l, typeName)
+    if layoutIdx < 0 {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: struct literal for unknown type \"" + typeName + "\"",
+        )
+        // Unknown type — emit in source order as a best-effort.
+        let mut out: List<MirOperand> = []
+        for f in e.structFields {
+            if f.hasValue {
+                out.push(mirLowerExprAsOperand(bs, f.value))
+            } else {
+                out.push(mirLowerShorthandFieldOperand(bs, f))
+            }
+        }
+        return out
+    }
+    let layout = bs.l.out.layouts.structs[layoutIdx]
+    let mut out: List<MirOperand> = []
+    for fld in layout.fields {
+        let src = mirLowerFindStructLitField(e.structFields, fld.name)
+        if src.name == "" {
+            mirLowerNoteIssue(
+                bs.l,
+                "mir_lower Stage 4e-2 TODO: struct literal missing field \"" + fld.name + "\" (defaults / spread not resolved)",
+            )
+            out.push(mirOperandConst(mirConstUnit()))
+        } else if src.hasValue {
+            out.push(mirLowerExprAsOperand(bs, src.value))
+        } else {
+            out.push(mirLowerShorthandFieldOperand(bs, src))
+        }
+    }
+    out
+}
+
+fn mirLowerShorthandFieldOperand(
+    bs: MirLowerBodyState,
+    f: HirStructLitField,
+) -> MirOperand {
+    // Shorthand `{ name }` binds the field to a local of the same
+    // name in the enclosing scope. Look it up and emit a Copy.
+    let id = mirLowerLookupName(bs, f.name)
+    if id < 0 {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: struct literal shorthand \"" + f.name + "\" — no local in scope",
+        )
+        return mirOperandConst(mirConstUnit())
+    }
+    mirOperandCopy(mirPlace(id), "")
+}
+
+fn mirLowerFindStructLitField(
+    fields: List<HirStructLitField>,
+    name: String,
+) -> HirStructLitField {
+    for f in fields {
+        if f.name == name {
+            return f
+        }
+    }
+    HirStructLitField {
+        name: "",
+        hasValue: false,
+        value: hirExprInvalid(),
+        span: hirNoSpan(),
+    }
+}
+
+fn mirLowerFindStructLayoutIndex(l: MirLowerer, name: String) -> Int {
+    let mut i = 0
+    for sl in l.out.layouts.structs {
+        if sl.name == name {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+/// mirLowerVariantLitInto lowers an enum variant construction like
+/// `Some(42)` or `Color.Red`. Emits an Aggregate RV tagged
+/// MirAggEnumVariant. Variant index lookup via the pass-1b enum
+/// layout; when the enum is unknown we still emit (with index 0 as a
+/// best-effort default) so the structural shape survives.
+pub fn mirLowerVariantLitInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    let span = mirSpanFromHir(e.span)
+    let mut fieldOps: List<MirOperand> = []
+    for a in e.variantArgs {
+        fieldOps.push(mirLowerExprAsOperand(bs, a.value))
+    }
+    let enumName = if e.variantEnum != "" {
+        e.variantEnum
+    } else {
+        hirTypeNameOf(e.typ)
+    }
+    let variantIdx = mirLowerFindVariantIndex(bs.l, enumName, e.variantName)
+    if variantIdx < 0 && enumName != "" {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: variant \"" + enumName + "." + e.variantName + "\" not in layout table",
+        )
+    }
+    let rv = mirRVVariant(
+        variantIdx,
+        e.variantName,
+        fieldOps,
+        hirTypeString(e.typ),
+    )
+    mirLowerEmitInstr(bs, mirAssignInstr(dest, rv, span))
+    let _ = destT
+}
+
+fn mirLowerFindVariantIndex(l: MirLowerer, enumName: String, variant: String) -> Int {
+    if enumName == "" {
+        return -1
+    }
+    for el in l.out.layouts.enums {
+        if el.name == enumName {
+            let mut i = 0
+            for v in el.variants {
+                if v.name == variant {
+                    return i
+                }
+                i = i + 1
+            }
+            return -1
+        }
+    }
+    -1
+}
+
+/// mirLowerRangeLitInto records a Stage 1 MIR gap and emits a
+/// placeholder — the Go side does the same via `noteIssue("range
+/// literal in value position not lowered to MIR")`. Real Range
+/// backend support is tracked under the MIR emitter's Range<T>
+/// whitelist.
+pub fn mirLowerRangeLitInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    let span = mirSpanFromHir(e.span)
+    mirLowerNoteIssue(
+        bs.l,
+        "mir_lower: range literal in value position not lowered to MIR",
+    )
+    mirLowerEmitInstr(
+        bs,
+        mirAssignInstr(dest, mirRVUse(mirOperandConst(mirConstUnit())), span),
+    )
+    let _ = destT
 }
 
 // ---- Match ---------------------------------------------------------

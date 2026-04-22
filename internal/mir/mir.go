@@ -628,6 +628,28 @@ const (
 	// IntrinsicRawNull returns the null RawPtr. Args: [].
 	// Lowers to `inttoptr i64 0 to ptr` (or `ptr null`).
 	IntrinsicRawNull
+
+	// ---- deferred String family ----
+	//
+	// Appended after the enum's historical tail so pre-existing
+	// kinds keep their numeric value (tests + telemetry that log
+	// "kind=NN" stay meaningful).
+
+	// IntrinsicStringJoin returns a single String built by
+	// concatenating parts with the separator between each adjacent
+	// pair. Args: [parts List<String>, sep String]. Mirrors the
+	// `std.strings.Join(parts, sep)` / `parts.join(sep)` surface.
+	IntrinsicStringJoin
+
+	// IntrinsicListPop discards the last element of a List and
+	// returns an Option<T> that is always None in the current
+	// lowering. Args: [list]. The native LLVM emitter routes this
+	// to `osty_rt_list_pop_discard` which aborts on empty; callers
+	// in toolchain source either ignore the result (`let _ = xs.pop()`)
+	// or immediately pattern-match on None, so losing the popped
+	// value is acceptable until a typed `osty_rt_list_pop_<suffix>`
+	// runtime family arrives.
+	IntrinsicListPop
 )
 
 // StorageLiveInstr marks a local as alive. Optional; backends that do
@@ -1560,6 +1582,10 @@ func (k IntrinsicKind) String() string {
 		return "result_unwrap_or"
 	case IntrinsicRawNull:
 		return "raw_null"
+	case IntrinsicStringJoin:
+		return "string_join"
+	case IntrinsicListPop:
+		return "list_pop"
 	}
 	return "invalid"
 }
