@@ -202,8 +202,8 @@ func TestLowerIfExpr(t *testing.T) {
 	fn := mkFn("abs", ir.TInt, &ir.Block{
 		Stmts: []ir.Stmt{
 			&ir.LetStmt{
-				Name: "n",
-				Type: ir.TInt,
+				Name:  "n",
+				Type:  ir.TInt,
 				Value: &ir.IntLit{Text: "-5", T: ir.TInt},
 			},
 		},
@@ -754,11 +754,11 @@ func TestValidateAcceptsExternalFunction(t *testing.T) {
 // table unchanged.
 func TestLowerPreservesUseDecls(t *testing.T) {
 	useDecl := &ir.UseDecl{
-		Path:        []string{"runtime", "strings"},
-		RawPath:     "runtime.strings",
-		Alias:       "strings",
+		Path:         []string{"runtime", "strings"},
+		RawPath:      "runtime.strings",
+		Alias:        "strings",
 		IsRuntimeFFI: true,
-		RuntimePath: "strings",
+		RuntimePath:  "strings",
 	}
 	mod := &ir.Module{Package: "main", Decls: []ir.Decl{useDecl}}
 	out := Lower(mod)
@@ -1665,6 +1665,38 @@ func TestLowerDeferInLoopReplaysOnContinue(t *testing.T) {
 	}
 }
 
+func TestLowerBlockScopedManagedLocalEmitsStorageDead(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "keep",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.Block{
+					Stmts: []ir.Stmt{
+						&ir.LetStmt{
+							Name:  "t",
+							Type:  ir.TString,
+							Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+						},
+					},
+				},
+			},
+			Result: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	live := strings.Index(text, "storage_live _2")
+	dead := strings.Index(text, "storage_dead _2")
+	if live < 0 || dead < 0 {
+		t.Fatalf("expected block-scoped managed local to get storage markers:\n%s", text)
+	}
+	if live >= dead {
+		t.Fatalf("expected storage_dead after storage_live, got %d >= %d:\n%s", live, dead, text)
+	}
+}
+
 // TestLowerDeferInnerBlockDoesNotLeakToOuterReturn proves the fix for
 // the Stage 2a limitation: a defer in an inner block must NOT also
 // re-run at the function's return. If it did, the "inner" marker
@@ -1803,12 +1835,12 @@ func TestLowerSelectTimeoutAndDefaultArms(t *testing.T) {
 // stdlibMethodTest is a tiny driver: build a method call on receiverT,
 // lower it, and assert the rendered output contains want.
 type stdlibMethodTest struct {
-	name       string
-	receiverT  ir.Type
-	method     string
-	args       []ir.Arg
-	retT       ir.Type
-	want       string // substring the printer output must contain
+	name      string
+	receiverT ir.Type
+	method    string
+	args      []ir.Arg
+	retT      ir.Type
+	want      string // substring the printer output must contain
 }
 
 func runStdlibMethodTest(t *testing.T, tc stdlibMethodTest) {

@@ -107,10 +107,14 @@ type mirGen struct {
 	// slot addresses are passed to each safepoint poll. This keeps the
 	// live-set precise without function-long root_bind pinning, so Phase D
 	// compaction can still relocate movable objects between polls.
+	// gcRootChunks caches the chunked slot-address arrays prepared at
+	// function entry; subsequent safepoints reuse them instead of
+	// re-emitting alloca/GEP/store scaffolding at each poll site.
 	// curBlockID tracks the block we're currently emitting so GotoTerm
 	// can detect loop back-edges (goto whose target block ID is <= the
 	// current block's ID) and emit a safepoint.
 	gcRoots           []mir.LocalID
+	gcRootChunks      []mirGCRootChunk
 	curBlockID        mir.BlockID
 	loopSafepointSlot string
 
@@ -166,6 +170,11 @@ type mirGen struct {
 	// Module-scoped numbering keeps IDs unique; flushed at module
 	// tail via emitLoopMetadata.
 	loopMDDefs []string
+}
+
+type mirGCRootChunk struct {
+	slotsPtr string
+	count    int
 }
 
 // mirFnSig caches a function's LLVM signature so call sites can render
@@ -986,6 +995,7 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	g.localSlots = map[mir.LocalID]string{}
 	g.fnBuf.Reset()
 	g.gcRoots = g.gcRoots[:0]
+	g.gcRootChunks = g.gcRootChunks[:0]
 	// v0.6 A5.2: fn.Vectorize is already default-true unless
 	// `#[no_vectorize]` was present (ir.Lower sets it). Mirror here
 	// verbatim — the per-fn state machine doesn't need to re-derive
@@ -1306,6 +1316,7 @@ func (g *mirGen) emitGCEntry(fn *mir.Function) {
 		g.fnBuf.WriteString(g.localSlots[id])
 		g.fnBuf.WriteByte('\n')
 	}
+	g.prepareGCSafepointRootChunks()
 	// Entry safepoint.
 	g.emitGCSafepointKind(safepointKindEntry)
 }
@@ -1324,6 +1335,52 @@ func (g *mirGen) visibleGCSafepointRoots() []string {
 		}
 	}
 	return out
+}
+
+func (g *mirGen) prepareGCSafepointRootChunks() {
+	roots := g.visibleGCSafepointRoots()
+	start := 0
+
+	g.gcRootChunks = g.gcRootChunks[:0]
+	if len(roots) == 0 {
+		return
+	}
+	if safepointRootChunkSize <= 0 {
+		safepointRootChunkSize = 1
+	}
+	for start < len(roots) {
+		end := start + safepointRootChunkSize
+		if end > len(roots) {
+			end = len(roots)
+		}
+		window := roots[start:end]
+		slotsPtr := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(slotsPtr)
+		g.fnBuf.WriteString(" = alloca ptr, i64 ")
+		g.fnBuf.WriteString(strconv.Itoa(len(window)))
+		g.fnBuf.WriteByte('\n')
+		for i, addr := range window {
+			slotPtr := g.fresh()
+			g.fnBuf.WriteString("  ")
+			g.fnBuf.WriteString(slotPtr)
+			g.fnBuf.WriteString(" = getelementptr ptr, ptr ")
+			g.fnBuf.WriteString(slotsPtr)
+			g.fnBuf.WriteString(", i64 ")
+			g.fnBuf.WriteString(strconv.Itoa(i))
+			g.fnBuf.WriteByte('\n')
+			g.fnBuf.WriteString("  store ptr ")
+			g.fnBuf.WriteString(addr)
+			g.fnBuf.WriteString(", ptr ")
+			g.fnBuf.WriteString(slotPtr)
+			g.fnBuf.WriteByte('\n')
+		}
+		g.gcRootChunks = append(g.gcRootChunks, mirGCRootChunk{
+			slotsPtr: slotsPtr,
+			count:    len(window),
+		})
+		start = end
+	}
 }
 
 // emitGCSafepoint emits a single safepoint poll at an unclassified site.
@@ -1345,23 +1402,24 @@ func (g *mirGen) emitGCSafepointKind(kind safepointKind) {
 		return
 	}
 	g.declareSafepoint()
-	roots := g.visibleGCSafepointRoots()
-	if len(roots) == 0 {
+	if len(g.gcRootChunks) == 0 {
 		serial := g.nextSafepoint
 		g.nextSafepoint++
 		g.fnBuf.WriteString(llvmRenderSafepointEmpty(encodeSafepointID(kind, serial)))
 		g.fnBuf.WriteByte('\n')
 		return
 	}
-	plan := llvmPlanSafepointChunks(int(kind), g.nextSafepoint, len(roots), safepointRootChunkSize)
+	plan := llvmPlanSafepointChunks(int(kind), g.nextSafepoint, len(g.gcRoots), safepointRootChunkSize)
 	g.nextSafepoint += len(plan)
-	for _, chunk := range plan {
-		emitter := llvmEmitter()
-		llvmEmitSafepointWithRoots(emitter, chunk.id, roots[chunk.start:chunk.end])
-		for _, line := range emitter.body {
-			g.fnBuf.WriteString(line)
-			g.fnBuf.WriteByte('\n')
-		}
+	for i, chunk := range plan {
+		rootChunk := g.gcRootChunks[i]
+		g.fnBuf.WriteString("  call void @osty.gc.safepoint_v1(i64 ")
+		g.fnBuf.WriteString(strconv.Itoa(chunk.id))
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(rootChunk.slotsPtr)
+		g.fnBuf.WriteString(", i64 ")
+		g.fnBuf.WriteString(strconv.Itoa(rootChunk.count))
+		g.fnBuf.WriteString(")\n")
 	}
 }
 
@@ -1442,10 +1500,33 @@ func (g *mirGen) emitInstr(inst mir.Instr) error {
 		return g.emitCall(x)
 	case *mir.IntrinsicInstr:
 		return g.emitIntrinsic(x)
-	case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+	case *mir.StorageLiveInstr:
 		return nil
+	case *mir.StorageDeadInstr:
+		return g.emitStorageDead(x)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("instruction %T", inst))
+}
+
+func (g *mirGen) emitStorageDead(dead *mir.StorageDeadInstr) error {
+	if dead == nil || !g.opts.EmitGC {
+		return nil
+	}
+	loc := g.fn.Local(dead.Local)
+	if !g.isManagedLocal(loc) {
+		return nil
+	}
+	slot := g.localSlots[dead.Local]
+	if slot == "" {
+		return nil
+	}
+	// The safepoint root arrays cache slot addresses, not values. Nulling
+	// the managed slot on StorageDead retires that root without rebuilding
+	// the array scaffolding at each poll site.
+	g.fnBuf.WriteString("  store ptr null, ptr ")
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteByte('\n')
+	return nil
 }
 
 func (g *mirGen) emitAssign(a *mir.AssignInstr) error {
