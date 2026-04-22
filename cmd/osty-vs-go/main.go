@@ -50,6 +50,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,22 +61,33 @@ import (
 type benchResult struct {
 	Pair     string
 	Name     string
-	GoNs     float64 // ns/op; NaN when absent
+	GoNs     float64 // ns/op median across --go-count sweeps; NaN when absent
+	GoNsCV   float64 // coefficient of variation (stddev/mean) across those sweeps; NaN when <2 samples
 	GoBytes  float64
 	GoAllocs float64
-	OsNs     float64
+	OsNs     float64 // median ns/op across --osty-count sweeps
+	OsNsCV   float64 // coefficient of variation across those sweeps; NaN when <2 samples
 	OsBytes  float64
 	OsAllocs float64 // always NaN today — kept for a future Osty accessor
 }
 
 type runRecord struct {
-	Timestamp time.Time `json:"timestamp"`
-	BenchTime string    `json:"bench_time"`
-	PairsDir  string    `json:"pairs_dir"`
-	Label     string    `json:"label,omitempty"`
-	GitHead   string    `json:"git_head,omitempty"`
-	GoCount   int       `json:"go_count,omitempty"`
-	GoCPU     string    `json:"go_cpu,omitempty"`
+	Timestamp time.Time   `json:"timestamp"`
+	BenchTime string      `json:"bench_time"`
+	PairsDir  string      `json:"pairs_dir"`
+	Label     string      `json:"label,omitempty"`
+	GitHead   string      `json:"git_head,omitempty"`
+	GoCount   int         `json:"go_count,omitempty"`
+	GoCPU     string      `json:"go_cpu,omitempty"`
+	OstyCount int         `json:"osty_count,omitempty"`
+	Machine   machineInfo `json:"machine,omitempty"`
+	// BaselineNs is the per-call sampling + loop overhead in nanoseconds,
+	// measured via the `baseline_empty` pair if present (so the Osty bench
+	// harness's own per-iteration clock pair doesn't poison microbenches).
+	// 0 when no baseline ran. Only used for display; never mutates the raw
+	// Osty ns/op stored on each result so history stays comparable across
+	// runs that did or didn't enable subtraction.
+	BaselineNs float64 `json:"baseline_ns,omitempty"`
 	// Score is the geomean of osty_ns/go_ns across benches with both
 	// sides present. Lower = Osty closer to Go. NaN when no pair
 	// contributes. Persisted so the research/loop paths don't have to
@@ -83,6 +95,18 @@ type runRecord struct {
 	// doesn't silently mutate the published score of old runs).
 	Score   float64       `json:"score,omitempty"`
 	Results []benchResult `json:"results"`
+}
+
+// machineInfo captures enough about the host to notice when a history
+// entry shouldn't be compared against another (different machine, CPU
+// throttle change). None of this is used for verdicts — it's an audit
+// trail so a surprising regression can be attributed to hardware drift
+// instead of a code change.
+type machineInfo struct {
+	GOOS     string `json:"goos,omitempty"`
+	GOARCH   string `json:"goarch,omitempty"`
+	NumCPU   int    `json:"num_cpu,omitempty"`
+	CPUModel string `json:"cpu_model,omitempty"`
 }
 
 // MarshalJSON writes NaN Score as omitted ("no verdict" for this run)
@@ -139,6 +163,64 @@ func composite(rows []benchResult) float64 {
 	return math.Exp(logSum / float64(n))
 }
 
+// baselinePairName is the pair directory whose job is to measure the
+// Osty bench harness's per-iteration sampling + loop overhead. When
+// present and --subtract-baseline is on, its median osty ns/op is
+// subtracted from every other pair's displayed ns/op. It does NOT
+// contribute to the geomean score (it would always anchor near 1x).
+const baselinePairName = "baseline_empty"
+
+// findBaselineNs extracts the Osty ns/op of the baseline_empty pair
+// from `rows`. Returns 0 when no such pair ran or its osty side is
+// missing (i.e. the pair failed to compile on this build).
+func findBaselineNs(rows []benchResult) float64 {
+	for _, r := range rows {
+		if r.Pair != baselinePairName {
+			continue
+		}
+		if math.IsNaN(r.OsNs) {
+			continue
+		}
+		return r.OsNs
+	}
+	return 0
+}
+
+// captureMachineInfo records enough host metadata to attribute surprising
+// regressions to hardware drift instead of code changes. Best-effort;
+// any missing field falls back to empty string. Deliberately avoids
+// running external binaries in a tight loop — called once per run.
+func captureMachineInfo() machineInfo {
+	return machineInfo{
+		GOOS:     runtime.GOOS,
+		GOARCH:   runtime.GOARCH,
+		NumCPU:   runtime.NumCPU(),
+		CPUModel: detectCPUModel(),
+	}
+}
+
+func detectCPUModel() string {
+	switch runtime.GOOS {
+	case "darwin":
+		out, err := exec.Command("sysctl", "-n", "machdep.cpu.brand_string").Output()
+		if err == nil {
+			return strings.TrimSpace(string(out))
+		}
+	case "linux":
+		data, err := os.ReadFile("/proc/cpuinfo")
+		if err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.HasPrefix(line, "model name") {
+					if idx := strings.Index(line, ":"); idx >= 0 {
+						return strings.TrimSpace(line[idx+1:])
+					}
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // gitHead returns the short commit hash the working tree is currently
 // at, or "" when we're not inside a git checkout. A "-dirty" suffix
 // marks uncommitted changes so a research run against an edited tree
@@ -167,9 +249,11 @@ func (r benchResult) MarshalJSON() ([]byte, error) {
 	}
 	for k, v := range map[string]float64{
 		"go_ns":       r.GoNs,
+		"go_ns_cv":    r.GoNsCV,
 		"go_bytes":    r.GoBytes,
 		"go_allocs":   r.GoAllocs,
 		"osty_ns":     r.OsNs,
+		"osty_ns_cv":  r.OsNsCV,
 		"osty_bytes":  r.OsBytes,
 		"osty_allocs": r.OsAllocs,
 	} {
@@ -185,9 +269,11 @@ func (r *benchResult) UnmarshalJSON(data []byte) error {
 		Pair     string   `json:"pair"`
 		Name     string   `json:"name"`
 		GoNs     *float64 `json:"go_ns"`
+		GoNsCV   *float64 `json:"go_ns_cv"`
 		GoBytes  *float64 `json:"go_bytes"`
 		GoAllocs *float64 `json:"go_allocs"`
 		OsNs     *float64 `json:"osty_ns"`
+		OsNsCV   *float64 `json:"osty_ns_cv"`
 		OsBytes  *float64 `json:"osty_bytes"`
 		OsAllocs *float64 `json:"osty_allocs"`
 	}
@@ -197,9 +283,11 @@ func (r *benchResult) UnmarshalJSON(data []byte) error {
 	r.Pair = m.Pair
 	r.Name = m.Name
 	r.GoNs = ptrOrNaN(m.GoNs)
+	r.GoNsCV = ptrOrNaN(m.GoNsCV)
 	r.GoBytes = ptrOrNaN(m.GoBytes)
 	r.GoAllocs = ptrOrNaN(m.GoAllocs)
 	r.OsNs = ptrOrNaN(m.OsNs)
+	r.OsNsCV = ptrOrNaN(m.OsNsCV)
 	r.OsBytes = ptrOrNaN(m.OsBytes)
 	r.OsAllocs = ptrOrNaN(m.OsAllocs)
 	return nil
@@ -366,6 +454,8 @@ func main() {
 	goBin := fs.String("go", "go", "path to the go binary used for `go test -bench`")
 	goCount := fs.Int("go-count", 3, "number of independent Go bench sweeps per pair; the runner records the median to reduce scheduler jitter")
 	goCPU := fs.String("go-cpu", "1", "value forwarded to `go test -cpu` for stable Go-side scheduling (default 1)")
+	ostyCount := fs.Int("osty-count", 1, "number of independent Osty bench sweeps per pair; each sweep triggers a full LLVM compile so values >1 trade wall time for a stddev/CoV estimate (default 1 — single sample, CoV reported as —)")
+	subtractBaseline := fs.Bool("subtract-baseline", false, "if set and the `baseline_empty` pair is present, its median ns/op is subtracted from every Osty ns/op as an estimate of the Osty bench harness's own per-iteration clock-sampling overhead. Display-only; raw values are still persisted to history.")
 	filter := fs.String("filter", "", "optional regex over pair names; only matching pairs run")
 	historyN := fs.Int("history", 0, "if >0, skip running and render the last N runs from "+historyFile+" as an ASCII trend graph")
 	label := fs.String("label", "", "optional short label stored with this run (shown in history output)")
@@ -397,6 +487,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "osty-vs-go: --go-count must be > 0")
 		os.Exit(2)
 	}
+	if *ostyCount <= 0 {
+		fmt.Fprintln(os.Stderr, "osty-vs-go: --osty-count must be > 0")
+		os.Exit(2)
+	}
 
 	osty := resolveOstyBin(*ostyBin)
 	if osty == "" {
@@ -424,19 +518,21 @@ func main() {
 			os.Exit(2)
 		}
 		cfg := autoresearchConfig{
-			Mutator:        *mutatorCmd,
-			MaxExperiments: *maxExperiments,
-			BenchTime:      *benchTime,
-			PairsDir:       *pairsDir,
-			OstyBin:        osty,
-			GoBin:          *goBin,
-			GoCount:        *goCount,
-			GoCPU:          *goCPU,
-			Label:          *label,
-			NoiseFrac:      *noiseFrac,
-			PairRE:         pairRE,
-			Interval:       *loopInterval,
-			GoCache:        newGoBenchCache(),
+			Mutator:          *mutatorCmd,
+			MaxExperiments:   *maxExperiments,
+			BenchTime:        *benchTime,
+			PairsDir:         *pairsDir,
+			OstyBin:          osty,
+			GoBin:            *goBin,
+			GoCount:          *goCount,
+			GoCPU:            *goCPU,
+			OstyCount:        *ostyCount,
+			SubtractBaseline: *subtractBaseline,
+			Label:            *label,
+			NoiseFrac:        *noiseFrac,
+			PairRE:           pairRE,
+			Interval:         *loopInterval,
+			GoCache:          newGoBenchCache(),
 		}
 		if err := runAutoresearch(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
@@ -446,11 +542,11 @@ func main() {
 	}
 
 	if *loopInterval > 0 {
-		runLoop(*loopInterval, *benchTime, *pairsDir, osty, *goBin, *goCount, *goCPU, *label, *noiseFrac, pairRE)
+		runLoop(*loopInterval, *benchTime, *pairsDir, osty, *goBin, *goCount, *goCPU, *ostyCount, *subtractBaseline, *label, *noiseFrac, pairRE)
 		return
 	}
 
-	if _, err := runOnce(*benchTime, *pairsDir, osty, *goBin, *goCount, *goCPU, *label, *noiseFrac, pairRE, nil); err != nil {
+	if _, err := runOnce(*benchTime, *pairsDir, osty, *goBin, *goCount, *goCPU, *ostyCount, *subtractBaseline, *label, *noiseFrac, pairRE, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
 		os.Exit(1)
 	}
@@ -460,7 +556,7 @@ func main() {
 // side, print the table, append to history, print the vs-best verdict.
 // Returns the new record so `--loop` can stream verdicts without
 // re-reading history.
-func runOnce(benchTime, pairsDir, ostyBin, goBin string, goCount int, goCPU, label string, noiseFrac float64, pairRE *regexp.Regexp, goCache *goBenchCache) (runRecord, error) {
+func runOnce(benchTime, pairsDir, ostyBin, goBin string, goCount int, goCPU string, ostyCount int, subtractBaseline bool, label string, noiseFrac float64, pairRE *regexp.Regexp, goCache *goBenchCache) (runRecord, error) {
 	pairs, err := discoverPairs(pairsDir)
 	if err != nil {
 		return runRecord{}, err
@@ -491,7 +587,7 @@ func runOnce(benchTime, pairsDir, ostyBin, goBin string, goCount int, goCPU, lab
 	if head != "" {
 		headPart = " @ " + head
 	}
-	fmt.Printf("# osty-vs-go run #%d%s%s — benchtime=%s, pairs=%d, go-count=%d, go-cpu=%s\n\n", seq, labelPart, headPart, benchTime, len(pairs), goCount, goCPU)
+	fmt.Printf("# osty-vs-go run #%d%s%s — benchtime=%s, pairs=%d, go-count=%d, osty-count=%d, go-cpu=%s\n\n", seq, labelPart, headPart, benchTime, len(pairs), goCount, ostyCount, goCPU)
 
 	var rows []benchResult
 	for _, pair := range pairs {
@@ -499,25 +595,37 @@ func runOnce(benchTime, pairsDir, ostyBin, goBin string, goCount int, goCPU, lab
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty-vs-go: go bench %s: %v\n", pair, err)
 		}
-		osRows, err := runOstyBench(ostyBin, pairsDir, pair, benchTime)
+		osRows, err := runOstyBench(ostyBin, pairsDir, pair, benchTime, ostyCount)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty-vs-go: osty bench %s: %v\n", pair, err)
 		}
 		rows = append(rows, mergePairRows(pair, goRows, osRows)...)
 	}
 
-	printTable(rows)
+	// baselineNs is the Osty per-iteration sampling overhead estimate.
+	// Always 0 when no baseline_empty pair ran or --subtract-baseline is off.
+	// Display-only: raw ns numbers stay in `rows` so history comparisons
+	// remain apples-to-apples across runs.
+	baselineNs := 0.0
+	if subtractBaseline {
+		baselineNs = findBaselineNs(rows)
+	}
+
+	printTable(rows, baselineNs)
 
 	record := runRecord{
-		Timestamp: time.Now(),
-		BenchTime: benchTime,
-		PairsDir:  pairsDir,
-		Label:     label,
-		GitHead:   head,
-		GoCount:   goCount,
-		GoCPU:     goCPU,
-		Score:     composite(rows),
-		Results:   rows,
+		Timestamp:  time.Now(),
+		BenchTime:  benchTime,
+		PairsDir:   pairsDir,
+		Label:      label,
+		GitHead:    head,
+		GoCount:    goCount,
+		GoCPU:      goCPU,
+		OstyCount:  ostyCount,
+		Machine:    captureMachineInfo(),
+		BaselineNs: baselineNs,
+		Score:      composite(rows),
+		Results:    rows,
 	}
 
 	// Compare against the best score in history BEFORE appending — we
@@ -537,7 +645,7 @@ func runOnce(benchTime, pairsDir, ostyBin, goBin string, goCount int, goCPU, lab
 // the user (or an outer agent) edits Osty sources; each tick's verdict
 // tells them whether the edit was an improvement, a regression, or
 // noise. Ctrl-C exits cleanly.
-func runLoop(interval time.Duration, benchTime, pairsDir, ostyBin, goBin string, goCount int, goCPU, label string, noiseFrac float64, pairRE *regexp.Regexp) {
+func runLoop(interval time.Duration, benchTime, pairsDir, ostyBin, goBin string, goCount int, goCPU string, ostyCount int, subtractBaseline bool, label string, noiseFrac float64, pairRE *regexp.Regexp) {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sig)
@@ -548,7 +656,7 @@ func runLoop(interval time.Duration, benchTime, pairsDir, ostyBin, goBin string,
 	// Run immediately rather than waiting `interval` for the first
 	// tick — the user just launched it and expects feedback.
 	for {
-		if _, err := runOnce(benchTime, pairsDir, ostyBin, goBin, goCount, goCPU, label, noiseFrac, pairRE, goCache); err != nil {
+		if _, err := runOnce(benchTime, pairsDir, ostyBin, goBin, goCount, goCPU, ostyCount, subtractBaseline, label, noiseFrac, pairRE, goCache); err != nil {
 			fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
 		}
 		fmt.Printf("\n(waiting %s before next sweep; Ctrl-C to stop)\n\n", interval)
@@ -566,19 +674,21 @@ func runLoop(interval time.Duration, benchTime, pairsDir, ostyBin, goBin string,
 // an unreadable 10-arg function signature and makes it trivial to pass
 // the same config into tests that mock out the bench sweep.
 type autoresearchConfig struct {
-	Mutator        string
-	MaxExperiments int
-	BenchTime      string
-	PairsDir       string
-	OstyBin        string
-	GoBin          string
-	GoCount        int
-	GoCPU          string
-	Label          string
-	NoiseFrac      float64
-	PairRE         *regexp.Regexp
-	Interval       time.Duration
-	GoCache        *goBenchCache
+	Mutator          string
+	MaxExperiments   int
+	BenchTime        string
+	PairsDir         string
+	OstyBin          string
+	GoBin            string
+	GoCount          int
+	GoCPU            string
+	OstyCount        int
+	SubtractBaseline bool
+	Label            string
+	NoiseFrac        float64
+	PairRE           *regexp.Regexp
+	Interval         time.Duration
+	GoCache          *goBenchCache
 }
 
 // runAutoresearch is the closest faithful take on karpathy/autoresearch
@@ -682,7 +792,7 @@ func runAutoresearchIter(cfg autoresearchConfig, iter int, stats *autoresearchSt
 
 	// Phase 2: run the bench sweep. runOnce already writes the history
 	// file and prints the verdict relative to all-time history.
-	rec, err := runOnce(cfg.BenchTime, cfg.PairsDir, cfg.OstyBin, cfg.GoBin, cfg.GoCount, cfg.GoCPU, cfg.Label, cfg.NoiseFrac, cfg.PairRE, cfg.GoCache)
+	rec, err := runOnce(cfg.BenchTime, cfg.PairsDir, cfg.OstyBin, cfg.GoBin, cfg.GoCount, cfg.GoCPU, cfg.OstyCount, cfg.SubtractBaseline, cfg.Label, cfg.NoiseFrac, cfg.PairRE, cfg.GoCache)
 	if err != nil {
 		// Bench failure shouldn't leave the mutator's changes on HEAD.
 		_, _ = gitRun("reset", "--hard", "HEAD")
@@ -916,9 +1026,11 @@ func parseGoBenchOutput(pair, out string) []benchResult {
 			Pair:     pair,
 			Name:     m[1],
 			GoNs:     ns,
+			GoNsCV:   math.NaN(),
 			GoBytes:  math.NaN(),
 			GoAllocs: math.NaN(),
 			OsNs:     math.NaN(),
+			OsNsCV:   math.NaN(),
 			OsBytes:  math.NaN(),
 			OsAllocs: math.NaN(),
 		}
@@ -968,9 +1080,11 @@ func aggregateGoBenchRuns(pair string, runs [][]benchResult) []benchResult {
 			Pair:     pair,
 			Name:     name,
 			GoNs:     medianFinite(s.ns),
+			GoNsCV:   coefficientOfVariation(s.ns),
 			GoBytes:  medianFinite(s.bytes),
 			GoAllocs: medianFinite(s.allocs),
 			OsNs:     math.NaN(),
+			OsNsCV:   math.NaN(),
 			OsBytes:  math.NaN(),
 			OsAllocs: math.NaN(),
 		})
@@ -998,14 +1112,91 @@ func medianFinite(values []float64) float64 {
 	return (sorted[mid-1] + sorted[mid]) / 2
 }
 
-func runOstyBench(ostyBin, pairsDir, pair, benchTime string) ([]benchResult, error) {
-	dir := filepath.Join(pairsDir, pair, "osty")
-	cmd := exec.Command(ostyBin, "test", "--bench", "--serial", "--benchtime="+benchTime, dir)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("%s test --bench: %w\n%s", ostyBin, err, out)
+// coefficientOfVariation returns sample stddev / mean over `values`. NaN
+// when fewer than two samples or when the mean is non-positive (the
+// ratio isn't meaningful on a zeroed bench). The caller uses this as a
+// per-bench "how noisy is this number?" signal — not an error bar, but
+// close enough to flag when a ±2% verdict is crying wolf.
+func coefficientOfVariation(values []float64) float64 {
+	if len(values) < 2 {
+		return math.NaN()
 	}
-	return parseOstyBenchOutput(pair, string(out)), nil
+	var sum float64
+	for _, v := range values {
+		sum += v
+	}
+	mean := sum / float64(len(values))
+	if mean <= 0 {
+		return math.NaN()
+	}
+	var sqSum float64
+	for _, v := range values {
+		d := v - mean
+		sqSum += d * d
+	}
+	stddev := math.Sqrt(sqSum / float64(len(values)-1))
+	return stddev / mean
+}
+
+func runOstyBench(ostyBin, pairsDir, pair, benchTime string, ostyCount int) ([]benchResult, error) {
+	dir := filepath.Join(pairsDir, pair, "osty")
+	if ostyCount < 1 {
+		ostyCount = 1
+	}
+	runs := make([][]benchResult, 0, ostyCount)
+	for i := 0; i < ostyCount; i++ {
+		cmd := exec.Command(ostyBin, "test", "--bench", "--serial", "--benchtime="+benchTime, dir)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return nil, fmt.Errorf("%s test --bench run %d/%d: %w\n%s", ostyBin, i+1, ostyCount, err, out)
+		}
+		runs = append(runs, parseOstyBenchOutput(pair, string(out)))
+	}
+	return aggregateOstyBenchRuns(pair, runs), nil
+}
+
+// aggregateOstyBenchRuns collapses ostyCount independent Osty sweeps
+// into per-bench median + CoV, mirroring the Go-side aggregator. One run
+// still passes through unchanged (single-sample CoV is NaN by design).
+func aggregateOstyBenchRuns(pair string, runs [][]benchResult) []benchResult {
+	type series struct {
+		ns    []float64
+		bytes []float64
+	}
+	byName := map[string]*series{}
+	for _, rows := range runs {
+		for _, row := range rows {
+			s := byName[row.Name]
+			if s == nil {
+				s = &series{}
+				byName[row.Name] = s
+			}
+			s.ns = appendFinite(s.ns, row.OsNs)
+			s.bytes = appendFinite(s.bytes, row.OsBytes)
+		}
+	}
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]benchResult, 0, len(names))
+	for _, name := range names {
+		s := byName[name]
+		out = append(out, benchResult{
+			Pair:     pair,
+			Name:     name,
+			GoNs:     math.NaN(),
+			GoNsCV:   math.NaN(),
+			GoBytes:  math.NaN(),
+			GoAllocs: math.NaN(),
+			OsNs:     medianFinite(s.ns),
+			OsNsCV:   coefficientOfVariation(s.ns),
+			OsBytes:  medianFinite(s.bytes),
+			OsAllocs: math.NaN(),
+		})
+	}
+	return out
 }
 
 // Osty output, line-oriented:
@@ -1047,9 +1238,11 @@ func parseOstyBenchOutput(pair, out string) []benchResult {
 				Pair:     pair,
 				Name:     name,
 				GoNs:     math.NaN(),
+				GoNsCV:   math.NaN(),
 				GoBytes:  math.NaN(),
 				GoAllocs: math.NaN(),
 				OsNs:     avg,
+				OsNsCV:   math.NaN(),
 				OsBytes:  bytes,
 				OsAllocs: math.NaN(),
 			})
@@ -1067,6 +1260,7 @@ func mergePairRows(pair string, goRows, osRows []benchResult) []benchResult {
 	for _, r := range osRows {
 		if existing, ok := byName[r.Name]; ok {
 			existing.OsNs = r.OsNs
+			existing.OsNsCV = r.OsNsCV
 			existing.OsBytes = r.OsBytes
 			existing.OsAllocs = r.OsAllocs
 			byName[r.Name] = existing
@@ -1086,20 +1280,29 @@ func mergePairRows(pair string, goRows, osRows []benchResult) []benchResult {
 	return out
 }
 
-func printTable(rows []benchResult) {
+func printTable(rows []benchResult, baselineNs float64) {
 	header := []string{
 		"pair", "bench",
-		"go ns/op", "osty ns/op", "ns osty/go",
+		"go ns/op", "go ±CV", "osty ns/op", "osty ±CV", "ns osty/go",
 		"go B/op", "osty B/op",
 		"go allocs/op",
 	}
 	lines := make([][]string, 0, len(rows))
 	for _, r := range rows {
+		osDisplay := r.OsNs
+		if baselineNs > 0 && !math.IsNaN(osDisplay) {
+			osDisplay = osDisplay - baselineNs
+			if osDisplay < 0 {
+				osDisplay = 0
+			}
+		}
 		lines = append(lines, []string{
 			r.Pair, r.Name,
 			formatFloat(r.GoNs, 2),
-			formatFloat(r.OsNs, 1),
-			formatRatio(r.OsNs, r.GoNs),
+			formatCV(r.GoNsCV),
+			formatFloat(osDisplay, 1),
+			formatCV(r.OsNsCV),
+			formatRatio(osDisplay, r.GoNs),
 			formatFloat(r.GoBytes, 0),
 			formatFloat(r.OsBytes, 0),
 			formatFloat(r.GoAllocs, 0),
@@ -1136,14 +1339,27 @@ func printTable(rows []benchResult) {
 	var logSum float64
 	var n int
 	for _, r := range rows {
+		if r.Pair == baselinePairName {
+			continue
+		}
 		if math.IsNaN(r.GoNs) || math.IsNaN(r.OsNs) || r.GoNs <= 0 {
 			continue
 		}
-		logSum += math.Log(r.OsNs / r.GoNs)
+		osNs := r.OsNs
+		if baselineNs > 0 {
+			osNs = osNs - baselineNs
+			if osNs <= 0 {
+				continue
+			}
+		}
+		logSum += math.Log(osNs / r.GoNs)
 		n++
 	}
 	if n > 0 {
 		fmt.Printf("\ngeomean ns osty/go: %.2fx  (over %d benches)\n", math.Exp(logSum/float64(n)), n)
+	}
+	if baselineNs > 0 {
+		fmt.Printf("baseline subtracted: %.1fns per Osty iteration (from `baseline_empty` pair)\n", baselineNs)
 	}
 }
 
@@ -1152,6 +1368,16 @@ func formatFloat(v float64, decimals int) string {
 		return "—"
 	}
 	return strconv.FormatFloat(v, 'f', decimals, 64)
+}
+
+// formatCV renders a coefficient of variation as "±X.Y%", or "—" when
+// there's no multi-sample estimate. The ± hints that this is spread
+// around the median, not a one-sided error bar.
+func formatCV(cv float64) string {
+	if math.IsNaN(cv) {
+		return "—"
+	}
+	return fmt.Sprintf("±%.1f%%", cv*100)
 }
 
 func formatRatio(osNs, goNs float64) string {
@@ -1202,18 +1428,43 @@ func printVsBestVerdict(current runRecord, prior []runRecord, noiseFrac float64)
 	}
 	delta := (current.Score - best.Score) / best.Score
 	bestIdx := runIndex(prior, best)
+	// Dynamic noise band: take the larger of the user-supplied --noise
+	// and the aggregate per-bench CoV reported on this run. If the
+	// measurement itself is noisy, a small delta won't cry "regression".
+	effNoise, noiseSrc := effectiveNoise(noiseFrac, current)
 	switch {
 	case current.Score < best.Score:
 		fmt.Printf("\n-> NEW BEST: score %.3f  (prev champion %.3f at run #%d; -%.2f%%)\n",
 			current.Score, best.Score, bestIdx, -delta*100)
-	case math.Abs(delta) <= noiseFrac:
-		fmt.Printf("\n-> within noise: score %.3f vs best %.3f at run #%d (%+.2f%%)\n",
-			current.Score, best.Score, bestIdx, delta*100)
+	case math.Abs(delta) <= effNoise:
+		fmt.Printf("\n-> within noise: score %.3f vs best %.3f at run #%d (%+.2f%%; noise band %.2f%% via %s)\n",
+			current.Score, best.Score, bestIdx, delta*100, effNoise*100, noiseSrc)
 	default:
-		fmt.Printf("\n-> regression: score %.3f vs best %.3f at run #%d (%+.2f%%)\n",
-			current.Score, best.Score, bestIdx, delta*100)
+		fmt.Printf("\n-> regression: score %.3f vs best %.3f at run #%d (%+.2f%%; noise band %.2f%% via %s)\n",
+			current.Score, best.Score, bestIdx, delta*100, effNoise*100, noiseSrc)
 	}
 	printPerBenchDeltas(current, best)
+}
+
+// effectiveNoise returns the wider of the user-supplied band and the
+// per-bench median Osty CoV captured on this run. Returns the static
+// --noise when no CV was captured (single-sample run) so behavior
+// matches pre-CV history.
+func effectiveNoise(userNoise float64, rec runRecord) (float64, string) {
+	var cvs []float64
+	for _, r := range rec.Results {
+		if !math.IsNaN(r.OsNsCV) {
+			cvs = append(cvs, r.OsNsCV)
+		}
+	}
+	if len(cvs) == 0 {
+		return userNoise, "--noise"
+	}
+	measured := medianFinite(cvs)
+	if math.IsNaN(measured) || measured <= userNoise {
+		return userNoise, "--noise"
+	}
+	return measured, "measured CoV"
 }
 
 // runIndex returns the 1-based absolute index of r in runs (the same

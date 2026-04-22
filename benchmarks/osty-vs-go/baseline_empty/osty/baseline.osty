@@ -1,0 +1,10 @@
+// Measures the osty bench harness's own per-iteration overhead (the
+// clock-pair sample + closure invocation + GC odometer read) so other
+// pairs can subtract it and not let harness cost dominate their
+// nanosecond-scale bodies. `#[inline(never)]` keeps the body from
+// being folded into the benchmark closure by LLVM.
+
+#[inline(never)]
+pub fn noop() -> Int {
+    0
+}

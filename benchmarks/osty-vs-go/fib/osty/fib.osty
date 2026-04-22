@@ -1,3 +1,4 @@
+#[inline(never)]
 pub fn fib(n: Int) -> Int {
     if n < 2 {
         n

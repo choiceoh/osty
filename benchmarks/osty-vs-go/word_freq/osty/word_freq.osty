@@ -19,6 +19,7 @@ fn sortedKeys(index: Map<String, Int>) -> List<String> {
     index.keys().sorted()
 }
 
+#[inline(never)]
 pub fn analyzeCorpusIndex(left: List<String>, right: List<String>) -> Int {
     let leftIndex = buildIndex(sortedWords(left), 0)
     let rightIndex = buildIndex(sortedWords(right), leftIndex.len())
