@@ -21,15 +21,14 @@ import (
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/sourcemap"
 	"github.com/osty/osty/internal/token"
-	"github.com/osty/osty/internal/toolchain"
 	"github.com/osty/osty/internal/types"
 )
 
 const nativeCheckerEnv = "OSTY_NATIVE_CHECKER_BIN"
 
-// The checker targets an Osty-native request/response boundary. The preferred
-// path uses an external executable, and the default host implementation falls
-// back to the embedded selfhost checker when that binary is unavailable.
+// The checker targets an Osty-native request/response boundary. The default
+// host implementation uses the embedded selfhost checker in-process; callers
+// can opt into an external executable by setting OSTY_NATIVE_CHECKER_BIN.
 type nativeChecker interface {
 	CheckSourceStructured([]byte) (nativeCheckResult, error)
 }
@@ -227,9 +226,6 @@ func adaptEmbeddedCheckResult(checked selfhost.CheckResult) nativeCheckResult {
 }
 
 var nativeCheckerFactory = defaultNativeChecker
-var ensureManagedNativeChecker = func() (string, error) {
-	return toolchain.EnsureNativeChecker(".")
-}
 
 // UseEmbeddedNativeChecker forces the in-process selfhost checker for the
 // remainder of the process. Use only in developer tooling (bootstrap-gen)
@@ -270,8 +266,32 @@ func UseCachedEmbeddedNativeChecker(cacheDir, validity string) {
 	}
 }
 
+// EmbeddedCheckerFingerprint returns a cache-stable identifier for the Go
+// sources compiled into the embedded selfhost checker rooted at repoRoot. When
+// the bundled generated sources are unavailable it returns the empty string so
+// callers can fall back to a coarser validity token.
+func EmbeddedCheckerFingerprint(repoRoot string) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "go=%s\nos=%s\narch=%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
+	files := []string{
+		"internal/selfhost/generated.go",
+		"internal/selfhost/astbridge/generated.go",
+	}
+	for _, rel := range files {
+		data, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(rel)))
+		if err != nil {
+			return ""
+		}
+		fmt.Fprintf(h, "%s=%d\n", rel, len(data))
+		h.Write(data)
+	}
+	sum := h.Sum(nil)
+	return hex.EncodeToString(sum[:12])
+}
+
 // UseCachedDefaultNativeChecker wraps whichever checker `defaultNativeChecker`
-// would return (managed subprocess, or embedded fallback) in the on-disk
+// would return (embedded by default, or an explicit subprocess override) in
+// the on-disk
 // cache layer. First-time builds pay the full check cost; second-and-later
 // builds with unchanged package inputs short-circuit to a JSON read
 // (~microseconds) instead of re-running the checker. Unchanged-package
@@ -286,7 +306,8 @@ func UseCachedDefaultNativeChecker(cacheDir, validity string) {
 	backing, note := defaultNativeChecker()
 	if backing == nil {
 		// Preserve the error note so callers see the same diagnostic as
-		// the uncached path when the managed checker can't start.
+		// the uncached path when an explicitly configured checker can't
+		// start.
 		nativeCheckerFactory = func() (nativeChecker, string) {
 			return nil, note
 		}
@@ -463,15 +484,7 @@ func defaultNativeChecker() (nativeChecker, string) {
 		}
 		return nativeCheckerExec{path: resolved}, ""
 	}
-	managedPath, err := ensureManagedNativeChecker()
-	if err != nil {
-		return embeddedNativeChecker{}, fmt.Sprintf(
-			"%s is not set and the managed toolchain checker could not be prepared: %v; falling back to the embedded checker",
-			nativeCheckerEnv,
-			err,
-		)
-	}
-	return nativeCheckerExec{path: managedPath}, ""
+	return embeddedNativeChecker{}, ""
 }
 
 type selfhostCheckedSource struct {

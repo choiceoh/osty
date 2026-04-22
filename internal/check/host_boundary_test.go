@@ -404,7 +404,7 @@ func TestNativeBoundaryOverlaysCanonicalSourceSpansBackToOriginalAST(t *testing.
 	}
 }
 
-func TestFileFallsBackToEmbeddedCheckerWhenManagedArtifactUnavailable(t *testing.T) {
+func TestFileUsesEmbeddedCheckerByDefaultWhenEnvUnset(t *testing.T) {
 	src := []byte(`fn id<T>(value: T) -> T { value }
 
 fn main() {
@@ -417,12 +417,6 @@ fn main() {
 	call := letStmt.Value.(*ast.CallExpr)
 
 	t.Setenv(nativeCheckerEnv, "")
-
-	oldEnsure := ensureManagedNativeChecker
-	ensureManagedNativeChecker = func() (string, error) {
-		return "", fmt.Errorf("boom")
-	}
-	t.Cleanup(func() { ensureManagedNativeChecker = oldEnsure })
 
 	oldFactory := nativeCheckerFactory
 	nativeCheckerFactory = defaultNativeChecker
