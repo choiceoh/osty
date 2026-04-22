@@ -696,7 +696,11 @@ func linkNativeTestBinary(ctx context.Context, assets nativeTestBundleAssets, tm
 	}
 	driverPath := filepath.Join(root, stem+"_driver.c")
 	driverObject := filepath.Join(root, stem+"_driver.o")
-	binaryPath := filepath.Join(root, stem)
+	binaryName := stem
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	binaryPath := filepath.Join(root, binaryName)
 	if err := os.WriteFile(driverPath, buildNativeTestDriver(tc.Name), 0o644); err != nil {
 		return "", err
 	}

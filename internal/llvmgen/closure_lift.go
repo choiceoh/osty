@@ -1,29 +1,38 @@
-// closure_lift.go — pre-pass over the IR module that hoists no-capture
+// closure_lift.go — pre-pass over the IR module that hoists
 // `*ostyir.Closure` literals into top-level synthetic fn declarations
 // so the legacy AST emitter never has to lower a `*ast.ClosureExpr`
-// directly. Each lifted closure is replaced (during the IR→AST
-// bridge) with a bare `*ast.Ident` referring to the synthesized fn.
-// The existing `emitIdent` path then materialises the closure as a
-// fn-value env via `g.emitFnValueEnv(sig)` (Phase 1, see fn_value.go),
-// reusing the same call ABI as bare top-level fn references.
+// directly.
 //
-// Scope (intentionally narrow):
-//   - Only closures with `len(c.Captures) == 0` are lifted. Captures
-//     mean the body reads names from the enclosing scope; lifting
-//     those requires a Phase 4 capture env layout (see MIR's
-//     `emitClosureEnv`) which this PR doesn't tackle. Closures with
-//     captures are left as `*ast.ClosureExpr` for the existing
-//     LLVM013 wall to handle (with a clearer error message — they
-//     can't be inlined as testing.context/benchmark are).
-//   - Lifted fns are appended to `file.Decls`. Their names follow
-//     `__osty_closure_<id>` with a per-bridge counter so two
-//     successive `legacyFileFromModule` calls don't collide.
+// Two lift shapes share the same infrastructure:
 //
-// The lift table is keyed by `*ostyir.Closure` pointer and consumed
-// once during `legacyClosureFromIR`. After bridge conversion finishes
-// the table is cleared (mirroring the
-// `currentSpecializedBuiltinSurfaces` pattern at the top of
-// ir_module.go).
+//   - **No-capture closures** (`Captures == 0`): replaced at the
+//     bridge with a bare `*ast.Ident` referring to the lifted fn.
+//     The existing `emitIdent` path materialises the closure as a
+//     fn-value env via `g.emitFnValueEnv(sig)` (Phase 1 thunk in
+//     fn_value.go), reusing the same call ABI as bare top-level fn
+//     references.
+//
+//   - **Capturing closures** (`Captures != 0`): the lifted fn takes
+//     `__env: ptr` as its first parameter; the env at runtime holds
+//     the lifted-fn pointer at slot 0 followed by capture values at
+//     slots 1..N. The bridge replaces the closure literal with a
+//     synthesized `CallExpr` to a marker name `__osty_make_closure_<n>`
+//     whose args are bare Idents of the captured names. The call site
+//     emitter (`emitClosureMakerCall` in fn_value.go) recognises the
+//     marker, allocates the env, and stores the lifted fn pointer +
+//     evaluated captures. Inside the lifted fn body, captures are
+//     pre-bound by `applyClosureCaptureBindings` after the parameter
+//     binding loop in `emitUserFunction`.
+//
+// Capture support is intentionally limited to scalar IR primitives
+// (Int / Bool / Char / Byte / Float and their typed cousins) — the
+// LLVM types those lower to (i64 / i1 / i32 / i8 / double) all fit
+// in a single machine word and the env layout stores them inline.
+// Pointer-typed captures (String, List<T>, struct) require a GC
+// trace callback so the env keeps captured managed pointers
+// reachable from mark; that's a follow-up. Closures with any
+// non-supported capture are skipped and fall through to the existing
+// LLVM013 wall.
 package llvmgen
 
 import (
@@ -33,22 +42,59 @@ import (
 	ostyir "github.com/osty/osty/internal/ir"
 )
 
+// closureCapture is one captured variable's metadata, in env slot
+// order. The slot index is `pos+1` (slot 0 is the lifted fn ptr).
+//
+// `name` is the variable's source name in the closure body — the
+// emitter binds the loaded value under this name so references
+// inside the body resolve naturally.
+//
+// `llvmTyp` is the LLVM IR type for the load (e.g. "i64" / "i32" /
+// "i1" / "double"). Stored here rather than reconstructed from the
+// AST type so the emitter doesn't need to re-walk the type lookup
+// at body-emit time.
+//
+// `astTyp` is the AST type the lifted-fn synthesizer needs when
+// adding the capture as an additional fn parameter (the no-thunk
+// design carries captures via env, but we still record astTyp for
+// type checking + diagnostic clarity).
+type closureCapture struct {
+	name    string
+	llvmTyp string
+	astTyp  ast.Type
+}
+
 // liftedClosure is the per-closure record produced by the lift pass.
-// Holds the synthesized name and the lowered AST FnDecl that the
-// bridge will append to the file. The decl is built once during the
-// pre-pass so subsequent `legacyClosureFromIR` lookups are O(1).
+// `decl` is the synthesized AST fn (with `__env` prepended for
+// capturing closures); `captures` is empty for no-capture closures
+// and matches env slots 1..N otherwise; `makerName` is the
+// synthesized marker name only present for capturing closures.
 type liftedClosure struct {
-	name string
-	decl *ast.FnDecl
+	name      string
+	decl      *ast.FnDecl
+	captures  []closureCapture
+	makerName string
 }
 
 // currentLiftedClosures maps each lifted IR Closure pointer to its
-// synthesized name + AST FnDecl. Set by `liftClosuresFromModule` at
-// the start of each bridge conversion and consulted by
+// record. Set by `liftClosuresFromModule` and consumed by
 // `legacyClosureFromIR`. Reset by `GenerateModule` after the AST
 // emitter consumes the side channel — same lifecycle as
 // `currentSpecializedBuiltinSurfaces`.
 var currentLiftedClosures map[*ostyir.Closure]*liftedClosure
+
+// currentLiftedClosuresByName mirrors currentLiftedClosures keyed by
+// the synthesized lifted-fn name. Used by the body emitter
+// (`liftedClosureCapturesByName`) to look up capture metadata when
+// emitting the lifted fn — the bridge has long discarded the
+// IR-pointer key by then.
+var currentLiftedClosuresByName map[string]*liftedClosure
+
+// currentLiftedClosuresByMaker mirrors currentLiftedClosures keyed by
+// the synthesized maker call name. Used by `emitClosureMakerCall` to
+// look up the env-construction info from a `__osty_make_closure_*`
+// CallExpr.
+var currentLiftedClosuresByMaker map[string]*liftedClosure
 
 // closureLiftCounter is a process-monotonic counter for synthesized
 // closure fn names. A monotonic counter (rather than per-module
@@ -57,16 +103,24 @@ var currentLiftedClosures map[*ostyir.Closure]*liftedClosure
 // name collision.
 var closureLiftCounter int
 
+// closureMakerNamePrefix is the marker prefix the bridge stamps on
+// the constructor call replacing a capturing closure literal. The
+// emitter dispatcher (emitClosureMakerCall) matches on this prefix
+// to route the call into env materialization.
+const closureMakerNamePrefix = "__osty_make_closure_"
+
 // liftClosuresFromModule walks `mod` and assigns a synthesized
-// top-level fn name to every `*ostyir.Closure` with no captures.
+// top-level fn name to every `*ostyir.Closure` it can lift.
 // Returns a slice of synthesized AST FnDecls in lift order so the
 // caller can prepend them to the bridged file's Decls.
 //
-// Closures with captures are skipped — they fall through to the
-// existing LLVM013 wall. A future capture-aware lifter can extend
-// this same map with a richer record (env struct layout etc.).
+// Closures with captures the lifter can't represent (e.g. ptr
+// captures, or any unrecognised CaptureKind) are skipped — they
+// fall through to the existing LLVM013 wall.
 func liftClosuresFromModule(mod *ostyir.Module) []ast.Decl {
 	currentLiftedClosures = map[*ostyir.Closure]*liftedClosure{}
+	currentLiftedClosuresByName = map[string]*liftedClosure{}
+	currentLiftedClosuresByMaker = map[string]*liftedClosure{}
 	if mod == nil {
 		return nil
 	}
@@ -76,40 +130,128 @@ func liftClosuresFromModule(mod *ostyir.Module) []ast.Decl {
 		if !ok || c == nil {
 			return true
 		}
-		if len(c.Captures) != 0 {
-			// Capture-bearing closures are out of scope for this PR.
-			// Leave them in place; the bridge returns the original
-			// ClosureExpr and the legacy emitter walls.
+		captures, ok := captureSlotsFromIR(c.Captures)
+		if !ok {
+			// One or more captures is a shape we don't support yet.
+			// Leave the closure intact; the existing LLVM013 wall
+			// fires.
 			return true
 		}
-		fnDecl, err := buildLiftedClosureFnDecl(c)
+		fnDecl, err := buildLiftedClosureFnDecl(c, captures)
 		if err != nil || fnDecl == nil {
-			// Best-effort: if we can't build the lifted fn cleanly
-			// (e.g. an unexpected param shape), skip it and let the
-			// downstream emitter wall the way it would have without
-			// lifting.
 			return true
 		}
 		closureLiftCounter++
-		fnDecl.Name = fmt.Sprintf("__osty_closure_%d", closureLiftCounter)
-		currentLiftedClosures[c] = &liftedClosure{name: fnDecl.Name, decl: fnDecl}
+		fnName := fmt.Sprintf("__osty_closure_%d", closureLiftCounter)
+		fnDecl.Name = fnName
+		rec := &liftedClosure{
+			name:     fnName,
+			decl:     fnDecl,
+			captures: captures,
+		}
+		if len(captures) > 0 {
+			rec.makerName = fmt.Sprintf("%s%d", closureMakerNamePrefix, closureLiftCounter)
+			currentLiftedClosuresByMaker[rec.makerName] = rec
+		}
+		currentLiftedClosures[c] = rec
+		currentLiftedClosuresByName[fnName] = rec
 		lifted = append(lifted, fnDecl)
 		return true
 	}), mod)
 	return lifted
 }
 
-// buildLiftedClosureFnDecl converts an IR Closure into an AST FnDecl
-// suitable for the legacy emitter. The closure's params, return
-// type, and body block are translated through the existing
-// IR→AST bridge helpers. The result has empty Annotations and
-// Pub=false — lifted closures are private to the compilation unit.
+// captureSlotsFromIR projects an IR closure's Captures into the
+// per-slot metadata the emitter needs. Returns ok=false when any
+// capture is unsupported (Kind, type, or shape) — the caller treats
+// that as a signal to skip the lift entirely.
 //
-// Returns (nil, nil) when the IR shape isn't lift-friendly (e.g. an
-// unnamed pattern param). The caller should skip silently in that
-// case so the legacy emitter retains the original ClosureExpr and
-// surfaces the regular wall.
-func buildLiftedClosureFnDecl(c *ostyir.Closure) (*ast.FnDecl, error) {
+// Supported shapes for this PR:
+//   - Kind: CaptureLocal / CaptureParam (bare reads of names from
+//     the enclosing fn's scope). CaptureGlobal / CaptureFn /
+//     CaptureSelf still bail.
+//   - LLVM type: scalar primitives only (i64 / i1 / i32 / i8 /
+//     double). Pointer-typed captures need a GC trace callback;
+//     deferred to a follow-up.
+func captureSlotsFromIR(captures []*ostyir.Capture) ([]closureCapture, bool) {
+	if len(captures) == 0 {
+		return nil, true
+	}
+	out := make([]closureCapture, 0, len(captures))
+	for _, c := range captures {
+		if c == nil || c.Name == "" {
+			return nil, false
+		}
+		switch c.Kind {
+		case ostyir.CaptureLocal, ostyir.CaptureParam:
+		default:
+			return nil, false
+		}
+		llvmTyp, ok := scalarLLVMTypeForIR(c.T)
+		if !ok {
+			return nil, false
+		}
+		astTyp := legacyTypeFromIR(c.T)
+		if astTyp == nil {
+			return nil, false
+		}
+		out = append(out, closureCapture{
+			name:    c.Name,
+			llvmTyp: llvmTyp,
+			astTyp:  astTyp,
+		})
+	}
+	return out, true
+}
+
+// scalarLLVMTypeForIR returns the LLVM IR type string for a scalar
+// IR primitive type, or ok=false for anything that doesn't fit in
+// a single machine word (ptr, struct, etc.).
+func scalarLLVMTypeForIR(t ostyir.Type) (string, bool) {
+	prim, ok := t.(*ostyir.PrimType)
+	if !ok || prim == nil {
+		return "", false
+	}
+	switch prim.Kind {
+	case ostyir.PrimInt, ostyir.PrimInt64, ostyir.PrimUInt64:
+		return "i64", true
+	case ostyir.PrimInt32, ostyir.PrimUInt32, ostyir.PrimChar:
+		return "i32", true
+	case ostyir.PrimInt16, ostyir.PrimUInt16:
+		return "i16", true
+	case ostyir.PrimInt8, ostyir.PrimUInt8, ostyir.PrimByte:
+		return "i8", true
+	case ostyir.PrimBool:
+		return "i1", true
+	case ostyir.PrimFloat, ostyir.PrimFloat64:
+		return "double", true
+	case ostyir.PrimFloat32:
+		return "float", true
+	}
+	return "", false
+}
+
+// buildLiftedClosureFnDecl converts an IR Closure into an AST FnDecl
+// suitable for the legacy emitter.
+//
+// For no-capture closures the signature mirrors the source: original
+// closure params + return type. The existing fn-value Env path
+// wraps it in a thunk (Phase 1).
+//
+// For capturing closures each capture is appended to the lifted
+// fn's parameter list, so a closure `|n| n + outer` with `outer:
+// Int` lifts to `fn __osty_closure_<id>(n: Int, outer: Int)`. The
+// body's references to `outer` resolve naturally to that
+// extra param — no special name-resolution path needed in the
+// emitter. The capturing thunk (emitted alongside in
+// `llvmCapturingClosureThunkDefinition`) reads each capture out
+// of the env at runtime and reorders args before calling the
+// lifted fn.
+//
+// Returns (nil, nil) when the IR shape isn't lift-friendly. The
+// caller skips silently — the legacy emitter falls back to the
+// LLVM013 wall.
+func buildLiftedClosureFnDecl(c *ostyir.Closure, captures []closureCapture) (*ast.FnDecl, error) {
 	if c == nil {
 		return nil, nil
 	}
@@ -138,6 +280,18 @@ func buildLiftedClosureFnDecl(c *ostyir.Closure) (*ast.FnDecl, error) {
 		}
 		out.Params = append(out.Params, legacyParam)
 	}
+	// Append each capture as an additional named parameter. The
+	// body's bare-Ident references (`outer`) bind naturally to
+	// these params during the regular emitUserFunction param-bind
+	// loop — no special closure-aware lookup needed.
+	for _, cap := range captures {
+		out.Params = append(out.Params, &ast.Param{
+			PosV: start,
+			EndV: start,
+			Name: cap.name,
+			Type: cap.astTyp,
+		})
+	}
 	body, err := legacyBlockFromIR(c.Body)
 	if err != nil {
 		return nil, err
@@ -147,13 +301,31 @@ func buildLiftedClosureFnDecl(c *ostyir.Closure) (*ast.FnDecl, error) {
 }
 
 // liftedClosureFor returns the lifted record for `c` if the pre-pass
-// scheduled it, or nil otherwise. Called by `legacyClosureFromIR`
-// to decide between returning a bare Ident reference (lifted) or
-// the original ClosureExpr (not lifted — bound for the existing
-// wall).
+// scheduled it, or nil otherwise.
 func liftedClosureFor(c *ostyir.Closure) *liftedClosure {
 	if currentLiftedClosures == nil || c == nil {
 		return nil
 	}
 	return currentLiftedClosures[c]
+}
+
+// liftedClosureByName returns the lifted record for the synthesized
+// fn name. Used by the body emitter to look up capture metadata
+// for pre-binding.
+func liftedClosureByName(name string) *liftedClosure {
+	if currentLiftedClosuresByName == nil || name == "" {
+		return nil
+	}
+	return currentLiftedClosuresByName[name]
+}
+
+// liftedClosureByMaker returns the lifted record for a synthesized
+// maker call name (`__osty_make_closure_<n>`). Used by the
+// emitter's call dispatcher to route the marker call into env
+// materialization.
+func liftedClosureByMaker(name string) *liftedClosure {
+	if currentLiftedClosuresByMaker == nil || name == "" {
+		return nil
+	}
+	return currentLiftedClosuresByMaker[name]
 }

@@ -6716,6 +6716,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitOptionalUserCall(call); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitClosureMakerCall(call); found || err != nil {
+		return v, err
+	}
 	sig, receiverExpr, found, err := g.userCallTarget(call)
 	if err != nil {
 		return value{}, err
