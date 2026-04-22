@@ -1,0 +1,582 @@
+// pmcompile.osty — self-hosted pattern-match decision tree compiler.
+//
+// This is the Osty port of `internal/ir/decision.go:CompileDecisionTree`.
+// It consumes a scrutinee HirType + a list of HirMatchArms, and
+// produces a HirDecisionNode tree (defined in hir.osty) that the
+// HIR→MIR lowerer (mir_lower.osty's Stage 4f walker) turns into a
+// MIR CFG.
+//
+// When the arm shapes fall outside the specialised switch cases
+// (Variant / Lit), the compiler degrades to a chain of guards
+// (`compileArmChain`) — this always type-checks but is slower at
+// runtime. Until this compiler runs, Match lowering falls back to
+// the tree-less "goto arm 0" path, which is wrong for any match
+// with more than one reachable arm.
+//
+// Algorithmically 1:1 with Go decision.go. Shape of the returned
+// tree is identical; Osty-specific changes are minimal:
+//
+//   - `map[string][]int` in tryCompileVariantSwitch is replaced by
+//     parallel String / List<Int> arrays (no Map intrinsic
+//     dependency).
+//   - Interface-dispatch switch on `arm.Pattern.(type)` becomes a
+//     match on `HirPatternKind`.
+
+use std.strings as strings
+
+// ====================================================================
+// Entry point
+// ====================================================================
+
+/// pmCompileDecisionTree builds a decision tree for the given
+/// scrutinee type and arms. Returns an `HirDecisionFail` when the
+/// arms list is empty (unreachable match); the resulting tree is
+/// always a valid HirDecisionNode, never the zero-default Invalid.
+pub fn pmCompileDecisionTree(scrutineeT: HirType, arms: List<HirMatchArm>) -> HirDecisionNode {
+    if arms.len() == 0 {
+        return hirDecisionFail()
+    }
+    let root = hirProjScrutinee()
+    pmCompileArms(arms, 0, root, scrutineeT)
+}
+
+// ====================================================================
+// Recursive compilation
+// ====================================================================
+
+/// pmCompileArms tries to build a specialised switch for the arms
+/// starting at `armStart`; on unsupported patterns it degrades to a
+/// plain chain of arm tests terminating in DecisionFail.
+pub fn pmCompileArms(
+    arms: List<HirMatchArm>,
+    armStart: Int,
+    proj: HirProjection,
+    t: HirType,
+) -> HirDecisionNode {
+    if armStart >= arms.len() {
+        return hirDecisionFail()
+    }
+    // Single wildcard / ident arm at the head short-circuits the
+    // whole cascade.
+    let first = arms[armStart]
+    if pmIsCatchAll(first.pattern) {
+        return pmCompileArmBody(armStart, first, proj)
+    }
+    // Specialised variant switch when every reachable arm is a
+    // VariantPat (or a trailing wildcard/ident).
+    let variantTree = pmTryCompileVariantSwitch(arms, armStart, proj)
+    if hirDecisionIsValid(variantTree) {
+        return variantTree
+    }
+    // Specialised literal switch (Int / Bool / Char / Byte / Float /
+    // String).
+    let litTree = pmTryCompileLitSwitch(arms, armStart, proj)
+    if hirDecisionIsValid(litTree) {
+        return litTree
+    }
+    // Fallback: "try arm i; else continue" chain.
+    let _ = t
+    pmCompileArmChain(arms, armStart, proj)
+}
+
+/// pmCompileArmBody materialises a single arm into a DecisionBind
+/// chain terminating in a DecisionLeaf (plus an optional
+/// DecisionGuard when the arm has a `when` clause).
+pub fn pmCompileArmBody(
+    armIdx: Int,
+    arm: HirMatchArm,
+    proj: HirProjection,
+) -> HirDecisionNode {
+    let leaf = hirDecisionLeaf(armIdx)
+    let body = pmBindPattern(arm.pattern, proj, leaf)
+    if arm.hasGuard {
+        return hirDecisionGuard(arm.guard, body, hirDecisionFail())
+    }
+    body
+}
+
+/// pmCompileArmChain emits "try arm 0; if no match, try arm 1; …"
+/// as a cascade of guards + leaves. The safe fallback for arms whose
+/// patterns the specialised compilers cannot handle.
+///
+/// A guard with an invalid condition (represented here as a
+/// placeholder `hirExprInvalid` guardCond) means "unconditional
+/// take the Then branch" — the walker honours this form specifically
+/// for pattern-based arms whose guard is purely structural.
+pub fn pmCompileArmChain(
+    arms: List<HirMatchArm>,
+    armStart: Int,
+    proj: HirProjection,
+) -> HirDecisionNode {
+    let mut cur = hirDecisionFail()
+    let mut i = arms.len() - 1
+    for i >= armStart {
+        let arm = arms[i]
+        let leaf = hirDecisionLeaf(i)
+        let mut body = pmBindPattern(arm.pattern, proj, leaf)
+        if arm.hasGuard {
+            body = hirDecisionGuard(arm.guard, body, cur)
+        }
+        if pmIsCatchAll(arm.pattern) && !arm.hasGuard {
+            // A catch-all (without a guard) collapses everything below
+            // it — future arms are unreachable.
+            cur = body
+        } else {
+            // Structural-only match: wrap in a Guard with an invalid
+            // cond so the walker's "unconditional Then" case kicks in.
+            cur = hirDecisionGuard(hirExprInvalid(), body, cur)
+        }
+        i = i - 1
+    }
+    cur
+}
+
+// ====================================================================
+// Specialised switches
+// ====================================================================
+
+/// pmTryCompileVariantSwitch returns a DecisionSwitch on variant
+/// tags when every reachable arm is a VariantPat (plus an optional
+/// trailing wildcard / ident default). Returns hirDecisionInvalid
+/// when the shape doesn't qualify; callers fall through to the next
+/// strategy.
+pub fn pmTryCompileVariantSwitch(
+    arms: List<HirMatchArm>,
+    armStart: Int,
+    proj: HirProjection,
+) -> HirDecisionNode {
+    // Parallel arrays replace Go's `cases map[string][]int`:
+    //   names[i]    — the variant name (insertion-order)
+    //   firstArm[i] — the index of the first arm that mentions it
+    // (Go's behaviour: if the same variant appears twice, only the
+    // first arm is actually compiled — the second is unreachable.)
+    let mut names: List<String> = []
+    let mut firstArm: List<Int> = []
+    let mut defaultArm = -1
+
+    let mut i = armStart
+    let mut stop = false
+    for !stop && i < arms.len() {
+        let arm = arms[i]
+        match arm.pattern.kind {
+            HirPatVariant -> {
+                if pmFindInList(names, arm.pattern.variantName) < 0 {
+                    names.push(arm.pattern.variantName)
+                    firstArm.push(i)
+                }
+            },
+            HirPatWild -> {
+                if defaultArm < 0 {
+                    defaultArm = i
+                }
+                stop = true
+            },
+            HirPatIdent -> {
+                if !arm.pattern.identMut && defaultArm < 0 {
+                    defaultArm = i
+                }
+                stop = true
+            },
+            _ -> {
+                // Non-variant pattern reached — not a pure variant
+                // dispatch. Caller will try the next strategy.
+                return hirDecisionInvalid()
+            },
+        }
+        i = i + 1
+    }
+    if names.len() == 0 {
+        return hirDecisionInvalid()
+    }
+    let mut cases: List<HirSwitchCase> = []
+    let mut ni = 0
+    for name in names {
+        let idx = firstArm[ni]
+        let arm = arms[idx]
+        let payloadProj = hirProjVariant(proj, name)
+        let child = pmCompileArmBody(idx, arm, payloadProj)
+        cases.push(hirSwitchCaseVariant(name, name, child))
+        ni = ni + 1
+    }
+    let defaultBody = if defaultArm >= 0 {
+        pmCompileArmBody(defaultArm, arms[defaultArm], proj)
+    } else {
+        hirDecisionFail()
+    }
+    hirDecisionSwitch(HirSwitchVariant, proj, cases, defaultBody)
+}
+
+/// pmTryCompileLitSwitch compiles arms like `1 -> …, 2 -> …, _ -> …`
+/// into a scalar-switch tree. Supports Int / Float / Bool / Char /
+/// Byte / String literal patterns. Returns hirDecisionInvalid when
+/// the shape doesn't qualify.
+pub fn pmTryCompileLitSwitch(
+    arms: List<HirMatchArm>,
+    armStart: Int,
+    proj: HirProjection,
+) -> HirDecisionNode {
+    let mut cases: List<HirSwitchCase> = []
+    let mut defaultArm = -1
+    let mut kind = HirSwitchUnknown
+
+    let mut i = armStart
+    let mut stop = false
+    for !stop && i < arms.len() {
+        let arm = arms[i]
+        match arm.pattern.kind {
+            HirPatLit -> {
+                let litValue = if arm.pattern.litValue.len() > 0 {
+                    arm.pattern.litValue[0]
+                } else {
+                    return hirDecisionInvalid()
+                }
+                let k = pmSwitchKindOfLit(litValue)
+                let kIsUnknown = match k {
+                    HirSwitchUnknown -> true,
+                    _ -> false,
+                }
+                if kIsUnknown {
+                    return hirDecisionInvalid()
+                }
+                match kind {
+                    HirSwitchUnknown -> {
+                        kind = k
+                    },
+                    _ -> {
+                        if !pmSwitchKindEq(kind, k) {
+                            return hirDecisionInvalid()
+                        }
+                    },
+                }
+                let body = pmCompileArmBody(i, arm, proj)
+                cases.push(hirSwitchCaseLit(pmLitLabel(litValue), litValue, body))
+            },
+            HirPatWild -> {
+                if defaultArm < 0 {
+                    defaultArm = i
+                }
+                stop = true
+            },
+            HirPatIdent -> {
+                if !arm.pattern.identMut && defaultArm < 0 {
+                    defaultArm = i
+                }
+                stop = true
+            },
+            _ -> {
+                return hirDecisionInvalid()
+            },
+        }
+        i = i + 1
+    }
+    let kindIsUnknown = match kind {
+        HirSwitchUnknown -> true,
+        _ -> false,
+    }
+    if kindIsUnknown {
+        return hirDecisionInvalid()
+    }
+    if cases.len() == 0 {
+        return hirDecisionInvalid()
+    }
+    let defaultBody = if defaultArm >= 0 {
+        pmCompileArmBody(defaultArm, arms[defaultArm], proj)
+    } else {
+        hirDecisionFail()
+    }
+    hirDecisionSwitch(kind, proj, cases, defaultBody)
+}
+
+// ====================================================================
+// Helpers
+// ====================================================================
+
+/// pmSwitchKindOfLit classifies a literal expression into the
+/// switch kind the tree compiler should use for it. Bool literals
+/// use SwitchBool (two-way branch); numeric + char + byte + string
+/// literals use the generic SwitchLit (eq-chain). Float literals
+/// land on SwitchLit too even though the Go side's MIR lit-switch
+/// fast path only handles Int — the slow eq-chain still works.
+pub fn pmSwitchKindOfLit(e: HirExpr) -> HirSwitchKind {
+    match e.kind {
+        HirExprBoolLit -> HirSwitchBool,
+        HirExprIntLit -> HirSwitchLit,
+        HirExprCharLit -> HirSwitchLit,
+        HirExprByteLit -> HirSwitchLit,
+        HirExprFloatLit -> HirSwitchLit,
+        HirExprStringLit -> HirSwitchLit,
+        _ -> HirSwitchUnknown,
+    }
+}
+
+/// pmSwitchKindEq is a structural equality check for HirSwitchKind.
+/// Osty's `==` between enum variants works on stored tags; using an
+/// explicit match here keeps the caller side of pmTryCompileLitSwitch
+/// readable without relying on implicit enum equality.
+fn pmSwitchKindEq(a: HirSwitchKind, b: HirSwitchKind) -> Bool {
+    match a {
+        HirSwitchUnknown -> {
+            match b {
+                HirSwitchUnknown -> true,
+                _ -> false,
+            }
+        },
+        HirSwitchVariant -> {
+            match b {
+                HirSwitchVariant -> true,
+                _ -> false,
+            }
+        },
+        HirSwitchLit -> {
+            match b {
+                HirSwitchLit -> true,
+                _ -> false,
+            }
+        },
+        HirSwitchBool -> {
+            match b {
+                HirSwitchBool -> true,
+                _ -> false,
+            }
+        },
+        HirSwitchTuple -> {
+            match b {
+                HirSwitchTuple -> true,
+                _ -> false,
+            }
+        },
+    }
+}
+
+/// pmLitLabel renders a debug label for a literal expression.
+/// Used in SwitchCase.label so printed trees are human-readable.
+pub fn pmLitLabel(e: HirExpr) -> String {
+    match e.kind {
+        HirExprBoolLit -> {
+            if e.boolValue {
+                "true"
+            } else {
+                "false"
+            }
+        },
+        HirExprIntLit -> e.numText,
+        HirExprFloatLit -> e.numText,
+        HirExprCharLit -> {
+            let mut buf: List<String> = []
+            buf.push("'")
+            buf.push(pmCodePointChar(e.charValue))
+            buf.push("'")
+            strings.join(buf, "")
+        },
+        HirExprByteLit -> {
+            let mut buf: List<String> = []
+            buf.push("b")
+            buf.push(pmIntToString(e.byteValue))
+            strings.join(buf, "")
+        },
+        HirExprStringLit -> {
+            let mut buf: List<String> = []
+            buf.push("\"")
+            for part in e.strParts {
+                if part.isLit {
+                    buf.push(part.lit)
+                } else {
+                    buf.push("{...}")
+                }
+            }
+            buf.push("\"")
+            strings.join(buf, "")
+        },
+        _ -> "?",
+    }
+}
+
+/// pmCodePointChar returns a one-character string for a code point.
+/// Current self-host stdlib exposes no `fromCodePoint` helper; we
+/// fall back to a placeholder for non-ASCII so the label remains
+/// printable. Decision-tree printing is debug-only so fidelity on
+/// this path is not worth a separate intrinsic.
+fn pmCodePointChar(cp: Int) -> String {
+    if cp >= 32 && cp < 127 {
+        let mut buf: List<String> = []
+        buf.push(pmAsciiChar(cp))
+        strings.join(buf, "")
+    } else {
+        "..."
+    }
+}
+
+fn pmAsciiChar(cp: Int) -> String {
+    // Osty stdlib lacks a bulk ASCII-to-String builder today; a
+    // manually unrolled table keeps this free of intrinsic
+    // dependencies. Only printable ASCII (0x20..0x7E) is populated;
+    // outside that range pmCodePointChar already routed to "...".
+    match cp {
+        32 -> " ", 33 -> "!", 34 -> "\"", 35 -> "#", 36 -> "$",
+        37 -> "%", 38 -> "&", 39 -> "'", 40 -> "(", 41 -> ")",
+        42 -> "*", 43 -> "+", 44 -> ",", 45 -> "-", 46 -> ".",
+        47 -> "/", 48 -> "0", 49 -> "1", 50 -> "2", 51 -> "3",
+        52 -> "4", 53 -> "5", 54 -> "6", 55 -> "7", 56 -> "8",
+        57 -> "9", 58 -> ":", 59 -> ";", 60 -> "<", 61 -> "=",
+        62 -> ">", 63 -> "?", 64 -> "@", 65 -> "A", 66 -> "B",
+        67 -> "C", 68 -> "D", 69 -> "E", 70 -> "F", 71 -> "G",
+        72 -> "H", 73 -> "I", 74 -> "J", 75 -> "K", 76 -> "L",
+        77 -> "M", 78 -> "N", 79 -> "O", 80 -> "P", 81 -> "Q",
+        82 -> "R", 83 -> "S", 84 -> "T", 85 -> "U", 86 -> "V",
+        87 -> "W", 88 -> "X", 89 -> "Y", 90 -> "Z", 91 -> "[",
+        92 -> "\\", 93 -> "]", 94 -> "^", 95 -> "_", 96 -> "`",
+        97 -> "a", 98 -> "b", 99 -> "c", 100 -> "d", 101 -> "e",
+        102 -> "f", 103 -> "g", 104 -> "h", 105 -> "i", 106 -> "j",
+        107 -> "k", 108 -> "l", 109 -> "m", 110 -> "n", 111 -> "o",
+        112 -> "p", 113 -> "q", 114 -> "r", 115 -> "s", 116 -> "t",
+        117 -> "u", 118 -> "v", 119 -> "w", 120 -> "x", 121 -> "y",
+        122 -> "z", 123 -> "{", 124 -> "|", 125 -> "}", 126 -> "~",
+        _ -> "?",
+    }
+}
+
+/// pmIntToString is a local decimal-render helper. Mirrors
+/// mir_lower's helper so this file stays standalone.
+fn pmIntToString(n: Int) -> String {
+    if n == 0 {
+        return "0"
+    }
+    let mut negative = false
+    let mut value = n
+    if value < 0 {
+        negative = true
+        value = 0 - value
+    }
+    let mut digits: List<String> = []
+    for value > 0 {
+        let d = value % 10
+        digits.push(pmDigitChar(d))
+        value = value / 10
+    }
+    let mut parts: List<String> = []
+    if negative {
+        parts.push("-")
+    }
+    let mut j = digits.len() - 1
+    for j >= 0 {
+        parts.push(digits[j])
+        j = j - 1
+    }
+    strings.join(parts, "")
+}
+
+fn pmDigitChar(d: Int) -> String {
+    match d {
+        0 -> "0", 1 -> "1", 2 -> "2", 3 -> "3", 4 -> "4",
+        5 -> "5", 6 -> "6", 7 -> "7", 8 -> "8", 9 -> "9",
+        _ -> "?",
+    }
+}
+
+/// pmFindInList returns the first index at which `needle` appears in
+/// `haystack`, or -1 when absent. Used by variant-switch to dedupe
+/// variant names while preserving insertion order.
+fn pmFindInList(haystack: List<String>, needle: String) -> Int {
+    let mut i = 0
+    for s in haystack {
+        if s == needle {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+// ====================================================================
+// Pattern binding
+// ====================================================================
+
+/// pmBindPattern materialises a DecisionBind chain for every name
+/// the pattern introduces, then hands control to `rest`. Unbound-
+/// pattern shapes (Wild / Lit / Range / Or / Error) pass through
+/// unchanged — they never produce bindings at this level.
+pub fn pmBindPattern(
+    p: HirPattern,
+    proj: HirProjection,
+    rest: HirDecisionNode,
+) -> HirDecisionNode {
+    match p.kind {
+        HirPatIdent -> {
+            hirDecisionBind(p.identName, proj, hirTypeInvalid(), rest)
+        },
+        HirPatBinding -> {
+            let inner = if p.bindingChild.len() > 0 {
+                p.bindingChild[0]
+            } else {
+                hirPatternInvalid()
+            }
+            hirDecisionBind(
+                p.bindingName,
+                proj,
+                hirTypeInvalid(),
+                pmBindPattern(inner, proj, rest),
+            )
+        },
+        HirPatTuple -> {
+            let mut acc = rest
+            let mut i = p.tupleElems.len() - 1
+            for i >= 0 {
+                let elem = p.tupleElems[i]
+                let childProj = hirProjTuple(proj, i)
+                acc = pmBindPattern(elem, childProj, acc)
+                i = i - 1
+            }
+            acc
+        },
+        HirPatStruct -> {
+            // Iterate in reverse so the emitted Bind chain runs fields
+            // in source order when the walker replays them.
+            let mut acc = rest
+            let mut i = p.structFields.len() - 1
+            for i >= 0 {
+                let f = p.structFields[i]
+                let childProj = hirProjField(proj, f.name)
+                if f.hasPattern {
+                    acc = pmBindPattern(f.pattern, childProj, acc)
+                } else {
+                    acc = hirDecisionBind(f.name, childProj, hirTypeInvalid(), acc)
+                }
+                i = i - 1
+            }
+            acc
+        },
+        HirPatVariant -> {
+            let mut acc = rest
+            let mut i = p.variantArgs.len() - 1
+            for i >= 0 {
+                let arg = p.variantArgs[i]
+                let childProj = hirProjVariantN(proj, p.variantName, i)
+                acc = pmBindPattern(arg, childProj, acc)
+                i = i - 1
+            }
+            acc
+        },
+        _ -> rest,
+    }
+}
+
+// ====================================================================
+// Catch-all detection
+// ====================================================================
+
+/// pmIsCatchAll reports whether `p` matches every value (wildcard or
+/// bare ident without mut / nested binding structure).
+pub fn pmIsCatchAll(p: HirPattern) -> Bool {
+    match p.kind {
+        HirPatWild -> true,
+        HirPatIdent -> !p.identMut,
+        HirPatBinding -> {
+            if p.bindingChild.len() > 0 {
+                pmIsCatchAll(p.bindingChild[0])
+            } else {
+                false
+            }
+        },
+        _ -> false,
+    }
+}
