@@ -2367,6 +2367,30 @@ func llvmStringRuntimeSliceSymbol() string {
 	return "osty_rt_strings_Slice"
 }
 
+func llvmStringRuntimeToUpperSymbol() string {
+	return "osty_rt_strings_ToUpper"
+}
+
+func llvmStringRuntimeToLowerSymbol() string {
+	return "osty_rt_strings_ToLower"
+}
+
+func llvmStringRuntimeIsValidIntSymbol() string {
+	return "osty_rt_strings_IsValidInt"
+}
+
+func llvmStringRuntimeToIntSymbol() string {
+	return "osty_rt_strings_ToInt"
+}
+
+func llvmStringRuntimeIsValidFloatSymbol() string {
+	return "osty_rt_strings_IsValidFloat"
+}
+
+func llvmStringRuntimeToFloatSymbol() string {
+	return "osty_rt_strings_ToFloat"
+}
+
 func llvmStringRuntimeTrimStartSymbol() string {
 	return "osty_rt_strings_TrimStart"
 }
@@ -2419,6 +2443,12 @@ func llvmStringRuntimeDeclarations() []string {
 		"declare ptr @osty_rt_strings_Replace(ptr, ptr, ptr)",
 		"declare ptr @osty_rt_strings_ReplaceAll(ptr, ptr, ptr)",
 		"declare ptr @osty_rt_strings_Slice(ptr, i64, i64)",
+		"declare ptr @osty_rt_strings_ToUpper(ptr)",
+		"declare ptr @osty_rt_strings_ToLower(ptr)",
+		"declare i1 @osty_rt_strings_IsValidInt(ptr)",
+		"declare i64 @osty_rt_strings_ToInt(ptr)",
+		"declare i1 @osty_rt_strings_IsValidFloat(ptr)",
+		"declare double @osty_rt_strings_ToFloat(ptr)",
 		"declare ptr @osty_rt_strings_TrimStart(ptr)",
 		"declare ptr @osty_rt_strings_TrimEnd(ptr)",
 		"declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)",
@@ -2507,6 +2537,14 @@ func llvmStringRuntimeReplaceAll(emitter *LlvmEmitter, value *LlvmValue, old *Ll
 
 func llvmStringRuntimeSlice(emitter *LlvmEmitter, value *LlvmValue, start *LlvmValue, end *LlvmValue) *LlvmValue {
 	return llvmCall(emitter, "ptr", "osty_rt_strings_Slice", []*LlvmValue{value, start, end})
+}
+
+func llvmStringRuntimeToUpper(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_strings_ToUpper", []*LlvmValue{value})
+}
+
+func llvmStringRuntimeToLower(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_strings_ToLower", []*LlvmValue{value})
 }
 
 func llvmStringRuntimeTrimStart(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {

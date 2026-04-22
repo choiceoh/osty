@@ -774,22 +774,32 @@ func (g *generator) structFieldListSourceType(expr ast.Expr) ast.Type {
 
 func (g *generator) staticExprListElemIsBytes(expr ast.Expr) bool {
 	sourceType, ok := g.staticExprSourceType(expr)
-	if !ok {
-		return false
+	if ok {
+		resolved, err := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{})
+		if err == nil {
+			named, ok := resolved.(*ast.NamedType)
+			if ok && len(named.Path) == 1 && named.Path[0] == "List" && len(named.Args) == 1 {
+				elemResolved, err := llvmResolveAliasType(named.Args[0], g.typeEnv(), map[string]bool{})
+				if err == nil && llvmNamedTypeIsBytes(elemResolved) {
+					return true
+				}
+			}
+		}
 	}
-	resolved, err := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{})
-	if err != nil {
-		return false
+	if list, ok := expr.(*ast.ListExpr); ok && len(list.Elems) != 0 {
+		for _, elem := range list.Elems {
+			elemSource, ok := g.staticExprSourceType(elem)
+			if !ok {
+				return false
+			}
+			elemResolved, err := llvmResolveAliasType(elemSource, g.typeEnv(), map[string]bool{})
+			if err != nil || !llvmNamedTypeIsBytes(elemResolved) {
+				return false
+			}
+		}
+		return true
 	}
-	named, ok := resolved.(*ast.NamedType)
-	if !ok || len(named.Path) != 1 || named.Path[0] != "List" || len(named.Args) != 1 {
-		return false
-	}
-	elemResolved, err := llvmResolveAliasType(named.Args[0], g.typeEnv(), map[string]bool{})
-	if err != nil {
-		return false
-	}
-	return llvmNamedTypeIsBytes(elemResolved)
+	return false
 }
 
 func (g *generator) staticExprListElemIsByte(expr ast.Expr) bool {
@@ -838,11 +848,15 @@ func (g *generator) staticStdStringsCallSourceType(call *ast.CallExpr) (ast.Type
 		return &ast.NamedType{Path: []string{"Int"}}, true
 	case "indexOf":
 		return &ast.OptionalType{Inner: &ast.NamedType{Path: []string{"Int"}}}, true
+	case "toInt":
+		return stringToIntResultSourceType(), true
+	case "toFloat":
+		return stringToFloatResultSourceType(), true
 	case "toBytes":
 		return &ast.NamedType{Path: []string{"Bytes"}}, true
 	case "contains", "hasPrefix", "hasSuffix":
 		return &ast.NamedType{Path: []string{"Bool"}}, true
-	case "concat", "join", "repeat", "replace", "replaceAll", "slice", "trim", "trimSpace", "trimStart", "trimEnd", "trimPrefix", "trimSuffix":
+	case "concat", "join", "repeat", "replace", "replaceAll", "slice", "trim", "trimSpace", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toUpper", "toLower":
 		return stringT, true
 	case "split", "splitN":
 		return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{stringT}}, true
@@ -867,14 +881,20 @@ func (g *generator) staticStdBytesCallSourceType(call *ast.CallExpr) (ast.Type, 
 		return &ast.NamedType{Path: []string{"Int"}}, true
 	case "isEmpty":
 		return &ast.NamedType{Path: []string{"Bool"}}, true
-	case "contains", "startsWith":
+	case "contains", "startsWith", "endsWith":
 		return &ast.NamedType{Path: []string{"Bool"}}, true
-	case "indexOf":
+	case "indexOf", "lastIndexOf":
 		return &ast.OptionalType{Inner: &ast.NamedType{Path: []string{"Int"}}}, true
+	case "split":
+		return bytesListSourceType(), true
 	case "get":
 		return &ast.OptionalType{Inner: &ast.NamedType{Path: []string{"Byte"}}}, true
-	case "fromString", "from", "concat", "repeat":
+	case "fromString", "from", "concat", "join", "repeat", "replace", "replaceAll", "trimLeft", "trimRight", "trim", "trimSpace", "toUpper", "toLower", "slice":
 		return &ast.NamedType{Path: []string{"Bytes"}}, true
+	case "toHex":
+		return &ast.NamedType{Path: []string{"String"}}, true
+	case "fromHex":
+		return bytesFromHexResultSourceType(), true
 	case "toString":
 		return bytesToStringResultSourceType(), true
 	}
@@ -891,14 +911,20 @@ func (g *generator) staticBytesNamespaceCallSourceType(call *ast.CallExpr) (ast.
 		return &ast.NamedType{Path: []string{"Int"}}, true
 	case "isEmpty":
 		return &ast.NamedType{Path: []string{"Bool"}}, true
-	case "contains", "startsWith":
+	case "contains", "startsWith", "endsWith":
 		return &ast.NamedType{Path: []string{"Bool"}}, true
-	case "indexOf":
+	case "indexOf", "lastIndexOf":
 		return &ast.OptionalType{Inner: &ast.NamedType{Path: []string{"Int"}}}, true
+	case "split":
+		return bytesListSourceType(), true
 	case "get":
 		return &ast.OptionalType{Inner: &ast.NamedType{Path: []string{"Byte"}}}, true
-	case "from", "concat", "repeat":
+	case "from", "concat", "join", "repeat", "replace", "replaceAll", "trimLeft", "trimRight", "trim", "trimSpace", "toUpper", "toLower", "slice":
 		return &ast.NamedType{Path: []string{"Bytes"}}, true
+	case "toHex":
+		return &ast.NamedType{Path: []string{"String"}}, true
+	case "fromHex":
+		return bytesFromHexResultSourceType(), true
 	case "toString":
 		return bytesToStringResultSourceType(), true
 	}
@@ -1018,9 +1044,13 @@ func (g *generator) staticStringMethodSourceType(call *ast.CallExpr) (ast.Type, 
 			Path: []string{"List"},
 			Args: []ast.Type{&ast.NamedType{Path: []string{"String"}}},
 		}, true
+	case "toInt":
+		return stringToIntResultSourceType(), true
+	case "toFloat":
+		return stringToFloatResultSourceType(), true
 	case "toBytes":
 		return &ast.NamedType{Path: []string{"Bytes"}}, true
-	case "trim", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toString", "join", "replace", "repeat":
+	case "trim", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toString", "join", "replace", "repeat", "toUpper", "toLower":
 		return &ast.NamedType{Path: []string{"String"}}, true
 	case "chars":
 		return &ast.NamedType{
@@ -1132,9 +1162,19 @@ func (g *generator) staticStringMethodResult(call *ast.CallExpr) (value, bool) {
 		}, true
 	case "split", "lines":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true}, true
+	case "toInt":
+		if info, ok := builtinResultTypeFromAST(stringToIntResultSourceType(), g.typeEnv()); ok {
+			return value{typ: info.typ, sourceType: stringToIntResultSourceType(), rootPaths: g.rootPathsForType(info.typ)}, true
+		}
+		return value{}, false
+	case "toFloat":
+		if info, ok := builtinResultTypeFromAST(stringToFloatResultSourceType(), g.typeEnv()); ok {
+			return value{typ: info.typ, sourceType: stringToFloatResultSourceType(), rootPaths: g.rootPathsForType(info.typ)}, true
+		}
+		return value{}, false
 	case "toBytes":
 		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"Bytes"}}}, true
-	case "trim", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toString", "join", "replace", "repeat":
+	case "trim", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toString", "join", "replace", "repeat", "toUpper", "toLower":
 		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"String"}}}, true
 	case "chars":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "i32"}, true
@@ -1163,7 +1203,7 @@ func (g *generator) stringMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, bool) 
 		"indexOf",
 		"get",
 		"trimStart", "trimEnd", "trimPrefix", "trimSuffix",
-		"split", "lines", "join", "trim", "replace", "repeat", "toString", "chars", "bytes", "toBytes":
+		"split", "lines", "join", "trim", "replace", "repeat", "toUpper", "toLower", "toInt", "toFloat", "toString", "chars", "bytes", "toBytes":
 		return field, true
 	default:
 		return nil, false
@@ -1180,14 +1220,18 @@ func (g *generator) staticBytesMethodSourceType(call *ast.CallExpr) (ast.Type, b
 		return &ast.NamedType{Path: []string{"Int"}}, true
 	case "isEmpty":
 		return &ast.NamedType{Path: []string{"Bool"}}, true
-	case "contains", "startsWith":
+	case "contains", "startsWith", "endsWith":
 		return &ast.NamedType{Path: []string{"Bool"}}, true
-	case "indexOf":
+	case "indexOf", "lastIndexOf":
 		return &ast.OptionalType{Inner: &ast.NamedType{Path: []string{"Int"}}}, true
 	case "get":
 		return &ast.OptionalType{Inner: &ast.NamedType{Path: []string{"Byte"}}}, true
-	case "concat", "repeat":
+	case "split":
+		return bytesListSourceType(), true
+	case "concat", "join", "repeat", "replace", "replaceAll", "trimLeft", "trimRight", "trim", "trimSpace", "toUpper", "toLower", "slice":
 		return &ast.NamedType{Path: []string{"Bytes"}}, true
+	case "toHex":
+		return &ast.NamedType{Path: []string{"String"}}, true
 	case "toString":
 		return bytesToStringResultSourceType(), true
 	default:
@@ -1205,9 +1249,9 @@ func (g *generator) staticBytesMethodResult(call *ast.CallExpr) (value, bool) {
 		return value{typ: "i64"}, true
 	case "isEmpty":
 		return value{typ: "i1"}, true
-	case "contains", "startsWith":
+	case "contains", "startsWith", "endsWith":
 		return value{typ: "i1"}, true
-	case "indexOf":
+	case "indexOf", "lastIndexOf":
 		return value{
 			typ:       "ptr",
 			gcManaged: true,
@@ -1223,8 +1267,12 @@ func (g *generator) staticBytesMethodResult(call *ast.CallExpr) (value, bool) {
 				Inner: &ast.NamedType{Path: []string{"Byte"}},
 			},
 		}, true
-	case "concat", "repeat":
+	case "split":
+		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", sourceType: bytesListSourceType()}, true
+	case "concat", "join", "repeat", "replace", "replaceAll", "trimLeft", "trimRight", "trim", "trimSpace", "toUpper", "toLower", "slice":
 		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"Bytes"}}}, true
+	case "toHex":
+		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"String"}}}, true
 	case "toString":
 		if info, ok := builtinResultTypeFromAST(bytesToStringResultSourceType(), g.typeEnv()); ok {
 			return value{typ: info.typ, sourceType: bytesToStringResultSourceType(), rootPaths: g.rootPathsForType(info.typ)}, true
@@ -1249,7 +1297,7 @@ func (g *generator) bytesMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, bool) {
 		return nil, false
 	}
 	switch field.Name {
-	case "len", "isEmpty", "get", "contains", "startsWith", "indexOf", "concat", "repeat", "toString":
+	case "len", "isEmpty", "get", "contains", "startsWith", "endsWith", "indexOf", "lastIndexOf", "split", "join", "concat", "repeat", "replace", "replaceAll", "trimLeft", "trimRight", "trim", "trimSpace", "toUpper", "toLower", "toHex", "slice", "toString":
 		return field, true
 	default:
 		return nil, false
@@ -1266,9 +1314,9 @@ func (g *generator) staticBytesNamespaceCallResult(call *ast.CallExpr) (value, b
 		return value{typ: "i64"}, true
 	case "isEmpty":
 		return value{typ: "i1"}, true
-	case "contains", "startsWith":
+	case "contains", "startsWith", "endsWith":
 		return value{typ: "i1"}, true
-	case "indexOf":
+	case "indexOf", "lastIndexOf":
 		return value{
 			typ:       "ptr",
 			gcManaged: true,
@@ -1284,8 +1332,17 @@ func (g *generator) staticBytesNamespaceCallResult(call *ast.CallExpr) (value, b
 				Inner: &ast.NamedType{Path: []string{"Byte"}},
 			},
 		}, true
-	case "from", "concat", "repeat":
+	case "split":
+		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", sourceType: bytesListSourceType()}, true
+	case "from", "concat", "join", "repeat", "replace", "replaceAll", "trimLeft", "trimRight", "trim", "trimSpace", "toUpper", "toLower", "slice":
 		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"Bytes"}}}, true
+	case "toHex":
+		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"String"}}}, true
+	case "fromHex":
+		if info, ok := builtinResultTypeFromAST(bytesFromHexResultSourceType(), g.typeEnv()); ok {
+			return value{typ: info.typ, sourceType: bytesFromHexResultSourceType(), rootPaths: g.rootPathsForType(info.typ)}, true
+		}
+		return value{}, false
 	case "toString":
 		if info, ok := builtinResultTypeFromAST(bytesToStringResultSourceType(), g.typeEnv()); ok {
 			return value{typ: info.typ, sourceType: bytesToStringResultSourceType(), rootPaths: g.rootPathsForType(info.typ)}, true
@@ -1305,7 +1362,7 @@ func (g *generator) bytesNamespaceCallInfo(call *ast.CallExpr) (*ast.FieldExpr, 
 		return nil, false
 	}
 	switch field.Name {
-	case "from", "len", "isEmpty", "get", "contains", "startsWith", "indexOf", "concat", "repeat", "toString":
+	case "from", "fromHex", "len", "isEmpty", "get", "contains", "startsWith", "endsWith", "indexOf", "lastIndexOf", "split", "join", "concat", "repeat", "replace", "replaceAll", "trimLeft", "trimRight", "trim", "trimSpace", "toUpper", "toLower", "toHex", "slice", "toString":
 		return field, true
 	default:
 		return nil, false

@@ -360,6 +360,54 @@ fn main() {
 	}
 }
 
+func TestStringToUpperMethodCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn loud(s: String) -> String {
+    s.toUpper()
+}
+
+fn main() {
+    println(loud("Abc!"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_to_upper_method.osty"})
+	if err != nil {
+		t.Fatalf("toUpper method call errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_ToUpper",
+		"declare ptr @osty_rt_strings_ToUpper(ptr)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("toUpper method call missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringToLowerMethodCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn soft(s: String) -> String {
+    s.toLower()
+}
+
+fn main() {
+    println(soft("AbC!"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_to_lower_method.osty"})
+	if err != nil {
+		t.Fatalf("toLower method call errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_ToLower",
+		"declare ptr @osty_rt_strings_ToLower(ptr)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("toLower method call missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStringToBytesMethodCarriesBytesSourceType(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn size(s: String) -> Int {
     s.toBytes().len()
@@ -660,6 +708,58 @@ fn main() {
 	}
 }
 
+func TestBytesEndsWithMethodRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn hasSuffix() -> Bool {
+    Bytes.from([b'a', b'b', b'c']).endsWith(Bytes.from([b'b', b'c']))
+}
+
+fn main() {
+    println(hasSuffix())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_ends_with_method.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.endsWith method call errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_from_list",
+		"@osty_rt_bytes_last_index_of",
+		"@osty_rt_bytes_len",
+		"icmp eq i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.endsWith method call missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesStaticEndsWithRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn hasSuffix() -> Bool {
+    Bytes.endsWith(Bytes.from([b'a', b'b', b'c']), Bytes.from([b'b', b'c']))
+}
+
+fn main() {
+    println(hasSuffix())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_static_ends_with.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.endsWith(...) errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_from_list",
+		"@osty_rt_bytes_last_index_of",
+		"@osty_rt_bytes_len",
+		"icmp eq i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.endsWith(...) missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestBytesStaticIndexOfPreservesOptionalIntSourceType(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn hasNeedle() -> Bool {
     Bytes.indexOf(Bytes.from([b'a', b'b', b'c']), Bytes.from([b'b'])).isSome()
@@ -681,6 +781,109 @@ fn main() {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("Bytes.indexOf(...).isSome() missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesLastIndexOfMethodReturnsOptionalInt(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn posOrMinusOne() -> Int {
+    Bytes.from([b'a', b'b', b'a']).lastIndexOf(Bytes.from([b'a'])) ?? -1
+}
+
+fn main() {
+    println(posOrMinusOne())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_last_index_of_method.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.lastIndexOf method call errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_from_list",
+		"@osty_rt_bytes_last_index_of",
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
+		"load i64, ptr",
+		"phi i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.lastIndexOf method call missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesStaticLastIndexOfPreservesOptionalIntSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn hasNeedle() -> Bool {
+    Bytes.lastIndexOf(Bytes.from([b'a', b'b', b'a']), Bytes.from([b'a'])).isSome()
+}
+
+fn main() {
+    println(hasNeedle())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_static_last_index_of_is_some.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.lastIndexOf(...).isSome() errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_from_list",
+		"@osty_rt_bytes_last_index_of",
+		"icmp ne ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.lastIndexOf(...).isSome() missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesSplitMethodCarriesBytesElementSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn firstChunkLen() -> Int {
+    let parts = Bytes.from([b'a', b',', b'b']).split(Bytes.from([b',']))
+    parts[0].len()
+}
+
+fn main() {
+    println(firstChunkLen())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_split_method_len.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.split method chain errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_split",
+		"call ptr @osty_rt_list_get_ptr",
+		"call i64 @osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.split method chain missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesJoinStaticHelperChainsIntoLen(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn joinedLen() -> Int {
+    Bytes.join(Bytes.from([b',']), [Bytes.from([b'a']), Bytes.from([b'b'])]).len()
+}
+
+fn main() {
+    println(joinedLen())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_join_static_len.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.join static helper errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_join",
+		"call ptr @osty_rt_bytes_join",
+		"call i64 @osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.join static helper missing %q:\n%s", want, got)
 		}
 	}
 }
@@ -735,6 +938,56 @@ fn main() {
 	}
 }
 
+func TestBytesSliceMethodChainPreservesBytesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn size() -> Int {
+    Bytes.from([b'A', b'B', b'C']).slice(1, 3).len()
+}
+
+fn main() {
+    println(size())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_slice_method_len.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.slice method chain errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_from_list",
+		"@osty_rt_bytes_slice",
+		"@osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.slice method chain missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesStaticSliceCarriesBytesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn size() -> Int {
+    Bytes.slice(Bytes.from([b'A', b'B', b'C']), 1, 3).len()
+}
+
+fn main() {
+    println(size())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_static_slice_len.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.slice static helper errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_from_list",
+		"@osty_rt_bytes_slice",
+		"@osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.slice static helper missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestBytesRepeatMethodChainPreservesBytesSourceType(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn size() -> Int {
     Bytes.from([b'A']).repeat(3).len()
@@ -781,6 +1034,229 @@ fn main() {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("Bytes.repeat static helper missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesReplaceMethodChainPreservesBytesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn size() -> Int {
+    Bytes.from([b'a', b'b', b'c']).replace(Bytes.from([b'b']), Bytes.from([b'Z'])).len()
+}
+
+fn main() {
+    println(size())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_replace_method_len.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.replace method chain errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_from_list",
+		"@osty_rt_bytes_replace",
+		"@osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.replace method chain missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesStaticReplaceAllCarriesBytesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn size() -> Int {
+    Bytes.replaceAll(Bytes.from([b'a', b'b', b'a']), Bytes.from([b'a']), Bytes.from([b'Z'])).len()
+}
+
+fn main() {
+    println(size())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_static_replace_all_len.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.replaceAll static helper errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_from_list",
+		"@osty_rt_bytes_replace_all",
+		"@osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.replaceAll static helper missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesTrimLeftRightMethodChainPreservesBytesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn size() -> Int {
+    Bytes.from([b' ', b' ', b'a', b' ', b' ']).trimLeft(Bytes.from([b' '])).trimRight(Bytes.from([b' '])).len()
+}
+
+fn main() {
+    println(size())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_trim_left_right_method_len.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.trimLeft/trimRight method chain errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_from_list",
+		"@osty_rt_bytes_trim_left",
+		"@osty_rt_bytes_trim_right",
+		"@osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.trimLeft/trimRight method chain missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesStaticTrimCarriesBytesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn size() -> Int {
+    Bytes.trim(Bytes.from([b'_', b'a', b'_']), Bytes.from([b'_'])).len()
+}
+
+fn main() {
+    println(size())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_static_trim_len.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.trim static helper errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_from_list",
+		"@osty_rt_bytes_trim",
+		"@osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.trim static helper missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesStaticTrimSpaceCarriesBytesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn size() -> Int {
+    Bytes.trimSpace(Bytes.from([b' ', b'a', b' ', b'\n'])).len()
+}
+
+fn main() {
+    println(size())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_static_trim_space_len.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.trimSpace static helper errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_from_list",
+		"@osty_rt_bytes_trim_space",
+		"@osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.trimSpace static helper missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesToUpperMethodChainPreservesBytesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn size() -> Int {
+    Bytes.from([b'a', b'B', b'!']).toUpper().len()
+}
+
+fn main() {
+    println(size())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_to_upper_method_len.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.toUpper method chain errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_from_list",
+		"@osty_rt_bytes_to_upper",
+		"@osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.toUpper method chain missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesStaticToLowerCarriesBytesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn size() -> Int {
+    Bytes.toLower(Bytes.from([b'A', b'b', b'!'])).len()
+}
+
+fn main() {
+    println(size())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_static_to_lower_len.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.toLower static helper errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_from_list",
+		"@osty_rt_bytes_to_lower",
+		"@osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.toLower static helper missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesToHexMethodChainPreservesStringSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn hasPrefix() -> Bool {
+    Bytes.from([b'A', b'B']).toHex().startsWith("41")
+}
+
+fn main() {
+    println(hasPrefix())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_to_hex_method_starts_with.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.toHex method chain errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_from_list",
+		"@osty_rt_bytes_to_hex",
+		"@osty_rt_strings_HasPrefix",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.toHex method chain missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBytesStaticFromHexQuestionCarriesBytesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn decodedLen() -> Result<Int, Error> {
+    let b = Bytes.fromHex("4142")?
+    Ok(b.len())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/bytes_from_hex_question.osty"})
+	if err != nil {
+		t.Fatalf("Bytes.fromHex()? errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_bytes_is_valid_hex",
+		"@osty_rt_bytes_from_hex",
+		"@osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Bytes.fromHex()? missing %q:\n%s", want, got)
 		}
 	}
 }
@@ -927,6 +1403,98 @@ fn main() {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("trimStart/trimEnd chain missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringToUpperMethodChainPreservesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn loudLen(s: String) -> Int {
+    s.toUpper().len()
+}
+
+fn main() {
+    println(loudLen("abc"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_to_upper_chain.osty"})
+	if err != nil {
+		t.Fatalf("String.toUpper().len() errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_ToUpper",
+		"@osty_rt_strings_ByteLen",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("String.toUpper().len() missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringToLowerMethodChainPreservesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn softHasA(s: String) -> Bool {
+    s.toLower().contains("a")
+}
+
+fn main() {
+    println(softHasA("ABC"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_to_lower_chain.osty"})
+	if err != nil {
+		t.Fatalf("String.toLower().contains() errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_ToLower",
+		"@osty_rt_strings_Contains",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("String.toLower().contains() missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringToIntMethodQuestionPreservesIntSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn parsedPlusOne() -> Result<Int, Error> {
+    let n = "42".toInt()?
+    Ok(n + 1)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_to_int_question.osty"})
+	if err != nil {
+		t.Fatalf("String.toInt()? errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_IsValidInt",
+		"@osty_rt_strings_ToInt",
+		"add i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("String.toInt()? missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringToFloatMethodQuestionPreservesFloatSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn parsedPlusTwo() -> Result<Float, Error> {
+    let f = "1.25".toFloat()?
+    Ok(f + 2.0)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_to_float_question.osty"})
+	if err != nil {
+		t.Fatalf("String.toFloat()? errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_IsValidFloat",
+		"@osty_rt_strings_ToFloat",
+		"fadd double",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("String.toFloat()? missing %q:\n%s", want, got)
 		}
 	}
 }

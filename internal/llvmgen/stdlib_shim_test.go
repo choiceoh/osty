@@ -222,6 +222,100 @@ fn main() {
 	}
 }
 
+func TestStdStringsToUpperRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn main() {
+    let out = strings.toUpper("Abc!")
+    println(out)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_strings_to_upper.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_ToUpper(ptr)",
+		"call ptr @osty_rt_strings_ToUpper",
+	} {
+		if !strings.Contains(string(ir), want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, string(ir))
+		}
+	}
+}
+
+func TestStdStringsToLowerRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn main() {
+    let out = strings.toLower("AbC!")
+    println(out)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_strings_to_lower.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_ToLower(ptr)",
+		"call ptr @osty_rt_strings_ToLower",
+	} {
+		if !strings.Contains(string(ir), want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, string(ir))
+		}
+	}
+}
+
+func TestStdStringsToIntQuestionPreservesIntSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn parsedPlusOne() -> Result<Int, Error> {
+    let n = strings.toInt("42")?
+    Ok(n + 1)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_strings_to_int_question.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare i1 @osty_rt_strings_IsValidInt(ptr)",
+		"declare i64 @osty_rt_strings_ToInt(ptr)",
+		"call i64 @osty_rt_strings_ToInt",
+		"add i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStdStringsToFloatQuestionPreservesFloatSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn parsedPlusTwo() -> Result<Float, Error> {
+    let f = strings.toFloat("1.25")?
+    Ok(f + 2.0)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_strings_to_float_question.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare i1 @osty_rt_strings_IsValidFloat(ptr)",
+		"declare double @osty_rt_strings_ToFloat(ptr)",
+		"call double @osty_rt_strings_ToFloat",
+		"fadd double",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStdStringsToBytesRoutesToRuntimeAndBytesMethodsCompose(t *testing.T) {
 	file := parseLLVMGenFile(t, `use std.strings as strings
 
@@ -531,6 +625,84 @@ fn main() {
 	}
 }
 
+func TestStdBytesEndsWithRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.bytes as bytes
+
+fn main() {
+    if bytes.endsWith(bytes.from([b'a', b'b', b'c']), bytes.from([b'b', b'c'])) {
+        println(1)
+    } else {
+        println(0)
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_bytes_ends_with.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_bytes_from_list(ptr)",
+		"declare i64 @osty_rt_bytes_last_index_of(ptr, ptr)",
+		"declare i64 @osty_rt_bytes_len(ptr)",
+		"call i64 @osty_rt_bytes_last_index_of",
+		"icmp eq i64",
+	} {
+		if !strings.Contains(string(ir), want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, string(ir))
+		}
+	}
+}
+
+func TestStdBytesSplitRoutesToRuntimeAndForInIterates(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.bytes as bytes
+
+fn main() {
+    for part in bytes.split(bytes.from([b'a', b',', b'b']), bytes.from([b','])) {
+        println(part.len())
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_bytes_split_for.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_bytes_split(ptr, ptr)",
+		"call ptr @osty_rt_bytes_split",
+		"call i64 @osty_rt_list_len",
+		"call i64 @osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q (split-then-for-in plumbing broken):\n%s", want, got)
+		}
+	}
+}
+
+func TestStdBytesJoinRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.bytes as bytes
+
+fn main() {
+    let n = bytes.join([bytes.from([b'a']), bytes.from([b'b'])], bytes.from([b','])).len()
+    println(n)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_bytes_join_len.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_bytes_join(ptr, ptr)",
+		"call ptr @osty_rt_bytes_join",
+		"call i64 @osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestCollectStdStringsAliasesIgnoresRuntimeFFI(t *testing.T) {
 	file := parseLLVMGenFile(t, `use runtime.strings as strings {
     fn HasPrefix(s: String, prefix: String) -> Bool
@@ -661,6 +833,32 @@ fn main() {
 	}
 }
 
+func TestStdBytesLastIndexOfRoutesToRuntimeAndOptionIntComposes(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.bytes as bytes
+
+fn main() {
+    let at = bytes.lastIndexOf(bytes.from([b'a', b'b', b'a']), bytes.from([b'a'])) ?? -1
+    println(at)
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_bytes_last_index_of.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_bytes_from_list(ptr)",
+		"declare i64 @osty_rt_bytes_last_index_of(ptr, ptr)",
+		"call i64 @osty_rt_bytes_last_index_of",
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
+		"load i64, ptr",
+		"phi i64",
+	} {
+		if !strings.Contains(string(ir), want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, string(ir))
+		}
+	}
+}
+
 func TestStdBytesConcatComposeWithLen(t *testing.T) {
 	file := parseLLVMGenFile(t, `use std.bytes as bytes
 
@@ -691,6 +889,36 @@ fn main() {
 	}
 }
 
+func TestStdBytesSliceComposeWithLen(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.bytes as bytes
+
+fn main() {
+    let n = bytes.slice(bytes.from([b'A', b'B', b'C']), 1, 3).len()
+    println(n)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_bytes_slice_len.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_bytes_from_list(ptr)",
+		"declare ptr @osty_rt_bytes_slice(ptr, i64, i64)",
+		"call ptr @osty_rt_bytes_slice",
+		"call i64 @osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStdBytesRepeatComposeWithLen(t *testing.T) {
 	file := parseLLVMGenFile(t, `use std.bytes as bytes
 
@@ -713,6 +941,222 @@ fn main() {
 		"declare ptr @osty_rt_bytes_from_list(ptr)",
 		"declare ptr @osty_rt_bytes_repeat(ptr, i64)",
 		"call ptr @osty_rt_bytes_repeat",
+		"call i64 @osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStdBytesReplaceRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.bytes as bytes
+
+fn main() {
+    let n = bytes.replace(bytes.from([b'a', b'b', b'c']), bytes.from([b'b']), bytes.from([b'Z'])).len()
+    println(n)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_bytes_replace_len.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_bytes_from_list(ptr)",
+		"declare ptr @osty_rt_bytes_replace(ptr, ptr, ptr)",
+		"call ptr @osty_rt_bytes_replace",
+		"call i64 @osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStdBytesReplaceAllRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.bytes as bytes
+
+fn main() {
+    let n = bytes.replaceAll(bytes.from([b'a', b'b', b'a']), bytes.from([b'a']), bytes.from([b'Z'])).len()
+    println(n)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_bytes_replace_all_len.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_bytes_from_list(ptr)",
+		"declare ptr @osty_rt_bytes_replace_all(ptr, ptr, ptr)",
+		"call ptr @osty_rt_bytes_replace_all",
+		"call i64 @osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStdBytesTrimLeftRightRouteToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.bytes as bytes
+
+fn main() {
+    let n = bytes.trimRight(bytes.trimLeft(bytes.from([b' ', b'a', b' ']), bytes.from([b' '])), bytes.from([b' '])).len()
+    println(n)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_bytes_trim_left_right_len.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_bytes_from_list(ptr)",
+		"declare ptr @osty_rt_bytes_trim_left(ptr, ptr)",
+		"declare ptr @osty_rt_bytes_trim_right(ptr, ptr)",
+		"call ptr @osty_rt_bytes_trim_left",
+		"call ptr @osty_rt_bytes_trim_right",
+		"call i64 @osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStdBytesTrimAndTrimSpaceRouteToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.bytes as bytes
+
+fn main() {
+    let a = bytes.trim(bytes.from([b'_', b'a', b'_']), bytes.from([b'_'])).len()
+    let b = bytes.trimSpace(bytes.from([b' ', b'a', b'\n'])).len()
+    println(a + b)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_bytes_trim_trim_space_len.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_bytes_trim(ptr, ptr)",
+		"declare ptr @osty_rt_bytes_trim_space(ptr)",
+		"call ptr @osty_rt_bytes_trim",
+		"call ptr @osty_rt_bytes_trim_space",
+		"call i64 @osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStdBytesToUpperLowerRouteToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.bytes as bytes
+
+fn main() {
+    let a = bytes.toUpper(bytes.from([b'a', b'B'])).len()
+    let b = bytes.toLower(bytes.from([b'A', b'b'])).len()
+    println(a + b)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_bytes_to_upper_lower_len.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_bytes_to_upper(ptr)",
+		"declare ptr @osty_rt_bytes_to_lower(ptr)",
+		"call ptr @osty_rt_bytes_to_upper",
+		"call ptr @osty_rt_bytes_to_lower",
+		"call i64 @osty_rt_bytes_len",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStdBytesToHexRoutesToRuntimeAndStringMethodsCompose(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.bytes as bytes
+
+fn main() {
+    let n = bytes.toHex(bytes.from([b'A', b'B'])).len()
+    println(n)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_bytes_to_hex_len.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_bytes_to_hex(ptr)",
+		"call ptr @osty_rt_bytes_to_hex",
+		"call i64 @osty_rt_strings_ByteLen",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStdBytesFromHexRoutesToRuntimeAndQuestionPreservesBytesSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.bytes as bytes
+
+fn decodedLen() -> Result<Int, Error> {
+    let b = bytes.fromHex("4142")?
+    Ok(b.len())
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_bytes_from_hex_question.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare i1 @osty_rt_bytes_is_valid_hex(ptr)",
+		"declare ptr @osty_rt_bytes_from_hex(ptr)",
+		"call i1 @osty_rt_bytes_is_valid_hex",
+		"call ptr @osty_rt_bytes_from_hex",
 		"call i64 @osty_rt_bytes_len",
 	} {
 		if !strings.Contains(got, want) {

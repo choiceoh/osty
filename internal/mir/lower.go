@@ -3230,6 +3230,10 @@ func stringIntrinsicForMethod(name string) IntrinsicKind {
 		return IntrinsicStringToUpper
 	case "toLower":
 		return IntrinsicStringToLower
+	case "toInt":
+		return IntrinsicStringToInt
+	case "toFloat":
+		return IntrinsicStringToFloat
 	case "replace":
 		return IntrinsicStringReplace
 	case "chars":
@@ -3254,12 +3258,40 @@ func bytesIntrinsicForMethod(name string) IntrinsicKind {
 		return IntrinsicBytesContains
 	case "startsWith":
 		return IntrinsicBytesStartsWith
+	case "endsWith":
+		return IntrinsicBytesEndsWith
 	case "indexOf":
 		return IntrinsicBytesIndexOf
+	case "lastIndexOf":
+		return IntrinsicBytesLastIndexOf
+	case "split":
+		return IntrinsicBytesSplit
+	case "join":
+		return IntrinsicBytesJoin
 	case "concat":
 		return IntrinsicBytesConcat
 	case "repeat":
 		return IntrinsicBytesRepeat
+	case "replace":
+		return IntrinsicBytesReplace
+	case "replaceAll":
+		return IntrinsicBytesReplaceAll
+	case "trimLeft":
+		return IntrinsicBytesTrimLeft
+	case "trimRight":
+		return IntrinsicBytesTrimRight
+	case "trim":
+		return IntrinsicBytesTrim
+	case "trimSpace":
+		return IntrinsicBytesTrimSpace
+	case "toUpper":
+		return IntrinsicBytesToUpper
+	case "toLower":
+		return IntrinsicBytesToLower
+	case "toHex":
+		return IntrinsicBytesToHex
+	case "slice":
+		return IntrinsicBytesSlice
 	}
 	return IntrinsicInvalid
 }
