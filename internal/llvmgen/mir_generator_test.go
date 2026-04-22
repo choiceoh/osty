@@ -2102,6 +2102,167 @@ func TestGenerateFromMIREmitGCChunksSafepointRoots(t *testing.T) {
 	}
 }
 
+func TestGenerateFromMIRReusesSafepointRootArrays(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "count",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name:  "i",
+					Type:  ir.TInt,
+					Mut:   true,
+					Value: &ir.IntLit{Text: "0", T: ir.TInt},
+				},
+				&ir.ForStmt{
+					Kind: ir.ForWhile,
+					Cond: &ir.BinaryExpr{
+						Op:    ir.BinLt,
+						Left:  &ir.Ident{Name: "i", Kind: ir.IdentLocal, T: ir.TInt},
+						Right: &ir.IntLit{Text: "2", T: ir.TInt},
+						T:     ir.TBool,
+					},
+					Body: &ir.Block{
+						Stmts: []ir.Stmt{
+							&ir.AssignStmt{
+								Op:      ir.AssignEq,
+								Targets: []ir.Expr{&ir.Ident{Name: "i", Kind: ir.IdentLocal, T: ir.TInt}},
+								Value: &ir.BinaryExpr{
+									Op:    ir.BinAdd,
+									Left:  &ir.Ident{Name: "i", Kind: ir.IdentLocal, T: ir.TInt},
+									Right: &ir.IntLit{Text: "1", T: ir.TInt},
+									T:     ir.TInt,
+								},
+							},
+						},
+					},
+				},
+			},
+			Result: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/gc-root-array-reuse.osty",
+		EmitGC:      true,
+	})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	if gotCount := strings.Count(got, "alloca ptr, i64 2"); gotCount != 1 {
+		t.Fatalf("expected one reused safepoint root array alloca, got %d in:\n%s", gotCount, got)
+	}
+	if gotCount := strings.Count(got, "call void @osty.gc.safepoint_v1(i64"); gotCount != 2 {
+		t.Fatalf("expected entry + loop safepoints, got %d in:\n%s", gotCount, got)
+	}
+	callRe := regexp.MustCompile(`call void @osty\.gc\.safepoint_v1\(i64 \d+, ptr (%t\d+), i64 2\)`)
+	matches := callRe.FindAllStringSubmatch(got, -1)
+	if len(matches) != 2 {
+		t.Fatalf("expected two safepoint calls sharing a root array pointer in:\n%s", got)
+	}
+	if matches[0][1] != matches[1][1] {
+		t.Fatalf("expected safepoints to reuse the same root array pointer, got %q and %q in:\n%s", matches[0][1], matches[1][1], got)
+	}
+}
+
+func TestGenerateFromMIRNullsManagedDeadLocalsBeforeLoopSafepoint(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "keep",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name:  "i",
+					Type:  ir.TInt,
+					Mut:   true,
+					Value: &ir.IntLit{Text: "0", T: ir.TInt},
+				},
+				&ir.ForStmt{
+					Kind: ir.ForWhile,
+					Cond: &ir.BinaryExpr{
+						Op:    ir.BinLt,
+						Left:  &ir.Ident{Name: "i", Kind: ir.IdentLocal, T: ir.TInt},
+						Right: &ir.IntLit{Text: "1", T: ir.TInt},
+						T:     ir.TBool,
+					},
+					Body: &ir.Block{
+						Stmts: []ir.Stmt{
+							&ir.Block{
+								Stmts: []ir.Stmt{
+									&ir.LetStmt{
+										Name:  "t",
+										Type:  ir.TString,
+										Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+									},
+								},
+							},
+							&ir.AssignStmt{
+								Op:      ir.AssignEq,
+								Targets: []ir.Expr{&ir.Ident{Name: "i", Kind: ir.IdentLocal, T: ir.TInt}},
+								Value: &ir.BinaryExpr{
+									Op:    ir.BinAdd,
+									Left:  &ir.Ident{Name: "i", Kind: ir.IdentLocal, T: ir.TInt},
+									Right: &ir.IntLit{Text: "1", T: ir.TInt},
+									T:     ir.TInt,
+								},
+							},
+						},
+					},
+				},
+			},
+			Result: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/gc-dead-local-null.osty",
+		EmitGC:      true,
+	})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	if gotCount := strings.Count(got, "call void @osty.gc.safepoint_v1(i64"); gotCount != 2 {
+		t.Fatalf("expected entry + loop safepoints, got %d in:\n%s", gotCount, got)
+	}
+	nullMatches := regexp.MustCompile(`store ptr null, ptr (%l\d+)`).FindAllStringSubmatchIndex(got, -1)
+	if len(nullMatches) < 3 {
+		t.Fatalf("expected entry zero-init plus storage-dead nulling in:\n%s", got)
+	}
+	nullCounts := map[string]int{}
+	nullPos := map[string][]int{}
+	for _, match := range nullMatches {
+		slot := got[match[2]:match[3]]
+		nullCounts[slot]++
+		nullPos[slot] = append(nullPos[slot], match[0])
+	}
+	var deadSlot string
+	for slot, count := range nullCounts {
+		if count == 2 {
+			deadSlot = slot
+			break
+		}
+	}
+	if deadSlot == "" {
+		t.Fatalf("expected one managed local slot to be nulled twice (entry + storage_dead) in:\n%s", got)
+	}
+	firstPoll := strings.Index(got, "call void @osty.gc.safepoint_v1(i64")
+	lastPoll := strings.LastIndex(got, "call void @osty.gc.safepoint_v1(i64")
+	if firstPoll < 0 || lastPoll <= firstPoll {
+		t.Fatalf("expected distinct entry and loop safepoints in:\n%s", got)
+	}
+	if !(nullPos[deadSlot][1] > firstPoll && nullPos[deadSlot][1] < lastPoll) {
+		t.Fatalf("expected storage-dead nulling for %s between entry and loop safepoints in:\n%s", deadSlot, got)
+	}
+}
+
 // TestGenerateFromMIREmitGCLoopSafepoint — A while-loop lowers to a
 // cond block whose branch terminator targets the loop body and the
 // exit. The back-edge from the body to the cond block must carry a
