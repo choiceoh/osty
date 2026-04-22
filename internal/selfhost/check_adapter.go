@@ -106,6 +106,35 @@ func CheckSourceStructured(src []byte) CheckResult {
 	return result
 }
 
+// CheckStructuredFromRun runs the bootstrapped Osty checker directly
+// on an existing FrontendRun's parser arena. Callers that already
+// hold a FrontendRun (for example through parser.ParseRun) should
+// prefer this entry point over CheckSourceStructured to avoid the
+// re-lex/re-parse pass that the source-based entry performs.
+//
+// Output matches CheckSourceStructured(src) byte-for-byte. The
+// astbridge *ast.File lowering is still triggered exactly once per
+// run by the intrinsic-body gate adapter (see
+// selfhostAppendIntrinsicBodyGateForRun); porting that gate walker
+// to AstArena is the follow-up that would make this path fully
+// astbridge-free.
+func CheckStructuredFromRun(run *FrontendRun) CheckResult {
+	if run == nil {
+		return CheckResult{}
+	}
+	file := run.astFile()
+	if file == nil {
+		return CheckResult{}
+	}
+	checked := frontendCheckAstStructured(file)
+	if checked == nil {
+		return CheckResult{}
+	}
+	result := adaptCheckResultFromRuneStream(checked, run.rt, run.stream)
+	selfhostAppendIntrinsicBodyGateForRun(&result, run)
+	return result
+}
+
 func adaptCheckSummary(checked *FrontCheckSummary) CheckSummary {
 	if checked == nil {
 		return CheckSummary{}
@@ -155,6 +184,15 @@ func adaptCheckResult(checked *FrontCheckResult, lexed *OstyLexedSource) CheckRe
 		rt = newRuneTable(lexed.source)
 		stream = lexed.stream
 	}
+	return adaptCheckResultFromRuneStream(checked, rt, stream)
+}
+
+// adaptCheckResultFromRuneStream is the position-mapping core of
+// adaptCheckResult. Factored out so callers that already hold a
+// runeTable + FrontLexStream (for example the arena-direct
+// CheckStructuredFromRun path, which reuses FrontendRun's own rt and
+// stream) can skip constructing an OstyLexedSource.
+func adaptCheckResultFromRuneStream(checked *FrontCheckResult, rt runeTable, stream *FrontLexStream) CheckResult {
 	result := CheckResult{
 		Summary:        adaptCheckSummaryWithContext(checked, selfhostStreamTokenPos(stream)),
 		TypedNodes:     make([]CheckedNode, 0, len(checked.typedNodes)),
