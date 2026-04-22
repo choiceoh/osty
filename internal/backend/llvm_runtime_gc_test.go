@@ -1539,10 +1539,11 @@ int main(void) {
 }
 
 // TestBundledRuntimeClosureEnvTracesCaptures covers the A4 depth
-// follow-up — `osty.rt.closure_env_alloc_v1` builds a self-describing
-// env with a capture array, the runtime registers
-// `osty_rt_closure_env_trace` at construction, and managed pointers
-// stored in captures stay reachable across GC.
+// follow-up — `osty.rt.closure_env_alloc_v2` builds a self-describing
+// env with a capture array + per-capture pointer bitmap, the runtime
+// registers `osty_rt_closure_env_trace` at construction, and managed
+// pointers stored in captures whose bitmap bit is set stay reachable
+// across GC.
 //
 // This exercises the allocation ABI that Phase 4's capture lowering
 // will emit. Today's llvmgen still materialises 0-capture envs via the
@@ -1570,11 +1571,12 @@ func TestBundledRuntimeClosureEnvTracesCaptures(t *testing.T) {
 typedef struct osty_rt_closure_env {
     void *fn_ptr;
     int64_t capture_count;
+    uint64_t pointer_bitmap;
     void *captures[];
 } osty_rt_closure_env;
 
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
-void *osty_rt_closure_env_alloc_v1(int64_t capture_count, const char *site) __asm__(OSTY_GC_SYMBOL("osty.rt.closure_env_alloc_v1"));
+void *osty_rt_closure_env_alloc_v2(int64_t capture_count, const char *site, uint64_t pointer_bitmap) __asm__(OSTY_GC_SYMBOL("osty.rt.closure_env_alloc_v2"));
 void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
 void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
 
@@ -1582,18 +1584,19 @@ void osty_gc_debug_collect(void);
 int64_t osty_gc_debug_live_count(void);
 
 int main(void) {
-    /* Phase 1 shape: zero captures. Env still allocates and is
-     * collectable. */
-    void *env0 = osty_rt_closure_env_alloc_v1(0, "env0");
+    /* Phase 1 shape: zero captures, bitmap zero. Env still allocates
+     * and is collectable. */
+    void *env0 = osty_rt_closure_env_alloc_v2(0, "env0", 0);
     osty_gc_root_bind_v1(env0);
     osty_gc_debug_collect();
     printf("%d\n", env0 != 0);
 
-    /* Phase 4 shape preview: 3 captures. Allocate three managed
-     * payloads and store them into the capture slots. They are NOT
-     * root-bound — their only liveness path is through the env's
-     * trace. If the trace is not wired, they're swept. */
-    osty_rt_closure_env *env = (osty_rt_closure_env *)osty_rt_closure_env_alloc_v1(3, "env3");
+    /* Phase 4 shape preview: 3 pointer captures (bitmap 0b111).
+     * Allocate three managed payloads and store them into capture
+     * slots. They are NOT root-bound — their only liveness path is
+     * through the env's trace. If the trace is not wired, they're
+     * swept. */
+    osty_rt_closure_env *env = (osty_rt_closure_env *)osty_rt_closure_env_alloc_v2(3, "env3", 0x7ULL);
     osty_gc_root_bind_v1(env);
     void *cap0 = osty_gc_alloc_v1(7, 32, "cap0");
     void *cap1 = osty_gc_alloc_v1(7, 32, "cap1");
@@ -1630,6 +1633,102 @@ int main(void) {
 	}
 	if got, want := string(runOutput), "1\n5 5\n1 1 1\n"; got != want {
 		t.Fatalf("closure-env harness stdout = %q, want %q", got, want)
+	}
+}
+
+// TestBundledRuntimeClosureEnvBitmapSkipsScalarSlots covers the §2.4
+// structural guarantee: a scalar capture whose 8-byte bit pattern
+// happens to collide with a live payload address must NOT keep that
+// payload alive through the closure env. The v1 layout gave only a
+// probabilistic guarantee (find_header filtering); v2's pointer bitmap
+// makes the tracer skip scalar slots unconditionally.
+//
+// Harness: allocate a payload P, root-bind it briefly to get its
+// address, unbind it, then store P's address (as a raw integer bit
+// pattern) into the scalar capture slot of a rooted closure env with
+// bitmap bit 0 cleared. After collect, P must be swept — if the tracer
+// honored the scalar slot, P would survive and the live count stays at
+// 2 (env + P) instead of the expected 1 (env only).
+func TestBundledRuntimeClosureEnvBitmapSkipsScalarSlots(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_closure_bitmap_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_closure_bitmap_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+typedef struct osty_rt_closure_env {
+    void *fn_ptr;
+    int64_t capture_count;
+    uint64_t pointer_bitmap;
+    void *captures[];
+} osty_rt_closure_env;
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void *osty_rt_closure_env_alloc_v2(int64_t capture_count, const char *site, uint64_t pointer_bitmap) __asm__(OSTY_GC_SYMBOL("osty.rt.closure_env_alloc_v2"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+
+void osty_gc_debug_collect(void);
+int64_t osty_gc_debug_live_count(void);
+
+int main(void) {
+    /* Two captures: slot 0 scalar (bit 0 cleared), slot 1 pointer
+     * (bit 1 set). Bitmap = 0b10 = 0x2. */
+    osty_rt_closure_env *env = (osty_rt_closure_env *)osty_rt_closure_env_alloc_v2(2, "env2", 0x2ULL);
+    osty_gc_root_bind_v1(env);
+
+    /* Payload P: allocate but do not root. Its only potential
+     * liveness path is through env's scalar capture slot. */
+    void *p = osty_gc_alloc_v1(7, 32, "scalar_victim");
+
+    /* Store P's address into the scalar slot as a raw bit pattern.
+     * Semantically this is a scalar (an Int that happens to equal
+     * a valid heap address). Under v1 conservative scan, find_header
+     * would identify P as reachable and keep it alive. Under v2 the
+     * bitmap bit is 0 so the tracer skips this slot unconditionally
+     * — P must be swept. */
+    env->captures[0] = p;
+
+    /* Payload Q: stored in the pointer slot with bitmap bit 1 set.
+     * Must survive collection. */
+    void *q = osty_gc_alloc_v1(7, 32, "pointer_capture");
+    env->captures[1] = q;
+
+    int64_t live_before = osty_gc_debug_live_count();
+    osty_gc_debug_collect();
+    int64_t live_after = osty_gc_debug_live_count();
+
+    /* live_before: env + P + Q = 3.
+     * live_after:  env + Q     = 2  (structural guarantee).
+     * If the tracer ignored the bitmap, live_after would be 3. */
+    printf("%lld %lld\n", (long long)live_before, (long long)live_after);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	if got, want := string(runOutput), "3 2\n"; got != want {
+		t.Fatalf("closure-bitmap harness stdout = %q, want %q", got, want)
 	}
 }
 

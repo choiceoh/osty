@@ -174,7 +174,7 @@ A5–A6는 safepoint ABI 주변 분류·가드.
   C 스택 안전. Sweep이 marked를 clear해 "outside collection == no marks"
   invariant 성립. 테스트 `TestBundledRuntimeMarkWorkQueueDeepGraph`.
 - ✅ **§2.4 A4 Closure env kind 예약** — `OSTY_GC_KIND_CLOSURE_ENV = 1029`.
-  Phase 1 closure env는 dedicated allocator `osty.rt.closure_env_alloc_v1`
+  Phase 1 closure env는 dedicated allocator `osty.rt.closure_env_alloc_v2`
   경유로 생성되고, heap dump와 `osty_gc_stats`에서 일반
   `osty.gc.alloc_v1` 객체와 분리 추적된다. Phase 4 capture 랜딩 시 이
   kind 태그로 분기하여 per-capture trace를 등록한다. 호출 지점:
@@ -206,16 +206,25 @@ A5–A6는 safepoint ABI 주변 분류·가드.
   유지, 초기 cap 128, tombstone 기반 삭제). deep-mark 테스트 28s → <1s.
   capacity / count / tombstones / find_ops 관측.
   `TestBundledRuntimeFindHeaderHashIndex`.
-- **A4 심화** — Phase 1 태그 swap을 넘어 `osty.rt.closure_env_alloc_v1`
+- **A4 심화** — Phase 1 태그 swap을 넘어 `osty.rt.closure_env_alloc_v2`
   전용 allocator + `osty_rt_closure_env_trace` 콜백을 런타임에 구현.
-  capture slot array를 직접 순회하는 self-describing 레이아웃
-  (`{ ptr fn, i64 capture_count, ptr captures[] }`). llvmgen
-  `emitFnValueEnv`가 dedicated 엔트리로 전환. Phase 4 capture lift는
-  `closure_lift.go`에서 scalar (Int / Bool / Char / Byte / Float) + 관리
-  포인터 (String / Bytes / List / Map / Set) capture를 env slot에 기록하며
-  runtime trace가 이를 walk한다. 3개 캡처 보유한 env로 trace 경로 검증:
-  `TestBundledRuntimeClosureEnvTracesCaptures`. E2E capture lift는
-  `TestClosureLiftCapturingIntLocal` / `TestClosureLiftCapturingStringLocal`.
+  self-describing 레이아웃 `{ ptr fn, i64 capture_count, i64
+  pointer_bitmap, ptr captures[] }` — `pointer_bitmap` 비트 i 가 1
+  iff `captures[i]`가 managed pointer. tracer는 비트맵을 참조해 scalar
+  slot을 unconditional하게 건너뛰므로, scalar bit pattern 이 live
+  payload 주소와 우연히 겹쳐도 false-retention 이 **구조적으로**
+  불가능하다 (v1 시절의 확률적 보장을 대체). llvmgen
+  `emitFnValueEnv` / `emitClosureMakerCall`이 dedicated 엔트리로 전환.
+  Phase 4 capture lift는 `closure_lift.go`에서 scalar (Int / Bool /
+  Char / Byte / Float) + 관리 포인터 (String / Bytes / List / Map /
+  Set) capture를 env slot에 기록하고 `pointerBitmapForCaptures`가
+  비트맵을 계산한다. runtime trace가 이를 walk한다. 캡처 개수는
+  비트맵 폭(64)에 맞춰 64 로 제한. Trace 경로 검증:
+  `TestBundledRuntimeClosureEnvTracesCaptures` + false-retention 구조적
+  보장 `TestBundledRuntimeClosureEnvBitmapSkipsScalarSlots`. E2E
+  capture lift는 `TestClosureLiftCapturingIntLocal` /
+  `TestClosureLiftCapturingStringLocal` /
+  `TestClosureLiftCapturingMixedScalarAndPointerEncodesBitmap`.
 - **A5 심화** — E2E 테스트 `TestGenerateFromASTSafepointKindMixCallAndLoop`:
   legacy 에미터가 lower한 IR을 정규식으로 파싱해 kind 분포를 복원,
   CALL + LOOP 존재와 UNSPECIFIED 부재를 검증. MIR 측 ENTRY + LOOP는

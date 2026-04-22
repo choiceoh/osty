@@ -68,7 +68,7 @@ fn main() {
 		// The lifted closure landed as a top-level def.
 		"@__osty_closure_",
 		// And the call site reaches it via the fn-value Env helper.
-		"@osty.rt.closure_env_alloc_v1",
+		"@osty.rt.closure_env_alloc_v2",
 		"@apply",
 	} {
 		if !strings.Contains(got, want) {
@@ -110,11 +110,11 @@ fn main() {
 // Locks the round-trip end-to-end:
 //
 //   - lifted fn signature appends the capture as `outer: Int`
-//   - capturing thunk emits `getelementptr i8, ptr %env, i64 16` +
+//   - capturing thunk emits `getelementptr i8, ptr %env, i64 24` +
 //     `load i64, ptr %cap0_slot` and calls the lifted fn with
 //     `(orig_args..., cap0)`
 //   - maker call site stores the thunk symbol at env slot 0 and
-//     the captured value at offset 16
+//     the captured value at offset 24
 func TestClosureLiftCapturingIntLocal(t *testing.T) {
 	src := `fn apply(f: fn(Int) -> Int, x: Int) -> Int {
     f(x)
@@ -137,13 +137,14 @@ fn main() {
 	for _, want := range []string{
 		// Lifted fn appends `outer` after the original `n` param.
 		"(i64 %n, i64 %outer)",
-		// Capturing thunk loads the capture from env at offset 16
-		// and reorders args.
-		"%cap0_slot = getelementptr i8, ptr %env, i64 16",
+		// Capturing thunk loads the capture from env at offset 24
+		// (after fn_ptr + capture_count + pointer_bitmap) and
+		// reorders args.
+		"%cap0_slot = getelementptr i8, ptr %env, i64 24",
 		"%cap0 = load i64",
 		"call i64 @__osty_closure_",
 		// Maker call site allocates env, stores thunk + capture.
-		"call ptr @osty.rt.closure_env_alloc_v1(i64 1",
+		"call ptr @osty.rt.closure_env_alloc_v2(i64 1",
 		"store ptr @__osty_closure_thunk___osty_closure_",
 		"store i64 ", // capture value store
 	} {
@@ -161,15 +162,19 @@ fn main() {
 }
 
 // A closure capturing a managed pointer (String) survives GC because
-// the env's trace callback (`osty_rt_closure_env_trace`) walks every
-// capture slot through `mark_slot_v1`, which filters to live heap
-// headers. The lifter now lowers String/Bytes/List/Map/Set captures
-// as `ptr` — the runtime side was already prepared during Phase A4.
+// the env's trace callback (`osty_rt_closure_env_trace`) consults the
+// per-capture pointer bitmap and marks every slot whose bit is set.
+// The lifter lowers String/Bytes/List/Map/Set captures as `ptr` and
+// emits bitmap bit i = 1 for each; the scalar-false-retention
+// guarantee (RUNTIME_GC §2.4) depends on bitmap bit i = 0 for scalars
+// so the tracer skips them unconditionally.
 //
 // Locks:
 //   - lifted fn signature appends `msg: String` after the `n` param
 //   - capturing thunk loads the capture as `ptr` (not `i64`)
-//   - maker call site stores `ptr` into the env slot at offset 16
+//   - maker call site stores `ptr` into the env slot at offset 24
+//   - maker call site passes `i64 1` for the bitmap (bit 0 set for
+//     the single pointer capture)
 func TestClosureLiftCapturingStringLocal(t *testing.T) {
 	src := `fn apply(f: fn(Int) -> String, x: Int) -> String {
     f(x)
@@ -189,23 +194,24 @@ fn main() {
 	for _, want := range []string{
 		// Lifted fn appends `msg` after `n`. LLVM String lowers to `ptr`.
 		"(i64 %n, ptr %msg)",
-		// Capturing thunk loads the capture as ptr from offset 16.
-		"%cap0_slot = getelementptr i8, ptr %env, i64 16",
+		// Capturing thunk loads the capture as ptr from offset 24.
+		"%cap0_slot = getelementptr i8, ptr %env, i64 24",
 		"%cap0 = load ptr",
-		// Maker call site allocates env with capture_count=1, stores
-		// the thunk at slot 0 and a ptr capture at offset 16.
-		"call ptr @osty.rt.closure_env_alloc_v1(i64 1",
+		// Maker call site allocates env with capture_count=1 and
+		// bitmap=1 (bit 0 set for the single pointer capture),
+		// stores the thunk at slot 0 and a ptr capture at offset 24.
+		"call ptr @osty.rt.closure_env_alloc_v2(i64 1",
 		"store ptr @__osty_closure_thunk___osty_closure_",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("string-capturing closure missing %q in IR:\n%s", want, got)
 		}
 	}
-	// Locate the slot at offset 16 and check the store that lands
+	// Locate the slot at offset 24 and check the store that lands
 	// there is a `store ptr`, not a `store i64` (which would leave
 	// the upper 4 bytes of a managed pointer undefined). This is the
 	// invariant that makes GC tracing correct for pointer captures.
-	if !strings.Contains(got, "store ptr %") || !strings.Contains(got, "= getelementptr i8, ptr %env, i64 16") {
+	if !strings.Contains(got, "store ptr %") || !strings.Contains(got, "= getelementptr i8, ptr %env, i64 24") {
 		t.Fatalf("expected `store ptr %%…` into env slot, got:\n%s", got)
 	}
 }
@@ -230,13 +236,53 @@ fn main() {
 		t.Fatalf("multi-capture closure errored: %v", err)
 	}
 	got := string(ir)
-	// Two capture loads at offsets 16 and 24.
+	// Two capture loads at offsets 24 and 32 (v2 header is 24 bytes:
+	// fn_ptr + capture_count + pointer_bitmap).
 	for _, want := range []string{
-		"= getelementptr i8, ptr %env, i64 16",
 		"= getelementptr i8, ptr %env, i64 24",
+		"= getelementptr i8, ptr %env, i64 32",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("multi-capture closure missing %q in IR:\n%s", want, got)
 		}
+	}
+}
+
+// A closure capturing both a scalar (Int) and a pointer (String) must
+// encode the bitmap with bit i set iff captures[i] is a pointer. This
+// is the codegen-side anchor for RUNTIME_GC §2.4 — the runtime tracer
+// consults this bitmap to skip scalar slots and close the scalar-
+// false-retention window structurally.
+//
+// The IR lowerer decides capture order, so the test accepts either
+// `i64 1` (pointer first) or `i64 2` (scalar first) — both encode
+// exactly one pointer in a two-slot env. Bitmap 0 (both scalars) or
+// 3 (both pointers) would be wrong.
+func TestClosureLiftCapturingMixedScalarAndPointerEncodesBitmap(t *testing.T) {
+	src := `fn apply(f: fn(Int) -> String, x: Int) -> String {
+    f(x)
+}
+
+fn main() {
+    let outerInt = 10
+    let outerStr = "hi"
+    let _ = apply(|n| if n > outerInt { outerStr } else { outerStr }, 5)
+}
+`
+	mod := lowerSrcLLVM(t, src)
+	ir, err := GenerateModule(mod, Options{PackageName: "main", SourcePath: "/tmp/closure_lift_mixed.osty"})
+	if err != nil {
+		t.Fatalf("mixed-capture closure errored: %v", err)
+	}
+	got := string(ir)
+	if !strings.Contains(got, "call ptr @osty.rt.closure_env_alloc_v2(i64 2") {
+		t.Fatalf("mixed-capture closure missing 2-capture v2 alloc:\n%s", got)
+	}
+	// Grab the bitmap arg. Accept either ordering. Must NOT be 0
+	// (both scalars) or 3 (both pointers).
+	hasBitmap1 := strings.Contains(got, "closure_env_alloc_v2(i64 2, ptr @") && strings.Contains(got, ", i64 1)")
+	hasBitmap2 := strings.Contains(got, "closure_env_alloc_v2(i64 2, ptr @") && strings.Contains(got, ", i64 2)")
+	if !hasBitmap1 && !hasBitmap2 {
+		t.Fatalf("expected bitmap `i64 1)` or `i64 2)` for one-pointer-one-scalar env, got:\n%s", got)
 	}
 }

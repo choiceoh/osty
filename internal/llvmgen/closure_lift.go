@@ -27,13 +27,15 @@
 // Capture support covers scalar IR primitives (Int / Bool / Char /
 // Byte / Float and their typed cousins) that fit in a single machine
 // word, plus managed pointer-typed captures (String / Bytes / List /
-// Map / Set) that lower to `ptr`. The runtime side is already set up
-// for this: `osty.rt.closure_env_alloc_v1` installs
-// `osty_rt_closure_env_trace`, which walks every capture slot via
-// `osty_gc_mark_slot_v1` — that helper filters through `find_header`,
-// so scalar bit patterns in a slot are safely skipped and real managed
-// pointers get marked. User struct captures and other ptr-by-value
-// shapes still fall through to the existing LLVM013 wall.
+// Map / Set) that lower to `ptr`. The emitter computes a per-env
+// pointer bitmap (bit i = 1 iff captures[i] is a managed pointer) and
+// passes it to `osty.rt.closure_env_alloc_v2`; the tracer
+// (`osty_rt_closure_env_trace`) consults the bitmap to mark only
+// pointer slots, giving a structural (not probabilistic) guarantee
+// that a scalar bit pattern aliasing a live heap address cannot
+// false-retain that payload (RUNTIME_GC §2.4). User struct captures
+// and other ptr-by-value shapes still fall through to the existing
+// LLVM013 wall.
 package llvmgen
 
 import (
@@ -63,6 +65,23 @@ type closureCapture struct {
 	name    string
 	llvmTyp string
 	astTyp  ast.Type
+}
+
+// pointerBitmapForCaptures encodes which capture slots hold managed
+// pointers as a 64-bit bitmap (bit i = 1 iff captures[i].llvmTyp is
+// "ptr"). The runtime tracer (`osty_rt_closure_env_trace`) consults
+// the bitmap to skip scalar slots unconditionally — a structural
+// guarantee against scalar false-retention (RUNTIME_GC §2.4).
+//
+// Caller must ensure len(captures) <= 64 (enforced at emit time).
+func pointerBitmapForCaptures(captures []closureCapture) uint64 {
+	var bitmap uint64
+	for i, c := range captures {
+		if c.llvmTyp == "ptr" {
+			bitmap |= uint64(1) << uint(i)
+		}
+	}
+	return bitmap
 }
 
 // liftedClosure is the per-closure record produced by the lift pass.

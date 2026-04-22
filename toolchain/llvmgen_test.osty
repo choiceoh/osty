@@ -1479,11 +1479,11 @@ fn testLlvmEmitSafepointWithRootsIsOstyOwned() {
 
 fn testLlvmEmitClosureEnvAllocRuntimeIsOstyOwned() {
     let emitter = llvmEmitter()
-    let env = llvmEmitClosureEnvAllocRuntime(emitter, 0, "@.str0", "__osty_closure_thunk_foo")
+    let env = llvmEmitClosureEnvAllocRuntime(emitter, 0, "@.str0", "__osty_closure_thunk_foo", 0)
     let ir = llvmTestStrings.join(emitter.body, "\n")
 
     testing.assertEq(env.typ, "ptr")
     testing.assertEq(env.name, "%t0")
-    assertLlvmContains(ir, "%t0 = call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr @.str0)")
+    assertLlvmContains(ir, "%t0 = call ptr @osty.rt.closure_env_alloc_v2(i64 0, ptr @.str0, i64 0)")
     assertLlvmContains(ir, "store ptr @__osty_closure_thunk_foo, ptr %t0")
 }

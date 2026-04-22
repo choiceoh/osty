@@ -744,14 +744,22 @@ func llvmClosureEnvPhase1CaptureCount() int {
 	return 0
 }
 
+// Byte offset where capture slots begin in a closure env: `ptr fn` (0) +
+// `i64 capture_count` (8) + `i64 pointer_bitmap` (16) + `captures[]` (24).
+// RUNTIME_GC §2.4 — the bitmap gives a structural guarantee against scalar
+// false-retention during trace.
+func llvmClosureEnvCapturesOffset() int {
+	return 24
+}
+
 // Osty: toolchain/llvmgen.osty:569:5
-func llvmEmitClosureEnvAllocRuntime(emitter *LlvmEmitter, captureCount int, siteName string, thunkSymbol string) *LlvmValue {
+func llvmEmitClosureEnvAllocRuntime(emitter *LlvmEmitter, captureCount int, siteName string, thunkSymbol string, pointerBitmap uint64) *LlvmValue {
 	// Osty: toolchain/llvmgen.osty:575:5
 	envTemp := llvmNextTemp(emitter)
 	_ = envTemp
 	// Osty: toolchain/llvmgen.osty:576:5
 	func() struct{} {
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = call ptr @osty.rt.closure_env_alloc_v1(i64 %s, ptr %s)", ostyToString(envTemp), ostyToString(captureCount), ostyToString(siteName)))
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = call ptr @osty.rt.closure_env_alloc_v2(i64 %s, ptr %s, i64 %d)", ostyToString(envTemp), ostyToString(captureCount), ostyToString(siteName), pointerBitmap))
 		return struct{}{}
 	}()
 	// Osty: toolchain/llvmgen.osty:579:5
