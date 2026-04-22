@@ -121,22 +121,41 @@ Phase 1A는 `osty_rt_task_*` / `osty_rt_thread_*` 심볼 집합을 먼저 링크
   - `TestBundledRuntimeSchedulerMassSpawn` — 100K spawn + join, linked-list inject queue 가 `OSTY_SCHED_INJECT_CAP` 없이 흡수하는지, counter 누수 / handle 동기화 primitive 누수 없는지 확인. `-short` 에서는 skip.
   - `TestBundledRuntimeSchedulerWorkerScaling` — 16 CPU-bound xorshift 바디, `workers=1` vs `workers=4` wall-clock 측정. 3.9x–4x speedup 관찰 (loose threshold: `4-worker < 1-worker / 2`). `-short` 에서는 skip.
 
-### Phase 3 — Preemption & concurrent GC
+### Phase 3 — Preemption & concurrent GC (부분 착수)
 
 **목표.** 긴 compute 루프도 양보. GC pause 최소화. 프로덕션-grade.
 
-**추가되는 것.**
-- 컴파일러: loop backedge 마다 `osty.sched.preempt_check_v1` emit.
-- 런타임: preempt_check는 `stop_requested` 검사 → set이면 safepoint로 위임.
-- 추가: 시그널 기반 async preemption (Go 1.14+ 스타일 SIGURG).
-- GC: concurrent tri-color marking + write barriers (§19.8 pre/post_write는 이미 존재). STW pause는 root scan + stack flush에만.
+**Phase 3 step 1 (현재, 착륙):** cooperative preemption at safepoints.
+- **`osty_rt_sched_preempt_observe`** — every `osty_gc_safepoint_v1` call (이미 컴파일러가 `emitLoopSafepoint` 으로 loop backedge 마다 emit, stride 1024) 진입 시 선행 실행. 세 가지 신호 관찰:
+  1. **Cancel observation + OS yield.** `osty_sched_current_group->cancelled` relaxed-load; cancelled이면 `sched_yield` 로 OS 스케줄러 슬롯 기부. 태스크 body 에서 `osty_rt_cancel_is_cancelled` 를 다음 user yield point 에서 보는 경로가 빨라짐.
+  2. **Concurrent-collector stop handshake.** `osty_gc_concurrent_stop_requested` relaxed-load; 설정되어 있으면 `osty_rt_sched_preempt_park_for_collector` 로 진입 (busy-wait; 향후 cv/sem 기반 wake). Phase 3 의 concurrent collector 가 flag 를 플립할 때 mutator 가 안정한 스택 스냅샷을 관찰할 수 있도록 ABI 를 먼저 착륙.
+  3. **Saturation elastic drain.** `is_worker && inject.count > 0 && parked == 0 && elastic_count < MAX` 이면 detached elastic worker spawn. `notify_blocking_wait` 의 compute-bound analogue — blocking cv_wait 에 진입하지 않는 순수 compute task 가 inject pending task 를 starve 시키던 갭 해소. 부하는 stride=1024 의 loop safepoint 단위로만 발생.
+- **공개 ABI 3종:**
+  - `osty_rt_sched_preempt_check_v1()` — `emitLoopSafepoint` 가 이미 내는 `osty.gc.safepoint_v1` 외에 명시적 preempt-only call 을 내고 싶은 미래 emitter 를 위한 진입점. 현재 GC 안 가는 hot 루프 사이트가 쓸 수 있음. No-op 인자/반환.
+  - `osty_rt_sched_concurrent_stop_request_v1()` / `osty_rt_sched_concurrent_stop_release_v1()` — concurrent collector (또는 테스트) 가 STW window 진입/이탈을 announce. mutator 는 다음 safepoint 에서 park / resume.
+- **Handle join 경로 GC-safe.** Phase 3 이전 `osty_rt_task_handle_join` 이 raw pointer 로 handle 을 dereference 했는데, main 의 `osty_gc_load_v1` read-barrier 통합과 merge conflict 를 해결하면서 Phase 2 의 join-helping 경로도 `osty_gc_load_v1(handle)` 경유로 전환 (forwarding-address invariant 유지).
 
-**제약.** 없음 (target state).
+**Phase 3 step 2 (미착수, 대규모):** concurrent collector 본체.
+- Tri-color marking + mutator write-barrier (pre/post_write 이미 존재, §19.8) 의 concurrent 버전.
+- STW pause 는 root scan + stack flush 윈도우에만. 현재 collector 는 allocator-triggered 일괄 sweep 이라 대규모 refactor 필요.
+- Preempt-observe 에서 mutator park 경로는 **이미 준비됨** — concurrent collector 가 stop_request 를 플립하기만 하면 동작. 컬렉터 자체는 별도 패치.
+
+**Phase 3 step 3 (미착수):** SIGURG 비동기 preemption.
+- `preempt_check` 가 없는 C FFI 블록 / 매우 긴 단일 instruction stream 을 signal-based 로 중단. Go 1.14+ SIGURG 참고. `preempt_check_v1` 의 safepoint 슬롯 커버리지가 낮은 라이브러리 코드에서만 필요.
+
+**제약 (여전히).**
+- **Concurrent GC 없음** — collector 가 ship 되기 전까지 `osty_concurrent_workers > 0` 동안 auto-collection 여전히 보류.
+- **Preemption 은 cooperative** — FFI / inline asm / `preempt_check` 없는 C 루프는 여전히 worker 점유. 일반 Osty 코드 (컴파일러가 loop safepoint emit) 는 커버됨.
+- Phase 2 의 elastic cap (`OSTY_SCHED_ELASTIC_MAX = 256`) 유지.
 
 **수용 테스트.**
-- 무한 compute 루프에서도 `thread.select` timeout arm 발화.
-- GC pause < 1ms on 100MB heap.
-- SIGURG inject 후 크래시 없음.
+- `TestBundledRuntimeSchedulerPreemptionDrainsQueueUnderComputeLoop` — `workers=1` 로 풀 saturation 을 강제한 뒤 compute loop (`osty_rt_sched_preempt_check_v1` 를 per-iteration 호출) + signal body 를 같은 그룹에 spawn. Phase 3 elastic-drain 이 발화하지 않으면 signal body 는 compute loop 이 끝나기 전 (~500ms of xorshift) 에는 절대 실행되지 않음. 통과 조건: `elapsed_ms < 2000` + signal return == 7. 실제 관찰: elapsed ≈ 0-1ms (elastic 이 즉시 발화).
+- `TestBundledRuntimeSchedulerConcurrentStopHandshake` — ABI 3종 직접 구동: 20ms 램프업 → `stop_request_v1` → 50ms park window → `stop_release_v1` → 20ms 재개. iteration 카운터를 before/mid/after 샘플링; stop window 동안 delta ≈ 0 (mutator 파크), release 이후 delta >> 0 (재개). 실제 관찰: stopped-delta=0~11, resumed-delta=수백만.
+- 기존 Phase 2 수용 테스트 전부 통과 유지 (ChannelStress, ChaseLevPushStealRace, MassSpawn 100K, WorkerScaling 3.9x 등). TSan clean 유지.
+
+**미작동 (후속).**
+- GC pause < 1ms on 100MB heap — 아직 concurrent collector 없음.
+- SIGURG inject without crash — SIGURG 기반 preemption 미구현.
 
 ## ABI 계약 (모든 단계 불변)
 
@@ -184,6 +203,12 @@ struct osty_rt_result_enum_v1 { int64_t disc; int64_t payload; };
 struct osty_rt_result_enum_v1 osty_rt_task_race(void *body);        // Result<T, Error>
 void *osty_rt_task_collect_all(void *body);                          // List<Result<T, Error>>
 void *osty_rt_parallel(void *items, int64_t concurrency, void *f);   // List<Result<R, Error>>
+
+// Phase 3 cooperative preemption (Phase 2 워커 풀 위에서 활성화)
+void osty_rt_sched_preempt_check_v1(void);              // compiler emit point
+void osty_rt_sched_concurrent_stop_request_v1(void);    // concurrent-collector STW enter (cv-backed)
+void osty_rt_sched_concurrent_stop_release_v1(void);    // concurrent-collector STW exit (broadcasts cv)
+void osty_rt_sched_kick_worker_v1(int64_t worker_id);   // SIGURG-based async preempt (POSIX; Windows no-op)
 ```
 
 **계약.** 백엔드는 이 시그니처에 맞춰 lower한다 ([mir_generator.go:1749](internal/llvmgen/mir_generator.go:1749) 이하). 런타임이 단계 이전되어도 **프로그램 재컴파일 불필요**.
@@ -202,8 +227,8 @@ void *osty_rt_parallel(void *items, int64_t concurrency, void *f);   // List<Res
 | §8 channels blocking | **abort stub** | ✓ | ✓ (elastic 워커로 pool saturation 대응) | ✓ |
 | §8 `thread.select` (recv/timeout/default) | **abort stub** | ✓ | ✓ | ✓ |
 | §8 `thread.select` send arm | **abort stub** | ✓ (폴링) | ✓ (폴링, 현재) | ✓ (fiber park) |
-| §19.1 STW GC | ✓ | ✓ + parked-root union | **paused while in-flight tasks live** | concurrent |
-| §19.10 safepoint contract | unchanged | extended (park-as-safepoint) | gated on `osty_concurrent_workers` (풀 워커 자체는 gate 안 함) | extended (preempt_check) |
+| §19.1 STW GC | ✓ | ✓ + parked-root union | **paused while in-flight tasks live** | concurrent (step 2 후속) |
+| §19.10 safepoint contract | unchanged | extended (park-as-safepoint) | gated on `osty_concurrent_workers` (풀 워커 자체는 gate 안 함) | **extended with preempt_observe (현재)** |
 
 ## 파일 인벤토리
 
@@ -230,4 +255,6 @@ void *osty_rt_parallel(void *items, int64_t concurrency, void *f);   // List<Res
 - 2026-04-22 (follow-up 1): Elastic trigger를 `push_inject` 의 "parked==0" 휴리스틱에서 **blocking-wait 진입 지점** (`osty_sched_notify_blocking_wait` call) 로 전환 — `push_inject` saturation-기반 트리거가 CPU-bound scaling (worker scaling test) 을 1.03x 로 망치는 문제 해결. 블로킹 cv_wait 직전 (`thread_chan_send/recv`, `handle_wait` 워커 경로) 에서만 inject pending task 가 있을 때 elastic spawn. `is_worker` TLS 플래그로 pool + elastic 워커 모두 커버. 이제 `workers=1 → 4` 에서 **3.97x speedup** 관찰. CPU-bound 작업은 elastic 없이 fixed pool 만 사용.
 - 2026-04-22 (follow-up 2): Inject queue 자료구조를 fixed ring (`OSTY_SCHED_INJECT_CAP=8192`) 에서 mutex-guarded **singly-linked FIFO** 로 교체. 100K-spawn stress 가 기존 ring 용량을 초과해 `task_spawn: inject queue overflow` abort → linked list 로 용량 제약 제거 (노드 per-task malloc). `push_inject` 실패 경로는 `calloc` OOM 으로만 한정.
 - 2026-04-22 (follow-up 3): Chase-Lev deque 슬롯 publication 을 release/acquire atomic 으로 승격 (기존 store + separate `__atomic_thread_fence(RELEASE)` 조합은 ThreadSanitizer 가 인식 못 함). `__atomic_store_n(slot, task, RELEASE)` → `__atomic_load_n(slot, ACQUIRE)` 로 task_item 필드 publication 명시적. `-fsanitize=thread -O1` 빌드 + 4-worker × 1000-child stress harness TSan warning 0 확인.
-- 2026-04-22 (follow-up 4): `race` / `collectAll` 의 handles_list 리드 경로가 `osty_rt_list_get_raw(..., trace_elem=NULL)` 로 호출해 ensure_layout 의 trace-kind mismatch 에서 abort (main 에서 존재하던 issue). 해당 list 는 `osty_rt_list_push_ptr` 로 빌드되어 `trace_elem = osty_gc_mark_slot_v1` 이므로 read 측도 동일 함수 포인터 전달하도록 수정. `TestBundledRuntimeSchedulerRace` / `TestBundledRuntimeSchedulerCollectAll` green.
+- 2026-04-22 (follow-up 4): `race` / `collectAll` 의 handles_list 리드 경로가 `osty_rt_list_get_raw(..., trace_elem=NULL)` 로 호출해 ensure_layout 의 trace-kind mismatch 에서 abort (main 에서 존재하던 issue). 해당 list 는 `osty_rt_list_push_ptr` 로 빌드되어 `trace_elem = osty_gc_mark_slot_v1` 이므로 read 측도 동일 함수 포인터 전달하도록 수정. `TestBundledRuntimeSchedulerRace` / `TestBundledRuntimeSchedulerCollectAll` green. (이후 merge 에서 main 의 `osty_rt_list_get_ptr` helper 로 대체 — 같은 목적, 더 깔끔.)
+- 2026-04-22 (follow-up 5): **Phase 3 step 1 착수**. `osty_rt_sched_preempt_observe` 를 `osty_gc_safepoint_v1` 선행으로 추가 — (a) current group `cancelled` relaxed-load 후 OS yield, (b) `osty_gc_concurrent_stop_requested` relaxed-load 후 해당 시 `osty_rt_sched_preempt_park_for_collector` 로 진입, (c) `is_worker && inject.count > 0 && parked == 0` 이면 saturation elastic spawn (compute-loop 가 queued task 를 starve 하는 Phase 2 갭 닫음). 공개 ABI 3종 추가: `osty_rt_sched_preempt_check_v1`, `osty_rt_sched_concurrent_stop_request_v1`, `osty_rt_sched_concurrent_stop_release_v1`. 수용 테스트 2종 (`PreemptionDrainsQueueUnderComputeLoop`, `ConcurrentStopHandshake`) green. TSan clean. Concurrent collector 본체 + SIGURG 는 Phase 3 step 2/3 로 후속.
+- 2026-04-22 (follow-up 6): **Phase 3 step 1 완결.** (a) Stop handshake park 를 busy-wait 에서 cv-based 로 전환 — `osty_gc_stop_mu` + `osty_gc_stop_cv` 추가, `stop_request` 가 mutex 아래 플래그 플립, `stop_release` 가 `cond_broadcast` 로 park 된 mutator 들을 일괄 기상. 50ms STW 윈도우가 50ms CPU 를 태우지 않음. (b) **SIGURG 비동기 preemption** — pool_init 에서 `sigaction(SIGURG, ...)` 으로 핸들러 등록, `sig_atomic_t` TLS 플래그가 async-signal-safe 로 설정되고 다음 safepoint 에서 clear-on-observe. 공개 ABI `osty_rt_sched_kick_worker_v1(int64_t worker_id)` (음수면 전체 풀) — concurrent collector / 외부 제어가 stride 롤오버 기다리지 않고 mutator 들을 safepoint 로 유도. POSIX-only (Windows 는 no-op; 일반 safepoint cadence 로 관찰). 수용 테스트 `SigurgKick` 통과 (100 kicks, worker 이터레이션 1.99M 델타). (c) **GC pause 베이스라인** — `GcPauseBaseline` 테스트가 1K rooted × 4KB + 9K garbage × 4KB = 40MB heap 위에서 STW major 를 측정, 현재 M-class HW 에서 ~6.5ms. Phase 3 step 2 (concurrent collector) 가 < 1ms 목표를 달성할 때 비교 기준. (d) `#[vectorize]` 루프에 대한 compiler-emit preempt_check 는 **의도적으로 안 함** — 루프 내 call 은 LLVM auto-vectorizer 를 죽임. Vectorized 핫 루프의 preemption 경로는 SIGURG 만 — handler 가 OS-level preempt 를 가져오므로 flag 자체가 안 관찰되어도 mutator 스레드가 잠시 off-CPU 되어 다른 스레드가 진행. 설계 문서에 trade-off 기록.

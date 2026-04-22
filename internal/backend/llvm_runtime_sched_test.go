@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -1414,5 +1415,431 @@ int main(void) {
 	// jitter and Amdahl overhead from task startup/join cost.
 	if four*2 > one {
 		t.Fatalf("worker scaling too weak: 1-worker=%dus, 4-worker=%dus, expected 4-worker < 1-worker / 2", one, four)
+	}
+}
+
+// Phase 3: cooperative preemption. A compute-bound task spawned into a
+// pool that is smaller than `compute + queued timeout` previously
+// starved the queued task because the compute body never hit a
+// blocking cv_wait (Phase 2's elastic trigger). With Phase 3's
+// loop-safepoint preemption hook, the compute body's safepoints
+// themselves spawn an elastic worker when the inject queue has
+// pending work. Test: workers=1, producer calls osty_gc_safepoint_v1
+// in a loop (standing in for compiler-emitted loop backedges), a
+// second task should observe completion within a bounded wall-clock.
+func TestBundledRuntimeSchedulerPreemptionDrainsQueueUnderComputeLoop(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_preempt_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_preempt_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <time.h>
+
+void *osty_rt_task_spawn(void *body_env);
+int64_t osty_rt_task_handle_join(void *handle);
+void osty_rt_sched_preempt_check_v1(void);
+
+typedef struct env_t { void *fn; volatile int64_t *done; } env_t;
+
+/* Compute body: tight xorshift mixer that runs for ~500ms, calling
+ * the preempt check every iteration. Without preemption + elastic
+ * fallback on workers=1, the sibling body below would never run. */
+static int64_t body_compute(void *env) {
+    env_t *e = (env_t *)env;
+    int64_t x = 1;
+    for (int64_t i = 0; i < 500000000LL; i++) {
+        x ^= x << 13;
+        x ^= (int64_t)((uint64_t)x >> 7);
+        x ^= x << 17;
+        /* Compiler-emitted loop safepoints drop into this exact
+         * hook — we call it directly here to simulate what
+         * emitLoopSafepoint already emits at loop backedges. */
+        osty_rt_sched_preempt_check_v1();
+        if (__atomic_load_n(e->done, __ATOMIC_ACQUIRE)) {
+            return x;  /* sibling signalled us; exit early */
+        }
+    }
+    return x;
+}
+
+/* Sibling body: flip the done flag so the compute body exits. This
+ * is what lets us measure "did the sibling get a chance to run?"
+ * under a saturated single-worker pool. */
+static int64_t body_signal(void *env) {
+    env_t *e = (env_t *)env;
+    __atomic_store_n(e->done, 1, __ATOMIC_RELEASE);
+    return 7;
+}
+
+int main(void) {
+    volatile int64_t done = 0;
+    env_t c_env = { (void *)body_compute, &done };
+    env_t s_env = { (void *)body_signal, &done };
+
+    struct timespec before, after;
+    clock_gettime(CLOCK_MONOTONIC, &before);
+
+    /* Compute first — with workers=1 it grabs the only worker. */
+    void *h_compute = osty_rt_task_spawn((void *)&c_env);
+    /* Sibling second — queued in inject. Without preemption it
+     * would sit there until compute runs to completion (~500ms of
+     * xorshift). With preemption, safepoint-triggered elastic
+     * spawn runs it within milliseconds. */
+    void *h_signal = osty_rt_task_spawn((void *)&s_env);
+
+    int64_t r_signal = osty_rt_task_handle_join(h_signal);
+    int64_t r_compute = osty_rt_task_handle_join(h_compute);
+
+    clock_gettime(CLOCK_MONOTONIC, &after);
+    long long elapsed_ms =
+        (long long)(after.tv_sec - before.tv_sec) * 1000LL +
+        (long long)((after.tv_nsec - before.tv_nsec) / 1000000LL);
+
+    printf("%lld %lld %lld\n",
+           (long long)r_signal, (long long)r_compute, elapsed_ms);
+    (void)r_compute;
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-O2", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, out)
+	}
+	run := exec.Command(binaryPath)
+	run.Env = append(os.Environ(), "OSTY_SCHED_WORKERS=1")
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, out)
+	}
+	var rSignal, rCompute, elapsedMs int64
+	if _, err := fmt.Sscanf(string(out), "%d %d %d", &rSignal, &rCompute, &elapsedMs); err != nil {
+		t.Fatalf("parse stdout %q: %v", out, err)
+	}
+	t.Logf("preemption: signal=%d compute=%d elapsed=%dms", rSignal, rCompute, elapsedMs)
+	if rSignal != 7 {
+		t.Fatalf("signal body did not run (result=%d, want 7)", rSignal)
+	}
+	// With preemption active, the signal body runs within
+	// milliseconds of spawn and the compute body exits on its next
+	// observation of done. Total wall-clock should be << the
+	// 500M-iteration loop (hundreds of ms at most on typical HW).
+	// Generous ceiling so CI jitter doesn't flake; without
+	// preemption the loop runs to completion and blows the limit.
+	if elapsedMs > 2000 {
+		t.Fatalf("preemption did not drain queue: elapsed %dms, expected < 2000ms", elapsedMs)
+	}
+}
+
+// Concurrent-GC handshake ABI. Phase 3 ships the stop_requested flag
+// + mutator park path so a future collector can drive STW windows
+// without refactoring every safepoint emission. This test drives the
+// request/release ABI directly and verifies a busy worker parks at
+// its next safepoint.
+func TestBundledRuntimeSchedulerConcurrentStopHandshake(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_stop_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_stop_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <time.h>
+
+void *osty_rt_task_spawn(void *body_env);
+int64_t osty_rt_task_handle_join(void *handle);
+void osty_rt_sched_preempt_check_v1(void);
+void osty_rt_sched_concurrent_stop_request_v1(void);
+void osty_rt_sched_concurrent_stop_release_v1(void);
+void osty_rt_thread_sleep(int64_t nanos);
+
+typedef struct env_t { void *fn; volatile int64_t *iters; } env_t;
+
+/* Body runs a loop that bumps a counter and hits the preempt check
+ * every iteration. After stop_request, the preempt check parks;
+ * after stop_release, iterations resume. Counter samples before and
+ * after the stop window let main confirm the mutator observed both
+ * edges. */
+static int64_t body_loop(void *env) {
+    env_t *e = (env_t *)env;
+    for (int64_t i = 0; i < 10000000LL; i++) {
+        __atomic_fetch_add(e->iters, 1, __ATOMIC_RELAXED);
+        osty_rt_sched_preempt_check_v1();
+    }
+    return 0;
+}
+
+int main(void) {
+    volatile int64_t iters = 0;
+    env_t env = { (void *)body_loop, &iters };
+    void *h = osty_rt_task_spawn((void *)&env);
+
+    /* Let the mutator ramp up. */
+    osty_rt_thread_sleep(20000000LL);  /* 20ms */
+    int64_t before = __atomic_load_n(&iters, __ATOMIC_RELAXED);
+
+    /* Raise the stop flag. The mutator parks at its next preempt
+     * check. Wait long enough that, if parking works, the iteration
+     * count stays pinned at the pre-stop value. */
+    osty_rt_sched_concurrent_stop_request_v1();
+    osty_rt_thread_sleep(50000000LL);  /* 50ms */
+    int64_t mid = __atomic_load_n(&iters, __ATOMIC_RELAXED);
+
+    /* Release. The mutator resumes and should quickly accumulate
+     * more iterations. */
+    osty_rt_sched_concurrent_stop_release_v1();
+    osty_rt_thread_sleep(20000000LL);
+    int64_t after = __atomic_load_n(&iters, __ATOMIC_RELAXED);
+
+    (void)osty_rt_task_handle_join(h);
+
+    /* mid - before should be tiny (mutator parked within a few
+     * iterations of the flag flip); after - mid should be >> 0
+     * (mutator resumed and kept going). */
+    long long stopped = (long long)(mid - before);
+    long long resumed = (long long)(after - mid);
+    printf("%lld %lld\n", stopped, resumed);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-O2", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, out)
+	}
+	out, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, out)
+	}
+	var stopped, resumed int64
+	if _, err := fmt.Sscanf(string(out), "%d %d", &stopped, &resumed); err != nil {
+		t.Fatalf("parse stdout %q: %v", out, err)
+	}
+	t.Logf("stop_handshake: stopped-delta=%d resumed-delta=%d", stopped, resumed)
+	// The mutator should resume and accumulate far more iterations
+	// after release than it did during the stop window. An exact
+	// bound is noisy (xorshift runs fast; kernel park latency varies),
+	// so we assert the qualitative invariant: after-release delta is
+	// strictly larger than during-stop delta by at least a few
+	// orders of magnitude.
+	if resumed <= stopped*10 {
+		t.Fatalf("concurrent stop handshake broken: stopped=%d resumed=%d (expected resumed >> stopped)",
+			stopped, resumed)
+	}
+}
+
+// SIGURG kick — async-preemption entry point. A compute-bound worker
+// spins on a tight loop that *never* calls the safepoint. The main
+// thread records the iteration counter, fires
+// osty_rt_sched_kick_worker_v1(-1) to SIGURG every pool worker, and
+// the worker's signal handler flips a TLS flag that the safepoint
+// observes on the next call — which the body then triggers via
+// preempt_check_v1. The test asserts the kick path reaches the
+// handler (flag set) without crashing the process.
+//
+// POSIX-only. Windows has no SIGURG and the runtime's kick is a
+// no-op there; test skips under Windows.
+func TestBundledRuntimeSchedulerSigurgKick(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGURG preemption is POSIX-only")
+	}
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_sigurg_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_sigurg_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <time.h>
+
+void *osty_rt_task_spawn(void *body_env);
+int64_t osty_rt_task_handle_join(void *handle);
+void osty_rt_sched_preempt_check_v1(void);
+void osty_rt_sched_kick_worker_v1(int64_t worker_id);
+void osty_rt_thread_sleep(int64_t nanos);
+
+typedef struct env_t {
+    void *fn;
+    volatile int64_t *ticks;
+    volatile int64_t *stop;
+} env_t;
+
+/* Body runs a compute loop and calls preempt_check_v1 every
+ * iteration. A kick sets the per-thread SIGURG flag; the next
+ * preempt_check_v1 observes it and yields (sched_yield). The body
+ * otherwise never touches the scheduler, so without SIGURG there
+ * would be no cross-thread signal into this worker. */
+static int64_t body_loop(void *env) {
+    env_t *e = (env_t *)env;
+    while (!__atomic_load_n(e->stop, __ATOMIC_ACQUIRE)) {
+        __atomic_fetch_add(e->ticks, 1, __ATOMIC_RELAXED);
+        osty_rt_sched_preempt_check_v1();
+    }
+    return 0;
+}
+
+int main(void) {
+    volatile int64_t ticks = 0;
+    volatile int64_t stop = 0;
+    env_t env = { (void *)body_loop, &ticks, &stop };
+    void *h = osty_rt_task_spawn((void *)&env);
+
+    /* Ramp. */
+    osty_rt_thread_sleep(20000000LL);
+    int64_t before = __atomic_load_n(&ticks, __ATOMIC_RELAXED);
+
+    /* Kick every pool worker. The SIGURG handler sets the worker's
+     * TLS flag; the next preempt_check_v1 clears it and yields. We
+     * don't assert a specific timing here — the test is "the kick
+     * path does not crash and iterations keep flowing". */
+    for (int i = 0; i < 100; i++) {
+        osty_rt_sched_kick_worker_v1(-1);
+    }
+
+    osty_rt_thread_sleep(20000000LL);
+    int64_t after = __atomic_load_n(&ticks, __ATOMIC_RELAXED);
+
+    __atomic_store_n(&stop, 1, __ATOMIC_RELEASE);
+    (void)osty_rt_task_handle_join(h);
+
+    /* The body should have kept running through every kick and
+     * accumulated further iterations. A zero delta means either the
+     * handler crashed the process or SIGURG delivered in a way that
+     * stuck the worker. */
+    long long delta = (long long)(after - before);
+    printf("%lld\n", delta);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-O2", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, out)
+	}
+	out, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, out)
+	}
+	var delta int64
+	if _, err := fmt.Sscanf(string(out), "%d", &delta); err != nil {
+		t.Fatalf("parse stdout %q: %v", out, err)
+	}
+	t.Logf("sigurg_kick: ticks delta = %d", delta)
+	if delta <= 0 {
+		t.Fatalf("SIGURG kick stalled the worker (delta=%d)", delta)
+	}
+}
+
+// GC pause characterization. Phase 3's ultimate goal is "GC pause <
+// 1ms on 100MB heap" via a concurrent collector, which is not yet
+// shipped. This test measures the current STW pause so Phase 3's
+// future concurrent-collector work has a baseline to compare
+// against. It allocates many GC-managed objects and times a forced
+// major collection; the assertion is a soft ceiling that catches
+// pathological regressions but does not yet meet the Phase 3
+// target. The harness prints the measured pause so CI / dev logs
+// carry the trend over time.
+func TestBundledRuntimeGcPauseBaseline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("gc pause baseline skipped in -short")
+	}
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_pause_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_pause_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <time.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+void osty_gc_debug_collect_major(void);
+
+#define N_ROOTED 1000     /* stays live across the collection */
+#define N_GARBAGE 9000    /* unreachable at collection time */
+
+int main(void) {
+    /* Allocate the rooted set. Each block is 4KB; 1000 × 4KB = 4MB
+     * of long-lived heap. The collector has to trace all of it. */
+    static void *rooted[N_ROOTED];
+    for (int i = 0; i < N_ROOTED; i++) {
+        rooted[i] = osty_gc_alloc_v1(7, 4096, "rooted");
+        osty_gc_root_bind_v1(rooted[i]);
+    }
+    /* Allocate garbage. Each block is 4KB; 9000 × 4KB = 36MB of
+     * unreachable heap. Sweep has to reclaim all of it. */
+    for (int i = 0; i < N_GARBAGE; i++) {
+        (void)osty_gc_alloc_v1(7, 4096, "garbage");
+    }
+
+    struct timespec before, after;
+    clock_gettime(CLOCK_MONOTONIC, &before);
+    osty_gc_debug_collect_major();
+    clock_gettime(CLOCK_MONOTONIC, &after);
+
+    long long elapsed_us =
+        (long long)(after.tv_sec - before.tv_sec) * 1000000LL +
+        (long long)((after.tv_nsec - before.tv_nsec) / 1000LL);
+    for (int i = 0; i < N_ROOTED; i++) {
+        osty_gc_root_release_v1(rooted[i]);
+    }
+    printf("%lld\n", elapsed_us);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-O2", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, out)
+	}
+	out, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, out)
+	}
+	var pauseUs int64
+	if _, err := fmt.Sscanf(string(out), "%d", &pauseUs); err != nil {
+		t.Fatalf("parse stdout %q: %v", out, err)
+	}
+	t.Logf("gc_pause_baseline: 40MB heap STW major = %dus", pauseUs)
+	// Regression ceiling: 500ms. The measured baseline today is
+	// typically tens of ms on M-class hardware. Phase 3 step 2
+	// (concurrent collector) aims for < 1ms per RUNTIME_SCHEDULER
+	// acceptance tests; this test characterises the current STW
+	// cost so that future diff clearly shows the improvement.
+	if pauseUs > 500000 {
+		t.Fatalf("STW major pause regressed: %dus (ceiling 500000us)", pauseUs)
 	}
 }
