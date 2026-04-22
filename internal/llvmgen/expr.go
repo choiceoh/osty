@@ -5790,7 +5790,7 @@ func (g *generator) emitMapIterate(mapVal value, keyTyp, valTyp string, keyStrin
 	}
 	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", cont))
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.endLabel)

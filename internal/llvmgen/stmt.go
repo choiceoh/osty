@@ -2836,7 +2836,7 @@ func (g *generator) emitMapRetainIfStmt(call *ast.CallExpr, base value, keyTyp s
 	}
 	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", cont2))
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	llvmRangeEnd(emitter, loop2)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop2.endLabel)
@@ -2984,7 +2984,7 @@ func (g *generator) emitMapFor(stmt *ast.ForStmt, kName, vName, keyTyp, valTyp s
 	}
 	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
-	g.emitGCSafepoint(emitter)
+	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	llvmRangeEnd(emitter, loop)
 	g.attachVectorizeMD(emitter, loop.condLabel)
 	g.takeOstyEmitter(emitter)
