@@ -137,16 +137,24 @@ pub fn elabFile(cx: ElabCx) {
 fn collectDecls(cx: ElabCx) {
     for declIdx in cx.ast.arena.decls {
         let node = astArenaNodeAt(cx.ast.arena, declIdx)
-        match node.kind {
-            AstNFnDecl -> collectFnDecl(cx, declIdx, node, "", [], []),
-            AstNStructDecl -> collectStructDecl(cx, declIdx, node),
-            AstNEnumDecl -> collectEnumDecl(cx, declIdx, node),
-            AstNInterfaceDecl -> collectInterfaceDecl(cx, declIdx, node),
-            AstNTypeAlias -> collectTypeAlias(cx, declIdx, node),
-            AstNLet -> collectLetDecl(cx, declIdx, node),
-            AstNLetDecl -> collectLetDecl(cx, declIdx, node),
-            AstNUseDecl -> collectUseDecl(cx, declIdx, node),
-            _ -> {},
+        if node.kind == AstNFnDecl {
+            collectFnDecl(cx, declIdx, node, "", [], [])
+        } else if node.kind == AstNStructDecl {
+            collectStructDecl(cx, declIdx, node)
+        } else if node.kind == AstNEnumDecl {
+            collectEnumDecl(cx, declIdx, node)
+        } else if node.kind == AstNInterfaceDecl {
+            collectInterfaceDecl(cx, declIdx, node)
+        } else if node.kind == AstNTypeAlias {
+            collectTypeAlias(cx, declIdx, node)
+        } else if node.kind == AstNLet {
+            collectLetDecl(cx, declIdx, node)
+        } else if node.kind == AstNLetDecl {
+            collectLetDecl(cx, declIdx, node)
+        } else if node.kind == AstNUseDecl {
+            collectUseDecl(cx, declIdx, node)
+        } else {
+            let _ = declIdx
         }
     }
 }
@@ -168,49 +176,52 @@ fn collectDecls(cx: ElabCx) {
 fn collectUseDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     let alias = useDeclAliasName(cx, node)
     if alias == "" {
-        return
-    }
-    let env = cx.env
-    // Register a binding so bare `X` in expression position has a
-    // type; the head name is what `checkLookupMethod` keys off.
-    let moduleTy = tyNamed(env.tys, alias, [])
-    checkBindSpan(env, alias, moduleTy, false, node.start, node.end)
-    checkRecordSymbol(env, declIdx, "use", alias, "", moduleTy, node.start, node.end)
+        let _ = alias
+    } else {
+        let env = cx.env
+        // Register a binding so bare `X` in expression position has a
+        // type; the head name is what `checkLookupMethod` keys off.
+        let moduleTy = tyNamed(env.tys, alias, [])
+        checkBindSpan(env, alias, moduleTy, false, node.start, node.end)
+        checkRecordSymbol(env, declIdx, "use", alias, "", moduleTy, node.start, node.end)
 
-    for bodyIdx in node.children {
-        let body = astArenaNodeAt(cx.ast.arena, bodyIdx)
-        match body.kind {
-            AstNFnDecl -> collectFnDecl(cx, bodyIdx, body, alias, [], []),
-            AstNStructDecl -> collectUseDeclTypeBody(cx, bodyIdx, body, alias),
-            AstNEnumDecl -> collectUseDeclTypeBody(cx, bodyIdx, body, alias),
-            AstNInterfaceDecl -> collectUseDeclTypeBody(cx, bodyIdx, body, alias),
-            AstNTypeAlias -> collectUseDeclTypeBody(cx, bodyIdx, body, alias),
-            _ -> {},
+        for bodyIdx in node.children {
+            let body = astArenaNodeAt(cx.ast.arena, bodyIdx)
+            if body.kind == AstNFnDecl {
+                collectFnDecl(cx, bodyIdx, body, alias, [], [])
+            } else if body.kind == AstNStructDecl {
+                collectUseDeclTypeBody(cx, bodyIdx, body, alias)
+            } else if body.kind == AstNEnumDecl {
+                collectUseDeclTypeBody(cx, bodyIdx, body, alias)
+            } else if body.kind == AstNInterfaceDecl {
+                collectUseDeclTypeBody(cx, bodyIdx, body, alias)
+            } else if body.kind == AstNTypeAlias {
+                collectUseDeclTypeBody(cx, bodyIdx, body, alias)
+            } else {
+                let _ = bodyIdx
+            }
         }
-    }
 
-    // `use std.strings as X` (no body) — pull the std.strings surface
-    // under the alias. Toolchain code routinely spells this as
-    // `strings`, `ciStrings`, `pkgStrings`, `llvmStrings`, etc.
-    if node.text == "std.strings" {
-        registerStdStringsAliasFns(env, alias)
-    }
-    // `use std.testing` (examples use this without an explicit alias,
-    // so the alias defaults to "testing" via useDeclAliasName).
-    if node.text == "std.testing" {
-        registerStdTestingAliasFns(env, alias)
-    }
-    if node.text == "std.fs" {
-        registerStdFsAliasFns(env, alias)
-    }
-    if node.text == "std.debug" {
-        registerStdDebugAliasFns(env, alias)
-    }
-    if node.text == "std.thread" {
-        registerStdThreadAliasFns(env, alias)
-    }
-    if node.text == "std.io" {
-        registerStdIoAliasFns(env, alias)
+        // `use std.strings as X` (no body) — pull the std.strings surface
+        // under the alias. Toolchain code routinely spells this as
+        // `strings`, `ciStrings`, `pkgStrings`, `llvmStrings`, etc.
+        if node.text == "std.strings" {
+            registerStdStringsAliasFns(env, alias)
+        } else if node.text == "std.testing" {
+            // `use std.testing` (examples use this without an explicit alias,
+            // so the alias defaults to "testing" via useDeclAliasName).
+            registerStdTestingAliasFns(env, alias)
+        } else if node.text == "std.fs" {
+            registerStdFsAliasFns(env, alias)
+        } else if node.text == "std.debug" {
+            registerStdDebugAliasFns(env, alias)
+        } else if node.text == "std.thread" {
+            registerStdThreadAliasFns(env, alias)
+        } else if node.text == "std.io" {
+            registerStdIoAliasFns(env, alias)
+        } else {
+            let _ = env
+        }
     }
 }
 
@@ -233,20 +244,22 @@ fn collectUseDeclTypeBody(cx: ElabCx, declIdx: Int, node: AstNode, alias: String
 fn registerUseDeclQualifiedTypeAlias(cx: ElabCx, alias: String, name: String, generics: List<String>) {
     let qualified = useDeclQualifiedTypeName(alias, name)
     if qualified == "" || qualified == name {
-        return
+        let _ = qualified
+    } else {
+        checkRegisterAlias(cx.env, CheckAliasSig {
+            name: qualified,
+            ty: tyNamed(cx.env.tys, name, genericListToTyArgs(cx, generics)),
+            generics,
+        })
     }
-    checkRegisterAlias(cx.env, CheckAliasSig {
-        name: qualified,
-        ty: tyNamed(cx.env.tys, name, genericListToTyArgs(cx, generics)),
-        generics,
-    })
 }
 
 fn useDeclQualifiedTypeName(alias: String, name: String) -> String {
     if alias == "" || name == "" {
-        return ""
+        ""
+    } else {
+        "{alias}.{name}"
     }
-    "{alias}.{name}"
 }
 
 /// registerStdStringsAliasFns registers the hot subset of std.strings
@@ -496,11 +509,16 @@ fn useDeclAliasName(cx: ElabCx, node: AstNode) -> String {
         if aliasIdx >= 0 {
             let aliasNode = astArenaNodeAt(cx.ast.arena, aliasIdx)
             if aliasNode.kind == AstNIdent && aliasNode.text != "" {
-                return aliasNode.text
+                aliasNode.text
+            } else {
+                useDeclLastSegment(node.text)
             }
+        } else {
+            useDeclLastSegment(node.text)
         }
+    } else {
+        useDeclLastSegment(node.text)
     }
-    useDeclLastSegment(node.text)
 }
 
 /// registerStdFsAliasFns — hot subset of std.fs.
@@ -614,43 +632,44 @@ fn registerStdIoAliasFns(env: CheckEnv, alias: String) {
 /// bare `core` → "core"; empty → empty.
 fn useDeclLastSegment(path: String) -> String {
     if path == "" {
-        return ""
+        ""
+    } else {
+        // Walk the bytes manually so this helper stays free of the
+        // `std.strings` import tax (check.osty would need one otherwise).
+        let afterSlash = useDeclTailAfter(path, "/")
+        useDeclTailAfter(afterSlash, ".")
     }
-    // Walk the bytes manually so this helper stays free of the
-    // `std.strings` import tax (check.osty would need one otherwise).
-    let afterSlash = useDeclTailAfter(path, "/")
-    useDeclTailAfter(afterSlash, ".")
 }
 
 fn useDeclTailAfter(s: String, sep: String) -> String {
     let mut out = s
-    let mut i = 0
-    for unit in strings.split(s, "") {
-        let _ = unit
-        i = i + 1
-    }
     // Scan from end to find last occurrence of `sep` (single char).
     let mut idx = -1
     let mut j = 0
     for unit in strings.split(s, "") {
         if unit == sep {
             idx = j
+        } else {
+            let _ = unit
         }
         j = j + 1
     }
     if idx < 0 {
-        return out
-    }
-    // Collect units after idx.
-    out = ""
-    let mut k = 0
-    for unit in strings.split(s, "") {
-        if k > idx {
-            out = "{out}{unit}"
+        out
+    } else {
+        // Collect units after idx.
+        out = ""
+        let mut k = 0
+        for unit in strings.split(s, "") {
+            if k > idx {
+                out = "{out}{unit}"
+            } else {
+                let _ = unit
+            }
+            k = k + 1
         }
-        k = k + 1
+        out
     }
-    out
 }
 
 
@@ -673,21 +692,21 @@ fn collectFnDecl(
     for paramIdx in node.children {
         let paramNode = astArenaNodeAt(cx.ast.arena, paramIdx)
         if paramNode.kind != AstNParam {
-            continue
+            let _ = paramIdx
+        } else if paramNode.text == "self" {
+            let _ = paramNode
+        } else {
+            // Prefix default-carrying params with "?" so the arity check
+            // (see paramDefaultCount in elab.osty) can count trailing
+            // defaults without threading a parallel List<Bool> through
+            // every CheckFnSig constructor.
+            let hasDefault = paramNode.left >= 0
+            let rawName = paramNode.text
+            let storedName = if hasDefault { "?" + rawName } else { rawName }
+            paramNames.push(storedName)
+            let declared = astTypeToTyInCollect(cx, paramNode.right)
+            paramTys.push(if declared >= 0 { declared } else { tErr(cx.env.tys) })
         }
-        if paramNode.text == "self" {
-            continue
-        }
-        // Prefix default-carrying params with "?" so the arity check
-        // (see paramDefaultCount in elab.osty) can count trailing
-        // defaults without threading a parallel List<Bool> through
-        // every CheckFnSig constructor.
-        let hasDefault = paramNode.left >= 0
-        let rawName = paramNode.text
-        let storedName = if hasDefault { "?" + rawName } else { rawName }
-        paramNames.push(storedName)
-        let declared = astTypeToTyInCollect(cx, paramNode.right)
-        paramTys.push(if declared >= 0 { declared } else { tErr(cx.env.tys) })
     }
 
     let retTy = astTypeToTyInCollect(cx, node.left)
@@ -712,6 +731,8 @@ fn collectFnDecl(
     checkRegisterFn(cx.env, sig)
     if node.right >= 0 {
         checkMarkFnHasBody(cx.env, name, owner)
+    } else {
+        let _ = node
     }
 
     // Record a symbol for the Go-bridge summary.
@@ -777,6 +798,8 @@ fn collectEnumDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
                     }
                     if ty >= 0 {
                         fieldTys.push(ty)
+                    } else {
+                        let _ = fIdx
                     }
                 }
                 checkRegisterVariant(cx.env, CheckVariantSig {
@@ -809,6 +832,8 @@ fn collectInterfaceDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
             let ifaceTy = astTypeToTyInCollect(cx, memberIdx)
             if ifaceTy >= 0 {
                 checkRegisterInterfaceExtends(cx.env, CheckInterfaceExt { owner: name, ifaceTy })
+            } else {
+                let _ = memberIdx
             }
         }
     }
@@ -895,6 +920,8 @@ fn elaborateFnBody(cx: ElabCx, node: AstNode, owner: String) {
     if node.right >= 0 {
         // Fn body is stored in node.right as a block (AstNBlock).
         let _ = elabCheck(cx, node.right, sig.retTy)
+    } else {
+        let _ = sig
     }
 
     cx.env.returnTy = prevReturn
@@ -909,6 +936,8 @@ fn elaborateStructMethods(cx: ElabCx, node: AstNode) {
         let member = astArenaNodeAt(cx.ast.arena, memberIdx)
         if member.kind == AstNFnDecl {
             elaborateFnBody(cx, member, owner)
+        } else {
+            let _ = memberIdx
         }
     }
 }
@@ -919,6 +948,8 @@ fn elaborateEnumMethods(cx: ElabCx, node: AstNode) {
         let member = astArenaNodeAt(cx.ast.arena, memberIdx)
         if member.kind == AstNFnDecl {
             elaborateFnBody(cx, member, owner)
+        } else {
+            let _ = memberIdx
         }
     }
 }

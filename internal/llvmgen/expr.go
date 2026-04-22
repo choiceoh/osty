@@ -3470,6 +3470,26 @@ func (g *generator) emitStringMethodCall(call *ast.CallExpr) (value, bool, error
 		v.gcManaged = true
 		v.sourceType = &ast.NamedType{Path: []string{"String"}}
 		return v, true, nil
+	case "substring", "slice":
+		if len(call.Args) != 2 {
+			return value{}, true, unsupportedf("call", "String.%s requires two positional arguments", field.Name)
+		}
+		start, err := g.emitStdStringsIntArg(call.Args[0], field.Name, 0)
+		if err != nil {
+			return value{}, true, err
+		}
+		end, err := g.emitStdStringsIntArg(call.Args[1], field.Name, 1)
+		if err != nil {
+			return value{}, true, err
+		}
+		g.declareRuntimeSymbol(llvmStringRuntimeSliceSymbol(), "ptr", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "i64"}})
+		emitter := g.toOstyEmitter()
+		out := llvmStringRuntimeSlice(emitter, toOstyValue(base), toOstyValue(start), toOstyValue(end))
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = true
+		v.sourceType = &ast.NamedType{Path: []string{"String"}}
+		return v, true, nil
 	case "toUpper":
 		if len(call.Args) != 0 {
 			return value{}, true, unsupported("call", "String.toUpper requires no arguments")

@@ -80,3 +80,31 @@ fn main() {
 		}
 	}
 }
+
+func TestStringSubstringMethodCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn stripPrefix(text: String) -> String {
+    if text.startsWith("0x") {
+        return text.substring(2, text.len())
+    }
+    text
+}
+
+fn main() {
+    println(stripPrefix("0xff"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_substring_method.osty"})
+	if err != nil {
+		t.Fatalf("substring method errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_Slice",
+		"declare ptr @osty_rt_strings_Slice(ptr, i64, i64)",
+		"call ptr @osty_rt_strings_Slice",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
