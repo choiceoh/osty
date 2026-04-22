@@ -1469,7 +1469,7 @@ fn elabInferStaticMethodCall(
 
         let inst = instBegin(cx, sig.generics, "{ownerName}.{sig.name}")
         let typeSig = checkLookupType(cx.env, ownerName)
-        let ownerArgs = tyArgsAt(cx.env.tys, recvResolved)
+        let ownerArgs = elabOwnerArgsForReceiver(cx.env.tys, ownerName, recvResolved)
         instSeedOwnerArgs(cx, inst, typeSig.generics, ownerArgs)
         instSeedExpectedRet(cx, inst, sig.retTy, expected)
         instSeedPositionalArgs(cx, inst, explicitArgs)
@@ -1576,6 +1576,56 @@ fn elabOwnerNameForReceiver(tys: TyArena, ty: Int) -> String {
     ""
 }
 
+/// elabOwnerArgsForReceiver extracts the generic args that should seed
+/// method inference for a receiver. Named owners use their direct type
+/// args; `T?` dispatches under owner `Option`, so its owner args are
+/// `[T]` instead of the empty `tyArgsAt` view of TkOptional.
+fn elabOwnerArgsForReceiver(tys: TyArena, ownerName: String, ty: Int) -> List<Int> {
+    if ownerName == "Option" && tyKindAt(tys, ty) == TkOptional {
+        return [tyInnerAt(tys, ty)]
+    }
+    tyArgsAt(tys, ty)
+}
+
+/// elabBuiltinErrorMethodSig mirrors the synthetic `Error` method
+/// surface registered in check_env. `downcast` already has a dedicated
+/// path; this fallback keeps the non-generic helpers reachable through
+/// ordinary method-call elaboration.
+fn elabBuiltinErrorMethodSig(env: CheckEnv, name: String) -> CheckFnSig {
+    let tys = env.tys
+    let tError = tyNamed(tys, "Error", [])
+    let tString_ = tString(tys)
+    if name == "message" {
+        return CheckFnSig {
+            name: "message", owner: "Error", receiverTy: tError, retTy: tString_,
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        }
+    }
+    if name == "source" {
+        return CheckFnSig {
+            name: "source", owner: "Error", receiverTy: tError, retTy: tyOptional(tys, tError),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        }
+    }
+    if name == "wrap" {
+        return CheckFnSig {
+            name: "wrap", owner: "Error", receiverTy: tError, retTy: tError,
+            paramNames: ["context"], paramTys: [tString_],
+            generics: [], genericBounds: [],
+        }
+    }
+    if name == "chain" {
+        return CheckFnSig {
+            name: "chain", owner: "Error", receiverTy: tError, retTy: tyNamed(tys, "List", [tError]),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        }
+    }
+    emptyCheckFnSig()
+}
+
 /// elabInferMethodCall handles `recv.method(args)` and the turbofish
 /// form `recv.method::<T>(args)`. Relies on `checkLookupMethod` with
 /// the receiver's head type. `explicitArgs` carries any turbofish type
@@ -1628,7 +1678,14 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     }
     let ownerName = elabOwnerNameForReceiver(cx.env.tys, recvResolved)
     let methodName = fieldNode.text
-    let sig = checkLookupMethod(cx.env, ownerName, methodName)
+    let lookedUpSig = checkLookupMethod(cx.env, ownerName, methodName)
+    let sig = if lookedUpSig.name != "" {
+        lookedUpSig
+    } else if ownerName == "Error" {
+        elabBuiltinErrorMethodSig(cx.env, methodName)
+    } else {
+        emptyCheckFnSig()
+    }
     if sig.name == "" {
         let hint = diagDidYouMean(
             checkSuggestSimilar(checkMethodNamesOf(cx.env, ownerName), methodName),
@@ -1664,7 +1721,7 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
 
     // Bind the receiver type params against the receiver's concrete args.
     let typeSig = checkLookupType(cx.env, ownerName)
-    let ownerArgs = tyArgsAt(cx.env.tys, recvResolved)
+    let ownerArgs = elabOwnerArgsForReceiver(cx.env.tys, ownerName, recvResolved)
     instSeedOwnerArgs(cx, inst, typeSig.generics, ownerArgs)
     instSeedExpectedRet(cx, inst, sig.retTy, expected)
 

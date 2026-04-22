@@ -329,3 +329,151 @@ fn main() {
 		t.Fatalf("binding type for name = %q, want String (all=%v)", got["name"], got)
 	}
 }
+
+func TestCheckSourceStructuredAcceptsStdErrorOptionResultMethods(t *testing.T) {
+	src := []byte(`use std.error
+
+enum FsError {
+    NotFound(String)
+
+    pub fn message(self) -> String {
+        match self {
+            NotFound(path) -> "missing {path}",
+        }
+    }
+
+    pub fn source(self) -> Error? {
+        None
+    }
+}
+
+fn main() {
+    let base: Error = FsError.NotFound("settings.osty")
+    let msg: String = base.message()
+    let parent: Error? = base.source()
+    let wrapped: Error = base.wrap("load")
+    let chain: List<Error> = wrapped.chain()
+
+    let maybe: Int? = Some(1)
+    let some: Bool = maybe.isSomeAnd(|v| v > 0)
+    let noneOr: Bool = maybe.isNoneOr(|v| v > 0)
+    let contains: Bool = maybe.contains(1)
+    let expected: Int = maybe.expect("need value")
+    let fallback: Int = maybe.unwrapOrElse(|| 0)
+    let zipped: (Int, String)? = maybe.zip(Some("ok"))
+    let mapped: String? = maybe.map(|v| "{v}")
+    let mappedOr: String = maybe.mapOr("zero", |v| "{v}")
+    let okOr: Result<Int, Error> = maybe.okOr("missing")
+    let okOrElse: Result<Int, FsError> = maybe.okOrElse(|| FsError.NotFound("fallback"))
+
+    let good: Result<Int, FsError> = Ok(1)
+    let okAnd: Bool = good.isOkAnd(|v| v > 0)
+    let containsOk: Bool = good.contains(1)
+    let inspected: Result<Int, FsError> = good.inspect(|v| println("{v}"))
+    let mappedRes: Result<String, FsError> = good.map(|v| "{v}")
+    let mappedOrElse: String = good.mapOrElse(|e| e.message(), |v| "{v}")
+
+    let bad: Result<Int, FsError> = Err(FsError.NotFound("broken"))
+    let errAnd: Bool = bad.isErrAnd(|e| e.message().len() > 0)
+    let recovered: Int = bad.unwrapOrElse(|e| e.message().len())
+    let promoted: Result<Int, Error> = bad.mapErr(|e| wrapped)
+    let chained: Result<Int, Error> = promoted.inspectErr(|e| println(e.message()))
+    let alt: Result<Int, Error> = promoted.orElse(|e| Ok(e.message().len()))
+
+    let textErr: Result<Int, String> = Err("bad")
+    let containsErr: Bool = textErr.containsErr("bad")
+    let expectErr: String = textErr.expectErr("want err")
+
+    let _ = (msg, parent, chain, some, noneOr, contains, expected, fallback, zipped, mapped, mappedOr, okOr, okOrElse)
+    let _ = (okAnd, containsOk, inspected, mappedRes, mappedOrElse, errAnd, recovered, chained, alt, containsErr, expectErr)
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+
+	got := map[string]string{}
+	for _, binding := range checked.Bindings {
+		got[binding.Name] = binding.TypeName
+	}
+	want := map[string]string{
+		"chain":        "List<Error>",
+		"okOrElse":     "Result<Int, FsError>",
+		"mappedOr":     "String",
+		"mappedRes":    "Result<String, FsError>",
+		"promoted":     "Result<Int, Error>",
+		"containsErr":  "Bool",
+		"expectErr":    "String",
+		"mappedOrElse": "String",
+	}
+	for name, wantType := range want {
+		if got[name] != wantType {
+			t.Fatalf("binding type for %s = %q, want %q (all=%v)", name, got[name], wantType, got)
+		}
+	}
+}
+
+func TestCheckSourceStructuredAcceptsStdListMethods(t *testing.T) {
+	src := []byte(`fn main() {
+    let words: List<String> = ["bb", "a", "ccc"]
+    let idx: Int? = words.indexOf("a")
+    let found: String? = words.find(|s| s.len() > 1)
+    let sortedWords: List<String> = words.sortedBy(|s| s.len())
+    let reversed: List<String> = words.reversed()
+    let taken: List<String> = words.take(2)
+    let dropped: List<String> = words.drop(1)
+    let appended: List<String> = words.appended("tail")
+    let combined: List<String> = words.concat(["tail"])
+    let pairs: List<(String, Int)> = words.zip([1, 2, 3])
+    let enumerated: List<(Int, String)> = words.enumerate()
+    let grouped: Map<Int, List<String>> = words.groupBy(|s| s.len())
+
+    let nums: List<Int> = [3, 1, 2, 4]
+    let chunks: List<List<Int>> = nums.chunked(2)
+    let windows: List<List<Int>> = nums.windowed(2, 1)
+    let partitioned: (List<Int>, List<Int>) = nums.partition(|n| n % 2 == 0)
+    let reduced: Int? = nums.reduce(|a, b| a + b)
+    let scanned: List<Int> = nums.scan(0, |a, b| a + b)
+    let flattened: List<Int> = nums.flatMap(|n| [n, n * 10])
+    let triples: List<(Int, String, Bool)> = nums.zip3(["a", "b", "c"], [true, false, true])
+
+    let mut mutNums: List<Int> = [3, 1, 2]
+    let removed: Int = mutNums.removeAt(1)
+    mutNums.sort()
+
+    let _ = (idx, found, sortedWords, reversed, taken, dropped, appended, combined, pairs, enumerated, grouped)
+    let _ = (chunks, windows, partitioned, reduced, scanned, flattened, triples, removed, mutNums)
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+
+	got := map[string]string{}
+	for _, binding := range checked.Bindings {
+		got[binding.Name] = binding.TypeName
+	}
+	want := map[string]string{
+		"idx":         "Int?",
+		"found":       "String?",
+		"sortedWords": "List<String>",
+		"pairs":       "List<(String, Int)>",
+		"grouped":     "Map<Int, List<String>>",
+		"windows":     "List<List<Int>>",
+		"partitioned": "(List<Int>, List<Int>)",
+		"reduced":     "Int?",
+		"scanned":     "List<Int>",
+		"flattened":   "List<Int>",
+		"triples":     "List<(Int, String, Bool)>",
+		"removed":     "Int",
+	}
+	for name, wantType := range want {
+		if got[name] != wantType {
+			t.Fatalf("binding type for %s = %q, want %q (all=%v)", name, got[name], wantType, got)
+		}
+	}
+}
