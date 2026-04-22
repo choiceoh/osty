@@ -10,27 +10,21 @@ the host plumbing.
 
 ```
 benchmarks/osty-vs-go/
-├── arith/
-│   ├── go/      # package arithbench — BenchmarkAdd
-│   └── osty/    # benchAdd
-├── word_freq/
-│   ├── go/      # package wordfreqbench — BenchmarkCorpusIndex
-│   └── osty/    # benchCorpusIndex
-├── loop_sum/
-│   ├── go/      # package loopsumbench — BenchmarkSumTo100
-│   └── osty/    # benchSumTo100
-├── record_pipeline/
-│   ├── go/      # package recordpipelinebench — BenchmarkRecordPipeline
-│   └── osty/    # benchRecordPipeline
-├── lane_route/
-│   ├── go/      # package laneroutebench — BenchmarkLaneRoute
-│   └── osty/    # benchLaneRoute
+├── arith/           # tiny scalar arithmetic / call overhead
+├── baseline_empty/  # harness-overhead anchor — subtract via --subtract-baseline
+├── fib/             # recursive call-heavy control flow
+├── hash_lookup/     # Map<Int,Int> insert + lookup (real dictionary workload)
+├── lane_route/      # branchy 1D dynamic programming / route relaxation
+├── loop_sum/        # tight scalar loop (vectorization regressions)
+├── matmul/          # 64×64 integer matmul (nested-loop numeric kernel)
+├── quicksort/       # iterative in-place Lomuto quicksort over List<Int>
+├── record_pipeline/ # struct-heavy filter + group + sorted-key aggregate
+├── simd_stats/      # long integer-array passes (vector-friendly hot loops)
 ├── simd_stats/
-│   ├── go/      # package simdstatsbench — BenchmarkSimdStats
-│   └── osty/    # benchSimdStats
-└── fib/
-    ├── go/      # package fibbench — BenchmarkFib15
-    └── osty/    # benchFib15
+├── word_freq/       # collections + sort + string-heavy aggregation
+└── <each>/
+    ├── go/          # package <name>bench — BenchmarkFoo
+    └── osty/        # benchFoo
 ```
 
 One bench per workload, named the same on both sides: Go's
@@ -38,15 +32,25 @@ One bench per workload, named the same on both sides: Go's
 a new top-level directory that follows the same layout — the runner
 discovers it automatically.
 
-Current workload mix:
+The mix spans three tiers so a composite score can't be gamed by one
+style:
 
-- `arith`: tiny scalar arithmetic / call overhead.
-- `fib`: recursive call-heavy control flow.
-- `loop_sum`: tight scalar loop (good for loop + vectorization regressions).
-- `word_freq`: collections + sort + string-heavy single-threaded aggregation.
-- `record_pipeline`: struct-heavy filtering + grouping + sorted-key aggregation.
-- `lane_route`: branchy one-dimensional dynamic programming / route relaxation.
-- `simd_stats`: long integer-array passes that stress vector-friendly hot loops.
+- **Microbenches** (`arith`, `fib`, `loop_sum`): scalar ops, call
+  overhead, branch prediction.
+- **Numeric kernels** (`matmul`, `simd_stats`, `lane_route`): tight
+  loops, array indexing, vectorizer-friendly patterns.
+- **System-level** (`word_freq`, `record_pipeline`, `hash_lookup`,
+  `quicksort`): collections, structs, sort, hash. These dominate real
+  application time and are the pairs most representative of deployed
+  Osty code.
+
+### DCE defense — always use `#[inline(never)]`
+
+Each Osty bench body carries `#[inline(never)]` to mirror the Go side's
+`//go:noinline`. Without it, LLVM inlines the whole call into the
+benchmark closure and `arith.Add` ends up measuring nothing. When you
+add a new pair, the top-level `pub fn` called from `testing.benchmark`
+**must** have `#[inline(never)]`.
 
 ## Running
 
@@ -70,8 +74,19 @@ Useful flags:
   In `--loop` / `--autoresearch`, unchanged Go workloads are cached
   per session, so long pairs such as `record_pipeline` and
   `simd_stats` don't keep re-running the same Go baseline every tick.
+- `--osty-count <N>` — mirror of `--go-count` for Osty. Default `1`
+  (fastest; single-sample runs report `—` in the CoV column). Every
+  Osty sweep triggers a full LLVM compile, so raising this trades
+  wall time for a stddev/CoV estimate per bench; `3` is a good
+  balance when you're deciding whether a small delta is real.
 - `--go-cpu <list>` — forwarded to `go test -cpu`. Default `1`, which
   reduces scheduler noise for very short Go benches.
+- `--subtract-baseline` — if the `baseline_empty` pair ran, subtract
+  its Osty ns/op from every other pair's displayed `osty ns/op` as an
+  estimate of the bench harness's own per-iteration overhead (clock
+  sampling + closure invocation + GC odometer read). Display-only;
+  raw values are still persisted to history for apples-to-apples
+  comparisons across runs.
 - `--pairs-dir <path>` — defaults to `benchmarks/osty-vs-go`.
 - `--history <N>` — skip running and render the last N recorded runs
   as an ASCII trend graph (see below).
@@ -83,23 +98,35 @@ Useful flags:
   compiler in a tight edit → measure → decide loop.
   The session reuses Go-side results until the pair's `go/` inputs or
   module files change.
-- `--noise <frac>` — band under which a vs-best delta is classified
-  as "within noise" rather than a regression. Default `0.02` (±2%).
+- `--noise <frac>` — static floor for the vs-best noise band. Default
+  `0.02` (±2%). The effective band is
+  `max(--noise, median per-bench CoV)` on runs that collected CoV
+  (i.e. `--osty-count >= 2`) — a noisy measurement widens its own
+  tolerance instead of crying wolf on every run.
 
-Sample output of one run:
+Sample output of one run (with `--osty-count 3 --subtract-baseline`):
 
 ```
-# osty-vs-go run #3 (baseline) — benchtime=500ms, pairs=4, go-count=3, go-cpu=1
+# osty-vs-go run #17 (baseline) — benchtime=500ms, pairs=10, go-count=3, osty-count=3, go-cpu=1
 
-pair      bench     go ns/op  osty ns/op  ns osty/go  go B/op  osty B/op  go allocs/op
---------  --------  --------  ----------  ----------  -------  ---------  ------------
-arith     Add       1.20      161.0       134.17x     0        0          0
-fib       Fib15     13002.00  38195.0     2.94x       0        0          0
-loop_sum  SumTo100  205.50    2001.0      9.74x       0        0          0
-word_freq CorpusIndex   4012.00  18944.0  4.72x      4096     3584       12
+pair             bench         go ns/op  go ±CV  osty ns/op  osty ±CV  ns osty/go  go B/op  osty B/op  go allocs/op
+---------------  ------------  --------  ------  ----------  --------  ----------  -------  ---------  ------------
+arith            Add              1.20   ±3.1%    143.0      ±2.4%     119.17x     0        0          0
+baseline_empty   Empty           11.70   ±1.8%     18.0      ±1.1%     1.54x       0        0          0
+fib              Fib15        13002.00   ±0.9%  38195.0      ±1.2%     2.94x       0        0          0
+hash_lookup      HashLookup  123456.00   ±2.1% 420120.0      ±3.0%     3.40x       73888    —          9
+matmul           Matmul      2581122.00  ±0.7% 8391902.0     ±1.5%     3.25x       32768    —          1
+quicksort        Quicksort   110052.00   ±1.4%  390201.0     ±2.0%     3.55x       16384    —          1
+…
 
-geomean ns osty/go: 7.17x  (over 4 benches)
+geomean ns osty/go: 6.92x  (over 9 benches)
+baseline subtracted: 18.0ns per Osty iteration (from `baseline_empty` pair)
 ```
+
+`baseline_empty` itself is excluded from the geomean — it exists to
+anchor harness overhead, not to be part of the comparison. The ±CV
+columns are empty when `--osty-count`/`--go-count` = 1 (no sample to
+compute stddev from).
 
 ## Metrics
 
@@ -107,8 +134,13 @@ Per bench the tool collects:
 
 - **ns/op** (both sides). Go's is the median `testing.B` time-per-op
   across `--go-count` independent sweeps after auto-tuned `b.N`.
-  Osty's is the `avg=…ns` field from
-  `testing.benchmark(N, …)` with per-iteration clock sampling.
+  Osty's is the median of the `avg=…ns` fields across
+  `--osty-count` sweeps of `testing.benchmark(N, …)` (with
+  per-iteration clock sampling).
+- **±CV** (both sides). Coefficient of variation
+  (`sample stddev / mean`) across the multi-sweep values — a
+  unitless "how jittery is this number" estimate. Reported as
+  `±X.Y%`. Shows `—` when there's only one sample.
 - **B/op** (both sides). Go's comes from `-benchmem`. Osty's comes
   from a runtime-side delta on `osty_gc_allocated_bytes_total`
   sampled before and after the timed region, divided by the final
@@ -116,8 +148,15 @@ Per bench the tool collects:
 - **allocs/op** (Go only for now — Osty's GC doesn't expose a cheap
   allocation-count accessor yet, so the Osty column is left blank.)
 - **ns osty/go ratio** per bench and a **geometric mean** across all
-  benches that have both sides. Geomean is less sensitive to single
-  microbenches blowing up than arithmetic mean.
+  benches that have both sides. `baseline_empty` is excluded.
+  Geomean is less sensitive to single microbenches blowing up than
+  arithmetic mean.
+- **Machine info** (captured once per run into the history record):
+  GOOS, GOARCH, `runtime.NumCPU()`, CPU brand string (via
+  `sysctl machdep.cpu.brand_string` on macOS,
+  `/proc/cpuinfo` on linux). Never compared against for verdicts —
+  audit trail only, so a surprising regression can be attributed to
+  hardware drift instead of a code change.
 
 ## Run history + trend graph
 
@@ -345,23 +384,29 @@ Other things the tool does *not* control for:
   emits a fresh binary per bench and clang links it. Only the inner
   timing is reported, but if you see a 3s wall-clock on a 500ms bench,
   most of that is compile + link.
-- DCE defenses: Go's `//go:noinline` marks keep the measured function
-  honest. Osty has no equivalent attribute yet, so `let _ = add(1, 2)`
-  could in principle be elided by a future optimiser pass; it isn't
-  today.
+- DCE defenses: `//go:noinline` / `#[inline(never)]` keep the measured
+  function honest. Every Go bench body in this directory uses
+  `//go:noinline`; every Osty body uses `#[inline(never)]` to match.
+  Without it, LLVM inlines the body into the benchmark closure and
+  the pair measures nothing. See the "DCE defense" note at the top.
 - Thermal state, turbo boost, background apps, and laptop power
   profiles affect both sides. Run with `--benchtime 2s` or longer to
-  reduce noise when comparing branches.
+  reduce noise when comparing branches; `--osty-count 3` on top
+  surfaces the per-run jitter as ±CV instead of hiding it.
 
 ## Adding a new pair
 
 1. `mkdir -p benchmarks/osty-vs-go/<name>/{go,osty}`
 2. In `go/`, write a Go file + `_test.go` with one or more
-   `BenchmarkFoo(b *testing.B)` functions. Pick a package name unique
-   across the tree (convention: `<name>bench`).
+   `BenchmarkFoo(b *testing.B)` functions. Mark the measured function
+   `//go:noinline`. Route the result through a package-level sink
+   variable so the compiler can't elide the call. Pick a package name
+   unique across the tree (convention: `<name>bench`).
 3. In `osty/`, write the matching `.osty` file + `_test.osty` with
    `fn benchFoo()` bodies that call `testing.benchmark(N, || {...})`.
-   The Osty function name's `bench` prefix is stripped for the match,
-   so `benchFoo` ↔ `BenchmarkFoo`.
+   The top-level `pub fn` called from the closure **must** carry
+   `#[inline(never)]` — without it, LLVM inlines the body and the
+   pair measures nothing. The Osty function name's `bench` prefix is
+   stripped for the match, so `benchFoo` ↔ `BenchmarkFoo`.
 4. Re-run `go run ./cmd/osty-vs-go` — the new pair shows up without
    any registration.

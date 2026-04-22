@@ -26,6 +26,7 @@ fn buildPipelineRecords() -> List<Record> {
     rows
 }
 
+#[inline(never)]
 pub fn analyzeRecordPipeline(rows: List<Record>) -> Int {
     let mut totals: Map<String, Int> = {:}
     for row in rows {

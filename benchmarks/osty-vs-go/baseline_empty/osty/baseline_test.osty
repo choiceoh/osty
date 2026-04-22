@@ -1,0 +1,8 @@
+use std.testing
+
+fn benchEmpty() {
+    testing.benchmark(10000, || {
+        let _ = noop()
+        Ok(())
+    })
+}

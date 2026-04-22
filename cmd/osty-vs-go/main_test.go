@@ -322,3 +322,180 @@ func TestDecideKeepStrictlyWorseIsReverted(t *testing.T) {
 		t.Fatal("regression must revert")
 	}
 }
+
+// ----- new harness-reliability primitives -----
+
+func TestCoefficientOfVariationBasic(t *testing.T) {
+	// stddev(100, 110, 90) = 10 (sample, n-1); mean = 100; CV = 0.10.
+	got := coefficientOfVariation([]float64{100, 110, 90})
+	if math.Abs(got-0.10) > 1e-9 {
+		t.Fatalf("coefficientOfVariation = %v, want 0.10", got)
+	}
+}
+
+func TestCoefficientOfVariationNaNBelowTwoSamples(t *testing.T) {
+	if got := coefficientOfVariation([]float64{42}); !math.IsNaN(got) {
+		t.Fatalf("single sample CV = %v, want NaN", got)
+	}
+	if got := coefficientOfVariation(nil); !math.IsNaN(got) {
+		t.Fatalf("empty CV = %v, want NaN", got)
+	}
+}
+
+func TestCoefficientOfVariationNaNOnZeroMean(t *testing.T) {
+	// Zeroed bench body — CV ratio is undefined; don't pretend otherwise.
+	if got := coefficientOfVariation([]float64{0, 0, 0}); !math.IsNaN(got) {
+		t.Fatalf("zero-mean CV = %v, want NaN", got)
+	}
+}
+
+func TestAggregateOstyBenchRunsMedianAndCV(t *testing.T) {
+	runs := [][]benchResult{
+		{mkOstyRow("matmul", "Matmul", 1000, 1024)},
+		{mkOstyRow("matmul", "Matmul", 1100, 1024)},
+		{mkOstyRow("matmul", "Matmul", 900, 1024)},
+	}
+	rows := aggregateOstyBenchRuns("matmul", runs)
+	if len(rows) != 1 {
+		t.Fatalf("aggregateOstyBenchRuns len = %d, want 1", len(rows))
+	}
+	if rows[0].OsNs != 1000 {
+		t.Fatalf("median ns = %v, want 1000", rows[0].OsNs)
+	}
+	if math.Abs(rows[0].OsNsCV-0.10) > 1e-9 {
+		t.Fatalf("CV = %v, want 0.10", rows[0].OsNsCV)
+	}
+	// bytes/op should also median-aggregate.
+	if rows[0].OsBytes != 1024 {
+		t.Fatalf("median bytes = %v, want 1024", rows[0].OsBytes)
+	}
+}
+
+func TestAggregateOstyBenchRunsSingleSampleCVIsNaN(t *testing.T) {
+	runs := [][]benchResult{{mkOstyRow("p", "B", 500, 0)}}
+	rows := aggregateOstyBenchRuns("p", runs)
+	if len(rows) != 1 {
+		t.Fatalf("aggregateOstyBenchRuns len = %d, want 1", len(rows))
+	}
+	if !math.IsNaN(rows[0].OsNsCV) {
+		t.Fatalf("single-sample CV = %v, want NaN", rows[0].OsNsCV)
+	}
+	if rows[0].OsNs != 500 {
+		t.Fatalf("ns = %v, want 500", rows[0].OsNs)
+	}
+}
+
+func mkOstyRow(pair, name string, osNs, osBytes float64) benchResult {
+	return benchResult{
+		Pair:     pair,
+		Name:     name,
+		GoNs:     math.NaN(),
+		GoNsCV:   math.NaN(),
+		GoBytes:  math.NaN(),
+		GoAllocs: math.NaN(),
+		OsNs:     osNs,
+		OsNsCV:   math.NaN(),
+		OsBytes:  osBytes,
+		OsAllocs: math.NaN(),
+	}
+}
+
+func TestFindBaselineNsPicksFromBaselinePair(t *testing.T) {
+	rows := []benchResult{
+		mkOstyRow("arith", "Add", 100, 0),
+		mkOstyRow(baselinePairName, "Empty", 55, 0),
+		mkOstyRow("fib", "Fib15", 9000, 0),
+	}
+	if got := findBaselineNs(rows); got != 55 {
+		t.Fatalf("findBaselineNs = %v, want 55", got)
+	}
+}
+
+func TestFindBaselineNsReturnsZeroWhenAbsent(t *testing.T) {
+	rows := []benchResult{mkOstyRow("arith", "Add", 100, 0)}
+	if got := findBaselineNs(rows); got != 0 {
+		t.Fatalf("findBaselineNs = %v, want 0", got)
+	}
+}
+
+func TestEffectiveNoiseFallsBackToUserWhenNoCV(t *testing.T) {
+	rec := mkRun(time.Now(), 1.5, mkResult("p", "B", 1, 2))
+	band, src := effectiveNoise(0.02, rec)
+	if band != 0.02 || src != "--noise" {
+		t.Fatalf("effectiveNoise with no CV = (%v, %q), want (0.02, --noise)", band, src)
+	}
+}
+
+func TestEffectiveNoiseTakesMedianCVWhenWider(t *testing.T) {
+	// Two benches with 5% and 7% CV — median is 6%, wider than 2% --noise.
+	rows := []benchResult{
+		{Pair: "p", Name: "A", OsNsCV: 0.05, GoNs: math.NaN(), GoNsCV: math.NaN(), GoBytes: math.NaN(), GoAllocs: math.NaN(), OsNs: math.NaN(), OsBytes: math.NaN(), OsAllocs: math.NaN()},
+		{Pair: "p", Name: "B", OsNsCV: 0.07, GoNs: math.NaN(), GoNsCV: math.NaN(), GoBytes: math.NaN(), GoAllocs: math.NaN(), OsNs: math.NaN(), OsBytes: math.NaN(), OsAllocs: math.NaN()},
+	}
+	rec := mkRun(time.Now(), 1.0, rows...)
+	band, src := effectiveNoise(0.02, rec)
+	if math.Abs(band-0.06) > 1e-9 || src != "measured CoV" {
+		t.Fatalf("effectiveNoise = (%v, %q), want (0.06, measured CoV)", band, src)
+	}
+}
+
+func TestCaptureMachineInfoHasGOOSAndGOARCH(t *testing.T) {
+	info := captureMachineInfo()
+	if info.GOOS == "" || info.GOARCH == "" {
+		t.Fatalf("captureMachineInfo = %+v, want non-empty GOOS/GOARCH", info)
+	}
+	if info.NumCPU <= 0 {
+		t.Fatalf("captureMachineInfo NumCPU = %d, want >0", info.NumCPU)
+	}
+}
+
+func TestRunRecordJSONRoundTripPreservesMachineAndBaseline(t *testing.T) {
+	rec := runRecord{
+		Timestamp:  time.Date(2026, 4, 22, 0, 0, 0, 0, time.UTC),
+		BenchTime:  "500ms",
+		Score:      1.5,
+		BaselineNs: 42.5,
+		Machine: machineInfo{
+			GOOS:     "darwin",
+			GOARCH:   "arm64",
+			NumCPU:   10,
+			CPUModel: "Apple M3 Max",
+		},
+		Results: []benchResult{mkResult("p", "B", 1, 2)},
+	}
+	data, err := rec.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back runRecord
+	if err := back.UnmarshalJSON(data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.BaselineNs != 42.5 {
+		t.Fatalf("BaselineNs = %v, want 42.5", back.BaselineNs)
+	}
+	if back.Machine != rec.Machine {
+		t.Fatalf("Machine = %+v, want %+v", back.Machine, rec.Machine)
+	}
+}
+
+func TestBenchResultJSONRoundTripPreservesCV(t *testing.T) {
+	in := benchResult{
+		Pair: "p", Name: "B",
+		GoNs: 100, GoNsCV: 0.03,
+		GoBytes: math.NaN(), GoAllocs: math.NaN(),
+		OsNs: 200, OsNsCV: 0.08,
+		OsBytes: math.NaN(), OsAllocs: math.NaN(),
+	}
+	data, err := in.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back benchResult
+	if err := back.UnmarshalJSON(data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.GoNsCV != 0.03 || back.OsNsCV != 0.08 {
+		t.Fatalf("CV round-trip: Go=%v Os=%v, want 0.03 / 0.08", back.GoNsCV, back.OsNsCV)
+	}
+}

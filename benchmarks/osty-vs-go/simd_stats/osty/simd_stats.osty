@@ -14,6 +14,7 @@ fn buildSimdWeights(n: Int) -> List<Int> {
     weights
 }
 
+#[inline(never)]
 #[vectorize]
 pub fn analyzeSimdStats(values: List<Int>, weights: List<Int>) -> Int {
     let n = if values.len() < weights.len() { values.len() } else { weights.len() }

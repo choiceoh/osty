@@ -1,0 +1,11 @@
+use std.testing
+
+fn benchMatmul() {
+    let n = 64
+    let a = buildMatrix(n, 1)
+    let b = buildMatrix(n, 7)
+    testing.benchmark(50, || {
+        let _ = matmulChecksum(a, b, n)
+        Ok(())
+    })
+}

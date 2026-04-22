@@ -1,0 +1,10 @@
+use std.testing
+
+fn benchHashLookup() {
+    let entries = buildKeys(2048)
+    let queries = buildKeys(8192)
+    testing.benchmark(50, || {
+        let _ = hashLookupChecksum(entries, queries)
+        Ok(())
+    })
+}

@@ -13,6 +13,7 @@ fn min2(a: Int, b: Int) -> Int {
     a
 }
 
+#[inline(never)]
 pub fn analyzeLaneRoute(costs: List<Int>) -> Int {
     let mut laneA = 0
     let mut laneB = 7

@@ -1,0 +1,9 @@
+use std.testing
+
+fn benchQuicksort() {
+    let input = buildInts(2048)
+    testing.benchmark(200, || {
+        let _ = quicksortChecksum(input)
+        Ok(())
+    })
+}

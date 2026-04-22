@@ -1,0 +1,74 @@
+fn buildInts(n: Int) -> List<Int> {
+    let mut xs: List<Int> = []
+    let mut state = 1
+    for _i in 0..n {
+        state = (state * 1103515245 + 12345) % 2147483648
+        xs.push(state % 1048576)
+    }
+    xs
+}
+
+#[inline(never)]
+pub fn quicksortChecksum(src: List<Int>) -> Int {
+    let mut xs = src
+    let n = xs.len()
+    if n <= 1 {
+        return 0
+    }
+
+    // Iterative quicksort: Lists are pass-by-value in Osty so a recursive
+    // in-place sort would need to thread the full array through every call
+    // frame. Manual stack of (lo, hi) pairs keeps one owner of `xs`.
+    let stackCap = 512
+    let mut stack: List<Int> = []
+    for _i in 0..stackCap {
+        stack.push(0)
+    }
+    stack[0] = 0
+    stack[1] = n - 1
+    let mut sp = 2
+
+    for sp > 0 {
+        sp = sp - 1
+        let hi = stack[sp]
+        sp = sp - 1
+        let lo = stack[sp]
+        if lo >= hi {
+            continue
+        }
+
+        let pivot = xs[hi]
+        let mut i = lo - 1
+        let mut j = lo
+        for j < hi {
+            if xs[j] < pivot {
+                i = i + 1
+                let t = xs[i]
+                xs[i] = xs[j]
+                xs[j] = t
+            }
+            j = j + 1
+        }
+        let t = xs[i + 1]
+        xs[i + 1] = xs[hi]
+        xs[hi] = t
+        let p = i + 1
+
+        stack[sp] = lo
+        sp = sp + 1
+        stack[sp] = p - 1
+        sp = sp + 1
+        stack[sp] = p + 1
+        sp = sp + 1
+        stack[sp] = hi
+        sp = sp + 1
+    }
+
+    let mut sum = 0
+    let mut k = 0
+    for k < xs.len() {
+        sum = sum + xs[k] * (k + 1)
+        k = k + 1
+    }
+    sum
+}
