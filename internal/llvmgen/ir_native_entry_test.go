@@ -1018,7 +1018,7 @@ fn main() {
 	}
 }
 
-func TestTryGenerateNativeOwnedModuleReturnsNotCoveredForStructFieldAssign(t *testing.T) {
+func TestTryGenerateNativeOwnedModuleCoversStructFieldAssign(t *testing.T) {
 	src := `struct Pair { left: Int, right: Int }
 
 fn main() {
@@ -1033,11 +1033,80 @@ fn main() {
 	if err != nil {
 		t.Fatalf("TryGenerateNativeOwnedModule returned error: %v", err)
 	}
-	if ok {
-		t.Fatalf("TryGenerateNativeOwnedModule unexpectedly covered struct field assignment:\n%s", string(out))
+	if !ok {
+		t.Fatal("TryGenerateNativeOwnedModule reported not covered for struct field assignment")
 	}
-	if len(out) != 0 {
-		t.Fatalf("TryGenerateNativeOwnedModule returned IR for uncovered module:\n%s", string(out))
+	got := string(out)
+	for _, want := range []string{
+		"%Pair = type { i64, i64 }",
+		"extractvalue %Pair",
+		"insertvalue %Pair",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("native-owned IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestTryGenerateNativeOwnedModuleCoversNestedStructFieldAssign(t *testing.T) {
+	src := `struct Inner { value: Int }
+
+struct Outer { inner: Inner, flag: Int }
+
+fn main() {
+    let mut outer = Outer { inner: Inner { value: 1 }, flag: 2 }
+    outer.inner.value = 3
+    println(outer.inner.value)
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_try_nested_struct_assign.osty"}
+	out, ok, err := TryGenerateNativeOwnedModule(mod, opts)
+	if err != nil {
+		t.Fatalf("TryGenerateNativeOwnedModule returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryGenerateNativeOwnedModule reported not covered for nested struct field assignment")
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Inner = type { i64 }",
+		"%Outer = type { %Inner, i64 }",
+		"extractvalue %Outer",
+		"insertvalue %Inner",
+		"insertvalue %Outer",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("nested native-owned IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestTryGenerateNativeOwnedModuleCoversListLiteralAndIndex(t *testing.T) {
+	src := `fn main() {
+    let xs = [1, 2]
+    println(xs[0])
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_try_list_index.osty"}
+	out, ok, err := TryGenerateNativeOwnedModule(mod, opts)
+	if err != nil {
+		t.Fatalf("TryGenerateNativeOwnedModule returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryGenerateNativeOwnedModule reported not covered for list index")
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_list_new()",
+		"call ptr @osty_rt_list_new()",
+		"call void @osty_rt_list_push_i64(",
+		"call i64 @osty_rt_list_get_i64(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("list native-owned IR missing %q:\n%s", want, got)
+		}
 	}
 }
 
