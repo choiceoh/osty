@@ -110,6 +110,8 @@ use go "github.com/osty/osty/internal/selfhost/astbridge" as astbridge {
     fn ContinueStmtNode(pos: Pos, end: Pos) -> Stmt
     fn DeferStmtNode(pos: Pos, end: Pos, x: Expr) -> Stmt
     fn ForStmtNode(pos: Pos, end: Pos, isForLet: Bool, pat: Pattern, iter: Expr, body: Block) -> Stmt
+    fn BreakStmtValueNode(pos: Pos, end: Pos, value: Expr) -> Stmt
+    fn LoopExprNode(pos: Pos, end: Pos, body: Block) -> Expr
     fn AssignStmtNode(pos: Pos, end: Pos, op: Kind, target: Expr, value: Expr) -> Stmt
     fn ChanSendStmtNode(pos: Pos, end: Pos, channel: Expr, value: Expr) -> Stmt
     fn ExprStmtNode(x: Expr) -> Stmt
@@ -126,10 +128,12 @@ use go "github.com/osty/osty/internal/selfhost/astbridge" as astbridge {
     fn BinaryExprNode(pos: Pos, end: Pos, op: Kind, left: Expr, right: Expr) -> Expr
     fn QuestionExprNode(pos: Pos, end: Pos, x: Expr) -> Expr
     fn CallExprNode(pos: Pos, end: Pos, fnExpr: Expr, args: List<Arg>) -> Expr
+    fn CallExprAsQuestionNode(pos: Pos, end: Pos, fnExpr: Expr, args: List<Arg>) -> Expr
     fn FieldExprNode(pos: Pos, end: Pos, x: Expr, name: String, optional: Bool) -> Expr
     fn IndexExprNode(pos: Pos, end: Pos, x: Expr, index: Expr) -> Expr
     fn TurbofishExprNode(pos: Pos, end: Pos, base: Expr, args: List<Type>) -> Expr
     fn RangeExprNode(pos: Pos, end: Pos, start: Expr, stop: Expr, inclusive: Bool) -> Expr
+    fn RangeExprStepNode(pos: Pos, end: Pos, start: Expr, stop: Expr, step: Expr, inclusive: Bool) -> Expr
     fn ParenExprNode(pos: Pos, end: Pos, x: Expr) -> Expr
     fn TupleExprNode(pos: Pos, end: Pos, elems: List<Expr>) -> Expr
     fn ListExprNode(pos: Pos, end: Pos, elems: List<Expr>) -> Expr
@@ -137,6 +141,7 @@ use go "github.com/osty/osty/internal/selfhost/astbridge" as astbridge {
     fn MapExprNode(pos: Pos, end: Pos, entries: List<MapEntry>, empty: Bool) -> Expr
     fn StructLitFieldNode(pos: Pos, name: String, value: Expr) -> StructLitField
     fn StructLitNode(pos: Pos, end: Pos, typ: Expr, fields: List<StructLitField>, spread: Expr) -> Expr
+    fn StructLitShorthandNode(pos: Pos, end: Pos, recv: Expr, fields: List<StructLitField>, spread: Expr) -> Expr
     fn IfExprNode(pos: Pos, end: Pos, isIfLet: Bool, pat: Pattern, cond: Expr, thenBlock: Block, alt: Expr) -> Expr
     fn MatchArmNode(pos: Pos, pat: Pattern, guard: Expr, body: Expr) -> MatchArm
     fn MatchExprNode(pos: Pos, end: Pos, scrutinee: Expr, arms: List<MatchArm>) -> Expr
@@ -1202,6 +1207,12 @@ fn astLowerStmt(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbr
         return astbridge.ReturnStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, n.left))
     }
     if n.kind == AstNBreak {
+        // G22 §A.4: `break <expr>` stores the value expression in n.left.
+        // Plain `break` leaves n.left == -1 → unchanged semantics.
+        if n.left >= 0 {
+            let value = astLowerExpr(arena, toks, n.left)
+            return astbridge.BreakStmtValueNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), value)
+        }
         return astbridge.BreakStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
     }
     if n.kind == AstNContinue {
@@ -1210,7 +1221,7 @@ fn astLowerStmt(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbr
     if n.kind == AstNDefer {
         return astbridge.DeferStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, n.left))
     }
-    if n.kind == AstNFor {
+    if n.kind == AstNFor && n.text != "loopexpr" {
         return astLowerForStmt(arena, toks, n)
     }
     if n.kind == AstNAssign {
@@ -1352,6 +1363,12 @@ fn astLowerExpr(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbr
     if n.kind == AstNClosure {
         return astLowerClosureExpr(arena, toks, n)
     }
+    // G22 §A.4: `loop { ... }` is an expression; the parser marks it as
+    // AstNFor with text="loopexpr" so statement lowering skips it.
+    if n.kind == AstNFor && n.text == "loopexpr" {
+        let body = astLowerBlock(arena, toks, n.right)
+        return astbridge.LoopExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), body)
+    }
     astbridge.NilExpr()
 }
 
@@ -1380,7 +1397,12 @@ fn astLowerCallExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) ->
             args.push(arg)
         }
     }
-    astbridge.CallExprNode(astbridge.ExprPos(fnExpr, astLowerNodePos(toks, n)), astLowerNodeEnd(toks, n), fnExpr, args)
+    let pos = astbridge.ExprPos(fnExpr, astLowerNodePos(toks, n))
+    let end = astLowerNodeEnd(toks, n)
+    if n.flags == 1 {
+        return astbridge.CallExprAsQuestionNode(pos, end, fnExpr, args)
+    }
+    astbridge.CallExprNode(pos, end, fnExpr, args)
 }
 
 fn astLowerFieldExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
@@ -1408,7 +1430,16 @@ fn astLowerTurbofishExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNod
 fn astLowerRangeExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
     let start = astLowerExpr(arena, toks, n.left)
     let stop = astLowerExpr(arena, toks, n.right)
-    astbridge.RangeExprNode(astbridge.ExprPos(start, astLowerNodePos(toks, n)), astbridge.ExprEnd(stop, astLowerNodeEnd(toks, n)), start, stop, n.flags == 1)
+    // flags bit 0 = inclusive, flag bit 1 (value 2) = has step (§A.4 G25)
+    let inclusive = (n.flags & 1) == 1
+    let hasStep = (n.flags & 2) == 2
+    let pos = astbridge.ExprPos(start, astLowerNodePos(toks, n))
+    let end = astbridge.ExprEnd(stop, astLowerNodeEnd(toks, n))
+    if hasStep && n.children.len() > 0 {
+        let step = astLowerExpr(arena, toks, n.children[0])
+        return astbridge.RangeExprStepNode(pos, end, start, stop, step, inclusive)
+    }
+    astbridge.RangeExprNode(pos, end, start, stop, inclusive)
 }
 
 fn astLowerTupleExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {
@@ -1454,7 +1485,13 @@ fn astLowerStructLitExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNod
         let cn = astArenaNodeAt(arena, child)
         fields.push(astbridge.StructLitFieldNode(astLowerNodePos(toks, cn), cn.text, astLowerExpr(arena, toks, cn.left)))
     }
-    astbridge.StructLitNode(astbridge.ExprPos(typ, astLowerNodePos(toks, n)), astLowerNodeEnd(toks, n), typ, fields, astLowerExpr(arena, toks, n.right))
+    let pos = astbridge.ExprPos(typ, astLowerNodePos(toks, n))
+    let end = astLowerNodeEnd(toks, n)
+    let spread = astLowerExpr(arena, toks, n.right)
+    if n.flags == 1 {
+        return astbridge.StructLitShorthandNode(pos, end, typ, fields, spread)
+    }
+    astbridge.StructLitNode(pos, end, typ, fields, spread)
 }
 
 fn astLowerIfExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Expr {

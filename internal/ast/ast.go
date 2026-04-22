@@ -709,6 +709,11 @@ func (s *ReturnStmt) End() token.Pos { return s.EndV }
 type BreakStmt struct {
 	PosV token.Pos
 	EndV token.Pos
+	// Value is the optional expression on `break <expr>` — only legal
+	// inside a `loop { … }` expression (G22, §A.4). Nil for a bare
+	// `break` inside a `for`/`while` loop, where a value would be a
+	// type error.
+	Value Expr
 }
 
 func (*BreakStmt) stmtNode()        {}
@@ -903,11 +908,18 @@ func (e *QuestionExpr) Pos() token.Pos { return e.PosV }
 func (e *QuestionExpr) End() token.Pos { return e.EndV }
 
 // CallExpr is `f(args)`.
+//
+// IsAsQuestion marks the call as desugared from `expr as? T` (G27, §7.4).
+// The parser lowers `expr as? T` into `expr.downcast::<T>()` and sets this
+// flag so the checker can enforce the §7.4 Error-bound rules specific to
+// the sugar form (E0757) without mis-attributing plain `.downcast::<T>()`
+// calls.
 type CallExpr struct {
-	PosV token.Pos
-	EndV token.Pos
-	Fn   Expr
-	Args []*Arg
+	PosV          token.Pos
+	EndV          token.Pos
+	Fn            Expr
+	Args          []*Arg
+	IsAsQuestion  bool
 }
 
 // Arg is either positional (Name == "") or keyword (Name != "").
@@ -975,6 +987,10 @@ type RangeExpr struct {
 	Start     Expr // optional
 	Stop      Expr // optional
 	Inclusive bool
+	// Step is the optional stride from a `by <expr>` suffix (G25, §A.4).
+	// `0..10 by 2` parses with Start=0, Stop=10, Inclusive=false, Step=2.
+	// Nil when the user wrote no `by` clause.
+	Step Expr
 }
 
 func (*RangeExpr) exprNode()        {}
@@ -1054,6 +1070,12 @@ type StructLit struct {
 	Type   Expr // usually Ident or FieldExpr chain naming the type
 	Fields []*StructLitField
 	Spread Expr // optional ..expr spread source
+	// IsShorthand marks the G26 §A.2 update-shorthand form
+	// `x { field: v }`. When set, `Type` carries the value `x` (not a
+	// type name); the checker infers the actual type from `x` and
+	// treats `Spread` (which the parser sets to `x`) as the spread
+	// source. Plain `T { ..x, field: v }` keeps IsShorthand=false.
+	IsShorthand bool
 }
 
 // StructLitField is one `name: expr` entry (or shorthand `name`).
@@ -1093,6 +1115,20 @@ type IfExpr struct {
 func (*IfExpr) exprNode()        {}
 func (e *IfExpr) Pos() token.Pos { return e.PosV }
 func (e *IfExpr) End() token.Pos { return e.EndV }
+
+// LoopExpr is `loop { ... }` — an infinite loop whose value is the
+// `break <expr>` that exits it (G22, §A.4). A `loop` with no `break`
+// that produces a value has type `Never`; otherwise the type is the
+// join of every break-value branch.
+type LoopExpr struct {
+	PosV token.Pos
+	EndV token.Pos
+	Body *Block
+}
+
+func (*LoopExpr) exprNode()        {}
+func (e *LoopExpr) Pos() token.Pos { return e.PosV }
+func (e *LoopExpr) End() token.Pos { return e.EndV }
 
 // MatchExpr is `match scrutinee { arm, arm, ... }`.
 type MatchExpr struct {

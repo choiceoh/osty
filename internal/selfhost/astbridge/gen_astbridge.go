@@ -570,6 +570,14 @@ func BreakStmtNode(pos, end Pos) Stmt {
 	return &ast.BreakStmt{PosV: pos, EndV: end}
 }
 
+func BreakStmtValueNode(pos, end Pos, value Expr) Stmt {
+	return &ast.BreakStmt{PosV: pos, EndV: end, Value: value}
+}
+
+func LoopExprNode(pos, end Pos, body Block) Expr {
+	return &ast.LoopExpr{PosV: pos, EndV: end, Body: body}
+}
+
 func ContinueStmtNode(pos, end Pos) Stmt {
 	return &ast.ContinueStmt{PosV: pos, EndV: end}
 }
@@ -645,6 +653,10 @@ func CallExprNode(pos, end Pos, fn Expr, args []Arg) Expr {
 	return &ast.CallExpr{PosV: pos, EndV: end, Fn: fn, Args: compactArgs(args)}
 }
 
+func CallExprAsQuestionNode(pos, end Pos, fn Expr, args []Arg) Expr {
+	return &ast.CallExpr{PosV: pos, EndV: end, Fn: fn, Args: compactArgs(args), IsAsQuestion: true}
+}
+
 func FieldExprNode(pos, end Pos, x Expr, name string, optional bool) Expr {
 	return &ast.FieldExpr{PosV: pos, EndV: end, X: x, Name: name, IsOptional: optional}
 }
@@ -659,6 +671,10 @@ func TurbofishExprNode(pos, end Pos, base Expr, args []Type) Expr {
 
 func RangeExprNode(pos, end Pos, start, stop Expr, inclusive bool) Expr {
 	return &ast.RangeExpr{PosV: pos, EndV: end, Start: start, Stop: stop, Inclusive: inclusive}
+}
+
+func RangeExprStepNode(pos, end Pos, start, stop, step Expr, inclusive bool) Expr {
+	return &ast.RangeExpr{PosV: pos, EndV: end, Start: start, Stop: stop, Inclusive: inclusive, Step: step}
 }
 
 func ParenExprNode(pos, end Pos, x Expr) Expr {
@@ -687,6 +703,10 @@ func StructLitFieldNode(pos Pos, name string, value Expr) StructLitField {
 
 func StructLitNode(pos, end Pos, typ Expr, fields []StructLitField, spread Expr) Expr {
 	return &ast.StructLit{PosV: pos, EndV: end, Type: typ, Fields: compactStructLitFields(fields), Spread: spread}
+}
+
+func StructLitShorthandNode(pos, end Pos, recv Expr, fields []StructLitField, spread Expr) Expr {
+	return &ast.StructLit{PosV: pos, EndV: end, Type: recv, Fields: compactStructLitFields(fields), Spread: spread, IsShorthand: true}
 }
 
 func IfExprNode(pos, end Pos, isIfLet bool, pat Pattern, cond Expr, then Block, alt Expr) Expr {

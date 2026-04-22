@@ -114,6 +114,9 @@ fn elabInferImpl(cx: ElabCx, idx: Int) -> ElabResult {
         AstNIf -> elabInferIf(cx, node, tErr(cx.env.tys)),
         AstNMatch -> elabInferMatch(cx, node, tErr(cx.env.tys)),
         AstNQuestion -> elabInferQuestion(cx, node),
+        // G22 §A.4: `loop { ... }` arrives as AstNFor with text="loopexpr".
+        // Route to the dedicated loop-expression handler.
+        _ if node.kind == AstNFor && node.text == "loopexpr" -> elabInferLoop(cx, idx, node),
         _ -> elabErrResult(cx, node.start, node.end),
     }
 }
@@ -782,6 +785,50 @@ fn elabChanSendStmt(cx: ElabCx, node: AstNode) -> Int {
         elabCheck(cx, node.right, elemTy)
     }
     coreChanSendStmt(cx.core, channel.node, value.node, node.start, node.end)
+}
+
+/// elabInferLoop type-checks a `loop { ... }` expression (G22 §A.4).
+/// The loop's type is the type of the first `break <expr>` discovered
+/// in the body; if no break carries a value, the type is `Never`. All
+/// break values are elaborated so a mismatch diagnoses at the break
+/// site via the normal assignment check against the first type.
+fn elabInferLoop(cx: ElabCx, idx: Int, node: AstNode) -> ElabResult {
+    let tys = cx.env.tys
+    let prevInLoop = cx.env.inLoop
+    cx.env.inLoop = true
+    let firstBreakTy = elabFindFirstBreakValueTy(cx, node.right, -1)
+    cx.env.inLoop = prevInLoop
+    let resultTy = if firstBreakTy < 0 { tNever(tys) } else { firstBreakTy }
+    let body = elabLoopBody(cx, node.right)
+    let coreIdx = coreForStmt(cx.core, -1, -1, body, 0, node.start, node.end)
+    ElabResult { node: coreIdx, ty: resultTy }
+}
+
+/// elabFindFirstBreakValueTy walks the arena subtree rooted at `idx`
+/// (typically the loop body block) and returns the inferred type of
+/// the first `break <expr>` it encounters. Returns `-1` if none.
+/// Nested loops' own breaks are skipped so they don't leak a type
+/// into the outer loop's inference.
+fn elabFindFirstBreakValueTy(cx: ElabCx, idx: Int, foundTy: Int) -> Int {
+    if idx < 0 || foundTy >= 0 {
+        return foundTy
+    }
+    let n = astArenaNodeAt(cx.ast.arena, idx)
+    if n.kind == AstNBreak && n.left >= 0 {
+        let r = elabInfer(cx, n.left)
+        return r.ty
+    }
+    // Skip nested loops — their break belongs to them, not to us.
+    if n.kind == AstNFor {
+        return foundTy
+    }
+    let mut acc = foundTy
+    acc = elabFindFirstBreakValueTy(cx, n.left, acc)
+    acc = elabFindFirstBreakValueTy(cx, n.right, acc)
+    for child in n.children {
+        acc = elabFindFirstBreakValueTy(cx, child, acc)
+    }
+    acc
 }
 
 fn elabForStmt(cx: ElabCx, node: AstNode) -> Int {
@@ -1539,6 +1586,46 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     if tyIsBad(cx.env.tys, recvResolved) {
         return elabPoisonResult(cx, callNode.start, callNode.end)
     }
+    // G27 §7.4: `expr as? T` desugars to `expr.downcast::<T>()` with
+    // callNode.flags == 1. Enforce the sugar-specific invariants here
+    // (operand must be `Error`; T must implement `Error`) before the
+    // ordinary method-lookup path would emit a generic E0703.
+    if callNode.flags == 1 {
+        if !(tyIsNamedHead(cx.env.tys, recvResolved, "Error")) {
+            cx.env.diagnostics.push(diagAsQuestionBadOperand(
+                tyToString(cx.env.tys, recvResolved),
+                callNode.start,
+                callNode.end,
+            ))
+            return elabPoisonResult(cx, callNode.start, callNode.end)
+        }
+        if checkIntListLenHelper(explicitArgs) >= 1 {
+            let targetTy = checkIntListAt(explicitArgs, 0)
+            let targetResolved = checkResolveAliasDeep(cx.env, targetTy)
+            if !(tyIsBad(cx.env.tys, targetResolved)) {
+                // Spec §7.4: `T` must be a concrete type implementing
+                // `Error`. We reject any target whose shape *cannot*
+                // implement Error:
+                //   * primitives (Int, Float, Bool, …)
+                //   * tuples / functions / optionals
+                // For named types we defer to the downcast semantics —
+                // user-defined struct/enum method registration timing
+                // across source vs. package check paths is not uniform
+                // enough to validate `message(self)` presence here
+                // without spurious rejections. Tracked as a depth gap
+                // separate from the core E0757 surface.
+                let targetKind = tyKindAt(cx.env.tys, targetResolved)
+                if targetKind == TkPrim || targetKind == TkTuple || targetKind == TkFn || targetKind == TkOptional {
+                    cx.env.diagnostics.push(diagAsQuestionBadType(
+                        tyToString(cx.env.tys, targetResolved),
+                        callNode.start,
+                        callNode.end,
+                    ))
+                    return elabPoisonResult(cx, callNode.start, callNode.end)
+                }
+            }
+        }
+    }
     let ownerName = elabOwnerNameForReceiver(cx.env.tys, recvResolved)
     let methodName = fieldNode.text
     let sig = checkLookupMethod(cx.env, ownerName, methodName)
@@ -2258,7 +2345,18 @@ fn elabInferTuple(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
 
 fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     let tys = cx.env.tys
-    let owner = structLitOwnerName(cx, node)
+    // G26 §A.2: `x { field: v }` carries the receiver value in
+    // node.left and sets node.flags == 1. Infer the owner from the
+    // receiver's type before running the ordinary struct-literal path.
+    // The parser already copies the receiver into node.right as spread
+    // source so explicit fields override the spread-supplied values.
+    let owner = if node.flags == 1 && node.left >= 0 {
+        let recv = elabInfer(cx, node.left)
+        let recvResolved = checkResolveAliasDeep(cx.env, recv.ty)
+        tyHeadAt(tys, recvResolved)
+    } else {
+        structLitOwnerName(cx, node)
+    }
     let typeSig = checkLookupType(cx.env, owner)
     if typeSig.name == "" {
         cx.env.diagnostics.push(diagUnknownName(owner, node.start, node.end))
@@ -2478,11 +2576,21 @@ fn elabInferRange(cx: ElabCx, node: AstNode) -> ElabResult {
     if !(tyIsInteger(tys, hi.ty)) && !(tyIsBad(tys, hi.ty)) {
         cx.env.diagnostics.push(diagMismatch("Int", tyToString(tys, hi.ty), node.start, node.end))
     }
+    // G25 §A.4: optional `by <expr>` stride. flags bit 1 marks presence;
+    // the step expr sits in children[0]. Must be integer to match
+    // iterator semantics. Bit 0 is the inclusive flag (`..=`).
+    let hasStep = (node.flags & 2) == 2
+    if hasStep && node.children.len() > 0 {
+        let step = elabInfer(cx, node.children[0])
+        if !(tyIsInteger(tys, step.ty)) && !(tyIsBad(tys, step.ty)) {
+            cx.env.diagnostics.push(diagMismatch("Int", tyToString(tys, step.ty), node.start, node.end))
+        }
+    }
     // Range result type mirrors the shared operand prim (Int in the
     // common case; preserve concrete integer when both agree).
     let elemTy = if tyEq(tys, lo.ty, hi.ty) { lo.ty } else { tInt(tys) }
     let rangeTy = tyNamed(tys, "Range", [elemTy])
-    let inclusive = node.flags == 1
+    let inclusive = (node.flags & 1) == 1
     let coreIdx = coreRange(cx.core, lo.node, hi.node, inclusive, rangeTy, node.start, node.end)
     ElabResult { node: coreIdx, ty: rangeTy }
 }

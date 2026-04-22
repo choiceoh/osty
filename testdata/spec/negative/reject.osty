@@ -236,6 +236,24 @@ pub fn hot(xs: List<Int>) -> Int { 0 }
 pub fn hash(a: Int, b: Int) -> Int { a + b }
 // === END
 
+// === CASE: E0757 === `as?` on non-Error operand
+fn f(n: Int) -> Int? {
+    n as? Int
+}
+// === END
+
+// === CASE: E0757 === `as?` target type must implement Error
+fn g(err: Error) -> Int? {
+    err as? Int
+}
+// === END
+
+// === CASE: E0202 === `as?` requires no whitespace between `as` and `?`
+fn h(err: Error) -> Error? {
+    err as ? Error
+}
+// === END
+
 // === CASE: E0004 === unterminated block comment (MUST remain last — the
 // unclosed /* is intentional and swallows every byte to EOF).
 /* never closes
