@@ -1488,6 +1488,11 @@ func llvmClangCompileObjectArgs(target string, irPath string, objectPath string)
 		// Osty: toolchain/llvmgen.osty:1178:9
 		func() struct{} { args = append(args, target); return struct{}{} }()
 	}
+	// Osty: toolchain/llvmgen.osty:1179:5 — baseline -O2 for production
+	// IR compilation. -O0 (the previous default) stranded every
+	// alloca/load/store emitted by the backend and disabled
+	// vectorization, adding ~100x on simd-friendly benches.
+	func() struct{} { args = append(args, "-O2"); return struct{}{} }()
 	// Osty: toolchain/llvmgen.osty:1180:5
 	func() struct{} { args = append(args, "-c"); return struct{}{} }()
 	// Osty: toolchain/llvmgen.osty:1181:5

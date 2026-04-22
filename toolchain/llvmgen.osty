@@ -2005,6 +2005,14 @@ pub fn llvmClangCompileObjectArgs(
         args.push("-target")
         args.push(target)
     }
+    // -O2 is the baseline production optimization level. Without it
+    // clang defaults to -O0, which leaves every alloca/load/store the
+    // backend emitted in place, defeats CSE/LICM, and prevents
+    // vectorization of loops that already carry the right metadata
+    // (`!llvm.loop.vectorize.enable`, `llvm.loop.parallel_accesses`).
+    // Measured on the longer osty-vs-go workloads: -O0 → -O2 closes
+    // simd_stats from ~100x slower than Go down to a small constant.
+    args.push("-O2")
     args.push("-c")
     args.push(irPath)
     args.push("-o")
