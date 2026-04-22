@@ -2545,10 +2545,6 @@ static inline size_t osty_rt_string_hash(const char *value) {
 }
 
 static int osty_rt_string_compare_bytes(const char *left, const char *right) {
-    size_t left_len = 0;
-    size_t right_len = 0;
-    size_t common = 0;
-    int cmp = 0;
     if (left == right) {
         return 0;
     }
@@ -2558,22 +2554,7 @@ static int osty_rt_string_compare_bytes(const char *left, const char *right) {
     if (right == NULL) {
         return 1;
     }
-    osty_rt_string_measure(left, &left_len, NULL);
-    osty_rt_string_measure(right, &right_len, NULL);
-    common = (left_len < right_len) ? left_len : right_len;
-    if (common != 0) {
-        cmp = memcmp(left, right, common);
-        if (cmp != 0) {
-            return cmp;
-        }
-    }
-    if (left_len < right_len) {
-        return -1;
-    }
-    if (left_len > right_len) {
-        return 1;
-    }
-    return 0;
+    return strcmp(left, right);
 }
 
 static size_t osty_rt_map_key_hash(int64_t kind, const void *key) {
