@@ -522,6 +522,8 @@ func mapTokenKind(k FrontTokenKind) token.Kind {
 		return token.AT
 	case *FrontTokenKind_FrontHash:
 		return token.HASH
+	case *FrontTokenKind_FrontLabel:
+		return token.LABEL
 	}
 	return token.ILLEGAL
 }

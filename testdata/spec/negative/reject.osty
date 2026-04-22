@@ -248,9 +248,34 @@ fn g(err: Error) -> Int? {
 }
 // === END
 
+// === CASE: E0757 === `as?` target struct without `message()` must not satisfy Error
+pub struct PlainNoMessage { pub x: Int }
+fn gp(err: Error) -> PlainNoMessage? {
+    err as? PlainNoMessage
+}
+// === END
+
 // === CASE: E0202 === `as?` requires no whitespace between `as` and `?`
 fn h(err: Error) -> Error? {
     err as ? Error
+}
+// === END
+
+// === CASE: E0763 === `break 'label` references a label not in scope
+fn no_such_label() {
+    'outer: for i in 0..10 {
+        break 'inner
+    }
+}
+// === END
+
+// === CASE: E0764 === inner label shadows an outer label of the same name
+fn label_shadow() {
+    'tag: for i in 0..10 {
+        'tag: for j in 0..10 {
+            break 'tag
+        }
+    }
 }
 // === END
 

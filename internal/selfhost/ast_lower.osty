@@ -110,8 +110,12 @@ use go "github.com/osty/osty/internal/selfhost/astbridge" as astbridge {
     fn ContinueStmtNode(pos: Pos, end: Pos) -> Stmt
     fn DeferStmtNode(pos: Pos, end: Pos, x: Expr) -> Stmt
     fn ForStmtNode(pos: Pos, end: Pos, isForLet: Bool, pat: Pattern, iter: Expr, body: Block) -> Stmt
+    fn ForStmtLabelNode(pos: Pos, end: Pos, label: String, isForLet: Bool, pat: Pattern, iter: Expr, body: Block) -> Stmt
     fn BreakStmtValueNode(pos: Pos, end: Pos, value: Expr) -> Stmt
+    fn BreakStmtLabelNode(pos: Pos, end: Pos, label: String, value: Expr) -> Stmt
+    fn ContinueStmtLabelNode(pos: Pos, end: Pos, label: String) -> Stmt
     fn LoopExprNode(pos: Pos, end: Pos, body: Block) -> Expr
+    fn LoopExprLabelNode(pos: Pos, end: Pos, label: String, body: Block) -> Expr
     fn AssignStmtNode(pos: Pos, end: Pos, op: Kind, target: Expr, value: Expr) -> Stmt
     fn ChanSendStmtNode(pos: Pos, end: Pos, channel: Expr, value: Expr) -> Stmt
     fn ExprStmtNode(x: Expr) -> Stmt
@@ -129,6 +133,7 @@ use go "github.com/osty/osty/internal/selfhost/astbridge" as astbridge {
     fn QuestionExprNode(pos: Pos, end: Pos, x: Expr) -> Expr
     fn CallExprNode(pos: Pos, end: Pos, fnExpr: Expr, args: List<Arg>) -> Expr
     fn CallExprAsQuestionNode(pos: Pos, end: Pos, fnExpr: Expr, args: List<Arg>) -> Expr
+    fn CallExprTrailingClosureNode(pos: Pos, end: Pos, fnExpr: Expr, args: List<Arg>) -> Expr
     fn FieldExprNode(pos: Pos, end: Pos, x: Expr, name: String, optional: Bool) -> Expr
     fn IndexExprNode(pos: Pos, end: Pos, x: Expr, index: Expr) -> Expr
     fn TurbofishExprNode(pos: Pos, end: Pos, base: Expr, args: List<Type>) -> Expr
@@ -1208,15 +1213,28 @@ fn astLowerStmt(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbr
     }
     if n.kind == AstNBreak {
         // G22 §A.4: `break <expr>` stores the value expression in n.left.
-        // Plain `break` leaves n.left == -1 → unchanged semantics.
+        // G24 §4.4: `break 'label` stores the label name in n.text.
+        let pos = astLowerNodePos(toks, n)
+        let end = astLowerNodeEnd(toks, n)
+        let mut value = astbridge.NilExpr()
         if n.left >= 0 {
-            let value = astLowerExpr(arena, toks, n.left)
-            return astbridge.BreakStmtValueNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), value)
+            value = astLowerExpr(arena, toks, n.left)
         }
-        return astbridge.BreakStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
+        if n.text != "" {
+            return astbridge.BreakStmtLabelNode(pos, end, n.text, value)
+        }
+        if n.left >= 0 {
+            return astbridge.BreakStmtValueNode(pos, end, value)
+        }
+        return astbridge.BreakStmtNode(pos, end)
     }
     if n.kind == AstNContinue {
-        return astbridge.ContinueStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
+        let pos = astLowerNodePos(toks, n)
+        let end = astLowerNodeEnd(toks, n)
+        if n.text != "" {
+            return astbridge.ContinueStmtLabelNode(pos, end, n.text)
+        }
+        return astbridge.ContinueStmtNode(pos, end)
     }
     if n.kind == AstNDefer {
         return astbridge.DeferStmtNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, n.left))
@@ -1241,34 +1259,39 @@ fn astLowerStmt(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbr
 }
 
 fn astLowerForStmt(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Stmt {
+    // G24 §4.4: `'label: for ...` stashes the label ident in children2[0].
+    let label = astLowerForLabel(arena, n)
+    let pos = astLowerNodePos(toks, n)
+    let end = astLowerNodeEnd(toks, n)
+    let mut isForLet = false
+    let mut pat = astbridge.NilPattern()
+    let mut iter = astbridge.NilExpr()
     if n.text == "forlet" {
-        return astbridge.ForStmtNode(
-            astLowerNodePos(toks, n),
-            astLowerNodeEnd(toks, n),
-            true,
-            astLowerChildPattern(arena, toks, n, 0),
-            astLowerExpr(arena, toks, n.left),
-            astLowerBlock(arena, toks, n.right),
-        )
+        isForLet = true
+        pat = astLowerChildPattern(arena, toks, n, 0)
+        iter = astLowerExpr(arena, toks, n.left)
+    } else if n.text == "forin" {
+        pat = astLowerChildPattern(arena, toks, n, 0)
+        iter = astLowerChildExpr(arena, toks, n, 1)
+    } else {
+        iter = astLowerExpr(arena, toks, n.left)
     }
-    if n.text == "forin" {
-        return astbridge.ForStmtNode(
-            astLowerNodePos(toks, n),
-            astLowerNodeEnd(toks, n),
-            false,
-            astLowerChildPattern(arena, toks, n, 0),
-            astLowerChildExpr(arena, toks, n, 1),
-            astLowerBlock(arena, toks, n.right),
-        )
+    let body = astLowerBlock(arena, toks, n.right)
+    if label != "" {
+        return astbridge.ForStmtLabelNode(pos, end, label, isForLet, pat, iter, body)
     }
-    astbridge.ForStmtNode(
-        astLowerNodePos(toks, n),
-        astLowerNodeEnd(toks, n),
-        false,
-        astbridge.NilPattern(),
-        astLowerExpr(arena, toks, n.left),
-        astLowerBlock(arena, toks, n.right),
-    )
+    astbridge.ForStmtNode(pos, end, isForLet, pat, iter, body)
+}
+
+fn astLowerForLabel(arena: AstArena, n: AstNode) -> String {
+    if n.children2.len() == 0 {
+        return ""
+    }
+    let labelIdx = n.children2[0]
+    if labelIdx < 0 {
+        return ""
+    }
+    astArenaNodeAt(arena, labelIdx).text
 }
 
 fn astLowerBlock(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbridge.Block {
@@ -1367,7 +1390,13 @@ fn astLowerExpr(arena: AstArena, toks: List<astbridge.Token>, idx: Int) -> astbr
     // AstNFor with text="loopexpr" so statement lowering skips it.
     if n.kind == AstNFor && n.text == "loopexpr" {
         let body = astLowerBlock(arena, toks, n.right)
-        return astbridge.LoopExprNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), body)
+        let pos = astLowerNodePos(toks, n)
+        let end = astLowerNodeEnd(toks, n)
+        let label = astLowerForLabel(arena, n)
+        if label != "" {
+            return astbridge.LoopExprLabelNode(pos, end, label, body)
+        }
+        return astbridge.LoopExprNode(pos, end, body)
     }
     astbridge.NilExpr()
 }
@@ -1399,8 +1428,12 @@ fn astLowerCallExpr(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) ->
     }
     let pos = astbridge.ExprPos(fnExpr, astLowerNodePos(toks, n))
     let end = astLowerNodeEnd(toks, n)
-    if n.flags == 1 {
+    // flags bit 0 = G27 `as?` sugar, bit 1 (value 2) = G23 trailing closure.
+    if (n.flags & 1) == 1 {
         return astbridge.CallExprAsQuestionNode(pos, end, fnExpr, args)
+    }
+    if (n.flags & 2) == 2 {
+        return astbridge.CallExprTrailingClosureNode(pos, end, fnExpr, args)
     }
     astbridge.CallExprNode(pos, end, fnExpr, args)
 }

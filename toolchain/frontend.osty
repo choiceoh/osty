@@ -82,6 +82,7 @@ pub enum FrontTokenKind {
     FrontUnderscore,
     FrontAt,
     FrontHash,
+    FrontLabel,
 }
 
 /// FrontToken is the compact token shape used by the Osty parser core.
@@ -848,6 +849,35 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
                 skip = scan.consumed - 1
+            } else if unit == "'" && frontScanLabel(units, idx, unitCount) > 0 {
+                // G24 §4.4: `'ident` is a loop label. The lexer disambiguates
+                // label vs char literal via `frontScanLabel`: an ident run
+                // after `'` that is *not* followed by a closing `'`
+                // (i.e. `'x` then space / `:` / EOF). Malformed-char cases
+                // keep the existing char-lit error path below.
+                let labelConsumed = frontScanLabel(units, idx, unitCount)
+                let leadingDocLines = frontAttachedDocLines(
+                    pendingDocLines,
+                    docLastLine,
+                    start.line,
+                )
+                atFileStart = false
+                tokens.push(
+                    frontLexTokenFromScan(
+                        units,
+                        idx,
+                        labelConsumed,
+                        FrontLabel,
+                        leadingDocLines,
+                        false,
+                        0,
+                        false,
+                    ),
+                )
+                tokenIndex = tokenIndex + 1
+                pendingDocLines = 0
+                insertTerm = frontKindInsertsTerm(FrontLabel)
+                skip = labelConsumed - 1
             } else if unit == "'" {
                 let scan = frontStringLikeScan(units, idx, unitCount, FrontChar)
                 let leadingDocLines = frontAttachedDocLines(
@@ -2258,6 +2288,46 @@ pub fn frontIdentScan(units: List<String>, start: Int, unitCount: Int) -> FrontS
     frontScanResult(FrontIdent, consumed, true)
 }
 
+/// frontScanLabel probes whether `units[start]` begins a G24 loop label
+/// (`'ident`). The caller guarantees `units[start] == "'"`. Returns the
+/// total consumed unit count including the leading apostrophe when the
+/// shape matches:
+///
+///   1. `units[start + 1]` is an ident-start (letter / `_`)
+///   2. Subsequent ident-continue chars run for at least one unit
+///   3. The first unit *after* the ident run is NOT `'` — rules out
+///      well-formed char literals like `'x'` which already tokenize as
+///      FrontChar via the existing path.
+///
+/// Returns `0` when the probe fails; the caller then falls back to the
+/// char-literal scan so malformed-char diagnostics stay unchanged.
+pub fn frontScanLabel(units: List<String>, start: Int, unitCount: Int) -> Int {
+    if start + 1 >= unitCount {
+        return 0
+    }
+    let head = frontUnitAt(units, start + 1)
+    if !(isFrontIdentStart(head)) {
+        return 0
+    }
+    let mut consumed = 1
+    for idx in (start + 1)..unitCount {
+        let unit = frontUnitAt(units, idx)
+        if isFrontIdentContinue(unit) {
+            consumed = consumed + 1
+        } else {
+            break
+        }
+    }
+    if consumed <= 1 {
+        return 0
+    }
+    let after = frontUnitAt(units, start + consumed)
+    if after == "'" {
+        return 0
+    }
+    consumed
+}
+
 pub fn frontKeywordKindAt(units: List<String>, start: Int, consumed: Int) -> FrontTokenKind {
     if frontUnitsMatch(units, start, consumed, "fn") {
         FrontFn
@@ -2968,6 +3038,7 @@ pub fn frontTokenKindName(kind: FrontTokenKind) -> String {
         FrontUnderscore -> "_",
         FrontAt -> "@",
         FrontHash -> "#",
+        FrontLabel -> "LABEL",
     }
 }
 

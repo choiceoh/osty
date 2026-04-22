@@ -714,16 +714,22 @@ type BreakStmt struct {
 	// `break` inside a `for`/`while` loop, where a value would be a
 	// type error.
 	Value Expr
+	// Label is the optional target-loop label on `break 'name` /
+	// `break 'name <expr>` (G24, §4.4). Empty for a bare `break`. The
+	// leading apostrophe is stripped during lexing; the stored text
+	// is just the identifier.
+	Label string
 }
 
 func (*BreakStmt) stmtNode()        {}
 func (s *BreakStmt) Pos() token.Pos { return s.PosV }
 func (s *BreakStmt) End() token.Pos { return s.EndV }
 
-// ContinueStmt is `continue`.
+// ContinueStmt is `continue` — optionally `continue 'label` (G24).
 type ContinueStmt struct {
-	PosV token.Pos
-	EndV token.Pos
+	PosV  token.Pos
+	EndV  token.Pos
+	Label string
 }
 
 func (*ContinueStmt) stmtNode()        {}
@@ -768,6 +774,10 @@ type ForStmt struct {
 	Pattern  Pattern // optional
 	Iter     Expr    // optional (nil = infinite)
 	Body     *Block
+	// Label is the optional `'name:` prefix (G24, §4.4) so enclosed
+	// `break 'name` / `continue 'name` can target this loop. Empty
+	// for unlabeled loops.
+	Label string
 }
 
 func (*ForStmt) stmtNode()        {}
@@ -914,12 +924,18 @@ func (e *QuestionExpr) End() token.Pos { return e.EndV }
 // flag so the checker can enforce the §7.4 Error-bound rules specific to
 // the sugar form (E0757) without mis-attributing plain `.downcast::<T>()`
 // calls.
+//
+// HasTrailingClosure marks the call as coming from trailing-closure sugar
+// `f(a) |x| { ... }` (G23, §A.2). The parser appends the closure to the
+// positional arg list; this flag lets the formatter restore the surface
+// form by splitting the last arg out of the parenthesised list.
 type CallExpr struct {
-	PosV          token.Pos
-	EndV          token.Pos
-	Fn            Expr
-	Args          []*Arg
-	IsAsQuestion  bool
+	PosV               token.Pos
+	EndV               token.Pos
+	Fn                 Expr
+	Args               []*Arg
+	IsAsQuestion       bool
+	HasTrailingClosure bool
 }
 
 // Arg is either positional (Name == "") or keyword (Name != "").
@@ -1124,6 +1140,9 @@ type LoopExpr struct {
 	PosV token.Pos
 	EndV token.Pos
 	Body *Block
+	// Label is the optional `'name:` prefix (G24, §4.4). Empty for
+	// unlabeled `loop { … }`.
+	Label string
 }
 
 func (*LoopExpr) exprNode()        {}

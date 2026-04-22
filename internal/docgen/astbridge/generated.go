@@ -167,6 +167,7 @@ func KindColonColon() Kind { return token.COLONCOLON }
 func KindUnderscore() Kind { return token.UNDERSCORE }
 func KindAt() Kind         { return token.AT }
 func KindHash() Kind       { return token.HASH }
+func KindLabel() Kind      { return token.LABEL }
 
 func FileNode(pos, end Pos, uses []Decl, decls []Decl, stmts []Stmt) File {
 	f := &ast.File{PosV: pos, EndV: end, Stmts: compactStmts(stmts)}
@@ -365,8 +366,24 @@ func BreakStmtValueNode(pos, end Pos, value Expr) Stmt {
 	return &ast.BreakStmt{PosV: pos, EndV: end, Value: value}
 }
 
+func BreakStmtLabelNode(pos, end Pos, label string, value Expr) Stmt {
+	return &ast.BreakStmt{PosV: pos, EndV: end, Label: label, Value: value}
+}
+
+func ContinueStmtLabelNode(pos, end Pos, label string) Stmt {
+	return &ast.ContinueStmt{PosV: pos, EndV: end, Label: label}
+}
+
 func LoopExprNode(pos, end Pos, body Block) Expr {
 	return &ast.LoopExpr{PosV: pos, EndV: end, Body: body}
+}
+
+func LoopExprLabelNode(pos, end Pos, label string, body Block) Expr {
+	return &ast.LoopExpr{PosV: pos, EndV: end, Label: label, Body: body}
+}
+
+func ForStmtLabelNode(pos, end Pos, label string, isForLet bool, pat Pattern, iter Expr, body Block) Stmt {
+	return &ast.ForStmt{PosV: pos, EndV: end, Label: label, IsForLet: isForLet, Pattern: pat, Iter: iter, Body: body}
 }
 
 func ContinueStmtNode(pos, end Pos) Stmt {
@@ -446,6 +463,10 @@ func CallExprNode(pos, end Pos, fn Expr, args []Arg) Expr {
 
 func CallExprAsQuestionNode(pos, end Pos, fn Expr, args []Arg) Expr {
 	return &ast.CallExpr{PosV: pos, EndV: end, Fn: fn, Args: compactArgs(args), IsAsQuestion: true}
+}
+
+func CallExprTrailingClosureNode(pos, end Pos, fn Expr, args []Arg) Expr {
+	return &ast.CallExpr{PosV: pos, EndV: end, Fn: fn, Args: compactArgs(args), HasTrailingClosure: true}
 }
 
 func RangeExprStepNode(pos, end Pos, start, stop, step Expr, inclusive bool) Expr {
