@@ -5693,15 +5693,38 @@ void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, 
 // lock across get + callback + insert. Recursive mutex so calls from
 // a user callback into the same map (e.g. counts.len()) re-acquire
 // instead of self-deadlocking.
+//
+// Single-threaded fast path: when `osty_concurrent_workers == 0`
+// there are no other threads that could observe partial state, so
+// both lock and unlock become no-ops. This is safe because:
+//   - The counter is incremented by the spawning thread BEFORE the
+//     new worker thread starts (see osty_rt_task_spawn), so a live
+//     worker always has workers >= 1 from every reader's view.
+//   - The counter is decremented only when workers join, which can
+//     only happen AFTER the current thread already observed > 0.
+//   - Readers on the spawning thread that see == 0 know the runtime
+//     is single-threaded at that moment; another thread cannot
+//     concurrently appear without this thread first incrementing
+//     the counter (which only happens via taskGroup → spawn), so
+//     the decision is stable for the duration of the op.
+//
+// The saving is substantial: every keyed op currently pays one
+// CRITICAL_SECTION enter/leave pair (Windows) or pthread_mutex
+// lock/unlock pair (POSIX) whether or not another thread exists.
+// In pure-main-thread programs that's 100% overhead on every
+// Map op — common case for CLI tools, build workloads, and the
+// whole osty-vs-go benchmark suite.
 void osty_rt_map_lock(void *raw_map) {
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     if (map == NULL || !map->mu_init) return;
+    if (osty_concurrent_workers == 0) return;
     osty_rt_rmu_lock(&map->mu);
 }
 
 void osty_rt_map_unlock(void *raw_map) {
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     if (map == NULL || !map->mu_init) return;
+    if (osty_concurrent_workers == 0) return;
     osty_rt_rmu_unlock(&map->mu);
 }
 
