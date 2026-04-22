@@ -100,14 +100,27 @@ func (g *gen) emitFnDeclBody(fn *ast.FnDecl, name string) {
 
 	prevRet := g.currentRetType
 	prevRetGo := g.currentRetGo
+	prevParams := g.currentFnParams
 	g.currentRetType = fn.ReturnType
 	g.currentRetGo = ""
 	if fn.ReturnType != nil {
 		g.currentRetGo = g.goTypeExpr(fn.ReturnType)
 	}
+	if len(fn.Params) > 0 {
+		params := make(map[string]ast.Type, len(fn.Params))
+		for _, p := range fn.Params {
+			if p.Name != "" && p.Type != nil {
+				params[p.Name] = p.Type
+			}
+		}
+		g.currentFnParams = params
+	} else {
+		g.currentFnParams = nil
+	}
 	defer func() {
 		g.currentRetType = prevRet
 		g.currentRetGo = prevRetGo
+		g.currentFnParams = prevParams
 	}()
 
 	g.emitBlockAsReturn(fn.Body, fn.ReturnType != nil)

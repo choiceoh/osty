@@ -650,7 +650,7 @@ pub fn hirLowerAnnotationStringLit(e: HirExpr) -> HirLowerStringParse {
 // ---- Internal digit helpers --------------------------------------
 
 fn hirLowerStripUnderscores(text: String) -> String {
-    strings.join(text.split("_"), "")
+    strings.join(strings.split(text, "_"), "")
 }
 
 fn hirLowerStripSign(text: String) -> String {
