@@ -468,17 +468,9 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 		os.Exit(1)
 	}
 	// 4. Transpile. Unsupported lowering shapes produce TODO markers;
-	// we log the warning but proceed so simple programs build. The
-	// per-file resolve handle is built but only consumed through the
-	// PrepareEntry single-file fallback below — when more than one
-	// .osty file lives in the package we route through PreparePackage
-	// so every sibling's top-level decls reach the merged ir.Module.
-	res := &resolve.Result{
-		Refs:      entryFile.Refs,
-		TypeRefs:  entryFile.TypeRefs,
-		FileScope: entryFile.FileScope,
-	}
-	_ = res // retained as fallback path below
+	// we log the warning but proceed so simple programs build. Package
+	// lowering is now the default even for single-file packages so the
+	// build path has one consistent backend entry contract.
 	if chk == nil {
 		chk = &check.Result{}
 	}
@@ -503,17 +495,49 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 		binName = runner.BuildBinaryName(binBaseOverride, pkgName, triple, targetOS, runtime.GOOS)
 	}
 	selectedBackend := backendFromCLI("build", backendID)
-	// Pick the multi-file path whenever the package has more than one
-	// source file. Single-file packages keep the historical
-	// PrepareEntry shape so backend tests that hand-build a one-file
-	// Package keep behaving identically.
+	layout := backend.Layout{
+		Root:    root,
+		Profile: profileName,
+		Target:  triple,
+	}
+	if backendID == backend.NameLLVM {
+		if emitResult, usedExternal, err := tryExternalPackageLLVMArtifacts(context.Background(), emitMode, layout, binName, resolved.Features, entryAbs, pkg); usedExternal {
+			if err != nil {
+				exitBackendEmitError("build", emitResult, err)
+			}
+			switch emitMode {
+			case backend.EmitBinary:
+				if emitResult.Artifacts.Binary != "" {
+					fmt.Printf("Built %s (%s)\n", emitResult.Artifacts.Binary, profileName)
+					return emitResult
+				}
+			case backend.EmitObject:
+				if emitResult.Artifacts.Object != "" {
+					fmt.Printf("Generated %s (%s)\n", emitResult.Artifacts.Object, profileName)
+					return emitResult
+				}
+			case backend.EmitLLVMIR:
+				if artifact := emitResult.Artifacts.SourcePath(); artifact != "" {
+					fmt.Printf("Generated %s (%s)\n", artifact, profileName)
+					return emitResult
+				}
+			}
+		}
+	}
+	// Package lowering is the default live build path; only degenerate
+	// empty-package callers fall back to a direct single-file entry.
 	var (
 		entry    backend.Entry
 		entryErr error
 	)
-	if pkg != nil && countLowerableFiles(pkg) > 1 {
+	if pkg != nil && countLowerableFiles(pkg) > 0 {
 		entry, entryErr = backend.PreparePackage("main", entryAbs, pkg, entryFile, chk)
 	} else {
+		res := &resolve.Result{
+			Refs:      entryFile.Refs,
+			TypeRefs:  entryFile.TypeRefs,
+			FileScope: entryFile.FileScope,
+		}
 		entry, entryErr = backend.PrepareEntry("main", entryAbs, entryFile.File, res, chk)
 	}
 	if err := entryErr; err != nil {
@@ -521,11 +545,7 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 		os.Exit(1)
 	}
 	emitResult, err := selectedBackend.Emit(context.Background(), backend.Request{
-		Layout: backend.Layout{
-			Root:    root,
-			Profile: profileName,
-			Target:  triple,
-		},
+		Layout:     layout,
 		Emit:       emitMode,
 		Entry:      entry,
 		BinaryName: binName,

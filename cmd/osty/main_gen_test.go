@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/osty/osty/internal/airepair"
+	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/diag"
 )
 
@@ -143,6 +145,152 @@ func TestPrepareGenBackendEntryUsesPackageLoweringForSiblingFiles(t *testing.T) 
 	}
 	if backendEntry.IR == nil || len(backendEntry.IR.Decls) != 2 {
 		t.Fatalf("backend entry decl count = %d, want 2", len(backendEntry.IR.Decls))
+	}
+}
+
+func TestPrepareGenBackendEntryUsesPackageLoweringForSingleFile(t *testing.T) {
+	dir := t.TempDir()
+	target := writeGenTestFile(t, dir, "main.osty", "fn main() { println(1) }\n")
+
+	entry, err := loadGenPackageEntry(target)
+	if err != nil {
+		t.Fatalf("loadGenPackageEntry() error = %v", err)
+	}
+	backendEntry, err := prepareGenBackendEntry("main", entry)
+	if err != nil {
+		t.Fatalf("prepareGenBackendEntry() error = %v", err)
+	}
+	if backendEntry.File != entry.file.File {
+		t.Fatal("backend entry did not keep the original single-file package AST")
+	}
+	if got := len(backendEntry.IR.Decls); got != 1 {
+		t.Fatalf("backend entry decl count = %d, want 1", got)
+	}
+}
+
+func TestEmitGenArtifactUsesNativeOwnedFastPathWhenCovered(t *testing.T) {
+	dir := t.TempDir()
+	target := writeGenTestFile(t, dir, "main.osty", `fn pick(flag: Bool) -> Int {
+    if flag {
+        42
+    } else {
+        0
+    }
+}
+
+fn main() {
+    let mut i = 0
+    let mut sum = 0
+    for i < 3 {
+        sum = sum + pick(i == 2)
+        i = i + 1
+    }
+    println(sum)
+}
+`)
+
+	entry, err := loadGenPackageEntry(target)
+	if err != nil {
+		t.Fatalf("loadGenPackageEntry() error = %v", err)
+	}
+	oldTry := tryExternalGenLLVMIR
+	tryExternalGenLLVMIR = func(*genPackageEntry) ([]byte, bool, []error, error) {
+		return nil, false, nil, nil
+	}
+	t.Cleanup(func() { tryExternalGenLLVMIR = oldTry })
+	backendEntry, err := prepareGenBackendEntry("main", entry)
+	if err != nil {
+		t.Fatalf("prepareGenBackendEntry() error = %v", err)
+	}
+	want, ok, warnings, err := backend.TryEmitNativeOwnedLLVMIRText(backendEntry, "")
+	if err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText() reported not covered for primitive slice")
+	}
+
+	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
+	if err != nil {
+		t.Fatalf("emitGenArtifact() error = %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("gen llvm-ir did not use native fast path output\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+	if result == nil {
+		t.Fatal("emitGenArtifact() result is nil")
+	}
+	if len(result.Warnings) != len(warnings) {
+		t.Fatalf("warning count = %d, want %d", len(result.Warnings), len(warnings))
+	}
+}
+
+func TestEmitGenArtifactUsesManagedNativeLLVMGenWhenCovered(t *testing.T) {
+	dir := t.TempDir()
+	target := writeGenTestFile(t, dir, "main.osty", "fn main() { println(1) }\n")
+
+	entry, err := loadGenPackageEntry(target)
+	if err != nil {
+		t.Fatalf("loadGenPackageEntry() error = %v", err)
+	}
+
+	oldTry := tryExternalGenLLVMIR
+	tryExternalGenLLVMIR = func(*genPackageEntry) ([]byte, bool, []error, error) {
+		return []byte("; external llvm ir"), true, []error{errors.New("external warning")}, nil
+	}
+	t.Cleanup(func() { tryExternalGenLLVMIR = oldTry })
+
+	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
+	if err != nil {
+		t.Fatalf("emitGenArtifact() error = %v", err)
+	}
+	if string(got) != "; external llvm ir" {
+		t.Fatalf("llvm ir = %q, want external output", got)
+	}
+	if result == nil || len(result.Warnings) != 1 || result.Warnings[0].Error() != "external warning" {
+		t.Fatalf("warnings = %#v, want external warning", result)
+	}
+}
+
+func TestEmitGenArtifactFallsBackForUncoveredNativeOwnedModule(t *testing.T) {
+	dir := t.TempDir()
+	target := writeGenTestFile(t, dir, "main.osty", `struct Pair { left: Int, right: Int }
+
+fn main() {
+    let mut pair = Pair { left: 1, right: 2 }
+    pair.left = 3
+    println(pair.left)
+}
+`)
+
+	entry, err := loadGenPackageEntry(target)
+	if err != nil {
+		t.Fatalf("loadGenPackageEntry() error = %v", err)
+	}
+	oldTry := tryExternalGenLLVMIR
+	tryExternalGenLLVMIR = func(*genPackageEntry) ([]byte, bool, []error, error) {
+		return nil, false, nil, nil
+	}
+	t.Cleanup(func() { tryExternalGenLLVMIR = oldTry })
+	backendEntry, err := prepareGenBackendEntry("main", entry)
+	if err != nil {
+		t.Fatalf("prepareGenBackendEntry() error = %v", err)
+	}
+	if _, ok, _, err := backend.TryEmitNativeOwnedLLVMIRText(backendEntry, ""); err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText() error = %v", err)
+	} else if ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText() unexpectedly covered struct field assignment")
+	}
+
+	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
+	if err != nil {
+		t.Fatalf("emitGenArtifact() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("emitGenArtifact() result is nil")
+	}
+	if !strings.Contains(string(got), "%Pair = type { i64, i64 }") {
+		t.Fatalf("fallback llvm-ir missing Pair type:\n%s", got)
 	}
 }
 

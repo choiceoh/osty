@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/osty/osty/internal/backend"
+	"github.com/osty/osty/internal/resolve"
 )
 
 func TestRunTestMainPassesNativeLLVMTest(t *testing.T) {
@@ -38,6 +42,66 @@ fn testAdd() {
 	}
 	if got := stderr.String(); strings.TrimSpace(got) != "" {
 		t.Fatalf("stderr = %q, want empty stderr", got)
+	}
+}
+
+func TestCompileNativeTestBundleUsesManagedNativeLLVMGenWhenCovered(t *testing.T) {
+	dir := t.TempDir()
+	path := writeNativeTestFile(t, dir, "lib_test.osty", `fn testAdd() {}
+`)
+	pkg := &resolve.Package{
+		Dir:  dir,
+		Name: "demo",
+		Files: []*resolve.PackageFile{
+			{Path: path, Source: []byte("fn testAdd() {}\n")},
+		},
+	}
+
+	oldTryIR := tryExternalPackageLLVMIR
+	oldEmit := emitPrebuiltLLVMIR
+	t.Cleanup(func() {
+		tryExternalPackageLLVMIR = oldTryIR
+		emitPrebuiltLLVMIR = oldEmit
+	})
+
+	objectPath := filepath.Join(t.TempDir(), "bundle.o")
+	tryExternalPackageLLVMIR = func(entryPath string, gotPkg *resolve.Package) ([]byte, bool, []error, error) {
+		if entryPath != path {
+			t.Fatalf("entryPath = %q, want %q", entryPath, path)
+		}
+		if gotPkg != pkg {
+			t.Fatal("got unexpected package pointer")
+		}
+		return []byte("; external ir"), true, nil, nil
+	}
+	emitPrebuiltLLVMIR = func(_ context.Context, req backend.Request, irOut []byte, warnings []error) (*backend.Result, error) {
+		if req.Emit != backend.EmitObject {
+			t.Fatalf("emit mode = %q, want object", req.Emit)
+		}
+		if req.BinaryName != "" {
+			t.Fatalf("binaryName = %q, want empty", req.BinaryName)
+		}
+		if string(irOut) != "; external ir" {
+			t.Fatalf("irOut = %q, want external ir", irOut)
+		}
+		return &backend.Result{
+			Backend: backend.NameLLVM,
+			Emit:    backend.EmitObject,
+			Artifacts: backend.Artifacts{
+				Object: objectPath,
+			},
+		}, nil
+	}
+
+	assets, err := compileNativeTestBundle(context.Background(), backend.LLVMBackend{}, t.TempDir(), pkg, nativeTestBundle{SourcePath: path})
+	if err != nil {
+		t.Fatalf("compileNativeTestBundle() error = %v", err)
+	}
+	if assets.ObjectPath != objectPath {
+		t.Fatalf("object path = %q, want %q", assets.ObjectPath, objectPath)
+	}
+	if assets.RuntimeObjectPath != "" {
+		t.Fatalf("runtime object path = %q, want empty when external result has no runtime dir", assets.RuntimeObjectPath)
 	}
 }
 

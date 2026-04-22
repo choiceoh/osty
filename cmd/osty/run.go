@@ -32,11 +32,7 @@ import (
 //  5. Execute the native backend binary, passing through the
 //     user-supplied arguments after `--`.
 //
-// Limitations (current emitter):
-//
-//   - Multi-file packages aren't fully emitted by the backend yet; run executes
-//     the selected entry file. Complex unsupported lowering shapes may
-//     still produce an unsupported-backend diagnostic.
+// Limitations:
 //
 //   - Registry / git dep code is vendored but NOT yet emitted
 //     together with the entry file — the Workspace loader sees them
@@ -217,15 +213,27 @@ func runRun(args []string, cliF cliFlags) {
 	}
 	binName := runner.BinaryNameFor(binBaseOverride, pkgName, runtime.GOOS)
 	selectedBackend := backendFromCLI("run", backendID)
-	// Multi-file packages must merge every sibling .osty file into one
-	// ir.Module before the backend runs; single-file packages keep the
-	// historical PrepareEntry path. countLowerableFiles lives in
-	// build.go alongside the analogous build-side dispatch.
+	layout := backend.Layout{
+		Root:    root,
+		Profile: resolved.Profile.Name,
+		Target:  triple,
+	}
+	if backendID == backend.NameLLVM {
+		if emitResult, usedExternal, err := tryExternalPackageLLVMArtifacts(context.Background(), emitMode, layout, binName, resolved.Features, entryAbs, rootPkg); usedExternal {
+			if err != nil {
+				exitBackendEmitError("run", emitResult, err)
+			}
+			runNativeBinary(emitResult.Artifacts.Binary, runArgs, runDir)
+			return
+		}
+	}
+	// Package lowering is the default live run path; only degenerate
+	// empty-package callers fall back to a direct single-file entry.
 	var (
 		backendEntry backend.Entry
 		entryErr     error
 	)
-	if rootPkg != nil && countLowerableFiles(rootPkg) > 1 {
+	if rootPkg != nil && countLowerableFiles(rootPkg) > 0 {
 		backendEntry, entryErr = backend.PreparePackage("main", entryAbs, rootPkg, entryFile, chk)
 	} else {
 		backendEntry, entryErr = backend.PrepareEntry("main", entryAbs, file, res, chk)
@@ -235,11 +243,7 @@ func runRun(args []string, cliF cliFlags) {
 		os.Exit(1)
 	}
 	emitResult, err := selectedBackend.Emit(context.Background(), backend.Request{
-		Layout: backend.Layout{
-			Root:    root,
-			Profile: resolved.Profile.Name,
-			Target:  triple,
-		},
+		Layout:     layout,
 		Emit:       emitMode,
 		Entry:      backendEntry,
 		BinaryName: binName,
@@ -274,4 +278,3 @@ func runNativeBinary(binPath string, args []string, dir string) {
 		os.Exit(1)
 	}
 }
-

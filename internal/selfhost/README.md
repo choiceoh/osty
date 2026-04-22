@@ -22,6 +22,9 @@ The exact merged Osty inputs live in
 
 - `ToolchainCheckerFiles()` feeds both the native checker binary and the
   `internal/selfhost/generated.go` regeneration path (via `gen_selfhost.go`)
+- `ToolchainLLVMGenFiles()` / `MergeToolchainLLVMGen()` expose the current
+  bootstrap-transpilable `toolchain/llvmgen.osty` bundle used by llvmgen
+  snapshot/selfhost smoke tests and future native llvmgen bridge work
 
 Notable inputs currently include:
 

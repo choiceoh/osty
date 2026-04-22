@@ -4,9 +4,10 @@
 // subcommand and the `--trace` global flag — both want the same
 // numbers, just rendered differently.
 //
-// Single-file mode only. The package isn't trying to subsume the
-// manifest-driven build orchestrator; for multi-file packages call
-// resolve.LoadPackage / check.Package directly.
+// The core Run/RunWithConfig entry points operate on a single source
+// buffer. Package/workspace helpers live here too for CLI tracing and
+// package-aware `--gen`, but this package still stops short of the
+// manifest-driven build orchestrator.
 package pipeline
 
 import (
@@ -25,12 +26,20 @@ import (
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/lint"
+	"github.com/osty/osty/internal/nativellvmgen"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
 )
+
+var tryExternalPipelineLLVMIR = func(entryPath string, pkg *resolve.Package) ([]byte, bool, []error, error) {
+	if pkg == nil {
+		return nil, false, nil, nil
+	}
+	return nativellvmgen.TryPackage(".", entryPath, pkg)
+}
 
 // declName returns the user-visible name of a top-level declaration,
 // or a placeholder when the AST node has no Name field. Used by the
@@ -252,25 +261,26 @@ func genHeader(name backend.Name, path string) string {
 	return fmt.Sprintf("\n; ---- %s ----\n", path)
 }
 
-func emitConfiguredGen(cfg Config, pkgName string, file *ast.File, res *resolve.Result, chk *check.Result, sourcePath string) ([]byte, error) {
-	name := configuredGenBackend(cfg)
-	mode := configuredGenEmit(cfg, name)
+func emitConfiguredGenPrepared(name backend.Name, mode backend.EmitMode, entry backend.Entry) ([]byte, error) {
+	if name == backend.NameLLVM && mode == backend.EmitLLVMIR {
+		out, warnings, emitErr := backend.EmitLLVMIRText(entry, "", nil)
+		if emitErr != nil {
+			return out, emitErr
+		}
+		if len(warnings) > 0 {
+			return out, warnings[0]
+		}
+		return out, nil
+	}
 	b, err := backend.New(name)
 	if err != nil {
 		return nil, err
-	}
-	if sourcePath == "" {
-		sourcePath = "<pipeline>"
 	}
 	tmpRoot, err := os.MkdirTemp("", "osty-pipeline-gen-*")
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(tmpRoot)
-	entry, err := backend.PrepareEntry(pkgName, sourcePath, file, res, chk)
-	if err != nil {
-		return nil, err
-	}
 
 	result, emitErr := b.Emit(context.Background(), backend.Request{
 		Layout: backend.Layout{
@@ -304,6 +314,73 @@ func emitConfiguredGen(cfg Config, pkgName string, file *ast.File, res *resolve.
 		return out, result.Warnings[0]
 	}
 	return out, nil
+}
+
+func emitConfiguredGen(cfg Config, pkgName string, file *ast.File, res *resolve.Result, chk *check.Result, sourcePath string) ([]byte, error) {
+	name := configuredGenBackend(cfg)
+	mode := configuredGenEmit(cfg, name)
+	if sourcePath == "" {
+		sourcePath = "<pipeline>"
+	}
+	entry, err := backend.PrepareEntry(pkgName, sourcePath, file, res, chk)
+	if err != nil {
+		return nil, err
+	}
+	return emitConfiguredGenPrepared(name, mode, entry)
+}
+
+func countLowerableFiles(pkg *resolve.Package) int {
+	if pkg == nil {
+		return 0
+	}
+	n := 0
+	for _, pf := range pkg.Files {
+		if pf != nil && pf.File != nil {
+			n++
+		}
+	}
+	return n
+}
+
+func packageEntryFile(pkg *resolve.Package) *resolve.PackageFile {
+	if pkg == nil {
+		return nil
+	}
+	for _, pf := range pkg.Files {
+		if pf != nil && pf.File != nil {
+			return pf
+		}
+	}
+	return nil
+}
+
+func emitConfiguredGenPackage(cfg Config, pkgName string, pkg *resolve.Package, chk *check.Result) ([]byte, error) {
+	if pkg == nil {
+		return nil, fmt.Errorf("missing package input for pipeline gen")
+	}
+	entryFile := packageEntryFile(pkg)
+	if entryFile == nil {
+		return nil, nil
+	}
+	name := configuredGenBackend(cfg)
+	mode := configuredGenEmit(cfg, name)
+	if name == backend.NameLLVM && mode == backend.EmitLLVMIR {
+		if out, ok, warnings, err := tryExternalPipelineLLVMIR(entryFile.Path, pkg); err == nil && ok {
+			if len(warnings) > 0 {
+				return out, warnings[0]
+			}
+			return out, nil
+		}
+	}
+	sourcePath := entryFile.Path
+	if sourcePath == "" {
+		sourcePath = "<pipeline>"
+	}
+	entry, err := backend.PreparePackage(pkgName, sourcePath, pkg, entryFile, chk)
+	if err != nil {
+		return nil, err
+	}
+	return emitConfiguredGenPrepared(name, mode, entry)
 }
 
 // Run executes lex → parse → resolve → check → lint over src with
@@ -622,46 +699,27 @@ func RunLoadedPackage(pkg *resolve.Package, stream io.Writer, cfg Config) Result
 		Counts:   map[string]int{"findings": len(lintDiags)},
 	})
 
-	// gen (optional, per-file aggregated). Backend emission is per-file;
-	// in package mode we run it once per file with that file's
-	// resolve view but the shared check.Result, then sum bytes-out
-	// and surface the first fatal error. Output bytes are concatenated
-	// into r.GenBytes with file headers so a downstream consumer can
-	// still reconstruct per-file boundaries.
+	// gen (optional, package-aware). Multi-file packages now lower once
+	// through backend.PreparePackage so sibling declarations share a
+	// single module; single-file packages keep the historical path.
 	if cfg.RunGen {
 		t0 = time.Now()
 		pkgName := genPackageName(cfg.GenPackageName, pkg.Name)
 		name := configuredGenBackend(cfg)
 		mode := configuredGenEmit(cfg, name)
-		var genBuf []byte
-		var firstErr error
+		out, err := emitConfiguredGenPackage(cfg, pkgName, pkg, chk)
+		r.GenBytes = out
+		r.GenError = err
 		genErrs := 0
-		for _, pf := range pkg.Files {
-			if pf.File == nil {
-				continue
-			}
-			fileRes := &resolve.Result{
-				Refs:      pf.Refs,
-				TypeRefs:  pf.TypeRefs,
-				FileScope: pf.FileScope,
-			}
-			out, err := emitConfiguredGen(cfg, pkgName, pf.File, fileRes, chk, pf.Path)
-			genBuf = append(genBuf, []byte(genHeader(name, pf.Path))...)
-			genBuf = append(genBuf, out...)
-			if err != nil {
-				genErrs++
-				if firstErr == nil {
-					firstErr = err
-				}
-			}
+		if err != nil {
+			genErrs = 1
 		}
-		r.GenBytes = genBuf
-		r.GenError = firstErr
+		lowerableFiles := countLowerableFiles(pkg)
 		label := genArtifactLabel(name, mode)
-		summary := fmt.Sprintf("%d bytes %s (across %d files)", len(genBuf), label, len(pkg.Files))
-		if firstErr != nil {
-			summary = fmt.Sprintf("%d bytes %s, %d file error(s); first: %v",
-				len(genBuf), label, genErrs, firstErr)
+		summary := fmt.Sprintf("%d bytes %s (package module from %d files)", len(out), label, lowerableFiles)
+		if err != nil {
+			summary = fmt.Sprintf("%d bytes %s (package module from %d files; error: %v)",
+				len(out), label, lowerableFiles, err)
 		}
 		emit(Stage{
 			Name:     "gen",
@@ -670,8 +728,8 @@ func RunLoadedPackage(pkg *resolve.Package, stream io.Writer, cfg Config) Result
 			Errors:   genErrs,
 			Warnings: 0,
 			Counts: map[string]int{
-				"bytes":       len(genBuf),
-				"files":       len(pkg.Files),
+				"bytes":       len(out),
+				"files":       lowerableFiles,
 				"file_errors": genErrs,
 			},
 		})
@@ -866,7 +924,7 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 		Counts:   map[string]int{"findings": len(lintDiags)},
 	})
 
-	// --- gen (workspace-wide aggregation) ---
+	// --- gen (workspace-wide package aggregation) ---
 	if cfg.RunGen {
 		t0 = time.Now()
 		name := configuredGenBackend(cfg)
@@ -882,23 +940,13 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 			}
 			pkgName := cfg.GenPackageName
 			pkgName = genPackageName(pkgName, pkg.Name)
-			for _, pf := range pkg.Files {
-				if pf.File == nil {
-					continue
-				}
-				fileRes := &resolve.Result{
-					Refs:      pf.Refs,
-					TypeRefs:  pf.TypeRefs,
-					FileScope: pf.FileScope,
-				}
-				out, err := emitConfiguredGen(cfg, pkgName, pf.File, fileRes, cr, pf.Path)
-				genBuf = append(genBuf, []byte(genHeader(name, pf.Path))...)
-				genBuf = append(genBuf, out...)
-				if err != nil {
-					genErrs++
-					if firstErr == nil {
-						firstErr = err
-					}
+			out, err := emitConfiguredGenPackage(cfg, pkgName, pkg, cr)
+			genBuf = append(genBuf, []byte(genHeader(name, pkg.Dir))...)
+			genBuf = append(genBuf, out...)
+			if err != nil {
+				genErrs++
+				if firstErr == nil {
+					firstErr = err
 				}
 			}
 		}

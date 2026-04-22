@@ -22,6 +22,24 @@ type nativeProjectionCtx struct {
 	structsByName map[string]*nativeStructInfo
 }
 
+// TryGenerateNativeOwnedModule emits textual LLVM IR only through the
+// native-owned primitive/control-flow slice mirrored from
+// toolchain/llvmgen.osty.
+//
+// ok=false means "shape not covered yet" and callers should choose a
+// fallback path themselves. Unlike GenerateModule, this helper never
+// falls back to the transitional IR -> AST bridge.
+func TryGenerateNativeOwnedModule(mod *ostyir.Module, opts Options) ([]byte, bool, error) {
+	if err := prepareModuleGeneration(mod); err != nil {
+		return nil, false, err
+	}
+	out, ok, err := tryNativeOwnedModule(mod, opts)
+	if err != nil || !ok {
+		return out, ok, err
+	}
+	return finalizeLegacyFFISurface(out, mod), true, nil
+}
+
 // tryNativeOwnedModule projects the IR module into the native-owned
 // primitive/control-flow slice mirrored from toolchain/llvmgen.osty.
 // ok=false means "shape not covered yet" and callers should fall back to the
