@@ -1,3 +1,4 @@
+#[vectorize]
 pub fn sumTo(n: Int) -> Int {
     let mut acc = 0
     for i in 0..n {
