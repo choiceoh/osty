@@ -288,6 +288,7 @@ func TryGenerateNativeOwnedModule(mod *ostyir.Module, opts Options) ([]byte, boo
 	if err := prepareModuleGeneration(mod); err != nil {
 		return nil, false, err
 	}
+	opts.Target = CanonicalLLVMTarget(opts.Target)
 	out, ok, err := tryNativeOwnedModule(mod, opts)
 	if err != nil || !ok {
 		return out, ok, err
@@ -305,6 +306,7 @@ func tryNativeOwnedModule(mod *ostyir.Module, opts Options) ([]byte, bool, error
 		return nil, false, nil
 	}
 	out := []byte(llvmNativeEmitModule(nativeMod))
+	out = withDataLayout(out, nativeMod.target)
 	out = appendNativeInterfaceSurface(out, mod, nativeMod)
 	out = appendNativeClosureThunks(out, nativeMod.projectionCtx)
 	return out, true, nil
@@ -314,6 +316,7 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 	if mod == nil {
 		return nil, false
 	}
+	opts.Target = CanonicalLLVMTarget(opts.Target)
 	ctx := &nativeProjectionCtx{
 		structsByName:     map[string]*nativeStructInfo{},
 		enumsByName:       map[string]*nativeEnumInfo{},

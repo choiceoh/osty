@@ -219,6 +219,8 @@ type llvmNativeRenderedFunction struct {
 	definition    string
 	stringGlobals []*LlvmStringGlobal
 	nextStringID  int
+	loopMDDefs    []string
+	nextLoopMD    int
 }
 
 type llvmNativeMaybeValue struct {
@@ -234,6 +236,8 @@ func llvmNativeEmitModule(mod *llvmNativeModule) string {
 	definitions := make([]string, 0, len(mod.globals)+len(mod.functions))
 	stringGlobals := append([]*LlvmStringGlobal(nil), mod.stringGlobals...)
 	nextStringID := len(stringGlobals)
+	loopMDDefs := make([]string, 0, len(mod.functions))
+	nextLoopMD := 0
 	for _, st := range mod.structs {
 		if st == nil {
 			continue
@@ -261,11 +265,14 @@ func llvmNativeEmitModule(mod *llvmNativeModule) string {
 		definitions = append(definitions, global.irName+" = internal "+kind+" "+global.llvmType+" "+global.init)
 	}
 	for _, fn := range mod.functions {
-		rendered := llvmNativeEmitFunction(fn, mod.globals, nextStringID)
+		rendered := llvmNativeEmitFunction(fn, mod.globals, nextStringID, nextLoopMD)
 		nextStringID = rendered.nextStringID
+		nextLoopMD = rendered.nextLoopMD
 		definitions = append(definitions, rendered.definition)
 		stringGlobals = append(stringGlobals, rendered.stringGlobals...)
+		loopMDDefs = append(loopMDDefs, rendered.loopMDDefs...)
 	}
+	definitions = append(definitions, loopMDDefs...)
 	return llvmRenderModuleWithRuntimeDeclarations(
 		mod.sourcePath,
 		mod.target,
@@ -425,7 +432,11 @@ func llvmNativeFastScalarListIndex(emitter *LlvmEmitter, paramName, idxName stri
 		elemPtr := llvmNextTemp(emitter)
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr inbounds %s, ptr %s, i64 %s", elemPtr, elemLLVM, data.name, index.name))
 		fastValue := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = load %s, ptr %s", fastValue, elemLLVM, elemPtr))
+		loadLine := fmt.Sprintf("  %s = load %s, ptr %s", fastValue, elemLLVM, elemPtr)
+		if emitter.parallelAccessHint && emitter.parallelAccessGroupRef != "" {
+			loadLine += fmt.Sprintf(", !llvm.access.group %s", emitter.parallelAccessGroupRef)
+		}
+		emitter.body = append(emitter.body, loadLine)
 		return &LlvmValue{typ: elemLLVM, name: fastValue, pointer: false}
 	}
 	nonNegative := llvmCompare(emitter, "sge", index, llvmIntLiteral(0))
@@ -450,11 +461,17 @@ func llvmNativeFastScalarListIndex(emitter *LlvmEmitter, paramName, idxName stri
 	return &LlvmValue{typ: elemLLVM, name: phi, pointer: false}
 }
 
-func llvmNativeEmitFunction(fn *llvmNativeFunction, globals []*llvmNativeGlobal, startStringID int) llvmNativeRenderedFunction {
+func llvmNativeEmitFunction(fn *llvmNativeFunction, globals []*llvmNativeGlobal, startStringID int, startLoopMD int) llvmNativeRenderedFunction {
 	emitter := llvmEmitter()
 	emitter.stringId = startStringID
+	emitter.nextLoopMD = startLoopMD
+	emitter.vectorizeHint = fn != nil && fn.vectorize
 	llvmNativeBindGlobals(emitter, globals)
 	eligibleScalarListParams := llvmNativeEligibleScalarListParams(fn)
+	if emitter.vectorizeHint && len(eligibleScalarListParams) > 0 {
+		emitter.parallelAccessHint = true
+		emitter.parallelAccessGroupRef = llvmNextAccessGroupRef(emitter)
+	}
 	params := make([]*LlvmParam, 0, len(fn.params))
 	for _, param := range fn.params {
 		paramIRType := param.llvmType
@@ -500,6 +517,8 @@ func llvmNativeEmitFunction(fn *llvmNativeFunction, globals []*llvmNativeGlobal,
 		definition:    llvmRenderFunction(retType, fn.name, params, emitter.body),
 		stringGlobals: append([]*LlvmStringGlobal(nil), emitter.stringGlobals...),
 		nextStringID:  emitter.stringId,
+		loopMDDefs:    append([]string(nil), emitter.loopMDDefs...),
+		nextLoopMD:    emitter.nextLoopMD,
 	}
 }
 

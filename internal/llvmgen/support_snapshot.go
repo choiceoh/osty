@@ -98,6 +98,19 @@ type LlvmEmitter struct {
 	// for any constant `addend` in `[0, k]`. Cleared on loop-body
 	// exit.
 	nativeSafeIndices map[string]map[string]int
+	// loopMDDefs accumulates module-scope loop metadata definitions
+	// for native-owned function emission. nextLoopMD keeps the `!N`
+	// namespace monotonically increasing across functions.
+	nextLoopMD int
+	loopMDDefs []string
+	// vectorizeHint mirrors the source-level vectorize bit for the
+	// current native-owned function. parallelAccessHint is the
+	// auto-enabled read-only scalar-list fast-path analogue of
+	// `#[parallel]`: when proven-safe raw-buffer loads are emitted,
+	// we attach one access-group and reference it from loop metadata.
+	vectorizeHint          bool
+	parallelAccessHint     bool
+	parallelAccessGroupRef string
 }
 
 // Osty: toolchain/llvmgen.osty:56:5
@@ -144,7 +157,54 @@ func llvmEmitter() *LlvmEmitter {
 		nativeListLens:    map[string]*LlvmValue{},
 		nativeBoundedLens: map[string]map[string]int{},
 		nativeSafeIndices: map[string]map[string]int{},
+		loopMDDefs:        make([]string, 0, 1),
 	}
+}
+
+func llvmLoopHintsActive(emitter *LlvmEmitter) bool {
+	if emitter == nil {
+		return false
+	}
+	return emitter.vectorizeHint || emitter.parallelAccessHint
+}
+
+func llvmNextLoopMetadataRef(emitter *LlvmEmitter, line string) string {
+	if emitter == nil {
+		return ""
+	}
+	ref := fmt.Sprintf("!%d", emitter.nextLoopMD)
+	emitter.nextLoopMD++
+	emitter.loopMDDefs = append(emitter.loopMDDefs, fmt.Sprintf("%s = %s", ref, line))
+	return ref
+}
+
+func llvmNextAccessGroupRef(emitter *LlvmEmitter) string {
+	return llvmNextLoopMetadataRef(emitter, "distinct !{}")
+}
+
+func llvmNextRangeLoopRef(emitter *LlvmEmitter) string {
+	if !llvmLoopHintsActive(emitter) {
+		return ""
+	}
+	props := make([]string, 0, 2)
+	if emitter.vectorizeHint {
+		props = append(props, llvmNextLoopMetadataRef(emitter, `!{!"llvm.loop.vectorize.enable", i1 true}`))
+	}
+	if emitter.parallelAccessHint && emitter.parallelAccessGroupRef != "" {
+		props = append(props, llvmNextLoopMetadataRef(emitter,
+			fmt.Sprintf(`!{!"llvm.loop.parallel_accesses", %s}`, emitter.parallelAccessGroupRef)))
+		props = append(props, llvmNextLoopMetadataRef(emitter,
+			`!{!"llvm.loop.unroll.count", i32 4}`))
+	}
+	if len(props) == 0 {
+		return ""
+	}
+	ref := fmt.Sprintf("!%d", emitter.nextLoopMD)
+	emitter.nextLoopMD++
+	children := append([]string{ref}, props...)
+	emitter.loopMDDefs = append(emitter.loopMDDefs,
+		fmt.Sprintf("%s = distinct !{%s}", ref, llvmStrings.Join(children, ", ")))
+	return ref
 }
 
 // Osty: toolchain/llvmgen.osty:94:5
@@ -1189,7 +1249,11 @@ func llvmRangeEnd(emitter *LlvmEmitter, loop *LlvmRangeLoop) {
 	}()
 	// Osty: toolchain/llvmgen.osty:868:5
 	func() struct{} {
-		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", ostyToString(loop.condLabel)))
+		line := fmt.Sprintf("  br label %%%s", ostyToString(loop.condLabel))
+		if loopMD := llvmNextRangeLoopRef(emitter); loopMD != "" {
+			line += fmt.Sprintf(", !llvm.loop %s", ostyToString(loopMD))
+		}
+		emitter.body = append(emitter.body, line)
 		return struct{}{}
 	}()
 	// Osty: toolchain/llvmgen.osty:869:5

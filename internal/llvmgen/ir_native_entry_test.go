@@ -32,6 +32,71 @@ func lowerNativeEntryModule(t *testing.T, src string) *ostyir.Module {
 	return mod
 }
 
+func renderNativeOwnedModuleText(nativeMod *llvmNativeModule) string {
+	if nativeMod == nil {
+		return ""
+	}
+	out := []byte(llvmNativeEmitModule(nativeMod))
+	return string(withDataLayout(out, nativeMod.target))
+}
+
+func TestTryGenerateNativeOwnedModuleAddsHostTargetHeader(t *testing.T) {
+	mod := lowerNativeEntryModule(t, `fn main() { println(1) }`)
+	out, ok, err := TryGenerateNativeOwnedModule(mod, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/native_entry_host_target.osty",
+	})
+	if err != nil {
+		t.Fatalf("TryGenerateNativeOwnedModule returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryGenerateNativeOwnedModule reported unsupported for primitive main")
+	}
+	wantTarget := CanonicalLLVMTarget("")
+	got := string(out)
+	if !strings.Contains(got, `target triple = "`+wantTarget+`"`) {
+		t.Fatalf("native-owned IR missing canonical host target %q:\n%s", wantTarget, got)
+	}
+	if !strings.Contains(got, `target datalayout = "`) {
+		t.Fatalf("native-owned IR missing target datalayout:\n%s", got)
+	}
+}
+
+func TestNativeOwnedModuleVectorizedScalarListLoopEmitsLoopMetadata(t *testing.T) {
+	src := `#[vectorize]
+fn sum(xs: List<Int>) -> Int {
+    let mut out = 0
+    for i in 0..xs.len() {
+        out = out + xs[i]
+    }
+    out
+}
+
+fn main() {
+    println(sum([1, 2, 3, 4]))
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	nativeMod, ok := nativeModuleFromIR(mod, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/native_entry_vector_loop.osty",
+	})
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for vectorized scalar list loop")
+	}
+	got := renderNativeOwnedModuleText(nativeMod)
+	for _, want := range []string{
+		"!llvm.loop !",
+		`!"llvm.loop.vectorize.enable", i1 true`,
+		`!"llvm.loop.parallel_accesses",`,
+		`!llvm.access.group !`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("native-owned loop IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestNativeOwnedModuleEntryPrimitiveSlice(t *testing.T) {
 	src := `fn pick(flag: Bool) -> Int {
     if flag {
@@ -57,7 +122,7 @@ fn main() {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for primitive slice")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define i64 @pick(i1 %flag)",
 		"phi i64",
@@ -138,7 +203,7 @@ fn main() {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for plain struct slice")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"%Pair = type { i64, i64 }",
 		"insertvalue %Pair",
@@ -178,7 +243,7 @@ fn main() {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for plain struct method slice")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define i64 @Pair__total(%Pair %self)",
 		"call i64 @Pair__total(%Pair",
@@ -218,7 +283,7 @@ fn main() {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for mut self method slice")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define void @Counter__bump(ptr %self)",
 		"call void @Counter__bump(ptr",
@@ -263,7 +328,7 @@ fn main() {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for projected local mut self receiver")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"alloca %Counter",
 		"call void @Counter__bump(ptr",
@@ -307,7 +372,7 @@ fn run(mut box: Box) {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for projected param mut self receiver")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define void @run(%Box %box)",
 		"alloca %Box",
@@ -385,7 +450,7 @@ fn main() {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for local struct field assignment")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"%Pair = type { i64, i64 }",
 		"store %Pair",
@@ -421,7 +486,7 @@ fn main() {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for nested local struct field assignment")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	if strings.Count(direct, "extractvalue") < 2 {
 		t.Fatalf("native-owned nested field-assign IR missing chained extractvalue ops:\n%s", direct)
 	}
@@ -451,7 +516,7 @@ fn bump(mut pair: Pair) {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for param struct field assignment")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define void @bump(%Pair %pair)",
 		"alloca %Pair",
@@ -488,7 +553,7 @@ fn main() {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for global struct field assignment")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"@osty_global_ORIGIN = internal global %Point { i64 1, i64 2 }",
 		"load %Point, ptr @osty_global_ORIGIN",
@@ -525,7 +590,7 @@ fn main() {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for top-level global let")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"@osty_global_MAX_USERS = internal constant i64 10000",
 		"define i64 @limit()",
@@ -557,7 +622,7 @@ fn main() {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for top-level global string let")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"@osty_global_DEFAULT_ERROR = internal constant ptr @.str0",
 		"load ptr, ptr @osty_global_DEFAULT_ERROR",
@@ -591,7 +656,7 @@ fn main() {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for top-level global struct let")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"%Point = type { i64, i64 }",
 		"@osty_global_ORIGIN = internal constant %Point { i64 0, i64 0 }",
@@ -631,7 +696,7 @@ func TestNativeOwnedModuleEntryStringMethodBatch(t *testing.T) {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for string method batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define i64 @describe(ptr %s)",
 		"declare ptr @osty_rt_strings_TrimSpace(ptr)",
@@ -673,7 +738,7 @@ func TestNativeOwnedModuleEntryListSetMethodBatch(t *testing.T) {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for list/set method batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define i64 @touch(ptr %words)",
 		"declare ptr @osty_rt_list_to_set_string(ptr)",
@@ -710,7 +775,7 @@ func TestNativeOwnedModuleEntryListPushInsertBatch(t *testing.T) {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for list push/insert batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define i64 @build(ptr %xs)",
 		"declare void @osty_rt_list_push_i64(ptr, i64)",
@@ -752,7 +817,7 @@ func TestNativeOwnedModuleEntryMapMethodBatch(t *testing.T) {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for map method batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define i64 @touch(ptr %counts)",
 		"declare void @osty_rt_map_insert_string(ptr, ptr, ptr)",
@@ -788,7 +853,7 @@ func TestNativeOwnedModuleEntryListLiteralAndIndexBatch(t *testing.T) {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for list literal/index batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define i64 @build()",
 		"declare ptr @osty_rt_list_new()",
@@ -825,7 +890,7 @@ fn build() -> Int {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for list struct bytes batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"%Point = type { i64, i64 }",
 		"declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64)",
@@ -859,7 +924,7 @@ func TestNativeOwnedModuleEntryMapIndexBatch(t *testing.T) {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for map index batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define i64 @lookup(ptr %counts)",
 		"declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr)",
@@ -892,7 +957,7 @@ func TestNativeOwnedModuleEntryTupleBatch(t *testing.T) {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for tuple batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"%Tuple.i64.i64 = type { i64, i64 }",
 		"insertvalue %Tuple.i64.i64 undef, i64 1, 0",
@@ -922,7 +987,7 @@ func TestNativeOwnedModuleEntryTupleParamBatch(t *testing.T) {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for tuple param batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"%Tuple.i64.ptr = type { i64, ptr }",
 		"define i64 @first(%Tuple.i64.ptr %p)",
@@ -955,7 +1020,7 @@ fn build() -> Int {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for map literal struct batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"%Point = type { i64, i64 }",
 		"declare ptr @osty_rt_map_new()",
@@ -1006,7 +1071,7 @@ fn main() {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for projected global mut self receiver")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"@osty_global_STATE = internal global %Box",
 		"load %Box, ptr @osty_global_STATE",
@@ -1163,7 +1228,7 @@ func TestNativeOwnedModuleEntryOptionalMethodBatch(t *testing.T) {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for optional method batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define i1 @flags(ptr %name)",
 		"icmp ne ptr",
@@ -1194,7 +1259,7 @@ func TestNativeOwnedModuleEntryOptionalCoalesceStringBatch(t *testing.T) {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for optional string coalesce batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define ptr @display(ptr %name)",
 		"icmp eq ptr",
@@ -1225,7 +1290,7 @@ func TestNativeOwnedModuleEntryOptionalCoalesceScalarBatch(t *testing.T) {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for optional scalar coalesce batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define i64 @score(ptr %value)",
 		"icmp eq ptr",
@@ -1258,7 +1323,7 @@ func TestNativeOwnedModuleEntryOptionalQuestionScalarBatch(t *testing.T) {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for optional scalar question batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"define ptr @requireScore(ptr %score)",
 		"ret ptr null",
@@ -1292,7 +1357,7 @@ fn requireName(profile: Profile?) -> String? {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for optional struct question batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"%Profile = type { ptr }",
 		"define ptr @requireName(ptr %profile)",
@@ -1326,7 +1391,7 @@ fn maybeName(profile: Profile?) -> String? {
 	if !ok {
 		t.Fatal("nativeModuleFromIR returned unsupported for optional field batch")
 	}
-	direct := llvmNativeEmitModule(nativeMod)
+	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"%Profile = type { ptr }",
 		"define ptr @maybeName(ptr %profile)",
