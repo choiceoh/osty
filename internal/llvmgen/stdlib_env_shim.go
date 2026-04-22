@@ -4,8 +4,8 @@
 // placeholder returning an empty list; this shim bypasses it so real
 // process environment reaches the program. `env.args()`,
 // `env.get(name)`, `env.require(name)`, `env.vars()`,
-// `env.currentDir()`, and `env.setCurrentDir(path)` are covered; the
-// remaining std.env surface (set, unset, …)
+// `env.currentDir()`, `env.setCurrentDir(path)`, `env.set(name, value)`,
+// and `env.unset(name)` are covered.
 // still falls through to LLVM015 and needs its own runtime helper + switch arm.
 package llvmgen
 
@@ -20,6 +20,8 @@ const ostyRtEnvVarsSymbol = "osty_rt_env_vars"
 const ostyRtEnvCurrentDirSymbol = "osty_rt_env_current_dir"
 const ostyRtEnvCurrentDirErrorSymbol = "osty_rt_env_current_dir_error"
 const ostyRtEnvSetCurrentDirSymbol = "osty_rt_env_set_current_dir"
+const ostyRtEnvSetSymbol = "osty_rt_env_set"
+const ostyRtEnvUnsetSymbol = "osty_rt_env_unset"
 
 // Shared across every env.args() call site so type inference doesn't
 // re-allocate an identical `List<String>` AST tree per reference.
@@ -42,7 +44,7 @@ var stdEnvRequireResultSourceTypeSingleton ast.Type = &ast.NamedType{
 
 var unitTupleSourceTypeSingleton ast.Type = &ast.TupleType{}
 
-var stdEnvSetCurrentDirResultSourceTypeSingleton ast.Type = &ast.NamedType{
+var stdEnvUnitErrorResultSourceTypeSingleton ast.Type = &ast.NamedType{
 	Path: []string{"Result"},
 	Args: []ast.Type{
 		unitTupleSourceTypeSingleton,
@@ -97,6 +99,10 @@ func (g *generator) emitStdEnvCall(call *ast.CallExpr) (value, bool, error) {
 		return g.emitStdEnvCurrentDirCall(call)
 	case "setCurrentDir":
 		return g.emitStdEnvSetCurrentDirCall(call)
+	case "set":
+		return g.emitStdEnvSetCall(call)
+	case "unset":
+		return g.emitStdEnvUnsetCall(call)
 	default:
 		return value{}, false, nil
 	}
@@ -150,13 +156,31 @@ func (g *generator) stdEnvCallStaticResult(call *ast.CallExpr) (value, bool) {
 			sourceType: stdEnvRequireResultSourceTypeSingleton,
 		}, true
 	case "setCurrentDir":
-		info, ok := builtinResultTypeFromAST(stdEnvSetCurrentDirResultSourceTypeSingleton, g.typeEnv())
+		info, ok := builtinResultTypeFromAST(stdEnvUnitErrorResultSourceTypeSingleton, g.typeEnv())
 		if !ok {
 			return value{}, false
 		}
 		return value{
 			typ:        info.typ,
-			sourceType: stdEnvSetCurrentDirResultSourceTypeSingleton,
+			sourceType: stdEnvUnitErrorResultSourceTypeSingleton,
+		}, true
+	case "set":
+		info, ok := builtinResultTypeFromAST(stdEnvUnitErrorResultSourceTypeSingleton, g.typeEnv())
+		if !ok {
+			return value{}, false
+		}
+		return value{
+			typ:        info.typ,
+			sourceType: stdEnvUnitErrorResultSourceTypeSingleton,
+		}, true
+	case "unset":
+		info, ok := builtinResultTypeFromAST(stdEnvUnitErrorResultSourceTypeSingleton, g.typeEnv())
+		if !ok {
+			return value{}, false
+		}
+		return value{
+			typ:        info.typ,
+			sourceType: stdEnvUnitErrorResultSourceTypeSingleton,
 		}, true
 	default:
 		return value{}, false
@@ -183,7 +207,11 @@ func (g *generator) staticStdEnvCallSourceType(call *ast.CallExpr) (ast.Type, bo
 	case "currentDir":
 		return stdEnvRequireResultSourceTypeSingleton, true
 	case "setCurrentDir":
-		return stdEnvSetCurrentDirResultSourceTypeSingleton, true
+		return stdEnvUnitErrorResultSourceTypeSingleton, true
+	case "set":
+		return stdEnvUnitErrorResultSourceTypeSingleton, true
+	case "unset":
+		return stdEnvUnitErrorResultSourceTypeSingleton, true
 	default:
 		return nil, false
 	}
@@ -395,7 +423,7 @@ func (g *generator) emitStdEnvSetCurrentDirCall(call *ast.CallExpr) (value, bool
 		return value{}, true, unsupported("call", "env.setCurrentDir requires one positional String argument")
 	}
 	unitInfo := g.registerTupleType(nil, nil)
-	info, ok := builtinResultTypeFromAST(stdEnvSetCurrentDirResultSourceTypeSingleton, g.typeEnv())
+	info, ok := builtinResultTypeFromAST(stdEnvUnitErrorResultSourceTypeSingleton, g.typeEnv())
 	if !ok {
 		return value{}, true, unsupported("type-system", "env.setCurrentDir Result<(), Error> type is unavailable")
 	}
@@ -451,7 +479,130 @@ func (g *generator) emitStdEnvSetCurrentDirCall(call *ast.CallExpr) (value, bool
 	v := value{
 		typ:        info.typ,
 		ref:        phi,
-		sourceType: stdEnvSetCurrentDirResultSourceTypeSingleton,
+		sourceType: stdEnvUnitErrorResultSourceTypeSingleton,
+	}
+	v.rootPaths = g.rootPathsForType(v.typ)
+	return v, true, nil
+}
+
+func (g *generator) emitStdEnvSetCall(call *ast.CallExpr) (value, bool, error) {
+	if len(call.Args) != 2 {
+		return value{}, true, unsupportedf("call", "env.set expects 2 arguments, got %d", len(call.Args))
+	}
+	first := call.Args[0]
+	second := call.Args[1]
+	if first == nil || first.Name != "" || first.Value == nil || second == nil || second.Name != "" || second.Value == nil {
+		return value{}, true, unsupported("call", "env.set requires two positional String arguments")
+	}
+	name, err := g.emitExpr(first.Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	name = g.protectManagedTemporary("env.set.name", name)
+	name, err = g.loadIfPointer(name)
+	if err != nil {
+		return value{}, true, err
+	}
+	if name.typ != "ptr" {
+		return value{}, true, unsupportedf("type-system", "env.set arg 1 type %s, want String", name.typ)
+	}
+	valueArg, err := g.emitExpr(second.Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	valueArg = g.protectManagedTemporary("env.set.value", valueArg)
+	valueArg, err = g.loadIfPointer(valueArg)
+	if err != nil {
+		return value{}, true, err
+	}
+	if valueArg.typ != "ptr" {
+		return value{}, true, unsupportedf("type-system", "env.set arg 2 type %s, want String", valueArg.typ)
+	}
+	return g.emitStdEnvUnitErrorResultFromRuntimeCall(
+		"env.set",
+		stdEnvUnitErrorResultSourceTypeSingleton,
+		ostyRtEnvSetSymbol,
+		[]paramInfo{{typ: "ptr"}, {typ: "ptr"}},
+		[]*LlvmValue{toOstyValue(name), toOstyValue(valueArg)},
+	)
+}
+
+func (g *generator) emitStdEnvUnsetCall(call *ast.CallExpr) (value, bool, error) {
+	if len(call.Args) != 1 {
+		return value{}, true, unsupportedf("call", "env.unset expects 1 argument, got %d", len(call.Args))
+	}
+	arg := call.Args[0]
+	if arg == nil || arg.Name != "" || arg.Value == nil {
+		return value{}, true, unsupported("call", "env.unset requires one positional String argument")
+	}
+	name, err := g.emitExpr(arg.Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	name = g.protectManagedTemporary("env.unset.name", name)
+	name, err = g.loadIfPointer(name)
+	if err != nil {
+		return value{}, true, err
+	}
+	if name.typ != "ptr" {
+		return value{}, true, unsupportedf("type-system", "env.unset arg 1 type %s, want String", name.typ)
+	}
+	return g.emitStdEnvUnitErrorResultFromRuntimeCall(
+		"env.unset",
+		stdEnvUnitErrorResultSourceTypeSingleton,
+		ostyRtEnvUnsetSymbol,
+		[]paramInfo{{typ: "ptr"}},
+		[]*LlvmValue{toOstyValue(name)},
+	)
+}
+
+func (g *generator) emitStdEnvUnitErrorResultFromRuntimeCall(prefix string, sourceType ast.Type, symbol string, params []paramInfo, args []*LlvmValue) (value, bool, error) {
+	unitInfo := g.registerTupleType(nil, nil)
+	info, ok := builtinResultTypeFromAST(sourceType, g.typeEnv())
+	if !ok {
+		return value{}, true, unsupportedf("type-system", "%s Result<(), Error> type is unavailable", prefix)
+	}
+	if g.resultTypes == nil {
+		g.resultTypes = map[string]builtinResultType{}
+	}
+	g.resultTypes[info.typ] = info
+	if info.okTyp != unitInfo.typ || info.errTyp != "ptr" {
+		return value{}, true, unsupportedf("type-system", "%s currently needs Result<%s, ptr>, got ok=%s err=%s", prefix, unitInfo.typ, info.okTyp, info.errTyp)
+	}
+	g.declareRuntimeSymbol(symbol, "ptr", params)
+	emitter := g.toOstyEmitter()
+	g.emitCallSafepointIfNeeded(emitter)
+	errText := llvmCall(emitter, "ptr", symbol, args)
+	failed := llvmCompare(emitter, "ne", errText, toOstyValue(value{typ: "ptr", ref: "null"}))
+	errLabel := llvmNextLabel(emitter, llvmBuiltinAggregatePart(prefix)+".err")
+	okLabel := llvmNextLabel(emitter, llvmBuiltinAggregatePart(prefix)+".ok")
+	contLabel := llvmNextLabel(emitter, llvmBuiltinAggregatePart(prefix)+".cont")
+	emitter.body = append(emitter.body, "  br i1 "+failed.name+", label %"+errLabel+", label %"+okLabel)
+
+	emitter.body = append(emitter.body, errLabel+":")
+	errResult := llvmStructLiteral(emitter, info.typ, []*LlvmValue{
+		toOstyValue(value{typ: "i64", ref: "1"}),
+		toOstyValue(llvmZeroValue(info.okTyp)),
+		errText,
+	})
+	emitter.body = append(emitter.body, "  br label %"+contLabel)
+
+	emitter.body = append(emitter.body, okLabel+":")
+	okResult := llvmStructLiteral(emitter, info.typ, []*LlvmValue{
+		toOstyValue(value{typ: "i64", ref: "0"}),
+		toOstyValue(llvmZeroValue(info.okTyp)),
+		toOstyValue(llvmZeroValue(info.errTyp)),
+	})
+	emitter.body = append(emitter.body, "  br label %"+contLabel)
+
+	emitter.body = append(emitter.body, contLabel+":")
+	phi := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, "  "+phi+" = phi "+info.typ+" [ "+errResult.name+", %"+errLabel+" ], [ "+okResult.name+", %"+okLabel+" ]")
+	g.takeOstyEmitter(emitter)
+	v := value{
+		typ:        info.typ,
+		ref:        phi,
+		sourceType: sourceType,
 	}
 	v.rootPaths = g.rootPathsForType(v.typ)
 	return v, true, nil

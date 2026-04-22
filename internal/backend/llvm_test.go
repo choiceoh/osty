@@ -1237,6 +1237,78 @@ fn main() {
 	}
 }
 
+func TestLLVMBackendBinaryStdEnvSetMutatesProcessEnv(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use std.env
+
+fn main() {
+    match env.set("OSTY_ENV_SET_TEST", "configured") {
+        Ok(_) -> println(env.get("OSTY_ENV_SET_TEST") ?? "missing"),
+        Err(err) -> println(err.message()),
+    }
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	filteredEnv := []string{}
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "OSTY_ENV_SET_TEST=") {
+			continue
+		}
+		filteredEnv = append(filteredEnv, entry)
+	}
+	cmd.Env = filteredEnv
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "configured\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLLVMBackendBinaryStdEnvUnsetMutatesProcessEnv(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use std.env
+
+fn main() {
+    match env.unset("OSTY_ENV_UNSET_TEST") {
+        Ok(_) -> println(env.get("OSTY_ENV_UNSET_TEST") ?? "missing"),
+        Err(err) -> println(err.message()),
+    }
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	filteredEnv := []string{}
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "OSTY_ENV_UNSET_TEST=") {
+			continue
+		}
+		filteredEnv = append(filteredEnv, entry)
+	}
+	cmd.Env = append(filteredEnv, "OSTY_ENV_UNSET_TEST=configured")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "missing\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
 func TestLLVMBackendBinarySafepointsKeepManagedRootsAlive(t *testing.T) {
 	parallelClangBackendTest(t)
 
