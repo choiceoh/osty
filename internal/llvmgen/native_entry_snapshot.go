@@ -499,6 +499,18 @@ func llvmNativeEmitStmt(emitter *LlvmEmitter, stmt *llvmNativeStmt) {
 		}
 	case llvmNativeStmtAssign:
 		if len(stmt.childExprs) > 0 {
+			// An assignment to a while-loop loopvar invalidates the
+			// bounds-analysis safety for the rest of the body. See
+			// llvmNativeStmtWhile — the condition guarantees
+			// `loopvar < bound` at body *entry*; once the body writes
+			// to loopvar, the guarantee may no longer hold for
+			// subsequent accesses in the same iteration. The next
+			// iteration's condition re-evaluation re-publishes it.
+			// Only clear when the destination is actually a current
+			// safe-index name, so we don't touch unrelated assigns.
+			if _, tracked := emitter.nativeSafeIndices[stmt.name]; tracked {
+				delete(emitter.nativeSafeIndices, stmt.name)
+			}
 			_ = llvmAssign(emitter, stmt.name, llvmNativeAssignValue(emitter, stmt))
 		}
 	case llvmNativeStmtFieldAssign:
@@ -529,12 +541,65 @@ func llvmNativeEmitStmt(emitter *LlvmEmitter, stmt *llvmNativeStmt) {
 		condLabel := llvmNextLabel(emitter, "for.cond")
 		bodyLabel := llvmNextLabel(emitter, "for.body")
 		endLabel := llvmNextLabel(emitter, "for.end")
+		// Bounds-analysis for while loops: if the condition is shaped
+		// `loopvar < <bounded-expr>` where the bounded expression's
+		// value is `<= list.len() + k` for some list set, then at the
+		// top of the body `loopvar` is guaranteed to fall in
+		// `[0, list.len() - k)` for those lists (assuming non-negative
+		// loopvar — common for counter-style loops, checked below by
+		// requiring the condition's LHS to be an ident whose current
+		// binding was already shown to be integer-typed).
+		//
+		// Safety holds only until the body modifies `loopvar` — see
+		// the assign case below which clears the entry on any write
+		// to a safe-index name. A subsequent `loopvar = loopvar + K`
+		// invalidates for the rest of the body; the next iteration's
+		// condition re-evaluation re-publishes it.
+		var whileLoopVar string
+		var whileSafeLists map[string]int
+		// primedLenReg, when non-nil, is the pre-hoisted length
+		// register for the condition's RHS — emitted once before
+		// the cond label so subsequent iterations reuse it instead
+		// of re-calling osty_rt_list_len each loop.
+		var primedLenReg *LlvmValue
+		if cmp := stmt.childExprs[0]; cmp != nil && cmp.kind == llvmNativeExprBinary && cmp.op == "<" && len(cmp.childExprs) == 2 {
+			lhs := cmp.childExprs[0]
+			rhs := cmp.childExprs[1]
+			if lhs != nil && lhs.kind == llvmNativeExprIdent {
+				if lists := llvmNativeBoundedLensFor(emitter, rhs); len(lists) > 0 {
+					whileLoopVar = lhs.name
+					whileSafeLists = lists
+				}
+				// Separate check: if the RHS is exactly
+				// `list.len()` for an already-primed scalar list
+				// parameter, the cached length is loop-invariant.
+				// Reuse it verbatim instead of re-calling the
+				// runtime helper every iteration. Without this,
+				// LLVM can't hoist because osty_rt_list_len has
+				// no memory-effect attribute.
+				if list := llvmNativeListLenSource(rhs); list != "" {
+					if length := emitter.nativeListLens[list]; length != nil {
+						primedLenReg = length
+					}
+				}
+			}
+		}
 		emitter.body = append(emitter.body, "  br label %"+condLabel)
 		emitter.body = append(emitter.body, condLabel+":")
-		cond := llvmNativeEvalExpr(emitter, stmt.childExprs[0])
+		var cond *LlvmValue
+		if primedLenReg != nil {
+			// Inline the comparison: i < primed_len. Saves a runtime
+			// call per iteration.
+			lhsVal := llvmNativeEvalExpr(emitter, stmt.childExprs[0].childExprs[0])
+			cond = llvmCompare(emitter, "slt", lhsVal, primedLenReg)
+		} else {
+			cond = llvmNativeEvalExpr(emitter, stmt.childExprs[0])
+		}
 		emitter.body = append(emitter.body, "  br i1 "+cond.name+", label %"+bodyLabel+", label %"+endLabel)
 		emitter.body = append(emitter.body, bodyLabel+":")
+		llvmNativePushSafeIndices(emitter, whileLoopVar, whileSafeLists)
 		_ = llvmNativeEmitBlock(emitter, stmt.childBlocks[0])
+		llvmNativePopSafeIndices(emitter, whileLoopVar)
 		emitter.body = append(emitter.body, "  br label %"+condLabel)
 		emitter.body = append(emitter.body, endLabel+":")
 	case llvmNativeStmtRange:
