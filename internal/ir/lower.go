@@ -1732,6 +1732,28 @@ func (l *lowerer) lowerClosure(c *ast.ClosureExpr) Expr {
 	for _, p := range c.Params {
 		out.Params = append(out.Params, l.lowerParam(p))
 	}
+	// Inline closures (`|acc, n| ...`) leave the per-param AST Type
+	// nil because the user didn't annotate them — the checker's
+	// inference picks them up via the call-site context (e.g.
+	// `xs.fold(0, |acc, n| ...)` resolves to fn(Int, Int) -> Int).
+	// `lowerParam` faithfully forwards the nil, but downstream IR
+	// validation rejects nil param types ("Closure: param[i] nil
+	// Type"). The checker's inferred FnType is in out.T already, so
+	// backfill missing param types from there.
+	//
+	// Closure return is filled the same way when no explicit
+	// annotation is present and the inferred FnType has a Return.
+	if fnT, ok := out.T.(*FnType); ok && fnT != nil {
+		for i, p := range out.Params {
+			if p == nil || p.Type != nil || i >= len(fnT.Params) {
+				continue
+			}
+			p.Type = fnT.Params[i]
+		}
+		if c.ReturnType == nil && fnT.Return != nil && out.Return == TUnit {
+			out.Return = fnT.Return
+		}
+	}
 	// Body is always an expression. Wrap non-block bodies in a synthetic
 	// block with the expression as the Result.
 	if blk, ok := c.Body.(*ast.Block); ok {
