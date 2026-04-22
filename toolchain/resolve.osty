@@ -1752,24 +1752,11 @@ fn srUndefinedHint(scope: SelfResolveScope, name: String) -> String {
 }
 
 fn srSuggestSimilar(scope: SelfResolveScope, name: String) -> String {
-    let mut best = ""
-    let mut bestDist = 3
-    let nameLen = srStringUnitCount(name)
+    let mut names: List<String> = []
     for sym in scope.symbols {
-        let diff = srStringUnitCount(sym.name) - nameLen
-        if diff > bestDist - 1 || 0 - diff > bestDist - 1 {
-            continue
-        }
-        let dist = srLevenshteinBounded(name, sym.name, bestDist)
-        if dist < bestDist {
-            best = sym.name
-            bestDist = dist
-            if bestDist == 1 {
-                return best
-            }
-        }
+        names.push(sym.name)
     }
-    best
+    srSuggestFromList(name, names)
 }
 
 fn srLevenshteinBounded(left: String, right: String, limit: Int) -> Int {
@@ -2017,7 +2004,7 @@ fn srCollectAnnotationNodes(file: AstFile, extraIdx: Int) -> List<AstNode> {
 
 /// srCheckDeclAnnotations validates the annotations attached to a single
 /// declaration (or member) against v0.4 §18.1:
-///   - unknown names → E0400
+///   - unknown names → E0400 (with did-you-mean hint)
 ///   - wrong target kind → E0607
 ///   - same name twice on one target → E0609
 fn srCheckDeclAnnotations(
@@ -2037,12 +2024,14 @@ fn srCheckDeclAnnotations(
     for ann in anns {
         let name = ann.text
         if !srIsAllowedAnnotation(name) {
-            out.diagnostics.push(selfResolveDiagnostic(
+            out.diagnostics.push(selfResolveDiagnosticHintAtNode(
                 "E0400",
                 "unknown annotation `#[" + name + "]`",
                 name,
                 ann.start,
                 ann.end,
+                -1,
+                srDidYouMeanHint(name, srAnnotationNameList()),
             ))
             continue
         }
@@ -2138,12 +2127,23 @@ fn srPushUnknownArg(
     name: String,
     start: Int,
     end: Int,
+    hint: String,
 ) -> SelfResolveResult {
     // Matches the Go resolver's quirk: unknown annotation-arg keys are
     // emitted as E0400 (CodeUnknownAnnotation), not E0739. See
-    // internal/resolve/resolve.go:711.
+    // internal/resolve/resolve.go:711. The `hint` field carries the
+    // did-you-mean suggestion (empty if none) — this is a strict
+    // improvement over Go, which emits no suggestion.
     let mut out = result
-    out.diagnostics.push(selfResolveDiagnostic("E0400", message, name, start, end))
+    out.diagnostics.push(selfResolveDiagnosticHintAtNode(
+        "E0400",
+        message,
+        name,
+        start,
+        end,
+        -1,
+        hint,
+    ))
     out
 }
 
@@ -2197,7 +2197,14 @@ fn srCheckJSONArgs(
                 out = srPushBadArg(out, "`#[json(optional)]` takes no value or `optional = true`", view.start, view.end)
             }
         } else {
-            out = srPushUnknownArg(out, "`#[json]` does not accept argument `" + view.key + "`", view.key, view.start, view.end)
+            out = srPushUnknownArg(
+                out,
+                "`#[json]` does not accept argument `" + view.key + "`",
+                view.key,
+                view.start,
+                view.end,
+                srDidYouMeanHint(view.key, srJSONArgKeys()),
+            )
         }
     }
     if hasSkip && (hasKey || hasOptional) {
@@ -2222,6 +2229,7 @@ fn srCheckDeprecatedArgs(
                     view.key,
                     view.start,
                     view.end,
+                    "",
                 )
             }
         } else {
@@ -2231,6 +2239,7 @@ fn srCheckDeprecatedArgs(
                 view.key,
                 view.start,
                 view.end,
+                srDidYouMeanHint(view.key, srDeprecatedArgKeys()),
             )
         }
     }
@@ -2307,4 +2316,69 @@ fn srCheckNoArgsRuntime(
         first.start,
         first.end,
     )
+}
+
+/// srAnnotationNameList returns the 14 permitted annotation names as a
+/// flat list for did-you-mean suggestions. Keep in sync with the
+/// `srAnnotAllowedTargets` switch.
+fn srAnnotationNameList() -> List<String> {
+    [
+        "json",
+        "deprecated",
+        "allow",
+        "intrinsic_methods",
+        "requires",
+        "no_alloc",
+        "intrinsic",
+        "c_abi",
+        "export",
+        "pod",
+        "repr",
+        "cfg",
+        "op",
+        "test",
+    ]
+}
+
+fn srJSONArgKeys() -> List<String> {
+    ["key", "skip", "optional"]
+}
+
+fn srDeprecatedArgKeys() -> List<String> {
+    ["since", "use", "message"]
+}
+
+/// srSuggestFromList finds the closest candidate (Levenshtein distance
+/// < 3) from a fixed list. Returns "" if nothing is within reach. This
+/// is the typo-suggestion primitive for annotation names and arg keys —
+/// unlike Go's resolver, which emits unknown-annotation errors with no
+/// spelling hints, the self-hosted version nudges the user toward the
+/// right spelling.
+fn srSuggestFromList(name: String, candidates: List<String>) -> String {
+    let mut best = ""
+    let mut bestDist = 3
+    let nameLen = srStringUnitCount(name)
+    for candidate in candidates {
+        let diff = srStringUnitCount(candidate) - nameLen
+        if diff > bestDist - 1 || 0 - diff > bestDist - 1 {
+            continue
+        }
+        let dist = srLevenshteinBounded(name, candidate, bestDist)
+        if dist < bestDist {
+            best = candidate
+            bestDist = dist
+            if bestDist == 1 {
+                return best
+            }
+        }
+    }
+    best
+}
+
+fn srDidYouMeanHint(name: String, candidates: List<String>) -> String {
+    let suggestion = srSuggestFromList(name, candidates)
+    if suggestion == "" {
+        return ""
+    }
+    "did you mean `{suggestion}`?"
 }

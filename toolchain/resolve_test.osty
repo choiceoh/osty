@@ -702,3 +702,80 @@ fn testSelfResolverRejectsNoArgsRuntimeWithArgs() {
 
     testing.assertEq(selfResolveCodeCount(result, "E0739"), 1)
 }
+
+fn testSelfResolverSuggestsAnnotationName() {
+    // `#[deprcated]` — one-char typo for `deprecated`. Go emits E0400
+    // with no hint; self-hosted adds a did-you-mean suggestion.
+    let result = selfResolveSource(
+        r"""
+            #[deprcated]
+            fn old() {}
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0400"), 1)
+    let mut sawHint = false
+    for diag in result.diagnostics {
+        if diag.code == "E0400" && diag.hint == "did you mean `deprecated`?" {
+            sawHint = true
+        }
+    }
+    testing.assert(sawHint)
+}
+
+fn testSelfResolverSuggestsJSONArgKey() {
+    // `ky` typo for `key` — hint should point to the correct spelling.
+    let result = selfResolveSource(
+        r"""
+            struct Point {
+                #[json(ky = "x")]
+                x: Int,
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0400"), 1)
+    let mut sawHint = false
+    for diag in result.diagnostics {
+        if diag.code == "E0400" && diag.hint == "did you mean `key`?" {
+            sawHint = true
+        }
+    }
+    testing.assert(sawHint)
+}
+
+fn testSelfResolverSuggestsDeprecatedArgKey() {
+    // `sincce` → `since`.
+    let result = selfResolveSource(
+        r"""
+            #[deprecated(sincce = "0.5")]
+            fn old() {}
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0400"), 1)
+    let mut sawHint = false
+    for diag in result.diagnostics {
+        if diag.code == "E0400" && diag.hint == "did you mean `since`?" {
+            sawHint = true
+        }
+    }
+    testing.assert(sawHint)
+}
+
+fn testSelfResolverSkipsDidYouMeanWhenTooFar() {
+    // A completely unrelated name shouldn't get a spurious suggestion.
+    let result = selfResolveSource(
+        r"""
+            #[xyzzy]
+            fn main() {}
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0400"), 1)
+    for diag in result.diagnostics {
+        if diag.code == "E0400" {
+            testing.assertEq(diag.hint, "")
+        }
+    }
+}
