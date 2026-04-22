@@ -105,7 +105,9 @@ fn f(x: Int) -> Int { match x { + -> 1, _ -> 0 } }
 // === END
 
 // === CASE: E0400 === unknown annotation
-#[inline]
+// (Historically `#[inline]` was unknown; it was added to the permitted
+// set in v0.6 A8, so the example is now any still-unregistered name.)
+#[magicOptimize]
 pub fn f() {}
 // === END
 
@@ -197,6 +199,26 @@ pub fn hot(n: Int) -> Int { n }
 // === CASE: E0739 === #[parallel] takes no arguments
 #[parallel(level = 2)]
 pub fn hot(n: Int) -> Int { n }
+// === END
+
+// === CASE: E0739 === #[inline(...)] rejects unknown flag
+#[inline(sometimes)]
+pub fn mid(n: Int) -> Int { n }
+// === END
+
+// === CASE: E0739 === #[hot] takes no arguments
+#[hot(priority = 1)]
+pub fn hot(n: Int) -> Int { n }
+// === END
+
+// === CASE: E0739 === #[target_feature(...)] requires at least one feature
+#[target_feature()]
+pub fn wide(n: Int) -> Int { n }
+// === END
+
+// === CASE: E0739 === #[target_feature(...)] rejects duplicate features
+#[target_feature(avx512f, avx512f)]
+pub fn wide(n: Int) -> Int { n }
 // === END
 
 // === CASE: E0004 === unterminated block comment (MUST remain last — the

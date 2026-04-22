@@ -190,6 +190,26 @@ var annotationRules = map[string]AnnotationTarget{
 	// Composes with `#[vectorize]` (unroll × width ≈ effective
 	// throughput). §3.8.6.
 	"unroll": TargetTopLevelDecl | TargetMethod,
+	// v0.6 A8. Inlining hint family. Bare `#[inline]` emits LLVM's
+	// `inlinehint` fn attribute, a soft suggestion. `#[inline(always)]`
+	// / `#[inline(never)]` emit the hard `alwaysinline` / `noinline`
+	// attributes which the inliner honors mechanically. §3.8.7.
+	"inline": TargetTopLevelDecl | TargetMethod,
+	// v0.6 A9. Function frequency hints. `#[hot]` emits the LLVM
+	// `hot` fn attribute (aggressive optimization, `.text.hot`
+	// section); `#[cold]` emits `cold` (size-optimize, move to
+	// `.text.cold`, bias branch prediction away from calls). Bare
+	// flags. §3.8.8.
+	"hot":  TargetTopLevelDecl | TargetMethod,
+	"cold": TargetTopLevelDecl | TargetMethod,
+	// v0.6 A10. Per-function target feature override. Each bare-ident
+	// argument names a CPU feature the backend should enable while
+	// compiling this function; the LLVM emitter materialises them as
+	// a single `target-features="+f1,+f2"` fn attribute. Lets a
+	// library ship one SIMD-heavy function compiled for AVX-512 /
+	// SVE without forcing the whole program onto that baseline.
+	// §3.8.9.
+	"target_feature": TargetTopLevelDecl | TargetMethod,
 }
 
 // IsAllowedAnnotation reports whether an annotation name is part of the

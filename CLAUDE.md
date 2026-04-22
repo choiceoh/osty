@@ -509,6 +509,18 @@ fn normalizeUrl(u: String) -> String { ... }
   safepoint poll 을 **스킵**한다 (§3.8.6). entry safepoint + caller-return
   safepoint 로 bracketing 되지만 루프 중간에 STW 에 응답하지 않음 — 의도된
   trade-off. mid-loop GC 협력이 필요하면 `#[no_vectorize]`.
+- `#[inline]` / `#[inline(always)]` / `#[inline(never)]` — top-level fn /
+  method. LLVM `inlinehint` / `alwaysinline` / `noinline` fn attr. Tiny
+  helper 는 `#[inline(always)]` 로 완전 인라인 — `tiny(n) * 2` 같은 호출이
+  `leaq 2(,%rdi,2), %rax` 한 명령으로 fold 됨 (v0.6 A8).
+- `#[hot]` / `#[cold]` — top-level fn / method. LLVM `hot` / `cold` fn attr
+  + `.text.hot` / `.text.unlikely` 섹션 배치. hot path 는 aggressive
+  optimize, error path 는 size-optimize. 서로 mutually exclusive (v0.6 A9).
+- `#[target_feature(avx512f, avx512bw, ...)]` — top-level fn / method.
+  해당 함수 하나만 지정된 CPU feature 로 컴파일. baseline x86-64 프로그램
+  에서 특정 함수만 AVX-512 ZMM 을 쓸 수 있음. **Safety**: 실행 CPU 가 그
+  feature 를 지원하는지 호출자가 보장해야 함 (`cpuid`/`HWCAP` dispatch).
+  v0.6 A10.
 - 값은 **리터럴만** (key=literal 또는 bare flag), 표현식 불가
 
 ```osty
@@ -812,6 +824,9 @@ fn parseTokens(tokens: List<Token>) -> Result<Config, Error> { ... }
 | 63.1 | **기본 ON** + `#[vectorize(scalable, predicate, width = N)]` + `#[no_vectorize]` | v0.6 A5/A5.1/A5.2. 기본은 모든 함수에서 `vectorize.enable` + safepoint 스킵. tuning args 로 strategy 지정; opt-out 은 `#[no_vectorize]`. |
 | 63.2 | `#[parallel]` | v0.6 A6. `!llvm.access.group` + `loop.parallel_accesses` 로 alias analysis 우회. soundness는 프로그래머 책임. |
 | 63.3 | `#[unroll]` / `#[unroll(count = N)]` | v0.6 A7. `loop.unroll.enable` 또는 `loop.unroll.count`. vectorize와 독립적. |
+| 63.4 | `#[inline]` / `#[inline(always)]` / `#[inline(never)]` | v0.6 A8. LLVM `inlinehint` / `alwaysinline` / `noinline` fn attr. |
+| 63.5 | `#[hot]` / `#[cold]` | v0.6 A9. LLVM `hot` / `cold` fn attr + `.text.hot` / `.text.unlikely` 섹션. |
+| 63.6 | `#[target_feature(f1, f2, ...)]` | v0.6 A10. Per-function CPU feature override. `"target-features"="+f1,+f2"`. |
 
 **전형 패턴** — 직렬화 키 매핑 + 내부 필드 숨김:
 

@@ -118,6 +118,14 @@ type generator struct {
 	unrollHint             bool
 	unrollCount            int
 	parallelAccessGroupRef string // `!N` for the per-function access group; "" when `#[parallel]` not set
+	// v0.6 A8/A9/A10: function-level LLVM attribute state, also
+	// populated by readLoopHints. Consumed by renderFunction when
+	// assembling the `define` line. Same semantics as the matching
+	// mir.Function fields.
+	inlineMode     int
+	hotHint        bool
+	coldHint       bool
+	targetFeatures []string
 	// loopMDDefs accumulates the module-level metadata node
 	// definitions that loop hints attach to. Module-scoped so IDs stay
 	// unique across all loops and access groups in the translation
@@ -206,6 +214,10 @@ func (g *generator) beginFunction() {
 	g.unrollHint = false
 	g.unrollCount = 0
 	g.parallelAccessGroupRef = ""
+	g.inlineMode = 0
+	g.hotHint = false
+	g.coldHint = false
+	g.targetFeatures = nil
 }
 
 // attachVectorizeMD rewrites the most recently emitted `br label %cond`
@@ -757,7 +769,67 @@ func (g *generator) renderFunction(ret, name string, params []paramInfo) string 
 	if g.parallelHint && g.parallelAccessGroupRef != "" {
 		body = tagParallelAccessesLines(body, g.parallelAccessGroupRef)
 	}
-	return llvmRenderFunction(ret, name, toLLVMParams(params), body)
+	rendered := llvmRenderFunction(ret, name, toLLVMParams(params), body)
+	// v0.6 A8/A9/A10: splice function-level LLVM attributes between
+	// the closing paren of the param list and the `{` that opens the
+	// body. llvmRenderFunction is an Osty-generated helper that we do
+	// not want to modify in-place, so we rewrite its first line
+	// instead — much cheaper than threading the attribute set
+	// through every call site of renderFunction.
+	if attrs := g.formatFnAttrs(); attrs != "" {
+		rendered = spliceFnAttrs(rendered, attrs)
+	}
+	return rendered
+}
+
+// formatFnAttrs assembles the function-level LLVM attribute string
+// for the currently emitting HIR function. Mirror of the MIR
+// emitter's `formatFnAttrs(fn)` — both keep the exact same output
+// shape so the LLVM verifier observes consistent IR across the two
+// backend paths.
+func (g *generator) formatFnAttrs() string {
+	parts := make([]string, 0, 4)
+	switch g.inlineMode {
+	case 1:
+		parts = append(parts, "inlinehint")
+	case 2:
+		parts = append(parts, "alwaysinline")
+	case 3:
+		parts = append(parts, "noinline")
+	}
+	if g.hotHint {
+		parts = append(parts, "hot")
+	}
+	if g.coldHint {
+		parts = append(parts, "cold")
+	}
+	if len(g.targetFeatures) > 0 {
+		prefixed := make([]string, len(g.targetFeatures))
+		for i, f := range g.targetFeatures {
+			prefixed[i] = "+" + strings.TrimPrefix(f, "+")
+		}
+		parts = append(parts,
+			fmt.Sprintf(`"target-features"="%s"`, strings.Join(prefixed, ",")))
+	}
+	return strings.Join(parts, " ")
+}
+
+// spliceFnAttrs rewrites the first `define ... (<params>) {` line of
+// a rendered function to carry the given attributes between the
+// closing paren and the opening brace. Leaves every other line
+// untouched. Used only when the HIR emitter has one or more v0.6 fn
+// attributes to emit — otherwise the renderer's output is byte-
+// identical to the pre-attribute shape.
+func spliceFnAttrs(rendered, attrs string) string {
+	const needle = ") {"
+	// Only touch the first occurrence — a function body may contain
+	// other `) {` sequences in landing-pad blocks or nested
+	// structures, and we must not mis-attach attributes there.
+	idx := strings.Index(rendered, needle)
+	if idx < 0 {
+		return rendered
+	}
+	return rendered[:idx] + ") " + attrs + " {" + rendered[idx+len(needle):]
 }
 
 // tagParallelAccessesLines is the `[]string` twin of the MIR path's

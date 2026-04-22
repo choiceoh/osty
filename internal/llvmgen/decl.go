@@ -1309,6 +1309,37 @@ func (g *generator) readLoopHints(decl *ast.FnDecl) {
 			}
 		}
 	}
+	// v0.6 A8/A9/A10 function-level attributes.
+	if inl := fnFindAnnotation(decl, "inline"); inl != nil {
+		// Default to soft (inlinehint); switch to hard (always/never)
+		// if the sub-flag is present.
+		g.inlineMode = 1
+		for _, arg := range inl.Args {
+			if arg == nil {
+				continue
+			}
+			switch arg.Key {
+			case "always":
+				g.inlineMode = 2
+			case "never":
+				g.inlineMode = 3
+			}
+		}
+	}
+	if fnHasAnnotation(decl, "hot") {
+		g.hotHint = true
+	}
+	if fnHasAnnotation(decl, "cold") {
+		g.coldHint = true
+	}
+	if tf := fnFindAnnotation(decl, "target_feature"); tf != nil {
+		for _, arg := range tf.Args {
+			if arg == nil || arg.Key == "" {
+				continue
+			}
+			g.targetFeatures = append(g.targetFeatures, arg.Key)
+		}
+	}
 }
 
 func (g *generator) emitUserFunction(sig *fnSig) (string, error) {

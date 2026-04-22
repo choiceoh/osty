@@ -190,6 +190,48 @@ func newMIRGen(m *mir.Module, opts Options) *mirGen {
 	}
 }
 
+// formatFnAttrs renders the v0.6 A8/A9/A10 function-level LLVM
+// attributes for a MIR function into a single space-joined string
+// suitable for splicing between the parameter list and the body
+// brace of a `define`/`declare` line. Returns "" when no attribute
+// applies.
+//
+// The set handled here is the exact mirror of the IR FnDecl fields
+// ir.Lower populates from annotations — InlineMode, Hot, Cold,
+// TargetFeatures. Shared across MIR and HIR emitters via the legacy
+// bridge's reified annotation list on the HIR side.
+func formatFnAttrs(fn *mir.Function) string {
+	parts := make([]string, 0, 4)
+	switch fn.InlineMode {
+	case 1: // InlineSoft
+		parts = append(parts, "inlinehint")
+	case 2: // InlineAlways
+		parts = append(parts, "alwaysinline")
+	case 3: // InlineNever
+		parts = append(parts, "noinline")
+	}
+	if fn.Hot {
+		parts = append(parts, "hot")
+	}
+	if fn.Cold {
+		parts = append(parts, "cold")
+	}
+	if len(fn.TargetFeatures) > 0 {
+		prefixed := make([]string, len(fn.TargetFeatures))
+		for i, f := range fn.TargetFeatures {
+			// LLVM's target-features string expects each feature
+			// prefixed with `+` for enable or `-` for disable. The
+			// v0.6 annotation set only supports enable, so we
+			// always prepend `+`. Features the user typed with a
+			// leading `+` are tolerated by stripping it first.
+			prefixed[i] = "+" + strings.TrimPrefix(f, "+")
+		}
+		parts = append(parts,
+			fmt.Sprintf(`"target-features"="%s"`, strings.Join(prefixed, ",")))
+	}
+	return strings.Join(parts, " ")
+}
+
 func firstNonEmpty(xs ...string) string {
 	for _, x := range xs {
 		if x != "" {
@@ -935,6 +977,13 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 		cconv = "ccc "
 	}
 
+	// v0.6 A8/A9/A10: function-level LLVM attributes go between the
+	// closing paren of the param list and the `{` that opens the body.
+	// `declare` lines accept the same set. Keyword attrs (`noinline`,
+	// `alwaysinline`, `inlinehint`, `hot`, `cold`) are bare; string
+	// attrs (`"target-features"="+f1,+f2"`) take the key=value form.
+	attrs := formatFnAttrs(fn)
+
 	if fn.IsExternal {
 		// External stub: just a declare.
 		sig := g.functionTypes[fn.Name]
@@ -945,7 +994,12 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 		g.out.WriteString(emitName)
 		g.out.WriteByte('(')
 		g.out.WriteString(strings.Join(sig.paramLLVM, ", "))
-		g.out.WriteString(")\n\n")
+		g.out.WriteByte(')')
+		if attrs != "" {
+			g.out.WriteByte(' ')
+			g.out.WriteString(attrs)
+		}
+		g.out.WriteString("\n\n")
 		return nil
 	}
 
@@ -978,7 +1032,12 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 		g.fnBuf.WriteString(" %arg")
 		g.fnBuf.WriteString(strconv.Itoa(i))
 	}
-	g.fnBuf.WriteString(") {\n")
+	g.fnBuf.WriteByte(')')
+	if attrs != "" {
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(attrs)
+	}
+	g.fnBuf.WriteString(" {\n")
 
 	// Entry-block preamble: alloca one slot per non-parameter local,
 	// and store incoming params into their alloca slots.

@@ -422,6 +422,9 @@ mechanism. The complete set is:
 | `#[no_vectorize]` | top-level `fn` declarations, struct/enum methods | Opt out of the default vectorize hint. Restores per-iteration safepoint polls (v0.6 A5.2) |
 | `#[parallel]` | top-level `fn` declarations, struct/enum methods | Hint: every load/store in the body tagged with `!llvm.access.group`, every loop's metadata references it via `llvm.loop.parallel_accesses` to bypass alias analysis (v0.6 A6) |
 | `#[unroll]` | top-level `fn` declarations, struct/enum methods | Hint: `llvm.loop.unroll.enable` on every loop in the body; `#[unroll(count = N)]` forces a specific unroll factor (v0.6 A7) |
+| `#[inline]` / `#[inline(always)]` / `#[inline(never)]` | top-level `fn` declarations, struct/enum methods | LLVM `inlinehint` / `alwaysinline` / `noinline` fn attribute (v0.6 A8) |
+| `#[hot]` / `#[cold]` | top-level `fn` declarations, struct/enum methods | LLVM `hot` / `cold` fn attribute + `.text.hot` / `.text.unlikely` section placement (v0.6 A9) |
+| `#[target_feature(f1, f2, ...)]` | top-level `fn` declarations, struct/enum methods | LLVM `"target-features"="+f1,+f2"` fn attribute — per-function CPU feature override (v0.6 A10) |
 
 **Runtime-only annotations** (privileged packages only — see §19.2 and §19.6).
 
@@ -707,7 +710,102 @@ responsiveness should drive the work in smaller chunks from an
 unannotated outer loop. The author opts in knowingly; the compiler
 does not second-guess.
 
-#### 3.8.7 Positioning Rules
+#### 3.8.7 `#[inline]` family
+
+Valid on top-level `fn` declarations and on struct/enum methods.
+Status: **v0.6 A8**. Controls the LLVM inliner's decision for the
+annotated function.
+
+| Form | LLVM fn attribute | Effect |
+|---|---|---|
+| `#[inline]` | `inlinehint` | Soft hint — inliner prefers inlining but can still refuse on size / call-count grounds |
+| `#[inline(always)]` | `alwaysinline` | Hard force — inliner **must** inline at every call site. Compile error if inlining fails (e.g. recursion) |
+| `#[inline(never)]` | `noinline` | Inliner must **not** inline. Useful to preserve a stable symbol for profiling or for breaking LTO cycles |
+
+Composes freely with `#[hot]`, `#[cold]`, `#[vectorize(...)]`, and
+the rest of the v0.6 annotation set. Unknown sub-flags are `E0739`.
+
+```osty
+#[inline(always)]
+pub fn lenUnchecked<T>(xs: List<T>) -> Int { xs.rawLen() }
+
+#[inline(never)]
+pub fn logBreakpoint(msg: String) {
+    fmt.stderr.writeLine(msg)
+}
+```
+
+#### 3.8.8 `#[hot]` / `#[cold]`
+
+Bare-flag annotations on top-level `fn` declarations and struct/enum
+methods. Status: **v0.6 A9**. Control the LLVM frequency attributes
+and text-section placement.
+
+| Annotation | LLVM fn attribute | Effect |
+|---|---|---|
+| `#[hot]` | `hot` | Function is frequently executed. Aggressive optimization; placed in the `.text.hot.` section so the linker can group hot code for i-cache locality |
+| `#[cold]` | `cold` | Function is rarely executed (error paths, slow-path fallbacks). Size-optimized; placed in `.text.unlikely.`; call sites receive a branch-prediction-away hint |
+
+The two are mutually exclusive on a single declaration — both together
+is `E0609` (duplicate annotation) via the normal annotation rules.
+Any argument on either is `E0739`.
+
+```osty
+#[hot]
+pub fn fastPath(n: Int) -> Int { n * 2 }
+
+#[cold]
+pub fn errorReport(e: Error) -> Int {
+    log.record(e)
+    -1
+}
+```
+
+#### 3.8.9 `#[target_feature(...)]`
+
+Valid on top-level `fn` declarations and struct/enum methods. Status:
+**v0.6 A10**. Overrides the LLVM backend's target-feature baseline
+for just this one function, letting a library ship a SIMD-heavy routine
+compiled for AVX-512 / SVE2 without forcing the whole program onto
+that baseline.
+
+Each bare-identifier argument names a CPU feature. The LLVM emitter
+materialises them as a single `"target-features"="+f1,+f2"` fn
+attribute (positive enable only in v0.6). Duplicate names are
+rejected with `E0739`; positional values without a key and
+`feature = "value"` shapes are also `E0739`.
+
+```osty
+// Only this one function compiles for AVX-512, even when the rest
+// of the module targets baseline x86-64. Caller is responsible for
+// CPU feature detection before dispatching here.
+#[target_feature(avx512f, avx512bw)]
+pub fn dotProductAVX512(xs: List<Int>, ys: List<Int>) -> Int {
+    let mut acc = 0
+    for i in 0..xs.len() {
+        acc = acc + xs[i] * ys[i]
+    }
+    acc
+}
+```
+
+**Safety contract.** The programmer is responsible for ensuring the
+CPU running this function actually supports the declared features.
+Calling a `#[target_feature(avx512f)]` routine on a CPU without
+AVX-512 is undefined behavior at the hardware level (illegal
+instruction fault). The usual pattern is a runtime-dispatch helper
+that probes `cpuid` / `HWCAP` before calling the specialised variant.
+Runtime dispatch is not built into v0.6; it belongs in the user's
+application logic or a separate track.
+
+Feature-name spelling matches LLVM's target-features vocabulary
+(`avx2`, `avx512f`, `avx512bw`, `sve`, `sve2`, `neon`, `vfp4`, etc.).
+Typos pass the resolver but will be ignored by the LLVM backend with
+a warning at compile time — the resolver does not maintain a
+per-target feature allowlist because it would need to evolve with
+every LLVM release.
+
+#### 3.8.10 Positioning Rules
 
 - Annotations may appear only before a named declaration. They cannot
   be attached to:

@@ -290,6 +290,12 @@ func (l *lowerer) lowerFunction(fn *ir.FnDecl, owner string, asMethod bool) *Fun
 	out.Parallel = fn.Parallel
 	out.Unroll = fn.Unroll
 	out.UnrollCount = fn.UnrollCount
+	out.InlineMode = fn.InlineMode
+	out.Hot = fn.Hot
+	out.Cold = fn.Cold
+	if len(fn.TargetFeatures) > 0 {
+		out.TargetFeatures = append([]string(nil), fn.TargetFeatures...)
+	}
 	out.IsIntrinsic = fn.IsIntrinsic
 	if fn.Body == nil {
 		out.IsExternal = true

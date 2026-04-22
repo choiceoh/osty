@@ -233,6 +233,10 @@ func cloneFnDecl(fn *FnDecl) *FnDecl {
 		Parallel:           fn.Parallel,
 		Unroll:             fn.Unroll,
 		UnrollCount:        fn.UnrollCount,
+		InlineMode:         fn.InlineMode,
+		Hot:                fn.Hot,
+		Cold:               fn.Cold,
+		TargetFeatures:     append([]string(nil), fn.TargetFeatures...),
 	}
 	if len(fn.Params) > 0 {
 		out.Params = make([]*Param, len(fn.Params))

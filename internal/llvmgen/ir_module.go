@@ -636,6 +636,43 @@ func legacyFnDeclFromIR(fn *ostyir.FnDecl, asMethod bool) (*ast.FnDecl, error) {
 			Args: args,
 		})
 	}
+	// v0.6 A8/A9/A10: reinstate function-attribute annotations so the
+	// HIR emitter's reified-AST path surfaces them for formatFnAttrs.
+	switch fn.InlineMode {
+	case ostyir.InlineSoft:
+		out.Annotations = append(out.Annotations, &ast.Annotation{
+			PosV: start, EndV: start, Name: "inline",
+		})
+	case ostyir.InlineAlways:
+		out.Annotations = append(out.Annotations, &ast.Annotation{
+			PosV: start, EndV: start, Name: "inline",
+			Args: []*ast.AnnotationArg{{PosV: start, Key: "always"}},
+		})
+	case ostyir.InlineNever:
+		out.Annotations = append(out.Annotations, &ast.Annotation{
+			PosV: start, EndV: start, Name: "inline",
+			Args: []*ast.AnnotationArg{{PosV: start, Key: "never"}},
+		})
+	}
+	if fn.Hot {
+		out.Annotations = append(out.Annotations, &ast.Annotation{
+			PosV: start, EndV: start, Name: "hot",
+		})
+	}
+	if fn.Cold {
+		out.Annotations = append(out.Annotations, &ast.Annotation{
+			PosV: start, EndV: start, Name: "cold",
+		})
+	}
+	if len(fn.TargetFeatures) > 0 {
+		args := make([]*ast.AnnotationArg, len(fn.TargetFeatures))
+		for i, feat := range fn.TargetFeatures {
+			args[i] = &ast.AnnotationArg{PosV: start, Key: feat}
+		}
+		out.Annotations = append(out.Annotations, &ast.Annotation{
+			PosV: start, EndV: start, Name: "target_feature", Args: args,
+		})
+	}
 	if asMethod {
 		out.Recv = &ast.Receiver{PosV: start, EndV: start, Mut: fn.ReceiverMut}
 	}

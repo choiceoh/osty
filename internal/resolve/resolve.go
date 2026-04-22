@@ -508,7 +508,7 @@ func (r *resolver) checkAnnotations(annots []*ast.Annotation, target ast.Annotat
 				Code(diag.CodeUnknownAnnotation).
 				Primary(diag.Span{Start: a.PosV, End: a.EndV},
 					"this annotation name is not recognized").
-				Note("v0.4 §18.1: only `#[json]`, `#[deprecated]`, `#[allow]`, `#[cfg]`, `#[op]`, `#[test]`, `#[vectorize]`, `#[no_vectorize]`, `#[parallel]`, `#[unroll]`, and the runtime sublanguage annotations are permitted").
+				Note("v0.4 §18.1: only `#[json]`, `#[deprecated]`, `#[allow]`, `#[cfg]`, `#[op]`, `#[test]`, `#[vectorize]`, `#[no_vectorize]`, `#[parallel]`, `#[unroll]`, `#[inline]`, `#[hot]`, `#[cold]`, `#[target_feature]`, and the runtime sublanguage annotations are permitted").
 				Build())
 			continue
 		}
@@ -564,6 +564,12 @@ func (r *resolver) checkAnnotationArgs(a *ast.Annotation, target ast.AnnotationT
 		r.checkParallelArgs(a)
 	case "unroll":
 		r.checkUnrollArgs(a)
+	case "inline":
+		r.checkInlineArgs(a)
+	case "hot", "cold":
+		r.checkBareFlag(a)
+	case "target_feature":
+		r.checkTargetFeatureArgs(a)
 	}
 }
 
@@ -766,6 +772,110 @@ func (r *resolver) checkVectorizeArgs(a *ast.Annotation) {
 				Note("accepted: `scalable`, `predicate`, `width = N`").
 				Build())
 		}
+	}
+}
+
+// checkInlineArgs validates `#[inline]` (v0.6 A8). Accepts the bare
+// form and two sub-flags `always` / `never`, which pick the hard LLVM
+// attribute (`alwaysinline` / `noinline`) vs the default soft hint
+// (`inlinehint`).
+func (r *resolver) checkInlineArgs(a *ast.Annotation) {
+	switch len(a.Args) {
+	case 0:
+		return
+	case 1:
+		arg := a.Args[0]
+		if arg == nil {
+			return
+		}
+		switch arg.Key {
+		case "always", "never":
+			if !isFlagOrTrue(arg) {
+				r.emit(diag.New(diag.Error,
+					fmt.Sprintf("`%s` in `#[inline(...)]` is a bare flag", arg.Key)).
+					Code(diag.CodeAnnotationBadArg).
+					PrimaryPos(arg.PosV,
+						fmt.Sprintf("expected `%s`, not `%s = ...`", arg.Key, arg.Key)).
+					Build())
+			}
+		default:
+			r.emit(diag.New(diag.Error,
+				fmt.Sprintf("unknown `#[inline]` argument `%s`", arg.Key)).
+				Code(diag.CodeAnnotationBadArg).
+				PrimaryPos(arg.PosV, "not a recognized flag").
+				Note("accepted: `always` (force inlining), `never` (forbid inlining), or no argument (soft hint)").
+				Build())
+		}
+	default:
+		r.emit(diag.New(diag.Error,
+			"`#[inline(...)]` takes at most one argument").
+			Code(diag.CodeAnnotationBadArg).
+			PrimaryPos(a.Args[1].PosV, "extra argument").
+			Note("use either `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`").
+			Build())
+	}
+}
+
+// checkBareFlag is the shared validator for annotations whose entire
+// surface is the bare-flag form: `#[hot]`, `#[cold]`, and similar.
+// Any argument is rejected.
+func (r *resolver) checkBareFlag(a *ast.Annotation) {
+	if len(a.Args) == 0 {
+		return
+	}
+	r.emit(diag.New(diag.Error,
+		fmt.Sprintf("`#[%s]` does not take arguments", a.Name)).
+		Code(diag.CodeAnnotationBadArg).
+		PrimaryPos(a.Args[0].PosV, "unexpected argument").
+		Build())
+}
+
+// checkTargetFeatureArgs validates `#[target_feature(...)]` (v0.6
+// A10): at least one bare-identifier argument naming a CPU feature.
+// Duplicate feature names are rejected so the backend doesn't have
+// to dedupe; malformed shapes (`feature = "value"` or empty arg
+// lists) are rejected with a pointed hint.
+func (r *resolver) checkTargetFeatureArgs(a *ast.Annotation) {
+	if len(a.Args) == 0 {
+		r.emit(diag.New(diag.Error,
+			"`#[target_feature(...)]` requires at least one feature name").
+			Code(diag.CodeAnnotationBadArg).
+			PrimaryPos(a.PosV, "empty feature list").
+			Note("example: `#[target_feature(avx512f, avx512bw)]`").
+			Build())
+		return
+	}
+	seen := map[string]bool{}
+	for _, arg := range a.Args {
+		if arg == nil {
+			continue
+		}
+		if arg.Key == "" {
+			r.emit(diag.New(diag.Error,
+				"`#[target_feature(...)]` feature names must be bare identifiers").
+				Code(diag.CodeAnnotationBadArg).
+				PrimaryPos(arg.PosV, "expected a feature name").
+				Build())
+			continue
+		}
+		if arg.Value != nil && !isFlagOrTrue(arg) {
+			r.emit(diag.New(diag.Error,
+				fmt.Sprintf("feature `%s` in `#[target_feature(...)]` takes no value", arg.Key)).
+				Code(diag.CodeAnnotationBadArg).
+				PrimaryPos(arg.PosV,
+					fmt.Sprintf("expected `%s`, not `%s = ...`", arg.Key, arg.Key)).
+				Build())
+			continue
+		}
+		if seen[arg.Key] {
+			r.emit(diag.New(diag.Error,
+				fmt.Sprintf("duplicate feature `%s` in `#[target_feature(...)]`", arg.Key)).
+				Code(diag.CodeAnnotationBadArg).
+				PrimaryPos(arg.PosV, "second occurrence").
+				Build())
+			continue
+		}
+		seen[arg.Key] = true
 	}
 }
 

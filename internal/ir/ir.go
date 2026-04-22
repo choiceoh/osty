@@ -402,7 +402,32 @@ type FnDecl struct {
 	// emits `llvm.loop.unroll.count, i32 N` instead of the bare
 	// enable flag. Only meaningful when `Unroll == true`.
 	UnrollCount int
+	// InlineMode captures the v0.6 A8 `#[inline]` family:
+	//   0 = InlineNone   — no annotation, let the inliner decide
+	//   1 = InlineSoft   — `#[inline]` bare; emits `inlinehint`
+	//   2 = InlineAlways — `#[inline(always)]`; emits `alwaysinline`
+	//   3 = InlineNever  — `#[inline(never)]`; emits `noinline`
+	InlineMode int
+	// Hot is true iff `#[hot]` is set. v0.6 A9. Emits LLVM's `hot` fn
+	// attribute (aggressive optimization + `.text.hot` section).
+	Hot bool
+	// Cold is true iff `#[cold]` is set. Opposite of `Hot`.
+	Cold bool
+	// TargetFeatures carries every bare-identifier argument from
+	// `#[target_feature(...)]` (v0.6 A10) in source order. The LLVM
+	// emitter renders them as `target-features="+f1,+f2"` with a `+`
+	// prefix per feature. Empty means "inherit module default".
+	TargetFeatures []string
 }
+
+// Inline-hint enum values for FnDecl.InlineMode. Exported so
+// downstream tooling can switch on them without guessing integers.
+const (
+	InlineNone = iota
+	InlineSoft
+	InlineAlways
+	InlineNever
+)
 
 func (*FnDecl) declNode()          {}
 func (f *FnDecl) At() Span         { return f.SpanV }

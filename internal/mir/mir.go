@@ -183,6 +183,27 @@ type Function struct {
 	// > 0 emits `llvm.loop.unroll.count, i32 N` instead.
 	Unroll      bool
 	UnrollCount int
+
+	// v0.6 A8 inlining hint. Semantics mirror the IR layer:
+	//   0 = InlineNone   — no annotation; inliner decides
+	//   1 = InlineSoft   — `#[inline]` — emits `inlinehint`
+	//   2 = InlineAlways — `#[inline(always)]` — emits `alwaysinline`
+	//   3 = InlineNever  — `#[inline(never)]` — emits `noinline`
+	InlineMode int
+
+	// v0.6 A9. Hot → `hot` fn attr; Cold → `cold` fn attr. Bare
+	// flags on `#[hot]` / `#[cold]`. Mutually exclusive at the IR
+	// level — the resolver has already rejected both on the same
+	// declaration via the duplicate-annotation check.
+	Hot  bool
+	Cold bool
+
+	// v0.6 A10. TargetFeatures carries each bare-identifier argument
+	// from `#[target_feature(...)]` in source order. The LLVM
+	// emitter renders them as `target-features="+f1,+f2"` with a `+`
+	// prefix per feature so this one function is compiled for a
+	// richer CPU baseline than the rest of the module.
+	TargetFeatures []string
 }
 
 // At returns the function's source span.
