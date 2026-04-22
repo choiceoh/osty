@@ -3271,15 +3271,12 @@ static int64_t osty_gc_compact_minor_with_stack_roots(
     return moved;
 }
 
-/* Phase A2 depth: monotonic timing helper. Falls back to 0 on systems
- * where `clock_gettime` is unavailable — callers must treat zero as
- * "no measurement" (still strictly monotonic inside a single run). */
+/* Phase A2 depth: monotonic timing helper. Delegates to
+ * osty_rt_monotonic_ns, which is platform-guarded (POSIX clock_gettime
+ * on Unix, QueryPerformanceCounter on Windows). Callers treat zero as
+ * "no measurement recorded" (still strictly monotonic inside a run). */
 static int64_t osty_gc_now_nanos(void) {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        return 0;
-    }
-    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+    return (int64_t)osty_rt_monotonic_ns();
 }
 
 /* Phase B remembered set maintenance after a minor collection.
