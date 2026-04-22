@@ -2891,6 +2891,39 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         paramNames: ["count"], paramTys: [tInt(tys)],
         generics: [], genericBounds: [],
     })
+    checkRegisterFn(env, CheckFnSig {
+        name: "trimStart", owner: "String", receiverTy: tString_, retTy: tString_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "trimEnd", owner: "String", receiverTy: tString_, retTy: tString_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "split", owner: "String", receiverTy: tString_,
+        retTy: tyNamed(tys, "List", [tString_]),
+        paramNames: ["sep"], paramTys: [tString_],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "lines", owner: "String", receiverTy: tString_,
+        retTy: tyNamed(tys, "List", [tString_]),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "indexOf", owner: "String", receiverTy: tString_,
+        retTy: tyOptional(tys, tInt(tys)),
+        paramNames: ["needle"], paramTys: [tString_],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "charCount", owner: "String", receiverTy: tString_, retTy: tInt(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
 
     // ----- Bytes intrinsics -----
     checkRegisterFn(env, CheckFnSig {
