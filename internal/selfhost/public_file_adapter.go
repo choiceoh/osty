@@ -10,5 +10,7 @@ func LowerPublicFileFromRun(run *FrontendRun) *ast.File {
 	if run == nil || run.parser == nil {
 		return nil
 	}
-	return astLowerPublicFile(run.parser.arena, run.Tokens())
+	file := astLowerPublicFile(run.parser.arena, run.Tokens())
+	ast.AssignIDs(file)
+	return file
 }

@@ -129,6 +129,50 @@ fn main() {
 	}
 }
 
+func TestCheckFromSourceMatchesRunDiagnosticsAndStructuredResult(t *testing.T) {
+	cases := []struct {
+		name string
+		src  []byte
+	}{
+		{
+			name: "clean source",
+			src: []byte(`fn main() {
+    let x = 1
+    let y = x + 2
+    y
+}
+`),
+		},
+		{
+			name: "type error",
+			src: []byte(`fn main() {
+    let n: Int = "oops"
+}
+`),
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			run := Run(tc.src)
+			wantDiags := run.Diagnostics()
+			wantResult := CheckStructuredFromRun(run)
+
+			ResetAstbridgeLowerCount()
+			gotDiags, gotResult := CheckFromSource(tc.src)
+			if !reflect.DeepEqual(wantDiags, gotDiags) {
+				t.Fatalf("CheckFromSource parse diagnostics diverge\nwant=%#v\ngot=%#v", wantDiags, gotDiags)
+			}
+			if !reflect.DeepEqual(wantResult, gotResult) {
+				t.Fatalf("CheckFromSource result diverges\nwant=%#v\ngot=%#v", wantResult, gotResult)
+			}
+			if got := AstbridgeLowerCount(); got != 0 {
+				t.Fatalf("CheckFromSource: AstbridgeLowerCount = %d, want 0", got)
+			}
+		})
+	}
+}
+
 // TestCheckPackageStructuredIsAstbridgeFree is the multi-file analogue.
 // The gate adapter re-parses each file's source into a fresh arena
 // (selfhostAppendIntrinsicBodyGateForPackage uses Run per file), so
