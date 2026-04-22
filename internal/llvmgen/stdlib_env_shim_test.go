@@ -64,3 +64,98 @@ func TestMainSignatureStableWithoutStdEnv(t *testing.T) {
 		t.Fatalf("unexpected env init prologue in main without std.env:\n%s", got)
 	}
 }
+
+// `env.get(name)` should lower to the runtime helper and preserve the
+// Optional<String> source type so `??` keeps compiling on top.
+func TestStdEnvGetRoutesToRuntimeAndKeepsOptionalSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.env as osenv
+
+fn main() {
+    let home = osenv.get("HOME") ?? "fallback"
+    println(home)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_env_get.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_env_get(ptr)",
+		"call ptr @osty_rt_env_get(ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// `env.vars()` should lower to the runtime helper and preserve the
+// Map<String, String> source type so map methods keep compiling.
+func TestStdEnvVarsRoutesToRuntimeAndKeepsMapSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.env as osenv
+
+fn main() {
+    let home = osenv.vars().get("HOME") ?? "fallback"
+    println(home)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_env_vars.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_env_vars()",
+		"call ptr @osty_rt_env_vars()",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// `env.require(name)` should lower through env.get, materialize a
+// Result<String, Error>, and keep ptr-backed `Error.message()` usable
+// on the Err arm without needing std.error type injection.
+func TestStdEnvRequireRoutesToRuntimeAndKeepsErrorMessageFallback(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.env as osenv
+
+fn main() {
+    match osenv.require("HOME") {
+        Ok(home) -> println(home),
+        Err(err) -> println(err.message()),
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_env_require.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_env_get(ptr)",
+		"call ptr @osty_rt_env_get(ptr",
+		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
+		"call ptr @osty_rt_strings_Concat(ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}

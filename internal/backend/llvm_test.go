@@ -991,6 +991,141 @@ fn main() {
 	}
 }
 
+func TestLLVMBackendBinaryStdEnvGetReadsProcessEnv(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use std.env
+
+fn main() {
+    println(env.get("OSTY_ENV_GET_TEST") ?? "missing")
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	cmd.Env = append(os.Environ(), "OSTY_ENV_GET_TEST=configured")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "configured\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLLVMBackendBinaryStdEnvVarsReadsProcessEnv(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use std.env
+
+fn main() {
+    let vars = env.vars()
+    println(vars.containsKey("OSTY_ENV_VARS_TEST"))
+    println(vars.get("OSTY_ENV_VARS_TEST") ?? "missing")
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	cmd.Env = append(os.Environ(),
+		"OSTY_ENV_VARS_TEST=configured",
+		"OSTY_GC_THRESHOLD_BYTES=1",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "true\nconfigured\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLLVMBackendBinaryStdEnvRequireReadsProcessEnv(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use std.env
+
+fn main() {
+    match env.require("OSTY_ENV_REQUIRE_TEST") {
+        Ok(value) -> println(value),
+        Err(err) -> println(err.message()),
+    }
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	filteredEnv := []string{}
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "OSTY_ENV_REQUIRE_TEST=") {
+			continue
+		}
+		filteredEnv = append(filteredEnv, entry)
+	}
+	cmd.Env = append(filteredEnv, "OSTY_ENV_REQUIRE_TEST=configured")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "configured\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLLVMBackendBinaryStdEnvRequireReportsMissingKey(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use std.env
+
+fn main() {
+    match env.require("OSTY_ENV_REQUIRE_TEST") {
+        Ok(value) -> println(value),
+        Err(err) -> {
+            println(err.message())
+            match err.source() {
+                Some(inner) -> println(inner.message()),
+                None -> println("none"),
+            }
+        },
+    }
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	filteredEnv := []string{}
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "OSTY_ENV_REQUIRE_TEST=") {
+			continue
+		}
+		filteredEnv = append(filteredEnv, entry)
+	}
+	cmd.Env = filteredEnv
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "environment variable not set: OSTY_ENV_REQUIRE_TEST\nnone\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
 func TestLLVMBackendBinarySafepointsKeepManagedRootsAlive(t *testing.T) {
 	parallelClangBackendTest(t)
 
