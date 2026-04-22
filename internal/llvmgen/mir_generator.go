@@ -578,7 +578,7 @@ func (g *mirGen) discoverFunctions() {
 		if fn == nil {
 			continue
 		}
-		sig := mirFnSig{retLLVM: g.llvmType(fn.ReturnType), returnType: fn.ReturnType}
+		sig := mirFnSig{retLLVM: g.functionReturnLLVM(fn), returnType: fn.ReturnType}
 		for _, pid := range fn.Params {
 			loc := fn.Local(pid)
 			if loc == nil {
@@ -596,9 +596,16 @@ func (g *mirGen) discoverFunctions() {
 			continue
 		}
 		fn := glob.Init
-		sig := mirFnSig{retLLVM: g.llvmType(fn.ReturnType), returnType: fn.ReturnType}
+		sig := mirFnSig{retLLVM: g.functionReturnLLVM(fn), returnType: fn.ReturnType}
 		g.functionTypes[fn.Name] = sig
 	}
+}
+
+func (g *mirGen) functionReturnLLVM(fn *mir.Function) string {
+	if fn != nil && fn.Name == "main" && len(fn.Params) == 0 && isUnitType(fn.ReturnType) {
+		return "i32"
+	}
+	return g.llvmType(fn.ReturnType)
 }
 
 // emitGlobalVars writes `@<name> = global <T> zeroinitializer` lines
@@ -3078,6 +3085,11 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 		}
 		g.fnBuf.WriteString("  ]\n")
 	case *mir.ReturnTerm:
+		if g.fn != nil && g.fn.Name == "main" && len(g.fn.Params) == 0 && isUnitType(g.fn.ReturnType) {
+			g.emitGCReleaseRoots()
+			g.fnBuf.WriteString("  ret i32 0\n")
+			return nil
+		}
 		if g.fn.ReturnType == nil || isUnitType(g.fn.ReturnType) {
 			// Release bound roots BEFORE ret so the GC doesn't
 			// scan dead slots for in-flight tail calls on other

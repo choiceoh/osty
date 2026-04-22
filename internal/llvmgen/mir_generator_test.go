@@ -388,13 +388,12 @@ func TestMIRDualEmitFromSource(t *testing.T) {
 		t.Fatalf("GenerateFromMIR: %v", mirErr)
 	}
 
-	// Both outputs should contain the program's semantic core. The
-	// exact signature for `main` differs between the paths (the HIR
-	// emitter wraps it in a `i32 @main()` C shim while the MIR MVP
-	// emits `void @main()`), so we only assert that SOME `@main`
-	// definition is present and that the core instructions show up.
+	// Both outputs should contain the program's semantic core and a
+	// C-entry-compatible `i32 @main()` so linked binaries exit through
+	// a defined status code instead of inheriting an undefined `void`
+	// main ABI.
 	for name, got := range map[string]string{"HIR": string(hirOut), "MIR": string(mirOut)} {
-		if !strings.Contains(got, "@main") || !strings.Contains(got, "define ") {
+		if !strings.Contains(got, "define i32 @main()") {
 			t.Fatalf("[%s] missing main definition:\n%s", name, got)
 		}
 		if !strings.Contains(got, "icmp") {
@@ -405,6 +404,9 @@ func TestMIRDualEmitFromSource(t *testing.T) {
 		}
 		if !strings.Contains(got, "@printf") {
 			t.Fatalf("[%s] missing printf call:\n%s", name, got)
+		}
+		if !strings.Contains(got, "ret i32 0") {
+			t.Fatalf("[%s] missing C-entry return 0:\n%s", name, got)
 		}
 	}
 }

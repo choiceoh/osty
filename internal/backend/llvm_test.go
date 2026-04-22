@@ -380,6 +380,8 @@ func TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics(t *testing.T) {
 		"@osty_rt_strings_Chars",
 		"@osty_rt_strings_Bytes",
 		"@osty_rt_strings_ByteLen",
+		"define i32 @main()",
+		"ret i32 0",
 	} {
 		if !strings.Contains(ir, want) {
 			t.Fatalf("expected IR to contain %q, got:\n%s", want, ir)
