@@ -28,6 +28,7 @@ var toolchainCheckerFiles = []string{
 	"toolchain/check_gates.osty",
 	"toolchain/resolve.osty",
 	"toolchain/lint.osty",
+	"toolchain/lsp.osty",
 	"internal/selfhost/ast_lower.osty",
 }
 
@@ -50,6 +51,16 @@ const stringsPrelude = `use go "strings" as strings {
 
 fn ostyStringsConcat(a: String, b: String) -> String { a + b }
 fn ostyStringsChars(s: String) -> List<Char> { s.chars() }
+fn ostyStringsSplit(s: String, sep: String) -> List<String> {
+    if sep == "" {
+        let mut units: List<String> = []
+        for ch in s.chars() {
+            units.push("{ch}")
+        }
+        return units
+    }
+    return strings.Split(s, sep)
+}
 fn ostyStringsSlice(s: String, start: Int, end: Int) -> String { s[start..end] }
 `
 
@@ -90,13 +101,14 @@ func MergeFiles(root string, files []string) ([]byte, error) {
 
 func stripLeadingStringsUse(src string) string {
 	const goPrefix = `use go "strings" as strings {`
+	const runtimePrefix = `use runtime.strings as strings {`
 	const stdPrefix = "use std.strings as strings"
 
 	lines := strings.SplitAfter(src, "\n")
 	for i := 0; i < len(lines); i++ {
 		trimmed := strings.TrimSpace(lines[i])
 		switch {
-		case strings.HasPrefix(trimmed, goPrefix):
+		case strings.HasPrefix(trimmed, goPrefix), strings.HasPrefix(trimmed, runtimePrefix):
 			for j := i + 1; j < len(lines); j++ {
 				if strings.TrimSpace(lines[j]) == "}" {
 					return strings.Join(lines[:i], "") + strings.Join(lines[j+1:], "")
@@ -113,7 +125,10 @@ func stripLeadingStringsUse(src string) string {
 
 func normalizeStdStringsCalls(src string) string {
 	for _, pair := range [][2]string{
-		{"strings.split(", "strings.Split("},
+		// Route split through an Osty shim so `sep == ""` keeps the
+		// selfhost/runtime "split into source units" behavior instead of
+		// Go strings.Split's leading/trailing empty elements.
+		{"strings.split(", "ostyStringsSplit("},
 		{"strings.join(", "strings.Join("},
 		{"strings.compare(", "strings.Compare("},
 		{"strings.contains(", "strings.Contains("},

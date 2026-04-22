@@ -29,6 +29,7 @@ The exact merged Osty inputs live in
 Notable inputs currently include:
 
 - `toolchain/{semver,semver_parse,frontend,lexer,parser,formatter_ast,check_bridge,diagnostic,check_diag,diag_manifest,diag_examples,ty,core,check_env,solve,elab,check,resolve,lint}.osty`
+- `toolchain/lsp.osty`
 - `internal/selfhost/ast_lower.osty`
 
 Regenerate the Go bridge with:

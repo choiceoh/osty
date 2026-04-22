@@ -9,6 +9,7 @@ The exact merge inputs are defined in
 Today they pull from:
 
 - `toolchain/*.osty` for the front-end/checker/backend-facing logic
+- including `toolchain/lsp.osty` for the self-hosted LSP pure-policy surface
 - `internal/selfhost/ast_lower.osty` for the Go-bridge lowering step
 
 Mainstream Go packages should call `internal/lexer`, `internal/parser`, and

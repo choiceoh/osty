@@ -244,12 +244,12 @@ func patchGenerated(path string) error {
 		{
 			name: "frontendLexStream cached units",
 			old: `func frontendLexStream(source string) *FrontLexStream {
-	// Osty: /tmp/selfhost_merged.osty:1077:5
-	units := strings.Split(source, "")
-	_ = units
-	// Osty: /tmp/selfhost_merged.osty:1078:5
-	unitCount := stringUnitCount(source)
-	_ = unitCount`,
+    // Osty: /tmp/selfhost_merged.osty:1077:5
+    units := ostyStringsSplit(source, "")
+    _ = units
+    // Osty: /tmp/selfhost_merged.osty:1078:5
+    unitCount := stringUnitCount(source)
+    _ = unitCount`,
 			new: `func frontendLexStream(source string) *FrontLexStream {
 	// Osty: /tmp/selfhost_merged.osty:1077:5
 	units := strings.Split(source, "")
@@ -266,13 +266,13 @@ func patchGenerated(path string) error {
 		{
 			name: "ostyLexFactsFromStream cached units",
 			old: `func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts {
-	// Osty: /tmp/selfhost_merged.osty:6326:5
-	units := strings.Split(source, "")
-	_ = units`,
+    // Osty: /tmp/selfhost_merged.osty:6326:5
+    units := ostyStringsSplit(source, "")
+    _ = units`,
 			new: `func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts {
-	// Osty: /tmp/selfhost_merged.osty:6326:5
-	units := stream.units
-	if units == nil {
+    // Osty: /tmp/selfhost_merged.osty:6326:5
+    units := stream.units
+    if units == nil {
 		units = strings.Split(source, "")
 	}
 	_ = units`,
@@ -324,6 +324,18 @@ func patchGenerated(path string) error {
 		`strings.Split(right, "")`, `splitStringUnits(right)`,
 		`strings.Split(s, "")`, `splitStringUnits(s)`,
 		`strings.Split(name, "")`, `splitStringUnits(name)`,
+		`strings.Split(prefix, "")`, `splitStringUnits(prefix)`,
+		`strings.Split(typeText, "")`, `splitStringUnits(typeText)`,
+		`ostyStringsSplit(source, "")`, `splitStringUnits(source)`,
+		`ostyStringsSplit(text, "")`, `splitStringUnits(text)`,
+		`ostyStringsSplit(line, "")`, `splitStringUnits(line)`,
+		`ostyStringsSplit(lexed.source, "")`, `splitStringUnits(lexed.source)`,
+		`ostyStringsSplit(left, "")`, `splitStringUnits(left)`,
+		`ostyStringsSplit(right, "")`, `splitStringUnits(right)`,
+		`ostyStringsSplit(s, "")`, `splitStringUnits(s)`,
+		`ostyStringsSplit(name, "")`, `splitStringUnits(name)`,
+		`ostyStringsSplit(prefix, "")`, `splitStringUnits(prefix)`,
+		`ostyStringsSplit(typeText, "")`, `splitStringUnits(typeText)`,
 	).Replace(src)
 	for _, fn := range []struct {
 		name string
@@ -494,6 +506,7 @@ func generatedSnippetContains(src, snippet string) bool {
 
 func generatedSnippetNormalizeLine(line string) string {
 	line = strings.TrimSuffix(line, "\n")
+	line = strings.ReplaceAll(line, "\t", "    ")
 	if m := generatedSnippetSourceLocPattern.FindStringSubmatch(line); m != nil {
 		return m[1] + "<loc>" + m[2]
 	}
