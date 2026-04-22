@@ -1460,6 +1460,7 @@ func (g *generator) emitIfExprValue(expr *ast.IfExpr) (value, error) {
 		return value{}, err
 	}
 	elsePred := g.currentBlock
+	thenValue, elseValue = coerceVoidArm(thenValue, elseValue)
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "if expression branch types %s/%s", thenValue.typ, elseValue.typ)
 	}
@@ -1509,6 +1510,7 @@ func (g *generator) emitIfLetExprValue(expr *ast.IfExpr) (value, error) {
 		return value{}, err
 	}
 	elsePred := g.currentBlock
+	thenValue, elseValue = coerceVoidArm(thenValue, elseValue)
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "if expression branch types %s/%s", thenValue.typ, elseValue.typ)
 	}
@@ -1519,6 +1521,15 @@ func (g *generator) emitIfExprPhi(labels *LlvmIfLabels, thenPred, elsePred strin
 	if labels == nil {
 		return value{}, unsupported("control-flow", "missing if-expression labels")
 	}
+	// Unreachable-arm coercion: when one branch ended in an abort
+	// sequence (`__resultAbort`, testing-abort, unwrap-on-None), the
+	// emitter leaves that predecessor with `unreachable` and reports
+	// `typ == "void"`. The phi needs two entries of the same type
+	// regardless — LLVM accepts `undef <ty>` from the unreachable
+	// edge, so we project the void side onto the reachable side's
+	// type rather than walling on the mismatch.
+	thenValue, elseValue = coerceVoidArm(thenValue, elseValue)
+	thenValue, elseValue = coerceVoidArm(thenValue, elseValue)
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "if expression branch types %s/%s", thenValue.typ, elseValue.typ)
 	}
@@ -1541,6 +1552,22 @@ func (g *generator) emitIfExprPhi(labels *LlvmIfLabels, thenPred, elsePred strin
 	mergeContainerMetadata(&out, thenValue, elseValue)
 	out.rootPaths = g.rootPathsForType(out.typ)
 	return out, nil
+}
+
+// coerceVoidArm pairs up two match-arm values when one of them
+// terminated in an unreachable abort (type = "void"). LLVM phi
+// instructions need uniform operand types; for the unreachable edge
+// the value is never actually used, so project it onto the reachable
+// arm's type with an `undef` operand. Both-void still goes through
+// unchanged so the surrounding check reports the real "no arm
+// produced a value" failure.
+func coerceVoidArm(a, b value) (value, value) {
+	if a.typ == "void" && b.typ != "void" && b.typ != "" {
+		a = value{typ: b.typ, ref: "undef"}
+	} else if b.typ == "void" && a.typ != "void" && a.typ != "" {
+		b = value{typ: a.typ, ref: "undef"}
+	}
+	return a, b
 }
 
 func (g *generator) emitBlockValue(block *ast.Block) (value, error) {
@@ -1628,6 +1655,20 @@ func (g *generator) emitMatchExprValue(expr *ast.MatchExpr) (value, error) {
 			if resolveErr == nil {
 				if opt, ok := resolved.(*ast.OptionalType); ok {
 					return g.emitOptionalMatchExprValue(scrutinee, opt.Inner, expr.Arms)
+				}
+				// `match c.x { Ok(v) -> …, Err(_) -> … }` where
+				// `c.x: Result<T, E>` is stored in a struct field or
+				// loaded indirectly — the scrutinee LLVM type is a
+				// ptr into that slot, not the aggregate value itself.
+				// Load the Result aggregate through the ptr and
+				// re-enter the dispatch so
+				// emitResultMatchExprValue can consume it.
+				if info, ok := builtinResultTypeFromAST(resolved, g.typeEnv()); ok {
+					emitter := g.toOstyEmitter()
+					loaded := llvmLoad(emitter, &LlvmValue{typ: info.typ, name: scrutinee.ref, pointer: true})
+					g.takeOstyEmitter(emitter)
+					aggregate := value{typ: info.typ, ref: loaded.name}
+					return g.emitResultMatchExprValue(aggregate, info, expr.Arms)
 				}
 			}
 		}
@@ -1839,6 +1880,7 @@ func (g *generator) emitResultMatchExprValue(scrutinee value, info builtinResult
 	}
 	elsePred := g.currentBlock
 
+	thenValue, elseValue = coerceVoidArm(thenValue, elseValue)
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
 	}
@@ -1960,6 +2002,7 @@ func (g *generator) emitPrimitiveLiteralMatchSelectValue(scrutinee value, arms [
 			haveCurrent = true
 			continue
 		}
+		armValue, current = coerceVoidArm(armValue, current)
 		if armValue.typ != current.typ {
 			return value{}, unsupportedf("type-system", "match arm types %s/%s", armValue.typ, current.typ)
 		}
@@ -2029,6 +2072,7 @@ func (g *generator) emitPrimitiveLiteralMatchChainValue(scrutinee value, arms []
 		return value{}, err
 	}
 	elsePred := g.currentBlock
+	thenValue, elseValue = coerceVoidArm(thenValue, elseValue)
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
 	}
@@ -2068,6 +2112,7 @@ func (g *generator) emitTagEnumMatchSelectValue(scrutinee value, arms []*ast.Mat
 			haveCurrent = true
 			continue
 		}
+		armValue, current = coerceVoidArm(armValue, current)
 		if armValue.typ != current.typ {
 			return value{}, unsupportedf("type-system", "match arm types %s/%s", armValue.typ, current.typ)
 		}
@@ -2134,6 +2179,7 @@ func (g *generator) emitTagEnumMatchChainValue(scrutinee value, arms []*ast.Matc
 		return value{}, err
 	}
 	elsePred := g.currentBlock
+	thenValue, elseValue = coerceVoidArm(thenValue, elseValue)
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
 	}
@@ -2178,6 +2224,7 @@ func (g *generator) emitGuardedMatchExprValue(scrutinee value, arms []*ast.Match
 		return value{}, err
 	}
 	elsePred := g.currentBlock
+	thenValue, elseValue = coerceVoidArm(thenValue, elseValue)
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
 	}
@@ -2225,6 +2272,7 @@ func (g *generator) emitGuardedMatchArmThenValue(scrutinee value, arm *ast.Match
 		return value{}, err
 	}
 	elsePred := g.currentBlock
+	thenValue, elseValue = coerceVoidArm(thenValue, elseValue)
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
 	}
@@ -2286,6 +2334,7 @@ func (g *generator) emitTagEnumMatchIfExprValue(scrutinee value, first, second *
 		return value{}, err
 	}
 	elsePred := g.currentBlock
+	thenValue, elseValue = coerceVoidArm(thenValue, elseValue)
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
 	}
@@ -2296,6 +2345,7 @@ func (g *generator) emitSelectValue(cond *LlvmValue, thenValue, elseValue value)
 	if cond == nil || cond.typ != "i1" {
 		return value{}, unsupported("type-system", "select condition must be Bool")
 	}
+	thenValue, elseValue = coerceVoidArm(thenValue, elseValue)
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "select branch types %s/%s", thenValue.typ, elseValue.typ)
 	}
@@ -4814,6 +4864,46 @@ func (g *generator) emitOptionMethodCall(call *ast.CallExpr) (value, bool, error
 	return value{typ: "i1", ref: cmp}, true, nil
 }
 
+// emitResultAbortCall lowers the stdlib `__resultAbort(msg)` helper
+// as a print + exit(1) sequence. The Osty body is a self-recursive
+// stub — the backend's job is to terminate the program with the
+// caller-supplied diagnostic. Mirrors the testing-abort contract so
+// the message hits stderr on the way out.
+//
+// Emits `call void @exit(i32 1)` without closing the current block:
+// the caller (match arm emission, if/else phi, …) still owns the
+// block's terminator (`br label %end`). Returned value uses `"void"`
+// to signal that the branch is effectively never-returning — downstream
+// phi builders pair it with coerceVoidArm so the phi entry becomes an
+// `undef <ty>` that LLVM accepts regardless of the sibling arm's type.
+// The runtime never actually reads that phi operand because exit(1)
+// already terminated the process.
+func (g *generator) emitResultAbortCall(call *ast.CallExpr) (value, error) {
+	msg := "called unwrap on Err"
+	emitter := g.toOstyEmitter()
+	emitted := false
+	if len(call.Args) >= 1 && call.Args[0] != nil && call.Args[0].Value != nil {
+		g.takeOstyEmitter(emitter)
+		m, err := g.emitExpr(call.Args[0].Value)
+		if err == nil {
+			m, err = g.loadIfPointer(m)
+		}
+		emitter = g.toOstyEmitter()
+		if err == nil && m.typ == "ptr" {
+			llvmPrintlnString(emitter, &LlvmValue{typ: "ptr", name: m.ref})
+			emitted = true
+		}
+	}
+	if !emitted {
+		msgPtr := llvmStringLiteral(emitter, msg)
+		llvmPrintlnString(emitter, msgPtr)
+	}
+	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
+	emitter.body = append(emitter.body, "  call void @exit(i32 1)")
+	g.takeOstyEmitter(emitter)
+	return value{typ: "void", ref: "undef"}, nil
+}
+
 // emitOptionUnwrap lowers `opt.unwrap()` for a ptr-backed `Option<T>`:
 // if the receiver is non-null the payload ptr is the result; null
 // aborts with a "called unwrap on None" message (matching the spec's
@@ -5060,6 +5150,7 @@ func (g *generator) emitPayloadEnumMatchExprValue(scrutinee value, info *enumInf
 		}
 		elsePred = g.currentBlock
 	}
+	thenValue, elseValue = coerceVoidArm(thenValue, elseValue)
 	if thenValue.typ != elseValue.typ {
 		return value{}, unsupportedf("type-system", "match arm types %s/%s", thenValue.typ, elseValue.typ)
 	}
@@ -5318,6 +5409,20 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if !found {
 		if id, ok := call.Fn.(*ast.Ident); ok && id.Name == "println" {
 			return value{}, unsupported("call", "println is only supported as a statement")
+		}
+		// stdlib `__resultAbort(msg) -> Never` from result.osty is a
+		// `Never`-returning helper the Result<T, E> combinators call
+		// on `unwrap`/`expect` error paths. The Osty body stub is a
+		// self-recursive placeholder; the backend is expected to
+		// intercept with a print + exit + unreachable sequence. Match
+		// the testing-abort contract so the failure mode is
+		// stderr-visible and the LLVM IR terminates the current block
+		// cleanly. The call still gets queued into the specialized
+		// `Result<T, E>.unwrap` body even when user code never calls
+		// unwrap, because monomorphize emits every non-generic method
+		// of a specialized owner.
+		if id, ok := call.Fn.(*ast.Ident); ok && id.Name == "__resultAbort" {
+			return g.emitResultAbortCall(call)
 		}
 		// Phase 1: indirect call through a first-class fn value held in a
 		// local/global binding. `f` was bound earlier (e.g. `let f =

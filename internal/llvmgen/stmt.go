@@ -1977,12 +1977,130 @@ func (g *generator) emitMatchStmt(expr *ast.MatchExpr) error {
 			if opt, ok := resolved.(*ast.OptionalType); ok && scrutinee.typ == "ptr" {
 				return g.emitOptionalMatchStmt(scrutinee, opt.Inner, expr.Arms)
 			}
+			// `match result { Ok(v) -> …, Err(_) -> … }` as a
+			// statement — either when the scrutinee is already the
+			// Result aggregate value (emit inlined) or when it's a
+			// ptr into a struct-field slot that needs loading first
+			// (mirrors the expr-path fallback).
+			if info, ok := builtinResultTypeFromAST(resolved, g.typeEnv()); ok {
+				if scrutinee.typ == "ptr" {
+					emitter := g.toOstyEmitter()
+					loaded := llvmLoad(emitter, &LlvmValue{typ: info.typ, name: scrutinee.ref, pointer: true})
+					g.takeOstyEmitter(emitter)
+					scrutinee = value{typ: info.typ, ref: loaded.name}
+				}
+				if scrutinee.typ == info.typ {
+					return g.emitResultMatchStmt(scrutinee, info, expr.Arms)
+				}
+			}
 		}
+	}
+	if info, ok := g.resultTypes[scrutinee.typ]; ok {
+		return g.emitResultMatchStmt(scrutinee, info, expr.Arms)
 	}
 	if scrutinee.typ != "i64" {
 		return unsupportedf("statement", "match statement scrutinee type %s (only tag-enum i64 supported as statement for now)", scrutinee.typ)
 	}
 	return g.emitTagEnumMatchStmt(scrutinee, expr.Arms)
+}
+
+// emitResultMatchStmt lowers a two-arm `match result { Ok(v) -> …,
+// Err(e) -> … }` in statement position. Mirrors emitOptionalMatchStmt's
+// basic-block shape: dispatch on the tag field, emit each arm's body
+// through `emitMatchArmBodyAsStmt`, rejoin at `match.end` for the
+// reachable predecessors. Payload bindings are extracted with the
+// same field-index contract the expr path (emitResultMatchArm) uses.
+func (g *generator) emitResultMatchStmt(scrutinee value, info builtinResultType, arms []*ast.MatchArm) error {
+	if len(arms) != 2 {
+		return unsupportedf("statement", "Result match requires exactly 2 arms, got %d", len(arms))
+	}
+	firstInfo, firstOk, err := g.matchResultPattern(info, arms[0].Pattern)
+	if err != nil {
+		return err
+	}
+	if !firstOk {
+		return unsupported("statement", "Result match first arm must be Ok(...), Err(...), or _")
+	}
+	if firstInfo.isWildcard {
+		baseState := g.captureScopeState()
+		if err := g.emitMatchArmBodyAsStmt(arms[0].Body); err != nil {
+			return err
+		}
+		g.restoreScopeState(baseState)
+		return nil
+	}
+	secondInfo, secondOk, err := g.matchResultPattern(info, arms[1].Pattern)
+	if err != nil {
+		return err
+	}
+	if !secondOk {
+		return unsupported("statement", "Result match second arm must be Ok(...), Err(...), or _")
+	}
+
+	emitter := g.toOstyEmitter()
+	tag := llvmExtractValue(emitter, toOstyValue(scrutinee), "i64", 0)
+	cond := llvmCompare(emitter, "eq", tag, toOstyValue(value{typ: "i64", ref: fmt.Sprintf("%d", firstInfo.tag)}))
+	thenLabel := llvmNextLabel(emitter, "match.result.first")
+	elseLabel := llvmNextLabel(emitter, "match.result.second")
+	endLabel := llvmNextLabel(emitter, "match.result.end")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, thenLabel, elseLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", thenLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(thenLabel)
+
+	if err := g.bindResultMatchPayload(scrutinee, firstInfo); err != nil {
+		return err
+	}
+	baseState := g.captureScopeState()
+	if err := g.emitMatchArmBodyAsStmt(arms[0].Body); err != nil {
+		return err
+	}
+	if g.currentReachable {
+		g.branchTo(endLabel)
+	}
+	g.restoreScopeState(baseState)
+
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", elseLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(elseLabel)
+
+	if err := g.bindResultMatchPayload(scrutinee, secondInfo); err != nil {
+		return err
+	}
+	baseState = g.captureScopeState()
+	if err := g.emitMatchArmBodyAsStmt(arms[1].Body); err != nil {
+		return err
+	}
+	if g.currentReachable {
+		g.branchTo(endLabel)
+	}
+	g.restoreScopeState(baseState)
+
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(endLabel)
+	return nil
+}
+
+// bindResultMatchPayload extracts and binds the payload local for a
+// Result match arm, matching the expr-side contract in
+// emitResultMatchArm: non-wildcard arms with `hasBinding` pull the
+// field at `info.fieldIndex` as `info.payloadType` and bind it under
+// `info.payloadName`.
+func (g *generator) bindResultMatchPayload(scrutinee value, info resultPatternInfo) error {
+	if info.isWildcard || !info.hasBinding {
+		return nil
+	}
+	emitter := g.toOstyEmitter()
+	payload := llvmExtractValue(emitter, toOstyValue(scrutinee), info.payloadType, info.fieldIndex)
+	g.takeOstyEmitter(emitter)
+	payloadValue := fromOstyValue(payload)
+	payloadValue.gcManaged = info.payloadType == "ptr"
+	payloadValue.rootPaths = g.rootPathsForType(info.payloadType)
+	g.bindNamedLocal(info.payloadName, payloadValue, false)
+	return nil
 }
 
 type optionalMatchPatternInfo struct {
