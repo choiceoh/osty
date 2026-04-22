@@ -2121,3 +2121,147 @@ int main(void) {
 		t.Fatalf("rooted object was reclaimed (live_after=%d)", liveAfter)
 	}
 }
+
+// Phase 3 step 2b — per-phase pause characterization. Phase A (STW
+// start) and Phase C (STW finish + sweep) sum to the user-visible
+// stop-the-world time; Phase B (concurrent mark) is the concurrent
+// cost that overlaps mutator execution. The < 1ms Phase-3 acceptance
+// goal from RUNTIME_SCHEDULER.md is about A + C, not B. This test
+// measures them on a representative heap and asserts sane shape
+// (non-zero timings, finite totals), logging concrete numbers so CI
+// trends surface any regression in the pause-reduction work.
+func TestBundledRuntimeSchedulerConcurrentIncrementalPerPhasePause(t *testing.T) {
+	if testing.Short() {
+		t.Skip("per-phase pause characterization skipped in -short")
+	}
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_per_phase_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_per_phase_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t kind, int64_t size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+int64_t osty_gc_debug_live_count(void);
+
+int64_t osty_gc_debug_concurrent_incremental_start_nanos(void);
+int64_t osty_gc_debug_concurrent_incremental_mark_nanos(void);
+int64_t osty_gc_debug_concurrent_incremental_finish_nanos(void);
+int64_t osty_gc_debug_concurrent_incremental_cycles(void);
+
+void *osty_rt_task_spawn(void *body_env);
+int64_t osty_rt_task_handle_join(void *handle);
+void osty_rt_sched_preempt_check_v1(void);
+void osty_rt_gc_collect_concurrent_incremental_v1(void *const *caller_roots, int64_t caller_count);
+void osty_rt_thread_sleep(int64_t nanos);
+
+typedef struct env_t { void *fn; volatile int64_t *stop; } env_t;
+
+static int64_t body_spin(void *env) {
+    env_t *e = (env_t *)env;
+    while (!__atomic_load_n(e->stop, __ATOMIC_ACQUIRE)) {
+        osty_rt_sched_preempt_check_v1();
+    }
+    return 0;
+}
+
+#define N_WORKERS 4
+#define N_ROOTED 1000
+#define N_GARBAGE 9000
+
+int main(void) {
+    /* Populate a realistic heap: 1K rooted × 4KB = 4MB live plus
+     * 9K garbage × 4KB = 36MB to sweep (mirrors the STW pause
+     * baseline test's shape so the numbers compare directly). */
+    static void *rooted[N_ROOTED];
+    for (int i = 0; i < N_ROOTED; i++) {
+        rooted[i] = osty_gc_alloc_v1(7, 4096, "rooted");
+        osty_gc_root_bind_v1(rooted[i]);
+    }
+    for (int i = 0; i < N_GARBAGE; i++) {
+        (void)osty_gc_alloc_v1(7, 4096, "garbage");
+    }
+
+    /* Spin up workers so the cycle runs with live mutators (the
+     * stop handshake + kick path is exercised on real parks). */
+    volatile int64_t stop = 0;
+    env_t envs[N_WORKERS];
+    void *hs[N_WORKERS];
+    for (int i = 0; i < N_WORKERS; i++) {
+        envs[i].fn = (void *)body_spin;
+        envs[i].stop = &stop;
+        hs[i] = osty_rt_task_spawn((void *)&envs[i]);
+    }
+    osty_rt_thread_sleep(20000000LL);  /* ramp */
+
+    osty_rt_gc_collect_concurrent_incremental_v1(NULL, 0);
+
+    int64_t start_ns = osty_gc_debug_concurrent_incremental_start_nanos();
+    int64_t mark_ns = osty_gc_debug_concurrent_incremental_mark_nanos();
+    int64_t finish_ns = osty_gc_debug_concurrent_incremental_finish_nanos();
+    int64_t cycles = osty_gc_debug_concurrent_incremental_cycles();
+
+    __atomic_store_n(&stop, 1, __ATOMIC_RELEASE);
+    for (int i = 0; i < N_WORKERS; i++) {
+        (void)osty_rt_task_handle_join(hs[i]);
+    }
+    for (int i = 0; i < N_ROOTED; i++) {
+        osty_gc_root_release_v1(rooted[i]);
+    }
+
+    printf("%lld %lld %lld %lld\n",
+           (long long)start_ns, (long long)mark_ns,
+           (long long)finish_ns, (long long)cycles);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-O2", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, out)
+	}
+	out, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, out)
+	}
+	var startNs, markNs, finishNs, cycles int64
+	if _, err := fmt.Sscanf(string(out), "%d %d %d %d",
+		&startNs, &markNs, &finishNs, &cycles); err != nil {
+		t.Fatalf("parse stdout %q: %v", out, err)
+	}
+	t.Logf("per_phase_pause: start=%dus mark=%dus finish=%dus cycles=%d  stw_total=%dus",
+		startNs/1000, markNs/1000, finishNs/1000, cycles,
+		(startNs+finishNs)/1000)
+
+	if cycles < 1 {
+		t.Fatalf("concurrent cycle did not complete: cycles=%d", cycles)
+	}
+	if startNs == 0 && markNs == 0 && finishNs == 0 {
+		t.Fatalf("per-phase timings all zero; instrumentation broken")
+	}
+	// Regression ceiling on the STW portion (A + C). Phase B is
+	// concurrent so it does not count toward user-visible latency.
+	// The baseline TestBundledRuntimeGcPauseBaseline measures
+	// ~6.5ms for a full STW on a similar heap; the concurrent
+	// path should be at minimum on par. Loose 1s cap for CI
+	// jitter; the logged figure is what matters for trending.
+	stwTotal := startNs + finishNs
+	if stwTotal > int64(1_000_000_000) {
+		t.Fatalf("STW total regressed beyond 1s: start=%d finish=%d", startNs, finishNs)
+	}
+}
