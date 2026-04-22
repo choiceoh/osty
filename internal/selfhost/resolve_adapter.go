@@ -1,6 +1,8 @@
 package selfhost
 
-import "errors"
+import (
+	"github.com/osty/osty/internal/diag"
+)
 
 // PackageResolveFile is the per-file input shape accepted by the structured
 // self-host resolve adapter.
@@ -138,6 +140,18 @@ func ResolveStructuredFromRun(run *FrontendRun) ResolveResult {
 	)
 }
 
+// ResolveFromSource parses src once and returns the parse diagnostics
+// together with the structured resolve result annotated with path.
+// Keeps the internal FrontendRun hidden from callers that only need
+// source-in / result-out, which is the subprocess-compatible shape.
+func ResolveFromSource(src []byte, path string) ([]*diag.Diagnostic, ResolveResult) {
+	run := Run(src)
+	if run == nil {
+		return nil, ResolveResult{}
+	}
+	return run.Diagnostics(), ResolveStructuredFromRunForPath(run, path)
+}
+
 // ResolveStructuredFromRunForPath is ResolveStructuredFromRun plus
 // single-file annotation: Symbols / Refs / TypeRefs / Diagnostics all
 // carry path, and each Ref's TargetFile is set to path when the resolver
@@ -168,34 +182,11 @@ func ResolveStructuredFromRunForPath(run *FrontendRun, path string) ResolveResul
 	return result
 }
 
-// ResolvePackageStructured lowers one structured package input into a
-// synthetic selfhost AST and runs the self-host resolver over the merged
-// package namespace.
+// ResolvePackageStructured re-parses each input file via the self-host
+// lexer + parser, merges the per-file AstArenas into a synthetic package
+// arena, and runs the self-host resolver over the merged namespace.
+// Source text is the sole AST ingress — no *ast.File round-trip.
 func ResolvePackageStructured(input PackageResolveInput) (ResolveResult, error) {
-	if selfhostCanBuildPackageAstDirect(input.Files) {
-		file, _, err := selfhostBuildPackageAstDirect(input.Files)
-		if err == nil {
-			if file == nil {
-				return ResolveResult{}, nil
-			}
-			result := adaptResolveResult(
-				selfResolveAstFile(file),
-				file,
-				func(start, end int) (int, int) {
-					if end < start {
-						end = start
-					}
-					return start, end
-				},
-			)
-			selfhostAnnotateResolveFiles(&result, input.Files)
-			return result, nil
-		}
-		var unsupported *selfhostLoweringUnsupported
-		if !errors.As(err, &unsupported) {
-			return ResolveResult{}, err
-		}
-	}
 	file, layout, err := selfhostBuildPackageAst(input.Files)
 	if err != nil {
 		return ResolveResult{}, err

@@ -406,11 +406,9 @@ func canonicalSelfhostInput(t *testing.T, src []byte, base int) selfhost.Package
 	if len(errs) != 0 {
 		t.Fatalf("Parse(%q): %v", string(src), errs)
 	}
-	out, sm := canonical.SourceWithMap(src, file)
+	out, _ := canonical.SourceWithMap(src, file)
 	return selfhost.PackageCheckFile{
-		Source:    out,
-		File:      file,
-		SourceMap: sm,
-		Base:      base,
+		Source: out,
+		Base:   base,
 	}
 }

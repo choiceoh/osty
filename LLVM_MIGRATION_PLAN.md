@@ -790,10 +790,10 @@ CLI 재배선의 resolve + check 축은 **단일 파일 + 단일 패키지** 경
 
 **남아있는 작업**:
 
-1. **Workspace `--native`** — `selfhostPackageCheckInput`이 `pf.File.Decls`를 걸어 cross-package import surface를 만든다. AstArena 기반 walker로 포팅 필요 (~500 LOC, 7 access site).
+1. **~~Workspace `--native`~~** — ✅ 완료. `selfhostPackageCheckInput` + `selfhostPackageImportSurfaces` 전부 `selfhost.PackageImportSurface(alias, runs)` (arena-direct) 로 포팅됨. `internal/selfhost/import_surface_arena.go` 가 arena walker를 hold. `PackageCheckFile.File *ast.File` / `SourceMap` 필드 + `selfhostBuildPackageAstDirect` / `selfhostPackageFileLowerer` (구 `package_ast_lower.go` ~1850 LOC) 동시 제거. `CheckPackageStructured` / `ResolvePackageStructured` 가 단일 re-parse path 로 단순화.
 2. **`osty lint --native`** — lint engine이 `*resolve.Result`의 포인터 아이덴티티 맵(`Refs map[*ast.Ident]*Symbol`)에 깊이 의존. identity 모델 재설계 선행.
 3. **LSP / formatter / bootstrap-gen** — 모두 `*ast.File` 포인터 기반. 각자의 identity 모델 포팅 필요.
-4. **ABI 경로** — `internal/selfhost/ast_lower.osty` + `internal/selfhost/astbridge/` 완전 제거는 위 소비자들이 전부 AstArena 경로로 전환된 후.
+4. **ABI 경로** — `internal/selfhost/ast_lower.osty` + `internal/selfhost/astbridge/` 완전 제거는 위 2·3 소비자들이 AstArena 경로로 전환된 후.
 
 **중요한 설계 결정 (PR #641)**: native 경로에서 empty 결과를 신호로 Go fallback을 발동시키면 안 된다. "native가 빈 결과를 반환 = 성공적으로 ref 없음 확인"이지 "native가 실패함"이 아니다. fallback은 실제 에러 때만 트리거해야 한다. 이 규칙은 `runResolvePackageInner`의 `nativeErrored` 플래그로 현재 구현됨.
 
