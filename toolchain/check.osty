@@ -858,9 +858,14 @@ fn elaborateDecls(cx: ElabCx) {
 }
 
 fn elaborateFnBody(cx: ElabCx, node: AstNode, owner: String) {
-    let sig = checkLookupFn(cx.env, node.text, owner)
-    if sig.name == "" {
+    let rawSig = checkLookupFn(cx.env, node.text, owner)
+    if rawSig.name == "" {
         return
+    }
+    let sig = if rawSig.receiverTy >= 0 {
+        checkSpecializeMethodSelf(cx.env, rawSig, rawSig.receiverTy)
+    } else {
+        rawSig
     }
     let mark = checkScopeMark(cx.env)
     let boundsMark = checkGenericBoundMark(cx.env)

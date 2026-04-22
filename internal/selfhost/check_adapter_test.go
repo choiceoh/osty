@@ -586,3 +586,79 @@ fn main() {
 		t.Fatalf("summary errors = %d, want 4 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
 	}
 }
+
+func TestCheckSourceStructuredAcceptsSelfTypedMethodsAndBuiltinSelfBounds(t *testing.T) {
+	src := []byte(`interface Mergeable {
+    fn same(self, other: Self) -> Bool
+}
+
+struct User {
+    name: String
+
+    fn renamed(self, name: String) -> Self {
+        User { name }
+    }
+
+    fn same(self, other: Self) -> Bool {
+        self.name == other.name
+    }
+}
+
+struct Point {
+    x: Int
+    y: Int
+}
+
+fn compare<T: Mergeable>(a: T, b: T) -> Bool {
+    a.same(b)
+}
+
+fn equals<T: Equal>(a: T, b: T) -> Bool {
+    a.eq(b) && !a.ne(b)
+}
+
+fn ordered<T: Ordered>(a: T, b: T) -> Bool {
+    a.le(b) || a.gt(b)
+}
+
+fn fingerprint<T: Hashable>(value: T) -> Int {
+    value.hash()
+}
+
+fn main() {
+    let user = User { name: "Ada" }
+    let renamed: User = user.renamed("Grace")
+    let sameUser: Bool = user.same(renamed)
+    let merged: Bool = compare(user, renamed)
+
+    let point = Point { x: 1, y: 2 }
+    let samePoint: Bool = equals(point, point)
+    let ord: Bool = ordered(1, 2)
+    let digest: Int = fingerprint(point)
+    let _ = (sameUser, merged, samePoint, ord, digest)
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+
+	got := map[string]string{}
+	for _, binding := range checked.Bindings {
+		got[binding.Name] = binding.TypeName
+	}
+	want := map[string]string{
+		"renamed":   "User",
+		"sameUser":  "Bool",
+		"merged":    "Bool",
+		"samePoint": "Bool",
+		"ord":       "Bool",
+		"digest":    "Int",
+	}
+	for name, wantType := range want {
+		if got[name] != wantType {
+			t.Fatalf("binding type for %s = %q, want %q (all=%v)", name, got[name], wantType, got)
+		}
+	}
+}

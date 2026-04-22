@@ -1111,8 +1111,8 @@ fn checkTypeSatisfiesInterfaceSeen(env: CheckEnv, concrete: Int, iface: Int, see
             if found.name == "" {
                 return false
             }
-            let wantTy = checkConcreteMethodTy(env, req, ifaceResolved)
-            let gotTy = checkConcreteMethodTy(env, found, concreteResolved)
+            let wantTy = checkConcreteMethodTy(env, req, ifaceResolved, concreteResolved)
+            let gotTy = checkConcreteMethodTy(env, found, concreteResolved, concreteResolved)
             if !(checkIsAssignable(env, wantTy, gotTy)) {
                 return false
             }
@@ -1337,24 +1337,82 @@ fn checkFnSigNames(xs: List<CheckFnSig>) -> List<String> {
     out
 }
 
-fn checkConcreteMethodTy(env: CheckEnv, sig: CheckFnSig, ownerTy: Int) -> Int {
+pub fn checkSpecializeMethodSelf(env: CheckEnv, sig: CheckFnSig, selfTy: Int) -> CheckFnSig {
+    if selfTy < 0 {
+        return sig
+    }
+    let mut paramTys: List<Int> = []
+    for p in sig.paramTys {
+        paramTys.push(checkSubstituteSelfTy(env, p, selfTy))
+    }
+    CheckFnSig {
+        name: sig.name,
+        owner: sig.owner,
+        receiverTy: checkSubstituteSelfTy(env, sig.receiverTy, selfTy),
+        retTy: checkSubstituteSelfTy(env, sig.retTy, selfTy),
+        paramNames: sig.paramNames,
+        paramTys,
+        generics: sig.generics,
+        genericBounds: sig.genericBounds,
+    }
+}
+
+fn checkConcreteMethodTy(env: CheckEnv, sig: CheckFnSig, ownerTy: Int, selfTy: Int) -> Int {
     let ownerResolved = checkResolveAliasDeep(env, ownerTy)
     let ownerHead = tyHeadAt(env.tys, ownerResolved)
     let ownerSig = checkLookupType(env, ownerHead)
     let ownerArgs = tyArgsAt(env.tys, ownerResolved)
+    let selfResolved = checkResolveAliasDeep(env, selfTy)
     let mut params: List<Int> = []
     let ret = if checkStringListLen(ownerSig.generics) == checkIntListLen(ownerArgs) {
         for p in sig.paramTys {
-            params.push(checkSubstituteTy(env, p, ownerSig.generics, ownerArgs))
+            let paramTy = checkSubstituteTy(env, p, ownerSig.generics, ownerArgs)
+            params.push(checkSubstituteSelfTy(env, paramTy, selfResolved))
         }
-        checkSubstituteTy(env, sig.retTy, ownerSig.generics, ownerArgs)
+        let retTy = checkSubstituteTy(env, sig.retTy, ownerSig.generics, ownerArgs)
+        checkSubstituteSelfTy(env, retTy, selfResolved)
     } else {
         for p in sig.paramTys {
-            params.push(p)
+            params.push(checkSubstituteSelfTy(env, p, selfResolved))
         }
-        sig.retTy
+        checkSubstituteSelfTy(env, sig.retTy, selfResolved)
     }
     tyFn(env.tys, params, ret)
+}
+
+fn checkSubstituteSelfTy(env: CheckEnv, ty: Int, selfTy: Int) -> Int {
+    if ty < 0 {
+        return ty
+    }
+    let kind = tyKindAt(env.tys, ty)
+    if kind == TkSelf {
+        return selfTy
+    }
+    if kind == TkNamed {
+        let mut args: List<Int> = []
+        for arg in tyArgsAt(env.tys, ty) {
+            args.push(checkSubstituteSelfTy(env, arg, selfTy))
+        }
+        return tyNamed(env.tys, tyHeadAt(env.tys, ty), args)
+    }
+    if kind == TkTuple {
+        let mut items: List<Int> = []
+        for item in tyArgsAt(env.tys, ty) {
+            items.push(checkSubstituteSelfTy(env, item, selfTy))
+        }
+        return tyTuple(env.tys, items)
+    }
+    if kind == TkFn {
+        let mut params: List<Int> = []
+        for param in tyArgsAt(env.tys, ty) {
+            params.push(checkSubstituteSelfTy(env, param, selfTy))
+        }
+        return tyFn(env.tys, params, checkSubstituteSelfTy(env, tyRetAt(env.tys, ty), selfTy))
+    }
+    if kind == TkOptional {
+        return tyOptional(env.tys, checkSubstituteSelfTy(env, tyInnerAt(env.tys, ty), selfTy))
+    }
+    ty
 }
 
 // ---------------------------------------------------------------------
