@@ -38,11 +38,11 @@ a spec. New implementation effort should land in the LLVM lowering/runtime path;
 | #   | 기능                                         | 시뮬 | 실  | 델타                                                 | P  | 참조                                                 |
 | --- | -------------------------------------------- | ---- | --- | ---------------------------------------------------- | -- | ---------------------------------------------------- |
 | 1.1 | ~~오브젝트 헤더~~                            | ✅   | ✅  | age + generation 추가 (Phase B1). pin/forwarding은 Phase D에서 | ✅ B1 | `osty_runtime.c:osty_gc_header`              |
-| 1.2 | 지역별 힙 (Eden/Survivor/Old/Humongous/Pinned) | ✅ | 🟡 | YOUNG/OLD 논리 구분 + young alloc / old evacuation bump region 분리 landed. old evac region은 empty-block recycle까지 포함, Survivor/TLAB/pinned 전용 region은 아직 없음 | P3 | `osty_runtime.c:osty_gc_link` (generation 분기)      |
-| 1.3 | Bump allocator                               | ✅   | 🟡  | young small-object bump block + major compaction old bump clone path landed. old evac region은 empty-block recycle 가능, young small-object는 minimal per-thread TLAB current block까지 포함 | P3 | `lib.osty:127-147` / `osty_runtime.c:osty_gc_bump_take_from_region`                                   |
+| 1.2 | 지역별 힙 (Eden/Survivor/Old/Humongous/Pinned) | ✅ | 🟡 | YOUNG alloc + minor survivor from/to copy region + major old evacuation bump region + explicit `alloc_pinned_v1` pinned region landed. survivor/old/pinned region은 empty-block recycle 포함, lowering은 아직 pinned alloc path를 자동 emit하지 않음 | P3 | `osty_runtime.c:osty_gc_link` (generation 분기)      |
+| 1.3 | Bump allocator                               | ✅   | 🟡  | young/survivor/old/pinned bump block landed. 모든 bump region은 forwarding-aware empty-block recycle, per-thread TLS current block refill까지 포함 | P3 | `lib.osty:127-147` / `osty_runtime.c:osty_gc_bump_take_from_region`                                   |
 | 1.4 | Free list (tenured / humongous)              | ✅   | 🟡  | sweep-dead header reuse + size-class bin landed. humongous는 direct alloc/free 경로로 분리 | P3 | `lib.osty:122-147` / `osty_runtime.c:osty_gc_free_list_take`                                   |
 | 1.5 | Size class / large object threshold          | ✅   | 🟡 | 16-byte size-class bin + humongous threshold landed. bump/region 전략은 아직 동일 | P3 | `lib.osty:709-764` / `osty_runtime.c:osty_gc_size_class_index_for_total_size`                                   |
-| 1.6 | TLAB (스레드별 할당 버퍼)                    | ✅   | 🟡  | young small-object bump current block만 per-thread TLS로 분리. Survivor/old/pinned region 전용 TLAB는 아직 없음 | P3 | `lib.osty:111-120` / `osty_runtime.c:osty_gc_tlab_current`                                   |
+| 1.6 | TLAB (스레드별 할당 버퍼)                    | ✅   | 🟡  | young/survivor/old/pinned bump current block이 per-thread TLS로 분리됐다. 다만 mutator-local retire policy / budgeted refill 같은 full TLAB policy는 아직 최소형 | P3 | `lib.osty:111-120` / `osty_runtime.c:osty_gc_tlab_current`                                   |
 | 1.7 | Stable object identity (movable와 분리)      | ✅   | ✅  | monotonic `stable_id` + reverse index + forwarding-aware debug/load path landed | ✅ D1 | `lib.osty:94-108` / `osty_runtime.c:osty_gc_header` |
 
 ## 2. 루트
@@ -89,7 +89,7 @@ a spec. New implementation effort should land in the LLVM lowering/runtime path;
 | #   | 기능                                  | 시뮬 | 실  | 델타 | P  |
 | --- | ------------------------------------- | ---- | --- | ---- | -- |
 | 5.1 | ~~Nursery / Eden~~                    | ✅   | 🟡  | 논리 구분만 (물리적 Eden/Survivor 분리는 Phase D), YOUNG 할당 경로는 완성 | ✅ B2 |
-| 5.2 | Survivor space + budget               | ✅   | ❌  | age 기반 in-place 승격으로 대체 — from/to 분리는 compaction 시 | P3 |
+| 5.2 | Survivor space + budget               | ✅   | 🟡  | minor GC가 survivor from/to bump region으로 copy하고 promote-age에서 old로 승격한다. survivor budget / spill policy는 아직 coarse | P3 |
 | 5.3 | ~~Tenured (old)~~                     | ✅   | ✅  | OLD bucket + 카운터 + in-place 승격 | ✅ B2/B3 |
 | 5.4 | ~~승격 정책 (age 비트, 임계)~~         | ✅   | ✅  | `OSTY_GC_PROMOTE_AGE_DEFAULT=3`, env override, age는 u8 | ✅ B3 |
 | 5.5 | ~~Minor GC 트리거 (nurseryLimit)~~    | ✅   | ✅  | `OSTY_GC_NURSERY_BYTES` + dispatcher 2-tier 선택 | ✅ B3/B5 |
@@ -102,8 +102,8 @@ post_write log가 소유하고, minor GC가 일관되게 소비한다.
 | #   | 기능                                   | 시뮬 | 실  | 델타                               | P  | 참조                          |
 | --- | -------------------------------------- | ---- | --- | ---------------------------------- | -- | ----------------------------- |
 | 6.1 | Mark-sweep 전체 heap                   | ✅   | ✅  | —                                  | —  | `osty_runtime.c:389-400`      |
-| 6.2 | Compaction / forwarding table          | ✅   | ✅  | major GC 후 STW forwarding/remap + repeated compaction alias retention landed | ✅ D4 | `lib.osty:215-222` / `osty_runtime.c:osty_gc_compact_major_with_stack_roots`            |
-| 6.3 | Evacuation (region 이전, pinned skip)  | ✅   | 🟡  | list/set/string/closure-env + typed channel + map payload (composite-inline value 포함) evacuate | P3 | `lib.osty:224-230` / `osty_runtime.c:osty_gc_header_is_movable`            |
+| 6.2 | Compaction / forwarding table          | ✅   | ✅  | major GC STW forwarding/remap + minor survivor forwarding/remap + repeated compaction alias retention landed | ✅ D4 | `lib.osty:215-222` / `osty_runtime.c:osty_gc_compact_major_with_stack_roots`            |
+| 6.3 | Evacuation (region 이전, pinned skip)  | ✅   | 🟡  | list/set/string/closure-env + typed channel + map payload (composite-inline value 포함) evacuate. minor는 movable young survivor를 survivor/old bump로 copy하고, explicit pinned alloc / pinned headers는 skip | P3 | `lib.osty:224-230` / `osty_runtime.c:osty_gc_header_is_movable`            |
 | 6.4 | Destructor callback                    | ✅   | ✅  | —                                  | —  | `osty_runtime.c:393-395`      |
 | 6.5 | 프래그멘테이션 계측                    | ✅   | ❌  | 진단용                             | P3 | `lib.osty:71-92`              |
 
@@ -120,7 +120,7 @@ post_write log가 소유하고, minor GC가 일관되게 소비한다.
 | --- | -------------------------------------- | ---- | --- | -------------------------------------- | --- |
 | 8.1 | Pin bit (evacuation 제외)              | ✅   | ✅  | header `pin_count` + pinned counters landed                | ✅ D3  |
 | 8.2 | pin / unpin API                        | ✅   | ✅  | `osty.gc.pin_v1` / `osty.gc.unpin_v1` export                                      | ✅ D3  |
-| 8.3 | LLVM pinned handle ref (FFI)           | ✅   | 🟡 | `root_bind`로 의미는 동치, API 격차   | P2  |
+| 8.3 | LLVM pinned handle ref (FFI)           | ✅   | 🟡 | 런타임은 `osty.gc.alloc_pinned_v1`까지 export하지만 lowering은 아직 `root_bind` 중심이라 born-pinned 경로를 자동 선택하지 않음 | P2  |
 | 8.4 | 유저 파이널라이저                      | ❌   | ❌  | 설계상 없음                            | N/A |
 | 8.5 | 런타임 내부 destroy 콜백               | ✅   | ✅  | —                                      | —   |
 
@@ -364,9 +364,11 @@ API → §1.3-1.6 region heap (bump/freelist/TLAB/size class).
   payload alias를 stable-id 기준으로 최신 header에 재결합한다.
 - ✅ **D3 pin API** — `pin_count`와 `osty.gc.pin_v1` /
   `osty.gc.unpin_v1`를 추가해서 evacuation 제외 대상을 명시할 수 있다.
-- 🟡 **남은 Phase D tail** — Survivor/from-to space /
-  survivor-old-pinned 전용 TLAB depth / young compaction-safe recycle /
-  pinned region-local recycle 분리는 아직 후속이다.
+- ✅ **Phase D allocator tail closed** — survivor/old/pinned TLAB current
+  block, explicit pinned region alloc, pinned/young/old/survivor
+  region-local recycle까지 런타임에 landed. 남는 건 Phase D tail이 아니라
+  후속 최적화(더 정교한 TLAB policy, 멀티스레드 mutator, lowering-side
+  born-pinned emission)다.
 
 ## 유지 규칙
 
