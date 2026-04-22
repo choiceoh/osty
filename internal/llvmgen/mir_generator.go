@@ -5023,8 +5023,7 @@ func (g *mirGen) emitStringConcatBoxed(op mir.Operand) (*LlvmValue, error) {
 	}
 	switch prim.Kind {
 	case ir.PrimInt, ir.PrimInt8, ir.PrimInt16, ir.PrimInt32, ir.PrimInt64,
-		ir.PrimUInt8, ir.PrimUInt16, ir.PrimUInt32, ir.PrimUInt64,
-		ir.PrimByte, ir.PrimChar:
+		ir.PrimUInt8, ir.PrimUInt16, ir.PrimUInt32, ir.PrimUInt64:
 		reg, err := g.evalOperand(op, t)
 		if err != nil {
 			return nil, err
@@ -5033,6 +5032,28 @@ func (g *mirGen) emitStringConcatBoxed(op mir.Operand) (*LlvmValue, error) {
 		g.declareRuntime(sym, "declare ptr @"+sym+"(i64)")
 		em := g.ostyEmitter()
 		out := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "i64", name: reg}})
+		g.flushOstyEmitter(em)
+		return out, nil
+	case ir.PrimChar:
+		reg, err := g.evalOperand(op, t)
+		if err != nil {
+			return nil, err
+		}
+		sym := "osty_rt_char_to_string"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(i32)")
+		em := g.ostyEmitter()
+		out := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "i32", name: reg}})
+		g.flushOstyEmitter(em)
+		return out, nil
+	case ir.PrimByte:
+		reg, err := g.evalOperand(op, t)
+		if err != nil {
+			return nil, err
+		}
+		sym := "osty_rt_byte_to_string"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(i8)")
+		em := g.ostyEmitter()
+		out := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "i8", name: reg}})
 		g.flushOstyEmitter(em)
 		return out, nil
 	case ir.PrimBool:
