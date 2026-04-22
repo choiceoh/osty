@@ -332,6 +332,91 @@ func TestGenerateFromMIRUnsupportedFallsBack(t *testing.T) {
 	}
 }
 
+func TestGenerateFromMIRAllowsPoisonedUnusedLocal(t *testing.T) {
+	fn := &mir.Function{
+		Name:       "answer",
+		ReturnType: ir.TInt,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: ir.TInt, Mut: true, IsReturn: true},
+			{ID: 1, Name: "poison", Type: ir.ErrTypeVal},
+		},
+		ReturnLocal: 0,
+		Entry:       0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					&mir.AssignInstr{
+						Dest: mir.Place{Local: 0},
+						Src: &mir.UseRV{Op: &mir.ConstOp{
+							Const: &mir.IntConst{Value: 42, T: ir.TInt},
+							T:     ir.TInt,
+						}},
+					},
+				},
+				Term: &mir.ReturnTerm{},
+			},
+		},
+	}
+	m := &mir.Module{
+		Package:   "main",
+		Functions: []*mir.Function{fn},
+		Layouts:   mir.NewLayoutTable(),
+	}
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/poisoned_local.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"define i64 @answer()",
+		"%l1 = alloca ptr",
+		"store i64 42",
+		"ret i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRRecoversPoisonedLetTypeFromValue(t *testing.T) {
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "label",
+				Return: ir.TString,
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{
+						&ir.LetStmt{
+							Name:  "prefix",
+							Type:  ir.ErrTypeVal,
+							Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "warn"}}},
+						},
+					},
+					Result: &ir.Ident{Name: "prefix", Kind: ir.IdentLocal, T: ir.TString},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	fn := m.LookupFunction("label")
+	if fn == nil {
+		t.Fatalf("missing label function")
+	}
+	if got := fn.Locals[1].Type.String(); got != "String" {
+		t.Fatalf("expected recovered let local type String, got %s", got)
+	}
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/recovered_let.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	if !strings.Contains(string(out), "define ptr @label()") {
+		t.Fatalf("missing label definition in:\n%s", out)
+	}
+}
+
 // TestMIRDualEmitFromSource runs a program through both emitter paths —
 // the HIR→AST bridge (legacy GenerateModule) and the new MIR-direct
 // path (GenerateFromMIR) — and asserts that both produce valid
@@ -839,6 +924,44 @@ func TestGenerateFromMIRListLiteralAndLen(t *testing.T) {
 		"call ptr @osty_rt_list_new()",
 		"declare void @osty_rt_list_push_i64(ptr, i64)",
 		"call void @osty_rt_list_push_i64(",
+		"declare i64 @osty_rt_list_len(ptr)",
+		"call i64 @osty_rt_list_len(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRForInListUsesLenRV(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "walk",
+				Return: ir.TUnit,
+				Params: []*ir.Param{{Name: "xs", Type: listInt}},
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{
+						&ir.ForStmt{
+							Kind: ir.ForIn,
+							Var:  "x",
+							Iter: &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: listInt},
+							Body: &ir.Block{},
+						},
+					},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/for_in_list.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
 		"declare i64 @osty_rt_list_len(ptr)",
 		"call i64 @osty_rt_list_len(",
 	} {
@@ -2582,6 +2705,98 @@ func TestGenerateFromMIRBytesLen(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
+	}
+}
+
+func TestGenerateFromMIRStringInterpolationConcat(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "qualify",
+		Return: ir.TString,
+		Params: []*ir.Param{
+			{Name: "alias", Type: ir.TString},
+			{Name: "name", Type: ir.TString},
+		},
+		Body: &ir.Block{
+			Result: &ir.StringLit{
+				Parts: []ir.StringPart{
+					{Expr: &ir.Ident{Name: "alias", Kind: ir.IdentParam, T: ir.TString}},
+					{IsLit: true, Lit: "."},
+					{Expr: &ir.Ident{Name: "name", Kind: ir.IdentParam, T: ir.TString}},
+				},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/string_concat.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "declare ptr @osty_rt_strings_Concat(ptr, ptr)") {
+		t.Fatalf("missing string concat runtime decl in:\n%s", got)
+	}
+	if strings.Count(got, "call ptr @osty_rt_strings_Concat(") != 2 {
+		t.Fatalf("expected two concat calls in:\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRStringInterpolationRecoversFieldExprTypes(t *testing.T) {
+	diagT := &ir.NamedType{Name: "Diag"}
+	fn := &ir.FnDecl{
+		Name:   "render",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "d", Type: diagT}},
+		Body: &ir.Block{
+			Result: &ir.StringLit{
+				Parts: []ir.StringPart{
+					{Expr: &ir.FieldExpr{
+						X:    &ir.Ident{Name: "d", Kind: ir.IdentParam, T: diagT},
+						Name: "code",
+						T:    ir.ErrTypeVal,
+					}},
+					{IsLit: true, Lit: ": "},
+					{Expr: &ir.FieldExpr{
+						X:    &ir.Ident{Name: "d", Kind: ir.IdentParam, T: diagT},
+						Name: "message",
+						T:    ir.ErrTypeVal,
+					}},
+				},
+			},
+		},
+	}
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.StructDecl{
+				Name: "Diag",
+				Fields: []*ir.Field{
+					{Name: "code", Type: ir.TString, Exported: true},
+					{Name: "message", Type: ir.TString, Exported: true},
+				},
+			},
+			fn,
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	mirFn := m.LookupFunction("render")
+	if mirFn == nil {
+		t.Fatalf("missing render function")
+	}
+	for _, loc := range mirFn.Locals {
+		if loc == nil {
+			continue
+		}
+		if _, ok := loc.Type.(*ir.ErrType); ok {
+			t.Fatalf("unexpected poisoned local _%d in MIR:\n%s", loc.ID, mir.PrintFunction(mirFn))
+		}
+	}
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/string_field_concat.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	if strings.Count(string(out), "call ptr @osty_rt_strings_Concat(") != 2 {
+		t.Fatalf("expected two concat calls in:\n%s", out)
 	}
 }
 
