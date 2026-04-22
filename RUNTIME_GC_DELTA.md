@@ -52,7 +52,7 @@ a spec. New implementation effort should land in the LLVM lowering/runtime path;
 | 2.1 | Stack root (safepoint 기반)         | ✅   | ✅  | —                                         | —  | `osty_runtime.c:1614-1623`        |
 | 2.2 | Manual root bind/release            | ✅   | ✅  | 시뮬은 list, 실은 refcount                | —  | `osty_runtime.c:1592-1612`        |
 | 2.3 | ~~Global / static root 테이블~~     | ✅   | ✅  | slot-address 등록, safepoint mark에서 순회 — PR #400 후속 | ✅ done | `osty_runtime.c:osty_gc_global_root_register_v1` |
-| 2.4 | Closure capture root                | ✅   | 🟡 | capture struct은 일반 alloc, slot descriptor 없음 | P2 | `lib.osty:618-622`          |
+| 2.4 | Closure capture root                | ✅   | 🟡 | scalar + 관리 포인터(String/Bytes/List/Map/Set) capture가 env slot에 저장되고 `osty_rt_closure_env_trace`가 모든 slot을 `mark_slot_v1`로 walk. user struct capture와 per-kind descriptor bitmap은 아직 TBD (scalar false-retention 가능성, §Closure capture depth 참조) | P2 | `lib.osty:618-622` / `closure_lift.go:managedPtrLLVMTypeForIR` |
 | 2.5 | Async frame root                    | ✅   | ❌  | async 구현 전까지 대기                    | P3 | `lib.osty:624-631`                |
 | 2.6 | Derived-base root pair              | ✅   | ❌  | inner pointer 대응                        | P3 | `lib.osty:582-600`                |
 | 2.7 | ~~Incremental shade-on-add~~        | ✅   | ✅  | `pre_write_v1` greys old value during MARK_INCREMENTAL (Phase C5) | ✅ C5 | `osty_runtime.c:osty_gc_pre_write_v1` |
@@ -105,7 +105,7 @@ post_write log가 소유하고, minor GC가 일관되게 소비한다.
 | 6.2 | Compaction / forwarding table          | ✅   | ✅  | major GC STW forwarding/remap + minor survivor forwarding/remap + repeated compaction alias retention landed | ✅ D4 | `lib.osty:215-222` / `osty_runtime.c:osty_gc_compact_major_with_stack_roots`            |
 | 6.3 | Evacuation (region 이전, pinned skip)  | ✅   | 🟡  | list/set/string/closure-env + typed channel + map payload (composite-inline value 포함) evacuate. minor는 movable young survivor를 survivor/old bump로 copy하고, explicit pinned alloc / pinned headers는 skip | P3 | `lib.osty:224-230` / `osty_runtime.c:osty_gc_header_is_movable`            |
 | 6.4 | Destructor callback                    | ✅   | ✅  | —                                  | —  | `osty_runtime.c:393-395`      |
-| 6.5 | 프래그멘테이션 계측                    | ✅   | ❌  | 진단용                             | P3 | `lib.osty:71-92`              |
+| 6.5 | ~~프래그멘테이션 계측~~                | ✅   | ✅  | free-list / humongous / bump 집계 14 필드를 `osty_gc_stats`에 통합 (한 번의 atomic read로 읽을 수 있음). `osty_gc_debug_stats_dump`도 3 라인 추가. `bump_block_count`는 live gauge, 나머지 `*_total`은 monotonic | ✅ done | `osty_runtime.c:osty_gc_debug_stats` |
 
 ## 7. 사이클 수집
 
@@ -138,7 +138,7 @@ post_write log가 소유하고, minor GC가 일관되게 소비한다.
 
 | #    | 기능                                                           | 시뮬 | 실  | 델타                                    | P  | 참조                          |
 | ---- | -------------------------------------------------------------- | ---- | --- | --------------------------------------- | -- | ----------------------------- |
-| 10.1 | Safepoint 종류 (call / alloc / loop-backedge / async-yield)    | ✅   | 🟡 | 단일 kind — id만 무시                   | P2 | `lib.osty:519-525`            |
+| 10.1 | ~~Safepoint 종류 (call / alloc / loop-backedge / async-yield)~~ | ✅   | ✅ | 모든 emit 사이트 분류 완료 (ENTRY/CALL/LOOP/YIELD). dead `emitGCSafepoint` unclassified helper 제거로 UNSPECIFIED 누출 구조적으로 봉쇄. ALLOC kind은 enum에 예약되어 있으나 per-alloc safepoint가 v0.6 A5.2 no-loop-poll 철학과 충돌하므로 의도적으로 emit 안 함 | ✅ done | `generator.go:emitGCSafepointKind` |
 | 10.2 | 스택맵 (라이브 bitmap + overflow)                              | ✅   | 🟡 | LLVM이 매번 slot 포인터 배열 emit       | P2 | `lib.osty:650-667`            |
 | 10.3 | STW 베이스라인                                                 | ✅   | ✅  | —                                       | —  | —                             |
 | 10.4 | 멀티스레드 (thread-local state)                                | ✅   | ❌  | 단일 스레드                             | P3 | `lib.osty:276-286`            |
@@ -210,9 +210,12 @@ A5–A6는 safepoint ABI 주변 분류·가드.
   전용 allocator + `osty_rt_closure_env_trace` 콜백을 런타임에 구현.
   capture slot array를 직접 순회하는 self-describing 레이아웃
   (`{ ptr fn, i64 capture_count, ptr captures[] }`). llvmgen
-  `emitFnValueEnv`가 dedicated 엔트리로 전환 — 현재는 capture_count=0이지만
-  Phase 4가 값만 바꿔끼우면 된다. 3개 캡처 보유한 env로 trace 경로 검증:
-  `TestBundledRuntimeClosureEnvTracesCaptures`.
+  `emitFnValueEnv`가 dedicated 엔트리로 전환. Phase 4 capture lift는
+  `closure_lift.go`에서 scalar (Int / Bool / Char / Byte / Float) + 관리
+  포인터 (String / Bytes / List / Map / Set) capture를 env slot에 기록하며
+  runtime trace가 이를 walk한다. 3개 캡처 보유한 env로 trace 경로 검증:
+  `TestBundledRuntimeClosureEnvTracesCaptures`. E2E capture lift는
+  `TestClosureLiftCapturingIntLocal` / `TestClosureLiftCapturingStringLocal`.
 - **A5 심화** — E2E 테스트 `TestGenerateFromASTSafepointKindMixCallAndLoop`:
   legacy 에미터가 lower한 IR을 정규식으로 파싱해 kind 분포를 복원,
   CALL + LOOP 존재와 UNSPECIFIED 부재를 검증. MIR 측 ENTRY + LOOP는
@@ -346,12 +349,37 @@ Phase A SATB log가 passive recording에서 **live consumer**로 승격. 마킹
 
 ## 다음 단계
 
-Phase C 깊이 패스 또는 Phase D (compaction). Phase C 깊이로 가면:
-§9.2 mutator assist → §4.4 concurrent thread → auto-dispatcher에 incremental
-편입 → minor + incremental 혼합.
+Phase A / B / C / D + audit follow-up까지 모두 랜딩된 상태. 남아 있는
+의미 있는 작업은 **스펙 또는 컨슈머 설계가 선행해야** 하는 것들이라
+런타임만 손보는 방식으로는 한계:
 
-Phase D는 §1.7 stable ID → §6.2-6.3 forwarding + evacuation → §8.1-8.2 pin
-API → §1.3-1.6 region heap (bump/freelist/TLAB/size class).
+- **§4.4 Mostly-concurrent mark + final remark** — Phase C incremental이
+  단일 스레드인 한계를 넘기려면 GC worker 스레드 + thread-safe grey queue
+  필요. 규모 큼. 스케줄러 쪽 동시성 프리미티브는 이미 있음.
+- **§1.6 Full TLAB policy** — per-thread TLS current block까지는 있으나
+  mutator-local retire / budgeted refill 같은 본격 정책은 부재.
+  벤치마크 근거가 있어야 튜닝 가능.
+- **§3.5 카드 테이블** — 현재는 per-edge remembered log로 우회. write-heavy
+  워크로드 프로파일링 결과가 있어야 카드 테이블 이득을 가늠 가능.
+- **§8.3 LLVM pinned handle ref (FFI)** — 런타임 `alloc_pinned_v1`은 있으나
+  Osty 소스 레벨 진입점(annotation, intrinsic) 설계 선행 필요.
+  현재 consumer 없음 → dead code 위험.
+- **§2.5 / §2.6 Async frame / derived-base root pair** — 언어 async 기능
+  랜딩 전까지 대기.
+
+Closure capture 쪽은 **per-capture kind bitmap**을 도입하면 §2.4의
+scalar false-retention 이론적 위험을 구조적으로 닫을 수 있고
+user struct capture도 지원할 수 있다 — 다음 실용적 candidate.
+
+## Phase 계보 (빠른 참조)
+
+| Phase | 목표                                 | 상태 |
+| ----- | ------------------------------------ | ---- |
+| A     | 관측·안정화 (validate / stats / mark queue / closure env kind / safepoint taxonomy) | ✅ |
+| B     | 세대 GC (nursery/tenured, 승격, minor, 2-tier pressure) | ✅ |
+| C     | Incremental marking (tri-color, budget step, SATB, mutator assist, auto-dispatcher) | ✅ |
+| D     | Compaction + pin + region heap + 후속 audit | ✅ |
+| 후속  | concurrent mark / full TLAB policy / card table / pinned FFI lowering / async roots | ❌ (스펙·컨슈머 선행) |
 
 ### Phase D 진행 상태
 
@@ -369,6 +397,44 @@ API → §1.3-1.6 region heap (bump/freelist/TLAB/size class).
   region-local recycle까지 런타임에 landed. 남는 건 Phase D tail이 아니라
   후속 최적화(더 정교한 TLAB policy, 멀티스레드 mutator, lowering-side
   born-pinned emission)다.
+- ✅ **Incremental-finish도 compact** (PR #618, 2026-04-22) — 랜딩 당시
+  doc상 Phase D는 ✅였으나 실제로 `osty_gc_collect_incremental_finish` +
+  auto-dispatcher inline finish 경로는 sweep만 하고 compact을 건너뛰어
+  `OSTY_GC_INCREMENTAL=1` 모드에서 Phase D forwarding/remap이 silently
+  우회되고 있었다. 새 `osty_gc_collect_incremental_finish_with_stack_roots`
+  entry + 공통 `_finish_locked(..., compact)` body로 STW major와 동일
+  의미론을 보장. zero-arg `finish()`는 concurrent 스케줄러가 parked mutator
+  stack을 노출하지 않아 compact 비활성 유지 (structural). 테스트:
+  `TestBundledRuntimeIncrementalFinishCompactsPhaseD`.
+
+### Phase D 후속 감사 결과 (PR #624 / #627)
+
+- ✅ **§2.4 closure managed-pointer capture** — scalar 전용 제약을 풀어
+  String/Bytes/List/Map/Set capture가 env slot에 `ptr`로 저장된다.
+  런타임 trace는 Phase A4부터 준비돼 있던 `osty_rt_closure_env_trace`를
+  그대로 재사용. 테스트: `TestClosureLiftCapturingStringLocal`.
+- ✅ **§10.1 safepoint kind audit** — legacy 에미터의 3개
+  loop-continuation 사이트(emitMapIterate / emitMapRetainIfStmt /
+  emitMapFor)가 여전히 UNSPECIFIED를 emit하고 있었다. 전부 `LOOP`로
+  분류하고, 죽은 `emitGCSafepoint` unclassified helper를
+  `generator.go` / `mir_generator.go`에서 제거해 UNSPECIFIED 경로를
+  정적으로 봉쇄. 테스트: `TestGenerateFromASTMapForEntriesTagsLoopKind`.
+- ✅ **§6.5 fragmentation snapshot** — 스칼라 accessor는 있었으나
+  `osty_gc_stats` 스냅샷에는 없어 한 번의 atomic read로 전체 그림을
+  얻을 수 없었다. 14 필드(free-list 4 / humongous 4 / bump 집계 6)
+  추가. PR #627에서 `bump_block_count_total` → `bump_block_count`로
+  rename — 해당 필드는 live gauge지 monotonic total이 아님.
+- 📝 **closure env scalar capture probabilistic caveat** — `mark_slot_v1`
+  필터가 find_header로 잘못된 주소를 걸러주지만, scalar capture 8-byte
+  bit pattern이 우연히 live heap payload 주소와 일치하면 한 사이클
+  false retention. 64-bit host에서 실질적 0% (힙은 user space 상위
+  반부, 작은 int/double은 다른 영역)이지만 구조적 보장은 아님.
+  `osty_runtime.c:osty_rt_closure_env_trace` 주석에 기록. 향후
+  per-capture-kind bitmap으로 구조적 보장으로 승격 가능.
+- 📝 **safepointKindAlloc은 예약 상태 유지** — enum에 정의되어 있으나
+  에미트 사이트 0. wire-up 시 per-alloc safepoint가 되어 v0.6 A5.2의
+  "loop 바디에서 per-iteration poll 억제" 철학과 충돌하므로 의도적
+  미사용. 타 컴포넌트에서 kind decode 호환을 위해 값 자체는 유지.
 
 ## 유지 규칙
 
