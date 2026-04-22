@@ -586,6 +586,7 @@ func collectNativeInterfaceImpls(mod *ostyir.Module) []nativeInterfaceImpl {
 		enumsByName:       map[string]*nativeEnumInfo{},
 		interfacesByName:  map[string]*nativeInterfaceInfo{},
 		tuplesByLLVMType:  map[string]*nativeTupleInfo{},
+		resultsByName:     map[string]*nativeResultInfo{},
 		resultsByLLVMType: map[string]*nativeResultInfo{},
 		methodsByOwner:    map[string]map[string]nativeMethodInfo{},
 	}
@@ -1053,11 +1054,11 @@ func nativeRegisterBuiltinResultType(ctx *nativeProjectionCtx, name string, okIR
 	if ctx == nil || okIR == nil || errIR == nil {
 		return nil, false
 	}
-	okType, ok := nativeLLVMTypeFromIR(ctx, okIR)
+	okType, ok := nativeResultSlotLLVMType(ctx, okIR)
 	if !ok || okType == "void" {
 		return nil, false
 	}
-	errType, ok := nativeLLVMTypeFromIR(ctx, errIR)
+	errType, ok := nativeResultSlotLLVMType(ctx, errIR)
 	if !ok || errType == "void" {
 		return nil, false
 	}
@@ -3957,15 +3958,29 @@ func nativeTupleInfoFromType(ctx *nativeProjectionCtx, t ostyir.Type) (*nativeTu
 // insertvalue into only the "live" slot while the other stays at
 // the zero value. Idempotent — repeat calls with the same type args
 // return the cached entry.
+// nativeResultSlotLLVMType resolves a Result<T, E> slot (ok or err)
+// type to its LLVM type, matching legacy-parity naming: no-payload
+// user enums collapse to `i64` (the tag) so the mangled Result
+// name matches `%Result.i64.i64` rather than `%Result.i64._Foo`.
+// Behaves like nativeLLVMTypeFromIR for all other shapes.
+func nativeResultSlotLLVMType(ctx *nativeProjectionCtx, t ostyir.Type) (string, bool) {
+	if named, ok := t.(*ostyir.NamedType); ok && named != nil && !named.Builtin && named.Package == "" && len(named.Args) == 0 {
+		if info, ok := ctx.enumsByName[named.Name]; ok && info != nil && info.def != nil && info.def.payloadSlotType == "" {
+			return "i64", true
+		}
+	}
+	return nativeLLVMTypeFromIR(ctx, t)
+}
+
 func nativeRegisterResultType(ctx *nativeProjectionCtx, okIR, errIR ostyir.Type) (string, bool) {
 	if ctx == nil {
 		return "", false
 	}
-	okLLVM, ok := nativeLLVMTypeFromIR(ctx, okIR)
+	okLLVM, ok := nativeResultSlotLLVMType(ctx, okIR)
 	if !ok || okLLVM == "void" {
 		return "", false
 	}
-	errLLVM, ok := nativeLLVMTypeFromIR(ctx, errIR)
+	errLLVM, ok := nativeResultSlotLLVMType(ctx, errIR)
 	if !ok || errLLVM == "void" {
 		return "", false
 	}

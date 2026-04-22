@@ -1466,6 +1466,8 @@ func llvmNativeEvalPrintln(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValu
 		llvmPrintlnF64(emitter, value)
 	case "ptr":
 		llvmPrintlnString(emitter, value)
+	case "i1":
+		llvmPrintlnBool(emitter, value)
 	default:
 		llvmPrintlnI64(emitter, value)
 	}
