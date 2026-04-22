@@ -102,7 +102,7 @@ func preparePackageEntry(req llvmgenRequest) (backend.Entry, error) {
 		return backend.Entry{}, err
 	}
 	ws.Stdlib = stdlib.LoadCached()
-	if _, err := ws.LoadPackage(""); err != nil {
+	if _, err := ws.LoadPackageArenaFirst(""); err != nil {
 		return backend.Entry{}, err
 	}
 	results := ws.ResolveAll()

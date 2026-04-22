@@ -688,7 +688,7 @@ func runCheckPackageLegacy(dir string, flags cliFlags) int {
 		cacheRoot = root
 	}
 	enableCheckerCacheForRoot(cacheRoot)
-	pkg, err := resolve.LoadPackageWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("check"), os.Stderr, flags))
+	pkg, err := resolve.LoadPackageArenaFirstWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("check"), os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		return 1
@@ -767,7 +767,7 @@ func runCheckWorkspace(dir string, flags cliFlags) {
 	// chases `use` edges from there, so deeper nested packages are
 	// pulled in lazily.
 	for _, p := range resolve.WorkspacePackagePaths(dir) {
-		_, _ = ws.LoadPackage(p)
+		_, _ = ws.LoadPackageArenaFirst(p)
 	}
 	results := ws.ResolveAll()
 	// Run the type checker over every package, producing one Result per
@@ -826,12 +826,11 @@ func runLintPackage(dir string, flags cliFlags) {
 // runLintPackageLegacy is the extracted single-package body of
 // runLintPackage (after the workspace check). Returns an exit code
 // so the lint DIR pipeline is exercisable in-process alongside the
-// check / typecheck / resolve legacy extractions. The parse + resolve
-// + check + lint pipeline is unchanged — parser.ParseDetailed runs
-// lazily through resolve.LoadPackageWithTransform, so every file in
-// the package gets its *ast.File lowered exactly once.
+// check / typecheck / resolve legacy extractions. Loads arena-first
+// (Phase 1c.2) so parse goes through selfhost.Run; pf.File / canonical
+// materialize lazily for the Go resolver + linter.
 func runLintPackageLegacy(dir string, flags cliFlags) int {
-	pkg, err := resolve.LoadPackageWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("lint"), os.Stderr, flags))
+	pkg, err := resolve.LoadPackageArenaFirstWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("lint"), os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		return 1
@@ -858,7 +857,7 @@ func runLintWorkspace(dir string, flags cliFlags) {
 	ws.Stdlib = stdlib.LoadCached()
 	anyErr, anyWarn := false, false
 	runOne := func(path string) {
-		pkg, err := ws.LoadPackage(path)
+		pkg, err := ws.LoadPackageArenaFirst(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 			anyErr = true
@@ -2603,7 +2602,7 @@ func loadGenPackageEntryWithTransform(path string, transform resolve.SourceTrans
 	}
 	ws.SourceTransform = transform
 	ws.Stdlib = stdlib.LoadCached()
-	if _, err := ws.LoadPackage(""); err != nil {
+	if _, err := ws.LoadPackageArenaFirst(""); err != nil {
 		return nil, err
 	}
 	results := ws.ResolveAll()

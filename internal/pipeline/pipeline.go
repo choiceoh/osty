@@ -558,11 +558,12 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 // separately), and the rest mirrors Run. Workspaces are not handled
 // here — point at a leaf package directory.
 //
-// If LoadPackage fails (e.g. directory unreadable), the returned
-// Result has empty Stages and the error is returned to the caller so
-// the CLI can decide whether to abort.
+// If loading fails (e.g. directory unreadable), the returned Result
+// has empty Stages and the error is returned to the caller so the
+// CLI can decide whether to abort. Uses the arena-first loader
+// (Phase 1c.2) so parse keeps the astbridge counter low.
 func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
-	pkg, err := resolve.LoadPackage(dir)
+	pkg, err := resolve.LoadPackageArenaFirst(dir)
 	if err != nil {
 		return Result{}, err
 	}
@@ -768,7 +769,7 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 	}
 	ws.Stdlib = stdlib.LoadCached()
 	for _, p := range resolve.WorkspacePackagePaths(dir) {
-		_, _ = ws.LoadPackage(p)
+		_, _ = ws.LoadPackageArenaFirst(p)
 	}
 
 	totalFiles, totalBytes, totalDecls, totalStmts, totalUses := 0, 0, 0, 0, 0

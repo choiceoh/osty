@@ -107,7 +107,7 @@ func LoadRunnerState(root string, preloaded *manifest.Manifest) LoadResult {
 		return loadWorkspace(r, false)
 	}
 
-	pkg, err := resolve.LoadPackage(r.Root)
+	pkg, err := resolve.LoadPackageArenaFirst(r.Root)
 	if err != nil {
 		return *r
 	}
@@ -134,7 +134,7 @@ func loadWorkspace(r *LoadResult, byManifest bool) LoadResult {
 			return
 		}
 		seen[member] = true
-		if pkg, err := ws.LoadPackage(member); err == nil && pkg != nil {
+		if pkg, err := ws.LoadPackageArenaFirst(member); err == nil && pkg != nil {
 			filterPackageCIFiles(pkg)
 			r.Packages = append(r.Packages, pkg)
 			pkgPaths = append(pkgPaths, member)
