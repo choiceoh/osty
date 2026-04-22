@@ -512,11 +512,21 @@ func (g *generator) emitBuiltinOptionSomeCall(call *ast.CallExpr) (value, bool, 
 		loaded.sourceType = ctx.sourceType
 		return loaded, true, nil
 	}
-	// Aggregate struct payload: box it on the GC heap.
-	if strings.HasPrefix(loaded.typ, "%") {
+	// Aggregate struct or scalar payload: box it on the GC heap. The
+	// resulting ptr matches the ABI of ptr-backed Option (None = null,
+	// Some(x) = non-null heap cell holding x). The match-arm consumer
+	// at `bindOptionalMatchPayload` already loads scalars from this
+	// shape via `loadValueFromAddress`, so no symmetric consumer-side
+	// change is needed.
+	//
+	// Scalar payloads (i1/i8/i16/i32/i64/float/double) take the same
+	// alloc + store path as aggregates; the only difference is that
+	// `emitAggregateByteSize`'s GEP trick happens to compute scalar
+	// sizes correctly too, so we share the codepath.
+	if strings.HasPrefix(loaded.typ, "%") || isScalarLLVMTypeForOptionBox(loaded.typ) {
 		emitter := g.toOstyEmitter()
 		size := g.emitAggregateByteSize(emitter, loaded.typ)
-		siteName := "runtime.option.some." + strings.TrimPrefix(loaded.typ, "%")
+		siteName := "runtime.option.some." + sanitizeOptionBoxSiteName(loaded.typ)
 		sitePtr := llvmStringLiteral(emitter, siteName)
 		box := llvmCall(emitter, "ptr", "osty.gc.alloc_v1", []*LlvmValue{
 			toOstyValue(value{typ: "i64", ref: "1"}), // OSTY_GC_KIND_GENERIC
@@ -534,5 +544,29 @@ func (g *generator) emitBuiltinOptionSomeCall(call *ast.CallExpr) (value, bool, 
 		out.sourceType = ctx.sourceType
 		return out, true, nil
 	}
-	return value{}, true, unsupportedf("type-system", "Some payload type %s requires boxed Option; only ptr-backed or aggregate-struct Some(...) is lowered", loaded.typ)
+	return value{}, true, unsupportedf("type-system", "Some payload type %s requires boxed Option; only ptr-backed, aggregate-struct, or scalar Some(...) is lowered", loaded.typ)
+}
+
+// isScalarLLVMTypeForOptionBox reports whether a payload's LLVM type
+// is one of the fixed-size scalar types the heap-boxed Option layout
+// supports. Pointer types are intentionally excluded — the caller has
+// already handled them via the ptr-passthrough branch above.
+func isScalarLLVMTypeForOptionBox(typ string) bool {
+	switch typ {
+	case "i1", "i8", "i16", "i32", "i64", "float", "double":
+		return true
+	}
+	return false
+}
+
+// sanitizeOptionBoxSiteName returns a GC site identifier suffix for an
+// Option box. For aggregate types like `%Foo` the leading `%` is
+// stripped (matching the prior aggregate-only naming); scalar types
+// pass through unchanged so heap-profile output distinguishes
+// `runtime.option.some.i64` from `runtime.option.some.Foo`.
+func sanitizeOptionBoxSiteName(typ string) string {
+	if strings.HasPrefix(typ, "%") {
+		return strings.TrimPrefix(typ, "%")
+	}
+	return typ
 }
