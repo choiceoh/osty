@@ -1,12 +1,12 @@
-package selfhost
+package selfhost_test
 
 import (
 	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
+	"github.com/osty/osty/internal/bootstrap/seedgen"
 	"github.com/osty/osty/internal/selfhost/bundle"
 )
 
@@ -26,23 +26,13 @@ func TestToolchainCheckerSourcesTranspile(t *testing.T) {
 	if err := os.WriteFile(mergedPath, merged, 0o644); err != nil {
 		t.Fatalf("write merged source: %v", err)
 	}
-	generatedPath := filepath.Join(tmpDir, "toolchain_checker_generated.go")
-
-	cmd := exec.Command(
-		"go", "run", "./cmd/osty-bootstrap-gen",
-		"--package", "selfhostsmoke",
-		"-o", generatedPath,
-		mergedPath,
-	)
-	cmd.Dir = repoRoot
-	out, err := cmd.CombinedOutput()
+	generated, err := seedgen.Generate(seedgen.Config{
+		SourcePath:  mergedPath,
+		PackageName: "selfhostsmoke",
+		RepoRoot:    repoRoot,
+	})
 	if err != nil {
-		t.Fatalf("transpile merged toolchain checker: %v\n%s", err, bytes.TrimSpace(out))
-	}
-
-	generated, err := os.ReadFile(generatedPath)
-	if err != nil {
-		t.Fatalf("read generated file: %v", err)
+		t.Fatalf("transpile merged toolchain checker: %v", err)
 	}
 	if len(generated) == 0 {
 		t.Fatalf("generated file is empty")

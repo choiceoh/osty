@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/osty/osty/internal/bootstrap/seedgen"
 )
 
 func TestToolchainLlvmgenSupportSourcesTranspile(t *testing.T) {
@@ -30,21 +32,16 @@ func TestToolchainLlvmgenSupportSourcesTranspile(t *testing.T) {
 	generatedPath := filepath.Join(tmpDir, "llvmgen_support_generated.go")
 	goModPath := filepath.Join(tmpDir, "go.mod")
 
-	cmd := exec.Command(
-		"go", "run", "./cmd/osty-bootstrap-gen",
-		"--package", "llvmgensmoke",
-		"-o", generatedPath,
-		mergedPath,
-	)
-	cmd.Dir = repoRoot
-	out, err := cmd.CombinedOutput()
+	generated, err := seedgen.Generate(seedgen.Config{
+		SourcePath:  mergedPath,
+		PackageName: "llvmgensmoke",
+		RepoRoot:    repoRoot,
+	})
 	if err != nil {
-		t.Fatalf("transpile merged llvmgen support: %v\n%s", err, bytes.TrimSpace(out))
+		t.Fatalf("transpile merged llvmgen support: %v", err)
 	}
-
-	generated, err := os.ReadFile(generatedPath)
-	if err != nil {
-		t.Fatalf("read generated file: %v", err)
+	if err := os.WriteFile(generatedPath, generated, 0o644); err != nil {
+		t.Fatalf("write generated file: %v", err)
 	}
 	if len(generated) == 0 {
 		t.Fatal("generated file is empty")

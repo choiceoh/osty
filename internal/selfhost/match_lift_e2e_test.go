@@ -1,4 +1,4 @@
-package selfhost
+package selfhost_test
 
 import (
 	"bytes"
@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/osty/osty/internal/bootstrap/seedgen"
 )
 
 // TestMatchArmReturnLiftsOutOfIIFE pins the bug-#3 fix from the
@@ -59,20 +61,16 @@ fn main() {
 	}
 	genPath := filepath.Join(tmpDir, "match_arm_return.go")
 
-	gen := exec.Command(
-		"go", "run", "./cmd/osty-bootstrap-gen",
-		"--package", "main",
-		"-o", genPath,
-		srcPath,
-	)
-	gen.Dir = repoRoot
-	if out, err := gen.CombinedOutput(); err != nil {
-		t.Fatalf("transpile: %v\n%s", err, bytes.TrimSpace(out))
-	}
-
-	generated, err := os.ReadFile(genPath)
+	generated, err := seedgen.Generate(seedgen.Config{
+		SourcePath:  srcPath,
+		PackageName: "main",
+		RepoRoot:    repoRoot,
+	})
 	if err != nil {
-		t.Fatalf("read generated: %v", err)
+		t.Fatalf("transpile: %v", err)
+	}
+	if err := os.WriteFile(genPath, generated, 0o644); err != nil {
+		t.Fatalf("write generated: %v", err)
 	}
 	if len(generated) == 0 {
 		t.Fatal("generated file is empty")

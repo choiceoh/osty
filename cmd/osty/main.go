@@ -394,9 +394,13 @@ func main() {
 				fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect / --dump-native-diags\n")
 				os.Exit(2)
 			}
-			if isWorkspace(path) {
-				fmt.Fprintf(os.Stderr, "osty: --native does not yet support workspace directories; run against a single package\n")
+			if root, ok, abort := nativeWorkspaceRoot(path, flags); abort {
 				os.Exit(2)
+			} else if ok {
+				if runTypecheckWorkspaceNative(root, flags) != 0 {
+					os.Exit(1)
+				}
+				return
 			}
 			if runTypecheckPackageNative(path, flags) != 0 {
 				os.Exit(1)
@@ -607,13 +611,13 @@ func runCheckPackage(dir string, flags cliFlags) {
 			fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect / --dump-native-diags\n")
 			os.Exit(2)
 		}
-		// Workspace support under --native is deferred: it requires
-		// threading stdlib + cross-package imports into
-		// CheckPackageStructured's import surface. Single-package
-		// directories get the astbridge-free path immediately.
-		if isWorkspace(dir) {
-			fmt.Fprintf(os.Stderr, "osty: --native does not yet support workspace directories; run against a single package\n")
+		if root, ok, abort := nativeWorkspaceRoot(dir, flags); abort {
 			os.Exit(2)
+		} else if ok {
+			if runCheckWorkspaceNative(root, flags) != 0 {
+				os.Exit(1)
+			}
+			return
 		}
 		if runCheckPackageNative(dir, flags) != 0 {
 			os.Exit(1)
@@ -699,6 +703,22 @@ func manifestLookupNear(dir string) (string, bool, error) {
 // "no skip" variant exclusively.
 func isWorkspace(dir string) bool {
 	return resolve.IsWorkspaceRoot(dir, "")
+}
+
+func nativeWorkspaceRoot(dir string, flags cliFlags) (string, bool, bool) {
+	if _, _, err := manifestLookupNear(dir); err == nil {
+		m, root, abort := loadManifestWithDiag(dir, flags)
+		if abort {
+			return root, false, true
+		}
+		if m != nil && m.Workspace != nil {
+			return root, true, false
+		}
+	}
+	if isWorkspace(dir) {
+		return dir, true, false
+	}
+	return "", false, false
 }
 
 // runCheckWorkspace loads every package (one subdirectory each) rooted
@@ -951,23 +971,7 @@ func runTypecheckPackageNative(dir string, flags cliFlags) int {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		return 1
 	}
-	input := selfhost.PackageCheckInput{
-		Files: make([]selfhost.PackageCheckFile, 0, len(pkg.Files)),
-	}
-	base := 0
-	for _, pf := range pkg.Files {
-		if pf == nil || len(pf.Source) == 0 {
-			continue
-		}
-		name := filepath.Base(pf.Path)
-		input.Files = append(input.Files, selfhost.PackageCheckFile{
-			Source: append([]byte(nil), pf.Source...),
-			Base:   base,
-			Name:   name,
-			Path:   pf.Path,
-		})
-		base += len(pf.Source) + 1
-	}
+	input := nativePackageCheckInput(pkg, nil)
 	checked, err := selfhost.CheckPackageStructured(input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
@@ -981,6 +985,10 @@ func runTypecheckPackageNative(dir string, flags cliFlags) int {
 		return 1
 	}
 	return 0
+}
+
+func runTypecheckWorkspaceNative(dir string, flags cliFlags) int {
+	return runNativeWorkspaceCheck(dir, "typecheck", flags, true)
 }
 
 // printNativePackageTypes is the DIR renderer for --native typecheck:
@@ -1028,32 +1036,14 @@ func printNativePackageTypes(result selfhost.CheckResult, files []selfhost.Packa
 // materialization), runs selfhost.CheckPackageStructured over the
 // arena, and converts the resulting CheckDiagnosticRecord slice into
 // per-file *diag.Diagnostic values so printPackageDiags keeps its
-// file-bucketed rendering. Workspace directories and import-surface
-// threading are not yet supported — the single-package happy path
-// runs astbridge-free end-to-end. Returns the subcommand exit code.
+// file-bucketed rendering. Returns the subcommand exit code.
 func runCheckPackageNative(dir string, flags cliFlags) int {
 	pkg, err := resolve.LoadPackageForNativeWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("check"), os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		return 1
 	}
-	input := selfhost.PackageCheckInput{
-		Files: make([]selfhost.PackageCheckFile, 0, len(pkg.Files)),
-	}
-	base := 0
-	for _, pf := range pkg.Files {
-		if pf == nil || len(pf.Source) == 0 {
-			continue
-		}
-		name := filepath.Base(pf.Path)
-		input.Files = append(input.Files, selfhost.PackageCheckFile{
-			Source: append([]byte(nil), pf.Source...),
-			Base:   base,
-			Name:   name,
-			Path:   pf.Path,
-		})
-		base += len(pf.Source) + 1
-	}
+	input := nativePackageCheckInput(pkg, nil)
 	checked, err := selfhost.CheckPackageStructured(input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
@@ -1066,6 +1056,111 @@ func runCheckPackageNative(dir string, flags cliFlags) int {
 		return 1
 	}
 	return 0
+}
+
+func runCheckWorkspaceNative(dir string, flags cliFlags) int {
+	return runNativeWorkspaceCheck(dir, "check", flags, false)
+}
+
+func runNativeWorkspaceCheck(dir, mode string, flags cliFlags, emitTypes bool) int {
+	ws, err := loadNativeWorkspace(dir, mode, flags)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
+		return 1
+	}
+	anyErr := false
+	for _, path := range nativeWorkspacePaths(ws) {
+		pkg := ws.Packages[path]
+		if pkg == nil {
+			continue
+		}
+		input := nativePackageCheckInput(pkg, check.PackageImportSurfacesForSelfhost(pkg, ws, ws.Stdlib))
+		checked, err := selfhost.CheckPackageStructured(input)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
+			return 1
+		}
+		diags := packageParseDiags(pkg)
+		diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
+		printPackageDiags(pkg, diags, flags)
+		if emitTypes {
+			printNativePackageTypes(checked, input.Files)
+		}
+		if hasError(diags) {
+			anyErr = true
+		}
+	}
+	if anyErr {
+		return 1
+	}
+	return 0
+}
+
+func loadNativeWorkspace(dir, mode string, flags cliFlags) (*resolve.Workspace, error) {
+	ws, err := resolve.NewWorkspace(dir)
+	if err != nil {
+		return nil, err
+	}
+	ws.SourceTransform = aiRepairSourceTransform(aiRepairPrefix(mode), os.Stderr, flags)
+	ws.Stdlib = nativeLazyStdlibProvider{}
+	for _, p := range resolve.WorkspacePackagePaths(dir) {
+		if _, err := ws.LoadPackageNative(p); err != nil {
+			return nil, err
+		}
+	}
+	return ws, nil
+}
+
+type nativeLazyStdlibProvider struct{}
+
+func (nativeLazyStdlibProvider) LookupPackage(dotPath string) *resolve.Package {
+	if !strings.HasPrefix(dotPath, resolve.StdPrefix) {
+		return nil
+	}
+	return stdlib.LoadCached().LookupPackage(dotPath)
+}
+
+func nativeWorkspacePaths(ws *resolve.Workspace) []string {
+	if ws == nil {
+		return nil
+	}
+	paths := make([]string, 0, len(ws.Packages))
+	for path := range ws.Packages {
+		if strings.HasPrefix(path, resolve.StdPrefix) {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func nativePackageCheckInput(pkg *resolve.Package, imports []selfhost.PackageCheckImport) selfhost.PackageCheckInput {
+	input := selfhost.PackageCheckInput{
+		Files: make([]selfhost.PackageCheckFile, 0, len(pkg.Files)),
+	}
+	if len(imports) > 0 {
+		input.Imports = append([]selfhost.PackageCheckImport(nil), imports...)
+	}
+	base := 0
+	for _, pf := range pkg.Files {
+		if pf == nil {
+			continue
+		}
+		src := pf.CheckerSource()
+		if len(src) == 0 {
+			continue
+		}
+		name := filepath.Base(pf.Path)
+		input.Files = append(input.Files, selfhost.PackageCheckFile{
+			Source: append([]byte(nil), src...),
+			Base:   base,
+			Name:   name,
+			Path:   pf.Path,
+		})
+		base += len(src) + 1
+	}
+	return input
 }
 
 // nativePackageCheckDiags buckets records by owning file (using the

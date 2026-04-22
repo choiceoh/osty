@@ -1,4 +1,4 @@
-package selfhost
+package selfhost_test
 
 import (
 	"bytes"
@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/osty/osty/internal/bootstrap/seedgen"
 	"github.com/osty/osty/internal/selfhost/bundle"
 )
 
@@ -81,21 +82,16 @@ func TestMirSourcesBootstrapSmoke(t *testing.T) {
 	}
 	generatedPath := filepath.Join(tmpDir, "mir_smoke.go")
 
-	gen := exec.Command(
-		"go", "run", "./cmd/osty-bootstrap-gen",
-		"--package", "main",
-		"-o", generatedPath,
-		mergedPath,
-	)
-	gen.Dir = repoRoot
-	out, err := gen.CombinedOutput()
+	generated, err := seedgen.Generate(seedgen.Config{
+		SourcePath:  mergedPath,
+		PackageName: "main",
+		RepoRoot:    repoRoot,
+	})
 	if err != nil {
-		t.Fatalf("transpile merged mir sources: %v\n%s", err, bytes.TrimSpace(out))
+		t.Fatalf("transpile merged mir sources: %v", err)
 	}
-
-	generated, err := os.ReadFile(generatedPath)
-	if err != nil {
-		t.Fatalf("read generated file: %v", err)
+	if err := os.WriteFile(generatedPath, generated, 0o644); err != nil {
+		t.Fatalf("write generated file: %v", err)
 	}
 	if len(generated) == 0 {
 		t.Fatal("generated file is empty")
@@ -109,7 +105,7 @@ func TestMirSourcesBootstrapSmoke(t *testing.T) {
 
 	run := exec.Command("go", "run", generatedPath)
 	run.Dir = repoRoot
-	out, err = run.CombinedOutput()
+	out, err := run.CombinedOutput()
 	if err != nil {
 		t.Fatalf("run generated mir smoke:\n%v\n%s\nGenerated source:\n%s",
 			err, bytes.TrimSpace(out), generated)

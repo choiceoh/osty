@@ -1,4 +1,4 @@
-package selfhost
+package selfhost_test
 
 import (
 	"bytes"
@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/osty/osty/internal/bootstrap/seedgen"
 	"github.com/osty/osty/internal/selfhost/bundle"
 )
 
@@ -29,21 +30,16 @@ func TestToolchainLLVMGenSourcesTranspile(t *testing.T) {
 	generatedPath := filepath.Join(tmpDir, "toolchain_llvmgen_generated.go")
 	goModPath := filepath.Join(tmpDir, "go.mod")
 
-	cmd := exec.Command(
-		"go", "run", "./cmd/osty-bootstrap-gen",
-		"--package", "llvmgenselfhostsmoke",
-		"-o", generatedPath,
-		mergedPath,
-	)
-	cmd.Dir = repoRoot
-	out, err := cmd.CombinedOutput()
+	generated, err := seedgen.Generate(seedgen.Config{
+		SourcePath:  mergedPath,
+		PackageName: "llvmgenselfhostsmoke",
+		RepoRoot:    repoRoot,
+	})
 	if err != nil {
-		t.Fatalf("transpile merged toolchain llvmgen: %v\n%s", err, bytes.TrimSpace(out))
+		t.Fatalf("transpile merged toolchain llvmgen: %v", err)
 	}
-
-	generated, err := os.ReadFile(generatedPath)
-	if err != nil {
-		t.Fatalf("read generated file: %v", err)
+	if err := os.WriteFile(generatedPath, generated, 0o644); err != nil {
+		t.Fatalf("write generated file: %v", err)
 	}
 	if len(generated) == 0 {
 		t.Fatal("generated file is empty")

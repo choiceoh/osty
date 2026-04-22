@@ -41,7 +41,7 @@ That flow:
 
 - regenerates `internal/selfhost/astbridge/generated.go`
 - merges the current toolchain/selfhost source bundle
-- invokes `cmd/osty-bootstrap-gen` to write `internal/selfhost/generated.go`
+- invokes the in-process `internal/bootstrap/seedgen` wrapper to write `internal/selfhost/generated.go` (`cmd/osty-bootstrap-gen` is now just a thin developer CLI over the same path)
 - normalizes host-specific source markers and reapplies the small Go-side
   compatibility/hot-path patches in `gen_selfhost.go`
 - installs the regenerated bridge only if `go build ./internal/selfhost/...`

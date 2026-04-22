@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 
+	"github.com/osty/osty/internal/bootstrap/seedgen"
 	"github.com/osty/osty/internal/llvmgen"
 )
 
@@ -57,21 +58,13 @@ func run() error {
 	if err := os.WriteFile(mergedPath, merged, 0o644); err != nil {
 		return fmt.Errorf("write merged llvmgen support: %w", err)
 	}
-	tmpOutPath := filepath.Join(tmpDir, "support_snapshot.go")
-	cmd := exec.Command(
-		"go", "run", "./cmd/osty-bootstrap-gen",
-		"--package", "llvmgen",
-		"-o", tmpOutPath,
-		mergedPath,
-	)
-	cmd.Dir = root
-	output, err := cmd.CombinedOutput()
+	data, err := seedgen.Generate(seedgen.Config{
+		SourcePath:  mergedPath,
+		PackageName: "llvmgen",
+		RepoRoot:    root,
+	})
 	if err != nil {
-		return fmt.Errorf("generate llvmgen support snapshot: %w\n%s", err, bytes.TrimSpace(output))
-	}
-	data, err := os.ReadFile(tmpOutPath)
-	if err != nil {
-		return fmt.Errorf("read generated llvmgen support snapshot: %w", err)
+		return fmt.Errorf("generate llvmgen support snapshot: %w", err)
 	}
 	data = postprocessSnapshot(data)
 	return installWithCompileGate(root, outPath, data)

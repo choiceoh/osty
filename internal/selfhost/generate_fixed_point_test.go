@@ -99,7 +99,7 @@ func overlaySelfhostGenerateInputs(t *testing.T, repoRoot, worktree string) {
 		"toolchain",
 		"internal/selfhost",
 		"internal/bootstrap/gen",
-		"cmd/osty-bootstrap-gen",
+		"internal/bootstrap/seedgen",
 		"internal/ast/ast.go",
 		"internal/token/token.go",
 	}

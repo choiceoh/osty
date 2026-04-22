@@ -25,4 +25,5 @@ go generate ./internal/selfhost
 
 That regeneration flow is implemented in
 [`internal/selfhost/gen_selfhost.go`](../internal/selfhost/gen_selfhost.go) and
-invokes `cmd/osty-bootstrap-gen` plus the `astbridge` generator.
+invokes the in-process `internal/bootstrap/seedgen` wrapper plus the
+`astbridge` generator.

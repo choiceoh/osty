@@ -1,7 +1,8 @@
 // Package gen translates a type-checked Osty AST into Go source code for the
-// bootstrap path. It is not part of the public compiler surface; the sole
-// caller is cmd/osty-bootstrap-gen, which regenerates
-// internal/selfhost/generated.go from the toolchain sources.
+// bootstrap path. It is not part of the public compiler surface; the public
+// wrapper lives in internal/bootstrap/seedgen, and the thin developer CLI is
+// cmd/osty-bootstrap-gen. Together they regenerate internal/selfhost/generated.go
+// from the toolchain sources.
 //
 // The transpiler runs after the front-end pipeline (lex → parse → resolve
 // → check) and consumes:
