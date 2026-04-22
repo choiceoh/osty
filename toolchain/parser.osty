@@ -197,10 +197,10 @@ pub fn newOstyParser(tokens: List<FrontToken>) -> OstyParser {
 
 fn opPeek(p: OstyParser) -> FrontToken {
     if p.typeGtDebt > 0 {
-        return FrontToken { kind: FrontGt, text: ">" }
+        return FrontToken { kind: FrontGt, text: ">", startOffset: 0, endOffset: 0 }
     }
     if p.pendingAssign {
-        return FrontToken { kind: FrontAssign, text: "=" }
+        return FrontToken { kind: FrontAssign, text: "=", startOffset: 0, endOffset: 0 }
     }
     if p.pos >= p.count { return frontEOF() }
     frontTokenAtList(p.tokens, p.pos)
@@ -213,13 +213,13 @@ fn opPeekAt(p: OstyParser, n: Int) -> FrontToken {
     let mut offset = n
     if p.typeGtDebt > 0 {
         if offset < p.typeGtDebt {
-            return FrontToken { kind: FrontGt, text: ">" }
+            return FrontToken { kind: FrontGt, text: ">", startOffset: 0, endOffset: 0 }
         }
         offset = offset - p.typeGtDebt
     }
     if p.pendingAssign {
         if offset == 0 {
-            return FrontToken { kind: FrontAssign, text: "=" }
+            return FrontToken { kind: FrontAssign, text: "=", startOffset: 0, endOffset: 0 }
         }
         offset = offset - 1
     }
@@ -259,11 +259,11 @@ fn opIsForHead(tok: FrontToken) -> Bool {
 fn opAdvance(p: OstyParser) -> FrontToken {
     if p.typeGtDebt > 0 {
         p.typeGtDebt = p.typeGtDebt - 1
-        return FrontToken { kind: FrontGt, text: ">" }
+        return FrontToken { kind: FrontGt, text: ">", startOffset: 0, endOffset: 0 }
     }
     if p.pendingAssign {
         p.pendingAssign = false
-        return FrontToken { kind: FrontAssign, text: "=" }
+        return FrontToken { kind: FrontAssign, text: "=", startOffset: 0, endOffset: 0 }
     }
     let tok = opPeek(p)
     if tok.kind != FrontEOF { p.pos = p.pos + 1 }
@@ -291,6 +291,18 @@ fn opSkipNewlines(p: OstyParser) {
     for opAt(p, FrontNewline) {
         let _ = opAdvance(p)
     }
+}
+
+/// opAdjacent reports whether two tokens sit flush against each other in
+/// source — i.e. no whitespace, comment, or newline separates them. This
+/// is how the parser answers "were these two tokens actually typed as a
+/// unit?" for whitespace-sensitive syntax. Synthetic tokens (typeGtDebt /
+/// pendingAssign splits, frontEOF, frontToken helper) carry 0 / 0 offsets
+/// and will never report adjacent against a real-source token unless that
+/// token legitimately starts at offset 0 — a harmless edge case (file
+/// start + synthetic would never co-occur in practice).
+fn opAdjacent(a: FrontToken, b: FrontToken) -> Bool {
+    a.endOffset == b.startOffset
 }
 
 // ===================================================================

@@ -85,9 +85,17 @@ pub enum FrontTokenKind {
 }
 
 /// FrontToken is the compact token shape used by the Osty parser core.
+///
+/// startOffset / endOffset are source byte offsets matching the rich
+/// FrontLexToken they originate from. Synthetic tokens (typeGtDebt /
+/// pendingAssign splits in the parser, frontToken / frontEOF helpers)
+/// carry 0 / 0 and will never compare adjacent to a real-source token —
+/// see opAdjacent in toolchain/parser.osty.
 pub struct FrontToken {
     pub kind: FrontTokenKind,
     pub text: String,
+    pub startOffset: Int,
+    pub endOffset: Int,
 }
 
 pub enum FrontCommentKind {
@@ -437,11 +445,11 @@ pub struct FrontParseTree {
 }
 
 pub fn frontToken(kindName: String, text: String) -> FrontToken {
-    FrontToken { kind: frontTokenKindByName(kindName), text }
+    FrontToken { kind: frontTokenKindByName(kindName), text, startOffset: 0, endOffset: 0 }
 }
 
 pub fn frontEOF() -> FrontToken {
-    FrontToken { kind: FrontEOF, text: "" }
+    FrontToken { kind: FrontEOF, text: "", startOffset: 0, endOffset: 0 }
 }
 
 pub fn frontPos(offset: Int, line: Int, column: Int) -> FrontPos {
@@ -1812,7 +1820,12 @@ pub fn frontendParseLexedSummary(source: String) -> FrontParseSummary {
 pub fn frontTokensFromStream(stream: FrontLexStream) -> List<FrontToken> {
     let mut parseTokens: List<FrontToken> = []
     for tok in stream.tokens {
-        parseTokens.push(FrontToken { kind: tok.kind, text: frontTokenKindName(tok.kind) })
+        parseTokens.push(FrontToken {
+            kind: tok.kind,
+            text: frontTokenKindName(tok.kind),
+            startOffset: tok.start.offset,
+            endOffset: tok.end.offset,
+        })
     }
     parseTokens
 }
@@ -1825,6 +1838,8 @@ pub fn frontTokensFromSource(source: String, stream: FrontLexStream) -> List<Fro
             FrontToken {
                 kind: tok.kind,
                 text: frontLexemeFromUnits(units, tok.start.offset, tok.length),
+                startOffset: tok.start.offset,
+                endOffset: tok.end.offset,
             },
         )
     }
