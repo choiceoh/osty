@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/osty/osty/internal/check"
-	"github.com/osty/osty/internal/toolchain"
 )
 
 // enableCheckerCacheForRoot activates the on-disk native-checker cache
@@ -21,10 +20,10 @@ import (
 //
 // The cache lives at `<root>/.osty/cache/checker/<validity>/` so it is
 // trivially inspectable (`cat`, `ls`) and trivially invalidated (`rm
-// -rf .osty/cache/checker/`). The validity segment binds entries to a
-// specific checker binary so upgrading the managed checker (new
-// `.osty/toolchain/<ver>/osty-native-checker`) transparently
-// invalidates every record without requiring a manual purge.
+// -rf .osty/cache/checker/`). The validity segment binds entries to the
+// embedded checker sources by default, so regenerating
+// `internal/selfhost/generated.go` transparently invalidates every record
+// without requiring a manual purge.
 //
 // No-op when OSTY_CHECKER_CACHE=0. Idempotent: safe to call multiple
 // times in a process — once overrides take, subsequent calls just
@@ -37,34 +36,25 @@ func enableCheckerCacheForRoot(root string) {
 		return
 	}
 	cacheDir := filepath.Join(root, ".osty", "cache", "checker")
-	validity := checkerCacheValidity()
+	validity := checkerCacheValidity(root)
 	check.UseCachedDefaultNativeChecker(cacheDir, validity)
 }
 
-// checkerCacheValidity returns a stable identifier for the current
-// checker binary. The cache invalidates whenever this changes, so the
-// implementation must capture every way the checker's behavior can
-// shift: binary content (via path + size + mtime), or — when the
-// managed checker isn't present — the embedded selfhost checker's
-// version.
+// checkerCacheValidity returns a stable identifier for the default checker
+// backend. When the embedded selfhost checker sources are readable from root,
+// they define the cache namespace; otherwise we fall back to a coarser tool
+// version token so callers still get a deterministic cache directory.
 //
-// We compute lazily and memoize: the validity only depends on process-
-// lifetime immutables (tool version, managed checker path) so a
-// single cache dir name suffices per run.
-func checkerCacheValidity() string {
+// We compute lazily and memoize: the validity only depends on process-lifetime
+// immutables for a single repo checkout, so one cache dir name suffices per run.
+func checkerCacheValidity(root string) string {
 	validityOnce.Do(func() {
+		if fp := check.EmbeddedCheckerFingerprint(root); fp != "" {
+			validity = fp
+			return
+		}
 		h := sha256.New()
 		fmt.Fprintf(h, "tool=%s\n", toolVersion())
-		// Managed-checker binary stamp: path + size + mtime. If the
-		// binary can't be located (dev host without it, or shutdown
-		// race), the hash still carries tool version so entries are
-		// validity-scoped within the process.
-		if path, err := toolchain.EnsureNativeChecker("."); err == nil {
-			if info, err := os.Stat(path); err == nil {
-				fmt.Fprintf(h, "checker=%s size=%d mtime=%d\n",
-					path, info.Size(), info.ModTime().UnixNano())
-			}
-		}
 		validity = hex.EncodeToString(h.Sum(nil))[:16]
 	})
 	return validity

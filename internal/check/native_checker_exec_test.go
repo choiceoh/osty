@@ -1,7 +1,6 @@
 package check
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,45 +49,15 @@ fn main() {
 	}
 }
 
-func TestDefaultNativeCheckerUsesManagedArtifactWhenEnvUnset(t *testing.T) {
+func TestDefaultNativeCheckerUsesEmbeddedCheckerWhenEnvUnset(t *testing.T) {
 	t.Setenv(nativeCheckerEnv, "")
-	bin := buildRepoNativeChecker(t)
-
-	oldEnsure := ensureManagedNativeChecker
-	ensureManagedNativeChecker = func() (string, error) { return bin, nil }
-	t.Cleanup(func() { ensureManagedNativeChecker = oldEnsure })
 
 	runner, note := defaultNativeChecker()
 	if runner == nil {
 		t.Fatalf("defaultNativeChecker returned nil runner: %s", note)
 	}
-	checked, err := runner.CheckSourceStructured([]byte("fn main() { let answer = 1 }\n"))
-	if err != nil {
-		t.Fatalf("CheckSourceStructured error: %v", err)
-	}
-	if checked.Summary.Errors != 0 {
-		t.Fatalf("summary errors = %d, want 0", checked.Summary.Errors)
-	}
-	if len(checked.TypedNodes) == 0 {
-		t.Fatalf("typed nodes = %#v, want non-empty result", checked.TypedNodes)
-	}
-}
-
-func TestDefaultNativeCheckerFallsBackToEmbeddedCheckerWhenManagedArtifactUnavailable(t *testing.T) {
-	t.Setenv(nativeCheckerEnv, "")
-
-	oldEnsure := ensureManagedNativeChecker
-	ensureManagedNativeChecker = func() (string, error) {
-		return "", fmt.Errorf("boom")
-	}
-	t.Cleanup(func() { ensureManagedNativeChecker = oldEnsure })
-
-	runner, note := defaultNativeChecker()
-	if runner == nil {
-		t.Fatalf("defaultNativeChecker returned nil runner: %s", note)
-	}
-	if note == "" || note == "boom" {
-		t.Fatalf("fallback note = %q, want fallback explanation", note)
+	if _, ok := runner.(embeddedNativeChecker); !ok {
+		t.Fatalf("defaultNativeChecker runner = %T, want embeddedNativeChecker", runner)
 	}
 	checked, err := runner.CheckSourceStructured([]byte("fn main() { let answer = 1 }\n"))
 	if err != nil {

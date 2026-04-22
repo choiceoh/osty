@@ -152,6 +152,10 @@ func toolchainSubsetOutcome(t *testing.T, root, checker string, files []string, 
 	return toolchainProbeOutcome{duration: dur, timedOut: false}
 }
 
+// ensureNativeCheckerBinary is probe-only instrumentation. Production checker
+// selection now defaults to the embedded selfhost path; the toolchain bisect and
+// timeout probes opt into the managed subprocess explicitly so they can keep
+// measuring the exec-boundary behavior in isolation.
 func ensureNativeCheckerBinary(t *testing.T, start string) string {
 	t.Helper()
 	path, err := toolchainbin.EnsureNativeChecker(start)
