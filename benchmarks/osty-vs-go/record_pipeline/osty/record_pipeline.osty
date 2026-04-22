@@ -1,0 +1,54 @@
+pub struct Record {
+    pub service: String,
+    pub region: String,
+    pub level: String,
+    pub latency: Int,
+    pub hot: Bool,
+    pub burst: Bool,
+}
+
+fn buildPipelineRecords() -> List<Record> {
+    let services = ["compiler", "runtime", "lsp", "checker"]
+    let regions = ["apac", "us", "eu"]
+    let levels = ["info", "warn", "error"]
+
+    let mut rows: List<Record> = []
+    for i in 0..192 {
+        rows.push(Record {
+            service: services[(i * 5 + i / 3) % services.len()],
+            region: regions[(i * 7 + i / 5) % regions.len()],
+            level: levels[(i * 11 + i / 7) % levels.len()],
+            latency: 10 + ((i * 17 + i / 2) % 29),
+            hot: i % 5 != 2,
+            burst: i % 8 == 0,
+        })
+    }
+    rows
+}
+
+pub fn analyzeRecordPipeline(rows: List<Record>) -> Int {
+    let mut totals: Map<String, Int> = {:}
+    for row in rows {
+        if !row.hot || row.latency < 18 {
+            continue
+        }
+        let key = "{row.service}/{row.region}/{row.level}"
+        let mut score = row.latency + row.service.len() + row.region.len()
+        if row.burst {
+            score = score + 11
+        }
+        let next = if totals.containsKey(key) {
+            totals.getOr(key, 0) + score
+        } else {
+            score
+        }
+        totals.insert(key, next)
+    }
+
+    let keys = totals.keys().sorted()
+    let mut checksum = keys.len() * 17
+    for key in keys {
+        checksum = checksum + totals.getOr(key, 0) + key.len()
+    }
+    checksum
+}

@@ -1,0 +1,10 @@
+use std.testing
+
+fn benchSimdStats() {
+    let values = buildSimdValues(2048)
+    let weights = buildSimdWeights(2048)
+    testing.benchmark(20, || {
+        let _ = analyzeSimdStats(values, weights)
+        Ok(())
+    })
+}
