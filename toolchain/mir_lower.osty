@@ -5029,8 +5029,8 @@ fn mirLowerDecisionSwitch(mc: MirLowerMatchContext, node: HirDecisionNode) {
     match node.switchKind {
         HirSwitchVariant -> mirLowerSwitchVariant(mc, node),
         HirSwitchBool -> mirLowerSwitchBool(mc, node),
-        HirSwitchLit -> mirLowerSwitchLitStub(mc, node),
-        HirSwitchTuple -> mirLowerSwitchTupleStub(mc, node),
+        HirSwitchLit -> mirLowerSwitchLit(mc, node),
+        HirSwitchTuple -> mirLowerSwitchTuple(mc, node),
         HirSwitchUnknown -> {
             mirLowerNoteIssue(mc.bs.l, "mir_lower: decision switch with unknown kind")
             mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
@@ -5130,11 +5130,79 @@ fn mirLowerIsLabelTrue(label: String) -> Bool {
     false
 }
 
-fn mirLowerSwitchLitStub(mc: MirLowerMatchContext, node: HirDecisionNode) {
-    mirLowerNoteIssue(
-        mc.bs.l,
-        "mir_lower Stage 4f-2 TODO: Lit switch in decision tree — falling through to default",
-    )
+/// mirLowerSwitchLit lowers a `match x { 1 -> …, 2 -> …, … }` shaped
+/// case: dispatch a scalar literal against a projected scrutinee.
+///
+/// Fast path: when every case's literal is an `IntLit` with a
+/// parseable numeric value, emit a single `SwitchIntTerm` keyed on
+/// the projected place.
+///
+/// Slow path: emit an eq-branch chain. Each case tests
+/// `projected_value == case_lit` and branches to the case body on
+/// success or the next test on failure. The last failure leads to
+/// the default subtree (Unreachable when absent).
+///
+/// Matches Go's `SwitchLit` arm exactly — same fast/slow split and
+/// same chain-reversal order.
+fn mirLowerSwitchLit(mc: MirLowerMatchContext, node: HirDecisionNode) {
+    let projType = mirLowerProjectionResultType(mc.bs.l, mc.scrutT, node.switchProj)
+    let projPlace = mirLowerProjectionToPlace(mc.bs.l, mc.scrutLocal, mc.scrutT, node.switchProj)
+    let projTypeText = hirTypeString(projType)
+
+    // Detect all-int fast path.
+    let mut allInt = true
+    let mut intVals: List<Int> = []
+    for c in node.switchCases {
+        if !c.hasLit {
+            allInt = false
+        } else {
+            match c.lit.kind {
+                HirExprIntLit -> {
+                    let v = mirLowerParseIntLit(c.lit.numText)
+                    intVals.push(v)
+                },
+                _ -> {
+                    allInt = false
+                },
+            }
+        }
+    }
+
+    if allInt && node.switchCases.len() > 0 {
+        mirLowerSwitchLitInt(mc, node, projPlace, projTypeText, intVals)
+        return
+    }
+
+    // Slow path: eq-chain. Iterate cases in reverse so each test's
+    // Else target is the next test's entry block (or the default).
+    let defaultBB = mirLowerNewBlock(mc.bs, mc.span)
+    let mut next = defaultBB
+    let mut idx = node.switchCases.len() - 1
+    for idx >= 0 {
+        let c = node.switchCases[idx]
+        let caseBB = mirLowerNewBlock(mc.bs, mc.span)
+        let testBB = mirLowerNewBlock(mc.bs, mc.span)
+        // Terminate the current test block with the eq-branch.
+        let rhs = if c.hasLit {
+            mirLowerExprAsOperand(mc.bs, c.lit)
+        } else {
+            mirOperandConst(mirConstUnit())
+        }
+        let lhs = mirOperandCopy(projPlace, projTypeText)
+        let cmp = mirLowerFreshTemp(mc.bs, hirTBool(), mc.span)
+        let cmpRV = mirRVBinary(MirBinEq, lhs, rhs, "Bool")
+        mirLowerEmitInstr(mc.bs, mirAssignInstr(mirPlace(cmp), cmpRV, mc.span))
+        let cmpOp = mirOperandCopy(mirPlace(cmp), "Bool")
+        mirLowerTerminate(mc.bs, mirBranchTerm(cmpOp, caseBB, next, mc.span))
+        // Lower the case body in caseBB.
+        mc.bs.cur = caseBB
+        mirLowerDecisionTree(mc, c.body)
+        // Switch cursor to testBB for the next (earlier) iteration.
+        mc.bs.cur = testBB
+        next = testBB
+        idx = idx - 1
+    }
+    mc.bs.cur = defaultBB
     if node.switchDefault.len() > 0 {
         mirLowerDecisionTree(mc, node.switchDefault[0])
     } else {
@@ -5142,18 +5210,61 @@ fn mirLowerSwitchLitStub(mc: MirLowerMatchContext, node: HirDecisionNode) {
     }
 }
 
-fn mirLowerSwitchTupleStub(mc: MirLowerMatchContext, node: HirDecisionNode) {
-    mirLowerNoteIssue(
-        mc.bs.l,
-        "mir_lower Stage 4f-2 TODO: Tuple switch in decision tree — falling through to first case",
-    )
-    if node.switchCases.len() > 0 {
-        mirLowerDecisionTree(mc, node.switchCases[0].body)
-    } else if node.switchDefault.len() > 0 {
+/// mirLowerSwitchLitInt is the all-int fast path: single SwitchInt
+/// over the projected place with one case per literal value.
+fn mirLowerSwitchLitInt(
+    mc: MirLowerMatchContext,
+    node: HirDecisionNode,
+    projPlace: MirPlace,
+    projTypeText: String,
+    intVals: List<Int>,
+) {
+    let mut bodies: List<Int> = []
+    let mut cases: List<MirSwitchCase> = []
+    let mut i = 0
+    for c in node.switchCases {
+        let bb = mirLowerNewBlock(mc.bs, mc.span)
+        bodies.push(bb)
+        cases.push(mirSwitchCase(intVals[i], bb, c.label))
+        i = i + 1
+    }
+    let defaultBB = mirLowerNewBlock(mc.bs, mc.span)
+    let scrutOp = mirOperandCopy(projPlace, projTypeText)
+    mirLowerTerminate(mc.bs, mirSwitchIntTerm(scrutOp, cases, defaultBB, mc.span))
+
+    let mut j = 0
+    for c in node.switchCases {
+        mc.bs.cur = bodies[j]
+        mirLowerDecisionTree(mc, c.body)
+        j = j + 1
+    }
+    mc.bs.cur = defaultBB
+    if node.switchDefault.len() > 0 {
         mirLowerDecisionTree(mc, node.switchDefault[0])
     } else {
         mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
     }
+}
+
+/// mirLowerSwitchTuple lowers a SwitchTuple node. Tuple patterns
+/// don't introduce a runtime test — they only destructure. So the
+/// switch always takes the single case (bindings have already been
+/// emitted via prior DecisionBind nodes in the cascade).
+///
+/// When cases is empty but a default exists, take the default; when
+/// neither is present, Unreachable (a well-typed tuple scrutinee
+/// should not reach this state since the compile-time test always
+/// matches).
+fn mirLowerSwitchTuple(mc: MirLowerMatchContext, node: HirDecisionNode) {
+    if node.switchCases.len() > 0 {
+        mirLowerDecisionTree(mc, node.switchCases[0].body)
+        return
+    }
+    if node.switchDefault.len() > 0 {
+        mirLowerDecisionTree(mc, node.switchDefault[0])
+        return
+    }
+    mirLowerTerminate(mc.bs, mirUnreachableTerm(mc.span))
 }
 
 // ---- Projection walk -----------------------------------------------
