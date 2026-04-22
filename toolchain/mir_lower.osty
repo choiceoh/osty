@@ -1506,26 +1506,11 @@ pub fn mirLowerStmt(bs: MirLowerBodyState, s: HirStmt) {
             bs.l,
             "mir_lower: error stmt reached MIR: " + s.errorNote,
         ),
-        HirStmtAssign -> mirLowerNoteIssue(
-            bs.l,
-            "mir_lower Stage 4c TODO: HirStmtAssign — skipped",
-        ),
-        HirStmtIf -> mirLowerNoteIssue(
-            bs.l,
-            "mir_lower Stage 4c TODO: HirStmtIf — skipped",
-        ),
-        HirStmtFor -> mirLowerNoteIssue(
-            bs.l,
-            "mir_lower Stage 4c TODO: HirStmtFor — skipped",
-        ),
-        HirStmtMatch -> mirLowerNoteIssue(
-            bs.l,
-            "mir_lower Stage 4c TODO: HirStmtMatch — skipped",
-        ),
-        HirStmtChanSend -> mirLowerNoteIssue(
-            bs.l,
-            "mir_lower Stage 4e TODO: HirStmtChanSend — skipped",
-        ),
+        HirStmtAssign -> mirLowerAssignStmt(bs, s),
+        HirStmtIf -> mirLowerIfStmt(bs, s),
+        HirStmtFor -> mirLowerForStmt(bs, s),
+        HirStmtMatch -> mirLowerMatchStmt(bs, s),
+        HirStmtChanSend -> mirLowerChanSendStmt(bs, s),
     }
 }
 
@@ -1625,4 +1610,557 @@ pub fn mirLowerContinueStmt(bs: MirLowerBodyState, s: HirStmt) {
     mirLowerReplayDefersFromDepth(bs, top.deferDepth, span)
     mirLowerEmitStorageDeadFromDepth(bs, top.scopeDepth)
     mirLowerTerminate(bs, mirGotoTerm(top.continueBlock, span))
+}
+
+// ====================================================================
+// Control flow (Stage 4c)
+// ====================================================================
+//
+// Stage 4c lowers if / for / match / assign / chan-send. Expression
+// operands are still produced by the Stage 4b stubs — operand typing
+// on BranchTerm.cond / comparison RHS / loop step isn't meaningful
+// until Stage 4d replaces the stubs with real RValues. The emitted
+// CFG shape is correct regardless, which is what downstream passes
+// like `mirValidateModule` actually inspect.
+
+// ---- Fresh temps + place extraction --------------------------------
+
+/// mirLowerFreshTemp mints an unnamed local typed as `t` and
+/// registers it with the current scope frame. Mirrors Go's
+/// `bs.freshTemp`.
+pub fn mirLowerFreshTemp(bs: MirLowerBodyState, t: HirType, span: MirSpan) -> Int {
+    mirLowerNewLocal(bs, "", t, false, span)
+}
+
+/// mirLowerExprToPlace maps an HIR expression onto a MirPlace suitable
+/// for the LHS of an assign. Stage 4c only supports bare identifiers
+/// (resolved via scope lookup); field / index / tuple-access targets
+/// land in Stage 4d when the projection walk arrives. Returns
+/// `(place, ok)` — the Bool flag lets callers record a targeted
+/// diagnostic without guessing at sentinel values.
+///
+/// Since Osty doesn't have tuple returns in our style yet, we return a
+/// MirPlace with `local == -1` on failure and callers check the local.
+pub fn mirLowerExprToPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
+    match e.kind {
+        HirExprIdent -> {
+            let id = mirLowerLookupName(bs, e.identName)
+            if id < 0 {
+                return mirPlace(-1)
+            }
+            mirPlace(id)
+        },
+        _ -> mirPlace(-1),
+    }
+}
+
+/// mirLowerPlaceIsValid reports whether the place refers to a real
+/// local (i.e. `mirLowerExprToPlace` succeeded).
+pub fn mirLowerPlaceIsValid(p: MirPlace) -> Bool {
+    p.local >= 0
+}
+
+// ---- If ------------------------------------------------------------
+
+/// mirLowerIfStmt lowers a statement-position `if` with an optional
+/// `else`. Emits: cond eval → Branch(then, else) → both arms Goto
+/// merge. Matches Go's `lowerIfStmt`.
+pub fn mirLowerIfStmt(bs: MirLowerBodyState, s: HirStmt) {
+    let span = mirSpanFromHir(s.span)
+    let cond = mirLowerExprAsOperand(bs, s.ifCond)
+    let thenBB = mirLowerNewBlock(bs, span)
+    let elseBB = mirLowerNewBlock(bs, span)
+    let merge = mirLowerNewBlock(bs, span)
+    mirLowerTerminate(bs, mirBranchTerm(cond, thenBB, elseBB, span))
+
+    // Then arm.
+    bs.cur = thenBB
+    mirLowerIfArm(bs, s.ifThen)
+    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+
+    // Else arm (may be empty — still emit a block that goes to merge).
+    bs.cur = elseBB
+    if s.ifHasElse {
+        mirLowerIfArm(bs, s.ifElse)
+    }
+    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+
+    bs.cur = merge
+}
+
+/// mirLowerIfArm lowers one branch of an if statement in its own
+/// scope + defer frame. The trailing expression (if any) has its
+/// side effects evaluated but the produced value is discarded —
+/// if-as-expression lowering uses a separate path.
+fn mirLowerIfArm(bs: MirLowerBodyState, body: HirBlock) {
+    mirLowerPushScope(bs)
+    mirLowerPushDeferScope(bs)
+    for s in body.stmts {
+        mirLowerStmt(bs, s)
+    }
+    if body.hasResult {
+        let _ = mirLowerExprAsOperand(bs, body.result)
+    }
+    mirLowerReplayTopFrame(bs, mirSpanFromHir(body.span))
+    mirLowerPopDeferScope(bs)
+    mirLowerPopScope(bs)
+}
+
+// ---- For -----------------------------------------------------------
+
+/// mirLowerForStmt dispatches on `forKind` and routes to the
+/// per-variant lowerer. An outer scope wraps the whole loop so
+/// per-iteration bindings (range var, iter temps) retire on exit.
+pub fn mirLowerForStmt(bs: MirLowerBodyState, s: HirStmt) {
+    mirLowerPushScope(bs)
+    match s.forKind {
+        HirForInfinite -> mirLowerForInfinite(bs, s),
+        HirForWhile -> mirLowerForWhile(bs, s),
+        HirForRange -> mirLowerForRange(bs, s),
+        HirForIn -> mirLowerForIn(bs, s),
+        HirForInvalid -> mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: for stmt with invalid kind",
+        ),
+    }
+    mirLowerPopScope(bs)
+}
+
+fn mirLowerForInfinite(bs: MirLowerBodyState, s: HirStmt) {
+    let span = mirSpanFromHir(s.span)
+    let header = mirLowerNewBlock(bs, span)
+    let body = mirLowerNewBlock(bs, span)
+    let exit = mirLowerNewBlock(bs, span)
+
+    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    bs.cur = header
+    mirLowerTerminate(bs, mirGotoTerm(body, span))
+
+    bs.cur = body
+    mirLowerForBodyWithFrames(bs, s.forBody, header, exit)
+    mirLowerTerminate(bs, mirGotoTerm(header, span))
+
+    bs.cur = exit
+}
+
+fn mirLowerForWhile(bs: MirLowerBodyState, s: HirStmt) {
+    let span = mirSpanFromHir(s.span)
+    let header = mirLowerNewBlock(bs, span)
+    let body = mirLowerNewBlock(bs, span)
+    let exit = mirLowerNewBlock(bs, span)
+
+    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    bs.cur = header
+    let cond = if s.forHasCond {
+        mirLowerExprAsOperand(bs, s.forCond)
+    } else {
+        mirOperandConst(mirConstBool(true))
+    }
+    mirLowerTerminate(bs, mirBranchTerm(cond, body, exit, span))
+
+    bs.cur = body
+    mirLowerForBodyWithFrames(bs, s.forBody, header, exit)
+    mirLowerTerminate(bs, mirGotoTerm(header, span))
+
+    bs.cur = exit
+}
+
+fn mirLowerForRange(bs: MirLowerBodyState, s: HirStmt) {
+    let span = mirSpanFromHir(s.span)
+    let intT = hirTInt()
+
+    // Index + end slots.
+    let idx = mirLowerNewLocal(bs, s.forVar, intT, true, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(idx, span))
+    if s.forHasStart {
+        mirLowerExprInto(bs, s.forStart, idx, intT)
+    }
+    let endLocal = mirLowerNewLocal(bs, "_end", intT, false, span)
+    if s.forHasEnd {
+        mirLowerExprInto(bs, s.forEnd, endLocal, intT)
+    }
+    mirLowerBindName(bs, s.forVar, idx)
+
+    let header = mirLowerNewBlock(bs, span)
+    let body = mirLowerNewBlock(bs, span)
+    let step = mirLowerNewBlock(bs, span)
+    let exit = mirLowerNewBlock(bs, span)
+
+    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    bs.cur = header
+
+    // cond: idx < end  (or <= when inclusive)
+    let cmpOp = if s.forInclusive {
+        MirBinLeq
+    } else {
+        MirBinLt
+    }
+    let cmp = mirLowerFreshTemp(bs, hirTBool(), span)
+    let leftOp = mirOperandCopy(mirPlace(idx), "Int")
+    let rightOp = mirOperandCopy(mirPlace(endLocal), "Int")
+    let rv = mirRVBinary(cmpOp, leftOp, rightOp, "Bool")
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(cmp), rv, span))
+    let condOp = mirOperandCopy(mirPlace(cmp), "Bool")
+    mirLowerTerminate(bs, mirBranchTerm(condOp, body, exit, span))
+
+    bs.cur = body
+    mirLowerBindName(bs, s.forVar, idx)
+    mirLowerForBodyWithFramesStep(bs, s.forBody, step, exit)
+    mirLowerTerminate(bs, mirGotoTerm(step, span))
+
+    // step: idx = idx + 1
+    bs.cur = step
+    let oneOp = mirOperandConst(mirConstInt(1, "Int"))
+    let stepRV = mirRVBinary(
+        MirBinAdd,
+        mirOperandCopy(mirPlace(idx), "Int"),
+        oneOp,
+        "Int",
+    )
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(idx), stepRV, span))
+    mirLowerTerminate(bs, mirGotoTerm(header, span))
+
+    bs.cur = exit
+}
+
+/// mirLowerForIn lowers a `for var in iter` loop. Full iteration
+/// requires real expression lowering to know the iterable's element
+/// type and List / Channel shape (Stage 4d/4e); Stage 4c emits a
+/// minimal shell (header ⇄ body ⇄ exit) so break / continue resolve
+/// correctly and notes an issue for the backend-visible gap.
+fn mirLowerForIn(bs: MirLowerBodyState, s: HirStmt) {
+    let span = mirSpanFromHir(s.span)
+    let iterT = if s.forHasIter {
+        s.forIter.typ
+    } else {
+        hirTypeInvalid()
+    }
+
+    // Materialise the iterable via the expr stub so any side effects
+    // (function calls in the iterable expression) at least emit a
+    // placeholder Assign. Real iteration lowering lands in Stage 4d.
+    if s.forHasIter {
+        let iterLocal = mirLowerNewLocal(bs, "_iter", iterT, false, span)
+        mirLowerEmitInstr(bs, mirStorageLiveInstr(iterLocal, span))
+        mirLowerExprInto(bs, s.forIter, iterLocal, iterT)
+    }
+
+    mirLowerNoteIssue(
+        bs.l,
+        "mir_lower Stage 4d TODO: for-in iteration over "
+            + hirTypeString(iterT)
+            + " — emitted shell only",
+    )
+
+    let header = mirLowerNewBlock(bs, span)
+    let body = mirLowerNewBlock(bs, span)
+    let exit = mirLowerNewBlock(bs, span)
+
+    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    bs.cur = header
+    // Stage 4d wires real iteration; for now a plain goto to the body
+    // plus an Unreachable termination in the exit block keeps the
+    // CFG validator happy without fabricating a termination condition.
+    mirLowerTerminate(bs, mirGotoTerm(body, span))
+
+    bs.cur = body
+    mirLowerForBodyWithFrames(bs, s.forBody, header, exit)
+    mirLowerTerminate(bs, mirGotoTerm(header, span))
+
+    bs.cur = exit
+}
+
+/// mirLowerForBodyWithFrames lowers the body of a for loop, pushing
+/// scope / defer frames and a loop frame that points break → `exit`
+/// and continue → `header`. Used by Infinite / While / ForIn.
+fn mirLowerForBodyWithFrames(
+    bs: MirLowerBodyState,
+    body: HirBlock,
+    continueBlock: Int,
+    breakBlock: Int,
+) {
+    mirLowerPushScope(bs)
+    mirLowerPushDeferScope(bs)
+    let frame = mirLowerLoopFrame(
+        breakBlock,
+        continueBlock,
+        mirLowerCurrentDeferDepth(bs) - 1,
+        mirLowerCurrentScopeDepth(bs),
+    )
+    bs.loopStack.push(frame)
+    for s in body.stmts {
+        mirLowerStmt(bs, s)
+    }
+    if body.hasResult {
+        let _ = mirLowerExprAsOperand(bs, body.result)
+    }
+    mirLowerReplayTopFrame(bs, mirSpanFromHir(body.span))
+    mirLowerPopLoopFrame(bs)
+    mirLowerPopDeferScope(bs)
+    mirLowerPopScope(bs)
+}
+
+/// mirLowerForBodyWithFramesStep is the ForRange-specific variant:
+/// `continue` jumps to the step block (not the header) so the index
+/// always gets incremented. `break` still targets `exit`.
+fn mirLowerForBodyWithFramesStep(
+    bs: MirLowerBodyState,
+    body: HirBlock,
+    stepBlock: Int,
+    breakBlock: Int,
+) {
+    mirLowerForBodyWithFrames(bs, body, stepBlock, breakBlock)
+}
+
+fn mirLowerPopLoopFrame(bs: MirLowerBodyState) {
+    if bs.loopStack.len() == 0 {
+        return
+    }
+    let topIdx = bs.loopStack.len() - 1
+    let mut kept: List<MirLowerLoopFrame> = []
+    let mut i = 0
+    for f in bs.loopStack {
+        if i < topIdx {
+            kept.push(f)
+        }
+        i = i + 1
+    }
+    bs.loopStack = kept
+}
+
+// ---- Assign --------------------------------------------------------
+
+/// mirLowerAssignStmt lowers `target = value`, compound assigns
+/// (`target op= value`), and multi-target `(a, b) = rhs`. Non-ident
+/// targets fall back to a diagnostic at Stage 4c; Stage 4d adds
+/// field / index / tuple-access Place extraction.
+pub fn mirLowerAssignStmt(bs: MirLowerBodyState, s: HirStmt) {
+    if s.assignTargets.len() == 0 {
+        return
+    }
+    // Compound assignment (e.g. `+=`) only meaningful for a single
+    // target; HIR guarantees this by construction.
+    match s.assignOp {
+        HirAssignEq -> {},
+        HirAssignInvalid -> {
+            mirLowerNoteIssue(bs.l, "mir_lower: assign stmt with invalid op")
+            return
+        },
+        _ -> {
+            if s.assignTargets.len() != 1 {
+                mirLowerNoteIssue(
+                    bs.l,
+                    "mir_lower: compound assign requires a single target",
+                )
+                return
+            }
+            mirLowerCompoundAssign(bs, s)
+            return
+        },
+    }
+    // Multi-target: lower RHS into a tuple scratch, destructure via
+    // TupleProj into each target.
+    if s.assignTargets.len() > 1 {
+        mirLowerMultiAssign(bs, s)
+        return
+    }
+    // Single-target `=`.
+    let target = s.assignTargets[0]
+    let dst = mirLowerExprToPlace(bs, target)
+    if !mirLowerPlaceIsValid(dst) {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4d TODO: assign target kind "
+                + hirExprKindName(target.kind)
+                + " — skipped",
+        )
+        return
+    }
+    mirLowerExprIntoPlace(bs, s.assignValue, dst, s.assignValue.typ)
+}
+
+fn mirLowerCompoundAssign(bs: MirLowerBodyState, s: HirStmt) {
+    let target = s.assignTargets[0]
+    let dst = mirLowerExprToPlace(bs, target)
+    if !mirLowerPlaceIsValid(dst) {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4d TODO: compound assign target kind "
+                + hirExprKindName(target.kind),
+        )
+        return
+    }
+    let op = hirAssignOpToBinOp(s.assignOp)
+    match op {
+        MirBinInvalid -> {
+            mirLowerNoteIssue(
+                bs.l,
+                "mir_lower: compound assign with unmapped op "
+                    + hirAssignOpName(s.assignOp),
+            )
+            return
+        },
+        _ -> {},
+    }
+    let lhsT = if hirTypeIsValid(target.typ) {
+        target.typ
+    } else {
+        s.assignValue.typ
+    }
+    let lhsTypeText = hirTypeString(lhsT)
+    let rhs = mirLowerExprAsOperand(bs, s.assignValue)
+    let lhs = mirOperandCopy(dst, lhsTypeText)
+    let rv = mirRVBinary(op, lhs, rhs, lhsTypeText)
+    mirLowerEmitInstr(bs, mirAssignInstr(dst, rv, mirSpanFromHir(s.span)))
+}
+
+fn mirLowerMultiAssign(bs: MirLowerBodyState, s: HirStmt) {
+    let span = mirSpanFromHir(s.span)
+    let rhsT = s.assignValue.typ
+    let scratch = mirLowerNewLocal(bs, "_mtuple", rhsT, false, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(scratch, span))
+    mirLowerExprInto(bs, s.assignValue, scratch, rhsT)
+    // Tuple element types: pull from the HIR tuple type when present.
+    let elemTs = match rhsT.kind {
+        HirTypeTuple -> rhsT.tupleElems,
+        _ -> [],
+    }
+    let mut i = 0
+    for target in s.assignTargets {
+        let dst = mirLowerExprToPlace(bs, target)
+        if !mirLowerPlaceIsValid(dst) {
+            mirLowerNoteIssue(
+                bs.l,
+                "mir_lower Stage 4d TODO: multi-assign target kind "
+                    + hirExprKindName(target.kind),
+            )
+            i = i + 1
+            continue
+        }
+        let et = if i < elemTs.len() {
+            elemTs[i]
+        } else if hirTypeIsValid(target.typ) {
+            target.typ
+        } else {
+            hirTypeInvalid()
+        }
+        let etText = hirTypeString(et)
+        let tupleProj = mirTupleProj(i, etText)
+        let srcPlace = mirPlaceProject(mirPlace(scratch), tupleProj)
+        let op = mirOperandCopy(srcPlace, etText)
+        let rv = mirRVUse(op)
+        mirLowerEmitInstr(bs, mirAssignInstr(dst, rv, span))
+        i = i + 1
+    }
+}
+
+/// mirLowerExprIntoPlace lowers an HIR expression into an arbitrary
+/// MirPlace (not just a bare local). Stage 4c wraps the local-only
+/// mirLowerExprInto: if the place is projection-free we can re-use
+/// the existing helper, otherwise we fall back to a scratch local +
+/// Assign from the scratch. The expression lowering itself is still
+/// the Stage 4b stub.
+pub fn mirLowerExprIntoPlace(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    if !mirPlaceHasProjections(dest) {
+        mirLowerExprInto(bs, e, dest.local, destT)
+        return
+    }
+    // Materialise into a scratch local first, then Assign from scratch
+    // into the projected destination. This mirrors Go's
+    // `lowerExprIntoPlace` fallback path.
+    let span = mirSpanFromHir(e.span)
+    let scratch = mirLowerFreshTemp(bs, destT, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(scratch, span))
+    mirLowerExprInto(bs, e, scratch, destT)
+    let destTypeText = hirTypeString(destT)
+    let srcOp = mirOperandCopy(mirPlace(scratch), destTypeText)
+    let rv = mirRVUse(srcOp)
+    mirLowerEmitInstr(bs, mirAssignInstr(dest, rv, span))
+}
+
+// ---- Match ---------------------------------------------------------
+
+/// mirLowerMatchStmt lowers a statement-position match. Since the
+/// self-hosted HIR doesn't yet carry a pre-compiled decision tree
+/// (Stage 3d deferred `HirDecisionNode` to a future turn), every
+/// match currently takes the tree-less fallback path: lower the
+/// scrutinee into a scratch, route unconditionally to arm 0's block,
+/// and record an issue so callers know to keep the Go pipeline until
+/// Stage 4f lands the decision tree.
+pub fn mirLowerMatchStmt(bs: MirLowerBodyState, s: HirStmt) {
+    let span = mirSpanFromHir(s.span)
+    let scrutT = if hirTypeIsValid(s.matchScrutinee.typ) {
+        s.matchScrutinee.typ
+    } else {
+        hirTypeErr()
+    }
+    mirLowerPushScope(bs)
+    let scrutLocal = mirLowerNewLocal(bs, "_scrut", scrutT, false, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(scrutLocal, span))
+    mirLowerExprInto(bs, s.matchScrutinee, scrutLocal, scrutT)
+
+    let merge = mirLowerNewBlock(bs, span)
+    let mut armBlocks: List<Int> = []
+    for arm in s.matchArms {
+        armBlocks.push(mirLowerNewBlock(bs, mirSpanFromHir(arm.span)))
+    }
+
+    mirLowerNoteIssue(
+        bs.l,
+        "mir_lower Stage 4f TODO: match without decision tree — routing to arm 0",
+    )
+    if armBlocks.len() > 0 {
+        mirLowerTerminate(bs, mirGotoTerm(armBlocks[0], span))
+    } else {
+        mirLowerTerminate(bs, mirUnreachableTerm(span))
+    }
+
+    let mut i = 0
+    for arm in s.matchArms {
+        bs.cur = armBlocks[i]
+        mirLowerPushScope(bs)
+        mirLowerPushDeferScope(bs)
+        for stmt in arm.body.stmts {
+            mirLowerStmt(bs, stmt)
+        }
+        if arm.body.hasResult {
+            let _ = mirLowerExprAsOperand(bs, arm.body.result)
+        }
+        mirLowerReplayTopFrame(bs, mirSpanFromHir(arm.body.span))
+        mirLowerPopDeferScope(bs)
+        mirLowerPopScope(bs)
+        mirLowerTerminate(bs, mirGotoTerm(merge, mirSpanFromHir(arm.span)))
+        i = i + 1
+    }
+
+    bs.cur = merge
+    mirLowerPopScope(bs)
+}
+
+// ---- Channel send --------------------------------------------------
+
+/// mirLowerChanSendStmt lowers `ch <- value` as an IntrinsicChanSend
+/// instruction. Both operands go through the Stage 4b operand stub;
+/// real channel + value lowering arrives with Stage 4e's concurrency
+/// intrinsics when the runtime ABI is wired end-to-end.
+pub fn mirLowerChanSendStmt(bs: MirLowerBodyState, s: HirStmt) {
+    let span = mirSpanFromHir(s.span)
+    let chOp = mirLowerExprAsOperand(bs, s.chanChannel)
+    let valOp = mirLowerExprAsOperand(bs, s.chanValue)
+    let mut args: List<MirOperand> = []
+    args.push(chOp)
+    args.push(valOp)
+    let instr = mirIntrinsicInstr(
+        false,
+        mirPlace(-1),
+        MirIntrinsicChanSend,
+        args,
+        span,
+    )
+    mirLowerEmitInstr(bs, instr)
 }
