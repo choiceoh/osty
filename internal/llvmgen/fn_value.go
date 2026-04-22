@@ -208,7 +208,11 @@ func synthFnSigFromFnType(ft *ast.FnType, env typeEnv) (*fnSig, error) {
 }
 
 func synthFnSigFromSourceType(sourceType ast.Type, env typeEnv) (*fnSig, bool, error) {
-	ft, ok := sourceType.(*ast.FnType)
+	resolved, err := llvmResolveAliasType(sourceType, env, map[string]bool{})
+	if err != nil {
+		return nil, false, err
+	}
+	ft, ok := resolved.(*ast.FnType)
 	if !ok {
 		return nil, false, nil
 	}
@@ -232,6 +236,73 @@ func requireFnValueSignature(v value, label string) (*fnSig, error) {
 		return nil, unsupportedf("call", "%s must be a fn value (got typ=%s, sig=%v)", label, v.typ, v.fnSigRef != nil)
 	}
 	return sig, nil
+}
+
+func (g *generator) protectFnValueCallback(prefix string, v value, label string) (value, *fnSig, error) {
+	sig, err := requireFnValueSignature(v, label)
+	if err != nil {
+		return value{}, nil, err
+	}
+	return g.protectManagedTemporary(prefix, v), sig, nil
+}
+
+func (g *generator) emitProtectedFnValueCall(fnVal value, sig *fnSig, args []*LlvmValue) (value, error) {
+	loaded, err := g.loadIfPointer(fnVal)
+	if err != nil {
+		return value{}, err
+	}
+	return g.emitFnValueIndirectCall(loaded, sig, args)
+}
+
+func (g *generator) attachFnValueSignatureFromSourceType(v *value) error {
+	if v == nil || v.sourceType == nil {
+		return nil
+	}
+	sig, ok, err := synthFnSigFromSourceType(v.sourceType, g.typeEnv())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	if v.typ != "ptr" {
+		return unsupportedf("type-system", "fn-valued source type lowered to %s, want ptr", v.typ)
+	}
+	v.fnSigRef = sig
+	return nil
+}
+
+func (g *generator) decorateValueFromSourceType(v *value, sourceType ast.Type) error {
+	if v == nil || sourceType == nil {
+		return nil
+	}
+	meta, err := containerMetadataFromSourceType(sourceType, g.typeEnv())
+	if err != nil {
+		return err
+	}
+	meta.applyToValue(v)
+	return g.attachFnValueSignatureFromSourceType(v)
+}
+
+func (g *generator) emitExprWithSourceType(expr ast.Expr, sourceType ast.Type) (value, error) {
+	if sourceType == nil {
+		return g.emitExpr(expr)
+	}
+	meta, err := containerMetadataFromSourceType(sourceType, g.typeEnv())
+	if err != nil {
+		return value{}, err
+	}
+	return g.emitExprWithHintAndSourceType(
+		expr,
+		sourceType,
+		meta.listElemTyp,
+		meta.listElemString,
+		meta.mapKeyTyp,
+		meta.mapValueTyp,
+		meta.mapKeyString,
+		meta.setElemTyp,
+		meta.setElemString,
+	)
 }
 
 // emitIndirectUserCall attempts to dispatch `call` as an indirect call
@@ -340,6 +411,11 @@ func (g *generator) indirectFieldCallCallee(fn *ast.FieldExpr) (value, *fnSig, b
 	}
 	if envVal.typ != "ptr" {
 		return value{}, nil, true, unsupportedf("type-system", "fn-typed field %q.%s expected ptr env, got %s", structInfo.name, fn.Name, envVal.typ)
+	}
+	envVal = g.protectManagedTemporary("field.fn", envVal)
+	envVal, err = g.loadIfPointer(envVal)
+	if err != nil {
+		return value{}, nil, true, err
 	}
 	return envVal, sig, true, nil
 }

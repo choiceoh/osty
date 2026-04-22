@@ -715,9 +715,6 @@ pub fn llvmCString(text: String) -> LlvmCString {
 // Byte comparisons, which would pull in intrinsics the backend
 // hasn't wired.
 pub fn llvmCStringEscape(text: String) -> String {
-    // O(n) accumulator: the previous `encoded = "{encoded}\\..."` form
-    // re-copied the whole buffer on every byte, so emitting a constant
-    // string of length N cost O(N^2).
     let mut parts: List<String> = []
     for b in text.bytes() {
         parts.push("\\")
@@ -1033,6 +1030,8 @@ fn llvmRenderModuleWithRuntimeDeclarations(
     lines.push("@.fmt_i64 = private unnamed_addr constant [5 x i8] c\"%ld\\0A\\00\"")
     lines.push("@.fmt_f64 = private unnamed_addr constant [6 x i8] c\"%.6f\\0A\\00\"")
     lines.push("@.fmt_str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"")
+    lines.push("@.bool_true = private unnamed_addr constant [5 x i8] c\"true\\00\"")
+    lines.push("@.bool_false = private unnamed_addr constant [6 x i8] c\"false\\00\"")
     for global in stringGlobals {
         lines.push(
             llvmStrings.join(
@@ -1326,10 +1325,10 @@ pub fn llvmNativeEmitFunction(
     if function.params.len() == 0 {
         let block = llvmNativeEmitBlock(emitter, function.body)
         if !(llvmNativeBodyHasTerminator(emitter.body)) {
-            if block.hasValue && function.returnType != "" && function.returnType != "void" {
-                llvmReturn(emitter, block.value)
-            } else if function.returnType == "i32" && function.name == "main" {
+            if function.returnType == "i32" && function.name == "main" {
                 llvmReturnI32Zero(emitter)
+            } else if block.hasValue && function.returnType != "" && function.returnType != "void" {
+                llvmReturn(emitter, block.value)
             } else if function.returnType == "" || function.returnType == "void" {
                 emitter.body.push("  ret void")
             } else {
@@ -1397,10 +1396,10 @@ pub fn llvmNativeEmitFunction(
     }
     let block = llvmNativeEmitBlock(emitter, function.body)
     if !(llvmNativeBodyHasTerminator(emitter.body)) {
-        if block.hasValue && function.returnType != "" && function.returnType != "void" {
-            llvmReturn(emitter, block.value)
-        } else if function.returnType == "i32" && function.name == "main" {
+        if function.returnType == "i32" && function.name == "main" {
             llvmReturnI32Zero(emitter)
+        } else if block.hasValue && function.returnType != "" && function.returnType != "void" {
+            llvmReturn(emitter, block.value)
         } else if function.returnType == "" || function.returnType == "void" {
             emitter.body.push("  ret void")
         } else {
@@ -3495,6 +3494,30 @@ pub fn llvmStringRuntimeSliceSymbol() -> String {
     "osty_rt_strings_Slice"
 }
 
+pub fn llvmStringRuntimeToUpperSymbol() -> String {
+    "osty_rt_strings_ToUpper"
+}
+
+pub fn llvmStringRuntimeToLowerSymbol() -> String {
+    "osty_rt_strings_ToLower"
+}
+
+pub fn llvmStringRuntimeIsValidIntSymbol() -> String {
+    "osty_rt_strings_IsValidInt"
+}
+
+pub fn llvmStringRuntimeToIntSymbol() -> String {
+    "osty_rt_strings_ToInt"
+}
+
+pub fn llvmStringRuntimeIsValidFloatSymbol() -> String {
+    "osty_rt_strings_IsValidFloat"
+}
+
+pub fn llvmStringRuntimeToFloatSymbol() -> String {
+    "osty_rt_strings_ToFloat"
+}
+
 pub fn llvmStringRuntimeTrimStartSymbol() -> String {
     "osty_rt_strings_TrimStart"
 }
@@ -3545,14 +3568,20 @@ pub fn llvmStringRuntimeDeclarations() -> List<String> {
         "declare ptr @osty_rt_float_to_string(double)",
         "declare ptr @osty_rt_bool_to_string(i1)",
         "declare i64 @osty_rt_strings_ByteLen(ptr)",
+        "declare i64 @osty_rt_strings_Compare(ptr, ptr)",
         "declare i64 @osty_rt_strings_Count(ptr, ptr)",
         "declare i64 @osty_rt_strings_IndexOf(ptr, ptr)",
-        "declare i64 @osty_rt_strings_Compare(ptr, ptr)",
         "declare ptr @osty_rt_strings_Join(ptr, ptr)",
         "declare ptr @osty_rt_strings_Repeat(ptr, i64)",
         "declare ptr @osty_rt_strings_Replace(ptr, ptr, ptr)",
         "declare ptr @osty_rt_strings_ReplaceAll(ptr, ptr, ptr)",
         "declare ptr @osty_rt_strings_Slice(ptr, i64, i64)",
+        "declare ptr @osty_rt_strings_ToUpper(ptr)",
+        "declare ptr @osty_rt_strings_ToLower(ptr)",
+        "declare i1 @osty_rt_strings_IsValidInt(ptr)",
+        "declare i64 @osty_rt_strings_ToInt(ptr)",
+        "declare i1 @osty_rt_strings_IsValidFloat(ptr)",
+        "declare double @osty_rt_strings_ToFloat(ptr)",
         "declare ptr @osty_rt_strings_TrimStart(ptr)",
         "declare ptr @osty_rt_strings_TrimEnd(ptr)",
         "declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)",
@@ -3681,6 +3710,14 @@ pub fn llvmStringRuntimeSlice(
     end: LlvmValue,
 ) -> LlvmValue {
     llvmCall(emitter, "ptr", "osty_rt_strings_Slice", [value, start, end])
+}
+
+pub fn llvmStringRuntimeToUpper(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_ToUpper", [value])
+}
+
+pub fn llvmStringRuntimeToLower(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_strings_ToLower", [value])
 }
 
 pub fn llvmStringRuntimeTrimStart(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
@@ -3859,12 +3896,7 @@ pub fn llvmNominalDeclHeaderDiagnostic(
             "generic {kind} \"{name}\" is not supported",
         )
     }
-    if methodCount != 0 {
-        return llvmUnsupportedDiagnostic(
-            "function-signature",
-            "{kind} \"{name}\" methods are not supported",
-        )
-    }
+    let _ = methodCount
     llvmUnsupportedDiagnosticWith("", "", "", "")
 }
 
@@ -3880,9 +3912,6 @@ pub fn llvmFunctionHeaderDiagnostic(
 ) -> LlvmUnsupportedDiagnostic {
     if !(identOk) {
         return llvmUnsupportedDiagnostic("name", "function name \"{name}\"")
-    }
-    if hasRecv {
-        return llvmUnsupportedDiagnostic("function-signature", "methods are not supported")
     }
     if genericCount != 0 {
         return llvmUnsupportedDiagnostic(

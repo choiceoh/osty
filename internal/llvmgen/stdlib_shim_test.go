@@ -452,6 +452,32 @@ fn main() {
 	}
 }
 
+func TestStdStringsSplitBoundLocalElementKeepsStringSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn main() {
+    let parts = strings.split("a,b", ",")
+    let first = parts[0]
+    println(first.len())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/std_strings_split_bound_local.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
+		"call ptr @osty_rt_strings_Split",
+		"declare i64 @osty_rt_strings_ByteLen(ptr)",
+		"call i64 @osty_rt_strings_ByteLen",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q (split-bound local lost String sourceType):\n%s", want, got)
+		}
+	}
+}
+
 func TestStdStringsTrimSpaceRoutesToRuntime(t *testing.T) {
 	file := parseLLVMGenFile(t, `use std.strings as strings
 

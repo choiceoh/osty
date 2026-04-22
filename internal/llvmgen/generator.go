@@ -1254,40 +1254,110 @@ func mergeContainerMetadata(dst *value, left, right value) {
 	}
 	// Preserve source-type when both branches agree so downstream
 	// consumers (list-literal isString parity, field-source lookups)
-	// don't lose the String/named-type tag across if-expressions and
-	// match-expressions. Shallow identity/equal-string-form comparison
-	// is sufficient here — the backend only needs "same source type"
-	// to decide whether to propagate; deeper structural equality is a
-	// job for the checker.
+	// don't lose the String/named-type/fn-shape tag across
+	// if-expressions and match-expressions. Backend consumers only
+	// need a narrow structural "same source type" predicate here so
+	// source-derived metadata survives branch merges without pulling in
+	// the full checker type-equality machinery.
 	if sameSourceType(left.sourceType, right.sourceType) {
 		dst.sourceType = left.sourceType
+	}
+	if sameFnSigShape(left.fnSigRef, right.fnSigRef) {
+		dst.fnSigRef = left.fnSigRef
 	}
 	dst.gcManaged = valueNeedsManagedRoot(*dst)
 }
 
-func sameSourceType(a, b ast.Type) bool {
+func sameFnSigShape(a, b *fnSig) bool {
 	if a == nil || b == nil {
 		return false
 	}
-	an, aok := a.(*ast.NamedType)
-	bn, bok := b.(*ast.NamedType)
-	if !aok || !bok {
+	if a.ret != b.ret ||
+		a.retListElemTyp != b.retListElemTyp ||
+		a.retListString != b.retListString ||
+		a.retMapKeyTyp != b.retMapKeyTyp ||
+		a.retMapValueTyp != b.retMapValueTyp ||
+		a.retMapKeyString != b.retMapKeyString ||
+		a.retSetElemTyp != b.retSetElemTyp ||
+		a.retSetElemString != b.retSetElemString ||
+		len(a.params) != len(b.params) {
 		return false
 	}
-	if len(an.Path) != len(bn.Path) || len(an.Args) != len(bn.Args) {
-		return false
-	}
-	for i := range an.Path {
-		if an.Path[i] != bn.Path[i] {
-			return false
-		}
-	}
-	for i := range an.Args {
-		if !sameSourceType(an.Args[i], bn.Args[i]) {
+	for i := range a.params {
+		ap := a.params[i]
+		bp := b.params[i]
+		if ap.typ != bp.typ ||
+			ap.irTyp != bp.irTyp ||
+			ap.listElemTyp != bp.listElemTyp ||
+			ap.listElemString != bp.listElemString ||
+			ap.mapKeyTyp != bp.mapKeyTyp ||
+			ap.mapValueTyp != bp.mapValueTyp ||
+			ap.mapKeyString != bp.mapKeyString ||
+			ap.setElemTyp != bp.setElemTyp ||
+			ap.setElemString != bp.setElemString ||
+			ap.mutable != bp.mutable ||
+			ap.byRef != bp.byRef {
 			return false
 		}
 	}
 	return true
+}
+
+func sameSourceType(a, b ast.Type) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	switch at := a.(type) {
+	case *ast.NamedType:
+		bt, ok := b.(*ast.NamedType)
+		if !ok {
+			return false
+		}
+		if len(at.Path) != len(bt.Path) || len(at.Args) != len(bt.Args) {
+			return false
+		}
+		for i := range at.Path {
+			if at.Path[i] != bt.Path[i] {
+				return false
+			}
+		}
+		for i := range at.Args {
+			if !sameSourceType(at.Args[i], bt.Args[i]) {
+				return false
+			}
+		}
+		return true
+	case *ast.OptionalType:
+		bt, ok := b.(*ast.OptionalType)
+		if !ok {
+			return false
+		}
+		return sameSourceType(at.Inner, bt.Inner)
+	case *ast.TupleType:
+		bt, ok := b.(*ast.TupleType)
+		if !ok || len(at.Elems) != len(bt.Elems) {
+			return false
+		}
+		for i := range at.Elems {
+			if !sameSourceType(at.Elems[i], bt.Elems[i]) {
+				return false
+			}
+		}
+		return true
+	case *ast.FnType:
+		bt, ok := b.(*ast.FnType)
+		if !ok || len(at.Params) != len(bt.Params) {
+			return false
+		}
+		for i := range at.Params {
+			if !sameSourceType(at.Params[i], bt.Params[i]) {
+				return false
+			}
+		}
+		return sameSourceType(at.ReturnType, bt.ReturnType)
+	default:
+		return false
+	}
 }
 
 type gcSafepointRoot struct {
@@ -1566,7 +1636,11 @@ func (g *generator) bindLetPattern(pattern ast.Pattern, v value, mutable bool) e
 		if !llvmIsIdent(p.Name) {
 			return unsupportedf("name", "let name %q", p.Name)
 		}
-		g.bindNamedLocal(p.Name, v, mutable)
+		bound := v
+		if err := g.decorateValueFromSourceType(&bound, bound.sourceType); err != nil {
+			return err
+		}
+		g.bindNamedLocal(p.Name, bound, mutable)
 		return nil
 	case *ast.BindingPat:
 		if mutable {
@@ -1578,7 +1652,11 @@ func (g *generator) bindLetPattern(pattern ast.Pattern, v value, mutable bool) e
 		if !llvmIsIdent(p.Name) {
 			return unsupportedf("name", "let name %q", p.Name)
 		}
-		g.bindNamedLocal(p.Name, v, false)
+		bound := v
+		if err := g.decorateValueFromSourceType(&bound, bound.sourceType); err != nil {
+			return err
+		}
+		g.bindNamedLocal(p.Name, bound, false)
 		return g.bindLetPattern(p.Pattern, v, false)
 	case *ast.TuplePat:
 		if mutable {
@@ -1655,6 +1733,11 @@ func (g *generator) extractTupleElement(tuple value, info tupleTypeInfo, index i
 	if index < len(info.elemListElemTyps) && info.elemListElemTyps[index] != "" {
 		elem.listElemTyp = info.elemListElemTyps[index]
 	}
+	if sourceType, ok := tupleElementSourceType(tuple.sourceType, index, g.typeEnv()); ok {
+		if err := g.decorateValueFromSourceType(&elem, sourceType); err != nil {
+			return value{}, err
+		}
+	}
 	elem.gcManaged = info.elems[index] == "ptr" || elem.listElemTyp != ""
 	elem.rootPaths = g.rootPathsForType(info.elems[index])
 	return elem, nil
@@ -1706,6 +1789,9 @@ func (g *generator) extractStructField(base value, info *structInfo, name string
 	loaded.setElemTyp = field.setElemTyp
 	loaded.setElemString = field.setElemString
 	loaded.sourceType = field.sourceType
+	if err := g.decorateValueFromSourceType(&loaded, field.sourceType); err != nil {
+		return value{}, err
+	}
 	loaded.gcManaged = valueNeedsManagedRoot(loaded)
 	loaded.rootPaths = g.rootPathsForType(field.typ)
 	return loaded, nil

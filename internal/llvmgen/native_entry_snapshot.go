@@ -243,10 +243,10 @@ func llvmNativeEmitFunction(fn *llvmNativeFunction, globals []*llvmNativeGlobal,
 	block := llvmNativeEmitBlock(emitter, fn.body)
 	if !llvmNativeBodyHasTerminator(emitter.body) {
 		switch {
-		case block.hasValue && fn.returnType != "" && fn.returnType != "void":
-			llvmReturn(emitter, block.value)
 		case fn.returnType == "i32" && fn.name == "main":
 			llvmReturnI32Zero(emitter)
+		case block.hasValue && fn.returnType != "" && fn.returnType != "void":
+			llvmReturn(emitter, block.value)
 		case fn.returnType == "" || fn.returnType == "void":
 			emitter.body = append(emitter.body, "  ret void")
 		default:

@@ -151,3 +151,99 @@ func TestSynthFnSigFromSourceTypeRecognizesFnTypeOnly(t *testing.T) {
 		t.Fatalf("sig.params = %#v, want one i64 param", sig.params)
 	}
 }
+
+func TestSynthFnSigFromSourceTypeResolvesFnAlias(t *testing.T) {
+	env := typeEnv{
+		aliases: map[string]*typeAliasInfo{
+			"Callback": {
+				name: "Callback",
+				decl: &ast.TypeAliasDecl{
+					Name: "Callback",
+					Target: &ast.FnType{
+						Params: []ast.Type{
+							&ast.NamedType{Path: []string{"Int"}},
+						},
+						ReturnType: &ast.NamedType{Path: []string{"Bool"}},
+					},
+				},
+			},
+		},
+	}
+
+	sig, ok, err := synthFnSigFromSourceType(&ast.NamedType{Path: []string{"Callback"}}, env)
+	if err != nil {
+		t.Fatalf("synthFnSigFromSourceType(alias) returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("synthFnSigFromSourceType(alias) = false, want true")
+	}
+	if sig == nil {
+		t.Fatal("synthFnSigFromSourceType(alias) returned nil sig")
+	}
+	if got := sig.ret; got != "i1" {
+		t.Fatalf("sig.ret = %q, want i1", got)
+	}
+	if len(sig.params) != 1 || sig.params[0].typ != "i64" {
+		t.Fatalf("sig.params = %#v, want one i64 param", sig.params)
+	}
+}
+
+func TestSameSourceTypeRecognizesStructuredForms(t *testing.T) {
+	makeFn := func(ret ast.Type) ast.Type {
+		return &ast.FnType{
+			Params: []ast.Type{
+				&ast.NamedType{Path: []string{"Int"}},
+			},
+			ReturnType: ret,
+		}
+	}
+
+	if !sameSourceType(
+		&ast.OptionalType{Inner: makeFn(nil)},
+		&ast.OptionalType{Inner: makeFn(nil)},
+	) {
+		t.Fatal("sameSourceType(optional fn unit-return) = false, want true")
+	}
+
+	if !sameSourceType(
+		&ast.TupleType{Elems: []ast.Type{
+			&ast.NamedType{Path: []string{"String"}},
+			&ast.OptionalType{Inner: makeFn(&ast.NamedType{Path: []string{"Bool"}})},
+		}},
+		&ast.TupleType{Elems: []ast.Type{
+			&ast.NamedType{Path: []string{"String"}},
+			&ast.OptionalType{Inner: makeFn(&ast.NamedType{Path: []string{"Bool"}})},
+		}},
+	) {
+		t.Fatal("sameSourceType(tuple optional-fn) = false, want true")
+	}
+
+	if sameSourceType(
+		&ast.FnType{
+			Params: []ast.Type{
+				&ast.NamedType{Path: []string{"Int"}},
+			},
+			ReturnType: &ast.NamedType{Path: []string{"Bool"}},
+		},
+		&ast.FnType{
+			Params: []ast.Type{
+				&ast.NamedType{Path: []string{"String"}},
+			},
+			ReturnType: &ast.NamedType{Path: []string{"Bool"}},
+		},
+	) {
+		t.Fatal("sameSourceType(fn param mismatch) = true, want false")
+	}
+
+	if sameSourceType(
+		&ast.TupleType{Elems: []ast.Type{
+			&ast.NamedType{Path: []string{"Int"}},
+		}},
+		&ast.TupleType{Elems: []ast.Type{
+			&ast.NamedType{Path: []string{"Int"}},
+			&ast.NamedType{Path: []string{"Int"}},
+		}},
+	) {
+		t.Fatal("sameSourceType(tuple arity mismatch) = true, want false")
+	}
+}
