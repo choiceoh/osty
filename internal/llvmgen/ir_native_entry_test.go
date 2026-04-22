@@ -157,7 +157,212 @@ fn main() {
 	}
 }
 
-func TestNativeOwnedModuleEntryFallsBackForStructFieldAssign(t *testing.T) {
+func TestNativeOwnedModuleEntryStructMethodSlice(t *testing.T) {
+	src := `struct Pair {
+    left: Int,
+    right: Int,
+
+    fn total(self) -> Int {
+        self.left + self.right
+    }
+}
+
+fn main() {
+    let pair = Pair { left: 1, right: 2 }
+    println(pair.total())
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_struct_method.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for plain struct method slice")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"define i64 @Pair__total(%Pair %self)",
+		"call i64 @Pair__total(%Pair",
+		"extractvalue %Pair",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned struct-method IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned struct-method entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryMutSelfMethodSlice(t *testing.T) {
+	src := `struct Counter {
+    value: Int,
+
+    fn bump(mut self) {
+        self.value = self.value + 1
+    }
+}
+
+fn main() {
+    let mut c = Counter { value: 1 }
+    c.bump()
+    println(c.value)
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_mut_self_method.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for mut self method slice")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"define void @Counter__bump(ptr %self)",
+		"call void @Counter__bump(ptr",
+		"load %Counter, ptr",
+		"store %Counter",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned mut-self IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned mut-self entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryMutSelfProjectedReceiverLocal(t *testing.T) {
+	src := `struct Counter {
+    value: Int,
+
+    fn bump(mut self) {
+        self.value = self.value + 1
+    }
+}
+
+struct Box {
+    counter: Counter,
+}
+
+fn main() {
+    let mut box = Box { counter: Counter { value: 1 } }
+    box.counter.bump()
+    println(box.counter.value)
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_mut_self_projected_local.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for projected local mut self receiver")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"alloca %Counter",
+		"call void @Counter__bump(ptr",
+		"insertvalue %Box",
+		"store %Box",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned projected local mut-self IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned projected local mut-self entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryMutSelfProjectedReceiverParam(t *testing.T) {
+	src := `struct Counter {
+    value: Int,
+
+    fn bump(mut self) {
+        self.value = self.value + 1
+    }
+}
+
+struct Box {
+    counter: Counter,
+}
+
+fn run(mut box: Box) {
+    box.counter.bump()
+    println(box.counter.value)
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_mut_self_projected_param.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for projected param mut self receiver")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"define void @run(%Box %box)",
+		"alloca %Box",
+		"alloca %Counter",
+		"call void @Counter__bump(ptr",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned projected param mut-self IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned projected param mut-self entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryRejectsMutSelfOnNonAddressableReceiver(t *testing.T) {
+	src := `struct Counter {
+    value: Int,
+
+    fn bump(mut self) {
+        self.value = self.value + 1
+    }
+}
+
+struct Box {
+    counter: Counter,
+}
+
+fn makeBox() -> Box {
+    Box { counter: Counter { value: 1 } }
+}
+
+fn main() {
+    makeBox().counter.bump()
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_mut_self_non_addressable.osty"}
+	if nativeMod, ok := nativeModuleFromIR(mod, opts); ok {
+		t.Fatalf("nativeModuleFromIR unexpectedly accepted non-addressable mut self receiver: %#v", nativeMod)
+	}
+	out, err := GenerateModule(mod, opts)
+	if err == nil {
+		t.Fatalf("GenerateModule unexpectedly accepted non-addressable mut self receiver:\n%s", string(out))
+	}
+	if !strings.Contains(err.Error(), "mut receiver for \"bump\"") {
+		t.Fatalf("GenerateModule error missing remaining wall, got: %v", err)
+	}
+}
+
+func TestNativeOwnedModuleEntryStructFieldAssignLocal(t *testing.T) {
 	src := `struct Pair { left: Int, right: Int }
 
 fn main() {
@@ -168,15 +373,648 @@ fn main() {
 `
 	mod := lowerNativeEntryModule(t, src)
 	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_struct_assign.osty"}
-	if nativeMod, ok := nativeModuleFromIR(mod, opts); ok {
-		t.Fatalf("nativeModuleFromIR unexpectedly accepted struct field assignment: %#v", nativeMod)
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for local struct field assignment")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"%Pair = type { i64, i64 }",
+		"store %Pair",
+		"insertvalue %Pair",
+		"extractvalue %Pair",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned field-assign IR missing %q:\n%s", want, direct)
+		}
 	}
 	out, err := GenerateModule(mod, opts)
 	if err != nil {
-		t.Fatalf("GenerateModule fallback failed: %v", err)
+		t.Fatalf("GenerateModule returned error: %v", err)
 	}
-	if !strings.Contains(string(out), "%Pair = type { i64, i64 }") {
-		t.Fatalf("legacy fallback IR missing struct definition:\n%s", string(out))
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned field-assign entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryNestedStructFieldAssignLocal(t *testing.T) {
+	src := `struct Inner { value: Int }
+struct Outer { inner: Inner }
+
+fn main() {
+    let mut outer = Outer { inner: Inner { value: 1 } }
+    outer.inner.value = 3
+    println(outer.inner.value)
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_nested_struct_assign.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for nested local struct field assignment")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	if strings.Count(direct, "extractvalue") < 2 {
+		t.Fatalf("native-owned nested field-assign IR missing chained extractvalue ops:\n%s", direct)
+	}
+	if strings.Count(direct, "insertvalue") < 3 {
+		t.Fatalf("native-owned nested field-assign IR missing chained insertvalue ops:\n%s", direct)
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned nested field-assign entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryStructFieldAssignParam(t *testing.T) {
+	src := `struct Pair { left: Int, right: Int }
+
+fn bump(mut pair: Pair) {
+    pair.left = 3
+    println(pair.left)
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_param_struct_assign.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for param struct field assignment")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"define void @bump(%Pair %pair)",
+		"alloca %Pair",
+		"store %Pair %pair",
+		"insertvalue %Pair",
+		"extractvalue %Pair",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned param field-assign IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned param field-assign entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryStructFieldAssignGlobal(t *testing.T) {
+	src := `struct Point { x: Int, y: Int }
+
+pub let mut ORIGIN: Point = Point { x: 1, y: 2 }
+
+fn main() {
+    ORIGIN.x = 3
+    println(ORIGIN.x)
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_global_struct_assign.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for global struct field assignment")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"@osty_global_ORIGIN = internal global %Point { i64 1, i64 2 }",
+		"load %Point, ptr @osty_global_ORIGIN",
+		"insertvalue %Point",
+		"store %Point",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned global field-assign IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned global field-assign entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryGlobalLetSlice(t *testing.T) {
+	src := `pub let MAX_USERS: Int = 10000
+
+fn limit() -> Int {
+    MAX_USERS
+}
+
+fn main() {
+    println(limit())
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_global_let.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for top-level global let")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"@osty_global_MAX_USERS = internal constant i64 10000",
+		"define i64 @limit()",
+		"load i64, ptr @osty_global_MAX_USERS",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned global-let IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned global-let entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryGlobalStringLetSlice(t *testing.T) {
+	src := `pub let DEFAULT_ERROR: String = "broken"
+
+fn main() {
+    println(DEFAULT_ERROR)
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_global_string_let.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for top-level global string let")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"@osty_global_DEFAULT_ERROR = internal constant ptr @.str0",
+		"load ptr, ptr @osty_global_DEFAULT_ERROR",
+		"@.str0 = private unnamed_addr constant",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned global-string-let IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned global-string-let entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryGlobalStructLetSlice(t *testing.T) {
+	src := `struct Point { x: Int, y: Int }
+
+pub let ORIGIN: Point = Point { x: 0, y: 0 }
+
+fn main() {
+    println(ORIGIN.x)
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_global_struct_let.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for top-level global struct let")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"%Point = type { i64, i64 }",
+		"@osty_global_ORIGIN = internal constant %Point { i64 0, i64 0 }",
+		"load %Point, ptr @osty_global_ORIGIN",
+		"extractvalue %Point",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned global-struct-let IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned global-struct-let entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryStringMethodBatch(t *testing.T) {
+	src := `fn describe(s: String) -> Int {
+    let parts = s.trim().trimPrefix("[").trimSuffix("]").split(",")
+    let chars = s.chars()
+    let bytes = s.bytes()
+    println(",".join(parts))
+    println(s.repeat(2))
+    println(s.startsWith("["))
+    println(s.endsWith("]"))
+    println(s.contains(","))
+    println(s.lines().len())
+    chars.len() + bytes.len() + s.charCount()
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_string_methods.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for string method batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"define i64 @describe(ptr %s)",
+		"declare ptr @osty_rt_strings_TrimSpace(ptr)",
+		"declare ptr @osty_rt_strings_Join(ptr, ptr)",
+		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
+		"declare ptr @osty_rt_strings_Chars(ptr)",
+		"declare i64 @osty_rt_list_len(ptr)",
+		"call ptr @osty_rt_strings_Join(ptr",
+		"call i64 @osty_rt_list_len(ptr",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned string-method IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned string-method entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryListSetMethodBatch(t *testing.T) {
+	src := `fn touch(words: List<String>) -> Int {
+    let mut seen = words.toSet()
+    seen.insert("z")
+    seen.remove("skip")
+    if seen.contains("z") {
+        seen.toList().sorted().len()
+    } else {
+        0
+    }
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_list_set_methods.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for list/set method batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"define i64 @touch(ptr %words)",
+		"declare ptr @osty_rt_list_to_set_string(ptr)",
+		"declare i1 @osty_rt_set_insert_string(ptr, ptr)",
+		"declare ptr @osty_rt_set_to_list(ptr)",
+		"declare ptr @osty_rt_list_sorted_string(ptr)",
+		"call ptr @osty_rt_list_to_set_string(ptr",
+		"call i1 @osty_rt_set_contains_string(ptr",
+		"call ptr @osty_rt_set_to_list(ptr",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned list/set-method IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned list/set-method entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryListPushInsertBatch(t *testing.T) {
+	src := `fn build(mut xs: List<Int>) -> Int {
+    xs.push(3)
+    xs.insert(0, 1)
+    xs.sorted().len()
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_list_push_insert.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for list push/insert batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"define i64 @build(ptr %xs)",
+		"declare void @osty_rt_list_push_i64(ptr, i64)",
+		"declare void @osty_rt_list_insert_i64(ptr, i64, i64)",
+		"declare ptr @osty_rt_list_sorted_i64(ptr)",
+		"call void @osty_rt_list_push_i64(ptr",
+		"call void @osty_rt_list_insert_i64(ptr",
+		"call ptr @osty_rt_list_sorted_i64(ptr",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned list push/insert IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned list push/insert entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryMapMethodBatch(t *testing.T) {
+	src := `fn touch(mut counts: Map<String, Int>) -> Int {
+    counts.insert("a", 1)
+    counts.insert("b", 2)
+    counts.remove("missing")
+    let keys = counts.keys().sorted()
+    if counts.containsKey("a") {
+        keys.len()
+    } else {
+        0
+    }
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_map_methods.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for map method batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"define i64 @touch(ptr %counts)",
+		"declare void @osty_rt_map_insert_string(ptr, ptr, ptr)",
+		"declare ptr @osty_rt_map_keys(ptr)",
+		"declare i1 @osty_rt_map_contains_string(ptr, ptr)",
+		"alloca i64",
+		"call void @osty_rt_map_insert_string(ptr",
+		"call ptr @osty_rt_map_keys(ptr",
+		"call i1 @osty_rt_map_contains_string(ptr",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned map-method IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned map-method entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryListLiteralAndIndexBatch(t *testing.T) {
+	src := `fn build() -> Int {
+    let xs = [1, 2, 3]
+    xs[1]
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_list_literal_index.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for list literal/index batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"define i64 @build()",
+		"declare ptr @osty_rt_list_new()",
+		"declare void @osty_rt_list_push_i64(ptr, i64)",
+		"declare i64 @osty_rt_list_get_i64(ptr, i64)",
+		"call ptr @osty_rt_list_new()",
+		"call void @osty_rt_list_push_i64(ptr",
+		"call i64 @osty_rt_list_get_i64(ptr",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned list literal/index IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned list literal/index entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryListStructBytesBatch(t *testing.T) {
+	src := `struct Point { x: Int, y: Int }
+
+fn build() -> Int {
+    let xs = [Point { x: 1, y: 2 }]
+    xs[0].x
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_list_struct_bytes.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for list struct bytes batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"%Point = type { i64, i64 }",
+		"declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64)",
+		"declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64)",
+		"call void @osty_rt_list_push_bytes_v1(",
+		"call void @osty_rt_list_get_bytes_v1(",
+		"getelementptr %Point, ptr null, i32 1",
+		"extractvalue %Point",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned list struct bytes IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned list struct bytes entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryMapIndexBatch(t *testing.T) {
+	src := `fn lookup(counts: Map<String, Int>) -> Int {
+    counts["a"]
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_map_index.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for map index batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"define i64 @lookup(ptr %counts)",
+		"declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr)",
+		"alloca i64",
+		"call void @osty_rt_map_get_or_abort_string(ptr",
+		"load i64, ptr",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned map index IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned map index entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryTupleBatch(t *testing.T) {
+	src := `fn pack() -> Int {
+    let t = (1, 2)
+    t.0 + t.1
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_tuple_batch.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for tuple batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"%Tuple.i64.i64 = type { i64, i64 }",
+		"insertvalue %Tuple.i64.i64 undef, i64 1, 0",
+		"extractvalue %Tuple.i64.i64",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned tuple IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned tuple entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryTupleParamBatch(t *testing.T) {
+	src := `fn first(p: (Int, String)) -> Int {
+    p.0
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_tuple_param.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for tuple param batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"%Tuple.i64.ptr = type { i64, ptr }",
+		"define i64 @first(%Tuple.i64.ptr %p)",
+		"extractvalue %Tuple.i64.ptr",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned tuple param IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned tuple param entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryMapLiteralStructBatch(t *testing.T) {
+	src := `struct Point { x: Int, y: Int }
+
+fn build() -> Int {
+    let points = {"p": Point { x: 1, y: 2 }}
+    points["p"].x
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_map_literal_struct.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for map literal struct batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"%Point = type { i64, i64 }",
+		"declare ptr @osty_rt_map_new()",
+		"declare void @osty_rt_map_insert_string(ptr, ptr, ptr)",
+		"declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr)",
+		"call ptr @osty_rt_map_new()",
+		"call void @osty_rt_map_insert_string(ptr",
+		"alloca %Point",
+		"call void @osty_rt_map_get_or_abort_string(ptr",
+		"extractvalue %Point",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned map literal struct IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned map literal struct entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryMutSelfProjectedReceiverGlobal(t *testing.T) {
+	src := `struct Counter {
+    value: Int,
+
+    fn bump(mut self) {
+        self.value = self.value + 1
+    }
+}
+
+struct Box {
+    counter: Counter,
+}
+
+pub let mut STATE: Box = Box { counter: Counter { value: 1 } }
+
+fn main() {
+    STATE.counter.bump()
+    println(STATE.counter.value)
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_mut_self_projected_global.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for projected global mut self receiver")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"@osty_global_STATE = internal global %Box",
+		"load %Box, ptr @osty_global_STATE",
+		"call void @Counter__bump(ptr",
+		"store %Box",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned projected global mut-self IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned projected global mut-self entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
 	}
 }
 

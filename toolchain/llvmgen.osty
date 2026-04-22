@@ -1125,7 +1125,11 @@ pub enum LlvmNativeExprKind {
     LlvmNativeExprString,
     LlvmNativeExprIdent,
     LlvmNativeExprStructLit,
+    LlvmNativeExprListLit,
+    LlvmNativeExprMapLit,
     LlvmNativeExprField,
+    LlvmNativeExprListIndex,
+    LlvmNativeExprMapIndex,
     LlvmNativeExprUnary,
     LlvmNativeExprBinary,
     LlvmNativeExprCall,
@@ -1139,6 +1143,7 @@ pub enum LlvmNativeStmtKind {
     LlvmNativeStmtLet,
     LlvmNativeStmtMutLet,
     LlvmNativeStmtAssign,
+    LlvmNativeStmtFieldAssign,
     LlvmNativeStmtReturn,
     LlvmNativeStmtIf,
     LlvmNativeStmtWhile,
@@ -1152,10 +1157,21 @@ pub struct LlvmNativeExpr {
     pub name: String,
     pub op: String,
     pub fieldIndex: Int,
+    pub elemLLVMType: String,
+    pub mapKeyLLVMType: String,
+    pub mapKeyIsString: Bool,
+    pub firstArgByRef: Bool,
+    pub receiverPath: List<LlvmNativeFieldPath>,
+    pub spillArgIndices: List<Int>,
     pub boolValue: Bool,
     pub inclusive: Bool,
     pub childExprs: List<LlvmNativeExpr>,
     pub childBlocks: List<LlvmNativeBlock>,
+}
+
+pub struct LlvmNativeFieldPath {
+    pub llvmType: String,
+    pub fieldIndex: Int,
 }
 
 pub struct LlvmNativeStmt {
@@ -1166,6 +1182,7 @@ pub struct LlvmNativeStmt {
     pub inclusive: Bool,
     pub childExprs: List<LlvmNativeExpr>,
     pub childBlocks: List<LlvmNativeBlock>,
+    pub fieldPath: List<LlvmNativeFieldPath>,
 }
 
 pub struct LlvmNativeBlock {
@@ -1177,6 +1194,16 @@ pub struct LlvmNativeBlock {
 pub struct LlvmNativeParam {
     pub name: String,
     pub llvmType: String,
+    pub irType: String,
+    pub byRef: Bool,
+}
+
+pub struct LlvmNativeGlobal {
+    pub name: String,
+    pub irName: String,
+    pub llvmType: String,
+    pub mutable: Bool,
+    pub init: String,
 }
 
 pub struct LlvmNativeStructField {
@@ -1200,8 +1227,14 @@ pub struct LlvmNativeFunction {
 pub struct LlvmNativeModule {
     pub sourcePath: String,
     pub target: String,
+    pub globals: List<LlvmNativeGlobal>,
     pub structs: List<LlvmNativeStruct>,
+    pub stringGlobals: List<LlvmStringGlobal>,
     pub functions: List<LlvmNativeFunction>,
+    pub needsListRuntime: Bool,
+    pub needsMapRuntime: Bool,
+    pub needsSetRuntime: Bool,
+    pub needsStringRuntime: Bool,
 }
 
 pub struct LlvmNativeRenderedFunction {
@@ -1218,9 +1251,8 @@ pub struct LlvmNativeMaybeValue {
 pub fn llvmNativeEmitModule(module: LlvmNativeModule) -> String {
     let mut typeDefs: List<String> = []
     let mut definitions: List<String> = []
-    let globalsSeed = llvmEmitter()
-    let mut stringGlobals = globalsSeed.stringGlobals
-    let mut nextStringId = 0
+    let mut stringGlobals = module.stringGlobals
+    let mut nextStringId = stringGlobals.len()
     for st in module.structs {
         let mut fieldTypes: List<String> = []
         for field in st.fields {
@@ -1228,23 +1260,63 @@ pub fn llvmNativeEmitModule(module: LlvmNativeModule) -> String {
         }
         typeDefs.push(llvmStructTypeDef(st.name, fieldTypes))
     }
+    for global in module.globals {
+        let kind = if global.mutable { "global" } else { "constant" }
+        definitions.push(
+            "{global.irName} = internal {kind} {global.llvmType} {global.init}",
+        )
+    }
     for function in module.functions {
-        let rendered = llvmNativeEmitFunction(function, nextStringId)
+        let rendered = llvmNativeEmitFunction(function, module.globals, nextStringId)
         nextStringId = rendered.nextStringId
         definitions.push(rendered.definition)
         for global in rendered.stringGlobals {
             stringGlobals.push(global)
         }
     }
-    llvmRenderModuleWithGlobalsAndTypes(module.sourcePath, module.target, typeDefs, stringGlobals, definitions)
+    llvmRenderModuleWithRuntimeDeclarations(
+        module.sourcePath,
+        module.target,
+        typeDefs,
+        stringGlobals,
+        llvmNativeRuntimeDeclarations(module),
+        definitions,
+    )
+}
+
+fn llvmNativeRuntimeDeclarations(module: LlvmNativeModule) -> List<String> {
+    let mut out: List<String> = []
+    if module.needsListRuntime {
+        for decl in llvmListRuntimeDeclarations() {
+            out.push(decl)
+        }
+    }
+    if module.needsMapRuntime {
+        for decl in llvmMapRuntimeDeclarations() {
+            out.push(decl)
+        }
+    }
+    if module.needsSetRuntime {
+        for decl in llvmSetRuntimeDeclarations() {
+            out.push(decl)
+        }
+    }
+    if module.needsStringRuntime {
+        for decl in llvmStringRuntimeDeclarations() {
+            out.push(decl)
+        }
+    }
+    out
 }
 
 pub fn llvmNativeEmitFunction(
     function: LlvmNativeFunction,
+    globals: List<LlvmNativeGlobal>,
     startStringId: Int,
 ) -> LlvmNativeRenderedFunction {
     let emitter = llvmEmitter()
     emitter.stringId = startStringId
+    llvmNativeBindGlobals(emitter, globals)
     if function.params.len() == 0 {
         let block = llvmNativeEmitBlock(emitter, function.body)
         if !(llvmNativeBodyHasTerminator(emitter.body)) {
@@ -1270,28 +1342,52 @@ pub fn llvmNativeEmitFunction(
         }
     }
     let first = function.params[0]
-    let mut params = [llvmParam(first.name, first.llvmType)]
-    llvmBind(
-        emitter,
-        first.name,
-        LlvmValue {
-            typ: first.llvmType,
-            name: "%{first.name}",
-            pointer: false,
-        },
-    )
-    for i in 1..function.params.len() {
-        let param = function.params[i]
-        params.push(llvmParam(param.name, param.llvmType))
+    let mut params = [llvmParam(first.name, if first.irType != "" { first.irType } else { first.llvmType })]
+    if first.byRef {
         llvmBind(
             emitter,
-            param.name,
+            first.name,
             LlvmValue {
-                typ: param.llvmType,
-                name: "%{param.name}",
+                typ: first.llvmType,
+                name: "%{first.name}",
+                pointer: true,
+            },
+        )
+    } else {
+        let _ = llvmMutableLetSlot(
+            emitter,
+            first.name,
+            LlvmValue {
+                typ: first.llvmType,
+                name: "%{first.name}",
                 pointer: false,
             },
         )
+    }
+    for i in 1..function.params.len() {
+        let param = function.params[i]
+        params.push(llvmParam(param.name, if param.irType != "" { param.irType } else { param.llvmType }))
+        if param.byRef {
+            llvmBind(
+                emitter,
+                param.name,
+                LlvmValue {
+                    typ: param.llvmType,
+                    name: "%{param.name}",
+                    pointer: true,
+                },
+            )
+        } else {
+            let _ = llvmMutableLetSlot(
+                emitter,
+                param.name,
+                LlvmValue {
+                    typ: param.llvmType,
+                    name: "%{param.name}",
+                    pointer: false,
+                },
+            )
+        }
     }
     let block = llvmNativeEmitBlock(emitter, function.body)
     if !(llvmNativeBodyHasTerminator(emitter.body)) {
@@ -1314,6 +1410,20 @@ pub fn llvmNativeEmitFunction(
         ),
         stringGlobals: emitter.stringGlobals,
         nextStringId: emitter.stringId,
+    }
+}
+
+fn llvmNativeBindGlobals(emitter: LlvmEmitter, globals: List<LlvmNativeGlobal>) {
+    for global in globals {
+        llvmBind(
+            emitter,
+            global.name,
+            LlvmValue {
+                typ: global.llvmType,
+                name: global.irName,
+                pointer: true,
+            },
+        )
     }
 }
 
@@ -1359,6 +1469,7 @@ fn llvmNativeEmitStmt(emitter: LlvmEmitter, stmt: LlvmNativeStmt) {
                 let _ = llvmAssign(emitter, stmt.name, value)
             }
         },
+        LlvmNativeStmtFieldAssign -> llvmNativeEmitFieldAssign(emitter, stmt),
         LlvmNativeStmtReturn -> {
             if stmt.childExprs.len() > 0 {
                 llvmReturn(emitter, llvmNativeEvalExpr(emitter, stmt.childExprs[0]))
@@ -1423,6 +1534,41 @@ fn llvmNativeAssignValue(emitter: LlvmEmitter, stmt: LlvmNativeStmt) -> LlvmValu
     llvmNativeApplyBinary(emitter, stmt.op, current, value, current.typ)
 }
 
+fn llvmNativeEmitFieldAssign(emitter: LlvmEmitter, stmt: LlvmNativeStmt) {
+    if stmt.childExprs.len() == 0 || stmt.fieldPath.len() == 0 {
+        return
+    }
+    let lookup = llvmLookup(emitter, stmt.name)
+    if !(lookup.found) || !(lookup.value.pointer) {
+        return
+    }
+    let root = llvmLoad(emitter, lookup.value)
+    let mut levels = [root]
+    for i in 1..stmt.fieldPath.len() {
+        let prev = stmt.fieldPath[i - 1]
+        levels.push(llvmExtractValue(emitter, levels[i - 1], prev.llvmType, prev.fieldIndex))
+    }
+    let mut value = llvmNativeEvalExpr(emitter, stmt.childExprs[0])
+    if stmt.op != "" && stmt.op != "=" {
+        let leaf = stmt.fieldPath[stmt.fieldPath.len() - 1]
+        let current = llvmExtractValue(
+            emitter,
+            levels[levels.len() - 1],
+            leaf.llvmType,
+            leaf.fieldIndex,
+        )
+        value = llvmNativeApplyBinary(emitter, stmt.op, current, value, current.typ)
+    }
+    let mut next = value
+    let mut i = stmt.fieldPath.len()
+    while i > 0 {
+        i = i - 1
+        let step = stmt.fieldPath[i]
+        next = llvmInsertValue(emitter, levels[i], next, step.fieldIndex)
+    }
+    llvmStore(emitter, lookup.value, next)
+}
+
 fn llvmNativeEvalExpr(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
     match expr.kind {
         LlvmNativeExprInt -> LlvmValue { typ: expr.llvmType, name: expr.text, pointer: false },
@@ -1435,7 +1581,11 @@ fn llvmNativeEvalExpr(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
         LlvmNativeExprString -> llvmStringLiteral(emitter, expr.text),
         LlvmNativeExprIdent -> llvmIdent(emitter, expr.name),
         LlvmNativeExprStructLit -> llvmNativeEvalStructLit(emitter, expr),
+        LlvmNativeExprListLit -> llvmNativeEvalListLit(emitter, expr),
+        LlvmNativeExprMapLit -> llvmNativeEvalMapLit(emitter, expr),
         LlvmNativeExprField -> llvmNativeEvalField(emitter, expr),
+        LlvmNativeExprListIndex -> llvmNativeEvalListIndex(emitter, expr),
+        LlvmNativeExprMapIndex -> llvmNativeEvalMapIndex(emitter, expr),
         LlvmNativeExprUnary -> llvmNativeEvalUnary(emitter, expr),
         LlvmNativeExprBinary -> llvmNativeEvalBinary(emitter, expr),
         LlvmNativeExprCall -> llvmNativeEvalCall(emitter, expr),
@@ -1462,6 +1612,60 @@ fn llvmNativeEvalField(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue 
     }
     let base = llvmNativeEvalExpr(emitter, expr.childExprs[0])
     llvmExtractValue(emitter, base, expr.llvmType, expr.fieldIndex)
+}
+
+fn llvmNativeEvalListLit(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    let list = llvmListNew(emitter)
+    for child in expr.childExprs {
+        let value = llvmNativeEvalExpr(emitter, child)
+        if llvmListUsesTypedRuntime(expr.elemLLVMType) {
+            llvmListPush(emitter, list, value)
+        } else {
+            let slot = llvmSpillToSlot(emitter, value)
+            let size = llvmSizeOf(emitter, expr.elemLLVMType)
+            llvmCallVoid(emitter, "osty_rt_list_push_bytes_v1", [list, slot, size])
+        }
+    }
+    list
+}
+
+fn llvmNativeEvalMapLit(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    let m = llvmMapNew(emitter)
+    let mut i = 0
+    while i + 1 < expr.childExprs.len() {
+        let key = llvmNativeEvalExpr(emitter, expr.childExprs[i])
+        let value = llvmNativeEvalExpr(emitter, expr.childExprs[i + 1])
+        let slot = llvmSpillToSlot(emitter, value)
+        llvmMapInsert(emitter, m, key, slot, expr.mapKeyIsString)
+        i = i + 2
+    }
+    m
+}
+
+fn llvmNativeEvalListIndex(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    if expr.childExprs.len() < 2 {
+        return llvmNativeZeroValue(expr.llvmType)
+    }
+    let list = llvmNativeEvalExpr(emitter, expr.childExprs[0])
+    let index = llvmNativeEvalExpr(emitter, expr.childExprs[1])
+    if llvmListUsesTypedRuntime(expr.elemLLVMType) {
+        return llvmListGet(emitter, list, index, expr.elemLLVMType)
+    }
+    let slot = llvmAllocaSlot(emitter, expr.elemLLVMType)
+    let size = llvmSizeOf(emitter, expr.elemLLVMType)
+    llvmCallVoid(emitter, "osty_rt_list_get_bytes_v1", [list, index, slot, size])
+    llvmLoadFromSlot(emitter, slot, expr.elemLLVMType)
+}
+
+fn llvmNativeEvalMapIndex(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    if expr.childExprs.len() < 2 {
+        return llvmNativeZeroValue(expr.llvmType)
+    }
+    let m = llvmNativeEvalExpr(emitter, expr.childExprs[0])
+    let key = llvmNativeEvalExpr(emitter, expr.childExprs[1])
+    let slot = llvmAllocaSlot(emitter, expr.llvmType)
+    llvmMapGetOrAbort(emitter, m, key, slot, expr.mapKeyIsString)
+    llvmLoadFromSlot(emitter, slot, expr.llvmType)
 }
 
 fn llvmNativeEvalUnary(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
@@ -1530,15 +1734,71 @@ fn llvmNativeEvalCall(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
         }
         return llvmCall(emitter, expr.llvmType, expr.name, [])
     }
-    let mut args = [llvmNativeEvalExpr(emitter, expr.childExprs[0])]
-    for i in 1..expr.childExprs.len() {
-        args.push(llvmNativeEvalExpr(emitter, expr.childExprs[i]))
+    let mut args: List<LlvmValue> = []
+    let mut argStart = 0
+    let mut restoreProjectedReceiver = false
+    let mut projectedBase = LlvmValue { typ: "i64", name: "0", pointer: true }
+    let mut projectedRecvSlot = LlvmValue { typ: "ptr", name: "null", pointer: false }
+    let mut projectedLeafType = "i64"
+    let mut projectedAggregates: List<LlvmValue> = []
+    if expr.firstArgByRef {
+        let first = expr.childExprs[0]
+        if first.kind != LlvmNativeExprIdent {
+            return llvmNativeZeroValue(expr.llvmType)
+        }
+        let lookup = llvmLookup(emitter, first.name)
+        if !(lookup.found) || !(lookup.value.pointer) {
+            return llvmNativeZeroValue(expr.llvmType)
+        }
+        if expr.receiverPath.len() == 0 {
+            args.push(LlvmValue { typ: "ptr", name: lookup.value.name, pointer: false })
+        } else {
+            projectedBase = lookup.value
+            let mut current = llvmLoad(emitter, lookup.value)
+            for step in expr.receiverPath {
+                projectedAggregates.push(current)
+                current = llvmExtractValue(emitter, current, step.llvmType, step.fieldIndex)
+            }
+            projectedLeafType = current.typ
+            projectedRecvSlot = llvmSpillToSlot(emitter, current)
+            args.push(projectedRecvSlot)
+            restoreProjectedReceiver = true
+        }
+        argStart = 1
     }
-    if expr.llvmType == "" || expr.llvmType == "void" {
+    for i in argStart..expr.childExprs.len() {
+        let mut value = llvmNativeEvalExpr(emitter, expr.childExprs[i])
+        if llvmNativeCallArgShouldSpill(expr, i) {
+            value = llvmSpillToSlot(emitter, value)
+        }
+        args.push(value)
+    }
+    let out = if expr.llvmType == "" || expr.llvmType == "void" {
         llvmCallVoid(emitter, expr.name, args)
-        return LlvmValue { typ: "void", name: "", pointer: false }
+        LlvmValue { typ: "void", name: "", pointer: false }
+    } else {
+        llvmCall(emitter, expr.llvmType, expr.name, args)
     }
-    llvmCall(emitter, expr.llvmType, expr.name, args)
+    if restoreProjectedReceiver {
+        let mut next = llvmLoadFromSlot(emitter, projectedRecvSlot, projectedLeafType)
+        let mut i = expr.receiverPath.len()
+        while i > 0 {
+            i = i - 1
+            let step = expr.receiverPath[i]
+            next = llvmInsertValue(emitter, projectedAggregates[i], next, step.fieldIndex)
+        }
+        llvmStore(emitter, projectedBase, next)
+    }
+    out
+}
+
+fn llvmNativeCallArgShouldSpill(expr: LlvmNativeExpr, idx: Int) -> Bool {
+    for target in expr.spillArgIndices {
+        if target == idx {
+            return true
+        }
+    }
+    false
 }
 
 fn llvmNativeEvalPrintln(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
@@ -2294,14 +2554,29 @@ pub fn llvmListRuntimeDeclarations() -> List<String> {
         "declare void @osty_rt_list_push_i1(ptr, i1)",
         "declare void @osty_rt_list_push_f64(ptr, double)",
         "declare void @osty_rt_list_push_ptr(ptr, ptr)",
+        "declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64)",
+        "declare void @osty_rt_list_insert_i64(ptr, i64, i64)",
+        "declare void @osty_rt_list_insert_i1(ptr, i64, i1)",
+        "declare void @osty_rt_list_insert_f64(ptr, i64, double)",
+        "declare void @osty_rt_list_insert_ptr(ptr, i64, ptr)",
         "declare i64 @osty_rt_list_get_i64(ptr, i64)",
         "declare i1 @osty_rt_list_get_i1(ptr, i64)",
         "declare double @osty_rt_list_get_f64(ptr, i64)",
         "declare ptr @osty_rt_list_get_ptr(ptr, i64)",
+        "declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64)",
         "declare void @osty_rt_list_set_i64(ptr, i64, i64)",
         "declare void @osty_rt_list_set_i1(ptr, i64, i1)",
         "declare void @osty_rt_list_set_f64(ptr, i64, double)",
         "declare void @osty_rt_list_set_ptr(ptr, i64, ptr)",
+        "declare ptr @osty_rt_list_sorted_i64(ptr)",
+        "declare ptr @osty_rt_list_sorted_i1(ptr)",
+        "declare ptr @osty_rt_list_sorted_f64(ptr)",
+        "declare ptr @osty_rt_list_sorted_string(ptr)",
+        "declare ptr @osty_rt_list_to_set_i64(ptr)",
+        "declare ptr @osty_rt_list_to_set_i1(ptr)",
+        "declare ptr @osty_rt_list_to_set_f64(ptr)",
+        "declare ptr @osty_rt_list_to_set_ptr(ptr)",
+        "declare ptr @osty_rt_list_to_set_string(ptr)",
     ]
 }
 
