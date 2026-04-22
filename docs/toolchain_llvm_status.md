@@ -1,5 +1,27 @@
 # Toolchain × LLVM compilability — status report
 
+## 2026-04-22 policy update — AST merged-probe gate retired
+
+`TestNativeToolchainMergedIsClean` (formerly at
+`internal/llvmgen/native_toolchain_clean_test.go`) has been **deleted**.
+It measured the legacy HIR→AST bridge surface, which the MIR-first real
+backend is actively replacing. Gating on it was locking in a surface we
+are deprecating, and any file migrating off `use go "..."` toward
+`use std.*` routinely tripped it for reasons unrelated to the
+self-host critical path (static type propagation gaps in the AST
+emitter's local `staticExprInfo`, not backend capability).
+
+The **real** self-host measurement is
+`TestProbeNativeToolchainMergedMIR` — parse → resolve → check →
+`ir.Lower` → `Monomorphize` → `mir.Lower` → `GenerateFromMIR`.
+Promoting that probe to authoritative + closing its first wall
+(`LLVM000 unsupported-source: unsupported local type <error> in
+checkHashKey`) is the next A-path deliverable. Historical language
+below still says "AST-merged CLEAN" because that was accurate at
+2026-04-21 snapshot time; treat it as archive, not current gate state.
+
+---
+
 Snapshot date: 2026-04-21 (late). Two major milestones since the morning
 refresh: (1) the native-only merged LLVM probe is now **CLEAN** — `#486`
 closed the last walls by landing `String.bytes()` / `String.chars()`

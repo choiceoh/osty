@@ -68,9 +68,16 @@ and falls back to the embedded selfhost bridge when that executable is
 unavailable, and `go generate ./internal/selfhost` still shells out to
 `cmd/osty-bootstrap-gen` to refresh `internal/selfhost/generated.go`. The
 whole-toolchain LLVM probe still first-walls on the bootstrap-only
-`runtime.golegacy.astbridge` bridge; the native-only merged
-probe (with bootstrap-only files skipped) now lowers CLEAN — the last
-wall (`LLVM015 [method_call_field]` on `buf.clear()` in ty.osty's
+`runtime.golegacy.astbridge` bridge. The native-only **AST** merged
+probe (`TestProbeNativeToolchainMerged`, with bootstrap-only files
+skipped) is informational only — its former authoritative gate
+`TestNativeToolchainMergedIsClean` was retired on 2026-04-22 because it
+measured the legacy HIR→AST bridge surface that the MIR-first real
+backend is replacing. The real self-host measurement is the **MIR**
+merged probe (`TestProbeNativeToolchainMergedMIR`), which runs the full
+`parse → resolve → check → ir.Lower → Monomorphize → mir.Lower →
+GenerateFromMIR` pipeline. The last AST-path wall before retirement
+(`LLVM015 [method_call_field]` on `buf.clear()` in ty.osty's
 generic-arg splitter) was closed by wiring `List<T>.clear()` through a
 new `osty_rt_list_clear` runtime helper. The earlier `Char` parameter
 lowering (`lspUtf16UnitsForChar`), `list_mixed_ptr`, non-ASCII string
