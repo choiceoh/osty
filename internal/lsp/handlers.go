@@ -465,7 +465,7 @@ func findIdentAt(a *docAnalysis, pos token.Pos) (*ast.Ident, *resolve.Symbol) {
 		return nil, nil
 	}
 	var best *ast.Ident
-	for id := range a.resolve.Refs {
+	for _, id := range a.resolve.RefIdents {
 		if containsPos(id.Pos(), id.End(), pos) {
 			// Prefer the narrowest span (useful once we have more
 			// nested node types, though Idents don't nest).
@@ -477,7 +477,7 @@ func findIdentAt(a *docAnalysis, pos token.Pos) (*ast.Ident, *resolve.Symbol) {
 	if best == nil {
 		return nil, nil
 	}
-	return best, a.resolve.Refs[best]
+	return best, a.resolve.RefsByID[best.ID]
 }
 
 // findNamedTypeAt mirrors findIdentAt for NamedType head references.
@@ -486,7 +486,7 @@ func findNamedTypeAt(a *docAnalysis, pos token.Pos) (*ast.NamedType, *resolve.Sy
 		return nil, nil
 	}
 	var best *ast.NamedType
-	for nt := range a.resolve.TypeRefs {
+	for _, nt := range a.resolve.TypeRefIdents {
 		if containsPos(nt.Pos(), nt.End(), pos) {
 			if best == nil || spanWidth(nt) < spanWidth(best) {
 				best = nt
@@ -496,7 +496,7 @@ func findNamedTypeAt(a *docAnalysis, pos token.Pos) (*ast.NamedType, *resolve.Sy
 	if best == nil {
 		return nil, nil
 	}
-	return best, a.resolve.TypeRefs[best]
+	return best, a.resolve.TypeRefsByID[best.ID]
 }
 
 // containsPos reports whether pos lies within [start, end). LSP

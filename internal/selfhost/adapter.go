@@ -213,6 +213,7 @@ func (r *FrontendRun) File() *ast.File {
 	}
 	atomic.AddInt64(&astbridgeLowerCount, 1)
 	r.file = astLowerPublicFile(r.parser.arena, r.Tokens())
+	ast.AssignIDs(r.file)
 	return r.file
 }
 

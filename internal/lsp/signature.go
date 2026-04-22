@@ -147,7 +147,7 @@ func calleeSymbol(call *ast.CallExpr, a *docAnalysis) (*resolve.Symbol, *ast.FnD
 		return nil, nil
 	}
 	if id, ok := call.Fn.(*ast.Ident); ok {
-		sym := a.resolve.Refs[id]
+		sym := a.resolve.RefsByID[id.ID]
 		if sym == nil {
 			return nil, nil
 		}

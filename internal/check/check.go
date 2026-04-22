@@ -25,11 +25,17 @@ type Result struct {
 	// SymTypes maps each resolver Symbol to its declared type.
 	SymTypes map[*resolve.Symbol]types.Type
 
-	// Instantiations records the concrete type-argument list at every
-	// generic call site (identified by its *ast.CallExpr). The Go
-	// backend emission reads this to emit one monomorphized copy of the
-	// callee per distinct argument list.
-	Instantiations map[*ast.CallExpr][]types.Type
+	// InstantiationsByID records the concrete type-argument list at
+	// every generic call site, keyed by the CallExpr's NodeID. The
+	// backends read this to emit one monomorphized copy of the callee
+	// per distinct argument list.
+	InstantiationsByID map[ast.NodeID][]types.Type
+
+	// InstantiationCalls enumerates the call sites behind
+	// InstantiationsByID so callers that need to walk every
+	// monomorphized call expression do not rely on pointer-keyed map
+	// iteration.
+	InstantiationCalls []*ast.CallExpr
 
 	// Diags aggregates the diagnostics produced during checking.
 	Diags []*diag.Diagnostic
@@ -289,19 +295,19 @@ func Workspace(
 
 func newResult() *Result {
 	return &Result{
-		Types:          map[ast.Expr]types.Type{},
-		LetTypes:       map[ast.Node]types.Type{},
-		SymTypes:       map[*resolve.Symbol]types.Type{},
-		Instantiations: map[*ast.CallExpr][]types.Type{},
+		Types:              map[ast.Expr]types.Type{},
+		LetTypes:           map[ast.Node]types.Type{},
+		SymTypes:           map[*resolve.Symbol]types.Type{},
+		InstantiationsByID: map[ast.NodeID][]types.Type{},
 	}
 }
 
 func resultWithSharedMaps(shared *Result) *Result {
 	return &Result{
-		Types:          shared.Types,
-		LetTypes:       shared.LetTypes,
-		SymTypes:       shared.SymTypes,
-		Instantiations: shared.Instantiations,
+		Types:              shared.Types,
+		LetTypes:           shared.LetTypes,
+		SymTypes:           shared.SymTypes,
+		InstantiationsByID: shared.InstantiationsByID,
 	}
 }
 
@@ -455,10 +461,16 @@ func diagnosticPrimaryEnd(d *diag.Diagnostic) token.Pos {
 // single resolved PackageFile. Returns nil if the file has no refs
 // map yet, which leaves the desugarer in local-file-only mode.
 func perFileResolveResult(pf *resolve.PackageFile) *resolve.Result {
-	if pf == nil || pf.Refs == nil {
+	if pf == nil || pf.RefsByID == nil {
 		return nil
 	}
-	return &resolve.Result{Refs: pf.Refs, TypeRefs: pf.TypeRefs, FileScope: pf.FileScope}
+	return &resolve.Result{
+		RefsByID:      pf.RefsByID,
+		TypeRefsByID:  pf.TypeRefsByID,
+		RefIdents:     pf.RefIdents,
+		TypeRefIdents: pf.TypeRefIdents,
+		FileScope:     pf.FileScope,
+	}
 }
 
 func isProviderStdlibPackage(ws *resolve.Workspace, path string, pkg *resolve.Package) bool {

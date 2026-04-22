@@ -495,7 +495,7 @@ type selfhostCheckedSource struct {
 type selfhostFileSegment struct {
 	file      *ast.File
 	scope     *resolve.Scope
-	refs      map[*ast.Ident]*resolve.Symbol
+	refs      map[ast.NodeID]*resolve.Symbol
 	base      int
 	sourceMap *sourcemap.Map
 }
@@ -1033,8 +1033,11 @@ func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked na
 				args = append(args, t)
 			}
 		}
-		if len(args) == len(inst.TypeArgs) {
-			result.Instantiations[call] = args
+		if len(args) == len(inst.TypeArgs) && call.ID != 0 {
+			if _, existed := result.InstantiationsByID[call.ID]; !existed {
+				result.InstantiationCalls = append(result.InstantiationCalls, call)
+			}
+			result.InstantiationsByID[call.ID] = args
 		}
 	}
 }
@@ -1804,10 +1807,10 @@ func selfhostFileSource(file *ast.File, rr *resolve.Result, src []byte, stdlib r
 		b.WriteByte('\n')
 	}
 	var scope *resolve.Scope
-	var refs map[*ast.Ident]*resolve.Symbol
+	var refs map[ast.NodeID]*resolve.Symbol
 	if rr != nil {
 		scope = rr.FileScope
-		refs = rr.Refs
+		refs = rr.RefsByID
 	}
 	return selfhostCheckedSource{
 		source: b.Bytes(),
@@ -1829,10 +1832,10 @@ func selfhostFileStructuredSource(file *ast.File, rr *resolve.Result, src []byte
 		}
 	}
 	var scope *resolve.Scope
-	var refs map[*ast.Ident]*resolve.Symbol
+	var refs map[ast.NodeID]*resolve.Symbol
 	if rr != nil {
 		scope = rr.FileScope
-		refs = rr.Refs
+		refs = rr.RefsByID
 	}
 	return selfhostCheckedSource{
 		source: append([]byte(nil), src...),
@@ -1866,7 +1869,7 @@ func selfhostPackageSource(pkg *resolve.Package, ws *resolve.Workspace, stdlib r
 		files = append(files, selfhostFileSegment{
 			file:      pf.File,
 			scope:     pf.FileScope,
-			refs:      pf.Refs,
+			refs:      pf.RefsByID,
 			base:      base,
 			sourceMap: pf.CanonicalMap,
 		})

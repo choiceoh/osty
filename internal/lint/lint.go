@@ -92,10 +92,10 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, chk *check.Result)
 	// each per-file lint pass.
 	used := map[*resolve.Symbol]bool{}
 	for _, pf := range pkg.Files {
-		for _, sym := range pf.Refs {
+		for _, sym := range pf.RefsByID {
 			used[sym] = true
 		}
-		for _, sym := range pf.TypeRefs {
+		for _, sym := range pf.TypeRefsByID {
 			used[sym] = true
 		}
 	}
@@ -119,9 +119,11 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, chk *check.Result)
 			continue
 		}
 		rr := &resolve.Result{
-			Refs:      pf.Refs,
-			TypeRefs:  pf.TypeRefs,
-			FileScope: pf.FileScope,
+			RefsByID:      pf.RefsByID,
+			TypeRefsByID:  pf.TypeRefsByID,
+			RefIdents:     pf.RefIdents,
+			TypeRefIdents: pf.TypeRefIdents,
+			FileScope:     pf.FileScope,
 		}
 		// Each file gets its own local Result so that filterSuppressed
 		// only considers this file's #[allow(...)] regions against this
@@ -178,10 +180,10 @@ func buildUsedSet(rr *resolve.Result) map[*resolve.Symbol]bool {
 	if rr == nil {
 		return used
 	}
-	for _, sym := range rr.Refs {
+	for _, sym := range rr.RefsByID {
 		used[sym] = true
 	}
-	for _, sym := range rr.TypeRefs {
+	for _, sym := range rr.TypeRefsByID {
 		used[sym] = true
 	}
 	return used

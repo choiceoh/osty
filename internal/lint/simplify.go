@@ -291,7 +291,7 @@ func exprsEqual(a, b ast.Expr, rr *resolve.Result) bool {
 		// If the resolver saw both, require identical Symbol identity
 		// so we don't flag `x` vs `x` that refer to distinct shadowed
 		// bindings (the shadow warning handles that separately).
-		sx, sy := rr.Refs[x], rr.Refs[y]
+		sx, sy := rr.RefsByID[x.ID], rr.RefsByID[y.ID]
 		if sx == nil || sy == nil {
 			// One unresolved — treat as possibly equal if names match.
 			return true

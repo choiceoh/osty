@@ -44,7 +44,7 @@ fn main() {
 	if got := chk.LookupSymType(res.FileScope.Lookup("id")); got == nil || got.String() != "fn(T) -> T" {
 		t.Fatalf("symbol type = %v, want fn(T) -> T", got)
 	}
-	if got := chk.Instantiations[call]; len(got) != 1 || got[0].String() != "Int" {
+	if got := chk.InstantiationsByID[call.ID]; len(got) != 1 || got[0].String() != "Int" {
 		t.Fatalf("call instantiation = %#v, want [Int]", got)
 	}
 }

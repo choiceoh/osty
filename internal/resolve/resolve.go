@@ -13,15 +13,22 @@ import (
 
 // Result is the output of resolving one Osty file.
 type Result struct {
-	// Refs maps each Ident node that the resolver examined to the symbol
-	// it refers to. Idents that failed resolution are not present in the
+	// RefsByID maps each resolved Ident's NodeID to the symbol it
+	// refers to. Idents that failed resolution are not present in the
 	// map (a corresponding diagnostic is emitted instead).
-	Refs map[*ast.Ident]*Symbol
-	// TypeRefs maps each NamedType node to the symbol the head name
-	// refers to (e.g. for `Map<String, Int>` it records the ref for
-	// `Map`). Only the head symbol is recorded; type arguments are
-	// resolved recursively and stored under their own NamedType keys.
-	TypeRefs map[*ast.NamedType]*Symbol
+	RefsByID map[ast.NodeID]*Symbol
+	// TypeRefsByID maps each NamedType's NodeID to the symbol the head
+	// name refers to (e.g. for `Map<String, Int>` it records the ref
+	// for `Map`). Only the head symbol is recorded; type arguments are
+	// resolved recursively under their own NamedType keys.
+	TypeRefsByID map[ast.NodeID]*Symbol
+	// RefIdents / TypeRefIdents enumerate the nodes behind RefsByID /
+	// TypeRefsByID, in no particular order. Callers that need to walk
+	// every resolved identifier iterate these instead of the maps so
+	// ports to the self-hosted compiler map cleanly onto
+	// List<&Ident> / List<&NamedType>.
+	RefIdents     []*ast.Ident
+	TypeRefIdents []*ast.NamedType
 	// FileScope is the file-level scope (children of the prelude). All
 	// top-level declarations live here.
 	FileScope *Scope
@@ -54,10 +61,12 @@ func FileWithStdlib(file *ast.File, prelude *Scope, stdlib StdlibProvider) *Resu
 	pr := ResolvePackage(pkg, prelude)
 	pf := pkg.Files[0]
 	return &Result{
-		Refs:      pf.Refs,
-		TypeRefs:  pf.TypeRefs,
-		FileScope: pf.FileScope,
-		Diags:     pr.Diags,
+		RefsByID:      pf.RefsByID,
+		TypeRefsByID:  pf.TypeRefsByID,
+		RefIdents:     pf.RefIdents,
+		TypeRefIdents: pf.TypeRefIdents,
+		FileScope:     pf.FileScope,
+		Diags:         pr.Diags,
 	}
 }
 
@@ -151,12 +160,10 @@ func (r *resolver) bodyPass(pkg *Package) {
 	for _, f := range pkg.Files {
 		fileScope := NewScope(r.pkgScope, "file:"+f.Path)
 		f.FileScope = fileScope
-		f.Refs = map[*ast.Ident]*Symbol{}
-		f.TypeRefs = map[*ast.NamedType]*Symbol{}
 
 		r.current = fileScope
-		r.refs = f.Refs
-		r.typeRefs = f.TypeRefs
+		r.refs = map[*ast.Ident]*Symbol{}
+		r.typeRefs = map[*ast.NamedType]*Symbol{}
 		r.file = f.File
 		r.filePath = f.Path
 
@@ -183,7 +190,45 @@ func (r *resolver) bodyPass(pkg *Package) {
 			}
 			restore()
 		}
+		f.RefsByID, f.RefIdents = projectRefsByID(r.refs)
+		f.TypeRefsByID, f.TypeRefIdents = projectTypeRefsByID(r.typeRefs)
 	}
+}
+
+// projectRefsByID rekeys Refs by ast.NodeID and emits the backing
+// ident list. Idents with ID == 0 (synthetic, never stamped by the
+// parser) are skipped; downstream consumers that key on NodeID treat
+// zero as unassigned.
+func projectRefsByID(refs map[*ast.Ident]*Symbol) (map[ast.NodeID]*Symbol, []*ast.Ident) {
+	if len(refs) == 0 {
+		return map[ast.NodeID]*Symbol{}, nil
+	}
+	byID := make(map[ast.NodeID]*Symbol, len(refs))
+	idents := make([]*ast.Ident, 0, len(refs))
+	for n, sym := range refs {
+		if n == nil || n.ID == 0 {
+			continue
+		}
+		byID[n.ID] = sym
+		idents = append(idents, n)
+	}
+	return byID, idents
+}
+
+func projectTypeRefsByID(refs map[*ast.NamedType]*Symbol) (map[ast.NodeID]*Symbol, []*ast.NamedType) {
+	if len(refs) == 0 {
+		return map[ast.NodeID]*Symbol{}, nil
+	}
+	byID := make(map[ast.NodeID]*Symbol, len(refs))
+	nts := make([]*ast.NamedType, 0, len(refs))
+	for n, sym := range refs {
+		if n == nil || n.ID == 0 {
+			continue
+		}
+		byID[n.ID] = sym
+		nts = append(nts, n)
+	}
+	return byID, nts
 }
 
 // resolver is the working state during one pass over a package. Each

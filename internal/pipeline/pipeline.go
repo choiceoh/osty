@@ -456,12 +456,12 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 	emit(Stage{
 		Name:     "resolve",
 		Duration: time.Since(t0),
-		Output:   fmt.Sprintf("%d refs, %d type refs", len(res.Refs), len(res.TypeRefs)),
+		Output:   fmt.Sprintf("%d refs, %d type refs", len(res.RefsByID), len(res.TypeRefsByID)),
 		Errors:   countSeverity(res.Diags, diag.Error),
 		Warnings: countSeverity(res.Diags, diag.Warning),
 		Counts: map[string]int{
-			"refs":      len(res.Refs),
-			"type_refs": len(res.TypeRefs),
+			"refs":      len(res.RefsByID),
+			"type_refs": len(res.TypeRefsByID),
 		},
 	})
 
@@ -499,7 +499,7 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 			"typed_exprs": typedExprs,
 			"let_types":   len(chk.LetTypes),
 			"sym_types":   len(chk.SymTypes),
-			"instantiate": len(chk.Instantiations),
+			"instantiate": len(chk.InstantiationsByID),
 		},
 	})
 
@@ -624,8 +624,8 @@ func RunLoadedPackage(pkg *resolve.Package, stream io.Writer, cfg Config) Result
 	r.AllDiags = append(r.AllDiags, res.Diags...)
 	totalRefs, totalTypeRefs := 0, 0
 	for _, pf := range pkg.Files {
-		totalRefs += len(pf.Refs)
-		totalTypeRefs += len(pf.TypeRefs)
+		totalRefs += len(pf.RefsByID)
+		totalTypeRefs += len(pf.TypeRefsByID)
 	}
 	emit(Stage{
 		Name:     "resolve",
@@ -673,7 +673,7 @@ func RunLoadedPackage(pkg *resolve.Package, stream io.Writer, cfg Config) Result
 			"typed_exprs": typedExprs,
 			"let_types":   len(chk.LetTypes),
 			"sym_types":   len(chk.SymTypes),
-			"instantiate": len(chk.Instantiations),
+			"instantiate": len(chk.InstantiationsByID),
 		},
 	})
 
@@ -682,9 +682,11 @@ func RunLoadedPackage(pkg *resolve.Package, stream io.Writer, cfg Config) Result
 	var lintDiags []*diag.Diagnostic
 	for _, pf := range pkg.Files {
 		fileRes := &resolve.Result{
-			Refs:      pf.Refs,
-			TypeRefs:  pf.TypeRefs,
-			FileScope: pf.FileScope,
+			RefsByID:      pf.RefsByID,
+			TypeRefsByID:  pf.TypeRefsByID,
+			RefIdents:     pf.RefIdents,
+			TypeRefIdents: pf.TypeRefIdents,
+			FileScope:     pf.FileScope,
 		}
 		lr := lint.File(pf.File, fileRes, chk)
 		lintDiags = append(lintDiags, lr.Diags...)
@@ -832,8 +834,8 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 			continue
 		}
 		for _, pf := range pkg.Files {
-			totalRefs += len(pf.Refs)
-			totalTypeRefs += len(pf.TypeRefs)
+			totalRefs += len(pf.RefsByID)
+			totalTypeRefs += len(pf.TypeRefsByID)
 		}
 	}
 	r.AllDiags = append(r.AllDiags, resolveDiags...)
@@ -906,9 +908,11 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 		}
 		for _, pf := range pkg.Files {
 			fileRes := &resolve.Result{
-				Refs:      pf.Refs,
-				TypeRefs:  pf.TypeRefs,
-				FileScope: pf.FileScope,
+				RefsByID:      pf.RefsByID,
+				TypeRefsByID:  pf.TypeRefsByID,
+				RefIdents:     pf.RefIdents,
+				TypeRefIdents: pf.TypeRefIdents,
+				FileScope:     pf.FileScope,
 			}
 			lr := lint.File(pf.File, fileRes, cr)
 			lintDiags = append(lintDiags, lr.Diags...)

@@ -78,12 +78,12 @@ func buildUsedDeclSet(rr *resolve.Result, usedSyms map[*resolve.Symbol]bool) map
 	if rr == nil {
 		return used
 	}
-	for _, sym := range rr.Refs {
+	for _, sym := range rr.RefsByID {
 		if sym != nil && sym.Decl != nil {
 			used[sym.Decl] = true
 		}
 	}
-	for _, sym := range rr.TypeRefs {
+	for _, sym := range rr.TypeRefsByID {
 		if sym != nil && sym.Decl != nil {
 			used[sym.Decl] = true
 		}

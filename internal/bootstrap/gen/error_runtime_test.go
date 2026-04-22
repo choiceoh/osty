@@ -107,8 +107,6 @@ func bootstrapGeneratedSource(t *testing.T, path string) string {
 	}
 
 	fileRes := &resolve.Result{
-		Refs:      entryFile.Refs,
-		TypeRefs:  entryFile.TypeRefs,
 		FileScope: entryFile.FileScope,
 		Diags:     rootRes.Diags,
 	}

@@ -457,9 +457,9 @@ func main() {
 				if rows, err := nativeResolvePackageRows(selected.pkg, selected.file.Path); err == nil && len(rows) > 0 {
 					fmt.Printf("# %s\n", selected.file.Path)
 					printNativeResolutionRows(rows)
-				} else if len(selected.file.Refs) > 0 {
+				} else if len(selected.file.RefsByID) > 0 {
 					fmt.Printf("# %s\n", selected.file.Path)
-					printResolutionRefs(selected.file.Refs)
+					printResolutionRefs(selected.file.RefIdents, selected.file.RefsByID)
 				}
 				if flags.showScopes {
 					if pkgScope := selected.file.FileScope.Parent(); pkgScope != nil {
@@ -1519,11 +1519,11 @@ func runResolvePackageInner(dir string, flags cliFlags) int {
 			// the package through *ast.File.
 			nativeErrored = true
 			ensureGoResolve()
-			if len(f.Refs) == 0 {
+			if len(f.RefsByID) == 0 {
 				continue
 			}
 			fmt.Printf("# %s\n", f.Path)
-			printResolutionRefs(f.Refs)
+			printResolutionRefs(f.RefIdents, f.RefsByID)
 			continue
 		}
 		if len(rows) == 0 {
@@ -1540,11 +1540,11 @@ func runResolvePackageInner(dir string, flags cliFlags) int {
 		// silently empty. EnsureFiles has already been called by
 		// the loop above in this branch.
 		for _, f := range pkg.Files {
-			if len(f.Refs) == 0 {
+			if len(f.RefsByID) == 0 {
 				continue
 			}
 			fmt.Printf("# %s\n", f.Path)
-			printResolutionRefs(f.Refs)
+			printResolutionRefs(f.RefIdents, f.RefsByID)
 		}
 	}
 	if flags.showScopes {
@@ -1753,11 +1753,9 @@ func fileOffsetMatchesAny(src []byte, pos token.Pos, names []string) bool {
 
 // printResolutionRefs dumps one file's resolved identifiers. Broken out
 // of printResolution so the package walker can print one header per file.
-func printResolutionRefs(refs map[*ast.Ident]*resolve.Symbol) {
-	idents := make([]*ast.Ident, 0, len(refs))
-	for id := range refs {
-		idents = append(idents, id)
-	}
+func printResolutionRefs(refIdents []*ast.Ident, refs map[ast.NodeID]*resolve.Symbol) {
+	idents := make([]*ast.Ident, 0, len(refIdents))
+	idents = append(idents, refIdents...)
 	sort.Slice(idents, func(i, j int) bool {
 		a, b := idents[i].PosV, idents[j].PosV
 		if a.Line != b.Line {
@@ -1766,7 +1764,7 @@ func printResolutionRefs(refs map[*ast.Ident]*resolve.Symbol) {
 		return a.Column < b.Column
 	})
 	for _, id := range idents {
-		s := refs[id]
+		s := refs[id.ID]
 		def := "<builtin>"
 		if s.Pos.Line > 0 {
 			def = fmt.Sprintf("%d:%d", s.Pos.Line, s.Pos.Column)
@@ -2133,10 +2131,8 @@ func loadLintConfigNear(startPath string) (lint.Config, bool) {
 // `line:col  Name  Kind  def-pos`. Useful for sanity-checking the
 // resolver's output without a debugger.
 func printResolution(_ *ast.File, res *resolve.Result) {
-	idents := make([]*ast.Ident, 0, len(res.Refs))
-	for id := range res.Refs {
-		idents = append(idents, id)
-	}
+	idents := make([]*ast.Ident, 0, len(res.RefIdents))
+	idents = append(idents, res.RefIdents...)
 	sort.Slice(idents, func(i, j int) bool {
 		a, b := idents[i].PosV, idents[j].PosV
 		if a.Line != b.Line {
@@ -2145,7 +2141,7 @@ func printResolution(_ *ast.File, res *resolve.Result) {
 		return a.Column < b.Column
 	})
 	for _, id := range idents {
-		s := res.Refs[id]
+		s := res.RefsByID[id.ID]
 		def := "<builtin>"
 		if s.Pos.Line > 0 {
 			def = fmt.Sprintf("%d:%d", s.Pos.Line, s.Pos.Column)
@@ -2688,10 +2684,12 @@ func (e *genPackageEntry) fileResult() *resolve.Result {
 		return nil
 	}
 	return &resolve.Result{
-		Refs:      e.file.Refs,
-		TypeRefs:  e.file.TypeRefs,
-		FileScope: e.file.FileScope,
-		Diags:     e.res.Diags,
+		RefsByID:      e.file.RefsByID,
+		TypeRefsByID:  e.file.TypeRefsByID,
+		RefIdents:     e.file.RefIdents,
+		TypeRefIdents: e.file.TypeRefIdents,
+		FileScope:     e.file.FileScope,
+		Diags:         e.res.Diags,
 	}
 }
 

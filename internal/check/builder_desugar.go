@@ -48,7 +48,7 @@ func DesugarBuildersInFile(f *ast.File, rr *resolve.Result) []*diag.Diagnostic {
 
 type builderDesugar struct {
 	localStructs map[string]*ast.StructDecl
-	refs         map[*ast.Ident]*resolve.Symbol
+	refs         map[ast.NodeID]*resolve.Symbol
 	diags        []*diag.Diagnostic
 	// scope is a stack of per-block variable → struct-decl bindings
 	// used to recover the receiver type of `ident.toBuilder()` when
@@ -61,7 +61,7 @@ func newBuilderDesugar(f *ast.File, rr *resolve.Result) *builderDesugar {
 		localStructs: map[string]*ast.StructDecl{},
 	}
 	if rr != nil {
-		out.refs = rr.Refs
+		out.refs = rr.RefsByID
 	}
 	for _, d := range f.Decls {
 		if sd, ok := d.(*ast.StructDecl); ok {
@@ -85,7 +85,7 @@ func (w *builderDesugar) structByIdent(id *ast.Ident) *ast.StructDecl {
 	if w.refs == nil {
 		return nil
 	}
-	sym := w.refs[id]
+	sym := w.refs[id.ID]
 	if sym == nil || sym.Kind != resolve.SymStruct {
 		return nil
 	}

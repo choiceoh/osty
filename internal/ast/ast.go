@@ -37,12 +37,19 @@ type (
 	}
 )
 
+// NodeID uniquely identifies an AST node within a single parse tree.
+// The zero value means unassigned; the parser assigns IDs sequentially
+// during construction. Unlike Go pointer identity, NodeID is portable
+// to the self-hosted compiler.
+type NodeID uint32
+
 // ==== Annotations ====
 
 // Annotation is `#[Name]` or `#[Name(arg, key = "v", ...)]`. Per v0.2 R26
 // the only permitted names in the v0.9 set are `json` and `deprecated`,
 // enforced by the parser.
 type Annotation struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	Name string
@@ -57,6 +64,7 @@ func (a *Annotation) End() token.Pos { return a.EndV }
 //	IDENT                — flag form (Key set, Value nil)
 //	IDENT '=' Literal    — key/value form (Key set, Value is the literal)
 type AnnotationArg struct {
+	ID    NodeID
 	PosV  token.Pos
 	Key   string
 	Value Expr // nil for flag form
@@ -288,6 +296,7 @@ func joinWithAnd(parts []string) string {
 
 // File is an entire .osty source file.
 type File struct {
+	ID NodeID
 	// Uses are all `use` declarations at the file's top.
 	Uses []*UseDecl
 	// Decls is the mix of declarations. For script files this may also
@@ -318,6 +327,7 @@ type Decorated interface {
 
 // UseDecl represents `use path`, `use path as alias`, and FFI forms.
 type UseDecl struct {
+	ID           NodeID
 	PosV         token.Pos
 	EndV         token.Pos
 	Path         []string // dot-separated path, or single entry with slashes for URLs
@@ -354,6 +364,7 @@ func (u *UseDecl) FFIPath() string {
 
 // FnDecl is a top-level or method function declaration.
 type FnDecl struct {
+	ID          NodeID
 	PosV        token.Pos
 	EndV        token.Pos
 	Pub         bool
@@ -379,6 +390,7 @@ func (f *FnDecl) Annots() []*Annotation { return f.Annotations }
 // so tools can rewrite `mut self` → `self` by deleting that token's span.
 // When Mut is false, MutPos is the zero Pos.
 type Receiver struct {
+	ID     NodeID
 	PosV   token.Pos
 	EndV   token.Pos
 	Mut    bool
@@ -395,6 +407,7 @@ func (r *Receiver) End() token.Pos { return r.EndV }
 // pattern (e.g. `|(k, v)| ...`) per SPEC_GAPS G4 — when Pattern is set,
 // Name is empty.
 type Param struct {
+	ID      NodeID
 	PosV    token.Pos
 	EndV    token.Pos
 	Name    string
@@ -420,6 +433,7 @@ func (p *Param) End() token.Pos {
 
 // GenericParam is a type parameter like `T` or `T: Ordered + Hashable`.
 type GenericParam struct {
+	ID          NodeID
 	PosV        token.Pos
 	EndV        token.Pos
 	Name        string
@@ -439,6 +453,7 @@ func (g *GenericParam) End() token.Pos {
 
 // StructDecl — a struct declaration (possibly partial).
 type StructDecl struct {
+	ID          NodeID
 	PosV        token.Pos
 	EndV        token.Pos
 	Pub         bool
@@ -458,6 +473,7 @@ func (s *StructDecl) Annots() []*Annotation { return s.Annotations }
 
 // Field is a struct field.
 type Field struct {
+	ID          NodeID
 	PosV        token.Pos
 	EndV        token.Pos
 	Pub         bool
@@ -488,6 +504,7 @@ func (f *Field) End() token.Pos {
 
 // EnumDecl — an enum declaration.
 type EnumDecl struct {
+	ID          NodeID
 	PosV        token.Pos
 	EndV        token.Pos
 	Pub         bool
@@ -507,6 +524,7 @@ func (e *EnumDecl) Annots() []*Annotation { return e.Annotations }
 
 // Variant is one enum variant: bare or tuple-like.
 type Variant struct {
+	ID          NodeID
 	PosV        token.Pos
 	EndV        token.Pos
 	Name        string
@@ -528,6 +546,7 @@ func (v *Variant) End() token.Pos {
 
 // InterfaceDecl — an interface declaration.
 type InterfaceDecl struct {
+	ID          NodeID
 	PosV        token.Pos
 	EndV        token.Pos
 	Pub         bool
@@ -547,6 +566,7 @@ func (i *InterfaceDecl) Annots() []*Annotation { return i.Annotations }
 
 // TypeAliasDecl — `type Name<T> = ...`.
 type TypeAliasDecl struct {
+	ID          NodeID
 	PosV        token.Pos
 	EndV        token.Pos
 	Pub         bool
@@ -569,6 +589,7 @@ func (t *TypeAliasDecl) Annots() []*Annotation { return t.Annotations }
 // lint's `unused_mut` autofix can delete the token directly. Zero Pos
 // when Mut is false.
 type LetDecl struct {
+	ID          NodeID
 	PosV        token.Pos
 	EndV        token.Pos
 	Pub         bool
@@ -592,6 +613,7 @@ func (l *LetDecl) Annots() []*Annotation { return l.Annotations }
 // NamedType is a reference to a named type, possibly with type arguments.
 // Example: `User`, `List<T>`, `Map<String, Int>`, `my.pkg.Type`.
 type NamedType struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	// Path allows qualified references: pkg.Type -> {"pkg", "Type"}.
@@ -605,6 +627,7 @@ func (n *NamedType) End() token.Pos { return n.EndV }
 
 // OptionalType wraps an inner type: T?.
 type OptionalType struct {
+	ID    NodeID
 	PosV  token.Pos
 	EndV  token.Pos
 	Inner Type
@@ -616,6 +639,7 @@ func (o *OptionalType) End() token.Pos { return o.EndV }
 
 // TupleType is `(T1, T2, ...)`.
 type TupleType struct {
+	ID    NodeID
 	PosV  token.Pos
 	EndV  token.Pos
 	Elems []Type
@@ -627,6 +651,7 @@ func (t *TupleType) End() token.Pos { return t.EndV }
 
 // FnType is `fn(A, B) -> R`.
 type FnType struct {
+	ID         NodeID
 	PosV       token.Pos
 	EndV       token.Pos
 	Params     []Type
@@ -642,6 +667,7 @@ func (f *FnType) End() token.Pos { return f.EndV }
 // Block is a sequence of statements evaluated in order. As an expression,
 // the result is the final expression statement.
 type Block struct {
+	ID    NodeID
 	PosV  token.Pos
 	EndV  token.Pos
 	Stmts []Stmt
@@ -658,6 +684,7 @@ func (b *Block) End() token.Pos { return b.EndV }
 // MutPos records the `mut` keyword's position when Mut is true, enabling
 // autofix of `let mut x` → `let x`. Zero Pos otherwise.
 type LetStmt struct {
+	ID      NodeID
 	PosV    token.Pos
 	EndV    token.Pos
 	Pattern Pattern
@@ -673,7 +700,8 @@ func (s *LetStmt) End() token.Pos { return s.EndV }
 
 // ExprStmt is an expression used in statement position.
 type ExprStmt struct {
-	X Expr
+	ID NodeID
+	X  Expr
 }
 
 func (*ExprStmt) stmtNode()        {}
@@ -683,6 +711,7 @@ func (s *ExprStmt) End() token.Pos { return s.X.End() }
 // AssignStmt covers `a = b`, compound assigns, and multiple assigns
 // `(a, b) = (c, d)`.
 type AssignStmt struct {
+	ID      NodeID
 	PosV    token.Pos
 	EndV    token.Pos
 	Op      token.Kind // ASSIGN, PLUSEQ, ...
@@ -696,6 +725,7 @@ func (s *AssignStmt) End() token.Pos { return s.EndV }
 
 // ReturnStmt — `return` or `return expr`.
 type ReturnStmt struct {
+	ID    NodeID
 	PosV  token.Pos
 	EndV  token.Pos
 	Value Expr // optional
@@ -707,6 +737,7 @@ func (s *ReturnStmt) End() token.Pos { return s.EndV }
 
 // BreakStmt is `break`.
 type BreakStmt struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	// Label is the optional `'label` target on `break 'label`.
@@ -729,6 +760,7 @@ func (s *BreakStmt) End() token.Pos { return s.EndV }
 
 // ContinueStmt is `continue`.
 type ContinueStmt struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	// Label is the optional `'label` target on `continue 'label`.
@@ -748,6 +780,7 @@ func (s *ContinueStmt) End() token.Pos { return s.EndV }
 // The spec explicitly declares channel send a statement rather than an
 // expression, so send cannot be composed with `=` or other operators.
 type ChanSendStmt struct {
+	ID      NodeID
 	PosV    token.Pos
 	EndV    token.Pos
 	Channel Expr
@@ -760,6 +793,7 @@ func (s *ChanSendStmt) End() token.Pos { return s.EndV }
 
 // DeferStmt schedules an expression or block to run on block exit.
 type DeferStmt struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	X    Expr // may be a Block
@@ -776,6 +810,7 @@ func (s *DeferStmt) End() token.Pos { return s.EndV }
 //	for x in xs { ... }                   // for-in     (Pattern x, Iter xs)
 //	for let Some(v) = e { ... }           // for-let    (IsForLet, Pattern, Iter)
 type ForStmt struct {
+	ID       NodeID
 	PosV     token.Pos
 	EndV     token.Pos
 	Label    string
@@ -796,6 +831,7 @@ func (s *ForStmt) End() token.Pos { return s.EndV }
 // Ident references a name. Dotted paths (foo.bar.baz) are represented as
 // FieldExpr chains; a single Ident is only a bare name.
 type Ident struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	Name string
@@ -807,6 +843,7 @@ func (i *Ident) End() token.Pos { return i.EndV }
 
 // Literal kinds carry the raw source text; conversion is deferred.
 type IntLit struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	Text string
@@ -817,6 +854,7 @@ func (l *IntLit) Pos() token.Pos { return l.PosV }
 func (l *IntLit) End() token.Pos { return l.EndV }
 
 type FloatLit struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	Text string
@@ -827,6 +865,7 @@ func (l *FloatLit) Pos() token.Pos { return l.PosV }
 func (l *FloatLit) End() token.Pos { return l.EndV }
 
 type CharLit struct {
+	ID    NodeID
 	PosV  token.Pos
 	EndV  token.Pos
 	Value rune
@@ -837,6 +876,7 @@ func (l *CharLit) Pos() token.Pos { return l.PosV }
 func (l *CharLit) End() token.Pos { return l.EndV }
 
 type ByteLit struct {
+	ID    NodeID
 	PosV  token.Pos
 	EndV  token.Pos
 	Value byte
@@ -858,6 +898,7 @@ func (l *ByteLit) End() token.Pos { return l.EndV }
 // is redundant — content is already normalized — but preserving it
 // keeps authorial intent across `osty fmt` round-trips.
 type StringLit struct {
+	ID       NodeID
 	PosV     token.Pos
 	EndV     token.Pos
 	IsRaw    bool
@@ -878,6 +919,7 @@ func (l *StringLit) End() token.Pos { return l.EndV }
 
 // BoolLit is `true` / `false`.
 type BoolLit struct {
+	ID    NodeID
 	PosV  token.Pos
 	EndV  token.Pos
 	Value bool
@@ -889,6 +931,7 @@ func (l *BoolLit) End() token.Pos { return l.EndV }
 
 // UnaryExpr is a prefix op: `-x`, `!x`, `~x`.
 type UnaryExpr struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	Op   token.Kind
@@ -902,6 +945,7 @@ func (e *UnaryExpr) End() token.Pos { return e.EndV }
 // BinaryExpr is `a op b` for arithmetic, comparison, logical, bitwise,
 // and the `??` coalescing operator.
 type BinaryExpr struct {
+	ID    NodeID
 	PosV  token.Pos
 	EndV  token.Pos
 	Op    token.Kind
@@ -915,6 +959,7 @@ func (e *BinaryExpr) End() token.Pos { return e.EndV }
 
 // QuestionExpr is the postfix `?` error/Option propagation.
 type QuestionExpr struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	X    Expr
@@ -937,6 +982,7 @@ func (e *QuestionExpr) End() token.Pos { return e.EndV }
 // positional arg list; this flag lets the formatter restore the surface
 // form by splitting the last arg out of the parenthesized list.
 type CallExpr struct {
+	ID                 NodeID
 	PosV               token.Pos
 	EndV               token.Pos
 	Fn                 Expr
@@ -947,6 +993,7 @@ type CallExpr struct {
 
 // Arg is either positional (Name == "") or keyword (Name != "").
 type Arg struct {
+	ID    NodeID
 	PosV  token.Pos
 	Name  string
 	Value Expr
@@ -966,6 +1013,7 @@ func (e *CallExpr) End() token.Pos { return e.EndV }
 
 // FieldExpr is `x.field` or `x?.field` (when IsOptional).
 type FieldExpr struct {
+	ID         NodeID
 	PosV       token.Pos
 	EndV       token.Pos
 	X          Expr
@@ -979,6 +1027,7 @@ func (e *FieldExpr) End() token.Pos { return e.EndV }
 
 // IndexExpr is `x[i]`.
 type IndexExpr struct {
+	ID    NodeID
 	PosV  token.Pos
 	EndV  token.Pos
 	X     Expr
@@ -993,6 +1042,7 @@ func (e *IndexExpr) End() token.Pos { return e.EndV }
 // type arguments. The parser attaches type args to the base (typically an
 // Ident or FieldExpr) via this wrapper.
 type TurbofishExpr struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	Base Expr
@@ -1005,6 +1055,7 @@ func (e *TurbofishExpr) End() token.Pos { return e.EndV }
 
 // RangeExpr is `a..b` / `a..=b` / `..b` / `a..`.
 type RangeExpr struct {
+	ID        NodeID
 	PosV      token.Pos
 	EndV      token.Pos
 	Start     Expr // optional
@@ -1022,6 +1073,7 @@ func (e *RangeExpr) End() token.Pos { return e.EndV }
 
 // ParenExpr groups `(expr)` — needed to distinguish `(a)` from `(a,)` tuple.
 type ParenExpr struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	X    Expr
@@ -1033,6 +1085,7 @@ func (e *ParenExpr) End() token.Pos { return e.EndV }
 
 // TupleExpr is `(a, b, c)`. The single-element form `(a,)` is a tuple.
 type TupleExpr struct {
+	ID    NodeID
 	PosV  token.Pos
 	EndV  token.Pos
 	Elems []Expr
@@ -1044,6 +1097,7 @@ func (e *TupleExpr) End() token.Pos { return e.EndV }
 
 // ListExpr is `[a, b, c]`.
 type ListExpr struct {
+	ID    NodeID
 	PosV  token.Pos
 	EndV  token.Pos
 	Elems []Expr
@@ -1055,6 +1109,7 @@ func (e *ListExpr) End() token.Pos { return e.EndV }
 
 // MapExpr is `{"k": v, ...}` or `{:}` (empty).
 type MapExpr struct {
+	ID      NodeID
 	PosV    token.Pos
 	EndV    token.Pos
 	Entries []*MapEntry
@@ -1062,6 +1117,7 @@ type MapExpr struct {
 }
 
 type MapEntry struct {
+	ID    NodeID
 	Key   Expr
 	Value Expr
 }
@@ -1088,6 +1144,7 @@ func (e *MapExpr) End() token.Pos { return e.EndV }
 
 // StructLit is `User { name: v, ..rest }`.
 type StructLit struct {
+	ID     NodeID
 	PosV   token.Pos
 	EndV   token.Pos
 	Type   Expr // usually Ident or FieldExpr chain naming the type
@@ -1103,6 +1160,7 @@ type StructLit struct {
 
 // StructLitField is one `name: expr` entry (or shorthand `name`).
 type StructLitField struct {
+	ID    NodeID
 	PosV  token.Pos
 	Name  string
 	Value Expr // nil iff shorthand (Name only)
@@ -1126,6 +1184,7 @@ func (e *StructLit) End() token.Pos { return e.EndV }
 // IfExpr covers `if cond { .. } else if cond { .. } else { .. }` and
 // `if let pat = e { .. } else { .. }`.
 type IfExpr struct {
+	ID      NodeID
 	PosV    token.Pos
 	EndV    token.Pos
 	IsIfLet bool
@@ -1144,12 +1203,13 @@ func (e *IfExpr) End() token.Pos { return e.EndV }
 // that produces a value has type `Never`; otherwise the type is the
 // join of every break-value branch.
 type LoopExpr struct {
-	PosV token.Pos
-	EndV token.Pos
-	Label string
+	ID       NodeID
+	PosV     token.Pos
+	EndV     token.Pos
+	Label    string
 	LabelPos token.Pos
 	LabelEnd token.Pos
-	Body *Block
+	Body     *Block
 }
 
 func (*LoopExpr) exprNode()        {}
@@ -1158,6 +1218,7 @@ func (e *LoopExpr) End() token.Pos { return e.EndV }
 
 // MatchExpr is `match scrutinee { arm, arm, ... }`.
 type MatchExpr struct {
+	ID        NodeID
 	PosV      token.Pos
 	EndV      token.Pos
 	Scrutinee Expr
@@ -1166,6 +1227,7 @@ type MatchExpr struct {
 
 // MatchArm is `pattern [if guard] -> body`.
 type MatchArm struct {
+	ID      NodeID
 	PosV    token.Pos
 	Pattern Pattern
 	Guard   Expr // optional
@@ -1186,6 +1248,7 @@ func (e *MatchExpr) End() token.Pos { return e.EndV }
 
 // ClosureExpr is `|params| body` or `|params| -> T { body }`.
 type ClosureExpr struct {
+	ID         NodeID
 	PosV       token.Pos
 	EndV       token.Pos
 	Params     []*Param // types optional (inferred)
@@ -1201,6 +1264,7 @@ func (e *ClosureExpr) End() token.Pos { return e.EndV }
 
 // WildcardPat is `_`.
 type WildcardPat struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 }
@@ -1211,6 +1275,7 @@ func (p *WildcardPat) End() token.Pos { return p.EndV }
 
 // LiteralPat is a literal used as a pattern.
 type LiteralPat struct {
+	ID      NodeID
 	PosV    token.Pos
 	EndV    token.Pos
 	Literal Expr // IntLit, FloatLit, StringLit, CharLit, BoolLit, ByteLit
@@ -1222,6 +1287,7 @@ func (p *LiteralPat) End() token.Pos { return p.EndV }
 
 // IdentPat is a pattern that binds an identifier.
 type IdentPat struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	Name string
@@ -1233,6 +1299,7 @@ func (p *IdentPat) End() token.Pos { return p.EndV }
 
 // TuplePat is `(a, b, _)`.
 type TuplePat struct {
+	ID    NodeID
 	PosV  token.Pos
 	EndV  token.Pos
 	Elems []Pattern
@@ -1244,6 +1311,7 @@ func (p *TuplePat) End() token.Pos { return p.EndV }
 
 // StructPat is `Point { x, y: n, .. }`.
 type StructPat struct {
+	ID     NodeID
 	PosV   token.Pos
 	EndV   token.Pos
 	Type   []string // qualified name (e.g. pkg.Type)
@@ -1254,6 +1322,7 @@ type StructPat struct {
 // StructPatField is one field entry: name (shorthand), name: pattern,
 // or name: literal.
 type StructPatField struct {
+	ID      NodeID
 	PosV    token.Pos
 	Name    string
 	Pattern Pattern // nil for shorthand (binds to Name)
@@ -1274,6 +1343,7 @@ func (p *StructPat) End() token.Pos { return p.EndV }
 // VariantPat is `Some(x)`, `Rect(w, h)`, `Empty`, `Ok(Some(n))`, with
 // optional qualified name `pkg.Variant(...)`.
 type VariantPat struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	Path []string  // e.g. ["Color", "Red"] or ["Some"]
@@ -1286,6 +1356,7 @@ func (p *VariantPat) End() token.Pos { return p.EndV }
 
 // RangePat is `0..=9`, `10..20`, `..=0`, `100..`.
 type RangePat struct {
+	ID        NodeID
 	PosV      token.Pos
 	EndV      token.Pos
 	Start     Expr // optional
@@ -1299,6 +1370,7 @@ func (p *RangePat) End() token.Pos { return p.EndV }
 
 // OrPat is `A | B | C`.
 type OrPat struct {
+	ID   NodeID
 	PosV token.Pos
 	EndV token.Pos
 	Alts []Pattern
@@ -1310,6 +1382,7 @@ func (p *OrPat) End() token.Pos { return p.EndV }
 
 // BindingPat is `name @ pattern`.
 type BindingPat struct {
+	ID      NodeID
 	PosV    token.Pos
 	EndV    token.Pos
 	Name    string

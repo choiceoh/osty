@@ -80,9 +80,11 @@ func LowerPackage(pkgName string, pkg *resolve.Package, chk *check.Result) (*Mod
 			continue
 		}
 		res := &resolve.Result{
-			Refs:      pf.Refs,
-			TypeRefs:  pf.TypeRefs,
-			FileScope: pf.FileScope,
+			RefsByID:      pf.RefsByID,
+			TypeRefsByID:  pf.TypeRefsByID,
+			RefIdents:     pf.RefIdents,
+			TypeRefIdents: pf.TypeRefIdents,
+			FileScope:     pf.FileScope,
 		}
 		l := &lowerer{pkgName: pkgName, file: pf.File, res: res, chk: chk}
 		fileMod, fileIssues := l.run()
@@ -729,10 +731,10 @@ func joinDottedPath(parts []string) string {
 }
 
 func (l *lowerer) typeRef(nt *ast.NamedType) *resolve.Symbol {
-	if l.res == nil {
+	if l.res == nil || nt == nil {
 		return nil
 	}
-	return l.res.TypeRefs[nt]
+	return l.res.TypeRefsByID[nt.ID]
 }
 
 // primitiveByName maps a scalar type name to the IR singleton.
@@ -1280,7 +1282,7 @@ func (l *lowerer) lowerIdent(id *ast.Ident) Expr {
 	out := &Ident{Name: id.Name, SpanV: nodeSpan(id), T: ErrTypeVal}
 	var sym *resolve.Symbol
 	if l.res != nil {
-		if s := l.res.Refs[id]; s != nil {
+		if s := l.res.RefsByID[id.ID]; s != nil {
 			sym = s
 			out.Kind = identKind(s)
 		}
@@ -1341,10 +1343,10 @@ func identTypeFromDecl(decl ast.Node) ast.Type {
 }
 
 func (l *lowerer) symbol(id *ast.Ident) *resolve.Symbol {
-	if l.res == nil {
+	if l.res == nil || id == nil {
 		return nil
 	}
-	return l.res.Refs[id]
+	return l.res.RefsByID[id.ID]
 }
 
 func identKind(sym *resolve.Symbol) IdentKind {
@@ -1747,10 +1749,10 @@ func (l *lowerer) lowerArg(a *ast.Arg) Arg {
 // checker recorded for this call site (monomorphisation info), or nil
 // when the checker did not annotate it.
 func (l *lowerer) instantiationArgs(e *ast.CallExpr) []Type {
-	if l.chk == nil || l.chk.Instantiations == nil {
+	if l.chk == nil || l.chk.InstantiationsByID == nil || e == nil {
 		return nil
 	}
-	raw, ok := l.chk.Instantiations[e]
+	raw, ok := l.chk.InstantiationsByID[e.ID]
 	if !ok || len(raw) == 0 {
 		return nil
 	}
