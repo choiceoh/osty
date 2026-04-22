@@ -2294,47 +2294,48 @@ func llvmListElementSuffix(typ string) string {
 
 // Osty: toolchain/llvmgen.osty:1819:5
 func llvmListRuntimeDeclarations() []string {
+	// List runtime ops. `osty_rt_list_len` is a pure read of the
+	// list's `len` field — annotated `memory(read)` so LLVM LICMs
+	// the call and CSEs repeated reads on the same list.
+	//
+	// Mutating ops (push / insert / set / sorted / to_set / get_*
+	// / data_*) are marked `nounwind willreturn` — they may write
+	// but never throw and always return. That's enough for LLVM to
+	// speculate around them and simplify control flow, without
+	// claiming they're pure.
 	return []string{
-		"declare ptr @osty_rt_list_new()",
-		// `osty_rt_list_len` is a single load of the list's `len`
-		// field — no locking, no allocations, no GC interaction.
-		// Annotating it `nounwind willreturn memory(read)` lets
-		// LLVM's LICM hoist the call out of loops whose bound is
-		// `i < list.len()`, and lets CSE collapse repeated
-		// `list.len()` reads on the same list inside a function.
-		// Both wins matter for the HIR-fallback bench path that
-		// never sees the native-owned fast-path priming.
+		"declare ptr @osty_rt_list_new() nounwind willreturn",
 		"declare i64 @osty_rt_list_len(ptr) nounwind willreturn memory(read)",
-		"declare void @osty_rt_list_push_i64(ptr, i64)",
-		"declare void @osty_rt_list_push_i1(ptr, i1)",
-		"declare void @osty_rt_list_push_f64(ptr, double)",
-		"declare void @osty_rt_list_push_ptr(ptr, ptr)",
-		"declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64)",
-		"declare void @osty_rt_list_insert_i64(ptr, i64, i64)",
-		"declare void @osty_rt_list_insert_i1(ptr, i64, i1)",
-		"declare void @osty_rt_list_insert_f64(ptr, i64, double)",
-		"declare void @osty_rt_list_insert_ptr(ptr, i64, ptr)",
-		"declare i64 @osty_rt_list_get_i64(ptr, i64)",
-		"declare i1 @osty_rt_list_get_i1(ptr, i64)",
-		"declare double @osty_rt_list_get_f64(ptr, i64)",
-		"declare ptr @osty_rt_list_get_ptr(ptr, i64)",
-		"declare ptr @osty_rt_list_data_i64(ptr)",
-		"declare ptr @osty_rt_list_data_i1(ptr)",
-		"declare ptr @osty_rt_list_data_f64(ptr)",
-		"declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64)",
-		"declare void @osty_rt_list_set_i64(ptr, i64, i64)",
-		"declare void @osty_rt_list_set_i1(ptr, i64, i1)",
-		"declare void @osty_rt_list_set_f64(ptr, i64, double)",
-		"declare void @osty_rt_list_set_ptr(ptr, i64, ptr)",
-		"declare ptr @osty_rt_list_sorted_i64(ptr)",
-		"declare ptr @osty_rt_list_sorted_i1(ptr)",
-		"declare ptr @osty_rt_list_sorted_f64(ptr)",
-		"declare ptr @osty_rt_list_sorted_string(ptr)",
-		"declare ptr @osty_rt_list_to_set_i64(ptr)",
-		"declare ptr @osty_rt_list_to_set_i1(ptr)",
-		"declare ptr @osty_rt_list_to_set_f64(ptr)",
-		"declare ptr @osty_rt_list_to_set_ptr(ptr)",
-		"declare ptr @osty_rt_list_to_set_string(ptr)",
+		"declare void @osty_rt_list_push_i64(ptr, i64) nounwind willreturn",
+		"declare void @osty_rt_list_push_i1(ptr, i1) nounwind willreturn",
+		"declare void @osty_rt_list_push_f64(ptr, double) nounwind willreturn",
+		"declare void @osty_rt_list_push_ptr(ptr, ptr) nounwind willreturn",
+		"declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64) nounwind willreturn",
+		"declare void @osty_rt_list_insert_i64(ptr, i64, i64) nounwind willreturn",
+		"declare void @osty_rt_list_insert_i1(ptr, i64, i1) nounwind willreturn",
+		"declare void @osty_rt_list_insert_f64(ptr, i64, double) nounwind willreturn",
+		"declare void @osty_rt_list_insert_ptr(ptr, i64, ptr) nounwind willreturn",
+		"declare i64 @osty_rt_list_get_i64(ptr, i64) nounwind willreturn",
+		"declare i1 @osty_rt_list_get_i1(ptr, i64) nounwind willreturn",
+		"declare double @osty_rt_list_get_f64(ptr, i64) nounwind willreturn",
+		"declare ptr @osty_rt_list_get_ptr(ptr, i64) nounwind willreturn",
+		"declare ptr @osty_rt_list_data_i64(ptr) nounwind willreturn",
+		"declare ptr @osty_rt_list_data_i1(ptr) nounwind willreturn",
+		"declare ptr @osty_rt_list_data_f64(ptr) nounwind willreturn",
+		"declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64) nounwind willreturn",
+		"declare void @osty_rt_list_set_i64(ptr, i64, i64) nounwind willreturn",
+		"declare void @osty_rt_list_set_i1(ptr, i64, i1) nounwind willreturn",
+		"declare void @osty_rt_list_set_f64(ptr, i64, double) nounwind willreturn",
+		"declare void @osty_rt_list_set_ptr(ptr, i64, ptr) nounwind willreturn",
+		"declare ptr @osty_rt_list_sorted_i64(ptr) nounwind willreturn",
+		"declare ptr @osty_rt_list_sorted_i1(ptr) nounwind willreturn",
+		"declare ptr @osty_rt_list_sorted_f64(ptr) nounwind willreturn",
+		"declare ptr @osty_rt_list_sorted_string(ptr) nounwind willreturn",
+		"declare ptr @osty_rt_list_to_set_i64(ptr) nounwind willreturn",
+		"declare ptr @osty_rt_list_to_set_i1(ptr) nounwind willreturn",
+		"declare ptr @osty_rt_list_to_set_f64(ptr) nounwind willreturn",
+		"declare ptr @osty_rt_list_to_set_ptr(ptr) nounwind willreturn",
+		"declare ptr @osty_rt_list_to_set_string(ptr) nounwind willreturn",
 	}
 }
 
@@ -2439,7 +2440,19 @@ func llvmListSetPtr(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue, val
 
 // Osty: toolchain/llvmgen.osty:1943:5
 func llvmMapRuntimeDeclarations() []string {
-	return []string{"declare ptr @osty_rt_map_new()", "declare i64 @osty_rt_map_len(ptr)", "declare ptr @osty_rt_map_keys(ptr)", "declare i1 @osty_rt_map_contains_i64(ptr, i64)", "declare i1 @osty_rt_map_contains_i1(ptr, i1)", "declare i1 @osty_rt_map_contains_f64(ptr, double)", "declare i1 @osty_rt_map_contains_ptr(ptr, ptr)", "declare i1 @osty_rt_map_contains_string(ptr, ptr)", "declare void @osty_rt_map_insert_i64(ptr, i64, ptr)", "declare void @osty_rt_map_insert_i1(ptr, i1, ptr)", "declare void @osty_rt_map_insert_f64(ptr, double, ptr)", "declare void @osty_rt_map_insert_ptr(ptr, ptr, ptr)", "declare void @osty_rt_map_insert_string(ptr, ptr, ptr)", "declare i1 @osty_rt_map_remove_i64(ptr, i64)", "declare i1 @osty_rt_map_remove_i1(ptr, i1)", "declare i1 @osty_rt_map_remove_f64(ptr, double)", "declare i1 @osty_rt_map_remove_ptr(ptr, ptr)", "declare i1 @osty_rt_map_remove_string(ptr, ptr)", "declare void @osty_rt_map_get_or_abort_i64(ptr, i64, ptr)", "declare void @osty_rt_map_get_or_abort_i1(ptr, i1, ptr)", "declare void @osty_rt_map_get_or_abort_f64(ptr, double, ptr)", "declare void @osty_rt_map_get_or_abort_ptr(ptr, ptr, ptr)", "declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr)"}
+	// Map runtime ops acquire/release locks and may allocate (for
+	// insert paths), so they can't carry `memory(read)`. But they
+	// never throw and always return, so `nounwind willreturn` is
+	// safe — lets LLVM speculate around calls and simplify CFG.
+	//
+	// `osty_rt_map_incr_i64_<suffix>(map, key, delta) -> i64` runs
+	// `map[key] = (map.get(key) ?? 0) + delta` under a single
+	// lock acquire/release pair. Replaces the common
+	// `containsKey + getOr + insert` 3-op pattern for Map<K, Int>
+	// counters — emitted by the compiler pattern matcher when that
+	// specific legacy shape appears in user code, and usable
+	// directly as an intrinsic-backed stdlib method.
+	return []string{"declare ptr @osty_rt_map_new() nounwind willreturn", "declare i64 @osty_rt_map_len(ptr) nounwind willreturn", "declare ptr @osty_rt_map_keys(ptr) nounwind willreturn", "declare i1 @osty_rt_map_contains_i64(ptr, i64) nounwind willreturn", "declare i1 @osty_rt_map_contains_i1(ptr, i1) nounwind willreturn", "declare i1 @osty_rt_map_contains_f64(ptr, double) nounwind willreturn", "declare i1 @osty_rt_map_contains_ptr(ptr, ptr) nounwind willreturn", "declare i1 @osty_rt_map_contains_string(ptr, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_i64(ptr, i64, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_i1(ptr, i1, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_f64(ptr, double, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_ptr(ptr, ptr, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_string(ptr, ptr, ptr) nounwind willreturn", "declare i1 @osty_rt_map_remove_i64(ptr, i64) nounwind willreturn", "declare i1 @osty_rt_map_remove_i1(ptr, i1) nounwind willreturn", "declare i1 @osty_rt_map_remove_f64(ptr, double) nounwind willreturn", "declare i1 @osty_rt_map_remove_ptr(ptr, ptr) nounwind willreturn", "declare i1 @osty_rt_map_remove_string(ptr, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_i64(ptr, i64, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_i1(ptr, i1, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_f64(ptr, double, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_ptr(ptr, ptr, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_i64(ptr, i64, i64) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_i1(ptr, i1, i64) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_f64(ptr, double, i64) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_ptr(ptr, ptr, i64) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_string(ptr, ptr, i64) nounwind willreturn"}
 }
 
 // Osty: toolchain/llvmgen.osty:1971:5

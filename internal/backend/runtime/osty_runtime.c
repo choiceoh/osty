@@ -5957,6 +5957,34 @@ OSTY_RT_DEFINE_MAP_KEY_OPS(f64, double)
 OSTY_RT_DEFINE_MAP_KEY_OPS(ptr, void *)
 OSTY_RT_DEFINE_MAP_KEY_OPS(string, const char *)
 
+// `osty_rt_map_incr_i64_<suffix>(map, key, delta)`: perform
+// `map[key] = (map.get(key) ?? 0) + delta` as a single atomic
+// operation under one lock acquire/release. Replaces the common
+// `containsKey + getOr + insert` 3-op pattern for Map<K, Int>
+// counters — one hash lookup instead of three, one lock-pair
+// instead of three.
+//
+// Returns the new value. Used by Map<K, Int>.incrBy stdlib method
+// and by the compiler pattern-matcher that recognises the
+// legacy anti-pattern in user code.
+#define OSTY_RT_DEFINE_MAP_INCR_I64_OPS(suffix, ctype) \
+int64_t osty_rt_map_incr_i64_##suffix(void *raw_map, ctype key, int64_t delta) { \
+    int64_t current = 0; \
+    int64_t next; \
+    osty_rt_map_lock(raw_map); \
+    osty_rt_map_get_raw(raw_map, &key, &current); \
+    next = current + delta; \
+    osty_rt_map_insert_raw(raw_map, &key, &next); \
+    osty_rt_map_unlock(raw_map); \
+    return next; \
+}
+
+OSTY_RT_DEFINE_MAP_INCR_I64_OPS(i64, int64_t)
+OSTY_RT_DEFINE_MAP_INCR_I64_OPS(i1, bool)
+OSTY_RT_DEFINE_MAP_INCR_I64_OPS(f64, double)
+OSTY_RT_DEFINE_MAP_INCR_I64_OPS(ptr, void *)
+OSTY_RT_DEFINE_MAP_INCR_I64_OPS(string, const char *)
+
 static void osty_rt_set_reserve(osty_rt_set *set, int64_t min_cap) {
     int64_t next_cap = set->cap;
     size_t bytes;
