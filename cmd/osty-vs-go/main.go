@@ -1206,10 +1206,14 @@ func aggregateOstyBenchRuns(pair string, runs [][]benchResult) []benchResult {
 //	  min=…ns p50=…ns p99=…ns max=…ns
 //
 // We key each summary to the most recent `ok\tbench*` name — --serial
-// keeps that ordering stable.
+// keeps that ordering stable. The runner computes ns/op as float
+// `total/iter` rather than trusting the integer `avg=` field — the
+// MIR backend's `avg` rounds sub-ns bodies to 0, and `total/iter`
+// preserves the fractional nanoseconds the clock resolution
+// actually captured.
 var (
 	ostyOkLineRE   = regexp.MustCompile(`^ok\t(bench[A-Za-z0-9_]+)\t`)
-	ostyBenchSumRE = regexp.MustCompile(`^bench\s+.+?\s+iter=\d+\s+total=\d+ns\s+avg=(\d+)ns(?:\s+bytes/op=(\d+))?`)
+	ostyBenchSumRE = regexp.MustCompile(`^bench\s+.+?\s+iter=(\d+)\s+total=(\d+)ns\s+avg=\d+ns(?:\s+bytes/op=(\d+))?`)
 )
 
 func parseOstyBenchOutput(pair, out string) []benchResult {
@@ -1223,13 +1227,18 @@ func parseOstyBenchOutput(pair, out string) []benchResult {
 			continue
 		}
 		if m := ostyBenchSumRE.FindStringSubmatch(line); m != nil && currentName != "" {
-			avg, err := strconv.ParseFloat(m[1], 64)
+			iter, err := strconv.ParseFloat(m[1], 64)
+			if err != nil || iter <= 0 {
+				continue
+			}
+			total, err := strconv.ParseFloat(m[2], 64)
 			if err != nil {
 				continue
 			}
+			avg := total / iter
 			bytes := math.NaN()
-			if m[2] != "" {
-				if v, err := strconv.ParseFloat(m[2], 64); err == nil {
+			if m[3] != "" {
+				if v, err := strconv.ParseFloat(m[3], 64); err == nil {
 					bytes = v
 				}
 			}

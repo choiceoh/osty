@@ -2079,14 +2079,19 @@ pub fn llvmClangCompileObjectArgs(
         args.push("-target")
         args.push(target)
     }
-    // -O2 is the baseline production optimization level. Without it
-    // clang defaults to -O0, which leaves every alloca/load/store the
-    // backend emitted in place, defeats CSE/LICM, and prevents
-    // vectorization of loops that already carry the right metadata
-    // (`!llvm.loop.vectorize.enable`, `llvm.loop.parallel_accesses`).
-    // Measured on the longer osty-vs-go workloads: -O0 → -O2 closes
-    // simd_stats from ~100x slower than Go down to a small constant.
-    args.push("-O2")
+    // -O3 + thin-LTO is the production tier. -O3 over -O2 unlocks more
+    // aggressive vectorization on bounds-check-free fast paths, and
+    // -flto=thin lets the link stage inline the runtime helpers
+    // (osty_rt_list_get_i64, osty_rt_list_len, …) at every call site —
+    // without LTO every xs[i] is a genuine function call across a TU
+    // boundary, which on List<Int>-heavy workloads (quicksort, matmul,
+    // lane_route) dominated per-iter cost. ThinLTO was picked over
+    // full `-flto` because its parallel pipeline keeps the already
+    // compile-heavy test runner's link step within seconds, and the
+    // inlining budget is still large enough to fold the primitive
+    // list/set helpers.
+    args.push("-O3")
+    args.push("-flto=thin")
     args.push("-c")
     args.push(irPath)
     args.push("-o")
@@ -2104,6 +2109,14 @@ pub fn llvmClangLinkBinaryArgs(
         args.push("-target")
         args.push(target)
     }
+    // -flto=thin on the link line tells the linker to run thinLTO's
+    // cross-module optimization pass. Without it, any objects that
+    // happen to be non-LTO (or any object compiled before we flipped
+    // the compile-side flag) silently drop to "call this symbol as-is"
+    // and we lose the inlining win for any bench still referencing
+    // pre-LTO runtime archives.
+    args.push("-O3")
+    args.push("-flto=thin")
     for objectPath in objectPaths {
         args.push(objectPath)
     }
