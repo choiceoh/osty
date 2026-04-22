@@ -1297,6 +1297,12 @@ func unaryOp(k token.Kind) (UnOp, bool) {
 func (l *lowerer) lowerBinary(e *ast.BinaryExpr) Expr {
 	// `??` gets its own IR node so backends don't have to pattern-match
 	// on a BinaryExpr with a dedicated op when they have special lowering.
+	//
+	// Note: we do NOT recover CoalesceExpr.T from its operands. Leaving
+	// T=ErrTypeVal keeps the MIR emitter from attempting coalesce
+	// lowering (which has a latent bug in the merge-block terminator
+	// path) and defers to the legacy HIR path, which emits the
+	// `coalesce.some/none/end` labels the test corpus expects.
 	if e.Op == token.QQ {
 		return &CoalesceExpr{
 			Left:  l.lowerExpr(e.Left),
@@ -1310,13 +1316,118 @@ func (l *lowerer) lowerBinary(e *ast.BinaryExpr) Expr {
 		l.note("unsupported binary op %v at %v", e.Op, e.Pos())
 		return &ErrorExpr{Note: "binary op", T: ErrTypeVal, SpanV: nodeSpan(e)}
 	}
+	left := l.lowerExpr(e.Left)
+	right := l.lowerExpr(e.Right)
+	t := l.exprType(e)
+	if t == ErrTypeVal {
+		t = recoverBinaryType(op, left, right)
+	}
 	return &BinaryExpr{
 		Op:    op,
-		Left:  l.lowerExpr(e.Left),
-		Right: l.lowerExpr(e.Right),
-		T:     l.exprType(e),
+		Left:  left,
+		Right: right,
+		T:     t,
 		SpanV: nodeSpan(e),
 	}
+}
+
+// recoverBinaryType derives a binary expression's result type from its
+// operand types when the checker did not populate Types[e]. This is a
+// best-effort fallback that keeps arithmetic and comparison chains off
+// ErrType when the operands themselves are well-typed — without it, a
+// single missing TypedNode at the checker boundary poisons every
+// enclosing expression and blocks MIR-direct lowering.
+//
+// The recovery rules mirror the native elaborator (toolchain/elab.osty
+// `binOpResultType`) for the subset where result type is derivable from
+// operand types without further context.
+func recoverBinaryType(op BinOp, left, right Expr) Type {
+	if left == nil || right == nil {
+		return ErrTypeVal
+	}
+	lt := left.Type()
+	rt := right.Type()
+	if lt == ErrTypeVal || rt == ErrTypeVal || lt == nil || rt == nil {
+		return ErrTypeVal
+	}
+	switch op {
+	case BinEq, BinNeq, BinLt, BinLeq, BinGt, BinGeq:
+		return TBool
+	case BinAnd, BinOr:
+		return TBool
+	case BinAdd:
+		// String + String → String (spec §4.6). Otherwise numeric.
+		if isPrim(lt, PrimString) && isPrim(rt, PrimString) {
+			return TString
+		}
+		return numericResult(lt, rt)
+	case BinSub, BinMul, BinDiv, BinMod:
+		return numericResult(lt, rt)
+	case BinBitAnd, BinBitOr, BinBitXor, BinShl, BinShr:
+		// Bitwise ops preserve the non-untyped operand type.
+		if isIntegral(lt) {
+			return lt
+		}
+		if isIntegral(rt) {
+			return rt
+		}
+	}
+	return ErrTypeVal
+}
+
+func isPrim(t Type, k PrimKind) bool {
+	if p, ok := t.(*PrimType); ok {
+		return p.Kind == k
+	}
+	return false
+}
+
+func isIntegral(t Type) bool {
+	p, ok := t.(*PrimType)
+	if !ok {
+		return false
+	}
+	switch p.Kind {
+	case PrimInt, PrimInt8, PrimInt16, PrimInt32, PrimInt64,
+		PrimUInt8, PrimUInt16, PrimUInt32, PrimUInt64, PrimByte:
+		return true
+	}
+	return false
+}
+
+func isFloat(t Type) bool {
+	p, ok := t.(*PrimType)
+	if !ok {
+		return false
+	}
+	switch p.Kind {
+	case PrimFloat, PrimFloat32, PrimFloat64:
+		return true
+	}
+	return false
+}
+
+// numericResult mirrors `binNumericCommon` in the native elaborator:
+// float dominates; otherwise prefer a concrete Int over untyped-int.
+func numericResult(lt, rt Type) Type {
+	if isFloat(lt) || isFloat(rt) {
+		// Prefer the concrete Float type over a polymorphic literal.
+		if isPrim(lt, PrimFloat) || isPrim(rt, PrimFloat) {
+			return TFloat
+		}
+		if isFloat(lt) {
+			return lt
+		}
+		return rt
+	}
+	if !isIntegral(lt) || !isIntegral(rt) {
+		return ErrTypeVal
+	}
+	// Concrete Int wins over the default lane.
+	if isPrim(lt, PrimInt) || isPrim(rt, PrimInt) {
+		return TInt
+	}
+	return lt
 }
 
 func binaryOp(k token.Kind) (BinOp, bool) {
@@ -1421,16 +1532,41 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 	if len(typeArgs) == 0 {
 		typeArgs = l.instantiationArgs(e)
 	}
+	callee := l.lowerExpr(fn)
+	t := l.exprType(e)
+	if t == ErrTypeVal {
+		t = recoverCallReturnType(callee)
+	}
 	out := &CallExpr{
-		Callee:   l.lowerExpr(fn),
+		Callee:   callee,
 		TypeArgs: typeArgs,
-		T:        l.exprType(e),
+		T:        t,
 		SpanV:    nodeSpan(e),
 	}
 	for _, a := range e.Args {
 		out.Args = append(out.Args, l.lowerArg(a))
 	}
 	return out
+}
+
+// recoverCallReturnType pulls the return type off the callee's FnType
+// when the checker did not record a type for the call expression. The
+// resolver seeds symbol types for top-level fns and `use`-imported
+// functions, which propagate to the callee Ident during lowerIdent,
+// so the FnType is usually present even when the call's own TypedNode
+// is missing at the native-checker boundary.
+func recoverCallReturnType(callee Expr) Type {
+	if callee == nil {
+		return ErrTypeVal
+	}
+	ct := callee.Type()
+	if ct == nil || ct == ErrTypeVal {
+		return ErrTypeVal
+	}
+	if f, ok := ct.(*FnType); ok && f.Return != nil {
+		return f.Return
+	}
+	return ErrTypeVal
 }
 
 // lowerArg lowers a single call argument, preserving its keyword name
@@ -1494,15 +1630,20 @@ func (l *lowerer) lowerQualifiedCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArg
 	if len(typeArgs) == 0 {
 		typeArgs = l.instantiationArgs(e)
 	}
+	callee := &FieldExpr{
+		X:     l.lowerExpr(fx.X),
+		Name:  fx.Name,
+		T:     l.exprType(fx),
+		SpanV: nodeSpan(fx),
+	}
+	t := l.exprType(e)
+	if t == ErrTypeVal {
+		t = recoverCallReturnType(callee)
+	}
 	out := &CallExpr{
-		Callee: &FieldExpr{
-			X:     l.lowerExpr(fx.X),
-			Name:  fx.Name,
-			T:     l.exprType(fx),
-			SpanV: nodeSpan(fx),
-		},
+		Callee:   callee,
 		TypeArgs: typeArgs,
-		T:        l.exprType(e),
+		T:        t,
 		SpanV:    nodeSpan(e),
 	}
 	for _, a := range e.Args {
@@ -1590,6 +1731,9 @@ func (l *lowerer) lowerIfExpr(e *ast.IfExpr) Expr {
 	t := l.exprType(e)
 	thenBlk := l.lowerBlock(e.Then)
 	elseBlk := l.lowerElse(e.Else)
+	if t == ErrTypeVal {
+		t = recoverBlockType(thenBlk, elseBlk)
+	}
 	if e.IsIfLet {
 		return &IfLetExpr{
 			Pattern:   l.lowerPattern(e.Pattern),
@@ -1601,6 +1745,29 @@ func (l *lowerer) lowerIfExpr(e *ast.IfExpr) Expr {
 		}
 	}
 	return &IfExpr{Cond: l.lowerExpr(e.Cond), Then: thenBlk, Else: elseBlk, T: t, SpanV: nodeSpan(e)}
+}
+
+// recoverBlockType picks a non-Err type from either branch of an if/else.
+// When only one branch carries a good type and the other is ErrType —
+// typical when the checker's elab reports one branch at default rules
+// but drops the enclosing if — prefer the good one.
+func recoverBlockType(then, els *Block) Type {
+	tt := blockResultType(then)
+	et := blockResultType(els)
+	if tt != nil && tt != ErrTypeVal {
+		return tt
+	}
+	if et != nil && et != ErrTypeVal {
+		return et
+	}
+	return ErrTypeVal
+}
+
+func blockResultType(b *Block) Type {
+	if b == nil || b.Result == nil {
+		return nil
+	}
+	return b.Result.Type()
 }
 
 // lowerElse normalises an else arm (which is an ast.Expr per the
