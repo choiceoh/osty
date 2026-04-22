@@ -1,8 +1,13 @@
 use std.testing
+use std.hint
 
 fn benchSumTo100() {
     testing.benchmark(200, || {
-        let _ = sumTo(100)
+        // Wrap the input in hint.black_box so LLVM can't IPA-CP the
+        // constant 100 into sumTo and fold the loop to a closed-form
+        // sum. Wrap the result so the unused `let _` doesn't let DCE
+        // eat the call whole. Both defenses are needed under `-O3 -flto`.
+        let _ = hint.black_box(sumTo(hint.black_box(100)))
         Ok(())
     })
 }

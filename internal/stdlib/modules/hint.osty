@@ -1,0 +1,25 @@
+// std.hint — compiler-opacity helpers.
+//
+// `black_box(value)` is an identity function at runtime but an opaque
+// boundary for the optimizer: it prevents the optimizer from
+// dead-code-eliminating the computation that produced `value` or from
+// const-folding across the call. The LLVM backend lowers it to a
+// side-effecting inline asm that claims to observe the value, so any
+// upstream work stays on the critical path even if the result is
+// discarded by the caller.
+//
+// Primary use cases:
+//
+//   * Benchmark bodies that would otherwise optimize down to a
+//     constant. `let _ = sumTo(100)` will be DCE'd whole because the
+//     result is unused; `let _ = hint.black_box(sumTo(100))` forces
+//     the call (and its loop) to stay.
+//   * Micro-tests that need to guarantee a specific operation actually
+//     executes, regardless of whether its result is consumed.
+//
+// The stub body (`value`) satisfies the checker; the LLVM backend
+// intercepts the call and replaces it with inline-asm opacity.
+
+pub fn black_box<T>(value: T) -> T {
+    value
+}
