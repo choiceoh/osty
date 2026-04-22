@@ -2773,11 +2773,55 @@ func TestGenerateFromMIRStringInterpolationConcat(t *testing.T) {
 		t.Fatalf("GenerateFromMIR: %v", err)
 	}
 	got := string(out)
-	if !strings.Contains(got, "declare ptr @osty_rt_strings_Concat(ptr, ptr)") {
-		t.Fatalf("missing string concat runtime decl in:\n%s", got)
+	if !strings.Contains(got, "declare ptr @osty_rt_strings_ConcatN(i64, ptr)") {
+		t.Fatalf("missing string concat_n runtime decl in:\n%s", got)
 	}
-	if strings.Count(got, "call ptr @osty_rt_strings_Concat(") != 2 {
-		t.Fatalf("expected two concat calls in:\n%s", got)
+	if strings.Count(got, "call ptr @osty_rt_strings_ConcatN(") != 1 {
+		t.Fatalf("expected one concat_n call in:\n%s", got)
+	}
+	if strings.Contains(got, "call ptr @osty_rt_strings_Concat(") {
+		t.Fatalf("did not expect chained concat calls in:\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRStringInterpolationConcatBoxesScalars(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "render",
+		Return: ir.TString,
+		Params: []*ir.Param{
+			{Name: "n", Type: ir.TInt},
+			{Name: "ok", Type: ir.TBool},
+		},
+		Body: &ir.Block{
+			Result: &ir.StringLit{
+				Parts: []ir.StringPart{
+					{Expr: &ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt}},
+					{IsLit: true, Lit: ":"},
+					{Expr: &ir.Ident{Name: "ok", Kind: ir.IdentParam, T: ir.TBool}},
+				},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/string_concat_scalars.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_int_to_string(i64)",
+		"declare ptr @osty_rt_bool_to_string(i1)",
+		"call ptr @osty_rt_int_to_string(",
+		"call ptr @osty_rt_bool_to_string(",
+		"call ptr @osty_rt_strings_ConcatN(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "call ptr @osty_rt_strings_Concat(") {
+		t.Fatalf("did not expect chained concat calls in:\n%s", got)
 	}
 }
 
