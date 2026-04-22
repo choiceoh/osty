@@ -1765,6 +1765,8 @@ func selfhostFrontTokenKind(kind token.Kind) (FrontTokenKind, error) {
 		return FrontTokenKind(&FrontTokenKind_FrontEOF{}), nil
 	case token.IDENT:
 		return FrontTokenKind(&FrontTokenKind_FrontIdent{}), nil
+	case token.LABEL:
+		return FrontTokenKind(&FrontTokenKind_FrontLabel{}), nil
 	case token.INT:
 		return FrontTokenKind(&FrontTokenKind_FrontInt{}), nil
 	case token.FLOAT:

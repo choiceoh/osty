@@ -319,6 +319,9 @@ struct SelfResolveScope {
     ifaceDefault: Bool,
     inFn: Bool,
     inLoop: Bool,
+    loopLabels: List<String>,
+    loopLabelStarts: List<Int>,
+    loopLabelEnds: List<Int>,
 }
 
 fn srRootScope(result: SelfResolveResult) -> SelfResolveScope {
@@ -328,6 +331,9 @@ fn srRootScope(result: SelfResolveResult) -> SelfResolveScope {
         ifaceDefault: false,
         inFn: false,
         inLoop: false,
+        loopLabels: [],
+        loopLabelStarts: [],
+        loopLabelEnds: [],
     }
 }
 
@@ -338,6 +344,9 @@ fn srChildScope(parent: SelfResolveScope) -> SelfResolveScope {
         ifaceDefault: parent.ifaceDefault,
         inFn: parent.inFn,
         inLoop: parent.inLoop,
+        loopLabels: srStringListCopy(parent.loopLabels),
+        loopLabelStarts: srIntListCopy(parent.loopLabelStarts),
+        loopLabelEnds: srIntListCopy(parent.loopLabelEnds),
     }
 }
 
@@ -348,6 +357,9 @@ fn srFnChildScope(parent: SelfResolveScope, ifaceDefault: Bool) -> SelfResolveSc
         ifaceDefault,
         inFn: true,
         inLoop: false,
+        loopLabels: [],
+        loopLabelStarts: [],
+        loopLabelEnds: [],
     }
 }
 
@@ -358,6 +370,9 @@ fn srLoopChildScope(parent: SelfResolveScope) -> SelfResolveScope {
         ifaceDefault: parent.ifaceDefault,
         inFn: parent.inFn,
         inLoop: true,
+        loopLabels: srStringListCopy(parent.loopLabels),
+        loopLabelStarts: srIntListCopy(parent.loopLabelStarts),
+        loopLabelEnds: srIntListCopy(parent.loopLabelEnds),
     }
 }
 
@@ -746,7 +761,23 @@ fn srAstResolveStmt(
                 idx,
             )
         }
-        return out
+        if scope.inLoop && node.extra >= 0 {
+            let labelNode = srAstNode(file, node.extra)
+            if srFindLoopLabel(scope, labelNode.text) < 0 {
+                out.diagnostics.push(
+                    selfResolveDiagnosticHintAtNode(
+                        "E0763",
+                        "undefined loop label",
+                        labelNode.text,
+                        labelNode.start,
+                        labelNode.end,
+                        node.extra,
+                        "add the label to an enclosing `for`/`loop`, or remove it from the break",
+                    ),
+                )
+            }
+        }
+        return srAstResolveExpr(file, node.left, scope, out)
     }
     if node.kind == AstNContinue {
         if !scope.inLoop {
@@ -758,6 +789,22 @@ fn srAstResolveStmt(
                 node.end,
                 idx,
             )
+        }
+        if scope.inLoop && node.extra >= 0 {
+            let labelNode = srAstNode(file, node.extra)
+            if srFindLoopLabel(scope, labelNode.text) < 0 {
+                out.diagnostics.push(
+                    selfResolveDiagnosticHintAtNode(
+                        "E0763",
+                        "undefined loop label",
+                        labelNode.text,
+                        labelNode.start,
+                        labelNode.end,
+                        node.extra,
+                        "add the label to an enclosing `for`/`loop`, or remove it from the continue",
+                    ),
+                )
+            }
         }
         return out
     }
@@ -784,6 +831,61 @@ fn srPushFlowDiag(
     out
 }
 
+fn srFindLoopLabel(scope: SelfResolveScope, name: String) -> Int {
+    let mut idx = scope.loopLabels.len() - 1
+    for idx >= 0 {
+        if srStringListAt(scope.loopLabels, idx) == name {
+            return idx
+        }
+        idx = idx - 1
+    }
+    -1
+}
+
+fn srPushLoopLabelShadowDiag(
+    scope: SelfResolveScope,
+    file: AstFile,
+    labelIdx: Int,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    if labelIdx < 0 {
+        return out
+    }
+    let labelNode = srAstNode(file, labelIdx)
+    let shadow = srFindLoopLabel(scope, labelNode.text)
+    if shadow >= 0 {
+        out.diagnostics.push(
+            selfResolveDiagnosticHintAtNode(
+                "E0764",
+                "loop label shadows an outer loop label",
+                labelNode.text,
+                labelNode.start,
+                labelNode.end,
+                labelIdx,
+                "rename one of the two loop labels so each nested loop name stays unique",
+            ),
+        )
+    }
+    out
+}
+
+fn srScopeWithLoopLabel(
+    scope: SelfResolveScope,
+    file: AstFile,
+    labelIdx: Int,
+) -> SelfResolveScope {
+    let mut next = scope
+    if labelIdx < 0 {
+        return next
+    }
+    let labelNode = srAstNode(file, labelIdx)
+    next.loopLabels.push(labelNode.text)
+    next.loopLabelStarts.push(labelNode.start)
+    next.loopLabelEnds.push(labelNode.end)
+    next
+}
+
 fn srAstResolveFor(
     file: AstFile,
     node: AstNode,
@@ -795,9 +897,11 @@ fn srAstResolveFor(
     let iterIdx = srAstChildAt(node.children, 1)
     out = srAstResolveExpr(file, iterIdx, scope, out)
     let loopScope = srChildScope(scope)
+    out = srPushLoopLabelShadowDiag(loopScope, file, node.extra, out)
+    let loopScope2 = srScopeWithLoopLabel(loopScope, file, node.extra)
     let patIdx = srAstChildAt(node.children, 0)
-    out = srAstResolvePattern(file, patIdx, loopScope, out)
-    let bodyScope = srLoopChildScope(loopScope)
+    out = srAstResolvePattern(file, patIdx, loopScope2, out)
+    let bodyScope = srLoopChildScope(loopScope2)
     srAstResolveBlock(file, node.right, bodyScope, out)
 }
 
@@ -880,6 +984,12 @@ fn srAstResolveExpr(
     }
     if node.kind == AstNClosure {
         return srAstResolveClosure(file, node, scope, out)
+    }
+    if node.kind == AstNFor && node.text == "loopexpr" {
+        let loopScope = srLoopChildScope(scope)
+        out = srPushLoopLabelShadowDiag(loopScope, file, node.extra, out)
+        let labeledScope = srScopeWithLoopLabel(loopScope, file, node.extra)
+        return srAstResolveBlock(file, node.right, labeledScope, out)
     }
     if node.kind == AstNBlock {
         let blockScope = srChildScope(scope)
@@ -1684,6 +1794,22 @@ fn srIntListAt(items: List<Int>, target: Int) -> Int {
 fn srStringListAt(items: List<String>, target: Int) -> String {
     if target < 0 || target >= items.len() { return "" }
     items[target]
+}
+
+fn srIntListCopy(items: List<Int>) -> List<Int> {
+    let mut out: List<Int> = []
+    for item in items {
+        out.push(item)
+    }
+    out
+}
+
+fn srStringListCopy(items: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    for item in items {
+        out.push(item)
+    }
+    out
 }
 
 fn srSymbolListCopy(items: List<SelfSymbol>) -> List<SelfSymbol> {

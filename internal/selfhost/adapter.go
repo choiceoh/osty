@@ -372,6 +372,8 @@ func mapTokenKind(k FrontTokenKind) token.Kind {
 		return token.NEWLINE
 	case *FrontTokenKind_FrontIdent:
 		return token.IDENT
+	case *FrontTokenKind_FrontLabel:
+		return token.LABEL
 	case *FrontTokenKind_FrontInt:
 		return token.INT
 	case *FrontTokenKind_FrontFloat:
@@ -506,6 +508,8 @@ func mapTokenKind(k FrontTokenKind) token.Kind {
 		return token.CHANARROW
 	case *FrontTokenKind_FrontQuestion:
 		return token.QUESTION
+	case *FrontTokenKind_FrontAsQuestion:
+		return token.ASQUESTION
 	case *FrontTokenKind_FrontQDot:
 		return token.QDOT
 	case *FrontTokenKind_FrontQQ:

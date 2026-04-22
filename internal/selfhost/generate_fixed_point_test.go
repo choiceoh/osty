@@ -3,11 +3,14 @@ package selfhost
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/osty/osty/internal/selfhost/bundle"
 )
 
 func TestGoGenerateSelfhostLeavesGeneratedArtifactsClean(t *testing.T) {
@@ -21,6 +24,7 @@ func TestGoGenerateSelfhostLeavesGeneratedArtifactsClean(t *testing.T) {
 	t.Cleanup(func() {
 		runRepoCmd(t, repoRoot, "git", "worktree", "remove", "--force", worktree)
 	})
+	overlaySelfhostGenerateInputs(t, repoRoot, worktree)
 
 	artifacts := []string{
 		"internal/selfhost/generated.go",
@@ -87,6 +91,74 @@ func copyGeneratedArtifact(t *testing.T, repoRoot, worktree, rel string) []byte 
 		t.Fatalf("write %s: %v", rel, err)
 	}
 	return data
+}
+
+func overlaySelfhostGenerateInputs(t *testing.T, repoRoot, worktree string) {
+	t.Helper()
+	paths := []string{
+		"toolchain",
+		"internal/selfhost",
+		"internal/bootstrap/gen",
+		"cmd/osty-bootstrap-gen",
+		"internal/ast/ast.go",
+		"internal/token/token.go",
+	}
+	for _, rel := range bundle.ToolchainCheckerFiles() {
+		paths = append(paths, rel)
+	}
+	seen := make(map[string]struct{}, len(paths))
+	for _, rel := range paths {
+		if _, ok := seen[rel]; ok {
+			continue
+		}
+		seen[rel] = struct{}{}
+		copyPathIntoWorktree(t, repoRoot, worktree, rel)
+	}
+}
+
+func copyPathIntoWorktree(t *testing.T, repoRoot, worktree, rel string) {
+	t.Helper()
+	src := filepath.Join(repoRoot, filepath.FromSlash(rel))
+	info, err := os.Stat(src)
+	if err != nil {
+		t.Fatalf("stat %s: %v", rel, err)
+	}
+	dst := filepath.Join(worktree, filepath.FromSlash(rel))
+	if !info.IsDir() {
+		copyFileIntoWorktree(t, src, dst)
+		return
+	}
+	if err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, relPath)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		copyFileIntoWorktree(t, path, target)
+		return nil
+	}); err != nil {
+		t.Fatalf("overlay %s: %v", rel, err)
+	}
+}
+
+func copyFileIntoWorktree(t *testing.T, src, dst string) {
+	t.Helper()
+	data, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read %s: %v", src, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(dst), err)
+	}
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		t.Fatalf("write %s: %v", dst, err)
+	}
 }
 
 func runDiffNoIndex(t *testing.T, left, right string) []byte {

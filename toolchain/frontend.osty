@@ -7,6 +7,7 @@ pub enum FrontTokenKind {
     FrontIllegal,
     FrontNewline,
     FrontIdent,
+    FrontLabel,
     FrontInt,
     FrontFloat,
     FrontChar,
@@ -74,6 +75,7 @@ pub enum FrontTokenKind {
     FrontArrow,
     FrontChanArrow,
     FrontQuestion,
+    FrontAsQuestion,
     FrontQDot,
     FrontQQ,
     FrontDotDot,
@@ -845,6 +847,30 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                         ),
                     )
                 }
+                pendingDocLines = 0
+                insertTerm = frontKindInsertsTerm(scan.kind)
+                skip = scan.consumed - 1
+            } else if unit == "'" && frontCanStartLabel(units, idx, unitCount) {
+                let scan = frontLabelScan(units, idx, unitCount)
+                let leadingDocLines = frontAttachedDocLines(
+                    pendingDocLines,
+                    docLastLine,
+                    start.line,
+                )
+                atFileStart = false
+                tokens.push(
+                    frontLexTokenFromScan(
+                        units,
+                        idx,
+                        scan.consumed,
+                        scan.kind,
+                        leadingDocLines,
+                        false,
+                        0,
+                        false,
+                    ),
+                )
+                tokenIndex = tokenIndex + 1
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
                 skip = scan.consumed - 1
@@ -1834,10 +1860,12 @@ pub fn frontTokensFromSource(source: String, stream: FrontLexStream) -> List<Fro
     let units = strings.split(source, "")
     let mut parseTokens: List<FrontToken> = []
     for tok in stream.tokens {
+        let raw = frontLexemeFromUnits(units, tok.start.offset, tok.length)
+        let text = if tok.kind == FrontLabel { frontLabelName(raw) } else { raw }
         parseTokens.push(
             FrontToken {
                 kind: tok.kind,
-                text: frontLexemeFromUnits(units, tok.start.offset, tok.length),
+                text,
                 startOffset: tok.start.offset,
                 endOffset: tok.end.offset,
             },
@@ -1938,6 +1966,12 @@ pub fn frontendLexSummary(source: String) -> FrontLexSummary {
                     summary.errors = summary.errors + 1
                 }
                 skip = stringLit.consumed - 1
+            } else if unit == "'" && frontCanStartLabel(units, idx, unitCount) {
+                atFileStart = false
+                let label = frontLabelScan(units, idx, unitCount)
+                summary = frontRecordScan(label, summary)
+                insertTerm = frontKindInsertsTerm(label.kind)
+                skip = label.consumed - 1
             } else if unit == "'" {
                 atFileStart = false
                 let charLit = frontStringLikeScan(units, idx, unitCount, FrontChar)
@@ -2251,11 +2285,49 @@ pub fn frontIdentScan(units: List<String>, start: Int, unitCount: Int) -> FrontS
     if consumed == 1 && frontUnitAt(units, start) == "_" {
         return frontScanResult(FrontUnderscore, consumed, true)
     }
+    if consumed == 2 && frontUnitsMatch(units, start, consumed, "as") && frontUnitAt(units, start + consumed) == "?" {
+        return frontScanResult(FrontAsQuestion, consumed + 1, true)
+    }
     let keyword = frontKeywordKindAt(units, start, consumed)
     if keyword != FrontIdent {
         return frontScanResult(keyword, consumed, true)
     }
     frontScanResult(FrontIdent, consumed, true)
+}
+
+pub fn frontCanStartLabel(units: List<String>, start: Int, unitCount: Int) -> Bool {
+    if frontUnitAt(units, start) != "'" {
+        return false
+    }
+    let first = frontUnitAt(units, start + 1)
+    if !(isFrontIdentStart(first)) {
+        return false
+    }
+    let scan = frontLabelScan(units, start, unitCount)
+    if !(scan.ok) {
+        return false
+    }
+    frontUnitAt(units, start + scan.consumed) != "'"
+}
+
+pub fn frontLabelScan(units: List<String>, start: Int, unitCount: Int) -> FrontScanResult {
+    if frontUnitAt(units, start) != "'" {
+        return frontScanResult(FrontIllegal, 1, false)
+    }
+    let first = frontUnitAt(units, start + 1)
+    if !(isFrontIdentStart(first)) {
+        return frontScanResult(FrontIllegal, 1, false)
+    }
+    let mut consumed = 1
+    for idx in start + 1..unitCount {
+        let unit = frontUnitAt(units, idx)
+        if isFrontIdentContinue(unit) {
+            consumed = consumed + 1
+        } else {
+            break
+        }
+    }
+    frontScanResult(FrontLabel, consumed, true)
 }
 
 pub fn frontKeywordKindAt(units: List<String>, start: Int, consumed: Int) -> FrontTokenKind {
@@ -2547,6 +2619,12 @@ pub fn classifyFrontLexeme(text: String) -> FrontTokenKind {
     if text == "" {
         return FrontIllegal
     }
+    if isFrontLabelLexeme(text) {
+        return FrontLabel
+    }
+    if text == "as?" {
+        return FrontAsQuestion
+    }
     if strings.hasPrefix(text, "r\"") {
         return FrontRawString
     }
@@ -2606,6 +2684,26 @@ pub fn isFrontIdentText(text: String) -> Bool {
         count = count + 1
     }
     count > 0
+}
+
+pub fn isFrontLabelLexeme(text: String) -> Bool {
+    if !(strings.hasPrefix(text, "'")) {
+        return false
+    }
+    let name = frontLabelName(text)
+    name != "" && isFrontIdentText(name)
+}
+
+pub fn frontLabelName(text: String) -> String {
+    let mut parts: List<String> = []
+    let mut idx = 0
+    for unit in strings.split(text, "") {
+        if idx > 0 {
+            parts.push(unit)
+        }
+        idx = idx + 1
+    }
+    strings.join(parts, "")
 }
 
 pub fn isFrontIdentStart(unit: String) -> Bool {
@@ -2745,6 +2843,8 @@ pub fn frontPunctuationKind(text: String) -> FrontTokenKind {
         FrontChanArrow
     } else if text == "?" {
         FrontQuestion
+    } else if text == "as?" {
+        FrontAsQuestion
     } else if text == "?." {
         FrontQDot
     } else if text == "??" {
@@ -2847,6 +2947,7 @@ pub fn isFrontPunctuationKind(kind: FrontTokenKind) -> Bool {
         FrontArrow -> true,
         FrontChanArrow -> true,
         FrontQuestion -> true,
+        FrontAsQuestion -> true,
         FrontQDot -> true,
         FrontQQ -> true,
         FrontDotDot -> true,
@@ -2866,6 +2967,8 @@ pub fn frontTokenKindByName(name: String) -> FrontTokenKind {
         FrontNewline
     } else if name == "IDENT" {
         FrontIdent
+    } else if name == "LABEL" {
+        FrontLabel
     } else if name == "INT" {
         FrontInt
     } else if name == "FLOAT" {
@@ -2878,6 +2981,8 @@ pub fn frontTokenKindByName(name: String) -> FrontTokenKind {
         FrontString
     } else if name == "RAWSTRING" {
         FrontRawString
+    } else if name == "ASQUESTION" {
+        FrontAsQuestion
     } else {
         let keyword = frontKeywordKind(name)
         if keyword != FrontIdent {
@@ -2893,6 +2998,7 @@ pub fn frontTokenKindName(kind: FrontTokenKind) -> String {
         FrontIllegal -> "ILLEGAL",
         FrontNewline -> "NEWLINE",
         FrontIdent -> "IDENT",
+        FrontLabel -> "LABEL",
         FrontInt -> "INT",
         FrontFloat -> "FLOAT",
         FrontChar -> "CHAR",
@@ -2960,6 +3066,7 @@ pub fn frontTokenKindName(kind: FrontTokenKind) -> String {
         FrontArrow -> "->",
         FrontChanArrow -> "<-",
         FrontQuestion -> "?",
+        FrontAsQuestion -> "as?",
         FrontQDot -> "?.",
         FrontQQ -> "??",
         FrontDotDot -> "..",

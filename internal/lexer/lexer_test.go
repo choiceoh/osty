@@ -128,6 +128,53 @@ func TestLexEmptyCharOrByte(t *testing.T) {
 	expectCode(t, "let a = b''", "E0009")
 }
 
+func TestLexAsQuestionSingleToken(t *testing.T) {
+	src := "fn f(err: Error) { let cast = err as? FsError }\n"
+	l := New([]byte(src))
+	toks := l.Lex()
+	if errs := l.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected lex errors: %v", errs)
+	}
+	var saw bool
+	for _, tk := range toks {
+		if tk.Kind == token.ASQUESTION {
+			saw = true
+			if tk.Value != "as?" {
+				t.Fatalf("ASQUESTION token value = %q; want %q", tk.Value, "as?")
+			}
+		}
+		if tk.Kind == token.IDENT && tk.Value == "as" {
+			t.Fatalf("lexer split `as?` into IDENT(`as`) in %v", toks)
+		}
+	}
+	if !saw {
+		t.Fatalf("missing ASQUESTION token in %v", toks)
+	}
+}
+
+func TestLexLoopLabelSingleToken(t *testing.T) {
+	src := "fn f() { 'outer: for { continue 'outer } }\n"
+	l := New([]byte(src))
+	toks := l.Lex()
+	if errs := l.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected lex errors: %v", errs)
+	}
+	var labels []token.Token
+	for _, tk := range toks {
+		if tk.Kind == token.LABEL {
+			labels = append(labels, tk)
+		}
+	}
+	if got, want := len(labels), 2; got != want {
+		t.Fatalf("label token count = %d, want %d in %v", got, want, toks)
+	}
+	for _, tk := range labels {
+		if tk.Value != "'outer" {
+			t.Fatalf("LABEL token value = %q; want %q", tk.Value, "'outer")
+		}
+	}
+}
+
 func TestLexInterpolationNestingOk(t *testing.T) {
 	// Nested braces inside an interpolation must not falsely close the string.
 	expectNoLexErrors(t, `let s = "a {f({g: 1})} b"`)

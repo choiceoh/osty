@@ -253,6 +253,9 @@ func dumpValue(b *strings.Builder, v reflect.Value, depth int) {
 			if !f.IsExported() {
 				continue
 			}
+			if omitSnapshotZeroField(f.Name, v.Field(i)) {
+				continue
+			}
 			if !first {
 				b.WriteString(", ")
 			}
@@ -317,6 +320,15 @@ func dumpValue(b *strings.Builder, v reflect.Value, depth int) {
 		fmt.Fprintf(b, "<%s>", v.Kind())
 	default:
 		fmt.Fprintf(b, "%v", v.Interface())
+	}
+}
+
+func omitSnapshotZeroField(name string, v reflect.Value) bool {
+	switch name {
+	case "Label", "LabelPos", "LabelEnd":
+		return v.IsZero()
+	default:
+		return false
 	}
 }
 

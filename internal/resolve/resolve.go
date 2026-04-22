@@ -229,9 +229,17 @@ type flowCtx struct {
 	// inLoop is true inside a `for` body. Nested loops don't need a
 	// counter because `break`/`continue` always target the innermost.
 	inLoop bool
+	// loopLabels is the lexical stack of currently-visible loop labels.
+	loopLabels []loopLabel
 	// inIfaceDefault is true inside an interface method's default body.
 	// Field access via `self.x` is rejected there per §2.6.2.
 	inIfaceDefault bool
+}
+
+type loopLabel struct {
+	Name string
+	Pos  token.Pos
+	End  token.Pos
 }
 
 // methodCtx bundles the state that controls `self` / `Self` semantics
@@ -1273,12 +1281,60 @@ func (r *resolver) enterFn(ifaceDefault bool) func() {
 	return func() { r.flowCtx = prev }
 }
 
-// enterLoop marks the current context as inside a `for` body for the
-// duration of the returned restore callback.
-func (r *resolver) enterLoop() func() {
-	prev := r.flowCtx.inLoop
-	r.flowCtx.inLoop = true
-	return func() { r.flowCtx.inLoop = prev }
+// enterLoop marks the current context as inside a loop body for the
+// duration of the returned restore callback, optionally pushing a
+// visible `'label` binding for labeled loops.
+func (r *resolver) enterLoop(label string, labelPos, labelEnd token.Pos) func() {
+	prev := r.flowCtx
+	next := prev
+	next.inLoop = true
+	if label != "" {
+		next.loopLabels = append(append([]loopLabel(nil), prev.loopLabels...), loopLabel{
+			Name: label,
+			Pos:  labelPos,
+			End:  labelEnd,
+		})
+	}
+	r.flowCtx = next
+	return func() { r.flowCtx = prev }
+}
+
+func (r *resolver) loopLabelInScope(name string) (*loopLabel, bool) {
+	for i := len(r.flowCtx.loopLabels) - 1; i >= 0; i-- {
+		lbl := &r.flowCtx.loopLabels[i]
+		if lbl.Name == name {
+			return lbl, true
+		}
+	}
+	return nil, false
+}
+
+func (r *resolver) checkLoopLabelShadow(name string, pos, end token.Pos) {
+	if name == "" {
+		return
+	}
+	if prev, ok := r.loopLabelInScope(name); ok {
+		r.emit(diag.New(diag.Error,
+			fmt.Sprintf("loop label `%s` shadows an outer loop label", name)).
+			Code(diag.CodeLabelShadow).
+			Primary(diag.Span{Start: pos, End: end}, "shadowed loop label").
+			Note(fmt.Sprintf("outer `%s` label is already in scope at %s", prev.Name, prev.Pos)).
+			Build())
+	}
+}
+
+func (r *resolver) resolveLoopLabelRef(name string, pos, end token.Pos) {
+	if name == "" || !r.flowCtx.inLoop {
+		return
+	}
+	if _, ok := r.loopLabelInScope(name); ok {
+		return
+	}
+	r.emit(diag.New(diag.Error,
+		fmt.Sprintf("undefined loop label `%s`", name)).
+		Code(diag.CodeUndefinedLabel).
+		Primary(diag.Span{Start: pos, End: end}, "unknown loop label").
+		Build())
 }
 
 // declareGenerics defines every generic parameter in the current scope
@@ -1586,11 +1642,16 @@ func (r *resolver) resolveStmt(s ast.Stmt) {
 			r.errorf(n.PosV, diag.CodeBreakOutsideLoop,
 				"`break` is only valid inside a `for` loop")
 		}
+		r.resolveLoopLabelRef(n.Label, n.LabelPos, n.LabelEnd)
+		if n.Value != nil {
+			r.resolveExpr(n.Value)
+		}
 	case *ast.ContinueStmt:
 		if !r.flowCtx.inLoop {
 			r.errorf(n.PosV, diag.CodeContinueOutsideLoop,
 				"`continue` is only valid inside a `for` loop")
 		}
+		r.resolveLoopLabelRef(n.Label, n.LabelPos, n.LabelEnd)
 	case *ast.DeferStmt:
 		if !r.flowCtx.inFn {
 			r.errorf(n.PosV, diag.CodeDeferOutsideFn,
@@ -1616,7 +1677,8 @@ func (r *resolver) resolveForStmt(f *ast.ForStmt) {
 			r.bindPattern(f.Pattern)
 		}
 		if f.Body != nil {
-			restore := r.enterLoop()
+			r.checkLoopLabelShadow(f.Label, f.LabelPos, f.LabelEnd)
+			restore := r.enterLoop(f.Label, f.LabelPos, f.LabelEnd)
 			for _, s := range f.Body.Stmts {
 				r.resolveStmt(s)
 			}
@@ -1735,6 +1797,13 @@ func (r *resolver) resolveExpr(e ast.Expr) {
 		r.resolveIfExpr(n)
 	case *ast.MatchExpr:
 		r.resolveMatchExpr(n)
+	case *ast.LoopExpr:
+		if n.Body != nil {
+			r.checkLoopLabelShadow(n.Label, n.LabelPos, n.LabelEnd)
+			restore := r.enterLoop(n.Label, n.LabelPos, n.LabelEnd)
+			r.resolveBlock(n.Body)
+			restore()
+		}
 	case *ast.ClosureExpr:
 		r.resolveClosure(n)
 	case *ast.Block:

@@ -242,9 +242,17 @@ func (p *printer) printStmt(s Stmt) {
 		}
 		p.b.WriteByte(')')
 	case *BreakStmt:
-		p.b.WriteString("(break)")
+		if s.Label != "" {
+			p.writef("(break '%s)", s.Label)
+		} else {
+			p.b.WriteString("(break)")
+		}
 	case *ContinueStmt:
-		p.b.WriteString("(continue)")
+		if s.Label != "" {
+			p.writef("(continue '%s)", s.Label)
+		} else {
+			p.b.WriteString("(continue)")
+		}
 	case *IfStmt:
 		p.b.WriteString("(if ")
 		p.printExpr(s.Cond)
@@ -260,6 +268,9 @@ func (p *printer) printStmt(s Stmt) {
 		p.b.WriteByte(')')
 	case *ForStmt:
 		p.writef("(for %s", forKindName(s.Kind))
+		if s.Label != "" {
+			p.writef(" '%s", s.Label)
+		}
 		if s.Var != "" {
 			p.writef(" %s", s.Var)
 		} else if s.Pattern != nil {

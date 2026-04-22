@@ -964,9 +964,9 @@ func (l *lowerer) lowerStmt(s ast.Stmt) Stmt {
 		}
 		return out
 	case *ast.BreakStmt:
-		return &BreakStmt{SpanV: nodeSpan(s)}
+		return &BreakStmt{Label: s.Label, SpanV: nodeSpan(s)}
 	case *ast.ContinueStmt:
-		return &ContinueStmt{SpanV: nodeSpan(s)}
+		return &ContinueStmt{Label: s.Label, SpanV: nodeSpan(s)}
 	case *ast.AssignStmt:
 		return l.lowerAssignStmt(s)
 	case *ast.ForStmt:
@@ -1035,10 +1035,10 @@ func (l *lowerer) lowerForStmt(s *ast.ForStmt) Stmt {
 	body := l.lowerBlock(s.Body)
 	// Classify: infinite | while | for-in (range or iterator).
 	if s.Pattern == nil && s.Iter == nil {
-		return &ForStmt{Kind: ForInfinite, Body: body, SpanV: nodeSpan(s)}
+		return &ForStmt{Kind: ForInfinite, Label: s.Label, Body: body, SpanV: nodeSpan(s)}
 	}
 	if s.Pattern == nil && s.Iter != nil {
-		return &ForStmt{Kind: ForWhile, Cond: l.lowerExpr(s.Iter), Body: body, SpanV: nodeSpan(s)}
+		return &ForStmt{Kind: ForWhile, Label: s.Label, Cond: l.lowerExpr(s.Iter), Body: body, SpanV: nodeSpan(s)}
 	}
 	var loopVar string
 	var loopPat Pattern
@@ -1051,6 +1051,7 @@ func (l *lowerer) lowerForStmt(s *ast.ForStmt) Stmt {
 	if r, ok := s.Iter.(*ast.RangeExpr); ok && r.Start != nil && r.Stop != nil {
 		return &ForStmt{
 			Kind:      ForRange,
+			Label:     s.Label,
 			Var:       loopVar,
 			Pattern:   loopPat,
 			Start:     l.lowerExpr(r.Start),
@@ -1062,6 +1063,7 @@ func (l *lowerer) lowerForStmt(s *ast.ForStmt) Stmt {
 	}
 	return &ForStmt{
 		Kind:    ForIn,
+		Label:   s.Label,
 		Var:     loopVar,
 		Pattern: loopPat,
 		Iter:    l.lowerExpr(s.Iter),

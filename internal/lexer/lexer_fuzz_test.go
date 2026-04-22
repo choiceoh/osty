@@ -52,6 +52,8 @@ func FuzzLex(f *testing.F) {
 		"let a = 1__000",      // E0008
 		"let a = ''",          // E0009 empty char
 		"let a = b''",         // E0009 empty byte
+		"let cast = err as? FsError", // fused postfix token
+		"'outer: for { continue 'outer }", // label token + labeled control flow
 		"let s = \"a {f({g: 1})} b\"", // nested interpolation
 		"let s = \"\"\"\n    line1\n    line2\n    \"\"\"", // triple valid
 		"let s = r\"raw \\n\"",  // raw string

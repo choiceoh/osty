@@ -140,3 +140,49 @@ func TestUnaryPostfixHoistingBitNot(t *testing.T) {
 		t.Fatalf("op = %s, want ~", u.Op)
 	}
 }
+
+func TestAsQuestionLowersToMarkedDowncastCall(t *testing.T) {
+	expr := parseExprInMain(t, "err as? FsError")
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("root type = %T, want *ast.CallExpr", expr)
+	}
+	if !call.IsAsQuestion {
+		t.Fatalf("CallExpr.IsAsQuestion = false; want true")
+	}
+	turbo, ok := call.Fn.(*ast.TurbofishExpr)
+	if !ok {
+		t.Fatalf("call fn type = %T, want *ast.TurbofishExpr", call.Fn)
+	}
+	field, ok := turbo.Base.(*ast.FieldExpr)
+	if !ok {
+		t.Fatalf("turbofish base type = %T, want *ast.FieldExpr", turbo.Base)
+	}
+	if field.Name != "downcast" {
+		t.Fatalf("field name = %q, want %q", field.Name, "downcast")
+	}
+	recv, ok := field.X.(*ast.Ident)
+	if !ok || recv.Name != "err" {
+		t.Fatalf("receiver = %T (%v), want Ident(err)", field.X, field.X)
+	}
+	if got := len(turbo.Args); got != 1 {
+		t.Fatalf("type arg count = %d, want 1", got)
+	}
+	target, ok := turbo.Args[0].(*ast.NamedType)
+	if !ok {
+		t.Fatalf("type arg type = %T, want *ast.NamedType", turbo.Args[0])
+	}
+	if got := target.Path[0]; got != "FsError" {
+		t.Fatalf("type arg path[0] = %q, want %q", got, "FsError")
+	}
+}
+
+func TestAsQuestionRejectsWhitespaceSplit(t *testing.T) {
+	_, diags := ParseDiagnostics([]byte("fn __test() { let _probe = err as ? FsError\n}\n"))
+	for _, d := range diags {
+		if d.Code == "E0202" {
+			return
+		}
+	}
+	t.Fatalf("expected E0202, got %#v", diags)
+}

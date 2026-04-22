@@ -709,6 +709,13 @@ func (s *ReturnStmt) End() token.Pos { return s.EndV }
 type BreakStmt struct {
 	PosV token.Pos
 	EndV token.Pos
+	// Label is the optional `'label` target on `break 'label`.
+	// Empty means the innermost enclosing loop.
+	Label string
+	// LabelPos / LabelEnd cover just the `'label` token when Label is
+	// present. Zero when the break is unlabeled.
+	LabelPos token.Pos
+	LabelEnd token.Pos
 	// Value is the optional expression on `break <expr>` — only legal
 	// inside a `loop { … }` expression (G22, §A.4). Nil for a bare
 	// `break` inside a `for`/`while` loop, where a value would be a
@@ -724,6 +731,13 @@ func (s *BreakStmt) End() token.Pos { return s.EndV }
 type ContinueStmt struct {
 	PosV token.Pos
 	EndV token.Pos
+	// Label is the optional `'label` target on `continue 'label`.
+	// Empty means the innermost enclosing loop.
+	Label string
+	// LabelPos / LabelEnd cover just the `'label` token when Label is
+	// present. Zero when the continue is unlabeled.
+	LabelPos token.Pos
+	LabelEnd token.Pos
 }
 
 func (*ContinueStmt) stmtNode()        {}
@@ -764,6 +778,9 @@ func (s *DeferStmt) End() token.Pos { return s.EndV }
 type ForStmt struct {
 	PosV     token.Pos
 	EndV     token.Pos
+	Label    string
+	LabelPos token.Pos
+	LabelEnd token.Pos
 	IsForLet bool
 	Pattern  Pattern // optional
 	Iter     Expr    // optional (nil = infinite)
@@ -1123,6 +1140,9 @@ func (e *IfExpr) End() token.Pos { return e.EndV }
 type LoopExpr struct {
 	PosV token.Pos
 	EndV token.Pos
+	Label string
+	LabelPos token.Pos
+	LabelEnd token.Pos
 	Body *Block
 }
 

@@ -515,9 +515,12 @@ func (l *stableLowerer) lowerEnumerateForStmt(stmt *ast.ForStmt) ([]ast.Stmt, bo
 	body.Stmts = append([]ast.Stmt{prelude}, body.Stmts...)
 
 	lowered := &ast.ForStmt{
-		PosV:    stmt.PosV,
-		EndV:    stmt.EndV,
-		Pattern: loopPattern,
+		PosV:     stmt.PosV,
+		EndV:     stmt.EndV,
+		Label:    stmt.Label,
+		LabelPos: stmt.LabelPos,
+		LabelEnd: stmt.LabelEnd,
+		Pattern:  loopPattern,
 		Iter: &ast.RangeExpr{
 			PosV:  stmt.PosV,
 			EndV:  stmt.EndV,

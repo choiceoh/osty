@@ -889,6 +889,10 @@ func (p *printer) printStmtInner(s ast.Stmt) {
 		p.nl()
 	case *ast.BreakStmt:
 		p.write("break")
+		if n.Label != "" {
+			p.write(" '")
+			p.write(n.Label)
+		}
 		if n.Value != nil {
 			p.write(" ")
 			p.printExpr(n.Value)
@@ -896,6 +900,10 @@ func (p *printer) printStmtInner(s ast.Stmt) {
 		p.nl()
 	case *ast.ContinueStmt:
 		p.write("continue")
+		if n.Label != "" {
+			p.write(" '")
+			p.write(n.Label)
+		}
 		p.nl()
 	case *ast.ChanSendStmt:
 		p.printExpr(n.Channel)
@@ -935,6 +943,11 @@ func (p *printer) printBlock(b *ast.Block) {
 }
 
 func (p *printer) printForStmt(n *ast.ForStmt) {
+	if n.Label != "" {
+		p.write("'")
+		p.write(n.Label)
+		p.write(": ")
+	}
 	p.write("for ")
 	if n.IsForLet {
 		p.write("let ")
@@ -1089,6 +1102,11 @@ func (p *printer) printExprInner(e ast.Expr) {
 	case *ast.IfExpr:
 		p.printIfExpr(n)
 	case *ast.LoopExpr:
+		if n.Label != "" {
+			p.write("'")
+			p.write(n.Label)
+			p.write(": ")
+		}
 		p.write("loop ")
 		p.printBlock(n.Body)
 	case *ast.MatchExpr:

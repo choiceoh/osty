@@ -442,7 +442,7 @@ pub fn astInfixRBP(kind: FrontTokenKind) -> Int {
 }
 
 fn astStartsExpr(kind: FrontTokenKind) -> Bool {
-    kind == FrontIdent || kind == FrontInt || kind == FrontFloat || kind == FrontString || kind == FrontRawString || kind == FrontChar || kind == FrontByte || kind == FrontLParen || kind == FrontLBracket || kind == FrontLBrace || kind == FrontMinus || kind == FrontNot || kind == FrontBitNot || kind == FrontIf || kind == FrontMatch || kind == FrontBitOr || kind == FrontOr || kind == FrontUnderscore
+    kind == FrontIdent || kind == FrontLabel || kind == FrontInt || kind == FrontFloat || kind == FrontString || kind == FrontRawString || kind == FrontChar || kind == FrontByte || kind == FrontLParen || kind == FrontLBracket || kind == FrontLBrace || kind == FrontMinus || kind == FrontNot || kind == FrontBitNot || kind == FrontIf || kind == FrontMatch || kind == FrontBitOr || kind == FrontOr || kind == FrontUnderscore
 }
 
 /// opCanStartScriptStmt decides whether the current top-level token
@@ -454,6 +454,10 @@ fn astStartsExpr(kind: FrontTokenKind) -> Bool {
 /// ExprStmts.
 fn opCanStartScriptStmt(p: OstyParser, tok: FrontToken) -> Bool {
     if tok.kind == FrontReturn || opIsForHead(tok) || tok.kind == FrontBreak || tok.kind == FrontContinue { return true }
+    if tok.kind == FrontLabel && opPeekAt(p, 1).kind == FrontColon {
+        let head = opPeekAt(p, 2)
+        return opIsForHead(head) || (head.kind == FrontIdent && head.text == "loop" && opPeekAt(p, 3).kind == FrontLBrace)
+    }
     if tok.kind == FrontIf || tok.kind == FrontMatch { return true }
     if tok.kind == FrontLParen || tok.kind == FrontLBracket || tok.kind == FrontLBrace { return true }
     if tok.kind == FrontBitOr || tok.kind == FrontOr { return true }
@@ -642,6 +646,23 @@ fn opParsePrimary(p: OstyParser) -> Int {
     n.start = start
     n.end = p.pos
     return opAddNode(p, n) }
+    if tok.kind == FrontLabel && opPeekAt(p, 1).kind == FrontColon && opPeekAt(p, 2).kind == FrontIdent && opPeekAt(p, 2).text == "loop" && opPeekAt(p, 3).kind == FrontLBrace {
+        let labelIdx = opConsumeLoopLabelPrefix(p)
+        let loopTok = opAdvance(p)
+        let prevInLoop = p.inLoop
+        p.inLoop = true
+        let bodyIdx = opParseBlockOrMap(p)
+        p.inLoop = prevInLoop
+        let mut n = emptyAstNode(AstNFor)
+        n.text = "loopexpr"
+        n.extra = labelIdx
+        n.right = bodyIdx
+        n.left = 0 - 1
+        n.start = start
+        n.end = p.pos
+        let _ = loopTok
+        return opAddNode(p, n)
+    }
     if tok.kind == FrontIdent {
         // G22 §A.4: `loop { ... }` is a value-producing loop expression.
         // The body is an ordinary block; iteration continues until a
@@ -1069,15 +1090,13 @@ fn opTryParsePostfix(p: OstyParser, lhs: Int) -> Int {
         n.end = p.pos
         return opAddNode(p, n)
     }
+    if tok.kind == FrontAsQuestion {
+        return opParseAsQuestion(p, lhs)
+    }
     if tok.kind == FrontIdent && tok.text == "as" && opPeekAt(p, 1).kind == FrontQuestion {
-        if opAdjacent(tok, opPeekAt(p, 1)) {
-            return opParseAsQuestion(p, lhs)
-        }
-        // Spec `OSTY_GRAMMAR_v0.5.md:28` requires `as?` to be a single
-        // token (no whitespace between `as` and `?`). Surface a targeted
-        // E0202 diagnostic and consume the shape so cascade errors on
-        // the RHS type name don't pile up. Reuses the "unexpected token"
-        // code band — a dedicated code can follow if this surface grows.
+        // After lexer fusion `as?` should arrive as FrontAsQuestion. If
+        // we still see IDENT(`as`) + QUESTION it must have whitespace in
+        // between, which v0.5 rejects with E0202.
         opErrorFull(p, "`as?` must be written without whitespace between `as` and `?`", "write `as?` as a single token (no space)", "OSTY_GRAMMAR_v0.5 §28", "E0202")
         let _ = opAdvance(p)
         let _ = opAdvance(p)
@@ -1165,7 +1184,6 @@ fn opParseTurbofish(p: OstyParser, callee: Int) -> Int {
 /// rule (E0757) on both operand and T.
 fn opParseAsQuestion(p: OstyParser, lhs: Int) -> Int {
     let start = p.pos
-    let _ = opAdvance(p)
     let _ = opAdvance(p)
     let typeIdx = opParseType(p)
     let mut fieldNode = emptyAstNode(AstNField)
@@ -1294,18 +1312,49 @@ fn astIsUpperName(text: String) -> Bool {
     first >= "A" && first <= "Z"
 }
 
+fn opHasLoopLabelPrefix(p: OstyParser) -> Bool {
+    opAt(p, FrontLabel) && opPeekAt(p, 1).kind == FrontColon
+}
+
+fn opParseLabelNode(p: OstyParser) -> Int {
+    let start = p.pos
+    let tok = opExpect(p, FrontLabel)
+    let mut n = emptyAstNode(AstNIdent)
+    n.text = strings.trimPrefix(tok.text, "'")
+    n.start = start
+    n.end = p.pos
+    opAddNode(p, n)
+}
+
+fn opConsumeLoopLabelPrefix(p: OstyParser) -> Int {
+    if !(opHasLoopLabelPrefix(p)) {
+        return -1
+    }
+    let labelIdx = opParseLabelNode(p)
+    let _ = opExpect(p, FrontColon)
+    labelIdx
+}
+
 // ===================================================================
 // STATEMENT PARSING
 // ===================================================================
 
 fn opParseStmt(p: OstyParser) -> Int {
     let tok = opPeek(p)
+    if opHasLoopLabelPrefix(p) && opIsForHead(opPeekAt(p, 2)) {
+        let labelIdx = opConsumeLoopLabelPrefix(p)
+        return opParseForStmt(p, labelIdx)
+    }
     if tok.kind == FrontLet { return opParseLetStmt(p, []) }
     if tok.kind == FrontReturn { return opParseReturnStmt(p) }
     if tok.kind == FrontBreak {
         let s = p.pos
         let _ = opAdvance(p)
         if !(p.inLoop) { opErrorFull(p, "`break` outside of loop", "move inside a `for` loop", "", "E0600") }
+        let mut labelIdx = -1
+        if opAt(p, FrontLabel) {
+            labelIdx = opParseLabelNode(p)
+        }
         // G22 §A.4: `break <expr>` exits the enclosing `loop` with a
         // value. Plain `break` inside `for`/`while` continues without a
         // value. We parse greedily — if an expression starts on the
@@ -1316,6 +1365,7 @@ fn opParseStmt(p: OstyParser) -> Int {
         }
         let mut n = emptyAstNode(AstNBreak)
         n.left = valueIdx
+        n.extra = labelIdx
         n.start = s
         n.end = p.pos
         return opAddNode(p, n)
@@ -1324,13 +1374,18 @@ fn opParseStmt(p: OstyParser) -> Int {
         let s = p.pos
         let _ = opAdvance(p)
         if !(p.inLoop) { opErrorFull(p, "`continue` outside of loop", "move inside a `for` loop", "", "E0601") }
+        let mut labelIdx = -1
+        if opAt(p, FrontLabel) {
+            labelIdx = opParseLabelNode(p)
+        }
         let mut n = emptyAstNode(AstNContinue)
+        n.extra = labelIdx
         n.start = s
         n.end = p.pos
         return opAddNode(p, n)
     }
     if tok.kind == FrontDefer { return opParseDeferStmt(p) }
-    if opIsForHead(tok) { return opParseForStmt(p) }
+    if opIsForHead(tok) { return opParseForStmt(p, -1) }
     let expr = opParseExpr(p)
     let next = opPeek(p)
     if next.kind == FrontChanArrow {
@@ -1448,7 +1503,7 @@ fn opExprToForPattern(p: OstyParser, exprIdx: Int) -> Int {
     exprIdx
 }
 
-fn opParseForStmt(p: OstyParser) -> Int {
+fn opParseForStmt(p: OstyParser, labelIdx: Int) -> Int {
     let start = p.pos
     let _ = opAdvance(p)
     let prevInLoop = p.inLoop
@@ -1508,6 +1563,7 @@ fn opParseForStmt(p: OstyParser) -> Int {
     n.text = kind
     n.left = condIdx
     n.right = body
+    n.extra = labelIdx
     n.children = [patIdx, iterIdx]
     n.start = start
     n.end = p.pos

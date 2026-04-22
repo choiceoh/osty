@@ -13,6 +13,7 @@ const (
 
 	// Literals
 	IDENT
+	LABEL // 'label
 	INT
 	FLOAT
 	CHAR
@@ -94,6 +95,7 @@ const (
 	SHREQ     // >>=
 
 	QUESTION // ?
+	ASQUESTION // as?
 	QDOT     // ?.
 	QQ       // ??
 
@@ -115,6 +117,7 @@ var kindNames = [...]string{
 	ILLEGAL:    "ILLEGAL",
 	NEWLINE:    "NEWLINE",
 	IDENT:      "IDENT",
+	LABEL:      "LABEL",
 	INT:        "INT",
 	FLOAT:      "FLOAT",
 	CHAR:       "CHAR",
@@ -180,6 +183,7 @@ var kindNames = [...]string{
 	SHLEQ:      "<<=",
 	SHREQ:      ">>=",
 	QUESTION:   "?",
+	ASQUESTION: "as?",
 	QDOT:       "?.",
 	QQ:         "??",
 	DOTDOT:     "..",

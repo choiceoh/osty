@@ -566,28 +566,28 @@ func ReturnStmtNode(pos, end Pos, value Expr) Stmt {
 	return &ast.ReturnStmt{PosV: pos, EndV: end, Value: value}
 }
 
-func BreakStmtNode(pos, end Pos) Stmt {
-	return &ast.BreakStmt{PosV: pos, EndV: end}
+func BreakStmtNode(pos, end Pos, label string, labelPos, labelEnd Pos) Stmt {
+	return &ast.BreakStmt{PosV: pos, EndV: end, Label: label, LabelPos: labelPos, LabelEnd: labelEnd}
 }
 
-func BreakStmtValueNode(pos, end Pos, value Expr) Stmt {
-	return &ast.BreakStmt{PosV: pos, EndV: end, Value: value}
+func BreakStmtValueNode(pos, end Pos, label string, labelPos, labelEnd Pos, value Expr) Stmt {
+	return &ast.BreakStmt{PosV: pos, EndV: end, Label: label, LabelPos: labelPos, LabelEnd: labelEnd, Value: value}
 }
 
-func LoopExprNode(pos, end Pos, body Block) Expr {
-	return &ast.LoopExpr{PosV: pos, EndV: end, Body: body}
+func LoopExprNode(pos, end Pos, label string, labelPos, labelEnd Pos, body Block) Expr {
+	return &ast.LoopExpr{PosV: pos, EndV: end, Label: label, LabelPos: labelPos, LabelEnd: labelEnd, Body: body}
 }
 
-func ContinueStmtNode(pos, end Pos) Stmt {
-	return &ast.ContinueStmt{PosV: pos, EndV: end}
+func ContinueStmtNode(pos, end Pos, label string, labelPos, labelEnd Pos) Stmt {
+	return &ast.ContinueStmt{PosV: pos, EndV: end, Label: label, LabelPos: labelPos, LabelEnd: labelEnd}
 }
 
 func DeferStmtNode(pos, end Pos, x Expr) Stmt {
 	return &ast.DeferStmt{PosV: pos, EndV: end, X: x}
 }
 
-func ForStmtNode(pos, end Pos, isForLet bool, pat Pattern, iter Expr, body Block) Stmt {
-	return &ast.ForStmt{PosV: pos, EndV: end, IsForLet: isForLet, Pattern: pat, Iter: iter, Body: body}
+func ForStmtNode(pos, end Pos, label string, labelPos, labelEnd Pos, isForLet bool, pat Pattern, iter Expr, body Block) Stmt {
+	return &ast.ForStmt{PosV: pos, EndV: end, Label: label, LabelPos: labelPos, LabelEnd: labelEnd, IsForLet: isForLet, Pattern: pat, Iter: iter, Body: body}
 }
 
 func AssignStmtNode(pos, end Pos, op Kind, target Expr, value Expr) Stmt {
