@@ -840,53 +840,180 @@ func extractOwnerNominal(t Type) string {
 	}
 }
 
-// builtinReceiverTypeArgArity reports the source-level generic arity of
-// builtin receiver types when checker metadata attached the receiver's
-// concrete type args directly to a nongeneric method call. This lets
-// monomorph clear stale TypeArgs even when the owner template itself
-// was not injected into the module (e.g. List.push in a specialized Map
-// body, or Option.isSome on an OptionalType receiver).
-func builtinReceiverTypeArgArity(t Type) int {
-	switch x := t.(type) {
-	case *NamedType:
-		switch x.Name {
-		case "List", "Set", "Option":
-			return 1
-		case "Map", "Result":
-			return 2
-		}
-	case *OptionalType:
-		return 1
-	}
-	return 0
-}
-
 var builtinNonGenericMethods = map[string]map[string]bool{
 	"List": {
+		"len":     true,
+		"isEmpty": true,
+		"get":     true,
 		"push":   true,
 		"pop":    true,
 		"insert": true,
+		"sorted": true,
+		"toSet":  true,
 		"clear":  true,
+	},
+	"Map": {
+		"len":         true,
+		"isEmpty":     true,
+		"get":         true,
+		"getOr":       true,
+		"containsKey": true,
+		"keys":        true,
+		"values":      true,
+		"entries":     true,
+		"forEach":     true,
+		"any":         true,
+		"all":         true,
+		"count":       true,
+		"find":        true,
+		"filter":      true,
+		"merge":       true,
+		"mergeWith":   true,
+		"insert":      true,
+		"remove":      true,
+		"clear":       true,
+		"update":      true,
+		"insertAll":   true,
+		"retainIf":    true,
+	},
+	"Set": {
+		"len":        true,
+		"isEmpty":    true,
+		"contains":   true,
+		"union":      true,
+		"intersect":  true,
+		"difference": true,
+		"insert":     true,
+		"remove":     true,
+		"toList":     true,
+		"clear":      true,
 	},
 	"Option": {
 		"isSome": true,
 		"isNone": true,
 	},
+	"Result": {
+		"isOk":       true,
+		"isErr":      true,
+		"contains":   true,
+		"containsErr": true,
+		"unwrap":     true,
+		"expect":     true,
+		"unwrapErr":  true,
+		"expectErr":  true,
+		"unwrapOr":   true,
+		"ok":         true,
+		"err":        true,
+		"and":        true,
+		"or":         true,
+		"inspect":    true,
+		"inspectErr": true,
+		"toString":   true,
+	},
 }
 
-func builtinMethodCarriesReceiverTypeArgsOnly(receiver Type, method string, got int) bool {
+var builtinGenericParamNames = map[string][]string{
+	"List":   []string{"T"},
+	"Set":    []string{"T"},
+	"Option": []string{"T"},
+	"Map":    []string{"K", "V"},
+	"Result": []string{"T", "E"},
+}
+
+// builtinReceiverOwnerAndArity reports the source-level builtin owner
+// name plus its generic arity for a receiver type. Unlike
+// extractOwnerNominal, this understands already-monomorphized `_ZTS…`
+// receiver names by bouncing through originalStructOf/originalEnumOf.
+func (s *monoState) builtinReceiverOwnerAndArity(receiver Type) (string, int, bool) {
+	switch x := receiver.(type) {
+	case *OptionalType:
+		return "Option", 1, true
+	case *NamedType:
+		switch x.Name {
+		case "List", "Set", "Option":
+			return x.Name, 1, true
+		case "Map", "Result":
+			return x.Name, 2, true
+		}
+		if orig, has := s.originalStructOf[x.Name]; has && orig != nil && isStdlibBuiltinName(orig.Name) {
+			return orig.Name, len(orig.Generics), true
+		}
+		if orig, has := s.originalEnumOf[x.Name]; has && orig != nil && isStdlibBuiltinName(orig.Name) {
+			return orig.Name, len(orig.Generics), true
+		}
+	}
+	return "", 0, false
+}
+
+func cloneSubstEnv(in SubstEnv) SubstEnv {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(SubstEnv, len(in))
+	for k, v := range in {
+		out[k] = CloneType(v)
+	}
+	return out
+}
+
+func (s *monoState) builtinReceiverSubstEnv(receiver Type) (SubstEnv, bool) {
+	switch x := receiver.(type) {
+	case *OptionalType:
+		return SubstEnv{"T": CloneType(x.Inner)}, true
+	case *NamedType:
+		if params := builtinGenericParamNames[x.Name]; len(params) > 0 && len(x.Args) == len(params) {
+			env := make(SubstEnv, len(params))
+			for i, name := range params {
+				env[name] = CloneType(x.Args[i])
+			}
+			return env, true
+		}
+		if orig, has := s.originalStructOf[x.Name]; has && orig != nil && isStdlibBuiltinName(orig.Name) {
+			if env := cloneSubstEnv(s.receiverEnvOf[x.Name]); len(env) > 0 {
+				return env, true
+			}
+		}
+		if orig, has := s.originalEnumOf[x.Name]; has && orig != nil && isStdlibBuiltinName(orig.Name) {
+			if env := cloneSubstEnv(s.receiverEnvOf[x.Name]); len(env) > 0 {
+				return env, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func (s *monoState) builtinMethodCarriesReceiverTypeArgsOnly(receiver Type, method string, got int) bool {
 	if got == 0 {
 		return false
 	}
-	owner := extractOwnerNominal(receiver)
-	if owner == "" {
+	owner, arity, ok := s.builtinReceiverOwnerAndArity(receiver)
+	if !ok {
 		return false
 	}
 	methods := builtinNonGenericMethods[owner]
 	if !methods[method] {
 		return false
 	}
-	return builtinReceiverTypeArgArity(receiver) == got
+	return arity == got
+}
+
+func (s *monoState) rewriteBuiltinReceiverMethodCall(c *MethodCall) {
+	if c == nil || c.Receiver == nil {
+		return
+	}
+	owner, _, ok := s.builtinReceiverOwnerAndArity(c.Receiver.Type())
+	if !ok {
+		return
+	}
+	if !builtinNonGenericMethods[owner][c.Name] {
+		return
+	}
+	if env, ok := s.builtinReceiverSubstEnv(c.Receiver.Type()); ok {
+		SubstituteTypes(c, env)
+	}
+	if s.builtinMethodCarriesReceiverTypeArgsOnly(c.Receiver.Type(), c.Name, len(c.TypeArgs)) {
+		c.TypeArgs = nil
+	}
 }
 
 // resolveOwner turns an owner nominal (either the mangled `_ZTSN…E`
@@ -955,13 +1082,14 @@ func (s *monoState) rewriteGenericMethodCall(c *MethodCall) {
 	if c == nil || len(c.TypeArgs) == 0 || c.Receiver == nil {
 		return
 	}
+	builtinReceiverOnly := s.builtinMethodCarriesReceiverTypeArgsOnly(c.Receiver.Type(), c.Name, len(c.TypeArgs))
 	nominal := extractOwnerNominal(c.Receiver.Type())
 	if nominal == "" {
 		return
 	}
 	kind, ownerMangled, origStruct, origEnum, receiverEnv, ok := s.resolveOwner(nominal)
 	if !ok {
-		if builtinMethodCarriesReceiverTypeArgsOnly(c.Receiver.Type(), c.Name, len(c.TypeArgs)) {
+		if builtinReceiverOnly {
 			c.TypeArgs = nil
 		}
 		return
@@ -975,6 +1103,9 @@ func (s *monoState) rewriteGenericMethodCall(c *MethodCall) {
 	}
 	origMethod := findMethod(origMethods, c.Name)
 	if origMethod == nil {
+		if builtinReceiverOnly {
+			c.TypeArgs = nil
+		}
 		return
 	}
 	if len(origMethod.Generics) == 0 {
@@ -1183,7 +1314,7 @@ func (s *monoState) scanDecl(d Decl) {
 		if d.Value != nil {
 			s.seedVariantTypeFromContext(d.Type, d.Value)
 			s.scanExpr(d.Value)
-			if isUnresolvedType(d.Type) {
+			if isUnresolvedType(d.Type) || containsTypeVar(d.Type) {
 				d.Type = cloneResolvedType(d.Value.Type())
 			}
 		}
@@ -1248,7 +1379,7 @@ func (s *monoState) scanStmt(st Stmt) {
 		if st.Value != nil {
 			s.seedVariantTypeFromContext(st.Type, st.Value)
 			s.scanExpr(st.Value)
-			if isUnresolvedType(st.Type) {
+			if isUnresolvedType(st.Type) || containsTypeVar(st.Type) {
 				st.Type = cloneResolvedType(st.Value.Type())
 			}
 		}
@@ -1647,6 +1778,7 @@ func (s *monoState) scanExpr(e Expr) {
 		for i := range e.Args {
 			s.scanExpr(e.Args[i].Value)
 		}
+		s.rewriteBuiltinReceiverMethodCall(e)
 		if len(e.TypeArgs) > 0 {
 			s.rewriteGenericMethodCall(e)
 		}

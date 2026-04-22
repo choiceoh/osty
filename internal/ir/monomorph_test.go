@@ -1823,6 +1823,89 @@ func TestMonomorphizeBuiltinOptionalMethodFallbackClearsReceiverTypeArgs(t *test
 	}
 }
 
+func TestMonomorphizeBuiltinMapMethodMissingTemplateClearsReceiverTypeArgs(t *testing.T) {
+	// Some lowered stdlib paths can leave the builtin owner declaration
+	// present without the original method template attached. Monomorph
+	// should still clear checker-carried receiver args on known
+	// nongeneric builtin methods instead of leaking stale turbofish
+	// metadata.
+	mapDecl := &StructDecl{
+		Name:     "Map",
+		Generics: []*TypeParam{{Name: "K"}, {Name: "V"}},
+	}
+	mapKV := &NamedType{Name: "Map", Args: []Type{TString, TInt}}
+	call := &MethodCall{
+		Receiver: &Ident{Name: "m", Kind: IdentLocal, T: mapKV},
+		Name:     "get",
+		TypeArgs: []Type{TString, TInt},
+		Args:     []Arg{{Value: strLit("k")}},
+		T:        &OptionalType{Inner: TInt},
+	}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{
+			&LetStmt{Name: "m", Type: mapKV},
+			&ExprStmt{X: call},
+		}},
+	}
+	out, errs := Monomorphize(&Module{Package: "main", Decls: []Decl{mapDecl, main}})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	var mainCp *FnDecl
+	for _, d := range out.Decls {
+		if fn, ok := d.(*FnDecl); ok && fn.Name == "main" {
+			mainCp = fn
+			break
+		}
+	}
+	if mainCp == nil {
+		t.Fatalf("main missing from output decls: %+v", out.Decls)
+	}
+	callCp := mainCp.Body.Stmts[1].(*ExprStmt).X.(*MethodCall)
+	if len(callCp.TypeArgs) != 0 {
+		t.Fatalf("builtin Map.get missing-template fallback should clear stale receiver TypeArgs, got %+v", callCp.TypeArgs)
+	}
+}
+
+func TestMonomorphizeBuiltinSetMethodFallbackSubstitutesReceiverReturnType(t *testing.T) {
+	// Default-off stdlib body lowering still runs monomorphization. For
+	// builtin nongeneric methods like Set<T>.toList(), the call result
+	// type and any let binding that records it should inherit the
+	// receiver's concrete T even when no builtin owner template was
+	// injected into the module.
+	tvT := &TypeVar{Name: "T"}
+	setInt := &NamedType{Name: "Set", Args: []Type{TInt}}
+	call := &MethodCall{
+		Receiver: &Ident{Name: "seen", Kind: IdentLocal, T: setInt},
+		Name:     "toList",
+		T:        &NamedType{Name: "List", Args: []Type{tvT}},
+	}
+	listT := &NamedType{Name: "List", Args: []Type{&TypeVar{Name: "T"}}}
+	main := &FnDecl{
+		Name: "main", Return: TUnit,
+		Body: &Block{Stmts: []Stmt{
+			&LetStmt{Name: "seen", Type: setInt},
+			&LetStmt{Name: "ids", Type: listT, Value: call},
+		}},
+	}
+	out, errs := Monomorphize(&Module{Package: "main", Decls: []Decl{main}})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	mainCp := out.Decls[0].(*FnDecl)
+	ids := mainCp.Body.Stmts[1].(*LetStmt)
+	listTyp, ok := ids.Type.(*NamedType)
+	if !ok || listTyp == nil || listTyp.Name != "List" || len(listTyp.Args) != 1 || typeString(listTyp.Args[0]) != typeString(TInt) {
+		t.Fatalf("let binding type should concrete-substitute Set<T>.toList() to List<Int>, got %+v", ids.Type)
+	}
+	callCp := ids.Value.(*MethodCall)
+	callRet, ok := callCp.T.(*NamedType)
+	if !ok || callRet == nil || callRet.Name != "List" || len(callRet.Args) != 1 || typeString(callRet.Args[0]) != typeString(TInt) {
+		t.Fatalf("builtin Set.toList fallback should concrete-substitute method return type, got %+v", callCp.T)
+	}
+}
+
 func TestMonomorphizeMethodLocalGenericArityMismatch(t *testing.T) {
 	box := genericBoxNonGenericOwner()
 	// get<U> — pass two type args

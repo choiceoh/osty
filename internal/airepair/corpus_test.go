@@ -121,7 +121,7 @@ func TestAnalyzeCorpus(t *testing.T) {
 			minBeforeTotalErrs: 1,
 			wantAfterParseErrs: 0,
 			wantAfterTotalErrs: 0,
-			wantChangeKinds:    []string{"python_if_block", "python_elif_block", "python_else_block"},
+			wantChangeKinds:    []string{"else_if_keyword", "python_if_block", "python_else_if_block", "python_else_block"},
 		},
 		{
 			name:               "js_for_of_loop",
@@ -233,7 +233,7 @@ func TestAnalyzeCorpus(t *testing.T) {
 			minBeforeTotalErrs: 1,
 			wantAfterParseErrs: 0,
 			wantAfterTotalErrs: 0,
-			wantChangeKinds:    []string{"python_match_block", "python_case_arm", "python_default_arm"},
+			wantChangeKinds:    []string{"case_arm", "default_arm", "python_match_block", "python_arrow_arm_block", "python_arrow_arm_block"},
 		},
 		{
 			name:               "python_bare_tuple_loop",

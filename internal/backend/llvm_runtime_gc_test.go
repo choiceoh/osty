@@ -4161,6 +4161,7 @@ void osty_gc_debug_collect_major(void);
 void osty_gc_debug_collect_minor(void);
 
 static int run_stw_during_mark(void (*stw_call)(void)) {
+    fflush(stdout);
     pid_t pid = fork();
     if (pid < 0) return 1;
     if (pid == 0) {
