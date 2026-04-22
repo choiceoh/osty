@@ -1,0 +1,15 @@
+use std.testing
+
+fn benchLogScan() {
+    let lines = buildLogLines(1024)
+    testing.benchmark(50, || {
+        // No hint.black_box here — logScan dispatches through several
+        // runtime helpers (strings_Split, map_insert, map_getOr) that
+        // LLVM can't prove side-effect-free, so the call survives DCE
+        // without the asm barrier. Adding `use std.hint` alongside the
+        // Map<String, Int> machinery triggers a separate monomorph-
+        // divergence the backend hasn't addressed yet.
+        let _ = logScan(lines)
+        Ok(())
+    })
+}

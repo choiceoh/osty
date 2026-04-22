@@ -1,0 +1,13 @@
+use std.testing
+
+fn benchCsvSum() {
+    let rows = buildCSV(512)
+    testing.benchmark(50, || {
+        // Parsing dispatches through strings_Split and string_toInt —
+        // runtime helpers LLVM can't see through — so the call
+        // survives DCE without an asm barrier. (See log_scan for the
+        // std.hint+Map monomorph-divergence note.)
+        let _ = csvSum(rows)
+        Ok(())
+    })
+}

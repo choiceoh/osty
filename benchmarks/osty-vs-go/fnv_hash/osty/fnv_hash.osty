@@ -1,0 +1,22 @@
+fn buildFnvInput(n: Int) -> List<Int> {
+    let mut xs: List<Int> = []
+    let mut state = 1
+    for _i in 0..n {
+        state = (state * 1103515245 + 12345) % 2147483648
+        xs.push(state % 256)
+    }
+    xs
+}
+
+#[inline(never)]
+pub fn fnvHash(bytes: List<Int>) -> Int {
+    let mut hash = 16777216
+    let prime = 16777619
+    let mut i = 0
+    for i < bytes.len() {
+        hash = hash ^ bytes[i]
+        hash = hash * prime
+        i = i + 1
+    }
+    hash
+}

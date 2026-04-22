@@ -1,0 +1,75 @@
+fn buildCSV(n: Int) -> List<String> {
+    let samples = [
+        "us,free,alice,search,ok",
+        "eu,pro,bob,report,ok",
+        "apac,enterprise,carol,search,fail",
+        "sa,free,dave,export,ok",
+        "us,pro,eve,report,fail",
+        "eu,enterprise,frank,search,ok",
+        "apac,free,grace,export,ok",
+        "sa,pro,heidi,report,fail",
+        "us,enterprise,ivan,search,ok",
+        "eu,free,judy,export,ok",
+        "apac,pro,ken,report,ok",
+        "sa,enterprise,leo,search,fail",
+    ]
+    let mut out: List<String> = []
+    let mut i = 0
+    for i < n {
+        out.push(samples[i % 12])
+        i = i + 1
+    }
+    out
+}
+
+fn regionWeight(s: String) -> Int {
+    if s == "us" {
+        1
+    } else if s == "eu" {
+        2
+    } else if s == "apac" {
+        3
+    } else if s == "sa" {
+        4
+    } else {
+        0
+    }
+}
+
+fn tierWeight(s: String) -> Int {
+    if s == "free" {
+        1
+    } else if s == "pro" {
+        3
+    } else if s == "enterprise" {
+        7
+    } else {
+        0
+    }
+}
+
+#[inline(never)]
+pub fn csvSum(rows: List<String>) -> Int {
+    let mut counts: Map<String, Int> = {:}
+    let mut total = 0
+    for row in rows {
+        let parts = row.split(",")
+        let key = "{parts[0]}/{parts[1]}"
+        let next = if counts.containsKey(key) {
+            counts.getOr(key, 0) + 1
+        } else {
+            1
+        }
+        counts.insert(key, next)
+        total = total + regionWeight(parts[0]) * tierWeight(parts[1])
+        if parts[4] == "ok" {
+            total = total + 1
+        }
+    }
+    // Fold the map so the GROUP BY cost participates in the checksum.
+    let keys = counts.keys().sorted()
+    for k in keys {
+        total = total + counts.getOr(k, 0) * k.len()
+    }
+    total
+}

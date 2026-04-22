@@ -2890,13 +2890,13 @@ func (g *mirGen) emitTestingBenchmarkMIR(c *mir.CallInstr) error {
 	// later benchmark in the same module reuses the same declare lines.
 	g.declareRuntime("osty_rt_bench_now_nanos", "declare i64 @osty_rt_bench_now_nanos()")
 	g.declareRuntime("osty_rt_bench_target_ns", "declare i64 @osty_rt_bench_target_ns()")
+	g.declareRuntime("osty_gc_debug_allocated_bytes_total", "declare i64 @osty_gc_debug_allocated_bytes_total()")
 	g.declareRuntime("printf", "declare i32 @printf(ptr, ...)")
 
-	// `@.bench_fmt` is the summary format string. The runner's regex
-	// (`^bench\s+.+?\s+iter=\d+\s+total=\d+ns\s+avg=(\d+)ns`) matches
-	// regardless of the filename portion, so "<unknown>" would parse —
-	// but a real path/line keeps the human-facing output useful.
-	benchFmt := g.stringLiteral("bench %s:%ld iter=%ld total=%ldns avg=%ldns\n")
+	// `@.bench_fmt` is the summary format string. Extended with
+	// `bytes/op=%ld` so the osty-vs-go runner can surface per-iter GC
+	// allocation — the existing regex optionally captures this field.
+	benchFmt := g.stringLiteral("bench %s:%ld iter=%ld total=%ldns avg=%ldns bytes/op=%ld\n")
 	pathSym := g.stringLiteral(g.source)
 	line := int64(c.SpanV.Start.Line)
 
@@ -3089,6 +3089,13 @@ func (g *mirGen) emitTestingBenchmarkMIR(c *mir.CallInstr) error {
 	}
 
 	// --- Phase 3: timed run. ---
+	// Sample the GC allocation odometer before and after the timed
+	// loop — the delta divided by finalN is the per-iter bytes/op
+	// we'll surface in the summary line.
+	bytesStart := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(bytesStart)
+	g.fnBuf.WriteString(" = call i64 @osty_gc_debug_allocated_bytes_total()\n")
 	timedStart := g.fresh()
 	g.fnBuf.WriteString("  ")
 	g.fnBuf.WriteString(timedStart)
@@ -3100,6 +3107,10 @@ func (g *mirGen) emitTestingBenchmarkMIR(c *mir.CallInstr) error {
 	g.fnBuf.WriteString("  ")
 	g.fnBuf.WriteString(timedEnd)
 	g.fnBuf.WriteString(" = call i64 @osty_rt_bench_now_nanos()\n")
+	bytesEnd := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(bytesEnd)
+	g.fnBuf.WriteString(" = call i64 @osty_gc_debug_allocated_bytes_total()\n")
 	total := g.fresh()
 	g.fnBuf.WriteString("  ")
 	g.fnBuf.WriteString(total)
@@ -3107,6 +3118,14 @@ func (g *mirGen) emitTestingBenchmarkMIR(c *mir.CallInstr) error {
 	g.fnBuf.WriteString(timedEnd)
 	g.fnBuf.WriteString(", ")
 	g.fnBuf.WriteString(timedStart)
+	g.fnBuf.WriteByte('\n')
+	bytesTotal := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(bytesTotal)
+	g.fnBuf.WriteString(" = sub i64 ")
+	g.fnBuf.WriteString(bytesEnd)
+	g.fnBuf.WriteString(", ")
+	g.fnBuf.WriteString(bytesStart)
 	g.fnBuf.WriteByte('\n')
 	// avg = total / finalN  (guarded: emit a select around N>0 so we never
 	// hit sdiv-by-zero when an exotic probe path nullified N).
@@ -3132,6 +3151,16 @@ func (g *mirGen) emitTestingBenchmarkMIR(c *mir.CallInstr) error {
 	g.fnBuf.WriteString(", ")
 	g.fnBuf.WriteString(safeN)
 	g.fnBuf.WriteByte('\n')
+	// bytesPerOp := bytesTotal / safeN. Guarded by the same safeN as
+	// avg so a degenerate N=0 path doesn't trap on sdiv.
+	bytesPerOp := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(bytesPerOp)
+	g.fnBuf.WriteString(" = sdiv i64 ")
+	g.fnBuf.WriteString(bytesTotal)
+	g.fnBuf.WriteString(", ")
+	g.fnBuf.WriteString(safeN)
+	g.fnBuf.WriteByte('\n')
 
 	// --- Phase 4: summary line + distribution line. ---
 	g.fnBuf.WriteString("  call i32 (ptr, ...) @printf(ptr ")
@@ -3146,6 +3175,8 @@ func (g *mirGen) emitTestingBenchmarkMIR(c *mir.CallInstr) error {
 	g.fnBuf.WriteString(total)
 	g.fnBuf.WriteString(", i64 ")
 	g.fnBuf.WriteString(avg)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(bytesPerOp)
 	g.fnBuf.WriteString(")\n")
 
 	// Distribution stub: the §11.4 spec contract requires `min=/p50=/p99=/max=`
