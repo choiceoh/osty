@@ -1676,6 +1676,41 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 	return out
 }
 
+// recoverQualifiedCallReturn pulls the declared return type off the
+// item-block signature that a `use` FFI alias introduces. Targets
+// the specific gap where the native checker skips a call like
+// `host.HasManifest(self.Manifest)` inside a method body — the
+// callee FieldExpr and the wrapping CallExpr both land with
+// ErrType, and the normal `recoverCallReturnType(callee)` path
+// cannot fire because callee.T itself is still ErrType. Returns nil
+// when the qualifier is not an FFI alias or no matching fn-block
+// signature exists, letting the caller's cascade behaviour stand.
+func (l *lowerer) recoverQualifiedCallReturn(fx *ast.FieldExpr) Type {
+	if fx == nil || l.file == nil {
+		return nil
+	}
+	aliasIdent, ok := fx.X.(*ast.Ident)
+	if !ok || aliasIdent.Name == "" || fx.Name == "" {
+		return nil
+	}
+	for _, u := range l.file.Uses {
+		if u == nil || !u.IsFFI() || u.Alias != aliasIdent.Name {
+			continue
+		}
+		for _, inner := range u.GoBody {
+			fn, ok := inner.(*ast.FnDecl)
+			if !ok || fn == nil || fn.Name != fx.Name {
+				continue
+			}
+			if fn.ReturnType == nil {
+				return &PrimType{Kind: PrimUnit}
+			}
+			return l.lowerType(fn.ReturnType)
+		}
+	}
+	return nil
+}
+
 // recoverCallReturnType pulls the return type off the callee's FnType
 // when the checker did not record a type for the call expression. The
 // resolver seeds symbol types for top-level fns and `use`-imported
@@ -1766,6 +1801,17 @@ func (l *lowerer) lowerQualifiedCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArg
 	t := l.exprType(e)
 	if t == ErrTypeVal {
 		t = recoverCallReturnType(callee)
+	}
+	if t == ErrTypeVal {
+		// Second-chance recovery: when the qualifier is a `use` FFI
+		// alias (e.g. `use runtime.cihost as host { fn HasManifest(…)
+		// -> Bool … }`), the native checker does not seed Types[fx]
+		// and the callee's own FnType is still ErrType. Walk the
+		// alias's item block in the current file's Uses to pull the
+		// declared return type straight from the AST.
+		if rec := l.recoverQualifiedCallReturn(fx); rec != nil && rec != ErrTypeVal {
+			t = rec
+		}
 	}
 	out := &CallExpr{
 		Callee:   callee,
@@ -2012,13 +2058,56 @@ func (l *lowerer) lowerFieldExpr(e *ast.FieldExpr) Expr {
 			SpanV: nodeSpan(e),
 		}
 	}
+	loweredX := l.lowerExpr(e.X)
+	t := l.exprType(e)
+	if t == ErrTypeVal {
+		if rec := l.recoverFieldType(loweredX, e.Name); rec != nil && rec != ErrTypeVal {
+			t = rec
+		}
+	}
 	return &FieldExpr{
-		X:        l.lowerExpr(e.X),
+		X:        loweredX,
 		Name:     e.Name,
 		Optional: e.IsOptional,
-		T:        l.exprType(e),
+		T:        t,
 		SpanV:    nodeSpan(e),
 	}
+}
+
+// recoverFieldType derives a field expression's result type by
+// looking up the field on the receiver's declared struct. Mirrors
+// the other operand-based recovery helpers (recoverBinaryType /
+// recoverBlockType / recoverCallReturnType / recoverIndexType) and
+// targets the native-checker gap where the walker skips expressions
+// nested inside string interpolation parts — leaving
+// `node.text` / `node.name` / `node.value` FieldExpr nodes
+// untyped, cascading ErrType through the enclosing MIR temps.
+//
+// The lookup is intentionally narrow: only `NamedType` receivers
+// whose name matches a `StructDecl` in the current file's top-level
+// declarations. Generics and cross-package types stay at ErrType
+// — the caller's prior cascade behaviour covers those.
+func (l *lowerer) recoverFieldType(base Expr, fieldName string) Type {
+	if base == nil || fieldName == "" || l.file == nil {
+		return nil
+	}
+	bt := base.Type()
+	nt, ok := bt.(*NamedType)
+	if !ok || nt.Name == "" {
+		return nil
+	}
+	for _, d := range l.file.Decls {
+		sd, ok := d.(*ast.StructDecl)
+		if !ok || sd == nil || sd.Name != nt.Name {
+			continue
+		}
+		for _, f := range sd.Fields {
+			if f != nil && f.Name == fieldName && f.Type != nil {
+				return l.lowerType(f.Type)
+			}
+		}
+	}
+	return nil
 }
 
 // tupleIndex parses a field name like "0" or "12" as a tuple index.
