@@ -4414,9 +4414,41 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 // type dictates the suffix (`_i64`, `_string`, `_bytes`, …).
 func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 	if i.Kind == mir.IntrinsicMapNew {
+		// `osty_rt_map_new` is `(key_kind, value_kind, value_size, trace)`;
+		// calling it with zero args leaves x0..x3 holding stale caller
+		// registers, and `osty_rt_map_new` aborts with "invalid map
+		// value size" as soon as value_size (x2) is ≤ 0. Derive K/V
+		// from the destination local's Map<K, V> type and pass the
+		// same (kind, kind, size, null) tuple the legacy AST emitter
+		// builds in emitMapNewFor.
+		if i.Dest == nil {
+			return unsupported("mir-mvp", "map_new without destination")
+		}
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return unsupported("mir-mvp", "map_new dest into unknown local")
+		}
+		keyT, valT := mapKeyValueTypes(destLoc.Type)
+		if keyT == nil || valT == nil {
+			return unsupported("mir-mvp", fmt.Sprintf("map_new dest type %s not Map<K,V>", mirTypeString(destLoc.Type)))
+		}
+		keyLLVM := g.llvmType(keyT)
+		valLLVM := g.llvmType(valT)
+		keyKind := containerAbiKind(keyLLVM, isStringLLVMType(keyT))
+		valKind := containerAbiKind(valLLVM, isStringLLVMType(valT))
+		valueSize := mapValueSizeBytes(valLLVM)
+		if valueSize <= 0 {
+			return unsupported("mir-mvp", fmt.Sprintf("map_new unsupported value type %s", valLLVM))
+		}
 		sym := "osty_rt_map_new"
-		g.declareRuntime(sym, "declare ptr @"+sym+"()")
-		return g.emitSimpleCall(i, sym, "ptr", nil)
+		g.declareRuntime(sym, "declare ptr @"+sym+"(i64, i64, i64, ptr)")
+		args := []string{
+			fmt.Sprintf("i64 %d", keyKind),
+			fmt.Sprintf("i64 %d", valKind),
+			fmt.Sprintf("i64 %d", valueSize),
+			"ptr null",
+		}
+		return g.emitSimpleCall(i, sym, "ptr", args)
 	}
 	if len(i.Args) < 1 {
 		return unsupported("mir-mvp", "map intrinsic with no receiver")
@@ -6361,6 +6393,24 @@ func mapKeyValueTypes(t mir.Type) (mir.Type, mir.Type) {
 		}
 	}
 	return nil, nil
+}
+
+// mapValueSizeBytes returns the slot width `osty_rt_map_new` expects
+// for a value of the given LLVM type, matching the legacy AST
+// emitter's emitTypeSize bookkeeping for the scalar slots the MIR
+// path currently produces map values in. Aggregates (structs / unions)
+// return 0 so callers can bail out with a diagnostic instead of
+// quietly lowering an ill-sized slot.
+func mapValueSizeBytes(llvmTyp string) int {
+	switch llvmTyp {
+	case "i64", "double", "ptr":
+		return 8
+	case "i32":
+		return 4
+	case "i8", "i1":
+		return 1
+	}
+	return 0
 }
 
 func setElemType(t mir.Type) mir.Type {

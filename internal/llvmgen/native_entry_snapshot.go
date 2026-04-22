@@ -106,6 +106,8 @@ type llvmNativeExpr struct {
 	elemLLVMType        string
 	mapKeyLLVMType      string
 	mapKeyIsString      bool
+	mapValueLLVMType    string
+	mapValueIsString    bool
 	optionInnerLLVMType string
 	firstArgByRef       bool
 	receiverPath        []*llvmNativeFieldPath
@@ -1334,7 +1336,11 @@ func llvmNativeEvalListLit(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValu
 }
 
 func llvmNativeEvalMapLit(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
-	m := llvmMapNew(emitter)
+	// `osty_rt_map_new` aborts on `value_size <= 0`; calling it with
+	// zero args leaves the arg registers holding garbage, so we must
+	// pass the correct (key_kind, value_kind, value_size, trace)
+	// tuple — matching the legacy AST emitter's `emitMapNewFor`.
+	m := llvmMapNewTyped(emitter, expr.mapKeyLLVMType, expr.mapKeyIsString, expr.mapValueLLVMType, expr.mapValueIsString)
 	for i := 0; i+1 < len(expr.childExprs); i += 2 {
 		key := llvmNativeEvalExpr(emitter, expr.childExprs[i])
 		value := llvmNativeEvalExpr(emitter, expr.childExprs[i+1])
@@ -1342,6 +1348,30 @@ func llvmNativeEvalMapLit(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue
 		llvmMapInsert(emitter, m, key, slot, expr.mapKeyIsString)
 	}
 	return m
+}
+
+// llvmMapNewTyped emits a 4-arg `osty_rt_map_new(key_kind, value_kind,
+// value_size, trace)` call with the actual K/V metadata derived from
+// the map literal's MIR types. Value-trace is deliberately `null` —
+// values are currently written through the spill-to-slot path which
+// either (1) is a scalar and doesn't need GC tracing or (2) is a
+// managed ptr and the slot itself is rooted elsewhere. A follow-up
+// PR will wire proper slot-trace callbacks for the managed-value case.
+func llvmMapNewTyped(emitter *LlvmEmitter, keyTyp string, keyIsString bool, valueTyp string, valueIsString bool) *LlvmValue {
+	keyKind := llvmContainerAbiKind(keyTyp, keyIsString)
+	valueKind := llvmContainerAbiKind(valueTyp, valueIsString)
+	valueSize := mapValueSizeBytes(valueTyp)
+	if valueSize <= 0 {
+		// Fallback: GEP-based size for aggregate / unknown-width slots.
+		// Matches emitTypeSize in generator.go.
+		valueSize = 8
+	}
+	return llvmCall(emitter, "ptr", "osty_rt_map_new", []*LlvmValue{
+		llvmIntLiteral(keyKind),
+		llvmIntLiteral(valueKind),
+		llvmIntLiteral(valueSize),
+		{typ: "ptr", name: "null"},
+	})
 }
 
 func llvmNativeEvalListIndex(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {

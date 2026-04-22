@@ -3027,11 +3027,13 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 			return nil, false
 		}
 		out := &llvmNativeExpr{
-			kind:           llvmNativeExprMapLit,
-			llvmType:       "ptr",
-			mapKeyLLVMType: mapInfo.mapKeyType,
-			mapKeyIsString: mapInfo.mapKeyString,
-			childExprs:     make([]*llvmNativeExpr, 0, len(e.Entries)*2),
+			kind:             llvmNativeExprMapLit,
+			llvmType:         "ptr",
+			mapKeyLLVMType:   mapInfo.mapKeyType,
+			mapKeyIsString:   mapInfo.mapKeyString,
+			mapValueLLVMType: mapInfo.mapValueType,
+			mapValueIsString: nativeTypeIsString(e.ValT),
+			childExprs:       make([]*llvmNativeExpr, 0, len(e.Entries)*2),
 		}
 		for _, entry := range e.Entries {
 			key, ok := nativeExprFromIRWithHint(ctx, entry.Key, mapInfo.mapKeyType)
