@@ -1,0 +1,56 @@
+fn buildSimdValues(n: Int) -> List<Int> {
+    let mut values: List<Int> = []
+    for i in 0..n {
+        values.push(((i * 17) % 97) - 45 + (i % 7))
+    }
+    values
+}
+
+fn buildSimdWeights(n: Int) -> List<Int> {
+    let mut weights: List<Int> = []
+    for i in 0..n {
+        weights.push(((i * 29) % 89) + 25)
+    }
+    weights
+}
+
+#[vectorize]
+pub fn analyzeSimdStats(values: List<Int>, weights: List<Int>) -> Int {
+    let n = if values.len() < weights.len() { values.len() } else { weights.len() }
+    let mut dot = 0
+    let mut energy = 0
+    let mut peak = -1000000000
+    let mut hits = 0
+
+    for i in 0..n {
+        let mixed = values[i] * weights[i] + values[i] * 4 - weights[i]
+        dot = dot + mixed
+        energy = energy + mixed * mixed
+        if mixed > 1500 {
+            hits = hits + 1
+        }
+    }
+
+    if n > 7 {
+        for i in 0..(n - 7) {
+            let window =
+                values[i] * weights[i] * 3 +
+                values[i + 1] * weights[i + 1] * 5 +
+                values[i + 2] * weights[i + 2] * 7 +
+                values[i + 3] * weights[i + 3] * 11 +
+                values[i + 4] * weights[i + 4] * 13 +
+                values[i + 5] * weights[i + 5] * 17 +
+                values[i + 6] * weights[i + 6] * 19 +
+                values[i + 7] * weights[i + 7] * 23
+            if window > peak {
+                peak = window
+            }
+        }
+    }
+
+    let mut out = dot + (energy / 97) + hits * 31 + (peak / 11)
+    if out < 0 {
+        out = 0 - out
+    }
+    out
+}

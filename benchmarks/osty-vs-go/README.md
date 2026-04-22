@@ -19,6 +19,15 @@ benchmarks/osty-vs-go/
 ├── loop_sum/
 │   ├── go/      # package loopsumbench — BenchmarkSumTo100
 │   └── osty/    # benchSumTo100
+├── record_pipeline/
+│   ├── go/      # package recordpipelinebench — BenchmarkRecordPipeline
+│   └── osty/    # benchRecordPipeline
+├── lane_route/
+│   ├── go/      # package laneroutebench — BenchmarkLaneRoute
+│   └── osty/    # benchLaneRoute
+├── simd_stats/
+│   ├── go/      # package simdstatsbench — BenchmarkSimdStats
+│   └── osty/    # benchSimdStats
 └── fib/
     ├── go/      # package fibbench — BenchmarkFib15
     └── osty/    # benchFib15
@@ -28,6 +37,16 @@ One bench per workload, named the same on both sides: Go's
 `BenchmarkFoo` pairs with Osty's `benchFoo`. Adding a new pair is just
 a new top-level directory that follows the same layout — the runner
 discovers it automatically.
+
+Current workload mix:
+
+- `arith`: tiny scalar arithmetic / call overhead.
+- `fib`: recursive call-heavy control flow.
+- `loop_sum`: tight scalar loop (good for loop + vectorization regressions).
+- `word_freq`: collections + sort + string-heavy single-threaded aggregation.
+- `record_pipeline`: struct-heavy filtering + grouping + sorted-key aggregation.
+- `lane_route`: branchy one-dimensional dynamic programming / route relaxation.
+- `simd_stats`: long integer-array passes that stress vector-friendly hot loops.
 
 ## Running
 

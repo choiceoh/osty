@@ -1,0 +1,9 @@
+use std.testing
+
+fn benchLaneRoute() {
+    let costs = buildLaneCosts(4096)
+    testing.benchmark(20, || {
+        let _ = analyzeLaneRoute(costs)
+        Ok(())
+    })
+}

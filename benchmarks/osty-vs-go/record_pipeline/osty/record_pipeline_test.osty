@@ -1,0 +1,9 @@
+use std.testing
+
+fn benchRecordPipeline() {
+    let rows = buildPipelineRecords()
+    testing.benchmark(10, || {
+        let _ = analyzeRecordPipeline(rows)
+        Ok(())
+    })
+}
