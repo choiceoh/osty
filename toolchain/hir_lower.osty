@@ -1866,3 +1866,379 @@ pub fn hirLowerRangeShapeName(s: HirLowerRangeShape) -> String {
         HirRangeShapeTo -> "to",
     }
 }
+
+// ====================================================================
+// Composite expr assemblers (Stage 5f)
+// ====================================================================
+//
+// The final assembly layer covering expression kinds that take
+// lists of already-lowered children plus annotation / metadata
+// context: Call / MethodCall / StructLit / VariantLit / Closure /
+// MatchExpr (+ decision-tree plumbing) / Block / If / IfLet.
+//
+// As with Stage 5c/5d, these helpers stay AST-agnostic — the
+// caller walks the parser arena, these normalise the assembly.
+
+// ---- Call / MethodCall / IntrinsicCall -------------------------
+
+/// hirLowerAssembleCall builds a plain function call. TypeArgs
+/// (turbofish) are optional — pass an empty list when absent.
+pub fn hirLowerAssembleCall(
+    callee: HirExpr,
+    typeArgs: List<HirType>,
+    args: List<HirArg>,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    if typeArgs.len() == 0 {
+        return hirCall(callee, args, typ, span)
+    }
+    hirCallTyped(callee, typeArgs, args, typ, span)
+}
+
+/// hirLowerAssembleMethodCall builds `receiver.name(args)`.
+/// TypeArgs (turbofish) are optional.
+pub fn hirLowerAssembleMethodCall(
+    receiver: HirExpr,
+    name: String,
+    typeArgs: List<HirType>,
+    args: List<HirArg>,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    if typeArgs.len() == 0 {
+        return hirMethodCall(receiver, name, args, typ, span)
+    }
+    hirMethodCallTyped(receiver, name, typeArgs, args, typ, span)
+}
+
+/// hirLowerAssembleIntrinsicCall wraps hirIntrinsic for the
+/// print family. Stage 5e's hirLowerIntrinsicFromIdent gives the
+/// caller the kind; this helper threads the already-lowered args.
+pub fn hirLowerAssembleIntrinsicCall(
+    kind: HirIntrinsicKind,
+    args: List<HirArg>,
+    span: HirSpan,
+) -> HirExpr {
+    hirIntrinsic(kind, args, span)
+}
+
+// ---- StructLit / VariantLit ------------------------------------
+
+/// hirLowerAssembleStructLit picks between the plain-fields form
+/// and the spread form based on `hasSpread`. Variant ctor calls
+/// from identifier-style shapes route through hirLowerAssembleVariantLit
+/// instead.
+pub fn hirLowerAssembleStructLit(
+    typeName: String,
+    fields: List<HirStructLitField>,
+    hasSpread: Bool,
+    spread: HirExpr,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    if hasSpread {
+        return hirStructLitSpread(typeName, fields, spread, typ, span)
+    }
+    hirStructLit(typeName, fields, typ, span)
+}
+
+/// hirLowerAssembleVariantLit builds an enum variant construction.
+/// `enumName` may be empty for prelude variants (Some/None/Ok/Err)
+/// whose owning enum is inferred from the typ.
+pub fn hirLowerAssembleVariantLit(
+    enumName: String,
+    variant: String,
+    args: List<HirArg>,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    hirVariantLit(enumName, variant, args, typ, span)
+}
+
+// ---- MatchExpr + decision tree integration ---------------------
+
+/// hirLowerAssembleMatchExpr builds a HirMatchExpr and optionally
+/// attaches a pre-compiled decision tree produced by
+/// `pmCompileDecisionTree` (see pmcompile.osty). The tree lets
+/// Stage 4f's walker emit a proper SwitchInt / Branch cascade;
+/// without it, the tree-less fallback takes over.
+///
+/// Callers should generally run:
+///
+///   let tree = pmCompileDecisionTree(scrutinee.typ, arms)
+///   let expr = hirLowerAssembleMatchExpr(
+///       scrutinee, arms, tree, typ, span,
+///   )
+///
+/// Passing a default-invalid tree signals "skip tree path"; the
+/// helper honours that and leaves matchExprHasTree=false.
+pub fn hirLowerAssembleMatchExpr(
+    scrutinee: HirExpr,
+    arms: List<HirMatchArm>,
+    tree: HirDecisionNode,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    let mut e = hirMatchExpr(scrutinee, arms, typ, span)
+    if hirDecisionIsValid(tree) {
+        e.matchExprHasTree = true
+        e.matchExprTree = tree
+    }
+    e
+}
+
+/// hirLowerAssembleMatchStmt mirrors MatchExpr but for statement
+/// position. Value is discarded; the walker routes through
+/// mirLowerMatchStmt's core on the MIR side.
+pub fn hirLowerAssembleMatchStmt(
+    scrutinee: HirExpr,
+    arms: List<HirMatchArm>,
+    tree: HirDecisionNode,
+    span: HirSpan,
+) -> HirStmt {
+    let mut s = hirMatchStmt(scrutinee, arms, span)
+    if hirDecisionIsValid(tree) {
+        s.matchHasTree = true
+        s.matchTree = tree
+    }
+    s
+}
+
+// ---- If / IfLet / BlockExpr ------------------------------------
+
+/// hirLowerAssembleIfExpr builds an if-as-expression. Unlike
+/// stmt-form if, expression-form always requires both arms — the
+/// resolver rejects else-less expression-form if.
+pub fn hirLowerAssembleIfExpr(
+    cond: HirExpr,
+    thenBlock: HirBlock,
+    elseBlock: HirBlock,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    hirIfExpr(cond, thenBlock, elseBlock, typ, span)
+}
+
+/// hirLowerAssembleIfLetExpr builds `if let pat = scrut { then }
+/// [else { else }]`. `hasElse=false` emits the no-else form;
+/// `elseBlock` is ignored.
+pub fn hirLowerAssembleIfLetExpr(
+    pattern: HirPattern,
+    scrutinee: HirExpr,
+    thenBlock: HirBlock,
+    hasElse: Bool,
+    elseBlock: HirBlock,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    if hasElse {
+        return hirIfLetExprElse(pattern, scrutinee, thenBlock, elseBlock, typ, span)
+    }
+    hirIfLetExpr(pattern, scrutinee, thenBlock, typ, span)
+}
+
+/// hirLowerAssembleBlockExpr wraps a block used as expression.
+pub fn hirLowerAssembleBlockExpr(
+    body: HirBlock,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    hirBlockExpr(body, typ, span)
+}
+
+// ---- Closure ---------------------------------------------------
+
+/// hirLowerAssembleClosure builds a closure expression from
+/// already-lowered components. Callers collect captures via the
+/// resolver's closure-analysis pass (or approximate by walking the
+/// body for free-variable references) before calling.
+pub fn hirLowerAssembleClosure(
+    params: List<HirParam>,
+    returnType: HirType,
+    body: HirBlock,
+    captures: List<HirCapture>,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    hirClosure(params, returnType, body, captures, typ, span)
+}
+
+/// hirLowerAssembleCapture wraps `hirCapture` with the
+/// `CaptureKind` pre-resolved from the enclosing scope's symbol
+/// table. Mirrors Go's closure-capture classifier.
+pub fn hirLowerAssembleCapture(
+    name: String,
+    kind: HirCaptureKind,
+    typ: HirType,
+    mutable: Bool,
+    span: HirSpan,
+) -> HirCapture {
+    let mut c = hirCapture(name, kind, typ, span)
+    c.mutable = mutable
+    c
+}
+
+/// hirLowerCaptureKindFromSymbol maps a resolver symbol-kind string
+/// (same convention as hirLowerIdentKindFromSymbol) to the closure
+/// CaptureKind. Self / fn / param / global / local are the five
+/// primary kinds; anything else defaults to Unknown.
+///
+/// `isTopLevelLet` routes SymLet to CaptureGlobal when the
+/// referenced let is module-level, matching the identKind split.
+pub fn hirLowerCaptureKindFromSymbol(
+    symKind: String,
+    isTopLevelLet: Bool,
+) -> HirCaptureKind {
+    if symKind == "Param" { return HirCaptureParam }
+    if symKind == "Fn" { return HirCaptureFn }
+    if symKind == "Self" { return HirCaptureSelf }
+    if symKind == "Let" {
+        if isTopLevelLet {
+            return HirCaptureGlobal
+        }
+        return HirCaptureLocal
+    }
+    HirCaptureUnknown
+}
+
+// ---- Arg assemblers --------------------------------------------
+
+/// hirLowerAssembleArg picks between keyword and positional arg
+/// based on `name`. Empty name → positional; non-empty → keyword.
+pub fn hirLowerAssembleArg(
+    name: String,
+    value: HirExpr,
+    span: HirSpan,
+) -> HirArg {
+    if name == "" {
+        return hirArg(value, span)
+    }
+    hirArgKeyword(name, value, span)
+}
+
+// ---- Pattern assemblers ----------------------------------------
+
+/// hirLowerAssemblePatternIdent normalises the mut / non-mut
+/// IdentPat split. Caller passes the flag directly.
+pub fn hirLowerAssemblePatternIdent(
+    name: String,
+    mutable: Bool,
+    span: HirSpan,
+) -> HirPattern {
+    if mutable {
+        return hirIdentPatMut(name, span)
+    }
+    hirIdentPat(name, span)
+}
+
+/// hirLowerAssemblePatternStruct picks between the exact-fields form
+/// and the `..` rest form based on `rest`.
+pub fn hirLowerAssemblePatternStruct(
+    typeName: String,
+    fields: List<HirStructPatField>,
+    rest: Bool,
+    span: HirSpan,
+) -> HirPattern {
+    if rest {
+        return hirStructPatRest(typeName, fields, span)
+    }
+    hirStructPat(typeName, fields, span)
+}
+
+/// hirLowerAssemblePatternRange classifies a range pattern by which
+/// bounds are present — same three-form split as RangeLit. Empty
+/// range (`..`) is rejected by the caller's classifier
+/// (hirLowerClassifyRange returns HirRangeShapeEmpty).
+pub fn hirLowerAssemblePatternRange(
+    hasLow: Bool,
+    low: HirExpr,
+    hasHigh: Bool,
+    high: HirExpr,
+    inclusive: Bool,
+    span: HirSpan,
+) -> HirPattern {
+    if hasLow && hasHigh {
+        return hirRangePatBounded(low, high, inclusive, span)
+    }
+    if hasLow {
+        return hirRangePatFrom(low, span)
+    }
+    if hasHigh {
+        return hirRangePatTo(high, inclusive, span)
+    }
+    // Empty `..` — caller should have already rejected; emit an
+    // error pattern so downstream stays structured.
+    hirErrorPat("empty range pattern", span)
+}
+
+/// hirLowerAssemblePatternStructField picks between the shorthand
+/// and expanded struct-field pattern forms.
+pub fn hirLowerAssemblePatternStructField(
+    name: String,
+    hasPattern: Bool,
+    pattern: HirPattern,
+    span: HirSpan,
+) -> HirStructPatField {
+    if hasPattern {
+        return hirStructPatField(name, pattern, span)
+    }
+    hirStructPatFieldShorthand(name, span)
+}
+
+// ---- MatchArm + decision tree wiring ---------------------------
+
+/// hirLowerAssembleMatchArm picks between the plain and guarded
+/// forms. The guard expression — if present — must be of type Bool;
+/// the HIR layer doesn't re-validate that.
+pub fn hirLowerAssembleMatchArm(
+    pattern: HirPattern,
+    hasGuard: Bool,
+    guard: HirExpr,
+    body: HirBlock,
+    span: HirSpan,
+) -> HirMatchArm {
+    if hasGuard {
+        return hirMatchArmGuarded(pattern, guard, body, span)
+    }
+    hirMatchArm(pattern, body, span)
+}
+
+// ---- String interpolation assembler ----------------------------
+
+/// hirLowerAssembleStringLit wraps the raw / triple / plain String
+/// lit constructor forms. The parts list carries both literal
+/// fragments and interpolated expressions; caller builds it via
+/// hirStringPartLit / hirStringPartExpr.
+pub fn hirLowerAssembleStringLit(
+    parts: List<HirStringPart>,
+    isRaw: Bool,
+    isTriple: Bool,
+    span: HirSpan,
+) -> HirExpr {
+    if isTriple {
+        return hirStringLitTriple(parts, span)
+    }
+    if isRaw {
+        return hirStringLitRaw(parts, span)
+    }
+    hirStringLit(parts, span)
+}
+
+// ---- ErrorExpr / ErrorStmt shortcuts ---------------------------
+
+/// hirLowerAssembleErrorExpr builds a poisoned expression for
+/// unsupported shapes the lowerer encountered. `note` is carried
+/// on the module's issue list separately; ErrorExpr preserves it
+/// inline for per-node context.
+pub fn hirLowerAssembleErrorExpr(
+    note: String,
+    typ: HirType,
+    span: HirSpan,
+) -> HirExpr {
+    hirErrorExpr(note, typ, span)
+}
+
+pub fn hirLowerAssembleErrorStmt(note: String, span: HirSpan) -> HirStmt {
+    hirErrorStmt(note, span)
+}
