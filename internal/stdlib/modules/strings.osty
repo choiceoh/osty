@@ -911,6 +911,14 @@ pub fn toBytes(s: String) -> Bytes {
     s.toBytes()
 }
 
+pub fn toInt(s: String) -> Result<Int, Error> {
+    s.toInt()
+}
+
+pub fn toFloat(s: String) -> Result<Float, Error> {
+    s.toFloat()
+}
+
 pub fn split(s: String, sep: String) -> List<String> {
     let chars = s.chars()
     let needle = sep.chars()

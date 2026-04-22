@@ -10,8 +10,22 @@ pub struct __BytesMethods {
     pub fn get(self, i: Int) -> Byte? { None }
     pub fn contains(self, sub: Bytes) -> Bool { false }
     pub fn startsWith(self, prefix: Bytes) -> Bool { false }
+    pub fn endsWith(self, suffix: Bytes) -> Bool { false }
     pub fn indexOf(self, sub: Bytes) -> Int? { None }
+    pub fn lastIndexOf(self, sub: Bytes) -> Int? { None }
+    pub fn split(self, sep: Bytes) -> List<Bytes> { [] }
+    pub fn join(self, parts: List<Bytes>) -> Bytes { "".toBytes() }
     pub fn concat(self, other: Bytes) -> Bytes { self.concat(other) }
     pub fn repeat(self, n: Int) -> Bytes { self.repeat(n) }
+    pub fn replace(self, old: Bytes, new: Bytes) -> Bytes { self.replace(old, new) }
+    pub fn replaceAll(self, old: Bytes, new: Bytes) -> Bytes { self.replaceAll(old, new) }
+    pub fn trimLeft(self, strip: Bytes) -> Bytes { self.trimLeft(strip) }
+    pub fn trimRight(self, strip: Bytes) -> Bytes { self.trimRight(strip) }
+    pub fn trim(self, strip: Bytes) -> Bytes { self.trim(strip) }
+    pub fn trimSpace(self) -> Bytes { self.trimSpace() }
+    pub fn toUpper(self) -> Bytes { self.toUpper() }
+    pub fn toLower(self) -> Bytes { self.toLower() }
+    pub fn toHex(self) -> String { "" }
+    pub fn slice(self, start: Int, end: Int) -> Bytes { self.slice(start, end) }
     pub fn toString(self) -> Result<String, Error> { Ok("") }
 }

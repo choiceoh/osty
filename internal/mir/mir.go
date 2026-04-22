@@ -486,6 +486,10 @@ const (
 	IntrinsicStringToUpper
 	// IntrinsicStringToLower returns lowercased String. Args: [string].
 	IntrinsicStringToLower
+	// IntrinsicStringToInt returns Result<Int, E>. Args: [string].
+	IntrinsicStringToInt
+	// IntrinsicStringToFloat returns Result<Float, E>. Args: [string].
+	IntrinsicStringToFloat
 	// IntrinsicStringReplace returns String with all occurrences of
 	// `old` replaced by `new`. Args: [string, old, new].
 	IntrinsicStringReplace
@@ -506,12 +510,40 @@ const (
 	IntrinsicBytesContains
 	// IntrinsicBytesStartsWith returns Bool. Args: [bytes, prefix].
 	IntrinsicBytesStartsWith
+	// IntrinsicBytesEndsWith returns Bool. Args: [bytes, suffix].
+	IntrinsicBytesEndsWith
 	// IntrinsicBytesIndexOf returns Int?. Args: [bytes, needle].
 	IntrinsicBytesIndexOf
+	// IntrinsicBytesLastIndexOf returns Int?. Args: [bytes, needle].
+	IntrinsicBytesLastIndexOf
+	// IntrinsicBytesSplit returns List<Bytes>. Args: [bytes, sep].
+	IntrinsicBytesSplit
+	// IntrinsicBytesJoin returns Bytes. Args: [sep, parts].
+	IntrinsicBytesJoin
 	// IntrinsicBytesConcat returns Bytes. Args: [left, right].
 	IntrinsicBytesConcat
 	// IntrinsicBytesRepeat returns Bytes. Args: [bytes, n].
 	IntrinsicBytesRepeat
+	// IntrinsicBytesReplace returns Bytes. Args: [bytes, old, new].
+	IntrinsicBytesReplace
+	// IntrinsicBytesReplaceAll returns Bytes. Args: [bytes, old, new].
+	IntrinsicBytesReplaceAll
+	// IntrinsicBytesTrimLeft returns Bytes. Args: [bytes, cutset].
+	IntrinsicBytesTrimLeft
+	// IntrinsicBytesTrimRight returns Bytes. Args: [bytes, cutset].
+	IntrinsicBytesTrimRight
+	// IntrinsicBytesTrim returns Bytes. Args: [bytes, cutset].
+	IntrinsicBytesTrim
+	// IntrinsicBytesTrimSpace returns Bytes. Args: [bytes].
+	IntrinsicBytesTrimSpace
+	// IntrinsicBytesToUpper returns Bytes. Args: [bytes].
+	IntrinsicBytesToUpper
+	// IntrinsicBytesToLower returns Bytes. Args: [bytes].
+	IntrinsicBytesToLower
+	// IntrinsicBytesToHex returns String. Args: [bytes].
+	IntrinsicBytesToHex
+	// IntrinsicBytesSlice returns Bytes. Args: [bytes, start, end].
+	IntrinsicBytesSlice
 
 	// ---- stdlib: Option / Result ----
 
@@ -1397,6 +1429,10 @@ func (k IntrinsicKind) String() string {
 		return "string_to_upper"
 	case IntrinsicStringToLower:
 		return "string_to_lower"
+	case IntrinsicStringToInt:
+		return "string_to_int"
+	case IntrinsicStringToFloat:
+		return "string_to_float"
 	case IntrinsicStringReplace:
 		return "string_replace"
 	case IntrinsicStringChars:
@@ -1413,12 +1449,40 @@ func (k IntrinsicKind) String() string {
 		return "bytes_contains"
 	case IntrinsicBytesStartsWith:
 		return "bytes_starts_with"
+	case IntrinsicBytesEndsWith:
+		return "bytes_ends_with"
 	case IntrinsicBytesIndexOf:
 		return "bytes_index_of"
+	case IntrinsicBytesLastIndexOf:
+		return "bytes_last_index_of"
+	case IntrinsicBytesSplit:
+		return "bytes_split"
+	case IntrinsicBytesJoin:
+		return "bytes_join"
 	case IntrinsicBytesConcat:
 		return "bytes_concat"
 	case IntrinsicBytesRepeat:
 		return "bytes_repeat"
+	case IntrinsicBytesReplace:
+		return "bytes_replace"
+	case IntrinsicBytesReplaceAll:
+		return "bytes_replace_all"
+	case IntrinsicBytesTrimLeft:
+		return "bytes_trim_left"
+	case IntrinsicBytesTrimRight:
+		return "bytes_trim_right"
+	case IntrinsicBytesTrim:
+		return "bytes_trim"
+	case IntrinsicBytesTrimSpace:
+		return "bytes_trim_space"
+	case IntrinsicBytesToUpper:
+		return "bytes_to_upper"
+	case IntrinsicBytesToLower:
+		return "bytes_to_lower"
+	case IntrinsicBytesToHex:
+		return "bytes_to_hex"
+	case IntrinsicBytesSlice:
+		return "bytes_slice"
 	case IntrinsicOptionIsSome:
 		return "option_is_some"
 	case IntrinsicOptionIsNone:
