@@ -98,11 +98,88 @@ func TestCheckStructuredFromRunIsAstbridgeFree(t *testing.T) {
 	}
 }
 
+// TestCheckSourceStructuredIsAstbridgeFree extends the zero-astbridge
+// guarantee to CheckSourceStructured: after porting the gate adapter
+// (selfhostAppendIntrinsicBodyGateForSource) to the AstArena walker,
+// the full source-based check path — lex, parse, native check, gate —
+// runs without triggering astLowerPublicFile. Regression net against
+// the gate adapter silently falling back to *ast.File.
+func TestCheckSourceStructuredIsAstbridgeFree(t *testing.T) {
+	src := []byte(`#[intrinsic]
+fn bad() -> Int {
+    42
+}
+
+fn main() {
+    let x = 1
+    let y = x + 2
+    y
+}
+`)
+	ResetAstbridgeLowerCount()
+
+	_ = CheckSourceStructured(src)
+	if got := AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("CheckSourceStructured: AstbridgeLowerCount = %d, want 0 (arena gate must not touch astbridge)", got)
+	}
+
+	_ = CheckSourceStructured(src)
+	if got := AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("second CheckSourceStructured: AstbridgeLowerCount = %d, want 0", got)
+	}
+}
+
+// TestCheckPackageStructuredIsAstbridgeFree is the multi-file analogue.
+// The gate adapter re-parses each file's source into a fresh arena
+// (selfhostAppendIntrinsicBodyGateForPackage uses Run per file), so
+// no *ast.File lowering happens even with the Direct-path input.
+func TestCheckPackageStructuredIsAstbridgeFree(t *testing.T) {
+	aSrc := []byte(`pub fn helper() -> Int { 1 }
+`)
+	bSrc := []byte(`#[intrinsic]
+fn bad() -> Int {
+    42
+}
+
+fn main() {
+    let _ = helper()
+}
+`)
+	input := PackageCheckInput{
+		Files: []PackageCheckFile{
+			{Source: aSrc, Name: "a.osty", Path: "a.osty", Base: 0},
+			{Source: bSrc, Name: "b.osty", Path: "b.osty", Base: len(aSrc) + 1},
+		},
+	}
+
+	ResetAstbridgeLowerCount()
+
+	result, err := CheckPackageStructured(input)
+	if err != nil {
+		t.Fatalf("CheckPackageStructured: %v", err)
+	}
+	if got := AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("CheckPackageStructured: AstbridgeLowerCount = %d, want 0", got)
+	}
+
+	// Sanity: the intrinsic violation in b.osty surfaces as a
+	// diagnostic, proving the gate walker actually ran.
+	foundIntrinsic := false
+	for _, d := range result.Diagnostics {
+		if d.Code == "E0773" { // diag.CodeIntrinsicNonEmptyBody
+			foundIntrinsic = true
+			break
+		}
+	}
+	if !foundIntrinsic {
+		t.Fatalf("expected CodeIntrinsicNonEmptyBody diagnostic, got %#v", result.Diagnostics)
+	}
+}
+
 // TestCheckStructuredFromRunIntrinsicGateEquivalence cross-checks the
-// arena gate walker against the legacy *ast.File walker. Both must
-// flag the same `#[intrinsic]` non-empty-body violation with identical
-// code, offsets, and notes, even in the presence of methods, use-go
-// bodies, and multi-annotation groups.
+// Run-based and source-based gate adapters produce identical output
+// across representative shapes: both now walk AstArena, so the
+// invariant is that they stay synchronized.
 func TestCheckStructuredFromRunIntrinsicGateEquivalence(t *testing.T) {
 	cases := []struct {
 		name string
