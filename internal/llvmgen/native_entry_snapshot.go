@@ -5,7 +5,10 @@
 
 package llvmgen
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 type llvmNativeExprKind int
 
@@ -27,6 +30,10 @@ const (
 	llvmNativeExprCall
 	llvmNativeExprPrintln
 	llvmNativeExprIf
+	llvmNativeExprOptionCheck
+	llvmNativeExprCoalesce
+	llvmNativeExprQuestion
+	llvmNativeExprOptionalField
 )
 
 type llvmNativeStmtKind int
@@ -45,22 +52,24 @@ const (
 )
 
 type llvmNativeExpr struct {
-	kind            llvmNativeExprKind
-	llvmType        string
-	text            string
-	name            string
-	op              string
-	fieldIndex      int
-	elemLLVMType    string
-	mapKeyLLVMType  string
-	mapKeyIsString  bool
-	firstArgByRef   bool
-	receiverPath    []*llvmNativeFieldPath
-	spillArgIndices []int
-	boolValue       bool
-	inclusive       bool
-	childExprs      []*llvmNativeExpr
-	childBlocks     []*llvmNativeBlock
+	kind                llvmNativeExprKind
+	llvmType            string
+	text                string
+	name                string
+	op                  string
+	fieldIndex          int
+	baseLLVMType        string
+	elemLLVMType        string
+	mapKeyLLVMType      string
+	mapKeyIsString      bool
+	optionInnerLLVMType string
+	firstArgByRef       bool
+	receiverPath        []*llvmNativeFieldPath
+	spillArgIndices     []int
+	boolValue           bool
+	inclusive           bool
+	childExprs          []*llvmNativeExpr
+	childBlocks         []*llvmNativeBlock
 }
 
 type llvmNativeFieldPath struct {
@@ -441,6 +450,14 @@ func llvmNativeEvalExpr(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
 		return llvmNativeEvalPrintln(emitter, expr)
 	case llvmNativeExprIf:
 		return llvmNativeEvalIfExpr(emitter, expr)
+	case llvmNativeExprOptionCheck:
+		return llvmNativeEvalOptionCheck(emitter, expr)
+	case llvmNativeExprCoalesce:
+		return llvmNativeEvalCoalesce(emitter, expr)
+	case llvmNativeExprQuestion:
+		return llvmNativeEvalQuestion(emitter, expr)
+	case llvmNativeExprOptionalField:
+		return llvmNativeEvalOptionalField(emitter, expr)
 	default:
 		return llvmNativeZeroValue(expr.llvmType)
 	}
@@ -634,6 +651,86 @@ func llvmNativeEvalIfExpr(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue
 	llvmIfExprElse(emitter, labels)
 	elseValue := llvmNativeBlockValue(emitter, expr.childBlocks[1], expr.llvmType)
 	return llvmIfExprEnd(emitter, expr.llvmType, thenValue, elseValue, labels)
+}
+
+func llvmNativeEvalOptionCheck(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
+	if len(expr.childExprs) == 0 {
+		return llvmNativeZeroValue("i1")
+	}
+	base := llvmNativeEvalExpr(emitter, expr.childExprs[0])
+	pred := "eq"
+	if expr.boolValue {
+		pred = "ne"
+	}
+	return llvmCompare(emitter, pred, base, llvmNativeZeroValue("ptr"))
+}
+
+func llvmNativeEvalCoalesce(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
+	if len(expr.childExprs) < 2 {
+		return llvmNativeZeroValue(expr.llvmType)
+	}
+	left := llvmNativeEvalExpr(emitter, expr.childExprs[0])
+	isNil := llvmCompare(emitter, "eq", left, llvmNativeZeroValue("ptr"))
+	someLabel := llvmNextLabel(emitter, "coalesce.some")
+	noneLabel := llvmNextLabel(emitter, "coalesce.none")
+	endLabel := llvmNextLabel(emitter, "coalesce.end")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil.name, noneLabel, someLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", someLabel))
+	innerType := firstNonEmpty(expr.optionInnerLLVMType, expr.llvmType)
+	someValue := left
+	if innerType != "ptr" {
+		someValue = llvmLoadFromSlot(emitter, left, innerType)
+	}
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", noneLabel))
+	noneValue := llvmNativeEvalExpr(emitter, expr.childExprs[1])
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi %s [ %s, %%%s ], [ %s, %%%s ]", tmp, expr.llvmType, someValue.name, someLabel, noneValue.name, noneLabel))
+	return &LlvmValue{typ: expr.llvmType, name: tmp}
+}
+
+func llvmNativeEvalQuestion(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
+	if len(expr.childExprs) == 0 {
+		return llvmNativeZeroValue(expr.llvmType)
+	}
+	base := llvmNativeEvalExpr(emitter, expr.childExprs[0])
+	isNil := llvmCompare(emitter, "eq", base, llvmNativeZeroValue("ptr"))
+	nilLabel := llvmNextLabel(emitter, "optional.return")
+	contLabel := llvmNextLabel(emitter, "optional.cont")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil.name, nilLabel, contLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", nilLabel))
+	emitter.body = append(emitter.body, "  ret ptr null")
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", contLabel))
+	innerType := firstNonEmpty(expr.optionInnerLLVMType, expr.llvmType)
+	if innerType == "ptr" {
+		return base
+	}
+	return llvmLoadFromSlot(emitter, base, innerType)
+}
+
+func llvmNativeEvalOptionalField(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
+	if len(expr.childExprs) == 0 || expr.baseLLVMType == "" {
+		return llvmNativeZeroValue(expr.llvmType)
+	}
+	base := llvmNativeEvalExpr(emitter, expr.childExprs[0])
+	isNil := llvmCompare(emitter, "eq", base, llvmNativeZeroValue("ptr"))
+	someLabel := llvmNextLabel(emitter, "optional.field.some")
+	noneLabel := llvmNextLabel(emitter, "optional.field.none")
+	endLabel := llvmNextLabel(emitter, "optional.field.end")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil.name, noneLabel, someLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", someLabel))
+	fieldType := firstNonEmpty(expr.optionInnerLLVMType, expr.llvmType)
+	loadedBase := llvmLoadFromSlot(emitter, base, expr.baseLLVMType)
+	someValue := llvmExtractValue(emitter, loadedBase, fieldType, expr.fieldIndex)
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", noneLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	tmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi ptr [ %s, %%%s ], [ null, %%%s ]", tmp, someValue.name, someLabel, noneLabel))
+	return &LlvmValue{typ: "ptr", name: tmp}
 }
 
 func llvmNativeBlockValue(emitter *LlvmEmitter, block *llvmNativeBlock, llvmType string) *LlvmValue {

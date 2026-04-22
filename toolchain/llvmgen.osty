@@ -1135,6 +1135,10 @@ pub enum LlvmNativeExprKind {
     LlvmNativeExprCall,
     LlvmNativeExprPrintln,
     LlvmNativeExprIf,
+    LlvmNativeExprOptionCheck,
+    LlvmNativeExprCoalesce,
+    LlvmNativeExprQuestion,
+    LlvmNativeExprOptionalField,
 }
 
 pub enum LlvmNativeStmtKind {
@@ -1157,9 +1161,11 @@ pub struct LlvmNativeExpr {
     pub name: String,
     pub op: String,
     pub fieldIndex: Int,
+    pub baseLLVMType: String,
     pub elemLLVMType: String,
     pub mapKeyLLVMType: String,
     pub mapKeyIsString: Bool,
+    pub optionInnerLLVMType: String,
     pub firstArgByRef: Bool,
     pub receiverPath: List<LlvmNativeFieldPath>,
     pub spillArgIndices: List<Int>,
@@ -1591,6 +1597,10 @@ fn llvmNativeEvalExpr(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
         LlvmNativeExprCall -> llvmNativeEvalCall(emitter, expr),
         LlvmNativeExprPrintln -> llvmNativeEvalPrintln(emitter, expr),
         LlvmNativeExprIf -> llvmNativeEvalIfExpr(emitter, expr),
+        LlvmNativeExprOptionCheck -> llvmNativeEvalOptionCheck(emitter, expr),
+        LlvmNativeExprCoalesce -> llvmNativeEvalCoalesce(emitter, expr),
+        LlvmNativeExprQuestion -> llvmNativeEvalQuestion(emitter, expr),
+        LlvmNativeExprOptionalField -> llvmNativeEvalOptionalField(emitter, expr),
         _ -> llvmNativeZeroValue(expr.llvmType),
     }
 }
@@ -1825,6 +1835,95 @@ fn llvmNativeEvalIfExpr(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue
     llvmIfExprElse(emitter, labels)
     let elseValue = llvmNativeBlockValue(emitter, expr.childBlocks[1], expr.llvmType)
     llvmIfExprEnd(emitter, expr.llvmType, thenValue, elseValue, labels)
+}
+
+fn llvmNativeEvalOptionCheck(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    if expr.childExprs.len() == 0 {
+        return llvmNativeZeroValue("i1")
+    }
+    let base = llvmNativeEvalExpr(emitter, expr.childExprs[0])
+    let pred = if expr.boolValue { "ne" } else { "eq" }
+    llvmCompare(emitter, pred, base, llvmNativeZeroValue("ptr"))
+}
+
+fn llvmNativeEvalCoalesce(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    if expr.childExprs.len() < 2 {
+        return llvmNativeZeroValue(expr.llvmType)
+    }
+    let left = llvmNativeEvalExpr(emitter, expr.childExprs[0])
+    let isNil = llvmCompare(emitter, "eq", left, llvmNativeZeroValue("ptr"))
+    let someLabel = llvmNextLabel(emitter, "coalesce.some")
+    let noneLabel = llvmNextLabel(emitter, "coalesce.none")
+    let endLabel = llvmNextLabel(emitter, "coalesce.end")
+    emitter.body.push("  br i1 {isNil.name}, label %{noneLabel}, label %{someLabel}")
+    emitter.body.push("{someLabel}:")
+    let mut innerType = expr.optionInnerLLVMType
+    if innerType == "" {
+        innerType = expr.llvmType
+    }
+    let someValue = if innerType == "ptr" {
+        left
+    } else {
+        llvmLoadFromSlot(emitter, left, innerType)
+    }
+    emitter.body.push("  br label %{endLabel}")
+    emitter.body.push("{noneLabel}:")
+    let noneValue = llvmNativeEvalExpr(emitter, expr.childExprs[1])
+    emitter.body.push("  br label %{endLabel}")
+    emitter.body.push("{endLabel}:")
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push(
+        "  {tmp} = phi {expr.llvmType} [ {someValue.name}, %{someLabel} ], [ {noneValue.name}, %{noneLabel} ]",
+    )
+    LlvmValue { typ: expr.llvmType, name: tmp, pointer: false }
+}
+
+fn llvmNativeEvalQuestion(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    if expr.childExprs.len() == 0 {
+        return llvmNativeZeroValue(expr.llvmType)
+    }
+    let base = llvmNativeEvalExpr(emitter, expr.childExprs[0])
+    let isNil = llvmCompare(emitter, "eq", base, llvmNativeZeroValue("ptr"))
+    let nilLabel = llvmNextLabel(emitter, "optional.return")
+    let contLabel = llvmNextLabel(emitter, "optional.cont")
+    emitter.body.push("  br i1 {isNil.name}, label %{nilLabel}, label %{contLabel}")
+    emitter.body.push("{nilLabel}:")
+    emitter.body.push("  ret ptr null")
+    emitter.body.push("{contLabel}:")
+    let mut innerType = expr.optionInnerLLVMType
+    if innerType == "" {
+        innerType = expr.llvmType
+    }
+    if innerType == "ptr" {
+        return base
+    }
+    llvmLoadFromSlot(emitter, base, innerType)
+}
+
+fn llvmNativeEvalOptionalField(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
+    if expr.childExprs.len() == 0 || expr.baseLLVMType == "" {
+        return llvmNativeZeroValue(expr.llvmType)
+    }
+    let base = llvmNativeEvalExpr(emitter, expr.childExprs[0])
+    let isNil = llvmCompare(emitter, "eq", base, llvmNativeZeroValue("ptr"))
+    let someLabel = llvmNextLabel(emitter, "optional.field.some")
+    let noneLabel = llvmNextLabel(emitter, "optional.field.none")
+    let endLabel = llvmNextLabel(emitter, "optional.field.end")
+    emitter.body.push("  br i1 {isNil.name}, label %{noneLabel}, label %{someLabel}")
+    emitter.body.push("{someLabel}:")
+    let mut fieldType = expr.optionInnerLLVMType
+    if fieldType == "" {
+        fieldType = expr.llvmType
+    }
+    let loadedBase = llvmLoadFromSlot(emitter, base, expr.baseLLVMType)
+    let someValue = llvmExtractValue(emitter, loadedBase, fieldType, expr.fieldIndex)
+    emitter.body.push("  br label %{endLabel}")
+    emitter.body.push("{noneLabel}:")
+    emitter.body.push("  br label %{endLabel}")
+    emitter.body.push("{endLabel}:")
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = phi ptr [ {someValue.name}, %{someLabel} ], [ null, %{noneLabel} ]")
+    LlvmValue { typ: "ptr", name: tmp, pointer: false }
 }
 
 fn llvmNativeBlockValue(
