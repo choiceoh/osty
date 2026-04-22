@@ -103,12 +103,13 @@ type mirGen struct {
 	fnBuf       strings.Builder
 
 	// GC instrumentation state (per-function, populated only when
-	// opts.EmitGC is set). gcRoots lists the managed-ptr locals in
-	// the order root_bind_v1 was emitted for them; emitter sites use
-	// the same order in reverse for root_release_v1 on return.
-	// curBlockID tracks the block we're currently emitting so
-	// GotoTerm can detect loop back-edges (goto whose target block
-	// ID is <= the current block's ID) and emit a safepoint.
+	// opts.EmitGC is set). gcRoots lists the managed-ptr locals whose
+	// slot addresses are passed to each safepoint poll. This keeps the
+	// live-set precise without function-long root_bind pinning, so Phase D
+	// compaction can still relocate movable objects between polls.
+	// curBlockID tracks the block we're currently emitting so GotoTerm
+	// can detect loop back-edges (goto whose target block ID is <= the
+	// current block's ID) and emit a safepoint.
 	gcRoots           []mir.LocalID
 	curBlockID        mir.BlockID
 	loopSafepointSlot string
@@ -1134,16 +1135,12 @@ func (g *mirGen) emitAllocaPreamble(fn *mir.Function) {
 // Only emitted when opts.EmitGC is set. The ABI matches the legacy
 // AST emitter (see internal/llvmgen/generator.go):
 //
-//   declare void @osty.gc.root_bind_v1(ptr)
-//   declare void @osty.gc.root_release_v1(ptr)
 //   declare void @osty.gc.safepoint_v1(i64, ptr, i64)
 //
-// The runtime keeps a per-thread root list populated by
-// `root_bind_v1` for each ptr-sized local; `safepoint_v1` is a poll
-// point that can scan the bound-root list. We don't pass an explicit
-// root vector at each safepoint — that's an optimisation the legacy
-// emitter uses for precise scanning, but the bound-root tracking is
-// sufficient for the MVP.
+// MIR now follows the legacy emitter's precise safepoint shape: each
+// poll receives an explicit vector of managed local slot addresses.
+// That keeps the live set precise without function-long pinning, so the
+// Phase D compactor can relocate movable objects between safepoints.
 
 // isManagedLocal reports whether a local should be tracked as a GC
 // root. A local is managed when it lowers to an LLVM ptr AND the MIR
@@ -1162,18 +1159,18 @@ func (g *mirGen) isManagedLocal(loc *mir.Local) bool {
 	return g.llvmType(loc.Type) == "ptr"
 }
 
-// emitGCEntry registers every managed local of the current function
-// as a GC root and emits a safepoint at function entry. Parameter
-// slots are bound after their arg value is stored; non-param slots
-// are null-initialised before binding so the GC never scans undef
-// memory.
+// emitGCEntry records every managed local of the current function and
+// emits a safepoint at function entry. Non-param managed slots are
+// null-initialised before the first poll so the GC never scans undef
+// memory. Unlike the old root_bind path, the roots are supplied
+// explicitly at each safepoint as slot addresses, which avoids
+// function-long pinning and lets compaction move objects between polls.
 func (g *mirGen) emitGCEntry(fn *mir.Function) {
 	if !g.opts.EmitGC {
 		return
 	}
-	// Collect managed locals in ID order. Params are listed first
-	// (their IDs are the lowest) so release-on-return unwinds in
-	// reverse bind order naturally.
+	// Collect managed locals in ID order so the emitted safepoint root
+	// arrays stay deterministic across builds.
 	for _, loc := range fn.Locals {
 		if !g.isManagedLocal(loc) {
 			continue
@@ -1186,7 +1183,7 @@ func (g *mirGen) emitGCEntry(fn *mir.Function) {
 		g.emitGCSafepointKind(safepointKindEntry)
 		return
 	}
-	// Zero non-param managed slots before binding. Param slots
+	// Zero non-param managed slots before the first safepoint. Param slots
 	// already hold the incoming arg from the preamble's store loop.
 	for _, id := range g.gcRoots {
 		loc := fn.Local(id)
@@ -1197,30 +1194,24 @@ func (g *mirGen) emitGCEntry(fn *mir.Function) {
 		g.fnBuf.WriteString(g.localSlots[id])
 		g.fnBuf.WriteByte('\n')
 	}
-	// Bind each managed slot as a root.
-	g.declareRootBindRelease()
-	for _, id := range g.gcRoots {
-		g.fnBuf.WriteString("  call void @osty.gc.root_bind_v1(ptr ")
-		g.fnBuf.WriteString(g.localSlots[id])
-		g.fnBuf.WriteString(")\n")
-	}
 	// Entry safepoint.
 	g.emitGCSafepointKind(safepointKindEntry)
 }
 
-// emitGCReleaseRoots releases every bound root in reverse bind order.
-// Called before every ret / unreachable terminator.
+// emitGCReleaseRoots is a legacy hook kept for call-site stability.
+// MIR GC lowering now uses explicit safepoint root arrays, so there is
+// no function-exit release work left to do.
 func (g *mirGen) emitGCReleaseRoots() {
-	if !g.opts.EmitGC || len(g.gcRoots) == 0 {
-		return
+}
+
+func (g *mirGen) visibleGCSafepointRoots() []string {
+	out := make([]string, 0, len(g.gcRoots))
+	for _, id := range g.gcRoots {
+		if slot := g.localSlots[id]; slot != "" {
+			out = append(out, slot)
+		}
 	}
-	g.declareRootBindRelease()
-	for i := len(g.gcRoots) - 1; i >= 0; i-- {
-		slot := g.localSlots[g.gcRoots[i]]
-		g.fnBuf.WriteString("  call void @osty.gc.root_release_v1(ptr ")
-		g.fnBuf.WriteString(slot)
-		g.fnBuf.WriteString(")\n")
-	}
+	return out
 }
 
 // emitGCSafepoint emits a single safepoint poll at an unclassified site.
@@ -1234,18 +1225,32 @@ func (g *mirGen) emitGCSafepoint() {
 // emitGCSafepointKind emits a safepoint poll tagged with the given kind.
 // The kind is packed into the high byte of the id the runtime receives;
 // the low 56 bits hold the per-module serial (see encodeSafepointID in
-// the legacy emitter). The ABI remains `safepoint_v1(i64 id, ptr roots,
-// i64 nroots)` — roots stay null/0 because root_bind_v1 already
-// registered the live set.
+// the legacy emitter). Managed MIR locals are passed as an explicit array
+// of slot addresses so the runtime can trace the live set without
+// pinning it for the entire function.
 func (g *mirGen) emitGCSafepointKind(kind safepointKind) {
 	if !g.opts.EmitGC {
 		return
 	}
 	g.declareSafepoint()
-	serial := g.nextSafepoint
-	g.nextSafepoint++
-	g.fnBuf.WriteString(llvmRenderSafepointEmpty(encodeSafepointID(kind, serial)))
-	g.fnBuf.WriteByte('\n')
+	roots := g.visibleGCSafepointRoots()
+	if len(roots) == 0 {
+		serial := g.nextSafepoint
+		g.nextSafepoint++
+		g.fnBuf.WriteString(llvmRenderSafepointEmpty(encodeSafepointID(kind, serial)))
+		g.fnBuf.WriteByte('\n')
+		return
+	}
+	plan := llvmPlanSafepointChunks(int(kind), g.nextSafepoint, len(roots), safepointRootChunkSize)
+	g.nextSafepoint += len(plan)
+	for _, chunk := range plan {
+		emitter := llvmEmitter()
+		llvmEmitSafepointWithRoots(emitter, chunk.id, roots[chunk.start:chunk.end])
+		for _, line := range emitter.body {
+			g.fnBuf.WriteString(line)
+			g.fnBuf.WriteByte('\n')
+		}
+	}
 }
 
 func (g *mirGen) emitLoopSafepointKind() {
@@ -1309,18 +1314,10 @@ func (g *mirGen) emitLoopSafepointKind() {
 }
 
 // declareSafepoint registers @osty.gc.safepoint_v1 — split from
-// root_bind/root_release so pointer-free functions don't pull in
-// unused root declarations.
+// the explicit-root machinery so pointer-free functions don't pull in
+// any unused GC declarations.
 func (g *mirGen) declareSafepoint() {
 	g.declareRuntime("osty.gc.safepoint_v1", "declare void @osty.gc.safepoint_v1(i64, ptr, i64)")
-}
-
-// declareRootBindRelease registers the bind/release pair in a single
-// call so their order in the runtime-declaration block is stable
-// regardless of whether bind or release emits first.
-func (g *mirGen) declareRootBindRelease() {
-	g.declareRuntime("osty.gc.root_bind_v1", "declare void @osty.gc.root_bind_v1(ptr)")
-	g.declareRuntime("osty.gc.root_release_v1", "declare void @osty.gc.root_release_v1(ptr)")
 }
 
 // ==== instructions ====
@@ -3244,9 +3241,9 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 			return nil
 		}
 		if g.fn.ReturnType == nil || isUnitType(g.fn.ReturnType) {
-			// Release bound roots BEFORE ret so the GC doesn't
-			// scan dead slots for in-flight tail calls on other
-			// threads.
+			// Explicit safepoint roots need no function-exit cleanup, but
+			// keep the hook in place so return lowering stays uniform if we
+			// grow per-function GC epilog work later.
 			g.emitGCReleaseRoots()
 			g.fnBuf.WriteString("  ret void\n")
 			return nil
@@ -3261,9 +3258,9 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 		g.fnBuf.WriteString(", ptr ")
 		g.fnBuf.WriteString(retSlot)
 		g.fnBuf.WriteByte('\n')
-		// Release roots after we've loaded the return value but
-		// before the ret — the value is now in an SSA register so
-		// it's safe for the slot to drop out of the root list.
+		// Keep the legacy hook between load and ret for symmetry with the
+		// unit-return path; explicit safepoint roots mean this is currently
+		// a no-op.
 		g.emitGCReleaseRoots()
 		g.fnBuf.WriteString("  ret ")
 		g.fnBuf.WriteString(llvmT)
