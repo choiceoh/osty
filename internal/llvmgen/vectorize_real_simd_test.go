@@ -6,7 +6,47 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/osty/osty/internal/check"
+	"github.com/osty/osty/internal/ir"
+	"github.com/osty/osty/internal/mir"
+	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 )
+
+// lowerThroughMIR runs the same full pipeline as `osty build --backend
+// llvm`: parse → resolve → check → ir.Lower → Monomorphize → mir.Lower
+// → GenerateFromMIR. Tests that want to assert on the IR the native
+// dispatcher actually selects must go through this path; `generateFromAST`
+// is the legacy HIR emitter and doesn't reach the MIR-only fast-path
+// machinery.
+func lowerThroughMIR(t *testing.T, src string) string {
+	t.Helper()
+	file := parseLLVMGenFile(t, src)
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.File(file, res, check.Opts{
+		UseGolegacy:   true,
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+	})
+	mod, issues := ir.Lower("main", file, res, chk)
+	if len(issues) != 0 {
+		t.Fatalf("ir.Lower: %v", issues)
+	}
+	monoMod, _ := ir.Monomorphize(mod)
+	mirMod := mir.Lower(monoMod)
+	out, err := GenerateFromMIR(mirMod, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/vectorize_mir_probe.osty",
+	})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	return string(out)
+}
 
 // TestVectorizeFunctionBodyIsCallFree pins the GC-contract side of the
 // v0.6 A5 delivery: inside a `#[vectorize]` function the lowered loop
@@ -142,6 +182,108 @@ fn main() {
 		t.Fatalf("clang -O3 on annotated IR did not vectorize the loop; "+
 			"expected a `remark: vectorized loop` line. Full output:\n%s",
 			remarks)
+	}
+}
+
+// TestVectorizeAppliesToListLocalReadLoop pins the "plain everyday code
+// should SIMD" promise of the default-on vectorize flip: build a local
+// `List<Int>`, then run a read-only XOR reduction over it. The MIR
+// emitter has long had a fast-path for *parameter* lists, but before
+// the lazy snapshot was added the caller had no way to cover locals —
+// so the reduction loop kept calling `@osty_rt_list_get_i64` per
+// iteration and LLVM's vectorizer bailed ("call instruction cannot be
+// vectorized"). This test is the regression oracle for that gap:
+// without the MIR-side snapshot + `memory(read)` attributes on the
+// list runtime surface, it fails at the clang remark check.
+func TestVectorizeAppliesToListLocalReadLoop(t *testing.T) {
+	clangPath, err := exec.LookPath("clang")
+	if err != nil {
+		t.Skip("clang not on PATH — skipping integration oracle")
+	}
+
+	src := `fn computeXor(n: Int) -> Int {
+    let mut xs: List<Int> = []
+    let mut k = 0
+    while k < n {
+        xs.push(k)
+        k = k + 1
+    }
+    let mut acc = 0
+    for j in 0..xs.len() {
+        acc = acc ^ xs[j]
+    }
+    acc
+}
+
+fn main() {
+    let _ = computeXor(64)
+}
+`
+	ir := lowerThroughMIR(t, src)
+
+	irPath := filepath.Join(t.TempDir(), "module.ll")
+	if err := writeBytes(irPath, []byte(ir)); err != nil {
+		t.Fatalf("write ir: %v", err)
+	}
+	cmd := exec.Command(clangPath,
+		"-x", "ir",
+		"-O3",
+		"-S",
+		"-o", filepath.Join(t.TempDir(), "module.s"),
+		"-Rpass=loop-vectorize",
+		irPath,
+	)
+	out, runErr := cmd.CombinedOutput()
+	remarks := string(out)
+	if runErr != nil {
+		t.Fatalf("clang -O3 on list-local IR failed: %v\n%s", runErr, remarks)
+	}
+	if !strings.Contains(remarks, "vectorized loop") {
+		fnBody, _ := extractFunctionBody(ir, "computeXor")
+		t.Fatalf("clang -O3 did not vectorize a read-only loop over a local "+
+			"List<Int>; default-on vectorize is effectively a no-op on "+
+			"everyday code. Remarks:\n%s\n\ncomputeXor body:\n%s",
+			remarks, fnBody)
+	}
+}
+
+// TestVectorizeLazySnapshotRespectsInLoopMutation is the soundness
+// oracle for the lazy-snapshot fast path: when a subscript read shares
+// a loop body with a mutation (push/set/insert) on the same local,
+// caching `data`/`len` across iterations would hand out stale pointers
+// after a reallocation. The CFG reachability gate must detect this and
+// fall back to the typed slow-path runtime call — we pin that by
+// asserting the emitted IR does NOT grow a `list.fast.*` branch inside
+// the mixed loop, and the slow-path `@osty_rt_list_get_i64` call stays
+// in the loop body.
+func TestVectorizeLazySnapshotRespectsInLoopMutation(t *testing.T) {
+	src := `fn mixed(n: Int) -> Int {
+    let mut xs: List<Int> = []
+    let mut acc = 0
+    for i in 0..n {
+        xs.push(i)
+        acc = acc ^ xs[0]
+    }
+    acc
+}
+
+fn main() {
+    let _ = mixed(8)
+}
+`
+	ir := lowerThroughMIR(t, src)
+	body, ok := extractFunctionBody(ir, "mixed")
+	if !ok {
+		t.Fatalf("mixed function not found:\n%s", ir)
+	}
+	if strings.Contains(body, "list.fast.") {
+		t.Fatalf("lazy fast path fired for a local that is mutated in "+
+			"the same loop as the read — would cache a stale data ptr "+
+			"across a realloc. Body:\n%s", body)
+	}
+	if !strings.Contains(body, "@osty_rt_list_get_i64") {
+		t.Fatalf("expected the typed slow-path call to still be present "+
+			"in the mixed loop (soundness fallback). Body:\n%s", body)
 	}
 }
 

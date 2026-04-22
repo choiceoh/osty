@@ -29,6 +29,20 @@ AVX-512 cost model 우회 문서화.
    루프가 bracketed 되어 GC liveness 는 유지. 실측: XOR reduction 1M
    × 200 iterations — scalar 0.28s vs vectorized 0.06s = **4.7× 속도
    향상**, ARM NEON `eor.16b` / `add.2d` emission 확인.
+1a. ~~**Local scalar List subscript fast path.**~~ **해소됨.** 이전에는
+   `emitVectorListPreamble` 이 함수 entry 에서 파라미터만 snapshot 해서
+   `let mut xs: List<Int> = []; push…; for i in 0..xs.len() { xs[i] }`
+   같은 "build-then-read" 패턴의 read 루프가 매 iteration 에서
+   `@osty_rt_list_get_i64` 를 호출했고, LLVM vectorizer 가 "call
+   instruction cannot be vectorized" 로 bail 했다. 해소 경로는
+   `emitVectorListFastLoad` 에 lazy snapshot 을 추가하고 forward-CFG
+   reachability gate (`mirLocalMutationReachableFrom`) 로 뮤테이션이
+   snapshot site 로부터 도달 가능하면 slow call 로 fallback — realloc
+   으로 인한 stale data ptr 캐싱을 막는다. 동시에 런타임 data / len /
+   get 선언에 `memory(read)` 를 부여해 LLVM LICM 이 snapshot call 을
+   hoist 할 수 있게 한다. 회귀 테스트는 `vectorize_real_simd_test.go`
+   의 `TestVectorizeAppliesToListLocalReadLoop` (happy path) 와
+   `TestVectorizeLazySnapshotRespectsInLoopMutation` (soundness gate).
 2. **Iterator-protocol loops.** `for x in iter` (iter 가 `List<T>` /
    range / `Map<K, V>` 가 아닌 경우) 는 callback-driven shape 로
    lower 되어 LLVM 이 trip count 를 볼 수 없다. 해결 경로는

@@ -830,7 +830,7 @@ fn parseTokens(tokens: List<Token>) -> Result<Config, Error> { ... }
 | 61 | `#[json(...)]` | struct field / variant |
 | 62 | `#[deprecated(...)]` | W0750 |
 | 63 | 값 = 리터럴 전용 | 검증 용이 |
-| 63.1 | **기본 ON** + `#[vectorize(scalable, predicate, width = N)]` + `#[no_vectorize]` | v0.6 A5/A5.1/A5.2. 기본은 모든 함수에서 `vectorize.enable` + safepoint 스킵. tuning args 로 strategy 지정; opt-out 은 `#[no_vectorize]`. |
+| 63.1 | **기본 ON** + `#[vectorize(scalable, predicate, width = N)]` + `#[no_vectorize]` | v0.6 A5/A5.1/A5.2. 기본은 모든 함수에서 `vectorize.enable` + safepoint 스킵. tuning args 로 strategy 지정; opt-out 은 `#[no_vectorize]`. 스칼라 `List<T>` (i64/i1/double) subscript 는 param 이든 local 이든 MIR lazy snapshot 으로 fast path 진입 — CFG forward reachability 로 뮤테이션 도달 가능하면 slow call 로 fallback (`mir_generator.go:snapshotVectorListLocal` / `mirLocalMutationReachableFrom`). `osty_rt_list_data_* / len / get_*` 는 `memory(read)` 로 선언되어 LLVM LICM 이 hoist 가능. |
 | 63.2 | `#[parallel]` | v0.6 A6. `!llvm.access.group` + `loop.parallel_accesses` 로 alias analysis 우회. soundness는 프로그래머 책임. |
 | 63.3 | `#[unroll]` / `#[unroll(count = N)]` | v0.6 A7. `loop.unroll.enable` 또는 `loop.unroll.count`. vectorize와 독립적. |
 | 63.4 | `#[inline]` / `#[inline(always)]` / `#[inline(never)]` | v0.6 A8. LLVM `inlinehint` / `alwaysinline` / `noinline` fn attr. |

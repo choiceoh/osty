@@ -1712,48 +1712,188 @@ func (g *mirGen) emitVectorListPreamble(fn *mir.Function) {
 	for _, rawID := range ids {
 		pid := mir.LocalID(rawID)
 		elemLLVM := eligible[pid]
-		slot := g.localSlots[pid]
-		if slot == "" {
-			continue
-		}
-		listReg := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(listReg)
-		g.fnBuf.WriteString(" = load ptr, ptr ")
-		g.fnBuf.WriteString(slot)
-		g.fnBuf.WriteByte('\n')
-
-		dataSym := listRuntimeDataSymbol(elemLLVM)
-		g.declareRuntime(dataSym, "declare ptr @"+dataSym+"(ptr)")
-		dataReg := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(dataReg)
-		g.fnBuf.WriteString(" = call ptr @")
-		g.fnBuf.WriteString(dataSym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(listReg)
-		g.fnBuf.WriteString(")\n")
-		g.vectorListData[pid] = dataReg
-
-		lenSym := listRuntimeLenSymbol()
-		g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr)")
-		lenReg := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(lenReg)
-		g.fnBuf.WriteString(" = call i64 @")
-		g.fnBuf.WriteString(lenSym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(listReg)
-		g.fnBuf.WriteString(")\n")
-		g.vectorListLens[pid] = lenReg
+		g.snapshotVectorListLocal(pid, elemLLVM)
 	}
 }
 
+// mirBlockSuccessors returns the out-edges of a MIR block — the set of
+// block IDs control can transfer to from the terminator. Used by
+// mirLocalMutationReachableFrom for forward-CFG analysis.
+func mirBlockSuccessors(bb *mir.BasicBlock) []mir.BlockID {
+	if bb == nil {
+		return nil
+	}
+	switch t := bb.Term.(type) {
+	case *mir.GotoTerm:
+		return []mir.BlockID{t.Target}
+	case *mir.BranchTerm:
+		return []mir.BlockID{t.Then, t.Else}
+	case *mir.SwitchIntTerm:
+		out := make([]mir.BlockID, 0, len(t.Cases)+1)
+		for _, c := range t.Cases {
+			out = append(out, c.Target)
+		}
+		out = append(out, t.Default)
+		return out
+	}
+	return nil
+}
+
+// mirLocalIsMutatedIn returns true if any instruction in `bb` mutates
+// `local` — i.e., passes it to an unsafe call/intrinsic, or reassigns
+// it via an AssignInstr. Mirrors the bailout rules in
+// eligibleVectorListParams but scoped to a single block and a single
+// local.
+func mirLocalIsMutatedIn(bb *mir.BasicBlock, local mir.LocalID) bool {
+	if bb == nil {
+		return false
+	}
+	touchesLocal := func(operands []mir.Operand) bool {
+		for _, op := range operands {
+			if id, ok := mirOperandRootLocal(op); ok && id == local {
+				return true
+			}
+		}
+		return false
+	}
+	for _, inst := range bb.Instrs {
+		switch x := inst.(type) {
+		case *mir.CallInstr:
+			if touchesLocal(x.Args) {
+				return true
+			}
+		case *mir.IntrinsicInstr:
+			if mirIntrinsicSafeForVectorListFastPath(x.Kind) {
+				continue
+			}
+			if touchesLocal(x.Args) {
+				return true
+			}
+		case *mir.AssignInstr:
+			if x.Dest.Local == local {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// mirLocalMutationReachableFrom returns true if, starting from block
+// `fromBB` and walking the forward CFG, any reachable block mutates
+// `local`. "Reaches itself" counts — so a loop body that contains both
+// the snapshot site and a push is correctly rejected. This is the
+// soundness gate that keeps the lazy snapshot path from caching a stale
+// `data` pointer past a reallocation.
+func mirLocalMutationReachableFrom(fn *mir.Function, fromBB mir.BlockID, local mir.LocalID) bool {
+	if fn == nil {
+		return false
+	}
+	visited := make(map[mir.BlockID]bool, len(fn.Blocks))
+	stack := []mir.BlockID{fromBB}
+	for len(stack) > 0 {
+		id := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if visited[id] {
+			continue
+		}
+		visited[id] = true
+		bb := fn.Block(id)
+		if bb == nil {
+			continue
+		}
+		if mirLocalIsMutatedIn(bb, local) {
+			return true
+		}
+		for _, s := range mirBlockSuccessors(bb) {
+			if !visited[s] {
+				stack = append(stack, s)
+			}
+		}
+	}
+	return false
+}
+
+// snapshotVectorListLocal emits a one-shot `data`/`len` capture for the
+// given scalar-List local (param or plain local) and records the result
+// registers in `vectorListData` / `vectorListLens`. Callers must have
+// already ensured the local has a stored value by the time this runs;
+// emitting too early (before the backing `osty_rt_list_*` object is
+// assigned) would capture an uninitialised slot. The helper is a no-op
+// when a snapshot already exists or the element type isn't fast-path
+// eligible (i64 / i1 / double).
+//
+// The data/len runtime symbols are declared with `memory(read)` so
+// LLVM's LICM can hoist the snapshot out of any loop that doesn't
+// mutate the list — which is what lets this path deliver real-world
+// SIMD speedups for plain `for i in 0..xs.len() { acc ^= xs[i] }`
+// patterns on locals (not just params).
+func (g *mirGen) snapshotVectorListLocal(local mir.LocalID, elemLLVM string) {
+	if !listUsesRawDataFastPath(elemLLVM) {
+		return
+	}
+	slot := g.localSlots[local]
+	if slot == "" {
+		return
+	}
+	if g.vectorListData[local] != "" && g.vectorListLens[local] != "" {
+		return
+	}
+	listReg := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(listReg)
+	g.fnBuf.WriteString(" = load ptr, ptr ")
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteByte('\n')
+
+	dataSym := listRuntimeDataSymbol(elemLLVM)
+	g.declareRuntime(dataSym, "declare ptr @"+dataSym+"(ptr) nounwind willreturn memory(read)")
+	dataReg := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(dataReg)
+	g.fnBuf.WriteString(" = call ptr @")
+	g.fnBuf.WriteString(dataSym)
+	g.fnBuf.WriteString("(ptr ")
+	g.fnBuf.WriteString(listReg)
+	g.fnBuf.WriteString(")\n")
+	g.vectorListData[local] = dataReg
+
+	lenSym := listRuntimeLenSymbol()
+	g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr) nounwind willreturn memory(read)")
+	lenReg := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(lenReg)
+	g.fnBuf.WriteString(" = call i64 @")
+	g.fnBuf.WriteString(lenSym)
+	g.fnBuf.WriteString("(ptr ")
+	g.fnBuf.WriteString(listReg)
+	g.fnBuf.WriteString(")\n")
+	g.vectorListLens[local] = lenReg
+}
+
 func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM string) (string, bool) {
+	slot := g.localSlots[local]
+	if slot == "" {
+		return "", false
+	}
+	// Lazy snapshot: when a local scalar List wasn't captured at
+	// function entry (i.e., it isn't an eligible param) but is about
+	// to be subscripted, emit the data/len capture here — provided no
+	// mutation of this local is forward-reachable in the CFG. The
+	// reachability gate is the correctness anchor: without it, a later
+	// push could reallocate the list's backing buffer and the cached
+	// `dataReg` would dangle. With it, LLVM's LICM still hoists the
+	// memory(read) snapshot calls out of non-mutating loops, so the
+	// resulting fast/slow branch matches the preamble shape that
+	// already vectorizes for params.
+	if g.vectorListData[local] == "" || g.vectorListLens[local] == "" {
+		if mirLocalMutationReachableFrom(g.fn, g.curBlockID, local) {
+			return "", false
+		}
+		g.snapshotVectorListLocal(local, elemLLVM)
+	}
 	dataReg := g.vectorListData[local]
 	lenReg := g.vectorListLens[local]
-	slot := g.localSlots[local]
-	if dataReg == "" || lenReg == "" || slot == "" {
+	if dataReg == "" || lenReg == "" {
 		return "", false
 	}
 	inBounds := g.fresh()
@@ -1801,7 +1941,12 @@ func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM stri
 	g.fnBuf.WriteByte('\n')
 
 	slowSym := listRuntimeGetSymbol(elemLLVM)
-	g.declareRuntime(slowSym, "declare "+elemLLVM+" @"+slowSym+"(ptr, i64)")
+	// memory(read): the typed slow-path read is semantically pure
+	// (modulo an idempotent first-call layout init). Marking it
+	// readonly lets LLVM reason across the fast/slow branch and keep
+	// the loop vectorizable even when the slow path is theoretically
+	// reachable for OOB indices.
+	g.declareRuntime(slowSym, "declare "+elemLLVM+" @"+slowSym+"(ptr, i64) nounwind willreturn memory(read)")
 	g.fnBuf.WriteString(slowLabel)
 	g.fnBuf.WriteString(":\n")
 	listReg := g.fresh()
@@ -3067,7 +3212,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			}
 		}
 		sym := listRuntimeLenSymbol()
-		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr) nounwind willreturn memory(read)")
 		em := g.ostyEmitter()
 		result := llvmListLen(em, &LlvmValue{typ: "ptr", name: listReg})
 		g.flushOstyEmitter(em)
@@ -3092,7 +3237,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 				}
 			}
 			sym := listRuntimeGetSymbol(elemLLVM)
-			g.declareRuntime(sym, "declare "+elemLLVM+" @"+sym+"(ptr, i64)")
+			g.declareRuntime(sym, "declare "+elemLLVM+" @"+sym+"(ptr, i64) nounwind willreturn memory(read)")
 			em := g.ostyEmitter()
 			result := llvmListGet(em,
 				&LlvmValue{typ: "ptr", name: listReg},
