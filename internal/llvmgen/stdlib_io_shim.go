@@ -3,6 +3,7 @@ package llvmgen
 import "github.com/osty/osty/internal/ast"
 
 const ostyRtIOWriteSymbol = "osty_rt_io_write"
+const ostyRtIOReadLineSymbol = "osty_rt_io_read_line"
 
 func collectStdIoAliases(file *ast.File) map[string]bool {
 	out := map[string]bool{}
@@ -50,15 +51,23 @@ func stdIoWriteFlags(name string) (newline bool, toStderr bool, ok bool) {
 }
 
 func (g *generator) stdIoCallMethod(call *ast.CallExpr) (string, bool) {
-	field, ok := fieldExprOfCallFn(call)
-	if !ok || field.IsOptional {
-		return "", false
-	}
-	alias, ok := field.X.(*ast.Ident)
-	if !ok || alias == nil || !g.stdIoAliases[alias.Name] || !isStdIoOutputMethod(field.Name) {
+	field, ok := g.stdIoCallField(call)
+	if !ok || !isStdIoOutputMethod(field.Name) {
 		return "", false
 	}
 	return field.Name, true
+}
+
+func (g *generator) stdIoCallField(call *ast.CallExpr) (*ast.FieldExpr, bool) {
+	field, ok := fieldExprOfCallFn(call)
+	if !ok || field.IsOptional {
+		return nil, false
+	}
+	alias, ok := field.X.(*ast.Ident)
+	if !ok || alias == nil || !g.stdIoAliases[alias.Name] {
+		return nil, false
+	}
+	return field, true
 }
 
 func stdIoBareCallName(call *ast.CallExpr) (string, bool) {
@@ -81,6 +90,15 @@ func (g *generator) emitStdIoCallStmt(call *ast.CallExpr) (bool, error) {
 		}
 	}
 	return true, g.emitStdIoWriteCall(call, method)
+}
+
+func (g *generator) emitStdIoCall(call *ast.CallExpr) (value, bool, error) {
+	field, ok := g.stdIoCallField(call)
+	if !ok || field.Name != "readLine" {
+		return value{}, false, nil
+	}
+	v, err := g.emitStdIoReadLineCall(call)
+	return v, true, err
 }
 
 func (g *generator) emitStdIoWriteCall(call *ast.CallExpr, method string) error {
@@ -108,6 +126,24 @@ func (g *generator) emitStdIoWriteCall(call *ast.CallExpr, method string) error 
 	})
 	g.takeOstyEmitter(emitter)
 	return nil
+}
+
+func (g *generator) emitStdIoReadLineCall(call *ast.CallExpr) (value, error) {
+	field, ok := g.stdIoCallField(call)
+	if !ok || field.Name != "readLine" {
+		return value{}, unsupported("call", "std.io.readLine requires a std.io alias receiver")
+	}
+	if len(call.Args) != 0 {
+		return value{}, unsupported("call", "std.io.readLine requires no arguments")
+	}
+	g.declareRuntimeSymbol(ostyRtIOReadLineSymbol, "ptr", nil)
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", ostyRtIOReadLineSymbol, nil)
+	g.takeOstyEmitter(emitter)
+	text := fromOstyValue(out)
+	text.gcManaged = true
+	text.sourceType = &ast.NamedType{Path: []string{"String"}}
+	return text, nil
 }
 
 func llvmStdIoBoolValue(v bool) *LlvmValue {

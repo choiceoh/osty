@@ -41,6 +41,32 @@ fn main() {
 	}
 }
 
+func TestStdIoReadLineRoutesToRuntimeInAST(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.io as io
+
+fn main() {
+    let line = io.readLine()
+    println(line)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_io_readline_ast.osty",
+	})
+	if err != nil {
+		t.Fatalf("generateFromAST: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_io_read_line()",
+		"call ptr @osty_rt_io_read_line()",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in IR:\n%s", want, got)
+		}
+	}
+}
+
 func TestStdIoOutputCallsRouteToRuntimeWriteInMIR(t *testing.T) {
 	mod := lowerSrcLLVM(t, `use std.io as io
 
@@ -74,6 +100,33 @@ fn main() {
 	}
 	if gotCalls := strings.Count(got, "call void @osty_rt_io_write("); gotCalls != 4 {
 		t.Fatalf("osty_rt_io_write call count = %d, want 4\n%s", gotCalls, got)
+	}
+}
+
+func TestStdIoReadLineRoutesToRuntimeInMIR(t *testing.T) {
+	mod := lowerSrcLLVM(t, `use std.io as io
+
+fn main() {
+    let line = io.readLine()
+    println(line)
+}
+`)
+	mirMod := buildMIRModuleFromHIR(t, mod)
+	out, err := GenerateFromMIR(mirMod, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_io_readline_mir.osty",
+	})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_io_read_line()",
+		"call ptr @osty_rt_io_read_line()",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in IR:\n%s", want, got)
+		}
 	}
 }
 
@@ -113,5 +166,34 @@ fn main() {
 	}
 	if gotCalls := strings.Count(got, "call void @osty_rt_io_write("); gotCalls != 4 {
 		t.Fatalf("osty_rt_io_write call count = %d, want 4\n%s", gotCalls, got)
+	}
+}
+
+func TestStdIoReadLineRoutesToRuntimeInNativeOwnedEntry(t *testing.T) {
+	mod := lowerNativeEntryModule(t, `use std.io as io
+
+fn main() {
+    let line = io.readLine()
+    println(line)
+}
+`)
+	out, ok, err := TryGenerateNativeOwnedModule(mod, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_io_readline_native.osty",
+	})
+	if err != nil {
+		t.Fatalf("TryGenerateNativeOwnedModule: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryGenerateNativeOwnedModule reported unsupported")
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_io_read_line()",
+		"call ptr @osty_rt_io_read_line()",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in IR:\n%s", want, got)
+		}
 	}
 }

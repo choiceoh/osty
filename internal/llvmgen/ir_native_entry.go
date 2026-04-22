@@ -2020,6 +2020,19 @@ func nativeStdIoCallStmtFromIR(ctx *nativeProjectionCtx, call *ostyir.CallExpr) 
 	}, true
 }
 
+func nativeStdIoExprFromIR(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (*llvmNativeExpr, bool) {
+	alias, name, ok := nativeQualifiedAliasCall(call)
+	if !ok || ctx == nil || !ctx.stdIoAliases[alias] || name != "readLine" || len(call.Args) != 0 {
+		return nil, false
+	}
+	ctx.addRuntimeDecl("declare ptr @" + ostyRtIOReadLineSymbol + "()")
+	return &llvmNativeExpr{
+		kind:     llvmNativeExprCall,
+		llvmType: "ptr",
+		name:     ostyRtIOReadLineSymbol,
+	}, true
+}
+
 func nativeStdIoIntrinsicExpr(ctx *nativeProjectionCtx, e *ostyir.IntrinsicCall) (*llvmNativeExpr, bool) {
 	if ctx == nil || e == nil || len(e.Args) != 1 || e.Args[0].IsKeyword() || e.Args[0].Value == nil {
 		return nil, false
@@ -3336,6 +3349,9 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 			childExprs:          []*llvmNativeExpr{left, right},
 		}, true
 	case *ostyir.CallExpr:
+		if stdIoExpr, ok := nativeStdIoExprFromIR(ctx, e); ok {
+			return stdIoExpr, true
+		}
 		if testingExpr, ok := nativeTestingResultExprFromIR(ctx, e); ok {
 			return testingExpr, true
 		}
