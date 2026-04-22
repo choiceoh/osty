@@ -2604,14 +2604,13 @@ pub fn mirLowerParseIntLit(text: String) -> Int {
 }
 
 fn mirLowerStripUnderscores(text: String) -> String {
-    let mut buf: List<String> = []
-    let chars = text.chars()
-    for ch in chars {
-        if ch != "_" {
-            buf.push(ch)
-        }
-    }
-    strings.join(buf, "")
+    // Spec §1.6.1 numeric separators: `_` between digits is lexically
+    // elided when computing the literal value. String.replace runs in
+    // a single pass and keeps the Char/String boundaries aligned with
+    // the backend — previously this loop wrote `if ch != "_"` where
+    // `ch: Char` met a String literal, walling the merged AST probe
+    // with LLVM011 "compare type mismatch i32/ptr".
+    text.replace("_", "")
 }
 
 fn mirLowerStripSign(text: String) -> String {
@@ -2654,24 +2653,29 @@ fn mirLowerParseRadix(text: String, radix: Int) -> Int {
     acc
 }
 
-fn mirLowerCharToDigit(ch: String) -> Int {
+// mirLowerCharToDigit takes a Char (i32 Unicode scalar) because the
+// caller iterates `text.chars()` which returns `List<Char>` per the
+// String primitive contract — earlier this took `String` and matched
+// against "0"/"a"/…, but that passed a Char where a String was
+// expected, walling the merged probe with LLVM011 type mismatch.
+fn mirLowerCharToDigit(ch: Char) -> Int {
     match ch {
-        "0" -> 0,
-        "1" -> 1,
-        "2" -> 2,
-        "3" -> 3,
-        "4" -> 4,
-        "5" -> 5,
-        "6" -> 6,
-        "7" -> 7,
-        "8" -> 8,
-        "9" -> 9,
-        "a" -> 10, "A" -> 10,
-        "b" -> 11, "B" -> 11,
-        "c" -> 12, "C" -> 12,
-        "d" -> 13, "D" -> 13,
-        "e" -> 14, "E" -> 14,
-        "f" -> 15, "F" -> 15,
+        '0' -> 0,
+        '1' -> 1,
+        '2' -> 2,
+        '3' -> 3,
+        '4' -> 4,
+        '5' -> 5,
+        '6' -> 6,
+        '7' -> 7,
+        '8' -> 8,
+        '9' -> 9,
+        'a' -> 10, 'A' -> 10,
+        'b' -> 11, 'B' -> 11,
+        'c' -> 12, 'C' -> 12,
+        'd' -> 13, 'D' -> 13,
+        'e' -> 14, 'E' -> 14,
+        'f' -> 15, 'F' -> 15,
         _ -> -1,
     }
 }
