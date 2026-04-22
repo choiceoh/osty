@@ -95,10 +95,11 @@ type llvmNativeBlock struct {
 }
 
 type llvmNativeParam struct {
-	name     string
-	llvmType string
-	irType   string
-	byRef    bool
+	name             string
+	llvmType         string
+	irType           string
+	byRef            bool
+	listElemLLVMType string
 }
 
 type llvmNativeGlobal struct {
@@ -125,6 +126,7 @@ type llvmNativeFunction struct {
 	returnType string
 	params     []*llvmNativeParam
 	body       *llvmNativeBlock
+	vectorize  bool
 }
 
 type llvmNativeModule struct {
@@ -215,10 +217,133 @@ func llvmNativeRuntimeDeclarations(mod *llvmNativeModule) []string {
 	return out
 }
 
+func llvmNativeCallPreservesScalarListParam(expr *llvmNativeExpr, paramName string) bool {
+	if expr == nil || paramName == "" {
+		return false
+	}
+	if expr.name != llvmListRuntimeLenSymbol() || len(expr.childExprs) != 1 {
+		return false
+	}
+	arg := expr.childExprs[0]
+	return arg != nil && arg.kind == llvmNativeExprIdent && arg.name == paramName
+}
+
+func llvmNativePruneScalarListParamsInExpr(expr *llvmNativeExpr, eligible map[string]string) {
+	if expr == nil || len(eligible) == 0 {
+		return
+	}
+	if expr.kind == llvmNativeExprCall {
+		for _, arg := range expr.childExprs {
+			if arg == nil || arg.kind != llvmNativeExprIdent {
+				continue
+			}
+			if _, ok := eligible[arg.name]; ok && !llvmNativeCallPreservesScalarListParam(expr, arg.name) {
+				delete(eligible, arg.name)
+			}
+		}
+	}
+	for _, child := range expr.childExprs {
+		llvmNativePruneScalarListParamsInExpr(child, eligible)
+	}
+	for _, block := range expr.childBlocks {
+		llvmNativePruneScalarListParamsInBlock(block, eligible)
+	}
+}
+
+func llvmNativePruneScalarListParamsInStmt(stmt *llvmNativeStmt, eligible map[string]string) {
+	if stmt == nil || len(eligible) == 0 {
+		return
+	}
+	if stmt.name != "" {
+		delete(eligible, stmt.name)
+	}
+	for _, expr := range stmt.childExprs {
+		llvmNativePruneScalarListParamsInExpr(expr, eligible)
+	}
+	for _, block := range stmt.childBlocks {
+		llvmNativePruneScalarListParamsInBlock(block, eligible)
+	}
+}
+
+func llvmNativePruneScalarListParamsInBlock(block *llvmNativeBlock, eligible map[string]string) {
+	if block == nil || len(eligible) == 0 {
+		return
+	}
+	for _, stmt := range block.stmts {
+		llvmNativePruneScalarListParamsInStmt(stmt, eligible)
+	}
+	if block.result != nil {
+		llvmNativePruneScalarListParamsInExpr(block.result, eligible)
+	}
+}
+
+func llvmNativeEligibleScalarListParams(fn *llvmNativeFunction) map[string]string {
+	eligible := map[string]string{}
+	if fn == nil {
+		return eligible
+	}
+	for _, param := range fn.params {
+		if param == nil || param.byRef || !listUsesRawDataFastPath(param.listElemLLVMType) {
+			continue
+		}
+		eligible[param.name] = param.listElemLLVMType
+	}
+	if len(eligible) == 0 {
+		return eligible
+	}
+	llvmNativePruneScalarListParamsInBlock(fn.body, eligible)
+	return eligible
+}
+
+func llvmNativePrimeScalarListParamFastPath(emitter *LlvmEmitter, paramName, elemLLVM string) {
+	if emitter == nil || paramName == "" || elemLLVM == "" {
+		return
+	}
+	list := llvmIdent(emitter, paramName)
+	if list == nil || list.typ != "ptr" {
+		return
+	}
+	emitter.nativeListData[paramName] = llvmListData(emitter, list, elemLLVM)
+	emitter.nativeListLens[paramName] = llvmListLen(emitter, list)
+}
+
+func llvmNativeFastScalarListIndex(emitter *LlvmEmitter, paramName string, index *LlvmValue, elemLLVM string) *LlvmValue {
+	if emitter == nil || paramName == "" || index == nil || index.typ != "i64" || !listUsesRawDataFastPath(elemLLVM) {
+		return nil
+	}
+	data := emitter.nativeListData[paramName]
+	length := emitter.nativeListLens[paramName]
+	list := llvmIdent(emitter, paramName)
+	if data == nil || length == nil || list == nil || list.typ != "ptr" {
+		return nil
+	}
+	nonNegative := llvmCompare(emitter, "sge", index, llvmIntLiteral(0))
+	beforeEnd := llvmCompare(emitter, "slt", index, length)
+	inBounds := llvmLogicalI1(emitter, llvmLogicalInstruction("&&"), nonNegative, beforeEnd)
+	fastLabel := llvmNextLabel(emitter, "list.raw.fast")
+	slowLabel := llvmNextLabel(emitter, "list.raw.slow")
+	endLabel := llvmNextLabel(emitter, "list.raw.end")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", inBounds.name, fastLabel, slowLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", fastLabel))
+	elemPtr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr inbounds %s, ptr %s, i64 %s", elemPtr, elemLLVM, data.name, index.name))
+	fastValue := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load %s, ptr %s", fastValue, elemLLVM, elemPtr))
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", slowLabel))
+	slowValue := llvmListGet(emitter, list, index, elemLLVM)
+	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	phi := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi %s [ %s, %%%s ], [ %s, %%%s ]", phi, elemLLVM, fastValue, fastLabel, slowValue.name, slowLabel))
+	return &LlvmValue{typ: elemLLVM, name: phi, pointer: false}
+}
+
 func llvmNativeEmitFunction(fn *llvmNativeFunction, globals []*llvmNativeGlobal, startStringID int) llvmNativeRenderedFunction {
 	emitter := llvmEmitter()
 	emitter.stringId = startStringID
 	llvmNativeBindGlobals(emitter, globals)
+	eligibleScalarListParams := llvmNativeEligibleScalarListParams(fn)
 	params := make([]*LlvmParam, 0, len(fn.params))
 	for _, param := range fn.params {
 		paramIRType := param.llvmType
@@ -238,6 +363,9 @@ func llvmNativeEmitFunction(fn *llvmNativeFunction, globals []*llvmNativeGlobal,
 				name:    "%" + param.name,
 				pointer: false,
 			})
+		}
+		if elemLLVM := eligibleScalarListParams[param.name]; elemLLVM != "" {
+			llvmNativePrimeScalarListParamFastPath(emitter, param.name, elemLLVM)
 		}
 	}
 	block := llvmNativeEmitBlock(emitter, fn.body)
@@ -492,6 +620,12 @@ func llvmNativeEvalMapLit(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue
 func llvmNativeEvalListIndex(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
 	if len(expr.childExprs) < 2 {
 		return llvmNativeZeroValue(expr.llvmType)
+	}
+	if base := expr.childExprs[0]; base != nil && base.kind == llvmNativeExprIdent && llvmListUsesTypedRuntime(expr.elemLLVMType) {
+		index := llvmNativeEvalExpr(emitter, expr.childExprs[1])
+		if fast := llvmNativeFastScalarListIndex(emitter, base.name, index, expr.elemLLVMType); fast != nil {
+			return fast
+		}
 	}
 	list := llvmNativeEvalExpr(emitter, expr.childExprs[0])
 	index := llvmNativeEvalExpr(emitter, expr.childExprs[1])

@@ -434,6 +434,39 @@ func TestTryEmitNativeOwnedLLVMIRTextCoversListIndex(t *testing.T) {
 	}
 }
 
+func TestTryEmitNativeOwnedLLVMIRTextVectorizedScalarListParamUsesRawDataFastPath(t *testing.T) {
+	t.Parallel()
+
+	req := newBackendRequest(t, EmitLLVMIR, `#[vectorize]
+fn dot(xs: List<Int>, ys: List<Int>) -> Int {
+    let n = if xs.len() < ys.len() { xs.len() } else { ys.len() }
+    let mut sum = 0
+    for i in 0..n {
+        sum = sum + xs[i] * ys[i]
+    }
+    sum
+}
+`)
+
+	got, ok, _, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
+	if err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for vectorized scalar list params")
+	}
+	ir := string(got)
+	if !strings.Contains(ir, "declare ptr @osty_rt_list_data_i64(ptr)") {
+		t.Fatalf("native-owned IR missing list data declaration:\n%s", ir)
+	}
+	if gotCount := strings.Count(ir, "call ptr @osty_rt_list_data_i64(ptr "); gotCount != 2 {
+		t.Fatalf("list data cache call count = %d, want 2\n%s", gotCount, ir)
+	}
+	if !strings.Contains(ir, "getelementptr inbounds i64, ptr ") {
+		t.Fatalf("native-owned IR missing raw i64 GEP:\n%s", ir)
+	}
+}
+
 func TestEmitLLVMIRTextPrefersNativeOwnedFastPathWhenCovered(t *testing.T) {
 	t.Parallel()
 

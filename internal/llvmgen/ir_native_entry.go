@@ -348,6 +348,7 @@ func nativeFunctionFromIR(ctx *nativeProjectionCtx, fn *ostyir.FnDecl) (*llvmNat
 		name:       fn.Name,
 		returnType: retType,
 		params:     make([]*llvmNativeParam, 0, len(fn.Params)),
+		vectorize:  fn.Vectorize,
 	}
 	for _, param := range fn.Params {
 		if param == nil || param.IsDestructured() || param.Default != nil {
@@ -357,10 +358,14 @@ func nativeFunctionFromIR(ctx *nativeProjectionCtx, fn *ostyir.FnDecl) (*llvmNat
 		if !ok || llvmType == "void" {
 			return nil, false
 		}
-		out.params = append(out.params, &llvmNativeParam{
+		nativeParam := &llvmNativeParam{
 			name:     param.Name,
 			llvmType: llvmType,
-		})
+		}
+		if info, ok := nativeExprInfoFromType(ctx, param.Type); ok && info.kind == nativeExprInfoList {
+			nativeParam.listElemLLVMType = info.listElemType
+		}
+		out.params = append(out.params, nativeParam)
 		ctx.bindScopeName(param.Name, nativeExprInfoFromLLVMType(llvmType))
 		if info, ok := nativeExprInfoFromType(ctx, param.Type); ok {
 			ctx.bindScopeName(param.Name, info)
@@ -414,6 +419,7 @@ func nativeMethodFunctionFromIR(
 			irType:   llvmMethodReceiverIRType(ownerInfo.def.llvmType, fn.ReceiverMut),
 			byRef:    fn.ReceiverMut,
 		}},
+		vectorize: fn.Vectorize,
 	}
 	ctx.bindScopeName("self", nativeExprInfo{
 		kind:       nativeExprInfoStruct,
@@ -428,10 +434,14 @@ func nativeMethodFunctionFromIR(
 		if !ok || llvmType == "void" {
 			return nil, false
 		}
-		out.params = append(out.params, &llvmNativeParam{
+		nativeParam := &llvmNativeParam{
 			name:     param.Name,
 			llvmType: llvmType,
-		})
+		}
+		if info, ok := nativeExprInfoFromType(ctx, param.Type); ok && info.kind == nativeExprInfoList {
+			nativeParam.listElemLLVMType = info.listElemType
+		}
+		out.params = append(out.params, nativeParam)
 		ctx.bindScopeName(param.Name, nativeExprInfoFromLLVMType(llvmType))
 		if info, ok := nativeExprInfoFromType(ctx, param.Type); ok {
 			ctx.bindScopeName(param.Name, info)
