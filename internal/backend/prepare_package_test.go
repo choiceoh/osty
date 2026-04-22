@@ -58,6 +58,32 @@ func TestPreparePackageMergesMultiFileDecls(t *testing.T) {
 	}
 }
 
+func TestPreparePackageSingleFileKeepsEntryFileAndDecl(t *testing.T) {
+	file := &ast.File{Decls: []ast.Decl{
+		&ast.FnDecl{Name: "main", Body: &ast.Block{}},
+	}}
+	pkg := &resolve.Package{
+		Name: "single",
+		Files: []*resolve.PackageFile{
+			{Path: "/main.osty", File: file},
+		},
+	}
+
+	entry, err := PreparePackage("main", "/main.osty", pkg, pkg.Files[0], nil)
+	if err != nil {
+		t.Fatalf("PreparePackage returned error: %v", err)
+	}
+	if entry.File != file {
+		t.Fatalf("Entry.File = %p, want %p", entry.File, file)
+	}
+	if entry.IR == nil || len(entry.IR.Decls) != 1 {
+		t.Fatalf("Entry.IR.Decls len = %d, want 1", len(entry.IR.Decls))
+	}
+	if fn, ok := entry.IR.Decls[0].(*ir.FnDecl); !ok || fn.Name != "main" {
+		t.Fatalf("Entry.IR.Decls[0] = %#v, want ir.FnDecl main", entry.IR.Decls[0])
+	}
+}
+
 // TestPreparePackageNilPackage rejects the obviously-bad input so a
 // regression in the build orchestrator surfaces here instead of as
 // a nil-deref deeper in the lowerer.
@@ -82,9 +108,9 @@ func TestPreparePackagePicksFirstNonNilFileWhenEntryUnset(t *testing.T) {
 	pkg := &resolve.Package{
 		Name: "pick",
 		Files: []*resolve.PackageFile{
-			nil,                                // resolver may emit a nil slot
-			{Path: "/skip.osty", File: nil},    // parse-failed slot
-			{Path: "/a.osty", File: fileA},     // first viable
+			nil,                             // resolver may emit a nil slot
+			{Path: "/skip.osty", File: nil}, // parse-failed slot
+			{Path: "/a.osty", File: fileA},  // first viable
 			{Path: "/b.osty", File: fileB},
 		},
 	}

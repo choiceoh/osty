@@ -2,9 +2,13 @@
 //
 // Public API surface (IR-only)
 //
-//   - GenerateModule(*ir.Module, Options) ([]byte, error) — the sole
-//     entry point for code generation. Consumes the backend-neutral
-//     IR produced by `internal/ir`.
+//   - GenerateModule(*ir.Module, Options) ([]byte, error) — the
+//     primary entry point for code generation. Consumes the
+//     backend-neutral IR produced by `internal/ir`.
+//   - TryGenerateNativeOwnedModule(*ir.Module, Options)
+//     ([]byte, bool, error) — native-owned primitive/control-flow
+//     fast path only. Returns ok=false when the module still needs the
+//     transitional legacy fallback.
 //
 // The package previously exposed Generate(*ast.File, Options) as an
 // alternate entry point. That AST route has been removed: the LLVM
@@ -36,8 +40,9 @@
 // GenerateModule now first tries a native-owned primitive/control-flow
 // slice mirrored from `toolchain/llvmgen.osty` and falls back to the
 // legacy IR -> AST bridge only for shapes still outside that slice
-// (see ir_module.go). The bridge remains an implementation detail that
-// the public API does not expose — callers neither construct nor
+// (see ir_module.go). TryGenerateNativeOwnedModule exposes just that
+// native-owned slice without taking the fallback. The bridge remains a
+// transitional implementation detail: callers never construct nor
 // observe the intermediate AST. Follow-on work will keep growing the
 // native path until the fallback disappears entirely.
 //

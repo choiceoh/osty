@@ -26,8 +26,8 @@ import (
 //
 // DIR: load → resolve → check → lint over every `.osty` file in the
 // directory as one package (workspaces aren't supported here — point at
-// a leaf package). --gen is logged as skipped because the per-file
-// backend gen doesn't aggregate to package output yet.
+// a leaf package). When --gen is set, multi-file packages lower once as
+// one backend module so sibling declarations share one output artifact.
 //
 // --per-decl threads check.Opts.OnDecl through, so the table grows a
 // per-declaration timing breakdown sorted by total time descending.

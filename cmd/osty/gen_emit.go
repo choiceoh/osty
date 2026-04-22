@@ -6,7 +6,15 @@ import (
 	"os"
 
 	"github.com/osty/osty/internal/backend"
+	"github.com/osty/osty/internal/nativellvmgen"
 )
+
+var tryExternalGenLLVMIR = func(entry *genPackageEntry) ([]byte, bool, []error, error) {
+	if entry == nil || entry.pkg == nil {
+		return nil, false, nil, nil
+	}
+	return nativellvmgen.TryPackage(".", entry.sourcePath, entry.pkg)
+}
 
 func prepareGenBackendEntry(pkgName string, entry *genPackageEntry) (backend.Entry, error) {
 	if entry == nil {
@@ -15,7 +23,7 @@ func prepareGenBackendEntry(pkgName string, entry *genPackageEntry) (backend.Ent
 	if entry.pkg == nil {
 		return backend.Entry{}, fmt.Errorf("missing package input for gen")
 	}
-	if countLowerableFiles(entry.pkg) > 1 {
+	if countLowerableFiles(entry.pkg) > 0 {
 		return backend.PreparePackage(pkgName, entry.sourcePath, entry.pkg, entry.file, entry.chk)
 	}
 	file, src, err := parseGenEmitFile(entry.pkg)
@@ -36,7 +44,7 @@ func emitGenArtifact(name backend.Name, mode backend.EmitMode, pkgName string, e
 		return nil, nil, err
 	}
 	if name == backend.NameLLVM && mode == backend.EmitLLVMIR {
-		out, warnings, emitErr := backend.EmitLLVMIRText(backendEntry, "", nil)
+		out, warnings, emitErr := emitGenLLVMIR(backendEntry, entry)
 		return out, &backend.Result{
 			Backend:  name,
 			Emit:     mode,
@@ -44,6 +52,16 @@ func emitGenArtifact(name backend.Name, mode backend.EmitMode, pkgName string, e
 		}, emitErr
 	}
 	return emitGenArtifactViaBackend(name, mode, backendEntry)
+}
+
+func emitGenLLVMIR(entry backend.Entry, pkgEntry *genPackageEntry) ([]byte, []error, error) {
+	if out, ok, warnings, err := tryExternalGenLLVMIR(pkgEntry); err == nil && ok {
+		return out, warnings, nil
+	}
+	if out, ok, warnings, err := backend.TryEmitNativeOwnedLLVMIRText(entry, ""); err == nil && ok {
+		return out, warnings, nil
+	}
+	return backend.EmitLLVMIRText(entry, "", nil)
 }
 
 func emitGenArtifactViaBackend(name backend.Name, mode backend.EmitMode, entry backend.Entry) ([]byte, *backend.Result, error) {

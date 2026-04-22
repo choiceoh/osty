@@ -77,6 +77,53 @@ fn main() {
 	}
 }
 
+func TestTryGenerateNativeOwnedModulePrimitiveSlice(t *testing.T) {
+	src := `fn pick(flag: Bool) -> Int {
+    if flag {
+        42
+    } else {
+        0
+    }
+}
+
+fn main() {
+    let mut i = 0
+    let mut sum = 0
+    for i < 3 {
+        sum = sum + pick(i == 2)
+        i = i + 1
+    }
+    println(sum)
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_try.osty"}
+	out, ok, err := TryGenerateNativeOwnedModule(mod, opts)
+	if err != nil {
+		t.Fatalf("TryGenerateNativeOwnedModule returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryGenerateNativeOwnedModule reported not covered for primitive slice")
+	}
+	for _, want := range []string{
+		"define i64 @pick(i1 %flag)",
+		"phi i64",
+		"for.cond",
+		"call i64 @pick(i1",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("native-owned helper IR missing %q:\n%s", want, string(out))
+		}
+	}
+	generated, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(generated) != string(out) {
+		t.Fatalf("TryGenerateNativeOwnedModule diverged from GenerateModule\n--- try ---\n%s\n--- generate ---\n%s", string(out), string(generated))
+	}
+}
+
 func TestNativeOwnedModuleEntryStructSlice(t *testing.T) {
 	src := `struct Pair { left: Int, right: Int }
 
@@ -130,5 +177,62 @@ fn main() {
 	}
 	if !strings.Contains(string(out), "%Pair = type { i64, i64 }") {
 		t.Fatalf("legacy fallback IR missing struct definition:\n%s", string(out))
+	}
+}
+
+func TestTryGenerateNativeOwnedModuleReturnsNotCoveredForStructFieldAssign(t *testing.T) {
+	src := `struct Pair { left: Int, right: Int }
+
+fn main() {
+    let mut pair = Pair { left: 1, right: 2 }
+    pair.left = 3
+    println(pair.left)
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_try_struct_assign.osty"}
+	out, ok, err := TryGenerateNativeOwnedModule(mod, opts)
+	if err != nil {
+		t.Fatalf("TryGenerateNativeOwnedModule returned error: %v", err)
+	}
+	if ok {
+		t.Fatalf("TryGenerateNativeOwnedModule unexpectedly covered struct field assignment:\n%s", string(out))
+	}
+	if len(out) != 0 {
+		t.Fatalf("TryGenerateNativeOwnedModule returned IR for uncovered module:\n%s", string(out))
+	}
+}
+
+func TestTryGenerateNativeOwnedModuleAppliesExportAndCABI(t *testing.T) {
+	mod := &ostyir.Module{
+		Package: "main",
+		Decls: []ostyir.Decl{
+			&ostyir.FnDecl{
+				Name:         "native_entry_v1",
+				ExportSymbol: "osty.gc.native_entry_v1",
+				CABI:         true,
+				Return:       &ostyir.PrimType{Kind: ostyir.PrimInt},
+				Body: &ostyir.Block{
+					Result: &ostyir.IntLit{Text: "0"},
+				},
+			},
+		},
+	}
+	out, ok, err := TryGenerateNativeOwnedModule(mod, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/native_entry_export_cabi.osty",
+	})
+	if err != nil {
+		t.Fatalf("TryGenerateNativeOwnedModule returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryGenerateNativeOwnedModule reported not covered for exported C ABI function")
+	}
+	got := string(out)
+	if !strings.Contains(got, "define ccc i64 @native_entry_v1()") {
+		t.Fatalf("native-owned helper IR missing C ABI calling convention:\n%s", got)
+	}
+	if !strings.Contains(got, "@osty.gc.native_entry_v1 = dso_local alias ptr, ptr @native_entry_v1") {
+		t.Fatalf("native-owned helper IR missing export alias:\n%s", got)
 	}
 }

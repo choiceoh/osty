@@ -642,6 +642,22 @@ func compileNativeTestBundle(ctx context.Context, b backend.Backend, tmpRoot str
 		binName = "osty_test_bundle_probe"
 	}
 	layoutRoot := filepath.Join(tmpRoot, "bundle-"+binName)
+	if result, usedExternal, err := tryExternalPackageLLVMArtifacts(ctx, backend.EmitObject, backend.Layout{
+		Root:    layoutRoot,
+		Profile: "test",
+	}, "", nil, sourcePath, pkg); usedExternal {
+		if err != nil {
+			return nativeTestBundleAssets{}, err
+		}
+		runtimeObject, err := backend.EnsureRuntimeObject(ctx, result.Artifacts, "")
+		if err != nil {
+			return nativeTestBundleAssets{}, err
+		}
+		return nativeTestBundleAssets{
+			ObjectPath:        result.Artifacts.Object,
+			RuntimeObjectPath: runtimeObject,
+		}, nil
+	}
 	entry, err := backend.PrepareEntry("main", sourcePath, file, res, chk)
 	if err != nil {
 		return nativeTestBundleAssets{}, err

@@ -22,19 +22,10 @@ import (
 // is unexported. Once the emitter consumes IR directly end-to-end, the
 // fallback bridge and the AST helper both go away.
 func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
-	if mod == nil {
-		return nil, unsupported("source-layout", "nil module")
-	}
-	if err := validateLegacyFFISurface(mod); err != nil {
-		return nil, err
-	}
-	if diag, ok := moduleUnsupportedDiagnostic(mod); ok {
-		return nil, &UnsupportedError{Diagnostic: diag}
-	}
-	if out, ok, err := tryNativeOwnedModule(mod, opts); err != nil {
+	if out, ok, err := TryGenerateNativeOwnedModule(mod, opts); err != nil {
 		return nil, err
 	} else if ok {
-		return finalizeLegacyFFISurface(out, mod), nil
+		return out, nil
 	}
 	file, err := legacyFileFromModule(mod)
 	if err != nil {
@@ -59,6 +50,19 @@ func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
 		return nil, err
 	}
 	return finalizeLegacyFFISurface(out, mod), nil
+}
+
+func prepareModuleGeneration(mod *ostyir.Module) error {
+	if mod == nil {
+		return unsupported("source-layout", "nil module")
+	}
+	if err := validateLegacyFFISurface(mod); err != nil {
+		return err
+	}
+	if diag, ok := moduleUnsupportedDiagnostic(mod); ok {
+		return &UnsupportedError{Diagnostic: diag}
+	}
+	return nil
 }
 
 // validateLegacyFFISurface rejects FFI-only contracts the legacy

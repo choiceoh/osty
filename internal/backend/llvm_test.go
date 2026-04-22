@@ -287,6 +287,301 @@ func TestEmitLLVMIRTextMatchesBackendArtifactOutput(t *testing.T) {
 	}
 }
 
+func TestEmitPrebuiltLLVMIRBuildsArtifactsFromProvidedIR(t *testing.T) {
+	t.Parallel()
+
+	tc := &fakeLLVMToolchain{}
+	backend := LLVMBackend{toolchain: tc}
+	root := t.TempDir()
+	req := Request{
+		Layout: Layout{
+			Root:    root,
+			Profile: "debug",
+		},
+		Emit:       EmitBinary,
+		BinaryName: "app",
+	}
+	warnings := []error{os.ErrExist}
+	result, err := backend.emitPrebuiltIR(context.Background(), req, []byte("source_filename = \"fake\"\ndefine i32 @main() { ret i32 0 }\n"), warnings)
+	if err != nil {
+		t.Fatalf("emitPrebuiltIR returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("emitPrebuiltIR returned nil result")
+	}
+	got, readErr := os.ReadFile(result.Artifacts.LLVMIR)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
+	}
+	if want := "source_filename = \"fake\"\ndefine i32 @main() { ret i32 0 }\n"; string(got) != want {
+		t.Fatalf("llvm ir = %q, want %q", got, want)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0] != os.ErrExist {
+		t.Fatalf("warnings = %#v, want propagated warnings", result.Warnings)
+	}
+	if len(tc.irCompiles) != 1 {
+		t.Fatalf("ir compile count = %d, want 1", len(tc.irCompiles))
+	}
+	if len(tc.cCompiles) != 1 {
+		t.Fatalf("runtime compile count = %d, want 1", len(tc.cCompiles))
+	}
+	if len(tc.links) != 1 {
+		t.Fatalf("link count = %d, want 1", len(tc.links))
+	}
+}
+
+func TestTryEmitNativeOwnedLLVMIRTextCoversPrimitiveSlice(t *testing.T) {
+	t.Parallel()
+
+	req := newBackendRequest(t, EmitLLVMIR, `fn pick(flag: Bool) -> Int {
+    if flag {
+        42
+    } else {
+        0
+    }
+}
+
+fn main() {
+    let mut i = 0
+    let mut sum = 0
+    for i < 3 {
+        sum = sum + pick(i == 2)
+        i = i + 1
+    }
+    println(sum)
+}
+`)
+
+	got, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
+	if err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for primitive slice")
+	}
+	if !strings.Contains(string(got), "define i64 @pick(i1 %flag)") {
+		t.Fatalf("native-owned IR missing pick definition:\n%s", string(got))
+	}
+	if !strings.Contains(string(got), "for.cond") {
+		t.Fatalf("native-owned IR missing loop label:\n%s", string(got))
+	}
+	if len(warnings) != len(req.Entry.IRIssues) {
+		t.Fatalf("warning count = %d, want %d", len(warnings), len(req.Entry.IRIssues))
+	}
+}
+
+func TestTryEmitNativeOwnedLLVMIRTextReturnsNotCovered(t *testing.T) {
+	t.Parallel()
+
+	req := newBackendRequest(t, EmitLLVMIR, `struct Pair { left: Int, right: Int }
+
+fn main() {
+    let mut pair = Pair { left: 1, right: 2 }
+    pair.left = 3
+    println(pair.left)
+}
+`)
+
+	got, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
+	if err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
+	}
+	if ok {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText unexpectedly covered struct field assignment:\n%s", string(got))
+	}
+	if len(got) != 0 {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned IR for uncovered source:\n%s", string(got))
+	}
+	if len(warnings) != len(req.Entry.IRIssues) {
+		t.Fatalf("warning count = %d, want %d", len(warnings), len(req.Entry.IRIssues))
+	}
+}
+
+func TestEmitLLVMIRTextPrefersNativeOwnedFastPathWhenCovered(t *testing.T) {
+	t.Parallel()
+
+	req := newBackendRequest(t, EmitLLVMIR, `fn pick(flag: Bool) -> Int {
+    if flag {
+        42
+    } else {
+        0
+    }
+}
+
+fn main() {
+    let mut i = 0
+    let mut sum = 0
+    for i < 3 {
+        sum = sum + pick(i == 2)
+        i = i + 1
+    }
+    println(sum)
+}
+`)
+
+	want, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
+	if err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for primitive slice")
+	}
+	got, gotWarnings, err := EmitLLVMIRText(req.Entry, "", nil)
+	if err != nil {
+		t.Fatalf("EmitLLVMIRText returned error: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("EmitLLVMIRText did not use native fast path output\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+	if len(gotWarnings) != len(warnings) {
+		t.Fatalf("warning count = %d, want %d", len(gotWarnings), len(warnings))
+	}
+}
+
+func TestEmitLLVMIRTextFallsBackWhenNativeOwnedUncovered(t *testing.T) {
+	t.Parallel()
+
+	req := newBackendRequest(t, EmitLLVMIR, `struct Pair { left: Int, right: Int }
+
+fn main() {
+    let mut pair = Pair { left: 1, right: 2 }
+    pair.left = 3
+    println(pair.left)
+}
+`)
+
+	if _, ok, _, err := TryEmitNativeOwnedLLVMIRText(req.Entry, ""); err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
+	} else if ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText unexpectedly covered struct field assignment")
+	}
+	got, warnings, err := EmitLLVMIRText(req.Entry, "", nil)
+	if err != nil {
+		t.Fatalf("EmitLLVMIRText returned error: %v", err)
+	}
+	if !strings.Contains(string(got), "%Pair = type { i64, i64 }") {
+		t.Fatalf("EmitLLVMIRText fallback IR missing Pair type:\n%s", got)
+	}
+	if len(warnings) != len(req.Entry.IRIssues) {
+		t.Fatalf("warning count = %d, want %d", len(warnings), len(req.Entry.IRIssues))
+	}
+}
+
+func TestLLVMBackendEmitBinaryPrefersNativeOwnedFastPathWhenCovered(t *testing.T) {
+	t.Parallel()
+
+	tc := &fakeLLVMToolchain{}
+	backend := LLVMBackend{toolchain: tc}
+	req := newBackendRequest(t, EmitBinary, `fn pick(flag: Bool) -> Int {
+    if flag {
+        42
+    } else {
+        0
+    }
+}
+
+fn main() {
+    let mut i = 0
+    let mut sum = 0
+    for i < 3 {
+        sum = sum + pick(i == 2)
+        i = i + 1
+    }
+    println(sum)
+}
+`)
+
+	want, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
+	if err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for primitive slice")
+	}
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	got, readErr := os.ReadFile(result.Artifacts.LLVMIR)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("Emit binary did not use native fast path output\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+	if len(result.Warnings) != len(warnings) {
+		t.Fatalf("warning count = %d, want %d", len(result.Warnings), len(warnings))
+	}
+}
+
+func TestLLVMBackendEmitBinaryFallsBackWhenNativeOwnedUncovered(t *testing.T) {
+	t.Parallel()
+
+	tc := &fakeLLVMToolchain{}
+	backend := LLVMBackend{toolchain: tc}
+	req := newBackendRequest(t, EmitBinary, `struct Pair { left: Int, right: Int }
+
+fn main() {
+    let mut pair = Pair { left: 1, right: 2 }
+    pair.left = 3
+    println(pair.left)
+}
+`)
+
+	if _, ok, _, err := TryEmitNativeOwnedLLVMIRText(req.Entry, ""); err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
+	} else if ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText unexpectedly covered struct field assignment")
+	}
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	got, readErr := os.ReadFile(result.Artifacts.LLVMIR)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
+	}
+	if !strings.Contains(string(got), "%Pair = type { i64, i64 }") {
+		t.Fatalf("Emit binary fallback IR missing Pair type:\n%s", got)
+	}
+}
+
+func TestEmitLLVMIRTextMirBackendOverridesNativeFastPath(t *testing.T) {
+	t.Parallel()
+
+	req := newBackendRequest(t, EmitLLVMIR, `fn pick(flag: Bool) -> Int {
+    if flag {
+        42
+    } else {
+        0
+    }
+}
+
+fn main() {
+    let mut i = 0
+    let mut sum = 0
+    for i < 3 {
+        sum = sum + pick(i == 2)
+        i = i + 1
+    }
+    println(sum)
+}
+`)
+
+	if _, ok, _, err := TryEmitNativeOwnedLLVMIRText(req.Entry, ""); err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
+	} else if !ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for primitive slice")
+	}
+	got, _, err := EmitLLVMIRText(req.Entry, "", []string{"mir-backend"})
+	if err != nil {
+		t.Fatalf("EmitLLVMIRText returned error: %v", err)
+	}
+	if !strings.Contains(string(got), "osty LLVM MIR backend") {
+		t.Fatalf("mir-backend feature did not override native fast path:\n%s", got)
+	}
+}
+
 func TestUseMIRBackendDefaultsEnabled(t *testing.T) {
 	t.Parallel()
 
@@ -301,6 +596,20 @@ func TestUseMIRBackendDefaultsEnabled(t *testing.T) {
 	}
 }
 
+func TestUseNativeOwnedLLVMIRDefaultsEnabled(t *testing.T) {
+	t.Parallel()
+
+	if !useNativeOwnedLLVMIR(nil, EmitLLVMIR) {
+		t.Fatal("useNativeOwnedLLVMIR(nil, EmitLLVMIR) = false, want true")
+	}
+	if !useNativeOwnedLLVMIR(nil, EmitBinary) {
+		t.Fatal("useNativeOwnedLLVMIR(nil, EmitBinary) = false, want true")
+	}
+	if !useNativeOwnedLLVMIR(nil, EmitObject) {
+		t.Fatal("useNativeOwnedLLVMIR(nil, EmitObject) = false, want true")
+	}
+}
+
 func TestUseMIRBackendLegacyFeatureDisables(t *testing.T) {
 	t.Parallel()
 
@@ -309,6 +618,20 @@ func TestUseMIRBackendLegacyFeatureDisables(t *testing.T) {
 	}
 	if useMIRBackend([]string{"mir-backend", "legacy-llvmgen"}, EmitBinary) {
 		t.Fatal("legacy-llvmgen should win when both features are present")
+	}
+}
+
+func TestUseNativeOwnedLLVMIRFeatureOverrides(t *testing.T) {
+	t.Parallel()
+
+	if useNativeOwnedLLVMIR([]string{"legacy-llvmgen"}, EmitBinary) {
+		t.Fatal("useNativeOwnedLLVMIR(legacy-llvmgen, EmitBinary) = true, want false")
+	}
+	if useNativeOwnedLLVMIR([]string{"mir-backend"}, EmitLLVMIR) {
+		t.Fatal("useNativeOwnedLLVMIR(mir-backend, EmitLLVMIR) = true, want false")
+	}
+	if useNativeOwnedLLVMIR([]string{"mir-backend", "legacy-llvmgen"}, EmitObject) {
+		t.Fatal("feature override should disable native fast path when either feature is present")
 	}
 }
 

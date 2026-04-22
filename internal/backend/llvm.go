@@ -37,6 +37,90 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 	if err := ValidateEmit(NameLLVM, req.Emit); err != nil {
 		return nil, err
 	}
+	irOut, warnings, genErr := generateLLVMIR(req.Entry, req.Layout.Target, req.Features, req.Emit)
+	if genErr == nil {
+		return b.emitPrebuiltIR(ctx, req, irOut, warnings)
+	}
+	out, err := b.preparePrebuiltIRResult(req, irOut, warnings)
+	if err != nil {
+		return nil, err
+	}
+	return out, genErr
+}
+
+// EmitLLVMIRText runs the LLVM lowering pipeline for one prepared entry and
+// returns the textual IR bytes directly, without creating artifact paths.
+func EmitLLVMIRText(entry Entry, target string, features []string) ([]byte, []error, error) {
+	return generateLLVMIR(entry, target, features, EmitLLVMIR)
+}
+
+// TryEmitNativeOwnedLLVMIRText runs only the native-owned llvmgen fast path
+// mirrored from toolchain/llvmgen.osty. It returns ok=false when the entry's
+// IR module is still outside that slice and the caller should choose a
+// fallback path.
+func TryEmitNativeOwnedLLVMIRText(entry Entry, target string) ([]byte, bool, []error, error) {
+	if entry.IR == nil {
+		return nil, false, nil, fmt.Errorf("llvm backend: missing lowered IR entry")
+	}
+	out, ok, err := llvmgen.TryGenerateNativeOwnedModule(entry.IR, llvmgen.Options{
+		PackageName: entry.PackageName,
+		SourcePath:  entry.SourcePath,
+		Source:      entry.Source,
+		Target:      target,
+	})
+	warnings := append([]error(nil), entry.IRIssues...)
+	if err != nil || !ok {
+		return out, ok, warnings, err
+	}
+	return out, true, warnings, nil
+}
+
+// EmitPrebuiltLLVMIR materializes already-generated LLVM IR into the standard
+// backend artifact layout and optionally compiles/links it for object/binary
+// requests.
+func EmitPrebuiltLLVMIR(ctx context.Context, req Request, irOut []byte, warnings []error) (*Result, error) {
+	return LLVMBackend{}.emitPrebuiltIR(ctx, req, irOut, warnings)
+}
+
+func (b LLVMBackend) emitPrebuiltIR(ctx context.Context, req Request, irOut []byte, warnings []error) (*Result, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	out, err := b.preparePrebuiltIRResult(req, irOut, warnings)
+	if err != nil {
+		return nil, err
+	}
+	if !llvmgen.NeedsObjectArtifact(req.Emit.String()) {
+		return out, nil
+	}
+	tc := b.llvmToolchain()
+	if err := tc.CompileObject(ctx, out.Artifacts.LLVMIR, out.Artifacts.Object, req.Layout.Target); err != nil {
+		return out, err
+	}
+	if !llvmgen.NeedsBinaryArtifact(req.Emit.String()) {
+		return out, nil
+	}
+	if out.Artifacts.Binary == "" {
+		return out, fmt.Errorf("%s", llvmgen.MissingBinaryArtifactMessage())
+	}
+	runtimeObject, err := ensureLocalGCRuntimeObject(ctx, tc, out.Artifacts, req.Layout.Target)
+	if err != nil {
+		return out, err
+	}
+	linkObjects := []string{out.Artifacts.Object}
+	if runtimeObject != "" {
+		linkObjects = append(linkObjects, runtimeObject)
+	}
+	if err := tc.LinkBinary(ctx, linkObjects, out.Artifacts.Binary, req.Layout.Target); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func (b LLVMBackend) preparePrebuiltIRResult(req Request, irOut []byte, warnings []error) (*Result, error) {
+	if err := ValidateEmit(NameLLVM, req.Emit); err != nil {
+		return nil, err
+	}
 	artifacts := req.Artifacts(NameLLVM)
 	if err := os.MkdirAll(artifacts.OutputDir, 0o755); err != nil {
 		return nil, err
@@ -49,55 +133,27 @@ func (b LLVMBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 	if artifacts.LLVMIR == "" {
 		return nil, fmt.Errorf("llvm backend: missing LLVM IR artifact path")
 	}
-	irOut, warnings, genErr := generateLLVMIR(req.Entry, req.Layout.Target, req.Features, req.Emit)
 	if err := os.WriteFile(artifacts.LLVMIR, irOut, 0o644); err != nil {
 		return nil, err
 	}
-	out := &Result{
+	return &Result{
 		Backend:   NameLLVM,
 		Emit:      req.Emit,
 		Artifacts: artifacts,
-		Warnings:  warnings,
-	}
-	if genErr == nil {
-		if !llvmgen.NeedsObjectArtifact(req.Emit.String()) {
-			return out, nil
-		}
-		tc := b.llvmToolchain()
-		if err := tc.CompileObject(ctx, artifacts.LLVMIR, artifacts.Object, req.Layout.Target); err != nil {
-			return out, err
-		}
-		if !llvmgen.NeedsBinaryArtifact(req.Emit.String()) {
-			return out, nil
-		}
-		if artifacts.Binary == "" {
-			return out, fmt.Errorf("%s", llvmgen.MissingBinaryArtifactMessage())
-		}
-		runtimeObject, err := ensureLocalGCRuntimeObject(ctx, tc, artifacts, req.Layout.Target)
-		if err != nil {
-			return out, err
-		}
-		linkObjects := []string{artifacts.Object}
-		if runtimeObject != "" {
-			linkObjects = append(linkObjects, runtimeObject)
-		}
-		if err := tc.LinkBinary(ctx, linkObjects, artifacts.Binary, req.Layout.Target); err != nil {
-			return out, err
-		}
-		return out, nil
-	}
-	return out, genErr
-}
-
-// EmitLLVMIRText runs the LLVM lowering pipeline for one prepared entry and
-// returns the textual IR bytes directly, without creating artifact paths.
-func EmitLLVMIRText(entry Entry, target string, features []string) ([]byte, []error, error) {
-	return generateLLVMIR(entry, target, features, EmitLLVMIR)
+		Warnings:  append([]error(nil), warnings...),
+	}, nil
 }
 
 func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode) ([]byte, []error, error) {
 	if entry.IR == nil {
 		return nil, nil, fmt.Errorf("llvm backend: missing lowered IR entry")
+	}
+	if useNativeOwnedLLVMIR(features, emit) {
+		if out, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(entry, target); err != nil {
+			return nil, warnings, err
+		} else if ok {
+			return out, warnings, nil
+		}
 	}
 	opts := llvmgen.Options{
 		PackageName: entry.PackageName,
@@ -110,12 +166,12 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	// for entry.File — the AST is a front-end artifact that the LLVM
 	// backend does not consume directly any more.
 	//
-	// MIR-first dispatch now defaults on the raw `llvm-ir` emission
-	// path. Requests can opt back into the legacy HIR→AST bridge with
-	// the `legacy-llvmgen` feature, or opt further in with
-	// `mir-backend` on object/binary emission while parity continues to
-	// grow. On MIR-emitter refusal we still fall back automatically, so
-	// enabling the new path cannot reduce coverage.
+	// After the native-owned fast path declines coverage, raw `llvm-ir`
+	// still prefers MIR by default. Requests can opt back into the
+	// legacy HIR→AST bridge with `legacy-llvmgen`, or force MIR on every
+	// emit mode with `mir-backend`. On MIR-emitter refusal we still fall
+	// back automatically, so enabling the new path cannot reduce
+	// coverage.
 	var (
 		irOut  []byte
 		genErr error
@@ -237,4 +293,26 @@ func useMIRBackend(features []string, emit EmitMode) bool {
 		return true
 	}
 	return emit == EmitLLVMIR
+}
+
+func useNativeOwnedLLVMIR(features []string, emit EmitMode) bool {
+	if featureEnabled(features, "legacy-llvmgen") {
+		return false
+	}
+	if featureEnabled(features, "mir-backend") {
+		return false
+	}
+	switch emit {
+	case EmitLLVMIR, EmitObject, EmitBinary:
+		return true
+	default:
+		return false
+	}
+}
+
+// UseNativeOwnedLLVMIR reports whether the backend's default dispatch would
+// prefer the native-owned llvmgen fast path for the given feature set and emit
+// mode.
+func UseNativeOwnedLLVMIR(features []string, emit EmitMode) bool {
+	return useNativeOwnedLLVMIR(features, emit)
 }
