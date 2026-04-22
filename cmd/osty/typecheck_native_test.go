@@ -84,6 +84,117 @@ func TestTypecheckCLINativeRejectsInspectAndDumpFlags(t *testing.T) {
 	}
 }
 
+// TestTypecheckCLINativePackageCleanSourcePrintsPerFileTypes confirms
+// the DIR rendering: each file's type dump is prefixed with a
+// `# <path>` header so downstream consumers can split by file. A
+// clean two-file package exits 0 and emits both file headers.
+func TestTypecheckCLINativePackageCleanSourcePrintsPerFileTypes(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.osty")
+	bPath := filepath.Join(dir, "b.osty")
+	if err := os.WriteFile(aPath, []byte(`pub fn helper() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte(`fn main() {
+    let x = 1
+    let y = x + 2
+    y
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := runOstyCLI(t, "typecheck", "--native", dir)
+	if got.exit != 0 {
+		t.Fatalf("osty typecheck --native DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "# "+bPath) {
+		t.Fatalf("stdout missing `# %s` header:\n%s", bPath, got.stdout)
+	}
+	// b.osty has scalar Int expressions that should show up in the
+	// typed-node dump.
+	if !strings.Contains(got.stdout, "Int") {
+		t.Fatalf("stdout missing Int type row:\n%s", got.stdout)
+	}
+}
+
+// TestTypecheckCLINativePackageRejectedWithoutNative pins the legacy
+// contract: `osty typecheck DIR` without --native is still rejected
+// with exit 2 (the pre-existing "does not accept a directory"
+// error), so this PR's DIR addition doesn't silently change legacy
+// semantics.
+func TestTypecheckCLINativePackageRejectedWithoutNative(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	if err := os.WriteFile(path, []byte(`fn main() {}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := runOstyCLI(t, "typecheck", dir)
+	if got.exit != 2 {
+		t.Fatalf("exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "typecheck does not accept a directory") {
+		t.Fatalf("stderr missing legacy rejection message:\n%s", got.stderr)
+	}
+}
+
+// TestRunTypecheckPackageNativeIsAstbridgeFree is the DIR in-process
+// counter test: runTypecheckPackageNative's full pipeline
+// (LoadPackageForNative → CheckPackageStructured →
+// nativePackageCheckDiags → printNativePackageTypes) must produce
+// AstbridgeLowerCount == 0.
+func TestRunTypecheckPackageNativeIsAstbridgeFree(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.osty")
+	bPath := filepath.Join(dir, "b.osty")
+	if err := os.WriteFile(aPath, []byte(`pub fn helper() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte(`fn main() {
+    let x = 1
+    let y = x + 2
+    y
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origStdout := os.Stdout
+	origStderr := os.Stderr
+	rout, wout, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stdout: %v", err)
+	}
+	rerr, werr, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stderr: %v", err)
+	}
+	os.Stdout = wout
+	os.Stderr = werr
+	t.Cleanup(func() {
+		os.Stdout = origStdout
+		os.Stderr = origStderr
+	})
+	drained := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
+	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
+
+	selfhost.ResetAstbridgeLowerCount()
+	exit := runTypecheckPackageNative(dir, cliFlags{noColor: true, native: true})
+	_ = wout.Close()
+	_ = werr.Close()
+	<-drained
+	<-drained
+
+	if exit != 0 {
+		t.Fatalf("runTypecheckPackageNative exit = %d, want 0", exit)
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("AstbridgeLowerCount after runTypecheckPackageNative = %d, want 0", got)
+	}
+}
+
 // TestRunTypecheckFileNativeIsAstbridgeFree is the in-process counter
 // test. Verifies the typecheck --native CLI body leaves
 // AstbridgeLowerCount at zero — including the type dump (which
