@@ -477,3 +477,112 @@ func TestCheckSourceStructuredAcceptsStdListMethods(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckSourceStructuredAcceptsDerivedStructEnumEqualHashableBounds(t *testing.T) {
+	src := []byte(`struct Point {
+    x: Int
+    y: Int
+}
+
+struct Wrapper<T> {
+    value: T
+}
+
+enum Token<T> {
+    Value(T)
+    Label(String)
+}
+
+fn needsEqual<T: Equal>(value: T) -> Bool {
+    value == value
+}
+
+fn needsHash<T: Hashable>(value: T) -> Int {
+    1
+}
+
+fn main() {
+    let point = Point { x: 1, y: 2 }
+    let wrapped: Wrapper<String> = Wrapper { value: "ok" }
+    let token: Token<Int> = Token.Value(1)
+
+    let eqPoint: Bool = needsEqual(point)
+    let hashPoint: Int = needsHash(point)
+    let eqWrapped: Bool = needsEqual(wrapped)
+    let hashWrapped: Int = needsHash(wrapped)
+    let eqToken: Bool = needsEqual(token)
+    let hashToken: Int = needsHash(token)
+
+    let pointMap: Map<Point, Int> = {:}
+    let tokenMap: Map<Token<Int>, Int> = {:}
+
+    let _ = (eqPoint, hashPoint, eqWrapped, hashWrapped, eqToken, hashToken, pointMap, tokenMap)
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+
+	got := map[string]string{}
+	for _, binding := range checked.Bindings {
+		got[binding.Name] = binding.TypeName
+	}
+	want := map[string]string{
+		"eqPoint":     "Bool",
+		"hashPoint":   "Int",
+		"eqWrapped":   "Bool",
+		"hashWrapped": "Int",
+		"eqToken":     "Bool",
+		"hashToken":   "Int",
+		"pointMap":    "Map<Point, Int>",
+		"tokenMap":    "Map<Token<Int>, Int>",
+	}
+	for name, wantType := range want {
+		if got[name] != wantType {
+			t.Fatalf("binding type for %s = %q, want %q (all=%v)", name, got[name], wantType, got)
+		}
+	}
+}
+
+func TestCheckSourceStructuredRejectsNonDerivableStructEnumEqualHashableBounds(t *testing.T) {
+	src := []byte(`struct BadBox {
+    f: fn() -> Int
+}
+
+enum BadTag {
+    Keep(fn() -> Int)
+}
+
+fn one() -> Int {
+    1
+}
+
+fn needsEqual<T: Equal>(value: T) -> Bool {
+    true
+}
+
+fn needsHash<T: Hashable>(value: T) -> Int {
+    0
+}
+
+fn main() {
+    let badBox = BadBox { f: one }
+    let badTag = BadTag.Keep(one)
+
+    let _ = needsEqual(badBox)
+    let _ = needsHash(badBox)
+    let _ = needsEqual(badTag)
+    let _ = needsHash(badTag)
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if got := checked.Summary.ErrorsByContext["E0749"]; got != 4 {
+		t.Fatalf("E0749 count = %d, want 4 (summary=%#v details=%v diagnostics=%#v)", got, checked.Summary, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+	if checked.Summary.Errors != 4 {
+		t.Fatalf("summary errors = %d, want 4 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+}

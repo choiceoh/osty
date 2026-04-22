@@ -1068,6 +1068,10 @@ pub fn checkIsAssignable(env: CheckEnv, dst: Int, src: Int) -> Bool {
 }
 
 pub fn checkTypeSatisfiesInterface(env: CheckEnv, concrete: Int, iface: Int) -> Bool {
+    checkTypeSatisfiesInterfaceSeen(env, concrete, iface, [])
+}
+
+fn checkTypeSatisfiesInterfaceSeen(env: CheckEnv, concrete: Int, iface: Int, seen: List<String>) -> Bool {
     let concreteResolved = checkResolveAliasDeep(env, concrete)
     let ifaceResolved = checkResolveAliasDeep(env, iface)
     if tyIsBad(env.tys, concreteResolved) || tyIsBad(env.tys, ifaceResolved) {
@@ -1083,13 +1087,21 @@ pub fn checkTypeSatisfiesInterface(env: CheckEnv, concrete: Int, iface: Int) -> 
     if !(checkIsInterface(env, ifaceHead)) {
         return false
     }
-    if checkBuiltinInterfaceInstance(env, concreteResolved, ifaceHead) {
+
+    let visitKey = checkSatisfiesInterfaceKey(concreteResolved, ifaceHead)
+    if listContainsString(seen, visitKey) {
+        return true
+    }
+    let mut nextSeen = seen
+    nextSeen.push(visitKey)
+
+    if checkBuiltinInterfaceInstance(env, concreteResolved, ifaceHead, nextSeen) {
         return true
     }
     if tyKindAt(env.tys, concreteResolved) == TkNamed {
         let concreteHead = tyHeadAt(env.tys, concreteResolved)
         for boundTy in checkGenericBoundsFor(env, concreteHead) {
-            if checkTypeSatisfiesInterface(env, boundTy, ifaceResolved) {
+            if checkTypeSatisfiesInterfaceSeen(env, boundTy, ifaceResolved, nextSeen) {
                 return true
             }
         }
@@ -1105,22 +1117,26 @@ pub fn checkTypeSatisfiesInterface(env: CheckEnv, concrete: Int, iface: Int) -> 
                 return false
             }
         }
-        return true
+        return checkFnListLen(required) > 0
     }
     false
 }
 
-fn checkBuiltinInterfaceInstance(env: CheckEnv, concrete: Int, ifaceHead: String) -> Bool {
+fn checkSatisfiesInterfaceKey(concrete: Int, ifaceHead: String) -> String {
+    "{concrete}:{ifaceHead}"
+}
+
+fn checkBuiltinInterfaceInstance(env: CheckEnv, concrete: Int, ifaceHead: String, seen: List<String>) -> Bool {
     let tys = env.tys
     let kind = tyKindAt(tys, concrete)
     if kind == TkPrim {
         return checkBuiltinPrimitiveInterfaceInstance(tys, concrete, ifaceHead)
     }
     if kind == TkTuple {
-        return checkBuiltinTupleInterfaceInstance(env, tyArgsAt(tys, concrete), ifaceHead)
+        return checkBuiltinTupleInterfaceInstance(env, tyArgsAt(tys, concrete), ifaceHead, seen)
     }
     if kind == TkOptional {
-        return checkBuiltinOptionInterfaceInstance(env, tyInnerAt(tys, concrete), ifaceHead)
+        return checkBuiltinOptionInterfaceInstance(env, tyInnerAt(tys, concrete), ifaceHead, seen)
     }
     if kind != TkNamed {
         return false
@@ -1129,18 +1145,18 @@ fn checkBuiltinInterfaceInstance(env: CheckEnv, concrete: Int, ifaceHead: String
     let head = tyHeadAt(tys, concrete)
     let args = tyArgsAt(tys, concrete)
     if head == "Option" && checkIntListLen(args) == 1 {
-        return checkBuiltinOptionInterfaceInstance(env, args[0], ifaceHead)
+        return checkBuiltinOptionInterfaceInstance(env, args[0], ifaceHead, seen)
     }
     if head == "Result" && checkIntListLen(args) == 2 {
-        return checkBuiltinResultInterfaceInstance(env, args[0], args[1], ifaceHead)
+        return checkBuiltinResultInterfaceInstance(env, args[0], args[1], ifaceHead, seen)
     }
     if (head == "List" || head == "Set") && checkIntListLen(args) == 1 {
-        return checkBuiltinUnaryCollectionInterfaceInstance(env, args[0], ifaceHead)
+        return checkBuiltinUnaryCollectionInterfaceInstance(env, args[0], ifaceHead, seen)
     }
     if head == "Map" && checkIntListLen(args) == 2 {
-        return checkBuiltinBinaryCollectionInterfaceInstance(env, args[0], args[1], ifaceHead)
+        return checkBuiltinBinaryCollectionInterfaceInstance(env, args[0], args[1], ifaceHead, seen)
     }
-    false
+    checkDerivedNominalInterfaceInstance(env, concrete, ifaceHead, seen)
 }
 
 fn checkBuiltinPrimitiveInterfaceInstance(tys: TyArena, concrete: Int, ifaceHead: String) -> Bool {
@@ -1165,27 +1181,27 @@ fn checkBuiltinPrimitiveInterfaceInstance(tys: TyArena, concrete: Int, ifaceHead
     false
 }
 
-fn checkBuiltinTupleInterfaceInstance(env: CheckEnv, items: List<Int>, ifaceHead: String) -> Bool {
+fn checkBuiltinTupleInterfaceInstance(env: CheckEnv, items: List<Int>, ifaceHead: String, seen: List<String>) -> Bool {
     if ifaceHead == "Ordered" {
         return false
     }
     let ifaceTy = tyNamed(env.tys, ifaceHead, [])
     for item in items {
-        if !(checkTypeSatisfiesInterface(env, item, ifaceTy)) {
+        if !(checkTypeSatisfiesInterfaceSeen(env, item, ifaceTy, seen)) {
             return false
         }
     }
     true
 }
 
-fn checkBuiltinOptionInterfaceInstance(env: CheckEnv, inner: Int, ifaceHead: String) -> Bool {
+fn checkBuiltinOptionInterfaceInstance(env: CheckEnv, inner: Int, ifaceHead: String, seen: List<String>) -> Bool {
     if ifaceHead != "Equal" && ifaceHead != "Ordered" && ifaceHead != "Hashable" {
         return false
     }
-    checkTypeSatisfiesInterface(env, inner, tyNamed(env.tys, ifaceHead, []))
+    checkTypeSatisfiesInterfaceSeen(env, inner, tyNamed(env.tys, ifaceHead, []), seen)
 }
 
-fn checkBuiltinResultInterfaceInstance(env: CheckEnv, okTy: Int, errTy: Int, ifaceHead: String) -> Bool {
+fn checkBuiltinResultInterfaceInstance(env: CheckEnv, okTy: Int, errTy: Int, ifaceHead: String, seen: List<String>) -> Bool {
     if ifaceHead == "Ordered" {
         return false
     }
@@ -1193,21 +1209,21 @@ fn checkBuiltinResultInterfaceInstance(env: CheckEnv, okTy: Int, errTy: Int, ifa
         return false
     }
     let ifaceTy = tyNamed(env.tys, ifaceHead, [])
-    checkTypeSatisfiesInterface(env, okTy, ifaceTy)
-        && checkTypeSatisfiesInterface(env, errTy, ifaceTy)
+    checkTypeSatisfiesInterfaceSeen(env, okTy, ifaceTy, seen)
+        && checkTypeSatisfiesInterfaceSeen(env, errTy, ifaceTy, seen)
 }
 
-fn checkBuiltinUnaryCollectionInterfaceInstance(env: CheckEnv, itemTy: Int, ifaceHead: String) -> Bool {
+fn checkBuiltinUnaryCollectionInterfaceInstance(env: CheckEnv, itemTy: Int, ifaceHead: String, seen: List<String>) -> Bool {
     if ifaceHead == "Ordered" {
         return false
     }
     if ifaceHead != "Equal" && ifaceHead != "Hashable" {
         return false
     }
-    checkTypeSatisfiesInterface(env, itemTy, tyNamed(env.tys, ifaceHead, []))
+    checkTypeSatisfiesInterfaceSeen(env, itemTy, tyNamed(env.tys, ifaceHead, []), seen)
 }
 
-fn checkBuiltinBinaryCollectionInterfaceInstance(env: CheckEnv, leftTy: Int, rightTy: Int, ifaceHead: String) -> Bool {
+fn checkBuiltinBinaryCollectionInterfaceInstance(env: CheckEnv, leftTy: Int, rightTy: Int, ifaceHead: String, seen: List<String>) -> Bool {
     if ifaceHead == "Ordered" {
         return false
     }
@@ -1215,8 +1231,77 @@ fn checkBuiltinBinaryCollectionInterfaceInstance(env: CheckEnv, leftTy: Int, rig
         return false
     }
     let ifaceTy = tyNamed(env.tys, ifaceHead, [])
-    checkTypeSatisfiesInterface(env, leftTy, ifaceTy)
-        && checkTypeSatisfiesInterface(env, rightTy, ifaceTy)
+    checkTypeSatisfiesInterfaceSeen(env, leftTy, ifaceTy, seen)
+        && checkTypeSatisfiesInterfaceSeen(env, rightTy, ifaceTy, seen)
+}
+
+fn checkDerivedNominalInterfaceInstance(env: CheckEnv, concrete: Int, ifaceHead: String, seen: List<String>) -> Bool {
+    if ifaceHead != "Equal" && ifaceHead != "Hashable" {
+        return false
+    }
+    let concreteHead = tyHeadAt(env.tys, concrete)
+    let typeSig = checkLookupType(env, concreteHead)
+    if typeSig.name == "" || typeSig.kind == "interface" {
+        return false
+    }
+    if typeSig.kind != "struct" && typeSig.kind != "enum" {
+        return false
+    }
+    if checkNominalAutoDeriveBlocked(env, concreteHead, ifaceHead) {
+        return false
+    }
+
+    let ifaceTy = tyNamed(env.tys, ifaceHead, [])
+    let concreteArgs = tyArgsAt(env.tys, concrete)
+    if typeSig.kind == "struct" {
+        for field in env.fields {
+            if field.owner == concreteHead {
+                let fieldTy = checkSubstituteTy(env, field.ty, typeSig.generics, concreteArgs)
+                if !(checkTypeSatisfiesInterfaceSeen(env, fieldTy, ifaceTy, seen)) {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    for variant in env.variants {
+        if variant.owner == concreteHead {
+            for payloadTy in variant.fieldTys {
+                let fieldTy = checkSubstituteTy(env, payloadTy, typeSig.generics, concreteArgs)
+                if !(checkTypeSatisfiesInterfaceSeen(env, fieldTy, ifaceTy, seen)) {
+                    return false
+                }
+            }
+        }
+    }
+    true
+}
+
+fn checkNominalAutoDeriveBlocked(env: CheckEnv, owner: String, ifaceHead: String) -> Bool {
+    for name in checkBuiltinInterfaceMethodNames(ifaceHead) {
+        if checkLookupFn(env, name, owner).name != "" {
+            return true
+        }
+    }
+    false
+}
+
+fn checkBuiltinInterfaceMethodNames(ifaceHead: String) -> List<String> {
+    if ifaceHead == "Equal" {
+        return ["eq", "ne"]
+    }
+    if ifaceHead == "Ordered" {
+        return ["eq", "ne", "lt", "le", "gt", "ge"]
+    }
+    if ifaceHead == "Hashable" {
+        return ["eq", "ne", "hash"]
+    }
+    []
+}
+
+fn checkFnListLen(xs: List<CheckFnSig>) -> Int {
+    xs.len()
 }
 
 fn checkInterfaceMethodSet(env: CheckEnv, owner: String) -> List<CheckFnSig> {
@@ -1452,6 +1537,89 @@ pub fn checkInstallPrelude(env: CheckEnv) {
     checkRegisterInterface(env, "Equal")
     checkRegisterInterface(env, "Ordered")
     checkRegisterInterface(env, "Hashable")
+    checkRegisterInterfaceExtends(env, CheckInterfaceExt {
+        owner: "Ordered",
+        ifaceTy: tyNamed(env.tys, "Equal", []),
+    })
+    checkRegisterInterfaceExtends(env, CheckInterfaceExt {
+        owner: "Hashable",
+        ifaceTy: tyNamed(env.tys, "Equal", []),
+    })
+
+    // The cmp stdlib module is prelude-visible but not materialized as
+    // concrete declarations during checker bootstrap, so register the
+    // canonical interface method surface here as well.
+    let tSelfCmp = tySelf(env.tys, "")
+    checkRegisterFn(env, CheckFnSig {
+        name: "eq",
+        owner: "Equal",
+        receiverTy: tSelfCmp,
+        retTy: tBool(env.tys),
+        paramNames: ["other"],
+        paramTys: [tSelfCmp],
+        generics: [],
+        genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "ne",
+        owner: "Equal",
+        receiverTy: tSelfCmp,
+        retTy: tBool(env.tys),
+        paramNames: ["other"],
+        paramTys: [tSelfCmp],
+        generics: [],
+        genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "lt",
+        owner: "Ordered",
+        receiverTy: tSelfCmp,
+        retTy: tBool(env.tys),
+        paramNames: ["other"],
+        paramTys: [tSelfCmp],
+        generics: [],
+        genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "le",
+        owner: "Ordered",
+        receiverTy: tSelfCmp,
+        retTy: tBool(env.tys),
+        paramNames: ["other"],
+        paramTys: [tSelfCmp],
+        generics: [],
+        genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "gt",
+        owner: "Ordered",
+        receiverTy: tSelfCmp,
+        retTy: tBool(env.tys),
+        paramNames: ["other"],
+        paramTys: [tSelfCmp],
+        generics: [],
+        genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "ge",
+        owner: "Ordered",
+        receiverTy: tSelfCmp,
+        retTy: tBool(env.tys),
+        paramNames: ["other"],
+        paramTys: [tSelfCmp],
+        generics: [],
+        genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "hash",
+        owner: "Hashable",
+        receiverTy: tSelfCmp,
+        retTy: tInt(env.tys),
+        paramNames: [],
+        paramTys: [],
+        generics: [],
+        genericBounds: [],
+    })
 
     // Register stdlib types that carry generics so alias/bound
     // substitution has the arity information it needs. Primitive
