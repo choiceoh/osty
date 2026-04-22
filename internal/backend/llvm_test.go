@@ -1020,6 +1020,35 @@ fn main() {
 	}
 }
 
+func TestLLVMBackendBinaryStdIoReadLine(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use std.io as io
+
+fn main() {
+    let first = io.readLine()
+    let second = io.readLine()
+    println(first)
+    println(second)
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	cmd.Stdin = strings.NewReader("alpha\nbeta\n")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "alpha\nbeta\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
 func TestLLVMBackendBinaryStdEnvGetReadsProcessEnv(t *testing.T) {
 	parallelClangBackendTest(t)
 

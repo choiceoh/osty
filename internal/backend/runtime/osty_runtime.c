@@ -11855,6 +11855,35 @@ void osty_rt_io_write(const char *text, bool newline, bool to_stderr) {
     fflush(out);
 }
 
+void *osty_rt_io_read_line(void) {
+    size_t cap = 128;
+    size_t len = 0;
+    char *buf = (char *)osty_rt_xmalloc(cap, "runtime.io.read_line.buf");
+    for (;;) {
+        int ch = fgetc(stdin);
+        if (ch == EOF || ch == '\n') {
+            break;
+        }
+        if (len + 1 >= cap) {
+            size_t next_cap = cap * 2;
+            char *grown = (char *)realloc(buf, next_cap);
+            if (grown == NULL) {
+                free(buf);
+                osty_rt_abort("runtime.io.read_line: realloc failed");
+            }
+            buf = grown;
+            cap = next_cap;
+        }
+        buf[len++] = (char)ch;
+    }
+    if (len > 0 && buf[len - 1] == '\r') {
+        len--;
+    }
+    void *out = osty_rt_string_dup_site(buf, len, "runtime.io.read_line");
+    free(buf);
+    return out;
+}
+
 /* std.env command-line argument surface.
  *
  * The emitter (see internal/llvmgen/stdlib_env_shim.go) routes the Osty

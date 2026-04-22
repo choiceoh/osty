@@ -2832,6 +2832,9 @@ func (g *mirGen) emitStdTestingCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, e
 
 func (g *mirGen) emitStdIoCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
 	method := strings.TrimPrefix(fnRef.Symbol, "std.io.")
+	if method == "readLine" {
+		return true, g.emitStdIoReadLineMIR(c)
+	}
 	if !isStdIoOutputMethod(method) {
 		return false, nil
 	}
@@ -2839,6 +2842,14 @@ func (g *mirGen) emitStdIoCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error)
 		return true, err
 	}
 	return true, g.storeUnitDestIfAny(c)
+}
+
+func (g *mirGen) emitStdIoReadLineMIR(c *mir.CallInstr) error {
+	if len(c.Args) != 0 {
+		return unsupported("mir-mvp", "std.io.readLine requires no arguments")
+	}
+	g.declareRuntime(ostyRtIOReadLineSymbol, "declare ptr @"+ostyRtIOReadLineSymbol+"()")
+	return g.emitCallSiteByName(c, ostyRtIOReadLineSymbol, "ptr", nil)
 }
 
 func (g *mirGen) emitStdIoWriteIntrinsic(i *mir.IntrinsicInstr, method string) error {
