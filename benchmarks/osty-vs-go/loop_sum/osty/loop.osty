@@ -1,9 +1,20 @@
+use std.hint
+
+// sumTo(n) is the canonical "tight scalar loop" bench body: repeated
+// accumulation of the induction variable. Without the black_box inside
+// the loop, LLVM's scalar-evolution pass recognizes the pattern and
+// rewrites the whole loop to n*(n-1)/2 — 3 arithmetic ops total —
+// which measures "Osty's IV analyzer" instead of "a tight loop". The
+// black_box on `acc + i` makes each iteration's value opaque to the
+// optimizer, forcing a real per-iter add + dependency chain. Go's
+// compiler doesn't do closed-form reduction on this pattern, so the
+// two sides now measure the same shape of work.
 #[inline(never)]
 #[vectorize]
 pub fn sumTo(n: Int) -> Int {
     let mut acc = 0
     for i in 0..n {
-        acc = acc + i
+        acc = hint.black_box(acc + i)
     }
     acc
 }

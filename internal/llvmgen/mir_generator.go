@@ -2567,6 +2567,11 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 			return err
 		}
 	}
+	if strings.HasPrefix(fnRef.Symbol, "std.hint.") {
+		if handled, err := g.emitStdHintCall(c, fnRef); handled {
+			return err
+		}
+	}
 	sig, known := g.functionTypes[fnRef.Symbol]
 	if !known {
 		return unsupported("mir-mvp", "call to unresolved symbol "+fnRef.Symbol)
@@ -2702,6 +2707,88 @@ func (g *mirGen) emitCallSiteByName(c *mir.CallInstr, symbol, retLLVM string, ar
 	g.fnBuf.WriteString(strings.Join(argStrs, ", "))
 	g.fnBuf.WriteString(")\n")
 	return nil
+}
+
+// emitStdHintCall dispatches `std.hint.*` call symbols. Currently
+// handles `black_box` only — a value-preserving barrier the optimizer
+// can't see through. Returns handled=true when the symbol matched.
+func (g *mirGen) emitStdHintCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
+	method := strings.TrimPrefix(fnRef.Symbol, "std.hint.")
+	switch method {
+	case "black_box":
+		return true, g.emitHintBlackBoxMIR(c)
+	}
+	return false, nil
+}
+
+// emitHintBlackBoxMIR lowers `std.hint.black_box(v)` to an identity
+// wrapper the optimizer can't see through: an empty inline-asm block
+// marked `sideeffect` that claims to read the input and hand back an
+// equivalent register. The `sideeffect` qualifier blocks DCE of the
+// producing expression (the whole reason loop_sum benches would
+// otherwise fold `sumTo(100)` to a constant and disappear), and the
+// opaque asm output blocks const-fold across the call.
+//
+// Scalar types only for now: i1/i8/i16/i32/i64/f32/f64/ptr fit the
+// "=r,0" (output-ties-input) register constraint. Struct/aggregate
+// arguments go through the fallback path (memory-clobbered alloca);
+// no current caller needs that so it's not implemented yet.
+func (g *mirGen) emitHintBlackBoxMIR(c *mir.CallInstr) error {
+	if len(c.Args) != 1 {
+		return unsupported("mir-mvp", "std.hint.black_box requires one argument")
+	}
+	arg := c.Args[0]
+	argT := arg.Type()
+	argLLVM := g.llvmType(argT)
+	argRef, err := g.evalOperand(arg, argT)
+	if err != nil {
+		return err
+	}
+	if !isScalarLLVMType(argLLVM) {
+		return unsupportedf("mir-mvp", "std.hint.black_box on non-scalar type %q not yet supported (register-tied asm constraint doesn't fit aggregates)", argLLVM)
+	}
+	emit := func(dest string) {
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(dest)
+		g.fnBuf.WriteString(" = call ")
+		g.fnBuf.WriteString(argLLVM)
+		g.fnBuf.WriteString(` asm sideeffect "", "=r,0"(`)
+		g.fnBuf.WriteString(argLLVM)
+		g.fnBuf.WriteByte(' ')
+		g.fnBuf.WriteString(argRef)
+		g.fnBuf.WriteString(")\n")
+	}
+	if c.Dest == nil {
+		// `let _ = black_box(x)` — no dest slot. Emit the asm anyway so
+		// the input computation survives DCE; the returned register is
+		// simply unused. (LLVM keeps it because the asm is sideeffect.)
+		tmp := g.fresh()
+		emit(tmp)
+		return nil
+	}
+	destLoc := g.fn.Local(c.Dest.Local)
+	tmp := g.fresh()
+	emit(tmp)
+	g.fnBuf.WriteString("  store ")
+	g.fnBuf.WriteString(g.llvmType(destLoc.Type))
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(tmp)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(g.localSlots[c.Dest.Local])
+	g.fnBuf.WriteByte('\n')
+	return nil
+}
+
+// isScalarLLVMType reports whether the given llvmType string names a
+// scalar LLVM type that fits a single register — the set the `=r,0`
+// asm constraint can tie to. Conservative; struct / array / composite
+// types return false.
+func isScalarLLVMType(t string) bool {
+	switch t {
+	case "i1", "i8", "i16", "i32", "i64", "float", "double", "ptr":
+		return true
+	}
+	return false
 }
 
 // emitStdTestingCall dispatches `std.testing.*` call symbols at MIR
