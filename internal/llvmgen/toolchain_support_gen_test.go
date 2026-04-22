@@ -24,6 +24,9 @@ func TestToolchainLlvmgenSupportSourcesTranspile(t *testing.T) {
 	if err := os.WriteFile(mergedPath, merged, 0o644); err != nil {
 		t.Fatalf("write merged source: %v", err)
 	}
+	if bytes.Contains(merged, []byte("pub fn llvmNativeEmitModule(")) {
+		t.Fatal("merged llvmgen support still contains the native entry slice")
+	}
 	generatedPath := filepath.Join(tmpDir, "llvmgen_support_generated.go")
 	goModPath := filepath.Join(tmpDir, "go.mod")
 

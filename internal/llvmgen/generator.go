@@ -347,7 +347,7 @@ var (
 // tolerates unknown kinds by falling back to UNSPECIFIED, so rolling
 // the encoding forward for future kinds does not break older runtimes
 // shipped alongside this LLVM output.
-func encodeSafepointID(kind safepointKind, serial int) int64 {
+func encodeSafepointID(kind safepointKind, serial int) int {
 	return llvmEncodeSafepointId(int(kind), serial)
 }
 
