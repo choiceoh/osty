@@ -1690,13 +1690,14 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     let ownerName = elabOwnerNameForReceiver(cx.env.tys, recvResolved)
     let methodName = fieldNode.text
     let lookedUpSig = checkLookupMethod(cx.env, ownerName, methodName)
-    let sig = if lookedUpSig.name != "" {
+    let rawSig = if lookedUpSig.name != "" {
         lookedUpSig
     } else if ownerName == "Error" {
         elabBuiltinErrorMethodSig(cx.env, methodName)
     } else {
         emptyCheckFnSig()
     }
+    let sig = checkSpecializeMethodSelf(cx.env, rawSig, recvResolved)
     if sig.name == "" {
         let hint = diagDidYouMean(
             checkSuggestSimilar(checkMethodNamesOf(cx.env, ownerName), methodName),
