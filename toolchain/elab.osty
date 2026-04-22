@@ -1654,18 +1654,29 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
             let targetResolved = checkResolveAliasDeep(cx.env, targetTy)
             if !(tyIsBad(cx.env.tys, targetResolved)) {
                 // Spec §7.4: `T` must be a concrete type implementing
-                // `Error`. We reject any target whose shape *cannot*
-                // implement Error:
-                //   * primitives (Int, Float, Bool, …)
-                //   * tuples / functions / optionals
-                // For named types we defer to the downcast semantics —
-                // user-defined struct/enum method registration timing
-                // across source vs. package check paths is not uniform
-                // enough to validate `message(self)` presence here
-                // without spurious rejections. Tracked as a depth gap
-                // separate from the core E0757 surface.
+                // `Error`. Two-tier rejection:
+                //   1. Non-named shapes (prim/tuple/fn/optional) cannot
+                //      carry user-defined methods — unconditionally bad.
+                //   2. Named types that ARE registered in the env but
+                //      lack a `message(self)` method — bad. Targets
+                //      whose declaration hasn't reached method
+                //      registration yet (rare ordering window) fall
+                //      through to the runtime downcast path.
+                //   3. `as? Error` itself is a no-op upcast — accept.
                 let targetKind = tyKindAt(cx.env.tys, targetResolved)
+                let mut rejected = false
                 if targetKind == TkPrim || targetKind == TkTuple || targetKind == TkFn || targetKind == TkOptional {
+                    rejected = true
+                } else if targetKind == TkNamed {
+                    let targetHead = tyHeadAt(cx.env.tys, targetResolved)
+                    if targetHead != "Error" && checkDeclaredTypeExists(cx.env, targetHead) {
+                        let messageSig = checkLookupMethod(cx.env, targetHead, "message")
+                        if messageSig.name == "" {
+                            rejected = true
+                        }
+                    }
+                }
+                if rejected {
                     cx.env.diagnostics.push(diagAsQuestionBadType(
                         tyToString(cx.env.tys, targetResolved),
                         callNode.start,

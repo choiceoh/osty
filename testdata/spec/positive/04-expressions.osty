@@ -243,3 +243,25 @@ fn apply_trailing_multi_arg() -> Int {
         doubled + 1
     }
 }
+
+// G24 §4.4: labeled loops + `break 'label v` / `continue 'label`.
+fn labeled_break_target() -> Int {
+    let x = 'outer: loop {
+        for n in 0..10 {
+            if n == 5 { break 'outer 42 }
+        }
+        break 0
+    }
+    x
+}
+
+fn labeled_continue_target() -> Int {
+    let mut total = 0
+    'outer: for i in 0..3 {
+        for j in 0..3 {
+            if j == 1 { continue 'outer }
+            total = total + i + j
+        }
+    }
+    total
+}
