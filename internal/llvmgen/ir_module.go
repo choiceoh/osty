@@ -1821,7 +1821,7 @@ func legacyClosureFromIR(expr *ostyir.Closure) (ast.Expr, error) {
 	out := &ast.ClosureExpr{
 		PosV:       start,
 		EndV:       end,
-		ReturnType: legacyTypeFromIR(expr.Return),
+		ReturnType: legacyClosureReturnType(expr.Return),
 	}
 	for _, param := range expr.Params {
 		legacyParam, err := legacyParamFromIR(param)
@@ -1836,6 +1836,13 @@ func legacyClosureFromIR(expr *ostyir.Closure) (ast.Expr, error) {
 	}
 	out.Body = body
 	return out, nil
+}
+
+func legacyClosureReturnType(t ostyir.Type) ast.Type {
+	if prim, ok := t.(*ostyir.PrimType); ok && prim != nil && prim.Kind == ostyir.PrimUnit {
+		return nil
+	}
+	return legacyTypeFromIR(t)
 }
 
 func legacyVariantLitFromIR(expr *ostyir.VariantLit) (ast.Expr, error) {

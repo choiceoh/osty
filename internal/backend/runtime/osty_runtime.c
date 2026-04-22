@@ -406,12 +406,12 @@ typedef struct osty_rt_map {
     int64_t index_len;
     int64_t *index_slots;
     int64_t index_inline[OSTY_RT_MAP_INLINE_INDEX_CAP];
-    // Per-map recursive mutex. Guarantees that all public map ops are
-    // mutually exclusive on a single instance so concurrent mutation
-    // can't realloc the slot arrays mid-read, drop the len mid-walk,
-    // or interleave an insert's memmove. Recursive so that `update`
-    // callbacks that touch the same map from within the lock don't
-    // self-deadlock.
+    // Per-map recursive mutex. Public ops elide it while the runtime
+    // is still single-threaded, then enable it permanently on first
+    // task spawn so concurrent mutation can't realloc the slot arrays
+    // mid-read, drop the len mid-walk, or interleave an insert's
+    // memmove. Recursive so that `update` callbacks that touch the
+    // same map from within the lock don't self-deadlock.
     osty_rt_rmu_t mu;
     int mu_init;
 } osty_rt_map;
@@ -947,6 +947,20 @@ static uint64_t osty_gc_allocate_stable_id(void) {
 static osty_rt_once_t osty_gc_lock_once = OSTY_RT_ONCE_INIT;
 static osty_rt_rmu_t osty_gc_lock;
 static int64_t osty_concurrent_workers = 0;
+static int osty_runtime_has_concurrency = 0;
+
+static inline int64_t osty_rt_concurrent_workers_load(void) {
+    return __atomic_load_n(&osty_concurrent_workers, __ATOMIC_ACQUIRE);
+}
+
+static inline bool osty_rt_runtime_has_concurrency(void) {
+    return __atomic_load_n(&osty_runtime_has_concurrency,
+                           __ATOMIC_ACQUIRE) != 0;
+}
+
+static inline void osty_rt_enable_concurrency_runtime(void) {
+    __atomic_store_n(&osty_runtime_has_concurrency, 1, __ATOMIC_RELEASE);
+}
 
 static void osty_gc_lock_init(void) {
     if (osty_rt_rmu_init(&osty_gc_lock) != 0) {
@@ -965,17 +979,17 @@ static void osty_gc_release(void) {
 
 static void osty_sched_workers_inc(void) {
     osty_gc_acquire();
-    osty_concurrent_workers += 1;
+    (void)__atomic_add_fetch(&osty_concurrent_workers, 1, __ATOMIC_ACQ_REL);
     osty_gc_release();
 }
 
 static void osty_sched_workers_dec(void) {
     osty_gc_acquire();
-    if (osty_concurrent_workers <= 0) {
+    if (osty_rt_concurrent_workers_load() <= 0) {
         osty_gc_release();
         osty_rt_abort("scheduler: worker counter underflow");
     }
-    osty_concurrent_workers -= 1;
+    (void)__atomic_sub_fetch(&osty_concurrent_workers, 1, __ATOMIC_ACQ_REL);
     osty_gc_release();
 }
 
@@ -3744,7 +3758,7 @@ void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots,
         osty_gc_release();
         osty_rt_abort("incremental start called while collection already in progress");
     }
-    if (osty_concurrent_workers > 0) {
+    if (osty_rt_concurrent_workers_load() > 0) {
         osty_gc_release();
         return;
     }
@@ -5715,6 +5729,7 @@ void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, 
 // Map op — common case for CLI tools, build workloads, and the
 // whole osty-vs-go benchmark suite.
 void osty_rt_map_lock(void *raw_map) {
+    if (!osty_rt_runtime_has_concurrency()) return;
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     if (map == NULL || !map->mu_init) return;
     if (osty_concurrent_workers == 0) return;
@@ -5722,6 +5737,7 @@ void osty_rt_map_lock(void *raw_map) {
 }
 
 void osty_rt_map_unlock(void *raw_map) {
+    if (!osty_rt_runtime_has_concurrency()) return;
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     if (map == NULL || !map->mu_init) return;
     if (osty_concurrent_workers == 0) return;
@@ -7662,7 +7678,7 @@ void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t
      * threads still reference. Defer until workers drain; a concurrent
      * collector is Phase 3. */
     osty_gc_acquire();
-    if (osty_concurrent_workers > 0) {
+    if (osty_rt_concurrent_workers_load() > 0) {
         osty_gc_release();
         return;
     }
@@ -7672,7 +7688,7 @@ void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t
 
 void osty_gc_debug_collect(void) {
     osty_gc_acquire();
-    if (osty_concurrent_workers > 0) {
+    if (osty_rt_concurrent_workers_load() > 0) {
         /* Same cross-thread root safety gate as safepoint_v1. */
         osty_gc_release();
         return;
@@ -7688,7 +7704,7 @@ void osty_gc_debug_collect(void) {
  * the tier explicitly regardless of pressure state. */
 void osty_gc_debug_collect_minor(void) {
     osty_gc_acquire();
-    if (osty_concurrent_workers > 0) {
+    if (osty_rt_concurrent_workers_load() > 0) {
         osty_gc_release();
         return;
     }
@@ -7698,7 +7714,7 @@ void osty_gc_debug_collect_minor(void) {
 
 void osty_gc_debug_collect_major(void) {
     osty_gc_acquire();
-    if (osty_concurrent_workers > 0) {
+    if (osty_rt_concurrent_workers_load() > 0) {
         osty_gc_release();
         return;
     }
@@ -9788,6 +9804,7 @@ static void *osty_rt_task_spawn_internal(void *group, void *body_env) {
     if (body_env == NULL) {
         osty_rt_abort("task_spawn: null body env");
     }
+    osty_rt_enable_concurrency_runtime();
     osty_sched_pool_lazy_init();
 
     osty_rt_task_handle_impl *h = osty_sched_alloc_handle();

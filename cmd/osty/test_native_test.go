@@ -45,6 +45,54 @@ fn testAdd() {
 	}
 }
 
+func TestRunTestMainBenchSupportsMultiFilePackageLowering(t *testing.T) {
+	requireClangForNativeTest(t)
+
+	dir := t.TempDir()
+	writeNativeTestFile(t, dir, "lib.osty", `pub fn accumulate(rows: List<String>) -> Int {
+    let mut totals: Map<String, Int> = {:}
+    for row in rows {
+        let next = if totals.containsKey(row) {
+            totals.getOr(row, 0) + 1
+        } else {
+            1
+        }
+        totals.insert(row, next)
+    }
+
+    let keys = totals.keys().sorted()
+    let mut checksum = 0
+    for key in keys {
+        checksum = checksum + totals.getOr(key, 0) + key.len()
+    }
+    checksum
+}
+`)
+	writeNativeTestFile(t, dir, "lib_test.osty", `use std.testing
+
+fn benchAccumulate() {
+    let rows = ["compiler", "runtime", "compiler", "lsp"]
+    testing.benchmark(5, || {
+        let _ = accumulate(rows)
+        Ok(())
+    })
+}
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runTestMain([]string{"--bench", "--serial", dir}, cliFlags{}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runTestMain() bench exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "ok\tbenchAccumulate") || !strings.Contains(got, "ok\t1 benchmarks passed") {
+		t.Fatalf("stdout = %q, want passing benchmark summary", got)
+	}
+	if got := stderr.String(); strings.TrimSpace(got) != "" {
+		t.Fatalf("stderr = %q, want empty stderr", got)
+	}
+}
+
 func TestCompileNativeTestBundleUsesManagedNativeLLVMGenWhenCovered(t *testing.T) {
 	dir := t.TempDir()
 	path := writeNativeTestFile(t, dir, "lib_test.osty", `fn testAdd() {}

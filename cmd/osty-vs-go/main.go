@@ -36,9 +36,14 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"hash"
+	"io"
+	"io/fs"
 	"math"
 	"os"
 	"os/exec"
@@ -209,6 +214,150 @@ func ptrOrNaN(p *float64) float64 {
 
 const historyFile = ".osty-vs-go-history.jsonl"
 
+type goBenchRunner func(goBin, pairsDir, pair, benchTime string, goCount int, goCPU string) ([]benchResult, error)
+
+type goBenchCache struct {
+	entries map[goBenchCacheKey][]benchResult
+}
+
+type goBenchCacheKey struct {
+	PairsDir    string
+	Pair        string
+	GoBin       string
+	BenchTime   string
+	GoCount     int
+	GoCPU       string
+	Fingerprint string
+}
+
+func newGoBenchCache() *goBenchCache {
+	return &goBenchCache{entries: map[goBenchCacheKey][]benchResult{}}
+}
+
+func runGoBenchCached(cache *goBenchCache, runner goBenchRunner, goBin, pairsDir, pair, benchTime string, goCount int, goCPU string) ([]benchResult, error) {
+	if cache == nil {
+		return runner(goBin, pairsDir, pair, benchTime, goCount, goCPU)
+	}
+	if cache.entries == nil {
+		cache.entries = map[goBenchCacheKey][]benchResult{}
+	}
+	key, err := goBenchCacheKeyFor(goBin, pairsDir, pair, benchTime, goCount, goCPU)
+	if err != nil {
+		return nil, err
+	}
+	if cached, ok := cache.entries[key]; ok {
+		return cloneBenchResults(cached), nil
+	}
+	rows, err := runner(goBin, pairsDir, pair, benchTime, goCount, goCPU)
+	if err != nil {
+		return nil, err
+	}
+	cache.entries[key] = cloneBenchResults(rows)
+	return cloneBenchResults(rows), nil
+}
+
+func cloneBenchResults(rows []benchResult) []benchResult {
+	if len(rows) == 0 {
+		return nil
+	}
+	return append([]benchResult(nil), rows...)
+}
+
+func goBenchCacheKeyFor(goBin, pairsDir, pair, benchTime string, goCount int, goCPU string) (goBenchCacheKey, error) {
+	fingerprint, err := goBenchInputsFingerprint(filepath.Join(pairsDir, pair, "go"))
+	if err != nil {
+		return goBenchCacheKey{}, err
+	}
+	return goBenchCacheKey{
+		PairsDir:    filepath.Clean(pairsDir),
+		Pair:        pair,
+		GoBin:       goBin,
+		BenchTime:   benchTime,
+		GoCount:     goCount,
+		GoCPU:       goCPU,
+		Fingerprint: fingerprint,
+	}, nil
+}
+
+func goBenchInputsFingerprint(pairDir string) (string, error) {
+	absPairDir, err := filepath.Abs(pairDir)
+	if err != nil {
+		return "", fmt.Errorf("abs pair dir %s: %w", pairDir, err)
+	}
+	h := sha256.New()
+	if err := hashDirTree(h, "pair", absPairDir); err != nil {
+		return "", err
+	}
+	if modRoot, ok := findGoModRoot(absPairDir); ok {
+		for _, name := range []string{"go.mod", "go.sum", "go.work", "go.work.sum"} {
+			if err := hashOptionalFile(h, name, filepath.Join(modRoot, name)); err != nil {
+				return "", err
+			}
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func findGoModRoot(start string) (string, bool) {
+	dir := start
+	for {
+		if info, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil && !info.IsDir() {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+func hashDirTree(h hash.Hash, label, root string) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !d.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		return hashFile(h, label+"/"+filepath.ToSlash(rel), path)
+	})
+}
+
+func hashOptionalFile(h hash.Hash, logicalName, path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	return hashFile(h, logicalName, path)
+}
+
+func hashFile(h hash.Hash, logicalName, path string) error {
+	if _, err := io.WriteString(h, logicalName+"\n"); err != nil {
+		return err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+	_, err = io.WriteString(h, "\n")
+	return err
+}
+
 func main() {
 	fs := flag.NewFlagSet("osty-vs-go", flag.ExitOnError)
 	benchTime := fs.String("benchtime", "500ms", "per-bench duration target for both Go (-benchtime) and Osty (--benchtime)")
@@ -287,6 +436,7 @@ func main() {
 			NoiseFrac:      *noiseFrac,
 			PairRE:         pairRE,
 			Interval:       *loopInterval,
+			GoCache:        newGoBenchCache(),
 		}
 		if err := runAutoresearch(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
@@ -300,7 +450,7 @@ func main() {
 		return
 	}
 
-	if _, err := runOnce(*benchTime, *pairsDir, osty, *goBin, *goCount, *goCPU, *label, *noiseFrac, pairRE); err != nil {
+	if _, err := runOnce(*benchTime, *pairsDir, osty, *goBin, *goCount, *goCPU, *label, *noiseFrac, pairRE, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
 		os.Exit(1)
 	}
@@ -310,7 +460,7 @@ func main() {
 // side, print the table, append to history, print the vs-best verdict.
 // Returns the new record so `--loop` can stream verdicts without
 // re-reading history.
-func runOnce(benchTime, pairsDir, ostyBin, goBin string, goCount int, goCPU, label string, noiseFrac float64, pairRE *regexp.Regexp) (runRecord, error) {
+func runOnce(benchTime, pairsDir, ostyBin, goBin string, goCount int, goCPU, label string, noiseFrac float64, pairRE *regexp.Regexp, goCache *goBenchCache) (runRecord, error) {
 	pairs, err := discoverPairs(pairsDir)
 	if err != nil {
 		return runRecord{}, err
@@ -345,7 +495,7 @@ func runOnce(benchTime, pairsDir, ostyBin, goBin string, goCount int, goCPU, lab
 
 	var rows []benchResult
 	for _, pair := range pairs {
-		goRows, err := runGoBench(goBin, pairsDir, pair, benchTime, goCount, goCPU)
+		goRows, err := runGoBenchCached(goCache, runGoBench, goBin, pairsDir, pair, benchTime, goCount, goCPU)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty-vs-go: go bench %s: %v\n", pair, err)
 		}
@@ -394,10 +544,11 @@ func runLoop(interval time.Duration, benchTime, pairsDir, ostyBin, goBin string,
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	goCache := newGoBenchCache()
 	// Run immediately rather than waiting `interval` for the first
 	// tick — the user just launched it and expects feedback.
 	for {
-		if _, err := runOnce(benchTime, pairsDir, ostyBin, goBin, goCount, goCPU, label, noiseFrac, pairRE); err != nil {
+		if _, err := runOnce(benchTime, pairsDir, ostyBin, goBin, goCount, goCPU, label, noiseFrac, pairRE, goCache); err != nil {
 			fmt.Fprintf(os.Stderr, "osty-vs-go: %v\n", err)
 		}
 		fmt.Printf("\n(waiting %s before next sweep; Ctrl-C to stop)\n\n", interval)
@@ -427,6 +578,7 @@ type autoresearchConfig struct {
 	NoiseFrac      float64
 	PairRE         *regexp.Regexp
 	Interval       time.Duration
+	GoCache        *goBenchCache
 }
 
 // runAutoresearch is the closest faithful take on karpathy/autoresearch
@@ -530,7 +682,7 @@ func runAutoresearchIter(cfg autoresearchConfig, iter int, stats *autoresearchSt
 
 	// Phase 2: run the bench sweep. runOnce already writes the history
 	// file and prints the verdict relative to all-time history.
-	rec, err := runOnce(cfg.BenchTime, cfg.PairsDir, cfg.OstyBin, cfg.GoBin, cfg.GoCount, cfg.GoCPU, cfg.Label, cfg.NoiseFrac, cfg.PairRE)
+	rec, err := runOnce(cfg.BenchTime, cfg.PairsDir, cfg.OstyBin, cfg.GoBin, cfg.GoCount, cfg.GoCPU, cfg.Label, cfg.NoiseFrac, cfg.PairRE, cfg.GoCache)
 	if err != nil {
 		// Bench failure shouldn't leave the mutator's changes on HEAD.
 		_, _ = gitRun("reset", "--hard", "HEAD")

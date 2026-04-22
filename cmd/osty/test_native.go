@@ -631,12 +631,6 @@ func compileNativeTestBundle(ctx context.Context, b backend.Backend, tmpRoot str
 	if sourcePath == "" {
 		sourcePath = filepath.Join(pkg.Dir, "__osty_test__.osty")
 	}
-	file, src, err := parseGenEmitFile(pkg)
-	if err != nil {
-		return nativeTestBundleAssets{}, err
-	}
-	res := resolveFile(file)
-	chk := check.File(file, res, checkOptsForSource(src))
 	binName := sanitizeNativeTestName(filepath.Base(sourcePath))
 	if binName == "osty_test" {
 		binName = "osty_test_bundle_probe"
@@ -658,11 +652,10 @@ func compileNativeTestBundle(ctx context.Context, b backend.Backend, tmpRoot str
 			RuntimeObjectPath: runtimeObject,
 		}, nil
 	}
-	entry, err := backend.PrepareEntry("main", sourcePath, file, res, chk)
+	entry, err := prepareNativeTestBackendEntry(sourcePath, pkg)
 	if err != nil {
 		return nativeTestBundleAssets{}, err
 	}
-	entry.Source = src
 	req := backend.Request{
 		Layout: backend.Layout{
 			Root:    layoutRoot,
@@ -683,6 +676,36 @@ func compileNativeTestBundle(ctx context.Context, b backend.Backend, tmpRoot str
 		ObjectPath:        result.Artifacts.Object,
 		RuntimeObjectPath: runtimeObject,
 	}, nil
+}
+
+func prepareNativeTestBackendEntry(sourcePath string, pkg *resolve.Package) (backend.Entry, error) {
+	if pkg == nil {
+		return backend.Entry{}, fmt.Errorf("missing package for native test bundle")
+	}
+	var entryFile *resolve.PackageFile
+	for _, pf := range pkg.Files {
+		if pf != nil && pf.Path == sourcePath {
+			entryFile = pf
+			break
+		}
+	}
+	if countLowerableFiles(pkg) > 0 {
+		res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+		chk := check.Package(pkg, res, checkOpts())
+		return backend.PreparePackage("main", sourcePath, pkg, entryFile, chk)
+	}
+	file, src, err := parseGenEmitFile(pkg)
+	if err != nil {
+		return backend.Entry{}, err
+	}
+	res := resolveFile(file)
+	chk := check.File(file, res, checkOptsForSource(src))
+	entry, err := backend.PrepareEntry("main", sourcePath, file, res, chk)
+	if err != nil {
+		return backend.Entry{}, err
+	}
+	entry.Source = src
+	return entry, nil
 }
 
 func linkNativeTestBinary(ctx context.Context, assets nativeTestBundleAssets, tmpRoot string, tc nativeTestCase) (string, error) {
