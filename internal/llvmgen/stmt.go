@@ -2511,12 +2511,24 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if err != nil {
 		return true, err
 	}
-	if arg.typ != elemTyp {
-		return true, unsupportedf("type-system", "list.push arg type %s, want %s", arg.typ, elemTyp)
-	}
 	argValue, err := g.loadIfPointer(arg)
 	if err != nil {
 		return true, err
+	}
+	// Aggregate element types (`%Struct`, `%Tuple.*`) reach here as a
+	// ptr pointing at the aggregate's slot — e.g. a stack-spilled
+	// literal produced by `Bucket { ... }` or an `emitListAggregateGet`
+	// out-parameter. Load through the ptr so the push path receives
+	// the actual aggregate value that matches `elemTyp`. Scalar / ptr
+	// elements already arrive at the right width.
+	if argValue.typ != elemTyp && argValue.typ == "ptr" && strings.HasPrefix(elemTyp, "%") {
+		emitter := g.toOstyEmitter()
+		loaded := llvmLoad(emitter, &LlvmValue{typ: elemTyp, name: argValue.ref, pointer: true})
+		g.takeOstyEmitter(emitter)
+		argValue = fromOstyValue(loaded)
+	}
+	if argValue.typ != elemTyp {
+		return true, unsupportedf("type-system", "list.push arg type %s, want %s", argValue.typ, elemTyp)
 	}
 	if g.usesAggregateListABI(elemTyp) {
 		return true, g.emitListAggregatePush(baseValue, argValue)
