@@ -2438,9 +2438,8 @@ fn mirLowerExprIntoPlaceImpl(
         HirExprIfLet -> mirLowerIfLetExprInto(bs, e, dest, destT),
         HirExprMethod -> mirLowerMethodCallInto(bs, e, dest, destT),
         HirExprMapLit -> mirLowerMapLitInto(bs, e, dest, destT),
-        // Kinds deferred to Stage 4e-4 / 4f:
+        // Kinds deferred to Stage 4f:
         HirExprMatch -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "MatchExpr"),
-        HirExprClosure -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "Closure"),
         _ -> mirLowerExprIntoPlaceRValue(bs, e, dest, destT),
     }
 }
@@ -2501,6 +2500,7 @@ pub fn mirLowerExprToRValue(
         HirExprIndex -> mirLowerIndexRValue(bs, e),
         HirExprTupleLit -> mirLowerTupleLitRValue(bs, e),
         HirExprList -> mirLowerListLitRValue(bs, e, hint),
+        HirExprClosure -> mirLowerClosureRValue(bs, e, hint),
         HirExprError -> mirLowerErrorExprRValue(bs, e),
         _ -> mirRVUse(mirLowerExprAsOperand(bs, e)),
     }
@@ -4566,4 +4566,264 @@ pub fn mirLowerEmitStringFreeFnIntrinsic(
     let hasDest = !hirTypeIsUnit(destT)
     let instr = mirIntrinsicInstr(hasDest, dest, kind, out, span)
     mirLowerEmitInstr(bs, instr)
+}
+
+// ====================================================================
+// Stage 4e-6: Closure lowering
+// ====================================================================
+//
+// Closures lower to a fresh top-level MIR function plus an
+// AggregateRV{MirAggClosure} carrying the fn symbol + capture
+// operands. The lifted function uses the env-first-arg ABI:
+//
+//   fn <symbol>(env: ClosureEnv, user_arg0, user_arg1, ...) -> R
+//
+// where `env` is a pointer to a heap-boxed struct
+// `(fn_ptr, cap0_type, cap1_type, ...)`. The body's prologue loads
+// captures from env[i+1] into per-capture locals, bound to their
+// source-level names so the rest of the body lowers unchanged.
+//
+// Matches Go's `lowerClosure` / `captureOperand` / `nextClosureSymbol`.
+
+/// mirLowerClosureRValue lifts a Closure body into a fresh MIR fn
+/// and returns the closure value as an AggregateRV.
+pub fn mirLowerClosureRValue(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    hint: HirType,
+) -> MirRValue {
+    let closureT = if hirTypeIsValid(e.typ) {
+        e.typ
+    } else if hirTypeIsValid(hint) {
+        hint
+    } else {
+        hirTypeErr()
+    }
+    let retT = if hirTypeIsValid(e.closureReturn) {
+        e.closureReturn
+    } else {
+        hirTUnit()
+    }
+    let symbol = mirLowerNextClosureSymbol(bs.l, bs.fn_.name)
+    let span = mirSpanFromHir(e.span)
+
+    // --- Build the lifted function -------------------------------
+    let mut lifted = mirFunction(symbol, hirTypeString(retT), span)
+
+    // _return local first (slot 0 by convention).
+    let retLocal = mirFunctionNewLocal(lifted, "_return", hirTypeString(retT), true, span)
+    lifted.returnLocal = retLocal
+
+    // _env param (first positional param, ClosureEnv type).
+    let envType = mirLowerClosureEnvType()
+    let envLocal = mirFunctionNewLocal(lifted, "_env", hirTypeString(envType), false, span)
+    lifted.params.push(envLocal)
+
+    // User params.
+    let mut userIdx = 0
+    for p in e.closureParams {
+        let paramName = if p.name == "" {
+            "arg" + mirLowerIntToString(userIdx)
+        } else {
+            p.name
+        }
+        let pt = if hirTypeIsValid(p.typ) {
+            p.typ
+        } else {
+            hirTypeErr()
+        }
+        let id = mirFunctionNewLocal(
+            lifted,
+            paramName,
+            hirTypeString(pt),
+            false,
+            mirSpanFromHir(p.span),
+        )
+        lifted.params.push(id)
+        userIdx = userIdx + 1
+    }
+
+    // Entry block.
+    let entry = mirFunctionNewBlock(lifted, span)
+    lifted.entry = entry
+
+    // --- Body state for the lifted fn ---------------------------
+    let liftedBS = mirLowerBodyState(bs.l, lifted, retT)
+    // Re-index param names — mirLowerBodyState did this already
+    // using lifted.params, so user params are bound. We need to
+    // install capture locals next.
+
+    // Env-struct layout mirrors Go's envStructType: `(ptr, cap0_type,
+    // cap1_type, ...)`. Slot 0 is reserved for the fn pointer at
+    // runtime; slots 1..N hold captures.
+    let envStructTypeText = mirLowerClosureEnvStructTypeText(e.closureCaptures)
+
+    // Emit per-capture prologue: read env[i+1] into a named local.
+    let mut capIdx = 0
+    for cap in e.closureCaptures {
+        let ct = if hirTypeIsValid(cap.typ) {
+            cap.typ
+        } else {
+            hirTypeErr()
+        }
+        let capName = if cap.name == "" {
+            "_cap" + mirLowerIntToString(capIdx)
+        } else {
+            cap.name
+        }
+        let capLocal = mirLowerNewLocal(liftedBS, capName, ct, cap.mutable, mirSpanFromHir(cap.span))
+        // Build: env.deref.tuple[i+1] of type ct
+        let mut envPlace = mirPlace(envLocal)
+        envPlace = mirPlaceProject(envPlace, mirDerefProj(envStructTypeText))
+        envPlace = mirPlaceProject(envPlace, mirTupleProj(capIdx + 1, hirTypeString(ct)))
+        let op = mirOperandCopy(envPlace, hirTypeString(ct))
+        let rv = mirRVUse(op)
+        mirLowerEmitInstr(
+            liftedBS,
+            mirAssignInstr(mirPlace(capLocal), rv, mirSpanFromHir(cap.span)),
+        )
+        mirLowerBindName(liftedBS, capName, capLocal)
+        capIdx = capIdx + 1
+    }
+
+    // --- Lower the body -----------------------------------------
+    for s in e.closureBody[0].stmts {
+        mirLowerStmt(liftedBS, s)
+    }
+    if e.closureBody.len() > 0 && e.closureBody[0].hasResult {
+        let body = e.closureBody[0]
+        mirLowerExprInto(liftedBS, body.result, retLocal, retT)
+        mirLowerRunDefers(liftedBS, mirSpanFromHir(body.span))
+        mirLowerTerminate(liftedBS, mirReturnTerm(mirSpanFromHir(body.span)))
+    } else {
+        mirLowerFinishNoReturn(liftedBS, span)
+    }
+
+    bs.l.out.functions.push(lifted)
+
+    // --- Materialise the closure value --------------------------
+    // field[0] = FnConst(symbol); field[i+1] = captureOperand(cap_i)
+    let mut fnParamTypes: List<HirType> = []
+    for p in e.closureParams {
+        fnParamTypes.push(p.typ)
+    }
+    let fnT = hirTypeFn(fnParamTypes, retT)
+    let fnTypeText = hirTypeString(fnT)
+
+    let mut fields: List<MirOperand> = []
+    fields.push(mirOperandConst(mirConstFn(symbol, fnTypeText)))
+    for cap in e.closureCaptures {
+        fields.push(mirLowerCaptureOperand(bs, cap))
+    }
+    mirRVAggregate(MirAggClosure, fields, hirTypeString(closureT))
+}
+
+/// mirLowerClosureEnvType returns the canonical `ClosureEnv` named
+/// type used throughout closure lowering. Matches Go's
+/// `closureEnvType` singleton.
+fn mirLowerClosureEnvType() -> HirType {
+    let mut t = hirTypeNamed("ClosureEnv", [])
+    t.namedBuiltin = true
+    t
+}
+
+/// mirLowerClosureEnvStructTypeText renders the printed form of the
+/// env struct tuple `(ptr, cap0_type, cap1_type, ...)` that the
+/// DerefProj carries. Used so the MIR place chain has a consistent
+/// type text for the deref's target.
+fn mirLowerClosureEnvStructTypeText(captures: List<HirCapture>) -> String {
+    let mut elems: List<String> = []
+    elems.push("ClosureEnv")
+    for cap in captures {
+        let ct = if hirTypeIsValid(cap.typ) {
+            cap.typ
+        } else {
+            hirTypeErr()
+        }
+        elems.push(hirTypeString(ct))
+    }
+    let mut buf: List<String> = []
+    buf.push("(")
+    let mut i = 0
+    for s in elems {
+        if i > 0 {
+            buf.push(", ")
+        }
+        buf.push(s)
+        i = i + 1
+    }
+    buf.push(")")
+    strings.join(buf, "")
+}
+
+/// mirLowerCaptureOperand produces an Operand that reads a single
+/// capture from the enclosing scope. Mirrors Go's `captureOperand`:
+/// fn/self/global/local/param cases each have distinct emission.
+pub fn mirLowerCaptureOperand(
+    bs: MirLowerBodyState,
+    cap: HirCapture,
+) -> MirOperand {
+    let t = if hirTypeIsValid(cap.typ) {
+        cap.typ
+    } else {
+        hirTypeErr()
+    }
+    let typeText = hirTypeString(t)
+    match cap.kind {
+        HirCaptureFn -> {
+            mirOperandConst(mirConstFn(cap.name, typeText))
+        },
+        HirCaptureSelf -> {
+            if bs.self.hasOwner {
+                mirOperandCopy(mirPlace(bs.self.localId), typeText)
+            } else {
+                mirLowerNoteIssue(
+                    bs.l,
+                    "mir_lower: CaptureSelf outside method body — using unit placeholder",
+                )
+                mirOperandConst(mirConstUnit())
+            }
+        },
+        HirCaptureGlobal -> {
+            let span = mirSpanFromHir(cap.span)
+            let tmp = mirLowerFreshTemp(bs, t, span)
+            let rv = mirRVGlobalRef(cap.name, typeText)
+            mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(tmp), rv, span))
+            mirOperandCopy(mirPlace(tmp), typeText)
+        },
+        _ -> mirLowerCaptureOperandLocal(bs, cap, typeText),
+    }
+}
+
+/// mirLowerCaptureOperandLocal handles Local / Param / prefix-capture
+/// (Unknown-kind in Osty HIR) captures. All three resolve to a local
+/// of the same source-level name in the enclosing scope.
+fn mirLowerCaptureOperandLocal(
+    bs: MirLowerBodyState,
+    cap: HirCapture,
+    typeText: String,
+) -> MirOperand {
+    let id = mirLowerLookupName(bs, cap.name)
+    if id < 0 {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: closure capture \"" + cap.name
+                + "\" not resolved in enclosing scope",
+        )
+        return mirOperandConst(mirConstUnit())
+    }
+    mirOperandCopy(mirPlace(id), typeText)
+}
+
+/// mirLowerNextClosureSymbol mints a unique lifted-closure symbol
+/// anchored at `parent`. Matches Go's `nextClosureSymbol`: bumps
+/// `l.closureSeq` and concatenates `parent__closureN` (or
+/// `closure_N` for the no-parent case).
+pub fn mirLowerNextClosureSymbol(l: MirLowerer, parent: String) -> String {
+    l.closureSeq = l.closureSeq + 1
+    let suffix = mirLowerIntToString(l.closureSeq)
+    if parent == "" {
+        return "closure_" + suffix
+    }
+    parent + "__closure" + suffix
 }
