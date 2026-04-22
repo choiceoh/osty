@@ -594,6 +594,9 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 		if out, ok := g.staticCharByteConversionResult(e); ok {
 			return out, true
 		}
+		if out, ok := g.staticCharPredicateResult(e); ok {
+			return out, true
+		}
 		if out, found, ok := g.staticCollectionMethodResult(e); found {
 			return out, ok
 		}
@@ -1069,6 +1072,34 @@ func (g *generator) staticCharByteConversionResult(call *ast.CallExpr) (value, b
 		// receiver to i8 and the eq/<= comparisons that follow type
 		// through emitBinary without an extra unwrap.
 		return value{typ: "i8"}, true
+	}
+	return value{}, false
+}
+
+// staticCharPredicateResult mirrors staticCharByteConversionResult but
+// for the Char predicate / case-conversion methods. Without this hook
+// the `c.isDigit()` / `c.toUpper()` calls inside an injected stdlib
+// body don't get a static return type and downstream type-driven
+// dispatch (e.g. interpolation deciding whether to call
+// emitRuntimeBoolToString vs emitRuntimeCharToString) can't pick the
+// right path.
+func (g *generator) staticCharPredicateResult(call *ast.CallExpr) (value, bool) {
+	if call == nil || len(call.Args) != 0 {
+		return value{}, false
+	}
+	field, ok := fieldExprOfCallFn(call)
+	if !ok || field.IsOptional || field.X == nil {
+		return value{}, false
+	}
+	baseInfo, ok := g.staticExprInfo(field.X)
+	if !ok || baseInfo.typ != "i32" {
+		return value{}, false
+	}
+	switch field.Name {
+	case "isDigit", "isAlpha", "isAlphanumeric", "isWhitespace", "isUpper", "isLower":
+		return value{typ: "i1"}, true
+	case "toUpper", "toLower":
+		return value{typ: "i32"}, true
 	}
 	return value{}, false
 }

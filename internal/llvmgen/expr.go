@@ -2803,6 +2803,132 @@ func (g *generator) emitCharByteConversionCall(call *ast.CallExpr) (value, bool,
 	return value{}, false, nil
 }
 
+// emitCharPredicateCall lowers the Char ASCII predicates and case
+// conversion methods declared in primitives/char.osty as intrinsic
+// placeholder bodies (`{ false }` / `{ '\0' }`). The injected stdlib
+// bodies that bring these into play (e.g. `strings.toUpper(s)` walks
+// each char with `c.toUpper()`) trip LLVM015 without a backend
+// dispatcher because the placeholder body has no callable shape.
+//
+// Scope: ASCII fast path. Non-ASCII codepoints pass through
+// unchanged from the case-conversion methods and report `false` from
+// every is-predicate. Unicode case folding tables are a follow-up
+// (RFC §2.1 leaves the wider behavior open). The methods covered
+// here are the ones the stdlib bodies actually call:
+//
+//	c.isDigit() / c.isAlpha() / c.isAlphanumeric()
+//	c.isWhitespace() / c.isUpper() / c.isLower()
+//	c.toUpper() / c.toLower()
+//
+// All operate on the Char's i32 codepoint scalar; `c.toInt()` and
+// `c.toString()` go through emitCharByteConversionCall and
+// emitPrimitiveToStringCall respectively.
+func (g *generator) emitCharPredicateCall(call *ast.CallExpr) (value, bool, error) {
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok || field.IsOptional {
+		return value{}, false, nil
+	}
+	if len(call.Args) != 0 {
+		return value{}, false, nil
+	}
+	switch field.Name {
+	case "isDigit", "isAlpha", "isAlphanumeric", "isWhitespace", "isUpper", "isLower", "toUpper", "toLower":
+	default:
+		return value{}, false, nil
+	}
+	baseInfo, ok := g.staticExprInfo(field.X)
+	if !ok || baseInfo.typ != "i32" {
+		return value{}, false, nil
+	}
+	base, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	if base.typ != "i32" {
+		return value{}, true, unsupportedf("type-system", "Char.%s receiver type %s, want i32", field.Name, base.typ)
+	}
+	emitter := g.toOstyEmitter()
+	defer g.takeOstyEmitter(emitter)
+	switch field.Name {
+	case "isDigit":
+		// `c - '0' < 10` as unsigned comparison handles ASCII digits in
+		// one branch-free check.
+		out := llvmCharAsciiRangeCheck(emitter, base.ref, '0', 10)
+		return value{typ: "i1", ref: out}, true, nil
+	case "isUpper":
+		out := llvmCharAsciiRangeCheck(emitter, base.ref, 'A', 26)
+		return value{typ: "i1", ref: out}, true, nil
+	case "isLower":
+		out := llvmCharAsciiRangeCheck(emitter, base.ref, 'a', 26)
+		return value{typ: "i1", ref: out}, true, nil
+	case "isAlpha":
+		// isUpper || isLower
+		up := llvmCharAsciiRangeCheck(emitter, base.ref, 'A', 26)
+		lo := llvmCharAsciiRangeCheck(emitter, base.ref, 'a', 26)
+		out := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = or i1 %s, %s", out, up, lo))
+		return value{typ: "i1", ref: out}, true, nil
+	case "isAlphanumeric":
+		// isDigit || isUpper || isLower
+		dg := llvmCharAsciiRangeCheck(emitter, base.ref, '0', 10)
+		up := llvmCharAsciiRangeCheck(emitter, base.ref, 'A', 26)
+		lo := llvmCharAsciiRangeCheck(emitter, base.ref, 'a', 26)
+		al := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = or i1 %s, %s", al, up, lo))
+		out := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = or i1 %s, %s", out, dg, al))
+		return value{typ: "i1", ref: out}, true, nil
+	case "isWhitespace":
+		// Spec-relevant ASCII whitespace: SPACE / TAB / LF / CR.
+		// (FF / VT are intentionally excluded — they don't appear in
+		// any current stdlib body and matching libc isspace() too
+		// closely is a Unicode follow-up concern.)
+		eqSp := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i32 %s, 32", eqSp, base.ref))
+		eqTab := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i32 %s, 9", eqTab, base.ref))
+		eqLf := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i32 %s, 10", eqLf, base.ref))
+		eqCr := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i32 %s, 13", eqCr, base.ref))
+		o1 := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = or i1 %s, %s", o1, eqSp, eqTab))
+		o2 := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = or i1 %s, %s", o2, eqLf, eqCr))
+		out := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = or i1 %s, %s", out, o1, o2))
+		return value{typ: "i1", ref: out}, true, nil
+	case "toLower":
+		// if c is ASCII upper, c + 32; else c. select form keeps it
+		// branch-free (downstream phi avoidance).
+		isUp := llvmCharAsciiRangeCheck(emitter, base.ref, 'A', 26)
+		shifted := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i32 %s, 32", shifted, base.ref))
+		out := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i32 %s, i32 %s", out, isUp, shifted, base.ref))
+		return value{typ: "i32", ref: out}, true, nil
+	case "toUpper":
+		isLo := llvmCharAsciiRangeCheck(emitter, base.ref, 'a', 26)
+		shifted := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = sub i32 %s, 32", shifted, base.ref))
+		out := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i32 %s, i32 %s", out, isLo, shifted, base.ref))
+		return value{typ: "i32", ref: out}, true, nil
+	}
+	return value{}, false, nil
+}
+
+// llvmCharAsciiRangeCheck emits `(c - low) <u count` — branch-free
+// half-open range check `low <= c < low+count` via a single unsigned
+// compare against the count. Returns the i1 temp name.
+func llvmCharAsciiRangeCheck(emitter *LlvmEmitter, charRef string, low int, count int) string {
+	shifted := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sub i32 %s, %d", shifted, charRef, low))
+	cmp := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp ult i32 %s, %d", cmp, shifted, count))
+	return cmp
+}
+
 // stdlib primitives/{int,float,bool}.osty declare toString as
 // `#[intrinsic_methods]` placeholders with empty bodies, which would
 // otherwise lower to dead IR; this dispatcher routes to the same
@@ -5303,6 +5429,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return v, err
 	}
 	if v, found, err := g.emitCharByteConversionCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitCharPredicateCall(call); found || err != nil {
 		return v, err
 	}
 	if v, found, err := g.emitStringMethodCall(call); found || err != nil {
