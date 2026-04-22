@@ -258,6 +258,48 @@ fn main() {
 	}
 }
 
+func TestResolveSourceStructuredUndefinedLoopLabel(t *testing.T) {
+	resolved := selfhost.ResolveSourceStructured([]byte(`fn main() {
+    for {
+        break 'missing
+    }
+}
+`))
+	if got := findResolveDiagnostic(resolved, "E0763"); got == nil {
+		t.Fatalf("expected E0763, got %#v", resolved.Diagnostics)
+	}
+}
+
+func TestResolveSourceStructuredLoopLabelShadow(t *testing.T) {
+	resolved := selfhost.ResolveSourceStructured([]byte(`fn main() {
+    'outer: for {
+        'outer: for {
+            continue 'outer
+        }
+    }
+}
+`))
+	if got := findResolveDiagnostic(resolved, "E0764"); got == nil {
+		t.Fatalf("expected E0764, got %#v", resolved.Diagnostics)
+	}
+}
+
+func TestResolveSourceStructuredResolvesBreakValue(t *testing.T) {
+	resolved := selfhost.ResolveSourceStructured([]byte(`fn main() {
+    let value = 1
+    let result = loop {
+        break value
+    }
+}
+`))
+	if resolved.Summary.Diagnostics != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", resolved.Diagnostics)
+	}
+	if ref := findResolvedRef(resolved, "value"); ref == nil {
+		t.Fatalf("missing break-value ref in %#v", resolved.Refs)
+	}
+}
+
 func findResolvedSymbol(result selfhost.ResolveResult, name string, kind string) *selfhost.ResolvedSymbol {
 	for i := range result.Symbols {
 		if result.Symbols[i].Name == name && result.Symbols[i].Kind == kind {

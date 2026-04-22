@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/osty/osty/internal/selfhost/bundle"
@@ -423,7 +424,9 @@ func patchGenerated(path string) error {
 	}
 	formatted, err := format.Source([]byte(src))
 	if err != nil {
-		return fmt.Errorf("format generated selfhost code: %w", err)
+		dumpPath := filepath.Join(os.TempDir(), "osty-selfhost-format-failed.go")
+		_ = os.WriteFile(dumpPath, []byte(src), 0o644)
+		return fmt.Errorf("format generated selfhost code: %w (dumped %s)", err, dumpPath)
 	}
 	if err := os.WriteFile(path, formatted, 0o644); err != nil {
 		return fmt.Errorf("write generated selfhost code: %w", err)
@@ -448,10 +451,75 @@ func replaceGeneratedFunction(src, name, replacement string) (string, error) {
 }
 
 func replaceGeneratedSnippet(src, name, old, replacement string) (string, error) {
-	if !strings.Contains(src, old) {
-		return "", fmt.Errorf("replace %s: snippet not found", name)
+	if strings.Contains(src, old) {
+		return strings.Replace(src, old, replacement, 1), nil
 	}
-	return strings.Replace(src, old, replacement, 1), nil
+	if generatedSnippetContains(src, replacement) {
+		return src, nil
+	}
+	return replaceGeneratedSnippetIgnoringSourceLoc(src, name, old, replacement)
+}
+
+var generatedSnippetSourceLocPattern = regexp.MustCompile(`^(\s*// Osty: /tmp/selfhost_merged\.osty:)\d+:\d+(\s*)$`)
+var generatedSnippetTempPattern = regexp.MustCompile(`\b_[A-Za-z]+\d+\b`)
+
+func replaceGeneratedSnippetIgnoringSourceLoc(src, name, old, replacement string) (string, error) {
+	srcLines := strings.SplitAfter(src, "\n")
+	oldLines := strings.SplitAfter(old, "\n")
+	start := generatedSnippetMatchStart(srcLines, oldLines)
+	if start < 0 {
+		dumpPath := filepath.Join(os.TempDir(), "osty-selfhost-patch-failed.go")
+		_ = os.WriteFile(dumpPath, []byte(src), 0o644)
+		return "", fmt.Errorf("replace %s: snippet not found (dumped %s)", name, dumpPath)
+	}
+	replacementLines := strings.SplitAfter(replacement, "\n")
+	if len(replacementLines) > 0 && len(oldLines) > 1 && !strings.HasSuffix(replacement, "\n") {
+		replacementLines[len(replacementLines)-1] += "\n"
+	}
+	out := append([]string{}, srcLines[:start]...)
+	out = append(out, replacementLines...)
+	out = append(out, srcLines[start+len(oldLines):]...)
+	return strings.Join(out, ""), nil
+}
+
+func generatedSnippetMatchStart(srcLines []string, oldLines []string) int {
+	if len(oldLines) == 0 {
+		return -1
+	}
+	normOld := make([]string, len(oldLines))
+	for i, line := range oldLines {
+		normOld[i] = generatedSnippetNormalizeLine(line)
+	}
+	for start := 0; start+len(oldLines) <= len(srcLines); start++ {
+		match := true
+		for off, line := range oldLines {
+			if generatedSnippetNormalizeLine(srcLines[start+off]) != normOld[off] {
+				match = false
+				break
+			}
+			_ = line
+		}
+		if match {
+			return start
+		}
+	}
+	return -1
+}
+
+func generatedSnippetContains(src, snippet string) bool {
+	if strings.Contains(src, snippet) {
+		return true
+	}
+	return generatedSnippetMatchStart(strings.SplitAfter(src, "\n"), strings.SplitAfter(snippet, "\n")) >= 0
+}
+
+func generatedSnippetNormalizeLine(line string) string {
+	line = strings.TrimSuffix(line, "\n")
+	if m := generatedSnippetSourceLocPattern.FindStringSubmatch(line); m != nil {
+		return m[1] + "<loc>" + m[2]
+	}
+	line = generatedSnippetTempPattern.ReplaceAllString(line, "_<tmp>")
+	return line
 }
 
 const frontPositionAtReplacement = `type frontPositionCacheState struct {

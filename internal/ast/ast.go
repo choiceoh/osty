@@ -709,27 +709,35 @@ func (s *ReturnStmt) End() token.Pos { return s.EndV }
 type BreakStmt struct {
 	PosV token.Pos
 	EndV token.Pos
+	// Label is the optional `'label` target on `break 'label`.
+	// Empty means the innermost enclosing loop.
+	Label string
+	// LabelPos / LabelEnd cover just the `'label` token when Label is
+	// present. Zero when the break is unlabeled.
+	LabelPos token.Pos
+	LabelEnd token.Pos
 	// Value is the optional expression on `break <expr>` — only legal
 	// inside a `loop { … }` expression (G22, §A.4). Nil for a bare
 	// `break` inside a `for`/`while` loop, where a value would be a
 	// type error.
 	Value Expr
-	// Label is the optional target-loop label on `break 'name` /
-	// `break 'name <expr>` (G24, §4.4). Empty for a bare `break`. The
-	// leading apostrophe is stripped during lexing; the stored text
-	// is just the identifier.
-	Label string
 }
 
 func (*BreakStmt) stmtNode()        {}
 func (s *BreakStmt) Pos() token.Pos { return s.PosV }
 func (s *BreakStmt) End() token.Pos { return s.EndV }
 
-// ContinueStmt is `continue` — optionally `continue 'label` (G24).
+// ContinueStmt is `continue`.
 type ContinueStmt struct {
-	PosV  token.Pos
-	EndV  token.Pos
+	PosV token.Pos
+	EndV token.Pos
+	// Label is the optional `'label` target on `continue 'label`.
+	// Empty means the innermost enclosing loop.
 	Label string
+	// LabelPos / LabelEnd cover just the `'label` token when Label is
+	// present. Zero when the continue is unlabeled.
+	LabelPos token.Pos
+	LabelEnd token.Pos
 }
 
 func (*ContinueStmt) stmtNode()        {}
@@ -770,14 +778,13 @@ func (s *DeferStmt) End() token.Pos { return s.EndV }
 type ForStmt struct {
 	PosV     token.Pos
 	EndV     token.Pos
+	Label    string
+	LabelPos token.Pos
+	LabelEnd token.Pos
 	IsForLet bool
 	Pattern  Pattern // optional
 	Iter     Expr    // optional (nil = infinite)
 	Body     *Block
-	// Label is the optional `'name:` prefix (G24, §4.4) so enclosed
-	// `break 'name` / `continue 'name` can target this loop. Empty
-	// for unlabeled loops.
-	Label string
 }
 
 func (*ForStmt) stmtNode()        {}
@@ -928,7 +935,7 @@ func (e *QuestionExpr) End() token.Pos { return e.EndV }
 // HasTrailingClosure marks the call as coming from trailing-closure sugar
 // `f(a) |x| { ... }` (G23, §A.2). The parser appends the closure to the
 // positional arg list; this flag lets the formatter restore the surface
-// form by splitting the last arg out of the parenthesised list.
+// form by splitting the last arg out of the parenthesized list.
 type CallExpr struct {
 	PosV               token.Pos
 	EndV               token.Pos
@@ -1139,10 +1146,10 @@ func (e *IfExpr) End() token.Pos { return e.EndV }
 type LoopExpr struct {
 	PosV token.Pos
 	EndV token.Pos
-	Body *Block
-	// Label is the optional `'name:` prefix (G24, §4.4). Empty for
-	// unlabeled `loop { … }`.
 	Label string
+	LabelPos token.Pos
+	LabelEnd token.Pos
+	Body *Block
 }
 
 func (*LoopExpr) exprNode()        {}

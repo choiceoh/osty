@@ -13,6 +13,7 @@ const (
 
 	// Literals
 	IDENT
+	LABEL // 'label
 	INT
 	FLOAT
 	CHAR
@@ -94,6 +95,7 @@ const (
 	SHREQ     // >>=
 
 	QUESTION // ?
+	ASQUESTION // as?
 	QDOT     // ?.
 	QQ       // ??
 
@@ -107,8 +109,6 @@ const (
 	UNDERSCORE // _ (standalone)
 	AT         // @
 	HASH       // # (annotation prefix; v0.2 R26/O1)
-	LABEL      // 'ident — loop label (G24, §4.4). Text is the bare
-	// identifier without the leading apostrophe.
 )
 
 // Names for debug/pretty-printing.
@@ -117,6 +117,7 @@ var kindNames = [...]string{
 	ILLEGAL:    "ILLEGAL",
 	NEWLINE:    "NEWLINE",
 	IDENT:      "IDENT",
+	LABEL:      "LABEL",
 	INT:        "INT",
 	FLOAT:      "FLOAT",
 	CHAR:       "CHAR",
@@ -182,6 +183,7 @@ var kindNames = [...]string{
 	SHLEQ:      "<<=",
 	SHREQ:      ">>=",
 	QUESTION:   "?",
+	ASQUESTION: "as?",
 	QDOT:       "?.",
 	QQ:         "??",
 	DOTDOT:     "..",
@@ -192,7 +194,6 @@ var kindNames = [...]string{
 	UNDERSCORE: "_",
 	AT:         "@",
 	HASH:       "#",
-	LABEL:      "LABEL",
 }
 
 func (k Kind) String() string {

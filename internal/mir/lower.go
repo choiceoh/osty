@@ -423,6 +423,7 @@ type scopeFrame struct {
 }
 
 type loopFrame struct {
+	label         string
 	breakBlock    BlockID
 	continueBlock BlockID
 	// deferDepth records the defer-frame depth active at the top of
@@ -1008,6 +1009,20 @@ func (bs *bodyState) lowerBreak(b *ir.BreakStmt) {
 		return
 	}
 	top := bs.loopStack[len(bs.loopStack)-1]
+	if b.Label != "" {
+		found := false
+		for i := len(bs.loopStack) - 1; i >= 0; i-- {
+			if bs.loopStack[i].label == b.Label {
+				top = bs.loopStack[i]
+				found = true
+				break
+			}
+		}
+		if !found {
+			bs.l.noteIssue("break to undefined loop label")
+			return
+		}
+	}
 	bs.replayDefersFromDepth(top.deferDepth, b.SpanV)
 	bs.emitStorageDeadFromDepth(top.scopeDepth)
 	bs.terminate(&GotoTerm{Target: top.breakBlock, SpanV: b.SpanV})
@@ -1019,6 +1034,20 @@ func (bs *bodyState) lowerContinue(c *ir.ContinueStmt) {
 		return
 	}
 	top := bs.loopStack[len(bs.loopStack)-1]
+	if c.Label != "" {
+		found := false
+		for i := len(bs.loopStack) - 1; i >= 0; i-- {
+			if bs.loopStack[i].label == c.Label {
+				top = bs.loopStack[i]
+				found = true
+				break
+			}
+		}
+		if !found {
+			bs.l.noteIssue("continue to undefined loop label")
+			return
+		}
+	}
 	bs.replayDefersFromDepth(top.deferDepth, c.SpanV)
 	bs.emitStorageDeadFromDepth(top.scopeDepth)
 	bs.terminate(&GotoTerm{Target: top.continueBlock, SpanV: c.SpanV})
@@ -1092,6 +1121,7 @@ func (bs *bodyState) lowerForInfinite(f *ir.ForStmt) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
+		label: f.Label,
 		breakBlock: exit, continueBlock: header, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	for _, s := range f.Body.Stmts {
@@ -1117,6 +1147,7 @@ func (bs *bodyState) lowerForWhile(f *ir.ForStmt) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
+		label: f.Label,
 		breakBlock: exit, continueBlock: header, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	for _, s := range f.Body.Stmts {
@@ -1170,6 +1201,7 @@ func (bs *bodyState) lowerForRange(f *ir.ForStmt) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
+		label: f.Label,
 		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	bs.bind(f.Var, idx)
@@ -1253,6 +1285,7 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
+		label: f.Label,
 		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	// load current element: elem = iter[idx]
@@ -1340,6 +1373,7 @@ func (bs *bodyState) lowerForInChannel(f *ir.ForStmt, iterT Type) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
+		label: f.Label,
 		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	// Unwrap the payload into a named local.

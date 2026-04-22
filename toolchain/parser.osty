@@ -181,12 +181,6 @@ pub struct OstyParser {
     pub inLoop: Bool,
     pub typeGtDebt: Int,
     pub pendingAssign: Bool,
-    /// G24 §4.4: stack of active loop labels (innermost last). Pushed
-    /// when `'name:` enters a loop, popped when the loop body finishes.
-    /// Read by `break 'label` / `continue 'label` to validate the label
-    /// is in scope (E0763) and to flag duplicates among nested loops
-    /// (E0764).
-    pub labelStack: List<String>,
 }
 
 pub fn newOstyParser(tokens: List<FrontToken>) -> OstyParser {
@@ -194,23 +188,7 @@ pub fn newOstyParser(tokens: List<FrontToken>) -> OstyParser {
         tokens, count: frontTokenListCount(tokens), pos: 0,
         arena: emptyAstArena(), noStructLit: false, inLoop: false,
         typeGtDebt: 0, pendingAssign: false,
-        labelStack: [],
     }
-}
-
-fn opLabelInScope(p: OstyParser, label: String) -> Bool {
-    for entry in p.labelStack {
-        if entry == label { return true }
-    }
-    false
-}
-
-/// opLabelText strips the leading apostrophe from a FrontLabel token's
-/// raw lexeme so the AST stores just the identifier (`outer` rather
-/// than `'outer`). The lexer carries the apostrophe in source text for
-/// span fidelity but every consumer wants the bare name.
-fn opLabelText(raw: String) -> String {
-    strings.trimPrefix(raw, "'")
 }
 
 // ===================================================================
@@ -464,7 +442,7 @@ pub fn astInfixRBP(kind: FrontTokenKind) -> Int {
 }
 
 fn astStartsExpr(kind: FrontTokenKind) -> Bool {
-    kind == FrontIdent || kind == FrontInt || kind == FrontFloat || kind == FrontString || kind == FrontRawString || kind == FrontChar || kind == FrontByte || kind == FrontLParen || kind == FrontLBracket || kind == FrontLBrace || kind == FrontMinus || kind == FrontNot || kind == FrontBitNot || kind == FrontIf || kind == FrontMatch || kind == FrontBitOr || kind == FrontOr || kind == FrontUnderscore
+    kind == FrontIdent || kind == FrontLabel || kind == FrontInt || kind == FrontFloat || kind == FrontString || kind == FrontRawString || kind == FrontChar || kind == FrontByte || kind == FrontLParen || kind == FrontLBracket || kind == FrontLBrace || kind == FrontMinus || kind == FrontNot || kind == FrontBitNot || kind == FrontIf || kind == FrontMatch || kind == FrontBitOr || kind == FrontOr || kind == FrontUnderscore
 }
 
 /// opCanStartScriptStmt decides whether the current top-level token
@@ -476,6 +454,10 @@ fn astStartsExpr(kind: FrontTokenKind) -> Bool {
 /// ExprStmts.
 fn opCanStartScriptStmt(p: OstyParser, tok: FrontToken) -> Bool {
     if tok.kind == FrontReturn || opIsForHead(tok) || tok.kind == FrontBreak || tok.kind == FrontContinue { return true }
+    if tok.kind == FrontLabel && opPeekAt(p, 1).kind == FrontColon {
+        let head = opPeekAt(p, 2)
+        return opIsForHead(head) || (head.kind == FrontIdent && head.text == "loop" && opPeekAt(p, 3).kind == FrontLBrace)
+    }
     if tok.kind == FrontIf || tok.kind == FrontMatch { return true }
     if tok.kind == FrontLParen || tok.kind == FrontLBracket || tok.kind == FrontLBrace { return true }
     if tok.kind == FrontBitOr || tok.kind == FrontOr { return true }
@@ -664,37 +646,41 @@ fn opParsePrimary(p: OstyParser) -> Int {
     n.start = start
     n.end = p.pos
     return opAddNode(p, n) }
+    if tok.kind == FrontLabel && opPeekAt(p, 1).kind == FrontColon && opPeekAt(p, 2).kind == FrontIdent && opPeekAt(p, 2).text == "loop" && opPeekAt(p, 3).kind == FrontLBrace {
+        let labelIdx = opConsumeLoopLabelPrefix(p)
+        let loopTok = opAdvance(p)
+        let prevInLoop = p.inLoop
+        p.inLoop = true
+        let bodyIdx = opParseBlockOrMap(p)
+        p.inLoop = prevInLoop
+        let mut n = emptyAstNode(AstNFor)
+        n.text = "loopexpr"
+        n.extra = labelIdx
+        n.right = bodyIdx
+        n.left = 0 - 1
+        n.start = start
+        n.end = p.pos
+        let _ = loopTok
+        return opAddNode(p, n)
+    }
     if tok.kind == FrontIdent {
         // G22 §A.4: `loop { ... }` is a value-producing loop expression.
         // The body is an ordinary block; iteration continues until a
         // `break <expr>` exits with a value.
         if tok.text == "loop" && opPeekAt(p, 1).kind == FrontLBrace {
-            return opParseLoopExpr(p, start, "")
+            opAdvance(p)
+            let prevInLoop = p.inLoop
+            p.inLoop = true
+            let bodyIdx = opParseBlockOrMap(p)
+            p.inLoop = prevInLoop
+            let mut n = emptyAstNode(AstNFor)
+            n.text = "loopexpr"
+            n.right = bodyIdx
+            n.left = 0 - 1
+            n.start = start
+            n.end = p.pos
+            return opAddNode(p, n)
         }
-    }
-    if tok.kind == FrontLabel && opPeekAt(p, 1).kind == FrontColon {
-        // G24 §4.4: `'label: loop { ... }` as an expression. The label
-        // scope wraps just this loop; we push/pop on the parser's
-        // labelStack so nested `break 'label` resolves correctly.
-        let labelTok = opAdvance(p)
-        let _ = opExpect(p, FrontColon)
-        let label = opLabelText(labelTok.text)
-        if opLabelInScope(p, label) {
-            opErrorFull(p, "label `'{label}` shadows an outer label of the same name", "rename one of the labels so each is unique within the nested stack", "OSTY_GRAMMAR_v0.5 §4.4", "E0764")
-        }
-        if !(opAt(p, FrontIdent) && opPeek(p).text == "loop" && opPeekAt(p, 1).kind == FrontLBrace) {
-            opErrorFull(p, "expected `loop` after label in expression position", "labeled `for`/`while` are statements; only `'label: loop \{ ... \}` is a labelable expression here", "OSTY_GRAMMAR_v0.5 §4.4", "E0204")
-            let mut errNode = emptyAstNode(AstNError)
-            errNode.start = start
-            errNode.end = p.pos
-            return opAddNode(p, errNode)
-        }
-        p.labelStack.push(label)
-        let result = opParseLoopExpr(p, start, label)
-        let _ = p.labelStack.pop()
-        return result
-    }
-    if tok.kind == FrontIdent {
         opAdvance(p)
         if tok.text == "true" || tok.text == "false" {
             let mut n = emptyAstNode(AstNBoolLit)
@@ -1046,10 +1032,7 @@ fn opAttachTrailingClosure(p: OstyParser, callIdx: Int) -> Int {
     n.left = originalCall.left
     n.children = newArgs
     n.text = originalCall.text
-    // Preserve any existing flag bits (e.g. G27 `as?` bit 0) and set
-    // bit 1 to mark this call as trailing-closure surface so the
-    // formatter can restore the `f(a) |x| { ... }` form.
-    n.flags = originalCall.flags | 2
+    n.flags = originalCall.flags
     n.start = originalCall.start
     n.end = p.pos
     opAddNode(p, n)
@@ -1107,15 +1090,13 @@ fn opTryParsePostfix(p: OstyParser, lhs: Int) -> Int {
         n.end = p.pos
         return opAddNode(p, n)
     }
+    if tok.kind == FrontAsQuestion {
+        return opParseAsQuestion(p, lhs)
+    }
     if tok.kind == FrontIdent && tok.text == "as" && opPeekAt(p, 1).kind == FrontQuestion {
-        if opAdjacent(tok, opPeekAt(p, 1)) {
-            return opParseAsQuestion(p, lhs)
-        }
-        // Spec `OSTY_GRAMMAR_v0.5.md:28` requires `as?` to be a single
-        // token (no whitespace between `as` and `?`). Surface a targeted
-        // E0202 diagnostic and consume the shape so cascade errors on
-        // the RHS type name don't pile up. Reuses the "unexpected token"
-        // code band — a dedicated code can follow if this surface grows.
+        // After lexer fusion `as?` should arrive as FrontAsQuestion. If
+        // we still see IDENT(`as`) + QUESTION it must have whitespace in
+        // between, which v0.5 rejects with E0202.
         opErrorFull(p, "`as?` must be written without whitespace between `as` and `?`", "write `as?` as a single token (no space)", "OSTY_GRAMMAR_v0.5 §28", "E0202")
         let _ = opAdvance(p)
         let _ = opAdvance(p)
@@ -1203,7 +1184,6 @@ fn opParseTurbofish(p: OstyParser, callee: Int) -> Int {
 /// rule (E0757) on both operand and T.
 fn opParseAsQuestion(p: OstyParser, lhs: Int) -> Int {
     let start = p.pos
-    let _ = opAdvance(p)
     let _ = opAdvance(p)
     let typeIdx = opParseType(p)
     let mut fieldNode = emptyAstNode(AstNField)
@@ -1332,37 +1312,60 @@ fn astIsUpperName(text: String) -> Bool {
     first >= "A" && first <= "Z"
 }
 
+fn opHasLoopLabelPrefix(p: OstyParser) -> Bool {
+    opAt(p, FrontLabel) && opPeekAt(p, 1).kind == FrontColon
+}
+
+fn opParseLabelNode(p: OstyParser) -> Int {
+    let start = p.pos
+    let tok = opExpect(p, FrontLabel)
+    let mut n = emptyAstNode(AstNIdent)
+    n.text = strings.trimPrefix(tok.text, "'")
+    n.start = start
+    n.end = p.pos
+    opAddNode(p, n)
+}
+
+fn opConsumeLoopLabelPrefix(p: OstyParser) -> Int {
+    if !(opHasLoopLabelPrefix(p)) {
+        return -1
+    }
+    let labelIdx = opParseLabelNode(p)
+    let _ = opExpect(p, FrontColon)
+    labelIdx
+}
+
 // ===================================================================
 // STATEMENT PARSING
 // ===================================================================
 
 fn opParseStmt(p: OstyParser) -> Int {
     let tok = opPeek(p)
+    if opHasLoopLabelPrefix(p) && opIsForHead(opPeekAt(p, 2)) {
+        let labelIdx = opConsumeLoopLabelPrefix(p)
+        return opParseForStmt(p, labelIdx)
+    }
     if tok.kind == FrontLet { return opParseLetStmt(p, []) }
     if tok.kind == FrontReturn { return opParseReturnStmt(p) }
     if tok.kind == FrontBreak {
         let s = p.pos
         let _ = opAdvance(p)
         if !(p.inLoop) { opErrorFull(p, "`break` outside of loop", "move inside a `for` loop", "", "E0600") }
-        // G22 §A.4: `break <expr>` exits the enclosing `loop` with a
-        // value. G24 §4.4: `break 'label` / `break 'label <expr>`
-        // targets a labeled loop. The lexer strips the apostrophe, so
-        // a FrontLabel token's `.text` is the bare identifier.
-        let mut label = ""
+        let mut labelIdx = -1
         if opAt(p, FrontLabel) {
-            let labelTok = opAdvance(p)
-            label = opLabelText(labelTok.text)
-            if !(opLabelInScope(p, label)) {
-                opErrorFull(p, "label `'{label}` is not in scope; no enclosing loop carries this name", "add `'{label}:` to the intended loop, or remove the label from the break", "OSTY_GRAMMAR_v0.5 §4.4", "E0763")
-            }
+            labelIdx = opParseLabelNode(p)
         }
+        // G22 §A.4: `break <expr>` exits the enclosing `loop` with a
+        // value. Plain `break` inside `for`/`while` continues without a
+        // value. We parse greedily — if an expression starts on the
+        // same line, capture it as the break value.
         let mut valueIdx = 0 - 1
         if astStartsExpr(opPeek(p).kind) && opPeek(p).kind != FrontNewline {
             valueIdx = opParseExpr(p)
         }
         let mut n = emptyAstNode(AstNBreak)
         n.left = valueIdx
-        n.text = label
+        n.extra = labelIdx
         n.start = s
         n.end = p.pos
         return opAddNode(p, n)
@@ -1371,29 +1374,18 @@ fn opParseStmt(p: OstyParser) -> Int {
         let s = p.pos
         let _ = opAdvance(p)
         if !(p.inLoop) { opErrorFull(p, "`continue` outside of loop", "move inside a `for` loop", "", "E0601") }
-        // G24 §4.4: optional `continue 'label`.
-        let mut label = ""
+        let mut labelIdx = -1
         if opAt(p, FrontLabel) {
-            let labelTok = opAdvance(p)
-            label = opLabelText(labelTok.text)
-            if !(opLabelInScope(p, label)) {
-                opErrorFull(p, "label `'{label}` is not in scope; no enclosing loop carries this name", "add `'{label}:` to the intended loop, or remove the label from the continue", "OSTY_GRAMMAR_v0.5 §4.4", "E0763")
-            }
+            labelIdx = opParseLabelNode(p)
         }
         let mut n = emptyAstNode(AstNContinue)
-        n.text = label
+        n.extra = labelIdx
         n.start = s
         n.end = p.pos
         return opAddNode(p, n)
     }
     if tok.kind == FrontDefer { return opParseDeferStmt(p) }
-    // G24 §4.4: `'label: for/loop/while { ... }` prefix. The label is a
-    // FrontLabel token followed by `:`; anything else after the colon is
-    // a syntax error caught when the loop keyword fails to match.
-    if tok.kind == FrontLabel && opPeekAt(p, 1).kind == FrontColon {
-        return opParseLabeledLoop(p)
-    }
-    if opIsForHead(tok) { return opParseForStmt(p) }
+    if opIsForHead(tok) { return opParseForStmt(p, -1) }
     let expr = opParseExpr(p)
     let next = opPeek(p)
     if next.kind == FrontChanArrow {
@@ -1511,86 +1503,7 @@ fn opExprToForPattern(p: OstyParser, exprIdx: Int) -> Int {
     exprIdx
 }
 
-/// opParseLoopExpr emits the AstNFor("loopexpr") arena node for a
-/// `loop { ... }` expression, optionally tagged with a label that
-/// callers obtained via the `'label:` prefix (G22 + G24). The caller
-/// is responsible for pushing the label onto `p.labelStack` before
-/// invoking us and popping after.
-fn opParseLoopExpr(p: OstyParser, start: Int, label: String) -> Int {
-    let _ = opAdvance(p)
-    let prevInLoop = p.inLoop
-    p.inLoop = true
-    let bodyIdx = opParseBlockOrMap(p)
-    p.inLoop = prevInLoop
-    let mut n = emptyAstNode(AstNFor)
-    n.text = "loopexpr"
-    n.right = bodyIdx
-    n.left = 0 - 1
-    if label != "" {
-        let mut labelIdent = emptyAstNode(AstNIdent)
-        labelIdent.text = label
-        labelIdent.start = start
-        labelIdent.end = start + 1
-        n.children2 = [opAddNode(p, labelIdent)]
-    }
-    n.start = start
-    n.end = p.pos
-    opAddNode(p, n)
-}
-
-/// opParseLabeledLoop consumes a `'label:` prefix (G24 §4.4) and then
-/// parses the labeled construct. Currently supports labeled
-/// `for` / `while`-alias / `loop { ... }` (loop expression used as a
-/// statement). The label text is attached to the resulting arena node
-/// via `children2[0]`, which `ast_lower` reads back during Go AST
-/// construction.
-fn opParseLabeledLoop(p: OstyParser) -> Int {
-    let labelStart = p.pos
-    let labelText = opLabelText(opAdvance(p).text)
-    let _ = opExpect(p, FrontColon)
-    if opLabelInScope(p, labelText) {
-        opErrorFull(p, "label `'{labelText}` shadows an outer label of the same name", "rename one of the labels so each is unique within the nested stack", "OSTY_GRAMMAR_v0.5 §4.4", "E0764")
-    }
-    let mut labelIdent = emptyAstNode(AstNIdent)
-    labelIdent.text = labelText
-    labelIdent.start = labelStart
-    labelIdent.end = labelStart + 1
-    let labelIdx = opAddNode(p, labelIdent)
-    p.labelStack.push(labelText)
-    let result = opParseLabeledLoopBody(p, labelStart, labelIdx)
-    let _ = p.labelStack.pop()
-    result
-}
-
-fn opParseLabeledLoopBody(p: OstyParser, labelStart: Int, labelIdx: Int) -> Int {
-    if opIsForHead(opPeek(p)) {
-        let stmtIdx = opParseForStmt(p)
-        let original = astArenaNodeAt(p.arena, stmtIdx)
-        let mut labeled = original
-        labeled.children2 = [labelIdx]
-        p.arena.nodes[stmtIdx] = labeled
-        return stmtIdx
-    }
-    if opAt(p, FrontIdent) && opPeek(p).text == "loop" && opPeekAt(p, 1).kind == FrontLBrace {
-        let loopIdx = opParsePrimary(p)
-        let original = astArenaNodeAt(p.arena, loopIdx)
-        let mut labeled = original
-        labeled.children2 = [labelIdx]
-        p.arena.nodes[loopIdx] = labeled
-        let mut wrapper = emptyAstNode(AstNExprStmt)
-        wrapper.left = loopIdx
-        wrapper.start = original.start
-        wrapper.end = p.pos
-        return opAddNode(p, wrapper)
-    }
-    opErrorFull(p, "expected `for`, `while`, or `loop` after label", "a label (`'name:`) must prefix a loop construct", "OSTY_GRAMMAR_v0.5 §4.4", "E0204")
-    let mut errNode = emptyAstNode(AstNError)
-    errNode.start = labelStart
-    errNode.end = p.pos
-    opAddNode(p, errNode)
-}
-
-fn opParseForStmt(p: OstyParser) -> Int {
+fn opParseForStmt(p: OstyParser, labelIdx: Int) -> Int {
     let start = p.pos
     let _ = opAdvance(p)
     let prevInLoop = p.inLoop
@@ -1650,6 +1563,7 @@ fn opParseForStmt(p: OstyParser) -> Int {
     n.text = kind
     n.left = condIdx
     n.right = body
+    n.extra = labelIdx
     n.children = [patIdx, iterIdx]
     n.start = start
     n.end = p.pos

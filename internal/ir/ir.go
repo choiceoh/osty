@@ -713,14 +713,22 @@ type ReturnStmt struct {
 func (*ReturnStmt) stmtNode()  {}
 func (r *ReturnStmt) At() Span { return r.SpanV }
 
-// BreakStmt exits the innermost loop.
-type BreakStmt struct{ SpanV Span }
+// BreakStmt exits the targeted loop.
+// Label is empty for the innermost enclosing loop.
+type BreakStmt struct {
+	Label string
+	SpanV Span
+}
 
 func (*BreakStmt) stmtNode()  {}
 func (b *BreakStmt) At() Span { return b.SpanV }
 
-// ContinueStmt skips to the next loop iteration.
-type ContinueStmt struct{ SpanV Span }
+// ContinueStmt skips to the next iteration of the targeted loop.
+// Label is empty for the innermost enclosing loop.
+type ContinueStmt struct {
+	Label string
+	SpanV Span
+}
 
 func (*ContinueStmt) stmtNode()  {}
 func (c *ContinueStmt) At() Span { return c.SpanV }
@@ -756,6 +764,7 @@ const (
 //	In:       Var, Iter, Body
 type ForStmt struct {
 	Kind      ForKind
+	Label     string
 	Var       string  // loop variable for simple-name Range / In forms
 	Pattern   Pattern // destructuring pattern for In / Range heads
 	Cond      Expr    // While
