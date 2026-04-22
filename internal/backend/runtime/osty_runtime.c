@@ -405,7 +405,9 @@ typedef struct osty_rt_map {
     int64_t index_cap;
     int64_t index_len;
     int64_t *index_slots;
+    uint32_t *index_hashes;
     int64_t index_inline[OSTY_RT_MAP_INLINE_INDEX_CAP];
+    uint32_t index_hashes_inline[OSTY_RT_MAP_INLINE_INDEX_CAP];
     // Per-map recursive mutex. Public ops elide it while the runtime
     // is still single-threaded, then enable it permanently on first
     // task spawn so concurrent mutation can't realloc the slot arrays
@@ -2603,6 +2605,11 @@ static size_t osty_rt_map_key_hash(int64_t kind, const void *key) {
     }
 }
 
+static inline uint32_t osty_rt_map_key_fingerprint(size_t hash) {
+    uint64_t bits = (uint64_t)hash;
+    return (uint32_t)(bits ^ (bits >> 32));
+}
+
 static void osty_rt_map_trace(void *payload) {
     osty_rt_map *map = (osty_rt_map *)payload;
     int64_t i;
@@ -2629,6 +2636,9 @@ static void osty_rt_map_destroy(void *payload) {
     if (map != NULL) {
         if (map->index_slots != NULL && map->index_slots != map->index_inline) {
             free(map->index_slots);
+        }
+        if (map->index_hashes != NULL && map->index_hashes != map->index_hashes_inline) {
+            free(map->index_hashes);
         }
         free(map->keys);
         free(map->values);
@@ -5628,18 +5638,24 @@ static void osty_rt_map_index_clear(osty_rt_map *map) {
     if (map->index_slots != NULL && map->index_slots != map->index_inline) {
         free(map->index_slots);
     }
+    if (map->index_hashes != NULL && map->index_hashes != map->index_hashes_inline) {
+        free(map->index_hashes);
+    }
     map->index_slots = NULL;
+    map->index_hashes = NULL;
     map->index_cap = 0;
     map->index_len = 0;
 }
 
-static void osty_rt_map_index_insert_slot(osty_rt_map *map, int64_t slot) {
+static void osty_rt_map_index_insert_slot_hashed(osty_rt_map *map, int64_t slot, size_t hash) {
     uint64_t mask = (uint64_t)(map->index_cap - 1);
-    uint64_t idx = (uint64_t)osty_rt_map_key_hash(map->key_kind, osty_rt_map_key_slot(map, slot)) & mask;
+    uint64_t idx = (uint64_t)hash & mask;
+    uint32_t fingerprint = osty_rt_map_key_fingerprint(hash);
     while (map->index_slots[idx] != 0) {
         idx = (idx + 1) & mask;
     }
     map->index_slots[idx] = slot + 1;
+    map->index_hashes[idx] = fingerprint;
     map->index_len += 1;
 }
 
@@ -5665,26 +5681,38 @@ static void osty_rt_map_index_rebuild(osty_rt_map *map, int64_t live_len) {
         if (map->index_slots != NULL && map->index_slots != map->index_inline) {
             free(map->index_slots);
         }
+        if (map->index_hashes != NULL && map->index_hashes != map->index_hashes_inline) {
+            free(map->index_hashes);
+        }
         map->index_slots = map->index_inline;
+        map->index_hashes = map->index_hashes_inline;
         memset(map->index_slots, 0, (size_t)cap * sizeof(int64_t));
+        memset(map->index_hashes, 0, (size_t)cap * sizeof(uint32_t));
         map->index_cap = cap;
     } else {
-        if (map->index_cap != cap || map->index_slots == NULL || map->index_slots == map->index_inline) {
+        if (map->index_cap != cap || map->index_slots == NULL || map->index_slots == map->index_inline ||
+            map->index_hashes == NULL || map->index_hashes == map->index_hashes_inline) {
             if (map->index_slots != NULL && map->index_slots != map->index_inline) {
                 free(map->index_slots);
             }
+            if (map->index_hashes != NULL && map->index_hashes != map->index_hashes_inline) {
+                free(map->index_hashes);
+            }
             map->index_slots = (int64_t *)calloc((size_t)cap, sizeof(int64_t));
-            if (map->index_slots == NULL) {
+            map->index_hashes = (uint32_t *)calloc((size_t)cap, sizeof(uint32_t));
+            if (map->index_slots == NULL || map->index_hashes == NULL) {
                 osty_rt_abort("out of memory");
             }
             map->index_cap = cap;
         } else {
             memset(map->index_slots, 0, (size_t)map->index_cap * sizeof(int64_t));
+            memset(map->index_hashes, 0, (size_t)map->index_cap * sizeof(uint32_t));
         }
     }
     map->index_len = 0;
     for (i = 0; i < map->len; i++) {
-        osty_rt_map_index_insert_slot(map, i);
+        size_t hash = osty_rt_map_key_hash(map->key_kind, osty_rt_map_key_slot(map, i));
+        osty_rt_map_index_insert_slot_hashed(map, i, hash);
     }
 }
 
@@ -5728,9 +5756,11 @@ static int64_t osty_rt_map_find_index_linear(osty_rt_map *map, const void *key) 
 }
 
 static int64_t osty_rt_map_find_index_indexed(osty_rt_map *map, const void *key) {
+    size_t key_hash = osty_rt_map_key_hash(map->key_kind, key);
+    uint32_t key_fingerprint = osty_rt_map_key_fingerprint(key_hash);
     size_t key_size = osty_rt_kind_size(map->key_kind);
     uint64_t mask = (uint64_t)(map->index_cap - 1);
-    uint64_t idx = (uint64_t)osty_rt_map_key_hash(map->key_kind, key) & mask;
+    uint64_t idx = (uint64_t)key_hash & mask;
 
     for (;;) {
         int64_t entry = map->index_slots[idx];
@@ -5740,6 +5770,7 @@ static int64_t osty_rt_map_find_index_indexed(osty_rt_map *map, const void *key)
         }
         slot = entry - 1;
         if (slot >= 0 && slot < map->len &&
+            map->index_hashes[idx] == key_fingerprint &&
             osty_rt_value_equals(osty_rt_map_key_slot(map, slot), key, key_size, map->key_kind)) {
             return slot;
         }
@@ -5777,6 +5808,7 @@ void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, 
     map->index_cap = 0;
     map->index_len = 0;
     map->index_slots = NULL;
+    map->index_hashes = NULL;
     osty_rt_map_mutex_init_or_abort(map);
     return map;
 }
@@ -5847,11 +5879,12 @@ static void osty_rt_map_insert_raw(void *raw_map, const void *key, const void *v
     memcpy(osty_rt_map_value_slot(map, index), value, map->value_size);
     if (inserted) {
         if (map->len >= 8) {
-            if (map->index_cap == 0 || map->index_slots == NULL ||
+            if (map->index_cap == 0 || map->index_slots == NULL || map->index_hashes == NULL ||
                 (map->index_len + 1) * 10 >= map->index_cap * 7) {
                 osty_rt_map_index_rebuild(map, map->len);
             } else {
-                osty_rt_map_index_insert_slot(map, index);
+                size_t hash = osty_rt_map_key_hash(map->key_kind, osty_rt_map_key_slot(map, index));
+                osty_rt_map_index_insert_slot_hashed(map, index, hash);
             }
         }
     }
