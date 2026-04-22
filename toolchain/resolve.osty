@@ -417,16 +417,20 @@ fn srAstCollectDecl(file: AstFile, idx: Int, result: SelfResolveResult) -> SelfR
         }
     } else if node.kind == AstNFnDecl {
         out = srAstAddFunctionSymbol(file, idx, out)
+        out = srCheckDeclAnnotations(file, node.extra, srAnnotTargetTopLevel(), out)
     } else if node.kind == AstNStructDecl || node.kind == AstNInterfaceDecl || node.kind == AstNTypeAlias {
         out = srAddSymbol(
             out,
             selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, node.flags == 1, idx),
         )
+        out = srCheckDeclAnnotations(file, node.extra, srAnnotTargetTopLevel(), out)
+        out = srCheckTypeMemberAnnotations(file, node, out)
     } else if node.kind == AstNEnumDecl {
         out = srAddSymbol(
             out,
             selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, node.flags == 1, idx),
         )
+        out = srCheckDeclAnnotations(file, node.extra, srAnnotTargetTopLevel(), out)
         for memberIdx in node.children {
             let member = srAstNode(file, memberIdx)
             if member.kind == AstNVariant {
@@ -444,6 +448,9 @@ fn srAstCollectDecl(file: AstFile, idx: Int, result: SelfResolveResult) -> SelfR
                         memberIdx,
                     ),
                 )
+                out = srCheckDeclAnnotations(file, member.extra, srAnnotTargetVariant(), out)
+            } else if member.kind == AstNFnDecl {
+                out = srCheckDeclAnnotations(file, member.extra, srAnnotTargetMethod(), out)
             }
         }
     } else if node.kind == AstNLet {
@@ -453,6 +460,33 @@ fn srAstCollectDecl(file: AstFile, idx: Int, result: SelfResolveResult) -> SelfR
                 out,
                 selfSymbolAtNode(item.name, "value", srAstLetTypeName(file, node), 0, 0, item.start, item.end, false, item.node),
             )
+        }
+        out = srCheckDeclAnnotations(file, node.extra, srAnnotTargetTopLevel(), out)
+    }
+    out
+}
+
+fn srCheckTypeMemberAnnotations(
+    file: AstFile,
+    node: AstNode,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    if node.kind == AstNStructDecl {
+        for memberIdx in node.children {
+            let member = srAstNode(file, memberIdx)
+            if member.kind == AstNField_ {
+                out = srCheckDeclAnnotations(file, member.extra, srAnnotTargetField(), out)
+            } else if member.kind == AstNFnDecl {
+                out = srCheckDeclAnnotations(file, member.extra, srAnnotTargetMethod(), out)
+            }
+        }
+    } else if node.kind == AstNInterfaceDecl {
+        for memberIdx in node.children {
+            let member = srAstNode(file, memberIdx)
+            if member.kind == AstNFnDecl {
+                out = srCheckDeclAnnotations(file, member.extra, srAnnotTargetMethod(), out)
+            }
         }
     }
     out
@@ -1856,4 +1890,168 @@ fn srIsUpperName(name: String) -> Bool {
 
 fn srIsDiscardName(name: String) -> Bool {
     name == "_" || strings.hasPrefix(name, "_")
+}
+
+// Annotation target bitmask. Matches the Go resolver's
+// `ast.AnnotationTarget` values (internal/ast/ast.go:79) so the
+// self-hosted checker can reuse the same allow-list logic.
+fn srAnnotTargetField() -> Int { 1 }
+fn srAnnotTargetTopLevel() -> Int { 2 }
+fn srAnnotTargetMethod() -> Int { 4 }
+fn srAnnotTargetVariant() -> Int { 8 }
+
+/// srAnnotAllowedTargets returns the bitmask of valid targets for a
+/// permitted annotation, or 0 for unknown names. Keep in sync with
+/// `annotationRules` in internal/ast/ast.go:93.
+fn srAnnotAllowedTargets(name: String) -> Int {
+    if name == "json" { return srAnnotTargetField() | srAnnotTargetVariant() }
+    if name == "deprecated" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    if name == "allow" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod() | srAnnotTargetField() | srAnnotTargetVariant()
+    }
+    if name == "intrinsic_methods" { return srAnnotTargetTopLevel() }
+    if name == "requires" { return srAnnotTargetMethod() }
+    if name == "no_alloc" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    if name == "intrinsic" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    if name == "c_abi" { return srAnnotTargetTopLevel() }
+    if name == "export" { return srAnnotTargetTopLevel() }
+    if name == "pod" { return srAnnotTargetTopLevel() }
+    if name == "repr" { return srAnnotTargetTopLevel() }
+    if name == "cfg" {
+        return srAnnotTargetTopLevel() | srAnnotTargetMethod() | srAnnotTargetField() | srAnnotTargetVariant()
+    }
+    if name == "op" { return srAnnotTargetMethod() }
+    if name == "test" { return srAnnotTargetTopLevel() }
+    0
+}
+
+fn srIsAllowedAnnotation(name: String) -> Bool {
+    srAnnotAllowedTargets(name) != 0
+}
+
+fn srAnnotationAllowedAt(name: String, target: Int) -> Bool {
+    let allowed = srAnnotAllowedTargets(name)
+    allowed != 0 && (allowed & target) != 0
+}
+
+fn srAnnotationTargetString(name: String) -> String {
+    let allowed = srAnnotAllowedTargets(name)
+    if allowed == 0 {
+        return "(unknown)"
+    }
+    let mut parts: List<String> = []
+    if (allowed & srAnnotTargetField()) != 0 { parts.push("struct fields") }
+    if (allowed & srAnnotTargetTopLevel()) != 0 { parts.push("top-level declarations") }
+    if (allowed & srAnnotTargetMethod()) != 0 { parts.push("methods") }
+    if (allowed & srAnnotTargetVariant()) != 0 { parts.push("enum variants") }
+    srJoinWithAnd(parts)
+}
+
+fn srJoinWithAnd(parts: List<String>) -> String {
+    let n = parts.len()
+    if n == 0 { return "" }
+    if n == 1 { return parts[0] }
+    if n == 2 { return parts[0] + " and " + parts[1] }
+    let mut out = ""
+    let mut idx = 0
+    for p in parts {
+        if idx == 0 {
+            out = p
+        } else if idx == n - 1 {
+            out = out + ", and " + p
+        } else {
+            out = out + ", " + p
+        }
+        idx = idx + 1
+    }
+    out
+}
+
+/// srCollectAnnotationNodes unpacks a decl's `extra` field into the flat
+/// list of AstNAnnotation nodes that hang off it. The parser packs 0, 1,
+/// or N annotations differently (-1 / direct idx / "__group" wrapper);
+/// this helper hides the shape difference.
+fn srCollectAnnotationNodes(file: AstFile, extraIdx: Int) -> List<AstNode> {
+    let mut anns: List<AstNode> = []
+    if extraIdx < 0 {
+        return anns
+    }
+    let ann = srAstNode(file, extraIdx)
+    if ann.kind != AstNAnnotation {
+        return anns
+    }
+    if ann.text == "__group" {
+        for childIdx in ann.children {
+            let child = srAstNode(file, childIdx)
+            if child.kind == AstNAnnotation {
+                anns.push(child)
+            }
+        }
+    } else {
+        anns.push(ann)
+    }
+    anns
+}
+
+/// srCheckDeclAnnotations validates the annotations attached to a single
+/// declaration (or member) against v0.4 §18.1:
+///   - unknown names → E0400
+///   - wrong target kind → E0607
+///   - same name twice on one target → E0609
+fn srCheckDeclAnnotations(
+    file: AstFile,
+    extraIdx: Int,
+    target: Int,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    // Most decls carry no annotations; skip the unpack call (and its
+    // list allocation) in the common case.
+    if extraIdx < 0 {
+        return result
+    }
+    let anns = srCollectAnnotationNodes(file, extraIdx)
+    let mut out = result
+    let mut seen: List<String> = []
+    for ann in anns {
+        let name = ann.text
+        if !srIsAllowedAnnotation(name) {
+            out.diagnostics.push(selfResolveDiagnostic(
+                "E0400",
+                "unknown annotation `#[" + name + "]`",
+                name,
+                ann.start,
+                ann.end,
+            ))
+            continue
+        }
+        if !srAnnotationAllowedAt(name, target) {
+            out.diagnostics.push(selfResolveDiagnosticHintAtNode(
+                "E0607",
+                "annotation `#[" + name + "]` is not allowed here",
+                name,
+                ann.start,
+                ann.end,
+                -1,
+                "`#[" + name + "]` is permitted on " + srAnnotationTargetString(name),
+            ))
+        }
+        let mut isDup = false
+        for prev in seen {
+            if prev == name {
+                isDup = true
+            }
+        }
+        if isDup {
+            out.diagnostics.push(selfResolveDiagnostic(
+                "E0609",
+                "annotation `#[" + name + "]` is repeated on the same target",
+                name,
+                ann.start,
+                ann.end,
+            ))
+            continue
+        }
+        seen.push(name)
+    }
+    out
 }
