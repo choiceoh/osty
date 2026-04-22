@@ -1146,8 +1146,11 @@ func nativeBlockFromStmts(ctx *nativeProjectionCtx, stmts []ostyir.Stmt, fnRetur
 func nativeStmtsFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType string) ([]*llvmNativeStmt, bool) {
 	switch s := stmt.(type) {
 	case *ostyir.LetStmt:
-		if _, ok := s.Pattern.(*ostyir.TuplePat); ok {
+		switch s.Pattern.(type) {
+		case *ostyir.TuplePat:
 			return nativeLetTupleDestructureStmts(ctx, s)
+		case *ostyir.StructPat:
+			return nativeLetStructDestructureStmts(ctx, s)
 		}
 	case *ostyir.ForStmt:
 		if s != nil && s.Kind == ostyir.ForIn {
@@ -1347,6 +1350,104 @@ func nativeLetTupleDestructureStmts(ctx *nativeProjectionCtx, s *ostyir.LetStmt)
 			childExprs: []*llvmNativeExpr{field},
 		})
 		ctx.bindScopeName(name, nativeExprInfoFromLLVMType(elemLLVM))
+	}
+	return out, true
+}
+
+// nativeLetStructDestructureStmts lowers
+// `let Foo { name, age, .. } = rhs` (and the rename shorthand
+// `let Foo { name: n, age }`) into a sequence of native `let`s —
+// one optional spill for the RHS, one per named field. Only
+// plain-ident field bindings are covered; nested sub-patterns,
+// wildcards, and mut bindings defer to the legacy bridge. The
+// pattern must name every field the emitted destructure extracts;
+// `Rest = true` (trailing `..`) is fine and means the struct has
+// more fields we don't read.
+func nativeLetStructDestructureStmts(ctx *nativeProjectionCtx, s *ostyir.LetStmt) ([]*llvmNativeStmt, bool) {
+	if ctx == nil || s == nil || s.Value == nil {
+		return nil, false
+	}
+	pat, ok := s.Pattern.(*ostyir.StructPat)
+	if !ok || pat == nil {
+		return nil, false
+	}
+	info, ok := nativeStructInfoFromType(ctx, s.Value.Type())
+	if !ok && pat.TypeName != "" {
+		info = ctx.structsByName[pat.TypeName]
+		ok = info != nil
+	}
+	if !ok || info == nil {
+		return nil, false
+	}
+	// Resolve each pattern field to a bare binder name and the
+	// struct field it maps to. Field-level shorthand (`{ name }`)
+	// binds to a local with the same name; `name: n` binds to `n`.
+	type binding struct {
+		binderName string
+		fieldIdx   int
+		fieldLLVM  string
+	}
+	bindings := make([]binding, 0, len(pat.Fields))
+	for _, f := range pat.Fields {
+		if f.Name == "" {
+			return nil, false
+		}
+		structField, ok := info.byName[f.Name]
+		if !ok {
+			return nil, false
+		}
+		binderName := f.Name
+		if f.Pattern != nil {
+			id, ok := f.Pattern.(*ostyir.IdentPat)
+			if !ok || id == nil || id.Name == "" || id.Mut {
+				return nil, false
+			}
+			binderName = id.Name
+		}
+		bindings = append(bindings, binding{
+			binderName: binderName,
+			fieldIdx:   structField.index,
+			fieldLLVM:  structField.llvmType,
+		})
+	}
+	value, ok := nativeExprFromIR(ctx, s.Value)
+	if !ok {
+		return nil, false
+	}
+	if value.llvmType != info.def.llvmType {
+		return nil, false
+	}
+	out := make([]*llvmNativeStmt, 0, len(bindings)+1)
+	var baseName string
+	if value.kind == llvmNativeExprIdent && value.name != "" {
+		baseName = value.name
+	} else {
+		baseName = ctx.freshTempName("__osty_native_s")
+		out = append(out, &llvmNativeStmt{
+			kind:       llvmNativeStmtLet,
+			name:       baseName,
+			childExprs: []*llvmNativeExpr{value},
+		})
+		ctx.bindScopeName(baseName, nativeExprInfoFromLLVMType(info.def.llvmType))
+	}
+	for _, b := range bindings {
+		base := &llvmNativeExpr{
+			kind:     llvmNativeExprIdent,
+			llvmType: info.def.llvmType,
+			name:     baseName,
+		}
+		field := &llvmNativeExpr{
+			kind:       llvmNativeExprField,
+			llvmType:   b.fieldLLVM,
+			fieldIndex: b.fieldIdx,
+			childExprs: []*llvmNativeExpr{base},
+		}
+		out = append(out, &llvmNativeStmt{
+			kind:       llvmNativeStmtLet,
+			name:       b.binderName,
+			childExprs: []*llvmNativeExpr{field},
+		})
+		ctx.bindScopeName(b.binderName, nativeExprInfoFromLLVMType(b.fieldLLVM))
 	}
 	return out, true
 }
