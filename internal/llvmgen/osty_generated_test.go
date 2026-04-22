@@ -850,6 +850,7 @@ func TestGeneratedStringRuntimeSymbolsAreOstyOwned(t *testing.T) {
 		{"trimSuffix", llvmStringRuntimeTrimSuffixSymbol(), "osty_rt_strings_TrimSuffix"},
 		{"chars", llvmStringRuntimeCharsSymbol(), "osty_rt_strings_Chars"},
 		{"bytes", llvmStringRuntimeBytesSymbol(), "osty_rt_strings_Bytes"},
+		{"toBytes", llvmStringRuntimeToBytesSymbol(), "osty_rt_strings_ToBytes"},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
@@ -883,6 +884,7 @@ func TestGeneratedStringRuntimeDeclarationsAreOstyOwned(t *testing.T) {
 		"declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)",
 		"declare ptr @osty_rt_strings_Chars(ptr)",
 		"declare ptr @osty_rt_strings_Bytes(ptr)",
+		"declare ptr @osty_rt_strings_ToBytes(ptr)",
 	}
 	for _, w := range want {
 		assertGeneratedIRContains(t, decls, w)
