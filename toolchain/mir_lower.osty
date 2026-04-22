@@ -4433,6 +4433,7 @@ pub fn mirLowerStdlibIntrinsicForMethod(
 
 fn mirLowerListStdlibMethod(name: String) -> MirIntrinsicKind {
     if name == "push" { return MirIntrinsicListPush }
+    if name == "pop" { return MirIntrinsicListPop }
     if name == "len" { return MirIntrinsicListLen }
     if name == "get" { return MirIntrinsicListGet }
     if name == "isEmpty" { return MirIntrinsicListIsEmpty }
@@ -4504,12 +4505,16 @@ pub fn mirLowerStringIntrinsicForMethod(name: String) -> MirIntrinsicKind {
     if name == "endsWith" { return MirIntrinsicStringEndsWith }
     if name == "indexOf" { return MirIntrinsicStringIndexOf }
     if name == "split" { return MirIntrinsicStringSplit }
+    if name == "join" { return MirIntrinsicStringJoin }
     if name == "trim" { return MirIntrinsicStringTrim }
     if name == "toUpper" { return MirIntrinsicStringToUpper }
     if name == "toLower" { return MirIntrinsicStringToLower }
+    if name == "toInt" { return MirIntrinsicStringToInt }
+    if name == "toFloat" { return MirIntrinsicStringToFloat }
     if name == "replace" { return MirIntrinsicStringReplace }
     if name == "chars" { return MirIntrinsicStringChars }
     if name == "bytes" { return MirIntrinsicStringBytes }
+    if name == "substring" { return MirIntrinsicStringSubstring }
     MirIntrinsicInvalid
 }
 
@@ -4517,6 +4522,25 @@ pub fn mirLowerBytesIntrinsicForMethod(name: String) -> MirIntrinsicKind {
     if name == "len" { return MirIntrinsicBytesLen }
     if name == "isEmpty" { return MirIntrinsicBytesIsEmpty }
     if name == "get" { return MirIntrinsicBytesGet }
+    if name == "contains" { return MirIntrinsicBytesContains }
+    if name == "startsWith" { return MirIntrinsicBytesStartsWith }
+    if name == "endsWith" { return MirIntrinsicBytesEndsWith }
+    if name == "indexOf" { return MirIntrinsicBytesIndexOf }
+    if name == "lastIndexOf" { return MirIntrinsicBytesLastIndexOf }
+    if name == "split" { return MirIntrinsicBytesSplit }
+    if name == "join" { return MirIntrinsicBytesJoin }
+    if name == "concat" { return MirIntrinsicBytesConcat }
+    if name == "repeat" { return MirIntrinsicBytesRepeat }
+    if name == "replace" { return MirIntrinsicBytesReplace }
+    if name == "replaceAll" { return MirIntrinsicBytesReplaceAll }
+    if name == "trimLeft" { return MirIntrinsicBytesTrimLeft }
+    if name == "trimRight" { return MirIntrinsicBytesTrimRight }
+    if name == "trim" { return MirIntrinsicBytesTrim }
+    if name == "trimSpace" { return MirIntrinsicBytesTrimSpace }
+    if name == "toUpper" { return MirIntrinsicBytesToUpper }
+    if name == "toLower" { return MirIntrinsicBytesToLower }
+    if name == "toHex" { return MirIntrinsicBytesToHex }
+    if name == "slice" { return MirIntrinsicBytesSlice }
     MirIntrinsicInvalid
 }
 
@@ -4525,6 +4549,11 @@ pub fn mirLowerBytesIntrinsicForMethod(name: String) -> MirIntrinsicKind {
 /// based String intrinsic of the same name. Used by the merged
 /// native-toolchain MIR probe (which skips stdlib body injection)
 /// and by anyone calling stdlib helpers through the module qualifier.
+///
+/// Accepts alias forms that the Go side also accepts:
+///   - hasPrefix → StringStartsWith
+///   - hasSuffix → StringEndsWith
+///   - slice     → StringSubstring
 pub fn mirLowerStdlibStringFreeFnToIntrinsic(
     qualifier: String,
     name: String,
@@ -4532,6 +4561,11 @@ pub fn mirLowerStdlibStringFreeFnToIntrinsic(
     if qualifier != "std.strings" {
         return MirIntrinsicInvalid
     }
+    // Accept the Go-level aliases first so they don't drop into the
+    // receiver-based table's unknown path.
+    if name == "hasPrefix" { return MirIntrinsicStringStartsWith }
+    if name == "hasSuffix" { return MirIntrinsicStringEndsWith }
+    if name == "slice" { return MirIntrinsicStringSubstring }
     // Delegate to the receiver-based table — `std.strings.split` and
     // `s.split(sep)` converge on the same runtime symbol.
     mirLowerStringIntrinsicForMethod(name)
