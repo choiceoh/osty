@@ -735,3 +735,392 @@ pub fn hirLowerClassifyBuilderDerive(
     }
     HirLowerBuilderInfo { derivable, required }
 }
+
+// ====================================================================
+// Decl assembly helpers (Stage 5c)
+// ====================================================================
+//
+// These sit one layer above the low-level `hir.osty` constructors
+// (hirFnDecl / hirStructDecl / etc.). They take already-lowered
+// children + a raw annotation list and produce the final HIR decl
+// with annotation-derived metadata pre-filled — the plumbing
+// layer that Stage 5d's AST walker will call.
+//
+// Separation of concerns:
+//
+//   - AST walker (Stage 5d, per-front-end):
+//       walk the parser/elab arena → collect children + annotations
+//   - Assembly helper (this file):
+//       apply annotation extractors → fill concrete HIR fields
+//   - Low-level constructor (hir.osty):
+//       allocate the struct, set defaults
+//
+// Keeping assembly pure lets us unit-test decl shaping without
+// depending on any particular AST arena encoding.
+
+// ---- Param + TypeParam -------------------------------------------
+
+/// hirLowerAssembleParam wraps `hirParam` for simple name-bound
+/// parameters, threading an optional default expression.
+pub fn hirLowerAssembleParam(
+    name: String,
+    typ: HirType,
+    hasDefault: Bool,
+    defaultValue: HirExpr,
+    span: HirSpan,
+) -> HirParam {
+    let mut p = hirParam(name, typ, span)
+    p.hasDefault = hasDefault
+    if hasDefault {
+        p.defaultValue = defaultValue
+    }
+    p
+}
+
+/// hirLowerAssembleParamDestructured wraps `hirParamDestructured`
+/// for pattern-bound parameters (`|(a, b)|`, `|User { name }|`).
+/// Destructured params never have a default value — the resolver
+/// rejects that combination.
+pub fn hirLowerAssembleParamDestructured(
+    pattern: HirPattern,
+    typ: HirType,
+    span: HirSpan,
+) -> HirParam {
+    hirParamDestructured(pattern, typ, span)
+}
+
+/// hirLowerAssembleTypeParam wraps `hirTypeParam` and sets the
+/// generic's bounds list.
+pub fn hirLowerAssembleTypeParam(
+    name: String,
+    bounds: List<HirType>,
+    span: HirSpan,
+) -> HirTypeParam {
+    let mut tp = hirTypeParam(name, span)
+    tp.bounds = bounds
+    tp
+}
+
+// ---- FnDecl ------------------------------------------------------
+
+/// hirLowerAssembleFnDecl builds a HirFnDecl from already-lowered
+/// components plus a raw annotation list. Calls every relevant
+/// extractor and writes the result into the concrete fields
+/// HirFnDecl carries (Vectorize / InlineMode / Hot / Cold /
+/// TargetFeatures etc.).
+///
+/// Unit default: if `ret` is invalid (callers pass `hirTypeInvalid()`
+/// for "no return clause"), it is replaced with `Unit` — matches
+/// Go's `if out.Return == nil { out.Return = TUnit }`.
+pub fn hirLowerAssembleFnDecl(
+    name: String,
+    params: List<HirParam>,
+    ret: HirType,
+    generics: List<HirTypeParam>,
+    body: HirBlock,
+    annotations: List<HirAnnotation>,
+    receiverMut: Bool,
+    exported: Bool,
+    span: HirSpan,
+) -> HirFnDecl {
+    let finalRet = if hirTypeIsValid(ret) {
+        ret
+    } else {
+        hirTUnit()
+    }
+    let mut decl = hirFnDecl(name, finalRet, span)
+    decl.params = params
+    decl.generics = generics
+    decl.body = body
+    decl.receiverMut = receiverMut
+    decl.exported = exported
+
+    let noVec = hirLowerHasNamedAnnotation(annotations, "no_vectorize")
+    let vecInfo = hirLowerExtractVectorizeArgs(annotations)
+    let unrollInfo = hirLowerExtractUnrollArgs(annotations)
+    let noaliasInfo = hirLowerExtractNoaliasArgs(annotations)
+
+    decl.exportSymbol = hirLowerExtractExportSymbol(annotations)
+    decl.cAbi = hirLowerHasNamedAnnotation(annotations, "c_abi")
+    decl.isIntrinsic = hirLowerHasNamedAnnotation(annotations, "intrinsic")
+    decl.noAlloc = hirLowerHasNamedAnnotation(annotations, "no_alloc")
+
+    // v0.6 A5.2: vectorize is default-on; `#[no_vectorize]` opts out.
+    decl.vectorize = !noVec
+    decl.noVectorize = noVec
+    decl.vectorizeWidth = vecInfo.width
+    decl.vectorizeScalable = vecInfo.scalable
+    decl.vectorizePredicate = vecInfo.predicate
+
+    decl.parallel = hirLowerHasNamedAnnotation(annotations, "parallel")
+    decl.unroll = unrollInfo.enable
+    decl.unrollCount = unrollInfo.count
+
+    decl.inlineMode = hirLowerExtractInlineMode(annotations)
+    decl.hot = hirLowerHasNamedAnnotation(annotations, "hot")
+    decl.cold = hirLowerHasNamedAnnotation(annotations, "cold")
+    decl.targetFeatures = hirLowerExtractTargetFeatures(annotations)
+    decl.pure = hirLowerHasNamedAnnotation(annotations, "pure")
+    decl.noaliasAll = noaliasInfo.all
+    decl.noaliasParams = noaliasInfo.names
+    let _ = vecInfo.enable
+
+    decl
+}
+
+// ---- Field + Variant --------------------------------------------
+
+/// hirLowerAssembleField builds a HirField from already-lowered
+/// components. JSON annotation options fill `jsonKey` / `jsonSkip` /
+/// `jsonOptional`. An invalid `defaultValue` argument is taken as
+/// "no default" when `hasDefault` is false.
+pub fn hirLowerAssembleField(
+    name: String,
+    typ: HirType,
+    hasDefault: Bool,
+    defaultValue: HirExpr,
+    exported: Bool,
+    annotations: List<HirAnnotation>,
+    span: HirSpan,
+) -> HirField {
+    let mut f = hirField(name, typ, span)
+    f.hasDefault = hasDefault
+    if hasDefault {
+        f.defaultValue = defaultValue
+    }
+    f.exported = exported
+    let jinfo = hirLowerJsonFieldOptions(annotations)
+    f.jsonKey = jinfo.key
+    f.jsonSkip = jinfo.skip
+    f.jsonOptional = jinfo.optional
+    f
+}
+
+/// hirLowerAssembleVariant builds a HirVariant with payload types
+/// already lowered. JSON variant options fill `jsonTag` / `jsonSkip`.
+pub fn hirLowerAssembleVariant(
+    name: String,
+    payload: List<HirType>,
+    annotations: List<HirAnnotation>,
+    span: HirSpan,
+) -> HirVariant {
+    let mut v = hirVariant(name, span)
+    v.payload = payload
+    let jinfo = hirLowerJsonVariantOptions(annotations)
+    v.jsonTag = jinfo.tag
+    v.jsonSkip = jinfo.skip
+    v
+}
+
+// ---- StructDecl -------------------------------------------------
+
+/// hirLowerAssembleStructDecl builds a HirStructDecl. Drives
+/// builder-derive classification by deriving the parallel
+/// (name / exported / hasDefault) lists from `fields`, then checks
+/// for a user-supplied `builder` method (LANG_SPEC §3.3 override
+/// rule). Methods whose name is `"builder"` cancel the auto-derive.
+pub fn hirLowerAssembleStructDecl(
+    name: String,
+    fields: List<HirField>,
+    methods: List<HirFnDecl>,
+    generics: List<HirTypeParam>,
+    exported: Bool,
+    annotations: List<HirAnnotation>,
+    span: HirSpan,
+) -> HirStructDecl {
+    let mut s = hirStructDecl(name, span)
+    s.fields = fields
+    s.methods = methods
+    s.generics = generics
+    s.exported = exported
+    s.pod = hirLowerHasNamedAnnotation(annotations, "pod")
+    s.reprC = hirLowerHasNamedAnnotation(annotations, "repr")
+
+    // Builder-derive classification.
+    let mut names: List<String> = []
+    let mut fExported: List<Bool> = []
+    let mut hasDefaults: List<Bool> = []
+    for f in fields {
+        names.push(f.name)
+        fExported.push(f.exported)
+        hasDefaults.push(f.hasDefault)
+    }
+    let info = hirLowerClassifyBuilderDerive(names, fExported, hasDefaults)
+    let mut derivable = info.derivable
+    // User-supplied `builder` method cancels auto-derive.
+    for m in methods {
+        if m.name == "builder" {
+            derivable = false
+        }
+    }
+    s.builderDerivable = derivable
+    s.builderRequiredFields = info.required
+    s
+}
+
+// ---- EnumDecl ---------------------------------------------------
+
+pub fn hirLowerAssembleEnumDecl(
+    name: String,
+    variants: List<HirVariant>,
+    methods: List<HirFnDecl>,
+    generics: List<HirTypeParam>,
+    exported: Bool,
+    span: HirSpan,
+) -> HirEnumDecl {
+    let mut e = hirEnumDecl(name, span)
+    e.variants = variants
+    e.methods = methods
+    e.generics = generics
+    e.exported = exported
+    e
+}
+
+// ---- LetDecl ----------------------------------------------------
+
+/// hirLowerAssembleLetDecl builds a top-level `let` / `pub let`.
+/// When `typ` is invalid AND `hasValue` is true, the value's
+/// inferred type is used — matches Go's `out.Type = out.Value.Type()`
+/// fallback.
+pub fn hirLowerAssembleLetDecl(
+    name: String,
+    typ: HirType,
+    hasValue: Bool,
+    value: HirExpr,
+    mutable: Bool,
+    exported: Bool,
+    span: HirSpan,
+) -> HirLetDecl {
+    let finalType = if hirTypeIsValid(typ) {
+        typ
+    } else if hasValue && hirTypeIsValid(value.typ) {
+        value.typ
+    } else {
+        hirTypeInvalid()
+    }
+    let mut ld = hirLetDecl(name, finalType, span)
+    ld.mutable = mutable
+    ld.exported = exported
+    if hasValue {
+        ld.hasValue = true
+        ld.value = value
+    }
+    ld
+}
+
+// ---- InterfaceDecl ----------------------------------------------
+
+pub fn hirLowerAssembleInterfaceDecl(
+    name: String,
+    methods: List<HirFnDecl>,
+    extends: List<HirType>,
+    generics: List<HirTypeParam>,
+    exported: Bool,
+    span: HirSpan,
+) -> HirInterfaceDecl {
+    let mut i = hirInterfaceDecl(name, span)
+    i.methods = methods
+    i.extends = extends
+    i.generics = generics
+    i.exported = exported
+    i
+}
+
+// ---- TypeAliasDecl ---------------------------------------------
+
+pub fn hirLowerAssembleTypeAliasDecl(
+    name: String,
+    target: HirType,
+    generics: List<HirTypeParam>,
+    exported: Bool,
+    span: HirSpan,
+) -> HirTypeAliasDecl {
+    let mut t = hirTypeAliasDecl(name, target, span)
+    t.generics = generics
+    t.exported = exported
+    t
+}
+
+// ---- UseDecl ---------------------------------------------------
+
+/// hirLowerAssembleUseDecl builds a plain (non-FFI) `use path.to.mod
+/// [as alias]` declaration. Caller supplies the dotted path segments
+/// and the explicit alias (empty for the last-segment default).
+pub fn hirLowerAssembleUseDecl(
+    path: List<String>,
+    alias: String,
+    rawPath: String,
+    span: HirSpan,
+) -> HirUseDecl {
+    let effectiveAlias = if alias == "" {
+        hirLowerLast(path)
+    } else {
+        alias
+    }
+    let mut u = hirUseDecl(effectiveAlias, rawPath, span)
+    u.path = path
+    u
+}
+
+/// hirLowerAssembleUseDeclGo builds a `use go "pkg/path" { … }` FFI
+/// binding. `goPath` is the verbatim Go import path, `goBodyFns`
+/// are the inline fn decls (produced by walking the FFI body with
+/// the regular AST→HIR pipeline).
+pub fn hirLowerAssembleUseDeclGo(
+    alias: String,
+    rawPath: String,
+    goPath: String,
+    goBodyFns: List<HirFnDecl>,
+    span: HirSpan,
+) -> HirUseDecl {
+    let mut u = hirUseDecl(alias, rawPath, span)
+    u.isGoFFI = true
+    u.goPath = goPath
+    u.goBodyFns = goBodyFns
+    u
+}
+
+/// hirLowerAssembleUseDeclRuntime builds a `use runtime "path" { … }`
+/// FFI binding (LANG_SPEC §19 runtime sublanguage).
+pub fn hirLowerAssembleUseDeclRuntime(
+    alias: String,
+    rawPath: String,
+    runtimePath: String,
+    span: HirSpan,
+) -> HirUseDecl {
+    let mut u = hirUseDecl(alias, rawPath, span)
+    u.isRuntimeFFI = true
+    u.runtimePath = runtimePath
+    u
+}
+
+// ---- Module wiring ---------------------------------------------
+
+/// hirLowerAddFnDecl appends a fn to the lowerer's output module.
+pub fn hirLowerAddFnDecl(l: HirLowerer, decl: HirFnDecl) {
+    l.out.fns.push(decl)
+}
+
+pub fn hirLowerAddStructDecl(l: HirLowerer, s: HirStructDecl) {
+    l.out.structs.push(s)
+}
+
+pub fn hirLowerAddEnumDecl(l: HirLowerer, e: HirEnumDecl) {
+    l.out.enums.push(e)
+}
+
+pub fn hirLowerAddLetDecl(l: HirLowerer, ld: HirLetDecl) {
+    l.out.lets.push(ld)
+}
+
+pub fn hirLowerAddInterfaceDecl(l: HirLowerer, i: HirInterfaceDecl) {
+    l.out.interfaces.push(i)
+}
+
+pub fn hirLowerAddTypeAliasDecl(l: HirLowerer, t: HirTypeAliasDecl) {
+    l.out.aliases.push(t)
+}
+
+pub fn hirLowerAddUseDecl(l: HirLowerer, u: HirUseDecl) {
+    l.out.uses.push(u)
+}
