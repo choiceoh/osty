@@ -264,17 +264,17 @@ func patchGenerated(path string) error {
 		{
 			name: "frontendLexStream cached units",
 			old: `func frontendLexStream(source string) *FrontLexStream {
-	// Osty: /tmp/selfhost_merged.osty:1068:5
+	// Osty: /tmp/selfhost_merged.osty:1076:5
 	units := strings.Split(source, "")
 	_ = units
-	// Osty: /tmp/selfhost_merged.osty:1069:5
+	// Osty: /tmp/selfhost_merged.osty:1077:5
 	unitCount := stringUnitCount(source)
 	_ = unitCount`,
 			new: `func frontendLexStream(source string) *FrontLexStream {
-	// Osty: /tmp/selfhost_merged.osty:1068:5
+	// Osty: /tmp/selfhost_merged.osty:1076:5
 	units := strings.Split(source, "")
 	_ = units
-	// Osty: /tmp/selfhost_merged.osty:1069:5
+	// Osty: /tmp/selfhost_merged.osty:1077:5
 	unitCount := len(units)
 	_ = unitCount`,
 		},
@@ -286,11 +286,11 @@ func patchGenerated(path string) error {
 		{
 			name: "ostyLexFactsFromStream cached units",
 			old: `func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts {
-	// Osty: /tmp/selfhost_merged.osty:6240:5
+	// Osty: /tmp/selfhost_merged.osty:6255:5
 	units := strings.Split(source, "")
 	_ = units`,
 			new: `func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts {
-	// Osty: /tmp/selfhost_merged.osty:6240:5
+	// Osty: /tmp/selfhost_merged.osty:6255:5
 	units := stream.units
 	if units == nil {
 		units = strings.Split(source, "")
@@ -299,20 +299,20 @@ func patchGenerated(path string) error {
 		},
 		{
 			name: "ostyLexFactsFromStream leading docs",
-			old: `	// Osty: /tmp/selfhost_merged.osty:6284:5
+			old: `	// Osty: /tmp/selfhost_merged.osty:6299:5
 	var leadingDocs []string = make([]string, 0, 1)
 	_ = leadingDocs
-	// Osty: /tmp/selfhost_merged.osty:6285:5
+	// Osty: /tmp/selfhost_merged.osty:6300:5
 	li := 0
 	_ = li
-	// Osty: /tmp/selfhost_merged.osty:6286:5
+	// Osty: /tmp/selfhost_merged.osty:6301:5
 	for li < tokenCount {
-		// Osty: /tmp/selfhost_merged.osty:6287:9
+		// Osty: /tmp/selfhost_merged.osty:6302:9
 		func() struct{} {
 			leadingDocs = append(leadingDocs, ostyJoinDocLines(units, stream, frontLexTokenAt(stream, li)))
 			return struct{}{}
 		}()
-		// Osty: /tmp/selfhost_merged.osty:6288:9
+		// Osty: /tmp/selfhost_merged.osty:6303:9
 		func() {
 			var _cur1635 int = li
 			var _rhs1636 int = 1
@@ -325,7 +325,7 @@ func patchGenerated(path string) error {
 			li = _cur1635 + _rhs1636
 		}()
 	}`,
-			new: `	// Osty: /tmp/selfhost_merged.osty:6284:5
+			new: `	// Osty: /tmp/selfhost_merged.osty:6299:5
 	leadingDocs := collectLeadingDocs(units, stream)
 	_ = leadingDocs`,
 		},

@@ -1098,6 +1098,8 @@ pub fn losslessToFrontTokens(stream: LosslessStream) -> List<FrontToken> {
             FrontToken {
                 kind: tok.kind,
                 text,
+                startOffset: tok.offset,
+                endOffset: tok.offset + tok.length,
             },
         )
     }

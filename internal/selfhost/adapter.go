@@ -103,8 +103,10 @@ func frontTokensFromRuneTable(rt runeTable, stream *FrontLexStream) []*FrontToke
 	parseTokens := make([]*FrontToken, 0, len(stream.tokens))
 	for _, tok := range stream.tokens {
 		parseTokens = append(parseTokens, &FrontToken{
-			kind: tok.kind,
-			text: rt.slice(tok.start.offset, tok.start.offset+tok.length),
+			kind:        tok.kind,
+			text:        rt.slice(tok.start.offset, tok.start.offset+tok.length),
+			startOffset: tok.start.offset,
+			endOffset:   tok.end.offset,
 		})
 	}
 	return parseTokens
