@@ -370,7 +370,7 @@ fn main() {
 	}
 }
 
-func TestTryEmitNativeOwnedLLVMIRTextReturnsNotCovered(t *testing.T) {
+func TestTryEmitNativeOwnedLLVMIRTextCoversStructFieldAssign(t *testing.T) {
 	t.Parallel()
 
 	req := newBackendRequest(t, EmitLLVMIR, `struct Pair { left: Int, right: Int }
@@ -386,11 +386,48 @@ fn main() {
 	if err != nil {
 		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
 	}
-	if ok {
-		t.Fatalf("TryEmitNativeOwnedLLVMIRText unexpectedly covered struct field assignment:\n%s", string(got))
+	if !ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for struct field assignment")
 	}
-	if len(got) != 0 {
-		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned IR for uncovered source:\n%s", string(got))
+	for _, want := range []string{
+		"%Pair = type { i64, i64 }",
+		"extractvalue %Pair",
+		"insertvalue %Pair",
+	} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("native-owned IR missing %q:\n%s", want, string(got))
+		}
+	}
+	if len(warnings) != len(req.Entry.IRIssues) {
+		t.Fatalf("warning count = %d, want %d", len(warnings), len(req.Entry.IRIssues))
+	}
+}
+
+func TestTryEmitNativeOwnedLLVMIRTextCoversListIndex(t *testing.T) {
+	t.Parallel()
+
+	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
+    let xs = [1, 2]
+    println(xs[0])
+}
+`)
+
+	got, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
+	if err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for list index")
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_list_new()",
+		"call ptr @osty_rt_list_new()",
+		"call void @osty_rt_list_push_i64(",
+		"call i64 @osty_rt_list_get_i64(",
+	} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("native-owned IR missing %q:\n%s", want, string(got))
+		}
 	}
 	if len(warnings) != len(req.Entry.IRIssues) {
 		t.Fatalf("warning count = %d, want %d", len(warnings), len(req.Entry.IRIssues))
@@ -438,7 +475,7 @@ fn main() {
 	}
 }
 
-func TestEmitLLVMIRTextFallsBackWhenNativeOwnedUncovered(t *testing.T) {
+func TestEmitLLVMIRTextPrefersNativeOwnedFastPathForStructFieldAssign(t *testing.T) {
 	t.Parallel()
 
 	req := newBackendRequest(t, EmitLLVMIR, `struct Pair { left: Int, right: Int }
@@ -450,20 +487,50 @@ fn main() {
 }
 `)
 
-	if _, ok, _, err := TryEmitNativeOwnedLLVMIRText(req.Entry, ""); err != nil {
+	want, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
+	if err != nil {
 		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
-	} else if ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText unexpectedly covered struct field assignment")
 	}
-	got, warnings, err := EmitLLVMIRText(req.Entry, "", nil)
+	if !ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for struct field assignment")
+	}
+	got, gotWarnings, err := EmitLLVMIRText(req.Entry, "", nil)
 	if err != nil {
 		t.Fatalf("EmitLLVMIRText returned error: %v", err)
 	}
-	if !strings.Contains(string(got), "%Pair = type { i64, i64 }") {
-		t.Fatalf("EmitLLVMIRText fallback IR missing Pair type:\n%s", got)
+	if string(got) != string(want) {
+		t.Fatalf("EmitLLVMIRText did not use native struct-field fast path output\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
-	if len(warnings) != len(req.Entry.IRIssues) {
-		t.Fatalf("warning count = %d, want %d", len(warnings), len(req.Entry.IRIssues))
+	if len(gotWarnings) != len(warnings) {
+		t.Fatalf("warning count = %d, want %d", len(gotWarnings), len(warnings))
+	}
+}
+
+func TestEmitLLVMIRTextPrefersNativeOwnedFastPathForListIndex(t *testing.T) {
+	t.Parallel()
+
+	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
+    let xs = [1, 2]
+    println(xs[0])
+}
+`)
+
+	want, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
+	if err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for list index")
+	}
+	got, gotWarnings, err := EmitLLVMIRText(req.Entry, "", nil)
+	if err != nil {
+		t.Fatalf("EmitLLVMIRText returned error: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("EmitLLVMIRText did not use native list fast path output\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+	if len(gotWarnings) != len(warnings) {
+		t.Fatalf("warning count = %d, want %d", len(gotWarnings), len(warnings))
 	}
 }
 
@@ -514,7 +581,7 @@ fn main() {
 	}
 }
 
-func TestLLVMBackendEmitBinaryFallsBackWhenNativeOwnedUncovered(t *testing.T) {
+func TestLLVMBackendEmitBinaryPrefersNativeOwnedFastPathForStructFieldAssign(t *testing.T) {
 	t.Parallel()
 
 	tc := &fakeLLVMToolchain{}
@@ -528,10 +595,12 @@ fn main() {
 }
 `)
 
-	if _, ok, _, err := TryEmitNativeOwnedLLVMIRText(req.Entry, ""); err != nil {
+	want, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
+	if err != nil {
 		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
-	} else if ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText unexpectedly covered struct field assignment")
+	}
+	if !ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for struct field assignment")
 	}
 	result, err := backend.Emit(context.Background(), req)
 	if err != nil {
@@ -541,8 +610,104 @@ fn main() {
 	if readErr != nil {
 		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
 	}
-	if !strings.Contains(string(got), "%Pair = type { i64, i64 }") {
-		t.Fatalf("Emit binary fallback IR missing Pair type:\n%s", got)
+	if string(got) != string(want) {
+		t.Fatalf("Emit binary did not use native struct-field fast path output\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+	if len(result.Warnings) != len(warnings) {
+		t.Fatalf("warning count = %d, want %d", len(result.Warnings), len(warnings))
+	}
+}
+
+func TestLLVMBackendEmitBinaryPrefersNativeOwnedFastPathForListIndex(t *testing.T) {
+	t.Parallel()
+
+	tc := &fakeLLVMToolchain{}
+	backend := LLVMBackend{toolchain: tc}
+	req := newBackendRequest(t, EmitBinary, `fn main() {
+    let xs = [1, 2]
+    println(xs[0])
+}
+`)
+
+	want, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
+	if err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for list index")
+	}
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	got, readErr := os.ReadFile(result.Artifacts.LLVMIR)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("Emit binary did not use native list fast path output\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+	if len(result.Warnings) != len(warnings) {
+		t.Fatalf("warning count = %d, want %d", len(result.Warnings), len(warnings))
+	}
+}
+
+func TestEmitLLVMIRTextFallsBackWhenNativeOwnedUncovered(t *testing.T) {
+	t.Parallel()
+
+	req := newBackendRequest(t, EmitLLVMIR, `struct Pair { left: Int, right: Int }
+
+fn main() {
+    let xs = [Pair { left: 1, right: 2 }]
+    println(xs[0].left)
+}
+`)
+
+	if _, ok, _, err := TryEmitNativeOwnedLLVMIRText(req.Entry, ""); err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
+	} else if ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText unexpectedly covered composite list index")
+	}
+	got, warnings, err := EmitLLVMIRText(req.Entry, "", nil)
+	if err != nil {
+		t.Fatalf("EmitLLVMIRText returned error: %v", err)
+	}
+	if !strings.Contains(string(got), "@osty_rt_list_get_bytes_v1") {
+		t.Fatalf("EmitLLVMIRText fallback IR missing bytes list get runtime call:\n%s", got)
+	}
+	if len(warnings) != len(req.Entry.IRIssues) {
+		t.Fatalf("warning count = %d, want %d", len(warnings), len(req.Entry.IRIssues))
+	}
+}
+
+func TestLLVMBackendEmitBinaryFallsBackWhenNativeOwnedUncovered(t *testing.T) {
+	t.Parallel()
+
+	tc := &fakeLLVMToolchain{}
+	backend := LLVMBackend{toolchain: tc}
+	req := newBackendRequest(t, EmitBinary, `struct Pair { left: Int, right: Int }
+
+fn main() {
+    let xs = [Pair { left: 1, right: 2 }]
+    println(xs[0].left)
+}
+`)
+
+	if _, ok, _, err := TryEmitNativeOwnedLLVMIRText(req.Entry, ""); err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
+	} else if ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText unexpectedly covered composite list index")
+	}
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	got, readErr := os.ReadFile(result.Artifacts.LLVMIR)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
+	}
+	if !strings.Contains(string(got), "@osty_rt_list_get_bytes") {
+		t.Fatalf("Emit binary fallback IR missing bytes list get runtime call:\n%s", got)
 	}
 }
 

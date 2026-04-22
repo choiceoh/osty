@@ -61,9 +61,58 @@ func TestRunEmitsNativeOwnedLLVMIRForPackage(t *testing.T) {
 	}
 }
 
-func TestRunReportsNotCoveredForUnsupportedSource(t *testing.T) {
+func TestRunEmitsNativeOwnedLLVMIRForStructFieldAssign(t *testing.T) {
 	var stdout bytes.Buffer
 	stdin := strings.NewReader(`{"path":"main.osty","source":"struct Pair { left: Int, right: Int }\nfn main() { let mut pair = Pair { left: 1, right: 2 } pair.left = 3 println(pair.left) }\n"}`)
+	if err := run(stdin, &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp llvmgenResponse
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.Covered {
+		t.Fatalf("covered = false, want true")
+	}
+	for _, want := range []string{
+		"%Pair = type { i64, i64 }",
+		"extractvalue %Pair",
+		"insertvalue %Pair",
+	} {
+		if !strings.Contains(resp.LLVMIR, want) {
+			t.Fatalf("llvmIr missing %q:\n%s", want, resp.LLVMIR)
+		}
+	}
+}
+
+func TestRunEmitsNativeOwnedLLVMIRForListIndex(t *testing.T) {
+	var stdout bytes.Buffer
+	stdin := strings.NewReader(`{"path":"main.osty","source":"fn main() { let xs = [1, 2] println(xs[0]) }\n"}`)
+	if err := run(stdin, &stdout); err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	var resp llvmgenResponse
+	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.Covered {
+		t.Fatalf("covered = false, want true")
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_list_new()",
+		"call ptr @osty_rt_list_new()",
+		"call void @osty_rt_list_push_i64(",
+		"call i64 @osty_rt_list_get_i64(",
+	} {
+		if !strings.Contains(resp.LLVMIR, want) {
+			t.Fatalf("llvmIr missing %q:\n%s", want, resp.LLVMIR)
+		}
+	}
+}
+
+func TestRunReportsNotCoveredForUnsupportedSource(t *testing.T) {
+	var stdout bytes.Buffer
+	stdin := strings.NewReader(`{"path":"main.osty","source":"struct Pair { left: Int, right: Int }\nfn main() { let xs = [Pair { left: 1, right: 2 }] println(xs[0].left) }\n"}`)
 	if err := run(stdin, &stdout); err != nil {
 		t.Fatalf("run error: %v", err)
 	}

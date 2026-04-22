@@ -252,7 +252,7 @@ func TestEmitGenArtifactUsesManagedNativeLLVMGenWhenCovered(t *testing.T) {
 	}
 }
 
-func TestEmitGenArtifactFallsBackForUncoveredNativeOwnedModule(t *testing.T) {
+func TestEmitGenArtifactUsesNativeOwnedFastPathForStructFieldAssign(t *testing.T) {
 	dir := t.TempDir()
 	target := writeGenTestFile(t, dir, "main.osty", `struct Pair { left: Int, right: Int }
 
@@ -276,10 +276,12 @@ fn main() {
 	if err != nil {
 		t.Fatalf("prepareGenBackendEntry() error = %v", err)
 	}
-	if _, ok, _, err := backend.TryEmitNativeOwnedLLVMIRText(backendEntry, ""); err != nil {
+	want, ok, warnings, err := backend.TryEmitNativeOwnedLLVMIRText(backendEntry, "")
+	if err != nil {
 		t.Fatalf("TryEmitNativeOwnedLLVMIRText() error = %v", err)
-	} else if ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText() unexpectedly covered struct field assignment")
+	}
+	if !ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText() reported not covered for struct field assignment")
 	}
 
 	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
@@ -289,8 +291,96 @@ fn main() {
 	if result == nil {
 		t.Fatal("emitGenArtifact() result is nil")
 	}
-	if !strings.Contains(string(got), "%Pair = type { i64, i64 }") {
-		t.Fatalf("fallback llvm-ir missing Pair type:\n%s", got)
+	if string(got) != string(want) {
+		t.Fatalf("gen llvm-ir did not use native struct-field fast path output\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+	if len(result.Warnings) != len(warnings) {
+		t.Fatalf("warning count = %d, want %d", len(result.Warnings), len(warnings))
+	}
+}
+
+func TestEmitGenArtifactUsesNativeOwnedFastPathForListIndex(t *testing.T) {
+	dir := t.TempDir()
+	target := writeGenTestFile(t, dir, "main.osty", `fn main() {
+    let xs = [1, 2]
+    println(xs[0])
+}
+`)
+
+	entry, err := loadGenPackageEntry(target)
+	if err != nil {
+		t.Fatalf("loadGenPackageEntry() error = %v", err)
+	}
+	oldTry := tryExternalGenLLVMIR
+	tryExternalGenLLVMIR = func(*genPackageEntry) ([]byte, bool, []error, error) {
+		return nil, false, nil, nil
+	}
+	t.Cleanup(func() { tryExternalGenLLVMIR = oldTry })
+	backendEntry, err := prepareGenBackendEntry("main", entry)
+	if err != nil {
+		t.Fatalf("prepareGenBackendEntry() error = %v", err)
+	}
+	want, ok, warnings, err := backend.TryEmitNativeOwnedLLVMIRText(backendEntry, "")
+	if err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText() reported not covered for list index")
+	}
+
+	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
+	if err != nil {
+		t.Fatalf("emitGenArtifact() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("emitGenArtifact() result is nil")
+	}
+	if string(got) != string(want) {
+		t.Fatalf("gen llvm-ir did not use native list fast path output\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+	if len(result.Warnings) != len(warnings) {
+		t.Fatalf("warning count = %d, want %d", len(result.Warnings), len(warnings))
+	}
+}
+
+func TestEmitGenArtifactFallsBackForUncoveredNativeOwnedModule(t *testing.T) {
+	dir := t.TempDir()
+	target := writeGenTestFile(t, dir, "main.osty", `struct Pair { left: Int, right: Int }
+
+fn main() {
+    let xs = [Pair { left: 1, right: 2 }]
+    println(xs[0].left)
+}
+`)
+
+	entry, err := loadGenPackageEntry(target)
+	if err != nil {
+		t.Fatalf("loadGenPackageEntry() error = %v", err)
+	}
+	oldTry := tryExternalGenLLVMIR
+	tryExternalGenLLVMIR = func(*genPackageEntry) ([]byte, bool, []error, error) {
+		return nil, false, nil, nil
+	}
+	t.Cleanup(func() { tryExternalGenLLVMIR = oldTry })
+	backendEntry, err := prepareGenBackendEntry("main", entry)
+	if err != nil {
+		t.Fatalf("prepareGenBackendEntry() error = %v", err)
+	}
+	if _, ok, _, err := backend.TryEmitNativeOwnedLLVMIRText(backendEntry, ""); err != nil {
+		t.Fatalf("TryEmitNativeOwnedLLVMIRText() error = %v", err)
+	} else if ok {
+		t.Fatal("TryEmitNativeOwnedLLVMIRText() unexpectedly covered composite list index")
+	}
+
+	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
+	if err != nil {
+		t.Fatalf("emitGenArtifact() error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("emitGenArtifact() result is nil")
+	}
+	if !strings.Contains(string(got), "@osty_rt_list_get_bytes_v1") {
+		t.Fatalf("fallback llvm-ir missing bytes list get runtime call:\n%s", got)
 	}
 }
 
