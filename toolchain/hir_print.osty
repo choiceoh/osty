@@ -918,8 +918,8 @@ fn hirPrintEscapeString(text: String) -> String {
     strings.replaceAll(newline, "\t", "\\t")
 }
 
-fn hirPrintEscapeChar(value: Char) -> String {
-    if value == '\'' {
+fn hirPrintEscapeChar(value: Int) -> String {
+    if value == 39 {
         "\\'"
     } else {
         "{value}"

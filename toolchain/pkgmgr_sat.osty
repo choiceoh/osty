@@ -172,17 +172,25 @@ pub fn satIntervalContains(iv: SatInterval, v: SemVersion) -> Bool {
     if !(satBoundIsUnbounded(iv.low)) {
         let cmp = compareSemVersion(v, iv.low.version)
         match iv.low.kind {
-            SatUnbounded -> true,
-            SatInclusive -> if cmp < 0 { return false },
-            SatExclusive -> if cmp <= 0 { return false },
+            SatUnbounded -> {},
+            SatInclusive -> {
+                if cmp < 0 { return false }
+            },
+            SatExclusive -> {
+                if cmp <= 0 { return false }
+            },
         }
     }
     if !(satBoundIsUnbounded(iv.high)) {
         let cmp = compareSemVersion(v, iv.high.version)
         match iv.high.kind {
-            SatUnbounded -> true,
-            SatInclusive -> if cmp > 0 { return false },
-            SatExclusive -> if cmp >= 0 { return false },
+            SatUnbounded -> {},
+            SatInclusive -> {
+                if cmp > 0 { return false }
+            },
+            SatExclusive -> {
+                if cmp >= 0 { return false }
+            },
         }
     }
     true
