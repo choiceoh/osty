@@ -1,0 +1,709 @@
+// monomorph_driver.osty — Stages C+D+E of the self-hosted port of
+// `internal/ir/monomorph.go`.
+//
+// Builds on Stage B (#713), which landed `MonoState` + the request
+// / drain / dedupe worklist engine with stubbed emit bodies. This
+// file fills in those emit bodies (Stage D), adds the AST scanner
+// walker (Stage C), and wires up the top-level entry point
+// `hirMonomorphizeModule` (Stage E).
+//
+// Port mapping:
+//
+//   internal/ir/monomorph.go:36   -> hirMonomorphizeModule
+//   internal/ir/monomorph.go:1258 -> monoEmitSpecialization body
+//   internal/ir/monomorph.go:495  -> monoEmitStructSpec helper
+//   internal/ir/monomorph.go:545  -> monoEmitEnumSpec helper
+//   internal/ir/monomorph.go:1276 -> monoScanDecl
+//   internal/ir/monomorph.go:1344 -> monoScanFnBody
+//   internal/ir/monomorph.go:1359 -> monoScanBlock
+//   internal/ir/monomorph.go:1373 -> monoScanStmt
+//   internal/ir/monomorph.go:1753 -> monoScanExpr
+//
+// Scope limits (open work, recorded as issues on the output):
+//   - Builtin-receiver method-call specialization
+//     (builtinReceiverSubstEnv + rewriteBuiltinReceiverMethodCall)
+//   - Pattern-from-scrutinee inference + variant literal type
+//     inference from context (resolvedExprType helpers)
+//   - Generic method-call env merge specialization
+//     (rewriteGenericMethodCall)
+//
+// These rely on algorithms with many edge cases; when the walker
+// hits one, `monoAddErr` records a "Stage F TODO" note and the
+// call site stays pointing at the template, letting the LLVM
+// backend fall back to the pre-mono HIR path.
+
+// ====================================================================
+// Stage D: emit bodies (fills in the Stage B stubs)
+// ====================================================================
+
+/// monoEmitFnSpecialization materialises one queued fn
+/// specialization. Clones the template via `hirSpecializeFnDecl`,
+/// renames to the mangled symbol, drops the generics list, scans
+/// the cloned body for further call sites (driving the worklist
+/// to fixpoint), then appends to the output module.
+///
+/// Replaces the Stage B stub `monoEmitSpecialization`. The
+/// original stubbed signature `(state, rec: MonoInstance)` is
+/// kept so existing call sites in `monoDrain` continue to
+/// dispatch without churn.
+pub fn monoEmitFnSpecialization(state: MonoState, rec: MonoInstance) {
+    let env = hirBuildSubstEnv(rec.fnDecl.generics, rec.typeArgs)
+    let mut spec = hirSpecializeFnDecl(rec.fnDecl, env)
+    spec.name = rec.mangled
+    spec.generics = []
+    // Scan the cloned body to discover further call sites —
+    // specialisations may reference other generics, which enqueues
+    // further requests through the state.
+    monoScanBlock(state, spec.body)
+    state.out.fns.push(spec)
+}
+
+/// monoEmitTypeSpecializationBody materialises one queued nominal-
+/// type specialization. Dispatches on `ownerKind` and delegates to
+/// the struct / enum specialiser. Interface specialisation is
+/// deferred — interfaces never reach the MIR path today, so any
+/// request records an issue note.
+///
+/// Replaces the Stage B stub body.
+pub fn monoEmitTypeSpecializationBody(state: MonoState, rec: MonoTypeInstance) {
+    if rec.ownerKind == 0 {
+        monoEmitStructSpec(state, rec)
+        return
+    }
+    if rec.ownerKind == 1 {
+        monoEmitEnumSpec(state, rec)
+        return
+    }
+    monoAddErr(
+        state,
+        "mono Stage F TODO: interface specialization deferred",
+    )
+}
+
+fn monoEmitStructSpec(state: MonoState, rec: MonoTypeInstance) {
+    let env = hirBuildSubstEnv(rec.structDecl.generics, rec.typeArgs)
+    let mut spec = hirSpecializeStructDecl(rec.structDecl, env)
+    spec.name = rec.mangled
+    spec.generics = []
+    // Preserve the template origin so downstream passes can re-map
+    // the specialization back to its source (LLVM layout hint reuse).
+    spec.builtinSource = rec.structDecl.name
+    // Carry the concrete type-args post-mono so the LLVM emitter
+    // re-associates a `_ZTS…` mangled struct back with its surface
+    // Map<K, V> / Option<T> form for intrinsic dispatch.
+    spec.builtinSourceArgs = rec.typeArgs
+    // Index the specialization by mangled symbol so future method-
+    // call requests can resolve the owner before the method body
+    // walks the struct's own methods.
+    state.structsByMangledKey.push(rec.mangled)
+    state.structsByMangled.push(spec)
+    state.out.structs.push(spec)
+    // Scan surviving method bodies for further instantiation
+    // requests. Method signatures were rewritten in the
+    // specialiser; bodies weren't walked yet.
+    for m in spec.methods {
+        monoScanBlock(state, m.body)
+    }
+}
+
+fn monoEmitEnumSpec(state: MonoState, rec: MonoTypeInstance) {
+    let env = hirBuildSubstEnv(rec.enumDecl.generics, rec.typeArgs)
+    let mut spec = hirSpecializeEnumDecl(rec.enumDecl, env)
+    spec.name = rec.mangled
+    spec.generics = []
+    spec.builtinSource = rec.enumDecl.name
+    spec.builtinSourceArgs = rec.typeArgs
+    state.enumsByMangledKey.push(rec.mangled)
+    state.enumsByMangled.push(spec)
+    state.out.enums.push(spec)
+    for m in spec.methods {
+        monoScanBlock(state, m.body)
+    }
+}
+
+/// monoEmitMethodSpecializationBody is the method-clone emitter
+/// counterpart. Stage B left this as a stub; Stage D needs to
+/// merge the receiver-level env with the method-local env, apply
+/// to the cloned method, and append to the already-emitted
+/// owner's method list.
+///
+/// The full env-merge logic (receiver captured at emit time vs.
+/// method-local captured at request time) is the subtle part of
+/// Go's `emitMethodSpecialization`. This skeleton fills in the
+/// simple path (both envs present in `state.receiverEnvs`) and
+/// records an issue when the receiver lookup fails.
+pub fn monoEmitMethodSpecializationBody(state: MonoState, rec: MonoMethodInstance) {
+    let ownerEnvIdx = monoFindReceiverEnv(state, rec.ownerMangled)
+    if ownerEnvIdx < 0 {
+        monoAddErr(
+            state,
+            "mono Stage F TODO: method " + rec.mangledMethodName
+                + " on unresolved owner " + rec.ownerMangled,
+        )
+        return
+    }
+    let receiverEnv = state.receiverEnvs[ownerEnvIdx]
+    let env = hirMergeSubstEnv(receiverEnv, rec.methodEnv)
+    let mut spec = hirSpecializeFnDecl(rec.origMethod, env)
+    spec.name = rec.mangledMethodName
+    spec.generics = []
+    monoScanBlock(state, spec.body)
+    // Append to the owner's method list.
+    if rec.ownerKind == 0 {
+        monoAppendMethodToStruct(state, rec.ownerMangled, spec)
+    } else if rec.ownerKind == 1 {
+        monoAppendMethodToEnum(state, rec.ownerMangled, spec)
+    } else {
+        monoAddErr(
+            state,
+            "mono: method specialization on unsupported ownerKind " + monoIntToStr(rec.ownerKind),
+        )
+    }
+}
+
+fn monoFindReceiverEnv(state: MonoState, mangled: String) -> Int {
+    let mut i = 0
+    for k in state.receiverEnvKey {
+        if k == mangled {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn monoAppendMethodToStruct(state: MonoState, mangled: String, m: HirFnDecl) {
+    // Walk the output struct list in place; the clone we appended
+    // at emit time shares a reference through state.out.structs.
+    let mut i = 0
+    for decl in state.out.structs {
+        if decl.name == mangled {
+            state.out.structs[i].methods.push(m)
+            return
+        }
+        i = i + 1
+    }
+}
+
+fn monoAppendMethodToEnum(state: MonoState, mangled: String, m: HirFnDecl) {
+    let mut i = 0
+    for decl in state.out.enums {
+        if decl.name == mangled {
+            state.out.enums[i].methods.push(m)
+            return
+        }
+        i = i + 1
+    }
+}
+
+// ---- Tiny local int → string used by error formatting ------------
+
+fn monoIntToStr(n: Int) -> String {
+    if n == 0 {
+        return "0"
+    }
+    let mut negative = false
+    let mut value = n
+    if value < 0 {
+        negative = true
+        value = 0 - value
+    }
+    let mut digits: List<String> = []
+    for value > 0 {
+        let d = value % 10
+        digits.push(monoDigitChar(d))
+        value = value / 10
+    }
+    let mut out: List<String> = []
+    if negative { out.push("-") }
+    let mut j = digits.len() - 1
+    for j >= 0 {
+        out.push(digits[j])
+        j = j - 1
+    }
+    let s = ""
+    let mut acc = s
+    for p in out {
+        acc = acc + p
+    }
+    acc
+}
+
+fn monoDigitChar(d: Int) -> String {
+    match d {
+        0 -> "0", 1 -> "1", 2 -> "2", 3 -> "3", 4 -> "4",
+        5 -> "5", 6 -> "6", 7 -> "7", 8 -> "8", 9 -> "9",
+        _ -> "?",
+    }
+}
+
+// ====================================================================
+// Stage C: scanner walker
+// ====================================================================
+
+/// monoScanBlock walks every stmt in `b` + optional trailing
+/// expression. Mirrors Go's `scanBlock`.
+pub fn monoScanBlock(state: MonoState, b: HirBlock) {
+    for stmt in b.stmts {
+        monoScanStmt(state, stmt)
+    }
+    if b.hasResult {
+        monoScanExpr(state, b.result)
+    }
+}
+
+/// monoScanStmt dispatches on HirStmtKind and recurses into every
+/// sub-expression / sub-block. No substitution happens here — the
+/// scanner's only job is call-site discovery (via `monoScanExpr`'s
+/// `HirExprCall` / `HirExprMethod` / `HirExprIdent` branches) and
+/// nominal-type discovery (via `monoScanType`).
+pub fn monoScanStmt(state: MonoState, stmt: HirStmt) {
+    match stmt.kind {
+        HirStmtBlock -> monoScanBlock(state, stmt.block),
+        HirStmtLet -> {
+            if stmt.letHasType {
+                monoScanType(state, stmt.letTyp)
+            }
+            if stmt.letHasValue {
+                monoScanExpr(state, stmt.letValue)
+            }
+        },
+        HirStmtExpr -> monoScanExpr(state, stmt.exprValue),
+        HirStmtAssign -> {
+            for t in stmt.assignTargets {
+                monoScanExpr(state, t)
+            }
+            monoScanExpr(state, stmt.assignValue)
+        },
+        HirStmtReturn -> {
+            if stmt.returnHasValue {
+                monoScanExpr(state, stmt.returnValue)
+            }
+        },
+        HirStmtIf -> {
+            monoScanExpr(state, stmt.ifCond)
+            monoScanBlock(state, stmt.ifThen)
+            if stmt.ifHasElse {
+                monoScanBlock(state, stmt.ifElse)
+            }
+        },
+        HirStmtFor -> {
+            if stmt.forHasCond { monoScanExpr(state, stmt.forCond) }
+            if stmt.forHasIter { monoScanExpr(state, stmt.forIter) }
+            if stmt.forHasStart { monoScanExpr(state, stmt.forStart) }
+            if stmt.forHasEnd { monoScanExpr(state, stmt.forEnd) }
+            monoScanBlock(state, stmt.forBody)
+        },
+        HirStmtMatch -> {
+            monoScanExpr(state, stmt.matchScrutinee)
+            for arm in stmt.matchArms {
+                if arm.hasGuard {
+                    monoScanExpr(state, arm.guard)
+                }
+                monoScanBlock(state, arm.body)
+            }
+        },
+        HirStmtDefer -> monoScanBlock(state, stmt.deferBody),
+        HirStmtChanSend -> {
+            monoScanExpr(state, stmt.chanChannel)
+            monoScanExpr(state, stmt.chanValue)
+        },
+        _ -> {},
+    }
+}
+
+/// monoScanExpr is the core call-site discovery walker. For every
+/// expression kind that carries type info it:
+///   - Recurses into child expressions / blocks
+///   - Scans embedded HirType fields via monoScanType for
+///     nominal-template references
+///   - On Call / Method / Ident with fn-kind callees with
+///     non-empty TypeArgs, calls monoRequestFn to enqueue the
+///     specialization and rewrites the reference in place to the
+///     mangled symbol
+pub fn monoScanExpr(state: MonoState, e: HirExpr) {
+    if !hirExprIsValid(e) {
+        return
+    }
+    monoScanType(state, e.typ)
+    match e.kind {
+        HirExprCall -> monoScanCall(state, e),
+        HirExprMethod -> monoScanMethod(state, e),
+        HirExprIdent -> monoScanIdent(state, e),
+        HirExprUnary -> {
+            if e.unaryChild.len() > 0 { monoScanExpr(state, e.unaryChild[0]) }
+        },
+        HirExprBinary -> {
+            if e.binaryLeft.len() > 0 { monoScanExpr(state, e.binaryLeft[0]) }
+            if e.binaryRight.len() > 0 { monoScanExpr(state, e.binaryRight[0]) }
+        },
+        HirExprField -> {
+            if e.fieldTarget.len() > 0 { monoScanExpr(state, e.fieldTarget[0]) }
+        },
+        HirExprIndex -> {
+            if e.indexTarget.len() > 0 { monoScanExpr(state, e.indexTarget[0]) }
+            if e.indexIndex.len() > 0 { monoScanExpr(state, e.indexIndex[0]) }
+        },
+        HirExprTupleAccess -> {
+            if e.tupleAccessTarget.len() > 0 { monoScanExpr(state, e.tupleAccessTarget[0]) }
+        },
+        HirExprBlock -> {
+            if e.blockBody.len() > 0 { monoScanBlock(state, e.blockBody[0]) }
+        },
+        HirExprIf -> {
+            if e.ifExprCond.len() > 0 { monoScanExpr(state, e.ifExprCond[0]) }
+            if e.ifExprThen.len() > 0 { monoScanBlock(state, e.ifExprThen[0]) }
+            if e.ifExprElse.len() > 0 { monoScanBlock(state, e.ifExprElse[0]) }
+        },
+        HirExprIfLet -> {
+            if e.ifLetScrutinee.len() > 0 { monoScanExpr(state, e.ifLetScrutinee[0]) }
+            if e.ifLetThen.len() > 0 { monoScanBlock(state, e.ifLetThen[0]) }
+            if e.ifLetHasElse && e.ifLetElse.len() > 0 {
+                monoScanBlock(state, e.ifLetElse[0])
+            }
+        },
+        HirExprMatch -> {
+            if e.matchExprScrutinee.len() > 0 {
+                monoScanExpr(state, e.matchExprScrutinee[0])
+            }
+            for arm in e.matchExprArms {
+                if arm.hasGuard {
+                    monoScanExpr(state, arm.guard)
+                }
+                monoScanBlock(state, arm.body)
+            }
+        },
+        HirExprCoalesce -> {
+            if e.coalesceLeft.len() > 0 { monoScanExpr(state, e.coalesceLeft[0]) }
+            if e.coalesceRight.len() > 0 { monoScanExpr(state, e.coalesceRight[0]) }
+        },
+        HirExprQuestion -> {
+            if e.questionChild.len() > 0 { monoScanExpr(state, e.questionChild[0]) }
+        },
+        HirExprList -> {
+            monoScanType(state, e.listElem)
+            for el in e.listElems {
+                monoScanExpr(state, el)
+            }
+        },
+        HirExprTupleLit -> {
+            for el in e.tupleElems {
+                monoScanExpr(state, el)
+            }
+        },
+        HirExprMapLit -> {
+            monoScanType(state, e.mapKeyT)
+            monoScanType(state, e.mapValT)
+            for entry in e.mapEntries {
+                monoScanExpr(state, entry.key)
+                monoScanExpr(state, entry.value)
+            }
+        },
+        HirExprStructLit -> {
+            for f in e.structFields {
+                if f.hasValue {
+                    monoScanExpr(state, f.value)
+                }
+            }
+            if e.structHasSpread && e.structSpread.len() > 0 {
+                monoScanExpr(state, e.structSpread[0])
+            }
+        },
+        HirExprVariantLit -> {
+            for a in e.variantArgs {
+                monoScanExpr(state, a.value)
+            }
+        },
+        HirExprClosure -> {
+            if e.closureBody.len() > 0 {
+                monoScanBlock(state, e.closureBody[0])
+            }
+        },
+        HirExprRange -> {
+            if e.rangeStart.len() > 0 { monoScanExpr(state, e.rangeStart[0]) }
+            if e.rangeEnd.len() > 0 { monoScanExpr(state, e.rangeEnd[0]) }
+        },
+        HirExprStringLit -> {
+            for part in e.strParts {
+                if !part.isLit && part.expr.len() > 0 {
+                    monoScanExpr(state, part.expr[0])
+                }
+            }
+        },
+        HirExprIntrinsic -> {
+            for a in e.intrinsicArgs {
+                monoScanExpr(state, a.value)
+            }
+        },
+        _ -> {},
+    }
+}
+
+/// monoScanType recurses into a HirType and enqueues specialization
+/// requests for any NamedType whose head matches a generic struct
+/// or enum template.
+pub fn monoScanType(state: MonoState, t: HirType) {
+    match t.kind {
+        HirTypeNamed -> {
+            if t.namedArgs.len() > 0 {
+                let si = monoFindGenericStruct(state, t.namedName)
+                if si >= 0 {
+                    let _ = monoRequestStructType(
+                        state,
+                        state.genericStructs[si],
+                        t.namedArgs,
+                    )
+                } else {
+                    let ei = monoFindGenericEnum(state, t.namedName)
+                    if ei >= 0 {
+                        let _ = monoRequestEnumType(
+                            state,
+                            state.genericEnums[ei],
+                            t.namedArgs,
+                        )
+                    }
+                }
+                // Recurse into each arg (nested generics).
+                for a in t.namedArgs {
+                    monoScanType(state, a)
+                }
+            }
+        },
+        HirTypeOptional -> {
+            if t.optionalInner.len() > 0 {
+                monoScanType(state, t.optionalInner[0])
+            }
+        },
+        HirTypeTuple -> {
+            for e in t.tupleElems {
+                monoScanType(state, e)
+            }
+        },
+        HirTypeFn -> {
+            for p in t.fnParams {
+                monoScanType(state, p)
+            }
+            if t.fnReturn.len() > 0 {
+                monoScanType(state, t.fnReturn[0])
+            }
+        },
+        _ -> {},
+    }
+}
+
+fn monoFindGenericStruct(state: MonoState, name: String) -> Int {
+    let mut i = 0
+    for n in state.genericStructNames {
+        if n == name {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn monoFindGenericEnum(state: MonoState, name: String) -> Int {
+    let mut i = 0
+    for n in state.genericEnumNames {
+        if n == name {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn monoFindGenericFn(state: MonoState, name: String) -> Int {
+    let mut i = 0
+    for n in state.genericFnNames {
+        if n == name {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+// ---- Call dispatchers --------------------------------------------
+
+fn monoScanCall(state: MonoState, e: HirExpr) {
+    if e.callCallee.len() > 0 {
+        let callee = e.callCallee[0]
+        match callee.kind {
+            HirExprIdent -> {
+                if callee.identKind == HirIdentFn && e.callTypeArgs.len() > 0 {
+                    let gi = monoFindGenericFn(state, callee.identName)
+                    if gi >= 0 {
+                        let mangled = monoRequestFn(
+                            state,
+                            state.genericFns[gi],
+                            e.callTypeArgs,
+                        )
+                        e.callCallee[0].identName = mangled
+                    }
+                }
+            },
+            _ -> monoScanExpr(state, callee),
+        }
+    }
+    for a in e.callArgs {
+        monoScanExpr(state, a.value)
+    }
+    for ta in e.callTypeArgs {
+        monoScanType(state, ta)
+    }
+}
+
+fn monoScanMethod(state: MonoState, e: HirExpr) {
+    if e.methodReceiver.len() > 0 {
+        monoScanExpr(state, e.methodReceiver[0])
+    }
+    for a in e.methodArgs {
+        monoScanExpr(state, a.value)
+    }
+    for ta in e.methodTypeArgs {
+        monoScanType(state, ta)
+    }
+    // Full generic-method-call specialization (receiver-env merge +
+    // builtin-receiver rewrite) is Stage F work.
+    if e.methodTypeArgs.len() > 0 {
+        monoAddErr(
+            state,
+            "mono Stage F TODO: generic method call \"" + e.methodName
+                + "\" — env-merge specialization deferred",
+        )
+    }
+}
+
+fn monoScanIdent(state: MonoState, e: HirExpr) {
+    if e.identKind == HirIdentFn && e.identTypeArgs.len() > 0 {
+        let gi = monoFindGenericFn(state, e.identName)
+        if gi >= 0 {
+            let mangled = monoRequestFn(
+                state,
+                state.genericFns[gi],
+                e.identTypeArgs,
+            )
+            e.identName = mangled
+        }
+    }
+    for ta in e.identTypeArgs {
+        monoScanType(state, ta)
+    }
+}
+
+// ====================================================================
+// Stage E: top-level entry point
+// ====================================================================
+
+/// hirMonomorphizeModule is the self-host analogue of Go's
+/// `Monomorphize(mod *Module)`. Pipeline:
+///
+///   1. Seed MonoState with the source package
+///   2. Partition the source module's decls: generic → index for
+///      template lookup; non-generic → pass straight through to
+///      the output module
+///   3. Scan every non-generic body for generic call-sites
+///      (entry-point discovery — the worklist seeds from here)
+///   4. Drain the worklists (fn / type / method) in alternation
+///      until every queue is empty. `monoDrain` (Stage B) walks
+///      this loop; `monoEmitFnSpecialization` /
+///      `monoEmitTypeSpecializationBody` /
+///      `monoEmitMethodSpecializationBody` materialise each
+///      request, and the emitter scans the cloned body, which
+///      may enqueue further requests
+///   5. Copy accumulated errs onto the output module's issue list
+///      so downstream passes can surface them
+///
+/// The returned module has no remaining generic decls; every call
+/// site has been rewritten to reference the specialized symbol.
+pub fn hirMonomorphizeModule(src: HirModule) -> HirModule {
+    let state = monoNewState(src.packageName)
+    hirMonoSeedSource(state, src)
+    hirMonoScanRoots(state)
+    monoDrain(state)
+    hirMonoCopyErrsToModule(state)
+    state.out
+}
+
+/// hirMonoSeedSource populates MonoState's template indexes and
+/// copies non-generic decls to the output module. Generic decls
+/// stay out of the output — they enter via specialization emit.
+fn hirMonoSeedSource(state: MonoState, src: HirModule) {
+    for decl in src.fns {
+        if decl.generics.len() > 0 {
+            state.genericFnNames.push(decl.name)
+            state.genericFns.push(decl)
+        } else {
+            state.out.fns.push(decl)
+        }
+    }
+    for decl in src.structs {
+        if decl.generics.len() > 0 {
+            state.genericStructNames.push(decl.name)
+            state.genericStructs.push(decl)
+        } else {
+            state.out.structs.push(decl)
+            state.structNames.push(decl.name)
+            state.structs.push(decl)
+        }
+    }
+    for decl in src.enums {
+        if decl.generics.len() > 0 {
+            state.genericEnumNames.push(decl.name)
+            state.genericEnums.push(decl)
+        } else {
+            state.out.enums.push(decl)
+            state.enumNames.push(decl.name)
+            state.enums.push(decl)
+        }
+    }
+    for decl in src.interfaces {
+        if decl.generics.len() > 0 {
+            state.genericInterfaceNames.push(decl.name)
+            state.genericInterfaces.push(decl)
+        } else {
+            state.out.interfaces.push(decl)
+        }
+    }
+    for decl in src.lets { state.out.lets.push(decl) }
+    for decl in src.uses { state.out.uses.push(decl) }
+    for decl in src.aliases { state.out.aliases.push(decl) }
+    for stmt in src.script { state.out.script.push(stmt) }
+}
+
+/// hirMonoScanRoots walks every non-generic body + script + global
+/// initialiser that passed through the seeder. Each call-site
+/// discovery there is an entry point into the specialization
+/// graph; the worklist engine (monoDrain) does the rest.
+fn hirMonoScanRoots(state: MonoState) {
+    for decl in state.out.fns {
+        monoScanBlock(state, decl.body)
+    }
+    for decl in state.out.structs {
+        for m in decl.methods {
+            monoScanBlock(state, m.body)
+        }
+    }
+    for decl in state.out.enums {
+        for m in decl.methods {
+            monoScanBlock(state, m.body)
+        }
+    }
+    for ld in state.out.lets {
+        if ld.hasValue {
+            monoScanExpr(state, ld.value)
+        }
+    }
+    for stmt in state.out.script {
+        monoScanStmt(state, stmt)
+    }
+}
+
+/// hirMonoCopyErrsToModule flushes accumulated issue strings onto
+/// the output module's issue list so downstream passes see them.
+fn hirMonoCopyErrsToModule(state: MonoState) {
+    for msg in state.errs {
+        hirModuleAddIssue(state.out, msg)
+    }
+}
