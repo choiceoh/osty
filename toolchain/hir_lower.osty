@@ -1124,3 +1124,337 @@ pub fn hirLowerAddTypeAliasDecl(l: HirLowerer, t: HirTypeAliasDecl) {
 pub fn hirLowerAddUseDecl(l: HirLowerer, u: HirUseDecl) {
     l.out.uses.push(u)
 }
+
+// ====================================================================
+// Stmt assembly helpers (Stage 5d)
+// ====================================================================
+//
+// Small normalization helpers used by the future AST walker. Each
+// takes already-lowered children (HirExpr / HirBlock / HirPattern)
+// and returns the appropriate HirStmt variant — making classification
+// decisions (Infinite vs While vs Range vs In, name-form vs pattern-
+// form Let, etc.) in a central place so the AST walker can stay shape-
+// agnostic.
+//
+// The low-level hir.osty constructors already cover every stmt shape;
+// these helpers handle the "which constructor to call" logic that
+// depends on what's present in the input.
+
+// ---- Pattern utilities -----------------------------------------
+
+/// HirLowerNameBind is a (name, ok) pair — Osty doesn't have tuple
+/// returns in our convention.
+pub struct HirLowerNameBind {
+    pub name: String,
+    pub ok: Bool,
+}
+
+/// hirLowerSimpleBindName returns (name, true) when `pattern` is a
+/// bare IdentPat (no mut, no nested binding). All other patterns
+/// require the full pattern-binding path via HirPattern.
+///
+/// Mirrors Go's `simpleBindName` but extends to cover the `mut`
+/// case too — callers that want the Go semantics (reject `mut` for
+/// simple-name form) can check pattern.identMut themselves.
+pub fn hirLowerSimpleBindName(pattern: HirPattern) -> HirLowerNameBind {
+    match pattern.kind {
+        HirPatIdent -> {
+            if pattern.identMut {
+                return HirLowerNameBind { name: "", ok: false }
+            }
+            HirLowerNameBind { name: pattern.identName, ok: true }
+        },
+        _ -> HirLowerNameBind { name: "", ok: false },
+    }
+}
+
+// ---- Type-yield classifier -------------------------------------
+
+/// hirLowerExpressionYieldsValue reports whether an expression with
+/// the given type produces a value worth materialising at a stmt-
+/// position call site. Unit / Never / Err types are "no value"; every
+/// other type is. Mirrors Go's `expressionYieldsValue`.
+///
+/// Used to decide whether an `ExprStmt { X: IfExpr / MatchExpr }`
+/// should promote to `IfStmt` / `MatchStmt` — the expression forms
+/// carry values, the statement forms discard them.
+pub fn hirLowerExpressionYieldsValue(typ: HirType) -> Bool {
+    if !hirTypeIsValid(typ) {
+        return false
+    }
+    if hirTypeIsUnit(typ) {
+        return false
+    }
+    if hirTypeIsNever(typ) {
+        return false
+    }
+    if hirTypeIsErr(typ) {
+        return false
+    }
+    true
+}
+
+// ---- LetStmt ---------------------------------------------------
+
+/// hirLowerAssembleLetStmt normalises a let-binding:
+///   - bare `IdentPat` (non-mut) → hirLetStmt (name form)
+///   - every other pattern       → hirLetStmtPattern
+///
+/// `typ` may be `hirTypeInvalid()` when the source had no declared
+/// type; in that case the helper falls back to `value.typ` when
+/// `hasValue` is true (matches Go's `out.Type = out.Value.Type()`).
+/// Missing value with invalid type produces a no-value let stmt
+/// matching Go's `s.Value == nil` branch.
+pub fn hirLowerAssembleLetStmt(
+    pattern: HirPattern,
+    typ: HirType,
+    hasValue: Bool,
+    value: HirExpr,
+    mutable: Bool,
+    span: HirSpan,
+) -> HirStmt {
+    let simple = hirLowerSimpleBindName(pattern)
+
+    let finalType = if hirTypeIsValid(typ) {
+        typ
+    } else if hasValue && hirTypeIsValid(value.typ) {
+        value.typ
+    } else {
+        hirTypeInvalid()
+    }
+
+    if !hasValue {
+        if simple.ok {
+            return hirLetStmtNoValue(simple.name, finalType, mutable, span)
+        }
+        // Pattern-form without a value is unusual — the resolver
+        // requires let bindings to have either a type or a value.
+        // Emit the pattern form anyway so downstream can diagnose.
+        let mut s = hirStmtInvalid()
+        s.kind = HirStmtLet
+        s.letPattern = pattern
+        s.letHasPattern = true
+        s.letTyp = finalType
+        s.letHasType = hirTypeIsValid(finalType)
+        s.letMut = mutable
+        s.span = span
+        return s
+    }
+    if simple.ok {
+        return hirLetStmt(simple.name, finalType, value, mutable, span)
+    }
+    hirLetStmtPattern(pattern, finalType, value, mutable, span)
+}
+
+// ---- AssignStmt ------------------------------------------------
+
+/// hirLowerAssembleAssignStmt picks the single- vs multi-target
+/// form based on the targets list length. Compound operators are
+/// only valid with a single target (the resolver enforces this);
+/// the helper still threads the raw `op` through so callers see a
+/// well-formed multi-target `=` or a defensive `op x = …` for the
+/// unusual cases.
+pub fn hirLowerAssembleAssignStmt(
+    op: HirAssignOp,
+    targets: List<HirExpr>,
+    value: HirExpr,
+    span: HirSpan,
+) -> HirStmt {
+    if targets.len() == 1 {
+        return hirAssignStmt(op, targets[0], value, span)
+    }
+    hirAssignStmtMulti(op, targets, value, span)
+}
+
+// ---- IfStmt ----------------------------------------------------
+
+/// hirLowerAssembleIfStmt wraps a statement-position if. When the
+/// else branch is absent, `hasElse` should be false; `elseBlock` is
+/// then ignored. Callers who need an `else if` chain should flatten
+/// it themselves via hirLowerFlattenElseIfChain before calling.
+pub fn hirLowerAssembleIfStmt(
+    cond: HirExpr,
+    thenBlock: HirBlock,
+    hasElse: Bool,
+    elseBlock: HirBlock,
+    span: HirSpan,
+) -> HirStmt {
+    if hasElse {
+        return hirIfStmtElse(cond, thenBlock, elseBlock, span)
+    }
+    hirIfStmt(cond, thenBlock, span)
+}
+
+/// hirLowerFlattenElseIf wraps an `else if` (produced by the AST
+/// walker as an IfExpr not directly usable as a Block) into a
+/// singleton-statement block. Mirrors Go's `lowerElseStmt` IfExpr
+/// branch. Callers pass the already-lowered HirIfStmt (or
+/// HirExprStmt wrapping an IfLetExpr) and get back a Block that
+/// can slot into HirIfStmt.ifElse.
+pub fn hirLowerFlattenElseIf(stmt: HirStmt, span: HirSpan) -> HirBlock {
+    let mut b = hirBlock(span)
+    hirBlockAppend(b, stmt)
+    b
+}
+
+/// hirLowerFlattenElseExpr wraps a non-if else expression into a
+/// singleton-statement block. Used when the else branch is a plain
+/// expression (e.g. a value literal in an if-else chain at stmt
+/// position). Mirrors Go's `lowerElseStmt` default branch.
+pub fn hirLowerFlattenElseExpr(e: HirExpr, span: HirSpan) -> HirBlock {
+    let mut b = hirBlock(span)
+    hirBlockAppend(b, hirExprStmt(e, span))
+    b
+}
+
+// ---- ForStmt ---------------------------------------------------
+
+/// hirLowerAssembleForStmt classifies a for-loop by the presence of
+/// pattern + iter + range-expr shape:
+///
+///   - no pattern, no iter     → Infinite loop
+///   - no pattern, has cond    → While
+///   - pattern, has range      → Range (caller signals via
+///                                 `isRange=true` + start/end/inclusive)
+///   - pattern, has iter       → In (iterator-shaped)
+///
+/// `loopVar` is the simple-identifier form when the pattern is a
+/// bare non-mut IdentPat; otherwise `hasPattern` is true and the
+/// full pattern drives destructuring.
+///
+/// The helper funnels into the specific `hirForXxxStmt`
+/// constructors, threading the right subset of arguments per kind.
+pub fn hirLowerAssembleForStmt(
+    hasPattern: Bool,
+    pattern: HirPattern,
+    hasCond: Bool,
+    cond: HirExpr,
+    hasIter: Bool,
+    iter: HirExpr,
+    isRange: Bool,
+    start: HirExpr,
+    end: HirExpr,
+    inclusive: Bool,
+    body: HirBlock,
+    span: HirSpan,
+) -> HirStmt {
+    // Infinite: no pattern + no iter/cond.
+    if !hasPattern && !hasIter && !hasCond {
+        return hirForInfiniteStmt(body, span)
+    }
+    // While: cond-controlled; no loop variable.
+    if !hasPattern && hasCond {
+        return hirForWhileStmt(cond, body, span)
+    }
+    // Range: pattern + start/end.
+    if isRange {
+        let simple = hirLowerSimpleBindName(pattern)
+        if simple.ok {
+            return hirForRangeStmt(simple.name, start, end, inclusive, body, span)
+        }
+        return hirForRangeStmtPattern(pattern, start, end, inclusive, body, span)
+    }
+    // In: pattern + arbitrary iter.
+    let simple = hirLowerSimpleBindName(pattern)
+    if simple.ok {
+        return hirForInStmt(simple.name, iter, body, span)
+    }
+    hirForInStmtPattern(pattern, iter, body, span)
+}
+
+// ---- ExprStmt promotion ----------------------------------------
+
+/// HirLowerStmtPromotion is a (stmt, promoted) pair — when an
+/// expression at statement position is actually an if / match with
+/// a unit/never value, the walker should emit the stmt form
+/// instead of `ExprStmt { X: IfExpr / MatchExpr }`. Callers check
+/// `promoted` and use `stmt` when true.
+pub struct HirLowerStmtPromotion {
+    pub stmt: HirStmt
+    pub promoted: Bool
+}
+
+/// hirLowerPromoteIfExprToStmt converts a statement-position
+/// HirIfExpr into a HirIfStmt when the expression yields no value
+/// (Unit/Never/Err). Returns `promoted=false` when the expression
+/// produces a value (in which case the caller should keep the
+/// ExprStmt wrapping).
+///
+/// Mirrors Go's lowerStmt branch:
+///     case *ast.ExprStmt:
+///         switch x := s.X.(type) {
+///         case *ast.IfExpr:
+///             if !x.IsIfLet { return l.lowerIfStmt(x) }
+///         }
+pub fn hirLowerPromoteIfExprToStmt(e: HirExpr) -> HirLowerStmtPromotion {
+    let isIf = match e.kind {
+        HirExprIf -> true,
+        _ -> false,
+    }
+    if !isIf {
+        return HirLowerStmtPromotion {
+            stmt: hirStmtInvalid(),
+            promoted: false,
+        }
+    }
+    if hirLowerExpressionYieldsValue(e.typ) {
+        return HirLowerStmtPromotion {
+            stmt: hirStmtInvalid(),
+            promoted: false,
+        }
+    }
+    let cond = if e.ifExprCond.len() > 0 {
+        e.ifExprCond[0]
+    } else {
+        hirExprInvalid()
+    }
+    let thenBlock = if e.ifExprThen.len() > 0 {
+        e.ifExprThen[0]
+    } else {
+        hirBlock(hirNoSpan())
+    }
+    if e.ifExprElse.len() > 0 {
+        return HirLowerStmtPromotion {
+            stmt: hirIfStmtElse(cond, thenBlock, e.ifExprElse[0], e.span),
+            promoted: true,
+        }
+    }
+    HirLowerStmtPromotion {
+        stmt: hirIfStmt(cond, thenBlock, e.span),
+        promoted: true,
+    }
+}
+
+/// hirLowerPromoteMatchExprToStmt converts a HirMatchExpr used at
+/// statement position into a HirMatchStmt when its value is
+/// discarded. Same shape / semantics as the IfExpr promoter.
+pub fn hirLowerPromoteMatchExprToStmt(e: HirExpr) -> HirLowerStmtPromotion {
+    let isMatch = match e.kind {
+        HirExprMatch -> true,
+        _ -> false,
+    }
+    if !isMatch {
+        return HirLowerStmtPromotion {
+            stmt: hirStmtInvalid(),
+            promoted: false,
+        }
+    }
+    if hirLowerExpressionYieldsValue(e.typ) {
+        return HirLowerStmtPromotion {
+            stmt: hirStmtInvalid(),
+            promoted: false,
+        }
+    }
+    let scrutinee = if e.matchExprScrutinee.len() > 0 {
+        e.matchExprScrutinee[0]
+    } else {
+        hirExprInvalid()
+    }
+    let mut s = hirMatchStmt(scrutinee, e.matchExprArms, e.span)
+    // Thread decision tree through when present (Stage 4f wire-up).
+    if e.matchExprHasTree {
+        s.matchHasTree = true
+        s.matchTree = e.matchExprTree
+    }
+    HirLowerStmtPromotion { stmt: s, promoted: true }
+}
