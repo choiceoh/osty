@@ -35,6 +35,7 @@ func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
 		// stale state.
 		currentSpecializedBuiltinSurfaces = nil
 		currentSpecializedBuiltinMeta = nil
+		currentLiftedClosures = nil
 		return nil, err
 	}
 	// Defer cleanup until AFTER generateASTFile consumes the side
@@ -44,6 +45,7 @@ func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
 	defer func() {
 		currentSpecializedBuiltinSurfaces = nil
 		currentSpecializedBuiltinMeta = nil
+		currentLiftedClosures = nil
 	}()
 	out, err := generateASTFile(file, opts)
 	if err != nil {
@@ -465,8 +467,24 @@ func legacyFileFromModule(mod *ostyir.Module) (*ast.File, error) {
 	// after `generateASTFile` consumes them. A deferred clear here
 	// would nil them before the downstream signatureOf /
 	// staticExprInfo paths can read the metadata off the built AST.
+	//
+	// Closure-literal hoisting runs alongside: every no-capture IR
+	// Closure gets a synthesized top-level fn so the legacy emitter
+	// sees a bare Ident (handled by the existing fn-value Env path
+	// in fn_value.go) instead of a `*ast.ClosureExpr` it can't
+	// lower. See closure_lift.go for the lift table contract.
+	liftedDecls := liftClosuresFromModule(mod)
 	start, end := legacySpan(mod.At())
 	file := &ast.File{PosV: start, EndV: end}
+	// Lifted closure fns go in first so collectDeclarations sees them
+	// before any other decl that might call them — matters when a
+	// lifted closure's name appears in the user's main fn signature
+	// hash via auto-rename collisions (the monotonic counter makes
+	// real collisions impossible, but order keeps the test snapshots
+	// deterministic).
+	for _, d := range liftedDecls {
+		file.Decls = append(file.Decls, d)
+	}
 	for _, decl := range mod.Decls {
 		legacyDecl, err := legacyDeclFromIR(decl)
 		if err != nil {
@@ -1701,6 +1719,17 @@ func legacyCoalesceExprFromIR(expr *ostyir.CoalesceExpr) (ast.Expr, error) {
 
 func legacyClosureFromIR(expr *ostyir.Closure) (ast.Expr, error) {
 	start, end := legacySpan(expr.At())
+	// If the lift pre-pass scheduled this closure as a top-level fn,
+	// substitute a bare Ident reference. The existing emitIdent path
+	// (expr.go:259) materialises the fn-value env automatically.
+	// See closure_lift.go for the contract.
+	if lifted := liftedClosureFor(expr); lifted != nil {
+		return &ast.Ident{
+			PosV: start,
+			EndV: end,
+			Name: lifted.name,
+		}, nil
+	}
 	out := &ast.ClosureExpr{
 		PosV:       start,
 		EndV:       end,
