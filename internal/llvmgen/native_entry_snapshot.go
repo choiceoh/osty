@@ -34,6 +34,31 @@ const (
 	llvmNativeExprCoalesce
 	llvmNativeExprQuestion
 	llvmNativeExprOptionalField
+	// llvmNativeExprInterfaceBox boxes a concrete struct value into
+	// an `%osty.iface` fat pointer. Shape:
+	//
+	//   childExprs[0] = concrete value expression (%<S>)
+	//   name          = vtable symbol (e.g. "@osty.vtable.Vec__Sized")
+	//   llvmType      = always "%osty.iface"
+	//
+	// Emits: spill concrete to slot, then two insertvalue calls to
+	// build the (data_ptr, vtable_ptr) fat pointer.
+	llvmNativeExprInterfaceBox
+	// llvmNativeExprInterfaceCall dispatches a method call through
+	// an `%osty.iface` fat pointer:
+	//
+	//   childExprs[0]   = receiver (iface value)
+	//   childExprs[1..] = non-self args
+	//   fieldIndex      = vtable slot index (0-based)
+	//   llvmType        = return type
+	//   name            = callee method name (cosmetic; SSA names are fresh)
+	//   text            = comma-separated LLVM types of non-self args
+	//                     (empty when no args) — carried to emit so the
+	//                     call instruction sees the exact ABI signature.
+	//
+	// Emits: extract data + vtable, GEP into vtable slot, load fn ptr,
+	// indirect call.
+	llvmNativeExprInterfaceCall
 )
 
 type llvmNativeStmtKind int
@@ -1032,9 +1057,107 @@ func llvmNativeEvalExpr(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
 		return llvmNativeEvalQuestion(emitter, expr)
 	case llvmNativeExprOptionalField:
 		return llvmNativeEvalOptionalField(emitter, expr)
+	case llvmNativeExprInterfaceBox:
+		return llvmNativeEvalInterfaceBox(emitter, expr)
+	case llvmNativeExprInterfaceCall:
+		return llvmNativeEvalInterfaceCall(emitter, expr)
 	default:
 		return llvmNativeZeroValue(expr.llvmType)
 	}
+}
+
+// llvmNativeEvalInterfaceBox emits the concrete-to-interface
+// boxing sequence:
+//
+//	<slot> = alloca %<S>
+//	store %<S> <concrete>, ptr <slot>
+//	<t1> = insertvalue %osty.iface undef, ptr <slot>, 0
+//	<t2> = insertvalue %osty.iface <t1>, ptr <vtable_sym>, 1
+//
+// and returns a value pointing at %osty.iface. `expr.name` carries
+// the vtable symbol like "@osty.vtable.Vec__Sized"; caller guarantees
+// it's well-formed.
+func llvmNativeEvalInterfaceBox(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
+	if emitter == nil || expr == nil || len(expr.childExprs) == 0 {
+		return llvmNativeZeroValue("%osty.iface")
+	}
+	concrete := llvmNativeEvalExpr(emitter, expr.childExprs[0])
+	slot := llvmSpillToSlot(emitter, concrete)
+	step1 := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %%osty.iface undef, ptr %s, 0", step1, slot.name))
+	step2 := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %%osty.iface %s, ptr %s, 1", step2, step1, expr.name))
+	return &LlvmValue{typ: "%osty.iface", name: step2}
+}
+
+// llvmNativeEvalInterfaceCall emits the indirect-dispatch sequence:
+//
+//	<data> = extractvalue %osty.iface <recv>, 0
+//	<vt>   = extractvalue %osty.iface <recv>, 1
+//	<slot> = getelementptr ptr, ptr <vt>, i64 <fieldIndex>
+//	<fn>   = load ptr, ptr <slot>
+//	<res>  = call <ret> <fn>(ptr <data>, <arg0_type> <arg0>, ...)
+//
+// Returns the call result value (zero-valued `llvmType` if the
+// method returns void). `expr.text` carries the comma-separated
+// LLVM types of the non-self args, parsed on the emit side so the
+// call instruction matches the shim ABI exactly.
+func llvmNativeEvalInterfaceCall(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
+	if emitter == nil || expr == nil || len(expr.childExprs) == 0 {
+		return llvmNativeZeroValue(expr.llvmType)
+	}
+	recv := llvmNativeEvalExpr(emitter, expr.childExprs[0])
+	data := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = extractvalue %%osty.iface %s, 0", data, recv.name))
+	vt := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = extractvalue %%osty.iface %s, 1", vt, recv.name))
+	slotAddr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr ptr, ptr %s, i64 %d", slotAddr, vt, expr.fieldIndex))
+	fnPtr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load ptr, ptr %s", fnPtr, slotAddr))
+
+	// Build the arg list: (ptr <data>, <type> <arg>, ...)
+	var argList strings.Builder
+	argList.WriteString("ptr ")
+	argList.WriteString(data)
+	argTypes := splitArgTypes(expr.text)
+	for i := 1; i < len(expr.childExprs); i++ {
+		argVal := llvmNativeEvalExpr(emitter, expr.childExprs[i])
+		argList.WriteString(", ")
+		if i-1 < len(argTypes) && argTypes[i-1] != "" {
+			argList.WriteString(argTypes[i-1])
+		} else {
+			argList.WriteString(argVal.typ)
+		}
+		argList.WriteString(" ")
+		argList.WriteString(argVal.name)
+	}
+
+	ret := expr.llvmType
+	if ret == "" {
+		ret = "void"
+	}
+	if ret == "void" {
+		emitter.body = append(emitter.body, fmt.Sprintf("  call void %s(%s)", fnPtr, argList.String()))
+		return llvmNativeZeroValue("void")
+	}
+	res := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call %s %s(%s)", res, ret, fnPtr, argList.String()))
+	return &LlvmValue{typ: ret, name: res}
+}
+
+// splitArgTypes parses a comma-separated list of LLVM types out of
+// the `text` field. Empty input yields a nil slice. No input
+// sanitization — callers control this field.
+func splitArgTypes(text string) []string {
+	if text == "" {
+		return nil
+	}
+	parts := strings.Split(text, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	return parts
 }
 
 func llvmNativeEvalListLit(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
