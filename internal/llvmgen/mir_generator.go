@@ -2070,6 +2070,110 @@ func (g *mirGen) emitStorageDead(dead *mir.StorageDeadInstr) error {
 	return nil
 }
 
+// emitIndexedWrite lowers a single-IndexProj AssignInstr — the
+// `xs[i] = v` / `m[k] = v` shape. Routes through the runtime list /
+// map setter so the heap representation stays in sync with what the
+// typed reads expect. Called from emitAssign when Dest has exactly
+// one projection and it's an IndexProj; anything more complex still
+// falls through to the aggregate-insertvalue path (which doesn't yet
+// support IndexProj in the middle of a chain).
+func (g *mirGen) emitIndexedWrite(a *mir.AssignInstr, destLoc *mir.Local, ip *mir.IndexProj) error {
+	localT := destLoc.Type
+	slot := g.localSlots[a.Dest.Local]
+	localLLVM := g.llvmType(localT)
+	contReg := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(contReg)
+	g.fnBuf.WriteString(" = load ")
+	g.fnBuf.WriteString(localLLVM)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteByte('\n')
+
+	elemT := ip.ElemType
+	if elemT == nil {
+		return unsupported("mir-mvp", "indexed write missing element type")
+	}
+	elemLLVM := g.llvmType(elemT)
+
+	switch {
+	case isListPtrType(localT):
+		idxReg, err := g.evalOperand(ip.Index, mir.TInt)
+		if err != nil {
+			return err
+		}
+		valReg, err := g.evalRValue(a.Src, elemT)
+		if err != nil {
+			return err
+		}
+		if listUsesTypedRuntime(elemLLVM) {
+			sym := "osty_rt_list_set_" + listRuntimeSymbolSuffix(elemLLVM)
+			g.declareRuntime(sym, "declare void @"+sym+"(ptr, i64, "+elemLLVM+")")
+			g.fnBuf.WriteString("  call void @")
+			g.fnBuf.WriteString(sym)
+			g.fnBuf.WriteString("(ptr ")
+			g.fnBuf.WriteString(contReg)
+			g.fnBuf.WriteString(", i64 ")
+			g.fnBuf.WriteString(idxReg)
+			g.fnBuf.WriteString(", ")
+			g.fnBuf.WriteString(elemLLVM)
+			g.fnBuf.WriteByte(' ')
+			g.fnBuf.WriteString(valReg)
+			g.fnBuf.WriteString(")\n")
+			return nil
+		}
+		// Composite element path — spill the value to a stack slot
+		// and hand the runtime a pointer + size so it can memcpy
+		// the bytes in place. Mirrors the IntrinsicListGet bytes-v1
+		// shape on the read side.
+		em := g.ostyEmitter()
+		valSlot := llvmSpillToSlot(em, &LlvmValue{typ: elemLLVM, name: valReg})
+		g.flushOstyEmitter(em)
+		sizeReg := g.emitSizeOf(elemLLVM)
+		sym := "osty_rt_list_set_bytes_v1"
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr, i64, ptr, i64, ptr)")
+		g.fnBuf.WriteString("  call void @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(contReg)
+		g.fnBuf.WriteString(", i64 ")
+		g.fnBuf.WriteString(idxReg)
+		g.fnBuf.WriteString(", ptr ")
+		g.fnBuf.WriteString(valSlot.name)
+		g.fnBuf.WriteString(", i64 ")
+		g.fnBuf.WriteString(sizeReg)
+		g.fnBuf.WriteString(", ptr null)\n")
+		return nil
+	case isMapPtrType(localT):
+		keyT, _ := mapKeyValueTypes(localT)
+		if keyT == nil {
+			return unsupported("mir-mvp", "map indexed write without key type")
+		}
+		keyLLVM := g.llvmType(keyT)
+		keyString := isStringLLVMType(keyT)
+		kReg, err := g.evalOperand(ip.Index, keyT)
+		if err != nil {
+			return err
+		}
+		vReg, err := g.evalRValue(a.Src, elemT)
+		if err != nil {
+			return err
+		}
+		sym := mapRuntimeInsertSymbol(keyLLVM, keyString)
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr, "+keyLLVM+", ptr)")
+		em := g.ostyEmitter()
+		valSlot := llvmSpillToSlot(em, &LlvmValue{typ: elemLLVM, name: vReg})
+		llvmMapInsert(em,
+			&LlvmValue{typ: "ptr", name: contReg},
+			&LlvmValue{typ: keyLLVM, name: kReg},
+			valSlot,
+			keyString)
+		g.flushOstyEmitter(em)
+		return nil
+	}
+	return unsupported("mir-mvp", fmt.Sprintf("indexed write on non-List/Map base %s", mirTypeString(localT)))
+}
+
 func (g *mirGen) emitAssign(a *mir.AssignInstr) error {
 	destLoc := g.fn.Local(a.Dest.Local)
 	if destLoc == nil {
@@ -2094,6 +2198,18 @@ func (g *mirGen) emitAssign(a *mir.AssignInstr) error {
 		g.fnBuf.WriteString(g.localSlots[a.Dest.Local])
 		g.fnBuf.WriteByte('\n')
 		return nil
+	}
+	// Single-IndexProj write (`xs[i] = v`, `m[k] = v`) — route to the
+	// runtime setter. This is the common shape used by Osty's
+	// list-rebuild / map-update patterns (e.g. `xs[i] = T { ..old, ...
+	// }` from CLAUDE.md's for-loop copy rule). Multi-projection writes
+	// with an IndexProj in the middle still fall through to the
+	// aggregate-insertvalue path below, which currently rejects IndexProj
+	// mid-chain.
+	if len(a.Dest.Projections) == 1 {
+		if ip, ok := a.Dest.Projections[0].(*mir.IndexProj); ok {
+			return g.emitIndexedWrite(a, destLoc, ip)
+		}
 	}
 	// Projected write: read-modify-write. Load the whole aggregate,
 	// insertvalue the new element, store back. For nested
