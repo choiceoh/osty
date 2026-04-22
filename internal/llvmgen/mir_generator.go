@@ -1069,7 +1069,7 @@ func (g *mirGen) checkTermSupported(fn *mir.Function, t mir.Terminator) error {
 
 func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 	switch k {
-	case mir.IntrinsicPrintln, mir.IntrinsicPrint:
+	case mir.IntrinsicPrintln, mir.IntrinsicPrint, mir.IntrinsicEprint, mir.IntrinsicEprintln:
 		return true
 	case mir.IntrinsicListPush, mir.IntrinsicListLen, mir.IntrinsicListGet,
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
@@ -2568,6 +2568,11 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 			return err
 		}
 	}
+	if strings.HasPrefix(fnRef.Symbol, "std.io.") {
+		if handled, err := g.emitStdIoCall(c, fnRef); handled {
+			return err
+		}
+	}
 	if strings.HasPrefix(fnRef.Symbol, "std.hint.") {
 		if handled, err := g.emitStdHintCall(c, fnRef); handled {
 			return err
@@ -2823,6 +2828,70 @@ func (g *mirGen) emitStdTestingCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, e
 		return true, g.emitTestingSnapshotMIR(c)
 	}
 	return false, nil
+}
+
+func (g *mirGen) emitStdIoCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
+	method := strings.TrimPrefix(fnRef.Symbol, "std.io.")
+	if !isStdIoOutputMethod(method) {
+		return false, nil
+	}
+	if err := g.emitStdIoWriteArgsMIR(c.Args, method); err != nil {
+		return true, err
+	}
+	return true, g.storeUnitDestIfAny(c)
+}
+
+func (g *mirGen) emitStdIoWriteIntrinsic(i *mir.IntrinsicInstr, method string) error {
+	return g.emitStdIoWriteArgsMIR(i.Args, method)
+}
+
+func (g *mirGen) emitStdIoWriteArgsMIR(args []mir.Operand, method string) error {
+	if len(args) != 1 {
+		return unsupported("mir-mvp", fmt.Sprintf("std.io.%s requires one positional argument", method))
+	}
+	text, err := g.emitStdIoStringOperandMIR(args[0], method)
+	if err != nil {
+		return err
+	}
+	newline, toStderr, ok := stdIoWriteFlags(method)
+	if !ok {
+		return unsupported("mir-mvp", "unsupported std.io method "+method)
+	}
+	g.declareRuntime(ostyRtIOWriteSymbol, "declare void @"+ostyRtIOWriteSymbol+"(ptr, i1, i1)")
+	g.fnBuf.WriteString("  call void @")
+	g.fnBuf.WriteString(ostyRtIOWriteSymbol)
+	g.fnBuf.WriteString("(ptr ")
+	g.fnBuf.WriteString(text)
+	g.fnBuf.WriteString(", i1 ")
+	g.fnBuf.WriteString(llvmStdIoI1Text(newline))
+	g.fnBuf.WriteString(", i1 ")
+	g.fnBuf.WriteString(llvmStdIoI1Text(toStderr))
+	g.fnBuf.WriteString(")\n")
+	return nil
+}
+
+func llvmStdIoI1Text(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
+}
+
+func (g *mirGen) emitStdIoStringOperandMIR(op mir.Operand, method string) (string, error) {
+	if op == nil || op.Type() == nil {
+		return "", unsupported("mir-mvp", "nil std.io operand")
+	}
+	if isStringLLVMType(op.Type()) {
+		return g.evalOperand(op, op.Type())
+	}
+	text, err := g.emitStringConcatBoxed(op)
+	if err != nil {
+		return "", err
+	}
+	if text != nil && text.typ == "ptr" {
+		return text.name, nil
+	}
+	return "", unsupported("mir-mvp", fmt.Sprintf("std.io.%s arg type %s", method, mirTypeString(op.Type())))
 }
 
 // emitTestingAssertMIR evaluates each argument for side-effects and
@@ -3702,6 +3771,10 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 			return unsupported("mir-mvp", "println with multiple args")
 		}
 		return g.emitPrintlnLike(i.Args[0], i.Kind == mir.IntrinsicPrintln)
+	case mir.IntrinsicEprint:
+		return g.emitStdIoWriteIntrinsic(i, "eprint")
+	case mir.IntrinsicEprintln:
+		return g.emitStdIoWriteIntrinsic(i, "eprintln")
 	case mir.IntrinsicListPush, mir.IntrinsicListLen, mir.IntrinsicListGet,
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
 		mir.IntrinsicListPop:

@@ -156,6 +156,7 @@ type nativeProjectionCtx struct {
 	mutableGlobals        map[string]bool
 	runtimeFFI            map[string]map[string]*nativeRuntimeFFIFunction
 	testingAliases        map[string]bool
+	stdIoAliases          map[string]bool
 	runtimeDecls          []string
 	runtimeDeclSet        map[string]bool
 	scopes                []map[string]nativeExprInfo
@@ -330,6 +331,7 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 		mutableGlobals:    map[string]bool{},
 		runtimeFFI:        map[string]map[string]*nativeRuntimeFFIFunction{},
 		testingAliases:    map[string]bool{},
+		stdIoAliases:      map[string]bool{},
 		runtimeDeclSet:    map[string]bool{},
 		sourcePath:        firstNonEmpty(opts.SourcePath, "<unknown>"),
 		source:            append([]byte(nil), opts.Source...),
@@ -360,6 +362,9 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 			}
 			if nativeIsStdTestingUse(d) {
 				ctx.testingAliases[nativeUseAlias(d)] = true
+			}
+			if nativeIsStdIoUse(d) {
+				ctx.stdIoAliases[nativeUseAlias(d)] = true
 			}
 		case *ostyir.StructDecl:
 			info, ok := nativeRegisterStructDecl(d)
@@ -1905,6 +1910,136 @@ func nativeTestingCallMethod(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (s
 	return name, true
 }
 
+func nativeIsStdIoUse(d *ostyir.UseDecl) bool {
+	return d != nil && !d.IsGoFFI && !d.IsRuntimeFFI && d.RawPath == "std.io"
+}
+
+func nativeStdIoCallMethod(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (string, bool) {
+	alias, name, ok := nativeQualifiedAliasCall(call)
+	if !ok || ctx == nil || !ctx.stdIoAliases[alias] || !isStdIoOutputMethod(name) {
+		return "", false
+	}
+	return name, true
+}
+
+func nativeStdIoStringExpr(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeExpr, bool) {
+	if ctx == nil || expr == nil || expr.Type() == nil {
+		return nil, false
+	}
+	if nativeTypeIsString(expr.Type()) {
+		return nativeExprFromIR(ctx, expr)
+	}
+	prim, ok := expr.Type().(*ostyir.PrimType)
+	if !ok {
+		return nil, false
+	}
+	value, ok := nativeExprFromIR(ctx, expr)
+	if !ok {
+		return nil, false
+	}
+	switch prim.Kind {
+	case ostyir.PrimInt, ostyir.PrimInt64:
+		ctx.addRuntimeDecl("declare ptr @osty_rt_int_to_string(i64)")
+		return &llvmNativeExpr{
+			kind:       llvmNativeExprCall,
+			llvmType:   "ptr",
+			name:       llvmIntRuntimeToStringSymbol(),
+			childExprs: []*llvmNativeExpr{value},
+		}, true
+	case ostyir.PrimFloat, ostyir.PrimFloat64:
+		ctx.addRuntimeDecl("declare ptr @osty_rt_float_to_string(double)")
+		return &llvmNativeExpr{
+			kind:       llvmNativeExprCall,
+			llvmType:   "ptr",
+			name:       llvmFloatRuntimeToStringSymbol(),
+			childExprs: []*llvmNativeExpr{value},
+		}, true
+	case ostyir.PrimBool:
+		ctx.addRuntimeDecl("declare ptr @osty_rt_bool_to_string(i1)")
+		return &llvmNativeExpr{
+			kind:       llvmNativeExprCall,
+			llvmType:   "ptr",
+			name:       llvmBoolRuntimeToStringSymbol(),
+			childExprs: []*llvmNativeExpr{value},
+		}, true
+	case ostyir.PrimChar:
+		ctx.addRuntimeDecl("declare ptr @osty_rt_char_to_string(i32)")
+		return &llvmNativeExpr{
+			kind:       llvmNativeExprCall,
+			llvmType:   "ptr",
+			name:       "osty_rt_char_to_string",
+			childExprs: []*llvmNativeExpr{value},
+		}, true
+	case ostyir.PrimByte:
+		ctx.addRuntimeDecl("declare ptr @osty_rt_byte_to_string(i8)")
+		return &llvmNativeExpr{
+			kind:       llvmNativeExprCall,
+			llvmType:   "ptr",
+			name:       "osty_rt_byte_to_string",
+			childExprs: []*llvmNativeExpr{value},
+		}, true
+	default:
+		return nil, false
+	}
+}
+
+func nativeStdIoWriteExpr(ctx *nativeProjectionCtx, arg ostyir.Expr, method string) (*llvmNativeExpr, bool) {
+	text, ok := nativeStdIoStringExpr(ctx, arg)
+	if !ok {
+		return nil, false
+	}
+	newline, toStderr, ok := stdIoWriteFlags(method)
+	if !ok {
+		return nil, false
+	}
+	ctx.addRuntimeDecl("declare void @osty_rt_io_write(ptr, i1, i1)")
+	return &llvmNativeExpr{
+		kind:     llvmNativeExprCall,
+		llvmType: "void",
+		name:     ostyRtIOWriteSymbol,
+		childExprs: []*llvmNativeExpr{
+			text,
+			{kind: llvmNativeExprBool, llvmType: "i1", boolValue: newline},
+			{kind: llvmNativeExprBool, llvmType: "i1", boolValue: toStderr},
+		},
+	}, true
+}
+
+func nativeStdIoCallStmtFromIR(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (*llvmNativeStmt, bool) {
+	method, ok := nativeStdIoCallMethod(ctx, call)
+	if !ok || len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
+		return nil, false
+	}
+	writeExpr, ok := nativeStdIoWriteExpr(ctx, call.Args[0].Value, method)
+	if !ok {
+		return nil, false
+	}
+	return &llvmNativeStmt{
+		kind:       llvmNativeStmtExpr,
+		childExprs: []*llvmNativeExpr{writeExpr},
+	}, true
+}
+
+func nativeStdIoIntrinsicExpr(ctx *nativeProjectionCtx, e *ostyir.IntrinsicCall) (*llvmNativeExpr, bool) {
+	if ctx == nil || e == nil || len(e.Args) != 1 || e.Args[0].IsKeyword() || e.Args[0].Value == nil {
+		return nil, false
+	}
+	method := ""
+	switch e.Kind {
+	case ostyir.IntrinsicPrint:
+		method = "print"
+	case ostyir.IntrinsicPrintln:
+		method = "println"
+	case ostyir.IntrinsicEprint:
+		method = "eprint"
+	case ostyir.IntrinsicEprintln:
+		method = "eprintln"
+	default:
+		return nil, false
+	}
+	return nativeStdIoWriteExpr(ctx, e.Args[0].Value, method)
+}
+
 func nativeSourceSpanText(ctx *nativeProjectionCtx, n ostyir.Node) string {
 	if ctx == nil || n == nil || len(ctx.source) == 0 {
 		return ""
@@ -2252,6 +2387,9 @@ func nativeStmtFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType s
 		if call, ok := s.X.(*ostyir.CallExpr); ok {
 			if testing, ok := nativeTestingCallStmtFromIR(ctx, call); ok {
 				return testing, true
+			}
+			if stdIo, ok := nativeStdIoCallStmtFromIR(ctx, call); ok {
+				return stdIo, true
 			}
 		}
 		if ifLet, ok := s.X.(*ostyir.IfLetExpr); ok {
@@ -3372,18 +3510,10 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 		}
 		return out, true
 	case *ostyir.IntrinsicCall:
-		if e.Kind != ostyir.IntrinsicPrintln || len(e.Args) != 1 || e.Args[0].IsKeyword() {
-			return nil, false
+		if stdIo, ok := nativeStdIoIntrinsicExpr(ctx, e); ok {
+			return stdIo, true
 		}
-		value, ok := nativeExprFromIR(ctx, e.Args[0].Value)
-		if !ok {
-			return nil, false
-		}
-		return &llvmNativeExpr{
-			kind:       llvmNativeExprPrintln,
-			llvmType:   "void",
-			childExprs: []*llvmNativeExpr{value},
-		}, true
+		return nil, false
 	case *ostyir.IfExpr:
 		cond, ok := nativeExprFromIR(ctx, e.Cond)
 		if !ok {

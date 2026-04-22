@@ -992,6 +992,34 @@ fn main() {
 	}
 }
 
+func TestLLVMBackendBinaryStdIoOutputFamily(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use std.io as io
+
+fn main() {
+    print(1)
+    io.println(" apples")
+    eprint(true)
+    io.eprintln(" pears")
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "1 apples\ntrue pears\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
 func TestLLVMBackendBinaryStdEnvGetReadsProcessEnv(t *testing.T) {
 	parallelClangBackendTest(t)
 
