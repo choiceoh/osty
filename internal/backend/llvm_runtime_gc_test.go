@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -4478,6 +4479,104 @@ int main(void) {
 	}
 	if got, want := string(runOutput), "1 1 1 1\n1 1\n1 1\n"; got != want {
 		t.Fatalf("phase-D global-root harness stdout = %q, want %q", got, want)
+	}
+}
+
+// TestBundledRuntimeIncrementalFinishCompactsPhaseD verifies that the
+// incremental major path runs Phase D compaction on finish — before
+// this landed, `osty.gc.collect_incremental_finish` only swept, so
+// `OSTY_GC_INCREMENTAL=1` callers silently skipped evacuation and
+// forwarding-table rebuild. The harness drives start → step → finish
+// manually, then checks the stack root was remapped, `load_v1` follows
+// the forwarding of the pre-compact payload, and the compaction
+// counter incremented exactly once.
+func TestBundledRuntimeIncrementalFinishCompactsPhaseD(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_phase_d_incremental_finish_harness.c")
+	binaryName := "runtime_gc_phase_d_incremental_finish_harness"
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	binaryPath := filepath.Join(dir, binaryName)
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdbool.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
+
+void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count);
+bool osty_gc_collect_incremental_step(int64_t budget);
+void osty_gc_collect_incremental_finish_with_stack_roots(void *const *root_slots, int64_t root_slot_count);
+
+int64_t osty_gc_debug_stable_id(void *payload);
+void *osty_gc_debug_payload_for_stable_id(int64_t stable_id);
+int64_t osty_gc_debug_compaction_count_total(void);
+int64_t osty_gc_debug_forwarded_objects_last(void);
+int64_t osty_gc_debug_forwarding_count(void);
+int64_t osty_gc_debug_load_forwarded_count(void);
+void *osty_rt_list_new(void);
+void osty_rt_list_push_ptr(void *list, void *value);
+void *osty_rt_list_get_ptr(void *list, int64_t index);
+
+int main(void) {
+    void *list = osty_rt_list_new();
+    void *saved_list = list;
+    void *child = osty_gc_alloc_v1(7, 32, "child");
+    void *saved_child = child;
+    int64_t list_id = osty_gc_debug_stable_id(list);
+    int64_t child_id = osty_gc_debug_stable_id(child);
+    osty_rt_list_push_ptr(list, child);
+
+    void *root = list;
+    void *root_slots[1] = { &root };
+
+    osty_gc_collect_incremental_start_with_stack_roots(root_slots, 1);
+    while (osty_gc_collect_incremental_step(100)) {}
+    osty_gc_collect_incremental_finish_with_stack_roots(root_slots, 1);
+
+    printf("%d %d %d\n",
+        root != saved_list,
+        osty_gc_load_v1(saved_list) == root,
+        osty_gc_debug_stable_id(root) == list_id);
+    printf("%d %d %d\n",
+        osty_rt_list_get_ptr(saved_list, 0) == osty_gc_load_v1(saved_child),
+        osty_gc_debug_stable_id(osty_rt_list_get_ptr(saved_list, 0)) == child_id,
+        osty_gc_debug_payload_for_stable_id(child_id) == osty_gc_load_v1(saved_child));
+    printf("%d %d %d\n",
+        osty_gc_debug_compaction_count_total() == 1,
+        osty_gc_debug_forwarded_objects_last() == 2,
+        osty_gc_debug_forwarding_count() == 2);
+    printf("%d\n", osty_gc_debug_load_forwarded_count() >= 2);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	got := strings.ReplaceAll(string(runOutput), "\r\n", "\n")
+	if want := "1 1 1\n1 1 1\n1 1 1\n1\n"; got != want {
+		t.Fatalf("phase-D incremental-finish harness stdout = %q, want %q", got, want)
 	}
 }
 
