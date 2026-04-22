@@ -730,7 +730,7 @@ typedef struct osty_gc_stats {
     int64_t humongous_alloc_bytes_total;
     int64_t humongous_swept_count_total;
     int64_t humongous_swept_bytes_total;
-    int64_t bump_block_count_total;
+    int64_t bump_block_count;
     int64_t bump_block_bytes_total;
     int64_t bump_alloc_count_total;
     int64_t bump_alloc_bytes_total;
@@ -902,7 +902,7 @@ typedef struct osty_gc_stats {
     int64_t humongous_alloc_bytes_total;
     int64_t humongous_swept_count_total;
     int64_t humongous_swept_bytes_total;
-    int64_t bump_block_count_total;
+    int64_t bump_block_count;
     int64_t bump_block_bytes_total;
     int64_t bump_alloc_count_total;
     int64_t bump_alloc_bytes_total;
