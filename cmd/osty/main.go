@@ -1344,18 +1344,23 @@ func runResolveFile(path string, src []byte, formatter *diag.Formatter, flags cl
 
 // runResolvePackage is runCheckPackage plus a resolution dump per file.
 func runResolvePackage(dir string, flags cliFlags) {
-	// Happy path: LoadPackageForNative produces selfhost FrontendRuns
-	// per file and leaves pf.File nil, so the astbridge-based *ast.File
-	// lowering is not triggered unless a fallback explicitly needs it
-	// (--show-scopes, or the Go-native resolver printing branch). The
-	// Go-native fallback is kept so that printResolutionRefs /
-	// printScopeTree still work when callers rely on them — each
-	// EnsureFile*() call materializes the *ast.File lazily and caches
-	// it for subsequent passes.
+	if code := runResolvePackageInner(dir, flags); code != 0 {
+		os.Exit(code)
+	}
+}
+
+// runResolvePackageInner is the extracted body of runResolvePackage,
+// returning an exit code instead of calling os.Exit so the DIR
+// resolve happy path is exercisable in-process for astbridge counter
+// assertions. Same behavior as the previous inline body —
+// LoadPackageForNative produces FrontendRuns per file and leaves
+// pf.File nil until a fallback (--show-scopes / Go-native resolver
+// printing branch) calls EnsureFile lazily.
+func runResolvePackageInner(dir string, flags cliFlags) int {
 	pkg, err := resolve.LoadPackageForNativeWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("resolve"), os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	var res *resolve.PackageResult
 	ensureGoResolve := func() *resolve.PackageResult {
@@ -1376,30 +1381,46 @@ func runResolvePackage(dir string, flags cliFlags) {
 		diags = r.Diags
 	}
 	printPackageDiags(pkg, diags, flags)
-	if nativeRowsUsed := false; true {
-		for _, f := range pkg.Files {
-			rows, err := nativeResolvePackageRows(pkg, f.Path)
-			if err != nil || len(rows) == 0 {
-				ensureGoResolve()
-				if len(f.Refs) == 0 {
-					continue
-				}
-				fmt.Printf("# %s\n", f.Path)
-				printResolutionRefs(f.Refs)
+	nativeRowsUsed := false
+	nativeErrored := false
+	for _, f := range pkg.Files {
+		rows, err := nativeResolvePackageRows(pkg, f.Path)
+		if err != nil {
+			// Only a hard error in the native row builder justifies
+			// forcing the Go fallback (which would trigger
+			// EnsureFiles and therefore per-file astbridge
+			// lowerings). An empty row slice from a clean file is
+			// legitimate output — declaration-only files genuinely
+			// have no refs to print — and must NOT drag the rest of
+			// the package through *ast.File.
+			nativeErrored = true
+			ensureGoResolve()
+			if len(f.Refs) == 0 {
 				continue
 			}
-			nativeRowsUsed = true
 			fmt.Printf("# %s\n", f.Path)
-			printNativeResolutionRows(rows)
+			printResolutionRefs(f.Refs)
+			continue
 		}
-		if !nativeRowsUsed {
-			for _, f := range pkg.Files {
-				if len(f.Refs) == 0 {
-					continue
-				}
-				fmt.Printf("# %s\n", f.Path)
-				printResolutionRefs(f.Refs)
+		if len(rows) == 0 {
+			// No refs in this file — declaration-only, skip silently.
+			continue
+		}
+		nativeRowsUsed = true
+		fmt.Printf("# %s\n", f.Path)
+		printNativeResolutionRows(rows)
+	}
+	if nativeErrored && !nativeRowsUsed {
+		// Native row generation failed for every file we tried —
+		// fall back to the Go resolver's Refs so the output is not
+		// silently empty. EnsureFiles has already been called by
+		// the loop above in this branch.
+		for _, f := range pkg.Files {
+			if len(f.Refs) == 0 {
+				continue
 			}
+			fmt.Printf("# %s\n", f.Path)
+			printResolutionRefs(f.Refs)
 		}
 	}
 	if flags.showScopes {
@@ -1410,8 +1431,9 @@ func runResolvePackage(dir string, flags cliFlags) {
 		printScopeTree(pkg.PkgScope)
 	}
 	if hasError(diags) {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // printPackageDiags groups diagnostics by source file so each one is
