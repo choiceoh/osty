@@ -1048,7 +1048,9 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 	case mir.IntrinsicStringConcat, mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
 		mir.IntrinsicStringLen, mir.IntrinsicStringIsEmpty,
 		mir.IntrinsicStringToUpper, mir.IntrinsicStringToLower,
-		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat:
+		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
+		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
+		mir.IntrinsicStringEndsWith:
 		return true
 	// Concurrency — channels / tasks / select / cancellation / helpers.
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
@@ -2412,7 +2414,9 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 	case mir.IntrinsicStringConcat, mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
 		mir.IntrinsicStringLen, mir.IntrinsicStringIsEmpty,
 		mir.IntrinsicStringToUpper, mir.IntrinsicStringToLower,
-		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat:
+		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
+		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
+		mir.IntrinsicStringEndsWith:
 		return g.emitStringIntrinsic(i)
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
 		mir.IntrinsicChanClose, mir.IntrinsicChanIsClosed:
@@ -3569,8 +3573,39 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitStringParseResultIntrinsic(i, strReg, "osty_rt_strings_IsValidInt", "osty_rt_strings_ToInt", "i64")
 	case mir.IntrinsicStringToFloat:
 		return g.emitStringParseResultIntrinsic(i, strReg, "osty_rt_strings_IsValidFloat", "osty_rt_strings_ToFloat", "double")
+	case mir.IntrinsicStringStartsWith:
+		return g.emitStringBinaryBoolIntrinsic(i, strReg, llvmStringRuntimeHasPrefixSymbol())
+	case mir.IntrinsicStringEndsWith:
+		return g.emitStringBinaryBoolIntrinsic(i, strReg, llvmStringRuntimeHasSuffixSymbol())
+	case mir.IntrinsicStringContains:
+		return g.emitStringBinaryBoolIntrinsic(i, strReg, llvmStringRuntimeContainsSymbol())
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("string intrinsic kind %d", i.Kind))
+}
+
+// emitStringBinaryBoolIntrinsic dispatches `.startsWith(s)` /
+// `.endsWith(s)` / `.contains(s)` style checks: `(str, arg) -> i1`.
+// Both operands must already resolve as String ptrs — the receiver
+// comes in as strReg (evaluated by emitStringIntrinsic), the single
+// arg is evaluated here. Binds the runtime symbol if not already
+// declared, then emits the call and stores the Bool result.
+func (g *mirGen) emitStringBinaryBoolIntrinsic(i *mir.IntrinsicInstr, strReg, sym string) error {
+	if len(i.Args) < 2 {
+		return unsupported("mir-mvp", fmt.Sprintf("%s with no arg", sym))
+	}
+	arg := i.Args[1]
+	if !isStringLLVMType(arg.Type()) {
+		return unsupported("mir-mvp", fmt.Sprintf("%s arg type %s", sym, mirTypeString(arg.Type())))
+	}
+	argReg, err := g.evalOperand(arg, arg.Type())
+	if err != nil {
+		return err
+	}
+	g.declareRuntime(sym, "declare i1 @"+sym+"(ptr, ptr)")
+	em := g.ostyEmitter()
+	result := llvmCall(em, "i1", sym, []*LlvmValue{{typ: "ptr", name: strReg}, {typ: "ptr", name: argReg}})
+	g.flushOstyEmitter(em)
+	return g.storeIntrinsicResult(i, result)
 }
 
 func (g *mirGen) emitStringParseResultIntrinsic(i *mir.IntrinsicInstr, strReg, validateSym, parseSym, parseLLVM string) error {
