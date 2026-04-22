@@ -1028,7 +1028,11 @@ func (g *generator) emitBinary(e *ast.BinaryExpr) (value, error) {
 	}
 	if llvmIsCompareOp(e.Op.String()) {
 		isString := g.staticExprIsString(e.Left) || g.staticExprIsString(e.Right)
-		return g.emitCompare(e.Op, left, right, isString)
+		v, err := g.emitCompare(e.Op, left, right, isString)
+		if err != nil {
+			return v, fmt.Errorf("%s at %s", err.Error(), exprPosLabel(e))
+		}
+		return v, nil
 	}
 	if e.Op == token.AND || e.Op == token.OR {
 		return g.emitLogical(e.Op, left, right)
@@ -1471,7 +1475,7 @@ func (g *generator) emitIfExprValue(expr *ast.IfExpr) (value, error) {
 		return value{}, unsupported("control-flow", "if expression has no then block")
 	}
 	if expr.Else == nil {
-		return value{}, unsupported("control-flow", "if expression has no else branch")
+		return value{}, unsupportedf("control-flow", "if expression has no else branch %s", exprPosLabel(expr))
 	}
 	cond, err := g.emitExpr(expr.Cond)
 	if err != nil {
@@ -1514,7 +1518,7 @@ func (g *generator) emitIfLetExprValue(expr *ast.IfExpr) (value, error) {
 		return value{}, unsupported("control-flow", "if expression has no then block")
 	}
 	if expr.Else == nil {
-		return value{}, unsupported("control-flow", "if expression has no else branch")
+		return value{}, unsupportedf("control-flow", "if expression has no else branch %s", exprPosLabel(expr))
 	}
 	scrutinee, err := g.emitExpr(expr.Cond)
 	if err != nil {
@@ -1625,7 +1629,7 @@ func (g *generator) emitBlockValue(block *ast.Block) (value, error) {
 		}
 		exprStmt, ok := stmt.(*ast.ExprStmt)
 		if !ok {
-			return value{}, unsupportedf("statement", "final block statement %T", stmt)
+			return value{}, unsupportedf("statement", "final block statement %T %s", stmt, exprPosLabel(stmt))
 		}
 		return g.emitExpr(exprStmt.X)
 	}
@@ -2161,7 +2165,7 @@ func (g *generator) emitTagEnumMatchSelectValue(scrutinee value, arms []*ast.Mat
 			return value{}, err
 		}
 		if !ok {
-			return value{}, unsupportedf("expression", "match arm must be a payload-free enum variant (got %s)", debugPatternShape(arm.Pattern))
+			return value{}, unsupportedf("expression", "match arm must be a payload-free enum variant (got %s) %s", debugPatternShape(arm.Pattern), exprPosLabel(arm.Pattern))
 		}
 		armValue, err := g.emitMatchArmBodyValue(arm.Body)
 		if err != nil {
@@ -2203,7 +2207,7 @@ func (g *generator) emitTagEnumMatchChainValue(scrutinee value, arms []*ast.Matc
 			if _, ok, err := g.matchEnumTag(arm.Pattern); err != nil {
 				return value{}, err
 			} else if !ok {
-				return value{}, unsupportedf("expression", "match arm must be a payload-free enum variant (got %s)", debugPatternShape(arm.Pattern))
+				return value{}, unsupportedf("expression", "match arm must be a payload-free enum variant (got %s) %s", debugPatternShape(arm.Pattern), exprPosLabel(arm.Pattern))
 			}
 		}
 		return g.emitMatchArmBodyValue(arm.Body)

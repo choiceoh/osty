@@ -169,20 +169,30 @@ fn satHighInclusiveRank(b: SatBound) -> Int {
 
 /// satIntervalContains reports whether `v` lies inside interval `iv`.
 pub fn satIntervalContains(iv: SatInterval, v: SemVersion) -> Bool {
+    // Flat chain of `if <cond> { return false }` guards. The original
+    // `match iv.low.kind { SatUnbounded -> true, SatInclusive -> if cmp < 0 { return false }, ... }`
+    // walled the legacy LLVM emitter twice: LLVM012 bare BoolLit
+    // expression-statement on the `-> true` arm, and LLVM012 final
+    // block statement ReturnStmt on any nested `if { return false }`
+    // block when the outer if/else-if chain gets treated as an
+    // expression. Guard-style statements keep every block terminating
+    // on a non-expression-statement without nesting.
     if !(satBoundIsUnbounded(iv.low)) {
         let cmp = compareSemVersion(v, iv.low.version)
-        match iv.low.kind {
-            SatUnbounded -> true,
-            SatInclusive -> if cmp < 0 { return false },
-            SatExclusive -> if cmp <= 0 { return false },
+        if iv.low.kind == SatInclusive && cmp < 0 {
+            return false
+        }
+        if iv.low.kind == SatExclusive && cmp <= 0 {
+            return false
         }
     }
     if !(satBoundIsUnbounded(iv.high)) {
         let cmp = compareSemVersion(v, iv.high.version)
-        match iv.high.kind {
-            SatUnbounded -> true,
-            SatInclusive -> if cmp > 0 { return false },
-            SatExclusive -> if cmp >= 0 { return false },
+        if iv.high.kind == SatInclusive && cmp > 0 {
+            return false
+        }
+        if iv.high.kind == SatExclusive && cmp >= 0 {
+            return false
         }
     }
     true

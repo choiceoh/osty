@@ -1094,7 +1094,8 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
 		mir.IntrinsicStringEndsWith, mir.IntrinsicStringSplit,
-		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring:
+		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring,
+		mir.IntrinsicStringReplace:
 		return true
 	// Concurrency — channels / tasks / select / cancellation / helpers.
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
@@ -2982,7 +2983,8 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
 		mir.IntrinsicStringEndsWith, mir.IntrinsicStringSplit,
-		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring:
+		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring,
+		mir.IntrinsicStringReplace:
 		return g.emitStringIntrinsic(i)
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
 		mir.IntrinsicChanClose, mir.IntrinsicChanIsClosed:
@@ -4232,8 +4234,38 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitStringJoin(i, strReg)
 	case mir.IntrinsicStringSubstring:
 		return g.emitStringSubstring(i, strReg)
+	case mir.IntrinsicStringReplace:
+		return g.emitStringReplaceAll(i, strReg)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("string intrinsic kind %d", i.Kind))
+}
+
+// emitStringReplaceAll emits `s.replace(old, new)` as a call to the
+// runtime helper `osty_rt_strings_ReplaceAll`, matching the spec's
+// always-replace-all semantics for the `String.replace` method. Args:
+// [s, old, new].
+func (g *mirGen) emitStringReplaceAll(i *mir.IntrinsicInstr, strReg string) error {
+	if len(i.Args) < 3 {
+		return unsupported("mir-mvp", "string_replace arity")
+	}
+	oldReg, err := g.evalOperand(i.Args[1], mir.TString)
+	if err != nil {
+		return err
+	}
+	newReg, err := g.evalOperand(i.Args[2], mir.TString)
+	if err != nil {
+		return err
+	}
+	sym := "osty_rt_strings_ReplaceAll"
+	g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, ptr, ptr)")
+	em := g.ostyEmitter()
+	result := llvmCall(em, "ptr", sym, []*LlvmValue{
+		{typ: "ptr", name: strReg},
+		{typ: "ptr", name: oldReg},
+		{typ: "ptr", name: newReg},
+	})
+	g.flushOstyEmitter(em)
+	return g.storeIntrinsicResult(i, result)
 }
 
 // emitStringSubstring emits `s.substring(start, end)` / `s[a..b]`

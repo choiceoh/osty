@@ -2363,11 +2363,14 @@ fn mirLowerMultiAssign(bs: MirLowerBodyState, s: HirStmt) {
     let scratch = mirLowerNewLocal(bs, "_mtuple", rhsT, false, span)
     mirLowerEmitInstr(bs, mirStorageLiveInstr(scratch, span))
     mirLowerExprInto(bs, s.assignValue, scratch, rhsT)
-    // Tuple element types: pull from the HIR tuple type when present.
-    let elemTs = match rhsT.kind {
-        HirTypeTuple -> rhsT.tupleElems,
-        _ -> [],
-    }
+    // Tuple element types: pull from the HIR tuple field unconditionally
+    // — HirType constructors set `tupleElems: []` for every kind (see
+    // hirTypeInvalid / hirTypePrim in hir.osty), so non-tuple values
+    // already yield the empty list the `i < elemTs.len()` guard below
+    // expects. Avoiding a `_ -> []` match arm sidesteps the legacy LLVM
+    // emitter's LLVM013 "empty list literal requires explicit List<T>"
+    // wall on the HIR→AST fallback path.
+    let elemTs: List<HirType> = rhsT.tupleElems
     let mut i = 0
     for target in s.assignTargets {
         let dst = mirLowerExprToPlace(bs, target)
@@ -2614,8 +2617,12 @@ fn mirLowerStripUnderscores(text: String) -> String {
 }
 
 fn mirLowerStripSign(text: String) -> String {
+    // Use strings.slice rather than `text.substring()` — the legacy
+    // LLVM emitter's AST-fallback path doesn't route String method
+    // calls through the substring intrinsic (LLVM015 "call target
+    // *ast.FieldExpr"), but accepts the package-level free function.
     if text.startsWith("+") || text.startsWith("-") {
-        text.substring(1, text.len())
+        strings.slice(text, 1, text.len())
     } else {
         text
     }
@@ -2626,13 +2633,13 @@ fn mirLowerParseIntDigits(text: String) -> Int {
         return 0
     }
     if text.startsWith("0x") || text.startsWith("0X") {
-        return mirLowerParseRadix(text.substring(2, text.len()), 16)
+        return mirLowerParseRadix(strings.slice(text, 2, text.len()), 16)
     }
     if text.startsWith("0b") || text.startsWith("0B") {
-        return mirLowerParseRadix(text.substring(2, text.len()), 2)
+        return mirLowerParseRadix(strings.slice(text, 2, text.len()), 2)
     }
     if text.startsWith("0o") || text.startsWith("0O") {
-        return mirLowerParseRadix(text.substring(2, text.len()), 8)
+        return mirLowerParseRadix(strings.slice(text, 2, text.len()), 8)
     }
     mirLowerParseRadix(text, 10)
 }
@@ -2655,28 +2662,20 @@ fn mirLowerParseRadix(text: String, radix: Int) -> Int {
 
 // mirLowerCharToDigit takes a Char (i32 Unicode scalar) because the
 // caller iterates `text.chars()` which returns `List<Char>` per the
-// String primitive contract — earlier this took `String` and matched
-// against "0"/"a"/…, but that passed a Char where a String was
-// expected, walling the merged probe with LLVM011 type mismatch.
+// String primitive contract. Folding to Int via `ch.toInt()` keeps
+// the merged-probe legacy fallback from walling — a Char scrutinee on
+// the `match` form triggers LLVM011 "match scrutinee type i32, want
+// enum tag", so we branch in Int-space instead.
 fn mirLowerCharToDigit(ch: Char) -> Int {
-    match ch {
-        '0' -> 0,
-        '1' -> 1,
-        '2' -> 2,
-        '3' -> 3,
-        '4' -> 4,
-        '5' -> 5,
-        '6' -> 6,
-        '7' -> 7,
-        '8' -> 8,
-        '9' -> 9,
-        'a' -> 10, 'A' -> 10,
-        'b' -> 11, 'B' -> 11,
-        'c' -> 12, 'C' -> 12,
-        'd' -> 13, 'D' -> 13,
-        'e' -> 14, 'E' -> 14,
-        'f' -> 15, 'F' -> 15,
-        _ -> -1,
+    let n = ch.toInt()
+    if n >= 48 && n <= 57 {
+        n - 48
+    } else if n >= 97 && n <= 102 {
+        n - 97 + 10
+    } else if n >= 65 && n <= 70 {
+        n - 65 + 10
+    } else {
+        -1
     }
 }
 

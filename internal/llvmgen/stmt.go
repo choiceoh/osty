@@ -1102,7 +1102,7 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 func (g *generator) emitExprStmt(expr ast.Expr) error {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
-		return unsupportedf("statement", "expression statement %T is not a call; only println and similar side-effect calls are supported as expression statements", expr)
+		return unsupportedf("statement", "expression statement %T %s is not a call; only println and similar side-effect calls are supported as expression statements", expr, exprPosLabel(expr))
 	}
 	if emitted, err := g.emitTestingCallStmt(call); emitted || err != nil {
 		return err

@@ -225,11 +225,16 @@ pub fn pmTryCompileLitSwitch(
         let arm = arms[i]
         match arm.pattern.kind {
             HirPatLit -> {
-                let litValue = if arm.pattern.litValue.len() > 0 {
-                    arm.pattern.litValue[0]
-                } else {
+                // Guard first, bind after — the legacy LLVM emitter
+                // walls on a `let x = if cond { value } else { return ... }`
+                // shape (LLVM012 "final block statement *ast.ReturnStmt")
+                // because the else-arm of an if-expression isn't allowed
+                // to diverge. A plain if-statement for the early return
+                // keeps the binding unconditional.
+                if arm.pattern.litValue.len() == 0 {
                     return hirDecisionInvalid()
                 }
+                let litValue = arm.pattern.litValue[0]
                 let k = pmSwitchKindOfLit(litValue)
                 let kIsUnknown = match k {
                     HirSwitchUnknown -> true,
@@ -381,7 +386,11 @@ pub fn pmLitLabel(e: HirExpr) -> String {
                 if part.isLit {
                     buf.push(part.lit)
                 } else {
-                    buf.push("{...}")
+                    // Escape the curlies — a bare `"{...}"` is parsed
+                    // as an interpolation slot whose expression is a
+                    // malformed `..`, which cascades into a phantom
+                    // RangeExpr node that walls the LLVM backend.
+                    buf.push("\{...\}")
                 }
             }
             buf.push("\"")

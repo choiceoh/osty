@@ -593,13 +593,13 @@ pub fn hirLowerParseAnnotationInt(e: HirExpr) -> HirLowerIntParse {
     let mut base = 10
     if text.startsWith("0x") || text.startsWith("0X") {
         base = 16
-        body = text.substring(2, text.len())
+        body = strings.slice(text, 2, text.len())
     } else if text.startsWith("0o") || text.startsWith("0O") {
         base = 8
-        body = text.substring(2, text.len())
+        body = strings.slice(text, 2, text.len())
     } else if text.startsWith("0b") || text.startsWith("0B") {
         base = 2
-        body = text.substring(2, text.len())
+        body = strings.slice(text, 2, text.len())
     }
     if body.len() == 0 {
         return HirLowerIntParse { value: 0, ok: false }
@@ -650,35 +650,39 @@ pub fn hirLowerAnnotationStringLit(e: HirExpr) -> HirLowerStringParse {
 // ---- Internal digit helpers --------------------------------------
 
 fn hirLowerStripUnderscores(text: String) -> String {
-    let mut buf: List<String> = []
-    let chars = text.chars()
-    for ch in chars {
-        if ch != "_" {
-            buf.push(ch)
-        }
-    }
-    strings.join(buf, "")
+    // Same shape as mir_lower.osty's mirLowerStripUnderscores post-#706.
+    // `text.chars()` yields `List<Char>`, so the per-char `!= "_"` test
+    // compared Char to a String literal — LLVM011 i32/ptr mismatch on
+    // the legacy fallback. A single-pass replace skips the Char surface.
+    text.replace("_", "")
 }
 
 fn hirLowerStripSign(text: String) -> String {
+    // strings.slice (free fn) rather than `text.substring()` (method call
+    // on FieldExpr receiver) — the legacy LLVM emitter rejects the
+    // latter with LLVM015.
     if text.startsWith("+") || text.startsWith("-") {
-        text.substring(1, text.len())
+        strings.slice(text, 1, text.len())
     } else {
         text
     }
 }
 
-fn hirLowerCharToDigit(ch: String) -> Int {
-    match ch {
-        "0" -> 0, "1" -> 1, "2" -> 2, "3" -> 3, "4" -> 4,
-        "5" -> 5, "6" -> 6, "7" -> 7, "8" -> 8, "9" -> 9,
-        "a" -> 10, "A" -> 10,
-        "b" -> 11, "B" -> 11,
-        "c" -> 12, "C" -> 12,
-        "d" -> 13, "D" -> 13,
-        "e" -> 14, "E" -> 14,
-        "f" -> 15, "F" -> 15,
-        _ -> -1,
+// hirLowerCharToDigit takes a Char — the caller iterates `body.chars()`
+// which returns `List<Char>`. Folding to Int via `ch.toInt()` keeps
+// the legacy LLVM fallback out of its "match scrutinee type i32, want
+// enum tag" wall; plain Int comparisons in an if/else-if chain carry
+// the same mapping.
+fn hirLowerCharToDigit(ch: Char) -> Int {
+    let n = ch.toInt()
+    if n >= 48 && n <= 57 {
+        n - 48
+    } else if n >= 97 && n <= 102 {
+        n - 97 + 10
+    } else if n >= 65 && n <= 70 {
+        n - 65 + 10
+    } else {
+        -1
     }
 }
 
@@ -1596,12 +1600,12 @@ pub fn hirLowerIsPreludeVariantName(name: String) -> Bool {
 /// hirLowerIsPrim reports whether `t` is a primitive HirType with
 /// the given PrimKind. Mirrors Go's `isPrim`.
 pub fn hirLowerIsPrim(t: HirType, pk: HirPrimKind) -> Bool {
+    // Plain field read + helper rather than a nested identity match —
+    // the inner `pkMatched -> …` identifier-bind arm walls the legacy
+    // LLVM emitter (LLVM013 "match arm must be a payload-free enum
+    // variant"), and the indirection adds no information.
     match t.kind {
-        HirTypePrim -> {
-            match t.primKind {
-                pkMatched -> hirLowerPrimKindEq(pkMatched, pk),
-            }
-        },
+        HirTypePrim -> hirLowerPrimKindEq(t.primKind, pk),
         _ -> false,
     }
 }
@@ -1821,14 +1825,8 @@ pub fn hirLowerNormalizeIntText(text: String) -> String {
     if text.len() == 0 {
         return ""
     }
-    let mut buf: List<String> = []
-    let chars = text.chars()
-    for ch in chars {
-        if ch != "_" {
-            buf.push(ch)
-        }
-    }
-    strings.join(buf, "")
+    // Same Char-vs-String fix pattern as hirLowerStripUnderscores.
+    text.replace("_", "")
 }
 
 /// hirLowerNormalizeFloatText shares the same underscore-stripping
