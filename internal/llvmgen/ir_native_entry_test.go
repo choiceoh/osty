@@ -1023,10 +1023,10 @@ fn build() -> Int {
 	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
 		"%Point = type { i64, i64 }",
-		"declare ptr @osty_rt_map_new()",
+		"declare ptr @osty_rt_map_new(i64, i64, i64, ptr)",
 		"declare void @osty_rt_map_insert_string(ptr, ptr, ptr)",
 		"declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr)",
-		"call ptr @osty_rt_map_new()",
+		"call ptr @osty_rt_map_new(",
 		"call void @osty_rt_map_insert_string(ptr",
 		"alloca %Point",
 		"call void @osty_rt_map_get_or_abort_string(ptr",

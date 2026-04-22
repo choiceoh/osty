@@ -2533,12 +2533,23 @@ func llvmMapRuntimeDeclarations() []string {
 	// counters — emitted by the compiler pattern matcher when that
 	// specific legacy shape appears in user code, and usable
 	// directly as an intrinsic-backed stdlib method.
-	return []string{"declare ptr @osty_rt_map_new() nounwind willreturn", "declare i64 @osty_rt_map_len(ptr) nounwind willreturn", "declare ptr @osty_rt_map_keys(ptr) nounwind willreturn", "declare i1 @osty_rt_map_contains_i64(ptr, i64) nounwind willreturn", "declare i1 @osty_rt_map_contains_i1(ptr, i1) nounwind willreturn", "declare i1 @osty_rt_map_contains_f64(ptr, double) nounwind willreturn", "declare i1 @osty_rt_map_contains_ptr(ptr, ptr) nounwind willreturn", "declare i1 @osty_rt_map_contains_string(ptr, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_i64(ptr, i64, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_i1(ptr, i1, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_f64(ptr, double, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_ptr(ptr, ptr, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_string(ptr, ptr, ptr) nounwind willreturn", "declare i1 @osty_rt_map_remove_i64(ptr, i64) nounwind willreturn", "declare i1 @osty_rt_map_remove_i1(ptr, i1) nounwind willreturn", "declare i1 @osty_rt_map_remove_f64(ptr, double) nounwind willreturn", "declare i1 @osty_rt_map_remove_ptr(ptr, ptr) nounwind willreturn", "declare i1 @osty_rt_map_remove_string(ptr, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_i64(ptr, i64, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_i1(ptr, i1, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_f64(ptr, double, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_ptr(ptr, ptr, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_i64(ptr, i64, i64) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_i1(ptr, i1, i64) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_f64(ptr, double, i64) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_ptr(ptr, ptr, i64) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_string(ptr, ptr, i64) nounwind willreturn"}
+	return []string{"declare ptr @osty_rt_map_new(i64, i64, i64, ptr) nounwind willreturn", "declare i64 @osty_rt_map_len(ptr) nounwind willreturn", "declare ptr @osty_rt_map_keys(ptr) nounwind willreturn", "declare i1 @osty_rt_map_contains_i64(ptr, i64) nounwind willreturn", "declare i1 @osty_rt_map_contains_i1(ptr, i1) nounwind willreturn", "declare i1 @osty_rt_map_contains_f64(ptr, double) nounwind willreturn", "declare i1 @osty_rt_map_contains_ptr(ptr, ptr) nounwind willreturn", "declare i1 @osty_rt_map_contains_string(ptr, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_i64(ptr, i64, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_i1(ptr, i1, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_f64(ptr, double, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_ptr(ptr, ptr, ptr) nounwind willreturn", "declare void @osty_rt_map_insert_string(ptr, ptr, ptr) nounwind willreturn", "declare i1 @osty_rt_map_remove_i64(ptr, i64) nounwind willreturn", "declare i1 @osty_rt_map_remove_i1(ptr, i1) nounwind willreturn", "declare i1 @osty_rt_map_remove_f64(ptr, double) nounwind willreturn", "declare i1 @osty_rt_map_remove_ptr(ptr, ptr) nounwind willreturn", "declare i1 @osty_rt_map_remove_string(ptr, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_i64(ptr, i64, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_i1(ptr, i1, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_f64(ptr, double, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_ptr(ptr, ptr, ptr) nounwind willreturn", "declare void @osty_rt_map_get_or_abort_string(ptr, ptr, ptr) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_i64(ptr, i64, i64) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_i1(ptr, i1, i64) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_f64(ptr, double, i64) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_ptr(ptr, ptr, i64) nounwind willreturn", "declare i64 @osty_rt_map_incr_i64_string(ptr, ptr, i64) nounwind willreturn"}
 }
 
 // Osty: toolchain/llvmgen.osty:1971:5
+//
+// Legacy smoke-IR helper: calls osty_rt_map_new with the `Map<Int, Int>`
+// ABI tuple (key_kind=1 Int, value_kind=1 Int, value_size=8, trace=null).
+// The real emitter uses llvmMapNewTyped(...) which derives these from
+// the actual K/V types; this helper keeps llvmSmokeMapBasicIR's fixed
+// `Map<Int, Int>` shape runnable without threading K/V through.
 func llvmMapNew(emitter *LlvmEmitter) *LlvmValue {
-	return llvmCall(emitter, "ptr", "osty_rt_map_new", make([]*LlvmValue, 0, 1))
+	return llvmCall(emitter, "ptr", "osty_rt_map_new", []*LlvmValue{
+		llvmIntLiteral(1),
+		llvmIntLiteral(1),
+		llvmIntLiteral(8),
+		{typ: "ptr", name: "null"},
+	})
 }
 
 // Osty: toolchain/llvmgen.osty:1975:5

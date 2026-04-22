@@ -1001,7 +1001,7 @@ func TestGeneratedMapRuntimeDeclarationsAreOstyOwned(t *testing.T) {
 	decls := strings.Join(llvmMapRuntimeDeclarations(), "\n")
 
 	want := []string{
-		"declare ptr @osty_rt_map_new()",
+		"declare ptr @osty_rt_map_new(i64, i64, i64, ptr)",
 		"declare i64 @osty_rt_map_len(ptr)",
 		"declare ptr @osty_rt_map_keys(ptr)",
 		"declare i1 @osty_rt_map_contains_i64(ptr, i64)",
@@ -1021,11 +1021,11 @@ func TestGeneratedMapBasicSmokeIR(t *testing.T) {
 	ir := llvmSmokeMapBasicIR("/tmp/map_basic.osty")
 
 	assertGeneratedIRContains(t, ir, "source_filename = \"/tmp/map_basic.osty\"")
-	assertGeneratedIRContains(t, ir, "declare ptr @osty_rt_map_new()")
+	assertGeneratedIRContains(t, ir, "declare ptr @osty_rt_map_new(i64, i64, i64, ptr)")
 	assertGeneratedIRContains(t, ir, "declare void @osty_rt_map_insert_i64(ptr, i64, ptr)")
 	assertGeneratedIRContains(t, ir, "declare i1 @osty_rt_map_contains_i64(ptr, i64)")
 	assertGeneratedIRContains(t, ir, "declare void @osty_rt_map_get_or_abort_i64(ptr, i64, ptr)")
-	assertGeneratedIRContains(t, ir, "%t0 = call ptr @osty_rt_map_new()")
+	assertGeneratedIRContains(t, ir, "%t0 = call ptr @osty_rt_map_new(i64 1, i64 1, i64 8, ptr null)")
 	assertGeneratedIRContains(t, ir, "%t1 = alloca i64")
 	assertGeneratedIRContains(t, ir, "store i64 42, ptr %t1")
 	assertGeneratedIRContains(t, ir, "call void @osty_rt_map_insert_i64(ptr %t0, i64 7, ptr %t1)")
