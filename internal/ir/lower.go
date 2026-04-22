@@ -1872,17 +1872,92 @@ func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs [
 	if len(typeArgs) == 0 {
 		typeArgs = l.instantiationArgs(e)
 	}
+	recv := l.lowerExpr(fx.X)
+	t := l.exprType(e)
+	if t == ErrTypeVal || t == nil {
+		// Recover from builtin method signatures when the checker
+		// left the call type unpopulated. Covers the common shapes
+		// from List / Map / Set / String / Bytes: `.len()`, `.isEmpty()`,
+		// `.contains(x)`, `.startsWith(s)`, etc. Without this, one
+		// `.len()` call with a checker-skipped receiver poisons
+		// every enclosing expression to ErrType and blocks MIR.
+		if recovered := recoverMethodReturnType(fx.Name, recv); recovered != nil {
+			t = recovered
+		}
+	}
 	out := &MethodCall{
-		Receiver: l.lowerExpr(fx.X),
+		Receiver: recv,
 		Name:     fx.Name,
 		TypeArgs: typeArgs,
-		T:        l.exprType(e),
+		T:        t,
 		SpanV:    nodeSpan(e),
 	}
 	for _, a := range e.Args {
 		out.Args = append(out.Args, l.lowerArg(a))
 	}
 	return out
+}
+
+// recoverMethodReturnType derives the return type of a receiver-and-
+// method pair for the subset of stdlib intrinsics where the return
+// shape is fixed by the name alone. Used as a fallback when the
+// Go-hosted checker didn't populate `Types[e]` for the call. Mirrors
+// the routing in internal/mir/lower.go:methodToIntrinsic.
+func recoverMethodReturnType(name string, recv Expr) Type {
+	if recv == nil {
+		return nil
+	}
+	rt := recv.Type()
+	if rt == nil || rt == ErrTypeVal {
+		return nil
+	}
+	// Common name-based shortcuts that don't depend on the receiver's
+	// concrete generic args.
+	switch name {
+	case "len":
+		if isBuiltinContainer(rt) || isPrim(rt, PrimString) || isPrim(rt, PrimBytes) {
+			return TInt
+		}
+	case "isEmpty":
+		if isBuiltinContainer(rt) || isPrim(rt, PrimString) || isPrim(rt, PrimBytes) {
+			return TBool
+		}
+	case "contains", "hasPrefix", "hasSuffix", "startsWith", "endsWith":
+		if isPrim(rt, PrimString) || isPrim(rt, PrimBytes) || isBuiltinContainer(rt) {
+			return TBool
+		}
+	case "toUpper", "toLower", "trim", "trimSpace", "trimLeft", "trimRight":
+		if isPrim(rt, PrimString) {
+			return TString
+		}
+	}
+	// Element-type returns: List<T>.first / .last / .get → T?, .push → Unit.
+	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "List" && len(nt.Args) == 1 {
+		switch name {
+		case "first", "last":
+			return &OptionalType{Inner: nt.Args[0]}
+		case "push":
+			return TUnit
+		case "sorted":
+			return nt
+		}
+	}
+	return nil
+}
+
+// isBuiltinContainer reports whether t is one of the builtin
+// homogeneous collections whose len/isEmpty/contains return types
+// can be derived from the method name alone.
+func isBuiltinContainer(t Type) bool {
+	nt, ok := t.(*NamedType)
+	if !ok || !nt.Builtin {
+		return false
+	}
+	switch nt.Name {
+	case "List", "Map", "Set":
+		return true
+	}
+	return false
 }
 
 // lowerVariantCall builds a VariantLit from a call whose callee is a
@@ -2101,13 +2176,60 @@ func (l *lowerer) lowerFieldExpr(e *ast.FieldExpr) Expr {
 			SpanV: nodeSpan(e),
 		}
 	}
+	x := l.lowerExpr(e.X)
+	t := l.exprType(e)
+	if t == ErrTypeVal || t == nil {
+		// Recover from the struct declaration when the checker didn't
+		// record a type for this field access. Without this, a single
+		// checker-skipped FieldExpr propagates ErrType to every
+		// `.locals.len()` or `.name + something` chain downstream.
+		if recovered := l.recoverFieldType(x.Type(), e.Name); recovered != nil {
+			t = recovered
+		}
+	}
 	return &FieldExpr{
-		X:        l.lowerExpr(e.X),
+		X:        x,
 		Name:     e.Name,
 		Optional: e.IsOptional,
-		T:        l.exprType(e),
+		T:        t,
 		SpanV:    nodeSpan(e),
 	}
+}
+
+// recoverFieldType resolves a field access `receiverType.fieldName`
+// back to the declared field type by consulting the resolver's type
+// decl for receiverType. Only handles user structs today —
+// enums/interfaces/tuples use different access shapes that do not
+// flow through lowerFieldExpr in the same way.
+func (l *lowerer) recoverFieldType(receiverType Type, fieldName string) Type {
+	if receiverType == nil || receiverType == ErrTypeVal {
+		return nil
+	}
+	nt, ok := receiverType.(*NamedType)
+	if !ok || nt.Builtin {
+		return nil
+	}
+	if l.res == nil {
+		return nil
+	}
+	sym := l.res.FileScope.Lookup(nt.Name)
+	if sym == nil || sym.Decl == nil {
+		return nil
+	}
+	sd, ok := sym.Decl.(*ast.StructDecl)
+	if !ok || sd == nil {
+		return nil
+	}
+	for _, f := range sd.Fields {
+		if f == nil || f.Name != fieldName {
+			continue
+		}
+		if f.Type == nil {
+			return nil
+		}
+		return l.lowerType(f.Type)
+	}
+	return nil
 }
 
 // tupleIndex parses a field name like "0" or "12" as a tuple index.
