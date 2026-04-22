@@ -892,6 +892,8 @@ static int64_t osty_gc_remembered_edge_cap = 0;
 static void osty_gc_barrier_logs_clear(void);
 
 void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
 void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
 void osty_gc_mark_slot_v1(void *slot_addr) __asm__(OSTY_GC_SYMBOL("osty.gc.mark_slot_v1"));
 
@@ -3334,6 +3336,55 @@ static void osty_rt_list_reserve(osty_rt_list *list, int64_t min_cap) {
     list->cap = next_cap;
 }
 
+static void osty_rt_list_emit_copied_write_barriers(void *raw_list, osty_rt_list *list, int64_t count) {
+    if (count <= 0) {
+        return;
+    }
+    if (list->elem_size == sizeof(void *) && list->trace_elem != NULL) {
+        int64_t i;
+        for (i = 0; i < count; i++) {
+            void *child = NULL;
+            memcpy(&child,
+                   list->data + (size_t)i * list->elem_size,
+                   sizeof(child));
+            if (child != NULL) {
+                osty_gc_post_write_v1(raw_list, child, OSTY_GC_KIND_LIST);
+            }
+        }
+        return;
+    }
+    if (list->gc_offset_count > 0) {
+        int64_t i;
+        int64_t j;
+        for (i = 0; i < count; i++) {
+            unsigned char *elem = list->data + (size_t)i * list->elem_size;
+            for (j = 0; j < list->gc_offset_count; j++) {
+                void *child = NULL;
+                memcpy(&child,
+                       elem + (size_t)list->gc_offsets[j],
+                       sizeof(child));
+                if (child != NULL) {
+                    osty_gc_post_write_v1(raw_list, child, OSTY_GC_KIND_LIST);
+                }
+            }
+        }
+    }
+}
+
+static void osty_rt_list_copy_initialized(void *raw_list, osty_rt_list *list, const unsigned char *src, int64_t count) {
+    if (count <= 0) {
+        list->len = 0;
+        return;
+    }
+    if (src == NULL) {
+        osty_rt_abort("list copy source is null");
+    }
+    osty_rt_list_reserve(list, count);
+    memcpy(list->data, src, (size_t)count * list->elem_size);
+    list->len = count;
+    osty_rt_list_emit_copied_write_barriers(raw_list, list, count);
+}
+
 static void osty_rt_list_push_raw(void *raw_list, const void *value, size_t elem_size, osty_rt_trace_slot_fn trace_elem) {
     osty_rt_list *list = osty_rt_list_cast(raw_list);
     osty_rt_list_ensure_layout(list, elem_size, trace_elem);
@@ -3663,56 +3714,64 @@ static int osty_rt_compare_string_ascending(const void *left, const void *right)
 void *osty_rt_list_sorted_i64(void *raw_list) {
     osty_rt_list *list = osty_rt_list_cast(raw_list);
     void *out = osty_rt_list_new();
-    int64_t i;
+    osty_rt_list *sorted = osty_rt_list_cast(out);
 
+    osty_gc_root_bind_v1(raw_list);
+    osty_gc_root_bind_v1(out);
     osty_rt_list_ensure_layout(list, sizeof(int64_t), NULL);
-    for (i = 0; i < list->len; i++) {
-        int64_t value = osty_rt_list_get_i64(raw_list, i);
-        osty_rt_list_push_i64(out, value);
-    }
-    qsort(osty_rt_list_cast(out)->data, (size_t)osty_rt_list_cast(out)->len, sizeof(int64_t), osty_rt_compare_i64_ascending);
+    osty_rt_list_ensure_layout(sorted, sizeof(int64_t), NULL);
+    osty_rt_list_copy_initialized(out, sorted, list->data, list->len);
+    qsort(sorted->data, (size_t)sorted->len, sizeof(int64_t), osty_rt_compare_i64_ascending);
+    osty_gc_root_release_v1(out);
+    osty_gc_root_release_v1(raw_list);
     return out;
 }
 
 void *osty_rt_list_sorted_i1(void *raw_list) {
     osty_rt_list *list = osty_rt_list_cast(raw_list);
     void *out = osty_rt_list_new();
-    int64_t i;
+    osty_rt_list *sorted = osty_rt_list_cast(out);
 
+    osty_gc_root_bind_v1(raw_list);
+    osty_gc_root_bind_v1(out);
     osty_rt_list_ensure_layout(list, sizeof(bool), NULL);
-    for (i = 0; i < list->len; i++) {
-        bool value = osty_rt_list_get_i1(raw_list, i);
-        osty_rt_list_push_i1(out, value);
-    }
-    qsort(osty_rt_list_cast(out)->data, (size_t)osty_rt_list_cast(out)->len, sizeof(bool), osty_rt_compare_i1_ascending);
+    osty_rt_list_ensure_layout(sorted, sizeof(bool), NULL);
+    osty_rt_list_copy_initialized(out, sorted, list->data, list->len);
+    qsort(sorted->data, (size_t)sorted->len, sizeof(bool), osty_rt_compare_i1_ascending);
+    osty_gc_root_release_v1(out);
+    osty_gc_root_release_v1(raw_list);
     return out;
 }
 
 void *osty_rt_list_sorted_f64(void *raw_list) {
     osty_rt_list *list = osty_rt_list_cast(raw_list);
     void *out = osty_rt_list_new();
-    int64_t i;
+    osty_rt_list *sorted = osty_rt_list_cast(out);
 
+    osty_gc_root_bind_v1(raw_list);
+    osty_gc_root_bind_v1(out);
     osty_rt_list_ensure_layout(list, sizeof(double), NULL);
-    for (i = 0; i < list->len; i++) {
-        double value = osty_rt_list_get_f64(raw_list, i);
-        osty_rt_list_push_f64(out, value);
-    }
-    qsort(osty_rt_list_cast(out)->data, (size_t)osty_rt_list_cast(out)->len, sizeof(double), osty_rt_compare_f64_ascending);
+    osty_rt_list_ensure_layout(sorted, sizeof(double), NULL);
+    osty_rt_list_copy_initialized(out, sorted, list->data, list->len);
+    qsort(sorted->data, (size_t)sorted->len, sizeof(double), osty_rt_compare_f64_ascending);
+    osty_gc_root_release_v1(out);
+    osty_gc_root_release_v1(raw_list);
     return out;
 }
 
 void *osty_rt_list_sorted_string(void *raw_list) {
     osty_rt_list *list = osty_rt_list_cast(raw_list);
     void *out = osty_rt_list_new();
-    int64_t i;
+    osty_rt_list *sorted = osty_rt_list_cast(out);
 
+    osty_gc_root_bind_v1(raw_list);
+    osty_gc_root_bind_v1(out);
     osty_rt_list_ensure_layout(list, sizeof(void *), osty_gc_mark_slot_v1);
-    for (i = 0; i < list->len; i++) {
-        void *value = osty_rt_list_get_ptr(raw_list, i);
-        osty_rt_list_push_ptr(out, value);
-    }
-    qsort(osty_rt_list_cast(out)->data, (size_t)osty_rt_list_cast(out)->len, sizeof(void *), osty_rt_compare_string_ascending);
+    osty_rt_list_ensure_layout(sorted, sizeof(void *), osty_gc_mark_slot_v1);
+    osty_rt_list_copy_initialized(out, sorted, list->data, list->len);
+    qsort(sorted->data, (size_t)sorted->len, sizeof(void *), osty_rt_compare_string_ascending);
+    osty_gc_root_release_v1(out);
+    osty_gc_root_release_v1(raw_list);
     return out;
 }
 
@@ -3738,7 +3797,9 @@ void *osty_rt_list_slice(void *raw_list, int64_t start, int64_t end) {
     }
     count = end - start;
 
+    osty_gc_root_bind_v1(raw_list);
     out_raw = osty_rt_list_new();
+    osty_gc_root_bind_v1(out_raw);
     out = osty_rt_list_cast(out_raw);
 
     // Propagate layout even for empty slices so downstream len/push/get
@@ -3751,45 +3812,17 @@ void *osty_rt_list_slice(void *raw_list, int64_t start, int64_t end) {
     }
 
     if (count == 0) {
+        osty_gc_root_release_v1(out_raw);
+        osty_gc_root_release_v1(raw_list);
         return out_raw;
     }
 
-    osty_rt_list_reserve(out, count);
-    memcpy(out->data,
-           src->data + (size_t)start * src->elem_size,
-           (size_t)count * src->elem_size);
-    out->len = count;
-
-    // Emit write barriers for each embedded pointer we copied in, so
-    // incremental / generational GC tracks the new list correctly.
-    if (out->elem_size == sizeof(void *) && src->trace_elem != NULL) {
-        int64_t i;
-        for (i = 0; i < count; i++) {
-            void *child = NULL;
-            memcpy(&child,
-                   out->data + (size_t)i * out->elem_size,
-                   sizeof(child));
-            if (child != NULL) {
-                osty_gc_post_write_v1(out_raw, child, OSTY_GC_KIND_LIST);
-            }
-        }
-    } else if (out->gc_offset_count > 0) {
-        int64_t i;
-        int64_t j;
-        for (i = 0; i < count; i++) {
-            unsigned char *elem = out->data + (size_t)i * out->elem_size;
-            for (j = 0; j < out->gc_offset_count; j++) {
-                void *child = NULL;
-                memcpy(&child,
-                       elem + (size_t)out->gc_offsets[j],
-                       sizeof(child));
-                if (child != NULL) {
-                    osty_gc_post_write_v1(out_raw, child, OSTY_GC_KIND_LIST);
-                }
-            }
-        }
-    }
-
+    osty_rt_list_copy_initialized(out_raw,
+                                  out,
+                                  src->data + (size_t)start * src->elem_size,
+                                  count);
+    osty_gc_root_release_v1(out_raw);
+    osty_gc_root_release_v1(raw_list);
     return out_raw;
 }
 
@@ -4984,43 +5017,40 @@ void osty_rt_map_clear(void *raw_map) {
 void *osty_rt_map_keys(void *raw_map) {
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     void *out = osty_rt_list_new();
-    int64_t i;
+    osty_rt_list *keys = osty_rt_list_cast(out);
+    int64_t count = 0;
     if (map == NULL) {
         osty_rt_abort("map is null");
     }
+    osty_gc_root_bind_v1(raw_map);
+    osty_gc_root_bind_v1(out);
     osty_rt_map_lock(raw_map);
-    for (i = 0; i < map->len; i++) {
-        switch (map->key_kind) {
-        case OSTY_RT_ABI_I64: {
-            int64_t value = 0;
-            memcpy(&value, osty_rt_map_key_slot(map, i), sizeof(value));
-            osty_rt_list_push_i64(out, value);
-            break;
-        }
-        case OSTY_RT_ABI_I1: {
-            bool value = false;
-            memcpy(&value, osty_rt_map_key_slot(map, i), sizeof(value));
-            osty_rt_list_push_i1(out, value);
-            break;
-        }
-        case OSTY_RT_ABI_F64: {
-            double value = 0.0;
-            memcpy(&value, osty_rt_map_key_slot(map, i), sizeof(value));
-            osty_rt_list_push_f64(out, value);
-            break;
-        }
-        case OSTY_RT_ABI_PTR:
-        case OSTY_RT_ABI_STRING: {
-            void *value = NULL;
-            memcpy(&value, osty_rt_map_key_slot(map, i), sizeof(value));
-            osty_rt_list_push_ptr(out, value);
-            break;
-        }
-        default:
-            osty_rt_abort("unsupported map key list kind");
-        }
+    switch (map->key_kind) {
+    case OSTY_RT_ABI_I64:
+        osty_rt_list_ensure_layout(keys, sizeof(int64_t), NULL);
+        break;
+    case OSTY_RT_ABI_I1:
+        osty_rt_list_ensure_layout(keys, sizeof(bool), NULL);
+        break;
+    case OSTY_RT_ABI_F64:
+        osty_rt_list_ensure_layout(keys, sizeof(double), NULL);
+        break;
+    case OSTY_RT_ABI_PTR:
+    case OSTY_RT_ABI_STRING:
+        osty_rt_list_ensure_layout(keys, sizeof(void *), osty_gc_mark_slot_v1);
+        break;
+    default:
+        osty_rt_abort("unsupported map key list kind");
+    }
+    count = map->len;
+    if (count > 0) {
+        osty_rt_list_copy_initialized(out, keys, map->keys, count);
+    } else {
+        keys->len = 0;
     }
     osty_rt_map_unlock(raw_map);
+    osty_gc_root_release_v1(out);
+    osty_gc_root_release_v1(raw_map);
     return out;
 }
 
@@ -5836,10 +5866,24 @@ void osty_gc_mark_slot_v1(void *slot_addr) {
     osty_gc_mark_root_slot(slot_addr);
 }
 
+static osty_gc_header *osty_gc_root_binding_header(void *root) {
+    osty_gc_header *header = osty_gc_find_header_or_forwarded(root);
+    if (header == NULL && root != NULL) {
+        // LLVM locals root managed values by passing the address of the
+        // stack slot that stores the payload. Runtime helpers sometimes
+        // root the payload directly. Accept both shapes here so GC-pin
+        // semantics stay stable across generated and hand-written paths.
+        void *payload = NULL;
+        memcpy(&payload, root, sizeof(payload));
+        header = osty_gc_find_header_or_forwarded(payload);
+    }
+    return header;
+}
+
 void osty_gc_root_bind_v1(void *root) {
     osty_gc_header *header;
     osty_gc_acquire();
-    header = osty_gc_find_header_or_forwarded(root);
+    header = osty_gc_root_binding_header(root);
     if (header == NULL) {
         osty_gc_release();
         return;
@@ -5855,7 +5899,7 @@ void osty_gc_root_bind_v1(void *root) {
 void osty_gc_root_release_v1(void *root) {
     osty_gc_header *header;
     osty_gc_acquire();
-    header = osty_gc_find_header_or_forwarded(root);
+    header = osty_gc_root_binding_header(root);
     if (header == NULL) {
         osty_gc_release();
         return;

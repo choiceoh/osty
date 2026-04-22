@@ -887,6 +887,48 @@ fn main() {
 	}
 }
 
+func TestLLVMBackendBinaryKeepsMapKeysSortedAliveUnderGC(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `fn sortedCount(words: List<String>) -> Int {
+    let mut index: Map<String, Int> = {:}
+    for word in words.sorted() {
+        if index.containsKey(word) {
+            continue
+        }
+        index.insert(word, 1)
+    }
+    index.keys().sorted().len()
+}
+
+fn main() {
+    let words = ["gamma", "alpha", "beta", "alpha", "gamma", "delta", "beta", "delta"]
+    let mut total = 0
+    let mut i = 0
+    while i < 50 {
+        total = total + sortedCount(words)
+        i = i + 1
+    }
+    println(total)
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	cmd.Env = append(os.Environ(), "OSTY_GC_STRESS=1", "OSTY_GC_THRESHOLD_BYTES=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "200\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
 func TestLLVMBackendBinaryForInOverTemporaryManagedListSurvivesPressure(t *testing.T) {
 	parallelClangBackendTest(t)
 
