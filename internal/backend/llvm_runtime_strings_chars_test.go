@@ -125,3 +125,81 @@ int main(void) {
 		t.Fatalf("runtime chars/bytes harness stdout mismatch\n---got---\n%s\n---want---\n%s", got, want)
 	}
 }
+
+func TestBundledRuntimeStringsHelpersPreserveSemantics(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_strings_helpers_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_strings_helpers_harness")
+
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+
+	harness := `#include <stdint.h>
+#include <stdio.h>
+
+int64_t osty_rt_strings_ByteLen(const char *value);
+int64_t osty_rt_strings_Compare(const char *left, const char *right);
+int osty_rt_strings_Equal(const char *left, const char *right);
+const char *osty_rt_strings_Concat(const char *left, const char *right);
+const char *osty_rt_strings_ConcatN(int64_t count, const char *const *parts);
+void *osty_rt_list_new(void);
+void osty_rt_list_push_ptr(void *list, void *value);
+void *osty_rt_list_sorted_string(void *raw_list);
+int64_t osty_rt_list_len(void *list);
+void *osty_rt_list_get_ptr(void *list, int64_t index);
+
+int main(void) {
+    const char *runtime = osty_rt_strings_Concat("run", "time");
+    const char *pieces[3] = { "map", "/", "key" };
+    const char *joined = osty_rt_strings_ConcatN(3, pieces);
+
+    printf("%lld %lld\n",
+           (long long)osty_rt_strings_ByteLen("compiler"),
+           (long long)osty_rt_strings_ByteLen(runtime));
+    printf("%d %d %d\n",
+           osty_rt_strings_Equal("osty", "osty"),
+           osty_rt_strings_Equal(runtime, "runtime"),
+           osty_rt_strings_Equal(joined, "map/key"));
+    printf("%lld %lld %lld\n",
+           (long long)osty_rt_strings_Compare("a", "b"),
+           (long long)osty_rt_strings_Compare("same", "same"),
+           (long long)osty_rt_strings_Compare(NULL, ""));
+
+    void *items = osty_rt_list_new();
+    osty_rt_list_push_ptr(items, (void *)"runtime");
+    osty_rt_list_push_ptr(items, (void *)runtime);
+    osty_rt_list_push_ptr(items, (void *)"compiler");
+    void *sorted = osty_rt_list_sorted_string(items);
+    for (int64_t i = 0; i < osty_rt_list_len(sorted); i++) {
+        printf("%s\n", (const char *)osty_rt_list_get_ptr(sorted, i));
+    }
+    return 0;
+}
+`
+	if err := os.WriteFile(harnessPath, []byte(harness), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+
+	buildOutput, err := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+
+	want := "8 7\n" +
+		"1 1 1\n" +
+		"-1 0 0\n" +
+		"compiler\n" +
+		"runtime\n" +
+		"runtime\n"
+	if got := string(runOutput); got != want {
+		t.Fatalf("runtime string helpers harness stdout mismatch\n---got---\n%s\n---want---\n%s", got, want)
+	}
+}
