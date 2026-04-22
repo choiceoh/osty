@@ -30,6 +30,7 @@ import (
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -42,9 +43,12 @@ type Result struct {
 //
 // rr must be the resolver's output for f. chk is optional — when non-nil,
 // rules that need type information (Never-call dead code, ignored
-// Result/Option) are enabled. The lint pass is read-only over all inputs:
-// it never mutates the AST, symbol tables, or checker state.
-func File(f *ast.File, rr *resolve.Result, chk *check.Result) *Result {
+// Result/Option) are enabled. src carries the original source bytes; the
+// self-hosted linter runs over them in parallel and its findings are merged
+// into the returned result, so selfhost-authored rules (toolchain/lint.osty)
+// are part of the CLI output. The lint pass is read-only over all inputs: it
+// never mutates the AST, symbol tables, or checker state.
+func File(f *ast.File, src []byte, rr *resolve.Result, chk *check.Result) *Result {
 	if f == nil {
 		return &Result{}
 	}
@@ -69,7 +73,49 @@ func File(f *ast.File, rr *resolve.Result, chk *check.Result) *Result {
 	l.lintComplexity()
 	l.lintDocs()
 	l.filterSuppressed()
+	mergeSelfhostLint(l.result, src)
 	return l.result
+}
+
+// mergeSelfhostLint appends diagnostics from the Osty-authored lint pass
+// (toolchain/lint.osty) that the Go pass did not already emit at the same
+// code + position. Dedupe is by (Code, start offset) because the two
+// implementations occasionally phrase the same finding differently.
+func mergeSelfhostLint(result *Result, src []byte) {
+	if result == nil || len(src) == 0 {
+		return
+	}
+	seen := map[selfhostLintKey]bool{}
+	for _, d := range result.Diags {
+		seen[selfhostLintKeyOf(d)] = true
+	}
+	for _, d := range selfhost.LintDiagnostics(src) {
+		if d == nil {
+			continue
+		}
+		k := selfhostLintKeyOf(d)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		result.Diags = append(result.Diags, d)
+	}
+}
+
+type selfhostLintKey struct {
+	code  string
+	start int
+}
+
+func selfhostLintKeyOf(d *diag.Diagnostic) selfhostLintKey {
+	if d == nil {
+		return selfhostLintKey{}
+	}
+	key := selfhostLintKey{code: d.Code}
+	if len(d.Spans) > 0 {
+		key.start = d.Spans[0].Span.Start.Offset
+	}
+	return key
 }
 
 // Package runs lint over every file in pkg as one analysis unit.
@@ -148,6 +194,7 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, chk *check.Result)
 		l.lintNaming()
 		l.lintSimplify()
 		l.filterSuppressed()
+		mergeSelfhostLint(local, pf.Source)
 		diag.StampFile(local.Diags, pf.Path)
 		res.Diags = append(res.Diags, local.Diags...)
 	}

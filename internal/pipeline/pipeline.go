@@ -505,7 +505,7 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 
 	// --- lint ---
 	t0 = time.Now()
-	lr := lint.File(file, res, chk)
+	lr := lint.File(file, src, res, chk)
 	r.Lint = lr
 	r.AllDiags = append(r.AllDiags, lr.Diags...)
 	emit(Stage{
@@ -688,7 +688,7 @@ func RunLoadedPackage(pkg *resolve.Package, stream io.Writer, cfg Config) Result
 			TypeRefIdents: pf.TypeRefIdents,
 			FileScope:     pf.FileScope,
 		}
-		lr := lint.File(pf.File, fileRes, chk)
+		lr := lint.File(pf.File, pf.Source, fileRes, chk)
 		lintDiags = append(lintDiags, lr.Diags...)
 	}
 	r.AllDiags = append(r.AllDiags, lintDiags...)
@@ -914,7 +914,7 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 				TypeRefIdents: pf.TypeRefIdents,
 				FileScope:     pf.FileScope,
 			}
-			lr := lint.File(pf.File, fileRes, cr)
+			lr := lint.File(pf.File, pf.Source, fileRes, cr)
 			lintDiags = append(lintDiags, lr.Diags...)
 		}
 	}

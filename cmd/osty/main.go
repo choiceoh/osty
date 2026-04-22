@@ -1307,7 +1307,7 @@ func runLintFileLegacy(path string, src []byte, formatter *diag.Formatter, flags
 	file, parseDiags := parsed.File, parsed.Diagnostics
 	res := resolveFile(file)
 	chk := check.File(file, res, checkOptsForFile(path, canonical.Source(src, file)))
-	lr := runLintEngine(file, res, chk)
+	lr := runLintEngine(file, src, res, chk)
 	if cfg, ok := loadLintConfigNear(path); ok {
 		lr = cfg.Apply(lr)
 	}
@@ -1906,8 +1906,8 @@ func resolveFile(file *ast.File) *resolve.Result {
 	return resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
 }
 
-func runLintEngine(file *ast.File, res *resolve.Result, chk *check.Result) *lint.Result {
-	return lint.File(file, res, chk)
+func runLintEngine(file *ast.File, src []byte, res *resolve.Result, chk *check.Result) *lint.Result {
+	return lint.File(file, src, res, chk)
 }
 
 // checkOpts builds the check.Opts every subcommand passes to the type

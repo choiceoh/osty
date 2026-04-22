@@ -246,7 +246,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 			}
 			rr := qs.ResolveFile.Fetch(ctx, path)
 			chk := qs.CheckFile.Fetch(ctx, path)
-			return lint.File(pr.File, rr, chk)
+			return lint.File(pr.File, pr.Source, rr, chk)
 		},
 		hashLintResult,
 	)
