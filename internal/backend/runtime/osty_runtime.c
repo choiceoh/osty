@@ -4182,8 +4182,24 @@ void *osty_rt_list_new(void) {
     return osty_gc_allocate_managed(sizeof(osty_rt_list), OSTY_GC_KIND_LIST, "runtime.list", osty_rt_list_trace, osty_rt_list_destroy);
 }
 
+/* osty_rt_list_cast_fast — direct cast without the osty_gc_load_v1
+ * barrier. Safe under the Phase A-C non-moving collector invariant
+ * (RUNTIME_GC.md §: "the collector does not relocate yet (compaction
+ * lands in Phase D)") — the payload pointer never changes for the
+ * lifetime of an allocation, so the find-header / forward-payload
+ * lookups are redundant. Only use this from primitive-typed list
+ * accessors (get_i64, set_i64, len) where the call was the dominant
+ * cost in tight-loop List<Int> code (quicksort, matmul, lane_route).
+ * Flip these callers back to osty_rt_list_cast when Phase D lands. */
+OSTY_HOT_INLINE static osty_rt_list *osty_rt_list_cast_fast(void *raw_list) {
+    if (raw_list == NULL) {
+        osty_rt_abort("list is null");
+    }
+    return (osty_rt_list *)raw_list;
+}
+
 OSTY_HOT_INLINE int64_t osty_rt_list_len(void *raw_list) {
-    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    osty_rt_list *list = osty_rt_list_cast_fast(raw_list);
     return list->len;
 }
 
@@ -4335,8 +4351,16 @@ void osty_rt_list_insert_bytes_roots_v1(void *raw_list, int64_t index, const voi
 }
 
 OSTY_HOT_INLINE int64_t osty_rt_list_get_i64(void *raw_list, int64_t index) {
+    /* Reimplemented against cast_fast + a direct bounds-checked GEP
+     * load instead of osty_rt_list_get_raw → osty_rt_list_cast. Saves
+     * the gc_load_v1 barrier per access; matmul/quicksort spend the
+     * majority of their iter cost here. */
+    osty_rt_list *list = osty_rt_list_cast_fast(raw_list);
+    if (index < 0 || index >= list->len) {
+        osty_rt_abort("list index out of range");
+    }
     int64_t value;
-    memcpy(&value, osty_rt_list_get_raw(raw_list, index, sizeof(value), NULL), sizeof(value));
+    memcpy(&value, list->data + ((size_t)index * list->elem_size), sizeof(value));
     return value;
 }
 
@@ -4394,7 +4418,12 @@ void osty_rt_list_get_bytes_v1(void *raw_list, int64_t index, void *out, int64_t
 }
 
 OSTY_HOT_INLINE void osty_rt_list_set_i64(void *raw_list, int64_t index, int64_t value) {
-    osty_rt_list_set_raw(raw_list, index, &value, sizeof(value), NULL);
+    /* Mirrors osty_rt_list_get_i64's fast path. */
+    osty_rt_list *list = osty_rt_list_cast_fast(raw_list);
+    if (index < 0 || index >= list->len) {
+        osty_rt_abort("list index out of range");
+    }
+    memcpy(list->data + ((size_t)index * list->elem_size), &value, sizeof(value));
 }
 
 void osty_rt_list_set_i1(void *raw_list, int64_t index, bool value) {
