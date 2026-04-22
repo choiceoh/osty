@@ -168,6 +168,23 @@ type chainSeg struct {
 	end token.Pos
 }
 
+// unwrapAsQuestion recovers the surface `expr as? T` from its
+// desugared shape `expr.downcast::<T>()`. The parser builds the
+// desugared form with IsAsQuestion=true so the formatter can restore
+// the sugar here; the underlying AST stays identical to the intrinsic
+// method call so downstream passes don't need to distinguish the two.
+func unwrapAsQuestion(call *ast.CallExpr) (ast.Expr, ast.Type, bool) {
+	turbo, ok := call.Fn.(*ast.TurbofishExpr)
+	if !ok || len(turbo.Args) != 1 {
+		return nil, nil, false
+	}
+	field, ok := turbo.Base.(*ast.FieldExpr)
+	if !ok || field.Name != "downcast" || field.IsOptional {
+		return nil, nil, false
+	}
+	return field.X, turbo.Args[0], true
+}
+
 // collectChain walks the left-recursive CallExpr/FieldExpr skeleton of
 // a method chain and returns (base, segs) — the chain root and each
 // `.method(...)` or `.field` step after it, in source order. Only
@@ -872,6 +889,10 @@ func (p *printer) printStmtInner(s ast.Stmt) {
 		p.nl()
 	case *ast.BreakStmt:
 		p.write("break")
+		if n.Value != nil {
+			p.write(" ")
+			p.printExpr(n.Value)
+		}
 		p.nl()
 	case *ast.ContinueStmt:
 		p.write("continue")
@@ -973,6 +994,14 @@ func (p *printer) printExprInner(e ast.Expr) {
 		p.printExpr(n.X)
 		p.write("?")
 	case *ast.CallExpr:
+		if n.IsAsQuestion {
+			if recv, target, ok := unwrapAsQuestion(n); ok {
+				p.printExpr(recv)
+				p.write(" as? ")
+				p.printType(target)
+				return
+			}
+		}
 		if base, segs := collectChain(n); !p.inlineOnly && shouldBreakChain(base, segs) {
 			p.printMethodChain(base, segs)
 			return
@@ -1020,6 +1049,10 @@ func (p *printer) printExprInner(e ast.Expr) {
 		if n.Stop != nil {
 			p.printExpr(n.Stop)
 		}
+		if n.Step != nil {
+			p.write(" by ")
+			p.printExpr(n.Step)
+		}
 	case *ast.ParenExpr:
 		p.write("(")
 		p.printExpr(n.X)
@@ -1055,6 +1088,9 @@ func (p *printer) printExprInner(e ast.Expr) {
 		p.printStructLit(n)
 	case *ast.IfExpr:
 		p.printIfExpr(n)
+	case *ast.LoopExpr:
+		p.write("loop ")
+		p.printBlock(n.Body)
 	case *ast.MatchExpr:
 		p.printMatchExpr(n)
 	case *ast.ClosureExpr:
@@ -1206,11 +1242,18 @@ func fieldIsVisible(f *ast.StructLitField) bool {
 }
 
 func (p *printer) printStructLit(s *ast.StructLit) {
+	// G26 §A.2: shorthand `x { field: v }` — the receiver `x` is both
+	// the Type position and the Spread source. Suppress the explicit
+	// `..x` to round-trip back to the shorthand surface.
+	spread := s.Spread
+	if s.IsShorthand {
+		spread = nil
+	}
 	// Error-recovery may leave a Fields entry with empty Name and nil
 	// Value; such entries emit nothing and must not force the
 	// non-empty branch (which would produce `Type { }`).
 	visible := 0
-	if s.Spread != nil {
+	if spread != nil {
 		visible++
 	}
 	for _, f := range s.Fields {
@@ -1232,7 +1275,7 @@ func (p *printer) printStructLit(s *ast.StructLit) {
 	// may still be rejected below by the MaxLineWidth budget.
 	refLine := s.Type.Pos().Line
 	ml := false
-	if s.Spread != nil && s.Spread.Pos().Line != refLine {
+	if spread != nil && spread.Pos().Line != refLine {
 		ml = true
 	}
 	for _, f := range s.Fields {
@@ -1244,9 +1287,9 @@ func (p *printer) printStructLit(s *ast.StructLit) {
 	emitFlat := func() {
 		p.write(" ")
 		first := true
-		if s.Spread != nil {
+		if spread != nil {
 			p.write("..")
-			p.printExpr(s.Spread)
+			p.printExpr(spread)
 			first = false
 		}
 		for _, f := range s.Fields {
@@ -1265,9 +1308,9 @@ func (p *printer) printStructLit(s *ast.StructLit) {
 	emitMulti := func() {
 		p.nl()
 		p.indent()
-		if s.Spread != nil {
+		if spread != nil {
 			p.write("..")
-			p.printExpr(s.Spread)
+			p.printExpr(spread)
 			p.write(",")
 			p.nl()
 		}

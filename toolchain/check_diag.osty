@@ -63,6 +63,7 @@ pub fn checkCodeDuplicateMethod() -> String { "E0747" }
 pub fn checkCodeCannotInferTyParam() -> String { "E0748" }
 pub fn checkCodeGenericBoundViolation() -> String { "E0749" }
 pub fn checkCodeInterfaceNotSatisfied() -> String { "E0751" }
+pub fn checkCodeAsQuestionBadType() -> String { "E0757" }
 pub fn checkCodeClosureAnnotationRequired() -> String { "E0752" }
 pub fn checkCodePatternShapeMismatch() -> String { "E0753" }
 pub fn checkCodeRuntimePrivilegeViolation() -> String { "E0770" }
@@ -288,6 +289,24 @@ pub fn diagInterfaceNotSatisfied(concrete: String, iface: String, start: Int, en
     checkDiag(
         checkCodeInterfaceNotSatisfied(),
         "`{concrete}` does not satisfy interface `{iface}`",
+        start,
+        end,
+    )
+}
+
+pub fn diagAsQuestionBadOperand(ty: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeAsQuestionBadType(),
+        "`as?` requires an `Error` operand, found `{ty}`",
+        start,
+        end,
+    )
+}
+
+pub fn diagAsQuestionBadType(ty: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeAsQuestionBadType(),
+        "`as?` target type `{ty}` must implement `Error`",
         start,
         end,
     )

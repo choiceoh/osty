@@ -175,3 +175,71 @@ fn compound_assignment_field() {
     cur.pos += 1
     let _ = cur.pos
 }
+
+// G25 §A.4: `by` step on range expressions.
+fn range_step_inclusive() -> Int {
+    let mut sum = 0
+    for i in 0..=10 by 2 {
+        sum = sum + i
+    }
+    sum
+}
+
+fn range_step_exclusive() -> Int {
+    let mut acc = 0
+    for i in 0..100 by 10 {
+        acc = acc + i
+    }
+    acc
+}
+
+fn range_step_negative() -> Int {
+    let mut sum = 0
+    for i in 10..0 by -1 {
+        sum = sum + i
+    }
+    sum
+}
+
+// G22 §A.4: `loop { ... }` expression with `break value`.
+fn loop_break_value() -> Int {
+    let x = loop {
+        break 42
+    }
+    x
+}
+
+fn loop_break_computed(n: Int) -> Int {
+    let mut i = 0
+    loop {
+        if i >= n { break i * 2 }
+        i = i + 1
+    }
+}
+
+// G26 §A.2: struct update shorthand `x { field: v }` ≡ `T { ..x, field: v }`.
+pub struct PointG26 { pub x: Int, pub y: Int }
+
+fn shift_right(p: PointG26, dx: Int) -> PointG26 {
+    p { x: p.x + dx }
+}
+
+fn double_both(p: PointG26) -> PointG26 {
+    p { x: p.x * 2, y: p.y * 2 }
+}
+
+// G23 §A.2: trailing closure — `f(a) |x| { body }` ≡ `f(a, |x| { body })`.
+fn apply_g23(f: fn(Int) -> Int, x: Int) -> Int {
+    f(x)
+}
+
+fn apply_trailing() -> Int {
+    apply_g23(3) |n| { n * 2 }
+}
+
+fn apply_trailing_multi_arg() -> Int {
+    apply_g23(3) |n| {
+        let doubled = n * 2
+        doubled + 1
+    }
+}

@@ -530,13 +530,27 @@ fn opParseExprBP(p: OstyParser, minBP: Int) -> Int {
             if op.kind == FrontDotDot || op.kind == FrontDotDotEq {
                 let mut rhsIdx = -1
                 if astStartsExpr(opPeek(p).kind) { rhsIdx = opParseExprBP(p, rbp) }
+                // G25 §A.4: optional `by <expr>` stride suffix.
+                // `by` is a contextual keyword — only recognised in this
+                // position, right after the range RHS, so ordinary
+                // identifiers named `by` remain legal elsewhere.
+                let mut stepChildren: List<Int> = []
+                let mut rangeFlags = 0
+                if op.kind == FrontDotDotEq { rangeFlags = 1 }
+                if opAt(p, FrontIdent) && opPeek(p).text == "by" {
+                    let _ = opAdvance(p)
+                    let stepIdx = opParseExprBP(p, rbp)
+                    stepChildren.push(stepIdx)
+                    rangeFlags = rangeFlags | 2
+                }
                 let leftNode = astArenaNodeAt(p.arena, left)
                 let mut rangeNode = emptyAstNode(AstNRange)
                 rangeNode.left = left
                 rangeNode.right = rhsIdx
+                rangeNode.children = stepChildren
                 rangeNode.start = leftNode.start
                 rangeNode.end = p.pos
-                if op.kind == FrontDotDotEq { rangeNode.flags = 1 }
+                rangeNode.flags = rangeFlags
                 left = opAddNode(p, rangeNode)
                 if astIsNonAssocOp(opPeek(p).kind) && astSameLevel(op.kind, opPeek(p).kind) {
                     opErrorFull(p, "chained range operators require parentheses", "", "v0.2 R1: range operators are non-associative", "E0200")
@@ -629,6 +643,23 @@ fn opParsePrimary(p: OstyParser) -> Int {
     n.end = p.pos
     return opAddNode(p, n) }
     if tok.kind == FrontIdent {
+        // G22 §A.4: `loop { ... }` is a value-producing loop expression.
+        // The body is an ordinary block; iteration continues until a
+        // `break <expr>` exits with a value.
+        if tok.text == "loop" && opPeekAt(p, 1).kind == FrontLBrace {
+            opAdvance(p)
+            let prevInLoop = p.inLoop
+            p.inLoop = true
+            let bodyIdx = opParseBlockOrMap(p)
+            p.inLoop = prevInLoop
+            let mut n = emptyAstNode(AstNFor)
+            n.text = "loopexpr"
+            n.right = bodyIdx
+            n.left = 0 - 1
+            n.start = start
+            n.end = p.pos
+            return opAddNode(p, n)
+        }
         opAdvance(p)
         if tok.text == "true" || tok.text == "false" {
             let mut n = emptyAstNode(AstNBoolLit)
@@ -926,6 +957,66 @@ fn opParseClosureBody(p: OstyParser, requireBlock: Bool) -> Int {
     opParseExpr(p)
 }
 
+/// opLooksLikeTrailingClosure peeks past the current `|` / `||` to
+/// decide whether the upcoming tokens form a closure-parameter-list +
+/// block-body combo (G23). A trailing closure satisfies:
+///   * `||` + `{` (empty-params form), or
+///   * `|` + (ident | `_`) [`:` Type] {`,` ...} + `|` + `{`.
+/// Anything else — including bare `| expr |` that could be a bitwise
+/// OR — is rejected so the ambiguity falls back to the infix path.
+fn opLooksLikeTrailingClosure(p: OstyParser) -> Bool {
+    let open = opPeek(p)
+    if open.kind == FrontOr {
+        // `||` — empty params form; body `{` must immediately follow.
+        return opPeekAt(p, 1).kind == FrontLBrace
+    }
+    if open.kind != FrontBitOr {
+        return false
+    }
+    // Walk the would-be parameter list. We accept a simple comma-
+    // separated list of identifiers with optional type annotations and
+    // bail out on anything fancier so we don't mis-lex `a | b | c`.
+    let mut i = 1
+    let mut depth = 0
+    for i < 32 {
+        let t = opPeekAt(p, i)
+        if t.kind == FrontEOF || t.kind == FrontNewline { return false }
+        if t.kind == FrontLParen { depth = depth + 1 }
+        if t.kind == FrontRParen { depth = depth - 1 }
+        if depth == 0 && t.kind == FrontBitOr {
+            return opPeekAt(p, i + 1).kind == FrontLBrace
+        }
+        if depth == 0 && t.kind == FrontOr {
+            // `|...||...` — the second `||` would close the params; but
+            // we treat this shape as ambiguous-for-safety.
+            return false
+        }
+        i = i + 1
+    }
+    false
+}
+
+/// opAttachTrailingClosure consumes a `|...|` (or `||`) + block and
+/// rebuilds the receiver CallExpr with the closure appended to its
+/// positional arguments. The original CallExpr arena node is left in
+/// place (other users reference it by index); a fresh AstNCall is
+/// added with extended `children` and returned.
+fn opAttachTrailingClosure(p: OstyParser, callIdx: Int) -> Int {
+    let originalCall = astArenaNodeAt(p.arena, callIdx)
+    let closureIdx = opParseClosure(p)
+    let mut newArgs: List<Int> = []
+    for c in originalCall.children { newArgs.push(c) }
+    newArgs.push(closureIdx)
+    let mut n = emptyAstNode(AstNCall)
+    n.left = originalCall.left
+    n.children = newArgs
+    n.text = originalCall.text
+    n.flags = originalCall.flags
+    n.start = originalCall.start
+    n.end = p.pos
+    opAddNode(p, n)
+}
+
 // ===================================================================
 // POSTFIX
 // ===================================================================
@@ -956,6 +1047,18 @@ fn opTryParsePostfix(p: OstyParser, lhs: Int) -> Int {
         return opAddNode(p, n)
     }
     if tok.kind == FrontLParen { return opParseCallArgs(p, lhs) }
+    // G23 §A.2: trailing closure — `f(a) |x| { … }` is sugar for
+    // `f(a, |x| { … })`. We only accept it right after a finished
+    // CallExpr so ordinary bitwise-OR expressions (`a(x) | b(y)`) are
+    // left untouched. Shape check: `| … |` (or bare `||`) immediately
+    // followed by `{`, and inside the `| … |` only closure-parameter
+    // tokens (ident / `_` / `(` for destructures / `,` / `:` / type).
+    if (tok.kind == FrontBitOr || tok.kind == FrontOr) && lhs >= 0 {
+        let lhsNode = astArenaNodeAt(p.arena, lhs)
+        if lhsNode.kind == AstNCall && opLooksLikeTrailingClosure(p) {
+            return opAttachTrailingClosure(p, lhs)
+        }
+    }
     if tok.kind == FrontLBracket { return opParseIndex(p, lhs) }
     if tok.kind == FrontQuestion {
         let s = p.pos
@@ -966,6 +1069,21 @@ fn opTryParsePostfix(p: OstyParser, lhs: Int) -> Int {
         n.end = p.pos
         return opAddNode(p, n)
     }
+    if tok.kind == FrontIdent && tok.text == "as" && opPeekAt(p, 1).kind == FrontQuestion {
+        if opAdjacent(tok, opPeekAt(p, 1)) {
+            return opParseAsQuestion(p, lhs)
+        }
+        // Spec `OSTY_GRAMMAR_v0.5.md:28` requires `as?` to be a single
+        // token (no whitespace between `as` and `?`). Surface a targeted
+        // E0202 diagnostic and consume the shape so cascade errors on
+        // the RHS type name don't pile up. Reuses the "unexpected token"
+        // code band — a dedicated code can follow if this surface grows.
+        opErrorFull(p, "`as?` must be written without whitespace between `as` and `?`", "write `as?` as a single token (no space)", "OSTY_GRAMMAR_v0.5 §28", "E0202")
+        let _ = opAdvance(p)
+        let _ = opAdvance(p)
+        let _ = opParseType(p)
+        return lhs
+    }
     if tok.kind == FrontColonColon {
         if opPeekAt(p, 1).kind == FrontLt { return opParseTurbofish(p, lhs) }
         opErrorFull(p, "`::` must be followed by `<`", "`::` is reserved for turbofish type arguments; use `.` for member access", "", "E0201")
@@ -975,6 +1093,14 @@ fn opTryParsePostfix(p: OstyParser, lhs: Int) -> Int {
     if tok.kind == FrontLBrace && !(p.noStructLit) && lhs >= 0 {
         let leftNode = astArenaNodeAt(p.arena, lhs)
         if leftNode.kind == AstNIdent && astIsUpperName(leftNode.text) { return opParseStructLit(p, lhs) }
+        // G26 §A.2: struct update shorthand `x { field: v }` — lowercase
+        // receiver is a value of struct type, we desugar to a spread +
+        // update. Only trigger when the brace body looks like a struct
+        // literal body (starts with `ident :` / `ident ,` / `..` / `}`)
+        // so ordinary `name { ... block }` positions don't get hijacked.
+        if leftNode.kind == AstNIdent && opLooksLikeStructLitBody(p) {
+            return opParseStructUpdateShorthand(p, lhs)
+        }
     }
     return 0 - 1
 }
@@ -1027,6 +1153,98 @@ fn opParseTurbofish(p: OstyParser, callee: Int) -> Int {
     let mut n = emptyAstNode(AstNTurbofish)
     n.left = callee
     n.children = typeArgs
+    n.start = start
+    n.end = p.pos
+    opAddNode(p, n)
+}
+
+/// opParseAsQuestion desugars `expr as? T` (G27, §7.4) into the same
+/// shape as `expr.downcast::<T>()`. The arena Call node carries
+/// `flags = 1` so the checker (via ast_lower.osty) can tell this call
+/// originated from `as?` sugar and enforce the stricter Error-bound
+/// rule (E0757) on both operand and T.
+fn opParseAsQuestion(p: OstyParser, lhs: Int) -> Int {
+    let start = p.pos
+    let _ = opAdvance(p)
+    let _ = opAdvance(p)
+    let typeIdx = opParseType(p)
+    let mut fieldNode = emptyAstNode(AstNField)
+    fieldNode.left = lhs
+    fieldNode.text = "downcast"
+    fieldNode.start = start
+    fieldNode.end = p.pos
+    let fieldIdx = opAddNode(p, fieldNode)
+    let mut turboNode = emptyAstNode(AstNTurbofish)
+    turboNode.left = fieldIdx
+    turboNode.children = [typeIdx]
+    turboNode.start = start
+    turboNode.end = p.pos
+    let turboIdx = opAddNode(p, turboNode)
+    let mut callNode = emptyAstNode(AstNCall)
+    callNode.left = turboIdx
+    callNode.children = []
+    callNode.flags = 1
+    callNode.start = start
+    callNode.end = p.pos
+    opAddNode(p, callNode)
+}
+
+/// opLooksLikeStructLitBody peeks past the current `{` and decides if
+/// the body has the shape of a struct literal (G26 shorthand trigger).
+/// We require either an immediate `}`, a spread `..`, or an ident
+/// followed by `:` or `,`. This avoids grabbing `foo { stmt; }` blocks
+/// — those would have their body start with a keyword or non-ident.
+fn opLooksLikeStructLitBody(p: OstyParser) -> Bool {
+    // Current token is the `{`. Peek ahead, stepping over newlines.
+    let mut i = 1
+    for opPeekAt(p, i).kind == FrontNewline { i = i + 1 }
+    let first = opPeekAt(p, i)
+    if first.kind == FrontRBrace { return true }
+    if first.kind == FrontDotDot { return true }
+    if first.kind != FrontIdent { return false }
+    let next = opPeekAt(p, i + 1)
+    next.kind == FrontColon || next.kind == FrontComma
+}
+
+/// opParseStructUpdateShorthand builds the G26 shorthand
+/// `x { field: v, ... }` — equivalent to `T { ..x, field: v, ... }`
+/// where `T` is `x`'s inferred type. We set the StructLit arena node's
+/// `flags` bit 0 so the checker knows to fill in the owner from the
+/// receiver's type rather than treat the LHS as a type name.
+fn opParseStructUpdateShorthand(p: OstyParser, recv: Int) -> Int {
+    let start = p.pos
+    let _ = opAdvance(p)
+    let mut fields: List<Int> = []
+    let mut spreadIdx = recv
+    opSkipNewlines(p)
+    for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
+        if opAt(p, FrontDotDot) {
+            let _ = opAdvance(p)
+            spreadIdx = opParseExpr(p)
+            opSkipNewlines(p)
+            let _ = opEat(p, FrontComma)
+            break
+        }
+        let fs = p.pos
+        let fn_ = opAdvance(p).text
+        let mut valIdx = 0 - 1
+        if opEat(p, FrontColon) { valIdx = opParseExpr(p) }
+        let mut fNode = emptyAstNode(AstNField_)
+        fNode.text = fn_
+        fNode.left = valIdx
+        fNode.start = fs
+        fNode.end = p.pos
+        fields.push(opAddNode(p, fNode))
+        opSkipNewlines(p)
+        if !(opEat(p, FrontComma)) { break }
+        opSkipNewlines(p)
+    }
+    let _ = opExpect(p, FrontRBrace)
+    let mut n = emptyAstNode(AstNStructLit)
+    n.left = recv
+    n.right = spreadIdx
+    n.children = fields
+    n.flags = 1
     n.start = start
     n.end = p.pos
     opAddNode(p, n)
@@ -1088,7 +1306,16 @@ fn opParseStmt(p: OstyParser) -> Int {
         let s = p.pos
         let _ = opAdvance(p)
         if !(p.inLoop) { opErrorFull(p, "`break` outside of loop", "move inside a `for` loop", "", "E0600") }
+        // G22 §A.4: `break <expr>` exits the enclosing `loop` with a
+        // value. Plain `break` inside `for`/`while` continues without a
+        // value. We parse greedily — if an expression starts on the
+        // same line, capture it as the break value.
+        let mut valueIdx = 0 - 1
+        if astStartsExpr(opPeek(p).kind) && opPeek(p).kind != FrontNewline {
+            valueIdx = opParseExpr(p)
+        }
         let mut n = emptyAstNode(AstNBreak)
+        n.left = valueIdx
         n.start = s
         n.end = p.pos
         return opAddNode(p, n)

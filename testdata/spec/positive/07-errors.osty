@@ -67,6 +67,14 @@ fn describeError(err: Error) -> String {
     }
 }
 
+// G27: `err as? T` is exact sugar for `err.downcast::<T>()`.
+fn describeErrorSugar(err: Error) -> String {
+    match err as? FsError {
+        Some(fs) -> fs.message(),
+        None -> err.message(),
+    }
+}
+
 fn directWidening() -> Result<String, Error> {
     Err(NotFound("settings.osty"))
 }
