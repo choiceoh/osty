@@ -560,3 +560,89 @@ func findResolveDiagnostic(result selfhost.ResolveResult, code string) *selfhost
 	}
 	return nil
 }
+
+func TestDetectImportCyclesAcyclicGraphEmitsNoDiag(t *testing.T) {
+	// a → b → c; no cycle.
+	input := selfhost.WorkspaceUses{Packages: []selfhost.PackageUses{
+		{Path: "a", Uses: []selfhost.UseEdge{{Target: "b", Pos: 10}}},
+		{Path: "b", Uses: []selfhost.UseEdge{{Target: "c", Pos: 20}}},
+		{Path: "c", Uses: nil},
+	}}
+	diags := selfhost.DetectImportCycles(input)
+	if len(diags) != 0 {
+		t.Fatalf("expected 0 cycle diags on DAG, got %d: %#v", len(diags), diags)
+	}
+}
+
+func TestDetectImportCyclesTwoCycleEmitsOneDiag(t *testing.T) {
+	// a ↔ b; one back-edge closes the cycle.
+	input := selfhost.WorkspaceUses{Packages: []selfhost.PackageUses{
+		{Path: "a", Uses: []selfhost.UseEdge{{Target: "b", Pos: 10, EndPos: 11, File: "a.osty"}}},
+		{Path: "b", Uses: []selfhost.UseEdge{{Target: "a", Pos: 20, EndPos: 21, File: "b.osty"}}},
+	}}
+	diags := selfhost.DetectImportCycles(input)
+	if len(diags) != 1 {
+		t.Fatalf("expected 1 cycle diag, got %d: %#v", len(diags), diags)
+	}
+	d := diags[0]
+	if d.Importer != "b" || d.Target != "a" {
+		t.Errorf("expected b→a back-edge, got %s→%s", d.Importer, d.Target)
+	}
+	if d.Pos != 20 {
+		t.Errorf("expected pos=20, got %d", d.Pos)
+	}
+	if !strings.Contains(d.Message, "cyclic import") {
+		t.Errorf("expected cyclic-import message, got %q", d.Message)
+	}
+}
+
+func TestDetectImportCyclesThreeNodeCycle(t *testing.T) {
+	// a → b → c → a; DFS from `a` finds the c→a back-edge.
+	input := selfhost.WorkspaceUses{Packages: []selfhost.PackageUses{
+		{Path: "a", Uses: []selfhost.UseEdge{{Target: "b", Pos: 1}}},
+		{Path: "b", Uses: []selfhost.UseEdge{{Target: "c", Pos: 2}}},
+		{Path: "c", Uses: []selfhost.UseEdge{{Target: "a", Pos: 3}}},
+	}}
+	diags := selfhost.DetectImportCycles(input)
+	if len(diags) != 1 {
+		t.Fatalf("expected 1 cycle diag for 3-node cycle, got %d", len(diags))
+	}
+	if diags[0].Importer != "c" || diags[0].Target != "a" {
+		t.Errorf("expected c→a back-edge, got %s→%s", diags[0].Importer, diags[0].Target)
+	}
+}
+
+func TestDetectImportCyclesSelfLoop(t *testing.T) {
+	input := selfhost.WorkspaceUses{Packages: []selfhost.PackageUses{
+		{Path: "a", Uses: []selfhost.UseEdge{{Target: "a", Pos: 5}}},
+	}}
+	diags := selfhost.DetectImportCycles(input)
+	if len(diags) != 1 {
+		t.Fatalf("expected 1 cycle diag for self-loop, got %d", len(diags))
+	}
+}
+
+func TestDetectImportCyclesUnknownTargetIgnored(t *testing.T) {
+	// Edge pointing to a package not in the workspace (e.g. std / external dep).
+	input := selfhost.WorkspaceUses{Packages: []selfhost.PackageUses{
+		{Path: "a", Uses: []selfhost.UseEdge{{Target: "std.fs", Pos: 10}}},
+	}}
+	diags := selfhost.DetectImportCycles(input)
+	if len(diags) != 0 {
+		t.Fatalf("expected unknown target to be ignored, got %d diags", len(diags))
+	}
+}
+
+func TestDetectImportCyclesMultipleCyclesEmitsMultipleDiags(t *testing.T) {
+	// Two independent 2-cycles: a↔b and c↔d.
+	input := selfhost.WorkspaceUses{Packages: []selfhost.PackageUses{
+		{Path: "a", Uses: []selfhost.UseEdge{{Target: "b", Pos: 1}}},
+		{Path: "b", Uses: []selfhost.UseEdge{{Target: "a", Pos: 2}}},
+		{Path: "c", Uses: []selfhost.UseEdge{{Target: "d", Pos: 3}}},
+		{Path: "d", Uses: []selfhost.UseEdge{{Target: "c", Pos: 4}}},
+	}}
+	diags := selfhost.DetectImportCycles(input)
+	if len(diags) != 2 {
+		t.Fatalf("expected 2 cycle diags, got %d: %#v", len(diags), diags)
+	}
+}
