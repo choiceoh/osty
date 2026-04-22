@@ -380,6 +380,28 @@ func main() {
 		case "lint":
 			runLintPackage(path, flags)
 			return
+		case "typecheck":
+			// Legacy typecheck is FILE-only. --native introduces DIR
+			// support because the native pipeline already has
+			// runCheckPackageNative (#633) and adding a per-file type
+			// dump on top is the minimal delta.
+			if !flags.native {
+				fmt.Fprintf(os.Stderr,
+					"osty: typecheck does not accept a directory without --native (expected a file)\n")
+				os.Exit(2)
+			}
+			if flags.inspect || flags.dumpNativeDiags {
+				fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect / --dump-native-diags\n")
+				os.Exit(2)
+			}
+			if isWorkspace(path) {
+				fmt.Fprintf(os.Stderr, "osty: --native does not yet support workspace directories; run against a single package\n")
+				os.Exit(2)
+			}
+			if runTypecheckPackageNative(path, flags) != 0 {
+				os.Exit(1)
+			}
+			return
 		default:
 			fmt.Fprintf(os.Stderr,
 				"osty: %s does not accept a directory (expected a file)\n", cmd)
@@ -941,6 +963,91 @@ func applyPackageFixes(pkg *resolve.Package, diags []*diag.Diagnostic, flags cli
 // surfaces. Extracting this keeps the subcommand body testable in-
 // process so the astbridge counter can pin the end-to-end CLI
 // invariant (not just the library primitives).
+// runTypecheckPackageNative is the DIR sibling of
+// runTypecheckFileNative and the typecheck sibling of
+// runCheckPackageNative. After the package check runs astbridge-free
+// over the merged arena, it emits a per-file type dump with each
+// file's header so `osty typecheck --native DIR` output stays
+// readable for packages with more than one source file. Returns the
+// subcommand exit code.
+func runTypecheckPackageNative(dir string, flags cliFlags) int {
+	pkg, err := resolve.LoadPackageForNativeWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("typecheck"), os.Stderr, flags))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
+		return 1
+	}
+	input := selfhost.PackageCheckInput{
+		Files: make([]selfhost.PackageCheckFile, 0, len(pkg.Files)),
+	}
+	base := 0
+	for _, pf := range pkg.Files {
+		if pf == nil || len(pf.Source) == 0 {
+			continue
+		}
+		name := filepath.Base(pf.Path)
+		input.Files = append(input.Files, selfhost.PackageCheckFile{
+			Source: append([]byte(nil), pf.Source...),
+			Base:   base,
+			Name:   name,
+			Path:   pf.Path,
+		})
+		base += len(pf.Source) + 1
+	}
+	checked, err := selfhost.CheckPackageStructured(input)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
+		return 1
+	}
+	diags := packageParseDiags(pkg)
+	diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
+	printPackageDiags(pkg, diags, flags)
+	printNativePackageTypes(checked, input.Files)
+	if hasError(diags) {
+		return 1
+	}
+	return 0
+}
+
+// printNativePackageTypes is the DIR renderer for --native typecheck:
+// buckets TypedNodes by owning file (same findOwningFile walker used
+// for diagnostics), relativizes byte offsets, and emits a
+// `# <path>` header followed by the single-file printNativeTypes
+// rows for each file that has at least one typed node. Files with
+// no typed nodes are silently skipped so the dump stays compact.
+func printNativePackageTypes(result selfhost.CheckResult, files []selfhost.PackageCheckFile) {
+	if len(result.TypedNodes) == 0 || len(files) == 0 {
+		return
+	}
+	buckets := make(map[int][]selfhost.CheckedNode, len(files))
+	for _, n := range result.TypedNodes {
+		if n.TypeName == "" {
+			continue
+		}
+		idx := findOwningFile(files, n.Start)
+		if idx < 0 {
+			continue
+		}
+		rel := n
+		rel.Start -= files[idx].Base
+		rel.End -= files[idx].Base
+		if rel.Start < 0 {
+			rel.Start = 0
+		}
+		if rel.End < rel.Start {
+			rel.End = rel.Start
+		}
+		buckets[idx] = append(buckets[idx], rel)
+	}
+	for i, f := range files {
+		bucket, ok := buckets[i]
+		if !ok || len(bucket) == 0 {
+			continue
+		}
+		fmt.Printf("# %s\n", f.Path)
+		printNativeTypes(f.Source, selfhost.CheckResult{TypedNodes: bucket})
+	}
+}
+
 // runCheckPackageNative is the DIR sibling of runCheckFileNative.
 // Loads the package via LoadPackageForNative (no eager *ast.File
 // materialization), runs selfhost.CheckPackageStructured over the
