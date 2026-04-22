@@ -1,4 +1,68 @@
-use go "github.com/osty/osty/internal/cihost" as host {
+// Opaque host handles — real shapes live in `internal/cihost` (Go).
+// Declared here at file scope so signatures in the `use runtime.cihost`
+// stanza (fn-only per LANG_SPEC §12.8) can reference them by name.
+struct Time {}
+struct Diagnostic {}
+struct Manifest {}
+struct ResolveWorkspace {}
+struct ResolvePackage {}
+struct PackageResult {}
+
+struct LoadResult {
+    Root: String,
+    Manifest: Manifest?,
+    Workspace: ResolveWorkspace?,
+    Packages: List<ResolvePackage?>,
+    Results: List<PackageResult?>,
+    Error: String,
+}
+
+struct CheckResult {
+    Note: String,
+    Diagnostics: List<Diagnostic?>,
+}
+
+struct ManifestCore {
+    HasPackage: Bool,
+    Name: String,
+    Version: String,
+    Edition: String,
+    License: String,
+    Description: String,
+}
+
+struct Symbol {
+    Name: String,
+    Kind: String,
+    Sig: String,
+}
+
+struct Snapshot {
+    Schema: Int,
+    Package: String,
+    Version: String,
+    Edition: String,
+    Symbols: List<Symbol>,
+    Packages: Map<String, List<Symbol>>,
+}
+
+struct SymbolRef {
+    Pkg: String,
+    Symbol: Symbol,
+}
+
+struct Diff {
+    Removed: List<SymbolRef>,
+    Added: List<SymbolRef>,
+    Changed: List<SymbolRef>,
+}
+
+struct SnapshotReadResult {
+    Snapshot: Snapshot,
+    Error: String,
+}
+
+use runtime.cihost as host {
     fn KeepAlive() -> Bool
     fn NowUTC() -> Time
     fn DiagnosticSeverity(d: Diagnostic?) -> String
@@ -40,67 +104,6 @@ use go "github.com/osty/osty/internal/cihost" as host {
     ) -> Snapshot
     fn CapturePackageHost(pkg: ResolvePackage?) -> List<Symbol>
     fn CompareSnapshots(baseline: Snapshot, current: Snapshot) -> Diff
-
-    struct Time {}
-    struct Diagnostic {}
-    struct Manifest {}
-    struct ResolveWorkspace {}
-    struct ResolvePackage {}
-    struct PackageResult {}
-
-    struct LoadResult {
-        Root: String,
-        Manifest: Manifest?,
-        Workspace: ResolveWorkspace?,
-        Packages: List<ResolvePackage?>,
-        Results: List<PackageResult?>,
-        Error: String,
-    }
-
-    struct CheckResult {
-        Note: String,
-        Diagnostics: List<Diagnostic?>,
-    }
-
-    struct ManifestCore {
-        HasPackage: Bool,
-        Name: String,
-        Version: String,
-        Edition: String,
-        License: String,
-        Description: String,
-    }
-
-    struct Snapshot {
-        Schema: Int,
-        Package: String,
-        Version: String,
-        Edition: String,
-        Symbols: List<Symbol>,
-        Packages: Map<String, List<Symbol>>,
-    }
-
-    struct Symbol {
-        Name: String,
-        Kind: String,
-        Sig: String,
-    }
-
-    struct Diff {
-        Removed: List<SymbolRef>,
-        Added: List<SymbolRef>,
-        Changed: List<SymbolRef>,
-    }
-
-    struct SymbolRef {
-        Pkg: String,
-        Symbol: Symbol,
-    }
-
-    struct SnapshotReadResult {
-        Snapshot: Snapshot,
-        Error: String,
-    }
 }
 use std.strings as ciStrings
 
@@ -133,14 +136,14 @@ pub struct Check {
     pub Passed: Bool,
     pub Skipped: Bool,
     pub Note: String,
-    pub Diags: List<host.Diagnostic?>,
+    pub Diags: List<Diagnostic?>,
 }
 
 /// Report is the aggregated outcome of one `osty ci` run.
 pub struct Report {
     pub ProjectRoot: String,
-    pub StartedAt: host.Time,
-    pub FinishedAt: host.Time,
+    pub StartedAt: Time,
+    pub FinishedAt: Time,
     pub Checks: List<Check>,
 
     pub fn AllPassed(self) -> Bool {
@@ -159,10 +162,10 @@ pub struct Report {
 pub struct Runner {
     pub Root: String,
     pub Opts: Options,
-    pub Manifest: host.Manifest?,
-    pub Workspace: host.ResolveWorkspace?,
-    pub Packages: List<host.ResolvePackage?>,
-    pub Results: List<host.PackageResult?>,
+    pub Manifest: Manifest?,
+    pub Workspace: ResolveWorkspace?,
+    pub Packages: List<ResolvePackage?>,
+    pub Results: List<PackageResult?>,
 
     pub fn Load(mut self) -> String {
         let loaded = host.LoadRunnerState(self.Root, self.Manifest)
@@ -422,31 +425,31 @@ pub fn NewRunner(root: String, opts: Options) -> Runner {
     }
 }
 
-pub fn CapturePackage(pkg: host.ResolvePackage?) -> List<host.Symbol> {
+pub fn CapturePackage(pkg: ResolvePackage?) -> List<Symbol> {
     host.CapturePackageHost(pkg)
 }
 
-pub fn NewSingleSnapshot(pkg: host.ResolvePackage?, version: String, edition: String) -> host.Snapshot {
+pub fn NewSingleSnapshot(pkg: ResolvePackage?, version: String, edition: String) -> Snapshot {
     host.NewSingleSnapshotHost(pkg, version, edition)
 }
 
 pub fn NewWorkspaceSnapshot(
-    packages: List<host.ResolvePackage?>,
+    packages: List<ResolvePackage?>,
     version: String,
     edition: String,
-) -> host.Snapshot {
+) -> Snapshot {
     host.NewWorkspaceSnapshotHost(packages, version, edition)
 }
 
-pub fn WriteSnapshot(path: String, snap: host.Snapshot) -> String {
+pub fn WriteSnapshot(path: String, snap: Snapshot) -> String {
     host.WriteSnapshotHost(path, snap)
 }
 
-pub fn ReadSnapshot(path: String) -> host.SnapshotReadResult {
+pub fn ReadSnapshot(path: String) -> SnapshotReadResult {
     host.ReadSnapshotHost(path)
 }
 
-pub fn Compare(baseline: host.Snapshot, current: host.Snapshot) -> host.Diff {
+pub fn Compare(baseline: Snapshot, current: Snapshot) -> Diff {
     host.CompareSnapshots(baseline, current)
 }
 
@@ -706,7 +709,7 @@ fn skipped(name: CheckName) -> Check {
     }
 }
 
-fn checkFromHostResult(name: CheckName, result: host.CheckResult) -> Check {
+fn checkFromHostResult(name: CheckName, result: CheckResult) -> Check {
     Check {
         Name: name,
         Passed: false,
@@ -716,7 +719,7 @@ fn checkFromHostResult(name: CheckName, result: host.CheckResult) -> Check {
     }
 }
 
-fn pushHostDiagnostics(c: Check, diags: List<host.Diagnostic?>) {
+fn pushHostDiagnostics(c: Check, diags: List<Diagnostic?>) {
     for d in diags {
         c.Diags.push(d)
     }
@@ -728,7 +731,7 @@ fn pushCoreDiagnostics(c: Check, diags: List<CiDiagCore>) {
     }
 }
 
-fn ciCheckHostPassed(diags: List<host.Diagnostic?>, strict: Bool) -> Bool {
+fn ciCheckHostPassed(diags: List<Diagnostic?>, strict: Bool) -> Bool {
     for d in diags {
         let severity = host.DiagnosticSeverity(d)
         if severity == "error" {
@@ -741,7 +744,7 @@ fn ciCheckHostPassed(diags: List<host.Diagnostic?>, strict: Bool) -> Bool {
     true
 }
 
-fn coreToCiManifest(m: host.ManifestCore) -> CiManifestCore {
+fn coreToCiManifest(m: ManifestCore) -> CiManifestCore {
     CiManifestCore {
         hasPackage: m.HasPackage,
         name: m.Name,
@@ -752,7 +755,7 @@ fn coreToCiManifest(m: host.ManifestCore) -> CiManifestCore {
     }
 }
 
-fn releaseCore(manifest: host.Manifest?) -> CiReleaseCore {
+fn releaseCore(manifest: Manifest?) -> CiReleaseCore {
     let m = host.ManifestCoreOf(manifest)
     let mut deps: List<CiDependencyCore> = []
     for row in host.DependencyCoreRows(manifest) {
@@ -787,7 +790,7 @@ fn dependencyCoreFromRow(row: String) -> CiDependencyCore {
     }
 }
 
-fn packageCount(packages: List<host.ResolvePackage?>) -> Int {
+fn packageCount(packages: List<ResolvePackage?>) -> Int {
     packages.len()
 }
 
@@ -799,7 +802,7 @@ fn ciBreakingSeverity(breakingIsError: Bool) -> String {
     }
 }
 
-fn qualifiedSymbol(ref: host.SymbolRef) -> String {
+fn qualifiedSymbol(ref: SymbolRef) -> String {
     if ref.Pkg == "" {
         ref.Symbol.Name
     } else {

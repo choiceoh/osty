@@ -2384,7 +2384,7 @@ pub fn llvmIsKnownRuntimeFfiPath(path: String) -> Bool {
     if path.startsWith("runtime.cabi.") || path == "runtime.cabi" {
         return true
     }
-    path == "runtime.strings" || path == "runtime.path.filepath"
+    path == "runtime.strings" || path == "runtime.path.filepath" || path == "runtime.cihost"
 }
 
 pub fn llvmRuntimeFfiAlias(explicitAlias: String, lastPath: String, runtimePath: String) -> String {
