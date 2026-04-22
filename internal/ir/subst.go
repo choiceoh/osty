@@ -377,6 +377,23 @@ func subst(n Node, env SubstEnv) {
 		for _, p := range n.Params {
 			subst(p, env)
 		}
+		// Closure params whose Type was already nil before substitution
+		// (lowerClosure backfill missed them — e.g., when a generic
+		// fn is monomorphized and its inner closure's inferred FnType
+		// uses TypeVars that are tracked only on Closure.T, not on
+		// each Param.Type) would leave validator tripping on
+		// "Closure: param[i] nil Type". Re-run the same backfill that
+		// lowerClosure does, now that Closure.T has been substituted
+		// — so the FnType's substituted param slots are the source of
+		// truth.
+		if fnT, ok := n.T.(*FnType); ok && fnT != nil {
+			for i, p := range n.Params {
+				if p == nil || p.Type != nil || i >= len(fnT.Params) {
+					continue
+				}
+				p.Type = fnT.Params[i]
+			}
+		}
 		for _, c := range n.Captures {
 			c.T = substType(c.T, env)
 		}

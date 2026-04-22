@@ -15,16 +15,17 @@ func TestLowerClassifiesTopLevelLetRefsAsGlobal(t *testing.T) {
 		Name:  "g",
 		Value: &ast.IntLit{Text: "1"},
 	}
-	ref := &ast.Ident{Name: "g"}
+	ref := &ast.Ident{ID: 1, Name: "g"}
 	closure := &ast.ClosureExpr{Body: ref}
 	file := &ast.File{
 		Decls: []ast.Decl{global},
 		Stmts: []ast.Stmt{&ast.ExprStmt{X: closure}},
 	}
 	res := &resolve.Result{
-		Refs: map[*ast.Ident]*resolve.Symbol{
-			ref: {Name: "g", Kind: resolve.SymLet, Decl: global},
+		RefsByID: map[ast.NodeID]*resolve.Symbol{
+			ref.ID: {Name: "g", Kind: resolve.SymLet, Decl: global},
 		},
+		RefIdents: []*ast.Ident{ref},
 	}
 
 	mod, issues := Lower("main", file, res, nil)
@@ -56,7 +57,7 @@ func TestLowerClassifiesTopLevelLetRefsAsGlobal(t *testing.T) {
 }
 
 func TestLowerPreludeVariantCallBecomesVariantLit(t *testing.T) {
-	some := &ast.Ident{Name: "Some"}
+	some := &ast.Ident{ID: 1, Name: "Some"}
 	call := &ast.CallExpr{
 		Fn: some,
 		Args: []*ast.Arg{{
@@ -67,9 +68,10 @@ func TestLowerPreludeVariantCallBecomesVariantLit(t *testing.T) {
 		Stmts: []ast.Stmt{&ast.ExprStmt{X: call}},
 	}
 	res := &resolve.Result{
-		Refs: map[*ast.Ident]*resolve.Symbol{
-			some: {Name: "Some", Kind: resolve.SymBuiltin, Pub: true},
+		RefsByID: map[ast.NodeID]*resolve.Symbol{
+			some.ID: {Name: "Some", Kind: resolve.SymBuiltin, Pub: true},
 		},
+		RefIdents: []*ast.Ident{some},
 	}
 
 	mod, issues := Lower("main", file, res, nil)

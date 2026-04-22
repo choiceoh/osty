@@ -2825,6 +2825,51 @@ func TestGenerateFromMIRStringInterpolationConcatBoxesScalars(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRStringInterpolationBoxesCharAndByte pins the
+// Char (i32) and Byte (i8) dispatch in emitStringConcatBoxed so they
+// call osty_rt_char_to_string / osty_rt_byte_to_string instead of
+// being misrouted through osty_rt_int_to_string(i64) (which produces
+// malformed LLVM IR on width mismatch).
+func TestGenerateFromMIRStringInterpolationBoxesCharAndByte(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "render",
+		Return: ir.TString,
+		Params: []*ir.Param{
+			{Name: "c", Type: ir.TChar},
+			{Name: "b", Type: ir.TByte},
+		},
+		Body: &ir.Block{
+			Result: &ir.StringLit{
+				Parts: []ir.StringPart{
+					{Expr: &ir.Ident{Name: "c", Kind: ir.IdentParam, T: ir.TChar}},
+					{IsLit: true, Lit: "="},
+					{Expr: &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TByte}},
+				},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/char_byte_concat.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_char_to_string(i32)",
+		"declare ptr @osty_rt_byte_to_string(i8)",
+		"call ptr @osty_rt_char_to_string(",
+		"call ptr @osty_rt_byte_to_string(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "@osty_rt_int_to_string") {
+		t.Fatalf("Char/Byte should not route through osty_rt_int_to_string:\n%s", got)
+	}
+}
+
 func TestGenerateFromMIRStringInterpolationRecoversFieldExprTypes(t *testing.T) {
 	diagT := &ir.NamedType{Name: "Diag"}
 	fn := &ir.FnDecl{

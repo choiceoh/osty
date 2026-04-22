@@ -95,6 +95,41 @@ func TestSubstituteTypesReachesFnDeclParamsAndBody(t *testing.T) {
 	}
 }
 
+// A Closure whose Params were never type-backfilled (p.Type == nil)
+// is legitimate mid-pipeline input when an outer specialization carries
+// TypeVars through the closure's inferred FnType (Closure.T) but hadn't
+// had lowerClosure's backfill run. After substitution, the Closure case
+// must re-run the same backfill so validator's
+// "Closure: param[i] nil Type" wall is not reintroduced. Without this,
+// ≥2 test files in a package importing a generic fn with an inner
+// closure (e.g. fmt.joinWith<T>) trip the validator at IR merge time.
+func TestSubstituteClosureBackfillsNilParamTypesFromSubstitutedFnType(t *testing.T) {
+	// Closure with nil param Type; inferred FnType on Closure.T uses
+	// TypeVar T that substitution will resolve to Int.
+	ft := &FnType{Params: []Type{&TypeVar{Name: "T"}}, Return: TString}
+	closure := &Closure{
+		T:      ft,
+		Return: TString,
+		Params: []*Param{{Name: "n", Type: nil}},
+		Body:   &Block{Result: &StringLit{Parts: []StringPart{{IsLit: true, Lit: ""}}}},
+	}
+	fn := &FnDecl{
+		Name:   "takeClosure",
+		Return: TUnit,
+		Body:   &Block{Result: closure},
+	}
+	SubstituteTypes(fn, SubstEnv{"T": TInt})
+	if closure.Params[0].Type == nil {
+		t.Fatalf("closure param Type still nil after substitution backfill")
+	}
+	if closure.Params[0].Type != TInt {
+		t.Fatalf("closure param Type not substituted: got %T (%v)", closure.Params[0].Type, closure.Params[0].Type)
+	}
+	if errs := Validate(&Module{Package: "main", Decls: []Decl{fn}}); len(errs) != 0 {
+		t.Fatalf("Validate failed after backfill: %v", errs)
+	}
+}
+
 func TestSubstituteTypesRewritesCallExprTypeArgs(t *testing.T) {
 	// A generic call inside a specialization body needs its TypeArgs
 	// rewritten before the outer worklist picks them up. The call's own
