@@ -534,5 +534,46 @@ func (g *generator) emitBuiltinOptionSomeCall(call *ast.CallExpr) (value, bool, 
 		out.sourceType = ctx.sourceType
 		return out, true, nil
 	}
-	return value{}, true, unsupportedf("type-system", "Some payload type %s requires boxed Option; only ptr-backed or aggregate-struct Some(...) is lowered", loaded.typ)
+	// Scalar payload (i64, i1, double, i8, i32): GC-box so Option<T>
+	// stays uniformly ptr-backed at the LLVM layer. Keeps
+	// `Some(42)` / `None` lowering consistent with the scalar boxing
+	// list.get / Map.get already perform — downstream `isSome` /
+	// `match` reads the null-ness of the result ptr regardless of T.
+	if size, ok := scalarSomeBoxByteSize(loaded.typ); ok {
+		emitter := g.toOstyEmitter()
+		siteName := "runtime.option.some." + loaded.typ
+		sitePtr := llvmStringLiteral(emitter, siteName)
+		box := llvmCall(emitter, "ptr", "osty.gc.alloc_v1", []*LlvmValue{
+			toOstyValue(value{typ: "i64", ref: "1"}),
+			toOstyValue(value{typ: "i64", ref: fmt.Sprintf("%d", size)}),
+			sitePtr,
+		})
+		emitter.body = append(emitter.body, fmt.Sprintf(
+			"  store %s %s, ptr %s",
+			loaded.typ, loaded.ref, box.name,
+		))
+		g.takeOstyEmitter(emitter)
+		g.needsGCRuntime = true
+		out := fromOstyValue(box)
+		out.gcManaged = true
+		out.sourceType = ctx.sourceType
+		return out, true, nil
+	}
+	return value{}, true, unsupportedf("type-system", "Some payload type %s requires boxed Option; only ptr-backed, aggregate-struct, and scalar (i64/i1/double/i8/i32) Some(...) is lowered", loaded.typ)
+}
+
+// scalarSomeBoxByteSize mirrors listGetBoxByteSize for the Some
+// construction path: returns the heap-box byte size for a scalar
+// payload, or (0, false) when the type is not a recognized primitive
+// the backend already materializes at this width.
+func scalarSomeBoxByteSize(typ string) (int, bool) {
+	switch typ {
+	case "i64", "double":
+		return 8, true
+	case "i32":
+		return 4, true
+	case "i8", "i1":
+		return 1, true
+	}
+	return 0, false
 }
