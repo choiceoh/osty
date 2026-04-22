@@ -239,3 +239,151 @@ func TestInjectReachableStdlibBodiesMixesFnsAndMethods(t *testing.T) {
 		t.Errorf("method callsite not rewritten: stmt.X = %T", methodStmt.X)
 	}
 }
+
+// TestInjectReachableStdlibBodiesTransitiveClosure verifies the
+// closure step pulls in same-module helpers an injected body
+// references by bare Ident. `strings.trim`'s body is
+// `trimEnd(trimStart(s))` — both `trimStart` and `trimEnd` are free
+// fns in the same `strings` module, called without a `strings.`
+// qualifier. Without the closure step they'd slip through the
+// first-hop scan, leaving the injected `trim` body referencing
+// undefined symbols.
+//
+// Asserts:
+//  1. injection includes the user-called `trim` PLUS the two
+//     transitively-pulled helpers (`trimStart`, `trimEnd`)
+//  2. the injected `trim`'s body has its bare Ident calls rewritten
+//     to mangled symbols (`osty_std_strings__trimStart` /
+//     `_trimEnd`), not the short names
+//  3. each rewritten Ident has Kind=IdentFn so downstream lookups
+//     treat it as a function reference rather than a local
+func TestInjectReachableStdlibBodiesTransitiveClosure(t *testing.T) {
+	reg := stdlib.LoadCached()
+	// User code: `strings.trim(s)`.
+	call := &ir.CallExpr{
+		Callee: &ir.FieldExpr{X: &ir.Ident{Name: "strings"}, Name: "trim"},
+		Args:   []ir.Arg{{Value: &ir.Ident{Name: "s"}}},
+	}
+	mod := &ir.Module{
+		Package: "main",
+		Script:  []ir.Stmt{&ir.ExprStmt{X: call}},
+	}
+	injected, issues := injectReachableStdlibBodies(mod, reg)
+	for _, issue := range issues {
+		t.Logf("non-fatal issue: %v", issue)
+	}
+	wantSymbols := map[string]bool{
+		"osty_std_strings__trim":      false,
+		"osty_std_strings__trimStart": false,
+		"osty_std_strings__trimEnd":   false,
+	}
+	for _, d := range injected {
+		fn, ok := d.(*ir.FnDecl)
+		if !ok {
+			continue
+		}
+		if _, want := wantSymbols[fn.Name]; want {
+			wantSymbols[fn.Name] = true
+		}
+	}
+	for sym, found := range wantSymbols {
+		if !found {
+			t.Fatalf("transitive closure did not inject %s; injected names: %v",
+				sym, fnDeclNames(injected))
+		}
+	}
+
+	// The injected `trim` body must reference the helpers by their
+	// mangled symbols (Kind=IdentFn), not by their short names.
+	var trimFn *ir.FnDecl
+	for _, d := range injected {
+		fn, ok := d.(*ir.FnDecl)
+		if !ok || fn.Name != "osty_std_strings__trim" {
+			continue
+		}
+		trimFn = fn
+		break
+	}
+	if trimFn == nil {
+		t.Fatalf("could not find lowered trim fn in injected decls")
+	}
+	mangledCalls := map[string]bool{}
+	bareCalls := []string{}
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		c, ok := n.(*ir.CallExpr)
+		if !ok || c == nil {
+			return true
+		}
+		ident, ok := c.Callee.(*ir.Ident)
+		if !ok {
+			return true
+		}
+		if ident.Name == "osty_std_strings__trimStart" || ident.Name == "osty_std_strings__trimEnd" {
+			mangledCalls[ident.Name] = true
+			if ident.Kind != ir.IdentFn {
+				t.Errorf("rewritten ident %q has Kind %v, want IdentFn", ident.Name, ident.Kind)
+			}
+		}
+		if ident.Name == "trimStart" || ident.Name == "trimEnd" {
+			bareCalls = append(bareCalls, ident.Name)
+		}
+		return true
+	}), trimFn.Body)
+	if !mangledCalls["osty_std_strings__trimStart"] {
+		t.Errorf("trim body did not call mangled trimStart")
+	}
+	if !mangledCalls["osty_std_strings__trimEnd"] {
+		t.Errorf("trim body did not call mangled trimEnd")
+	}
+	if len(bareCalls) != 0 {
+		t.Errorf("trim body still has bare-Ident calls (un-rewritten): %v", bareCalls)
+	}
+}
+
+// TestInjectReachableStdlibBodiesTransitiveDedupe confirms a helper
+// reachable both directly (via a user call) and transitively (via
+// another injected fn's body) is injected exactly once. Without the
+// `injectedFn` set check the closure step would re-lower it and
+// emit a duplicate FnDecl.
+func TestInjectReachableStdlibBodiesTransitiveDedupe(t *testing.T) {
+	reg := stdlib.LoadCached()
+	// Call both `trim` (which transitively references trimStart) and
+	// `trimStart` directly.
+	mod := &ir.Module{
+		Package: "main",
+		Script: []ir.Stmt{
+			&ir.ExprStmt{X: &ir.CallExpr{
+				Callee: &ir.FieldExpr{X: &ir.Ident{Name: "strings"}, Name: "trim"},
+				Args:   []ir.Arg{{Value: &ir.Ident{Name: "s"}}},
+			}},
+			&ir.ExprStmt{X: &ir.CallExpr{
+				Callee: &ir.FieldExpr{X: &ir.Ident{Name: "strings"}, Name: "trimStart"},
+				Args:   []ir.Arg{{Value: &ir.Ident{Name: "s"}}},
+			}},
+		},
+	}
+	injected, _ := injectReachableStdlibBodies(mod, reg)
+	count := 0
+	for _, d := range injected {
+		fn, ok := d.(*ir.FnDecl)
+		if !ok {
+			continue
+		}
+		if fn.Name == "osty_std_strings__trimStart" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("trimStart injected %d times, want exactly 1; injected names: %v", count, fnDeclNames(injected))
+	}
+}
+
+func fnDeclNames(decls []ir.Decl) []string {
+	out := []string{}
+	for _, d := range decls {
+		if fn, ok := d.(*ir.FnDecl); ok {
+			out = append(out, fn.Name)
+		}
+	}
+	return out
+}

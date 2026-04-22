@@ -166,8 +166,26 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 	if len(reachedFns) == 0 && len(reachedMethods) == 0 {
 		return nil, nil
 	}
+	type fnKey struct{ module, name string }
+	injectedFn := map[fnKey]bool{}
+	for _, r := range reachedFns {
+		injectedFn[fnKey{module: r.Module, name: r.Fn.Name}] = true
+	}
+	type methodKey struct{ module, typeName, method string }
+	injectedMethod := map[methodKey]bool{}
+	for _, r := range reachedMethods {
+		injectedMethod[methodKey{module: r.Module, typeName: r.Type, method: r.Method}] = true
+	}
+
 	var out []ir.Decl
 	var issues []error
+	// Track lowered free fns by module so we can transitively scan them
+	// for additional same-module callees (the closure step below).
+	type loweredFromModule struct {
+		module string
+		fn     *ir.FnDecl
+	}
+	var loweredFreeFns []loweredFromModule
 	for _, r := range reachedFns {
 		res := stdlibResolveResult(reg, r.Module)
 		chk := stdlibCheckResult(reg, r.Module)
@@ -178,6 +196,7 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 		}
 		lowered.Name = StdlibSymbol(r.Module, r.Fn.Name)
 		out = append(out, lowered)
+		loweredFreeFns = append(loweredFreeFns, loweredFromModule{module: r.Module, fn: lowered})
 	}
 	for _, m := range reachedMethods {
 		res := stdlibResolveResult(reg, m.Module)
@@ -187,11 +206,115 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 		if lowered == nil {
 			continue
 		}
-		out = append(out, methodToFreeFn(lowered, m.Module, m.Type, m.Method))
+		freeFn := methodToFreeFn(lowered, m.Module, m.Type, m.Method)
+		out = append(out, freeFn)
+		// Methods can call same-module free fns too; route them
+		// through the same closure step.
+		loweredFreeFns = append(loweredFreeFns, loweredFromModule{module: m.Module, fn: freeFn})
 	}
 	RewriteStdlibCallsites(mod, reachedFns)
 	RewriteStdlibMethodCallsites(mod, reachedMethods)
+
+	// Closure pass: an injected stdlib body can reference other free
+	// fns from its own module by bare Ident (e.g. `trim` calls
+	// `trimEnd(trimStart(s))`). The first-hop scan above only saw
+	// `strings.trim` from the user module — `trimStart`/`trimEnd`
+	// would slip through. Walk each newly lowered body, find bare
+	// Ident calls that resolve to same-module stdlib fns, inject
+	// those, and rewrite the call site to the mangled name. Loop to
+	// fixed point so a chain (`a → b → c`) is fully closed in one
+	// pass.
+	queue := append([]loweredFromModule(nil), loweredFreeFns...)
+	for len(queue) > 0 {
+		next := queue[0]
+		queue = queue[1:]
+		for callName := range scanBareIdentCallNames(next.fn) {
+			calleeFn := reg.LookupFnDecl(next.module, callName)
+			if calleeFn == nil {
+				continue
+			}
+			k := fnKey{module: next.module, name: callName}
+			if injectedFn[k] {
+				// Already injected — just rewrite this body's
+				// call sites for the name.
+				rewriteBareIdentCalls(next.fn, callName, StdlibSymbol(next.module, callName))
+				continue
+			}
+			injectedFn[k] = true
+			res := stdlibResolveResult(reg, next.module)
+			chk := stdlibCheckResult(reg, next.module)
+			lowered, fnIssues := ir.LowerFnDecl(mod.Package, calleeFn, res, chk)
+			issues = append(issues, fnIssues...)
+			if lowered == nil {
+				continue
+			}
+			lowered.Name = StdlibSymbol(next.module, callName)
+			out = append(out, lowered)
+			rewriteBareIdentCalls(next.fn, callName, lowered.Name)
+			queue = append(queue, loweredFromModule{module: next.module, fn: lowered})
+		}
+	}
 	return out, issues
+}
+
+// scanBareIdentCallNames returns the set of names referenced in
+// `bareName(args)` shaped call sites inside a function body — i.e.
+// `CallExpr{Callee: *Ident}`. Method calls and qualifier calls
+// (`module.fn`, `recv.method`) are intentionally excluded; those
+// have their own reach paths and rewriters.
+//
+// Used by the closure step in `injectReachableStdlibBodies` to
+// discover same-module stdlib helpers an already-injected body
+// transitively depends on (e.g. `strings.trim`'s body references
+// `trimStart` and `trimEnd` as bare Idents). The caller filters the
+// returned names against `Registry.LookupFnDecl(module, name)` to
+// keep user-defined locals / params out of the injection set.
+func scanBareIdentCallNames(fn *ir.FnDecl) map[string]struct{} {
+	out := map[string]struct{}{}
+	if fn == nil || fn.Body == nil {
+		return out
+	}
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		call, ok := n.(*ir.CallExpr)
+		if !ok || call == nil {
+			return true
+		}
+		ident, ok := call.Callee.(*ir.Ident)
+		if !ok || ident == nil || ident.Name == "" {
+			return true
+		}
+		out[ident.Name] = struct{}{}
+		return true
+	}), fn.Body)
+	return out
+}
+
+// rewriteBareIdentCalls walks a function body and renames any bare
+// Ident callee whose Name == old to new. Mutates the IR in place.
+// Method calls and FieldExpr callees are not affected — they have
+// their own rewriter paths.
+//
+// Used by the closure step after injecting a same-module callee:
+// the caller's body still references the callee by its short name
+// (`trimEnd(s)`), and this rewrites it to the mangled symbol
+// (`osty_std_strings__trimEnd(s)`).
+func rewriteBareIdentCalls(fn *ir.FnDecl, oldName, newName string) {
+	if fn == nil || fn.Body == nil || oldName == "" || newName == "" || oldName == newName {
+		return
+	}
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		call, ok := n.(*ir.CallExpr)
+		if !ok || call == nil {
+			return true
+		}
+		ident, ok := call.Callee.(*ir.Ident)
+		if !ok || ident == nil || ident.Name != oldName {
+			return true
+		}
+		ident.Name = newName
+		ident.Kind = ir.IdentFn
+		return true
+	}), fn.Body)
 }
 
 // methodToFreeFn converts a lowered stdlib method declaration into a
