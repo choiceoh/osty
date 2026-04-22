@@ -219,3 +219,55 @@ fn main() {
 		}
 	}
 }
+
+func TestGenerateResultMatchFnValuePayloadIndirectCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `type Callback = fn(Int) -> Int
+
+fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn fallback(n: Int) -> Int {
+    n - 1
+}
+
+fn choose(flag: Int) -> Result<Callback, String> {
+    if flag == 1 {
+        Ok(inc)
+    } else {
+        Err("missing")
+    }
+}
+
+fn main() {
+    let out = match choose(1) {
+        Ok(f) -> f(41),
+        Err(_) -> fallback(41),
+    }
+    println(out)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "core",
+		SourcePath:  "/tmp/result_match_fn_value.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"%Result.ptr.ptr = type { i64, ptr, ptr }",
+		"define private i64 @__osty_closure_thunk_inc(ptr %env, i64 %arg0)",
+		"= extractvalue %Result.ptr.ptr",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "LLVM015") {
+		t.Fatalf("result-match fn payload regressed to direct-call fallback:\n%s", got)
+	}
+}

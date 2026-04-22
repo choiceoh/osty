@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -15,16 +16,7 @@ func TestGoGenerateSupportSnapshotIsFixedPoint(t *testing.T) {
 
 	repoRoot := filepath.Join("..", "..")
 	worktree := filepath.Join(t.TempDir(), "worktree")
-	add := exec.Command("git", "worktree", "add", "--detach", worktree, "HEAD")
-	add.Dir = repoRoot
-	if out, err := add.CombinedOutput(); err != nil {
-		t.Fatalf("add temp worktree: %v\n%s", err, bytes.TrimSpace(out))
-	}
-	defer func() {
-		remove := exec.Command("git", "worktree", "remove", worktree, "--force")
-		remove.Dir = repoRoot
-		_, _ = remove.CombinedOutput()
-	}()
+	copyCurrentCheckout(t, repoRoot, worktree)
 
 	runGenerate := func() {
 		t.Helper()
@@ -56,5 +48,46 @@ func TestGoGenerateSupportSnapshotIsFixedPoint(t *testing.T) {
 	out, err := build.CombinedOutput()
 	if err != nil {
 		t.Fatalf("compile generated support snapshot: %v\n%s", err, bytes.TrimSpace(out))
+	}
+}
+
+func copyCurrentCheckout(t *testing.T, repoRoot, dstRoot string) {
+	t.Helper()
+	list := exec.Command("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	list.Dir = repoRoot
+	out, err := list.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git ls-files: %v\n%s", err, bytes.TrimSpace(out))
+	}
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel == "" {
+			continue
+		}
+		srcPath := filepath.Join(repoRoot, rel)
+		info, err := os.Lstat(srcPath)
+		if err != nil {
+			t.Fatalf("stat %s: %v", rel, err)
+		}
+		dstPath := filepath.Join(dstRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(rel), err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(srcPath)
+			if err != nil {
+				t.Fatalf("readlink %s: %v", rel, err)
+			}
+			if err := os.Symlink(target, dstPath); err != nil {
+				t.Fatalf("symlink %s: %v", rel, err)
+			}
+			continue
+		}
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		if err := os.WriteFile(dstPath, data, info.Mode().Perm()); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
 	}
 }

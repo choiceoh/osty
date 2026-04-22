@@ -414,6 +414,580 @@ fn main() {
 	}
 }
 
+// Regression: when a fn value is produced by an if-expression, the
+// merged value must retain call-shape metadata so a later bare
+// `f(args)` still routes through the indirect fn-value path.
+func TestGenerateFnValueIfExprMergedLocalIndirectCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn dec(n: Int) -> Int {
+    n - 1
+}
+
+fn main() {
+    let flag = 1
+    let f = if flag == 1 { inc } else { dec }
+    println(f(41))
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_value_if_merge.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"define private i64 @__osty_closure_thunk_inc(ptr %env, i64 %arg0)",
+		"define private i64 @__osty_closure_thunk_dec(ptr %env, i64 %arg0)",
+		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
+		"= phi ptr [",
+		"= load ptr, ptr",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "LLVM015") {
+		t.Fatalf("if-merged fn value regressed to direct-call fallback:\n%s", got)
+	}
+}
+
+// Regression: a fn-valued optional coalesced into a local binding must
+// recover its call signature from sourceType, even when the declared
+// source type is a named alias to fn(...).
+func TestGenerateFnValueCoalesceAliasBoundLocalIndirectCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `type Callback = fn(Int) -> Int
+
+fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn dec(n: Int) -> Int {
+    n - 1
+}
+
+fn choose(flag: Int, cb: Callback?) -> Int {
+    let fallback = if flag == 1 { inc } else { dec }
+    let f = cb ?? fallback
+    f(41)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_value_coalesce_alias.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"define i64 @choose(i64 %flag, ptr %cb)",
+		"define private i64 @__osty_closure_thunk_inc(ptr %env, i64 %arg0)",
+		"define private i64 @__osty_closure_thunk_dec(ptr %env, i64 %arg0)",
+		"coalesce.end",
+		"= phi ptr [",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "LLVM015") {
+		t.Fatalf("coalesced aliased fn value regressed to direct-call fallback:\n%s", got)
+	}
+}
+
+// Regression: an optional fn value produced by merging two `?.field`
+// branches must preserve its Optional<fn(...)> source type so a later
+// `?? fallback` can unwrap it and rebind the bare fn-value call shape.
+func TestGenerateFnValueOptionalFieldIfMergeCoalesceLocalIndirectCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct Hook {
+    cb: fn(Int) -> Int,
+}
+
+fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn dec(n: Int) -> Int {
+    n - 1
+}
+
+fn choose(flag: Int, left: Hook?, right: Hook?) -> Int {
+    let maybe = if flag == 1 { left?.cb } else { right?.cb }
+    let f = maybe ?? dec
+    f(41)
+}
+
+fn main() {
+    let h = Hook { cb: inc }
+    println(choose(1, Some(h), None))
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_value_optional_field_if_merge.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"define i64 @choose(i64 %flag, ptr %left, ptr %right)",
+		"optional.end",
+		"coalesce.end",
+		"= phi ptr [",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "?? left source type unknown") || strings.Contains(got, "?? requires Option<T> on the left") {
+		t.Fatalf("optional fn merge lost source type across if-expression:\n%s", got)
+	}
+	if strings.Contains(got, "LLVM015") {
+		t.Fatalf("optional fn merge/coalesce regressed to direct-call fallback:\n%s", got)
+	}
+}
+
+// Regression: enum payload binding must preserve fn-value source metadata
+// so `match Action.Use(f) -> f(...)` keeps routing through indirect dispatch.
+func TestGenerateFnValueEnumPayloadMatchIndirectCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `type Callback = fn(Int) -> Int
+
+enum Action {
+    Use(Callback)
+    Skip
+}
+
+fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn fallback(n: Int) -> Int {
+    n - 1
+}
+
+fn apply(action: Action) -> Int {
+    match action {
+        Use(f) -> f(41),
+        Skip -> fallback(41),
+    }
+}
+
+fn main() {
+    println(apply(Use(inc)))
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_value_enum_payload_match.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"%Action = type { i64, ptr }",
+		"define private i64 @__osty_closure_thunk_inc(ptr %env, i64 %arg0)",
+		"extractvalue %Action",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "LLVM015") {
+		t.Fatalf("enum-payload fn value regressed to direct-call fallback:\n%s", got)
+	}
+}
+
+func TestGenerateFnValueListForInIndirectCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `type Callback = fn(Int) -> Int
+
+fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn dec(n: Int) -> Int {
+    n - 1
+}
+
+fn main() {
+    let callbacks: List<Callback> = [inc, dec]
+    for f in callbacks {
+        println(f(41))
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_value_list_for_in.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_list_new()",
+		"call void @osty_rt_list_push_ptr(",
+		"call ptr @osty_rt_list_get_ptr(",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "LLVM015") {
+		t.Fatalf("list-for fn value regressed to direct-call fallback:\n%s", got)
+	}
+}
+
+func TestGenerateFnValueUntypedListLiteralForInIndirectCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn dec(n: Int) -> Int {
+    n - 1
+}
+
+fn main() {
+    let callbacks = [inc, dec]
+    for f in callbacks {
+        println(f(41))
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_value_untyped_list_for_in.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_list_new()",
+		"call void @osty_rt_list_push_ptr(",
+		"call ptr @osty_rt_list_get_ptr(",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "LLVM015") {
+		t.Fatalf("untyped list-for fn value regressed to direct-call fallback:\n%s", got)
+	}
+}
+
+func TestGenerateFnValueMapForInIndirectCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `type Callback = fn(Int) -> Int
+
+fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn main() {
+    let callbacks: Map<String, Callback> = { "inc": inc }
+    for (k, f) in callbacks {
+        println(f(41))
+        println(k.len())
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_value_map_for_in.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call i64 @osty_rt_map_len(",
+		"call ptr @osty_rt_map_entry_at_string(",
+		"load ptr, ptr ",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "LLVM015") {
+		t.Fatalf("map-for fn value regressed to direct-call fallback:\n%s", got)
+	}
+}
+
+func TestGenerateFnValueUntypedMapLiteralGetOrBoundLocalIndirectCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn dec(n: Int) -> Int {
+    n - 1
+}
+
+fn main() {
+    let callbacks = { "hot": inc }
+    let f = callbacks.getOr("cold", dec)
+    println(f(41))
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_value_untyped_map_get_or.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_map_new(",
+		"call void @osty_rt_map_insert_string(",
+		"= phi ptr [",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "LLVM015") {
+		t.Fatalf("untyped map.getOr fn value regressed to direct-call fallback:\n%s", got)
+	}
+}
+
+func TestGenerateFnValueNestedEmptyListLiteralUsesSourceHint(t *testing.T) {
+	file := parseLLVMGenFile(t, `type Callback = fn(Int) -> Int
+
+fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn main() {
+    let groups: List<List<Callback>> = [[inc], []]
+    for group in groups {
+        for f in group {
+            println(f(41))
+        }
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_value_nested_empty_list.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_list_new()",
+		"call void @osty_rt_list_push_ptr(",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFnValueListPushEmptyListUsesSourceHint(t *testing.T) {
+	file := parseLLVMGenFile(t, `type Callback = fn(Int) -> Int
+
+fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn main() {
+    let groups: List<List<Callback>> = []
+    groups.push([])
+    groups.push([inc])
+    for group in groups {
+        for f in group {
+            println(f(41))
+        }
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_value_list_push_empty_list.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_list_new()",
+		"call void @osty_rt_list_push_ptr(",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFnValueNestedEmptyMapLiteralValueUsesSourceHint(t *testing.T) {
+	file := parseLLVMGenFile(t, `type Callback = fn(Int) -> Int
+
+fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn main() {
+    let groups: Map<String, List<Callback>> = { "hot": [inc], "cold": [] }
+    for (k, group) in groups {
+        println(k.len())
+        for f in group {
+            println(f(41))
+        }
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_value_nested_empty_map.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_map_new(",
+		"call void @osty_rt_map_insert_string(",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFnValueMapGetOrEmptyListDefaultUsesSourceHint(t *testing.T) {
+	file := parseLLVMGenFile(t, `type Callback = fn(Int) -> Int
+
+fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn main() {
+    let groups: Map<String, List<Callback>> = { "hot": [inc] }
+    let group = groups.getOr("cold", [])
+    for f in group {
+        println(f(41))
+    }
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_value_map_get_or_empty_list.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call ptr @osty_rt_map_new(",
+		"call ptr @osty_rt_list_new()",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFnValueEnumPayloadConstructorUsesSourceHint(t *testing.T) {
+	file := parseLLVMGenFile(t, `type Callback = fn(Int) -> Int
+
+enum Action {
+    Batch(List<List<Callback>>)
+    Skip
+}
+
+fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn run(action: Action) -> Int {
+    match action {
+        Batch(groups) -> {
+            for group in groups {
+                for f in group {
+                    return f(41)
+                }
+            }
+            0
+        },
+        Skip -> 0,
+    }
+}
+
+fn main() {
+    println(run(Batch([[inc], []])))
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_value_enum_payload_ctor_hint.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"%Action = type { i64, ptr }",
+		"call ptr @osty_rt_list_new()",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFnValueTupleDestructureIndirectCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn main() {
+    let pair: (fn(Int) -> Int, Int) = (inc, 0)
+    let (f, _) = pair
+    println(f(41))
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_value_tuple_destructure.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"%Tuple.ptr.i64 = type { ptr, i64 }",
+		"extractvalue %Tuple.ptr.i64",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "LLVM015") {
+		t.Fatalf("tuple-destructured fn value regressed to direct-call fallback:\n%s", got)
+	}
+}
+
 // TestGenerateStringCharsLowersToRuntimeCall verifies String.chars()
 // dispatches to osty_rt_strings_Chars and yields a GC-managed list whose
 // element width is i32 (the Char lowering). `chars.len()` must keep
@@ -590,6 +1164,89 @@ fn main() {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// Regression: a fn-typed struct field loaded into a local binding must
+// retain the synthesized fnSigRef so a later bare `cb(args)` dispatches
+// through the indirect fn-value path instead of falling through to the
+// direct-call diagnostic.
+func TestGenerateFnTypedStructFieldBoundLocalIndirectCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct Hook {
+    cb: fn(Int) -> Int,
+}
+
+fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn main() {
+    let h = Hook { cb: inc }
+    let cb = h.cb
+    println(cb(41))
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_typed_struct_field_local.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"define private i64 @__osty_closure_thunk_inc(ptr %env, i64 %arg0)",
+		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
+		"= load ptr, ptr",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "LLVM015") {
+		t.Fatalf("fn-typed field bound local regressed to direct-call fallback:\n%s", got)
+	}
+}
+
+// Regression: struct-pattern destructuring of a fn-typed field must use
+// the same sourceType-driven decoration path as plain field loads so a
+// later bare `cb(args)` still dispatches indirectly.
+func TestGenerateFnTypedStructPatternBoundLocalIndirectCall(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct Hook {
+    cb: fn(Int) -> Int,
+}
+
+fn inc(n: Int) -> Int {
+    n + 1
+}
+
+fn main() {
+    let h = Hook { cb: inc }
+    let Hook { cb } = h
+    println(cb(41))
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/fn_typed_struct_pattern_local.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"%Hook = type { ptr }",
+		"extractvalue %Hook",
+		"= load ptr, ptr",
+		"= call i64 (ptr, i64)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "LLVM015") {
+		t.Fatalf("fn-typed struct-pattern local regressed to direct-call fallback:\n%s", got)
 	}
 }
 

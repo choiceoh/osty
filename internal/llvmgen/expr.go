@@ -211,9 +211,9 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 	case *ast.TupleExpr:
 		return g.emitTupleExpr(e)
 	case *ast.ListExpr:
-		return g.emitListExprWithHint(e, "", false)
+		return g.emitListExprWithHint(e, nil, "", false)
 	case *ast.MapExpr:
-		return g.emitMapExprWithHint(e, "", "", false)
+		return g.emitMapExprWithHint(e, nil, nil, "", "", false)
 	case *ast.StructLit:
 		return g.emitStructLit(e)
 	case *ast.IfExpr:
@@ -486,6 +486,9 @@ func (g *generator) emitFieldExpr(expr *ast.FieldExpr) (value, error) {
 	loaded.setElemTyp = field.setElemTyp
 	loaded.setElemString = field.setElemString
 	loaded.sourceType = field.sourceType
+	if err := g.decorateValueFromSourceType(&loaded, field.sourceType); err != nil {
+		return value{}, err
+	}
 	loaded.gcManaged = valueNeedsManagedRoot(loaded)
 	loaded.rootPaths = g.rootPathsForType(field.typ)
 	return loaded, nil
@@ -1790,6 +1793,13 @@ type resultPatternInfo struct {
 	isWildcard  bool // true if pattern is bare `_`
 }
 
+func resultVariantName(tag int) string {
+	if tag == 1 {
+		return "Err"
+	}
+	return "Ok"
+}
+
 func (g *generator) matchResultPattern(info builtinResultType, pattern ast.Pattern) (resultPatternInfo, bool, error) {
 	if _, ok := pattern.(*ast.WildcardPat); ok {
 		return resultPatternInfo{isWildcard: true}, true, nil
@@ -1897,6 +1907,9 @@ func (g *generator) emitResultMatchArm(scrutinee value, info resultPatternInfo, 
 		payloadValue := fromOstyValue(payload)
 		payloadValue.gcManaged = info.payloadType == "ptr"
 		payloadValue.rootPaths = g.rootPathsForType(info.payloadType)
+		if err := g.decorateValueFromSourceType(&payloadValue, builtinResultPayloadSourceType(scrutinee.sourceType, resultVariantName(info.tag))); err != nil {
+			return value{}, err
+		}
 		g.bindNamedLocal(info.payloadName, payloadValue, false)
 	}
 	return g.emitMatchArmBodyValue(body)
@@ -2361,10 +2374,10 @@ func (g *generator) emitSelectValue(cond *LlvmValue, thenValue, elseValue value)
 
 func (g *generator) emitExprWithHint(expr ast.Expr, listElemTyp string, listElemString bool, mapKeyTyp string, mapValueTyp string, mapKeyString bool, setElemTyp string, setElemString bool) (value, error) {
 	if list, ok := expr.(*ast.ListExpr); ok {
-		return g.emitListExprWithHint(list, listElemTyp, listElemString)
+		return g.emitListExprWithHint(list, nil, listElemTyp, listElemString)
 	}
 	if m, ok := expr.(*ast.MapExpr); ok {
-		return g.emitMapExprWithHint(m, mapKeyTyp, mapValueTyp, mapKeyString)
+		return g.emitMapExprWithHint(m, nil, nil, mapKeyTyp, mapValueTyp, mapKeyString)
 	}
 	return g.emitExpr(expr)
 }
@@ -2489,13 +2502,33 @@ func (g *generator) emitExprWithHintAndSourceType(expr ast.Expr, sourceType ast.
 			g.optionContexts = g.optionContexts[:len(g.optionContexts)-1]
 		}()
 	}
-	v, err := g.emitExprWithHint(expr, listElemTyp, listElemString, mapKeyTyp, mapValueTyp, mapKeyString, setElemTyp, setElemString)
+	var (
+		v   value
+		err error
+	)
+	if list, ok := expr.(*ast.ListExpr); ok {
+		elemSource, _ := llvmListElementSourceType(sourceType, g.typeEnv())
+		v, err = g.emitListExprWithHint(list, elemSource, listElemTyp, listElemString)
+	} else if m, ok := expr.(*ast.MapExpr); ok {
+		keySource, valueSource, _ := llvmMapSourceTypes(sourceType, g.typeEnv())
+		v, err = g.emitMapExprWithHint(m, keySource, valueSource, mapKeyTyp, mapValueTyp, mapKeyString)
+	} else {
+		v, err = g.emitExprWithHint(expr, listElemTyp, listElemString, mapKeyTyp, mapValueTyp, mapKeyString, setElemTyp, setElemString)
+	}
 	if err != nil {
 		return value{}, err
 	}
-	if v.sourceType == nil && sourceType != nil {
-		if typ, err := llvmType(sourceType, g.typeEnv()); err == nil && typ == v.typ {
-			v.sourceType = sourceType
+	decorateWith := sourceType
+	if decorateWith == nil && v.sourceType == nil {
+		if staticSource, ok := g.staticExprSourceType(expr); ok {
+			decorateWith = staticSource
+		}
+	}
+	if v.sourceType == nil && decorateWith != nil {
+		if typ, err := llvmType(decorateWith, g.typeEnv()); err == nil && typ == v.typ {
+			if err := g.decorateValueFromSourceType(&v, decorateWith); err != nil {
+				return value{}, err
+			}
 		}
 	}
 	return v, nil
@@ -2639,7 +2672,7 @@ func (g *generator) emitListAggregateGet(listValue value, index value, elemTyp s
 	return loaded, nil
 }
 
-func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp string, hintedElemString bool) (value, error) {
+func (g *generator) emitListExprWithHint(expr *ast.ListExpr, elemSource ast.Type, hintedElemTyp string, hintedElemString bool) (value, error) {
 	if expr == nil {
 		return value{}, unsupported("expression", "nil list literal")
 	}
@@ -2649,7 +2682,13 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp strin
 	elemString := hintedElemString
 	emittedElems := make([]value, 0, len(expr.Elems))
 	for i, elem := range expr.Elems {
-		v, err := g.emitExpr(elem)
+		var v value
+		var err error
+		if elemSource != nil {
+			v, err = g.emitExprWithHintAndSourceType(elem, elemSource, "", false, "", "", false, "", false)
+		} else {
+			v, err = g.emitExpr(elem)
+		}
 		if err != nil {
 			return value{}, err
 		}
@@ -2731,7 +2770,7 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, hintedElemTyp strin
 	return listValue, nil
 }
 
-func (g *generator) emitMapExprWithHint(expr *ast.MapExpr, hintedKeyTyp, hintedValueTyp string, hintedKeyString bool) (value, error) {
+func (g *generator) emitMapExprWithHint(expr *ast.MapExpr, keySource, valueSource ast.Type, hintedKeyTyp, hintedValueTyp string, hintedKeyString bool) (value, error) {
 	if expr == nil {
 		return value{}, unsupported("expression", "nil map literal")
 	}
@@ -2749,11 +2788,22 @@ func (g *generator) emitMapExprWithHint(expr *ast.MapExpr, hintedKeyTyp, hintedV
 		if entry == nil {
 			return value{}, unsupported("expression", "nil map entry")
 		}
-		key, err := g.emitExpr(entry.Key)
+		var key value
+		var err error
+		if keySource != nil {
+			key, err = g.emitExprWithHintAndSourceType(entry.Key, keySource, "", false, "", "", false, "", false)
+		} else {
+			key, err = g.emitExpr(entry.Key)
+		}
 		if err != nil {
 			return value{}, err
 		}
-		val, err := g.emitExpr(entry.Value)
+		var val value
+		if valueSource != nil {
+			val, err = g.emitExprWithHintAndSourceType(entry.Value, valueSource, "", false, "", "", false, "", false)
+		} else {
+			val, err = g.emitExpr(entry.Value)
+		}
 		if err != nil {
 			return value{}, err
 		}
@@ -2773,7 +2823,7 @@ func (g *generator) emitMapExprWithHint(expr *ast.MapExpr, hintedKeyTyp, hintedV
 		})
 	}
 	if keyTyp == "" || valueTyp == "" {
-		return value{}, unsupported("expression", "empty map literal requires an explicit Map<K, V> type")
+		return value{}, unsupportedf("expression", "empty map literal %s requires an explicit Map<K, V> type", exprPosLabel(expr))
 	}
 	traceSymbol := g.traceCallbackSymbol(valueTyp, g.rootPathsForType(valueTyp))
 	g.declareRuntimeSymbol(mapRuntimeNewSymbol(), "ptr", []paramInfo{{typ: "i64"}, {typ: "i64"}, {typ: "i64"}, {typ: "ptr"}})
@@ -5418,7 +5468,8 @@ func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
 		if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 			return value{}, true, unsupported("call", "map.containsKey requires one positional argument")
 		}
-		key, err := g.emitExpr(call.Args[0].Value)
+		keySource, _, _ := g.iterableMapSourceTypes(field.X)
+		key, err := g.emitExprWithSourceType(call.Args[0].Value, keySource)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -5452,7 +5503,8 @@ func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
 		if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 			return value{}, true, unsupported("call", "map.remove requires one positional argument")
 		}
-		key, err := g.emitExpr(call.Args[0].Value)
+		keySource, _, _ := g.iterableMapSourceTypes(field.X)
+		key, err := g.emitExprWithSourceType(call.Args[0].Value, keySource)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -5512,7 +5564,11 @@ func (g *generator) emitMapGet(call *ast.CallExpr, base value, keyTyp string, ke
 	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 		return value{}, true, unsupported("call", "map.get requires one positional argument")
 	}
-	key, err := g.emitExpr(call.Args[0].Value)
+	var keySource ast.Type
+	if field, ok := fieldExprOfCallFn(call); ok {
+		keySource, _, _ = g.iterableMapSourceTypes(field.X)
+	}
+	key, err := g.emitExprWithSourceType(call.Args[0].Value, keySource)
 	if err != nil {
 		return value{}, true, err
 	}
@@ -5788,7 +5844,7 @@ func (g *generator) emitMapMergeWith(call *ast.CallExpr, base value, keyTyp stri
 	if err != nil {
 		return value{}, true, err
 	}
-	sig, err := requireFnValueSignature(combine, "map.mergeWith combine")
+	combineHeld, sig, err := g.protectFnValueCallback("mergewith.combine", combine, "map.mergeWith combine")
 	if err != nil {
 		return value{}, true, err
 	}
@@ -5798,7 +5854,6 @@ func (g *generator) emitMapMergeWith(call *ast.CallExpr, base value, keyTyp stri
 
 	base = g.protectManagedTemporary("mergewith.self", base)
 	other = g.protectManagedTemporary("mergewith.other", other)
-	combineHeld := g.protectManagedTemporary("mergewith.combine", combine)
 
 	outMap, err := g.emitMapNewFor(keyTyp, valTyp, keyString)
 	if err != nil {
@@ -5850,11 +5905,7 @@ func (g *generator) emitMapMergeWith(call *ast.CallExpr, base value, keyTyp stri
 			g.takeOstyEmitter(emitter)
 			existing = value{typ: valTyp, ref: payload.name}
 		}
-		combineLoaded, err := g.loadIfPointer(combineHeld)
-		if err != nil {
-			return err
-		}
-		combined, err := g.emitFnValueIndirectCall(combineLoaded, sig, []*LlvmValue{
+		combined, err := g.emitProtectedFnValueCall(combineHeld, sig, []*LlvmValue{
 			{typ: valTyp, name: existing.ref},
 			{typ: valTyp, name: v.ref},
 		})
@@ -5894,7 +5945,7 @@ func (g *generator) emitMapMapValues(call *ast.CallExpr, base value, keyTyp stri
 	if err != nil {
 		return value{}, true, err
 	}
-	sig, err := requireFnValueSignature(f, "map.mapValues f")
+	fHeld, sig, err := g.protectFnValueCallback("mapvalues.f", f, "map.mapValues f")
 	if err != nil {
 		return value{}, true, err
 	}
@@ -5907,7 +5958,6 @@ func (g *generator) emitMapMapValues(call *ast.CallExpr, base value, keyTyp stri
 	}
 
 	base = g.protectManagedTemporary("mapvalues.self", base)
-	fHeld := g.protectManagedTemporary("mapvalues.f", f)
 
 	outMap, err := g.emitMapNewFor(keyTyp, rTyp, keyString)
 	if err != nil {
@@ -5916,11 +5966,7 @@ func (g *generator) emitMapMapValues(call *ast.CallExpr, base value, keyTyp stri
 	outMap = g.protectManagedTemporary("mapvalues.out", outMap)
 
 	err = g.emitMapIterate(base, keyTyp, base.mapValueTyp, keyString, "mv", func(k, v value) error {
-		fLoaded, err := g.loadIfPointer(fHeld)
-		if err != nil {
-			return err
-		}
-		rVal, err := g.emitFnValueIndirectCall(fLoaded, sig, []*LlvmValue{{typ: v.typ, name: v.ref}})
+		rVal, err := g.emitProtectedFnValueCall(fHeld, sig, []*LlvmValue{{typ: v.typ, name: v.ref}})
 		if err != nil {
 			return err
 		}
@@ -5949,7 +5995,11 @@ func (g *generator) emitMapGetOr(call *ast.CallExpr, base value, keyTyp string, 
 		call.Args[0].Value == nil || call.Args[1].Value == nil {
 		return value{}, true, unsupported("call", "map.getOr requires two positional arguments")
 	}
-	key, err := g.emitExpr(call.Args[0].Value)
+	var keySource, valueSource ast.Type
+	if field, ok := fieldExprOfCallFn(call); ok {
+		keySource, valueSource, _ = g.iterableMapSourceTypes(field.X)
+	}
+	key, err := g.emitExprWithSourceType(call.Args[0].Value, keySource)
 	if err != nil {
 		return value{}, true, err
 	}
@@ -5961,7 +6011,7 @@ func (g *generator) emitMapGetOr(call *ast.CallExpr, base value, keyTyp string, 
 		return value{}, true, err
 	}
 
-	def, err := g.emitExpr(call.Args[1].Value)
+	def, err := g.emitExprWithSourceType(call.Args[1].Value, valueSource)
 	if err != nil {
 		return value{}, true, err
 	}
@@ -6259,7 +6309,8 @@ func (g *generator) emitSetMethodCall(call *ast.CallExpr) (value, bool, error) {
 		if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 			return value{}, true, unsupportedf("call", "set.%s requires one positional argument", field.Name)
 		}
-		item, err := g.emitExpr(call.Args[0].Value)
+		itemSource, _ := g.setElemSourceType(field.X)
+		item, err := g.emitExprWithSourceType(call.Args[0].Value, itemSource)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -6405,6 +6456,15 @@ func (g *generator) bindPayloadEnumPattern(scrutinee value, pattern enumPatternI
 	if len(pattern.payloadBindings) == 0 {
 		return nil
 	}
+	decoratePayload := func(payloadIndex int, payloadValue *value) error {
+		if payloadIndex < 0 || payloadValue == nil {
+			return nil
+		}
+		if payloadIndex >= len(pattern.variant.payloadSourceTypes) {
+			return nil
+		}
+		return g.decorateValueFromSourceType(payloadValue, pattern.variant.payloadSourceTypes[payloadIndex])
+	}
 	if pattern.isBoxed {
 		emitter := g.toOstyEmitter()
 		heapPtr := llvmExtractValue(emitter, toOstyValue(scrutinee), "ptr", 1)
@@ -6419,6 +6479,10 @@ func (g *generator) bindPayloadEnumPattern(scrutinee value, pattern enumPatternI
 				emitter.body = append(emitter.body, fmt.Sprintf("  %s = load %s, ptr %s", loadTmp, b.typ, gep))
 				payloadValue := value{typ: b.typ, ref: loadTmp}
 				payloadValue.rootPaths = g.rootPathsForType(b.typ)
+				if err := decoratePayload(i, &payloadValue); err != nil {
+					g.takeOstyEmitter(emitter)
+					return err
+				}
 				g.bindNamedLocal(b.name, payloadValue, false)
 			}
 			g.takeOstyEmitter(emitter)
@@ -6431,6 +6495,9 @@ func (g *generator) bindPayloadEnumPattern(scrutinee value, pattern enumPatternI
 		payloadValue.listElemTyp = pattern.payloadListElemTyp
 		payloadValue.gcManaged = b.typ == "ptr" || pattern.payloadListElemTyp != ""
 		payloadValue.rootPaths = g.rootPathsForType(b.typ)
+		if err := decoratePayload(0, &payloadValue); err != nil {
+			return err
+		}
 		g.bindNamedLocal(b.name, payloadValue, false)
 		return nil
 	}
@@ -6449,6 +6516,9 @@ func (g *generator) bindPayloadEnumPattern(scrutinee value, pattern enumPatternI
 		}
 		payloadValue.gcManaged = b.typ == "ptr" || payloadValue.listElemTyp != ""
 		payloadValue.rootPaths = g.rootPathsForType(b.typ)
+		if err := decoratePayload(i, &payloadValue); err != nil {
+			return err
+		}
 		g.bindNamedLocal(b.name, payloadValue, false)
 	}
 	return nil
@@ -7208,7 +7278,11 @@ func (g *generator) emitEnumVariantCall(call *ast.CallExpr) (value, bool, error)
 		if arg.Name != "" || arg.Value == nil {
 			return value{}, true, unsupportedf("call", "enum variant %q requires positional payload", ref.variant.name)
 		}
-		payload, err := g.emitExpr(arg.Value)
+		var payloadSource ast.Type
+		if i < len(ref.variant.payloadSourceTypes) {
+			payloadSource = ref.variant.payloadSourceTypes[i]
+		}
+		payload, err := g.emitExprWithHintAndSourceType(arg.Value, payloadSource, "", false, "", "", false, "", false)
 		if err != nil {
 			return value{}, true, err
 		}

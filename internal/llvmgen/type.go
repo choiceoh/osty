@@ -186,6 +186,10 @@ func llvmEnumPayloadType(t ast.Type, env typeEnv) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	switch resolved.(type) {
+	case *ast.FnType, *ast.OptionalType, *ast.TupleType:
+		return "ptr", nil
+	}
 	named, ok := t.(*ast.NamedType)
 	if resolvedNamed, resolvedOK := resolved.(*ast.NamedType); resolvedOK {
 		named = resolvedNamed
@@ -395,11 +399,27 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 	case *ast.StringLit:
 		return &ast.NamedType{Path: []string{"String"}}, true
 	case *ast.Ident:
-		if v, ok := g.lookupBinding(e.Name); ok && v.sourceType != nil {
-			return v.sourceType, true
+		if v, ok := g.lookupBinding(e.Name); ok {
+			if v.sourceType != nil {
+				return v.sourceType, true
+			}
+			if src := fnSourceTypeFromSignature(v.fnSigRef); src != nil {
+				return src, true
+			}
+		}
+		if sig := g.functions[e.Name]; sig != nil && sig.receiverType == "" {
+			if src := fnSourceTypeFromSignature(sig); src != nil {
+				return src, true
+			}
 		}
 	case *ast.ParenExpr:
 		return g.staticExprSourceType(e.X)
+	case *ast.TupleExpr:
+		return g.staticTupleLiteralSourceType(e)
+	case *ast.ListExpr:
+		return g.staticListLiteralSourceType(e)
+	case *ast.MapExpr:
+		return g.staticMapLiteralSourceType(e)
 	case *ast.QuestionExpr:
 		src, ok := g.staticExprSourceType(e.X)
 		if !ok {
@@ -423,6 +443,9 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 			return src, true
 		}
 		if src, ok := g.staticStdEnvCallSourceType(e); ok {
+			return src, true
+		}
+		if src, ok := g.staticCollectionMethodSourceType(e); ok {
 			return src, true
 		}
 		if src, ok := g.staticMapMethodSourceType(e); ok {
@@ -509,6 +532,185 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 			if len(named.Args) == 2 {
 				return named.Args[1], true
 			}
+		}
+	}
+	return nil, false
+}
+
+func fnSourceTypeFromSignature(sig *fnSig) ast.Type {
+	if sig == nil {
+		return nil
+	}
+	params := make([]ast.Type, 0, len(sig.params))
+	for _, p := range sig.params {
+		if p.sourceType == nil {
+			return nil
+		}
+		params = append(params, p.sourceType)
+	}
+	if sig.ret != "void" && sig.returnSourceType == nil {
+		return nil
+	}
+	return &ast.FnType{
+		Params:     params,
+		ReturnType: sig.returnSourceType,
+	}
+}
+
+func (g *generator) staticTupleLiteralSourceType(expr *ast.TupleExpr) (ast.Type, bool) {
+	if expr == nil {
+		return nil, false
+	}
+	elems := make([]ast.Type, 0, len(expr.Elems))
+	for _, elem := range expr.Elems {
+		src, ok := g.staticExprSourceType(elem)
+		if !ok {
+			return nil, false
+		}
+		elems = append(elems, src)
+	}
+	return &ast.TupleType{Elems: elems}, true
+}
+
+func (g *generator) staticListLiteralSourceType(expr *ast.ListExpr) (ast.Type, bool) {
+	if expr == nil || len(expr.Elems) == 0 {
+		return nil, false
+	}
+	elemSource, ok := g.staticExprSourceType(expr.Elems[0])
+	if !ok {
+		return nil, false
+	}
+	for _, elem := range expr.Elems[1:] {
+		src, ok := g.staticExprSourceType(elem)
+		if !ok || !sameSourceType(elemSource, src) {
+			return nil, false
+		}
+	}
+	return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{elemSource}}, true
+}
+
+func (g *generator) staticMapLiteralSourceType(expr *ast.MapExpr) (ast.Type, bool) {
+	if expr == nil || len(expr.Entries) == 0 {
+		return nil, false
+	}
+	first := expr.Entries[0]
+	keySource, ok := g.staticExprSourceType(first.Key)
+	if !ok {
+		return nil, false
+	}
+	valueSource, ok := g.staticExprSourceType(first.Value)
+	if !ok {
+		return nil, false
+	}
+	for _, entry := range expr.Entries[1:] {
+		keySrc, ok := g.staticExprSourceType(entry.Key)
+		if !ok || !sameSourceType(keySource, keySrc) {
+			return nil, false
+		}
+		valSrc, ok := g.staticExprSourceType(entry.Value)
+		if !ok || !sameSourceType(valueSource, valSrc) {
+			return nil, false
+		}
+	}
+	return &ast.NamedType{Path: []string{"Map"}, Args: []ast.Type{keySource, valueSource}}, true
+}
+
+// staticCollectionMethodSourceType reconstructs source-level return
+// types for list/map/set intrinsic methods so local binds and nested
+// container expressions can keep element metadata without every emit
+// site assigning sourceType manually.
+func (g *generator) staticCollectionMethodSourceType(call *ast.CallExpr) (ast.Type, bool) {
+	if field, _, _, found := g.listMethodInfo(call); found {
+		baseSource, ok := g.staticExprSourceType(field.X)
+		if !ok {
+			return nil, false
+		}
+		resolved, err := llvmResolveAliasType(baseSource, g.typeEnv(), map[string]bool{})
+		if err != nil {
+			return nil, false
+		}
+		named, ok := resolved.(*ast.NamedType)
+		if !ok || len(named.Path) != 1 || named.Path[0] != "List" || len(named.Args) != 1 {
+			return nil, false
+		}
+		switch field.Name {
+		case "len":
+			return &ast.NamedType{Path: []string{"Int"}}, true
+		case "isEmpty":
+			return &ast.NamedType{Path: []string{"Bool"}}, true
+		case "sorted":
+			return baseSource, true
+		case "toSet":
+			return &ast.NamedType{Path: []string{"Set"}, Args: []ast.Type{named.Args[0]}}, true
+		}
+	}
+	if field, _, _, _, found := g.mapMethodInfo(call); found {
+		baseSource, ok := g.staticExprSourceType(field.X)
+		if !ok {
+			return nil, false
+		}
+		resolved, err := llvmResolveAliasType(baseSource, g.typeEnv(), map[string]bool{})
+		if err != nil {
+			return nil, false
+		}
+		named, ok := resolved.(*ast.NamedType)
+		if !ok || len(named.Path) != 1 || named.Path[0] != "Map" || len(named.Args) != 2 {
+			return nil, false
+		}
+		keyAST := named.Args[0]
+		valAST := named.Args[1]
+		switch field.Name {
+		case "len":
+			return &ast.NamedType{Path: []string{"Int"}}, true
+		case "isEmpty", "containsKey":
+			return &ast.NamedType{Path: []string{"Bool"}}, true
+		case "get":
+			return &ast.OptionalType{Inner: valAST}, true
+		case "getOr":
+			return valAST, true
+		case "keys":
+			return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{keyAST}}, true
+		case "mergeWith":
+			return baseSource, true
+		case "mapValues":
+			if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Value == nil {
+				return nil, false
+			}
+			callbackSource, ok := g.staticExprSourceType(call.Args[0].Value)
+			if !ok {
+				return nil, false
+			}
+			resolvedCallback, err := llvmResolveAliasType(callbackSource, g.typeEnv(), map[string]bool{})
+			if err != nil {
+				return nil, false
+			}
+			ft, ok := resolvedCallback.(*ast.FnType)
+			if !ok || ft.ReturnType == nil {
+				return nil, false
+			}
+			return &ast.NamedType{Path: []string{"Map"}, Args: []ast.Type{keyAST, ft.ReturnType}}, true
+		}
+	}
+	if field, _, _, found := g.setMethodInfo(call); found {
+		baseSource, ok := g.staticExprSourceType(field.X)
+		if !ok {
+			return nil, false
+		}
+		resolved, err := llvmResolveAliasType(baseSource, g.typeEnv(), map[string]bool{})
+		if err != nil {
+			return nil, false
+		}
+		named, ok := resolved.(*ast.NamedType)
+		if !ok || len(named.Path) != 1 || named.Path[0] != "Set" || len(named.Args) != 1 {
+			return nil, false
+		}
+		switch field.Name {
+		case "len":
+			return &ast.NamedType{Path: []string{"Int"}}, true
+		case "isEmpty", "contains", "remove":
+			return &ast.NamedType{Path: []string{"Bool"}}, true
+		case "toList":
+			return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{named.Args[0]}}, true
 		}
 	}
 	return nil, false
@@ -695,6 +897,18 @@ func (g *generator) decorateStaticValueFromSourceType(out value, expr ast.Expr) 
 	return out
 }
 
+func tupleElementSourceType(sourceType ast.Type, index int, env typeEnv) (ast.Type, bool) {
+	resolved, err := llvmResolveAliasType(sourceType, env, map[string]bool{})
+	if err != nil {
+		return nil, false
+	}
+	tuple, ok := resolved.(*ast.TupleType)
+	if !ok || index < 0 || index >= len(tuple.Elems) {
+		return nil, false
+	}
+	return tuple.Elems[index], true
+}
+
 func (g *generator) staticListLiteralElementInfo(expr *ast.ListExpr) (string, bool, bool) {
 	if expr == nil || len(expr.Elems) == 0 {
 		return "", false, false
@@ -741,12 +955,48 @@ func (g *generator) iterableElemSourceType(iter ast.Expr) (ast.Type, bool) {
 			return nil, false
 		}
 	}
-	resolved, err := llvmResolveAliasType(src, g.typeEnv(), map[string]bool{})
+	return llvmListElementSourceType(src, g.typeEnv())
+}
+
+func llvmListElementSourceType(sourceType ast.Type, env typeEnv) (ast.Type, bool) {
+	resolved, err := llvmResolveAliasType(sourceType, env, map[string]bool{})
 	if err != nil {
 		return nil, false
 	}
 	named, ok := resolved.(*ast.NamedType)
 	if !ok || len(named.Path) != 1 || named.Path[0] != "List" || len(named.Args) != 1 {
+		return nil, false
+	}
+	return named.Args[0], true
+}
+
+func (g *generator) iterableMapSourceTypes(iter ast.Expr) (ast.Type, ast.Type, bool) {
+	src, ok := g.staticExprSourceType(iter)
+	if !ok {
+		return nil, nil, false
+	}
+	return llvmMapSourceTypes(src, g.typeEnv())
+}
+
+func llvmMapSourceTypes(sourceType ast.Type, env typeEnv) (ast.Type, ast.Type, bool) {
+	resolved, err := llvmResolveAliasType(sourceType, env, map[string]bool{})
+	if err != nil {
+		return nil, nil, false
+	}
+	named, ok := resolved.(*ast.NamedType)
+	if !ok || len(named.Path) != 1 || named.Path[0] != "Map" || len(named.Args) != 2 {
+		return nil, nil, false
+	}
+	return named.Args[0], named.Args[1], true
+}
+
+func llvmSetElementSourceType(sourceType ast.Type, env typeEnv) (ast.Type, bool) {
+	resolved, err := llvmResolveAliasType(sourceType, env, map[string]bool{})
+	if err != nil {
+		return nil, false
+	}
+	named, ok := resolved.(*ast.NamedType)
+	if !ok || len(named.Path) != 1 || named.Path[0] != "Set" || len(named.Args) != 1 {
 		return nil, false
 	}
 	return named.Args[0], true
@@ -770,6 +1020,14 @@ func (g *generator) structFieldListSourceType(expr ast.Expr) ast.Type {
 		return nil
 	}
 	return f.sourceType
+}
+
+func (g *generator) setElemSourceType(expr ast.Expr) (ast.Type, bool) {
+	src, ok := g.staticExprSourceType(expr)
+	if !ok {
+		return nil, false
+	}
+	return llvmSetElementSourceType(src, g.typeEnv())
 }
 
 func (g *generator) staticExprListElemIsBytes(expr ast.Expr) bool {

@@ -206,6 +206,7 @@ type variantInfo struct {
 	name                string
 	tag                 int
 	payloads            []string
+	payloadSourceTypes  []ast.Type
 	payloadListElemTyp  string
 	payloadListElemTyps []string
 }
@@ -964,6 +965,7 @@ func collectEnum(decl *ast.EnumDecl, env typeEnv) (*enumInfo, error) {
 			return nil, unsupported(diag.kind, diag.message)
 		}
 		payloads := make([]string, 0, len(variant.Fields))
+		payloadSourceTypes := make([]ast.Type, 0, len(variant.Fields))
 		payloadListElemTyps := make([]string, 0, len(variant.Fields))
 		payloadListElemTyp := ""
 		for fi, field := range variant.Fields {
@@ -973,6 +975,7 @@ func collectEnum(decl *ast.EnumDecl, env typeEnv) (*enumInfo, error) {
 				return nil, unsupported(diag.kind, diag.message)
 			}
 			payloads = append(payloads, typ)
+			payloadSourceTypes = append(payloadSourceTypes, field)
 			if fi >= len(info.payloadSlotTypes) {
 				info.payloadSlotTypes = append(info.payloadSlotTypes, typ)
 			} else if info.payloadSlotTypes[fi] != typ {
@@ -1002,6 +1005,7 @@ func collectEnum(decl *ast.EnumDecl, env typeEnv) (*enumInfo, error) {
 			name:                variant.Name,
 			tag:                 i,
 			payloads:            payloads,
+			payloadSourceTypes:  payloadSourceTypes,
 			payloadListElemTyp:  payloadListElemTyp,
 			payloadListElemTyps: payloadListElemTyps,
 		}
@@ -1382,14 +1386,11 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 			setElemString:  p.setElemString,
 			sourceType:     p.sourceType,
 		}
-		// Phase 3: fn-typed parameter. The value arrives as a ptr to
-		// a closure env (same uniform ABI as phase 1), so we tag the
-		// binding with a synthesised *fnSig so subsequent `p(args)`
-		// inside the body dispatches through emitIndirectUserCall.
-		if fsig, ok, err := synthFnSigFromSourceType(p.sourceType, g.typeEnv()); err != nil {
+		// Reconstruct source-derived container metadata / fn call shape
+		// at the parameter bind edge so fn-typed and collection-typed
+		// params use the same recovery path as local binds.
+		if err := g.decorateValueFromSourceType(&v, p.sourceType); err != nil {
 			return "", err
-		} else if ok {
-			v.fnSigRef = fsig
 		}
 		v.gcManaged = valueNeedsManagedRoot(v)
 		v.rootPaths = g.rootPathsForType(p.typ)
