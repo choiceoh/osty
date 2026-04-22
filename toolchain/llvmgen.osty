@@ -557,7 +557,7 @@ pub fn llvmPlanSafepointChunks(
 ///
 /// Points at the dedicated `OSTY_GC_KIND_CLOSURE_ENV = 1029`
 /// reservation in the runtime. The closure allocation path itself
-/// uses `osty.rt.closure_env_alloc_v1`, which installs the
+/// uses `osty.rt.closure_env_alloc_v2`, which installs the
 /// capture-tracing callback at construction; this constant is
 /// retained for heap-dump / `osty_gc_stats` categorisation and as
 /// the pivot for any direct `osty.gc.alloc_v1` caller that wants to
@@ -571,11 +571,18 @@ pub fn llvmClosureEnvGcKind() -> Int { 1029 }
 /// capture-aware lowering lands.
 pub fn llvmClosureEnvPhase1CaptureCount() -> Int { 0 }
 
+/// Byte offset where capture slots begin in a closure env. Layout:
+/// `ptr fn` (0) + `i64 capture_count` (8) + `i64 pointer_bitmap` (16)
+/// + `captures[]` (24). Bumped from 16 when the bitmap field landed
+/// (RUNTIME_GC §2.4 — structural guarantee against scalar
+/// false-retention).
+pub fn llvmClosureEnvCapturesOffset() -> Int { 24 }
+
 /// Phase A4 closure env allocation + thunk install. Calls
-/// `osty.rt.closure_env_alloc_v1` with the supplied capture count
-/// (currently always `llvmClosureEnvPhase1CaptureCount()`) and a
-/// diagnostic site, then stores the thunk symbol at slot 0 so
-/// subsequent indirect calls can dispatch through the env. Returns
+/// `osty.rt.closure_env_alloc_v2` with the supplied capture count, a
+/// diagnostic site, and the pointer bitmap (bit i = 1 iff capture slot
+/// i holds a managed pointer), then stores the thunk symbol at slot 0
+/// so subsequent indirect calls can dispatch through the env. Returns
 /// the env pointer as a `ptr`-typed LlvmValue. The runtime helper
 /// attaches the capture-tracing GC callback at construction so any
 /// managed pointers a Phase 4 lowering drops into capture slots are
@@ -585,10 +592,11 @@ pub fn llvmEmitClosureEnvAllocRuntime(
     captureCount: Int,
     siteName: String,
     thunkSymbol: String,
+    pointerBitmap: Int,
 ) -> LlvmValue {
     let envTemp = llvmNextTemp(emitter)
     emitter.body.push(
-        "  {envTemp} = call ptr @osty.rt.closure_env_alloc_v1(i64 {captureCount}, ptr {siteName})",
+        "  {envTemp} = call ptr @osty.rt.closure_env_alloc_v2(i64 {captureCount}, ptr {siteName}, i64 {pointerBitmap})",
     )
     emitter.body.push("  store ptr @{thunkSymbol}, ptr {envTemp}")
     LlvmValue { typ: "ptr", name: envTemp, pointer: false }

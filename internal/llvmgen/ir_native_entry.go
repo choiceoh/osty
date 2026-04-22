@@ -54,10 +54,10 @@ type nativeTupleInfo struct {
 // appended after the original closure params on the lifted fn -
 // the thunk loads them from env slots and forwards everything.
 //
-// Env layout: `ptr` fn slot at offset 0, `ptr` GC-trace slot at
-// offset 8, captures in declaration order at offset 16 + i*8 (each
-// capture occupies one 8-byte slot, even when the LLVM type is
-// smaller - matches legacy emit).
+// Env layout: `ptr fn` slot at offset 0, `i64 capture_count` at
+// offset 8, `i64 pointer_bitmap` at offset 16, captures in
+// declaration order at offset 24 + i*8 (each capture occupies one
+// 8-byte slot, even when the LLVM type is smaller).
 type nativeClosureInfo struct {
 	id           int
 	liftedName   string
@@ -4269,9 +4269,10 @@ func nativeEmitLiftedClosures(ctx *nativeProjectionCtx, out *llvmNativeModule) b
 // appendNativeClosureThunks appends one trampoline fn per
 // registered closure to the emitted LLVM IR text. The thunk ABI
 // is `(ptr env, <orig_params>)`; the body loads each capture from
-// env at offset 16 + i*8, then calls the lifted fn with
-// `(orig_args..., cap0, cap1, ...)`. Also emits a top-level
-// `declare` for the env-alloc helper (no-op if already present).
+// env at offset `closureEnvCapturesOffset + i*8`, then calls the
+// lifted fn with `(orig_args..., cap0, cap1, ...)`. Also emits a
+// top-level `declare` for the env-alloc helper (no-op if already
+// present).
 func appendNativeClosureThunks(out []byte, ctx *nativeProjectionCtx) []byte {
 	if ctx == nil || len(ctx.closuresByID) == 0 {
 		return out
@@ -4279,7 +4280,7 @@ func appendNativeClosureThunks(out []byte, ctx *nativeProjectionCtx) []byte {
 	if len(out) > 0 && out[len(out)-1] != '\n' {
 		out = append(out, '\n')
 	}
-	out = append(out, "declare ptr @osty.rt.closure_env_alloc_v1(i64, ptr)\n"...)
+	out = append(out, "declare ptr @osty.rt.closure_env_alloc_v2(i64, ptr, i64)\n"...)
 	for _, info := range ctx.closuresByID {
 		var b strings.Builder
 		b.WriteString("define private ")
@@ -4294,9 +4295,9 @@ func appendNativeClosureThunks(out []byte, ctx *nativeProjectionCtx) []byte {
 			b.WriteString(strconv.Itoa(i))
 		}
 		b.WriteString(") {\nentry:\n")
-		// Load each capture from env at offset 16 + i*8.
+		// Load each capture from env at offset `closureEnvCapturesOffset + i*8`.
 		for i, capType := range info.captureLLVMs {
-			b.WriteString(fmt.Sprintf("  %%cap%d_slot = getelementptr i8, ptr %%env, i64 %d\n", i, 16+i*8))
+			b.WriteString(fmt.Sprintf("  %%cap%d_slot = getelementptr i8, ptr %%env, i64 %d\n", i, llvmClosureEnvCapturesOffset()+i*8))
 			b.WriteString(fmt.Sprintf("  %%cap%d = load %s, ptr %%cap%d_slot\n", i, capType, i))
 		}
 		// Call the lifted fn: (orig_args..., cap0, cap1, ...). Env

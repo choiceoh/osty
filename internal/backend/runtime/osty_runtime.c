@@ -483,7 +483,7 @@ enum {
      * callback (`osty_rt_closure_env_trace`) that walks the capture
      * slots so any managed pointer captured by a closure stays
      * reachable across GC cycles. Layout below in `osty_rt_closure_env`.
-    * Allocation is dedicated: `osty.rt.closure_env_alloc_v1` rather
+    * Allocation is dedicated: `osty.rt.closure_env_alloc_v2` rather
      * than the generic `osty.gc.alloc_v1`, so the trace is installed
      * at construction and not as a post-alloc mutation. Phase 1 still
      * emits envs with `capture_count = 0`, exercising the allocation
@@ -502,16 +502,25 @@ enum {
 
 /* Closure environment payload. The thunk ABI is preserved — the LLVM
  * call site still does `load ptr, ptr %env` — because `fn_ptr` stays
- * at offset 0. `capture_count` and `captures[]` follow so the trace
- * callback can iterate without any side metadata.
+ * at offset 0. `capture_count` and `pointer_bitmap` follow so the
+ * trace callback can iterate without any side metadata.
  *
- * Capture slots hold `void *`, always through managed-pointer
- * semantics. Non-pointer captures (scalar values boxed by the Osty
- * frontend) would still go here as tagged managed values; the
- * frontend is responsible for boxing. */
+ * `pointer_bitmap` (RUNTIME_GC §2.4): bit i is 1 iff `captures[i]`
+ * holds a managed pointer that the tracer must mark. Scalar captures
+ * set bit i to 0 so the tracer skips them entirely — a structural
+ * guarantee that a scalar bit pattern aliasing a live payload address
+ * cannot false-retain that payload. Bitmap width caps capture count
+ * at 64 per env (enforced at alloc time); closures in practice never
+ * approach this limit.
+ *
+ * Capture slots hold `void *` bit patterns. For pointer slots the
+ * value is a managed payload pointer; for scalar slots the 8-byte
+ * pattern is the raw IEEE-754 double / sign-extended integer / bool
+ * the frontend stored — the GC never dereferences it. */
 typedef struct osty_rt_closure_env {
     void *fn_ptr;
     int64_t capture_count;
+    uint64_t pointer_bitmap;
     void *captures[];
 } osty_rt_closure_env;
 
@@ -7369,32 +7378,33 @@ static void osty_rt_enum_ptr_payload_trace(void *payload) {
  * closure capture survives GC while the env itself is reachable.
  *
  * The env layout is self-describing (see `osty_rt_closure_env`) so the
- * trace needs no external descriptor — it reads `capture_count`, then
- * passes each slot address to `osty_gc_mark_slot_v1`. Non-managed
- * capture values (scalars that the Osty frontend stores as raw bits
- * inside the slot) are handled transparently because `mark_slot_v1`
- * filters through `find_header`.
+ * trace needs no external descriptor — it reads `capture_count` and
+ * `pointer_bitmap`, then calls `osty_gc_mark_slot_v1` only for slots
+ * whose bitmap bit is set.
  *
- * Correctness caveat: `find_header` identifies real heap payloads by
- * pointer, so a scalar capture whose 8-byte bit pattern happens to
- * collide with a live payload address will be treated as a reachable
- * pointer and keep that object alive for one extra cycle. On a 64-bit
- * host typical IEEE-754 doubles and small integers do not alias heap
- * addresses (heap sits in the high half of user space; small doubles
- * have exponent bits 0x3F…, small ints sit below 0x0001…), so the
- * collision probability is effectively zero in practice — but the
- * guarantee is probabilistic, not structural. A follow-up that stores
- * a per-capture kind bitmap would close this to a structural
- * guarantee; today's code chooses the simpler self-describing layout.
+ * This is a structural guarantee against scalar false-retention: the
+ * frontend records which capture slots hold managed pointers at alloc
+ * time (`osty_rt_closure_env_alloc_v2`), so scalar bit patterns that
+ * happen to alias a live payload address can never keep that payload
+ * alive through a closure env. This closes the probabilistic caveat
+ * the v1 layout carried (find_header would have safely skipped
+ * invalid pointers, but the guarantee was statistical, not
+ * structural).
  */
 static void osty_rt_closure_env_trace(void *payload) {
     osty_rt_closure_env *env = (osty_rt_closure_env *)payload;
+    uint64_t bitmap;
+    int64_t n;
     int64_t i;
     if (env == NULL || env->capture_count <= 0) {
         return;
     }
-    for (i = 0; i < env->capture_count; i++) {
-        osty_gc_mark_slot_v1((void *)&env->captures[i]);
+    bitmap = env->pointer_bitmap;
+    n = env->capture_count;
+    for (i = 0; i < n; i++) {
+        if ((bitmap >> (uint64_t)i) & 1ULL) {
+            osty_gc_mark_slot_v1((void *)&env->captures[i]);
+        }
     }
 }
 
@@ -7403,19 +7413,29 @@ static void osty_rt_closure_env_trace(void *payload) {
  * together — there is no post-alloc mutation window where a
  * collection could see an env without its trace installed.
  *
- * Exported as `osty.rt.closure_env_alloc_v1` so the LLVM emitter can
- * call it with a single `call ptr @osty.rt.closure_env_alloc_v1(i64 N,
- * ptr %site)` at the fn-value materialisation site.
+ * `pointer_bitmap` (RUNTIME_GC §2.4): bit i is 1 iff capture slot i
+ * holds a managed pointer. Scalar slots leave the bit clear so the
+ * tracer skips them entirely, giving a structural (not probabilistic)
+ * guarantee against scalar false-retention. The bitmap is 64 bits
+ * wide so capture_count is capped at 64 — closures in practice never
+ * approach this limit.
+ *
+ * Exported as `osty.rt.closure_env_alloc_v2` so the LLVM emitter can
+ * call it with a single `call ptr @osty.rt.closure_env_alloc_v2(i64 N,
+ * ptr %site, i64 %bitmap)` at the fn-value materialisation site.
  */
-void *osty_rt_closure_env_alloc_v1(int64_t capture_count, const char *site)
-    __asm__(OSTY_GC_SYMBOL("osty.rt.closure_env_alloc_v1"));
+void *osty_rt_closure_env_alloc_v2(int64_t capture_count, const char *site, uint64_t pointer_bitmap)
+    __asm__(OSTY_GC_SYMBOL("osty.rt.closure_env_alloc_v2"));
 
-void *osty_rt_closure_env_alloc_v1(int64_t capture_count, const char *site) {
+void *osty_rt_closure_env_alloc_v2(int64_t capture_count, const char *site, uint64_t pointer_bitmap) {
     size_t byte_size;
     osty_rt_closure_env *env;
 
     if (capture_count < 0) {
         osty_rt_abort("negative closure env capture count");
+    }
+    if (capture_count > 64) {
+        osty_rt_abort("closure env capture count exceeds bitmap width (max 64)");
     }
     if ((size_t)capture_count > (SIZE_MAX - sizeof(osty_rt_closure_env)) / sizeof(void *)) {
         osty_rt_abort("closure env capture count overflow");
@@ -7425,6 +7445,7 @@ void *osty_rt_closure_env_alloc_v1(int64_t capture_count, const char *site) {
         byte_size, OSTY_GC_KIND_CLOSURE_ENV, site,
         osty_rt_closure_env_trace, NULL);
     env->capture_count = capture_count;
+    env->pointer_bitmap = pointer_bitmap;
     return env;
 }
 

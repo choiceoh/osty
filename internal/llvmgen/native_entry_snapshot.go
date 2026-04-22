@@ -48,7 +48,7 @@ const (
 	// a no-capture closure literal:
 	//
 	//   %site = <string literal ptr>
-	//   %env  = call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr %site)
+	//   %env  = call ptr @osty.rt.closure_env_alloc_v2(i64 0, ptr %site, i64 0)
 	//   store ptr <thunk_sym>, ptr %env
 	//
 	// `name` carries the thunk symbol (e.g. "@__osty_closure_thunk___osty_closure_1"),
@@ -1197,19 +1197,21 @@ func llvmNativeEvalInterfaceCall(emitter *LlvmEmitter, expr *llvmNativeExpr) *Ll
 
 // llvmNativeEvalClosureEnvAlloc emits the env-alloc + store-thunk
 // sequence used by a closure literal, plus (for capturing closures)
-// per-capture stores into env slots at offset 16 + i*8.
+// per-capture stores into env slots at offset
+// `closureEnvCapturesOffset + i*8`.
 //
 //	%site = <ptr to string literal>
-//	%env  = call ptr @osty.rt.closure_env_alloc_v1(i64 <N>, ptr %site)
+//	%env  = call ptr @osty.rt.closure_env_alloc_v2(i64 <N>, ptr %site, i64 <bitmap>)
 //	store ptr <thunkSym>, ptr %env
 //	; for each capture i:
-//	%cap<i>_slot = getelementptr i8, ptr %env, i64 <16 + i*8>
+//	%cap<i>_slot = getelementptr i8, ptr %env, i64 <closureEnvCapturesOffset + i*8>
 //	store <capType> <capVal>, ptr %cap<i>_slot
 //
 // `expr.text` has shape "<site>;<capType0>,<capType1>,..." — the
 // site label up to the first semicolon, then comma-separated
 // capture LLVM types (empty for no-capture). The capture values
-// are `expr.childExprs` in declaration order.
+// are `expr.childExprs` in declaration order. Bit i of the pointer
+// bitmap is set iff `capTypes[i] == "ptr"` (RUNTIME_GC §2.4).
 func llvmNativeEvalClosureEnvAlloc(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
 	if emitter == nil || expr == nil {
 		return llvmNativeZeroValue("ptr")
@@ -1220,11 +1222,18 @@ func llvmNativeEvalClosureEnvAlloc(emitter *LlvmEmitter, expr *llvmNativeExpr) *
 		capTypesRaw = expr.text[idx+1:]
 	}
 	capTypes := splitArgTypes(capTypesRaw)
+	var bitmap uint64
+	for i, t := range capTypes {
+		if t == "ptr" {
+			bitmap |= uint64(1) << uint(i)
+		}
+	}
 	site := llvmStringLiteral(emitter, siteLabel)
 	env := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call ptr @osty.rt.closure_env_alloc_v1(i64 %d, ptr %s)", env, len(capTypes), site.name))
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call ptr @osty.rt.closure_env_alloc_v2(i64 %d, ptr %s, i64 %d)", env, len(capTypes), site.name, bitmap))
 	emitter.body = append(emitter.body, fmt.Sprintf("  store ptr %s, ptr %s", expr.name, env))
-	// Store each capture value into its env slot at offset 16 + i*8.
+	// Store each capture value into its env slot at offset
+	// `closureEnvCapturesOffset + i*8`.
 	for i, child := range expr.childExprs {
 		val := llvmNativeEvalExpr(emitter, child)
 		typ := "i64"
@@ -1233,7 +1242,7 @@ func llvmNativeEvalClosureEnvAlloc(emitter *LlvmEmitter, expr *llvmNativeExpr) *
 		}
 		slot := fmt.Sprintf("%%cap%d_slot", i)
 		// Use raw-named slot (matches legacy shape so tests can lock it).
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr i8, ptr %s, i64 %d", slot, env, 16+i*8))
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr i8, ptr %s, i64 %d", slot, env, llvmClosureEnvCapturesOffset()+i*8))
 		emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", typ, val.name, slot))
 	}
 	return &LlvmValue{typ: "ptr", name: env}

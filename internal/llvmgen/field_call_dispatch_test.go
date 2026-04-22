@@ -357,7 +357,7 @@ fn main() {
 		// closure allocator (RUNTIME_GC_DELTA §2.4), so the trace
 		// callback for captures is installed at construction even
 		// though Phase 1 passes 0 captures.
-		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
+		"call ptr @osty.rt.closure_env_alloc_v2(i64 0, ptr",
 		"store ptr @__osty_closure_thunk_identity, ptr",
 		// Indirect call at the use site: load fn ptr from env[0],
 		// invoke through the loaded ptr with env as implicit arg 0.
@@ -443,7 +443,7 @@ fn main() {
 	for _, want := range []string{
 		"define private i64 @__osty_closure_thunk_inc(ptr %env, i64 %arg0)",
 		"define private i64 @__osty_closure_thunk_dec(ptr %env, i64 %arg0)",
-		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
+		"call ptr @osty.rt.closure_env_alloc_v2(i64 0, ptr",
 		"= phi ptr [",
 		"= load ptr, ptr",
 		"= call i64 (ptr, i64)",
@@ -1156,7 +1156,7 @@ fn main() {
 		// the dedicated runtime allocator so its capture-tracing
 		// callback is installed at construction. Phase 1 passes 0
 		// captures; Phase 4 will grow the count.
-		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
+		"call ptr @osty.rt.closure_env_alloc_v2(i64 0, ptr",
 		// The FieldExpr call path loads the fn ptr from env and
 		// dispatches through it.
 		"= call i64 (ptr, i64)",
@@ -1196,7 +1196,7 @@ fn main() {
 	got := string(ir)
 	for _, want := range []string{
 		"define private i64 @__osty_closure_thunk_inc(ptr %env, i64 %arg0)",
-		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
+		"call ptr @osty.rt.closure_env_alloc_v2(i64 0, ptr",
 		"= load ptr, ptr",
 		"= call i64 (ptr, i64)",
 	} {
@@ -1280,7 +1280,7 @@ fn main() {
 		"= call i64 (ptr, i64)",
 		// main materialises a GC-heap env for inc and passes it to
 		// apply via the Phase A4 closure-dedicated allocator.
-		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
+		"call ptr @osty.rt.closure_env_alloc_v2(i64 0, ptr",
 		"define private i64 @__osty_closure_thunk_inc(ptr %env, i64 %arg0)",
 	} {
 		if !strings.Contains(got, want) {
@@ -1318,7 +1318,7 @@ fn main() {
 	for _, want := range []string{
 		"define void @apply2(ptr %f)",
 		"call void (ptr, i64, i64)",
-		"call ptr @osty.rt.closure_env_alloc_v1(i64 0, ptr",
+		"call ptr @osty.rt.closure_env_alloc_v2(i64 0, ptr",
 		"define private void @__osty_closure_thunk_printPair(ptr %env, i64 %arg0, i64 %arg1)",
 	} {
 		if !strings.Contains(got, want) {

@@ -64,17 +64,20 @@ var fnValuePhase1CaptureCount = llvmClosureEnvPhase1CaptureCount()
 // fnSigRef so a subsequent call site can do indirect dispatch with
 // the correct signature.
 //
-// Allocation goes through `osty.rt.closure_env_alloc_v1` (Phase A4
+// Allocation goes through `osty.rt.closure_env_alloc_v2` (Phase A4
 // dedicated entry, RUNTIME_GC_DELTA §2.4). That helper attaches the
 // capture-tracing callback at construction so any managed pointers
 // placed in capture slots by a Phase 4 lowering are immediately
 // reachable from GC mark without revisiting the emit site.
 //
-// The env layout is `{ ptr fn, i64 capture_count, ptr captures[] }`.
-// `fn` at offset 0 is unchanged from the Phase 1 ABI, so existing
-// thunk call sites (`load ptr, ptr %env`) continue to work. For
-// Phase 1 the capture count is zero — the bulge only grows when the
-// capture-aware lowering lands.
+// The env layout is `{ ptr fn, i64 capture_count, i64 pointer_bitmap,
+// ptr captures[] }`. `fn` at offset 0 is unchanged from the Phase 1
+// ABI, so existing thunk call sites (`load ptr, ptr %env`) continue
+// to work. For Phase 1 the capture count is zero — bitmap is zero
+// too, and the env is a shell whose only job is to carry the thunk
+// pointer. Bit i of `pointer_bitmap` is 1 iff capture slot i holds a
+// managed pointer; the tracer consults it so scalar bit patterns can
+// never false-retain a live payload they happen to alias.
 //
 // Callers must already be inside a function — there is no
 // module-level fn-value literal path (globals would need a separate
@@ -85,13 +88,16 @@ func (g *generator) emitFnValueEnv(sig *fnSig) (value, error) {
 		return value{}, unsupportedf("call", "fn-value env for nil signature")
 	}
 	thunk := g.ensureFnValueThunk(sig)
-	g.declareRuntimeSymbol("osty.rt.closure_env_alloc_v1", "ptr", []paramInfo{
+	g.declareRuntimeSymbol("osty.rt.closure_env_alloc_v2", "ptr", []paramInfo{
 		{typ: "i64"},
 		{typ: "ptr"},
+		{typ: "i64"},
 	})
 	emitter := g.toOstyEmitter()
 	site := llvmStringLiteral(emitter, "runtime.closure.env.ptr")
-	env := llvmEmitClosureEnvAllocRuntime(emitter, fnValuePhase1CaptureCount, site.name, thunk)
+	// No captures, so bitmap is zero — the env carries only the thunk
+	// pointer at slot 0 and the tracer has nothing to mark.
+	env := llvmEmitClosureEnvAllocRuntime(emitter, fnValuePhase1CaptureCount, site.name, thunk, 0)
 	g.takeOstyEmitter(emitter)
 	g.needsGCRuntime = true
 	return value{
@@ -247,8 +253,10 @@ func requireFnValueSignature(v value, label string) (*fnSig, error) {
 //   - register a Phase 4 capturing thunk for the lifted fn that
 //     loads each capture from env at runtime and reorders args
 //     before calling the lifted fn
-//   - allocate env via `osty.rt.closure_env_alloc_v1(N, site, thunk)`;
-//     the helper writes the supplied symbol at slot 0
+//   - allocate env via `osty.rt.closure_env_alloc_v2(N, site, bitmap)`;
+//     the helper writes the supplied symbol at slot 0. `bitmap` bit i
+//     is 1 iff capture slot i holds a managed pointer — the tracer
+//     uses it to skip scalar slots unconditionally
 //   - eval each capture in the call site's lexical scope and
 //     store the result at env's capture slot i+1
 //
@@ -320,22 +328,27 @@ func (g *generator) emitClosureMakerCall(call *ast.CallExpr) (value, bool, error
 		captureVals[i] = loaded
 	}
 	thunkSym := g.ensureCapturingClosureThunk(rec, origParamCount, sig)
-	g.declareRuntimeSymbol("osty.rt.closure_env_alloc_v1", "ptr", []paramInfo{
+	if len(rec.captures) > 64 {
+		return value{}, true, unsupportedf("call", "closure %q captures %d values; pointer bitmap caps this at 64", rec.name, len(rec.captures))
+	}
+	bitmap := pointerBitmapForCaptures(rec.captures)
+	g.declareRuntimeSymbol("osty.rt.closure_env_alloc_v2", "ptr", []paramInfo{
 		{typ: "i64"},
 		{typ: "ptr"},
+		{typ: "i64"},
 	})
 	emitter := g.toOstyEmitter()
 	site := llvmStringLiteral(emitter, "runtime.closure.env.captures")
-	env := llvmEmitClosureEnvAllocRuntime(emitter, len(rec.captures), site.name, thunkSym)
+	env := llvmEmitClosureEnvAllocRuntime(emitter, len(rec.captures), site.name, thunkSym, bitmap)
 	g.takeOstyEmitter(emitter)
 	g.needsGCRuntime = true
-	// Store each capture at offset 16 + i*8. Header is
-	// `{ ptr fn, i64 cap_count }` (16 bytes); captures payload
-	// follows. The 8-byte stride keeps slot indexing uniform across
-	// scalar widths.
+	// Store each capture at `closureEnvCapturesOffset + i*8`. Header is
+	// `{ ptr fn, i64 cap_count, i64 pointer_bitmap }` (24 bytes);
+	// captures payload follows. The 8-byte stride keeps slot indexing
+	// uniform across scalar widths.
 	emitter = g.toOstyEmitter()
 	for i, cv := range captureVals {
-		offset := 16 + i*8
+		offset := llvmClosureEnvCapturesOffset() + i*8
 		slotPtr := llvmNextTemp(emitter)
 		emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr i8, ptr %s, i64 %d", slotPtr, env.name, offset))
 		emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", cv.typ, cv.ref, slotPtr))
@@ -353,7 +366,7 @@ func (g *generator) emitClosureMakerCall(call *ast.CallExpr) (value, bool, error
 // for the lifted fn `sig.irName` and returns its symbol name.
 //
 //	define private RET @__osty_closure_thunk_<sym>(ptr %env, P0 %arg0, ...) {
-//	  %cap0_slot = getelementptr i8, ptr %env, i64 16
+//	  %cap0_slot = getelementptr i8, ptr %env, i64 24
 //	  %cap0 = load <CT0>, ptr %cap0_slot
 //	  ...
 //	  (%ret = )? call RET @<sym>(P0 %arg0, ..., <CT0> %cap0, ...)
@@ -409,7 +422,7 @@ func llvmCapturingClosureThunkDefinition(symbol string, returnType string, origP
 	}
 	captureArgParts := make([]string, 0, len(captureTypes))
 	for i, ct := range captureTypes {
-		offset := 16 + i*8
+		offset := llvmClosureEnvCapturesOffset() + i*8
 		slotName := fmt.Sprintf("%%cap%d_slot", i)
 		valName := fmt.Sprintf("%%cap%d", i)
 		lines = append(lines, fmt.Sprintf("  %s = getelementptr i8, ptr %%env, i64 %d", slotName, offset))
