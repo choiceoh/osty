@@ -36753,6 +36753,11 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "trimSuffix", owner: "String", receiverTy: tString_, retTy: tString_, paramNames: []string{"suffix"}, paramTys: []int{tString_}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16966:5
 	checkRegisterFn(env, &CheckFnSig{name: "toInt", owner: "String", receiverTy: tString_, retTy: tyNamed(tys, "Result", []int{tInt(tys), tyNamed(tys, "Error", make([]int, 0, 1))}), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "toUpper", owner: "String", receiverTy: tString_, retTy: tString_, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "toLower", owner: "String", receiverTy: tString_, retTy: tString_, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "trim", owner: "String", receiverTy: tString_, retTy: tString_, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "replace", owner: "String", receiverTy: tString_, retTy: tString_, paramNames: []string{"old", "new"}, paramTys: []int{tString_, tString_}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "repeat", owner: "String", receiverTy: tString_, retTy: tString_, paramNames: []string{"count"}, paramTys: []int{tInt(tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16974:5
 	checkRegisterFn(env, &CheckFnSig{name: "from", owner: "Bytes", receiverTy: -1, retTy: tBytes_, paramNames: []string{"items"}, paramTys: []int{tListByte}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16979:5
