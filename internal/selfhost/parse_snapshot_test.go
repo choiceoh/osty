@@ -325,6 +325,11 @@ func dumpValue(b *strings.Builder, v reflect.Value, depth int) {
 
 func omitSnapshotZeroField(name string, v reflect.Value) bool {
 	switch name {
+	case "ID":
+		// Parser snapshots care about syntax/diagnostic shape, not the
+		// incidental preorder numbering used by later compiler passes.
+		// Omitting NodeID keeps the oracle stable across ID-plumbing work.
+		return true
 	case "Label", "LabelPos", "LabelEnd":
 		return v.IsZero()
 	default:

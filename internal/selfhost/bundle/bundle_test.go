@@ -12,6 +12,9 @@ func TestToolchainCheckerBundleIsToolchainOnly(t *testing.T) {
 	if !contains(toolchain, "toolchain/frontend.osty") {
 		t.Fatalf("toolchain checker bundle missing toolchain frontend: %#v", toolchain)
 	}
+	if !contains(toolchain, "toolchain/lsp.osty") {
+		t.Fatalf("toolchain checker bundle missing LSP policy: %#v", toolchain)
+	}
 	for _, entry := range toolchain {
 		if strings.HasPrefix(entry, "examples/selfhost-core/") {
 			t.Fatalf("toolchain checker bundle unexpectedly references legacy selfhost-core path %q: %#v", entry, toolchain)
@@ -39,8 +42,16 @@ fn demoSlice() -> String {
     strings.slice("abcd", 1, 3)
 }
 `)
+	writeBundleFile(t, root, "runtime_strings.osty", `use runtime.strings as strings {
+    fn split(s: String, sep: String) -> List<String>
+}
 
-	merged, err := MergeFiles(root, []string{"go_strings.osty", "std_strings.osty"})
+fn demoRuntime() -> Int {
+    strings.split("값a", "").len()
+}
+`)
+
+	merged, err := MergeFiles(root, []string{"go_strings.osty", "std_strings.osty", "runtime_strings.osty"})
 	if err != nil {
 		t.Fatalf("MergeFiles() error = %v", err)
 	}
@@ -54,14 +65,23 @@ fn demoSlice() -> String {
 	if strings.Contains(got, "use std.strings as strings") {
 		t.Fatalf("merged source kept per-file std.strings import:\n%s", got)
 	}
+	if strings.Contains(got, "use runtime.strings as strings") {
+		t.Fatalf("merged source kept per-file runtime.strings import:\n%s", got)
+	}
 	if strings.Contains(got, "strings.join(") {
 		t.Fatalf("merged source kept std.strings camelCase call:\n%s", got)
 	}
 	if strings.Contains(got, "strings.slice(") {
 		t.Fatalf("merged source kept std.strings slice call:\n%s", got)
 	}
+	if !strings.Contains(got, `strings.Split("a,b", ",")`) {
+		t.Fatalf("merged source rewrote Go strings.Split call unexpectedly:\n%s", got)
+	}
+	if !strings.Contains(got, `ostyStringsSplit("값a", "").len()`) {
+		t.Fatalf("merged source missing runtime split shim call:\n%s", got)
+	}
 	if !strings.Contains(got, `strings.Join(["a", "b"], ",")`) {
-		t.Fatalf("merged source missing normalized PascalCase strings call:\n%s", got)
+		t.Fatalf("merged source missing normalized join call:\n%s", got)
 	}
 	if !strings.Contains(got, `ostyStringsSlice("abcd", 1, 3)`) {
 		t.Fatalf("merged source missing std.strings slice shim:\n%s", got)

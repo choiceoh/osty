@@ -407,7 +407,7 @@ func validLengthFieldOffsets(src []byte) map[int]bool {
 		if fe.Name != "length" {
 			return
 		}
-		t := chk.Types[fe.X]
+		t := semanticExprType(fe.X, res, chk)
 		// Rewrite is only safe when the receiver is a known builtin
 		// container whose `.length` is genuine JS habit (String/Bytes/List/Map/Set).
 		// Unknown receiver types may resolve to a user struct in another
@@ -423,12 +423,83 @@ func validLengthFieldOffsets(src []byte) map[int]bool {
 	return skip
 }
 
+func semanticExprType(e ast.Expr, res *resolve.Result, chk *check.Result) types.Type {
+	if e == nil || chk == nil {
+		return nil
+	}
+	if t := chk.Types[e]; t != nil {
+		return t
+	}
+	id, ok := e.(*ast.Ident)
+	if !ok || res == nil {
+		return nil
+	}
+	sym := res.RefsByID[id.ID]
+	if sym == nil {
+		return nil
+	}
+	if t := chk.SymTypes[sym]; t != nil {
+		return t
+	}
+	for node, t := range chk.LetTypes {
+		switch n := node.(type) {
+		case *ast.LetDecl:
+			if sym.Decl == n {
+				return t
+			}
+		case *ast.LetStmt:
+			if semanticPatternBindsNode(n.Pattern, sym.Decl) {
+				return t
+			}
+		}
+	}
+	return nil
+}
+
 func isRewritableLengthReceiver(t types.Type) bool {
 	switch v := t.(type) {
 	case *types.Primitive:
 		return v.Kind == types.PString || v.Kind == types.PBytes
 	case *types.Named:
 		return v != nil && v.IsBuiltinNamed()
+	}
+	return false
+}
+
+func semanticPatternBindsNode(p ast.Pattern, target ast.Node) bool {
+	if p == nil || target == nil {
+		return false
+	}
+	if p == target {
+		return true
+	}
+	switch p := p.(type) {
+	case *ast.TuplePat:
+		for _, elem := range p.Elems {
+			if semanticPatternBindsNode(elem, target) {
+				return true
+			}
+		}
+	case *ast.StructPat:
+		for _, f := range p.Fields {
+			if semanticPatternBindsNode(f.Pattern, target) {
+				return true
+			}
+		}
+	case *ast.VariantPat:
+		for _, arg := range p.Args {
+			if semanticPatternBindsNode(arg, target) {
+				return true
+			}
+		}
+	case *ast.OrPat:
+		for _, alt := range p.Alts {
+			if semanticPatternBindsNode(alt, target) {
+				return true
+			}
+		}
+	case *ast.BindingPat:
+		return semanticPatternBindsNode(p.Pattern, target)
 	}
 	return false
 }

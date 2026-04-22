@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 
 	"github.com/osty/osty/internal/bootstrap/gen"
@@ -113,7 +114,19 @@ func Generate(cfg Config) ([]byte, error) {
 	if out == nil && emitErr != nil {
 		return nil, emitErr
 	}
+	out = normalizeGeneratedOutput(out)
 	return out, emitErr
+}
+
+var generatedInterpLenCall = regexp.MustCompile(
+	`ostyToString\(([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\.len\(\)\)`,
+)
+
+func normalizeGeneratedOutput(src []byte) []byte {
+	if len(src) == 0 {
+		return src
+	}
+	return generatedInterpLenCall.ReplaceAll(src, []byte("ostyToString(len($1))"))
 }
 
 func hasError(diags []*diag.Diagnostic) bool {
