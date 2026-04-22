@@ -10,6 +10,7 @@ import (
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/parser"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/sourcemap"
 	"github.com/osty/osty/internal/token"
 )
@@ -34,29 +35,40 @@ const cacheLevels = 16
 
 var indentCache = strings.Repeat(Indent, cacheLevels)
 
-// Source formats the given Osty source bytes. It returns the formatted
-// output, any parse diagnostics produced along the way, and an error
-// only when the input cannot be parsed (i.e. diagnostics contain at
-// least one Error-severity entry).
+// Source formats the given Osty source bytes. It delegates to the
+// self-hosted Osty formatter compiled from toolchain/formatter_ast.osty;
+// the surviving Go printer below is used as the fallback when the
+// self-host formatter reports a failure.
+//
+// Returns the formatted output, any parse diagnostics produced along
+// the way, and an error only when the input cannot be parsed (i.e.
+// diagnostics contain at least one Error-severity entry).
 //
 // Warnings do not block formatting — the formatter works on a
 // best-effort AST when possible. Callers that want "format only clean
 // files" should inspect the returned diagnostics themselves.
 func Source(src []byte) ([]byte, []*diag.Diagnostic, error) {
-	// Keep one lexer pass for comments; parsing itself is handled by the
-	// self-hosted front end through parser.ParseDiagnostics.
-	l := lexer.New(src)
-	_ = l.Lex()
-	file, diags := parser.ParseDiagnostics(src)
+	_, diags := parser.ParseDiagnostics(src)
 	for _, d := range diags {
 		if d.Severity == diag.Error {
 			return nil, diags, fmt.Errorf("cannot format file with parse errors")
 		}
 	}
+	out, _, err := selfhost.FormatSource(src)
+	if err == nil {
+		return out, diags, nil
+	}
+	return goPrinterFallback(src, diags)
+}
+
+// goPrinterFallback renders src with the legacy Go printer. It exists
+// so the self-host formatter can fall back without losing the parse
+// diagnostics or changing the public Source error contract.
+func goPrinterFallback(src []byte, diags []*diag.Diagnostic) ([]byte, []*diag.Diagnostic, error) {
+	l := lexer.New(src)
+	_ = l.Lex()
+	file, _ := parser.ParseDiagnostics(src)
 	p := newPrinter(l.Comments(), nil)
-	// Formatted output is within ~10% of input size for well-written
-	// code; preallocating avoids ~log2(N) buffer reallocations on large
-	// files.
 	p.buf.Grow(len(src))
 	p.printFile(file)
 	return p.bytes(), diags, nil
