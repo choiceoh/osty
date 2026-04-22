@@ -65,6 +65,7 @@ import (
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/scaffold"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
@@ -91,6 +92,14 @@ type cliFlags struct {
 	// once the native-checker boundary has been invoked. Off by default;
 	// nil-safe when the native checker was unavailable.
 	dumpNativeDiags bool
+	// native routes `check` through the self-host arena pipeline
+	// (ParseRun → CheckStructuredFromRun → CheckDiagnosticsAsDiag)
+	// instead of the Go-hosted resolve + check.File pair. The happy
+	// path never materializes *ast.File, so
+	// selfhost.AstbridgeLowerCount stays at 0 for the whole
+	// subcommand. Incompatible with --inspect / --dump-native-diags,
+	// which both probe the Go check.Result shape.
+	native bool
 	// suppressSummary silences the `N error(s), M warning(s)` trailer
 	// inside a single printDiags call. The package-diagnostic walker sets
 	// this per-file bucket and then prints one consolidated summary
@@ -300,6 +309,16 @@ func main() {
 			runCi(rest, flags)
 			return
 		}
+		// Allow `--native` after the subcommand so users can type
+		// `osty check --native FILE` (subcommand-local flag
+		// placement, matching how `lint` accepts `--fix` /
+		// `--strict`). Strip it from args so the downstream file-
+		// required check and subcommand dispatch still see
+		// positional-only input.
+		if rest, present := takeBoolFlag(args[1:], "--native"); present {
+			flags.native = true
+			args = append([]string{"check"}, rest...)
+		}
 	}
 	// explain looks up a diagnostic or lint code and prints its doc.
 	// Handled before the generic "file required" check because it
@@ -466,6 +485,16 @@ func main() {
 			os.Exit(1)
 		}
 	case "check":
+		if flags.native {
+			if flags.inspect || flags.dumpNativeDiags {
+				fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect / --dump-native-diags\n")
+				os.Exit(2)
+			}
+			if runCheckFileNative(path, src, formatter, flags) != 0 {
+				os.Exit(1)
+			}
+			return
+		}
 		parsed := parser.ParseDetailed(src)
 		file, diags := parsed.File, parsed.Diagnostics
 		res := resolveFile(file)
@@ -568,6 +597,7 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
 	flag.BoolVar(&f.inspect, "inspect", false, "check: emit one record per expression showing the inference rule, type, and hint (see LANG_SPEC_v0.5/02a-type-inference.md)")
 	flag.BoolVar(&f.dumpNativeDiags, "dump-native-diags", false, "check: after the run, print the native checker's per-context error histogram to stderr")
+	flag.BoolVar(&f.native, "native", false, "check: route through the self-host arena pipeline (astbridge-free); incompatible with --inspect and --dump-native-diags")
 	flag.Usage = usage
 	flag.Parse()
 	return f
@@ -877,6 +907,35 @@ func applyPackageFixes(pkg *resolve.Package, diags []*diag.Diagnostic, flags cli
 // surfaces. Extracting this keeps the subcommand body testable in-
 // process so the astbridge counter can pin the end-to-end CLI
 // invariant (not just the library primitives).
+// runCheckFileNative drives `osty check --native FILE` end-to-end on
+// the self-host arena pipeline: parser.ParseRun produces the
+// FrontendRun without lowering *ast.File, selfhost.CheckStructuredFromRun
+// runs the native checker directly on the arena (arena-direct gate
+// included), and selfhost.CheckDiagnosticsAsDiag lifts the structured
+// records into the CLI's usual diag.Diagnostic shape. Zero astbridge
+// lowerings on the happy path — the counter stays at 0 throughout,
+// pinned by TestRunCheckFileNativeIsAstbridgeFree. Returns the
+// subcommand's exit code (0 clean / 1 on any error-severity
+// diagnostic).
+func runCheckFileNative(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
+	run := parser.ParseRun(src)
+	parseDiags := run.Diagnostics()
+	checked := selfhost.CheckStructuredFromRun(run)
+	checkDiags := selfhost.CheckDiagnosticsAsDiag(src, checked.Diagnostics)
+	for _, d := range checkDiags {
+		if d != nil && d.File == "" {
+			d.File = path
+		}
+	}
+	all := append([]*diag.Diagnostic{}, parseDiags...)
+	all = append(all, checkDiags...)
+	printDiags(formatter, all, flags)
+	if hasError(all) {
+		return 1
+	}
+	return 0
+}
+
 func runResolveFile(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
 	run := parser.ParseRun(src)
 	parseDiags := run.Diagnostics()
