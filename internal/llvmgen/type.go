@@ -428,6 +428,9 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		if src, ok := g.staticMapMethodSourceType(e); ok {
 			return src, true
 		}
+		if src, ok := g.staticListMethodSourceType(e); ok {
+			return src, true
+		}
 		if id, ok := e.Fn.(*ast.Ident); ok {
 			if sig := g.functions[id.Name]; sig != nil && sig.returnSourceType != nil {
 				return sig.returnSourceType, true
@@ -948,6 +951,47 @@ func (g *generator) staticMapMethodSourceType(call *ast.CallExpr) (ast.Type, boo
 		return &ast.OptionalType{Inner: valAST}, true
 	case "keys":
 		return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{keyAST}}, true
+	}
+	return nil, false
+}
+
+// staticListMethodSourceType recovers the source-level return type of
+// a List intrinsic method call. The most important consumer is the
+// Optional match-as-expression dispatch, which needs to see `T?` for
+// `xs.get(i)` so a downstream `match xs.get(0) { Some(x) -> a, None
+// -> b }` routes to emitOptionalMatchExprValue rather than walling
+// with "match scrutinee type ptr, want enum tag".
+//
+// Method → source-type map:
+//
+//	len        → Int
+//	isEmpty    → Bool
+//	get(Int)   → T?
+func (g *generator) staticListMethodSourceType(call *ast.CallExpr) (ast.Type, bool) {
+	field, _, _, found := g.listMethodInfo(call)
+	if !found {
+		return nil, false
+	}
+	baseSrc, ok := g.staticExprSourceType(field.X)
+	if !ok {
+		return nil, false
+	}
+	resolved, err := llvmResolveAliasType(baseSrc, g.typeEnv(), map[string]bool{})
+	if err != nil {
+		return nil, false
+	}
+	named, ok := resolved.(*ast.NamedType)
+	if !ok || len(named.Path) != 1 || named.Path[0] != "List" || len(named.Args) != 1 {
+		return nil, false
+	}
+	elemAST := named.Args[0]
+	switch field.Name {
+	case "len":
+		return &ast.NamedType{Path: []string{"Int"}}, true
+	case "isEmpty":
+		return &ast.NamedType{Path: []string{"Bool"}}, true
+	case "get":
+		return &ast.OptionalType{Inner: elemAST}, true
 	}
 	return nil, false
 }
