@@ -610,28 +610,14 @@ func TestUseNativeOwnedLLVMIRDefaultsEnabled(t *testing.T) {
 	}
 }
 
-func TestUseMIRBackendLegacyFeatureDisables(t *testing.T) {
-	t.Parallel()
-
-	if useMIRBackend([]string{"legacy-llvmgen"}, EmitLLVMIR) {
-		t.Fatal("useMIRBackend(legacy-llvmgen, EmitLLVMIR) = true, want false")
-	}
-	if useMIRBackend([]string{"mir-backend", "legacy-llvmgen"}, EmitBinary) {
-		t.Fatal("legacy-llvmgen should win when both features are present")
-	}
-}
-
 func TestUseNativeOwnedLLVMIRFeatureOverrides(t *testing.T) {
 	t.Parallel()
 
-	if useNativeOwnedLLVMIR([]string{"legacy-llvmgen"}, EmitBinary) {
-		t.Fatal("useNativeOwnedLLVMIR(legacy-llvmgen, EmitBinary) = true, want false")
-	}
 	if useNativeOwnedLLVMIR([]string{"mir-backend"}, EmitLLVMIR) {
 		t.Fatal("useNativeOwnedLLVMIR(mir-backend, EmitLLVMIR) = true, want false")
 	}
-	if useNativeOwnedLLVMIR([]string{"mir-backend", "legacy-llvmgen"}, EmitObject) {
-		t.Fatal("feature override should disable native fast path when either feature is present")
+	if useNativeOwnedLLVMIR([]string{"mir-backend"}, EmitObject) {
+		t.Fatal("useNativeOwnedLLVMIR(mir-backend, EmitObject) = true, want false")
 	}
 }
 

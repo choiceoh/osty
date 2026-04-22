@@ -167,9 +167,7 @@ func runRun(args []string, cliF cliFlags) {
 		os.Exit(1)
 	}
 
-	// Locate the AST + resolve/check results for the entry file so we
-	// can pass them to gen. The entry is in the root package; find
-	// the matching PackageFile.
+	// Locate the root package entry file for package lowering.
 	var entryFile *resolve.PackageFile
 	entryAbs, _ := filepath.Abs(entry)
 	for _, pf := range rootPkg.Files {
@@ -182,12 +180,6 @@ func runRun(args []string, cliF cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty run: entry %s not part of the root package\n", entry)
 		os.Exit(1)
 	}
-	res := &resolve.Result{
-		Refs:      entryFile.Refs,
-		TypeRefs:  entryFile.TypeRefs,
-		FileScope: entryFile.FileScope,
-	}
-	file := entryFile.File
 	chk := checks[""]
 	if chk == nil {
 		chk = &check.Result{}
@@ -227,18 +219,8 @@ func runRun(args []string, cliF cliFlags) {
 			return
 		}
 	}
-	// Package lowering is the default live run path; only degenerate
-	// empty-package callers fall back to a direct single-file entry.
-	var (
-		backendEntry backend.Entry
-		entryErr     error
-	)
-	if rootPkg != nil && countLowerableFiles(rootPkg) > 0 {
-		backendEntry, entryErr = backend.PreparePackage("main", entryAbs, rootPkg, entryFile, chk)
-	} else {
-		backendEntry, entryErr = backend.PrepareEntry("main", entryAbs, file, res, chk)
-	}
-	if err := entryErr; err != nil {
+	backendEntry, err := backend.PreparePackage("main", entryAbs, rootPkg, entryFile, chk)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(1)
 	}
