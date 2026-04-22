@@ -3415,7 +3415,7 @@ int main(void) {
 	}
 }
 
-func TestBundledRuntimeFreeListReusesSweptMajorSlotsPhaseD(t *testing.T) {
+func TestBundledRuntimeYoungBumpRecyclesSweptMajorSlotsPhaseD(t *testing.T) {
 	parallelClangBackendTest(t)
 
 	dir := t.TempDir()
@@ -3439,25 +3439,26 @@ void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site)
 void osty_gc_debug_collect(void);
 int64_t osty_gc_debug_collection_count(void);
 int64_t osty_gc_debug_live_count(void);
-int64_t osty_gc_debug_free_list_count(void);
-int64_t osty_gc_debug_free_list_reused_count_total(void);
+int64_t osty_gc_debug_bump_block_count(void);
+int64_t osty_gc_debug_bump_recycled_block_count_total(void);
 
 int main(void) {
-    void *dead = osty_gc_alloc_v1(7, 24, "dead");
     void *reused = NULL;
+
+    (void)osty_gc_alloc_v1(7, 24, "dead");
 
     osty_gc_debug_collect();
     printf("%d %d %d\n",
         osty_gc_debug_collection_count() == 1,
         osty_gc_debug_live_count() == 0,
-        osty_gc_debug_free_list_count() == 1);
+        osty_gc_debug_bump_block_count() == 0);
     reused = osty_gc_alloc_v1(8, 24, "reused");
     printf("%d %d %d\n",
-        reused == dead,
+        reused != NULL,
         osty_gc_debug_live_count() == 1,
-        osty_gc_debug_free_list_count() == 0);
+        osty_gc_debug_bump_block_count() == 1);
     printf("%d %d %d\n",
-        osty_gc_debug_free_list_reused_count_total() == 1,
+        osty_gc_debug_bump_recycled_block_count_total() == 1,
         osty_gc_debug_collection_count() == 1,
         reused != NULL);
     return 0;
@@ -3476,11 +3477,11 @@ int main(void) {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
 	if got, want := string(runOutput), "1 1 1\n1 1 1\n1 1 1\n"; got != want {
-		t.Fatalf("phase-D freelist-major harness stdout = %q, want %q", got, want)
+		t.Fatalf("phase-D young-bump-major harness stdout = %q, want %q", got, want)
 	}
 }
 
-func TestBundledRuntimeFreeListReusesSweptMinorSlotsPhaseD(t *testing.T) {
+func TestBundledRuntimeYoungBumpRecyclesSweptMinorSlotsPhaseD(t *testing.T) {
 	parallelClangBackendTest(t)
 
 	dir := t.TempDir()
@@ -3504,25 +3505,26 @@ void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site)
 void osty_gc_debug_collect_minor(void);
 int64_t osty_gc_debug_minor_count(void);
 int64_t osty_gc_debug_live_count(void);
-int64_t osty_gc_debug_free_list_count(void);
-int64_t osty_gc_debug_free_list_reused_count_total(void);
+int64_t osty_gc_debug_bump_block_count(void);
+int64_t osty_gc_debug_bump_recycled_block_count_total(void);
 
 int main(void) {
-    void *dead = osty_gc_alloc_v1(7, 24, "dead");
     void *reused = NULL;
+
+    (void)osty_gc_alloc_v1(7, 24, "dead");
 
     osty_gc_debug_collect_minor();
     printf("%d %d %d\n",
         osty_gc_debug_minor_count() == 1,
         osty_gc_debug_live_count() == 0,
-        osty_gc_debug_free_list_count() == 1);
+        osty_gc_debug_bump_block_count() == 0);
     reused = osty_gc_alloc_v1(8, 24, "reused");
     printf("%d %d %d\n",
-        reused == dead,
+        reused != NULL,
         osty_gc_debug_live_count() == 1,
-        osty_gc_debug_free_list_count() == 0);
+        osty_gc_debug_bump_block_count() == 1);
     printf("%d %d %d\n",
-        osty_gc_debug_free_list_reused_count_total() == 1,
+        osty_gc_debug_bump_recycled_block_count_total() == 1,
         osty_gc_debug_minor_count() == 1,
         reused != NULL);
     return 0;
@@ -3541,11 +3543,11 @@ int main(void) {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
 	if got, want := string(runOutput), "1 1 1\n1 1 1\n1 1 1\n"; got != want {
-		t.Fatalf("phase-D freelist-minor harness stdout = %q, want %q", got, want)
+		t.Fatalf("phase-D young-bump-minor harness stdout = %q, want %q", got, want)
 	}
 }
 
-func TestBundledRuntimeSizeClassesSeparateFreeListReusePhaseD(t *testing.T) {
+func TestBundledRuntimeYoungBumpKeepsFreeListColdAcrossSizeClassesPhaseD(t *testing.T) {
 	parallelClangBackendTest(t)
 
 	dir := t.TempDir()
@@ -3570,29 +3572,30 @@ void osty_gc_debug_collect(void);
 int64_t osty_gc_debug_live_count(void);
 int64_t osty_gc_debug_free_list_count(void);
 int64_t osty_gc_debug_free_list_reused_count_total(void);
+int64_t osty_gc_debug_bump_block_count(void);
 
 int main(void) {
-    void *small = osty_gc_alloc_v1(7, 24, "small");
+    (void)osty_gc_alloc_v1(7, 24, "small");
     void *other = NULL;
     void *same = NULL;
 
     osty_gc_debug_collect();
     printf("%d %d %d\n",
         osty_gc_debug_live_count() == 0,
-        osty_gc_debug_free_list_count() == 1,
+        osty_gc_debug_free_list_count() == 0,
         osty_gc_debug_free_list_reused_count_total() == 0);
 
     other = osty_gc_alloc_v1(8, 120, "other");
     printf("%d %d %d\n",
-        other != small,
+        other != NULL,
         osty_gc_debug_live_count() == 1,
-        osty_gc_debug_free_list_count() == 1);
+        osty_gc_debug_bump_block_count() == 1);
 
     same = osty_gc_alloc_v1(9, 24, "same");
     printf("%d %d %d\n",
-        same == small,
+        same != NULL,
         osty_gc_debug_live_count() == 2,
-        osty_gc_debug_free_list_reused_count_total() == 1);
+        osty_gc_debug_free_list_reused_count_total() == 0);
     return 0;
 }
 `), 0o644); err != nil {
@@ -3609,7 +3612,7 @@ int main(void) {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
 	if got, want := string(runOutput), "1 1 1\n1 1 1\n1 1 1\n"; got != want {
-		t.Fatalf("phase-D size-class harness stdout = %q, want %q", got, want)
+		t.Fatalf("phase-D young-bump-size-class harness stdout = %q, want %q", got, want)
 	}
 }
 
@@ -3901,6 +3904,185 @@ int main(void) {
 	}
 }
 
+func TestBundledRuntimeYoungBumpRecycleWaitsForForwardingCleanupPhaseD(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_phase_d_young_recycle_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_phase_d_young_recycle_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) __asm__(OSTY_GC_SYMBOL("osty.gc.safepoint_v1"));
+void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
+
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_bump_block_count(void);
+int64_t osty_gc_debug_bump_recycled_block_count_total(void);
+int64_t osty_gc_debug_compaction_count_total(void);
+int64_t osty_gc_debug_forwarding_count(void);
+
+int main(void) {
+    void *obj = osty_gc_alloc_v1(7, 24, "obj");
+    void *saved = obj;
+    void *root = obj;
+    void *root_slots[1] = { &root };
+
+    osty_gc_safepoint_v1(1, root_slots, 1);
+    printf("%d %d %d\n",
+        root != saved,
+        osty_gc_debug_compaction_count_total() == 1,
+        osty_gc_load_v1(saved) == root);
+    printf("%d %d %d\n",
+        osty_gc_debug_bump_block_count() == 1,
+        osty_gc_debug_bump_recycled_block_count_total() == 0,
+        osty_gc_debug_forwarding_count() == 1);
+
+    root = NULL;
+    {
+        void *garbage = osty_gc_alloc_v1(8, 8, "garbage");
+        (void)garbage;
+    }
+    osty_gc_safepoint_v1(2, root_slots, 1);
+    printf("%d %d %d\n",
+        osty_gc_debug_live_count() == 0,
+        osty_gc_debug_bump_block_count() == 0,
+        osty_gc_debug_bump_recycled_block_count_total() == 1);
+    printf("%d %d %d\n",
+        osty_gc_debug_forwarding_count() == 0,
+        osty_gc_load_v1(saved) == saved,
+        1);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_THRESHOLD_BYTES=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	if got, want := string(runOutput), "1 1 1\n1 1 1\n1 1 1\n1 1 1\n"; got != want {
+		t.Fatalf("phase-D young-recycle harness stdout = %q, want %q", got, want)
+	}
+}
+
+func TestBundledRuntimeMinorCopiesYoungSurvivorsIntoSurvivorRegionPhaseD(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_phase_d_survivor_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_phase_d_survivor_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_global_root_register_v1(void *slot) __asm__(OSTY_GC_SYMBOL("osty.gc.global_root_register_v1"));
+void osty_gc_global_root_unregister_v1(void *slot) __asm__(OSTY_GC_SYMBOL("osty.gc.global_root_unregister_v1"));
+void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
+
+void osty_gc_debug_collect_minor(void);
+void osty_gc_debug_collect_major(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_generation_of(void *payload);
+int64_t osty_gc_debug_age_of(void *payload);
+int64_t osty_gc_debug_compaction_count_total(void);
+int64_t osty_gc_debug_survivor_bump_block_count(void);
+int64_t osty_gc_debug_survivor_bump_alloc_count_total(void);
+int64_t osty_gc_debug_survivor_tlab_refill_count_total(void);
+int64_t osty_gc_debug_survivor_bump_recycled_block_count_total(void);
+
+static void *g_slot = NULL;
+
+int main(void) {
+    void *saved0 = NULL;
+    void *saved1 = NULL;
+    void *saved2 = NULL;
+
+    g_slot = osty_gc_alloc_v1(7, 24, "obj");
+    saved0 = g_slot;
+    osty_gc_global_root_register_v1(&g_slot);
+
+    osty_gc_debug_collect_minor();
+    saved1 = g_slot;
+    printf("%d %d %d\n",
+        saved1 != saved0,
+        osty_gc_load_v1(saved0) == saved1,
+        osty_gc_debug_survivor_bump_block_count() == 1);
+    printf("%d %d %d\n",
+        osty_gc_debug_survivor_bump_alloc_count_total() == 1,
+        osty_gc_debug_compaction_count_total() == 1,
+        osty_gc_debug_survivor_tlab_refill_count_total() == 1 &&
+            osty_gc_debug_generation_of(g_slot) == 0 &&
+            osty_gc_debug_age_of(g_slot) == 1);
+
+    osty_gc_debug_collect_minor();
+    saved2 = g_slot;
+    printf("%d %d %d\n",
+        saved2 != saved1,
+        osty_gc_load_v1(saved0) == saved2,
+        osty_gc_load_v1(saved1) == saved2);
+    printf("%d %d %d\n",
+        osty_gc_debug_survivor_bump_block_count() == 2,
+        osty_gc_debug_survivor_bump_alloc_count_total() == 2,
+        osty_gc_debug_survivor_tlab_refill_count_total() == 2 &&
+            osty_gc_debug_generation_of(g_slot) == 0 &&
+            osty_gc_debug_age_of(g_slot) == 2);
+
+    osty_gc_global_root_unregister_v1(&g_slot);
+    osty_gc_debug_collect_major();
+    printf("%d %d %d\n",
+        osty_gc_debug_live_count() == 0,
+        osty_gc_debug_survivor_bump_block_count() == 0,
+        osty_gc_debug_survivor_bump_recycled_block_count_total() == 2);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_PROMOTE_AGE=3")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	if got, want := string(runOutput), "1 1 1\n1 1 1\n1 1 1\n1 1 1\n1 1 1\n"; got != want {
+		t.Fatalf("phase-D survivor harness stdout = %q, want %q", got, want)
+	}
+}
+
 func TestBundledRuntimeCompactionUsesOldBumpRegionPhaseD(t *testing.T) {
 	parallelClangBackendTest(t)
 
@@ -3933,6 +4115,7 @@ int64_t osty_gc_debug_old_bump_block_count(void);
 int64_t osty_gc_debug_old_bump_block_bytes_total(void);
 int64_t osty_gc_debug_old_bump_alloc_count_total(void);
 int64_t osty_gc_debug_old_bump_alloc_bytes_total(void);
+int64_t osty_gc_debug_old_tlab_refill_count_total(void);
 
 int main(void) {
     void *obj = osty_gc_alloc_v1(7, 24, "obj");
@@ -3954,7 +4137,7 @@ int main(void) {
     printf("%d %d %d\n",
         osty_gc_debug_old_bump_block_count() == 1,
         osty_gc_debug_old_bump_block_bytes_total() >= osty_gc_debug_bump_block_bytes(),
-        osty_gc_debug_old_bump_alloc_bytes_total() > 0 &&
+        osty_gc_debug_old_tlab_refill_count_total() == 1 &&
             osty_gc_debug_live_count() == 1);
     return 0;
 }
@@ -4049,6 +4232,179 @@ int main(void) {
 	}
 	if got, want := string(runOutput), "1 1 1\n1 1 1\n1 1 1\n"; got != want {
 		t.Fatalf("phase-D old-bump-recycle harness stdout = %q, want %q", got, want)
+	}
+}
+
+func TestBundledRuntimePinnedAllocatorUsesPinnedRegionPhaseD(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_phase_d_pinned_region_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_phase_d_pinned_region_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_pinned_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_pinned_v1"));
+void osty_gc_unpin_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.unpin_v1"));
+
+void osty_gc_debug_collect_major(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_generation_of(void *payload);
+int64_t osty_gc_debug_pin_count_of(void *payload);
+int64_t osty_gc_debug_pinned_count(void);
+int64_t osty_gc_debug_compaction_count_total(void);
+int64_t osty_gc_debug_pinned_bump_block_count(void);
+int64_t osty_gc_debug_pinned_bump_alloc_count_total(void);
+int64_t osty_gc_debug_pinned_tlab_refill_count_total(void);
+int64_t osty_gc_debug_pinned_bump_recycled_block_count_total(void);
+
+int main(void) {
+    void *obj = osty_gc_alloc_pinned_v1(7, 24, "pinned");
+
+    printf("%d %d %d\n",
+        obj != NULL,
+        osty_gc_debug_pin_count_of(obj) == 1,
+        osty_gc_debug_pinned_count() == 1);
+    printf("%d %d %d\n",
+        osty_gc_debug_generation_of(obj) == 1,
+        osty_gc_debug_pinned_bump_block_count() == 1,
+        osty_gc_debug_pinned_bump_alloc_count_total() == 1);
+    printf("%d %d %d\n",
+        osty_gc_debug_pinned_tlab_refill_count_total() == 1,
+        osty_gc_debug_live_count() == 1,
+        osty_gc_debug_compaction_count_total() == 0);
+
+    osty_gc_debug_collect_major();
+    printf("%d %d %d\n",
+        osty_gc_debug_live_count() == 1,
+        osty_gc_debug_pinned_count() == 1,
+        osty_gc_debug_pinned_bump_block_count() == 1);
+
+    osty_gc_unpin_v1(obj);
+    osty_gc_debug_collect_major();
+    printf("%d %d %d\n",
+        osty_gc_debug_live_count() == 0,
+        osty_gc_debug_pinned_count() == 0,
+        osty_gc_debug_pinned_bump_block_count() == 0 &&
+            osty_gc_debug_pinned_bump_recycled_block_count_total() == 1);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	if got, want := string(runOutput), "1 1 1\n1 1 1\n1 1 1\n1 1 1\n1 1 1\n"; got != want {
+		t.Fatalf("phase-D pinned-region harness stdout = %q, want %q", got, want)
+	}
+}
+
+func TestBundledRuntimePinnedAllocatorThreadLocalTlabPhaseD(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_phase_d_pinned_tlab_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_phase_d_pinned_tlab_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <pthread.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_pinned_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_pinned_v1"));
+void osty_gc_unpin_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.unpin_v1"));
+
+void osty_gc_debug_collect_major(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_bump_block_bytes(void);
+int64_t osty_gc_debug_pinned_bump_block_count(void);
+int64_t osty_gc_debug_pinned_bump_alloc_count_total(void);
+int64_t osty_gc_debug_pinned_tlab_refill_count_total(void);
+int64_t osty_gc_debug_pinned_bump_recycled_block_count_total(void);
+
+static void *worker_alloc(void *arg) {
+    (void)arg;
+    return osty_gc_alloc_pinned_v1(8, 24, "worker");
+}
+
+int main(void) {
+    pthread_t tid;
+    void *a = osty_gc_alloc_pinned_v1(7, 24, "main.a");
+    void *b = NULL;
+    void *c = NULL;
+    uintptr_t dac = 0;
+
+    if (pthread_create(&tid, NULL, worker_alloc, NULL) != 0) {
+        printf("0 0 0\n0 0 0\n0 0 0\n");
+        return 0;
+    }
+    if (pthread_join(tid, &b) != 0) {
+        printf("0 0 0\n0 0 0\n0 0 0\n");
+        return 0;
+    }
+    c = osty_gc_alloc_pinned_v1(9, 24, "main.c");
+    dac = (uintptr_t)c - (uintptr_t)a;
+
+    printf("%d %d %d\n",
+        osty_gc_debug_pinned_bump_block_count() == 2,
+        osty_gc_debug_pinned_tlab_refill_count_total() == 2,
+        osty_gc_debug_pinned_bump_alloc_count_total() == 3);
+    printf("%d %d %d\n",
+        dac > 0,
+        (int64_t)dac < osty_gc_debug_bump_block_bytes(),
+        osty_gc_debug_live_count() == 3 && a != NULL && b != NULL && c != NULL);
+
+    osty_gc_unpin_v1(a);
+    osty_gc_unpin_v1(b);
+    osty_gc_unpin_v1(c);
+    osty_gc_debug_collect_major();
+    printf("%d %d %d\n",
+        osty_gc_debug_live_count() == 0,
+        osty_gc_debug_pinned_bump_block_count() == 0,
+        osty_gc_debug_pinned_bump_recycled_block_count_total() == 2);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	if got, want := string(runOutput), "1 1 1\n1 1 1\n1 1 1\n"; got != want {
+		t.Fatalf("phase-D pinned-tlab harness stdout = %q, want %q", got, want)
 	}
 }
 

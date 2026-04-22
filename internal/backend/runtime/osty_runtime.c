@@ -490,7 +490,9 @@ enum {
 enum {
     OSTY_GC_STORAGE_DIRECT = 0,
     OSTY_GC_STORAGE_BUMP_YOUNG = 1,
-    OSTY_GC_STORAGE_BUMP_OLD = 2,
+    OSTY_GC_STORAGE_BUMP_SURVIVOR = 2,
+    OSTY_GC_STORAGE_BUMP_OLD = 3,
+    OSTY_GC_STORAGE_BUMP_PINNED = 4,
 };
 
 /* Closure environment payload. The thunk ABI is preserved — the LLVM
@@ -556,6 +558,17 @@ static int64_t osty_gc_bump_block_bytes_total = 0;
 static int64_t osty_gc_bump_alloc_count_total = 0;
 static int64_t osty_gc_bump_alloc_bytes_total = 0;
 static int64_t osty_gc_tlab_refill_count_total = 0;
+static int64_t osty_gc_bump_recycled_block_count_total = 0;
+static int64_t osty_gc_bump_recycled_bytes_total = 0;
+static osty_gc_bump_block *osty_gc_survivor_bump_blocks = NULL;
+static osty_gc_bump_block *osty_gc_survivor_bump_current = NULL;
+static int64_t osty_gc_survivor_bump_block_count = 0;
+static int64_t osty_gc_survivor_bump_block_bytes_total = 0;
+static int64_t osty_gc_survivor_bump_alloc_count_total = 0;
+static int64_t osty_gc_survivor_bump_alloc_bytes_total = 0;
+static int64_t osty_gc_survivor_bump_recycled_block_count_total = 0;
+static int64_t osty_gc_survivor_bump_recycled_bytes_total = 0;
+static int64_t osty_gc_survivor_tlab_refill_count_total = 0;
 static osty_gc_bump_block *osty_gc_old_bump_blocks = NULL;
 static osty_gc_bump_block *osty_gc_old_bump_current = NULL;
 static int64_t osty_gc_old_bump_block_count = 0;
@@ -564,6 +577,16 @@ static int64_t osty_gc_old_bump_alloc_count_total = 0;
 static int64_t osty_gc_old_bump_alloc_bytes_total = 0;
 static int64_t osty_gc_old_bump_recycled_block_count_total = 0;
 static int64_t osty_gc_old_bump_recycled_bytes_total = 0;
+static int64_t osty_gc_old_tlab_refill_count_total = 0;
+static osty_gc_bump_block *osty_gc_pinned_bump_blocks = NULL;
+static osty_gc_bump_block *osty_gc_pinned_bump_current = NULL;
+static int64_t osty_gc_pinned_bump_block_count = 0;
+static int64_t osty_gc_pinned_bump_block_bytes_total = 0;
+static int64_t osty_gc_pinned_bump_alloc_count_total = 0;
+static int64_t osty_gc_pinned_bump_alloc_bytes_total = 0;
+static int64_t osty_gc_pinned_bump_recycled_block_count_total = 0;
+static int64_t osty_gc_pinned_bump_recycled_bytes_total = 0;
+static int64_t osty_gc_pinned_tlab_refill_count_total = 0;
 static int64_t osty_gc_humongous_alloc_count_total = 0;
 static int64_t osty_gc_humongous_alloc_bytes_total = 0;
 static int64_t osty_gc_humongous_swept_count_total = 0;
@@ -621,6 +644,9 @@ static bool osty_gc_minor_in_progress = false;
  * safepoint turns this into an immediate major. */
 static bool osty_gc_collection_requested_major = false;
 static OSTY_RT_TLS osty_gc_bump_block *osty_gc_tlab_current = NULL;
+static OSTY_RT_TLS osty_gc_bump_block *osty_gc_survivor_tlab_current = NULL;
+static OSTY_RT_TLS osty_gc_bump_block *osty_gc_old_tlab_current = NULL;
+static OSTY_RT_TLS osty_gc_bump_block *osty_gc_pinned_tlab_current = NULL;
 
 /* Phase C incremental collection state (RUNTIME_GC_DELTA §4.3).
  *
@@ -1009,6 +1035,7 @@ static void osty_gc_index_grow(int64_t new_capacity) {
 static void osty_gc_index_insert(void *payload, osty_gc_header *header) {
     size_t mask;
     size_t idx;
+    size_t first_tombstone = SIZE_MAX;
     /* Keep load factor ≤ 0.75 including tombstones so probes stay
      * short. Capacity is always a power of two — start at 128. */
     if (osty_gc_index_slots == NULL ||
@@ -1019,11 +1046,19 @@ static void osty_gc_index_insert(void *payload, osty_gc_header *header) {
     }
     mask = (size_t)(osty_gc_index_capacity - 1);
     idx = osty_gc_index_hash(payload) & mask;
-    while (osty_gc_index_slots[idx].payload != NULL &&
-           osty_gc_index_slots[idx].payload != OSTY_GC_INDEX_TOMBSTONE) {
+    while (osty_gc_index_slots[idx].payload != NULL) {
+        if (osty_gc_index_slots[idx].payload == OSTY_GC_INDEX_TOMBSTONE) {
+            if (first_tombstone == SIZE_MAX) {
+                first_tombstone = idx;
+            }
+        } else if (osty_gc_index_slots[idx].payload == payload) {
+            osty_gc_index_slots[idx].header = header;
+            return;
+        }
         idx = (idx + 1) & mask;
     }
-    if (osty_gc_index_slots[idx].payload == OSTY_GC_INDEX_TOMBSTONE) {
+    if (first_tombstone != SIZE_MAX) {
+        idx = first_tombstone;
         osty_gc_index_tombstones -= 1;
     }
     osty_gc_index_slots[idx].payload = payload;
@@ -1096,6 +1131,7 @@ static void osty_gc_identity_grow(int64_t new_capacity) {
 static void osty_gc_identity_insert(uint64_t stable_id, osty_gc_header *header) {
     size_t mask;
     size_t idx;
+    size_t first_tombstone = SIZE_MAX;
 
     if (stable_id == 0 || stable_id == OSTY_GC_IDENTITY_TOMBSTONE) {
         osty_rt_abort("invalid GC stable id");
@@ -1110,15 +1146,20 @@ static void osty_gc_identity_insert(uint64_t stable_id, osty_gc_header *header) 
     }
     mask = (size_t)(osty_gc_identity_capacity - 1);
     idx = osty_gc_identity_hash(stable_id) & mask;
-    while (osty_gc_identity_slots[idx].stable_id != 0 &&
-           osty_gc_identity_slots[idx].stable_id != OSTY_GC_IDENTITY_TOMBSTONE) {
-        if (osty_gc_identity_slots[idx].stable_id == stable_id) {
+    while (osty_gc_identity_slots[idx].stable_id != 0) {
+        if (osty_gc_identity_slots[idx].stable_id ==
+            OSTY_GC_IDENTITY_TOMBSTONE) {
+            if (first_tombstone == SIZE_MAX) {
+                first_tombstone = idx;
+            }
+        } else if (osty_gc_identity_slots[idx].stable_id == stable_id) {
             osty_gc_identity_slots[idx].header = header;
             return;
         }
         idx = (idx + 1) & mask;
     }
-    if (osty_gc_identity_slots[idx].stable_id == OSTY_GC_IDENTITY_TOMBSTONE) {
+    if (first_tombstone != SIZE_MAX) {
+        idx = first_tombstone;
         osty_gc_identity_tombstones -= 1;
     }
     osty_gc_identity_slots[idx].stable_id = stable_id;
@@ -1198,6 +1239,7 @@ static void osty_gc_forwarding_insert(void *from_payload,
                                       osty_gc_header *to_header) {
     size_t mask;
     size_t idx;
+    size_t first_tombstone = SIZE_MAX;
 
     if (from_payload == NULL ||
         from_payload == OSTY_GC_FORWARDING_TOMBSTONE ||
@@ -1214,10 +1256,14 @@ static void osty_gc_forwarding_insert(void *from_payload,
     }
     mask = (size_t)(osty_gc_forwarding_capacity - 1);
     idx = osty_gc_forwarding_hash(from_payload) & mask;
-    while (osty_gc_forwarding_slots[idx].from_payload != NULL &&
-           osty_gc_forwarding_slots[idx].from_payload !=
-               OSTY_GC_FORWARDING_TOMBSTONE) {
-        if (osty_gc_forwarding_slots[idx].from_payload == from_payload) {
+    while (osty_gc_forwarding_slots[idx].from_payload != NULL) {
+        if (osty_gc_forwarding_slots[idx].from_payload ==
+            OSTY_GC_FORWARDING_TOMBSTONE) {
+            if (first_tombstone == SIZE_MAX) {
+                first_tombstone = idx;
+            }
+        } else if (osty_gc_forwarding_slots[idx].from_payload ==
+                   from_payload) {
             osty_gc_forwarding_slots[idx].to_header = to_header;
             osty_gc_forwarding_slots[idx].stable_id = to_header->stable_id;
             osty_gc_forwarding_slots[idx].byte_size = to_header->byte_size;
@@ -1225,8 +1271,8 @@ static void osty_gc_forwarding_insert(void *from_payload,
         }
         idx = (idx + 1) & mask;
     }
-    if (osty_gc_forwarding_slots[idx].from_payload ==
-        OSTY_GC_FORWARDING_TOMBSTONE) {
+    if (first_tombstone != SIZE_MAX) {
+        idx = first_tombstone;
         osty_gc_forwarding_tombstones -= 1;
     }
     osty_gc_forwarding_slots[idx].from_payload = from_payload;
@@ -1450,10 +1496,9 @@ static void osty_gc_note_pin_release(osty_gc_header *header) {
 }
 
 /* Phase B promotion: move `header` from YOUNG to OLD in place. Only the
- * bookkeeping counters change; payload address is stable (no compaction
- * yet), so any outstanding root pointer or SATB log entry keeps pointing
- * at the same memory. Called once a YOUNG survivor has hit the age
- * threshold. */
+ * bookkeeping counters change. Phase D may already have copied an
+ * unpinned survivor into survivor/old bump storage before this runs, but
+ * promotion itself still just relinks the chosen live header into OLD. */
 static void osty_gc_promote_header(osty_gc_header *header) {
     if (header->generation == OSTY_GC_GEN_OLD) {
         return;
@@ -1612,7 +1657,39 @@ static int64_t osty_gc_size_class_index_for_total_size(size_t total_size) {
     return (int64_t)(aligned_size / OSTY_GC_SIZE_CLASS_ALIGN) - 1;
 }
 
+static bool osty_gc_bump_block_has_forwarding_alias(
+    const osty_gc_bump_block *block) {
+    int64_t i;
+
+    if (block == NULL || osty_gc_forwarding_slots == NULL) {
+        return false;
+    }
+    for (i = 0; i < osty_gc_forwarding_capacity; i++) {
+        void *from_payload = osty_gc_forwarding_slots[i].from_payload;
+        const unsigned char *addr;
+        if (from_payload == NULL ||
+            from_payload == OSTY_GC_FORWARDING_TOMBSTONE) {
+            continue;
+        }
+        addr = (const unsigned char *)from_payload;
+        if (addr >= block->data && addr < block->data + block->size) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool osty_gc_old_bump_release_header(osty_gc_header *header);
+static bool osty_gc_young_bump_release_header(osty_gc_header *header);
+static bool osty_gc_survivor_bump_release_header(osty_gc_header *header);
+static bool osty_gc_pinned_bump_release_header(osty_gc_header *header);
+static void osty_gc_bump_recycle_empty_blocks(
+    osty_gc_bump_block **blocks_head,
+    osty_gc_bump_block **current,
+    int64_t *block_count,
+    int64_t *recycled_count_total,
+    int64_t *recycled_bytes_total,
+    bool clear_tlab_current);
 
 static void osty_gc_free_list_push(osty_gc_header *header) {
     osty_gc_free_chunk *chunk;
@@ -1690,7 +1767,16 @@ static osty_gc_header *osty_gc_free_list_take(size_t total_size,
  * their old payload addresses in the forwarding table, so reusing them
  * would alias a stale logical identity to a new object. */
 static void osty_gc_reclaim_swept_header(osty_gc_header *header) {
+    if (osty_gc_young_bump_release_header(header)) {
+        return;
+    }
+    if (osty_gc_survivor_bump_release_header(header)) {
+        return;
+    }
     if (osty_gc_old_bump_release_header(header)) {
+        return;
+    }
+    if (osty_gc_pinned_bump_release_header(header)) {
         return;
     }
     osty_gc_free_list_push(header);
@@ -1700,7 +1786,16 @@ static void osty_gc_release_replaced_header(osty_gc_header *header) {
     if (header == NULL) {
         return;
     }
+    if (osty_gc_young_bump_release_header(header)) {
+        return;
+    }
+    if (osty_gc_survivor_bump_release_header(header)) {
+        return;
+    }
     if (osty_gc_old_bump_release_header(header)) {
+        return;
+    }
+    if (osty_gc_pinned_bump_release_header(header)) {
         return;
     }
     if (header->storage_kind == OSTY_GC_STORAGE_DIRECT) {
@@ -1781,20 +1876,70 @@ static osty_gc_header *osty_gc_bump_take_from_region(
     return header;
 }
 
-static osty_gc_header *osty_gc_tlab_take(size_t total_size) {
+static osty_gc_header *osty_gc_bump_take_from_tlab_region(
+    size_t total_size,
+    uint8_t storage_kind,
+    osty_gc_bump_block **blocks_head,
+    osty_gc_bump_block **shared_current,
+    osty_gc_bump_block **tlab_current,
+    int64_t *block_count_total,
+    int64_t *block_bytes_total,
+    int64_t *alloc_count_total,
+    int64_t *alloc_bytes_total,
+    int64_t *tlab_refill_count_total) {
     osty_gc_header *header = osty_gc_bump_take_from_region(
-        total_size, OSTY_GC_STORAGE_BUMP_YOUNG,
-        &osty_gc_bump_blocks, &osty_gc_tlab_current,
-        &osty_gc_bump_block_count, &osty_gc_bump_block_bytes_total,
-        &osty_gc_bump_alloc_count_total, &osty_gc_bump_alloc_bytes_total);
+        total_size, storage_kind, blocks_head, tlab_current,
+        block_count_total, block_bytes_total, alloc_count_total,
+        alloc_bytes_total);
 
     if (header != NULL) {
-        osty_gc_bump_current = osty_gc_tlab_current;
-        if (header == (osty_gc_header *)(void *)osty_gc_tlab_current->data) {
-            osty_gc_tlab_refill_count_total += 1;
+        *shared_current = *tlab_current;
+        if (header == (osty_gc_header *)(void *)(*tlab_current)->data) {
+            *tlab_refill_count_total += 1;
         }
     }
     return header;
+}
+
+static osty_gc_header *osty_gc_tlab_take(size_t total_size) {
+    return osty_gc_bump_take_from_tlab_region(
+        total_size, OSTY_GC_STORAGE_BUMP_YOUNG, &osty_gc_bump_blocks,
+        &osty_gc_bump_current, &osty_gc_tlab_current,
+        &osty_gc_bump_block_count, &osty_gc_bump_block_bytes_total,
+        &osty_gc_bump_alloc_count_total, &osty_gc_bump_alloc_bytes_total,
+        &osty_gc_tlab_refill_count_total);
+}
+
+static osty_gc_header *osty_gc_survivor_tlab_take(size_t total_size) {
+    return osty_gc_bump_take_from_tlab_region(
+        total_size, OSTY_GC_STORAGE_BUMP_SURVIVOR,
+        &osty_gc_survivor_bump_blocks, &osty_gc_survivor_bump_current,
+        &osty_gc_survivor_tlab_current, &osty_gc_survivor_bump_block_count,
+        &osty_gc_survivor_bump_block_bytes_total,
+        &osty_gc_survivor_bump_alloc_count_total,
+        &osty_gc_survivor_bump_alloc_bytes_total,
+        &osty_gc_survivor_tlab_refill_count_total);
+}
+
+static osty_gc_header *osty_gc_old_tlab_take(size_t total_size) {
+    return osty_gc_bump_take_from_tlab_region(
+        total_size, OSTY_GC_STORAGE_BUMP_OLD, &osty_gc_old_bump_blocks,
+        &osty_gc_old_bump_current, &osty_gc_old_tlab_current,
+        &osty_gc_old_bump_block_count, &osty_gc_old_bump_block_bytes_total,
+        &osty_gc_old_bump_alloc_count_total,
+        &osty_gc_old_bump_alloc_bytes_total,
+        &osty_gc_old_tlab_refill_count_total);
+}
+
+static osty_gc_header *osty_gc_pinned_tlab_take(size_t total_size) {
+    return osty_gc_bump_take_from_tlab_region(
+        total_size, OSTY_GC_STORAGE_BUMP_PINNED, &osty_gc_pinned_bump_blocks,
+        &osty_gc_pinned_bump_current, &osty_gc_pinned_tlab_current,
+        &osty_gc_pinned_bump_block_count,
+        &osty_gc_pinned_bump_block_bytes_total,
+        &osty_gc_pinned_bump_alloc_count_total,
+        &osty_gc_pinned_bump_alloc_bytes_total,
+        &osty_gc_pinned_tlab_refill_count_total);
 }
 
 static osty_gc_bump_block *osty_gc_bump_block_find_owner(
@@ -1844,28 +1989,120 @@ static void osty_gc_bump_block_release(
     free(block);
 }
 
-static bool osty_gc_old_bump_release_header(osty_gc_header *header) {
+static bool osty_gc_bump_release_header_from_region(
+    osty_gc_header *header,
+    uint8_t storage_kind,
+    osty_gc_bump_block **blocks_head,
+    osty_gc_bump_block **current,
+    int64_t *block_count,
+    int64_t *recycled_count_total,
+    int64_t *recycled_bytes_total,
+    bool clear_tlab_current) {
     osty_gc_bump_block *block;
 
-    if (header == NULL || header->storage_kind != OSTY_GC_STORAGE_BUMP_OLD) {
+    if (header == NULL || header->storage_kind != storage_kind) {
         return false;
     }
-    block = osty_gc_bump_block_find_owner(osty_gc_old_bump_blocks, header);
+    block = osty_gc_bump_block_find_owner(*blocks_head, header);
     if (block == NULL) {
-        osty_rt_abort("GC old bump owner missing");
+        osty_rt_abort("GC bump owner missing");
     }
     if (block->live_alloc_count <= 0) {
-        osty_rt_abort("GC old bump live count underflow");
+        osty_rt_abort("GC bump live count underflow");
     }
     block->live_alloc_count -= 1;
-    if (block->live_alloc_count == 0) {
+    if (block->live_alloc_count == 0 &&
+        !osty_gc_bump_block_has_forwarding_alias(block)) {
+        if (clear_tlab_current) {
+            if (storage_kind == OSTY_GC_STORAGE_BUMP_YOUNG &&
+                osty_gc_tlab_current == block) {
+                osty_gc_tlab_current = NULL;
+            }
+            if (storage_kind == OSTY_GC_STORAGE_BUMP_SURVIVOR &&
+                osty_gc_survivor_tlab_current == block) {
+                osty_gc_survivor_tlab_current = NULL;
+            }
+            if (storage_kind == OSTY_GC_STORAGE_BUMP_OLD &&
+                osty_gc_old_tlab_current == block) {
+                osty_gc_old_tlab_current = NULL;
+            }
+            if (storage_kind == OSTY_GC_STORAGE_BUMP_PINNED &&
+                osty_gc_pinned_tlab_current == block) {
+                osty_gc_pinned_tlab_current = NULL;
+            }
+        }
         osty_gc_bump_block_release(
-            block, &osty_gc_old_bump_blocks, &osty_gc_old_bump_current,
-            &osty_gc_old_bump_block_count,
-            &osty_gc_old_bump_recycled_block_count_total,
-            &osty_gc_old_bump_recycled_bytes_total);
+            block, blocks_head, current, block_count, recycled_count_total,
+            recycled_bytes_total);
     }
     return true;
+}
+
+static bool osty_gc_young_bump_release_header(osty_gc_header *header) {
+    return osty_gc_bump_release_header_from_region(
+        header, OSTY_GC_STORAGE_BUMP_YOUNG, &osty_gc_bump_blocks,
+        &osty_gc_bump_current, &osty_gc_bump_block_count,
+        &osty_gc_bump_recycled_block_count_total,
+        &osty_gc_bump_recycled_bytes_total, true);
+}
+
+static bool osty_gc_survivor_bump_release_header(osty_gc_header *header) {
+    return osty_gc_bump_release_header_from_region(
+        header, OSTY_GC_STORAGE_BUMP_SURVIVOR, &osty_gc_survivor_bump_blocks,
+        &osty_gc_survivor_bump_current, &osty_gc_survivor_bump_block_count,
+        &osty_gc_survivor_bump_recycled_block_count_total,
+        &osty_gc_survivor_bump_recycled_bytes_total, true);
+}
+
+static bool osty_gc_old_bump_release_header(osty_gc_header *header) {
+    return osty_gc_bump_release_header_from_region(
+        header, OSTY_GC_STORAGE_BUMP_OLD, &osty_gc_old_bump_blocks,
+        &osty_gc_old_bump_current, &osty_gc_old_bump_block_count,
+        &osty_gc_old_bump_recycled_block_count_total,
+        &osty_gc_old_bump_recycled_bytes_total, true);
+}
+
+static bool osty_gc_pinned_bump_release_header(osty_gc_header *header) {
+    return osty_gc_bump_release_header_from_region(
+        header, OSTY_GC_STORAGE_BUMP_PINNED, &osty_gc_pinned_bump_blocks,
+        &osty_gc_pinned_bump_current, &osty_gc_pinned_bump_block_count,
+        &osty_gc_pinned_bump_recycled_block_count_total,
+        &osty_gc_pinned_bump_recycled_bytes_total, true);
+}
+
+static void osty_gc_bump_recycle_empty_blocks(
+    osty_gc_bump_block **blocks_head,
+    osty_gc_bump_block **current,
+    int64_t *block_count,
+    int64_t *recycled_count_total,
+    int64_t *recycled_bytes_total,
+    bool clear_tlab_current) {
+    osty_gc_bump_block *block = *blocks_head;
+
+    while (block != NULL) {
+        osty_gc_bump_block *next = block->next;
+        if (block->live_alloc_count == 0 &&
+            !osty_gc_bump_block_has_forwarding_alias(block)) {
+            if (clear_tlab_current) {
+                if (osty_gc_tlab_current == block) {
+                    osty_gc_tlab_current = NULL;
+                }
+                if (osty_gc_survivor_tlab_current == block) {
+                    osty_gc_survivor_tlab_current = NULL;
+                }
+                if (osty_gc_old_tlab_current == block) {
+                    osty_gc_old_tlab_current = NULL;
+                }
+                if (osty_gc_pinned_tlab_current == block) {
+                    osty_gc_pinned_tlab_current = NULL;
+                }
+            }
+            osty_gc_bump_block_release(
+                block, blocks_head, current, block_count,
+                recycled_count_total, recycled_bytes_total);
+        }
+        block = next;
+    }
 }
 
 /* Phase B pressure split: `allocated_since_collect` still tracks the
@@ -1891,6 +2128,21 @@ static void osty_gc_note_allocation(size_t payload_size) {
     if (nursery_limit > 0 &&
         (osty_gc_young_bytes >= nursery_limit ||
          osty_gc_allocated_since_minor >= nursery_limit)) {
+        osty_gc_collection_requested = true;
+    }
+}
+
+static void osty_gc_note_old_allocation(size_t payload_size) {
+    int64_t pressure_limit = osty_gc_pressure_limit_now();
+
+    if (payload_size > (size_t)INT64_MAX) {
+        osty_rt_abort("GC payload size overflow");
+    }
+    osty_gc_allocated_since_collect += (int64_t)payload_size;
+    osty_gc_allocated_bytes_total += (int64_t)payload_size;
+    if (pressure_limit > 0 &&
+        (osty_gc_live_bytes >= pressure_limit ||
+         osty_gc_allocated_since_collect >= pressure_limit)) {
         osty_gc_collection_requested = true;
     }
 }
@@ -1971,6 +2223,72 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
     /* Phase C3 mutator assist: if an incremental major is active,
      * borrow a proportional amount of mark work from the allocator
      * so the mutator literally pays for its allocation pressure. */
+    if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL) {
+        int64_t bpu = osty_gc_assist_bytes_per_unit_now();
+        if (bpu > 0) {
+            int64_t units = (int64_t)payload_size / bpu;
+            if (units < 1) {
+                units = 1;
+            }
+            int64_t done = osty_gc_mark_drain_budget(units);
+            osty_gc_mutator_assist_work_total += done;
+            osty_gc_mutator_assist_calls_total += 1;
+        }
+    }
+    osty_gc_release();
+    return header->payload;
+}
+
+static void *osty_gc_allocate_pinned_managed(size_t byte_size,
+                                             int64_t object_kind,
+                                             const char *site,
+                                             osty_gc_trace_fn trace,
+                                             osty_gc_destroy_fn destroy) {
+    osty_gc_header *header;
+    size_t payload_size = byte_size;
+    size_t total_size;
+    bool humongous;
+    uint8_t storage_kind = OSTY_GC_STORAGE_DIRECT;
+
+    total_size = osty_gc_total_size_for_payload_size(payload_size);
+    payload_size = total_size - sizeof(osty_gc_header);
+    humongous = osty_gc_total_size_is_humongous(total_size);
+    header = NULL;
+    if (!humongous) {
+        osty_gc_acquire();
+        header = osty_gc_pinned_tlab_take(total_size);
+        if (header != NULL) {
+            storage_kind = OSTY_GC_STORAGE_BUMP_PINNED;
+        }
+        osty_gc_release();
+    }
+    if (header == NULL) {
+        header = (osty_gc_header *)calloc(1, total_size);
+        if (header == NULL) {
+            osty_rt_abort("out of memory");
+        }
+    }
+    header->object_kind = object_kind;
+    header->byte_size = (int64_t)payload_size;
+    header->trace = trace;
+    header->destroy = destroy;
+    header->site = site;
+    header->payload = (void *)(header + 1);
+    header->storage_kind = storage_kind;
+    header->generation = OSTY_GC_GEN_OLD;
+    header->age = 0;
+    header->pin_count = 1;
+    header->color = OSTY_GC_COLOR_WHITE;
+    header->marked = false;
+    osty_gc_acquire();
+    if (humongous) {
+        osty_gc_humongous_alloc_count_total += 1;
+        osty_gc_humongous_alloc_bytes_total += (int64_t)payload_size;
+    }
+    header->stable_id = osty_gc_allocate_stable_id();
+    osty_gc_link(header);
+    osty_gc_note_pin_acquire(header);
+    osty_gc_note_old_allocation(payload_size);
     if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL) {
         int64_t bpu = osty_gc_assist_bytes_per_unit_now();
         if (bpu > 0) {
@@ -2475,9 +2793,17 @@ static void osty_gc_remap_header_payload(osty_gc_header *header) {
     }
 }
 
-static osty_gc_header *osty_gc_clone_header_storage(osty_gc_header *header) {
+static osty_gc_header *osty_gc_clone_header_storage_to_bump_region(
+    osty_gc_header *header,
+    uint8_t storage_kind,
+    osty_gc_bump_block **blocks_head,
+    osty_gc_bump_block **current,
+    int64_t *block_count_total,
+    int64_t *block_bytes_total,
+    int64_t *alloc_count_total,
+    int64_t *alloc_bytes_total) {
     osty_gc_header *clone;
-    uint8_t clone_storage_kind = OSTY_GC_STORAGE_DIRECT;
+    bool used_bump = false;
     size_t total_size;
 
     if (header == NULL) {
@@ -2488,17 +2814,29 @@ static osty_gc_header *osty_gc_clone_header_storage(osty_gc_header *header) {
         osty_rt_abort("GC clone size overflow");
     }
     total_size = sizeof(osty_gc_header) + (size_t)header->byte_size;
-    if (!osty_gc_total_size_is_humongous(total_size)) {
-        clone = osty_gc_bump_take_from_region(
-            total_size, OSTY_GC_STORAGE_BUMP_OLD,
-            &osty_gc_old_bump_blocks, &osty_gc_old_bump_current,
-            &osty_gc_old_bump_block_count,
-            &osty_gc_old_bump_block_bytes_total,
-            &osty_gc_old_bump_alloc_count_total,
-            &osty_gc_old_bump_alloc_bytes_total);
-        if (clone != NULL) {
-            clone_storage_kind = OSTY_GC_STORAGE_BUMP_OLD;
+    if (!osty_gc_total_size_is_humongous(total_size) &&
+        storage_kind != OSTY_GC_STORAGE_DIRECT) {
+        switch (storage_kind) {
+        case OSTY_GC_STORAGE_BUMP_YOUNG:
+            clone = osty_gc_tlab_take(total_size);
+            break;
+        case OSTY_GC_STORAGE_BUMP_SURVIVOR:
+            clone = osty_gc_survivor_tlab_take(total_size);
+            break;
+        case OSTY_GC_STORAGE_BUMP_OLD:
+            clone = osty_gc_old_tlab_take(total_size);
+            break;
+        case OSTY_GC_STORAGE_BUMP_PINNED:
+            clone = osty_gc_pinned_tlab_take(total_size);
+            break;
+        default:
+            clone = osty_gc_bump_take_from_region(
+                total_size, storage_kind, blocks_head, current,
+                block_count_total, block_bytes_total, alloc_count_total,
+                alloc_bytes_total);
+            break;
         }
+        used_bump = clone != NULL;
     } else {
         clone = NULL;
     }
@@ -2514,12 +2852,22 @@ static osty_gc_header *osty_gc_clone_header_storage(osty_gc_header *header) {
     clone->next_gen = NULL;
     clone->prev_gen = NULL;
     clone->payload = (void *)(clone + 1);
-    clone->storage_kind = clone_storage_kind;
+    clone->storage_kind = used_bump ? storage_kind : OSTY_GC_STORAGE_DIRECT;
     return clone;
 }
 
-static osty_gc_header *osty_gc_clone_map_header(osty_gc_header *header) {
-    osty_gc_header *clone = osty_gc_clone_header_storage(header);
+static osty_gc_header *osty_gc_clone_map_header_to_bump_region(
+    osty_gc_header *header,
+    uint8_t storage_kind,
+    osty_gc_bump_block **blocks_head,
+    osty_gc_bump_block **current,
+    int64_t *block_count_total,
+    int64_t *block_bytes_total,
+    int64_t *alloc_count_total,
+    int64_t *alloc_bytes_total) {
+    osty_gc_header *clone = osty_gc_clone_header_storage_to_bump_region(
+        header, storage_kind, blocks_head, current, block_count_total,
+        block_bytes_total, alloc_count_total, alloc_bytes_total);
     osty_rt_map *old_map;
     osty_rt_map *new_map;
 
@@ -2547,8 +2895,18 @@ static osty_gc_header *osty_gc_clone_map_header(osty_gc_header *header) {
     return clone;
 }
 
-static osty_gc_header *osty_gc_clone_chan_header(osty_gc_header *header) {
-    osty_gc_header *clone = osty_gc_clone_header_storage(header);
+static osty_gc_header *osty_gc_clone_chan_header_to_bump_region(
+    osty_gc_header *header,
+    uint8_t storage_kind,
+    osty_gc_bump_block **blocks_head,
+    osty_gc_bump_block **current,
+    int64_t *block_count_total,
+    int64_t *block_bytes_total,
+    int64_t *alloc_count_total,
+    int64_t *alloc_bytes_total) {
+    osty_gc_header *clone = osty_gc_clone_header_storage_to_bump_region(
+        header, storage_kind, blocks_head, current, block_count_total,
+        block_bytes_total, alloc_count_total, alloc_bytes_total);
     osty_rt_chan_impl *old_ch;
     osty_rt_chan_impl *new_ch;
 
@@ -2576,25 +2934,48 @@ static osty_gc_header *osty_gc_clone_chan_header(osty_gc_header *header) {
     return clone;
 }
 
-static osty_gc_header *osty_gc_clone_header(osty_gc_header *header) {
+static osty_gc_header *osty_gc_clone_header_to_bump_region(
+    osty_gc_header *header,
+    uint8_t storage_kind,
+    osty_gc_bump_block **blocks_head,
+    osty_gc_bump_block **current,
+    int64_t *block_count_total,
+    int64_t *block_bytes_total,
+    int64_t *alloc_count_total,
+    int64_t *alloc_bytes_total) {
     osty_gc_header *clone;
 
     if (header == NULL) {
         return NULL;
     }
     if (header->object_kind == OSTY_GC_KIND_MAP) {
-        return osty_gc_clone_map_header(header);
+        return osty_gc_clone_map_header_to_bump_region(
+            header, storage_kind, blocks_head, current, block_count_total,
+            block_bytes_total, alloc_count_total, alloc_bytes_total);
     }
     if (header->object_kind == OSTY_GC_KIND_CHANNEL) {
-        return osty_gc_clone_chan_header(header);
+        return osty_gc_clone_chan_header_to_bump_region(
+            header, storage_kind, blocks_head, current, block_count_total,
+            block_bytes_total, alloc_count_total, alloc_bytes_total);
     }
-    clone = osty_gc_clone_header_storage(header);
+    clone = osty_gc_clone_header_storage_to_bump_region(
+        header, storage_kind, blocks_head, current, block_count_total,
+        block_bytes_total, alloc_count_total, alloc_bytes_total);
 
     if (clone == NULL) {
         return NULL;
     }
     memcpy(clone->payload, header->payload, (size_t)header->byte_size);
     return clone;
+}
+
+static osty_gc_header *osty_gc_clone_header(osty_gc_header *header) {
+    return osty_gc_clone_header_to_bump_region(
+        header, OSTY_GC_STORAGE_BUMP_OLD, &osty_gc_old_bump_blocks,
+        &osty_gc_old_bump_current, &osty_gc_old_bump_block_count,
+        &osty_gc_old_bump_block_bytes_total,
+        &osty_gc_old_bump_alloc_count_total,
+        &osty_gc_old_bump_alloc_bytes_total);
 }
 
 static void osty_gc_replace_header(osty_gc_header *old_header,
@@ -2657,6 +3038,26 @@ static int64_t osty_gc_compact_major_with_stack_roots(
     if (moved == 0) {
         osty_gc_forwarding_retain_history(snapshots, snapshot_count);
         free(snapshots);
+        osty_gc_bump_recycle_empty_blocks(
+            &osty_gc_bump_blocks, &osty_gc_bump_current,
+            &osty_gc_bump_block_count,
+            &osty_gc_bump_recycled_block_count_total,
+            &osty_gc_bump_recycled_bytes_total, true);
+        osty_gc_bump_recycle_empty_blocks(
+            &osty_gc_survivor_bump_blocks, &osty_gc_survivor_bump_current,
+            &osty_gc_survivor_bump_block_count,
+            &osty_gc_survivor_bump_recycled_block_count_total,
+            &osty_gc_survivor_bump_recycled_bytes_total, true);
+        osty_gc_bump_recycle_empty_blocks(
+            &osty_gc_old_bump_blocks, &osty_gc_old_bump_current,
+            &osty_gc_old_bump_block_count,
+            &osty_gc_old_bump_recycled_block_count_total,
+            &osty_gc_old_bump_recycled_bytes_total, true);
+        osty_gc_bump_recycle_empty_blocks(
+            &osty_gc_pinned_bump_blocks, &osty_gc_pinned_bump_current,
+            &osty_gc_pinned_bump_block_count,
+            &osty_gc_pinned_bump_recycled_block_count_total,
+            &osty_gc_pinned_bump_recycled_bytes_total, true);
         osty_gc_forwarded_objects_last = 0;
         osty_gc_forwarded_bytes_last = 0;
         return 0;
@@ -2694,6 +3095,151 @@ static int64_t osty_gc_compact_major_with_stack_roots(
     }
     osty_gc_forwarding_retain_history(snapshots, snapshot_count);
     free(snapshots);
+    osty_gc_bump_recycle_empty_blocks(
+        &osty_gc_bump_blocks, &osty_gc_bump_current,
+        &osty_gc_bump_block_count, &osty_gc_bump_recycled_block_count_total,
+        &osty_gc_bump_recycled_bytes_total, true);
+    osty_gc_bump_recycle_empty_blocks(
+        &osty_gc_survivor_bump_blocks, &osty_gc_survivor_bump_current,
+        &osty_gc_survivor_bump_block_count,
+        &osty_gc_survivor_bump_recycled_block_count_total,
+        &osty_gc_survivor_bump_recycled_bytes_total, true);
+    osty_gc_bump_recycle_empty_blocks(
+        &osty_gc_old_bump_blocks, &osty_gc_old_bump_current,
+        &osty_gc_old_bump_block_count,
+        &osty_gc_old_bump_recycled_block_count_total,
+        &osty_gc_old_bump_recycled_bytes_total, true);
+    osty_gc_bump_recycle_empty_blocks(
+        &osty_gc_pinned_bump_blocks, &osty_gc_pinned_bump_current,
+        &osty_gc_pinned_bump_block_count,
+        &osty_gc_pinned_bump_recycled_block_count_total,
+        &osty_gc_pinned_bump_recycled_bytes_total, true);
+
+    osty_gc_compaction_count_total += 1;
+    osty_gc_forwarded_objects_last = moved;
+    osty_gc_forwarded_bytes_last = moved_bytes;
+    return moved;
+}
+
+static int64_t osty_gc_compact_minor_with_stack_roots(
+    void *const *root_slots, int64_t root_slot_count, int64_t promote_age) {
+    osty_gc_header *header;
+    osty_gc_header *next;
+    osty_gc_forwarding_snapshot *snapshots;
+    int64_t snapshot_count = 0;
+    int64_t i;
+    int64_t moved = 0;
+    int64_t moved_bytes = 0;
+
+    snapshots = osty_gc_forwarding_snapshot_take(&snapshot_count);
+    osty_gc_forwarding_clear();
+    osty_gc_survivor_bump_current = NULL;
+    osty_gc_survivor_tlab_current = NULL;
+    header = osty_gc_young_head;
+    while (header != NULL) {
+        if (osty_gc_header_is_movable(header)) {
+            bool will_promote = (int64_t)header->age + 1 >= promote_age;
+            osty_gc_header *clone = osty_gc_clone_header_to_bump_region(
+                header,
+                will_promote ? OSTY_GC_STORAGE_BUMP_OLD
+                             : OSTY_GC_STORAGE_BUMP_SURVIVOR,
+                will_promote ? &osty_gc_old_bump_blocks
+                             : &osty_gc_survivor_bump_blocks,
+                will_promote ? &osty_gc_old_bump_current
+                             : &osty_gc_survivor_bump_current,
+                will_promote ? &osty_gc_old_bump_block_count
+                             : &osty_gc_survivor_bump_block_count,
+                will_promote ? &osty_gc_old_bump_block_bytes_total
+                             : &osty_gc_survivor_bump_block_bytes_total,
+                will_promote ? &osty_gc_old_bump_alloc_count_total
+                             : &osty_gc_survivor_bump_alloc_count_total,
+                will_promote ? &osty_gc_old_bump_alloc_bytes_total
+                             : &osty_gc_survivor_bump_alloc_bytes_total);
+            osty_gc_forwarding_insert(header->payload, clone);
+            moved += 1;
+            moved_bytes += header->byte_size;
+        }
+        header = header->next_gen;
+    }
+    if (moved == 0) {
+        osty_gc_forwarding_retain_history(snapshots, snapshot_count);
+        free(snapshots);
+        osty_gc_bump_recycle_empty_blocks(
+            &osty_gc_bump_blocks, &osty_gc_bump_current,
+            &osty_gc_bump_block_count,
+            &osty_gc_bump_recycled_block_count_total,
+            &osty_gc_bump_recycled_bytes_total, true);
+        osty_gc_bump_recycle_empty_blocks(
+            &osty_gc_survivor_bump_blocks, &osty_gc_survivor_bump_current,
+            &osty_gc_survivor_bump_block_count,
+            &osty_gc_survivor_bump_recycled_block_count_total,
+            &osty_gc_survivor_bump_recycled_bytes_total, true);
+        osty_gc_bump_recycle_empty_blocks(
+            &osty_gc_old_bump_blocks, &osty_gc_old_bump_current,
+            &osty_gc_old_bump_block_count,
+            &osty_gc_old_bump_recycled_block_count_total,
+            &osty_gc_old_bump_recycled_bytes_total, true);
+        osty_gc_bump_recycle_empty_blocks(
+            &osty_gc_pinned_bump_blocks, &osty_gc_pinned_bump_current,
+            &osty_gc_pinned_bump_block_count,
+            &osty_gc_pinned_bump_recycled_block_count_total,
+            &osty_gc_pinned_bump_recycled_bytes_total, true);
+        osty_gc_forwarded_objects_last = 0;
+        osty_gc_forwarded_bytes_last = 0;
+        return 0;
+    }
+
+    for (i = 0; i < root_slot_count; i++) {
+        osty_gc_remap_slot((void *)root_slots[i]);
+    }
+    for (i = 0; i < osty_gc_global_root_count; i++) {
+        osty_gc_remap_slot(osty_gc_global_root_slots[i]);
+    }
+
+    header = osty_gc_objects;
+    while (header != NULL) {
+        osty_gc_header *current = osty_gc_forwarding_lookup(header->payload);
+        if (current == NULL) {
+            current = header;
+        }
+        osty_gc_remap_header_payload(current);
+        header = header->next;
+    }
+
+    header = osty_gc_objects;
+    while (header != NULL) {
+        next = header->next;
+        {
+            osty_gc_header *replacement =
+                osty_gc_forwarding_lookup(header->payload);
+            if (replacement != NULL) {
+                osty_gc_replace_header(header, replacement);
+                osty_gc_release_replaced_header(header);
+            }
+        }
+        header = next;
+    }
+    osty_gc_forwarding_retain_history(snapshots, snapshot_count);
+    free(snapshots);
+    osty_gc_bump_recycle_empty_blocks(
+        &osty_gc_bump_blocks, &osty_gc_bump_current,
+        &osty_gc_bump_block_count, &osty_gc_bump_recycled_block_count_total,
+        &osty_gc_bump_recycled_bytes_total, true);
+    osty_gc_bump_recycle_empty_blocks(
+        &osty_gc_survivor_bump_blocks, &osty_gc_survivor_bump_current,
+        &osty_gc_survivor_bump_block_count,
+        &osty_gc_survivor_bump_recycled_block_count_total,
+        &osty_gc_survivor_bump_recycled_bytes_total, true);
+    osty_gc_bump_recycle_empty_blocks(
+        &osty_gc_old_bump_blocks, &osty_gc_old_bump_current,
+        &osty_gc_old_bump_block_count,
+        &osty_gc_old_bump_recycled_block_count_total,
+        &osty_gc_old_bump_recycled_bytes_total, true);
+    osty_gc_bump_recycle_empty_blocks(
+        &osty_gc_pinned_bump_blocks, &osty_gc_pinned_bump_current,
+        &osty_gc_pinned_bump_block_count,
+        &osty_gc_pinned_bump_recycled_block_count_total,
+        &osty_gc_pinned_bump_recycled_bytes_total, true);
 
     osty_gc_compaction_count_total += 1;
     osty_gc_forwarded_objects_last = moved;
@@ -2729,8 +3275,12 @@ static void osty_gc_remembered_edges_compact_after_minor(void) {
     int64_t write_idx = 0;
     int64_t i;
     for (i = 0; i < osty_gc_remembered_edge_count; i++) {
-        osty_gc_header *owner = osty_gc_find_header(osty_gc_remembered_edges[i].owner);
-        osty_gc_header *value = osty_gc_find_header(osty_gc_remembered_edges[i].value);
+        void *owner_payload =
+            osty_gc_forward_payload(osty_gc_remembered_edges[i].owner);
+        void *value_payload =
+            osty_gc_forward_payload(osty_gc_remembered_edges[i].value);
+        osty_gc_header *owner = osty_gc_find_header(owner_payload);
+        osty_gc_header *value = osty_gc_find_header(value_payload);
         if (owner == NULL || value == NULL) {
             continue;
         }
@@ -2740,10 +3290,8 @@ static void osty_gc_remembered_edges_compact_after_minor(void) {
         if (value->generation != OSTY_GC_GEN_YOUNG) {
             continue;
         }
-        osty_gc_remembered_edges[write_idx].owner =
-            osty_gc_remembered_edges[i].owner;
-        osty_gc_remembered_edges[write_idx].value =
-            osty_gc_remembered_edges[i].value;
+        osty_gc_remembered_edges[write_idx].owner = owner_payload;
+        osty_gc_remembered_edges[write_idx].value = value_payload;
         write_idx += 1;
     }
     osty_gc_remembered_edge_count = write_idx;
@@ -2836,9 +3384,10 @@ static void osty_gc_collect_major_with_stack_roots(void *const *root_slots, int6
 /* Phase B minor collection (RUNTIME_GC_DELTA §5.1-5.5).
  *
  * Scans only YOUNG objects. OLD objects are assumed live; any
- * OLD→YOUNG edge is preserved by walking the remembered set. YOUNG
- * survivors that cross `promote_age` move to OLD in place (address
- * stable, no compaction). Frees unreachable YOUNG; OLD untouched.
+ * OLD→YOUNG edge is preserved by walking the remembered set. Phase D
+ * extends the survivor path so movable YOUNG objects can be copied into
+ * survivor/old bump regions before the age/promote step runs. Frees
+ * unreachable YOUNG; OLD untouched.
  */
 static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
     osty_gc_header *header;
@@ -2910,11 +3459,18 @@ static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int6
         } else {
             header->color = OSTY_GC_COLOR_WHITE;
             header->marked = false;
-            if ((int64_t)header->age + 1 >= promote_age) {
-                osty_gc_promote_header(header);
-            } else if (header->age < UINT8_MAX) {
-                header->age += 1;
-            }
+        }
+        header = next;
+    }
+    (void)osty_gc_compact_minor_with_stack_roots(
+        root_slots, root_slot_count, promote_age);
+    header = osty_gc_young_head;
+    while (header != NULL) {
+        next = header->next_gen;
+        if ((int64_t)header->age + 1 >= promote_age) {
+            osty_gc_promote_header(header);
+        } else if (header->age < UINT8_MAX) {
+            header->age += 1;
         }
         header = next;
     }
@@ -5623,6 +6179,7 @@ uint8_t osty_rt_bytes_get(void *raw_bytes, int64_t index) {
 }
 
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void *osty_gc_alloc_pinned_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_pinned_v1"));
 void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
 void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
 void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
@@ -5641,6 +6198,16 @@ void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site)
         osty_rt_abort("negative GC allocation size");
     }
     return osty_gc_allocate_managed((size_t)byte_size, object_kind == 0 ? OSTY_GC_KIND_GENERIC : object_kind, site, NULL, NULL);
+}
+
+void *osty_gc_alloc_pinned_v1(int64_t object_kind, int64_t byte_size, const char *site) {
+    if (byte_size < 0) {
+        osty_rt_abort("negative GC pinned allocation size");
+    }
+    return osty_gc_allocate_pinned_managed(
+        (size_t)byte_size,
+        object_kind == 0 ? OSTY_GC_KIND_GENERIC : object_kind, site, NULL,
+        NULL);
 }
 
 static void osty_rt_enum_ptr_payload_trace(void *payload) {
@@ -6334,6 +6901,42 @@ int64_t osty_gc_debug_tlab_refill_count_total(void) {
     return osty_gc_tlab_refill_count_total;
 }
 
+int64_t osty_gc_debug_bump_recycled_block_count_total(void) {
+    return osty_gc_bump_recycled_block_count_total;
+}
+
+int64_t osty_gc_debug_bump_recycled_bytes_total(void) {
+    return osty_gc_bump_recycled_bytes_total;
+}
+
+int64_t osty_gc_debug_survivor_bump_block_count(void) {
+    return osty_gc_survivor_bump_block_count;
+}
+
+int64_t osty_gc_debug_survivor_bump_block_bytes_total(void) {
+    return osty_gc_survivor_bump_block_bytes_total;
+}
+
+int64_t osty_gc_debug_survivor_bump_alloc_count_total(void) {
+    return osty_gc_survivor_bump_alloc_count_total;
+}
+
+int64_t osty_gc_debug_survivor_bump_alloc_bytes_total(void) {
+    return osty_gc_survivor_bump_alloc_bytes_total;
+}
+
+int64_t osty_gc_debug_survivor_tlab_refill_count_total(void) {
+    return osty_gc_survivor_tlab_refill_count_total;
+}
+
+int64_t osty_gc_debug_survivor_bump_recycled_block_count_total(void) {
+    return osty_gc_survivor_bump_recycled_block_count_total;
+}
+
+int64_t osty_gc_debug_survivor_bump_recycled_bytes_total(void) {
+    return osty_gc_survivor_bump_recycled_bytes_total;
+}
+
 int64_t osty_gc_debug_old_bump_block_count(void) {
     return osty_gc_old_bump_block_count;
 }
@@ -6350,12 +6953,44 @@ int64_t osty_gc_debug_old_bump_alloc_bytes_total(void) {
     return osty_gc_old_bump_alloc_bytes_total;
 }
 
+int64_t osty_gc_debug_old_tlab_refill_count_total(void) {
+    return osty_gc_old_tlab_refill_count_total;
+}
+
 int64_t osty_gc_debug_old_bump_recycled_block_count_total(void) {
     return osty_gc_old_bump_recycled_block_count_total;
 }
 
 int64_t osty_gc_debug_old_bump_recycled_bytes_total(void) {
     return osty_gc_old_bump_recycled_bytes_total;
+}
+
+int64_t osty_gc_debug_pinned_bump_block_count(void) {
+    return osty_gc_pinned_bump_block_count;
+}
+
+int64_t osty_gc_debug_pinned_bump_block_bytes_total(void) {
+    return osty_gc_pinned_bump_block_bytes_total;
+}
+
+int64_t osty_gc_debug_pinned_bump_alloc_count_total(void) {
+    return osty_gc_pinned_bump_alloc_count_total;
+}
+
+int64_t osty_gc_debug_pinned_bump_alloc_bytes_total(void) {
+    return osty_gc_pinned_bump_alloc_bytes_total;
+}
+
+int64_t osty_gc_debug_pinned_tlab_refill_count_total(void) {
+    return osty_gc_pinned_tlab_refill_count_total;
+}
+
+int64_t osty_gc_debug_pinned_bump_recycled_block_count_total(void) {
+    return osty_gc_pinned_bump_recycled_block_count_total;
+}
+
+int64_t osty_gc_debug_pinned_bump_recycled_bytes_total(void) {
+    return osty_gc_pinned_bump_recycled_bytes_total;
 }
 
 int64_t osty_gc_debug_humongous_threshold_bytes(void) {
@@ -7046,12 +7681,29 @@ int64_t osty_gc_debug_validate_heap(void) {
         osty_gc_bump_alloc_count_total < 0 ||
         osty_gc_bump_alloc_bytes_total < 0 ||
         osty_gc_tlab_refill_count_total < 0 ||
+        osty_gc_bump_recycled_block_count_total < 0 ||
+        osty_gc_bump_recycled_bytes_total < 0 ||
+        osty_gc_survivor_bump_block_count < 0 ||
+        osty_gc_survivor_bump_block_bytes_total < 0 ||
+        osty_gc_survivor_bump_alloc_count_total < 0 ||
+        osty_gc_survivor_bump_alloc_bytes_total < 0 ||
+        osty_gc_survivor_tlab_refill_count_total < 0 ||
+        osty_gc_survivor_bump_recycled_block_count_total < 0 ||
+        osty_gc_survivor_bump_recycled_bytes_total < 0 ||
         osty_gc_old_bump_block_count < 0 ||
         osty_gc_old_bump_block_bytes_total < 0 ||
         osty_gc_old_bump_alloc_count_total < 0 ||
         osty_gc_old_bump_alloc_bytes_total < 0 ||
+        osty_gc_old_tlab_refill_count_total < 0 ||
         osty_gc_old_bump_recycled_block_count_total < 0 ||
         osty_gc_old_bump_recycled_bytes_total < 0 ||
+        osty_gc_pinned_bump_block_count < 0 ||
+        osty_gc_pinned_bump_block_bytes_total < 0 ||
+        osty_gc_pinned_bump_alloc_count_total < 0 ||
+        osty_gc_pinned_bump_alloc_bytes_total < 0 ||
+        osty_gc_pinned_tlab_refill_count_total < 0 ||
+        osty_gc_pinned_bump_recycled_block_count_total < 0 ||
+        osty_gc_pinned_bump_recycled_bytes_total < 0 ||
         osty_gc_humongous_alloc_count_total < 0 ||
         osty_gc_humongous_alloc_bytes_total < 0 ||
         osty_gc_humongous_swept_count_total < 0 ||
