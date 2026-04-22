@@ -2609,18 +2609,13 @@ pub fn mirLowerParseIntLit(text: String) -> Int {
 }
 
 fn mirLowerStripUnderscores(text: String) -> String {
-    // Spec §1.6.1 numeric separators: `_` between digits is lexically
-    // elided when computing the literal value. String.replace runs in
-    // a single pass and keeps the Char/String boundaries aligned with
-    // the backend — previously this loop wrote `if ch != "_"` where
-    // `ch: Char` met a String literal, walling the merged AST probe
-    // with LLVM011 "compare type mismatch i32/ptr".
-    text.replace("_", "")
+    // §1.6.1 numeric separators
+    strings.replaceAll(text, "_", "")
 }
 
 fn mirLowerStripSign(text: String) -> String {
     if text.startsWith("+") || text.startsWith("-") {
-        text.substring(1, text.len())
+        strings.slice(text, 1, text.len())
     } else {
         text
     }
@@ -2631,13 +2626,13 @@ fn mirLowerParseIntDigits(text: String) -> Int {
         return 0
     }
     if text.startsWith("0x") || text.startsWith("0X") {
-        return mirLowerParseRadix(text.substring(2, text.len()), 16)
+        return mirLowerParseRadix(strings.slice(text, 2, text.len()), 16)
     }
     if text.startsWith("0b") || text.startsWith("0B") {
-        return mirLowerParseRadix(text.substring(2, text.len()), 2)
+        return mirLowerParseRadix(strings.slice(text, 2, text.len()), 2)
     }
     if text.startsWith("0o") || text.startsWith("0O") {
-        return mirLowerParseRadix(text.substring(2, text.len()), 8)
+        return mirLowerParseRadix(strings.slice(text, 2, text.len()), 8)
     }
     mirLowerParseRadix(text, 10)
 }
