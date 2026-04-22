@@ -2296,7 +2296,15 @@ func llvmListElementSuffix(typ string) string {
 func llvmListRuntimeDeclarations() []string {
 	return []string{
 		"declare ptr @osty_rt_list_new()",
-		"declare i64 @osty_rt_list_len(ptr)",
+		// `osty_rt_list_len` is a single load of the list's `len`
+		// field — no locking, no allocations, no GC interaction.
+		// Annotating it `nounwind willreturn memory(read)` lets
+		// LLVM's LICM hoist the call out of loops whose bound is
+		// `i < list.len()`, and lets CSE collapse repeated
+		// `list.len()` reads on the same list inside a function.
+		// Both wins matter for the HIR-fallback bench path that
+		// never sees the native-owned fast-path priming.
+		"declare i64 @osty_rt_list_len(ptr) nounwind willreturn memory(read)",
 		"declare void @osty_rt_list_push_i64(ptr, i64)",
 		"declare void @osty_rt_list_push_i1(ptr, i1)",
 		"declare void @osty_rt_list_push_f64(ptr, double)",
@@ -3265,7 +3273,12 @@ func llvmStringRuntimeToBytesSymbol() string {
 
 // Osty: toolchain/llvmgen.osty:2731:5
 func llvmStringRuntimeDeclarations() []string {
-	return []string{"declare i1 @osty_rt_strings_Equal(ptr, ptr)", "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)", "declare i1 @osty_rt_strings_HasSuffix(ptr, ptr)", "declare i1 @osty_rt_strings_Contains(ptr, ptr)", "declare ptr @osty_rt_strings_Split(ptr, ptr)", "declare ptr @osty_rt_strings_Concat(ptr, ptr)", "declare ptr @osty_rt_int_to_string(i64)", "declare ptr @osty_rt_float_to_string(double)", "declare ptr @osty_rt_bool_to_string(i1)", "declare i64 @osty_rt_strings_ByteLen(ptr)", "declare i64 @osty_rt_strings_Compare(ptr, ptr)", "declare i64 @osty_rt_strings_Count(ptr, ptr)", "declare i64 @osty_rt_strings_IndexOf(ptr, ptr)", "declare ptr @osty_rt_strings_Join(ptr, ptr)", "declare ptr @osty_rt_strings_Repeat(ptr, i64)", "declare ptr @osty_rt_strings_Replace(ptr, ptr, ptr)", "declare ptr @osty_rt_strings_ReplaceAll(ptr, ptr, ptr)", "declare ptr @osty_rt_strings_Slice(ptr, i64, i64)", "declare ptr @osty_rt_strings_ToUpper(ptr)", "declare ptr @osty_rt_strings_ToLower(ptr)", "declare i1 @osty_rt_strings_IsValidInt(ptr)", "declare i64 @osty_rt_strings_ToInt(ptr)", "declare i1 @osty_rt_strings_IsValidFloat(ptr)", "declare double @osty_rt_strings_ToFloat(ptr)", "declare ptr @osty_rt_strings_TrimStart(ptr)", "declare ptr @osty_rt_strings_TrimEnd(ptr)", "declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)", "declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)", "declare ptr @osty_rt_strings_TrimSpace(ptr)", "declare ptr @osty_rt_strings_Chars(ptr)", "declare ptr @osty_rt_strings_Bytes(ptr)", "declare ptr @osty_rt_strings_ToBytes(ptr)"}
+	// `osty_rt_strings_ByteLen` is a `strlen` call on the string
+	// payload pointer — pure read, no allocations, no GC barrier.
+	// Mark `nounwind willreturn memory(read)` so LLVM hoists it out
+	// of loops whose body re-reads the same string's length and
+	// CSEs repeated `s.len()` calls within a function.
+	return []string{"declare i1 @osty_rt_strings_Equal(ptr, ptr)", "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)", "declare i1 @osty_rt_strings_HasSuffix(ptr, ptr)", "declare i1 @osty_rt_strings_Contains(ptr, ptr)", "declare ptr @osty_rt_strings_Split(ptr, ptr)", "declare ptr @osty_rt_strings_Concat(ptr, ptr)", "declare ptr @osty_rt_int_to_string(i64)", "declare ptr @osty_rt_float_to_string(double)", "declare ptr @osty_rt_bool_to_string(i1)", "declare i64 @osty_rt_strings_ByteLen(ptr) nounwind willreturn memory(read)", "declare i64 @osty_rt_strings_Compare(ptr, ptr)", "declare i64 @osty_rt_strings_Count(ptr, ptr)", "declare i64 @osty_rt_strings_IndexOf(ptr, ptr)", "declare ptr @osty_rt_strings_Join(ptr, ptr)", "declare ptr @osty_rt_strings_Repeat(ptr, i64)", "declare ptr @osty_rt_strings_Replace(ptr, ptr, ptr)", "declare ptr @osty_rt_strings_ReplaceAll(ptr, ptr, ptr)", "declare ptr @osty_rt_strings_Slice(ptr, i64, i64)", "declare ptr @osty_rt_strings_ToUpper(ptr)", "declare ptr @osty_rt_strings_ToLower(ptr)", "declare i1 @osty_rt_strings_IsValidInt(ptr)", "declare i64 @osty_rt_strings_ToInt(ptr)", "declare i1 @osty_rt_strings_IsValidFloat(ptr)", "declare double @osty_rt_strings_ToFloat(ptr)", "declare ptr @osty_rt_strings_TrimStart(ptr)", "declare ptr @osty_rt_strings_TrimEnd(ptr)", "declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)", "declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)", "declare ptr @osty_rt_strings_TrimSpace(ptr)", "declare ptr @osty_rt_strings_Chars(ptr)", "declare ptr @osty_rt_strings_Bytes(ptr)", "declare ptr @osty_rt_strings_ToBytes(ptr)"}
 }
 
 // Osty: toolchain/llvmgen.osty:2768:5
