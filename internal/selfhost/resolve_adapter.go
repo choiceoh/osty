@@ -10,6 +10,35 @@ type PackageResolveFile = PackageCheckFile
 // so the self-host resolver can see one shared top-level namespace.
 type PackageResolveInput struct {
 	Files []PackageResolveFile `json:"files,omitempty"`
+	// Cfg, when non-nil, activates the `#[cfg(key = "value")]` pre-resolve
+	// filter per LANG_SPEC v0.5 §5 / G29. A nil Cfg leaves every decl
+	// alive (cfg shape validation still emits E0405/E0739 either way).
+	Cfg *CfgEnv `json:"cfg,omitempty"`
+}
+
+// CfgEnv carries the values that `#[cfg(...)]` predicates compare against.
+// Mirrors toolchain/resolve.osty::SelfResolveCfgEnv and the internal/resolve
+// Go-side CfgEnv — kept as a separate type so the selfhost package has no
+// cycle with internal/resolve.
+type CfgEnv struct {
+	OS       string   `json:"os,omitempty"`
+	Arch     string   `json:"arch,omitempty"`
+	Target   string   `json:"target,omitempty"`
+	Features []string `json:"features,omitempty"`
+}
+
+// toSelf converts the external CfgEnv into the selfhost-generated struct the
+// Osty resolver consumes. A nil receiver maps to the disabled sentinel so
+// the walk behaves identically to callers that never passed an env.
+func (c *CfgEnv) toSelf() *SelfResolveCfgEnv {
+	if c == nil {
+		return selfResolveCfgDisabled()
+	}
+	features := c.Features
+	if features == nil {
+		features = []string{}
+	}
+	return selfResolveCfgEnv(c.OS, c.Arch, c.Target, features)
 }
 
 // ResolveSummary is the exported Go summary for the bootstrapped Osty
@@ -94,6 +123,13 @@ func ResolveSource(src []byte) ResolveSummary {
 // ResolveSourceStructured runs the bootstrapped Osty resolver over one source
 // string and returns the structured result.
 func ResolveSourceStructured(src []byte) ResolveResult {
+	return ResolveSourceStructuredWithCfg(src, nil)
+}
+
+// ResolveSourceStructuredWithCfg is ResolveSourceStructured plus the
+// `#[cfg(...)]` pre-resolve filter. Pass nil to disable filtering while
+// still receiving E0405/E0739 validation diagnostics on malformed cfg args.
+func ResolveSourceStructuredWithCfg(src []byte, cfg *CfgEnv) ResolveResult {
 	lexed := ostyLexSource(string(src))
 	if lexed == nil {
 		return ResolveResult{}
@@ -104,7 +140,7 @@ func ResolveSourceStructured(src []byte) ResolveResult {
 	}
 	rt := newRuneTable(lexed.source)
 	return adaptResolveResult(
-		selfResolveAstFile(file),
+		selfResolveAstFileWithCfg(file, cfg.toSelf()),
 		file,
 		func(start, end int) (int, int) {
 			return checkNodeOffsets(rt, lexed.stream, start, end)
@@ -170,8 +206,9 @@ func ResolveStructuredFromRunForPath(run *FrontendRun, path string) ResolveResul
 
 // ResolvePackageStructured lowers one structured package input into a
 // synthetic selfhost AST and runs the self-host resolver over the merged
-// package namespace.
+// package namespace. Cfg filtering activates when input.Cfg is non-nil.
 func ResolvePackageStructured(input PackageResolveInput) (ResolveResult, error) {
+	cfg := input.Cfg.toSelf()
 	if selfhostCanBuildPackageAstDirect(input.Files) {
 		file, _, err := selfhostBuildPackageAstDirect(input.Files)
 		if err == nil {
@@ -179,7 +216,7 @@ func ResolvePackageStructured(input PackageResolveInput) (ResolveResult, error) 
 				return ResolveResult{}, nil
 			}
 			result := adaptResolveResult(
-				selfResolveAstFile(file),
+				selfResolveAstFileWithCfg(file, cfg),
 				file,
 				func(start, end int) (int, int) {
 					if end < start {
@@ -204,7 +241,7 @@ func ResolvePackageStructured(input PackageResolveInput) (ResolveResult, error) 
 		return ResolveResult{}, nil
 	}
 	result := adaptResolveResult(
-		selfResolveAstFile(file),
+		selfResolveAstFileWithCfg(file, cfg),
 		file,
 		func(start, end int) (int, int) {
 			return checkNodeOffsetsWithTokenLayout(layout, start, end)

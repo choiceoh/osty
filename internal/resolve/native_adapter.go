@@ -88,9 +88,27 @@ func nativeResolveArtifacts(pkg *Package) (selfhost.ResolveResult, []nativeResol
 	return pkg.nativeResolve.result, pkg.nativeResolve.files, pkg.nativeResolve.err
 }
 
+// nativeCfgEnvFor picks the `#[cfg(...)]` evaluation env the native resolver
+// should use for pkg. Matches the legacy ResolveAll behaviour: when the
+// package is attached to a workspace it inherits the workspace env (or
+// DefaultCfgEnv when the workspace hasn't set one), so cross-compilation
+// flags populate both paths identically. Standalone packages (no workspace)
+// stay unfiltered.
+func nativeCfgEnvFor(pkg *Package) *selfhost.CfgEnv {
+	if pkg == nil || pkg.workspace == nil {
+		return nil
+	}
+	env := pkg.workspace.cfgEnv
+	if env == nil {
+		env = DefaultCfgEnv()
+	}
+	return env.toSelfhost()
+}
+
 func nativeResolveInput(pkg *Package) (selfhost.PackageResolveInput, []nativeResolveFileInfo, error) {
 	input := selfhost.PackageResolveInput{
 		Files: make([]selfhost.PackageResolveFile, 0, len(pkg.Files)),
+		Cfg:   nativeCfgEnvFor(pkg),
 	}
 	files := make([]nativeResolveFileInfo, 0, len(pkg.Files))
 	base := 0
