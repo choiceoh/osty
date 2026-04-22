@@ -1,18 +1,16 @@
 // std.io — console I/O.
 //
 // `print`, `println`, `eprint`, `eprintln`, `readLine` are the full
-// Tier 1 surface. All five except `readLine` are prelude-aliased so
-// user code can call them unqualified. Bodies are placeholders; the
-// transpiler emits the actual stdio calls.
+// Tier 1 surface. All five are backend-owned declarations; the output
+// helpers are prelude-aliased while `readLine` is module-qualified.
+// The LLVM lowering routes them to the runtime stdio helpers.
 
-pub fn print(s: String) {}
+pub fn print(s: String)
 
-pub fn println(s: String) {}
+pub fn println(s: String)
 
-pub fn eprint(s: String) {}
+pub fn eprint(s: String)
 
-pub fn eprintln(s: String) {}
+pub fn eprintln(s: String)
 
-pub fn readLine() -> String {
-    ""
-}
+pub fn readLine() -> String

@@ -1231,8 +1231,8 @@ pub fn mirModule(packageName: String) -> MirModule {
 
 pub fn mirModuleLookupFunction(m: MirModule, symbol: String) -> Int {
     let mut i = 0
-    for func in m.functions {
-        if func.name == symbol {
+    for f in m.functions {
+        if f.name == symbol {
             return i
         }
         i = i + 1
@@ -1341,8 +1341,8 @@ pub fn mirPrintModule(m: MirModule) -> String {
     for g in m.globals {
         parts.push("\n{mirPrintGlobal(g)}")
     }
-    for func in m.functions {
-        parts.push("\n{mirPrintFunction(func)}")
+    for f in m.functions {
+        parts.push("\n{mirPrintFunction(f)}")
     }
     strings.join(parts, "")
 }

@@ -188,12 +188,13 @@ pub fn hirRewriteBlockTypes(b: HirBlock, env: HirSubstEnv) {
 /// This is the "shallow" version used by the decl-cloner before
 /// full body scanning. The scanner's recursive walk handles
 /// nested blocks / expressions.
-pub fn hirRewriteFnDeclTypes(decl: HirFnDecl, env: HirSubstEnv) {
+pub fn hirRewriteFnDeclTypes(decl: HirFnDecl, env: HirSubstEnv) -> HirFnDecl {
+    let mut out = decl
     // Return type.
-    decl.ret = hirSubstType(decl.ret, env)
+    out.ret = hirSubstType(out.ret, env)
     // Parameters.
     let mut rewrittenParams: List<HirParam> = []
-    for p in decl.params {
+    for p in out.params {
         let mut np = p
         np.typ = hirSubstType(np.typ, env)
         if np.hasDefault {
@@ -201,12 +202,12 @@ pub fn hirRewriteFnDeclTypes(decl: HirFnDecl, env: HirSubstEnv) {
         }
         rewrittenParams.push(np)
     }
-    decl.params = rewrittenParams
+    out.params = rewrittenParams
     // Generic bounds (the specialization's remaining generics —
     // usually empty after a full substitution, but keep the walk
     // defensive for partial-specialization cases).
     let mut rewrittenGenerics: List<HirTypeParam> = []
-    for gp in decl.generics {
+    for gp in out.generics {
         let mut ngp = gp
         let mut rewrittenBounds: List<HirType> = []
         for b in ngp.bounds {
@@ -215,10 +216,11 @@ pub fn hirRewriteFnDeclTypes(decl: HirFnDecl, env: HirSubstEnv) {
         ngp.bounds = rewrittenBounds
         rewrittenGenerics.push(ngp)
     }
-    decl.generics = rewrittenGenerics
+    out.generics = rewrittenGenerics
     // Top-level block type surfaces (children visited by the
     // scanner).
-    hirRewriteBlockTypes(decl.body, env)
+    hirRewriteBlockTypes(out.body, env)
+    out
 }
 
 // ====================================================================
@@ -351,7 +353,7 @@ pub fn hirRewriteStringPartTypes(parts: List<HirStringPart>, env: HirSubstEnv) {
 /// and append it to the module's decl list.
 pub fn hirSpecializeFnDecl(decl: HirFnDecl, env: HirSubstEnv) -> HirFnDecl {
     let mut clone = hirCloneFnDecl(decl)
-    hirRewriteFnDeclTypes(clone, env)
+    clone = hirRewriteFnDeclTypes(clone, env)
     clone
 }
 
@@ -366,7 +368,7 @@ pub fn hirSpecializeStructDecl(decl: HirStructDecl, env: HirSubstEnv) -> HirStru
     let mut rewrittenMethods: List<HirFnDecl> = []
     for m in clone.methods {
         let mut nm = m
-        hirRewriteFnDeclTypes(nm, env)
+        nm = hirRewriteFnDeclTypes(nm, env)
         rewrittenMethods.push(nm)
     }
     clone.methods = rewrittenMethods
@@ -389,7 +391,7 @@ pub fn hirSpecializeEnumDecl(decl: HirEnumDecl, env: HirSubstEnv) -> HirEnumDecl
     let mut rewrittenMethods: List<HirFnDecl> = []
     for m in clone.methods {
         let mut nm = m
-        hirRewriteFnDeclTypes(nm, env)
+        nm = hirRewriteFnDeclTypes(nm, env)
         rewrittenMethods.push(nm)
     }
     clone.methods = rewrittenMethods

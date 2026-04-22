@@ -1219,9 +1219,7 @@ func findOwningFile(files []selfhost.PackageCheckFile, offset int) int {
 // line/column span and the inferred type. Zero astbridge lowerings
 // on the happy path (same counter invariant as runCheckFileNative).
 func runTypecheckFileNative(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
-	run := parser.ParseRun(src)
-	parseDiags := run.Diagnostics()
-	checked := selfhost.CheckStructuredFromRun(run)
+	parseDiags, checked := selfhost.CheckFromSource(src)
 	checkDiags := selfhost.CheckDiagnosticsAsDiag(src, checked.Diagnostics)
 	for _, d := range checkDiags {
 		if d != nil && d.File == "" {
@@ -1399,9 +1397,7 @@ func runTypecheckFileLegacy(path string, src []byte, formatter *diag.Formatter, 
 // subcommand's exit code (0 clean / 1 on any error-severity
 // diagnostic).
 func runCheckFileNative(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
-	run := parser.ParseRun(src)
-	parseDiags := run.Diagnostics()
-	checked := selfhost.CheckStructuredFromRun(run)
+	parseDiags, checked := selfhost.CheckFromSource(src)
 	checkDiags := selfhost.CheckDiagnosticsAsDiag(src, checked.Diagnostics)
 	for _, d := range checkDiags {
 		if d != nil && d.File == "" {
@@ -1418,15 +1414,15 @@ func runCheckFileNative(path string, src []byte, formatter *diag.Formatter, flag
 }
 
 func runResolveFile(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
-	run := parser.ParseRun(src)
-	parseDiags := run.Diagnostics()
+	parseDiags, resolved := selfhost.ResolveFromSource(src, path)
 	var (
 		res  *resolve.Result
 		file *ast.File
 	)
 	ensureLoweredFile := func() *ast.File {
 		if file == nil {
-			file = run.File()
+			parsed, _ := parser.ParseDiagnostics(src)
+			file = parsed
 		}
 		return file
 	}
@@ -1437,10 +1433,10 @@ func runResolveFile(path string, src []byte, formatter *diag.Formatter, flags cl
 		return res
 	}
 	all := append([]*diag.Diagnostic{}, parseDiags...)
-	nativeDiags := nativeResolveFromRunDiagnostics(run, src, path)
+	nativeDiags := nativeResolveDiagnosticsFromResolved(resolved, src, path)
 	all = append(all, nativeDiags...)
 	printDiags(formatter, all, flags)
-	if rows := nativeResolveFromRunRows(run, src, path); len(rows) > 0 {
+	if rows := nativeResolveRowsFromResolved(resolved, src, path); len(rows) > 0 {
 		printNativeResolutionRows(rows)
 	} else {
 		// Native pass produced no rows — fall back to the Go
@@ -2392,6 +2388,10 @@ func runFmt(args []string) {
 		repairs = repair.Source(src)
 		formatSrc = repairs.Source
 	}
+	parserCanonical, parserCanonicalChanged := parserCanonicalFmtSource(formatSrc)
+	if parserCanonicalChanged {
+		formatSrc = parserCanonical
+	}
 	var (
 		out   []byte
 		diags []*diag.Diagnostic
@@ -2399,9 +2399,17 @@ func runFmt(args []string) {
 	)
 	switch engine {
 	case "", "go", "ast":
-		out, diags, ferr = format.Source(formatSrc)
+		if !repairMode && parserCanonicalChanged {
+			out = formatSrc
+		} else {
+			out, diags, ferr = format.Source(formatSrc)
+		}
 	case "osty":
-		out, diags, ferr = format.OstySource(formatSrc)
+		if !repairMode && parserCanonicalChanged {
+			out = formatSrc
+		} else {
+			out, diags, ferr = format.OstySource(formatSrc)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "osty fmt: unknown engine %q (want go or osty)\n", engine)
 		os.Exit(2)
@@ -2441,6 +2449,18 @@ func runFmt(args []string) {
 		fmt.Fprintf(os.Stderr, "osty fmt: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func parserCanonicalFmtSource(src []byte) ([]byte, bool) {
+	parsed := parser.ParseDetailed(src)
+	if parsed.File == nil || parsed.Provenance == nil || parsed.Provenance.Empty() {
+		return src, false
+	}
+	canonicalSrc := canonical.Source(src, parsed.File)
+	if len(canonicalSrc) == 0 || bytes.Equal(canonicalSrc, src) {
+		return src, false
+	}
+	return canonicalSrc, true
 }
 
 // runGen implements the `osty gen` subcommand: emit a single .osty

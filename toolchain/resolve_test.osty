@@ -779,3 +779,269 @@ fn testSelfResolverSkipsDidYouMeanWhenTooFar() {
         }
     }
 }
+
+fn testSelfResolverCfgDropsNonMatchingOs() {
+    let source = r"""
+            #[cfg(os = "linux")]
+            fn linuxOnly() -> Int { 42 }
+
+            #[cfg(os = "darwin")]
+            fn darwinOnly() -> Int { 99 }
+
+            fn unconditional() -> Int { 1 }
+            """
+    let env = selfResolveCfgEnv("linux", "amd64", "linux", [])
+    let result = selfResolveAstFileWithCfg(astParse(source), env)
+
+    testing.assertEq(selfResolveDiagnosticCount(result), 0)
+    testing.assert(selfResolveHasSymbol(result, "linuxOnly", "fn"))
+    testing.assert(!selfResolveHasSymbol(result, "darwinOnly", "fn"))
+    testing.assert(selfResolveHasSymbol(result, "unconditional", "fn"))
+}
+
+fn testSelfResolverCfgFeatureFlag() {
+    let source = r"""
+            #[cfg(feature = "ssl")]
+            fn withSsl() -> Int { 1 }
+
+            #[cfg(feature = "tls")]
+            fn withTls() -> Int { 2 }
+            """
+    let env = selfResolveCfgEnv("linux", "amd64", "linux", ["ssl"])
+    let result = selfResolveAstFileWithCfg(astParse(source), env)
+
+    testing.assert(selfResolveHasSymbol(result, "withSsl", "fn"))
+    testing.assert(!selfResolveHasSymbol(result, "withTls", "fn"))
+}
+
+fn testSelfResolverCfgMultipleConjoin() {
+    let source = r"""
+            #[cfg(os = "linux")]
+            #[cfg(arch = "amd64")]
+            fn linuxAmd64() -> Int { 1 }
+
+            #[cfg(os = "linux")]
+            #[cfg(arch = "arm64")]
+            fn linuxArm64() -> Int { 2 }
+            """
+    let env = selfResolveCfgEnv("linux", "amd64", "linux", [])
+    let result = selfResolveAstFileWithCfg(astParse(source), env)
+
+    testing.assert(selfResolveHasSymbol(result, "linuxAmd64", "fn"))
+    testing.assert(!selfResolveHasSymbol(result, "linuxArm64", "fn"))
+}
+
+fn testSelfResolverCfgUnknownKeyEmitsE0405() {
+    let source = r"""
+            #[cfg(bogus = "value")]
+            fn bad() -> Int { 1 }
+            """
+    let env = selfResolveCfgEnv("linux", "amd64", "linux", [])
+    let result = selfResolveAstFileWithCfg(astParse(source), env)
+
+    testing.assertEq(selfResolveCodeCount(result, "E0405"), 1)
+    // Unknown key evaluates to false — decl drops. Matches Go cfg.go.
+    testing.assert(!selfResolveHasSymbol(result, "bad", "fn"))
+}
+
+fn testSelfResolverCfgTargetMismatchDrops() {
+    let source = r"""
+            #[cfg(target = "wasm")]
+            fn wasmOnly() -> Int { 1 }
+            """
+    let env = selfResolveCfgEnv("linux", "amd64", "linux", [])
+    let result = selfResolveAstFileWithCfg(astParse(source), env)
+
+    testing.assertEq(selfResolveDiagnosticCount(result), 0)
+    testing.assert(!selfResolveHasSymbol(result, "wasmOnly", "fn"))
+}
+
+fn testSelfResolverCfgDisabledPassesEveryDecl() {
+    // Legacy callers that invoke `selfResolveAstFile(file)` must see no
+    // filtering — the disabled sentinel env keeps every decl alive.
+    let source = r"""
+            #[cfg(os = "darwin")]
+            fn darwinOnly() -> Int { 42 }
+            """
+    let result = selfResolveAstFile(astParse(source))
+    testing.assert(selfResolveHasSymbol(result, "darwinOnly", "fn"))
+}
+
+fn testSelfResolverPartialStructMergesWithoutDuplicate() {
+    let result = selfResolveSource(
+        r"""
+            pub struct Point {
+                pub x: Int,
+                pub y: Int,
+            }
+
+            pub struct Point {
+                pub fn origin() -> Self {
+                    Point { x: 0, y: 0 }
+                }
+            }
+            """,
+    )
+    testing.assertEq(selfResolveCodeCount(result, "E0501"), 0)
+    testing.assertEq(result.duplicates, 0)
+    let mut pointCount = 0
+    for sym in result.symbols {
+        if sym.name == "Point" && sym.kind == "type" {
+            pointCount = pointCount + 1
+        }
+    }
+    testing.assertEq(pointCount, 1)
+}
+
+fn testSelfResolverPartialFieldsInMultiplePartialsDiagnosed() {
+    let result = selfResolveSource(
+        r"""
+            pub struct Point {
+                pub x: Int,
+            }
+
+            pub struct Point {
+                pub y: Int,
+            }
+            """,
+    )
+    testing.assert(selfResolveCodeCount(result, "E0501") >= 1)
+    let mut sawFields = false
+    for diag in result.diagnostics {
+        if diag.code == "E0501" && strings.contains(diag.message, "fields") {
+            sawFields = true
+        }
+    }
+    testing.assert(sawFields)
+}
+
+fn testSelfResolverPartialMethodDuplicateDiagnosed() {
+    let result = selfResolveSource(
+        r"""
+            pub struct Counter {
+                pub n: Int,
+
+                pub fn reset(mut self) {
+                    self.n = 0
+                }
+            }
+
+            pub struct Counter {
+                pub fn reset(mut self) {
+                    self.n = -1
+                }
+            }
+            """,
+    )
+    let mut sawMethodDup = false
+    for diag in result.diagnostics {
+        if diag.code == "E0501" && strings.contains(diag.message, "method `reset`") {
+            sawMethodDup = true
+        }
+    }
+    testing.assert(sawMethodDup)
+}
+
+fn testSelfResolverStructEnumKindMismatchEmitsDuplicate() {
+    let result = selfResolveSource(
+        r"""
+            pub struct Color {
+                pub hex: Int,
+            }
+
+            pub enum Color {
+                Red,
+                Green,
+            }
+            """,
+    )
+    testing.assert(selfResolveCodeCount(result, "E0501") >= 1)
+    testing.assert(result.duplicates >= 1)
+}
+
+fn testSelfResolverCfgDisabledStillEmitsShapeDiags() {
+    // Shape validation (E0405 unknown key / E0739 bad arg) runs whether
+    // or not the env is enabled so tooling surfaces malformed cfg even
+    // on the legacy non-filtering path.
+    let source = r"""
+            #[cfg(bogus = "value")]
+            fn bad() -> Int { 1 }
+            """
+    let result = selfResolveAstFile(astParse(source))
+    testing.assertEq(selfResolveCodeCount(result, "E0405"), 1)
+    // Env disabled → decl survives despite the bad cfg.
+    testing.assert(selfResolveHasSymbol(result, "bad", "fn"))
+}
+
+fn testSelfDetectImportCyclesEmptyGraphHasNoDiags() {
+    let input = SelfWorkspaceUses { packages: [] }
+    let diags = selfDetectImportCycles(input)
+    testing.assertEq(diags.len(), 0)
+}
+
+fn testSelfDetectImportCyclesDagEmitsNoDiag() {
+    // a → b → c; no cycle.
+    let input = SelfWorkspaceUses {
+        packages: [
+            SelfPackageUses {
+                path: "a",
+                uses: [SelfUseEdge { target: "b", pos: 10, endPos: 11, file: "" }],
+            },
+            SelfPackageUses {
+                path: "b",
+                uses: [SelfUseEdge { target: "c", pos: 20, endPos: 21, file: "" }],
+            },
+            SelfPackageUses { path: "c", uses: [] },
+        ],
+    }
+    let diags = selfDetectImportCycles(input)
+    testing.assertEq(diags.len(), 0)
+}
+
+fn testSelfDetectImportCyclesTwoCycleEmitsOneDiag() {
+    let input = SelfWorkspaceUses {
+        packages: [
+            SelfPackageUses {
+                path: "a",
+                uses: [SelfUseEdge { target: "b", pos: 10, endPos: 11, file: "a.osty" }],
+            },
+            SelfPackageUses {
+                path: "b",
+                uses: [SelfUseEdge { target: "a", pos: 20, endPos: 21, file: "b.osty" }],
+            },
+        ],
+    }
+    let diags = selfDetectImportCycles(input)
+    testing.assertEq(diags.len(), 1)
+    let first = diags[0]
+    testing.assertEq(first.importer, "b")
+    testing.assertEq(first.target, "a")
+    testing.assertEq(first.pos, 20)
+}
+
+fn testSelfDetectImportCyclesSelfLoop() {
+    let input = SelfWorkspaceUses {
+        packages: [
+            SelfPackageUses {
+                path: "a",
+                uses: [SelfUseEdge { target: "a", pos: 5, endPos: 6, file: "a.osty" }],
+            },
+        ],
+    }
+    let diags = selfDetectImportCycles(input)
+    testing.assertEq(diags.len(), 1)
+}
+
+fn testSelfDetectImportCyclesUnknownTargetIgnored() {
+    // Edge pointing at a package not in the input (e.g. std / external).
+    let input = SelfWorkspaceUses {
+        packages: [
+            SelfPackageUses {
+                path: "a",
+                uses: [SelfUseEdge { target: "std.fs", pos: 10, endPos: 11, file: "a.osty" }],
+            },
+        ],
+    }
+    let diags = selfDetectImportCycles(input)
+    testing.assertEq(diags.len(), 0)
+}

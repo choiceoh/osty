@@ -1220,6 +1220,11 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 }
 
 func (g *generator) emitExprStmt(expr ast.Expr) error {
+	switch expr.(type) {
+	case *ast.BoolLit, *ast.IntLit, *ast.FloatLit, *ast.StringLit, *ast.CharLit, *ast.ByteLit:
+		// Pure literal statements are semantic no-ops in statement position.
+		return nil
+	}
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
 		if block, ok := expr.(*ast.Block); ok {
@@ -1241,6 +1246,9 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 		return err
 	}
 	if emitted, err := g.emitRuntimeFFICallStmt(call); emitted || err != nil {
+		return err
+	}
+	if emitted, err := g.emitStdIoCallStmt(call); emitted || err != nil {
 		return err
 	}
 	if emitted, err := g.emitOptionalUserCallStmt(call); emitted || err != nil {

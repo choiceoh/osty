@@ -2870,6 +2870,40 @@ func TestGenerateFromMIRStringInterpolationBoxesCharAndByte(t *testing.T) {
 	}
 }
 
+func TestGenerateFromMIRBinaryStringAddUsesRuntimeConcat(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "greet",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "name", Type: ir.TString}},
+		Body: &ir.Block{
+			Result: &ir.BinaryExpr{
+				Op:    ir.BinAdd,
+				Left:  &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "hi "}}},
+				Right: &ir.Ident{Name: "name", Kind: ir.IdentParam, T: ir.TString},
+				T:     ir.TString,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/string_add.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
+		"call ptr @osty_rt_strings_Concat(ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "add ptr") {
+		t.Fatalf("string add lowered to raw ptr add:\n%s", got)
+	}
+}
+
 func TestGenerateFromMIRStringInterpolationRecoversFieldExprTypes(t *testing.T) {
 	diagT := &ir.NamedType{Name: "Diag"}
 	fn := &ir.FnDecl{

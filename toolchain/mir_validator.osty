@@ -47,16 +47,16 @@ pub fn mirValidateModule(m: MirModule) -> List<String> {
     }
     let mut seenNames: List<String> = []
     let mut i = 0
-    for func in m.functions {
-        if func.name == "" {
+    for f in m.functions {
+        if f.name == "" {
             errs.push("function[{i}]: empty name")
         }
-        if listContainsString(seenNames, func.name) {
-            errs.push("function \"{func.name}\": duplicate symbol")
+        if listContainsString(seenNames, f.name) {
+            errs.push("function \"{f.name}\": duplicate symbol")
         } else {
-            seenNames.push(func.name)
+            seenNames.push(f.name)
         }
-        let fnErrs = mirValidateFunction(func)
+        let fnErrs = mirValidateFunction(f)
         for e in fnErrs {
             errs.push(e)
         }

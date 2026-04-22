@@ -1087,7 +1087,7 @@ pub fn monoEmitSpecialization(state: MonoState, rec: MonoInstance) {
     let mut spec = hirSpecializeFnDecl(rec.fnDecl, env)
     spec.name = rec.mangled
     spec.generics = []
-    monoRewriteFnSignature(state, spec)
+    spec = monoRewriteFnSignature(state, spec)
     monoScanFnBody(state, spec)
     state.out.fns.push(spec)
 }
@@ -1118,7 +1118,7 @@ pub fn monoEmitMethodSpecialization(state: MonoState, rec: MonoMethodInstance) {
     let mut spec = hirSpecializeFnDecl(rec.origMethod, env)
     spec.name = rec.mangledMethodName
     spec.generics = []
-    monoRewriteFnSignature(state, spec)
+    spec = monoRewriteFnSignature(state, spec)
     monoScanFnBody(state, spec)
     if rec.ownerKind == 0 {
         monoAppendMethodToStruct(state, rec.ownerMangled, spec)
@@ -1187,7 +1187,7 @@ fn monoSpecializeInterfaceDecl(decl: HirInterfaceDecl, env: HirSubstEnv) -> HirI
     let mut rewrittenMethods: List<HirFnDecl> = []
     for m in clone.methods {
         let mut nm = m
-        hirRewriteFnDeclTypes(nm, env)
+        nm = hirRewriteFnDeclTypes(nm, env)
         rewrittenMethods.push(nm)
     }
     clone.methods = rewrittenMethods
@@ -1253,22 +1253,24 @@ fn monoRewriteTypeList(state: MonoState, types: List<HirType>) -> List<HirType> 
     out
 }
 
-fn monoRewriteFnSignature(state: MonoState, decl: HirFnDecl) {
-    decl.ret = monoRewriteType(state, decl.ret)
+fn monoRewriteFnSignature(state: MonoState, decl: HirFnDecl) -> HirFnDecl {
+    let mut out = decl
+    out.ret = monoRewriteType(state, out.ret)
     let mut rewrittenParams: List<HirParam> = []
-    for p in decl.params {
+    for p in out.params {
         let mut np = p
         np.typ = monoRewriteType(state, np.typ)
         rewrittenParams.push(np)
     }
-    decl.params = rewrittenParams
+    out.params = rewrittenParams
     let mut rewrittenGenerics: List<HirTypeParam> = []
-    for gp in decl.generics {
+    for gp in out.generics {
         let mut ngp = gp
         ngp.bounds = monoRewriteTypeList(state, ngp.bounds)
         rewrittenGenerics.push(ngp)
     }
-    decl.generics = rewrittenGenerics
+    out.generics = rewrittenGenerics
+    out
 }
 
 fn monoRewriteFields(state: MonoState, fields: List<HirField>) -> List<HirField> {
@@ -1299,7 +1301,7 @@ fn monoPrepareOwnerMethods(state: MonoState, methods: List<HirFnDecl>) -> List<H
     for m in methods {
         let mut nm = m
         if nm.generics.len() == 0 {
-            monoRewriteFnSignature(state, nm)
+            nm = monoRewriteFnSignature(state, nm)
             monoScanFnBody(state, nm)
         }
         out.push(nm)
@@ -1596,7 +1598,9 @@ fn monoScanCall(state: MonoState, e: HirExpr) {
                     if gi >= 0 {
                         let mangled = monoRequestFn(state, state.genericFns[gi], e.callTypeArgs)
                         if mangled != "" {
-                            e.callCallee[0].identName = mangled
+                            let rewritten = e.callCallee[0]
+                            rewritten.identName = mangled
+                            e.callCallee[0] = rewritten
                             e.callTypeArgs = []
                         }
                     }
@@ -2109,28 +2113,47 @@ pub fn monoCopyScript(state: MonoState, module: HirModule) {
 }
 
 fn monoScanRoots(state: MonoState) {
-    for decl in state.out.fns {
-        monoRewriteFnSignature(state, decl)
-        monoScanFnBody(state, decl)
+    let mut fi = 0
+    for fi < state.out.fns.len() {
+        let rewritten = monoRewriteFnSignature(state, state.out.fns[fi])
+        state.out.fns[fi] = rewritten
+        monoScanFnBody(state, state.out.fns[fi])
+        fi = fi + 1
     }
-    for decl in state.out.structs {
+    let mut si = 0
+    for si < state.out.structs.len() {
+        let mut decl = state.out.structs[si]
         decl.fields = monoRewriteFields(state, decl.fields)
         decl.methods = monoPrepareOwnerMethods(state, decl.methods)
+        state.out.structs[si] = decl
+        si = si + 1
     }
-    for decl in state.out.enums {
+    let mut ei = 0
+    for ei < state.out.enums.len() {
+        let mut decl = state.out.enums[ei]
         decl.variants = monoRewriteVariantPayloads(state, decl.variants)
         decl.methods = monoPrepareOwnerMethods(state, decl.methods)
+        state.out.enums[ei] = decl
+        ei = ei + 1
     }
-    for decl in state.out.interfaces {
+    let mut ii = 0
+    for ii < state.out.interfaces.len() {
+        let mut decl = state.out.interfaces[ii]
         decl.extends = monoRewriteTypeList(state, decl.extends)
         decl.methods = monoPrepareOwnerMethods(state, decl.methods)
+        state.out.interfaces[ii] = decl
+        ii = ii + 1
     }
-    for decl in state.out.lets {
+    let mut li = 0
+    for li < state.out.lets.len() {
+        let mut decl = state.out.lets[li]
         decl.typ = monoRewriteType(state, decl.typ)
-        if decl.hasValue {
-            monoSeedVariantTypeFromContext(state, decl.typ, decl.value)
-            monoScanExpr(state, decl.value)
+        state.out.lets[li] = decl
+        if state.out.lets[li].hasValue {
+            monoSeedVariantTypeFromContext(state, state.out.lets[li].typ, state.out.lets[li].value)
+            monoScanExpr(state, state.out.lets[li].value)
         }
+        li = li + 1
     }
     for stmt in state.out.script {
         monoScanStmt(state, stmt)
@@ -2152,14 +2175,26 @@ fn monoFilterOutGenericMethods(methods: List<HirFnDecl>) -> List<HirFnDecl> {
 }
 
 fn monoDropPreservedGenericMethods(state: MonoState) {
-    for decl in state.out.structs {
+    let mut si = 0
+    for si < state.out.structs.len() {
+        let mut decl = state.out.structs[si]
         decl.methods = monoFilterOutGenericMethods(decl.methods)
+        state.out.structs[si] = decl
+        si = si + 1
     }
-    for decl in state.out.enums {
+    let mut ei = 0
+    for ei < state.out.enums.len() {
+        let mut decl = state.out.enums[ei]
         decl.methods = monoFilterOutGenericMethods(decl.methods)
+        state.out.enums[ei] = decl
+        ei = ei + 1
     }
-    for decl in state.out.interfaces {
+    let mut ii = 0
+    for ii < state.out.interfaces.len() {
+        let mut decl = state.out.interfaces[ii]
         decl.methods = monoFilterOutGenericMethods(decl.methods)
+        state.out.interfaces[ii] = decl
+        ii = ii + 1
     }
 }
 

@@ -11845,6 +11845,45 @@ void osty_rt_test_snapshot(const char *name, const char *output, const char *sou
     exit(1);
 }
 
+void osty_rt_io_write(const char *text, bool newline, bool to_stderr) {
+    FILE *out = to_stderr ? stderr : stdout;
+    const char *safe = text != NULL ? text : "";
+    fputs(safe, out);
+    if (newline) {
+        fputc('\n', out);
+    }
+    fflush(out);
+}
+
+void *osty_rt_io_read_line(void) {
+    size_t cap = 128;
+    size_t len = 0;
+    char *buf = (char *)osty_rt_xmalloc(cap, "runtime.io.read_line.buf");
+    for (;;) {
+        int ch = fgetc(stdin);
+        if (ch == EOF || ch == '\n') {
+            break;
+        }
+        if (len + 1 >= cap) {
+            size_t next_cap = cap * 2;
+            char *grown = (char *)realloc(buf, next_cap);
+            if (grown == NULL) {
+                free(buf);
+                osty_rt_abort("runtime.io.read_line: realloc failed");
+            }
+            buf = grown;
+            cap = next_cap;
+        }
+        buf[len++] = (char)ch;
+    }
+    if (len > 0 && buf[len - 1] == '\r') {
+        len--;
+    }
+    void *out = osty_rt_string_dup_site(buf, len, "runtime.io.read_line");
+    free(buf);
+    return out;
+}
+
 /* std.env command-line argument surface.
  *
  * The emitter (see internal/llvmgen/stdlib_env_shim.go) routes the Osty
@@ -11870,6 +11909,10 @@ void osty_rt_test_snapshot(const char *name, const char *output, const char *sou
  * `Map<String, String>`. Keys beginning with '=' are skipped on
  * Windows to avoid the drive-current-directory pseudo-entries the CRT
  * exposes through GetEnvironmentStringsA.
+ *
+ * `env.set(name, value)` / `env.unset(name)` return NULL on success
+ * and a freshly allocated error String on failure, matching the
+ * `Result<(), Error>` lowering used for directory mutations too.
  *
  * `env.currentDir()` duplicates the process working directory into a
  * fresh managed String on success. On failure the helper returns NULL
@@ -12011,6 +12054,71 @@ void *osty_rt_env_vars(void) {
 #endif
     osty_gc_root_release_v1(out);
     return out;
+}
+
+void *osty_rt_env_set(const char *name, const char *value) {
+    if (name == NULL) {
+        return osty_rt_env_error_message("failed to set environment variable", "name is null", "runtime.env.set.error");
+    }
+    if (value == NULL) {
+        return osty_rt_env_error_message("failed to set environment variable", "value is null", "runtime.env.set.error");
+    }
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    if (SetEnvironmentVariableA(name, value)) {
+        return NULL;
+    }
+    DWORD code = GetLastError();
+    char buf[96];
+    int written;
+    if (code == 0) {
+        return osty_rt_env_error_message("failed to set environment variable", "unknown error", "runtime.env.set.error");
+    }
+    written = snprintf(buf, sizeof(buf), "win32 error %lu", (unsigned long)code);
+    if (written < 0) {
+        return osty_rt_env_error_message("failed to set environment variable", "win32 error", "runtime.env.set.error");
+    }
+    return osty_rt_env_error_message("failed to set environment variable", buf, "runtime.env.set.error");
+#else
+    errno = 0;
+    if (setenv(name, value, 1) == 0) {
+        return NULL;
+    }
+    if (errno == 0) {
+        return osty_rt_env_error_message("failed to set environment variable", "unknown error", "runtime.env.set.error");
+    }
+    return osty_rt_env_error_message("failed to set environment variable", strerror(errno), "runtime.env.set.error");
+#endif
+}
+
+void *osty_rt_env_unset(const char *name) {
+    if (name == NULL) {
+        return osty_rt_env_error_message("failed to unset environment variable", "name is null", "runtime.env.unset.error");
+    }
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    if (SetEnvironmentVariableA(name, NULL)) {
+        return NULL;
+    }
+    DWORD code = GetLastError();
+    char buf[96];
+    int written;
+    if (code == 0) {
+        return osty_rt_env_error_message("failed to unset environment variable", "unknown error", "runtime.env.unset.error");
+    }
+    written = snprintf(buf, sizeof(buf), "win32 error %lu", (unsigned long)code);
+    if (written < 0) {
+        return osty_rt_env_error_message("failed to unset environment variable", "win32 error", "runtime.env.unset.error");
+    }
+    return osty_rt_env_error_message("failed to unset environment variable", buf, "runtime.env.unset.error");
+#else
+    errno = 0;
+    if (unsetenv(name) == 0) {
+        return NULL;
+    }
+    if (errno == 0) {
+        return osty_rt_env_error_message("failed to unset environment variable", "unknown error", "runtime.env.unset.error");
+    }
+    return osty_rt_env_error_message("failed to unset environment variable", strerror(errno), "runtime.env.unset.error");
+#endif
 }
 
 void *osty_rt_env_current_dir(void) {

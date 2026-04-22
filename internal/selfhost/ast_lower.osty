@@ -702,7 +702,7 @@ fn astLowerStringContent(s: String) -> String {
 
 fn astLowerDecodedLiteral(s: String) -> String {
     let mut raw = s
-    if strings.HasPrefix(raw, "b") {
+    if strings.HasPrefix(raw, "b'") {
         raw = strings.TrimPrefix(raw, "b")
     }
     if strings.HasPrefix(raw, "'") && strings.HasSuffix(raw, "'") {

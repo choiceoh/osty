@@ -48,6 +48,7 @@ type generator struct {
 	runtimeFFI        map[string]map[string]*runtimeFFIFunction
 	runtimeFFIPaths   map[string]string
 	testingAliases    map[string]bool
+	stdIoAliases      map[string]bool
 	stdBytesAliases   map[string]bool
 	stdStringsAliases map[string]bool
 	stdEnvAliases     map[string]bool

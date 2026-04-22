@@ -1328,8 +1328,8 @@ pub fn llvmNativeEmitModule(module: LlvmNativeModule) -> String {
             "{global.irName} = internal {kind} {global.llvmType} {global.init}",
         )
     }
-    for function in module.functions {
-        let rendered = llvmNativeEmitFunction(function, module.globals, nextStringId)
+    for fnDecl in module.functions {
+        let rendered = llvmNativeEmitFunction(fnDecl, module.globals, nextStringId)
         nextStringId = rendered.nextStringId
         definitions.push(rendered.definition)
         for global in rendered.stringGlobals {
@@ -1640,7 +1640,7 @@ fn llvmNativeEmitFieldAssign(emitter: LlvmEmitter, stmt: LlvmNativeStmt) {
     }
     let mut next = value
     let mut i = stmt.fieldPath.len()
-    while i > 0 {
+    for i > 0 {
         i = i - 1
         let step = stmt.fieldPath[i]
         next = llvmInsertValue(emitter, levels[i], next, step.fieldIndex)
@@ -1715,7 +1715,7 @@ fn llvmNativeEvalListLit(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValu
 fn llvmNativeEvalMapLit(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
     let m = llvmMapNew(emitter)
     let mut i = 0
-    while i + 1 < expr.childExprs.len() {
+    for i + 1 < expr.childExprs.len() {
         let key = llvmNativeEvalExpr(emitter, expr.childExprs[i])
         let value = llvmNativeEvalExpr(emitter, expr.childExprs[i + 1])
         let slot = llvmSpillToSlot(emitter, value)
@@ -1865,7 +1865,7 @@ fn llvmNativeEvalCall(emitter: LlvmEmitter, expr: LlvmNativeExpr) -> LlvmValue {
     if restoreProjectedReceiver {
         let mut next = llvmLoadFromSlot(emitter, projectedRecvSlot, projectedLeafType)
         let mut i = expr.receiverPath.len()
-        while i > 0 {
+        for i > 0 {
             i = i - 1
             let step = expr.receiverPath[i]
             next = llvmInsertValue(emitter, projectedAggregates[i], next, step.fieldIndex)

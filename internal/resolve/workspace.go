@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -464,10 +465,17 @@ type importCycleDiag struct {
 
 // detectCycles walks the import graph induced by every loaded package's
 // `use` declarations and returns one diagnostic per edge that completes
-// a cycle. Stub/cycle-marker packages contribute no edges.
+// a cycle. Stub/cycle-marker packages contribute no edges. The DFS
+// itself lives in toolchain/resolve.osty::selfDetectImportCycles —
+// this Go side prepares the graph, dispatches to the Osty algorithm,
+// and reconstructs rich diag.Diagnostic objects from the returned
+// offset-based CycleDiag records.
 func (w *Workspace) detectCycles() []importCycleDiag {
 	// Build adjacency with positions so diagnostics can point at the
-	// exact `use` statement that closes the cycle.
+	// exact `use` statement that closes the cycle. The selfhost
+	// algorithm round-trips pos as an offset only; keeping the
+	// token.Pos here lets us restore Line/Column when rendering
+	// the diagnostic.
 	type edge struct {
 		target string
 		pos    token.Pos
@@ -490,43 +498,52 @@ func (w *Workspace) detectCycles() []importCycleDiag {
 			}
 		}
 	}
-	var out []importCycleDiag
-	state := map[string]int{} // 0 unvisited, 1 on stack, 2 done
-	var dfs func(n string)
-	dfs = func(n string) {
-		if state[n] == 2 {
-			return
-		}
-		state[n] = 1
-		for _, e := range adj[n] {
-			if state[e.target] == 1 {
-				out = append(out, importCycleDiag{
-					importer: n,
-					diag: diag.New(diag.Error,
-						fmt.Sprintf("cyclic import: `%s` imports `%s` which (transitively) imports `%s`",
-							n, e.target, n)).
-						Code(diag.CodeCyclicImport).
-						PrimaryPos(e.pos, "completes an import cycle").
-						Note("v0.2 §5.4: package imports must form a DAG").
-						Hint("break the cycle by extracting the shared names into a third package that both sides import").
-						Build(),
-				})
-				continue
-			}
-			if state[e.target] == 0 {
-				dfs(e.target)
-			}
-		}
-		state[n] = 2
-	}
-	// Stable iteration for deterministic diagnostic order.
+	// Stable iteration for deterministic diagnostic order — mirrors
+	// the previous in-process DFS, which sorted adj keys before DFS.
 	keys := make([]string, 0, len(adj))
 	for k := range adj {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
+
+	input := selfhost.WorkspaceUses{Packages: make([]selfhost.PackageUses, 0, len(keys))}
 	for _, k := range keys {
-		dfs(k)
+		uses := make([]selfhost.UseEdge, 0, len(adj[k]))
+		for _, e := range adj[k] {
+			uses = append(uses, selfhost.UseEdge{
+				Target: e.target,
+				Pos:    e.pos.Offset,
+			})
+		}
+		input.Packages = append(input.Packages, selfhost.PackageUses{
+			Path: k,
+			Uses: uses,
+		})
+	}
+	cycles := selfhost.DetectImportCycles(input)
+
+	out := make([]importCycleDiag, 0, len(cycles))
+	for _, cd := range cycles {
+		// Re-find the original token.Pos via (target, pos offset) —
+		// multiple edges between the same nodes may exist (one
+		// package importing another twice from different files) so
+		// match on offset, not just target.
+		var pos token.Pos
+		for _, e := range adj[cd.Importer] {
+			if e.target == cd.Target && e.pos.Offset == cd.Pos {
+				pos = e.pos
+				break
+			}
+		}
+		out = append(out, importCycleDiag{
+			importer: cd.Importer,
+			diag: diag.New(diag.Error, cd.Message).
+				Code(diag.CodeCyclicImport).
+				PrimaryPos(pos, "completes an import cycle").
+				Note("v0.2 §5.4: package imports must form a DAG").
+				Hint("break the cycle by extracting the shared names into a third package that both sides import").
+				Build(),
+		})
 	}
 	return out
 }

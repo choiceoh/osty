@@ -27,6 +27,7 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 // CfgEnv carries the values that `#[cfg(key = "value")]` predicates
@@ -59,6 +60,27 @@ func DefaultCfgEnv() *CfgEnv {
 		Arch:     runtime.GOARCH,
 		Target:   runtime.GOOS,
 		Features: map[string]bool{},
+	}
+}
+
+// toSelfhost projects this Go-side CfgEnv onto the selfhost.CfgEnv the
+// bootstrapped resolver consumes. Returns nil for a nil receiver so the
+// native path inherits "no filtering" behaviour without extra casing.
+func (c *CfgEnv) toSelfhost() *selfhost.CfgEnv {
+	if c == nil {
+		return nil
+	}
+	features := make([]string, 0, len(c.Features))
+	for name, enabled := range c.Features {
+		if enabled {
+			features = append(features, name)
+		}
+	}
+	return &selfhost.CfgEnv{
+		OS:       c.OS,
+		Arch:     c.Arch,
+		Target:   c.Target,
+		Features: features,
 	}
 }
 

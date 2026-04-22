@@ -1,5 +1,7 @@
 package selfhost
 
+import "github.com/osty/osty/internal/diag"
+
 // CheckSummary is the exported Go shape for the bootstrapped Osty checker.
 //
 // The self-hosted checker is authoritative for mainstream checker diagnostics
@@ -104,6 +106,20 @@ func CheckSourceStructured(src []byte) CheckResult {
 	result := adaptCheckResult(checked, lexed)
 	selfhostAppendIntrinsicBodyGateForSource(&result, src)
 	return result
+}
+
+// CheckFromSource parses src, runs the bootstrapped Osty checker, and
+// returns parse-level diagnostics plus the structured check result in
+// one pass. Callers that previously threaded a *FrontendRun through
+// their CLI layer should prefer this entry point: it keeps the
+// FrontendRun internal so cmd/osty does not need the selfhost type to
+// cross its call boundary.
+func CheckFromSource(src []byte) ([]*diag.Diagnostic, CheckResult) {
+	run := Run(src)
+	if run == nil {
+		return nil, CheckResult{}
+	}
+	return run.Diagnostics(), CheckStructuredFromRun(run)
 }
 
 // CheckStructuredFromRun runs the bootstrapped Osty checker directly

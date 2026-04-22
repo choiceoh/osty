@@ -12,6 +12,118 @@ type PackageResolveFile = PackageCheckFile
 // so the self-host resolver can see one shared top-level namespace.
 type PackageResolveInput struct {
 	Files []PackageResolveFile `json:"files,omitempty"`
+	// Cfg, when non-nil, activates the `#[cfg(key = "value")]` pre-resolve
+	// filter per LANG_SPEC v0.5 §5 / G29. A nil Cfg leaves every decl
+	// alive (cfg shape validation still emits E0405/E0739 either way).
+	Cfg *CfgEnv `json:"cfg,omitempty"`
+}
+
+// UseEdge is one `use <target>` edge in the workspace import graph.
+// Pos / EndPos are source offsets pointing at the use site; callers
+// render them into line/column via their own source-map when emitting
+// diagnostics.
+type UseEdge struct {
+	Target string
+	Pos    int
+	EndPos int
+	File   string
+}
+
+// PackageUses groups every non-FFI use edge emitted by one package.
+// Path is the dotted package key (same format as
+// internal/resolve::UseKey).
+type PackageUses struct {
+	Path string
+	Uses []UseEdge
+}
+
+// WorkspaceUses is the cross-package input accepted by
+// DetectImportCycles. Callers should sort Packages lexicographically
+// by Path so the diagnostic emission order stays deterministic — the
+// detector respects the given order verbatim.
+type WorkspaceUses struct {
+	Packages []PackageUses
+}
+
+// CycleDiag is one cyclic-import diagnostic record carrying the edge
+// that closed the cycle. Callers convert this to a rich
+// diag.Diagnostic by rendering Pos / EndPos through their source map.
+type CycleDiag struct {
+	Importer string
+	Target   string
+	Pos      int
+	EndPos   int
+	File     string
+	Message  string
+}
+
+// DetectImportCycles walks the given workspace graph and returns one
+// CycleDiag per edge that completes a cycle. Targets absent from
+// Packages are ignored (matches the Go resolver's existing
+// behaviour: stub / external-dep packages contribute no edges). The
+// underlying DFS lives in toolchain/resolve.osty; callers on the Go
+// side build the graph, dispatch here, and translate the returned
+// diagnostics back into the host's diag.Diagnostic format.
+func DetectImportCycles(input WorkspaceUses) []CycleDiag {
+	self := toSelfWorkspaceUses(input)
+	diags := selfDetectImportCycles(self)
+	out := make([]CycleDiag, 0, len(diags))
+	for _, d := range diags {
+		out = append(out, CycleDiag{
+			Importer: d.importer,
+			Target:   d.target,
+			Pos:      d.pos,
+			EndPos:   d.endPos,
+			File:     d.file,
+			Message:  d.message,
+		})
+	}
+	return out
+}
+
+func toSelfWorkspaceUses(w WorkspaceUses) *SelfWorkspaceUses {
+	packages := make([]*SelfPackageUses, 0, len(w.Packages))
+	for _, p := range w.Packages {
+		uses := make([]*SelfUseEdge, 0, len(p.Uses))
+		for _, e := range p.Uses {
+			uses = append(uses, &SelfUseEdge{
+				target: e.Target,
+				pos:    e.Pos,
+				endPos: e.EndPos,
+				file:   e.File,
+			})
+		}
+		packages = append(packages, &SelfPackageUses{
+			path: p.Path,
+			uses: uses,
+		})
+	}
+	return &SelfWorkspaceUses{packages: packages}
+}
+
+// CfgEnv carries the values that `#[cfg(...)]` predicates compare against.
+// Mirrors toolchain/resolve.osty::SelfResolveCfgEnv and the internal/resolve
+// Go-side CfgEnv — kept as a separate type so the selfhost package has no
+// cycle with internal/resolve.
+type CfgEnv struct {
+	OS       string   `json:"os,omitempty"`
+	Arch     string   `json:"arch,omitempty"`
+	Target   string   `json:"target,omitempty"`
+	Features []string `json:"features,omitempty"`
+}
+
+// toSelf converts the external CfgEnv into the selfhost-generated struct the
+// Osty resolver consumes. A nil receiver maps to the disabled sentinel so
+// the walk behaves identically to callers that never passed an env.
+func (c *CfgEnv) toSelf() *SelfResolveCfgEnv {
+	if c == nil {
+		return selfResolveCfgDisabled()
+	}
+	features := c.Features
+	if features == nil {
+		features = []string{}
+	}
+	return selfResolveCfgEnv(c.OS, c.Arch, c.Target, features)
 }
 
 // ResolveSummary is the exported Go summary for the bootstrapped Osty
@@ -96,6 +208,13 @@ func ResolveSource(src []byte) ResolveSummary {
 // ResolveSourceStructured runs the bootstrapped Osty resolver over one source
 // string and returns the structured result.
 func ResolveSourceStructured(src []byte) ResolveResult {
+	return ResolveSourceStructuredWithCfg(src, nil)
+}
+
+// ResolveSourceStructuredWithCfg is ResolveSourceStructured plus the
+// `#[cfg(...)]` pre-resolve filter. Pass nil to disable filtering while
+// still receiving E0405/E0739 validation diagnostics on malformed cfg args.
+func ResolveSourceStructuredWithCfg(src []byte, cfg *CfgEnv) ResolveResult {
 	lexed := ostyLexSource(string(src))
 	if lexed == nil {
 		return ResolveResult{}
@@ -106,7 +225,7 @@ func ResolveSourceStructured(src []byte) ResolveResult {
 	}
 	rt := newRuneTable(lexed.source)
 	return adaptResolveResult(
-		selfResolveAstFile(file),
+		selfResolveAstFileWithCfg(file, cfg.toSelf()),
 		file,
 		func(start, end int) (int, int) {
 			return checkNodeOffsets(rt, lexed.stream, start, end)
@@ -185,8 +304,10 @@ func ResolveStructuredFromRunForPath(run *FrontendRun, path string) ResolveResul
 // ResolvePackageStructured re-parses each input file via the self-host
 // lexer + parser, merges the per-file AstArenas into a synthetic package
 // arena, and runs the self-host resolver over the merged namespace.
-// Source text is the sole AST ingress — no *ast.File round-trip.
+// Source text is the sole AST ingress — no *ast.File round-trip. Cfg
+// filtering activates when input.Cfg is non-nil.
 func ResolvePackageStructured(input PackageResolveInput) (ResolveResult, error) {
+	cfg := input.Cfg.toSelf()
 	file, layout, err := selfhostBuildPackageAst(input.Files)
 	if err != nil {
 		return ResolveResult{}, err
@@ -195,7 +316,7 @@ func ResolvePackageStructured(input PackageResolveInput) (ResolveResult, error) 
 		return ResolveResult{}, nil
 	}
 	result := adaptResolveResult(
-		selfResolveAstFile(file),
+		selfResolveAstFileWithCfg(file, cfg),
 		file,
 		func(start, end int) (int, int) {
 			return checkNodeOffsetsWithTokenLayout(layout, start, end)

@@ -225,3 +225,67 @@ fn main() {
 		}
 	}
 }
+
+// `env.set(name, value)` should lower to the runtime helper and
+// preserve the Result<(), Error> source type so `match` keeps compiling.
+func TestStdEnvSetRoutesToRuntimeAndKeepsResultSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.env as osenv
+
+fn main() {
+    match osenv.set("HOME", "/tmp/demo") {
+        Ok(_) -> println("ok"),
+        Err(err) -> println(err.message()),
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_env_set.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_env_set(ptr, ptr)",
+		"call ptr @osty_rt_env_set(ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// `env.unset(name)` should lower to the runtime helper and preserve
+// the Result<(), Error> source type so `match` keeps compiling.
+func TestStdEnvUnsetRoutesToRuntimeAndKeepsResultSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.env as osenv
+
+fn main() {
+    match osenv.unset("HOME") {
+        Ok(_) -> println("ok"),
+        Err(err) -> println(err.message()),
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_env_unset.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_env_unset(ptr)",
+		"call ptr @osty_rt_env_unset(ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}

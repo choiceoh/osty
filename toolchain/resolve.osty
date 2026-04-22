@@ -25,6 +25,29 @@ pub struct SelfResolveDiagnostic {
     pub hint: String,
 }
 
+/// SelfPartialDecl tracks one struct/enum name that may be declared across
+/// multiple files in a package per LANG_SPEC v0.5 §3.4 / grammar R19.
+/// The resolver accumulates state as it walks each partial declaration so
+/// later partials can be validated against earlier ones — pub visibility,
+/// generic-parameter list, fields-in-one-place, and cross-declaration
+/// method-name uniqueness.
+pub struct SelfPartialDecl {
+    pub name: String,
+    pub kind: String,
+    pub firstNode: Int,
+    pub firstStart: Int,
+    pub firstEnd: Int,
+    pub firstPub: Bool,
+    pub firstGenerics: List<String>,
+    pub methodNames: List<String>,
+    pub methodStarts: List<Int>,
+    pub methodEnds: List<Int>,
+    pub methodNodes: List<Int>,
+    pub hasFields: Bool,
+    pub firstFieldsStart: Int,
+    pub firstFieldsEnd: Int,
+}
+
 /// SelfResolveResult contains package symbols plus resolver diagnostics and
 /// references collected while walking lexical scopes in function bodies.
 pub struct SelfResolveResult {
@@ -41,6 +64,33 @@ pub struct SelfResolveResult {
     pub refTargetEnds: List<Int>,
     pub unresolved: Int,
     pub duplicates: Int,
+    /// partials is scratch state used by the top-level collect pass to
+    /// detect R19 violations across partial struct/enum declarations.
+    /// Consumers of SelfResolveResult can ignore this field — it stays
+    /// in the struct so the pass can thread state through the existing
+    /// walker signatures without extra tuple returns.
+    pub partials: List<SelfPartialDecl>,
+}
+
+/// SelfResolveCfgEnv carries the `#[cfg(key = "value")]` evaluation
+/// context per LANG_SPEC v0.5 §5 / G29. When `enabled` is false every
+/// `#[cfg(...)]` guard is treated as passing — callers that want
+/// conditional filtering must construct an env with `enabled = true`.
+/// Malformed cfg arguments (E0405 unknown-key, E0739 non-string value)
+/// are diagnosed regardless of `enabled` so tooling sees the same
+/// validation errors whether or not filtering is active.
+///
+/// v0.5 scope: simple `key = "value"` form with keys `os`, `target`,
+/// `arch`, `feature`. Composite `all(...) / any(...) / not(...)` forms
+/// are deferred until the annotation-argument grammar grows nested
+/// function-like calls. Multiple `#[cfg(...)]` on one decl are
+/// conjoined.
+pub struct SelfResolveCfgEnv {
+    pub enabled: Bool,
+    pub os: String,
+    pub arch: String,
+    pub target: String,
+    pub features: List<String>,
 }
 
 pub fn selfSymbol(
@@ -118,6 +168,7 @@ pub fn emptySelfResolveResult() -> SelfResolveResult {
         refTargetEnds: [],
         unresolved: 0,
         duplicates: 0,
+        partials: [],
     }
 }
 
@@ -128,11 +179,142 @@ pub fn selfResolveSource(source: String) -> SelfResolveResult {
 }
 
 pub fn selfResolveAstFile(file: AstFile) -> SelfResolveResult {
+    selfResolveAstFileWithCfg(file, selfResolveCfgDisabled())
+}
+
+/// selfResolveCfgDisabled constructs a sentinel env whose `enabled` flag is
+/// false — the resolver treats every `#[cfg(...)]` guard as passing while
+/// still emitting shape-validation diagnostics for malformed args.
+pub fn selfResolveCfgDisabled() -> SelfResolveCfgEnv {
+    SelfResolveCfgEnv { enabled: false, os: "", arch: "", target: "", features: [] }
+}
+
+/// selfResolveCfgEnv builds an enabled env from the host-derived values that
+/// `#[cfg(os = ...)]`, `#[cfg(arch = ...)]`, `#[cfg(target = ...)]`, and
+/// `#[cfg(feature = ...)]` predicates compare against.
+pub fn selfResolveCfgEnv(
+    os: String,
+    arch: String,
+    target: String,
+    features: List<String>,
+) -> SelfResolveCfgEnv {
+    SelfResolveCfgEnv { enabled: true, os, arch, target, features }
+}
+
+pub fn selfResolveAstFileWithCfg(file: AstFile, cfg: SelfResolveCfgEnv) -> SelfResolveResult {
     let mut result = emptySelfResolveResult()
-    result = selfResolveAstCollectTopLevel(file, result)
+    result = selfResolveAstCollectTopLevel(file, cfg, result)
     let scope = srRootScope(result)
-    result = selfResolveAstScanFunctions(file, scope, result)
+    result = selfResolveAstScanFunctions(file, cfg, scope, result)
     result
+}
+
+/// SelfUseEdge is one `use target.path` edge in the workspace import
+/// graph. `pos` / `endPos` are source offsets pointing at the use site
+/// that introduced the edge — cycle diagnostics anchor on them.
+pub struct SelfUseEdge {
+    pub target: String,
+    pub pos: Int,
+    pub endPos: Int,
+    pub file: String,
+}
+
+/// SelfPackageUses groups every non-FFI `use` edge emitted by one
+/// package. `path` is the dotted package key (same format as `UseKey`
+/// in internal/resolve).
+pub struct SelfPackageUses {
+    pub path: String,
+    pub uses: List<SelfUseEdge>,
+}
+
+/// SelfWorkspaceUses is the cross-package input accepted by
+/// `selfDetectImportCycles`. Callers should pre-sort `packages` by
+/// `path` so the diagnostic emission order is deterministic — the
+/// algorithm respects the given order.
+pub struct SelfWorkspaceUses {
+    pub packages: List<SelfPackageUses>,
+}
+
+/// SelfCycleDiag is one `E0506` cyclic-import diagnostic carrying the
+/// edge that closed the cycle. The rendered message matches the Go
+/// resolver's existing wording (v0.2 §5.4) so golden snapshots stay
+/// stable whether the diag is produced by Go or Osty.
+pub struct SelfCycleDiag {
+    pub importer: String,
+    pub target: String,
+    pub pos: Int,
+    pub endPos: Int,
+    pub file: String,
+    pub message: String,
+}
+
+struct SelfCycleState {
+    colors: List<Int>,
+    out: List<SelfCycleDiag>,
+}
+
+/// selfDetectImportCycles walks the workspace import graph and emits one
+/// SelfCycleDiag per edge that completes a cycle. Mirrors
+/// internal/resolve/workspace.go::detectCycles — DFS with a tri-state
+/// colour array (0=unvisited, 1=on-stack, 2=done). Targets absent from
+/// `input.packages` are ignored (matches the Go behaviour: stub and
+/// external-dep packages contribute no edges).
+pub fn selfDetectImportCycles(input: SelfWorkspaceUses) -> List<SelfCycleDiag> {
+    let mut paths: List<String> = []
+    let mut usesLists: List<List<SelfUseEdge>> = []
+    for pkg in input.packages {
+        paths.push(pkg.path)
+        usesLists.push(pkg.uses)
+    }
+    let mut colors: List<Int> = []
+    for p in paths {
+        let _keep = p
+        colors.push(0)
+    }
+    let mut state = SelfCycleState { colors, out: [] }
+    let mut idx = 0
+    for p in paths {
+        let _keep = p
+        state = selfCycleDfs(idx, paths, usesLists, state)
+        idx = idx + 1
+    }
+    state.out
+}
+
+fn selfCycleDfs(
+    idx: Int,
+    paths: List<String>,
+    usesLists: List<List<SelfUseEdge>>,
+    state: SelfCycleState,
+) -> SelfCycleState {
+    if state.colors[idx] == 2 {
+        return state
+    }
+    let mut out = state
+    out.colors[idx] = 1
+    for edge in usesLists[idx] {
+        let targetIdx = srStringListIndex(paths, edge.target)
+        if targetIdx < 0 {
+            continue
+        }
+        if out.colors[targetIdx] == 1 {
+            let message = "cyclic import: `" + paths[idx] + "` imports `" + edge.target + "` which (transitively) imports `" + paths[idx] + "`"
+            out.out.push(SelfCycleDiag {
+                importer: paths[idx],
+                target: edge.target,
+                pos: edge.pos,
+                endPos: edge.endPos,
+                file: edge.file,
+                message,
+            })
+            continue
+        }
+        if out.colors[targetIdx] == 0 {
+            out = selfCycleDfs(targetIdx, paths, usesLists, out)
+        }
+    }
+    out.colors[idx] = 2
+    out
 }
 
 pub fn selfResolveDiagnosticCount(result: SelfResolveResult) -> Int {
@@ -408,20 +590,37 @@ fn srScopeHas(scope: SelfResolveScope, name: String) -> Bool {
     srScopeLookup(scope, name).name != ""
 }
 
-fn selfResolveAstCollectTopLevel(file: AstFile, result: SelfResolveResult) -> SelfResolveResult {
+fn selfResolveAstCollectTopLevel(
+    file: AstFile,
+    cfg: SelfResolveCfgEnv,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
     let mut out = result
     for declIdx in file.arena.decls {
-        out = srAstCollectDecl(file, declIdx, out)
+        out = srAstCollectDecl(file, declIdx, cfg, out)
     }
     out
 }
 
-fn srAstCollectDecl(file: AstFile, idx: Int, result: SelfResolveResult) -> SelfResolveResult {
+fn srAstCollectDecl(
+    file: AstFile,
+    idx: Int,
+    cfg: SelfResolveCfgEnv,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
     if idx < 0 {
         return result
     }
     let node = srAstNode(file, idx)
-    let mut out = result
+    // cfg arg shape validation runs whether or not the decl will drop —
+    // tooling surfaces E0405/E0739 on malformed cfg even when the filter
+    // would have removed the decl. The main annotation walk below does
+    // NOT re-validate cfg (see srCheckAnnotationArgs) so diags don't
+    // double-fire for decls that survive.
+    let mut out = srValidateCfgAnnotationsOnDecl(file, node.extra, result)
+    if !srCfgDeclPasses(file, node, cfg) {
+        return out
+    }
     if node.kind == AstNUseDecl {
         let alias = srAstUseAlias(file, node)
         if alias != "" {
@@ -433,7 +632,11 @@ fn srAstCollectDecl(file: AstFile, idx: Int, result: SelfResolveResult) -> SelfR
     } else if node.kind == AstNFnDecl {
         out = srAstAddFunctionSymbol(file, idx, out)
         out = srCheckDeclAnnotations(file, node.extra, srAnnotTargetTopLevel(), out)
-    } else if node.kind == AstNStructDecl || node.kind == AstNInterfaceDecl || node.kind == AstNTypeAlias {
+    } else if node.kind == AstNStructDecl {
+        out = srHandlePartialType(file, node, idx, "struct", out)
+        out = srCheckDeclAnnotations(file, node.extra, srAnnotTargetTopLevel(), out)
+        out = srCheckTypeMemberAnnotations(file, node, out)
+    } else if node.kind == AstNInterfaceDecl || node.kind == AstNTypeAlias {
         out = srAddSymbol(
             out,
             selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, node.flags == 1, idx),
@@ -441,10 +644,7 @@ fn srAstCollectDecl(file: AstFile, idx: Int, result: SelfResolveResult) -> SelfR
         out = srCheckDeclAnnotations(file, node.extra, srAnnotTargetTopLevel(), out)
         out = srCheckTypeMemberAnnotations(file, node, out)
     } else if node.kind == AstNEnumDecl {
-        out = srAddSymbol(
-            out,
-            selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, node.flags == 1, idx),
-        )
+        out = srHandlePartialType(file, node, idx, "enum", out)
         out = srCheckDeclAnnotations(file, node.extra, srAnnotTargetTopLevel(), out)
         for memberIdx in node.children {
             let member = srAstNode(file, memberIdx)
@@ -531,12 +731,13 @@ fn srAstAddFunctionSymbol(
 
 fn selfResolveAstScanFunctions(
     file: AstFile,
+    cfg: SelfResolveCfgEnv,
     scope: SelfResolveScope,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     let mut out = result
     for declIdx in file.arena.decls {
-        out = srAstScanFunctionsInDecl(file, declIdx, scope, out)
+        out = srAstScanFunctionsInDecl(file, declIdx, cfg, scope, out)
     }
     out
 }
@@ -544,6 +745,7 @@ fn selfResolveAstScanFunctions(
 fn srAstScanFunctionsInDecl(
     file: AstFile,
     idx: Int,
+    cfg: SelfResolveCfgEnv,
     scope: SelfResolveScope,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
@@ -551,6 +753,9 @@ fn srAstScanFunctionsInDecl(
         return result
     }
     let node = srAstNode(file, idx)
+    if !srCfgDeclPasses(file, node, cfg) {
+        return result
+    }
     let mut out = result
     if node.kind == AstNFnDecl {
         return srAstResolveFunction(file, idx, scope, "", false, out)
@@ -1820,6 +2025,256 @@ fn srSymbolListCopy(items: List<SelfSymbol>) -> List<SelfSymbol> {
     out
 }
 
+/// srHandlePartialType routes a struct or enum declaration through the
+/// partial-merge flow (LANG_SPEC v0.5 §3.4 / R19). The first declaration
+/// of a name installs its symbol and registers a SelfPartialDecl tracker;
+/// later same-kind declarations validate R19 against the first without
+/// re-emitting E0501, while kind-mismatched duplicates fall through to
+/// the normal duplicate-declaration path. Methods spread across partials
+/// are merged into the tracker so cross-declaration method-name
+/// collisions can fire E0501 with a targeted message.
+fn srHandlePartialType(
+    file: AstFile,
+    node: AstNode,
+    idx: Int,
+    kind: String,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let partialIdx = srFindPartialIdx(result.partials, node.text)
+    let isPub = node.flags == 1
+    if partialIdx < 0 {
+        // First time — install symbol and seed the partial tracker.
+        let mut out = srAddSymbol(
+            result,
+            selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, isPub, idx),
+        )
+        out = srRegisterPartial(file, node, idx, kind, isPub, out)
+        return out
+    }
+    let prev = result.partials[partialIdx]
+    if prev.kind != kind {
+        // Struct-vs-enum mismatch is a normal duplicate — route through
+        // srAddSymbol so the E0501 / duplicates counter fire as usual.
+        return srAddSymbol(
+            result,
+            selfSymbolAtNode(node.text, "type", "", 0, 0, node.start, node.end, isPub, idx),
+        )
+    }
+    // Legal partial — no new symbol is added; instead, validate R19
+    // invariants against the canonical (first) declaration and merge the
+    // new partial's methods into the shared tracker.
+    let mut out = srValidatePartialConsistency(file, node, idx, isPub, kind, prev, result)
+    out = srMergePartialMembers(file, node, idx, kind, partialIdx, out)
+    out
+}
+
+fn srFindPartialIdx(partials: List<SelfPartialDecl>, name: String) -> Int {
+    let mut idx = 0
+    for p in partials {
+        if p.name == name {
+            return idx
+        }
+        idx = idx + 1
+    }
+    -1
+}
+
+fn srRegisterPartial(
+    file: AstFile,
+    node: AstNode,
+    idx: Int,
+    kind: String,
+    isPub: Bool,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let generics = srCollectGenericNames(file, node.children2)
+    let mut hasFields = false
+    let mut firstFieldsStart = -1
+    let mut firstFieldsEnd = -1
+    for memberIdx in node.children {
+        let member = srAstNode(file, memberIdx)
+        let isMember = (kind == "struct" && member.kind == AstNField_) ||
+                       (kind == "enum" && member.kind == AstNVariant)
+        if isMember && !hasFields {
+            hasFields = true
+            firstFieldsStart = member.start
+            firstFieldsEnd = member.end
+        }
+    }
+    let mut methodNames: List<String> = []
+    let mut methodStarts: List<Int> = []
+    let mut methodEnds: List<Int> = []
+    let mut methodNodes: List<Int> = []
+    for memberIdx in node.children {
+        let member = srAstNode(file, memberIdx)
+        if member.kind == AstNFnDecl {
+            methodNames.push(member.text)
+            methodStarts.push(member.start)
+            methodEnds.push(member.end)
+            methodNodes.push(memberIdx)
+        }
+    }
+    let entry = SelfPartialDecl {
+        name: node.text,
+        kind,
+        firstNode: idx,
+        firstStart: node.start,
+        firstEnd: node.end,
+        firstPub: isPub,
+        firstGenerics: generics,
+        methodNames,
+        methodStarts,
+        methodEnds,
+        methodNodes,
+        hasFields,
+        firstFieldsStart,
+        firstFieldsEnd,
+    }
+    let mut out = result
+    out.partials.push(entry)
+    out
+}
+
+fn srCollectGenericNames(file: AstFile, generics: List<Int>) -> List<String> {
+    let mut names: List<String> = []
+    for gIdx in generics {
+        let g = srAstNode(file, gIdx)
+        names.push(g.text)
+    }
+    names
+}
+
+fn srValidatePartialConsistency(
+    file: AstFile,
+    node: AstNode,
+    idx: Int,
+    isPub: Bool,
+    kind: String,
+    prev: SelfPartialDecl,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    if isPub != prev.firstPub {
+        let message = "partial declarations of " + kind + " `" + node.text + "` disagree on visibility"
+        out.diagnostics.push(selfResolveDiagnosticHintAtNode(
+            "E0501",
+            message,
+            node.text,
+            node.start,
+            node.end,
+            idx,
+            "v0.5 R19: all partial declarations of the same type must have matching `pub` modifiers",
+        ))
+    }
+    let newGenerics = srCollectGenericNames(file, node.children2)
+    if !srGenericsEqual(prev.firstGenerics, newGenerics) {
+        out.diagnostics.push(selfResolveDiagnosticHintAtNode(
+            "E0501",
+            "partial declarations of `" + node.text + "` disagree on type parameters",
+            node.text,
+            node.start,
+            node.end,
+            idx,
+            "v0.5 R19: all partial declarations must have the same type-parameter list",
+        ))
+    }
+    let mut newHasFields = false
+    let mut newFieldsStart = -1
+    let mut newFieldsEnd = -1
+    for memberIdx in node.children {
+        let member = srAstNode(file, memberIdx)
+        let isMember = (kind == "struct" && member.kind == AstNField_) ||
+                       (kind == "enum" && member.kind == AstNVariant)
+        if isMember && !newHasFields {
+            newHasFields = true
+            newFieldsStart = member.start
+            newFieldsEnd = member.end
+        }
+    }
+    if prev.hasFields && newHasFields {
+        let label = if kind == "struct" { "fields" } else { "variants" }
+        out.diagnostics.push(selfResolveDiagnosticHintAtNode(
+            "E0501",
+            kind + " `" + node.text + "` may declare " + label + " in exactly one partial declaration",
+            node.text,
+            newFieldsStart,
+            newFieldsEnd,
+            idx,
+            "v0.5 R19: a partial struct/enum may spread methods across files, but its fields or variants must live in exactly one declaration",
+        ))
+    }
+    out
+}
+
+fn srGenericsEqual(a: List<String>, b: List<String>) -> Bool {
+    if a.len() != b.len() {
+        return false
+    }
+    let mut i = 0
+    for name in a {
+        if name != b[i] { return false }
+        i = i + 1
+    }
+    true
+}
+
+fn srMergePartialMembers(
+    file: AstFile,
+    node: AstNode,
+    idx: Int,
+    kind: String,
+    partialIdx: Int,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    // Update hasFields if the new partial is the first to declare members.
+    let prev = out.partials[partialIdx]
+    if !prev.hasFields {
+        for memberIdx in node.children {
+            let member = srAstNode(file, memberIdx)
+            let isMember = (kind == "struct" && member.kind == AstNField_) ||
+                           (kind == "enum" && member.kind == AstNVariant)
+            if isMember {
+                let mut entry = out.partials[partialIdx]
+                entry.hasFields = true
+                entry.firstFieldsStart = member.start
+                entry.firstFieldsEnd = member.end
+                out.partials[partialIdx] = entry
+                break
+            }
+        }
+    }
+    // Walk new partial's methods: cross-declaration duplicates emit
+    // E0501 with the method-specific message; fresh names are recorded.
+    for memberIdx in node.children {
+        let member = srAstNode(file, memberIdx)
+        if member.kind != AstNFnDecl {
+            continue
+        }
+        let dupIdx = srStringListIndex(out.partials[partialIdx].methodNames, member.text)
+        if dupIdx >= 0 {
+            let message = "method `" + member.text + "` is declared more than once on type `" + node.text + "`"
+            out.diagnostics.push(selfResolveDiagnosticHintAtNode(
+                "E0501",
+                message,
+                member.text,
+                member.start,
+                member.end,
+                memberIdx,
+                "v0.5 R19: methods spread across partial declarations must have unique names",
+            ))
+            continue
+        }
+        let mut entry = out.partials[partialIdx]
+        entry.methodNames.push(member.text)
+        entry.methodStarts.push(member.start)
+        entry.methodEnds.push(member.end)
+        entry.methodNodes.push(memberIdx)
+        out.partials[partialIdx] = entry
+    }
+    out
+}
+
 fn srAddSymbol(result: SelfResolveResult, sym: SelfSymbol) -> SelfResolveResult {
     let mut out = result
     if srSymbolExistsAtDepth(out.symbols, sym.name, sym.depth) {
@@ -2286,10 +2741,182 @@ fn srCheckAnnotationArgs(
     if ann.text == "deprecated" { return srCheckDeprecatedArgs(file, ann, result) }
     if ann.text == "repr" { return srCheckReprArgs(file, ann, result) }
     if ann.text == "export" { return srCheckExportArgs(file, ann, result) }
+    // cfg args are validated up front in srAstCollectDecl (before the
+    // filter drop) so dropped decls still surface E0405/E0739. Skipping
+    // cfg here avoids double-emission for decls that survive.
     if ann.text == "intrinsic" || ann.text == "pod" || ann.text == "c_abi" || ann.text == "no_alloc" {
         return srCheckNoArgsRuntime(file, ann, result)
     }
     result
+}
+
+/// srValidateCfgAnnotationsOnDecl runs cfg shape validation over every
+/// `#[cfg(...)]` annotation attached to a decl. Called from the top-level
+/// decl walker before the filter drop so dropped decls still surface
+/// E0405 / E0739. Non-cfg annotations are skipped here — the main
+/// srCheckDeclAnnotations walk handles them when the decl survives.
+fn srValidateCfgAnnotationsOnDecl(
+    file: AstFile,
+    extraIdx: Int,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if extraIdx < 0 {
+        return result
+    }
+    let anns = srCollectAnnotationNodes(file, extraIdx)
+    let mut out = result
+    for ann in anns {
+        if ann.text == "cfg" {
+            out = srCheckCfgArgs(file, ann, out)
+        }
+    }
+    out
+}
+
+/// srCheckCfgArgs validates `#[cfg(key = "value")]` arguments. Emits
+/// E0739 when the annotation is empty or an arg is not `key = string`,
+/// and E0405 when the key is not one of `os / arch / target / feature`.
+/// Mirrors the Go resolver's cfg.go::evaluateCfgAnnotation +
+/// evaluateCfgArg (internal/resolve/cfg.go:111, 139). Diag emission is
+/// independent of filter evaluation — tooling sees the same shape
+/// errors whether or not filtering is enabled.
+fn srCheckCfgArgs(
+    file: AstFile,
+    ann: AstNode,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    if srAstListCount(ann.children) == 0 {
+        out.diagnostics.push(selfResolveDiagnosticHintAtNode(
+            "E0739",
+            "`#[cfg(...)]` requires at least one predicate",
+            "cfg",
+            ann.start,
+            ann.end,
+            -1,
+            "v0.5 §5 / G29: use `#[cfg(key = \"value\")]` where key is `os`, `target`, `arch`, or `feature`",
+        ))
+        return out
+    }
+    for argIdx in ann.children {
+        out = srCheckCfgArg(file, argIdx, out)
+    }
+    out
+}
+
+fn srCheckCfgArg(
+    file: AstFile,
+    argIdx: Int,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let view = srAnnotArgView(file, argIdx)
+    let mut out = result
+    if view.isFlag || view.key == "" || view.valueIdx < 0 || !srIsStringLitAtIdx(file, view.valueIdx) {
+        out.diagnostics.push(selfResolveDiagnosticHintAtNode(
+            "E0739",
+            "`#[cfg(...)]` requires a `key = \"value\"` argument",
+            "cfg",
+            view.start,
+            view.end,
+            -1,
+            "v0.5 §5: cfg argument values must be string literals — no identifiers or computed expressions",
+        ))
+        return out
+    }
+    if view.key == "os" || view.key == "arch" || view.key == "target" || view.key == "feature" {
+        return out
+    }
+    out.diagnostics.push(selfResolveDiagnosticHintAtNode(
+        "E0405",
+        "unknown cfg key `" + view.key + "`",
+        "cfg",
+        view.start,
+        view.end,
+        -1,
+        "v0.5 §5 / G29 recognises only `os`, `target`, `arch`, `feature`",
+    ))
+    out
+}
+
+/// srCfgDeclPasses decides whether a decl survives the `#[cfg(...)]`
+/// pre-resolve filter. When the env is disabled every decl passes.
+/// Otherwise multiple cfg annotations are conjoined — all must hold —
+/// mirroring internal/resolve/cfg.go::evaluateCfgOnDecl. Malformed
+/// cfg arguments evaluate to false, matching the Go filter.
+fn srCfgDeclPasses(file: AstFile, node: AstNode, cfg: SelfResolveCfgEnv) -> Bool {
+    if !cfg.enabled {
+        return true
+    }
+    if node.extra < 0 {
+        return true
+    }
+    let anns = srCollectAnnotationNodes(file, node.extra)
+    for ann in anns {
+        if ann.text != "cfg" {
+            continue
+        }
+        if !srCfgAnnotationPasses(file, ann, cfg) {
+            return false
+        }
+    }
+    true
+}
+
+fn srCfgAnnotationPasses(file: AstFile, ann: AstNode, cfg: SelfResolveCfgEnv) -> Bool {
+    if srAstListCount(ann.children) == 0 {
+        return false
+    }
+    for argIdx in ann.children {
+        let view = srAnnotArgView(file, argIdx)
+        if !srCfgArgPasses(file, view, cfg) {
+            return false
+        }
+    }
+    true
+}
+
+fn srCfgArgPasses(file: AstFile, view: SrAnnotArgView, cfg: SelfResolveCfgEnv) -> Bool {
+    if view.isFlag { return false }
+    if view.valueIdx < 0 { return false }
+    let v = srAstNode(file, view.valueIdx)
+    if v.kind != AstNStringLit { return false }
+    let value = srStringLitContent(v.text)
+    if view.key == "os" { return cfg.os == value }
+    if view.key == "arch" { return cfg.arch == value }
+    if view.key == "target" { return cfg.target == value }
+    if view.key == "feature" { return srCfgEnvHasFeature(cfg, value) }
+    false
+}
+
+/// srStringLitContent unwraps the raw string-literal lexeme stored on an
+/// AstNStringLit node. The parser records the full source text (including
+/// the surrounding `"` / `"""` / `r"…"` syntax) so the formatter can
+/// round-trip exactly. cfg argument matching needs just the inner value;
+/// escape sequences inside the literal are not interpreted because
+/// v0.5 §5 restricts cfg values to simple identifiers.
+fn srStringLitContent(text: String) -> String {
+    if strings.hasPrefix(text, "r\"\"\"") && strings.hasSuffix(text, "\"\"\"") {
+        return strings.trimSuffix(strings.trimPrefix(text, "r\"\"\""), "\"\"\"")
+    }
+    if strings.hasPrefix(text, "\"\"\"") && strings.hasSuffix(text, "\"\"\"") {
+        return strings.trimSuffix(strings.trimPrefix(text, "\"\"\""), "\"\"\"")
+    }
+    if strings.hasPrefix(text, "r\"") && strings.hasSuffix(text, "\"") {
+        return strings.trimSuffix(strings.trimPrefix(text, "r\""), "\"")
+    }
+    if strings.hasPrefix(text, "\"") && strings.hasSuffix(text, "\"") {
+        return strings.trimSuffix(strings.trimPrefix(text, "\""), "\"")
+    }
+    text
+}
+
+fn srCfgEnvHasFeature(cfg: SelfResolveCfgEnv, name: String) -> Bool {
+    for f in cfg.features {
+        if f == name {
+            return true
+        }
+    }
+    false
 }
 
 fn srCheckJSONArgs(
