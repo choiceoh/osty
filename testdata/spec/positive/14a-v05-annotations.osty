@@ -36,3 +36,42 @@ fn arithmeticTest() {
     let _ = a
     let _ = b
 }
+
+// ---- #[vectorize] (v0.6 A5) ----
+// Bare flag on a top-level fn — LLVM backend attaches
+// !llvm.loop.vectorize.enable metadata to every user-written for-loop
+// lowered in the body. Semantics are a hint; LLVM's own legality +
+// profitability analysis decides whether the loop actually vectorizes.
+
+#[vectorize]
+fn sumTo(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc + i
+    }
+    acc
+}
+
+#[vectorize]
+fn twoLoops(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc + i
+    }
+    for j in 0..n {
+        acc = acc + j
+    }
+    acc
+}
+
+// #[vectorize] on a method — allowed target.
+struct Accumulator {
+    total: Int,
+
+    #[vectorize]
+    fn addRange(mut self, n: Int) {
+        for i in 0..n {
+            self.total = self.total + i
+        }
+    }
+}

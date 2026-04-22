@@ -172,6 +172,18 @@ defer println("{x}")
 pub fn f() {}
 // === END
 
+// === CASE: E0607 === #[vectorize] on a struct field (wrong target)
+pub struct Bad {
+    #[vectorize]
+    pub count: Int,
+}
+// === END
+
+// === CASE: E0739 === #[vectorize] does not take arguments
+#[vectorize(width = 4)]
+pub fn hot(n: Int) -> Int { n }
+// === END
+
 // === CASE: E0004 === unterminated block comment (MUST remain last — the
 // unclosed /* is intentional and swallows every byte to EOF).
 /* never closes

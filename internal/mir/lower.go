@@ -282,6 +282,7 @@ func (l *lowerer) lowerFunction(fn *ir.FnDecl, owner string, asMethod bool) *Fun
 	out.Exported = fn.Exported
 	out.ExportSymbol = fn.ExportSymbol
 	out.CABI = fn.CABI
+	out.Vectorize = fn.Vectorize
 	out.IsIntrinsic = fn.IsIntrinsic
 	if fn.Body == nil {
 		out.IsExternal = true

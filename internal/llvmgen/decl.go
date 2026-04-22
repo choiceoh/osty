@@ -1228,8 +1228,24 @@ func (g *generator) emitEnvArgsPrologue() {
 	)
 }
 
+// fnHasAnnotation reports whether the function declaration carries an
+// annotation with the given name. Safe on nil declarations — returns
+// false.
+func fnHasAnnotation(decl *ast.FnDecl, name string) bool {
+	if decl == nil {
+		return false
+	}
+	for _, a := range decl.Annotations {
+		if a != nil && a.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 	g.beginFunction()
+	g.vectorizeHint = fnHasAnnotation(sig.decl, "vectorize")
 	g.returnType = sig.ret
 	g.returnSourceType = sig.returnSourceType
 	g.returnListElemTyp = sig.retListElemTyp

@@ -492,6 +492,12 @@ fn normalizeUrl(u: String) -> String { ... }
 
 - `#[json(...)]` — struct field / enum variant
 - `#[deprecated(...)]` — 모든 선언, W0750 경고
+- `#[vectorize]` — top-level fn / method 에만 허용 (v0.6 A5). LLVM 백엔드가
+  바디 안의 각 user-written `for` 루프 backedge 에 `!llvm.loop` +
+  `llvm.loop.vectorize.enable=true` metadata 를 부착한다. **힌트**: vectorizer 가
+  legality/profitability 를 따지고, 현재는 GC safepoint poll 과 non-countable
+  iterator 루프가 걸림돌 (SPEC_GAPS.md `vectorize-hint`). 인자 없는 bare flag;
+  `#[vectorize(...)]` 은 E0739.
 - 값은 **리터럴만** (key=literal 또는 bare flag), 표현식 불가
 
 ```osty
@@ -506,6 +512,15 @@ pub struct ApiUser {
 
 #[deprecated(since = "0.5", use = "loginV2")]
 pub fn login(u: String, p: String) -> Result<Session, Error> { ... }
+
+#[vectorize]
+pub fn sumTo(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc + i
+    }
+    acc
+}
 ```
 
 ## A.10 특수 컴파일러 기능
@@ -783,6 +798,7 @@ fn parseTokens(tokens: List<Token>) -> Result<Config, Error> { ... }
 | 61 | `#[json(...)]` | struct field / variant |
 | 62 | `#[deprecated(...)]` | W0750 |
 | 63 | 값 = 리터럴 전용 | 검증 용이 |
+| 63.1 | `#[vectorize]` | v0.6 A5. LLVM `!llvm.loop.vectorize.enable` 메타데이터 부착. hint only — safepoint poll / non-countable iterator 로 인한 실패는 SPEC_GAPS `vectorize-hint` 에 기록. bare flag. |
 
 **전형 패턴** — 직렬화 키 매핑 + 내부 필드 숨김:
 
@@ -796,6 +812,22 @@ pub struct ApiUser {
     internal: CacheHandle,
 }
 ```
+
+**전형 패턴** — 내부 tight loop 에 `#[vectorize]` 부착 (v0.6 A5):
+
+```osty
+#[vectorize]
+pub fn dotProduct(xs: List<Float64>, ys: List<Float64>) -> Float64 {
+    let mut acc = 0.0
+    for i in 0..xs.len() {
+        acc = acc + xs[i] * ys[i]
+    }
+    acc
+}
+```
+
+호출 사이트 변경 없음. LLVM 이 vectorize 실패해도 프로그램 의미는 동일하므로
+측정 → 적용 순서가 안전. 상세 제약은 §3.8.3 + SPEC_GAPS `vectorize-hint`.
 
 ## B.9 FFI
 

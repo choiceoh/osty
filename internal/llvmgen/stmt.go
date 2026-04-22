@@ -614,6 +614,7 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
 	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	llvmRangeEnd(emitter, loop)
+	g.attachVectorizeMD(emitter, loop.condLabel)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.endLabel)
 	return nil
@@ -685,6 +686,7 @@ func (g *generator) emitWhileFor(stmt *ast.ForStmt) error {
 	emitter = g.toOstyEmitter()
 	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
+	g.attachVectorizeMD(emitter, condLabel)
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
@@ -763,6 +765,7 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 	emitter = g.toOstyEmitter()
 	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
+	g.attachVectorizeMD(emitter, condLabel)
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
@@ -2838,6 +2841,7 @@ func (g *generator) emitMapFor(stmt *ast.ForStmt, kName, vName, keyTyp, valTyp s
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
 	g.emitGCSafepoint(emitter)
 	llvmRangeEnd(emitter, loop)
+	g.attachVectorizeMD(emitter, loop.condLabel)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.endLabel)
 	return nil
@@ -2941,6 +2945,7 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
 	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	llvmRangeEnd(emitter, loop)
+	g.attachVectorizeMD(emitter, loop.condLabel)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.endLabel)
 	return nil

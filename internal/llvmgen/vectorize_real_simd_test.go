@@ -1,0 +1,170 @@
+package llvmgen
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// TestVectorizeFunctionBodyIsCallFree pins the GC-contract side of the
+// v0.6 A5 delivery: inside a `#[vectorize]` function the lowered loop
+// body must not contain `call void @osty.gc.safepoint_v1(...)`. LLVM's
+// loop vectorizer treats any call inside the latch as a potential
+// side-effect and bails; the whole point of this test is that the
+// contract documented in LANG_SPEC §3.8.3 actually holds at the IR
+// level so the vectorizer has a chance to fire on -O2/-O3.
+//
+// A sibling unannotated function in the same file keeps its per-
+// iteration poll (negative control). This prevents the safepoint
+// opt-out from regressing into a module-wide "no loop polls" bug.
+func TestVectorizeFunctionBodyIsCallFree(t *testing.T) {
+	file := parseLLVMGenFile(t, `#[vectorize]
+fn hot(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc + i
+    }
+    acc
+}
+
+fn cold(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc + i
+    }
+    acc
+}
+
+fn main() {
+    let _ = hot(1)
+    let _ = cold(1)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/vectorize_callfree.osty",
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	got := string(ir)
+
+	hot, ok := extractFunctionBody(got, "hot")
+	if !ok {
+		t.Fatalf("hot function not found in IR:\n%s", got)
+	}
+	if strings.Contains(hot, "osty.gc.safepoint_v1") {
+		t.Fatalf("#[vectorize] hot body still emits gc.safepoint_v1 "+
+			"(LLVM vectorizer will bail):\n%s", hot)
+	}
+
+	cold, ok := extractFunctionBody(got, "cold")
+	if !ok {
+		t.Fatalf("cold function not found in IR:\n%s", got)
+	}
+	if !strings.Contains(cold, "osty.gc.safepoint_v1") {
+		t.Fatalf("unannotated cold body dropped its safepoint — the "+
+			"vectorize opt-out must not leak to sibling functions:\n%s", cold)
+	}
+}
+
+// TestVectorizeAnnotationLetsClangVectorize is the integration oracle:
+// pipe an annotated XOR-reduction IR into clang at -O3, parse its
+// `-Rpass=loop-vectorize` remarks, and assert we see at least one
+// "vectorized loop" message. XOR was chosen on purpose — a plain
+// arithmetic-series sum (`acc = acc + i`) can be closed-formed by
+// InstCombine and the entire loop disappears, which is a great outcome
+// but indistinguishable from "vectorizer didn't fire." XOR reduction
+// survives every algebraic folder while still being a textbook
+// reducible operation, so the remarks are meaningful.
+//
+// Skipped when `clang` isn't on PATH (cross-platform CI friendliness).
+func TestVectorizeAnnotationLetsClangVectorize(t *testing.T) {
+	clangPath, err := exec.LookPath("clang")
+	if err != nil {
+		t.Skip("clang not on PATH — skipping integration oracle")
+	}
+
+	file := parseLLVMGenFile(t, `#[vectorize]
+fn xorTo(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc ^ i
+    }
+    acc
+}
+
+fn main() {
+    let _ = xorTo(1024)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/vectorize_clang_oracle.osty",
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	irPath := filepath.Join(t.TempDir(), "module.ll")
+	if err := writeBytes(irPath, ir); err != nil {
+		t.Fatalf("write ir: %v", err)
+	}
+
+	cmd := exec.Command(clangPath,
+		"-x", "ir",
+		"-O3",
+		"-S",
+		"-o", filepath.Join(t.TempDir(), "module.s"),
+		"-Rpass=loop-vectorize",
+		irPath,
+	)
+	out, runErr := cmd.CombinedOutput()
+	remarks := string(out)
+
+	// clang prints its remarks to stderr; CombinedOutput merges them
+	// with stdout, so a non-zero exit is genuinely a failure (not just
+	// noisy remarks on a successful build).
+	if runErr != nil {
+		t.Fatalf("clang -O3 on vectorize-annotated IR failed: %v\n%s",
+			runErr, remarks)
+	}
+	if !strings.Contains(remarks, "vectorized loop") {
+		t.Fatalf("clang -O3 on annotated IR did not vectorize the loop; "+
+			"expected a `remark: vectorized loop` line. Full output:\n%s",
+			remarks)
+	}
+}
+
+// extractFunctionBody returns the text between `define ... @name(...) {`
+// and the matching closing `}` on a line by itself. It's a tiny helper
+// for tests that need to scope substring assertions to one function
+// without dragging in a real LLVM IR parser.
+func extractFunctionBody(module, name string) (string, bool) {
+	needle := "@" + name + "("
+	start := strings.Index(module, needle)
+	if start < 0 {
+		return "", false
+	}
+	// Walk to the `{` that opens this function's body.
+	brace := strings.IndexByte(module[start:], '{')
+	if brace < 0 {
+		return "", false
+	}
+	start += brace + 1
+	// Matching `}` on its own line is unique in our emitter — bodies
+	// never contain a bare `}` at column zero.
+	end := strings.Index(module[start:], "\n}\n")
+	if end < 0 {
+		return "", false
+	}
+	return module[start : start+end], true
+}
+
+func writeBytes(path string, data []byte) error {
+	return os.WriteFile(path, data, 0o644)
+}

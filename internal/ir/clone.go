@@ -225,6 +225,7 @@ func cloneFnDecl(fn *FnDecl) *FnDecl {
 		CABI:         fn.CABI,
 		IsIntrinsic:  fn.IsIntrinsic,
 		NoAlloc:      fn.NoAlloc,
+		Vectorize:    fn.Vectorize,
 	}
 	if len(fn.Params) > 0 {
 		out.Params = make([]*Param, len(fn.Params))
