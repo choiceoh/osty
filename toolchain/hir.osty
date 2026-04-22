@@ -173,6 +173,40 @@ pub enum HirPatternKind {
     HirPatError,
 }
 
+/// HirDecisionNodeKind enumerates the pre-compiled decision tree
+/// variants produced by the Osty equivalent of `CompileDecisionTree`.
+/// Match lowering (Stage 4f) consumes this tree when present; when
+/// absent (e.g. tree compilation couldn't cover the arms' shape) the
+/// MIR lowerer falls back to an arm-by-arm cascade.
+pub enum HirDecisionNodeKind {
+    HirDecisionInvalid,
+    HirDecisionLeaf,
+    HirDecisionFail,
+    HirDecisionBind,
+    HirDecisionGuard,
+    HirDecisionSwitch,
+}
+
+/// HirSwitchKind tells backends how to compile a DecisionSwitch's
+/// test. Matches ir.SwitchKind in decision.go.
+pub enum HirSwitchKind {
+    HirSwitchUnknown,
+    HirSwitchVariant,
+    HirSwitchLit,
+    HirSwitchBool,
+    HirSwitchTuple,
+}
+
+/// HirProjectionKind enumerates the sub-value extraction shapes the
+/// decision tree currently models. Matches ir.ProjectionKind.
+pub enum HirProjectionKind {
+    HirProjScrutinee,
+    HirProjTuple,
+    HirProjField,
+    HirProjVariant,
+    HirProjVariantN,
+}
+
 /// HirUnOp mirrors ir.UnOp.
 pub enum HirUnOp {
     HirUnInvalid,
@@ -1250,6 +1284,8 @@ pub struct HirStmt {
     // Match
     pub matchScrutinee: HirExpr,
     pub matchArms: List<HirMatchArm>,
+    pub matchHasTree: Bool,
+    pub matchTree: HirDecisionNode,
 
     // Defer
     pub deferBody: HirBlock,
@@ -1309,6 +1345,8 @@ pub fn hirStmtInvalid() -> HirStmt {
 
         matchScrutinee: hirExprInvalid(),
         matchArms: [],
+        matchHasTree: false,
+        matchTree: hirDecisionInvalid(),
 
         deferBody: hirBlock(hirNoSpan()),
 
@@ -1929,6 +1967,8 @@ pub struct HirExpr {
     // MatchExpr
     pub matchExprScrutinee: List<HirExpr>,
     pub matchExprArms: List<HirMatchArm>,
+    pub matchExprHasTree: Bool,
+    pub matchExprTree: HirDecisionNode,
 
     // IfLetExpr
     pub ifLetPattern: HirPattern,
@@ -2029,6 +2069,8 @@ pub fn hirExprInvalid() -> HirExpr {
 
         matchExprScrutinee: [],
         matchExprArms: [],
+        matchExprHasTree: false,
+        matchExprTree: hirDecisionInvalid(),
 
         ifLetPattern: hirPatternInvalid(),
         ifLetScrutinee: [],
@@ -3051,5 +3093,333 @@ pub fn hirTypeKindName(k: HirTypeKind) -> String {
         HirTypeFn -> "Fn",
         HirTypeVar -> "Var",
         HirTypeErr -> "<error>",
+    }
+}
+
+// ====================================================================
+// Decision tree data model (Stage 3d follow-up)
+// ====================================================================
+//
+// A pre-compiled decision tree for `match` lowering. Produced by a
+// future `toolchain/pmcompile.osty` (or imported from the Go side's
+// `ir.CompileDecisionTree` during the bootstrap transition) and
+// consumed by `mir_lower.osty`'s Stage 4f MatchExpr lowerer.
+//
+// Nodes follow Osty's convention of a flat struct with a kind tag;
+// recursive children live in length-0/1 Lists (HirDecisionNode.next /
+// HirDecisionNode.guardThen / etc.) so the struct has a fixed size.
+//
+// A `HirProjection` describes the path from the match scrutinee to
+// the sub-value that the current decision node is inspecting. It is
+// a linked list walking *up* toward the root; `base` is length 0 for
+// the scrutinee itself, length 1 for any nested position. `kind` +
+// index / field / variant name encode the hop.
+
+// ---- HirProjection (linked-list projection path) ------------------
+
+/// HirProjection describes how to extract a sub-value from the match
+/// scrutinee at runtime. Projections chain — a nested pattern like
+/// `Some((x, y))` first projects the variant payload, then the tuple
+/// elements.
+///
+/// `base` stores 0 or 1 elements: length 0 for projections rooted at
+/// the scrutinee (`HirProjScrutinee`), length 1 for any nested hop.
+pub struct HirProjection {
+    pub kind: HirProjectionKind,
+    pub base: List<HirProjection>,
+    pub index: Int,
+    pub field: String,
+    pub variant: String,
+}
+
+pub fn hirProjScrutinee() -> HirProjection {
+    HirProjection {
+        kind: HirProjScrutinee,
+        base: [],
+        index: 0,
+        field: "",
+        variant: "",
+    }
+}
+
+pub fn hirProjTuple(base: HirProjection, index: Int) -> HirProjection {
+    let mut children: List<HirProjection> = []
+    children.push(base)
+    HirProjection {
+        kind: HirProjTuple,
+        base: children,
+        index,
+        field: "",
+        variant: "",
+    }
+}
+
+pub fn hirProjField(base: HirProjection, field: String) -> HirProjection {
+    let mut children: List<HirProjection> = []
+    children.push(base)
+    HirProjection {
+        kind: HirProjField,
+        base: children,
+        index: 0,
+        field,
+        variant: "",
+    }
+}
+
+pub fn hirProjVariant(base: HirProjection, variant: String) -> HirProjection {
+    let mut children: List<HirProjection> = []
+    children.push(base)
+    HirProjection {
+        kind: HirProjVariant,
+        base: children,
+        index: 0,
+        field: "",
+        variant,
+    }
+}
+
+pub fn hirProjVariantN(base: HirProjection, variant: String, index: Int) -> HirProjection {
+    let mut children: List<HirProjection> = []
+    children.push(base)
+    HirProjection {
+        kind: HirProjVariantN,
+        base: children,
+        index,
+        field: "",
+        variant,
+    }
+}
+
+/// hirProjBase returns the projection's parent hop, or an invalid
+/// `HirProjScrutinee` when the projection is already rooted.
+pub fn hirProjBase(p: HirProjection) -> HirProjection {
+    if p.base.len() > 0 {
+        p.base[0]
+    } else {
+        hirProjScrutinee()
+    }
+}
+
+// ---- HirSwitchCase ------------------------------------------------
+
+/// HirSwitchCase is one child of a DecisionSwitch. `label` is a human-
+/// readable description (variant name, literal text, "true"/"false").
+/// `variant` carries the machine-usable variant name for Variant
+/// switches; `hasLit` + `lit` carry the literal expression for Lit
+/// switches. `body` is the subtree taken on match.
+pub struct HirSwitchCase {
+    pub label: String,
+    pub variant: String,
+    pub hasLit: Bool,
+    pub lit: HirExpr,
+    pub body: HirDecisionNode,
+}
+
+pub fn hirSwitchCaseVariant(
+    label: String,
+    variant: String,
+    body: HirDecisionNode,
+) -> HirSwitchCase {
+    HirSwitchCase {
+        label,
+        variant,
+        hasLit: false,
+        lit: hirExprInvalid(),
+        body,
+    }
+}
+
+pub fn hirSwitchCaseLit(
+    label: String,
+    lit: HirExpr,
+    body: HirDecisionNode,
+) -> HirSwitchCase {
+    HirSwitchCase {
+        label,
+        variant: "",
+        hasLit: true,
+        lit,
+        body,
+    }
+}
+
+// ---- HirDecisionNode (flat tree node) -----------------------------
+
+/// HirDecisionNode is the flat decision-tree node. Children that
+/// reference another HirDecisionNode (Bind.next, Guard.then/else,
+/// Switch.default) live in a `List<HirDecisionNode>` of length 0 or
+/// 1 to break the recursive containment — Osty structs are value
+/// types, direct self-reference would be infinite-size.
+///
+/// Payload layout by kind:
+///
+///   Leaf    — leafArm
+///   Fail    — (no payload)
+///   Bind    — bindName / bindHasProj / bindProj / bindType /
+///             bindNext
+///   Guard   — guardCond / guardThen / guardElse
+///   Switch  — switchKind / switchProj / switchCases /
+///             switchDefault
+pub struct HirDecisionNode {
+    pub kind: HirDecisionNodeKind,
+
+    // Leaf
+    pub leafArm: Int,
+
+    // Bind — `name = projection` introduces a local binding and
+    // continues with `next`. Binding the scrutinee as a whole omits
+    // the projection (bindHasProj=false).
+    pub bindName: String,
+    pub bindHasProj: Bool,
+    pub bindProj: HirProjection,
+    pub bindType: HirType,
+    pub bindNext: List<HirDecisionNode>,
+
+    // Guard — evaluate cond; true → then, false → else
+    pub guardCond: HirExpr,
+    pub guardThen: List<HirDecisionNode>,
+    pub guardElse: List<HirDecisionNode>,
+
+    // Switch — test `switchProj` against each case in order; fall
+    // through to `switchDefault` when no case matches
+    pub switchKind: HirSwitchKind,
+    pub switchProj: HirProjection,
+    pub switchCases: List<HirSwitchCase>,
+    pub switchDefault: List<HirDecisionNode>,
+}
+
+pub fn hirDecisionInvalid() -> HirDecisionNode {
+    HirDecisionNode {
+        kind: HirDecisionInvalid,
+        leafArm: -1,
+        bindName: "",
+        bindHasProj: false,
+        bindProj: hirProjScrutinee(),
+        bindType: hirTypeInvalid(),
+        bindNext: [],
+        guardCond: hirExprInvalid(),
+        guardThen: [],
+        guardElse: [],
+        switchKind: HirSwitchUnknown,
+        switchProj: hirProjScrutinee(),
+        switchCases: [],
+        switchDefault: [],
+    }
+}
+
+pub fn hirDecisionLeaf(armIndex: Int) -> HirDecisionNode {
+    let mut n = hirDecisionInvalid()
+    n.kind = HirDecisionLeaf
+    n.leafArm = armIndex
+    n
+}
+
+pub fn hirDecisionFail() -> HirDecisionNode {
+    let mut n = hirDecisionInvalid()
+    n.kind = HirDecisionFail
+    n
+}
+
+/// hirDecisionBind introduces `name = projection` and continues with
+/// `next`. Use hirDecisionBindWhole for binding the scrutinee as a
+/// whole (no projection).
+pub fn hirDecisionBind(
+    name: String,
+    proj: HirProjection,
+    typ: HirType,
+    next: HirDecisionNode,
+) -> HirDecisionNode {
+    let mut n = hirDecisionInvalid()
+    n.kind = HirDecisionBind
+    n.bindName = name
+    n.bindHasProj = true
+    n.bindProj = proj
+    n.bindType = typ
+    n.bindNext.push(next)
+    n
+}
+
+pub fn hirDecisionBindWhole(
+    name: String,
+    typ: HirType,
+    next: HirDecisionNode,
+) -> HirDecisionNode {
+    let mut n = hirDecisionInvalid()
+    n.kind = HirDecisionBind
+    n.bindName = name
+    n.bindHasProj = false
+    n.bindType = typ
+    n.bindNext.push(next)
+    n
+}
+
+pub fn hirDecisionGuard(
+    cond: HirExpr,
+    thenNode: HirDecisionNode,
+    elseNode: HirDecisionNode,
+) -> HirDecisionNode {
+    let mut n = hirDecisionInvalid()
+    n.kind = HirDecisionGuard
+    n.guardCond = cond
+    n.guardThen.push(thenNode)
+    n.guardElse.push(elseNode)
+    n
+}
+
+pub fn hirDecisionSwitch(
+    kind: HirSwitchKind,
+    proj: HirProjection,
+    cases: List<HirSwitchCase>,
+    defaultNode: HirDecisionNode,
+) -> HirDecisionNode {
+    let mut n = hirDecisionInvalid()
+    n.kind = HirDecisionSwitch
+    n.switchKind = kind
+    n.switchProj = proj
+    n.switchCases = cases
+    n.switchDefault.push(defaultNode)
+    n
+}
+
+/// hirDecisionIsValid reports whether the node is a real decision
+/// (not the default-zero placeholder used when match arms lack a
+/// pre-compiled tree).
+pub fn hirDecisionIsValid(n: HirDecisionNode) -> Bool {
+    match n.kind {
+        HirDecisionInvalid -> false,
+        _ -> true,
+    }
+}
+
+// ---- Enum-kind stringification ------------------------------------
+
+pub fn hirDecisionNodeKindName(k: HirDecisionNodeKind) -> String {
+    match k {
+        HirDecisionInvalid -> "<invalid>",
+        HirDecisionLeaf -> "Leaf",
+        HirDecisionFail -> "Fail",
+        HirDecisionBind -> "Bind",
+        HirDecisionGuard -> "Guard",
+        HirDecisionSwitch -> "Switch",
+    }
+}
+
+pub fn hirSwitchKindName(k: HirSwitchKind) -> String {
+    match k {
+        HirSwitchUnknown -> "?",
+        HirSwitchVariant -> "variant",
+        HirSwitchLit -> "lit",
+        HirSwitchBool -> "bool",
+        HirSwitchTuple -> "tuple",
+    }
+}
+
+pub fn hirProjectionKindName(k: HirProjectionKind) -> String {
+    match k {
+        HirProjScrutinee -> "scrutinee",
+        HirProjTuple -> "tuple",
+        HirProjField -> "field",
+        HirProjVariant -> "variant",
+        HirProjVariantN -> "variantN",
     }
 }
