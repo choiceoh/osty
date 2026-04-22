@@ -1,11 +1,68 @@
 package main
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/osty/osty/internal/selfhost"
 )
+
+// TestRunResolveFileHappyPathIsAstbridgeFree pins the end-to-end CLI
+// invariant: the extracted runResolveFile body that powers `osty
+// resolve FILE` must not trigger a single astLowerPublicFile call on
+// clean input. This catches CLI-layer regressions that the library
+// primitive tests (ResolveStructuredFromRun, LoadPackageForNative)
+// cannot see on their own — any accidentally-added run.File() inside
+// the subcommand body would fail this test.
+//
+// Stdout is redirected to discard so the subcommand's normal ref/diag
+// rendering doesn't pollute go test output; the counter assertion is
+// the actual invariant under test.
+func TestRunResolveFileHappyPathIsAstbridgeFree(t *testing.T) {
+	src := []byte(`fn helper(x: Int) -> Int {
+    x
+}
+
+fn main() {
+    let value = helper(1)
+}
+`)
+	path := filepath.Join(t.TempDir(), "main.osty")
+	if err := os.WriteFile(path, src, 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	flags := cliFlags{noColor: true}
+	formatter := newFormatter(path, src, flags)
+
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = origStdout })
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		_, _ = io.Copy(io.Discard, r)
+	}()
+
+	selfhost.ResetAstbridgeLowerCount()
+	exit := runResolveFile(path, src, formatter, flags)
+	_ = w.Close()
+	<-drained
+
+	if exit != 0 {
+		t.Fatalf("runResolveFile exit = %d, want 0", exit)
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("AstbridgeLowerCount after runResolveFile happy path = %d, want 0 (any non-zero means the CLI body regressed into a *ast.File detour)", got)
+	}
+}
 
 func TestResolveCLISingleFilePrintsNativeResolutionRows(t *testing.T) {
 	dir := t.TempDir()
