@@ -1138,9 +1138,24 @@ func assignOp(k token.Kind) AssignOp {
 func (l *lowerer) lowerExpr(e ast.Expr) Expr {
 	switch e := e.(type) {
 	case *ast.IntLit:
-		return &IntLit{Text: e.Text, T: l.exprType(e), SpanV: nodeSpan(e)}
+		t := l.exprType(e)
+		if t == ErrTypeVal {
+			// Default int-literal type when the checker didn't
+			// populate Types[e] — covers literals nested inside
+			// contexts the Go-hosted checker skips (string interp
+			// parts, match arm bodies, etc.). Without this, a
+			// stray `+ 1` poisons the enclosing BinaryExpr to
+			// ErrType, which cascades to every consumer of the
+			// match / block result.
+			t = TInt
+		}
+		return &IntLit{Text: e.Text, T: t, SpanV: nodeSpan(e)}
 	case *ast.FloatLit:
-		return &FloatLit{Text: e.Text, T: l.exprType(e), SpanV: nodeSpan(e)}
+		t := l.exprType(e)
+		if t == ErrTypeVal {
+			t = TFloat
+		}
+		return &FloatLit{Text: e.Text, T: t, SpanV: nodeSpan(e)}
 	case *ast.BoolLit:
 		return &BoolLit{Value: e.Value, SpanV: nodeSpan(e)}
 	case *ast.CharLit:
@@ -2247,9 +2262,101 @@ func (l *lowerer) lowerMatchExpr(m *ast.MatchExpr) Expr {
 		SpanV:     nodeSpan(m),
 	}
 	out.Arms = l.lowerMatchArms(m.Arms)
+	// Recover the match type from its arm bodies when the checker
+	// left it as <error>. The checker's type inference for match
+	// expressions across large arm sets sometimes loses the common
+	// arm type (observed on toolchain/core.osty `corePrintNodeBody`
+	// and similar dispatch tables), which then poisons every
+	// downstream operation consuming the match result. Unifying from
+	// arm bodies keeps the MIR fast path live as long as every arm
+	// resolved to the same concrete type.
+	if out.T == nil || out.T == ErrTypeVal {
+		if recovered := recoverMatchType(out.Arms); recovered != nil && recovered != ErrTypeVal {
+			out.T = recovered
+		}
+	}
 	// Compile a decision tree when the arm shapes are specialisable.
 	out.Tree = CompileDecisionTree(out.Scrutinee.Type(), out.Arms)
 	return out
+}
+
+// recoverMatchType returns the common body type across a set of
+// match arms, or ErrTypeVal when arms disagree / are not available.
+// Used as a fallback when the checker didn't record a type for the
+// enclosing match expression. A Block's yielded type is its Result
+// expression's type (or TUnit when Result is nil).
+func recoverMatchType(arms []*MatchArm) Type {
+	var candidate Type
+	for _, arm := range arms {
+		if arm == nil || arm.Body == nil {
+			continue
+		}
+		t := blockResultType(arm.Body)
+		if t == nil || t == ErrTypeVal {
+			continue
+		}
+		if candidate == nil {
+			candidate = t
+			continue
+		}
+		if !typesEquivalent(candidate, t) {
+			return ErrTypeVal
+		}
+	}
+	if candidate == nil {
+		return ErrTypeVal
+	}
+	return candidate
+}
+
+
+// typesEquivalent is a narrow equality suitable for match-arm
+// unification. It's intentionally strict: primitive kinds must match
+// exactly, named types compare by (package, name, builtin) tuple.
+// Structural types (tuples, optionals, fn types) recurse. Anything
+// involving ErrType short-circuits to false so recovery doesn't
+// silently accept a poisoned arm.
+func typesEquivalent(a, b Type) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if a == ErrTypeVal || b == ErrTypeVal {
+		return false
+	}
+	switch ax := a.(type) {
+	case *PrimType:
+		bx, ok := b.(*PrimType)
+		return ok && ax.Kind == bx.Kind
+	case *NamedType:
+		bx, ok := b.(*NamedType)
+		if !ok || ax.Name != bx.Name || ax.Package != bx.Package || ax.Builtin != bx.Builtin {
+			return false
+		}
+		if len(ax.Args) != len(bx.Args) {
+			return false
+		}
+		for i := range ax.Args {
+			if !typesEquivalent(ax.Args[i], bx.Args[i]) {
+				return false
+			}
+		}
+		return true
+	case *OptionalType:
+		bx, ok := b.(*OptionalType)
+		return ok && typesEquivalent(ax.Inner, bx.Inner)
+	case *TupleType:
+		bx, ok := b.(*TupleType)
+		if !ok || len(ax.Elems) != len(bx.Elems) {
+			return false
+		}
+		for i := range ax.Elems {
+			if !typesEquivalent(ax.Elems[i], bx.Elems[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (l *lowerer) lowerMatchArms(arms []*ast.MatchArm) []*MatchArm {

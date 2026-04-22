@@ -598,7 +598,7 @@ func localDefiningSiteHint(fn *mir.Function, id mir.LocalID) string {
 			switch x := inst.(type) {
 			case *mir.AssignInstr:
 				if placeReferencesLocal(x.Dest, id) {
-					return fmt.Sprintf("written by assign at %d:%d", x.SpanV.Start.Line, x.SpanV.Start.Column)
+					return fmt.Sprintf("written by assign at %d:%d (src=%s)", x.SpanV.Start.Line, x.SpanV.Start.Column, mirRValueDebugString(x.Src))
 				}
 			case *mir.CallInstr:
 				if x.Dest != nil && placeReferencesLocal(*x.Dest, id) {
@@ -616,6 +616,30 @@ func localDefiningSiteHint(fn *mir.Function, id mir.LocalID) string {
 		}
 	}
 	return ""
+}
+
+// mirRValueDebugString returns a short type-name tag for a MIR RValue,
+// used by localDefiningSiteHint to hint what expression produced an
+// ErrType local when the defining instruction was a bare Assign with
+// a synthetic span.
+func mirRValueDebugString(r mir.RValue) string {
+	if r == nil {
+		return "nil"
+	}
+	switch v := r.(type) {
+	case *mir.BinaryRV:
+		return fmt.Sprintf("BinaryRV(op=%d, T=%s)", int(v.Op), mirTypeString(v.T))
+	case *mir.UnaryRV:
+		return fmt.Sprintf("UnaryRV(op=%d, T=%s)", int(v.Op), mirTypeString(v.T))
+	case *mir.AggregateRV:
+		return fmt.Sprintf("AggregateRV(kind=%d, T=%s)", int(v.Kind), mirTypeString(v.T))
+	case *mir.UseRV:
+		_ = v
+		return "UseRV"
+	case *mir.CastRV:
+		return fmt.Sprintf("CastRV(kind=%d, To=%s)", int(v.Kind), mirTypeString(v.To))
+	}
+	return fmt.Sprintf("%T", r)
 }
 
 // mirCalleeDebugString returns a short identifier for a MIR callee
