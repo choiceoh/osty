@@ -98,8 +98,16 @@ type cliFlags struct {
 	// path never materializes *ast.File, so
 	// selfhost.AstbridgeLowerCount stays at 0 for the whole
 	// subcommand. Incompatible with --inspect / --dump-native-diags,
-	// which both probe the Go check.Result shape.
+	// which both probe the Go check.Result shape. Production default
+	// as of Phase 1c.1 (SELFHOST_PORT_MATRIX.md); `--legacy` opts back
+	// to the Go-hosted pair until the dual-track is retired.
 	native bool
+	// legacy routes `check` / `typecheck` back through the Go-hosted
+	// resolve + check.File pair. Escape hatch for the 1c.1 default
+	// flip — Phase 1c.5 deletes both this flag and the legacy path
+	// once every consumer (pipeline/build/lsp/cihost) has been moved
+	// onto native_adapter. Setting this clears `native`.
+	legacy bool
 	// suppressSummary silences the `N error(s), M warning(s)` trailer
 	// inside a single printDiags call. The package-diagnostic walker sets
 	// this per-file bucket and then prints one consolidated summary
@@ -309,20 +317,33 @@ func main() {
 			runCi(rest, flags)
 			return
 		}
-		// Allow `--native` after the subcommand so users can type
-		// `osty check --native FILE` (subcommand-local flag
+		// Allow `--native` / `--legacy` after the subcommand so users
+		// can type `osty check --native FILE` or
+		// `osty check --legacy FILE` (subcommand-local flag
 		// placement, matching how `lint` accepts `--fix` /
 		// `--strict`). Strip it from args so the downstream file-
 		// required check and subcommand dispatch still see
 		// positional-only input.
 		if rest, present := takeBoolFlag(args[1:], "--native"); present {
 			flags.native = true
+			flags.legacy = false
+			args = append([]string{"check"}, rest...)
+		}
+		if rest, present := takeBoolFlag(args[1:], "--legacy"); present {
+			flags.legacy = true
+			flags.native = false
 			args = append([]string{"check"}, rest...)
 		}
 	}
 	if cmd == "typecheck" {
 		if rest, present := takeBoolFlag(args[1:], "--native"); present {
 			flags.native = true
+			flags.legacy = false
+			args = append([]string{"typecheck"}, rest...)
+		}
+		if rest, present := takeBoolFlag(args[1:], "--legacy"); present {
+			flags.legacy = true
+			flags.native = false
 			args = append([]string{"typecheck"}, rest...)
 		}
 	}
@@ -381,13 +402,14 @@ func main() {
 			runLintPackage(path, flags)
 			return
 		case "typecheck":
-			// Legacy typecheck is FILE-only. --native introduces DIR
-			// support because the native pipeline already has
-			// runCheckPackageNative (#633) and adding a per-file type
-			// dump on top is the minimal delta.
+			// Legacy typecheck is FILE-only; native typecheck has DIR
+			// support via runTypecheckPackageNative (#633). The 1c.1
+			// default is native, so DIR just works; `--legacy` is the
+			// only way this branch can be !native, and that path
+			// stays single-file.
 			if !flags.native {
 				fmt.Fprintf(os.Stderr,
-					"osty: typecheck does not accept a directory without --native (expected a file)\n")
+					"osty: typecheck --legacy does not accept a directory (expected a file)\n")
 				os.Exit(2)
 			}
 			if flags.inspect || flags.dumpNativeDiags {
@@ -586,9 +608,13 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
 	flag.BoolVar(&f.inspect, "inspect", false, "check: emit one record per expression showing the inference rule, type, and hint (see LANG_SPEC_v0.5/02a-type-inference.md)")
 	flag.BoolVar(&f.dumpNativeDiags, "dump-native-diags", false, "check: after the run, print the native checker's per-context error histogram to stderr")
-	flag.BoolVar(&f.native, "native", false, "check: route through the self-host arena pipeline (astbridge-free); incompatible with --inspect and --dump-native-diags")
+	flag.BoolVar(&f.native, "native", true, "check/typecheck: route through the self-host arena pipeline (astbridge-free; production default). Incompatible with --inspect and --dump-native-diags; redundant with the default but accepted for backwards compatibility")
+	flag.BoolVar(&f.legacy, "legacy", false, "check/typecheck: route through the Go-hosted resolve + check.File pair (pre-1c.1 default). Escape hatch while the selfhost checker coverage tail finishes; will be removed once dual-track is retired")
 	flag.Usage = usage
 	flag.Parse()
+	if f.legacy {
+		f.native = false
+	}
 	return f
 }
 

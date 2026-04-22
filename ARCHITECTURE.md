@@ -35,6 +35,22 @@ High-level map of the Osty front-end. For spec decisions see
 Each stage produces diagnostics as it goes; they accumulate in a single
 `[]*diag.Diagnostic` that the CLI renders at the end.
 
+### Default path: self-host arena (since Phase 1c.1, 2026-04-23)
+
+`osty check` and `osty typecheck` now dispatch to the **self-host arena
+pipeline** by default: `parser.ParseRun` produces a selfhost `FrontendRun`
+(no astbridge lowering), then `selfhost.CheckStructuredFromRun` runs the
+Osty-native resolver + checker in one pass, emitting structured records
+that `selfhost.CheckDiagnosticsAsDiag` lifts into the CLI's `diag.Diagnostic`
+shape. `--legacy` routes back through the Go-hosted
+`parser.ParseDetailed` + `internal/resolve.ResolvePackage` + `check.File`
+triple for compatibility; see `SELFHOST_PORT_MATRIX.md`'s 1c roadmap for
+when this escape hatch retires. `osty resolve` has been self-host-first
+since 2026-04 and is unaffected by the 1c.1 flip. `pipeline.RunPackage`,
+`build`, `run`, `doc`, `lsp`, and `cihost` still use the Go-hosted loader
+in this tree — each is a dedicated 1c.2/1c.3 session that gates on a
+`selfhost.ResolveResult` → `PackageFile.RefsByID` adapter being written.
+
 ## Package cheat sheet
 
 ### `internal/token`
