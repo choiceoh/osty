@@ -69,6 +69,7 @@ type paramInfo struct {
 	setElemTyp     string
 	setElemString  bool
 	sourceType     ast.Type
+	pattern        ast.Pattern
 	mutable        bool
 	byRef          bool
 }
@@ -508,6 +509,26 @@ func collectStdTestingAliases(file *ast.File) map[string]bool {
 		alias := use.Alias
 		if alias == "" {
 			alias = "testing"
+		}
+		if alias != "" {
+			out[alias] = true
+		}
+	}
+	return out
+}
+
+func collectStdTestingGenAliases(file *ast.File) map[string]bool {
+	out := map[string]bool{}
+	if file == nil {
+		return out
+	}
+	for _, use := range file.Uses {
+		if use == nil || len(use.Path) != 3 || use.Path[0] != "std" || use.Path[1] != "testing" || use.Path[2] != "gen" {
+			continue
+		}
+		alias := use.Alias
+		if alias == "" {
+			alias = "gen"
 		}
 		if alias != "" {
 			out[alias] = true
@@ -1223,29 +1244,35 @@ func signatureOf(fn *ast.FnDecl, ownerName string, env typeEnv) (*fnSig, error) 
 		}
 		sig.ret = ret
 	}
-	for _, p := range fn.Params {
-		if diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, p.Pattern != nil || p.Name == "", false, true, ""); diag.kind != "" {
-			return nil, unsupported(diag.kind, diag.message)
-		}
+	for i, p := range fn.Params {
 		if p.Default != nil {
-			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, true, true, "")
+			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, p.Pattern != nil || p.Name == "", true, true, "")
 			return nil, unsupported(diag.kind, diag.message)
 		}
-		if !llvmIsIdent(p.Name) {
+		paramName := p.Name
+		if p.Pattern != nil {
+			if paramName == "" {
+				paramName = fmt.Sprintf("__arg%d", i)
+			}
+		} else if paramName == "" {
+			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, true, false, true, "")
+			return nil, unsupported(diag.kind, diag.message)
+		}
+		if !llvmIsIdent(paramName) {
 			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, false, "")
 			return nil, unsupported(diag.kind, diag.message)
 		}
 		typ, err := llvmType(p.Type, env)
 		if err != nil {
-			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, true, unsupportedMessage(err))
+			diag := llvmFunctionParamDiagnostic(fn.Name, paramName, false, false, true, unsupportedMessage(err))
 			return nil, unsupported(diag.kind, diag.message)
 		}
 		meta, err := containerMetadataFromSourceType(p.Type, env)
 		if err != nil {
-			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, false, false, true, unsupportedMessage(err))
+			diag := llvmFunctionParamDiagnostic(fn.Name, paramName, false, false, true, unsupportedMessage(err))
 			return nil, unsupported(diag.kind, diag.message)
 		}
-		info := paramInfo{name: p.Name, typ: typ}
+		info := paramInfo{name: paramName, typ: typ, pattern: p.Pattern}
 		meta.applyToParam(&info)
 		sig.params = append(sig.params, info)
 	}
@@ -1500,9 +1527,27 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 			v.ptr = true
 			v.mutable = p.mutable
 			g.bindLocal(p.name, v)
+			if p.pattern != nil {
+				loaded, err := g.emitIdent(p.name)
+				if err != nil {
+					return "", err
+				}
+				if err := g.bindLetPattern(p.pattern, loaded, false); err != nil {
+					return "", err
+				}
+			}
 			continue
 		}
 		g.bindNamedLocal(p.name, v, p.mutable)
+		if p.pattern != nil {
+			loaded, err := g.emitIdent(p.name)
+			if err != nil {
+				return "", err
+			}
+			if err := g.bindLetPattern(p.pattern, loaded, false); err != nil {
+				return "", err
+			}
+		}
 	}
 	if sig.ret == "void" {
 		if err := g.emitBlock(sig.decl.Body.Stmts); err != nil {

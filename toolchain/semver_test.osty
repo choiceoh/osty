@@ -89,8 +89,9 @@ fn testSemverComparisonHelpersAreThreeWay() {
     testing.assertEq(signString("rc", "rc"), 0)
 }
 
-// Property-based tests (v0.5 G33). Stubs in std.testing.gen make
-// these no-ops at runtime today — see testing_gen.osty header.
+// Property-based tests (v0.5 G33). The current LLVM lowering exercises
+// the `intRange` / `pair` / `triple` subset directly from the property
+// call site, so these now run as real invariants instead of placeholders.
 
 fn testSemverPropSignIntReflexive() {
     testing.property(

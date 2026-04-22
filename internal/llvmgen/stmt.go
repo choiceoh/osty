@@ -1324,6 +1324,8 @@ func (g *generator) emitTestingCallStmt(call *ast.CallExpr) (bool, error) {
 		return true, err
 	case "snapshot":
 		return true, g.emitTestingSnapshot(call)
+	case "property", "propertyN", "propertySeeded":
+		return true, g.emitTestingProperty(call, method)
 	default:
 		return true, unsupportedf("call", "testing.%s is not supported by LLVM yet", method)
 	}

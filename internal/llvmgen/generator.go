@@ -28,34 +28,35 @@ type generator struct {
 	// the generic address-space contract from this value — see
 	// dataLayoutFor / withDataLayout for the matching `target
 	// datalayout` directive emitted alongside the triple.
-	target            string
-	functions         map[string]*fnSig
-	methods           map[string]map[string]*fnSig
-	structs           []*structInfo
-	structsByName     map[string]*structInfo
-	structsByType     map[string]*structInfo
-	enums             []*enumInfo
-	enumsByName       map[string]*enumInfo
-	enumsByType       map[string]*enumInfo
-	interfacesByName  map[string]*interfaceInfo
-	typeAliasesByName map[string]*typeAliasInfo
-	globals           map[string]value
-	globalDefs        []string
-	globalConsts      map[string]constValue
-	tupleTypes        map[string]tupleTypeInfo
-	resultTypes       map[string]builtinResultType
-	rangeTypes        map[string]builtinRangeType
-	runtimeFFI        map[string]map[string]*runtimeFFIFunction
-	runtimeFFIPaths   map[string]string
-	testingAliases    map[string]bool
-	stdIoAliases      map[string]bool
-	stdBytesAliases   map[string]bool
-	stdStringsAliases map[string]bool
-	stdEnvAliases     map[string]bool
-	runtimeDecls      map[string]runtimeDecl
-	runtimeDeclOrder  []string
-	traceHelpers      map[string]string
-	traceHelperDefs   []string
+	target               string
+	functions            map[string]*fnSig
+	methods              map[string]map[string]*fnSig
+	structs              []*structInfo
+	structsByName        map[string]*structInfo
+	structsByType        map[string]*structInfo
+	enums                []*enumInfo
+	enumsByName          map[string]*enumInfo
+	enumsByType          map[string]*enumInfo
+	interfacesByName     map[string]*interfaceInfo
+	typeAliasesByName    map[string]*typeAliasInfo
+	globals              map[string]value
+	globalDefs           []string
+	globalConsts         map[string]constValue
+	tupleTypes           map[string]tupleTypeInfo
+	resultTypes          map[string]builtinResultType
+	rangeTypes           map[string]builtinRangeType
+	runtimeFFI           map[string]map[string]*runtimeFFIFunction
+	runtimeFFIPaths      map[string]string
+	testingAliases       map[string]bool
+	stdTestingGenAliases map[string]bool
+	stdIoAliases         map[string]bool
+	stdBytesAliases      map[string]bool
+	stdStringsAliases    map[string]bool
+	stdEnvAliases        map[string]bool
+	runtimeDecls         map[string]runtimeDecl
+	runtimeDeclOrder     []string
+	traceHelpers         map[string]string
+	traceHelperDefs      []string
 	// Closure-env thunks generated on demand when a top-level fn
 	// symbol is used as a first-class value. Mirror of the MIR
 	// closure ABI (internal/llvmgen/mir_generator.go:emitThunks): one

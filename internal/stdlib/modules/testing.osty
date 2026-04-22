@@ -76,27 +76,13 @@ pub struct Gen<T> {
 /// counterexample failure) in the surrounding test case. Seed
 /// defaults to the runner-wide seed so a failing property is
 /// reproducible.
-pub fn property<T>(name: String, g: Gen<T>, pred: fn(T) -> Bool) {
-    let _ = name
-    let _ = g
-    let _ = pred
-}
+pub fn property<T>(name: String, g: Gen<T>, pred: fn(T) -> Bool)
 
 /// `propertyN` varies the sample budget. Use with large generators
 /// where 100 samples is too thin, or with cheap generators where
 /// more samples improve coverage.
-pub fn propertyN<T>(name: String, g: Gen<T>, iterations: Int, pred: fn(T) -> Bool) {
-    let _ = name
-    let _ = g
-    let _ = iterations
-    let _ = pred
-}
+pub fn propertyN<T>(name: String, g: Gen<T>, iterations: Int, pred: fn(T) -> Bool)
 
 /// `propertySeeded` pins the sample seed — useful inside a test
 /// that wants the property replay to match an earlier failing run.
-pub fn propertySeeded<T>(name: String, g: Gen<T>, seed: Int, pred: fn(T) -> Bool) {
-    let _ = name
-    let _ = g
-    let _ = seed
-    let _ = pred
-}
+pub fn propertySeeded<T>(name: String, g: Gen<T>, seed: Int, pred: fn(T) -> Bool)

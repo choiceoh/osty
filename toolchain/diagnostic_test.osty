@@ -140,9 +140,10 @@ fn testDiagnosticFormatsLintDiagnosticsWithLocations() {
     assertDiagnosticTextContains(output, "value is compared with itself `x`")
 }
 
-// Property-based tests (v0.5 G33). Stubs in std.testing.gen make
-// these no-ops at runtime today. `intRange(1000, 9999)` keeps
-// synthesised codes inside the 5-char classifier ranges.
+// Property-based tests (v0.5 G33). The current LLVM lowering exercises
+// the `intRange` / `oneOf` subset directly from the property call
+// site. `intRange(1000, 9999)` keeps synthesised codes inside the
+// 5-char classifier ranges.
 
 fn testDiagnosticPropErrorCodesAreErrors() {
     testing.property(

@@ -1400,6 +1400,57 @@ fn main() {
 	}
 }
 
+func TestLLVMBackendBinaryTestingPropertyGeneratorSubset(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use std.testing as testing
+use std.testing.gen as gen
+
+fn main() {
+    testing.property(
+        "intRange stays inside bounds",
+        gen.intRange(-1000, 1000),
+        |n: Int| n >= -1000 && n < 1000,
+    )
+    testing.property(
+        "ascii strings honor maxLen",
+        gen.asciiString(12),
+        |s: String| s.len() <= 12,
+    )
+    testing.property(
+        "pair generator keeps both ranges",
+        gen.pair(gen.intRange(-3, 3), gen.intRange(10, 20)),
+        |(a, b): (Int, Int)| a >= -3 && a < 3 && b >= 10 && b < 20,
+    )
+    testing.property(
+        "triple generator keeps all ranges",
+        gen.triple(gen.intRange(0, 2), gen.intRange(3, 5), gen.intRange(6, 8)),
+        |(a, b, c): (Int, Int, Int)| a >= 0 && a < 2 && b >= 3 && b < 5 && c >= 6 && c < 8,
+    )
+    testing.property(
+        "oneOf chooses from the provided literal pool",
+        gen.oneOf(["aa", "bbb", "cccc"]),
+        |s: String| s == "aa" || s == "bbb" || s == "cccc",
+    )
+    println("ok")
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "ok\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
 func TestLLVMBackendBinarySafepointsKeepManagedRootsAlive(t *testing.T) {
 	parallelClangBackendTest(t)
 

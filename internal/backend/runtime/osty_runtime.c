@@ -11884,6 +11884,47 @@ void *osty_rt_io_read_line(void) {
     return out;
 }
 
+static uint64_t osty_rt_test_gen_mix_u64(uint64_t x) {
+    x += 0x9E3779B97F4A7C15ULL;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+    return x ^ (x >> 31);
+}
+
+int64_t osty_rt_test_gen_int(int64_t seed) {
+    return (int64_t)osty_rt_test_gen_mix_u64((uint64_t)seed);
+}
+
+int64_t osty_rt_test_gen_int_range(int64_t lo, int64_t hi, int64_t seed) {
+    uint64_t span;
+    uint64_t mixed;
+    if (hi <= lo) {
+        osty_rt_abort("testing.gen.intRange: hi must be greater than lo");
+    }
+    span = (uint64_t)(hi - lo);
+    mixed = osty_rt_test_gen_mix_u64((uint64_t)seed);
+    return lo + (int64_t)(mixed % span);
+}
+
+void *osty_rt_test_gen_ascii_string(int64_t max_len, int64_t seed) {
+    uint64_t mixed;
+    size_t len;
+    size_t i;
+    char *buf;
+    if (max_len < 0) {
+        osty_rt_abort("testing.gen.asciiString: maxLen must be non-negative");
+    }
+    mixed = osty_rt_test_gen_mix_u64((uint64_t)seed);
+    len = (size_t)(mixed % (uint64_t)(max_len + 1));
+    buf = (char *)osty_rt_xmalloc(len + 1, "runtime.test_gen.ascii_string");
+    for (i = 0; i < len; i++) {
+        uint64_t ch_seed = mixed + (uint64_t)i * 0x9E3779B97F4A7C15ULL;
+        buf[i] = (char)(32 + (osty_rt_test_gen_mix_u64(ch_seed) % 95ULL));
+    }
+    buf[len] = '\0';
+    return osty_rt_string_dup_site(buf, len, "runtime.test_gen.ascii_string");
+}
+
 /* std.env command-line argument surface.
  *
  * The emitter (see internal/llvmgen/stdlib_env_shim.go) routes the Osty
