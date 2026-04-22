@@ -2484,14 +2484,94 @@ static uint64_t osty_rt_hash_mix64(uint64_t h) {
     return h;
 }
 
-static size_t osty_rt_hash_bytes(const unsigned char *bytes, size_t len) {
-    uint64_t h = 1469598103934665603ULL;
-    size_t i;
-    for (i = 0; i < len; i++) {
-        h ^= (uint64_t)bytes[i];
-        h *= 1099511628211ULL;
+#define OSTY_RT_STRING_CACHE_SLOTS 256
+
+typedef struct osty_rt_string_cache_entry {
+    const char *value;
+    size_t len;
+    size_t hash;
+} osty_rt_string_cache_entry;
+
+static OSTY_RT_TLS osty_rt_string_cache_entry
+    osty_rt_string_cache[OSTY_RT_STRING_CACHE_SLOTS];
+
+static void osty_rt_string_measure(const char *value,
+                                   size_t *len_out,
+                                   size_t *hash_out) {
+    size_t len = 0;
+    size_t hash = (size_t)osty_rt_hash_mix64(0ULL);
+    if (value != NULL) {
+        size_t idx = (size_t)osty_rt_hash_mix64(
+                         ((uint64_t)(uintptr_t)value) >> 4) &
+                     (OSTY_RT_STRING_CACHE_SLOTS - 1);
+        osty_rt_string_cache_entry *entry = &osty_rt_string_cache[idx];
+        if (entry->value == value) {
+            len = entry->len;
+            hash = entry->hash;
+        } else {
+            const unsigned char *cursor = (const unsigned char *)value;
+            uint64_t h = 1469598103934665603ULL;
+            while (*cursor != '\0') {
+                h ^= (uint64_t)(*cursor++);
+                h *= 1099511628211ULL;
+                len += 1;
+            }
+            hash = (size_t)osty_rt_hash_mix64(h);
+            entry->value = value;
+            entry->len = len;
+            entry->hash = hash;
+        }
     }
-    return (size_t)osty_rt_hash_mix64(h);
+    if (len_out != NULL) {
+        *len_out = len;
+    }
+    if (hash_out != NULL) {
+        *hash_out = hash;
+    }
+}
+
+static inline size_t osty_rt_string_len(const char *value) {
+    size_t len = 0;
+    osty_rt_string_measure(value, &len, NULL);
+    return len;
+}
+
+static inline size_t osty_rt_string_hash(const char *value) {
+    size_t hash = (size_t)osty_rt_hash_mix64(0ULL);
+    osty_rt_string_measure(value, NULL, &hash);
+    return hash;
+}
+
+static int osty_rt_string_compare_bytes(const char *left, const char *right) {
+    size_t left_len = 0;
+    size_t right_len = 0;
+    size_t common = 0;
+    int cmp = 0;
+    if (left == right) {
+        return 0;
+    }
+    if (left == NULL) {
+        return (right == NULL) ? 0 : -1;
+    }
+    if (right == NULL) {
+        return 1;
+    }
+    osty_rt_string_measure(left, &left_len, NULL);
+    osty_rt_string_measure(right, &right_len, NULL);
+    common = (left_len < right_len) ? left_len : right_len;
+    if (common != 0) {
+        cmp = memcmp(left, right, common);
+        if (cmp != 0) {
+            return cmp;
+        }
+    }
+    if (left_len < right_len) {
+        return -1;
+    }
+    if (left_len > right_len) {
+        return 1;
+    }
+    return 0;
 }
 
 static size_t osty_rt_map_key_hash(int64_t kind, const void *key) {
@@ -2515,10 +2595,7 @@ static size_t osty_rt_map_key_hash(int64_t kind, const void *key) {
     case OSTY_RT_ABI_STRING: {
         const char *value = NULL;
         memcpy(&value, key, sizeof(value));
-        if (value == NULL) {
-            return (size_t)osty_rt_hash_mix64(0ULL);
-        }
-        return osty_rt_hash_bytes((const unsigned char *)value, strlen(value));
+        return osty_rt_string_hash(value);
     }
     default:
         osty_rt_abort("unsupported map key hash kind");
@@ -4375,16 +4452,7 @@ static int osty_rt_compare_f64_ascending(const void *left, const void *right) {
 static int osty_rt_compare_string_ascending(const void *left, const void *right) {
     const char *left_value = *(const char * const *)left;
     const char *right_value = *(const char * const *)right;
-    if (left_value == NULL || right_value == NULL) {
-        if (left_value == right_value) {
-            return 0;
-        }
-        if (left_value == NULL) {
-            return -1;
-        }
-        return 1;
-    }
-    return strcmp(left_value, right_value);
+    return osty_rt_string_compare_bytes(left_value, right_value);
 }
 
 void *osty_rt_list_sorted_i64(void *raw_list) {
@@ -4503,10 +4571,23 @@ void *osty_rt_list_slice(void *raw_list, int64_t start, int64_t end) {
 }
 
 bool osty_rt_strings_Equal(const char *left, const char *right) {
-    if (left == NULL || right == NULL) {
-        return left == right;
+    size_t left_len = 0;
+    size_t right_len = 0;
+    if (left == right) {
+        return true;
     }
-    return strcmp(left, right) == 0;
+    if (left == NULL || right == NULL) {
+        return false;
+    }
+    osty_rt_string_measure(left, &left_len, NULL);
+    osty_rt_string_measure(right, &right_len, NULL);
+    if (left_len != right_len) {
+        return false;
+    }
+    if (left_len == 0) {
+        return true;
+    }
+    return memcmp(left, right, left_len) == 0;
 }
 
 const char *osty_rt_int_to_string(int64_t value) {
@@ -4701,7 +4782,7 @@ int64_t osty_rt_strings_Compare(const char *left, const char *right) {
     if (right == NULL) {
         return left[0] == '\0' ? 0 : 1;
     }
-    result = strcmp(left, right);
+    result = osty_rt_string_compare_bytes(left, right);
     if (result < 0) {
         return -1;
     }
@@ -4751,15 +4832,12 @@ int64_t osty_rt_strings_IndexOf(const char *value, const char *substr) {
 }
 
 int64_t osty_rt_strings_ByteLen(const char *value) {
-    if (value == NULL) {
-        return 0;
-    }
-    return (int64_t)strlen(value);
+    return (int64_t)osty_rt_string_len(value);
 }
 
 const char *osty_rt_strings_Concat(const char *left, const char *right) {
-    size_t left_len = (left == NULL) ? 0 : strlen(left);
-    size_t right_len = (right == NULL) ? 0 : strlen(right);
+    size_t left_len = osty_rt_string_len(left);
+    size_t right_len = osty_rt_string_len(right);
     char *out = (char *)osty_gc_allocate_managed(left_len + right_len + 1, OSTY_GC_KIND_STRING, "runtime.strings.concat", NULL, NULL);
     if (left_len != 0) {
         memcpy(out, left, left_len);
@@ -4785,7 +4863,7 @@ const char *osty_rt_strings_ConcatN(int64_t count, const char *const *parts) {
     if (count > 0 && parts != NULL) {
         for (i = 0; i < count; i++) {
             if (parts[i] != NULL) {
-                total += strlen(parts[i]);
+                total += osty_rt_string_len(parts[i]);
             }
         }
     }
@@ -4796,7 +4874,7 @@ const char *osty_rt_strings_ConcatN(int64_t count, const char *const *parts) {
             if (parts[i] == NULL) {
                 continue;
             }
-            size_t n = strlen(parts[i]);
+            size_t n = osty_rt_string_len(parts[i]);
             if (n != 0) {
                 memcpy(cursor, parts[i], n);
                 cursor += n;
@@ -4822,7 +4900,7 @@ bool osty_rt_strings_HasPrefix(const char *value, const char *prefix) {
     if (value == NULL || prefix == NULL) {
         return false;
     }
-    prefix_len = strlen(prefix);
+    prefix_len = osty_rt_string_len(prefix);
     return strncmp(value, prefix, prefix_len) == 0;
 }
 
@@ -4832,8 +4910,8 @@ bool osty_rt_strings_HasSuffix(const char *value, const char *suffix) {
     if (value == NULL || suffix == NULL) {
         return false;
     }
-    value_len = strlen(value);
-    suffix_len = strlen(suffix);
+    value_len = osty_rt_string_len(value);
+    suffix_len = osty_rt_string_len(suffix);
     if (suffix_len > value_len) {
         return false;
     }
@@ -5079,7 +5157,7 @@ void *osty_rt_strings_Bytes(const char *value) {
         return out;
     }
     cursor = (const unsigned char *)value;
-    n = strlen(value);
+    n = osty_rt_string_len(value);
     for (i = 0; i < n; i++) {
         item = (int8_t)cursor[i];
         osty_rt_list_push_bytes_v1(out, &item, (int64_t)sizeof(item));
@@ -5105,12 +5183,12 @@ const char *osty_rt_strings_Join(void *raw_parts, const char *sep) {
         return out;
     }
     count = parts->len;
-    sep_len = (sep == NULL) ? 0 : strlen(sep);
+    sep_len = osty_rt_string_len(sep);
     total = 0;
     for (i = 0; i < count; i++) {
         piece = ((const char **)parts->data)[i];
         if (piece != NULL) {
-            total += strlen(piece);
+            total += osty_rt_string_len(piece);
         }
         if (i + 1 < count) {
             total += sep_len;
@@ -5121,7 +5199,7 @@ const char *osty_rt_strings_Join(void *raw_parts, const char *sep) {
     for (i = 0; i < count; i++) {
         piece = ((const char **)parts->data)[i];
         if (piece != NULL) {
-            piece_len = strlen(piece);
+            piece_len = osty_rt_string_len(piece);
             if (piece_len != 0) {
                 memcpy(cursor, piece, piece_len);
                 cursor += piece_len;
@@ -5147,7 +5225,7 @@ const char *osty_rt_strings_Repeat(const char *value, int64_t n) {
     if (n <= 0) {
         return osty_rt_string_dup_site("", 0, "runtime.strings.repeat.empty");
     }
-    value_len = strlen(value);
+    value_len = osty_rt_string_len(value);
     if (value_len == 0) {
         return osty_rt_string_dup_site("", 0, "runtime.strings.repeat.empty");
     }
