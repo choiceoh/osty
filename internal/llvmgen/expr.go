@@ -3852,7 +3852,8 @@ func (g *generator) emitMapMapValues(call *ast.CallExpr, base value, keyTyp stri
 // form `self.get(key) ?? default`. It composes the real `get` intrinsic
 // (Option<V>) with the ptr-backed coalesce shape: icmp eq ptr null →
 // branch → phi. For scalar V the some branch also loads the payload
-// out of the boxed Option so the phi produces V, not ptr.
+// out of a stack slot so hot getOr loops avoid allocating an Option box
+// per successful lookup.
 func (g *generator) emitMapGetOr(call *ast.CallExpr, base value, keyTyp string, keyString bool) (value, bool, error) {
 	if len(call.Args) != 2 ||
 		call.Args[0].Name != "" || call.Args[1].Name != "" ||
@@ -3870,10 +3871,6 @@ func (g *generator) emitMapGetOr(call *ast.CallExpr, base value, keyTyp string, 
 	if err != nil {
 		return value{}, true, err
 	}
-	optVal, err := g.emitMapGetCore(base, loadedKey, keyTyp, keyString)
-	if err != nil {
-		return value{}, true, err
-	}
 
 	def, err := g.emitExpr(call.Args[1].Value)
 	if err != nil {
@@ -3882,6 +3879,48 @@ func (g *generator) emitMapGetOr(call *ast.CallExpr, base value, keyTyp string, 
 	valTyp := base.mapValueTyp
 	if def.typ != valTyp {
 		return value{}, true, unsupportedf("type-system", "map.getOr default type %s, want %s", def.typ, valTyp)
+	}
+	if valTyp != "ptr" {
+		getSym := mapRuntimeGetSymbol(keyTyp, keyString)
+		g.declareRuntimeSymbol(getSym, "i1", []paramInfo{{typ: "ptr"}, {typ: keyTyp}, {typ: "ptr"}})
+
+		emitter := g.toOstyEmitter()
+		slot := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, valTyp))
+		present := llvmCall(emitter, "i1", getSym, []*LlvmValue{
+			toOstyValue(base),
+			toOstyValue(loadedKey),
+			{typ: "ptr", name: slot},
+		})
+		labels := llvmIfExprStart(emitter, present)
+		g.takeOstyEmitter(emitter)
+
+		// then = hit: load the scalar payload from the temp slot.
+		g.currentBlock = labels.thenLabel
+		emitter = g.toOstyEmitter()
+		payload := llvmLoad(emitter, &LlvmValue{typ: valTyp, name: slot, pointer: true})
+		g.takeOstyEmitter(emitter)
+		hitPred := g.currentBlock
+		hitVal := value{typ: valTyp, ref: payload.name}
+
+		// else = miss: fall back to the default.
+		emitter = g.toOstyEmitter()
+		llvmIfExprElse(emitter, labels)
+		g.takeOstyEmitter(emitter)
+		g.currentBlock = labels.elseLabel
+		missPred := g.currentBlock
+		missVal := def
+
+		out, err := g.emitIfExprPhi(labels, hitPred, missPred, hitVal, missVal)
+		if err != nil {
+			return value{}, true, err
+		}
+		return out, true, nil
+	}
+
+	optVal, err := g.emitMapGetCore(base, loadedKey, keyTyp, keyString)
+	if err != nil {
+		return value{}, true, err
 	}
 
 	emitter := g.toOstyEmitter()
