@@ -722,6 +722,20 @@ typedef struct osty_gc_stats {
     int64_t allocated_since_minor;
     int64_t nursery_limit_bytes;
     int64_t promote_age;
+    int64_t free_list_count;
+    int64_t free_list_bytes;
+    int64_t free_list_reused_count_total;
+    int64_t free_list_reused_bytes_total;
+    int64_t humongous_alloc_count_total;
+    int64_t humongous_alloc_bytes_total;
+    int64_t humongous_swept_count_total;
+    int64_t humongous_swept_bytes_total;
+    int64_t bump_block_count_total;
+    int64_t bump_block_bytes_total;
+    int64_t bump_alloc_count_total;
+    int64_t bump_alloc_bytes_total;
+    int64_t bump_recycled_block_count_total;
+    int64_t bump_recycled_bytes_total;
 } osty_gc_stats;
 
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
@@ -799,6 +813,172 @@ int main(void) {
 	}
 	if got, want := string(runOutput), "2 48 0\n1 0 2 48\n2 1 40 88\n1 1 1\n1\n"; got != want {
 		t.Fatalf("runtime stats harness stdout = %q, want %q", got, want)
+	}
+}
+
+// TestBundledRuntimeStatsFragmentation covers RUNTIME_GC_DELTA §6.5 —
+// the fragmentation instrumentation now consolidated into the
+// osty_gc_stats snapshot. Individual scalar accessors existed before,
+// but a single atomic read was missing. The harness exercises both
+// the small-object young-bump path and the humongous-object direct
+// path, runs a collection, and confirms:
+//
+//   - small allocations increment bump_alloc_count_total /
+//     bytes (young tier via TLAB)
+//   - a humongous allocation bypasses the bump path and increments
+//     humongous_alloc_count_total / bytes instead
+//   - after sweep, the humongous object is reclaimed and
+//     humongous_swept_count_total advances
+//   - sweeping young-bump allocations recycles empty blocks, so
+//     bump_recycled_block_count_total grows
+//   - scalar accessors agree with the struct snapshot
+func TestBundledRuntimeStatsFragmentation(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_stats_fragmentation_harness.c")
+	binaryName := "runtime_gc_stats_fragmentation_harness"
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	binaryPath := filepath.Join(dir, binaryName)
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+typedef struct osty_gc_stats {
+    int64_t collection_count;
+    int64_t live_count;
+    int64_t live_bytes;
+    int64_t allocated_since_collect;
+    int64_t allocated_bytes_total;
+    int64_t swept_count_total;
+    int64_t swept_bytes_total;
+    int64_t pre_write_count;
+    int64_t pre_write_managed_count;
+    int64_t post_write_count;
+    int64_t post_write_managed_count;
+    int64_t load_count;
+    int64_t load_managed_count;
+    int64_t satb_log_count;
+    int64_t remembered_edge_count;
+    int64_t global_root_count;
+    int64_t pressure_limit_bytes;
+    int64_t mark_stack_max_depth;
+    int64_t collection_nanos_total;
+    int64_t collection_nanos_last;
+    int64_t collection_nanos_max;
+    int64_t index_capacity;
+    int64_t index_count;
+    int64_t index_tombstones;
+    int64_t index_find_ops_total;
+    int64_t minor_count;
+    int64_t major_count;
+    int64_t minor_nanos_total;
+    int64_t major_nanos_total;
+    int64_t young_count;
+    int64_t young_bytes;
+    int64_t old_count;
+    int64_t old_bytes;
+    int64_t promoted_count_total;
+    int64_t promoted_bytes_total;
+    int64_t allocated_since_minor;
+    int64_t nursery_limit_bytes;
+    int64_t promote_age;
+    int64_t free_list_count;
+    int64_t free_list_bytes;
+    int64_t free_list_reused_count_total;
+    int64_t free_list_reused_bytes_total;
+    int64_t humongous_alloc_count_total;
+    int64_t humongous_alloc_bytes_total;
+    int64_t humongous_swept_count_total;
+    int64_t humongous_swept_bytes_total;
+    int64_t bump_block_count_total;
+    int64_t bump_block_bytes_total;
+    int64_t bump_alloc_count_total;
+    int64_t bump_alloc_bytes_total;
+    int64_t bump_recycled_block_count_total;
+    int64_t bump_recycled_bytes_total;
+} osty_gc_stats;
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+
+void osty_gc_debug_collect(void);
+void osty_gc_debug_stats(osty_gc_stats *out);
+int64_t osty_gc_debug_humongous_alloc_count_total(void);
+int64_t osty_gc_debug_humongous_alloc_bytes_total(void);
+int64_t osty_gc_debug_bump_alloc_count_total(void);
+int64_t osty_gc_debug_bump_alloc_bytes_total(void);
+
+int main(void) {
+    osty_gc_stats s0, s1, s2;
+
+    /* Baseline. */
+    osty_gc_debug_stats(&s0);
+
+    /* Small-object churn: 8 allocations that go through the young bump
+     * path. None are rooted so they all get swept on collect. */
+    for (int i = 0; i < 8; i++) {
+        (void)osty_gc_alloc_v1(7, 32, "frag.small");
+    }
+    /* Humongous: crosses the size-class threshold so it takes the
+     * direct-alloc path, bypassing bump blocks. 256 KiB is well
+     * above the humongous threshold. */
+    (void)osty_gc_alloc_v1(7, 256 * 1024, "frag.humongous");
+
+    osty_gc_debug_stats(&s1);
+    /* Small allocs landed on the young bump path. */
+    printf("%d\n", s1.bump_alloc_count_total - s0.bump_alloc_count_total >= 8);
+    /* Humongous bypassed the bump path and shows in humongous totals. */
+    printf("%d %d\n",
+        s1.humongous_alloc_count_total - s0.humongous_alloc_count_total == 1,
+        s1.humongous_alloc_bytes_total - s0.humongous_alloc_bytes_total >= 256 * 1024);
+
+    /* Collect: all allocations are unreferenced, so they get swept.
+     * Humongous frees directly; young-bump blocks that fully empty
+     * move onto the recycled-block list. */
+    osty_gc_debug_collect();
+    osty_gc_debug_stats(&s2);
+    /* Humongous swept counter advanced. */
+    printf("%d\n",
+        s2.humongous_swept_count_total - s0.humongous_swept_count_total >= 1);
+    /* The young-bump block holding our small objects should have
+     * recycled since every occupant was swept. */
+    printf("%d\n",
+        s2.bump_recycled_block_count_total >= s0.bump_recycled_block_count_total);
+
+    /* Scalar accessors agree with struct snapshot. */
+    printf("%d %d %d\n",
+        osty_gc_debug_humongous_alloc_count_total() == s2.humongous_alloc_count_total,
+        osty_gc_debug_humongous_alloc_bytes_total() == s2.humongous_alloc_bytes_total,
+        osty_gc_debug_bump_alloc_bytes_total() == s2.bump_alloc_bytes_total);
+
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	got := strings.ReplaceAll(string(runOutput), "\r\n", "\n")
+	if want := "1\n1 1\n1\n1\n1 1 1\n"; got != want {
+		t.Fatalf("fragmentation stats harness stdout = %q, want %q", got, want)
 	}
 }
 

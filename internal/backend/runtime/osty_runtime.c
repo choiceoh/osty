@@ -8111,6 +8111,28 @@ typedef struct osty_gc_stats {
     int64_t allocated_since_minor;
     int64_t nursery_limit_bytes;
     int64_t promote_age;
+    /* Phase D / §6.5 — fragmentation instrumentation. All individual
+     * counters already have scalar accessors (osty_gc_debug_free_list_*,
+     * osty_gc_debug_bump_*, osty_gc_debug_humongous_*); consolidating
+     * them into the stats snapshot lets a single atomic read capture
+     * the whole fragmentation picture without taking the GC lock per
+     * field. Fields grouped by tier so tuning scripts can compute
+     * utilization ratios (alloc / block_bytes_total) and recycle rates
+     * (recycled_bytes_total / swept_bytes_total) directly. */
+    int64_t free_list_count;
+    int64_t free_list_bytes;
+    int64_t free_list_reused_count_total;
+    int64_t free_list_reused_bytes_total;
+    int64_t humongous_alloc_count_total;
+    int64_t humongous_alloc_bytes_total;
+    int64_t humongous_swept_count_total;
+    int64_t humongous_swept_bytes_total;
+    int64_t bump_block_count_total;
+    int64_t bump_block_bytes_total;
+    int64_t bump_alloc_count_total;
+    int64_t bump_alloc_bytes_total;
+    int64_t bump_recycled_block_count_total;
+    int64_t bump_recycled_bytes_total;
 } osty_gc_stats;
 
 void osty_gc_debug_stats(osty_gc_stats *out) {
@@ -8156,6 +8178,48 @@ void osty_gc_debug_stats(osty_gc_stats *out) {
     out->allocated_since_minor = osty_gc_allocated_since_minor;
     out->nursery_limit_bytes = osty_gc_nursery_limit_now();
     out->promote_age = osty_gc_promote_age_now();
+    /* §6.5 fragmentation. Bump aggregates sum across tiers (young /
+     * survivor / old / pinned) so a single utilization ratio covers
+     * the whole bump population; callers that want per-tier breakdown
+     * use the existing scalar accessors. */
+    out->free_list_count = osty_gc_free_list_count;
+    out->free_list_bytes = osty_gc_free_list_bytes;
+    out->free_list_reused_count_total = osty_gc_free_list_reused_count_total;
+    out->free_list_reused_bytes_total = osty_gc_free_list_reused_bytes_total;
+    out->humongous_alloc_count_total = osty_gc_humongous_alloc_count_total;
+    out->humongous_alloc_bytes_total = osty_gc_humongous_alloc_bytes_total;
+    out->humongous_swept_count_total = osty_gc_humongous_swept_count_total;
+    out->humongous_swept_bytes_total = osty_gc_humongous_swept_bytes_total;
+    out->bump_block_count_total =
+        osty_gc_bump_block_count +
+        osty_gc_survivor_bump_block_count +
+        osty_gc_old_bump_block_count +
+        osty_gc_pinned_bump_block_count;
+    out->bump_block_bytes_total =
+        osty_gc_bump_block_bytes_total +
+        osty_gc_survivor_bump_block_bytes_total +
+        osty_gc_old_bump_block_bytes_total +
+        osty_gc_pinned_bump_block_bytes_total;
+    out->bump_alloc_count_total =
+        osty_gc_bump_alloc_count_total +
+        osty_gc_survivor_bump_alloc_count_total +
+        osty_gc_old_bump_alloc_count_total +
+        osty_gc_pinned_bump_alloc_count_total;
+    out->bump_alloc_bytes_total =
+        osty_gc_bump_alloc_bytes_total +
+        osty_gc_survivor_bump_alloc_bytes_total +
+        osty_gc_old_bump_alloc_bytes_total +
+        osty_gc_pinned_bump_alloc_bytes_total;
+    out->bump_recycled_block_count_total =
+        osty_gc_bump_recycled_block_count_total +
+        osty_gc_survivor_bump_recycled_block_count_total +
+        osty_gc_old_bump_recycled_block_count_total +
+        osty_gc_pinned_bump_recycled_block_count_total;
+    out->bump_recycled_bytes_total =
+        osty_gc_bump_recycled_bytes_total +
+        osty_gc_survivor_bump_recycled_bytes_total +
+        osty_gc_old_bump_recycled_bytes_total +
+        osty_gc_pinned_bump_recycled_bytes_total;
     osty_gc_release();
 }
 
@@ -8361,6 +8425,9 @@ void osty_gc_debug_stats_dump(FILE *out) {
             "  young / old:             %lld objs %lld B / %lld objs %lld B\n"
             "  promoted total:          %lld objs %lld B\n"
             "  nursery:                 %lld / %lld bytes, promote_age=%lld\n"
+            "  free list:               %lld chunks, %lld bytes (reused %lld / %lld B total)\n"
+            "  humongous:               alloc %lld / %lld B, swept %lld / %lld B\n"
+            "  bump (all tiers):        %lld blocks, %lld B, alloc %lld / %lld B, recycled %lld blocks / %lld B\n"
             "}\n",
             (long long)s.collection_count,
             (long long)s.live_count, (long long)s.live_bytes,
@@ -8384,7 +8451,20 @@ void osty_gc_debug_stats_dump(FILE *out) {
             (long long)s.old_count, (long long)s.old_bytes,
             (long long)s.promoted_count_total, (long long)s.promoted_bytes_total,
             (long long)s.allocated_since_minor,
-            (long long)s.nursery_limit_bytes, (long long)s.promote_age);
+            (long long)s.nursery_limit_bytes, (long long)s.promote_age,
+            (long long)s.free_list_count, (long long)s.free_list_bytes,
+            (long long)s.free_list_reused_count_total,
+            (long long)s.free_list_reused_bytes_total,
+            (long long)s.humongous_alloc_count_total,
+            (long long)s.humongous_alloc_bytes_total,
+            (long long)s.humongous_swept_count_total,
+            (long long)s.humongous_swept_bytes_total,
+            (long long)s.bump_block_count_total,
+            (long long)s.bump_block_bytes_total,
+            (long long)s.bump_alloc_count_total,
+            (long long)s.bump_alloc_bytes_total,
+            (long long)s.bump_recycled_block_count_total,
+            (long long)s.bump_recycled_bytes_total);
 }
 
 /* Phase A1 heap validation oracle (RUNTIME_GC_DELTA §9.5).
