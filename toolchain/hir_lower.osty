@@ -661,6 +661,11 @@ fn hirLowerStripSign(text: String) -> String {
     }
 }
 
+// hirLowerCharToDigit takes a Char (i32 Unicode scalar) because the
+// caller iterates `text.chars()` which returns `List<Char>` per the
+// String primitive contract. Earlier this took `String` and matched
+// against "0"/"a"/…, which passed a Char where a String was expected
+// and first-walled the merged AST probe with LLVM011.
 fn hirLowerCharToDigit(ch: Char) -> Int {
     match ch {
         '0' -> 0, '1' -> 1, '2' -> 2, '3' -> 3, '4' -> 4,

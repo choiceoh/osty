@@ -308,6 +308,11 @@ type builtinResultType struct {
 	errTyp string
 }
 
+type builtinRangeType struct {
+	typ     string
+	elemTyp string
+}
+
 func builtinResultTypeFromAST(t ast.Type, env typeEnv) (builtinResultType, bool) {
 	named, ok := t.(*ast.NamedType)
 	if !ok || len(named.Path) != 1 || named.Path[0] != "Result" || len(named.Args) != 2 {
@@ -325,6 +330,25 @@ func builtinResultTypeFromAST(t ast.Type, env typeEnv) (builtinResultType, bool)
 		typ:    llvmResultTypeName(okTyp, errTyp),
 		okTyp:  okTyp,
 		errTyp: errTyp,
+	}, true
+}
+
+func llvmRangeTypeName(elemTyp string) string {
+	return llvmBuiltinAggregateName("Range", elemTyp)
+}
+
+func builtinRangeTypeFromAST(t ast.Type, env typeEnv) (builtinRangeType, bool) {
+	named, ok := t.(*ast.NamedType)
+	if !ok || len(named.Path) != 1 || named.Path[0] != "Range" || len(named.Args) != 1 {
+		return builtinRangeType{}, false
+	}
+	elemTyp, err := llvmType(named.Args[0], env)
+	if err != nil {
+		return builtinRangeType{}, false
+	}
+	return builtinRangeType{
+		typ:     llvmRangeTypeName(elemTyp),
+		elemTyp: elemTyp,
 	}, true
 }
 
@@ -529,6 +553,58 @@ func collectBuiltinResultTypes(file *ast.File, env typeEnv) map[string]builtinRe
 	}
 	for _, stmt := range file.Stmts {
 		collectBuiltinResultTypesFromStmt(out, stmt, env)
+	}
+	return out
+}
+
+func collectBuiltinRangeTypes(file *ast.File, env typeEnv) map[string]builtinRangeType {
+	out := map[string]builtinRangeType{}
+	if file == nil {
+		return out
+	}
+	collectFn := func(fn *ast.FnDecl) {
+		if fn == nil {
+			return
+		}
+		for _, param := range fn.Params {
+			if param == nil {
+				continue
+			}
+			collectBuiltinRangeTypeFromAST(out, param.Type, env)
+		}
+		collectBuiltinRangeTypeFromAST(out, fn.ReturnType, env)
+	}
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.FnDecl:
+			collectFn(d)
+		case *ast.StructDecl:
+			for _, field := range d.Fields {
+				if field == nil {
+					continue
+				}
+				collectBuiltinRangeTypeFromAST(out, field.Type, env)
+			}
+			for _, method := range d.Methods {
+				collectFn(method)
+			}
+		case *ast.EnumDecl:
+			for _, variant := range d.Variants {
+				if variant == nil {
+					continue
+				}
+				for _, field := range variant.Fields {
+					collectBuiltinRangeTypeFromAST(out, field, env)
+				}
+			}
+			for _, method := range d.Methods {
+				collectFn(method)
+			}
+		case *ast.LetDecl:
+			collectBuiltinRangeTypeFromAST(out, d.Type, env)
+		case *ast.TypeAliasDecl:
+			collectBuiltinRangeTypeFromAST(out, d.Target, env)
+		}
 	}
 	return out
 }
@@ -784,6 +860,32 @@ func collectBuiltinResultTypeFromAST(out map[string]builtinResultType, t ast.Typ
 			collectBuiltinResultTypeFromAST(out, param, env)
 		}
 		collectBuiltinResultTypeFromAST(out, tt.ReturnType, env)
+	}
+}
+
+func collectBuiltinRangeTypeFromAST(out map[string]builtinRangeType, t ast.Type, env typeEnv) {
+	if out == nil || t == nil {
+		return
+	}
+	switch tt := t.(type) {
+	case *ast.NamedType:
+		if info, ok := builtinRangeTypeFromAST(tt, env); ok {
+			out[info.typ] = info
+		}
+		for _, arg := range tt.Args {
+			collectBuiltinRangeTypeFromAST(out, arg, env)
+		}
+	case *ast.OptionalType:
+		collectBuiltinRangeTypeFromAST(out, tt.Inner, env)
+	case *ast.TupleType:
+		for _, elem := range tt.Elems {
+			collectBuiltinRangeTypeFromAST(out, elem, env)
+		}
+	case *ast.FnType:
+		for _, param := range tt.Params {
+			collectBuiltinRangeTypeFromAST(out, param, env)
+		}
+		collectBuiltinRangeTypeFromAST(out, tt.ReturnType, env)
 	}
 }
 

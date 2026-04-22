@@ -14,6 +14,38 @@ import (
 	"github.com/osty/osty/internal/stdlib"
 )
 
+func collectToolchainProbeFiles(dir string, skipBootstrapOnly bool) ([]string, []string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	var files []string
+	var skipped []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
+			continue
+		}
+		if !skipBootstrapOnly {
+			files = append(files, name)
+			continue
+		}
+		src, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		if isBootstrapOnlyOstyFile(src) {
+			skipped = append(skipped, name)
+			continue
+		}
+		files = append(files, name)
+	}
+	return files, skipped, nil
+}
+
 // mergeToolchainSources concatenates toolchain files in order into a
 // single source buffer. The parser tolerates duplicate
 // `use std.strings as strings` stanzas, so repeats across files are
@@ -125,17 +157,9 @@ func TestProbeWholeToolchainMerged(t *testing.T) {
 		t.Fatalf("abs root: %v", err)
 	}
 	dir := filepath.Join(root, "toolchain")
-	entries, err := os.ReadDir(dir)
+	files, _, err := collectToolchainProbeFiles(dir, false)
 	if err != nil {
 		t.Fatalf("read toolchain: %v", err)
-	}
-	var files []string
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
-			continue
-		}
-		files = append(files, name)
 	}
 	merged := mergeToolchainSources(t, root, files)
 	file, _ := parser.ParseDiagnostics(merged)
@@ -190,26 +214,9 @@ func TestProbeNativeToolchainMerged(t *testing.T) {
 		t.Fatalf("abs root: %v", err)
 	}
 	dir := filepath.Join(root, "toolchain")
-	entries, err := os.ReadDir(dir)
+	files, skipped, err := collectToolchainProbeFiles(dir, true)
 	if err != nil {
 		t.Fatalf("read toolchain: %v", err)
-	}
-	var files []string
-	var skipped []string
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
-			continue
-		}
-		src, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			continue
-		}
-		if isBootstrapOnlyOstyFile(src) {
-			skipped = append(skipped, name)
-			continue
-		}
-		files = append(files, name)
 	}
 	if len(skipped) == 0 {
 		t.Logf("no bootstrap-only files detected; this probe is equivalent to TestProbeWholeToolchainMerged")
@@ -250,26 +257,9 @@ func TestProbeNativeToolchainMergedMIR(t *testing.T) {
 		t.Fatalf("abs root: %v", err)
 	}
 	dir := filepath.Join(root, "toolchain")
-	entries, err := os.ReadDir(dir)
+	files, skipped, err := collectToolchainProbeFiles(dir, true)
 	if err != nil {
 		t.Fatalf("read toolchain: %v", err)
-	}
-	var files []string
-	var skipped []string
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
-			continue
-		}
-		src, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			continue
-		}
-		if isBootstrapOnlyOstyFile(src) {
-			skipped = append(skipped, name)
-			continue
-		}
-		files = append(files, name)
 	}
 	if len(skipped) > 0 {
 		t.Logf("bootstrap-only files skipped (%d): %s", len(skipped), strings.Join(skipped, ", "))

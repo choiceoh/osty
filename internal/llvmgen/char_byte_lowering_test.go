@@ -229,6 +229,43 @@ fn main() {
 	}
 }
 
+// hirLowerParseRadix-style loop: iterate `text.chars()` (List<Char>),
+// pass each char to a helper, and match on char literals. This is the
+// exact family of shapes that first-walled the merged AST probe when
+// the helper still expected String.
+func TestCharsLoopFeedsCharMatchHelper(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn charToDigit(ch: Char) -> Int {
+    match ch {
+        '0' -> 0,
+        '1' -> 1,
+        'a' -> 10, 'A' -> 10,
+        _ -> -1,
+    }
+}
+
+fn parseHead(text: String) -> Int {
+    let mut acc = 0
+    let chars = text.chars()
+    for ch in chars {
+        let d = charToDigit(ch)
+        if d < 0 {
+            return acc
+        }
+        acc = acc * 16 + d
+    }
+    acc
+}
+
+fn main() {
+    println(parseHead("1A"))
+}
+`)
+	_, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/chars_digit_loop.osty"})
+	if err != nil {
+		t.Fatalf("chars loop + char match helper still errors: %v", err)
+	}
+}
+
 // Byte.toString() calls the osty_rt_byte_to_string runtime helper to
 // materialise a single-byte String. Useful for raw-byte display paths.
 func TestByteToStringCallsRuntimeHelper(t *testing.T) {

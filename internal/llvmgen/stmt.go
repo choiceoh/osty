@@ -674,16 +674,33 @@ func (g *generator) emitFieldAssign(target *ast.FieldExpr, rhs ast.Expr) error {
 		}
 		break
 	}
-	baseIdent, ok := cur.X.(*ast.Ident)
-	if !ok {
+	switch base := cur.X.(type) {
+	case *ast.Ident:
+		return g.emitBindingFieldAssign(base, fields, rhs)
+	case *ast.IndexExpr:
+		return g.emitIndexedFieldAssign(base, fields, rhs)
+	default:
 		return unsupportedf("statement", "field assignment base %T", cur.X)
+	}
+}
+
+func (g *generator) emitBindingFieldAssign(baseIdent *ast.Ident, fields []string, rhs ast.Expr) error {
+	if baseIdent == nil {
+		return unsupported("statement", "nil field assignment base")
 	}
 	slot, ok := g.lookupBinding(baseIdent.Name)
 	if !ok {
 		return unsupportedf("name", "assignment to unknown identifier %q", baseIdent.Name)
 	}
 	if !slot.ptr {
-		return unsupportedf("statement", "field assignment on non-addressable binding %q", baseIdent.Name)
+		materialized, ok, err := g.materializeAddressableLocalBinding(baseIdent.Name)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return unsupportedf("statement", "field assignment on non-addressable binding %q", baseIdent.Name)
+		}
+		slot = materialized
 	}
 	// NB: we deliberately do not gate on `slot.mutable` here. Osty's
 	// checker accepts field-through-param writes for managed context
@@ -741,6 +758,61 @@ func (g *generator) emitFieldAssign(target *ast.FieldExpr, rhs ast.Expr) error {
 	return nil
 }
 
+func (g *generator) emitIndexedFieldAssign(target *ast.IndexExpr, fields []string, rhs ast.Expr) error {
+	if target == nil {
+		return unsupported("statement", "nil indexed field assignment target")
+	}
+	base, err := g.emitExpr(target.X)
+	if err != nil {
+		return err
+	}
+	index, err := g.emitExpr(target.Index)
+	if err != nil {
+		return err
+	}
+	root, err := g.emitListElementValue(base, index)
+	if err != nil {
+		return err
+	}
+	steps := make([]fieldInfo, len(fields))
+	curTyp := root.typ
+	for i, name := range fields {
+		info := g.structsByType[curTyp]
+		if info == nil {
+			return unsupportedf("type-system", "field assignment on %s", curTyp)
+		}
+		field, ok := info.byName[name]
+		if !ok {
+			return unsupportedf("expression", "struct %q has no field %q", info.name, name)
+		}
+		steps[i] = field
+		curTyp = field.typ
+	}
+	innermost := steps[len(steps)-1]
+	v, err := g.emitExprWithHintAndSourceType(rhs, innermost.sourceType, innermost.listElemTyp, innermost.listElemString, innermost.mapKeyTyp, innermost.mapValueTyp, innermost.mapKeyString, innermost.setElemTyp, innermost.setElemString)
+	if err != nil {
+		return err
+	}
+	if v.typ != innermost.typ {
+		return unsupportedf("type-system", "field assignment index.%s type %s, value %s", strings.Join(fields, "."), innermost.typ, v.typ)
+	}
+	emitter := g.toOstyEmitter()
+	levels := make([]value, len(steps))
+	levels[0] = root
+	for i := 1; i < len(steps); i++ {
+		prev := levels[i-1]
+		extracted := llvmExtractValue(emitter, toOstyValue(prev), steps[i-1].typ, steps[i-1].index)
+		levels[i] = fromOstyValue(extracted)
+	}
+	next := v
+	for i := len(steps) - 1; i >= 0; i-- {
+		rebuilt := llvmInsertValue(emitter, toOstyValue(levels[i]), toOstyValue(next), steps[i].index)
+		next = fromOstyValue(rebuilt)
+	}
+	g.takeOstyEmitter(emitter)
+	return g.emitListAssignValue(base, index, next)
+}
+
 func (g *generator) emitIndexAssign(target *ast.IndexExpr, rhs ast.Expr) error {
 	if target == nil {
 		return unsupported("statement", "nil index assignment target")
@@ -770,6 +842,19 @@ func (g *generator) emitIndexAssign(target *ast.IndexExpr, rhs ast.Expr) error {
 	if err != nil {
 		return err
 	}
+	return g.emitListAssignValue(base, index, loaded)
+}
+
+func (g *generator) emitListAssignValue(base, index, v value) error {
+	if base.listElemTyp == "" {
+		return unsupported("statement", "list assignment currently supports lists only")
+	}
+	if index.typ != "i64" {
+		return unsupportedf("type-system", "list index type %s, want i64", index.typ)
+	}
+	if v.typ != base.listElemTyp {
+		return unsupportedf("type-system", "list assignment value type %s, want %s", v.typ, base.listElemTyp)
+	}
 	emitter := g.toOstyEmitter()
 	if listUsesTypedRuntime(base.listElemTyp) {
 		symbol := listRuntimeSetSymbol(base.listElemTyp)
@@ -777,11 +862,11 @@ func (g *generator) emitIndexAssign(target *ast.IndexExpr, rhs ast.Expr) error {
 		emitter.body = append(emitter.body, fmt.Sprintf(
 			"  call void @%s(%s)",
 			symbol,
-			llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(index), toOstyValue(loaded)}),
+			llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(index), toOstyValue(v)}),
 		))
 	} else {
 		traceSymbol := g.traceCallbackSymbol(base.listElemTyp, g.rootPathsForType(base.listElemTyp))
-		addr := g.spillValueAddress(emitter, "list.set", loaded)
+		addr := g.spillValueAddress(emitter, "list.set", v)
 		sizeValue := g.emitTypeSize(emitter, base.listElemTyp)
 		g.declareRuntimeSymbol(listRuntimeSetBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
 		emitter.body = append(emitter.body, fmt.Sprintf(
@@ -792,6 +877,41 @@ func (g *generator) emitIndexAssign(target *ast.IndexExpr, rhs ast.Expr) error {
 	}
 	g.takeOstyEmitter(emitter)
 	return nil
+}
+
+func (g *generator) emitListElementValue(base, index value) (value, error) {
+	if base.listElemTyp == "" {
+		return value{}, unsupported("expression", "index expression on non-list base")
+	}
+	if index.typ != "i64" {
+		return value{}, unsupportedf("type-system", "list index type %s, want i64", index.typ)
+	}
+	if listUsesTypedRuntime(base.listElemTyp) {
+		symbol := listRuntimeGetSymbol(base.listElemTyp)
+		g.declareRuntimeSymbol(symbol, base.listElemTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, base.listElemTyp, symbol, []*LlvmValue{toOstyValue(base), toOstyValue(index)})
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = base.listElemTyp == "ptr"
+		v.rootPaths = g.rootPathsForType(base.listElemTyp)
+		return v, nil
+	}
+	traceSymbol := g.traceCallbackSymbol(base.listElemTyp, g.rootPathsForType(base.listElemTyp))
+	emitter := g.toOstyEmitter()
+	slot := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, base.listElemTyp))
+	sizeValue := g.emitTypeSize(emitter, base.listElemTyp)
+	g.declareRuntimeSymbol(listRuntimeGetBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
+	emitter.body = append(emitter.body, fmt.Sprintf(
+		"  call void @%s(%s)",
+		listRuntimeGetBytesSymbol(),
+		llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(index), {typ: "ptr", name: slot}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
+	))
+	loaded := g.loadValueFromAddress(emitter, base.listElemTyp, slot)
+	g.takeOstyEmitter(emitter)
+	loaded.rootPaths = g.rootPathsForType(base.listElemTyp)
+	return loaded, nil
 }
 
 func (g *generator) emitFor(stmt *ast.ForStmt) error {
@@ -1102,7 +1222,11 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 func (g *generator) emitExprStmt(expr ast.Expr) error {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
-		return unsupportedf("statement", "expression statement %T is not a call; only println and similar side-effect calls are supported as expression statements", expr)
+		if block, ok := expr.(*ast.Block); ok {
+			return g.emitScopedStmtBlock(block.Stmts)
+		}
+		_, err := g.emitExpr(expr)
+		return err
 	}
 	if emitted, err := g.emitTestingCallStmt(call); emitted || err != nil {
 		return err
@@ -2263,6 +2387,9 @@ func (g *generator) emitMatchStmt(expr *ast.MatchExpr) error {
 	if info, ok := g.resultTypes[scrutinee.typ]; ok {
 		return g.emitResultMatchStmt(scrutinee, info, expr.Arms)
 	}
+	if isPrimitiveLiteralMatchScrutineeType(scrutinee.typ) && isPrimitiveLiteralMatchArms(expr.Arms) {
+		return g.emitPrimitiveLiteralMatchStmt(scrutinee, expr.Arms)
+	}
 	if scrutinee.typ != "i64" {
 		return unsupportedf("statement", "match statement scrutinee type %s (only tag-enum i64 supported as statement for now)", scrutinee.typ)
 	}
@@ -2614,6 +2741,87 @@ func (g *generator) emitTagEnumMatchStmt(scrutinee value, arms []*ast.MatchArm) 
 		anyReached = true
 	}
 
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(endLabel)
+	g.currentReachable = anyReached
+	return nil
+}
+
+func (g *generator) emitPrimitiveLiteralMatchStmt(scrutinee value, arms []*ast.MatchArm) error {
+	emitter := g.toOstyEmitter()
+	endLabel := llvmNextLabel(emitter, "match.end")
+	g.takeOstyEmitter(emitter)
+
+	anyReached := false
+	for i, arm := range arms {
+		if arm == nil {
+			return unsupported("statement", "nil match arm")
+		}
+		if arm.Guard != nil {
+			return unsupported("statement", "guarded primitive match arms are not yet supported as statements")
+		}
+		_, isWildcard := arm.Pattern.(*ast.WildcardPat)
+		isLast := i == len(arms)-1
+
+		if isWildcard {
+			if !isLast {
+				return unsupported("statement", "wildcard match arm must be last")
+			}
+			baseState := g.captureScopeState()
+			if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
+				return err
+			}
+			if g.currentReachable {
+				g.branchTo(endLabel)
+				anyReached = true
+			}
+			g.restoreScopeState(baseState)
+			continue
+		}
+
+		litPat, ok := arm.Pattern.(*ast.LiteralPat)
+		if !ok || litPat.Literal == nil {
+			return unsupportedf("statement", "primitive match arm must be a literal pattern or wildcard, got %T", arm.Pattern)
+		}
+		litValue, err := g.emitExpr(litPat.Literal)
+		if err != nil {
+			return err
+		}
+		if litValue.typ != scrutinee.typ {
+			return unsupportedf("type-system", "match literal type %s does not match scrutinee %s", litValue.typ, scrutinee.typ)
+		}
+
+		emitter := g.toOstyEmitter()
+		cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(litValue))
+		armLabel := llvmNextLabel(emitter, "match.arm")
+		nextLabel := llvmNextLabel(emitter, "match.next")
+		emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, armLabel, nextLabel))
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", armLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(armLabel)
+
+		baseState := g.captureScopeState()
+		if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
+			return err
+		}
+		if g.currentReachable {
+			g.branchTo(endLabel)
+			anyReached = true
+		}
+		g.restoreScopeState(baseState)
+
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, fmt.Sprintf("%s:", nextLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(nextLabel)
+	}
+
+	if g.currentReachable {
+		g.branchTo(endLabel)
+		anyReached = true
+	}
 	emitter = g.toOstyEmitter()
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	g.takeOstyEmitter(emitter)

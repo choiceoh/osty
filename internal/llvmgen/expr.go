@@ -29,6 +29,21 @@ func (g *generator) ifLetCondition(pattern ast.Pattern, scrutinee value) (*LlvmV
 	if _, ok := pattern.(*ast.WildcardPat); ok {
 		return toOstyValue(value{typ: "i1", ref: "true"}), func() error { return nil }, nil
 	}
+	if p, ok := pattern.(*ast.BindingPat); ok {
+		cond, bind, err := g.ifLetCondition(p.Pattern, scrutinee)
+		if err != nil {
+			return nil, nil, err
+		}
+		return cond, func() error {
+			if err := g.bindLetPattern(&ast.IdentPat{Name: p.Name}, scrutinee, false); err != nil {
+				return err
+			}
+			if bind != nil {
+				return bind()
+			}
+			return nil
+		}, nil
+	}
 	if info := g.enumsByType[scrutinee.typ]; info != nil && info.hasPayload {
 		matched, ok, err := g.matchPayloadEnumPattern(info, pattern)
 		if err != nil {
@@ -45,17 +60,79 @@ func (g *generator) ifLetCondition(pattern ast.Pattern, scrutinee value) (*LlvmV
 			return g.bindPayloadEnumPattern(scrutinee, matched)
 		}, nil
 	}
+	if litPat, ok := pattern.(*ast.LiteralPat); ok && litPat.Literal != nil && isPrimitiveLiteralMatchScrutineeType(scrutinee.typ) {
+		litValue, err := g.emitExpr(litPat.Literal)
+		if err != nil {
+			return nil, nil, err
+		}
+		if litValue.typ != scrutinee.typ {
+			return nil, nil, unsupportedf("type-system", "match literal type %s, want %s", litValue.typ, scrutinee.typ)
+		}
+		emitter := g.toOstyEmitter()
+		cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(litValue))
+		g.takeOstyEmitter(emitter)
+		return cond, func() error { return nil }, nil
+	}
 	tag, ok, err := g.matchEnumTag(pattern)
 	if err != nil {
 		return nil, nil, err
 	}
 	if !ok {
+		if _, ok := pattern.(*ast.IdentPat); ok {
+			return toOstyValue(value{typ: "i1", ref: "true"}), func() error {
+				return g.bindLetPattern(pattern, scrutinee, false)
+			}, nil
+		}
 		return nil, nil, unsupported("control-flow", "if-let pattern must be an enum variant")
 	}
 	emitter := g.toOstyEmitter()
 	cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(value{typ: "i64", ref: strconv.Itoa(tag)}))
 	g.takeOstyEmitter(emitter)
 	return cond, func() error { return nil }, nil
+}
+
+func (g *generator) matchNeedsGenericConditionPath(scrutinee value, arms []*ast.MatchArm) bool {
+	if len(arms) == 0 {
+		return false
+	}
+	payloadInfo := g.enumsByType[scrutinee.typ]
+	if payloadInfo != nil && payloadInfo.hasPayload {
+		for _, arm := range arms {
+			if arm == nil || arm.Pattern == nil {
+				continue
+			}
+			switch pat := arm.Pattern.(type) {
+			case *ast.BindingPat:
+				return true
+			case *ast.IdentPat:
+				if _, ok, err := g.matchPayloadEnumPattern(payloadInfo, pat); err == nil && !ok {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if scrutinee.typ == "i64" || isPrimitiveLiteralMatchScrutineeType(scrutinee.typ) {
+		literalSetOnly := isPrimitiveLiteralMatchArms(arms)
+		for _, arm := range arms {
+			if arm == nil || arm.Pattern == nil {
+				continue
+			}
+			switch pat := arm.Pattern.(type) {
+			case *ast.BindingPat:
+				return true
+			case *ast.IdentPat:
+				if _, ok, err := g.matchEnumTag(pat); err == nil && !ok {
+					return true
+				}
+			case *ast.LiteralPat:
+				if !literalSetOnly {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (g *generator) emitStringLiteral(lit *ast.StringLit) (value, error) {
@@ -253,6 +330,8 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 		return g.emitListExprWithHint(e, nil, "", false)
 	case *ast.MapExpr:
 		return g.emitMapExprWithHint(e, nil, nil, "", "", false)
+	case *ast.RangeExpr:
+		return g.emitRangeExpr(e)
 	case *ast.StructLit:
 		return g.emitStructLit(e)
 	case *ast.IfExpr:
@@ -262,6 +341,64 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 	default:
 		return value{}, unsupportedf("expression", "expression %T %s", expr, exprPosLabel(expr))
 	}
+}
+
+func (g *generator) emitRangeExpr(expr *ast.RangeExpr) (value, error) {
+	if expr == nil {
+		return value{}, unsupported("expression", "nil range literal")
+	}
+	if expr.Step != nil {
+		return value{}, unsupported("expression", "range literal with step is not supported yet")
+	}
+	sourceType, _ := g.staticRangeExprSourceType(expr)
+	info, ok := builtinRangeTypeFromAST(sourceType, g.typeEnv())
+	if !ok {
+		info = builtinRangeType{
+			typ:     llvmRangeTypeName("i64"),
+			elemTyp: "i64",
+		}
+		sourceType = &ast.NamedType{Path: []string{"Range"}, Args: []ast.Type{&ast.NamedType{Path: []string{"Int"}}}}
+	}
+	if g.rangeTypes == nil {
+		g.rangeTypes = map[string]builtinRangeType{}
+	}
+	g.rangeTypes[info.typ] = info
+
+	emitBound := func(bound ast.Expr) (value, bool, error) {
+		if bound == nil {
+			return value{typ: info.elemTyp, ref: llvmZeroLiteral(info.elemTyp)}, false, nil
+		}
+		v, err := g.emitExpr(bound)
+		if err != nil {
+			return value{}, false, err
+		}
+		if v.typ != info.elemTyp {
+			return value{}, false, unsupportedf("type-system", "range bound type %s, want %s", v.typ, info.elemTyp)
+		}
+		return v, true, nil
+	}
+
+	startVal, hasStart, err := emitBound(expr.Start)
+	if err != nil {
+		return value{}, err
+	}
+	stopVal, hasStop, err := emitBound(expr.Stop)
+	if err != nil {
+		return value{}, err
+	}
+
+	emitter := g.toOstyEmitter()
+	out := llvmStructLiteral(emitter, info.typ, []*LlvmValue{
+		toOstyValue(startVal),
+		toOstyValue(stopVal),
+		toOstyValue(value{typ: "i1", ref: strconv.FormatBool(hasStart)}),
+		toOstyValue(value{typ: "i1", ref: strconv.FormatBool(hasStop)}),
+		toOstyValue(value{typ: "i1", ref: strconv.FormatBool(expr.Inclusive)}),
+	})
+	g.takeOstyEmitter(emitter)
+	loaded := fromOstyValue(out)
+	loaded.sourceType = sourceType
+	return loaded, nil
 }
 
 // exprPosLabel formats the AST node's source line/column and byte
@@ -505,9 +642,26 @@ func (g *generator) emitFieldExpr(expr *ast.FieldExpr) (value, error) {
 	if err != nil {
 		return value{}, err
 	}
+	rangeSource := base.sourceType
+	if rangeSource == nil {
+		rangeSource, _ = g.staticExprSourceType(expr.X)
+	}
+	if field, ok := g.builtinRangeFieldInfo(rangeSource, expr.Name); ok {
+		emitter := g.toOstyEmitter()
+		out := llvmExtractValue(emitter, toOstyValue(base), field.typ, field.index)
+		g.takeOstyEmitter(emitter)
+		loaded := fromOstyValue(out)
+		loaded.sourceType = field.sourceType
+		if err := g.decorateValueFromSourceType(&loaded, field.sourceType); err != nil {
+			return value{}, err
+		}
+		loaded.gcManaged = valueNeedsManagedRoot(loaded)
+		loaded.rootPaths = g.rootPathsForType(field.typ)
+		return loaded, nil
+	}
 	info := g.structsByType[base.typ]
 	if info == nil {
-		return value{}, unsupportedf("type-system", "field access on %s", base.typ)
+		return value{}, unsupportedf("type-system", "field %q access on %s %s", expr.Name, base.typ, exprPosLabel(expr))
 	}
 	field, ok := info.byName[expr.Name]
 	if !ok {
@@ -1623,6 +1777,12 @@ func (g *generator) emitBlockValue(block *ast.Block) (value, error) {
 			}
 			continue
 		}
+		if ret, ok := stmt.(*ast.ReturnStmt); ok {
+			if err := g.emitReturn(ret); err != nil {
+				return value{}, err
+			}
+			return value{typ: "void", ref: "undef"}, nil
+		}
 		exprStmt, ok := stmt.(*ast.ExprStmt)
 		if !ok {
 			return value{}, unsupportedf("statement", "final block statement %T", stmt)
@@ -1676,6 +1836,12 @@ func (g *generator) emitMatchExprValue(expr *ast.MatchExpr) (value, error) {
 	if hasGuard {
 		return g.emitGuardedMatchExprValue(scrutinee, expr.Arms)
 	}
+	if g.matchNeedsGenericConditionPath(scrutinee, expr.Arms) {
+		return g.emitGuardedMatchExprValue(scrutinee, expr.Arms)
+	}
+	if isPrimitiveLiteralMatchScrutineeType(scrutinee.typ) && isPrimitiveLiteralMatchArms(expr.Arms) {
+		return g.emitPrimitiveLiteralMatchExprValue(scrutinee, expr.Arms)
+	}
 	if scrutinee.typ == "i64" {
 		// `match n { 0 -> ..., 1 -> ..., _ -> ... }` on a plain Int
 		// scrutinee falls into the same i64 dispatch as a payload-free
@@ -1683,9 +1849,6 @@ func (g *generator) emitMatchExprValue(expr *ast.MatchExpr) (value, error) {
 		// variant idents, so emitTagEnumMatchExprValue's matchEnumTag
 		// returns false on every arm. Detect the literal-pattern shape
 		// up front and route to the dedicated primitive lowering.
-		if isPrimitiveLiteralMatchArms(expr.Arms) {
-			return g.emitPrimitiveLiteralMatchExprValue(scrutinee, expr.Arms)
-		}
 		return g.emitTagEnumMatchExprValue(scrutinee, expr.Arms)
 	}
 	if info := g.enumsByType[scrutinee.typ]; info != nil && info.hasPayload {
@@ -1999,6 +2162,15 @@ func isPrimitiveLiteralMatchArms(arms []*ast.MatchArm) bool {
 		}
 	}
 	return sawLiteral
+}
+
+func isPrimitiveLiteralMatchScrutineeType(typ string) bool {
+	switch typ {
+	case "i64", "i32", "i8", "i1":
+		return true
+	default:
+		return false
+	}
 }
 
 // emitPrimitiveLiteralMatchExprValue lowers `match n { 0 -> A, 1 -> B,

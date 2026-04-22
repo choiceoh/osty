@@ -381,7 +381,7 @@ pub fn pmLitLabel(e: HirExpr) -> String {
                 if part.isLit {
                     buf.push(part.lit)
                 } else {
-                    buf.push("{...}")
+                    buf.push("\{...\}")
                 }
             }
             buf.push("\"")

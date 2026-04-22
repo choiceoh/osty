@@ -13,11 +13,11 @@ import (
 
 // TestToolchainHasNoPhantomRangeExpr locks the fix for the "LLVM013
 // *ast.RangeExpr at 1:16" wall that TestProbeNativeToolchainMerged
-// hit before. Root cause: `llvmUnsupportedDiagnostic`'s hint strings
-// carried unescaped `{ ... }` which the Osty lexer treats as
-// interpolation. The reparsed interpolation expression (` .. `) came
-// back as a RangeExpr with position 1:16 (offset 15) in the local
-// reparse buffer, which then surfaced as the backend's first wall.
+// hit before. Root cause: unescaped `{ ... }` in string literals,
+// which the Osty lexer treats as interpolation. Reparsing those
+// placeholders can synthesize phantom nodes (historically RangeExpr,
+// later an empty-name FieldExpr) at 1:16 in the local reparse buffer,
+// which then surface as the backend's first wall.
 //
 // Regression shape: any top-level toolchain declaration that contains
 // a *ast.RangeExpr whose reported line is BEFORE the declaration's
@@ -51,6 +51,12 @@ func TestToolchainHasNoPhantomRangeExpr(t *testing.T) {
 			walkPhantomRange(reflect.ValueOf(decl), func(line, col, off int) {
 				if line < declPos.Line {
 					t.Errorf("%s: decl %q (line %d) has phantom RangeExpr at %d:%d (offset %d) — likely an unescaped `{ ... }` in a string literal",
+						name, declLabel(decl), declPos.Line, line, col, off)
+				}
+			})
+			walkPhantomEmptyField(reflect.ValueOf(decl), func(line, col, off int) {
+				if line < declPos.Line {
+					t.Errorf("%s: decl %q (line %d) has phantom empty FieldExpr at %d:%d (offset %d) — likely an unescaped `{ ... }` in a string literal",
 						name, declLabel(decl), declPos.Line, line, col, off)
 				}
 			})
@@ -111,6 +117,34 @@ func walkPhantomRange(v reflect.Value, visit func(line, col, off int)) {
 	case reflect.Slice:
 		for i := 0; i < v.Len(); i++ {
 			walkPhantomRange(v.Index(i), visit)
+		}
+	}
+}
+
+func walkPhantomEmptyField(v reflect.Value, visit func(line, col, off int)) {
+	for v.Kind() == reflect.Interface || v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			return
+		}
+		v = v.Elem()
+	}
+	switch v.Kind() {
+	case reflect.Struct:
+		if v.Type().Name() == "FieldExpr" {
+			name := v.FieldByName("Name")
+			if name.IsValid() && name.Kind() == reflect.String && name.Len() == 0 {
+				p := v.FieldByName("PosV")
+				visit(int(p.FieldByName("Line").Int()),
+					int(p.FieldByName("Column").Int()),
+					int(p.FieldByName("Offset").Int()))
+			}
+		}
+		for i := 0; i < v.NumField(); i++ {
+			walkPhantomEmptyField(v.Field(i), visit)
+		}
+	case reflect.Slice:
+		for i := 0; i < v.Len(); i++ {
+			walkPhantomEmptyField(v.Index(i), visit)
 		}
 	}
 }

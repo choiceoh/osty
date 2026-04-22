@@ -44,6 +44,7 @@ type generator struct {
 	globalConsts      map[string]constValue
 	tupleTypes        map[string]tupleTypeInfo
 	resultTypes       map[string]builtinResultType
+	rangeTypes        map[string]builtinRangeType
 	runtimeFFI        map[string]map[string]*runtimeFFIFunction
 	runtimeFFIPaths   map[string]string
 	testingAliases    map[string]bool
@@ -513,7 +514,7 @@ func (g *generator) render(defs []string) []byte {
 	allDefs := make([]string, 0, len(g.globalDefs)+len(defs))
 	allDefs = append(allDefs, g.globalDefs...)
 	allDefs = append(allDefs, defs...)
-	typeDefs := make([]string, 0, len(g.structs)+len(g.enumsByType)+len(g.tupleTypes)+len(g.resultTypes))
+	typeDefs := make([]string, 0, len(g.structs)+len(g.enumsByType)+len(g.tupleTypes)+len(g.resultTypes)+len(g.rangeTypes))
 	for _, info := range g.structs {
 		fieldTypes := make([]string, 0, len(info.fields))
 		for _, field := range info.fields {
@@ -568,6 +569,17 @@ func (g *generator) render(defs []string) []byte {
 		for _, name := range names {
 			info := g.resultTypes[name]
 			typeDefs = append(typeDefs, llvmStructTypeDef(strings.TrimPrefix(info.typ, "%"), []string{"i64", info.okTyp, info.errTyp}))
+		}
+	}
+	if len(g.rangeTypes) != 0 {
+		names := make([]string, 0, len(g.rangeTypes))
+		for name := range g.rangeTypes {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			info := g.rangeTypes[name]
+			typeDefs = append(typeDefs, llvmStructTypeDef(strings.TrimPrefix(info.typ, "%"), []string{info.elemTyp, info.elemTyp, "i1", "i1", "i1"}))
 		}
 	}
 	// Phase 6a: interface fat-pointer type + per (impl, interface) vtable
@@ -1617,6 +1629,35 @@ func (g *generator) lookupLocal(name string) (value, bool) {
 		}
 	}
 	return value{}, false
+}
+
+func (g *generator) lookupLocalScope(name string) (int, value, bool) {
+	for i := len(g.locals) - 1; i >= 0; i-- {
+		if v, ok := g.locals[i][name]; ok {
+			return i, v, true
+		}
+	}
+	return -1, value{}, false
+}
+
+func (g *generator) materializeAddressableLocalBinding(name string) (value, bool, error) {
+	scope, current, ok := g.lookupLocalScope(name)
+	if !ok {
+		return value{}, false, nil
+	}
+	if current.ptr {
+		return current, true, nil
+	}
+	emitter := g.toOstyEmitter()
+	slot := llvmMutableLetSlot(emitter, name, toOstyValue(current))
+	slotValue := fromOstyValue(slot)
+	copyContainerMetadata(&slotValue, current)
+	slotValue.mutable = current.mutable
+	slotValue.rootPaths = cloneRootPaths(current.rootPaths)
+	g.bindGCRootIfManagedPointer(emitter, slotValue)
+	g.takeOstyEmitter(emitter)
+	g.locals[scope][name] = slotValue
+	return slotValue, true, nil
 }
 
 func (g *generator) bindLetPattern(pattern ast.Pattern, v value, mutable bool) error {

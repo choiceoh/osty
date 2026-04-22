@@ -128,3 +128,39 @@ func TestGenerateIntLiteralMatchNonSelectSafeUsesIfPhi(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateCharLiteralMatchExpression(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn digit(ch: Char) -> Int {
+    match ch {
+        '0' -> 0,
+        '1' -> 1,
+        _ -> -1,
+    }
+}
+
+fn main() {
+    println(digit('1'))
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/char_literal_match.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"define i64 @digit(i32",
+		"icmp eq i32",
+		"ret i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected IR to contain %q, got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "LLVM013") {
+		t.Fatalf("emitted LLVM013 unsupported diagnostic where char-literal match lowering should fire:\n%s", got)
+	}
+}
