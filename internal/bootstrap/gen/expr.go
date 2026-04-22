@@ -2064,6 +2064,9 @@ func (g *gen) syntacticTypeSeen(e ast.Expr, seen map[ast.Node]bool) ast.Type {
 	case *ast.Ident:
 		sym := g.symbolFor(e)
 		if sym == nil {
+			if t, ok := g.currentFnParams[e.Name]; ok && t != nil {
+				return t
+			}
 			return nil
 		}
 		switch d := sym.Decl.(type) {

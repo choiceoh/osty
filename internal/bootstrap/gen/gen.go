@@ -228,6 +228,16 @@ type gen struct {
 	// rather than an explicit AST annotation.
 	currentRetGo string
 
+	// currentFnParams maps the enclosing fn's parameter names to their
+	// declared AST type. Populated on every fn body entry and restored on
+	// exit. Used by syntacticType as a last-resort fallback when the
+	// resolver did not stamp a NodeID on an Ident (e.g. inside a string
+	// interpolation segment — the self-host parser stores interp as raw
+	// text and re-parses lazily, producing nodes the resolver may see
+	// without a NodeID, so lookups by NodeID miss even though the name
+	// binds to a known parameter).
+	currentFnParams map[string]ast.Type
+
 	// retHintType / retHintGo carry the enclosing function's return type
 	// as a *tail-position* hint. Set by emitReturn and the tail of
 	// emitBlockAsReturn; consumed (and cleared) by emitMatch and the
