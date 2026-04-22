@@ -2392,6 +2392,10 @@ func runFmt(args []string) {
 		repairs = repair.Source(src)
 		formatSrc = repairs.Source
 	}
+	parserCanonical, parserCanonicalChanged := parserCanonicalFmtSource(formatSrc)
+	if parserCanonicalChanged {
+		formatSrc = parserCanonical
+	}
 	var (
 		out   []byte
 		diags []*diag.Diagnostic
@@ -2399,9 +2403,17 @@ func runFmt(args []string) {
 	)
 	switch engine {
 	case "", "go", "ast":
-		out, diags, ferr = format.Source(formatSrc)
+		if !repairMode && parserCanonicalChanged {
+			out = formatSrc
+		} else {
+			out, diags, ferr = format.Source(formatSrc)
+		}
 	case "osty":
-		out, diags, ferr = format.OstySource(formatSrc)
+		if !repairMode && parserCanonicalChanged {
+			out = formatSrc
+		} else {
+			out, diags, ferr = format.OstySource(formatSrc)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "osty fmt: unknown engine %q (want go or osty)\n", engine)
 		os.Exit(2)
@@ -2441,6 +2453,18 @@ func runFmt(args []string) {
 		fmt.Fprintf(os.Stderr, "osty fmt: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func parserCanonicalFmtSource(src []byte) ([]byte, bool) {
+	parsed := parser.ParseDetailed(src)
+	if parsed.File == nil || parsed.Provenance == nil || parsed.Provenance.Empty() {
+		return src, false
+	}
+	canonicalSrc := canonical.Source(src, parsed.File)
+	if len(canonicalSrc) == 0 || bytes.Equal(canonicalSrc, src) {
+		return src, false
+	}
+	return canonicalSrc, true
 }
 
 // runGen implements the `osty gen` subcommand: emit a single .osty
