@@ -1617,7 +1617,125 @@ func (g *generator) emitMatchExprValue(expr *ast.MatchExpr) (value, error) {
 	if info, ok := g.resultTypes[scrutinee.typ]; ok {
 		return g.emitResultMatchExprValue(scrutinee, info, expr.Arms)
 	}
+	// Optional match-as-expression: `match opt { Some(x) -> a, None -> b }`
+	// where opt has source type T?. The scrutinee LLVM type is "ptr"
+	// (boxed Option ABI: null = None, non-null = Some(x)), which the
+	// generic enum-tag fallback can't distinguish from a raw pointer.
+	// Mirrors the optional-source-type detection used by emitMatchStmt
+	// at stmt.go:1962-1968.
+	if scrutinee.typ == "ptr" {
+		if sourceType, ok := g.staticExprSourceType(expr.Scrutinee); ok {
+			resolved, resolveErr := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{})
+			if resolveErr == nil {
+				if opt, ok := resolved.(*ast.OptionalType); ok {
+					return g.emitOptionalMatchExprValue(scrutinee, opt.Inner, expr.Arms)
+				}
+			}
+		}
+	}
 	return value{}, unsupportedf("type-system", "match scrutinee type %s, want enum tag", scrutinee.typ)
+}
+
+// emitOptionalMatchExprValue lowers `match opt { Some(x) -> a, None -> b }`
+// in value position. Mirrors emitOptionalMatchStmt's branch shape but
+// uses emitIfExprPhi to merge the two arm values, so the match
+// participates as an expression in let / fn-return / nested call
+// position.
+//
+// Constraints (deliberately tight, matching the statement path):
+//   - exactly two productive arms covering Some + None (a wildcard
+//     fills in for either)
+//   - no guards (those still wall — same as the statement path)
+//   - both arms produce the same LLVM type (emitIfExprPhi enforces)
+//
+// The Some payload is bound via bindOptionalMatchPayload, which
+// already handles ptr / scalar / aggregate via loadValueFromAddress,
+// so this routine doesn't touch the boxing/unboxing surface.
+func (g *generator) emitOptionalMatchExprValue(scrutinee value, innerSource ast.Type, arms []*ast.MatchArm) (value, error) {
+	if len(arms) == 0 {
+		return value{}, unsupported("expression", "optional match has no arms")
+	}
+	type optionalArmExpr struct {
+		pat  optionalMatchPatternInfo
+		body ast.Expr
+	}
+	parsed := make([]optionalArmExpr, 0, len(arms))
+	for _, arm := range arms {
+		if arm == nil {
+			return value{}, unsupported("expression", "nil match arm")
+		}
+		if arm.Guard != nil {
+			return value{}, unsupported("expression", "guarded optional match arms not yet supported in expression position")
+		}
+		pat, ok, err := matchOptionalPattern(arm.Pattern)
+		if err != nil {
+			return value{}, err
+		}
+		if !ok {
+			return value{}, unsupportedf("expression", "optional match arm must be Some/None/wildcard, got %T", arm.Pattern)
+		}
+		parsed = append(parsed, optionalArmExpr{pat: pat, body: arm.Body})
+	}
+	// Resolve which parsed arm covers Some and which covers None, with
+	// a wildcard filling in either slot. The first matching arm wins
+	// (mirrors source-order arm preference).
+	var someArm, noneArm, wildcardArm *optionalArmExpr
+	for i := range parsed {
+		switch {
+		case parsed[i].pat.isSome && someArm == nil:
+			someArm = &parsed[i]
+		case parsed[i].pat.isNone && noneArm == nil:
+			noneArm = &parsed[i]
+		case parsed[i].pat.isWildcard && wildcardArm == nil:
+			wildcardArm = &parsed[i]
+		}
+	}
+	if someArm == nil {
+		someArm = wildcardArm
+	}
+	if noneArm == nil {
+		noneArm = wildcardArm
+	}
+	if someArm == nil || noneArm == nil {
+		return value{}, unsupported("expression", "optional match must cover both Some and None (a wildcard counts for the missing side)")
+	}
+
+	emitter := g.toOstyEmitter()
+	isNil := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNil, scrutinee.ref))
+	// `cond=true` selects the then-label per llvmIfExprStart; isNil=true
+	// → the None arm runs in `then`, the Some arm in `else`.
+	labels := llvmIfExprStart(emitter, &LlvmValue{typ: "i1", name: isNil})
+	g.takeOstyEmitter(emitter)
+
+	g.currentBlock = labels.thenLabel
+	g.pushScope()
+	noneValue, err := g.emitMatchArmBodyValue(noneArm.body)
+	g.popScope()
+	if err != nil {
+		return value{}, err
+	}
+	nonePred := g.currentBlock
+
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+	g.pushScope()
+	if someArm.pat.isSome {
+		if err := g.bindOptionalMatchPayload(scrutinee, innerSource, someArm.pat); err != nil {
+			g.popScope()
+			return value{}, err
+		}
+	}
+	someValue, err := g.emitMatchArmBodyValue(someArm.body)
+	g.popScope()
+	if err != nil {
+		return value{}, err
+	}
+	somePred := g.currentBlock
+
+	return g.emitIfExprPhi(labels, nonePred, somePred, noneValue, someValue)
 }
 
 // resultPatternInfo describes a single arm of a Result match: which
@@ -3202,18 +3320,24 @@ func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) 
 // `osty_rt_list_get_<suffix>` aborts on out-of-range access, so the
 // Option semantics are emitted in IR: check `0 <= i < len` first, take
 // the runtime get only on the in-bounds branch, and let a phi node
-// thread the result (the ptr-backed element) or null (None) into the
+// thread the result (the boxed Option ptr) or null (None) into the
 // parent block.
 //
-// Only ptr-backed element types are lowered here today: `Option<T>` for
-// T = scalar (Int, Bool, Float, Char, Byte) still needs the
-// scalar-boxing Option codegen that stdlib_shim.go's
-// emitBuiltinOptionSomeCall path handles for user-written Some(x). The
-// injected stdlib bodies that bring this method into play
-// (`List<T>.first`, `last`, …) always receive T of reference type
-// (String, List<U>, struct) because that is the specialization the
-// injection pipeline actually requests — scalar callsites fall through
-// to user-written bodies that don't rely on this dispatch.
+// Two element-type families are supported:
+//   - ptr-backed (String, List<U>, struct, ...): `osty_rt_list_get_ptr`
+//     returns the element directly; in-bounds value is the ptr itself,
+//     None is null. No allocation.
+//   - scalar (i1, i8, i16, i32, i64, float, double): the scalar is
+//     fetched via the typed runtime symbol when one exists
+//     (i64/i1/double), otherwise via `osty_rt_list_get_bytes_v1` with
+//     a stack out-buffer. The in-bounds path then boxes the scalar
+//     into a GC-managed heap cell so the Option ABI stays uniform
+//     (None = null ptr, Some = heap ptr holding the scalar).
+//
+// The boxing shape mirrors `emitBuiltinOptionSomeCall`'s scalar path
+// in stdlib_shim.go: `osty.gc.alloc_v1(GENERIC, sizeof(T), site)` +
+// store. Match consumers handle both via `bindOptionalMatchPayload →
+// loadValueFromAddress`, so no symmetric consumer change was needed.
 func (g *generator) emitListGetCall(call *ast.CallExpr, base value, elemTyp string, elemString bool) (value, error) {
 	if len(call.Args) != 1 {
 		return value{}, unsupportedf("call", "list.get expects 1 argument, got %d", len(call.Args))
@@ -3222,8 +3346,9 @@ func (g *generator) emitListGetCall(call *ast.CallExpr, base value, elemTyp stri
 	if arg == nil || arg.Name != "" || arg.Value == nil {
 		return value{}, unsupportedf("call", "list.get requires a positional Int argument")
 	}
-	if elemTyp != "ptr" {
-		return value{}, unsupportedf("type-system", "list.get on List<non-ptr elem %s> needs scalar-Option boxing; only ptr-backed elements lower today", elemTyp)
+	scalar := isScalarLLVMTypeForOptionBox(elemTyp)
+	if elemTyp != "ptr" && !scalar {
+		return value{}, unsupportedf("type-system", "list.get on List<unsupported elem %s>", elemTyp)
 	}
 	idx, err := g.emitExpr(arg.Value)
 	if err != nil {
@@ -3238,8 +3363,6 @@ func (g *generator) emitListGetCall(call *ast.CallExpr, base value, elemTyp stri
 	}
 
 	g.declareRuntimeSymbol(listRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
-	getSym := listRuntimeGetSymbol("ptr")
-	g.declareRuntimeSymbol(getSym, "ptr", []paramInfo{{typ: "ptr"}, {typ: "i64"}})
 
 	emitter := g.toOstyEmitter()
 	lenVal := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
@@ -3260,14 +3383,59 @@ func (g *generator) emitListGetCall(call *ast.CallExpr, base value, elemTyp stri
 	g.enterBlock(inLabel)
 
 	emitter = g.toOstyEmitter()
-	gotVal := llvmCall(emitter, "ptr", getSym, []*LlvmValue{toOstyValue(base), toOstyValue(idx)})
+	var gotRef string
+	if elemTyp == "ptr" {
+		getSym := listRuntimeGetSymbol("ptr")
+		g.declareRuntimeSymbol(getSym, "ptr", []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+		got := llvmCall(emitter, "ptr", getSym, []*LlvmValue{toOstyValue(base), toOstyValue(idx)})
+		gotRef = got.name
+	} else {
+		// Fetch the scalar via either the typed runtime
+		// (osty_rt_list_get_<i64|i1|f64>) when supported, or the
+		// generic byte-array path (osty_rt_list_get_bytes_v1) with a
+		// stack out-buffer.
+		var scalarRef string
+		if llvmListUsesTypedRuntime(elemTyp) {
+			getSym := listRuntimeGetSymbol(elemTyp)
+			g.declareRuntimeSymbol(getSym, elemTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
+			got := llvmCall(emitter, elemTyp, getSym, []*LlvmValue{toOstyValue(base), toOstyValue(idx)})
+			scalarRef = got.name
+		} else {
+			// bytes-v1 path: allocate a temp slot, hand it to the
+			// runtime as the out pointer, then load the scalar back.
+			outSlot := llvmNextTemp(emitter)
+			emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", outSlot, elemTyp))
+			sizeVal := g.emitAggregateByteSize(emitter, elemTyp)
+			g.declareRuntimeSymbol("osty_rt_list_get_bytes_v1", "void", []paramInfo{
+				{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"},
+			})
+			emitter.body = append(emitter.body, fmt.Sprintf(
+				"  call void @osty_rt_list_get_bytes_v1(ptr %s, i64 %s, ptr %s, i64 %s)",
+				base.ref, idx.ref, outSlot, sizeVal.ref,
+			))
+			loadTmp := llvmNextTemp(emitter)
+			emitter.body = append(emitter.body, fmt.Sprintf("  %s = load %s, ptr %s", loadTmp, elemTyp, outSlot))
+			scalarRef = loadTmp
+		}
+		// Box the scalar: alloc GC cell, store scalar into it, return ptr.
+		size := g.emitAggregateByteSize(emitter, elemTyp)
+		sitePtr := llvmStringLiteral(emitter, "list.get."+sanitizeOptionBoxSiteName(elemTyp))
+		box := llvmCall(emitter, "ptr", "osty.gc.alloc_v1", []*LlvmValue{
+			toOstyValue(value{typ: "i64", ref: "1"}), // OSTY_GC_KIND_GENERIC
+			toOstyValue(size),
+			sitePtr,
+		})
+		emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", elemTyp, scalarRef, box.name))
+		g.needsGCRuntime = true
+		gotRef = box.name
+	}
 	inPred := g.currentBlock
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", outLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
 	tmp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi ptr [ %s, %%%s ], [ null, %%%s ]", tmp, gotVal.name, inPred, outLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi ptr [ %s, %%%s ], [ null, %%%s ]", tmp, gotRef, inPred, outLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
 
@@ -3977,18 +4145,24 @@ func (g *generator) emitOptionMethodCall(call *ast.CallExpr) (value, bool, error
 	return value{typ: "i1", ref: cmp}, true, nil
 }
 
-// emitOptionUnwrap lowers `opt.unwrap()` for a ptr-backed `Option<T>`:
-// if the receiver is non-null the payload ptr is the result; null
-// aborts with a "called unwrap on None" message (matching the spec's
-// panic shape). Uses the same print+exit+unreachable contract as
+// emitOptionUnwrap lowers `opt.unwrap()` for a boxed `Option<T>`:
+// if the receiver is non-null the payload is the result; null aborts
+// with a "called unwrap on None" message (matching the spec's panic
+// shape). Uses the same print+exit+unreachable contract as
 // `emitTestingAbortWithEmitter` so the abort path is visible in
 // stderr without pulling in the full testing harness.
 //
-// Scalar Option (Option<Int>, Option<Bool>, …) still routes through
-// the caller's generic fallback — ptr-backed is where the injection
-// pipeline (`List<T>.first(self) -> T?`, `self.indexOf(k).isSome()`
-// chains, …) needs unwrap first.
+// For ptr-backed Option<T> (T = String / List / struct), the payload
+// IS the receiver ptr — no load needed. For scalar Option<T>
+// (Option<Int>, Option<Bool>, ...) the receiver is a heap-boxed ptr
+// holding the scalar; we load the scalar at innerTyp and return it,
+// matching what callers expect downstream (an i64, i1, …, not a
+// ptr to one).
 func (g *generator) emitOptionUnwrap(base value, optType *ast.OptionalType, call *ast.CallExpr) (value, bool, error) {
+	innerTyp, err := llvmType(optType.Inner, g.typeEnv())
+	if err != nil {
+		return value{}, true, err
+	}
 	emitter := g.toOstyEmitter()
 	isNone := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNone, base.ref))
@@ -4010,9 +4184,17 @@ func (g *generator) emitOptionUnwrap(base value, optType *ast.OptionalType, call
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(someLabel)
 
-	out := base
-	out.sourceType = optType.Inner
-	return out, true, nil
+	if innerTyp == "ptr" {
+		out := base
+		out.sourceType = optType.Inner
+		return out, true, nil
+	}
+	// Scalar Option: load the boxed scalar from the heap cell.
+	emitter = g.toOstyEmitter()
+	loaded := g.loadValueFromAddress(emitter, innerTyp, base.ref)
+	g.takeOstyEmitter(emitter)
+	loaded.sourceType = optType.Inner
+	return loaded, true, nil
 }
 
 func (g *generator) emitSetMethodCall(call *ast.CallExpr) (value, bool, error) {
