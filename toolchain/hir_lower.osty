@@ -1,0 +1,312 @@
+// hir_lower.osty — self-hosted AST → HIR lowerer (Stage 5a scaffold).
+//
+// Osty port of `internal/ir/lower.go`. The Go side is 2625 lines
+// depending on four separate packages (ast / resolve / check /
+// types); porting it as a single blob isn't practical, so this
+// stage lands the plumbing first:
+//
+//   - HirLowerer state struct (mirrors Go's `lowerer`)
+//   - Issue/diagnostic note buffer
+//   - TyArena → HirType bridge (equivalent of Go's
+//     `fromCheckerType` — the authoritative path for expression
+//     types, since the checker already typed every expression)
+//   - Primitive name / PrimKind → HirType helpers
+//     (`primitiveByName` / `primitiveByKind` equivalents)
+//   - joinDottedPath utility
+//   - hirLowerModule entry that seeds an empty HirModule
+//
+// Stage 5b+ fills in AST-walking decl / stmt / expr lowerers once
+// the toolchain's AST / resolver shape is threaded into the bridge.
+// In the Osty self-host the "AST" input is the arena-based
+// `FrontParseTree` from `lexer.osty` / `parser.osty`, and the
+// "checker result" is `elab.osty` + `ty.osty`'s `TyArena`, so the
+// straight 1:1 port isn't meaningful — the real task is building
+// an adapter from those Osty-native shapes to `HirType` / `HirExpr`
+// / `HirStmt` nodes defined in `hir.osty`. That adapter is the
+// subject of Stage 5b/5c/5d.
+//
+// Relation to Go:
+//   - Go `lowerer`                        ↔ HirLowerer
+//   - Go `fromCheckerType(t types.Type)`  ↔ hirLowerTyToHirType(arena, idx)
+//   - Go `primitiveByName(name)`          ↔ hirLowerPrimByName(name)
+//   - Go `primitiveByKind(k)`             ↔ hirLowerPrimByPk(pk)
+//   - Go `joinDottedPath(parts)`          ↔ hirLowerJoinDottedPath(parts)
+
+use std.strings as strings
+
+// ====================================================================
+// Lowerer state
+// ====================================================================
+
+/// HirLowerer is the per-module lowering context. Mirrors Go's
+/// `lowerer`. State grows in stage 5b/5c/5d as more of lower.go
+/// ports in; for stage 5a only the output module + issue list are
+/// populated.
+pub struct HirLowerer {
+    pub packageName: String,
+    pub out: HirModule,
+    pub issues: List<String>,
+}
+
+pub fn hirLowerer(packageName: String) -> HirLowerer {
+    HirLowerer {
+        packageName,
+        out: hirModule(packageName),
+        issues: [],
+    }
+}
+
+/// hirLowerNote records a non-fatal lowering issue. Matches Go's
+/// `lowerer.note` — issues surface through the final HirModule's
+/// `issues` list once lowering finishes.
+pub fn hirLowerNote(l: HirLowerer, msg: String) {
+    l.issues.push(msg)
+}
+
+/// hirLowerFinish copies accumulated issues onto the output module
+/// and returns it. Call once AST lowering completes.
+pub fn hirLowerFinish(l: HirLowerer) -> HirModule {
+    for msg in l.issues {
+        hirModuleAddIssue(l.out, msg)
+    }
+    l.out
+}
+
+/// hirLowerModule is the entry public signature future stages will
+/// fill in. For Stage 5a it seeds an empty HirModule carrying the
+/// package name and any pre-registered issues — Stage 5b+ will thread
+/// the AST / resolver / checker inputs through and populate decls.
+pub fn hirLowerModule(packageName: String) -> HirModule {
+    let l = hirLowerer(packageName)
+    hirLowerNote(
+        l,
+        "hir_lower Stage 5a scaffold: AST → HIR lowering not yet implemented",
+    )
+    hirLowerFinish(l)
+}
+
+// ====================================================================
+// Type lowering: TyArena → HirType
+// ====================================================================
+//
+// The Osty toolchain already performs name resolution + type
+// checking via `elab.osty`, which stores inferred types in a
+// `TyArena` (see `ty.osty`). The HIR nodes in `hir.osty` use a
+// different representation (`HirType`, a flat struct with kind
+// tags), so we need a bridge between the two.
+//
+// `hirLowerTyToHirType` plays the role of Go's `fromCheckerType`:
+// given an elab-produced `TyArena` + a node index, it reconstructs
+// the equivalent `HirType`. This is the path expression lowering
+// will use — the checker already assigned a type to every
+// expression, so we never need to re-derive types from AST shape.
+
+/// hirLowerTyToHirType converts an elaborated `TyArena` type
+/// (referenced by `idx`) into a `HirType`. Invalid / poisoned /
+/// out-of-range inputs render as `hirTypeErr`. Type-var nodes
+/// preserve their source-level name + owner so monomorphization
+/// can substitute them later.
+pub fn hirLowerTyToHirType(arena: TyArena, idx: Int) -> HirType {
+    if idx < 0 || idx >= tyNodeCount(arena) {
+        return hirTypeErr()
+    }
+    if tyIsErr(arena, idx) || tyIsPoison(arena, idx) {
+        return hirTypeErr()
+    }
+    let kind = tyKindAt(arena, idx)
+    match kind {
+        TkErr -> hirTypeErr(),
+        TkPoison -> hirTypeErr(),
+        TkPrim -> hirLowerPrimByPk(tyPrimAt(arena, idx)),
+        TkNamed -> hirLowerNamedFromTy(arena, idx),
+        TkOptional -> {
+            let inner = hirLowerTyToHirType(arena, tyInnerAt(arena, idx))
+            hirTypeOptional(inner)
+        },
+        TkTuple -> {
+            let mut elems: List<HirType> = []
+            for ei in tyArgsAt(arena, idx) {
+                elems.push(hirLowerTyToHirType(arena, ei))
+            }
+            hirTypeTuple(elems)
+        },
+        TkFn -> {
+            let mut params: List<HirType> = []
+            for pi in tyArgsAt(arena, idx) {
+                params.push(hirLowerTyToHirType(arena, pi))
+            }
+            let retIdx = tyRetAt(arena, idx)
+            let ret = if retIdx >= 0 {
+                hirLowerTyToHirType(arena, retIdx)
+            } else {
+                hirTUnit()
+            }
+            hirTypeFn(params, ret)
+        },
+        TkVar -> {
+            let varName = tyVarNameAt(arena, idx)
+            let varOwner = tyVarOwnerAt(arena, idx)
+            hirTypeVar(varName, varOwner)
+        },
+        TkSelf -> {
+            // Interface / trait bodies carry `Self` as a distinct
+            // arena kind; the HIR has no separate Self — represent it
+            // as a TypeVar bound to the owning type's name so
+            // monomorphization can substitute it per impl.
+            let owner = tyHeadAt(arena, idx)
+            hirTypeVar("Self", owner)
+        },
+    }
+}
+
+/// hirLowerNamedFromTy reconstructs a `HirType` for a `TkNamed`
+/// arena node. Built-in generic heads (List / Map / Set / Option /
+/// Result / Maybe) flip the `builtin` bit on the resulting
+/// `HirTypeNamed`. Scalar primitive names that survived the arena
+/// round-trip (unusual — elab canonicalises them to `TkPrim` — but
+/// defensive) route to the primitive table.
+fn hirLowerNamedFromTy(arena: TyArena, idx: Int) -> HirType {
+    let head = tyHeadAt(arena, idx)
+    let argIdxs = tyArgsAt(arena, idx)
+    if argIdxs.len() == 0 {
+        let prim = hirLowerPrimByName(head)
+        let primHit = match prim.kind {
+            HirTypeInvalid -> false,
+            _ -> true,
+        }
+        if primHit {
+            return prim
+        }
+    }
+    let mut args: List<HirType> = []
+    for ai in argIdxs {
+        args.push(hirLowerTyToHirType(arena, ai))
+    }
+    if hirLowerIsBuiltinGenericName(head) {
+        return hirTypeBuiltin(head, args)
+    }
+    hirTypeNamed(head, args)
+}
+
+/// hirLowerIsBuiltinGenericName reports whether `name` is one of the
+/// stdlib-provided generic type heads. Mirrors Go's
+/// `lowerNamedType`'s fallback case.
+fn hirLowerIsBuiltinGenericName(name: String) -> Bool {
+    if name == "List" { return true }
+    if name == "Map" { return true }
+    if name == "Set" { return true }
+    if name == "Option" { return true }
+    if name == "Result" { return true }
+    if name == "Maybe" { return true }
+    false
+}
+
+// ====================================================================
+// Primitive lookups
+// ====================================================================
+
+/// hirLowerPrimByName maps a scalar type name to the HirType
+/// singleton constructor. Mirrors Go's `primitiveByName` — returns
+/// an invalid HirType when the name isn't a primitive scalar so
+/// callers can fall through to the named-type path.
+pub fn hirLowerPrimByName(name: String) -> HirType {
+    if name == "Int" { return hirTInt() }
+    if name == "Int8" { return hirTInt8() }
+    if name == "Int16" { return hirTInt16() }
+    if name == "Int32" { return hirTInt32() }
+    if name == "Int64" { return hirTInt64() }
+    if name == "UInt8" { return hirTUInt8() }
+    if name == "UInt16" { return hirTUInt16() }
+    if name == "UInt32" { return hirTUInt32() }
+    if name == "UInt64" { return hirTUInt64() }
+    if name == "Byte" { return hirTByte() }
+    if name == "Float" { return hirTFloat() }
+    if name == "Float32" { return hirTFloat32() }
+    if name == "Float64" { return hirTFloat64() }
+    if name == "Bool" { return hirTBool() }
+    if name == "Char" { return hirTChar() }
+    if name == "String" { return hirTString() }
+    if name == "Bytes" { return hirTBytes() }
+    if name == "RawPtr" { return hirTRawPtr() }
+    hirTypeInvalid()
+}
+
+/// hirLowerPrimByPk maps a `ty.osty` PrimKind to the HirType
+/// primitive. Mirrors Go's `primitiveByKind`. Unknown / invalid
+/// inputs render as ErrType.
+///
+/// Note: `PkUntypedInt` / `PkUntypedFloat` default to `Int` /
+/// `Float` — matches Go's `types.Untyped.Default()` convention so
+/// downstream passes never see an untyped carrier.
+pub fn hirLowerPrimByPk(pk: PrimKind) -> HirType {
+    match pk {
+        PkInvalid -> hirTypeErr(),
+        PkInt -> hirTInt(),
+        PkInt8 -> hirTInt8(),
+        PkInt16 -> hirTInt16(),
+        PkInt32 -> hirTInt32(),
+        PkInt64 -> hirTInt64(),
+        PkUInt8 -> hirTUInt8(),
+        PkUInt16 -> hirTUInt16(),
+        PkUInt32 -> hirTUInt32(),
+        PkUInt64 -> hirTUInt64(),
+        PkByte -> hirTByte(),
+        PkFloat -> hirTFloat(),
+        PkFloat32 -> hirTFloat32(),
+        PkFloat64 -> hirTFloat64(),
+        PkBool -> hirTBool(),
+        PkChar -> hirTChar(),
+        PkString -> hirTString(),
+        PkBytes -> hirTBytes(),
+        PkUnit -> hirTUnit(),
+        PkNever -> hirTNever(),
+        PkUntypedInt -> hirTInt(),
+        PkUntypedFloat -> hirTFloat(),
+    }
+}
+
+// ====================================================================
+// Misc helpers
+// ====================================================================
+
+/// hirLowerJoinDottedPath joins a non-empty list with `.`. Mirrors
+/// Go's `joinDottedPath` — used when reconstructing qualified
+/// NamedType package prefixes.
+pub fn hirLowerJoinDottedPath(parts: List<String>) -> String {
+    if parts.len() == 0 {
+        return ""
+    }
+    if parts.len() == 1 {
+        return parts[0]
+    }
+    strings.join(parts, ".")
+}
+
+/// hirLowerDropLast returns `xs` without its final element, or an
+/// empty list when `xs` is empty. Used when splitting a dotted
+/// NamedType path into qualifier + leaf name.
+pub fn hirLowerDropLast(xs: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    if xs.len() <= 1 {
+        return out
+    }
+    let mut i = 0
+    let last = xs.len() - 1
+    for s in xs {
+        if i < last {
+            out.push(s)
+        }
+        i = i + 1
+    }
+    out
+}
+
+/// hirLowerLast returns the final element of `xs`, or an empty
+/// string for an empty list. Used alongside hirLowerDropLast for
+/// qualifier/name splitting.
+pub fn hirLowerLast(xs: List<String>) -> String {
+    if xs.len() == 0 {
+        return ""
+    }
+    xs[xs.len() - 1]
+}
