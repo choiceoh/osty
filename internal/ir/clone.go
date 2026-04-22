@@ -221,11 +221,18 @@ func cloneFnDecl(fn *FnDecl) *FnDecl {
 		ReceiverMut:  fn.ReceiverMut,
 		Exported:     fn.Exported,
 		SpanV:        fn.SpanV,
-		ExportSymbol: fn.ExportSymbol,
-		CABI:         fn.CABI,
-		IsIntrinsic:  fn.IsIntrinsic,
-		NoAlloc:      fn.NoAlloc,
-		Vectorize:    fn.Vectorize,
+		ExportSymbol:       fn.ExportSymbol,
+		CABI:               fn.CABI,
+		IsIntrinsic:        fn.IsIntrinsic,
+		NoAlloc:            fn.NoAlloc,
+		Vectorize:          fn.Vectorize,
+		NoVectorize:        fn.NoVectorize,
+		VectorizeWidth:     fn.VectorizeWidth,
+		VectorizeScalable:  fn.VectorizeScalable,
+		VectorizePredicate: fn.VectorizePredicate,
+		Parallel:           fn.Parallel,
+		Unroll:             fn.Unroll,
+		UnrollCount:        fn.UnrollCount,
 	}
 	if len(fn.Params) > 0 {
 		out.Params = make([]*Param, len(fn.Params))

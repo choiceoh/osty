@@ -37,14 +37,24 @@ fn arithmeticTest() {
     let _ = b
 }
 
-// ---- #[vectorize] (v0.6 A5) ----
-// Bare flag on a top-level fn — LLVM backend attaches
-// !llvm.loop.vectorize.enable metadata to every user-written for-loop
-// lowered in the body. Semantics are a hint; LLVM's own legality +
-// profitability analysis decides whether the loop actually vectorizes.
+// ---- Vectorize (v0.6 A5 / A5.1 / A5.2) ----
+// Default is ON — a plain `fn` already gets vectorize metadata + the
+// per-iteration safepoint skip. Annotations are only for deviation.
 
-#[vectorize]
-fn sumTo(n: Int) -> Int {
+// v0.6 A5.1 — tuning args: scalable + predicate + width. Default-on
+// is preserved, these arguments only refine strategy.
+#[vectorize(scalable, predicate, width = 8)]
+fn xorTo(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc ^ i
+    }
+    acc
+}
+
+// v0.6 A5.2 — opt-out for GC-cooperative worker loops.
+#[no_vectorize]
+fn drainStep(n: Int) -> Int {
     let mut acc = 0
     for i in 0..n {
         acc = acc + i
@@ -52,26 +62,73 @@ fn sumTo(n: Int) -> Int {
     acc
 }
 
+// Bare `#[vectorize]` is accepted as a no-op (documents intent;
+// redundant with default).
 #[vectorize]
-fn twoLoops(n: Int) -> Int {
+fn hotButExplicit(n: Int) -> Int {
     let mut acc = 0
     for i in 0..n {
         acc = acc + i
     }
-    for j in 0..n {
-        acc = acc + j
-    }
     acc
 }
 
-// #[vectorize] on a method — allowed target.
+// vectorize tuning on a method — allowed target.
 struct Accumulator {
     total: Int,
 
-    #[vectorize]
+    #[vectorize(predicate)]
     fn addRange(mut self, n: Int) {
         for i in 0..n {
             self.total = self.total + i
         }
     }
+}
+
+// ---- #[parallel] (v0.6 A6) ----
+// Asserts iterations have no loop-carried memory dependencies — LLVM
+// emits !llvm.access.group + llvm.loop.parallel_accesses metadata.
+
+#[parallel]
+fn addInto(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc + i * 2
+    }
+    acc
+}
+
+// ---- #[unroll] / #[unroll(count = N)] (v0.6 A7) ----
+// Bare form lets compiler pick; count form forces a specific factor.
+
+#[unroll]
+fn bareUnroll(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc + i
+    }
+    acc
+}
+
+#[unroll(count = 4)]
+fn fixedUnroll(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc + i
+    }
+    acc
+}
+
+// ---- combined hints ----
+// All three annotations compose. Width × unroll ≈ effective throughput.
+
+#[vectorize(predicate)]
+#[parallel]
+#[unroll(count = 2)]
+fn allCombined(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc ^ i
+    }
+    acc
 }

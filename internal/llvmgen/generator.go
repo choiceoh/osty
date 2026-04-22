@@ -103,16 +103,25 @@ type generator struct {
 	// stdlib-body work tracked under LLVM018.
 	deferStack [][]*ast.DeferStmt
 
-	// vectorizeHint is true while lowering the body of a function or
-	// method annotated with `#[vectorize]`. When set, each loop backedge
-	// branch emitted inside the body carries `!llvm.loop !N` metadata
-	// requesting LLVM's loop vectorizer to consider the loop. The hint
-	// is reset at every function boundary by beginFunction.
-	vectorizeHint bool
-	// loopMDDefs accumulates the module-level metadata node definitions
-	// that the loop vectorize hint attaches to. Module-scoped so IDs
-	// stay unique across all loops in the translation unit; rendered at
-	// the tail of the module via render().
+	// v0.6 A5/A5.1/A6/A7 loop-optimization hint state. All fields live
+	// on the generator (rather than in a sub-struct) to match the
+	// existing flat-state style of this file; they are reset at every
+	// function boundary by beginFunction. The HIR emitter mirrors the
+	// MIR emitter's `mirGen` fields — both backend paths honor the
+	// full annotation set so the backend dispatcher's MIR-first
+	// default does not drop hints on the legacy fallback.
+	vectorizeHint          bool
+	vectorizeWidth         int
+	vectorizeScalable      bool
+	vectorizePredicate     bool
+	parallelHint           bool
+	unrollHint             bool
+	unrollCount            int
+	parallelAccessGroupRef string // `!N` for the per-function access group; "" when `#[parallel]` not set
+	// loopMDDefs accumulates the module-level metadata node
+	// definitions that loop hints attach to. Module-scoped so IDs stay
+	// unique across all loops and access groups in the translation
+	// unit; rendered at the tail of the module via render().
 	loopMDDefs []string
 }
 
@@ -190,48 +199,107 @@ func (g *generator) beginFunction() {
 	g.optionContexts = nil
 	g.deferStack = [][]*ast.DeferStmt{nil}
 	g.vectorizeHint = false
+	g.vectorizeWidth = 0
+	g.vectorizeScalable = false
+	g.vectorizePredicate = false
+	g.parallelHint = false
+	g.unrollHint = false
+	g.unrollCount = 0
+	g.parallelAccessGroupRef = ""
 }
 
 // attachVectorizeMD rewrites the most recently emitted `br label %cond`
-// line in emitter.body to carry `!llvm.loop !N` metadata, allocating a
-// fresh self-referential metadata node in the process. No-op when the
-// current function is not annotated `#[vectorize]`.
+// line in emitter.body to carry `!llvm.loop !N` metadata reflecting
+// whichever of the `#[vectorize]` / `#[parallel]` / `#[unroll]` hints
+// are currently active. No-op when no hint is set.
 //
 // The caller provides the cond label explicitly so the scan anchors on
 // the exact backedge — this avoids misidentifying an earlier `br label`
 // inside a nested safepoint poll block as the backedge.
 func (g *generator) attachVectorizeMD(emitter *LlvmEmitter, condLabel string) {
-	if !g.vectorizeHint || emitter == nil {
+	if emitter == nil || !g.loopHintsActive() {
 		return
 	}
 	target := fmt.Sprintf("  br label %%%s", condLabel)
 	for i := len(emitter.body) - 1; i >= 0; i-- {
 		if emitter.body[i] == target {
-			mdID := g.nextLoopVectorizeMD()
-			emitter.body[i] = target + fmt.Sprintf(", !llvm.loop %s", mdID)
+			ref := g.nextLoopMD()
+			if ref == "" {
+				return
+			}
+			emitter.body[i] = target + fmt.Sprintf(", !llvm.loop %s", ref)
 			return
 		}
 	}
 }
 
-// nextLoopVectorizeMD allocates a fresh LLVM metadata node for the loop
-// vectorize hint and records its textual definition in loopMDDefs. The
-// returned string is the node reference (e.g. `!0`) suitable for
-// appending to a branch terminator as `!llvm.loop !0`. The node is
-// `distinct` and self-referential per LLVM's loop metadata convention,
-// with one named-string child naming the vectorize-enable property.
-// Module-scoped numbering keeps IDs unique across every loop in the
-// translation unit; the starting space is reserved because Osty does
-// not otherwise emit numeric metadata today.
-func (g *generator) nextLoopVectorizeMD() string {
-	base := len(g.loopMDDefs)
-	loopRef := fmt.Sprintf("!%d", base)
-	enableRef := fmt.Sprintf("!%d", base+1)
+// loopHintsActive reports whether any of the v0.6 loop-optimization
+// annotations are in effect for the function currently being lowered.
+func (g *generator) loopHintsActive() bool {
+	return g.vectorizeHint || g.parallelHint || g.unrollHint
+}
+
+// nextLoopMD allocates the full `!llvm.loop` metadata tree reflecting
+// the current function's combined `#[vectorize(...)]` / `#[parallel]`
+// / `#[unroll(...)]` hints, records the textual definitions in
+// loopMDDefs, and returns the loop-node reference (`!N`). The shape
+// is the same one the MIR emitter produces (`mir_generator.go:nextLoopMD`);
+// both paths must stay in lock-step or the verifier sees inconsistent
+// metadata across fallbacks.
+func (g *generator) nextLoopMD() string {
+	alloc := func(line string) string {
+		ref := fmt.Sprintf("!%d", len(g.loopMDDefs))
+		g.loopMDDefs = append(g.loopMDDefs, fmt.Sprintf("%s = %s", ref, line))
+		return ref
+	}
+	var propRefs []string
+	if g.vectorizeHint {
+		propRefs = append(propRefs, alloc(`!{!"llvm.loop.vectorize.enable", i1 true}`))
+		if g.vectorizeWidth > 0 {
+			propRefs = append(propRefs, alloc(
+				fmt.Sprintf(`!{!"llvm.loop.vectorize.width", i32 %d}`, g.vectorizeWidth)))
+		}
+		if g.vectorizeScalable {
+			propRefs = append(propRefs, alloc(`!{!"llvm.loop.vectorize.scalable.enable", i1 true}`))
+		}
+		if g.vectorizePredicate {
+			propRefs = append(propRefs, alloc(`!{!"llvm.loop.vectorize.predicate.enable", i1 true}`))
+		}
+	}
+	if g.parallelHint && g.parallelAccessGroupRef != "" {
+		propRefs = append(propRefs, alloc(
+			fmt.Sprintf(`!{!"llvm.loop.parallel_accesses", %s}`, g.parallelAccessGroupRef)))
+	}
+	if g.unrollHint {
+		if g.unrollCount > 0 {
+			propRefs = append(propRefs, alloc(
+				fmt.Sprintf(`!{!"llvm.loop.unroll.count", i32 %d}`, g.unrollCount)))
+		} else {
+			propRefs = append(propRefs, alloc(`!{!"llvm.loop.unroll.enable", i1 true}`))
+		}
+	}
+	if len(propRefs) == 0 {
+		return ""
+	}
+	loopRef := fmt.Sprintf("!%d", len(g.loopMDDefs))
+	children := append([]string{loopRef}, propRefs...)
 	g.loopMDDefs = append(g.loopMDDefs,
-		fmt.Sprintf("%s = distinct !{%s, %s}", loopRef, loopRef, enableRef),
-		fmt.Sprintf(`%s = !{!"llvm.loop.vectorize.enable", i1 true}`, enableRef),
-	)
+		fmt.Sprintf("%s = distinct !{%s}", loopRef, strings.Join(children, ", ")))
 	return loopRef
+}
+
+// allocParallelAccessGroup lazily materialises the per-function
+// `!llvm.access.group` metadata node referenced by every load/store
+// in a `#[parallel]` function, caching the reference for reuse by
+// subsequent load/store sites and the loop-level metadata.
+func (g *generator) allocParallelAccessGroup() string {
+	if g.parallelAccessGroupRef != "" {
+		return g.parallelAccessGroupRef
+	}
+	ref := fmt.Sprintf("!%d", len(g.loopMDDefs))
+	g.loopMDDefs = append(g.loopMDDefs, fmt.Sprintf("%s = distinct !{}", ref))
+	g.parallelAccessGroupRef = ref
+	return ref
 }
 
 func (g *generator) bindGCRootIfManagedPointer(emitter *LlvmEmitter, slot value) {
@@ -351,15 +419,15 @@ func (g *generator) emitGCSafepointKind(emitter *LlvmEmitter, kind safepointKind
 }
 
 func (g *generator) allocLoopSafepointCounter(emitter *LlvmEmitter) string {
-	// v0.6 A5 contract: `#[vectorize]` functions opt out of per-iteration
-	// GC safepoint polls so LLVM's loop vectorizer sees a call-free
-	// latch. The counter slot is never consulted under this mode, so we
-	// avoid allocating it in the first place (saves one alloca + one
-	// store in every loop preheader). The function-entry safepoint from
-	// `emitGCEntry` and any safepoints after the loop exits still
-	// participate in STW coordination; the contract is documented in
-	// LANG_SPEC §3.8.3.
-	if g.vectorizeHint {
+	// v0.6 A5/A6/A7 contract: any loop-optimization annotation opts
+	// the function out of per-iteration GC safepoint polls so LLVM
+	// sees a call-free latch. The counter slot is never consulted
+	// under this mode, so we avoid allocating it in the first place
+	// (saves one alloca + one store in every loop preheader). The
+	// function-entry safepoint from `emitGCEntry` and any safepoints
+	// after the loop exits still participate in STW coordination;
+	// the contract is documented in LANG_SPEC §3.8.3.
+	if g.loopHintsActive() {
 		return ""
 	}
 	if loopSafepointStride <= 1 {
@@ -372,11 +440,10 @@ func (g *generator) allocLoopSafepointCounter(emitter *LlvmEmitter) string {
 }
 
 func (g *generator) emitLoopSafepoint(emitter *LlvmEmitter, counterSlot string) {
-	// v0.6 A5 contract — matching allocLoopSafepointCounter above: when
-	// the enclosing function is `#[vectorize]`, no per-iteration poll is
-	// emitted at all. The loop body therefore stays call-free and the
-	// LLVM loop vectorizer can analyse it as a countable loop.
-	if g.vectorizeHint {
+	// v0.6 A5/A6/A7 contract — matching allocLoopSafepointCounter
+	// above: any loop-optimization hint suppresses the per-iteration
+	// poll so the LLVM loop analyzers see a call-free body.
+	if g.loopHintsActive() {
 		return
 	}
 	if counterSlot == "" || loopSafepointStride <= 1 {
@@ -681,7 +748,35 @@ func (g *generator) runtimeDeclarationIR() []string {
 }
 
 func (g *generator) renderFunction(ret, name string, params []paramInfo) string {
-	return llvmRenderFunction(ret, name, toLLVMParams(params), g.body)
+	body := g.body
+	// v0.6 A6: in `#[parallel]` functions, append the per-function
+	// access-group metadata to every load/store line so the
+	// `llvm.loop.parallel_accesses` reference on each loop back-edge
+	// has something to resolve to. Doing this at render time keeps
+	// the hot emission paths in stmt.go / expr.go untouched.
+	if g.parallelHint && g.parallelAccessGroupRef != "" {
+		body = tagParallelAccessesLines(body, g.parallelAccessGroupRef)
+	}
+	return llvmRenderFunction(ret, name, toLLVMParams(params), body)
+}
+
+// tagParallelAccessesLines is the `[]string` twin of the MIR path's
+// tagParallelAccesses — it walks each body line and appends
+// `, !llvm.access.group !N` to load/store lines that do not already
+// carry that attachment. The HIR emitter accumulates the body in a
+// `[]string`, so we operate on the slice directly rather than on a
+// single joined string.
+func tagParallelAccessesLines(body []string, groupRef string) []string {
+	suffix := ", !llvm.access.group " + groupRef
+	out := make([]string, len(body))
+	for i, line := range body {
+		if isMemoryAccessLine(line) && !strings.Contains(line, "!llvm.access.group") {
+			out[i] = line + suffix
+			continue
+		}
+		out[i] = line
+	}
+	return out
 }
 
 func (g *generator) typeEnv() typeEnv {

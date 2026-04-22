@@ -1243,9 +1243,77 @@ func fnHasAnnotation(decl *ast.FnDecl, name string) bool {
 	return false
 }
 
+// fnFindAnnotation returns the first annotation with the given name, or
+// nil if the declaration has no such annotation.
+func fnFindAnnotation(decl *ast.FnDecl, name string) *ast.Annotation {
+	if decl == nil {
+		return nil
+	}
+	for _, a := range decl.Annotations {
+		if a != nil && a.Name == name {
+			return a
+		}
+	}
+	return nil
+}
+
+// readLoopHints pulls the v0.6 loop-optimization hint set off the
+// reified `*ast.FnDecl` into generator state so emitFor et al. can
+// attach metadata without re-walking annotations on every back-edge.
+// Called once per function body at emitUserFunction entry. The args
+// on `#[vectorize(...)]` / `#[unroll(...)]` come already-validated
+// from the resolver, so numeric parses here can assume well-formed
+// shape and silently fall back to 0 on anything unexpected.
+func (g *generator) readLoopHints(decl *ast.FnDecl) {
+	// v0.6 A5.2: vectorize is default-on. Start with the hint enabled
+	// and let `#[no_vectorize]` flip it off. The `#[vectorize(...)]`
+	// annotation is still read for tuning args (width, scalable,
+	// predicate) that refine the default-on behavior.
+	g.vectorizeHint = true
+	if fnHasAnnotation(decl, "no_vectorize") {
+		g.vectorizeHint = false
+	}
+	if vec := fnFindAnnotation(decl, "vectorize"); vec != nil {
+		for _, arg := range vec.Args {
+			if arg == nil {
+				continue
+			}
+			switch arg.Key {
+			case "scalable":
+				g.vectorizeScalable = true
+			case "predicate":
+				g.vectorizePredicate = true
+			case "width":
+				if lit, ok := arg.Value.(*ast.IntLit); ok {
+					if v, err := strconv.Atoi(strings.ReplaceAll(lit.Text, "_", "")); err == nil && v > 0 {
+						g.vectorizeWidth = v
+					}
+				}
+			}
+		}
+	}
+	if fnHasAnnotation(decl, "parallel") {
+		g.parallelHint = true
+		g.allocParallelAccessGroup()
+	}
+	if u := fnFindAnnotation(decl, "unroll"); u != nil {
+		g.unrollHint = true
+		for _, arg := range u.Args {
+			if arg == nil || arg.Key != "count" {
+				continue
+			}
+			if lit, ok := arg.Value.(*ast.IntLit); ok {
+				if v, err := strconv.Atoi(strings.ReplaceAll(lit.Text, "_", "")); err == nil && v > 0 {
+					g.unrollCount = v
+				}
+			}
+		}
+	}
+}
+
 func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 	g.beginFunction()
-	g.vectorizeHint = fnHasAnnotation(sig.decl, "vectorize")
+	g.readLoopHints(sig.decl)
 	g.returnType = sig.ret
 	g.returnSourceType = sig.returnSourceType
 	g.returnListElemTyp = sig.retListElemTyp

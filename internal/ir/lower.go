@@ -2,6 +2,8 @@ package ir
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
@@ -170,17 +172,29 @@ func (l *lowerer) lowerDecl(d ast.Decl) Decl {
 }
 
 func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
+	_, vecWidth, vecScalable, vecPredicate := extractVectorizeArgs(fn.Annotations)
+	unrollEnable, unrollCount := extractUnrollArgs(fn.Annotations)
+	noVec := hasNamedAnnotation(fn.Annotations, "no_vectorize")
 	out := &FnDecl{
-		Name:         fn.Name,
-		Return:       l.lowerType(fn.ReturnType),
-		ReceiverMut:  fn.Recv != nil && fn.Recv.Mut,
-		Exported:     fn.Pub,
-		SpanV:        nodeSpan(fn),
-		ExportSymbol: extractExportSymbol(fn.Annotations),
-		CABI:         hasNamedAnnotation(fn.Annotations, "c_abi"),
-		IsIntrinsic:  hasNamedAnnotation(fn.Annotations, "intrinsic"),
-		NoAlloc:      hasNamedAnnotation(fn.Annotations, "no_alloc"),
-		Vectorize:    hasNamedAnnotation(fn.Annotations, "vectorize"),
+		Name:               fn.Name,
+		Return:             l.lowerType(fn.ReturnType),
+		ReceiverMut:        fn.Recv != nil && fn.Recv.Mut,
+		Exported:           fn.Pub,
+		SpanV:              nodeSpan(fn),
+		ExportSymbol:       extractExportSymbol(fn.Annotations),
+		CABI:               hasNamedAnnotation(fn.Annotations, "c_abi"),
+		IsIntrinsic:        hasNamedAnnotation(fn.Annotations, "intrinsic"),
+		NoAlloc:            hasNamedAnnotation(fn.Annotations, "no_alloc"),
+		// v0.6 A5.2: vectorize is default-on. `#[no_vectorize]` is
+		// the sole way to opt out.
+		Vectorize:          !noVec,
+		NoVectorize:        noVec,
+		VectorizeWidth:     vecWidth,
+		VectorizeScalable:  vecScalable,
+		VectorizePredicate: vecPredicate,
+		Parallel:           hasNamedAnnotation(fn.Annotations, "parallel"),
+		Unroll:             unrollEnable,
+		UnrollCount:        unrollCount,
 	}
 	if out.Return == nil {
 		out.Return = TUnit
@@ -214,6 +228,88 @@ func hasNamedAnnotation(annots []*ast.Annotation, name string) bool {
 		}
 	}
 	return false
+}
+
+// extractVectorizeArgs reads `#[vectorize(...)]` metadata from the
+// annotation list and returns (enable, width, scalable, predicate).
+// `enable` tracks presence of the annotation regardless of args; the
+// three other flags are set from the arg list the resolver already
+// validated, so we can assume well-formed shape here.
+func extractVectorizeArgs(annots []*ast.Annotation) (enable bool, width int, scalable, predicate bool) {
+	for _, a := range annots {
+		if a == nil || a.Name != "vectorize" {
+			continue
+		}
+		enable = true
+		for _, arg := range a.Args {
+			if arg == nil {
+				continue
+			}
+			switch arg.Key {
+			case "scalable":
+				scalable = true
+			case "predicate":
+				predicate = true
+			case "width":
+				if lit, ok := arg.Value.(*ast.IntLit); ok {
+					if v, ok := parseAnnotationInt(lit.Text); ok {
+						width = v
+					}
+				}
+			}
+		}
+	}
+	return
+}
+
+// extractUnrollArgs reads `#[unroll]` / `#[unroll(count = N)]` from
+// the annotation list and returns (enable, count). `count == 0` means
+// the bare form; a positive value means the fixed factor.
+func extractUnrollArgs(annots []*ast.Annotation) (enable bool, count int) {
+	for _, a := range annots {
+		if a == nil || a.Name != "unroll" {
+			continue
+		}
+		enable = true
+		for _, arg := range a.Args {
+			if arg == nil || arg.Key != "count" {
+				continue
+			}
+			if lit, ok := arg.Value.(*ast.IntLit); ok {
+				if v, ok := parseAnnotationInt(lit.Text); ok {
+					count = v
+				}
+			}
+		}
+	}
+	return
+}
+
+// parseAnnotationInt parses a decimal/hex/octal/binary integer literal
+// text (with optional underscore separators) into an int. Returns
+// (value, true) only for non-negative values that fit in int.
+func parseAnnotationInt(text string) (int, bool) {
+	text = strings.ReplaceAll(text, "_", "")
+	base := 10
+	switch {
+	case strings.HasPrefix(text, "0x"), strings.HasPrefix(text, "0X"):
+		base = 16
+		text = text[2:]
+	case strings.HasPrefix(text, "0o"), strings.HasPrefix(text, "0O"):
+		base = 8
+		text = text[2:]
+	case strings.HasPrefix(text, "0b"), strings.HasPrefix(text, "0B"):
+		base = 2
+		text = text[2:]
+	}
+	if text == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(text, base, 64)
+	if err != nil || v < 0 || v > int64(^uint(0)>>1) {
+		return 0, false
+	}
+	return int(v), true
 }
 
 func extractExportSymbol(annots []*ast.Annotation) string {

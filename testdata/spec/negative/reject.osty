@@ -179,8 +179,23 @@ pub struct Bad {
 }
 // === END
 
-// === CASE: E0739 === #[vectorize] does not take arguments
-#[vectorize(width = 4)]
+// === CASE: E0739 === #[vectorize] rejects unknown argument keys
+#[vectorize(foo = 4)]
+pub fn hot(n: Int) -> Int { n }
+// === END
+
+// === CASE: E0739 === #[vectorize] rejects width out of range
+#[vectorize(width = 99999)]
+pub fn hot(n: Int) -> Int { n }
+// === END
+
+// === CASE: E0739 === #[unroll] rejects unknown argument keys
+#[unroll(factor = 4)]
+pub fn hot(n: Int) -> Int { n }
+// === END
+
+// === CASE: E0739 === #[parallel] takes no arguments
+#[parallel(level = 2)]
 pub fn hot(n: Int) -> Int { n }
 // === END
 

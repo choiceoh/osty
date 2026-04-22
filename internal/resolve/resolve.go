@@ -3,6 +3,7 @@ package resolve
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
@@ -507,7 +508,7 @@ func (r *resolver) checkAnnotations(annots []*ast.Annotation, target ast.Annotat
 				Code(diag.CodeUnknownAnnotation).
 				Primary(diag.Span{Start: a.PosV, End: a.EndV},
 					"this annotation name is not recognized").
-				Note("v0.4 §18.1: only `#[json]`, `#[deprecated]`, `#[allow]`, `#[cfg]`, `#[op]`, `#[test]`, `#[vectorize]`, and the runtime sublanguage annotations are permitted").
+				Note("v0.4 §18.1: only `#[json]`, `#[deprecated]`, `#[allow]`, `#[cfg]`, `#[op]`, `#[test]`, `#[vectorize]`, `#[no_vectorize]`, `#[parallel]`, `#[unroll]`, and the runtime sublanguage annotations are permitted").
 				Build())
 			continue
 		}
@@ -557,6 +558,12 @@ func (r *resolver) checkAnnotationArgs(a *ast.Annotation, target ast.AnnotationT
 		r.checkNoArgsRuntime(a)
 	case "vectorize":
 		r.checkVectorizeArgs(a)
+	case "no_vectorize":
+		r.checkNoVectorizeArgs(a)
+	case "parallel":
+		r.checkParallelArgs(a)
+	case "unroll":
+		r.checkUnrollArgs(a)
 	}
 }
 
@@ -663,18 +670,210 @@ func (r *resolver) checkNoArgsRuntime(a *ast.Annotation) {
 		Build())
 }
 
-// checkVectorizeArgs validates `#[vectorize]`, which is a bare-flag
-// hint with no arguments (v0.6 A5). Any argument is rejected.
+// checkVectorizeArgs validates `#[vectorize]` per v0.6 A5 / A5.1.
+// The bare-flag form is still accepted ("compiler chooses everything")
+// and three optional tuning args are now permitted:
+//
+//   - `scalable` — prefer scalable vectorization (SVE, RVV) over
+//     fixed-width (NEON). Bare flag.
+//   - `predicate` — enable tail folding so the vectorizer processes
+//     trip counts that are not a multiple of the vector width via
+//     masked operations instead of a scalar tail loop. Bare flag.
+//   - `width = N` — force the vectorization factor to exactly N
+//     (positive int literal, 1..1024). Unlocks AVX-512 ZMM on Intel,
+//     where the cost model otherwise refuses 512-bit vectors.
+//
+// Unknown keys, duplicate keys, and out-of-range widths are rejected
+// with E0739.
 func (r *resolver) checkVectorizeArgs(a *ast.Annotation) {
+	var hasScalable, hasPredicate, hasWidth bool
+	for _, arg := range a.Args {
+		if arg == nil {
+			continue
+		}
+		switch arg.Key {
+		case "scalable":
+			if hasScalable {
+				r.emit(diag.New(diag.Error,
+					"duplicate `scalable` in `#[vectorize(...)]`").
+					Code(diag.CodeAnnotationBadArg).
+					PrimaryPos(arg.PosV, "second occurrence").
+					Build())
+				continue
+			}
+			hasScalable = true
+			if !isFlagOrTrue(arg) {
+				r.emit(diag.New(diag.Error,
+					"`scalable` in `#[vectorize(...)]` is a bare flag").
+					Code(diag.CodeAnnotationBadArg).
+					PrimaryPos(arg.PosV, "expected `scalable`, not `scalable = ...`").
+					Build())
+			}
+		case "predicate":
+			if hasPredicate {
+				r.emit(diag.New(diag.Error,
+					"duplicate `predicate` in `#[vectorize(...)]`").
+					Code(diag.CodeAnnotationBadArg).
+					PrimaryPos(arg.PosV, "second occurrence").
+					Build())
+				continue
+			}
+			hasPredicate = true
+			if !isFlagOrTrue(arg) {
+				r.emit(diag.New(diag.Error,
+					"`predicate` in `#[vectorize(...)]` is a bare flag").
+					Code(diag.CodeAnnotationBadArg).
+					PrimaryPos(arg.PosV, "expected `predicate`, not `predicate = ...`").
+					Build())
+			}
+		case "width":
+			if hasWidth {
+				r.emit(diag.New(diag.Error,
+					"duplicate `width` in `#[vectorize(...)]`").
+					Code(diag.CodeAnnotationBadArg).
+					PrimaryPos(arg.PosV, "second occurrence").
+					Build())
+				continue
+			}
+			hasWidth = true
+			w, ok := positiveIntArg(arg.Value)
+			if !ok {
+				r.emit(diag.New(diag.Error,
+					"`width` in `#[vectorize(...)]` requires a positive integer literal").
+					Code(diag.CodeAnnotationBadArg).
+					PrimaryPos(arg.PosV, "expected `width = <1..1024>`").
+					Build())
+				continue
+			}
+			if w < 1 || w > 1024 {
+				r.emit(diag.New(diag.Error,
+					"`width` in `#[vectorize(...)]` must be in 1..1024").
+					Code(diag.CodeAnnotationBadArg).
+					PrimaryPos(arg.PosV, "value out of range").
+					Build())
+			}
+		case "":
+			r.emit(diag.New(diag.Error,
+				"`#[vectorize(...)]` arguments must be named").
+				Code(diag.CodeAnnotationBadArg).
+				PrimaryPos(arg.PosV, "positional argument not allowed").
+				Build())
+		default:
+			r.emit(diag.New(diag.Error,
+				fmt.Sprintf("unknown `#[vectorize]` argument `%s`", arg.Key)).
+				Code(diag.CodeAnnotationBadArg).
+				PrimaryPos(arg.PosV, "not a recognized key").
+				Note("accepted: `scalable`, `predicate`, `width = N`").
+				Build())
+		}
+	}
+}
+
+// checkNoVectorizeArgs validates `#[no_vectorize]` (v0.6 A5.2), a
+// bare-flag opt-out. Any argument is rejected.
+func (r *resolver) checkNoVectorizeArgs(a *ast.Annotation) {
 	if len(a.Args) == 0 {
 		return
 	}
 	r.emit(diag.New(diag.Error,
-		"`#[vectorize]` does not take arguments").
+		"`#[no_vectorize]` does not take arguments").
 		Code(diag.CodeAnnotationBadArg).
 		PrimaryPos(a.Args[0].PosV, "unexpected argument").
-		Note("v0.6 A5: `#[vectorize]` is a bare flag — the compiler chooses the concrete vectorization strategy").
+		Note("v0.6 A5.2: `#[no_vectorize]` is a bare flag that opts a function out of the default vectorize treatment").
 		Build())
+}
+
+// checkParallelArgs validates `#[parallel]` (v0.6 A6), a bare-flag
+// annotation. Any argument is rejected.
+func (r *resolver) checkParallelArgs(a *ast.Annotation) {
+	if len(a.Args) == 0 {
+		return
+	}
+	r.emit(diag.New(diag.Error,
+		"`#[parallel]` does not take arguments").
+		Code(diag.CodeAnnotationBadArg).
+		PrimaryPos(a.Args[0].PosV, "unexpected argument").
+		Note("v0.6 A6: `#[parallel]` is a bare flag asserting no loop-carried memory dependencies").
+		Build())
+}
+
+// checkUnrollArgs validates `#[unroll]` / `#[unroll(count = N)]`
+// (v0.6 A7). Accepts either the bare form (no args — compiler picks
+// factor) or a single `count = <1..1024>` key/value pair. Positional
+// values are not supported because the v0.5 annotation grammar only
+// produces `key` or `key = value` arg shapes.
+func (r *resolver) checkUnrollArgs(a *ast.Annotation) {
+	switch len(a.Args) {
+	case 0:
+		return
+	case 1:
+		arg := a.Args[0]
+		if arg == nil {
+			return
+		}
+		if arg.Key != "count" {
+			r.emit(diag.New(diag.Error,
+				fmt.Sprintf("unknown `#[unroll]` argument `%s`", arg.Key)).
+				Code(diag.CodeAnnotationBadArg).
+				PrimaryPos(arg.PosV, "not a recognized key").
+				Note("accepted: `count = N` for a fixed unroll factor").
+				Build())
+			return
+		}
+		n, ok := positiveIntArg(arg.Value)
+		if !ok {
+			r.emit(diag.New(diag.Error,
+				"`#[unroll(count = N)]` requires a positive integer literal").
+				Code(diag.CodeAnnotationBadArg).
+				PrimaryPos(arg.PosV, "expected `count = <1..1024>`").
+				Build())
+			return
+		}
+		if n < 1 || n > 1024 {
+			r.emit(diag.New(diag.Error,
+				"`#[unroll(count = N)]` value must be in 1..1024").
+				Code(diag.CodeAnnotationBadArg).
+				PrimaryPos(arg.PosV, "value out of range").
+				Build())
+		}
+	default:
+		r.emit(diag.New(diag.Error,
+			"`#[unroll(...)]` takes at most one argument").
+			Code(diag.CodeAnnotationBadArg).
+			PrimaryPos(a.Args[1].PosV, "extra argument").
+			Build())
+	}
+}
+
+// positiveIntArg extracts the value of a positive integer literal
+// annotation argument. Returns (value, true) only when the expression
+// is an `*ast.IntLit` whose text parses as a non-negative int64.
+func positiveIntArg(e ast.Expr) (int64, bool) {
+	lit, ok := e.(*ast.IntLit)
+	if !ok {
+		return 0, false
+	}
+	text := strings.ReplaceAll(lit.Text, "_", "")
+	base := 10
+	switch {
+	case strings.HasPrefix(text, "0x"), strings.HasPrefix(text, "0X"):
+		base = 16
+		text = text[2:]
+	case strings.HasPrefix(text, "0o"), strings.HasPrefix(text, "0O"):
+		base = 8
+		text = text[2:]
+	case strings.HasPrefix(text, "0b"), strings.HasPrefix(text, "0B"):
+		base = 2
+		text = text[2:]
+	}
+	if text == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(text, base, 64)
+	if err != nil || v < 0 {
+		return 0, false
+	}
+	return v, true
 }
 
 // checkJSONArgs validates #[json(...)] argument shapes per §3.8.1:

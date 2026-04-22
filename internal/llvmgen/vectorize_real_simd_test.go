@@ -20,8 +20,12 @@ import (
 // iteration poll (negative control). This prevents the safepoint
 // opt-out from regressing into a module-wide "no loop polls" bug.
 func TestVectorizeFunctionBodyIsCallFree(t *testing.T) {
-	file := parseLLVMGenFile(t, `#[vectorize]
-fn hot(n: Int) -> Int {
+	// v0.6 A5.2 flip: default is vectorize-ON (no annotation). The
+	// opt-out is `#[no_vectorize]`, which restores per-iteration
+	// safepoint polls. The test keeps one fn on each side of the
+	// default so a regression where one leaks into the other would be
+	// caught.
+	file := parseLLVMGenFile(t, `fn hot(n: Int) -> Int {
     let mut acc = 0
     for i in 0..n {
         acc = acc + i
@@ -29,6 +33,7 @@ fn hot(n: Int) -> Int {
     acc
 }
 
+#[no_vectorize]
 fn cold(n: Int) -> Int {
     let mut acc = 0
     for i in 0..n {
@@ -57,8 +62,8 @@ fn main() {
 		t.Fatalf("hot function not found in IR:\n%s", got)
 	}
 	if strings.Contains(hot, "osty.gc.safepoint_v1") {
-		t.Fatalf("#[vectorize] hot body still emits gc.safepoint_v1 "+
-			"(LLVM vectorizer will bail):\n%s", hot)
+		t.Fatalf("default-on vectorize should keep hot body call-free "+
+			"(LLVM vectorizer would otherwise bail):\n%s", hot)
 	}
 
 	cold, ok := extractFunctionBody(got, "cold")
@@ -66,8 +71,8 @@ fn main() {
 		t.Fatalf("cold function not found in IR:\n%s", got)
 	}
 	if !strings.Contains(cold, "osty.gc.safepoint_v1") {
-		t.Fatalf("unannotated cold body dropped its safepoint — the "+
-			"vectorize opt-out must not leak to sibling functions:\n%s", cold)
+		t.Fatalf("`#[no_vectorize]` should restore per-iteration safepoints "+
+			"and the opt-out must not leak to sibling functions:\n%s", cold)
 	}
 }
 
