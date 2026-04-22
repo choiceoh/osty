@@ -1056,9 +1056,9 @@ fn prune(m: Map<String, Int>) {
 
 // TestGenerateMapForInLowersAsIndexedWalk locks map iteration
 // infrastructure: `for (k, v) in m` over Map<String, Int> lowers as
-// map_len + index loop + key_at + value_at slot accessors. This is the
-// primitive `retainIf`/`mergeWith`/`mapValues` compose on top of — it
-// MUST work on arbitrary user code, not just stdlib helpers.
+// map_len + index loop + combined entry_at accessor. This keeps key and
+// value snapshots under one map lock while preserving the generic
+// "alloca value slot, then load" shape user code composes on top of.
 func TestGenerateMapForInLowersAsIndexedWalk(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn sum(m: Map<String, Int>) -> Int {
     let mut total = 0
@@ -1078,11 +1078,9 @@ func TestGenerateMapForInLowersAsIndexedWalk(t *testing.T) {
 	got := string(ir)
 	for _, want := range []string{
 		"declare i64 @osty_rt_map_len(ptr)",
-		"declare ptr @osty_rt_map_key_at_string(ptr, i64)",
-		"declare void @osty_rt_map_value_at(ptr, i64, ptr)",
+		"declare ptr @osty_rt_map_entry_at_string(ptr, i64, ptr)",
 		"call i64 @osty_rt_map_len(",
-		"call ptr @osty_rt_map_key_at_string(",
-		"call void @osty_rt_map_value_at(",
+		"call ptr @osty_rt_map_entry_at_string(",
 		"alloca i64",
 		"load i64, ptr",
 	} {

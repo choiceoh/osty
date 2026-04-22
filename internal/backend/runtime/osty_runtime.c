@@ -5526,8 +5526,9 @@ static bool osty_rt_map_get_raw(void *raw_map, const void *key, void *out_value)
 }
 
 // Value-at-slot (V-type-agnostic): memcpy the V stored at slot i
-// into *out_value. Backs the for-(k, v)-in-m iteration path — key
-// accessors are macro-generated per K suffix below.
+// into *out_value. Kept as a standalone helper for callers that only
+// need V; the general map for-in path uses the combined entry_at
+// helpers below to snapshot K and V under one lock.
 void osty_rt_map_value_at(void *raw_map, int64_t index, void *out_value) {
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     if (map == NULL || out_value == NULL) {
@@ -5659,6 +5660,20 @@ ctype osty_rt_map_key_at_##suffix(void *raw_map, int64_t index) { \
         osty_rt_abort("map key_at out of bounds"); \
     } \
     memcpy(&out, osty_rt_map_key_slot(map, index), sizeof(ctype)); \
+    osty_rt_map_unlock(raw_map); \
+    return out; \
+} \
+ctype osty_rt_map_entry_at_##suffix(void *raw_map, int64_t index, void *out_value) { \
+    osty_rt_map *map = osty_rt_map_cast(raw_map); \
+    ctype out; \
+    if (map == NULL || out_value == NULL) osty_rt_abort("map entry_at invalid args"); \
+    osty_rt_map_lock(raw_map); \
+    if (index < 0 || index >= map->len) { \
+        osty_rt_map_unlock(raw_map); \
+        osty_rt_abort("map entry_at out of bounds"); \
+    } \
+    memcpy(&out, osty_rt_map_key_slot(map, index), sizeof(ctype)); \
+    memcpy(out_value, osty_rt_map_value_slot(map, index), map->value_size); \
     osty_rt_map_unlock(raw_map); \
     return out; \
 }
@@ -9511,6 +9526,22 @@ typedef struct osty_rt_parallel_worker_env {
     osty_rt_parallel_ctx *ctx;
 } osty_rt_parallel_worker_env;
 
+static void osty_rt_parallel_init_out_list(void *raw_list, int64_t count) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    size_t bytes = 0;
+
+    if (count < 0) {
+        osty_rt_abort("parallel: negative output length");
+    }
+    osty_rt_list_ensure_layout(list, sizeof(osty_rt_result_enum_v1), NULL);
+    osty_rt_list_reserve(list, count);
+    if (count > 0) {
+        bytes = (size_t)count * sizeof(osty_rt_result_enum_v1);
+        memset(list->data, 0, bytes);
+    }
+    list->len = count;
+}
+
 static int64_t osty_rt_parallel_worker_body(void *env) {
     osty_rt_parallel_worker_env *we = (osty_rt_parallel_worker_env *)env;
     osty_rt_parallel_ctx *ctx = we->ctx;
@@ -9524,22 +9555,26 @@ static int64_t osty_rt_parallel_worker_body(void *env) {
         if (osty_rt_cancel_is_cancelled()) {
             return 0;
         }
-        int64_t idx = __atomic_fetch_add(&ctx->next_index, 1, __ATOMIC_ACQ_REL);
+        int64_t idx = __atomic_fetch_add(&ctx->next_index, 1, __ATOMIC_RELAXED);
         if (idx >= ctx->total) {
             return 0;
         }
+        osty_rt_list *items_list = osty_rt_list_cast(ctx->items);
+        osty_rt_list *out_list = osty_rt_list_cast(ctx->out);
         int64_t item = 0;
         memcpy(&item,
-               osty_rt_list_get_raw(ctx->items, idx, sizeof(item), NULL),
+               items_list->data + ((size_t)idx * sizeof(item)),
                sizeof(item));
         int64_t result_bits = f(ctx->f_env, item);
         osty_rt_result_enum_v1 r;
         r.disc = OSTY_RT_RESULT_OK_DISC;
         r.payload = result_bits;
-        /* Concurrent set_raw at distinct indices is safe: ensure_layout
-         * is a no-op after pre-fill, the data buffer is stable (no
-         * reserve during set), and the writes don't overlap. */
-        osty_rt_list_set_raw(ctx->out, idx, &r, sizeof(r), NULL);
+        /* Concurrent writes at distinct indices are safe: the output
+         * list is pre-sized up front, workers never reserve/append, and
+         * the slots do not overlap. Re-casting each iteration keeps GC
+         * forwarding / compaction semantics intact without re-running
+         * the full list_get/list_set helper stack on every item. */
+        memcpy(out_list->data + ((size_t)idx * sizeof(r)), &r, sizeof(r));
     }
 }
 
@@ -9555,17 +9590,14 @@ void *osty_rt_parallel(void *items, int64_t concurrency, void *f_env) {
     if (f_env == NULL) {
         osty_rt_abort("parallel: null closure env");
     }
-    osty_rt_list *items_list = (osty_rt_list *)items;
+    osty_rt_list *items_list = osty_rt_list_cast(items);
     if (items_list->elem_size != 0 && items_list->elem_size != sizeof(int64_t)) {
         osty_rt_abort("parallel: element size > 8 bytes not supported yet");
     }
     int64_t n = items_list->len;
 
     void *out = osty_rt_list_new();
-    osty_rt_result_enum_v1 zero = {0, 0};
-    for (int64_t i = 0; i < n; i++) {
-        osty_rt_list_push_raw(out, &zero, sizeof(zero), NULL);
-    }
+    osty_rt_parallel_init_out_list(out, n);
     if (n == 0) {
         return out;
     }
