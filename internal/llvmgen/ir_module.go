@@ -309,6 +309,13 @@ func specializedBuiltinMangledForSurface(surface ast.Type) (string, bool) {
 // the built-in shapes we care about (primitive idents like `Int` /
 // `String` / `Bool`, plus nested NamedType references). Nested
 // generic args recurse so Map<String, List<Int>> round-trips cleanly.
+//
+// When an IR arg is itself a mangled `_ZTSN…` specialization — the
+// inner `List<String>` of `List<List<String>>`, for example — look
+// its surface entry back up in `currentSpecializedBuiltinSurfaces`
+// and compare at that level. The AST side only ever carries the
+// surface form (`List<String>`), so a literal string compare would
+// miss every nested stdlib specialization.
 func surfaceBuiltinArgsMatch(irArgs []ostyir.Type, astArgs []ast.Type) bool {
 	if len(irArgs) != len(astArgs) {
 		return false
@@ -318,6 +325,19 @@ func surfaceBuiltinArgsMatch(irArgs []ostyir.Type, astArgs []ast.Type) bool {
 		astNamed, ok := astArgs[i].(*ast.NamedType)
 		if !ok || len(astNamed.Path) != 1 {
 			return false
+		}
+		if strings.HasPrefix(irName, "_ZTS") {
+			surf, ok := currentSpecializedBuiltinSurfaces[irName]
+			if !ok {
+				return false
+			}
+			if surf.Source != astNamed.Path[0] {
+				return false
+			}
+			if !surfaceBuiltinArgsMatch(surf.Args, astNamed.Args) {
+				return false
+			}
+			continue
 		}
 		if irName != astNamed.Path[0] {
 			return false
