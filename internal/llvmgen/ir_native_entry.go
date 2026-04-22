@@ -47,6 +47,31 @@ type nativeTupleInfo struct {
 	elemLLVMTypes []string
 }
 
+// nativeClosureInfo records a lifted closure's identity, ABI, and
+// captures. `liftedName` is the synthesized top-level fn
+// (`@__osty_closure_<N>`); `thunkName` is its env-ABI trampoline
+// (`@__osty_closure_thunk_<liftedName>`). Capture params are
+// appended after the original closure params on the lifted fn —
+// the thunk loads them from env slots and forwards everything.
+//
+// Env layout: `ptr` fn slot at offset 0, `ptr` GC-trace slot at
+// offset 8, captures in declaration order at offset 16 + i*8 (each
+// capture occupies one 8-byte slot, even when the LLVM type is
+// smaller — matches legacy emit).
+type nativeClosureInfo struct {
+	id            int
+	liftedName    string
+	thunkName     string
+	paramNames    []string
+	paramLLVMs    []string
+	captureNames  []string
+	captureLLVMs  []string
+	returnLLVM    string
+	body          *ostyir.Block
+	params        []*ostyir.Param
+	returnIR      ostyir.Type
+}
+
 // nativeResultInfo records one specialization of the built-in
 // `Result<T, E>` enum, laid out as a tagged union `{ i64, <ok>, <err> }`.
 // The tag carries 0 for `Ok` and 1 for `Err`; the two payload slots are
@@ -110,6 +135,10 @@ type nativeProjectionCtx struct {
 	tupleOrder            []string
 	resultsByLLVMType     map[string]*nativeResultInfo
 	resultOrder           []string
+	closures              map[*ostyir.Closure]*nativeClosureInfo
+	closuresByID          []*nativeClosureInfo
+	closureCounter        int
+	closureSiteGlobalID   int // string-global slot index for closure env "site" label
 	methodsByOwner        map[string]map[string]nativeMethodInfo
 	globalConsts          map[string]nativeConstValue
 	mutableGlobals        map[string]bool
@@ -245,6 +274,7 @@ func tryNativeOwnedModule(mod *ostyir.Module, opts Options) ([]byte, bool, error
 	}
 	out := []byte(llvmNativeEmitModule(nativeMod))
 	out = appendNativeInterfaceSurface(out, mod, nativeMod)
+	out = appendNativeClosureThunks(out, nativeMod.projectionCtx)
 	return out, true, nil
 }
 
@@ -258,9 +288,10 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 		interfacesByName:  map[string]*nativeInterfaceInfo{},
 		tuplesByLLVMType:  map[string]*nativeTupleInfo{},
 		resultsByLLVMType: map[string]*nativeResultInfo{},
-		methodsByOwner:   map[string]map[string]nativeMethodInfo{},
-		globalConsts:     map[string]nativeConstValue{},
-		mutableGlobals:   map[string]bool{},
+		closures:          map[*ostyir.Closure]*nativeClosureInfo{},
+		methodsByOwner:    map[string]map[string]nativeMethodInfo{},
+		globalConsts:      map[string]nativeConstValue{},
+		mutableGlobals:    map[string]bool{},
 	}
 	out := &llvmNativeModule{
 		sourcePath:    firstNonEmpty(opts.SourcePath, "<unknown>"),
@@ -391,6 +422,13 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 			return nil, false
 		}
 	}
+	// Synthesize no-capture closure lifted fns AFTER all user fn
+	// bodies are projected — the projection registers each Closure
+	// expr on-demand via `nativeRegisterClosure`, then this pass
+	// turns the registrations into native `llvmNativeFunction`s.
+	if !nativeEmitLiftedClosures(ctx, out) {
+		return nil, false
+	}
 	out.stringGlobals = append(out.stringGlobals, ctx.stringGlobals...)
 	for _, llvmType := range ctx.tupleOrder {
 		if info := ctx.tuplesByLLVMType[llvmType]; info != nil {
@@ -425,6 +463,7 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 	out.needsMapRuntime = ctx.needsMapRT
 	out.needsSetRuntime = ctx.needsSetRT
 	out.needsStringRuntime = ctx.needsStringRT
+	out.projectionCtx = ctx
 	return out, true
 }
 
@@ -1588,12 +1627,34 @@ func nativeStmtFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType s
 	case nil:
 		return nil, true
 	case *ostyir.LetStmt:
-		if s.Pattern != nil || s.Value == nil {
+		if s.Value == nil {
+			return nil, false
+		}
+		// `let _ = expr` lowers as `LetStmt{Pattern: WildPat}` — the
+		// value is discarded. Treat as an expression statement so
+		// the emitter doesn't try to bind an empty-name slot.
+		if _, isWild := s.Pattern.(*ostyir.WildPat); isWild {
+			value, ok := nativeExprFromIR(ctx, s.Value)
+			if !ok {
+				return nil, false
+			}
+			return &llvmNativeStmt{
+				kind:       llvmNativeStmtExpr,
+				childExprs: []*llvmNativeExpr{value},
+			}, true
+		}
+		if s.Pattern != nil {
 			return nil, false
 		}
 		value, ok := nativeExprFromIR(ctx, s.Value)
 		if !ok {
 			return nil, false
+		}
+		if s.Name == "" || s.Name == "_" {
+			return &llvmNativeStmt{
+				kind:       llvmNativeStmtExpr,
+				childExprs: []*llvmNativeExpr{value},
+			}, true
 		}
 		// Auto-box concrete → interface: when the declared slot type
 		// is an interface and the RHS produced a concrete struct
@@ -2578,6 +2639,13 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 		if !ok || len(e.TypeArgs) != 0 {
 			return nil, false
 		}
+		// Fn-value call: the callee is a local / param whose type
+		// resolves to `ptr` (a closure env). Emit indirect dispatch
+		// that loads the trampoline fn ptr from slot 0 and calls
+		// it with `(env, args...)`.
+		if fnCall, ok := nativeFnValueCallFromIdent(ctx, callee, e); ok {
+			return fnCall, true
+		}
 		llvmType, ok := nativeLLVMTypeFromIR(ctx, e.Type())
 		if !ok {
 			return nil, false
@@ -2599,6 +2667,50 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 			out.childExprs = append(out.childExprs, value)
 		}
 		return out, true
+	case *ostyir.Closure:
+		info, ok := nativeRegisterClosure(ctx, e)
+		if !ok {
+			return nil, false
+		}
+		// No captures — trivial maker: alloc env with count 0 + store
+		// thunk ptr at slot 0.
+		if len(info.captureNames) == 0 {
+			return &llvmNativeExpr{
+				kind:     llvmNativeExprClosureEnvAlloc,
+				llvmType: "ptr",
+				name:     "@" + info.thunkName,
+				text:     "runtime.closure.env.ptr",
+			}, true
+		}
+		// Capturing closure: alloc env with N captures, store thunk,
+		// evaluate each capture and store into env slot. Captures are
+		// emitted as child exprs (1..N) alongside the base alloc
+		// expression (the emitter picks them up from the extra
+		// children).
+		children := make([]*llvmNativeExpr, 0, len(info.captureNames))
+		for _, name := range info.captureNames {
+			// Look up the capture in the current scope — it must be
+			// a local/param visible at the closure literal's site.
+			scopeInfo, okName := ctx.lookupScopeName(name)
+			if !okName {
+				return nil, false
+			}
+			children = append(children, &llvmNativeExpr{
+				kind:     llvmNativeExprIdent,
+				llvmType: scopeInfo.llvmType,
+				name:     name,
+			})
+		}
+		// text carries the capture LLVM types comma-separated so the
+		// emitter can emit the right `store <type>` per slot.
+		text := strings.Join(info.captureLLVMs, ",")
+		return &llvmNativeExpr{
+			kind:       llvmNativeExprClosureEnvAlloc,
+			llvmType:   "ptr",
+			name:       "@" + info.thunkName,
+			text:       "runtime.closure.env.ptr;" + text, // use `;` separator
+			childExprs: children,
+		}, true
 	case *ostyir.MethodCall:
 		if builtin, ok := nativeBuiltinMethodExprFromIR(ctx, e); ok {
 			return builtin, true
@@ -3381,6 +3493,257 @@ func nativeResultConstructorExprFromIR(ctx *nativeProjectionCtx, e *ostyir.Metho
 			errChild,
 		},
 	}, true
+}
+
+// nativeRegisterClosure records a `*ostyir.Closure` so the module
+// emitter can synthesize its lifted fn and trampoline thunk.
+// Returns (nil, false) when parameter / return types don't lower
+// cleanly, or when any capture has an LLVM type the native path
+// can't thread through the env (only scalars + `ptr` supported).
+func nativeRegisterClosure(ctx *nativeProjectionCtx, c *ostyir.Closure) (*nativeClosureInfo, bool) {
+	if ctx == nil || c == nil {
+		return nil, false
+	}
+	if c.Body == nil {
+		return nil, false
+	}
+	if info, ok := ctx.closures[c]; ok {
+		return info, true
+	}
+	paramNames := make([]string, 0, len(c.Params))
+	paramLLVMs := make([]string, 0, len(c.Params))
+	for _, p := range c.Params {
+		if p == nil || p.IsDestructured() || p.Default != nil {
+			return nil, false
+		}
+		typ, ok := nativeLLVMTypeFromIR(ctx, p.Type)
+		if !ok || typ == "void" {
+			return nil, false
+		}
+		paramNames = append(paramNames, p.Name)
+		paramLLVMs = append(paramLLVMs, typ)
+	}
+	returnLLVM, ok := nativeLLVMTypeFromIR(ctx, c.Return)
+	if !ok {
+		return nil, false
+	}
+	captureNames := make([]string, 0, len(c.Captures))
+	captureLLVMs := make([]string, 0, len(c.Captures))
+	for _, cap := range c.Captures {
+		if cap == nil || cap.Name == "" || cap.Mut {
+			return nil, false
+		}
+		typ, ok := nativeLLVMTypeFromIR(ctx, cap.T)
+		if !ok || typ == "void" {
+			return nil, false
+		}
+		// Only scalar / ptr captures are safe for the 8-byte slot
+		// layout today; struct / tuple captures would need larger
+		// env slots and defer to legacy.
+		switch typ {
+		case "i64", "i1", "i32", "i8", "double", "ptr":
+			// OK
+		default:
+			return nil, false
+		}
+		captureNames = append(captureNames, cap.Name)
+		captureLLVMs = append(captureLLVMs, typ)
+	}
+	ctx.closureCounter++
+	id := ctx.closureCounter
+	lifted := fmt.Sprintf("__osty_closure_%d", id)
+	info := &nativeClosureInfo{
+		id:           id,
+		liftedName:   lifted,
+		thunkName:    "__osty_closure_thunk_" + lifted,
+		paramNames:   paramNames,
+		paramLLVMs:   paramLLVMs,
+		captureNames: captureNames,
+		captureLLVMs: captureLLVMs,
+		returnLLVM:   returnLLVM,
+		body:         c.Body,
+		params:       c.Params,
+		returnIR:     c.Return,
+	}
+	ctx.closures[c] = info
+	ctx.closuresByID = append(ctx.closuresByID, info)
+	return info, true
+}
+
+// nativeFnValueCallFromIdent lowers `f(args)` into a fn-value
+// indirect call when `f` is a local or parameter whose source
+// type is a `*ostyir.FnType`. Returns (nil, false) otherwise so
+// the caller falls through to the regular direct-call path.
+func nativeFnValueCallFromIdent(
+	ctx *nativeProjectionCtx,
+	callee *ostyir.Ident,
+	call *ostyir.CallExpr,
+) (*llvmNativeExpr, bool) {
+	if ctx == nil || callee == nil || call == nil {
+		return nil, false
+	}
+	if callee.Kind != ostyir.IdentParam && callee.Kind != ostyir.IdentLocal {
+		return nil, false
+	}
+	fnT, ok := callee.Type().(*ostyir.FnType)
+	if !ok || fnT == nil {
+		return nil, false
+	}
+	envIdent, ok := nativeExprFromIR(ctx, callee)
+	if !ok || envIdent.llvmType != "ptr" {
+		return nil, false
+	}
+	if len(call.Args) != len(fnT.Params) {
+		return nil, false
+	}
+	paramTypes := make([]string, 0, len(fnT.Params))
+	for _, pt := range fnT.Params {
+		typ, ok := nativeLLVMTypeFromIR(ctx, pt)
+		if !ok {
+			return nil, false
+		}
+		paramTypes = append(paramTypes, typ)
+	}
+	children := make([]*llvmNativeExpr, 0, len(call.Args)+1)
+	children = append(children, envIdent)
+	for i, arg := range call.Args {
+		if arg.IsKeyword() {
+			return nil, false
+		}
+		value, ok := nativeExprFromIRWithHint(ctx, arg.Value, paramTypes[i])
+		if !ok {
+			return nil, false
+		}
+		children = append(children, value)
+	}
+	returnLLVM, ok := nativeLLVMTypeFromIR(ctx, fnT.Return)
+	if !ok {
+		return nil, false
+	}
+	return &llvmNativeExpr{
+		kind:       llvmNativeExprFnValueCall,
+		llvmType:   returnLLVM,
+		text:       strings.Join(paramTypes, ", "),
+		childExprs: children,
+	}, true
+}
+
+// nativeEmitLiftedClosures turns each registered closure into a
+// synthesized lifted fn (`@__osty_closure_N`) appended to the
+// module's function list. Capture-bearing closures get their
+// capture names appended as extra params so the body can reference
+// them as regular locals. The corresponding thunk fn is appended
+// later as raw LLVM IR text via `appendNativeClosureThunks`.
+func nativeEmitLiftedClosures(ctx *nativeProjectionCtx, out *llvmNativeModule) bool {
+	if ctx == nil || len(ctx.closuresByID) == 0 {
+		return true
+	}
+	for _, info := range ctx.closuresByID {
+		totalParams := len(info.params) + len(info.captureNames)
+		params := make([]*llvmNativeParam, 0, totalParams)
+		ctx.pushScope()
+		for i, p := range info.params {
+			params = append(params, &llvmNativeParam{
+				name:     p.Name,
+				llvmType: info.paramLLVMs[i],
+			})
+			ctx.bindScopeName(p.Name, nativeExprInfoFromLLVMType(info.paramLLVMs[i]))
+		}
+		for i, capName := range info.captureNames {
+			params = append(params, &llvmNativeParam{
+				name:     capName,
+				llvmType: info.captureLLVMs[i],
+			})
+			ctx.bindScopeName(capName, nativeExprInfoFromLLVMType(info.captureLLVMs[i]))
+		}
+		prevReturn := ctx.currentReturnLLVMType
+		ctx.currentReturnLLVMType = info.returnLLVM
+		body, ok := nativeBlockFromIR(ctx, info.body, info.returnLLVM)
+		ctx.currentReturnLLVMType = prevReturn
+		ctx.popScope()
+		if !ok {
+			return false
+		}
+		out.functions = append(out.functions, &llvmNativeFunction{
+			name:       info.liftedName,
+			returnType: info.returnLLVM,
+			params:     params,
+			body:       body,
+		})
+	}
+	return true
+}
+
+// appendNativeClosureThunks appends one trampoline fn per
+// registered closure to the emitted LLVM IR text. The thunk ABI
+// is `(ptr env, <orig_params>)`; the body loads each capture from
+// env at offset 16 + i*8, then calls the lifted fn with
+// `(orig_args..., cap0, cap1, ...)`. Also emits a top-level
+// `declare` for the env-alloc helper (no-op if already present).
+func appendNativeClosureThunks(out []byte, ctx *nativeProjectionCtx) []byte {
+	if ctx == nil || len(ctx.closuresByID) == 0 {
+		return out
+	}
+	if len(out) > 0 && out[len(out)-1] != '\n' {
+		out = append(out, '\n')
+	}
+	out = append(out, "declare ptr @osty.rt.closure_env_alloc_v1(i64, ptr)\n"...)
+	for _, info := range ctx.closuresByID {
+		var b strings.Builder
+		b.WriteString("define private ")
+		b.WriteString(info.returnLLVM)
+		b.WriteString(" @")
+		b.WriteString(info.thunkName)
+		b.WriteString("(ptr %env")
+		for i, pt := range info.paramLLVMs {
+			b.WriteString(", ")
+			b.WriteString(pt)
+			b.WriteString(" %arg")
+			b.WriteString(strconv.Itoa(i))
+		}
+		b.WriteString(") {\nentry:\n")
+		// Load each capture from env at offset 16 + i*8.
+		for i, capType := range info.captureLLVMs {
+			b.WriteString(fmt.Sprintf("  %%cap%d_slot = getelementptr i8, ptr %%env, i64 %d\n", i, 16+i*8))
+			b.WriteString(fmt.Sprintf("  %%cap%d = load %s, ptr %%cap%d_slot\n", i, capType, i))
+		}
+		// Call the lifted fn: (orig_args..., cap0, cap1, ...). Env
+		// is dropped because the lifted fn takes captures as regular
+		// by-value params, not via env pointer.
+		argList := ""
+		for i, pt := range info.paramLLVMs {
+			if i > 0 {
+				argList += ", "
+			}
+			argList += pt + " %arg" + strconv.Itoa(i)
+		}
+		for i, capType := range info.captureLLVMs {
+			if argList != "" {
+				argList += ", "
+			}
+			argList += capType + " %cap" + strconv.Itoa(i)
+		}
+		if info.returnLLVM == "" || info.returnLLVM == "void" {
+			b.WriteString("  call void @")
+			b.WriteString(info.liftedName)
+			b.WriteString("(")
+			b.WriteString(argList)
+			b.WriteString(")\n  ret void\n")
+		} else {
+			b.WriteString("  %ret = call ")
+			b.WriteString(info.returnLLVM)
+			b.WriteString(" @")
+			b.WriteString(info.liftedName)
+			b.WriteString("(")
+			b.WriteString(argList)
+			b.WriteString(")\n  ret ")
+			b.WriteString(info.returnLLVM)
+			b.WriteString(" %ret\n")
+		}
+		b.WriteString("}\n")
+		out = append(out, b.String()...)
+	}
+	return out
 }
 
 func nativeRegisterTupleType(ctx *nativeProjectionCtx, tuple *ostyir.TupleType) (string, bool) {
@@ -4220,6 +4583,12 @@ func nativeLLVMTypeFromIR(ctx *nativeProjectionCtx, t ostyir.Type) (string, bool
 		return "ptr", true
 	case *ostyir.TupleType:
 		return nativeRegisterTupleType(ctx, tt)
+	case *ostyir.FnType:
+		// Fn-value params / locals lower to `ptr` — the closure env
+		// pointer. Call sites load the trampoline fn pointer from
+		// slot 0 and invoke it with (env, args...). See the closure
+		// lift pass for the full ABI.
+		return "ptr", true
 	default:
 		return "", false
 	}
