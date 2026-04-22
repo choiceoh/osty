@@ -317,9 +317,9 @@ warning). Rule-level policy logic lives in `toolchain/diag_policy.osty`.
 ### `internal/bootstrap/gen`
 Developer-only Osty→Go transpiler used exclusively to regenerate
 `internal/selfhost/generated.go` from the `toolchain/*.osty` sources.
-Not reachable from the public `osty` CLI; the sole caller is
-`cmd/osty-bootstrap-gen` (invoked by `internal/selfhost/gen_selfhost.go`
-via `go run`). Consumes `*ast.File` + `*resolve.Result` +
+Not reachable from the public `osty` CLI; the in-process caller is
+`internal/bootstrap/seedgen`, with `cmd/osty-bootstrap-gen` now just a
+thin developer wrapper. Consumes `*ast.File` + `*resolve.Result` +
 `*check.Result` and emits source-mapped Go. Will be retired once the
 LLVM backend can self-host the toolchain directly; no new feature work
 belongs here.

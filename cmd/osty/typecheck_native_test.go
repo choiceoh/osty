@@ -139,6 +139,42 @@ func TestTypecheckCLINativePackageRejectedWithoutNative(t *testing.T) {
 	}
 }
 
+func TestTypecheckCLINativeWorkspaceCrossPackagePrintsTypes(t *testing.T) {
+	dir := t.TempDir()
+	depDir := filepath.Join(dir, "dep")
+	appDir := filepath.Join(dir, "app")
+	if err := os.MkdirAll(depDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(depDir, "dep.osty"), []byte(`pub fn helper() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	appPath := filepath.Join(appDir, "main.osty")
+	if err := os.WriteFile(appPath, []byte(`use dep
+
+fn main() {
+    let x = dep.helper()
+    x
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := runOstyCLI(t, "typecheck", "--native", dir)
+	if got.exit != 0 {
+		t.Fatalf("osty typecheck --native WORKSPACE exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "# "+appPath) {
+		t.Fatalf("stdout missing `# %s` header:\n%s", appPath, got.stdout)
+	}
+	if !strings.Contains(got.stdout, "Int") {
+		t.Fatalf("stdout missing Int type row:\n%s", got.stdout)
+	}
+}
+
 // TestRunTypecheckPackageNativeIsAstbridgeFree is the DIR in-process
 // counter test: runTypecheckPackageNative's full pipeline
 // (LoadPackageForNative → CheckPackageStructured →
@@ -192,6 +228,64 @@ func TestRunTypecheckPackageNativeIsAstbridgeFree(t *testing.T) {
 	}
 	if got := selfhost.AstbridgeLowerCount(); got != 0 {
 		t.Fatalf("AstbridgeLowerCount after runTypecheckPackageNative = %d, want 0", got)
+	}
+}
+
+func TestRunTypecheckWorkspaceNativeIsAstbridgeFree(t *testing.T) {
+	dir := t.TempDir()
+	depDir := filepath.Join(dir, "dep")
+	appDir := filepath.Join(dir, "app")
+	if err := os.MkdirAll(depDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(depDir, "dep.osty"), []byte(`pub fn helper() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "main.osty"), []byte(`use dep
+
+fn main() {
+    let x = dep.helper()
+    x
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origStdout := os.Stdout
+	origStderr := os.Stderr
+	rout, wout, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stdout: %v", err)
+	}
+	rerr, werr, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stderr: %v", err)
+	}
+	os.Stdout = wout
+	os.Stderr = werr
+	t.Cleanup(func() {
+		os.Stdout = origStdout
+		os.Stderr = origStderr
+	})
+	drained := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(io.Discard, rout); drained <- struct{}{} }()
+	go func() { _, _ = io.Copy(io.Discard, rerr); drained <- struct{}{} }()
+
+	selfhost.ResetAstbridgeLowerCount()
+	exit := runTypecheckWorkspaceNative(dir, cliFlags{noColor: true, native: true})
+	_ = wout.Close()
+	_ = werr.Close()
+	<-drained
+	<-drained
+
+	if exit != 0 {
+		t.Fatalf("runTypecheckWorkspaceNative exit = %d, want 0", exit)
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("AstbridgeLowerCount after runTypecheckWorkspaceNative = %d, want 0", got)
 	}
 }
 

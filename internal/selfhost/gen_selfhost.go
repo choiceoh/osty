@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/osty/osty/internal/bootstrap/seedgen"
 	"github.com/osty/osty/internal/selfhost/bundle"
 	"github.com/osty/osty/internal/selfhost/genpatch"
 )
@@ -56,38 +57,21 @@ func run() error {
 		return fmt.Errorf("write merged selfhost source: %w", err)
 	}
 	tmpOutPath := filepath.Join(tmpDir, "generated.go")
-	// bootstrap-gen links selfhost directly and forces the embedded
-	// checker, so we no longer build osty-native-checker for regen.
-	// That dropped ~15s of JSON + subprocess overhead on the checker
-	// call. OSTY_NATIVE_CHECKER_BIN is still honoured only as an
-	// explicit debug override.
-	cmd := exec.Command(
-		"go", "run", "./cmd/osty-bootstrap-gen",
-		"--package", "selfhost",
-		"-o", tmpOutPath,
-		mergedPath,
-	)
-	cmd.Dir = root
-	if override := strings.TrimSpace(os.Getenv("OSTY_NATIVE_CHECKER_BIN")); override != "" {
-		cmd.Env = append(os.Environ(), "OSTY_NATIVE_CHECKER_BIN="+override)
-	} else {
-		cmd.Env = os.Environ()
-	}
-	output, err := cmd.CombinedOutput()
+	data, err := seedgen.Generate(seedgen.Config{
+		SourcePath:  mergedPath,
+		PackageName: "selfhost",
+		RepoRoot:    root,
+	})
 	if err != nil {
-		return fmt.Errorf("generate selfhost parser: %w\n%s", err, bytes.TrimSpace(output))
+		return fmt.Errorf("generate selfhost parser: %w", err)
 	}
-	if bootstrapGenMissingTypes(output) {
-		return fmt.Errorf(
-			"generate selfhost parser: bootstrap gen emitted untyped Go; refusing to overwrite %s\n%s",
-			outPath,
-			bytes.TrimSpace(output),
-		)
+	if err := os.WriteFile(tmpOutPath, data, 0o644); err != nil {
+		return fmt.Errorf("write generated selfhost code: %w", err)
 	}
 	if err := patchGenerated(tmpOutPath); err != nil {
 		return err
 	}
-	data, err := os.ReadFile(tmpOutPath)
+	data, err = os.ReadFile(tmpOutPath)
 	if err != nil {
 		return fmt.Errorf("read patched selfhost code: %w", err)
 	}
@@ -146,10 +130,6 @@ func installWithBuildGate(root, outPath string, data []byte) error {
 	)
 }
 
-func bootstrapGenMissingTypes(output []byte) bool {
-	return bytes.Contains(output, []byte("osty-bootstrap-gen: warning: native type checking is unavailable"))
-}
-
 func generatedSelfhostUpToDate(root, outPath string) (bool, error) {
 	outInfo, err := os.Stat(outPath)
 	if err != nil {
@@ -172,22 +152,21 @@ func generatedSelfhostUpToDate(root, outPath string) (bool, error) {
 	if err := checkPath(filepath.Join(root, "internal/selfhost/gen_selfhost.go")); err != nil {
 		return false, fmt.Errorf("stat selfhost generator: %w", err)
 	}
-	// bootstrap-gen is the Osty→Go transpiler driver — its sources
-	// directly shape generated.go, so a change here must trigger a
-	// regen. Without this, editing `internal/bootstrap/gen/*.go` would
-	// leave generated.go stale and every downstream test run would
-	// silently reflect the pre-edit output.
-	genDir := filepath.Join(root, "internal/bootstrap/gen")
-	genEntries, err := os.ReadDir(genDir)
-	if err != nil {
-		return false, fmt.Errorf("read bootstrap/gen: %w", err)
-	}
-	for _, entry := range genEntries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
-			continue
+	// The Osty->Go transpiler and its in-process seed wrapper both
+	// directly shape generated.go, so edits here must trigger a regen.
+	for _, relDir := range []string{"internal/bootstrap/gen", "internal/bootstrap/seedgen"} {
+		genDir := filepath.Join(root, relDir)
+		genEntries, err := os.ReadDir(genDir)
+		if err != nil {
+			return false, fmt.Errorf("read %s: %w", relDir, err)
 		}
-		if err := checkPath(filepath.Join(genDir, entry.Name())); err != nil {
-			return false, fmt.Errorf("stat bootstrap/gen/%s: %w", entry.Name(), err)
+		for _, entry := range genEntries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+				continue
+			}
+			if err := checkPath(filepath.Join(genDir, entry.Name())); err != nil {
+				return false, fmt.Errorf("stat %s/%s: %w", relDir, entry.Name(), err)
+			}
 		}
 	}
 	for _, rel := range bundle.ToolchainCheckerFiles() {

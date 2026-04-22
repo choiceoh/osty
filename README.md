@@ -36,7 +36,7 @@ compiler path is now native-only through the LLVM backend.
 | Multi-file packages (`resolve` loader/package/workspace) | done |
 | LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by toolchain sources |
 | Native LLVM backend (`internal/backend`, `internal/llvmgen`) | public backend path; scalar/control-flow/string smoke subset emits LLVM IR/object/binary, later phase 64-73 value/control-flow smoke expansion is documented, unsupported shapes report Osty-authored LLVM diagnostics |
-| Bootstrap Go transpiler (`internal/bootstrap/gen`, `cmd/osty-bootstrap-gen`) | developer-only tool that regenerates `internal/selfhost/generated.go` from the toolchain sources; not part of the public `osty` CLI |
+| Bootstrap Go transpiler (`internal/bootstrap/gen`, `internal/bootstrap/seedgen`, `cmd/osty-bootstrap-gen`) | developer-only tool that regenerates `internal/selfhost/generated.go` from the toolchain sources; not part of the public `osty` CLI |
 | Independent IR (`internal/ir`) | done — patterns, match, closures, struct/field/method, generic free-fn + generic struct/enum monomorphization with Itanium-mangled specializations (`ir.Monomorphize`, invoked from `backend.PrepareEntry`; fn symbols use `_Z…`, nominal types use `_ZTS…`) |
 | Project scaffolding (`internal/scaffold`, `osty new` / `osty init`) | done — `--bin`, `--lib`, `--workspace`, `--cli`, `--service` |
 | Manifest + lockfile + SemVer (`internal/manifest`, `lockfile`, `pkgmgr/semver`) | done (parse + validate + resolve) |
@@ -65,9 +65,11 @@ Code-level re-audit on the same date narrows that further: the tree is not yet
 "fully self-hosted" end-to-end. `internal/check` still prefers a managed
 external `osty-native-checker` binary under `.osty/toolchain/<tool-version>/`
 and falls back to the embedded selfhost bridge when that executable is
-unavailable, and `go generate ./internal/selfhost` still shells out to
-`cmd/osty-bootstrap-gen` to refresh `internal/selfhost/generated.go`. The
-whole-toolchain LLVM probe still first-walls on the bootstrap-only
+unavailable, and `go generate ./internal/selfhost` still depends on the
+developer-only bootstrap transpiler stack (`internal/bootstrap/gen` via
+the in-process `internal/bootstrap/seedgen` wrapper, plus
+`runtime.golegacy.astbridge`) to refresh `internal/selfhost/generated.go`.
+The whole-toolchain LLVM probe still first-walls on the bootstrap-only
 `runtime.golegacy.astbridge` bridge. The native-only **AST** merged
 probe (`TestProbeNativeToolchainMerged`, with bootstrap-only files
 skipped) is informational only — its former authoritative gate
