@@ -291,11 +291,11 @@ pub fn mirLowerLookupUseAlias(l: MirLowerer, alias: String) -> Int {
 pub fn mirLowerModule(src: HirModule) -> MirModule {
     let l = mirLowerer(src)
     mirLowerRun(l)
-    // copy issues onto the output module so downstream consumers
-    // can decide fallback policy without touching the lowerer state.
-    for msg in l.issues {
-        hirModuleAddIssue(l.out, msg)
-    }
+    // Lowering issues live on the lowerer (`l.issues`) — downstream
+    // consumers read them there. MirModule has no `issues` field,
+    // so the previous copy loop was a leftover from the Stage 4b
+    // scaffold and tried to call hirModuleAddIssue with a MirModule
+    // receiver (type mismatch under selfhost check). Removed.
     l.out
 }
 
