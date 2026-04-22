@@ -165,6 +165,12 @@ type mirGen struct {
 	// to that load/store as `!llvm.access !N` and referenced from the
 	// loop-level `!"llvm.loop.parallel_accesses", !N` property.
 	parallelAccessGroupRef string
+	// vectorListData / vectorListLens cache scalar list-param snapshots
+	// for the conservative raw-buffer fast path used by vectorized,
+	// call-free loops. Keys are root local IDs of eligible `List<Int>` /
+	// `List<Bool>` / `List<Float>` params.
+	vectorListData map[mir.LocalID]string
+	vectorListLens map[mir.LocalID]string
 	// loopMDDefs accumulates every metadata-node definition (loop
 	// hint chains + access groups) for the whole translation unit.
 	// Module-scoped numbering keeps IDs unique; flushed at module
@@ -787,6 +793,106 @@ func isSetPtrType(t mir.Type) bool {
 	return false
 }
 
+func vectorListElemType(t mir.Type) mir.Type {
+	if nt, ok := t.(*ir.NamedType); ok && nt.Name == "List" && nt.Builtin && len(nt.Args) > 0 {
+		return nt.Args[0]
+	}
+	return nil
+}
+
+func mirOperandRootLocal(op mir.Operand) (mir.LocalID, bool) {
+	switch o := op.(type) {
+	case *mir.CopyOp:
+		return o.Place.Local, true
+	case *mir.MoveOp:
+		return o.Place.Local, true
+	default:
+		return 0, false
+	}
+}
+
+func mirFunctionHasBackedge(fn *mir.Function) bool {
+	for _, bb := range fn.Blocks {
+		if bb == nil || bb.Term == nil {
+			continue
+		}
+		switch term := bb.Term.(type) {
+		case *mir.GotoTerm:
+			if term.Target <= bb.ID {
+				return true
+			}
+		case *mir.BranchTerm:
+			if term.Then <= bb.ID || term.Else <= bb.ID {
+				return true
+			}
+		case *mir.SwitchIntTerm:
+			if term.Default <= bb.ID {
+				return true
+			}
+			for _, c := range term.Cases {
+				if c.Target <= bb.ID {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func mirIntrinsicSafeForVectorListFastPath(k mir.IntrinsicKind) bool {
+	switch k {
+	case mir.IntrinsicListLen, mir.IntrinsicListIsEmpty:
+		return true
+	default:
+		return false
+	}
+}
+
+func (g *mirGen) eligibleVectorListParams(fn *mir.Function) map[mir.LocalID]string {
+	eligible := map[mir.LocalID]string{}
+	if !g.vectorizeHint || !mirFunctionHasBackedge(fn) {
+		return eligible
+	}
+	for _, pid := range fn.Params {
+		loc := fn.Local(pid)
+		if loc == nil {
+			continue
+		}
+		elemT := vectorListElemType(loc.Type)
+		if elemT == nil {
+			continue
+		}
+		elemLLVM := g.llvmType(elemT)
+		if listUsesRawDataFastPath(elemLLVM) {
+			eligible[pid] = elemLLVM
+		}
+	}
+	if len(eligible) == 0 {
+		return eligible
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, inst := range bb.Instrs {
+			switch x := inst.(type) {
+			case *mir.CallInstr:
+				return map[mir.LocalID]string{}
+			case *mir.IntrinsicInstr:
+				if !mirIntrinsicSafeForVectorListFastPath(x.Kind) {
+					return map[mir.LocalID]string{}
+				}
+			case *mir.AssignInstr:
+				delete(eligible, x.Dest.Local)
+			}
+			if len(eligible) == 0 {
+				return eligible
+			}
+		}
+	}
+	return eligible
+}
+
 func (g *mirGen) checkRValueSupported(fn *mir.Function, rv mir.RValue) error {
 	switch r := rv.(type) {
 	case *mir.UseRV, *mir.UnaryRV, *mir.BinaryRV,
@@ -1180,6 +1286,8 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	g.unrollHint = fn.Unroll
 	g.unrollCount = fn.UnrollCount
 	g.parallelAccessGroupRef = ""
+	g.vectorListData = map[mir.LocalID]string{}
+	g.vectorListLens = map[mir.LocalID]string{}
 	if g.parallelHint {
 		// Allocate the per-function access group eagerly so every
 		// load/store site can reference it without branching on lazy
@@ -1280,6 +1388,7 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	// Register managed-ptr locals as GC roots and take a safepoint at
 	// the function entry. No-op unless opts.EmitGC is set.
 	g.emitGCEntry(fn)
+	g.emitVectorListPreamble(fn)
 
 	// Emit each block in ID order. The entry block was already opened
 	// (its label is implicit in LLVM, but we still emit it for clarity
@@ -1422,6 +1531,152 @@ func (g *mirGen) emitAllocaPreamble(fn *mir.Function) {
 	} else {
 		g.loopSafepointSlot = ""
 	}
+}
+
+func (g *mirGen) emitVectorListPreamble(fn *mir.Function) {
+	eligible := g.eligibleVectorListParams(fn)
+	if len(eligible) == 0 {
+		return
+	}
+	ids := make([]int, 0, len(eligible))
+	for pid := range eligible {
+		ids = append(ids, int(pid))
+	}
+	sort.Ints(ids)
+	for _, rawID := range ids {
+		pid := mir.LocalID(rawID)
+		elemLLVM := eligible[pid]
+		slot := g.localSlots[pid]
+		if slot == "" {
+			continue
+		}
+		listReg := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(listReg)
+		g.fnBuf.WriteString(" = load ptr, ptr ")
+		g.fnBuf.WriteString(slot)
+		g.fnBuf.WriteByte('\n')
+
+		dataSym := listRuntimeDataSymbol(elemLLVM)
+		g.declareRuntime(dataSym, "declare ptr @"+dataSym+"(ptr)")
+		dataReg := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(dataReg)
+		g.fnBuf.WriteString(" = call ptr @")
+		g.fnBuf.WriteString(dataSym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(listReg)
+		g.fnBuf.WriteString(")\n")
+		g.vectorListData[pid] = dataReg
+
+		lenSym := listRuntimeLenSymbol()
+		g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr)")
+		lenReg := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(lenReg)
+		g.fnBuf.WriteString(" = call i64 @")
+		g.fnBuf.WriteString(lenSym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(listReg)
+		g.fnBuf.WriteString(")\n")
+		g.vectorListLens[pid] = lenReg
+	}
+}
+
+func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM string) (string, bool) {
+	dataReg := g.vectorListData[local]
+	lenReg := g.vectorListLens[local]
+	slot := g.localSlots[local]
+	if dataReg == "" || lenReg == "" || slot == "" {
+		return "", false
+	}
+	inBounds := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(inBounds)
+	g.fnBuf.WriteString(" = icmp ult i64 ")
+	g.fnBuf.WriteString(idxVal)
+	g.fnBuf.WriteString(", ")
+	g.fnBuf.WriteString(lenReg)
+	g.fnBuf.WriteByte('\n')
+
+	fastLabel := g.freshLabel("list.fast")
+	slowLabel := g.freshLabel("list.slow")
+	mergeLabel := g.freshLabel("list.merge")
+	g.fnBuf.WriteString("  br i1 ")
+	g.fnBuf.WriteString(inBounds)
+	g.fnBuf.WriteString(", label %")
+	g.fnBuf.WriteString(fastLabel)
+	g.fnBuf.WriteString(", label %")
+	g.fnBuf.WriteString(slowLabel)
+	g.fnBuf.WriteByte('\n')
+
+	g.fnBuf.WriteString(fastLabel)
+	g.fnBuf.WriteString(":\n")
+	elemPtr := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(elemPtr)
+	g.fnBuf.WriteString(" = getelementptr inbounds ")
+	g.fnBuf.WriteString(elemLLVM)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(dataReg)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(idxVal)
+	g.fnBuf.WriteByte('\n')
+	fastVal := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(fastVal)
+	g.fnBuf.WriteString(" = load ")
+	g.fnBuf.WriteString(elemLLVM)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(elemPtr)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString("  br label %")
+	g.fnBuf.WriteString(mergeLabel)
+	g.fnBuf.WriteByte('\n')
+
+	slowSym := listRuntimeGetSymbol(elemLLVM)
+	g.declareRuntime(slowSym, "declare "+elemLLVM+" @"+slowSym+"(ptr, i64)")
+	g.fnBuf.WriteString(slowLabel)
+	g.fnBuf.WriteString(":\n")
+	listReg := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(listReg)
+	g.fnBuf.WriteString(" = load ptr, ptr ")
+	g.fnBuf.WriteString(slot)
+	g.fnBuf.WriteByte('\n')
+	slowVal := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(slowVal)
+	g.fnBuf.WriteString(" = call ")
+	g.fnBuf.WriteString(elemLLVM)
+	g.fnBuf.WriteString(" @")
+	g.fnBuf.WriteString(slowSym)
+	g.fnBuf.WriteString("(ptr ")
+	g.fnBuf.WriteString(listReg)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(idxVal)
+	g.fnBuf.WriteString(")\n")
+	g.fnBuf.WriteString("  br label %")
+	g.fnBuf.WriteString(mergeLabel)
+	g.fnBuf.WriteByte('\n')
+
+	g.fnBuf.WriteString(mergeLabel)
+	g.fnBuf.WriteString(":\n")
+	merged := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(merged)
+	g.fnBuf.WriteString(" = phi ")
+	g.fnBuf.WriteString(elemLLVM)
+	g.fnBuf.WriteString(" [")
+	g.fnBuf.WriteString(fastVal)
+	g.fnBuf.WriteString(", %")
+	g.fnBuf.WriteString(fastLabel)
+	g.fnBuf.WriteString("], [")
+	g.fnBuf.WriteString(slowVal)
+	g.fnBuf.WriteString(", %")
+	g.fnBuf.WriteString(slowLabel)
+	g.fnBuf.WriteString("]\n")
+	return merged, true
 }
 
 // ==== GC instrumentation ====
@@ -2116,6 +2371,11 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		}
 		return g.emitListPushOperand(listReg, i.Args[1], elemT)
 	case mir.IntrinsicListLen:
+		if local, ok := mirOperandRootLocal(listOp); ok {
+			if cached := g.vectorListLens[local]; cached != "" {
+				return g.storeIntrinsicResult(i, &LlvmValue{typ: "i64", name: cached})
+			}
+		}
 		sym := listRuntimeLenSymbol()
 		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
 		em := g.ostyEmitter()
@@ -2136,6 +2396,11 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		if listUsesTypedRuntime(elemLLVM) {
+			if local, ok := mirOperandRootLocal(listOp); ok && listUsesRawDataFastPath(elemLLVM) {
+				if fast, ok := g.emitVectorListFastLoad(local, idxReg, elemLLVM); ok {
+					return g.storeIntrinsicResult(i, &LlvmValue{typ: elemLLVM, name: fast})
+				}
+			}
 			sym := listRuntimeGetSymbol(elemLLVM)
 			g.declareRuntime(sym, "declare "+elemLLVM+" @"+sym+"(ptr, i64)")
 			em := g.ostyEmitter()
@@ -5137,6 +5402,14 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 				return "", err
 			}
 			if listUsesTypedRuntime(elemLLVM) {
+				if i == 0 && listUsesRawDataFastPath(elemLLVM) {
+					if fast, ok := g.emitVectorListFastLoad(place.Local, idxVal, elemLLVM); ok {
+						curReg = fast
+						curLLVM = elemLLVM
+						curT = elemT
+						continue
+					}
+				}
 				sym := "osty_rt_list_get_" + listRuntimeSymbolSuffix(elemLLVM)
 				g.declareRuntime(sym, "declare "+elemLLVM+" @"+sym+"(ptr, i64)")
 				next := g.fresh()

@@ -69,12 +69,14 @@ type LlvmCString struct {
 
 // Osty: toolchain/llvmgen.osty:47:5
 type LlvmEmitter struct {
-	temp          int
-	label         int
-	stringId      int
-	body          []string
-	locals        []*LlvmBinding
-	stringGlobals []*LlvmStringGlobal
+	temp           int
+	label          int
+	stringId       int
+	body           []string
+	locals         []*LlvmBinding
+	stringGlobals  []*LlvmStringGlobal
+	nativeListData map[string]*LlvmValue
+	nativeListLens map[string]*LlvmValue
 }
 
 // Osty: toolchain/llvmgen.osty:56:5
@@ -110,7 +112,16 @@ type LlvmUnsupportedDiagnostic struct {
 
 // Osty: toolchain/llvmgen.osty:83:5
 func llvmEmitter() *LlvmEmitter {
-	return &LlvmEmitter{temp: 0, label: 0, stringId: 0, body: make([]string, 0, 1), locals: make([]*LlvmBinding, 0, 1), stringGlobals: make([]*LlvmStringGlobal, 0, 1)}
+	return &LlvmEmitter{
+		temp:           0,
+		label:          0,
+		stringId:       0,
+		body:           make([]string, 0, 1),
+		locals:         make([]*LlvmBinding, 0, 1),
+		stringGlobals:  make([]*LlvmStringGlobal, 0, 1),
+		nativeListData: map[string]*LlvmValue{},
+		nativeListLens: map[string]*LlvmValue{},
+	}
 }
 
 // Osty: toolchain/llvmgen.osty:94:5
@@ -2242,7 +2253,40 @@ func llvmListElementSuffix(typ string) string {
 
 // Osty: toolchain/llvmgen.osty:1819:5
 func llvmListRuntimeDeclarations() []string {
-	return []string{"declare ptr @osty_rt_list_new()", "declare i64 @osty_rt_list_len(ptr)", "declare void @osty_rt_list_push_i64(ptr, i64)", "declare void @osty_rt_list_push_i1(ptr, i1)", "declare void @osty_rt_list_push_f64(ptr, double)", "declare void @osty_rt_list_push_ptr(ptr, ptr)", "declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64)", "declare void @osty_rt_list_insert_i64(ptr, i64, i64)", "declare void @osty_rt_list_insert_i1(ptr, i64, i1)", "declare void @osty_rt_list_insert_f64(ptr, i64, double)", "declare void @osty_rt_list_insert_ptr(ptr, i64, ptr)", "declare i64 @osty_rt_list_get_i64(ptr, i64)", "declare i1 @osty_rt_list_get_i1(ptr, i64)", "declare double @osty_rt_list_get_f64(ptr, i64)", "declare ptr @osty_rt_list_get_ptr(ptr, i64)", "declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64)", "declare void @osty_rt_list_set_i64(ptr, i64, i64)", "declare void @osty_rt_list_set_i1(ptr, i64, i1)", "declare void @osty_rt_list_set_f64(ptr, i64, double)", "declare void @osty_rt_list_set_ptr(ptr, i64, ptr)", "declare ptr @osty_rt_list_sorted_i64(ptr)", "declare ptr @osty_rt_list_sorted_i1(ptr)", "declare ptr @osty_rt_list_sorted_f64(ptr)", "declare ptr @osty_rt_list_sorted_string(ptr)", "declare ptr @osty_rt_list_to_set_i64(ptr)", "declare ptr @osty_rt_list_to_set_i1(ptr)", "declare ptr @osty_rt_list_to_set_f64(ptr)", "declare ptr @osty_rt_list_to_set_ptr(ptr)", "declare ptr @osty_rt_list_to_set_string(ptr)"}
+	return []string{
+		"declare ptr @osty_rt_list_new()",
+		"declare i64 @osty_rt_list_len(ptr)",
+		"declare void @osty_rt_list_push_i64(ptr, i64)",
+		"declare void @osty_rt_list_push_i1(ptr, i1)",
+		"declare void @osty_rt_list_push_f64(ptr, double)",
+		"declare void @osty_rt_list_push_ptr(ptr, ptr)",
+		"declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64)",
+		"declare void @osty_rt_list_insert_i64(ptr, i64, i64)",
+		"declare void @osty_rt_list_insert_i1(ptr, i64, i1)",
+		"declare void @osty_rt_list_insert_f64(ptr, i64, double)",
+		"declare void @osty_rt_list_insert_ptr(ptr, i64, ptr)",
+		"declare i64 @osty_rt_list_get_i64(ptr, i64)",
+		"declare i1 @osty_rt_list_get_i1(ptr, i64)",
+		"declare double @osty_rt_list_get_f64(ptr, i64)",
+		"declare ptr @osty_rt_list_get_ptr(ptr, i64)",
+		"declare ptr @osty_rt_list_data_i64(ptr)",
+		"declare ptr @osty_rt_list_data_i1(ptr)",
+		"declare ptr @osty_rt_list_data_f64(ptr)",
+		"declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64)",
+		"declare void @osty_rt_list_set_i64(ptr, i64, i64)",
+		"declare void @osty_rt_list_set_i1(ptr, i64, i1)",
+		"declare void @osty_rt_list_set_f64(ptr, i64, double)",
+		"declare void @osty_rt_list_set_ptr(ptr, i64, ptr)",
+		"declare ptr @osty_rt_list_sorted_i64(ptr)",
+		"declare ptr @osty_rt_list_sorted_i1(ptr)",
+		"declare ptr @osty_rt_list_sorted_f64(ptr)",
+		"declare ptr @osty_rt_list_sorted_string(ptr)",
+		"declare ptr @osty_rt_list_to_set_i64(ptr)",
+		"declare ptr @osty_rt_list_to_set_i1(ptr)",
+		"declare ptr @osty_rt_list_to_set_f64(ptr)",
+		"declare ptr @osty_rt_list_to_set_ptr(ptr)",
+		"declare ptr @osty_rt_list_to_set_string(ptr)",
+	}
 }
 
 // Osty: toolchain/llvmgen.osty:1856:5
@@ -2294,6 +2338,10 @@ func llvmListGet(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue, elemTy
 	symbol := llvmListRuntimeGetSymbol(llvmListElementSuffix(elemTyp))
 	_ = symbol
 	return llvmCall(emitter, elemTyp, symbol, []*LlvmValue{list, index})
+}
+
+func llvmListData(emitter *LlvmEmitter, list *LlvmValue, elemTyp string) *LlvmValue {
+	return llvmCall(emitter, "ptr", listRuntimeDataSymbol(elemTyp), []*LlvmValue{list})
 }
 
 // Osty: toolchain/llvmgen.osty:1905:5

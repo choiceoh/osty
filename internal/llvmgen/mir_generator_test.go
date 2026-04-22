@@ -1475,6 +1475,46 @@ func TestGenerateFromMIRListIndexReadPtrElem(t *testing.T) {
 	}
 }
 
+func TestGenerateFromMIRVectorizedScalarListParamUsesRawDataFastPath(t *testing.T) {
+	src := `fn sumDot(xs: List<Int>, ys: List<Int>, n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc + xs[i] * ys[i]
+    }
+    acc
+}
+`
+	file := parseLLVMGenFile(t, src)
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.File(file, res, check.Opts{
+		UseGolegacy:   true,
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+	})
+	hir, issues := ir.Lower("main", file, res, chk)
+	if len(issues) != 0 {
+		t.Fatalf("ir.Lower issues: %v", issues)
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/sumdot.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "declare ptr @osty_rt_list_data_i64(ptr)") {
+		t.Fatalf("expected raw-data helper declaration in:\n%s", got)
+	}
+	if gotCount := strings.Count(got, "call ptr @osty_rt_list_data_i64(ptr "); gotCount != 2 {
+		t.Fatalf("expected two raw-data cache calls (xs + ys), got %d in:\n%s", gotCount, got)
+	}
+	if !strings.Contains(got, "getelementptr inbounds i64, ptr ") {
+		t.Fatalf("expected scalar list fast path GEP in:\n%s", got)
+	}
+}
+
 // ==== Stage 3.6: composite list element types (bytes ABI) ====
 
 func TestGenerateFromMIRListStructPushAndRead(t *testing.T) {

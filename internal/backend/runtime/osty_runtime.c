@@ -4182,6 +4182,24 @@ double osty_rt_list_get_f64(void *raw_list, int64_t index) {
     return value;
 }
 
+void *osty_rt_list_data_i64(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    osty_rt_list_ensure_layout(list, sizeof(int64_t), NULL);
+    return list->data;
+}
+
+void *osty_rt_list_data_i1(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    osty_rt_list_ensure_layout(list, sizeof(bool), NULL);
+    return list->data;
+}
+
+void *osty_rt_list_data_f64(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    osty_rt_list_ensure_layout(list, sizeof(double), NULL);
+    return list->data;
+}
+
 void *osty_rt_list_get_ptr(void *raw_list, int64_t index) {
     void *value;
     memcpy(&value, osty_rt_list_get_raw(raw_list, index, sizeof(value), osty_gc_mark_slot_v1), sizeof(value));
