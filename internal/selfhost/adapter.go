@@ -508,8 +508,6 @@ func mapTokenKind(k FrontTokenKind) token.Kind {
 		return token.CHANARROW
 	case *FrontTokenKind_FrontQuestion:
 		return token.QUESTION
-	case *FrontTokenKind_FrontAsQuestion:
-		return token.ASQUESTION
 	case *FrontTokenKind_FrontQDot:
 		return token.QDOT
 	case *FrontTokenKind_FrontQQ:

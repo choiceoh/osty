@@ -358,6 +358,7 @@ func selfhostBuildImportedFn(
 		Owner:         owner,
 		ReceiverType:  receiverType,
 		ReturnType:    selfhostImportedTypeSource(localTypes, scopeGenerics, fn.ReturnType),
+		HasBody:       fn.Body != nil,
 		ParamNames:    paramNames,
 		ParamTypes:    paramTypes,
 		ParamDefaults: paramDefaults,

@@ -66,6 +66,22 @@ func RuneString(value int) string {
 	return string(rune(value))
 }
 
+func BreakStmtLabelNode(pos, end Pos, label string, value Expr) Stmt {
+	return BreakStmtValueNode(pos, end, label, ZeroPos(), ZeroPos(), value)
+}
+
+func ContinueStmtLabelNode(pos, end Pos, label string) Stmt {
+	return ContinueStmtNode(pos, end, label, ZeroPos(), ZeroPos())
+}
+
+func ForStmtLabelNode(pos, end Pos, label string, isForLet bool, pat Pattern, iter Expr, body Block) Stmt {
+	return ForStmtNode(pos, end, label, ZeroPos(), ZeroPos(), isForLet, pat, iter, body)
+}
+
+func LoopExprLabelNode(pos, end Pos, label string, body Block) Expr {
+	return LoopExprNode(pos, end, label, ZeroPos(), ZeroPos(), body)
+}
+
 func firstRune(s string) rune {
 	r, _ := utf8.DecodeRuneInString(s)
 	return r

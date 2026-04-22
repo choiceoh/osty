@@ -939,6 +939,11 @@ type ostyBasicError struct {
 	messageText string
 }
 
+type ostyWrappedError struct {
+	context string
+	cause   any
+}
+
 func ostyErrorNew(message string) any {
 	return ostyBasicError{messageText: message}
 }
@@ -946,6 +951,14 @@ func ostyErrorNew(message string) any {
 func (e ostyBasicError) message() string { return e.messageText }
 
 func (e ostyBasicError) source() *any { return nil }
+
+func (e ostyWrappedError) message() string {
+	return e.context + ": " + ostyErrorMessage(e.cause)
+}
+
+func (e ostyWrappedError) source() *any {
+	return &e.cause
+}
 
 func ostyErrorDowncast[T any](err any) *T {
 	v, ok := err.(T)
@@ -979,6 +992,23 @@ func ostyErrorSource(err any) *any {
 		return e.source()
 	}
 	return nil
+}
+
+func ostyErrorWrap(err any, context string) any {
+	return ostyWrappedError{context: context, cause: err}
+}
+
+func ostyErrorChain(err any) []any {
+	if err == nil {
+		return nil
+	}
+	out := []any{err}
+	cur := ostyErrorSource(err)
+	for cur != nil {
+		out = append(out, *cur)
+		cur = ostyErrorSource(*cur)
+	}
+	return out
 }
 `)
 	}

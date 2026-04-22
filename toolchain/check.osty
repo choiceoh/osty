@@ -710,6 +710,9 @@ fn collectFnDecl(
         genericBounds: combinedBounds,
     }
     checkRegisterFn(cx.env, sig)
+    if node.right >= 0 {
+        checkMarkFnHasBody(cx.env, name, owner)
+    }
 
     // Record a symbol for the Go-bridge summary.
     let fnTy = tyFn(cx.env.tys, sig.paramTys, sig.retTy)
