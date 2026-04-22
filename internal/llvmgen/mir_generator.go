@@ -1072,7 +1072,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicStringToUpper, mir.IntrinsicStringToLower,
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
-		mir.IntrinsicStringEndsWith:
+		mir.IntrinsicStringEndsWith, mir.IntrinsicStringSplit:
 		return true
 	// Concurrency — channels / tasks / select / cancellation / helpers.
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
@@ -2438,7 +2438,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicStringToUpper, mir.IntrinsicStringToLower,
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
-		mir.IntrinsicStringEndsWith:
+		mir.IntrinsicStringEndsWith, mir.IntrinsicStringSplit:
 		return g.emitStringIntrinsic(i)
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
 		mir.IntrinsicChanClose, mir.IntrinsicChanIsClosed:
@@ -3517,7 +3517,26 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		var acc *LlvmValue
 		for idx, op := range i.Args {
 			if !isStringLLVMType(op.Type()) {
-				return unsupported("mir-mvp", fmt.Sprintf("string_concat arg %d type %s", idx+1, mirTypeString(op.Type())))
+				// String interpolation embeds non-String values
+				// (`"{n}"`) whose checker-side coercion to String
+				// doesn't always survive to the MIR arg list.
+				// Box numeric/bool parts at the emitter boundary
+				// so the concat runtime sees uniform ptr args.
+				boxed, boxErr := g.emitStringConcatBoxed(op)
+				if boxErr != nil {
+					return boxErr
+				}
+				if boxed == nil {
+					return unsupported("mir-mvp", fmt.Sprintf("string_concat arg %d type %s", idx+1, mirTypeString(op.Type())))
+				}
+				if acc == nil {
+					acc = boxed
+					continue
+				}
+				em := g.ostyEmitter()
+				acc = llvmStringConcat(em, acc, boxed)
+				g.flushOstyEmitter(em)
+				continue
 			}
 			partReg, err := g.evalOperand(op, op.Type())
 			if err != nil {
@@ -3601,8 +3620,89 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitStringBinaryBoolIntrinsic(i, strReg, llvmStringRuntimeHasSuffixSymbol())
 	case mir.IntrinsicStringContains:
 		return g.emitStringBinaryBoolIntrinsic(i, strReg, llvmStringRuntimeContainsSymbol())
+	case mir.IntrinsicStringSplit:
+		return g.emitStringSplit(i, strReg)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("string intrinsic kind %d", i.Kind))
+}
+
+// emitStringConcatBoxed converts a non-String operand into a String
+// ptr suitable for string_concat. Handles the common coercion
+// shapes produced by string interpolation: Int / Int8..64 /
+// UInt8..64 / Byte / Bool / Float / Float32 / Float64 / Char.
+// Returns nil when the operand type isn't a known scalar, letting
+// the caller surface an unsupported-source diagnostic instead.
+func (g *mirGen) emitStringConcatBoxed(op mir.Operand) (*LlvmValue, error) {
+	t := op.Type()
+	if t == nil {
+		return nil, nil
+	}
+	prim, ok := t.(*ir.PrimType)
+	if !ok {
+		return nil, nil
+	}
+	switch prim.Kind {
+	case ir.PrimInt, ir.PrimInt8, ir.PrimInt16, ir.PrimInt32, ir.PrimInt64,
+		ir.PrimUInt8, ir.PrimUInt16, ir.PrimUInt32, ir.PrimUInt64,
+		ir.PrimByte, ir.PrimChar:
+		reg, err := g.evalOperand(op, t)
+		if err != nil {
+			return nil, err
+		}
+		sym := llvmIntRuntimeToStringSymbol()
+		g.declareRuntime(sym, "declare ptr @"+sym+"(i64)")
+		em := g.ostyEmitter()
+		out := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "i64", name: reg}})
+		g.flushOstyEmitter(em)
+		return out, nil
+	case ir.PrimBool:
+		reg, err := g.evalOperand(op, t)
+		if err != nil {
+			return nil, err
+		}
+		sym := llvmBoolRuntimeToStringSymbol()
+		g.declareRuntime(sym, "declare ptr @"+sym+"(i1)")
+		em := g.ostyEmitter()
+		out := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "i1", name: reg}})
+		g.flushOstyEmitter(em)
+		return out, nil
+	case ir.PrimFloat, ir.PrimFloat32, ir.PrimFloat64:
+		reg, err := g.evalOperand(op, t)
+		if err != nil {
+			return nil, err
+		}
+		sym := llvmFloatRuntimeToStringSymbol()
+		g.declareRuntime(sym, "declare ptr @"+sym+"(double)")
+		em := g.ostyEmitter()
+		out := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "double", name: reg}})
+		g.flushOstyEmitter(em)
+		return out, nil
+	}
+	return nil, nil
+}
+
+// emitStringSplit emits `.split(sep)` as a call to the runtime
+// `osty_rt_strings_Split(ptr, ptr) -> ptr` helper. The runtime
+// returns a List<String> pointer; the MIR dest local has that same
+// shape, so no additional wrapping is needed.
+func (g *mirGen) emitStringSplit(i *mir.IntrinsicInstr, strReg string) error {
+	if len(i.Args) < 2 {
+		return unsupported("mir-mvp", "string_split with no sep arg")
+	}
+	sep := i.Args[1]
+	if !isStringLLVMType(sep.Type()) {
+		return unsupported("mir-mvp", fmt.Sprintf("string_split sep type %s", mirTypeString(sep.Type())))
+	}
+	sepReg, err := g.evalOperand(sep, sep.Type())
+	if err != nil {
+		return err
+	}
+	sym := llvmStringRuntimeSplitSymbol()
+	g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, ptr)")
+	em := g.ostyEmitter()
+	result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: strReg}, {typ: "ptr", name: sepReg}})
+	g.flushOstyEmitter(em)
+	return g.storeIntrinsicResult(i, result)
 }
 
 // emitStringBinaryBoolIntrinsic dispatches `.startsWith(s)` /
