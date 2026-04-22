@@ -3157,6 +3157,8 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 		switch name {
 		case "push":
 			return IntrinsicListPush
+		case "pop":
+			return IntrinsicListPop
 		case "len":
 			return IntrinsicListLen
 		case "get":
@@ -3263,6 +3265,8 @@ func stringIntrinsicForMethod(name string) IntrinsicKind {
 		return IntrinsicStringIndexOf
 	case "split":
 		return IntrinsicStringSplit
+	case "join":
+		return IntrinsicStringJoin
 	case "trim":
 		return IntrinsicStringTrim
 	case "toUpper":
@@ -3361,6 +3365,8 @@ func stdlibStringFreeFnToIntrinsic(qualifier, name string) IntrinsicKind {
 		return IntrinsicStringIndexOf
 	case "split":
 		return IntrinsicStringSplit
+	case "join":
+		return IntrinsicStringJoin
 	case "trim":
 		return IntrinsicStringTrim
 	case "toUpper":
