@@ -419,7 +419,11 @@ func (g *mirGen) checkSupported() error {
 				continue
 			}
 			if !g.typeSupported(loc.Type) {
-				return unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s", mirTypeString(loc.Type), fn.Name))
+				hint := localDefiningSiteHint(fn, loc.ID)
+			if hint != "" {
+				return unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s (local %s id=%d; %s)", mirTypeString(loc.Type), fn.Name, localDisplayName(loc), loc.ID, hint))
+			}
+			return unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s (local %s id=%d)", mirTypeString(loc.Type), fn.Name, localDisplayName(loc), loc.ID))
 			}
 		}
 		if fn.ReturnType != nil && !g.typeSupported(fn.ReturnType) {
@@ -475,7 +479,11 @@ func (g *mirGen) checkFunctionSupported(fn *mir.Function) error {
 			continue
 		}
 		if !g.typeSupported(loc.Type) {
-			return unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s", mirTypeString(loc.Type), fn.Name))
+			hint := localDefiningSiteHint(fn, loc.ID)
+			if hint != "" {
+				return unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s (local %s id=%d; %s)", mirTypeString(loc.Type), fn.Name, localDisplayName(loc), loc.ID, hint))
+			}
+			return unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s (local %s id=%d)", mirTypeString(loc.Type), fn.Name, localDisplayName(loc), loc.ID))
 		}
 	}
 	if fn.ReturnType != nil && !g.typeSupported(fn.ReturnType) {
@@ -557,6 +565,72 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 		return true
 	}
 	return false
+}
+
+// localDisplayName returns a human-readable tag for an ErrType diag
+// so "unsupported local type <error>" points at the specific binding.
+// When the local is a synthetic temp (no Name), append the first
+// instruction that *writes* the temp — that's usually the expression
+// whose checker-inferred type leaked through as <error>.
+func localDisplayName(loc *mir.Local) string {
+	if loc == nil {
+		return "<nil>"
+	}
+	if loc.Name == "" {
+		return "<temp>"
+	}
+	return loc.Name
+}
+
+// localDefiningSiteHint walks fn's blocks to find the first
+// instruction that assigns to loc.ID, returning a short textual hint
+// suitable for embedding in an "unsupported local type <error>"
+// diagnostic. Returns "" when no writer is found.
+func localDefiningSiteHint(fn *mir.Function, id mir.LocalID) string {
+	if fn == nil {
+		return ""
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, inst := range bb.Instrs {
+			switch x := inst.(type) {
+			case *mir.AssignInstr:
+				if placeReferencesLocal(x.Dest, id) {
+					return fmt.Sprintf("written by assign at %d:%d", x.SpanV.Start.Line, x.SpanV.Start.Column)
+				}
+			case *mir.CallInstr:
+				if x.Dest != nil && placeReferencesLocal(*x.Dest, id) {
+					callee := "?"
+					if x.Callee != nil {
+						callee = mirCalleeDebugString(x.Callee)
+					}
+					return fmt.Sprintf("written by call `%s` at %d:%d", callee, x.SpanV.Start.Line, x.SpanV.Start.Column)
+				}
+			case *mir.IntrinsicInstr:
+				if x.Dest != nil && placeReferencesLocal(*x.Dest, id) {
+					return fmt.Sprintf("written by intrinsic kind=%d at %d:%d", int(x.Kind), x.SpanV.Start.Line, x.SpanV.Start.Column)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// mirCalleeDebugString returns a short identifier for a MIR callee
+// suitable for use in a diagnostic hint. Keeps the dependency surface
+// shallow (no reflection on unknown callee variants) — unknown shapes
+// collapse to their Go type name.
+func mirCalleeDebugString(c mir.Callee) string {
+	if c == nil {
+		return "?"
+	}
+	switch v := c.(type) {
+	case *mir.FnRef:
+		return v.Symbol
+	}
+	return fmt.Sprintf("%T", c)
 }
 
 func allowUnusedErrLocal(fn *mir.Function, loc *mir.Local) bool {

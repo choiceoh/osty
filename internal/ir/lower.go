@@ -1767,6 +1767,31 @@ func (l *lowerer) lowerQualifiedCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArg
 	if t == ErrTypeVal {
 		t = recoverCallReturnType(callee)
 	}
+	// The Go-hosted checker doesn't register `use X { fn Y(...) -> R
+	// }` member signatures on the package symbol, so `host.Y` ends up
+	// as <error> in both the checker types map and the callee's
+	// FnType. Fall back to reading the UseDecl body (for inline FFI
+	// signatures) or the resolved package scope (for stdlib /
+	// workspace modules) directly: the AST already has the signature,
+	// we just need to lower it. Without this, MIR's typeSupported
+	// rejects the synthetic result temp with `unsupported local type
+	// <error>` for every runtime / stdlib module call site.
+	if t == ErrTypeVal || t == nil {
+		if id, ok := fx.X.(*ast.Ident); ok {
+			if sym := l.symbol(id); sym != nil && sym.Kind == resolve.SymPackage {
+				if ud, ok := sym.Decl.(*ast.UseDecl); ok && ud != nil {
+					if ret := l.lookupUseDeclFnReturn(ud, fx.Name); ret != nil {
+						t = ret
+					}
+				}
+				if (t == ErrTypeVal || t == nil) && sym.Package != nil {
+					if ret := l.lookupPackageFnReturn(sym.Package, fx.Name); ret != nil {
+						t = ret
+					}
+				}
+			}
+		}
+	}
 	out := &CallExpr{
 		Callee:   callee,
 		TypeArgs: typeArgs,
@@ -1777,6 +1802,55 @@ func (l *lowerer) lowerQualifiedCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArg
 		out.Args = append(out.Args, l.lowerArg(a))
 	}
 	return out
+}
+
+// lookupUseDeclFnReturn scans a `use X { ... }` body for an fn named
+// fnName and returns its lowered return type (TUnit when the source
+// declared no return type). Returns nil when no matching fn is found.
+// This is the fallback path used by lowerQualifiedCall when the
+// checker left the call's result type as <error>.
+func (l *lowerer) lookupUseDeclFnReturn(ud *ast.UseDecl, fnName string) Type {
+	if ud == nil {
+		return nil
+	}
+	for _, d := range ud.GoBody {
+		fn, ok := d.(*ast.FnDecl)
+		if !ok || fn == nil || fn.Name != fnName {
+			continue
+		}
+		if fn.ReturnType == nil {
+			return TUnit
+		}
+		return l.lowerType(fn.ReturnType)
+	}
+	return nil
+}
+
+// lookupPackageFnReturn finds a top-level public fn named fnName in
+// the resolved package and returns its lowered return type. Used by
+// lowerQualifiedCall as the fallback when the UseDecl is a bare
+// `use std.strings as X` (no inline FFI body) — the fn lives in the
+// package's PkgScope, and its AST is on the resolved package file.
+func (l *lowerer) lookupPackageFnReturn(pkg *resolve.Package, fnName string) Type {
+	if pkg == nil {
+		return nil
+	}
+	for _, pf := range pkg.Files {
+		if pf == nil || pf.File == nil {
+			continue
+		}
+		for _, decl := range pf.File.Decls {
+			fn, ok := decl.(*ast.FnDecl)
+			if !ok || fn == nil || fn.Name != fnName {
+				continue
+			}
+			if fn.ReturnType == nil {
+				return TUnit
+			}
+			return l.lowerType(fn.ReturnType)
+		}
+	}
+	return nil
 }
 
 func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs []Type) Expr {
