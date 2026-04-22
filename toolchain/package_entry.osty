@@ -5,7 +5,7 @@ use runtime.path.filepath as filepath {
 
 /// PackageEntryKind is the self-hosting-facing shape of one package file.
 pub enum PackageEntryKind {
-    Manifest,
+    ManifestFile,
     Lockfile,
     Source,
     Support,
@@ -16,33 +16,33 @@ pub enum PackageEntryKind {
 pub fn packageEntryKind(rel: String) -> PackageEntryKind {
     let base = filepath.Base(rel)
     if base == ".osty" || base == ".git" || base == ".hg" || base == ".svn" || base == ".DS_Store" {
-        Ignored
+        PackageEntryKind.Ignored
     } else if base == "osty.toml" {
-        Manifest
+        PackageEntryKind.ManifestFile
     } else if base == "osty.lock" {
-        Lockfile
+        PackageEntryKind.Lockfile
     } else if filepath.Ext(base) == ".osty" {
-        Source
+        PackageEntryKind.Source
     } else {
-        Support
+        PackageEntryKind.Support
     }
 }
 
 /// packageEntryKindName returns a stable label for reports and snapshots.
 pub fn packageEntryKindName(kind: PackageEntryKind) -> String {
     match kind {
-        Manifest -> "manifest",
-        Lockfile -> "lockfile",
-        Source -> "source",
-        Support -> "support",
-        Ignored -> "ignored",
+        PackageEntryKind.ManifestFile -> "manifest",
+        PackageEntryKind.Lockfile -> "lockfile",
+        PackageEntryKind.Source -> "source",
+        PackageEntryKind.Support -> "support",
+        PackageEntryKind.Ignored -> "ignored",
     }
 }
 
 /// shouldHashPackageEntry mirrors the package-manager rule for cache metadata.
 pub fn shouldHashPackageEntry(rel: String) -> Bool {
     match packageEntryKind(rel) {
-        Ignored -> false,
+        PackageEntryKind.Ignored -> false,
         _ -> true,
     }
 }
@@ -50,7 +50,7 @@ pub fn shouldHashPackageEntry(rel: String) -> Bool {
 /// isOstySourceEntry reports whether a package path is authored Osty code.
 pub fn isOstySourceEntry(rel: String) -> Bool {
     match packageEntryKind(rel) {
-        Source -> true,
+        PackageEntryKind.Source -> true,
         _ -> false,
     }
 }

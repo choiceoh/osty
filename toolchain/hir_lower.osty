@@ -593,13 +593,13 @@ pub fn hirLowerParseAnnotationInt(e: HirExpr) -> HirLowerIntParse {
     let mut base = 10
     if text.startsWith("0x") || text.startsWith("0X") {
         base = 16
-        body = text.substring(2, text.len())
+        body = strings.slice(text, 2, text.len())
     } else if text.startsWith("0o") || text.startsWith("0O") {
         base = 8
-        body = text.substring(2, text.len())
+        body = strings.slice(text, 2, text.len())
     } else if text.startsWith("0b") || text.startsWith("0B") {
         base = 2
-        body = text.substring(2, text.len())
+        body = strings.slice(text, 2, text.len())
     }
     if body.len() == 0 {
         return HirLowerIntParse { value: 0, ok: false }
@@ -650,34 +650,28 @@ pub fn hirLowerAnnotationStringLit(e: HirExpr) -> HirLowerStringParse {
 // ---- Internal digit helpers --------------------------------------
 
 fn hirLowerStripUnderscores(text: String) -> String {
-    let mut buf: List<String> = []
-    let chars = text.chars()
-    for ch in chars {
-        if ch != "_" {
-            buf.push(ch)
-        }
-    }
-    strings.join(buf, "")
+    // §1.6.1 numeric separators
+    strings.replaceAll(text, "_", "")
 }
 
 fn hirLowerStripSign(text: String) -> String {
     if text.startsWith("+") || text.startsWith("-") {
-        text.substring(1, text.len())
+        strings.slice(text, 1, text.len())
     } else {
         text
     }
 }
 
-fn hirLowerCharToDigit(ch: String) -> Int {
+fn hirLowerCharToDigit(ch: Char) -> Int {
     match ch {
-        "0" -> 0, "1" -> 1, "2" -> 2, "3" -> 3, "4" -> 4,
-        "5" -> 5, "6" -> 6, "7" -> 7, "8" -> 8, "9" -> 9,
-        "a" -> 10, "A" -> 10,
-        "b" -> 11, "B" -> 11,
-        "c" -> 12, "C" -> 12,
-        "d" -> 13, "D" -> 13,
-        "e" -> 14, "E" -> 14,
-        "f" -> 15, "F" -> 15,
+        '0' -> 0, '1' -> 1, '2' -> 2, '3' -> 3, '4' -> 4,
+        '5' -> 5, '6' -> 6, '7' -> 7, '8' -> 8, '9' -> 9,
+        'a' -> 10, 'A' -> 10,
+        'b' -> 11, 'B' -> 11,
+        'c' -> 12, 'C' -> 12,
+        'd' -> 13, 'D' -> 13,
+        'e' -> 14, 'E' -> 14,
+        'f' -> 15, 'F' -> 15,
         _ -> -1,
     }
 }
@@ -1821,14 +1815,7 @@ pub fn hirLowerNormalizeIntText(text: String) -> String {
     if text.len() == 0 {
         return ""
     }
-    let mut buf: List<String> = []
-    let chars = text.chars()
-    for ch in chars {
-        if ch != "_" {
-            buf.push(ch)
-        }
-    }
-    strings.join(buf, "")
+    strings.replaceAll(text, "_", "")
 }
 
 /// hirLowerNormalizeFloatText shares the same underscore-stripping

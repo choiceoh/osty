@@ -350,7 +350,6 @@ pub fn hirTypeEqual(a: HirType, b: HirType) -> Bool {
         HirTypeVar -> a.varName == b.varName && a.varOwner == b.varOwner,
         HirTypeErr -> true,
         HirTypeInvalid -> true,
-        _ -> false,
     }
 }
 
