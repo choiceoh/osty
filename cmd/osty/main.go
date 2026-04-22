@@ -556,42 +556,8 @@ func main() {
 				return
 			}
 		}
-		parsed := parser.ParseDetailed(src)
-		file, parseDiags := parsed.File, parsed.Diagnostics
-		res := resolveFile(file)
-		chk := check.File(file, res, checkOptsForFile(path, canonical.Source(src, file)))
-		lr := runLintEngine(file, res, chk)
-		if cfg, ok := loadLintConfigNear(path); ok {
-			lr = cfg.Apply(lr)
-		}
-		all := append(append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...), chk.Diags...)
-		all = append(all, lr.Diags...)
-		printDiags(formatter, all, flags)
-		if flags.fix || flags.fixDryRun {
-			newSrc, applied, skipped := lint.ApplyFixes(src, lr.Diags)
-			mode := "osty lint"
-			switch {
-			case flags.fixDryRun:
-				// Write the would-be-applied source to stdout so users
-				// can pipe it through `diff` / `less` before committing
-				// to a real --fix pass. The file on disk is untouched.
-				if _, err := os.Stdout.Write(newSrc); err != nil {
-					fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %v\n", mode, err)
-					os.Exit(1)
-				}
-				fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %d fix(es) would apply, %d overlap(s) would be skipped\n", mode, applied, skipped)
-			case flags.fix:
-				if applied > 0 {
-					if err := os.WriteFile(path, newSrc, 0o644); err != nil {
-						fmt.Fprintf(os.Stderr, "%s --fix: %v\n", mode, err)
-						os.Exit(1)
-					}
-				}
-				fmt.Fprintf(os.Stderr, "%s --fix: applied %d fix(es), skipped %d overlap(s)\n", mode, applied, skipped)
-			}
-		}
-		if hasError(all) || (flags.strict && hasWarning(all)) {
-			os.Exit(1)
+		if code := runLintFileLegacy(path, src, formatter, flags); code != 0 {
+			os.Exit(code)
 		}
 	default:
 		usage()
@@ -807,18 +773,32 @@ func runLintPackage(dir string, flags cliFlags) {
 		runLintWorkspace(dir, flags)
 		return
 	}
+	if code := runLintPackageLegacy(dir, flags); code != 0 {
+		os.Exit(code)
+	}
+}
+
+// runLintPackageLegacy is the extracted single-package body of
+// runLintPackage (after the workspace check). Returns an exit code
+// so the lint DIR pipeline is exercisable in-process alongside the
+// check / typecheck / resolve legacy extractions. The parse + resolve
+// + check + lint pipeline is unchanged — parser.ParseDetailed runs
+// lazily through resolve.LoadPackageWithTransform, so every file in
+// the package gets its *ast.File lowered exactly once.
+func runLintPackageLegacy(dir string, flags cliFlags) int {
 	pkg, err := resolve.LoadPackageWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("lint"), os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
 	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 	chk := check.Package(pkg, res, checkOpts())
 	cfg, cfgBase, hasCfg := loadLintConfigWithBase(dir)
 	outcome := runLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)
 	if outcome.anyErr || (flags.strict && outcome.anyWarn) {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 // runLintWorkspace lints each package inside dir, aggregating diagnostics
@@ -1217,6 +1197,55 @@ func byteOffsetLineCol(src []byte, offset int) (int, int) {
 		col++
 	}
 	return line, col
+}
+
+// runLintFileLegacy is the extracted `osty lint FILE` body (minus the
+// exclude-config early-return, which stays in the caller so the "skip"
+// message fires before parse work begins). Same
+// parser.ParseDetailed → resolveFile → check.File → lint engine
+// pipeline the inline body ran, now returning an exit code so the
+// lint legacy path is exercisable in-process alongside the check /
+// typecheck legacy baselines (#639, #640, #641). Handles --fix /
+// --fix-dry-run stdout/disk side-effects inside the function.
+func runLintFileLegacy(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
+	parsed := parser.ParseDetailed(src)
+	file, parseDiags := parsed.File, parsed.Diagnostics
+	res := resolveFile(file)
+	chk := check.File(file, res, checkOptsForFile(path, canonical.Source(src, file)))
+	lr := runLintEngine(file, res, chk)
+	if cfg, ok := loadLintConfigNear(path); ok {
+		lr = cfg.Apply(lr)
+	}
+	all := append(append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...), chk.Diags...)
+	all = append(all, lr.Diags...)
+	printDiags(formatter, all, flags)
+	if flags.fix || flags.fixDryRun {
+		newSrc, applied, skipped := lint.ApplyFixes(src, lr.Diags)
+		mode := "osty lint"
+		switch {
+		case flags.fixDryRun:
+			// Write the would-be-applied source to stdout so users
+			// can pipe it through `diff` / `less` before committing
+			// to a real --fix pass. The file on disk is untouched.
+			if _, err := os.Stdout.Write(newSrc); err != nil {
+				fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %v\n", mode, err)
+				return 1
+			}
+			fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %d fix(es) would apply, %d overlap(s) would be skipped\n", mode, applied, skipped)
+		case flags.fix:
+			if applied > 0 {
+				if err := os.WriteFile(path, newSrc, 0o644); err != nil {
+					fmt.Fprintf(os.Stderr, "%s --fix: %v\n", mode, err)
+					return 1
+				}
+			}
+			fmt.Fprintf(os.Stderr, "%s --fix: applied %d fix(es), skipped %d overlap(s)\n", mode, applied, skipped)
+		}
+	}
+	if hasError(all) || (flags.strict && hasWarning(all)) {
+		return 1
+	}
+	return 0
 }
 
 // runCheckFileLegacy is the extracted `osty check FILE` body (the
