@@ -373,6 +373,8 @@ typedef struct osty_rt_list {
     unsigned char *data;
 } osty_rt_list;
 
+#define OSTY_RT_MAP_INLINE_INDEX_CAP 64
+
 typedef struct osty_rt_map {
     int64_t len;
     int64_t cap;
@@ -382,6 +384,14 @@ typedef struct osty_rt_map {
     osty_rt_trace_slot_fn value_trace;
     unsigned char *keys;
     unsigned char *values;
+    // Lookup side index: open-addressed hash table storing slot+1 so
+    // `Map` keeps its insertion-ordered key/value arrays while get /
+    // contains / insert avoid an O(n) scan once the map grows past the
+    // tiny-list regime.
+    int64_t index_cap;
+    int64_t index_len;
+    int64_t *index_slots;
+    int64_t index_inline[OSTY_RT_MAP_INLINE_INDEX_CAP];
     // Per-map recursive mutex. Guarantees that all public map ops are
     // mutually exclusive on a single instance so concurrent mutation
     // can't realloc the slot arrays mid-read, drop the len mid-walk,
@@ -1276,6 +1286,57 @@ static size_t osty_rt_kind_size(int64_t kind) {
     }
 }
 
+static uint64_t osty_rt_hash_mix64(uint64_t h) {
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
+    return h;
+}
+
+static size_t osty_rt_hash_bytes(const unsigned char *bytes, size_t len) {
+    uint64_t h = 1469598103934665603ULL;
+    size_t i;
+    for (i = 0; i < len; i++) {
+        h ^= (uint64_t)bytes[i];
+        h *= 1099511628211ULL;
+    }
+    return (size_t)osty_rt_hash_mix64(h);
+}
+
+static size_t osty_rt_map_key_hash(int64_t kind, const void *key) {
+    switch (kind) {
+    case OSTY_RT_ABI_I64:
+    case OSTY_RT_ABI_F64: {
+        uint64_t bits = 0;
+        memcpy(&bits, key, sizeof(bits));
+        return (size_t)osty_rt_hash_mix64(bits);
+    }
+    case OSTY_RT_ABI_I1: {
+        bool value = false;
+        memcpy(&value, key, sizeof(value));
+        return (size_t)osty_rt_hash_mix64(value ? 0x9e3779b97f4a7c15ULL : 0ULL);
+    }
+    case OSTY_RT_ABI_PTR: {
+        void *value = NULL;
+        memcpy(&value, key, sizeof(value));
+        return (size_t)osty_rt_hash_mix64((uint64_t)(uintptr_t)value);
+    }
+    case OSTY_RT_ABI_STRING: {
+        const char *value = NULL;
+        memcpy(&value, key, sizeof(value));
+        if (value == NULL) {
+            return (size_t)osty_rt_hash_mix64(0ULL);
+        }
+        return osty_rt_hash_bytes((const unsigned char *)value, strlen(value));
+    }
+    default:
+        osty_rt_abort("unsupported map key hash kind");
+        return 0;
+    }
+}
+
 static void osty_rt_map_trace(void *payload) {
     osty_rt_map *map = (osty_rt_map *)payload;
     int64_t i;
@@ -1300,6 +1361,9 @@ static void osty_rt_map_trace(void *payload) {
 static void osty_rt_map_destroy(void *payload) {
     osty_rt_map *map = (osty_rt_map *)payload;
     if (map != NULL) {
+        if (map->index_slots != NULL && map->index_slots != map->index_inline) {
+            free(map->index_slots);
+        }
         free(map->keys);
         free(map->values);
         if (map->mu_init) {
@@ -3357,6 +3421,70 @@ static void *osty_rt_map_key_slot(osty_rt_map *map, int64_t index) {
     return (void *)(map->keys + ((size_t)index * osty_rt_kind_size(map->key_kind)));
 }
 
+static void osty_rt_map_index_clear(osty_rt_map *map) {
+    if (map->index_slots != NULL && map->index_slots != map->index_inline) {
+        free(map->index_slots);
+    }
+    map->index_slots = NULL;
+    map->index_cap = 0;
+    map->index_len = 0;
+}
+
+static void osty_rt_map_index_insert_slot(osty_rt_map *map, int64_t slot) {
+    uint64_t mask = (uint64_t)(map->index_cap - 1);
+    uint64_t idx = (uint64_t)osty_rt_map_key_hash(map->key_kind, osty_rt_map_key_slot(map, slot)) & mask;
+    while (map->index_slots[idx] != 0) {
+        idx = (idx + 1) & mask;
+    }
+    map->index_slots[idx] = slot + 1;
+    map->index_len += 1;
+}
+
+static void osty_rt_map_index_rebuild(osty_rt_map *map, int64_t live_len) {
+    int64_t cap = 8;
+    int64_t i;
+
+    if (live_len < 8) {
+        osty_rt_map_index_clear(map);
+        return;
+    }
+    while (cap < live_len * 2) {
+        if (cap > INT64_MAX / 2) {
+            cap = live_len * 2;
+            break;
+        }
+        cap *= 2;
+    }
+    if (cap <= 0) {
+        osty_rt_abort("map index capacity overflow");
+    }
+    if (cap <= OSTY_RT_MAP_INLINE_INDEX_CAP) {
+        if (map->index_slots != NULL && map->index_slots != map->index_inline) {
+            free(map->index_slots);
+        }
+        map->index_slots = map->index_inline;
+        memset(map->index_slots, 0, (size_t)cap * sizeof(int64_t));
+        map->index_cap = cap;
+    } else {
+        if (map->index_cap != cap || map->index_slots == NULL || map->index_slots == map->index_inline) {
+            if (map->index_slots != NULL && map->index_slots != map->index_inline) {
+                free(map->index_slots);
+            }
+            map->index_slots = (int64_t *)calloc((size_t)cap, sizeof(int64_t));
+            if (map->index_slots == NULL) {
+                osty_rt_abort("out of memory");
+            }
+            map->index_cap = cap;
+        } else {
+            memset(map->index_slots, 0, (size_t)map->index_cap * sizeof(int64_t));
+        }
+    }
+    map->index_len = 0;
+    for (i = 0; i < map->len; i++) {
+        osty_rt_map_index_insert_slot(map, i);
+    }
+}
+
 static void osty_rt_map_reserve(osty_rt_map *map, int64_t min_cap) {
     int64_t next_cap = map->cap;
     size_t key_bytes;
@@ -3385,7 +3513,7 @@ static void osty_rt_map_reserve(osty_rt_map *map, int64_t min_cap) {
     map->cap = next_cap;
 }
 
-static int64_t osty_rt_map_find_index(osty_rt_map *map, const void *key) {
+static int64_t osty_rt_map_find_index_linear(osty_rt_map *map, const void *key) {
     int64_t i;
     size_t key_size = osty_rt_kind_size(map->key_kind);
     for (i = 0; i < map->len; i++) {
@@ -3394,6 +3522,33 @@ static int64_t osty_rt_map_find_index(osty_rt_map *map, const void *key) {
         }
     }
     return -1;
+}
+
+static int64_t osty_rt_map_find_index_indexed(osty_rt_map *map, const void *key) {
+    size_t key_size = osty_rt_kind_size(map->key_kind);
+    uint64_t mask = (uint64_t)(map->index_cap - 1);
+    uint64_t idx = (uint64_t)osty_rt_map_key_hash(map->key_kind, key) & mask;
+
+    for (;;) {
+        int64_t entry = map->index_slots[idx];
+        int64_t slot;
+        if (entry == 0) {
+            return -1;
+        }
+        slot = entry - 1;
+        if (slot >= 0 && slot < map->len &&
+            osty_rt_value_equals(osty_rt_map_key_slot(map, slot), key, key_size, map->key_kind)) {
+            return slot;
+        }
+        idx = (idx + 1) & mask;
+    }
+}
+
+static int64_t osty_rt_map_find_index(osty_rt_map *map, const void *key) {
+    if (map->index_cap > 0 && map->index_slots != NULL) {
+        return osty_rt_map_find_index_indexed(map, key);
+    }
+    return osty_rt_map_find_index_linear(map, key);
 }
 
 void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, osty_rt_trace_slot_fn value_trace) {
@@ -3409,6 +3564,9 @@ void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, 
     map->value_kind = value_kind;
     map->value_size = (size_t)value_size;
     map->value_trace = value_trace;
+    map->index_cap = 0;
+    map->index_len = 0;
+    map->index_slots = NULL;
     {
         pthread_mutexattr_t attr;
         if (pthread_mutexattr_init(&attr) != 0) {
@@ -3451,6 +3609,7 @@ static void osty_rt_map_insert_raw(void *raw_map, const void *key, const void *v
     osty_rt_map *map = (osty_rt_map *)raw_map;
     int64_t index;
     size_t key_size;
+    bool inserted = false;
     if (map == NULL || key == NULL || value == NULL) {
         osty_rt_abort("invalid map insert");
     }
@@ -3460,9 +3619,20 @@ static void osty_rt_map_insert_raw(void *raw_map, const void *key, const void *v
         osty_rt_map_reserve(map, map->len + 1);
         index = map->len;
         map->len += 1;
+        inserted = true;
     }
     memcpy(osty_rt_map_key_slot(map, index), key, key_size);
     memcpy(osty_rt_map_value_slot(map, index), value, map->value_size);
+    if (inserted) {
+        if (map->len >= 8) {
+            if (map->index_cap == 0 || map->index_slots == NULL ||
+                (map->index_len + 1) * 10 >= map->index_cap * 7) {
+                osty_rt_map_index_rebuild(map, map->len);
+            } else {
+                osty_rt_map_index_insert_slot(map, index);
+            }
+        }
+    }
 }
 
 static bool osty_rt_map_remove_raw(void *raw_map, const void *key) {
@@ -3484,6 +3654,9 @@ static bool osty_rt_map_remove_raw(void *raw_map, const void *key) {
         memmove(osty_rt_map_value_slot(map, index), osty_rt_map_value_slot(map, index + 1), (size_t)(map->len - index - 1) * value_size);
     }
     map->len -= 1;
+    if (map->index_cap != 0 || map->index_slots != NULL) {
+        osty_rt_map_index_rebuild(map, map->len);
+    }
     return true;
 }
 
@@ -3563,6 +3736,7 @@ void osty_rt_map_clear(void *raw_map) {
     }
     osty_rt_map_lock(raw_map);
     map->len = 0;
+    osty_rt_map_index_clear(map);
     osty_rt_map_unlock(raw_map);
 }
 
