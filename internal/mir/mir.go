@@ -1192,17 +1192,19 @@ const (
 // records. Structural types (tuples, lists) are keyed by their
 // canonical string representation.
 type LayoutTable struct {
-	Structs map[string]*StructLayout
-	Enums   map[string]*EnumLayout
-	Tuples  map[string]*TupleLayout
+	Structs    map[string]*StructLayout
+	Enums      map[string]*EnumLayout
+	Tuples     map[string]*TupleLayout
+	Interfaces map[string]*InterfaceLayout
 }
 
 // NewLayoutTable returns an empty layout table with initialised maps.
 func NewLayoutTable() *LayoutTable {
 	return &LayoutTable{
-		Structs: map[string]*StructLayout{},
-		Enums:   map[string]*EnumLayout{},
-		Tuples:  map[string]*TupleLayout{},
+		Structs:    map[string]*StructLayout{},
+		Enums:      map[string]*EnumLayout{},
+		Tuples:     map[string]*TupleLayout{},
+		Interfaces: map[string]*InterfaceLayout{},
 	}
 }
 
@@ -1243,6 +1245,32 @@ type TupleLayout struct {
 	Key     string
 	Mangled string
 	Fields  []FieldLayout
+}
+
+// InterfaceLayout records one user-declared interface and the set of
+// concrete types (structs / enums) that structurally satisfy it. The
+// backend uses Methods to lay out vtable slots and Impls to generate
+// per-(impl, iface) vtable symbols (`@osty.vtable.<impl>__<iface>`).
+// Source-name method matching mirrors the legacy AST emitter — strict
+// signature matching is future work once method-signature parity lands.
+type InterfaceLayout struct {
+	Name    string
+	Methods []InterfaceMethod
+	Impls   []InterfaceImpl
+}
+
+// InterfaceMethod is one slot in an interface's method table.
+type InterfaceMethod struct {
+	Name string
+	Slot int
+}
+
+// InterfaceImpl names one concrete type satisfying an interface plus
+// the LLVM-level vtable symbol the backend emits for the (impl, iface)
+// pair.
+type InterfaceImpl struct {
+	ImplName  string
+	VtableSym string
 }
 
 // ==== Helpers for span propagation ====
