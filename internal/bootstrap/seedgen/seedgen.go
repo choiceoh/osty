@@ -10,6 +10,7 @@ import (
 	"runtime"
 
 	"github.com/osty/osty/internal/bootstrap/gen"
+	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
@@ -64,10 +65,11 @@ func Generate(cfg Config) ([]byte, error) {
 		return nil, err
 	}
 	ws.Stdlib = reg
-	if _, err := ws.LoadPackage(""); err != nil {
+	if _, err := ws.LoadPackageNative(""); err != nil {
 		return nil, err
 	}
 	results := ws.ResolveAll()
+	materializeCanonicalWorkspaceSources(ws)
 
 	pkg := ws.Packages[""]
 	if pkg == nil {
@@ -116,6 +118,23 @@ func Generate(cfg Config) ([]byte, error) {
 	}
 	out = normalizeGeneratedOutput(out)
 	return out, emitErr
+}
+
+func materializeCanonicalWorkspaceSources(ws *resolve.Workspace) {
+	if ws == nil {
+		return
+	}
+	for _, pkg := range ws.Packages {
+		if pkg == nil {
+			continue
+		}
+		for _, pf := range pkg.Files {
+			if pf == nil || pf.File == nil || len(pf.CanonicalSource) > 0 {
+				continue
+			}
+			pf.CanonicalSource, pf.CanonicalMap = canonical.SourceWithMap(pf.Source, pf.File)
+		}
+	}
 }
 
 var generatedInterpLenCall = regexp.MustCompile(

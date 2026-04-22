@@ -259,6 +259,55 @@ fn main() {
 	}
 }
 
+func TestResolveFromSourceMatchesRunDiagnosticsAndStructuredResult(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+		src  []byte
+	}{
+		{
+			name: "clean source",
+			path: "main.osty",
+			src: []byte(`fn helper(x: Int) -> Int {
+    x
+}
+
+fn main() {
+    let value = helper(1)
+}
+`),
+		},
+		{
+			name: "missing ref",
+			path: "broken.osty",
+			src: []byte(`fn main() {
+    let x = missing()
+}
+`),
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			run := selfhost.Run(tc.src)
+			wantDiags := run.Diagnostics()
+			wantResult := selfhost.ResolveStructuredFromRunForPath(run, tc.path)
+
+			selfhost.ResetAstbridgeLowerCount()
+			gotDiags, gotResult := selfhost.ResolveFromSource(tc.src, tc.path)
+			if !reflect.DeepEqual(wantDiags, gotDiags) {
+				t.Fatalf("ResolveFromSource parse diagnostics diverge\nwant=%#v\ngot=%#v", wantDiags, gotDiags)
+			}
+			if !reflect.DeepEqual(wantResult, gotResult) {
+				t.Fatalf("ResolveFromSource result diverges\nwant=%#v\ngot=%#v", wantResult, gotResult)
+			}
+			if got := selfhost.AstbridgeLowerCount(); got != 0 {
+				t.Fatalf("ResolveFromSource: AstbridgeLowerCount = %d, want 0", got)
+			}
+		})
+	}
+}
+
 func TestResolveSourceStructuredUndefinedLoopLabel(t *testing.T) {
 	resolved := selfhost.ResolveSourceStructured([]byte(`fn main() {
     for {

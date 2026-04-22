@@ -93,10 +93,9 @@ type cliFlags struct {
 	// nil-safe when the native checker was unavailable.
 	dumpNativeDiags bool
 	// native routes `check` through the self-host arena pipeline
-	// (ParseRun → CheckStructuredFromRun → CheckDiagnosticsAsDiag)
-	// instead of the Go-hosted resolve + check.File pair. The happy
-	// path never materializes *ast.File, so
-	// selfhost.AstbridgeLowerCount stays at 0 for the whole
+	// (selfhost.CheckFromSource) instead of the Go-hosted resolve +
+	// check.File pair. The happy path never materializes *ast.File,
+	// so selfhost.AstbridgeLowerCount stays at 0 for the whole
 	// subcommand. Incompatible with --inspect / --dump-native-diags,
 	// which both probe the Go check.Result shape.
 	native bool
@@ -950,13 +949,13 @@ func applyPackageFixes(pkg *resolve.Package, diags []*diag.Diagnostic, flags cli
 
 // runResolveFile is the extracted body of `osty resolve FILE`. It
 // drives the single-file resolve happy path entirely through the
-// self-host arena (ParseRun → ResolveStructuredFromRun); `run.File()`
-// — the sole astbridge entry point on this side of the compiler — is
-// only materialized lazily when a fallback needs it (printResolution
-// with no native rows, or --show-scopes). Returns the subcommand's
-// exit code: 0 on clean input, 1 when any error-severity diagnostic
-// surfaces. Extracting this keeps the subcommand body testable in-
-// process so the astbridge counter can pin the end-to-end CLI
+// self-host arena (selfhost.ResolveFromSource); the astbridge
+// *ast.File is only materialized lazily via parser.ParseDiagnostics
+// when a fallback needs it (printResolution with no native rows, or
+// --show-scopes). Returns the subcommand's exit code: 0 on clean
+// input, 1 when any error-severity diagnostic surfaces. Extracting
+// this keeps the subcommand body testable in-process so the
+// astbridge counter can pin the end-to-end CLI
 // invariant (not just the library primitives).
 // runTypecheckPackageNative is the DIR sibling of
 // runTypecheckFileNative and the typecheck sibling of
@@ -1387,13 +1386,13 @@ func runTypecheckFileLegacy(path string, src []byte, formatter *diag.Formatter, 
 }
 
 // runCheckFileNative drives `osty check --native FILE` end-to-end on
-// the self-host arena pipeline: parser.ParseRun produces the
-// FrontendRun without lowering *ast.File, selfhost.CheckStructuredFromRun
-// runs the native checker directly on the arena (arena-direct gate
-// included), and selfhost.CheckDiagnosticsAsDiag lifts the structured
-// records into the CLI's usual diag.Diagnostic shape. Zero astbridge
-// lowerings on the happy path — the counter stays at 0 throughout,
-// pinned by TestRunCheckFileNativeIsAstbridgeFree. Returns the
+// the self-host arena pipeline: selfhost.CheckFromSource parses once
+// and runs the native checker directly on the arena (arena-direct
+// gate included), and selfhost.CheckDiagnosticsAsDiag lifts the
+// structured records into the CLI's usual diag.Diagnostic shape.
+// Zero astbridge lowerings on the happy path — the counter stays at
+// 0 throughout, pinned by TestRunCheckFileNativeIsAstbridgeFree.
+// Returns the
 // subcommand's exit code (0 clean / 1 on any error-severity
 // diagnostic).
 func runCheckFileNative(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
