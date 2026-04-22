@@ -673,6 +673,24 @@ func legacyFnDeclFromIR(fn *ostyir.FnDecl, asMethod bool) (*ast.FnDecl, error) {
 			PosV: start, EndV: start, Name: "target_feature", Args: args,
 		})
 	}
+	if fn.Pure {
+		out.Annotations = append(out.Annotations, &ast.Annotation{
+			PosV: start, EndV: start, Name: "pure",
+		})
+	}
+	if fn.NoaliasAll {
+		out.Annotations = append(out.Annotations, &ast.Annotation{
+			PosV: start, EndV: start, Name: "noalias",
+		})
+	} else if len(fn.NoaliasParams) > 0 {
+		args := make([]*ast.AnnotationArg, len(fn.NoaliasParams))
+		for i, name := range fn.NoaliasParams {
+			args[i] = &ast.AnnotationArg{PosV: start, Key: name}
+		}
+		out.Annotations = append(out.Annotations, &ast.Annotation{
+			PosV: start, EndV: start, Name: "noalias", Args: args,
+		})
+	}
 	if asMethod {
 		out.Recv = &ast.Receiver{PosV: start, EndV: start, Mut: fn.ReceiverMut}
 	}

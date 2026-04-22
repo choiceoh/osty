@@ -199,7 +199,9 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 		Hot:                hasNamedAnnotation(fn.Annotations, "hot"),
 		Cold:               hasNamedAnnotation(fn.Annotations, "cold"),
 		TargetFeatures:     extractTargetFeatures(fn.Annotations),
+		Pure:               hasNamedAnnotation(fn.Annotations, "pure"),
 	}
+	out.NoaliasAll, out.NoaliasParams = extractNoaliasArgs(fn.Annotations)
 	if out.Return == nil {
 		out.Return = TUnit
 	}
@@ -242,6 +244,29 @@ func extractInlineMode(annots []*ast.Annotation) int {
 		return InlineSoft
 	}
 	return InlineNone
+}
+
+// extractNoaliasArgs reads `#[noalias]` / `#[noalias(p1, p2)]` and
+// returns (allParams, []paramName). Bare form → (true, nil).
+// Arg-list form → (false, names). Absent → (false, nil).
+func extractNoaliasArgs(annots []*ast.Annotation) (bool, []string) {
+	for _, a := range annots {
+		if a == nil || a.Name != "noalias" {
+			continue
+		}
+		if len(a.Args) == 0 {
+			return true, nil
+		}
+		names := make([]string, 0, len(a.Args))
+		for _, arg := range a.Args {
+			if arg == nil || arg.Key == "" {
+				continue
+			}
+			names = append(names, arg.Key)
+		}
+		return false, names
+	}
+	return false, nil
 }
 
 // extractTargetFeatures reads `#[target_feature(...)]` and returns

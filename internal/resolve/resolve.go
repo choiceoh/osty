@@ -508,7 +508,7 @@ func (r *resolver) checkAnnotations(annots []*ast.Annotation, target ast.Annotat
 				Code(diag.CodeUnknownAnnotation).
 				Primary(diag.Span{Start: a.PosV, End: a.EndV},
 					"this annotation name is not recognized").
-				Note("v0.4 §18.1: only `#[json]`, `#[deprecated]`, `#[allow]`, `#[cfg]`, `#[op]`, `#[test]`, `#[vectorize]`, `#[no_vectorize]`, `#[parallel]`, `#[unroll]`, `#[inline]`, `#[hot]`, `#[cold]`, `#[target_feature]`, and the runtime sublanguage annotations are permitted").
+				Note("v0.4 §18.1: only `#[json]`, `#[deprecated]`, `#[allow]`, `#[cfg]`, `#[op]`, `#[test]`, `#[vectorize]`, `#[no_vectorize]`, `#[parallel]`, `#[unroll]`, `#[inline]`, `#[hot]`, `#[cold]`, `#[target_feature]`, `#[noalias]`, `#[pure]`, and the runtime sublanguage annotations are permitted").
 				Build())
 			continue
 		}
@@ -566,10 +566,12 @@ func (r *resolver) checkAnnotationArgs(a *ast.Annotation, target ast.AnnotationT
 		r.checkUnrollArgs(a)
 	case "inline":
 		r.checkInlineArgs(a)
-	case "hot", "cold":
+	case "hot", "cold", "pure":
 		r.checkBareFlag(a)
 	case "target_feature":
 		r.checkTargetFeatureArgs(a)
+	case "noalias":
+		r.checkNoaliasArgs(a)
 	}
 }
 
@@ -870,6 +872,52 @@ func (r *resolver) checkTargetFeatureArgs(a *ast.Annotation) {
 		if seen[arg.Key] {
 			r.emit(diag.New(diag.Error,
 				fmt.Sprintf("duplicate feature `%s` in `#[target_feature(...)]`", arg.Key)).
+				Code(diag.CodeAnnotationBadArg).
+				PrimaryPos(arg.PosV, "second occurrence").
+				Build())
+			continue
+		}
+		seen[arg.Key] = true
+	}
+}
+
+// checkNoaliasArgs validates `#[noalias]` / `#[noalias(p1, p2)]`
+// (v0.6 A11). Bare form promises every pointer parameter is noalias;
+// the arg-list form names specific parameters. Each argument must be
+// a bare identifier (a parameter name); key = value shapes and
+// duplicates are rejected. The resolver does not cross-check that
+// the names match actual parameters — that check lives in the
+// emitter since it already iterates params, and keeping it out of
+// the resolver keeps the rule independent of param type analysis.
+func (r *resolver) checkNoaliasArgs(a *ast.Annotation) {
+	if len(a.Args) == 0 {
+		return
+	}
+	seen := map[string]bool{}
+	for _, arg := range a.Args {
+		if arg == nil {
+			continue
+		}
+		if arg.Key == "" {
+			r.emit(diag.New(diag.Error,
+				"`#[noalias(...)]` parameter names must be bare identifiers").
+				Code(diag.CodeAnnotationBadArg).
+				PrimaryPos(arg.PosV, "expected a parameter name").
+				Build())
+			continue
+		}
+		if arg.Value != nil && !isFlagOrTrue(arg) {
+			r.emit(diag.New(diag.Error,
+				fmt.Sprintf("parameter `%s` in `#[noalias(...)]` takes no value", arg.Key)).
+				Code(diag.CodeAnnotationBadArg).
+				PrimaryPos(arg.PosV,
+					fmt.Sprintf("expected `%s`, not `%s = ...`", arg.Key, arg.Key)).
+				Build())
+			continue
+		}
+		if seen[arg.Key] {
+			r.emit(diag.New(diag.Error,
+				fmt.Sprintf("duplicate parameter `%s` in `#[noalias(...)]`", arg.Key)).
 				Code(diag.CodeAnnotationBadArg).
 				PrimaryPos(arg.PosV, "second occurrence").
 				Build())

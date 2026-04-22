@@ -210,6 +210,22 @@ var annotationRules = map[string]AnnotationTarget{
 	// SVE without forcing the whole program onto that baseline.
 	// §3.8.9.
 	"target_feature": TargetTopLevelDecl | TargetMethod,
+	// v0.6 A11. Promise that pointer-typed parameters do not alias.
+	// Bare `#[noalias]` marks every pointer param; `#[noalias(p1, p2)]`
+	// marks only the listed params. The LLVM emitter inserts the
+	// `noalias` parameter attribute on matching params so the LLVM
+	// alias analyzer can assume the pointers point at disjoint
+	// memory — unlocks SROA, loop vectorization, and LICM that would
+	// otherwise bail on potential aliasing. §3.8.11.
+	"noalias": TargetTopLevelDecl | TargetMethod,
+	// v0.6 A13. Asserts the function has no observable side effects
+	// (no writes to memory the caller can see, no I/O, no calls to
+	// impure functions). The LLVM emitter sets the `readnone` fn
+	// attribute so callers can CSE / hoist repeated calls to the same
+	// arguments. Lenient in v0.6 — the compiler trusts the
+	// annotation; a checker-level enforcement pass is tracked under
+	// SPEC_GAPS `pure-enforce`. §3.8.12.
+	"pure": TargetTopLevelDecl | TargetMethod,
 }
 
 // IsAllowedAnnotation reports whether an annotation name is part of the

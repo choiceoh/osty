@@ -204,6 +204,19 @@ type Function struct {
 	// prefix per feature so this one function is compiled for a
 	// richer CPU baseline than the rest of the module.
 	TargetFeatures []string
+
+	// v0.6 A11. NoaliasAll is set by bare `#[noalias]`; the emitter
+	// stamps every pointer parameter with the LLVM `noalias` attr.
+	// NoaliasParams carries the explicit parameter names from
+	// `#[noalias(p1, p2)]` when the user wants fine-grained control.
+	NoaliasAll    bool
+	NoaliasParams []string
+
+	// v0.6 A13. Pure is set by `#[pure]`; the emitter attaches the
+	// `readnone` fn attribute so the caller can CSE repeated calls.
+	// Semantics are trusted by the backend and not verified by the
+	// checker in v0.6.
+	Pure bool
 }
 
 // At returns the function's source span.

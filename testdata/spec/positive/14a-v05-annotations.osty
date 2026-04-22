@@ -170,14 +170,41 @@ fn widestAVX512(n: Int) -> Int {
     acc
 }
 
+// ---- #[noalias] (v0.6 A11) ----
+
+#[noalias]
+fn addInto(dst: List<Int>, src: List<Int>) -> Int {
+    let mut acc = 0
+    for i in 0..dst.len() {
+        acc = acc + src[i]
+    }
+    acc
+}
+
+#[noalias(src)]
+fn partialNoalias(src: List<Int>, dst: List<Int>, aux: List<Int>) -> Int {
+    let mut acc = 0
+    for i in 0..src.len() {
+        acc = acc + src[i]
+    }
+    acc
+}
+
+// ---- #[pure] (v0.6 A13) ----
+
+#[pure]
+fn mixKeys(a: Int, b: Int) -> Int { a * 31 + b }
+
 // ---- full stack: loop hints + fn attrs compose ----
 
 #[inline(never)]
 #[hot]
+#[pure]
+#[noalias(xs)]
 #[target_feature(avx2)]
 #[vectorize(predicate)]
 #[unroll(count = 4)]
-fn superHot(n: Int) -> Int {
+fn superHot(xs: List<Int>, n: Int) -> Int {
     let mut acc = 0
     for i in 0..n { acc = acc ^ i }
     acc

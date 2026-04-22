@@ -201,7 +201,7 @@ func newMIRGen(m *mir.Module, opts Options) *mirGen {
 // TargetFeatures. Shared across MIR and HIR emitters via the legacy
 // bridge's reified annotation list on the HIR side.
 func formatFnAttrs(fn *mir.Function) string {
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 5)
 	switch fn.InlineMode {
 	case 1: // InlineSoft
 		parts = append(parts, "inlinehint")
@@ -215,6 +215,11 @@ func formatFnAttrs(fn *mir.Function) string {
 	}
 	if fn.Cold {
 		parts = append(parts, "cold")
+	}
+	if fn.Pure {
+		// v0.6 A13 `#[pure]` → LLVM `readnone`: function reads no
+		// memory and has no side effects. Enables caller-side CSE.
+		parts = append(parts, "readnone")
 	}
 	if len(fn.TargetFeatures) > 0 {
 		prefixed := make([]string, len(fn.TargetFeatures))
@@ -230,6 +235,44 @@ func formatFnAttrs(fn *mir.Function) string {
 			fmt.Sprintf(`"target-features"="%s"`, strings.Join(prefixed, ",")))
 	}
 	return strings.Join(parts, " ")
+}
+
+// noaliasNameSet builds a lookup set of parameter names that should
+// receive the LLVM `noalias` attribute. Bare `#[noalias]` is encoded
+// as NoaliasAll, producing a nil set that the per-param check treats
+// as "yes for every pointer param". The explicit list form produces
+// a populated set and the all-flag is false.
+func noaliasNameSet(fn *mir.Function) map[string]struct{} {
+	if fn.NoaliasAll || len(fn.NoaliasParams) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(fn.NoaliasParams))
+	for _, n := range fn.NoaliasParams {
+		set[n] = struct{}{}
+	}
+	return set
+}
+
+// paramIsNoalias decides whether a single parameter should receive
+// the `noalias` attribute on the LLVM signature line. LLVM rejects
+// the attribute on non-pointer types, so we gate on the LLVM-level
+// type being `ptr`. The lookup uses the parameter's source-level
+// name (from mir.Local.Name), not the emitted `%argN` symbol.
+func paramIsNoalias(fn *mir.Function, loc *mir.Local, llvmT string, names map[string]struct{}) bool {
+	if llvmT != "ptr" {
+		return false
+	}
+	if fn.NoaliasAll {
+		return true
+	}
+	if names == nil {
+		return false
+	}
+	if loc == nil {
+		return false
+	}
+	_, ok := names[loc.Name]
+	return ok
 }
 
 func firstNonEmpty(xs ...string) string {
@@ -1017,6 +1060,12 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 
 	// Signature line.
 	sig := g.functionTypes[fn.Name]
+	// v0.6 A11: decide per-param whether the `noalias` attribute
+	// applies. Bare `#[noalias]` stamps every pointer param;
+	// `#[noalias(p1, p2)]` stamps only the named ones. Non-pointer
+	// params (i64, double, etc.) ignore the attribute — LLVM rejects
+	// `noalias` on non-pointer types.
+	noaliasNames := noaliasNameSet(fn)
 	g.fnBuf.WriteString("define ")
 	g.fnBuf.WriteString(cconv)
 	g.fnBuf.WriteString(sig.retLLVM)
@@ -1028,7 +1077,11 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 			g.fnBuf.WriteString(", ")
 		}
 		loc := fn.Local(pid)
-		g.fnBuf.WriteString(g.llvmType(loc.Type))
+		llvmT := g.llvmType(loc.Type)
+		g.fnBuf.WriteString(llvmT)
+		if paramIsNoalias(fn, loc, llvmT, noaliasNames) {
+			g.fnBuf.WriteString(" noalias")
+		}
 		g.fnBuf.WriteString(" %arg")
 		g.fnBuf.WriteString(strconv.Itoa(i))
 	}

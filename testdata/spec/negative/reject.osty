@@ -221,6 +221,21 @@ pub fn wide(n: Int) -> Int { n }
 pub fn wide(n: Int) -> Int { n }
 // === END
 
+// === CASE: E0739 === #[noalias(...)] rejects key=value form
+#[noalias(xs = 1)]
+pub fn hot(xs: List<Int>) -> Int { 0 }
+// === END
+
+// === CASE: E0739 === #[noalias(...)] rejects duplicate param names
+#[noalias(xs, xs)]
+pub fn hot(xs: List<Int>) -> Int { 0 }
+// === END
+
+// === CASE: E0739 === #[pure] takes no arguments
+#[pure(strict)]
+pub fn hash(a: Int, b: Int) -> Int { a + b }
+// === END
+
 // === CASE: E0004 === unterminated block comment (MUST remain last — the
 // unclosed /* is intentional and swallows every byte to EOF).
 /* never closes

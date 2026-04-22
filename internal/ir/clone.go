@@ -237,6 +237,9 @@ func cloneFnDecl(fn *FnDecl) *FnDecl {
 		Hot:                fn.Hot,
 		Cold:               fn.Cold,
 		TargetFeatures:     append([]string(nil), fn.TargetFeatures...),
+		NoaliasAll:         fn.NoaliasAll,
+		NoaliasParams:      append([]string(nil), fn.NoaliasParams...),
+		Pure:               fn.Pure,
 	}
 	if len(fn.Params) > 0 {
 		out.Params = make([]*Param, len(fn.Params))

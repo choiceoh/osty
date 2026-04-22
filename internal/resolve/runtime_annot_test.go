@@ -656,6 +656,102 @@ pub fn hot() -> Int { 1 }
 	}
 }
 
+// --- #[noalias] (v0.6 A11) ---
+
+func TestNoaliasAcceptsBareFlag(t *testing.T) {
+	src := `
+#[noalias]
+pub fn copy(xs: List<Int>, ys: List<Int>) -> Int { 0 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on bare #[noalias], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestNoaliasAcceptsParamList(t *testing.T) {
+	src := `
+#[noalias(xs, ys)]
+pub fn copy(xs: List<Int>, ys: List<Int>) -> Int { 0 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on #[noalias(xs, ys)], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestNoaliasRejectsKeyValue(t *testing.T) {
+	src := `
+#[noalias(xs = 1)]
+pub fn copy(xs: List<Int>) -> Int { 0 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on key=value noalias, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestNoaliasRejectsDuplicate(t *testing.T) {
+	src := `
+#[noalias(xs, xs)]
+pub fn copy(xs: List<Int>) -> Int { 0 }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on duplicate param, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestNoaliasRejectsOnField(t *testing.T) {
+	src := `
+pub struct Bad {
+    #[noalias]
+    pub xs: List<Int>,
+}
+`
+	if got := countBadTarget(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0607 on noalias-on-field, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+// --- #[pure] (v0.6 A13) ---
+
+func TestPureAcceptsBareFlag(t *testing.T) {
+	src := `
+#[pure]
+pub fn hash(a: Int, b: Int) -> Int { a * 31 + b }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 0 {
+		t.Fatalf("expected 0 E0739 on bare #[pure], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestPureRejectsArgs(t *testing.T) {
+	src := `
+#[pure(strict)]
+pub fn hash(a: Int, b: Int) -> Int { a * 31 + b }
+`
+	if got := countArgBad(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0739 on #[pure(...)], got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
+func TestPureRejectsOnField(t *testing.T) {
+	src := `
+pub struct Bad {
+    #[pure]
+    pub n: Int,
+}
+`
+	if got := countBadTarget(runAnnotArgs(t, src)); got != 1 {
+		t.Fatalf("expected 1 E0607 on pure-on-field, got %d:\n%s",
+			got, renderDiags(runAnnotArgs(t, src)))
+	}
+}
+
 // --- combined: full canonical runtime annotation stack ---
 
 func TestCanonicalRuntimeStackValidates(t *testing.T) {

@@ -118,14 +118,19 @@ type generator struct {
 	unrollHint             bool
 	unrollCount            int
 	parallelAccessGroupRef string // `!N` for the per-function access group; "" when `#[parallel]` not set
-	// v0.6 A8/A9/A10: function-level LLVM attribute state, also
-	// populated by readLoopHints. Consumed by renderFunction when
-	// assembling the `define` line. Same semantics as the matching
-	// mir.Function fields.
+	// v0.6 A8/A9/A10/A11/A13: function-level LLVM attribute state,
+	// also populated by readLoopHints. Consumed by renderFunction
+	// when assembling the `define` line. Same semantics as the
+	// matching mir.Function fields. A11 noalias lives here too even
+	// though it attaches to parameters rather than the fn itself —
+	// renderFunction needs both pieces when rewriting the signature.
 	inlineMode     int
 	hotHint        bool
 	coldHint       bool
+	pureHint       bool
 	targetFeatures []string
+	noaliasAll     bool
+	noaliasParams  []string
 	// loopMDDefs accumulates the module-level metadata node
 	// definitions that loop hints attach to. Module-scoped so IDs stay
 	// unique across all loops and access groups in the translation
@@ -217,7 +222,10 @@ func (g *generator) beginFunction() {
 	g.inlineMode = 0
 	g.hotHint = false
 	g.coldHint = false
+	g.pureHint = false
 	g.targetFeatures = nil
+	g.noaliasAll = false
+	g.noaliasParams = nil
 }
 
 // attachVectorizeMD rewrites the most recently emitted `br label %cond`
@@ -770,16 +778,72 @@ func (g *generator) renderFunction(ret, name string, params []paramInfo) string 
 		body = tagParallelAccessesLines(body, g.parallelAccessGroupRef)
 	}
 	rendered := llvmRenderFunction(ret, name, toLLVMParams(params), body)
-	// v0.6 A8/A9/A10: splice function-level LLVM attributes between
-	// the closing paren of the param list and the `{` that opens the
-	// body. llvmRenderFunction is an Osty-generated helper that we do
-	// not want to modify in-place, so we rewrite its first line
-	// instead — much cheaper than threading the attribute set
+	// v0.6 A8/A9/A10/A13: splice function-level LLVM attributes
+	// between the closing paren of the param list and the `{` that
+	// opens the body. llvmRenderFunction is an Osty-generated helper
+	// that we do not want to modify in-place, so we rewrite its first
+	// line instead — much cheaper than threading the attribute set
 	// through every call site of renderFunction.
 	if attrs := g.formatFnAttrs(); attrs != "" {
 		rendered = spliceFnAttrs(rendered, attrs)
 	}
+	// v0.6 A11: `noalias` attaches to individual ptr params, so the
+	// splice target is inside the param list rather than after it.
+	if g.noaliasAll || len(g.noaliasParams) > 0 {
+		rendered = spliceNoaliasParams(rendered, params, g.noaliasAll, g.noaliasParams)
+	}
 	return rendered
+}
+
+// spliceNoaliasParams rewrites the first `define ... (<params>) {`
+// line in rendered IR so that pointer parameters selected by the v0.6
+// A11 `#[noalias]` rules carry the LLVM `noalias` parameter attribute.
+// Non-pointer params and non-matching names are passed through
+// unchanged. The rewrite only touches the signature line — every
+// subsequent body line with parens is left alone.
+func spliceNoaliasParams(rendered string, params []paramInfo, all bool, names []string) string {
+	nameSet := map[string]bool{}
+	for _, n := range names {
+		nameSet[n] = true
+	}
+	lineEnd := strings.IndexByte(rendered, '\n')
+	if lineEnd < 0 {
+		return rendered
+	}
+	line := rendered[:lineEnd]
+	rest := rendered[lineEnd:]
+	openParen := strings.IndexByte(line, '(')
+	closeParen := strings.LastIndexByte(line, ')')
+	if openParen < 0 || closeParen < 0 || closeParen <= openParen {
+		return rendered
+	}
+	prefix := line[:openParen+1]
+	suffix := line[closeParen:]
+	inner := line[openParen+1 : closeParen]
+	if inner == "" {
+		return rendered
+	}
+	pieces := strings.Split(inner, ", ")
+	for i, piece := range pieces {
+		if i >= len(params) {
+			break
+		}
+		if params[i].typ != "ptr" {
+			continue
+		}
+		if !all && !nameSet[params[i].name] {
+			continue
+		}
+		// `piece` looks like "ptr %name" — insert `noalias` between
+		// the type and the register name. Defensive: if the shape is
+		// unexpected we leave the piece intact.
+		parts := strings.SplitN(piece, " ", 2)
+		if len(parts) != 2 || parts[0] != "ptr" {
+			continue
+		}
+		pieces[i] = "ptr noalias " + parts[1]
+	}
+	return prefix + strings.Join(pieces, ", ") + suffix + rest
 }
 
 // formatFnAttrs assembles the function-level LLVM attribute string
@@ -802,6 +866,9 @@ func (g *generator) formatFnAttrs() string {
 	}
 	if g.coldHint {
 		parts = append(parts, "cold")
+	}
+	if g.pureHint {
+		parts = append(parts, "readnone")
 	}
 	if len(g.targetFeatures) > 0 {
 		prefixed := make([]string, len(g.targetFeatures))

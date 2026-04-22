@@ -1340,6 +1340,21 @@ func (g *generator) readLoopHints(decl *ast.FnDecl) {
 			g.targetFeatures = append(g.targetFeatures, arg.Key)
 		}
 	}
+	if fnHasAnnotation(decl, "pure") {
+		g.pureHint = true
+	}
+	if na := fnFindAnnotation(decl, "noalias"); na != nil {
+		if len(na.Args) == 0 {
+			g.noaliasAll = true
+		} else {
+			for _, arg := range na.Args {
+				if arg == nil || arg.Key == "" {
+					continue
+				}
+				g.noaliasParams = append(g.noaliasParams, arg.Key)
+			}
+		}
+	}
 }
 
 func (g *generator) emitUserFunction(sig *fnSig) (string, error) {

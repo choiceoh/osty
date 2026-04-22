@@ -425,6 +425,8 @@ mechanism. The complete set is:
 | `#[inline]` / `#[inline(always)]` / `#[inline(never)]` | top-level `fn` declarations, struct/enum methods | LLVM `inlinehint` / `alwaysinline` / `noinline` fn attribute (v0.6 A8) |
 | `#[hot]` / `#[cold]` | top-level `fn` declarations, struct/enum methods | LLVM `hot` / `cold` fn attribute + `.text.hot` / `.text.unlikely` section placement (v0.6 A9) |
 | `#[target_feature(f1, f2, ...)]` | top-level `fn` declarations, struct/enum methods | LLVM `"target-features"="+f1,+f2"` fn attribute — per-function CPU feature override (v0.6 A10) |
+| `#[noalias]` / `#[noalias(p1, p2)]` | top-level `fn` declarations, struct/enum methods | Promise pointer params do not alias — emits LLVM `noalias` param attr (v0.6 A11) |
+| `#[pure]` | top-level `fn` declarations, struct/enum methods | Assert no side effects — emits LLVM `readnone` fn attr, unlocks CSE/hoisting (v0.6 A13) |
 
 **Runtime-only annotations** (privileged packages only — see §19.2 and §19.6).
 
@@ -805,7 +807,91 @@ a warning at compile time — the resolver does not maintain a
 per-target feature allowlist because it would need to evolve with
 every LLVM release.
 
-#### 3.8.10 Positioning Rules
+#### 3.8.10 `#[noalias]`
+
+Valid on top-level `fn` declarations and on struct/enum methods.
+Status: **v0.6 A11**. Promises pointer-typed parameters do not alias.
+
+| Form | Effect |
+|---|---|
+| `#[noalias]` | Every `ptr`-typed parameter of this function gets the LLVM `noalias` parameter attribute |
+| `#[noalias(p1, p2)]` | Only the named parameters get `noalias`; other pointer params stay potentially-aliasing |
+
+Non-pointer parameters (Int, Bool, Float, ...) are silently skipped —
+LLVM rejects `noalias` on non-pointer types.
+
+**Why it matters.** LLVM's alias analyzer conservatively assumes two
+pointer parameters can point at overlapping memory, which blocks
+SROA, LICM, loop vectorization, and any transform that would reorder
+loads and stores across the two. `noalias` tells the analyzer "these
+pointers point at disjoint regions" and unlocks the full suite of
+memory-dependency-based optimizations.
+
+```osty
+// Bare — the two slices are disjoint buffers.
+#[noalias]
+pub fn addInto(dst: List<Int>, src: List<Int>) {
+    for i in 0..dst.len() {
+        dst[i] = dst[i] + src[i]
+    }
+}
+
+// Surgical — only `src` is guaranteed disjoint; `dst` and `scratch`
+// may alias (e.g., they point into the same arena).
+#[noalias(src)]
+pub fn combine(src: List<Int>, dst: List<Int>, scratch: List<Int>) {
+    for i in 0..src.len() {
+        dst[i] = src[i] + scratch[i]
+    }
+}
+```
+
+**Soundness is the programmer's responsibility.** Calling a
+`#[noalias]` function with aliasing pointers is undefined behavior
+at the LLVM optimization level — the backend is free to reorder
+loads/stores in ways that would be illegal under true aliasing.
+Unlike `#[parallel]`, which is coarser (whole-loop), `#[noalias]`
+scopes the promise to specific parameters and survives across
+inlining and LTO.
+
+Unknown keys, `key = value` shapes, and duplicate parameter names
+are rejected with `E0739`.
+
+#### 3.8.11 `#[pure]`
+
+Valid on top-level `fn` declarations and on struct/enum methods.
+Bare flag. Status: **v0.6 A13** (lenient — the compiler trusts the
+annotation; see SPEC_GAPS `pure-enforce`).
+
+Asserts the function has no observable side effects: no writes to
+memory the caller can see, no I/O, no calls to impure functions.
+The LLVM emitter sets the `readnone` fn attribute, which lets the
+optimizer:
+
+- **CSE** repeated calls with the same arguments — multiple
+  `f(a, b)` invocations collapse to one.
+- **Hoist** calls out of loops when their arguments are loop-
+  invariant.
+- **Inline aggressively** since there are no side-effect ordering
+  constraints to preserve.
+- **Dead-call elimination** if the return value is unused.
+
+```osty
+#[pure]
+pub fn mixKeys(a: Int, b: Int) -> Int { a * 31 + b }
+```
+
+**Soundness is the programmer's responsibility.** The v0.6 compiler
+does not verify that the annotated body is actually pure. A
+`#[pure]` function that mutates shared state or performs I/O is
+undefined behavior — the optimizer will drop, reorder, or duplicate
+calls in ways that expose the lie. A future release will add a
+checker pass that rejects non-pure bodies; the work is tracked under
+SPEC_GAPS `pure-enforce`.
+
+Any argument is rejected with `E0739`.
+
+#### 3.8.12 Positioning Rules
 
 - Annotations may appear only before a named declaration. They cannot
   be attached to:

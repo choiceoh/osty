@@ -418,6 +418,23 @@ type FnDecl struct {
 	// emitter renders them as `target-features="+f1,+f2"` with a `+`
 	// prefix per feature. Empty means "inherit module default".
 	TargetFeatures []string
+	// NoaliasAll is set by bare `#[noalias]` (v0.6 A11). When true,
+	// every pointer-typed parameter receives the LLVM `noalias`
+	// parameter attribute.
+	NoaliasAll bool
+	// NoaliasParams carries the explicit parameter name list from
+	// `#[noalias(p1, p2)]`. When non-empty, only the named pointer
+	// parameters get the `noalias` attribute; other pointer params
+	// stay potentially-aliasing. Mutually exclusive in practice with
+	// NoaliasAll (the resolver treats bare `#[noalias]` as the
+	// all-params form and the list form as surgical).
+	NoaliasParams []string
+	// Pure is set by `#[pure]` (v0.6 A13). The LLVM emitter attaches
+	// the `readnone` fn attribute so callers can CSE repeated calls
+	// with the same arguments. v0.6 trusts the annotation; a checker
+	// pass that verifies absence of side effects is open work tracked
+	// under SPEC_GAPS `pure-enforce`.
+	Pure bool
 }
 
 // Inline-hint enum values for FnDecl.InlineMode. Exported so
