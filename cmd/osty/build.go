@@ -231,8 +231,8 @@ func isOstySource(name string) bool {
 
 // countLowerableFiles reports how many of pkg.Files actually carry a
 // parsed AST. PackageFile entries with a nil File slip through resolve
-// when parse fails fatally; ir.LowerPackage skips them, so we count the
-// same predicate when deciding between PrepareEntry and PreparePackage.
+// when parse fails fatally; ir.LowerPackage skips them, and the gen path
+// uses the same predicate to decide whether package lowering is viable.
 func countLowerableFiles(pkg *resolve.Package) int {
 	if pkg == nil {
 		return 0
@@ -524,23 +524,8 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 			}
 		}
 	}
-	// Package lowering is the default live build path; only degenerate
-	// empty-package callers fall back to a direct single-file entry.
-	var (
-		entry    backend.Entry
-		entryErr error
-	)
-	if pkg != nil && countLowerableFiles(pkg) > 0 {
-		entry, entryErr = backend.PreparePackage("main", entryAbs, pkg, entryFile, chk)
-	} else {
-		res := &resolve.Result{
-			Refs:      entryFile.Refs,
-			TypeRefs:  entryFile.TypeRefs,
-			FileScope: entryFile.FileScope,
-		}
-		entry, entryErr = backend.PrepareEntry("main", entryAbs, entryFile.File, res, chk)
-	}
-	if err := entryErr; err != nil {
+	entry, err := backend.PreparePackage("main", entryAbs, pkg, entryFile, chk)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
 		os.Exit(1)
 	}

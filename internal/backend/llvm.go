@@ -167,11 +167,9 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	// backend does not consume directly any more.
 	//
 	// After the native-owned fast path declines coverage, raw `llvm-ir`
-	// still prefers MIR by default. Requests can opt back into the
-	// legacy HIR→AST bridge with `legacy-llvmgen`, or force MIR on every
-	// emit mode with `mir-backend`. On MIR-emitter refusal we still fall
-	// back automatically, so enabling the new path cannot reduce
-	// coverage.
+	// still prefers MIR by default, and `mir-backend` can force MIR on
+	// every emit mode. On MIR-emitter refusal we still fall back
+	// automatically, so enabling the new path cannot reduce coverage.
 	var (
 		irOut  []byte
 		genErr error
@@ -269,38 +267,24 @@ func runClang(ctx context.Context, action string, args []string) error {
 	return fmt.Errorf("%s: %w", llvmgen.ClangFailureMessage(action, command, msg), err)
 }
 
-// featureEnabled reports whether `name` appears in the features
-// slice.
-func featureEnabled(features []string, name string) bool {
-	for _, f := range features {
-		if f == name {
-			return true
-		}
-	}
-	return false
-}
-
 // useMIRBackend reports whether LLVM emission should prefer the
 // MIR-direct path. Raw `llvm-ir` emission is MIR-first by default;
-// callers can opt back into the legacy HIR→AST bridge with the
-// `legacy-llvmgen` feature, or opt further in on object/binary
-// emission with `mir-backend` while parity stabilizes.
+// callers can opt further in on object/binary emission with
+// `mir-backend` while parity stabilizes.
 func useMIRBackend(features []string, emit EmitMode) bool {
-	if featureEnabled(features, "legacy-llvmgen") {
-		return false
-	}
-	if featureEnabled(features, "mir-backend") {
-		return true
+	for _, f := range features {
+		if f == "mir-backend" {
+			return true
+		}
 	}
 	return emit == EmitLLVMIR
 }
 
 func useNativeOwnedLLVMIR(features []string, emit EmitMode) bool {
-	if featureEnabled(features, "legacy-llvmgen") {
-		return false
-	}
-	if featureEnabled(features, "mir-backend") {
-		return false
+	for _, f := range features {
+		if f == "mir-backend" {
+			return false
+		}
 	}
 	switch emit {
 	case EmitLLVMIR, EmitObject, EmitBinary:

@@ -713,10 +713,9 @@ MIR tests isolated from front-end churn.
   - **Dispatcher gate.** `llvmgen.Options.UseMIR` selects the path.
     The backend dispatcher (`internal/backend/llvm.go`) now prefers
     `GenerateFromMIR(entry.MIR, opts)` by default on raw `llvm-ir`
-    emission, lets requests opt back into the legacy bridge with the
-    `legacy-llvmgen` feature, and still allows explicit opt-in on
-    object/binary emission via `mir-backend`. On `ErrUnsupported` the
-    dispatcher catches the sentinel and falls back to
+    emission, and still allows explicit opt-in on object/binary
+    emission via `mir-backend`. On `ErrUnsupported` the dispatcher
+    catches the sentinel and falls back to
     `GenerateModule(entry.IR, opts)` automatically, so coverage
     regressions are impossible while parity lands.
   - **MVP coverage.** Primitive types (Int / UInt / Byte / Bool /
@@ -917,10 +916,9 @@ MIR tests isolated from front-end churn.
 
 - **Stage 4 (partially landed — MIR-first IR emission).** The LLVM
   backend now prefers the MIR-direct emitter by default for raw
-  `llvm-ir` output. The legacy HIR→AST bridge remains callable under
-  the `legacy-llvmgen` feature, object/binary emission can still opt in
-  explicitly with `mir-backend`, and the dispatcher falls back
-  automatically on `ErrUnsupported`.
+  `llvm-ir` output. Object/binary emission can still opt in explicitly
+  with `mir-backend`, and the dispatcher falls back automatically on
+  `ErrUnsupported`.
 
 - **Stage 3.9 (landed — concurrency intrinsic runtime mapping).**
   All MIR concurrency intrinsics emitted by the MIR lowerer now
