@@ -2859,11 +2859,101 @@ pub fn mirLowerCallExprInto(
         return
     }
     let callee = e.callCallee[0]
-    // Ident callee paths
+    // 1. Concurrency intrinsic fast path for prelude-visible names
+    //    (`taskGroup`, `parallel`, `race`, `collectAll`).
+    if callee.kind == HirExprIdent {
+        let ck = mirLowerConcurrencyIntrinsicForFree("", callee.identName)
+        match ck {
+            MirIntrinsicInvalid -> {},
+            _ -> {
+                mirLowerEmitConcurrencyIntrinsic(bs, ck, e.callArgs, dest, destT, span)
+                return
+            },
+        }
+    }
+    // 2. Use-alias qualified call: `thread.spawn(f)`, `std.runtime.raw.null()`,
+    //    `strings.split(s, ",")`. Only triggers on FieldExpr callees
+    //    whose receiver is a bare Ident aliasing an imported use decl.
+    if callee.kind == HirExprField && !callee.fieldOptional {
+        if mirLowerCallExprQualifiedIntrinsic(bs, e, callee, dest, destT, span) {
+            return
+        }
+    }
+    // 3. Ident fallback path (direct fn, indirect call, variant ctor).
     match callee.kind {
         HirExprIdent -> mirLowerCallIdent(bs, e, callee, dest, destT, span),
         _ -> mirLowerCallUnsupported(bs, e, dest, destT, span, "non-ident callee"),
     }
+}
+
+/// mirLowerCallExprQualifiedIntrinsic handles `pkg.fn(args)` shaped
+/// as a CallExpr with a FieldExpr callee. Returns `true` when an
+/// intrinsic matched and the call has been emitted; `false` otherwise
+/// so the main dispatcher can continue routing.
+fn mirLowerCallExprQualifiedIntrinsic(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    callee: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) -> Bool {
+    if callee.fieldTarget.len() == 0 {
+        return false
+    }
+    let recv = callee.fieldTarget[0]
+    let useIdx = mirLowerUseAliasIndexForReceiver(bs.l, recv)
+    if useIdx < 0 {
+        return false
+    }
+    let use_ = bs.l.useAliases[useIdx]
+    let qualifier = mirLowerUseQualifier(use_)
+    let name = callee.fieldName
+    // Concurrency intrinsic (thread-namespaced).
+    let ck = mirLowerConcurrencyIntrinsicForFree(qualifier, name)
+    match ck {
+        MirIntrinsicInvalid -> {},
+        _ -> {
+            mirLowerEmitConcurrencyIntrinsic(bs, ck, e.callArgs, dest, destT, span)
+            return true
+        },
+    }
+    // Runtime sublanguage intrinsic (std.runtime.raw.null).
+    let rk = mirLowerRuntimeIntrinsicForFree(qualifier, name)
+    match rk {
+        MirIntrinsicInvalid -> {},
+        _ -> {
+            mirLowerEmitRuntimeIntrinsic(bs, rk, e.callArgs, dest, destT, span)
+            return true
+        },
+    }
+    // Stdlib strings free-fn — `std.strings.NAME(s, ...)` routes to
+    // the String method intrinsic of the same name.
+    let sk = mirLowerStdlibStringFreeFnToIntrinsic(qualifier, name)
+    match sk {
+        MirIntrinsicInvalid -> {},
+        _ -> {
+            mirLowerEmitStringFreeFnIntrinsic(bs, sk, e.callArgs, dest, destT, span)
+            return true
+        },
+    }
+    false
+}
+
+/// mirLowerUseQualifier returns the qualifier string that the
+/// intrinsic tables key on. FFI use decls prefer `goPath` /
+/// `runtimePath`; plain imports use the alias (fallback to rawPath).
+fn mirLowerUseQualifier(use_: HirUseDecl) -> String {
+    if use_.isGoFFI && use_.goPath != "" {
+        return use_.goPath
+    }
+    if use_.isRuntimeFFI && use_.runtimePath != "" {
+        return use_.runtimePath
+    }
+    if use_.alias != "" {
+        return use_.alias
+    }
+    use_.rawPath
 }
 
 fn mirLowerCallIdent(
@@ -3858,13 +3948,81 @@ pub fn mirLowerMethodCallInto(
         return
     }
     let recv = e.methodReceiver[0]
-    // 1. Use-alias qualifier fast path.
+    // 1. Use-alias qualifier fast path. Before routing through a
+    //    direct FnRef, probe the intrinsic tables: `thread.spawn(f)`,
+    //    `std.strings.split(s, ",")`, `std.runtime.raw.null()`.
     let useIdx = mirLowerUseAliasIndexForReceiver(bs.l, recv)
     if useIdx >= 0 {
-        mirLowerMethodCallQualified(bs, e, bs.l.useAliases[useIdx], dest, destT, span)
+        let use_ = bs.l.useAliases[useIdx]
+        let qualifier = mirLowerUseQualifier(use_)
+        let ck = mirLowerConcurrencyIntrinsicForFree(qualifier, e.methodName)
+        match ck {
+            MirIntrinsicInvalid -> {},
+            _ -> {
+                mirLowerEmitConcurrencyIntrinsic(bs, ck, e.methodArgs, dest, destT, span)
+                return
+            },
+        }
+        let rk = mirLowerRuntimeIntrinsicForFree(qualifier, e.methodName)
+        match rk {
+            MirIntrinsicInvalid -> {},
+            _ -> {
+                mirLowerEmitRuntimeIntrinsic(bs, rk, e.methodArgs, dest, destT, span)
+                return
+            },
+        }
+        let sk = mirLowerStdlibStringFreeFnToIntrinsic(qualifier, e.methodName)
+        match sk {
+            MirIntrinsicInvalid -> {},
+            _ -> {
+                mirLowerEmitStringFreeFnIntrinsic(bs, sk, e.methodArgs, dest, destT, span)
+                return
+            },
+        }
+        mirLowerMethodCallQualified(bs, e, use_, dest, destT, span)
         return
     }
-    // 2/3. Regular method call.
+    // 2. Concurrency method intrinsic (ch.recv() / h.join() /
+    //    g.spawn(f) etc.) on runtime-owned receiver types.
+    let concKind = mirLowerConcurrencyIntrinsicForMethod(recv.typ, e.methodName)
+    match concKind {
+        MirIntrinsicInvalid -> {},
+        _ -> {
+            mirLowerEmitMethodIntrinsic(
+                bs,
+                concKind,
+                recv,
+                e.methodArgs,
+                dest,
+                destT,
+                span,
+                mirLowerIsVoidConcurrencyIntrinsic(concKind),
+            )
+            return
+        },
+    }
+    // 3. Stdlib method intrinsic (List/Map/Set/String/Bytes/Option/
+    //    Result). Runs after concurrency so primitive-name collisions
+    //    (`close`, etc.) stay unambiguous.
+    let stdKind = mirLowerStdlibIntrinsicForMethod(recv.typ, e.methodName)
+    match stdKind {
+        MirIntrinsicInvalid -> {},
+        _ -> {
+            mirLowerEmitMethodIntrinsic(
+                bs,
+                stdKind,
+                recv,
+                e.methodArgs,
+                dest,
+                destT,
+                span,
+                mirLowerIsVoidStdlibIntrinsic(stdKind),
+            )
+            return
+        },
+    }
+    // 4/5. Regular method call (user-defined signature or mangled
+    //      fallback).
     mirLowerMethodCallUser(bs, e, recv, dest, destT, span)
 }
 
@@ -4056,4 +4214,356 @@ pub fn mirLowerMapLitInto(
         )
         mirLowerEmitInstr(bs, setInstr)
     }
+}
+
+// ====================================================================
+// Stage 4e-4: Intrinsic dispatch tables
+// ====================================================================
+//
+// These mirror Go's concurrencyIntrinsicForFree /
+// concurrencyIntrinsicForMethod / runtimeIntrinsicForFree /
+// stdlibIntrinsicForMethod / stringIntrinsicForMethod /
+// bytesIntrinsicForMethod / stdlibStringFreeFnToIntrinsic tables
+// verbatim — the LLVM emitter and the self-host lowerer depend on
+// matching dispatch so toolchain-wide behaviour stays identical.
+//
+// Invalid / unmapped inputs return MirIntrinsicInvalid; callers check
+// for invalid and fall through to the normal call-emission path.
+
+// ---- Concurrency (free functions) ---------------------------------
+
+/// mirLowerConcurrencyIntrinsicForFree maps a prelude / thread-
+/// namespaced top-level function name to a MIR concurrency intrinsic.
+/// `qualifier` is the `use`-level prefix (e.g. "thread", "std.thread")
+/// for package-qualified calls, or "" for prelude-visible names.
+pub fn mirLowerConcurrencyIntrinsicForFree(qualifier: String, name: String) -> MirIntrinsicKind {
+    let threadNs = qualifier == "thread" || qualifier == "std.thread"
+    let preludeOnly = qualifier == ""
+    if preludeOnly {
+        if name == "taskGroup" { return MirIntrinsicTaskGroup }
+        if name == "parallel" { return MirIntrinsicParallel }
+        if name == "race" { return MirIntrinsicRace }
+        if name == "collectAll" { return MirIntrinsicCollectAll }
+    }
+    if threadNs {
+        if name == "race" { return MirIntrinsicRace }
+        if name == "collectAll" { return MirIntrinsicCollectAll }
+        if name == "spawn" { return MirIntrinsicSpawn }
+        if name == "chan" { return MirIntrinsicChanMake }
+        if name == "select" { return MirIntrinsicSelect }
+        if name == "isCancelled" { return MirIntrinsicIsCancelled }
+        if name == "checkCancelled" { return MirIntrinsicCheckCancelled }
+        if name == "yield" { return MirIntrinsicYield }
+        if name == "sleep" { return MirIntrinsicSleep }
+    }
+    MirIntrinsicInvalid
+}
+
+/// mirLowerConcurrencyIntrinsicForMethod maps a (receiver type,
+/// method name) pair to a MIR concurrency intrinsic. Used for method
+/// syntax on runtime-owned concurrency types (Channel, Handle,
+/// Group/TaskGroup, Select).
+pub fn mirLowerConcurrencyIntrinsicForMethod(
+    receiverT: HirType,
+    name: String,
+) -> MirIntrinsicKind {
+    let recv = hirTypeNameOf(receiverT)
+    if recv == "Channel" {
+        if name == "recv" { return MirIntrinsicChanRecv }
+        if name == "close" { return MirIntrinsicChanClose }
+        if name == "isClosed" { return MirIntrinsicChanIsClosed }
+    }
+    if recv == "Handle" {
+        if name == "join" { return MirIntrinsicHandleJoin }
+    }
+    if recv == "Group" || recv == "TaskGroup" {
+        if name == "spawn" { return MirIntrinsicSpawn }
+        if name == "cancel" { return MirIntrinsicGroupCancel }
+        if name == "isCancelled" { return MirIntrinsicGroupIsCancelled }
+    }
+    if recv == "Select" {
+        if name == "recv" { return MirIntrinsicSelectRecv }
+        if name == "send" { return MirIntrinsicSelectSend }
+        if name == "timeout" { return MirIntrinsicSelectTimeout }
+        if name == "default" { return MirIntrinsicSelectDefault }
+    }
+    MirIntrinsicInvalid
+}
+
+/// mirLowerIsVoidConcurrencyIntrinsic reports whether an intrinsic
+/// produces no MIR-visible value. Used so calls in expression
+/// position do not carry a stale dest.
+pub fn mirLowerIsVoidConcurrencyIntrinsic(k: MirIntrinsicKind) -> Bool {
+    match k {
+        MirIntrinsicChanSend -> true,
+        MirIntrinsicChanClose -> true,
+        MirIntrinsicGroupCancel -> true,
+        MirIntrinsicYield -> true,
+        MirIntrinsicSelectRecv -> true,
+        MirIntrinsicSelectSend -> true,
+        MirIntrinsicSelectTimeout -> true,
+        MirIntrinsicSelectDefault -> true,
+        _ -> false,
+    }
+}
+
+// ---- Runtime (std.runtime.raw) ------------------------------------
+
+/// mirLowerRuntimeIntrinsicForFree maps a §19 runtime sublanguage
+/// free function name to a MIR intrinsic. Only `std.runtime.raw.null`
+/// is currently represented in the Osty mir_lower intrinsic table;
+/// extend this as the runtime sublanguage grows.
+pub fn mirLowerRuntimeIntrinsicForFree(qualifier: String, name: String) -> MirIntrinsicKind {
+    if qualifier != "std.runtime.raw" {
+        return MirIntrinsicInvalid
+    }
+    if name == "null" {
+        return MirIntrinsicRawNull
+    }
+    MirIntrinsicInvalid
+}
+
+// ---- Stdlib method intrinsics (List / Map / Set / Option /
+// Result; delegates to String / Bytes tables for those primitives) --
+
+/// mirLowerStdlibIntrinsicForMethod maps a (receiver type, method)
+/// pair on the built-in generic types (List, Map, Set, Option,
+/// Result, Maybe) or the primitive types (String, Bytes) to a MIR
+/// intrinsic. Returns MirIntrinsicInvalid for anything else.
+///
+/// Runs after the concurrency method recogniser so Channel / Handle
+/// / Group / Select receivers do not accidentally shadow primitive
+/// names like `close`.
+pub fn mirLowerStdlibIntrinsicForMethod(
+    receiverT: HirType,
+    name: String,
+) -> MirIntrinsicKind {
+    // Optional-type surface (T?) has no NamedType form — dispatch it
+    // before the named-type table.
+    if receiverT.kind == HirTypeOptional {
+        return mirLowerOptionStdlibMethod(name)
+    }
+    if receiverT.kind == HirTypePrim {
+        if receiverT.primKind == HirPrimString {
+            return mirLowerStringIntrinsicForMethod(name)
+        }
+        if receiverT.primKind == HirPrimBytes {
+            return mirLowerBytesIntrinsicForMethod(name)
+        }
+        return MirIntrinsicInvalid
+    }
+    let recv = hirTypeNameOf(receiverT)
+    if recv == "List" { return mirLowerListStdlibMethod(name) }
+    if recv == "Map" { return mirLowerMapStdlibMethod(name) }
+    if recv == "Set" { return mirLowerSetStdlibMethod(name) }
+    if recv == "Option" || recv == "Maybe" {
+        return mirLowerOptionStdlibMethod(name)
+    }
+    if recv == "Result" { return mirLowerResultStdlibMethod(name) }
+    MirIntrinsicInvalid
+}
+
+fn mirLowerListStdlibMethod(name: String) -> MirIntrinsicKind {
+    if name == "push" { return MirIntrinsicListPush }
+    if name == "len" { return MirIntrinsicListLen }
+    if name == "get" { return MirIntrinsicListGet }
+    if name == "isEmpty" { return MirIntrinsicListIsEmpty }
+    if name == "first" { return MirIntrinsicListFirst }
+    if name == "last" { return MirIntrinsicListLast }
+    if name == "sorted" { return MirIntrinsicListSorted }
+    if name == "contains" { return MirIntrinsicListContains }
+    if name == "indexOf" { return MirIntrinsicListIndexOf }
+    if name == "toSet" { return MirIntrinsicListToSet }
+    MirIntrinsicInvalid
+}
+
+fn mirLowerMapStdlibMethod(name: String) -> MirIntrinsicKind {
+    if name == "get" { return MirIntrinsicMapGet }
+    if name == "set" { return MirIntrinsicMapSet }
+    if name == "contains" { return MirIntrinsicMapContains }
+    if name == "len" { return MirIntrinsicMapLen }
+    if name == "keys" { return MirIntrinsicMapKeys }
+    if name == "values" { return MirIntrinsicMapValues }
+    if name == "remove" { return MirIntrinsicMapRemove }
+    MirIntrinsicInvalid
+}
+
+fn mirLowerSetStdlibMethod(name: String) -> MirIntrinsicKind {
+    if name == "insert" { return MirIntrinsicSetInsert }
+    if name == "contains" { return MirIntrinsicSetContains }
+    if name == "len" { return MirIntrinsicSetLen }
+    if name == "toList" { return MirIntrinsicSetToList }
+    if name == "remove" { return MirIntrinsicSetRemove }
+    MirIntrinsicInvalid
+}
+
+fn mirLowerOptionStdlibMethod(name: String) -> MirIntrinsicKind {
+    if name == "isSome" { return MirIntrinsicOptionIsSome }
+    if name == "isNone" { return MirIntrinsicOptionIsNone }
+    if name == "unwrap" { return MirIntrinsicOptionUnwrap }
+    if name == "unwrapOr" { return MirIntrinsicOptionUnwrapOr }
+    MirIntrinsicInvalid
+}
+
+fn mirLowerResultStdlibMethod(name: String) -> MirIntrinsicKind {
+    if name == "isOk" { return MirIntrinsicResultIsOk }
+    if name == "isErr" { return MirIntrinsicResultIsErr }
+    if name == "unwrap" { return MirIntrinsicResultUnwrap }
+    if name == "unwrapOr" { return MirIntrinsicResultUnwrapOr }
+    MirIntrinsicInvalid
+}
+
+/// mirLowerIsVoidStdlibIntrinsic reports whether a stdlib intrinsic
+/// produces no MIR-visible value. Keeps call sites in expression
+/// position from carrying a stale dest through to the backend.
+pub fn mirLowerIsVoidStdlibIntrinsic(k: MirIntrinsicKind) -> Bool {
+    match k {
+        MirIntrinsicListPush -> true,
+        MirIntrinsicMapSet -> true,
+        MirIntrinsicMapRemove -> true,
+        MirIntrinsicSetInsert -> true,
+        _ -> false,
+    }
+}
+
+// ---- String / Bytes method intrinsics -----------------------------
+
+pub fn mirLowerStringIntrinsicForMethod(name: String) -> MirIntrinsicKind {
+    if name == "len" { return MirIntrinsicStringLen }
+    if name == "isEmpty" { return MirIntrinsicStringIsEmpty }
+    if name == "contains" { return MirIntrinsicStringContains }
+    if name == "startsWith" { return MirIntrinsicStringStartsWith }
+    if name == "endsWith" { return MirIntrinsicStringEndsWith }
+    if name == "indexOf" { return MirIntrinsicStringIndexOf }
+    if name == "split" { return MirIntrinsicStringSplit }
+    if name == "trim" { return MirIntrinsicStringTrim }
+    if name == "toUpper" { return MirIntrinsicStringToUpper }
+    if name == "toLower" { return MirIntrinsicStringToLower }
+    if name == "replace" { return MirIntrinsicStringReplace }
+    if name == "chars" { return MirIntrinsicStringChars }
+    if name == "bytes" { return MirIntrinsicStringBytes }
+    MirIntrinsicInvalid
+}
+
+pub fn mirLowerBytesIntrinsicForMethod(name: String) -> MirIntrinsicKind {
+    if name == "len" { return MirIntrinsicBytesLen }
+    if name == "isEmpty" { return MirIntrinsicBytesIsEmpty }
+    if name == "get" { return MirIntrinsicBytesGet }
+    MirIntrinsicInvalid
+}
+
+/// mirLowerStdlibStringFreeFnToIntrinsic maps
+/// `std.strings.NAME(s, ...)` free-function calls to the receiver-
+/// based String intrinsic of the same name. Used by the merged
+/// native-toolchain MIR probe (which skips stdlib body injection)
+/// and by anyone calling stdlib helpers through the module qualifier.
+pub fn mirLowerStdlibStringFreeFnToIntrinsic(
+    qualifier: String,
+    name: String,
+) -> MirIntrinsicKind {
+    if qualifier != "std.strings" {
+        return MirIntrinsicInvalid
+    }
+    // Delegate to the receiver-based table — `std.strings.split` and
+    // `s.split(sep)` converge on the same runtime symbol.
+    mirLowerStringIntrinsicForMethod(name)
+}
+
+// ====================================================================
+// Stage 4e-4: Wire intrinsic fast paths into call lowering
+// ====================================================================
+
+/// mirLowerEmitConcurrencyIntrinsic lowers args in source order and
+/// emits a single IntrinsicInstr. Void-returning kinds drop the dest.
+/// Matches Go's `emitConcurrencyIntrinsic`.
+pub fn mirLowerEmitConcurrencyIntrinsic(
+    bs: MirLowerBodyState,
+    kind: MirIntrinsicKind,
+    args: List<HirArg>,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) {
+    let mut out: List<MirOperand> = []
+    for a in args {
+        out.push(mirLowerExprAsOperand(bs, a.value))
+    }
+    let hasDest = !hirTypeIsUnit(destT) && !mirLowerIsVoidConcurrencyIntrinsic(kind)
+    let instr = mirIntrinsicInstr(hasDest, dest, kind, out, span)
+    mirLowerEmitInstr(bs, instr)
+}
+
+/// mirLowerEmitRuntimeIntrinsic lowers args + emits a §19 runtime
+/// intrinsic. Every supported runtime intrinsic today returns a
+/// value, but we still honour the unit-check just like Go's emitter.
+pub fn mirLowerEmitRuntimeIntrinsic(
+    bs: MirLowerBodyState,
+    kind: MirIntrinsicKind,
+    args: List<HirArg>,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) {
+    let mut out: List<MirOperand> = []
+    for a in args {
+        out.push(mirLowerExprAsOperand(bs, a.value))
+    }
+    let hasDest = !hirTypeIsUnit(destT)
+    let instr = mirIntrinsicInstr(hasDest, dest, kind, out, span)
+    mirLowerEmitInstr(bs, instr)
+}
+
+/// mirLowerEmitMethodIntrinsic lowers a method-syntax intrinsic:
+/// receiver becomes the first operand, then user args. Matches Go's
+/// method-intrinsic shape used for Channel / Handle / Group / Select
+/// / List / Map / Set / String / Bytes / Option / Result methods.
+pub fn mirLowerEmitMethodIntrinsic(
+    bs: MirLowerBodyState,
+    kind: MirIntrinsicKind,
+    receiver: HirExpr,
+    args: List<HirArg>,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+    voidIntrinsic: Bool,
+) {
+    let recvOp = mirLowerExprAsOperand(bs, receiver)
+    let mut out: List<MirOperand> = []
+    out.push(recvOp)
+    for a in args {
+        out.push(mirLowerExprAsOperand(bs, a.value))
+    }
+    let hasDest = !hirTypeIsUnit(destT) && !voidIntrinsic
+    let instr = mirIntrinsicInstr(hasDest, dest, kind, out, span)
+    mirLowerEmitInstr(bs, instr)
+}
+
+/// mirLowerEmitStringFreeFnIntrinsic lowers `std.strings.NAME(s, ...)`
+/// by treating `s` as the receiver operand and the remaining args as
+/// user args. Mirrors Go's stdlibStringFreeFnToIntrinsic + the call-
+/// site emission that `emitStringFreeFnIntrinsic` performs.
+pub fn mirLowerEmitStringFreeFnIntrinsic(
+    bs: MirLowerBodyState,
+    kind: MirIntrinsicKind,
+    args: List<HirArg>,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) {
+    if args.len() == 0 {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: std.strings free-fn with zero args — falling through",
+        )
+        return
+    }
+    let mut out: List<MirOperand> = []
+    let mut i = 0
+    for a in args {
+        out.push(mirLowerExprAsOperand(bs, a.value))
+        i = i + 1
+    }
+    let hasDest = !hirTypeIsUnit(destT)
+    let instr = mirIntrinsicInstr(hasDest, dest, kind, out, span)
+    mirLowerEmitInstr(bs, instr)
 }
