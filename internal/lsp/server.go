@@ -18,6 +18,7 @@ import (
 	"github.com/osty/osty/internal/parser"
 	ostyquery "github.com/osty/osty/internal/query/osty"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
 )
 
@@ -471,14 +472,14 @@ func dirHasOstySiblings(dir, selfPath string) bool {
 // as one package. The file whose URI the client opened is substituted
 // with `src` so unsaved edits are honored.
 func (s *Server) analyzePackage(pkgDir, path string, src []byte) *docAnalysis {
-	pkg, err := resolve.LoadPackage(pkgDir)
+	pkg, err := resolve.LoadPackageForNativeWithTransform(pkgDir, lspSourceOverrideTransform(path, src))
 	if err != nil {
 		return nil
 	}
 	if pkg == nil || len(pkg.Files) == 0 {
 		return nil
 	}
-	substituteFileSource(pkg, path, src)
+	lspMaterializeNativePackageFiles(pkg)
 	pr := resolve.ResolvePackage(pkg, s.prelude)
 	chk := check.Package(pkg, pr, lspCheckOpts(nil))
 	lr := lint.Package(pkg, pr, chk)
@@ -497,17 +498,11 @@ func (s *Server) analyzeWorkspace(root, path string, src []byte) *docAnalysis {
 	if err != nil {
 		return nil
 	}
+	ws.SourceTransform = lspSourceOverrideTransform(path, src)
 	// Seed the root package (if any) and every immediate subdir that
 	// has `.osty` files; LoadPackage chases `use` edges from there.
 	seedWorkspace(ws, root)
-	// Swap in the client's buffer for the currently-open file. Only
-	// one package owns it; stop once substituteFileSource reports a
-	// hit so the remaining packages don't pay for a useless walk.
-	for _, pkg := range ws.Packages {
-		if substituteFileSource(pkg, path, src) {
-			break
-		}
-	}
+	lspMaterializeNativeWorkspace(ws)
 	resolved := ws.ResolveAll()
 	checks := check.Workspace(ws, resolved, lspCheckOpts(nil))
 	// Collect every loaded package for cross-file handlers.
@@ -549,31 +544,59 @@ func (s *Server) analyzeWorkspace(root, path string, src []byte) *docAnalysis {
 // Delegates to the shared helper so CLI and LSP don't drift.
 func seedWorkspace(ws *resolve.Workspace, root string) {
 	for _, p := range resolve.WorkspacePackagePaths(root) {
-		_, _ = ws.LoadPackage(p)
+		_, _ = ws.LoadPackageNative(p)
 	}
 }
 
-// substituteFileSource overwrites the parsed state of the file at
-// `path` with a fresh parse of `src`. Returns true when a matching
-// file was found so callers can stop scanning additional packages.
-// Used so the LSP analyzes the client's unsaved buffer even when
-// on-disk content is stale.
-func substituteFileSource(pkg *resolve.Package, path string, src []byte) bool {
+func lspSourceOverrideTransform(path string, src []byte) resolve.SourceTransform {
+	if path == "" {
+		return nil
+	}
+	return func(candidate string, original []byte) []byte {
+		if candidate != path {
+			return original
+		}
+		return append([]byte(nil), src...)
+	}
+}
+
+func lspSourceOverrideMapTransform(overrides map[string][]byte) resolve.SourceTransform {
+	if len(overrides) == 0 {
+		return nil
+	}
+	return func(candidate string, original []byte) []byte {
+		src, ok := overrides[candidate]
+		if !ok {
+			return original
+		}
+		return append([]byte(nil), src...)
+	}
+}
+
+func lspMaterializeNativeWorkspace(ws *resolve.Workspace) {
+	if ws == nil {
+		return
+	}
+	for _, pkg := range ws.Packages {
+		lspMaterializeNativePackageFiles(pkg)
+	}
+}
+
+func lspMaterializeNativePackageFiles(pkg *resolve.Package) {
+	if pkg == nil {
+		return
+	}
 	for _, pf := range pkg.Files {
-		if pf.Path != path {
+		if pf == nil {
 			continue
 		}
-		parsed := parser.ParseDetailed(src)
-		canonicalSrc, canonicalMap := canonical.SourceWithMap(src, parsed.File)
-		pf.Source = src
-		pf.CanonicalSource = canonicalSrc
-		pf.CanonicalMap = canonicalMap
-		pf.File = parsed.File
-		pf.ParseDiags = parsed.Diagnostics
-		pf.ParseProvenance = parsed.Provenance
-		return true
+		if pf.File == nil && pf.Run != nil {
+			pf.File = selfhost.LowerPublicFileFromRun(pf.Run)
+		}
+		if len(pf.CanonicalSource) == 0 && pf.File != nil {
+			pf.CanonicalSource, pf.CanonicalMap = canonical.SourceWithMap(pf.Source, pf.File)
+		}
 	}
-	return false
 }
 
 // analysisForFileInPackage builds a docAnalysis that carries the
@@ -803,7 +826,6 @@ func (s *Server) ensureWorkspaceIndex(root string) []*resolve.Package {
 	if err != nil {
 		return nil
 	}
-	seedWorkspace(ws, root)
 	// Substitute in every open document's current buffer so the
 	// index reflects unsaved edits, not stale disk contents.
 	s.docs.mu.Lock()
@@ -814,11 +836,10 @@ func (s *Server) ensureWorkspaceIndex(root string) []*resolve.Package {
 		}
 	}
 	s.docs.mu.Unlock()
-	for _, pkg := range ws.Packages {
-		for path, src := range openBufs {
-			substituteFileSource(pkg, path, src)
-		}
-	}
+	ws.SourceTransform = lspSourceOverrideMapTransform(openBufs)
+	ws.Packages = map[string]*resolve.Package{}
+	seedWorkspace(ws, root)
+	lspMaterializeNativeWorkspace(ws)
 	_ = ws.ResolveAll()
 	pkgs := make([]*resolve.Package, 0, len(ws.Packages))
 	for _, pkg := range ws.Packages {
