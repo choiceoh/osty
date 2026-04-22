@@ -320,6 +320,12 @@ func main() {
 			args = append([]string{"check"}, rest...)
 		}
 	}
+	if cmd == "typecheck" {
+		if rest, present := takeBoolFlag(args[1:], "--native"); present {
+			flags.native = true
+			args = append([]string{"typecheck"}, rest...)
+		}
+	}
 	// explain looks up a diagnostic or lint code and prints its doc.
 	// Handled before the generic "file required" check because it
 	// takes a code (or nothing, to list every code) — never a path.
@@ -511,6 +517,16 @@ func main() {
 			os.Exit(1)
 		}
 	case "typecheck":
+		if flags.native {
+			if flags.inspect || flags.dumpNativeDiags {
+				fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect / --dump-native-diags\n")
+				os.Exit(2)
+			}
+			if runTypecheckFileNative(path, src, formatter, flags) != 0 {
+				os.Exit(1)
+			}
+			return
+		}
 		parsed := parser.ParseDetailed(src)
 		file, diags := parsed.File, parsed.Diagnostics
 		res := resolveFile(file)
@@ -1018,6 +1034,87 @@ func findOwningFile(files []selfhost.PackageCheckFile, offset int) int {
 		}
 	}
 	return -1
+}
+
+// runTypecheckFileNative is runCheckFileNative plus the type dump.
+// After the check runs on the arena, prints every typed-node range
+// selfhost.CheckResult.TypedNodes recorded — one row per node with
+// line/column span and the inferred type. Zero astbridge lowerings
+// on the happy path (same counter invariant as runCheckFileNative).
+func runTypecheckFileNative(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
+	run := parser.ParseRun(src)
+	parseDiags := run.Diagnostics()
+	checked := selfhost.CheckStructuredFromRun(run)
+	checkDiags := selfhost.CheckDiagnosticsAsDiag(src, checked.Diagnostics)
+	for _, d := range checkDiags {
+		if d != nil && d.File == "" {
+			d.File = path
+		}
+	}
+	all := append([]*diag.Diagnostic{}, parseDiags...)
+	all = append(all, checkDiags...)
+	printDiags(formatter, all, flags)
+	printNativeTypes(src, checked)
+	if hasError(all) {
+		return 1
+	}
+	return 0
+}
+
+// printNativeTypes is the --native sibling of printTypes: it renders
+// selfhost.CheckResult.TypedNodes (node.Start, node.End are byte
+// offsets produced by the native checker) as
+// `line:col-line:col\tTypeName` rows sorted by start position. Rows
+// with empty TypeName (the checker's signal-only placeholders) are
+// dropped so output stays compact.
+func printNativeTypes(src []byte, result selfhost.CheckResult) {
+	type row struct {
+		start, end int
+		text       string
+	}
+	rows := make([]row, 0, len(result.TypedNodes))
+	for _, n := range result.TypedNodes {
+		if n.TypeName == "" {
+			continue
+		}
+		rows = append(rows, row{start: n.Start, end: n.End, text: n.TypeName})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].start != rows[j].start {
+			return rows[i].start < rows[j].start
+		}
+		return rows[i].end < rows[j].end
+	})
+	for _, r := range rows {
+		sl, sc := byteOffsetLineCol(src, r.start)
+		el, ec := byteOffsetLineCol(src, r.end)
+		fmt.Printf("%d:%d-%d:%d\t%s\n", sl, sc, el, ec, r.text)
+	}
+}
+
+// byteOffsetLineCol is a single-pass scan equivalent of the
+// positionAtOffset helper that lives inside selfhost for the
+// diagnostic converter. Promoted to cmd/osty because the typed-node
+// renderer needs it inline — keep the two scanners in sync with
+// internal/selfhost/check_diag_convert.go:positionAtOffsetForDiag.
+func byteOffsetLineCol(src []byte, offset int) (int, int) {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(src) {
+		offset = len(src)
+	}
+	line := 1
+	col := 1
+	for i := 0; i < offset; i++ {
+		if src[i] == '\n' {
+			line++
+			col = 1
+			continue
+		}
+		col++
+	}
+	return line, col
 }
 
 // runCheckFileNative drives `osty check --native FILE` end-to-end on
