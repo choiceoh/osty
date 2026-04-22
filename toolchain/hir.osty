@@ -3423,3 +3423,83 @@ pub fn hirProjectionKindName(k: HirProjectionKind) -> String {
         HirProjVariantN -> "variantN",
     }
 }
+
+// ====================================================================
+// Annotation bridge types (for hir_lower.osty extraction helpers)
+// ====================================================================
+//
+// HIR nodes themselves never carry `HirAnnotation` values — AST-level
+// annotations (`#[vectorize(...)]`, `#[json(...)]`, `#[export("…")]`
+// etc.) are extracted into concrete fields on the decl during
+// AST→HIR lowering (FnDecl.Vectorize, Field.JSONKey, …).
+//
+// `HirAnnotation` + `HirAnnotationArg` exist as a shared bridge
+// type: the AST→HIR lowerer builds a `List<HirAnnotation>` from its
+// input (whatever the Osty front-end's annotation representation is)
+// and hands it to the extractors below. Keeping the extractors
+// independent of the specific AST arena shape lets them be unit-
+// tested in isolation and reused as the front-end evolves.
+
+/// HirAnnotation is a single `#[name(args)]` attribute. `name` is
+/// the bare identifier (e.g. `"vectorize"`, `"export"`).
+pub struct HirAnnotation {
+    pub name: String,
+    pub args: List<HirAnnotationArg>,
+    pub span: HirSpan,
+}
+
+pub fn hirAnnotation(name: String, span: HirSpan) -> HirAnnotation {
+    HirAnnotation { name, args: [], span }
+}
+
+/// HirAnnotationArg is one argument of an annotation. Three shapes
+/// appear in practice:
+///
+///   - bare identifier: `scalable` / `predicate` / `always` — `key`
+///     is the identifier text, `hasValue` is false
+///   - key = value: `width = 4` / `count = 8` / `key = "…"` — `key`
+///     is the LHS identifier, `hasValue` is true with the RHS in
+///     `value`
+///   - positional literal: `"name"` in `#[export("name")]` — `key`
+///     is empty, `hasValue` is true with the literal in `value`
+///
+/// `value` is a `HirExpr` so annotation-argument literals reuse the
+/// existing HIR literal nodes; malformed values (resolver should
+/// have rejected them) fall through as `HirExprInvalid`.
+pub struct HirAnnotationArg {
+    pub key: String,
+    pub hasValue: Bool,
+    pub value: HirExpr,
+    pub span: HirSpan,
+}
+
+pub fn hirAnnotationArgFlag(key: String, span: HirSpan) -> HirAnnotationArg {
+    HirAnnotationArg {
+        key,
+        hasValue: false,
+        value: hirExprInvalid(),
+        span,
+    }
+}
+
+pub fn hirAnnotationArgKeyValue(
+    key: String,
+    value: HirExpr,
+    span: HirSpan,
+) -> HirAnnotationArg {
+    HirAnnotationArg {
+        key,
+        hasValue: true,
+        value,
+        span,
+    }
+}
+
+pub fn hirAnnotationArgPositional(value: HirExpr, span: HirSpan) -> HirAnnotationArg {
+    HirAnnotationArg {
+        key: "",
+        hasValue: true,
+        value,
+        span,
+    }
+}
