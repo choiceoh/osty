@@ -191,17 +191,31 @@ func llvmEnumPayloadType(t ast.Type, env typeEnv) (string, error) {
 		named = resolvedNamed
 		ok = true
 	}
-	if !ok {
-		return "", unsupported("type-system", "LLVM enum payloads currently support Int or Float only")
+	if ok {
+		name := ""
+		if len(named.Path) == 1 {
+			name = named.Path[0]
+		}
+		if typ := llvmEnumPayloadNamedType(name, len(named.Path), len(named.Args)); typ != "" {
+			return typ, nil
+		}
 	}
-	name := ""
-	if len(named.Path) == 1 {
-		name = named.Path[0]
+	// Fall through to the runtime-ABI mapping so interface, struct,
+	// enum, and container payload types all get a well-defined LLVM
+	// representation. Canonical motivating case: `Result<T, Error>`
+	// after `injectReachableStdlibTypes` — `Err` carries an `Error`
+	// interface payload which the primitive table doesn't list but
+	// the rest of the backend already passes around as
+	// `%osty.iface`. Tuples / Optional / Fn types fold into `ptr` the
+	// same way a runtime-ABI boundary treats them.
+	abi, err := llvmRuntimeABIType(resolved, env)
+	if err != nil {
+		return "", err
 	}
-	if typ := llvmEnumPayloadNamedType(name, len(named.Path), len(named.Args)); typ != "" {
-		return typ, nil
+	if abi == "" || abi == "void" {
+		return "", unsupported("type-system", "LLVM enum payloads currently support primitives (Int / Float / Char / Byte / String), interfaces, structs, enums, and container / tuple / Optional / Fn types — got an empty runtime-ABI projection")
 	}
-	return "", unsupported("type-system", "LLVM enum payloads currently support Int, Float, or String only")
+	return abi, nil
 }
 
 func (g *generator) structInfoForExpr(expr ast.Expr) (*structInfo, string, error) {
