@@ -315,6 +315,13 @@ fn isPodType(arena: AstArena, typeIdx: Int, podStructs: List<String>, podGeneric
 }
 
 fn formatTypeForDiag(arena: AstArena, typeIdx: Int) -> String {
+    // Every recursive `formatTypeForDiag(...)` result is hoisted into a
+    // typed `String` local before being spliced into the enclosing
+    // interpolation. Inlining the call directly inside `"{...}"`
+    // leaves a synthetic interp temp at `<error>` type under MIR
+    // lowering, tripping `unsupported local type <error> in
+    // formatTypeForDiag` — same workaround shape as
+    // `checkSubstCacheKey` / `checkIntKey`.
     if typeIdx < 0 {
         return "?"
     }
@@ -323,7 +330,8 @@ fn formatTypeForDiag(arena: AstArena, typeIdx: Int) -> String {
         return "?"
     }
     if node.text == "optional" {
-        return "{formatTypeForDiag(arena, node.left)}?"
+        let inner: String = formatTypeForDiag(arena, node.left)
+        return "{inner}?"
     }
     if node.text == "tuple" {
         let mut out = "("
@@ -334,7 +342,8 @@ fn formatTypeForDiag(arena: AstArena, typeIdx: Int) -> String {
             } else {
                 out = "{out}, "
             }
-            out = "{out}{formatTypeForDiag(arena, elIdx)}"
+            let part: String = formatTypeForDiag(arena, elIdx)
+            out = "{out}{part}"
         }
         return "{out})"
     }
@@ -347,11 +356,13 @@ fn formatTypeForDiag(arena: AstArena, typeIdx: Int) -> String {
             } else {
                 out = "{out}, "
             }
-            out = "{out}{formatTypeForDiag(arena, pIdx)}"
+            let part: String = formatTypeForDiag(arena, pIdx)
+            out = "{out}{part}"
         }
         out = "{out})"
         if node.right >= 0 {
-            out = "{out} -> {formatTypeForDiag(arena, node.right)}"
+            let ret: String = formatTypeForDiag(arena, node.right)
+            out = "{out} -> {ret}"
         }
         return out
     }
@@ -367,7 +378,8 @@ fn formatTypeForDiag(arena: AstArena, typeIdx: Int) -> String {
         } else {
             out = "{out}, "
         }
-        out = "{out}{formatTypeForDiag(arena, argIdx)}"
+        let part: String = formatTypeForDiag(arena, argIdx)
+        out = "{out}{part}"
     }
     "{out}>"
 }

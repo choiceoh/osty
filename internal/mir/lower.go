@@ -758,6 +758,16 @@ func (bs *bodyState) lowerLet(let *ir.LetStmt) {
 	t := let.Type
 	if isPoisonType(t) && let.Value != nil {
 		t = let.Value.Type()
+		// Same IR→MIR seam recovery lowerExprAsOperand uses for
+		// `"{f(...)}"` interpolations: when `let x = f(...)` is
+		// dropped by the checker, recover the initializer type off
+		// the fn signature / stdlib intrinsic table so the binding's
+		// local doesn't carry ErrType into every downstream use.
+		if isPoisonType(t) {
+			if rt := bs.recoverOperandType(let.Value); rt != nil && !isPoisonType(rt) {
+				t = rt
+			}
+		}
 	}
 	if t == nil {
 		t = ir.ErrTypeVal
@@ -1965,9 +1975,242 @@ func (bs *bodyState) lowerExprAsOperand(e ir.Expr) Operand {
 	if t == nil {
 		t = ir.ErrTypeVal
 	}
+	// The IR→MIR seam leaks `<error>` typed temps whenever a CallExpr
+	// reaches this point without a per-node type (the checker skips
+	// expressions nested inside string interpolations, match arms, and
+	// a handful of other suppressed contexts). The MIR emitter later
+	// rejects any local with ErrType — `unsupported local type <error>
+	// in <fn>` — masking what is really a type-propagation gap. Recover
+	// the return type off the module's own fn signature table (preferred)
+	// or the callee's FnType (fallback) so every downstream temp has a
+	// concrete width.
+	if t == ir.ErrTypeVal {
+		if rt := bs.recoverOperandType(e); rt != nil && rt != ir.ErrTypeVal {
+			t = rt
+		}
+	}
 	tmp := bs.freshTemp(t, exprSpan(e))
 	bs.lowerExprInto(e, tmp, t)
 	return &CopyOp{Place: Place{Local: tmp}, T: t}
+}
+
+// recoverOperandType patches the subset of expression shapes that reach
+// lowerExprAsOperand's generic fallback with ErrType. Today that's
+// dominated by CallExpr inside `"{f(...)}"` interpolations where the
+// checker/native-checker pair skips the call node; lifting the return
+// type off the module's own signature table keeps the MIR temp typed
+// so the emitter doesn't wall on `unsupported local type <error>`.
+func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
+	if e == nil {
+		return nil
+	}
+	switch x := e.(type) {
+	case *ir.CallExpr:
+		if x.Callee == nil {
+			return nil
+		}
+		// Preferred path: free-fn call by bare identifier. The MIR
+		// lowerer's pass-1 signature table carries the declared return
+		// type off the IR FnDecl, which survives even when per-node
+		// checker annotations are missing.
+		if id, ok := x.Callee.(*ir.Ident); ok {
+			if sig := bs.l.signatureForFn(id.Name); sig != nil && sig.retType != nil && sig.retType != ir.ErrTypeVal {
+				return sig.retType
+			}
+		}
+		// Qualified call through a `use X as alias` — `alias.fn(...)`.
+		// When the checker/native-checker pair skips the call node and
+		// neither the UseDecl body nor the resolved package surface has
+		// the fn's return type, fall back to the stdlib intrinsic table
+		// (std.strings.*) which is the dispatch path the MIR emitter
+		// already uses for these calls at lowerCallExprInto.
+		if fx, ok := x.Callee.(*ir.FieldExpr); ok {
+			if use := bs.l.useAliasFor(fx.X); use != nil {
+				if rt := stdlibFreeFnReturnType(qualifierOf(use), fx.Name); rt != nil {
+					return rt
+				}
+				// Also accept Path-based match: RawPath may be empty
+				// for alias-only imports; fall back to "std.strings"
+				// via Path joined.
+				if rt := stdlibFreeFnReturnType(pathQualifier(use), fx.Name); rt != nil {
+					return rt
+				}
+			}
+			// Otherwise rely on whatever FnType the FieldExpr carries.
+			if ct := fx.Type(); ct != nil && ct != ir.ErrTypeVal {
+				if f, ok := ct.(*ir.FnType); ok && f.Return != nil {
+					return f.Return
+				}
+			}
+		}
+		// Fallback: the callee may still carry a concrete FnType (for
+		// fn-typed locals / params with a declared signature).
+		ct := x.Callee.Type()
+		if ct == nil || ct == ir.ErrTypeVal {
+			return nil
+		}
+		if f, ok := ct.(*ir.FnType); ok && f.Return != nil {
+			return f.Return
+		}
+	case *ir.MethodCall:
+		// Method calls show up inside interpolations whenever the
+		// checker skipped the call site (e.g. `"{xs.len()}"`). Recover
+		// via the method-signature table keyed on the receiver's type
+		// name. Receivers that resolve to a generic builtin (String,
+		// List<T>, Map<K, V>) go through the hardcoded intrinsic
+		// return-type table since they never appear in the user's
+		// signatures map.
+		if x.Receiver == nil {
+			return nil
+		}
+		// Package-qualified MethodCall: HIR lowers `strings.join(xs, s)`
+		// as MethodCall{Receiver: Ident("strings"), Name: "join"}. The
+		// receiver is a use alias, not a value, so look up via the alias
+		// table instead of x.Receiver.Type().
+		if use := bs.l.useAliasFor(x.Receiver); use != nil {
+			if rt := stdlibFreeFnReturnType(qualifierOf(use), x.Name); rt != nil {
+				return rt
+			}
+			if rt := stdlibFreeFnReturnType(pathQualifier(use), x.Name); rt != nil {
+				return rt
+			}
+		}
+		recvT := x.Receiver.Type()
+		if rt := builtinMethodReturnType(recvT, x.Name); rt != nil {
+			return rt
+		}
+		if recvT == nil || recvT == ir.ErrTypeVal {
+			return nil
+		}
+		if nt, ok := recvT.(*ir.NamedType); ok && nt.Name != "" {
+			if sig := bs.l.signatureForMethod(nt.Name, x.Name); sig != nil && sig.retType != nil && sig.retType != ir.ErrTypeVal {
+				return sig.retType
+			}
+		}
+	case *ir.IndexExpr:
+		// `xs[i]` in interp position ends up here when the checker
+		// dropped the element type. Peel the collection type off the
+		// receiver.
+		if x.X == nil {
+			return nil
+		}
+		xT := x.X.Type()
+		if xT == nil || xT == ir.ErrTypeVal {
+			return nil
+		}
+		if nt, ok := xT.(*ir.NamedType); ok && len(nt.Args) > 0 {
+			switch nt.Name {
+			case "List":
+				return nt.Args[0]
+			case "Map":
+				if len(nt.Args) >= 2 {
+					return nt.Args[1]
+				}
+			}
+		}
+	case *ir.BinaryExpr:
+		// Binary ops in interp position: integer arithmetic is the
+		// dominant case. Recover from operand types.
+		lt := x.Left.Type()
+		rt := x.Right.Type()
+		if lt != nil && lt != ir.ErrTypeVal {
+			return lt
+		}
+		if rt != nil && rt != ir.ErrTypeVal {
+			return rt
+		}
+	}
+	return nil
+}
+
+// builtinMethodReturnType returns the declared return type for the
+// subset of receiver-method calls that the MIR emitter dispatches
+// through a runtime intrinsic rather than a user-defined FnDecl. Used
+// as a last-resort fallback in recoverOperandType.
+func builtinMethodReturnType(recvT ir.Type, method string) ir.Type {
+	if recvT == nil {
+		return nil
+	}
+	// String.* method returns.
+	if isStringReceiver(recvT) {
+		switch method {
+		case "len", "indexOf":
+			return ir.TInt
+		case "isEmpty", "contains", "hasPrefix", "startsWith", "hasSuffix", "endsWith":
+			return ir.TBool
+		case "substring", "slice", "trim", "toUpper", "toLower", "replace", "toString":
+			return ir.TString
+		case "chars":
+			return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TChar}, Builtin: true}
+		case "bytes":
+			return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TByte}, Builtin: true}
+		}
+	}
+	// List<T>.* method returns — we only need the ones that appear
+	// inside `"{...}"` interpolations in the toolchain, which is the
+	// `.len()` / `.isEmpty()` pair. Element-typed returns (pop, first,
+	// last) rarely hit this path because the checker tracks them.
+	if nt, ok := recvT.(*ir.NamedType); ok && nt.Builtin {
+		switch nt.Name {
+		case "List", "Map", "Set":
+			switch method {
+			case "len":
+				return ir.TInt
+			case "isEmpty":
+				return ir.TBool
+			}
+		}
+	}
+	return nil
+}
+
+// isStringReceiver reports whether a receiver type is String — either
+// via the primitive (TString) or a NamedType tagged "String".
+func isStringReceiver(t ir.Type) bool {
+	if t == ir.TString {
+		return true
+	}
+	if nt, ok := t.(*ir.NamedType); ok {
+		return nt.Name == "String"
+	}
+	return false
+}
+
+// pathQualifier returns the "." joined Path of a UseDecl, so
+// `use std.strings as strings` yields "std.strings" even when RawPath
+// is empty (path-only imports).
+func pathQualifier(use *ir.UseDecl) string {
+	if use == nil || len(use.Path) == 0 {
+		return ""
+	}
+	return strings.Join(use.Path, ".")
+}
+
+// stdlibFreeFnReturnType reports the declared return type for the
+// subset of `std.strings.*` free-function calls that the MIR emitter
+// dispatches through an intrinsic. Used as the last-resort fallback in
+// recoverOperandType when the checker/native-checker pair has dropped
+// the call site's per-node type and neither the UseDecl body nor the
+// resolved package surface carries the fn signature.
+func stdlibFreeFnReturnType(qualifier, name string) ir.Type {
+	if qualifier != "std.strings" {
+		return nil
+	}
+	switch name {
+	case "len", "indexOf":
+		return ir.TInt
+	case "isEmpty", "contains", "hasPrefix", "startsWith", "hasSuffix", "endsWith":
+		return ir.TBool
+	case "join", "substring", "slice", "trim", "toUpper", "toLower", "replace":
+		return ir.TString
+	case "split":
+		return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	case "chars":
+		return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TChar}, Builtin: true}
+	case "bytes":
+		return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TByte}, Builtin: true}
+	}
+	return nil
 }
 
 // lowerExprToRValue lowers a non-control-flow expression into an
@@ -2892,6 +3135,21 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 		}
 		if kind := runtimeIntrinsicForFree(qualifierOf(use), mc.Name); kind != IntrinsicInvalid {
 			bs.emitRuntimeIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
+			return
+		}
+		// Route `std.strings.fn(x, ...)` to the equivalent String-method
+		// intrinsic — mirrors the CallExpr+FieldExpr path in
+		// lowerCallExprInto. The HIR pipeline may lower `pkg.fn(...)` as
+		// a MethodCall with the package alias as the receiver; without
+		// this branch the merged native-toolchain MIR probe would emit a
+		// CallInstr targeting `std.strings.join` whose result temp stays
+		// at ErrType because the checker skipped the call node.
+		if kind := stdlibStringFreeFnToIntrinsic(qualifierOf(use), mc.Name); kind != IntrinsicInvalid {
+			bs.emitStringFreeFnIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
+			return
+		}
+		if kind := stdlibStringFreeFnToIntrinsic(pathQualifier(use), mc.Name); kind != IntrinsicInvalid {
+			bs.emitStringFreeFnIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
 			return
 		}
 		args := make([]Operand, len(mc.Args))

@@ -1275,9 +1275,19 @@ func (l *lowerer) lowerStringLit(s *ast.StringLit) Expr {
 	for _, p := range s.Parts {
 		if p.IsLit {
 			out.Parts = append(out.Parts, StringPart{IsLit: true, Lit: p.Lit})
-		} else {
-			out.Parts = append(out.Parts, StringPart{Expr: l.lowerExpr(p.Expr)})
+			continue
 		}
+		// A non-literal part with a nil expression is produced by the
+		// parser's error-recovery path when a `{...}` interpolation
+		// slot couldn't be parsed cleanly. Downstream consumers
+		// (mir.Lower, the MIR emitter) assume every non-lit part has
+		// a real Expr, so treat the hole as an empty string literal
+		// here rather than letting lowerExpr crash on a nil switch.
+		if p.Expr == nil {
+			out.Parts = append(out.Parts, StringPart{IsLit: true, Lit: ""})
+			continue
+		}
+		out.Parts = append(out.Parts, StringPart{Expr: l.lowerExpr(p.Expr)})
 	}
 	return out
 }
