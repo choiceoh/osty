@@ -22,6 +22,21 @@
 #include <string.h>
 #include <time.h>
 
+/* OSTY_HOT_INLINE marks runtime primitives that osty-lowered IR calls
+ * on hot paths (`xs[i]`, `xs[i] = v`, `xs.len()`). Without this
+ * annotation ThinLTO weighs them against its own size budget and often
+ * leaves them out-of-line, so every primitive List<Int> element access
+ * in user code pays a real cross-TU function call. On List-heavy
+ * benchmarks (quicksort, matmul, lane_route) this was measured at a
+ * 10-50x slowdown vs. Go slice access. `always_inline` forces the
+ * inlining regardless of the heuristic; external linkage is preserved
+ * because .ll-side `declare`s bind to the ordinary runtime symbol. */
+#if defined(__GNUC__) || defined(__clang__)
+#  define OSTY_HOT_INLINE __attribute__((always_inline))
+#else
+#  define OSTY_HOT_INLINE
+#endif
+
 /* Snapshot / file-IO primitives — mkdir is spelled differently on Win32
  * vs. POSIX, so we funnel the one-directory-level call through
  * osty_rt_mkdir_one. Everything else (fopen/fread/fwrite/getenv) is
@@ -4158,7 +4173,7 @@ void *osty_rt_list_new(void) {
     return osty_gc_allocate_managed(sizeof(osty_rt_list), OSTY_GC_KIND_LIST, "runtime.list", osty_rt_list_trace, osty_rt_list_destroy);
 }
 
-int64_t osty_rt_list_len(void *raw_list) {
+OSTY_HOT_INLINE int64_t osty_rt_list_len(void *raw_list) {
     osty_rt_list *list = osty_rt_list_cast(raw_list);
     return list->len;
 }
@@ -4310,7 +4325,7 @@ void osty_rt_list_insert_bytes_roots_v1(void *raw_list, int64_t index, const voi
     }
 }
 
-int64_t osty_rt_list_get_i64(void *raw_list, int64_t index) {
+OSTY_HOT_INLINE int64_t osty_rt_list_get_i64(void *raw_list, int64_t index) {
     int64_t value;
     memcpy(&value, osty_rt_list_get_raw(raw_list, index, sizeof(value), NULL), sizeof(value));
     return value;
@@ -4369,7 +4384,7 @@ void osty_rt_list_get_bytes_v1(void *raw_list, int64_t index, void *out, int64_t
     osty_rt_list_get_bytes(raw_list, index, out, elem_size, NULL);
 }
 
-void osty_rt_list_set_i64(void *raw_list, int64_t index, int64_t value) {
+OSTY_HOT_INLINE void osty_rt_list_set_i64(void *raw_list, int64_t index, int64_t value) {
     osty_rt_list_set_raw(raw_list, index, &value, sizeof(value), NULL);
 }
 

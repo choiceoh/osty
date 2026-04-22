@@ -238,11 +238,15 @@ func clangCompileCObjectArgs(target, sourcePath, objectPath string) []string {
 	if !isWindowsTarget(target) {
 		args = append(args, "-pthread")
 	}
-	// -O2 keeps the GC/scheduler runtime in the same optimization tier
-	// as the IR compile path (see llvmClangCompileObjectArgs); -O0
-	// here would leave hot runtime helpers like osty_rt_list_get_i64
-	// unoptimized and cap the win from the IR-side fast paths.
-	args = append(args, "-O2", "-std=c11", "-c", sourcePath, "-o", objectPath)
+	// -O3 + -flto=thin keeps the GC/scheduler runtime in the same tier
+	// as the IR compile path (see llvmClangCompileObjectArgs). The
+	// thinLTO bitcode lets the linker inline hot primitive runtime
+	// helpers (osty_rt_list_get_i64, osty_rt_list_len, …) at every IR
+	// call site — without it every `xs[i]` in user code pays a real
+	// cross-TU function call and the List<Int>-heavy osty-vs-go
+	// workloads (quicksort, matmul, lane_route) stay 10-50x slower
+	// than Go for no reason other than missing inlining.
+	args = append(args, "-O3", "-flto=thin", "-std=c11", "-c", sourcePath, "-o", objectPath)
 	return args
 }
 

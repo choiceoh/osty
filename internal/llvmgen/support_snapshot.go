@@ -1575,12 +1575,16 @@ func llvmClangCompileObjectArgs(target string, irPath string, objectPath string)
 		// Osty: toolchain/llvmgen.osty:1178:9
 		func() struct{} { args = append(args, target); return struct{}{} }()
 	}
-	// Osty: toolchain/llvmgen.osty:1179:5 — -O3 for production IR
-	// compilation. -O0 (the previous default) stranded every
-	// alloca/load/store emitted by the backend and disabled
-	// vectorization. -O3 over -O2 unlocks more aggressive
-	// vectorization on the cleaned-up bounds-check-free fast path.
+	// Osty: toolchain/llvmgen.osty:1179:5 — -O3 + thin-LTO for
+	// production IR compilation. -O0 (the original default) stranded
+	// every alloca/load/store. -O3 unlocks vectorization; -flto=thin
+	// lets the link stage inline runtime helpers (osty_rt_list_get_i64,
+	// osty_rt_list_len, …) at every call site, which on
+	// List<Int>-heavy workloads (quicksort, matmul, lane_route)
+	// collapses a per-element cross-TU function call to a couple of
+	// load/stores — the dominant cost without LTO.
 	func() struct{} { args = append(args, "-O3"); return struct{}{} }()
+	func() struct{} { args = append(args, "-flto=thin"); return struct{}{} }()
 	// x86-64-v3 (Haswell-era / AVX2 / FMA / BMI2) is the broadly-
 	// available baseline that LLVM's vectorizer can target with 4-wide
 	// i64 / 8-wide i32 SIMD. Without it the cost model defaults to
@@ -1616,6 +1620,12 @@ func llvmClangLinkBinaryArgs(target string, objectPaths []string, binaryPath str
 		// Osty: toolchain/llvmgen.osty:1195:9
 		func() struct{} { args = append(args, target); return struct{}{} }()
 	}
+	// Osty: toolchain/llvmgen.osty:1196:5 — -O3 + -flto=thin on the
+	// link line so the thinLTO cross-module pass actually runs. Without
+	// this, objects compiled with -flto=thin still get linked without
+	// the LTO inlining step and the runtime helpers stay un-inlined.
+	func() struct{} { args = append(args, "-O3"); return struct{}{} }()
+	func() struct{} { args = append(args, "-flto=thin"); return struct{}{} }()
 	// Osty: toolchain/llvmgen.osty:1197:5
 	for _, objectPath := range objectPaths {
 		// Osty: toolchain/llvmgen.osty:1198:9
