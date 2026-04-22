@@ -151,6 +151,13 @@ type Function struct {
 	// keyword in the `define`/`declare` line so the function uses
 	// the platform's C calling convention.
 	CABI bool
+
+	// Vectorize is set when the function carries `#[vectorize]` (v0.6
+	// A5 §3.8.3). The LLVM emitter attaches `!llvm.loop !N` metadata
+	// with `llvm.loop.vectorize.enable=true` to every loop backedge
+	// lowered in the body. Pure hint — the LLVM vectorizer makes the
+	// final legality + profitability decision.
+	Vectorize bool
 }
 
 // At returns the function's source span.

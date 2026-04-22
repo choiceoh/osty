@@ -156,6 +156,14 @@ var annotationRules = map[string]AnnotationTarget{
 	// `_test.osty` files; production builds exclude them. No
 	// arguments.
 	"test": TargetTopLevelDecl,
+	// v0.6 A5 (SIMD track). Requests the LLVM backend to attach
+	// `!llvm.loop !{..., !"llvm.loop.vectorize.enable", i1 true}`
+	// metadata to every loop lowered inside the annotated function
+	// body. A hint only: LLVM's loop vectorizer still performs legality
+	// and profitability analysis, and GC safepoint polls in the latch
+	// may inhibit vectorization in practice — see SPEC_GAPS.md entry
+	// "vectorize-hint". No arguments.
+	"vectorize": TargetTopLevelDecl | TargetMethod,
 }
 
 // IsAllowedAnnotation reports whether an annotation name is part of the

@@ -82,6 +82,7 @@ func GenerateFromMIR(m *mir.Module, opts Options) ([]byte, error) {
 	g.emitGlobalVars()
 	g.emitStringPool()
 	g.emitRuntimeDeclarations()
+	g.emitLoopMetadata()
 	return withDataLayout([]byte(g.out.String()), opts.Target), nil
 }
 
@@ -140,6 +141,14 @@ type mirGen struct {
 	// ignores env and delegates to the real fn.
 	thunkDefs  map[string]string // symbol → full thunk IR
 	thunkOrder []string
+
+	// v0.6 A5: vectorize hint. vectorizeHint mirrors fn.Vectorize and
+	// is set at function entry; it drives `!llvm.loop !N` metadata
+	// emission on loop back-edge terminators. loopMDDefs accumulates
+	// the self-referential metadata node definitions for the entire
+	// module, flushed at module tail in GenerateFromMIR.
+	vectorizeHint bool
+	loopMDDefs    []string
 }
 
 // mirFnSig caches a function's LLVM signature so call sites can render
@@ -171,6 +180,39 @@ func firstNonEmpty(xs ...string) string {
 		}
 	}
 	return ""
+}
+
+// nextLoopVectorizeMD allocates a fresh distinct self-referential
+// `!llvm.loop` metadata node whose property list enables LLVM's loop
+// vectorizer, records its textual definition, and returns the node
+// reference (e.g. `!4`). Module-scoped numbering keeps IDs unique
+// across every loop in the translation unit. Kept in sync with the
+// legacy HIR emitter's counterpart in `generator.go` — both paths now
+// honor `#[vectorize]` so the backend dispatcher's MIR-first default
+// does not drop the hint on the floor.
+func (g *mirGen) nextLoopVectorizeMD() string {
+	base := len(g.loopMDDefs)
+	loopRef := fmt.Sprintf("!%d", base)
+	enableRef := fmt.Sprintf("!%d", base+1)
+	g.loopMDDefs = append(g.loopMDDefs,
+		fmt.Sprintf("%s = distinct !{%s, %s}", loopRef, loopRef, enableRef),
+		fmt.Sprintf(`%s = !{!"llvm.loop.vectorize.enable", i1 true}`, enableRef),
+	)
+	return loopRef
+}
+
+// emitLoopMetadata appends every `!llvm.loop` node + vectorize-enable
+// property collected during function emission to the module tail. No
+// module footer is emitted when no `#[vectorize]` function ran.
+func (g *mirGen) emitLoopMetadata() {
+	if len(g.loopMDDefs) == 0 {
+		return
+	}
+	g.out.WriteByte('\n')
+	for _, def := range g.loopMDDefs {
+		g.out.WriteString(def)
+		g.out.WriteByte('\n')
+	}
 }
 
 // ==== support check ====
@@ -772,6 +814,7 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	g.localSlots = map[mir.LocalID]string{}
 	g.fnBuf.Reset()
 	g.gcRoots = g.gcRoots[:0]
+	g.vectorizeHint = fn.Vectorize
 
 	emitName := fn.Name
 	if fn.ExportSymbol != "" {
@@ -2675,18 +2718,30 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 		// call on every tight-loop iteration. Forward gotos (if/else
 		// joins, fall-throughs) do not need extra polls because the
 		// function already took one at entry.
-		if g.opts.EmitGC && x.Target <= g.curBlockID {
+		//
+		// v0.6 A5: `#[vectorize]` functions opt out of per-iteration
+		// polls — the vectorizer cannot analyse a latch with a
+		// side-effecting call, and the entry safepoint + post-return
+		// safepoint in the caller bracket the window. See §3.8.3.
+		isBackedge := x.Target <= g.curBlockID
+		if g.opts.EmitGC && isBackedge && !g.vectorizeHint {
 			g.emitLoopSafepointKind()
 		}
 		g.fnBuf.WriteString("  br label %")
 		g.fnBuf.WriteString(g.blockLabels[x.Target])
+		if isBackedge && g.vectorizeHint {
+			g.fnBuf.WriteString(", !llvm.loop ")
+			g.fnBuf.WriteString(g.nextLoopVectorizeMD())
+		}
 		g.fnBuf.WriteByte('\n')
 	case *mir.BranchTerm:
 		// Same throttled back-edge rule applied to conditional
 		// branches — covers `while cond { ... }` style loops where
 		// the cond block has a conditional branch back to its own
 		// body.
-		if g.opts.EmitGC && (x.Then <= g.curBlockID || x.Else <= g.curBlockID) {
+		isBackedge := x.Then <= g.curBlockID || x.Else <= g.curBlockID
+		// v0.6 A5 — same vectorize-hint opt-out as the GotoTerm case.
+		if g.opts.EmitGC && isBackedge && !g.vectorizeHint {
 			g.emitLoopSafepointKind()
 		}
 		cond, err := g.evalOperand(x.Cond, mir.TBool)
@@ -2699,6 +2754,10 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 		g.fnBuf.WriteString(g.blockLabels[x.Then])
 		g.fnBuf.WriteString(", label %")
 		g.fnBuf.WriteString(g.blockLabels[x.Else])
+		if isBackedge && g.vectorizeHint {
+			g.fnBuf.WriteString(", !llvm.loop ")
+			g.fnBuf.WriteString(g.nextLoopVectorizeMD())
+		}
 		g.fnBuf.WriteByte('\n')
 	case *mir.SwitchIntTerm:
 		scrutT := x.Scrutinee.Type()

@@ -180,6 +180,7 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 		CABI:         hasNamedAnnotation(fn.Annotations, "c_abi"),
 		IsIntrinsic:  hasNamedAnnotation(fn.Annotations, "intrinsic"),
 		NoAlloc:      hasNamedAnnotation(fn.Annotations, "no_alloc"),
+		Vectorize:    hasNamedAnnotation(fn.Annotations, "vectorize"),
 	}
 	if out.Return == nil {
 		out.Return = TUnit

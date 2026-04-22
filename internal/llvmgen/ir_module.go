@@ -532,6 +532,21 @@ func legacyFnDeclFromIR(fn *ostyir.FnDecl, asMethod bool) (*ast.FnDecl, error) {
 		Name:       fn.Name,
 		ReturnType: legacyTypeFromIR(fn.Return),
 	}
+	// Surface the narrow set of backend-relevant annotations that the
+	// legacy AST emitter re-reads from the reified FnDecl. The bridge
+	// intentionally does not rematerialise user-facing annotations like
+	// `#[json]` or `#[deprecated]` — those are consumed upstream (by the
+	// resolver / lint) before the IR is handed to the backend. Only
+	// codegen-behavior flags get reconstituted, and only as bare-flag
+	// placeholders; their semantics are carried by the IR fields, the
+	// annotation names here are just the signal the emitter checks for.
+	if fn.Vectorize {
+		out.Annotations = append(out.Annotations, &ast.Annotation{
+			PosV: start,
+			EndV: start,
+			Name: "vectorize",
+		})
+	}
 	if asMethod {
 		out.Recv = &ast.Receiver{PosV: start, EndV: start, Mut: fn.ReceiverMut}
 	}
