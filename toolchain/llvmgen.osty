@@ -46,6 +46,23 @@ pub struct LlvmEmitter {
     pub body: List<String>,
     pub locals: List<LlvmBinding>,
     pub stringGlobals: List<LlvmStringGlobal>,
+    /// nativeBoundedLens records the offset slack `k` such that
+    /// `name + k <= len(list_param)` for each (name, list_param) pair
+    /// the analyser has proven a bound on. Single direct
+    /// `let n = list.len()` populates `{list: 0}`; `let m = n - 7`
+    /// then propagates to `{list: 7}`; the canonical
+    /// `if a.len() < b.len() { a.len() } else { b.len() }` diamond
+    /// populates both lists with offset 0. See
+    /// internal/llvmgen/native_entry_snapshot.go for the consuming
+    /// emitter helpers.
+    pub nativeBoundedLens: Map<String, Map<String, Int>>,
+    /// nativeSafeIndices is the per-loop-body view of
+    /// nativeBoundedLens: for each in-flight loop variable `i`,
+    /// `nativeSafeIndices[i][L] = k` means `L[i + addend]` is safe
+    /// for any constant `addend` in `[0, k]`. The list-index emitter
+    /// consults this to skip the runtime bounds-check branch — that
+    /// branch's slow-path call is what blocks LLVM's LoopVectorizer.
+    pub nativeSafeIndices: Map<String, Map<String, Int>>,
 }
 
 pub struct LlvmIfLabels {
