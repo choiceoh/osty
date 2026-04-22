@@ -103,6 +103,100 @@ fn main() {
 	}
 }
 
+// TestTryGenerateNativeOwnedModuleCoversInterfaceBoxingDispatch locks
+// Phase 6b: `let s: Sized = v` boxes `v` into `%osty.iface` and
+// `s.size()` dispatches indirectly through the vtable.
+func TestTryGenerateNativeOwnedModuleCoversInterfaceBoxingDispatch(t *testing.T) {
+	src := `interface Sized {
+    fn size(self) -> Int
+}
+
+struct Vec {
+    count: Int,
+
+    fn size(self) -> Int {
+        self.count
+    }
+}
+
+fn main() {
+    let v = Vec { count: 3 }
+    let s: Sized = v
+    println(s.size())
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	out, ok, err := TryGenerateNativeOwnedModule(mod, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/native_iface_box_dispatch.osty",
+	})
+	if err != nil {
+		t.Fatalf("TryGenerateNativeOwnedModule errored: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryGenerateNativeOwnedModule reported uncovered for Sized/Vec boxing + dispatch")
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%osty.iface = type { ptr, ptr }",
+		"@osty.vtable.Vec__Sized",
+		"alloca %Vec",
+		"store %Vec",
+		"insertvalue %osty.iface undef, ptr",
+		"insertvalue %osty.iface",
+		"ptr @osty.vtable.Vec__Sized, 1",
+		"extractvalue %osty.iface",
+		"getelementptr ptr",
+		"load ptr, ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("native-owned IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestTryGenerateNativeOwnedModuleCoversInterfaceDispatchWithArgs
+// locks Phase 6c: non-self arguments flow through the indirect
+// call with their native LLVM types.
+func TestTryGenerateNativeOwnedModuleCoversInterfaceDispatchWithArgs(t *testing.T) {
+	src := `interface Combine {
+    fn combine(self, other: Int) -> Int
+}
+
+struct Thing {
+    x: Int,
+
+    fn combine(self, other: Int) -> Int {
+        self.x + other
+    }
+}
+
+fn main() {
+    let t = Thing { x: 3 }
+    let c: Combine = t
+    println(c.combine(4))
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	out, ok, err := TryGenerateNativeOwnedModule(mod, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/native_iface_dispatch_args.osty",
+	})
+	if err != nil {
+		t.Fatalf("TryGenerateNativeOwnedModule errored: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryGenerateNativeOwnedModule reported uncovered for Combine/Thing dispatch-with-args")
+	}
+	got := string(out)
+	if !strings.Contains(got, ", i64 4)") {
+		t.Fatalf("non-self arg `i64 4` missing from indirect call:\n%s", got)
+	}
+	if !strings.Contains(got, "@osty.vtable.Thing__Combine") {
+		t.Fatalf("vtable symbol missing:\n%s", got)
+	}
+}
+
 // TestTryGenerateNativeOwnedModuleSkipsInterfaceWithoutImpl locks
 // the guard: an interface with no structural impl in the module
 // must not produce any vtable / shim symbols. Otherwise we'd leak

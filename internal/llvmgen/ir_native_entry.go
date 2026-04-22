@@ -639,6 +639,112 @@ func buildNativeInterfaceImpl(
 	}, true
 }
 
+// nativeInterfaceBoxExpr wraps a concrete struct value expression
+// into an `llvmNativeExprInterfaceBox` expression that emits the
+// spill-to-slot + two-insertvalue sequence. The interface target
+// must be a non-generic named interface that the concrete type
+// structurally satisfies — otherwise we'd point at a vtable
+// symbol the emitter never emitted.
+//
+// Returns (nil, false) when the target interface isn't registered
+// or when no structural impl exists for the concrete type, so the
+// caller stays in the non-boxed path rather than producing a
+// dangling `@osty.vtable.<S>__<I>` reference.
+func nativeInterfaceBoxExpr(ctx *nativeProjectionCtx, ifaceType ostyir.Type, concrete *llvmNativeExpr) (*llvmNativeExpr, bool) {
+	if ctx == nil || ifaceType == nil || concrete == nil {
+		return nil, false
+	}
+	named, ok := ifaceType.(*ostyir.NamedType)
+	if !ok || named == nil || len(named.Args) != 0 || named.Package != "" {
+		return nil, false
+	}
+	if _, ok := ctx.interfacesByName[named.Name]; !ok {
+		return nil, false
+	}
+	structName := strings.TrimPrefix(concrete.llvmType, "%")
+	if structName == "" || structName == concrete.llvmType {
+		return nil, false
+	}
+	vtable := "@osty.vtable." + structName + "__" + named.Name
+	return &llvmNativeExpr{
+		kind:         llvmNativeExprInterfaceBox,
+		llvmType:     "%osty.iface",
+		name:         vtable,
+		baseLLVMType: concrete.llvmType,
+		childExprs:   []*llvmNativeExpr{concrete},
+	}, true
+}
+
+// nativeInterfaceMethodCallExpr builds a native interface-call
+// expression when the method-call receiver is an `%osty.iface`
+// fat pointer. The interface method's slot index is looked up on
+// `ctx.interfacesByName` (declaration order) and its LLVM return +
+// non-self parameter types are encoded into the native expression
+// so the emitter can render the indirect-call argument list
+// exactly. Returns (nil, false) when the receiver isn't an
+// interface or the requested method is unknown.
+func nativeInterfaceMethodCallExpr(
+	ctx *nativeProjectionCtx,
+	e *ostyir.MethodCall,
+	receiverValue *llvmNativeExpr,
+) (*llvmNativeExpr, bool) {
+	if ctx == nil || e == nil || e.Receiver == nil || receiverValue == nil {
+		return nil, false
+	}
+	if receiverValue.llvmType != "%osty.iface" {
+		return nil, false
+	}
+	named, ok := e.Receiver.Type().(*ostyir.NamedType)
+	if !ok || named == nil || len(named.Args) != 0 {
+		return nil, false
+	}
+	iface, ok := ctx.interfacesByName[named.Name]
+	if !ok {
+		return nil, false
+	}
+	var (
+		method *nativeInterfaceMethod
+		slot   = -1
+	)
+	for i, m := range iface.methods {
+		if m != nil && m.name == e.Name {
+			method = m
+			slot = i
+			break
+		}
+	}
+	if method == nil || slot < 0 {
+		return nil, false
+	}
+	if len(e.Args) != len(method.paramLLVMs) {
+		return nil, false
+	}
+	children := make([]*llvmNativeExpr, 0, len(e.Args)+1)
+	children = append(children, receiverValue)
+	for i, arg := range e.Args {
+		if arg.IsKeyword() {
+			return nil, false
+		}
+		argExpr, ok := nativeExprFromIR(ctx, arg.Value)
+		if !ok {
+			return nil, false
+		}
+		if argExpr.llvmType != method.paramLLVMs[i] {
+			return nil, false
+		}
+		children = append(children, argExpr)
+	}
+	paramList := strings.Join(method.paramLLVMs, ", ")
+	return &llvmNativeExpr{
+		kind:       llvmNativeExprInterfaceCall,
+		llvmType:   method.returnLLVM,
+		name:       e.Name,
+		text:       paramList,
+		fieldIndex: slot,
+		childExprs: children,
+	}, true
+}
+
 // emitNativeInterfaceVtable emits
 // `@osty.vtable.<struct>__<iface> = internal constant { ptr, ptr, ... } { ptr @osty.shim...., ... }`
 // — one slot per interface method, in declaration order.
@@ -1464,6 +1570,18 @@ func nativeStmtFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType s
 		if !ok {
 			return nil, false
 		}
+		// Auto-box concrete → interface: when the declared slot type
+		// is an interface and the RHS produced a concrete struct
+		// value, wrap it in a native interface-box expression so
+		// the emitter spills the struct and assembles the fat
+		// pointer.
+		if s.Type != nil && value.llvmType != "%osty.iface" {
+			if declLLVM, ok := nativeLLVMTypeFromIR(ctx, s.Type); ok && declLLVM == "%osty.iface" {
+				if boxed, ok := nativeInterfaceBoxExpr(ctx, s.Type, value); ok {
+					value = boxed
+				}
+			}
+		}
 		kind := llvmNativeStmtLet
 		if s.Mut {
 			kind = llvmNativeStmtMutLet
@@ -1474,6 +1592,12 @@ func nativeStmtFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType s
 			ctx.bindScopeName(s.Name, info)
 		} else {
 			ctx.bindScopeName(s.Name, nativeExprInfoFromLLVMType(value.llvmType))
+		}
+		// If we boxed above, rebind with `%osty.iface` info so later
+		// method-call dispatch on this ident sees the interface
+		// shape rather than the concrete struct's binding.
+		if value.llvmType == "%osty.iface" {
+			ctx.bindScopeName(s.Name, nativeExprInfoFromLLVMType("%osty.iface"))
 		}
 		return &llvmNativeStmt{
 			kind:       kind,
@@ -2455,6 +2579,20 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 			return builtin, true
 		}
 		if len(e.TypeArgs) != 0 {
+			return nil, false
+		}
+		// Interface-receiver dispatch: evaluate the receiver first
+		// and check whether it lowers to `%osty.iface`. If so, emit
+		// an indirect vtable call instead of the concrete direct
+		// call below.
+		if recvLLVM, ok := nativeLLVMTypeFromIR(ctx, e.Receiver.Type()); ok && recvLLVM == "%osty.iface" {
+			receiverValue, ok := nativeExprFromIR(ctx, e.Receiver)
+			if !ok {
+				return nil, false
+			}
+			if call, ok := nativeInterfaceMethodCallExpr(ctx, e, receiverValue); ok {
+				return call, true
+			}
 			return nil, false
 		}
 		ownerName, ok := nativeMethodOwnerName(e.Receiver.Type())
@@ -3905,6 +4043,16 @@ func nativeLLVMTypeFromIR(ctx *nativeProjectionCtx, t ostyir.Type) (string, bool
 		}
 		if info, ok := nativeEnumInfoFromType(ctx, tt); ok {
 			return info.def.llvmType, true
+		}
+		// Interface-typed values are `%osty.iface` fat pointers
+		// — `{ data_ptr, vtable_ptr }`. The vtable surface is
+		// emitted by appendNativeInterfaceSurface; boxing /
+		// indirect dispatch is handled by the projection's
+		// LetStmt + MethodCall paths.
+		if ctx != nil && tt != nil && len(tt.Args) == 0 && tt.Package == "" {
+			if _, ok := ctx.interfacesByName[tt.Name]; ok {
+				return "%osty.iface", true
+			}
 		}
 		return "", false
 	case *ostyir.OptionalType:
