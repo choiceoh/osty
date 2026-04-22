@@ -934,15 +934,7 @@ fn checkSubstCacheSet(env: CheckEnv, ty: Int, generics: List<String>, args: List
 }
 
 fn checkSubstCacheKey(ty: Int, generics: List<String>, args: List<Int>) -> String {
-    // Materialize the two helper results into typed `String` locals
-    // before splicing them into the interpolation. Inlining the calls
-    // directly leaves a synthetic interp temp at `<error>` type under
-    // MIR lowering, tripping `unsupported local type <error> in
-    // checkSubstCacheKey` in mir_generator.go — same shape as the
-    // `let v: Int = xs[i]` workaround in `checkIntKey` below.
-    let gKey: String = checkStringKey(generics)
-    let aKey: String = checkIntKey(args)
-    "{ty}\u{1f}{gKey}\u{1f}{aKey}"
+    "{ty}\u{1f}{checkStringKey(generics)}\u{1f}{checkIntKey(args)}"
 }
 
 // ---------------------------------------------------------------------
