@@ -1,8 +1,6 @@
 package selfhost
 
 import (
-	"errors"
-
 	"github.com/osty/osty/internal/diag"
 )
 
@@ -303,35 +301,13 @@ func ResolveStructuredFromRunForPath(run *FrontendRun, path string) ResolveResul
 	return result
 }
 
-// ResolvePackageStructured lowers one structured package input into a
-// synthetic selfhost AST and runs the self-host resolver over the merged
-// package namespace. Cfg filtering activates when input.Cfg is non-nil.
+// ResolvePackageStructured re-parses each input file via the self-host
+// lexer + parser, merges the per-file AstArenas into a synthetic package
+// arena, and runs the self-host resolver over the merged namespace.
+// Source text is the sole AST ingress — no *ast.File round-trip. Cfg
+// filtering activates when input.Cfg is non-nil.
 func ResolvePackageStructured(input PackageResolveInput) (ResolveResult, error) {
 	cfg := input.Cfg.toSelf()
-	if selfhostCanBuildPackageAstDirect(input.Files) {
-		file, _, err := selfhostBuildPackageAstDirect(input.Files)
-		if err == nil {
-			if file == nil {
-				return ResolveResult{}, nil
-			}
-			result := adaptResolveResult(
-				selfResolveAstFileWithCfg(file, cfg),
-				file,
-				func(start, end int) (int, int) {
-					if end < start {
-						end = start
-					}
-					return start, end
-				},
-			)
-			selfhostAnnotateResolveFiles(&result, input.Files)
-			return result, nil
-		}
-		var unsupported *selfhostLoweringUnsupported
-		if !errors.As(err, &unsupported) {
-			return ResolveResult{}, err
-		}
-	}
 	file, layout, err := selfhostBuildPackageAst(input.Files)
 	if err != nil {
 		return ResolveResult{}, err

@@ -123,19 +123,14 @@ func nativeResolveInput(pkg *Package) (selfhost.PackageResolveInput, []nativeRes
 		if len(src) == 0 {
 			continue
 		}
-		// File is required by the Direct lowering path in
-		// selfhostBuildPackageAstDirect. When pf was loaded via
-		// LoadPackageForNative it is nil; passing nil here makes
-		// ResolvePackageStructured take the non-Direct path, which
-		// re-parses Source via the self-host lexer + parser (no
-		// astbridge).
+		// ResolvePackageStructured re-parses Source via the self-host
+		// lexer + parser — no *ast.File round-trip, so we only pass
+		// source bytes + routing metadata here.
 		input.Files = append(input.Files, selfhost.PackageResolveFile{
-			Source:    append([]byte(nil), src...),
-			File:      pf.File,
-			SourceMap: pf.CanonicalMap,
-			Base:      base,
-			Name:      filepath.Base(pf.Path),
-			Path:      pf.Path,
+			Source: append([]byte(nil), src...),
+			Base:   base,
+			Name:   filepath.Base(pf.Path),
+			Path:   pf.Path,
 		})
 		files = append(files, nativeResolveFileInfo{
 			path:       pf.Path,

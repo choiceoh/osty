@@ -1,20 +1,12 @@
 package selfhost
 
 import (
-	"errors"
 	"fmt"
-
-	"github.com/osty/osty/internal/ast"
-	"github.com/osty/osty/internal/sourcemap"
 )
 
 type PackageCheckFile struct {
-	Source []byte    `json:"source,omitempty"`
-	File   *ast.File `json:"-"`
-	// SourceMap projects original parser AST spans into the canonical checker
-	// source held in Source. Nil when Source is a direct passthrough.
-	SourceMap *sourcemap.Map `json:"-"`
-	Base      int            `json:"base,omitempty"`
+	Source []byte `json:"source,omitempty"`
+	Base   int    `json:"base,omitempty"`
 	// Name is the display filename surfaced in diagnostic telemetry (typically
 	// a basename like `user.osty`). Empty when unknown; the telemetry suffix
 	// falls back to `@Lnn:Cnn` without a filename prefix in that case.
@@ -91,29 +83,12 @@ type PackageCheckInput struct {
 	Imports []PackageCheckImport `json:"imports,omitempty"`
 }
 
-// CheckPackageStructured lowers one structured package input into a synthetic
-// selfhost AST, installs imported package surfaces directly into the checker
-// env, and runs the typed checker without routing through concatenated source
-// text for parsing.
+// CheckPackageStructured re-parses each input file via the self-host
+// lexer + parser, merges the per-file AstArenas into a synthetic package
+// arena, installs imported package surfaces directly into the checker
+// env, and runs the typed checker. Source text is the sole AST ingress
+// point — no *ast.File round-trip, no astbridge bumps.
 func CheckPackageStructured(input PackageCheckInput) (CheckResult, error) {
-	if selfhostCanBuildPackageAstDirect(input.Files) {
-		file, layout, err := selfhostBuildPackageAstDirect(input.Files)
-		if err == nil {
-			if file == nil {
-				return CheckResult{}, nil
-			}
-			cx := newElabCx(file, emptyTyArena())
-			selfhostInstallImportSurfaces(cx.env, input.Imports)
-			elabFile(cx)
-			result := adaptCheckResultWithByteLayout(serializeCheckResult(cx), layout)
-			selfhostAppendIntrinsicBodyGateForPackage(&result, input)
-			return result, nil
-		}
-		var unsupported *selfhostLoweringUnsupported
-		if !errors.As(err, &unsupported) {
-			return CheckResult{}, err
-		}
-	}
 	file, layout, err := selfhostBuildPackageAst(input.Files)
 	if err != nil {
 		return CheckResult{}, err
