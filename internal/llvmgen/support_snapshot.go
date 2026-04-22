@@ -77,6 +77,27 @@ type LlvmEmitter struct {
 	stringGlobals  []*LlvmStringGlobal
 	nativeListData map[string]*LlvmValue
 	nativeListLens map[string]*LlvmValue
+	// nativeBoundedLens records the offset slack `k` such that
+	// `name + k <= len(list_param)` for each (name, list_param) pair
+	// the analyser has proven a bound on. The unit is "scalar
+	// elements", matching the index space of `list[i]`. Single direct
+	// `let n = list.len()` populates `{list: 0}` (i.e. `n <=
+	// list.len()`); `let m = n - 7` then propagates to
+	// `{list: 7}` (i.e. `m + 7 <= list.len()`); the canonical
+	// `if a.len() < b.len() { a.len() } else { b.len() }` diamond
+	// populates both lists with offset 0.
+	//
+	// Consumed by the loop emitter: `for i in 0..bound` makes
+	// `safeOffset[i][L] = nativeBoundedLens[bound][L]`, which the
+	// list-index emitter uses to decide whether `L[i + k]` for a
+	// constant `k` is provably in-bounds.
+	nativeBoundedLens map[string]map[string]int
+	// nativeSafeIndices is the per-loop-body view of
+	// nativeBoundedLens: for each in-flight loop variable `i`,
+	// `nativeSafeIndices[i][L] = k` means `L[i + addend]` is safe
+	// for any constant `addend` in `[0, k]`. Cleared on loop-body
+	// exit.
+	nativeSafeIndices map[string]map[string]int
 }
 
 // Osty: toolchain/llvmgen.osty:56:5
@@ -113,14 +134,16 @@ type LlvmUnsupportedDiagnostic struct {
 // Osty: toolchain/llvmgen.osty:83:5
 func llvmEmitter() *LlvmEmitter {
 	return &LlvmEmitter{
-		temp:           0,
-		label:          0,
-		stringId:       0,
-		body:           make([]string, 0, 1),
-		locals:         make([]*LlvmBinding, 0, 1),
-		stringGlobals:  make([]*LlvmStringGlobal, 0, 1),
-		nativeListData: map[string]*LlvmValue{},
-		nativeListLens: map[string]*LlvmValue{},
+		temp:              0,
+		label:             0,
+		stringId:          0,
+		body:              make([]string, 0, 1),
+		locals:            make([]*LlvmBinding, 0, 1),
+		stringGlobals:     make([]*LlvmStringGlobal, 0, 1),
+		nativeListData:    map[string]*LlvmValue{},
+		nativeListLens:    map[string]*LlvmValue{},
+		nativeBoundedLens: map[string]map[string]int{},
+		nativeSafeIndices: map[string]map[string]int{},
 	}
 }
 
@@ -1488,11 +1511,24 @@ func llvmClangCompileObjectArgs(target string, irPath string, objectPath string)
 		// Osty: toolchain/llvmgen.osty:1178:9
 		func() struct{} { args = append(args, target); return struct{}{} }()
 	}
-	// Osty: toolchain/llvmgen.osty:1179:5 — baseline -O2 for production
-	// IR compilation. -O0 (the previous default) stranded every
+	// Osty: toolchain/llvmgen.osty:1179:5 — -O3 for production IR
+	// compilation. -O0 (the previous default) stranded every
 	// alloca/load/store emitted by the backend and disabled
-	// vectorization, adding ~100x on simd-friendly benches.
-	func() struct{} { args = append(args, "-O2"); return struct{}{} }()
+	// vectorization. -O3 over -O2 unlocks more aggressive
+	// vectorization on the cleaned-up bounds-check-free fast path.
+	func() struct{} { args = append(args, "-O3"); return struct{}{} }()
+	// x86-64-v3 (Haswell-era / AVX2 / FMA / BMI2) is the broadly-
+	// available baseline that LLVM's vectorizer can target with 4-wide
+	// i64 / 8-wide i32 SIMD. Without it the cost model defaults to
+	// SSE2 (width 2 for i64), leaving the bounds-check-free hot
+	// loops well below their potential. Targets that aren't x86-64
+	// (e.g. arm64) ignore this flag because LLVM only applies it to
+	// the matching backend; we still gate on target containing
+	// "x86_64" / "amd64" to avoid passing flags an unrelated backend
+	// might warn about.
+	if llvmStrings.Contains(target, "x86_64") || llvmStrings.Contains(target, "amd64") {
+		func() struct{} { args = append(args, "-march=x86-64-v3"); return struct{}{} }()
+	}
 	// Osty: toolchain/llvmgen.osty:1180:5
 	func() struct{} { args = append(args, "-c"); return struct{}{} }()
 	// Osty: toolchain/llvmgen.osty:1181:5
