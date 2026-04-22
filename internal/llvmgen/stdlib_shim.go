@@ -554,6 +554,9 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 	case "splitN":
 		v, err := g.emitStdStringsSplitN(call)
 		return v, true, err
+	case "fields":
+		v, err := g.emitStdStringsFields(call)
+		return v, true, err
 	case "slice":
 		v, err := g.emitStdStringsSlice(call)
 		return v, true, err
@@ -637,7 +640,7 @@ func (g *generator) stdStringsCallStaticResult(call *ast.CallExpr) (value, bool)
 		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"Bytes"}}}, true
 	case "concat", "join", "repeat", "replace", "replaceAll", "slice", "trim", "trimSpace", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toUpper", "toLower":
 		return value{typ: "ptr", gcManaged: true}, true
-	case "split", "splitN":
+	case "split", "splitN", "fields":
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true}, true
 	}
 	return value{}, false
@@ -762,6 +765,31 @@ func (g *generator) emitStdStringsSplitN(call *ast.CallExpr) (value, error) {
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(s), toOstyValue(sep), toOstyValue(nLoaded)})
+	g.takeOstyEmitter(emitter)
+	parts := fromOstyValue(out)
+	parts.gcManaged = true
+	parts.listElemTyp = "ptr"
+	parts.listElemString = true
+	return parts, nil
+}
+
+// emitStdStringsFields mirrors emitStdStringsSplit for the 1-arg
+// whitespace tokenizer. Runtime body is osty_rt_strings_Fields.
+// Parity with Go's strings.Fields and the pure-Osty body at
+// internal/stdlib/modules/strings.osty:fields (byte-level ASCII
+// whitespace, consistent with the rest of the shim).
+func (g *generator) emitStdStringsFields(call *ast.CallExpr) (value, error) {
+	if len(call.Args) != 1 {
+		return value{}, unsupportedf("call", "strings.fields expects 1 argument, got %d", len(call.Args))
+	}
+	s, err := g.emitStdStringsArg(call.Args[0], "fields", 0)
+	if err != nil {
+		return value{}, err
+	}
+	symbol := "osty_rt_strings_Fields"
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(s)})
 	g.takeOstyEmitter(emitter)
 	parts := fromOstyValue(out)
 	parts.gcManaged = true

@@ -1,14 +1,4 @@
-use go "strings" as strings {
-    fn hasPrefix(s: String, prefix: String) -> Bool
-    fn join(elems: List<String>, sep: String) -> String
-    fn repeat(s: String, count: Int) -> String
-    fn replaceAll(s: String, old: String, new: String) -> String
-    fn split(s: String, sep: String) -> List<String>
-    fn splitN(s: String, sep: String, n: Int) -> List<String>
-    fn toLower(s: String) -> String
-    fn trimPrefix(s: String, prefix: String) -> String
-    fn trimSpace(s: String) -> String
-}
+use std.strings as strings
 
 /// SelfDocPackage is the self-hosted documentation root for one package.
 pub struct SelfDocPackage {

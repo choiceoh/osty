@@ -7,10 +7,10 @@
 //
 // NOTE(osty-migration): AST traversal for top-level shells is deeply tied to
 // Go ast.Decl types; porting requires either an Osty-side AST mirror
-// (currently absent — toolchain/ast_lower.osty is Go-FFI only) or rerouting
-// through the IR tier (toolchain/ir.osty). Const-eval (constExpr chain) is
-// the closest candidate for near-term Osty ownership once simple Expr
-// mirrors exist.
+// (currently absent — internal/selfhost/ast_lower.osty is the Go-FFI bridge,
+// not a native AST) or rerouting through the IR tier (toolchain/ir.osty).
+// Const-eval (constExpr chain) is the closest candidate for near-term Osty
+// ownership once simple Expr mirrors exist.
 package llvmgen
 
 import (
