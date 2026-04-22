@@ -2,6 +2,7 @@ package llvmgen
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -1920,8 +1921,9 @@ func TestGenerateFromMIREmitGCDefaultOff(t *testing.T) {
 }
 
 // TestGenerateFromMIREmitGCManagedParam — A function with a
-// managed-ptr param (String) should bind the param slot as a root,
-// take an entry safepoint, and release the root before ret.
+// managed-ptr param (String) should surface the param slot in the
+// entry safepoint root array rather than function-long root_bind
+// pinning.
 func TestGenerateFromMIREmitGCManagedParam(t *testing.T) {
 	// fn identity(s: String) -> String { s }
 	fn := &ir.FnDecl{
@@ -1944,39 +1946,39 @@ func TestGenerateFromMIREmitGCManagedParam(t *testing.T) {
 	}
 	got := string(out)
 	for _, want := range []string{
-		// Runtime declarations.
-		"declare void @osty.gc.root_bind_v1(ptr)",
-		"declare void @osty.gc.root_release_v1(ptr)",
 		"declare void @osty.gc.safepoint_v1(i64, ptr, i64)",
-		// Entry safepoint carries kind=ENTRY (1) in the high byte and
-		// serial 0 in the low 56 bits → 1<<56.
-		"call void @osty.gc.safepoint_v1(i64 72057594037927936, ptr null, i64 0)",
-		// Param slot is bound as a root.
-		"call void @osty.gc.root_bind_v1(ptr %p",
-		// Release on the return path.
-		"call void @osty.gc.root_release_v1(ptr %p",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
 	}
-	// The return value load must happen before root_release so the
-	// live value is in an SSA register when the slot drops out of
-	// the root list.
-	loadIdx := strings.Index(got, "load ptr, ptr %p")
-	releaseIdx := strings.Index(got, "call void @osty.gc.root_release_v1")
-	retIdx := strings.Index(got, "ret ptr")
-	if loadIdx < 0 || releaseIdx < 0 || retIdx < 0 {
-		t.Fatalf("ordering markers missing in:\n%s", got)
+	for _, forbidden := range []string{
+		"osty.gc.root_bind_v1",
+		"osty.gc.root_release_v1",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("unexpected legacy root-binding symbol %q in:\n%s", forbidden, got)
+		}
 	}
-	if !(loadIdx < releaseIdx && releaseIdx < retIdx) {
-		t.Fatalf("expected load → release → ret ordering in:\n%s", got)
+	if !strings.Contains(got, "alloca ptr, i64 2") {
+		t.Fatalf("expected entry safepoint array for return slot + param slot in:\n%s", got)
+	}
+	for _, want := range []string{
+		"store ptr %l0, ptr %t1",
+		"store ptr %p1, ptr %t2",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected safepoint root array to contain %q in:\n%s", want, got)
+		}
+	}
+	if !regexp.MustCompile(`call void @osty\.gc\.safepoint_v1\(i64 72057594037927936, ptr %t\d+, i64 2\)`).MatchString(got) {
+		t.Fatalf("expected entry safepoint to receive two explicit roots in:\n%s", got)
 	}
 }
 
 // TestGenerateFromMIREmitGCNonParamLocalZeroInit — A non-param
-// managed local must be null-initialised before root_bind so the GC
-// never scans undef memory.
+// managed local must be null-initialised before the first safepoint so
+// the GC never scans undef memory.
 func TestGenerateFromMIREmitGCNonParamLocalZeroInit(t *testing.T) {
 	// fn first(xs: List<Int>) -> List<Int> { let y = xs; y }
 	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
@@ -2009,15 +2011,15 @@ func TestGenerateFromMIREmitGCNonParamLocalZeroInit(t *testing.T) {
 	if !strings.Contains(got, "store ptr null, ptr %l") {
 		t.Fatalf("expected non-param local to be null-initialised in:\n%s", got)
 	}
-	// The null-init must happen before the bind so the GC sees a
+	// The null-init must happen before the first safepoint so the GC sees a
 	// valid (null) pointer at every safepoint.
 	zeroIdx := strings.Index(got, "store ptr null, ptr %l")
-	bindIdx := strings.Index(got, "call void @osty.gc.root_bind_v1(ptr %l")
-	if zeroIdx < 0 || bindIdx < 0 {
-		t.Fatalf("zero-init / bind markers missing in:\n%s", got)
+	safepointIdx := strings.Index(got, "call void @osty.gc.safepoint_v1(i64 72057594037927936")
+	if zeroIdx < 0 || safepointIdx < 0 {
+		t.Fatalf("zero-init / safepoint markers missing in:\n%s", got)
 	}
-	if !(zeroIdx < bindIdx) {
-		t.Fatalf("expected zero-init before root_bind in:\n%s", got)
+	if !(zeroIdx < safepointIdx) {
+		t.Fatalf("expected zero-init before the first safepoint in:\n%s", got)
 	}
 }
 
@@ -2052,6 +2054,51 @@ func TestGenerateFromMIREmitGCNoManagedLocals(t *testing.T) {
 	}
 	if strings.Contains(got, "osty.gc.root_release_v1") {
 		t.Fatalf("unexpected root_release in pointer-free function:\n%s", got)
+	}
+}
+
+func TestGenerateFromMIREmitGCChunksSafepointRoots(t *testing.T) {
+	oldChunkSize := safepointRootChunkSize
+	safepointRootChunkSize = 4
+	defer func() { safepointRootChunkSize = oldChunkSize }()
+
+	params := []*ir.Param{
+		{Name: "a", Type: ir.TString},
+		{Name: "b", Type: ir.TString},
+		{Name: "c", Type: ir.TString},
+		{Name: "d", Type: ir.TString},
+		{Name: "e", Type: ir.TString},
+		{Name: "f", Type: ir.TString},
+		{Name: "g", Type: ir.TString},
+	}
+	fn := &ir.FnDecl{
+		Name:   "head",
+		Return: ir.TString,
+		Params: params,
+		Body: &ir.Block{
+			Result: &ir.Ident{Name: "a", Kind: ir.IdentParam, T: ir.TString},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/gc-chunks.osty",
+		EmitGC:      true,
+	})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	allocas := regexp.MustCompile(`alloca ptr, i64 (\d+)`).FindAllStringSubmatch(got, -1)
+	if len(allocas) != 2 {
+		t.Fatalf("expected two safepoint root allocas, got %d in:\n%s", len(allocas), got)
+	}
+	if allocas[0][1] != "4" || allocas[1][1] != "4" {
+		t.Fatalf("expected safepoint root chunk sizes [4 4], got [%s %s] in:\n%s", allocas[0][1], allocas[1][1], got)
+	}
+	if gotCount := strings.Count(got, "call void @osty.gc.safepoint_v1(i64"); gotCount != 2 {
+		t.Fatalf("expected two chunked safepoint calls, got %d in:\n%s", gotCount, got)
 	}
 }
 
