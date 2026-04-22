@@ -7179,6 +7179,18 @@ static void osty_rt_enum_ptr_payload_trace(void *payload) {
  * capture values (scalars that the Osty frontend stores as raw bits
  * inside the slot) are handled transparently because `mark_slot_v1`
  * filters through `find_header`.
+ *
+ * Correctness caveat: `find_header` identifies real heap payloads by
+ * pointer, so a scalar capture whose 8-byte bit pattern happens to
+ * collide with a live payload address will be treated as a reachable
+ * pointer and keep that object alive for one extra cycle. On a 64-bit
+ * host typical IEEE-754 doubles and small integers do not alias heap
+ * addresses (heap sits in the high half of user space; small doubles
+ * have exponent bits 0x3F…, small ints sit below 0x0001…), so the
+ * collision probability is effectively zero in practice — but the
+ * guarantee is probabilistic, not structural. A follow-up that stores
+ * a per-capture kind bitmap would close this to a structural
+ * guarantee; today's code chooses the simpler self-describing layout.
  */
 static void osty_rt_closure_env_trace(void *payload) {
     osty_rt_closure_env *env = (osty_rt_closure_env *)payload;
@@ -8160,7 +8172,12 @@ typedef struct osty_gc_stats {
     int64_t humongous_alloc_bytes_total;
     int64_t humongous_swept_count_total;
     int64_t humongous_swept_bytes_total;
-    int64_t bump_block_count_total;
+    /* bump_block_count is a live gauge — sum of currently allocated
+     * bump blocks across tiers. The per-tier statics decrement on
+     * recycle, so this reflects "blocks in flight", not a cumulative
+     * total. The remaining bump fields are monotonic totals (see
+     * `*_total` suffix); they only grow. */
+    int64_t bump_block_count;
     int64_t bump_block_bytes_total;
     int64_t bump_alloc_count_total;
     int64_t bump_alloc_bytes_total;
@@ -8223,7 +8240,7 @@ void osty_gc_debug_stats(osty_gc_stats *out) {
     out->humongous_alloc_bytes_total = osty_gc_humongous_alloc_bytes_total;
     out->humongous_swept_count_total = osty_gc_humongous_swept_count_total;
     out->humongous_swept_bytes_total = osty_gc_humongous_swept_bytes_total;
-    out->bump_block_count_total =
+    out->bump_block_count =
         osty_gc_bump_block_count +
         osty_gc_survivor_bump_block_count +
         osty_gc_old_bump_block_count +
@@ -8460,7 +8477,7 @@ void osty_gc_debug_stats_dump(FILE *out) {
             "  nursery:                 %lld / %lld bytes, promote_age=%lld\n"
             "  free list:               %lld chunks, %lld bytes (reused %lld / %lld B total)\n"
             "  humongous:               alloc %lld / %lld B, swept %lld / %lld B\n"
-            "  bump (all tiers):        %lld blocks, %lld B, alloc %lld / %lld B, recycled %lld blocks / %lld B\n"
+            "  bump (all tiers):        %lld blocks live, %lld B allocated for blocks (cumul), alloc %lld / %lld B, recycled %lld blocks / %lld B\n"
             "}\n",
             (long long)s.collection_count,
             (long long)s.live_count, (long long)s.live_bytes,
@@ -8492,7 +8509,7 @@ void osty_gc_debug_stats_dump(FILE *out) {
             (long long)s.humongous_alloc_bytes_total,
             (long long)s.humongous_swept_count_total,
             (long long)s.humongous_swept_bytes_total,
-            (long long)s.bump_block_count_total,
+            (long long)s.bump_block_count,
             (long long)s.bump_block_bytes_total,
             (long long)s.bump_alloc_count_total,
             (long long)s.bump_alloc_bytes_total,
