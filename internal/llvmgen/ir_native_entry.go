@@ -47,6 +47,22 @@ type nativeTupleInfo struct {
 	elemLLVMTypes []string
 }
 
+// nativeResultInfo records one specialization of the built-in
+// `Result<T, E>` enum, laid out as a tagged union `{ i64, <ok>, <err> }`.
+// The tag carries 0 for `Ok` and 1 for `Err`; the two payload slots are
+// filled independently so a single-variant constructor only mutates its
+// own slot while the other stays at the zero value. The legacy-parity
+// naming scheme `%Result.<ok>.<err>` comes from `llvmResultTypeName`
+// so interop with the existing HIR path stays exact.
+type nativeResultInfo struct {
+	def       *llvmNativeStruct
+	okLLVM    string
+	errLLVM   string
+	llvmType  string
+	okIRType  ostyir.Type
+	errIRType ostyir.Type
+}
+
 // nativeInterfaceMethod captures a single interface method's
 // calling-convention-level shape: the LLVM return type and parameter
 // types *excluding* the receiver (self). The receiver is always
@@ -92,6 +108,8 @@ type nativeProjectionCtx struct {
 	structOrder           []string // declaration order for deterministic emission
 	tuplesByLLVMType      map[string]*nativeTupleInfo
 	tupleOrder            []string
+	resultsByLLVMType     map[string]*nativeResultInfo
+	resultOrder           []string
 	methodsByOwner        map[string]map[string]nativeMethodInfo
 	globalConsts          map[string]nativeConstValue
 	mutableGlobals        map[string]bool
@@ -235,10 +253,11 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 		return nil, false
 	}
 	ctx := &nativeProjectionCtx{
-		structsByName:    map[string]*nativeStructInfo{},
-		enumsByName:      map[string]*nativeEnumInfo{},
-		interfacesByName: map[string]*nativeInterfaceInfo{},
-		tuplesByLLVMType: map[string]*nativeTupleInfo{},
+		structsByName:     map[string]*nativeStructInfo{},
+		enumsByName:       map[string]*nativeEnumInfo{},
+		interfacesByName:  map[string]*nativeInterfaceInfo{},
+		tuplesByLLVMType:  map[string]*nativeTupleInfo{},
+		resultsByLLVMType: map[string]*nativeResultInfo{},
 		methodsByOwner:   map[string]map[string]nativeMethodInfo{},
 		globalConsts:     map[string]nativeConstValue{},
 		mutableGlobals:   map[string]bool{},
@@ -378,6 +397,11 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 			out.structs = append(out.structs, info.def)
 		}
 	}
+	for _, llvmType := range ctx.resultOrder {
+		if info := ctx.resultsByLLVMType[llvmType]; info != nil {
+			out.structs = append(out.structs, info.def)
+		}
+	}
 	if len(mod.Script) != 0 {
 		if hasMain {
 			return nil, false
@@ -462,10 +486,11 @@ func collectNativeInterfaceImpls(mod *ostyir.Module) []nativeInterfaceImpl {
 		return nil
 	}
 	ctx := &nativeProjectionCtx{
-		structsByName:    map[string]*nativeStructInfo{},
-		enumsByName:      map[string]*nativeEnumInfo{},
-		interfacesByName: map[string]*nativeInterfaceInfo{},
-		tuplesByLLVMType: map[string]*nativeTupleInfo{},
+		structsByName:     map[string]*nativeStructInfo{},
+		enumsByName:       map[string]*nativeEnumInfo{},
+		interfacesByName:  map[string]*nativeInterfaceInfo{},
+		tuplesByLLVMType:  map[string]*nativeTupleInfo{},
+		resultsByLLVMType: map[string]*nativeResultInfo{},
 		methodsByOwner:   map[string]map[string]nativeMethodInfo{},
 	}
 	structOrder := make([]string, 0)
@@ -2578,6 +2603,13 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 		if builtin, ok := nativeBuiltinMethodExprFromIR(ctx, e); ok {
 			return builtin, true
 		}
+		// Result.Ok(x) / Result.Err(e) — the IR carries these as
+		// method calls on the `Result` type name. Detect via the
+		// return type (MethodCall.T) rather than the receiver,
+		// which the lowerer marks as ErrType for type-name callees.
+		if call, ok := nativeResultConstructorExprFromIR(ctx, e); ok {
+			return call, true
+		}
 		if len(e.TypeArgs) != 0 {
 			return nil, false
 		}
@@ -3230,6 +3262,125 @@ func nativeTupleInfoFromType(ctx *nativeProjectionCtx, t ostyir.Type) (*nativeTu
 	}
 	info := ctx.tuplesByLLVMType[llvmType]
 	return info, info != nil
+}
+
+// nativeRegisterResultType registers a `Result<T, E>` specialization
+// on demand and returns its `%Result.<ok>.<err>` LLVM type name. The
+// emitted struct layout is `{ i64 tag, <ok>, <err> }`:
+// both payload slots always occupy space so the constructor can
+// insertvalue into only the "live" slot while the other stays at
+// the zero value. Idempotent — repeat calls with the same type args
+// return the cached entry.
+func nativeRegisterResultType(ctx *nativeProjectionCtx, okIR, errIR ostyir.Type) (string, bool) {
+	if ctx == nil {
+		return "", false
+	}
+	okLLVM, ok := nativeLLVMTypeFromIR(ctx, okIR)
+	if !ok || okLLVM == "void" {
+		return "", false
+	}
+	errLLVM, ok := nativeLLVMTypeFromIR(ctx, errIR)
+	if !ok || errLLVM == "void" {
+		return "", false
+	}
+	llvmType := llvmResultTypeName(okLLVM, errLLVM)
+	if _, exists := ctx.resultsByLLVMType[llvmType]; exists {
+		return llvmType, true
+	}
+	fields := []*llvmNativeStructField{
+		{llvmType: "i64"},
+		{llvmType: okLLVM},
+		{llvmType: errLLVM},
+	}
+	ctx.resultsByLLVMType[llvmType] = &nativeResultInfo{
+		def: &llvmNativeStruct{
+			name:     strings.TrimPrefix(llvmType, "%"),
+			llvmType: llvmType,
+			fields:   fields,
+		},
+		okLLVM:    okLLVM,
+		errLLVM:   errLLVM,
+		llvmType:  llvmType,
+		okIRType:  okIR,
+		errIRType: errIR,
+	}
+	ctx.resultOrder = append(ctx.resultOrder, llvmType)
+	return llvmType, true
+}
+
+// nativeResultConstructorExprFromIR lowers `Result.Ok(x)` /
+// `Result.Err(e)` method-call expressions into a native struct
+// literal over the Result<T, E> storage type. The tag occupies
+// field 0 (Ok=0, Err=1), the Ok payload sits in field 1, and the
+// Err payload in field 2. The constructor fills only its own
+// payload slot; the other payload stays at its zero value so
+// pattern matching can still read it safely.
+func nativeResultConstructorExprFromIR(ctx *nativeProjectionCtx, e *ostyir.MethodCall) (*llvmNativeExpr, bool) {
+	if ctx == nil || e == nil {
+		return nil, false
+	}
+	if e.Name != "Ok" && e.Name != "Err" {
+		return nil, false
+	}
+	named, ok := e.T.(*ostyir.NamedType)
+	if !ok || named == nil || !named.Builtin || named.Name != "Result" || len(named.Args) != 2 {
+		return nil, false
+	}
+	llvmType, ok := nativeRegisterResultType(ctx, named.Args[0], named.Args[1])
+	if !ok {
+		return nil, false
+	}
+	info := ctx.resultsByLLVMType[llvmType]
+	if info == nil {
+		return nil, false
+	}
+	if len(e.Args) != 1 {
+		return nil, false
+	}
+	if e.Args[0].IsKeyword() {
+		return nil, false
+	}
+	var (
+		tag          = "0"
+		payloadLLVM  = info.okLLVM
+		zeroLLVM     = info.errLLVM
+		okChild      *llvmNativeExpr
+		errChild     *llvmNativeExpr
+		payloadSlot  = 1
+		zeroSlot     = 2
+		payloadIR    = info.okIRType
+	)
+	if e.Name == "Err" {
+		tag = "1"
+		payloadLLVM = info.errLLVM
+		zeroLLVM = info.okLLVM
+		payloadSlot = 2
+		zeroSlot = 1
+		payloadIR = info.errIRType
+	}
+	_ = payloadIR
+	_ = zeroSlot
+	payloadExpr, ok := nativeExprFromIRWithHint(ctx, e.Args[0].Value, payloadLLVM)
+	if !ok || payloadExpr.llvmType != payloadLLVM {
+		return nil, false
+	}
+	if e.Name == "Ok" {
+		okChild = payloadExpr
+		errChild = nativeZeroExprForLLVMType(zeroLLVM)
+	} else {
+		okChild = nativeZeroExprForLLVMType(zeroLLVM)
+		errChild = payloadExpr
+	}
+	_ = payloadSlot
+	return &llvmNativeExpr{
+		kind:     llvmNativeExprStructLit,
+		llvmType: llvmType,
+		childExprs: []*llvmNativeExpr{
+			{kind: llvmNativeExprInt, llvmType: "i64", text: tag},
+			okChild,
+			errChild,
+		},
+	}, true
 }
 
 func nativeRegisterTupleType(ctx *nativeProjectionCtx, tuple *ostyir.TupleType) (string, bool) {
@@ -4035,6 +4186,13 @@ func nativeLLVMTypeFromIR(ctx *nativeProjectionCtx, t ostyir.Type) (string, bool
 			switch tt.Name {
 			case "List", "Map", "Set":
 				return "ptr", true
+			case "Result":
+				if len(tt.Args) == 2 {
+					if name, ok := nativeRegisterResultType(ctx, tt.Args[0], tt.Args[1]); ok {
+						return name, true
+					}
+				}
+				return "", false
 			}
 			return "", false
 		}
