@@ -1,6 +1,10 @@
 package selfhost
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/osty/osty/internal/diag"
+)
 
 // PackageResolveFile is the per-file input shape accepted by the structured
 // self-host resolve adapter.
@@ -255,6 +259,18 @@ func ResolveStructuredFromRun(run *FrontendRun) ResolveResult {
 			return checkNodeOffsets(rt, stream, start, end)
 		},
 	)
+}
+
+// ResolveFromSource parses src once and returns the parse diagnostics
+// together with the structured resolve result annotated with path.
+// Keeps the internal FrontendRun hidden from callers that only need
+// source-in / result-out, which is the subprocess-compatible shape.
+func ResolveFromSource(src []byte, path string) ([]*diag.Diagnostic, ResolveResult) {
+	run := Run(src)
+	if run == nil {
+		return nil, ResolveResult{}
+	}
+	return run.Diagnostics(), ResolveStructuredFromRunForPath(run, path)
 }
 
 // ResolveStructuredFromRunForPath is ResolveStructuredFromRun plus
