@@ -106,7 +106,15 @@ int main(void) {
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
-	if got, want := string(runOutput), "1\n0\n2\n1\n1\n1\n1\n1\n1\n3\n3\n0\n3\n1\n1\n9\n9\n0\n"; got != want {
+	// osty_gc_debug_load_count / osty_gc_debug_load_managed_count on
+	// lines 13 and 17 (the "2\n2" and "8\n8" entries) were bumped from
+	// 3/3/9/9 when osty_rt_list_len gained a Phase-A-C fast path that
+	// skips osty_gc_load_v1 (see osty_runtime.c:osty_rt_list_cast_fast).
+	// len() no longer pays the barrier, so its previously-implied
+	// increment no longer shows up in the counter. The correctness of
+	// root tracking / collection counting is unaffected — verified by
+	// the live_count / write_count columns still matching.
+	if got, want := string(runOutput), "1\n0\n2\n1\n1\n1\n1\n1\n1\n2\n2\n0\n3\n1\n1\n8\n8\n0\n"; got != want {
 		t.Fatalf("runtime GC harness stdout = %q, want %q", got, want)
 	}
 }
