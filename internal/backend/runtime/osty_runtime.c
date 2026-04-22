@@ -4757,6 +4757,42 @@ const char *osty_rt_strings_Concat(const char *left, const char *right) {
     return out;
 }
 
+/* osty_rt_strings_ConcatN concatenates `count` strings into a single
+ * GC-managed buffer. One allocation total, regardless of `count`.
+ *
+ * The compiler lowers N-way string interpolation (`"{a}/{b}/{c}"`)
+ * to this helper instead of N-1 chained two-arg Concat calls — saves
+ * N-2 intermediate allocations per interpolation site. Per-row cost
+ * on record_pipeline's `"{service}/{region}/{level}"` key drops from
+ * 4 allocs to 1. */
+const char *osty_rt_strings_ConcatN(int64_t count, const char *const *parts) {
+    size_t total = 0;
+    int64_t i;
+    if (count > 0 && parts != NULL) {
+        for (i = 0; i < count; i++) {
+            if (parts[i] != NULL) {
+                total += strlen(parts[i]);
+            }
+        }
+    }
+    char *out = (char *)osty_gc_allocate_managed(total + 1, OSTY_GC_KIND_STRING, "runtime.strings.concat_n", NULL, NULL);
+    char *cursor = out;
+    if (count > 0 && parts != NULL) {
+        for (i = 0; i < count; i++) {
+            if (parts[i] == NULL) {
+                continue;
+            }
+            size_t n = strlen(parts[i]);
+            if (n != 0) {
+                memcpy(cursor, parts[i], n);
+                cursor += n;
+            }
+        }
+    }
+    *cursor = '\0';
+    return out;
+}
+
 bool osty_rt_strings_Contains(const char *value, const char *substr) {
     if (value == NULL || substr == NULL) {
         return false;
