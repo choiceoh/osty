@@ -777,10 +777,11 @@ func TestGenerateMapGetScalarValueBoxLowering(t *testing.T) {
 	}
 }
 
-// TestGenerateMapGetOrScalarValueUnwrapsBox verifies Map.getOr for
-// scalar V: the getOr composition loads the i64 payload out of the
-// boxed Option in the some branch and phis it against the scalar
-// default, producing `phi i64` (not `phi ptr`).
+// TestGenerateMapGetOrScalarValueUsesDirectLookup verifies Map.getOr
+// for scalar V uses the bool-returning map_get runtime directly: a
+// stack slot receives the payload on hit, the hit branch loads it, and
+// the miss branch falls back to the scalar default without allocating
+// an Option box.
 func TestGenerateMapGetOrScalarValueUnwrapsBox(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn count(m: Map<String, Int>, k: String) -> Int {
     m.getOr(k, 0)
@@ -796,14 +797,17 @@ func TestGenerateMapGetOrScalarValueUnwrapsBox(t *testing.T) {
 	got := string(ir)
 	for _, want := range []string{
 		"call i1 @osty_rt_map_get_string(",
-		"call ptr @osty.gc.alloc_v1(i64 1, i64 8,",
-		"icmp eq ptr",
+		"alloca i64",
+		"br i1 ",
 		"load i64, ptr",
 		"= phi i64 [",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "call ptr @osty.gc.alloc_v1") {
+		t.Fatalf("scalar getOr should not allocate an Option box:\n%s", got)
 	}
 	if strings.Contains(got, "osty_rt_map_contains_string") ||
 		strings.Contains(got, "osty_rt_map_get_or_abort_string") {
