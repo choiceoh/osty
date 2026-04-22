@@ -561,6 +561,223 @@ func findResolveDiagnostic(result selfhost.ResolveResult, code string) *selfhost
 	return nil
 }
 
+// ---- v0.6 annotation recognition + arg validation --------------------
+
+// Every v0.6 performance annotation must be accepted by the Osty
+// resolver. Regression net: before the port, these fired E0400 and any
+// user code hit spurious resolver errors under the native checker.
+func TestV06AnnotationsRecognized(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"vectorize-bare", "#[vectorize]\nfn f() -> Int { 0 }\n"},
+		{"vectorize-tuned", `#[vectorize(scalable, predicate, width = 8)]` + "\nfn f() -> Int { 0 }\n"},
+		{"no_vectorize", "#[no_vectorize]\nfn f() -> Int { 0 }\n"},
+		{"parallel", "#[parallel]\nfn f() -> Int { 0 }\n"},
+		{"unroll-bare", "#[unroll]\nfn f() -> Int { 0 }\n"},
+		{"unroll-count", "#[unroll(count = 4)]\nfn f() -> Int { 0 }\n"},
+		{"inline-bare", "#[inline]\nfn f() -> Int { 0 }\n"},
+		{"inline-always", "#[inline(always)]\nfn f() -> Int { 0 }\n"},
+		{"inline-never", "#[inline(never)]\nfn f() -> Int { 0 }\n"},
+		{"hot", "#[hot]\nfn f() -> Int { 0 }\n"},
+		{"cold", "#[cold]\nfn f() -> Int { 0 }\n"},
+		{"pure", "#[pure]\nfn f() -> Int { 0 }\n"},
+		{"target_feature", "#[target_feature(avx512f, avx512bw)]\nfn f() -> Int { 0 }\n"},
+		{"noalias-bare", "#[noalias]\nfn f() -> Int { 0 }\n"},
+		{"noalias-params", "#[noalias(src, dst)]\nfn f() -> Int { 0 }\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := selfhost.ResolveSourceStructured([]byte(c.src))
+			for _, d := range r.Diagnostics {
+				if d.Code == "E0400" || d.Code == "E0739" {
+					t.Errorf("unexpected %s on %s: %q", d.Code, c.name, d.Message)
+				}
+			}
+		})
+	}
+}
+
+func TestV06BareFlagRejectsArgs(t *testing.T) {
+	cases := []string{
+		"#[hot(foo)]\nfn f() -> Int { 0 }\n",
+		"#[cold(bar)]\nfn f() -> Int { 0 }\n",
+		"#[pure(baz)]\nfn f() -> Int { 0 }\n",
+		"#[no_vectorize(x)]\nfn f() -> Int { 0 }\n",
+		"#[parallel(y)]\nfn f() -> Int { 0 }\n",
+	}
+	for _, src := range cases {
+		r := selfhost.ResolveSourceStructured([]byte(src))
+		found := false
+		for _, d := range r.Diagnostics {
+			if d.Code == "E0739" && strings.Contains(d.Message, "does not take arguments") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected E0739 for args on bare flag, got %#v (src=%q)", r.Diagnostics, src)
+		}
+	}
+}
+
+func TestV06VectorizeBadWidthRejected(t *testing.T) {
+	// width must be a positive integer in 1..1024.
+	src := []byte(`#[vectorize(width = 9999)]
+fn f() -> Int { 0 }
+`)
+	r := selfhost.ResolveSourceStructured(src)
+	found := false
+	for _, d := range r.Diagnostics {
+		if d.Code == "E0739" && strings.Contains(d.Message, "1..1024") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected out-of-range width diag, got %#v", r.Diagnostics)
+	}
+}
+
+func TestV06VectorizeUnknownKeyRejected(t *testing.T) {
+	src := []byte(`#[vectorize(bogus)]
+fn f() -> Int { 0 }
+`)
+	r := selfhost.ResolveSourceStructured(src)
+	found := false
+	for _, d := range r.Diagnostics {
+		if d.Code == "E0739" && strings.Contains(d.Message, "unknown") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected unknown-key diag, got %#v", r.Diagnostics)
+	}
+}
+
+func TestV06VectorizeDuplicateFlagRejected(t *testing.T) {
+	src := []byte(`#[vectorize(scalable, scalable)]
+fn f() -> Int { 0 }
+`)
+	r := selfhost.ResolveSourceStructured(src)
+	found := false
+	for _, d := range r.Diagnostics {
+		if d.Code == "E0739" && strings.Contains(d.Message, "duplicate") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected duplicate-scalable diag, got %#v", r.Diagnostics)
+	}
+}
+
+func TestV06UnrollBadCountRejected(t *testing.T) {
+	src := []byte(`#[unroll(count = 5000)]
+fn f() -> Int { 0 }
+`)
+	r := selfhost.ResolveSourceStructured(src)
+	found := false
+	for _, d := range r.Diagnostics {
+		if d.Code == "E0739" && strings.Contains(d.Message, "1..1024") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected out-of-range count diag, got %#v", r.Diagnostics)
+	}
+}
+
+func TestV06InlineExtraArgRejected(t *testing.T) {
+	src := []byte(`#[inline(always, foo)]
+fn f() -> Int { 0 }
+`)
+	r := selfhost.ResolveSourceStructured(src)
+	found := false
+	for _, d := range r.Diagnostics {
+		if d.Code == "E0739" && strings.Contains(d.Message, "at most one argument") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected `at most one argument` diag, got %#v", r.Diagnostics)
+	}
+}
+
+func TestV06InlineUnknownFlagRejected(t *testing.T) {
+	src := []byte(`#[inline(sometimes)]
+fn f() -> Int { 0 }
+`)
+	r := selfhost.ResolveSourceStructured(src)
+	found := false
+	for _, d := range r.Diagnostics {
+		if d.Code == "E0739" && strings.Contains(d.Message, "unknown") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected unknown-inline-flag diag, got %#v", r.Diagnostics)
+	}
+}
+
+func TestV06TargetFeatureEmptyRejected(t *testing.T) {
+	src := []byte(`#[target_feature()]
+fn f() -> Int { 0 }
+`)
+	r := selfhost.ResolveSourceStructured(src)
+	found := false
+	for _, d := range r.Diagnostics {
+		if d.Code == "E0739" && strings.Contains(d.Message, "at least one feature") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected empty-feature-list diag, got %#v", r.Diagnostics)
+	}
+}
+
+func TestV06TargetFeatureDuplicateRejected(t *testing.T) {
+	src := []byte(`#[target_feature(avx512f, avx512f)]
+fn f() -> Int { 0 }
+`)
+	r := selfhost.ResolveSourceStructured(src)
+	found := false
+	for _, d := range r.Diagnostics {
+		if d.Code == "E0739" && strings.Contains(d.Message, "duplicate feature") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected duplicate-feature diag, got %#v", r.Diagnostics)
+	}
+}
+
+func TestV06NoaliasDuplicateRejected(t *testing.T) {
+	src := []byte(`#[noalias(p, p)]
+fn f() -> Int { 0 }
+`)
+	r := selfhost.ResolveSourceStructured(src)
+	found := false
+	for _, d := range r.Diagnostics {
+		if d.Code == "E0739" && strings.Contains(d.Message, "duplicate parameter") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected duplicate-param diag, got %#v", r.Diagnostics)
+	}
+}
+
+// ---- Detect import cycles ---------------------------------------------
+
 func TestDetectImportCyclesAcyclicGraphEmitsNoDiag(t *testing.T) {
 	// a → b → c; no cycle.
 	input := selfhost.WorkspaceUses{Packages: []selfhost.PackageUses{

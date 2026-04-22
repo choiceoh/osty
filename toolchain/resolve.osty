@@ -2512,6 +2512,17 @@ fn srAnnotAllowedTargets(name: String) -> Int {
     }
     if name == "op" { return srAnnotTargetMethod() }
     if name == "test" { return srAnnotTargetTopLevel() }
+    // v0.6 performance annotations (A5–A11, A13). All target fn / method.
+    if name == "vectorize" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    if name == "no_vectorize" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    if name == "parallel" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    if name == "unroll" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    if name == "inline" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    if name == "hot" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    if name == "cold" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    if name == "pure" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    if name == "target_feature" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    if name == "noalias" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     0
 }
 
@@ -2747,6 +2758,16 @@ fn srCheckAnnotationArgs(
     if ann.text == "intrinsic" || ann.text == "pod" || ann.text == "c_abi" || ann.text == "no_alloc" {
         return srCheckNoArgsRuntime(file, ann, result)
     }
+    // v0.6 bare-flag annotations (A5.2 / A6 / A9 / A13): reject any args.
+    if ann.text == "hot" || ann.text == "cold" || ann.text == "pure" ||
+       ann.text == "no_vectorize" || ann.text == "parallel" {
+        return srCheckBareFlagAnnotation(file, ann, result)
+    }
+    if ann.text == "inline" { return srCheckInlineArgs(file, ann, result) }
+    if ann.text == "unroll" { return srCheckUnrollArgs(file, ann, result) }
+    if ann.text == "vectorize" { return srCheckVectorizeArgs(file, ann, result) }
+    if ann.text == "target_feature" { return srCheckTargetFeatureArgs(file, ann, result) }
+    if ann.text == "noalias" { return srCheckNoaliasArgs(file, ann, result) }
     result
 }
 
@@ -3071,7 +3092,406 @@ fn srCheckNoArgsRuntime(
     )
 }
 
-/// srAnnotationNameList returns the 14 permitted annotation names as a
+/// srCheckBareFlagAnnotation validates the v0.6 bare-flag annotations
+/// (`#[hot]`, `#[cold]`, `#[pure]`, `#[no_vectorize]`, `#[parallel]`):
+/// any argument is an E0739 error. Mirrors internal/resolve/resolve.go
+/// ::checkBareFlag / ::checkNoVectorizeArgs / ::checkParallelArgs.
+fn srCheckBareFlagAnnotation(
+    file: AstFile,
+    ann: AstNode,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if ann.children.len() == 0 {
+        return result
+    }
+    let first = srAnnotArgView(file, ann.children[0])
+    srPushBadArg(
+        result,
+        "`#[" + ann.text + "]` does not take arguments",
+        first.start,
+        first.end,
+    )
+}
+
+/// srCheckInlineArgs validates `#[inline]` / `#[inline(always)]` /
+/// `#[inline(never)]` (v0.6 A8). Bare form is a soft hint; the
+/// `always` / `never` sub-flags pick the hard `alwaysinline` /
+/// `noinline` LLVM attributes. Mirrors
+/// internal/resolve/resolve.go::checkInlineArgs.
+fn srCheckInlineArgs(
+    file: AstFile,
+    ann: AstNode,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if ann.children.len() == 0 {
+        return result
+    }
+    if ann.children.len() > 1 {
+        let second = srAnnotArgView(file, ann.children[1])
+        return srPushBadArgHint(
+            result,
+            "`#[inline(...)]` takes at most one argument",
+            second.start,
+            second.end,
+            "use either `#[inline]`, `#[inline(always)]`, or `#[inline(never)]`",
+        )
+    }
+    let view = srAnnotArgView(file, ann.children[0])
+    if view.key == "always" || view.key == "never" {
+        if !srIsFlagOrTrue(file, view) {
+            return srPushBadArg(
+                result,
+                "`" + view.key + "` in `#[inline(...)]` is a bare flag",
+                view.start,
+                view.end,
+            )
+        }
+        return result
+    }
+    srPushBadArgHint(
+        result,
+        "unknown `#[inline]` argument `" + view.key + "`",
+        view.start,
+        view.end,
+        "accepted: `always` (force inlining), `never` (forbid inlining), or no argument (soft hint)",
+    )
+}
+
+/// srCheckUnrollArgs validates `#[unroll]` / `#[unroll(count = N)]`
+/// (v0.6 A7). Bare form lets LLVM choose the factor; the `count = N`
+/// form pins it to 1..1024. Mirrors
+/// internal/resolve/resolve.go::checkUnrollArgs.
+fn srCheckUnrollArgs(
+    file: AstFile,
+    ann: AstNode,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if ann.children.len() == 0 {
+        return result
+    }
+    if ann.children.len() > 1 {
+        let second = srAnnotArgView(file, ann.children[1])
+        return srPushBadArg(
+            result,
+            "`#[unroll(...)]` takes at most one argument",
+            second.start,
+            second.end,
+        )
+    }
+    let view = srAnnotArgView(file, ann.children[0])
+    if view.key != "count" {
+        return srPushBadArgHint(
+            result,
+            "unknown `#[unroll]` argument `" + view.key + "`",
+            view.start,
+            view.end,
+            "accepted: `count = N` for a fixed unroll factor",
+        )
+    }
+    srCheckUnrollCountValue(file, view, result)
+}
+
+fn srCheckUnrollCountValue(
+    file: AstFile,
+    view: SrAnnotArgView,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let n = srAnnotIntValue(file, view)
+    if n < 0 {
+        return srPushBadArg(
+            result,
+            "`#[unroll(count = N)]` requires a positive integer literal",
+            view.start,
+            view.end,
+        )
+    }
+    if n < 1 || n > 1024 {
+        return srPushBadArg(
+            result,
+            "`#[unroll(count = N)]` value must be in 1..1024",
+            view.start,
+            view.end,
+        )
+    }
+    result
+}
+
+/// srCheckVectorizeArgs validates `#[vectorize]` (v0.6 A5 / A5.1).
+/// Accepts the bare form (default treatment; redundant hint) plus
+/// named tuning args: `scalable` flag, `predicate` flag, and
+/// `width = N` with N in 1..1024. Duplicates and unknown keys fire
+/// E0739 apiece. Mirrors
+/// internal/resolve/resolve.go::checkVectorizeArgs.
+fn srCheckVectorizeArgs(
+    file: AstFile,
+    ann: AstNode,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    let mut hasScalable = false
+    let mut hasPredicate = false
+    let mut hasWidth = false
+    for argIdx in ann.children {
+        let view = srAnnotArgView(file, argIdx)
+        if view.key == "scalable" {
+            if hasScalable {
+                out = srPushBadArg(
+                    out,
+                    "duplicate `scalable` in `#[vectorize(...)]`",
+                    view.start,
+                    view.end,
+                )
+                continue
+            }
+            hasScalable = true
+            if !srIsFlagOrTrue(file, view) {
+                out = srPushBadArg(
+                    out,
+                    "`scalable` in `#[vectorize(...)]` is a bare flag",
+                    view.start,
+                    view.end,
+                )
+            }
+            continue
+        }
+        if view.key == "predicate" {
+            if hasPredicate {
+                out = srPushBadArg(
+                    out,
+                    "duplicate `predicate` in `#[vectorize(...)]`",
+                    view.start,
+                    view.end,
+                )
+                continue
+            }
+            hasPredicate = true
+            if !srIsFlagOrTrue(file, view) {
+                out = srPushBadArg(
+                    out,
+                    "`predicate` in `#[vectorize(...)]` is a bare flag",
+                    view.start,
+                    view.end,
+                )
+            }
+            continue
+        }
+        if view.key == "width" {
+            if hasWidth {
+                out = srPushBadArg(
+                    out,
+                    "duplicate `width` in `#[vectorize(...)]`",
+                    view.start,
+                    view.end,
+                )
+                continue
+            }
+            hasWidth = true
+            let n = srAnnotIntValue(file, view)
+            if n < 0 {
+                out = srPushBadArg(
+                    out,
+                    "`width` in `#[vectorize(...)]` requires a positive integer literal",
+                    view.start,
+                    view.end,
+                )
+                continue
+            }
+            if n < 1 || n > 1024 {
+                out = srPushBadArg(
+                    out,
+                    "`width` in `#[vectorize(...)]` must be in 1..1024",
+                    view.start,
+                    view.end,
+                )
+            }
+            continue
+        }
+        if view.key == "" {
+            out = srPushBadArg(
+                out,
+                "`#[vectorize(...)]` arguments must be named",
+                view.start,
+                view.end,
+            )
+            continue
+        }
+        out = srPushBadArgHint(
+            out,
+            "unknown `#[vectorize]` argument `" + view.key + "`",
+            view.start,
+            view.end,
+            "accepted: `scalable`, `predicate`, `width = N`",
+        )
+    }
+    out
+}
+
+/// srCheckTargetFeatureArgs validates `#[target_feature(...)]` (v0.6
+/// A10): at least one bare-identifier feature name, no duplicates,
+/// no `key = value` shapes. Mirrors
+/// internal/resolve/resolve.go::checkTargetFeatureArgs.
+fn srCheckTargetFeatureArgs(
+    file: AstFile,
+    ann: AstNode,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    if ann.children.len() == 0 {
+        return srPushBadArgHint(
+            out,
+            "`#[target_feature(...)]` requires at least one feature name",
+            ann.start,
+            ann.end,
+            "example: `#[target_feature(avx512f, avx512bw)]`",
+        )
+    }
+    let mut seen: List<String> = []
+    for argIdx in ann.children {
+        let view = srAnnotArgView(file, argIdx)
+        if view.key == "" {
+            out = srPushBadArg(
+                out,
+                "`#[target_feature(...)]` feature names must be bare identifiers",
+                view.start,
+                view.end,
+            )
+            continue
+        }
+        if !srIsFlagOrTrue(file, view) {
+            out = srPushBadArg(
+                out,
+                "feature `" + view.key + "` in `#[target_feature(...)]` takes no value",
+                view.start,
+                view.end,
+            )
+            continue
+        }
+        if srStringListIndex(seen, view.key) >= 0 {
+            out = srPushBadArg(
+                out,
+                "duplicate feature `" + view.key + "` in `#[target_feature(...)]`",
+                view.start,
+                view.end,
+            )
+            continue
+        }
+        seen.push(view.key)
+    }
+    out
+}
+
+/// srCheckNoaliasArgs validates `#[noalias]` / `#[noalias(p1, p2)]`
+/// (v0.6 A11). Bare form marks every pointer param; the arg-list form
+/// names specific parameter identifiers. Each arg must be a bare
+/// identifier; duplicates are rejected. Mirrors
+/// internal/resolve/resolve.go::checkNoaliasArgs.
+fn srCheckNoaliasArgs(
+    file: AstFile,
+    ann: AstNode,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let mut out = result
+    if ann.children.len() == 0 {
+        return out
+    }
+    let mut seen: List<String> = []
+    for argIdx in ann.children {
+        let view = srAnnotArgView(file, argIdx)
+        if view.key == "" {
+            out = srPushBadArg(
+                out,
+                "`#[noalias(...)]` parameter names must be bare identifiers",
+                view.start,
+                view.end,
+            )
+            continue
+        }
+        if !srIsFlagOrTrue(file, view) {
+            out = srPushBadArg(
+                out,
+                "parameter `" + view.key + "` in `#[noalias(...)]` takes no value",
+                view.start,
+                view.end,
+            )
+            continue
+        }
+        if srStringListIndex(seen, view.key) >= 0 {
+            out = srPushBadArg(
+                out,
+                "duplicate parameter `" + view.key + "` in `#[noalias(...)]`",
+                view.start,
+                view.end,
+            )
+            continue
+        }
+        seen.push(view.key)
+    }
+    out
+}
+
+fn srPushBadArgHint(
+    result: SelfResolveResult,
+    message: String,
+    start: Int,
+    end: Int,
+    hint: String,
+) -> SelfResolveResult {
+    let mut out = result
+    out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0739", message, "", start, end, -1, hint))
+    out
+}
+
+/// srAnnotIntValue extracts a non-negative integer literal from an
+/// annotation arg's value slot. Returns -1 when the value slot is
+/// empty, not an IntLit, or parses to a non-representable value.
+/// Supports decimal / hex / octal / binary + underscores, matching
+/// the Osty numeric grammar (§1.6.1).
+fn srAnnotIntValue(file: AstFile, view: SrAnnotArgView) -> Int {
+    if view.valueIdx < 0 { return -1 }
+    let v = srAstNode(file, view.valueIdx)
+    if v.kind != AstNIntLit { return -1 }
+    srParseAnnotationInt(v.text)
+}
+
+fn srParseAnnotationInt(raw: String) -> Int {
+    let stripped = strings.replaceAll(raw, "_", "")
+    if stripped.len() == 0 { return -1 }
+    let mut text = stripped
+    let mut base = 10
+    if strings.hasPrefix(text, "0x") || strings.hasPrefix(text, "0X") {
+        base = 16
+        text = strings.slice(text, 2, text.len())
+    } else if strings.hasPrefix(text, "0o") || strings.hasPrefix(text, "0O") {
+        base = 8
+        text = strings.slice(text, 2, text.len())
+    } else if strings.hasPrefix(text, "0b") || strings.hasPrefix(text, "0B") {
+        base = 2
+        text = strings.slice(text, 2, text.len())
+    }
+    if text.len() == 0 { return -1 }
+    let mut acc = 0
+    for ch in text.chars() {
+        let d = srCharToDigit(ch)
+        if d < 0 || d >= base { return -1 }
+        acc = acc * base + d
+    }
+    acc
+}
+
+fn srCharToDigit(ch: Char) -> Int {
+    let cp = ch.toInt()
+    if cp >= 48 && cp <= 57 {
+        cp - 48
+    } else if cp >= 65 && cp <= 70 {
+        cp - 55
+    } else if cp >= 97 && cp <= 102 {
+        cp - 87
+    } else {
+        -1
+    }
+}
+
+/// srAnnotationNameList returns every permitted annotation name as a
 /// flat list for did-you-mean suggestions. Keep in sync with the
 /// `srAnnotAllowedTargets` switch.
 fn srAnnotationNameList() -> List<String> {
@@ -3090,6 +3510,17 @@ fn srAnnotationNameList() -> List<String> {
         "cfg",
         "op",
         "test",
+        // v0.6 performance hints.
+        "vectorize",
+        "no_vectorize",
+        "parallel",
+        "unroll",
+        "inline",
+        "hot",
+        "cold",
+        "pure",
+        "target_feature",
+        "noalias",
     ]
 }
 
