@@ -1037,6 +1037,14 @@ fn srResolveOneAstIdent(
     result: SelfResolveResult,
 ) -> SelfResolveResult {
     let mut out = result
+    if name == "_" {
+        // `_` is a pattern wildcard; in an expression it is never a value.
+        // The parser rejects it at the token level too (E0604), but we
+        // emit here to match Go's resolver contract and to suppress the
+        // misleading "undefined name `_`" that the normal lookup path
+        // would otherwise produce.
+        return srWildcardInExprAtNode(out, start, end, node)
+    }
     if srIsBuiltinName(name) {
         return out
     }
@@ -1186,6 +1194,20 @@ fn srSelfOutsideAtNode(result: SelfResolveResult, start: Int, end: Int, node: In
 fn srSelfTypeOutsideAtNode(result: SelfResolveResult, start: Int, end: Int, node: Int) -> SelfResolveResult {
     let mut out = result
     out.diagnostics.push(selfResolveDiagnosticAtNode("E0504", "`Self` outside type body", "Self", start, end, node))
+    out
+}
+
+fn srWildcardInExprAtNode(result: SelfResolveResult, start: Int, end: Int, node: Int) -> SelfResolveResult {
+    let mut out = result
+    out.diagnostics.push(selfResolveDiagnosticHintAtNode(
+        "E0604",
+        "`_` is only valid as a pattern wildcard, not as an expression",
+        "_",
+        start,
+        end,
+        node,
+        "use `let _ = expr` to ignore a value",
+    ))
     out
 }
 

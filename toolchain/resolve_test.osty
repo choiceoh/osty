@@ -539,3 +539,41 @@ fn testSelfResolverChecksAnnotationsOnStructMembers() {
 
     testing.assertEq(selfResolveCodeCount(result, "E0607"), 2)
 }
+
+fn testSelfResolverRejectsWildcardInExpr() {
+    // `_` as a value is E0604 — the wildcard belongs in pattern position.
+    // Also verifies we suppress the misleading "undefined name `_`"
+    // (E0500) that the normal lookup path would otherwise produce.
+    let result = selfResolveSource(
+        r"""
+            fn main() -> Int {
+                let x = _ + 1
+                x
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0604"), 1)
+    testing.assertEq(selfResolveCodeCount(result, "E0500"), 0)
+}
+
+fn testSelfResolverAcceptsWildcardInPattern() {
+    // `_` in pattern position — `let _ =` and match arm — is legal.
+    // Parser encodes these as AstNPattern/wildcardKind, so the ident
+    // resolver never sees them.
+    let result = selfResolveSource(
+        r"""
+            fn main() {
+                let _ = compute()
+                match tag() {
+                    _ -> (),
+                }
+            }
+
+            fn compute() -> Int { 42 }
+            fn tag() -> Int { 0 }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0604"), 0)
+}
