@@ -1143,3 +1143,198 @@ func TestTryGenerateNativeOwnedModuleAppliesExportAndCABI(t *testing.T) {
 		t.Fatalf("native-owned helper IR missing export alias:\n%s", got)
 	}
 }
+
+func TestNativeOwnedModuleEntryOptionalMethodBatch(t *testing.T) {
+	src := `fn flags(name: String?) -> Bool {
+    name.isSome() && !name.isNone()
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_optional_methods.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for optional method batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"define i1 @flags(ptr %name)",
+		"icmp ne ptr",
+		"icmp eq ptr",
+		"xor i1",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned optional-method IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned optional-method entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryOptionalCoalesceStringBatch(t *testing.T) {
+	src := `fn display(name: String?) -> String {
+    name ?? "anon"
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_optional_coalesce_string.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for optional string coalesce batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"define ptr @display(ptr %name)",
+		"icmp eq ptr",
+		"phi ptr",
+		"@.str0 = private unnamed_addr constant",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned optional-string-coalesce IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned optional-string-coalesce entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryOptionalCoalesceScalarBatch(t *testing.T) {
+	src := `fn score(value: Int?) -> Int {
+    value ?? 7
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_optional_coalesce_scalar.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for optional scalar coalesce batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"define i64 @score(ptr %value)",
+		"icmp eq ptr",
+		"load i64, ptr %t",
+		"phi i64",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned optional-scalar-coalesce IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned optional-scalar-coalesce entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryOptionalQuestionScalarBatch(t *testing.T) {
+	src := `fn requireScore(score: Int?) -> String? {
+    let value = score?
+    println(value)
+    "ok"
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_optional_question_scalar.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for optional scalar question batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"define ptr @requireScore(ptr %score)",
+		"ret ptr null",
+		"load i64, ptr %t",
+		"call i32 (ptr, ...) @printf(ptr @.fmt_i64, i64",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned optional-scalar-question IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned optional-scalar-question entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryOptionalQuestionStructBatch(t *testing.T) {
+	src := `struct Profile { name: String }
+
+fn requireName(profile: Profile?) -> String? {
+    let value = profile?
+    value.name
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_optional_question_struct.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for optional struct question batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"%Profile = type { ptr }",
+		"define ptr @requireName(ptr %profile)",
+		"ret ptr null",
+		"load %Profile, ptr %t",
+		"extractvalue %Profile",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned optional-struct-question IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned optional-struct-question entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}
+
+func TestNativeOwnedModuleEntryOptionalFieldBatch(t *testing.T) {
+	src := `struct Profile { name: String }
+
+fn maybeName(profile: Profile?) -> String? {
+    profile?.name
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_optional_field.osty"}
+	nativeMod, ok := nativeModuleFromIR(mod, opts)
+	if !ok {
+		t.Fatal("nativeModuleFromIR returned unsupported for optional field batch")
+	}
+	direct := llvmNativeEmitModule(nativeMod)
+	for _, want := range []string{
+		"%Profile = type { ptr }",
+		"define ptr @maybeName(ptr %profile)",
+		"load %Profile, ptr %t",
+		"extractvalue %Profile",
+		"phi ptr",
+	} {
+		if !strings.Contains(direct, want) {
+			t.Fatalf("native-owned optional-field IR missing %q:\n%s", want, direct)
+		}
+	}
+	out, err := GenerateModule(mod, opts)
+	if err != nil {
+		t.Fatalf("GenerateModule returned error: %v", err)
+	}
+	if string(out) != direct {
+		t.Fatalf("GenerateModule diverged from native-owned optional-field entrypoint\n--- direct ---\n%s\n--- generate ---\n%s", direct, string(out))
+	}
+}

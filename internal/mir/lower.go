@@ -290,6 +290,17 @@ func (l *lowerer) lowerFunction(fn *ir.FnDecl, owner string, asMethod bool) *Fun
 	out.Parallel = fn.Parallel
 	out.Unroll = fn.Unroll
 	out.UnrollCount = fn.UnrollCount
+	out.InlineMode = fn.InlineMode
+	out.Hot = fn.Hot
+	out.Cold = fn.Cold
+	if len(fn.TargetFeatures) > 0 {
+		out.TargetFeatures = append([]string(nil), fn.TargetFeatures...)
+	}
+	out.NoaliasAll = fn.NoaliasAll
+	if len(fn.NoaliasParams) > 0 {
+		out.NoaliasParams = append([]string(nil), fn.NoaliasParams...)
+	}
+	out.Pure = fn.Pure
 	out.IsIntrinsic = fn.IsIntrinsic
 	if fn.Body == nil {
 		out.IsExternal = true
@@ -379,9 +390,9 @@ type bodyState struct {
 	fn  *Function
 	cur BlockID
 
-	// locals maps HIR-visible names to MIR local IDs. Pushed on let
-	// binding, popped at the end of scopes.
-	locals []map[string]LocalID
+	// locals maps HIR-visible names to MIR local IDs and tracks the
+	// scope-owned locals that should receive StorageDead on scope exit.
+	locals []scopeFrame
 
 	// paramLocals is a cached view of fn.Params for quick access.
 	paramLocals []LocalID
@@ -406,6 +417,11 @@ type ownerContext struct {
 	localID  LocalID
 }
 
+type scopeFrame struct {
+	names  map[string]LocalID
+	locals []LocalID
+}
+
 type loopFrame struct {
 	breakBlock    BlockID
 	continueBlock BlockID
@@ -414,6 +430,10 @@ type loopFrame struct {
 	// *inclusive* of this one — every iteration enters the body
 	// scope fresh, so the body's defers run on both exit paths.
 	deferDepth int
+	// scopeDepth records the local-scope depth of the loop body so
+	// break/continue can retire loop-body locals before control jumps
+	// to the header/step/exit blocks.
+	scopeDepth int
 }
 
 func newBodyState(l *lowerer, fn *Function) *bodyState {
@@ -427,7 +447,7 @@ func newBodyState(l *lowerer, fn *Function) *bodyState {
 	for i, p := range fn.Params {
 		loc := fn.Locals[p]
 		if loc != nil && loc.Name != "" {
-			bs.locals[0][loc.Name] = p
+			bs.locals[0].names[loc.Name] = p
 		}
 		bs.paramLocals = append(bs.paramLocals, p)
 		_ = i
@@ -436,13 +456,14 @@ func newBodyState(l *lowerer, fn *Function) *bodyState {
 }
 
 func (bs *bodyState) pushScope() {
-	bs.locals = append(bs.locals, map[string]LocalID{})
+	bs.locals = append(bs.locals, scopeFrame{names: map[string]LocalID{}})
 }
 
 func (bs *bodyState) popScope() {
 	if len(bs.locals) == 0 {
 		return
 	}
+	bs.emitStorageDeadForScope(&bs.locals[len(bs.locals)-1])
 	bs.locals = bs.locals[:len(bs.locals)-1]
 }
 
@@ -450,16 +471,66 @@ func (bs *bodyState) bind(name string, id LocalID) {
 	if name == "" {
 		return
 	}
-	bs.locals[len(bs.locals)-1][name] = id
+	bs.locals[len(bs.locals)-1].names[name] = id
 }
 
 func (bs *bodyState) lookup(name string) (LocalID, bool) {
 	for i := len(bs.locals) - 1; i >= 0; i-- {
-		if id, ok := bs.locals[i][name]; ok {
+		if id, ok := bs.locals[i].names[name]; ok {
 			return id, true
 		}
 	}
 	return 0, false
+}
+
+func (bs *bodyState) registerScopeLocal(id LocalID) {
+	if len(bs.locals) == 0 {
+		return
+	}
+	loc := bs.fn.Local(id)
+	if loc == nil || loc.IsParam || loc.IsReturn {
+		return
+	}
+	bs.locals[len(bs.locals)-1].locals = append(bs.locals[len(bs.locals)-1].locals, id)
+}
+
+func (bs *bodyState) currentScopeDepth() int {
+	return len(bs.locals) - 1
+}
+
+func (bs *bodyState) emitStorageDeadFromDepth(depth int) {
+	if depth < 0 {
+		depth = 0
+	}
+	for i := len(bs.locals) - 1; i >= depth; i-- {
+		bs.emitStorageDeadForScope(&bs.locals[i])
+	}
+}
+
+func (bs *bodyState) emitStorageDeadForScope(scope *scopeFrame) {
+	if scope == nil || len(scope.locals) == 0 {
+		return
+	}
+	bb := bs.currentBlock()
+	if bb == nil || bb.Term != nil {
+		scope.locals = nil
+		return
+	}
+	for i := len(scope.locals) - 1; i >= 0; i-- {
+		id := scope.locals[i]
+		sp := Span{}
+		if loc := bs.fn.Local(id); loc != nil {
+			sp = loc.SpanV
+		}
+		bs.emit(&StorageDeadInstr{Local: id, SpanV: sp})
+	}
+	scope.locals = nil
+}
+
+func (bs *bodyState) newLocal(name string, t Type, mut bool, sp Span) LocalID {
+	id := bs.fn.NewLocal(name, t, mut, sp)
+	bs.registerScopeLocal(id)
+	return id
 }
 
 // ==== cursor + block helpers ====
@@ -575,7 +646,7 @@ func (bs *bodyState) lowerBlockStmt(b *ir.Block) {
 
 func (bs *bodyState) lowerLet(let *ir.LetStmt) {
 	t := let.Type
-	if t == nil && let.Value != nil {
+	if isPoisonType(t) && let.Value != nil {
 		t = let.Value.Type()
 	}
 	if t == nil {
@@ -585,7 +656,7 @@ func (bs *bodyState) lowerLet(let *ir.LetStmt) {
 	case let.Pattern != nil:
 		bs.lowerLetPattern(let.Pattern, let.Value, t, let.SpanV)
 	case let.Name != "":
-		id := bs.fn.NewLocal(let.Name, t, let.Mut, let.SpanV)
+		id := bs.newLocal(let.Name, t, let.Mut, let.SpanV)
 		bs.emit(&StorageLiveInstr{Local: id, SpanV: let.SpanV})
 		if let.Value != nil {
 			bs.lowerExprInto(let.Value, id, t)
@@ -596,8 +667,16 @@ func (bs *bodyState) lowerLet(let *ir.LetStmt) {
 	}
 }
 
+func isPoisonType(t Type) bool {
+	if t == nil {
+		return true
+	}
+	_, ok := t.(*ir.ErrType)
+	return ok
+}
+
 func (bs *bodyState) lowerLetPattern(pat ir.Pattern, value ir.Expr, valueType Type, sp Span) {
-	scratch := bs.fn.NewLocal("_scratch", valueType, false, sp)
+	scratch := bs.newLocal("_scratch", valueType, false, sp)
 	bs.emit(&StorageLiveInstr{Local: scratch, SpanV: sp})
 	if value != nil {
 		bs.lowerExprInto(value, scratch, valueType)
@@ -618,7 +697,7 @@ func (bs *bodyState) bindPattern(pat ir.Pattern, scrutinee Place, scrutineeT Typ
 	case *ir.WildPat:
 		return
 	case *ir.IdentPat:
-		id := bs.fn.NewLocal(p.Name, scrutineeT, p.Mut, p.SpanV)
+		id := bs.newLocal(p.Name, scrutineeT, p.Mut, p.SpanV)
 		bs.emit(&StorageLiveInstr{Local: id, SpanV: p.SpanV})
 		bs.emit(&AssignInstr{
 			Dest:  Place{Local: id},
@@ -628,7 +707,7 @@ func (bs *bodyState) bindPattern(pat ir.Pattern, scrutinee Place, scrutineeT Typ
 		bs.bind(p.Name, id)
 	case *ir.BindingPat:
 		// Bind the whole scrutinee to the outer name, then recurse.
-		id := bs.fn.NewLocal(p.Name, scrutineeT, false, p.SpanV)
+		id := bs.newLocal(p.Name, scrutineeT, false, p.SpanV)
 		bs.emit(&StorageLiveInstr{Local: id, SpanV: p.SpanV})
 		bs.emit(&AssignInstr{
 			Dest:  Place{Local: id},
@@ -653,7 +732,7 @@ func (bs *bodyState) bindPattern(pat ir.Pattern, scrutinee Place, scrutineeT Typ
 			if f.Pattern != nil {
 				bs.bindPattern(f.Pattern, child, ft, p.SpanV)
 			} else {
-				id := bs.fn.NewLocal(f.Name, ft, false, p.SpanV)
+				id := bs.newLocal(f.Name, ft, false, p.SpanV)
 				bs.emit(&StorageLiveInstr{Local: id, SpanV: p.SpanV})
 				bs.emit(&AssignInstr{
 					Dest:  Place{Local: id},
@@ -757,7 +836,7 @@ func (bs *bodyState) lowerCompoundAssign(a *ir.AssignStmt) {
 // TupleProj into that scratch.
 func (bs *bodyState) lowerMultiAssign(a *ir.AssignStmt) {
 	rhsT := a.Value.Type()
-	scratch := bs.fn.NewLocal("_mtuple", rhsT, false, a.SpanV)
+	scratch := bs.newLocal("_mtuple", rhsT, false, a.SpanV)
 	bs.emit(&StorageLiveInstr{Local: scratch, SpanV: a.SpanV})
 	bs.lowerExprInto(a.Value, scratch, rhsT)
 	elemTs := tupleElementTypes(rhsT)
@@ -930,6 +1009,7 @@ func (bs *bodyState) lowerBreak(b *ir.BreakStmt) {
 	}
 	top := bs.loopStack[len(bs.loopStack)-1]
 	bs.replayDefersFromDepth(top.deferDepth, b.SpanV)
+	bs.emitStorageDeadFromDepth(top.scopeDepth)
 	bs.terminate(&GotoTerm{Target: top.breakBlock, SpanV: b.SpanV})
 }
 
@@ -940,6 +1020,7 @@ func (bs *bodyState) lowerContinue(c *ir.ContinueStmt) {
 	}
 	top := bs.loopStack[len(bs.loopStack)-1]
 	bs.replayDefersFromDepth(top.deferDepth, c.SpanV)
+	bs.emitStorageDeadFromDepth(top.scopeDepth)
 	bs.terminate(&GotoTerm{Target: top.continueBlock, SpanV: c.SpanV})
 }
 
@@ -984,6 +1065,7 @@ func (bs *bodyState) lowerIfStmt(st *ir.IfStmt) {
 }
 
 func (bs *bodyState) lowerForStmt(f *ir.ForStmt) {
+	bs.pushScope()
 	switch f.Kind {
 	case ir.ForInfinite:
 		bs.lowerForInfinite(f)
@@ -996,6 +1078,7 @@ func (bs *bodyState) lowerForStmt(f *ir.ForStmt) {
 	default:
 		bs.l.noteIssue("unsupported for kind %d", f.Kind)
 	}
+	bs.popScope()
 }
 
 func (bs *bodyState) lowerForInfinite(f *ir.ForStmt) {
@@ -1009,7 +1092,7 @@ func (bs *bodyState) lowerForInfinite(f *ir.ForStmt) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
-		breakBlock: exit, continueBlock: header, deferDepth: len(bs.deferFrames) - 1,
+		breakBlock: exit, continueBlock: header, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	for _, s := range f.Body.Stmts {
 		bs.lowerStmt(s)
@@ -1034,7 +1117,7 @@ func (bs *bodyState) lowerForWhile(f *ir.ForStmt) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
-		breakBlock: exit, continueBlock: header, deferDepth: len(bs.deferFrames) - 1,
+		breakBlock: exit, continueBlock: header, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	for _, s := range f.Body.Stmts {
 		bs.lowerStmt(s)
@@ -1050,10 +1133,10 @@ func (bs *bodyState) lowerForWhile(f *ir.ForStmt) {
 // ==== range / in loop lowering ====
 
 func (bs *bodyState) lowerForRange(f *ir.ForStmt) {
-	idx := bs.fn.NewLocal(f.Var, TInt, true, f.SpanV)
+	idx := bs.newLocal(f.Var, TInt, true, f.SpanV)
 	bs.emit(&StorageLiveInstr{Local: idx, SpanV: f.SpanV})
 	bs.lowerExprInto(f.Start, idx, TInt)
-	end := bs.fn.NewLocal("_end", TInt, false, f.SpanV)
+	end := bs.newLocal("_end", TInt, false, f.SpanV)
 	bs.lowerExprInto(f.End, end, TInt)
 	bs.bind(f.Var, idx)
 	header := bs.newBlock(f.SpanV)
@@ -1087,7 +1170,7 @@ func (bs *bodyState) lowerForRange(f *ir.ForStmt) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
-		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1,
+		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	bs.bind(f.Var, idx)
 	for _, s := range f.Body.Stmts {
@@ -1128,16 +1211,16 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 		elemT = ir.ErrTypeVal
 	}
 	// capture iterable into a temp so we can re-read length and index
-	iter := bs.fn.NewLocal("_iter", iterT, false, f.SpanV)
+	iter := bs.newLocal("_iter", iterT, false, f.SpanV)
 	bs.emit(&StorageLiveInstr{Local: iter, SpanV: f.SpanV})
 	bs.lowerExprInto(f.Iter, iter, iterT)
-	lenLocal := bs.fn.NewLocal("_len", TInt, false, f.SpanV)
+	lenLocal := bs.newLocal("_len", TInt, false, f.SpanV)
 	bs.emit(&AssignInstr{
 		Dest:  Place{Local: lenLocal},
 		Src:   &LenRV{Place: Place{Local: iter}, T: TInt},
 		SpanV: f.SpanV,
 	})
-	idx := bs.fn.NewLocal("_idx", TInt, true, f.SpanV)
+	idx := bs.newLocal("_idx", TInt, true, f.SpanV)
 	bs.emit(&AssignInstr{
 		Dest:  Place{Local: idx},
 		Src:   &UseRV{Op: &ConstOp{Const: &IntConst{Value: 0, T: TInt}, T: TInt}},
@@ -1170,10 +1253,10 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
-		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1,
+		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	// load current element: elem = iter[idx]
-	elemLocal := bs.fn.NewLocal("_elem", elemT, false, f.SpanV)
+	elemLocal := bs.newLocal("_elem", elemT, false, f.SpanV)
 	elemPlace := Place{Local: iter, Projections: []Projection{
 		&IndexProj{
 			Index:    &CopyOp{Place: Place{Local: idx}, T: TInt},
@@ -1221,7 +1304,7 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 func (bs *bodyState) lowerForInChannel(f *ir.ForStmt, iterT Type) {
 	elemT := channelElementType(iterT)
 	optT := &ir.OptionalType{Inner: elemT}
-	iter := bs.fn.NewLocal("_chan", iterT, false, f.SpanV)
+	iter := bs.newLocal("_chan", iterT, false, f.SpanV)
 	bs.emit(&StorageLiveInstr{Local: iter, SpanV: f.SpanV})
 	bs.lowerExprInto(f.Iter, iter, iterT)
 
@@ -1233,7 +1316,7 @@ func (bs *bodyState) lowerForInChannel(f *ir.ForStmt, iterT Type) {
 
 	bs.cur = header
 	// opt := chan_recv(iter); switch opt { Some => body, None => exit }
-	opt := bs.fn.NewLocal("_recv", optT, false, f.SpanV)
+	opt := bs.newLocal("_recv", optT, false, f.SpanV)
 	bs.emit(&IntrinsicInstr{
 		Dest:  &Place{Local: opt},
 		Kind:  IntrinsicChanRecv,
@@ -1257,10 +1340,10 @@ func (bs *bodyState) lowerForInChannel(f *ir.ForStmt, iterT Type) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
-		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1,
+		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	// Unwrap the payload into a named local.
-	elemLocal := bs.fn.NewLocal("_elem", elemT, false, f.SpanV)
+	elemLocal := bs.newLocal("_elem", elemT, false, f.SpanV)
 	payloadProj := &VariantProj{
 		Variant:  int(someTagOf(optT)),
 		Name:     "Some",
@@ -1305,11 +1388,12 @@ func (bs *bodyState) lowerMatchExprInto(m *ir.MatchExpr, dest LocalID, destT Typ
 
 // lowerMatch drives match lowering using an optional decision tree.
 func (bs *bodyState) lowerMatch(scrutinee ir.Expr, arms []*ir.MatchArm, tree ir.DecisionNode, sp Span, dest *LocalID, destT Type) {
+	bs.pushScope()
 	scrutT := scrutinee.Type()
 	if scrutT == nil {
 		scrutT = ir.ErrTypeVal
 	}
-	scrutLocal := bs.fn.NewLocal("_scrut", scrutT, false, sp)
+	scrutLocal := bs.newLocal("_scrut", scrutT, false, sp)
 	bs.emit(&StorageLiveInstr{Local: scrutLocal, SpanV: sp})
 	bs.lowerExprInto(scrutinee, scrutLocal, scrutT)
 
@@ -1367,6 +1451,7 @@ func (bs *bodyState) lowerMatch(scrutinee ir.Expr, arms []*ir.MatchArm, tree ir.
 	}
 
 	bs.cur = merge
+	bs.popScope()
 }
 
 type matchContext struct {
@@ -1399,7 +1484,7 @@ func (mc *matchContext) lowerTree(node ir.DecisionNode) {
 			projType = n.T
 		}
 		place := projectionToPlace(bs.l, mc.scrutLocal, mc.scrutT, n.Proj)
-		id := bs.fn.NewLocal(n.Name, projType, false, mc.sp)
+		id := bs.newLocal(n.Name, projType, false, mc.sp)
 		bs.emit(&StorageLiveInstr{Local: id, SpanV: mc.sp})
 		bs.emit(&AssignInstr{
 			Dest:  Place{Local: id},
@@ -1703,6 +1788,23 @@ func (bs *bodyState) lowerExprAsOperand(e ir.Expr) Operand {
 		return &ConstOp{Const: &UnitConst{}, T: TUnit}
 	case *ir.StringLit:
 		return bs.lowerStringLit(x)
+	case *ir.FieldExpr:
+		if !x.Optional {
+			recvPlace, ok := bs.lowerExprToPlace(x.X)
+			if !ok {
+				t := x.X.Type()
+				tmp := bs.freshTemp(t, exprSpan(x.X))
+				bs.lowerExprInto(x.X, tmp, t)
+				recvPlace = Place{Local: tmp}
+			}
+			info := bs.l.structFromType(x.X.Type(), "")
+			fieldT := bs.fieldExprType(x)
+			idx := bs.l.fieldIndex(info, x.Name)
+			return &CopyOp{
+				Place: recvPlace.Project(&FieldProj{Index: idx, Name: x.Name, Type: fieldT}),
+				T:     fieldT,
+			}
+		}
 	case *ir.Ident:
 		return bs.lowerIdent(x)
 	}
@@ -1749,8 +1851,9 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 			}
 			info := bs.l.structFromType(x.X.Type(), "")
 			idx := bs.l.fieldIndex(info, x.Name)
-			proj := &FieldProj{Index: idx, Name: x.Name, Type: x.T}
-			return &UseRV{Op: &CopyOp{Place: recvPlace.Project(proj), T: x.T}}
+			fieldT := bs.fieldExprType(x)
+			proj := &FieldProj{Index: idx, Name: x.Name, Type: fieldT}
+			return &UseRV{Op: &CopyOp{Place: recvPlace.Project(proj), T: fieldT}}
 		}
 		// Optional field — handled via lowerOptionalFieldInto (the
 		// caller should have routed us through lowerExprIntoPlace).
@@ -2009,9 +2112,10 @@ func (bs *bodyState) lowerBlockExprInto(be *ir.BlockExpr, dest Place, destT Type
 // It lowers into a discriminant test + payload binding for Option /
 // enum variants, and falls back to an unsupported note otherwise.
 func (bs *bodyState) lowerIfLetExprInto(ife *ir.IfLetExpr, dest Place, destT Type) {
+	bs.pushScope()
 	scrut := ife.Scrutinee
 	scrutT := scrut.Type()
-	scrutLocal := bs.fn.NewLocal("_iflet", scrutT, false, ife.SpanV)
+	scrutLocal := bs.newLocal("_iflet", scrutT, false, ife.SpanV)
 	bs.emit(&StorageLiveInstr{Local: scrutLocal, SpanV: ife.SpanV})
 	bs.lowerExprInto(scrut, scrutLocal, scrutT)
 
@@ -2032,6 +2136,7 @@ func (bs *bodyState) lowerIfLetExprInto(ife *ir.IfLetExpr, dest Place, destT Typ
 			bs.popDeferScope()
 			bs.popScope()
 		}
+		bs.popScope()
 		return
 	}
 	varIdx := bs.l.variantIndexByName(scrutT, vp.Variant)
@@ -2087,6 +2192,7 @@ func (bs *bodyState) lowerIfLetExprInto(ife *ir.IfLetExpr, dest Place, destT Typ
 	}
 	bs.terminate(&GotoTerm{Target: merge, SpanV: ife.SpanV})
 	bs.cur = merge
+	bs.popScope()
 }
 
 // lowerMatchExprIntoPlace routes through the generic matcher.
@@ -2097,7 +2203,7 @@ func (bs *bodyState) lowerMatchExprIntoPlace(m *ir.MatchExpr, dest Place, destT 
 	if t == nil {
 		t = m.T
 	}
-	local := bs.fn.NewLocal("_match", t, false, m.SpanV)
+	local := bs.newLocal("_match", t, false, m.SpanV)
 	bs.emit(&StorageLiveInstr{Local: local, SpanV: m.SpanV})
 	bs.lowerMatch(m.Scrutinee, m.Arms, m.Tree, m.SpanV, &local, t)
 	bs.emit(&AssignInstr{
@@ -2109,8 +2215,9 @@ func (bs *bodyState) lowerMatchExprIntoPlace(m *ir.MatchExpr, dest Place, destT 
 
 // lowerCoalesceInto handles `left ?? right`.
 func (bs *bodyState) lowerCoalesceInto(c *ir.CoalesceExpr, dest Place, destT Type) {
+	bs.pushScope()
 	leftT := c.Left.Type()
-	leftLocal := bs.fn.NewLocal("_coalesce", leftT, false, c.SpanV)
+	leftLocal := bs.newLocal("_coalesce", leftT, false, c.SpanV)
 	bs.emit(&StorageLiveInstr{Local: leftLocal, SpanV: c.SpanV})
 	bs.lowerExprInto(c.Left, leftLocal, leftT)
 	disc := bs.freshTemp(TInt, c.SpanV)
@@ -2140,6 +2247,7 @@ func (bs *bodyState) lowerCoalesceInto(c *ir.CoalesceExpr, dest Place, destT Typ
 	bs.lowerExprIntoPlace(c.Right, dest, destT)
 	bs.terminate(&GotoTerm{Target: merge, SpanV: c.SpanV})
 	bs.cur = merge
+	bs.popScope()
 }
 
 // lowerQuestionInto handles `e?`. The receiver must be Option<T> or
@@ -2153,8 +2261,9 @@ func (bs *bodyState) lowerCoalesceInto(c *ir.CoalesceExpr, dest Place, destT Typ
 // error path is just "None of the return type" — materialised via
 // NullaryRV{NullaryNone}.
 func (bs *bodyState) lowerQuestionInto(q *ir.QuestionExpr, dest Place, destT Type) {
+	bs.pushScope()
 	xT := q.X.Type()
-	tmp := bs.fn.NewLocal("_q", xT, false, q.SpanV)
+	tmp := bs.newLocal("_q", xT, false, q.SpanV)
 	bs.emit(&StorageLiveInstr{Local: tmp, SpanV: q.SpanV})
 	bs.lowerExprInto(q.X, tmp, xT)
 	disc := bs.freshTemp(TInt, q.SpanV)
@@ -2187,6 +2296,7 @@ func (bs *bodyState) lowerQuestionInto(q *ir.QuestionExpr, dest Place, destT Typ
 		Src:   &UseRV{Op: &CopyOp{Place: Place{Local: tmp}.Project(payloadProj), T: destT}},
 		SpanV: q.SpanV,
 	})
+	bs.popScope()
 }
 
 // rebuildErrorIntoReturn materialises the error value for a `?`
@@ -2300,7 +2410,7 @@ func typesMatch(a, b Type) bool {
 // lowerOptionalFieldInto handles `x?.field`.
 func (bs *bodyState) lowerOptionalFieldInto(fe *ir.FieldExpr, dest Place, destT Type) {
 	recvT := fe.X.Type()
-	recvLocal := bs.fn.NewLocal("_opt", recvT, false, fe.SpanV)
+	recvLocal := bs.newLocal("_opt", recvT, false, fe.SpanV)
 	bs.emit(&StorageLiveInstr{Local: recvLocal, SpanV: fe.SpanV})
 	bs.lowerExprInto(fe.X, recvLocal, recvT)
 	disc := bs.freshTemp(TInt, fe.SpanV)
@@ -3146,6 +3256,10 @@ func stringIntrinsicForMethod(name string) IntrinsicKind {
 		return IntrinsicStringToUpper
 	case "toLower":
 		return IntrinsicStringToLower
+	case "toInt":
+		return IntrinsicStringToInt
+	case "toFloat":
+		return IntrinsicStringToFloat
 	case "replace":
 		return IntrinsicStringReplace
 	case "chars":
@@ -3170,12 +3284,40 @@ func bytesIntrinsicForMethod(name string) IntrinsicKind {
 		return IntrinsicBytesContains
 	case "startsWith":
 		return IntrinsicBytesStartsWith
+	case "endsWith":
+		return IntrinsicBytesEndsWith
 	case "indexOf":
 		return IntrinsicBytesIndexOf
+	case "lastIndexOf":
+		return IntrinsicBytesLastIndexOf
+	case "split":
+		return IntrinsicBytesSplit
+	case "join":
+		return IntrinsicBytesJoin
 	case "concat":
 		return IntrinsicBytesConcat
 	case "repeat":
 		return IntrinsicBytesRepeat
+	case "replace":
+		return IntrinsicBytesReplace
+	case "replaceAll":
+		return IntrinsicBytesReplaceAll
+	case "trimLeft":
+		return IntrinsicBytesTrimLeft
+	case "trimRight":
+		return IntrinsicBytesTrimRight
+	case "trim":
+		return IntrinsicBytesTrim
+	case "trimSpace":
+		return IntrinsicBytesTrimSpace
+	case "toUpper":
+		return IntrinsicBytesToUpper
+	case "toLower":
+		return IntrinsicBytesToLower
+	case "toHex":
+		return IntrinsicBytesToHex
+	case "slice":
+		return IntrinsicBytesSlice
 	}
 	return IntrinsicInvalid
 }
@@ -3394,7 +3536,7 @@ func (l *lowerer) nextClosureSymbol(parent string) string {
 // ==== misc helpers ====
 
 func (bs *bodyState) freshTemp(t Type, sp Span) LocalID {
-	return bs.fn.NewLocal("", t, false, sp)
+	return bs.newLocal("", t, false, sp)
 }
 
 // finishNoReturn ensures the current block ends in a terminator. For
@@ -3782,6 +3924,23 @@ func hasInterpolation(s *ir.StringLit) bool {
 		}
 	}
 	return false
+}
+
+func (bs *bodyState) fieldExprType(x *ir.FieldExpr) Type {
+	if x == nil {
+		return ir.ErrTypeVal
+	}
+	if !isPoisonType(x.T) {
+		return x.T
+	}
+	info := bs.l.structFromType(x.X.Type(), "")
+	if info == nil {
+		return x.T
+	}
+	if ft := bs.l.fieldType(info, x.Name); ft != nil {
+		return ft
+	}
+	return x.T
 }
 
 func mapUnaryOp(op ir.UnOp) UnaryOp {

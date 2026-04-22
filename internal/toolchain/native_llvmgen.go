@@ -2,6 +2,7 @@ package toolchain
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,15 @@ var (
 	nativeLLVMGenBuildMu sync.Mutex
 	installNativeLLVMGen = buildNativeLLVMGen
 )
+
+var nativeLLVMGenSourceInputs = []string{
+	"cmd/osty-native-llvmgen",
+	"internal/backend",
+	"internal/llvmgen",
+	"internal/nativellvmgen",
+	"go.mod",
+	"go.sum",
+}
 
 func NativeLLVMGenBinaryName() string {
 	name := "osty-native-llvmgen"
@@ -35,14 +45,22 @@ func EnsureNativeLLVMGen(start string) (string, error) {
 		return "", err
 	}
 	path := ManagedNativeLLVMGenPath(root)
-	if fileExists(path) {
+	stale, err := nativeLLVMGenNeedsRebuild(path)
+	if err != nil {
+		return "", err
+	}
+	if !stale {
 		return path, nil
 	}
 
 	nativeLLVMGenBuildMu.Lock()
 	defer nativeLLVMGenBuildMu.Unlock()
 
-	if fileExists(path) {
+	stale, err = nativeLLVMGenNeedsRebuild(path)
+	if err != nil {
+		return "", err
+	}
+	if !stale {
 		return path, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -52,6 +70,65 @@ func EnsureNativeLLVMGen(start string) (string, error) {
 		return "", err
 	}
 	return path, nil
+}
+
+func nativeLLVMGenNeedsRebuild(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("stat managed llvmgen: %w", err)
+	}
+	if info.IsDir() {
+		return true, nil
+	}
+	root, err := sourceRepoRootFunc()
+	if err != nil {
+		return false, err
+	}
+	managedModTime := info.ModTime()
+	for _, rel := range nativeLLVMGenSourceInputs {
+		sourcePath := filepath.Join(root, rel)
+		sourceInfo, err := os.Stat(sourcePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return false, fmt.Errorf("stat native llvmgen source %q: %w", sourcePath, err)
+		}
+		if !sourceInfo.IsDir() {
+			if sourceInfo.ModTime().After(managedModTime) {
+				return true, nil
+			}
+			continue
+		}
+		var newer bool
+		walkErr := filepath.WalkDir(sourcePath, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			fileInfo, err := d.Info()
+			if err != nil {
+				return err
+			}
+			if fileInfo.ModTime().After(managedModTime) {
+				newer = true
+				return fs.SkipAll
+			}
+			return nil
+		})
+		if walkErr != nil && walkErr != fs.SkipAll {
+			return false, fmt.Errorf("walk native llvmgen sources %q: %w", sourcePath, walkErr)
+		}
+		if newer {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func buildNativeLLVMGen(dest string) error {

@@ -45,11 +45,11 @@ pub fn lastIndexOf(b: Bytes, sub: Bytes) -> Int? {
 }
 
 pub fn split(b: Bytes, sep: Bytes) -> List<Bytes> {
-    split(b, sep)
+    b.split(sep)
 }
 
 pub fn join(parts: List<Bytes>, sep: Bytes) -> Bytes {
-    join(parts, sep)
+    sep.join(parts)
 }
 
 pub fn concat(a: Bytes, b: Bytes) -> Bytes {

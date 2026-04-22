@@ -195,7 +195,13 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 		Parallel:           hasNamedAnnotation(fn.Annotations, "parallel"),
 		Unroll:             unrollEnable,
 		UnrollCount:        unrollCount,
+		InlineMode:         extractInlineMode(fn.Annotations),
+		Hot:                hasNamedAnnotation(fn.Annotations, "hot"),
+		Cold:               hasNamedAnnotation(fn.Annotations, "cold"),
+		TargetFeatures:     extractTargetFeatures(fn.Annotations),
+		Pure:               hasNamedAnnotation(fn.Annotations, "pure"),
 	}
+	out.NoaliasAll, out.NoaliasParams = extractNoaliasArgs(fn.Annotations)
 	if out.Return == nil {
 		out.Return = TUnit
 	}
@@ -207,6 +213,78 @@ func (l *lowerer) lowerFnDecl(fn *ast.FnDecl) *FnDecl {
 	}
 	if fn.Body != nil {
 		out.Body = l.lowerBlock(fn.Body)
+	}
+	return out
+}
+
+// extractInlineMode reads the v0.6 A8 `#[inline]` family off the
+// annotation list and returns the corresponding FnDecl.InlineMode
+// value. Bare `#[inline]` → InlineSoft; `#[inline(always)]` →
+// InlineAlways; `#[inline(never)]` → InlineNever; absent →
+// InlineNone.
+func extractInlineMode(annots []*ast.Annotation) int {
+	for _, a := range annots {
+		if a == nil || a.Name != "inline" {
+			continue
+		}
+		if len(a.Args) == 0 {
+			return InlineSoft
+		}
+		for _, arg := range a.Args {
+			if arg == nil {
+				continue
+			}
+			switch arg.Key {
+			case "always":
+				return InlineAlways
+			case "never":
+				return InlineNever
+			}
+		}
+		return InlineSoft
+	}
+	return InlineNone
+}
+
+// extractNoaliasArgs reads `#[noalias]` / `#[noalias(p1, p2)]` and
+// returns (allParams, []paramName). Bare form → (true, nil).
+// Arg-list form → (false, names). Absent → (false, nil).
+func extractNoaliasArgs(annots []*ast.Annotation) (bool, []string) {
+	for _, a := range annots {
+		if a == nil || a.Name != "noalias" {
+			continue
+		}
+		if len(a.Args) == 0 {
+			return true, nil
+		}
+		names := make([]string, 0, len(a.Args))
+		for _, arg := range a.Args {
+			if arg == nil || arg.Key == "" {
+				continue
+			}
+			names = append(names, arg.Key)
+		}
+		return false, names
+	}
+	return false, nil
+}
+
+// extractTargetFeatures reads `#[target_feature(...)]` and returns
+// each bare-identifier argument in source order, skipping empty
+// keys. The resolver has already rejected malformed arg shapes, so
+// we can assume well-formed names here.
+func extractTargetFeatures(annots []*ast.Annotation) []string {
+	var out []string
+	for _, a := range annots {
+		if a == nil || a.Name != "target_feature" {
+			continue
+		}
+		for _, arg := range a.Args {
+			if arg == nil || arg.Key == "" {
+				continue
+			}
+			out = append(out, arg.Key)
+		}
 	}
 	return out
 }

@@ -53,6 +53,41 @@ AVX-512 cost model 우회 문서화.
 
 향후 gap 을 닫을 때 같은 entry 에 해결 요지 + 관련 PR 을 기록한다.
 
+### `pure-enforce` — `#[pure]` checker enforcement (v0.6 A13)
+
+**상태:** `#[pure]` 는 v0.6 에 lenient 로 착륙했다 (§3.8.11). 현재
+컴파일러는 annotation 을 **신뢰만 하고 검증하지 않는다** — LLVM 이 `readnone`
+attribute 를 받아서 CSE / hoist / dead-call elim 을 수행하지만, 본문이
+실제로 pure 한지는 체커가 확인하지 않는다. 거짓말하면 undefined behavior.
+
+해소 경로: `internal/check` 에 purity analyzer 추가. 금지 목록:
+(a) non-local write (field/global/ref-parameter 의 store), (b) I/O
+(`println`, `fmt.*`, filesystem), (c) impure call (다른 `#[pure]` 나
+known-pure intrinsic 이 아닌 fn 호출), (d) volatile / atomic ops,
+(e) allocation (GC 는 관찰 가능). `#[pure]` 어노테이션 있는 함수 본문
+walk 해서 위 중 하나라도 발견하면 새 에러 코드 (예: E0780) 발화.
+
+언어 surface 변경 없음 — 어노테이션 의미는 이미 §3.8.11 에 정의됨. 검증
+도입은 기존 `#[pure]` 코드를 깨지 않는다 (정확히 쓰였다면).
+
+### `a12-branch-hints` — `likely(x)` / `unlikely(x)` 빌트인 (v0.6 A12 후속)
+
+**상태:** Tier 2 트랙에서 A11 (`#[noalias]`), A13 (`#[pure]`) 는
+착륙했지만 A12 branch prediction 빌트인은 후속 PR 로 미뤄진 상태.
+구현 규모: (a) prelude 에 `likely(x: Bool) -> Bool` / `unlikely(x: Bool)
+-> Bool` 등록, (b) checker 가 이를 builtin-identity 로 인식, (c) IR /
+MIR / LLVM emitter 에서 `@llvm.expect.i1(i1 %x, i1 <hint>)` intrinsic
+call 로 lower. Annotation 과 달리 새로운 builtin symbol 을 언어 surface
+에 추가하는 것이므로 `#[inline]` 류와 다른 종류의 변경이다.
+
+설계 대안도 열려 있음:
+- `if likely(cond) { ... }` — 빌트인 expression wrap
+- `match x { likely A => ..., unlikely B => ... }` — match arm prefix
+  (grammar 변경 필요)
+- `#[likely] if ...` — expression attribute (grammar 변경 필요)
+
+빌트인 함수 접근이 가장 부담이 적음. 별도 PR 에서 scope 결정 후 착륙.
+
 **운영 정책.** 새 gap 은 기존 처리 절차대로 G 번호를 부여해 `Open Gaps`
 섹션에서 추적. 버그 수정 / 명확화 / 성능 최적화 / 의미 중립 변경은
 G 번호 없이 일반 이슈 트래커에서 처리. 언어 surface 변경은 정식 버전

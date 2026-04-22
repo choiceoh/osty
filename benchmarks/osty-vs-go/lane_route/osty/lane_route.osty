@@ -1,0 +1,35 @@
+fn buildLaneCosts(n: Int) -> List<Int> {
+    let mut costs: List<Int> = []
+    for i in 0..n {
+        costs.push(((i * 19 + (i / 3) * 7) % 41) + 3)
+    }
+    costs
+}
+
+fn min2(a: Int, b: Int) -> Int {
+    if b < a {
+        return b
+    }
+    a
+}
+
+pub fn analyzeLaneRoute(costs: List<Int>) -> Int {
+    let mut laneA = 0
+    let mut laneB = 7
+    let mut laneC = 13
+    let mut checksum = 0
+    let mut i = 0
+    for i < costs.len() {
+        let cost = costs[i]
+        let nextA = min2(laneA, laneB + 3) + cost
+        let nextB = min2(min2(laneA + 2, laneB), laneC + 2) + (cost / 2) + (i % 7)
+        let nextC = min2(laneB + 3, laneC) + ((cost * 2) / 3) + (i % 5)
+        laneA = nextA
+        laneB = nextB
+        laneC = nextC
+        checksum = checksum + ((nextA + nextB + nextC) % 97)
+        i = i + 1
+    }
+    let tail = [laneA, laneB, laneC].sorted()
+    checksum + tail[0] + tail[1] * 2 + tail[2] * 3
+}

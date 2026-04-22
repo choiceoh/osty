@@ -15,6 +15,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2325,6 +2326,12 @@ const char *osty_rt_strings_Repeat(const char *value, int64_t n);
 const char *osty_rt_strings_Replace(const char *value, const char *old, const char *new_value);
 const char *osty_rt_strings_ReplaceAll(const char *value, const char *old, const char *new_value);
 const char *osty_rt_strings_Slice(const char *value, int64_t start, int64_t end);
+const char *osty_rt_strings_ToUpper(const char *value);
+const char *osty_rt_strings_ToLower(const char *value);
+bool osty_rt_strings_IsValidInt(const char *value);
+int64_t osty_rt_strings_ToInt(const char *value);
+bool osty_rt_strings_IsValidFloat(const char *value);
+double osty_rt_strings_ToFloat(const char *value);
 const char *osty_rt_strings_TrimStart(const char *value);
 const char *osty_rt_strings_TrimEnd(const char *value);
 const char *osty_rt_strings_TrimPrefix(const char *value, const char *prefix);
@@ -2337,9 +2344,24 @@ void *osty_rt_bytes_from_list(void *raw_list);
 void *osty_rt_bytes_concat(void *raw_left, void *raw_right);
 void *osty_rt_bytes_repeat(void *raw_bytes, int64_t n);
 int64_t osty_rt_bytes_index_of(void *raw_bytes, void *raw_sub);
+int64_t osty_rt_bytes_last_index_of(void *raw_bytes, void *raw_sub);
+void *osty_rt_bytes_split(void *raw_bytes, void *raw_sep);
+void *osty_rt_bytes_join(void *raw_parts, void *raw_sep);
+void *osty_rt_bytes_replace(void *raw_bytes, void *raw_old, void *raw_new_value);
+void *osty_rt_bytes_replace_all(void *raw_bytes, void *raw_old, void *raw_new_value);
+void *osty_rt_bytes_trim_left(void *raw_bytes, void *raw_strip);
+void *osty_rt_bytes_trim_right(void *raw_bytes, void *raw_strip);
+void *osty_rt_bytes_trim(void *raw_bytes, void *raw_strip);
+void *osty_rt_bytes_trim_space(void *raw_bytes);
+void *osty_rt_bytes_to_upper(void *raw_bytes);
+void *osty_rt_bytes_to_lower(void *raw_bytes);
+const char *osty_rt_bytes_to_hex(void *raw_bytes);
+bool osty_rt_bytes_is_valid_hex(const char *value);
+void *osty_rt_bytes_from_hex(const char *value);
 bool osty_rt_bytes_is_valid_utf8(void *raw_bytes);
 const char *osty_rt_bytes_to_string(void *raw_bytes);
 uint8_t osty_rt_bytes_get(void *raw_bytes, int64_t index);
+void *osty_rt_bytes_slice(void *raw_bytes, int64_t start, int64_t end);
 bool osty_rt_set_insert_i64(void *raw_set, int64_t item);
 bool osty_rt_set_insert_i1(void *raw_set, bool item);
 bool osty_rt_set_insert_f64(void *raw_set, double item);
@@ -4160,6 +4182,24 @@ double osty_rt_list_get_f64(void *raw_list, int64_t index) {
     return value;
 }
 
+void *osty_rt_list_data_i64(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    osty_rt_list_ensure_layout(list, sizeof(int64_t), NULL);
+    return list->data;
+}
+
+void *osty_rt_list_data_i1(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    osty_rt_list_ensure_layout(list, sizeof(bool), NULL);
+    return list->data;
+}
+
+void *osty_rt_list_data_f64(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    osty_rt_list_ensure_layout(list, sizeof(double), NULL);
+    return list->data;
+}
+
 void *osty_rt_list_get_ptr(void *raw_list, int64_t index) {
     void *value;
     memcpy(&value, osty_rt_list_get_raw(raw_list, index, sizeof(value), osty_gc_mark_slot_v1), sizeof(value));
@@ -5133,8 +5173,108 @@ const char *osty_rt_strings_Slice(const char *value, int64_t start, int64_t end)
     return osty_rt_string_dup_site(value + start, (size_t)(end - start), "runtime.strings.slice");
 }
 
+const char *osty_rt_strings_ToUpper(const char *value) {
+    size_t len;
+    char *out;
+    size_t i;
+
+    value = (value == NULL) ? "" : value;
+    len = strlen(value);
+    out = (char *)osty_rt_string_dup_site(value, len, "runtime.strings.to_upper");
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)out[i];
+        if (c >= 'a' && c <= 'z') {
+            out[i] = (char)(c - ('a' - 'A'));
+        }
+    }
+    return out;
+}
+
+const char *osty_rt_strings_ToLower(const char *value) {
+	size_t len;
+	char *out;
+	size_t i;
+
+    value = (value == NULL) ? "" : value;
+    len = strlen(value);
+    out = (char *)osty_rt_string_dup_site(value, len, "runtime.strings.to_lower");
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)out[i];
+        if (c >= 'A' && c <= 'Z') {
+            out[i] = (char)(c + ('a' - 'A'));
+        }
+	}
+	return out;
+}
+
+bool osty_rt_strings_IsValidInt(const char *value) {
+	char *end = NULL;
+
+	value = (value == NULL) ? "" : value;
+	if (value[0] == '\0' ||
+		value[0] == ' ' || value[0] == '\t' || value[0] == '\n' ||
+		value[0] == '\r' || value[0] == '\v' || value[0] == '\f') {
+		return false;
+	}
+	errno = 0;
+	(void)strtoll(value, &end, 10);
+	if (end == value || end == NULL || *end != '\0' || errno == ERANGE) {
+		return false;
+	}
+	return true;
+}
+
+int64_t osty_rt_strings_ToInt(const char *value) {
+	char *end = NULL;
+	long long parsed;
+
+	value = (value == NULL) ? "" : value;
+	if (!osty_rt_strings_IsValidInt(value)) {
+		osty_rt_abort("runtime.strings.to_int: invalid integer");
+	}
+	errno = 0;
+	parsed = strtoll(value, &end, 10);
+	if (end == value || end == NULL || *end != '\0' || errno == ERANGE) {
+		osty_rt_abort("runtime.strings.to_int: invalid integer");
+	}
+	return (int64_t)parsed;
+}
+
+bool osty_rt_strings_IsValidFloat(const char *value) {
+	char *end = NULL;
+
+	value = (value == NULL) ? "" : value;
+	if (value[0] == '\0' ||
+		value[0] == ' ' || value[0] == '\t' || value[0] == '\n' ||
+		value[0] == '\r' || value[0] == '\v' || value[0] == '\f') {
+		return false;
+	}
+	errno = 0;
+	(void)strtod(value, &end);
+	if (end == value || end == NULL || *end != '\0' || errno == ERANGE) {
+		return false;
+	}
+	return true;
+}
+
+double osty_rt_strings_ToFloat(const char *value) {
+	char *end = NULL;
+	double parsed;
+
+	value = (value == NULL) ? "" : value;
+	if (!osty_rt_strings_IsValidFloat(value)) {
+		osty_rt_abort("runtime.strings.to_float: invalid float");
+	}
+	errno = 0;
+	parsed = strtod(value, &end);
+	if (end == value || end == NULL || *end != '\0' || errno == ERANGE) {
+		osty_rt_abort("runtime.strings.to_float: invalid float");
+	}
+	return parsed;
+}
+
 const char *osty_rt_strings_TrimPrefix(const char *value, const char *prefix) {
-    const char *start;
+	const char *start;
 
     if (value == NULL) {
         return osty_rt_string_dup_site("", 0, "runtime.strings.trim_prefix.empty");
@@ -5954,6 +6094,53 @@ static bool osty_rt_bytes_validate_utf8_data(const unsigned char *data, size_t l
     return true;
 }
 
+static bool osty_rt_bytes_contains_byte(const unsigned char *data, size_t len, unsigned char needle) {
+    size_t i;
+
+    for (i = 0; i < len; i++) {
+        if (data[i] == needle) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool osty_rt_bytes_is_space(unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f';
+}
+
+static int osty_rt_hex_nibble(unsigned char c) {
+    if (c >= '0' && c <= '9') {
+        return (int)(c - '0');
+    }
+    if (c >= 'a' && c <= 'f') {
+        return (int)(c - 'a') + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return (int)(c - 'A') + 10;
+    }
+    return -1;
+}
+
+static void *osty_rt_bytes_dup_site(const unsigned char *start, size_t len, const char *site) {
+    size_t total;
+    osty_rt_bytes *out;
+    unsigned char *data;
+
+    if (len > SIZE_MAX - sizeof(osty_rt_bytes)) {
+        osty_rt_abort("runtime.bytes.dup: size overflow");
+    }
+    total = sizeof(osty_rt_bytes) + len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, site, NULL, NULL);
+    data = (unsigned char *)(out + 1);
+    out->data = data;
+    out->len = (int64_t)len;
+    if (len != 0) {
+        memcpy(data, start, len);
+    }
+    return out;
+}
+
 void *osty_rt_bytes_from_list(void *raw_list) {
     osty_rt_list *list = (osty_rt_list *)raw_list;
     size_t len;
@@ -6118,6 +6305,622 @@ int64_t osty_rt_bytes_index_of(void *raw_bytes, void *raw_sub) {
     return -1;
 }
 
+int64_t osty_rt_bytes_last_index_of(void *raw_bytes, void *raw_sub) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    osty_rt_bytes *sub = (osty_rt_bytes *)raw_sub;
+    size_t value_len = 0;
+    size_t sub_len = 0;
+    size_t i;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.last_index_of: negative value length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (sub != NULL) {
+        if (sub->len < 0) {
+            osty_rt_abort("runtime.bytes.last_index_of: negative sub length");
+        }
+        sub_len = (size_t)sub->len;
+    }
+    if (sub_len == 0) {
+        return (int64_t)value_len;
+    }
+    if (sub_len > value_len) {
+        return -1;
+    }
+    if (b->data == NULL) {
+        osty_rt_abort("runtime.bytes.last_index_of: missing value storage");
+    }
+    if (sub->data == NULL) {
+        osty_rt_abort("runtime.bytes.last_index_of: missing sub storage");
+    }
+    for (i = value_len - sub_len + 1; i > 0; i--) {
+        size_t at = i - 1;
+        if (memcmp(b->data + at, sub->data, sub_len) == 0) {
+            return (int64_t)at;
+        }
+    }
+    return -1;
+}
+
+void *osty_rt_bytes_split(void *raw_bytes, void *raw_sep) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    osty_rt_bytes *sep = (osty_rt_bytes *)raw_sep;
+    size_t value_len = 0;
+    size_t sep_len = 0;
+    size_t start = 0;
+    size_t i;
+    void *out = osty_rt_list_new();
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.split: negative value length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (sep != NULL) {
+        if (sep->len < 0) {
+            osty_rt_abort("runtime.bytes.split: negative sep length");
+        }
+        sep_len = (size_t)sep->len;
+    }
+    if (value_len != 0 && b->data == NULL) {
+        osty_rt_abort("runtime.bytes.split: missing value storage");
+    }
+    if (sep_len != 0 && sep->data == NULL) {
+        osty_rt_abort("runtime.bytes.split: missing sep storage");
+    }
+    if (sep_len == 0) {
+        for (i = 0; i < value_len; i++) {
+            osty_rt_list_push_ptr(out, osty_rt_bytes_dup_site(b->data + i, 1, "runtime.bytes.split.byte"));
+        }
+        return out;
+    }
+    for (i = 0; i + sep_len <= value_len;) {
+        if (memcmp(b->data + i, sep->data, sep_len) == 0) {
+            osty_rt_list_push_ptr(out, osty_rt_bytes_dup_site((start < i) ? (b->data + start) : NULL, i - start, "runtime.bytes.split.part"));
+            i += sep_len;
+            start = i;
+            continue;
+        }
+        i += 1;
+    }
+    osty_rt_list_push_ptr(out, osty_rt_bytes_dup_site((start < value_len) ? (b->data + start) : NULL, value_len - start, "runtime.bytes.split.part"));
+    return out;
+}
+
+void *osty_rt_bytes_join(void *raw_parts, void *raw_sep) {
+    osty_rt_list *parts = NULL;
+    osty_rt_bytes *sep = (osty_rt_bytes *)raw_sep;
+    size_t sep_len = 0;
+    size_t total_len = 0;
+    int64_t count;
+    int64_t i;
+    osty_rt_bytes *out;
+    unsigned char *cursor;
+
+    if (sep != NULL) {
+        if (sep->len < 0) {
+            osty_rt_abort("runtime.bytes.join: negative sep length");
+        }
+        sep_len = (size_t)sep->len;
+        if (sep_len != 0 && sep->data == NULL) {
+            osty_rt_abort("runtime.bytes.join: missing sep storage");
+        }
+    }
+    if (raw_parts == NULL) {
+        return osty_rt_bytes_dup_site(NULL, 0, "runtime.bytes.join.empty");
+    }
+    parts = osty_rt_list_cast(raw_parts);
+    if (parts->len == 0) {
+        return osty_rt_bytes_dup_site(NULL, 0, "runtime.bytes.join.empty");
+    }
+    osty_rt_list_ensure_layout(parts, sizeof(void *), osty_gc_mark_slot_v1);
+    count = parts->len;
+    for (i = 0; i < count; i++) {
+        osty_rt_bytes *piece = ((osty_rt_bytes **)parts->data)[i];
+        size_t piece_len = 0;
+        if (piece != NULL) {
+            if (piece->len < 0) {
+                osty_rt_abort("runtime.bytes.join: negative piece length");
+            }
+            piece_len = (size_t)piece->len;
+            if (piece_len != 0 && piece->data == NULL) {
+                osty_rt_abort("runtime.bytes.join: missing piece storage");
+            }
+        }
+        if (piece_len > SIZE_MAX - total_len) {
+            osty_rt_abort("runtime.bytes.join: size overflow");
+        }
+        total_len += piece_len;
+        if (i + 1 < count) {
+            if (sep_len > SIZE_MAX - total_len) {
+                osty_rt_abort("runtime.bytes.join: size overflow");
+            }
+            total_len += sep_len;
+        }
+    }
+    out = (osty_rt_bytes *)osty_rt_bytes_dup_site(NULL, total_len, total_len == 0 ? "runtime.bytes.join.empty" : "runtime.bytes.join");
+    cursor = out->data;
+    for (i = 0; i < count; i++) {
+        osty_rt_bytes *piece = ((osty_rt_bytes **)parts->data)[i];
+        size_t piece_len = 0;
+        if (piece != NULL) {
+            piece_len = (size_t)piece->len;
+            if (piece_len != 0) {
+                memcpy(cursor, piece->data, piece_len);
+                cursor += piece_len;
+            }
+        }
+        if (i + 1 < count && sep_len != 0) {
+            memcpy(cursor, sep->data, sep_len);
+            cursor += sep_len;
+        }
+    }
+    return out;
+}
+
+void *osty_rt_bytes_replace(void *raw_bytes, void *raw_old, void *raw_new_value) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    osty_rt_bytes *old = (osty_rt_bytes *)raw_old;
+    osty_rt_bytes *new_value = (osty_rt_bytes *)raw_new_value;
+    size_t value_len = 0;
+    size_t old_len = 0;
+    size_t new_len = 0;
+    size_t index;
+    size_t prefix_len;
+    size_t suffix_len;
+    size_t total_len;
+    size_t total;
+    osty_rt_bytes *out;
+    unsigned char *data;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.replace: negative value length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (old != NULL) {
+        if (old->len < 0) {
+            osty_rt_abort("runtime.bytes.replace: negative old length");
+        }
+        old_len = (size_t)old->len;
+    }
+    if (new_value != NULL) {
+        if (new_value->len < 0) {
+            osty_rt_abort("runtime.bytes.replace: negative new length");
+        }
+        new_len = (size_t)new_value->len;
+    }
+    if (value_len != 0 && b->data == NULL) {
+        osty_rt_abort("runtime.bytes.replace: missing value storage");
+    }
+    if (old_len != 0 && old->data == NULL) {
+        osty_rt_abort("runtime.bytes.replace: missing old storage");
+    }
+    if (new_len != 0 && new_value->data == NULL) {
+        osty_rt_abort("runtime.bytes.replace: missing new storage");
+    }
+    if (old_len == 0) {
+        if (new_len > SIZE_MAX - value_len) {
+            osty_rt_abort("runtime.bytes.replace: size overflow");
+        }
+        total_len = new_len + value_len;
+        total = sizeof(osty_rt_bytes) + total_len;
+        out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, "runtime.bytes.replace", NULL, NULL);
+        data = (unsigned char *)(out + 1);
+        out->data = data;
+        out->len = (int64_t)total_len;
+        if (new_len != 0) {
+            memcpy(data, new_value->data, new_len);
+        }
+        if (value_len != 0) {
+            memcpy(data + new_len, b->data, value_len);
+        }
+        return out;
+    }
+    if (old_len > value_len) {
+        return osty_rt_bytes_dup_site(value_len == 0 ? NULL : b->data, value_len, "runtime.bytes.replace.copy");
+    }
+    for (index = 0; index + old_len <= value_len; index++) {
+        if (memcmp(b->data + index, old->data, old_len) == 0) {
+            prefix_len = index;
+            suffix_len = value_len - prefix_len - old_len;
+            if (prefix_len > SIZE_MAX - new_len || prefix_len + new_len > SIZE_MAX - suffix_len) {
+                osty_rt_abort("runtime.bytes.replace: size overflow");
+            }
+            total_len = prefix_len + new_len + suffix_len;
+            total = sizeof(osty_rt_bytes) + total_len;
+            out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, "runtime.bytes.replace", NULL, NULL);
+            data = (unsigned char *)(out + 1);
+            out->data = data;
+            out->len = (int64_t)total_len;
+            if (prefix_len != 0) {
+                memcpy(data, b->data, prefix_len);
+            }
+            if (new_len != 0) {
+                memcpy(data + prefix_len, new_value->data, new_len);
+            }
+            if (suffix_len != 0) {
+                memcpy(data + prefix_len + new_len, b->data + index + old_len, suffix_len);
+            }
+            return out;
+        }
+    }
+    return osty_rt_bytes_dup_site(value_len == 0 ? NULL : b->data, value_len, "runtime.bytes.replace.copy");
+}
+
+void *osty_rt_bytes_replace_all(void *raw_bytes, void *raw_old, void *raw_new_value) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    osty_rt_bytes *old = (osty_rt_bytes *)raw_old;
+    osty_rt_bytes *new_value = (osty_rt_bytes *)raw_new_value;
+    size_t value_len = 0;
+    size_t old_len = 0;
+    size_t new_len = 0;
+    size_t total_len;
+    size_t total;
+    int64_t count = 0;
+    size_t cursor = 0;
+    osty_rt_bytes *out;
+    unsigned char *data;
+    unsigned char *dst;
+    size_t i;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.replace_all: negative value length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (old != NULL) {
+        if (old->len < 0) {
+            osty_rt_abort("runtime.bytes.replace_all: negative old length");
+        }
+        old_len = (size_t)old->len;
+    }
+    if (new_value != NULL) {
+        if (new_value->len < 0) {
+            osty_rt_abort("runtime.bytes.replace_all: negative new length");
+        }
+        new_len = (size_t)new_value->len;
+    }
+    if (value_len != 0 && b->data == NULL) {
+        osty_rt_abort("runtime.bytes.replace_all: missing value storage");
+    }
+    if (old_len != 0 && old->data == NULL) {
+        osty_rt_abort("runtime.bytes.replace_all: missing old storage");
+    }
+    if (new_len != 0 && new_value->data == NULL) {
+        osty_rt_abort("runtime.bytes.replace_all: missing new storage");
+    }
+    if (old_len == 0) {
+        if (new_len != 0 && value_len + 1 > SIZE_MAX / new_len) {
+            osty_rt_abort("runtime.bytes.replace_all: size overflow");
+        }
+        total_len = value_len + (value_len + 1) * new_len;
+        total = sizeof(osty_rt_bytes) + total_len;
+        out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, "runtime.bytes.replace_all", NULL, NULL);
+        data = (unsigned char *)(out + 1);
+        out->data = data;
+        out->len = (int64_t)total_len;
+        dst = data;
+        if (new_len != 0) {
+            memcpy(dst, new_value->data, new_len);
+            dst += new_len;
+        }
+        for (i = 0; i < value_len; i++) {
+            *dst++ = b->data[i];
+            if (new_len != 0) {
+                memcpy(dst, new_value->data, new_len);
+                dst += new_len;
+            }
+        }
+        return out;
+    }
+    if (old_len > value_len) {
+        return osty_rt_bytes_dup_site(value_len == 0 ? NULL : b->data, value_len, "runtime.bytes.replace_all.copy");
+    }
+    for (i = 0; i + old_len <= value_len;) {
+        if (memcmp(b->data + i, old->data, old_len) == 0) {
+            count += 1;
+            i += old_len;
+            continue;
+        }
+        i += 1;
+    }
+    if (count == 0) {
+        return osty_rt_bytes_dup_site(value_len == 0 ? NULL : b->data, value_len, "runtime.bytes.replace_all.copy");
+    }
+    if (new_len >= old_len) {
+        size_t delta = new_len - old_len;
+        if (delta != 0 && (size_t)count > (SIZE_MAX - value_len) / delta) {
+            osty_rt_abort("runtime.bytes.replace_all: size overflow");
+        }
+        total_len = value_len + (size_t)count * delta;
+    } else {
+        total_len = value_len - (size_t)count * (old_len - new_len);
+    }
+    if (total_len > SIZE_MAX - sizeof(osty_rt_bytes)) {
+        osty_rt_abort("runtime.bytes.replace_all: size overflow");
+    }
+    total = sizeof(osty_rt_bytes) + total_len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, "runtime.bytes.replace_all", NULL, NULL);
+    data = (unsigned char *)(out + 1);
+    out->data = data;
+    out->len = (int64_t)total_len;
+    dst = data;
+    while (cursor < value_len) {
+        if (cursor + old_len <= value_len && memcmp(b->data + cursor, old->data, old_len) == 0) {
+            if (new_len != 0) {
+                memcpy(dst, new_value->data, new_len);
+                dst += new_len;
+            }
+            cursor += old_len;
+            continue;
+        }
+        *dst++ = b->data[cursor++];
+    }
+    return out;
+}
+
+void *osty_rt_bytes_trim_left(void *raw_bytes, void *raw_strip) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    osty_rt_bytes *strip = (osty_rt_bytes *)raw_strip;
+    size_t value_len = 0;
+    size_t strip_len = 0;
+    size_t start = 0;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.trim_left: negative value length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (strip != NULL) {
+        if (strip->len < 0) {
+            osty_rt_abort("runtime.bytes.trim_left: negative strip length");
+        }
+        strip_len = (size_t)strip->len;
+    }
+    if (value_len != 0 && b->data == NULL) {
+        osty_rt_abort("runtime.bytes.trim_left: missing value storage");
+    }
+    if (strip_len != 0 && strip->data == NULL) {
+        osty_rt_abort("runtime.bytes.trim_left: missing strip storage");
+    }
+    while (start < value_len && strip_len != 0 && osty_rt_bytes_contains_byte(strip->data, strip_len, b->data[start])) {
+        start++;
+    }
+    return osty_rt_bytes_dup_site((start < value_len) ? (b->data + start) : NULL, value_len - start, "runtime.bytes.trim_left");
+}
+
+void *osty_rt_bytes_trim_right(void *raw_bytes, void *raw_strip) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    osty_rt_bytes *strip = (osty_rt_bytes *)raw_strip;
+    size_t value_len = 0;
+    size_t strip_len = 0;
+    size_t end;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.trim_right: negative value length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (strip != NULL) {
+        if (strip->len < 0) {
+            osty_rt_abort("runtime.bytes.trim_right: negative strip length");
+        }
+        strip_len = (size_t)strip->len;
+    }
+    if (value_len != 0 && b->data == NULL) {
+        osty_rt_abort("runtime.bytes.trim_right: missing value storage");
+    }
+    if (strip_len != 0 && strip->data == NULL) {
+        osty_rt_abort("runtime.bytes.trim_right: missing strip storage");
+    }
+    end = value_len;
+    while (end > 0 && strip_len != 0 && osty_rt_bytes_contains_byte(strip->data, strip_len, b->data[end - 1])) {
+        end--;
+    }
+    return osty_rt_bytes_dup_site((end == 0) ? NULL : b->data, end, "runtime.bytes.trim_right");
+}
+
+void *osty_rt_bytes_trim(void *raw_bytes, void *raw_strip) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    osty_rt_bytes *strip = (osty_rt_bytes *)raw_strip;
+    size_t value_len = 0;
+    size_t strip_len = 0;
+    size_t start = 0;
+    size_t end;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.trim: negative value length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (strip != NULL) {
+        if (strip->len < 0) {
+            osty_rt_abort("runtime.bytes.trim: negative strip length");
+        }
+        strip_len = (size_t)strip->len;
+    }
+    if (value_len != 0 && b->data == NULL) {
+        osty_rt_abort("runtime.bytes.trim: missing value storage");
+    }
+    if (strip_len != 0 && strip->data == NULL) {
+        osty_rt_abort("runtime.bytes.trim: missing strip storage");
+    }
+    end = value_len;
+    while (start < value_len && strip_len != 0 && osty_rt_bytes_contains_byte(strip->data, strip_len, b->data[start])) {
+        start++;
+    }
+    while (end > start && strip_len != 0 && osty_rt_bytes_contains_byte(strip->data, strip_len, b->data[end - 1])) {
+        end--;
+    }
+    return osty_rt_bytes_dup_site((start < end) ? (b->data + start) : NULL, end - start, "runtime.bytes.trim");
+}
+
+void *osty_rt_bytes_trim_space(void *raw_bytes) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    size_t value_len = 0;
+    size_t start = 0;
+    size_t end;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.trim_space: negative value length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (value_len != 0 && b->data == NULL) {
+        osty_rt_abort("runtime.bytes.trim_space: missing value storage");
+    }
+    end = value_len;
+    while (start < value_len && osty_rt_bytes_is_space(b->data[start])) {
+        start++;
+    }
+    while (end > start && osty_rt_bytes_is_space(b->data[end - 1])) {
+        end--;
+    }
+    return osty_rt_bytes_dup_site((start < end) ? (b->data + start) : NULL, end - start, "runtime.bytes.trim_space");
+}
+
+void *osty_rt_bytes_to_upper(void *raw_bytes) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    size_t value_len = 0;
+    osty_rt_bytes *out;
+    unsigned char *data;
+    size_t i;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.to_upper: negative value length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (value_len != 0 && b->data == NULL) {
+        osty_rt_abort("runtime.bytes.to_upper: missing value storage");
+    }
+    out = (osty_rt_bytes *)osty_rt_bytes_dup_site((value_len == 0) ? NULL : b->data, value_len, "runtime.bytes.to_upper");
+    data = out->data;
+    for (i = 0; i < value_len; i++) {
+        unsigned char c = data[i];
+        if (c >= 'a' && c <= 'z') {
+            data[i] = (unsigned char)(c - ('a' - 'A'));
+        }
+    }
+    return out;
+}
+
+void *osty_rt_bytes_to_lower(void *raw_bytes) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    size_t value_len = 0;
+    osty_rt_bytes *out;
+    unsigned char *data;
+    size_t i;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.to_lower: negative value length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (value_len != 0 && b->data == NULL) {
+        osty_rt_abort("runtime.bytes.to_lower: missing value storage");
+    }
+    out = (osty_rt_bytes *)osty_rt_bytes_dup_site((value_len == 0) ? NULL : b->data, value_len, "runtime.bytes.to_lower");
+    data = out->data;
+    for (i = 0; i < value_len; i++) {
+        unsigned char c = data[i];
+        if (c >= 'A' && c <= 'Z') {
+            data[i] = (unsigned char)(c + ('a' - 'A'));
+        }
+    }
+    return out;
+}
+
+const char *osty_rt_bytes_to_hex(void *raw_bytes) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    size_t value_len = 0;
+    size_t total_len;
+    char *out;
+    size_t i;
+    static const char hex[] = "0123456789abcdef";
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.to_hex: negative value length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (value_len != 0 && b->data == NULL) {
+        osty_rt_abort("runtime.bytes.to_hex: missing value storage");
+    }
+    if (value_len == 0) {
+        return osty_rt_string_dup_site("", 0, "runtime.bytes.to_hex.empty");
+    }
+    if (value_len > (SIZE_MAX - 1) / 2) {
+        osty_rt_abort("runtime.bytes.to_hex: size overflow");
+    }
+    total_len = value_len * 2;
+    out = (char *)osty_gc_allocate_managed(total_len + 1, OSTY_GC_KIND_STRING, "runtime.bytes.to_hex", NULL, NULL);
+    for (i = 0; i < value_len; i++) {
+        unsigned char c = b->data[i];
+        out[i * 2] = hex[c >> 4];
+        out[i * 2 + 1] = hex[c & 0x0F];
+    }
+    out[total_len] = '\0';
+    return out;
+}
+
+bool osty_rt_bytes_is_valid_hex(const char *value) {
+    size_t len;
+    size_t i;
+
+    value = (value == NULL) ? "" : value;
+    len = strlen(value);
+    if ((len & 1U) != 0) {
+        return false;
+    }
+    for (i = 0; i < len; i++) {
+        if (osty_rt_hex_nibble((unsigned char)value[i]) < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void *osty_rt_bytes_from_hex(const char *value) {
+    size_t len;
+    size_t byte_len;
+    size_t i;
+    osty_rt_bytes *out;
+    unsigned char *data;
+
+    value = (value == NULL) ? "" : value;
+    len = strlen(value);
+    if ((len & 1U) != 0) {
+        osty_rt_abort("runtime.bytes.from_hex: odd hex length");
+    }
+    byte_len = len / 2;
+    out = (osty_rt_bytes *)osty_rt_bytes_dup_site(NULL, byte_len, byte_len == 0 ? "runtime.bytes.from_hex.empty" : "runtime.bytes.from_hex");
+    data = out->data;
+    for (i = 0; i < byte_len; i++) {
+        int hi = osty_rt_hex_nibble((unsigned char)value[i * 2]);
+        int lo = osty_rt_hex_nibble((unsigned char)value[i * 2 + 1]);
+        if (hi < 0 || lo < 0) {
+            osty_rt_abort("runtime.bytes.from_hex: invalid hex digit");
+        }
+        data[i] = (unsigned char)((hi << 4) | lo);
+    }
+    return out;
+}
+
 int64_t osty_rt_bytes_len(void *raw_bytes) {
     osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
     if (b == NULL) {
@@ -6193,6 +6996,44 @@ uint8_t osty_rt_bytes_get(void *raw_bytes, int64_t index) {
         osty_rt_abort("runtime.bytes.get: index out of range");
     }
     return b->data[index];
+}
+
+void *osty_rt_bytes_slice(void *raw_bytes, int64_t start, int64_t end) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    size_t value_len = 0;
+    size_t slice_len;
+    size_t total;
+    osty_rt_bytes *out;
+    unsigned char *data;
+
+    if (b != NULL) {
+        if (b->len < 0) {
+            osty_rt_abort("runtime.bytes.slice: negative length");
+        }
+        value_len = (size_t)b->len;
+    }
+    if (start < 0 || end < start) {
+        osty_rt_abort("runtime.bytes.slice: invalid bounds");
+    }
+    if ((uint64_t)end > (uint64_t)value_len) {
+        osty_rt_abort("runtime.bytes.slice: end out of range");
+    }
+    slice_len = (size_t)(end - start);
+    if (slice_len > SIZE_MAX - sizeof(osty_rt_bytes)) {
+        osty_rt_abort("runtime.bytes.slice: size overflow");
+    }
+    total = sizeof(osty_rt_bytes) + slice_len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, "runtime.bytes.slice", NULL, NULL);
+    data = (unsigned char *)(out + 1);
+    out->data = data;
+    out->len = (int64_t)slice_len;
+    if (slice_len != 0) {
+        if (b == NULL || b->data == NULL) {
+            osty_rt_abort("runtime.bytes.slice: missing storage");
+        }
+        memcpy(data, b->data + (size_t)start, slice_len);
+    }
+    return out;
 }
 
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
@@ -8932,6 +9773,19 @@ void osty_rt_gc_collect_concurrent_v1(void *const *caller_roots,
     osty_rt_sched_concurrent_stop_release_v1();
 }
 
+/* Per-phase pause instrumentation for the concurrent-incremental
+ * cycle. Updated on each call to `collect_concurrent_incremental_v1`;
+ * accessors below expose them to tests and to future metrics sinks
+ * (tracing, benchmarks). The "pause" figures are what user-visible
+ * latency sees: Phase A (start) + Phase C (finish + sweep). Phase B
+ * is concurrent so it doesn't count toward stop-the-world time even
+ * when the collector is running. Default zero until the first cycle
+ * completes. */
+static volatile int64_t osty_gc_concurrent_incremental_start_nanos = 0;
+static volatile int64_t osty_gc_concurrent_incremental_mark_nanos = 0;
+static volatile int64_t osty_gc_concurrent_incremental_finish_nanos = 0;
+static volatile int64_t osty_gc_concurrent_incremental_cycles = 0;
+
 /* Phase 3 step 2b — concurrent incremental collection driver.
  *
  * Upgrade of `osty_rt_gc_collect_concurrent_v1` that lets the MARK
@@ -8980,6 +9834,7 @@ void osty_rt_gc_collect_concurrent_incremental_v1(
     }
 
     /* ---- Phase A: STW start ---- */
+    int64_t t_phase_a_start = osty_gc_now_nanos();
     osty_rt_sched_concurrent_stop_request_v1();
     osty_rt_sched_kick_worker_v1(-1);
 
@@ -9039,6 +9894,7 @@ void osty_rt_gc_collect_concurrent_incremental_v1(
     if (flat != NULL) free(flat);
 
     osty_rt_sched_concurrent_stop_release_v1();
+    int64_t t_phase_a_end = osty_gc_now_nanos();
 
     /* ---- Phase B: concurrent mark drain ----
      *
@@ -9051,8 +9907,10 @@ void osty_rt_gc_collect_concurrent_incremental_v1(
         if (!more) break;
         osty_rt_plat_yield();
     }
+    int64_t t_phase_b_end = osty_gc_now_nanos();
 
     /* ---- Phase C: STW finish + sweep ---- */
+    int64_t t_phase_c_start = osty_gc_now_nanos();
     osty_rt_sched_concurrent_stop_request_v1();
     osty_rt_sched_kick_worker_v1(-1);
 
@@ -9070,6 +9928,46 @@ void osty_rt_gc_collect_concurrent_incremental_v1(
     osty_gc_collect_incremental_finish();
 
     osty_rt_sched_concurrent_stop_release_v1();
+    int64_t t_phase_c_end = osty_gc_now_nanos();
+
+    /* Publish per-phase timings. Overflows are impossible in
+     * practice (int64 nanoseconds = ~292 years) so plain subtraction
+     * is safe. Phase A + Phase C is the user-visible pause; Phase B
+     * is the concurrent mark duration. */
+    __atomic_store_n(&osty_gc_concurrent_incremental_start_nanos,
+                     t_phase_a_end - t_phase_a_start,
+                     __ATOMIC_RELEASE);
+    __atomic_store_n(&osty_gc_concurrent_incremental_mark_nanos,
+                     t_phase_b_end - t_phase_a_end,
+                     __ATOMIC_RELEASE);
+    __atomic_store_n(&osty_gc_concurrent_incremental_finish_nanos,
+                     t_phase_c_end - t_phase_c_start,
+                     __ATOMIC_RELEASE);
+    __atomic_fetch_add(&osty_gc_concurrent_incremental_cycles, 1,
+                       __ATOMIC_RELEASE);
+}
+
+/* Phase 3 step 2b — per-phase timing accessors.
+ *
+ * Return the nanoseconds spent in each phase of the *most recent*
+ * concurrent-incremental cycle. Zero before the first cycle has
+ * run; updated atomically at cycle end so a test can sample
+ * outside the cycle safely. */
+int64_t osty_gc_debug_concurrent_incremental_start_nanos(void) {
+    return __atomic_load_n(&osty_gc_concurrent_incremental_start_nanos,
+                           __ATOMIC_ACQUIRE);
+}
+int64_t osty_gc_debug_concurrent_incremental_mark_nanos(void) {
+    return __atomic_load_n(&osty_gc_concurrent_incremental_mark_nanos,
+                           __ATOMIC_ACQUIRE);
+}
+int64_t osty_gc_debug_concurrent_incremental_finish_nanos(void) {
+    return __atomic_load_n(&osty_gc_concurrent_incremental_finish_nanos,
+                           __ATOMIC_ACQUIRE);
+}
+int64_t osty_gc_debug_concurrent_incremental_cycles(void) {
+    return __atomic_load_n(&osty_gc_concurrent_incremental_cycles,
+                           __ATOMIC_ACQUIRE);
 }
 
 /* Async preemption kick. Sends SIGURG to pool worker `worker_id`

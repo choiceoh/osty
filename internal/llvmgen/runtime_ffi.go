@@ -299,6 +299,10 @@ func listRuntimeLenSymbol() string {
 	return llvmListRuntimeLenSymbol()
 }
 
+func listRuntimeDataSymbol(elemTyp string) string {
+	return "osty_rt_list_data_" + llvmListElementSuffix(elemTyp)
+}
+
 func listRuntimePopDiscardSymbol() string {
 	return "osty_rt_list_pop_discard"
 }
@@ -467,6 +471,15 @@ func mapSetKeySuffix(typ string, isString bool) string {
 
 func listUsesTypedRuntime(elemTyp string) bool {
 	return llvmListUsesTypedRuntime(elemTyp)
+}
+
+func listUsesRawDataFastPath(elemTyp string) bool {
+	switch elemTyp {
+	case "i64", "i1", "double":
+		return true
+	default:
+		return false
+	}
 }
 
 func listRuntimeSymbolSuffix(typ string) string {

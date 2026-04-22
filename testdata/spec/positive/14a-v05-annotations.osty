@@ -132,3 +132,80 @@ fn allCombined(n: Int) -> Int {
     }
     acc
 }
+
+// ---- #[inline] family (v0.6 A8) ----
+
+#[inline]
+fn softInline(n: Int) -> Int { n + 1 }
+
+#[inline(always)]
+fn forceInline(n: Int) -> Int { n * 2 }
+
+#[inline(never)]
+fn noInline(n: Int) -> Int { n + 100 }
+
+// ---- #[hot] / #[cold] (v0.6 A9) ----
+
+#[hot]
+fn hotPath(n: Int) -> Int { n * 3 }
+
+#[cold]
+fn errorReport(code: Int) -> Int { code }
+
+// ---- #[target_feature(...)] (v0.6 A10) ----
+// Per-function CPU feature override — only this fn compiles for the
+// named features, rest of the module keeps its baseline.
+
+#[target_feature(avx2)]
+fn wideSSE(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n { acc = acc ^ i }
+    acc
+}
+
+#[target_feature(avx512f, avx512bw)]
+fn widestAVX512(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n { acc = acc ^ i }
+    acc
+}
+
+// ---- #[noalias] (v0.6 A11) ----
+
+#[noalias]
+fn addInto(dst: List<Int>, src: List<Int>) -> Int {
+    let mut acc = 0
+    for i in 0..dst.len() {
+        acc = acc + src[i]
+    }
+    acc
+}
+
+#[noalias(src)]
+fn partialNoalias(src: List<Int>, dst: List<Int>, aux: List<Int>) -> Int {
+    let mut acc = 0
+    for i in 0..src.len() {
+        acc = acc + src[i]
+    }
+    acc
+}
+
+// ---- #[pure] (v0.6 A13) ----
+
+#[pure]
+fn mixKeys(a: Int, b: Int) -> Int { a * 31 + b }
+
+// ---- full stack: loop hints + fn attrs compose ----
+
+#[inline(never)]
+#[hot]
+#[pure]
+#[noalias(xs)]
+#[target_feature(avx2)]
+#[vectorize(predicate)]
+#[unroll(count = 4)]
+fn superHot(xs: List<Int>, n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n { acc = acc ^ i }
+    acc
+}

@@ -206,6 +206,7 @@ type variantInfo struct {
 	name                string
 	tag                 int
 	payloads            []string
+	payloadSourceTypes  []ast.Type
 	payloadListElemTyp  string
 	payloadListElemTyps []string
 }
@@ -964,6 +965,7 @@ func collectEnum(decl *ast.EnumDecl, env typeEnv) (*enumInfo, error) {
 			return nil, unsupported(diag.kind, diag.message)
 		}
 		payloads := make([]string, 0, len(variant.Fields))
+		payloadSourceTypes := make([]ast.Type, 0, len(variant.Fields))
 		payloadListElemTyps := make([]string, 0, len(variant.Fields))
 		payloadListElemTyp := ""
 		for fi, field := range variant.Fields {
@@ -973,6 +975,7 @@ func collectEnum(decl *ast.EnumDecl, env typeEnv) (*enumInfo, error) {
 				return nil, unsupported(diag.kind, diag.message)
 			}
 			payloads = append(payloads, typ)
+			payloadSourceTypes = append(payloadSourceTypes, field)
 			if fi >= len(info.payloadSlotTypes) {
 				info.payloadSlotTypes = append(info.payloadSlotTypes, typ)
 			} else if info.payloadSlotTypes[fi] != typ {
@@ -1002,6 +1005,7 @@ func collectEnum(decl *ast.EnumDecl, env typeEnv) (*enumInfo, error) {
 			name:                variant.Name,
 			tag:                 i,
 			payloads:            payloads,
+			payloadSourceTypes:  payloadSourceTypes,
 			payloadListElemTyp:  payloadListElemTyp,
 			payloadListElemTyps: payloadListElemTyps,
 		}
@@ -1309,6 +1313,52 @@ func (g *generator) readLoopHints(decl *ast.FnDecl) {
 			}
 		}
 	}
+	// v0.6 A8/A9/A10 function-level attributes.
+	if inl := fnFindAnnotation(decl, "inline"); inl != nil {
+		// Default to soft (inlinehint); switch to hard (always/never)
+		// if the sub-flag is present.
+		g.inlineMode = 1
+		for _, arg := range inl.Args {
+			if arg == nil {
+				continue
+			}
+			switch arg.Key {
+			case "always":
+				g.inlineMode = 2
+			case "never":
+				g.inlineMode = 3
+			}
+		}
+	}
+	if fnHasAnnotation(decl, "hot") {
+		g.hotHint = true
+	}
+	if fnHasAnnotation(decl, "cold") {
+		g.coldHint = true
+	}
+	if tf := fnFindAnnotation(decl, "target_feature"); tf != nil {
+		for _, arg := range tf.Args {
+			if arg == nil || arg.Key == "" {
+				continue
+			}
+			g.targetFeatures = append(g.targetFeatures, arg.Key)
+		}
+	}
+	if fnHasAnnotation(decl, "pure") {
+		g.pureHint = true
+	}
+	if na := fnFindAnnotation(decl, "noalias"); na != nil {
+		if len(na.Args) == 0 {
+			g.noaliasAll = true
+		} else {
+			for _, arg := range na.Args {
+				if arg == nil || arg.Key == "" {
+					continue
+				}
+				g.noaliasParams = append(g.noaliasParams, arg.Key)
+			}
+		}
+	}
 }
 
 func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
@@ -1336,14 +1386,11 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 			setElemString:  p.setElemString,
 			sourceType:     p.sourceType,
 		}
-		// Phase 3: fn-typed parameter. The value arrives as a ptr to
-		// a closure env (same uniform ABI as phase 1), so we tag the
-		// binding with a synthesised *fnSig so subsequent `p(args)`
-		// inside the body dispatches through emitIndirectUserCall.
-		if fsig, ok, err := synthFnSigFromSourceType(p.sourceType, g.typeEnv()); err != nil {
+		// Reconstruct source-derived container metadata / fn call shape
+		// at the parameter bind edge so fn-typed and collection-typed
+		// params use the same recovery path as local binds.
+		if err := g.decorateValueFromSourceType(&v, p.sourceType); err != nil {
 			return "", err
-		} else if ok {
-			v.fnSigRef = fsig
 		}
 		v.gcManaged = valueNeedsManagedRoot(v)
 		v.rootPaths = g.rootPathsForType(p.typ)

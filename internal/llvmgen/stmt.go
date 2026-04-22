@@ -2427,7 +2427,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if base.typ != "ptr" || elemTyp == "" {
 		return true, unsupportedf("type-system", "list receiver type %s", base.typ)
 	}
-	elemSourceType, _ := g.iterableElemSourceType(field.X)
+	elemSource, _ := g.iterableElemSourceType(field.X)
 	base = g.protectManagedTemporary("list.base", base)
 	baseValue, err := g.loadIfPointer(base)
 	if err != nil {
@@ -2476,7 +2476,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 		if err != nil {
 			return true, err
 		}
-		arg, err := g.emitExprWithHintAndSourceType(call.Args[1].Value, elemSourceType, "", false, "", "", false, "", false)
+		arg, err := g.emitExprWithSourceType(call.Args[1].Value, elemSource)
 		if err != nil {
 			return true, err
 		}
@@ -2507,7 +2507,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 		return true, unsupported("call", "list.push requires one positional argument")
 	}
-	arg, err := g.emitExprWithHintAndSourceType(call.Args[0].Value, elemSourceType, "", false, "", "", false, "", false)
+	arg, err := g.emitExprWithSourceType(call.Args[0].Value, elemSource)
 	if err != nil {
 		return true, err
 	}
@@ -2598,11 +2598,12 @@ func (g *generator) emitMapMethodCallStmt(call *ast.CallExpr) (bool, error) {
 		if len(call.Args) != 2 || call.Args[0].Name != "" || call.Args[1].Name != "" || call.Args[0].Value == nil || call.Args[1].Value == nil {
 			return true, unsupported("call", "map.insert requires two positional arguments")
 		}
-		key, err := g.emitExpr(call.Args[0].Value)
+		keySource, valSource, _ := g.iterableMapSourceTypes(field.X)
+		key, err := g.emitExprWithSourceType(call.Args[0].Value, keySource)
 		if err != nil {
 			return true, err
 		}
-		val, err := g.emitExpr(call.Args[1].Value)
+		val, err := g.emitExprWithSourceType(call.Args[1].Value, valSource)
 		if err != nil {
 			return true, err
 		}
@@ -2664,7 +2665,7 @@ func (g *generator) emitMapUpdateStmt(call *ast.CallExpr, base value, keyTyp str
 	if err != nil {
 		return err
 	}
-	sig, err := requireFnValueSignature(fnVal, "map.update callback")
+	fnVal, sig, err := g.protectFnValueCallback("update.callback", fnVal, "map.update callback")
 	if err != nil {
 		return err
 	}
@@ -2692,7 +2693,7 @@ func (g *generator) emitMapUpdateStmt(call *ast.CallExpr, base value, keyTyp str
 	}
 
 	// f(env, opt) -> V via the indirect-call ABI.
-	newVal, err := g.emitFnValueIndirectCall(fnVal, sig, []*LlvmValue{toOstyValue(optVal)})
+	newVal, err := g.emitProtectedFnValueCall(fnVal, sig, []*LlvmValue{toOstyValue(optVal)})
 	if err != nil {
 		return err
 	}
@@ -2729,7 +2730,7 @@ func (g *generator) emitMapRetainIfStmt(call *ast.CallExpr, base value, keyTyp s
 	if err != nil {
 		return err
 	}
-	sig, err := requireFnValueSignature(predVal, "map.retainIf callback")
+	predHeld, sig, err := g.protectFnValueCallback("retainif.pred", predVal, "map.retainIf callback")
 	if err != nil {
 		return err
 	}
@@ -2739,7 +2740,6 @@ func (g *generator) emitMapRetainIfStmt(call *ast.CallExpr, base value, keyTyp s
 	valTyp := base.mapValueTyp
 
 	baseVal := g.protectManagedTemporary("retainif.map", base)
-	predHeld := g.protectManagedTemporary("retainif.pred", predVal)
 
 	// victims = list_new()
 	g.declareRuntimeSymbol(listRuntimeNewSymbol(), "ptr", nil)
@@ -2754,11 +2754,7 @@ func (g *generator) emitMapRetainIfStmt(call *ast.CallExpr, base value, keyTyp s
 
 	// Pass 1: snapshot-iterate, collect victim keys where pred returns false.
 	err = g.emitMapIterate(baseVal, keyTyp, valTyp, keyString, "retainif", func(k, v value) error {
-		predLoaded, err := g.loadIfPointer(predHeld)
-		if err != nil {
-			return err
-		}
-		cond, err := g.emitFnValueIndirectCall(predLoaded, sig, []*LlvmValue{
+		cond, err := g.emitProtectedFnValueCall(predHeld, sig, []*LlvmValue{
 			{typ: keyTyp, name: k.ref},
 			{typ: valTyp, name: v.ref},
 		})
@@ -2860,7 +2856,8 @@ func (g *generator) emitSetMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if err != nil {
 		return true, err
 	}
-	item, err := g.emitExpr(call.Args[0].Value)
+	elemSource, _ := g.setElemSourceType(field.X)
+	item, err := g.emitExprWithSourceType(call.Args[0].Value, elemSource)
 	if err != nil {
 		return true, err
 	}
@@ -2930,6 +2927,7 @@ func (g *generator) emitMapFor(stmt *ast.ForStmt, kName, vName, keyTyp, valTyp s
 		return err
 	}
 	indexValue := value{typ: "i64", ref: loop.current}
+	keySource, valSource, _ := g.iterableMapSourceTypes(stmt.Iter)
 
 	// Snapshot key and value under the same map lock.
 	entryAtSym := mapRuntimeEntryAtSymbol(keyTyp, keyString)
@@ -2946,12 +2944,28 @@ func (g *generator) emitMapFor(stmt *ast.ForStmt, kName, vName, keyTyp, valTyp s
 	keyVal := fromOstyValue(keyLoaded)
 	keyVal.gcManaged = keyTyp == "ptr"
 	keyVal.rootPaths = g.rootPathsForType(keyTyp)
+	keyVal.sourceType = keySource
+	if err := g.decorateValueFromSourceType(&keyVal, keySource); err != nil {
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
+		return err
+	}
 	g.bindLocal(kName, keyVal)
 	emitter = g.toOstyEmitter()
 	valLoaded := g.loadValueFromAddress(emitter, valTyp, vslot)
 	g.takeOstyEmitter(emitter)
 	valLoaded.gcManaged = valTyp == "ptr"
 	valLoaded.rootPaths = g.rootPathsForType(valTyp)
+	valLoaded.sourceType = valSource
+	if err := g.decorateValueFromSourceType(&valLoaded, valSource); err != nil {
+		if len(g.locals) > scopeDepth {
+			g.popScope()
+		}
+		g.popLoop()
+		return err
+	}
 	g.bindLocal(vName, valLoaded)
 
 	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
@@ -3026,6 +3040,10 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 			return err
 		}
 		item.sourceType = elemSource
+		if err := g.decorateValueFromSourceType(&item, elemSource); err != nil {
+			g.popScope()
+			return err
+		}
 		g.bindLocal(iterName, item)
 	} else if listUsesTypedRuntime(elemTyp) {
 		getSymbol := listRuntimeGetSymbol(elemTyp)
@@ -3037,6 +3055,10 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 		loaded.gcManaged = elemTyp == "ptr"
 		loaded.rootPaths = g.rootPathsForType(elemTyp)
 		loaded.sourceType = elemSource
+		if err := g.decorateValueFromSourceType(&loaded, elemSource); err != nil {
+			g.popScope()
+			return err
+		}
 		g.bindLocal(iterName, loaded)
 	} else {
 		traceSymbol := g.traceCallbackSymbol(elemTyp, g.rootPathsForType(elemTyp))
@@ -3056,6 +3078,10 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 		g.takeOstyEmitter(emitter)
 		loaded.rootPaths = g.rootPathsForType(elemTyp)
 		loaded.sourceType = elemSource
+		if err := g.decorateValueFromSourceType(&loaded, elemSource); err != nil {
+			g.popScope()
+			return err
+		}
 		g.bindLocal(iterName, loaded)
 	}
 	if err := g.emitBlock(stmt.Body.Stmts); err != nil {

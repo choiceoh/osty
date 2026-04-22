@@ -183,6 +183,40 @@ type Function struct {
 	// > 0 emits `llvm.loop.unroll.count, i32 N` instead.
 	Unroll      bool
 	UnrollCount int
+
+	// v0.6 A8 inlining hint. Semantics mirror the IR layer:
+	//   0 = InlineNone   — no annotation; inliner decides
+	//   1 = InlineSoft   — `#[inline]` — emits `inlinehint`
+	//   2 = InlineAlways — `#[inline(always)]` — emits `alwaysinline`
+	//   3 = InlineNever  — `#[inline(never)]` — emits `noinline`
+	InlineMode int
+
+	// v0.6 A9. Hot → `hot` fn attr; Cold → `cold` fn attr. Bare
+	// flags on `#[hot]` / `#[cold]`. Mutually exclusive at the IR
+	// level — the resolver has already rejected both on the same
+	// declaration via the duplicate-annotation check.
+	Hot  bool
+	Cold bool
+
+	// v0.6 A10. TargetFeatures carries each bare-identifier argument
+	// from `#[target_feature(...)]` in source order. The LLVM
+	// emitter renders them as `target-features="+f1,+f2"` with a `+`
+	// prefix per feature so this one function is compiled for a
+	// richer CPU baseline than the rest of the module.
+	TargetFeatures []string
+
+	// v0.6 A11. NoaliasAll is set by bare `#[noalias]`; the emitter
+	// stamps every pointer parameter with the LLVM `noalias` attr.
+	// NoaliasParams carries the explicit parameter names from
+	// `#[noalias(p1, p2)]` when the user wants fine-grained control.
+	NoaliasAll    bool
+	NoaliasParams []string
+
+	// v0.6 A13. Pure is set by `#[pure]`; the emitter attaches the
+	// `readnone` fn attribute so the caller can CSE repeated calls.
+	// Semantics are trusted by the backend and not verified by the
+	// checker in v0.6.
+	Pure bool
 }
 
 // At returns the function's source span.
@@ -511,6 +545,10 @@ const (
 	IntrinsicStringToUpper
 	// IntrinsicStringToLower returns lowercased String. Args: [string].
 	IntrinsicStringToLower
+	// IntrinsicStringToInt returns Result<Int, E>. Args: [string].
+	IntrinsicStringToInt
+	// IntrinsicStringToFloat returns Result<Float, E>. Args: [string].
+	IntrinsicStringToFloat
 	// IntrinsicStringReplace returns String with all occurrences of
 	// `old` replaced by `new`. Args: [string, old, new].
 	IntrinsicStringReplace
@@ -531,12 +569,40 @@ const (
 	IntrinsicBytesContains
 	// IntrinsicBytesStartsWith returns Bool. Args: [bytes, prefix].
 	IntrinsicBytesStartsWith
+	// IntrinsicBytesEndsWith returns Bool. Args: [bytes, suffix].
+	IntrinsicBytesEndsWith
 	// IntrinsicBytesIndexOf returns Int?. Args: [bytes, needle].
 	IntrinsicBytesIndexOf
+	// IntrinsicBytesLastIndexOf returns Int?. Args: [bytes, needle].
+	IntrinsicBytesLastIndexOf
+	// IntrinsicBytesSplit returns List<Bytes>. Args: [bytes, sep].
+	IntrinsicBytesSplit
+	// IntrinsicBytesJoin returns Bytes. Args: [sep, parts].
+	IntrinsicBytesJoin
 	// IntrinsicBytesConcat returns Bytes. Args: [left, right].
 	IntrinsicBytesConcat
 	// IntrinsicBytesRepeat returns Bytes. Args: [bytes, n].
 	IntrinsicBytesRepeat
+	// IntrinsicBytesReplace returns Bytes. Args: [bytes, old, new].
+	IntrinsicBytesReplace
+	// IntrinsicBytesReplaceAll returns Bytes. Args: [bytes, old, new].
+	IntrinsicBytesReplaceAll
+	// IntrinsicBytesTrimLeft returns Bytes. Args: [bytes, cutset].
+	IntrinsicBytesTrimLeft
+	// IntrinsicBytesTrimRight returns Bytes. Args: [bytes, cutset].
+	IntrinsicBytesTrimRight
+	// IntrinsicBytesTrim returns Bytes. Args: [bytes, cutset].
+	IntrinsicBytesTrim
+	// IntrinsicBytesTrimSpace returns Bytes. Args: [bytes].
+	IntrinsicBytesTrimSpace
+	// IntrinsicBytesToUpper returns Bytes. Args: [bytes].
+	IntrinsicBytesToUpper
+	// IntrinsicBytesToLower returns Bytes. Args: [bytes].
+	IntrinsicBytesToLower
+	// IntrinsicBytesToHex returns String. Args: [bytes].
+	IntrinsicBytesToHex
+	// IntrinsicBytesSlice returns Bytes. Args: [bytes, start, end].
+	IntrinsicBytesSlice
 
 	// ---- stdlib: Option / Result ----
 
@@ -1422,6 +1488,10 @@ func (k IntrinsicKind) String() string {
 		return "string_to_upper"
 	case IntrinsicStringToLower:
 		return "string_to_lower"
+	case IntrinsicStringToInt:
+		return "string_to_int"
+	case IntrinsicStringToFloat:
+		return "string_to_float"
 	case IntrinsicStringReplace:
 		return "string_replace"
 	case IntrinsicStringChars:
@@ -1438,12 +1508,40 @@ func (k IntrinsicKind) String() string {
 		return "bytes_contains"
 	case IntrinsicBytesStartsWith:
 		return "bytes_starts_with"
+	case IntrinsicBytesEndsWith:
+		return "bytes_ends_with"
 	case IntrinsicBytesIndexOf:
 		return "bytes_index_of"
+	case IntrinsicBytesLastIndexOf:
+		return "bytes_last_index_of"
+	case IntrinsicBytesSplit:
+		return "bytes_split"
+	case IntrinsicBytesJoin:
+		return "bytes_join"
 	case IntrinsicBytesConcat:
 		return "bytes_concat"
 	case IntrinsicBytesRepeat:
 		return "bytes_repeat"
+	case IntrinsicBytesReplace:
+		return "bytes_replace"
+	case IntrinsicBytesReplaceAll:
+		return "bytes_replace_all"
+	case IntrinsicBytesTrimLeft:
+		return "bytes_trim_left"
+	case IntrinsicBytesTrimRight:
+		return "bytes_trim_right"
+	case IntrinsicBytesTrim:
+		return "bytes_trim"
+	case IntrinsicBytesTrimSpace:
+		return "bytes_trim_space"
+	case IntrinsicBytesToUpper:
+		return "bytes_to_upper"
+	case IntrinsicBytesToLower:
+		return "bytes_to_lower"
+	case IntrinsicBytesToHex:
+		return "bytes_to_hex"
+	case IntrinsicBytesSlice:
+		return "bytes_slice"
 	case IntrinsicOptionIsSome:
 		return "option_is_some"
 	case IntrinsicOptionIsNone:
