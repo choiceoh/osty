@@ -98,6 +98,12 @@ func runBuild(args []string, flags cliFlags) {
 		triple = resolved.Target.Triple
 	}
 
+	// Turn on the native-checker cache for this process. First
+	// invocation warms the cache; every subsequent `osty build` with
+	// unchanged package bytes hits it and skips the multi-second
+	// checker round-trip. No-op under OSTY_CHECKER_CACHE=0.
+	enableCheckerCacheForRoot(root)
+
 	// Step 2.5: incremental-build shortcut. Hash every .osty file
 	// under the project root and compare against the cached
 	// fingerprint. A matching record lets us skip the front-end +

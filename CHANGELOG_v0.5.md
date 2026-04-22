@@ -170,6 +170,11 @@ and readable by 0.4 tooling.
 Entries touching the shipped rows above, newest first. Hashes are
 short; `git log <hash>` for the full message.
 
+- **Phase 2 scheduler + compiler-speed wave (2026-04-22)** — three paths merged under a "real-world speedup" umbrella:
+  - **Runtime scheduler (Phase 2)**: thread-per-task pthread model replaced by worker pool + per-worker Chase-Lev work-stealing deque + linked-list FIFO inject queue + on-demand detached elastic worker for blocking saturation. `OSTY_SCHED_WORKERS` env override. ThreadSanitizer-clean (slot publication is release/acquire). Observed 3.97x speedup (16 CPU-bound tasks, workers=1→4). Full details in [RUNTIME_SCHEDULER.md](./RUNTIME_SCHEDULER.md). ABI unchanged so MIR/backend don't recompile. As a side effect, `TestBundledRuntimeSchedulerRace` / `TestBundledRuntimeSchedulerCollectAll` (main's "list trace-kind mismatch" issue) are fixed.
+  - **Parallel `check.Workspace()`**: per-package native-checker calls run on a GOMAXPROCS worker pool with a mutex only around the shared type-map overlay. 3.36x speedup on 8 synthesized packages, 2.55x on 32 ([`internal/check/workspace_parallel_test.go`](./internal/check/workspace_parallel_test.go) bench + equivalence test). `OSTY_CHECK_PARALLEL=0` disables for debugging ordering bugs.
+  - **On-disk checker cache**: the existing `cachedEmbeddedChecker` is generalized to `cachedNativeChecker` and wrapped around whichever backend `defaultNativeChecker` returns (managed subprocess or embedded fallback). `cmd/osty` activates the cache in `build` / `run` / `check` commands; entries land at `.osty/cache/checker/<validity>/pkg-<hash>.json` with validity keyed by tool version + managed checker stamp. Incremental re-runs with unchanged package inputs short-circuit the multi-second checker round-trip to a JSON read. `OSTY_CHECKER_CACHE=0` disables.
+
 - **014a6fe** — `err.downcast::<T>()` LLVM lowering (backend half of G27 / §7.4)
 - **607eb19** — `use path.X as Y` stable-alias rewrite migrates from Go side to the self-hosted parser
 - **af371d1** — `use path::{ ... }` scoped-use handling migrates to the self-hosted parser; `internal/parser/scoped_imports.go` retired

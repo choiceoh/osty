@@ -4966,44 +4966,70 @@ done:
 }
 
 /* ======================================================================
- * Scheduler: pthread-backed (RUNTIME_SCHEDULER.md Phase 1B/2 hybrid)
+ * Scheduler: worker pool + Chase-Lev work-stealing deques
+ * (RUNTIME_SCHEDULER.md Phase 2)
  *
- * The public ABI is unchanged from Phase 1A; this is the first
- * implementation that runs tasks on real OS threads and gives channels
- * proper block/wake semantics. Key points:
+ * Replaces the thread-per-task model with a bounded pool of worker
+ * threads that consume tasks from per-worker Chase-Lev deques (Lê
+ * et al., "Correct and Efficient Work-Stealing for Weak Memory
+ * Models", PPoPP'13 — the weak-memory-safe variant). Tasks submitted
+ * from non-worker threads land on a global FIFO inject queue; workers
+ * first pop their own deque, then steal from a random peer, then
+ * drain the inject queue, and finally park on a shared cv until more
+ * work arrives.
  *
- *   - task_spawn / task_group_spawn → pthread_create; handle_join →
- *     pthread_join. Bodies run in parallel when CPU allows.
- *   - task_group(body) runs body on the calling thread and activates
- *     a group. Children created via task_group_spawn inherit the group
- *     in their TLS (osty_sched_current_group). Callers are responsible
- *     for joining handles; the group teardown does not auto-reap
- *     stragglers yet (tracked in RUNTIME_SCHEDULER.md roadmap).
- *   - Channels are bounded ring buffers with pthread_mutex + two
- *     condition variables. send blocks while full, recv while empty.
- *     close wakes both waits; recv after close-and-drain returns ok=0.
- *     Capacity 0 is clamped to 1 (documented limitation; true
- *     rendezvous lands with Phase 1B fibers).
- *   - select / race / collectAll / parallel remain as loud aborts
- *     because their registration surface needs Osty-side builder
- *     allocation we have not wired yet; the message points at the
- *     scheduler roadmap so programs that reach them fail fast.
+ * ABI unchanged (RUNTIME_SCHEDULER.md §ABI contract): spawn and
+ * group_spawn still return a GC-managed Handle; handle_join still
+ * blocks until the body publishes its result. Callers that polled
+ * `handle->done` under the old layout (race tie-break) continue to
+ * observe the atomic release store published by the worker thread.
  *
- * ABI abuse notice: MIR declares task_group / handle_join with the
- * caller's Osty-side return type (usually i64 or ptr). pthread_join
- * yields a `void *` that the linker treats as compatible 64-bit on
- * x86_64 SysV and AArch64 AAPCS. Scalar/ptr returns up to 8 bytes are
- * supported. Float returns travel as raw bits through int64_t; struct
- * returns still require Phase 2 ABI work.
+ * Join-helping: a worker that calls handle_join on a not-yet-done
+ * handle drains its own deque and steals, making progress toward any
+ * task the target depends on. This keeps the pool deadlock-free under
+ * dependency depth greater than the worker count. Non-worker joiners
+ * (the main thread) park on the handle's cv — the pool is sized to
+ * make progress without the main thread helping.
+ *
+ * GC coupling (spec §19.1): `osty_concurrent_workers` counts
+ * *in-flight tasks*, not pool threads. Parked workers are not
+ * touching Osty state, so they do not gate collection. The counter
+ * is incremented on enqueue and decremented after the body returns,
+ * matching Phase 1B semantics so the existing gating in
+ * allocate_managed / write barriers / root bind stays correct.
+ *
+ * Worker count: default `min(CPUs, 8)`. Override via `OSTY_SCHED_WORKERS`
+ * in [1, 256]. The pool is initialized lazily on first spawn and
+ * shut down at process exit via atexit (workers drain remaining
+ * tasks, then thread_join).
+ *
+ * ABI abuse notice (unchanged from Phase 1B): task bodies and
+ * handle_join travel their 8-byte result through int64_t. Scalar/ptr
+ * returns up to 8 bytes are supported directly; float returns are
+ * raw bits through int64_t; anything wider still requires a separate
+ * ABI pass.
  * ====================================================================== */
+
+#if !defined(OSTY_RT_PLATFORM_WIN32)
+#  include <unistd.h>    /* sysconf(_SC_NPROCESSORS_ONLN) */
+#endif
+#if defined(__APPLE__)
+/* Forward-declare the sysctl entry we need instead of pulling in
+ * <sys/sysctl.h>, which on macOS transitively requires BSD types
+ * (u_int, u_char) that are hidden under our strict _POSIX_C_SOURCE
+ * feature macros. The signature is stable in the Darwin libc. */
+extern int sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
+                        void *newp, size_t newlen);
+#endif
 
 typedef int64_t (*osty_task_group_body_fn)(void *env, void *group);
 typedef int64_t (*osty_task_spawn_body_fn)(void *env);
 
 struct osty_rt_task_handle_impl_;
+typedef struct osty_rt_task_handle_impl_ osty_rt_task_handle_impl;
 
 typedef struct osty_rt_task_handle_node {
-    struct osty_rt_task_handle_impl_ *handle;
+    osty_rt_task_handle_impl *handle;
     struct osty_rt_task_handle_node *next;
 } osty_rt_task_handle_node;
 
@@ -5014,58 +5040,529 @@ typedef struct osty_rt_task_group_impl {
     osty_rt_task_handle_node *children;  /* all handles spawned into group */
 } osty_rt_task_group_impl;
 
-typedef struct osty_rt_task_handle_impl_ {
-    osty_rt_thread_t thread;
-    int has_thread;                      /* 1 while thread is joinable */
-    void *body_env;
+struct osty_rt_task_handle_impl_ {
     osty_rt_task_group_impl *group;      /* inherited group, may be NULL */
-    volatile int64_t result;
-    volatile int32_t done;
-    int32_t errored;                     /* reserved */
-} osty_rt_task_handle_impl;
+    int64_t result;                      /* published before `done` store */
+    volatile int32_t done;               /* 0 = pending, 1 = completed */
+    osty_rt_mu_t mu;                     /* guards cv for non-worker joiners */
+    osty_rt_cond_t cv;
+    int sync_live;                       /* 1 iff mu/cv initialised */
+};
+
+typedef struct osty_rt_task_item {
+    void *body_env;
+    osty_rt_task_group_impl *group;
+    osty_rt_task_handle_impl *handle;
+} osty_rt_task_item;
 
 static OSTY_RT_TLS osty_rt_task_group_impl *osty_sched_current_group = NULL;
 
-/* Handles live in the GC heap so they are reclaimed once the Osty
- * `Handle<T>` reference drops. While the spawned thread runs,
- * `osty_concurrent_workers > 0` keeps collection paused, so the
- * handle pointer the trampoline carries cannot be freed under it.
- * Once the thread exits and Osty drops its reference, the next
- * collection sweeps the handle. No explicit free on the error path
- * either — the handle becomes unreachable and gets reaped. */
-static osty_rt_task_handle_impl *osty_sched_alloc_handle(void) {
-    return (osty_rt_task_handle_impl *)osty_gc_allocate_managed(
-        sizeof(osty_rt_task_handle_impl),
-        OSTY_GC_KIND_GENERIC,
-        "runtime.task.handle",
-        NULL, NULL);
+/* ---- Per-worker Chase-Lev deque.
+ *
+ * Single producer (owner worker) pushes/pops at the bottom; any
+ * thread may steal from the top. Implements the weak-memory-safe
+ * variant from Lê et al. 2013:
+ *   - owner stores the task pointer, then release fence, then a
+ *     relaxed store to `bottom`;
+ *   - owner's pop does relaxed --bottom, seq-cst fence, relaxed load
+ *     of top, and a seq-cst CAS on the final-element race;
+ *   - thieves acquire-load top and bottom (with a seq-cst fence
+ *     between) and use a seq-cst CAS to claim the slot.
+ *
+ * Deque size is a fixed power of two. Local overflow falls through
+ * to the inject queue so oversubscribed workers never lose work. */
+
+#define OSTY_SCHED_DEQUE_CAP   4096
+#define OSTY_SCHED_DEQUE_MASK  (OSTY_SCHED_DEQUE_CAP - 1)
+
+typedef struct osty_rt_deque {
+    volatile int64_t top;
+    volatile int64_t bottom;
+    osty_rt_task_item *slots[OSTY_SCHED_DEQUE_CAP];
+} osty_rt_deque;
+
+static void osty_rt_deque_init(osty_rt_deque *dq) {
+    __atomic_store_n(&dq->top, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&dq->bottom, 0, __ATOMIC_RELAXED);
+    memset(dq->slots, 0, sizeof(dq->slots));
 }
 
-static void osty_sched_unimplemented(const char *what) {
-    fprintf(stderr,
-            "osty llvm runtime: %s is not implemented yet "
-            "(see RUNTIME_SCHEDULER.md for roadmap).\n",
-            what);
-    abort();
-}
-
-static void osty_rt_task_thread_cleanup(osty_rt_task_handle_impl *h) {
-    /* Invoked on the worker's normal return path. The runtime never
-     * calls pthread_cancel / pthread_exit, so bodies always reach the
-     * closing return; unwind-safe cleanup is unnecessary. */
-    __atomic_store_n(&h->done, 1, __ATOMIC_RELEASE);
-    osty_sched_workers_dec();
-}
-
-static void *osty_rt_task_thread_trampoline(void *arg) {
-    osty_rt_task_handle_impl *h = (osty_rt_task_handle_impl *)arg;
-    if (h->group != NULL) {
-        osty_sched_current_group = h->group;
+/* Owner-only. 0 on success, -1 on overflow (caller falls back to inject).
+ * Slot is published with a release store so a thief's acquire load
+ * of the same slot observes the fully-initialized task item (and,
+ * transitively, every field written before push). */
+static int osty_rt_deque_push(osty_rt_deque *dq, osty_rt_task_item *t) {
+    int64_t b = __atomic_load_n(&dq->bottom, __ATOMIC_RELAXED);
+    int64_t tp = __atomic_load_n(&dq->top, __ATOMIC_ACQUIRE);
+    if (b - tp >= OSTY_SCHED_DEQUE_CAP) {
+        return -1;
     }
-    osty_task_spawn_body_fn fn = (osty_task_spawn_body_fn)(*(void **)h->body_env);
-    h->result = fn(h->body_env);
-    osty_rt_task_thread_cleanup(h);
+    __atomic_store_n(&dq->slots[b & OSTY_SCHED_DEQUE_MASK], t,
+                     __ATOMIC_RELEASE);
+    __atomic_store_n(&dq->bottom, b + 1, __ATOMIC_RELEASE);
+    return 0;
+}
+
+/* Owner-only. NULL when the deque is empty. The slot load uses
+ * acquire so that the matching release store in push (and everything
+ * that happened-before it on the writer) is visible to the caller. */
+static osty_rt_task_item *osty_rt_deque_pop(osty_rt_deque *dq) {
+    int64_t b = __atomic_load_n(&dq->bottom, __ATOMIC_RELAXED) - 1;
+    __atomic_store_n(&dq->bottom, b, __ATOMIC_RELAXED);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    int64_t tp = __atomic_load_n(&dq->top, __ATOMIC_RELAXED);
+    osty_rt_task_item *x = NULL;
+    if (tp <= b) {
+        x = __atomic_load_n(&dq->slots[b & OSTY_SCHED_DEQUE_MASK],
+                            __ATOMIC_ACQUIRE);
+        if (tp == b) {
+            /* Final element — race with a concurrent thief. */
+            int64_t expected = tp;
+            if (!__atomic_compare_exchange_n(&dq->top, &expected, tp + 1,
+                                             false,
+                                             __ATOMIC_SEQ_CST,
+                                             __ATOMIC_RELAXED)) {
+                x = NULL;
+            }
+            __atomic_store_n(&dq->bottom, b + 1, __ATOMIC_RELAXED);
+        }
+    } else {
+        __atomic_store_n(&dq->bottom, b + 1, __ATOMIC_RELAXED);
+    }
+    return x;
+}
+
+/* Thief. NULL on empty or CAS-lost; caller retries by picking another
+ * victim or falling through to the inject queue. */
+static osty_rt_task_item *osty_rt_deque_steal(osty_rt_deque *dq) {
+    int64_t tp = __atomic_load_n(&dq->top, __ATOMIC_ACQUIRE);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    int64_t b = __atomic_load_n(&dq->bottom, __ATOMIC_ACQUIRE);
+    if (tp >= b) {
+        return NULL;
+    }
+    osty_rt_task_item *x =
+        __atomic_load_n(&dq->slots[tp & OSTY_SCHED_DEQUE_MASK],
+                        __ATOMIC_ACQUIRE);
+    int64_t expected = tp;
+    if (!__atomic_compare_exchange_n(&dq->top, &expected, tp + 1,
+                                     false,
+                                     __ATOMIC_SEQ_CST,
+                                     __ATOMIC_RELAXED)) {
+        return NULL;
+    }
+    return x;
+}
+
+/* ---- Global inject queue (mutex-guarded FIFO linked list).
+ *
+ * Non-worker submitters enqueue here; workers drain it when their own
+ * deque and all steal attempts come up empty. Implemented as a
+ * singly-linked list rather than a ring so the queue can absorb
+ * arbitrarily large spawn bursts without spurious overflow. Nodes
+ * are malloc'd per task (one cacheline each) and freed by the
+ * popper — task items themselves are freed in osty_sched_run_task. */
+
+typedef struct osty_rt_inject_node {
+    osty_rt_task_item *task;
+    struct osty_rt_inject_node *next;
+} osty_rt_inject_node;
+
+typedef struct osty_rt_inject {
+    osty_rt_inject_node *head;  /* oldest queued */
+    osty_rt_inject_node *tail;  /* newest queued */
+    int64_t count;
+} osty_rt_inject;
+
+static osty_rt_inject osty_sched_inject;
+
+/* ---- Pool state. */
+
+static osty_rt_mu_t osty_sched_pool_mu;
+static osty_rt_cond_t osty_sched_pool_cv;
+static int64_t osty_sched_pool_parked = 0;    /* guarded by pool_mu */
+static volatile int osty_sched_pool_shutdown = 0;
+static int osty_sched_worker_count = 0;
+static osty_rt_thread_t *osty_sched_worker_threads = NULL;
+static osty_rt_deque *osty_sched_worker_deques = NULL;
+static OSTY_RT_TLS int osty_sched_worker_id = -1;
+/* Set to 1 by both pool workers and elastic workers while they are
+ * executing a task body. `worker_id >= 0` identifies pool workers
+ * (owners of a deque); elastic workers keep `worker_id = -1` because
+ * they do not own a deque. `is_worker` unifies "will eventually
+ * return to the scheduler loop" for blocking-wait instrumentation. */
+static OSTY_RT_TLS int osty_sched_is_worker = 0;
+static osty_rt_once_t osty_sched_pool_once = OSTY_RT_ONCE_INIT;
+
+/* Elastic pool cap. Temp workers are spawned on demand when the fixed
+ * pool is saturated (every worker running, no one parked) so that
+ * blocking-op workloads cannot deadlock the pool. Bounded to keep
+ * runaway programs from fork-bombing the scheduler. */
+#define OSTY_SCHED_ELASTIC_MAX 256
+static int64_t osty_sched_elastic_count = 0;  /* guarded by pool_mu */
+
+/* Per-thread PRNG for steal-victim selection. Seeded from worker id
+ * so every worker draws from a different sequence. SplitMix64 variant. */
+static OSTY_RT_TLS uint64_t osty_sched_rand_state = 0;
+
+static uint64_t osty_sched_rand_next(void) {
+    uint64_t x = osty_sched_rand_state + 0x9E3779B97F4A7C15ULL;
+    osty_sched_rand_state = x;
+    x ^= x >> 30;
+    x *= 0xBF58476D1CE4E5B9ULL;
+    x ^= x >> 27;
+    x *= 0x94D049BB133111EBULL;
+    x ^= x >> 31;
+    return x;
+}
+
+static void *osty_sched_worker_main(void *arg);
+static void *osty_sched_elastic_main(void *arg);
+static void osty_sched_shutdown_atexit(void);
+static void osty_sched_spawn_elastic(void);
+
+static int osty_sched_default_worker_count(void) {
+    const char *env = getenv("OSTY_SCHED_WORKERS");
+    if (env != NULL && env[0] != '\0') {
+        char *endp = NULL;
+        long n = strtol(env, &endp, 10);
+        if (endp != env && n >= 1 && n <= 256) {
+            return (int)n;
+        }
+    }
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    long cpu = (long)si.dwNumberOfProcessors;
+#elif defined(__APPLE__)
+    /* Darwin hides _SC_NPROCESSORS_ONLN under _DARWIN_C_SOURCE; the
+     * sysctl path is always available and returns the current online
+     * core count directly. */
+    int ncpu = 0;
+    size_t sz = sizeof(ncpu);
+    if (sysctlbyname("hw.ncpu", &ncpu, &sz, NULL, 0) != 0 || ncpu < 1) {
+        ncpu = 4;
+    }
+    long cpu = (long)ncpu;
+#elif defined(_SC_NPROCESSORS_ONLN)
+    long cpu = sysconf(_SC_NPROCESSORS_ONLN);
+#else
+    long cpu = 4;
+#endif
+    if (cpu < 1) cpu = 1;
+    if (cpu > 8) cpu = 8;
+    return (int)cpu;
+}
+
+static void osty_sched_pool_init(void) {
+    if (osty_rt_mu_init(&osty_sched_pool_mu) != 0 ||
+        osty_rt_cond_init(&osty_sched_pool_cv) != 0) {
+        osty_rt_abort("scheduler: pool mutex/cv init failed");
+    }
+    osty_sched_inject.head = NULL;
+    osty_sched_inject.tail = NULL;
+    osty_sched_inject.count = 0;
+
+    int n = osty_sched_default_worker_count();
+    osty_sched_worker_count = n;
+    osty_sched_worker_threads =
+        (osty_rt_thread_t *)calloc((size_t)n, sizeof(osty_rt_thread_t));
+    osty_sched_worker_deques =
+        (osty_rt_deque *)calloc((size_t)n, sizeof(osty_rt_deque));
+    if (osty_sched_worker_threads == NULL || osty_sched_worker_deques == NULL) {
+        osty_rt_abort("scheduler: pool alloc failed");
+    }
+    for (int i = 0; i < n; i++) {
+        osty_rt_deque_init(&osty_sched_worker_deques[i]);
+    }
+    /* atexit first so an early worker_start failure still teardown-
+     * safes any workers that did start. */
+    atexit(osty_sched_shutdown_atexit);
+    for (int i = 0; i < n; i++) {
+        if (osty_rt_thread_start(&osty_sched_worker_threads[i],
+                                 osty_sched_worker_main,
+                                 (void *)(intptr_t)i) != 0) {
+            osty_rt_abort("scheduler: worker thread start failed");
+        }
+    }
+}
+
+static void osty_sched_pool_lazy_init(void) {
+    osty_rt_once(&osty_sched_pool_once, osty_sched_pool_init);
+}
+
+static void osty_sched_shutdown_atexit(void) {
+    /* Best-effort shutdown. Workers finish any in-flight task, then
+     * exit. Don't touch GC state here — atexit order vs. other
+     * libc destructors is undefined. */
+    osty_rt_mu_lock(&osty_sched_pool_mu);
+    osty_sched_pool_shutdown = 1;
+    osty_rt_cond_broadcast(&osty_sched_pool_cv);
+    osty_rt_mu_unlock(&osty_sched_pool_mu);
+    for (int i = 0; i < osty_sched_worker_count; i++) {
+        osty_rt_thread_join(osty_sched_worker_threads[i], NULL);
+    }
+}
+
+/* Caller holds pool_mu. Returns 1 if any deque or the inject queue
+ * has work for self_id to take. */
+static int osty_sched_has_any_work_unlocked(int self_id) {
+    if (osty_sched_inject.count > 0) {
+        return 1;
+    }
+    for (int i = 0; i < osty_sched_worker_count; i++) {
+        if (i == self_id) continue;
+        osty_rt_deque *dq = &osty_sched_worker_deques[i];
+        int64_t tp = __atomic_load_n(&dq->top, __ATOMIC_ACQUIRE);
+        int64_t b = __atomic_load_n(&dq->bottom, __ATOMIC_ACQUIRE);
+        if (b > tp) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static osty_rt_task_item *osty_sched_pop_inject(void) {
+    osty_rt_mu_lock(&osty_sched_pool_mu);
+    osty_rt_task_item *t = NULL;
+    osty_rt_inject_node *node = osty_sched_inject.head;
+    if (node != NULL) {
+        t = node->task;
+        osty_sched_inject.head = node->next;
+        if (osty_sched_inject.head == NULL) {
+            osty_sched_inject.tail = NULL;
+        }
+        osty_sched_inject.count -= 1;
+    }
+    osty_rt_mu_unlock(&osty_sched_pool_mu);
+    free(node);
+    return t;
+}
+
+/* 0 on success, -1 on allocation failure. Signals a parked worker
+ * if any are available. Elastic workers are NOT spawned here — if
+ * the fixed pool is CPU-bound, oversubscribing on every push would
+ * destroy scaling. Oversubscription only happens at actual blocking
+ * points via `osty_sched_notify_blocking_wait`. */
+static int osty_sched_push_inject(osty_rt_task_item *t) {
+    osty_rt_inject_node *node =
+        (osty_rt_inject_node *)calloc(1, sizeof(*node));
+    if (node == NULL) {
+        return -1;
+    }
+    node->task = t;
+    node->next = NULL;
+    osty_rt_mu_lock(&osty_sched_pool_mu);
+    if (osty_sched_inject.tail != NULL) {
+        osty_sched_inject.tail->next = node;
+    } else {
+        osty_sched_inject.head = node;
+    }
+    osty_sched_inject.tail = node;
+    osty_sched_inject.count += 1;
+    if (osty_sched_pool_parked > 0) {
+        osty_rt_cond_signal(&osty_sched_pool_cv);
+    }
+    osty_rt_mu_unlock(&osty_sched_pool_mu);
+    return 0;
+}
+
+/* Signal that a worker (pool or elastic) is about to enter a
+ * blocking cv_wait (channel full/empty, handle completion). If the
+ * inject queue has pending work, spawn an elastic helper so the
+ * queued task isn't stranded while this worker is off-CPU. No-op
+ * when the caller isn't a worker (main thread) or when the elastic
+ * cap would be breached. */
+static void osty_sched_notify_blocking_wait(void) {
+    if (!osty_sched_is_worker) {
+        return;
+    }
+    osty_rt_mu_lock(&osty_sched_pool_mu);
+    int want = (osty_sched_inject.count > 0 &&
+                osty_sched_elastic_count < OSTY_SCHED_ELASTIC_MAX);
+    if (want) {
+        osty_sched_elastic_count += 1;
+    }
+    osty_rt_mu_unlock(&osty_sched_pool_mu);
+    if (want) {
+        osty_sched_spawn_elastic();
+    }
+}
+
+/* Try to steal from a random non-self victim. Caller retries via the
+ * outer take-work loop; a single pass is "good enough" per iteration. */
+static osty_rt_task_item *osty_sched_try_steal(int self_id) {
+    int n = osty_sched_worker_count;
+    if (n <= 1) {
+        return NULL;
+    }
+    int start = (int)(osty_sched_rand_next() % (uint64_t)n);
+    for (int i = 0; i < n; i++) {
+        int victim = (start + i) % n;
+        if (victim == self_id) continue;
+        osty_rt_task_item *t =
+            osty_rt_deque_steal(&osty_sched_worker_deques[victim]);
+        if (t != NULL) {
+            return t;
+        }
+    }
     return NULL;
+}
+
+/* Own deque → steal → inject. NULL when every source is empty. */
+static osty_rt_task_item *osty_sched_take_work(int self_id) {
+    if (self_id >= 0) {
+        osty_rt_task_item *t =
+            osty_rt_deque_pop(&osty_sched_worker_deques[self_id]);
+        if (t != NULL) return t;
+    }
+    osty_rt_task_item *t = osty_sched_try_steal(self_id);
+    if (t != NULL) return t;
+    return osty_sched_pop_inject();
+}
+
+static void osty_sched_park_until_work_or_shutdown(int self_id) {
+    osty_rt_mu_lock(&osty_sched_pool_mu);
+    while (!osty_sched_pool_shutdown &&
+           !osty_sched_has_any_work_unlocked(self_id)) {
+        osty_sched_pool_parked += 1;
+        osty_rt_cond_wait(&osty_sched_pool_cv, &osty_sched_pool_mu);
+        osty_sched_pool_parked -= 1;
+    }
+    osty_rt_mu_unlock(&osty_sched_pool_mu);
+}
+
+static void osty_rt_task_handle_complete(osty_rt_task_handle_impl *h,
+                                         int64_t result) {
+    /* Publish result before `done` so any concurrent acquire-load of
+     * `done` sees a coherent result. The cv broadcast is strictly for
+     * sleeping joiners; worker joiners (help-drain) re-check `done`
+     * between steals. */
+    h->result = result;
+    __atomic_store_n(&h->done, 1, __ATOMIC_RELEASE);
+    osty_rt_mu_lock(&h->mu);
+    osty_rt_cond_broadcast(&h->cv);
+    osty_rt_mu_unlock(&h->mu);
+}
+
+static void osty_sched_run_task(osty_rt_task_item *t) {
+    osty_rt_task_group_impl *prev = osty_sched_current_group;
+    osty_sched_current_group = t->group;
+    osty_task_spawn_body_fn fn =
+        (osty_task_spawn_body_fn)(*(void **)t->body_env);
+    int64_t result = fn(t->body_env);
+    osty_sched_current_group = prev;
+
+    osty_rt_task_handle_complete(t->handle, result);
+    osty_sched_workers_dec();
+    free(t);
+}
+
+static void *osty_sched_worker_main(void *arg) {
+    int self = (int)(intptr_t)arg;
+    osty_sched_worker_id = self;
+    osty_sched_is_worker = 1;
+    osty_sched_rand_state = (uint64_t)self * 0x9E3779B97F4A7C15ULL + 1;
+    for (;;) {
+        osty_rt_task_item *t = osty_sched_take_work(self);
+        if (t != NULL) {
+            osty_sched_run_task(t);
+            continue;
+        }
+        if (osty_sched_pool_shutdown) {
+            /* Drain any last-second work so nothing is left with
+             * done=0. If we then still see nothing, exit. */
+            t = osty_sched_take_work(self);
+            if (t != NULL) {
+                osty_sched_run_task(t);
+                continue;
+            }
+            break;
+        }
+        osty_sched_park_until_work_or_shutdown(self);
+    }
+    osty_sched_worker_id = -1;
+    osty_sched_is_worker = 0;
+    return NULL;
+}
+
+/* Elastic worker: spawned on demand when a pool worker is about to
+ * block and the inject queue still has pending work. Not a pool
+ * member (worker_id = -1) — cannot be the target of steals, but can
+ * steal from the pool's deques and drain the inject queue. Exits as
+ * soon as work dries up so oversubscription decays back to the
+ * baseline pool size when the burst finishes. */
+static void *osty_sched_elastic_main(void *arg) {
+    (void)arg;
+    osty_sched_worker_id = -1;
+    osty_sched_is_worker = 1;
+    osty_sched_rand_state =
+        (uint64_t)(uintptr_t)&osty_sched_elastic_count +
+        osty_rt_monotonic_ns();
+    for (;;) {
+        osty_rt_task_item *t = osty_sched_take_work(-1);
+        if (t == NULL) {
+            break;
+        }
+        osty_sched_run_task(t);
+    }
+    osty_sched_is_worker = 0;
+    osty_rt_mu_lock(&osty_sched_pool_mu);
+    osty_sched_elastic_count -= 1;
+    osty_rt_mu_unlock(&osty_sched_pool_mu);
+    return NULL;
+}
+
+static void osty_sched_spawn_elastic(void) {
+    osty_rt_thread_t thr;
+    if (osty_rt_thread_start(&thr, osty_sched_elastic_main, NULL) != 0) {
+        /* Spawn failure is non-fatal: the pushed task still lives in
+         * the inject queue and a pool worker will pick it up once it
+         * finishes its current body. Undo the elastic reservation. */
+        osty_rt_mu_lock(&osty_sched_pool_mu);
+        osty_sched_elastic_count -= 1;
+        osty_rt_mu_unlock(&osty_sched_pool_mu);
+        return;
+    }
+    /* Detach so the OS reaps the thread on exit — we never join
+     * elastics explicitly. Pool workers retain their joinable handle
+     * because the atexit shutdown must wait on them. */
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    CloseHandle(thr);
+#else
+    pthread_detach(thr);
+#endif
+}
+
+/* ---- Handle + group. */
+
+static void osty_rt_task_handle_destroy(void *payload) {
+    osty_rt_task_handle_impl *h = (osty_rt_task_handle_impl *)payload;
+    if (h == NULL || !h->sync_live) {
+        return;
+    }
+    osty_rt_mu_destroy(&h->mu);
+    osty_rt_cond_destroy(&h->cv);
+    h->sync_live = 0;
+}
+
+/* Handle is GC-managed: reclaimed when no Osty Handle<T> reference
+ * remains. While a task is in-flight, osty_concurrent_workers > 0
+ * pauses collection so the pointer the task item carries cannot be
+ * freed underneath it. */
+static osty_rt_task_handle_impl *osty_sched_alloc_handle(void) {
+    osty_rt_task_handle_impl *h =
+        (osty_rt_task_handle_impl *)osty_gc_allocate_managed(
+            sizeof(osty_rt_task_handle_impl),
+            OSTY_GC_KIND_GENERIC,
+            "runtime.task.handle",
+            NULL, osty_rt_task_handle_destroy);
+    if (osty_rt_mu_init(&h->mu) != 0 ||
+        osty_rt_cond_init(&h->cv) != 0) {
+        osty_rt_abort("task_spawn: handle sync init failed");
+    }
+    h->sync_live = 1;
+    return h;
 }
 
 static void osty_rt_task_group_attach(osty_rt_task_group_impl *g,
@@ -5082,12 +5579,45 @@ static void osty_rt_task_group_attach(osty_rt_task_group_impl *g,
     osty_rt_mu_unlock(&g->children_mu);
 }
 
+/* Wait for a single handle. Worker callers help-drain so that nested
+ * joins cannot deadlock a pool smaller than the dependency depth. */
+static void osty_rt_task_handle_wait(osty_rt_task_handle_impl *h) {
+    if (__atomic_load_n(&h->done, __ATOMIC_ACQUIRE)) {
+        return;
+    }
+    int self = osty_sched_worker_id;
+    if (self >= 0) {
+        while (!__atomic_load_n(&h->done, __ATOMIC_ACQUIRE)) {
+            osty_rt_task_item *t = osty_sched_take_work(self);
+            if (t != NULL) {
+                osty_sched_run_task(t);
+                continue;
+            }
+            /* No work available and handle still pending. Before
+             * parking, let a helper spawn if the inject queue has
+             * anything waiting — some of that work may be what the
+             * completing worker is currently blocked on. */
+            osty_sched_notify_blocking_wait();
+            osty_rt_mu_lock(&h->mu);
+            if (!__atomic_load_n(&h->done, __ATOMIC_ACQUIRE)) {
+                osty_rt_cond_wait(&h->cv, &h->mu);
+            }
+            osty_rt_mu_unlock(&h->mu);
+        }
+        return;
+    }
+    osty_rt_mu_lock(&h->mu);
+    while (!__atomic_load_n(&h->done, __ATOMIC_ACQUIRE)) {
+        osty_rt_cond_wait(&h->cv, &h->mu);
+    }
+    osty_rt_mu_unlock(&h->mu);
+}
+
 static void osty_rt_task_group_reap(osty_rt_task_group_impl *g) {
-    /* Called from task_group() after the body returns. Any child still
-     * marked joinable is joined so no thread outlives its group scope
-     * (spec §8.1). Handles themselves are not freed — the Osty caller
-     * may still read their result fields. Nodes ARE freed because the
-     * group stack-frame is about to disappear. */
+    /* Spec §8.1: no child outlives its group scope. Walk the child
+     * list and wait on every handle. Workers may help-drain; the
+     * main thread just parks on the cv. Nodes are freed because the
+     * group's stack frame is about to disappear. */
     osty_rt_mu_lock(&g->children_mu);
     osty_rt_task_handle_node *node = g->children;
     g->children = NULL;
@@ -5095,12 +5625,8 @@ static void osty_rt_task_group_reap(osty_rt_task_group_impl *g) {
 
     while (node != NULL) {
         osty_rt_task_handle_node *next = node->next;
-        osty_rt_task_handle_impl *h = node->handle;
-        if (h != NULL && h->has_thread) {
-            if (osty_rt_thread_join(h->thread, NULL) != 0) {
-                osty_rt_abort("task_group: thread join failed during reap");
-            }
-            h->has_thread = 0;
+        if (node->handle != NULL) {
+            osty_rt_task_handle_wait(node->handle);
         }
         free(node);
         node = next;
@@ -5125,9 +5651,6 @@ int64_t osty_rt_task_group(void *body_env) {
     osty_task_group_body_fn fn = (osty_task_group_body_fn)(*(void **)body_env);
     int64_t result = fn(body_env, (void *)&group);
 
-    /* Reap any children the body forgot to join (spec §8.1 structured
-     * lifetime). Runs before we restore the previous TLS group so that
-     * a nested taskGroup's teardown sees its own scope. */
     osty_rt_task_group_reap(&group);
     osty_rt_mu_destroy(&group.children_mu);
 
@@ -5139,17 +5662,48 @@ static void *osty_rt_task_spawn_internal(void *group, void *body_env) {
     if (body_env == NULL) {
         osty_rt_abort("task_spawn: null body env");
     }
+    osty_sched_pool_lazy_init();
+
     osty_rt_task_handle_impl *h = osty_sched_alloc_handle();
-    h->body_env = body_env;
     h->group = (osty_rt_task_group_impl *)group;
-    osty_sched_workers_inc();
-    if (osty_rt_thread_start(&h->thread,
-                             osty_rt_task_thread_trampoline, h) != 0) {
-        osty_sched_workers_dec();
-        /* h is GC-managed — letting it go unreachable is enough. */
-        osty_rt_abort("task_spawn: thread start failed");
+
+    osty_rt_task_item *item =
+        (osty_rt_task_item *)calloc(1, sizeof(*item));
+    if (item == NULL) {
+        osty_rt_abort("task_spawn: out of memory");
     }
-    h->has_thread = 1;
+    item->body_env = body_env;
+    item->group = (osty_rt_task_group_impl *)group;
+    item->handle = h;
+
+    /* Inc BEFORE publishing so GC can never run while the env / handle
+     * would be visible only through unscanned task-item memory. The
+     * matching dec happens in osty_sched_run_task after the body
+     * returns. */
+    osty_sched_workers_inc();
+
+    int self = osty_sched_worker_id;
+    int routed = 0;
+    if (self >= 0) {
+        if (osty_rt_deque_push(&osty_sched_worker_deques[self], item) == 0) {
+            routed = 1;
+            /* Wake a parked peer so the newly pushed task isn't
+             * stranded if we block before the next safepoint. */
+            osty_rt_mu_lock(&osty_sched_pool_mu);
+            if (osty_sched_pool_parked > 0) {
+                osty_rt_cond_signal(&osty_sched_pool_cv);
+            }
+            osty_rt_mu_unlock(&osty_sched_pool_mu);
+        }
+    }
+    if (!routed) {
+        if (osty_sched_push_inject(item) != 0) {
+            osty_sched_workers_dec();
+            free(item);
+            osty_rt_abort("task_spawn: inject queue alloc failed (OOM)");
+        }
+    }
+
     if (h->group != NULL) {
         osty_rt_task_group_attach(h->group, h);
     }
@@ -5169,15 +5723,7 @@ int64_t osty_rt_task_handle_join(void *handle) {
         osty_rt_abort("task_handle_join: null handle");
     }
     osty_rt_task_handle_impl *h = (osty_rt_task_handle_impl *)handle;
-    if (h->has_thread) {
-        if (osty_rt_thread_join(h->thread, NULL) != 0) {
-            osty_rt_abort("task_handle_join: thread join failed");
-        }
-        h->has_thread = 0;
-    }
-    /* After pthread_join, h->done is acquire-visible via the implicit
-     * release on worker_dec; read via atomic for clarity. */
-    (void)__atomic_load_n(&h->done, __ATOMIC_ACQUIRE);
+    osty_rt_task_handle_wait(h);
     return h->result;
 }
 
@@ -5317,6 +5863,15 @@ bool osty_rt_thread_chan_is_closed(void *raw) {
 
 static void osty_rt_chan_send_raw(osty_rt_chan_impl *ch, int64_t slot) {
     osty_rt_mu_lock(&ch->mu);
+    if (ch->count == ch->cap && !ch->closed) {
+        /* About to park this worker for an indeterminate time. If
+         * we're a pool worker and the inject queue has work, hand
+         * off to an elastic helper so queued tasks aren't stranded
+         * behind our blocked stack. */
+        osty_rt_mu_unlock(&ch->mu);
+        osty_sched_notify_blocking_wait();
+        osty_rt_mu_lock(&ch->mu);
+    }
     while (ch->count == ch->cap && !ch->closed) {
         osty_rt_cond_wait(&ch->not_full, &ch->mu);
     }
@@ -5334,6 +5889,11 @@ static void osty_rt_chan_send_raw(osty_rt_chan_impl *ch, int64_t slot) {
 static osty_rt_chan_recv_result osty_rt_chan_recv_raw(osty_rt_chan_impl *ch) {
     osty_rt_chan_recv_result r = {0, 0};
     osty_rt_mu_lock(&ch->mu);
+    if (ch->count == 0 && !ch->closed) {
+        osty_rt_mu_unlock(&ch->mu);
+        osty_sched_notify_blocking_wait();
+        osty_rt_mu_lock(&ch->mu);
+    }
     while (ch->count == 0 && !ch->closed) {
         osty_rt_cond_wait(&ch->not_empty, &ch->mu);
     }
@@ -5765,8 +6325,13 @@ void *osty_rt_task_collect_all(void *body_env) {
     int64_t n = handles_list != NULL ? osty_rt_list_len(handles_list) : 0;
     for (int64_t i = 0; i < n; i++) {
         void *handle = NULL;
+        /* handles_list was built via osty_rt_list_push_ptr, which
+         * tags the list with trace_elem = osty_gc_mark_slot_v1.
+         * Passing NULL here would trip ensure_layout's trace-kind
+         * check; the read must announce the same trace function. */
         memcpy(&handle,
-               osty_rt_list_get_raw(handles_list, i, sizeof(handle), NULL),
+               osty_rt_list_get_raw(handles_list, i, sizeof(handle),
+                                    osty_gc_mark_slot_v1),
                sizeof(handle));
         osty_rt_result_enum_v1 r;
         r.disc = OSTY_RT_RESULT_OK_DISC;
@@ -5818,8 +6383,11 @@ osty_rt_result_enum_v1 osty_rt_task_race(void *body_env) {
     }
     for (int64_t i = 0; i < n; i++) {
         void *h = NULL;
+        /* Same trace-kind rule as collect_all: the handles list was
+         * built with push_ptr so its trace_elem is mark_slot_v1. */
         memcpy(&h,
-               osty_rt_list_get_raw(handles_list, i, sizeof(h), NULL),
+               osty_rt_list_get_raw(handles_list, i, sizeof(h),
+                                    osty_gc_mark_slot_v1),
                sizeof(h));
         handles[i] = (osty_rt_task_handle_impl *)h;
     }

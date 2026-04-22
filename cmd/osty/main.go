@@ -617,6 +617,13 @@ func runCheckPackage(dir string, flags cliFlags) {
 		runCheckWorkspace(dir, flags)
 		return
 	}
+	// Single-package path: enable the native-checker cache anchored
+	// at the best manifest root we can find, falling back to dir.
+	cacheRoot := dir
+	if root, _, err := manifestLookupNear(dir); err == nil && root != "" {
+		cacheRoot = root
+	}
+	enableCheckerCacheForRoot(cacheRoot)
 	pkg, err := resolve.LoadPackageWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("check"), os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
@@ -663,6 +670,10 @@ func isWorkspace(dir string) bool {
 // package — so `auth/` diagnostics use `auth/` sources, `db/` uses
 // `db/` sources, etc.
 func runCheckWorkspace(dir string, flags cliFlags) {
+	// Activate the on-disk checker cache so a re-run with zero
+	// changes hits every package and finishes in milliseconds.
+	enableCheckerCacheForRoot(dir)
+
 	ws, err := resolve.NewWorkspace(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)

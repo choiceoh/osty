@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1015,5 +1016,403 @@ int main(void) {
 	const want = "1\n1\n42\n42\n2\n"
 	if got := string(runOutput); got != want {
 		t.Fatalf("select_send harness stdout = %q, want %q", got, want)
+	}
+}
+
+// Phase 2 (worker pool) acceptance tests. These cover behavior that
+// is specific to the pool + Chase-Lev + elastic-worker design — on top
+// of the Phase 1B suite above, which verifies the public ABI contract
+// in a way that stays valid across scheduler impls.
+
+// Pool saturation with blocking channel ops. OSTY_SCHED_WORKERS=1
+// starves the fixed pool; a producer body blocks on a full channel
+// and the consumer must be able to run *somewhere*. Elastic workers
+// are the only way out — without them this test hangs indefinitely.
+func TestBundledRuntimeSchedulerElasticWorkerUnblocksSaturation(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_elastic_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_elastic_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+
+typedef struct { int64_t value; int64_t ok; } recv_result;
+
+void *osty_rt_thread_chan_make(int64_t capacity);
+void osty_rt_thread_chan_close(void *ch);
+void osty_rt_thread_chan_send_i64(void *ch, int64_t v);
+recv_result osty_rt_thread_chan_recv_i64(void *ch);
+
+void *osty_rt_task_spawn(void *body_env);
+int64_t osty_rt_task_handle_join(void *handle);
+
+typedef struct prod_env { void *fn; void *ch; int64_t n; } prod_env;
+typedef struct cons_env { void *fn; void *ch; } cons_env;
+
+static int64_t body_produce(void *env) {
+    prod_env *e = (prod_env *)env;
+    int64_t acc = 0;
+    for (int64_t i = 0; i < e->n; i++) {
+        osty_rt_thread_chan_send_i64(e->ch, i);
+        acc += i;
+    }
+    return acc;
+}
+
+static int64_t body_consume(void *env) {
+    cons_env *e = (cons_env *)env;
+    int64_t acc = 0;
+    for (;;) {
+        recv_result r = osty_rt_thread_chan_recv_i64(e->ch);
+        if (!r.ok) break;
+        acc += r.value;
+    }
+    return acc;
+}
+
+int main(void) {
+    /* cap-4 channel + 50 items per producer — forces block/wake
+     * many times. With only one pool worker, every other task has
+     * to come from elastic spawns. */
+    void *ch = osty_rt_thread_chan_make(4);
+
+    prod_env penvs[3];
+    void *phs[3];
+    for (int i = 0; i < 3; i++) {
+        penvs[i].fn = (void *)body_produce;
+        penvs[i].ch = ch;
+        penvs[i].n = 50;
+        phs[i] = osty_rt_task_spawn((void *)&penvs[i]);
+    }
+    cons_env cenvs[3];
+    void *chs[3];
+    for (int i = 0; i < 3; i++) {
+        cenvs[i].fn = (void *)body_consume;
+        cenvs[i].ch = ch;
+        chs[i] = osty_rt_task_spawn((void *)&cenvs[i]);
+    }
+
+    int64_t psum = 0;
+    for (int i = 0; i < 3; i++) psum += osty_rt_task_handle_join(phs[i]);
+    osty_rt_thread_chan_close(ch);
+    int64_t csum = 0;
+    for (int i = 0; i < 3; i++) csum += osty_rt_task_handle_join(chs[i]);
+    printf("%lld\n%lld\n%d\n", (long long)psum, (long long)csum, psum == csum ? 1 : 0);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, out)
+	}
+
+	// Σ_{p=0..2} Σ_{i=0..49} i = 3 × (0+1+...+49) = 3 × 1225 = 3675.
+	const want = "3675\n3675\n1\n"
+	for _, workers := range []string{"1", "2", "3"} {
+		t.Run("workers="+workers, func(t *testing.T) {
+			cmd := exec.Command(binaryPath)
+			cmd.Env = append(os.Environ(), "OSTY_SCHED_WORKERS="+workers)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("workers=%s run failed: %v\n%s", workers, err, out)
+			}
+			if got := string(out); got != want {
+				t.Fatalf("workers=%s stdout = %q, want %q", workers, got, want)
+			}
+		})
+	}
+}
+
+// Chase-Lev push/pop vs concurrent steal. One "owner" pool worker
+// spawns a tight burst of children into its own local deque; other
+// pool workers aggressively steal. All children must complete and
+// their captured ids must sum correctly — a missed enqueue or a
+// double-claim from the pop-vs-steal race would desync the sum.
+func TestBundledRuntimeSchedulerChaseLevPushStealRace(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_chaselev_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_chaselev_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+
+void *osty_rt_task_spawn(void *body_env);
+int64_t osty_rt_task_handle_join(void *handle);
+
+#define N_CHILDREN 5000
+
+typedef struct leaf_env { void *fn; int64_t id; } leaf_env;
+
+typedef struct spawner_env {
+    void *fn;
+    leaf_env *envs;
+    void **handles;
+    int64_t n;
+} spawner_env;
+
+/* Leaf: return id. Tight body so pop vs steal races fire constantly. */
+static int64_t leaf_body(void *env) {
+    leaf_env *e = (leaf_env *)env;
+    return e->id;
+}
+
+/* Runs on a pool worker — each task_spawn call pushes to the worker's
+ * own Chase-Lev deque (worker_id >= 0 branch in spawn_internal). Peer
+ * workers aggressively steal from this deque while we keep pushing,
+ * exercising the push vs steal race on every iteration. Joining here
+ * uses the join-helping path so a worker waiting on a child still
+ * drains its own deque. */
+static int64_t spawner_body(void *env) {
+    spawner_env *e = (spawner_env *)env;
+    for (int64_t i = 0; i < e->n; i++) {
+        e->handles[i] = osty_rt_task_spawn(&e->envs[i]);
+    }
+    int64_t acc = 0;
+    for (int64_t i = 0; i < e->n; i++) {
+        acc += osty_rt_task_handle_join(e->handles[i]);
+    }
+    return acc;
+}
+
+int main(void) {
+    static leaf_env envs[N_CHILDREN];
+    static void *handles[N_CHILDREN];
+    for (int64_t i = 0; i < N_CHILDREN; i++) {
+        envs[i].fn = (void *)leaf_body;
+        envs[i].id = i;
+    }
+    spawner_env se = {
+        (void *)spawner_body, envs, handles, (int64_t)N_CHILDREN,
+    };
+    /* Ship the work to a pool worker, then block the main thread on
+     * its handle. Children therefore get pushed from inside a pool
+     * worker — i.e., into its own deque, where steals have something
+     * to contend with. */
+    void *h = osty_rt_task_spawn((void *)&se);
+    int64_t acc = osty_rt_task_handle_join(h);
+
+    /* Σ i for i in [0, N) = N*(N-1)/2 */
+    int64_t expected = ((int64_t)N_CHILDREN) * ((int64_t)N_CHILDREN - 1) / 2;
+    printf("%lld\n%lld\n%d\n",
+           (long long)acc, (long long)expected,
+           acc == expected ? 1 : 0);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, out)
+	}
+	for _, workers := range []string{"1", "2", "4", "8"} {
+		t.Run("workers="+workers, func(t *testing.T) {
+			cmd := exec.Command(binaryPath)
+			cmd.Env = append(os.Environ(), "OSTY_SCHED_WORKERS="+workers)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("workers=%s run failed: %v\n%s", workers, err, out)
+			}
+			const want = "12497500\n12497500\n1\n"
+			if got := string(out); got != want {
+				t.Fatalf("workers=%s stdout = %q, want %q", workers, got, want)
+			}
+		})
+	}
+}
+
+// Heavy spawn count. Catches cumulative errors (missed dec, leaked
+// handle sync primitives, deque index drift) that only manifest
+// with many iterations. Also exercises the steal → inject fallback
+// on the owner's deque overflow (deque cap is 4096 per worker).
+func TestBundledRuntimeSchedulerMassSpawn(t *testing.T) {
+	if testing.Short() {
+		t.Skip("mass spawn stress skipped in -short")
+	}
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_mass_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_mass_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+void *osty_rt_task_spawn(void *body_env);
+int64_t osty_rt_task_handle_join(void *handle);
+
+#define N_TASKS 100000
+
+typedef struct env_t { void *fn; int64_t id; } env_t;
+
+static int64_t body(void *env) {
+    env_t *e = (env_t *)env;
+    return e->id & 0xffffffffLL;   /* cheap deterministic work */
+}
+
+int main(void) {
+    env_t *envs = (env_t *)calloc(N_TASKS, sizeof(env_t));
+    void **handles = (void **)calloc(N_TASKS, sizeof(void *));
+    if (envs == NULL || handles == NULL) {
+        fprintf(stderr, "oom\n");
+        return 1;
+    }
+    for (int64_t i = 0; i < N_TASKS; i++) {
+        envs[i].fn = (void *)body;
+        envs[i].id = i;
+    }
+    for (int64_t i = 0; i < N_TASKS; i++) {
+        handles[i] = osty_rt_task_spawn(&envs[i]);
+    }
+    int64_t acc = 0;
+    for (int64_t i = 0; i < N_TASKS; i++) {
+        acc += osty_rt_task_handle_join(handles[i]);
+    }
+    int64_t expected = 0;
+    for (int64_t i = 0; i < N_TASKS; i++) {
+        expected += (i & 0xffffffffLL);
+    }
+    printf("%lld\n%lld\n%d\n", (long long)acc, (long long)expected,
+           acc == expected ? 1 : 0);
+    free(envs);
+    free(handles);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-O2", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, out)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	// Σ_{i=0}^{99999} i = 4999950000.
+	const want = "4999950000\n4999950000\n1\n"
+	if got := string(runOutput); got != want {
+		t.Fatalf("mass spawn stdout = %q, want %q", got, want)
+	}
+}
+
+// Worker-count scaling: a CPU-bound workload should get faster as
+// OSTY_SCHED_WORKERS grows. Runs the same fixed-work payload at
+// workers=1 and workers=4; asserts the 4-worker wall-clock beats
+// the 1-worker wall-clock by a clear margin. Loose threshold so CI
+// jitter and Amdahl's overhead don't flake, but tight enough to
+// catch "work-stealing doesn't actually distribute work" regressions.
+func TestBundledRuntimeSchedulerWorkerScaling(t *testing.T) {
+	if testing.Short() {
+		t.Skip("worker scaling skipped in -short")
+	}
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_scaling_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_scaling_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <time.h>
+
+void *osty_rt_task_spawn(void *body_env);
+int64_t osty_rt_task_handle_join(void *handle);
+
+#define N_TASKS 16
+#define ITERS 30000000LL    /* ~30ms of work per task on M-class cores */
+
+typedef struct env_t { void *fn; int64_t seed; } env_t;
+
+/* Compute-bound body. Non-trivial arithmetic so the compiler can't
+ * fold it away; xorshift-ish mixer seeded by the task id. */
+static int64_t body(void *env) {
+    env_t *e = (env_t *)env;
+    int64_t x = e->seed ^ 0x9E3779B97F4A7C15LL;
+    for (int64_t i = 0; i < ITERS; i++) {
+        x ^= x << 13;
+        x ^= (int64_t)((uint64_t)x >> 7);
+        x ^= x << 17;
+    }
+    return x;
+}
+
+int main(void) {
+    env_t envs[N_TASKS];
+    void *handles[N_TASKS];
+    for (int i = 0; i < N_TASKS; i++) {
+        envs[i].fn = (void *)body;
+        envs[i].seed = (int64_t)i + 1;
+    }
+
+    struct timespec before, after;
+    clock_gettime(CLOCK_MONOTONIC, &before);
+    for (int i = 0; i < N_TASKS; i++) handles[i] = osty_rt_task_spawn(&envs[i]);
+    int64_t acc = 0;
+    for (int i = 0; i < N_TASKS; i++) acc += osty_rt_task_handle_join(handles[i]);
+    clock_gettime(CLOCK_MONOTONIC, &after);
+
+    long long elapsed_us =
+        (long long)(after.tv_sec - before.tv_sec) * 1000000LL +
+        (long long)((after.tv_nsec - before.tv_nsec) / 1000);
+    /* Prevent the compiler from eliding the loop by reading acc. */
+    printf("%lld %lld\n", elapsed_us, (long long)acc);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-O2", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, out)
+	}
+
+	runWith := func(t *testing.T, workers string) int64 {
+		t.Helper()
+		cmd := exec.Command(binaryPath)
+		cmd.Env = append(os.Environ(), "OSTY_SCHED_WORKERS="+workers)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("workers=%s run failed: %v\n%s", workers, err, out)
+		}
+		var us, acc int64
+		if _, err := fmt.Sscanf(string(out), "%d %d", &us, &acc); err != nil {
+			t.Fatalf("parse stdout %q: %v", out, err)
+		}
+		return us
+	}
+
+	one := runWith(t, "1")
+	four := runWith(t, "4")
+	t.Logf("workers=1: %dus  workers=4: %dus  speedup=%.2fx",
+		one, four, float64(one)/float64(four))
+
+	// Tight enough to catch a broken stealer (no parallelism at all
+	// would yield speedup≈1.0) but loose enough to survive CI
+	// jitter and Amdahl overhead from task startup/join cost.
+	if four*2 > one {
+		t.Fatalf("worker scaling too weak: 1-worker=%dus, 4-worker=%dus, expected 4-worker < 1-worker / 2", one, four)
 	}
 }

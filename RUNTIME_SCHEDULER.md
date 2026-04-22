@@ -1,6 +1,6 @@
 # RUNTIME_SCHEDULER.md — Osty 런타임 스케줄러 아키텍처 & 단계 로드맵
 
-> **Status (2026-04):** Phase 1B/2 하이브리드 진행 중. pthread 기반 task spawn/join + mutex/cond 기반 채널이 공개 런타임에 들어왔다. `parallel` / `race` / `collectAll` 헬퍼는 더 이상 abort 스텁이 아니며 pthread 위에서 동작한다 (폴링 기반 race tie-break, 공유 카운터 기반 bounded-concurrency parallel, group-scoped collectAll). `thread.select`의 send arm도 타입별 value-register surface (`osty_rt_select_send_{i64,i1,f64,ptr,bytes_v1}`) 로 완성되어 공개 런타임에 `osty_sched_unimplemented` 경로는 더 이상 남아 있지 않다. 이 문서는 `LANG_SPEC_v0.5/08-concurrency.md` §8.0과 `LANG_SPEC_v0.5/19-runtime-primitives.md` §19.1 "GC × scheduler interaction" 절에 대응하는 **구현 레퍼런스**다. 스펙은 관찰 가능한 계약만 고정하고, 이 문서는 공개 LLVM 백엔드의 참조 런타임이 어떤 단계로 그 계약을 만족하는지 기술한다.
+> **Status (2026-04-22):** **Phase 2 착륙.** thread-per-task pthread 모델이 워커 풀 + 워커별 Chase-Lev work-stealing deque + linked-list FIFO 인젝트 큐로 교체됨. 워커 수는 기본 `min(CPUs, 8)` (Darwin 은 `sysctlbyname("hw.ncpu")`, 그 외 POSIX 는 `sysconf(_SC_NPROCESSORS_ONLN)`, Windows 는 `GetSystemInfo`), `OSTY_SCHED_WORKERS` 환경변수로 `[1, 256]` 오버라이드. Elastic worker는 **블로킹 cv_wait 진입 직전에만** on-demand 생성 (상한 `OSTY_SCHED_ELASTIC_MAX = 256`) — CPU-bound 워크로드는 오버섭스크립션 없이 fixed pool 로 스케일. 관찰된 speedup: 16 xorshift task × `workers=1 → 4` 에서 **3.97x**. ThreadSanitizer clean (Chase-Lev slot publication 을 release/acquire atomic 으로 게시). 공개 ABI (`osty_rt_task_spawn/group_spawn/handle_join/group/group_cancel/...`) 는 Phase 1B에서 그대로 유지 — MIR/백엔드 재컴파일 불필요. `parallel` / `race` / `collectAll` / `thread.select` (recv/send/timeout/default) 은 Phase 1B에서 추가된 형태 그대로 풀 위에서 동작하며, Phase 1B부터 남아있던 `race` / `collectAll` 의 `list trace-kind mismatch` 버그는 이 마이그레이션 중에 함께 수정. 이 문서는 `LANG_SPEC_v0.5/08-concurrency.md` §8.0과 `LANG_SPEC_v0.5/19-runtime-primitives.md` §19.1 "GC × scheduler interaction" 절에 대응하는 **구현 레퍼런스**다. 스펙은 관찰 가능한 계약만 고정하고, 이 문서는 공개 LLVM 백엔드의 참조 런타임이 어떤 단계로 그 계약을 만족하는지 기술한다.
 
 ## 배경
 
@@ -26,7 +26,7 @@
 
 Phase 1A는 `osty_rt_task_*` / `osty_rt_thread_*` 심볼 집합을 먼저 링크 가능한 형태로 노출하는 데 초점이 있었다. 모든 task body를 호출자 스레드에서 동기 실행하고, 채널/select/helper는 abort 스텁이었다. 현재 Phase 1B/2 pthread 경로에 의해 대체된다 — ABI는 불변이며, Phase 1A 수용 테스트는 Phase 1B 경로 위에서도 그대로 통과한다.
 
-### Phase 1B / Phase 2 — pthread-backed (현재)
+### Phase 1B / Phase 2-early — pthread-backed (대체됨)
 
 **목표.** 실제 OS 스레드 기반 병렬 실행. 채널 block/wake 의미론 정확. 관찰 가능한 M:N 병렬성 제공.
 
@@ -88,26 +88,38 @@ Phase 1A는 `osty_rt_task_*` / `osty_rt_thread_*` 심볼 집합을 먼저 링크
 - `Handle.join`이 자식 완료 전까지 부모 대기.
 - GC 테스트: `taskGroup(|g| { g.spawn(|| allocLoop()); allocLoop() })` — 할당-양보-할당 사이클에서 collector가 parked-fiber root를 놓치지 않음.
 
-### Phase 2 — Multi-worker M:N
+### Phase 2 — Worker pool + Chase-Lev work-stealing (현재)
 
-**목표.** 실제 CPU 병렬. 관찰 가능한 모델 동일.
+**목표.** thread-per-task 오버헤드 제거. 관찰 가능한 의미론은 Phase 1B와 동일 (구조적 수명, 취소 전파, defer × cancel, Handle/Group non-escape). 관찰 가능한 차이는 spawn latency와 TLS/stack 풋프린트.
 
-**추가되는 것.**
-- N 개의 OS worker 스레드 (default `min(CPUs, 8)`, env `OSTY_SCHED_WORKERS`).
-- Global ready queue → per-worker deque + work stealing (Chase-Lev 혹은 단순 lock queue로 시작).
-- Channel send/recv lock은 per-channel mutex; select는 two-phase lock (arms 정렬 → 순차 lock).
-- GC STW: collection 시작 worker가 `stop_requested = 1` flag set → 모든 worker가 다음 safepoint에서 park → collector 돈 뒤 release.
-- cooperative preemption: worker가 safepoint 체크 주기 ≤ N ms (tunable).
+**구현 (`internal/backend/runtime/osty_runtime.c` "Scheduler: worker pool + Chase-Lev" 블록).**
+- **워커 수:** 기본 `min(CPUs, 8)`. `OSTY_SCHED_WORKERS` 환경변수로 `[1, 256]` 오버라이드. Darwin에서는 `sysctlbyname("hw.ncpu", ...)` (strict-POSIX 모드에서 `<sys/sysctl.h>`가 `u_int` 충돌을 일으켜 `extern int sysctlbyname(...)` forward-decl), 그 외 POSIX는 `sysconf(_SC_NPROCESSORS_ONLN)`, Windows는 `GetSystemInfo`. 풀은 **lazy init** (첫 `task_spawn` 호출 시) + `atexit` 셧다운 (shutdown flag broadcast + 각 워커 `thread_join`).
+- **Chase-Lev deque (워커별):** Lê 외 "Correct and Efficient Work-Stealing for Weak Memory Models" (PPoPP'13) weak-memory variant. 슬롯 포인터 자체를 `release`/`acquire` atomic 으로 게시 — release-store on slot → release-store on bottom, pop/steal은 acquire-load on bottom → acquire-load on slot 으로 task item 의 모든 필드 (body_env, group, handle) publication을 보장. Final-element race에선 `seq_cst` CAS on top. 고정 크기 `OSTY_SCHED_DEQUE_CAP = 4096`; 오버플로우시 인젝트 큐로 폴백.
+- **전역 인젝트 큐:** mutex-guarded **singly-linked FIFO** (노드 per task, `calloc`/`free`). 초기 설계의 고정 ring buffer 는 100K-spawn 부담에서 오버플로우 → 용량 제약 제거를 위해 linked list로 전환. 비-워커 submitter (메인 스레드) 또는 로컬 덱 오버플로우시 경유. 워커 조회 순서: **own deque → random steal → inject queue**. 풀 `cv`로 파크/웨이크.
+- **Elastic workers — notify-before-block 트리거:** `push_inject` 는 elastic을 절대 spawn 하지 않음 (CPU-bound 워크로드 오버섭스크립션 방지). 워커가 **블로킹 cv_wait 에 진입하기 직전** (`thread.chan` send 가 full / recv 가 empty / `handle_wait` worker 경로가 자체 deque/steal 실패 후 cv park 직전) `osty_sched_notify_blocking_wait` 호출. inject queue에 pending task 가 있고 `OSTY_SCHED_ELASTIC_MAX = 256` 상한 이내면 detached elastic worker spawn. 탄력 워커는 풀 멤버 아님 (`worker_id = -1`, `is_worker = 1`), own deque 없이 steal + inject만 소비하고 work 고갈되면 exit. CPU-bound 워크는 elastic 트리거 없이 fixed pool 로 스케일 (scaling test 3.97x@4workers 확인).
+- **Handle rework:** Handle은 GC-managed, 필드는 `{group, result, done (atomic), mu, cv, sync_live}`. Body 완료 시 워커는 `result` → `done` release-store → `cv` broadcast 순서로 publish. Join-helping: 워커 조이너는 `done` 대기중 own-deque drain + steal로 진행, take_work가 NULL이면 `notify_blocking_wait` 후 `h->cv` park. 비-워커 조이너 (메인 스레드) 는 `h->cv` 만 park. GC sweep시 handle destroy → `mu/cv` 해제.
+- **task_group/reap:** 그룹 body 실행 후 자식 리스트 순회, 각 handle 에 `handle_wait`. 남은 자식은 `cv` 대기로 스코프 탈출 방지 (spec §8.1).
+- **GC 상호작용:** `osty_concurrent_workers`는 **in-flight task 수** (풀 스레드 수 아님). 파크된 워커는 Osty state 미접촉 → collection 게이트 안 함. `workers_inc`는 spawn 엔큐 직전, `dec`는 body 리턴 후 (Phase 1B와 동일 granularity). 공개 런타임에서 `osty_sched_unimplemented` 경로 0개 유지.
+- **TSan clean.** 슬롯 publication을 release/acquire atomic 으로 한 결과 ThreadSanitizer 경고 0. Chase-Lev stress × 4 workers × 1000 children (cold repo state) 재현 harness로 검증.
 
 **제약.**
-- 여전히 non-preemptive. 긴 compute 루프는 다른 task의 진행을 막음.
-- concurrent GC 없음. STW pause는 모든 할당 스레드 멈춤.
+- **여전히 non-preemptive within a body.** 긴 compute 루프는 그 워커 슬롯을 점유. 다른 task 의 진행을 protocol-level로 지연시킴.
+- **Concurrent GC 없음.** 자동 collection은 여전히 `osty_concurrent_workers > 0` 동안 보류 — 장기 워크로드 OOM 가능.
+- **Task 결과는 8바이트 스칼라 폭.** Phase 1B 제약 유지.
+- **Elastic worker spillover 는 thread-per-task 에 가까운 비용이 발생할 수 있음.** 블로킹 op × (inject 큐 pending task) 조합에서 `pthread_create` 가 task-per-burst 패턴으로 호출됨.
+- **Fiber-level 블로킹 park 없음.** 채널 send/recv/select send arm 은 여전히 OS 스레드를 점유한 채 블록 (Phase 1B fiber 경로가 들어오면 해소).
 
-**수용 테스트.**
-- `parallel(items, 8, f)`이 실제로 8-way 병렬 (wall-clock ≈ N_items / 8 × per-item).
-- Stress: 1M spawn across 8 workers 안정.
-- GC 레이스 없음 (TSan clean).
-- `race()`의 비결정 tie-break이 observable (stable within run, varies across runs).
+**수용 테스트 (Phase 1B suite + Phase 2 신규).** `internal/backend/llvm_runtime_sched_test.go`:
+- **Phase 1B 베이스라인 (워커 풀 위에서 동일 통과):**
+  - `TestBundledRuntimeScheduler`: taskGroup + spawn/join + cancel 전파 + 4-way parallel spawn wall-clock 검증.
+  - `TestBundledRuntimeSchedulerChannels`, `TestBundledRuntimeSchedulerChannelStress`, `TestBundledRuntimeSchedulerTaskGroupAutoReap`.
+  - `TestBundledRuntimeSchedulerSelect` (recv/timeout/default), `TestBundledRuntimeSchedulerSelectSend` (send arm).
+  - `TestBundledRuntimeSchedulerCollectAll`, `TestBundledRuntimeSchedulerRace`, `TestBundledRuntimeSchedulerParallel`.
+- **Phase 2 신규:**
+  - `TestBundledRuntimeSchedulerElasticWorkerUnblocksSaturation` — `workers=1/2/3` × (3 producer, 3 consumer, cap-4 channel) 로 풀 saturation 강제, elastic worker가 consumer 를 실행해 데드락 없이 completion 확인.
+  - `TestBundledRuntimeSchedulerChaseLevPushStealRace` — 5000 leaf child × `workers=1/2/4/8`, pool-worker-내 spawn 이 own-deque push/pop 경로를 타고, peer 가 steal 하는 pop-vs-steal 레이스를 상시 발사. id 합산 mismatch 시 실패.
+  - `TestBundledRuntimeSchedulerMassSpawn` — 100K spawn + join, linked-list inject queue 가 `OSTY_SCHED_INJECT_CAP` 없이 흡수하는지, counter 누수 / handle 동기화 primitive 누수 없는지 확인. `-short` 에서는 skip.
+  - `TestBundledRuntimeSchedulerWorkerScaling` — 16 CPU-bound xorshift 바디, `workers=1` vs `workers=4` wall-clock 측정. 3.9x–4x speedup 관찰 (loose threshold: `4-worker < 1-worker / 2`). `-short` 에서는 skip.
 
 ### Phase 3 — Preemption & concurrent GC
 
@@ -180,18 +192,18 @@ void *osty_rt_parallel(void *items, int64_t concurrency, void *f);   // List<Res
 
 | 스펙 조항 | Phase 1A | Phase 1B | Phase 2 | Phase 3 |
 |---|---|---|---|---|
-| §8.0 M:N + no thread identity | trivially (N=M=1) | trivially (N=1) | ✓ | ✓ |
+| §8.0 M:N + no thread identity | trivially (N=M=1) | trivially (N=1) | ✓ (현재, 워커 풀) | ✓ |
 | §8.1 structured lifetime | ✓ | ✓ | ✓ | ✓ |
 | §8.2 failure propagation | ✓ | ✓ | ✓ | ✓ |
-| §8.3 `parallel` bounded | sequential stub | concurrent on 1 worker | actual N-way (pthread, 현재) | ✓ |
-| §8.3 `race` nondeterministic tie | N/A (no concurrency) | N/A | observable (폴링 기반, 현재) | observable (per-handle park) |
-| §8.3 `collectAll` | sequential stub | sequential stub | ✓ (현재) | ✓ |
+| §8.3 `parallel` bounded | sequential stub | concurrent on 1 worker | actual N-way (풀 위에서) | ✓ |
+| §8.3 `race` nondeterministic tie | N/A (no concurrency) | N/A | observable (폴링 기반) | observable (per-handle park) |
+| §8.3 `collectAll` | sequential stub | sequential stub | ✓ | ✓ |
 | §8.4 cancel with cause | ✓ | ✓ | ✓ | ✓ |
-| §8 channels blocking | **abort stub** | ✓ | ✓ | ✓ |
+| §8 channels blocking | **abort stub** | ✓ | ✓ (elastic 워커로 pool saturation 대응) | ✓ |
 | §8 `thread.select` (recv/timeout/default) | **abort stub** | ✓ | ✓ | ✓ |
-| §8 `thread.select` send arm | **abort stub** | ✓ (폴링, 현재) | ✓ (per-channel lock) | ✓ (fiber park) |
-| §19.1 STW GC | ✓ | ✓ + parked-root union | **paused while workers live** | concurrent |
-| §19.10 safepoint contract | unchanged | extended (park-as-safepoint) | gated on `osty_concurrent_workers` | extended (preempt_check) |
+| §8 `thread.select` send arm | **abort stub** | ✓ (폴링) | ✓ (폴링, 현재) | ✓ (fiber park) |
+| §19.1 STW GC | ✓ | ✓ + parked-root union | **paused while in-flight tasks live** | concurrent |
+| §19.10 safepoint contract | unchanged | extended (park-as-safepoint) | gated on `osty_concurrent_workers` (풀 워커 자체는 gate 안 함) | extended (preempt_check) |
 
 ## 파일 인벤토리
 
@@ -214,3 +226,8 @@ void *osty_rt_parallel(void *items, int64_t concurrency, void *f);   // List<Res
 - 2026-04-20 (follow-up): write barrier / root bind/release 전부 `osty_gc_lock`으로 감쌈; pthread cleanup handler로 worker counter 누수 불가능; `task_group`에 auto-reap 도입; `thread.select`의 recv/timeout/default arm 구현. send arm만 보류.
 - 2026-04-21: `osty_rt_task_collect_all` / `osty_rt_task_race` / `osty_rt_parallel` abort 스텁 제거. race는 handle `done` flag 폴링 (500μs cadence) + group cancel 브로드캐스트, collectAll은 fresh group 스코프에서 handle list를 돌며 `Ok(result)` 로 감싸 반환, parallel은 detached worker × `__atomic_fetch_add` 인덱스 분배로 pre-sized 출력 slot에 결과를 쓴다. MIR: `IntrinsicRace`는 `{i64, i64}` enum 레이아웃 반환으로 전환 (기존 `ptr` 반환 제거). 남은 abort 스텁은 `osty_rt_select_send` 하나.
 - 2026-04-21 (follow-up): `osty_rt_select_send` abort 제거. `osty_rt_select_send_{i64,i1,f64,ptr,bytes_v1}` 5종 진입점을 타입별로 추가하고, select 폴링 루프에 send-arm try-enqueue 경로를 합류시켰다. 스칼라는 channel ring-buffer의 int64 slot에 bits packing, 복합형은 `osty_rt_thread_chan_send_bytes_v1`와 동일하게 GC-managed 버퍼 복사 후 포인터 slot 저장. Enqueue 성공 시 arm closure를 `() -> ()`로 plain 호출한다. MIR (`internal/llvmgen/mir_generator.go emitSelectSend`)은 channel element 타입으로 suffix를 골라 4-arg scalar / 5-arg bytes 형태로 lower. Stdlib `thread.osty`의 `Select.send`도 `(ch, value, f)` 3-인자 surface로 정정. `TestBundledRuntimeSchedulerSelectSendStubAborts`는 `TestBundledRuntimeSchedulerSelectSend` (end-to-end harness) 로 대체. 공개 런타임에서 `osty_sched_unimplemented` 호출은 이제 0개.
+- 2026-04-22: **Phase 2 착수.** thread-per-task pthread 모델을 워커 풀 + 워커별 Chase-Lev work-stealing deque + 전역 FIFO 인젝트 큐로 교체. 워커 수 기본 `min(CPUs, 8)` (Darwin sysctl/POSIX sysconf/Win32 SYSTEM_INFO 경로), `OSTY_SCHED_WORKERS` 로 `[1, 256]` 오버라이드. Saturation 대응으로 `OSTY_SCHED_ELASTIC_MAX = 256` 상한의 detached elastic worker on-demand 생성. Handle struct는 `{group, result, done, mu, cv, sync_live}` 로 재설계 — worker joiner 는 join-helping 으로 own-deque drain + steal, 비-워커 joiner 는 `h->cv` 파크. `task_group_reap` 은 handle list 순회 후 각 `handle_wait` 호출로 구조적 수명 보장. ABI 심볼 불변 (`osty_rt_task_spawn/group_spawn/handle_join/group/group_cancel/group_is_cancelled/cancel_is_cancelled/thread_yield/thread_sleep`), MIR/백엔드 재컴파일 불필요. Darwin `<sys/sysctl.h>` 는 strict POSIX 모드에서 `u_int` 충돌을 일으켜 `sysctlbyname` 을 forward-declare 로 대체.
+- 2026-04-22 (follow-up 1): Elastic trigger를 `push_inject` 의 "parked==0" 휴리스틱에서 **blocking-wait 진입 지점** (`osty_sched_notify_blocking_wait` call) 로 전환 — `push_inject` saturation-기반 트리거가 CPU-bound scaling (worker scaling test) 을 1.03x 로 망치는 문제 해결. 블로킹 cv_wait 직전 (`thread_chan_send/recv`, `handle_wait` 워커 경로) 에서만 inject pending task 가 있을 때 elastic spawn. `is_worker` TLS 플래그로 pool + elastic 워커 모두 커버. 이제 `workers=1 → 4` 에서 **3.97x speedup** 관찰. CPU-bound 작업은 elastic 없이 fixed pool 만 사용.
+- 2026-04-22 (follow-up 2): Inject queue 자료구조를 fixed ring (`OSTY_SCHED_INJECT_CAP=8192`) 에서 mutex-guarded **singly-linked FIFO** 로 교체. 100K-spawn stress 가 기존 ring 용량을 초과해 `task_spawn: inject queue overflow` abort → linked list 로 용량 제약 제거 (노드 per-task malloc). `push_inject` 실패 경로는 `calloc` OOM 으로만 한정.
+- 2026-04-22 (follow-up 3): Chase-Lev deque 슬롯 publication 을 release/acquire atomic 으로 승격 (기존 store + separate `__atomic_thread_fence(RELEASE)` 조합은 ThreadSanitizer 가 인식 못 함). `__atomic_store_n(slot, task, RELEASE)` → `__atomic_load_n(slot, ACQUIRE)` 로 task_item 필드 publication 명시적. `-fsanitize=thread -O1` 빌드 + 4-worker × 1000-child stress harness TSan warning 0 확인.
+- 2026-04-22 (follow-up 4): `race` / `collectAll` 의 handles_list 리드 경로가 `osty_rt_list_get_raw(..., trace_elem=NULL)` 로 호출해 ensure_layout 의 trace-kind mismatch 에서 abort (main 에서 존재하던 issue). 해당 list 는 `osty_rt_list_push_ptr` 로 빌드되어 `trace_elem = osty_gc_mark_slot_v1` 이므로 read 측도 동일 함수 포인터 전달하도록 수정. `TestBundledRuntimeSchedulerRace` / `TestBundledRuntimeSchedulerCollectAll` green.
