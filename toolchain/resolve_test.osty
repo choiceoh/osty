@@ -577,3 +577,128 @@ fn testSelfResolverAcceptsWildcardInPattern() {
 
     testing.assertEq(selfResolveCodeCount(result, "E0604"), 0)
 }
+
+fn testSelfResolverRejectsJSONBadKeyType() {
+    // `#[json(key = 123)]` — value must be a string literal. E0739.
+    let result = selfResolveSource(
+        r"""
+            struct Point {
+                #[json(key = 123)]
+                x: Int,
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0739"), 1)
+}
+
+fn testSelfResolverRejectsJSONUnknownArg() {
+    // Unknown arg keys in `#[json]` are reported as E0400 to match the
+    // Go resolver's existing quirk (CodeUnknownAnnotation for arg keys).
+    let result = selfResolveSource(
+        r"""
+            struct Point {
+                #[json(bogus = "x")]
+                x: Int,
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0400"), 1)
+}
+
+fn testSelfResolverRejectsJSONMutuallyExclusive() {
+    // `skip` plus `key`/`optional` is a spec violation. E0739.
+    let result = selfResolveSource(
+        r"""
+            struct Point {
+                #[json(skip, key = "x")]
+                internal: Int,
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0739"), 1)
+}
+
+fn testSelfResolverRejectsJSONOptionalOnVariant() {
+    // `optional` is struct-field-only. On an enum variant it's E0739.
+    let result = selfResolveSource(
+        r"""
+            enum Color {
+                #[json(optional)]
+                Red,
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0739"), 1)
+}
+
+fn testSelfResolverRejectsReprMissingArg() {
+    let result = selfResolveSource(
+        r"""
+            #[repr]
+            struct Raw { x: Int }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0739"), 1)
+}
+
+fn testSelfResolverRejectsReprUnknownLayout() {
+    let result = selfResolveSource(
+        r"""
+            #[repr(packed)]
+            struct Raw { x: Int }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0739"), 1)
+}
+
+fn testSelfResolverAcceptsReprC() {
+    let result = selfResolveSource(
+        r"""
+            #[repr(c)]
+            struct Raw { x: Int }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0739"), 0)
+}
+
+fn testSelfResolverRejectsExportWithoutSymbol() {
+    let result = selfResolveSource(
+        r"""
+            #[export]
+            fn entry() {}
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0739"), 1)
+}
+
+fn testSelfResolverRejectsExportWithKey() {
+    // `#[export(name = "x")]` is wrong — export takes a positional string.
+    let result = selfResolveSource(
+        r"""
+            #[export(name = "sym")]
+            fn entry() {}
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0739"), 1)
+}
+
+fn testSelfResolverRejectsNoArgsRuntimeWithArgs() {
+    // `#[pod]` and friends are bare flags; any argument is E0739.
+    let result = selfResolveSource(
+        r"""
+            #[pod(c)]
+            struct Raw { x: Int }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0739"), 1)
+}
