@@ -129,6 +129,14 @@ func (g *generator) emitInterpolatedString(lit *ast.StringLit) (value, error) {
 		}
 		pieces = append(pieces, piece)
 	}
+	if len(pieces) >= 3 {
+		r, err := g.emitRuntimeStringConcatN(pieces)
+		if err != nil {
+			return value{}, err
+		}
+		r.sourceType = &ast.NamedType{Path: []string{"String"}}
+		return r, nil
+	}
 	result := pieces[0]
 	for i := 1; i < len(pieces); i++ {
 		r, err := g.emitRuntimeStringConcat(result, pieces[i])
@@ -139,6 +147,37 @@ func (g *generator) emitInterpolatedString(lit *ast.StringLit) (value, error) {
 	}
 	result.sourceType = &ast.NamedType{Path: []string{"String"}}
 	return result, nil
+}
+
+// emitRuntimeStringConcatN lowers an N-way string concatenation as
+// one call to `osty_rt_strings_ConcatN(count, parts_ptr)` instead of
+// N-1 chained two-arg Concat calls. Saves N-2 intermediate allocations
+// per interpolation site; measurable on hot paths that build keys
+// inside loops (e.g. record_pipeline's `"{service}/{region}/{level}"`
+// maps to one alloc per row instead of four).
+//
+// The array of parts is materialized in a stack alloca at the current
+// block — free for the caller and automatically dead after the call.
+func (g *generator) emitRuntimeStringConcatN(pieces []value) (value, error) {
+	symbol := "osty_rt_strings_ConcatN"
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{
+		{typ: "i64"},
+		{typ: "ptr"},
+	})
+	emitter := g.toOstyEmitter()
+	// Stack-allocate `[N x ptr]` and store each piece into the slot.
+	arr := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca [%d x ptr]", arr, len(pieces)))
+	for i, piece := range pieces {
+		slot := llvmNextTemp(emitter)
+		emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr [%d x ptr], ptr %s, i64 0, i64 %d", slot, len(pieces), arr, i))
+		emitter.body = append(emitter.body, fmt.Sprintf("  store ptr %s, ptr %s", piece.ref, slot))
+	}
+	out := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call ptr @%s(i64 %d, ptr %s)", out, symbol, len(pieces), arr))
+	g.takeOstyEmitter(emitter)
+	joined := value{typ: "ptr", ref: out, gcManaged: true}
+	return joined, nil
 }
 
 func (g *generator) emitInterpolationStringPiece(v value) (value, error) {

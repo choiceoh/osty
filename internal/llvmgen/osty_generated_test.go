@@ -941,8 +941,15 @@ func TestGenerateInterpolatedIntAndFloatUseRuntimeToString(t *testing.T) {
 	assertGeneratedIRContains(t, got, "declare ptr @osty_rt_float_to_string(double)")
 	assertGeneratedIRContains(t, got, "call ptr @osty_rt_int_to_string(i64")
 	assertGeneratedIRContains(t, got, "call ptr @osty_rt_float_to_string(double")
-	if strings.Count(got, "call ptr @osty_rt_strings_Concat") != 2 {
-		t.Fatalf("expected exactly 2 string concat calls, got IR:\n%s", got)
+	// 3-way interpolation `"{n}:{f}"` lowers to a single
+	// osty_rt_strings_ConcatN call instead of two chained Concat
+	// calls — one allocation per interpolation site. See
+	// emitInterpolatedString in expr.go.
+	if strings.Count(got, "call ptr @osty_rt_strings_ConcatN") != 1 {
+		t.Fatalf("expected exactly 1 ConcatN call, got IR:\n%s", got)
+	}
+	if strings.Contains(got, "call ptr @osty_rt_strings_Concat(") {
+		t.Fatalf("did not expect any two-arg Concat call for 3-way interpolation, got IR:\n%s", got)
 	}
 }
 
