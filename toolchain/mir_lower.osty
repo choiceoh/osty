@@ -1440,29 +1440,66 @@ pub fn mirLowerFinishNoReturn(bs: MirLowerBodyState, span: MirSpan) {
 // lands, these stubs get replaced with a full operand/place/rvalue
 // dispatcher driven by HirExprKind.
 
-/// mirLowerExprAsOperand is the placeholder operand producer. Every
-/// call currently returns a unit-const operand and notes a
-/// "Stage 4d TODO" issue with the expression kind that was asked.
+/// mirLowerExprAsOperand lowers an expression and returns an operand
+/// holding its value. Used for call arguments, conditions, and any
+/// other read-only read site. Stage 4d covers:
 ///
-/// When `e` is already the invalid default (HirExprInvalid) no issue
-/// is emitted — this is the "nothing to lower" path used by bare
-/// returns and similar.
+///   - Literals (Int / Float / Bool / Char / Byte / Unit) — direct
+///     MirConst operand
+///   - StringLit (literal-only, no interpolation) — string const
+///   - Ident (Local / Param) — Copy from the resolved local
+///   - FieldExpr (non-optional) — receiver place + FieldProj
+///   - TupleAccess — receiver place + TupleProj
+///   - IndexExpr — receiver place + IndexProj
+///   - Anything else — allocate a temp, dispatch via mirLowerExprInto,
+///     return Copy from the temp. This covers TupleLit / ListLit /
+///     Unary / Binary etc. without duplicating per-kind code.
+///
+/// Kinds that need dedicated dispatch (control flow, calls, closures,
+/// etc.) route through the temp-allocation fallback plus whatever
+/// mirLowerExprIntoPlace implements — Stage 4e/4f fills those in.
 pub fn mirLowerExprAsOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
     if !hirExprIsValid(e) {
         return mirOperandConst(mirConstUnit())
     }
-    mirLowerNoteIssue(
-        bs.l,
-        "mir_lower Stage 4d TODO: expr kind " + hirExprKindName(e.kind)
-            + " — returning unit-const placeholder operand",
-    )
-    mirOperandConst(mirConstUnit())
+    match e.kind {
+        HirExprIntLit -> mirLowerIntLitOperand(e),
+        HirExprFloatLit -> mirLowerFloatLitOperand(e),
+        HirExprBoolLit -> mirOperandConst(mirConstBool(e.boolValue)),
+        HirExprCharLit -> mirOperandConst(mirConstChar(e.charValue)),
+        HirExprByteLit -> mirOperandConst(mirConstByte(e.byteValue)),
+        HirExprUnitLit -> mirOperandConst(mirConstUnit()),
+        HirExprStringLit -> mirLowerStringLitOperand(bs, e),
+        HirExprIdent -> mirLowerIdentOperand(bs, e),
+        HirExprField -> mirLowerFieldExprOperand(bs, e),
+        HirExprTupleAccess -> mirLowerTupleAccessOperand(bs, e),
+        HirExprIndex -> mirLowerIndexExprOperand(bs, e),
+        _ -> mirLowerExprAsOperandFallback(bs, e),
+    }
 }
 
-/// mirLowerExprInto is the placeholder "lower into dest local"
-/// routine. Stage 4d wires the full RValue-producing dispatcher;
-/// Stage 4b emits a conservative Assign of unit-const into `dest`
-/// and records an issue.
+/// mirLowerExprAsOperandFallback handles every expression kind that
+/// isn't directly operand-shaped: allocate a temp of the expected
+/// type, dispatch via `mirLowerExprInto`, and return a Copy of the
+/// temp. Matches Go's `lowerExprAsOperand` default branch.
+fn mirLowerExprAsOperandFallback(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
+    let t = if hirTypeIsValid(e.typ) {
+        e.typ
+    } else {
+        hirTypeErr()
+    }
+    let span = mirSpanFromHir(e.span)
+    let tmp = mirLowerFreshTemp(bs, t, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(tmp, span))
+    mirLowerExprInto(bs, e, tmp, t)
+    mirOperandCopy(mirPlace(tmp), hirTypeString(t))
+}
+
+/// mirLowerExprInto lowers `e` and stores the produced value into
+/// `dest` (a bare local). Thin wrapper that forwards to
+/// mirLowerExprIntoPlaceImpl — kept separate so Stage 4b's scope
+/// helpers and stmt lowerers can use the simpler local-only path
+/// without constructing MirPlace values.
 pub fn mirLowerExprInto(
     bs: MirLowerBodyState,
     e: HirExpr,
@@ -1472,16 +1509,153 @@ pub fn mirLowerExprInto(
     if !hirExprIsValid(e) {
         return
     }
+    mirLowerExprIntoPlaceImpl(bs, e, mirPlace(dest), destT)
+}
+
+// ---- Literal operand helpers (Stage 4d) ----------------------------
+
+fn mirLowerIntLitOperand(e: HirExpr) -> MirOperand {
+    let typeText = if hirTypeIsValid(e.typ) {
+        hirTypeString(e.typ)
+    } else {
+        "Int"
+    }
+    let value = mirLowerParseIntLit(e.numText)
+    mirOperandConst(mirConstInt(value, typeText))
+}
+
+fn mirLowerFloatLitOperand(e: HirExpr) -> MirOperand {
+    let typeText = if hirTypeIsValid(e.typ) {
+        hirTypeString(e.typ)
+    } else {
+        "Float"
+    }
+    // Strip underscores from the source text — `mirConstFloat` carries
+    // the textual form verbatim for downstream numeric emission.
+    let text = mirLowerStripUnderscores(e.numText)
+    mirOperandConst(mirConstFloat(text, typeText))
+}
+
+/// mirLowerStringLitOperand handles literal-only StringLit (no
+/// interpolation). Interpolated forms record a Stage 4e TODO and
+/// return an empty-string const so downstream consumers can continue.
+fn mirLowerStringLitOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
+    let mut buf: List<String> = []
+    let mut hasInterpolation = false
+    for part in e.strParts {
+        if part.isLit {
+            buf.push(part.lit)
+        } else {
+            hasInterpolation = true
+        }
+    }
+    if hasInterpolation {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4e TODO: interpolated StringLit — using literal fragments only",
+        )
+    }
+    mirOperandConst(mirConstString(strings.join(buf, "")))
+}
+
+/// mirLowerIdentOperand lowers an ident reference to an operand.
+/// Locals / params resolve to a Copy of the bound place; fn / global
+/// / variant idents record Stage 4e TODOs and fall back to a temp
+/// holding the Stage 4b unit-const stub so the surrounding code
+/// still has a well-typed operand to consume.
+fn mirLowerIdentOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
+    let typeText = hirTypeString(e.typ)
+    match e.identKind {
+        HirIdentLocal -> mirLowerIdentLocalOperand(bs, e, typeText),
+        HirIdentParam -> mirLowerIdentLocalOperand(bs, e, typeText),
+        HirIdentFn -> mirOperandConst(mirConstFn(e.identName, typeText)),
+        HirIdentGlobal -> mirLowerIdentGlobalOperand(bs, e, typeText),
+        HirIdentVariant -> mirLowerIdentVariantOperand(bs, e),
+        HirIdentTypeName -> mirLowerIdentUnsupported(bs, e, "type-name"),
+        HirIdentBuiltin -> mirLowerIdentUnsupported(bs, e, "builtin"),
+        HirIdentUnknown -> mirLowerIdentUnsupported(bs, e, "unresolved"),
+    }
+}
+
+fn mirLowerIdentLocalOperand(bs: MirLowerBodyState, e: HirExpr, typeText: String) -> MirOperand {
+    let id = mirLowerLookupName(bs, e.identName)
+    if id < 0 {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: unresolved local \"" + e.identName + "\"",
+        )
+        return mirOperandConst(mirConstUnit())
+    }
+    mirOperandCopy(mirPlace(id), typeText)
+}
+
+/// mirLowerIdentGlobalOperand emits a fresh temp, assigns the global's
+/// current value into it via a GlobalRef rvalue, then returns a Copy
+/// of the temp. Matches Go's `lowerIdent` IdentGlobal path.
+fn mirLowerIdentGlobalOperand(bs: MirLowerBodyState, e: HirExpr, typeText: String) -> MirOperand {
+    let t = if hirTypeIsValid(e.typ) {
+        e.typ
+    } else {
+        hirTypeErr()
+    }
+    let span = mirSpanFromHir(e.span)
+    let tmp = mirLowerFreshTemp(bs, t, span)
+    let rv = mirRVGlobalRef(e.identName, hirTypeString(t))
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(tmp), rv, span))
+    mirOperandCopy(mirPlace(tmp), typeText)
+}
+
+/// mirLowerIdentVariantOperand handles a bare variant ident like
+/// `None` / `Red`. Stage 4e wires full variant aggregate emission;
+/// Stage 4d-1 records an issue and returns a unit-const so the
+/// lowering at least terminates.
+fn mirLowerIdentVariantOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
     mirLowerNoteIssue(
         bs.l,
-        "mir_lower Stage 4d TODO: expr kind " + hirExprKindName(e.kind)
-            + " — emitting unit-const Assign into dest",
+        "mir_lower Stage 4e TODO: bare variant ident \"" + e.identName + "\"",
     )
-    let destPlace = mirPlace(dest)
-    let rv = mirRVUse(mirOperandConst(mirConstUnit()))
-    let instr = mirAssignInstr(destPlace, rv, mirSpanFromHir(e.span))
-    let _ = destT
-    mirLowerEmitInstr(bs, instr)
+    mirOperandConst(mirConstUnit())
+}
+
+fn mirLowerIdentUnsupported(bs: MirLowerBodyState, e: HirExpr, kindName: String) -> MirOperand {
+    mirLowerNoteIssue(
+        bs.l,
+        "mir_lower: " + kindName + " ident \"" + e.identName + "\" unsupported in operand position",
+    )
+    mirOperandConst(mirConstUnit())
+}
+
+// ---- Place-carrying expression operands (Stage 4d) -----------------
+
+fn mirLowerFieldExprOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
+    if e.fieldOptional {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4e TODO: optional field chain as operand",
+        )
+        return mirOperandConst(mirConstUnit())
+    }
+    let place = mirLowerFieldExprPlace(bs, e)
+    if !mirLowerPlaceIsValid(place) {
+        return mirOperandConst(mirConstUnit())
+    }
+    mirOperandCopy(place, hirTypeString(e.typ))
+}
+
+fn mirLowerTupleAccessOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
+    let place = mirLowerTupleAccessPlace(bs, e)
+    if !mirLowerPlaceIsValid(place) {
+        return mirOperandConst(mirConstUnit())
+    }
+    mirOperandCopy(place, hirTypeString(e.typ))
+}
+
+fn mirLowerIndexExprOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
+    let place = mirLowerIndexExprPlace(bs, e)
+    if !mirLowerPlaceIsValid(place) {
+        return mirOperandConst(mirConstUnit())
+    }
+    mirOperandCopy(place, hirTypeString(e.typ))
 }
 
 // ====================================================================
@@ -1643,7 +1817,31 @@ pub fn mirLowerFreshTemp(bs: MirLowerBodyState, t: HirType, span: MirSpan) -> In
 /// MirPlace with `local == -1` on failure and callers check the local.
 pub fn mirLowerExprToPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
     match e.kind {
-        HirExprIdent -> {
+        HirExprIdent -> mirLowerIdentPlace(bs, e),
+        HirExprField -> mirLowerFieldExprPlace(bs, e),
+        HirExprTupleAccess -> mirLowerTupleAccessPlace(bs, e),
+        HirExprIndex -> mirLowerIndexExprPlace(bs, e),
+        _ -> mirPlace(-1),
+    }
+}
+
+fn mirLowerIdentPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
+    match e.identKind {
+        HirIdentLocal -> {
+            let id = mirLowerLookupName(bs, e.identName)
+            if id < 0 {
+                return mirPlace(-1)
+            }
+            mirPlace(id)
+        },
+        HirIdentParam -> {
+            let id = mirLowerLookupName(bs, e.identName)
+            if id < 0 {
+                return mirPlace(-1)
+            }
+            mirPlace(id)
+        },
+        HirIdentUnknown -> {
             let id = mirLowerLookupName(bs, e.identName)
             if id < 0 {
                 return mirPlace(-1)
@@ -1654,10 +1852,155 @@ pub fn mirLowerExprToPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
     }
 }
 
+/// mirLowerFieldExprPlace lowers `x.name` into a MirPlace:
+/// receiver-as-place + FieldProj. Optional chains (`x?.name`) are
+/// Stage 4e and fail here (invalid Place).
+pub fn mirLowerFieldExprPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
+    if e.fieldOptional {
+        return mirPlace(-1)
+    }
+    if e.fieldTarget.len() == 0 {
+        return mirPlace(-1)
+    }
+    let recv = e.fieldTarget[0]
+    let base = mirLowerReceiverPlace(bs, recv)
+    if !mirLowerPlaceIsValid(base) {
+        return mirPlace(-1)
+    }
+    let structName = hirTypeNameOf(recv.typ)
+    let fieldIdx = mirLowerStructFieldIndex(bs.l, structName, e.fieldName)
+    let proj = mirFieldProj(fieldIdx, e.fieldName, hirTypeString(e.typ))
+    mirPlaceProject(base, proj)
+}
+
+/// mirLowerTupleAccessPlace lowers `t.0` / `t.N` into a MirPlace with
+/// a TupleProj.
+pub fn mirLowerTupleAccessPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
+    if e.tupleAccessTarget.len() == 0 {
+        return mirPlace(-1)
+    }
+    let recv = e.tupleAccessTarget[0]
+    let base = mirLowerReceiverPlace(bs, recv)
+    if !mirLowerPlaceIsValid(base) {
+        return mirPlace(-1)
+    }
+    let proj = mirTupleProj(e.tupleAccessIndex, hirTypeString(e.typ))
+    mirPlaceProject(base, proj)
+}
+
+/// mirLowerIndexExprPlace lowers `x[i]` into a MirPlace with an
+/// IndexProj. The index operand is lowered into the current block;
+/// when the receiver isn't a bare place we spill it into a fresh
+/// temp and project from there.
+pub fn mirLowerIndexExprPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
+    if e.indexTarget.len() == 0 || e.indexIndex.len() == 0 {
+        return mirPlace(-1)
+    }
+    let recv = e.indexTarget[0]
+    let base = mirLowerReceiverPlace(bs, recv)
+    if !mirLowerPlaceIsValid(base) {
+        return mirPlace(-1)
+    }
+    let idxExpr = e.indexIndex[0]
+    let idxOp = mirLowerExprAsOperand(bs, idxExpr)
+    // The index projection on MirPlace takes a local id when available,
+    // otherwise a constant index. We spill the operand into a temp so
+    // the MIR builder has a local id to carry on the projection.
+    let elemTypeText = hirTypeString(e.typ)
+    let proj = mirLowerMakeIndexProj(bs, idxOp, idxExpr.typ, elemTypeText, mirSpanFromHir(e.span))
+    mirPlaceProject(base, proj)
+}
+
+/// mirLowerMakeIndexProj turns an index MirOperand into a MirProjection.
+/// Const-int operands take the fast path (IndexProjConst); any other
+/// operand shape is spilled into a fresh Int temp first, matching the
+/// MIR convention that IndexProj references a local id.
+fn mirLowerMakeIndexProj(
+    bs: MirLowerBodyState,
+    idxOp: MirOperand,
+    idxT: HirType,
+    elemTypeText: String,
+    span: MirSpan,
+) -> MirProjection {
+    match idxOp.kind {
+        MirOpConst -> {
+            match idxOp.const.kind {
+                MirConstInt -> mirIndexProjConst(idxOp.const.intValue, elemTypeText),
+                _ -> mirLowerSpillIndexOperand(bs, idxOp, idxT, elemTypeText, span),
+            }
+        },
+        _ -> mirLowerSpillIndexOperand(bs, idxOp, idxT, elemTypeText, span),
+    }
+}
+
+fn mirLowerSpillIndexOperand(
+    bs: MirLowerBodyState,
+    idxOp: MirOperand,
+    idxT: HirType,
+    elemTypeText: String,
+    span: MirSpan,
+) -> MirProjection {
+    let t = if hirTypeIsValid(idxT) {
+        idxT
+    } else {
+        hirTInt()
+    }
+    let tmp = mirLowerFreshTemp(bs, t, span)
+    let rv = mirRVUse(idxOp)
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(tmp), rv, span))
+    mirIndexProjLocal(tmp, elemTypeText)
+}
+
+/// mirLowerReceiverPlace returns a Place for a receiver expression
+/// (the `x` in `x.field` / `x[i]` / `x.0`). Non-Place expressions get
+/// spilled into a fresh temp via mirLowerExprInto.
+fn mirLowerReceiverPlace(bs: MirLowerBodyState, recv: HirExpr) -> MirPlace {
+    let direct = mirLowerExprToPlace(bs, recv)
+    if mirLowerPlaceIsValid(direct) {
+        return direct
+    }
+    let t = if hirTypeIsValid(recv.typ) {
+        recv.typ
+    } else {
+        hirTypeErr()
+    }
+    let span = mirSpanFromHir(recv.span)
+    let tmp = mirLowerFreshTemp(bs, t, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(tmp, span))
+    mirLowerExprInto(bs, recv, tmp, t)
+    mirPlace(tmp)
+}
+
 /// mirLowerPlaceIsValid reports whether the place refers to a real
 /// local (i.e. `mirLowerExprToPlace` succeeded).
 pub fn mirLowerPlaceIsValid(p: MirPlace) -> Bool {
     p.local >= 0
+}
+
+// ---- Struct field index lookup -------------------------------------
+
+/// mirLowerStructFieldIndex looks up a field's positional index on a
+/// struct layout by name. Returns -1 when the struct isn't in the
+/// layout table or the field isn't present. Built from the layouts
+/// seeded during `mirLowerBuildLayouts` (pass 1b) so the Stage 4d
+/// lowering path doesn't need to re-walk the HIR.
+pub fn mirLowerStructFieldIndex(l: MirLowerer, structName: String, fieldName: String) -> Int {
+    if structName == "" {
+        return -1
+    }
+    for sl in l.out.layouts.structs {
+        if sl.name == structName {
+            let mut i = 0
+            for f in sl.fields {
+                if f.name == fieldName {
+                    return i
+                }
+                i = i + 1
+            }
+            return -1
+        }
+    }
+    -1
 }
 
 // ---- If ------------------------------------------------------------
@@ -2054,33 +2397,282 @@ fn mirLowerMultiAssign(bs: MirLowerBodyState, s: HirStmt) {
     }
 }
 
-/// mirLowerExprIntoPlace lowers an HIR expression into an arbitrary
-/// MirPlace (not just a bare local). Stage 4c wraps the local-only
-/// mirLowerExprInto: if the place is projection-free we can re-use
-/// the existing helper, otherwise we fall back to a scratch local +
-/// Assign from the scratch. The expression lowering itself is still
-/// the Stage 4b stub.
+/// mirLowerExprIntoPlace is the public expression-to-dest dispatcher.
+/// Matches Go's `lowerExprIntoPlace`: control-flow / call / aggregate
+/// kinds get their own handler; everything else routes through
+/// `mirLowerExprToRValue` and emits a straight Assign into the dest
+/// Place (projection-free or projected — the MIR builder accepts
+/// both).
+///
+/// Stage 4d-1 implements the RValue path. Stage 4e fills in the
+/// control-flow / call kinds that this file currently routes to
+/// `mirLowerExprIntoPlaceStub`.
 pub fn mirLowerExprIntoPlace(
     bs: MirLowerBodyState,
     e: HirExpr,
     dest: MirPlace,
     destT: HirType,
 ) {
-    if !mirPlaceHasProjections(dest) {
-        mirLowerExprInto(bs, e, dest.local, destT)
+    mirLowerExprIntoPlaceImpl(bs, e, dest, destT)
+}
+
+fn mirLowerExprIntoPlaceImpl(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    if !hirExprIsValid(e) {
         return
     }
-    // Materialise into a scratch local first, then Assign from scratch
-    // into the projected destination. This mirrors Go's
-    // `lowerExprIntoPlace` fallback path.
-    let span = mirSpanFromHir(e.span)
-    let scratch = mirLowerFreshTemp(bs, destT, span)
-    mirLowerEmitInstr(bs, mirStorageLiveInstr(scratch, span))
-    mirLowerExprInto(bs, e, scratch, destT)
-    let destTypeText = hirTypeString(destT)
-    let srcOp = mirOperandCopy(mirPlace(scratch), destTypeText)
-    let rv = mirRVUse(srcOp)
-    mirLowerEmitInstr(bs, mirAssignInstr(dest, rv, span))
+    match e.kind {
+        HirExprIf -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "IfExpr"),
+        HirExprIfLet -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "IfLetExpr"),
+        HirExprBlock -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "BlockExpr"),
+        HirExprMatch -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "MatchExpr"),
+        HirExprCoalesce -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "CoalesceExpr"),
+        HirExprQuestion -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "QuestionExpr"),
+        HirExprCall -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "CallExpr"),
+        HirExprMethod -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "MethodCall"),
+        HirExprIntrinsic -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "IntrinsicCall"),
+        HirExprMapLit -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "MapLit"),
+        HirExprClosure -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "Closure"),
+        HirExprStructLit -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "StructLit"),
+        HirExprVariantLit -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "VariantLit"),
+        HirExprRange -> mirLowerExprIntoPlaceStub(bs, e, dest, destT, "RangeLit"),
+        _ -> mirLowerExprIntoPlaceRValue(bs, e, dest, destT),
+    }
+}
+
+/// mirLowerExprIntoPlaceRValue is the default path: lower `e` to an
+/// RValue, Assign into `dest`. Covers all scalar-producing shapes
+/// (literals, ident reads, Unary / Binary, Field / Index /
+/// TupleAccess reads, TupleLit, ListLit, ErrorExpr).
+fn mirLowerExprIntoPlaceRValue(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    let rv = mirLowerExprToRValue(bs, e, destT)
+    mirLowerEmitInstr(bs, mirAssignInstr(dest, rv, mirSpanFromHir(e.span)))
+}
+
+/// mirLowerExprIntoPlaceStub records a Stage 4e TODO issue and emits
+/// a unit-const Assign into `dest` so downstream consumers still see
+/// a well-formed Assign instruction (just with placeholder content).
+fn mirLowerExprIntoPlaceStub(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+    kindLabel: String,
+) {
+    mirLowerNoteIssue(
+        bs.l,
+        "mir_lower Stage 4e TODO: " + kindLabel + " into place — unit-const placeholder",
+    )
+    let rv = mirRVUse(mirOperandConst(mirConstUnit()))
+    mirLowerEmitInstr(bs, mirAssignInstr(dest, rv, mirSpanFromHir(e.span)))
+    let _ = destT
+}
+
+// ====================================================================
+// Expression → RValue dispatcher (Stage 4d)
+// ====================================================================
+
+/// mirLowerExprToRValue lowers a non-control-flow expression into an
+/// RValue suitable for the RHS of an Assign. Mirrors Go's
+/// `lowerExprToRValue`.
+pub fn mirLowerExprToRValue(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    hint: HirType,
+) -> MirRValue {
+    if !hirExprIsValid(e) {
+        return mirRVUse(mirOperandConst(mirConstUnit()))
+    }
+    match e.kind {
+        HirExprUnary -> mirLowerUnaryRValue(bs, e),
+        HirExprBinary -> mirLowerBinaryRValue(bs, e),
+        HirExprField -> mirLowerFieldRValue(bs, e),
+        HirExprTupleAccess -> mirLowerTupleAccessRValue(bs, e),
+        HirExprIndex -> mirLowerIndexRValue(bs, e),
+        HirExprTupleLit -> mirLowerTupleLitRValue(bs, e),
+        HirExprList -> mirLowerListLitRValue(bs, e, hint),
+        HirExprError -> mirLowerErrorExprRValue(bs, e),
+        _ -> mirRVUse(mirLowerExprAsOperand(bs, e)),
+    }
+}
+
+fn mirLowerUnaryRValue(bs: MirLowerBodyState, e: HirExpr) -> MirRValue {
+    let op = hirUnOpToMir(e.unaryOp)
+    let child = if e.unaryChild.len() > 0 {
+        mirLowerExprAsOperand(bs, e.unaryChild[0])
+    } else {
+        mirOperandConst(mirConstUnit())
+    }
+    mirRVUnary(op, child, hirTypeString(e.typ))
+}
+
+fn mirLowerBinaryRValue(bs: MirLowerBodyState, e: HirExpr) -> MirRValue {
+    let op = hirBinOpToMir(e.binaryOp)
+    let left = if e.binaryLeft.len() > 0 {
+        mirLowerExprAsOperand(bs, e.binaryLeft[0])
+    } else {
+        mirOperandConst(mirConstUnit())
+    }
+    let right = if e.binaryRight.len() > 0 {
+        mirLowerExprAsOperand(bs, e.binaryRight[0])
+    } else {
+        mirOperandConst(mirConstUnit())
+    }
+    mirRVBinary(op, left, right, hirTypeString(e.typ))
+}
+
+fn mirLowerFieldRValue(bs: MirLowerBodyState, e: HirExpr) -> MirRValue {
+    if e.fieldOptional {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower Stage 4e TODO: optional FieldExpr in rvalue position",
+        )
+        return mirRVUse(mirOperandConst(mirConstUnit()))
+    }
+    mirRVUse(mirLowerFieldExprOperand(bs, e))
+}
+
+fn mirLowerTupleAccessRValue(bs: MirLowerBodyState, e: HirExpr) -> MirRValue {
+    mirRVUse(mirLowerTupleAccessOperand(bs, e))
+}
+
+fn mirLowerIndexRValue(bs: MirLowerBodyState, e: HirExpr) -> MirRValue {
+    mirRVUse(mirLowerIndexExprOperand(bs, e))
+}
+
+fn mirLowerTupleLitRValue(bs: MirLowerBodyState, e: HirExpr) -> MirRValue {
+    let mut fields: List<MirOperand> = []
+    for elem in e.tupleElems {
+        fields.push(mirLowerExprAsOperand(bs, elem))
+    }
+    mirRVAggregate(MirAggTuple, fields, hirTypeString(e.typ))
+}
+
+fn mirLowerListLitRValue(bs: MirLowerBodyState, e: HirExpr, hint: HirType) -> MirRValue {
+    let mut fields: List<MirOperand> = []
+    for elem in e.listElems {
+        fields.push(mirLowerExprAsOperand(bs, elem))
+    }
+    let lt = if hirTypeIsValid(hint) {
+        hint
+    } else if hirTypeIsValid(e.typ) {
+        e.typ
+    } else {
+        let mut args: List<HirType> = []
+        args.push(e.listElem)
+        hirTypeBuiltin("List", args)
+    }
+    mirRVAggregate(MirAggList, fields, hirTypeString(lt))
+}
+
+fn mirLowerErrorExprRValue(bs: MirLowerBodyState, e: HirExpr) -> MirRValue {
+    mirLowerNoteIssue(
+        bs.l,
+        "mir_lower: error expression reached MIR: " + e.errorNote,
+    )
+    mirRVUse(mirOperandConst(mirConstUnit()))
+}
+
+// ====================================================================
+// Literal parsing helpers (Stage 4d)
+// ====================================================================
+
+/// mirLowerParseIntLit parses an Osty integer literal text into an
+/// Int. Handles decimal + hex (0x) + binary (0b) + octal (0o) forms
+/// and strips underscores. Unrecognised prefixes fall back to 0 with
+/// no diagnostic (the checker already vetted the source text).
+pub fn mirLowerParseIntLit(text: String) -> Int {
+    let stripped = mirLowerStripUnderscores(text)
+    let trimmed = mirLowerStripSign(stripped)
+    let negative = stripped.len() > 0 && stripped.startsWith("-")
+    let value = mirLowerParseIntDigits(trimmed)
+    if negative {
+        0 - value
+    } else {
+        value
+    }
+}
+
+fn mirLowerStripUnderscores(text: String) -> String {
+    let mut buf: List<String> = []
+    let chars = text.chars()
+    for ch in chars {
+        if ch != "_" {
+            buf.push(ch)
+        }
+    }
+    strings.join(buf, "")
+}
+
+fn mirLowerStripSign(text: String) -> String {
+    if text.startsWith("+") || text.startsWith("-") {
+        text.substring(1, text.len())
+    } else {
+        text
+    }
+}
+
+fn mirLowerParseIntDigits(text: String) -> Int {
+    if text.len() == 0 {
+        return 0
+    }
+    if text.startsWith("0x") || text.startsWith("0X") {
+        return mirLowerParseRadix(text.substring(2, text.len()), 16)
+    }
+    if text.startsWith("0b") || text.startsWith("0B") {
+        return mirLowerParseRadix(text.substring(2, text.len()), 2)
+    }
+    if text.startsWith("0o") || text.startsWith("0O") {
+        return mirLowerParseRadix(text.substring(2, text.len()), 8)
+    }
+    mirLowerParseRadix(text, 10)
+}
+
+fn mirLowerParseRadix(text: String, radix: Int) -> Int {
+    let mut acc = 0
+    let chars = text.chars()
+    for ch in chars {
+        let d = mirLowerCharToDigit(ch)
+        if d < 0 || d >= radix {
+            // Malformed past this point; return what we have. The
+            // checker already rejects bad literals so this is
+            // defensive only.
+            return acc
+        }
+        acc = acc * radix + d
+    }
+    acc
+}
+
+fn mirLowerCharToDigit(ch: String) -> Int {
+    match ch {
+        "0" -> 0,
+        "1" -> 1,
+        "2" -> 2,
+        "3" -> 3,
+        "4" -> 4,
+        "5" -> 5,
+        "6" -> 6,
+        "7" -> 7,
+        "8" -> 8,
+        "9" -> 9,
+        "a" -> 10, "A" -> 10,
+        "b" -> 11, "B" -> 11,
+        "c" -> 12, "C" -> 12,
+        "d" -> 13, "D" -> 13,
+        "e" -> 14, "E" -> 14,
+        "f" -> 15, "F" -> 15,
+        _ -> -1,
+    }
 }
 
 // ---- Match ---------------------------------------------------------
