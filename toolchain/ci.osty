@@ -219,15 +219,16 @@ pub struct Runner {
             rep.Checks.push(skipped(CheckSemver))
         }
 
-        let mut i = 0
-        for c in rep.Checks {
-            if c.Skipped {
-                let _ = c
-            } else {
-                rep.Checks[i] = Check { ..c, Passed: ciCheckHostPassed(c.Diags, self.Opts.Strict) }
-            }
-            i = i + 1
-        }
+        // Index-based rewrite (`rep.Checks[i] = Check { ..c, ... }`)
+        // walls the LLVM native-owned path with a spurious LLVM011
+        // "struct Runner field rep type error" ghost-field
+        // diagnostic — method-local struct literals written back into
+        // a field of a `mut rep` local get mis-resolved as a
+        // hypothetical field of the enclosing `Runner` struct.
+        // Delegating the rebuild to a top-level helper bypasses that
+        // scope confusion and keeps the merged native-toolchain MIR
+        // pipeline gate CLEAN.
+        rep.Checks = ciFinalizeChecks(rep.Checks, self.Opts.Strict)
         rep.FinishedAt = host.NowUTC()
         rep
     }
@@ -709,6 +710,39 @@ fn skipped(name: CheckName) -> Check {
         Note: ciSkippedNote(),
         Diags: host.EmptyDiagnostics(),
     }
+}
+
+// ciFinalizeChecks rebuilds a Check list with the Passed flag
+// resolved per non-Skipped element. Lives at top level (not as a
+// Runner method) because the in-method rebuild shape — e.g.
+// `rep.Checks[i] = Check { ..c, Passed: ... }` — triggers a
+// spurious LLVM011 "struct Runner field rep type error" ghost-field
+// diagnostic on the native-owned LLVM path. Keeping the helper
+// outside Runner's scope sidesteps that resolver/checker confusion
+// so the merged native-toolchain MIR pipeline gate stays CLEAN.
+//
+// Uses explicit per-field copies (no `..c` spread) because the
+// multi-line struct-spread form still trips an E0204 parser state
+// in the current toolchain; the spec allows it but the parser path
+// exercised by the merged probe does not handle the newline-split
+// shape yet.
+fn ciFinalizeChecks(checks: List<Check>, strict: Bool) -> List<Check> {
+    let mut out: List<Check> = []
+    for c in checks {
+        if c.Skipped {
+            out.push(c)
+        } else {
+            let finalized = Check {
+                Name: c.Name,
+                Passed: ciCheckHostPassed(c.Diags, strict),
+                Skipped: c.Skipped,
+                Note: c.Note,
+                Diags: c.Diags,
+            }
+            out.push(finalized)
+        }
+    }
+    return out
 }
 
 fn checkFromHostResult(name: CheckName, result: CheckResult) -> Check {
