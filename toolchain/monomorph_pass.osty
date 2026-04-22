@@ -367,3 +367,729 @@ fn hirTypeListEqual(a: List<HirType>, b: List<HirType>) -> Bool {
     }
     true
 }
+
+// ====================================================================
+// Stage B — worklist engine (MonoState + 3-queue drainer)
+// ====================================================================
+//
+// Port mapping:
+//
+//   internal/ir/monomorph.go:167 (monoState)        -> MonoState
+//   internal/ir/monomorph.go:243 (monoInstance)     -> MonoInstance
+//   internal/ir/monomorph.go:256 (monoTypeInstance) -> MonoTypeInstance
+//   internal/ir/monomorph.go:235 (monoMethodInstance) -> MonoMethodInstance
+//   internal/ir/monomorph.go:274 (request)          -> monoRequestFn
+//   internal/ir/monomorph.go:330 (requestStructType) -> monoRequestStructType
+//   internal/ir/monomorph.go:375 (requestEnumType)  -> monoRequestEnumType
+//   internal/ir/monomorph.go:427 (requestInterfaceType) -> monoRequestInterfaceType
+//   internal/ir/monomorph.go:119 (drain loop)       -> monoDrain
+//   internal/ir/monomorph.go:1965 (typeCodeOf)      -> hirTypeCodeOf
+//
+// Stage B contains request routing + the worklist drain loop but not
+// the emitter bodies: `monoEmitSpecialization` / `monoEmitTypeSpecialization`
+// / `monoEmitMethodSpecialization` are empty stubs that simply consume
+// the queued entry. Stage D fills them in. Until then the drain still
+// terminates (every pass at least pops one entry from every non-empty
+// queue and appends nothing) so tests can exercise dedupe + mangling
+// end-to-end.
+
+// --------------------------------------------------------------------
+// Worklist instance records
+// --------------------------------------------------------------------
+
+/// MonoInstance is one pending free-fn specialization. `fn` is the
+/// original generic declaration (the emitter clones it at emit time,
+/// not enqueue time); `typeArgs` are the concrete types matching the
+/// declaration's generics; `mangled` is the final `_Z…` symbol the
+/// request path has already assigned and recorded in seen.
+pub struct MonoInstance {
+    pub fnDecl: HirFnDecl,
+    pub typeArgs: List<HirType>,
+    pub mangled: String,
+}
+
+/// MonoTypeInstance is one pending nominal-type specialization. The
+/// three declaration slots are mutually exclusive; `ownerKind` picks
+/// the live one (0=struct, 1=enum, 2=interface) so callers do not
+/// have to poke at all three zero-defaults. Both the decl and
+/// typeArgs are captured so the emitter can materialize the clone
+/// when it dequeues.
+pub struct MonoTypeInstance {
+    pub ownerKind: Int,
+    pub structDecl: HirStructDecl,
+    pub enumDecl: HirEnumDecl,
+    pub interfaceDecl: HirInterfaceDecl,
+    pub typeArgs: List<HirType>,
+    pub mangled: String,
+}
+
+/// MonoMethodInstance is one pending method specialization.
+/// `ownerKind` again chooses the bucket used at emit time to look the
+/// final owner clone up in structsByMangled / enumsByMangled (with
+/// fallback to the non-generic tables via structsByName / enumsByName).
+/// `methodEnv` captures the method-local substitution only; the
+/// receiver-level env is retrieved from `receiverEnvOf` during emit
+/// and merged on top (mirrors Go's lazy merge, matching how Phase 4
+/// allows a method request to be queued before its owner is emitted).
+pub struct MonoMethodInstance {
+    pub ownerKind: Int,
+    pub ownerMangled: String,
+    pub origMethod: HirFnDecl,
+    pub mangledMethodName: String,
+    pub methodEnv: HirSubstEnv,
+}
+
+// --------------------------------------------------------------------
+// MonoState — shared across the whole pass
+// --------------------------------------------------------------------
+
+/// MonoState is the entire working set of the monomorphization pass.
+///
+/// All string→Struct maps use parallel `List<String>` + `List<…>`
+/// arrays rather than the Map intrinsic. The reasons carry over from
+/// Stage A's `HirSubstEnv` rationale: tiny entry counts (a non-trivial
+/// program has maybe dozens of generic specializations, not
+/// thousands), stable iteration order keeps derived artifacts
+/// deterministic, and this sidesteps backend constraints on
+/// nested-generic Maps whose value type contains another list-backed
+/// struct.
+///
+/// Field layout mirrors Go's `monoState` (monomorph.go:167) directly
+/// so the stage-by-stage port can be audited by diffing the two
+/// side by side. The Phase-4-only tables (`structsByMangled`,
+/// `originalStructOf`, `receiverEnvOf`, …) are allocated up front
+/// even though Stage B does not populate them — Stage C and later
+/// will, and making the struct shape stable across stages avoids
+/// churning every call site when those stages land.
+pub struct MonoState {
+    // Input context.
+    pub pkg: String,
+
+    // Output module being assembled.
+    pub out: HirModule,
+
+    // Accumulated non-fatal errors (formatted via interpolation).
+    pub errs: List<String>,
+
+    // Worklist queues.
+    pub queue: List<MonoInstance>,
+    pub typeQueue: List<MonoTypeInstance>,
+    pub methodQueue: List<MonoMethodInstance>,
+
+    // Free-fn specialization dedup.
+    // seenKeys[i] == MonomorphDedupeKey(fn, pkg, argCodes)
+    // seenMangled[i] == final `_Z…` symbol.
+    pub seenKeys: List<String>,
+    pub seenMangled: List<String>,
+
+    // Struct/enum/interface specialization dedup.
+    pub typeSeenKeys: List<String>,
+    pub typeSeenMangled: List<String>,
+
+    // Method specialization dedup.
+    pub methodSeenKeys: List<String>,
+    pub methodSeenMangled: List<String>,
+
+    // Generic declaration indexes — populated in Pass 1 (Stage C).
+    pub genericFnNames: List<String>,
+    pub genericFns: List<HirFnDecl>,
+    pub genericStructNames: List<String>,
+    pub genericStructs: List<HirStructDecl>,
+    pub genericEnumNames: List<String>,
+    pub genericEnums: List<HirEnumDecl>,
+    pub genericInterfaceNames: List<String>,
+    pub genericInterfaces: List<HirInterfaceDecl>,
+
+    // All (generic + non-generic) struct/enum owners by source name —
+    // populated in Pass 1/2 (Stage C). Phase 4 method routing reads
+    // these when resolving a non-generic owner from a bare source name.
+    pub structNames: List<String>,
+    pub structs: List<HirStructDecl>,
+    pub enumNames: List<String>,
+    pub enums: List<HirEnumDecl>,
+
+    // Specialization clones indexed by their mangled `_ZTS…` symbol
+    // (Stage D fills these when it emits struct/enum clones).
+    pub structsByMangledKey: List<String>,
+    pub structsByMangled: List<HirStructDecl>,
+    pub enumsByMangledKey: List<String>,
+    pub enumsByMangled: List<HirEnumDecl>,
+
+    // Mangled nominal → original generic template. Recorded eagerly
+    // in `monoRequestStructType` / `monoRequestEnumType` so that
+    // method-call rewriting that runs before the owner specialization
+    // has actually been emitted still resolves the template.
+    pub originalStructKey: List<String>,
+    pub originalStructs: List<HirStructDecl>,
+    pub originalEnumKey: List<String>,
+    pub originalEnums: List<HirEnumDecl>,
+
+    // Mangled owner → receiver-level substitution env captured at the
+    // moment the nominal specialization was emitted (Stage D) so
+    // method specialization can layer the method-local env on top.
+    pub receiverEnvKey: List<String>,
+    pub receiverEnvs: List<HirSubstEnv>,
+}
+
+/// monoNewState returns a MonoState primed for `pkg`. Every list is
+/// empty; `out.packageName` is set to `pkg` so the caller can append
+/// clones directly without another initialization step.
+pub fn monoNewState(pkg: String) -> MonoState {
+    MonoState {
+        pkg,
+        out: hirModule(pkg),
+        errs: [],
+
+        queue: [],
+        typeQueue: [],
+        methodQueue: [],
+
+        seenKeys: [],
+        seenMangled: [],
+        typeSeenKeys: [],
+        typeSeenMangled: [],
+        methodSeenKeys: [],
+        methodSeenMangled: [],
+
+        genericFnNames: [],
+        genericFns: [],
+        genericStructNames: [],
+        genericStructs: [],
+        genericEnumNames: [],
+        genericEnums: [],
+        genericInterfaceNames: [],
+        genericInterfaces: [],
+
+        structNames: [],
+        structs: [],
+        enumNames: [],
+        enums: [],
+
+        structsByMangledKey: [],
+        structsByMangled: [],
+        enumsByMangledKey: [],
+        enumsByMangled: [],
+
+        originalStructKey: [],
+        originalStructs: [],
+        originalEnumKey: [],
+        originalEnums: [],
+
+        receiverEnvKey: [],
+        receiverEnvs: [],
+    }
+}
+
+/// monoAddErr records a non-fatal issue. The caller does its own
+/// string interpolation; this wrapper just centralizes the `push`
+/// so future work (dedupe identical messages, rank by severity)
+/// has a single choke point.
+pub fn monoAddErr(state: MonoState, msg: String) {
+    state.errs.push(msg)
+}
+
+// --------------------------------------------------------------------
+// Dedup table lookups
+// --------------------------------------------------------------------
+
+/// monoSeenFnLookup returns the mangled name previously bound to
+/// `key`, or "" when the key has not been recorded. "" is reserved:
+/// successful mangling never produces an empty symbol (the shortest
+/// mangled form is `_Z4mainI` or similar) so callers can use an
+/// empty-string check as a miss signal.
+fn monoSeenFnLookup(state: MonoState, key: String) -> String {
+    let mut i = 0
+    for k in state.seenKeys {
+        if k == key {
+            return state.seenMangled[i]
+        }
+        i = i + 1
+    }
+    ""
+}
+
+fn monoSeenTypeLookup(state: MonoState, key: String) -> String {
+    let mut i = 0
+    for k in state.typeSeenKeys {
+        if k == key {
+            return state.typeSeenMangled[i]
+        }
+        i = i + 1
+    }
+    ""
+}
+
+fn monoSeenMethodLookup(state: MonoState, key: String) -> String {
+    let mut i = 0
+    for k in state.methodSeenKeys {
+        if k == key {
+            return state.methodSeenMangled[i]
+        }
+        i = i + 1
+    }
+    ""
+}
+
+// --------------------------------------------------------------------
+// Type → Itanium code
+// --------------------------------------------------------------------
+
+/// hirTypeCodeOf produces an Itanium-compatible encoding string for
+/// `t` using the mangling helpers already owned by
+/// `toolchain/monomorph.osty`. Matches Go's typeCodeOf
+/// (monomorph.go:1965) case-for-case.
+///
+/// Unknown / poisoned types yield "?" so a caller-side emptiness
+/// check flags malformed inputs before a bogus symbol escapes.
+///
+/// `pkg` is the enclosing module's package name; the builtin /
+/// user-defined nested encodings need it so that a call to
+/// `id::<Point>` from package `main` and one from package `foo`
+/// produce distinct mangled symbols when their `Point` types are
+/// independently declared.
+pub fn hirTypeCodeOf(t: HirType, pkg: String) -> String {
+    match t.kind {
+        HirTypePrim -> {
+            let code = monomorphPrimCode(hirPrimKindString(t.primKind))
+            if code == "" {
+                return "?"
+            }
+            code
+        },
+        HirTypeNamed -> hirTypeCodeOfNamed(t, pkg),
+        HirTypeOptional -> {
+            let inner = if t.optionalInner.len() > 0 {
+                hirTypeCodeOf(t.optionalInner[0], pkg)
+            } else {
+                "?"
+            }
+            monomorphBuiltinTemplate("Option", inner)
+        },
+        HirTypeTuple -> {
+            let mut body = ""
+            for e in t.tupleElems {
+                body = "{body}{hirTypeCodeOf(e, pkg)}"
+            }
+            monomorphBuiltinTemplate("Tuple", body)
+        },
+        HirTypeFn -> {
+            // Itanium pointer-to-function form `PF<ret><params>E`.
+            // Rare enough in generics that we approximate; the dedup
+            // key only needs uniqueness so this is fine.
+            let ret = if t.fnReturn.len() > 0 {
+                hirTypeCodeOf(t.fnReturn[0], pkg)
+            } else {
+                "v"
+            }
+            let mut body = "PF{ret}"
+            for p in t.fnParams {
+                body = "{body}{hirTypeCodeOf(p, pkg)}"
+            }
+            "{body}E"
+        },
+        HirTypeVar -> "?",
+        HirTypeErr -> "?",
+        HirTypeInvalid -> "?",
+    }
+}
+
+/// hirTypeCodeOfNamed dispatches the HirTypeNamed branch: a bare
+/// primitive reference falls back to the primitive table (the checker
+/// occasionally lowers `Int` as a NamedType with no package / args);
+/// builtin aggregates route through monomorphBuiltin*; everything
+/// else is a user-declared nominal that uses the ` N<pkg><name>…E`
+/// nested encoding, with a `I<args>EE` template bracket when
+/// concrete type arguments are attached.
+fn hirTypeCodeOfNamed(t: HirType, pkg: String) -> String {
+    if t.namedPkg == "" && t.namedArgs.len() == 0 {
+        let code = monomorphPrimCode(t.namedName)
+        if code != "" {
+            return code
+        }
+    }
+    if t.namedBuiltin {
+        return hirBuiltinTypeCode(t, pkg)
+    }
+    let scope = if pkg == "" { "main" } else { pkg }
+    if t.namedArgs.len() > 0 {
+        let mut body = ""
+        for a in t.namedArgs {
+            body = "{body}{hirTypeCodeOf(a, pkg)}"
+        }
+        return monomorphUserTemplateNested(scope, t.namedName, body)
+    }
+    monomorphUserNested(scope, t.namedName)
+}
+
+/// hirBuiltinTypeCode encodes prelude aggregates (List, Map, Set,
+/// Option, Result, Bytes, String, …). When the type has no template
+/// args it collapses to the simple nested form.
+fn hirBuiltinTypeCode(t: HirType, pkg: String) -> String {
+    if t.namedArgs.len() == 0 {
+        return monomorphBuiltinNested(t.namedName)
+    }
+    let mut body = ""
+    for a in t.namedArgs {
+        body = "{body}{hirTypeCodeOf(a, pkg)}"
+    }
+    monomorphBuiltinTemplate(t.namedName, body)
+}
+
+/// hirTypeCodeList is a convenience wrapper that encodes each element
+/// of `ts` independently and returns the resulting list. Used by the
+/// request path to pre-compute `typeArgCodes` before building the
+/// dedup key.
+pub fn hirTypeCodeList(ts: List<HirType>, pkg: String) -> List<String> {
+    let mut out: List<String> = []
+    for t in ts {
+        out.push(hirTypeCodeOf(t, pkg))
+    }
+    out
+}
+
+// --------------------------------------------------------------------
+// Request routing
+// --------------------------------------------------------------------
+
+/// monoRequestFn enqueues `(fn, typeArgs)` for specialization and
+/// returns the mangled name the caller should use at the call site.
+/// Duplicate requests short-circuit via the seen table. Returns ""
+/// (and records an error) when the request is malformed: arity
+/// mismatch, or any concrete type arg still contains a TypeVar
+/// (upstream substitution missed a scope).
+///
+/// Caller responsibility: the returned name must be substituted back
+/// into the call expression's callee — Stage C's scanner does that.
+/// Stage B only guarantees enqueue + mangling + dedup.
+pub fn monoRequestFn(state: MonoState, fnDecl: HirFnDecl, typeArgs: List<HirType>) -> String {
+    if !monomorphShouldInstantiate(typeArgs.len(), fnDecl.generics.len()) {
+        monoAddErr(state, "monomorph: arity mismatch for {fnDecl.name}: {typeArgs.len()} type args vs {fnDecl.generics.len()} generics")
+        return ""
+    }
+    if monoCheckConcreteArgs(state, "fn", fnDecl.name, typeArgs) {
+        return ""
+    }
+    let typeArgCodes = hirTypeCodeList(typeArgs, state.pkg)
+    let key = monomorphDedupeKey(fnDecl.name, state.pkg, typeArgCodes)
+    let existing = monoSeenFnLookup(state, key)
+    if existing != "" {
+        return existing
+    }
+    // Encode param types for the symbol tail so the dedup key is
+    // disjoint from a same-generics different-params specialization
+    // (relevant when checker overloads by signature later).
+    let env = hirBuildSubstEnv(fnDecl.generics, typeArgs)
+    let mut paramCodes: List<String> = []
+    for p in fnDecl.params {
+        let substituted = hirSubstType(p.typ, env)
+        paramCodes.push(hirTypeCodeOf(substituted, state.pkg))
+    }
+    let substRet = hirSubstType(fnDecl.ret, env)
+    let returnCode = hirTypeCodeOf(substRet, state.pkg)
+    let req = MonomorphRequest {
+        pkg: state.pkg,
+        fnName: fnDecl.name,
+        typeArgCodes,
+        paramTypeCodes: paramCodes,
+        returnTypeCode: returnCode,
+    }
+    let mangled = monomorphMangleFn(req).symbol
+    state.seenKeys.push(key)
+    state.seenMangled.push(mangled)
+    state.queue.push(MonoInstance {
+        fnDecl,
+        typeArgs: hirCloneTypeList(typeArgs),
+        mangled,
+    })
+    mangled
+}
+
+/// monoRequestStructType queues a struct specialization and returns
+/// the mangled `_ZTS…` symbol. Same dedup + error-guard shape as
+/// monoRequestFn; the mangled→original mapping is recorded eagerly so
+/// Phase 4 method rewriting that runs before the struct is emitted
+/// still resolves the template.
+pub fn monoRequestStructType(state: MonoState, decl: HirStructDecl, typeArgs: List<HirType>) -> String {
+    if !monomorphShouldInstantiate(typeArgs.len(), decl.generics.len()) {
+        monoAddErr(state, "monomorph: arity mismatch for struct {decl.name}: {typeArgs.len()} type args vs {decl.generics.len()} generics")
+        return ""
+    }
+    if monoCheckConcreteArgs(state, "struct", decl.name, typeArgs) {
+        return ""
+    }
+    let typeArgCodes = hirTypeCodeList(typeArgs, state.pkg)
+    let key = monomorphTypeDedupeKey(decl.name, state.pkg, typeArgCodes)
+    let existing = monoSeenTypeLookup(state, key)
+    if existing != "" {
+        return existing
+    }
+    let req = MonomorphTypeRequest {
+        pkg: state.pkg,
+        typeName: decl.name,
+        typeArgCodes,
+    }
+    let mangled = monomorphMangleType(req).symbol
+    // Record *before* enqueueing so that a recursive field type (e.g.
+    // `struct List<T> { next: Option<List<T>>? }`) that requests the
+    // same specialization from inside the emitter hits the cache and
+    // terminates instead of looping.
+    state.typeSeenKeys.push(key)
+    state.typeSeenMangled.push(mangled)
+    state.originalStructKey.push(mangled)
+    state.originalStructs.push(decl)
+    state.typeQueue.push(MonoTypeInstance {
+        ownerKind: 0,
+        structDecl: decl,
+        enumDecl: hirEnumDecl("", hirNoSpan()),
+        interfaceDecl: hirInterfaceDecl("", hirNoSpan()),
+        typeArgs: hirCloneTypeList(typeArgs),
+        mangled,
+    })
+    mangled
+}
+
+/// monoRequestEnumType is the enum counterpart of monoRequestStructType.
+pub fn monoRequestEnumType(state: MonoState, decl: HirEnumDecl, typeArgs: List<HirType>) -> String {
+    if !monomorphShouldInstantiate(typeArgs.len(), decl.generics.len()) {
+        monoAddErr(state, "monomorph: arity mismatch for enum {decl.name}: {typeArgs.len()} type args vs {decl.generics.len()} generics")
+        return ""
+    }
+    if monoCheckConcreteArgs(state, "enum", decl.name, typeArgs) {
+        return ""
+    }
+    let typeArgCodes = hirTypeCodeList(typeArgs, state.pkg)
+    let key = monomorphTypeDedupeKey(decl.name, state.pkg, typeArgCodes)
+    let existing = monoSeenTypeLookup(state, key)
+    if existing != "" {
+        return existing
+    }
+    let req = MonomorphTypeRequest {
+        pkg: state.pkg,
+        typeName: decl.name,
+        typeArgCodes,
+    }
+    let mangled = monomorphMangleType(req).symbol
+    state.typeSeenKeys.push(key)
+    state.typeSeenMangled.push(mangled)
+    state.originalEnumKey.push(mangled)
+    state.originalEnums.push(decl)
+    state.typeQueue.push(MonoTypeInstance {
+        ownerKind: 1,
+        structDecl: hirStructDecl("", hirNoSpan()),
+        enumDecl: decl,
+        interfaceDecl: hirInterfaceDecl("", hirNoSpan()),
+        typeArgs: hirCloneTypeList(typeArgs),
+        mangled,
+    })
+    mangled
+}
+
+/// monoRequestInterfaceType queues an interface specialization. Unlike
+/// struct/enum the Phase-4 `originalXOf` mapping is not populated —
+/// interfaces have no instance-method dispatch site to route, so Phase
+/// 4 bookkeeping skips them.
+pub fn monoRequestInterfaceType(state: MonoState, decl: HirInterfaceDecl, typeArgs: List<HirType>) -> String {
+    if !monomorphShouldInstantiate(typeArgs.len(), decl.generics.len()) {
+        monoAddErr(state, "monomorph: arity mismatch for interface {decl.name}: {typeArgs.len()} type args vs {decl.generics.len()} generics")
+        return ""
+    }
+    if monoCheckConcreteArgs(state, "interface", decl.name, typeArgs) {
+        return ""
+    }
+    let typeArgCodes = hirTypeCodeList(typeArgs, state.pkg)
+    let key = monomorphTypeDedupeKey(decl.name, state.pkg, typeArgCodes)
+    let existing = monoSeenTypeLookup(state, key)
+    if existing != "" {
+        return existing
+    }
+    let req = MonomorphTypeRequest {
+        pkg: state.pkg,
+        typeName: decl.name,
+        typeArgCodes,
+    }
+    let mangled = monomorphMangleType(req).symbol
+    state.typeSeenKeys.push(key)
+    state.typeSeenMangled.push(mangled)
+    state.typeQueue.push(MonoTypeInstance {
+        ownerKind: 2,
+        structDecl: hirStructDecl("", hirNoSpan()),
+        enumDecl: hirEnumDecl("", hirNoSpan()),
+        interfaceDecl: decl,
+        typeArgs: hirCloneTypeList(typeArgs),
+        mangled,
+    })
+    mangled
+}
+
+/// monoRequestMethodSpecialization queues a Phase-4 method clone.
+/// `ownerMangled` is the already-mangled nominal symbol (either a
+/// specialization or a bare non-generic owner); `ownerKind`
+/// distinguishes the struct (0) / enum (1) bucket used at emit time.
+/// `methodEnv` captures the method-local substitution (method-local
+/// `U`, etc.); receiver-level bindings are *not* in it — they are
+/// looked up in `receiverEnvs` during emit and merged on top.
+///
+/// Returns the method-local mangled tail (appendable after
+/// `{ownerMangled}__` to get the full specialized method symbol).
+/// An empty typeArgs list yields the bare method name — callers that
+/// accidentally route a non-generic method through here stay safe.
+pub fn monoRequestMethodSpecialization(
+    state: MonoState,
+    ownerMangled: String,
+    ownerKind: Int,
+    method: HirFnDecl,
+    typeArgs: List<HirType>,
+) -> String {
+    if monoCheckConcreteArgs(state, "method", method.name, typeArgs) {
+        return ""
+    }
+    let typeArgCodes = hirTypeCodeList(typeArgs, state.pkg)
+    let key = monomorphMethodDedupeKey(ownerMangled, method.name, typeArgCodes)
+    let existing = monoSeenMethodLookup(state, key)
+    if existing != "" {
+        return existing
+    }
+    let req = MonomorphMethodRequest {
+        ownerMangled,
+        methodName: method.name,
+        typeArgCodes,
+    }
+    let mangled = monomorphMangleMethod(req).symbol
+    state.methodSeenKeys.push(key)
+    state.methodSeenMangled.push(mangled)
+    let methodEnv = hirBuildSubstEnv(method.generics, typeArgs)
+    state.methodQueue.push(MonoMethodInstance {
+        ownerKind,
+        ownerMangled,
+        origMethod: method,
+        mangledMethodName: mangled,
+        methodEnv,
+    })
+    mangled
+}
+
+/// monoCheckConcreteArgs enforces "every type arg must be fully
+/// substituted by this point". Returns true when a violation was
+/// found and recorded — the request path treats that as an abort
+/// signal. The explicit boolean return (rather than inverting to
+/// "ok") mirrors the Go side's early-return pattern so the diff
+/// between the two implementations stays readable.
+fn monoCheckConcreteArgs(state: MonoState, kind: String, name: String, typeArgs: List<HirType>) -> Bool {
+    let mut i = 0
+    for ta in typeArgs {
+        if hirContainsTypeVar(ta) {
+            monoAddErr(state, "monomorph: type arg {i} of {kind} {name} still contains a type variable ({hirTypeString(ta)})")
+            return true
+        }
+        i = i + 1
+    }
+    false
+}
+
+// --------------------------------------------------------------------
+// Worklist drain
+// --------------------------------------------------------------------
+
+/// monoDrain runs the interleaved worklist drain described in
+/// `internal/ir/monomorph.go:119`. Each iteration of the outer loop:
+///
+///   1. Pops every pending fn specialization and emits it.
+///   2. Pops every pending nominal-type specialization and emits it.
+///   3. Pops every pending method specialization and emits it.
+///
+/// Emitting a fn specialization may discover generic call sites (grows
+/// the fn queue) or generic type references (grows the type queue);
+/// emitting a type specialization may discover generic method calls
+/// (grows the method queue). The outer loop re-drains until every
+/// queue reaches its fixed point — all three are simultaneously empty.
+///
+/// Stage B's emitters are stubs: they consume one entry each without
+/// producing output, so the drain terminates immediately after the
+/// first pass (every queue goes to zero and stays there). Stage D
+/// replaces the stubs with real clone-and-substitute logic.
+pub fn monoDrain(state: MonoState) {
+    // Bound the outer loop defensively — a runaway drain (e.g. the
+    // Stage D emitter accidentally enqueuing an unbounded cascade of
+    // requests) should surface as a diagnostic rather than hang the
+    // compiler. 1024 full passes is comfortably above the largest
+    // realistic generic graph; Go has no such bound but its debug
+    // builds catch the same failure via Ctrl-C.
+    let maxPasses = 1024
+    for _pass in 0..maxPasses {
+        if state.queue.len() == 0
+            && state.typeQueue.len() == 0
+            && state.methodQueue.len() == 0 {
+            return
+        }
+        monoDrainFnQueue(state)
+        monoDrainTypeQueue(state)
+        monoDrainMethodQueue(state)
+    }
+    monoAddErr(state, "monomorph: drain exceeded {maxPasses} passes; likely an emitter is enqueuing without discharging (current queue sizes: fn={state.queue.len()}, type={state.typeQueue.len()}, method={state.methodQueue.len()})")
+}
+
+/// monoDrainFnQueue pops every currently-queued free-fn specialization
+/// and emits it. Drains exactly the entries present on entry — new
+/// entries appended by the emitter are left for the next outer-loop
+/// iteration so we do not starve the other two queues (matches Go's
+/// bounded index-loop pattern in monomorph.go:126).
+fn monoDrainFnQueue(state: MonoState) {
+    let snapshot = state.queue
+    state.queue = []
+    for rec in snapshot {
+        monoEmitSpecialization(state, rec)
+    }
+}
+
+fn monoDrainTypeQueue(state: MonoState) {
+    let snapshot = state.typeQueue
+    state.typeQueue = []
+    for rec in snapshot {
+        monoEmitTypeSpecialization(state, rec)
+    }
+}
+
+fn monoDrainMethodQueue(state: MonoState) {
+    let snapshot = state.methodQueue
+    state.methodQueue = []
+    for rec in snapshot {
+        monoEmitMethodSpecialization(state, rec)
+    }
+}
+
+// --------------------------------------------------------------------
+// Emitter stubs (Stage D fills these in)
+// --------------------------------------------------------------------
+
+/// monoEmitSpecialization materializes one free-fn specialization:
+/// clone the generic declaration, substitute its generics with the
+/// instance's concrete type args, rewrite any nested generic call
+/// sites through `monoRequestFn`, and append the clone to
+/// `state.out.fns`.
+///
+/// Stage B ships a no-op stub so the drain terminates. Stage D
+/// replaces this body — the signature stays fixed so call sites do
+/// not churn.
+pub fn monoEmitSpecialization(state: MonoState, rec: MonoInstance) {
+    let _ = state
+    let _ = rec
+}
+
+/// monoEmitTypeSpecialization dispatches one queued nominal-type
+/// instance to its variant-specific emitter (struct / enum /
+/// interface). Stage B stub; Stage D implements the clone-and-rewrite.
+pub fn monoEmitTypeSpecialization(state: MonoState, rec: MonoTypeInstance) {
+    let _ = state
+    let _ = rec
+}
+
+/// monoEmitMethodSpecialization materializes one method clone onto its
+/// already-emitted owner. `rec.ownerMangled` names the target; the
+/// receiver's substitution env is fetched from `state.receiverEnvs`
+/// and merged with `rec.methodEnv` before substituting into the
+/// method body. Stage B stub; Stage D implements.
+pub fn monoEmitMethodSpecialization(state: MonoState, rec: MonoMethodInstance) {
+    let _ = state
+    let _ = rec
+}
+
