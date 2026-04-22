@@ -1458,3 +1458,411 @@ pub fn hirLowerPromoteMatchExprToStmt(e: HirExpr) -> HirLowerStmtPromotion {
     }
     HirLowerStmtPromotion { stmt: s, promoted: true }
 }
+
+// ====================================================================
+// Expr assembly helpers (Stage 5e)
+// ====================================================================
+//
+// Token-text → operator mappers, resolver symbol → HirIdentKind
+// classifier, type-recovery fallbacks for contexts where the
+// checker didn't populate Types[e], and small shape predicates the
+// future AST walker will use when emitting HirExpr nodes.
+//
+// Token / symbol-kind inputs are passed as `String` rather than an
+// Osty-native token enum because different front-ends (parser.osty
+// vs. external tooling) may use slightly different tag conventions
+// — normalising on the canonical source-level operator text keeps
+// these helpers portable.
+
+// ---- Operator mappers -------------------------------------------
+
+/// hirLowerUnaryOpFromToken maps the source-level unary-op token
+/// text to a HirUnOp. Unknown tokens return HirUnInvalid — callers
+/// should emit an ErrorExpr with a descriptive note.
+pub fn hirLowerUnaryOpFromToken(text: String) -> HirUnOp {
+    if text == "-" { return HirUnNeg }
+    if text == "+" { return HirUnPlus }
+    if text == "!" { return HirUnNot }
+    if text == "~" { return HirUnBitNot }
+    HirUnInvalid
+}
+
+/// hirLowerBinaryOpFromToken maps the source-level binary-op token
+/// text to a HirBinOp. Covers every op Osty binary-expr tokens
+/// produce today (arithmetic / comparison / logical / bitwise /
+/// shift). The `??` coalesce op is deliberately absent — it routes
+/// through HirExprCoalesce, not HirExprBinary.
+pub fn hirLowerBinaryOpFromToken(text: String) -> HirBinOp {
+    if text == "+" { return HirBinAdd }
+    if text == "-" { return HirBinSub }
+    if text == "*" { return HirBinMul }
+    if text == "/" { return HirBinDiv }
+    if text == "%" { return HirBinMod }
+    if text == "==" { return HirBinEq }
+    if text == "!=" { return HirBinNeq }
+    if text == "<" { return HirBinLt }
+    if text == "<=" { return HirBinLeq }
+    if text == ">" { return HirBinGt }
+    if text == ">=" { return HirBinGeq }
+    if text == "&&" { return HirBinAnd }
+    if text == "||" { return HirBinOr }
+    if text == "&" { return HirBinBitAnd }
+    if text == "|" { return HirBinBitOr }
+    if text == "^" { return HirBinBitXor }
+    if text == "<<" { return HirBinShl }
+    if text == ">>" { return HirBinShr }
+    HirBinInvalid
+}
+
+/// hirLowerAssignOpFromToken maps the source-level assign-op token
+/// text to a HirAssignOp. Plain `=` is HirAssignEq; every compound
+/// form routes to its dedicated variant.
+pub fn hirLowerAssignOpFromToken(text: String) -> HirAssignOp {
+    if text == "=" { return HirAssignEq }
+    if text == "+=" { return HirAssignAdd }
+    if text == "-=" { return HirAssignSub }
+    if text == "*=" { return HirAssignMul }
+    if text == "/=" { return HirAssignDiv }
+    if text == "%=" { return HirAssignMod }
+    if text == "&=" { return HirAssignAnd }
+    if text == "|=" { return HirAssignOr }
+    if text == "^=" { return HirAssignXor }
+    if text == "<<=" { return HirAssignShl }
+    if text == ">>=" { return HirAssignShr }
+    HirAssignInvalid
+}
+
+// ---- IdentKind classifier --------------------------------------
+
+/// hirLowerIdentKindFromSymbol maps a canonical resolver symbol-kind
+/// string to a HirIdentKind. Matches Go's `identKind` for every
+/// symbol category HIR preserves.
+///
+/// Accepts the symbol-kind name directly rather than a structured
+/// Symbol value; different front-ends model symbols differently,
+/// but the kind string (e.g. "Let", "Param", "Fn") is portable.
+/// Callers classify SymLet as Global vs Local based on whether the
+/// decl is top-level — passed in via `isTopLevelLet`.
+pub fn hirLowerIdentKindFromSymbol(
+    symKind: String,
+    isTopLevelLet: Bool,
+) -> HirIdentKind {
+    if symKind == "Let" {
+        if isTopLevelLet {
+            return HirIdentGlobal
+        }
+        return HirIdentLocal
+    }
+    if symKind == "Param" { return HirIdentParam }
+    if symKind == "Fn" { return HirIdentFn }
+    if symKind == "Variant" { return HirIdentVariant }
+    if symKind == "Struct" { return HirIdentTypeName }
+    if symKind == "Enum" { return HirIdentTypeName }
+    if symKind == "Interface" { return HirIdentTypeName }
+    if symKind == "TypeAlias" { return HirIdentTypeName }
+    if symKind == "Builtin" { return HirIdentBuiltin }
+    HirIdentUnknown
+}
+
+// ---- Intrinsic + prelude-name recognisers ----------------------
+
+/// hirLowerIntrinsicFromIdent recognises bare-identifier print-family
+/// intrinsics (print / println / eprint / eprintln). Mirrors Go's
+/// `intrinsicByName`. Non-intrinsic names return
+/// HirIntrinsicInvalid.
+pub fn hirLowerIntrinsicFromIdent(name: String) -> HirIntrinsicKind {
+    if name == "print" { return HirIntrinsicPrint }
+    if name == "println" { return HirIntrinsicPrintln }
+    if name == "eprint" { return HirIntrinsicEprint }
+    if name == "eprintln" { return HirIntrinsicEprintln }
+    HirIntrinsicInvalid
+}
+
+/// hirLowerIsPreludeVariantName reports whether `name` is one of
+/// the stdlib-exposed builtin variant constructors (Some / None /
+/// Ok / Err). Used by the call-lowering path to route
+/// `Some(42)` / `Ok(x)` / `Err(e)` / `None` through variant-ctor
+/// lowering rather than plain fn calls.
+pub fn hirLowerIsPreludeVariantName(name: String) -> Bool {
+    if name == "Some" { return true }
+    if name == "None" { return true }
+    if name == "Ok" { return true }
+    if name == "Err" { return true }
+    false
+}
+
+// ---- Primitive predicates --------------------------------------
+
+/// hirLowerIsPrim reports whether `t` is a primitive HirType with
+/// the given PrimKind. Mirrors Go's `isPrim`.
+pub fn hirLowerIsPrim(t: HirType, pk: HirPrimKind) -> Bool {
+    match t.kind {
+        HirTypePrim -> {
+            match t.primKind {
+                pkMatched -> hirLowerPrimKindEq(pkMatched, pk),
+            }
+        },
+        _ -> false,
+    }
+}
+
+fn hirLowerPrimKindEq(a: HirPrimKind, b: HirPrimKind) -> Bool {
+    match a {
+        HirPrimInvalid -> match b { HirPrimInvalid -> true, _ -> false },
+        HirPrimInt -> match b { HirPrimInt -> true, _ -> false },
+        HirPrimInt8 -> match b { HirPrimInt8 -> true, _ -> false },
+        HirPrimInt16 -> match b { HirPrimInt16 -> true, _ -> false },
+        HirPrimInt32 -> match b { HirPrimInt32 -> true, _ -> false },
+        HirPrimInt64 -> match b { HirPrimInt64 -> true, _ -> false },
+        HirPrimUInt8 -> match b { HirPrimUInt8 -> true, _ -> false },
+        HirPrimUInt16 -> match b { HirPrimUInt16 -> true, _ -> false },
+        HirPrimUInt32 -> match b { HirPrimUInt32 -> true, _ -> false },
+        HirPrimUInt64 -> match b { HirPrimUInt64 -> true, _ -> false },
+        HirPrimByte -> match b { HirPrimByte -> true, _ -> false },
+        HirPrimFloat -> match b { HirPrimFloat -> true, _ -> false },
+        HirPrimFloat32 -> match b { HirPrimFloat32 -> true, _ -> false },
+        HirPrimFloat64 -> match b { HirPrimFloat64 -> true, _ -> false },
+        HirPrimBool -> match b { HirPrimBool -> true, _ -> false },
+        HirPrimChar -> match b { HirPrimChar -> true, _ -> false },
+        HirPrimString -> match b { HirPrimString -> true, _ -> false },
+        HirPrimBytes -> match b { HirPrimBytes -> true, _ -> false },
+        HirPrimRawPtr -> match b { HirPrimRawPtr -> true, _ -> false },
+        HirPrimUnit -> match b { HirPrimUnit -> true, _ -> false },
+        HirPrimNever -> match b { HirPrimNever -> true, _ -> false },
+    }
+}
+
+/// hirLowerIsIntegralType reports whether `t` is an integer
+/// primitive. Used by bitwise-op type recovery.
+pub fn hirLowerIsIntegralType(t: HirType) -> Bool {
+    match t.kind {
+        HirTypePrim -> {
+            match t.primKind {
+                HirPrimInt -> true,
+                HirPrimInt8 -> true,
+                HirPrimInt16 -> true,
+                HirPrimInt32 -> true,
+                HirPrimInt64 -> true,
+                HirPrimUInt8 -> true,
+                HirPrimUInt16 -> true,
+                HirPrimUInt32 -> true,
+                HirPrimUInt64 -> true,
+                HirPrimByte -> true,
+                _ -> false,
+            }
+        },
+        _ -> false,
+    }
+}
+
+/// hirLowerIsFloatType reports whether `t` is a floating-point
+/// primitive. Symmetric with hirLowerIsIntegralType.
+pub fn hirLowerIsFloatType(t: HirType) -> Bool {
+    match t.kind {
+        HirTypePrim -> {
+            match t.primKind {
+                HirPrimFloat -> true,
+                HirPrimFloat32 -> true,
+                HirPrimFloat64 -> true,
+                _ -> false,
+            }
+        },
+        _ -> false,
+    }
+}
+
+/// hirLowerIsNumericType reports whether `t` is integer or float.
+pub fn hirLowerIsNumericType(t: HirType) -> Bool {
+    hirLowerIsIntegralType(t) || hirLowerIsFloatType(t)
+}
+
+// ---- Type recovery ---------------------------------------------
+
+/// hirLowerNumericResult picks the result type for a numeric binary
+/// op given its operand types. Follows Go's `numericResult`: if
+/// either operand is a float, the result is that float type; else
+/// prefer the non-invalid operand; else `Int` as a safe default.
+pub fn hirLowerNumericResult(lt: HirType, rt: HirType) -> HirType {
+    if hirLowerIsFloatType(lt) { return lt }
+    if hirLowerIsFloatType(rt) { return rt }
+    if hirTypeIsValid(lt) && !hirTypeIsErr(lt) { return lt }
+    if hirTypeIsValid(rt) && !hirTypeIsErr(rt) { return rt }
+    hirTInt()
+}
+
+/// hirLowerRecoverBinaryType derives a binary-expression result
+/// type from its operand types. Called when the checker didn't
+/// populate `Types[e]` — without it, one missing type node
+/// cascades an ErrType through every enclosing arithmetic /
+/// comparison expression. Mirrors Go's `recoverBinaryType`.
+pub fn hirLowerRecoverBinaryType(op: HirBinOp, lt: HirType, rt: HirType) -> HirType {
+    if hirTypeIsErr(lt) || hirTypeIsErr(rt) { return hirTypeErr() }
+    if !hirTypeIsValid(lt) || !hirTypeIsValid(rt) { return hirTypeErr() }
+    match op {
+        HirBinEq -> hirTBool(),
+        HirBinNeq -> hirTBool(),
+        HirBinLt -> hirTBool(),
+        HirBinLeq -> hirTBool(),
+        HirBinGt -> hirTBool(),
+        HirBinGeq -> hirTBool(),
+        HirBinAnd -> hirTBool(),
+        HirBinOr -> hirTBool(),
+        HirBinAdd -> {
+            // String + String → String; else numeric.
+            if hirLowerIsPrim(lt, HirPrimString) && hirLowerIsPrim(rt, HirPrimString) {
+                return hirTString()
+            }
+            hirLowerNumericResult(lt, rt)
+        },
+        HirBinSub -> hirLowerNumericResult(lt, rt),
+        HirBinMul -> hirLowerNumericResult(lt, rt),
+        HirBinDiv -> hirLowerNumericResult(lt, rt),
+        HirBinMod -> hirLowerNumericResult(lt, rt),
+        HirBinBitAnd -> hirLowerBitwiseResult(lt, rt),
+        HirBinBitOr -> hirLowerBitwiseResult(lt, rt),
+        HirBinBitXor -> hirLowerBitwiseResult(lt, rt),
+        HirBinShl -> hirLowerBitwiseResult(lt, rt),
+        HirBinShr -> hirLowerBitwiseResult(lt, rt),
+        _ -> hirTypeErr(),
+    }
+}
+
+fn hirLowerBitwiseResult(lt: HirType, rt: HirType) -> HirType {
+    if hirLowerIsIntegralType(lt) { return lt }
+    if hirLowerIsIntegralType(rt) { return rt }
+    hirTypeErr()
+}
+
+/// hirLowerRecoverIndexType derives an indexing expression's
+/// element type from the receiver's type when the checker left the
+/// index node unknown. Covers:
+///
+///   - List<T>  → T
+///   - Map<K,V> → V
+///   - Bytes    → Byte
+///   - String   → Char
+///
+/// Mirrors Go's `recoverIndexType`. Returns ErrType for all other
+/// shapes so downstream consumers fall through to the previous
+/// cascade behaviour.
+pub fn hirLowerRecoverIndexType(baseT: HirType) -> HirType {
+    if !hirTypeIsValid(baseT) {
+        return hirTypeErr()
+    }
+    match baseT.kind {
+        HirTypePrim -> {
+            match baseT.primKind {
+                HirPrimBytes -> hirTByte(),
+                HirPrimString -> hirTChar(),
+                _ -> hirTypeErr(),
+            }
+        },
+        HirTypeNamed -> {
+            if baseT.namedName == "List" && baseT.namedArgs.len() >= 1 {
+                return baseT.namedArgs[0]
+            }
+            if baseT.namedName == "Map" && baseT.namedArgs.len() >= 2 {
+                return baseT.namedArgs[1]
+            }
+            hirTypeErr()
+        },
+        _ -> hirTypeErr(),
+    }
+}
+
+// ---- Place-expression detection --------------------------------
+
+/// hirLowerCanLowerAsPlace reports whether `e` is a syntactic
+/// "place" — something that can appear on the LHS of an assign
+/// without materialising through a temporary. HIR place shapes:
+/// Ident (resolves to a local / param / global), FieldExpr (non-
+/// optional), TupleAccess, IndexExpr. Nested place chains are
+/// transitive: `x.y.z[i]` is a place iff `x` is.
+///
+/// Optional-field chains (`x?.y`) are NOT places — they can return
+/// None and therefore need to materialise.
+pub fn hirLowerCanLowerAsPlace(e: HirExpr) -> Bool {
+    match e.kind {
+        HirExprIdent -> true,
+        HirExprField -> {
+            if e.fieldOptional {
+                return false
+            }
+            if e.fieldTarget.len() > 0 {
+                return hirLowerCanLowerAsPlace(e.fieldTarget[0])
+            }
+            false
+        },
+        HirExprTupleAccess -> {
+            if e.tupleAccessTarget.len() > 0 {
+                return hirLowerCanLowerAsPlace(e.tupleAccessTarget[0])
+            }
+            false
+        },
+        HirExprIndex -> {
+            if e.indexTarget.len() > 0 {
+                return hirLowerCanLowerAsPlace(e.indexTarget[0])
+            }
+            false
+        },
+        _ -> false,
+    }
+}
+
+// ---- Literal text normalization --------------------------------
+
+/// hirLowerNormalizeIntText strips underscore separators from an
+/// integer literal's source text. Used before handing the text to
+/// mirConstInt / hirLowerParseIntLit so those consumers see a
+/// canonical digit-only form (0x / 0b / 0o prefixes are preserved).
+///
+/// Pass-through for empty strings so callers can chain safely.
+pub fn hirLowerNormalizeIntText(text: String) -> String {
+    if text.len() == 0 {
+        return ""
+    }
+    let mut buf: List<String> = []
+    let chars = text.chars()
+    for ch in chars {
+        if ch != "_" {
+            buf.push(ch)
+        }
+    }
+    strings.join(buf, "")
+}
+
+/// hirLowerNormalizeFloatText shares the same underscore-stripping
+/// logic as hirLowerNormalizeIntText. Kept as a distinct name so
+/// call sites document intent.
+pub fn hirLowerNormalizeFloatText(text: String) -> String {
+    hirLowerNormalizeIntText(text)
+}
+
+// ---- Range classifier ------------------------------------------
+
+/// HirLowerRangeShape classifies a range literal by which bounds
+/// are present. The shape drives which `hirRangeLitBounded` /
+/// `hirRangeLitFrom` / `hirRangeLitTo` constructor the caller
+/// uses — matches Go's RangeExpr handling.
+pub enum HirLowerRangeShape {
+    HirRangeShapeEmpty,       // `..` or `..=` with no bounds — error
+    HirRangeShapeBounded,     // `a..b` / `a..=b`
+    HirRangeShapeFrom,        // `a..` — unbounded above
+    HirRangeShapeTo,          // `..b` / `..=b` — unbounded below
+}
+
+pub fn hirLowerClassifyRange(hasStart: Bool, hasEnd: Bool) -> HirLowerRangeShape {
+    if hasStart && hasEnd { return HirRangeShapeBounded }
+    if hasStart { return HirRangeShapeFrom }
+    if hasEnd { return HirRangeShapeTo }
+    HirRangeShapeEmpty
+}
+
+pub fn hirLowerRangeShapeName(s: HirLowerRangeShape) -> String {
+    match s {
+        HirRangeShapeEmpty -> "empty",
+        HirRangeShapeBounded -> "bounded",
+        HirRangeShapeFrom -> "from",
+        HirRangeShapeTo -> "to",
+    }
+}
