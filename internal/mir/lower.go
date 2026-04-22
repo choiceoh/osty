@@ -29,6 +29,7 @@ func Lower(mod *ir.Module) *Module {
 		methods:    map[string]*fnSignature{},
 		enums:      map[string]*ir.EnumDecl{},
 		structs:    map[string]*ir.StructDecl{},
+		interfaces: map[string]*ir.InterfaceDecl{},
 		globals:    map[string]*ir.LetDecl{},
 		useAliases: map[string]*ir.UseDecl{},
 	}
@@ -72,6 +73,7 @@ type lowerer struct {
 	methods    map[string]*fnSignature
 	enums      map[string]*ir.EnumDecl
 	structs    map[string]*ir.StructDecl
+	interfaces map[string]*ir.InterfaceDecl
 	globals    map[string]*ir.LetDecl
 	useAliases map[string]*ir.UseDecl // alias name → use decl
 	closureSeq int
@@ -139,6 +141,14 @@ func (l *lowerer) collectSignatures() {
 				}
 				l.methods[methodKey(x.Name, m.Name)] = sig
 			}
+		case *ir.InterfaceDecl:
+			if len(x.Generics) > 0 {
+				// Generic interface specs should have been erased /
+				// monomorphised by now; any survivors are irrelevant to
+				// the concrete code reaching the backend.
+				continue
+			}
+			l.interfaces[x.Name] = x
 		case *ir.LetDecl:
 			l.globals[x.Name] = x
 		case *ir.UseDecl:
@@ -178,6 +188,105 @@ func (l *lowerer) buildLayouts() {
 		}
 		l.out.Layouts.Enums[name] = el
 	}
+	l.buildInterfaceLayouts()
+}
+
+// buildInterfaceLayouts populates Layouts.Interfaces from every
+// collected InterfaceDecl and discovers each interface's structural
+// implementers by walking the struct/enum method sets. Source-name
+// method matching mirrors the legacy AST emitter; strict signature
+// matching arrives with the dispatch path.
+func (l *lowerer) buildInterfaceLayouts() {
+	for name, iface := range l.interfaces {
+		il := &InterfaceLayout{Name: name}
+		for i, m := range iface.Methods {
+			if m == nil || m.Name == "" {
+				continue
+			}
+			il.Methods = append(il.Methods, InterfaceMethod{Name: m.Name, Slot: i})
+		}
+		for _, sd := range l.structsOrdered() {
+			if interfaceSatisfiedByStruct(iface, sd) {
+				il.Impls = append(il.Impls, InterfaceImpl{
+					ImplName:  sd.Name,
+					VtableSym: "@osty.vtable." + sd.Name + "__" + name,
+				})
+			}
+		}
+		for _, ed := range l.enumsOrdered() {
+			if interfaceSatisfiedByEnum(iface, ed) {
+				il.Impls = append(il.Impls, InterfaceImpl{
+					ImplName:  ed.Name,
+					VtableSym: "@osty.vtable." + ed.Name + "__" + name,
+				})
+			}
+		}
+		l.out.Layouts.Interfaces[name] = il
+	}
+}
+
+// structsOrdered returns the struct decls in source order so iface-
+// impl discovery produces deterministic IR.
+func (l *lowerer) structsOrdered() []*ir.StructDecl {
+	out := make([]*ir.StructDecl, 0, len(l.structs))
+	for _, d := range l.src.Decls {
+		if sd, ok := d.(*ir.StructDecl); ok && len(sd.Generics) == 0 {
+			out = append(out, sd)
+		}
+	}
+	return out
+}
+
+// enumsOrdered mirrors structsOrdered for enum decls.
+func (l *lowerer) enumsOrdered() []*ir.EnumDecl {
+	out := make([]*ir.EnumDecl, 0, len(l.enums))
+	for _, d := range l.src.Decls {
+		if ed, ok := d.(*ir.EnumDecl); ok && len(ed.Generics) == 0 {
+			out = append(out, ed)
+		}
+	}
+	return out
+}
+
+func interfaceSatisfiedByStruct(iface *ir.InterfaceDecl, sd *ir.StructDecl) bool {
+	if iface == nil || sd == nil {
+		return false
+	}
+	methodNames := map[string]bool{}
+	for _, m := range sd.Methods {
+		if m != nil && m.Name != "" {
+			methodNames[m.Name] = true
+		}
+	}
+	return interfaceMethodsCovered(iface, methodNames)
+}
+
+func interfaceSatisfiedByEnum(iface *ir.InterfaceDecl, ed *ir.EnumDecl) bool {
+	if iface == nil || ed == nil {
+		return false
+	}
+	methodNames := map[string]bool{}
+	for _, m := range ed.Methods {
+		if m != nil && m.Name != "" {
+			methodNames[m.Name] = true
+		}
+	}
+	return interfaceMethodsCovered(iface, methodNames)
+}
+
+func interfaceMethodsCovered(iface *ir.InterfaceDecl, methods map[string]bool) bool {
+	if len(iface.Methods) == 0 {
+		return false
+	}
+	for _, m := range iface.Methods {
+		if m == nil || m.Name == "" {
+			continue
+		}
+		if !methods[m.Name] {
+			return false
+		}
+	}
+	return true
 }
 
 func (l *lowerer) emitUse(u *ir.UseDecl) {
