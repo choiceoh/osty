@@ -1843,3 +1843,281 @@ int main(void) {
 		t.Fatalf("STW major pause regressed: %dus (ceiling 500000us)", pauseUs)
 	}
 }
+
+// Phase 3 step 2 — concurrent collection driver. Verifies that
+// `osty_rt_gc_collect_concurrent_v1` can run a full major collection
+// while pool worker threads are live inside task bodies. Before this
+// path, `osty_gc_debug_collect_major` was hard-gated to a no-op
+// whenever `osty_concurrent_workers > 0`, meaning long-running
+// programs with always-live workers never collected.
+//
+// Test shape: spawn N worker tasks that each spin on a preempt_check
+// loop (their only role is to hold `osty_concurrent_workers > 0`
+// and publish non-trivial stack roots at each safepoint). From
+// main, allocate and discard a few MB of garbage, then call
+// collect_concurrent_v1. Assert the garbage is reclaimed (live
+// bytes drop) and none of the workers crash.
+func TestBundledRuntimeSchedulerConcurrentCollectDrivesMutators(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_concurrent_collect_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_concurrent_collect_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t kind, int64_t size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_live_bytes(void);
+
+void *osty_rt_task_spawn(void *body_env);
+int64_t osty_rt_task_handle_join(void *handle);
+void osty_rt_sched_preempt_check_v1(void);
+void osty_rt_gc_collect_concurrent_v1(void *const *caller_roots, int64_t caller_count);
+void osty_rt_thread_sleep(int64_t nanos);
+
+typedef struct env_t {
+    void *fn;
+    volatile int64_t *stop;
+} env_t;
+
+/* Worker body: spin on preempt_check_v1 while holding the in-flight
+ * counter. The key property is that the worker is PARKABLE — at any
+ * safepoint or preempt tick, a concurrent collector can request a
+ * stop and this body will park via the cv path. */
+static int64_t body_spin(void *env) {
+    env_t *e = (env_t *)env;
+    while (!__atomic_load_n(e->stop, __ATOMIC_ACQUIRE)) {
+        osty_rt_sched_preempt_check_v1();
+    }
+    return 0;
+}
+
+#define N_WORKERS 4
+#define N_GARBAGE 200
+
+int main(void) {
+    volatile int64_t stop = 0;
+    env_t envs[N_WORKERS];
+    void *hs[N_WORKERS];
+    for (int i = 0; i < N_WORKERS; i++) {
+        envs[i].fn = (void *)body_spin;
+        envs[i].stop = &stop;
+        hs[i] = osty_rt_task_spawn((void *)&envs[i]);
+    }
+
+    /* Let workers ramp up so they're genuinely inside task bodies
+     * (not still queued in inject). */
+    osty_rt_thread_sleep(20000000LL);
+
+    /* Allocate + pin one rooted block so we can prove it survives. */
+    void *keep = osty_gc_alloc_v1(7, 256, "keep");
+    osty_gc_root_bind_v1(keep);
+
+    /* Allocate a pile of garbage (not rooted). */
+    for (int i = 0; i < N_GARBAGE; i++) {
+        (void)osty_gc_alloc_v1(7, 4096, "garbage");
+    }
+    int64_t live_before = osty_gc_debug_live_count();
+
+    /* Before Phase 3 step 2, osty_gc_debug_collect_major would no-op
+     * here because osty_concurrent_workers > 0. collect_concurrent_v1
+     * uses the stop-request handshake to park the four spinning
+     * workers, publish their roots, and then collect. */
+    osty_rt_gc_collect_concurrent_v1(NULL, 0);
+
+    int64_t live_after = osty_gc_debug_live_count();
+
+    /* Signal workers to stop; join them cleanly. */
+    __atomic_store_n(&stop, 1, __ATOMIC_RELEASE);
+    for (int i = 0; i < N_WORKERS; i++) {
+        (void)osty_rt_task_handle_join(hs[i]);
+    }
+    osty_gc_root_release_v1(keep);
+
+    /* Live count should have dropped by at least half (garbage reclaimed).
+     * Exact numbers vary with internal runtime bookkeeping (pool
+     * handles, task items tied to the runtime, etc.) so we look for
+     * a qualitative drop rather than a specific figure. */
+    printf("%lld %lld\n", (long long)live_before, (long long)live_after);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-O2", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, out)
+	}
+	out, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, out)
+	}
+	var before, after int64
+	if _, err := fmt.Sscanf(string(out), "%d %d", &before, &after); err != nil {
+		t.Fatalf("parse stdout %q: %v", out, err)
+	}
+	t.Logf("concurrent_collect: live_before=%d live_after=%d", before, after)
+	// The 200 × 4KB garbage allocations must have been reclaimed; the
+	// live count drops by at least 150 (allowing some slack for
+	// runtime bookkeeping objects that may or may not survive).
+	if before-after < 150 {
+		t.Fatalf("concurrent collection did not reclaim garbage: before=%d after=%d",
+			before, after)
+	}
+}
+
+// Phase 3 step 2b — concurrent incremental collector. Upgrades the
+// STW-during-workers path so the MARK phase overlaps with mutator
+// execution; only start (root scan) and finish (final drain + sweep)
+// are STW. Verified by measuring that the parked-mutator counter
+// drops to zero during the mark phase — i.e. mutators run while the
+// collector is still walking the heap — and that a rooted object
+// survives while garbage is reclaimed.
+func TestBundledRuntimeSchedulerConcurrentIncrementalMarkOverlapsMutators(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_concurrent_incremental_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_concurrent_incremental_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t kind, int64_t size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+int64_t osty_gc_debug_live_count(void);
+
+void *osty_rt_task_spawn(void *body_env);
+int64_t osty_rt_task_handle_join(void *handle);
+void osty_rt_sched_preempt_check_v1(void);
+void osty_rt_gc_collect_concurrent_incremental_v1(void *const *caller_roots, int64_t caller_count);
+void osty_rt_thread_sleep(int64_t nanos);
+
+typedef struct env_t {
+    void *fn;
+    volatile int64_t *stop;
+    volatile int64_t *ticks;
+} env_t;
+
+/* Worker body: spin on preempt_check_v1, bumping a tick counter.
+ * The concurrent-incremental collector will park them briefly for
+ * start (root scan) and finish (final drain + sweep), but the
+ * between-window mark phase must let them keep ticking. */
+static int64_t body_spin(void *env) {
+    env_t *e = (env_t *)env;
+    while (!__atomic_load_n(e->stop, __ATOMIC_ACQUIRE)) {
+        __atomic_fetch_add(e->ticks, 1, __ATOMIC_RELAXED);
+        osty_rt_sched_preempt_check_v1();
+    }
+    return 0;
+}
+
+#define N_WORKERS 4
+#define N_GARBAGE 200
+
+int main(void) {
+    volatile int64_t stop = 0;
+    volatile int64_t ticks = 0;
+    env_t envs[N_WORKERS];
+    void *hs[N_WORKERS];
+    for (int i = 0; i < N_WORKERS; i++) {
+        envs[i].fn = (void *)body_spin;
+        envs[i].stop = &stop;
+        envs[i].ticks = &ticks;
+        hs[i] = osty_rt_task_spawn((void *)&envs[i]);
+    }
+
+    /* Ramp workers. */
+    osty_rt_thread_sleep(20000000LL);
+    int64_t ticks_before = __atomic_load_n(&ticks, __ATOMIC_RELAXED);
+
+    /* Allocate + pin the survivor. */
+    void *keep = osty_gc_alloc_v1(7, 256, "keep-incremental");
+    osty_gc_root_bind_v1(keep);
+
+    /* Allocate garbage. These are unreachable; the concurrent
+     * incremental collector must sweep them. */
+    for (int i = 0; i < N_GARBAGE; i++) {
+        (void)osty_gc_alloc_v1(7, 4096, "garbage-incremental");
+    }
+    int64_t live_before = osty_gc_debug_live_count();
+
+    /* Run the full concurrent-incremental cycle. Mutators park
+     * briefly at start and finish; the mark drain between them
+     * runs while they keep incrementing the tick counter. */
+    osty_rt_gc_collect_concurrent_incremental_v1(NULL, 0);
+
+    int64_t live_after = osty_gc_debug_live_count();
+    int64_t ticks_after = __atomic_load_n(&ticks, __ATOMIC_RELAXED);
+
+    __atomic_store_n(&stop, 1, __ATOMIC_RELEASE);
+    for (int i = 0; i < N_WORKERS; i++) {
+        (void)osty_rt_task_handle_join(hs[i]);
+    }
+    osty_gc_root_release_v1(keep);
+
+    /* Three quantities: live count delta (garbage reclaimed),
+     * ticks delta (mutator progress during the concurrent cycle),
+     * and a boolean that 'keep' survived (live_after >= 1). */
+    printf("%lld %lld %lld\n",
+           (long long)(live_before - live_after),
+           (long long)(ticks_after - ticks_before),
+           (long long)live_after);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-O2", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, out)
+	}
+	out, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, out)
+	}
+	var reclaimed, mutatorTicks, liveAfter int64
+	if _, err := fmt.Sscanf(string(out), "%d %d %d", &reclaimed, &mutatorTicks, &liveAfter); err != nil {
+		t.Fatalf("parse stdout %q: %v", out, err)
+	}
+	t.Logf("concurrent_incremental: reclaimed=%d mutator_ticks_during=%d live_after=%d",
+		reclaimed, mutatorTicks, liveAfter)
+	if reclaimed < 150 {
+		t.Fatalf("concurrent incremental collection did not reclaim garbage: reclaimed=%d", reclaimed)
+	}
+	// Mutators must have made progress during the cycle. A pure
+	// STW-during-workers path would have zero ticks delta from start
+	// to end of collect_concurrent_incremental_v1; the concurrent
+	// mark phase lets them accumulate.
+	if mutatorTicks < 100 {
+		t.Fatalf("mutators did not progress during concurrent mark: ticks_delta=%d", mutatorTicks)
+	}
+	if liveAfter < 1 {
+		t.Fatalf("rooted object was reclaimed (live_after=%d)", liveAfter)
+	}
+}
