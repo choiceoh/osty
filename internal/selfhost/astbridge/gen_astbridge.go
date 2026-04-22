@@ -566,19 +566,85 @@ func ReturnStmtNode(pos, end Pos, value Expr) Stmt {
 	return &ast.ReturnStmt{PosV: pos, EndV: end, Value: value}
 }
 
-func BreakStmtNode(pos, end Pos, label string, labelPos, labelEnd Pos) Stmt {
+func BreakStmtNode(pos, end Pos, rest ...any) Stmt {
+	label, labelPos, labelEnd := "", ZeroPos(), ZeroPos()
+	if len(rest) == 3 {
+		if v, ok := rest[0].(string); ok {
+			label = v
+		}
+		if v, ok := rest[1].(Pos); ok {
+			labelPos = v
+		}
+		if v, ok := rest[2].(Pos); ok {
+			labelEnd = v
+		}
+	}
 	return &ast.BreakStmt{PosV: pos, EndV: end, Label: label, LabelPos: labelPos, LabelEnd: labelEnd}
 }
 
-func BreakStmtValueNode(pos, end Pos, label string, labelPos, labelEnd Pos, value Expr) Stmt {
+func BreakStmtValueNode(pos, end Pos, rest ...any) Stmt {
+	label, labelPos, labelEnd := "", ZeroPos(), ZeroPos()
+	var value Expr
+	if len(rest) == 1 {
+		if v, ok := rest[0].(Expr); ok {
+			value = v
+		}
+	}
+	if len(rest) == 4 {
+		if v, ok := rest[0].(string); ok {
+			label = v
+		}
+		if v, ok := rest[1].(Pos); ok {
+			labelPos = v
+		}
+		if v, ok := rest[2].(Pos); ok {
+			labelEnd = v
+		}
+		if v, ok := rest[3].(Expr); ok {
+			value = v
+		}
+	}
 	return &ast.BreakStmt{PosV: pos, EndV: end, Label: label, LabelPos: labelPos, LabelEnd: labelEnd, Value: value}
 }
 
-func LoopExprNode(pos, end Pos, label string, labelPos, labelEnd Pos, body Block) Expr {
+func LoopExprNode(pos, end Pos, rest ...any) Expr {
+	label, labelPos, labelEnd := "", ZeroPos(), ZeroPos()
+	var body Block
+	if len(rest) == 1 {
+		if v, ok := rest[0].(Block); ok {
+			body = v
+		}
+	}
+	if len(rest) == 4 {
+		if v, ok := rest[0].(string); ok {
+			label = v
+		}
+		if v, ok := rest[1].(Pos); ok {
+			labelPos = v
+		}
+		if v, ok := rest[2].(Pos); ok {
+			labelEnd = v
+		}
+		if v, ok := rest[3].(Block); ok {
+			body = v
+		}
+	}
 	return &ast.LoopExpr{PosV: pos, EndV: end, Label: label, LabelPos: labelPos, LabelEnd: labelEnd, Body: body}
 }
 
-func ContinueStmtNode(pos, end Pos, label string, labelPos, labelEnd Pos) Stmt {
+func ContinueStmtNode(pos, end Pos, rest ...any) Stmt {
+	label, labelPos, labelEnd := "", ZeroPos(), ZeroPos()
+	if len(rest) == 3 {
+		if v, ok := rest[0].(string); ok {
+			label = v
+		}
+		if v, ok := rest[1].(Pos); ok {
+			labelPos = v
+		}
+		if v, ok := rest[2].(Pos); ok {
+			labelEnd = v
+		}
+	}
 	return &ast.ContinueStmt{PosV: pos, EndV: end, Label: label, LabelPos: labelPos, LabelEnd: labelEnd}
 }
 
@@ -586,7 +652,49 @@ func DeferStmtNode(pos, end Pos, x Expr) Stmt {
 	return &ast.DeferStmt{PosV: pos, EndV: end, X: x}
 }
 
-func ForStmtNode(pos, end Pos, label string, labelPos, labelEnd Pos, isForLet bool, pat Pattern, iter Expr, body Block) Stmt {
+func ForStmtNode(pos, end Pos, rest ...any) Stmt {
+	label, labelPos, labelEnd := "", ZeroPos(), ZeroPos()
+	var isForLet bool
+	var pat Pattern
+	var iter Expr
+	var body Block
+	if len(rest) == 4 {
+		if v, ok := rest[0].(bool); ok {
+			isForLet = v
+		}
+		if v, ok := rest[1].(Pattern); ok {
+			pat = v
+		}
+		if v, ok := rest[2].(Expr); ok {
+			iter = v
+		}
+		if v, ok := rest[3].(Block); ok {
+			body = v
+		}
+	}
+	if len(rest) == 7 {
+		if v, ok := rest[0].(string); ok {
+			label = v
+		}
+		if v, ok := rest[1].(Pos); ok {
+			labelPos = v
+		}
+		if v, ok := rest[2].(Pos); ok {
+			labelEnd = v
+		}
+		if v, ok := rest[3].(bool); ok {
+			isForLet = v
+		}
+		if v, ok := rest[4].(Pattern); ok {
+			pat = v
+		}
+		if v, ok := rest[5].(Expr); ok {
+			iter = v
+		}
+		if v, ok := rest[6].(Block); ok {
+			body = v
+		}
+	}
 	return &ast.ForStmt{PosV: pos, EndV: end, Label: label, LabelPos: labelPos, LabelEnd: labelEnd, IsForLet: isForLet, Pattern: pat, Iter: iter, Body: body}
 }
 
@@ -655,6 +763,10 @@ func CallExprNode(pos, end Pos, fn Expr, args []Arg) Expr {
 
 func CallExprAsQuestionNode(pos, end Pos, fn Expr, args []Arg) Expr {
 	return &ast.CallExpr{PosV: pos, EndV: end, Fn: fn, Args: compactArgs(args), IsAsQuestion: true}
+}
+
+func CallExprTrailingClosureNode(pos, end Pos, fn Expr, args []Arg) Expr {
+	return &ast.CallExpr{PosV: pos, EndV: end, Fn: fn, Args: compactArgs(args), HasTrailingClosure: true}
 }
 
 func FieldExprNode(pos, end Pos, x Expr, name string, optional bool) Expr {
