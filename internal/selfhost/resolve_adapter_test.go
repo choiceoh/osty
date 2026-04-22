@@ -3,6 +3,7 @@ package selfhost_test
 import (
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/osty/osty/internal/selfhost"
@@ -297,6 +298,239 @@ func TestResolveSourceStructuredResolvesBreakValue(t *testing.T) {
 	}
 	if ref := findResolvedRef(resolved, "value"); ref == nil {
 		t.Fatalf("missing break-value ref in %#v", resolved.Refs)
+	}
+}
+
+func TestResolveSourceStructuredWithCfgDropsNonMatchingOS(t *testing.T) {
+	src := []byte(`#[cfg(os = "linux")]
+fn linuxOnly() -> Int { 42 }
+
+#[cfg(os = "darwin")]
+fn darwinOnly() -> Int { 99 }
+
+fn unconditional() -> Int { 1 }
+`)
+	env := &selfhost.CfgEnv{OS: "linux", Arch: "amd64", Target: "linux"}
+	resolved := selfhost.ResolveSourceStructuredWithCfg(src, env)
+	if resolved.Summary.Diagnostics != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", resolved.Diagnostics)
+	}
+	if findResolvedSymbol(resolved, "linuxOnly", "fn") == nil {
+		t.Errorf("linuxOnly should survive under os=linux")
+	}
+	if findResolvedSymbol(resolved, "darwinOnly", "fn") != nil {
+		t.Errorf("darwinOnly should drop under os=linux")
+	}
+	if findResolvedSymbol(resolved, "unconditional", "fn") == nil {
+		t.Errorf("unannotated fn should always survive")
+	}
+}
+
+func TestResolveSourceStructuredWithCfgFeatureFlag(t *testing.T) {
+	src := []byte(`#[cfg(feature = "ssl")]
+fn withSsl() -> Int { 1 }
+
+#[cfg(feature = "tls")]
+fn withTls() -> Int { 2 }
+`)
+	env := &selfhost.CfgEnv{OS: "linux", Arch: "amd64", Target: "linux", Features: []string{"ssl"}}
+	resolved := selfhost.ResolveSourceStructuredWithCfg(src, env)
+	if findResolvedSymbol(resolved, "withSsl", "fn") == nil {
+		t.Errorf("withSsl should survive with feature=ssl")
+	}
+	if findResolvedSymbol(resolved, "withTls", "fn") != nil {
+		t.Errorf("withTls should drop without feature=tls")
+	}
+}
+
+func TestResolveSourceStructuredWithCfgUnknownKeyEmitsE0405(t *testing.T) {
+	src := []byte(`#[cfg(bogus = "value")]
+fn bad() -> Int { 1 }
+`)
+	env := &selfhost.CfgEnv{OS: "linux", Arch: "amd64", Target: "linux"}
+	resolved := selfhost.ResolveSourceStructuredWithCfg(src, env)
+	if got := findResolveDiagnostic(resolved, "E0405"); got == nil {
+		t.Fatalf("expected E0405 for unknown cfg key, got %#v", resolved.Diagnostics)
+	}
+	if findResolvedSymbol(resolved, "bad", "fn") != nil {
+		t.Errorf("decl with unknown cfg key should drop")
+	}
+}
+
+func TestResolveSourceStructuredPartialStructMergesMethods(t *testing.T) {
+	// Two partial declarations of the same struct — fields in one,
+	// methods in the other. R19 allows this; no duplicate diag should
+	// fire, and both methods flow through annotation validation.
+	src := []byte(`pub struct Point {
+    pub x: Int,
+    pub y: Int,
+}
+
+pub struct Point {
+    pub fn origin() -> Self {
+        Point { x: 0, y: 0 }
+    }
+}
+`)
+	resolved := selfhost.ResolveSourceStructured(src)
+	if got := findResolveDiagnostic(resolved, "E0501"); got != nil {
+		t.Fatalf("unexpected E0501 on legal partial merge: %#v", resolved.Diagnostics)
+	}
+	if resolved.Summary.Duplicates != 0 {
+		t.Errorf("duplicates = %d, want 0", resolved.Summary.Duplicates)
+	}
+	// Exactly one Point symbol (from the first partial); the second
+	// partial reuses the canonical symbol.
+	count := 0
+	for _, s := range resolved.Symbols {
+		if s.Name == "Point" && s.Kind == "type" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("Point symbol count = %d, want 1 (partial merge)", count)
+	}
+}
+
+func TestResolveSourceStructuredPartialFieldsInMultipleEmitsE0501(t *testing.T) {
+	src := []byte(`pub struct Point {
+    pub x: Int,
+}
+
+pub struct Point {
+    pub y: Int,
+}
+`)
+	resolved := selfhost.ResolveSourceStructured(src)
+	if got := findResolveDiagnostic(resolved, "E0501"); got == nil {
+		t.Fatalf("expected E0501 for fields in multiple partials, got %#v", resolved.Diagnostics)
+	}
+	// The diag message should mention fields-in-one-partial so callers
+	// can distinguish this from a plain duplicate.
+	found := false
+	for _, d := range resolved.Diagnostics {
+		if d.Code == "E0501" && strings.Contains(d.Message, "fields") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected fields-specific E0501 message, got %#v", resolved.Diagnostics)
+	}
+}
+
+func TestResolveSourceStructuredPartialPubMismatchEmitsE0501(t *testing.T) {
+	src := []byte(`pub struct Box {
+    pub value: Int,
+}
+
+struct Box {
+    fn display(self) -> Int { self.value }
+}
+`)
+	resolved := selfhost.ResolveSourceStructured(src)
+	found := false
+	for _, d := range resolved.Diagnostics {
+		if d.Code == "E0501" && strings.Contains(d.Message, "visibility") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected visibility-specific E0501, got %#v", resolved.Diagnostics)
+	}
+}
+
+func TestResolveSourceStructuredPartialGenericMismatchEmitsE0501(t *testing.T) {
+	src := []byte(`pub struct Cell<T> {
+    pub value: T,
+}
+
+pub struct Cell<U> {
+    pub fn display(self) -> U { self.value }
+}
+`)
+	resolved := selfhost.ResolveSourceStructured(src)
+	found := false
+	for _, d := range resolved.Diagnostics {
+		if d.Code == "E0501" && strings.Contains(d.Message, "type parameters") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected type-parameter-specific E0501, got %#v", resolved.Diagnostics)
+	}
+}
+
+func TestResolveSourceStructuredPartialDuplicateMethodEmitsE0501(t *testing.T) {
+	src := []byte(`pub struct Counter {
+    pub n: Int,
+
+    pub fn reset(mut self) {
+        self.n = 0
+    }
+}
+
+pub struct Counter {
+    pub fn reset(mut self) {
+        self.n = -1
+    }
+}
+`)
+	resolved := selfhost.ResolveSourceStructured(src)
+	found := false
+	for _, d := range resolved.Diagnostics {
+		if d.Code == "E0501" && strings.Contains(d.Message, "method `reset`") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected duplicate-method E0501, got %#v", resolved.Diagnostics)
+	}
+}
+
+func TestResolveSourceStructuredStructEnumKindMismatchEmitsE0501(t *testing.T) {
+	// A struct and an enum sharing a name are NOT a legal partial —
+	// it's a normal duplicate, so a plain E0501 fires and the
+	// duplicates counter bumps.
+	src := []byte(`pub struct Color {
+    pub hex: Int,
+}
+
+pub enum Color {
+    Red,
+    Green,
+}
+`)
+	resolved := selfhost.ResolveSourceStructured(src)
+	if got := findResolveDiagnostic(resolved, "E0501"); got == nil {
+		t.Fatalf("expected E0501 for struct-vs-enum kind mismatch, got %#v", resolved.Diagnostics)
+	}
+	if resolved.Summary.Duplicates == 0 {
+		t.Errorf("duplicates counter should bump on kind mismatch, got %d", resolved.Summary.Duplicates)
+	}
+}
+
+func TestResolveSourceStructuredNilCfgPassesEveryDecl(t *testing.T) {
+	// Nil env preserves the pre-port behaviour: no filtering, every
+	// cfg-annotated decl survives. The shape validator still runs.
+	src := []byte(`#[cfg(os = "darwin")]
+fn darwinOnly() -> Int { 42 }
+
+#[cfg(bogus = "value")]
+fn bad() -> Int { 1 }
+`)
+	resolved := selfhost.ResolveSourceStructuredWithCfg(src, nil)
+	if findResolvedSymbol(resolved, "darwinOnly", "fn") == nil {
+		t.Errorf("nil cfg should leave darwinOnly alive")
+	}
+	if findResolvedSymbol(resolved, "bad", "fn") == nil {
+		t.Errorf("nil cfg should leave malformed-cfg decl alive")
+	}
+	if got := findResolveDiagnostic(resolved, "E0405"); got == nil {
+		t.Errorf("E0405 should still fire under nil cfg (validation is always on)")
 	}
 }
 
