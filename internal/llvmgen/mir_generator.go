@@ -1075,7 +1075,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		return true
 	case mir.IntrinsicListPush, mir.IntrinsicListLen, mir.IntrinsicListGet,
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
-		mir.IntrinsicListPop:
+		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast:
 		return true
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapSet,
 		mir.IntrinsicMapContains, mir.IntrinsicMapLen, mir.IntrinsicMapKeys,
@@ -4213,7 +4213,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitStdIoWriteIntrinsic(i, "eprintln")
 	case mir.IntrinsicListPush, mir.IntrinsicListLen, mir.IntrinsicListGet,
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
-		mir.IntrinsicListPop:
+		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast:
 		return g.emitListIntrinsic(i)
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapSet,
 		mir.IntrinsicMapContains, mir.IntrinsicMapLen, mir.IntrinsicMapKeys,
@@ -4376,6 +4376,80 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: listReg}})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicListFirst, mir.IntrinsicListLast:
+		// `.first()` / `.last()` return `T?`. Runtime has no bespoke
+		// symbol — lower as `len == 0 ? None : Some(get(idx))` where
+		// idx is 0 for first and len-1 for last. Scalar elems use the
+		// typed get_<kind> symbol; composite elements (structs / lists
+		// / maps) aren't supported yet because the raw scalar-return
+		// contract above doesn't match their aggregate shape.
+		if !listUsesTypedRuntime(elemLLVM) {
+			return unsupported("mir-mvp", fmt.Sprintf("list_%s on composite element type %s", mirIntrinsicLabel(i.Kind), elemLLVM))
+		}
+		if i.Dest == nil {
+			return unsupported("mir-mvp", fmt.Sprintf("%s without destination", mirIntrinsicLabel(i.Kind)))
+		}
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return unsupported("mir-mvp", fmt.Sprintf("%s dest into unknown local", mirIntrinsicLabel(i.Kind)))
+		}
+		destLLVM := g.llvmType(destLoc.Type)
+		destSlot := g.localSlots[i.Dest.Local]
+		lenSym := listRuntimeLenSymbol()
+		g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr) nounwind willreturn memory(read)")
+		getSym := listRuntimeGetSymbol(elemLLVM)
+		g.declareRuntime(getSym, "declare "+elemLLVM+" @"+getSym+"(ptr, i64) nounwind willreturn memory(read)")
+		lenReg := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
+		isEmpty := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = icmp eq i64 %s, 0\n", isEmpty, lenReg)
+		someLabel := g.freshLabel("list.opt.some")
+		noneLabel := g.freshLabel("list.opt.none")
+		endLabel := g.freshLabel("list.opt.end")
+		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", isEmpty, noneLabel, someLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
+		fmt.Fprintf(&g.fnBuf, "  store %s zeroinitializer, ptr %s\n", destLLVM, destSlot)
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+		var idxRef string
+		if i.Kind == mir.IntrinsicListFirst {
+			idxRef = "0"
+		} else {
+			idxRef = g.fresh()
+			fmt.Fprintf(&g.fnBuf, "  %s = sub i64 %s, 1\n", idxRef, lenReg)
+		}
+		elemReg := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, idxRef)
+		// Option<T> slot-1 is i64-wide by layout convention (see
+		// support_snapshot.go / emitNullaryRV). For non-i64 scalars we
+		// must widen/bitcast to i64 before insertvalue.
+		payloadReg := elemReg
+		switch elemLLVM {
+		case "i64":
+			// no-op
+		case "i1", "i8", "i16", "i32":
+			widened := g.fresh()
+			fmt.Fprintf(&g.fnBuf, "  %s = zext %s %s to i64\n", widened, elemLLVM, elemReg)
+			payloadReg = widened
+		case "double":
+			cast := g.fresh()
+			fmt.Fprintf(&g.fnBuf, "  %s = bitcast double %s to i64\n", cast, elemReg)
+			payloadReg = cast
+		case "ptr":
+			cast := g.fresh()
+			fmt.Fprintf(&g.fnBuf, "  %s = ptrtoint ptr %s to i64\n", cast, elemReg)
+			payloadReg = cast
+		default:
+			return unsupported("mir-mvp", fmt.Sprintf("list_%s payload widen unsupported for %s", mirIntrinsicLabel(i.Kind), elemLLVM))
+		}
+		tagged := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 1, 0\n", tagged, destLLVM)
+		filled := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n", filled, destLLVM, tagged, payloadReg)
+		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", destLLVM, filled, destSlot)
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
+		return nil
 	case mir.IntrinsicListPop:
 		// Runtime exposes `osty_rt_list_pop_discard` — drops the last
 		// element without returning it. All toolchain uses of
