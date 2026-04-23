@@ -94,22 +94,36 @@ func TestCompoundAssignStringConcat(t *testing.T) {
 	}
 }
 
-func TestCompoundAssignIndexTargetRejected(t *testing.T) {
+func TestCompoundAssignIndexTargetIntArithmetic(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn main() {
     let mut xs = [1, 2, 3]
     xs[0] += 10
+    xs[1] -= 1
+    xs[2] *= 3
     println(xs[0])
+    println(xs[1])
+    println(xs[2])
 }
 `)
 
-	_, err := generateFromAST(file, Options{
+	ir, err := generateFromAST(file, Options{
 		PackageName: "main",
 		SourcePath:  "/tmp/compound_assign_index.osty",
 	})
-	if err == nil {
-		t.Fatalf("expected compound assignment on index target to be rejected")
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "compound assignment") {
-		t.Fatalf("expected rejection message to mention compound assignment, got: %v", err)
+
+	got := string(ir)
+	for _, want := range []string{
+		"add i64",
+		"sub i64",
+		"mul i64",
+		"osty_rt_list_get_i64",
+		"osty_rt_list_set_i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
 	}
 }

@@ -1180,32 +1180,41 @@ func (g *generator) emitBinary(e *ast.BinaryExpr) (value, error) {
 	if err != nil {
 		return value{}, err
 	}
-	if llvmIsCompareOp(e.Op.String()) {
-		isString := g.staticExprIsString(e.Left) || g.staticExprIsString(e.Right)
-		return g.emitCompare(e.Op, left, right, isString)
+	isString := g.staticExprIsString(e.Left) || g.staticExprIsString(e.Right)
+	return g.emitBinaryOpValues(e.Op, left, right, isString)
+}
+
+// emitBinaryOpValues applies a binary operator to already-evaluated operands.
+// Shared with compound-assignment paths that can't safely re-evaluate the
+// left expression (notably index targets like `xs[i] += v`, where re-reading
+// would double-evaluate `i`). `isString` mirrors the flag emitBinary passes
+// to emitCompare: true when either operand is known to be a String.
+func (g *generator) emitBinaryOpValues(opTok token.Kind, left, right value, isString bool) (value, error) {
+	if llvmIsCompareOp(opTok.String()) {
+		return g.emitCompare(opTok, left, right, isString)
 	}
-	if e.Op == token.AND || e.Op == token.OR {
-		return g.emitLogical(e.Op, left, right)
+	if opTok == token.AND || opTok == token.OR {
+		return g.emitLogical(opTok, left, right)
 	}
 	if left.typ == "double" && right.typ == "double" {
-		op := llvmFloatBinaryInstruction(e.Op.String())
+		op := llvmFloatBinaryInstruction(opTok.String())
 		if op == "" {
-			return value{}, unsupportedf("expression", "binary operator %q", e.Op)
+			return value{}, unsupportedf("expression", "binary operator %q", opTok)
 		}
 		emitter := g.toOstyEmitter()
 		out := llvmBinaryF64(emitter, op, toOstyValue(left), toOstyValue(right))
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), nil
 	}
-	if left.typ == "ptr" && right.typ == "ptr" && e.Op == token.PLUS {
+	if left.typ == "ptr" && right.typ == "ptr" && opTok == token.PLUS {
 		return g.emitRuntimeStringConcat(left, right)
 	}
 	if left.typ != "i64" || right.typ != "i64" {
-		return value{}, unsupportedf("type-system", "binary operator %q on %s/%s", e.Op, left.typ, right.typ)
+		return value{}, unsupportedf("type-system", "binary operator %q on %s/%s", opTok, left.typ, right.typ)
 	}
-	op := llvmIntBinaryInstruction(e.Op.String())
+	op := llvmIntBinaryInstruction(opTok.String())
 	if op == "" {
-		return value{}, unsupportedf("expression", "binary operator %q", e.Op)
+		return value{}, unsupportedf("expression", "binary operator %q", opTok)
 	}
 	emitter := g.toOstyEmitter()
 	out := llvmBinaryI64(emitter, op, toOstyValue(left), toOstyValue(right))

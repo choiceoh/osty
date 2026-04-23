@@ -640,7 +640,9 @@ fn tally(tokens: List<String>) -> Int {
 }
 
 // 10종: += -= *= /= %= &= |= ^= <<= >>=
-// 인덱스 타깃(xs[i] += v)은 아직 코드젠에서 미지원 — 평문 형태로 작성
+// 인덱스 타깃(xs[i] += v)도 LLVM 백엔드에서 지원 — base/index를 한 번만
+// 평가한 뒤 old 값을 읽고 op 적용해 다시 기록한다. List<Int> / List<Float>
+// 산술, List<Int> 비트/시프트 모두 통과.
 ```
 
 ## B.2 타입 시스템
