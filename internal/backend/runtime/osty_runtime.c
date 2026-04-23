@@ -4404,14 +4404,20 @@ void *osty_rt_list_get_ptr(void *raw_list, int64_t index) {
     return osty_gc_load_v1(value);
 }
 
-void osty_rt_list_get_bytes(void *raw_list, int64_t index, void *out_value, int64_t elem_size, osty_rt_trace_slot_fn trace_elem) {
+OSTY_HOT_INLINE void osty_rt_list_get_bytes(void *raw_list, int64_t index, void *out_value, int64_t elem_size, osty_rt_trace_slot_fn trace_elem) {
     if (out_value == NULL || elem_size < 0) {
         osty_rt_abort("invalid list get_bytes call");
     }
     memcpy(out_value, osty_rt_list_get_raw(raw_list, index, (size_t)elem_size, trace_elem), (size_t)elem_size);
 }
 
-void osty_rt_list_get_bytes_v1(void *raw_list, int64_t index, void *out, int64_t elem_size) {
+/* Hot path for struct-element list iteration (`for row in rows` where
+ * rows: List<Record>). Inlined so LTO can see the memcpy against a
+ * fixed-size struct and let SROA split the per-iter alloca + load into
+ * direct per-field loads — record_pipeline's analyzeRecordPipeline
+ * reads 3 struct fields per row × 192 rows, so the memcpy-round-trip
+ * overhead compounds quickly without this. */
+OSTY_HOT_INLINE void osty_rt_list_get_bytes_v1(void *raw_list, int64_t index, void *out, int64_t elem_size) {
     if (out == NULL) {
         osty_rt_abort("list output buffer is null");
     }
