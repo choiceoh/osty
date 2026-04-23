@@ -1,0 +1,133 @@
+use std.testing
+
+fn testInspectEmitsLiteralAndIdentRecords() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let x: Int = 42
+                let y = x + 1
+            }
+            """,
+    )
+
+    testing.assert(recs.len() >= 3)
+
+    let mut sawIntLit = false
+    let mut sawVar = false
+    let mut sawBinop = false
+    for rec in recs {
+        if rec.rule == "LIT-INT" {
+            sawIntLit = true
+        }
+        if rec.rule == "VAR" {
+            sawVar = true
+        }
+        if rec.rule == "BINOP" {
+            sawBinop = true
+        }
+    }
+    testing.assert(sawIntLit)
+    testing.assert(sawVar)
+    testing.assert(sawBinop)
+}
+
+fn testInspectRecordsSortedByStart() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let a = 1
+                let b = 2
+                let c = a + b
+            }
+            """,
+    )
+
+    if recs.len() < 2 {
+        return
+    }
+
+    let mut prev = recs[0].start
+    for i in 1..recs.len() {
+        let cur = recs[i].start
+        testing.assert(prev <= cur)
+        prev = cur
+    }
+}
+
+fn testInspectCarriesTypeNamesForLiterals() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let x: Int = 7
+                let s: String = "hi"
+            }
+            """,
+    )
+
+    let mut sawIntType = false
+    let mut sawStringType = false
+    for rec in recs {
+        if rec.rule == "LIT-INT" && rec.typeName == "Int" {
+            sawIntType = true
+        }
+        if rec.rule == "LIT-STRING" && rec.typeName == "String" {
+            sawStringType = true
+        }
+    }
+    testing.assert(sawIntType)
+    testing.assert(sawStringType)
+}
+
+fn testInspectRuleCoverageIsNonEmpty() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let xs: List<Int> = [1, 2, 3]
+                let pair: (Int, Int) = (1, 2)
+                let result = if xs.len() > 0 { 1 } else { 0 }
+                let _ = xs[0]
+            }
+            """,
+    )
+
+    let mut sawList = false
+    let mut sawTuple = false
+    let mut sawIf = false
+    let mut sawIndex = false
+    for rec in recs {
+        if rec.rule == "LIST" { sawList = true }
+        if rec.rule == "TUPLE" { sawTuple = true }
+        if rec.rule == "IF" { sawIf = true }
+        if rec.rule == "INDEX" { sawIndex = true }
+    }
+    testing.assert(sawList)
+    testing.assert(sawTuple)
+    testing.assert(sawIf)
+    testing.assert(sawIndex)
+}
+
+fn testInspectEmptyOnEmptyFile() {
+    let recs = inspectSource("")
+    testing.assertEq(recs.len(), 0)
+}
+
+fn testInspectRecordFieldsStable() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let _ = 1
+            }
+            """,
+    )
+
+    if recs.len() == 0 {
+        return
+    }
+    let first = recs[0]
+    testing.assert(first.start >= 0)
+    testing.assert(first.end >= first.start)
+    testing.assert(first.nodeKind != "")
+    testing.assert(first.rule != "")
+    testing.assertEq(first.hintName, "")
+    testing.assertEq(first.notes.len(), 0)
+}

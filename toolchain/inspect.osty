@@ -1,0 +1,177 @@
+// inspect.osty — per-node type-inference observations.
+//
+// The Go reference implementation (`internal/check/inspect.go`) walks the
+// parser AST top-down and emits one `InspectRecord` per expression/decl it
+// visits, labelling each record with the bidirectional-inference rule that
+// produced the node's type (see `LANG_SPEC_v0.5/02a-type-inference.md`
+// §2a.4 / §2a.5).
+//
+// This module implements a **v1 self-host port**: it iterates the already-
+// computed `FrontCheckResult.typedNodes` list and emits one
+// `InspectRecord` per typed expression, sorted by source offset. Compared
+// to the Go reference:
+//
+//   - ✅ LIT-*, VAR, BINOP, UNARY, CALL, FIELD, INDEX, IF, MATCH, LIST, MAP,
+//        TUPLE, STRUCT-LIT, RANGE, BLOCK, PAREN, QUESTION, TURBOFISH,
+//        CLOSURE rules are emitted.
+//   - ❌ FN-DECL / LET declarations are not yet surfaced here — those
+//        nodes don't sit in `typedNodes` because the checker stores them
+//        via `bindings` / `FrontCheckedBinding`. Follow-up can fold those
+//        in to complete parity.
+//   - ❌ Hint propagation (`hintName`) is empty in v1. Go reconstructs the
+//        hint by re-walking the AST with expected-type threading. Porting
+//        that requires a small type-string parser on top of
+//        `FrontCheckedNode.typeName` (since the self-host path only
+//        exposes types as rendered strings, not structured `types.Type`).
+//        Tracked in SELFHOST_PORT_MATRIX.md.
+//
+// Entry points:
+//
+//   inspectSource(source) -> List<InspectRecord>
+//       Parse + check + inspect in one call. Convenience for callers who
+//       don't already hold a `FrontCheckResult`.
+//
+//   inspectFromCheckResult(checked) -> List<InspectRecord>
+//       Extract records from an existing check run. Used by the Go
+//       `selfhost.InspectFromRun` bridge on top of a `FrontendRun`.
+//
+// The record shape mirrors `internal/check/inspect.go::InspectRecord`.
+// Keep these two definitions in lockstep — the Go bridge adapter lifts
+// Osty records into the same Go-side struct.
+
+pub struct InspectRecord {
+    pub start: Int,
+    pub end: Int,
+    pub nodeKind: String,
+    pub rule: String,
+    pub typeName: String,
+    pub hintName: String,
+    pub notes: List<String>,
+}
+
+pub fn inspectSource(source: String) -> List<InspectRecord> {
+    let checked = frontendCheckSourceStructured(source)
+    inspectFromCheckResult(checked)
+}
+
+pub fn inspectFromCheckResult(checked: FrontCheckResult) -> List<InspectRecord> {
+    let mut out: List<InspectRecord> = []
+    for tn in checked.typedNodes {
+        let rule = inspectRuleForKind(tn.kind)
+        if rule == "" {
+            continue
+        }
+        out.push(InspectRecord {
+            start: tn.start,
+            end: tn.end,
+            nodeKind: tn.kind,
+            rule,
+            typeName: tn.typeName,
+            hintName: "",
+            notes: [],
+        })
+    }
+    inspectSortByOffset(out)
+}
+
+/// Map an AstNodeKind name (as rendered by `astNodeKindName`) to the
+/// LANG_SPEC §2a.4 rule label. Returns "" for kinds that don't carry
+/// an inference record (e.g. pattern nodes, declarations).
+fn inspectRuleForKind(kind: String) -> String {
+    if kind == "AstNIntLit" { return "LIT-INT" }
+    if kind == "AstNFloatLit" { return "LIT-FLOAT" }
+    if kind == "AstNStringLit" { return "LIT-STRING" }
+    if kind == "AstNBoolLit" { return "LIT-BOOL" }
+    if kind == "AstNCharLit" { return "LIT-CHAR" }
+    if kind == "AstNByteLit" { return "LIT-BYTE" }
+    if kind == "AstNIdent" { return "VAR" }
+    if kind == "AstNParen" { return "PAREN" }
+    if kind == "AstNBlock" { return "BLOCK" }
+    if kind == "AstNUnary" { return "UNARY" }
+    if kind == "AstNBinary" { return "BINOP" }
+    if kind == "AstNIf" { return "IF" }
+    if kind == "AstNMatch" { return "MATCH" }
+    if kind == "AstNCall" { return "CALL" }
+    if kind == "AstNField" { return "FIELD" }
+    if kind == "AstNIndex" { return "INDEX" }
+    if kind == "AstNList" { return "LIST" }
+    if kind == "AstNMap" { return "MAP" }
+    if kind == "AstNTuple" { return "TUPLE" }
+    if kind == "AstNStructLit" { return "STRUCT-LIT" }
+    if kind == "AstNRange" { return "RANGE" }
+    if kind == "AstNClosure" { return "CLOSURE" }
+    if kind == "AstNQuestion" { return "QUESTION" }
+    if kind == "AstNTurbofish" { return "TURBOFISH" }
+    ""
+}
+
+/// Sort records by (start, end) ascending. Stable insertion sort; typed
+/// node lists are short enough (hundreds of entries per file) that the
+/// O(n²) cost is irrelevant and the simplicity is worth more than a
+/// generic quicksort import.
+fn inspectSortByOffset(recs: List<InspectRecord>) -> List<InspectRecord> {
+    let mut sorted = recs
+    let n = sorted.len()
+    if n <= 1 {
+        return sorted
+    }
+    for i in 1..n {
+        let mut j = i
+        for _ in 0..i {
+            if j == 0 {
+                break
+            }
+            let a = sorted[j - 1]
+            let b = sorted[j]
+            if a.start < b.start {
+                break
+            }
+            if a.start == b.start && a.end <= b.end {
+                break
+            }
+            sorted[j - 1] = b
+            sorted[j] = a
+            j = j - 1
+        }
+    }
+    sorted
+}
+
+// ---------------------------------------------------------------------
+// Bridge helpers (called from internal/selfhost/inspect_adapter.go).
+// ---------------------------------------------------------------------
+
+/// Count records the bridge will receive. The Go adapter uses this to
+/// pre-size its result slice and to sanity-check that the FFI round-
+/// trip didn't drop records.
+pub fn inspectRecordCount(recs: List<InspectRecord>) -> Int {
+    recs.len()
+}
+
+/// Accessors used by the Go bridge to pull each record field by index.
+/// Returning primitives one at a time avoids the struct-flatten path
+/// that the selfhost FFI currently does not implement.
+
+pub fn inspectRecordStart(recs: List<InspectRecord>, i: Int) -> Int {
+    recs[i].start
+}
+
+pub fn inspectRecordEnd(recs: List<InspectRecord>, i: Int) -> Int {
+    recs[i].end
+}
+
+pub fn inspectRecordNodeKind(recs: List<InspectRecord>, i: Int) -> String {
+    recs[i].nodeKind
+}
+
+pub fn inspectRecordRule(recs: List<InspectRecord>, i: Int) -> String {
+    recs[i].rule
+}
+
+pub fn inspectRecordTypeName(recs: List<InspectRecord>, i: Int) -> String {
+    recs[i].typeName
+}
+
+pub fn inspectRecordHintName(recs: List<InspectRecord>, i: Int) -> String {
+    recs[i].hintName
+}
