@@ -47,6 +47,41 @@ func BenchmarkCheckStructuredFromRun(b *testing.B) {
 	}
 }
 
+func BenchmarkNewElabCx(b *testing.B) {
+	src := []byte(`fn main() {
+    let xs = [1, 2, 3]
+    let y = xs[0] + 2
+    y
+}
+`)
+	run := Run(src)
+	if run == nil {
+		b.Fatal("Run returned nil")
+	}
+	file := run.semanticAstFile()
+	if file == nil {
+		b.Fatal("semanticAstFile returned nil")
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		cx := newElabCx(file, emptyTyArena())
+		if cx == nil || cx.env == nil || cx.core == nil {
+			b.Fatal("newElabCx returned incomplete context")
+		}
+	}
+}
+
+func BenchmarkEmptyTyArena(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		arena := emptyTyArena()
+		if arena == nil || arena.idxInt < 0 || arena.idxString < 0 {
+			b.Fatal("emptyTyArena returned incomplete arena")
+		}
+	}
+}
+
 func TestRunDefersLexAdaptationUntilTokensRequested(t *testing.T) {
 	src := []byte(`fn main() {
     let x = 1

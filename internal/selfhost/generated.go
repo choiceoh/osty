@@ -8,6 +8,7 @@ import (
 	"github.com/osty/osty/internal/selfhost/astbridge"
 	"math"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -28561,15 +28562,20 @@ type TyArena struct {
 	idxUntypedFloat int
 }
 
+const (
+	tyArenaSeedNodesCap  = 24
+	tyArenaSeedInternCap = 32
+)
+
 // Osty: /tmp/selfhost_merged.osty:11549:5
 func emptyTyNode() *TyNode {
-	return &TyNode{kind: TyKind(&TyKind_TkErr{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: make([]int, 0, 1), ret: -1, varId: 0, varName: "", varOwner: ""}
+	return &TyNode{kind: TyKind(&TyKind_TkErr{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: nil, ret: -1, varId: 0, varName: "", varOwner: ""}
 }
 
 // Osty: /tmp/selfhost_merged.osty:11565:5
 func emptyTyArena() *TyArena {
 	// Osty: /tmp/selfhost_merged.osty:11566:5
-	arena := &TyArena{nodes: make([]*TyNode, 0, 1), internKeys: make([]string, 0, 1), internHashes: make([]int, 0, 1), internValues: make([]int, 0, 1), idxErr: -1, idxPoison: -1, idxInt: -1, idxInt8: -1, idxInt16: -1, idxInt32: -1, idxInt64: -1, idxUInt8: -1, idxUInt16: -1, idxUInt32: -1, idxUInt64: -1, idxByte: -1, idxFloat: -1, idxFloat32: -1, idxFloat64: -1, idxBool: -1, idxChar: -1, idxString: -1, idxBytes: -1, idxUnit: -1, idxNever: -1, idxUntypedInt: -1, idxUntypedFloat: -1}
+	arena := &TyArena{nodes: make([]*TyNode, 0, tyArenaSeedNodesCap), internKeys: make([]string, 0, tyArenaSeedInternCap), internHashes: make([]int, 0, tyArenaSeedInternCap), internValues: make([]int, 0, tyArenaSeedInternCap), idxErr: -1, idxPoison: -1, idxInt: -1, idxInt8: -1, idxInt16: -1, idxInt32: -1, idxInt64: -1, idxUInt8: -1, idxUInt16: -1, idxUInt32: -1, idxUInt64: -1, idxByte: -1, idxFloat: -1, idxFloat32: -1, idxFloat64: -1, idxBool: -1, idxChar: -1, idxString: -1, idxBytes: -1, idxUnit: -1, idxNever: -1, idxUntypedInt: -1, idxUntypedFloat: -1}
 	_ = arena
 	// Osty: /tmp/selfhost_merged.osty:11580:10
 	arena.idxErr = tyAllocErr(arena)
@@ -28626,7 +28632,7 @@ func tyAllocErr(arena *TyArena) int {
 	idx := tyNodeCount(arena)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:11608:5
-	node := &TyNode{kind: TyKind(&TyKind_TkErr{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: make([]int, 0, 1), ret: -1, varId: 0, varName: "", varOwner: ""}
+	node := &TyNode{kind: TyKind(&TyKind_TkErr{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: nil, ret: -1, varId: 0, varName: "", varOwner: ""}
 	_ = node
 	// Osty: /tmp/selfhost_merged.osty:11612:5
 	func() struct{} { arena.nodes = append(arena.nodes, node); return struct{}{} }()
@@ -28639,7 +28645,7 @@ func tyAllocPoison(arena *TyArena) int {
 	idx := tyNodeCount(arena)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:11618:5
-	node := &TyNode{kind: TyKind(&TyKind_TkPoison{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: make([]int, 0, 1), ret: -1, varId: 0, varName: "", varOwner: ""}
+	node := &TyNode{kind: TyKind(&TyKind_TkPoison{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: nil, ret: -1, varId: 0, varName: "", varOwner: ""}
 	_ = node
 	// Osty: /tmp/selfhost_merged.osty:11622:5
 	func() struct{} { arena.nodes = append(arena.nodes, node); return struct{}{} }()
@@ -28652,7 +28658,7 @@ func tyAllocPrim(arena *TyArena, prim PrimKind) int {
 	idx := tyNodeCount(arena)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:11628:5
-	node := &TyNode{kind: TyKind(&TyKind_TkPrim{}), prim: prim, head: "", args: make([]int, 0, 1), ret: -1, varId: 0, varName: "", varOwner: ""}
+	node := &TyNode{kind: TyKind(&TyKind_TkPrim{}), prim: prim, head: "", args: nil, ret: -1, varId: 0, varName: "", varOwner: ""}
 	_ = node
 	// Osty: /tmp/selfhost_merged.osty:11632:5
 	func() struct{} { arena.nodes = append(arena.nodes, node); return struct{}{} }()
@@ -28881,7 +28887,7 @@ func tyFn(arena *TyArena, params []int, ret int) int {
 // Osty: /tmp/selfhost_merged.osty:11739:5
 func tyOptional(arena *TyArena, inner int) int {
 	// Osty: /tmp/selfhost_merged.osty:11740:5
-	node := &TyNode{kind: TyKind(&TyKind_TkOptional{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: make([]int, 0, 1), ret: inner, varId: 0, varName: "", varOwner: ""}
+	node := &TyNode{kind: TyKind(&TyKind_TkOptional{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: nil, ret: inner, varId: 0, varName: "", varOwner: ""}
 	_ = node
 	return tyInternNode(arena, tyKeyOptional(node.ret), node)
 }
@@ -28892,7 +28898,7 @@ func tyVarFresh(arena *TyArena, owner string, name string) int {
 	idx := tyNodeCount(arena)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:11752:5
-	node := &TyNode{kind: TyKind(&TyKind_TkVar{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: make([]int, 0, 1), ret: -1, varId: func() int {
+	node := &TyNode{kind: TyKind(&TyKind_TkVar{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: "", args: nil, ret: -1, varId: func() int {
 		var _p2008 int = idx
 		var _rhs2009 int = 1
 		if _rhs2009 > 0 && _p2008 > math.MaxInt-_rhs2009 {
@@ -28912,7 +28918,7 @@ func tyVarFresh(arena *TyArena, owner string, name string) int {
 // Osty: /tmp/selfhost_merged.osty:11763:5
 func tySelf(arena *TyArena, owner string) int {
 	// Osty: /tmp/selfhost_merged.osty:11764:5
-	node := &TyNode{kind: TyKind(&TyKind_TkSelf{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: owner, args: make([]int, 0, 1), ret: -1, varId: 0, varName: "", varOwner: ""}
+	node := &TyNode{kind: TyKind(&TyKind_TkSelf{}), prim: PrimKind(&PrimKind_PkInvalid{}), head: owner, args: nil, ret: -1, varId: 0, varName: "", varOwner: ""}
 	_ = node
 	return tyInternNode(arena, tyKeySelf(node.head), node)
 }
@@ -28946,96 +28952,53 @@ func tyInternNode(arena *TyArena, key string, node *TyNode) int {
 
 // Osty: /tmp/selfhost_merged.osty:11785:1
 func tyLookupInterned(arena *TyArena, key string, hash int) int {
-	// Osty: /tmp/selfhost_merged.osty:11786:5
-	i := 0
-	_ = i
-	// Osty: /tmp/selfhost_merged.osty:11787:5
-	n := len(arena.internKeys)
-	_ = n
-	// Osty: /tmp/selfhost_merged.osty:11788:5
-	for i < n {
-		// Osty: /tmp/selfhost_merged.osty:11789:9
+	for i := len(arena.internKeys) - 1; i >= 0; i-- {
 		if arena.internHashes[i] == hash && arena.internKeys[i] == key {
-			// Osty: /tmp/selfhost_merged.osty:11790:13
 			return arena.internValues[i]
 		}
-		// Osty: /tmp/selfhost_merged.osty:11792:9
-		func() {
-			var _cur2010 int = i
-			var _rhs2011 int = 1
-			if _rhs2011 > 0 && _cur2010 > math.MaxInt-_rhs2011 {
-				panic("integer overflow")
-			}
-			if _rhs2011 < 0 && _cur2010 < math.MinInt-_rhs2011 {
-				panic("integer overflow")
-			}
-			i = _cur2010 + _rhs2011
-		}()
 	}
 	return -1
 }
 
 // Osty: /tmp/selfhost_merged.osty:11797:1
 func tyKeyNamed(head string, args []int) string {
-	return fmt.Sprintf("N|%s|%s", ostyToString(head), ostyToString(tyKeyArgs(args)))
+	return "N|" + head + "|" + tyKeyArgs(args)
 }
 
 // Osty: /tmp/selfhost_merged.osty:11801:1
 func tyKeyTuple(args []int) string {
-	return fmt.Sprintf("T|%s", ostyToString(tyKeyArgs(args)))
+	return "T|" + tyKeyArgs(args)
 }
 
 // Osty: /tmp/selfhost_merged.osty:11805:1
 func tyKeyFn(args []int, ret int) string {
-	return fmt.Sprintf("F|%s|%s", ostyToString(tyKeyArgs(args)), ostyToString(ret))
+	return "F|" + tyKeyArgs(args) + "|" + strconv.Itoa(ret)
 }
 
 // Osty: /tmp/selfhost_merged.osty:11809:1
 func tyKeyOptional(inner int) string {
-	return fmt.Sprintf("O|%s", ostyToString(inner))
+	return "O|" + strconv.Itoa(inner)
 }
 
 // Osty: /tmp/selfhost_merged.osty:11813:1
 func tyKeySelf(owner string) string {
-	return fmt.Sprintf("S|%s", ostyToString(owner))
+	return "S|" + owner
 }
 
 // Osty: /tmp/selfhost_merged.osty:11817:1
 func tyKeyArgs(args []int) string {
-	// Osty: /tmp/selfhost_merged.osty:11818:5
 	if len(args) == 0 {
-		// Osty: /tmp/selfhost_merged.osty:11819:9
 		return ""
 	}
-	// Osty: /tmp/selfhost_merged.osty:11821:5
-	out := ""
-	_ = out
-	// Osty: /tmp/selfhost_merged.osty:11822:5
-	i := 0
-	_ = i
-	// Osty: /tmp/selfhost_merged.osty:11823:5
-	for _, arg := range args {
-		// Osty: /tmp/selfhost_merged.osty:11824:9
+	var b strings.Builder
+	b.Grow(len(args) * 4)
+	for i, arg := range args {
 		if i > 0 {
-			// Osty: /tmp/selfhost_merged.osty:11825:13
-			out = fmt.Sprintf("%s,", ostyToString(out))
+			b.WriteByte(',')
 		}
-		// Osty: /tmp/selfhost_merged.osty:11827:9
-		out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(arg))
-		// Osty: /tmp/selfhost_merged.osty:11828:9
-		func() {
-			var _cur2012 int = i
-			var _rhs2013 int = 1
-			if _rhs2013 > 0 && _cur2012 > math.MaxInt-_rhs2013 {
-				panic("integer overflow")
-			}
-			if _rhs2013 < 0 && _cur2012 < math.MinInt-_rhs2013 {
-				panic("integer overflow")
-			}
-			i = _cur2012 + _rhs2013
-		}()
+		b.WriteString(strconv.Itoa(arg))
 	}
-	return out
+	return b.String()
 }
 
 // Osty: /tmp/selfhost_merged.osty:11840:5
@@ -33455,9 +33418,79 @@ type CheckEnv struct {
 	instantiations          []*CheckInstantiationRecord
 }
 
+const (
+	checkEnvBindingsCap      = 64
+	checkEnvBindingNamesCap  = 64
+	checkEnvFnsCap           = 192
+	checkEnvFnBodiesCap      = 24
+	checkEnvFieldsCap        = 48
+	checkEnvVariantsCap      = 16
+	checkEnvAliasesCap       = 24
+	checkEnvTypesCap         = 24
+	checkEnvInterfacesCap    = 8
+	checkEnvInterfaceExtCap  = 8
+	checkEnvGenericBoundsCap = 16
+	checkEnvSubstCacheCap    = 64
+	checkEnvDiagnosticsCap   = 16
+	checkEnvRecordCap        = 64
+	checkEnvInstantiationCap = 32
+)
+
 // Osty: /tmp/selfhost_merged.osty:14301:5
 func emptyCheckEnv(tys *TyArena) *CheckEnv {
-	return &CheckEnv{tys: tys, bindings: make([]*CheckBinding, 0, 1), bindingIndexNames: make([]string, 0, 1), bindingIndexHashes: make([]int, 0, 1), bindingIndexStacks: make([][]*CheckBinding, 0, 1), fns: make([]*CheckFnSig, 0, 1), fnIndexKeys: make([]string, 0, 1), fnIndexHashes: make([]int, 0, 1), fnIndexValues: make([]int, 0, 1), fnBodyKeys: make([]string, 0, 1), fnBodyHashes: make([]int, 0, 1), fields: make([]*CheckFieldSig, 0, 1), fieldIndexKeys: make([]string, 0, 1), fieldIndexHashes: make([]int, 0, 1), fieldIndexValues: make([]int, 0, 1), variants: make([]*CheckVariantSig, 0, 1), variantIndexKeys: make([]string, 0, 1), variantIndexHashes: make([]int, 0, 1), variantIndexValues: make([]int, 0, 1), variantOwnerIndexKeys: make([]string, 0, 1), variantOwnerIndexHashes: make([]int, 0, 1), variantOwnerIndexValues: make([]int, 0, 1), aliases: make([]*CheckAliasSig, 0, 1), aliasIndexKeys: make([]string, 0, 1), aliasIndexHashes: make([]int, 0, 1), aliasIndexValues: make([]int, 0, 1), types: make([]*CheckTypeSig, 0, 1), typeIndexKeys: make([]string, 0, 1), typeIndexHashes: make([]int, 0, 1), typeIndexValues: make([]int, 0, 1), interfaces: make([]string, 0, 1), interfaceIndexKeys: make([]string, 0, 1), interfaceIndexHashes: make([]int, 0, 1), interfaceExtends: make([]*CheckInterfaceExt, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1), genericBoundIndexNames: make([]string, 0, 1), genericBoundIndexHashes: make([]int, 0, 1), genericBoundIndexStacks: make([][]int, 0, 1), aliasDeepCache: make([]int, 0, 1), substCacheKeys: make([]string, 0, 1), substCacheHashes: make([]int, 0, 1), substCacheValues: make([]int, 0, 1), returnTy: tErr(tys), fnName: "", inLoop: false, diagnostics: make([]*CheckDiagnostic, 0, 1), assignments: 0, accepted: 0, bindingRecords: make([]*CheckBindingRecord, 0, 1), symbolRecords: make([]*CheckSymbolRecord, 0, 1), instantiations: make([]*CheckInstantiationRecord, 0, 1)}
+	return &CheckEnv{
+		tys:                     tys,
+		bindings:                make([]*CheckBinding, 0, checkEnvBindingsCap),
+		bindingIndexNames:       make([]string, 0, checkEnvBindingNamesCap),
+		bindingIndexHashes:      make([]int, 0, checkEnvBindingNamesCap),
+		bindingIndexStacks:      make([][]*CheckBinding, 0, checkEnvBindingNamesCap),
+		fns:                     make([]*CheckFnSig, 0, checkEnvFnsCap),
+		fnIndexKeys:             make([]string, 0, checkEnvFnsCap),
+		fnIndexHashes:           make([]int, 0, checkEnvFnsCap),
+		fnIndexValues:           make([]int, 0, checkEnvFnsCap),
+		fnBodyKeys:              make([]string, 0, checkEnvFnBodiesCap),
+		fnBodyHashes:            make([]int, 0, checkEnvFnBodiesCap),
+		fields:                  make([]*CheckFieldSig, 0, checkEnvFieldsCap),
+		fieldIndexKeys:          make([]string, 0, checkEnvFieldsCap),
+		fieldIndexHashes:        make([]int, 0, checkEnvFieldsCap),
+		fieldIndexValues:        make([]int, 0, checkEnvFieldsCap),
+		variants:                make([]*CheckVariantSig, 0, checkEnvVariantsCap),
+		variantIndexKeys:        make([]string, 0, checkEnvVariantsCap),
+		variantIndexHashes:      make([]int, 0, checkEnvVariantsCap),
+		variantIndexValues:      make([]int, 0, checkEnvVariantsCap),
+		variantOwnerIndexKeys:   make([]string, 0, checkEnvVariantsCap),
+		variantOwnerIndexHashes: make([]int, 0, checkEnvVariantsCap),
+		variantOwnerIndexValues: make([]int, 0, checkEnvVariantsCap),
+		aliases:                 make([]*CheckAliasSig, 0, checkEnvAliasesCap),
+		aliasIndexKeys:          make([]string, 0, checkEnvAliasesCap),
+		aliasIndexHashes:        make([]int, 0, checkEnvAliasesCap),
+		aliasIndexValues:        make([]int, 0, checkEnvAliasesCap),
+		types:                   make([]*CheckTypeSig, 0, checkEnvTypesCap),
+		typeIndexKeys:           make([]string, 0, checkEnvTypesCap),
+		typeIndexHashes:         make([]int, 0, checkEnvTypesCap),
+		typeIndexValues:         make([]int, 0, checkEnvTypesCap),
+		interfaces:              make([]string, 0, checkEnvInterfacesCap),
+		interfaceIndexKeys:      make([]string, 0, checkEnvInterfacesCap),
+		interfaceIndexHashes:    make([]int, 0, checkEnvInterfacesCap),
+		interfaceExtends:        make([]*CheckInterfaceExt, 0, checkEnvInterfaceExtCap),
+		genericBounds:           make([]*CheckGenericBound, 0, checkEnvGenericBoundsCap),
+		genericBoundIndexNames:  make([]string, 0, checkEnvGenericBoundsCap),
+		genericBoundIndexHashes: make([]int, 0, checkEnvGenericBoundsCap),
+		genericBoundIndexStacks: make([][]int, 0, checkEnvGenericBoundsCap),
+		aliasDeepCache:          make([]int, 0, checkEnvGenericBoundsCap),
+		substCacheKeys:          make([]string, 0, checkEnvSubstCacheCap),
+		substCacheHashes:        make([]int, 0, checkEnvSubstCacheCap),
+		substCacheValues:        make([]int, 0, checkEnvSubstCacheCap),
+		returnTy:                tErr(tys),
+		fnName:                  "",
+		inLoop:                  false,
+		diagnostics:             make([]*CheckDiagnostic, 0, checkEnvDiagnosticsCap),
+		assignments:             0,
+		accepted:                0,
+		bindingRecords:          make([]*CheckBindingRecord, 0, checkEnvRecordCap),
+		symbolRecords:           make([]*CheckSymbolRecord, 0, checkEnvRecordCap),
+		instantiations:          make([]*CheckInstantiationRecord, 0, checkEnvInstantiationCap),
+	}
 }
 
 // Osty: /tmp/selfhost_merged.osty:14366:5
@@ -33621,16 +33654,15 @@ func checkRegisterFn(env *CheckEnv, sig *CheckFnSig) {
 	// Osty: /tmp/selfhost_merged.osty:14456:5
 	func() struct{} { env.fns = append(env.fns, sig); return struct{}{} }()
 	// Osty: /tmp/selfhost_merged.osty:14457:5
-	key := checkFnKey(sig.name, sig.owner)
-	_ = key
-	// Osty: /tmp/selfhost_merged.osty:14458:5
-	keyHash := checkHashKey(key)
+	keyHash := checkHashOwnerName(sig.owner, sig.name)
 	_ = keyHash
 	// Osty: /tmp/selfhost_merged.osty:14459:5
-	slot := checkNameIndex(env.fnIndexKeys, env.fnIndexHashes, key, keyHash)
+	slot := checkNameIndexOwnerName(env.fnIndexKeys, env.fnIndexHashes, sig.owner, sig.name, keyHash)
 	_ = slot
 	// Osty: /tmp/selfhost_merged.osty:14460:5
 	if slot < 0 {
+		key := checkFnKey(sig.name, sig.owner)
+		_ = key
 		// Osty: /tmp/selfhost_merged.osty:14461:9
 		func() struct{} { env.fnIndexKeys = append(env.fnIndexKeys, key); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:14462:9
@@ -33645,17 +33677,15 @@ func checkRegisterFn(env *CheckEnv, sig *CheckFnSig) {
 
 // Osty: /tmp/selfhost_merged.osty:14469:5
 func checkMarkFnHasBody(env *CheckEnv, name string, owner string) {
-	// Osty: /tmp/selfhost_merged.osty:14470:5
-	key := checkFnKey(name, owner)
-	_ = key
-	// Osty: /tmp/selfhost_merged.osty:14471:5
-	keyHash := checkHashKey(key)
+	keyHash := checkHashOwnerName(owner, name)
 	_ = keyHash
 	// Osty: /tmp/selfhost_merged.osty:14472:5
-	if checkNameIndex(env.fnBodyKeys, env.fnBodyHashes, key, keyHash) >= 0 {
+	if checkNameIndexOwnerName(env.fnBodyKeys, env.fnBodyHashes, owner, name, keyHash) >= 0 {
 		// Osty: /tmp/selfhost_merged.osty:14473:9
 		return
 	}
+	key := checkFnKey(name, owner)
+	_ = key
 	// Osty: /tmp/selfhost_merged.osty:14475:5
 	func() struct{} { env.fnBodyKeys = append(env.fnBodyKeys, key); return struct{}{} }()
 	// Osty: /tmp/selfhost_merged.osty:14476:5
@@ -33664,19 +33694,12 @@ func checkMarkFnHasBody(env *CheckEnv, name string, owner string) {
 
 // Osty: /tmp/selfhost_merged.osty:14479:5
 func checkFnHasBody(env *CheckEnv, name string, owner string) bool {
-	// Osty: /tmp/selfhost_merged.osty:14480:5
-	key := checkFnKey(name, owner)
-	_ = key
-	return checkNameIndex(env.fnBodyKeys, env.fnBodyHashes, key, checkHashKey(key)) >= 0
+	return checkNameIndexOwnerName(env.fnBodyKeys, env.fnBodyHashes, owner, name, checkHashOwnerName(owner, name)) >= 0
 }
 
 // Osty: /tmp/selfhost_merged.osty:14484:5
 func checkLookupFn(env *CheckEnv, name string, owner string) *CheckFnSig {
-	// Osty: /tmp/selfhost_merged.osty:14485:5
-	key := checkFnKey(name, owner)
-	_ = key
-	// Osty: /tmp/selfhost_merged.osty:14486:5
-	idx := checkLookupExactIndex(env.fnIndexKeys, env.fnIndexHashes, env.fnIndexValues, key, checkHashKey(key))
+	idx := checkLookupExactIndexOwnerName(env.fnIndexKeys, env.fnIndexHashes, env.fnIndexValues, owner, name, checkHashOwnerName(owner, name))
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14487:5
 	if idx >= 0 {
@@ -33773,16 +33796,15 @@ func checkRegisterField(env *CheckEnv, field *CheckFieldSig) {
 	// Osty: /tmp/selfhost_merged.osty:14544:5
 	func() struct{} { env.fields = append(env.fields, field); return struct{}{} }()
 	// Osty: /tmp/selfhost_merged.osty:14545:5
-	key := checkOwnerKey(field.owner, field.name)
-	_ = key
-	// Osty: /tmp/selfhost_merged.osty:14546:5
-	keyHash := checkHashKey(key)
+	keyHash := checkHashOwnerName(field.owner, field.name)
 	_ = keyHash
 	// Osty: /tmp/selfhost_merged.osty:14547:5
-	slot := checkNameIndex(env.fieldIndexKeys, env.fieldIndexHashes, key, keyHash)
+	slot := checkNameIndexOwnerName(env.fieldIndexKeys, env.fieldIndexHashes, field.owner, field.name, keyHash)
 	_ = slot
 	// Osty: /tmp/selfhost_merged.osty:14548:5
 	if slot < 0 {
+		key := checkOwnerKey(field.owner, field.name)
+		_ = key
 		// Osty: /tmp/selfhost_merged.osty:14549:9
 		func() struct{} { env.fieldIndexKeys = append(env.fieldIndexKeys, key); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:14550:9
@@ -33797,11 +33819,7 @@ func checkRegisterField(env *CheckEnv, field *CheckFieldSig) {
 
 // Osty: /tmp/selfhost_merged.osty:14557:5
 func checkLookupField(env *CheckEnv, owner string, name string) *CheckFieldSig {
-	// Osty: /tmp/selfhost_merged.osty:14558:5
-	key := checkOwnerKey(owner, name)
-	_ = key
-	// Osty: /tmp/selfhost_merged.osty:14559:5
-	idx := checkLookupExactIndex(env.fieldIndexKeys, env.fieldIndexHashes, env.fieldIndexValues, key, checkHashKey(key))
+	idx := checkLookupExactIndexOwnerName(env.fieldIndexKeys, env.fieldIndexHashes, env.fieldIndexValues, owner, name, checkHashOwnerName(owner, name))
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14560:5
 	if idx >= 0 {
@@ -33837,16 +33855,15 @@ func checkRegisterVariant(env *CheckEnv, variant *CheckVariantSig) {
 		env.variantIndexValues[nameSlot] = idx
 	}
 	// Osty: /tmp/selfhost_merged.osty:14578:5
-	ownerKey := checkOwnerKey(variant.owner, variant.name)
-	_ = ownerKey
-	// Osty: /tmp/selfhost_merged.osty:14579:5
-	ownerHash := checkHashKey(ownerKey)
+	ownerHash := checkHashOwnerName(variant.owner, variant.name)
 	_ = ownerHash
 	// Osty: /tmp/selfhost_merged.osty:14580:5
-	ownerSlot := checkNameIndex(env.variantOwnerIndexKeys, env.variantOwnerIndexHashes, ownerKey, ownerHash)
+	ownerSlot := checkNameIndexOwnerName(env.variantOwnerIndexKeys, env.variantOwnerIndexHashes, variant.owner, variant.name, ownerHash)
 	_ = ownerSlot
 	// Osty: /tmp/selfhost_merged.osty:14581:5
 	if ownerSlot < 0 {
+		ownerKey := checkOwnerKey(variant.owner, variant.name)
+		_ = ownerKey
 		// Osty: /tmp/selfhost_merged.osty:14582:9
 		func() struct{} {
 			env.variantOwnerIndexKeys = append(env.variantOwnerIndexKeys, ownerKey)
@@ -33883,11 +33900,7 @@ func checkLookupVariant(env *CheckEnv, name string) *CheckVariantSig {
 
 // Osty: /tmp/selfhost_merged.osty:14598:5
 func checkLookupVariantInOwner(env *CheckEnv, owner string, name string) *CheckVariantSig {
-	// Osty: /tmp/selfhost_merged.osty:14599:5
-	key := checkOwnerKey(owner, name)
-	_ = key
-	// Osty: /tmp/selfhost_merged.osty:14600:5
-	idx := checkLookupExactIndex(env.variantOwnerIndexKeys, env.variantOwnerIndexHashes, env.variantOwnerIndexValues, key, checkHashKey(key))
+	idx := checkLookupExactIndexOwnerName(env.variantOwnerIndexKeys, env.variantOwnerIndexHashes, env.variantOwnerIndexValues, owner, name, checkHashOwnerName(owner, name))
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14601:5
 	if idx >= 0 {
@@ -34271,138 +34284,88 @@ func checkGenericBoundIndexPop(env *CheckEnv, name string) {
 
 // Osty: /tmp/selfhost_merged.osty:14787:1
 func checkHashKey(key string) int {
-	// Osty: /tmp/selfhost_merged.osty:14788:5
-	h := 5381
-	_ = h
-	// Osty: /tmp/selfhost_merged.osty:14789:5
-	for _, b := range []byte(key) {
-		// Osty: /tmp/selfhost_merged.osty:14790:9
-		func() {
-			var _cur2100 int = (func() int {
-				var _p2102 int = h
-				var _rhs2103 int = 33
-				if _p2102 != 0 && _rhs2103 != 0 {
-					if _p2102 == int(-1) && _rhs2103 == math.MinInt {
-						panic("integer overflow")
-					}
-					if _rhs2103 == int(-1) && _p2102 == math.MinInt {
-						panic("integer overflow")
-					}
-					if _p2102 > 0 {
-						if _rhs2103 > 0 && _p2102 > math.MaxInt/_rhs2103 {
-							panic("integer overflow")
-						}
-						if _rhs2103 < 0 && _rhs2103 < math.MinInt/_p2102 {
-							panic("integer overflow")
-						}
-					} else {
-						if _rhs2103 > 0 && _p2102 < math.MinInt/_rhs2103 {
-							panic("integer overflow")
-						}
-						if _rhs2103 < 0 && _p2102 < math.MaxInt/_rhs2103 {
-							panic("integer overflow")
-						}
-					}
-				}
-				return _p2102 * _rhs2103
-			}() + int(b))
-			var _rhs2101 int = 1073741789
-			if _rhs2101 == 0 {
-				panic("integer modulo by zero")
-			}
-			if _cur2100 == math.MinInt && _rhs2101 == int(-1) {
-				panic("integer overflow")
-			}
-			h = _cur2100 % _rhs2101
-		}()
+	// Fast non-cryptographic hash for selfhost checker indexes.
+	// Keep the result in the positive int range so downstream arrays
+	// can continue storing `[]int` hashes without extra normalization.
+	var h uint64 = 1469598103934665603
+	for i := 0; i < len(key); i++ {
+		h ^= uint64(key[i])
+		h *= 1099511628211
 	}
-	return h
+	return int(h & 0x7fffffff)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14795:1
 func checkNameIndex(names []string, hashes []int, name string, hash int) int {
-	// Osty: /tmp/selfhost_merged.osty:14796:5
-	i := func() int {
-		var _p2104 int = len(names)
-		var _rhs2105 int = 1
-		if _rhs2105 < 0 && _p2104 > math.MaxInt+_rhs2105 {
-			panic("integer overflow")
-		}
-		if _rhs2105 > 0 && _p2104 < math.MinInt+_rhs2105 {
-			panic("integer overflow")
-		}
-		return _p2104 - _rhs2105
-	}()
-	_ = i
-	// Osty: /tmp/selfhost_merged.osty:14797:5
-	for i >= 0 {
-		// Osty: /tmp/selfhost_merged.osty:14798:9
+	for i := len(names) - 1; i >= 0; i-- {
 		if hashes[i] == hash && names[i] == name {
-			// Osty: /tmp/selfhost_merged.osty:14799:13
 			return i
 		}
-		// Osty: /tmp/selfhost_merged.osty:14801:9
-		func() {
-			var _cur2106 int = i
-			var _rhs2107 int = 1
-			if _rhs2107 < 0 && _cur2106 > math.MaxInt+_rhs2107 {
-				panic("integer overflow")
-			}
-			if _rhs2107 > 0 && _cur2106 < math.MinInt+_rhs2107 {
-				panic("integer overflow")
-			}
-			i = _cur2106 - _rhs2107
-		}()
 	}
 	return -1
 }
 
 // Osty: /tmp/selfhost_merged.osty:14806:1
 func checkLookupExactIndex(keys []string, hashes []int, values []int, key string, hash int) int {
-	// Osty: /tmp/selfhost_merged.osty:14807:5
-	i := func() int {
-		var _p2108 int = len(keys)
-		var _rhs2109 int = 1
-		if _rhs2109 < 0 && _p2108 > math.MaxInt+_rhs2109 {
-			panic("integer overflow")
-		}
-		if _rhs2109 > 0 && _p2108 < math.MinInt+_rhs2109 {
-			panic("integer overflow")
-		}
-		return _p2108 - _rhs2109
-	}()
-	_ = i
-	// Osty: /tmp/selfhost_merged.osty:14808:5
-	for i >= 0 {
-		// Osty: /tmp/selfhost_merged.osty:14809:9
+	for i := len(keys) - 1; i >= 0; i-- {
 		if hashes[i] == hash && keys[i] == key {
-			// Osty: /tmp/selfhost_merged.osty:14810:13
 			return values[i]
 		}
-		// Osty: /tmp/selfhost_merged.osty:14812:9
-		func() {
-			var _cur2110 int = i
-			var _rhs2111 int = 1
-			if _rhs2111 < 0 && _cur2110 > math.MaxInt+_rhs2111 {
-				panic("integer overflow")
-			}
-			if _rhs2111 > 0 && _cur2110 < math.MinInt+_rhs2111 {
-				panic("integer overflow")
-			}
-			i = _cur2110 - _rhs2111
-		}()
+	}
+	return -1
+}
+
+func checkHashOwnerName(owner string, name string) int {
+	var h uint64 = 1469598103934665603
+	for i := 0; i < len(owner); i++ {
+		h ^= uint64(owner[i])
+		h *= 1099511628211
+	}
+	h ^= 0x1f
+	h *= 1099511628211
+	for i := 0; i < len(name); i++ {
+		h ^= uint64(name[i])
+		h *= 1099511628211
+	}
+	return int(h & 0x7fffffff)
+}
+
+func checkJoinedOwnerNameEquals(key string, owner string, name string) bool {
+	if len(key) != len(owner)+1+len(name) {
+		return false
+	}
+	if key[len(owner)] != '\x1f' {
+		return false
+	}
+	return key[:len(owner)] == owner && key[len(owner)+1:] == name
+}
+
+func checkNameIndexOwnerName(names []string, hashes []int, owner string, name string, hash int) int {
+	for i := len(names) - 1; i >= 0; i-- {
+		if hashes[i] == hash && checkJoinedOwnerNameEquals(names[i], owner, name) {
+			return i
+		}
+	}
+	return -1
+}
+
+func checkLookupExactIndexOwnerName(keys []string, hashes []int, values []int, owner string, name string, hash int) int {
+	for i := len(keys) - 1; i >= 0; i-- {
+		if hashes[i] == hash && checkJoinedOwnerNameEquals(keys[i], owner, name) {
+			return values[i]
+		}
 	}
 	return -1
 }
 
 // Osty: /tmp/selfhost_merged.osty:14817:1
 func checkFnKey(name string, owner string) string {
-	return fmt.Sprintf("%s\x1f%s", ostyToString(owner), ostyToString(name))
+	return owner + "\x1f" + name
 }
 
 // Osty: /tmp/selfhost_merged.osty:14821:1
 func checkOwnerKey(owner string, name string) string {
-	return fmt.Sprintf("%s\x1f%s", ostyToString(owner), ostyToString(name))
+	return owner + "\x1f" + name
 }
 
 // Osty: /tmp/selfhost_merged.osty:14833:5
@@ -37526,7 +37489,29 @@ func newElabCx(ast *AstFile, tys *TyArena) *ElabCx {
 	_ = env
 	// Osty: /tmp/selfhost_merged.osty:17592:5
 	checkInstallPrelude(env)
-	return &ElabCx{ast: ast, core: emptyCoreArena(), env: env, typedExprNodes: make([]int, 0, 1), typedExprCoreNodes: make([]int, 0, 1), typedExprTypes: make([]int, 0, 1), typedStmtNodes: make([]int, 0, 1), typedStmtCoreNodes: make([]int, 0, 1)}
+	nodeCap := 32
+	stmtCap := 16
+	if ast != nil && ast.arena != nil {
+		if len(ast.arena.nodes) > nodeCap {
+			nodeCap = len(ast.arena.nodes)
+		}
+		if len(ast.arena.decls) > 0 {
+			stmtCap = len(ast.arena.decls) * 4
+			if stmtCap < 16 {
+				stmtCap = 16
+			}
+		}
+	}
+	return &ElabCx{
+		ast:                ast,
+		core:               &CoreArena{nodes: make([]*CoreNode, 0, nodeCap)},
+		env:                env,
+		typedExprNodes:     make([]int, 0, nodeCap),
+		typedExprCoreNodes: make([]int, 0, nodeCap),
+		typedExprTypes:     make([]int, 0, nodeCap),
+		typedStmtNodes:     make([]int, 0, stmtCap),
+		typedStmtCoreNodes: make([]int, 0, stmtCap),
+	}
 }
 
 // Osty: /tmp/selfhost_merged.osty:17609:5
