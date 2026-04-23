@@ -259,8 +259,8 @@ func adaptResolveResult(resolved *SelfResolveResult, file *AstFile, offsets func
 	result := ResolveResult{
 		Summary:     adaptResolveSummary(resolved),
 		Symbols:     make([]ResolvedSymbol, 0, len(resolved.symbols)),
-		Refs:        make([]ResolvedRef, 0, minResolveRefCount(resolved)),
-		TypeRefs:    make([]ResolvedTypeRef, 0, minResolveTypeRefCount(resolved)),
+		Refs:        make([]ResolvedRef, 0, len(resolved.refList)),
+		TypeRefs:    make([]ResolvedTypeRef, 0, len(resolved.typeRefList)),
 		Diagnostics: make([]ResolveDiagnosticRecord, 0, len(resolved.diagnostics)),
 	}
 	for _, sym := range resolved.symbols {
@@ -280,24 +280,30 @@ func adaptResolveResult(resolved *SelfResolveResult, file *AstFile, offsets func
 			Public:   sym.public,
 		})
 	}
-	for i := 0; i < minResolveRefCount(resolved); i++ {
-		start, end := selfhostResolveNodeOffsets(file, resolved.refNodes[i], offsets)
-		targetStart, targetEnd := offsets(resolved.refTargetStarts[i], resolved.refTargetEnds[i])
+	for _, ref := range resolved.refList {
+		if ref == nil {
+			continue
+		}
+		start, end := selfhostResolveNodeOffsets(file, ref.node, offsets)
+		targetStart, targetEnd := offsets(ref.targetStart, ref.targetEnd)
 		result.Refs = append(result.Refs, ResolvedRef{
-			Name:        resolved.refNames[i],
-			Node:        resolved.refNodes[i],
+			Name:        ref.name,
+			Node:        ref.node,
 			Start:       start,
 			End:         end,
-			TargetNode:  resolved.refTargets[i],
+			TargetNode:  ref.target,
 			TargetStart: targetStart,
 			TargetEnd:   targetEnd,
 		})
 	}
-	for i := 0; i < minResolveTypeRefCount(resolved); i++ {
-		start, end := selfhostResolveNodeOffsets(file, resolved.typeRefNodes[i], offsets)
+	for _, tref := range resolved.typeRefList {
+		if tref == nil {
+			continue
+		}
+		start, end := selfhostResolveNodeOffsets(file, tref.node, offsets)
 		result.TypeRefs = append(result.TypeRefs, ResolvedTypeRef{
-			Name:  resolved.typeRefNames[i],
-			Node:  resolved.typeRefNodes[i],
+			Name:  tref.name,
+			Node:  tref.node,
 			Start: start,
 			End:   end,
 		})
@@ -318,37 +324,6 @@ func adaptResolveResult(resolved *SelfResolveResult, file *AstFile, offsets func
 		})
 	}
 	return result
-}
-
-func minResolveRefCount(resolved *SelfResolveResult) int {
-	if resolved == nil {
-		return 0
-	}
-	n := len(resolved.refNames)
-	if len(resolved.refNodes) < n {
-		n = len(resolved.refNodes)
-	}
-	if len(resolved.refTargets) < n {
-		n = len(resolved.refTargets)
-	}
-	if len(resolved.refTargetStarts) < n {
-		n = len(resolved.refTargetStarts)
-	}
-	if len(resolved.refTargetEnds) < n {
-		n = len(resolved.refTargetEnds)
-	}
-	return n
-}
-
-func minResolveTypeRefCount(resolved *SelfResolveResult) int {
-	if resolved == nil {
-		return 0
-	}
-	n := len(resolved.typeRefNames)
-	if len(resolved.typeRefNodes) < n {
-		n = len(resolved.typeRefNodes)
-	}
-	return n
 }
 
 func selfhostResolveNodeOffsets(file *AstFile, node int, offsets func(start, end int) (int, int)) (int, int) {

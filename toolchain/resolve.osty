@@ -48,20 +48,38 @@ pub struct SelfPartialDecl {
     pub firstFieldsEnd: Int,
 }
 
+/// SelfResolvedRef is one resolved value-ref site: the identifier's AST node
+/// plus the target symbol it binds to. `target` is the target symbol's node,
+/// or `-1` for builtins / unresolved. `targetStart` / `targetEnd` carry the
+/// target symbol's declaration span for the (rare) cases where the consumer
+/// needs it directly (e.g. cross-file `def` row rendering that can't walk
+/// the arena). The ref site's own source span is derivable from `node`, so
+/// it is not duplicated here.
+pub struct SelfResolvedRef {
+    pub name: String,
+    pub node: Int,
+    pub target: Int,
+    pub targetStart: Int,
+    pub targetEnd: Int,
+}
+
+/// SelfResolvedTypeRef is one resolved type-ref head site. Carrying just
+/// the ident's AST node is enough — type-ref consumers only need the name
+/// and the node for disambiguation.
+pub struct SelfResolvedTypeRef {
+    pub name: String,
+    pub node: Int,
+}
+
 /// SelfResolveResult contains package symbols plus resolver diagnostics and
 /// references collected while walking lexical scopes in function bodies.
 pub struct SelfResolveResult {
     pub symbols: List<SelfSymbol>,
     pub diagnostics: List<SelfResolveDiagnostic>,
     pub refs: Int,
-    pub refNames: List<String>,
-    pub refNodes: List<Int>,
+    pub refList: List<SelfResolvedRef>,
     pub typeRefs: Int,
-    pub typeRefNames: List<String>,
-    pub typeRefNodes: List<Int>,
-    pub refTargets: List<Int>,
-    pub refTargetStarts: List<Int>,
-    pub refTargetEnds: List<Int>,
+    pub typeRefList: List<SelfResolvedTypeRef>,
     pub unresolved: Int,
     pub duplicates: Int,
     /// partials is scratch state used by the top-level collect pass to
@@ -158,14 +176,9 @@ pub fn emptySelfResolveResult() -> SelfResolveResult {
         symbols: [],
         diagnostics: [],
         refs: 0,
-        refNames: [],
-        refNodes: [],
+        refList: [],
         typeRefs: 0,
-        typeRefNames: [],
-        typeRefNodes: [],
-        refTargets: [],
-        refTargetStarts: [],
-        refTargetEnds: [],
+        typeRefList: [],
         unresolved: 0,
         duplicates: 0,
         partials: [],
@@ -351,8 +364,8 @@ pub fn selfResolveHasSymbol(result: SelfResolveResult, name: String, kind: Strin
 }
 
 pub fn selfResolveHasRef(result: SelfResolveResult, name: String) -> Bool {
-    for refName in result.refNames {
-        if refName == name {
+    for ref in result.refList {
+        if ref.name == name {
             return true
         }
     }
@@ -360,8 +373,8 @@ pub fn selfResolveHasRef(result: SelfResolveResult, name: String) -> Bool {
 }
 
 pub fn selfResolveHasRefNode(result: SelfResolveResult, node: Int) -> Bool {
-    for refNode in result.refNodes {
-        if refNode == node {
+    for ref in result.refList {
+        if ref.node == node {
             return true
         }
     }
@@ -369,8 +382,8 @@ pub fn selfResolveHasRefNode(result: SelfResolveResult, node: Int) -> Bool {
 }
 
 pub fn selfResolveHasTypeRef(result: SelfResolveResult, name: String) -> Bool {
-    for refName in result.typeRefNames {
-        if refName == name {
+    for ref in result.typeRefList {
+        if ref.name == name {
             return true
         }
     }
@@ -384,20 +397,15 @@ pub fn selfResolveHasRefTarget(
     end: Int,
     node: Int,
 ) -> Bool {
-    let mut idx = 0
-    for refName in result.refNames {
-        if refName == name {
-            let target = srIntListAt(result.refTargets, idx)
-            let targetStart = srIntListAt(result.refTargetStarts, idx)
-            let targetEnd = srIntListAt(result.refTargetEnds, idx)
-            if node >= 0 && target >= 0 && target == node {
+    for ref in result.refList {
+        if ref.name == name {
+            if node >= 0 && ref.target >= 0 && ref.target == node {
                 return true
             }
-            if targetStart == start && targetEnd == end {
+            if ref.targetStart == start && ref.targetEnd == end {
                 return true
             }
         }
-        idx = idx + 1
     }
     false
 }
@@ -410,23 +418,15 @@ pub fn selfResolveRefNodeTargets(
     end: Int,
     targetNode: Int,
 ) -> Bool {
-    let mut idx = 0
-    for node in result.refNodes {
-        if node == refNode {
-            let refName = srStringListAt(result.refNames, idx)
-            let target = srIntListAt(result.refTargets, idx)
-            let targetStart = srIntListAt(result.refTargetStarts, idx)
-            let targetEnd = srIntListAt(result.refTargetEnds, idx)
-            if refName == name {
-                if targetNode >= 0 && target >= 0 && target == targetNode {
-                    return true
-                }
-                if targetStart == start && targetEnd == end {
-                    return true
-                }
+    for ref in result.refList {
+        if ref.node == refNode && ref.name == name {
+            if targetNode >= 0 && ref.target >= 0 && ref.target == targetNode {
+                return true
+            }
+            if ref.targetStart == start && ref.targetEnd == end {
+                return true
             }
         }
-        idx = idx + 1
     }
     false
 }
@@ -448,23 +448,21 @@ pub fn selfResolveRefNodesSameTarget(
     let mut rightTarget = -1
     let mut rightStart = -1
     let mut rightEnd = -1
-    let mut idx = 0
-    for node in result.refNodes {
-        if node == leftNode && !(leftFound) {
+    for ref in result.refList {
+        if ref.node == leftNode && !(leftFound) {
             leftFound = true
-            leftTarget = srIntListAt(result.refTargets, idx)
-            leftStart = srIntListAt(result.refTargetStarts, idx)
-            leftEnd = srIntListAt(result.refTargetEnds, idx)
-        } else if node == rightNode && !(rightFound) {
+            leftTarget = ref.target
+            leftStart = ref.targetStart
+            leftEnd = ref.targetEnd
+        } else if ref.node == rightNode && !(rightFound) {
             rightFound = true
-            rightTarget = srIntListAt(result.refTargets, idx)
-            rightStart = srIntListAt(result.refTargetStarts, idx)
-            rightEnd = srIntListAt(result.refTargetEnds, idx)
+            rightTarget = ref.target
+            rightStart = ref.targetStart
+            rightEnd = ref.targetEnd
         }
         if leftFound && rightFound {
             break
         }
-        idx = idx + 1
     }
 
     if !(leftFound) || !(rightFound) {
@@ -1480,11 +1478,13 @@ fn srRecordRef(
 ) -> SelfResolveResult {
     let mut out = result
     out.refs = out.refs + 1
-    out.refNames.push(name)
-    out.refNodes.push(node)
-    out.refTargets.push(target.node)
-    out.refTargetStarts.push(target.start)
-    out.refTargetEnds.push(target.end)
+    out.refList.push(SelfResolvedRef {
+        name: name,
+        node: node,
+        target: target.node,
+        targetStart: target.start,
+        targetEnd: target.end,
+    })
     out
 }
 
@@ -1495,8 +1495,7 @@ fn srRecordBareRef(result: SelfResolveResult, name: String, node: Int) -> SelfRe
 fn srRecordTypeRef(result: SelfResolveResult, name: String, node: Int) -> SelfResolveResult {
     let mut out = result
     out.typeRefs = out.typeRefs + 1
-    out.typeRefNames.push(name)
-    out.typeRefNodes.push(node)
+    out.typeRefList.push(SelfResolvedTypeRef { name: name, node: node })
     out
 }
 
