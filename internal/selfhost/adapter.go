@@ -99,14 +99,19 @@ func runFrontend(src []byte, adaptTokens bool) *FrontendRun {
 }
 
 func frontTokensFromRuneTable(rt runeTable, stream *FrontLexStream) []*FrontToken {
-	parseTokens := make([]*FrontToken, 0, len(stream.tokens))
-	for _, tok := range stream.tokens {
-		parseTokens = append(parseTokens, &FrontToken{
+	if stream == nil || len(stream.tokens) == 0 {
+		return nil
+	}
+	values := make([]FrontToken, len(stream.tokens))
+	parseTokens := make([]*FrontToken, len(stream.tokens))
+	for i, tok := range stream.tokens {
+		values[i] = FrontToken{
 			kind:        tok.kind,
 			text:        rt.slice(tok.start.offset, tok.start.offset+tok.length),
 			startOffset: tok.start.offset,
 			endOffset:   tok.end.offset,
-		})
+		}
+		parseTokens[i] = &values[i]
 	}
 	return parseTokens
 }
