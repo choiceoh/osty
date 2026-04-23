@@ -93,8 +93,6 @@ func runFrontend(src []byte, adaptTokens bool) *FrontendRun {
 	run := &FrontendRun{text: text, rt: rt, stream: stream, parser: p}
 	if adaptTokens {
 		run.ensureLexAdapted()
-	} else {
-		run.lexDiags = lexDiagnosticsFromFacts(rt, stream, run.facts())
 	}
 	return run
 }
