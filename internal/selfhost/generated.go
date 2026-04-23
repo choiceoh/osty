@@ -40374,6 +40374,23 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 		// Osty: /tmp/selfhost_merged.osty:19231:9
 		return elabPoisonResult(cx, callNode.start, callNode.end)
 	}
+	// `?.` at method callee (LANG_SPEC §4 / appendix A.6). The parser
+	// stamps fieldNode.flags == 1 for `?.`; unwrap the Option receiver
+	// for the lookup and wrap the final return type via
+	// elabWrapOptionalChain below. Non-Option receiver → E0719.
+	// `callNode.flags == 1` is the UNRELATED `as?` sugar handled right
+	// after this block (different flag on a different node).
+	isOptionalChain := fieldNode.flags == 1
+	_ = isOptionalChain
+	lookupRecvTy := recvResolved
+	if isOptionalChain {
+		if ostyEqual(tyKindAt(cx.env.tys, recvResolved), TyKind(&TyKind_TkOptional{})) {
+			lookupRecvTy = tyInnerAt(cx.env.tys, recvResolved)
+		} else {
+			cx.env.diagnostics = append(cx.env.diagnostics, diagOptionalChainOnNon(tyToString(cx.env.tys, recvResolved), fieldNode.start, fieldNode.end))
+			return elabPoisonResult(cx, callNode.start, callNode.end)
+		}
+	}
 	// Osty: /tmp/selfhost_merged.osty:19237:5
 	if callNode.flags == 1 {
 		// Osty: /tmp/selfhost_merged.osty:19238:9
@@ -40436,13 +40453,13 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 		}
 	}
 	// Osty: /tmp/selfhost_merged.osty:19284:5
-	ownerName := elabOwnerNameForReceiver(cx.env.tys, recvResolved)
+	ownerName := elabOwnerNameForReceiver(cx.env.tys, lookupRecvTy)
 	_ = ownerName
 	// Osty: /tmp/selfhost_merged.osty:19285:5
 	methodName := fieldNode.text
 	_ = methodName
 	// Osty: /tmp/selfhost_merged.osty:19286:5
-	lookedUpSig := checkLookupMethodForReceiver(cx.env, recvResolved, ownerName, methodName)
+	lookedUpSig := checkLookupMethodForReceiver(cx.env, lookupRecvTy, ownerName, methodName)
 	_ = lookedUpSig
 	// Osty: /tmp/selfhost_merged.osty:19287:5
 	rawSig := func() *CheckFnSig {
@@ -40456,12 +40473,12 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 	}()
 	_ = rawSig
 	// Osty: /tmp/selfhost_merged.osty:19294:5
-	sig := checkSpecializeMethodSelf(cx.env, rawSig, recvResolved)
+	sig := checkSpecializeMethodSelf(cx.env, rawSig, lookupRecvTy)
 	_ = sig
 	// Osty: /tmp/selfhost_merged.osty:19295:5
 	if sig.name == "" {
 		// Osty: /tmp/selfhost_merged.osty:19296:9
-		hint := diagDidYouMean(checkSuggestSimilar(checkMethodNamesForReceiver(cx.env, recvResolved, ownerName), methodName))
+		hint := diagDidYouMean(checkSuggestSimilar(checkMethodNamesForReceiver(cx.env, lookupRecvTy, ownerName), methodName))
 		_ = hint
 		// Osty: /tmp/selfhost_merged.osty:19299:9
 		func() struct{} {
@@ -40477,7 +40494,9 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 		coreArgs := elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, callNode.children, callNode.start, callNode.end)
 		_ = coreArgs
 		// Osty: /tmp/selfhost_merged.osty:19308:9
-		retTy := sig.retTy
+		// `?.` wraps the method's return type in Option — see Osty
+		// helper elabWrapOptionalChain (flattens when already Option).
+		retTy := elabWrapOptionalChain(cx, isOptionalChain, sig.retTy)
 		_ = retTy
 		// Osty: /tmp/selfhost_merged.osty:19309:9
 		if !(tyIsBad(cx.env.tys, expected)) {
@@ -40497,7 +40516,7 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 	typeSig := checkLookupType(cx.env, ownerName)
 	_ = typeSig
 	// Osty: /tmp/selfhost_merged.osty:19330:5
-	ownerArgs := elabOwnerArgsForReceiver(cx.env.tys, ownerName, recvResolved)
+	ownerArgs := elabOwnerArgsForReceiver(cx.env.tys, ownerName, lookupRecvTy)
 	_ = ownerArgs
 	// Osty: /tmp/selfhost_merged.osty:19331:5
 	instSeedOwnerArgs(cx, inst, typeSig.generics, ownerArgs)
@@ -40512,7 +40531,8 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 	retSubstituted := instSubstitute(cx, inst, sig.retTy)
 	_ = retSubstituted
 	// Osty: /tmp/selfhost_merged.osty:19344:5
-	retTy := instZonk(cx, inst, retSubstituted)
+	// `?.` wraps the (post-zonk) generic method return in Option.
+	retTy := elabWrapOptionalChain(cx, isOptionalChain, instZonk(cx, inst, retSubstituted))
 	_ = retTy
 	// Osty: /tmp/selfhost_merged.osty:19345:5
 	elabReportUnresolvedGenerics(cx, inst.solver, sig, inst.freshs, callNode.start, callNode.end)
