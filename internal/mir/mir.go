@@ -484,6 +484,15 @@ const (
 	IntrinsicListIndexOf
 	// IntrinsicListToSet constructs a Set<T> from a List<T>. Args: [list].
 	IntrinsicListToSet
+	// IntrinsicListRemoveAt removes the element at the given index and
+	// returns it. Aborts on out-of-range. Args: [list, idx]. Dest is T.
+	IntrinsicListRemoveAt
+	// IntrinsicListReverse reverses a List<T> in place. Args: [list].
+	// Dest nil.
+	IntrinsicListReverse
+	// IntrinsicListReversed returns a freshly allocated copy of the list
+	// with elements in reverse order. Args: [list]. Dest is List<T>.
+	IntrinsicListReversed
 
 	// ---- stdlib collections: Map<K, V> ----
 
@@ -1517,6 +1526,12 @@ func (k IntrinsicKind) String() string {
 		return "list_index_of"
 	case IntrinsicListToSet:
 		return "list_to_set"
+	case IntrinsicListRemoveAt:
+		return "list_remove_at"
+	case IntrinsicListReverse:
+		return "list_reverse"
+	case IntrinsicListReversed:
+		return "list_reversed"
 	case IntrinsicMapNew:
 		return "map_new"
 	case IntrinsicMapGet:
