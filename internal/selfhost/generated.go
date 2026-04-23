@@ -36065,6 +36065,7 @@ func checkInstallPrelude(env *CheckEnv) {
 	checkRegisterType(env, &CheckTypeSig{name: "List", generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1), kind: "struct"})
 	// Osty: /tmp/selfhost_merged.osty:15894:5
 	checkRegisterType(env, &CheckTypeSig{name: "Map", generics: []string{"K", "V"}, genericBounds: make([]*CheckGenericBound, 0, 1), kind: "struct"})
+	checkRegisterType(env, &CheckTypeSig{name: "Set", generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1), kind: "struct"})
 	// Osty: /tmp/selfhost_merged.osty:15895:5
 	checkRegisterType(env, &CheckTypeSig{name: "Option", generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1), kind: "enum"})
 	// Osty: /tmp/selfhost_merged.osty:15896:5

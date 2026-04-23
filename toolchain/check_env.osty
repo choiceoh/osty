@@ -1797,6 +1797,7 @@ pub fn checkInstallPrelude(env: CheckEnv) {
     // type entry so type-qualified calls can resolve the owner name.
     checkRegisterType(env, CheckTypeSig { name: "List", generics: ["T"], genericBounds: [], kind: "struct" })
     checkRegisterType(env, CheckTypeSig { name: "Map", generics: ["K", "V"], genericBounds: [], kind: "struct" })
+    checkRegisterType(env, CheckTypeSig { name: "Set", generics: ["T"], genericBounds: [], kind: "struct" })
     checkRegisterType(env, CheckTypeSig { name: "Option", generics: ["T"], genericBounds: [], kind: "enum" })
     checkRegisterType(env, CheckTypeSig { name: "Result", generics: ["T", "E"], genericBounds: [], kind: "enum" })
     checkRegisterType(env, CheckTypeSig { name: "Range", generics: ["T"], genericBounds: [], kind: "struct" })
