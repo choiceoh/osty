@@ -121,8 +121,8 @@ regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환.
 | **Workspace 2-pass (declare/body)** | `internal/resolve/workspace.go:356` | — | — | n/a | 호스트 경계 — `internal/selfhost/workspace_driver.go` 쪽에서 담당 |
 | **#[cfg] 사전 필터** | `internal/resolve/cfg.go:69` | `toolchain/resolve.osty::srCfgDeclPasses` | E0405, E0739 | **partial** | 2026-04-22 native 경로 Osty 구동 (srCfgDeclPasses + selfResolveAstFileWithCfg). Go `cfg.go` 는 레거시 `ResolveAll` 에 남아있음 — 레거시 retire 시 제거 |
 | **Package visibility 강제** | `internal/resolve/resolve.go:410` | — | E0553, E0770 | **go-only** | `ResolveUseTarget` 가 pub 체크 |
-| Partial-decl method name 유일성 | `internal/resolve/merge.go:100` | — | — | go-only | partial struct 메서드명 중복 금지 |
-| Self-host ref tracking (refNames/Targets) | — | `toolchain/resolve.osty:1270` | — | osty-only-unwired | Osty 가 emit 하지만 adapter 가 다른 형식으로만 쓴다 |
+| Partial-decl method name 유일성 | `internal/resolve/merge.go:100::checkPartialMethodNames` (Go legacy fallback, `--legacy` 경로 전용) | `toolchain/resolve.osty::srHandlePartialType` (line 2247+ cross-file methodNames dup 검출 → E0501 + R19 note 발행) | E0501 (R19) | **ported** | Osty `SelfPartialDecl.methodNames` 트래커가 partial struct/enum 여러 파일에 걸친 method 중복을 잡고 동일 메시지 / 동일 note 발행. Go `checkPartialMethodNames` 는 `declareTopLevelPackage` 에서만 호출되며 이 경로는 phase 1c.1 flip 이후 `--legacy` 에서만 활성화. 1c.5 에서 merge.go 와 함께 삭제 |
+| Self-host ref tracking (refNames/Targets) | `internal/selfhost/resolve_adapter.go::adaptResolveResult` (refNodes/refNames/refTargets/refTargetStarts/refTargetEnds 전부 `ResolvedRef` 로 lift) | `toolchain/resolve.osty:1483+ out.refNames.push` / `out.refTargets.push` | — | **ported** | PR #754 리베이스 시점 이후 adapter 가 Osty emit 된 병렬 리스트 5종을 `ResolvedRef` 로 공식 변환. 추가 필드 이관 없음 — translation 은 단순 indexed zip 이므로 "unwired" 라벨은 과거 표현 |
 | Generic arity 기록 | — | `toolchain/resolve.osty:510` | — | ported | 양쪽 동일 |
 
 ### Resolver 포팅 우선순위
@@ -131,7 +131,7 @@ regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환.
 2. ~~**Partial struct/enum merge** (E0509/E0501)~~ — **착륙 2026-04-23**. `SelfPartialDecl` 트래커 + `srHandlePartialType`, R19 4 invariants (pub / generics / fields-in-one / method name uniqueness) 검증. 현재는 single-file (native_adapter 가 `ResolvePackageStructured` 로 다중 파일을 synthetic 단일 네임스페이스로 합쳐 통과). True cross-file stitching 은 workspace 모델 등장 이후.
 3. ~~**Workspace cycle detection** (E0506)~~ — **착륙 2026-04-23**. `selfDetectImportCycles` + `SelfWorkspaceUses` / `SelfPackageUses` / `SelfUseEdge` / `SelfCycleDiag` (toolchain/resolve.osty). `selfhost.DetectImportCycles` Go bridge. `internal/resolve/workspace.go::detectCycles` 는 그래프 준비 + offset 기반 roundtrip 후 `token.Pos` 복원 + 진단 렌더링 glue 만 남김. 알고리즘 (DFS 3-상태 색칠) 은 완전히 Osty 쪽.
 4. **Package visibility 강제** (E0553/E0770) — `pub use` re-export 검증 포함. cross-package 가시성 그래프 필요 — cycle detection 과 같은 workspace 레이어 위에 올린다.
-5. **`osty-only-unwired` refNames/refTargets** — adapter 가 이미 자체 형식으로 번역 중이라, Osty 측 emit 을 소비하도록 adapter 를 슬림하게 바꾸면 bridge 면적이 줄어든다. 버그픽스성 작업.
+5. ~~**`osty-only-unwired` refNames/refTargets**~~ — **재평가 결과 기 이식**. `internal/selfhost/resolve_adapter.go::adaptResolveResult` 가 이미 Osty emit 된 5 개 병렬 리스트 (refNodes / refNames / refTargets / refTargetStarts / refTargetEnds) 를 `ResolvedRef` 로 indexed-zip 해 공식 변환 중. "unwired" 라벨은 과거 표현이었고 현재 adapter 가 유일 소비자 — bridge 면적 추가 축소 여지 없음.
 
 ---
 
