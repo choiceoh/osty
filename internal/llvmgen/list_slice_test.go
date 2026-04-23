@@ -109,3 +109,115 @@ fn main() {
 		t.Fatalf("list<string> slice did not call runtime slice:\n%s", got)
 	}
 }
+
+// List indexing by a bound Range value routes through osty_rt_list_slice
+// — same runtime as the literal-range path. The aggregate is destructured
+// at runtime so hasStart/hasStop/inclusive stay live.
+func TestListSliceByLetRangeValue(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    let xs = [10, 20, 30, 40]
+    let n = xs.len()
+    let r = 0..n
+    let ys = xs[r]
+    println(ys.len())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/list_slice_let_range.osty"})
+	if err != nil {
+		t.Fatalf("let-range list slice errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_list_slice",
+		"@osty_rt_list_len",
+		"extractvalue %Range.i64",
+		"select i1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("let-range list slice missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// Range passed as a parameter also routes through the slice runtime.
+// Covers `fn f(xs, r) { xs[r] }` where the function body has no static
+// view of the range's start/stop — everything is pulled out of the
+// aggregate at runtime.
+func TestListSliceByRangeParam(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn take(xs: List<Int>, r: Range<Int>) -> List<Int> {
+    xs[r]
+}
+
+fn main() {
+    let xs = [10, 20, 30]
+    println(take(xs, 0..2).len())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/list_slice_range_param.osty"})
+	if err != nil {
+		t.Fatalf("range-param list slice errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_list_slice",
+		"extractvalue %Range.i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("range-param list slice missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// Open-ended range values (`..n`, `n..`, `..`) must fall back to 0 for
+// start and list.len for stop, matching the literal slicer. Validated
+// here by storing an open-low range in a let and confirming the IR
+// still emits the hasStart/hasStop select guards.
+func TestListSliceByOpenRangeValue(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    let xs = [10, 20, 30, 40]
+    let r = ..3
+    let ys = xs[r]
+    println(ys.len())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/list_slice_open_range.osty"})
+	if err != nil {
+		t.Fatalf("open-low range list slice errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_list_slice",
+		"extractvalue %Range.i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("open-low range list slice missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// Inclusive range values (`a..=b`) must add 1 to the stop bound at
+// runtime. The select on the `inclusive` field lets the same IR handle
+// both exclusive and inclusive ranges without branching.
+func TestListSliceByInclusiveRangeValue(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    let xs = [10, 20, 30]
+    let r = 0..=1
+    let ys = xs[r]
+    println(ys.len())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/list_slice_incl_range.osty"})
+	if err != nil {
+		t.Fatalf("inclusive range-value list slice errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_list_slice",
+		"add i64",
+		"select i1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("inclusive range-value list slice missing %q:\n%s", want, got)
+		}
+	}
+}

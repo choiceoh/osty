@@ -81,6 +81,31 @@ fn main() {
 	}
 }
 
+// String indexing by a bound Range value routes through
+// osty_rt_strings_Slice — same runtime as the literal-range path.
+func TestStringSliceByRangeValue(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    let s = "hello"
+    let n = s.len()
+    let r = 1..n
+    println(s[r])
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_slice_let_range.osty"})
+	if err != nil {
+		t.Fatalf("string range-value slice errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_Slice",
+		"extractvalue %Range.i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("string range-value slice missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStringSubstringMethodCall(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn stripPrefix(text: String) -> String {
     if text.startsWith("0x") {
