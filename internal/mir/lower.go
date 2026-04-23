@@ -2472,6 +2472,19 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 		elemT := bs.tupleAccessType(x)
 		return &UseRV{Op: &CopyOp{Place: recvPlace.Project(&TupleProj{Index: x.Index, Type: elemT}), T: elemT}}
 	case *ir.IndexExpr:
+		// `s[a..b]` on a String lowers to the IntrinsicStringSubstring
+		// pipe instead of IndexProj — Range values aren't first-class in
+		// MIR stage 1 (see the RangeLit fallback below) so an IndexProj
+		// whose Index operand is a unit-typed const would reach the
+		// backend as `call strings_Slice(ptr, undef, undef)` and abort
+		// at runtime with "invalid bounds". Handle the common slice
+		// shape by pulling start/end operands straight out of the
+		// RangeLit's Start/End exprs and emitting a proper intrinsic.
+		if rng, ok := x.Index.(*ir.RangeLit); ok && isStringReceiverType(x.X.Type()) {
+			if rv, handled := bs.lowerStringSliceRValue(x, rng); handled {
+				return rv
+			}
+		}
 		recvPlace, ok := bs.lowerExprToPlace(x.X)
 		if !ok {
 			t := bs.recoveredTypeOf(x.X)
@@ -2544,6 +2557,14 @@ func (bs *bodyState) lowerExprToPlace(e ir.Expr) (Place, bool) {
 		}
 		return recv.Project(&TupleProj{Index: x.Index, Type: bs.tupleAccessType(x)}), true
 	case *ir.IndexExpr:
+		// `s[a..b]` has no projection representation — the IntrinsicStringSubstring
+		// runtime call materialises a fresh String and only the RValue
+		// path can model that. Bail out here so callers use the RValue
+		// form instead (lowerExprAsRValue catches the string-slice
+		// pattern and emits the intrinsic directly).
+		if _, ok := x.Index.(*ir.RangeLit); ok && isStringReceiverType(x.X.Type()) {
+			return Place{}, false
+		}
 		recv, ok := bs.lowerExprToPlace(x.X)
 		if !ok {
 			return Place{}, false
@@ -4081,6 +4102,43 @@ func stdlibStringFreeFnToIntrinsic(qualifier, name string) IntrinsicKind {
 		return IntrinsicStringReplace
 	}
 	return IntrinsicInvalid
+}
+
+// isStringReceiverType reports whether `t` is a String primitive,
+// matching the receivers that the IntrinsicStringSubstring runtime
+// call expects. Used to gate the `s[a..b]` fast-path lowering below.
+func isStringReceiverType(t ir.Type) bool {
+	if pt, ok := t.(*ir.PrimType); ok {
+		return pt.Kind == ir.PrimString
+	}
+	return false
+}
+
+// lowerStringSliceRValue emits `s[a..b]` as an IntrinsicStringSubstring
+// call, returning the RValue that reads the resulting temp. Requires
+// both bounds to be concrete exprs on the RangeLit — the unbounded
+// `s[..b]` / `s[a..]` / `s[..]` shapes still fall through to the
+// generic IndexProj path (for now that routes through the same broken
+// Range-in-value lowering, so callers should emit explicit bounds).
+// `..=` inclusive ranges also fall through; the runtime API takes
+// half-open [start, end) offsets so supporting `..=` cleanly would
+// mean bumping `end` by one byte which conflicts with the multi-byte
+// char boundary invariant the runtime enforces.
+func (bs *bodyState) lowerStringSliceRValue(x *ir.IndexExpr, rng *ir.RangeLit) (RValue, bool) {
+	if rng == nil || rng.Start == nil || rng.End == nil || rng.Inclusive {
+		return nil, false
+	}
+	recvOp := bs.lowerExprAsOperand(x.X)
+	startOp := bs.lowerExprAsOperand(rng.Start)
+	endOp := bs.lowerExprAsOperand(rng.End)
+	tmp := bs.freshTemp(ir.TString, exprSpan(x))
+	bs.emit(&IntrinsicInstr{
+		Dest:  &Place{Local: tmp},
+		Kind:  IntrinsicStringSubstring,
+		Args:  []Operand{recvOp, startOp, endOp},
+		SpanV: exprSpan(x),
+	})
+	return &UseRV{Op: &CopyOp{Place: Place{Local: tmp}, T: ir.TString}}, true
 }
 
 // emitStringFreeFnIntrinsic lowers each arg in source order and
