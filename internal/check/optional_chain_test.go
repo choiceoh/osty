@@ -118,6 +118,71 @@ fn main() {
 	}
 }
 
+func TestOptionalChainMethodCallOnOption(t *testing.T) {
+	src := `struct User {
+    pub name: String,
+
+    pub fn greeting(self) -> String {
+        "hi, " + self.name
+    }
+}
+
+fn main() {
+    let u: User? = Some(User { name: "a" })
+    let g: String? = u?.greeting()
+}
+`
+	diags := checkOptionalChainSource(t, src)
+	for _, code := range []string{"E0700", "E0703", "E0719"} {
+		if n := countByCode(diags, code); n != 0 {
+			t.Fatalf("%s must not fire on `opt?.method()`, got %d:\n%s",
+				code, n, renderDiagList(diags))
+		}
+	}
+}
+
+func TestOptionalChainMethodCallCoalesceUnwraps(t *testing.T) {
+	src := `struct User {
+    pub name: String,
+    pub fn greeting(self) -> String { self.name }
+}
+
+fn main() {
+    let u: User? = None
+    let s: String = u?.greeting() ?? "anon"
+}
+`
+	diags := checkOptionalChainSource(t, src)
+	for _, code := range []string{"E0700", "E0703", "E0717", "E0719"} {
+		if n := countByCode(diags, code); n != 0 {
+			t.Fatalf("%s must not fire on `opt?.method() ?? default`, got %d:\n%s",
+				code, n, renderDiagList(diags))
+		}
+	}
+}
+
+func TestOptionalChainMethodCallOnNonOptionRejected(t *testing.T) {
+	src := `struct User {
+    pub name: String,
+    pub fn greeting(self) -> String { self.name }
+}
+
+fn main() {
+    let u: User = User { name: "a" }
+    let bad = u?.greeting()
+}
+`
+	diags := checkOptionalChainSource(t, src)
+	if n := countByCode(diags, "E0719"); n != 1 {
+		t.Fatalf("E0719 must fire exactly once on `non_opt?.method()`, got %d:\n%s",
+			n, renderDiagList(diags))
+	}
+	if n := countByCode(diags, "E0703"); n != 0 {
+		t.Fatalf("E0703 (no method) must not fire alongside E0719, got %d:\n%s",
+			n, renderDiagList(diags))
+	}
+}
+
 func TestOptionalChainE0719MessageNamesReceiverType(t *testing.T) {
 	src := `fn main() {
     let n: Int = 5
