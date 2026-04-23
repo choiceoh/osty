@@ -6,24 +6,36 @@
 // produced the node's type (see `LANG_SPEC_v0.5/02a-type-inference.md`
 // §2a.4 / §2a.5).
 //
-// This module implements a **v1 self-host port**: it iterates the already-
-// computed `FrontCheckResult.typedNodes` list and emits one
-// `InspectRecord` per typed expression, sorted by source offset. Compared
-// to the Go reference:
+// This module implements a **v1.5 self-host port**. v1 iterated the
+// already-computed `FrontCheckResult.typedNodes` list for expression-
+// level records. v1.5 folds in decl-level records sourced from
+// `FrontCheckResult.symbols` (top-level `fn` / `let` / struct / enum /
+// interface / alias / use) and pattern bindings from
+// `FrontCheckResult.bindings` (match scrutinee + struct destructure
+// binders).
 //
-//   - ✅ LIT-*, VAR, BINOP, UNARY, CALL, FIELD, INDEX, IF, MATCH, LIST, MAP,
-//        TUPLE, STRUCT-LIT, RANGE, BLOCK, PAREN, QUESTION, TURBOFISH,
-//        CLOSURE rules are emitted.
-//   - ❌ FN-DECL / LET declarations are not yet surfaced here — those
-//        nodes don't sit in `typedNodes` because the checker stores them
-//        via `bindings` / `FrontCheckedBinding`. Follow-up can fold those
-//        in to complete parity.
-//   - ❌ Hint propagation (`hintName`) is empty in v1. Go reconstructs the
-//        hint by re-walking the AST with expected-type threading. Porting
-//        that requires a small type-string parser on top of
+// Coverage vs the Go reference:
+//
+//   - ✅ Expression rules (LIT-\*, VAR, BINOP, UNARY, CALL, FIELD, INDEX,
+//        IF, MATCH, LIST, MAP, TUPLE, STRUCT-LIT, RANGE, BLOCK, PAREN,
+//        QUESTION, TURBOFISH, CLOSURE).
+//   - ✅ Decl rules (FN-DECL, LET, STRUCT-DECL, ENUM-DECL, INTERFACE-DECL,
+//        TYPE-ALIAS, USE) — sourced from `symbols`. Go emits only
+//        FN-DECL / LET among these; the extra decl kinds are a strict
+//        super-set that surfaces more context for IDE-style observers.
+//   - ✅ Pattern bindings — rule `BIND` from `bindings`. Covers `match`
+//        scrutinee binders and struct/enum destructure patterns.
+//   - ❌ **Local let statements** (LetStmt inside a block body) — the
+//        self-host checker records those as part of the block walker's
+//        state but doesn't push a separate `symbols` / `bindings` entry,
+//        so v1.5 silently drops them. Porting would require either an
+//        AST re-walk or a `symbols` entry per local let. Tracked in
+//        SELFHOST_PORT_MATRIX.md as a follow-up.
+//   - ❌ Hint propagation (`hintName`) is still empty. Go reconstructs
+//        the hint by re-walking the AST with expected-type threading.
+//        Porting needs a small type-string parser on top of
 //        `FrontCheckedNode.typeName` (since the self-host path only
 //        exposes types as rendered strings, not structured `types.Type`).
-//        Tracked in SELFHOST_PORT_MATRIX.md.
 //
 // Entry points:
 //
@@ -71,6 +83,47 @@ pub fn inspectFromCheckResult(checked: FrontCheckResult) -> List<InspectRecord> 
             notes: [],
         })
     }
+    for sym in checked.symbols {
+        let rule = inspectRuleForSymbolKind(sym.kind)
+        if rule == "" {
+            continue
+        }
+        let mut notes: List<String> = []
+        if sym.name != "" {
+            notes.push("name: " + sym.name)
+        }
+        if sym.owner != "" {
+            notes.push("owner: " + sym.owner)
+        }
+        out.push(InspectRecord {
+            start: sym.start,
+            end: sym.end,
+            nodeKind: inspectNodeKindForSymbolKind(sym.kind),
+            rule,
+            typeName: sym.typeName,
+            hintName: "",
+            notes,
+        })
+    }
+    for bnd in checked.bindings {
+        if bnd.name == "" || bnd.name == "_" {
+            continue
+        }
+        let mut notes: List<String> = []
+        notes.push("name: " + bnd.name)
+        if bnd.mutable {
+            notes.push("mutable")
+        }
+        out.push(InspectRecord {
+            start: bnd.start,
+            end: bnd.end,
+            nodeKind: "Binding",
+            rule: "BIND",
+            typeName: bnd.typeName,
+            hintName: "",
+            notes,
+        })
+    }
     inspectSortByOffset(out)
 }
 
@@ -103,6 +156,37 @@ fn inspectRuleForKind(kind: String) -> String {
     if kind == "AstNQuestion" { return "QUESTION" }
     if kind == "AstNTurbofish" { return "TURBOFISH" }
     ""
+}
+
+/// Map a `FrontCheckedSymbol.kind` (e.g. "fn", "let", "struct") to the
+/// inspect rule label. Returns "" for symbol kinds that shouldn't
+/// surface as records (currently none — "use" also gets USE).
+fn inspectRuleForSymbolKind(kind: String) -> String {
+    if kind == "fn" { return "FN-DECL" }
+    if kind == "let" { return "LET" }
+    if kind == "struct" { return "STRUCT-DECL" }
+    if kind == "enum" { return "ENUM-DECL" }
+    if kind == "interface" { return "INTERFACE-DECL" }
+    if kind == "alias" { return "TYPE-ALIAS" }
+    if kind == "use" { return "USE" }
+    if kind == "field" { return "FIELD-DECL" }
+    if kind == "variant" { return "VARIANT-DECL" }
+    ""
+}
+
+/// Map a symbol kind to a nodeKind string suitable for the record's
+/// `nodeKind` field. Parallels `astNodeKindName` for decl-level symbols.
+fn inspectNodeKindForSymbolKind(kind: String) -> String {
+    if kind == "fn" { return "FnDecl" }
+    if kind == "let" { return "LetDecl" }
+    if kind == "struct" { return "StructDecl" }
+    if kind == "enum" { return "EnumDecl" }
+    if kind == "interface" { return "InterfaceDecl" }
+    if kind == "alias" { return "TypeAliasDecl" }
+    if kind == "use" { return "UseDecl" }
+    if kind == "field" { return "StructField" }
+    if kind == "variant" { return "EnumVariant" }
+    "Symbol"
 }
 
 /// Sort records by (start, end) ascending. Stable insertion sort; typed
