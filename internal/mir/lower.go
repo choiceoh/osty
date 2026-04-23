@@ -2185,6 +2185,56 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		case *ir.FloatLit:
 			return ir.TFloat64
 		}
+	case *ir.Ident:
+		// Ident whose carrier type is poisoned — if it resolves to a
+		// MIR local we've already created (common after lowerLet's
+		// own valueType recovery), surface the local's type instead
+		// of the poisoned annotation on the IR node.
+		if id, ok := bs.lookup(x.Name); ok {
+			if loc := bs.fn.Local(id); loc != nil && !isPoisonType(loc.Type) {
+				return loc.Type
+			}
+		}
+	case *ir.IfExpr:
+		// `let x = if ... { a } else { b }` with a poisoned IfExpr
+		// carrier: recover from whichever arm's tail expression still
+		// carries a concrete type. Both arms produce the same type by
+		// exhaustiveness, so either is fine.
+		if rt := recoverBlockTailType(bs, x.Then); rt != nil {
+			return rt
+		}
+		if rt := recoverBlockTailType(bs, x.Else); rt != nil {
+			return rt
+		}
+	}
+	return nil
+}
+
+// recoverBlockTailType returns the recovered type of a Block's tail
+// expression. When b.Result is nil — common after a checker bailout,
+// since ir/lower.go's lowerBlock only promotes the last stmt to
+// Result when the checker tagged it with a non-unit type — fall back
+// to the final statement when it's an ExprStmt. Named to distinguish
+// it from ir.blockResultType, which is the authoritative non-recovery
+// version on the IR side.
+func recoverBlockTailType(bs *bodyState, b *ir.Block) ir.Type {
+	if b == nil {
+		return nil
+	}
+	tail := b.Result
+	if tail == nil && len(b.Stmts) > 0 {
+		if es, ok := b.Stmts[len(b.Stmts)-1].(*ir.ExprStmt); ok {
+			tail = es.X
+		}
+	}
+	if tail == nil {
+		return nil
+	}
+	if t := tail.Type(); !isPoisonType(t) {
+		return t
+	}
+	if rt := bs.recoverOperandType(tail); !isPoisonType(rt) {
+		return rt
 	}
 	return nil
 }
