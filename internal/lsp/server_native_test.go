@@ -40,6 +40,23 @@ func TestAnalyzePackageContainingUsesNativeCompatibilityPath(t *testing.T) {
 	}
 }
 
+func TestAnalyzeSingleFileUsesNativeCompatibilityPath(t *testing.T) {
+	src := []byte("pub fn fresh() {}\n")
+	s := NewServer(bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{})
+
+	selfhost.ResetAstbridgeLowerCount()
+	a := s.analyzeSingleFile(src)
+	if a == nil {
+		t.Fatal("analyzeSingleFile returned nil")
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("AstbridgeLowerCount after single-file analyze = %d, want 0", got)
+	}
+	if got := lspFirstFnName(a.file); got != "fresh" {
+		t.Fatalf("first function = %q, want %q", got, "fresh")
+	}
+}
+
 func TestAnalyzeWorkspaceUsesNativeCompatibilityPath(t *testing.T) {
 	root := t.TempDir()
 	appDir := filepath.Join(root, "app")

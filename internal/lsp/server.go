@@ -701,21 +701,22 @@ func diagBelongsToFile(d *diag.Diagnostic, pf *resolve.PackageFile) bool {
 // repeated edits of the same buffer benefit from the incremental
 // cache and early cutoff.
 func (s *Server) analyzeSingleFile(src []byte) *docAnalysis {
-	parsed := parser.ParseDetailed(src)
-	res := resolve.File(parsed.File, s.prelude)
-	canonicalSrc, _ := canonical.SourceWithMap(src, parsed.File)
-	chk := check.File(parsed.File, res, lspCheckOpts(canonicalSrc))
-	lr := lint.File(parsed.File, src, res, chk)
+	run := parser.ParseRun(src)
+	file := selfhost.LowerPublicFileFromRun(run)
+	parseDiags := run.Diagnostics()
+	canonicalSrc, _ := canonical.SourceWithMap(src, file)
+	res := resolve.File(file, s.prelude)
+	chk := check.File(file, res, lspCheckOpts(canonicalSrc))
+	lr := lint.File(file, src, res, chk)
 	all := make([]*diag.Diagnostic, 0,
-		len(parsed.Diagnostics)+len(res.Diags)+len(chk.Diags)+len(lr.Diags))
-	all = append(all, parsed.Diagnostics...)
+		len(parseDiags)+len(res.Diags)+len(chk.Diags)+len(lr.Diags))
+	all = append(all, parseDiags...)
 	all = append(all, res.Diags...)
 	all = append(all, chk.Diags...)
 	all = append(all, lr.Diags...)
 	return &docAnalysis{
 		lines:      newLineIndex(src),
-		file:       parsed.File,
-		provenance: parsed.Provenance,
+		file:       file,
 		canonical:  canonicalSrc,
 		resolve:    res,
 		check:      chk,
