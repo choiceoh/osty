@@ -4548,11 +4548,20 @@ func channelElementType(t ir.Type) Type {
 // that already represents a variant's single payload element. Used to
 // detect redundant ProjVariantN steps after a ProjVariant has already
 // descended into a scalar payload.
+// isScalarPayload reports whether `t` is already a "leaf" payload
+// type from a variant projection's perspective — i.e. `ProjVariantN(0)`
+// against it is redundant because there's no further variant
+// structure to narrow through.
+//
+// OptionalType is NOT scalar: it's a variant container
+// (`Some(T) | None`), and `variantLookupPayloadType` needs to actually
+// narrow through it. Including OptionalType here used to short-circuit
+// the first ProjVariant(Some) on an `Int?` scrutinee, so the bound
+// name in `match xs.first() { Some(v) -> … }` got typed `Int?`
+// instead of `Int`.
 func isScalarPayload(t ir.Type) bool {
 	switch t.(type) {
 	case *ir.PrimType:
-		return true
-	case *ir.OptionalType:
 		return true
 	case *ir.FnType:
 		return true
