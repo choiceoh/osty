@@ -1079,7 +1079,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		return true
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapSet,
 		mir.IntrinsicMapContains, mir.IntrinsicMapLen, mir.IntrinsicMapKeys,
-		mir.IntrinsicMapRemove:
+		mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted:
 		return true
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
@@ -4217,7 +4217,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitListIntrinsic(i)
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapSet,
 		mir.IntrinsicMapContains, mir.IntrinsicMapLen, mir.IntrinsicMapKeys,
-		mir.IntrinsicMapRemove:
+		mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted:
 		return g.emitMapIntrinsic(i)
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
@@ -4710,6 +4710,34 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 			&LlvmValue{typ: keyLLVM, name: kReg},
 			keyString)
 		g.flushOstyEmitter(em)
+		return nil
+	case mir.IntrinsicMapKeysSorted:
+		// Fused `map.keys().sorted()` → single runtime call. Saves the
+		// extra list allocation the unfused form does inside
+		// `osty_rt_list_sorted_<suffix>`. Key-type dispatched: the HIR
+		// matcher only emits this when the key has a registered
+		// comparator (i64 / string), so we just pick the symbol.
+		suffix := "string"
+		if !keyString {
+			suffix = llvmMapKeySuffix(keyLLVM, false)
+		}
+		sym := "osty_rt_map_keys_sorted_" + suffix
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = call ptr @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(mapReg)
+		g.fnBuf.WriteString(")\n")
+		if i.Dest != nil {
+			g.fnBuf.WriteString("  store ptr ")
+			g.fnBuf.WriteString(tmp)
+			g.fnBuf.WriteString(", ptr ")
+			g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
+			g.fnBuf.WriteByte('\n')
+		}
 		return nil
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("map intrinsic kind %d", i.Kind))
