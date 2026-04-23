@@ -7,18 +7,17 @@ fn buildInts(n: Int) -> List<Int> {
     }
     xs
 }
-
 #[inline(never)]
 pub fn quicksortChecksum(src: List<Int>) -> Int {
-    let mut xs = src
-    let n = xs.len()
+    let n = src.len()
     if n <= 1 {
         return 0
     }
 
-    // Iterative quicksort: Lists are pass-by-value in Osty so a recursive
-    // in-place sort would need to thread the full array through every call
-    // frame. Manual stack of (lo, hi) pairs keeps one owner of `xs`.
+    // List has reference semantics (LANG_SPEC §2.8); copy so each call sorts
+    // a fresh buffer — Lomuto is O(n²) on already-sorted input.
+    let mut xs = src[0..n]
+
     let stackCap = 512
     let mut stack: List<Int> = []
     for _i in 0..stackCap {
@@ -27,7 +26,6 @@ pub fn quicksortChecksum(src: List<Int>) -> Int {
     stack[0] = 0
     stack[1] = n - 1
     let mut sp = 2
-
     for sp > 0 {
         sp = sp - 1
         let hi = stack[sp]
@@ -36,7 +34,6 @@ pub fn quicksortChecksum(src: List<Int>) -> Int {
         if lo >= hi {
             continue
         }
-
         let pivot = xs[hi]
         let mut i = lo - 1
         let mut j = lo
@@ -53,7 +50,6 @@ pub fn quicksortChecksum(src: List<Int>) -> Int {
         xs[i + 1] = xs[hi]
         xs[hi] = t
         let p = i + 1
-
         stack[sp] = lo
         sp = sp + 1
         stack[sp] = p - 1
@@ -63,7 +59,6 @@ pub fn quicksortChecksum(src: List<Int>) -> Int {
         stack[sp] = hi
         sp = sp + 1
     }
-
     let mut sum = 0
     let mut k = 0
     for k < xs.len() {
