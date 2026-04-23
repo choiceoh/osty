@@ -1,0 +1,17 @@
+enum Maybe {
+    Some(Int)
+    None
+}
+
+fn printValue(value: Maybe) {
+    if let Some(x) = value {
+        println(x)
+    } else {
+        println(0)
+    }
+}
+
+fn main() {
+    printValue(Some(42))
+    printValue(None)
+}

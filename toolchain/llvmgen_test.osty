@@ -139,7 +139,7 @@ fn testLlvmToolchainPlanIsOstyOwned() {
 fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     let cases = llvmSmokeExecutableCorpus()
 
-    testing.assert(cases.len() == 54)
+    testing.assert(cases.len() == 61)
     testing.assert(cases[0].name == "minimal")
     testing.assert(cases[0].fixture == "minimal_print.osty")
     testing.assert(cases[0].stdout == "42\n")
@@ -302,6 +302,27 @@ fn testLlvmExecutableCorpusPlanIsOstyOwned() {
     testing.assert(cases[53].name == "bool-mut")
     testing.assert(cases[53].fixture == "bool_mut_print.osty")
     testing.assert(cases[53].stdout == "42\n")
+    testing.assert(cases[54].name == "result-question-int")
+    testing.assert(cases[54].fixture == "result_question_int_print.osty")
+    testing.assert(cases[54].stdout == "42\n")
+    testing.assert(cases[55].name == "enum-multi-field-payload")
+    testing.assert(cases[55].fixture == "enum_multi_field_payload_print.osty")
+    testing.assert(cases[55].stdout == "12\n7\n0\n")
+    testing.assert(cases[56].name == "coalesce-ptr")
+    testing.assert(cases[56].fixture == "coalesce_ptr_print.osty")
+    testing.assert(cases[56].stdout == "anonymous\nAda\n")
+    testing.assert(cases[57].name == "coalesce-int")
+    testing.assert(cases[57].fixture == "coalesce_int_print.osty")
+    testing.assert(cases[57].stdout == "0\n42\n")
+    testing.assert(cases[58].name == "if-let-payload-stmt")
+    testing.assert(cases[58].fixture == "if_let_payload_stmt_print.osty")
+    testing.assert(cases[58].stdout == "42\n0\n")
+    testing.assert(cases[59].name == "if-let-payload-expr")
+    testing.assert(cases[59].fixture == "if_let_payload_expr_print.osty")
+    testing.assert(cases[59].stdout == "42\n0\n")
+    testing.assert(cases[60].name == "if-let-qualified-variant")
+    testing.assert(cases[60].fixture == "if_let_qualified_variant_print.osty")
+    testing.assert(cases[60].stdout == "42\n0\n")
 }
 
 fn testLlvmUnsupportedDiagnosticPolicyIsOstyOwned() {
