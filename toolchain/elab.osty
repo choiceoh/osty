@@ -1712,6 +1712,28 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     if tyIsBad(cx.env.tys, recvResolved) {
         return elabPoisonResult(cx, callNode.start, callNode.end)
     }
+    // `?.` applied at a method callee (LANG_SPEC §4 / appendix A.6).
+    // Parser tags the field callee with `fieldNode.flags == 1`. Mirror
+    // elabInferField's behaviour: Option receiver → unwrap to inner for
+    // the method lookup and wrap the return type in Option below; non-
+    // Option receiver → E0719. `callNode.flags == 1` is the UNRELATED
+    // `as?` error-downcast sugar handled immediately below, so the two
+    // flag bits never collide.
+    let isOptionalChain = fieldNode.flags == 1
+    let lookupRecvTy = if isOptionalChain {
+        if tyKindAt(cx.env.tys, recvResolved) == TkOptional {
+            tyInnerAt(cx.env.tys, recvResolved)
+        } else {
+            cx.env.diagnostics.push(diagOptionalChainOnNon(
+                tyToString(cx.env.tys, recvResolved),
+                fieldNode.start,
+                fieldNode.end,
+            ))
+            return elabPoisonResult(cx, callNode.start, callNode.end)
+        }
+    } else {
+        recvResolved
+    }
     // G27 §7.4: `expr as? T` desugars to `expr.downcast::<T>()` with
     // callNode.flags == 1. Enforce the sugar-specific invariants here
     // (operand must be `Error`; T must implement `Error`) before the
@@ -1763,9 +1785,9 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
             }
         }
     }
-    let ownerName = elabOwnerNameForReceiver(cx.env.tys, recvResolved)
+    let ownerName = elabOwnerNameForReceiver(cx.env.tys, lookupRecvTy)
     let methodName = fieldNode.text
-    let lookedUpSig = checkLookupMethodForReceiver(cx.env, recvResolved, ownerName, methodName)
+    let lookedUpSig = checkLookupMethodForReceiver(cx.env, lookupRecvTy, ownerName, methodName)
     let rawSig = if lookedUpSig.name != "" {
         lookedUpSig
     } else if ownerName == "Error" {
@@ -1773,10 +1795,10 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     } else {
         emptyCheckFnSig()
     }
-    let sig = checkSpecializeMethodSelf(cx.env, rawSig, recvResolved)
+    let sig = checkSpecializeMethodSelf(cx.env, rawSig, lookupRecvTy)
     if sig.name == "" {
         let hint = diagDidYouMean(
-            checkSuggestSimilar(checkMethodNamesForReceiver(cx.env, recvResolved, ownerName), methodName),
+            checkSuggestSimilar(checkMethodNamesForReceiver(cx.env, lookupRecvTy, ownerName), methodName),
         )
         cx.env.diagnostics.push(checkDiagAttachHint(
             diagUnknownMethod(ownerName, methodName, fieldNode.start, fieldNode.end),
@@ -1787,7 +1809,10 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
 
     if checkStringListLenHelper(sig.generics) == 0 {
         let coreArgs = elabCallArgsMonomorphicWithNames(cx, sig.name, sig.paramNames, sig.paramTys, callNode.children, callNode.start, callNode.end)
-        let retTy = sig.retTy
+        // `?.` wraps the method's return in `Option<_>` (flattening when
+        // already Option) so `let s: String? = opt?.format()` checks out
+        // against the annotated `String?` rather than raw `String`.
+        let retTy = elabWrapOptionalChain(cx, isOptionalChain, sig.retTy)
         if !(tyIsBad(cx.env.tys, expected)) {
             let _ = checkExpectAssignable(cx.env, expected, retTy, callNode.start, callNode.end)
         }
@@ -1809,7 +1834,7 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
 
     // Bind the receiver type params against the receiver's concrete args.
     let typeSig = checkLookupType(cx.env, ownerName)
-    let ownerArgs = elabOwnerArgsForReceiver(cx.env.tys, ownerName, recvResolved)
+    let ownerArgs = elabOwnerArgsForReceiver(cx.env.tys, ownerName, lookupRecvTy)
     instSeedOwnerArgs(cx, inst, typeSig.generics, ownerArgs)
     instSeedExpectedRet(cx, inst, sig.retTy, expected)
 
@@ -1823,7 +1848,7 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
 
     let coreArgs = elabCallArgs(cx, inst.solver, sig, inst.freshs, callNode.children, callNode.start, callNode.end)
     let retSubstituted = instSubstitute(cx, inst, sig.retTy)
-    let retTy = instZonk(cx, inst, retSubstituted)
+    let retTy = elabWrapOptionalChain(cx, isOptionalChain, instZonk(cx, inst, retSubstituted))
     elabReportUnresolvedGenerics(cx, inst.solver, sig, inst.freshs, callNode.start, callNode.end)
     instCheckBounds(cx, inst, sig.genericBounds, callNode.start, callNode.end)
 
