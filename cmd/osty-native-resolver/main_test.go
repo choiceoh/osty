@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/selfhost/api"
 )
 
 func TestRunEmitsStructuredResolveResult(t *testing.T) {
@@ -16,7 +16,7 @@ func TestRunEmitsStructuredResolveResult(t *testing.T) {
 	if err := run(stdin, &stdout); err != nil {
 		t.Fatalf("run error: %v", err)
 	}
-	var resp resolveResponse
+	var resp api.ResolveResult
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -46,9 +46,9 @@ func TestRunResolvesPackageStructuredRequest(t *testing.T) {
 	dir := t.TempDir()
 	fileA := []byte("pub fn helper() -> Int { 1 }\n")
 	fileB := []byte("fn main() { let value = helper() }\n")
-	reqBody, err := json.Marshal(resolveRequest{
-		Package: &selfhost.PackageResolveInput{
-			Files: []selfhost.PackageResolveFile{
+	reqBody, err := json.Marshal(api.ResolveRequest{
+		Package: &api.PackageResolveInput{
+			Files: []api.PackageResolveFile{
 				{Source: fileA, Base: 0, Name: "a.osty", Path: filepath.Join(dir, "a.osty")},
 				{Source: fileB, Base: len(fileA) + 1, Name: "b.osty", Path: filepath.Join(dir, "b.osty")},
 			},
@@ -62,7 +62,7 @@ func TestRunResolvesPackageStructuredRequest(t *testing.T) {
 	if err := run(bytes.NewReader(reqBody), &stdout); err != nil {
 		t.Fatalf("run error: %v", err)
 	}
-	var resp resolveResponse
+	var resp api.ResolveResult
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}

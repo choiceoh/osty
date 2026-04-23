@@ -108,73 +108,85 @@ type CheckRequest struct {
 
 // ResolveSummary is the exported Go summary for the bootstrapped Osty
 // resolver.
+//
+// JSON tags mirror the cmd/osty-native-resolver wire format so the
+// struct travels both in-process and across the subprocess edge
+// without a translation layer.
 type ResolveSummary struct {
-	Symbols           int
-	Refs              int
-	TypeRefs          int
-	Diagnostics       int
-	Unresolved        int
-	Duplicates        int
-	SymbolsByKind     map[string]int
-	DiagnosticsByCode map[string]int
+	Symbols           int            `json:"symbols"`
+	Refs              int            `json:"refs"`
+	TypeRefs          int            `json:"typeRefs"`
+	Diagnostics       int            `json:"diagnostics"`
+	Unresolved        int            `json:"unresolved"`
+	Duplicates        int            `json:"duplicates"`
+	SymbolsByKind     map[string]int `json:"symbolsByKind,omitempty"`
+	DiagnosticsByCode map[string]int `json:"diagnosticsByCode,omitempty"`
 }
 
 // ResolvedSymbol records one symbol declared by the self-host resolver.
 type ResolvedSymbol struct {
-	Node     int
-	Name     string
-	Kind     string
-	TypeName string
-	Arity    int
-	Depth    int
-	Start    int
-	End      int
-	Public   bool
-	File     string
+	Node     int    `json:"node"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	TypeName string `json:"typeName"`
+	Arity    int    `json:"arity"`
+	Depth    int    `json:"depth"`
+	Start    int    `json:"start"`
+	End      int    `json:"end"`
+	Public   bool   `json:"public"`
+	File     string `json:"file,omitempty"`
 }
 
 // ResolvedRef records one value/name reference plus its resolved target span
 // when available.
 type ResolvedRef struct {
-	Name        string
-	Node        int
-	Start       int
-	End         int
-	File        string
-	TargetNode  int
-	TargetStart int
-	TargetEnd   int
-	TargetFile  string
+	Name        string `json:"name"`
+	Node        int    `json:"node"`
+	Start       int    `json:"start"`
+	End         int    `json:"end"`
+	File        string `json:"file,omitempty"`
+	TargetNode  int    `json:"targetNode"`
+	TargetStart int    `json:"targetStart"`
+	TargetEnd   int    `json:"targetEnd"`
+	TargetFile  string `json:"targetFile,omitempty"`
 }
 
 // ResolvedTypeRef records one resolved type-name reference.
 type ResolvedTypeRef struct {
-	Name  string
-	Node  int
-	Start int
-	End   int
-	File  string
+	Name  string `json:"name"`
+	Node  int    `json:"node"`
+	Start int    `json:"start"`
+	End   int    `json:"end"`
+	File  string `json:"file,omitempty"`
 }
 
 // ResolveDiagnosticRecord is one structured diagnostic produced by the
 // self-host resolver.
 type ResolveDiagnosticRecord struct {
-	Code    string
-	Message string
-	Name    string
-	Hint    string
-	Node    int
-	Start   int
-	End     int
-	File    string
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Name    string `json:"name,omitempty"`
+	Hint    string `json:"hint,omitempty"`
+	Node    int    `json:"node"`
+	Start   int    `json:"start"`
+	End     int    `json:"end"`
+	File    string `json:"file,omitempty"`
 }
 
 // ResolveResult is the structured Go-facing surface for the bootstrapped
 // resolver.
 type ResolveResult struct {
-	Summary     ResolveSummary
-	Symbols     []ResolvedSymbol
-	Refs        []ResolvedRef
-	TypeRefs    []ResolvedTypeRef
-	Diagnostics []ResolveDiagnosticRecord
+	Summary     ResolveSummary            `json:"summary"`
+	Symbols     []ResolvedSymbol          `json:"symbols"`
+	Refs        []ResolvedRef             `json:"refs"`
+	TypeRefs    []ResolvedTypeRef         `json:"typeRefs"`
+	Diagnostics []ResolveDiagnosticRecord `json:"diagnostics,omitempty"`
+}
+
+// ResolveRequest is the wire shape consumed by the
+// cmd/osty-native-resolver subprocess entry point. Exactly one of
+// Source / Package should be set.
+type ResolveRequest struct {
+	Source  string               `json:"source,omitempty"`
+	Package *PackageResolveInput `json:"package,omitempty"`
 }
