@@ -621,18 +621,20 @@ func compoundBinaryOp(op token.Kind) (token.Kind, bool) {
 	}
 }
 
-// emitCompoundAssign lowers `x op= v` to `x = x op v`. Index targets are
-// rejected up front because re-reading them would double-evaluate the index
-// expression; ident and single-level field targets are pure lookups and
-// safe to rewrite.
+// emitCompoundAssign lowers `x op= v` to `x = x op v`. Ident and single-level
+// field targets desugar into a synthetic AssignStmt because re-reading them is
+// a pure lookup. Index targets (`xs[i] += v`) instead evaluate the base and
+// index exactly once, load the old element, compute `old op v`, and write the
+// new value back — desugaring would double-evaluate `i` and break any
+// side-effecting index expression.
 func (g *generator) emitCompoundAssign(stmt *ast.AssignStmt) error {
 	binOp, ok := compoundBinaryOp(stmt.Op)
 	if !ok {
 		return unsupportedf("statement", "compound assignment %q", stmt.Op)
 	}
 	target := stmt.Targets[0]
-	if _, isIndex := target.(*ast.IndexExpr); isIndex {
-		return unsupportedf("statement", "compound assignment %q on index target not yet lowered", stmt.Op)
+	if index, isIndex := target.(*ast.IndexExpr); isIndex {
+		return g.emitIndexCompoundAssign(index, binOp, stmt.Value)
 	}
 	synth := &ast.BinaryExpr{
 		PosV:  target.Pos(),
@@ -649,6 +651,51 @@ func (g *generator) emitCompoundAssign(stmt *ast.AssignStmt) error {
 		Value:   synth,
 	}
 	return g.emitAssign(desugared)
+}
+
+func (g *generator) emitIndexCompoundAssign(target *ast.IndexExpr, binOp token.Kind, rhs ast.Expr) error {
+	if target == nil {
+		return unsupported("statement", "nil index compound-assignment target")
+	}
+	base, err := g.emitExpr(target.X)
+	if err != nil {
+		return err
+	}
+	if base.listElemTyp == "" {
+		return unsupported("statement", "compound assignment on non-list index target")
+	}
+	index, err := g.emitExpr(target.Index)
+	if err != nil {
+		return err
+	}
+	if index.typ != "i64" {
+		return unsupportedf("type-system", "list index type %s, want i64", index.typ)
+	}
+	old, err := g.emitListElementValue(base, index)
+	if err != nil {
+		return err
+	}
+	oldLoaded, err := g.loadIfPointer(old)
+	if err != nil {
+		return err
+	}
+	rhsVal, err := g.emitExprWithHint(rhs, "", false, "", "", false, "", false)
+	if err != nil {
+		return err
+	}
+	rhsLoaded, err := g.loadIfPointer(rhsVal)
+	if err != nil {
+		return err
+	}
+	isString := base.listElemTyp == "ptr" && oldLoaded.typ == "ptr"
+	newVal, err := g.emitBinaryOpValues(binOp, oldLoaded, rhsLoaded, isString)
+	if err != nil {
+		return err
+	}
+	if newVal.typ != base.listElemTyp {
+		return unsupportedf("type-system", "compound assignment result type %s, want %s", newVal.typ, base.listElemTyp)
+	}
+	return g.emitListAssignValue(base, index, newVal)
 }
 
 func (g *generator) emitFieldAssign(target *ast.FieldExpr, rhs ast.Expr) error {
@@ -2607,9 +2654,6 @@ func (g *generator) emitOptionalMatchStmt(scrutinee value, innerSource ast.Type,
 		if arm == nil {
 			return unsupported("statement", "nil match arm")
 		}
-		if arm.Guard != nil {
-			return unsupported("statement", "guarded optional match arms are not yet supported as statements")
-		}
 		pattern, ok, err := matchOptionalPattern(arm.Pattern)
 		if err != nil {
 			return err
@@ -2623,6 +2667,9 @@ func (g *generator) emitOptionalMatchStmt(scrutinee value, innerSource ast.Type,
 				return unsupported("statement", "wildcard match arm must be last")
 			}
 			baseState := g.captureScopeState()
+			if err := g.emitMatchArmGuard(arm, endLabel); err != nil {
+				return err
+			}
 			if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
 				return err
 			}
@@ -2652,6 +2699,9 @@ func (g *generator) emitOptionalMatchStmt(scrutinee value, innerSource ast.Type,
 				return err
 			}
 		}
+		if err := g.emitMatchArmGuard(arm, nextLabel); err != nil {
+			return err
+		}
 		if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
 			return err
 		}
@@ -2679,6 +2729,31 @@ func (g *generator) emitOptionalMatchStmt(scrutinee value, innerSource ast.Type,
 	return nil
 }
 
+// emitMatchArmGuard evaluates an arm guard after a successful pattern match
+// and branches to `failLabel` on false. The caller must have already bound
+// any pattern variables the guard expression refers to. On success the
+// generator is positioned inside a fresh `match.guardOk.N` block so the arm
+// body emission proceeds normally. No-op when arm.Guard is nil.
+func (g *generator) emitMatchArmGuard(arm *ast.MatchArm, failLabel string) error {
+	if arm == nil || arm.Guard == nil {
+		return nil
+	}
+	guard, err := g.emitExpr(arm.Guard)
+	if err != nil {
+		return err
+	}
+	if guard.typ != "i1" {
+		return unsupportedf("type-system", "match guard type %s, want i1", guard.typ)
+	}
+	emitter := g.toOstyEmitter()
+	guardOk := llvmNextLabel(emitter, "match.guardOk")
+	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", guard.ref, guardOk, failLabel))
+	emitter.body = append(emitter.body, fmt.Sprintf("%s:", guardOk))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(guardOk)
+	return nil
+}
+
 func (g *generator) emitTagEnumMatchStmt(scrutinee value, arms []*ast.MatchArm) error {
 	emitter := g.toOstyEmitter()
 	endLabel := llvmNextLabel(emitter, "match.end")
@@ -2689,9 +2764,6 @@ func (g *generator) emitTagEnumMatchStmt(scrutinee value, arms []*ast.MatchArm) 
 		if arm == nil {
 			return unsupported("statement", "nil match arm")
 		}
-		if arm.Guard != nil {
-			return unsupported("statement", "guarded match arms are not yet supported as statements")
-		}
 		_, isWildcard := arm.Pattern.(*ast.WildcardPat)
 		isLast := i == len(arms)-1
 
@@ -2700,6 +2772,9 @@ func (g *generator) emitTagEnumMatchStmt(scrutinee value, arms []*ast.MatchArm) 
 				return unsupported("statement", "wildcard match arm must be last")
 			}
 			baseState := g.captureScopeState()
+			if err := g.emitMatchArmGuard(arm, endLabel); err != nil {
+				return err
+			}
 			if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
 				return err
 			}
@@ -2729,6 +2804,9 @@ func (g *generator) emitTagEnumMatchStmt(scrutinee value, arms []*ast.MatchArm) 
 		g.enterBlock(armLabel)
 
 		baseState := g.captureScopeState()
+		if err := g.emitMatchArmGuard(arm, nextLabel); err != nil {
+			return err
+		}
 		if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
 			return err
 		}
@@ -2772,9 +2850,6 @@ func (g *generator) emitPrimitiveLiteralMatchStmt(scrutinee value, arms []*ast.M
 		if arm == nil {
 			return unsupported("statement", "nil match arm")
 		}
-		if arm.Guard != nil {
-			return unsupported("statement", "guarded primitive match arms are not yet supported as statements")
-		}
 		_, isWildcard := arm.Pattern.(*ast.WildcardPat)
 		isLast := i == len(arms)-1
 
@@ -2783,6 +2858,9 @@ func (g *generator) emitPrimitiveLiteralMatchStmt(scrutinee value, arms []*ast.M
 				return unsupported("statement", "wildcard match arm must be last")
 			}
 			baseState := g.captureScopeState()
+			if err := g.emitMatchArmGuard(arm, endLabel); err != nil {
+				return err
+			}
 			if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
 				return err
 			}
@@ -2816,6 +2894,9 @@ func (g *generator) emitPrimitiveLiteralMatchStmt(scrutinee value, arms []*ast.M
 		g.enterBlock(armLabel)
 
 		baseState := g.captureScopeState()
+		if err := g.emitMatchArmGuard(arm, nextLabel); err != nil {
+			return err
+		}
 		if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
 			return err
 		}
