@@ -505,6 +505,14 @@ const (
 	IntrinsicMapValues
 	// IntrinsicMapRemove deletes a key. Args: [map, key]. Dest nil.
 	IntrinsicMapRemove
+	// IntrinsicMapKeysSorted fuses `map.keys().sorted()` into a single
+	// runtime call, saving the intermediate unsorted-keys-list
+	// allocation that the unfused two-call sequence produces. Args:
+	// [map]. Dest receives `List<K>` (the sorted key list). Currently
+	// limited to maps whose key type has a runtime comparator
+	// registered (i64 / string); the HIR pattern matcher that emits
+	// this rejects other keys and falls back to the unfused lowering.
+	IntrinsicMapKeysSorted
 
 	// ---- stdlib collections: Set<T> ----
 
@@ -1525,6 +1533,8 @@ func (k IntrinsicKind) String() string {
 		return "map_values"
 	case IntrinsicMapRemove:
 		return "map_remove"
+	case IntrinsicMapKeysSorted:
+		return "map_keys_sorted"
 	case IntrinsicSetNew:
 		return "set_new"
 	case IntrinsicSetInsert:
