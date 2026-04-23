@@ -970,6 +970,16 @@ void osty_rt_option_unwrap_none(void) {
     osty_rt_abort("called unwrap on None");
 }
 
+// Noreturn OOB helper used by the List<scalar> fast-path writer. The
+// fast-path emits `icmp ult idx, snapshot_len` and only hits this on
+// verified out-of-range indices; calling a dedicated noreturn helper
+// lets LLVM treat the OOB branch as dead code and hoist list-metadata
+// reads past the fast-path store without alias concerns from the slow
+// path.
+void osty_rt_list_oob_abort_v1(void) {
+    osty_rt_abort("list index out of range");
+}
+
 static uint64_t osty_gc_allocate_stable_id(void) {
     uint64_t id = osty_gc_next_stable_id;
     if (id == 0 || id == OSTY_GC_IDENTITY_TOMBSTONE) {

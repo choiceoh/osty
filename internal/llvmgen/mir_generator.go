@@ -32,6 +32,7 @@ package llvmgen
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -40,6 +41,16 @@ import (
 	"github.com/osty/osty/internal/ir"
 	"github.com/osty/osty/internal/mir"
 )
+
+// fastPathListWriteEnabled gates the MIR fast-path `xs[i] = v` emission.
+// Disabled by default while we ship the CFG-reachability relaxation that
+// lets reads snapshot across slot-write neighbourhoods — the write path
+// itself needs scoped alias metadata to be a consistent win. Flip on
+// with OSTY_LLVM_LIST_WRITE_FASTPATH=1 for benchmarking during the next
+// iteration.
+func fastPathListWriteEnabled() bool {
+	return os.Getenv("OSTY_LLVM_LIST_WRITE_FASTPATH") == "1"
+}
 
 // GenerateFromMIR emits textual LLVM IR from a MIR module. It is the
 // Stage 3 entry point into llvmgen. Callers that still want the legacy
@@ -182,13 +193,38 @@ type mirGen struct {
 	// for the conservative raw-buffer fast path used by vectorized,
 	// call-free loops. Keys are root local IDs of eligible `List<Int>` /
 	// `List<Bool>` / `List<Float>` params.
-	vectorListData map[mir.LocalID]string
-	vectorListLens map[mir.LocalID]string
+	//
+	// vectorListSnapDef records the MIR block that emitted the snapshot
+	// calls — used to decide dominance when reusing the cached data/len
+	// registers. The sentinel vectorListSnapPreambleBlock means "captured
+	// in the function preamble" (dominates every block). A real BlockID
+	// means "captured inside that block"; the cache is only reusable
+	// within that same block — entering a different block must
+	// re-snapshot (LLVM's GVN merges redundant `memory(read)` runtime
+	// calls across blocks, and LICM hoists them out of non-mutating
+	// loops, so the emitted IR stays tight).
+	vectorListData    map[mir.LocalID]string
+	vectorListLens    map[mir.LocalID]string
+	vectorListSnapDef map[mir.LocalID]mir.BlockID
+	// vectorListHoistLocals names scalar-List locals whose snapshot
+	// should be emitted inline in the entry block right after their
+	// single rebind. Populated by planVectorListHoists pre-pass;
+	// consumed (and entries deleted) by maybeHoistSnapshotAfterAssign.
+	vectorListHoistLocals map[mir.LocalID]string
 	// loopMDDefs accumulates every metadata-node definition (loop
 	// hint chains + access groups) for the whole translation unit.
 	// Module-scoped numbering keeps IDs unique; flushed at module
 	// tail via emitLoopMetadata.
 	loopMDDefs []string
+	// listMetaScopeList is the `!alias.scope` node reference that
+	// tags `osty_rt_list_data_*` / `osty_rt_list_len` snapshot calls
+	// as reading the list-metadata scope. Fast-path loads and stores
+	// that go through the cached `data` pointer carry the matching
+	// `!noalias` attachment so LLVM can prove the buffer writes don't
+	// invalidate the metadata reads — which is what unlocks LICM on
+	// hot loops that interleave snapshot reuse with slot writes.
+	// Allocated once per module on first use via listAliasScopeRef.
+	listMetaScopeList string
 }
 
 type mirGCRootChunk struct {
@@ -374,6 +410,30 @@ func (g *mirGen) nextLoopMD() string {
 	g.loopMDDefs = append(g.loopMDDefs,
 		fmt.Sprintf("%s = distinct !{%s}", loopRef, strings.Join(children, ", ")))
 	return loopRef
+}
+
+// listAliasScopeRef returns the module-level `!alias.scope` node
+// reference for the list-metadata scope, allocating the domain + scope
+// + list nodes lazily on first use. Call sites attach it via
+// `!alias.scope !N` (to declare a read is in the scope) or `!noalias !N`
+// (to declare a write is outside the scope). The combination lets LLVM
+// hoist `osty_rt_list_data_*` / `osty_rt_list_len` snapshot calls past
+// fast-path buffer stores that happen in the same loop body.
+func (g *mirGen) listAliasScopeRef() string {
+	if g.listMetaScopeList != "" {
+		return g.listMetaScopeList
+	}
+	domainRef := fmt.Sprintf("!%d", len(g.loopMDDefs))
+	g.loopMDDefs = append(g.loopMDDefs,
+		fmt.Sprintf(`%s = distinct !{!"osty.list.metadata.domain"}`, domainRef))
+	scopeRef := fmt.Sprintf("!%d", len(g.loopMDDefs))
+	g.loopMDDefs = append(g.loopMDDefs,
+		fmt.Sprintf(`%s = distinct !{!"osty.list.metadata.scope", %s}`, scopeRef, domainRef))
+	listRef := fmt.Sprintf("!%d", len(g.loopMDDefs))
+	g.loopMDDefs = append(g.loopMDDefs,
+		fmt.Sprintf("%s = !{%s}", listRef, scopeRef))
+	g.listMetaScopeList = listRef
+	return listRef
 }
 
 // nextAccessGroupMD allocates a fresh empty `!llvm.access.group`
@@ -990,6 +1050,112 @@ func mirIntrinsicSafeForVectorListFastPath(k mir.IntrinsicKind) bool {
 	}
 }
 
+// planVectorListHoists identifies non-param scalar-List locals whose
+// backing buffer stays stable for the whole function — exactly one
+// rebind (in the entry block), no resize-capable operations (push /
+// pop / calls) anywhere, element type raw-data eligible. These are
+// safe to snapshot once in the entry block and reuse from every
+// successor, avoiding the per-block capture that otherwise costs
+// two runtime calls per loop iteration in mutation-heavy functions
+// like quicksort's partition step.
+//
+// Only runs when the write fast-path is enabled — on the default
+// path the existing preamble+lazy pair keeps its baseline behavior.
+func (g *mirGen) planVectorListHoists(fn *mir.Function) map[mir.LocalID]string {
+	out := map[mir.LocalID]string{}
+	if !fastPathListWriteEnabled() || fn == nil {
+		return out
+	}
+	if !mirFunctionHasBackedge(fn) {
+		return out
+	}
+	// Candidate locals: non-param List<scalar> with raw-data eligible
+	// element type. Params are already handled by the preamble path.
+	candidates := map[mir.LocalID]string{}
+	for _, loc := range fn.Locals {
+		if loc == nil || loc.IsParam {
+			continue
+		}
+		elemT := vectorListElemType(loc.Type)
+		if elemT == nil {
+			continue
+		}
+		elemLLVM := g.llvmType(elemT)
+		if !listUsesRawDataFastPath(elemLLVM) {
+			continue
+		}
+		candidates[loc.ID] = elemLLVM
+	}
+	if len(candidates) == 0 {
+		return out
+	}
+	touchesLocal := func(operands []mir.Operand, local mir.LocalID) bool {
+		for _, op := range operands {
+			if id, ok := mirOperandRootLocal(op); ok && id == local {
+				return true
+			}
+		}
+		return false
+	}
+	rebindCount := map[mir.LocalID]int{}
+	rebindBlock := map[mir.LocalID]mir.BlockID{}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, inst := range bb.Instrs {
+			switch x := inst.(type) {
+			case *mir.CallInstr:
+				// Any call touching the local could resize it via
+				// an opaque path — drop it.
+				for id := range candidates {
+					if touchesLocal(x.Args, id) {
+						delete(candidates, id)
+					}
+				}
+			case *mir.IntrinsicInstr:
+				if mirIntrinsicSafeForVectorListFastPath(x.Kind) {
+					continue
+				}
+				for id := range candidates {
+					if touchesLocal(x.Args, id) {
+						delete(candidates, id)
+					}
+				}
+			case *mir.AssignInstr:
+				id := x.Dest.Local
+				if _, ok := candidates[id]; !ok {
+					continue
+				}
+				if x.Dest.HasProjections() {
+					// Slot writes are fine — they don't change
+					// the backing buffer address.
+					continue
+				}
+				rebindCount[id]++
+				if rebindCount[id] == 1 {
+					rebindBlock[id] = bb.ID
+				} else {
+					// More than one rebind — we can't safely hoist
+					// a single snapshot to the entry block because
+					// the later rebind invalidates it mid-function.
+					delete(candidates, id)
+				}
+			}
+		}
+	}
+	for id, elemLLVM := range candidates {
+		if rebindCount[id] != 1 {
+			continue
+		}
+		if rebindBlock[id] != fn.Entry {
+			continue
+		}
+		out[id] = elemLLVM
+	}
+	return out
+}
+
 func (g *mirGen) eligibleVectorListParams(fn *mir.Function) map[mir.LocalID]string {
 	eligible := map[mir.LocalID]string{}
 	if !g.vectorizeHint || !mirFunctionHasBackedge(fn) {
@@ -1012,6 +1178,14 @@ func (g *mirGen) eligibleVectorListParams(fn *mir.Function) map[mir.LocalID]stri
 	if len(eligible) == 0 {
 		return eligible
 	}
+	touchesLocal := func(operands []mir.Operand, local mir.LocalID) bool {
+		for _, op := range operands {
+			if id, ok := mirOperandRootLocal(op); ok && id == local {
+				return true
+			}
+		}
+		return false
+	}
 	for _, bb := range fn.Blocks {
 		if bb == nil {
 			continue
@@ -1019,13 +1193,38 @@ func (g *mirGen) eligibleVectorListParams(fn *mir.Function) map[mir.LocalID]stri
 		for _, inst := range bb.Instrs {
 			switch x := inst.(type) {
 			case *mir.CallInstr:
-				return map[mir.LocalID]string{}
+				// Previously bailed on any CallInstr; that was
+				// overly conservative for functions whose body has
+				// a call that doesn't even take the candidate param
+				// (e.g. quicksort creates its own `stack` list via
+				// intrinsics but never passes `src` to anything).
+				// Only drop params that the call actually receives.
+				for id := range eligible {
+					if touchesLocal(x.Args, id) {
+						delete(eligible, id)
+					}
+				}
 			case *mir.IntrinsicInstr:
-				if !mirIntrinsicSafeForVectorListFastPath(x.Kind) {
-					return map[mir.LocalID]string{}
+				if mirIntrinsicSafeForVectorListFastPath(x.Kind) {
+					continue
+				}
+				for id := range eligible {
+					if touchesLocal(x.Args, id) {
+						delete(eligible, id)
+					}
 				}
 			case *mir.AssignInstr:
-				delete(eligible, x.Dest.Local)
+				// Rebind-only (`xs = ...`) invalidates the snapshot.
+				// Slot-writes (`xs[i] = v`) leave the backing buffer
+				// intact, so the snapshot stays valid across them —
+				// but only when the write fast-path is enabled. With
+				// the feature off, the pre-change behavior stands and
+				// any AssignInstr to this root delists it.
+				if !x.Dest.HasProjections() {
+					delete(eligible, x.Dest.Local)
+				} else if !fastPathListWriteEnabled() {
+					delete(eligible, x.Dest.Local)
+				}
 			}
 			if len(eligible) == 0 {
 				return eligible
@@ -1464,6 +1663,8 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	g.parallelAccessGroupRef = ""
 	g.vectorListData = map[mir.LocalID]string{}
 	g.vectorListLens = map[mir.LocalID]string{}
+	g.vectorListSnapDef = map[mir.LocalID]mir.BlockID{}
+	g.vectorListHoistLocals = g.planVectorListHoists(fn)
 	if g.parallelHint {
 		// Allocate the per-function access group eagerly so every
 		// load/store site can reference it without branching on lazy
@@ -1709,6 +1910,14 @@ func (g *mirGen) emitAllocaPreamble(fn *mir.Function) {
 	}
 }
 
+// vectorListSnapPreambleBlock marks a snapshot captured in the function
+// preamble (before any MIR block is emitted). The entry-block preamble
+// dominates every block, so its cache can be reused anywhere. We pick a
+// sentinel outside the valid BlockID range (-1) to distinguish from
+// per-block lazy captures, whose cache is reusable only within the
+// defining block.
+const vectorListSnapPreambleBlock mir.BlockID = -1
+
 func (g *mirGen) emitVectorListPreamble(fn *mir.Function) {
 	eligible := g.eligibleVectorListParams(fn)
 	if len(eligible) == 0 {
@@ -1719,11 +1928,40 @@ func (g *mirGen) emitVectorListPreamble(fn *mir.Function) {
 		ids = append(ids, int(pid))
 	}
 	sort.Ints(ids)
+	savedBlock := g.curBlockID
+	g.curBlockID = vectorListSnapPreambleBlock
 	for _, rawID := range ids {
 		pid := mir.LocalID(rawID)
 		elemLLVM := eligible[pid]
 		g.snapshotVectorListLocal(pid, elemLLVM)
 	}
+	g.curBlockID = savedBlock
+}
+
+// snapshotValidInCurBlock reports whether the cached data/len registers
+// for `local` were emitted in a block that dominates the current MIR
+// block. A preamble-captured snapshot dominates everything; a snapshot
+// captured inside a MIR block only dominates that same block.
+func (g *mirGen) snapshotValidInCurBlock(local mir.LocalID) bool {
+	b, ok := g.vectorListSnapDef[local]
+	if !ok {
+		return false
+	}
+	return b == vectorListSnapPreambleBlock || b == g.curBlockID
+}
+
+// invalidateStaleVectorListSnapshot clears a cache entry whose defining
+// block no longer dominates the current block. Callers that are about to
+// emit a fresh snapshot (or fall through to a runtime call) must run
+// this first so they don't hand out a register defined upstream in a
+// non-dominating path.
+func (g *mirGen) invalidateStaleVectorListSnapshot(local mir.LocalID) {
+	if g.snapshotValidInCurBlock(local) {
+		return
+	}
+	delete(g.vectorListData, local)
+	delete(g.vectorListLens, local)
+	delete(g.vectorListSnapDef, local)
 }
 
 // mirBlockSuccessors returns the out-edges of a MIR block — the set of
@@ -1754,6 +1992,16 @@ func mirBlockSuccessors(bb *mir.BasicBlock) []mir.BlockID {
 // it via an AssignInstr. Mirrors the bailout rules in
 // eligibleVectorListParams but scoped to a single block and a single
 // local.
+//
+// AssignInstr classification: a write with NO projections on Dest
+// (`xs = ...`) rebinds the local to a possibly-different List object
+// and invalidates any cached `data`/`len` snapshot. A write WITH
+// projections (`xs[i] = v`, `point.x = 3`, etc.) updates a slot of an
+// existing container without relocating its backing buffer — so a
+// snapshotted `data` pointer stays valid across the write. Slot-writes
+// are treated as non-mutations for snapshot purposes; this unlocks the
+// vectorizable fast path for tight `xs[i] = v` loops (matmul, in-place
+// quicksort partitioning).
 func mirLocalIsMutatedIn(bb *mir.BasicBlock, local mir.LocalID) bool {
 	if bb == nil {
 		return false
@@ -1766,6 +2014,7 @@ func mirLocalIsMutatedIn(bb *mir.BasicBlock, local mir.LocalID) bool {
 		}
 		return false
 	}
+	slotWriteCountsAsMutation := !fastPathListWriteEnabled()
 	for _, inst := range bb.Instrs {
 		switch x := inst.(type) {
 		case *mir.CallInstr:
@@ -1780,7 +2029,13 @@ func mirLocalIsMutatedIn(bb *mir.BasicBlock, local mir.LocalID) bool {
 				return true
 			}
 		case *mir.AssignInstr:
-			if x.Dest.Local == local {
+			if x.Dest.Local != local {
+				continue
+			}
+			if !x.Dest.HasProjections() {
+				return true
+			}
+			if slotWriteCountsAsMutation {
 				return true
 			}
 		}
@@ -1855,6 +2110,8 @@ func (g *mirGen) snapshotVectorListLocal(local mir.LocalID, elemLLVM string) {
 	g.fnBuf.WriteString(slot)
 	g.fnBuf.WriteByte('\n')
 
+	scopeList := g.listAliasScopeRef()
+
 	dataSym := listRuntimeDataSymbol(elemLLVM)
 	g.declareRuntime(dataSym, "declare ptr @"+dataSym+"(ptr) nounwind willreturn memory(read)")
 	dataReg := g.fresh()
@@ -1864,7 +2121,9 @@ func (g *mirGen) snapshotVectorListLocal(local mir.LocalID, elemLLVM string) {
 	g.fnBuf.WriteString(dataSym)
 	g.fnBuf.WriteString("(ptr ")
 	g.fnBuf.WriteString(listReg)
-	g.fnBuf.WriteString(")\n")
+	g.fnBuf.WriteString("), !alias.scope ")
+	g.fnBuf.WriteString(scopeList)
+	g.fnBuf.WriteByte('\n')
 	g.vectorListData[local] = dataReg
 
 	lenSym := listRuntimeLenSymbol()
@@ -1876,8 +2135,11 @@ func (g *mirGen) snapshotVectorListLocal(local mir.LocalID, elemLLVM string) {
 	g.fnBuf.WriteString(lenSym)
 	g.fnBuf.WriteString("(ptr ")
 	g.fnBuf.WriteString(listReg)
-	g.fnBuf.WriteString(")\n")
+	g.fnBuf.WriteString("), !alias.scope ")
+	g.fnBuf.WriteString(scopeList)
+	g.fnBuf.WriteByte('\n')
 	g.vectorListLens[local] = lenReg
+	g.vectorListSnapDef[local] = g.curBlockID
 }
 
 func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM string) (string, bool) {
@@ -1895,6 +2157,7 @@ func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM stri
 	// memory(read) snapshot calls out of non-mutating loops, so the
 	// resulting fast/slow branch matches the preamble shape that
 	// already vectorizes for params.
+	g.invalidateStaleVectorListSnapshot(local)
 	if g.vectorListData[local] == "" || g.vectorListLens[local] == "" {
 		if mirLocalMutationReachableFrom(g.fn, g.curBlockID, local) {
 			return "", false
@@ -1938,6 +2201,13 @@ func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM stri
 	g.fnBuf.WriteString(", i64 ")
 	g.fnBuf.WriteString(idxVal)
 	g.fnBuf.WriteByte('\n')
+	// Fast-path read touches the data buffer, which is outside the
+	// list-metadata alias scope — tagging the load with `!noalias`
+	// lets LLVM prove the buffer load doesn't clobber the snapshot
+	// `osty_rt_list_data_*` / `osty_rt_list_len` calls, so LICM can
+	// hoist them out of loops that interleave reads with other
+	// buffer traffic.
+	scopeList := g.listAliasScopeRef()
 	fastVal := g.fresh()
 	g.fnBuf.WriteString("  ")
 	g.fnBuf.WriteString(fastVal)
@@ -1945,6 +2215,8 @@ func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM stri
 	g.fnBuf.WriteString(elemLLVM)
 	g.fnBuf.WriteString(", ptr ")
 	g.fnBuf.WriteString(elemPtr)
+	g.fnBuf.WriteString(", !noalias ")
+	g.fnBuf.WriteString(scopeList)
 	g.fnBuf.WriteByte('\n')
 	g.fnBuf.WriteString("  br label %")
 	g.fnBuf.WriteString(mergeLabel)
@@ -1998,6 +2270,116 @@ func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM stri
 	g.fnBuf.WriteString(slowLabel)
 	g.fnBuf.WriteString("]\n")
 	return merged, true
+}
+
+// emitVectorListFastStore emits an inline bounds-checked write to a
+// snapshotted scalar-List local, symmetric to emitVectorListFastLoad.
+// Returns true when the fast path was used; false (no IR emitted) when
+// the local has no valid snapshot, the element type isn't raw-data
+// eligible, or a mutation is forward-reachable from here. Caller must
+// fall through to the runtime set call on false.
+//
+// Correctness: the fast path is safe iff the backing buffer cannot move
+// between the snapshot site and the write site. The gate is identical
+// to the read case — `mirLocalMutationReachableFrom` walks forward from
+// `curBlockID` and any reachable push/pop/rebind forces the slow path.
+// A slot-write `xs[j] = v` does NOT relocate `xs.data`, so it doesn't
+// invalidate its own snapshot; that's why matmul's inner loop and
+// quicksort's partition loop both vectorize after this change.
+func (g *mirGen) emitVectorListFastStore(local mir.LocalID, idxVal, valReg, elemLLVM string) bool {
+	if !listUsesRawDataFastPath(elemLLVM) {
+		return false
+	}
+	slot := g.localSlots[local]
+	if slot == "" {
+		return false
+	}
+	g.invalidateStaleVectorListSnapshot(local)
+	if g.vectorListData[local] == "" || g.vectorListLens[local] == "" {
+		if mirLocalMutationReachableFrom(g.fn, g.curBlockID, local) {
+			return false
+		}
+		g.snapshotVectorListLocal(local, elemLLVM)
+	}
+	dataReg := g.vectorListData[local]
+	lenReg := g.vectorListLens[local]
+	if dataReg == "" || lenReg == "" {
+		return false
+	}
+
+	inBounds := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(inBounds)
+	g.fnBuf.WriteString(" = icmp ult i64 ")
+	g.fnBuf.WriteString(idxVal)
+	g.fnBuf.WriteString(", ")
+	g.fnBuf.WriteString(lenReg)
+	g.fnBuf.WriteByte('\n')
+
+	fastLabel := g.freshLabel("list.set.fast")
+	slowLabel := g.freshLabel("list.set.slow")
+	mergeLabel := g.freshLabel("list.set.merge")
+	g.fnBuf.WriteString("  br i1 ")
+	g.fnBuf.WriteString(inBounds)
+	g.fnBuf.WriteString(", label %")
+	g.fnBuf.WriteString(fastLabel)
+	g.fnBuf.WriteString(", label %")
+	g.fnBuf.WriteString(slowLabel)
+	g.fnBuf.WriteByte('\n')
+
+	g.fnBuf.WriteString(fastLabel)
+	g.fnBuf.WriteString(":\n")
+	elemPtr := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(elemPtr)
+	g.fnBuf.WriteString(" = getelementptr inbounds ")
+	g.fnBuf.WriteString(elemLLVM)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(dataReg)
+	g.fnBuf.WriteString(", i64 ")
+	g.fnBuf.WriteString(idxVal)
+	g.fnBuf.WriteByte('\n')
+	// `!noalias` tags the buffer store as outside the list-metadata
+	// scope, disjoint from the `osty_rt_list_data_*` / `osty_rt_list_len`
+	// snapshot calls. That's the alias fact LLVM needs to hoist those
+	// calls past this store in LICM — previously the store was
+	// conservatively assumed to clobber the metadata memory the calls
+	// read from, pinning the snapshot inside the loop.
+	scopeList := g.listAliasScopeRef()
+	g.fnBuf.WriteString("  store ")
+	g.fnBuf.WriteString(elemLLVM)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(valReg)
+	g.fnBuf.WriteString(", ptr ")
+	g.fnBuf.WriteString(elemPtr)
+	g.fnBuf.WriteString(", !noalias ")
+	g.fnBuf.WriteString(scopeList)
+	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString("  br label %")
+	g.fnBuf.WriteString(mergeLabel)
+	g.fnBuf.WriteByte('\n')
+
+	// Slow path: call a dedicated noreturn helper that aborts with the
+	// same "list index out of range" message the typed runtime set
+	// function uses. The terminal `unreachable` tells LLVM this branch
+	// doesn't return — so the snapshot's `memory(read)` data/len calls
+	// stay hoistable over the fast-path store, even though the hot
+	// loop executes slot writes every iteration. Switching from the
+	// previous slow-path `osty_rt_list_set_*` call (which was declared
+	// as a memory writer) is what unlocks the in-loop LICM win on
+	// matmul and quicksort's partition step.
+	const oobSym = "osty_rt_list_oob_abort_v1"
+	g.declareRuntime(oobSym, "declare void @"+oobSym+"() noreturn cold nounwind")
+	g.fnBuf.WriteString(slowLabel)
+	g.fnBuf.WriteString(":\n")
+	g.fnBuf.WriteString("  call void @")
+	g.fnBuf.WriteString(oobSym)
+	g.fnBuf.WriteString("() noreturn\n")
+	g.fnBuf.WriteString("  unreachable\n")
+
+	g.fnBuf.WriteString(mergeLabel)
+	g.fnBuf.WriteString(":\n")
+	return true
 }
 
 // ==== GC instrumentation ====
@@ -2235,7 +2617,11 @@ func (g *mirGen) declareSafepoint() {
 func (g *mirGen) emitInstr(inst mir.Instr) error {
 	switch x := inst.(type) {
 	case *mir.AssignInstr:
-		return g.emitAssign(x)
+		if err := g.emitAssign(x); err != nil {
+			return err
+		}
+		g.maybeHoistSnapshotAfterAssign(x)
+		return nil
 	case *mir.CallInstr:
 		return g.emitCall(x)
 	case *mir.IntrinsicInstr:
@@ -2246,6 +2632,44 @@ func (g *mirGen) emitInstr(inst mir.Instr) error {
 		return g.emitStorageDead(x)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("instruction %T", inst))
+}
+
+// maybeHoistSnapshotAfterAssign emits the scalar-List snapshot for
+// `local` immediately after its initial rebind in the entry block,
+// provided the pre-pass marked the local as hoist-eligible. The
+// snapshot registers then dominate every block — on par with the
+// preamble-captured param case — so later fast-path loads/stores
+// reuse them instead of re-issuing `osty_rt_list_data_*` per block.
+// Without this hoist, LLVM's LICM can't always merge block-local
+// snapshots (a per-block capture in a multi-block hot loop pays the
+// runtime-call cost every iteration), which is what kept
+// quicksort's partition loop from benefitting from the fast path.
+func (g *mirGen) maybeHoistSnapshotAfterAssign(a *mir.AssignInstr) {
+	if len(g.vectorListHoistLocals) == 0 {
+		return
+	}
+	if g.curBlockID != g.fn.Entry {
+		return
+	}
+	if a.Dest.HasProjections() {
+		return
+	}
+	elemLLVM, ok := g.vectorListHoistLocals[a.Dest.Local]
+	if !ok {
+		return
+	}
+	if g.vectorListData[a.Dest.Local] != "" {
+		return
+	}
+	// Route through the preamble sentinel so the snapshot is
+	// treated as dominating every block — the rebind just executed
+	// is part of the entry block, so any register defined after it
+	// is available to every successor in LLVM SSA.
+	saved := g.curBlockID
+	g.curBlockID = vectorListSnapPreambleBlock
+	g.snapshotVectorListLocal(a.Dest.Local, elemLLVM)
+	g.curBlockID = saved
+	delete(g.vectorListHoistLocals, a.Dest.Local)
 }
 
 func (g *mirGen) emitStorageDead(dead *mir.StorageDeadInstr) error {
@@ -2339,6 +2763,27 @@ func (g *mirGen) emitIndexedWrite(a *mir.AssignInstr, destLoc *mir.Local, ip *mi
 			return err
 		}
 		if listUsesTypedRuntime(elemLLVM) {
+			// Fast path: when the root local is the list itself (no
+			// preceding field/tuple projections) and snapshot
+			// eligibility holds, emit an inline bounds-checked store
+			// against the cached `data` pointer. LLVM can then SLP /
+			// vectorize the inner loop alongside any fast-path reads
+			// on the same list. When nested projections are present
+			// (e.g. `env.xs[i] = v`), the `contReg` was derived via
+			// extractvalue and has no tracked snapshot, so fall
+			// through to the runtime call.
+			//
+			// Gated by env var during bring-up: the fast-path write
+			// unlocks huge wins on snapshot-friendly loops but regresses
+			// partition-style inner loops (e.g. quicksort) whose
+			// snapshot calls currently can't be CSE'd across fast-path
+			// store writes. Keeping it opt-in avoids a geomean hit on
+			// default runs while we tune alias metadata in a follow-up.
+			if fastPathListWriteEnabled() && len(projs) == 1 {
+				if g.emitVectorListFastStore(a.Dest.Local, idxReg, valReg, elemLLVM) {
+					return nil
+				}
+			}
 			sym := "osty_rt_list_set_" + listRuntimeSymbolSuffix(elemLLVM)
 			g.declareRuntime(sym, "declare void @"+sym+"(ptr, i64, "+elemLLVM+")")
 			g.fnBuf.WriteString("  call void @")
@@ -4454,8 +4899,10 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitListPushOperand(listReg, i.Args[1], elemT)
 	case mir.IntrinsicListLen:
 		if local, ok := mirOperandRootLocal(listOp); ok {
-			if cached := g.vectorListLens[local]; cached != "" {
-				return g.storeIntrinsicResult(i, &LlvmValue{typ: "i64", name: cached})
+			if g.snapshotValidInCurBlock(local) {
+				if cached := g.vectorListLens[local]; cached != "" {
+					return g.storeIntrinsicResult(i, &LlvmValue{typ: "i64", name: cached})
+				}
 			}
 		}
 		sym := listRuntimeLenSymbol()
