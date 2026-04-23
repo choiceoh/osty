@@ -143,6 +143,7 @@ func finalizeEntryModule(entry Entry, mod *ir.Module) (Entry, error) {
 		mod = monoMod
 		entry.IRIssues = append(entry.IRIssues, monoErrs...)
 	}
+	mod = ir.Optimize(mod, ir.OptimizeOptions{})
 	entry.IR = mod
 	if validateErrs := ir.Validate(mod); len(validateErrs) != 0 {
 		entry.IRIssues = append(entry.IRIssues, validateErrs...)

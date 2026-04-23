@@ -240,6 +240,9 @@ func (o *optimizer) visitExpr(e Expr) Expr {
 		for i := range e.Args {
 			e.Args[i].Value = o.visitExpr(e.Args[i].Value)
 		}
+		if simplified, ok := o.simplifyMethodCall(e); ok {
+			return simplified
+		}
 		return e
 	case *ListLit:
 		for i, el := range e.Elems {
@@ -479,6 +482,84 @@ func (o *optimizer) simplifyBinary(e *BinaryExpr) (Expr, bool) {
 		return e.Left, true
 	}
 	return nil, false
+}
+
+func (o *optimizer) simplifyMethodCall(e *MethodCall) (Expr, bool) {
+	if o.opts.DisableSimplify {
+		return nil, false
+	}
+	current := e
+	changed := false
+	for {
+		next, ok := simplifyLenMethodChainStep(current)
+		if !ok {
+			break
+		}
+		current = next
+		changed = true
+	}
+	if !changed {
+		return nil, false
+	}
+	return current, true
+}
+
+func simplifyLenMethodChainStep(e *MethodCall) (*MethodCall, bool) {
+	if e == nil || e.Name != "len" || len(e.Args) != 0 || len(e.TypeArgs) != 0 {
+		return nil, false
+	}
+	recvCall, ok := e.Receiver.(*MethodCall)
+	if !ok || len(recvCall.Args) != 0 || len(recvCall.TypeArgs) != 0 {
+		return nil, false
+	}
+	switch recvCall.Name {
+	case "sorted":
+		if !isBuiltinListLikeExpr(recvCall.Receiver) {
+			return nil, false
+		}
+	case "keys":
+		if !isBuiltinNamedType(recvCall.Receiver.Type(), "Map", 2) {
+			return nil, false
+		}
+	case "toList":
+		if !isBuiltinNamedType(recvCall.Receiver.Type(), "Set", 1) {
+			return nil, false
+		}
+	default:
+		return nil, false
+	}
+	return &MethodCall{
+		Receiver: recvCall.Receiver,
+		Name:     "len",
+		T:        e.T,
+		SpanV:    e.SpanV,
+	}, true
+}
+
+func isBuiltinNamedType(t Type, name string, argCount int) bool {
+	n, ok := t.(*NamedType)
+	if !ok {
+		return false
+	}
+	return n.Builtin && n.Package == "" && n.Name == name && len(n.Args) == argCount
+}
+
+func isBuiltinListLikeExpr(e Expr) bool {
+	if isBuiltinNamedType(e.Type(), "List", 1) {
+		return true
+	}
+	m, ok := e.(*MethodCall)
+	if !ok || len(m.Args) != 0 || len(m.TypeArgs) != 0 {
+		return false
+	}
+	switch m.Name {
+	case "keys":
+		return isBuiltinNamedType(m.Receiver.Type(), "Map", 2)
+	case "toList":
+		return isBuiltinNamedType(m.Receiver.Type(), "Set", 1)
+	default:
+		return false
+	}
 }
 
 func foldIntBinary(e *BinaryExpr, l, r *IntLit) (Expr, bool) {
