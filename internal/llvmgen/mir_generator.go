@@ -2298,39 +2298,32 @@ func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM stri
 	g.fnBuf.WriteString(mergeLabel)
 	g.fnBuf.WriteByte('\n')
 
-	slowSym := listRuntimeGetSymbol(elemLLVM)
-	// memory(read): the typed slow-path read is semantically pure
-	// (modulo an idempotent first-call layout init). Marking it
-	// readonly lets LLVM reason across the fast/slow branch and keep
-	// the loop vectorizable even when the slow path is theoretically
-	// reachable for OOB indices.
-	g.declareRuntime(slowSym, "declare "+elemLLVM+" @"+slowSym+"(ptr, i64) nounwind willreturn memory(read)")
+	// Slow path: since the snapshot's `len` is captured under the
+	// same gate that rules out resize-capable ops between capture
+	// and use, the fast-path bounds check either passes (valid
+	// access) or indicates a genuine OOB — the runtime set/get
+	// would also abort. Calling the noreturn helper + `unreachable`
+	// gives LLVM a dead-code slow side, which lets the vectorizer
+	// see the fast-path gep+load as the sole live path and fold
+	// the branch away when range analysis can prove the index is
+	// in bounds (matmul's `k < n` where `n` was used to build the
+	// list, for example). Mirrors the write fast-path's slow-side
+	// shape.
+	const oobSym = "osty_rt_list_oob_abort_v1"
+	g.declareRuntime(oobSym, "declare void @"+oobSym+"() noreturn cold nounwind")
 	g.fnBuf.WriteString(slowLabel)
 	g.fnBuf.WriteString(":\n")
-	listReg := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(listReg)
-	g.fnBuf.WriteString(" = load ptr, ptr ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteByte('\n')
-	slowVal := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(slowVal)
-	g.fnBuf.WriteString(" = call ")
-	g.fnBuf.WriteString(elemLLVM)
-	g.fnBuf.WriteString(" @")
-	g.fnBuf.WriteString(slowSym)
-	g.fnBuf.WriteString("(ptr ")
-	g.fnBuf.WriteString(listReg)
-	g.fnBuf.WriteString(", i64 ")
-	g.fnBuf.WriteString(idxVal)
-	g.fnBuf.WriteString(")\n")
-	g.fnBuf.WriteString("  br label %")
-	g.fnBuf.WriteString(mergeLabel)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString("  call void @")
+	g.fnBuf.WriteString(oobSym)
+	g.fnBuf.WriteString("() noreturn\n")
+	g.fnBuf.WriteString("  unreachable\n")
 
 	g.fnBuf.WriteString(mergeLabel)
 	g.fnBuf.WriteString(":\n")
+	// With the slow path unreachable, the merge has only one live
+	// predecessor — but LLVM still requires SSA form, so the phi
+	// stays and LLVM's simplifyCFG later collapses it to a plain
+	// use of the fast-path value.
 	merged := g.fresh()
 	g.fnBuf.WriteString("  ")
 	g.fnBuf.WriteString(merged)
@@ -2340,10 +2333,6 @@ func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM stri
 	g.fnBuf.WriteString(fastVal)
 	g.fnBuf.WriteString(", %")
 	g.fnBuf.WriteString(fastLabel)
-	g.fnBuf.WriteString("], [")
-	g.fnBuf.WriteString(slowVal)
-	g.fnBuf.WriteString(", %")
-	g.fnBuf.WriteString(slowLabel)
 	g.fnBuf.WriteString("]\n")
 	return merged, true
 }

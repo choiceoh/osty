@@ -1680,13 +1680,22 @@ func TestGenerateFromMIRListIndexRead(t *testing.T) {
 		t.Fatalf("GenerateFromMIR: %v", err)
 	}
 	got := string(out)
+	// Scalar List reads now go through the data/len fast path with a
+	// noreturn abort on the OOB slow side (no `osty_rt_list_get_i64`
+	// slow call any more). Assert the shape that replaced it.
 	for _, want := range []string{
-		"declare i64 @osty_rt_list_get_i64(ptr, i64)",
-		"call i64 @osty_rt_list_get_i64(ptr ",
+		"declare ptr @osty_rt_list_data_i64(ptr)",
+		"declare i64 @osty_rt_list_len(ptr)",
+		"declare void @osty_rt_list_oob_abort_v1()",
+		"getelementptr inbounds i64, ptr ",
+		"call void @osty_rt_list_oob_abort_v1() noreturn",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "osty_rt_list_get_i64") {
+		t.Fatalf("unexpected scalar get call in:\n%s", got)
 	}
 }
 
