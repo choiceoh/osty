@@ -12,6 +12,32 @@ import (
 // helper dedupes against newer generated bundles, so this stays safe once the
 // selfhost output catches up.
 
+// IntrinsicBodyDiagsForSource runs the arena-direct `#[intrinsic]`
+// body-shape gate (LANG_SPEC §19.6 / E0773) over src and returns the
+// produced diagnostics already stamped with path. Used by the Go
+// check.File / check.Package drivers as the single source of truth for
+// E0773 — the legacy Go-side `runIntrinsicBodyChecks` walker was
+// retired once this public entry landed.
+//
+// Returns nil when parse fails fatally (the parser's own error
+// diagnostics surface separately on the main check path). Runs
+// astbridge-free: the FrontendRun created here never calls File(), so
+// the AstbridgeLowerCount counter stays at 0.
+func IntrinsicBodyDiagsForSource(src []byte, path string) []*diag.Diagnostic {
+	if len(src) == 0 {
+		return nil
+	}
+	run := Run(src)
+	if run == nil || run.parser == nil || run.parser.arena == nil {
+		return nil
+	}
+	if selfhostHasErrorDiagnostics(run.Diagnostics()) {
+		return nil
+	}
+	records := selfhostIntrinsicBodyDiagnosticsFromArena(run.parser.arena, run.rt, run.stream, 0, path)
+	return CheckDiagnosticsAsDiag(src, records)
+}
+
 func selfhostAppendIntrinsicBodyGateForSource(result *CheckResult, src []byte) {
 	if result == nil || len(src) == 0 {
 		return
