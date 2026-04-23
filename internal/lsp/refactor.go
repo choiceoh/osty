@@ -9,6 +9,7 @@ import (
 	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 // LSP code-action kind strings (LSP 3.17 §codeActionKind). Only the
@@ -369,8 +370,8 @@ func airepairFixAllEdit(doc *document) *TextEdit {
 		return nil
 	}
 	repaired := result.Repaired
-	if parsed := parser.ParseDetailed(repaired); parsed.File != nil {
-		if canonicalRepaired := canonical.Source(repaired, parsed.File); len(canonicalRepaired) > 0 {
+	if file := selfhost.LowerPublicFileFromRun(parser.ParseRun(repaired)); file != nil {
+		if canonicalRepaired := canonical.Source(repaired, file); len(canonicalRepaired) > 0 {
 			repaired = canonicalRepaired
 		}
 	}
