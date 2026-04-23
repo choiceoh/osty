@@ -1576,6 +1576,39 @@ fn main() {
 	}
 }
 
+func TestLLVMBackendIRElidesMapKeysSortedLenChain(t *testing.T) {
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitLLVMIR, `fn sortedCount(words: List<String>) -> Int {
+    let mut index: Map<String, Int> = {:}
+    for word in words {
+        index.insert(word, 1)
+    }
+    index.keys().sorted().len()
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	out, err := os.ReadFile(result.Artifacts.LLVMIR)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) failed: %v", result.Artifacts.LLVMIR, err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "call i64 @osty_rt_map_len(") {
+		t.Fatalf("optimized llvm-ir missing map.len call:\n%s", got)
+	}
+	for _, unwanted := range []string{
+		"call ptr @osty_rt_map_keys(",
+		"call ptr @osty_rt_list_sorted_string(",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("optimized llvm-ir unexpectedly kept %q:\n%s", unwanted, got)
+		}
+	}
+}
+
 func TestLLVMBackendBinaryForInOverTemporaryManagedListSurvivesPressure(t *testing.T) {
 	parallelClangBackendTest(t)
 

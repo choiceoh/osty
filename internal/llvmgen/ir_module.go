@@ -22,6 +22,7 @@ import (
 // is unexported. Once the emitter consumes IR directly end-to-end, the
 // fallback bridge and the AST helper both go away.
 func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
+	mod = ostyir.Optimize(mod, ostyir.OptimizeOptions{})
 	if out, ok, err := TryGenerateNativeOwnedModule(mod, opts); err != nil {
 		return nil, err
 	} else if ok {

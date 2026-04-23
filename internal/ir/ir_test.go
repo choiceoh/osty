@@ -9,10 +9,10 @@ import (
 func TestOptimizeFoldsIntArithmetic(t *testing.T) {
 	// (1 + 2) * 3
 	e := &BinaryExpr{
-		Op:   BinMul,
-		Left: &BinaryExpr{Op: BinAdd, Left: intLit("1"), Right: intLit("2"), T: TInt},
+		Op:    BinMul,
+		Left:  &BinaryExpr{Op: BinAdd, Left: intLit("1"), Right: intLit("2"), T: TInt},
 		Right: intLit("3"),
-		T:    TInt,
+		T:     TInt,
 	}
 	m := moduleWithExpr(e)
 	Optimize(m, OptimizeOptions{})
@@ -128,6 +128,118 @@ func TestOptimizeRespectsDisableFlags(t *testing.T) {
 	got := m.Script[0].(*ExprStmt).X
 	if _, ok := got.(*BinaryExpr); !ok {
 		t.Fatalf("expected BinaryExpr preserved with DisableConstFold, got %T", got)
+	}
+}
+
+func TestOptimizeSimplifiesListSortedLen(t *testing.T) {
+	list := &Ident{
+		Name: "xs",
+		Kind: IdentLocal,
+		T:    &NamedType{Name: "List", Args: []Type{TInt}, Builtin: true},
+	}
+	e := &MethodCall{
+		Receiver: &MethodCall{
+			Receiver: list,
+			Name:     "sorted",
+			T:        list.T,
+		},
+		Name: "len",
+		T:    TInt,
+	}
+	m := moduleWithExpr(e)
+	Optimize(m, OptimizeOptions{})
+	assertOptimizedLenReceiverIdent(t, m.Script[0].(*ExprStmt).X, "xs")
+}
+
+func TestOptimizeSimplifiesMapKeysLen(t *testing.T) {
+	index := &Ident{
+		Name: "index",
+		Kind: IdentLocal,
+		T:    &NamedType{Name: "Map", Args: []Type{TString, TInt}, Builtin: true},
+	}
+	e := &MethodCall{
+		Receiver: &MethodCall{
+			Receiver: index,
+			Name:     "keys",
+			T:        &NamedType{Name: "List", Args: []Type{TString}, Builtin: true},
+		},
+		Name: "len",
+		T:    TInt,
+	}
+	m := moduleWithExpr(e)
+	Optimize(m, OptimizeOptions{})
+	assertOptimizedLenReceiverIdent(t, m.Script[0].(*ExprStmt).X, "index")
+}
+
+func TestOptimizeSimplifiesMapKeysSortedLen(t *testing.T) {
+	index := &Ident{
+		Name: "index",
+		Kind: IdentLocal,
+		T:    &NamedType{Name: "Map", Args: []Type{TString, TInt}, Builtin: true},
+	}
+	e := &MethodCall{
+		Receiver: &MethodCall{
+			Receiver: &MethodCall{
+				Receiver: index,
+				Name:     "keys",
+			},
+			Name: "sorted",
+		},
+		Name: "len",
+		T:    TInt,
+	}
+	m := moduleWithExpr(e)
+	Optimize(m, OptimizeOptions{})
+	assertOptimizedLenReceiverIdent(t, m.Script[0].(*ExprStmt).X, "index")
+}
+
+func TestOptimizeSimplifiesSetToListSortedLen(t *testing.T) {
+	seen := &Ident{
+		Name: "seen",
+		Kind: IdentLocal,
+		T:    &NamedType{Name: "Set", Args: []Type{TString}, Builtin: true},
+	}
+	e := &MethodCall{
+		Receiver: &MethodCall{
+			Receiver: &MethodCall{
+				Receiver: seen,
+				Name:     "toList",
+			},
+			Name: "sorted",
+		},
+		Name: "len",
+		T:    TInt,
+	}
+	m := moduleWithExpr(e)
+	Optimize(m, OptimizeOptions{})
+	assertOptimizedLenReceiverIdent(t, m.Script[0].(*ExprStmt).X, "seen")
+}
+
+func TestOptimizeDoesNotSimplifyUserDefinedListSortedLen(t *testing.T) {
+	list := &Ident{
+		Name: "xs",
+		Kind: IdentLocal,
+		T:    &NamedType{Name: "List", Args: []Type{TInt}},
+	}
+	e := &MethodCall{
+		Receiver: &MethodCall{
+			Receiver: list,
+			Name:     "sorted",
+			T:        list.T,
+		},
+		Name: "len",
+		T:    TInt,
+	}
+	m := moduleWithExpr(e)
+	Optimize(m, OptimizeOptions{})
+	got := m.Script[0].(*ExprStmt).X
+	lenCall, ok := got.(*MethodCall)
+	if !ok {
+		t.Fatalf("expected MethodCall preserved, got %T", got)
+	}
+	sortedCall, ok := lenCall.Receiver.(*MethodCall)
+	if !ok || sortedCall.Name != "sorted" {
+		t.Fatalf("expected sorted().len() preserved, got %T (%v)", lenCall.Receiver, lenCall.Receiver)
 	}
 }
 
@@ -403,5 +515,19 @@ func moduleWithExpr(e Expr) *Module {
 	}
 }
 
-func intLit(text string) *IntLit  { return &IntLit{Text: text, T: TInt} }
-func strLit(s string) *StringLit  { return &StringLit{Parts: []StringPart{{IsLit: true, Lit: s}}} }
+func assertOptimizedLenReceiverIdent(t *testing.T, got Expr, want string) {
+	t.Helper()
+	lenCall, ok := got.(*MethodCall)
+	if !ok {
+		t.Fatalf("expected MethodCall after optimization, got %T", got)
+	}
+	if lenCall.Name != "len" {
+		t.Fatalf("expected len call, got %q", lenCall.Name)
+	}
+	if recv, ok := lenCall.Receiver.(*Ident); !ok || recv.Name != want {
+		t.Fatalf("expected len receiver %q, got %T (%v)", want, lenCall.Receiver, lenCall.Receiver)
+	}
+}
+
+func intLit(text string) *IntLit { return &IntLit{Text: text, T: TInt} }
+func strLit(s string) *StringLit { return &StringLit{Parts: []StringPart{{IsLit: true, Lit: s}}} }
