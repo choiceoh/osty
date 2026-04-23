@@ -1077,7 +1077,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
 		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast,
 		mir.IntrinsicListRemoveAt, mir.IntrinsicListReverse, mir.IntrinsicListReversed,
-		mir.IntrinsicListIndexOf:
+		mir.IntrinsicListIndexOf, mir.IntrinsicListContains:
 		return true
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapSet,
 		mir.IntrinsicMapContains, mir.IntrinsicMapLen, mir.IntrinsicMapKeys,
@@ -4217,7 +4217,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
 		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast,
 		mir.IntrinsicListRemoveAt, mir.IntrinsicListReverse, mir.IntrinsicListReversed,
-		mir.IntrinsicListIndexOf:
+		mir.IntrinsicListIndexOf, mir.IntrinsicListContains:
 		return g.emitListIntrinsic(i)
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapSet,
 		mir.IntrinsicMapContains, mir.IntrinsicMapLen, mir.IntrinsicMapKeys,
@@ -4580,6 +4580,79 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		filled := g.fresh()
 		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n", filled, destLLVM, tagged, iReg)
 		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", destLLVM, filled, destSlot)
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", contLabel)
+		next := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = add i64 %s, 1\n", next, iReg)
+		fmt.Fprintf(&g.fnBuf, "  store i64 %s, ptr %s\n", next, iSlot)
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", headLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
+		return nil
+	case mir.IntrinsicListContains:
+		// `contains(x) -> Bool` — inline linear scan. Same shape as
+		// IntrinsicListIndexOf but the dest is i1 and we short-circuit
+		// to `true` on the first match; otherwise pre-stored `false`
+		// survives to the end block.
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "list_contains arity")
+		}
+		if !listUsesTypedRuntime(elemLLVM) {
+			return unsupported("mir-mvp", fmt.Sprintf("list_contains on composite element type %s", elemLLVM))
+		}
+		if i.Dest == nil {
+			return unsupported("mir-mvp", "list_contains without destination")
+		}
+		if g.fn.Local(i.Dest.Local) == nil {
+			return unsupported("mir-mvp", "list_contains dest into unknown local")
+		}
+		destSlot := g.localSlots[i.Dest.Local]
+		needleOp := i.Args[1]
+		needleReg, err := g.evalOperand(needleOp, needleOp.Type())
+		if err != nil {
+			return err
+		}
+		lenSym := listRuntimeLenSymbol()
+		g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr) nounwind willreturn memory(read)")
+		getSym := listRuntimeGetSymbol(elemLLVM)
+		g.declareRuntime(getSym, "declare "+elemLLVM+" @"+getSym+"(ptr, i64) nounwind willreturn memory(read)")
+		stringEq := ""
+		if isStringLLVMType(needleOp.Type()) {
+			stringEq = llvmStringRuntimeEqualSymbol()
+			g.declareRuntime(stringEq, "declare i1 @"+stringEq+"(ptr, ptr) nounwind willreturn memory(read)")
+		}
+		lenReg := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
+		// Pre-store false; overwrite with true on first match.
+		fmt.Fprintf(&g.fnBuf, "  store i1 false, ptr %s\n", destSlot)
+		iSlot := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = alloca i64\n", iSlot)
+		fmt.Fprintf(&g.fnBuf, "  store i64 0, ptr %s\n", iSlot)
+		headLabel := g.freshLabel("list.contains.head")
+		bodyLabel := g.freshLabel("list.contains.body")
+		matchLabel := g.freshLabel("list.contains.match")
+		contLabel := g.freshLabel("list.contains.cont")
+		endLabel := g.freshLabel("list.contains.end")
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", headLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", headLabel)
+		iReg := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = load i64, ptr %s\n", iReg, iSlot)
+		cont := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = icmp slt i64 %s, %s\n", cont, iReg, lenReg)
+		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", cont, bodyLabel, endLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", bodyLabel)
+		elemReg := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, iReg)
+		eqReg := g.fresh()
+		if stringEq != "" {
+			fmt.Fprintf(&g.fnBuf, "  %s = call i1 @%s(ptr %s, ptr %s)\n", eqReg, stringEq, elemReg, needleReg)
+		} else if elemLLVM == "double" {
+			fmt.Fprintf(&g.fnBuf, "  %s = fcmp oeq double %s, %s\n", eqReg, elemReg, needleReg)
+		} else {
+			fmt.Fprintf(&g.fnBuf, "  %s = icmp eq %s %s, %s\n", eqReg, elemLLVM, elemReg, needleReg)
+		}
+		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", eqReg, matchLabel, contLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", matchLabel)
+		fmt.Fprintf(&g.fnBuf, "  store i1 true, ptr %s\n", destSlot)
 		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
 		fmt.Fprintf(&g.fnBuf, "%s:\n", contLabel)
 		next := g.fresh()
