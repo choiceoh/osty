@@ -438,6 +438,16 @@ fn unOpBitNot(env: CheckEnv, inner: Int, start: Int, end: Int) -> Int {
 // ---------------------------------------------------------------------
 
 fn elabInferBinary(cx: ElabCx, node: AstNode) -> ElabResult {
+    // `??` is a binary-shaped AST node but has Option-specific
+    // inference rules — detect it directly off the source token
+    // before tokenToBinOp collapses it to BoInvalid (there is no
+    // matching BinOp variant). Without this early route the coalesce
+    // falls through to `binOpResultType(op=BoInvalid, ...)` which
+    // returns tErr, poisoning any closure body that uses `?? `
+    // (e.g. `|n: Int?| n ?? 0` became `fn(Int?) -> <error>`).
+    if node.op == FrontQQ {
+        return elabCoalesce(cx, node)
+    }
     let op = tokenToBinOp(node.op)
     // `??` has special checking for Option unwrap.
     if binOpIsCoalesce(op) {
@@ -567,12 +577,22 @@ fn elabCoalesce(cx: ElabCx, node: AstNode) -> ElabResult {
     let right = elabInfer(cx, node.right)
     let leftTy = checkResolveAliasDeep(cx.env, left.ty)
     let tys = cx.env.tys
+    // `T?` surface syntax lowers to TkOptional; `Option<T>` qualified
+    // form lowers to TkNamed. Both are the same type per §7 spec, so
+    // accept either representation — closure params use `|n: Int?|`
+    // which went through astTypeToTy → tyOptional, never reaching the
+    // TkNamed branch.
+    let mut inner = -1
     if tyIsNamedHead(tys, leftTy, "Option") {
-        let inner = if checkIntListLenHelper(tyArgsAt(tys, leftTy)) > 0 {
+        inner = if checkIntListLenHelper(tyArgsAt(tys, leftTy)) > 0 {
             tyArgsAt(tys, leftTy)[0]
         } else {
             tErr(tys)
         }
+    } else if tyKindAt(tys, leftTy) == TkOptional {
+        inner = tyInnerAt(tys, leftTy)
+    }
+    if inner >= 0 {
         let _ = checkExpectAssignable(cx.env, inner, right.ty, node.start, node.end)
         let coreIdx = coreCoalesce(cx.core, left.node, right.node, inner, node.start, node.end)
         return ElabResult { node: coreIdx, ty: inner }

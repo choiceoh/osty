@@ -38099,6 +38099,12 @@ func unOpBitNot(env *CheckEnv, inner int, start int, end int) int {
 
 // Osty: /tmp/selfhost_merged.osty:17949:1
 func elabInferBinary(cx *ElabCx, node *AstNode) *ElabResult {
+	// `??` is a binary-shaped AST node but has Option-specific inference
+	// rules — detect it directly off the source token before
+	// tokenToBinOp collapses it to BoInvalid (no matching BinOp variant).
+	if _, ok := node.op.(*FrontTokenKind_FrontQQ); ok {
+		return elabCoalesce(cx, node)
+	}
 	// Osty: /tmp/selfhost_merged.osty:17950:5
 	op := tokenToBinOp(node.op)
 	_ = op
@@ -38353,22 +38359,21 @@ func elabCoalesce(cx *ElabCx, node *AstNode) *ElabResult {
 	tys := cx.env.tys
 	_ = tys
 	// Osty: /tmp/selfhost_merged.osty:18079:5
+	// `T?` surface syntax lowers to TkOptional; `Option<T>` qualified
+	// form lowers to TkNamed. Both are the same type per §7 spec.
+	inner := -1
 	if tyIsNamedHead(tys, leftTy, "Option") {
-		// Osty: /tmp/selfhost_merged.osty:18080:9
-		inner := func() int {
-			if checkIntListLenHelper(tyArgsAt(tys, leftTy)) > 0 {
-				return tyArgsAt(tys, leftTy)[0]
-			} else {
-				return tErr(tys)
-			}
-		}()
-		_ = inner
-		// Osty: /tmp/selfhost_merged.osty:18085:9
+		if checkIntListLenHelper(tyArgsAt(tys, leftTy)) > 0 {
+			inner = tyArgsAt(tys, leftTy)[0]
+		} else {
+			inner = tErr(tys)
+		}
+	} else if _, ok := tyKindAt(tys, leftTy).(*TyKind_TkOptional); ok {
+		inner = tyInnerAt(tys, leftTy)
+	}
+	if inner >= 0 {
 		_ = checkExpectAssignable(cx.env, inner, right.ty, node.start, node.end)
-		// Osty: /tmp/selfhost_merged.osty:18086:9
 		coreIdx := coreCoalesce(cx.core, left.node, right.node, inner, node.start, node.end)
-		_ = coreIdx
-		// Osty: /tmp/selfhost_merged.osty:18087:9
 		return &ElabResult{node: coreIdx, ty: inner}
 	}
 	// Osty: /tmp/selfhost_merged.osty:18089:5
