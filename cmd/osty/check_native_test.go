@@ -120,6 +120,27 @@ func TestCheckCLINativePackageCleanSourceExitsZero(t *testing.T) {
 	}
 }
 
+func TestCheckCLINativePackageLoadsStdlibImportSurfaces(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	if err := os.WriteFile(path, []byte(`use std.strings as strings
+
+fn main() {
+    let parts = strings.fields("alpha beta")
+    parts
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := runOstyCLI(t, "check", "--native", dir)
+	if got.exit != 0 {
+		t.Fatalf("osty check --native DIR exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if strings.Contains(got.stderr, "error[E0703]") {
+		t.Fatalf("stderr retained missing-method E0703 for std.strings surface:\n%s", got.stderr)
+	}
+}
+
 // TestCheckCLINativePackageSurfacesPerFileIntrinsic confirms the
 // per-file diagnostic bucketing: an `#[intrinsic]` violation in the
 // second file must surface with E0773 and a span whose rendered path
