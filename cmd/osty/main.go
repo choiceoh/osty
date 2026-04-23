@@ -1163,6 +1163,9 @@ func nativePackageCheckInput(pkg *resolve.Package, imports []selfhost.PackageChe
 	input := selfhost.PackageCheckInput{
 		Files: make([]selfhost.PackageCheckFile, 0, len(pkg.Files)),
 	}
+	if len(imports) == 0 {
+		imports = check.PackageImportSurfacesForSelfhost(pkg, nil, nativeLazyStdlibProvider{})
+	}
 	if len(imports) > 0 {
 		input.Imports = append([]selfhost.PackageCheckImport(nil), imports...)
 	}
