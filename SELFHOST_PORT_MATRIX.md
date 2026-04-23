@@ -59,6 +59,41 @@ compat 로 수락된다 (no-op).
   orchestrator 로 축소. check 내부 helper 들 (`privilege`, `podshape`,
   `noalloc`, `builder_desugar`) 은 `check_gates.osty` 로 이식이 완료된
   시점에서 삭제.
+
+  **2026-04-24 스코프 검증** (grep 기반 실측):
+  - `check.File` 총 호출부 44 건 (production 8 + 테스트 36) 중 실제 migration
+    candidate 는 소수:
+    - **Legacy by design (4)**: `cmd/osty/main.go:1334/1383/1406` 의 `run{Lint,
+      Check,Typecheck}FileLegacy` 3종 + `internal/pipeline/pipeline.go:483`
+      (`UseGolegacy: true` 명시). `UseGolegacy=true` 는 `internal/cihost/host.go`,
+      `internal/airepair/airepair.go:461`, `internal/bootstrap/seedgen/seedgen.go`,
+      `internal/ir/lower_test.go`, `internal/ir/runtime_annot_propagation_test.go`
+      등에서도 쓰임 — 의도적 Go baseline, migration 대상 아님.
+    - **구조적 의존 (4)**: `internal/lsp/server.go:709` (analyzeSingleFile —
+      코드 주석이 "legacy eager analysis path — retained"),
+      `internal/backend/stdlib_check.go:56` (stdlib per-module 캐시,
+      `*check.Result` 전체 구조 반환), `internal/airepair/airepair.go:322`
+      (`probe` — `ProbeStats` 가 `{Parse,Resolve,Check}.Errors` 단계별 카운트
+      요구. `selfhost.CheckFromSource` 는 resolve+check 통합),
+      `internal/airepair/semantic.go:401` (`validLengthFieldOffsets` →
+      `semanticExprType(fe.X, res, chk)` Go-side 구조 type lookup).
+  - **의미**: "모든 call site 통일" 은 실제로는 4 개 구조적 의존 사이트 각각
+    별도 리팩터가 필요. Single-PR 은 불가능. 각 사이트마다 adapter/schema 변경
+    동반 예상.
+
+  잔여 Go check/ 파일 실측 LOC (2026-04-24 `wc -l`):
+  - `host_boundary.go` 1986 (브릿지: `nativeCheckerExec` +
+    `embeddedNativeChecker` + `cachedNativeChecker` + `apply*Result` 군)
+  - `inspect.go` 647 (과거 매트릭스 262 표기는 stale — 현 규모 2.5배)
+  - `builder_desugar.go` 592 (Go AST 레벨 desugar — Osty HIR 레벨과 중복)
+  - `check.go` 457 (File/Package/Workspace entry 3종)
+  - `package_input.go` 199 (workspace 병렬 캐시)
+  - `privilege.go` 47 (host 식별 predicate 2 개 — `isPrivilegedPackage` /
+    `isPrivilegedPackagePath`. #770 이후 "최소 잔류" 로 주석 명시)
+  - 합계 3928 (테스트 제외)
+
+  **이미 삭제된 파일 (확인됨)**: `podshape.go`, `noalloc.go`, `intrinsic_body.go`,
+  `query.go` — 이전 매트릭스/CHANGELOG 대로 모두 부재.
 - **1c.5** ⏳ `internal/resolve/resolve.go` (body-walk resolver),
   `internal/resolve/cfg.go` (legacy cfg pre-filter),
   `internal/resolve/prelude.go` (Go-side prelude builder),
@@ -156,7 +191,7 @@ regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환.
 | Annotation semantic validation | `(hostboundary)` | `toolchain/resolve.osty` (v0.6 arg validators) + `toolchain/hir_lower.osty:923-950` (extract) + `toolchain/mir.osty::MirFunction` + `toolchain/mir_lower.osty::mirLowerCopyFnAnnotations` (HIR→MIR 전달) | E0739 | **partial (LLVM-emission 남음)** | 2026-04-23 resolve 단계 v0.6 arg validator 10 종 전부 이식. HIR extract 계층 + HirFnDecl 필드 10 종 landing 완료. **2026-04-23 후속**: MirFunction 이 9 annotation 그룹 필드 (`vectorize[Width/Scalable/Predicate]` / `noVectorize` / `parallel` / `unroll[Count]` / `inlineMode` (MirInlineMode enum) / `hot` / `cold` / `targetFeatures` / `noaliasAll` / `noaliasParams` / `pure`) 을 HirFnDecl 로부터 `mirLowerCopyFnAnnotations` 가 lossless 복사 — Go `ir.FnDecl` shim 이 소비할 수 있는 단일 MIR-level 소스 완성. **잔여**: `toolchain/llvmgen.osty` 가 이 MIR 필드를 LLVM fn-attr / loop-metadata 로 emit 하는 경로 (A5 loop md / A8 fn attr / A9 section 배치 / A10 target-features / A11 noalias param attr / A13 readnone). 현재는 Go `internal/llvmgen` 쪽이 emit 을 전담 — Osty native LLVMgen 은 여전히 scalar-only |
 | **Builder auto-derive** | `internal/check/builder_desugar.go` | `toolchain/hir_lower.osty:684` | E0774 | **partial** | Go 는 AST 레벨 desugar, Osty 는 HIR 레벨 qualify — **중복 포팅 필요** |
 | **ToString auto-derive** | — | — | — | — | 양쪽 미구현. 스펙 요구 여부 확인 필요 |
-| **Privilege system** | `internal/check/privilege.go` (33 줄, `isPrivilegedPackage[Path]` 헬퍼만 잔존) | `toolchain/check_gates.osty:376` | E0770 | **ported** | 2026-04-23 PR #770 로 호출부 제거, 후속 PR 로 Go duplicate walker + parity harness + 전용 test 전부 제거. Osty `runCheckGates` 가 authoritative. 동시에 `check_gates.osty::privilegeWalkTypeAlias` 의 `children2` → `children` 버그 수정 (TypeAlias 는 generics 를 `children` 에 둠 — §19.4 Pod-bound 이 type alias 에서 누락되던 실버그 해소) |
+| **Privilege system** | `internal/check/privilege.go` (47 LOC — 2026-04-24 실측; 주석 포함. `isPrivilegedPackage[Path]` 헬퍼 2 개만 잔존) | `toolchain/check_gates.osty:376` | E0770 | **ported** | 2026-04-23 PR #770 로 호출부 제거, 후속 PR 로 Go duplicate walker + parity harness + 전용 test 전부 제거. Osty `runCheckGates` 가 authoritative. 동시에 `check_gates.osty::privilegeWalkTypeAlias` 의 `children2` → `children` 버그 수정 (TypeAlias 는 generics 를 `children` 에 둠 — §19.4 Pod-bound 이 type alias 에서 누락되던 실버그 해소) |
 | **POD shape analysis** | (Go duplicate 제거됨) | `toolchain/check_gates.osty:146` | E0771 | **ported** | 2026-04-23 same consolidation. Go `podshape.go` / `podshape_test.go` 전부 제거 |
 | **Noalloc analysis** | (Go duplicate 제거됨) | `toolchain/check_gates.osty:275` | E0772 | **ported** | 2026-04-23 same consolidation. Go `noalloc.go` / `noalloc_test.go` 전부 제거 |
 | Raw-ptr handling | privilege + podshape gates | `toolchain/check_gates.osty:runtimeGated*` | E0770, E0771 | partial | privilege + POD 결합 |
@@ -168,7 +203,7 @@ regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환.
 | Diagnostic file path 결합 | `host_boundary.go::stampPackageDiags` | `toolchain/check_diag.osty` | — | partial | Go 가 경로 스탬프, Osty 가 메시지 렌더 |
 | **Native checker exec 경계** | `host_boundary.go::nativeCheckerExec` | — | — | **n/a** | 외부 바이너리 인터페이스 — 포팅 대상 아님 |
 | Embedded selfhost bridge | `host_boundary.go::embeddedNativeChecker` | `toolchain/check_bridge.osty` (9줄) | — | n/a | **9줄짜리 얇은 stub — AST 변경에 취약** |
-| **Inspect / per-node 기록** | `internal/check/inspect.go` (262줄) | — | — | **go-only** | bidirectional 규칙 재실행해 hint 재구성 |
+| **Inspect / per-node 기록** | `internal/check/inspect.go` (647 LOC — 2026-04-24 실측) | `toolchain/inspect.osty` (v1 — `typedNodes` 기반 워커) + `toolchain/inspect_test.osty` | — | **partial** | 2026-04-24 v1 착륙: `inspectSource(src)` / `inspectFromCheckResult(checked)` 가 `FrontCheckResult.typedNodes` 를 iterate 하고 LIT-\*, VAR, BINOP, UNARY, CALL, FIELD, INDEX, IF, MATCH, LIST, MAP, TUPLE, STRUCT-LIT, RANGE, BLOCK, PAREN, QUESTION, TURBOFISH, CLOSURE rule 기록을 start offset 정렬 반환. **남은 갭**: (1) FN-DECL / LET 는 `typedNodes` 에 존재하지 않고 `bindings` 쪽에 있어 follow-up 에서 합쳐야 함. (2) `hintName` 은 v1 에서 빈 문자열 — Go 쪽 top-down 재실행을 Osty 에서 재현하려면 `List<T>` / tuple / `Map<K,V>` / `fn(..) -> R` 시그니처 파서를 `typeName: String` 위에 얹어야 함. (3) `notes` (generic instantiation, "method call" 마커 등) 는 아직 비어있음. (4) Go 브리지 (`selfhost.InspectFromRun`) 는 다음 세션에서 추가 — `generated.go` 재생성 + bundle 업데이트 필요 |
 | Generic bound checking | `(hostboundary)` | `toolchain/elab.osty` | E0749 | ported | monomorph 시 bound 강제 |
 | Pattern shape mismatch (E0753) | `(hostboundary)` | `toolchain/elab.osty:elabPattern` | E0753 | ported | — |
 | Closure annotation requirement | `(hostboundary)` | `toolchain/elab.osty:1849` | E0752 | partial | param seeding 만 |
@@ -178,7 +213,7 @@ regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환.
 1. ~~**Intrinsic body (E0773)**~~ — **착륙 2026-04-23**. Osty side (`toolchain/check_gates.osty` + `selfhostIntrinsicBodyDiagnosticsFromArena`) 가 이미 존재했고, Go 레거시 `intrinsic_body.go` (93 LOC) + test 제거 + `check.go:208/285` 콜사이트를 public `selfhost.IntrinsicBodyDiagsForSource(src, path)` 래퍼로 대체. Native path (CheckPackageStructured 내부) 와 Go fallback 모두 동일 arena gate 공유 — silent diverge 불가능.
 2. **Privilege / POD / Noalloc 3-gate 통합** — 양쪽 `partial` 인데 **독립 실행 중** — silent divergence 리스크 제일 큼. 방법: 해당 gate 를 `check_gates.osty` 단일 소스로 몰고 Go 쪽은 adapter 만 남긴다. 3개가 구조적으로 유사하니 한 번에 처리.
 3. **Builder auto-derive 단일화** — Go AST 레벨 desugar 를 `hir_lower.osty` 쪽으로 흡수. `toBuilder()` receiver type recovery 를 옮기려면 scope 정보 필요 → resolver `#[cfg]` 포팅 이후 진행.
-4. **Inspect / Query API 포팅** — `inspect.go` 262줄 + `query.go` 127줄 을 `toolchain/inspect.osty` 로. IDE/LSP feature 기반, golden snapshot 영향 적어 차단 없이 병행 가능.
+4. **Inspect 포팅** — **v1 착륙 2026-04-24**. `toolchain/inspect.osty` (185 LOC) + `toolchain/inspect_test.osty` 가 Osty 쪽 scaffold 와 표현식 레코드 대부분을 커버. `query.go` 는 PR #787 후속으로 삭제됨. **Follow-up**: (a) decl-level 레코드 (FN-DECL, LET) 를 `bindings` / `FrontCheckedBinding` 을 엮어 추가. (b) Hint propagation — `FrontCheckedNode.typeName: String` 위에 얇은 타입 파서 (`List<T>` / tuple / `Map<K,V>` / `fn(..) -> R` 시그니처) 를 올려 top-down 재실행. (c) Go 브리지: `bundle.go` 의 `toolchainCheckerFiles` 에 `toolchain/inspect.osty` 추가 → `just build-all` 로 `internal/selfhost/generated.go` 재생성 → `internal/selfhost/inspect_adapter.go` 에 `InspectFromSource(src) []api.InspectRecord` 노출. (d) Go `check.Inspect` 는 당분간 parity reference 로 유지; `cmd/osty inspect` 의 `--arena` 플래그로 Osty path 토글.
 5. **Annotation semantic validation 완성** — `#[vectorize]`/`#[parallel]`/`#[hot]`/`#[pure]` 를 `hir_lower.osty` 에 추가. v0.6 A5–A13 stanza 기반 스펙이 권위.
 6. **Defer lifecycle 설계** — 스펙 정리 먼저. 백엔드와 cross-cutting 이라 `SPEC_GAPS.md` entry 선행.
 7. **Package input / worker pool** — 호스트 경계 바깥이지만 Osty 로 가져오려면 파일 IO + 프로세스 스케줄링 이 Osty 측에 필요. 가장 뒤.
