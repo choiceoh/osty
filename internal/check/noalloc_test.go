@@ -10,11 +10,16 @@ import (
 	"github.com/osty/osty/internal/stdlib"
 )
 
-// runNoAlloc parses + resolves + runs only the noalloc walker (the
-// native-checker boundary is bypassed via parseResolvedFile + a direct
-// runNoAllocChecks call). This keeps the spike's tests self-contained:
-// they exercise just the new code path without depending on the rest
-// of the checker being green for unrelated reasons.
+// runNoAlloc drives the full Osty check pipeline via check.File so the
+// E0772 emissions come from `toolchain/check_gates.osty::runNoAllocGate`
+// — the production path after PR #770 retired the Go-side duplicate
+// runs. Non-noalloc diagnostics (resolver noise, privilege gate, …)
+// are filtered out so the existing test assertions keep their tight
+// E0772-only shape.
+//
+// Privileged=true is set so the `#[no_alloc]` fixtures, which carry
+// runtime-surface annotations, don't also trip the privilege gate and
+// drown the noalloc diag in E0770 noise.
 func runNoAlloc(t *testing.T, src string) []*diag.Diagnostic {
 	t.Helper()
 	file, diags := parser.ParseDiagnostics([]byte(src))
@@ -22,10 +27,18 @@ func runNoAlloc(t *testing.T, src string) []*diag.Diagnostic {
 		t.Fatalf("parse diagnostics: %v", diags)
 	}
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
-	// Resolver may still emit diagnostics (e.g. unknown identifiers in
-	// our stripped fixtures); we only care about the noalloc pass here.
-	_ = res
-	return runNoAllocChecks(file, res)
+	result := File(file, res, Opts{
+		Source:     []byte(src),
+		Stdlib:     stdlib.LoadCached(),
+		Privileged: true,
+	})
+	out := make([]*diag.Diagnostic, 0, len(result.Diags))
+	for _, d := range result.Diags {
+		if d != nil && d.Code == diag.CodeNoAllocViolation {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func expectNoAllocCode(t *testing.T, src string, wantCount int) []*diag.Diagnostic {
