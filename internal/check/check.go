@@ -8,7 +8,6 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
 )
@@ -190,24 +189,16 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 	privileged := isPrivilegedPackage(pkg)
 	applyNativePackageResult(result, pkg, pr, nil, opt.Stdlib, privileged)
 	stampPackageDiags(result.Diags, pkg)
+	// §19 policy gates (privilege / POD / no_alloc / intrinsic body) are
+	// now sourced from the bootstrapped Osty checker
+	// (toolchain/check_gates.osty::runCheckGates), which `applyNativePackageResult`
+	// just consumed. Cross-side parity is pinned by
+	// internal/check/gates_diff_test.go::TestGatesCrossSideParity, so the
+	// duplicate Go-side runs previously stitched in here were removed to
+	// keep the two emitters from drifting.
 	for _, pf := range pkg.Files {
 		if pf == nil {
 			continue
-		}
-		if d := runPrivilegeGate(pf.File, privileged); len(d) > 0 {
-			diag.StampFile(d, pf.Path)
-			result.Diags = appendMissingDiagnostics(result.Diags, d)
-		}
-		if d := runPodShapeChecks(pf.File); len(d) > 0 {
-			diag.StampFile(d, pf.Path)
-			result.Diags = appendMissingDiagnostics(result.Diags, d)
-		}
-		if d := runNoAllocChecks(pf.File, nil); len(d) > 0 {
-			diag.StampFile(d, pf.Path)
-			result.Diags = appendMissingDiagnostics(result.Diags, d)
-		}
-		if d := selfhost.IntrinsicBodyDiagsForSource(pf.CheckerSource(), pf.Path); len(d) > 0 {
-			result.Diags = appendMissingDiagnostics(result.Diags, d)
 		}
 		recordSelfhostDeclPass(opt.OnDecl, pf.File, "collect")
 		recordSelfhostDeclPass(opt.OnDecl, pf.File, "check")
@@ -262,28 +253,14 @@ func Workspace(
 		}
 	}
 	applyNativeWorkspaceResults(ws, resolved, out, opt.Stdlib)
+	// §19 policy gates are sourced from the Osty checker (see File()
+	// comment above). TestGatesCrossSideParity guards against drift.
 	for _, e := range walk {
 		pkgResult := out[e.path]
 		stampPackageDiags(pkgResult.Diags, e.pkg)
 		for _, pf := range e.pkg.Files {
 			if pf == nil {
 				continue
-			}
-			privileged := isPrivilegedPackagePath(e.path) || isPrivilegedPackage(e.pkg)
-			if d := runPrivilegeGate(pf.File, privileged); len(d) > 0 {
-				diag.StampFile(d, pf.Path)
-				pkgResult.Diags = appendMissingDiagnostics(pkgResult.Diags, d)
-			}
-			if d := runPodShapeChecks(pf.File); len(d) > 0 {
-				diag.StampFile(d, pf.Path)
-				pkgResult.Diags = appendMissingDiagnostics(pkgResult.Diags, d)
-			}
-			if d := runNoAllocChecks(pf.File, nil); len(d) > 0 {
-				diag.StampFile(d, pf.Path)
-				pkgResult.Diags = appendMissingDiagnostics(pkgResult.Diags, d)
-			}
-			if d := selfhost.IntrinsicBodyDiagsForSource(pf.CheckerSource(), pf.Path); len(d) > 0 {
-				pkgResult.Diags = appendMissingDiagnostics(pkgResult.Diags, d)
 			}
 			recordSelfhostDeclPass(opt.OnDecl, pf.File, "collect")
 			recordSelfhostDeclPass(opt.OnDecl, pf.File, "check")

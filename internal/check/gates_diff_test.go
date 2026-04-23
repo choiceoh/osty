@@ -9,18 +9,20 @@ import (
 	"github.com/osty/osty/internal/selfhost"
 )
 
-// The Go-native checker and the bootstrapped Osty checker each run their
-// own copy of the §19 policy gates (privilege / POD shape / noalloc /
-// intrinsic body). That duplication is flagged as a correctness hazard
-// in SELFHOST_PORT_MATRIX.md: divergence silently lands in production
-// until someone compares the two emitters by hand.
+// Three of the four §19 policy gates still have Go reference
+// implementations — privilege / POD shape / noalloc — kept around for
+// unit-test ergonomics even though their production emitters moved to
+// `toolchain/check_gates.osty::runCheckGates`. Intrinsic body (E0773)
+// was consolidated end-to-end in #769: the Go file is gone and every
+// call-site routes through `selfhost.IntrinsicBodyDiagsForSource`, so
+// no parity comparison remains for that gate.
 //
-// This test nails down parity on the *gate diagnostic codes* — E0770 /
-// E0771 / E0772 / E0773 — across a curated corpus. Each case lists the
-// source + privileged flag, plus the set of gate codes the port contract
-// requires both sides to emit. A failure on either side (Go-only or
-// Osty-only) surfaces the exact divergence and blocks further
-// consolidation until investigated.
+// This test nails down parity on the *gate diagnostic codes* —
+// E0770 / E0771 / E0772 — across a curated corpus. Each case lists the
+// source + privileged flag, plus the set of gate codes the port
+// contract requires both sides to emit. A failure on either side
+// (Go-only or Osty-only) surfaces the exact divergence and blocks
+// further consolidation until investigated.
 //
 // Non-gate diagnostics (E0500, E0717, …) are filtered out — the Osty
 // checker runs the full pipeline (resolve + elab + gates) so its diag
@@ -38,38 +40,9 @@ func TestGatesCrossSideParity(t *testing.T) {
 			wantCodes: []string{},
 		},
 		{
-			// Intrinsic with non-empty body — E0773 from both sides.
-			name:       "intrinsic-non-empty-body",
-			src:        "#[intrinsic] fn raw_null() -> Int { 0 }\n",
-			privileged: true,
-			wantCodes:  []string{"E0773"},
-		},
-		{
-			// Intrinsic with empty body — no diag.
-			name:       "intrinsic-empty-body-ok",
-			src:        "#[intrinsic] fn raw_null() -> Int {}\n",
-			privileged: true,
-			wantCodes:  []string{},
-		},
-		{
-			// Intrinsic signature-only — no diag.
-			name:       "intrinsic-signatureless-ok",
-			src:        "#[intrinsic] fn raw_null() -> Int\n",
-			privileged: true,
-			wantCodes:  []string{},
-		},
-		{
-			// Non-privileged package using #[intrinsic] — Go strips
-			// E0770 (the gate is skipped); Osty emits unconditionally
-			// and the host boundary strips it post-hoc. At the gate
-			// boundary (this test) Osty will surface E0770 while Go
-			// won't — that asymmetry is flagged in the test
-			// expectation so the consolidation plan has to pick one.
-			//
-			// For now the wantCodes captures what the *Go* emitter
-			// produces; the Osty side may diverge, and if it does the
-			// assertion below surfaces the extra codes so the team
-			// has a concrete list to reconcile.
+			// Non-privileged package using #[intrinsic] — privilege
+			// gate fires (E0770) because the runtime sublanguage
+			// surface is off-limits outside privileged packages.
 			name:      "non-privileged-intrinsic",
 			src:       "#[intrinsic] fn raw_null() -> Int\n",
 			wantCodes: []string{"E0770"},
@@ -156,7 +129,6 @@ func runGoGateCodes(t *testing.T, src string, privileged bool) []string {
 	diags = append(diags, runPrivilegeGate(file, privileged)...)
 	diags = append(diags, runPodShapeChecks(file)...)
 	diags = append(diags, runNoAllocChecks(file, nil)...)
-	diags = append(diags, runIntrinsicBodyChecks(file)...)
 	return filterGateCodes(diags)
 }
 
@@ -202,7 +174,7 @@ func filterGateCodes(diags []*diag.Diagnostic) []string {
 
 func isGateCode(code string) bool {
 	switch code {
-	case "E0770", "E0771", "E0772", "E0773":
+	case "E0770", "E0771", "E0772":
 		return true
 	}
 	return false
