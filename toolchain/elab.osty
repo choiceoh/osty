@@ -2221,15 +2221,38 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
     if tyIsBad(cx.env.tys, recvTy) {
         return elabPoisonResult(cx, node.start, node.end)
     }
-    let kind = tyKindAt(cx.env.tys, recvTy)
+    // `?.` (LANG_SPEC §4 / appendix A.6) short-circuits on an Option
+    // receiver and wraps the resulting field type back into `?`. The
+    // parser marks `?.` with `AstNField.flags == 1` (see
+    // opParseFieldOrCall in toolchain/parser.osty:1058). When the
+    // receiver is already an Option we unwrap to the inner type for the
+    // ordinary field lookup and tag the result for `?`-wrapping below;
+    // non-Option receivers are rejected with E0719 so users see a
+    // dedicated error instead of E0702 "no field on type T?".
+    let isOptionalChain = node.flags == 1
+    let lookupTy = if isOptionalChain {
+        if tyKindAt(cx.env.tys, recvTy) == TkOptional {
+            tyInnerAt(cx.env.tys, recvTy)
+        } else {
+            cx.env.diagnostics.push(diagOptionalChainOnNon(
+                tyToString(cx.env.tys, recvTy),
+                node.start,
+                node.end,
+            ))
+            return elabPoisonResult(cx, node.start, node.end)
+        }
+    } else {
+        recvTy
+    }
+    let kind = tyKindAt(cx.env.tys, lookupTy)
     let fieldName = node.text
     match kind {
         TkTuple -> {
-            let elems = tyArgsAt(cx.env.tys, recvTy)
+            let elems = tyArgsAt(cx.env.tys, lookupTy)
             let idx = parseTupleIndex(fieldName)
             if idx < 0 || idx >= checkIntListLenHelper(elems) {
                 cx.env.diagnostics.push(diagUnknownField(
-                    tyToString(cx.env.tys, recvTy),
+                    tyToString(cx.env.tys, lookupTy),
                     fieldName,
                     node.start,
                     node.end,
@@ -2237,11 +2260,12 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
                 return elabPoisonResult(cx, node.start, node.end)
             }
             let elemTy = checkIntListAt(elems, idx)
-            let coreIdx = coreTupleAccess(cx.core, recv.node, idx, elemTy, node.start, node.end)
-            ElabResult { node: coreIdx, ty: elemTy }
+            let resultTy = elabWrapOptionalChain(cx, isOptionalChain, elemTy)
+            let coreIdx = coreTupleAccess(cx.core, recv.node, idx, resultTy, node.start, node.end)
+            ElabResult { node: coreIdx, ty: resultTy }
         },
         TkNamed -> {
-            let owner = tyHeadAt(cx.env.tys, recvTy)
+            let owner = tyHeadAt(cx.env.tys, lookupTy)
             let fieldSig = checkLookupField(cx.env, owner, fieldName)
             if fieldSig.name == "" {
                 let hint = diagDidYouMean(
@@ -2255,18 +2279,19 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
             }
             // Substitute owner generics.
             let typeSig = checkLookupType(cx.env, owner)
-            let ownerArgs = tyArgsAt(cx.env.tys, recvTy)
+            let ownerArgs = tyArgsAt(cx.env.tys, lookupTy)
             let fieldTy = if checkStringListLenHelper(typeSig.generics) == checkIntListLenHelper(ownerArgs) {
                 checkSubstituteTy(cx.env, fieldSig.ty, typeSig.generics, ownerArgs)
             } else {
                 fieldSig.ty
             }
-            let coreIdx = coreField(cx.core, recv.node, fieldName, fieldTy, node.start, node.end)
-            ElabResult { node: coreIdx, ty: fieldTy }
+            let resultTy = elabWrapOptionalChain(cx, isOptionalChain, fieldTy)
+            let coreIdx = coreField(cx.core, recv.node, fieldName, resultTy, node.start, node.end)
+            ElabResult { node: coreIdx, ty: resultTy }
         },
         _ -> {
             cx.env.diagnostics.push(diagUnknownField(
-                tyToString(cx.env.tys, recvTy),
+                tyToString(cx.env.tys, lookupTy),
                 fieldName,
                 node.start,
                 node.end,
@@ -2274,6 +2299,26 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
             elabPoisonResult(cx, node.start, node.end)
         },
     }
+}
+
+/// elabWrapOptionalChain wraps `ty` in a fresh `T?` when the current
+/// field access came from a `?.` chain and the field's own type is not
+/// already Option. Matches LANG_SPEC §4's short-circuit rule: `opt?.x`
+/// typed as the field type with an extra Option layer, and nested
+/// `a?.b?.c` flattens so double-wrap (`Option<Option<_>>`) never
+/// appears — the inner `?.` already returned an Option, so its field
+/// lookup sees the inner type and the outer `?.` would re-wrap
+/// unconditionally. Clamping on the already-Option case keeps the
+/// type identical to what the spec calls out and what stdlib Option
+/// combinators expect.
+fn elabWrapOptionalChain(cx: ElabCx, isOptionalChain: Bool, ty: Int) -> Int {
+    if !isOptionalChain {
+        return ty
+    }
+    if tyKindAt(cx.env.tys, ty) == TkOptional {
+        return ty
+    }
+    tyOptional(cx.env.tys, ty)
 }
 
 fn checkStringListLenHelper(xs: List<String>) -> Int {

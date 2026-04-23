@@ -47,6 +47,7 @@ pub fn checkCodeUnknownMethod() -> String { "E0703" }
 pub fn checkCodeNotCallable() -> String { "E0704" }
 pub fn checkCodeMissingField() -> String { "E0708" }
 pub fn checkCodeQuestionNotOptional() -> String { "E0717" }
+pub fn checkCodeOptionalChainOnNon() -> String { "E0719" }
 pub fn checkCodeInvalidAssignTarget() -> String { "E0724" }
 pub fn checkCodeImmutableAssign() -> String { "E0725" }
 pub fn checkCodeReturnMismatch() -> String { "E0726" }
@@ -174,6 +175,15 @@ pub fn diagUnknownField(owner: String, name: String, start: Int, end: Int) -> Ch
     checkDiag(
         checkCodeUnknownField(),
         "no field `{name}` on type `{owner}`",
+        start,
+        end,
+    )
+}
+
+pub fn diagOptionalChainOnNon(owner: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiag(
+        checkCodeOptionalChainOnNon(),
+        "`?.` operator applied to non-optional type `{owner}`; use `.` for direct field access",
         start,
         end,
     )
