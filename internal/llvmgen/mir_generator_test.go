@@ -2970,6 +2970,194 @@ func TestGenerateFromMIRStringInterpolationRecoversFieldExprTypes(t *testing.T) 
 	}
 }
 
+func TestGenerateFromMIRRecoversUseRVProjectionTypes(t *testing.T) {
+	diagT := &ir.NamedType{Name: "Diag"}
+	listStringT := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	pairT := &ir.TupleType{Elems: []ir.Type{ir.TInt, ir.TString}}
+
+	tests := []struct {
+		name   string
+		fnName string
+		mod    *ir.Module
+	}{
+		{
+			name:   "field",
+			fnName: "renderField",
+			mod: &ir.Module{
+				Package: "main",
+				Decls: []ir.Decl{
+					&ir.StructDecl{
+						Name: "Diag",
+						Fields: []*ir.Field{
+							{Name: "code", Type: ir.TString, Exported: true},
+						},
+					},
+					&ir.FnDecl{
+						Name:   "wrapDiag",
+						Return: diagT,
+						Params: []*ir.Param{{Name: "d", Type: diagT}},
+						Body: &ir.Block{
+							Result: &ir.Ident{Name: "d", Kind: ir.IdentParam, T: diagT},
+						},
+					},
+					&ir.FnDecl{
+						Name:   "renderField",
+						Return: ir.TString,
+						Params: []*ir.Param{{Name: "d", Type: diagT}},
+						Body: &ir.Block{
+							Result: &ir.FieldExpr{
+								X: &ir.CallExpr{
+									Callee: &ir.Ident{
+										Name: "wrapDiag",
+										Kind: ir.IdentFn,
+										T: &ir.FnType{
+											Params: []ir.Type{diagT},
+											Return: diagT,
+										},
+									},
+									Args: []ir.Arg{{
+										Value: &ir.Ident{Name: "d", Kind: ir.IdentParam, T: diagT},
+									}},
+									T: ir.ErrTypeVal,
+								},
+								Name: "code",
+								T:    ir.ErrTypeVal,
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:   "tuple",
+			fnName: "renderTuple",
+			mod: &ir.Module{
+				Package: "main",
+				Decls: []ir.Decl{
+					&ir.FnDecl{
+						Name:   "makePair",
+						Return: pairT,
+						Params: []*ir.Param{{Name: "n", Type: ir.TInt}},
+						Body: &ir.Block{
+							Result: &ir.TupleLit{
+								Elems: []ir.Expr{
+									&ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt},
+									&ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "ok"}}},
+								},
+								T: pairT,
+							},
+						},
+					},
+					&ir.FnDecl{
+						Name:   "renderTuple",
+						Return: ir.TString,
+						Params: []*ir.Param{{Name: "n", Type: ir.TInt}},
+						Body: &ir.Block{
+							Result: &ir.TupleAccess{
+								X: &ir.CallExpr{
+									Callee: &ir.Ident{
+										Name: "makePair",
+										Kind: ir.IdentFn,
+										T: &ir.FnType{
+											Params: []ir.Type{ir.TInt},
+											Return: pairT,
+										},
+									},
+									Args: []ir.Arg{{
+										Value: &ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt},
+									}},
+									T: ir.ErrTypeVal,
+								},
+								Index: 1,
+								T:     ir.ErrTypeVal,
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:   "index",
+			fnName: "renderIndex",
+			mod: &ir.Module{
+				Package: "main",
+				Decls: []ir.Decl{
+					&ir.FnDecl{
+						Name:   "makeList",
+						Return: listStringT,
+						Body: &ir.Block{
+							Result: &ir.ListLit{
+								Elems: []ir.Expr{
+									&ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "ok"}}},
+								},
+								Elem: ir.TString,
+							},
+						},
+					},
+					&ir.FnDecl{
+						Name:   "renderIndex",
+						Return: ir.TString,
+						Body: &ir.Block{
+							Result: &ir.IndexExpr{
+								X: &ir.CallExpr{
+									Callee: &ir.Ident{
+										Name: "makeList",
+										Kind: ir.IdentFn,
+										T: &ir.FnType{
+											Return: listStringT,
+										},
+									},
+									T: ir.ErrTypeVal,
+								},
+								Index: &ir.IntLit{Text: "0", T: ir.TInt},
+								T:     ir.ErrTypeVal,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := buildMIRModuleFromHIR(t, tt.mod)
+			mirFn := m.LookupFunction(tt.fnName)
+			if mirFn == nil {
+				t.Fatalf("missing %s function", tt.fnName)
+			}
+			for _, bb := range mirFn.Blocks {
+				if bb == nil {
+					continue
+				}
+				for _, inst := range bb.Instrs {
+					asg, ok := inst.(*mir.AssignInstr)
+					if !ok {
+						continue
+					}
+					use, ok := asg.Src.(*mir.UseRV)
+					if !ok || use.Op == nil {
+						continue
+					}
+					if _, ok := use.Op.Type().(*ir.ErrType); ok {
+						t.Fatalf("UseRV operand type stayed poisoned in %s:\n%s", tt.fnName, mir.PrintFunction(mirFn))
+					}
+				}
+			}
+			out, err := GenerateFromMIR(m, Options{
+				PackageName: "main",
+				SourcePath:  "/tmp/" + tt.fnName + "_use_rv_recovery.osty",
+			})
+			if err != nil {
+				t.Fatalf("GenerateFromMIR: %v\n%s", err, mir.PrintFunction(mirFn))
+			}
+			if strings.Contains(string(out), "<error>") {
+				t.Fatalf("generated IR still mentions <error>:\n%s", out)
+			}
+		})
+	}
+}
+
 // TestGenerateFromMIRStringChars verifies String.chars() dispatches
 // through `osty_rt_strings_Chars(ptr) -> ptr` — matching the legacy
 // emitter's routing so `.chars()` participates in MIR-direct object /

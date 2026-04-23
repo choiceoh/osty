@@ -1240,7 +1240,7 @@ func (bs *bodyState) lowerForInfinite(f *ir.ForStmt) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
-		label: f.Label,
+		label:      f.Label,
 		breakBlock: exit, continueBlock: header, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	for _, s := range f.Body.Stmts {
@@ -1266,7 +1266,7 @@ func (bs *bodyState) lowerForWhile(f *ir.ForStmt) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
-		label: f.Label,
+		label:      f.Label,
 		breakBlock: exit, continueBlock: header, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	for _, s := range f.Body.Stmts {
@@ -1320,7 +1320,7 @@ func (bs *bodyState) lowerForRange(f *ir.ForStmt) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
-		label: f.Label,
+		label:      f.Label,
 		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	bs.bind(f.Var, idx)
@@ -1404,7 +1404,7 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
-		label: f.Label,
+		label:      f.Label,
 		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	// load current element: elem = iter[idx]
@@ -1492,7 +1492,7 @@ func (bs *bodyState) lowerForInChannel(f *ir.ForStmt, iterT Type) {
 	bs.pushScope()
 	bs.pushDeferScope()
 	bs.loopStack = append(bs.loopStack, &loopFrame{
-		label: f.Label,
+		label:      f.Label,
 		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
 	})
 	// Unwrap the payload into a named local.
@@ -1959,7 +1959,7 @@ func (bs *bodyState) lowerExprAsOperand(e ir.Expr) Operand {
 				bs.lowerExprInto(x.X, tmp, t)
 				recvPlace = Place{Local: tmp}
 			}
-			info := bs.l.structFromType(x.X.Type(), "")
+			info := bs.fieldExprInfo(x)
 			fieldT := bs.fieldExprType(x)
 			idx := bs.l.fieldIndex(info, x.Name)
 			return &CopyOp{
@@ -2104,26 +2104,16 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 				return sig.retType
 			}
 		}
+	case *ir.FieldExpr:
+		return bs.fieldExprType(x)
+	case *ir.TupleAccess:
+		return bs.tupleAccessType(x)
 	case *ir.IndexExpr:
 		// `xs[i]` in interp position ends up here when the checker
 		// dropped the element type. Peel the collection type off the
 		// receiver.
-		if x.X == nil {
-			return nil
-		}
-		xT := x.X.Type()
-		if xT == nil || xT == ir.ErrTypeVal {
-			return nil
-		}
-		if nt, ok := xT.(*ir.NamedType); ok && len(nt.Args) > 0 {
-			switch nt.Name {
-			case "List":
-				return nt.Args[0]
-			case "Map":
-				if len(nt.Args) >= 2 {
-					return nt.Args[1]
-				}
-			}
+		if elemT := bs.indexExprType(x); elemT != nil && elemT != ir.ErrTypeVal {
+			return elemT
 		}
 	case *ir.BinaryExpr:
 		// Comparison / logical ops always yield Bool regardless of
@@ -2278,7 +2268,7 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 				bs.lowerExprInto(x.X, tmp, t)
 				recvPlace = Place{Local: tmp}
 			}
-			info := bs.l.structFromType(x.X.Type(), "")
+			info := bs.fieldExprInfo(x)
 			idx := bs.l.fieldIndex(info, x.Name)
 			fieldT := bs.fieldExprType(x)
 			proj := &FieldProj{Index: idx, Name: x.Name, Type: fieldT}
@@ -2296,7 +2286,8 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 			bs.lowerExprInto(x.X, tmp, t)
 			recvPlace = Place{Local: tmp}
 		}
-		return &UseRV{Op: &CopyOp{Place: recvPlace.Project(&TupleProj{Index: x.Index, Type: x.T}), T: x.T}}
+		elemT := bs.tupleAccessType(x)
+		return &UseRV{Op: &CopyOp{Place: recvPlace.Project(&TupleProj{Index: x.Index, Type: elemT}), T: elemT}}
 	case *ir.IndexExpr:
 		recvPlace, ok := bs.lowerExprToPlace(x.X)
 		if !ok {
@@ -2306,7 +2297,8 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 			recvPlace = Place{Local: tmp}
 		}
 		idx := bs.lowerExprAsOperand(x.Index)
-		return &UseRV{Op: &CopyOp{Place: recvPlace.Project(&IndexProj{Index: idx, ElemType: x.T}), T: x.T}}
+		elemT := bs.indexExprType(x)
+		return &UseRV{Op: &CopyOp{Place: recvPlace.Project(&IndexProj{Index: idx, ElemType: elemT}), T: elemT}}
 	case *ir.TupleLit:
 		fields := make([]Operand, len(x.Elems))
 		for i, e := range x.Elems {
@@ -2358,22 +2350,23 @@ func (bs *bodyState) lowerExprToPlace(e ir.Expr) (Place, bool) {
 		if !ok {
 			return Place{}, false
 		}
-		info := bs.l.structFromType(x.X.Type(), "")
+		info := bs.fieldExprInfo(x)
+		fieldT := bs.fieldExprType(x)
 		idx := bs.l.fieldIndex(info, x.Name)
-		return recv.Project(&FieldProj{Index: idx, Name: x.Name, Type: x.T}), true
+		return recv.Project(&FieldProj{Index: idx, Name: x.Name, Type: fieldT}), true
 	case *ir.TupleAccess:
 		recv, ok := bs.lowerExprToPlace(x.X)
 		if !ok {
 			return Place{}, false
 		}
-		return recv.Project(&TupleProj{Index: x.Index, Type: x.T}), true
+		return recv.Project(&TupleProj{Index: x.Index, Type: bs.tupleAccessType(x)}), true
 	case *ir.IndexExpr:
 		recv, ok := bs.lowerExprToPlace(x.X)
 		if !ok {
 			return Place{}, false
 		}
 		idx := bs.lowerExprAsOperand(x.Index)
-		return recv.Project(&IndexProj{Index: idx, ElemType: x.T}), true
+		return recv.Project(&IndexProj{Index: idx, ElemType: bs.indexExprType(x)}), true
 	}
 	return Place{}, false
 }
@@ -4512,6 +4505,13 @@ func hasInterpolation(s *ir.StringLit) bool {
 	return false
 }
 
+func (bs *bodyState) fieldExprInfo(x *ir.FieldExpr) *lookupStruct {
+	if x == nil || x.X == nil {
+		return &lookupStruct{}
+	}
+	return bs.l.structFromType(bs.recoveredTypeOf(x.X), "")
+}
+
 func (bs *bodyState) fieldExprType(x *ir.FieldExpr) Type {
 	if x == nil {
 		return ir.ErrTypeVal
@@ -4519,12 +4519,62 @@ func (bs *bodyState) fieldExprType(x *ir.FieldExpr) Type {
 	if !isPoisonType(x.T) {
 		return x.T
 	}
-	info := bs.l.structFromType(x.X.Type(), "")
+	info := bs.fieldExprInfo(x)
 	if info == nil {
 		return x.T
 	}
 	if ft := bs.l.fieldType(info, x.Name); ft != nil {
 		return ft
+	}
+	return x.T
+}
+
+func (bs *bodyState) tupleAccessType(x *ir.TupleAccess) Type {
+	if x == nil {
+		return ir.ErrTypeVal
+	}
+	if !isPoisonType(x.T) {
+		return x.T
+	}
+	if x.X == nil {
+		return x.T
+	}
+	if elemT := elementTypeAt(tupleElementTypes(bs.recoveredTypeOf(x.X)), x.Index); !isPoisonType(elemT) {
+		return elemT
+	}
+	return x.T
+}
+
+func (bs *bodyState) indexExprType(x *ir.IndexExpr) Type {
+	if x == nil {
+		return ir.ErrTypeVal
+	}
+	if !isPoisonType(x.T) {
+		return x.T
+	}
+	if x.X == nil {
+		return x.T
+	}
+	switch baseT := bs.recoveredTypeOf(x.X).(type) {
+	case *ir.NamedType:
+		if len(baseT.Args) == 0 {
+			return x.T
+		}
+		switch baseT.Name {
+		case "List":
+			return baseT.Args[0]
+		case "Map":
+			if len(baseT.Args) >= 2 {
+				return baseT.Args[1]
+			}
+		}
+	case *ir.PrimType:
+		switch baseT.Kind {
+		case ir.PrimBytes:
+			return ir.TByte
+		case ir.PrimString:
+			return ir.TChar
+		}
 	}
 	return x.T
 }
