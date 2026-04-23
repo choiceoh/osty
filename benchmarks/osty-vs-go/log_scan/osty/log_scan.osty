@@ -1,14 +1,7 @@
 fn buildLogLines(n: Int) -> List<String> {
     let levels = ["INFO", "WARN", "ERROR", "DEBUG", "INFO", "WARN", "INFO"]
     let services = ["auth", "api", "db", "cache", "worker"]
-    let messages = [
-        "request completed",
-        "connection closed",
-        "retry scheduled",
-        "cache miss",
-        "query executed",
-        "timeout reached",
-    ]
+    let messages = ["request completed", "connection closed", "retry scheduled", "cache miss", "query executed", "timeout reached"]
     let mut out: List<String> = []
     let mut i = 0
     for i < n {
@@ -20,22 +13,17 @@ fn buildLogLines(n: Int) -> List<String> {
     }
     out
 }
-
 #[inline(never)]
 pub fn logScan(lines: List<String>) -> Int {
     let mut counts: Map<String, Int> = {:}
     for line in lines {
-        let parts = line.split(" ")
-        // Sample lines all have >=4 tokens so we can index directly.
-        // parts.len() on List<String> hits LLVM015 on current backends;
-        // skipping the guard trades defensive correctness for
-        // compatibility on the hot path. The fixture is controlled.
-        let level = parts[1]
-        let next = if counts.containsKey(level) {
-            counts.getOr(level, 0) + 1
-        } else {
-            1
-        }
+        // Mirror Go's IndexByte + subslice: locate the level between the
+        // first two spaces without allocating a full List<String>.
+        let first = line.indexOf(" ").unwrap()
+        let rest = line[(first + 1)..line.len()]
+        let second = rest.indexOf(" ").unwrap()
+        let level = rest[0..second]
+        let next = counts.getOr(level, 0) + 1
         counts.insert(level, next)
     }
     let mut checksum = 0
