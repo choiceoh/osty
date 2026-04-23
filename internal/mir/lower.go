@@ -796,6 +796,21 @@ func isPoisonType(t Type) bool {
 }
 
 func (bs *bodyState) lowerLetPattern(pat ir.Pattern, value ir.Expr, valueType Type, sp Span) {
+	// Wildcard-only binding has nothing to store, so skip the scratch
+	// local and evaluate `value` for side effects — otherwise a
+	// `let _ = x` with a poisoned `x.Type()` materialises an ErrType
+	// scratch that survives into MIR.
+	if _, ok := pat.(*ir.WildPat); ok {
+		if value != nil {
+			_ = bs.lowerExprAsOperand(value)
+		}
+		return
+	}
+	if isPoisonType(valueType) && value != nil {
+		if rt := bs.recoverOperandType(value); rt != nil && !isPoisonType(rt) {
+			valueType = rt
+		}
+	}
 	scratch := bs.newLocal("_scratch", valueType, false, sp)
 	bs.emit(&StorageLiveInstr{Local: scratch, SpanV: sp})
 	if value != nil {
@@ -1358,8 +1373,13 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 		return
 	}
 	elemT := listElementType(iterT)
-	if elemT == nil {
-		elemT = ir.ErrTypeVal
+	if elemT == nil || isPoisonType(elemT) {
+		// List<?> with a poisoned element type would propagate ErrType
+		// to the `_elem` copy and surface as `unsupported local type
+		// <error>` downstream. Drop the for-in, same as the
+		// non-List/Channel fallback above.
+		bs.l.noteIssue("for-in over List with unresolved element type is not lowered to MIR yet")
+		return
 	}
 	// capture iterable into a temp so we can re-read length and index
 	iter := bs.newLocal("_iter", iterT, false, f.SpanV)
@@ -2152,6 +2172,28 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 			if _, ok := bs.l.structs[x.TypeName]; ok {
 				return &ir.NamedType{Name: x.TypeName}
 			}
+		}
+	case *ir.UnaryExpr:
+		// `!x` is Bool unconditionally; `-x` / `+x` / `~x` propagate
+		// the operand's type, falling back to numeric-literal defaults
+		// when the operand itself lost its annotation.
+		if x.Op == ir.UnNot {
+			return ir.TBool
+		}
+		if x.X == nil {
+			return nil
+		}
+		if ot := x.X.Type(); ot != nil && ot != ir.ErrTypeVal {
+			return ot
+		}
+		if rt := bs.recoverOperandType(x.X); rt != nil && rt != ir.ErrTypeVal {
+			return rt
+		}
+		switch x.X.(type) {
+		case *ir.IntLit:
+			return ir.TInt
+		case *ir.FloatLit:
+			return ir.TFloat64
 		}
 	}
 	return nil
