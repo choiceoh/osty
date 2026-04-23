@@ -111,6 +111,123 @@ fn testInspectEmptyOnEmptyFile() {
     testing.assertEq(recs.len(), 0)
 }
 
+fn testInspectEmitsFnDeclRecords() {
+    let recs = inspectSource(
+        r"""
+            pub fn greet(name: String) -> String {
+                "hi, {name}"
+            }
+
+            fn main() {
+                let _ = greet("alice")
+            }
+            """,
+    )
+
+    let mut sawGreet = false
+    let mut sawMain = false
+    for rec in recs {
+        if rec.rule != "FN-DECL" {
+            continue
+        }
+        for note in rec.notes {
+            if note == "name: greet" {
+                sawGreet = true
+            }
+            if note == "name: main" {
+                sawMain = true
+            }
+        }
+    }
+    testing.assert(sawGreet)
+    testing.assert(sawMain)
+}
+
+fn testInspectEmitsTopLevelLetRecord() {
+    let recs = inspectSource(
+        r"""
+            let answer: Int = 42
+
+            fn main() {
+                let _ = answer
+            }
+            """,
+    )
+
+    let mut sawLet = false
+    for rec in recs {
+        if rec.rule == "LET" && rec.typeName == "Int" {
+            for note in rec.notes {
+                if note == "name: answer" {
+                    sawLet = true
+                }
+            }
+        }
+    }
+    testing.assert(sawLet)
+}
+
+fn testInspectEmitsBindRecords() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let opt: Option<Int> = Some(42)
+                match opt {
+                    Some(x) -> x,
+                    None -> 0,
+                }
+            }
+            """,
+    )
+
+    let mut sawBind = false
+    for rec in recs {
+        if rec.rule == "BIND" {
+            for note in rec.notes {
+                if note == "name: x" {
+                    sawBind = true
+                }
+            }
+        }
+    }
+    testing.assert(sawBind)
+}
+
+fn testInspectEmitsStructAndEnumDeclRecords() {
+    let recs = inspectSource(
+        r"""
+            pub struct Point { pub x: Int, pub y: Int }
+
+            pub enum Color { Red, Green, Blue }
+
+            fn main() {
+                let _ = Point { x: 1, y: 2 }
+            }
+            """,
+    )
+
+    let mut sawStruct = false
+    let mut sawEnum = false
+    for rec in recs {
+        if rec.rule == "STRUCT-DECL" {
+            for note in rec.notes {
+                if note == "name: Point" {
+                    sawStruct = true
+                }
+            }
+        }
+        if rec.rule == "ENUM-DECL" {
+            for note in rec.notes {
+                if note == "name: Color" {
+                    sawEnum = true
+                }
+            }
+        }
+    }
+    testing.assert(sawStruct)
+    testing.assert(sawEnum)
+}
+
 fn testInspectRecordFieldsStable() {
     let recs = inspectSource(
         r"""
