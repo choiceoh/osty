@@ -90,6 +90,7 @@ regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환.
 
 - `ported` — Osty 가 해당 로직을 구동하며 Go 쪽은 facade/adapter
 - `partial` — 양쪽에 overlapping/diverged 구현 존재
+- `broken` — 스펙이 요구하는데 양쪽 모두 구현 누락 / 오동작
 - `go-only` — 아직 Go 에만 있음
 - `osty-only-unwired` — Osty 에 있으나 consumer 파이프라인이 사용 안 함
 - `n/a` — 호스트 경계 infra (포팅 대상 아님)
@@ -144,7 +145,7 @@ regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환.
 | 메서드 dispatch (struct/enum/iface) | `(hostboundary)` | `toolchain/elab.osty:1550` | E0703 | ported | `checkSpecializeMethodSelf` |
 | Interface default-body | `(hostboundary)` | `toolchain/check_env.osty` | — | **partial** | 상속은 기록, default body 코드패스 빈약 (`269eebf8` 가 일반화 진행중) |
 | `?` 전파 (Option/Result) | `(hostboundary)` | `toolchain/elab.osty:161,1360` | E0717 | ported | `TkOptional` intern |
-| `?.` optional chain | `(hostboundary)` | `toolchain/elab.osty:432` | — | partial | 타이핑 존재, 테스트 커버리지 얕음 |
+| `?.` optional chain | `(hostboundary)` | `toolchain/elab.osty::elabInferField` (`node.flags==1` 미처리) + `internal/diag/codes.go::CodeOptionalChainOnNon` (E0719 선언만 있고 emit 없음) | E0702 (오발화), E0719 (미발화) | **broken** | 파서는 `AstNField.flags == 1` 로 `?.` 를 마킹하지만 elab 이 flag 를 무시해 `expr?.field` 를 일반 `.` 로 처리 — receiver 가 `Option<T>` 이면 E0702 "no field `foo` on type `T?`" 를 오발화. spec §4 / 부록 A.6 이 요구하는 (a) Option unwrap + 결과 타입 `U?` 래핑 (b) non-Option receiver 에 E0719 발화 둘 다 미구현. `internal/diag/codes.go::CodeOptionalChainOnNon` 은 선언만 있고 caller 0 — Osty 를 스펙에 맞춰 고쳐야 함 (bootstrap regen 동반). 2026-04-23 재조사로 라벨 `partial` → `broken` 교정 |
 | `??` nil-coalesce | `(hostboundary)` | `toolchain/elab.osty:432` | — | ported | Option unwrap 특수 |
 | **Defer lifecycle** | `internal/check/*.go` (분산) | — | — | **go-only** | Osty 쪽 검증 없음; 백엔드 의존성 설계 필요 |
 | 패턴 exhaustiveness | `(hostboundary)` | `toolchain/elab.osty:2669` | E0712 | ported | witness 생성 phase 1, opaque range phase 2 |
