@@ -515,7 +515,7 @@ func (g *generator) boxInterfaceValue(ifaceType ast.Type, v value) (value, error
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, v.typ))
 	emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", v.typ, v.ref, slot))
 	step1 := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %%osty.iface undef, ptr %s, 0", step1, slot))
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %%osty.iface zeroinitializer, ptr %s, 0", step1, slot))
 	step2 := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %%osty.iface %s, ptr %s, 1", step2, step1, vtableSym))
 	g.takeOstyEmitter(emitter)

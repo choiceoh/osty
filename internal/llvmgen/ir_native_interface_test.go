@@ -142,7 +142,7 @@ fn main() {
 		"@osty.vtable.Vec__Sized",
 		"alloca %Vec",
 		"store %Vec",
-		"insertvalue %osty.iface undef, ptr",
+		"insertvalue %osty.iface zeroinitializer, ptr",
 		"insertvalue %osty.iface",
 		"ptr @osty.vtable.Vec__Sized, 1",
 		"extractvalue %osty.iface",
@@ -151,6 +151,33 @@ fn main() {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("native-owned IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestTryGenerateNativeOwnedModuleCoversBitwiseUnaryNot(t *testing.T) {
+	src := `fn main() {
+    println(~-43)
+}
+`
+	mod := lowerNativeEntryModule(t, src)
+	out, ok, err := TryGenerateNativeOwnedModule(mod, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/native_bitnot.osty",
+	})
+	if err != nil {
+		t.Fatalf("TryGenerateNativeOwnedModule errored: %v", err)
+	}
+	if !ok {
+		t.Fatal("TryGenerateNativeOwnedModule reported uncovered for bitwise unary not")
+	}
+	got := string(out)
+	for _, want := range []string{
+		"xor i64",
+		"-1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("native-owned bitwise-not IR missing %q:\n%s", want, got)
 		}
 	}
 }
