@@ -1043,6 +1043,57 @@ pub struct MirFunction {
     pub exportSymbol: String,
     pub cAbi: Bool,
     pub span: MirSpan,
+
+    // v0.6 A5–A13 annotation-sourced metadata. Mirrors HirFnDecl so
+    // the MIR → LLVM pass can emit fn attrs / loop metadata without
+    // re-walking HIR. Defaults leave every flag off; hirLowerFnDecl
+    // populates the values, mirLowerCopyFnAnnotations threads them
+    // through. See LLVM_MIGRATION_PLAN.md "annotation semantic lowering"
+    // for the per-field backend emission plan — today llvmgen.osty
+    // is still scalar-only, so these fields are consumed exclusively
+    // by the Go-side ir.FnDecl shim until the toolchain LLVMgen
+    // learns to emit them.
+    pub vectorize: Bool,
+    pub noVectorize: Bool,
+    pub vectorizeWidth: Int,
+    pub vectorizeScalable: Bool,
+    pub vectorizePredicate: Bool,
+    pub parallel: Bool,
+    pub unroll: Bool,
+    pub unrollCount: Int,
+    pub inlineMode: MirInlineMode,
+    pub hot: Bool,
+    pub cold: Bool,
+    pub targetFeatures: List<String>,
+    pub noaliasAll: Bool,
+    pub noaliasParams: List<String>,
+    pub pure: Bool,
+}
+
+/// MirInlineMode mirrors HirInlineMode / ir.InlineNone–Never so the
+/// MIR→LLVM pass can translate `#[inline]` / `#[inline(always)]` /
+/// `#[inline(never)]` into the matching LLVM fn attribute without a
+/// cross-enum table. Keeping the enum self-contained in `mir.osty`
+/// (rather than importing HirInlineMode) lets the MIR bundle compile
+/// without the HIR tier — the HIR→MIR conversion helper lives in
+/// `mir_lower.osty` where both enums are in scope. See
+/// toolchain/hir.osty:303.
+pub enum MirInlineMode {
+    MirInlineNone,
+    MirInlineSoft,
+    MirInlineAlways,
+    MirInlineNever,
+}
+
+/// mirInlineModeName renders a MirInlineMode for diagnostic /
+/// debug-print callers. Matches hirInlineModeName verbatim.
+pub fn mirInlineModeName(mode: MirInlineMode) -> String {
+    match mode {
+        MirInlineNone -> "none",
+        MirInlineSoft -> "soft",
+        MirInlineAlways -> "always",
+        MirInlineNever -> "never",
+    }
 }
 
 pub fn mirFunction(name: String, returnType: String, span: MirSpan) -> MirFunction {
@@ -1060,6 +1111,25 @@ pub fn mirFunction(name: String, returnType: String, span: MirSpan) -> MirFuncti
         exportSymbol: "",
         cAbi: false,
         span,
+        // v0.6 A5–A13 annotation defaults match HirFnDecl's bare
+        // constructor: every flag off, empty targetFeatures list,
+        // inlineMode defaults to None. mirLowerCopyFnAnnotations
+        // overwrites these from the HIR source of truth.
+        vectorize: false,
+        noVectorize: false,
+        vectorizeWidth: 0,
+        vectorizeScalable: false,
+        vectorizePredicate: false,
+        parallel: false,
+        unroll: false,
+        unrollCount: 0,
+        inlineMode: MirInlineNone,
+        hot: false,
+        cold: false,
+        targetFeatures: [],
+        noaliasAll: false,
+        noaliasParams: [],
+        pure: false,
     }
 }
 
