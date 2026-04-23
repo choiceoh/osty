@@ -19,6 +19,7 @@ import (
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/sourcemap"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
@@ -29,98 +30,34 @@ const nativeCheckerEnv = "OSTY_NATIVE_CHECKER_BIN"
 // The checker targets an Osty-native request/response boundary. The default
 // host implementation uses the embedded selfhost checker in-process; callers
 // can opt into an external executable by setting OSTY_NATIVE_CHECKER_BIN.
+//
+// The result and request types are api.CheckResult / api.CheckRequest so the
+// in-process embedded path and the subprocess exec path speak identical
+// shapes with no adapter layer in between.
 type nativeChecker interface {
-	CheckSourceStructured([]byte) (nativeCheckResult, error)
+	CheckSourceStructured([]byte) (api.CheckResult, error)
 }
 
 type nativePackageChecker interface {
-	CheckPackageStructured(selfhost.PackageCheckInput) (nativeCheckResult, error)
-}
-
-type nativeCheckRequest struct {
-	Source  string                      `json:"source,omitempty"`
-	Package *selfhost.PackageCheckInput `json:"package,omitempty"`
-}
-
-type nativeCheckSummary struct {
-	Assignments     int                       `json:"assignments"`
-	Accepted        int                       `json:"accepted"`
-	Errors          int                       `json:"errors"`
-	ErrorsByContext map[string]int            `json:"errorsByContext,omitempty"`
-	ErrorDetails    map[string]map[string]int `json:"errorDetails,omitempty"`
-}
-
-type nativeCheckedNode struct {
-	Node     int    `json:"node"`
-	Kind     string `json:"kind"`
-	TypeName string `json:"typeName"`
-	Start    int    `json:"start"`
-	End      int    `json:"end"`
-}
-
-type nativeCheckedBinding struct {
-	Node     int    `json:"node"`
-	Name     string `json:"name"`
-	TypeName string `json:"typeName"`
-	Mutable  bool   `json:"mutable"`
-	Start    int    `json:"start"`
-	End      int    `json:"end"`
-}
-
-type nativeCheckedSymbol struct {
-	Node     int    `json:"node"`
-	Kind     string `json:"kind"`
-	Name     string `json:"name"`
-	Owner    string `json:"owner"`
-	TypeName string `json:"typeName"`
-	Start    int    `json:"start"`
-	End      int    `json:"end"`
-}
-
-type nativeCheckInstantiation struct {
-	Node       int      `json:"node"`
-	Callee     string   `json:"callee"`
-	TypeArgs   []string `json:"typeArgs"`
-	ResultType string   `json:"resultType"`
-	Start      int      `json:"start"`
-	End        int      `json:"end"`
-}
-
-type nativeCheckDiagnostic struct {
-	Code     string   `json:"code"`
-	Severity string   `json:"severity"`
-	Message  string   `json:"message"`
-	Start    int      `json:"start"`
-	End      int      `json:"end"`
-	File     string   `json:"file,omitempty"`
-	Notes    []string `json:"notes,omitempty"`
-}
-
-type nativeCheckResult struct {
-	Summary        nativeCheckSummary         `json:"summary"`
-	TypedNodes     []nativeCheckedNode        `json:"typedNodes"`
-	Bindings       []nativeCheckedBinding     `json:"bindings"`
-	Symbols        []nativeCheckedSymbol      `json:"symbols"`
-	Instantiations []nativeCheckInstantiation `json:"instantiations"`
-	Diagnostics    []nativeCheckDiagnostic    `json:"diagnostics,omitempty"`
+	CheckPackageStructured(api.PackageCheckInput) (api.CheckResult, error)
 }
 
 type nativeCheckerExec struct {
 	path string
 }
 
-func (e nativeCheckerExec) CheckSourceStructured(src []byte) (nativeCheckResult, error) {
-	return e.run(nativeCheckRequest{Source: string(src)})
+func (e nativeCheckerExec) CheckSourceStructured(src []byte) (api.CheckResult, error) {
+	return e.run(api.CheckRequest{Source: string(src)})
 }
 
-func (e nativeCheckerExec) CheckPackageStructured(input selfhost.PackageCheckInput) (nativeCheckResult, error) {
-	return e.run(nativeCheckRequest{Package: &input})
+func (e nativeCheckerExec) CheckPackageStructured(input api.PackageCheckInput) (api.CheckResult, error) {
+	return e.run(api.CheckRequest{Package: &input})
 }
 
-func (e nativeCheckerExec) run(req nativeCheckRequest) (nativeCheckResult, error) {
+func (e nativeCheckerExec) run(req api.CheckRequest) (api.CheckResult, error) {
 	payload, err := json.Marshal(req)
 	if err != nil {
-		return nativeCheckResult{}, fmt.Errorf("marshal native checker request: %w", err)
+		return api.CheckResult{}, fmt.Errorf("marshal native checker request: %w", err)
 	}
 	cmd := exec.Command(e.path)
 	cmd.Stdin = bytes.NewReader(payload)
@@ -130,99 +67,23 @@ func (e nativeCheckerExec) run(req nativeCheckRequest) (nativeCheckResult, error
 		if msg == "" {
 			msg = "<no output>"
 		}
-		return nativeCheckResult{}, fmt.Errorf("exec %s: %w (%s)", e.path, err, msg)
+		return api.CheckResult{}, fmt.Errorf("exec %s: %w (%s)", e.path, err, msg)
 	}
-	var checked nativeCheckResult
+	var checked api.CheckResult
 	if err := json.Unmarshal(out, &checked); err != nil {
-		return nativeCheckResult{}, fmt.Errorf("decode native checker response: %w", err)
+		return api.CheckResult{}, fmt.Errorf("decode native checker response: %w", err)
 	}
 	return checked, nil
 }
 
 type embeddedNativeChecker struct{}
 
-func (embeddedNativeChecker) CheckSourceStructured(src []byte) (nativeCheckResult, error) {
-	checked := selfhost.CheckSourceStructured(src)
-	return adaptEmbeddedCheckResult(checked), nil
+func (embeddedNativeChecker) CheckSourceStructured(src []byte) (api.CheckResult, error) {
+	return selfhost.CheckSourceStructured(src), nil
 }
 
-func (embeddedNativeChecker) CheckPackageStructured(input selfhost.PackageCheckInput) (nativeCheckResult, error) {
-	checked, err := selfhost.CheckPackageStructured(input)
-	if err != nil {
-		return nativeCheckResult{}, err
-	}
-	return adaptEmbeddedCheckResult(checked), nil
-}
-
-func adaptEmbeddedCheckResult(checked selfhost.CheckResult) nativeCheckResult {
-	result := nativeCheckResult{
-		Summary: nativeCheckSummary{
-			Assignments:     checked.Summary.Assignments,
-			Accepted:        checked.Summary.Accepted,
-			Errors:          checked.Summary.Errors,
-			ErrorsByContext: cloneStringIntMap(checked.Summary.ErrorsByContext),
-			ErrorDetails:    cloneErrorDetailMap(checked.Summary.ErrorDetails),
-		},
-		TypedNodes:     make([]nativeCheckedNode, 0, len(checked.TypedNodes)),
-		Bindings:       make([]nativeCheckedBinding, 0, len(checked.Bindings)),
-		Symbols:        make([]nativeCheckedSymbol, 0, len(checked.Symbols)),
-		Instantiations: make([]nativeCheckInstantiation, 0, len(checked.Instantiations)),
-	}
-	for _, node := range checked.TypedNodes {
-		result.TypedNodes = append(result.TypedNodes, nativeCheckedNode{
-			Node:     node.Node,
-			Kind:     node.Kind,
-			TypeName: node.TypeName,
-			Start:    node.Start,
-			End:      node.End,
-		})
-	}
-	for _, binding := range checked.Bindings {
-		result.Bindings = append(result.Bindings, nativeCheckedBinding{
-			Node:     binding.Node,
-			Name:     binding.Name,
-			TypeName: binding.TypeName,
-			Mutable:  binding.Mutable,
-			Start:    binding.Start,
-			End:      binding.End,
-		})
-	}
-	for _, symbol := range checked.Symbols {
-		result.Symbols = append(result.Symbols, nativeCheckedSymbol{
-			Node:     symbol.Node,
-			Kind:     symbol.Kind,
-			Name:     symbol.Name,
-			Owner:    symbol.Owner,
-			TypeName: symbol.TypeName,
-			Start:    symbol.Start,
-			End:      symbol.End,
-		})
-	}
-	for _, inst := range checked.Instantiations {
-		result.Instantiations = append(result.Instantiations, nativeCheckInstantiation{
-			Node:       inst.Node,
-			Callee:     inst.Callee,
-			TypeArgs:   append([]string(nil), inst.TypeArgs...),
-			ResultType: inst.ResultType,
-			Start:      inst.Start,
-			End:        inst.End,
-		})
-	}
-	if len(checked.Diagnostics) > 0 {
-		result.Diagnostics = make([]nativeCheckDiagnostic, 0, len(checked.Diagnostics))
-		for _, d := range checked.Diagnostics {
-			result.Diagnostics = append(result.Diagnostics, nativeCheckDiagnostic{
-				Code:     d.Code,
-				Severity: d.Severity,
-				Message:  d.Message,
-				Start:    d.Start,
-				End:      d.End,
-				File:     d.File,
-				Notes:    append([]string(nil), d.Notes...),
-			})
-		}
-	}
-	return result
+func (embeddedNativeChecker) CheckPackageStructured(input api.PackageCheckInput) (api.CheckResult, error) {
+	return selfhost.CheckPackageStructured(input)
 }
 
 var nativeCheckerFactory = defaultNativeChecker
@@ -254,7 +115,7 @@ func UseEmbeddedNativeChecker() {
 // cacheDir is created on demand. A misformatted cache entry is silently
 // rebuilt. The cache is plain JSON so it is trivially introspectable
 // with `cat`; no schema migration is attempted, so bump validity if the
-// nativeCheckResult shape changes.
+// api.CheckResult shape changes.
 func UseCachedEmbeddedNativeChecker(cacheDir, validity string) {
 	checker := cachedNativeChecker{
 		backing:  embeddedNativeChecker{},
@@ -341,7 +202,7 @@ type cachedNativeChecker struct {
 	validity string
 }
 
-func (c cachedNativeChecker) CheckSourceStructured(src []byte) (nativeCheckResult, error) {
+func (c cachedNativeChecker) CheckSourceStructured(src []byte) (api.CheckResult, error) {
 	key := cachedEmbeddedKey("src", src)
 	if res, ok := c.read(key); ok {
 		return res, nil
@@ -353,7 +214,7 @@ func (c cachedNativeChecker) CheckSourceStructured(src []byte) (nativeCheckResul
 	return res, err
 }
 
-func (c cachedNativeChecker) CheckPackageStructured(input selfhost.PackageCheckInput) (nativeCheckResult, error) {
+func (c cachedNativeChecker) CheckPackageStructured(input selfhost.PackageCheckInput) (api.CheckResult, error) {
 	// Key on the raw source + a stable subset of the import surface.
 	// Hashing the full PackageCheckInput through json.Marshal would
 	// traverse the entire parsed AST — multi-second for the regen
@@ -369,7 +230,7 @@ func (c cachedNativeChecker) CheckPackageStructured(input selfhost.PackageCheckI
 	// falls through to the single-source entry. We pick the package
 	// path explicitly so the subprocess round-trip isn't bypassed.
 	var (
-		res nativeCheckResult
+		res api.CheckResult
 		err error
 	)
 	if pc, ok := c.backing.(nativePackageChecker); ok {
@@ -429,19 +290,19 @@ func packageCheckFingerprint(input selfhost.PackageCheckInput) []byte {
 	return sum[:]
 }
 
-func (c cachedNativeChecker) read(key string) (nativeCheckResult, bool) {
+func (c cachedNativeChecker) read(key string) (api.CheckResult, bool) {
 	data, err := os.ReadFile(filepath.Join(c.dir, key+".json"))
 	if err != nil {
-		return nativeCheckResult{}, false
+		return api.CheckResult{}, false
 	}
-	var res nativeCheckResult
+	var res api.CheckResult
 	if err := json.Unmarshal(data, &res); err != nil {
-		return nativeCheckResult{}, false
+		return api.CheckResult{}, false
 	}
 	return res, true
 }
 
-func (c cachedNativeChecker) write(key string, res nativeCheckResult) {
+func (c cachedNativeChecker) write(key string, res api.CheckResult) {
 	data, err := json.Marshal(res)
 	if err != nil {
 		return
@@ -525,7 +386,7 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 		return
 	}
 	var (
-		checked    nativeCheckResult
+		checked    api.CheckResult
 		checkedSrc selfhostCheckedSource
 		err        error
 	)
@@ -590,7 +451,7 @@ func applySelfhostPackageResult(result *Result, pkg *resolve.Package, _ *resolve
 		return
 	}
 	var (
-		checked nativeCheckResult
+		checked api.CheckResult
 		err     error
 	)
 	input := selfhostPackageCheckInput(pkg, ws, stdlib, src)
@@ -723,7 +584,7 @@ func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, ws *re
 		return
 	}
 	var (
-		checked nativeCheckResult
+		checked api.CheckResult
 		err     error
 	)
 	input := selfhostPackageCheckInput(pkg, ws, stdlib, src)
@@ -758,7 +619,7 @@ type nativeDiagPolicy struct {
 	privileged bool
 }
 
-func nativeCheckerTelemetry(checked nativeCheckResult, policy nativeDiagPolicy) *NativeCheckerTelemetry {
+func nativeCheckerTelemetry(checked api.CheckResult, policy nativeDiagPolicy) *NativeCheckerTelemetry {
 	summary := filteredNativeSummary(checked, policy)
 	if summary.Assignments == 0 && summary.Errors == 0 && len(summary.ErrorsByContext) == 0 {
 		return nil
@@ -794,7 +655,7 @@ func cloneStringIntMap(src map[string]int) map[string]int {
 	return out
 }
 
-func nativeCheckerDiags(src []byte, checked nativeCheckResult, policy nativeDiagPolicy) []*diag.Diagnostic {
+func nativeCheckerDiags(src []byte, checked api.CheckResult, policy nativeDiagPolicy) []*diag.Diagnostic {
 	out := make([]*diag.Diagnostic, 0, len(checked.Diagnostics))
 	for _, d := range checked.Diagnostics {
 		if shouldSuppressNativeDiag(d, policy) {
@@ -826,7 +687,7 @@ func nativeCheckerDiags(src []byte, checked nativeCheckResult, policy nativeDiag
 	return out
 }
 
-func filteredNativeSummary(checked nativeCheckResult, policy nativeDiagPolicy) nativeCheckSummary {
+func filteredNativeSummary(checked api.CheckResult, policy nativeDiagPolicy) api.CheckSummary {
 	summary := checked.Summary
 	if !policy.privileged {
 		return summary
@@ -862,11 +723,11 @@ func filteredNativeSummary(checked nativeCheckResult, policy nativeDiagPolicy) n
 	return summary
 }
 
-func shouldSuppressNativeDiag(d nativeCheckDiagnostic, policy nativeDiagPolicy) bool {
+func shouldSuppressNativeDiag(d api.CheckDiagnosticRecord, policy nativeDiagPolicy) bool {
 	return policy.privileged && d.Code == diag.CodeRuntimePrivilegeViolation
 }
 
-func nativeDiagIsError(d nativeCheckDiagnostic) bool {
+func nativeDiagIsError(d api.CheckDiagnosticRecord) bool {
 	switch strings.ToLower(strings.TrimSpace(d.Severity)) {
 	case "warning", "warn", "lint":
 		return false
@@ -884,7 +745,7 @@ func nativeDiagIsError(d nativeCheckDiagnostic) bool {
 // reported line/column may diverge from the user's file by a fixed
 // offset. Downstream consumers still get the structured code + message
 // + notes, which is what the migrated gates (§19.6 E0773, ...) rely on.
-func convertNativeDiag(src []byte, d nativeCheckDiagnostic) *diag.Diagnostic {
+func convertNativeDiag(src []byte, d api.CheckDiagnosticRecord) *diag.Diagnostic {
 	if d.Code == "" && d.Message == "" {
 		return nil
 	}
@@ -979,7 +840,7 @@ func (idx *selfhostSpanIndex) bindNode(key selfhostNameSpanKey, n ast.Node) {
 	idx.bindings[key] = n
 }
 
-func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked nativeCheckResult) {
+func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked api.CheckResult) {
 	if result == nil {
 		return
 	}

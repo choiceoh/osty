@@ -12,36 +12,37 @@ import (
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/stdlib"
 )
 
 type fakeNativeChecker struct {
-	result nativeCheckResult
+	result api.CheckResult
 	err    error
 }
 
-func (f fakeNativeChecker) CheckSourceStructured([]byte) (nativeCheckResult, error) {
+func (f fakeNativeChecker) CheckSourceStructured([]byte) (api.CheckResult, error) {
 	return f.result, f.err
 }
 
 type fakeNativePackageChecker struct {
 	t            *testing.T
-	result       nativeCheckResult
+	result       api.CheckResult
 	err          error
 	sourceCalls  int
 	packageCalls int
 	imports      []selfhost.PackageCheckImport
 }
 
-func (f *fakeNativePackageChecker) CheckSourceStructured([]byte) (nativeCheckResult, error) {
+func (f *fakeNativePackageChecker) CheckSourceStructured([]byte) (api.CheckResult, error) {
 	f.sourceCalls++
 	if f.t != nil {
 		f.t.Fatalf("file-mode checker unexpectedly used raw source path")
 	}
-	return nativeCheckResult{}, fmt.Errorf("unexpected raw source path")
+	return api.CheckResult{}, fmt.Errorf("unexpected raw source path")
 }
 
-func (f *fakeNativePackageChecker) CheckPackageStructured(input selfhost.PackageCheckInput) (nativeCheckResult, error) {
+func (f *fakeNativePackageChecker) CheckPackageStructured(input selfhost.PackageCheckInput) (api.CheckResult, error) {
 	f.packageCalls++
 	f.imports = append([]selfhost.PackageCheckImport(nil), input.Imports...)
 	return f.result, f.err
@@ -57,9 +58,9 @@ func TestNativeBoundaryPrefersStructuredPackageCheckerForFileMode(t *testing.T) 
 
 	fake := &fakeNativePackageChecker{
 		t: t,
-		result: nativeCheckResult{
-			Summary: nativeCheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
-			Bindings: []nativeCheckedBinding{{
+		result: api.CheckResult{
+			Summary: api.CheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
+			Bindings: []api.CheckedBinding{{
 				Name:     "value",
 				TypeName: "UntypedInt",
 				Start:    letStmt.Pattern.Pos().Offset,
@@ -131,19 +132,19 @@ fn main() {
 
 	oldFactory := nativeCheckerFactory
 	nativeCheckerFactory = func() (nativeChecker, string) {
-		return fakeNativeChecker{result: nativeCheckResult{
-			Summary: nativeCheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
-			TypedNodes: []nativeCheckedNode{
+		return fakeNativeChecker{result: api.CheckResult{
+			Summary: api.CheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
+			TypedNodes: []api.CheckedNode{
 				{Kind: "Call", TypeName: "Int", Start: call.Pos().Offset, End: call.End().Offset},
 				{Kind: "IntLit", TypeName: "Int", Start: lit.Pos().Offset, End: lit.End().Offset},
 			},
-			Bindings: []nativeCheckedBinding{
+			Bindings: []api.CheckedBinding{
 				{Name: "answer", TypeName: "Int", Start: letStmt.Pattern.Pos().Offset, End: letStmt.Pattern.End().Offset},
 			},
-			Symbols: []nativeCheckedSymbol{
+			Symbols: []api.CheckedSymbol{
 				{Name: "id", Kind: "fn", TypeName: "fn(T) -> T", Start: idDecl.Pos().Offset, End: idDecl.End().Offset},
 			},
-			Instantiations: []nativeCheckInstantiation{
+			Instantiations: []api.CheckInstantiation{
 				{Callee: "id", TypeArgs: []string{"Int"}, Start: call.Pos().Offset, End: call.End().Offset},
 			},
 		}}, ""
@@ -190,8 +191,8 @@ fn main() {}
 
 	oldFactory := nativeCheckerFactory
 	nativeCheckerFactory = func() (nativeChecker, string) {
-		return fakeNativeChecker{result: nativeCheckResult{
-			Summary: nativeCheckSummary{Assignments: 0, Accepted: 0, Errors: 0},
+		return fakeNativeChecker{result: api.CheckResult{
+			Summary: api.CheckSummary{Assignments: 0, Accepted: 0, Errors: 0},
 		}}, ""
 	}
 	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
@@ -236,12 +237,12 @@ fn main() {}
 
 	oldFactory := nativeCheckerFactory
 	nativeCheckerFactory = func() (nativeChecker, string) {
-		return fakeNativeChecker{result: nativeCheckResult{
-			Summary: nativeCheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
-			Bindings: []nativeCheckedBinding{
+		return fakeNativeChecker{result: api.CheckResult{
+			Summary: api.CheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
+			Bindings: []api.CheckedBinding{
 				{Name: "value", TypeName: "Int", Start: param.Pos().Offset, End: param.End().Offset},
 			},
-			Symbols: []nativeCheckedSymbol{
+			Symbols: []api.CheckedSymbol{
 				{Name: "unused", Kind: "fn", TypeName: "fn(Int) -> Int", Start: unusedDecl.Pos().Offset, End: unusedDecl.End().Offset},
 			},
 		}}, ""
@@ -265,7 +266,7 @@ fn main() {}
 }
 
 func TestConvertNativeDiagPreservesFile(t *testing.T) {
-	got := convertNativeDiag([]byte("fn main() {}\n"), nativeCheckDiagnostic{
+	got := convertNativeDiag([]byte("fn main() {}\n"), api.CheckDiagnosticRecord{
 		Code:     diag.CodeIntrinsicNonEmptyBody,
 		Severity: "error",
 		Message:  "`#[intrinsic]` function `violator` must have an empty body",
@@ -290,9 +291,9 @@ pub fn raw_null() -> Int { 0 }
 
 	oldFactory := nativeCheckerFactory
 	nativeCheckerFactory = func() (nativeChecker, string) {
-		return fakeNativeChecker{result: nativeCheckResult{
-			Summary: nativeCheckSummary{},
-			Diagnostics: []nativeCheckDiagnostic{
+		return fakeNativeChecker{result: api.CheckResult{
+			Summary: api.CheckSummary{},
+			Diagnostics: []api.CheckDiagnosticRecord{
 				{
 					Code:     diag.CodeIntrinsicNonEmptyBody,
 					Severity: "error",
@@ -326,8 +327,8 @@ pub fn raw_null() -> Int { }
 
 	oldFactory := nativeCheckerFactory
 	nativeCheckerFactory = func() (nativeChecker, string) {
-		return fakeNativeChecker{result: nativeCheckResult{
-			Summary: nativeCheckSummary{
+		return fakeNativeChecker{result: api.CheckResult{
+			Summary: api.CheckSummary{
 				Assignments:     1,
 				Accepted:        1,
 				Errors:          1,
@@ -338,7 +339,7 @@ pub fn raw_null() -> Int { }
 					},
 				},
 			},
-			Diagnostics: []nativeCheckDiagnostic{
+			Diagnostics: []api.CheckDiagnosticRecord{
 				{
 					Code:     diag.CodeRuntimePrivilegeViolation,
 					Severity: "error",
@@ -386,9 +387,9 @@ func TestNativeBoundaryOverlaysCanonicalSourceSpansBackToOriginalAST(t *testing.
 
 	oldFactory := nativeCheckerFactory
 	nativeCheckerFactory = func() (nativeChecker, string) {
-		return fakeNativeChecker{result: nativeCheckResult{
-			Summary: nativeCheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
-			TypedNodes: []nativeCheckedNode{
+		return fakeNativeChecker{result: api.CheckResult{
+			Summary: api.CheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
+			TypedNodes: []api.CheckedNode{
 				{Kind: "Call", TypeName: "Int", Start: start, End: end},
 			},
 		}}, ""

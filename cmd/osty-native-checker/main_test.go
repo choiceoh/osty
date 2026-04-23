@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/selfhost/api"
 )
 
 func TestRunEmitsStructuredCheckResult(t *testing.T) {
@@ -15,7 +15,7 @@ func TestRunEmitsStructuredCheckResult(t *testing.T) {
 	if err := run(stdin, &stdout); err != nil {
 		t.Fatalf("run error: %v", err)
 	}
-	var resp checkResponse
+	var resp api.CheckResult
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestRunChecksGenericBoundsAndInterfaceExtends(t *testing.T) {
 	if err := run(goodIn, &goodOut); err != nil {
 		t.Fatalf("run good error: %v", err)
 	}
-	var goodResp checkResponse
+	var goodResp api.CheckResult
 	if err := json.Unmarshal(goodOut.Bytes(), &goodResp); err != nil {
 		t.Fatalf("decode good response: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestRunChecksGenericBoundsAndInterfaceExtends(t *testing.T) {
 	if err := run(badIn, &badOut); err != nil {
 		t.Fatalf("run bad error: %v", err)
 	}
-	var badResp checkResponse
+	var badResp api.CheckResult
 	if err := json.Unmarshal(badOut.Bytes(), &badResp); err != nil {
 		t.Fatalf("decode bad response: %v", err)
 	}
@@ -78,9 +78,9 @@ func TestRunChecksGenericBoundsAndInterfaceExtends(t *testing.T) {
 func TestRunChecksPackageStructuredRequest(t *testing.T) {
 	fileA := []byte("fn helper() -> Int { 1 }\n")
 	fileB := []byte("fn main() { let value = helper() }\n")
-	reqBody, err := json.Marshal(checkRequest{
-		Package: &selfhost.PackageCheckInput{
-			Files: []selfhost.PackageCheckFile{
+	reqBody, err := json.Marshal(api.CheckRequest{
+		Package: &api.PackageCheckInput{
+			Files: []api.PackageCheckFile{
 				{Source: fileA, Base: 0, Name: "a.osty"},
 				{Source: fileB, Base: len(fileA) + 1, Name: "b.osty"},
 			},
@@ -94,7 +94,7 @@ func TestRunChecksPackageStructuredRequest(t *testing.T) {
 	if err := run(bytes.NewReader(reqBody), &stdout); err != nil {
 		t.Fatalf("run error: %v", err)
 	}
-	var resp checkResponse
+	var resp api.CheckResult
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
