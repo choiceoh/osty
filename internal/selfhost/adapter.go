@@ -71,6 +71,7 @@ type FrontendRun struct {
 	toks     []token.Token
 	comments []token.Comment
 	file     *ast.File
+	semantic *AstFile
 	lexDiags []*diag.Diagnostic
 	diags    []*diag.Diagnostic
 	adapted  bool
@@ -224,6 +225,17 @@ func (r *FrontendRun) astFile() *AstFile {
 		return nil
 	}
 	return &AstFile{arena: r.parser.arena}
+}
+
+func (r *FrontendRun) semanticAstFile() *AstFile {
+	if r == nil {
+		return nil
+	}
+	if r.semantic != nil {
+		return r.semantic
+	}
+	r.semantic = selfhostSemanticAstFile(r.astFile())
+	return r.semantic
 }
 
 // LexDiagnostics returns lexer-only diagnostics.

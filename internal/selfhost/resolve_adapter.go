@@ -110,7 +110,7 @@ func ResolveSourceStructuredWithCfg(src []byte, cfg *CfgEnv) ResolveResult {
 	if lexed == nil {
 		return ResolveResult{}
 	}
-	file := astParseLexedSource(lexed)
+	file := selfhostSemanticAstFile(astParseLexedSource(lexed))
 	if file == nil {
 		return ResolveResult{}
 	}
@@ -135,7 +135,7 @@ func ResolveStructuredFromRun(run *FrontendRun) ResolveResult {
 	if run == nil {
 		return ResolveResult{}
 	}
-	file := run.astFile()
+	file := run.semanticAstFile()
 	if file == nil {
 		return ResolveResult{}
 	}

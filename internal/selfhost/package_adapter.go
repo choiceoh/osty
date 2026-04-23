@@ -70,6 +70,7 @@ func selfhostBuildPackageAst(files []PackageCheckFile) (*AstFile, *selfhostPacka
 		if len(parsed.arena.errors) > 0 {
 			return nil, nil, fmt.Errorf("selfhost package adapter: parse errors: %s", astFormatErrors(parsed))
 		}
+		parsed = selfhostSemanticAstFile(parsed)
 		tokenBase := len(layout.starts)
 		fileIdx := -1
 		if file.Name != "" {

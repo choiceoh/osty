@@ -30,7 +30,14 @@ func CheckSource(src []byte) CheckSummary {
 // structured result consumed by the Go check.Result bridge.
 func CheckSourceStructured(src []byte) CheckResult {
 	lexed := ostyLexSource(string(src))
-	checked := frontendCheckLexedSourceStructured(lexed)
+	if lexed == nil {
+		return CheckResult{}
+	}
+	file := selfhostSemanticAstFile(astParseLexedSource(lexed))
+	if file == nil {
+		return CheckResult{}
+	}
+	checked := frontendCheckAstStructured(file)
 	if checked == nil {
 		return CheckResult{}
 	}
@@ -69,7 +76,7 @@ func CheckStructuredFromRun(run *FrontendRun) CheckResult {
 	if run == nil {
 		return CheckResult{}
 	}
-	file := run.astFile()
+	file := run.semanticAstFile()
 	if file == nil {
 		return CheckResult{}
 	}
