@@ -4464,34 +4464,76 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
 		return nil
 	case mir.IntrinsicListPop:
-		// Runtime exposes `osty_rt_list_pop_discard` — drops the last
-		// element without returning it. All toolchain uses of
-		// `xs.pop()` currently discard the result (`let _ = xs.pop()`
-		// or bare-statement form), so the dest gets a zero-initialized
-		// Option<T> placeholder. A future typed-pop runtime family can
-		// replace this with real Some(T) returns.
-		sym := "osty_rt_list_pop_discard"
-		g.declareRuntime(sym, "declare void @"+sym+"(ptr)")
-		g.fnBuf.WriteString("  call void @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(listReg)
-		g.fnBuf.WriteString(")\n")
+		// `xs.pop()` returns `Option<T>` — the last element wrapped in
+		// Some, or None for an empty list. The runtime's
+		// `osty_rt_list_pop_discard` drops the tail but aborts on
+		// empty, so we gate it behind a `len > 0` check and compute the
+		// returned value via `list_get_<kind>(list, len-1)` before the
+		// discard so the element is captured.
+		discardSym := "osty_rt_list_pop_discard"
+		g.declareRuntime(discardSym, "declare void @"+discardSym+"(ptr)")
 		if i.Dest == nil {
+			// Statement-position `xs.pop()` with no dest: fall back
+			// to the classic discard-and-abort path.
+			fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s)\n", discardSym, listReg)
 			return nil
 		}
-		// Zero-init the dest (None for Option<T>).
 		destLoc := g.fn.Local(i.Dest.Local)
 		if destLoc == nil {
+			fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s)\n", discardSym, listReg)
 			return nil
+		}
+		if !listUsesTypedRuntime(elemLLVM) {
+			return unsupported("mir-mvp", fmt.Sprintf("list_pop on composite element type %s", elemLLVM))
 		}
 		destLLVM := g.llvmType(destLoc.Type)
 		destSlot := g.localSlots[i.Dest.Local]
-		g.fnBuf.WriteString("  store ")
-		g.fnBuf.WriteString(destLLVM)
-		g.fnBuf.WriteString(" zeroinitializer, ptr ")
-		g.fnBuf.WriteString(destSlot)
-		g.fnBuf.WriteByte('\n')
+		lenSym := listRuntimeLenSymbol()
+		g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr) nounwind willreturn memory(read)")
+		getSym := listRuntimeGetSymbol(elemLLVM)
+		g.declareRuntime(getSym, "declare "+elemLLVM+" @"+getSym+"(ptr, i64) nounwind willreturn memory(read)")
+		lenReg := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
+		isEmpty := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = icmp eq i64 %s, 0\n", isEmpty, lenReg)
+		someLabel := g.freshLabel("list.pop.some")
+		noneLabel := g.freshLabel("list.pop.none")
+		endLabel := g.freshLabel("list.pop.end")
+		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", isEmpty, noneLabel, someLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
+		fmt.Fprintf(&g.fnBuf, "  store %s zeroinitializer, ptr %s\n", destLLVM, destSlot)
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+		lastIdx := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = sub i64 %s, 1\n", lastIdx, lenReg)
+		elemReg := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, lastIdx)
+		fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s)\n", discardSym, listReg)
+		payloadReg := elemReg
+		switch elemLLVM {
+		case "i64":
+		case "i1", "i8", "i16", "i32":
+			widened := g.fresh()
+			fmt.Fprintf(&g.fnBuf, "  %s = zext %s %s to i64\n", widened, elemLLVM, elemReg)
+			payloadReg = widened
+		case "double":
+			cast := g.fresh()
+			fmt.Fprintf(&g.fnBuf, "  %s = bitcast double %s to i64\n", cast, elemReg)
+			payloadReg = cast
+		case "ptr":
+			cast := g.fresh()
+			fmt.Fprintf(&g.fnBuf, "  %s = ptrtoint ptr %s to i64\n", cast, elemReg)
+			payloadReg = cast
+		default:
+			return unsupported("mir-mvp", fmt.Sprintf("list_pop payload widen unsupported for %s", elemLLVM))
+		}
+		tagged := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 1, 0\n", tagged, destLLVM)
+		filled := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n", filled, destLLVM, tagged, payloadReg)
+		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", destLLVM, filled, destSlot)
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
 		return nil
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("list intrinsic kind %d", i.Kind))
