@@ -1075,7 +1075,9 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		return true
 	case mir.IntrinsicListPush, mir.IntrinsicListLen, mir.IntrinsicListGet,
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
-		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast:
+		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast,
+		mir.IntrinsicListRemoveAt, mir.IntrinsicListReverse, mir.IntrinsicListReversed,
+		mir.IntrinsicListIndexOf:
 		return true
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapSet,
 		mir.IntrinsicMapContains, mir.IntrinsicMapLen, mir.IntrinsicMapKeys,
@@ -4213,7 +4215,9 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitStdIoWriteIntrinsic(i, "eprintln")
 	case mir.IntrinsicListPush, mir.IntrinsicListLen, mir.IntrinsicListGet,
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
-		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast:
+		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast,
+		mir.IntrinsicListRemoveAt, mir.IntrinsicListReverse, mir.IntrinsicListReversed,
+		mir.IntrinsicListIndexOf:
 		return g.emitListIntrinsic(i)
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapSet,
 		mir.IntrinsicMapContains, mir.IntrinsicMapLen, mir.IntrinsicMapKeys,
@@ -4461,6 +4465,127 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n", filled, destLLVM, tagged, payloadReg)
 		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", destLLVM, filled, destSlot)
 		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
+		return nil
+	case mir.IntrinsicListReverse:
+		// In-place reverse. Runtime walks elem_size-sized slots byte by
+		// byte so the call is element-type agnostic.
+		sym := "osty_rt_list_reverse"
+		g.declareRuntime(sym, "declare void @"+sym+"(ptr)")
+		fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s)\n", sym, listReg)
+		return nil
+	case mir.IntrinsicListReversed:
+		// Returns a freshly allocated reversed copy. Same elem_size/
+		// trace handling inside the runtime; GC roots remain valid
+		// across the allocation because the source list stays
+		// reachable through the caller's local.
+		sym := "osty_rt_list_reversed"
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: listReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicListRemoveAt:
+		// `removeAt(i) -> T` — aborts on OOB (matching stdlib spec).
+		// Compute the return value via `list_get_<kind>` BEFORE the
+		// runtime splice so the captured element is still valid.
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "list_remove_at arity")
+		}
+		if !listUsesTypedRuntime(elemLLVM) {
+			return unsupported("mir-mvp", fmt.Sprintf("list_remove_at on composite element type %s", elemLLVM))
+		}
+		idxOp := i.Args[1]
+		idxReg, err := g.evalOperand(idxOp, idxOp.Type())
+		if err != nil {
+			return err
+		}
+		getSym := listRuntimeGetSymbol(elemLLVM)
+		g.declareRuntime(getSym, "declare "+elemLLVM+" @"+getSym+"(ptr, i64) nounwind willreturn memory(read)")
+		spliceSym := "osty_rt_list_remove_at_discard"
+		g.declareRuntime(spliceSym, "declare void @"+spliceSym+"(ptr, i64)")
+		elemReg := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, idxReg)
+		fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s, i64 %s)\n", spliceSym, listReg, idxReg)
+		return g.storeIntrinsicResult(i, &LlvmValue{typ: elemLLVM, name: elemReg})
+	case mir.IntrinsicListIndexOf:
+		// `indexOf(x) -> Int?` — linear scan. Emit inline loop so we
+		// don't need per-elem-type runtime helpers. Dest is Option<Int>
+		// with i64 payload.
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "list_index_of arity")
+		}
+		if !listUsesTypedRuntime(elemLLVM) {
+			return unsupported("mir-mvp", fmt.Sprintf("list_index_of on composite element type %s", elemLLVM))
+		}
+		if i.Dest == nil {
+			return unsupported("mir-mvp", "list_index_of without destination")
+		}
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return unsupported("mir-mvp", "list_index_of dest into unknown local")
+		}
+		destLLVM := g.llvmType(destLoc.Type)
+		destSlot := g.localSlots[i.Dest.Local]
+		needleOp := i.Args[1]
+		needleReg, err := g.evalOperand(needleOp, needleOp.Type())
+		if err != nil {
+			return err
+		}
+		lenSym := listRuntimeLenSymbol()
+		g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr) nounwind willreturn memory(read)")
+		getSym := listRuntimeGetSymbol(elemLLVM)
+		g.declareRuntime(getSym, "declare "+elemLLVM+" @"+getSym+"(ptr, i64) nounwind willreturn memory(read)")
+		stringEq := ""
+		if isStringLLVMType(needleOp.Type()) {
+			// String equality must go through the runtime — raw ptr
+			// compare would reject equal-content separate allocations.
+			stringEq = llvmStringRuntimeEqualSymbol()
+			g.declareRuntime(stringEq, "declare i1 @"+stringEq+"(ptr, ptr) nounwind willreturn memory(read)")
+		}
+		lenReg := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
+		// Pre-store None; overwritten with Some(idx) on match.
+		fmt.Fprintf(&g.fnBuf, "  store %s zeroinitializer, ptr %s\n", destLLVM, destSlot)
+		iSlot := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = alloca i64\n", iSlot)
+		fmt.Fprintf(&g.fnBuf, "  store i64 0, ptr %s\n", iSlot)
+		headLabel := g.freshLabel("list.indexof.head")
+		bodyLabel := g.freshLabel("list.indexof.body")
+		matchLabel := g.freshLabel("list.indexof.match")
+		contLabel := g.freshLabel("list.indexof.cont")
+		endLabel := g.freshLabel("list.indexof.end")
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", headLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", headLabel)
+		iReg := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = load i64, ptr %s\n", iReg, iSlot)
+		cont := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = icmp slt i64 %s, %s\n", cont, iReg, lenReg)
+		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", cont, bodyLabel, endLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", bodyLabel)
+		elemReg := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, iReg)
+		eqReg := g.fresh()
+		if stringEq != "" {
+			fmt.Fprintf(&g.fnBuf, "  %s = call i1 @%s(ptr %s, ptr %s)\n", eqReg, stringEq, elemReg, needleReg)
+		} else if elemLLVM == "double" {
+			fmt.Fprintf(&g.fnBuf, "  %s = fcmp oeq double %s, %s\n", eqReg, elemReg, needleReg)
+		} else {
+			fmt.Fprintf(&g.fnBuf, "  %s = icmp eq %s %s, %s\n", eqReg, elemLLVM, elemReg, needleReg)
+		}
+		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", eqReg, matchLabel, contLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", matchLabel)
+		tagged := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 1, 0\n", tagged, destLLVM)
+		filled := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n", filled, destLLVM, tagged, iReg)
+		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", destLLVM, filled, destSlot)
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", contLabel)
+		next := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = add i64 %s, 1\n", next, iReg)
+		fmt.Fprintf(&g.fnBuf, "  store i64 %s, ptr %s\n", next, iSlot)
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", headLabel)
 		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
 		return nil
 	case mir.IntrinsicListPop:
