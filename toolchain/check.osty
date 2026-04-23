@@ -1202,3 +1202,133 @@ pub fn frontCheckResultSymbolCount(result: FrontCheckResult, kind: String) -> In
 pub fn frontCheckResultInstantiationCount(result: FrontCheckResult) -> Int {
     result.instantiations.len()
 }
+
+// ---------------------------------------------------------------------
+// Position-based queries over the structured check result — hover,
+// goto-definition, and LSP inlay-hint sources. Mirrors the Go-side
+// API in internal/check/query.go (`TypeAt` / `LetTypeAt` / `SymbolAt`
+// / `Hover`), but walks the offset-keyed arrays the bootstrapped
+// checker already produces so the Go maps stop being the single
+// source of truth. Inputs are byte offsets (start-inclusive,
+// end-exclusive) to match the `start` / `end` slots stamped on every
+// FrontChecked* record.
+// ---------------------------------------------------------------------
+
+/// SelfCheckHoverInfo bundles the three pieces an IDE hover usually
+/// surfaces: the narrowest typed-expression type at the cursor, the
+/// declared binding type if the cursor sits on a let/param ident, and
+/// the resolved symbol's name + declared type when the cursor falls on
+/// a reference. Empty strings mean "no match" — the Go bridge treats
+/// them as Go `nil`.
+pub struct SelfCheckHoverInfo {
+    pub exprType: String,
+    pub letType: String,
+    pub symbolName: String,
+    pub symbolKind: String,
+    pub symbolType: String,
+}
+
+/// selfCheckTypeNameAtOffset returns the type-name of the narrowest
+/// typed expression whose source span covers `offset`. Returns "" when
+/// no typed node contains the offset (whitespace, comment, untyped
+/// fragment).
+pub fn selfCheckTypeNameAtOffset(result: FrontCheckResult, offset: Int) -> String {
+    let mut bestIdx = -1
+    let mut bestSize = 0
+    let mut i = 0
+    for node in result.typedNodes {
+        if selfCheckOffsetContains(node.start, node.end, offset) {
+            let size = node.end - node.start
+            if bestIdx < 0 || size < bestSize {
+                bestIdx = i
+                bestSize = size
+            }
+        }
+        i = i + 1
+    }
+    if bestIdx < 0 {
+        return ""
+    }
+    result.typedNodes[bestIdx].typeName
+}
+
+/// selfCheckLetTypeNameAtOffset returns the declared type-name of the
+/// let/param binding whose ident span covers `offset`. Returns "" when
+/// the offset isn't on a binding site. Matches the semantics of the
+/// Go `Result.LetTypeAt` helper.
+pub fn selfCheckLetTypeNameAtOffset(result: FrontCheckResult, offset: Int) -> String {
+    for b in result.bindings {
+        if selfCheckOffsetContains(b.start, b.end, offset) {
+            return b.typeName
+        }
+    }
+    ""
+}
+
+/// selfCheckSymbolNameAtOffset returns the name of the narrowest
+/// declared symbol whose span covers `offset`. Returns "" when no
+/// symbol declaration touches the offset. Callers wanting the symbol
+/// type alongside the name should use `selfCheckHoverAtOffset` to
+/// avoid a second walk.
+pub fn selfCheckSymbolNameAtOffset(result: FrontCheckResult, offset: Int) -> String {
+    let mut bestIdx = -1
+    let mut bestSize = 0
+    let mut i = 0
+    for s in result.symbols {
+        if selfCheckOffsetContains(s.start, s.end, offset) {
+            let size = s.end - s.start
+            if bestIdx < 0 || size < bestSize {
+                bestIdx = i
+                bestSize = size
+            }
+        }
+        i = i + 1
+    }
+    if bestIdx < 0 {
+        return ""
+    }
+    result.symbols[bestIdx].name
+}
+
+/// selfCheckHoverAtOffset collects every hover-relevant datum in one
+/// walk — expression type, let-binding type, and symbol triple —
+/// mirroring the Go `Result.Hover` combinator.
+pub fn selfCheckHoverAtOffset(result: FrontCheckResult, offset: Int) -> SelfCheckHoverInfo {
+    let mut info = SelfCheckHoverInfo {
+        exprType: selfCheckTypeNameAtOffset(result, offset),
+        letType: selfCheckLetTypeNameAtOffset(result, offset),
+        symbolName: "",
+        symbolKind: "",
+        symbolType: "",
+    }
+    let mut bestIdx = -1
+    let mut bestSize = 0
+    let mut i = 0
+    for s in result.symbols {
+        if selfCheckOffsetContains(s.start, s.end, offset) {
+            let size = s.end - s.start
+            if bestIdx < 0 || size < bestSize {
+                bestIdx = i
+                bestSize = size
+            }
+        }
+        i = i + 1
+    }
+    if bestIdx >= 0 {
+        info.symbolName = result.symbols[bestIdx].name
+        info.symbolKind = result.symbols[bestIdx].kind
+        info.symbolType = result.symbols[bestIdx].typeName
+    }
+    info
+}
+
+/// selfCheckOffsetContains tests whether `offset` lies in the
+/// half-open `[start, end)` span. Positions of zero or negative
+/// length (empty spans) never contain anything, matching the Go-side
+/// `spanContains` behaviour.
+fn selfCheckOffsetContains(start: Int, end: Int, offset: Int) -> Bool {
+    if end <= start {
+        return false
+    }
+    offset >= start && offset < end
+}

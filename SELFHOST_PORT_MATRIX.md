@@ -163,7 +163,7 @@ regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환.
 | Package input / workspace parallel | `internal/check/package_input.go` | — | — | **go-only** | 호스트 경계 worker pool, 캐시 fingerprinting |
 | HIR lowering orchestration | `host_boundary.go` (JSON 읽기) | `toolchain/hir_lower.osty` 전체 | — | ported | Osty 가 decl walk + annotation 추출, Go 는 결과 소비 |
 | File/Package/Workspace 진입점 | `internal/check/check.go` | `toolchain/check.osty` | — | partial | Go 가 native exec + embed 래퍼, Osty 가 phase 1–7 |
-| **Type query / LookupType API** | `internal/check/query.go` | — | — | **go-only** | IDE/LSP 용 accessor — `internal/check/inspect.go` 와 세트 |
+| **Type query / LookupType API** | `internal/check/query.go` (check.Result maps) + `internal/selfhost/check_query.go` (api.CheckResult offsets) | `toolchain/check.osty::selfCheck{Type,LetType,Symbol}NameAtOffset` + `selfCheckHoverAtOffset` | — | **partial** | 2026-04-23 Osty canonical 알고리즘 착륙 + Go-side `selfhost.{TypeAtOffset,LetTypeAtOffset,SymbolNameAtOffset,HoverAtOffset}` 브리지. `check.Result` 경유 레거시 쿼리는 그대로 존속 — 후속 작업: lint/LSP/inspect consumer 를 `api.CheckResult` 경유로 이관 → `query.go` 삭제 가능 |
 | Diagnostic file path 결합 | `host_boundary.go::stampPackageDiags` | `toolchain/check_diag.osty` | — | partial | Go 가 경로 스탬프, Osty 가 메시지 렌더 |
 | **Native checker exec 경계** | `host_boundary.go::nativeCheckerExec` | — | — | **n/a** | 외부 바이너리 인터페이스 — 포팅 대상 아님 |
 | Embedded selfhost bridge | `host_boundary.go::embeddedNativeChecker` | `toolchain/check_bridge.osty` (9줄) | — | n/a | **9줄짜리 얇은 stub — AST 변경에 취약** |
