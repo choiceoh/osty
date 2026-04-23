@@ -4594,7 +4594,7 @@ pub fn mirLowerStdlibStringFreeFnToIntrinsic(
     qualifier: String,
     name: String,
 ) -> MirIntrinsicKind {
-    if qualifier != "std.strings" {
+    if qualifier != "std.strings" && qualifier != "strings" {
         return MirIntrinsicInvalid
     }
     // Accept the Go-level aliases first so they don't drop into the

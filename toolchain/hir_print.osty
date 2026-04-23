@@ -873,7 +873,7 @@ fn hirExprLiteralText(e: HirExpr) -> String {
                 if part.isLit {
                     out = out + part.lit
                 } else {
-                    out = out + "{expr}"
+                    out = out + "\{expr\}"
                 }
             }
             out + "\""

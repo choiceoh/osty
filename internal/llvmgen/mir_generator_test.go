@@ -598,6 +598,64 @@ func TestGenerateFromMIRStructLiteralAndFieldRead(t *testing.T) {
 	}
 }
 
+func TestGenerateFromMIRStructLiteralSeedsOptionalFieldNoneType(t *testing.T) {
+	src := `struct Runner {
+    manifest: Int?
+    workspace: String?
+}
+
+fn newRunner() -> Runner {
+    Runner {
+        manifest: None,
+        workspace: None,
+    }
+}
+`
+	file := parseLLVMGenFile(t, src)
+	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	reg := stdlib.LoadCached()
+	chk := check.File(file, res, check.Opts{
+		UseGolegacy:   true,
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+		Source:        []byte(src),
+	})
+	hirMod, issues := ir.Lower("main", file, res, chk)
+	if len(issues) != 0 {
+		t.Fatalf("ir.Lower issues: %v", issues)
+	}
+	monoMod, monoErrs := ir.Monomorphize(hirMod)
+	if len(monoErrs) != 0 {
+		t.Fatalf("ir.Monomorphize: %v", monoErrs)
+	}
+	if errs := ir.Validate(monoMod); len(errs) != 0 {
+		t.Fatalf("ir.Validate: %v", errs)
+	}
+	mirMod := mir.Lower(monoMod)
+	if mirMod == nil {
+		t.Fatalf("mir.Lower returned nil")
+	}
+	if errs := mir.Validate(mirMod); len(errs) != 0 {
+		t.Fatalf("mir.Validate: %v", errs)
+	}
+	out, err := GenerateFromMIR(mirMod, Options{PackageName: "main", SourcePath: "/tmp/struct_none_fields.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Runner = type { %Option.i64, %Option.string }",
+		"insertvalue %Option.i64 undef, i64 0, 0",
+		"insertvalue %Option.string undef, i64 0, 0",
+		"ret %Runner",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 func TestGenerateFromMIRTupleLiteralAndElementRead(t *testing.T) {
 	// fn pack() -> Int { let t = (1, 2); t.0 + t.1 }
 	tupT := &ir.TupleType{Elems: []ir.Type{ir.TInt, ir.TInt}}
@@ -1013,6 +1071,59 @@ func TestGenerateFromMIROptionIsSomeLowers(t *testing.T) {
 	for _, want := range []string{
 		"extractvalue %Option.i64",
 		"icmp ne i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRQuestionRebuildsOptionalReturnNone(t *testing.T) {
+	// fn widen(x: Int?) -> Bool? {
+	//   let n = x?
+	//   Some(n > 0)
+	// }
+	intOpt := &ir.OptionalType{Inner: ir.TInt}
+	boolOpt := &ir.OptionalType{Inner: ir.TBool}
+	fn := &ir.FnDecl{
+		Name:   "widen",
+		Return: boolOpt,
+		Params: []*ir.Param{{Name: "x", Type: intOpt}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "n",
+					Type: ir.TInt,
+					Value: &ir.QuestionExpr{
+						X: &ir.Ident{Name: "x", Kind: ir.IdentParam, T: intOpt},
+						T: ir.TInt,
+					},
+				},
+			},
+			Result: &ir.VariantLit{
+				Enum:    "Option",
+				Variant: "Some",
+				Args: []ir.Arg{{Value: &ir.BinaryExpr{
+					Op:    ir.BinGt,
+					Left:  &ir.Ident{Name: "n", Kind: ir.IdentLocal, T: ir.TInt},
+					Right: &ir.IntLit{Text: "0", T: ir.TInt},
+					T:     ir.TBool,
+				}}},
+				T: boolOpt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/opt_question_bool.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Option.i1 = type { i64, i64 }",
+		"insertvalue %Option.i1 undef, i64 0, 0",
+		"ret %Option.i1",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
