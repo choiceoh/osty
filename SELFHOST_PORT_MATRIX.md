@@ -90,6 +90,7 @@ regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환.
 
 - `ported` — Osty 가 해당 로직을 구동하며 Go 쪽은 facade/adapter
 - `partial` — 양쪽에 overlapping/diverged 구현 존재
+- `broken` — 스펙이 요구하는데 양쪽 모두 구현 누락 / 오동작
 - `go-only` — 아직 Go 에만 있음
 - `osty-only-unwired` — Osty 에 있으나 consumer 파이프라인이 사용 안 함
 - `n/a` — 호스트 경계 infra (포팅 대상 아님)
@@ -121,8 +122,8 @@ regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환.
 | **Workspace 2-pass (declare/body)** | `internal/resolve/workspace.go:356` | — | — | n/a | 호스트 경계 — `internal/selfhost/workspace_driver.go` 쪽에서 담당 |
 | **#[cfg] 사전 필터** | `internal/resolve/cfg.go:69` | `toolchain/resolve.osty::srCfgDeclPasses` | E0405, E0739 | **partial** | 2026-04-22 native 경로 Osty 구동 (srCfgDeclPasses + selfResolveAstFileWithCfg). Go `cfg.go` 는 레거시 `ResolveAll` 에 남아있음 — 레거시 retire 시 제거 |
 | **Package visibility 강제** | `internal/resolve/resolve.go:410` | — | E0553, E0770 | **go-only** | `ResolveUseTarget` 가 pub 체크 |
-| Partial-decl method name 유일성 | `internal/resolve/merge.go:100` | — | — | go-only | partial struct 메서드명 중복 금지 |
-| Self-host ref tracking (refNames/Targets) | — | `toolchain/resolve.osty:1270` | — | osty-only-unwired | Osty 가 emit 하지만 adapter 가 다른 형식으로만 쓴다 |
+| Partial-decl method name 유일성 | `internal/resolve/merge.go:100::checkPartialMethodNames` (Go legacy fallback, `--legacy` 경로 전용) | `toolchain/resolve.osty::srHandlePartialType` (line 2247+ cross-file methodNames dup 검출 → E0501 + R19 note 발행) | E0501 (R19) | **ported** | Osty `SelfPartialDecl.methodNames` 트래커가 partial struct/enum 여러 파일에 걸친 method 중복을 잡고 동일 메시지 / 동일 note 발행. Go `checkPartialMethodNames` 는 `declareTopLevelPackage` 에서만 호출되며 이 경로는 phase 1c.1 flip 이후 `--legacy` 에서만 활성화. 1c.5 에서 merge.go 와 함께 삭제 |
+| Self-host ref tracking (refNames/Targets) | `internal/selfhost/resolve_adapter.go::adaptResolveResult` (refNodes/refNames/refTargets/refTargetStarts/refTargetEnds 전부 `ResolvedRef` 로 lift) | `toolchain/resolve.osty:1483+ out.refNames.push` / `out.refTargets.push` | — | **ported** | PR #754 리베이스 시점 이후 adapter 가 Osty emit 된 병렬 리스트 5종을 `ResolvedRef` 로 공식 변환. 추가 필드 이관 없음 — translation 은 단순 indexed zip 이므로 "unwired" 라벨은 과거 표현 |
 | Generic arity 기록 | — | `toolchain/resolve.osty:510` | — | ported | 양쪽 동일 |
 
 ### Resolver 포팅 우선순위
@@ -131,7 +132,7 @@ regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환.
 2. ~~**Partial struct/enum merge** (E0509/E0501)~~ — **착륙 2026-04-23**. `SelfPartialDecl` 트래커 + `srHandlePartialType`, R19 4 invariants (pub / generics / fields-in-one / method name uniqueness) 검증. 현재는 single-file (native_adapter 가 `ResolvePackageStructured` 로 다중 파일을 synthetic 단일 네임스페이스로 합쳐 통과). True cross-file stitching 은 workspace 모델 등장 이후.
 3. ~~**Workspace cycle detection** (E0506)~~ — **착륙 2026-04-23**. `selfDetectImportCycles` + `SelfWorkspaceUses` / `SelfPackageUses` / `SelfUseEdge` / `SelfCycleDiag` (toolchain/resolve.osty). `selfhost.DetectImportCycles` Go bridge. `internal/resolve/workspace.go::detectCycles` 는 그래프 준비 + offset 기반 roundtrip 후 `token.Pos` 복원 + 진단 렌더링 glue 만 남김. 알고리즘 (DFS 3-상태 색칠) 은 완전히 Osty 쪽.
 4. **Package visibility 강제** (E0553/E0770) — `pub use` re-export 검증 포함. cross-package 가시성 그래프 필요 — cycle detection 과 같은 workspace 레이어 위에 올린다.
-5. **`osty-only-unwired` refNames/refTargets** — adapter 가 이미 자체 형식으로 번역 중이라, Osty 측 emit 을 소비하도록 adapter 를 슬림하게 바꾸면 bridge 면적이 줄어든다. 버그픽스성 작업.
+5. ~~**`osty-only-unwired` refNames/refTargets**~~ — **재평가 결과 기 이식**. `internal/selfhost/resolve_adapter.go::adaptResolveResult` 가 이미 Osty emit 된 5 개 병렬 리스트 (refNodes / refNames / refTargets / refTargetStarts / refTargetEnds) 를 `ResolvedRef` 로 indexed-zip 해 공식 변환 중. "unwired" 라벨은 과거 표현이었고 현재 adapter 가 유일 소비자 — bridge 면적 추가 축소 여지 없음.
 
 ---
 
@@ -144,7 +145,7 @@ regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환.
 | 메서드 dispatch (struct/enum/iface) | `(hostboundary)` | `toolchain/elab.osty:1550` | E0703 | ported | `checkSpecializeMethodSelf` |
 | Interface default-body | `(hostboundary)` | `toolchain/check_env.osty` | — | **partial** | 상속은 기록, default body 코드패스 빈약 (`269eebf8` 가 일반화 진행중) |
 | `?` 전파 (Option/Result) | `(hostboundary)` | `toolchain/elab.osty:161,1360` | E0717 | ported | `TkOptional` intern |
-| `?.` optional chain | `(hostboundary)` | `toolchain/elab.osty:432` | — | partial | 타이핑 존재, 테스트 커버리지 얕음 |
+| `?.` optional chain | `(hostboundary)` | `toolchain/elab.osty::elabInferField` + `elabWrapOptionalChain` + `toolchain/check_diag.osty::diagOptionalChainOnNon` | E0719 | **partial** | 2026-04-23 field-access 경로 LANG_SPEC §4 / 부록 A.6 준수로 복구. `AstNField.flags == 1` 분기 추가, Option receiver 는 inner 로 unwrap 후 lookup / 결과를 다시 `T?` wrap (이미 Option 이면 flatten), non-Option receiver 는 E0719 발화. `checkCodeOptionalChainOnNon` + `diagOptionalChainOnNon` 신규, `generated.go` 도 lockstep 동기화. 회귀 가드: [internal/check/optional_chain_test.go](internal/check/optional_chain_test.go) 5 개 테스트 (Option struct, nested flatten, `??` coalesce unwrap, E0719 non-Option 거부, 메시지 shape). **잔여**: method-call 경로 `obj?.method()` — `elabInferMethodCall` 이 `AstNField.flags` 를 아직 전달 안 함 (후속 PR) |
 | `??` nil-coalesce | `(hostboundary)` | `toolchain/elab.osty:432` | — | ported | Option unwrap 특수 |
 | **Defer lifecycle** | `internal/check/*.go` (분산) | — | — | **go-only** | Osty 쪽 검증 없음; 백엔드 의존성 설계 필요 |
 | 패턴 exhaustiveness | `(hostboundary)` | `toolchain/elab.osty:2669` | E0712 | ported | witness 생성 phase 1, opaque range phase 2 |
@@ -163,7 +164,7 @@ regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환.
 | Package input / workspace parallel | `internal/check/package_input.go` | — | — | **go-only** | 호스트 경계 worker pool, 캐시 fingerprinting |
 | HIR lowering orchestration | `host_boundary.go` (JSON 읽기) | `toolchain/hir_lower.osty` 전체 | — | ported | Osty 가 decl walk + annotation 추출, Go 는 결과 소비 |
 | File/Package/Workspace 진입점 | `internal/check/check.go` | `toolchain/check.osty` | — | partial | Go 가 native exec + embed 래퍼, Osty 가 phase 1–7 |
-| **Type query / LookupType API** | `internal/check/query.go` (check.Result maps) + `internal/selfhost/check_query.go` (api.CheckResult offsets) | `toolchain/check.osty::selfCheck{Type,LetType,Symbol}NameAtOffset` + `selfCheckHoverAtOffset` | — | **partial** | 2026-04-23 Osty canonical 알고리즘 착륙 + Go-side `selfhost.{TypeAtOffset,LetTypeAtOffset,SymbolNameAtOffset,HoverAtOffset}` 브리지. `check.Result` 경유 레거시 쿼리는 그대로 존속 — 후속 작업: lint/LSP/inspect consumer 를 `api.CheckResult` 경유로 이관 → `query.go` 삭제 가능 |
+| **Type query / LookupType API** | `internal/selfhost/check_query.go` (api.CheckResult offsets) | `toolchain/check.osty::selfCheck{Type,LetType,Symbol}NameAtOffset` + `selfCheckHoverAtOffset` | — | **ported** | 2026-04-23 Osty canonical 알고리즘 착륙 + Go-side `selfhost.{TypeAtOffset,LetTypeAtOffset,SymbolNameAtOffset,HoverAtOffset}` 브리지 (PR #787). **후속 정리 (이 PR)**: `internal/check/query.go` (127 LOC, `Result.TypeAt/SymbolAt/LetTypeAt/Hover` + 로컬 `HoverInfo`) 가 내부 호출만 있고 external consumer 가 0 이었음을 grep 으로 확인 후 전체 삭제. `check.Result` 경유 레거시 쿼리 경로 소멸, `selfhost.HoverInfo` + offset API 가 유일 — LSP/lint/inspect 는 이미 `findNamedTypeAt` / `targetSymbolAt` 등 자체 LSP 헬퍼를 쓰고 있어 이관 불필요했음 |
 | Diagnostic file path 결합 | `host_boundary.go::stampPackageDiags` | `toolchain/check_diag.osty` | — | partial | Go 가 경로 스탬프, Osty 가 메시지 렌더 |
 | **Native checker exec 경계** | `host_boundary.go::nativeCheckerExec` | — | — | **n/a** | 외부 바이너리 인터페이스 — 포팅 대상 아님 |
 | Embedded selfhost bridge | `host_boundary.go::embeddedNativeChecker` | `toolchain/check_bridge.osty` (9줄) | — | n/a | **9줄짜리 얇은 stub — AST 변경에 취약** |

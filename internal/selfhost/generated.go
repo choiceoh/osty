@@ -27450,6 +27450,12 @@ func checkCodeQuestionNotOptional() string {
 	return "E0717"
 }
 
+// kept in sync with toolchain/check_diag.osty — added alongside
+// elabInferField's `?.` path (LANG_SPEC §4 / appendix A.6).
+func checkCodeOptionalChainOnNon() string {
+	return "E0719"
+}
+
 // Osty: /tmp/selfhost_merged.osty:10811:5
 func checkCodeInvalidAssignTarget() string {
 	return "E0724"
@@ -27622,6 +27628,13 @@ func diagUnknownName(name string, start int, end int) *CheckDiagnostic {
 // Osty: /tmp/selfhost_merged.osty:10934:5
 func diagUnknownField(owner string, name string, start int, end int) *CheckDiagnostic {
 	return checkDiag(checkCodeUnknownField(), fmt.Sprintf("no field `%s` on type `%s`", ostyToString(name), ostyToString(owner)), start, end)
+}
+
+// kept in sync with toolchain/check_diag.osty — fires when the parser
+// marked a field access with `?.` (AstNField.flags == 1) but the
+// receiver did not resolve to an Option type.
+func diagOptionalChainOnNon(owner string, start int, end int) *CheckDiagnostic {
+	return checkDiag(checkCodeOptionalChainOnNon(), fmt.Sprintf("`?.` operator applied to non-optional type `%s`; use `.` for direct field access", ostyToString(owner)), start, end)
 }
 
 // Osty: /tmp/selfhost_merged.osty:10943:5
@@ -41193,8 +41206,22 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 		// Osty: /tmp/selfhost_merged.osty:19740:9
 		return elabPoisonResult(cx, node.start, node.end)
 	}
+	// `?.` (LANG_SPEC §4 / appendix A.6). Parser sets
+	// AstNField.flags == 1 for `?.`; kept in sync with
+	// toolchain/elab.osty::elabInferField.
+	isOptionalChain := node.flags == 1
+	_ = isOptionalChain
+	lookupTy := recvTy
+	if isOptionalChain {
+		if ostyEqual(tyKindAt(cx.env.tys, recvTy), TyKind(&TyKind_TkOptional{})) {
+			lookupTy = tyInnerAt(cx.env.tys, recvTy)
+		} else {
+			cx.env.diagnostics = append(cx.env.diagnostics, diagOptionalChainOnNon(tyToString(cx.env.tys, recvTy), node.start, node.end))
+			return elabPoisonResult(cx, node.start, node.end)
+		}
+	}
 	// Osty: /tmp/selfhost_merged.osty:19742:5
-	kind := tyKindAt(cx.env.tys, recvTy)
+	kind := tyKindAt(cx.env.tys, lookupTy)
 	_ = kind
 	// Osty: /tmp/selfhost_merged.osty:19743:5
 	fieldName := node.text
@@ -41204,7 +41231,7 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 		_ = _m2233
 		if func() bool { _, ok := _m2233.(*TyKind_TkTuple); return ok }() {
 			// Osty: /tmp/selfhost_merged.osty:19746:13
-			elems := tyArgsAt(cx.env.tys, recvTy)
+			elems := tyArgsAt(cx.env.tys, lookupTy)
 			_ = elems
 			// Osty: /tmp/selfhost_merged.osty:19747:13
 			idx := parseTupleIndex(fieldName)
@@ -41213,7 +41240,7 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 			if idx < 0 || idx >= checkIntListLenHelper(elems) {
 				// Osty: /tmp/selfhost_merged.osty:19749:17
 				func() struct{} {
-					cx.env.diagnostics = append(cx.env.diagnostics, diagUnknownField(tyToString(cx.env.tys, recvTy), fieldName, node.start, node.end))
+					cx.env.diagnostics = append(cx.env.diagnostics, diagUnknownField(tyToString(cx.env.tys, lookupTy), fieldName, node.start, node.end))
 					return struct{}{}
 				}()
 				// Osty: /tmp/selfhost_merged.osty:19755:17
@@ -41222,14 +41249,16 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 			// Osty: /tmp/selfhost_merged.osty:19757:13
 			elemTy := checkIntListAt(elems, idx)
 			_ = elemTy
+			resultTy := elabWrapOptionalChain(cx, isOptionalChain, elemTy)
+			_ = resultTy
 			// Osty: /tmp/selfhost_merged.osty:19758:13
-			coreIdx := coreTupleAccess(cx.core, recv.node, idx, elemTy, node.start, node.end)
+			coreIdx := coreTupleAccess(cx.core, recv.node, idx, resultTy, node.start, node.end)
 			_ = coreIdx
-			return &ElabResult{node: coreIdx, ty: elemTy}
+			return &ElabResult{node: coreIdx, ty: resultTy}
 		}
 		if func() bool { _, ok := _m2233.(*TyKind_TkNamed); return ok }() {
 			// Osty: /tmp/selfhost_merged.osty:19762:13
-			owner := tyHeadAt(cx.env.tys, recvTy)
+			owner := tyHeadAt(cx.env.tys, lookupTy)
 			_ = owner
 			// Osty: /tmp/selfhost_merged.osty:19763:13
 			fieldSig := checkLookupField(cx.env, owner, fieldName)
@@ -41251,7 +41280,7 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 			typeSig := checkLookupType(cx.env, owner)
 			_ = typeSig
 			// Osty: /tmp/selfhost_merged.osty:19776:13
-			ownerArgs := tyArgsAt(cx.env.tys, recvTy)
+			ownerArgs := tyArgsAt(cx.env.tys, lookupTy)
 			_ = ownerArgs
 			// Osty: /tmp/selfhost_merged.osty:19777:13
 			fieldTy := func() int {
@@ -41262,20 +41291,35 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 				}
 			}()
 			_ = fieldTy
+			resultTy := elabWrapOptionalChain(cx, isOptionalChain, fieldTy)
+			_ = resultTy
 			// Osty: /tmp/selfhost_merged.osty:19782:13
-			coreIdx := coreField(cx.core, recv.node, fieldName, fieldTy, node.start, node.end)
+			coreIdx := coreField(cx.core, recv.node, fieldName, resultTy, node.start, node.end)
 			_ = coreIdx
-			return &ElabResult{node: coreIdx, ty: fieldTy}
+			return &ElabResult{node: coreIdx, ty: resultTy}
 		}
 		{
 			// Osty: /tmp/selfhost_merged.osty:19786:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagUnknownField(tyToString(cx.env.tys, recvTy), fieldName, node.start, node.end))
+				cx.env.diagnostics = append(cx.env.diagnostics, diagUnknownField(tyToString(cx.env.tys, lookupTy), fieldName, node.start, node.end))
 				return struct{}{}
 			}()
 			return elabPoisonResult(cx, node.start, node.end)
 		}
 	}()
+}
+
+// elabWrapOptionalChain mirrors the Osty helper in
+// toolchain/elab.osty — wraps a field-lookup result in `Option` when
+// the access came from `?.` and the field is not already optional.
+func elabWrapOptionalChain(cx *ElabCx, isOptionalChain bool, ty int) int {
+	if !isOptionalChain {
+		return ty
+	}
+	if ostyEqual(tyKindAt(cx.env.tys, ty), TyKind(&TyKind_TkOptional{})) {
+		return ty
+	}
+	return tyOptional(cx.env.tys, ty)
 }
 
 // Osty: /tmp/selfhost_merged.osty:19797:1
