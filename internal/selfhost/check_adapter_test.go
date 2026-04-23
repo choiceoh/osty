@@ -5,6 +5,76 @@ import (
 	"testing"
 )
 
+func BenchmarkRunDiagnostics(b *testing.B) {
+	src := []byte(`fn main() {
+    let xs = [1, 2, 3]
+    let y = xs[0] + 2
+    y
+}
+`)
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		run := Run(src)
+		if run == nil {
+			b.Fatal("Run returned nil")
+		}
+		diags := run.Diagnostics()
+		if len(diags) != 0 {
+			b.Fatalf("len(diags) = %d, want 0", len(diags))
+		}
+	}
+}
+
+func BenchmarkCheckStructuredFromRun(b *testing.B) {
+	src := []byte(`fn main() {
+    let xs = [1, 2, 3]
+    let y = xs[0] + 2
+    y
+}
+`)
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		run := Run(src)
+		if run == nil {
+			b.Fatal("Run returned nil")
+		}
+		result := CheckStructuredFromRun(run)
+		if result.Summary.Errors != 0 {
+			b.Fatalf("errors = %d, want 0", result.Summary.Errors)
+		}
+	}
+}
+
+func TestRunDefersLexAdaptationUntilTokensRequested(t *testing.T) {
+	src := []byte(`fn main() {
+    let x = 1
+    x
+}
+`)
+
+	run := Run(src)
+	if run == nil {
+		t.Fatal("Run returned nil")
+	}
+	if run.adapted {
+		t.Fatal("Run eagerly adapted lex surfaces")
+	}
+	if diags := run.Diagnostics(); len(diags) != 0 {
+		t.Fatalf("Diagnostics = %#v, want none", diags)
+	}
+	if run.adapted {
+		t.Fatal("Diagnostics() should not force token/comment adaptation")
+	}
+	if toks := run.Tokens(); len(toks) == 0 {
+		t.Fatal("Tokens() returned no tokens")
+	}
+	if !run.adapted {
+		t.Fatal("Tokens() should force token/comment adaptation")
+	}
+}
+
 // TestCheckStructuredFromRunMatchesCheckSourceStructured pins the
 // invariant that feeds the check-path astbridge wedge: running the
 // native checker on an existing FrontendRun's parser arena must

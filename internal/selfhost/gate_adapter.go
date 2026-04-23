@@ -31,7 +31,7 @@ func IntrinsicBodyDiagsForSource(src []byte, path string) []*diag.Diagnostic {
 	if run == nil || run.parser == nil || run.parser.arena == nil {
 		return nil
 	}
-	if selfhostHasErrorDiagnostics(run.Diagnostics()) {
+	if selfhostRunHasErrorDiagnostics(run) {
 		return nil
 	}
 	records := selfhostIntrinsicBodyDiagnosticsFromArena(run.parser.arena, run.rt, run.stream, 0, path)
@@ -43,10 +43,7 @@ func selfhostAppendIntrinsicBodyGateForSource(result *CheckResult, src []byte) {
 		return
 	}
 	run := Run(src)
-	if selfhostHasErrorDiagnostics(run.Diagnostics()) {
-		return
-	}
-	if run.parser == nil || run.parser.arena == nil {
+	if selfhostRunHasErrorDiagnostics(run) || run.parser == nil || run.parser.arena == nil {
 		return
 	}
 	records := selfhostIntrinsicBodyDiagnosticsFromArena(run.parser.arena, run.rt, run.stream, 0, "")
@@ -63,11 +60,7 @@ func selfhostAppendIntrinsicBodyGateForRun(result *CheckResult, run *FrontendRun
 	if result == nil || run == nil {
 		return
 	}
-	diags := run.Diagnostics()
-	if selfhostHasErrorDiagnostics(diags) {
-		return
-	}
-	if run.parser == nil || run.parser.arena == nil {
+	if selfhostRunHasErrorDiagnostics(run) || run.parser == nil || run.parser.arena == nil {
 		return
 	}
 	records := selfhostIntrinsicBodyDiagnosticsFromArena(run.parser.arena, run.rt, run.stream, 0, "")
@@ -215,15 +208,22 @@ func selfhostAppendIntrinsicBodyGateForPackage(result *CheckResult, input Packag
 			continue
 		}
 		run := Run(file.Source)
-		if selfhostHasErrorDiagnostics(run.Diagnostics()) {
-			continue
-		}
-		if run.parser == nil || run.parser.arena == nil {
+		if selfhostRunHasErrorDiagnostics(run) || run.parser == nil || run.parser.arena == nil {
 			continue
 		}
 		records = append(records, selfhostIntrinsicBodyDiagnosticsFromArena(run.parser.arena, run.rt, run.stream, file.Base, file.Path)...)
 	}
 	selfhostMergeDiagnosticRecords(result, records...)
+}
+
+func selfhostRunHasErrorDiagnostics(run *FrontendRun) bool {
+	if run == nil {
+		return false
+	}
+	if run.stream != nil && len(run.stream.diagnostics) > 0 {
+		return true
+	}
+	return run.parser != nil && run.parser.arena != nil && len(run.parser.arena.errors) > 0
 }
 
 func selfhostHasErrorDiagnostics(diags []*diag.Diagnostic) bool {
