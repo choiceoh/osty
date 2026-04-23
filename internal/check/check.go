@@ -8,6 +8,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
 )
@@ -205,8 +206,7 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 			diag.StampFile(d, pf.Path)
 			result.Diags = appendMissingDiagnostics(result.Diags, d)
 		}
-		if d := runIntrinsicBodyChecks(pf.File); len(d) > 0 {
-			diag.StampFile(d, pf.Path)
+		if d := selfhost.IntrinsicBodyDiagsForSource(pf.CheckerSource(), pf.Path); len(d) > 0 {
 			result.Diags = appendMissingDiagnostics(result.Diags, d)
 		}
 		recordSelfhostDeclPass(opt.OnDecl, pf.File, "collect")
@@ -282,8 +282,7 @@ func Workspace(
 				diag.StampFile(d, pf.Path)
 				pkgResult.Diags = appendMissingDiagnostics(pkgResult.Diags, d)
 			}
-			if d := runIntrinsicBodyChecks(pf.File); len(d) > 0 {
-				diag.StampFile(d, pf.Path)
+			if d := selfhost.IntrinsicBodyDiagsForSource(pf.CheckerSource(), pf.Path); len(d) > 0 {
 				pkgResult.Diags = appendMissingDiagnostics(pkgResult.Diags, d)
 			}
 			recordSelfhostDeclPass(opt.OnDecl, pf.File, "collect")
