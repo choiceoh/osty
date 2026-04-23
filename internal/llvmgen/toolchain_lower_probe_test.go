@@ -23,6 +23,7 @@ func TestProbeToolchainSemverAndDiagPolicyLower(t *testing.T) {
 	cases := []string{
 		"toolchain/semver.osty",
 		"toolchain/diag_policy.osty",
+		"toolchain/manifest_validation.osty",
 	}
 	for _, rel := range cases {
 		path := filepath.Join(root, rel)

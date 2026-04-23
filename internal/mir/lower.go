@@ -824,6 +824,50 @@ func isPoisonType(t Type) bool {
 	return ok
 }
 
+func containsTypeVar(t Type) bool {
+	switch x := t.(type) {
+	case nil:
+		return false
+	case *ir.TypeVar:
+		return true
+	case *ir.NamedType:
+		for _, a := range x.Args {
+			if containsTypeVar(a) {
+				return true
+			}
+		}
+		return false
+	case *ir.OptionalType:
+		return containsTypeVar(x.Inner)
+	case *ir.TupleType:
+		for _, e := range x.Elems {
+			if containsTypeVar(e) {
+				return true
+			}
+		}
+		return false
+	case *ir.FnType:
+		for _, p := range x.Params {
+			if containsTypeVar(p) {
+				return true
+			}
+		}
+		return containsTypeVar(x.Return)
+	default:
+		return false
+	}
+}
+
+func shouldPreferHintType(actual, hint Type) bool {
+	if hint == nil || isPoisonType(hint) {
+		return false
+	}
+	if actual == nil || isPoisonType(actual) {
+		return true
+	}
+	return containsTypeVar(actual) && !containsTypeVar(hint)
+}
+
 func (bs *bodyState) lowerLetPattern(pat ir.Pattern, value ir.Expr, valueType Type, sp Span) {
 	// Wildcard-only binding has nothing to store, so skip the scratch
 	// local and evaluate `value` for side effects — otherwise a
@@ -2041,6 +2085,24 @@ func (bs *bodyState) lowerExprAsOperand(e ir.Expr) Operand {
 	tmp := bs.freshTemp(t, exprSpan(e))
 	bs.lowerExprInto(e, tmp, t)
 	return &CopyOp{Place: Place{Local: tmp}, T: t}
+}
+
+func (bs *bodyState) lowerExprAsOperandHint(e ir.Expr, hint Type) Operand {
+	if !shouldPreferHintType(e.Type(), hint) {
+		return bs.lowerExprAsOperand(e)
+	}
+	if id, ok := e.(*ir.Ident); ok {
+		if id.Name == "None" && id.Kind != ir.IdentLocal && id.Kind != ir.IdentParam {
+			tmp := bs.freshTemp(hint, id.SpanV)
+			bs.emit(&AssignInstr{
+				Dest:  Place{Local: tmp},
+				Src:   &NullaryRV{Kind: NullaryNone, T: hint},
+				SpanV: id.SpanV,
+			})
+			return &CopyOp{Place: Place{Local: tmp}, T: hint}
+		}
+	}
+	return bs.lowerExprAsOperand(e)
 }
 
 // recoveredTypeOf returns e.Type() when it's populated, otherwise
@@ -3548,7 +3610,7 @@ func (bs *bodyState) lowerStructLit(sl *ir.StructLit, hint Type) RValue {
 				continue
 			}
 		} else {
-			fields[i] = bs.lowerExprAsOperand(f.Value)
+			fields[i] = bs.lowerExprAsOperandHint(f.Value, bs.l.fieldType(info, f.Name))
 			filled[i] = true
 		}
 	}
