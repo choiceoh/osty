@@ -3052,16 +3052,14 @@ fn hirLowerClosureCaptures(
     let node = astArenaNodeAt(cx.ast.arena, closureIdx)
     let mut names: List<String> = []
     let mut out: List<HirCapture> = []
-    let mut i = 0
-    for refNode in cx.resolved.refNodes {
-        let target = hirLowerIntListAt(cx.resolved.refTargets, i)
-        let name = hirLowerStringListAt(cx.resolved.refNames, i)
+    for ref in cx.resolved.refList {
+        let refNode = ref.node
+        let target = ref.target
+        let name = ref.name
         if !(hirLowerNodeInsideClosure(cx.ast, closureIdx, refNode, true)) {
-            i = i + 1
             continue
         }
         if target >= 0 && hirLowerNodeInsideClosure(cx.ast, closureIdx, target, false) {
-            i = i + 1
             continue
         }
         let coreIdx = hirLowerExprCoreIdx(cx, refNode)
@@ -3094,7 +3092,6 @@ fn hirLowerClosureCaptures(
                 ),
             )
         }
-        i = i + 1
     }
     out
 }
