@@ -2,86 +2,24 @@ package selfhost
 
 import (
 	"fmt"
+
+	"github.com/osty/osty/internal/selfhost/api"
 )
 
-type PackageCheckFile struct {
-	Source []byte `json:"source,omitempty"`
-	Base   int    `json:"base,omitempty"`
-	// Name is the display filename surfaced in diagnostic telemetry (typically
-	// a basename like `user.osty`). Empty when unknown; the telemetry suffix
-	// falls back to `@Lnn:Cnn` without a filename prefix in that case.
-	Name string `json:"name,omitempty"`
-	// Path is the owning source path when known. Package-mode diagnostics carry
-	// this through the native checker boundary so multi-file callers do not
-	// need to guess which file owned a given span.
-	Path string `json:"path,omitempty"`
-}
-
-type PackageCheckGenericBound struct {
-	TyParam       string `json:"tyParam,omitempty"`
-	InterfaceType string `json:"interfaceType,omitempty"`
-}
-
-type PackageCheckFn struct {
-	Name          string                     `json:"name,omitempty"`
-	Owner         string                     `json:"owner,omitempty"`
-	ReceiverType  string                     `json:"receiverType,omitempty"`
-	ReturnType    string                     `json:"returnType,omitempty"`
-	HasBody       bool                       `json:"hasBody,omitempty"`
-	ParamNames    []string                   `json:"paramNames,omitempty"`
-	ParamTypes    []string                   `json:"paramTypes,omitempty"`
-	ParamDefaults []bool                     `json:"paramDefaults,omitempty"`
-	Generics      []string                   `json:"generics,omitempty"`
-	GenericBounds []PackageCheckGenericBound `json:"genericBounds,omitempty"`
-}
-
-type PackageCheckField struct {
-	Owner      string `json:"owner,omitempty"`
-	Name       string `json:"name,omitempty"`
-	TypeName   string `json:"typeName,omitempty"`
-	HasDefault bool   `json:"hasDefault,omitempty"`
-}
-
-type PackageCheckVariant struct {
-	Owner      string   `json:"owner,omitempty"`
-	Name       string   `json:"name,omitempty"`
-	FieldTypes []string `json:"fieldTypes,omitempty"`
-	Generics   []string `json:"generics,omitempty"`
-}
-
-type PackageCheckAlias struct {
-	Name     string   `json:"name,omitempty"`
-	Target   string   `json:"target,omitempty"`
-	Generics []string `json:"generics,omitempty"`
-}
-
-type PackageCheckType struct {
-	Name          string                     `json:"name,omitempty"`
-	Kind          string                     `json:"kind,omitempty"`
-	Generics      []string                   `json:"generics,omitempty"`
-	GenericBounds []PackageCheckGenericBound `json:"genericBounds,omitempty"`
-}
-
-type PackageCheckInterfaceExt struct {
-	Owner         string `json:"owner,omitempty"`
-	InterfaceType string `json:"interfaceType,omitempty"`
-}
-
-type PackageCheckImport struct {
-	Alias           string                     `json:"alias,omitempty"`
-	Functions       []PackageCheckFn           `json:"functions,omitempty"`
-	Fields          []PackageCheckField        `json:"fields,omitempty"`
-	Variants        []PackageCheckVariant      `json:"variants,omitempty"`
-	Aliases         []PackageCheckAlias        `json:"aliases,omitempty"`
-	TypeDecls       []PackageCheckType         `json:"typeDecls,omitempty"`
-	InterfaceExts   []PackageCheckInterfaceExt `json:"interfaceExts,omitempty"`
-	RegisterAsIface []string                   `json:"registerAsIface,omitempty"`
-}
-
-type PackageCheckInput struct {
-	Files   []PackageCheckFile   `json:"files,omitempty"`
-	Imports []PackageCheckImport `json:"imports,omitempty"`
-}
+// Package-level type aliases re-export the shared boundary shapes from
+// internal/selfhost/api. See selfhost/api/package.go for definitions.
+type (
+	PackageCheckFile         = api.PackageCheckFile
+	PackageCheckGenericBound = api.PackageCheckGenericBound
+	PackageCheckFn           = api.PackageCheckFn
+	PackageCheckField        = api.PackageCheckField
+	PackageCheckVariant      = api.PackageCheckVariant
+	PackageCheckAlias        = api.PackageCheckAlias
+	PackageCheckType         = api.PackageCheckType
+	PackageCheckInterfaceExt = api.PackageCheckInterfaceExt
+	PackageCheckImport       = api.PackageCheckImport
+	PackageCheckInput        = api.PackageCheckInput
+)
 
 // CheckPackageStructured re-parses each input file via the self-host
 // lexer + parser, merges the per-file AstArenas into a synthetic package

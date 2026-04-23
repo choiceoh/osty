@@ -5,58 +5,16 @@ import (
 	"github.com/osty/osty/internal/selfhost/api"
 )
 
-// PackageResolveFile is the per-file input shape accepted by the structured
-// self-host resolve adapter.
-type PackageResolveFile = PackageCheckFile
-
-// PackageResolveInput batches one or more source files into a synthetic package
-// so the self-host resolver can see one shared top-level namespace.
-type PackageResolveInput struct {
-	Files []PackageResolveFile `json:"files,omitempty"`
-	// Cfg, when non-nil, activates the `#[cfg(key = "value")]` pre-resolve
-	// filter per LANG_SPEC v0.5 §5 / G29. A nil Cfg leaves every decl
-	// alive (cfg shape validation still emits E0405/E0739 either way).
-	Cfg *CfgEnv `json:"cfg,omitempty"`
-}
-
-// UseEdge is one `use <target>` edge in the workspace import graph.
-// Pos / EndPos are source offsets pointing at the use site; callers
-// render them into line/column via their own source-map when emitting
-// diagnostics.
-type UseEdge struct {
-	Target string
-	Pos    int
-	EndPos int
-	File   string
-}
-
-// PackageUses groups every non-FFI use edge emitted by one package.
-// Path is the dotted package key (same format as
-// internal/resolve::UseKey).
-type PackageUses struct {
-	Path string
-	Uses []UseEdge
-}
-
-// WorkspaceUses is the cross-package input accepted by
-// DetectImportCycles. Callers should sort Packages lexicographically
-// by Path so the diagnostic emission order stays deterministic — the
-// detector respects the given order verbatim.
-type WorkspaceUses struct {
-	Packages []PackageUses
-}
-
-// CycleDiag is one cyclic-import diagnostic record carrying the edge
-// that closed the cycle. Callers convert this to a rich
-// diag.Diagnostic by rendering Pos / EndPos through their source map.
-type CycleDiag struct {
-	Importer string
-	Target   string
-	Pos      int
-	EndPos   int
-	File     string
-	Message  string
-}
+// Resolve-side types re-exported from internal/selfhost/api. See
+// selfhost/api/package.go for definitions.
+type (
+	PackageResolveFile  = api.PackageResolveFile
+	PackageResolveInput = api.PackageResolveInput
+	UseEdge             = api.UseEdge
+	PackageUses         = api.PackageUses
+	WorkspaceUses       = api.WorkspaceUses
+	CycleDiag           = api.CycleDiag
+)
 
 // DetectImportCycles walks the given workspace graph and returns one
 // CycleDiag per edge that completes a cycle. Targets absent from
@@ -102,21 +60,15 @@ func toSelfWorkspaceUses(w WorkspaceUses) *SelfWorkspaceUses {
 	return &SelfWorkspaceUses{packages: packages}
 }
 
-// CfgEnv carries the values that `#[cfg(...)]` predicates compare against.
-// Mirrors toolchain/resolve.osty::SelfResolveCfgEnv and the internal/resolve
-// Go-side CfgEnv — kept as a separate type so the selfhost package has no
-// cycle with internal/resolve.
-type CfgEnv struct {
-	OS       string   `json:"os,omitempty"`
-	Arch     string   `json:"arch,omitempty"`
-	Target   string   `json:"target,omitempty"`
-	Features []string `json:"features,omitempty"`
-}
+// CfgEnv is re-exported from internal/selfhost/api. See
+// selfhost/api/package.go for the definition.
+type CfgEnv = api.CfgEnv
 
-// toSelf converts the external CfgEnv into the selfhost-generated struct the
-// Osty resolver consumes. A nil receiver maps to the disabled sentinel so
-// the walk behaves identically to callers that never passed an env.
-func (c *CfgEnv) toSelf() *SelfResolveCfgEnv {
+// cfgEnvToSelf converts the external CfgEnv into the selfhost-
+// generated struct the Osty resolver consumes. A nil env maps to the
+// disabled sentinel so the walk behaves identically to callers that
+// never passed one.
+func cfgEnvToSelf(c *CfgEnv) *SelfResolveCfgEnv {
 	if c == nil {
 		return selfResolveCfgDisabled()
 	}
@@ -164,7 +116,7 @@ func ResolveSourceStructuredWithCfg(src []byte, cfg *CfgEnv) ResolveResult {
 	}
 	rt := newRuneTable(lexed.source)
 	return adaptResolveResult(
-		selfResolveAstFileWithCfg(file, cfg.toSelf()),
+		selfResolveAstFileWithCfg(file, cfgEnvToSelf(cfg)),
 		file,
 		func(start, end int) (int, int) {
 			return checkNodeOffsets(rt, lexed.stream, start, end)
@@ -246,7 +198,7 @@ func ResolveStructuredFromRunForPath(run *FrontendRun, path string) ResolveResul
 // Source text is the sole AST ingress — no *ast.File round-trip. Cfg
 // filtering activates when input.Cfg is non-nil.
 func ResolvePackageStructured(input PackageResolveInput) (ResolveResult, error) {
-	cfg := input.Cfg.toSelf()
+	cfg := cfgEnvToSelf(input.Cfg)
 	file, layout, err := selfhostBuildPackageAst(input.Files)
 	if err != nil {
 		return ResolveResult{}, err
