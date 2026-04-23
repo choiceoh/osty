@@ -177,6 +177,15 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	if opts.UseMIR && entry.MIR != nil {
 		irOut, genErr = llvmgen.GenerateFromMIR(entry.MIR, opts)
 		if genErr != nil && errors.Is(genErr, llvmgen.ErrUnsupported) {
+			// OSTY_TRACE_MIR_FALLBACK is the probe env flag that prints
+			// which shape made the MIR emitter refuse. Off by default
+			// so user-facing `osty test` / `osty build` stays quiet —
+			// wire it on when extending MIR coverage to see the
+			// specific unsupported symbol/type hint the emitter
+			// surfaces.
+			if os.Getenv("OSTY_TRACE_MIR_FALLBACK") != "" {
+				fmt.Fprintf(os.Stderr, "osty-mir-fallback: %s: %v\n", entry.SourcePath, genErr)
+			}
 			// MIR emitter refused — fall back to the HIR path.
 			opts.UseMIR = false
 			irOut, genErr = llvmgen.GenerateModule(entry.IR, opts)
