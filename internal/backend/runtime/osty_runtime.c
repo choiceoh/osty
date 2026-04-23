@@ -4269,6 +4269,96 @@ void osty_rt_list_insert_ptr(void *raw_list, int64_t index, void *value) {
     osty_gc_post_write_v1(raw_list, value, OSTY_GC_KIND_LIST);
 }
 
+// osty_rt_list_remove_at_discard shifts list[index+1..len] left by one slot
+// and decrements len. Aborts on out-of-range (matches stdlib
+// `removeAt(i) -> T` semantics — the caller reads the element first via
+// a typed get, then invokes this helper to splice the slot out).
+// Element-type-agnostic: operates in terms of list->elem_size.
+void osty_rt_list_remove_at_discard(void *raw_list, int64_t index) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    if (list == NULL) {
+        osty_rt_abort("list.removeAt on nil receiver");
+    }
+    if (index < 0 || index >= list->len) {
+        osty_rt_abort("list.removeAt index out of range");
+    }
+    size_t elem_size = list->elem_size;
+    if (index + 1 < list->len) {
+        memmove(list->data + (size_t)index * elem_size,
+                list->data + (size_t)(index + 1) * elem_size,
+                (size_t)(list->len - index - 1) * elem_size);
+    }
+    list->len -= 1;
+}
+
+// osty_rt_list_reverse reverses the list in place. Byte-level swap
+// using the list's own elem_size — no per-element type dispatch needed.
+// The GC trace bookkeeping survives because we swap entire slots
+// (including any embedded ptrs or gc_offsets roots); no slot ever
+// holds a half-written intermediate value visible to a GC safepoint
+// because the whole swap is inline within a single C call.
+void osty_rt_list_reverse(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    if (list == NULL) {
+        osty_rt_abort("list.reverse on nil receiver");
+    }
+    if (list->len <= 1) {
+        return;
+    }
+    size_t elem_size = list->elem_size;
+    if (elem_size == 0) {
+        return;
+    }
+    // Stack buffer for small slots; heap buffer for larger ones.
+    unsigned char small[64];
+    unsigned char *tmp = small;
+    unsigned char *heap = NULL;
+    if (elem_size > sizeof(small)) {
+        heap = (unsigned char *)malloc(elem_size);
+        if (heap == NULL) {
+            osty_rt_abort("list.reverse: out of memory");
+        }
+        tmp = heap;
+    }
+    int64_t lo = 0, hi = list->len - 1;
+    while (lo < hi) {
+        unsigned char *a = list->data + (size_t)lo * elem_size;
+        unsigned char *b = list->data + (size_t)hi * elem_size;
+        memcpy(tmp, a, elem_size);
+        memcpy(a, b, elem_size);
+        memcpy(b, tmp, elem_size);
+        lo++;
+        hi--;
+    }
+    if (heap != NULL) {
+        free(heap);
+    }
+}
+
+// osty_rt_list_reversed returns a freshly allocated list holding the
+// receiver's elements in reverse order. The new list inherits the
+// source's elem_size + trace callback so GC bookkeeping stays intact.
+void *osty_rt_list_reversed(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    if (list == NULL) {
+        osty_rt_abort("list.reversed on nil receiver");
+    }
+    osty_rt_list *out = (osty_rt_list *)osty_rt_list_new();
+    if (list->len == 0) {
+        return out;
+    }
+    size_t elem_size = list->elem_size;
+    osty_rt_list_ensure_layout(out, elem_size, list->trace_elem);
+    osty_rt_list_reserve(out, list->len);
+    // Copy elements from end → start into the new list's data buffer.
+    for (int64_t i = 0; i < list->len; i++) {
+        const unsigned char *src = list->data + (size_t)(list->len - 1 - i) * elem_size;
+        memcpy(out->data + (size_t)i * elem_size, src, elem_size);
+    }
+    out->len = list->len;
+    return out;
+}
+
 void osty_rt_list_push_i1(void *raw_list, bool value) {
     osty_rt_list_push_raw(raw_list, &value, sizeof(value), NULL);
 }
