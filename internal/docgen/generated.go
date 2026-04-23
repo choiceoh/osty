@@ -10479,8 +10479,8 @@ func opParsePrimary(p *OstyParser) int {
 	}
 	// Osty: /tmp/docgen_merged.osty:7200:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontUnderscore{})) {
-		// Osty: /tmp/docgen_merged.osty:7201:5
-		opErrorFull(p, "`_` can only be used as a pattern", "for ignored bindings, write `let _ = expr`", "", "E0604")
+		// Accept `_` at the token level and defer E0604 to the resolver
+		// (see toolchain/parser.osty). docgen's parser shares this branch.
 		// Osty: /tmp/docgen_merged.osty:7202:5
 		opAdvance(p)
 		// Osty: /tmp/docgen_merged.osty:7203:5

@@ -189,6 +189,18 @@ pub fn diagOptionalChainOnNon(owner: String, start: Int, end: Int) -> CheckDiagn
     )
 }
 
+pub fn diagWildcardInExpr(start: Int, end: Int) -> CheckDiagnostic {
+    // Mirrors `srWildcardInExprAtNode` in toolchain/resolve.osty so the
+    // elab and resolve pipelines emit the same E0604 payload for a `_`
+    // used as a value.
+    checkDiag(
+        "E0604",
+        "`_` is only valid as a pattern wildcard, not as an expression",
+        start,
+        end,
+    )
+}
+
 pub fn diagUnknownMethod(owner: String, name: String, start: Int, end: Int) -> CheckDiagnostic {
     checkDiag(
         checkCodeUnknownMethod(),

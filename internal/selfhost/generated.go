@@ -19870,8 +19870,11 @@ func opParsePrimary(p *OstyParser) int {
 	}
 	// Osty: /tmp/selfhost_merged.osty:7562:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontUnderscore{})) {
-		// Osty: /tmp/selfhost_merged.osty:7563:5
-		opErrorFull(p, "`_` can only be used as a pattern", "for ignored bindings, write `let _ = expr`", "", "E0604")
+		// Accept `_` at the token level and defer E0604 to the resolver.
+		// See toolchain/parser.osty for the rationale — for-in tuple
+		// destructures (`for (_, item) in xs`) parse the tuple as an
+		// expression first, then rewrite into a pattern. Eager parse-
+		// time emission fires on the rewritten pattern's wildcard.
 		// Osty: /tmp/selfhost_merged.osty:7564:5
 		opAdvance(p)
 		// Osty: /tmp/selfhost_merged.osty:7565:5
@@ -27635,6 +27638,13 @@ func diagUnknownField(owner string, name string, start int, end int) *CheckDiagn
 // receiver did not resolve to an Option type.
 func diagOptionalChainOnNon(owner string, start int, end int) *CheckDiagnostic {
 	return checkDiag(checkCodeOptionalChainOnNon(), fmt.Sprintf("`?.` operator applied to non-optional type `%s`; use `.` for direct field access", ostyToString(owner)), start, end)
+}
+
+// kept in sync with toolchain/check_diag.osty — mirrors
+// srWildcardInExprAtNode so elab emits the same E0604 payload the
+// resolver produces for a `_` used as a value.
+func diagWildcardInExpr(start int, end int) *CheckDiagnostic {
+	return checkDiag("E0604", "`_` is only valid as a pattern wildcard, not as an expression", start, end)
 }
 
 // Osty: /tmp/selfhost_merged.osty:10943:5
@@ -37933,6 +37943,15 @@ func elabCheckFloatLit(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 
 // Osty: /tmp/selfhost_merged.osty:17834:1
 func elabInferIdent(cx *ElabCx, node *AstNode) *ElabResult {
+	// `_` at expression position is spec-level invalid. Emit E0604
+	// here so the parser's now-deferred E0604 still reaches the user
+	// through the check pipeline (resolve emits it for `osty resolve`,
+	// elab emits it for `osty check`). Kept in sync with
+	// toolchain/elab.osty::elabInferIdent.
+	if node.text == "_" {
+		cx.env.diagnostics = append(cx.env.diagnostics, diagWildcardInExpr(node.start, node.end))
+		return elabPoisonResult(cx, node.start, node.end)
+	}
 	// Osty: /tmp/selfhost_merged.osty:17835:5
 	ty := checkLookup(cx.env, node.text)
 	_ = ty
