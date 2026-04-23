@@ -703,7 +703,16 @@ fn opParsePrimary(p: OstyParser) -> Int {
     if tok.kind == FrontMatch { return opParseMatchExpr(p) }
     if tok.kind == FrontBitOr || tok.kind == FrontOr { return opParseClosure(p) }
     if tok.kind == FrontUnderscore {
-    opErrorFull(p, "`_` can only be used as a pattern", "for ignored bindings, write `let _ = expr`", "", "E0604")
+    // Accept `_` at the token level and defer the E0604 diagnostic
+    // to the resolver (`srResolveOneAstIdent` → `srWildcardInExprAtNode`).
+    // The parser has no way to tell whether this `_` will later be
+    // rewritten into a pattern wildcard — e.g. `for (_, item) in xs`
+    // parses the tuple as an expression and then `opExprToForPattern`
+    // converts it to an AstNPattern, at which point the `_` is in
+    // pattern position and must NOT carry a lingering E0604. Emitting
+    // lazily from the resolver keeps the legitimate `let x = _` case
+    // covered (resolver sees AstNIdent in expr-value context) while
+    // unblocking for-in tuple destructures.
     opAdvance(p)
     let mut n = emptyAstNode(AstNIdent)
     n.text = "_"

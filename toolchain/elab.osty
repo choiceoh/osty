@@ -314,6 +314,17 @@ fn elabCheckFloatLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
 // ---------------------------------------------------------------------
 
 fn elabInferIdent(cx: ElabCx, node: AstNode) -> ElabResult {
+    // `_` in expression position is spec-level invalid (§4 pattern
+    // wildcard only). The parser accepts it as an AstNIdent so for-in
+    // tuple destructures like `for (_, item) in xs` — which parse the
+    // LHS as an expression first and then convert to AstNPattern —
+    // do not bleed E0604 from that conversion site. Emit the dedicated
+    // E0604 here before the ordinary unknown-name fallback kicks in,
+    // matching toolchain/resolve.osty::srResolveOneAstIdent's contract.
+    if node.text == "_" {
+        cx.env.diagnostics.push(diagWildcardInExpr(node.start, node.end))
+        return elabPoisonResult(cx, node.start, node.end)
+    }
     let ty = checkLookup(cx.env, node.text)
     if ty >= 0 {
         let coreIdx = coreIdent(cx.core, node.text, IkLocal, ty, node.start, node.end)

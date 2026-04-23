@@ -32,7 +32,6 @@ error E0205 "expected closure parameter" ^[100:19-100:22] hint="use an identifie
 error E0301 "expected pattern" ^[104:33-104:34] hint="supply a literal, variant, struct, tuple, or `_` pattern"
 error E0600 "`break` outside of loop" ^[132:16-132:17] hint="move inside a `for` loop"
 error E0601 "`continue` outside of loop" ^[136:19-136:20] hint="move inside a `for` loop"
-error E0604 "`_` can only be used as a pattern" ^[140:18-140:19] hint="for ignored bindings, write `let _ = expr`"
 error E0607 "annotation on the wrong kind of declaration" ^[163:1-163:4] hint="annotations are not permitted on `use` statements"
 error E0608 "`defer` is not allowed at the top level of a script" ^[168:1-168:6] hint="move this `defer` inside a function body — it binds to the enclosing function's return"
 error E0202 "`as?` must be written without whitespace between `as` and `?`" ^[260:9-260:11] hint="write `as?` as a single token (no space)" note="OSTY_GRAMMAR_v0.5 §28"
