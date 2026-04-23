@@ -4333,6 +4333,19 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
+		// `list[i]` and `list.get(i)` both map to IntrinsicListGet, but
+		// the stdlib sig for `.get` is `T?` (safe, returns None on OOB)
+		// while `list[i]` is the abort-on-OOB form (T). Detect the
+		// Option<T> dest and emit the len-guarded Some/None wrap
+		// instead of a raw typed-get that would type-mismatch when
+		// stored into the Option slot.
+		if i.Dest != nil && listUsesTypedRuntime(elemLLVM) {
+			if destLoc := g.fn.Local(i.Dest.Local); destLoc != nil {
+				if _, optDest := destLoc.Type.(*ir.OptionalType); optDest {
+					return g.emitListSafeGet(i, listReg, idxReg, elemLLVM, destLoc.Type)
+				}
+			}
+		}
 		if listUsesTypedRuntime(elemLLVM) {
 			if local, ok := mirOperandRootLocal(listOp); ok && listUsesRawDataFastPath(elemLLVM) {
 				if fast, ok := g.emitVectorListFastLoad(local, idxReg, elemLLVM); ok {
@@ -7452,6 +7465,65 @@ func (g *mirGen) emitListPushOperand(listReg string, op mir.Operand, elemT mir.T
 // runtime helper. Allocates a stack slot sized to the element type,
 // asks the runtime to write into it, loads back, and stores into
 // the intrinsic's optional destination.
+// emitListSafeGet lowers `list.get(i)` where the dest is `Option<T>`.
+// The runtime `osty_rt_list_get_<kind>` aborts on OOB, so we gate the
+// call behind an in-bounds check and materialise None for the OOB
+// branch. Pattern mirrors emitListIntrinsic(IntrinsicListFirst/Last).
+// Scalar elements only — composite element types go through the
+// existing bytes-v1 path and aren't rewrapped here.
+func (g *mirGen) emitListSafeGet(i *mir.IntrinsicInstr, listReg, idxReg, elemLLVM string, destT mir.Type) error {
+	destLLVM := g.llvmType(destT)
+	destSlot := g.localSlots[i.Dest.Local]
+	lenSym := listRuntimeLenSymbol()
+	g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr) nounwind willreturn memory(read)")
+	getSym := listRuntimeGetSymbol(elemLLVM)
+	g.declareRuntime(getSym, "declare "+elemLLVM+" @"+getSym+"(ptr, i64) nounwind willreturn memory(read)")
+	lenReg := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
+	nonNeg := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = icmp sge i64 %s, 0\n", nonNeg, idxReg)
+	inUpper := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = icmp slt i64 %s, %s\n", inUpper, idxReg, lenReg)
+	inBounds := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = and i1 %s, %s\n", inBounds, nonNeg, inUpper)
+	someLabel := g.freshLabel("list.safeget.some")
+	noneLabel := g.freshLabel("list.safeget.none")
+	endLabel := g.freshLabel("list.safeget.end")
+	fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", inBounds, someLabel, noneLabel)
+	fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
+	fmt.Fprintf(&g.fnBuf, "  store %s zeroinitializer, ptr %s\n", destLLVM, destSlot)
+	fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+	fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+	elemReg := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, idxReg)
+	payloadReg := elemReg
+	switch elemLLVM {
+	case "i64":
+	case "i1", "i8", "i16", "i32":
+		widened := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = zext %s %s to i64\n", widened, elemLLVM, elemReg)
+		payloadReg = widened
+	case "double":
+		cast := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = bitcast double %s to i64\n", cast, elemReg)
+		payloadReg = cast
+	case "ptr":
+		cast := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = ptrtoint ptr %s to i64\n", cast, elemReg)
+		payloadReg = cast
+	default:
+		return unsupported("mir-mvp", fmt.Sprintf("list_get safe payload widen unsupported for %s", elemLLVM))
+	}
+	tagged := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 1, 0\n", tagged, destLLVM)
+	filled := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n", filled, destLLVM, tagged, payloadReg)
+	fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", destLLVM, filled, destSlot)
+	fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+	fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
+	return nil
+}
+
 func (g *mirGen) emitListGetBytes(i *mir.IntrinsicInstr, listReg, idxReg string, elemT mir.Type) error {
 	elemLLVM := g.llvmType(elemT)
 	sym := listRuntimeGetBytesV1Symbol()
