@@ -193,6 +193,65 @@ fn testInspectEmitsBindRecords() {
     testing.assert(sawBind)
 }
 
+fn testInspectEmitsLocalLetAsLetRule() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let inner: Int = 7
+                let mut counter: Int = 0
+                counter = counter + inner
+            }
+            """,
+    )
+
+    let mut sawInner = false
+    let mut sawCounter = false
+    for rec in recs {
+        if rec.rule != "LET" {
+            continue
+        }
+        if rec.nodeKind != "LetStmt" {
+            continue
+        }
+        for note in rec.notes {
+            if note == "name: inner" {
+                sawInner = true
+            }
+            if note == "name: counter" {
+                sawCounter = true
+            }
+        }
+    }
+    testing.assert(sawInner)
+    testing.assert(sawCounter)
+}
+
+fn testInspectMatchPatternStaysBindRule() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let opt: Option<Int> = Some(3)
+                match opt {
+                    Some(v) -> v,
+                    None -> 0,
+                }
+            }
+            """,
+    )
+
+    let mut sawBindV = false
+    for rec in recs {
+        if rec.rule == "BIND" && rec.nodeKind == "Binding" {
+            for note in rec.notes {
+                if note == "name: v" {
+                    sawBindV = true
+                }
+            }
+        }
+    }
+    testing.assert(sawBindV)
+}
+
 fn testInspectEmitsStructAndEnumDeclRecords() {
     let recs = inspectSource(
         r"""

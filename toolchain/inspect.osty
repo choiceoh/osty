@@ -62,11 +62,69 @@ pub struct InspectRecord {
 }
 
 pub fn inspectSource(source: String) -> List<InspectRecord> {
-    let checked = frontendCheckSourceStructured(source)
-    inspectFromCheckResult(checked)
+    let lexed = ostyLexSource(source)
+    let parsed = astParseLexedSource(lexed)
+    let checked = frontendCheckAstStructured(parsed)
+    inspectFromAstAndCheck(parsed, checked)
 }
 
+/// AST-less entry. Convenient for callers that don't have the parser
+/// arena on hand (e.g. pure test fixtures). Pattern bindings from local
+/// `let` statements get the generic `BIND` rule in this path — use
+/// `inspectFromAstAndCheck` to get them promoted to `LET`.
 pub fn inspectFromCheckResult(checked: FrontCheckResult) -> List<InspectRecord> {
+    inspectBuildRecords(checked, astLetPatternSet(emptyAstFile()))
+}
+
+/// AST-aware entry. Uses the parser arena to promote binding records
+/// whose node sits at the top of a local `let` statement from the
+/// generic `BIND` rule up to `LET`, matching the Go reference's
+/// treatment of `LetStmt`.
+pub fn inspectFromAstAndCheck(file: AstFile, checked: FrontCheckResult) -> List<InspectRecord> {
+    inspectBuildRecords(checked, astLetPatternSet(file))
+}
+
+fn emptyAstFile() -> AstFile {
+    AstFile { arena: emptyAstArena() }
+}
+
+/// Return a flat list of AstNPattern indices that are the direct
+/// top-level pattern of an `AstNLet` statement AND classify as a bare
+/// `ident` pattern (v1.6 scope — destructuring lets keep `BIND`).
+fn astLetPatternSet(file: AstFile) -> List<Int> {
+    let mut out: List<Int> = []
+    let arena = file.arena
+    let n = arena.nodes.len()
+    for i in 0..n {
+        let node = arena.nodes[i]
+        if node.kind != AstNLet {
+            continue
+        }
+        let patIdx = node.left
+        if patIdx < 0 || patIdx >= n {
+            continue
+        }
+        let pat = arena.nodes[patIdx]
+        if pat.kind == AstNPattern && pat.extra == astPatternIdentKind() {
+            out.push(patIdx)
+        }
+    }
+    out
+}
+
+fn inspectIsLetPatternIdx(letPatterns: List<Int>, nodeIdx: Int) -> Bool {
+    for idx in letPatterns {
+        if idx == nodeIdx {
+            return true
+        }
+    }
+    false
+}
+
+fn inspectBuildRecords(
+    checked: FrontCheckResult,
+    letPatterns: List<Int>,
+) -> List<InspectRecord> {
     let mut out: List<InspectRecord> = []
     for tn in checked.typedNodes {
         let rule = inspectRuleForKind(tn.kind)
@@ -109,6 +167,9 @@ pub fn inspectFromCheckResult(checked: FrontCheckResult) -> List<InspectRecord> 
         if bnd.name == "" || bnd.name == "_" {
             continue
         }
+        let isLocalLet = inspectIsLetPatternIdx(letPatterns, bnd.node)
+        let rule = if isLocalLet { "LET" } else { "BIND" }
+        let nodeKind = if isLocalLet { "LetStmt" } else { "Binding" }
         let mut notes: List<String> = []
         notes.push("name: " + bnd.name)
         if bnd.mutable {
@@ -117,8 +178,8 @@ pub fn inspectFromCheckResult(checked: FrontCheckResult) -> List<InspectRecord> 
         out.push(InspectRecord {
             start: bnd.start,
             end: bnd.end,
-            nodeKind: "Binding",
-            rule: "BIND",
+            nodeKind,
+            rule,
             typeName: bnd.typeName,
             hintName: "",
             notes,
