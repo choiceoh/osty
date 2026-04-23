@@ -2380,6 +2380,28 @@ func (bs *bodyState) lowerExprToPlace(e ir.Expr) (Place, bool) {
 
 // lowerIdent turns an Ident into an operand.
 func (bs *bodyState) lowerIdent(id *ir.Ident) Operand {
+	// Bare `None` (no payload, no call) reaches here as an Ident with
+	// Kind=IdentBuiltin because prelude.go tags it as SymBuiltin. Without
+	// explicit handling it would fall through to the FnConst fallback
+	// below and emit as `@None` — an undefined global at LLVM level. The
+	// LLVM runtime shape for every Option<T>::None is `{0, 0}`, so
+	// materialise a NullaryNone with the ident's checker-resolved type.
+	// Callers that want type-directed coercion (e.g. plus(None) where
+	// the checker seeded id.T from the signature) already get it for
+	// free because id.T is Option<Int> by the time this fires.
+	if id.Name == "None" && id.Kind != ir.IdentLocal && id.Kind != ir.IdentParam {
+		t := id.T
+		if t == nil {
+			t = ir.ErrTypeVal
+		}
+		tmp := bs.freshTemp(t, id.SpanV)
+		bs.emit(&AssignInstr{
+			Dest:  Place{Local: tmp},
+			Src:   &NullaryRV{Kind: NullaryNone, T: t},
+			SpanV: id.SpanV,
+		})
+		return &CopyOp{Place: Place{Local: tmp}, T: t}
+	}
 	switch id.Kind {
 	case ir.IdentFn:
 		fnType := id.T
