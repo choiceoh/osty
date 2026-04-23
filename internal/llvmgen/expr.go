@@ -768,6 +768,9 @@ func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
 	if err != nil {
 		return value{}, err
 	}
+	if info, ok := g.rangeTypes[index.typ]; ok {
+		return g.emitSliceIndexByRangeValue(expr, base, index, info)
+	}
 	switch {
 	case base.listElemTyp != "":
 		if index.typ != "i64" {
@@ -840,17 +843,8 @@ func (g *generator) emitSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr) (val
 	if base.listElemTyp != "" {
 		return g.emitListSliceIndex(expr, rng, base)
 	}
-	if base.typ != "ptr" {
-		return value{}, unsupportedf("type-system", "slice indexing on %s, want String (ptr) or List<T>", base.typ)
-	}
-	baseIsString := false
-	if sourceType, ok := g.staticExprSourceType(expr.X); ok {
-		if resolved, resErr := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{}); resErr == nil {
-			baseIsString = llvmNamedTypeIsString(resolved)
-		}
-	}
-	if !baseIsString {
-		return value{}, unsupported("type-system", "slice indexing is only supported on String or List<T> receivers")
+	if err := g.requireStringSliceBase(expr.X, base); err != nil {
+		return value{}, err
 	}
 	base, err = g.loadIfPointer(base)
 	if err != nil {
@@ -966,6 +960,104 @@ func (g *generator) emitListSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr, 
 	sliced.sourceType = base.sourceType
 	sliced.rootPaths = g.rootPathsForType(base.listElemTyp)
 	return sliced, nil
+}
+
+// Range aggregate layout — kept in lockstep with the struct def emitted
+// at generator.go (fields: elemTyp, elemTyp, i1, i1, i1). If the layout
+// ever gains a field, update builtinRangeFieldInfo in type.go and the
+// type def site together.
+const (
+	rangeFieldStart     = 0
+	rangeFieldStop      = 1
+	rangeFieldHasStart  = 2
+	rangeFieldHasStop   = 3
+	rangeFieldInclusive = 4
+)
+
+// emitSliceIndexByRangeValue lowers `base[r]` where `r` is a Range<T>
+// value (param, let binding, or expression result) rather than an inline
+// range literal. The Range aggregate is destructured at runtime and fed
+// to the same osty_rt_list_slice / osty_rt_strings_Slice helpers as the
+// literal path. Element type is restricted to i64 (Range<Int>) to match
+// the literal slicer's bound constraints.
+func (g *generator) emitSliceIndexByRangeValue(expr *ast.IndexExpr, base value, rangeVal value, info builtinRangeType) (value, error) {
+	if info.elemTyp != "i64" {
+		return value{}, unsupportedf("type-system", "slice range element type %s, want i64", info.elemTyp)
+	}
+
+	isList := base.listElemTyp != ""
+	if !isList {
+		if err := g.requireStringSliceBase(expr.X, base); err != nil {
+			return value{}, err
+		}
+	}
+	baseLoaded, err := g.loadIfPointer(base)
+	if err != nil {
+		return value{}, err
+	}
+
+	var lenSym, sliceSym string
+	if isList {
+		lenSym = listRuntimeLenSymbol()
+		sliceSym = listRuntimeSliceSymbol()
+	} else {
+		lenSym = llvmStringRuntimeByteLenSymbol()
+		sliceSym = llvmStringRuntimeSliceSymbol()
+	}
+	g.declareRuntimeSymbol(lenSym, "i64", []paramInfo{{typ: "ptr"}})
+	g.declareRuntimeSymbol(sliceSym, "ptr", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "i64"}})
+
+	emitter := g.toOstyEmitter()
+	startRaw := llvmExtractValue(emitter, toOstyValue(rangeVal), "i64", rangeFieldStart)
+	stopRaw := llvmExtractValue(emitter, toOstyValue(rangeVal), "i64", rangeFieldStop)
+	hasStart := llvmExtractValue(emitter, toOstyValue(rangeVal), "i1", rangeFieldHasStart)
+	hasStop := llvmExtractValue(emitter, toOstyValue(rangeVal), "i1", rangeFieldHasStop)
+	inclusive := llvmExtractValue(emitter, toOstyValue(rangeVal), "i1", rangeFieldInclusive)
+
+	startSel := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 %s, i64 0", startSel, hasStart.name, startRaw.name))
+	stopPlus := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", stopPlus, stopRaw.name))
+	stopIncl := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 %s, i64 %s", stopIncl, inclusive.name, stopPlus, stopRaw.name))
+
+	lenVal := llvmCall(emitter, "i64", lenSym, []*LlvmValue{toOstyValue(baseLoaded)})
+	endSel := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 %s, i64 %s", endSel, hasStop.name, stopIncl, lenVal.name))
+
+	startVal := value{typ: "i64", ref: startSel}
+	endVal := value{typ: "i64", ref: endSel}
+	out := llvmCall(emitter, "ptr", sliceSym, []*LlvmValue{toOstyValue(baseLoaded), toOstyValue(startVal), toOstyValue(endVal)})
+	g.takeOstyEmitter(emitter)
+
+	sliced := fromOstyValue(out)
+	sliced.gcManaged = true
+	if isList {
+		sliced.listElemTyp = base.listElemTyp
+		sliced.listElemString = base.listElemString
+		sliced.sourceType = base.sourceType
+		sliced.rootPaths = g.rootPathsForType(base.listElemTyp)
+	} else {
+		sliced.sourceType = &ast.NamedType{Path: []string{"String"}}
+	}
+	return sliced, nil
+}
+
+// requireStringSliceBase rejects non-String ptr receivers at the slice
+// index site. Shared between literal-range and range-value slice paths
+// so the diagnostic phrasing stays identical.
+func (g *generator) requireStringSliceBase(x ast.Expr, base value) error {
+	if base.typ != "ptr" {
+		return unsupportedf("type-system", "slice indexing on %s, want String (ptr) or List<T>", base.typ)
+	}
+	if sourceType, ok := g.staticExprSourceType(x); ok {
+		if resolved, resErr := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{}); resErr == nil {
+			if llvmNamedTypeIsString(resolved) {
+				return nil
+			}
+		}
+	}
+	return unsupported("type-system", "slice indexing is only supported on String or List<T> receivers")
 }
 
 func (g *generator) enumVariantValue(expr *ast.FieldExpr) (value, bool, error) {
