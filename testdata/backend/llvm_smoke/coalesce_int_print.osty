@@ -1,0 +1,10 @@
+fn ageOr(age: Int?) -> Int {
+    age ?? 0
+}
+
+fn main() {
+    let missing: Int? = None
+    let present: Int? = Some(42)
+    println(ageOr(missing))
+    println(ageOr(present))
+}

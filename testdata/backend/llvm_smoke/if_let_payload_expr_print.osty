@@ -1,0 +1,17 @@
+enum Maybe {
+    Some(Int)
+    None
+}
+
+fn score(value: Maybe) -> Int {
+    if let Some(x) = value {
+        x
+    } else {
+        0
+    }
+}
+
+fn main() {
+    println(score(Some(42)))
+    println(score(None))
+}

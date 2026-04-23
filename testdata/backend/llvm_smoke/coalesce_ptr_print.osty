@@ -1,0 +1,10 @@
+fn resolve(name: String?) -> String {
+    name ?? "anonymous"
+}
+
+fn main() {
+    let missing: String? = None
+    let present: String? = Some("Ada")
+    println(resolve(missing))
+    println(resolve(present))
+}

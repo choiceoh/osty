@@ -4498,6 +4498,36 @@ pub fn llvmSmokeExecutableCorpus() -> List<LlvmSmokeExecutableCase> {
             fixture: "result_question_int_print.osty",
             stdout: "42\n",
         },
+        LlvmSmokeExecutableCase {
+            name: "enum-multi-field-payload",
+            fixture: "enum_multi_field_payload_print.osty",
+            stdout: "12\n7\n0\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "coalesce-ptr",
+            fixture: "coalesce_ptr_print.osty",
+            stdout: "anonymous\nAda\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "coalesce-int",
+            fixture: "coalesce_int_print.osty",
+            stdout: "0\n42\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "if-let-payload-stmt",
+            fixture: "if_let_payload_stmt_print.osty",
+            stdout: "42\n0\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "if-let-payload-expr",
+            fixture: "if_let_payload_expr_print.osty",
+            stdout: "42\n0\n",
+        },
+        LlvmSmokeExecutableCase {
+            name: "if-let-qualified-variant",
+            fixture: "if_let_qualified_variant_print.osty",
+            stdout: "42\n0\n",
+        },
     ]
 }
 

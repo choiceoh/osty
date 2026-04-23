@@ -1,0 +1,19 @@
+enum Maybe {
+    Some(Int)
+    None
+}
+
+fn printValue(value: Maybe) {
+    if let Maybe.Some(x) = value {
+        println(x)
+    } else {
+        println(0)
+    }
+}
+
+fn main() {
+    let someValue: Maybe = Maybe.Some(42)
+    let noneValue: Maybe = Maybe.None
+    printValue(someValue)
+    printValue(noneValue)
+}
