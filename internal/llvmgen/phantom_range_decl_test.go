@@ -64,6 +64,41 @@ func TestToolchainHasNoPhantomRangeExpr(t *testing.T) {
 	}
 }
 
+// TestToolchainFilesParseWithoutDiagnostics closes the simpler failure
+// mode behind the phantom-node regression above: an unescaped `\{` /
+// `\}` omission in a toolchain string literal can fail the initial
+// parse outright, which then later surfaces as confusing downstream
+// parser/checker walls such as "expected ), got let".
+func TestToolchainFilesParseWithoutDiagnostics(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	dir := filepath.Join(root, "toolchain")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !ostyToolchainSource(name) {
+			continue
+		}
+		src, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		file, diags := parser.ParseDiagnostics(src)
+		if len(diags) > 0 {
+			t.Errorf("%s: ParseDiagnostics returned %d diagnostics; first=%v", name, len(diags), diags[0])
+			continue
+		}
+		if file == nil {
+			t.Errorf("%s: ParseDiagnostics returned nil file without diagnostics", name)
+		}
+	}
+}
+
 func ostyToolchainSource(name string) bool {
 	if !hasSuffix(name, ".osty") {
 		return false
