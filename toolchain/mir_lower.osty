@@ -717,13 +717,54 @@ fn mirLowerFunctionIsExternal(decl: HirFnDecl) -> Bool {
 }
 
 /// mirLowerCopyFnAnnotations copies HIR annotation metadata onto the
-/// MIR function. The MIR side currently stores a subset (export
-/// symbol, C ABI) but the rest of v0.6 A5–A13 annotations are
-/// downstream concerns tracked in `LLVM_MIGRATION_PLAN.md`.
+/// MIR function. v0.6 A5–A13 annotations flow through verbatim so a
+/// future MIR → LLVM pass can emit fn attrs / loop metadata without
+/// re-walking HIR. Backend emission is still scalar-only in
+/// toolchain/llvmgen.osty today; the fields are consumed by the Go
+/// ir.FnDecl shim (internal/llvmgen) that maps MIR metadata onto the
+/// legacy Go IR shape the production LLVM emitter expects.
 fn mirLowerCopyFnAnnotations(out: MirFunction, decl: HirFnDecl) {
     out.exported = decl.exported
     out.exportSymbol = decl.exportSymbol
     out.cAbi = decl.cAbi
+
+    // v0.6 A5 — vectorize / no_vectorize (loop metadata).
+    out.vectorize = decl.vectorize
+    out.noVectorize = decl.noVectorize
+    out.vectorizeWidth = decl.vectorizeWidth
+    out.vectorizeScalable = decl.vectorizeScalable
+    out.vectorizePredicate = decl.vectorizePredicate
+
+    // v0.6 A6 — parallel (loop access-group metadata). v0.6 A7 —
+    // unroll (loop.unroll.count or loop.unroll.enable).
+    out.parallel = decl.parallel
+    out.unroll = decl.unroll
+    out.unrollCount = decl.unrollCount
+
+    // v0.6 A8 — inline family fn attr. HirInlineMode and MirInlineMode
+    // mirror each other variant-for-variant; the match below is the
+    // only bridge between the two tiers so `mir.osty` stays unaware of
+    // HIR types (keeps the MIR bundle compilable without HIR).
+    out.inlineMode = match decl.inlineMode {
+        HirInlineNone -> MirInlineNone,
+        HirInlineSoft -> MirInlineSoft,
+        HirInlineAlways -> MirInlineAlways,
+        HirInlineNever -> MirInlineNever,
+    }
+
+    // v0.6 A9 — hot / cold section placement + fn attr.
+    out.hot = decl.hot
+    out.cold = decl.cold
+
+    // v0.6 A10 — target_feature per-function CPU feature.
+    out.targetFeatures = decl.targetFeatures
+
+    // v0.6 A11 — noalias param attr (blanket or per-param names).
+    out.noaliasAll = decl.noaliasAll
+    out.noaliasParams = decl.noaliasParams
+
+    // v0.6 A13 — pure / readnone fn attr (lenient: no body audit).
+    out.pure = decl.pure
 }
 
 /// mirLowerSeedFunction stamps the return slot + parameter locals +
