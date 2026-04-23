@@ -1122,6 +1122,12 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 	// LLVM zext — no runtime call needed.
 	case mir.IntrinsicByteToInt, mir.IntrinsicCharToInt:
 		return true
+	// Option<T> method lowering — disc/payload extract on %Option.<T>
+	// (emitOptionIntrinsic). Unwrap None branches to
+	// osty_rt_option_unwrap_none() + unreachable.
+	case mir.IntrinsicOptionIsSome, mir.IntrinsicOptionIsNone,
+		mir.IntrinsicOptionUnwrap, mir.IntrinsicOptionUnwrapOr:
+		return true
 	}
 	return false
 }
@@ -4256,8 +4262,142 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitIntegerWidenIntrinsic(i, "i8", "i64")
 	case mir.IntrinsicCharToInt:
 		return g.emitIntegerWidenIntrinsic(i, "i32", "i64")
+	case mir.IntrinsicOptionIsSome, mir.IntrinsicOptionIsNone,
+		mir.IntrinsicOptionUnwrap, mir.IntrinsicOptionUnwrapOr:
+		return g.emitOptionIntrinsic(i)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("intrinsic %s", mirIntrinsicLabel(i.Kind)))
+}
+
+// emitOptionIntrinsic lowers the four Option<T> method intrinsics that
+// reduce the `match self { Some(v) -> v, None -> ... }` pattern in
+// [internal/stdlib/modules/option.osty] into direct `%Option.<T>`
+// extractvalue / branch / abort sequences. The `%Option.<T>` layout is
+// `{ i64 disc, i64 payload }` with disc=0 for None, disc=1 for Some.
+// Payload is widened to i64 at construction time; narrowing back to T
+// on extraction mirrors the widen map the List.first/last emitter uses.
+func (g *mirGen) emitOptionIntrinsic(i *mir.IntrinsicInstr) error {
+	if len(i.Args) < 1 {
+		return unsupported("mir-mvp", fmt.Sprintf("%s without operand", mirIntrinsicLabel(i.Kind)))
+	}
+	optT := i.Args[0].Type()
+	if optT == nil {
+		return unsupported("mir-mvp", fmt.Sprintf("%s operand has no type", mirIntrinsicLabel(i.Kind)))
+	}
+	optLLVM := g.llvmType(optT)
+	optVal, err := g.evalOperand(i.Args[0], optT)
+	if err != nil {
+		return err
+	}
+	discReg := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = extractvalue %s %s, 0\n", discReg, optLLVM, optVal)
+
+	switch i.Kind {
+	case mir.IntrinsicOptionIsSome:
+		res := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = icmp ne i64 %s, 0\n", res, discReg)
+		return g.storeIntrinsicResult(i, &LlvmValue{typ: "i1", name: res})
+	case mir.IntrinsicOptionIsNone:
+		res := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = icmp eq i64 %s, 0\n", res, discReg)
+		return g.storeIntrinsicResult(i, &LlvmValue{typ: "i1", name: res})
+	case mir.IntrinsicOptionUnwrap:
+		if i.Dest == nil {
+			return unsupported("mir-mvp", "option_unwrap without destination")
+		}
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return unsupported("mir-mvp", "option_unwrap dest into unknown local")
+		}
+		destLLVM := g.llvmType(destLoc.Type)
+		destSlot := g.localSlots[i.Dest.Local]
+		isNone := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = icmp eq i64 %s, 0\n", isNone, discReg)
+		noneLabel := g.freshLabel("opt.unwrap.none")
+		someLabel := g.freshLabel("opt.unwrap.some")
+		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", isNone, noneLabel, someLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
+		abortSym := "osty_rt_option_unwrap_none"
+		g.declareRuntime(abortSym, "declare void @"+abortSym+"() noreturn")
+		fmt.Fprintf(&g.fnBuf, "  call void @%s()\n", abortSym)
+		g.fnBuf.WriteString("  unreachable\n")
+		fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+		payload := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = extractvalue %s %s, 1\n", payload, optLLVM, optVal)
+		narrowed, err := g.narrowOptionPayload(payload, destLLVM)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", destLLVM, narrowed, destSlot)
+		return nil
+	case mir.IntrinsicOptionUnwrapOr:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "option_unwrapOr needs [option, fallback]")
+		}
+		if i.Dest == nil {
+			return unsupported("mir-mvp", "option_unwrapOr without destination")
+		}
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return unsupported("mir-mvp", "option_unwrapOr dest into unknown local")
+		}
+		destLLVM := g.llvmType(destLoc.Type)
+		destSlot := g.localSlots[i.Dest.Local]
+		isNone := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = icmp eq i64 %s, 0\n", isNone, discReg)
+		noneLabel := g.freshLabel("opt.unwrapor.none")
+		someLabel := g.freshLabel("opt.unwrapor.some")
+		endLabel := g.freshLabel("opt.unwrapor.end")
+		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", isNone, noneLabel, someLabel)
+		// None arm: evaluate and propagate fallback.
+		fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
+		fallback, err := g.evalOperand(i.Args[1], destLoc.Type)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		// Some arm: extract and narrow payload.
+		fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+		payload := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = extractvalue %s %s, 1\n", payload, optLLVM, optVal)
+		narrowed, err := g.narrowOptionPayload(payload, destLLVM)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		// Join.
+		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
+		merged := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = phi %s [ %s, %%%s ], [ %s, %%%s ]\n",
+			merged, destLLVM, fallback, noneLabel, narrowed, someLabel)
+		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", destLLVM, merged, destSlot)
+		return nil
+	}
+	return unsupported("mir-mvp", fmt.Sprintf("option intrinsic kind %d", i.Kind))
+}
+
+// narrowOptionPayload is the inverse of the i64-widen map the Option /
+// Maybe constructors use at insertvalue time (see emitListIntrinsic's
+// IntrinsicListFirst/Last arm). Payload is always stored as i64; on
+// extraction we truncate / bitcast back to the caller's concrete T.
+func (g *mirGen) narrowOptionPayload(payloadI64, destLLVM string) (string, error) {
+	switch destLLVM {
+	case "i64":
+		return payloadI64, nil
+	case "i1", "i8", "i16", "i32":
+		narrow := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = trunc i64 %s to %s\n", narrow, payloadI64, destLLVM)
+		return narrow, nil
+	case "double":
+		narrow := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = bitcast i64 %s to double\n", narrow, payloadI64)
+		return narrow, nil
+	case "ptr":
+		narrow := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = inttoptr i64 %s to ptr\n", narrow, payloadI64)
+		return narrow, nil
+	}
+	return "", unsupported("mir-mvp", "option payload narrow unsupported for "+destLLVM)
 }
 
 // emitIntegerWidenIntrinsic emits a `zext` from the source-width type

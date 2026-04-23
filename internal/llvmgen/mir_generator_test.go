@@ -882,6 +882,144 @@ func TestGenerateFromMIROptionalNoneConstruction(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIROptionUnwrapLowers pins the MIR emitter for the four
+// Option<T> method intrinsics (isSome, isNone, unwrap, unwrapOr). The
+// underlying lowering keeps Option<T> as `{ i64 disc, i64 payload }`
+// and extracts via insertvalue / extractvalue pairs, with unwrap on
+// None trapping through `osty_rt_option_unwrap_none()` + `unreachable`.
+func TestGenerateFromMIROptionUnwrapLowers(t *testing.T) {
+	// fn pick() -> Int {
+	//     let o = Some(42)
+	//     o.unwrap()
+	// }
+	optT := &ir.OptionalType{Inner: ir.TInt}
+	fn := &ir.FnDecl{
+		Name:   "pick",
+		Return: ir.TInt,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "o",
+					Type: optT,
+					Value: &ir.VariantLit{
+						Enum:    "",
+						Variant: "Some",
+						Args:    []ir.Arg{{Value: &ir.IntLit{Text: "42", T: ir.TInt}}},
+						T:       optT,
+					},
+				},
+			},
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "o", Kind: ir.IdentLocal, T: optT},
+				Name:     "unwrap",
+				T:        ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/opt_unwrap.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare void @osty_rt_option_unwrap_none() noreturn",
+		"call void @osty_rt_option_unwrap_none()",
+		"unreachable",
+		"extractvalue %Option.i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIROptionUnwrapOrLowers pins the fallback path:
+// `isNone` → take the default, else extract payload — phi-merged.
+func TestGenerateFromMIROptionUnwrapOrLowers(t *testing.T) {
+	optT := &ir.OptionalType{Inner: ir.TInt}
+	fn := &ir.FnDecl{
+		Name:   "pickOr",
+		Return: ir.TInt,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name:  "o",
+					Type:  optT,
+					Value: &ir.VariantLit{Enum: "", Variant: "None", T: optT},
+				},
+			},
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "o", Kind: ir.IdentLocal, T: optT},
+				Name:     "unwrapOr",
+				Args:     []ir.Arg{{Value: &ir.IntLit{Text: "7", T: ir.TInt}}},
+				T:        ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/opt_unwrap_or.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"extractvalue %Option.i64",
+		"icmp eq i64",
+		"phi i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIROptionIsSomeLowers covers the trivial disc read
+// + `icmp ne` path that materialises `.isSome()` as a Bool.
+func TestGenerateFromMIROptionIsSomeLowers(t *testing.T) {
+	optT := &ir.OptionalType{Inner: ir.TInt}
+	fn := &ir.FnDecl{
+		Name:   "present",
+		Return: ir.TBool,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "o",
+					Type: optT,
+					Value: &ir.VariantLit{
+						Enum:    "",
+						Variant: "Some",
+						Args:    []ir.Arg{{Value: &ir.IntLit{Text: "1", T: ir.TInt}}},
+						T:       optT,
+					},
+				},
+			},
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "o", Kind: ir.IdentLocal, T: optT},
+				Name:     "isSome",
+				T:        ir.TBool,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/opt_is_some.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"extractvalue %Option.i64",
+		"icmp ne i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 // ==== Stage 3.3: list / map / set intrinsics ====
 
 func TestGenerateFromMIRListLiteralAndLen(t *testing.T) {

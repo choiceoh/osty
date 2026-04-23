@@ -961,6 +961,15 @@ static void osty_rt_abort(const char *message) {
     abort();
 }
 
+// Public abort helper called from LLVM IR when `Option.unwrap()` fires on
+// a None value. The corresponding stdlib body (`option.osty::unwrap`)
+// routes to this through the MIR `IntrinsicOptionUnwrap` lowerer —
+// backends emit a disc==0 branch that tail-calls this helper. The
+// companion `osty_rt_result_unwrap_err` handles the Result variant.
+void osty_rt_option_unwrap_none(void) {
+    osty_rt_abort("called unwrap on None");
+}
+
 static uint64_t osty_gc_allocate_stable_id(void) {
     uint64_t id = osty_gc_next_stable_id;
     if (id == 0 || id == OSTY_GC_IDENTITY_TOMBSTONE) {
