@@ -18712,19 +18712,20 @@ func astArenaNodeAt(arena *AstArena, idx int) *AstNode {
 
 // Osty: /tmp/selfhost_merged.osty:7032:5
 type OstyParser struct {
-	tokens        []*FrontToken
-	count         int
-	pos           int
-	arena         *AstArena
-	noStructLit   bool
-	inLoop        bool
-	typeGtDebt    int
-	pendingAssign bool
+	tokens            []*FrontToken
+	count             int
+	pos               int
+	arena             *AstArena
+	noStructLit       bool
+	allowExprWildcard bool
+	inLoop            bool
+	typeGtDebt        int
+	pendingAssign     bool
 }
 
 // Osty: /tmp/selfhost_merged.osty:7043:5
 func newOstyParser(tokens []*FrontToken) *OstyParser {
-	return &OstyParser{tokens: tokens, count: frontTokenListCount(tokens), pos: 0, arena: emptyAstArena(), noStructLit: false, inLoop: false, typeGtDebt: 0, pendingAssign: false}
+	return &OstyParser{tokens: tokens, count: frontTokenListCount(tokens), pos: 0, arena: emptyAstArena(), noStructLit: false, allowExprWildcard: false, inLoop: false, typeGtDebt: 0, pendingAssign: false}
 }
 
 // Osty: /tmp/selfhost_merged.osty:7055:1
@@ -19871,7 +19872,9 @@ func opParsePrimary(p *OstyParser) int {
 	// Osty: /tmp/selfhost_merged.osty:7562:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontUnderscore{})) {
 		// Osty: /tmp/selfhost_merged.osty:7563:5
-		opErrorFull(p, "`_` can only be used as a pattern", "for ignored bindings, write `let _ = expr`", "", "E0604")
+		if !(p.allowExprWildcard) {
+			opErrorFull(p, "`_` can only be used as a pattern", "for ignored bindings, write `let _ = expr`", "", "E0604")
+		}
 		// Osty: /tmp/selfhost_merged.osty:7564:5
 		opAdvance(p)
 		// Osty: /tmp/selfhost_merged.osty:7565:5
@@ -21556,7 +21559,11 @@ func opExprToForPattern(p *OstyParser, exprIdx int) int {
 		pat := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
 		_ = pat
 		// Osty: /tmp/selfhost_merged.osty:8337:12
-		pat.extra = astPatternIdentKind()
+		if node.text == "_" {
+			pat.extra = astPatternWildcardKind()
+		} else {
+			pat.extra = astPatternIdentKind()
+		}
 		// Osty: /tmp/selfhost_merged.osty:8338:12
 		pat.text = node.text
 		// Osty: /tmp/selfhost_merged.osty:8339:12
@@ -21669,13 +21676,17 @@ func opParseForStmt(p *OstyParser, labelIdx int) int {
 		// Osty: /tmp/selfhost_merged.osty:8396:9
 		pv := p.noStructLit
 		_ = pv
+		prevAllowExprWildcard := p.allowExprWildcard
+		_ = prevAllowExprWildcard
 		// Osty: /tmp/selfhost_merged.osty:8397:10
 		p.noStructLit = true
+		p.allowExprWildcard = true
 		// Osty: /tmp/selfhost_merged.osty:8398:9
 		expr := opParseExpr(p)
 		_ = expr
 		// Osty: /tmp/selfhost_merged.osty:8399:10
 		p.noStructLit = pv
+		p.allowExprWildcard = prevAllowExprWildcard
 		// Osty: /tmp/selfhost_merged.osty:8400:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && opPeek(p).text == "in" {
 			// Osty: /tmp/selfhost_merged.osty:8401:13

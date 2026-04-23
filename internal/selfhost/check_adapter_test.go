@@ -115,6 +115,19 @@ fn main() {
 }
 `),
 		},
+		{
+			name: "stable helper lowerings",
+			src: []byte(`fn main() {
+    let mut items = [1, 2]
+    let count = len(items)
+    items = append(items, count)
+    let more = append(items, count)
+    for (_, item) in enumerate(more) {
+        println(item)
+    }
+}
+`),
+		},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -125,6 +138,22 @@ fn main() {
 				t.Fatalf("CheckStructuredFromRun diverges from CheckSourceStructured\nlegacy=%#v\nfresh=%#v", legacy, fresh)
 			}
 		})
+	}
+}
+
+func TestRunDiagnosticsAllowDiscardInForInHead(t *testing.T) {
+	src := []byte(`fn main() {
+    let items = ["a", "b"]
+    for (_, item) in enumerate(items) {
+        println(item)
+    }
+}
+`)
+	run := Run(src)
+	for _, d := range run.Diagnostics() {
+		if d != nil && d.Code == "E0604" {
+			t.Fatalf("unexpected wildcard parse diagnostic in for-in head: %#v", d)
+		}
 	}
 }
 
