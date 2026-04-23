@@ -6080,6 +6080,34 @@ void *osty_rt_map_keys(void *raw_map) {
     return out;
 }
 
+/* osty_rt_map_keys_sorted_<suffix> — `map.keys()` + `list.sorted()`
+ * fused into one allocation. The unfused sequence creates the keys
+ * list, then allocates a *second* list inside sorted() and copies
+ * into it before qsort. Fusing saves the second list allocation —
+ * we qsort the freshly-built keys buffer in place before the caller
+ * ever sees it. Matches the `.keys().sorted()` shape every
+ * Map-aggregation bench (word_freq, record_pipeline, csv_parse) ends
+ * with. One variant per key suffix to route through the right
+ * comparator; i64 and string are wired because those are the key
+ * kinds the osty-vs-go sweep exercises. */
+void *osty_rt_map_keys_sorted_string(void *raw_map) {
+    void *keys = osty_rt_map_keys(raw_map);
+    osty_rt_list *list = osty_rt_list_cast(keys);
+    if (list->len > 1) {
+        qsort(list->data, (size_t)list->len, sizeof(void *), osty_rt_compare_string_ascending);
+    }
+    return keys;
+}
+
+void *osty_rt_map_keys_sorted_i64(void *raw_map) {
+    void *keys = osty_rt_map_keys(raw_map);
+    osty_rt_list *list = osty_rt_list_cast(keys);
+    if (list->len > 1) {
+        qsort(list->data, (size_t)list->len, sizeof(int64_t), osty_rt_compare_i64_ascending);
+    }
+    return keys;
+}
+
 // Every public keyed op takes the per-map lock, runs the raw op, and
 // releases. Recursive so that `update`'s outer lock + a re-entrant op
 // from a user callback (e.g. counts.len() inside f) don't deadlock.

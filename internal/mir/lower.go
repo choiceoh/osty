@@ -754,6 +754,35 @@ func (bs *bodyState) lowerBlockStmt(b *ir.Block) {
 	bs.popScope()
 }
 
+// mapKVFromMapType peels a Map<K, V> named type into its (K, V) type
+// args. Returns (nil, nil) for anything else. Used by the HIR-level
+// peephole matchers that fuse common Map access patterns before
+// reaching MIR emit.
+func mapKVFromMapType(t ir.Type) (ir.Type, ir.Type) {
+	named, ok := t.(*ir.NamedType)
+	if !ok || named.Name != "Map" || len(named.Args) != 2 {
+		return nil, nil
+	}
+	return named.Args[0], named.Args[1]
+}
+
+// mapKeyHasRuntimeSort reports whether `osty_rt_map_keys_sorted_<suf>`
+// exists for this key type. Only i64 and string are currently
+// implemented — floats would need a NaN-stable comparator and bools
+// don't benefit from sorting in practice.
+func mapKeyHasRuntimeSort(t ir.Type) bool {
+	if pt, ok := t.(*ir.PrimType); ok {
+		switch pt.Kind {
+		case ir.PrimInt, ir.PrimInt64, ir.PrimString:
+			return true
+		}
+	}
+	if nt, ok := t.(*ir.NamedType); ok {
+		return nt.Name == "Int" || nt.Name == "String"
+	}
+	return false
+}
+
 func (bs *bodyState) lowerLet(let *ir.LetStmt) {
 	t := let.Type
 	if isPoisonType(t) && let.Value != nil {
@@ -3254,6 +3283,36 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 			SpanV: mc.SpanV,
 		})
 		return
+	}
+
+	// Peephole: `map.keys().sorted()` fuses to a single
+	// IntrinsicMapKeysSorted runtime call, saving the intermediate
+	// unsorted-keys-list allocation. Every Map-aggregation bench
+	// (word_freq, record_pipeline, csv_parse) ends with a
+	// `totals.keys().sorted()` to fold the map into a stable
+	// checksum, so the saved allocation compounds across iterations.
+	// The rewrite is strict: only fires when the receiver is itself a
+	// MethodCall(.keys) on a Map<K, V> with a registered key
+	// comparator (i64 / string). Anything else falls through to the
+	// unfused lowering.
+	if mc.Name == "sorted" && len(mc.Args) == 0 {
+		if inner, ok := mc.Receiver.(*ir.MethodCall); ok &&
+			inner.Name == "keys" && len(inner.Args) == 0 {
+			if kT, _ := mapKVFromMapType(inner.Receiver.Type()); kT != nil && mapKeyHasRuntimeSort(kT) {
+				mapOp := bs.lowerExprAsOperand(inner.Receiver)
+				destPtr := &dest
+				if isUnit(destT) {
+					destPtr = nil
+				}
+				bs.emit(&IntrinsicInstr{
+					Dest:  destPtr,
+					Kind:  IntrinsicMapKeysSorted,
+					Args:  []Operand{mapOp},
+					SpanV: mc.SpanV,
+				})
+				return
+			}
+		}
 	}
 
 	// Stdlib-intrinsic fast path: List / Map / Set / String / Bytes /
