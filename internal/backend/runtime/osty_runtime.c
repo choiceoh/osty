@@ -4797,7 +4797,6 @@ const char *osty_rt_byte_to_string(int8_t value) {
 
 const char *osty_rt_float_to_string(double value) {
     char buffer[64];
-    int precision;
 
     if (isnan(value)) {
         return osty_rt_string_dup_site("NaN", 3, "runtime.float.to_string");
@@ -4809,18 +4808,8 @@ const char *osty_rt_float_to_string(double value) {
         return osty_rt_string_dup_site("+Inf", 4, "runtime.float.to_string");
     }
 
-    buffer[0] = '\0';
-    for (precision = 1; precision <= 17; precision++) {
-        char *end = NULL;
-        double parsed;
-
-        if (snprintf(buffer, sizeof(buffer), "%.*g", precision, value) < 0) {
-            osty_rt_abort("failed to format Float as String");
-        }
-        parsed = strtod(buffer, &end);
-        if (end != NULL && *end == '\0' && osty_rt_f64_same_bits(parsed, value)) {
-            break;
-        }
+    if (snprintf(buffer, sizeof(buffer), "%.6f", value) < 0) {
+        osty_rt_abort("failed to format Float as String");
     }
     return osty_rt_string_dup_site(buffer, strlen(buffer), "runtime.float.to_string");
 }

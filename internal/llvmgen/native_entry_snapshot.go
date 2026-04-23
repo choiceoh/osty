@@ -203,6 +203,7 @@ type llvmNativeModule struct {
 	globals            []*llvmNativeGlobal
 	structs            []*llvmNativeStruct
 	enums              []*llvmNativeEnum
+	interfaceImpls     []nativeInterfaceImpl
 	stringGlobals      []*LlvmStringGlobal
 	functions          []*llvmNativeFunction
 	needsListRuntime   bool
@@ -234,12 +235,15 @@ func llvmNativeEmitModule(mod *llvmNativeModule) string {
 	if mod == nil {
 		return llvmRenderModule("", "", nil)
 	}
-	typeDefs := make([]string, 0, len(mod.structs))
+	typeDefs := make([]string, 0, len(mod.structs)+1)
 	definitions := make([]string, 0, len(mod.globals)+len(mod.functions))
 	stringGlobals := append([]*LlvmStringGlobal(nil), mod.stringGlobals...)
 	nextStringID := len(stringGlobals)
 	loopMDDefs := make([]string, 0, len(mod.functions))
 	nextLoopMD := 0
+	if len(mod.interfaceImpls) != 0 {
+		typeDefs = append(typeDefs, "%osty.iface = type { ptr, ptr }")
+	}
 	for _, st := range mod.structs {
 		if st == nil {
 			continue
@@ -266,6 +270,11 @@ func llvmNativeEmitModule(mod *llvmNativeModule) string {
 		}
 		definitions = append(definitions, global.irName+" = internal "+kind+" "+global.llvmType+" "+global.init)
 	}
+	for _, impl := range mod.interfaceImpls {
+		if ir := strings.TrimSpace(string(emitNativeInterfaceVtable(impl))); ir != "" {
+			definitions = append(definitions, ir)
+		}
+	}
 	for _, fn := range mod.functions {
 		rendered := llvmNativeEmitFunction(fn, mod.globals, nextStringID, nextLoopMD)
 		nextStringID = rendered.nextStringID
@@ -273,6 +282,13 @@ func llvmNativeEmitModule(mod *llvmNativeModule) string {
 		definitions = append(definitions, rendered.definition)
 		stringGlobals = append(stringGlobals, rendered.stringGlobals...)
 		loopMDDefs = append(loopMDDefs, rendered.loopMDDefs...)
+	}
+	for _, impl := range mod.interfaceImpls {
+		for _, method := range impl.methods {
+			if ir := strings.TrimSpace(string(emitNativeInterfaceShim(impl, method))); ir != "" {
+				definitions = append(definitions, ir)
+			}
+		}
 	}
 	definitions = append(definitions, loopMDDefs...)
 	return llvmRenderModuleWithRuntimeDeclarations(
@@ -1132,7 +1148,7 @@ func llvmNativeEvalExpr(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
 //
 //	<slot> = alloca %<S>
 //	store %<S> <concrete>, ptr <slot>
-//	<t1> = insertvalue %osty.iface undef, ptr <slot>, 0
+//	<t1> = insertvalue %osty.iface zeroinitializer, ptr <slot>, 0
 //	<t2> = insertvalue %osty.iface <t1>, ptr <vtable_sym>, 1
 //
 // and returns a value pointing at %osty.iface. `expr.name` carries
@@ -1145,7 +1161,7 @@ func llvmNativeEvalInterfaceBox(emitter *LlvmEmitter, expr *llvmNativeExpr) *Llv
 	concrete := llvmNativeEvalExpr(emitter, expr.childExprs[0])
 	slot := llvmSpillToSlot(emitter, concrete)
 	step1 := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %%osty.iface undef, ptr %s, 0", step1, slot.name))
+	emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %%osty.iface zeroinitializer, ptr %s, 0", step1, slot.name))
 	step2 := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %%osty.iface %s, ptr %s, 1", step2, step1, expr.name))
 	return &LlvmValue{typ: "%osty.iface", name: step2}
@@ -1423,6 +1439,8 @@ func llvmNativeEvalUnary(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue 
 		return value
 	case "!":
 		return llvmNotI1(emitter, value)
+	case "~":
+		return llvmBinaryI64(emitter, "xor", value, llvmIntLiteral(-1))
 	default:
 		if expr.llvmType == "double" {
 			return llvmBinaryF64(emitter, llvmFloatBinaryInstruction("-"), llvmNativeZeroValue("double"), value)

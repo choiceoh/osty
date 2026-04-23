@@ -308,7 +308,6 @@ func tryNativeOwnedModule(mod *ostyir.Module, opts Options) ([]byte, bool, error
 	}
 	out := []byte(llvmNativeEmitModule(nativeMod))
 	out = withDataLayout(out, nativeMod.target)
-	out = appendNativeInterfaceSurface(out, mod, nativeMod)
 	out = appendNativeClosureThunks(out, nativeMod.projectionCtx)
 	return out, true, nil
 }
@@ -533,6 +532,7 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 	out.needsMapRuntime = ctx.needsMapRT
 	out.needsSetRuntime = ctx.needsSetRT
 	out.needsStringRuntime = ctx.needsStringRT
+	out.interfaceImpls = collectNativeInterfaceImpls(mod)
 	out.projectionCtx = ctx
 	out.extraRuntimeDecls = append(out.extraRuntimeDecls, ctx.runtimeDecls...)
 	return out, true
@@ -2822,6 +2822,15 @@ func nativeConstFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (nativeConstV
 				return nativeConstValue{llvmType: "i1", init: strconv.FormatBool(value.init != "true")}, true
 			}
 			return nativeConstValue{}, false
+		case "~":
+			if value.llvmType != "i64" {
+				return nativeConstValue{}, false
+			}
+			n, err := strconv.ParseInt(value.init, 10, 64)
+			if err != nil {
+				return nativeConstValue{}, false
+			}
+			return nativeConstValue{llvmType: "i64", init: strconv.FormatInt(^n, 10)}, true
 		default:
 			return nativeConstValue{}, false
 		}
@@ -5474,6 +5483,8 @@ func nativeUnaryOpString(op ostyir.UnOp) string {
 		return "+"
 	case ostyir.UnNot:
 		return "!"
+	case ostyir.UnBitNot:
+		return "~"
 	default:
 		return ""
 	}
