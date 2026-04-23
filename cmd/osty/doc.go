@@ -106,7 +106,7 @@ func runDoc(args []string, flags cliFlags) {
 
 	var pkgDoc *docgen.SelfDocPackage
 	if info.IsDir() {
-		pkg, err := resolve.LoadPackage(path)
+		pkg, err := resolve.LoadPackageArenaFirst(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty doc: %v\n", err)
 			os.Exit(1)
@@ -233,7 +233,7 @@ func runWorkspaceDoc(root, format, outPath, title string,
 	}
 	ws.Stdlib = stdlib.LoadCached()
 	for _, p := range resolve.WorkspacePackagePaths(root) {
-		_, _ = ws.LoadPackage(p)
+		_, _ = ws.LoadPackageArenaFirst(p)
 	}
 
 	// Build docgen Packages keyed by the workspace's import paths so

@@ -176,3 +176,43 @@ func loadPackageNativePaths(paths []string, dir, name string, transform SourceTr
 	}
 	return pkg, nil
 }
+
+// LoadPackageArenaFirst is the recommended loader for CLI / pipeline /
+// LSP / cihost consumers that want the astbridge-free parse while still
+// handing downstream passes a Package with pf.File / pf.CanonicalSource
+// populated in the same shape LoadPackage produced. Internally it runs
+// LoadPackageForNative, EnsureFiles (lazy astbridge lowering per file),
+// and MaterializeCanonicalSources. Phase 1c.2 migration target — see
+// SELFHOST_PORT_MATRIX.md.
+func LoadPackageArenaFirst(dir string) (*Package, error) {
+	return LoadPackageArenaFirstWithTransform(dir, nil)
+}
+
+// LoadPackageArenaFirstWithTransform is LoadPackageArenaFirst plus an
+// optional pre-parse source transform (e.g. airepair).
+func LoadPackageArenaFirstWithTransform(dir string, transform SourceTransform) (*Package, error) {
+	pkg, err := LoadPackageForNativeWithTransform(dir, transform)
+	if err != nil {
+		return nil, err
+	}
+	pkg.EnsureFiles()
+	pkg.MaterializeCanonicalSources()
+	return pkg, nil
+}
+
+// LoadPackageArenaFirst is the Workspace-level sibling of the
+// package-level LoadPackageArenaFirst. Delegates to LoadPackageNative
+// (arena-first parse + lazy *ast.File lowering) and then materializes
+// canonical sources so downstream consumers observe the full legacy
+// Package shape.
+func (w *Workspace) LoadPackageArenaFirst(dotPath string) (*Package, error) {
+	pkg, err := w.LoadPackageNative(dotPath)
+	if err != nil {
+		return nil, err
+	}
+	if pkg != nil {
+		pkg.EnsureFiles()
+		pkg.MaterializeCanonicalSources()
+	}
+	return pkg, nil
+}

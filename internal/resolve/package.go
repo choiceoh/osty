@@ -2,6 +2,7 @@ package resolve
 
 import (
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/selfhost"
@@ -142,6 +143,27 @@ func (pkg *Package) EnsureFiles() {
 	}
 	for _, pf := range pkg.Files {
 		pf.EnsureFile()
+	}
+}
+
+// MaterializeCanonicalSources populates pf.CanonicalSource /
+// pf.CanonicalMap on every file in pkg when either is missing and a
+// lowered *ast.File is available. Needed after arena-first loading
+// (LoadPackageForNative → EnsureFiles) so consumers that project
+// canonical-source spans (native checker bridge, seedgen, LSP query
+// engine) see the same shape LoadPackage's eager loader produces.
+//
+// Idempotent: files that already carry CanonicalSource are skipped.
+// Safe to call before or after ResolvePackage / ResolveAll.
+func (pkg *Package) MaterializeCanonicalSources() {
+	if pkg == nil {
+		return
+	}
+	for _, pf := range pkg.Files {
+		if pf == nil || pf.File == nil || len(pf.CanonicalSource) > 0 {
+			continue
+		}
+		pf.CanonicalSource, pf.CanonicalMap = canonical.SourceWithMap(pf.Source, pf.File)
 	}
 }
 
