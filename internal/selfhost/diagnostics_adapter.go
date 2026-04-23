@@ -20,32 +20,7 @@ func (r *FrontendRun) Diagnostics() []*diag.Diagnostic {
 }
 
 func dedupeDiagnostics(in []*diag.Diagnostic) []*diag.Diagnostic {
-	if len(in) <= 1 {
-		if len(in) == 1 && in[0] == nil {
-			return in[:0]
-		}
-		return in
-	}
 	out := in[:0]
-	if len(in) <= 4 {
-		for _, d := range in {
-			if d == nil {
-				continue
-			}
-			pos := d.PrimaryPos()
-			dup := false
-			for _, seen := range out {
-				if seen != nil && seen.PrimaryPos() == pos {
-					dup = true
-					break
-				}
-			}
-			if !dup {
-				out = append(out, d)
-			}
-		}
-		return out
-	}
 	seen := map[token.Pos]bool{}
 	for _, d := range in {
 		if d == nil {
