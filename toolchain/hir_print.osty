@@ -575,7 +575,7 @@ fn hirPrintTupleExpr(e: HirExpr, indent: Int) -> String {
 
 fn hirPrintMapExpr(e: HirExpr, indent: Int) -> String {
     let mut parts: List<String> = []
-    parts.push("{")
+    parts.push("\{")
     let mut i = 0
     for en in e.mapEntries {
         if i > 0 {
@@ -586,7 +586,7 @@ fn hirPrintMapExpr(e: HirExpr, indent: Int) -> String {
         parts.push(hirPrintExpr(en.value, indent))
         i = i + 1
     }
-    parts.push("}")
+    parts.push("\}")
     strings.join(parts, "")
 }
 
@@ -594,7 +594,7 @@ fn hirPrintStructLitExpr(e: HirExpr, indent: Int) -> String {
     let mut parts: List<String> = []
     parts.push("(")
     parts.push(e.structTypeName)
-    parts.push(" {")
+    parts.push(" \{")
     let mut i = 0
     for f in e.structFields {
         if i > 0 {
@@ -613,7 +613,7 @@ fn hirPrintStructLitExpr(e: HirExpr, indent: Int) -> String {
         parts.push(" ..")
         parts.push(hirPrintExpr(e.structSpread[0], indent))
     }
-    parts.push("})")
+    parts.push("\})")
     strings.join(parts, "")
 }
 
@@ -731,9 +731,9 @@ fn hirPrintStringLit(e: HirExpr) -> String {
         if part.isLit {
             out = out + hirPrintEscapeString(part.lit)
         } else if part.expr.len() > 0 {
-            out = out + "{"
+            out = out + "\{"
             out = out + hirPrintExpr(part.expr[0], 0)
-            out = out + "}"
+            out = out + "\}"
         }
     }
     out + "\""
@@ -786,7 +786,7 @@ fn hirPrintTuplePattern(p: HirPattern) -> String {
 fn hirPrintStructPattern(p: HirPattern) -> String {
     let mut parts: List<String> = []
     parts.push(p.structTypeName)
-    parts.push(" { ")
+    parts.push(" \{ ")
     let mut i = 0
     for f in p.structFields {
         if i > 0 {
@@ -805,7 +805,7 @@ fn hirPrintStructPattern(p: HirPattern) -> String {
         }
         parts.push("..")
     }
-    parts.push(" }")
+    parts.push(" \}")
     strings.join(parts, "")
 }
 
