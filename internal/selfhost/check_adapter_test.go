@@ -61,11 +61,17 @@ func TestRunDefersLexAdaptationUntilTokensRequested(t *testing.T) {
 	if run.adapted {
 		t.Fatal("Run eagerly adapted lex surfaces")
 	}
+	if run.lexDiags != nil {
+		t.Fatal("Run eagerly adapted lexer diagnostics")
+	}
 	if diags := run.Diagnostics(); len(diags) != 0 {
 		t.Fatalf("Diagnostics = %#v, want none", diags)
 	}
 	if run.adapted {
 		t.Fatal("Diagnostics() should not force token/comment adaptation")
+	}
+	if run.lexDiags == nil {
+		t.Fatal("Diagnostics() should populate lexer diagnostics lazily")
 	}
 	if toks := run.Tokens(); len(toks) == 0 {
 		t.Fatal("Tokens() returned no tokens")
