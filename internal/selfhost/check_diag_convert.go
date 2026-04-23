@@ -1,6 +1,7 @@
 package selfhost
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/osty/osty/internal/diag"
@@ -20,9 +21,10 @@ import (
 // Callers that want per-record control should use
 // CheckDiagnosticRecordAsDiag instead and filter before conversion.
 func CheckDiagnosticsAsDiag(src []byte, records []CheckDiagnosticRecord) []*diag.Diagnostic {
+	index := newDiagLineIndex(src)
 	out := make([]*diag.Diagnostic, 0, len(records))
 	for _, rec := range records {
-		if converted := CheckDiagnosticRecordAsDiag(src, rec); converted != nil {
+		if converted := checkDiagnosticRecordAsDiagWithIndex(src, index, rec); converted != nil {
 			out = append(out, converted)
 		}
 	}
@@ -37,9 +39,13 @@ func CheckDiagnosticsAsDiag(src []byte, records []CheckDiagnosticRecord) []*diag
 // native checker occasionally reports a past-EOF end when the
 // originating token is the trailing EOF marker, and we'd rather emit
 // a clamped span than drop the diagnostic. Line/column come from a
-// single linear scan of src (no rune table needed; the native
-// checker's offsets are already byte-accurate).
+// lightweight line-start index over src (no rune table needed; the
+// native checker's offsets are already byte-accurate).
 func CheckDiagnosticRecordAsDiag(src []byte, rec CheckDiagnosticRecord) *diag.Diagnostic {
+	return checkDiagnosticRecordAsDiagWithIndex(src, newDiagLineIndex(src), rec)
+}
+
+func checkDiagnosticRecordAsDiagWithIndex(src []byte, index diagLineIndex, rec CheckDiagnosticRecord) *diag.Diagnostic {
 	if rec.Code == "" && rec.Message == "" {
 		return nil
 	}
@@ -55,7 +61,7 @@ func CheckDiagnosticRecordAsDiag(src []byte, rec CheckDiagnosticRecord) *diag.Di
 	if rec.File != "" {
 		b = b.File(rec.File)
 	}
-	b = b.Primary(byteRangeSpanForDiag(src, rec.Start, rec.End), "")
+	b = b.Primary(index.byteRangeSpan(rec.Start, rec.End), "")
 	for _, note := range rec.Notes {
 		if strings.TrimSpace(note) == "" {
 			continue
@@ -65,43 +71,60 @@ func CheckDiagnosticRecordAsDiag(src []byte, rec CheckDiagnosticRecord) *diag.Di
 	return b.Build()
 }
 
-// byteRangeSpanForDiag builds a diag.Span over the [start, end) byte
-// range in src. Mirrors internal/check/host_boundary.go:byteRangeSpan
-// so both entry points produce identical spans for equivalent input
-// — keep the two in sync.
-func byteRangeSpanForDiag(src []byte, start, end int) diag.Span {
-	if start < 0 {
-		start = 0
+type diagLineIndex struct {
+	starts []int
+	total  int
+}
+
+func newDiagLineIndex(src []byte) diagLineIndex {
+	starts := make([]int, 1, 1+len(src)/32)
+	starts[0] = 0
+	for i, b := range src {
+		if b == '\n' {
+			starts = append(starts, i+1)
+		}
 	}
+	return diagLineIndex{starts: starts, total: len(src)}
+}
+
+func (idx diagLineIndex) byteRangeSpan(start, end int) diag.Span {
+	start = idx.clampOffset(start)
+	end = idx.clampOffset(end)
 	if end < start {
 		end = start
 	}
-	if len(src) == 0 {
+	if idx.total == 0 {
 		p := token.Pos{Line: 1, Column: 1, Offset: 0}
 		return diag.Span{Start: p, End: p}
 	}
-	if start > len(src) {
-		start = len(src)
-	}
-	if end > len(src) {
-		end = len(src)
-	}
 	return diag.Span{
-		Start: positionAtOffsetForDiag(src, start),
-		End:   positionAtOffsetForDiag(src, end),
+		Start: idx.positionAt(start),
+		End:   idx.positionAt(end),
 	}
 }
 
-func positionAtOffsetForDiag(src []byte, offset int) token.Pos {
-	line := 1
-	col := 1
-	for i := 0; i < offset && i < len(src); i++ {
-		if src[i] == '\n' {
-			line++
-			col = 1
-			continue
-		}
-		col++
+func (idx diagLineIndex) clampOffset(offset int) int {
+	if offset < 0 {
+		return 0
 	}
-	return token.Pos{Line: line, Column: col, Offset: offset}
+	if offset > idx.total {
+		return idx.total
+	}
+	return offset
+}
+
+func (idx diagLineIndex) positionAt(offset int) token.Pos {
+	offset = idx.clampOffset(offset)
+	lineIdx := sort.Search(len(idx.starts), func(i int) bool {
+		return idx.starts[i] > offset
+	}) - 1
+	if lineIdx < 0 {
+		lineIdx = 0
+	}
+	lineStart := idx.starts[lineIdx]
+	return token.Pos{
+		Line:   lineIdx + 1,
+		Column: offset - lineStart + 1,
+		Offset: offset,
+	}
 }

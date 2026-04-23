@@ -1,6 +1,7 @@
 package selfhost_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/osty/osty/internal/diag"
@@ -116,7 +117,7 @@ func TestCheckDiagnosticRecordAsDiagSeverityMapping(t *testing.T) {
 		{"warning", diag.Warning},
 		{"warn", diag.Warning},
 		{"WARN", diag.Warning},
-		{"", diag.Error},    // default
+		{"", diag.Error},     // default
 		{"info", diag.Error}, // unrecognized → default to Error (not silently downgraded)
 	}
 	for _, tc := range cases {
@@ -136,5 +137,58 @@ func TestCheckDiagnosticRecordAsDiagSeverityMapping(t *testing.T) {
 				t.Fatalf("severity for %q = %v, want %v", tc.severity, got.Severity, tc.want)
 			}
 		})
+	}
+}
+
+func TestCheckDiagnosticRecordAsDiagPreservesOffsetMapping(t *testing.T) {
+	src := []byte("alpha\nbeta\ngamma\n")
+	got := selfhost.CheckDiagnosticRecordAsDiag(src, selfhost.CheckDiagnosticRecord{
+		Code:    "Eline",
+		Message: "mapped",
+		Start:   strings.Index(string(src), "beta"),
+		End:     strings.Index(string(src), "gamma"),
+	})
+	if got == nil {
+		t.Fatal("nil diagnostic")
+	}
+	if len(got.Spans) == 0 {
+		t.Fatal("missing primary span")
+	}
+	span := got.Spans[0].Span
+	if span.Start.Line != 2 || span.Start.Column != 1 {
+		t.Fatalf("start = %d:%d, want 2:1", span.Start.Line, span.Start.Column)
+	}
+	if span.End.Line != 3 || span.End.Column != 1 {
+		t.Fatalf("end = %d:%d, want 3:1", span.End.Line, span.End.Column)
+	}
+}
+
+func BenchmarkCheckDiagnosticsAsDiag(b *testing.B) {
+	var src strings.Builder
+	src.Grow(32 * 256)
+	records := make([]selfhost.CheckDiagnosticRecord, 0, 256)
+	offset := 0
+	for i := 0; i < 256; i++ {
+		line := "let value = 1234567890\n"
+		start := offset + len("let ")
+		end := start + len("value")
+		src.WriteString(line)
+		offset += len(line)
+		records = append(records, selfhost.CheckDiagnosticRecord{
+			Code:     "Ebench",
+			Message:  "bench",
+			Severity: "error",
+			Start:    start,
+			End:      end,
+		})
+	}
+	data := []byte(src.String())
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		diags := selfhost.CheckDiagnosticsAsDiag(data, records)
+		if len(diags) != len(records) {
+			b.Fatalf("len(diags) = %d, want %d", len(diags), len(records))
+		}
 	}
 }

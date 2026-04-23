@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 
@@ -772,43 +773,65 @@ func convertNativeDiag(src []byte, d api.CheckDiagnosticRecord) *diag.Diagnostic
 }
 
 // byteRangeSpan builds a `diag.Span` for a [start, end) byte range
-// into `src`. It walks the bytes to recover 1-based line/column.
-// Clamping keeps downstream renderers robust even when the native
-// checker reports offsets beyond EOF.
+// into `src`. A lightweight line-start index keeps repeated
+// conversions off the O(offset) byte-walk path while preserving the
+// same 1-based line/column shape. Clamping keeps downstream
+// renderers robust even when the native checker reports offsets
+// beyond EOF.
 func byteRangeSpan(src []byte, start, end int) diag.Span {
-	if start < 0 {
-		start = 0
-	}
+	idx := newSelfhostDiagLineIndex(src)
+	start = idx.clampOffset(start)
+	end = idx.clampOffset(end)
 	if end < start {
 		end = start
 	}
-	if len(src) == 0 {
+	if idx.total == 0 {
 		p := token.Pos{Line: 1, Column: 1, Offset: 0}
 		return diag.Span{Start: p, End: p}
 	}
-	if start > len(src) {
-		start = len(src)
-	}
-	if end > len(src) {
-		end = len(src)
-	}
-	startPos := positionAtOffset(src, start)
-	endPos := positionAtOffset(src, end)
-	return diag.Span{Start: startPos, End: endPos}
+	return diag.Span{Start: idx.positionAt(start), End: idx.positionAt(end)}
 }
 
-func positionAtOffset(src []byte, offset int) token.Pos {
-	line := 1
-	col := 1
-	for i := 0; i < offset && i < len(src); i++ {
-		if src[i] == '\n' {
-			line++
-			col = 1
-			continue
+type selfhostDiagLineIndex struct {
+	starts []int
+	total  int
+}
+
+func newSelfhostDiagLineIndex(src []byte) selfhostDiagLineIndex {
+	starts := make([]int, 1, 1+len(src)/32)
+	starts[0] = 0
+	for i, b := range src {
+		if b == '\n' {
+			starts = append(starts, i+1)
 		}
-		col++
 	}
-	return token.Pos{Line: line, Column: col, Offset: offset}
+	return selfhostDiagLineIndex{starts: starts, total: len(src)}
+}
+
+func (idx selfhostDiagLineIndex) clampOffset(offset int) int {
+	if offset < 0 {
+		return 0
+	}
+	if offset > idx.total {
+		return idx.total
+	}
+	return offset
+}
+
+func (idx selfhostDiagLineIndex) positionAt(offset int) token.Pos {
+	offset = idx.clampOffset(offset)
+	lineIdx := sort.Search(len(idx.starts), func(i int) bool {
+		return idx.starts[i] > offset
+	}) - 1
+	if lineIdx < 0 {
+		lineIdx = 0
+	}
+	lineStart := idx.starts[lineIdx]
+	return token.Pos{
+		Line:   lineIdx + 1,
+		Column: offset - lineStart + 1,
+		Offset: offset,
+	}
 }
 
 type selfhostSpanKey struct {

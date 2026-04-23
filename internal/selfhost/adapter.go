@@ -79,7 +79,7 @@ type FrontendRun struct {
 // Run executes the self-hosted lexer and parser once and keeps all adapted
 // public surfaces available through FrontendRun methods.
 func Run(src []byte) *FrontendRun {
-	return runFrontend(src, true)
+	return runFrontend(src, false)
 }
 
 func runFrontend(src []byte, adaptTokens bool) *FrontendRun {
