@@ -1954,7 +1954,7 @@ func (bs *bodyState) lowerExprAsOperand(e ir.Expr) Operand {
 		if !x.Optional {
 			recvPlace, ok := bs.lowerExprToPlace(x.X)
 			if !ok {
-				t := x.X.Type()
+				t := bs.recoveredTypeOf(x.X)
 				tmp := bs.freshTemp(t, exprSpan(x.X))
 				bs.lowerExprInto(x.X, tmp, t)
 				recvPlace = Place{Local: tmp}
@@ -1992,6 +1992,23 @@ func (bs *bodyState) lowerExprAsOperand(e ir.Expr) Operand {
 	tmp := bs.freshTemp(t, exprSpan(e))
 	bs.lowerExprInto(e, tmp, t)
 	return &CopyOp{Place: Place{Local: tmp}, T: t}
+}
+
+// recoveredTypeOf returns e.Type() when it's populated, otherwise
+// falls back to recoverOperandType so callers that freshTemp directly
+// off an expression's declared type don't punch ErrType into the
+// temp's width. Callers in FieldExpr / TupleAccess / IndexExpr fallback
+// paths use this to patch the receiver temp for chained access like
+// `f(x).field` where the checker dropped the call's return type.
+func (bs *bodyState) recoveredTypeOf(e ir.Expr) ir.Type {
+	t := e.Type()
+	if t != nil && t != ir.ErrTypeVal {
+		return t
+	}
+	if rt := bs.recoverOperandType(e); rt != nil && rt != ir.ErrTypeVal {
+		return rt
+	}
+	return t
 }
 
 // recoverOperandType patches the subset of expression shapes that reach
@@ -2109,8 +2126,16 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 			}
 		}
 	case *ir.BinaryExpr:
-		// Binary ops in interp position: integer arithmetic is the
-		// dominant case. Recover from operand types.
+		// Comparison / logical ops always yield Bool regardless of
+		// operand types — that alone is enough to un-poison temps
+		// backing `a == b` / `a < b` / `x && y` when the checker
+		// skipped them.
+		switch x.Op {
+		case ir.BinEq, ir.BinNeq, ir.BinLt, ir.BinLeq, ir.BinGt, ir.BinGeq, ir.BinAnd, ir.BinOr:
+			return ir.TBool
+		}
+		// Arithmetic / bitwise: recover from whichever operand still
+		// carries a concrete type.
 		lt := x.Left.Type()
 		rt := x.Right.Type()
 		if lt != nil && lt != ir.ErrTypeVal {
@@ -2118,6 +2143,15 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		}
 		if rt != nil && rt != ir.ErrTypeVal {
 			return rt
+		}
+	case *ir.StructLit:
+		// `StructName { ... }` whose checker-side type got poisoned.
+		// TypeName survives because it's parsed, so synthesise a
+		// NamedType as long as the struct is in this module's table.
+		if x.TypeName != "" {
+			if _, ok := bs.l.structs[x.TypeName]; ok {
+				return &ir.NamedType{Name: x.TypeName}
+			}
 		}
 	}
 	return nil
@@ -2239,7 +2273,7 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 			recvPlace, ok := bs.lowerExprToPlace(x.X)
 			if !ok {
 				// Fall back: lower X into a temp.
-				t := x.X.Type()
+				t := bs.recoveredTypeOf(x.X)
 				tmp := bs.freshTemp(t, exprSpan(x.X))
 				bs.lowerExprInto(x.X, tmp, t)
 				recvPlace = Place{Local: tmp}
@@ -2257,7 +2291,7 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 	case *ir.TupleAccess:
 		recvPlace, ok := bs.lowerExprToPlace(x.X)
 		if !ok {
-			t := x.X.Type()
+			t := bs.recoveredTypeOf(x.X)
 			tmp := bs.freshTemp(t, exprSpan(x.X))
 			bs.lowerExprInto(x.X, tmp, t)
 			recvPlace = Place{Local: tmp}
@@ -2266,7 +2300,7 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 	case *ir.IndexExpr:
 		recvPlace, ok := bs.lowerExprToPlace(x.X)
 		if !ok {
-			t := x.X.Type()
+			t := bs.recoveredTypeOf(x.X)
 			tmp := bs.freshTemp(t, exprSpan(x.X))
 			bs.lowerExprInto(x.X, tmp, t)
 			recvPlace = Place{Local: tmp}
@@ -2377,8 +2411,12 @@ func (bs *bodyState) lowerIdent(id *ir.Ident) Operand {
 	case ir.IdentVariant:
 		// bare variant → aggregate with no payload.
 		t := id.T
-		if t == nil {
-			t = ir.ErrTypeVal
+		if t == nil || t == ir.ErrTypeVal {
+			if enumName := bs.l.enumForVariant(id.Name); enumName != "" {
+				t = &ir.NamedType{Name: enumName}
+			} else if t == nil {
+				t = ir.ErrTypeVal
+			}
 		}
 		tmp := bs.freshTemp(t, id.SpanV)
 		idx := bs.l.variantIndexByName(t, id.Name)
@@ -3308,8 +3346,14 @@ func (bs *bodyState) lowerIntrinsicCallInto(ic *ir.IntrinsicCall, dest *Place) {
 
 func (bs *bodyState) lowerStructLit(sl *ir.StructLit, hint Type) RValue {
 	t := sl.T
-	if t == nil {
-		t = hint
+	if t == nil || t == ir.ErrTypeVal {
+		if hint != nil && hint != ir.ErrTypeVal {
+			t = hint
+		} else if sl.TypeName != "" {
+			if _, ok := bs.l.structs[sl.TypeName]; ok {
+				t = &ir.NamedType{Name: sl.TypeName}
+			}
+		}
 	}
 	info := bs.l.structFromType(t, sl.TypeName)
 	fieldOrder := bs.l.fieldNames(info)
@@ -4141,6 +4185,25 @@ func (l *lowerer) variantLayout(enum, name string) *variantInfo {
 		}
 	}
 	return nil
+}
+
+// enumForVariant returns the declared enum name that contains a
+// variant of the given name, or "" when no such enum exists in the
+// current module. Used by MIR recovery to un-poison bare variant
+// references (`AstNFnDecl`, `AstNLet`, …) whose checker-side type was
+// dropped after a top-level checker bailout.
+func (l *lowerer) enumForVariant(name string) string {
+	for enumName, e := range l.enums {
+		if e == nil {
+			continue
+		}
+		for _, v := range e.Variants {
+			if v.Name == name {
+				return enumName
+			}
+		}
+	}
+	return ""
 }
 
 func (l *lowerer) variantIndexByName(t ir.Type, name string) int {
