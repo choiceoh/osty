@@ -48677,7 +48677,10 @@ func privilegeWalkTypeAlias(cx *ElabCx, arena *AstArena, node *AstNode) {
 	// Osty: /tmp/selfhost_merged.osty:24273:5
 	privilegeCheckAnnotationsOn(cx, arena, node)
 	// Osty: /tmp/selfhost_merged.osty:24274:5
-	for _, gpIdx := range node.children2 {
+	// NOTE: keep in lockstep with toolchain/check_gates.osty —
+	// TypeAlias stores generics on `children`, not `children2`. See
+	// opParseTypeAliasDecl in toolchain/parser.osty:2240.
+	for _, gpIdx := range node.children {
 		// Osty: /tmp/selfhost_merged.osty:24275:9
 		privilegeWalkGenericParam(cx, arena, gpIdx)
 	}

@@ -5,31 +5,56 @@ import (
 	"testing"
 
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/parser"
-	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/stdlib"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/types"
 )
 
-// runEndToEnd parses, resolves, and runs every check-level pass
-// (privilege gate + pod shape + no_alloc) against a source snippet,
-// returning the combined diagnostic list. Used by the RawPtr spike to
-// verify that registering `RawPtr` as a prelude-visible primitive does
-// not trigger unexpected resolve or typecheck errors on real fixtures.
+// runEndToEnd drives the self-host checker (which runs §19 gates +
+// resolve + elab internally via toolchain/check_gates.osty::runCheckGates)
+// against src and returns the gate-band plus resolver diagnostics lifted
+// into diag.Diagnostic form. This narrows the view to what the retired
+// Go-side `runPrivilegeGate + runPodShapeChecks + runNoAllocChecks +
+// res.Diags` stack used to surface — full elab adds its own error
+// classes (E0700 type mismatches etc.) that the RawPtr tests never
+// asserted against. When privileged is true, E0770 is stripped after
+// the fact so callers observing privileged-mode output see the same
+// shape the host boundary produces (host_boundary.go strips the code
+// via shouldSuppressNativeDiag + nativeCheckerSummary).
 func runEndToEnd(t *testing.T, src string, privileged bool) []*diag.Diagnostic {
 	t.Helper()
-	file, parseDiags := parser.ParseDiagnostics([]byte(src))
-	if len(parseDiags) != 0 {
-		t.Fatalf("parse diagnostics: %v", parseDiags)
+	result := selfhost.CheckSourceStructured([]byte(src))
+	diags := selfhost.CheckDiagnosticsAsDiag([]byte(src), result.Diagnostics)
+	out := make([]*diag.Diagnostic, 0, len(diags))
+	for _, d := range diags {
+		if d == nil {
+			continue
+		}
+		if privileged && d.Code == diag.CodeRuntimePrivilegeViolation {
+			continue
+		}
+		if isGateOrResolveDiagCode(d.Code) {
+			out = append(out, d)
+		}
 	}
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
-
-	var out []*diag.Diagnostic
-	out = append(out, res.Diags...)
-	out = append(out, runPrivilegeGate(file, privileged)...)
-	out = append(out, runPodShapeChecks(file)...)
-	out = append(out, runNoAllocChecks(file, res)...)
 	return out
+}
+
+// isGateOrResolveDiagCode matches the diagnostic codes the original
+// runEndToEnd harness surfaced: the four §19 policy gates + the
+// resolver band. Elab-level errors (E0700 family) are intentionally
+// omitted — the original path did not run elab.
+func isGateOrResolveDiagCode(code string) bool {
+	switch code {
+	case "E0770", "E0771", "E0772", "E0773":
+		return true
+	}
+	// Resolver codes are E0400–E0506 (see internal/diag/codes.go).
+	if len(code) == 5 && code[0] == 'E' {
+		if code >= "E0400" && code <= "E0506" {
+			return true
+		}
+	}
+	return false
 }
 
 // --- RawPtr is a real primitive ---

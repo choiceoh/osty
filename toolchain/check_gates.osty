@@ -520,7 +520,12 @@ fn privilegeWalkInterfaceDecl(cx: ElabCx, arena: AstArena, node: AstNode) {
 
 fn privilegeWalkTypeAlias(cx: ElabCx, arena: AstArena, node: AstNode) {
     privilegeCheckAnnotationsOn(cx, arena, node)
-    for gpIdx in node.children2 {
+    // TypeAlias stores generics on `children` (NOT children2 as
+    // Fn/Struct/Enum/Interface do) — see opParseTypeAliasDecl in
+    // toolchain/parser.osty:2240. Walking `children2` here silently
+    // misses `pub type PodList<T: Pod> = List<T>` and lets the user
+    // escape the §19.4 Pod-bound gate.
+    for gpIdx in node.children {
         privilegeWalkGenericParam(cx, arena, gpIdx)
     }
     // Alias target: parsers vary across struct/enum/typealias on which
