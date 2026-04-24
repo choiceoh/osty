@@ -2456,11 +2456,6 @@ pub fn astPrettyPrint(file: AstFile) -> String {
 }
 
 fn astPPNode(arena: AstArena, idx: Int, depth: Int, lines: List<String>) -> List<String> {
-    // Rename the mutable alias away from `lines` so bootstrap-gen
-    // doesn't emit `lines := lines` (Go compile error: "no new
-    // variables on left side of :=" when the parameter shares the
-    // identifier). The List is heap-managed so `push` in place and
-    // the return value carry the same identity either way.
     let mut out = lines
     if idx < 0 {
         return out

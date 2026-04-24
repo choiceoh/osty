@@ -109,10 +109,6 @@ pub fn occursCheck(tys: TyArena, solver: Solver, varId: Int, ty: Int) -> Bool {
         return false
     }
     let kind = tyKindAt(tys, walked)
-    // Single-expression arms only — the bootstrap Osty→Go
-    // transpiler miscompiles match arms whose body is a brace block
-    // with an early `return`. `||` gives the same short-circuit
-    // behaviour the early-return form had.
     match kind {
         TkVar      -> tyVarIdAt(tys, walked) == varId,
         TkNamed    -> occursInList(tys, solver, varId, tyArgsAt(tys, walked)),
@@ -297,9 +293,6 @@ fn zonkAt(env: CheckEnv, solver: Solver, ty: Int, depth: Int) -> Int {
     }
     let walked = solverWalk(env.tys, solver, ty)
     let kind = tyKindAt(env.tys, walked)
-    // Compound arms delegate to helpers so the match body stays
-    // single-expression — see note on checkResolveAliasDeepAt for
-    // the transpiler limitation driving this.
     match kind {
         TkNamed    -> zonkAtNamed(env, solver, walked, depth),
         TkTuple    -> zonkAtTuple(env, solver, walked, depth),

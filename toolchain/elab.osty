@@ -406,8 +406,6 @@ fn unOpResultType(env: CheckEnv, op: UnOp, inner: Int, start: Int, end: Int) -> 
     if tyIsBad(tys, inner) {
         return inner
     }
-    // Each arm delegates to a helper so the match body stays a
-    // single expression per arm (bootstrap transpiler workaround).
     match op {
         UoNot     -> unOpNot(env, inner, start, end),
         UoNeg     -> unOpNumeric(env, "-", inner, start, end),
