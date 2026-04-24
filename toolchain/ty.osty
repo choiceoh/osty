@@ -687,6 +687,50 @@ fn primKindName(prim: PrimKind) -> String {
 }
 
 // ---------------------------------------------------------------------
+// Escape analysis (E0743 / §8.1 G13). `Handle<T>` and `Group` (alias
+// for `TaskGroup`) are non-escaping structured-concurrency capabilities.
+// `tyEscapingCapabilityHead` returns the head name ("Handle", "Group",
+// "TaskGroup") of the first escape-banned type reached while walking
+// the structural type tree, or "" if `idx` is capability-free. Callers
+// use the returned head to shape the diagnostic message at positions
+// where storage/return would let the value outlive its owning group.
+// `Group.spawn` is the one legitimate producer of `Handle<_>` — call
+// sites check against this helper and exempt that signature.
+// ---------------------------------------------------------------------
+
+pub fn tyEscapingCapabilityHead(arena: TyArena, idx: Int) -> String {
+    if idx < 0 {
+        return ""
+    }
+    let node = tyGet(arena, idx)
+    match node.kind {
+        TkNamed -> {
+            if node.head == "Handle" || node.head == "Group" || node.head == "TaskGroup" {
+                return node.head
+            }
+            for arg in node.args {
+                let inner = tyEscapingCapabilityHead(arena, arg)
+                if inner != "" {
+                    return inner
+                }
+            }
+            ""
+        },
+        TkOptional -> tyEscapingCapabilityHead(arena, node.ret),
+        TkTuple -> {
+            for elem in node.args {
+                let inner = tyEscapingCapabilityHead(arena, elem)
+                if inner != "" {
+                    return inner
+                }
+            }
+            ""
+        },
+        _ -> "",
+    }
+}
+
+// ---------------------------------------------------------------------
 // Transitional bridge from the legacy string representation. Only
 // parses the exact dialect emitted by the old `frontCheckParseType`
 // (see `toolchain/check.osty:1293`); anything outside that grammar

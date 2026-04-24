@@ -735,6 +735,23 @@ fn collectFnDecl(
     let retTy = astTypeToTyInCollect(cx, node.left)
     let retEffective = if retTy >= 0 { retTy } else { tUnit(cx.env.tys) }
 
+    // §8.1 G13 / E0743: Handle<_> and Group/TaskGroup are non-escaping
+    // capabilities — banned from function return positions. Report at
+    // the return-type node span when present, otherwise the fn header.
+    if tyEscapingCapabilityHead(cx.env.tys, retEffective) != "" {
+        let retNode = if node.left >= 0 {
+            astArenaNodeAt(cx.ast.arena, node.left)
+        } else {
+            node
+        }
+        cx.env.diagnostics.push(diagNonEscapingEscape(
+            tyToString(cx.env.tys, retEffective),
+            "function return",
+            retNode.start,
+            retNode.end,
+        ))
+    }
+
     let receiverTy = if owner == "" {
         -1
     } else {
@@ -779,6 +796,16 @@ fn collectStructDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
                 let fieldTy = astTypeToTyInCollect(cx, member.right)
                 let effectiveTy = if fieldTy >= 0 { fieldTy } else { tErr(cx.env.tys) }
                 let hasDefault = member.left >= 0
+                // §8.1 G13 / E0743: struct fields can outlive the group
+                // that produced the capability, so banned here.
+                if tyEscapingCapabilityHead(cx.env.tys, effectiveTy) != "" {
+                    cx.env.diagnostics.push(diagNonEscapingEscape(
+                        tyToString(cx.env.tys, effectiveTy),
+                        "struct field",
+                        member.start,
+                        member.end,
+                    ))
+                }
                 let field = CheckFieldSig {
                     owner: name,
                     name: member.text,
@@ -823,6 +850,16 @@ fn collectEnumDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
                     }
                     if ty >= 0 {
                         fieldTys.push(ty)
+                        // §8.1 G13 / E0743: enum variant payloads outlive
+                        // the owning group just as struct fields do.
+                        if tyEscapingCapabilityHead(cx.env.tys, ty) != "" {
+                            cx.env.diagnostics.push(diagNonEscapingEscape(
+                                tyToString(cx.env.tys, ty),
+                                "enum variant payload",
+                                f.start,
+                                f.end,
+                            ))
+                        }
                     } else {
                         let _ = fIdx
                     }
@@ -869,6 +906,22 @@ fn collectTypeAlias(cx: ElabCx, declIdx: Int, node: AstNode) {
     let generics = collectGenericNames(cx, node.children)
     let target = astTypeToTyInCollect(cx, node.left)
     let ty = if target >= 0 { target } else { tErr(cx.env.tys) }
+    // §8.1 G13 / E0743: a type alias effectively declares a storable
+    // type — banning caps at aliases prevents laundering escape bans
+    // through `type H = Handle<Int>` usage later.
+    if tyEscapingCapabilityHead(cx.env.tys, ty) != "" {
+        let targetNode = if node.left >= 0 {
+            astArenaNodeAt(cx.ast.arena, node.left)
+        } else {
+            node
+        }
+        cx.env.diagnostics.push(diagNonEscapingEscape(
+            tyToString(cx.env.tys, ty),
+            "type alias",
+            targetNode.start,
+            targetNode.end,
+        ))
+    }
     checkRegisterAlias(cx.env, CheckAliasSig { name, ty, generics })
     checkRecordSymbol(cx.env, declIdx, "alias", name, "", ty, node.start, node.end)
 }
@@ -885,6 +938,16 @@ fn collectLetDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     }
     let declared = astTypeToTyInCollect(cx, declaredIdx)
     let ty = if declared >= 0 { declared } else { tErr(cx.env.tys) }
+    // §8.1 G13 / E0743: a module-scope `let` outlives any individual
+    // taskGroup body — banned from storing Handle/Group.
+    if declared >= 0 && tyEscapingCapabilityHead(cx.env.tys, ty) != "" {
+        cx.env.diagnostics.push(diagNonEscapingEscape(
+            tyToString(cx.env.tys, ty),
+            "module-level binding",
+            node.start,
+            node.end,
+        ))
+    }
     // Bind the name globally so ident lookups find it during
     // elaboration of fn bodies.
     checkBindSpan(cx.env, name, ty, node.flags == 1, node.start, node.end)
