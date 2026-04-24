@@ -34,7 +34,7 @@ fn main() {
 		"%Maybe = type { i64, i64 }",
 		"extractvalue %Maybe",
 		"icmp eq i64",
-		"call i32 (ptr, ...) @printf",
+		"call void @osty_rt_io_write",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)

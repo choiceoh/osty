@@ -18,7 +18,9 @@ fn testAddTable() {
         (0, 0, 0),
         (-1, -1, -2),
     ]
-    for (i, (a, b, expected)) in cases.enumerate() {
+    let _osty_enumerate0 = cases
+    for i in 0.._osty_enumerate0.len() {
+        let (a, b, expected) = _osty_enumerate0[i]
         testing.context("case {i}: add({a}, {b})", || {
             testing.assertEq(add(a, b), expected)
         })

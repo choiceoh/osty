@@ -25,7 +25,7 @@ func TestGenerateModuleWhileLoopCompat(t *testing.T) {
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
-		
+
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,
@@ -89,7 +89,7 @@ fn main() {
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
-		
+
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,
@@ -136,7 +136,7 @@ func runMonoLowerPipeline(t *testing.T, src, sourcePath string) string {
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
-		
+
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,
@@ -246,7 +246,8 @@ fn main() {
 		"call i1 @osty_rt_set_contains_ptr",
 		"@.bool_true = private unnamed_addr constant [5 x i8] c\"true\\00\"",
 		"@.bool_false = private unnamed_addr constant [6 x i8] c\"false\\00\"",
-		"select i1 ",
+		"call ptr @osty_rt_bool_to_string",
+		"call void @osty_rt_io_write",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)

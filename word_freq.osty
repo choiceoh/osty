@@ -100,7 +100,9 @@ log.setLevel(log.Level.Info)
 
 let args = env.args()
 let mut paths: List<String> = []
-for (i, a) in args.enumerate() {
+let _osty_enumerate0 = args
+for i in 0.._osty_enumerate0.len() {
+    let a = _osty_enumerate0[i]
     if i == 0 { continue }                 // args[0] = 프로그램명
     paths.push(a)
 }
