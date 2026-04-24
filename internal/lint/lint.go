@@ -1,18 +1,8 @@
-// Package lint emits lint warnings (`Lxxxx` codes) at diag.Warning
-// severity; lint warnings never block compilation. The CLI surfaces
-// them via `osty lint`, with `--strict` flipping warnings into a
-// non-zero exit for CI use.
-//
-// Nearly every rule runs in toolchain/lint.osty. This package is now a
-// thin Go adapter: it dispatches to the self-hosted pass via
-// mergeSelfhostLint, applies #[allow(...)] suppression, stamps file
-// paths on diagnostics, and implements a single Go-only rule:
-//
-//	L0060  missing doc comment
-//
-// L0060 stays Go-side while Osty grows a doc-comment inspection
-// surface; when the Osty version lands this package can collapse to a
-// pure adapter.
+// Package lint is a thin Go adapter over toolchain/lint.osty. Every
+// rule is emitted by the self-hosted pass; this package just dispatches
+// to it via mergeSelfhostLint, applies #[allow(...)] suppression, and
+// stamps file paths on the resulting diagnostics. Warnings never block
+// compilation; `osty lint --strict` flips them into a non-zero exit.
 package lint
 
 import (
@@ -28,10 +18,10 @@ type Result struct {
 	Diags []*diag.Diagnostic
 }
 
-// File runs the Go-side L0060 doc rule plus the self-hosted lint pass
-// over one resolved source file and returns the merged diagnostic
-// list. rr is the resolver's output for f; chk is optional. The pass
-// is read-only over every input.
+// File runs the self-hosted lint pass over one resolved source file
+// and returns the merged diagnostic list. rr / chk are accepted for
+// API stability; the adapter no longer reads them. The pass is
+// read-only over every input.
 func File(f *ast.File, src []byte, rr *resolve.Result, chk *check.Result) *Result {
 	if f == nil {
 		return &Result{}
@@ -42,7 +32,6 @@ func File(f *ast.File, src []byte, rr *resolve.Result, chk *check.Result) *Resul
 		file:   f,
 		result: &Result{},
 	}
-	l.lintDocs()
 	l.filterSuppressed()
 	mergeSelfhostLint(l.result, src)
 	return l.result

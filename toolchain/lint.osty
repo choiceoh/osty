@@ -2504,6 +2504,8 @@ fn selfLintAstCheckMissingDocsDecl(
         out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public interface has no doc comment")
     } else if node.kind == AstNTypeAlias {
         out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public type alias has no doc comment")
+    } else if node.kind == AstNLet {
+        out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public binding has no doc comment")
     }
     out
 }
