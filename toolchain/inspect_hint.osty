@@ -1,0 +1,200 @@
+// inspect_hint.osty — type-string parser utilities for inspect hint
+// propagation.
+//
+// The self-host checker exposes inferred types as rendered strings on
+// `FrontCheckedNode.typeName` — there is no structured `types.Type`
+// surface like the Go reference has. Walking hints top-down therefore
+// needs small helpers that unwrap compound type strings into their
+// component strings: `List<Int>` → `Int` as the element hint, tuples
+// into per-element hints, `Map<K, V>` into (K, V), and
+// `fn(Ps...) -> R` into (Ps, R).
+//
+// This module is string-in / string-out; it intentionally does not
+// touch the AST. The caller (`inspect.osty`'s walker — wired in a
+// follow-up slice) handles shape detection off AST node kinds and
+// calls these helpers to obtain child hints.
+//
+// Input shape comes from `toolchain/ty.osty::tyToString`. Known cases
+// covered here:
+//
+//   - `List<T>` — prefix + outermost `>`
+//   - `(T1, T2, ...)` — outer `()` + top-level `,` split
+//   - `Map<K, V>` — prefix + exactly two top-level commas
+//   - `fn(Ps) -> R` — prefix `fn(` + matching `)` + ` -> R`
+//
+// Unknown shapes (bare primitives, user-defined nominal types, `T?`,
+// `Result<T, E>`, etc.) are not unwrapped; the caller should treat the
+// hint as opaque and pass an empty hint to descendants instead.
+//
+// ASCII assumption: the type strings emitted by `tyToString` only
+// contain ASCII characters, so `String[a..b]` byte-space slicing is
+// safe here. `.chars()` detour is intentionally avoided to keep the
+// parser allocation-light.
+
+pub struct HintPair {
+    pub key: String,
+    pub value: String,
+}
+
+pub struct HintFnSig {
+    pub ok: Bool,
+    pub params: List<String>,
+    pub returnType: String,
+}
+
+/// Return the element type of a `List<T>` hint. Empty string when the
+/// hint isn't a List.
+pub fn hintListElem(hint: String) -> String {
+    if !hint.startsWith("List<") {
+        return ""
+    }
+    if !hint.endsWith(">") {
+        return ""
+    }
+    let n = hint.len()
+    if n <= 6 {
+        return ""
+    }
+    hint[5..n - 1].trim()
+}
+
+/// Return the element types of a tuple hint `(T1, T2, ...)`. Empty list
+/// when the hint isn't a tuple or when arity doesn't match.
+pub fn hintTupleElems(hint: String, arity: Int) -> List<String> {
+    let stripped = hintStripOuter(hint, "(", ")")
+    if stripped == "" {
+        return []
+    }
+    let parts = hintSplitTopLevelComma(stripped)
+    if parts.len() != arity {
+        return []
+    }
+    let mut trimmed: List<String> = []
+    for p in parts {
+        trimmed.push(p.trim())
+    }
+    trimmed
+}
+
+/// Return the (key, value) types of a `Map<K, V>` hint. Empty strings
+/// when the hint isn't a Map or arity mismatches.
+pub fn hintMapEntries(hint: String) -> HintPair {
+    if !hint.startsWith("Map<") || !hint.endsWith(">") {
+        return HintPair { key: "", value: "" }
+    }
+    let n = hint.len()
+    if n <= 5 {
+        return HintPair { key: "", value: "" }
+    }
+    let inner = hint[4..n - 1]
+    let parts = hintSplitTopLevelComma(inner)
+    if parts.len() != 2 {
+        return HintPair { key: "", value: "" }
+    }
+    HintPair { key: parts[0].trim(), value: parts[1].trim() }
+}
+
+/// Return the parameter list + return type of a `fn(Ps...) -> R` hint.
+/// Returns `ok: false` when the hint isn't an fn type. When the hint
+/// has no return annotation (bare `fn(Ps)`), `returnType` is empty but
+/// `ok` is still `true`.
+pub fn hintFnSignature(hint: String) -> HintFnSig {
+    if !hint.startsWith("fn(") {
+        return HintFnSig { ok: false, params: [], returnType: "" }
+    }
+    let close = hintFindMatchingParen(hint, 3)
+    if close < 0 {
+        return HintFnSig { ok: false, params: [], returnType: "" }
+    }
+    let paramStr = hint[3..close].trim()
+    let mut params: List<String> = []
+    if paramStr != "" {
+        for p in hintSplitTopLevelComma(paramStr) {
+            params.push(p.trim())
+        }
+    }
+    let restRaw = hint[close + 1..hint.len()]
+    let rest = restRaw.trim()
+    if !rest.startsWith("->") {
+        return HintFnSig { ok: true, params, returnType: "" }
+    }
+    let ret = rest[2..rest.len()].trim()
+    HintFnSig { ok: true, params, returnType: ret }
+}
+
+// ---------------------------------------------------------------------
+// Primitives.
+// ---------------------------------------------------------------------
+
+/// Split `s` on top-level `,` tokens, ignoring commas inside `<...>`,
+/// `(...)`, or `[...]`. Bracket-depth scan; no real parse. Always
+/// returns at least one element (possibly empty) for a non-empty input.
+pub fn hintSplitTopLevelComma(s: String) -> List<String> {
+    let mut parts: List<String> = []
+    let mut cur = ""
+    let mut depth = 0
+    for ch in s.chars() {
+        if ch == '<' || ch == '(' || ch == '[' {
+            depth = depth + 1
+            cur = cur + "{ch}"
+        } else if ch == '>' || ch == ')' || ch == ']' {
+            depth = depth - 1
+            cur = cur + "{ch}"
+        } else if ch == ',' && depth == 0 {
+            parts.push(cur)
+            cur = ""
+        } else {
+            cur = cur + "{ch}"
+        }
+    }
+    if cur != "" || parts.len() > 0 {
+        parts.push(cur)
+    }
+    parts
+}
+
+/// Strip a leading `open` and trailing `close` from `s`. Returns ""
+/// when either bracket is missing. Does not verify bracket balance
+/// inside — call only on simple tuple-shaped strings.
+pub fn hintStripOuter(s: String, open: String, close: String) -> String {
+    if s.len() < open.len() + close.len() {
+        return ""
+    }
+    if !s.startsWith(open) {
+        return ""
+    }
+    if !s.endsWith(close) {
+        return ""
+    }
+    let n = s.len()
+    s[open.len()..n - close.len()]
+}
+
+/// Scan from `startIdx` looking for the `)` that closes the `(` just
+/// before it. Tracks paren depth (so nested parens balance). Returns
+/// the index of the matching close, or -1 if none is found.
+pub fn hintFindMatchingParen(s: String, startIdx: Int) -> Int {
+    let chars = s.chars()
+    let n = chars.len()
+    if startIdx < 0 || startIdx > n {
+        return -1
+    }
+    let mut depth = 1
+    let mut i = startIdx
+    for _ in startIdx..n {
+        if i >= n {
+            return -1
+        }
+        let ch = chars[i]
+        if ch == '(' {
+            depth = depth + 1
+        } else if ch == ')' {
+            depth = depth - 1
+            if depth == 0 {
+                return i
+            }
+        }
+        i = i + 1
+    }
+    -1
+}

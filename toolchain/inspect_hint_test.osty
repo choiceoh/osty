@@ -1,0 +1,129 @@
+use std.testing
+
+fn testHintListElemUnwrapsSimpleList() {
+    testing.assertEq(hintListElem("List<Int>"), "Int")
+    testing.assertEq(hintListElem("List<String>"), "String")
+}
+
+fn testHintListElemUnwrapsNestedList() {
+    testing.assertEq(hintListElem("List<List<Int>>"), "List<Int>")
+    testing.assertEq(hintListElem("List<Map<String, Int>>"), "Map<String, Int>")
+}
+
+fn testHintListElemRejectsNonList() {
+    testing.assertEq(hintListElem("Int"), "")
+    testing.assertEq(hintListElem("(Int, String)"), "")
+    testing.assertEq(hintListElem(""), "")
+    testing.assertEq(hintListElem("List"), "")
+    testing.assertEq(hintListElem("List<"), "")
+}
+
+fn testHintTupleElemsSplitsPair() {
+    let parts = hintTupleElems("(Int, String)", 2)
+    testing.assertEq(parts.len(), 2)
+    testing.assertEq(parts[0], "Int")
+    testing.assertEq(parts[1], "String")
+}
+
+fn testHintTupleElemsRespectsArity() {
+    let wrong = hintTupleElems("(Int, String, Bool)", 2)
+    testing.assertEq(wrong.len(), 0)
+
+    let right = hintTupleElems("(Int, String, Bool)", 3)
+    testing.assertEq(right.len(), 3)
+    testing.assertEq(right[2], "Bool")
+}
+
+fn testHintTupleElemsHandlesNestedGenerics() {
+    let parts = hintTupleElems("(List<Int>, Map<String, Bool>)", 2)
+    testing.assertEq(parts.len(), 2)
+    testing.assertEq(parts[0], "List<Int>")
+    testing.assertEq(parts[1], "Map<String, Bool>")
+}
+
+fn testHintTupleElemsRejectsNonTuple() {
+    let not = hintTupleElems("Int", 1)
+    testing.assertEq(not.len(), 0)
+
+    let notListed = hintTupleElems("List<Int>", 1)
+    testing.assertEq(notListed.len(), 0)
+}
+
+fn testHintMapEntriesSplitsKeyValue() {
+    let entry = hintMapEntries("Map<String, Int>")
+    testing.assertEq(entry.key, "String")
+    testing.assertEq(entry.value, "Int")
+}
+
+fn testHintMapEntriesHandlesNestedValue() {
+    let entry = hintMapEntries("Map<String, List<Int>>")
+    testing.assertEq(entry.key, "String")
+    testing.assertEq(entry.value, "List<Int>")
+}
+
+fn testHintMapEntriesRejectsNonMap() {
+    let not = hintMapEntries("List<Int>")
+    testing.assertEq(not.key, "")
+    testing.assertEq(not.value, "")
+
+    let bare = hintMapEntries("Int")
+    testing.assertEq(bare.key, "")
+    testing.assertEq(bare.value, "")
+}
+
+fn testHintFnSignatureParsesParams() {
+    let sig = hintFnSignature("fn(Int, String) -> Bool")
+    testing.assert(sig.ok)
+    testing.assertEq(sig.params.len(), 2)
+    testing.assertEq(sig.params[0], "Int")
+    testing.assertEq(sig.params[1], "String")
+    testing.assertEq(sig.returnType, "Bool")
+}
+
+fn testHintFnSignatureHandlesNoParams() {
+    let sig = hintFnSignature("fn() -> Int")
+    testing.assert(sig.ok)
+    testing.assertEq(sig.params.len(), 0)
+    testing.assertEq(sig.returnType, "Int")
+}
+
+fn testHintFnSignatureHandlesNestedGenerics() {
+    let sig = hintFnSignature("fn(List<Int>, Map<String, Bool>) -> Option<Int>")
+    testing.assert(sig.ok)
+    testing.assertEq(sig.params.len(), 2)
+    testing.assertEq(sig.params[0], "List<Int>")
+    testing.assertEq(sig.params[1], "Map<String, Bool>")
+    testing.assertEq(sig.returnType, "Option<Int>")
+}
+
+fn testHintFnSignatureRejectsNonFn() {
+    let not = hintFnSignature("Int")
+    testing.assert(!not.ok)
+
+    let listNot = hintFnSignature("List<Int>")
+    testing.assert(!listNot.ok)
+}
+
+fn testHintSplitTopLevelCommaIgnoresNested() {
+    let parts = hintSplitTopLevelComma("Int, List<Int, Bool>, String")
+    testing.assertEq(parts.len(), 3)
+    testing.assertEq(parts[0].trim(), "Int")
+    testing.assertEq(parts[1].trim(), "List<Int, Bool>")
+    testing.assertEq(parts[2].trim(), "String")
+}
+
+fn testHintSplitTopLevelCommaEmptyInput() {
+    let parts = hintSplitTopLevelComma("")
+    testing.assertEq(parts.len(), 0)
+}
+
+fn testHintStripOuterRemovesBrackets() {
+    testing.assertEq(hintStripOuter("(Int, String)", "(", ")"), "Int, String")
+    testing.assertEq(hintStripOuter("<T>", "<", ">"), "T")
+}
+
+fn testHintStripOuterRequiresExactMatch() {
+    testing.assertEq(hintStripOuter("(Int, String", "(", ")"), "")
+    testing.assertEq(hintStripOuter("Int, String)", "(", ")"), "")
+    testing.assertEq(hintStripOuter("Int", "(", ")"), "")
+}
