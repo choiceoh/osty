@@ -150,6 +150,96 @@ func TestCloneStructPreservesBuilderDerive(t *testing.T) {
 	}
 }
 
+func TestLowerBuilderChainToStructLit(t *testing.T) {
+	src := `
+pub struct Point {
+    pub x: Int,
+    pub y: Int,
+}
+
+fn main() {
+    let p = Point.builder().x(3).y(4).build()
+}
+`
+	mod := lowerSrc(t, src)
+	mainFn := findFn(t, mod, "main")
+	letP := findLet(t, mainFn, "p")
+	lit, ok := letP.Value.(*StructLit)
+	if !ok {
+		t.Fatalf("lowered value = %T, want *StructLit", letP.Value)
+	}
+	if lit.TypeName != "Point" {
+		t.Fatalf("TypeName = %q, want Point", lit.TypeName)
+	}
+	if lit.Spread != nil {
+		t.Fatal("builder().build() should not lower with spread")
+	}
+	if got := len(lit.Fields); got != 2 {
+		t.Fatalf("field count = %d, want 2", got)
+	}
+	if lit.Fields[0].Name != "x" || lit.Fields[1].Name != "y" {
+		t.Fatalf("field order = [%s %s], want [x y]", lit.Fields[0].Name, lit.Fields[1].Name)
+	}
+}
+
+func TestLowerToBuilderChainToStructLitWithSpread(t *testing.T) {
+	src := `
+pub struct Point {
+    pub x: Int,
+    pub y: Int,
+}
+
+fn main() {
+    let p = Point { x: 1, y: 2 }
+    let q = p.toBuilder().x(99).build()
+}
+`
+	mod := lowerSrc(t, src)
+	mainFn := findFn(t, mod, "main")
+	letQ := findLet(t, mainFn, "q")
+	lit, ok := letQ.Value.(*StructLit)
+	if !ok {
+		t.Fatalf("lowered value = %T, want *StructLit", letQ.Value)
+	}
+	if lit.TypeName != "Point" {
+		t.Fatalf("TypeName = %q, want Point", lit.TypeName)
+	}
+	if lit.Spread == nil {
+		t.Fatal("toBuilder().build() should lower with spread")
+	}
+	if got := len(lit.Fields); got != 1 {
+		t.Fatalf("field count = %d, want 1", got)
+	}
+	if lit.Fields[0].Name != "x" {
+		t.Fatalf("field name = %q, want x", lit.Fields[0].Name)
+	}
+}
+
+func findFn(t *testing.T, mod *Module, name string) *FnDecl {
+	t.Helper()
+	for _, d := range mod.Decls {
+		if fn, ok := d.(*FnDecl); ok && fn.Name == name {
+			return fn
+		}
+	}
+	t.Fatalf("fn %q not in module decls", name)
+	return nil
+}
+
+func findLet(t *testing.T, fn *FnDecl, name string) *LetStmt {
+	t.Helper()
+	if fn == nil || fn.Body == nil {
+		t.Fatalf("fn/body missing while searching let %q", name)
+	}
+	for _, stmt := range fn.Body.Stmts {
+		if let, ok := stmt.(*LetStmt); ok && let.Name == name {
+			return let
+		}
+	}
+	t.Fatalf("let %q not in fn body", name)
+	return nil
+}
+
 func findStruct(t *testing.T, mod *Module, name string) *StructDecl {
 	t.Helper()
 	for _, d := range mod.Decls {

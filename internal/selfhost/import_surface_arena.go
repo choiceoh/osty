@@ -332,6 +332,7 @@ func arenaAppendImportedStruct(surface *PackageCheckImport, arena *AstArena, ali
 				Owner:      name,
 				Name:       child.text,
 				TypeName:   fieldType,
+				Exported:   child.flags == 1,
 				HasDefault: child.left >= 0,
 			})
 		case *AstNodeKind_AstNFnDecl:

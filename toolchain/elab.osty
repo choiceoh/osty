@@ -1713,11 +1713,208 @@ fn elabBuiltinErrorMethodSig(env: CheckEnv, name: String) -> CheckFnSig {
     emptyCheckFnSig()
 }
 
+pub struct ElabBuilderSetter {
+    pub name: String,
+    pub argNode: Int,
+    pub start: Int,
+    pub end: Int,
+}
+
+fn elabBuilderDeriveInfoForOwner(env: CheckEnv, owner: String) -> CheckBuilderDeriveInfo {
+    let mut fieldNames: List<String> = []
+    let mut fieldExported: List<Bool> = []
+    let mut fieldHasDefaults: List<Bool> = []
+    let mut methodNames: List<String> = []
+    for field in env.fields {
+        if field.owner == owner {
+            fieldNames.push(field.name)
+            fieldExported.push(field.exported)
+            fieldHasDefaults.push(field.hasDefault)
+        }
+    }
+    for fnSig in env.fns {
+        if fnSig.owner == owner && !fnSig.hasReceiver {
+            methodNames.push(fnSig.name)
+        }
+    }
+    checkClassifyBuilderDerive(fieldNames, fieldExported, fieldHasDefaults, methodNames)
+}
+
+fn elabBuilderHasExportedField(env: CheckEnv, owner: String, fieldName: String) -> Bool {
+    for field in env.fields {
+        if field.owner == owner && field.name == fieldName && field.exported {
+            return true
+        }
+    }
+    false
+}
+
+fn elabBuilderSetterIndex(setters: List<ElabBuilderSetter>, fieldName: String) -> Int {
+    let mut i = 0
+    for setter in setters {
+        if setter.name == fieldName {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn elabLowerBuilderChain(
+    cx: ElabCx,
+    callNode: AstNode,
+    expected: Int,
+    owner: String,
+    setters: List<ElabBuilderSetter>,
+    spreadNode: Int,
+    spreadTy: Int,
+    required: List<String>,
+) -> ElabResult {
+    for setter in setters {
+        if !(elabBuilderHasExportedField(cx.env, owner, setter.name)) {
+            return ElabResult { node: -1, ty: -1 }
+        }
+    }
+
+    let tys = cx.env.tys
+    let typeSig = checkLookupType(cx.env, owner)
+    if typeSig.name == "" {
+        return elabPoisonResult(cx, callNode.start, callNode.end)
+    }
+
+    let inst = instBegin(cx, typeSig.generics, owner)
+    if tyIsNamedHead(tys, expected, owner) {
+        instSeedPositionalArgs(cx, inst, tyArgsAt(tys, expected))
+    }
+    if spreadNode >= 0 && spreadTy >= 0 {
+        let spreadHint = tyNamed(tys, owner, inst.freshs)
+        let _ = unify(cx.env, inst.solver, spreadHint, spreadTy)
+    }
+
+    let mut missing: List<String> = []
+    let mut coreFieldsList: List<Int> = []
+    for field in cx.env.fields {
+        if field.owner != owner || !(field.exported) {
+            continue
+        }
+        let setterIdx = elabBuilderSetterIndex(setters, field.name)
+        if setterIdx < 0 {
+            if spreadNode < 0 && listContainsString(required, field.name) {
+                missing.push(field.name)
+            }
+            continue
+        }
+        let setter = setters[setterIdx]
+        let specialised = instSubstitute(cx, inst, field.ty)
+        let hint = instZonk(cx, inst, specialised)
+        let r = elabCheck(cx, setter.argNode, hint)
+        let _ = unify(cx.env, inst.solver, hint, r.ty)
+        coreFieldsList.push(coreStructField(cx.core, field.name, r.node, setter.start, setter.end))
+    }
+
+    if spreadNode < 0 && missing.len() > 0 {
+        cx.env.diagnostics.push(diagBuilderMissingRequiredField(owner, missing, callNode.start, callNode.end))
+    }
+
+    instCheckBounds(cx, inst, typeSig.genericBounds, callNode.start, callNode.end)
+    let concreteTypeArgs = instConcreteArgs(cx, inst)
+    let resultTy = if checkIntListLenHelper(concreteTypeArgs) == 0 {
+        tyNamed(tys, owner, [])
+    } else {
+        tyNamed(tys, owner, concreteTypeArgs)
+    }
+    let coreIdx = coreStruct(cx.core, owner, coreFieldsList, spreadNode, concreteTypeArgs, resultTy, callNode.start, callNode.end)
+    ElabResult { node: coreIdx, ty: resultTy }
+}
+
+fn elabTryBuilderChain(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expected: Int, explicitArgs: List<Int>) -> ElabResult {
+    if fieldNode.text != "build" || fieldNode.flags == 1 {
+        return ElabResult { node: -1, ty: -1 }
+    }
+    if checkIntListLenHelper(explicitArgs) != 0 || checkIntListLenHelper(callNode.children) != 0 {
+        return ElabResult { node: -1, ty: -1 }
+    }
+
+    let mut setters: List<ElabBuilderSetter> = []
+    let mut cursorIdx = fieldNode.left
+    for cursorIdx >= 0 {
+        let cursor = astArenaNodeAt(cx.ast.arena, cursorIdx)
+        if cursor.kind != AstNCall || cursor.left < 0 {
+            return ElabResult { node: -1, ty: -1 }
+        }
+        let callee = astArenaNodeAt(cx.ast.arena, cursor.left)
+        if callee.kind != AstNField || callee.flags == 1 {
+            return ElabResult { node: -1, ty: -1 }
+        }
+
+        if callee.text == "builder" {
+            if checkIntListLenHelper(cursor.children) != 0 || callee.left < 0 {
+                return ElabResult { node: -1, ty: -1 }
+            }
+            let root = astArenaNodeAt(cx.ast.arena, callee.left)
+            if root.kind != AstNIdent {
+                return ElabResult { node: -1, ty: -1 }
+            }
+            let typeSig = checkLookupType(cx.env, root.text)
+            if typeSig.name == "" || typeSig.kind != "struct" {
+                return ElabResult { node: -1, ty: -1 }
+            }
+            let info = elabBuilderDeriveInfoForOwner(cx.env, root.text)
+            if !(info.derivable) {
+                return ElabResult { node: -1, ty: -1 }
+            }
+            return elabLowerBuilderChain(cx, callNode, expected, root.text, setters, -1, -1, info.required)
+        }
+
+        if callee.text == "toBuilder" {
+            if checkIntListLenHelper(cursor.children) != 0 || callee.left < 0 {
+                return ElabResult { node: -1, ty: -1 }
+            }
+            let recv = elabInfer(cx, callee.left)
+            let recvResolved = checkResolveAliasDeep(cx.env, recv.ty)
+            if tyIsBad(cx.env.tys, recvResolved) {
+                return elabPoisonResult(cx, callNode.start, callNode.end)
+            }
+            if tyKindAt(cx.env.tys, recvResolved) != TkNamed {
+                return ElabResult { node: -1, ty: -1 }
+            }
+            let owner = tyHeadAt(cx.env.tys, recvResolved)
+            let typeSig = checkLookupType(cx.env, owner)
+            if typeSig.name == "" || typeSig.kind != "struct" {
+                return ElabResult { node: -1, ty: -1 }
+            }
+            let info = elabBuilderDeriveInfoForOwner(cx.env, owner)
+            if !(info.derivable) {
+                return ElabResult { node: -1, ty: -1 }
+            }
+            return elabLowerBuilderChain(cx, callNode, expected, owner, setters, recv.node, recvResolved, info.required)
+        }
+
+        if checkIntListLenHelper(cursor.children) != 1 {
+            return ElabResult { node: -1, ty: -1 }
+        }
+        setters.push(ElabBuilderSetter {
+            name: callee.text,
+            argNode: checkIntListAt(cursor.children, 0),
+            start: callee.start,
+            end: callee.end,
+        })
+        cursorIdx = callee.left
+    }
+
+    ElabResult { node: -1, ty: -1 }
+}
+
 /// elabInferMethodCall handles `recv.method(args)` and the turbofish
 /// form `recv.method::<T>(args)`. Relies on `checkLookupMethod` with
 /// the receiver's head type. `explicitArgs` carries any turbofish type
 /// arguments supplied at the call site; pass `[]` for plain calls.
 fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expected: Int, explicitArgs: List<Int>) -> ElabResult {
+    let builder = elabTryBuilderChain(cx, callNode, fieldNode, expected, explicitArgs)
+    if builder.ty >= 0 {
+        return builder
+    }
+
     let recv = elabInfer(cx, fieldNode.left)
     let recvResolved = checkResolveAliasDeep(cx.env, recv.ty)
     if tyIsBad(cx.env.tys, recvResolved) {
@@ -1731,9 +1928,10 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     // `as?` error-downcast sugar handled immediately below, so the two
     // flag bits never collide.
     let isOptionalChain = fieldNode.flags == 1
-    let lookupRecvTy = if isOptionalChain {
+    let mut lookupRecvTy = recvResolved
+    if isOptionalChain {
         if tyKindAt(cx.env.tys, recvResolved) == TkOptional {
-            tyInnerAt(cx.env.tys, recvResolved)
+            lookupRecvTy = tyInnerAt(cx.env.tys, recvResolved)
         } else {
             cx.env.diagnostics.push(diagOptionalChainOnNon(
                 tyToString(cx.env.tys, recvResolved),
@@ -1742,8 +1940,6 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
             ))
             return elabPoisonResult(cx, callNode.start, callNode.end)
         }
-    } else {
-        recvResolved
     }
     // G27 §7.4: `expr as? T` desugars to `expr.downcast::<T>()` with
     // callNode.flags == 1. Enforce the sugar-specific invariants here
@@ -2266,9 +2462,10 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
     // non-Option receivers are rejected with E0719 so users see a
     // dedicated error instead of E0702 "no field on type T?".
     let isOptionalChain = node.flags == 1
-    let lookupTy = if isOptionalChain {
+    let mut lookupTy = recvTy
+    if isOptionalChain {
         if tyKindAt(cx.env.tys, recvTy) == TkOptional {
-            tyInnerAt(cx.env.tys, recvTy)
+            lookupTy = tyInnerAt(cx.env.tys, recvTy)
         } else {
             cx.env.diagnostics.push(diagOptionalChainOnNon(
                 tyToString(cx.env.tys, recvTy),
@@ -2277,8 +2474,6 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
             ))
             return elabPoisonResult(cx, node.start, node.end)
         }
-    } else {
-        recvTy
     }
     let kind = tyKindAt(cx.env.tys, lookupTy)
     let fieldName = node.text

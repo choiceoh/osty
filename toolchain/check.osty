@@ -282,137 +282,137 @@ fn registerStdStringsAliasFns(env: CheckEnv, alias: String) {
     let emptyBounds: List<CheckGenericBound> = []
 
     checkRegisterFn(env, CheckFnSig {
-        name: "len", owner: alias, receiverTy: -1, retTy: tInt_,
+        name: "len", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tInt_,
         paramNames: ["s"], paramTys: [tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "isEmpty", owner: alias, receiverTy: -1, retTy: tBool_,
+        name: "isEmpty", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
         paramNames: ["s"], paramTys: [tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "concat", owner: alias, receiverTy: -1, retTy: tString_,
+        name: "concat", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
         paramNames: ["a", "b"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "chars", owner: alias, receiverTy: -1, retTy: tListChar_,
+        name: "chars", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListChar_,
         paramNames: ["s"], paramTys: [tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "bytes", owner: alias, receiverTy: -1, retTy: tListByte_,
+        name: "bytes", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListByte_,
         paramNames: ["s"], paramTys: [tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "split", owner: alias, receiverTy: -1, retTy: tListString,
+        name: "split", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListString,
         paramNames: ["s", "sep"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "splitN", owner: alias, receiverTy: -1, retTy: tListString,
+        name: "splitN", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListString,
         paramNames: ["s", "sep", "n"], paramTys: [tString_, tString_, tInt_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "lines", owner: alias, receiverTy: -1, retTy: tListString,
+        name: "lines", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tListString,
         paramNames: ["s"], paramTys: [tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "join", owner: alias, receiverTy: -1, retTy: tString_,
+        name: "join", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
         paramNames: ["parts", "sep"], paramTys: [tListString, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "contains", owner: alias, receiverTy: -1, retTy: tBool_,
+        name: "contains", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
         paramNames: ["s", "substr"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "indexOf", owner: alias, receiverTy: -1, retTy: tOptInt,
+        name: "indexOf", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tOptInt,
         paramNames: ["s", "substr"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "lastIndexOf", owner: alias, receiverTy: -1, retTy: tOptInt,
+        name: "lastIndexOf", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tOptInt,
         paramNames: ["s", "substr"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "count", owner: alias, receiverTy: -1, retTy: tInt_,
+        name: "count", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tInt_,
         paramNames: ["s", "substr"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "startsWith", owner: alias, receiverTy: -1, retTy: tBool_,
+        name: "startsWith", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
         paramNames: ["s", "prefix"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "hasPrefix", owner: alias, receiverTy: -1, retTy: tBool_,
+        name: "hasPrefix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
         paramNames: ["s", "prefix"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "endsWith", owner: alias, receiverTy: -1, retTy: tBool_,
+        name: "endsWith", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
         paramNames: ["s", "suffix"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "hasSuffix", owner: alias, receiverTy: -1, retTy: tBool_,
+        name: "hasSuffix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
         paramNames: ["s", "suffix"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "trim", owner: alias, receiverTy: -1, retTy: tString_,
+        name: "trim", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
         paramNames: ["s"], paramTys: [tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "trimSpace", owner: alias, receiverTy: -1, retTy: tString_,
+        name: "trimSpace", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
         paramNames: ["s"], paramTys: [tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "trimPrefix", owner: alias, receiverTy: -1, retTy: tString_,
+        name: "trimPrefix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
         paramNames: ["s", "prefix"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "trimSuffix", owner: alias, receiverTy: -1, retTy: tString_,
+        name: "trimSuffix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
         paramNames: ["s", "suffix"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "toUpper", owner: alias, receiverTy: -1, retTy: tString_,
+        name: "toUpper", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
         paramNames: ["s"], paramTys: [tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "toLower", owner: alias, receiverTy: -1, retTy: tString_,
+        name: "toLower", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
         paramNames: ["s"], paramTys: [tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "compare", owner: alias, receiverTy: -1, retTy: tInt_,
+        name: "compare", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tInt_,
         paramNames: ["a", "b"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "repeat", owner: alias, receiverTy: -1, retTy: tString_,
+        name: "repeat", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
         paramNames: ["s", "count"], paramTys: [tString_, tInt_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "replaceAll", owner: alias, receiverTy: -1, retTy: tString_,
+        name: "replaceAll", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
         paramNames: ["s", "old", "new"], paramTys: [tString_, tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "slice", owner: alias, receiverTy: -1, retTy: tString_,
+        name: "slice", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
         paramNames: ["s", "start", "end"], paramTys: [tString_, tInt_, tInt_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
@@ -444,57 +444,57 @@ fn registerStdTestingAliasFns(env: CheckEnv, alias: String) {
     let gTE: List<String> = ["T", "E"]
 
     checkRegisterFn(env, CheckFnSig {
-        name: "assert", owner: alias, receiverTy: -1, retTy: tUnit_,
+        name: "assert", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
         paramNames: ["cond"], paramTys: [tBool_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "assertTrue", owner: alias, receiverTy: -1, retTy: tUnit_,
+        name: "assertTrue", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
         paramNames: ["cond"], paramTys: [tBool_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "assertFalse", owner: alias, receiverTy: -1, retTy: tUnit_,
+        name: "assertFalse", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
         paramNames: ["cond"], paramTys: [tBool_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "assertEq", owner: alias, receiverTy: -1, retTy: tUnit_,
+        name: "assertEq", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
         paramNames: ["actual", "expected"], paramTys: [tT, tT],
         generics: gT, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "assertNe", owner: alias, receiverTy: -1, retTy: tUnit_,
+        name: "assertNe", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
         paramNames: ["actual", "expected"], paramTys: [tT, tT],
         generics: gT, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "expectOk", owner: alias, receiverTy: -1, retTy: tT,
+        name: "expectOk", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tT,
         paramNames: ["result"], paramTys: [tResultTE],
         generics: gTE, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "expectError", owner: alias, receiverTy: -1, retTy: tE,
+        name: "expectError", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tE,
         paramNames: ["result"], paramTys: [tResultTE],
         generics: gTE, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "fail", owner: alias, receiverTy: -1, retTy: tNever(tys),
+        name: "fail", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tNever(tys),
         paramNames: ["msg"], paramTys: [tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "context", owner: alias, receiverTy: -1, retTy: tUnit_,
+        name: "context", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
         paramNames: ["msg", "body"], paramTys: [tString_, tFnUnit],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "benchmark", owner: alias, receiverTy: -1, retTy: tUnit_,
+        name: "benchmark", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
         paramNames: ["iterations", "body"], paramTys: [tInt_, tFnResUnit],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "snapshot", owner: alias, receiverTy: -1, retTy: tUnit_,
+        name: "snapshot", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
         paramNames: ["name", "output"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
@@ -532,15 +532,15 @@ fn registerStdFsAliasFns(env: CheckEnv, alias: String) {
     let emptyGenerics: List<String> = []
     let emptyBounds: List<CheckGenericBound> = []
     let add = [
-        CheckFnSig { name: "exists", owner: alias, receiverTy: -1, retTy: tBool_,
+        CheckFnSig { name: "exists", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
             paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "readToString", owner: alias, receiverTy: -1, retTy: tResString,
+        CheckFnSig { name: "readToString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString,
             paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "writeString", owner: alias, receiverTy: -1, retTy: tResUnit,
+        CheckFnSig { name: "writeString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
             paramNames: ["path", "contents"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "remove", owner: alias, receiverTy: -1, retTy: tResUnit,
+        CheckFnSig { name: "remove", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
             paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "create", owner: alias, receiverTy: -1, retTy: tResUnit,
+        CheckFnSig { name: "create", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
             paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
     ]
     for sig in add {
@@ -553,7 +553,7 @@ fn registerStdDebugAliasFns(env: CheckEnv, alias: String) {
     let tys = env.tys
     let tT = tyNamed(tys, "T", [])
     checkRegisterFn(env, CheckFnSig {
-        name: "dbg", owner: alias, receiverTy: -1, retTy: tT,
+        name: "dbg", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tT,
         paramNames: ["value"], paramTys: [tT],
         generics: ["T"], genericBounds: [],
     })
@@ -571,27 +571,27 @@ fn registerStdThreadAliasFns(env: CheckEnv, alias: String) {
     let tResUnit = tyNamed(tys, "Result", [tUnit_, tyNamed(tys, "Error", [])])
     let gT: List<String> = ["T"]
     checkRegisterFn(env, CheckFnSig {
-        name: "spawn", owner: alias, receiverTy: -1, retTy: tHandleT,
+        name: "spawn", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tHandleT,
         paramNames: ["body"], paramTys: [tyFn(tys, [], tT)],
         generics: gT, genericBounds: [],
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "chan", owner: alias, receiverTy: -1, retTy: tChanT,
+        name: "chan", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tChanT,
         paramNames: ["capacity"], paramTys: [tInt_],
         generics: gT, genericBounds: [],
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "sleep", owner: alias, receiverTy: -1, retTy: tResUnit,
+        name: "sleep", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
         paramNames: ["duration"], paramTys: [tyNamed(tys, "Duration", [])],
         generics: [], genericBounds: [],
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "yield", owner: alias, receiverTy: -1, retTy: tUnit_,
+        name: "yield", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
         paramNames: [], paramTys: [],
         generics: [], genericBounds: [],
     })
     checkRegisterFn(env, CheckFnSig {
-        name: "isCancelled", owner: alias, receiverTy: -1, retTy: tBool_,
+        name: "isCancelled", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
         paramNames: [], paramTys: [],
         generics: [], genericBounds: [],
     })
@@ -602,7 +602,7 @@ fn registerStdThreadAliasFns(env: CheckEnv, alias: String) {
     // inside checkInstallChannelIntrinsics so `s.recv(...)` dispatches.
     let tSelectBuilder = tyNamed(tys, "SelectBuilder", [])
     checkRegisterFn(env, CheckFnSig {
-        name: "select", owner: alias, receiverTy: -1, retTy: tT,
+        name: "select", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tT,
         paramNames: ["body"], paramTys: [tyFn(tys, [tSelectBuilder], tT)],
         generics: gT, genericBounds: [],
     })
@@ -615,13 +615,13 @@ fn registerStdIoAliasFns(env: CheckEnv, alias: String) {
     let tUnit_ = tUnit(tys)
     for n in ["print", "println", "eprint", "eprintln"] {
         checkRegisterFn(env, CheckFnSig {
-            name: n, owner: alias, receiverTy: -1, retTy: tUnit_,
+            name: n, owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
             paramNames: ["s"], paramTys: [tString_],
             generics: [], genericBounds: [],
         })
     }
     checkRegisterFn(env, CheckFnSig {
-        name: "readLine", owner: alias, receiverTy: -1, retTy: tString_,
+        name: "readLine", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
         paramNames: [], paramTys: [],
         generics: [], genericBounds: [],
     })
@@ -689,12 +689,13 @@ fn collectFnDecl(
     // Build paramTys / paramNames from node.children (AstNParam entries).
     let mut paramNames: List<String> = []
     let mut paramTys: List<Int> = []
+    let mut hasReceiver = false
     for paramIdx in node.children {
         let paramNode = astArenaNodeAt(cx.ast.arena, paramIdx)
         if paramNode.kind != AstNParam {
             let _ = paramIdx
         } else if paramNode.text == "self" {
-            let _ = paramNode
+            hasReceiver = true
         } else {
             // Prefix default-carrying params with "?" so the arity check
             // (see paramDefaultCount in elab.osty) can count trailing
@@ -722,6 +723,7 @@ fn collectFnDecl(
         name,
         owner,
         receiverTy,
+        hasReceiver,
         retTy: retEffective,
         paramNames,
         paramTys,
@@ -759,6 +761,7 @@ fn collectStructDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
                     owner: name,
                     name: member.text,
                     ty: effectiveTy,
+                    exported: member.flags == 1,
                     hasDefault,
                 }
                 checkRegisterField(cx.env, field)

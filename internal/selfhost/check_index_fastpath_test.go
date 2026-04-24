@@ -37,42 +37,45 @@ func TestCheckHashKeyIsStable(t *testing.T) {
 	}
 }
 
-func TestCheckHashOwnerNameMatchesJoinedKeyHash(t *testing.T) {
+func TestCheckOwnerKeyHashMatchesJoinedKeyHash(t *testing.T) {
 	owner, name := "Owner", "method"
-	if got, want := checkHashOwnerName(owner, name), checkHashKey(checkOwnerKey(owner, name)); got != want {
-		t.Fatalf("checkHashOwnerName = %d, want %d", got, want)
+	key := checkOwnerKey(owner, name)
+	if got, want := checkHashKey(key), checkHashKey(checkOwnerKey(owner, name)); got != want {
+		t.Fatalf("checkHashKey(owner key) = %d, want %d", got, want)
 	}
 }
 
-func TestCheckNameIndexOwnerNameReturnsLatestMatch(t *testing.T) {
+func TestCheckNameIndexOwnerKeyReturnsLatestMatch(t *testing.T) {
 	keys := []string{
 		checkOwnerKey("One", "field"),
 		checkOwnerKey("Two", "field"),
 		checkOwnerKey("One", "field"),
 	}
 	hashes := []int{
-		checkHashOwnerName("One", "field"),
-		checkHashOwnerName("Two", "field"),
-		checkHashOwnerName("One", "field"),
+		checkHashKey(checkOwnerKey("One", "field")),
+		checkHashKey(checkOwnerKey("Two", "field")),
+		checkHashKey(checkOwnerKey("One", "field")),
 	}
-	if got := checkNameIndexOwnerName(keys, hashes, "One", "field", checkHashOwnerName("One", "field")); got != 2 {
-		t.Fatalf("checkNameIndexOwnerName = %d, want 2", got)
+	key := checkOwnerKey("One", "field")
+	if got := checkNameIndex(keys, hashes, key, checkHashKey(key)); got != 2 {
+		t.Fatalf("checkNameIndex(owner key) = %d, want 2", got)
 	}
 }
 
-func TestCheckLookupExactIndexOwnerNameReturnsLatestValue(t *testing.T) {
+func TestCheckLookupExactIndexOwnerKeyReturnsLatestValue(t *testing.T) {
 	keys := []string{
 		checkOwnerKey("One", "field"),
 		checkOwnerKey("Two", "field"),
 		checkOwnerKey("One", "field"),
 	}
 	hashes := []int{
-		checkHashOwnerName("One", "field"),
-		checkHashOwnerName("Two", "field"),
-		checkHashOwnerName("One", "field"),
+		checkHashKey(checkOwnerKey("One", "field")),
+		checkHashKey(checkOwnerKey("Two", "field")),
+		checkHashKey(checkOwnerKey("One", "field")),
 	}
 	values := []int{10, 20, 30}
-	if got := checkLookupExactIndexOwnerName(keys, hashes, values, "One", "field", checkHashOwnerName("One", "field")); got != 30 {
-		t.Fatalf("checkLookupExactIndexOwnerName = %d, want 30", got)
+	key := checkOwnerKey("One", "field")
+	if got := checkLookupExactIndex(keys, hashes, values, key, checkHashKey(key)); got != 30 {
+		t.Fatalf("checkLookupExactIndex(owner key) = %d, want 30", got)
 	}
 }

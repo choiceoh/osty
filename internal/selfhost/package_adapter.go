@@ -2,6 +2,7 @@ package selfhost
 
 import (
 	"fmt"
+	"reflect"
 
 	"github.com/osty/osty/internal/selfhost/api"
 )
@@ -369,12 +370,14 @@ func selfhostInstallImportSurfaces(env *CheckEnv, imports []PackageCheckImport) 
 			})
 		}
 		for _, field := range imp.Fields {
-			checkRegisterField(env, &CheckFieldSig{
+			sig := &CheckFieldSig{
 				owner:      field.Owner,
 				name:       field.Name,
 				ty:         selfhostTypeNameToTy(env, field.TypeName),
 				hasDefault: field.HasDefault,
-			})
+			}
+			selfhostSetCheckFieldExported(sig, field.Exported)
+			checkRegisterField(env, sig)
 		}
 		for _, variant := range imp.Variants {
 			fieldTys := make([]int, 0, len(variant.FieldTypes))
@@ -416,6 +419,30 @@ func selfhostInstallImportSurfaces(env *CheckEnv, imports []PackageCheckImport) 
 			}
 		}
 	}
+}
+
+// selfhostSetCheckFieldExported bridges the checked-in generated.go shape
+// during regen: older generated snapshots do not yet carry the `exported`
+// field on CheckFieldSig, so package compilation would fail if we named the
+// field directly in a composite literal. Reflection keeps the pre-regen
+// package buildable and becomes a no-op once the generated type lags behind.
+func selfhostSetCheckFieldExported(sig *CheckFieldSig, exported bool) {
+	if sig == nil {
+		return
+	}
+	rv := reflect.ValueOf(sig)
+	if !rv.IsValid() || rv.Kind() != reflect.Pointer || rv.IsNil() {
+		return
+	}
+	elem := rv.Elem()
+	if !elem.IsValid() || elem.Kind() != reflect.Struct {
+		return
+	}
+	field := elem.FieldByName("exported")
+	if !field.IsValid() || !field.CanSet() || field.Kind() != reflect.Bool {
+		return
+	}
+	field.SetBool(exported)
 }
 
 func selfhostMaterializeBounds(env *CheckEnv, bounds []PackageCheckGenericBound) []*CheckGenericBound {

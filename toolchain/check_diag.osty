@@ -73,6 +73,7 @@ pub fn checkCodeRuntimePrivilegeViolation() -> String { "E0770" }
 pub fn checkCodePodShapeViolation() -> String { "E0771" }
 pub fn checkCodeNoAllocViolation() -> String { "E0772" }
 pub fn checkCodeIntrinsicNonEmptyBody() -> String { "E0773" }
+pub fn checkCodeBuilderMissingRequiredField() -> String { "E0774" }
 
 // ---------------------------------------------------------------------
 // Low-level builder. Higher-level constructors below wrap this so call
@@ -225,6 +226,25 @@ pub fn diagMissingField(owner: String, fieldName: String, start: Int, end: Int) 
         "missing field `{fieldName}` in initializer for `{owner}`",
         start,
         end,
+    )
+}
+
+pub fn diagBuilderMissingRequiredField(owner: String, missing: List<String>, start: Int, end: Int) -> CheckDiagnostic {
+    let plural = if missing.len() == 1 { "field" } else { "fields" }
+    let first = if missing.len() > 0 { missing[0] } else { "" }
+    let joined = strings.join(missing, ", ")
+    let mut notes: List<String> = [
+        "LANG_SPEC §3.3 (G9): builder rejects `.build()` until every `pub` field without a default is set",
+    ]
+    if first != "" {
+        notes.push("hint: set with `.{first}(<value>)` before `.build()`")
+    }
+    checkDiagWithNotes(
+        checkCodeBuilderMissingRequiredField(),
+        "builder for `{owner}` cannot call `.build()`: required {plural} not set: {joined}",
+        start,
+        end,
+        notes,
     )
 }
 

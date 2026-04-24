@@ -157,10 +157,6 @@ func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	// entry point is used from multi-file walkers that do not always
 	// bundle a resolve.PackageFile, so we pass the path through opts.
 	path := opt.Path
-	if d := DesugarBuildersInFile(f, rr); len(d) > 0 {
-		diag.StampFile(d, path)
-		result.Diags = append(result.Diags, d...)
-	}
 	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib, opt.Privileged)
 	diag.StampFile(result.Diags, path)
 	recordSelfhostDeclPass(opt.OnDecl, f, "collect")
@@ -169,19 +165,11 @@ func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 }
 
 // SelfhostFile drives the selfhost checker directly on a single resolved
-// source file, skipping the builder-desugar and decl-pass-record steps
-// that File performs. Intended for callers that know their input has no
-// builder-style auto-derive call chains (e.g. the stdlib module checker
-// in internal/backend/stdlib_check.go, where stdlib sources are
-// internal and don't exercise the user-facing builder auto-derive).
-//
-// Phase 1c.4 scaffolding: this is the first call-site swap away from
-// check.File as the "everything" entry point. Eventually check.File
-// and this helper become two variants of a single entry that the
-// caller picks based on whether they need the AST-level builder pass.
-// When 1c.4 is complete and builder desugar has moved into the HIR
-// lowerer, File's desugar step goes away entirely and SelfhostFile
-// becomes the only path.
+// source file and skips the decl-pass-record bookkeeping that File
+// performs. The native checker is now authoritative for builder-chain
+// typing and diagnostics; downstream IR lowering rewrites auto-derived
+// builder chains on demand, so File and SelfhostFile share the same
+// semantic checker path.
 func SelfhostFile(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
@@ -198,15 +186,6 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 	result := newResult()
 	if pkg == nil || len(pkg.Files) == 0 {
 		return result
-	}
-	for _, pf := range pkg.Files {
-		if pf == nil {
-			continue
-		}
-		if d := DesugarBuildersInFile(pf.File, perFileResolveResult(pf)); len(d) > 0 {
-			diag.StampFile(d, pf.Path)
-			result.Diags = append(result.Diags, d...)
-		}
 	}
 	privileged := isPrivilegedPackage(pkg)
 	applyNativePackageResult(result, pkg, pr, nil, opt.Stdlib, privileged)
@@ -264,15 +243,6 @@ func Workspace(
 	out := make(map[string]*Result, len(walk))
 	for _, e := range walk {
 		out[e.path] = resultWithSharedMaps(shared)
-		for _, pf := range e.pkg.Files {
-			if pf == nil {
-				continue
-			}
-			if d := DesugarBuildersInFile(pf.File, perFileResolveResult(pf)); len(d) > 0 {
-				diag.StampFile(d, pf.Path)
-				out[e.path].Diags = append(out[e.path].Diags, d...)
-			}
-		}
 	}
 	applyNativeWorkspaceResults(ws, resolved, out, opt.Stdlib)
 	// §19 policy gates are sourced from the Osty checker (see File()
@@ -452,23 +422,6 @@ func diagnosticPrimaryEnd(d *diag.Diagnostic) token.Pos {
 		return d.Spans[0].Span.End
 	}
 	return token.Pos{}
-}
-
-// perFileResolveResult builds the minimal resolve.Result shape the
-// builder desugarer consumes (Refs for ident→symbol lookups) from a
-// single resolved PackageFile. Returns nil if the file has no refs
-// map yet, which leaves the desugarer in local-file-only mode.
-func perFileResolveResult(pf *resolve.PackageFile) *resolve.Result {
-	if pf == nil || pf.RefsByID == nil {
-		return nil
-	}
-	return &resolve.Result{
-		RefsByID:      pf.RefsByID,
-		TypeRefsByID:  pf.TypeRefsByID,
-		RefIdents:     pf.RefIdents,
-		TypeRefIdents: pf.TypeRefIdents,
-		FileScope:     pf.FileScope,
-	}
 }
 
 func isProviderStdlibPackage(ws *resolve.Workspace, path string, pkg *resolve.Package) bool {
