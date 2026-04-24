@@ -26,7 +26,7 @@ fn main() {
 	if file == nil {
 		t.Fatal("parse failed")
 	}
-	res := File(file, NewPrelude())
+	res := FileWithStdlib(file, NewPrelude(), nil)
 
 	if res.RefsByID == nil || res.TypeRefsByID == nil {
 		t.Fatal("RefsByID / TypeRefsByID not populated")
