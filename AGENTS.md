@@ -6,3 +6,16 @@
 - Use `just repair-check`, `just ci`, and `just verify-selfhost` for wider validation when touching CLI, toolchain, or generated outputs.
 - Prefer targeted `go test -count=1 -vet=off <pkg>` over whole-tree runs unless the change is broad; run `just vet` separately when needed.
 - Local generated artifacts live in `.bin/`, `.osty/`, `.profiles/`, and `.direnv/`.
+- Prefer isolated task workspaces over editing directly on the main checkout.
+- In non-interactive shells, start task workspaces with `cd "$(aitask <slug>)"` and inspect state with `aistatus`.
+- Use `aisave "<type: summary>"` to stage/commit task workspace changes; add `--push` only when you want the remote branch updated.
+- When an agent can choose its shell, prefer a lightweight `bash` login shell over an interactive `zsh` session with extra hooks.
+- Prefer `rg` for text search and `fd` for file discovery.
+- Use `eza` when directory structure matters and `bat` for quick file previews.
+- Use `jq` for JSON and `yq` for YAML/TOML-style config work.
+- Use `hyperfine` for repeatable CLI benchmark comparisons.
+- Prefer repo watch loops built on `watchexec` when iterating locally.
+- Prefer `ast-grep` for structural searches or codemods before falling back to plain-text regex.
+- After editing shell scripts, run `shfmt -w` and `shellcheck`.
+- Prefer `gotestsum` for broader Go test runs when you want compact failure summaries.
+- Use `tokei` for quick repository sizing and `ctags` (Homebrew `universal-ctags`) for cross-language symbol indexing when LSP coverage is thin.
