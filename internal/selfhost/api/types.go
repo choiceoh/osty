@@ -190,3 +190,21 @@ type ResolveRequest struct {
 	Source  string               `json:"source,omitempty"`
 	Package *PackageResolveInput `json:"package,omitempty"`
 }
+
+// InspectRecord is the exported shape of one inspector observation
+// produced by the self-hosted inspect pass (toolchain/inspect.osty).
+//
+// Unlike internal/check.InspectRecord — which carries structured
+// types.Type values and token.Pos spans — this record stays in the
+// self-host's pre-lift representation: raw byte offsets and rendered
+// type strings. Callers that need structured types should continue to
+// use the Go-side Inspect until the self-host surfaces a typed form.
+type InspectRecord struct {
+	Start    int      `json:"start"`
+	End      int      `json:"end"`
+	NodeKind string   `json:"nodeKind"`
+	Rule     string   `json:"rule"`
+	TypeName string   `json:"typeName,omitempty"`
+	HintName string   `json:"hintName,omitempty"`
+	Notes    []string `json:"notes,omitempty"`
+}
