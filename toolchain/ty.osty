@@ -445,12 +445,6 @@ pub fn tyRetAt(arena: TyArena, idx: Int) -> Int {
 
 pub fn tyInnerAt(arena: TyArena, idx: Int) -> Int {
     let node = tyGet(arena, idx)
-    // Written as an if-else expression (rather than early-return +
-    // fallthrough value) so the bootstrap Osty→Go transpiler sees a
-    // pure expression and emits a single `return` with the right
-    // value. The early-return form trips a pre-existing transpiler
-    // bug where the fallthrough literal becomes part of an
-    // if-expression subtraction.
     if node.kind == TkOptional {
         node.ret
     } else {
@@ -555,12 +549,6 @@ pub fn tyEq(arena: TyArena, a: Int, b: Int) -> Bool {
     if na.kind != nb.kind {
         return false
     }
-    // Match arms here use pure boolean expressions rather than
-    // `{ ... return false; tail }` early-return blocks. The
-    // bootstrap Osty→Go transpiler miscompiles the early-return
-    // form inside a match arm (emits a bare `return` followed by
-    // unreachable body), so we express the same semantics via
-    // short-circuit `&&`.
     match na.kind {
         TkErr -> true,
         TkPoison -> true,
@@ -914,10 +902,6 @@ fn splitTopLevel(text: String) -> List<String> {
             buf.push(unit)
         } else if unit == "," && angle == 0 && paren == 0 {
             out.push(strings.trimSpace(strings.join(buf, "")))
-            // `buf = []` loses bootstrap-gen's type inference for the
-            // fresh empty list (emitted as `make([]any, 0, 1)` instead
-            // of `make([]string, 0, 1)`), so regen fails to compile on
-            // Windows. Clear in place to keep the element type.
             buf.clear()
         } else {
             buf.push(unit)

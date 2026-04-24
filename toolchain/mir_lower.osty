@@ -5117,11 +5117,7 @@ fn mirLowerSwitchVariant(mc: MirLowerMatchContext, node: HirDecisionNode) {
     let discRV = mirRVDiscriminant(projPlace, "Int")
     mirLowerEmitInstr(mc.bs, mirAssignInstr(mirPlace(disc), discRV, mc.span))
 
-    // Allocate one block per case + a default block. Iterate by
-    // index (binding `i` in the loop header itself satisfies the
-    // bootstrap transpiler's "declared and used" check for the
-    // generated Go counterpart) instead of `for _c in …`, which
-    // lowers to a named-but-unused `_c` in Go.
+    // Allocate one block per case + a default block.
     let mut caseBlocks: List<Int> = []
     let caseCount = node.switchCases.len()
     for i in 0..caseCount {

@@ -2,18 +2,14 @@
 ///
 /// This module incrementally replaces the hand-written Go at
 /// `internal/llvmgen/mir_generator.go`. Each section of the Go source
-/// moves here as its dependencies are resolved; the generator at
-/// `internal/llvmgen/gen_mir_generator_snapshot.go` transpiles this
-/// file to `internal/llvmgen/mir_generator_snapshot.go` so the
-/// native backend picks up the ported helpers without going through
-/// a hand-maintained bridge.
+/// moves here as its dependencies are resolved, landing through the
+/// LLVM self-host path rather than a Go-transpile regen.
 ///
 /// Scope of the first iteration: §13 "type mapping" — the pure
-/// text→LLVM type dispatcher that every other section calls. The
-/// bodied helpers here route through `llvmStrings.*` instead of
-/// String methods so the bootstrap transpiler can target the Go
-/// stdlib directly (the transpiler doesn't lower `.indexOf` /
-/// `.hasSuffix` method syntax yet).
+/// text→LLVM type dispatcher that every other section calls. Bodied
+/// helpers here still route through `llvmStrings.*` aliases (provided
+/// by the toolchain bundle prelude); the future refactor to plain
+/// String methods tracks in SPEC_GAPS.
 
 /// mirLlvmTypeForPrim returns the LLVM scalar type string for the
 /// primitive type name produced by `hirTypeString` (spec text form —
@@ -281,27 +277,20 @@ pub fn mirEarliestAfter(input: String, needle: String) -> Int {
 /// **Restriction:** this Osty version handles printable ASCII
 /// (0x20..=0x7E) plus the two structural escapes (`\` → `\\`, `"`
 /// → `\22`). Non-printable / non-ASCII bytes deliberately crash the
-/// encoder — the bootstrap transpiler can't lower the
-/// `fmt.Sprintf("\\%02X", c)` hex formatting the general case
-/// needs (compare the hand-written `llvmCStringEscape` patch in
-/// `internal/llvmgen/gen_support_snapshot.go`). The Go-side caller
-/// must screen `s` for non-printable bytes first and route those
-/// strings to the original `encodeLLVMString` implementation in
-/// `mir_generator.go`.
+/// encoder; the Go-side caller must screen `s` for non-printable
+/// bytes first and route those strings to the original
+/// `encodeLLVMString` implementation in `mir_generator.go`.
 ///
-/// On non-printable input the function triggers a Go out-of-range
+/// On non-printable input the function triggers an out-of-range
 /// slice panic instead of returning malformed IR — the crash points
 /// at the missing pre-screen rather than silently emitting bad LLVM.
 pub fn mirEncodeLLVMString(s: String) -> String {
     // All printable ASCII characters except `\` and `"` (those have
-    // dedicated escape branches above). Membership test via
-    // `llvmStrings.Contains` keeps us off `Char` / byte arithmetic,
-    // which the bootstrap transpiler doesn't lower for non-i64
-    // scalars. The literal is split across two pieces so the byte
-    // sequence `=` followed by `>` never appears in source — the
-    // front-end lexer scans the raw bytes for that pair (E0007 fat
-    // arrow) regardless of whether they sit inside a string or a
-    // comment.
+    // dedicated escape branches above). The literal is split across
+    // two pieces so the byte sequence `=` followed by `>` never
+    // appears in source — the front-end lexer scans the raw bytes
+    // for that pair (E0007 fat arrow) regardless of whether they
+    // sit inside a string or a comment.
     let printable = " !#$%&'()*+,-./0123456789:;<=" + ">?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz\{|\}~"
     let mut out = ""
     let n = s.len()
