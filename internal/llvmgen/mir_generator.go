@@ -5430,43 +5430,87 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicMapGet:
+		// `m.get(k) -> V?` — present-flag runtime plus `%Option.<V>`
+		// aggregate construction. The runtime helper
+		// `osty_rt_map_get_<suffix>(map, key, out) -> i1` memcpys V
+		// into `out` and returns true on hit; on miss it returns
+		// false and leaves `out` untouched. We branch on the flag,
+		// widen the loaded V into the i64 payload slot in the hit
+		// arm (or use 0 in the miss arm), insertvalue into the
+		// standard `{ i64 disc, i64 payload }` layout, and store the
+		// aggregate into the dest slot.
+		//
+		// The indexing form `m[k]` goes through IndexProj +
+		// `emitMapGetOrAbort`, which keeps the abort-on-miss runtime
+		// (correct semantics: indexing panics on miss). Only `.get`
+		// returns Option<V>.
 		if len(i.Args) != 2 {
 			return unsupported("mir-mvp", "map_get arity")
+		}
+		if i.Dest == nil {
+			return unsupported("mir-mvp", "map_get without destination")
+		}
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return fmt.Errorf("mir-mvp: map_get into unknown local %d", i.Dest.Local)
+		}
+		optT, ok := destLoc.Type.(*ir.OptionalType)
+		if !ok {
+			return unsupportedf("mir-mvp",
+				"map_get dest must be Option<V>, got %s",
+				mirTypeString(destLoc.Type))
 		}
 		kReg, err := g.evalOperand(i.Args[1], keyT)
 		if err != nil {
 			return err
 		}
 		vLLVM := g.llvmType(valT)
-		// When the destination local's LLVM type matches the map's
-		// value type exactly, hand the runtime the dest slot itself —
-		// the runtime will memcpy straight into it, skipping the
-		// fresh-alloca + load + store we'd otherwise need.
-		if i.Dest != nil {
-			destLoc := g.fn.Local(i.Dest.Local)
-			if destLoc == nil {
-				return fmt.Errorf("mir-mvp: map_get into unknown local %d", i.Dest.Local)
-			}
-			if g.llvmType(destLoc.Type) == vLLVM {
-				g.emitMapGetOrAbort(mapReg, kReg, keyLLVM, keyString, vLLVM, g.localSlots[i.Dest.Local])
-				return nil
-			}
-			// Type mismatch (a future coercion shape): fall through
-			// to the alloca-load path so the store retains its
-			// declared type width.
-			loaded := g.emitMapGetOrAbort(mapReg, kReg, keyLLVM, keyString, vLLVM, "")
-			g.fnBuf.WriteString("  store ")
-			g.fnBuf.WriteString(g.llvmType(destLoc.Type))
-			g.fnBuf.WriteByte(' ')
-			g.fnBuf.WriteString(loaded)
-			g.fnBuf.WriteString(", ptr ")
-			g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
-			g.fnBuf.WriteByte('\n')
-			return nil
+		optLLVM := g.llvmType(optT)
+
+		getSym := mapRuntimeGetSymbol(keyLLVM, keyString)
+		g.declareRuntime(getSym, "declare i1 @"+getSym+"(ptr, "+keyLLVM+", ptr)")
+		slot := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = alloca %s\n", slot, vLLVM)
+		present := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = call i1 @%s(ptr %s, %s %s, ptr %s)\n",
+			present, getSym, mapReg, keyLLVM, kReg, slot)
+
+		someLabel := g.freshLabel("map.get.some")
+		noneLabel := g.freshLabel("map.get.none")
+		mergeLabel := g.freshLabel("map.get.merge")
+		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n",
+			present, someLabel, noneLabel)
+
+		fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+		loaded := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = load %s, ptr %s\n", loaded, vLLVM, slot)
+		payloadI64, err := g.toI64Slot(loaded, optT.Inner)
+		if err != nil {
+			return err
 		}
-		// No destination — still perform the call for its side
-		// effects (abort-on-miss).
-		g.emitMapGetOrAbort(mapReg, kReg, keyLLVM, keyString, vLLVM, "")
+		someStep1 := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 1, 0\n",
+			someStep1, optLLVM)
+		someValue := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n",
+			someValue, optLLVM, someStep1, payloadI64)
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", mergeLabel)
+
+		fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
+		noneStep1 := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 0, 0\n",
+			noneStep1, optLLVM)
+		noneValue := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 0, 1\n",
+			noneValue, optLLVM, noneStep1)
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", mergeLabel)
+
+		fmt.Fprintf(&g.fnBuf, "%s:\n", mergeLabel)
+		merged := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = phi %s [ %s, %%%s ], [ %s, %%%s ]\n",
+			merged, optLLVM, someValue, someLabel, noneValue, noneLabel)
+		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n",
+			optLLVM, merged, g.localSlots[i.Dest.Local])
 		return nil
 	case mir.IntrinsicMapGetOr:
 		// `m.getOr(k, d) -> V` lowered without allocating an Option
