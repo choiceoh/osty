@@ -195,6 +195,7 @@ type llvmNativeFunction struct {
 	params     []*llvmNativeParam
 	body       *llvmNativeBlock
 	vectorize  bool
+	inlineMode int
 }
 
 type llvmNativeModule struct {
@@ -542,12 +543,58 @@ func llvmNativeEmitFunction(fn *llvmNativeFunction, globals []*llvmNativeGlobal,
 		retType = "void"
 	}
 	return llvmNativeRenderedFunction{
-		definition:    llvmRenderFunction(retType, fn.name, params, emitter.body),
+		definition:    llvmRenderFunctionWithAttrs(retType, fn.name, params, llvmNativeFnAttrString(fn), emitter.body),
 		stringGlobals: append([]*LlvmStringGlobal(nil), emitter.stringGlobals...),
 		nextStringID:  emitter.stringId,
 		loopMDDefs:    append([]string(nil), emitter.loopMDDefs...),
 		nextLoopMD:    emitter.nextLoopMD,
 	}
+}
+
+// llvmNativeInlineAttrKeyword mirrors toolchain/llvmgen.osty's
+// `llvmNativeInlineAttrKeyword`. Maps the v0.6 A8 `#[inline]` family
+// discriminant to the matching LLVM fn-attribute keyword; unknown
+// modes fall through to the empty string so the renderer produces the
+// attribute-free `define ... (...) {` shape.
+func llvmNativeInlineAttrKeyword(mode int) string {
+	switch mode {
+	case 1:
+		return "inlinehint"
+	case 2:
+		return "alwaysinline"
+	case 3:
+		return "noinline"
+	default:
+		return ""
+	}
+}
+
+// llvmNativeFnAttrString mirrors toolchain/llvmgen.osty's
+// `llvmNativeFnAttrString`. Assembles the fn-attribute string spliced
+// between `)` and `{` on a `llvmNativeFunction`'s `define` line.
+func llvmNativeFnAttrString(fn *llvmNativeFunction) string {
+	if fn == nil {
+		return ""
+	}
+	return llvmNativeInlineAttrKeyword(fn.inlineMode)
+}
+
+// llvmRenderFunctionWithAttrs mirrors toolchain/llvmgen.osty's
+// `llvmRenderFunctionWithAttrs`. Renders a function `define` line
+// with an optional fn-attribute string spliced between the parameter
+// list's closing paren and the opening brace. `fnAttrs == ""` produces
+// output byte-identical to `llvmRenderFunction`.
+func llvmRenderFunctionWithAttrs(ret string, name string, params []*LlvmParam, fnAttrs string, body []string) string {
+	var header string
+	if fnAttrs == "" {
+		header = fmt.Sprintf("define %s @%s(%s) {", ret, name, llvmParams(params))
+	} else {
+		header = fmt.Sprintf("define %s @%s(%s) %s {", ret, name, llvmParams(params), fnAttrs)
+	}
+	lines := []string{header, "entry:"}
+	lines = append(lines, body...)
+	lines = append(lines, "}")
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func llvmNativeBindGlobals(emitter *LlvmEmitter, globals []*llvmNativeGlobal) {

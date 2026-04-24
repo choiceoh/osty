@@ -1280,6 +1280,62 @@ pub struct LlvmNativeFunction {
     pub returnType: String,
     pub params: List<LlvmNativeParam>,
     pub body: LlvmNativeBlock,
+    /// v0.6 A8 `#[inline]` family: 0=none, 1=inlinehint, 2=alwaysinline,
+    /// 3=noinline. Mirrors `ir.FnDecl.InlineMode` in the Go HIR.
+    pub inlineMode: Int,
+}
+
+/// Translate a `LlvmNativeFunction.inlineMode` discriminant into the
+/// corresponding LLVM fn-attribute keyword. Mirrors the HIR emitter's
+/// `formatFnAttrs` switch — values here are the authoritative v0.6 A8
+/// mapping (`InlineSoft`/`InlineAlways`/`InlineNever`). Unknown modes
+/// fall through to the empty string so the renderer produces the
+/// attribute-free `define ... (...) \{` shape.
+pub fn llvmNativeInlineAttrKeyword(mode: Int) -> String {
+    if mode == 1 {
+        "inlinehint"
+    } else if mode == 2 {
+        "alwaysinline"
+    } else if mode == 3 {
+        "noinline"
+    } else {
+        ""
+    }
+}
+
+/// Assemble the fn-attribute string spliced between `)` and `\{` on a
+/// `LlvmNativeFunction`'s `define` line. Currently only the A8 inline
+/// family contributes; future v0.6 annotations (hot/cold/pure/target
+/// features/noalias) land in this helper as they gain Osty-emitter
+/// coverage so all callers stay on one call shape.
+pub fn llvmNativeFnAttrString(function: LlvmNativeFunction) -> String {
+    llvmNativeInlineAttrKeyword(function.inlineMode)
+}
+
+/// Variant of `llvmRenderFunction` that splices a fn-attribute string
+/// (e.g. `"alwaysinline"`, `"readnone"`) between the parameter list's
+/// closing paren and the body-opening brace. `fnAttrs == ""` produces
+/// output byte-identical to `llvmRenderFunction` so the attribute-free
+/// path stays on a stable shape. Lives inside the native-owned entry
+/// slice because only the IR-projected emitter consumes it today.
+pub fn llvmRenderFunctionWithAttrs(
+    ret: String,
+    name: String,
+    params: List<LlvmParam>,
+    fnAttrs: String,
+    body: List<String>,
+) -> String {
+    let header = if fnAttrs == "" {
+        "define {ret} @{name}({llvmParams(params)}) \{"
+    } else {
+        "define {ret} @{name}({llvmParams(params)}) {fnAttrs} \{"
+    }
+    let mut lines = [header, "entry:"]
+    for line in body {
+        lines.push(line)
+    }
+    lines.push("\}")
+    llvmStrings.join([llvmStrings.join(lines, "\n"), "\n"], "")
 }
 
 pub struct LlvmNativeModule {
@@ -1410,10 +1466,11 @@ pub fn llvmNativeEmitFunction(
             }
         }
         return LlvmNativeRenderedFunction {
-            definition: llvmRenderFunction(
+            definition: llvmRenderFunctionWithAttrs(
                 if function.returnType == "" { "void" } else { function.returnType },
                 function.name,
                 [],
+                llvmNativeFnAttrString(function),
                 emitter.body,
             ),
             stringGlobals: emitter.stringGlobals,
@@ -1481,10 +1538,11 @@ pub fn llvmNativeEmitFunction(
         }
     }
     return LlvmNativeRenderedFunction {
-        definition: llvmRenderFunction(
+        definition: llvmRenderFunctionWithAttrs(
             if function.returnType == "" { "void" } else { function.returnType },
             function.name,
             params,
+            llvmNativeFnAttrString(function),
             emitter.body,
         ),
         stringGlobals: emitter.stringGlobals,

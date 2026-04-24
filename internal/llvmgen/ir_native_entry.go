@@ -1351,6 +1351,7 @@ func nativeFunctionFromIR(ctx *nativeProjectionCtx, fn *ostyir.FnDecl) (*llvmNat
 		returnType: retType,
 		params:     make([]*llvmNativeParam, 0, len(fn.Params)),
 		vectorize:  fn.Vectorize,
+		inlineMode: fn.InlineMode,
 	}
 	for _, param := range fn.Params {
 		if param == nil || param.IsDestructured() || param.Default != nil {
@@ -1421,7 +1422,8 @@ func nativeMethodFunctionFromIR(
 			irType:   llvmMethodReceiverIRType(ownerInfo.def.llvmType, fn.ReceiverMut),
 			byRef:    fn.ReceiverMut,
 		}},
-		vectorize: fn.Vectorize,
+		vectorize:  fn.Vectorize,
+		inlineMode: fn.InlineMode,
 	}
 	ctx.bindScopeName("self", nativeExprInfo{
 		kind:       nativeExprInfoStruct,
