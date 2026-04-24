@@ -25,8 +25,8 @@ func lowerThroughMIR(t *testing.T, src string) string {
 	file := parseLLVMGenFile(t, src)
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
 	reg := stdlib.LoadCached()
-	chk := check.File(file, res, check.Opts{
-		UseGolegacy:   true,
+	chk := check.SelfhostFile(file, res, check.Opts{
+		
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,

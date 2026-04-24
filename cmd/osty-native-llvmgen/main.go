@@ -70,8 +70,8 @@ func prepareSourceEntry(req llvmgenRequest) (backend.Entry, error) {
 	}
 	reg := stdlib.LoadCached()
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{
-		UseGolegacy:   true,
+	chk := check.SelfhostFile(file, res, check.Opts{
+		
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,
@@ -107,7 +107,7 @@ func preparePackageEntry(req llvmgenRequest) (backend.Entry, error) {
 	}
 	results := ws.ResolveAll()
 	checks := check.Workspace(ws, results, check.Opts{
-		UseGolegacy: true,
+		
 		Stdlib:      ws.Stdlib,
 	})
 	pkg := ws.Packages[""]
