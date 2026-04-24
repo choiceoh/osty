@@ -111,6 +111,20 @@ compat 로 수락된다 (no-op).
   `ResolveAll` (Go-host) 전부 삭제. `--legacy` 플래그 제거. 매트릭스의
   `ported` 행 전부 "완료".
 
+  **2026-04-24 진행** (incremental deletion chain):
+  - #829: `resolve.File` helper (dead 6 LOC) 삭제.
+  - #830: `resolve.LoadPackage` 13 call site → `LoadPackageArenaFirst` 이전
+    + top-level `LoadPackage` wrapper 삭제.
+  - (이 PR): **`--legacy` 플래그 제거** + `cliFlags.legacy` 필드 삭제 +
+    `runCheckFileLegacy` / `runTypecheckFileLegacy` / `runCheckPackageLegacy` /
+    `runCheckWorkspace` 4 legacy runner 삭제 + `runLintFileLegacy` →
+    `runLintFile` / `runLintPackageLegacy` → `runLintPackage` 리네임 +
+    `cmd/osty/check_legacy_baseline_test.go` / `lint_legacy_baseline_test.go`
+    test file 전체 삭제 + 관련 legacy 가드 test 2 종 (`TestCheckCLILegacyOptOutStillWorks` /
+    `TestTypecheckCLILegacyPackageRejected`) 삭제. `--native` 는 backwards-compat
+    no-op 으로 수락. **check.File 잔여 호출자는 `runLintFile` + `internal/pipeline`
+    UseGolegacy baseline 만** — 각각 별도 migration 필요.
+
 각 phase 의 끝에 `just full` + 매뉴얼 `osty check toolchain` smoke 로
 regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환.
 

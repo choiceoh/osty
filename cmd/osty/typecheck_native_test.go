@@ -74,8 +74,8 @@ func TestTypecheckCLINativeRejectsInspectFlag(t *testing.T) {
 	if got.exit != 2 {
 		t.Fatalf("exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
-	if !strings.Contains(got.stderr, "incompatible") {
-		t.Fatalf("stderr missing `incompatible` explanation:\n%s", got.stderr)
+	if !strings.Contains(got.stderr, "not supported") {
+		t.Fatalf("stderr missing `not supported` explanation:\n%s", got.stderr)
 	}
 }
 
@@ -198,28 +198,6 @@ fn main() {
 	}
 	if !strings.Contains(got.stdout, "List<String>") {
 		t.Fatalf("stdout missing List<String> type row:\n%s", got.stdout)
-	}
-}
-
-// TestTypecheckCLILegacyPackageRejected pins the legacy contract
-// that survives the 1c.1 flip: `osty typecheck --legacy DIR` is
-// still rejected with exit 2, because only the native path has DIR
-// support (runTypecheckPackageNative). The default (`osty typecheck
-// DIR` — now native) is covered by
-// TestTypecheckCLINativePackageCleanSourcePrintsTypes.
-func TestTypecheckCLILegacyPackageRejected(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "main.osty")
-	if err := os.WriteFile(path, []byte(`fn main() {}
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got := runOstyCLI(t, "typecheck", "--legacy", dir)
-	if got.exit != 2 {
-		t.Fatalf("exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
-	}
-	if !strings.Contains(got.stderr, "typecheck --legacy does not accept a directory") {
-		t.Fatalf("stderr missing legacy rejection message:\n%s", got.stderr)
 	}
 }
 

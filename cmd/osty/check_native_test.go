@@ -80,8 +80,8 @@ func TestCheckCLINativeRejectsInspectFlag(t *testing.T) {
 	if got.exit != 2 {
 		t.Fatalf("exit = %d, want 2 (flag-incompatibility rejection)\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
-	if !strings.Contains(got.stderr, "incompatible") {
-		t.Fatalf("stderr missing `incompatible` explanation:\n%s", got.stderr)
+	if !strings.Contains(got.stderr, "not supported") {
+		t.Fatalf("stderr missing `not supported` explanation:\n%s", got.stderr)
 	}
 }
 
@@ -423,12 +423,11 @@ func TestRunCheckFileNativeIsAstbridgeFree(t *testing.T) {
 // TestCheckCLIDefaultPathUsesSelfhostArena is the production-default
 // companion to TestRunCheckFileNativeIsAstbridgeFree: after the
 // 1c.1 flip (SELFHOST_PORT_MATRIX.md), `osty check FILE` with no
-// flag at all must route through the self-host arena pipeline the
-// same way `--native` does. Run the subprocess CLI so the default
+// flag at all routes through the self-host arena pipeline the same
+// way `--native` does. Run the subprocess CLI so the default
 // actually goes through parseFlags/dispatch, then verify exit 0 on
-// a well-typed input. Paired regression: any future attempt to
-// re-route the default through runCheckFileLegacy must either
-// update this test or add a --legacy-gated wrapper.
+// a well-typed input. Phase 1c.5 retired the Go-hosted escape
+// hatch — the self-host path is the only path now.
 func TestCheckCLIDefaultPathExitsZero(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
@@ -443,31 +442,6 @@ func TestCheckCLIDefaultPathExitsZero(t *testing.T) {
 	got := runOstyCLI(t, "check", path)
 	if got.exit != 0 {
 		t.Fatalf("osty check (default) exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
-	}
-	if strings.Contains(got.stderr, "error[") {
-		t.Fatalf("stderr contained error output on clean source:\n%s", got.stderr)
-	}
-}
-
-// TestCheckCLILegacyOptOutStillWorks pins the 1c.1 escape hatch:
-// even after the default flip, `osty check --legacy FILE` must
-// still route through runCheckFileLegacy so the Go-hosted resolve +
-// check.File pair remains a reachable fallback until Phase 1c.5
-// removes both sides.
-func TestCheckCLILegacyOptOutStillWorks(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "main.osty")
-	if err := os.WriteFile(path, []byte(`fn main() {
-    let x = 1
-    let y = x + 2
-    y
-}
-`), 0o644); err != nil {
-		t.Fatalf("write source: %v", err)
-	}
-	got := runOstyCLI(t, "check", "--legacy", path)
-	if got.exit != 0 {
-		t.Fatalf("osty check --legacy exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
 	if strings.Contains(got.stderr, "error[") {
 		t.Fatalf("stderr contained error output on clean source:\n%s", got.stderr)
