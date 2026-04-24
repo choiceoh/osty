@@ -119,8 +119,7 @@ func (l *linter) simplifyExpr(e ast.Expr) {
 		// / `if c { false } else { true }`). Only if both branches are
 		// a single-stmt block holding a BoolLit.
 		l.checkRedundantBool(n)
-		l.checkConstantCondition(n)
-		l.checkEmptyBranch(n)
+		// L0022 / L0023 emission lives in toolchain/lint.osty.
 		l.checkIdenticalBranches(n)
 		l.simplifyExpr(n.Cond)
 		l.simplifyBlock(n.Then)
@@ -336,79 +335,6 @@ func exprsEqual(a, b ast.Expr, rr *resolve.Result) bool {
 	// Calls, closures, list/map/struct literals, unary/binary on
 	// non-idents, etc. — bail out conservatively.
 	return false
-}
-
-// ---- L0022: constant condition in `if` ----
-
-func (l *linter) checkConstantCondition(n *ast.IfExpr) {
-	// if-let bindings test a pattern; they're never "constant" in the
-	// sense this rule means.
-	if n.IsIfLet {
-		return
-	}
-	val, ok := evalConstantBool(n.Cond)
-	if !ok {
-		return
-	}
-	lit := "true"
-	if !val {
-		lit = "false"
-	}
-	l.emit(diag.New(diag.Warning,
-		"`if` condition is always "+lit).
-		Code(diag.CodeConstantCondition).
-		Primary(diag.Span{Start: n.Cond.Pos(), End: n.Cond.End()},
-			"always "+lit).
-		Hint("drop the `if`, or use the real condition instead of a literal").
-		Build())
-}
-
-// evalConstantBool recognises the tiny set of condition shapes we can
-// prove true/false without type information: bare BoolLit, `!BoolLit`,
-// and parentheses around either.
-func evalConstantBool(e ast.Expr) (bool, bool) {
-	for {
-		switch n := e.(type) {
-		case *ast.BoolLit:
-			return n.Value, true
-		case *ast.ParenExpr:
-			e = n.X
-		case *ast.UnaryExpr:
-			if n.Op != token.NOT {
-				return false, false
-			}
-			v, ok := evalConstantBool(n.X)
-			if !ok {
-				return false, false
-			}
-			return !v, true
-		default:
-			return false, false
-		}
-	}
-}
-
-// ---- L0023: empty `if` / `else` branch ----
-
-func (l *linter) checkEmptyBranch(n *ast.IfExpr) {
-	if n.Then != nil && len(n.Then.Stmts) == 0 {
-		l.emit(diag.New(diag.Warning,
-			"`if` body is empty").
-			Code(diag.CodeEmptyBranch).
-			Primary(diag.Span{Start: n.Then.PosV, End: n.Then.EndV},
-				"empty block").
-			Hint("fill in the branch, or negate the condition and drop the `if`").
-			Build())
-	}
-	if elseBlock, ok := n.Else.(*ast.Block); ok && len(elseBlock.Stmts) == 0 {
-		l.emit(diag.New(diag.Warning,
-			"`else` body is empty").
-			Code(diag.CodeEmptyBranch).
-			Primary(diag.Span{Start: elseBlock.PosV, End: elseBlock.EndV},
-				"empty block").
-			Hint("drop the empty `else`, or fill it in").
-			Build())
-	}
 }
 
 // ---- L0025: identical branches ----
