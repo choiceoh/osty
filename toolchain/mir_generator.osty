@@ -1,0 +1,272 @@
+/// MIR→LLVM emitter (self-host port).
+///
+/// This module incrementally replaces the hand-written Go at
+/// `internal/llvmgen/mir_generator.go`. Each section of the Go source
+/// moves here as its dependencies are resolved; the generator at
+/// `internal/llvmgen/gen_mir_generator_snapshot.go` transpiles this
+/// file to `internal/llvmgen/mir_generator_snapshot.go` so the
+/// native backend picks up the ported helpers without going through
+/// a hand-maintained bridge.
+///
+/// Scope of the first iteration: §13 "type mapping" — the pure
+/// text→LLVM type dispatcher that every other section calls. The
+/// bodied helpers here route through `llvmStrings.*` instead of
+/// String methods so the bootstrap transpiler can target the Go
+/// stdlib directly (the transpiler doesn't lower `.indexOf` /
+/// `.hasSuffix` method syntax yet).
+
+/// mirLlvmTypeForPrim returns the LLVM scalar type string for the
+/// primitive type name produced by `hirTypeString` (spec text form —
+/// e.g. `Int`, `Bool`, `Float64`). Returns `""` when the name isn't
+/// a recognised primitive, which tells the caller to fall through to
+/// the generic / named-type path in `mirLlvmType`.
+pub fn mirLlvmTypeForPrim(name: String) -> String {
+    if name == "Int" || name == "Int64" || name == "UInt64" {
+        return "i64"
+    }
+    if name == "Int32" || name == "UInt32" || name == "Char" {
+        return "i32"
+    }
+    if name == "Int16" || name == "UInt16" {
+        return "i16"
+    }
+    if name == "Int8" || name == "UInt8" || name == "Byte" {
+        return "i8"
+    }
+    if name == "Bool" {
+        return "i1"
+    }
+    if name == "Float" || name == "Float64" {
+        return "double"
+    }
+    if name == "Float32" {
+        return "float"
+    }
+    // String / Bytes flow through the runtime as opaque `ptr`s.
+    if name == "String" || name == "Bytes" {
+        return "ptr"
+    }
+    // §19.3 RawPtr — opaque pointer-shaped scalar.
+    if name == "RawPtr" {
+        return "ptr"
+    }
+    // Unit / Never fold to void at the LLVM layer.
+    if name == "Unit" || name == "()" {
+        return "void"
+    }
+    if name == "Never" {
+        return "void"
+    }
+    ""
+}
+
+/// mirLlvmTypeForOpaqueNamed maps the fixed set of named types that
+/// lower to `ptr` at the LLVM boundary — builtin collections and the
+/// concurrency runtime handle types. Returns `""` when the name
+/// doesn't match, so the caller continues the dispatch chain.
+pub fn mirLlvmTypeForOpaqueNamed(name: String) -> String {
+    // Builtin collection containers: the runtime owns their struct
+    // layout, LLVM only sees the pointer handle.
+    if name == "List" || name == "Map" || name == "Set" || name == "Bytes" {
+        return "ptr"
+    }
+    // Concurrency runtime values: same deal — opaque handles.
+    if name == "Channel" || name == "Handle" || name == "Group" ||
+       name == "TaskGroup" || name == "Select" || name == "Duration" {
+        return "ptr"
+    }
+    // Closure environment struct — always passed as a pointer to the
+    // captured-vars block the MIR lowerer synthesised.
+    if name == "ClosureEnv" {
+        return "ptr"
+    }
+    ""
+}
+
+/// mirLlvmTypeHeadName strips the optional `pkg.` prefix and the
+/// `<...>` argument list from a hirTypeString-style named type
+/// text, returning just the head identifier. For `Map<String, Int>`
+/// this returns `"Map"`. For `pkg.Event` it returns `"Event"`. For
+/// bare names like `Int` it returns the input unchanged. Invalid
+/// shapes (`<nil>`, `<error>`) pass through unchanged.
+pub fn mirLlvmTypeHeadName(typeText: String) -> String {
+    // Strip trailing generic args first so the subsequent dot search
+    // doesn't walk into `<...>` content (package paths don't nest
+    // angle brackets).
+    let ltIdx = llvmStrings.Index(typeText, "<")
+    let stripped = if ltIdx >= 0 {
+        typeText[0..ltIdx]
+    } else {
+        typeText
+    }
+    let dotIdx = llvmStrings.Index(stripped, ".")
+    if dotIdx >= 0 {
+        stripped[(dotIdx + 1)..stripped.len()]
+    } else {
+        stripped
+    }
+}
+
+/// mirLlvmTypeIsOptionalSurface reports whether the input is a
+/// surface-form `T?` optional, as produced by `hirTypeString` for
+/// `ir.OptionalType`. Guards against `fn(...) -> T?` where the `?`
+/// is also a return-type marker by requiring top-level bracket
+/// depth to be zero — i.e. the trailing `?` belongs to the outer
+/// type, not a nested function result.
+pub fn mirLlvmTypeIsOptionalSurface(typeText: String) -> Bool {
+    let n = typeText.len()
+    if n == 0 {
+        return false
+    }
+    if !llvmStrings.HasSuffix(typeText, "?") {
+        return false
+    }
+    // Walk the prefix once to confirm no unbalanced `<`/`(` keeps us
+    // inside a nested generic / fn-sig — if so the `?` is inner.
+    let mut depth = 0
+    let mut i = 0
+    let prefix = typeText[0..(n - 1)]
+    let plen = prefix.len()
+    for i < plen {
+        let ch = prefix[i..(i + 1)]
+        if ch == "<" || ch == "(" {
+            depth = depth + 1
+        } else if ch == ">" || ch == ")" {
+            depth = depth - 1
+        }
+        i = i + 1
+    }
+    depth == 0
+}
+
+/// mirIsHeapEqualityType reports whether MIR `==` / `!=` on values of
+/// the given hir-style type text should dispatch to a runtime
+/// content-equality call instead of a raw LLVM `icmp` on the pointer.
+///
+/// Mirrors `isHeapEqualityType` in `internal/llvmgen/mir_generator.go`:
+/// stage-1 covers only the String and Bytes primitives, both of which
+/// share the C-string ABI and route through `osty_rt_strings_Equal`.
+/// Collection container types (`List<...>`, `Map<...>`, etc.) deliberately
+/// fall through to the raw pointer comparison path until the runtime
+/// gains content-equality helpers for them.
+pub fn mirIsHeapEqualityType(typeText: String) -> Bool {
+    typeText == "String" || typeText == "Bytes"
+}
+
+/// mirIsStringPrimTypeText reports whether the hir-style type text
+/// names the `String` primitive exactly. Used by the binary-op lowerer
+/// to gate routing of `<` / `<=` / `>` / `>=` through
+/// `osty_rt_strings_Compare` — Bytes ordering has no runtime support
+/// yet and stays on the raw-icmp path. Mirrors `isStringPrimType` in
+/// `internal/llvmgen/mir_generator.go`.
+pub fn mirIsStringPrimTypeText(typeText: String) -> Bool {
+    typeText == "String"
+}
+
+/// mirIsUnitTypeText reports whether the hir-style type text names the
+/// `Unit` / `()` / `Never` "no-value" types. Mirrors `isUnitType` in
+/// `internal/llvmgen/mir_generator.go` but operates on the textual
+/// surface rather than the `*ir.PrimType` node — sufficient for
+/// dispatch sites that only have the `mirTypeString` form on hand.
+/// `Never` collapses to the unit treatment at the LLVM layer because
+/// both lower to `void` and never produce a stored result slot.
+pub fn mirIsUnitTypeText(typeText: String) -> Bool {
+    typeText == "Unit" || typeText == "()" || typeText == "Never"
+}
+
+/// mirIsFloatTypeText reports whether the hir-style type text names a
+/// floating-point primitive. Mirrors `isFloatType` in
+/// `internal/llvmgen/mir_generator.go`. Accepts both the spec surface
+/// (`Float`, `Float32`, `Float64`) and the LLVM-text forms (`double`,
+/// `float`) so callers that pass `mirLlvmTypeForPrim` results directly
+/// also classify correctly.
+pub fn mirIsFloatTypeText(typeText: String) -> Bool {
+    typeText == "Float" || typeText == "Float32" || typeText == "Float64" ||
+        typeText == "double" || typeText == "float"
+}
+
+/// mirFirstNonEmpty returns the first non-empty entry in `vals`, or the
+/// empty string when every entry is empty. Mirrors the variadic
+/// `firstNonEmpty(xs ...string) string` helper in
+/// `internal/llvmgen/mir_generator.go`; Osty doesn't surface Go-style
+/// variadics so callers wrap their inputs into a `List<String>` at the
+/// call site.
+pub fn mirFirstNonEmpty(vals: List<String>) -> String {
+    let n = vals.len()
+    let mut i = 0
+    for i < n {
+        let x = vals[i]
+        if x != "" {
+            return x
+        }
+        i = i + 1
+    }
+    ""
+}
+
+/// mirEarliestAfter returns the byte offset of the first occurrence
+/// of `needle` inside `input`, or `-1` when absent. Mirrors the
+/// single-needle slice of the `earliestAfter` helper in
+/// `internal/llvmgen/mir_generator.go`. The Go caller still sweeps a
+/// list of markers (`"define "`, `"declare "`); each sweep boils
+/// down to one call here, and the caller picks the smallest non-
+/// negative result.
+pub fn mirEarliestAfter(input: String, needle: String) -> Int {
+    llvmStrings.Index(input, needle)
+}
+
+/// mirEncodeLLVMString returns the escaped body of `s` for an LLVM
+/// IR `c"..."` constant. The result is the bytes that go between
+/// the opening `c"` and closing `"`; callers concatenate the
+/// constant header (`@.str.N = private unnamed_addr constant [...]`)
+/// themselves and compute the array length as `s.len() + 1` (the
+/// trailing `\00` NUL is appended here).
+///
+/// **Restriction:** this Osty version handles printable ASCII
+/// (0x20..=0x7E) plus the two structural escapes (`\` → `\\`, `"`
+/// → `\22`). Non-printable / non-ASCII bytes deliberately crash the
+/// encoder — the bootstrap transpiler can't lower the
+/// `fmt.Sprintf("\\%02X", c)` hex formatting the general case
+/// needs (compare the hand-written `llvmCStringEscape` patch in
+/// `internal/llvmgen/gen_support_snapshot.go`). The Go-side caller
+/// must screen `s` for non-printable bytes first and route those
+/// strings to the original `encodeLLVMString` implementation in
+/// `mir_generator.go`.
+///
+/// On non-printable input the function triggers a Go out-of-range
+/// slice panic instead of returning malformed IR — the crash points
+/// at the missing pre-screen rather than silently emitting bad LLVM.
+pub fn mirEncodeLLVMString(s: String) -> String {
+    // All printable ASCII characters except `\` and `"` (those have
+    // dedicated escape branches above). Membership test via
+    // `llvmStrings.Contains` keeps us off `Char` / byte arithmetic,
+    // which the bootstrap transpiler doesn't lower for non-i64
+    // scalars. The literal is split across two pieces so the byte
+    // sequence `=` followed by `>` never appears in source — the
+    // front-end lexer scans the raw bytes for that pair (E0007 fat
+    // arrow) regardless of whether they sit inside a string or a
+    // comment.
+    let printable = " !#$%&'()*+,-./0123456789:;<=" + ">?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz\{|\}~"
+    let mut out = ""
+    let n = s.len()
+    let mut i = 0
+    for i < n {
+        let ch = s[i..(i + 1)]
+        if ch == "\\" {
+            out = out + "\\\\"
+        } else if ch == "\"" {
+            out = out + "\\22"
+        } else if llvmStrings.Contains(printable, ch) {
+            out = out + ch
+        } else {
+            // Non-printable / non-ASCII byte — caller skipped the
+            // pre-screen. Trip an out-of-range slice so the panic
+            // lands at the offending site.
+            let plen = printable.len()
+            let trap = printable[(plen + 1)..(plen + 2)]
+            return trap
+        }
+        i = i + 1
+    }
+    out + "\\00"
+}
