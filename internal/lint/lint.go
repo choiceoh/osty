@@ -7,9 +7,8 @@
 // block compilation. The CLI surfaces them via `osty lint`, with
 // `--strict` flipping warnings into a non-zero exit for CI use.
 //
-// Currently implemented rules:
+// Currently implemented rules (Go-side):
 //
-//	L0001  unused `let` binding
 //	L0002  unused function / closure parameter
 //	L0003  unused `use` alias (file-local)
 //	L0010  inner `let` shadows an outer binding
@@ -17,6 +16,9 @@
 //	L0030  type name not UpperCamelCase
 //	L0031  fn / let / param name not lowerCamelCase
 //	L0032  enum variant name not UpperCamelCase
+//
+// L0001 (unused `let` binding) is emitted by toolchain/lint.osty and
+// merged in by mergeSelfhostLint.
 //
 // Additional rules (e.g. unreachable via Never, dead match arms, magic
 // numbers) belong here once the underlying analyses (type checker,
