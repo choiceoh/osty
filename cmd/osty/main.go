@@ -92,21 +92,13 @@ type cliFlags struct {
 	// `internal/check.Result`; self-host native CLI paths read the same
 	// counters directly from `selfhost.CheckSummary`. Off by default.
 	dumpNativeDiags bool
-	// native routes `check` through the self-host arena pipeline
-	// (selfhost.CheckFromSource) instead of the Go-hosted resolve +
-	// check.File pair. The happy path never materializes *ast.File,
-	// so selfhost.AstbridgeLowerCount stays at 0 for the whole
-	// subcommand. Incompatible with --inspect, which still probes the
-	// Go check.Result shape. Production default as of Phase 1c.1
-	// (SELFHOST_PORT_MATRIX.md); `--legacy` opts back to the Go-hosted
-	// pair until the dual-track is retired.
+	// native is accepted as a backwards-compat no-op: the self-host
+	// arena pipeline (selfhost.CheckFromSource) has been the
+	// `check` / `typecheck` default since Phase 1c.1 and is now the
+	// only path after 1c.5 retired the Go-hosted escape hatch. The
+	// flag is still recognised by parseFlags so old scripts keep
+	// working, but it no longer selects between code paths.
 	native bool
-	// legacy routes `check` / `typecheck` back through the Go-hosted
-	// resolve + check.File pair. Escape hatch for the 1c.1 default
-	// flip — Phase 1c.5 deletes both this flag and the legacy path
-	// once every consumer (pipeline/build/lsp/cihost) has been moved
-	// onto native_adapter. Setting this clears `native`.
-	legacy bool
 	// suppressSummary silences the `N error(s), M warning(s)` trailer
 	// inside a single printDiags call. The package-diagnostic walker sets
 	// this per-file bucket and then prints one consolidated summary
@@ -316,33 +308,19 @@ func main() {
 			runCi(rest, flags)
 			return
 		}
-		// Allow `--native` / `--legacy` after the subcommand so users
-		// can type `osty check --native FILE` or
-		// `osty check --legacy FILE` (subcommand-local flag
-		// placement, matching how `lint` accepts `--fix` /
-		// `--strict`). Strip it from args so the downstream file-
-		// required check and subcommand dispatch still see
-		// positional-only input.
+		// `--native` is accepted after the subcommand as a backwards-
+		// compat no-op; the self-host pipeline is the only path since
+		// Phase 1c.5 retired `--legacy`. Strip it so the downstream
+		// file-required check and subcommand dispatch see positional-
+		// only input.
 		if rest, present := takeBoolFlag(args[1:], "--native"); present {
 			flags.native = true
-			flags.legacy = false
-			args = append([]string{"check"}, rest...)
-		}
-		if rest, present := takeBoolFlag(args[1:], "--legacy"); present {
-			flags.legacy = true
-			flags.native = false
 			args = append([]string{"check"}, rest...)
 		}
 	}
 	if cmd == "typecheck" {
 		if rest, present := takeBoolFlag(args[1:], "--native"); present {
 			flags.native = true
-			flags.legacy = false
-			args = append([]string{"typecheck"}, rest...)
-		}
-		if rest, present := takeBoolFlag(args[1:], "--legacy"); present {
-			flags.legacy = true
-			flags.native = false
 			args = append([]string{"typecheck"}, rest...)
 		}
 	}
@@ -401,18 +379,8 @@ func main() {
 			runLintPackage(path, flags)
 			return
 		case "typecheck":
-			// Legacy typecheck is FILE-only; native typecheck has DIR
-			// support via runTypecheckPackageNative (#633). The 1c.1
-			// default is native, so DIR just works; `--legacy` is the
-			// only way this branch can be !native, and that path
-			// stays single-file.
-			if !flags.native {
-				fmt.Fprintf(os.Stderr,
-					"osty: typecheck --legacy does not accept a directory (expected a file)\n")
-				os.Exit(2)
-			}
 			if flags.inspect {
-				fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect\n")
+				fmt.Fprintf(os.Stderr, "osty: --inspect is not supported on the self-host typecheck path\n")
 				os.Exit(2)
 			}
 			if root, ok, abort := nativeWorkspaceRoot(path, flags); abort {
@@ -538,31 +506,19 @@ func main() {
 			os.Exit(1)
 		}
 	case "check":
-		if flags.native {
-			if flags.inspect {
-				fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect\n")
-				os.Exit(2)
-			}
-			if runCheckFileNative(path, src, formatter, flags) != 0 {
-				os.Exit(1)
-			}
-			return
+		if flags.inspect {
+			fmt.Fprintf(os.Stderr, "osty: --inspect is not supported on the self-host check path\n")
+			os.Exit(2)
 		}
-		if runCheckFileLegacy(path, src, formatter, flags) != 0 {
+		if runCheckFileNative(path, src, formatter, flags) != 0 {
 			os.Exit(1)
 		}
 	case "typecheck":
-		if flags.native {
-			if flags.inspect {
-				fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect\n")
-				os.Exit(2)
-			}
-			if runTypecheckFileNative(path, src, formatter, flags) != 0 {
-				os.Exit(1)
-			}
-			return
+		if flags.inspect {
+			fmt.Fprintf(os.Stderr, "osty: --inspect is not supported on the self-host typecheck path\n")
+			os.Exit(2)
 		}
-		if runTypecheckFileLegacy(path, src, formatter, flags) != 0 {
+		if runTypecheckFileNative(path, src, formatter, flags) != 0 {
 			os.Exit(1)
 		}
 	case "resolve":
@@ -581,7 +537,7 @@ func main() {
 				return
 			}
 		}
-		if code := runLintFileLegacy(path, src, formatter, flags); code != 0 {
+		if code := runLintFile(path, src, formatter, flags); code != 0 {
 			os.Exit(code)
 		}
 	default:
@@ -607,13 +563,9 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
 	flag.BoolVar(&f.inspect, "inspect", false, "check: emit one record per expression showing the inference rule, type, and hint (see LANG_SPEC_v0.5/02a-type-inference.md)")
 	flag.BoolVar(&f.dumpNativeDiags, "dump-native-diags", false, "check/typecheck: after the run, print the native checker's per-context error histogram to stderr")
-	flag.BoolVar(&f.native, "native", true, "check/typecheck: route through the self-host arena pipeline (astbridge-free; production default). Incompatible with --inspect; redundant with the default but accepted for backwards compatibility")
-	flag.BoolVar(&f.legacy, "legacy", false, "check/typecheck: route through the Go-hosted resolve + check.File pair (pre-1c.1 default). Escape hatch while the selfhost checker coverage tail finishes; will be removed once dual-track is retired")
+	flag.BoolVar(&f.native, "native", true, "check/typecheck: backwards-compat no-op since Phase 1c.5. The self-host arena pipeline is the only path; this flag is accepted so old scripts keep working")
 	flag.Usage = usage
 	flag.Parse()
-	if f.legacy {
-		f.native = false
-	}
 	return f
 }
 
@@ -623,90 +575,31 @@ func parseFlags() cliFlags {
 // runCheckPackage runs lex + parse + resolve over dir. Two modes:
 //
 //   - **Single-package**: dir contains `.osty` files directly. Loaded
-//     as one Package via resolve.LoadPackage.
+//     via resolve.LoadPackageArenaFirst.
 //   - **Workspace**: dir has no top-level `.osty` files but one or
 //     more subdirectories do. The whole tree is loaded via Workspace
 //     so cross-package `use` declarations resolve.
 //
-// Diagnostics are rendered with each file's own formatter so source
-// snippets point at the right lines even when spanning packages.
+// Always routes through the self-host native path since Phase 1c.5
+// retired the Go-hosted legacy alternative. Diagnostics are rendered
+// with each file's own formatter so source snippets point at the right
+// lines even when spanning packages.
 func runCheckPackage(dir string, flags cliFlags) {
-	if flags.native {
-		if flags.inspect {
-			fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect\n")
-			os.Exit(2)
-		}
-		if root, ok, abort := nativeWorkspaceRoot(dir, flags); abort {
-			os.Exit(2)
-		} else if ok {
-			if runCheckWorkspaceNative(root, flags) != 0 {
-				os.Exit(1)
-			}
-			return
-		}
-		if runCheckPackageNative(dir, flags) != 0 {
+	if flags.inspect {
+		fmt.Fprintf(os.Stderr, "osty: --inspect is not supported on the self-host check path\n")
+		os.Exit(2)
+	}
+	if root, ok, abort := nativeWorkspaceRoot(dir, flags); abort {
+		os.Exit(2)
+	} else if ok {
+		if runCheckWorkspaceNative(root, flags) != 0 {
 			os.Exit(1)
 		}
 		return
 	}
-	// When dir (or any ancestor) contains osty.toml, validate it first:
-	// manifest errors (bad edition, empty workspace, etc.) surface
-	// before we descend into source files. A workspace manifest also
-	// promotes dir to workspace-mode even when the directory layout
-	// alone wouldn't trigger it.
-	if _, _, err := manifestLookupNear(dir); err == nil {
-		m, _, abort := loadManifestWithDiag(dir, flags)
-		if abort {
-			os.Exit(2)
-		}
-		if m != nil && m.Workspace != nil {
-			runCheckWorkspace(dir, flags)
-			return
-		}
+	if runCheckPackageNative(dir, flags) != 0 {
+		os.Exit(1)
 	}
-	if isWorkspace(dir) {
-		runCheckWorkspace(dir, flags)
-		return
-	}
-	if code := runCheckPackageLegacy(dir, flags); code != 0 {
-		os.Exit(code)
-	}
-}
-
-// runCheckPackageLegacy is the extracted single-package body of
-// runCheckPackage (the non-native branch, after manifest + workspace
-// dispatching). Returns an exit code instead of calling os.Exit so
-// the legacy DIR path is exercisable in-process alongside
-// runCheckPackageNative — symmetric to runCheckFileLegacy (#639).
-// Callers that previously relied on os.Exit semantics should
-// propagate the returned code.
-func runCheckPackageLegacy(dir string, flags cliFlags) int {
-	// Single-package path: enable the native-checker cache anchored
-	// at the best manifest root we can find, falling back to dir.
-	cacheRoot := dir
-	if root, _, err := manifestLookupNear(dir); err == nil && root != "" {
-		cacheRoot = root
-	}
-	enableCheckerCacheForRoot(cacheRoot)
-	pkg, err := resolve.LoadPackageArenaFirstWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("check"), os.Stderr, flags))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-		return 1
-	}
-	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
-	chk := check.Package(pkg, res, checkOpts())
-	diags := append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...)
-	printPackageDiags(pkg, diags, flags)
-	if flags.inspect {
-		runInspectPackage(pkg, chk, flags)
-	}
-	if flags.dumpNativeDiags {
-		dumpNativeDiagsFor(dir, chk)
-	}
-	if hasError(diags) {
-		return 1
-	}
-	return 0
 }
 
 // manifestLookupNear reports whether an osty.toml is reachable from
@@ -746,103 +639,31 @@ func nativeWorkspaceRoot(dir string, flags cliFlags) (string, bool, bool) {
 	return "", false, false
 }
 
-// runCheckWorkspace loads every package (one subdirectory each) rooted
-// at dir, runs cross-package resolution, and prints diagnostics per
-// package — so `auth/` diagnostics use `auth/` sources, `db/` uses
-// `db/` sources, etc.
-func runCheckWorkspace(dir string, flags cliFlags) {
-	// Activate the on-disk checker cache so a re-run with zero
-	// changes hits every package and finishes in milliseconds.
-	enableCheckerCacheForRoot(dir)
-
-	ws, err := resolve.NewWorkspace(dir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-		os.Exit(1)
-	}
-	ws.SourceTransform = aiRepairSourceTransform(aiRepairPrefix("check"), os.Stderr, flags)
-	ws.Stdlib = stdlib.LoadCached()
-	// Seed the loader with the root package (if any) plus every
-	// immediate subdirectory that contains .osty files. LoadPackage
-	// chases `use` edges from there, so deeper nested packages are
-	// pulled in lazily.
-	for _, p := range resolve.WorkspacePackagePaths(dir) {
-		_, _ = ws.LoadPackageArenaFirst(p)
-	}
-	results := ws.ResolveAll()
-	// Run the type checker over every package, producing one Result per
-	// package keyed by import path. Diagnostics from both phases are
-	// merged per-package for unified reporting.
-	checks := check.Workspace(ws, results, checkOpts())
-
-	anyErr := false
-	paths := make([]string, 0, len(ws.Packages))
-	for p := range ws.Packages {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
-	for _, p := range paths {
-		pkg := ws.Packages[p]
-		r, ok := results[p]
-		if !ok || pkg == nil {
-			continue
-		}
-		diags := append([]*diag.Diagnostic{}, r.Diags...)
-		cr := checks[p]
-		if cr != nil {
-			diags = append(diags, cr.Diags...)
-		}
-		printPackageDiags(pkg, diags, flags)
-		if flags.inspect && cr != nil {
-			runInspectPackage(pkg, cr, flags)
-		}
-		if flags.dumpNativeDiags && cr != nil {
-			dumpNativeDiagsFor(p, cr)
-		}
-		if hasError(diags) {
-			anyErr = true
-		}
-	}
-	if anyErr {
-		os.Exit(1)
-	}
-}
-
 // runLintPackage runs the lint pass over every .osty file in dir as a
 // single package so cross-file uses of `use` aliases and top-level
 // declarations don't trigger false "unused" warnings. Workspace mode
 // (dir-of-packages) runs lint per contained package via
-// runLintWorkspace.
+// runLintWorkspace. Single-package path loads arena-first (Phase 1c.2)
+// so parse goes through selfhost.Run; pf.File / canonical materialize
+// lazily for the Go resolver + linter until lint moves onto the
+// engine path in a later Phase 1c.5 slice.
 func runLintPackage(dir string, flags cliFlags) {
 	if isWorkspace(dir) {
 		runLintWorkspace(dir, flags)
 		return
 	}
-	if code := runLintPackageLegacy(dir, flags); code != 0 {
-		os.Exit(code)
-	}
-}
-
-// runLintPackageLegacy is the extracted single-package body of
-// runLintPackage (after the workspace check). Returns an exit code
-// so the lint DIR pipeline is exercisable in-process alongside the
-// check / typecheck / resolve legacy extractions. Loads arena-first
-// (Phase 1c.2) so parse goes through selfhost.Run; pf.File / canonical
-// materialize lazily for the Go resolver + linter.
-func runLintPackageLegacy(dir string, flags cliFlags) int {
 	pkg, err := resolve.LoadPackageArenaFirstWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("lint"), os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-		return 1
+		os.Exit(1)
 	}
 	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
 	chk := check.Package(pkg, res, checkOpts())
 	cfg, cfgBase, hasCfg := loadLintConfigWithBase(dir)
 	outcome := runLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)
 	if outcome.anyErr || (flags.strict && outcome.anyWarn) {
-		return 1
+		os.Exit(1)
 	}
-	return 0
 }
 
 // runLintWorkspace lints each package inside dir, aggregating diagnostics
@@ -1331,15 +1152,18 @@ func byteOffsetLineCol(src []byte, offset int) (int, int) {
 	return line, col
 }
 
-// runLintFileLegacy is the extracted `osty lint FILE` body (minus the
+// runLintFile is the extracted `osty lint FILE` body (minus the
 // exclude-config early-return, which stays in the caller so the "skip"
-// message fires before parse work begins). Same
-// parser.ParseDetailed → resolveFile → check.File → lint engine
-// pipeline the inline body ran, now returning an exit code so the
-// lint legacy path is exercisable in-process alongside the check /
-// typecheck legacy baselines (#639, #640, #641). Handles --fix /
-// --fix-dry-run stdout/disk side-effects inside the function.
-func runLintFileLegacy(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
+// message fires before parse work begins). Runs parse → resolveFile →
+// check.File → lint engine; handles --fix / --fix-dry-run stdout/disk
+// side-effects inside the function.
+//
+// Lint still uses check.File because the lint engine consumes the
+// Go-side `*check.Result` shape (Types / SymTypes / LetTypes). A
+// separate Phase 1c.5 slice will move lint onto the engine path, at
+// which point this function collapses onto selfhost.CheckFromSource
+// + a lint engine that accepts the selfhost result directly.
+func runLintFile(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
 	parsed := parser.ParseDetailed(src)
 	file, parseDiags := parsed.File, parsed.Diagnostics
 	res := resolveFile(file)
@@ -1375,51 +1199,6 @@ func runLintFileLegacy(path string, src []byte, formatter *diag.Formatter, flags
 		}
 	}
 	if hasError(all) || (flags.strict && hasWarning(all)) {
-		return 1
-	}
-	return 0
-}
-
-// runCheckFileLegacy is the extracted `osty check FILE` body (the
-// path taken when --native is NOT set). It calls parser.ParseDetailed
-// (which lowers *ast.File via astbridge — one AstbridgeLowerCount
-// bump per call), then runs the Go-native resolver + check.File
-// pair, renders diagnostics, and optionally runs --inspect /
-// --dump-native-diags. Extracted alongside runCheckFileNative so
-// baseline counter tests can exercise the legacy path in-process
-// and pin its current astbridge cost as a regression floor.
-func runCheckFileLegacy(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
-	parsed := parser.ParseDetailed(src)
-	file, diags := parsed.File, parsed.Diagnostics
-	res := resolveFile(file)
-	chk := check.File(file, res, checkOptsForFile(path, canonical.Source(src, file)))
-	all := append(append(append([]*diag.Diagnostic{}, diags...), res.Diags...), chk.Diags...)
-	printDiags(formatter, all, flags)
-	if flags.inspect {
-		runInspect(file, chk, flags)
-	}
-	if flags.dumpNativeDiags {
-		dumpNativeDiagsFor(path, chk)
-	}
-	if hasError(all) {
-		return 1
-	}
-	return 0
-}
-
-// runTypecheckFileLegacy is the extracted `osty typecheck FILE` body
-// (non-native path). Same astbridge cost profile as
-// runCheckFileLegacy — one bump from parser.ParseDetailed — plus the
-// Go-native printTypes pass over check.Result.Types.
-func runTypecheckFileLegacy(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
-	parsed := parser.ParseDetailed(src)
-	file, diags := parsed.File, parsed.Diagnostics
-	res := resolveFile(file)
-	chk := check.File(file, res, checkOptsForFile(path, canonical.Source(src, file)))
-	all := append(append(append([]*diag.Diagnostic{}, diags...), res.Diags...), chk.Diags...)
-	printDiags(formatter, all, flags)
-	printTypes(chk)
-	if hasError(all) {
 		return 1
 	}
 	return 0
