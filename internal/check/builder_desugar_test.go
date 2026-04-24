@@ -161,6 +161,53 @@ fn main() {
 	})
 }
 
+func TestDesugarLeavesNonDerivableBuilderChainUntouched(t *testing.T) {
+	src := `
+pub struct Point {
+    pub x: Int,
+    hidden: Int,
+}
+
+fn main() {
+    let p = Point.builder().x(3).build()
+}
+`
+	f := parseOrFatal(t, src)
+	diags := DesugarBuildersInFile(f, nil)
+	if len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics for non-derivable builder: %v", diags)
+	}
+	val := findLetValue(f, "p")
+	if _, ok := val.(*ast.StructLit); ok {
+		t.Fatal("non-derivable builder chain must be left untouched")
+	}
+}
+
+func TestDesugarLeavesCustomBuilderOverrideUntouched(t *testing.T) {
+	src := `
+pub struct Point {
+    pub x: Int,
+
+    pub fn builder() -> Point {
+        Point { x: 0 }
+    }
+}
+
+fn main() {
+    let p = Point.builder().x(3).build()
+}
+`
+	f := parseOrFatal(t, src)
+	diags := DesugarBuildersInFile(f, nil)
+	if len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics for custom builder override: %v", diags)
+	}
+	val := findLetValue(f, "p")
+	if _, ok := val.(*ast.StructLit); ok {
+		t.Fatal("custom builder override must cancel auto-derived desugaring")
+	}
+}
+
 func TestDesugarNestedInArg(t *testing.T) {
 	src := `
 pub struct Point { pub x: Int, pub y: Int }
@@ -438,6 +485,29 @@ fn main() {
 	}
 	if lit.Spread == nil {
 		t.Fatal("toBuilder rewrite must carry spread for chained builder binding")
+	}
+}
+
+func TestDesugarToBuilderOnNonDerivableStructLeftAlone(t *testing.T) {
+	src := `
+pub struct Point {
+    pub x: Int,
+    hidden: Int,
+}
+
+fn main() {
+    let p = Point { x: 1, hidden: 2 }
+    let q = p.toBuilder().x(99).build()
+}
+`
+	f := parseOrFatal(t, src)
+	diags := DesugarBuildersInFile(f, nil)
+	if len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	val := findLetValue(f, "q")
+	if _, ok := val.(*ast.StructLit); ok {
+		t.Fatal("toBuilder on non-derivable struct must be left untouched")
 	}
 }
 

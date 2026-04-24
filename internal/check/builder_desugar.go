@@ -48,6 +48,7 @@ func DesugarBuildersInFile(f *ast.File, rr *resolve.Result) []*diag.Diagnostic {
 
 type builderDesugar struct {
 	localStructs map[string]*ast.StructDecl
+	builderInfo  map[*ast.StructDecl]builderDeriveInfo
 	refs         map[ast.NodeID]*resolve.Symbol
 	diags        []*diag.Diagnostic
 	// scope is a stack of per-block variable → struct-decl bindings
@@ -59,6 +60,7 @@ type builderDesugar struct {
 func newBuilderDesugar(f *ast.File, rr *resolve.Result) *builderDesugar {
 	out := &builderDesugar{
 		localStructs: map[string]*ast.StructDecl{},
+		builderInfo:  map[*ast.StructDecl]builderDeriveInfo{},
 	}
 	if rr != nil {
 		out.refs = rr.RefsByID
@@ -93,6 +95,18 @@ func (w *builderDesugar) structByIdent(id *ast.Ident) *ast.StructDecl {
 		return sd
 	}
 	return nil
+}
+
+func (w *builderDesugar) deriveInfo(sd *ast.StructDecl) builderDeriveInfo {
+	if sd == nil {
+		return builderDeriveInfo{}
+	}
+	if info, ok := w.builderInfo[sd]; ok {
+		return info
+	}
+	info := classifyBuilderDerive(sd)
+	w.builderInfo[sd] = info
+	return info
 }
 
 // ---- block-scope binding tracking (for Ident.toBuilder()) ----
@@ -428,7 +442,11 @@ func (w *builderDesugar) tryDesugar(call *ast.CallExpr) ast.Expr {
 			if sd == nil {
 				return nil
 			}
-			return w.rewriteFromBuilder(call, sd, setters)
+			info := w.deriveInfo(sd)
+			if !info.Derivable {
+				return nil
+			}
+			return w.rewriteFromBuilder(call, sd, info.Required, setters)
 		}
 		if fe.Name == "toBuilder" {
 			if len(inner.Args) != 0 {
@@ -436,6 +454,9 @@ func (w *builderDesugar) tryDesugar(call *ast.CallExpr) ast.Expr {
 			}
 			sd := w.structFromReceiver(fe.X)
 			if sd == nil {
+				return nil
+			}
+			if !w.deriveInfo(sd).Derivable {
 				return nil
 			}
 			return w.rewriteFromToBuilder(call, sd, fe.X, setters)
@@ -462,10 +483,10 @@ func (w *builderDesugar) tryDesugar(call *ast.CallExpr) ast.Expr {
 func (w *builderDesugar) rewriteFromBuilder(
 	call *ast.CallExpr,
 	sd *ast.StructDecl,
+	required []string,
 	setters []builderSetter,
 ) ast.Expr {
 	values, positions := collapseSetters(setters)
-	required := requiredPubFieldNames(sd)
 	missing := missingRequired(required, values)
 	if len(missing) > 0 {
 		w.emitMissing(call, sd.Name, missing)
@@ -509,21 +530,6 @@ func collapseSetters(setters []builderSetter) (
 		positions[s.name] = s.pos
 	}
 	return values, positions
-}
-
-// requiredPubFieldNames returns the pub-no-default field names in
-// declaration order, which is the G9 "must-be-set" set.
-func requiredPubFieldNames(sd *ast.StructDecl) []string {
-	var out []string
-	for _, f := range sd.Fields {
-		if f == nil || !f.Pub {
-			continue
-		}
-		if f.Default == nil {
-			out = append(out, f.Name)
-		}
-	}
-	return out
 }
 
 // missingRequired returns the required field names absent from the
