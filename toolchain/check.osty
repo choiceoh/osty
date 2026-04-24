@@ -331,8 +331,20 @@ fn registerStdStringsAliasFns(env: CheckEnv, alias: String) {
         paramNames: ["s", "substr"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
+    // Bootstrap MIR-LLVM helpers use Go-style stdlib names so the
+    // snapshot transpiler can route them straight to Go's strings package.
+    checkRegisterFn(env, CheckFnSig {
+        name: "Contains", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
+        paramNames: ["s", "substr"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
     checkRegisterFn(env, CheckFnSig {
         name: "indexOf", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tOptInt,
+        paramNames: ["s", "substr"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "Index", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tInt_,
         paramNames: ["s", "substr"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
@@ -357,12 +369,22 @@ fn registerStdStringsAliasFns(env: CheckEnv, alias: String) {
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
+        name: "HasPrefix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
+        paramNames: ["s", "prefix"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
         name: "endsWith", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
         paramNames: ["s", "suffix"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
     checkRegisterFn(env, CheckFnSig {
         name: "hasSuffix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
+        paramNames: ["s", "suffix"], paramTys: [tString_, tString_],
+        generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "HasSuffix", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
         paramNames: ["s", "suffix"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })

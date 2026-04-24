@@ -1899,17 +1899,17 @@ func (mc *matchContext) lowerSwitch(sw *ir.DecisionSwitch) {
 			return
 		}
 		// Mixed / non-integer literal chain.
-		var defTarget BlockID
-		if sw.Default != nil {
-			defTarget = bs.newBlock(mc.sp)
-		} else {
-			defTarget = bs.newBlock(mc.sp)
+		defTarget := bs.newBlock(mc.sp)
+		if len(sw.Cases) == 0 {
+			bs.terminate(&GotoTerm{Target: defTarget, SpanV: mc.sp})
+			bs.cur = defTarget
 		}
-		next := defTarget
-		for i := len(sw.Cases) - 1; i >= 0; i-- {
-			c := sw.Cases[i]
+		for i, c := range sw.Cases {
 			caseBB := bs.newBlock(mc.sp)
-			testBB := bs.newBlock(mc.sp)
+			elseBB := defTarget
+			if i < len(sw.Cases)-1 {
+				elseBB = bs.newBlock(mc.sp)
+			}
 			// Lower the literal into an operand.
 			rhs := bs.lowerExprAsOperand(c.Lit)
 			cmp := bs.freshTemp(TBool, mc.sp)
@@ -1926,13 +1926,12 @@ func (mc *matchContext) lowerSwitch(sw *ir.DecisionSwitch) {
 			bs.terminate(&BranchTerm{
 				Cond:  &CopyOp{Place: Place{Local: cmp}, T: TBool},
 				Then:  caseBB,
-				Else:  next,
+				Else:  elseBB,
 				SpanV: mc.sp,
 			})
 			bs.cur = caseBB
 			mc.lowerTree(c.Body)
-			bs.cur = testBB
-			next = testBB
+			bs.cur = elseBB
 		}
 		bs.cur = defTarget
 		if sw.Default != nil {
@@ -2077,8 +2076,8 @@ func (bs *bodyState) lowerExprAsOperand(e ir.Expr) Operand {
 	// the return type off the module's own fn signature table (preferred)
 	// or the callee's FnType (fallback) so every downstream temp has a
 	// concrete width.
-	if t == ir.ErrTypeVal {
-		if rt := bs.recoverOperandType(e); rt != nil && rt != ir.ErrTypeVal {
+	if isPoisonType(t) {
+		if rt := bs.recoverOperandType(e); rt != nil && !isPoisonType(rt) {
 			t = rt
 		}
 	}
@@ -2113,10 +2112,10 @@ func (bs *bodyState) lowerExprAsOperandHint(e ir.Expr, hint Type) Operand {
 // `f(x).field` where the checker dropped the call's return type.
 func (bs *bodyState) recoveredTypeOf(e ir.Expr) ir.Type {
 	t := e.Type()
-	if t != nil && t != ir.ErrTypeVal {
+	if !isPoisonType(t) {
 		return t
 	}
-	if rt := bs.recoverOperandType(e); rt != nil && rt != ir.ErrTypeVal {
+	if rt := bs.recoverOperandType(e); rt != nil && !isPoisonType(rt) {
 		return rt
 	}
 	return t
@@ -2142,7 +2141,7 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		// type off the IR FnDecl, which survives even when per-node
 		// checker annotations are missing.
 		if id, ok := x.Callee.(*ir.Ident); ok {
-			if sig := bs.l.signatureForFn(id.Name); sig != nil && sig.retType != nil && sig.retType != ir.ErrTypeVal {
+			if sig := bs.l.signatureForFn(id.Name); sig != nil && !isPoisonType(sig.retType) {
 				return sig.retType
 			}
 		}
@@ -2165,7 +2164,7 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 				}
 			}
 			// Otherwise rely on whatever FnType the FieldExpr carries.
-			if ct := fx.Type(); ct != nil && ct != ir.ErrTypeVal {
+			if ct := fx.Type(); !isPoisonType(ct) {
 				if f, ok := ct.(*ir.FnType); ok && f.Return != nil {
 					return f.Return
 				}
@@ -2174,7 +2173,7 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		// Fallback: the callee may still carry a concrete FnType (for
 		// fn-typed locals / params with a declared signature).
 		ct := x.Callee.Type()
-		if ct == nil || ct == ir.ErrTypeVal {
+		if isPoisonType(ct) {
 			return nil
 		}
 		if f, ok := ct.(*ir.FnType); ok && f.Return != nil {
@@ -2207,11 +2206,11 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		if rt := builtinMethodReturnType(recvT, x.Name); rt != nil {
 			return rt
 		}
-		if recvT == nil || recvT == ir.ErrTypeVal {
+		if isPoisonType(recvT) {
 			return nil
 		}
 		if nt, ok := recvT.(*ir.NamedType); ok && nt.Name != "" {
-			if sig := bs.l.signatureForMethod(nt.Name, x.Name); sig != nil && sig.retType != nil && sig.retType != ir.ErrTypeVal {
+			if sig := bs.l.signatureForMethod(nt.Name, x.Name); sig != nil && !isPoisonType(sig.retType) {
 				return sig.retType
 			}
 		}
@@ -2223,7 +2222,7 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		// `xs[i]` in interp position ends up here when the checker
 		// dropped the element type. Peel the collection type off the
 		// receiver.
-		if elemT := bs.indexExprType(x); elemT != nil && elemT != ir.ErrTypeVal {
+		if elemT := bs.indexExprType(x); !isPoisonType(elemT) {
 			return elemT
 		}
 	case *ir.BinaryExpr:
@@ -2239,10 +2238,10 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		// carries a concrete type.
 		lt := x.Left.Type()
 		rt := x.Right.Type()
-		if lt != nil && lt != ir.ErrTypeVal {
+		if !isPoisonType(lt) {
 			return lt
 		}
-		if rt != nil && rt != ir.ErrTypeVal {
+		if !isPoisonType(rt) {
 			return rt
 		}
 	case *ir.StructLit:
@@ -2264,10 +2263,10 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		if x.X == nil {
 			return nil
 		}
-		if ot := x.X.Type(); ot != nil && ot != ir.ErrTypeVal {
+		if ot := x.X.Type(); !isPoisonType(ot) {
 			return ot
 		}
-		if rt := bs.recoverOperandType(x.X); rt != nil && rt != ir.ErrTypeVal {
+		if rt := bs.recoverOperandType(x.X); !isPoisonType(rt) {
 			return rt
 		}
 		switch x.X.(type) {
@@ -2404,9 +2403,9 @@ func stdlibFreeFnReturnType(qualifier, name string) ir.Type {
 		return nil
 	}
 	switch name {
-	case "len", "indexOf":
+	case "len", "indexOf", "Index":
 		return ir.TInt
-	case "isEmpty", "contains", "hasPrefix", "startsWith", "hasSuffix", "endsWith":
+	case "isEmpty", "contains", "Contains", "hasPrefix", "HasPrefix", "startsWith", "hasSuffix", "HasSuffix", "endsWith":
 		return ir.TBool
 	case "join", "substring", "slice", "trim", "toUpper", "toLower", "replace":
 		return ir.TString
@@ -2526,7 +2525,7 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 		return &UseRV{Op: &ConstOp{Const: &UnitConst{}, T: TUnit}}
 	}
 	// Fallback: lower as operand and wrap in UseRV.
-	return &UseRV{Op: bs.lowerExprAsOperand(e)}
+	return &UseRV{Op: bs.lowerExprAsOperandHint(e, hint)}
 }
 
 // lowerExprToPlace tries to describe e as a Place without materialising
@@ -2630,7 +2629,7 @@ func (bs *bodyState) lowerIdent(id *ir.Ident) Operand {
 	case ir.IdentVariant:
 		// bare variant → aggregate with no payload.
 		t := id.T
-		if t == nil || t == ir.ErrTypeVal {
+		if isPoisonType(t) {
 			if enumName := bs.l.enumForVariant(id.Name); enumName != "" {
 				t = &ir.NamedType{Name: enumName}
 			} else if t == nil {
@@ -2690,8 +2689,7 @@ func (bs *bodyState) lowerStringLit(s *ir.StringLit) Operand {
 			args = append(args, &ConstOp{Const: &StringConst{Value: p.Lit}, T: TString})
 			continue
 		}
-		op := bs.lowerExprAsOperand(p.Expr)
-		args = append(args, op)
+		args = append(args, bs.lowerStringInterpolationOperand(p.Expr))
 	}
 	tmp := bs.freshTemp(TString, s.SpanV)
 	bs.emit(&IntrinsicInstr{
@@ -2701,6 +2699,126 @@ func (bs *bodyState) lowerStringLit(s *ir.StringLit) Operand {
 		SpanV: s.SpanV,
 	})
 	return &CopyOp{Place: Place{Local: tmp}, T: TString}
+}
+
+func (bs *bodyState) lowerStringInterpolationOperand(e ir.Expr) Operand {
+	op := bs.lowerExprAsOperand(e)
+	if !isPoisonType(op.Type()) {
+		return op
+	}
+	if rt := bs.recoverOperandType(e); !isPoisonType(rt) {
+		return retagOperandType(op, rt)
+	}
+	if rt := bs.recoverOperandStorageType(op); !isPoisonType(rt) {
+		return retagOperandType(op, rt)
+	}
+	return op
+}
+
+func (bs *bodyState) recoverOperandStorageType(op Operand) Type {
+	var place Place
+	switch x := op.(type) {
+	case *CopyOp:
+		place = x.Place
+	case *MoveOp:
+		place = x.Place
+	default:
+		return nil
+	}
+	loc := bs.fn.Local(place.Local)
+	if loc == nil || isPoisonType(loc.Type) {
+		return nil
+	}
+	cur := loc.Type
+	for _, proj := range place.Projections {
+		if pt := mirProjectionType(proj); !isPoisonType(pt) {
+			cur = pt
+			continue
+		}
+		switch p := proj.(type) {
+		case *FieldProj:
+			cur = bs.l.fieldType(bs.l.structFromType(cur, ""), p.Name)
+		case *TupleProj:
+			cur = elementTypeAt(tupleElementTypes(cur), p.Index)
+		case *VariantProj:
+			cur = variantLookupPayloadType(bs.l, cur, p.Name, p.FieldIdx)
+		case *IndexProj:
+			cur = indexElementType(cur)
+		case *DerefProj:
+			cur = p.Type
+		}
+		if isPoisonType(cur) {
+			return nil
+		}
+	}
+	return cur
+}
+
+func mirProjectionType(p Projection) Type {
+	switch x := p.(type) {
+	case *FieldProj:
+		return x.Type
+	case *TupleProj:
+		return x.Type
+	case *VariantProj:
+		return x.Type
+	case *IndexProj:
+		return x.ElemType
+	case *DerefProj:
+		return x.Type
+	}
+	return nil
+}
+
+func retagOperandType(op Operand, t Type) Operand {
+	switch x := op.(type) {
+	case *CopyOp:
+		return &CopyOp{Place: retagPlaceType(x.Place, t), T: t}
+	case *MoveOp:
+		return &MoveOp{Place: retagPlaceType(x.Place, t), T: t}
+	case *ConstOp:
+		return &ConstOp{Const: x.Const, T: t}
+	}
+	return op
+}
+
+func retagPlaceType(p Place, t Type) Place {
+	if len(p.Projections) == 0 {
+		return p
+	}
+	projs := append([]Projection(nil), p.Projections...)
+	last := len(projs) - 1
+	if isPoisonType(mirProjectionType(projs[last])) {
+		projs[last] = retagProjectionType(projs[last], t)
+	}
+	p.Projections = projs
+	return p
+}
+
+func retagProjectionType(p Projection, t Type) Projection {
+	switch x := p.(type) {
+	case *FieldProj:
+		cp := *x
+		cp.Type = t
+		return &cp
+	case *TupleProj:
+		cp := *x
+		cp.Type = t
+		return &cp
+	case *VariantProj:
+		cp := *x
+		cp.Type = t
+		return &cp
+	case *IndexProj:
+		cp := *x
+		cp.ElemType = t
+		return &cp
+	case *DerefProj:
+		cp := *x
+		cp.Type = t
+		return &cp
+	}
+	return p
 }
 
 // lowerIfExprInto lowers an IfExpr by reusing the stmt-form lowering
@@ -4074,13 +4192,13 @@ func stdlibStringFreeFnToIntrinsic(qualifier, name string) IntrinsicKind {
 		return IntrinsicStringLen
 	case "isEmpty":
 		return IntrinsicStringIsEmpty
-	case "contains":
+	case "contains", "Contains":
 		return IntrinsicStringContains
-	case "hasPrefix", "startsWith":
+	case "hasPrefix", "HasPrefix", "startsWith":
 		return IntrinsicStringStartsWith
-	case "hasSuffix", "endsWith":
+	case "hasSuffix", "HasSuffix", "endsWith":
 		return IntrinsicStringEndsWith
-	case "indexOf":
+	case "indexOf", "Index":
 		return IntrinsicStringIndexOf
 	case "split":
 		return IntrinsicStringSplit
@@ -4404,7 +4522,8 @@ func (bs *bodyState) finishNoReturn() {
 // ==== helpers that bridge HIR-level knowledge to layouts ====
 
 type lookupStruct struct {
-	decl *ir.StructDecl
+	decl   *ir.StructDecl
+	layout *StructLayout
 }
 
 func (l *lowerer) structFromType(t ir.Type, fallbackName string) *lookupStruct {
@@ -4415,45 +4534,80 @@ func (l *lowerer) structFromType(t ir.Type, fallbackName string) *lookupStruct {
 	if name == "" {
 		return &lookupStruct{}
 	}
+	var layout *StructLayout
+	if l.out != nil && l.out.Layouts != nil {
+		layout = l.out.Layouts.Structs[name]
+	}
 	if d, ok := l.structs[name]; ok {
-		return &lookupStruct{decl: d}
+		return &lookupStruct{decl: d, layout: layout}
+	}
+	if layout != nil {
+		return &lookupStruct{layout: layout}
 	}
 	return &lookupStruct{}
 }
 
 func (l *lowerer) fieldType(info *lookupStruct, name string) Type {
-	if info == nil || info.decl == nil {
+	if info == nil {
 		return ir.ErrTypeVal
 	}
-	for _, f := range info.decl.Fields {
-		if f.Name == name {
-			return f.Type
+	if info.decl != nil {
+		for _, f := range info.decl.Fields {
+			if f.Name == name && !isPoisonType(f.Type) {
+				return f.Type
+			}
+		}
+	}
+	if info.layout != nil {
+		for _, f := range info.layout.Fields {
+			if f.Name == name {
+				return f.Type
+			}
 		}
 	}
 	return ir.ErrTypeVal
 }
 
 func (l *lowerer) fieldIndex(info *lookupStruct, name string) int {
-	if info == nil || info.decl == nil {
+	if info == nil {
 		return 0
 	}
-	for i, f := range info.decl.Fields {
-		if f.Name == name {
-			return i
+	if info.decl != nil {
+		for i, f := range info.decl.Fields {
+			if f.Name == name {
+				return i
+			}
+		}
+	}
+	if info.layout != nil {
+		for _, f := range info.layout.Fields {
+			if f.Name == name {
+				return f.Index
+			}
 		}
 	}
 	return 0
 }
 
 func (l *lowerer) fieldNames(info *lookupStruct) []string {
-	if info == nil || info.decl == nil {
+	if info == nil {
 		return nil
 	}
-	out := make([]string, len(info.decl.Fields))
-	for i, f := range info.decl.Fields {
-		out[i] = f.Name
+	if info.decl != nil {
+		out := make([]string, len(info.decl.Fields))
+		for i, f := range info.decl.Fields {
+			out[i] = f.Name
+		}
+		return out
 	}
-	return out
+	if info.layout != nil {
+		out := make([]string, len(info.layout.Fields))
+		for i, f := range info.layout.Fields {
+			out[i] = f.Name
+		}
+		return out
+	}
+	return nil
 }
 
 type variantInfo struct {
@@ -4841,10 +4995,19 @@ func (bs *bodyState) indexExprType(x *ir.IndexExpr) Type {
 	if x.X == nil {
 		return x.T
 	}
-	switch baseT := bs.recoveredTypeOf(x.X).(type) {
+	for _, baseT := range []Type{bs.recoveredTypeOf(x.X), bs.recoverOperandType(x.X)} {
+		if elemT := indexElementType(baseT); !isPoisonType(elemT) {
+			return elemT
+		}
+	}
+	return x.T
+}
+
+func indexElementType(base Type) Type {
+	switch baseT := base.(type) {
 	case *ir.NamedType:
 		if len(baseT.Args) == 0 {
-			return x.T
+			return ir.ErrTypeVal
 		}
 		switch baseT.Name {
 		case "List":
@@ -4862,7 +5025,7 @@ func (bs *bodyState) indexExprType(x *ir.IndexExpr) Type {
 			return ir.TChar
 		}
 	}
-	return x.T
+	return ir.ErrTypeVal
 }
 
 func mapUnaryOp(op ir.UnOp) UnaryOp {

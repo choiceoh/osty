@@ -2401,7 +2401,7 @@ fn hirLowerStructDecl(
     )
 }
 
-fn hirLowerFnDeclHasNoReceiver(ast: AstPackage, idx: Int) -> Bool {
+fn hirLowerFnDeclHasNoReceiver(ast: AstFile, idx: Int) -> Bool {
     let node = astArenaNodeAt(ast.arena, idx)
     if node.kind != AstNFnDecl {
         return true

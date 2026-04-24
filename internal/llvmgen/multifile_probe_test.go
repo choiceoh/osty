@@ -173,7 +173,8 @@ func TestProbeWholeToolchainMerged(t *testing.T) {
 // isBootstrapOnlyOstyFile reports whether the source is a
 // host-boundary bootstrap adapter — i.e., whether it declares either
 //
-//   - a `use runtime.golegacy.*` FFI (the legacy Go AST bridge), or
+//   - a `use runtime.golegacy.*` FFI (the legacy Go AST bridge),
+//   - a `use runtime.cihost` FFI (the CI runner's Go host adapter), or
 //   - a `use go "..."` FFI (arbitrary Go package host binding)
 //
 // Both forms require the Osty compiler to be running under the
@@ -188,6 +189,7 @@ func isBootstrapOnlyOstyFile(src []byte) bool {
 			continue
 		}
 		if strings.HasPrefix(trimmed, "use runtime.golegacy.") ||
+			strings.HasPrefix(trimmed, "use runtime.cihost") ||
 			strings.HasPrefix(trimmed, "use go \"") {
 			return true
 		}
@@ -245,9 +247,8 @@ func TestProbeNativeToolchainMerged(t *testing.T) {
 // GenerateFromMIR pipeline and reports the first stage that walls
 // (along with its message). Info-only.
 //
-// NOTE: the toolchain currently has ~949 checker errors, so ir.Lower /
-// Monomorphize will produce issues; the probe logs the count and keeps
-// going so we can see where the MIR emitter itself walls.
+// The probe logs checker/lowering counts and keeps going so we can see
+// where the MIR emitter itself walls.
 func TestProbeNativeToolchainMergedMIR(t *testing.T) {
 	if testing.Short() {
 		t.Skip("info-only; slow; skipped in -short")
@@ -272,7 +273,7 @@ func TestProbeNativeToolchainMergedMIR(t *testing.T) {
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
-		
+
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,
