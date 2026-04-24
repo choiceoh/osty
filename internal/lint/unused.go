@@ -12,22 +12,22 @@ import (
 // lintUnused flags every bound name that is never referenced anywhere in
 // the resolved source:
 //
-//	L0001 - let bindings (both statement lets and top-level LetDecls)
 //	L0002 - function / closure parameters
 //	L0003 - `use` aliases
+//
+// L0001 (unused let binding) runs in toolchain/lint.osty and is merged in
+// by mergeSelfhostLint.
 //
 // Names that intentionally go unused (`_foo`), publicly exported items
 // (`pub fn`, `pub let`), and the implicit `self` / `Self` are excluded.
 // In package mode the "used" set is the union across every file in the
 // package, so cross-file references don't trigger false positives.
 //
-// Implementation note: unused bindings are by definition NOT reachable
-// from the resolver's Refs/TypeRefs maps (and their enclosing scope is
-// no longer live after resolve finishes). We therefore cannot look up
-// the Symbol for a pattern binding directly; instead we build a set of
+// Implementation note: unused params are by definition NOT reachable from
+// the resolver's Refs/TypeRefs maps (and their enclosing scope is no
+// longer live after resolve finishes). We therefore build a set of
 // "declaration AST nodes that some reference points back at" via the
-// Symbol.Decl field, then check each declaration's node against that
-// set.
+// Symbol.Decl field, then check each parameter's node against that set.
 func (l *linter) lintUnused() {
 	usedDecls := buildUsedDeclSet(l.resolved, l.used)
 
@@ -59,7 +59,7 @@ func (l *linter) lintUnused() {
 			Build())
 	}
 
-	// ---- L0001 / L0002: walk bodies for lets + params ----
+	// ---- L0002: walk bodies for params ----
 	for _, d := range l.file.Decls {
 		l.unusedDecl(d, usedDecls)
 	}
@@ -132,10 +132,6 @@ func (l *linter) unusedDecl(d ast.Decl, usedDecls map[ast.Node]bool) {
 			}
 		}
 	case *ast.LetDecl:
-		if !n.Pub && !isUnderscore(n.Name) && !usedDecls[n] {
-			l.warnNode(n, diag.CodeUnusedLet,
-				"binding `%s` is never used", n.Name)
-		}
 		l.unusedExpr(n.Value, usedDecls)
 	}
 }
@@ -289,36 +285,16 @@ func namePos(base token.Pos, deltaCol int) token.Pos {
 	}
 }
 
-// unusedPattern flags each pattern-bound name whose declaration AST node
-// is not in usedDecls.
+// unusedPattern recurses into composite patterns so nested lets / params
+// are reachable for the other rules (L0002 unused param in closures the
+// pattern binds, etc.). L0001 unused-binding detection lives in
+// toolchain/lint.osty.
 func (l *linter) unusedPattern(p ast.Pattern, usedDecls map[ast.Node]bool) {
 	if p == nil {
 		return
 	}
 	switch n := p.(type) {
-	case *ast.IdentPat:
-		if isUnderscore(n.Name) {
-			return
-		}
-		if !usedDecls[n] {
-			l.emit(diag.New(diag.Warning,
-				"binding `"+n.Name+"` is never used").
-				Code(diag.CodeUnusedLet).
-				Primary(diag.Span{Start: n.PosV, End: n.EndV}, "unused binding").
-				Suggest(diag.Span{Start: n.PosV, End: n.PosV},
-					"_", "rename to `_"+n.Name+"` to mark intentionally unused", true).
-				Build())
-		}
 	case *ast.BindingPat:
-		if !isUnderscore(n.Name) && !usedDecls[n] {
-			l.emit(diag.New(diag.Warning,
-				"binding `"+n.Name+"` is never used").
-				Code(diag.CodeUnusedLet).
-				Primary(diag.Span{Start: n.PosV, End: n.EndV}, "unused binding").
-				Suggest(diag.Span{Start: n.PosV, End: n.PosV},
-					"_", "rename to `_"+n.Name+"` to mark intentionally unused", true).
-				Build())
-		}
 		l.unusedPattern(n.Pattern, usedDecls)
 	case *ast.TuplePat:
 		for _, e := range n.Elems {
@@ -328,9 +304,6 @@ func (l *linter) unusedPattern(p ast.Pattern, usedDecls map[ast.Node]bool) {
 		for _, f := range n.Fields {
 			if f.Pattern != nil {
 				l.unusedPattern(f.Pattern, usedDecls)
-			} else if !isUnderscore(f.Name) && !usedDecls[f] {
-				l.warnNode(f, diag.CodeUnusedLet,
-					"binding `%s` is never used", f.Name)
 			}
 		}
 	case *ast.VariantPat:
