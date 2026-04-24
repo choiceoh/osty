@@ -761,3 +761,111 @@ pub fn mirEncodeLLVMString(s: String) -> String {
     }
     out + "\\00"
 }
+
+/// mirLlvmGlobalVarLine renders `@<name> = global <ty> zeroinitializer\n`
+/// — one top-level global definition for each module Global. Used by
+/// `emitGlobalVars` in `internal/llvmgen/mir_generator.go`; the init
+/// expression is deferred into the `__osty_init_globals` ctor so the
+/// static allocation always starts zeroed.
+pub fn mirLlvmGlobalVarLine(name: String, llvmType: String) -> String {
+    "@" + name + " = global " + llvmType + " zeroinitializer\n"
+}
+
+/// mirLlvmIfaceTypeDefLine is the constant fat-pointer type
+/// definition `%osty.iface = type { ptr, ptr }\n` that must precede
+/// any `%osty.iface` use inside struct / tuple layouts. `ifaceTouched`
+/// gates emission on the Go side.
+pub fn mirLlvmIfaceTypeDefLine() -> String {
+    "%osty.iface = type \{ ptr, ptr \}\n"
+}
+
+/// mirLlvmStructTypeDefLine renders the `%<name> = type { <fields> }\n`
+/// line for a user struct or a tuple (both share the same shape; the
+/// Go caller joins the LLVM field types with `", "` first).
+pub fn mirLlvmStructTypeDefLine(name: String, fieldsJoined: String) -> String {
+    "%" + name + " = type \{ " + fieldsJoined + " \}\n"
+}
+
+/// mirLlvmEnumLayoutTypeDefLine renders the fixed 2-word enum layout
+/// `%<name> = type { i64, i64 }\n` — matches the MIR emitter's
+/// convention where Option / Result / user enums always use
+/// `{ i64 disc, i64 payload }` regardless of payload type (payloads
+/// narrower than i64 are upcast at construction, pointer payloads go
+/// through ptrtoint).
+pub fn mirLlvmEnumLayoutTypeDefLine(name: String) -> String {
+    "%" + name + " = type \{ i64, i64 \}\n"
+}
+
+/// mirLlvmVtableDeclLine renders `<sym> = external constant [0 x ptr]\n`
+/// for every `@osty.vtable.<impl>__<iface>` symbol referenced from a
+/// downcast compare site. `symbol` already includes the leading `@`.
+/// The vtable body itself isn't emitted by the MIR path yet — the
+/// declaration just makes the `icmp eq ptr` reference legal.
+pub fn mirLlvmVtableDeclLine(symbol: String) -> String {
+    symbol + " = external constant [0 x ptr]\n"
+}
+
+/// mirGlobalCtorsRegistration returns the constant
+/// `@llvm.global_ctors` appending-array line that wires
+/// `@__osty_init_globals` into LLVM's priority-ordered ctor queue at
+/// priority 65535 (runs last). Constant — no callsite-specific state.
+pub fn mirGlobalCtorsRegistration() -> String {
+    "@llvm.global_ctors = appending global [1 x \{ i32, ptr, ptr \}] [\{ i32, ptr, ptr \} \{ i32 65535, ptr @__osty_init_globals, ptr null \}]\n\n"
+}
+
+/// mirInitGlobalsCtorHeader is the `define private void
+/// @__osty_init_globals() \{\nentry:\n` prelude that opens the ctor
+/// body. Pair with `mirInitGlobalsCtorFooter` to bookend the per-global
+/// call+store sequences built by `mirInitGlobalsCtorStoreSequence`.
+pub fn mirInitGlobalsCtorHeader() -> String {
+    "define private void @__osty_init_globals() \{\nentry:\n"
+}
+
+/// mirInitGlobalsCtorFooter closes the ctor with `ret void` + `}` plus
+/// the trailing two newlines that separate the ctor from the
+/// following `@llvm.global_ctors` registration line.
+pub fn mirInitGlobalsCtorFooter() -> String {
+    "  ret void\n\}\n\n"
+}
+
+/// mirInitGlobalsCtorStoreSequence renders one global's
+/// `%vName = call <retLLVM> @<initName>()` +
+/// `store <retLLVM> %vName, ptr @<globName>` pair inside the
+/// `@__osty_init_globals` ctor body. The `%v<globName>` temp name
+/// scheme mirrors the Go source's per-global SSA naming — stable
+/// even if module-level init reordering changes later.
+pub fn mirInitGlobalsCtorStoreSequence(globName: String, retLLVM: String, initName: String) -> String {
+    let tmp = "%v" + globName
+    "  " + tmp + " = call " + retLLVM + " @" + initName + "()\n" +
+    "  store " + retLLVM + " " + tmp + ", ptr @" + globName + "\n"
+}
+
+/// mirRuntimeDeclareLine renders the plain-shape runtime declaration
+/// `declare <ret> @<sym>(<argList>)`. `argList` is already joined with
+/// `", "` by the caller — empty-arg functions pass `""`. Used for
+/// runtime intrinsics that don't need LLVM attribute tuning.
+pub fn mirRuntimeDeclareLine(retTy: String, sym: String, argList: String) -> String {
+    "declare " + retTy + " @" + sym + "(" + argList + ")"
+}
+
+/// mirRuntimeDeclareMemoryRead renders a read-only runtime intrinsic
+/// declare suffixed with `nounwind willreturn memory(read)`. The
+/// attribute trio is what unlocks LLVM's LICM / CSE of snapshot
+/// calls like `osty_rt_list_data_*` / `osty_rt_list_len` out of
+/// hot loops. Use for helpers whose result depends only on the
+/// pointed-to contents (no side effects, no trapping).
+pub fn mirRuntimeDeclareMemoryRead(retTy: String, sym: String, argList: String) -> String {
+    "declare " + retTy + " @" + sym + "(" + argList + ") nounwind willreturn memory(read)"
+}
+
+/// mirRuntimeDeclareNoReturn renders an abort-kind runtime declare
+/// with the `noreturn` attribute. The `cold` flag additionally
+/// appends `cold nounwind` — used for bounds-check traps and similar
+/// unlikely-taken paths so LLVM tilts block placement away from them.
+pub fn mirRuntimeDeclareNoReturn(retTy: String, sym: String, argList: String, cold: Bool) -> String {
+    let prefix = "declare " + retTy + " @" + sym + "(" + argList + ") noreturn"
+    if cold {
+        return prefix + " cold nounwind"
+    }
+    prefix
+}

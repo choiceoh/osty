@@ -55,7 +55,7 @@ untouched.
 | - | ------- | ----- | ----- | ---- | ------ |
 | 1 | generator state | 100–472 | ~10 | LOW | Partial — `firstNonEmpty`, `formatFnAttrs`, `loopHintsActive`, loop-metadata + alias-scope + access-group templates ported (`mirFormatFnAttrs`, `mirLoopHintsActive`, `mirLoopMDVectorizeEnable`/`Scalable`/`Predicate`/`Width`, `mirLoopMDUnrollEnable`/`Count`, `mirLoopMDParallelAccesses`, `mirAliasScopeDomainLine`/`ScopeLine`/`ListLine`, `mirAccessGroupLine`); `nextLoopMD` body + `g.loopMDDefs` indexing stays on Go (state) |
 | 2 | support check | 473–1364 | ~20 | MEDIUM | Go-only |
-| 3 | header + runtime declares | 1365–1641 | ~8 | LOW | Go-only |
+| 3 | header + runtime declares | 1365–1641 | ~8 | LOW | Partial — global-var, ctor, iface/struct/enum/tuple/vtable type-def lines + three runtime-declare shapes ported (`mirLlvmGlobalVarLine`, `mirLlvmIfaceTypeDefLine`, `mirLlvmStructTypeDefLine`, `mirLlvmEnumLayoutTypeDefLine`, `mirLlvmVtableDeclLine`, `mirGlobalCtorsRegistration`, `mirInitGlobalsCtorHeader`/`Footer`/`StoreSequence`, `mirRuntimeDeclareLine`, `mirRuntimeDeclareMemoryRead`, `mirRuntimeDeclareNoReturn`); orchestration (`emitGlobalVars`/`emitTypeDefs`/`emitRuntimeDeclarations`) + state (`g.declares`/`g.out`) stays on Go |
 | 4 | function emission | 1642–2384 | ~18 | MEDIUM | Go-only |
 | 5 | GC instrumentation | 2385–2614 | ~8 | LOW | Go-only |
 | 6 | instructions | 2615–4873 | ~35 | HIGH | Go-only |
@@ -188,6 +188,18 @@ list keeps new Osty clean of known landmines.
 | `mirAliasScopeScopeLine` | `(ref: String, domainRef: String) -> String` | §1 | `!N = distinct !{!"osty.list.metadata.scope", !Domain}` — middle node of the chain |
 | `mirAliasScopeListLine` | `(ref: String, scopeRef: String) -> String` | §1 | `!N = !{!Scope}` — the one-element scope list attached via `!alias.scope`/`!noalias` |
 | `mirAccessGroupLine` | `(ref: String) -> String` | §1 | `!N = distinct !{}` — A6 parallel-access group root |
+| `mirLlvmGlobalVarLine` | `(name: String, llvmType: String) -> String` | §3 | `@<name> = global <T> zeroinitializer\n` — module-scope global backing; value filled by `@__osty_init_globals` ctor |
+| `mirLlvmIfaceTypeDefLine` | `() -> String` | §3 | `%osty.iface = type { ptr, ptr }\n` — fat-pointer type-def, emitted once when any interface reference lands in the module |
+| `mirLlvmStructTypeDefLine` | `(name: String, fieldsJoined: String) -> String` | §3 | `%<name> = type { <fields> }\n` — used for both user structs and tuple type-defs (shape is identical; caller joins field types first) |
+| `mirLlvmEnumLayoutTypeDefLine` | `(name: String) -> String` | §3 | `%<name> = type { i64, i64 }\n` — fixed 2-word enum layout for Option / Result / user enums |
+| `mirLlvmVtableDeclLine` | `(symbol: String) -> String` | §3 | `<sym> = external constant [0 x ptr]\n` — downcast-site vtable reference (body deferred) |
+| `mirGlobalCtorsRegistration` | `() -> String` | §3 | Constant `@llvm.global_ctors` appending-array that wires `@__osty_init_globals` at priority 65535 |
+| `mirInitGlobalsCtorHeader` | `() -> String` | §3 | `define private void @__osty_init_globals() {\nentry:\n` — ctor prelude |
+| `mirInitGlobalsCtorFooter` | `() -> String` | §3 | `  ret void\n}\n\n` — ctor epilogue with the two-newline separator before the ctors registration line |
+| `mirInitGlobalsCtorStoreSequence` | `(globName: String, retLLVM: String, initName: String) -> String` | §3 | One `%vName = call <T> @<init>() ; store <T> %vName, ptr @<glob>` pair inside the ctor body |
+| `mirRuntimeDeclareLine` | `(retTy: String, sym: String, argList: String) -> String` | §3 | Plain `declare <ret> @<sym>(<args>)` — no LLVM-attribute tuning |
+| `mirRuntimeDeclareMemoryRead` | `(retTy: String, sym: String, argList: String) -> String` | §3 | `declare ... ) nounwind willreturn memory(read)` — the attribute combo that unlocks LICM / CSE of snapshot calls (list-data / list-len / slow-path getters) |
+| `mirRuntimeDeclareNoReturn` | `(retTy: String, sym: String, argList: String, cold: Bool) -> String` | §3 | `declare ... ) noreturn` + optional ` cold nounwind` for bounds-check traps |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as
