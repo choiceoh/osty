@@ -1291,10 +1291,11 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 	// object/binary emission instead of falling back.
 	case mir.IntrinsicStringConcat, mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
 		mir.IntrinsicStringLen, mir.IntrinsicStringIsEmpty,
+		mir.IntrinsicStringTrim,
 		mir.IntrinsicStringToUpper, mir.IntrinsicStringToLower,
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
-		mir.IntrinsicStringEndsWith, mir.IntrinsicStringSplit,
+		mir.IntrinsicStringEndsWith, mir.IntrinsicStringIndexOf, mir.IntrinsicStringSplit,
 		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring:
 		return true
 	// Concurrency — channels / tasks / select / cancellation / helpers.
@@ -4675,10 +4676,11 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitBytesIntrinsic(i)
 	case mir.IntrinsicStringConcat, mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
 		mir.IntrinsicStringLen, mir.IntrinsicStringIsEmpty,
+		mir.IntrinsicStringTrim,
 		mir.IntrinsicStringToUpper, mir.IntrinsicStringToLower,
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
-		mir.IntrinsicStringEndsWith, mir.IntrinsicStringSplit,
+		mir.IntrinsicStringEndsWith, mir.IntrinsicStringIndexOf, mir.IntrinsicStringSplit,
 		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring:
 		return g.emitStringIntrinsic(i)
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
@@ -4977,13 +4979,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 	case mir.IntrinsicListFirst, mir.IntrinsicListLast:
 		// `.first()` / `.last()` return `T?`. Runtime has no bespoke
 		// symbol — lower as `len == 0 ? None : Some(get(idx))` where
-		// idx is 0 for first and len-1 for last. Scalar elems use the
-		// typed get_<kind> symbol; composite elements (structs / lists
-		// / maps) aren't supported yet because the raw scalar-return
-		// contract above doesn't match their aggregate shape.
-		if !listUsesTypedRuntime(elemLLVM) {
-			return unsupported("mir-mvp", fmt.Sprintf("list_%s on composite element type %s", mirIntrinsicLabel(i.Kind), elemLLVM))
-		}
+		// idx is 0 for first and len-1 for last.
 		if i.Dest == nil {
 			return unsupported("mir-mvp", fmt.Sprintf("%s without destination", mirIntrinsicLabel(i.Kind)))
 		}
@@ -4995,8 +4991,6 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		destSlot := g.localSlots[i.Dest.Local]
 		lenSym := listRuntimeLenSymbol()
 		g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr) nounwind willreturn memory(read)")
-		getSym := listRuntimeGetSymbol(elemLLVM)
-		g.declareRuntime(getSym, "declare "+elemLLVM+" @"+getSym+"(ptr, i64) nounwind willreturn memory(read)")
 		lenReg := g.fresh()
 		fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
 		isEmpty := g.fresh()
@@ -5016,28 +5010,12 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			idxRef = g.fresh()
 			fmt.Fprintf(&g.fnBuf, "  %s = sub i64 %s, 1\n", idxRef, lenReg)
 		}
-		elemReg := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, idxRef)
-		// Option<T> slot-1 is i64-wide by layout convention (see
-		// support_snapshot.go / emitNullaryRV). For non-i64 scalars we
-		// must widen/bitcast to i64 before insertvalue.
-		payloadReg := elemReg
-		switch elemLLVM {
-		case "i64":
-			// no-op
-		case "i1", "i8", "i16", "i32":
-			widened := g.fresh()
-			fmt.Fprintf(&g.fnBuf, "  %s = zext %s %s to i64\n", widened, elemLLVM, elemReg)
-			payloadReg = widened
-		case "double":
-			cast := g.fresh()
-			fmt.Fprintf(&g.fnBuf, "  %s = bitcast double %s to i64\n", cast, elemReg)
-			payloadReg = cast
-		case "ptr":
-			cast := g.fresh()
-			fmt.Fprintf(&g.fnBuf, "  %s = ptrtoint ptr %s to i64\n", cast, elemReg)
-			payloadReg = cast
-		default:
+		elemReg, err := g.emitListLoadElement(listReg, idxRef, elemLLVM)
+		if err != nil {
+			return err
+		}
+		payloadReg, err := g.listOptionalPayloadToI64(elemReg, elemLLVM, elemT)
+		if err != nil {
 			return unsupported("mir-mvp", fmt.Sprintf("list_%s payload widen unsupported for %s", mirIntrinsicLabel(i.Kind), elemLLVM))
 		}
 		tagged := g.fresh()
@@ -5073,20 +5051,17 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		if len(i.Args) != 2 {
 			return unsupported("mir-mvp", "list_remove_at arity")
 		}
-		if !listUsesTypedRuntime(elemLLVM) {
-			return unsupported("mir-mvp", fmt.Sprintf("list_remove_at on composite element type %s", elemLLVM))
-		}
 		idxOp := i.Args[1]
 		idxReg, err := g.evalOperand(idxOp, idxOp.Type())
 		if err != nil {
 			return err
 		}
-		getSym := listRuntimeGetSymbol(elemLLVM)
-		g.declareRuntime(getSym, "declare "+elemLLVM+" @"+getSym+"(ptr, i64) nounwind willreturn memory(read)")
 		spliceSym := "osty_rt_list_remove_at_discard"
 		g.declareRuntime(spliceSym, "declare void @"+spliceSym+"(ptr, i64)")
-		elemReg := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, idxReg)
+		elemReg, err := g.emitListLoadElement(listReg, idxReg, elemLLVM)
+		if err != nil {
+			return err
+		}
 		fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s, i64 %s)\n", spliceSym, listReg, idxReg)
 		return g.storeIntrinsicResult(i, &LlvmValue{typ: elemLLVM, name: elemReg})
 	case mir.IntrinsicListIndexOf:
@@ -5262,15 +5237,10 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s)\n", discardSym, listReg)
 			return nil
 		}
-		if !listUsesTypedRuntime(elemLLVM) {
-			return unsupported("mir-mvp", fmt.Sprintf("list_pop on composite element type %s", elemLLVM))
-		}
 		destLLVM := g.llvmType(destLoc.Type)
 		destSlot := g.localSlots[i.Dest.Local]
 		lenSym := listRuntimeLenSymbol()
 		g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr) nounwind willreturn memory(read)")
-		getSym := listRuntimeGetSymbol(elemLLVM)
-		g.declareRuntime(getSym, "declare "+elemLLVM+" @"+getSym+"(ptr, i64) nounwind willreturn memory(read)")
 		lenReg := g.fresh()
 		fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
 		isEmpty := g.fresh()
@@ -5285,25 +5255,13 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
 		lastIdx := g.fresh()
 		fmt.Fprintf(&g.fnBuf, "  %s = sub i64 %s, 1\n", lastIdx, lenReg)
-		elemReg := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, lastIdx)
+		elemReg, err := g.emitListLoadElement(listReg, lastIdx, elemLLVM)
+		if err != nil {
+			return err
+		}
 		fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s)\n", discardSym, listReg)
-		payloadReg := elemReg
-		switch elemLLVM {
-		case "i64":
-		case "i1", "i8", "i16", "i32":
-			widened := g.fresh()
-			fmt.Fprintf(&g.fnBuf, "  %s = zext %s %s to i64\n", widened, elemLLVM, elemReg)
-			payloadReg = widened
-		case "double":
-			cast := g.fresh()
-			fmt.Fprintf(&g.fnBuf, "  %s = bitcast double %s to i64\n", cast, elemReg)
-			payloadReg = cast
-		case "ptr":
-			cast := g.fresh()
-			fmt.Fprintf(&g.fnBuf, "  %s = ptrtoint ptr %s to i64\n", cast, elemReg)
-			payloadReg = cast
-		default:
+		payloadReg, err := g.listOptionalPayloadToI64(elemReg, elemLLVM, elemT)
+		if err != nil {
 			return unsupported("mir-mvp", fmt.Sprintf("list_pop payload widen unsupported for %s", elemLLVM))
 		}
 		tagged := g.fresh()
@@ -5316,6 +5274,49 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		return nil
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("list intrinsic kind %d", i.Kind))
+}
+
+func (g *mirGen) emitListLoadElement(listReg, idxReg string, elemLLVM string) (string, error) {
+	if listUsesTypedRuntime(elemLLVM) {
+		getSym := listRuntimeGetSymbol(elemLLVM)
+		g.declareRuntime(getSym, "declare "+elemLLVM+" @"+getSym+"(ptr, i64) nounwind willreturn memory(read)")
+		elemReg := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, idxReg)
+		return elemReg, nil
+	}
+	slot := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = alloca %s\n", slot, elemLLVM)
+	sizeReg := g.emitSizeOf(elemLLVM)
+	sym := listRuntimeGetBytesV1Symbol()
+	g.declareRuntime(sym, "declare void @"+sym+"(ptr, i64, ptr, i64)")
+	fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s, i64 %s, ptr %s, i64 %s)\n", sym, listReg, idxReg, slot, sizeReg)
+	elemReg := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = load %s, ptr %s\n", elemReg, elemLLVM, slot)
+	return elemReg, nil
+}
+
+func (g *mirGen) listOptionalPayloadToI64(elemReg, elemLLVM string, elemT mir.Type) (string, error) {
+	switch elemLLVM {
+	case "i64":
+		return elemReg, nil
+	case "i1", "i8", "i16", "i32":
+		widened := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = zext %s %s to i64\n", widened, elemLLVM, elemReg)
+		return widened, nil
+	case "double":
+		cast := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = bitcast double %s to i64\n", cast, elemReg)
+		return cast, nil
+	case "ptr":
+		cast := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = ptrtoint ptr %s to i64\n", cast, elemReg)
+		return cast, nil
+	default:
+		if strings.HasPrefix(elemLLVM, "%") {
+			return g.toI64Slot(elemReg, elemT)
+		}
+	}
+	return "", unsupported("mir-mvp", "list optional payload widen unsupported for "+elemLLVM)
 }
 
 // emitMapIntrinsic dispatches map intrinsics to runtime symbols. Key
@@ -6413,6 +6414,13 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		result := llvmCompare(em, "eq", size, llvmIntLiteral(0))
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicStringTrim:
+		sym := llvmStringRuntimeTrimSpaceSymbol()
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		em := g.ostyEmitter()
+		result := llvmStringRuntimeTrimSpace(em, &LlvmValue{typ: "ptr", name: strReg})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicStringToUpper:
 		sym := "osty_rt_strings_ToUpper"
 		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
@@ -6437,6 +6445,8 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitStringBinaryBoolIntrinsic(i, strReg, llvmStringRuntimeHasSuffixSymbol())
 	case mir.IntrinsicStringContains:
 		return g.emitStringBinaryBoolIntrinsic(i, strReg, llvmStringRuntimeContainsSymbol())
+	case mir.IntrinsicStringIndexOf:
+		return g.emitStringIndexOf(i, strReg)
 	case mir.IntrinsicStringSplit:
 		return g.emitStringSplit(i, strReg)
 	case mir.IntrinsicStringJoin:
@@ -6450,6 +6460,65 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitStringSubstring(i, strReg)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("string intrinsic kind %d", i.Kind))
+}
+
+func (g *mirGen) emitStringIndexOf(i *mir.IntrinsicInstr, strReg string) error {
+	if len(i.Args) != 2 {
+		return unsupported("mir-mvp", "string_index_of arity")
+	}
+	needleReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+	if err != nil {
+		return err
+	}
+	sym := llvmStringRuntimeIndexOfSymbol()
+	g.declareRuntime(sym, "declare i64 @"+sym+"(ptr, ptr)")
+	em := g.ostyEmitter()
+	index := llvmCall(em, "i64", sym, []*LlvmValue{
+		{typ: "ptr", name: strReg},
+		{typ: "ptr", name: needleReg},
+	})
+	g.flushOstyEmitter(em)
+	if i.Dest == nil {
+		return nil
+	}
+	destLoc := g.fn.Local(i.Dest.Local)
+	if destLoc == nil {
+		return fmt.Errorf("mir-mvp: string_index_of dest %d", i.Dest.Local)
+	}
+	if optT, ok := destLoc.Type.(*ir.OptionalType); ok {
+		return g.storeOptionalIntFromNegativeOneIndex(i, optT, index.name, "string.index_of")
+	}
+	return g.storeIntrinsicResult(i, index)
+}
+
+func (g *mirGen) storeOptionalIntFromNegativeOneIndex(i *mir.IntrinsicInstr, optT *ir.OptionalType, indexReg, labelPrefix string) error {
+	optLLVM := g.llvmType(optT)
+	present := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = icmp sge i64 %s, 0\n", present, indexReg)
+	someLabel := g.freshLabel(labelPrefix + ".some")
+	noneLabel := g.freshLabel(labelPrefix + ".none")
+	mergeLabel := g.freshLabel(labelPrefix + ".merge")
+	fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", present, someLabel, noneLabel)
+
+	fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+	someStep := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 1, 0\n", someStep, optLLVM)
+	someValue := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n", someValue, optLLVM, someStep, indexReg)
+	fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", mergeLabel)
+
+	fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
+	noneStep := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 0, 0\n", noneStep, optLLVM)
+	noneValue := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 0, 1\n", noneValue, optLLVM, noneStep)
+	fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", mergeLabel)
+
+	fmt.Fprintf(&g.fnBuf, "%s:\n", mergeLabel)
+	result := g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = phi %s [ %s, %%%s ], [ %s, %%%s ]\n", result, optLLVM, someValue, someLabel, noneValue, noneLabel)
+	fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", optLLVM, result, g.localSlots[i.Dest.Local])
+	return nil
 }
 
 // emitStringSubstring emits `s.substring(start, end)` / `s[a..b]`

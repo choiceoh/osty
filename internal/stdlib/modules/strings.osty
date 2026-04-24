@@ -1004,6 +1004,13 @@ pub fn contains(s: String, substr: String) -> Bool {
     indexOfChars(s.chars(), substr.chars()) >= 0
 }
 
+// Bootstrap aliases for self-hosted MIR→LLVM snapshot sources. These
+// mirror Go's strings package names where the snapshot transpiler
+// deliberately routes directly to Go helpers.
+pub fn Contains(s: String, substr: String) -> Bool {
+    contains(s, substr)
+}
+
 pub fn indexOf(s: String, substr: String) -> Int? {
     let at = indexOfChars(s.chars(), substr.chars())
     if at < 0 {
@@ -1011,6 +1018,10 @@ pub fn indexOf(s: String, substr: String) -> Int? {
     } else {
         Some(at)
     }
+}
+
+pub fn Index(s: String, substr: String) -> Int {
+    indexOfChars(s.chars(), substr.chars())
 }
 
 pub fn lastIndexOf(s: String, substr: String) -> Int? {
@@ -1049,6 +1060,10 @@ pub fn hasPrefix(s: String, prefix: String) -> Bool {
     startsWith(s, prefix)
 }
 
+pub fn HasPrefix(s: String, prefix: String) -> Bool {
+    hasPrefix(s, prefix)
+}
+
 pub fn endsWith(s: String, suffix: String) -> Bool {
     let chars = s.chars()
     let needle = suffix.chars()
@@ -1057,6 +1072,10 @@ pub fn endsWith(s: String, suffix: String) -> Bool {
 
 pub fn hasSuffix(s: String, suffix: String) -> Bool {
     endsWith(s, suffix)
+}
+
+pub fn HasSuffix(s: String, suffix: String) -> Bool {
+    hasSuffix(s, suffix)
 }
 
 pub fn trim(s: String) -> String {
