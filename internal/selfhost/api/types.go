@@ -89,11 +89,11 @@ type CheckDiagnosticRecord struct {
 
 // CheckResult is the structured Go-facing surface for the bootstrapped checker.
 type CheckResult struct {
-	Summary        CheckSummary          `json:"summary"`
-	TypedNodes     []CheckedNode         `json:"typedNodes"`
-	Bindings       []CheckedBinding      `json:"bindings"`
-	Symbols        []CheckedSymbol       `json:"symbols"`
-	Instantiations []CheckInstantiation  `json:"instantiations"`
+	Summary        CheckSummary            `json:"summary"`
+	TypedNodes     []CheckedNode           `json:"typedNodes"`
+	Bindings       []CheckedBinding        `json:"bindings"`
+	Symbols        []CheckedSymbol         `json:"symbols"`
+	Instantiations []CheckInstantiation    `json:"instantiations"`
 	Diagnostics    []CheckDiagnosticRecord `json:"diagnostics,omitempty"`
 }
 

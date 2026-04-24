@@ -19,9 +19,9 @@ type GreenKind int
 const (
 	// ---- Meta ----
 
-	GkNone GreenKind = iota // unused sentinel
-	GkToken                 // a terminal with text + trivia
-	GkTrivia                // a trivia leaf (rarely used; trivia usually lives on tokens)
+	GkNone   GreenKind = iota // unused sentinel
+	GkToken                   // a terminal with text + trivia
+	GkTrivia                  // a trivia leaf (rarely used; trivia usually lives on tokens)
 
 	// ---- File / entry points ----
 
@@ -85,7 +85,7 @@ const (
 	GkBoolLit
 	GkCharLit
 	GkByteLit
-	GkStringPart // one text segment of a STRING/RAWSTRING
+	GkStringPart   // one text segment of a STRING/RAWSTRING
 	GkStringInterp // one {expr} interpolation
 
 	// ---- Expressions: operators ----
@@ -278,7 +278,7 @@ var greenKindNames = map[GreenKind]string{
 // source extent (TotalWidth) while consumers that only care about the token
 // text can still use Width:
 //
-//   TotalWidth = LeadingWidth + Width + TrailingWidth
+//	TotalWidth = LeadingWidth + Width + TrailingWidth
 //
 // Structural sharing: two GreenTokens with identical fields dedupe to a
 // single id in the arena, saving memory for common keyword/punctuation

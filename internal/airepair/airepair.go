@@ -478,7 +478,7 @@ func compareFrontEndAssist(before, after ProbeStats) int {
 func checkOptsForSource(src []byte) check.Opts {
 	reg := stdlib.LoadCached()
 	return check.Opts{
-		
+
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,

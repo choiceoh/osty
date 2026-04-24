@@ -31,8 +31,8 @@ fn main() {
 	}
 	got := string(ir)
 	for _, want := range []string{
-		"sub i32 ",  // c - '0'
-		"icmp ult i32 ",  // <u 10
+		"sub i32 ",      // c - '0'
+		"icmp ult i32 ", // <u 10
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("Char.isDigit missing %q in IR:\n%s", want, got)

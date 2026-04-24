@@ -42,7 +42,7 @@
 //     IntrinsicCall, MethodCall, VariantLit, FieldExpr, TupleAccess,
 //     IndexExpr, ListLit, MapLit, TupleLit, StructLit, RangeLit,
 //     Closure (Captures), BlockExpr, IfExpr, IfLetExpr, MatchExpr (arms
-//     + optional DecisionTree), ErrorExpr.
+//   - optional DecisionTree), ErrorExpr.
 //   - Patterns: WildPat, IdentPat, LitPat, TuplePat, StructPat,
 //     VariantPat, RangePat, OrPat, BindingPat, ErrorPat.
 //   - Types: PrimType (with canonical singletons), NamedType (Package

@@ -61,14 +61,14 @@
 //
 // # What's usable today
 //
-// - `LookupStructMethod` / `LookupEnumMethod` — return the cached
-//   stdlib AST FnDecl for a built-in method. Callers get a read-only
-//   view; cloning is the caller's responsibility (use
-//   `internal/ir/clone.go` once converted to IR).
+//   - `LookupStructMethod` / `LookupEnumMethod` — return the cached
+//     stdlib AST FnDecl for a built-in method. Callers get a read-only
+//     view; cloning is the caller's responsibility (use
+//     `internal/ir/clone.go` once converted to IR).
 //
-// - `MapCanonicalHelperNames` — the §B.9.1.64 canonical set. Useful
-//   for the future dispatcher that decides whether a given callsite
-//   should route to monomorphization or intrinsic.
+//   - `MapCanonicalHelperNames` — the §B.9.1.64 canonical set. Useful
+//     for the future dispatcher that decides whether a given callsite
+//     should route to monomorphization or intrinsic.
 //
 // Tests in `stdlib_method_lookup_test.go` pin the registry has all
 // six Map canonical helpers plus Option's isSome/isNone, so a stdlib

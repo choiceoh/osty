@@ -62,7 +62,7 @@ func bootstrapGeneratedSource(t *testing.T, path string) string {
 
 	reg := stdlib.LoadCached()
 	opts := check.Opts{
-		
+
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,

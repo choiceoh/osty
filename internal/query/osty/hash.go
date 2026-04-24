@@ -37,7 +37,6 @@ func newHasher() *stableHasher {
 	return s
 }
 
-
 // sum returns the accumulated hash and returns the hasher to the
 // pool. Callers use this once per top-level hashFn (and once per
 // intermediate hash in helpers like the SymTypes symbol-hashing
@@ -571,4 +570,3 @@ func hashStringSlice(ss []string) [32]byte {
 	}
 	return h.sum()
 }
-

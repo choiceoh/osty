@@ -72,15 +72,15 @@ func FormatInspectJSON(w io.Writer, recs []InspectRecord) error {
 	enc := json.NewEncoder(w)
 	for _, r := range recs {
 		if err := enc.Encode(inspectRecordJSON{
-			PosLine:    r.Pos.Line,
-			PosColumn:  r.Pos.Column,
-			EndLine:    r.End.Line,
-			EndColumn:  r.End.Column,
-			NodeKind:   r.NodeKind,
-			Rule:       r.Rule,
-			Type:       typeString(r.Type),
-			Hint:       typeString(r.Hint),
-			Notes:      r.Notes,
+			PosLine:   r.Pos.Line,
+			PosColumn: r.Pos.Column,
+			EndLine:   r.End.Line,
+			EndColumn: r.End.Column,
+			NodeKind:  r.NodeKind,
+			Rule:      r.Rule,
+			Type:      typeString(r.Type),
+			Hint:      typeString(r.Hint),
+			Notes:     r.Notes,
 		}); err != nil {
 			return err
 		}

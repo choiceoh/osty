@@ -4,8 +4,8 @@ import "testing"
 
 func TestResolveTestWorkers(t *testing.T) {
 	cases := []struct {
-		name                              string
-		serial                            bool
+		name                            string
+		serial                          bool
 		jobs, cpuCount, testCount, want int
 	}{
 		{"serial-wins", true, 8, 16, 100, 1},

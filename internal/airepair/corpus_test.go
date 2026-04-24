@@ -127,7 +127,7 @@ func TestAnalyzeCorpus(t *testing.T) {
 			// else_if_keyword → python_else_if_block path the Go-legacy
 			// checker triggered. Final repaired source is identical
 			// (expected fixture unchanged; wantAfterTotalErrs stays 0).
-			wantChangeKinds:    []string{"python_if_block", "python_elif_block", "python_else_block"},
+			wantChangeKinds: []string{"python_if_block", "python_elif_block", "python_else_block"},
 		},
 		{
 			name:               "js_for_of_loop",

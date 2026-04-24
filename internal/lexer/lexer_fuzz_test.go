@@ -32,44 +32,44 @@ func FuzzLex(f *testing.F) {
 	// tripped the parser fuzzer, and a handful of truncated inputs that
 	// exercise the unterminated-* code paths.
 	seeds := []string{
-		"",                   // empty
-		"\x00",               // lone NUL
-		"\xff\xfe\xfd",       // invalid UTF-8 sequence
-		"#",                  // lone hash (historic parser hang)
+		"",             // empty
+		"\x00",         // lone NUL
+		"\xff\xfe\xfd", // invalid UTF-8 sequence
+		"#",            // lone hash (historic parser hang)
 		"#!/usr/bin/env osty\n",
 		"\ufeffpub fn main() {}",
-		"let s = \"hello",    // E0001 unterminated
+		"let s = \"hello", // E0001 unterminated
 		"let s = \"hi\n",
-		"let n = 0X1F",        // E0002
-		"let c = '\\u{D800}'", // E0003 surrogate
-		"let c = '\\q'",       // E0003 unknown escape
-		"/* never closes",     // E0004
-		"let x = ⚡",           // E0005
-		"let s = \"\"\"oops\"\"\"", // E0006 missing leading newline
-		"match 0 { 0 => 1 }",  // E0007 fat arrow
-		"let a = 1_",          // E0008
-		"let a = 0x_FF",       // E0008
-		"let a = 1__000",      // E0008
-		"let a = ''",          // E0009 empty char
-		"let a = b''",         // E0009 empty byte
-		"let cast = err as? FsError", // fused postfix token
+		"let n = 0X1F",                    // E0002
+		"let c = '\\u{D800}'",             // E0003 surrogate
+		"let c = '\\q'",                   // E0003 unknown escape
+		"/* never closes",                 // E0004
+		"let x = ⚡",                       // E0005
+		"let s = \"\"\"oops\"\"\"",        // E0006 missing leading newline
+		"match 0 { 0 => 1 }",              // E0007 fat arrow
+		"let a = 1_",                      // E0008
+		"let a = 0x_FF",                   // E0008
+		"let a = 1__000",                  // E0008
+		"let a = ''",                      // E0009 empty char
+		"let a = b''",                     // E0009 empty byte
+		"let cast = err as? FsError",      // fused postfix token
 		"'outer: for { continue 'outer }", // label token + labeled control flow
-		"let s = \"a {f({g: 1})} b\"", // nested interpolation
+		"let s = \"a {f({g: 1})} b\"",     // nested interpolation
 		"let s = \"\"\"\n    line1\n    line2\n    \"\"\"", // triple valid
-		"let s = r\"raw \\n\"",  // raw string
-		"let s = b\"bytes\"",    // byte string
-		"let c = '\\u{1F600}'",  // valid unicode escape
-		"let x = 길 + 🦀",        // multi-byte UTF-8 identifiers (invalid, but no panic)
-		"0x",                    // truncated base literal
+		"let s = r\"raw \\n\"",                             // raw string
+		"let s = b\"bytes\"",                               // byte string
+		"let c = '\\u{1F600}'",                             // valid unicode escape
+		"let x = 길 + 🦀",                                    // multi-byte UTF-8 identifiers (invalid, but no panic)
+		"0x",                                               // truncated base literal
 		"0b",
 		"0o",
-		"\"",                    // lone quote
-		"\"\"\"",                // lone triple
-		"'",                     // lone apostrophe
+		"\"",     // lone quote
+		"\"\"\"", // lone triple
+		"'",      // lone apostrophe
 		"b'",
 		"r\"",
-		"\\u{",                  // truncated unicode escape
-		"{",                     // lone brace
+		"\\u{", // truncated unicode escape
+		"{",    // lone brace
 		"fn f() {\n    return 1\n}",
 		// ASI suppression landmines: binary op at EOL + leading dot.
 		"let x = 1 +\n    2\n",

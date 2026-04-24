@@ -77,11 +77,11 @@ func TestUsesFrontEndAIRepair(t *testing.T) {
 
 func TestShouldCaptureAiRepair(t *testing.T) {
 	cases := []struct {
-		name         string
-		mode         string
-		changed      bool
-		totalErrors  int
-		want         bool
+		name        string
+		mode        string
+		changed     bool
+		totalErrors int
+		want        bool
 	}{
 		{"always-no-changes-no-errors", "always", false, 0, true},
 		{"always-changed-errors", "always", true, 5, true},

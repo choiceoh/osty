@@ -54,7 +54,7 @@ func Generate(cfg Config) ([]byte, error) {
 
 	reg := stdlib.LoadCached()
 	opts := check.Opts{
-		
+
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,

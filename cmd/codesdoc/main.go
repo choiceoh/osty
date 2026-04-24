@@ -715,17 +715,17 @@ func renderEntry(b *strings.Builder, e codeEntry) {
 // Headings that share a family prefix (e.g. "Manifest — TOML syntax."
 // vs "Manifest — schema.") are matched by prefix via headingToFamily.
 var headingFamily = map[string]string{
-	"Lexical":                  "FamilyLexical",
+	"Lexical":                   "FamilyLexical",
 	"Declarations & statements": "FamilyDeclaration",
-	"Expressions":              "FamilyExpression",
-	"Types & patterns":         "FamilyTypePattern",
-	"Annotations":              "FamilyAnnotation",
-	"Name resolution":          "FamilyResolution",
-	"Control flow / context":   "FamilyControlFlow",
-	"Type checking":            "FamilyTypeChecking",
-	"Deprecation warning":      "FamilyWarning",
-	"Runtime sublanguage":      "FamilyTypeChecking", // TODO: dedicated FamilyRuntime once generated.go accommodates it
-	"Scaffolding":              "FamilyScaffold",
+	"Expressions":               "FamilyExpression",
+	"Types & patterns":          "FamilyTypePattern",
+	"Annotations":               "FamilyAnnotation",
+	"Name resolution":           "FamilyResolution",
+	"Control flow / context":    "FamilyControlFlow",
+	"Type checking":             "FamilyTypeChecking",
+	"Deprecation warning":       "FamilyWarning",
+	"Runtime sublanguage":       "FamilyTypeChecking", // TODO: dedicated FamilyRuntime once generated.go accommodates it
+	"Scaffolding":               "FamilyScaffold",
 }
 
 // headingPrefixFamily matches headings by prefix when multiple

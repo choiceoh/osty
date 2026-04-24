@@ -752,7 +752,7 @@ func engineKeyForURI(uri string) string {
 func lspCheckOpts(src []byte) check.Opts {
 	reg := stdlib.LoadCached()
 	return check.Opts{
-		
+
 		Source:        src,
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,

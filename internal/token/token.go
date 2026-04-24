@@ -94,10 +94,10 @@ const (
 	SHLEQ     // <<=
 	SHREQ     // >>=
 
-	QUESTION // ?
+	QUESTION   // ?
 	ASQUESTION // as?
-	QDOT     // ?.
-	QQ       // ??
+	QDOT       // ?.
+	QQ         // ??
 
 	DOTDOT   // ..
 	DOTDOTEQ // ..=

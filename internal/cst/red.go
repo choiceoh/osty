@@ -17,8 +17,8 @@ type Red struct {
 	absoluteOffset int
 	// green identifies the underlying green entry. We keep both the tag
 	// and the id so the node / token dispatch is straightforward.
-	tag  GreenChildTag // GctNode or GctToken
-	id   int           // arena id
+	tag GreenChildTag // GctNode or GctToken
+	id  int           // arena id
 }
 
 // Tree couples a Green arena with a Red side-table. The side-table caches
