@@ -101,7 +101,7 @@ func TestNativeResolutionRowsCrossFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pkg, err := LoadPackage(dir)
+	pkg, err := LoadPackageArenaFirst(dir)
 	if err != nil {
 		t.Fatalf("LoadPackage: %v", err)
 	}
@@ -136,7 +136,7 @@ fn main() {
 		t.Fatal(err)
 	}
 
-	pkg, err := LoadPackage(dir)
+	pkg, err := LoadPackageArenaFirst(dir)
 	if err != nil {
 		t.Fatalf("LoadPackage: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestNativeDiagnosticsSingleFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pkg, err := LoadPackage(dir)
+	pkg, err := LoadPackageArenaFirst(dir)
 	if err != nil {
 		t.Fatalf("LoadPackage: %v", err)
 	}

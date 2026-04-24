@@ -29,7 +29,7 @@ func TestLintPackageStampsPerFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pkg, err := resolve.LoadPackage(dir)
+	pkg, err := resolve.LoadPackageArenaFirst(dir)
 	if err != nil {
 		t.Fatalf("LoadPackage: %v", err)
 	}

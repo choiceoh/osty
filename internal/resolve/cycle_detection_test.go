@@ -43,7 +43,7 @@ pub fn world() -> Int { 1 }
 		t.Fatalf("NewWorkspace: %v", err)
 	}
 	for _, p := range WorkspacePackagePaths(root) {
-		if _, err := ws.LoadPackage(p); err != nil {
+		if _, err := ws.LoadPackageArenaFirst(p); err != nil {
 			t.Fatalf("LoadPackage %s: %v", p, err)
 		}
 	}
@@ -101,7 +101,7 @@ func TestWorkspaceDetectsCyclicImportThreePackage(t *testing.T) {
 		t.Fatalf("NewWorkspace: %v", err)
 	}
 	for _, p := range WorkspacePackagePaths(root) {
-		if _, err := ws.LoadPackage(p); err != nil {
+		if _, err := ws.LoadPackageArenaFirst(p); err != nil {
 			t.Fatalf("LoadPackage %s: %v", p, err)
 		}
 	}
@@ -151,7 +151,7 @@ func TestWorkspaceNoCycleOnDAG(t *testing.T) {
 		t.Fatalf("NewWorkspace: %v", err)
 	}
 	for _, p := range WorkspacePackagePaths(root) {
-		if _, err := ws.LoadPackage(p); err != nil {
+		if _, err := ws.LoadPackageArenaFirst(p); err != nil {
 			t.Fatalf("LoadPackage %s: %v", p, err)
 		}
 	}

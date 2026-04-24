@@ -25,7 +25,7 @@ func TestPackageDiagsCarryOwningFilePath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	pkg, err := LoadPackage(dir)
+	pkg, err := LoadPackageArenaFirst(dir)
 	if err != nil {
 		t.Fatalf("LoadPackage: %v", err)
 	}

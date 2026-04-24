@@ -28,7 +28,7 @@ pub fn violator() -> Int { 42 }
 		t.Fatal(err)
 	}
 
-	pkg, err := resolve.LoadPackage(dir)
+	pkg, err := resolve.LoadPackageArenaFirst(dir)
 	if err != nil {
 		t.Fatalf("LoadPackage: %v", err)
 	}

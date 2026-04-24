@@ -69,7 +69,7 @@ pub struct Pair%d {
 	}
 	ws.Stdlib = stdlib.LoadCached()
 	for i := 0; i < n; i++ {
-		if _, err := ws.LoadPackage(fmt.Sprintf("pkg%d", i)); err != nil {
+		if _, err := ws.LoadPackageArenaFirst(fmt.Sprintf("pkg%d", i)); err != nil {
 			tb.Fatalf("load pkg%d: %v", i, err)
 		}
 	}

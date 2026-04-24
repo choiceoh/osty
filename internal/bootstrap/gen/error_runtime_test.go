@@ -73,7 +73,7 @@ func bootstrapGeneratedSource(t *testing.T, path string) string {
 		t.Fatalf("NewWorkspace: %v", err)
 	}
 	ws.Stdlib = reg
-	if _, err := ws.LoadPackage(""); err != nil {
+	if _, err := ws.LoadPackageArenaFirst(""); err != nil {
 		t.Fatalf("LoadPackage: %v", err)
 	}
 	results := ws.ResolveAll()
