@@ -19,6 +19,7 @@ func TestToolchainHirBundleIncludesHirLower(t *testing.T) {
 		"toolchain/hir_clone.osty",
 		"toolchain/monomorph_pass.osty",
 		"toolchain/pmcompile.osty",
+		"toolchain/builder_policy.osty",
 		"toolchain/hir_lower.osty",
 	}
 	seen := make(map[string]bool)

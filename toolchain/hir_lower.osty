@@ -768,60 +768,6 @@ fn hirLowerCharToDigit(ch: Char) -> Int {
 }
 
 // ====================================================================
-// Builder-derive classification
-// ====================================================================
-
-/// HirLowerBuilderInfo is the result of classifying whether a struct
-/// qualifies for auto-derived builder codegen (LANG_SPEC §3.3).
-///
-/// `derivable` is true only when every non-pub field has a default —
-/// the builder chain lets callers omit non-pub fields, so they must
-/// have a default to fall back on. `required` lists the names of
-/// `pub` fields without a default, in source order — callers use
-/// this list for the compile-time error when `.build()` is called
-/// with missing fields (G9).
-pub struct HirLowerBuilderInfo {
-    pub derivable: Bool,
-    pub required: List<String>,
-}
-
-/// hirLowerClassifyBuilderDerive inspects a struct's field list and
-/// produces (derivable, requiredPubFields). Mirrors Go's
-/// `classifyBuilderDerive`.
-///
-/// Takes a parallel list of (name, exported, hasDefault) tuples
-/// rather than `List<HirField>` to avoid assuming the field's HIR
-/// Expr default is lowered yet — the classifier runs before body
-/// lowering completes. Callers build the input by walking their
-/// struct's AST-level field list.
-pub fn hirLowerClassifyBuilderDerive(
-    names: List<String>,
-    exported: List<Bool>,
-    hasDefaults: List<Bool>,
-) -> HirLowerBuilderInfo {
-    let n = names.len()
-    if n != exported.len() || n != hasDefaults.len() {
-        return HirLowerBuilderInfo { derivable: false, required: [] }
-    }
-    let mut derivable = true
-    let mut required: List<String> = []
-    let mut i = 0
-    for i < n {
-        let isPub = exported[i]
-        let hasDefault = hasDefaults[i]
-        if !isPub && !hasDefault {
-            // Private field without a default — builder can't emit.
-            derivable = false
-        }
-        if isPub && !hasDefault {
-            required.push(names[i])
-        }
-        i = i + 1
-    }
-    HirLowerBuilderInfo { derivable, required }
-}
-
-// ====================================================================
 // Decl assembly helpers (Stage 5c)
 // ====================================================================
 //
@@ -1001,9 +947,9 @@ pub fn hirLowerAssembleVariant(
 
 /// hirLowerAssembleStructDecl builds a HirStructDecl. Drives
 /// builder-derive classification by deriving the parallel
-/// (name / exported / hasDefault) lists from `fields`, then checks
-/// for a user-supplied `builder` method (LANG_SPEC §3.3 override
-/// rule). Methods whose name is `"builder"` cancel the auto-derive.
+/// (name / exported / hasDefault / methodName) lists consumed by the
+/// shared `checkClassifyBuilderDerive` helper in
+/// `toolchain/builder_policy.osty`.
 pub fn hirLowerAssembleStructDecl(
     name: String,
     fields: List<HirField>,
@@ -1025,20 +971,17 @@ pub fn hirLowerAssembleStructDecl(
     let mut names: List<String> = []
     let mut fExported: List<Bool> = []
     let mut hasDefaults: List<Bool> = []
+    let mut methodNames: List<String> = []
     for f in fields {
         names.push(f.name)
         fExported.push(f.exported)
         hasDefaults.push(f.hasDefault)
     }
-    let info = hirLowerClassifyBuilderDerive(names, fExported, hasDefaults)
-    let mut derivable = info.derivable
-    // User-supplied `builder` method cancels auto-derive.
     for m in methods {
-        if m.name == "builder" {
-            derivable = false
-        }
+        methodNames.push(m.name)
     }
-    s.builderDerivable = derivable
+    let info = checkClassifyBuilderDerive(names, fExported, hasDefaults, methodNames)
+    s.builderDerivable = info.derivable
     s.builderRequiredFields = info.required
     s
 }
