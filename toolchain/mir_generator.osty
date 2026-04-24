@@ -83,6 +83,366 @@ pub fn mirLlvmTypeForOpaqueNamed(name: String) -> String {
     ""
 }
 
+/// mirTupleTagForPrim returns the mangled tag fragment used when a
+/// primitive type appears inside a tuple / enum / result type name.
+/// Mirrors the `*ir.PrimType` branch of `llvmTypeForTupleTag` in
+/// `internal/llvmgen/mir_generator.go`. The tag form differs from
+/// `mirLlvmTypeForPrim` — floats are `f64`/`f32` (not `double`/`float`),
+/// String / Bytes keep their spec names (not `ptr`), and Unit is
+/// `unit` (not `void`). Returns `""` when the caller should fall
+/// through to the generic `"opaque"` tag — matches the Go switch's
+/// implicit default.
+pub fn mirTupleTagForPrim(name: String) -> String {
+    if name == "Int" || name == "Int64" || name == "UInt64" {
+        return "i64"
+    }
+    if name == "Int32" || name == "UInt32" || name == "Char" {
+        return "i32"
+    }
+    if name == "Int16" || name == "UInt16" {
+        return "i16"
+    }
+    if name == "Int8" || name == "UInt8" || name == "Byte" {
+        return "i8"
+    }
+    if name == "Bool" {
+        return "i1"
+    }
+    if name == "Float" || name == "Float64" {
+        return "f64"
+    }
+    if name == "Float32" {
+        return "f32"
+    }
+    if name == "String" {
+        return "string"
+    }
+    if name == "Bytes" {
+        return "bytes"
+    }
+    // `PrimType.String()` renders PrimUnit as `"()"`; keep `"Unit"`
+    // too for symmetry with `mirLlvmTypeForPrim` even though no Go
+    // stringifier produces it.
+    if name == "Unit" || name == "()" {
+        return "unit"
+    }
+    ""
+}
+
+/// mirTupleTagForNamed returns the mangled tag fragment used when a
+/// named type appears inside a tuple / enum / result type name.
+/// Mirrors the `*ir.NamedType` branch of `llvmTypeForTupleTag`:
+/// builtin collection handles and the concurrency runtime types
+/// collapse to `"ptr"`, everything else keeps its declared name so
+/// mangled strings stay human-readable (`Tuple.i64.Event`).
+pub fn mirTupleTagForNamed(name: String, builtin: Bool) -> String {
+    // Builtin collection / closure-env handles share the opaque-ptr
+    // LLVM form. The `builtin` guard preserves user names that
+    // happen to collide with builtin identifiers.
+    if builtin {
+        if name == "List" || name == "Map" || name == "Set" ||
+           name == "Bytes" || name == "ClosureEnv" {
+            return "ptr"
+        }
+    }
+    // Concurrency runtime handle types are always opaque pointers,
+    // regardless of the Builtin flag — the Go source also skips the
+    // guard here, so we keep the same relaxation.
+    if name == "Channel" || name == "Handle" || name == "Group" ||
+       name == "TaskGroup" || name == "Select" || name == "Duration" {
+        return "ptr"
+    }
+    name
+}
+
+/// mirOptionalTypeName returns the mangled LLVM type name for a
+/// surface `T?` optional. Matches `optionalTypeName` in
+/// `internal/llvmgen/mir_generator.go` — always a two-word mangling
+/// since `Option` needs an inner tag to disambiguate payload slot
+/// width. Caller passes `innerTag` already computed via
+/// `mirTupleTagForPrim` / `mirTupleTagForNamed` / tuple recursion.
+pub fn mirOptionalTypeName(innerTag: String) -> String {
+    "Option." + innerTag
+}
+
+/// mirOptionTypeName returns the mangled name for a `Option<T>`
+/// *named* type (as distinct from the surface `T?` form). When the
+/// caller has no inner tag (bare `Option`), the result is just
+/// `"Option"` — the Go source emits this when the named type has no
+/// type args. Otherwise the suffix mirrors `mirOptionalTypeName`.
+pub fn mirOptionTypeName(innerTag: String) -> String {
+    if innerTag == "" {
+        return "Option"
+    }
+    "Option." + innerTag
+}
+
+/// mirResultTypeName returns the mangled name for `Result<T, E>`.
+/// Matches `resultTypeName` — one-arg drops the `E` suffix, no-arg
+/// falls back to bare `"Result"`. Empty-string tags signal "skip"
+/// so the caller doesn't have to duplicate the arg-count branching.
+pub fn mirResultTypeName(okTag: String, errTag: String) -> String {
+    if okTag == "" {
+        return "Result"
+    }
+    if errTag == "" {
+        return "Result." + okTag
+    }
+    "Result." + okTag + "." + errTag
+}
+
+/// mirTupleTypeNameFromTags returns the mangled name for a tuple
+/// type given its element tags (already computed via
+/// `mirTupleTagForPrim` / `mirTupleTagForNamed` / nested
+/// `mirTupleTypeNameFromTags`). The element tags are joined with
+/// `.` separators so the name stays printable and collision-free
+/// (`Tuple.i64.string.f64`). Mirrors `tupleName` in the Go source
+/// — the Go version was literally
+/// `"Tuple." + strings.Join(tags, ".")`, so an empty tag list
+/// produces the trailing-dot form `"Tuple."`. The Go version also
+/// registers the tuple layout in `g.tupleDefs`, which stays on the
+/// caller since it's module state.
+pub fn mirTupleTypeNameFromTags(tags: List<String>) -> String {
+    let mut joined = ""
+    let mut first = true
+    for tag in tags {
+        if first {
+            joined = tag
+            first = false
+        } else {
+            joined = joined + "." + tag
+        }
+    }
+    "Tuple." + joined
+}
+
+/// mirBinaryOpcode returns the LLVM opcode (and `icmp`/`fcmp`
+/// predicate) for the MIR binary operator whose `BinaryOp.String()`
+/// form matches `symbol`. The `isFloat` flag selects the
+/// floating-point family for arithmetic + comparison symbols. Logical
+/// (`&&` / `||`) and bitwise (`&` / `|` / `^` / `<<` / `>>`)
+/// operators ignore `isFloat` — the Go source also never reaches
+/// those branches with a float operand. Returns `""` when no match
+/// so the caller can fall through to the `unsupported` diagnostic.
+pub fn mirBinaryOpcode(symbol: String, isFloat: Bool) -> String {
+    if symbol == "+" {
+        if isFloat { return "fadd" }
+        return "add"
+    }
+    if symbol == "-" {
+        if isFloat { return "fsub" }
+        return "sub"
+    }
+    if symbol == "*" {
+        if isFloat { return "fmul" }
+        return "mul"
+    }
+    if symbol == "/" {
+        if isFloat { return "fdiv" }
+        return "sdiv"
+    }
+    if symbol == "%" {
+        if isFloat { return "frem" }
+        return "srem"
+    }
+    if symbol == "==" {
+        if isFloat { return "fcmp oeq" }
+        return "icmp eq"
+    }
+    if symbol == "!=" {
+        if isFloat { return "fcmp one" }
+        return "icmp ne"
+    }
+    if symbol == "<" {
+        if isFloat { return "fcmp olt" }
+        return "icmp slt"
+    }
+    if symbol == "<=" {
+        if isFloat { return "fcmp ole" }
+        return "icmp sle"
+    }
+    if symbol == ">" {
+        if isFloat { return "fcmp ogt" }
+        return "icmp sgt"
+    }
+    if symbol == ">=" {
+        if isFloat { return "fcmp oge" }
+        return "icmp sge"
+    }
+    // Logical-and / bitwise-and share the `and` opcode; the operand
+    // type is what differs — `i1` for logical, operand LLVM type
+    // for bitwise. Callers discriminate via `mirBinaryForcesI1Type`.
+    if symbol == "&&" || symbol == "&" {
+        return "and"
+    }
+    if symbol == "||" || symbol == "|" {
+        return "or"
+    }
+    if symbol == "^" {
+        return "xor"
+    }
+    if symbol == "<<" {
+        return "shl"
+    }
+    if symbol == ">>" {
+        return "ashr"
+    }
+    ""
+}
+
+/// mirBinaryForcesI1Type reports whether the operand type emitted
+/// alongside the opcode should be `"i1"` regardless of the argument
+/// type the caller would otherwise use. True for logical `&&` / `||`
+/// only — bitwise `&` / `|` / `^` shift on the operand width.
+/// Complements `mirBinaryOpcode` so the caller never has to repeat
+/// the opcode switch.
+pub fn mirBinaryForcesI1Type(symbol: String) -> Bool {
+    symbol == "&&" || symbol == "||"
+}
+
+/// mirLoopHintsActive reports whether any v0.6 loop annotation is
+/// set for the current function — i.e. whether the loop-metadata
+/// emitter should attach an `!llvm.loop !N` reference to this
+/// function's back-edge terminators. Mirrors the Go predicate of
+/// the same name; the Boolean OR lives here so the Go caller only
+/// keeps the state-owning flag fields.
+pub fn mirLoopHintsActive(vectorizeHint: Bool, parallelHint: Bool, unrollHint: Bool) -> Bool {
+    vectorizeHint || parallelHint || unrollHint
+}
+
+/// mirLoopMDVectorizeEnable returns the literal body of the
+/// `!llvm.loop.vectorize.enable` metadata node. Always
+/// `i1 true` — `#[vectorize]` has no "disable" form; the absence
+/// of the annotation is what signals disable.
+pub fn mirLoopMDVectorizeEnable() -> String {
+    "!\{!\"llvm.loop.vectorize.enable\", i1 true\}"
+}
+
+/// mirLoopMDVectorizeScalable returns the literal body of the
+/// `!llvm.loop.vectorize.scalable.enable` node — the SVE/RVV
+/// scalable-vector toggle produced by `#[vectorize(scalable)]`.
+pub fn mirLoopMDVectorizeScalable() -> String {
+    "!\{!\"llvm.loop.vectorize.scalable.enable\", i1 true\}"
+}
+
+/// mirLoopMDVectorizePredicate returns the literal body of the
+/// `!llvm.loop.vectorize.predicate.enable` node — the tail-folding
+/// toggle produced by `#[vectorize(predicate)]`.
+pub fn mirLoopMDVectorizePredicate() -> String {
+    "!\{!\"llvm.loop.vectorize.predicate.enable\", i1 true\}"
+}
+
+/// mirLoopMDUnrollEnable returns the literal body of the
+/// `!llvm.loop.unroll.enable` node — bare `#[unroll]` without a
+/// `count = N` argument. The count form has dynamic content and is
+/// built by the Go caller from the (already-formatted) count digit
+/// string via `mirLoopMDUnrollCount`.
+pub fn mirLoopMDUnrollEnable() -> String {
+    "!\{!\"llvm.loop.unroll.enable\", i1 true\}"
+}
+
+/// mirLoopMDVectorizeWidth returns the body of the
+/// `!llvm.loop.vectorize.width` metadata node for a `width = N`
+/// argument. `widthDigits` must be the already-formatted decimal
+/// form (the bootstrap transpiler doesn't lower Go-style
+/// `fmt.Sprintf("%d", n)`, so the Go caller handles the Int-to-
+/// String conversion).
+pub fn mirLoopMDVectorizeWidth(widthDigits: String) -> String {
+    "!\{!\"llvm.loop.vectorize.width\", i32 " + widthDigits + "\}"
+}
+
+/// mirLoopMDUnrollCount returns the body of the
+/// `!llvm.loop.unroll.count` metadata node for `#[unroll(count =
+/// N)]`. As with width, `countDigits` is pre-formatted by the
+/// caller.
+pub fn mirLoopMDUnrollCount(countDigits: String) -> String {
+    "!\{!\"llvm.loop.unroll.count\", i32 " + countDigits + "\}"
+}
+
+/// mirLoopMDParallelAccesses returns the body of the
+/// `!llvm.loop.parallel_accesses` metadata node for `#[parallel]`.
+/// `accessGroupRef` is the already-allocated `!N` reference string
+/// pointing at the function's `!llvm.access.group` node.
+pub fn mirLoopMDParallelAccesses(accessGroupRef: String) -> String {
+    "!\{!\"llvm.loop.parallel_accesses\", " + accessGroupRef + "\}"
+}
+
+/// mirFormatFnAttrs renders the v0.6 A8/A9/A10/A13 function-level
+/// LLVM attribute string spliced between the parameter list and the
+/// body brace of a `define`/`declare` line. Returns `""` when no
+/// attribute applies so the caller emits the attribute-free form.
+///
+/// Inputs mirror the `mir.Function` shape the Go source reads:
+/// `inlineMode` uses the v0.6 A8 discriminant (0 none / 1 soft /
+/// 2 always / 3 never — see `ir.FnDecl.InlineMode`), `hot` / `cold`
+/// / `pureFn` toggle the corresponding LLVM fn-attrs, and
+/// `targetFeatures` lists the A10 feature names that get
+/// `+`-prefixed and joined for the `"target-features"` attr.
+/// Matches `formatFnAttrs` in `internal/llvmgen/mir_generator.go`
+/// byte-for-byte (including the `hot` + `cold` both-set relaxation:
+/// callers filter that upstream).
+pub fn mirFormatFnAttrs(
+    inlineMode: Int,
+    hot: Bool,
+    cold: Bool,
+    pureFn: Bool,
+    targetFeatures: List<String>,
+) -> String {
+    let mut parts: List<String> = []
+    if inlineMode == 1 {
+        parts.push("inlinehint")
+    } else if inlineMode == 2 {
+        parts.push("alwaysinline")
+    } else if inlineMode == 3 {
+        parts.push("noinline")
+    }
+    if hot {
+        parts.push("hot")
+    }
+    if cold {
+        parts.push("cold")
+    }
+    // v0.6 A13 `#[pure]` → LLVM `readnone`: function reads no
+    // memory and has no side effects. Enables caller-side CSE.
+    if pureFn {
+        parts.push("readnone")
+    }
+    if !targetFeatures.isEmpty() {
+        // LLVM's target-features string expects each feature prefixed
+        // with `+` for enable. v0.6 surface only supports enable, so
+        // we always prepend `+` after stripping any user-typed `+`.
+        let mut joined = ""
+        let mut first = true
+        for f in targetFeatures {
+            let stripped = if llvmStrings.HasPrefix(f, "+") {
+                f[1..f.len()]
+            } else {
+                f
+            }
+            if first {
+                joined = "+" + stripped
+                first = false
+            } else {
+                joined = joined + ",+" + stripped
+            }
+        }
+        parts.push("\"target-features\"=\"" + joined + "\"")
+    }
+    // Space-join the parts list. Empty list → "" so caller emits
+    // the attribute-free define/declare shape.
+    let mut out = ""
+    let mut first = true
+    for p in parts {
+        if first {
+            out = p
+            first = false
+        } else {
+            out = out + " " + p
+        }
+    }
+    out
+}
+
 /// mirLlvmTypeHeadName strips the optional `pkg.` prefix and the
 /// `<...>` argument list from a hirTypeString-style named type
 /// text, returning just the head identifier. For `Map<String, Int>`

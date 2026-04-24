@@ -264,43 +264,11 @@ func newMIRGen(m *mir.Module, opts Options) *mirGen {
 //
 // The set handled here is the exact mirror of the IR FnDecl fields
 // ir.Lower populates from annotations — InlineMode, Hot, Cold,
-// TargetFeatures. Shared across MIR and HIR emitters via the legacy
-// bridge's reified annotation list on the HIR side.
+// Pure, TargetFeatures. Delegates to the Osty-sourced
+// `mirFormatFnAttrs` helper (`toolchain/mir_generator.osty`) so the
+// attribute-name table has a single source of truth.
 func formatFnAttrs(fn *mir.Function) string {
-	parts := make([]string, 0, 5)
-	switch fn.InlineMode {
-	case 1: // InlineSoft
-		parts = append(parts, "inlinehint")
-	case 2: // InlineAlways
-		parts = append(parts, "alwaysinline")
-	case 3: // InlineNever
-		parts = append(parts, "noinline")
-	}
-	if fn.Hot {
-		parts = append(parts, "hot")
-	}
-	if fn.Cold {
-		parts = append(parts, "cold")
-	}
-	if fn.Pure {
-		// v0.6 A13 `#[pure]` → LLVM `readnone`: function reads no
-		// memory and has no side effects. Enables caller-side CSE.
-		parts = append(parts, "readnone")
-	}
-	if len(fn.TargetFeatures) > 0 {
-		prefixed := make([]string, len(fn.TargetFeatures))
-		for i, f := range fn.TargetFeatures {
-			// LLVM's target-features string expects each feature
-			// prefixed with `+` for enable or `-` for disable. The
-			// v0.6 annotation set only supports enable, so we
-			// always prepend `+`. Features the user typed with a
-			// leading `+` are tolerated by stripping it first.
-			prefixed[i] = "+" + strings.TrimPrefix(f, "+")
-		}
-		parts = append(parts,
-			fmt.Sprintf(`"target-features"="%s"`, strings.Join(prefixed, ",")))
-	}
-	return strings.Join(parts, " ")
+	return mirFormatFnAttrs(fn.InlineMode, fn.Hot, fn.Cold, fn.Pure, fn.TargetFeatures)
 }
 
 // noaliasNameSet builds a lookup set of parameter names that should
@@ -374,28 +342,28 @@ func (g *mirGen) nextLoopMD() string {
 	}
 
 	if g.vectorizeHint {
-		propRefs = append(propRefs, alloc(`!{!"llvm.loop.vectorize.enable", i1 true}`))
+		propRefs = append(propRefs, alloc(mirLoopMDVectorizeEnable()))
 		if g.vectorizeWidth > 0 {
 			propRefs = append(propRefs, alloc(
-				fmt.Sprintf(`!{!"llvm.loop.vectorize.width", i32 %d}`, g.vectorizeWidth)))
+				mirLoopMDVectorizeWidth(strconv.Itoa(g.vectorizeWidth))))
 		}
 		if g.vectorizeScalable {
-			propRefs = append(propRefs, alloc(`!{!"llvm.loop.vectorize.scalable.enable", i1 true}`))
+			propRefs = append(propRefs, alloc(mirLoopMDVectorizeScalable()))
 		}
 		if g.vectorizePredicate {
-			propRefs = append(propRefs, alloc(`!{!"llvm.loop.vectorize.predicate.enable", i1 true}`))
+			propRefs = append(propRefs, alloc(mirLoopMDVectorizePredicate()))
 		}
 	}
 	if g.parallelHint && g.parallelAccessGroupRef != "" {
 		propRefs = append(propRefs, alloc(
-			fmt.Sprintf(`!{!"llvm.loop.parallel_accesses", %s}`, g.parallelAccessGroupRef)))
+			mirLoopMDParallelAccesses(g.parallelAccessGroupRef)))
 	}
 	if g.unrollHint {
 		if g.unrollCount > 0 {
 			propRefs = append(propRefs, alloc(
-				fmt.Sprintf(`!{!"llvm.loop.unroll.count", i32 %d}`, g.unrollCount)))
+				mirLoopMDUnrollCount(strconv.Itoa(g.unrollCount))))
 		} else {
-			propRefs = append(propRefs, alloc(`!{!"llvm.loop.unroll.enable", i1 true}`))
+			propRefs = append(propRefs, alloc(mirLoopMDUnrollEnable()))
 		}
 	}
 	if len(propRefs) == 0 {
@@ -451,7 +419,7 @@ func (g *mirGen) nextAccessGroupMD() string {
 // back-edges. Covers vectorize/parallel/unroll without re-listing the
 // individual field names at every call site.
 func (g *mirGen) loopHintsActive() bool {
-	return g.vectorizeHint || g.parallelHint || g.unrollHint
+	return mirLoopHintsActive(g.vectorizeHint, g.parallelHint, g.unrollHint)
 }
 
 // emitLoopMetadata appends every `!llvm.loop` node + vectorize-enable
@@ -9199,98 +9167,30 @@ func (g *mirGen) emitBinary(op mir.BinaryOp, left, right string, argT, resT mir.
 		return g.emitStringOrdering(op, left, right)
 	}
 	argLLVM := g.llvmType(argT)
-	resLLVM := g.llvmType(resT)
+	_ = g.llvmType(resT)
 	isFloat := isFloatType(argT)
+	sym := op.String()
+	opcode := mirBinaryOpcode(sym, isFloat)
+	if opcode == "" {
+		return "", unsupported("mir-mvp", fmt.Sprintf("binary op %d", op))
+	}
+	ty := argLLVM
+	if mirBinaryForcesI1Type(sym) {
+		ty = "i1"
+	}
 	tmp := g.fresh()
-
-	render := func(opStr string, ty string) (string, error) {
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = ")
-		g.fnBuf.WriteString(opStr)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(ty)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(left)
-		g.fnBuf.WriteString(", ")
-		g.fnBuf.WriteString(right)
-		g.fnBuf.WriteByte('\n')
-		return tmp, nil
-	}
-
-	switch op {
-	case mir.BinAdd:
-		if isFloat {
-			return render("fadd", argLLVM)
-		}
-		return render("add", argLLVM)
-	case mir.BinSub:
-		if isFloat {
-			return render("fsub", argLLVM)
-		}
-		return render("sub", argLLVM)
-	case mir.BinMul:
-		if isFloat {
-			return render("fmul", argLLVM)
-		}
-		return render("mul", argLLVM)
-	case mir.BinDiv:
-		if isFloat {
-			return render("fdiv", argLLVM)
-		}
-		return render("sdiv", argLLVM)
-	case mir.BinMod:
-		if isFloat {
-			return render("frem", argLLVM)
-		}
-		return render("srem", argLLVM)
-	case mir.BinEq:
-		if isFloat {
-			return render("fcmp oeq", argLLVM)
-		}
-		return render("icmp eq", argLLVM)
-	case mir.BinNeq:
-		if isFloat {
-			return render("fcmp one", argLLVM)
-		}
-		return render("icmp ne", argLLVM)
-	case mir.BinLt:
-		if isFloat {
-			return render("fcmp olt", argLLVM)
-		}
-		return render("icmp slt", argLLVM)
-	case mir.BinLeq:
-		if isFloat {
-			return render("fcmp ole", argLLVM)
-		}
-		return render("icmp sle", argLLVM)
-	case mir.BinGt:
-		if isFloat {
-			return render("fcmp ogt", argLLVM)
-		}
-		return render("icmp sgt", argLLVM)
-	case mir.BinGeq:
-		if isFloat {
-			return render("fcmp oge", argLLVM)
-		}
-		return render("icmp sge", argLLVM)
-	case mir.BinAnd:
-		return render("and", "i1")
-	case mir.BinOr:
-		return render("or", "i1")
-	case mir.BinBitAnd:
-		return render("and", argLLVM)
-	case mir.BinBitOr:
-		return render("or", argLLVM)
-	case mir.BinBitXor:
-		return render("xor", argLLVM)
-	case mir.BinShl:
-		return render("shl", argLLVM)
-	case mir.BinShr:
-		return render("ashr", argLLVM)
-	}
-	_ = resLLVM
-	return "", unsupported("mir-mvp", fmt.Sprintf("binary op %d", op))
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(tmp)
+	g.fnBuf.WriteString(" = ")
+	g.fnBuf.WriteString(opcode)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(ty)
+	g.fnBuf.WriteByte(' ')
+	g.fnBuf.WriteString(left)
+	g.fnBuf.WriteString(", ")
+	g.fnBuf.WriteString(right)
+	g.fnBuf.WriteByte('\n')
+	return tmp, nil
 }
 
 // isHeapEqualityType reports whether MIR `==` / `!=` on values of type t
@@ -9709,23 +9609,23 @@ func (g *mirGen) llvmType(t mir.Type) string {
 // ==== enum layout helpers ====
 
 // optionalTypeName returns a mangled `Option.<T>` name for a surface
-// `T?` optional. The layout is always `{ i64 disc, <payload> }` where
-// payload is the inner's LLVM type promoted to a slot-sized value.
+// `T?` optional. The pure mangling step delegates to the Osty-sourced
+// `mirOptionalTypeName`; `registerEnumLayout` stays on Go because it
+// mutates `g.enumLayouts` module state.
 func (g *mirGen) optionalTypeName(t *ir.OptionalType) string {
-	name := "Option." + g.llvmTypeForTupleTag(t.Inner)
+	name := mirOptionalTypeName(g.llvmTypeForTupleTag(t.Inner))
 	g.registerEnumLayout(name, t.Inner)
 	return name
 }
 
 func (g *mirGen) optionTypeName(t *ir.NamedType) string {
 	inner := mir.Type(nil)
+	innerTag := ""
 	if len(t.Args) > 0 {
 		inner = t.Args[0]
+		innerTag = g.llvmTypeForTupleTag(inner)
 	}
-	name := "Option"
-	if inner != nil {
-		name = "Option." + g.llvmTypeForTupleTag(inner)
-	}
+	name := mirOptionTypeName(innerTag)
 	g.registerEnumLayout(name, inner)
 	return name
 }
@@ -9734,15 +9634,16 @@ func (g *mirGen) optionTypeName(t *ir.NamedType) string {
 // i64 width and Err payload (usually an Error ptr) reuses it via
 // bitcast — matching the legacy emitter's `%Result.T.E` convention.
 func (g *mirGen) resultTypeName(t *ir.NamedType) string {
-	name := "Result"
 	var inner mir.Type
+	okTag, errTag := "", ""
 	if len(t.Args) >= 1 {
 		inner = t.Args[0]
-		name = "Result." + g.llvmTypeForTupleTag(t.Args[0])
+		okTag = g.llvmTypeForTupleTag(t.Args[0])
 		if len(t.Args) >= 2 {
-			name += "." + g.llvmTypeForTupleTag(t.Args[1])
+			errTag = g.llvmTypeForTupleTag(t.Args[1])
 		}
 	}
+	name := mirResultTypeName(okTag, errTag)
 	g.registerEnumLayout(name, inner)
 	return name
 }
@@ -9763,14 +9664,15 @@ func (g *mirGen) registerEnumLayout(name string, inner mir.Type) {
 
 // tupleName returns the mangled LLVM type name for a tuple and
 // ensures its type definition is emitted at least once per module.
-// Keeping the naming scheme in sync with the legacy emitter
-// (`Tuple.<elem1>.<elem2>.…`) makes it easier to cross-check output.
+// The mangling step delegates to the Osty-sourced
+// `mirTupleTypeNameFromTags`; tuple layout registration stays on Go
+// because it mutates `g.tupleDefs` / `g.tupleOrder` module state.
 func (g *mirGen) tupleName(t *ir.TupleType) string {
-	var parts []string
+	tags := make([]string, 0, len(t.Elems))
 	for _, e := range t.Elems {
-		parts = append(parts, g.llvmTypeForTupleTag(e))
+		tags = append(tags, g.llvmTypeForTupleTag(e))
 	}
-	name := "Tuple." + strings.Join(parts, ".")
+	name := mirTupleTypeNameFromTags(tags)
 	if _, ok := g.tupleDefs[name]; !ok {
 		// Defer the actual `%Tuple.* = type { ... }` line until the
 		// emitter flushes its type pool so the order is stable.
@@ -9782,47 +9684,20 @@ func (g *mirGen) tupleName(t *ir.TupleType) string {
 
 // llvmTypeForTupleTag renders a type in the compact mangled form used
 // inside a tuple type name (dots instead of LLVM keywords). Matches
-// the legacy naming (`i64.string.f64.Tuple.i64.i64`).
+// the legacy naming (`i64.string.f64.Tuple.i64.i64`). The PrimType
+// and NamedType branches delegate to the Osty-sourced
+// `mirTupleTagForPrim` / `mirTupleTagForNamed` helpers
+// (`toolchain/mir_generator.osty`) so the tag table has a single
+// source of truth; tuple recursion stays here because it touches
+// `g.tupleDefs` module state.
 func (g *mirGen) llvmTypeForTupleTag(t mir.Type) string {
 	switch x := t.(type) {
 	case *ir.PrimType:
-		switch x.Kind {
-		case ir.PrimInt, ir.PrimInt64, ir.PrimUInt64:
-			return "i64"
-		case ir.PrimInt32, ir.PrimUInt32, ir.PrimChar:
-			return "i32"
-		case ir.PrimInt16, ir.PrimUInt16:
-			return "i16"
-		case ir.PrimInt8, ir.PrimUInt8, ir.PrimByte:
-			return "i8"
-		case ir.PrimBool:
-			return "i1"
-		case ir.PrimFloat, ir.PrimFloat64:
-			return "f64"
-		case ir.PrimFloat32:
-			return "f32"
-		case ir.PrimString:
-			return "string"
-		case ir.PrimBytes:
-			return "bytes"
-		case ir.PrimUnit:
-			return "unit"
+		if tag := mirTupleTagForPrim(x.String()); tag != "" {
+			return tag
 		}
 	case *ir.NamedType:
-		// Builtin types that flow as `ptr` at the LLVM boundary are
-		// tagged as "ptr" so mangled names like `ClosureEnv.ptr.i64`
-		// stay readable. User named types keep their declared name.
-		if x.Builtin {
-			switch x.Name {
-			case "List", "Map", "Set", "Bytes", "ClosureEnv":
-				return "ptr"
-			}
-		}
-		switch x.Name {
-		case "Channel", "Handle", "Group", "TaskGroup", "Select", "Duration":
-			return "ptr"
-		}
-		return x.Name
+		return mirTupleTagForNamed(x.Name, x.Builtin)
 	case *ir.TupleType:
 		return g.tupleName(x)
 	case *ir.FnType:

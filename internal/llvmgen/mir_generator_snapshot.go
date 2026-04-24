@@ -91,12 +91,410 @@ func mirLlvmTypeForOpaqueNamed(name string) string {
 	return ""
 }
 
-// Osty: toolchain/mir_generator.osty:101:5
-func mirLlvmTypeHeadName(typeText string) string {
+// Osty: toolchain/mir_generator.osty:104:5
+func mirTupleTagForPrim(name string) string {
 	// Osty: toolchain/mir_generator.osty:105:5
+	if name == "Int" || name == "Int64" || name == "UInt64" {
+		// Osty: toolchain/mir_generator.osty:106:9
+		return "i64"
+	}
+	// Osty: toolchain/mir_generator.osty:108:5
+	if name == "Int32" || name == "UInt32" || name == "Char" {
+		// Osty: toolchain/mir_generator.osty:109:9
+		return "i32"
+	}
+	// Osty: toolchain/mir_generator.osty:111:5
+	if name == "Int16" || name == "UInt16" {
+		// Osty: toolchain/mir_generator.osty:112:9
+		return "i16"
+	}
+	// Osty: toolchain/mir_generator.osty:114:5
+	if name == "Int8" || name == "UInt8" || name == "Byte" {
+		// Osty: toolchain/mir_generator.osty:115:9
+		return "i8"
+	}
+	// Osty: toolchain/mir_generator.osty:117:5
+	if name == "Bool" {
+		// Osty: toolchain/mir_generator.osty:118:9
+		return "i1"
+	}
+	// Osty: toolchain/mir_generator.osty:120:5
+	if name == "Float" || name == "Float64" {
+		// Osty: toolchain/mir_generator.osty:121:9
+		return "f64"
+	}
+	// Osty: toolchain/mir_generator.osty:123:5
+	if name == "Float32" {
+		// Osty: toolchain/mir_generator.osty:124:9
+		return "f32"
+	}
+	// Osty: toolchain/mir_generator.osty:126:5
+	if name == "String" {
+		// Osty: toolchain/mir_generator.osty:127:9
+		return "string"
+	}
+	// Osty: toolchain/mir_generator.osty:129:5
+	if name == "Bytes" {
+		// Osty: toolchain/mir_generator.osty:130:9
+		return "bytes"
+	}
+	// Osty: toolchain/mir_generator.osty:135:5
+	if name == "Unit" || name == "()" {
+		// Osty: toolchain/mir_generator.osty:136:9
+		return "unit"
+	}
+	return ""
+}
+
+// Osty: toolchain/mir_generator.osty:147:5
+func mirTupleTagForNamed(name string, builtin bool) string {
+	// Osty: toolchain/mir_generator.osty:151:5
+	if builtin {
+		// Osty: toolchain/mir_generator.osty:152:9
+		if name == "List" || name == "Map" || name == "Set" || name == "Bytes" || name == "ClosureEnv" {
+			// Osty: toolchain/mir_generator.osty:154:13
+			return "ptr"
+		}
+	}
+	// Osty: toolchain/mir_generator.osty:160:5
+	if name == "Channel" || name == "Handle" || name == "Group" || name == "TaskGroup" || name == "Select" || name == "Duration" {
+		// Osty: toolchain/mir_generator.osty:162:9
+		return "ptr"
+	}
+	return name
+}
+
+// Osty: toolchain/mir_generator.osty:173:5
+func mirOptionalTypeName(innerTag string) string {
+	return "Option." + innerTag
+}
+
+// Osty: toolchain/mir_generator.osty:182:5
+func mirOptionTypeName(innerTag string) string {
+	// Osty: toolchain/mir_generator.osty:183:5
+	if innerTag == "" {
+		// Osty: toolchain/mir_generator.osty:184:9
+		return "Option"
+	}
+	return "Option." + innerTag
+}
+
+// Osty: toolchain/mir_generator.osty:193:5
+func mirResultTypeName(okTag string, errTag string) string {
+	// Osty: toolchain/mir_generator.osty:194:5
+	if okTag == "" {
+		// Osty: toolchain/mir_generator.osty:195:9
+		return "Result"
+	}
+	// Osty: toolchain/mir_generator.osty:197:5
+	if errTag == "" {
+		// Osty: toolchain/mir_generator.osty:198:9
+		return "Result." + okTag
+	}
+	return "Result." + okTag + "." + errTag
+}
+
+// Osty: toolchain/mir_generator.osty:214:5
+func mirTupleTypeNameFromTags(tags []string) string {
+	// Osty: toolchain/mir_generator.osty:215:5
+	joined := ""
+	_ = joined
+	// Osty: toolchain/mir_generator.osty:216:5
+	first := true
+	_ = first
+	// Osty: toolchain/mir_generator.osty:217:5
+	for _, tag := range tags {
+		// Osty: toolchain/mir_generator.osty:218:9
+		if first {
+			// Osty: toolchain/mir_generator.osty:219:13
+			joined = tag
+			// Osty: toolchain/mir_generator.osty:220:13
+			first = false
+		} else {
+			// Osty: toolchain/mir_generator.osty:222:13
+			joined = joined + "." + tag
+		}
+	}
+	return "Tuple." + joined
+}
+
+// Osty: toolchain/mir_generator.osty:236:5
+func mirBinaryOpcode(symbol string, isFloat bool) string {
+	// Osty: toolchain/mir_generator.osty:237:5
+	if symbol == "+" {
+		// Osty: toolchain/mir_generator.osty:238:9
+		if isFloat {
+			// Osty: toolchain/mir_generator.osty:238:22
+			return "fadd"
+		}
+		// Osty: toolchain/mir_generator.osty:239:9
+		return "add"
+	}
+	// Osty: toolchain/mir_generator.osty:241:5
+	if symbol == "-" {
+		// Osty: toolchain/mir_generator.osty:242:9
+		if isFloat {
+			// Osty: toolchain/mir_generator.osty:242:22
+			return "fsub"
+		}
+		// Osty: toolchain/mir_generator.osty:243:9
+		return "sub"
+	}
+	// Osty: toolchain/mir_generator.osty:245:5
+	if symbol == "*" {
+		// Osty: toolchain/mir_generator.osty:246:9
+		if isFloat {
+			// Osty: toolchain/mir_generator.osty:246:22
+			return "fmul"
+		}
+		// Osty: toolchain/mir_generator.osty:247:9
+		return "mul"
+	}
+	// Osty: toolchain/mir_generator.osty:249:5
+	if symbol == "/" {
+		// Osty: toolchain/mir_generator.osty:250:9
+		if isFloat {
+			// Osty: toolchain/mir_generator.osty:250:22
+			return "fdiv"
+		}
+		// Osty: toolchain/mir_generator.osty:251:9
+		return "sdiv"
+	}
+	// Osty: toolchain/mir_generator.osty:253:5
+	if symbol == "%" {
+		// Osty: toolchain/mir_generator.osty:254:9
+		if isFloat {
+			// Osty: toolchain/mir_generator.osty:254:22
+			return "frem"
+		}
+		// Osty: toolchain/mir_generator.osty:255:9
+		return "srem"
+	}
+	// Osty: toolchain/mir_generator.osty:257:5
+	if symbol == "==" {
+		// Osty: toolchain/mir_generator.osty:258:9
+		if isFloat {
+			// Osty: toolchain/mir_generator.osty:258:22
+			return "fcmp oeq"
+		}
+		// Osty: toolchain/mir_generator.osty:259:9
+		return "icmp eq"
+	}
+	// Osty: toolchain/mir_generator.osty:261:5
+	if symbol == "!=" {
+		// Osty: toolchain/mir_generator.osty:262:9
+		if isFloat {
+			// Osty: toolchain/mir_generator.osty:262:22
+			return "fcmp one"
+		}
+		// Osty: toolchain/mir_generator.osty:263:9
+		return "icmp ne"
+	}
+	// Osty: toolchain/mir_generator.osty:265:5
+	if symbol == "<" {
+		// Osty: toolchain/mir_generator.osty:266:9
+		if isFloat {
+			// Osty: toolchain/mir_generator.osty:266:22
+			return "fcmp olt"
+		}
+		// Osty: toolchain/mir_generator.osty:267:9
+		return "icmp slt"
+	}
+	// Osty: toolchain/mir_generator.osty:269:5
+	if symbol == "<=" {
+		// Osty: toolchain/mir_generator.osty:270:9
+		if isFloat {
+			// Osty: toolchain/mir_generator.osty:270:22
+			return "fcmp ole"
+		}
+		// Osty: toolchain/mir_generator.osty:271:9
+		return "icmp sle"
+	}
+	// Osty: toolchain/mir_generator.osty:273:5
+	if symbol == ">" {
+		// Osty: toolchain/mir_generator.osty:274:9
+		if isFloat {
+			// Osty: toolchain/mir_generator.osty:274:22
+			return "fcmp ogt"
+		}
+		// Osty: toolchain/mir_generator.osty:275:9
+		return "icmp sgt"
+	}
+	// Osty: toolchain/mir_generator.osty:277:5
+	if symbol == ">=" {
+		// Osty: toolchain/mir_generator.osty:278:9
+		if isFloat {
+			// Osty: toolchain/mir_generator.osty:278:22
+			return "fcmp oge"
+		}
+		// Osty: toolchain/mir_generator.osty:279:9
+		return "icmp sge"
+	}
+	// Osty: toolchain/mir_generator.osty:284:5
+	if symbol == "&&" || symbol == "&" {
+		// Osty: toolchain/mir_generator.osty:285:9
+		return "and"
+	}
+	// Osty: toolchain/mir_generator.osty:287:5
+	if symbol == "||" || symbol == "|" {
+		// Osty: toolchain/mir_generator.osty:288:9
+		return "or"
+	}
+	// Osty: toolchain/mir_generator.osty:290:5
+	if symbol == "^" {
+		// Osty: toolchain/mir_generator.osty:291:9
+		return "xor"
+	}
+	// Osty: toolchain/mir_generator.osty:293:5
+	if symbol == "<<" {
+		// Osty: toolchain/mir_generator.osty:294:9
+		return "shl"
+	}
+	// Osty: toolchain/mir_generator.osty:296:5
+	if symbol == ">>" {
+		// Osty: toolchain/mir_generator.osty:297:9
+		return "ashr"
+	}
+	return ""
+}
+
+// Osty: toolchain/mir_generator.osty:308:5
+func mirBinaryForcesI1Type(symbol string) bool {
+	return symbol == "&&" || symbol == "||"
+}
+
+// Osty: toolchain/mir_generator.osty:318:5
+func mirLoopHintsActive(vectorizeHint bool, parallelHint bool, unrollHint bool) bool {
+	return vectorizeHint || parallelHint || unrollHint
+}
+
+// Osty: toolchain/mir_generator.osty:326:5
+func mirLoopMDVectorizeEnable() string {
+	return "!{!\"llvm.loop.vectorize.enable\", i1 true}"
+}
+
+// Osty: toolchain/mir_generator.osty:333:5
+func mirLoopMDVectorizeScalable() string {
+	return "!{!\"llvm.loop.vectorize.scalable.enable\", i1 true}"
+}
+
+// Osty: toolchain/mir_generator.osty:340:5
+func mirLoopMDVectorizePredicate() string {
+	return "!{!\"llvm.loop.vectorize.predicate.enable\", i1 true}"
+}
+
+// Osty: toolchain/mir_generator.osty:349:5
+func mirLoopMDUnrollEnable() string {
+	return "!{!\"llvm.loop.unroll.enable\", i1 true}"
+}
+
+// Osty: toolchain/mir_generator.osty:359:5
+func mirLoopMDVectorizeWidth(widthDigits string) string {
+	return "!{!\"llvm.loop.vectorize.width\", i32 " + widthDigits + "}"
+}
+
+// Osty: toolchain/mir_generator.osty:367:5
+func mirLoopMDUnrollCount(countDigits string) string {
+	return "!{!\"llvm.loop.unroll.count\", i32 " + countDigits + "}"
+}
+
+// Osty: toolchain/mir_generator.osty:375:5
+func mirLoopMDParallelAccesses(accessGroupRef string) string {
+	return "!{!\"llvm.loop.parallel_accesses\", " + accessGroupRef + "}"
+}
+
+// Osty: toolchain/mir_generator.osty:393:5
+func mirFormatFnAttrs(inlineMode int, hot bool, cold bool, pureFn bool, targetFeatures []string) string {
+	// Osty: toolchain/mir_generator.osty:400:5
+	var parts []string = make([]string, 0, 1)
+	_ = parts
+	// Osty: toolchain/mir_generator.osty:401:5
+	if inlineMode == 1 {
+		// Osty: toolchain/mir_generator.osty:402:9
+		func() struct{} { parts = append(parts, "inlinehint"); return struct{}{} }()
+	} else if inlineMode == 2 {
+		// Osty: toolchain/mir_generator.osty:404:9
+		func() struct{} { parts = append(parts, "alwaysinline"); return struct{}{} }()
+	} else if inlineMode == 3 {
+		// Osty: toolchain/mir_generator.osty:406:9
+		func() struct{} { parts = append(parts, "noinline"); return struct{}{} }()
+	}
+	// Osty: toolchain/mir_generator.osty:408:5
+	if hot {
+		// Osty: toolchain/mir_generator.osty:409:9
+		func() struct{} { parts = append(parts, "hot"); return struct{}{} }()
+	}
+	// Osty: toolchain/mir_generator.osty:411:5
+	if cold {
+		// Osty: toolchain/mir_generator.osty:412:9
+		func() struct{} { parts = append(parts, "cold"); return struct{}{} }()
+	}
+	// Osty: toolchain/mir_generator.osty:416:5
+	if pureFn {
+		// Osty: toolchain/mir_generator.osty:417:9
+		func() struct{} { parts = append(parts, "readnone"); return struct{}{} }()
+	}
+	// Osty: toolchain/mir_generator.osty:419:5
+	if !(len(targetFeatures) == 0) {
+		// Osty: toolchain/mir_generator.osty:423:9
+		joined := ""
+		_ = joined
+		// Osty: toolchain/mir_generator.osty:424:9
+		first := true
+		_ = first
+		// Osty: toolchain/mir_generator.osty:425:9
+		for _, f := range targetFeatures {
+			// Osty: toolchain/mir_generator.osty:426:13
+			stripped := func() string {
+				if llvmStrings.HasPrefix(f, "+") {
+					return f[1:len(f)]
+				} else {
+					return f
+				}
+			}()
+			_ = stripped
+			// Osty: toolchain/mir_generator.osty:431:13
+			if first {
+				// Osty: toolchain/mir_generator.osty:432:17
+				joined = "+" + stripped
+				// Osty: toolchain/mir_generator.osty:433:17
+				first = false
+			} else {
+				// Osty: toolchain/mir_generator.osty:435:17
+				joined = joined + ",+" + stripped
+			}
+		}
+		// Osty: toolchain/mir_generator.osty:438:9
+		func() struct{} { parts = append(parts, "\"target-features\"=\""+joined+"\""); return struct{}{} }()
+	}
+	// Osty: toolchain/mir_generator.osty:442:5
+	out := ""
+	_ = out
+	// Osty: toolchain/mir_generator.osty:443:5
+	first := true
+	_ = first
+	// Osty: toolchain/mir_generator.osty:444:5
+	for _, p := range parts {
+		// Osty: toolchain/mir_generator.osty:445:9
+		if first {
+			// Osty: toolchain/mir_generator.osty:446:13
+			out = p
+			// Osty: toolchain/mir_generator.osty:447:13
+			first = false
+		} else {
+			// Osty: toolchain/mir_generator.osty:449:13
+			out = out + " " + p
+		}
+	}
+	return out
+}
+
+// Osty: toolchain/mir_generator.osty:461:5
+func mirLlvmTypeHeadName(typeText string) string {
+	// Osty: toolchain/mir_generator.osty:465:5
 	ltIdx := llvmStrings.Index(typeText, "<")
 	_ = ltIdx
-	// Osty: toolchain/mir_generator.osty:106:5
+	// Osty: toolchain/mir_generator.osty:466:5
 	stripped := func() string {
 		if ltIdx >= 0 {
 			return typeText[0:ltIdx]
@@ -105,7 +503,7 @@ func mirLlvmTypeHeadName(typeText string) string {
 		}
 	}()
 	_ = stripped
-	// Osty: toolchain/mir_generator.osty:111:5
+	// Osty: toolchain/mir_generator.osty:471:5
 	dotIdx := llvmStrings.Index(stripped, ".")
 	_ = dotIdx
 	return func() string {
@@ -117,41 +515,41 @@ func mirLlvmTypeHeadName(typeText string) string {
 	}()
 }
 
-// Osty: toolchain/mir_generator.osty:125:5
+// Osty: toolchain/mir_generator.osty:485:5
 func mirLlvmTypeIsOptionalSurface(typeText string) bool {
-	// Osty: toolchain/mir_generator.osty:126:5
+	// Osty: toolchain/mir_generator.osty:486:5
 	n := len(typeText)
 	_ = n
-	// Osty: toolchain/mir_generator.osty:127:5
+	// Osty: toolchain/mir_generator.osty:487:5
 	if n == 0 {
-		// Osty: toolchain/mir_generator.osty:128:9
+		// Osty: toolchain/mir_generator.osty:488:9
 		return false
 	}
-	// Osty: toolchain/mir_generator.osty:130:5
+	// Osty: toolchain/mir_generator.osty:490:5
 	if !llvmStrings.HasSuffix(typeText, "?") {
-		// Osty: toolchain/mir_generator.osty:131:9
+		// Osty: toolchain/mir_generator.osty:491:9
 		return false
 	}
-	// Osty: toolchain/mir_generator.osty:135:5
+	// Osty: toolchain/mir_generator.osty:495:5
 	depth := 0
 	_ = depth
-	// Osty: toolchain/mir_generator.osty:136:5
+	// Osty: toolchain/mir_generator.osty:496:5
 	i := 0
 	_ = i
-	// Osty: toolchain/mir_generator.osty:137:5
+	// Osty: toolchain/mir_generator.osty:497:5
 	prefix := typeText[0:(n - 1)]
 	_ = prefix
-	// Osty: toolchain/mir_generator.osty:138:5
+	// Osty: toolchain/mir_generator.osty:498:5
 	plen := len(prefix)
 	_ = plen
-	// Osty: toolchain/mir_generator.osty:139:5
+	// Osty: toolchain/mir_generator.osty:499:5
 	for i < plen {
-		// Osty: toolchain/mir_generator.osty:140:9
+		// Osty: toolchain/mir_generator.osty:500:9
 		ch := prefix[i:(i + 1)]
 		_ = ch
-		// Osty: toolchain/mir_generator.osty:141:9
+		// Osty: toolchain/mir_generator.osty:501:9
 		if ch == "<" || ch == "(" {
-			// Osty: toolchain/mir_generator.osty:142:13
+			// Osty: toolchain/mir_generator.osty:502:13
 			func() {
 				var _cur1 int = depth
 				var _rhs2 int = 1
@@ -164,7 +562,7 @@ func mirLlvmTypeIsOptionalSurface(typeText string) bool {
 				depth = _cur1 + _rhs2
 			}()
 		} else if ch == ">" || ch == ")" {
-			// Osty: toolchain/mir_generator.osty:144:13
+			// Osty: toolchain/mir_generator.osty:504:13
 			func() {
 				var _cur3 int = depth
 				var _rhs4 int = 1
@@ -177,7 +575,7 @@ func mirLlvmTypeIsOptionalSurface(typeText string) bool {
 				depth = _cur3 - _rhs4
 			}()
 		}
-		// Osty: toolchain/mir_generator.osty:146:9
+		// Osty: toolchain/mir_generator.osty:506:9
 		func() {
 			var _cur5 int = i
 			var _rhs6 int = 1
@@ -193,90 +591,90 @@ func mirLlvmTypeIsOptionalSurface(typeText string) bool {
 	return depth == 0
 }
 
-// Osty: toolchain/mir_generator.osty:161:5
+// Osty: toolchain/mir_generator.osty:521:5
 func mirIsHeapEqualityType(typeText string) bool {
 	return typeText == "String" || typeText == "Bytes"
 }
 
-// Osty: toolchain/mir_generator.osty:171:5
+// Osty: toolchain/mir_generator.osty:531:5
 func mirIsStringPrimTypeText(typeText string) bool {
 	return typeText == "String"
 }
 
-// Osty: toolchain/mir_generator.osty:182:5
+// Osty: toolchain/mir_generator.osty:542:5
 func mirIsStringOrderingSymbol(symbol string) bool {
 	return symbol == "<" || symbol == "<=" || symbol == ">" || symbol == ">="
 }
 
-// Osty: toolchain/mir_generator.osty:192:5
+// Osty: toolchain/mir_generator.osty:552:5
 func mirStringOrderingPredicate(symbol string) string {
-	// Osty: toolchain/mir_generator.osty:193:5
+	// Osty: toolchain/mir_generator.osty:553:5
 	if symbol == "<" {
-		// Osty: toolchain/mir_generator.osty:194:9
+		// Osty: toolchain/mir_generator.osty:554:9
 		return "slt"
 	}
-	// Osty: toolchain/mir_generator.osty:196:5
+	// Osty: toolchain/mir_generator.osty:556:5
 	if symbol == "<=" {
-		// Osty: toolchain/mir_generator.osty:197:9
+		// Osty: toolchain/mir_generator.osty:557:9
 		return "sle"
 	}
-	// Osty: toolchain/mir_generator.osty:199:5
+	// Osty: toolchain/mir_generator.osty:559:5
 	if symbol == ">" {
-		// Osty: toolchain/mir_generator.osty:200:9
+		// Osty: toolchain/mir_generator.osty:560:9
 		return "sgt"
 	}
-	// Osty: toolchain/mir_generator.osty:202:5
+	// Osty: toolchain/mir_generator.osty:562:5
 	if symbol == ">=" {
-		// Osty: toolchain/mir_generator.osty:203:9
+		// Osty: toolchain/mir_generator.osty:563:9
 		return "sge"
 	}
 	return ""
 }
 
-// Osty: toolchain/mir_generator.osty:215:5
+// Osty: toolchain/mir_generator.osty:575:5
 func mirIsUnitTypeText(typeText string) bool {
 	return typeText == "Unit" || typeText == "()" || typeText == "Never"
 }
 
-// Osty: toolchain/mir_generator.osty:225:5
+// Osty: toolchain/mir_generator.osty:585:5
 func mirIsFloatTypeText(typeText string) bool {
 	return typeText == "Float" || typeText == "Float32" || typeText == "Float64" || typeText == "double" || typeText == "float"
 }
 
-// Osty: toolchain/mir_generator.osty:236:5
+// Osty: toolchain/mir_generator.osty:596:5
 func mirIsScalarLLVMType(t string) bool {
 	return t == "i1" || t == "i8" || t == "i16" || t == "i32" || t == "i64" || t == "float" || t == "double" || t == "ptr"
 }
 
-// Osty: toolchain/mir_generator.osty:246:5
+// Osty: toolchain/mir_generator.osty:606:5
 func mirLlvmI1Text(v bool) string {
-	// Osty: toolchain/mir_generator.osty:247:5
+	// Osty: toolchain/mir_generator.osty:607:5
 	if v {
-		// Osty: toolchain/mir_generator.osty:248:9
+		// Osty: toolchain/mir_generator.osty:608:9
 		return "true"
 	}
 	return "false"
 }
 
-// Osty: toolchain/mir_generator.osty:259:5
+// Osty: toolchain/mir_generator.osty:619:5
 func mirFirstNonEmpty(vals []string) string {
-	// Osty: toolchain/mir_generator.osty:260:5
+	// Osty: toolchain/mir_generator.osty:620:5
 	n := len(vals)
 	_ = n
-	// Osty: toolchain/mir_generator.osty:261:5
+	// Osty: toolchain/mir_generator.osty:621:5
 	i := 0
 	_ = i
-	// Osty: toolchain/mir_generator.osty:262:5
+	// Osty: toolchain/mir_generator.osty:622:5
 	for i < n {
-		// Osty: toolchain/mir_generator.osty:263:9
+		// Osty: toolchain/mir_generator.osty:623:9
 		x := vals[i]
 		_ = x
-		// Osty: toolchain/mir_generator.osty:264:9
+		// Osty: toolchain/mir_generator.osty:624:9
 		if x != "" {
-			// Osty: toolchain/mir_generator.osty:265:13
+			// Osty: toolchain/mir_generator.osty:625:13
 			return x
 		}
-		// Osty: toolchain/mir_generator.osty:267:9
+		// Osty: toolchain/mir_generator.osty:627:9
 		func() {
 			var _cur7 int = i
 			var _rhs8 int = 1
@@ -292,51 +690,51 @@ func mirFirstNonEmpty(vals []string) string {
 	return ""
 }
 
-// Osty: toolchain/mir_generator.osty:279:5
+// Osty: toolchain/mir_generator.osty:639:5
 func mirEarliestAfter(input string, needle string) int {
 	return llvmStrings.Index(input, needle)
 }
 
-// Osty: toolchain/mir_generator.osty:304:5
+// Osty: toolchain/mir_generator.osty:664:5
 func mirEncodeLLVMString(s string) string {
-	// Osty: toolchain/mir_generator.osty:314:5
+	// Osty: toolchain/mir_generator.osty:674:5
 	printable := " !#$%&'()*+,-./0123456789:;<=" + ">?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~"
 	_ = printable
-	// Osty: toolchain/mir_generator.osty:315:5
+	// Osty: toolchain/mir_generator.osty:675:5
 	out := ""
 	_ = out
-	// Osty: toolchain/mir_generator.osty:316:5
+	// Osty: toolchain/mir_generator.osty:676:5
 	n := len(s)
 	_ = n
-	// Osty: toolchain/mir_generator.osty:317:5
+	// Osty: toolchain/mir_generator.osty:677:5
 	i := 0
 	_ = i
-	// Osty: toolchain/mir_generator.osty:318:5
+	// Osty: toolchain/mir_generator.osty:678:5
 	for i < n {
-		// Osty: toolchain/mir_generator.osty:319:9
+		// Osty: toolchain/mir_generator.osty:679:9
 		ch := s[i:(i + 1)]
 		_ = ch
-		// Osty: toolchain/mir_generator.osty:320:9
+		// Osty: toolchain/mir_generator.osty:680:9
 		if ch == "\\" {
-			// Osty: toolchain/mir_generator.osty:321:13
+			// Osty: toolchain/mir_generator.osty:681:13
 			out = out + "\\\\"
 		} else if ch == "\"" {
-			// Osty: toolchain/mir_generator.osty:323:13
+			// Osty: toolchain/mir_generator.osty:683:13
 			out = out + "\\22"
 		} else if llvmStrings.Contains(printable, ch) {
-			// Osty: toolchain/mir_generator.osty:325:13
+			// Osty: toolchain/mir_generator.osty:685:13
 			out = out + ch
 		} else {
-			// Osty: toolchain/mir_generator.osty:330:13
+			// Osty: toolchain/mir_generator.osty:690:13
 			plen := len(printable)
 			_ = plen
-			// Osty: toolchain/mir_generator.osty:331:13
+			// Osty: toolchain/mir_generator.osty:691:13
 			trap := printable[(plen + 1):(plen + 2)]
 			_ = trap
-			// Osty: toolchain/mir_generator.osty:332:13
+			// Osty: toolchain/mir_generator.osty:692:13
 			return trap
 		}
-		// Osty: toolchain/mir_generator.osty:334:9
+		// Osty: toolchain/mir_generator.osty:694:9
 		func() {
 			var _cur9 int = i
 			var _rhs10 int = 1
