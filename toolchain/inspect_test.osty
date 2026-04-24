@@ -348,6 +348,69 @@ fn testInspectEmitsStructAndEnumDeclRecords() {
     testing.assert(sawEnum)
 }
 
+fn testInspectHintsListElement() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let xs: List<Int> = [42]
+            }
+            """,
+    )
+
+    let mut sawHint = false
+    for rec in recs {
+        if rec.rule == "LIT-INT" && rec.hintName == "Int" {
+            sawHint = true
+        }
+    }
+    testing.assert(sawHint)
+}
+
+fn testInspectHintsTupleElements() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let pair: (Int, String) = (7, "hi")
+            }
+            """,
+    )
+
+    let mut sawIntHint = false
+    let mut sawStringHint = false
+    for rec in recs {
+        if rec.rule == "LIT-INT" && rec.hintName == "Int" {
+            sawIntHint = true
+        }
+        if rec.rule == "LIT-STRING" && rec.hintName == "String" {
+            sawStringHint = true
+        }
+    }
+    testing.assert(sawIntHint)
+    testing.assert(sawStringHint)
+}
+
+fn testInspectHintsCallArguments() {
+    let recs = inspectSource(
+        r"""
+            fn scale(n: Int, factor: Int) -> Int {
+                n * factor
+            }
+
+            fn main() {
+                let _ = scale(3, 5)
+            }
+            """,
+    )
+
+    let mut intHintCount = 0
+    for rec in recs {
+        if rec.rule == "LIT-INT" && rec.hintName == "Int" {
+            intHintCount = intHintCount + 1
+        }
+    }
+    testing.assert(intHintCount >= 2)
+}
+
 fn testInspectRecordFieldsStable() {
     let recs = inspectSource(
         r"""
@@ -365,6 +428,5 @@ fn testInspectRecordFieldsStable() {
     testing.assert(first.end >= first.start)
     testing.assert(first.nodeKind != "")
     testing.assert(first.rule != "")
-    testing.assertEq(first.hintName, "")
     testing.assertEq(first.notes.len(), 0)
 }
