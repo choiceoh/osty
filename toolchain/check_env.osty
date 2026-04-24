@@ -34,6 +34,7 @@ pub struct CheckFnSig {
     pub name: String,
     pub owner: String,
     pub receiverTy: Int,        // -1 when free function
+    pub hasReceiver: Bool,
     pub retTy: Int,
     pub paramNames: List<String>,
     pub paramTys: List<Int>,
@@ -45,6 +46,7 @@ pub struct CheckFieldSig {
     pub owner: String,
     pub name: String,
     pub ty: Int,
+    pub exported: Bool,
     pub hasDefault: Bool,
 }
 

@@ -43,6 +43,7 @@ type PackageCheckField struct {
 	Owner      string `json:"owner,omitempty"`
 	Name       string `json:"name,omitempty"`
 	TypeName   string `json:"typeName,omitempty"`
+	Exported   bool   `json:"exported,omitempty"`
 	HasDefault bool   `json:"hasDefault,omitempty"`
 }
 

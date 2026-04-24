@@ -542,40 +542,9 @@ func (l *lowerer) lowerStructDecl(sd *ast.StructDecl) *StructDecl {
 	for _, m := range sd.Methods {
 		out.Methods = append(out.Methods, l.lowerFnDecl(m))
 	}
-	out.BuilderDerivable, out.BuilderRequiredFields = classifyBuilderDerive(sd)
+	info := check.ClassifyBuilderDerive(sd)
+	out.BuilderDerivable, out.BuilderRequiredFields = info.Derivable, info.Required
 	return out
-}
-
-// classifyBuilderDerive computes the LANG_SPEC §3.3 auto-derive
-// preconditions for a struct. `derivable` is true when every private
-// field carries an explicit default AND the user did not supply an
-// overriding associated fn named `builder` (the spec lets user
-// definitions replace auto-generated ones).
-//
-// `required` is the list of pub field names that lack a default — the
-// fields the user MUST set via generated setters before `.build()`.
-// It is returned even when derivable is false so diagnostics can
-// explain both the missing builder and what it would have required.
-func classifyBuilderDerive(sd *ast.StructDecl) (derivable bool, required []string) {
-	derivable = true
-	for _, f := range sd.Fields {
-		if !f.Pub && f.Default == nil {
-			derivable = false
-		}
-		if f.Pub && f.Default == nil {
-			required = append(required, f.Name)
-		}
-	}
-	for _, m := range sd.Methods {
-		if m == nil || m.Recv != nil {
-			continue
-		}
-		if m.Name == "builder" {
-			derivable = false
-			break
-		}
-	}
-	return derivable, required
 }
 
 func (l *lowerer) lowerEnumDecl(ed *ast.EnumDecl) *EnumDecl {
@@ -1669,6 +1638,9 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 	}
 	// Method call: x.name(args).
 	if fx, ok := fn.(*ast.FieldExpr); ok {
+		if lowered := l.tryLowerBuilderChain(e, fx); lowered != nil {
+			return lowered
+		}
 		if id, ok := fx.X.(*ast.Ident); ok {
 			if sym := l.symbol(id); sym != nil {
 				if sym.Kind == resolve.SymEnum || sym.Kind == resolve.SymStruct {
@@ -1711,6 +1683,169 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 	}
 	for _, a := range e.Args {
 		out.Args = append(out.Args, l.lowerArg(a))
+	}
+	return out
+}
+
+type builderLowerSetter struct {
+	name string
+	arg  *ast.Arg
+}
+
+func (l *lowerer) tryLowerBuilderChain(call *ast.CallExpr, build *ast.FieldExpr) Expr {
+	if call == nil || build == nil || build.Name != "build" || build.IsOptional || len(call.Args) != 0 {
+		return nil
+	}
+	var setters []builderLowerSetter
+	cursor := build.X
+	for {
+		inner, ok := cursor.(*ast.CallExpr)
+		if !ok {
+			return nil
+		}
+		fe, ok := inner.Fn.(*ast.FieldExpr)
+		if !ok || fe.IsOptional {
+			return nil
+		}
+		if fe.Name == "builder" {
+			if len(inner.Args) != 0 {
+				return nil
+			}
+			id, ok := fe.X.(*ast.Ident)
+			if !ok {
+				return nil
+			}
+			sd := l.structDeclByIdent(id)
+			if sd == nil {
+				return nil
+			}
+			if !check.ClassifyBuilderDerive(sd).Derivable {
+				return nil
+			}
+			return l.lowerBuilderStructLit(call, sd, nil, setters)
+		}
+		if fe.Name == "toBuilder" {
+			if len(inner.Args) != 0 {
+				return nil
+			}
+			sd := l.structDeclFromReceiver(fe.X)
+			if sd == nil {
+				return nil
+			}
+			if !check.ClassifyBuilderDerive(sd).Derivable {
+				return nil
+			}
+			return l.lowerBuilderStructLit(call, sd, l.lowerExpr(fe.X), setters)
+		}
+		if len(inner.Args) != 1 {
+			return nil
+		}
+		arg := inner.Args[0]
+		if arg == nil || arg.Name != "" || arg.Value == nil {
+			return nil
+		}
+		setters = append(setters, builderLowerSetter{name: fe.Name, arg: arg})
+		cursor = fe.X
+	}
+}
+
+func (l *lowerer) structDeclByIdent(id *ast.Ident) *ast.StructDecl {
+	if id == nil {
+		return nil
+	}
+	if sym := l.symbol(id); sym != nil {
+		if sd, ok := sym.Decl.(*ast.StructDecl); ok {
+			return sd
+		}
+	}
+	return l.structDeclByName(id.Name)
+}
+
+func (l *lowerer) structDeclFromReceiver(e ast.Expr) *ast.StructDecl {
+	if e == nil {
+		return nil
+	}
+	switch n := e.(type) {
+	case *ast.StructLit:
+		switch head := n.Type.(type) {
+		case *ast.Ident:
+			return l.structDeclByIdent(head)
+		case *ast.FieldExpr:
+			return l.structDeclByName(head.Name)
+		}
+	case *ast.ParenExpr:
+		return l.structDeclFromReceiver(n.X)
+	}
+	return l.structDeclByType(l.exprType(e))
+}
+
+func (l *lowerer) structDeclByType(t Type) *ast.StructDecl {
+	nt, ok := t.(*NamedType)
+	if !ok || nt == nil || nt.Builtin {
+		return nil
+	}
+	return l.structDeclByName(nt.Name)
+}
+
+func (l *lowerer) structDeclByName(name string) *ast.StructDecl {
+	if name == "" {
+		return nil
+	}
+	if l.file != nil {
+		for _, decl := range l.file.Decls {
+			if sd, ok := decl.(*ast.StructDecl); ok && sd != nil && sd.Name == name {
+				return sd
+			}
+		}
+	}
+	if l.res != nil && l.res.FileScope != nil {
+		if sym := l.res.FileScope.Lookup(name); sym != nil {
+			if sd, ok := sym.Decl.(*ast.StructDecl); ok {
+				return sd
+			}
+		}
+	}
+	return nil
+}
+
+func (l *lowerer) lowerBuilderStructLit(
+	call *ast.CallExpr,
+	sd *ast.StructDecl,
+	spread Expr,
+	setters []builderLowerSetter,
+) Expr {
+	if call == nil || sd == nil {
+		return nil
+	}
+	byName := make(map[string]*ast.Arg, len(setters))
+	for _, setter := range setters {
+		if setter.arg == nil {
+			continue
+		}
+		if _, exists := byName[setter.name]; exists {
+			continue
+		}
+		byName[setter.name] = setter.arg
+	}
+	out := &StructLit{
+		TypeName: sd.Name,
+		T:        l.exprType(call),
+		Spread:   spread,
+		SpanV:    nodeSpan(call),
+	}
+	for _, field := range sd.Fields {
+		if field == nil || !field.Pub {
+			continue
+		}
+		arg := byName[field.Name]
+		if arg == nil || arg.Value == nil {
+			continue
+		}
+		out.Fields = append(out.Fields, StructLitField{
+			Name:  field.Name,
+			Value: l.lowerExpr(arg.Value),
+			SpanV: Span{Start: posFromToken(arg.Pos()), End: posFromToken(arg.End())},
+		})
 	}
 	return out
 }

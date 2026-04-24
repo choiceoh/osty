@@ -22,6 +22,7 @@ var toolchainCheckerFiles = []string{
 	"toolchain/ty.osty",
 	"toolchain/core.osty",
 	"toolchain/check_env.osty",
+	"toolchain/builder_policy.osty",
 	"toolchain/solve.osty",
 	"toolchain/elab.osty",
 	"toolchain/check.osty",

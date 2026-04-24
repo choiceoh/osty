@@ -1,7 +1,7 @@
 // builder_policy.osty — shared builder auto-derive classification.
 //
 // This file is part of both the checker bundle and the HIR bundle so
-// Go-side builder desugaring and Osty-side HIR lowering consume the
+// the selfhost checker, Osty HIR lowering, and Go-side IR adapters consume the
 // exact same rules for:
 //   - whether a struct qualifies for auto-derived builder support
 //   - which `pub` fields are still required at `.build()`
@@ -23,8 +23,8 @@ pub struct CheckBuilderDeriveInfo {
 }
 
 /// checkClassifyBuilderDerive is the single source of truth for
-/// builder auto-derive classification used by both the Go pre-pass
-/// and the Osty HIR lowerer.
+/// builder auto-derive classification used by the selfhost checker,
+/// the Osty HIR lowerer, and the Go-side lowering adapter.
 pub fn checkClassifyBuilderDerive(
     fieldNames: List<String>,
     fieldExported: List<Bool>,

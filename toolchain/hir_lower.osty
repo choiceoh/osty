@@ -954,6 +954,7 @@ pub fn hirLowerAssembleStructDecl(
     name: String,
     fields: List<HirField>,
     methods: List<HirFnDecl>,
+    builderMethodNames: List<String>,
     generics: List<HirTypeParam>,
     exported: Bool,
     annotations: List<HirAnnotation>,
@@ -971,16 +972,12 @@ pub fn hirLowerAssembleStructDecl(
     let mut names: List<String> = []
     let mut fExported: List<Bool> = []
     let mut hasDefaults: List<Bool> = []
-    let mut methodNames: List<String> = []
     for f in fields {
         names.push(f.name)
         fExported.push(f.exported)
         hasDefaults.push(f.hasDefault)
     }
-    for m in methods {
-        methodNames.push(m.name)
-    }
-    let info = checkClassifyBuilderDerive(names, fExported, hasDefaults, methodNames)
+    let info = checkClassifyBuilderDerive(names, fExported, hasDefaults, builderMethodNames)
     s.builderDerivable = info.derivable
     s.builderRequiredFields = info.required
     s
@@ -2380,23 +2377,40 @@ fn hirLowerStructDecl(
     let annotations = hirLowerAnnotations(cx, node.extra, scope)
     let mut fields: List<HirField> = []
     let mut methods: List<HirFnDecl> = []
+    let mut builderMethodNames: List<String> = []
     for memberIdx in node.children {
         let member = astArenaNodeAt(cx.ast.arena, memberIdx)
         if member.kind == AstNField_ {
             fields.push(hirLowerStructFieldDecl(cx, memberIdx, scope))
         } else if member.kind == AstNFnDecl {
             methods.push(hirLowerFnDecl(cx, memberIdx, node.text, scope))
+            if hirLowerFnDeclHasNoReceiver(cx.ast, memberIdx) {
+                builderMethodNames.push(member.text)
+            }
         }
     }
     hirLowerAssembleStructDecl(
         node.text,
         fields,
         methods,
+        builderMethodNames,
         generics,
         node.flags == 1,
         annotations,
         span,
     )
+}
+
+fn hirLowerFnDeclHasNoReceiver(ast: AstPackage, idx: Int) -> Bool {
+    let node = astArenaNodeAt(ast.arena, idx)
+    if node.kind != AstNFnDecl {
+        return true
+    }
+    if node.children.len() == 0 {
+        return true
+    }
+    let first = astArenaNodeAt(ast.arena, node.children[0])
+    !(first.kind == AstNParam && first.text == "self" && first.left < 0)
 }
 
 fn hirLowerEnumDecl(

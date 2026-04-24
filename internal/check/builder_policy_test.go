@@ -1,9 +1,13 @@
 package check
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/osty/osty/internal/ast"
+)
 
 func TestClassifyBuilderDeriveListsTracksRequiredAndOverride(t *testing.T) {
-	info := classifyBuilderDeriveLists(
+	info := ClassifyBuilderDeriveLists(
 		[]string{"x", "hidden", "name"},
 		[]bool{true, false, true},
 		[]bool{false, true, true},
@@ -16,7 +20,7 @@ func TestClassifyBuilderDeriveListsTracksRequiredAndOverride(t *testing.T) {
 		t.Fatalf("required = %v, want [x]", info.Required)
 	}
 
-	override := classifyBuilderDeriveLists(
+	override := ClassifyBuilderDeriveLists(
 		[]string{"x"},
 		[]bool{true},
 		[]bool{false},
@@ -26,7 +30,19 @@ func TestClassifyBuilderDeriveListsTracksRequiredAndOverride(t *testing.T) {
 		t.Fatalf("derivable = true, want false when custom builder() exists")
 	}
 
-	blocked := classifyBuilderDeriveLists(
+	methodNamedBuilder := ClassifyBuilderDerive(&ast.StructDecl{
+		Fields: []*ast.Field{
+			{Name: "x", Pub: true},
+		},
+		Methods: []*ast.FnDecl{
+			{Name: "builder", Recv: &ast.Receiver{}},
+		},
+	})
+	if !methodNamedBuilder.Derivable {
+		t.Fatalf("derivable = false, want true when only a method named builder(self) exists")
+	}
+
+	blocked := ClassifyBuilderDeriveLists(
 		[]string{"x", "hidden"},
 		[]bool{true, false},
 		[]bool{false, false},

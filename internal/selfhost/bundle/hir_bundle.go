@@ -30,7 +30,6 @@ var hirExtensionFiles = []string{
 	"toolchain/monomorph_rewrite.osty",
 	"toolchain/monomorph_pass.osty",
 	"toolchain/pmcompile.osty",
-	"toolchain/builder_policy.osty",
 	"toolchain/hir_lower.osty",
 }
 

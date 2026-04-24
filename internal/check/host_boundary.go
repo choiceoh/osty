@@ -283,6 +283,10 @@ func packageCheckFingerprint(input selfhost.PackageCheckInput) []byte {
 		for _, td := range imp.TypeDecls {
 			fmt.Fprintf(h, "  type=%s kind=%s generics=%d\n", td.Name, td.Kind, len(td.Generics))
 		}
+		for _, field := range imp.Fields {
+			fmt.Fprintf(h, "  field=%s/%s type=%s exported=%t default=%t\n",
+				field.Owner, field.Name, field.TypeName, field.Exported, field.HasDefault)
+		}
 		for _, v := range imp.Variants {
 			fmt.Fprintf(h, "  variant=%s/%s fields=%d\n", v.Owner, v.Name, len(v.FieldTypes))
 		}

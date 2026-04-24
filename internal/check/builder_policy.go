@@ -2,18 +2,18 @@ package check
 
 import "github.com/osty/osty/internal/ast"
 
-// builderDeriveInfo mirrors the shared Osty-side policy in
+// BuilderDeriveInfo mirrors the shared Osty-side policy in
 // `toolchain/builder_policy.osty::checkClassifyBuilderDerive`.
-// Keep the field/default/method override rules in lockstep until the
-// full builder chain rewrite moves behind a generated selfhost bridge.
-type builderDeriveInfo struct {
+// The selfhost checker owns builder typing/diagnostics; this Go mirror
+// is the shared adapter for host-side IR metadata and lowering.
+type BuilderDeriveInfo struct {
 	Derivable bool
 	Required  []string
 }
 
-func classifyBuilderDerive(sd *ast.StructDecl) builderDeriveInfo {
+func ClassifyBuilderDerive(sd *ast.StructDecl) BuilderDeriveInfo {
 	if sd == nil {
-		return builderDeriveInfo{}
+		return BuilderDeriveInfo{}
 	}
 	fieldNames := make([]string, 0, len(sd.Fields))
 	fieldExported := make([]bool, 0, len(sd.Fields))
@@ -28,22 +28,22 @@ func classifyBuilderDerive(sd *ast.StructDecl) builderDeriveInfo {
 	}
 	methodNames := make([]string, 0, len(sd.Methods))
 	for _, m := range sd.Methods {
-		if m == nil {
+		if m == nil || m.Recv != nil {
 			continue
 		}
 		methodNames = append(methodNames, m.Name)
 	}
-	return classifyBuilderDeriveLists(fieldNames, fieldExported, fieldHasDefaults, methodNames)
+	return ClassifyBuilderDeriveLists(fieldNames, fieldExported, fieldHasDefaults, methodNames)
 }
 
-func classifyBuilderDeriveLists(
+func ClassifyBuilderDeriveLists(
 	fieldNames []string,
 	fieldExported []bool,
 	fieldHasDefaults []bool,
 	methodNames []string,
-) builderDeriveInfo {
+) BuilderDeriveInfo {
 	if len(fieldNames) != len(fieldExported) || len(fieldNames) != len(fieldHasDefaults) {
-		return builderDeriveInfo{}
+		return BuilderDeriveInfo{}
 	}
 	required := make([]string, 0, len(fieldNames))
 	derivable := true
@@ -63,7 +63,7 @@ func classifyBuilderDeriveLists(
 			break
 		}
 	}
-	return builderDeriveInfo{
+	return BuilderDeriveInfo{
 		Derivable: derivable,
 		Required:  required,
 	}
