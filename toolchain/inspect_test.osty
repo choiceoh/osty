@@ -193,6 +193,126 @@ fn testInspectEmitsBindRecords() {
     testing.assert(sawBind)
 }
 
+fn testInspectEmitsLocalLetAsLetRule() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let inner: Int = 7
+                let mut counter: Int = 0
+                counter = counter + inner
+            }
+            """,
+    )
+
+    let mut sawInner = false
+    let mut sawCounter = false
+    for rec in recs {
+        if rec.rule != "LET" {
+            continue
+        }
+        if rec.nodeKind != "LetStmt" {
+            continue
+        }
+        for note in rec.notes {
+            if note == "name: inner" {
+                sawInner = true
+            }
+            if note == "name: counter" {
+                sawCounter = true
+            }
+        }
+    }
+    testing.assert(sawInner)
+    testing.assert(sawCounter)
+}
+
+fn testInspectEmitsTupleDestructureLet() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let (lo, hi): (Int, Int) = (1, 10)
+                let _ = lo + hi
+            }
+            """,
+    )
+
+    let mut sawLo = false
+    let mut sawHi = false
+    for rec in recs {
+        if rec.rule != "LET" || rec.nodeKind != "LetStmt" {
+            continue
+        }
+        for note in rec.notes {
+            if note == "name: lo" {
+                sawLo = true
+            }
+            if note == "name: hi" {
+                sawHi = true
+            }
+        }
+    }
+    testing.assert(sawLo)
+    testing.assert(sawHi)
+}
+
+fn testInspectEmitsStructDestructureLet() {
+    let recs = inspectSource(
+        r"""
+            pub struct Point { pub x: Int, pub y: Int }
+
+            fn main() {
+                let p: Point = Point { x: 3, y: 4 }
+                let Point { x, y } = p
+                let _ = x + y
+            }
+            """,
+    )
+
+    let mut sawX = false
+    let mut sawY = false
+    for rec in recs {
+        if rec.rule != "LET" || rec.nodeKind != "LetStmt" {
+            continue
+        }
+        for note in rec.notes {
+            if note == "name: x" {
+                sawX = true
+            }
+            if note == "name: y" {
+                sawY = true
+            }
+        }
+    }
+    testing.assert(sawX)
+    testing.assert(sawY)
+}
+
+fn testInspectMatchPatternStaysBindRule() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let opt: Option<Int> = Some(3)
+                match opt {
+                    Some(v) -> v,
+                    None -> 0,
+                }
+            }
+            """,
+    )
+
+    let mut sawBindV = false
+    for rec in recs {
+        if rec.rule == "BIND" && rec.nodeKind == "Binding" {
+            for note in rec.notes {
+                if note == "name: v" {
+                    sawBindV = true
+                }
+            }
+        }
+    }
+    testing.assert(sawBindV)
+}
+
 fn testInspectEmitsStructAndEnumDeclRecords() {
     let recs = inspectSource(
         r"""
