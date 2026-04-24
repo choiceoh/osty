@@ -5430,6 +5430,17 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicMapGet:
+		// `m.get(k) -> V?` — the stdlib signature is Option-returning
+		// (collections.osty §Map). Emits the present-flag runtime
+		// `osty_rt_map_get_<K>(map, key, out) -> i1` and constructs an
+		// `%Option.V = { i64 disc, i64 payload }` struct: miss → disc=0
+		// (zeroinitializer), hit → disc=1 with the loaded payload
+		// widened to i64. No GC box — Option<V> stays on the stack.
+		//
+		// `m[k]` (IndexExpr on a Map) is a separate lowering path: it
+		// goes through IndexProj and aborts on miss via
+		// `emitMapGetOrAbort`. The two have different language-level
+		// semantics (§10: `m[k]` aborts, `m.get(k)` returns V?).
 		if len(i.Args) != 2 {
 			return unsupported("mir-mvp", "map_get arity")
 		}
@@ -5438,35 +5449,41 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		vLLVM := g.llvmType(valT)
-		// When the destination local's LLVM type matches the map's
-		// value type exactly, hand the runtime the dest slot itself —
-		// the runtime will memcpy straight into it, skipping the
-		// fresh-alloca + load + store we'd otherwise need.
-		if i.Dest != nil {
-			destLoc := g.fn.Local(i.Dest.Local)
-			if destLoc == nil {
-				return fmt.Errorf("mir-mvp: map_get into unknown local %d", i.Dest.Local)
-			}
-			if g.llvmType(destLoc.Type) == vLLVM {
-				g.emitMapGetOrAbort(mapReg, kReg, keyLLVM, keyString, vLLVM, g.localSlots[i.Dest.Local])
-				return nil
-			}
-			// Type mismatch (a future coercion shape): fall through
-			// to the alloca-load path so the store retains its
-			// declared type width.
-			loaded := g.emitMapGetOrAbort(mapReg, kReg, keyLLVM, keyString, vLLVM, "")
-			g.fnBuf.WriteString("  store ")
-			g.fnBuf.WriteString(g.llvmType(destLoc.Type))
-			g.fnBuf.WriteByte(' ')
-			g.fnBuf.WriteString(loaded)
-			g.fnBuf.WriteString(", ptr ")
-			g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
-			g.fnBuf.WriteByte('\n')
+		if i.Dest == nil {
 			return nil
 		}
-		// No destination — still perform the call for its side
-		// effects (abort-on-miss).
-		g.emitMapGetOrAbort(mapReg, kReg, keyLLVM, keyString, vLLVM, "")
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return fmt.Errorf("mir-mvp: map_get into unknown local %d", i.Dest.Local)
+		}
+		optT, ok := destLoc.Type.(*ir.OptionalType)
+		if !ok {
+			return unsupportedf("mir-mvp", "map_get dest type %s, expected Optional<V>", mirTypeString(destLoc.Type))
+		}
+		optLLVM := g.llvmType(optT)
+		destSlot := g.localSlots[i.Dest.Local]
+		present, slot := g.emitMapGetProbe(mapReg, kReg, keyLLVM, keyString, vLLVM)
+		someLabel := g.freshLabel("map.get.some")
+		noneLabel := g.freshLabel("map.get.none")
+		endLabel := g.freshLabel("map.get.end")
+		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", present, someLabel, noneLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+		loaded := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = load %s, ptr %s\n", loaded, vLLVM, slot)
+		payloadI64, err := g.listOptionalPayloadToI64(loaded, vLLVM, valT)
+		if err != nil {
+			return unsupportedf("mir-mvp", "map_get payload widen unsupported for %s", vLLVM)
+		}
+		someStep := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 1, 0\n", someStep, optLLVM)
+		someValue := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n", someValue, optLLVM, someStep, payloadI64)
+		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", optLLVM, someValue, destSlot)
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
+		fmt.Fprintf(&g.fnBuf, "  store %s zeroinitializer, ptr %s\n", optLLVM, destSlot)
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
 		return nil
 	case mir.IntrinsicMapGetOr:
 		// `m.getOr(k, d) -> V` lowered without allocating an Option
@@ -5498,13 +5515,7 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		if destLLVM != vLLVM {
 			return unsupportedf("mir-mvp", "map_getOr dest type %s does not match value type %s", destLLVM, vLLVM)
 		}
-		getSym := mapRuntimeGetSymbol(keyLLVM, keyString)
-		g.declareRuntime(getSym, "declare i1 @"+getSym+"(ptr, "+keyLLVM+", ptr)")
-		slot := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = alloca %s\n", slot, vLLVM)
-		present := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = call i1 @%s(ptr %s, %s %s, ptr %s)\n",
-			present, getSym, mapReg, keyLLVM, kReg, slot)
+		present, slot := g.emitMapGetProbe(mapReg, kReg, keyLLVM, keyString, vLLVM)
 		hitLabel := g.freshLabel("map.getOr.hit")
 		missLabel := g.freshLabel("map.getOr.miss")
 		endLabel := g.freshLabel("map.getOr.end")
@@ -5644,6 +5655,24 @@ func (g *mirGen) emitMapGetOrAbort(mapReg, keyReg, keyLLVM string, keyString boo
 	loaded := llvmLoadFromSlot(em, slot, valLLVM)
 	g.flushOstyEmitter(em)
 	return loaded.name
+}
+
+// emitMapGetProbe emits the shared prologue of `m.get(k)` /
+// `m.getOr(k, d)`: declares the present-flag runtime helper,
+// allocates an out-slot sized for `valLLVM`, and calls
+// `osty_rt_map_get_<suffix>(map, key, out) -> i1`. Returns the SSA
+// register holding the i1 present flag and the slot the runtime
+// writes into on hit. Shared so the two call sites can't drift in
+// ABI (mirrors the `emitMapGetOrAbort` sharing rationale).
+func (g *mirGen) emitMapGetProbe(mapReg, keyReg, keyLLVM string, keyString bool, valLLVM string) (present, slot string) {
+	getSym := mapRuntimeGetSymbol(keyLLVM, keyString)
+	g.declareRuntime(getSym, "declare i1 @"+getSym+"(ptr, "+keyLLVM+", ptr)")
+	slot = g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = alloca %s\n", slot, valLLVM)
+	present = g.fresh()
+	fmt.Fprintf(&g.fnBuf, "  %s = call i1 @%s(ptr %s, %s %s, ptr %s)\n",
+		present, getSym, mapReg, keyLLVM, keyReg, slot)
+	return present, slot
 }
 
 // spillToSlot materialises `val` (an SSA register of `llvmType`) in

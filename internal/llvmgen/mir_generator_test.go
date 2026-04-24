@@ -1435,41 +1435,35 @@ func TestGenerateFromMIRMapPrimitiveGet(t *testing.T) {
 	}
 }
 
-// TestGenerateFromMIRMapGetMethodDestSlotFastPath — `let v = m.get(k)`
-// lowers to an IntrinsicMapGet with a known Dest local. When the
-// destination slot's LLVM type matches the value type, the emitter
-// hands the dest slot directly to the runtime — no extra alloca +
-// load + store pair. Locks in the fast path extracted during the
-// Stage 3.12 refactor.
-func TestGenerateFromMIRMapGetMethodDestSlotFastPath(t *testing.T) {
-	// fn lookup(m: Map<String, Int>, k: String) -> Int {
-	//     let v = m.get(k)
-	//     v
+// TestGenerateFromMIRMapGetMethod — `let v: Int? = m.get(k)` lowers
+// to the present-flag runtime `osty_rt_map_get_<K>(map, key, out)`
+// plus `%Option.i64` struct construction. Miss → disc=0 via a
+// zeroinitializer store; hit → disc=1 with the loaded payload.
+// Locks in the Option-returning ABI that matches the stdlib
+// signature `Map.get(self, key: K) -> V?` and guards against
+// regressing to the abort-variant runtime used by `m[k]`.
+func TestGenerateFromMIRMapGetMethod(t *testing.T) {
+	// fn lookup(m: Map<String, Int>, k: String) -> Int? {
+	//     m.get(k)
 	// }
 	mapT := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
+	optIntT := &ir.OptionalType{Inner: ir.TInt}
 	fn := &ir.FnDecl{
 		Name:   "lookup",
-		Return: ir.TInt,
+		Return: optIntT,
 		Params: []*ir.Param{
 			{Name: "m", Type: mapT},
 			{Name: "k", Type: ir.TString},
 		},
 		Body: &ir.Block{
-			Stmts: []ir.Stmt{
-				&ir.LetStmt{
-					Name: "v",
-					Type: ir.TInt,
-					Value: &ir.MethodCall{
-						Receiver: &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapT},
-						Name:     "get",
-						Args: []ir.Arg{
-							{Value: &ir.Ident{Name: "k", Kind: ir.IdentParam, T: ir.TString}},
-						},
-						T: ir.TInt,
-					},
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapT},
+				Name:     "get",
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "k", Kind: ir.IdentParam, T: ir.TString}},
 				},
+				T: optIntT,
 			},
-			Result: &ir.Ident{Name: "v", Kind: ir.IdentLocal, T: ir.TInt},
 		},
 	}
 	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
@@ -1479,17 +1473,31 @@ func TestGenerateFromMIRMapGetMethodDestSlotFastPath(t *testing.T) {
 		t.Fatalf("GenerateFromMIR: %v", err)
 	}
 	got := string(out)
-	// The runtime call's 3rd argument is the dest local's alloca
-	// slot (`%lN`) rather than a fresh emitter temp (`%tN`). That's
-	// the signal that the fast path skipped the extra alloca +
-	// load + store a separate out-slot would require.
-	if !strings.Contains(got, "call void @osty_rt_map_get_or_abort_string(ptr %t0, ptr %t1, ptr %l") {
-		t.Fatalf("expected runtime call to use dest local slot directly:\n%s", got)
+	for _, want := range []string{
+		// Present-flag runtime — NOT the abort variant.
+		"declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)",
+		"call i1 @osty_rt_map_get_string(",
+		// Both arms + join label.
+		"map.get.some",
+		"map.get.none",
+		"map.get.end",
+		// Option struct construction on hit.
+		"insertvalue %Option.i64 undef, i64 1, 0",
+		"insertvalue %Option.i64 ",
+		// None arm writes disc=0 via zeroinitializer.
+		"store %Option.i64 zeroinitializer, ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
 	}
-	// Fresh-temp out-slot would look like `call ... ptr %t<N>)` at
-	// the 3rd arg — guard against it.
-	if strings.Contains(got, "call void @osty_rt_map_get_or_abort_string(ptr %t0, ptr %t1, ptr %t") {
-		t.Fatalf("dest-slot fast path regressed to fresh-temp out-slot:\n%s", got)
+	// Abort variant must not appear — that would be the `m[k]` path.
+	if strings.Contains(got, "osty_rt_map_get_or_abort_") {
+		t.Fatalf("map.get regressed to abort runtime:\n%s", got)
+	}
+	// No GC box for Option<Int> — struct stays on the stack.
+	if strings.Contains(got, "osty.gc.alloc_v1") {
+		t.Fatalf("map.get allocated a GC box (stack path regressed):\n%s", got)
 	}
 }
 
