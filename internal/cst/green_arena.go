@@ -189,4 +189,3 @@ func (b *GreenBuilder) Finish() (arena *GreenArena, rootID int) {
 	}
 	return b.arena, b.root
 }
-

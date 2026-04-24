@@ -36,7 +36,7 @@ type DecisionLeaf struct {
 	ArmIndex int
 }
 
-func (*DecisionLeaf) decisionNode()   {}
+func (*DecisionLeaf) decisionNode()    {}
 func (l *DecisionLeaf) String() string { return fmt.Sprintf("leaf(arm=%d)", l.ArmIndex) }
 
 // DecisionFail is reached only when no arm matches. For a match proven
@@ -44,7 +44,7 @@ func (l *DecisionLeaf) String() string { return fmt.Sprintf("leaf(arm=%d)", l.Ar
 // backends must still emit a safe trap (e.g. a runtime abort).
 type DecisionFail struct{}
 
-func (*DecisionFail) decisionNode()   {}
+func (*DecisionFail) decisionNode()  {}
 func (*DecisionFail) String() string { return "fail" }
 
 // DecisionBind adds one pattern binding (`name = projection`) to the

@@ -437,7 +437,7 @@ func TestMIRDualEmitFromSource(t *testing.T) {
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
-		
+
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,
@@ -615,7 +615,7 @@ fn newRunner() -> Runner {
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
-		
+
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,
@@ -1737,7 +1737,7 @@ func TestGenerateFromMIRVectorizedScalarListParamUsesRawDataFastPath(t *testing.
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
-		
+
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,

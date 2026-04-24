@@ -36,7 +36,7 @@ func TestBinaryNameForAppliesExeOnWindows(t *testing.T) {
 
 func TestBuildBinaryName(t *testing.T) {
 	cases := []struct {
-		name                                        string
+		name                                       string
 		bin, pkg, triple, targetOS, hostGoos, want string
 	}{
 		{"host-linux", "cli", "pkg", "", "", "linux", "cli"},

@@ -15,15 +15,15 @@ import (
 type TriviaKind int
 
 const (
-	_                             TriviaKind = iota
-	TriviaWhitespace                         // runs of ' ' or '\t'
-	TriviaNewline                            // one or more '\n' (source is normalized)
-	TriviaLineComment                        // `// ...` up to end-of-line (exclusive of '\n')
-	TriviaBlockComment                       // `/* ... */`, possibly multi-line
-	TriviaDocComment                         // `/// ...` up to end-of-line
-	TriviaShebang                            // `#!...` on the first line only
-	TriviaBom                                // U+FEFF at offset 0 only
-	TriviaUnterminatedBlockComment           // `/* ...` with no closing `*/`
+	_                              TriviaKind = iota
+	TriviaWhitespace                          // runs of ' ' or '\t'
+	TriviaNewline                             // one or more '\n' (source is normalized)
+	TriviaLineComment                         // `// ...` up to end-of-line (exclusive of '\n')
+	TriviaBlockComment                        // `/* ... */`, possibly multi-line
+	TriviaDocComment                          // `/// ...` up to end-of-line
+	TriviaShebang                             // `#!...` on the first line only
+	TriviaBom                                 // U+FEFF at offset 0 only
+	TriviaUnterminatedBlockComment            // `/* ...` with no closing `*/`
 )
 
 // String returns a short, stable label for snapshot and log output.

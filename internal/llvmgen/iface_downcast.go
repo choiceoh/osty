@@ -87,11 +87,11 @@ func (g *generator) emitIfaceDowncastIR(ifaceVal value, targetVtableSym string) 
 //
 // Recognition walks:
 //
-//   CallExpr
-//     Fn: TurbofishExpr
-//       Base: FieldExpr { Name: "downcast", X: <recv> }
-//       Args: [ NamedType{ Path: ["T"] } ]
-//     Args: []                       // no value args
+//	CallExpr
+//	  Fn: TurbofishExpr
+//	    Base: FieldExpr { Name: "downcast", X: <recv> }
+//	    Args: [ NamedType{ Path: ["T"] } ]
+//	  Args: []                       // no value args
 //
 // The receiver's static type must resolve to %osty.iface (any
 // interface — downcast is Error-specific in the spec but the

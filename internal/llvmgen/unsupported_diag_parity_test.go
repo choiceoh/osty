@@ -95,7 +95,7 @@ func TestUnsupportedDiagnosticOstySnapshotParity(t *testing.T) {
 }
 
 var (
-	ostyKindBranchRE = regexp.MustCompile(`if kind == "([^"]+)"`)
+	ostyKindBranchRE      = regexp.MustCompile(`if kind == "([^"]+)"`)
 	ostyUnsupportedCallRE = regexp.MustCompile(
 		`llvmUnsupportedDiagnosticWith\(\s*"(LLVM\d{3})"\s*,\s*kind\s*,\s*detail\s*,\s*"((?:[^"\\]|\\.)*)"`,
 	)
@@ -108,12 +108,12 @@ var (
 // llvmUnsupportedDiagnostic. Two branch shapes are recognized:
 //
 //   - uniform helper call:
-//       return llvmUnsupportedDiagnosticWith("LLVMNNN", kind, detail, "hint")
+//     return llvmUnsupportedDiagnosticWith("LLVMNNN", kind, detail, "hint")
 //   - field-literal return (LLVM001 / LLVM002, which decorate the kind
 //     they emit so they can't reuse the helper):
-//       return LlvmUnsupportedDiagnostic {
-//         code: "LLVMNNN", ..., hint: "hint", ...,
-//       }
+//     return LlvmUnsupportedDiagnostic {
+//     code: "LLVMNNN", ..., hint: "hint", ...,
+//     }
 //
 // Each branch is bounded to the source slice between its kind anchor
 // and the next branch's anchor, so a field-literal hint pattern from

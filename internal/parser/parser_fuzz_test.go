@@ -75,7 +75,7 @@ func truncate(src []byte) string {
 // BenchmarkParseBaseline measures parse time on a representative file.
 // Useful for the Phase 5 perf budget (Green parse within 1.4x of baseline).
 //
-//   go test ./internal/parser -bench=BenchmarkParseBaseline -benchtime=3s
+//	go test ./internal/parser -bench=BenchmarkParseBaseline -benchtime=3s
 func BenchmarkParseBaseline(b *testing.B) {
 	src, err := os.ReadFile(filepath.Join("..", "..", "word_freq.osty"))
 	if err != nil {

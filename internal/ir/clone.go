@@ -215,12 +215,12 @@ func cloneFnDecl(fn *FnDecl) *FnDecl {
 		return nil
 	}
 	out := &FnDecl{
-		Name:         fn.Name,
-		Return:       CloneType(fn.Return),
-		Body:         cloneBlockOrNil(fn.Body),
-		ReceiverMut:  fn.ReceiverMut,
-		Exported:     fn.Exported,
-		SpanV:        fn.SpanV,
+		Name:               fn.Name,
+		Return:             CloneType(fn.Return),
+		Body:               cloneBlockOrNil(fn.Body),
+		ReceiverMut:        fn.ReceiverMut,
+		Exported:           fn.Exported,
+		SpanV:              fn.SpanV,
 		ExportSymbol:       fn.ExportSymbol,
 		CABI:               fn.CABI,
 		IsIntrinsic:        fn.IsIntrinsic,

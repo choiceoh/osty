@@ -86,7 +86,6 @@ func (r *Result) LookupType(e ast.Expr) types.Type {
 // Opts bundles optional inputs to File / Package / Workspace.
 type Opts struct {
 
-
 	// Source is the raw source for File. Package and Workspace read
 	// sources from resolve.PackageFile.
 	Source []byte

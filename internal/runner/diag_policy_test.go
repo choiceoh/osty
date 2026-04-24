@@ -4,9 +4,9 @@ import "testing"
 
 func TestIsDeferredGenCheckDiag(t *testing.T) {
 	cases := []struct {
-		name             string
-		severity, msg    string
-		want             bool
+		name          string
+		severity, msg string
+		want          bool
 	}{
 		{"error-with-marker-prefix", "error", "type checking unavailable for /tmp/foo.osty", true},
 		{"warning-even-with-marker", "warning", "type checking unavailable for /tmp/foo.osty", false},

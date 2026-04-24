@@ -14,7 +14,7 @@ import (
 // (returns raw T) and storing the raw scalar into an `%Option.T`
 // slot — clang rejected with:
 //
-//   '%tN' defined with type 'i64' but expected '%Option.i64'
+//	'%tN' defined with type 'i64' but expected '%Option.i64'
 //
 // Fix detects `i.Dest` typed as OptionalType and routes through a
 // bounds-guarded len-check + Some/None wrap (same pattern as

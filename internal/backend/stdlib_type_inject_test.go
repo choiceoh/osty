@@ -14,12 +14,12 @@ import (
 // TestInjectedMapTypeMonomorphizes drives the Option B Phase 1
 // pipeline end-to-end at the IR layer:
 //
-//   1. User code references `Map<String, Int>` in a function signature
-//      and calls `m.containsKey(k)` inside the body.
-//   2. injectReachableStdlibTypes appends Map's generic StructDecl to
-//      the module.
-//   3. ir.Monomorphize specializes Map<K, V> → Map$String$Int with its
-//      methods (containsKey, getOr, update, …) pre-substituted.
+//  1. User code references `Map<String, Int>` in a function signature
+//     and calls `m.containsKey(k)` inside the body.
+//  2. injectReachableStdlibTypes appends Map's generic StructDecl to
+//     the module.
+//  3. ir.Monomorphize specializes Map<K, V> → Map$String$Int with its
+//     methods (containsKey, getOr, update, …) pre-substituted.
 //
 // The assertion: the output IR module contains a specialized struct
 // for Map<String, Int>, and its Methods list includes the bodied
