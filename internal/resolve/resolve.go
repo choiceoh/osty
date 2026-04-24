@@ -8,6 +8,7 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -416,7 +417,11 @@ func (r *resolver) resolvePackageMember(f *ast.FieldExpr, pkgSym *Symbol) {
 // emitting an appropriate diagnostic (E0507/E0508/E0509) at refPos.
 // `typePos` tightens error wording when the caller is in a type
 // position ("undefined type in package X") vs. a value position
-// ("undefined name in package X").
+// ("undefined name in package X"). The Scope lookup stays on the Go
+// side; the diagnostic wording is decided by
+// toolchain/resolve.osty::selfLookupPackageMember via the
+// selfhost.LookupPackageMember bridge so Osty owns the single source
+// of truth for E0507 / E0508 messaging.
 func (r *resolver) lookupPackageMember(pkgSym *Symbol, member string, refPos token.Pos, typePos bool) *Symbol {
 	pkg := pkgSym.Package
 	if pkg == nil || pkg.isStub {
@@ -433,31 +438,28 @@ func (r *resolver) lookupPackageMember(pkgSym *Symbol, member string, refPos tok
 		return nil
 	}
 	sym := pkg.PkgScope.LookupLocal(member)
-	if sym == nil {
-		noun := "name"
-		if typePos {
-			noun = "type"
-		}
-		r.emit(diag.New(diag.Error,
-			fmt.Sprintf("package `%s` has no exported %s `%s`",
-				pkgSym.Name, noun, member)).
-			Code(diag.CodeUnknownExportedMember).
-			PrimaryPos(refPos, "unknown member").
+	found := sym != nil
+	public := found && sym.Pub
+	res := selfhost.LookupPackageMember(pkgSym.Name, member, typePos, found, public)
+	switch res.Status {
+	case selfhost.MemberLookupOK:
+		return sym
+	case selfhost.MemberLookupMissing:
+		r.emit(diag.New(diag.Error, res.Message).
+			Code(res.Code).
+			PrimaryPos(refPos, res.Primary).
+			Build())
+		return nil
+	case selfhost.MemberLookupPrivate:
+		r.emit(diag.New(diag.Error, res.Message).
+			Code(res.Code).
+			PrimaryPos(refPos, res.Primary).
+			Note(res.Note).
+			Hint(res.Hint).
 			Build())
 		return nil
 	}
-	if !sym.Pub {
-		r.emit(diag.New(diag.Error,
-			fmt.Sprintf("`%s.%s` is not exported from package `%s`",
-				pkgSym.Name, member, pkgSym.Name)).
-			Code(diag.CodePrivateAcrossPackages).
-			PrimaryPos(refPos, "private across packages").
-			Note(fmt.Sprintf("declared without `pub` in package `%s`", pkgSym.Name)).
-			Hint(fmt.Sprintf("add `pub` to the declaration of `%s` or access it only from within its package", member)).
-			Build())
-		return nil
-	}
-	return sym
+	return nil
 }
 
 func lastSeg(s string, sep byte) string {

@@ -330,6 +330,83 @@ fn selfCycleDfs(
     out
 }
 
+/// SelfMemberLookupResult encodes the outcome of a cross-package
+/// `pkg.member` lookup plus the diagnostic wording that should be
+/// emitted (if any). The Go resolver owns the Scope traversal — this
+/// function only decides which diag code + message / note / hint
+/// string to render for the (pkgName, member, found, public) tuple.
+///
+/// `status`:
+///   0 — member is public; caller should return the looked-up symbol
+///       and emit nothing.
+///   1 — member exists but is private (E0507). All string fields are
+///       populated.
+///   2 — member does not exist in the package (E0508). `note`/`hint`
+///       stay empty.
+pub struct SelfMemberLookupResult {
+    pub status: Int,
+    pub code: String,
+    pub message: String,
+    pub primary: String,
+    pub note: String,
+    pub hint: String,
+}
+
+/// selfLookupPackageMember computes the cross-package member-access
+/// diagnostic for `pkg.member` access sites. Mirrors the wording of
+/// internal/resolve/resolve.go::lookupPackageMember so golden
+/// snapshots stay identical whether the diagnostic is produced by Go
+/// or Osty.
+///
+/// `pkgName` — local name of the package symbol (e.g. `fs`).
+/// `member` — the identifier being accessed.
+/// `typePos` — true when the call site is in a type position; this
+///             tightens "name" to "type" in the E0508 wording.
+/// `found` — true when pkgScope lookup returned a symbol.
+/// `public` — true when the found symbol is marked `pub`. Ignored
+///             when `found` is false.
+pub fn selfLookupPackageMember(
+    pkgName: String,
+    member: String,
+    typePos: Bool,
+    found: Bool,
+    public: Bool,
+) -> SelfMemberLookupResult {
+    if !found {
+        let noun = if typePos { "type" } else { "name" }
+        let message = "package `" + pkgName + "` has no exported " + noun + " `" + member + "`"
+        return SelfMemberLookupResult {
+            status: 2,
+            code: "E0508",
+            message,
+            primary: "unknown member",
+            note: "",
+            hint: "",
+        }
+    }
+    if !public {
+        let message = "`" + pkgName + "." + member + "` is not exported from package `" + pkgName + "`"
+        let note = "declared without `pub` in package `" + pkgName + "`"
+        let hint = "add `pub` to the declaration of `" + member + "` or access it only from within its package"
+        return SelfMemberLookupResult {
+            status: 1,
+            code: "E0507",
+            message,
+            primary: "private across packages",
+            note,
+            hint,
+        }
+    }
+    SelfMemberLookupResult {
+        status: 0,
+        code: "",
+        message: "",
+        primary: "",
+        note: "",
+        hint: "",
+    }
+}
+
 pub fn selfResolveDiagnosticCount(result: SelfResolveResult) -> Int {
     result.diagnostics.len()
 }

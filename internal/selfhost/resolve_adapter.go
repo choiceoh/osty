@@ -14,6 +14,14 @@ type (
 	PackageUses         = api.PackageUses
 	WorkspaceUses       = api.WorkspaceUses
 	CycleDiag           = api.CycleDiag
+	MemberLookupStatus  = api.MemberLookupStatus
+	MemberLookupResult  = api.MemberLookupResult
+)
+
+const (
+	MemberLookupOK      = api.MemberLookupOK
+	MemberLookupPrivate = api.MemberLookupPrivate
+	MemberLookupMissing = api.MemberLookupMissing
 )
 
 // DetectImportCycles walks the given workspace graph and returns one
@@ -38,6 +46,26 @@ func DetectImportCycles(input WorkspaceUses) []CycleDiag {
 		})
 	}
 	return out
+}
+
+// LookupPackageMember decides which (if any) diagnostic to emit for a
+// cross-package `pkg.member` access. The caller owns the Scope lookup
+// and symbol deref: `found` must be true when pkgScope returned a
+// symbol for `member`, and `public` must reflect that symbol's `pub`
+// flag. `typePos` tightens the E0508 wording from "name" to "type"
+// when the access site is in a type position. The message wording
+// lives in toolchain/resolve.osty so golden snapshots stay stable
+// regardless of which side emits the diagnostic.
+func LookupPackageMember(pkgName, member string, typePos, found, public bool) MemberLookupResult {
+	r := selfLookupPackageMember(pkgName, member, typePos, found, public)
+	return MemberLookupResult{
+		Status:  MemberLookupStatus(r.status),
+		Code:    r.code,
+		Message: r.message,
+		Primary: r.primary,
+		Note:    r.note,
+		Hint:    r.hint,
+	}
 }
 
 func toSelfWorkspaceUses(w WorkspaceUses) *SelfWorkspaceUses {
