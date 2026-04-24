@@ -60,27 +60,86 @@ func TestTypecheckCLINativeSurfacesTypeError(t *testing.T) {
 	}
 }
 
-// TestTypecheckCLINativeRejectsInspectAndDumpFlags mirrors the check
-// path incompatibility contract: --inspect / --dump-native-diags both
-// probe the Go check.Result shape, which --native never materializes.
-func TestTypecheckCLINativeRejectsInspectAndDumpFlags(t *testing.T) {
+// TestTypecheckCLINativeRejectsInspectFlag mirrors the check-path
+// incompatibility contract: --inspect still probes the Go
+// check.Result shape, which --native never materializes.
+func TestTypecheckCLINativeRejectsInspectFlag(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
 	if err := os.WriteFile(path, []byte(`fn main() {}
 `), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	for _, incompatible := range []string{"--inspect", "--dump-native-diags"} {
-		incompatible := incompatible
-		t.Run(incompatible, func(t *testing.T) {
-			got := runOstyCLI(t, incompatible, "typecheck", "--native", path)
-			if got.exit != 2 {
-				t.Fatalf("exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
-			}
-			if !strings.Contains(got.stderr, "incompatible") {
-				t.Fatalf("stderr missing `incompatible` explanation:\n%s", got.stderr)
-			}
-		})
+	got := runOstyCLI(t, "--inspect", "typecheck", "--native", path)
+	if got.exit != 2 {
+		t.Fatalf("exit = %d, want 2\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "incompatible") {
+		t.Fatalf("stderr missing `incompatible` explanation:\n%s", got.stderr)
+	}
+}
+
+func TestRunTypecheckFileNativeDumpNativeDiagsPrintsSummary(t *testing.T) {
+	src := []byte(`fn id(n: Int) -> Int {
+    n
+}
+
+fn main() {
+    let y = id(1)
+    y
+}
+`)
+	path := filepath.Join(t.TempDir(), "main.osty")
+	if err := os.WriteFile(path, src, 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	flags := cliFlags{noColor: true, native: true, dumpNativeDiags: true}
+	formatter := newFormatter(path, src, flags)
+
+	origStdout := os.Stdout
+	rout, wout, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stdout: %v", err)
+	}
+	os.Stdout = wout
+	t.Cleanup(func() { os.Stdout = origStdout })
+	origStderr := os.Stderr
+	rerr, werr, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stderr: %v", err)
+	}
+	os.Stderr = werr
+	t.Cleanup(func() { os.Stderr = origStderr })
+
+	selfhost.ResetAstbridgeLowerCount()
+	exit := runTypecheckFileNative(path, src, formatter, flags)
+	_ = wout.Close()
+	_ = werr.Close()
+	stdoutBytes, err := io.ReadAll(rout)
+	if err != nil {
+		t.Fatalf("read stdout: %v", err)
+	}
+	stderrBytes, err := io.ReadAll(rerr)
+	if err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	stdout := string(stdoutBytes)
+	stderr := string(stderrBytes)
+
+	if exit != 0 {
+		t.Fatalf("runTypecheckFileNative exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", exit, stdout, stderr)
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("AstbridgeLowerCount after dump-native-diags native typecheck = %d, want 0", got)
+	}
+	if !strings.Contains(stderr, "native checker telemetry: "+path) {
+		t.Fatalf("stderr missing telemetry header:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "assignments:") {
+		t.Fatalf("stderr missing assignments row:\n%s", stderr)
+	}
+	if !strings.Contains(stdout, "Int") {
+		t.Fatalf("stdout missing Int type row:\n%s", stdout)
 	}
 }
 

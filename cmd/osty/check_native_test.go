@@ -60,34 +60,76 @@ fn bad() -> Int {
 	}
 }
 
-// TestCheckCLINativeRejectsInspectAndDumpFlags pins the flag
-// compatibility contract. --inspect / --dump-native-diags both probe
-// the Go check.Result shape, which --native never materializes, so
-// combining them is explicitly rejected at the dispatch site with
-// exit code 2.
-func TestCheckCLINativeRejectsInspectAndDumpFlags(t *testing.T) {
+// TestCheckCLINativeRejectsInspectFlag pins the remaining flag
+// compatibility contract. --inspect still probes the Go check.Result
+// shape, which --native never materializes, so combining them is
+// explicitly rejected at the dispatch site with exit code 2.
+func TestCheckCLINativeRejectsInspectFlag(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
 	if err := os.WriteFile(path, []byte(`fn main() {}
 `), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	// --inspect and --dump-native-diags are declared as global flags
-	// in parseFlags(), so Go's flag package only recognizes them
+	// --inspect is declared as a global flag in parseFlags(), so Go's
+	// flag package only recognizes it
 	// before the subcommand. Pre-subcommand placement is the normal
 	// user ergonomic for those flags; combining them with --native
 	// must still be rejected at the dispatch site.
-	for _, incompatible := range []string{"--inspect", "--dump-native-diags"} {
-		incompatible := incompatible
-		t.Run(incompatible, func(t *testing.T) {
-			got := runOstyCLI(t, incompatible, "check", "--native", path)
-			if got.exit != 2 {
-				t.Fatalf("exit = %d, want 2 (flag-incompatibility rejection)\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
-			}
-			if !strings.Contains(got.stderr, "incompatible") {
-				t.Fatalf("stderr missing `incompatible` explanation:\n%s", got.stderr)
-			}
-		})
+	got := runOstyCLI(t, "--inspect", "check", "--native", path)
+	if got.exit != 2 {
+		t.Fatalf("exit = %d, want 2 (flag-incompatibility rejection)\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "incompatible") {
+		t.Fatalf("stderr missing `incompatible` explanation:\n%s", got.stderr)
+	}
+}
+
+func TestRunCheckFileNativeDumpNativeDiagsPrintsSummary(t *testing.T) {
+	src := []byte(`fn id(n: Int) -> Int {
+    n
+}
+
+fn main() {
+    let y = id(1)
+    y
+}
+`)
+	path := filepath.Join(t.TempDir(), "main.osty")
+	if err := os.WriteFile(path, src, 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	flags := cliFlags{noColor: true, native: true, dumpNativeDiags: true}
+	formatter := newFormatter(path, src, flags)
+
+	origStderr := os.Stderr
+	rerr, werr, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe stderr: %v", err)
+	}
+	os.Stderr = werr
+	t.Cleanup(func() { os.Stderr = origStderr })
+
+	selfhost.ResetAstbridgeLowerCount()
+	exit := runCheckFileNative(path, src, formatter, flags)
+	_ = werr.Close()
+	stderrBytes, err := io.ReadAll(rerr)
+	if err != nil {
+		t.Fatalf("read stderr: %v", err)
+	}
+	stderr := string(stderrBytes)
+
+	if exit != 0 {
+		t.Fatalf("runCheckFileNative exit = %d, want 0\nstderr:\n%s", exit, stderr)
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("AstbridgeLowerCount after dump-native-diags native check = %d, want 0", got)
+	}
+	if !strings.Contains(stderr, "native checker telemetry: "+path) {
+		t.Fatalf("stderr missing telemetry header:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "assignments:") {
+		t.Fatalf("stderr missing assignments row:\n%s", stderr)
 	}
 }
 
