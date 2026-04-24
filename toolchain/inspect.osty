@@ -326,8 +326,8 @@ fn inspectSpreadCallHints(
 }
 
 /// Thread hints top-down through identity-like / nested parent nodes
-/// (Block tail, If arm, Paren inner, Closure body) starting from two
-/// seed sources the self-host checker makes available:
+/// (Block tail, If arm, Paren inner, Closure body, Match arm body)
+/// starting from two seed sources the self-host checker makes available:
 ///
 ///   1. **Function signatures** (`symbols[*]` with `kind == "fn"`):
 ///      the declared return type (unwrapped from `fn(Ps) -> R`) flows
@@ -462,6 +462,18 @@ fn inspectThreadHint(arena: AstArena, idx: Int, hint: String, hints: List<String
         let sig = hintFnSignature(hint)
         if sig.ok && sig.returnType != "" {
             inspectThreadHint(arena, node.left, sig.returnType, hints)
+        }
+    } else if node.kind == AstNMatch {
+        // Each arm's body is evaluated against the outer expected type.
+        // Scrutinee (node.left) stays in synth mode — don't thread.
+        for armIdx in node.children {
+            if armIdx < 0 || armIdx >= n {
+                continue
+            }
+            let armNode = arena.nodes[armIdx]
+            if armNode.kind == AstNMatchArm && armNode.right >= 0 {
+                inspectThreadHint(arena, armNode.right, hint, hints)
+            }
         }
     }
 }
