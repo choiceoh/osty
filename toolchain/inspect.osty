@@ -203,7 +203,7 @@ fn inspectHintForNode(hintsByNode: List<String>, nodeIdx: Int) -> String {
 fn inspectBuildHintsByNode(arena: AstArena, checked: FrontCheckResult) -> List<String> {
     let n = arena.nodes.len()
     let mut hints: List<String> = []
-    for _ in 0..n {
+    for _k in 0..n {
         hints.push("")
     }
     if n == 0 {
@@ -232,7 +232,7 @@ fn inspectBuildHintsByNode(arena: AstArena, checked: FrontCheckResult) -> List<S
 fn inspectTypeNameByNode(arena: AstArena, checked: FrontCheckResult) -> List<String> {
     let n = arena.nodes.len()
     let mut out: List<String> = []
-    for _ in 0..n {
+    for _k in 0..n {
         out.push("")
     }
     for tn in checked.typedNodes {
@@ -626,7 +626,7 @@ fn inspectSortByOffset(recs: List<InspectRecord>) -> List<InspectRecord> {
     }
     for i in 1..n {
         let mut j = i
-        for _ in 0..i {
+        for _k in 0..i {
             if j == 0 {
                 break
             }

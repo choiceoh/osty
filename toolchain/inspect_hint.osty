@@ -181,7 +181,7 @@ pub fn hintFindMatchingParen(s: String, startIdx: Int) -> Int {
     }
     let mut depth = 1
     let mut i = startIdx
-    for _ in startIdx..n {
+    for _k in startIdx..n {
         if i >= n {
             return -1
         }
