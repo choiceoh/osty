@@ -88,18 +88,18 @@ type cliFlags struct {
 	aiMode     airepair.Mode
 	// dumpNativeDiags prints the native checker's per-context error
 	// histogram (assignments/accepted/errors + breakdown) to stderr after
-	// a `check` / `typecheck` run. Populated from `internal/check.Result`
-	// once the native-checker boundary has been invoked. Off by default;
-	// nil-safe when the native checker was unavailable.
+	// a `check` / `typecheck` run. Legacy paths read it from
+	// `internal/check.Result`; self-host native CLI paths read the same
+	// counters directly from `selfhost.CheckSummary`. Off by default.
 	dumpNativeDiags bool
 	// native routes `check` through the self-host arena pipeline
 	// (selfhost.CheckFromSource) instead of the Go-hosted resolve +
 	// check.File pair. The happy path never materializes *ast.File,
 	// so selfhost.AstbridgeLowerCount stays at 0 for the whole
-	// subcommand. Incompatible with --inspect / --dump-native-diags,
-	// which both probe the Go check.Result shape. Production default
-	// as of Phase 1c.1 (SELFHOST_PORT_MATRIX.md); `--legacy` opts back
-	// to the Go-hosted pair until the dual-track is retired.
+	// subcommand. Incompatible with --inspect, which still probes the
+	// Go check.Result shape. Production default as of Phase 1c.1
+	// (SELFHOST_PORT_MATRIX.md); `--legacy` opts back to the Go-hosted
+	// pair until the dual-track is retired.
 	native bool
 	// legacy routes `check` / `typecheck` back through the Go-hosted
 	// resolve + check.File pair. Escape hatch for the 1c.1 default
@@ -411,8 +411,8 @@ func main() {
 					"osty: typecheck --legacy does not accept a directory (expected a file)\n")
 				os.Exit(2)
 			}
-			if flags.inspect || flags.dumpNativeDiags {
-				fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect / --dump-native-diags\n")
+			if flags.inspect {
+				fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect\n")
 				os.Exit(2)
 			}
 			if root, ok, abort := nativeWorkspaceRoot(path, flags); abort {
@@ -539,8 +539,8 @@ func main() {
 		}
 	case "check":
 		if flags.native {
-			if flags.inspect || flags.dumpNativeDiags {
-				fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect / --dump-native-diags\n")
+			if flags.inspect {
+				fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect\n")
 				os.Exit(2)
 			}
 			if runCheckFileNative(path, src, formatter, flags) != 0 {
@@ -553,8 +553,8 @@ func main() {
 		}
 	case "typecheck":
 		if flags.native {
-			if flags.inspect || flags.dumpNativeDiags {
-				fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect / --dump-native-diags\n")
+			if flags.inspect {
+				fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect\n")
 				os.Exit(2)
 			}
 			if runTypecheckFileNative(path, src, formatter, flags) != 0 {
@@ -606,8 +606,8 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.trace, "trace", false, "stream per-phase timing to stderr (single-file front-end commands)")
 	flag.BoolVar(&f.explain, "explain", false, "after diagnostics, print the `osty explain CODE` text for each unique code")
 	flag.BoolVar(&f.inspect, "inspect", false, "check: emit one record per expression showing the inference rule, type, and hint (see LANG_SPEC_v0.5/02a-type-inference.md)")
-	flag.BoolVar(&f.dumpNativeDiags, "dump-native-diags", false, "check: after the run, print the native checker's per-context error histogram to stderr")
-	flag.BoolVar(&f.native, "native", true, "check/typecheck: route through the self-host arena pipeline (astbridge-free; production default). Incompatible with --inspect and --dump-native-diags; redundant with the default but accepted for backwards compatibility")
+	flag.BoolVar(&f.dumpNativeDiags, "dump-native-diags", false, "check/typecheck: after the run, print the native checker's per-context error histogram to stderr")
+	flag.BoolVar(&f.native, "native", true, "check/typecheck: route through the self-host arena pipeline (astbridge-free; production default). Incompatible with --inspect; redundant with the default but accepted for backwards compatibility")
 	flag.BoolVar(&f.legacy, "legacy", false, "check/typecheck: route through the Go-hosted resolve + check.File pair (pre-1c.1 default). Escape hatch while the selfhost checker coverage tail finishes; will be removed once dual-track is retired")
 	flag.Usage = usage
 	flag.Parse()
@@ -632,8 +632,8 @@ func parseFlags() cliFlags {
 // snippets point at the right lines even when spanning packages.
 func runCheckPackage(dir string, flags cliFlags) {
 	if flags.native {
-		if flags.inspect || flags.dumpNativeDiags {
-			fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect / --dump-native-diags\n")
+		if flags.inspect {
+			fmt.Fprintf(os.Stderr, "osty: --native is incompatible with --inspect\n")
 			os.Exit(2)
 		}
 		if root, ok, abort := nativeWorkspaceRoot(dir, flags); abort {
@@ -1005,6 +1005,9 @@ func runTypecheckPackageNative(dir string, flags cliFlags) int {
 	diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
 	printPackageDiags(pkg, diags, flags)
 	printNativePackageTypes(checked, input.Files)
+	if flags.dumpNativeDiags {
+		dumpNativeDiagsForSummary(dir, checked.Summary)
+	}
 	if hasError(diags) {
 		return 1
 	}
@@ -1076,6 +1079,9 @@ func runCheckPackageNative(dir string, flags cliFlags) int {
 	diags := packageParseDiags(pkg)
 	diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
 	printPackageDiags(pkg, diags, flags)
+	if flags.dumpNativeDiags {
+		dumpNativeDiagsForSummary(dir, checked.Summary)
+	}
 	if hasError(diags) {
 		return 1
 	}
@@ -1109,6 +1115,9 @@ func runNativeWorkspaceCheck(dir, mode string, flags cliFlags, emitTypes bool) i
 		printPackageDiags(pkg, diags, flags)
 		if emitTypes {
 			printNativePackageTypes(checked, input.Files)
+		}
+		if flags.dumpNativeDiags {
+			dumpNativeDiagsForSummary(path, checked.Summary)
 		}
 		if hasError(diags) {
 			anyErr = true
@@ -1257,6 +1266,9 @@ func runTypecheckFileNative(path string, src []byte, formatter *diag.Formatter, 
 	all = append(all, checkDiags...)
 	printDiags(formatter, all, flags)
 	printNativeTypes(src, checked)
+	if flags.dumpNativeDiags {
+		dumpNativeDiagsForSummary(path, checked.Summary)
+	}
 	if hasError(all) {
 		return 1
 	}
@@ -1434,6 +1446,9 @@ func runCheckFileNative(path string, src []byte, formatter *diag.Formatter, flag
 	all := append([]*diag.Diagnostic{}, parseDiags...)
 	all = append(all, checkDiags...)
 	printDiags(formatter, all, flags)
+	if flags.dumpNativeDiags {
+		dumpNativeDiagsForSummary(path, checked.Summary)
+	}
 	if hasError(all) {
 		return 1
 	}

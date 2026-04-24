@@ -18,7 +18,16 @@ import (
 	"sort"
 
 	"github.com/osty/osty/internal/check"
+	"github.com/osty/osty/internal/selfhost"
 )
+
+type nativeDiagTelemetry struct {
+	Assignments     int
+	Accepted        int
+	Errors          int
+	ErrorsByContext map[string]int
+	ErrorDetails    map[string]map[string]int
+}
 
 // dumpNativeDiagsFor prints the native checker's per-context histogram
 // for one already-checked scope (file, package, or workspace entry) to
@@ -30,6 +39,29 @@ func dumpNativeDiagsFor(label string, chk *check.Result) {
 		return
 	}
 	t := chk.NativeCheckerTelemetry
+	dumpNativeDiagTelemetry(label, nativeDiagTelemetry{
+		Assignments:     t.Assignments,
+		Accepted:        t.Accepted,
+		Errors:          t.Errors,
+		ErrorsByContext: t.ErrorsByContext,
+		ErrorDetails:    t.ErrorDetails,
+	})
+}
+
+// dumpNativeDiagsForSummary is the native CLI-path sibling of
+// dumpNativeDiagsFor: it reads the already-materialized self-host
+// summary directly instead of going through check.Result.
+func dumpNativeDiagsForSummary(label string, summary selfhost.CheckSummary) {
+	dumpNativeDiagTelemetry(label, nativeDiagTelemetry{
+		Assignments:     summary.Assignments,
+		Accepted:        summary.Accepted,
+		Errors:          summary.Errors,
+		ErrorsByContext: summary.ErrorsByContext,
+		ErrorDetails:    summary.ErrorDetails,
+	})
+}
+
+func dumpNativeDiagTelemetry(label string, t nativeDiagTelemetry) {
 	if t.Errors == 0 && t.Assignments == 0 {
 		return
 	}
