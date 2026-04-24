@@ -3238,16 +3238,12 @@ func (g *mirGen) emitHintBlackBoxMIR(c *mir.CallInstr) error {
 	return nil
 }
 
-// isScalarLLVMType reports whether the given llvmType string names a
-// scalar LLVM type that fits a single register — the set the `=r,0`
-// asm constraint can tie to. Conservative; struct / array / composite
-// types return false.
+// isScalarLLVMType delegates to the Osty-sourced `mirIsScalarLLVMType`
+// predicate (`toolchain/mir_generator.osty`). The set the `=r,0` asm
+// constraint can tie to stays a single source of truth on the Osty
+// side; composite types (struct / array) fall through to the safe path.
 func isScalarLLVMType(t string) bool {
-	switch t {
-	case "i1", "i8", "i16", "i32", "i64", "float", "double", "ptr":
-		return true
-	}
-	return false
+	return mirIsScalarLLVMType(t)
 }
 
 // emitStdTestingCall dispatches `std.testing.*` call symbols at MIR
@@ -3334,11 +3330,11 @@ func (g *mirGen) emitStdIoWriteArgsMIR(args []mir.Operand, method string) error 
 	return nil
 }
 
+// llvmStdIoI1Text delegates to the Osty-sourced `mirLlvmI1Text`
+// (`toolchain/mir_generator.osty`) — the `bool` → `"true"` / `"false"`
+// shim is shared with any other site that needs an LLVM i1 literal.
 func llvmStdIoI1Text(v bool) string {
-	if v {
-		return "true"
-	}
-	return "false"
+	return mirLlvmI1Text(v)
 }
 
 func (g *mirGen) emitStdIoStringOperandMIR(op mir.Operand, method string) (string, error) {
@@ -9143,12 +9139,12 @@ func isStringPrimType(t mir.Type) bool {
 	return mirIsStringPrimTypeText(p.String())
 }
 
+// isStringOrderingBinOp delegates to the Osty-sourced
+// `mirIsStringOrderingSymbol` predicate (`toolchain/mir_generator.osty`).
+// The Go wrapper hands over the `mir.BinaryOp.String()` form so the
+// symbol-matching stays as a single source of truth on the Osty side.
 func isStringOrderingBinOp(op mir.BinaryOp) bool {
-	switch op {
-	case mir.BinLt, mir.BinLeq, mir.BinGt, mir.BinGeq:
-		return true
-	}
-	return false
+	return mirIsStringOrderingSymbol(op.String())
 }
 
 // emitStringOrdering lowers `<` / `<=` / `>` / `>=` on String values to
@@ -9181,18 +9177,12 @@ func (g *mirGen) emitStringOrdering(op mir.BinaryOp, left, right string) (string
 	return out, nil
 }
 
+// stringOrderingPredicate delegates to the Osty-sourced
+// `mirStringOrderingPredicate` helper (`toolchain/mir_generator.osty`).
+// Callers guard with `isStringOrderingBinOp` first, so the empty
+// fallthrough never reaches an emitter site.
 func stringOrderingPredicate(op mir.BinaryOp) string {
-	switch op {
-	case mir.BinLt:
-		return "slt"
-	case mir.BinLeq:
-		return "sle"
-	case mir.BinGt:
-		return "sgt"
-	case mir.BinGeq:
-		return "sge"
-	}
-	return ""
+	return mirStringOrderingPredicate(op.String())
 }
 
 // ==== strings ====

@@ -204,34 +204,79 @@ func mirIsStringPrimTypeText(typeText string) bool {
 }
 
 // Osty: toolchain/mir_generator.osty:182:5
+func mirIsStringOrderingSymbol(symbol string) bool {
+	return symbol == "<" || symbol == "<=" || symbol == ">" || symbol == ">="
+}
+
+// Osty: toolchain/mir_generator.osty:192:5
+func mirStringOrderingPredicate(symbol string) string {
+	// Osty: toolchain/mir_generator.osty:193:5
+	if symbol == "<" {
+		// Osty: toolchain/mir_generator.osty:194:9
+		return "slt"
+	}
+	// Osty: toolchain/mir_generator.osty:196:5
+	if symbol == "<=" {
+		// Osty: toolchain/mir_generator.osty:197:9
+		return "sle"
+	}
+	// Osty: toolchain/mir_generator.osty:199:5
+	if symbol == ">" {
+		// Osty: toolchain/mir_generator.osty:200:9
+		return "sgt"
+	}
+	// Osty: toolchain/mir_generator.osty:202:5
+	if symbol == ">=" {
+		// Osty: toolchain/mir_generator.osty:203:9
+		return "sge"
+	}
+	return ""
+}
+
+// Osty: toolchain/mir_generator.osty:215:5
 func mirIsUnitTypeText(typeText string) bool {
 	return typeText == "Unit" || typeText == "()" || typeText == "Never"
 }
 
-// Osty: toolchain/mir_generator.osty:192:5
+// Osty: toolchain/mir_generator.osty:225:5
 func mirIsFloatTypeText(typeText string) bool {
 	return typeText == "Float" || typeText == "Float32" || typeText == "Float64" || typeText == "double" || typeText == "float"
 }
 
-// Osty: toolchain/mir_generator.osty:203:5
+// Osty: toolchain/mir_generator.osty:236:5
+func mirIsScalarLLVMType(t string) bool {
+	return t == "i1" || t == "i8" || t == "i16" || t == "i32" || t == "i64" || t == "float" || t == "double" || t == "ptr"
+}
+
+// Osty: toolchain/mir_generator.osty:246:5
+func mirLlvmI1Text(v bool) string {
+	// Osty: toolchain/mir_generator.osty:247:5
+	if v {
+		// Osty: toolchain/mir_generator.osty:248:9
+		return "true"
+	}
+	return "false"
+}
+
+// Osty: toolchain/mir_generator.osty:259:5
 func mirFirstNonEmpty(vals []string) string {
-	// Osty: toolchain/mir_generator.osty:204:5
+	// Osty: toolchain/mir_generator.osty:260:5
 	n := len(vals)
 	_ = n
-	// Osty: toolchain/mir_generator.osty:205:5
+	// Osty: toolchain/mir_generator.osty:261:5
 	i := 0
 	_ = i
-	// Osty: toolchain/mir_generator.osty:206:5
+	// Osty: toolchain/mir_generator.osty:262:5
 	for i < n {
-		// Osty: toolchain/mir_generator.osty:207:9
+		// Osty: toolchain/mir_generator.osty:263:9
 		x := vals[i]
 		_ = x
-		// Osty: toolchain/mir_generator.osty:208:9
+		// Osty: toolchain/mir_generator.osty:264:9
 		if x != "" {
-			// Osty: toolchain/mir_generator.osty:209:13
+			// Osty: toolchain/mir_generator.osty:265:13
 			return x
 		}
-		// Osty: toolchain/mir_generator.osty:211:9
+		// Osty: toolchain/mir_generator.osty:267:9
 		func() {
 			var _cur7 int = i
 			var _rhs8 int = 1
@@ -247,51 +292,51 @@ func mirFirstNonEmpty(vals []string) string {
 	return ""
 }
 
-// Osty: toolchain/mir_generator.osty:223:5
+// Osty: toolchain/mir_generator.osty:279:5
 func mirEarliestAfter(input string, needle string) int {
 	return llvmStrings.Index(input, needle)
 }
 
-// Osty: toolchain/mir_generator.osty:248:5
+// Osty: toolchain/mir_generator.osty:304:5
 func mirEncodeLLVMString(s string) string {
-	// Osty: toolchain/mir_generator.osty:258:5
+	// Osty: toolchain/mir_generator.osty:314:5
 	printable := " !#$%&'()*+,-./0123456789:;<=" + ">?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~"
 	_ = printable
-	// Osty: toolchain/mir_generator.osty:259:5
+	// Osty: toolchain/mir_generator.osty:315:5
 	out := ""
 	_ = out
-	// Osty: toolchain/mir_generator.osty:260:5
+	// Osty: toolchain/mir_generator.osty:316:5
 	n := len(s)
 	_ = n
-	// Osty: toolchain/mir_generator.osty:261:5
+	// Osty: toolchain/mir_generator.osty:317:5
 	i := 0
 	_ = i
-	// Osty: toolchain/mir_generator.osty:262:5
+	// Osty: toolchain/mir_generator.osty:318:5
 	for i < n {
-		// Osty: toolchain/mir_generator.osty:263:9
+		// Osty: toolchain/mir_generator.osty:319:9
 		ch := s[i:(i + 1)]
 		_ = ch
-		// Osty: toolchain/mir_generator.osty:264:9
+		// Osty: toolchain/mir_generator.osty:320:9
 		if ch == "\\" {
-			// Osty: toolchain/mir_generator.osty:265:13
+			// Osty: toolchain/mir_generator.osty:321:13
 			out = out + "\\\\"
 		} else if ch == "\"" {
-			// Osty: toolchain/mir_generator.osty:267:13
+			// Osty: toolchain/mir_generator.osty:323:13
 			out = out + "\\22"
 		} else if llvmStrings.Contains(printable, ch) {
-			// Osty: toolchain/mir_generator.osty:269:13
+			// Osty: toolchain/mir_generator.osty:325:13
 			out = out + ch
 		} else {
-			// Osty: toolchain/mir_generator.osty:274:13
+			// Osty: toolchain/mir_generator.osty:330:13
 			plen := len(printable)
 			_ = plen
-			// Osty: toolchain/mir_generator.osty:275:13
+			// Osty: toolchain/mir_generator.osty:331:13
 			trap := printable[(plen + 1):(plen + 2)]
 			_ = trap
-			// Osty: toolchain/mir_generator.osty:276:13
+			// Osty: toolchain/mir_generator.osty:332:13
 			return trap
 		}
-		// Osty: toolchain/mir_generator.osty:278:9
+		// Osty: toolchain/mir_generator.osty:334:9
 		func() {
 			var _cur9 int = i
 			var _rhs10 int = 1
