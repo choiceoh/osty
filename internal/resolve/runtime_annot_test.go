@@ -18,7 +18,7 @@ func runAnnotArgs(t *testing.T, src string) []*diag.Diagnostic {
 	if len(parseDiags) != 0 {
 		t.Fatalf("parse diagnostics: %v", parseDiags)
 	}
-	res := File(file, NewPrelude())
+	res := FileWithStdlib(file, NewPrelude(), nil)
 	return res.Diags
 }
 

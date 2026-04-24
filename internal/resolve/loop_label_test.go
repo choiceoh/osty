@@ -18,7 +18,7 @@ func TestResolveUndefinedLoopLabel(t *testing.T) {
 	if len(parseDiags) > 0 {
 		t.Fatalf("parse diagnostics = %v", parseDiags)
 	}
-	res := File(file, NewPrelude())
+	res := FileWithStdlib(file, NewPrelude(), nil)
 	if !hasResolveCode(res.Diags, "E0763") {
 		t.Fatalf("expected E0763, got %#v", res.Diags)
 	}
@@ -37,7 +37,7 @@ func TestResolveLoopLabelShadow(t *testing.T) {
 	if len(parseDiags) > 0 {
 		t.Fatalf("parse diagnostics = %v", parseDiags)
 	}
-	res := File(file, NewPrelude())
+	res := FileWithStdlib(file, NewPrelude(), nil)
 	if !hasResolveCode(res.Diags, "E0764") {
 		t.Fatalf("expected E0764, got %#v", res.Diags)
 	}
@@ -55,7 +55,7 @@ func TestResolveBreakValueExpression(t *testing.T) {
 	if len(parseDiags) > 0 {
 		t.Fatalf("parse diagnostics = %v", parseDiags)
 	}
-	res := File(file, NewPrelude())
+	res := FileWithStdlib(file, NewPrelude(), nil)
 	if len(res.Diags) != 0 {
 		t.Fatalf("unexpected resolve diagnostics: %#v", res.Diags)
 	}

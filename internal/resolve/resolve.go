@@ -36,15 +36,8 @@ type Result struct {
 	Diags []*diag.Diagnostic
 }
 
-// File runs name resolution over a single parsed source file. It is a
-// thin convenience wrapper around ResolvePackage that treats the input
-// as a one-file package. Use ResolvePackage directly when working with
-// a real on-disk directory.
-func File(file *ast.File, prelude *Scope) *Result {
-	return FileWithStdlib(file, prelude, nil)
-}
-
-// FileWithStdlib is File plus a StdlibProvider: `use std.*` imports in
+// FileWithStdlib runs name resolution over a single parsed source file
+// with an optional StdlibProvider: `use std.*` imports in
 // the source resolve through the provider before falling back to the
 // opaque-stub behavior. Passing a nil provider is equivalent to File.
 func FileWithStdlib(file *ast.File, prelude *Scope, stdlib StdlibProvider) *Result {
