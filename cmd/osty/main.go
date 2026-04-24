@@ -1155,19 +1155,19 @@ func byteOffsetLineCol(src []byte, offset int) (int, int) {
 // runLintFile is the extracted `osty lint FILE` body (minus the
 // exclude-config early-return, which stays in the caller so the "skip"
 // message fires before parse work begins). Runs parse → resolveFile →
-// check.File → lint engine; handles --fix / --fix-dry-run stdout/disk
-// side-effects inside the function.
+// check.SelfhostFile → lint engine; handles --fix / --fix-dry-run
+// stdout/disk side-effects inside the function.
 //
-// Lint still uses check.File because the lint engine consumes the
-// Go-side `*check.Result` shape (Types / SymTypes / LetTypes). A
-// separate Phase 1c.5 slice will move lint onto the engine path, at
-// which point this function collapses onto selfhost.CheckFromSource
-// + a lint engine that accepts the selfhost result directly.
+// Uses check.SelfhostFile (not check.File) since Phase 1c.5 — lint on
+// a single file never exercises the AST-level builder-desugar rewrite
+// (desugar runs on check.Package for multi-file auto-derive chains),
+// so the selfhost-direct entry shaves that pass without altering the
+// `*check.Result` shape the lint engine consumes.
 func runLintFile(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
 	parsed := parser.ParseDetailed(src)
 	file, parseDiags := parsed.File, parsed.Diagnostics
 	res := resolveFile(file)
-	chk := check.File(file, res, checkOptsForFile(path, canonical.Source(src, file)))
+	chk := check.SelfhostFile(file, res, checkOptsForFile(path, canonical.Source(src, file)))
 	lr := runLintEngine(file, src, res, chk)
 	if cfg, ok := loadLintConfigNear(path); ok {
 		lr = cfg.Apply(lr)
