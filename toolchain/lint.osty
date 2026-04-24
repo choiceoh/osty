@@ -3037,8 +3037,24 @@ fn selfLintIgnoredResultStmt(
         out = selfLintIgnoredResultExpr(file, node.left, hints, out)
         return selfLintIgnoredResultExpr(file, node.right, hints, out)
     }
-    if node.kind == AstNReturn || node.kind == AstNDefer {
+    if node.kind == AstNReturn {
         return selfLintIgnoredResultExpr(file, node.left, hints, out)
+    }
+    if node.kind == AstNDefer {
+        let exprIdx = node.left
+        let typeName = selfLintTypeAt(hints, exprIdx)
+        if selfLintTypeIsMustUse(typeName) {
+            out = selfLintEmitAtNode(
+                out,
+                "L0007",
+                "discarded must-use value in `defer` — wrap with `ignoreError` / `logError` (§10.1) or handle explicitly",
+                typeName,
+                node.start,
+                node.end,
+                exprIdx,
+            )
+        }
+        return selfLintIgnoredResultExpr(file, exprIdx, hints, out)
     }
     if node.kind == AstNFor {
         let iterIdx = selfLintAstChildAt(node.children, 1)

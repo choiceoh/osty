@@ -101,6 +101,10 @@ func (l *linter) ignoredResultStmtInBlock(s ast.Stmt, tailIsValue bool) {
 	case *ast.ReturnStmt:
 		l.ignoredResultExpr(n.Value)
 	case *ast.DeferStmt:
+		if l.isIgnoredMustUse(n.X) {
+			l.warnNode(n.X, diag.CodeIgnoredResult,
+				"discarded `%s` value in `defer` — wrap with `ignoreError` / `logError` (§10.1) or handle explicitly", l.describeMustUse(n.X))
+		}
 		l.ignoredResultExpr(n.X)
 	case *ast.ForStmt:
 		l.ignoredResultExpr(n.Iter)

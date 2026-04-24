@@ -30,6 +30,8 @@ var toolchainCheckerFiles = []string{
 	"toolchain/resolve.osty",
 	"toolchain/lint.osty",
 	"toolchain/lsp.osty",
+	"toolchain/inspect.osty",
+	"toolchain/inspect_hint.osty",
 	"internal/selfhost/ast_lower.osty",
 }
 

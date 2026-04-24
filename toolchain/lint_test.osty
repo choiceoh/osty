@@ -782,6 +782,42 @@ fn testSelfLintFindsIgnoredResultViaTypeHints() {
     testing.assertEq(selfLintCodeCount(report, "L0007"), 1)
 }
 
+fn testSelfLintEmitsL0007ForDeferResult() {
+    let source =
+        r"""
+            fn close() -> Result<(), Error> { Ok(()) }
+
+            fn caller() {
+                defer close()
+            }
+            """
+    let file = astParse(source)
+    let resolved = selfResolveAstFile(file)
+    let checked = frontendCheckAstStructured(file)
+    let report = selfLintCheckedAstSource(source, file, resolved, checked)
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0007"), 1)
+}
+
+fn testSelfLintSkipsL0007ForDeferUnit() {
+    let source =
+        r"""
+            fn shutdown() {}
+
+            fn caller() {
+                defer shutdown()
+            }
+            """
+    let file = astParse(source)
+    let resolved = selfResolveAstFile(file)
+    let checked = frontendCheckAstStructured(file)
+    let report = selfLintCheckedAstSource(source, file, resolved, checked)
+
+    testing.assertEq(report.parseErrors, 0)
+    testing.assertEq(selfLintCodeCount(report, "L0007"), 0)
+}
+
 fn testSelfLintSkipsL0007WithoutTypeHints() {
     let report = selfLintSource(
         r"""

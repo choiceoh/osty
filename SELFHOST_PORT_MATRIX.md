@@ -192,7 +192,7 @@ embedded adapter / 아직 포팅되지 않은 consumer shape 를 담당한다:
 | `?` 전파 (Option/Result) | `(hostboundary)` | `toolchain/elab.osty:161,1360` | E0717 | ported | `TkOptional` intern |
 | `?.` optional chain | `(hostboundary)` | `toolchain/elab.osty::elabInferField` + `elabInferMethodCall` + `elabWrapOptionalChain` + `toolchain/check_diag.osty::diagOptionalChainOnNon` | E0719 | **ported** | 2026-04-23 field-access + method-call 양쪽 LANG_SPEC §4 / 부록 A.6 준수로 복구. Field: `elabInferField` 가 `AstNField.flags == 1` 분기 — Option receiver `tyInnerAt` unwrap → lookup → 결과를 `elabWrapOptionalChain` 로 `Option<_>` 재래핑 (이미 Option 이면 flatten). Non-Option → E0719. Method: `elabInferMethodCall` 이 `fieldNode.flags == 1` 으로 동일 처리 — mono / generic instantiation 양쪽 return path 에서 retTy 를 wrap. `generated.go` lockstep sync. 회귀 가드: [internal/check/optional_chain_test.go](internal/check/optional_chain_test.go) 8 테스트 (field + method call 쌍 × {Option receiver 정상, `??` coalesce unwrap, non-Option E0719, 메시지 shape, nested flatten}) |
 | `??` nil-coalesce | `(hostboundary)` | `toolchain/elab.osty:432` | — | ported | Option unwrap 특수 |
-| **Defer lifecycle** | `internal/check/*.go` (분산) | — | — | **go-only** | Osty 쪽 검증 없음; 백엔드 의존성 설계 필요 |
+| **Defer lifecycle** | `internal/parser/parser.go`·`internal/resolve/file.go`·`internal/lint/typebased.go` | `toolchain/parser.osty:2050`·`toolchain/resolve.osty:947`·`toolchain/lint.osty:3043` | E0603 / E0608 / L0007 | static-ported | 정적 검증 (top-level defer 거부, 비-호출 defer 거부, Result/Option defer → L0007) 은 Go·Osty 양쪽에 있음. 런타임 lifecycle (LIFO / `?` propagation / cancellation / abort-skip §4.12 rules 3/7/8) 은 백엔드 영역 |
 | 패턴 exhaustiveness | `(hostboundary)` | `toolchain/elab.osty:2669` | E0712 | ported | witness 생성 phase 1, opaque range phase 2 |
 | 패턴 reachability | `(hostboundary)` | `toolchain/elab.osty:3171` | E0740, E0741 | ported | guarded pattern 추적 |
 | 숫자 리터럴 다형성 | `(hostboundary)` | `toolchain/elab.osty:273` | — | partial | 기대 타입 기반 narrowing, 범위 좁음 |
@@ -213,7 +213,7 @@ embedded adapter / 아직 포팅되지 않은 consumer shape 를 담당한다:
 | Diagnostic file path 결합 | `host_boundary.go::stampPackageDiags` | `toolchain/check_diag.osty` | — | partial | Go 가 경로 스탬프, Osty 가 메시지 렌더 |
 | **Native checker exec 경계** | `host_boundary.go::nativeCheckerExec` | — | — | **n/a** | 외부 바이너리 인터페이스 — 포팅 대상 아님 |
 | Embedded selfhost bridge | `host_boundary.go::embeddedNativeChecker` | `toolchain/check_bridge.osty` (9줄) | — | n/a | **9줄짜리 얇은 stub — AST 변경에 취약** |
-| **Inspect / per-node 기록** | `internal/check/inspect.go` (647 LOC — 2026-04-24 실측) | `toolchain/inspect.osty` + `toolchain/inspect_hint.osty` + tests | — | **partial** | 2026-04-24 점진 착륙: **v1 (#810)** expression 19 종 → **v1.5 (#811)** decl + pattern binding → **v1.6 (#813)** `AstNLet` ident pattern 을 LET 로 승격 → **v1.7 (#817)** destructuring let 까지 LET → **v1.8 (#818)** 타입 문자열 파서 유틸 → **v1.9 (#819)** `inspectBuildHintsByNode` 가 파서 유틸을 엮어 List/Tuple/Map entry/Call arg 4 가지 parent shape 에서 `hintName` 을 직접 자식 레코드에 채움 → **v1.10 (#820)** AST 재귀 walker `inspectThreadHint` 가 symbols (fn return / top-level let / local let binding) 에서 seed 를 뽑아 Block tail / If then-else / Paren inner / Closure body 체인을 타고 hint 가 leaf 까지 흐르도록 확장 → **v1.11** Match arm body 도 같은 walker 경로로 threading (scrutinee 는 synth 유지). **남은 갭**: (1) For-loop body / 필드 접근 chain / method call receiver 같은 기타 container shape 은 아직 미커버. (2) Expression `notes` (generic instantiation / method-call marker) 비어있음. (3) Go 브리지 (`selfhost.InspectFromRun`) — `bundle.toolchainCheckerFiles` 에 `inspect.osty` / `inspect_hint.osty` 추가 + `generated.go` 재생성 필요. **2026-04-24 시도 결과**: bundle 에 두 파일 추가 후 `go generate ./internal/selfhost/...` 실행 시 transpiler 가 `for _ in range` 루프를 invalid Go (`for _ := ...; _ < n; _++`) 로 번역하는 버그 + 함수를 포함한 뒤 elab 계열 일부 call site (`elabPoisonResult(...)`) 가 `*ElabResult → int` 타입 미스매치 에러로 regen 실패. **해제 조건**: (a) Osty→Go 트랜스파일러 (`internal/bootstrap/gen`) 가 `for _ in range` 를 named loop var 로 lower 하거나 throwaway 처리하도록 수정, (b) inspect 포함 시 elabPoisonResult 회귀 원인 조사 (라인넘버 shift 효과일 가능성도 있음 — 추가 조사 필요). 첫 번째는 toolchain 코드에서 `for _ in` → `for _k in` 회피 가능 (이 PR 에서 적용). 두 번째는 별도 bootstrap 트랜스파일러 이슈. |
+| **Inspect / per-node 기록** | `internal/check/inspect.go` (647 LOC — 2026-04-24 실측) | `toolchain/inspect.osty` + `toolchain/inspect_hint.osty` + tests + `internal/selfhost/inspect_adapter.go` (Go 브리지) | — | **partial** | 2026-04-24 점진 착륙: v1~v1.11 까지 포팅. **2026-04-24 후속**: bundle 등록 + `generated.go` regen + Go 브리지 착륙. `toolchain/inspect.osty` / `inspect_hint.osty` 를 `bundle.toolchainCheckerFiles` 에 추가 후 `go generate ./internal/selfhost/...` 이 exit 0 + `go build ./...` 통과. PR #824 의 `for _ in` → `for _k in` 리네임이 transpiler 버그를 우회했고, `elabPoisonResult` regression 은 재현되지 않아 별도 수정 없이 해소. `internal/selfhost/inspect_adapter.go::InspectFromSource(src []byte) []api.InspectRecord` 공개. `api.InspectRecord` (byte offsets + 렌더된 타입 문자열) 는 `check.InspectRecord` (`types.Type` + `token.Pos`) 와 달리 self-host 의 pre-lift 표현 그대로 노출 — CLI 와 IDE 소비자는 구조적 타입이 필요하면 당분간 Go-side `check.Inspect` 유지. **남은 갭**: (1) For-loop body / 필드 접근 chain / method call receiver 같은 기타 container shape 미커버. (2) Expression `notes` (generic instantiation / method-call marker) 비어있음. (3) CLI `osty check --inspect` 는 여전히 Go `check.Inspect` 호출 — `--arena` 토글 추가 + Go parity 검증 후 전환. |
 | Generic bound checking | `(hostboundary)` | `toolchain/elab.osty` | E0749 | ported | monomorph 시 bound 강제 |
 | Pattern shape mismatch (E0753) | `(hostboundary)` | `toolchain/elab.osty:elabPattern` | E0753 | ported | — |
 | Closure annotation requirement | `(hostboundary)` | `toolchain/elab.osty:1849` | E0752 | partial | param seeding 만 |
@@ -223,10 +223,32 @@ embedded adapter / 아직 포팅되지 않은 consumer shape 를 담당한다:
 1. ~~**Intrinsic body (E0773)**~~ — **착륙 2026-04-23**. Osty side (`toolchain/check_gates.osty` + `selfhostIntrinsicBodyDiagnosticsFromArena`) 가 이미 존재했고, Go 레거시 `intrinsic_body.go` (93 LOC) + test 제거 + `check.go:208/285` 콜사이트를 public `selfhost.IntrinsicBodyDiagsForSource(src, path)` 래퍼로 대체. Native path (CheckPackageStructured 내부) 와 Go fallback 모두 동일 arena gate 공유 — silent diverge 불가능.
 2. **Privilege / POD / Noalloc 3-gate 통합** — 양쪽 `partial` 인데 **독립 실행 중** — silent divergence 리스크 제일 큼. 방법: 해당 gate 를 `check_gates.osty` 단일 소스로 몰고 Go 쪽은 adapter 만 남긴다. 3개가 구조적으로 유사하니 한 번에 처리.
 3. ~~**Builder auto-derive 단일화**~~ — **착륙 2026-04-24**. derive-policy shared source (`toolchain/builder_policy.osty`) 분리 후 selfhost checker 가 builder chain typing / E0774 를 직접 수행하고, Go AST prepass `builder_desugar.go` 는 제거. Go `internal/ir/lower.go` 는 `check.ClassifyBuilderDerive` adapter 만 재사용.
-4. **Inspect 포팅** — **v1 착륙 2026-04-24**. `toolchain/inspect.osty` (185 LOC) + `toolchain/inspect_test.osty` 가 Osty 쪽 scaffold 와 표현식 레코드 대부분을 커버. `query.go` 는 PR #787 후속으로 삭제됨. **Follow-up**: (a) decl-level 레코드 (FN-DECL, LET) 를 `bindings` / `FrontCheckedBinding` 을 엮어 추가. (b) Hint propagation — `FrontCheckedNode.typeName: String` 위에 얇은 타입 파서 (`List<T>` / tuple / `Map<K,V>` / `fn(..) -> R` 시그니처) 를 올려 top-down 재실행. (c) Go 브리지: `bundle.go` 의 `toolchainCheckerFiles` 에 `toolchain/inspect.osty` 추가 → `just build-all` 로 `internal/selfhost/generated.go` 재생성 → `internal/selfhost/inspect_adapter.go` 에 `InspectFromSource(src) []api.InspectRecord` 노출. (d) Go `check.Inspect` 는 당분간 parity reference 로 유지; `cmd/osty inspect` 의 `--arena` 플래그로 Osty path 토글.
+4. **Inspect 포팅** — **v1~v1.11 + Go 브리지 착륙 2026-04-24**. bundle 등록 / regen / `selfhost.InspectFromSource` 공개 완료. **Follow-up**: (a) For-loop body / 필드 chain / method receiver 등 미커버 container shape 추가. (b) Expression `notes` 채우기 (generic instantiation / method-call marker). (c) CLI `cmd/osty inspect` 의 `--arena` 토글 추가 + Go `check.Inspect` parity 검증 → Go 복제본 제거.
 5. **Annotation semantic validation 완성** — `#[vectorize]`/`#[parallel]`/`#[hot]`/`#[pure]` 를 `hir_lower.osty` 에 추가. v0.6 A5–A13 stanza 기반 스펙이 권위.
-6. **Defer lifecycle 설계** — 스펙 정리 먼저. 백엔드와 cross-cutting 이라 `SPEC_GAPS.md` entry 선행.
+6. **Defer lifecycle 설계** — 정적 검증 (E0603·E0608·L0007) 은 Go·Osty 양쪽 이식 완료 (2026-04-24). 런타임 lifecycle (LIFO / `?` propagation / cancellation / abort-skip) 은 백엔드 cross-cutting 이라 `SPEC_GAPS.md` entry 선행.
 7. **Package input / worker pool** — 호스트 경계 바깥이지만 Osty 로 가져오려면 파일 IO + 프로세스 스케줄링 이 Osty 측에 필요. 가장 뒤.
+
+### LSP 포팅 현황 (2026-04-24 실측)
+
+`toolchain/lsp.osty` ~1200 LOC 가 이미 순수 에디터 정책을 커버 — 시맨틱 토큰 legend (`lspSemanticTypeForTokenKind/SymbolKind`), UTF-16 위치 변환
+(`lspOstyPositionToLSP`, `lspPositionToOsty`), completion sort key
+(`lspCompletionSortTextForSymbolKind`), hover signature
+(`lspHoverSignatureLine`), 심볼/import sort (`lspSortSymbolIndexes` /
+`lspSortImportIndexes`), code-action kind filter (`lspWantsCodeActionKind`),
+diagnostic payload (`lspDiagnosticPayload`) 모두 Osty side 에 있음.
+
+`internal/lsp` 의 Go 쪽 (`handlers.go` / `refactor.go` / `completion.go` / `codeaction.go`)
+은 대부분 이 pure fn 들을 thin wrapper 로 호출하는 orchestration —
+`*ast.UseDecl` / `*resolve.Symbol` / `*check.Result` 등 **Go identity
+type** 을 소비하기 때문에 단순 포팅이 아니라 identity-model migration 이
+선행되어야 함 (#727 이 NodeID-keyed maps 로 해제했으나 LSP caller 는 아직
+전환 전). 현재 상태에서는 추가 port 가 오히려 orchestration 을
+복잡하게 만들 위험이 있어 **LSP 는 active 포팅 항목에서 제외**.
+
+다음 사이클의 작은 착륙 후보 (진입 비용 낮음):
+- completion sort 를 `labels: List<String>` → `List<Int>` 순수 index 재정렬로 완결 (`SortLSPCompletionIndexes` 를 selfhost 단일 호출로 단순화)
+- `symbolDoc` 의 AST decl → doc comment switch 를 `ast_lower.osty` 에 쌍둥이로 이관하고 Go 는 1-line delegator 로 축소
+- orchestration-layer identity 전환 (arena NodeID) 가 선행되면 `organizeImportsAction` / `completionItemFromSym` 전체 이관 검토
 
 ---
 
