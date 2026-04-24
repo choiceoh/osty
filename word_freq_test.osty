@@ -39,11 +39,15 @@ fn testTopNOrder() {
         ({"x": 1, "y": 1},         1, [("x", 1)]),
         ({:},                      3, []),
     ]
-    for (i, (input, n, expected)) in cases.enumerate() {
+    let _osty_enumerate0 = cases
+    for i in 0.._osty_enumerate0.len() {
+        let (input, n, expected) = _osty_enumerate0[i]
         testing.context("case {i}", || {
             let got = topN(input, n).map(|e| (e.word, e.count))
             testing.assertEq(got.len(), expected.len())
-            for (j, pair) in got.enumerate() {
+            let _osty_enumerate1 = got
+            for j in 0.._osty_enumerate1.len() {
+                let pair = _osty_enumerate1[j]
                 let (gotWord, gotCount) = pair
                 match expected.get(j) {
                     Some(exp) -> {

@@ -79,7 +79,7 @@ fmt:
     gofmt -w $(git ls-files '*.go')
 
 fmt-check:
-    unformatted="$$(gofmt -l $$(git ls-files '*.go'))"; if [ -n "$$unformatted" ]; then printf '%s\n' "$$unformatted"; exit 1; fi
+    unformatted="$(gofmt -l $(git ls-files '*.go'))"; if [ -n "$unformatted" ]; then printf '%s\n' "$unformatted"; exit 1; fi
 
 lsp test=".":
     go test {{test_flags}} ./internal/lsp -run '{{test}}' -v
@@ -94,7 +94,7 @@ diag test=".":
     go test {{test_flags}} ./internal/diag -run '{{test}}' -v
 
 repair-check: build
-    while IFS= read -r file; do case "$$file" in testdata/spec/negative/*) continue ;; esac; {{bin}} repair --check "$$file"; done < <(git ls-files '*.osty')
+    while IFS= read -r file; do case "$file" in testdata/spec/negative/*|internal/airepair/testdata/corpus/*.input.osty) continue ;; esac; {{bin}} repair --check "$file"; done < <(git ls-files '*.osty')
 
 ci: build
     {{bin}} ci .

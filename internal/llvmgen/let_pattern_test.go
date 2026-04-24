@@ -48,7 +48,7 @@ fn main() {
 		"extractvalue %Bucket",
 		"extractvalue %Pair",
 		"call ptr @osty_rt_list_sorted_string",
-		"call i32 (ptr, ...) @printf",
+		"call void @osty_rt_io_write",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)

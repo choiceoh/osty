@@ -71,7 +71,7 @@ fn main() {
 	for _, want := range []string{
 		"@osty_global_DEFAULT_ERROR = internal constant ptr @.str0",
 		"load ptr, ptr @osty_global_DEFAULT_ERROR",
-		"call i32 (ptr, ...) @printf(ptr @.fmt_str, ptr",
+		"call void @osty_rt_io_write",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)

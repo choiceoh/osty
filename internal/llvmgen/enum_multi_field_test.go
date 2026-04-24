@@ -36,7 +36,7 @@ func TestGenerateEnumMultiFieldFixture(t *testing.T) {
 		", 1",
 		", 2",
 		"mul i64",
-		"call i32 (ptr, ...) @printf",
+		"call void @osty_rt_io_write",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("fixture IR missing %q:\n%s", want, got)

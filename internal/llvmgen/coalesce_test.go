@@ -145,17 +145,12 @@ func TestGenerateCoalesceChainsRightAssoc(t *testing.T) {
 	}
 }
 
-// End-to-end: full compilation pipeline (parser → resolve → check →
-// ir.Lower → mir.Lower → GenerateFromMIR → fall back to
-// GenerateModule on ErrUnsupported) reaches the legacy emitter and
-// produces coalesce IR. This is the path that real `osty build`
-// takes, so the test is the definitive proof that `??` works.
-//
-// The MIR emitter currently refuses Option<String> locals with
-// LLVM000 ("unsupported local type <error>") so the backend
-// dispatcher falls back to the HIR→AST bridge automatically. The
-// fallback behavior is not under test here — what matters is that
-// *some* path produces working coalesce IR for the full pipeline.
+// End-to-end: full compilation pipeline (parser -> resolve -> check ->
+// ir.Lower -> mir.Lower -> GenerateFromMIR, with legacy fallback on
+// ErrUnsupported) produces coalesce semantics on the same path that real
+// `osty build` takes. The MIR path now handles Option<String> directly, so
+// the proof checks for the lowered tagged-option branch rather than legacy
+// `coalesce.*` labels.
 func TestGenerateCoalesceFullPipeline(t *testing.T) {
 	src := `fn resolve(name: String?) -> String {
     name ?? "anonymous"
@@ -167,7 +162,7 @@ fn main() {}
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
-		
+
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,
@@ -199,11 +194,13 @@ fn main() {}
 
 	got := string(out)
 	for _, want := range []string{
-		"define ptr @resolve(ptr %name)",
-		"coalesce.some",
-		"coalesce.none",
-		"coalesce.end",
-		"phi ptr",
+		"%Option.string = type { i64, i64 }",
+		"define ptr @resolve(%Option.string %arg0)",
+		"switch i64",
+		"i64 1, label",
+		"inttoptr i64",
+		"store ptr @.str.0",
+		"ret ptr",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("full-pipeline IR missing %q:\n%s", want, got)
