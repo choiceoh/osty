@@ -2894,6 +2894,61 @@ func TestGenerateFromMIRStringInequality(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRStringEqualityInlineLiteral — `s == "us"` where
+// one operand is a compile-time StringConst and the other is dynamic
+// must expand inline (NULL guard, ptr-eq fast path, byte-wise compare
+// with terminating NUL check) instead of calling
+// osty_rt_strings_Equal. Short literal comparisons dominate CSV / log
+// parse hot paths; the inline form saves the per-call overhead and
+// the two strlen scans the runtime performs.
+func TestGenerateFromMIRStringEqualityInlineLiteral(t *testing.T) {
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "isUS",
+				Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+				Return: ir.TBool,
+				Body: &ir.Block{
+					Result: &ir.BinaryExpr{
+						Op:    ir.BinEq,
+						Left:  &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+						Right: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "us"}}},
+						T:     ir.TBool,
+					},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/streqinline.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	if strings.Contains(got, "call i1 @osty_rt_strings_Equal") {
+		t.Fatalf("expected inline expansion, found runtime dispatch:\n%s", got)
+	}
+	// Pin the emitted shape: ptr-eq fast path, two content-byte
+	// compares against 'u'/'s' (literal "us"), a terminating NUL
+	// check at offset 2, and a bool-phi joining match/nomatch.
+	for _, want := range []string{
+		"icmp eq ptr",
+		"load i8, ptr",
+		", 117\n",                      // 'u'
+		", 115\n",                      // 's'
+		"getelementptr inbounds i8, ptr",
+		", i64 2\n",                    // offset past content
+		", 0\n",                        // NUL terminator compare
+		"phi i1 [true, %streq.match",
+		"], [false, %streq.nomatch",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in inline-expansion IR:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateFromMIRStringOrdering — String `<` / `<=` / `>` / `>=`
 // must lower to osty_rt_strings_Compare (i64 -1/0/+1) + `icmp <pred>
 // i64 result, 0`. Without this routing the MIR path would emit a raw
