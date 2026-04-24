@@ -1493,6 +1493,67 @@ func TestGenerateFromMIRMapGetMethodDestSlotFastPath(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRMapGetOr — `m.getOr(k, d) -> V` lowers to the
+// present-flag runtime call `osty_rt_map_get_<K>` plus a phi that
+// merges the loaded payload with the default operand. Guards against
+// regressing back to the Option-box path (`m.get(k) ?? d`) that went
+// through the abort-variant runtime + a GC-allocated scalar box.
+func TestGenerateFromMIRMapGetOr(t *testing.T) {
+	// fn lookup(m: Map<String, Int>, k: String, d: Int) -> Int {
+	//     m.getOr(k, d)
+	// }
+	mapT := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "lookup",
+		Return: ir.TInt,
+		Params: []*ir.Param{
+			{Name: "m", Type: mapT},
+			{Name: "k", Type: ir.TString},
+			{Name: "d", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapT},
+				Name:     "getOr",
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "k", Kind: ir.IdentParam, T: ir.TString}},
+					{Value: &ir.Ident{Name: "d", Kind: ir.IdentParam, T: ir.TInt}},
+				},
+				T: ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/map_getor.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)",
+		"call i1 @osty_rt_map_get_string(",
+		"map.getOr.hit",
+		"map.getOr.miss",
+		"map.getOr.end",
+		"phi i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	// Must NOT route through the abort variant — that's the
+	// `m.get(k)`/unwrap path, not getOr.
+	if strings.Contains(got, "osty_rt_map_get_or_abort_string") {
+		t.Fatalf("getOr regressed to abort runtime:\n%s", got)
+	}
+	// Must NOT heap-allocate a scalar Option box — the whole point
+	// of the MIR path is to keep the value on the stack.
+	if strings.Contains(got, "osty.gc.alloc_v1") {
+		t.Fatalf("getOr allocated a GC box (stack path regressed):\n%s", got)
+	}
+}
+
 func TestGenerateFromMIRSetContains(t *testing.T) {
 	setT := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TInt}, Builtin: true}
 	fn := &ir.FnDecl{
@@ -4037,6 +4098,101 @@ func TestGenerateFromMIRBytesConcat(t *testing.T) {
 	for _, want := range []string{
 		"declare ptr @osty_rt_bytes_concat(ptr, ptr)",
 		"call ptr @osty_rt_bytes_concat(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRListSlice verifies `list[a..b]` on a List<T>
+// receiver lowers through the MIR IntrinsicListSlice path to
+// `osty_rt_list_slice(ptr, i64, i64) -> ptr`. Regression guard on
+// the quicksort-unblocking lowering (Range-typed IndexExpr operand
+// previously reached the backend as `osty_rt_list_get_ptr(ptr, i64)`
+// with a Range<i64> register mismatch).
+func TestGenerateFromMIRListSlice(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "window",
+		Return: listInt,
+		Params: []*ir.Param{
+			{Name: "xs", Type: listInt},
+			{Name: "a", Type: ir.TInt},
+			{Name: "b", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Result: &ir.IndexExpr{
+				X: &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: listInt},
+				Index: &ir.RangeLit{
+					Start: &ir.Ident{Name: "a", Kind: ir.IdentParam, T: ir.TInt},
+					End:   &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TInt},
+					T:     &ir.NamedType{Name: "Range", Args: []ir.Type{ir.TInt}, Builtin: true},
+				},
+				T: listInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/list_slice.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_list_slice(ptr, i64, i64)",
+		"call ptr @osty_rt_list_slice(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	// The failure mode this guards against — a typed get helper landing
+	// here because the Range reached the generic IndexProj path.
+	if strings.Contains(got, "osty_rt_list_get_ptr") {
+		t.Fatalf("regressed to osty_rt_list_get_ptr on a range index:\n%s", got)
+	}
+}
+
+// TestGenerateFromMIRListSliceInclusive — `list[a..=b]` normalises to
+// a half-open `[a, b+1)` slice at lowering time, so the runtime call
+// still sees the element-agnostic `osty_rt_list_slice` shape.
+func TestGenerateFromMIRListSliceInclusive(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "window",
+		Return: listInt,
+		Params: []*ir.Param{
+			{Name: "xs", Type: listInt},
+			{Name: "a", Type: ir.TInt},
+			{Name: "b", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Result: &ir.IndexExpr{
+				X: &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: listInt},
+				Index: &ir.RangeLit{
+					Start:     &ir.Ident{Name: "a", Kind: ir.IdentParam, T: ir.TInt},
+					End:       &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TInt},
+					Inclusive: true,
+					T:         &ir.NamedType{Name: "Range", Args: []ir.Type{ir.TInt}, Builtin: true},
+				},
+				T: listInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/list_slice_incl.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_list_slice(ptr, i64, i64)",
+		"call ptr @osty_rt_list_slice(",
+		// +1 normalisation evidence.
+		"add i64",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)

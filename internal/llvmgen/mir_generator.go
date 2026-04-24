@@ -1274,11 +1274,11 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
 		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast,
 		mir.IntrinsicListRemoveAt, mir.IntrinsicListReverse, mir.IntrinsicListReversed,
-		mir.IntrinsicListIndexOf, mir.IntrinsicListContains:
+		mir.IntrinsicListIndexOf, mir.IntrinsicListContains, mir.IntrinsicListSlice:
 		return true
-	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapSet,
-		mir.IntrinsicMapContains, mir.IntrinsicMapLen, mir.IntrinsicMapKeys,
-		mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted:
+	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapGetOr,
+		mir.IntrinsicMapSet, mir.IntrinsicMapContains, mir.IntrinsicMapLen,
+		mir.IntrinsicMapKeys, mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted:
 		return true
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
@@ -4663,11 +4663,11 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
 		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast,
 		mir.IntrinsicListRemoveAt, mir.IntrinsicListReverse, mir.IntrinsicListReversed,
-		mir.IntrinsicListIndexOf, mir.IntrinsicListContains:
+		mir.IntrinsicListIndexOf, mir.IntrinsicListContains, mir.IntrinsicListSlice:
 		return g.emitListIntrinsic(i)
-	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapSet,
-		mir.IntrinsicMapContains, mir.IntrinsicMapLen, mir.IntrinsicMapKeys,
-		mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted:
+	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapGetOr,
+		mir.IntrinsicMapSet, mir.IntrinsicMapContains, mir.IntrinsicMapLen,
+		mir.IntrinsicMapKeys, mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted:
 		return g.emitMapIntrinsic(i)
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
@@ -5042,6 +5042,33 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: listReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicListSlice:
+		// `list[a..b]` / `list[a..=b]` — elem_size-agnostic half-open
+		// copy. Inclusive ranges are pre-normalised at lowering time
+		// so this path always sees [start, end) operands.
+		if len(i.Args) != 3 {
+			return unsupported("mir-mvp", "list_slice arity")
+		}
+		startOp := i.Args[1]
+		startReg, err := g.evalOperand(startOp, startOp.Type())
+		if err != nil {
+			return err
+		}
+		endOp := i.Args[2]
+		endReg, err := g.evalOperand(endOp, endOp.Type())
+		if err != nil {
+			return err
+		}
+		sym := listRuntimeSliceSymbol()
+		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, i64, i64)")
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{
+			{typ: "ptr", name: listReg},
+			{typ: "i64", name: startReg},
+			{typ: "i64", name: endReg},
+		})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicListRemoveAt:
@@ -5440,6 +5467,67 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		// No destination — still perform the call for its side
 		// effects (abort-on-miss).
 		g.emitMapGetOrAbort(mapReg, kReg, keyLLVM, keyString, vLLVM, "")
+		return nil
+	case mir.IntrinsicMapGetOr:
+		// `m.getOr(k, d) -> V` lowered without allocating an Option
+		// box. Uses the present-flag runtime helper
+		// `osty_rt_map_get_<suffix>(map, key, out) -> i1`: on hit the
+		// runtime memcpys into `out` and returns true, on miss it
+		// returns false and leaves `out` untouched. We branch on the
+		// flag, load the out-slot in the hit arm, evaluate `default`
+		// in the miss arm, phi-merge both into V, and store into the
+		// dest slot. This keeps the whole operation on the stack —
+		// the legacy `m.get(k) ?? d` AST path went through
+		// `emitMapGet` which allocates a scalar Option box per call.
+		if len(i.Args) != 3 {
+			return unsupported("mir-mvp", "map_getOr arity")
+		}
+		if i.Dest == nil {
+			return unsupported("mir-mvp", "map_getOr without destination")
+		}
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return unsupported("mir-mvp", "map_getOr dest into unknown local")
+		}
+		kReg, err := g.evalOperand(i.Args[1], keyT)
+		if err != nil {
+			return err
+		}
+		vLLVM := g.llvmType(valT)
+		destLLVM := g.llvmType(destLoc.Type)
+		if destLLVM != vLLVM {
+			return unsupportedf("mir-mvp", "map_getOr dest type %s does not match value type %s", destLLVM, vLLVM)
+		}
+		getSym := mapRuntimeGetSymbol(keyLLVM, keyString)
+		g.declareRuntime(getSym, "declare i1 @"+getSym+"(ptr, "+keyLLVM+", ptr)")
+		slot := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = alloca %s\n", slot, vLLVM)
+		present := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = call i1 @%s(ptr %s, %s %s, ptr %s)\n",
+			present, getSym, mapReg, keyLLVM, kReg, slot)
+		hitLabel := g.freshLabel("map.getOr.hit")
+		missLabel := g.freshLabel("map.getOr.miss")
+		endLabel := g.freshLabel("map.getOr.end")
+		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", present, hitLabel, missLabel)
+		// Hit: load payload from the out-slot the runtime filled.
+		fmt.Fprintf(&g.fnBuf, "%s:\n", hitLabel)
+		loaded := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = load %s, ptr %s\n", loaded, vLLVM, slot)
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		// Miss: evaluate the default operand. Deferred until this arm
+		// so it isn't computed on a hit path.
+		fmt.Fprintf(&g.fnBuf, "%s:\n", missLabel)
+		fallback, err := g.evalOperand(i.Args[2], destLoc.Type)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		// Join.
+		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
+		merged := g.fresh()
+		fmt.Fprintf(&g.fnBuf, "  %s = phi %s [ %s, %%%s ], [ %s, %%%s ]\n",
+			merged, vLLVM, loaded, hitLabel, fallback, missLabel)
+		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", vLLVM, merged, g.localSlots[i.Dest.Local])
 		return nil
 	case mir.IntrinsicMapSet:
 		if len(i.Args) != 3 {

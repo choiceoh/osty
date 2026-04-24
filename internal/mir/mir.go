@@ -686,6 +686,25 @@ const (
 	// get the code point in numeric context. Lowers to
 	// `zext i32 to i64`.
 	IntrinsicCharToInt
+
+	// IntrinsicListSlice returns the half-open slice `list[start..end)`
+	// as a freshly allocated List<T>. Args: [list, start, end]. Routed
+	// by the `list[a..b]` / `list[a..=b]` index-expr sugar when the
+	// base is List<T>; the runtime `osty_rt_list_slice` is
+	// element-agnostic (byte-level memcpy off the elem_size header),
+	// so a single intrinsic kind covers every T. Inclusive ranges are
+	// pre-normalised at lowering time by adding 1 to `end`.
+	IntrinsicListSlice
+
+	// IntrinsicMapGetOr implements `map.getOr(key, default) -> V`.
+	// Args: [map, key, default]. Lowers to the present-flag variant
+	// of the runtime map_get helper (`get_<suffix>` returns bool and
+	// writes the value into an out slot), branching to the default
+	// operand on miss. Present directly as an intrinsic rather than
+	// as `map.get(key) ?? default` because the existing
+	// IntrinsicMapGet path emits the abort-on-miss runtime and a `??`
+	// over it would never see the default operand.
+	IntrinsicMapGetOr
 )
 
 // StorageLiveInstr marks a local as alive. Optional; backends that do
@@ -1664,6 +1683,10 @@ func (k IntrinsicKind) String() string {
 		return "byte_to_int"
 	case IntrinsicCharToInt:
 		return "char_to_int"
+	case IntrinsicListSlice:
+		return "list_slice"
+	case IntrinsicMapGetOr:
+		return "map_get_or"
 	}
 	return "invalid"
 }

@@ -2479,9 +2479,16 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 		// at runtime with "invalid bounds". Handle the common slice
 		// shape by pulling start/end operands straight out of the
 		// RangeLit's Start/End exprs and emitting a proper intrinsic.
-		if rng, ok := x.Index.(*ir.RangeLit); ok && isStringReceiverType(x.X.Type()) {
-			if rv, handled := bs.lowerStringSliceRValue(x, rng); handled {
-				return rv
+		if rng, ok := x.Index.(*ir.RangeLit); ok {
+			switch {
+			case isStringReceiverType(x.X.Type()):
+				if rv, handled := bs.lowerStringSliceRValue(x, rng); handled {
+					return rv
+				}
+			case isListType(x.X.Type()):
+				if rv, handled := bs.lowerListSliceRValue(x, rng); handled {
+					return rv
+				}
 			}
 		}
 		recvPlace, ok := bs.lowerExprToPlace(x.X)
@@ -2561,8 +2568,10 @@ func (bs *bodyState) lowerExprToPlace(e ir.Expr) (Place, bool) {
 		// path can model that. Bail out here so callers use the RValue
 		// form instead (lowerExprAsRValue catches the string-slice
 		// pattern and emits the intrinsic directly).
-		if _, ok := x.Index.(*ir.RangeLit); ok && isStringReceiverType(x.X.Type()) {
-			return Place{}, false
+		if _, ok := x.Index.(*ir.RangeLit); ok {
+			if isStringReceiverType(x.X.Type()) || isListType(x.X.Type()) {
+				return Place{}, false
+			}
 		}
 		recv, ok := bs.lowerExprToPlace(x.X)
 		if !ok {
@@ -4017,9 +4026,15 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 		switch name {
 		case "get":
 			return IntrinsicMapGet
-		case "set":
+		case "getOr":
+			return IntrinsicMapGetOr
+		// Stdlib's Map defines `.insert(k, v)` as the canonical
+		// insert method (see collections.osty §pub struct Map). The
+		// older `.set` alias is kept so existing bench / test
+		// sources that hand-wrote `.set` still route here.
+		case "insert", "set":
 			return IntrinsicMapSet
-		case "contains":
+		case "contains", "containsKey":
 			return IntrinsicMapContains
 		case "len":
 			return IntrinsicMapLen
@@ -4243,7 +4258,7 @@ func isStringReceiverType(t ir.Type) bool {
 // mean bumping `end` by one byte which conflicts with the multi-byte
 // char boundary invariant the runtime enforces.
 func (bs *bodyState) lowerStringSliceRValue(x *ir.IndexExpr, rng *ir.RangeLit) (RValue, bool) {
-	if rng == nil || rng.Start == nil || rng.End == nil || rng.Inclusive {
+	if rng.Start == nil || rng.End == nil || rng.Inclusive {
 		return nil, false
 	}
 	recvOp := bs.lowerExprAsOperand(x.X)
@@ -4257,6 +4272,46 @@ func (bs *bodyState) lowerStringSliceRValue(x *ir.IndexExpr, rng *ir.RangeLit) (
 		SpanV: exprSpan(x),
 	})
 	return &UseRV{Op: &CopyOp{Place: Place{Local: tmp}, T: ir.TString}}, true
+}
+
+// lowerListSliceRValue emits `list[a..b]` / `list[a..=b]` as an
+// IntrinsicListSlice call, returning the RValue that reads the
+// freshly-allocated List<T>. Requires both bounds to be concrete
+// exprs; open-ended ranges are unsupported (MIR has no Range
+// first-class value). Inclusive `..=` ranges are normalised to a
+// half-open `[start, end+1)` at lowering time — unlike the String
+// path, lists have no multi-byte boundary concerns so the +1 is
+// unambiguous.
+func (bs *bodyState) lowerListSliceRValue(x *ir.IndexExpr, rng *ir.RangeLit) (RValue, bool) {
+	if rng.Start == nil || rng.End == nil {
+		return nil, false
+	}
+	recvOp := bs.lowerExprAsOperand(x.X)
+	startOp := bs.lowerExprAsOperand(rng.Start)
+	endOp := bs.lowerExprAsOperand(rng.End)
+	if rng.Inclusive {
+		endTmp := bs.freshTemp(ir.TInt, exprSpan(rng))
+		bs.emit(&AssignInstr{
+			Dest: Place{Local: endTmp},
+			Src: &BinaryRV{
+				Op:    BinAdd,
+				Left:  endOp,
+				Right: &ConstOp{Const: &IntConst{Value: 1, T: TInt}, T: TInt},
+				T:     TInt,
+			},
+			SpanV: exprSpan(rng),
+		})
+		endOp = &CopyOp{Place: Place{Local: endTmp}, T: TInt}
+	}
+	listT := x.X.Type()
+	tmp := bs.freshTemp(listT, exprSpan(x))
+	bs.emit(&IntrinsicInstr{
+		Dest:  &Place{Local: tmp},
+		Kind:  IntrinsicListSlice,
+		Args:  []Operand{recvOp, startOp, endOp},
+		SpanV: exprSpan(x),
+	})
+	return &UseRV{Op: &CopyOp{Place: Place{Local: tmp}, T: listT}}, true
 }
 
 // emitStringFreeFnIntrinsic lowers each arg in source order and
