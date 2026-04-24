@@ -1398,45 +1398,23 @@ func (g *mirGen) emitGlobalVars() {
 		if glob == nil {
 			continue
 		}
-		block.WriteByte('@')
-		block.WriteString(glob.Name)
-		block.WriteString(" = global ")
-		block.WriteString(g.llvmType(glob.Type))
-		block.WriteString(" zeroinitializer\n")
+		block.WriteString(mirLlvmGlobalVarLine(glob.Name, g.llvmType(glob.Type)))
 	}
 	block.WriteByte('\n')
 	// Ctor function: `@__osty_init_globals() { call <Ti> @_init_xxx();
 	// store <Ti> %tmp, ptr @xxx; ... ret void }`.
-	block.WriteString("define private void @__osty_init_globals() {\n")
-	block.WriteString("entry:\n")
+	block.WriteString(mirInitGlobalsCtorHeader())
 	for _, glob := range g.mod.Globals {
 		if glob == nil || glob.Init == nil {
 			continue
 		}
-		initName := glob.Init.Name
-		retLLVM := g.llvmType(glob.Type)
-		tmp := "%v" + glob.Name
-		block.WriteString("  ")
-		block.WriteString(tmp)
-		block.WriteString(" = call ")
-		block.WriteString(retLLVM)
-		block.WriteString(" @")
-		block.WriteString(initName)
-		block.WriteString("()\n")
-		block.WriteString("  store ")
-		block.WriteString(retLLVM)
-		block.WriteByte(' ')
-		block.WriteString(tmp)
-		block.WriteString(", ptr @")
-		block.WriteString(glob.Name)
-		block.WriteByte('\n')
+		block.WriteString(mirInitGlobalsCtorStoreSequence(glob.Name, g.llvmType(glob.Type), glob.Init.Name))
 	}
-	block.WriteString("  ret void\n")
-	block.WriteString("}\n\n")
+	block.WriteString(mirInitGlobalsCtorFooter())
 	// LLVM ctor registration. Priority 65535 runs last among ctors
 	// so anything with lower priority (runtime setup) has already
 	// executed.
-	block.WriteString("@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__osty_init_globals, ptr null }]\n\n")
+	block.WriteString(mirGlobalCtorsRegistration())
 
 	// Inject the block before the first `define ` / `declare ` line
 	// so the `@<name>` globals and the ctor sit alongside type defs.
@@ -1533,7 +1511,7 @@ func (g *mirGen) emitTypeDefs() {
 		// Interface fat-pointer type def must precede any `%osty.iface`
 		// use inside struct / tuple layouts. Ordering is conservative —
 		// emit once at the top of the type-def block.
-		block.WriteString("%osty.iface = type { ptr, ptr }\n")
+		block.WriteString(mirLlvmIfaceTypeDefLine())
 	}
 	for _, name := range g.structOrder {
 		sl := g.mod.Layouts.Structs[name]
@@ -1544,16 +1522,10 @@ func (g *mirGen) emitTypeDefs() {
 		for i, f := range sl.Fields {
 			parts[i] = g.llvmType(f.Type)
 		}
-		block.WriteByte('%')
-		block.WriteString(name)
-		block.WriteString(" = type { ")
-		block.WriteString(strings.Join(parts, ", "))
-		block.WriteString(" }\n")
+		block.WriteString(mirLlvmStructTypeDefLine(name, strings.Join(parts, ", ")))
 	}
 	for _, name := range g.enumLayoutOrder {
-		block.WriteByte('%')
-		block.WriteString(name)
-		block.WriteString(" = type { i64, i64 }\n")
+		block.WriteString(mirLlvmEnumLayoutTypeDefLine(name))
 	}
 	for _, name := range g.tupleOrder {
 		elems := g.tupleDefs[name]
@@ -1561,11 +1533,7 @@ func (g *mirGen) emitTypeDefs() {
 		for i, e := range elems {
 			parts[i] = g.llvmType(e)
 		}
-		block.WriteByte('%')
-		block.WriteString(name)
-		block.WriteString(" = type { ")
-		block.WriteString(strings.Join(parts, ", "))
-		block.WriteString(" }\n")
+		block.WriteString(mirLlvmStructTypeDefLine(name, strings.Join(parts, ", ")))
 	}
 	// Vtable declarations for every `@osty.vtable.<impl>__<iface>`
 	// referenced from a downcast call site. Declared as external
@@ -1574,10 +1542,7 @@ func (g *mirGen) emitTypeDefs() {
 	// only needs the symbol to exist so the `icmp eq ptr` is a legal
 	// reference.
 	for _, sym := range g.vtableRefOrder {
-		// `<sym> = external constant [0 x ptr]` — `@`-prefixed symbol
-		// already present in `sym`.
-		block.WriteString(sym)
-		block.WriteString(" = external constant [0 x ptr]\n")
+		block.WriteString(mirLlvmVtableDeclLine(sym))
 	}
 	block.WriteByte('\n')
 
@@ -2077,7 +2042,7 @@ func (g *mirGen) snapshotVectorListLocal(local mir.LocalID, elemLLVM string) {
 	scopeList := g.listAliasScopeRef()
 
 	dataSym := listRuntimeDataSymbol(elemLLVM)
-	g.declareRuntime(dataSym, "declare ptr @"+dataSym+"(ptr) nounwind willreturn memory(read)")
+	g.declareRuntime(dataSym, mirRuntimeDeclareMemoryRead("ptr", dataSym, "ptr"))
 	dataReg := g.fresh()
 	g.fnBuf.WriteString("  ")
 	g.fnBuf.WriteString(dataReg)
@@ -2091,7 +2056,7 @@ func (g *mirGen) snapshotVectorListLocal(local mir.LocalID, elemLLVM string) {
 	g.vectorListData[local] = dataReg
 
 	lenSym := listRuntimeLenSymbol()
-	g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr) nounwind willreturn memory(read)")
+	g.declareRuntime(lenSym, mirRuntimeDeclareMemoryRead("i64", lenSym, "ptr"))
 	lenReg := g.fresh()
 	g.fnBuf.WriteString("  ")
 	g.fnBuf.WriteString(lenReg)
@@ -2192,7 +2157,7 @@ func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM stri
 	// readonly lets LLVM reason across the fast/slow branch and keep
 	// the loop vectorizable even when the slow path is theoretically
 	// reachable for OOB indices.
-	g.declareRuntime(slowSym, "declare "+elemLLVM+" @"+slowSym+"(ptr, i64) nounwind willreturn memory(read)")
+	g.declareRuntime(slowSym, mirRuntimeDeclareMemoryRead(elemLLVM, slowSym, "ptr, i64"))
 	g.fnBuf.WriteString(slowLabel)
 	g.fnBuf.WriteString(":\n")
 	listReg := g.fresh()
@@ -2333,7 +2298,7 @@ func (g *mirGen) emitVectorListFastStore(local mir.LocalID, idxVal, valReg, elem
 	// as a memory writer) is what unlocks the in-loop LICM win on
 	// matmul and quicksort's partition step.
 	const oobSym = "osty_rt_list_oob_abort_v1"
-	g.declareRuntime(oobSym, "declare void @"+oobSym+"() noreturn cold nounwind")
+	g.declareRuntime(oobSym, mirRuntimeDeclareNoReturn("void", oobSym, "", true))
 	g.fnBuf.WriteString(slowLabel)
 	g.fnBuf.WriteString(":\n")
 	g.fnBuf.WriteString("  call void @")
@@ -4724,7 +4689,7 @@ func (g *mirGen) emitOptionIntrinsic(i *mir.IntrinsicInstr) error {
 		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", isNone, noneLabel, someLabel)
 		fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
 		abortSym := "osty_rt_option_unwrap_none"
-		g.declareRuntime(abortSym, "declare void @"+abortSym+"() noreturn")
+		g.declareRuntime(abortSym, mirRuntimeDeclareNoReturn("void", abortSym, "", false))
 		fmt.Fprintf(&g.fnBuf, "  call void @%s()\n", abortSym)
 		g.fnBuf.WriteString("  unreachable\n")
 		fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
@@ -4867,7 +4832,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			}
 		}
 		sym := listRuntimeLenSymbol()
-		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr) nounwind willreturn memory(read)")
+		g.declareRuntime(sym, mirRuntimeDeclareMemoryRead("i64", sym, "ptr"))
 		em := g.ostyEmitter()
 		result := llvmListLen(em, &LlvmValue{typ: "ptr", name: listReg})
 		g.flushOstyEmitter(em)
@@ -4905,7 +4870,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 				}
 			}
 			sym := listRuntimeGetSymbol(elemLLVM)
-			g.declareRuntime(sym, "declare "+elemLLVM+" @"+sym+"(ptr, i64) nounwind willreturn memory(read)")
+			g.declareRuntime(sym, mirRuntimeDeclareMemoryRead(elemLLVM, sym, "ptr, i64"))
 			em := g.ostyEmitter()
 			result := llvmListGet(em,
 				&LlvmValue{typ: "ptr", name: listReg},
@@ -4955,7 +4920,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		destLLVM := g.llvmType(destLoc.Type)
 		destSlot := g.localSlots[i.Dest.Local]
 		lenSym := listRuntimeLenSymbol()
-		g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr) nounwind willreturn memory(read)")
+		g.declareRuntime(lenSym, mirRuntimeDeclareMemoryRead("i64", lenSym, "ptr"))
 		lenReg := g.fresh()
 		fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
 		isEmpty := g.fresh()
@@ -5081,15 +5046,15 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		lenSym := listRuntimeLenSymbol()
-		g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr) nounwind willreturn memory(read)")
+		g.declareRuntime(lenSym, mirRuntimeDeclareMemoryRead("i64", lenSym, "ptr"))
 		getSym := listRuntimeGetSymbol(elemLLVM)
-		g.declareRuntime(getSym, "declare "+elemLLVM+" @"+getSym+"(ptr, i64) nounwind willreturn memory(read)")
+		g.declareRuntime(getSym, mirRuntimeDeclareMemoryRead(elemLLVM, getSym, "ptr, i64"))
 		stringEq := ""
 		if isStringLLVMType(needleOp.Type()) {
 			// String equality must go through the runtime — raw ptr
 			// compare would reject equal-content separate allocations.
 			stringEq = llvmStringRuntimeEqualSymbol()
-			g.declareRuntime(stringEq, "declare i1 @"+stringEq+"(ptr, ptr) nounwind willreturn memory(read)")
+			g.declareRuntime(stringEq, mirRuntimeDeclareMemoryRead("i1", stringEq, "ptr, ptr"))
 		}
 		lenReg := g.fresh()
 		fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
@@ -5160,13 +5125,13 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		lenSym := listRuntimeLenSymbol()
-		g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr) nounwind willreturn memory(read)")
+		g.declareRuntime(lenSym, mirRuntimeDeclareMemoryRead("i64", lenSym, "ptr"))
 		getSym := listRuntimeGetSymbol(elemLLVM)
-		g.declareRuntime(getSym, "declare "+elemLLVM+" @"+getSym+"(ptr, i64) nounwind willreturn memory(read)")
+		g.declareRuntime(getSym, mirRuntimeDeclareMemoryRead(elemLLVM, getSym, "ptr, i64"))
 		stringEq := ""
 		if isStringLLVMType(needleOp.Type()) {
 			stringEq = llvmStringRuntimeEqualSymbol()
-			g.declareRuntime(stringEq, "declare i1 @"+stringEq+"(ptr, ptr) nounwind willreturn memory(read)")
+			g.declareRuntime(stringEq, mirRuntimeDeclareMemoryRead("i1", stringEq, "ptr, ptr"))
 		}
 		lenReg := g.fresh()
 		fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
@@ -5232,7 +5197,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		destLLVM := g.llvmType(destLoc.Type)
 		destSlot := g.localSlots[i.Dest.Local]
 		lenSym := listRuntimeLenSymbol()
-		g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr) nounwind willreturn memory(read)")
+		g.declareRuntime(lenSym, mirRuntimeDeclareMemoryRead("i64", lenSym, "ptr"))
 		lenReg := g.fresh()
 		fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
 		isEmpty := g.fresh()
@@ -5271,7 +5236,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 func (g *mirGen) emitListLoadElement(listReg, idxReg string, elemLLVM string) (string, error) {
 	if listUsesTypedRuntime(elemLLVM) {
 		getSym := listRuntimeGetSymbol(elemLLVM)
-		g.declareRuntime(getSym, "declare "+elemLLVM+" @"+getSym+"(ptr, i64) nounwind willreturn memory(read)")
+		g.declareRuntime(getSym, mirRuntimeDeclareMemoryRead(elemLLVM, getSym, "ptr, i64"))
 		elemReg := g.fresh()
 		fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, idxReg)
 		return elemReg, nil
@@ -8496,9 +8461,9 @@ func (g *mirGen) emitListSafeGet(i *mir.IntrinsicInstr, listReg, idxReg, elemLLV
 	destLLVM := g.llvmType(destT)
 	destSlot := g.localSlots[i.Dest.Local]
 	lenSym := listRuntimeLenSymbol()
-	g.declareRuntime(lenSym, "declare i64 @"+lenSym+"(ptr) nounwind willreturn memory(read)")
+	g.declareRuntime(lenSym, mirRuntimeDeclareMemoryRead("i64", lenSym, "ptr"))
 	getSym := listRuntimeGetSymbol(elemLLVM)
-	g.declareRuntime(getSym, "declare "+elemLLVM+" @"+getSym+"(ptr, i64) nounwind willreturn memory(read)")
+	g.declareRuntime(getSym, mirRuntimeDeclareMemoryRead(elemLLVM, getSym, "ptr, i64"))
 	lenReg := g.fresh()
 	fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
 	nonNeg := g.fresh()

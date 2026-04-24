@@ -796,3 +796,69 @@ func mirEncodeLLVMString(s string) string {
 	}
 	return out + "\\00"
 }
+
+// Osty: toolchain/mir_generator.osty:781:5
+func mirLlvmGlobalVarLine(name string, llvmType string) string {
+	return "@" + name + " = global " + llvmType + " zeroinitializer\n"
+}
+
+// Osty: toolchain/mir_generator.osty:789:5
+func mirLlvmIfaceTypeDefLine() string {
+	return "%osty.iface = type { ptr, ptr }\n"
+}
+
+// Osty: toolchain/mir_generator.osty:796:5
+func mirLlvmStructTypeDefLine(name string, fieldsJoined string) string {
+	return "%" + name + " = type { " + fieldsJoined + " }\n"
+}
+
+// Osty: toolchain/mir_generator.osty:806:5
+func mirLlvmEnumLayoutTypeDefLine(name string) string {
+	return "%" + name + " = type { i64, i64 }\n"
+}
+
+// Osty: toolchain/mir_generator.osty:815:5
+func mirLlvmVtableDeclLine(symbol string) string {
+	return symbol + " = external constant [0 x ptr]\n"
+}
+
+// Osty: toolchain/mir_generator.osty:823:5
+func mirGlobalCtorsRegistration() string {
+	return "@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @__osty_init_globals, ptr null }]\n\n"
+}
+
+// Osty: toolchain/mir_generator.osty:831:5
+func mirInitGlobalsCtorHeader() string {
+	return "define private void @__osty_init_globals() {\nentry:\n"
+}
+
+// Osty: toolchain/mir_generator.osty:838:5
+func mirInitGlobalsCtorFooter() string {
+	return "  ret void\n}\n\n"
+}
+
+// Osty: toolchain/mir_generator.osty:848:5
+func mirInitGlobalsCtorStoreSequence(globName string, retLLVM string, initName string) string {
+	tmp := "%v" + globName
+	return "  " + tmp + " = call " + retLLVM + " @" + initName + "()\n" +
+		"  store " + retLLVM + " " + tmp + ", ptr @" + globName + "\n"
+}
+
+// Osty: toolchain/mir_generator.osty:858:5
+func mirRuntimeDeclareLine(retTy string, sym string, argList string) string {
+	return "declare " + retTy + " @" + sym + "(" + argList + ")"
+}
+
+// Osty: toolchain/mir_generator.osty:868:5
+func mirRuntimeDeclareMemoryRead(retTy string, sym string, argList string) string {
+	return "declare " + retTy + " @" + sym + "(" + argList + ") nounwind willreturn memory(read)"
+}
+
+// Osty: toolchain/mir_generator.osty:876:5
+func mirRuntimeDeclareNoReturn(retTy string, sym string, argList string, cold bool) string {
+	prefix := "declare " + retTy + " @" + sym + "(" + argList + ") noreturn"
+	if cold {
+		return prefix + " cold nounwind"
+	}
+	return prefix
+}
