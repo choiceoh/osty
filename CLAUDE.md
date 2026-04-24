@@ -36,6 +36,24 @@
 - `ERROR_CODES.md` — 진단 카탈로그 (생성물, `internal/diag/codes.go`에서 자동 생성)
 - `RUNTIME_GC.md` — 런타임/GC 구현 경로
 
+## graphify 지식 그래프
+
+`graphify-out/`에 AST + 시맨틱 병합 그래프 존재 (13.6k 노드 / 44.9k 엣지 / 159 커뮤니티). 스코프: `internal/` + `LANG_SPEC_v0.5/` + `toolchain/`. `cmd/`·`benchmarks/`·`examples/`는 미인덱스.
+
+### 언제 쓸지
+- 아키텍처/파이프라인 질문 → **먼저 `graphify-out/GRAPH_REPORT.md`** 읽고 god 노드 + 커뮤니티 구조 파악
+- 크로스 커뮤니티 관계 추적 (예: "X가 어떻게 Y와 연결되는가") → `/graphify query "..."`
+- 단일 파일/심볼 검색 → Grep이 여전히 우위
+- 코드 수정 후 → `graphify update .` (AST-only, 토큰 비용 없음)
+
+### 주요 커뮤니티 (c0–c24)
+c0 Self-host Checker+Docgen · c1 LLVM Codegen Core · c2 LLVM Toolchain Tests · c3 Self-host Runner+AI Repair · c4 GC Runtime (C) · c5 Bootstrap Go Transpiler+Formatter · c6 LSP+Query · c7 Lint+Resolve · c8 Docgen AST Lowering · c9 CST+Backend Glue · c10 MIR Patterns+Match · c11 Package Manager · c12 Monomorphization · c13 IR Core+Profile · c14 AST Annotations · c15 Resolve+Pipeline · c16 IR Stmts+Exprs · c17 Closure Lifting · c18 CI+Host Adapter · c19 Builder Derive · c20 LLVM Stdlib Shims · c21 Backend Artifacts · c22 Manifest Validation · c23 LSP Protocol · c24 Resolve Annot Tests
+
+### 한계
+- 노드 수가 5k 임계값 초과 → HTML 시각화 스킵됨. `graph.json` + 리포트로 사용
+- `.osty` 파일은 AST 추출기 미지원 (시맨틱 청크만 커버)
+- `contains()` 같은 god 노드의 INFERRED 엣지 (760+개)는 **검증 필요** — 리포트 "Edge Quality" 섹션 참조
+
 ## 파이프라인 (절대 순서)
 
 ```
