@@ -46,53 +46,55 @@ compiler path is now native-only through the LLVM backend.
 | CI quality tooling (`internal/ci`, `osty ci`) | done — Osty-authored generated CI core, signature-aware snapshots, workspace coverage, JSON reports |
 | Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, backend-aware gen, baseline diff, LSP trace, `--explain` |
 | Profiles / targets / features / cache (`internal/profile`, `osty profiles` / `targets` / `features` / `cache`) | done — built-in and manifest profiles, cross-target env, feature closure + file pragmas, backend-aware fingerprints |
-| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | executable — textual IR / object / binary through `clang` for scalar / control-flow / Bool / String (ASCII + multi-byte UTF-8), all four payload-free/single-scalar/struct/enum-payload `Result<T, E>` shapes with `?` propagation (phase 54-63 + phase 74 closed), match-as-expression and match-as-statement over bare-variant and wildcard arms, nested field assignment, `Char`/`Byte` parameter + return lowering with width/sign conversions, interface vtable dispatch with generic monomorphization, list / map / set literals and intrinsics (`isEmpty`, `pop` discard, nested `IndexExpr`, source-type tracked list literals), payload-free enum match and `Float` / String payload enums, simple struct aggregates and method calls, host `clang` driver, and categorized `LLVM00x` / `LLVM01x` Osty-authored diagnostics for source shapes that still skeletonize (currently the `String.bytes` / `String.chars` → `List<Byte>` / `List<Char>` lowering path and heterogeneous `list_mixed_ptr` literals outside the tracked-source-type path) |
+| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | executable — textual IR / object / binary through `clang` for scalar / control-flow / Bool / String (ASCII + multi-byte UTF-8), all four payload-free/single-scalar/struct/enum-payload `Result<T, E>` shapes with `?` propagation (phase 54-63 + phase 74 closed), match-as-expression and match-as-statement over bare-variant and wildcard arms, nested field assignment, `Char`/`Byte` parameter + return lowering with width/sign conversions, interface vtable dispatch with generic monomorphization, list / map / set literals and intrinsics (`isEmpty`, `pop` discard, nested `IndexExpr`, source-type tracked list literals), payload-free enum match and `Float` / String payload enums, simple struct aggregates and method calls, `String.bytes` / `String.chars` lowering, host `clang` driver, and categorized `LLVM00x` / `LLVM01x` Osty-authored diagnostics for source shapes that still skeletonize. The merged toolchain native gate is not clean yet; current first walls are tracked below. |
 | Package registry backend / `osty registry serve` | done — file-backed HTTP server for index/search/download/publish/yank, with ETag index responses and bearer-token write auth |
 | Package registry / `osty add` / `osty update` / `osty run` | done (resolve + vendor + lockfile-honoring re-resolves, ETag-cached registry index, copy fallback for symlink-less filesystems; CLI: `add`, `remove`/`rm`, `update`, `run`, `fetch`, `publish`, `search`, `info`, `yank`/`unyank`, `login`/`logout`; `--locked` / `--frozen` CI guards) |
 | Package manager (`osty add` / `osty update`, path + git + registry sources, SemVer resolver, deterministic lockfile) | wired — `add` mutates `osty.toml` and re-vendors; `update` re-resolves selectively or in full |
 | `osty run` (build + exec through backend) | wired — resolves manifest, vendors deps, emits the native entry artifact, runs the backend binary with profile/feature flags, and rejects cross-target execution |
 | `osty publish` (pack + upload tarball to a registry) | wired — deterministic gzipped tar, sha256 checksum, bearer-auth POST; `--dry-run` stops before upload |
 
-Status note (revalidated 2026-04-19): the universal LLVM CLI wedge called out
-in older status docs is closed again. A fresh hello-world
-`osty gen --backend=llvm` run exits 0 and emits `.ll`, and the four targeted
-`internal/llvmgen` regressions previously cited in
-[`docs/toolchain_llvm_status.md`](./docs/toolchain_llvm_status.md) now pass.
-Current selfhosting/toolchain tracking is therefore about remaining front-end
-and toolchain-surface gaps, not a blanket "all LLVM CLI calls panic" state.
+Status note (revalidated 2026-04-24): the universal LLVM CLI wedge called out
+in older status docs is closed. A hello-world `osty gen --backend=llvm` run is
+not the blocker anymore; current selfhosting/toolchain tracking is about two
+much narrower gaps: checked-in bootstrap output drift and the merged native
+toolchain backend gate.
 
-Code-level re-audit on the same date narrows that further: the tree is not yet
-"fully self-hosted" end-to-end. `internal/check` still prefers a managed
-external `osty-native-checker` binary under `.osty/toolchain/<tool-version>/`
-and falls back to the embedded selfhost bridge when that executable is
-unavailable, and `go generate ./internal/selfhost` still depends on the
-developer-only bootstrap transpiler stack (`internal/bootstrap/gen` via
-the in-process `internal/bootstrap/seedgen` wrapper, plus
-`runtime.golegacy.astbridge`) to refresh `internal/selfhost/generated.go`.
-The whole-toolchain LLVM probe still first-walls on the bootstrap-only
-`runtime.golegacy.astbridge` bridge. The native-only **AST** merged
-probe (`TestProbeNativeToolchainMerged`, with bootstrap-only files
-skipped) is informational only — its former authoritative gate
-`TestNativeToolchainMergedIsClean` was retired on 2026-04-22 because it
-measured the legacy HIR→AST bridge surface that the MIR-first real
-backend is replacing. The real self-host measurement is the **MIR**
-merged probe (`TestProbeNativeToolchainMergedMIR`), which runs the full
-`parse → resolve → check → ir.Lower → Monomorphize → mir.Lower →
-GenerateFromMIR` pipeline. The last AST-path wall before retirement
-(`LLVM015 [method_call_field]` on `buf.clear()` in ty.osty's
-generic-arg splitter) was closed by wiring `List<T>.clear()` through a
-new `osty_rt_list_clear` runtime helper. The earlier `Char` parameter
-lowering (`lspUtf16UnitsForChar`), `list_mixed_ptr`, non-ASCII string
-literal, match-as-statement, nested-field assignment, and
-`String.bytes()` / `String.chars()` intrinsic walls are all closed:
-`String.chars()` / `String.bytes()` dispatch at
-`internal/llvmgen/expr.go` to `osty_rt_strings_Chars` /
-`osty_rt_strings_Bytes` (full UTF-8 coverage including maximal-subpart
-recovery on ill-formed input), tagging the result list element width
-(`i32` / `i8`) so downstream iteration takes the `_bytes_v1` ABI. `Result<T, E>` `?` propagation is wired; collection literals and a
-substantial slice of collection methods lower; MIR capturing-closure env
-emission has landed with tests — so the remaining work is a narrow
-runtime/backend parity queue rather than a single missing subsystem.
+Code-level re-audit on 2026-04-24: the tree is not yet "fully self-hosted"
+end-to-end, but the front-end CLI path is ahead of several older documents.
+`osty check`, `osty typecheck`, and `osty resolve` now run the self-host arena
+path by default, and the Go-hosted `--legacy` check/typecheck escape hatch has
+been removed. `--native` is still accepted only as a backwards-compatible no-op.
+`internal/check` defaults to the embedded selfhost checker in-process; setting
+`OSTY_NATIVE_CHECKER_BIN` opts into the external JSON checker boundary.
+
+The front-end astbridge-free guards currently pass for the CLI and the
+selfhost adapters (`TestRun{Resolve,Check,Typecheck}*AstbridgeFree`,
+`TestCheckCLIDefaultPathExitsZero`, and the selfhost
+`Check*Structured*AstbridgeFree` tests). `just front` and `just verify-selfhost`
+also pass in the same audit.
+
+The two red lights are explicit:
+
+- `TestGoGenerateSelfhostLeavesGeneratedArtifactsClean` fails because
+  `go generate ./internal/selfhost` would change
+  `internal/selfhost/generated.go`: `toolchain/check.osty` now registers
+  extra `std.strings` aliases such as `Contains`, `Index`, and `HasPrefix`
+  that the checked-in generated file does not yet contain.
+- `TestNativeToolchainMergedMIRPipelineIsClean` fails. The info-only
+  AST probes (`TestProbeWholeToolchainMerged` and
+  `TestProbeNativeToolchainMerged`, with `ci.osty` skipped in the latter)
+  both first-wall on `LLVM011 type-system: struct "CheckFnSig" field
+  "hasReceiver" has a default value`. The MIR probe reaches
+  `GenerateFromMIR` with zero checker diagnostics and first-walls on
+  `LLVM000 unsupported-source: indirect call on non-function type
+  SelfDocDecl`; the production-style fallback then hits the same
+  `CheckFnSig.hasReceiver` default-value wall. `TestNativeToolchainMergedMIRErrTypeFloor`
+  passes with ErrType count 0, so the current blocker is backend/runtime
+  coverage, not checker ErrType leakage.
+
+Earlier walls for `Char` / `Byte` lowering, `list_mixed_ptr`, non-ASCII string
+literals, match-as-statement, nested-field assignment, `List<T>.clear()`, and
+`String.bytes()` / `String.chars()` are closed.
 
 The front-end (lex → parse → resolve → type-check) is **coverage-complete
 for the v0.4 core**: spec blocks parse, package/workspace resolution is
@@ -413,9 +415,9 @@ newline-separated `else`.
   String / List / Map / Set / GC / scheduler / channel ABIs.
   Unsupported shapes still prepare skeleton artifacts and report
   `LLVM00x` / `LLVM01x` diagnostics authored by the toolchain backend
-  policy — the current first-walls are `String.bytes` / `String.chars`
-  → `List<Byte>` / `List<Char>` lowering and heterogeneous
-  `list_mixed_ptr` literals outside the tracked source-type path)
+  policy. The merged native toolchain first-walls are currently
+  `CheckFnSig.hasReceiver` default-field lowering on the AST path and
+  `SelfDocDecl` indirect-call lowering on the MIR path)
 - `--emit MODE` — requested text artifact. `llvm-ir` emits LLVM IR.
 
 `pipeline --gen` accepts the same source-artifact backend selection:
