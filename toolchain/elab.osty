@@ -1424,6 +1424,13 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
     elabReportUnresolvedGenerics(cx, inst.solver, sig, inst.freshs, node.start, node.end)
     instCheckBounds(cx, inst, sig.genericBounds, node.start, node.end)
 
+    // §8.1 G13 / E0743: if monomorphization binds a capability type
+    // into the return shape (e.g. `taskGroup<T>` with T = Handle<_>,
+    // or `f<T>(x: T) -> T` with T = Group), flag the call site. The
+    // spec-sanctioned producer `spawn` is exempt — it is *how* you
+    // obtain `Handle<_>` in the first place.
+    elabCheckCallReturnEscape(cx, sig.owner, sig.name, retTy, node.start, node.end)
+
     // Record instantiation for the bridge summary.
     let typeArgsConcrete = instConcreteArgs(cx, inst)
     if checkIntListLenHelper(typeArgsConcrete) > 0 {
@@ -1432,6 +1439,38 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
 
     let coreCallNode = coreCall(cx.core, coreFn, coreArgs, typeArgsConcrete, retTy, node.start, node.end)
     ElabResult { node: coreCallNode, ty: retTy }
+}
+
+/// elabCheckCallReturnEscape emits E0743 when a generic call's
+/// substituted return type carries `Handle<_>` / `Group` / `TaskGroup`.
+/// `Group.spawn`, `thread.spawn`, and the prelude `spawn` are the
+/// sanctioned producers — skip them so the canonical `g.spawn(|| ...)`
+/// pattern stays legal.
+fn elabCheckCallReturnEscape(
+    cx: ElabCx,
+    ownerName: String,
+    methodName: String,
+    retTy: Int,
+    start: Int,
+    end: Int,
+) {
+    if methodName == "spawn" {
+        return
+    }
+    if tyEscapingCapabilityHead(cx.env.tys, retTy) == "" {
+        return
+    }
+    let context = if ownerName == "" {
+        "call to `{methodName}`"
+    } else {
+        "call to `{ownerName}.{methodName}`"
+    }
+    cx.env.diagnostics.push(diagNonEscapingEscape(
+        tyToString(cx.env.tys, retTy),
+        context,
+        start,
+        end,
+    ))
 }
 
 /// elabInferVariantCall handles payload-ful variant constructors
@@ -2058,6 +2097,9 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     let retTy = elabWrapOptionalChain(cx, isOptionalChain, instZonk(cx, inst, retSubstituted))
     elabReportUnresolvedGenerics(cx, inst.solver, sig, inst.freshs, callNode.start, callNode.end)
     instCheckBounds(cx, inst, sig.genericBounds, callNode.start, callNode.end)
+
+    // §8.1 G13 / E0743: method-call monomorphization escape check.
+    elabCheckCallReturnEscape(cx, ownerName, sig.name, retTy, callNode.start, callNode.end)
 
     let typeArgsConcrete = instConcreteArgs(cx, inst)
     if checkIntListLenHelper(typeArgsConcrete) > 0 {

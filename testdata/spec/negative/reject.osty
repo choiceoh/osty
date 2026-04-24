@@ -279,6 +279,37 @@ fn label_shadow() {
 }
 // === END
 
+// === CASE: E0743 === Handle<T> escapes via function return type
+use std.thread
+fn makeHandle() -> Handle<Int> {
+    todo()
+}
+// === END
+
+// === CASE: E0743 === Handle<T> inside struct field type
+use std.thread
+pub struct Pool {
+    pub h: Handle<Int>,
+}
+// === END
+
+// === CASE: E0743 === Handle<T> inside enum variant payload
+use std.thread
+pub enum Box { Wrap(Handle<Int>) }
+// === END
+
+// === CASE: E0743 === type alias for Handle<T>
+use std.thread
+type H = Handle<Int>
+// === END
+
+// === CASE: E0743 === Handle<T> as channel payload (call-site monomorph)
+use std.thread
+fn ch() {
+    let _c = thread.chan::<Handle<Int>>(0)
+}
+// === END
+
 // === CASE: E0004 === unterminated block comment (MUST remain last — the
 // unclosed /* is intentional and swallows every byte to EOF).
 /* never closes
