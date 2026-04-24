@@ -71,17 +71,23 @@ pub fn inspectSource(source: String) -> List<InspectRecord> {
 /// AST-less entry. Convenient for callers that don't have the parser
 /// arena on hand (e.g. pure test fixtures). Pattern bindings from local
 /// `let` statements get the generic `BIND` rule in this path — use
-/// `inspectFromAstAndCheck` to get them promoted to `LET`.
+/// `inspectFromAstAndCheck` to get them promoted to `LET`. Hints are
+/// always empty on this path since there's no arena to scan.
 pub fn inspectFromCheckResult(checked: FrontCheckResult) -> List<InspectRecord> {
-    inspectBuildRecords(checked, astLetPatternSet(emptyAstFile()))
+    inspectBuildRecords(checked, astLetPatternSet(emptyAstFile()), [])
 }
 
-/// AST-aware entry. Uses the parser arena to promote binding records
-/// whose node sits at the top of a local `let` statement from the
-/// generic `BIND` rule up to `LET`, matching the Go reference's
-/// treatment of `LetStmt`.
+/// AST-aware entry. Uses the parser arena to:
+///   - promote binding records from `BIND` to `LET` for let-pattern
+///     idents (see `astLetPatternSet`),
+///   - populate `hintName` on expression records by looking at the
+///     parent's recorded type (via `inspectBuildHintsByNode`). Covers
+///     the List / Tuple / Call shapes today; nested chains (Block,
+///     If, Paren, Closure) are deferred to a follow-up walker slice.
 pub fn inspectFromAstAndCheck(file: AstFile, checked: FrontCheckResult) -> List<InspectRecord> {
-    inspectBuildRecords(checked, astLetPatternSet(file))
+    let hints = inspectBuildHintsByNode(file.arena, checked)
+    inspectThreadHintsThroughContainers(file.arena, checked, hints)
+    inspectBuildRecords(checked, astLetPatternSet(file), hints)
 }
 
 fn emptyAstFile() -> AstFile {
@@ -173,9 +179,314 @@ fn inspectIsLetPatternIdx(letPatterns: List<Int>, nodeIdx: Int) -> Bool {
     false
 }
 
+fn inspectHintForNode(hintsByNode: List<String>, nodeIdx: Int) -> String {
+    if nodeIdx < 0 || nodeIdx >= hintsByNode.len() {
+        return ""
+    }
+    hintsByNode[nodeIdx]
+}
+
+/// Build a dense NodeID-indexed hint table by scanning the arena for
+/// nodes whose recorded type (in `FrontCheckResult.typedNodes`) lets us
+/// derive hints for their children:
+///
+///   - `List<T>` → every child element gets hint `T`
+///   - `(T1, T2, ...)` (tuple) → each child gets its positional type
+///   - `Map<K, V>` → each entry's key child gets `K`, value child gets `V`
+///   - `CallExpr` → each arg gets its positional param type from the
+///     callee's recorded `fn(Ps) -> R` type
+///
+/// Nested / identity-like parents (Block, If, Paren, Closure) and
+/// hints from declared annotations (LetStmt / FnDecl return type) are
+/// deferred to a later walker slice that threads hints top-down through
+/// the AST rather than looking only at direct parents.
+fn inspectBuildHintsByNode(arena: AstArena, checked: FrontCheckResult) -> List<String> {
+    let n = arena.nodes.len()
+    let mut hints: List<String> = []
+    for _ in 0..n {
+        hints.push("")
+    }
+    if n == 0 {
+        return hints
+    }
+    let typeByNode = inspectTypeNameByNode(arena, checked)
+    for i in 0..n {
+        let parent = arena.nodes[i]
+        let parentType = typeByNode[i]
+        if parentType == "" {
+            continue
+        }
+        if parent.kind == AstNList {
+            inspectSpreadListHints(hints, parent, parentType, n)
+        } else if parent.kind == AstNTuple {
+            inspectSpreadTupleHints(hints, parent, parentType, n)
+        } else if parent.kind == AstNMap {
+            inspectSpreadMapHints(hints, arena, parent, parentType, n)
+        } else if parent.kind == AstNCall {
+            inspectSpreadCallHints(hints, parent, typeByNode, n)
+        }
+    }
+    hints
+}
+
+fn inspectTypeNameByNode(arena: AstArena, checked: FrontCheckResult) -> List<String> {
+    let n = arena.nodes.len()
+    let mut out: List<String> = []
+    for _ in 0..n {
+        out.push("")
+    }
+    for tn in checked.typedNodes {
+        if tn.node >= 0 && tn.node < n {
+            out[tn.node] = tn.typeName
+        }
+    }
+    out
+}
+
+fn inspectSpreadListHints(hints: List<String>, parent: AstNode, parentType: String, n: Int) {
+    let h = hintListElem(parentType)
+    if h == "" {
+        return
+    }
+    for childIdx in parent.children {
+        if childIdx >= 0 && childIdx < n {
+            hints[childIdx] = h
+        }
+    }
+}
+
+fn inspectSpreadTupleHints(hints: List<String>, parent: AstNode, parentType: String, n: Int) {
+    let arity = parent.children.len()
+    let elems = hintTupleElems(parentType, arity)
+    if elems.len() != arity {
+        return
+    }
+    let mut k = 0
+    for childIdx in parent.children {
+        if childIdx >= 0 && childIdx < n && k < elems.len() {
+            hints[childIdx] = elems[k]
+        }
+        k = k + 1
+    }
+}
+
+fn inspectSpreadMapHints(
+    hints: List<String>,
+    arena: AstArena,
+    parent: AstNode,
+    parentType: String,
+    n: Int,
+) {
+    let entry = hintMapEntries(parentType)
+    if entry.key == "" && entry.value == "" {
+        return
+    }
+    // Each child of AstNMap is an entry pair; entry.left = key idx, entry.right = value idx.
+    for entryIdx in parent.children {
+        if entryIdx < 0 || entryIdx >= n {
+            continue
+        }
+        let entryNode = arena.nodes[entryIdx]
+        let keyIdx = entryNode.left
+        let valIdx = entryNode.right
+        if keyIdx >= 0 && keyIdx < n && entry.key != "" {
+            hints[keyIdx] = entry.key
+        }
+        if valIdx >= 0 && valIdx < n && entry.value != "" {
+            hints[valIdx] = entry.value
+        }
+    }
+}
+
+fn inspectSpreadCallHints(
+    hints: List<String>,
+    parent: AstNode,
+    typeByNode: List<String>,
+    n: Int,
+) {
+    let calleeIdx = parent.left
+    if calleeIdx < 0 || calleeIdx >= n {
+        return
+    }
+    let calleeType = typeByNode[calleeIdx]
+    if calleeType == "" {
+        return
+    }
+    let sig = hintFnSignature(calleeType)
+    if !sig.ok {
+        return
+    }
+    let mut k = 0
+    for argIdx in parent.children {
+        if argIdx >= 0 && argIdx < n && k < sig.params.len() {
+            hints[argIdx] = sig.params[k]
+        }
+        k = k + 1
+    }
+}
+
+/// Thread hints top-down through identity-like / nested parent nodes
+/// (Block tail, If arm, Paren inner, Closure body, Match arm body)
+/// starting from two seed sources the self-host checker makes available:
+///
+///   1. **Function signatures** (`symbols[*]` with `kind == "fn"`):
+///      the declared return type (unwrapped from `fn(Ps) -> R`) flows
+///      into the fn body block, then down through Block tails / If arms
+///      / Paren inners / Closure bodies to their leaf expressions.
+///
+///   2. **Let values** — top-level via `symbols[*]` with `kind == "let"`
+///      (typeName = declared type), and local lets via the
+///      `AstNLet.left` pattern's matching binding record (typeName =
+///      inferred binding type, which equals the annotation when one was
+///      written). The hint flows into `letNode.right` (the value
+///      expression).
+///
+/// v1.9's direct-parent-type pass (List / Tuple / Map / Call) already
+/// populated hints for positional children. v1.10 extends that by
+/// chaining through containers that preserve their parent's expected
+/// type, so hints reach leaves inside nested expressions like
+/// `let x: Int = if cond { (42) } else { -1 }`.
+///
+/// Structural hints from v1.9 take priority — `inspectThreadHint`
+/// only writes into slots that are still "". A pre-existing hint
+/// (e.g. from a List parent) wins over the chained outer hint.
+fn inspectThreadHintsThroughContainers(
+    arena: AstArena,
+    checked: FrontCheckResult,
+    hints: List<String>,
+) {
+    let n = arena.nodes.len()
+    if n == 0 {
+        return
+    }
+    let bindingTypeByPattern = inspectBindingTypeByPattern(checked)
+
+    for sym in checked.symbols {
+        if sym.node < 0 || sym.node >= n {
+            continue
+        }
+        let declNode = arena.nodes[sym.node]
+        if sym.kind == "fn" {
+            let sig = hintFnSignature(sym.typeName)
+            if !sig.ok || sig.returnType == "" {
+                continue
+            }
+            if declNode.kind == AstNFnDecl && declNode.right >= 0 {
+                inspectThreadHint(arena, declNode.right, sig.returnType, hints)
+            }
+        } else if sym.kind == "let" {
+            if sym.typeName == "" {
+                continue
+            }
+            if (declNode.kind == AstNLet || declNode.kind == AstNLetDecl) && declNode.right >= 0 {
+                inspectThreadHint(arena, declNode.right, sym.typeName, hints)
+            }
+        }
+    }
+
+    // Seed local lets by matching AstNLet nodes to binding records via
+    // the pattern index. Top-level lets are handled above and re-seeded
+    // here idempotently (the inner walker is "" guarded).
+    for i in 0..n {
+        let letNode = arena.nodes[i]
+        if letNode.kind != AstNLet {
+            continue
+        }
+        if letNode.right < 0 {
+            continue
+        }
+        let hint = inspectLookupBindingType(bindingTypeByPattern, letNode.left)
+        if hint == "" {
+            continue
+        }
+        inspectThreadHint(arena, letNode.right, hint, hints)
+    }
+}
+
+fn inspectBindingTypeByPattern(checked: FrontCheckResult) -> List<InspectBindingEntry> {
+    let mut out: List<InspectBindingEntry> = []
+    for bnd in checked.bindings {
+        out.push(InspectBindingEntry { node: bnd.node, typeName: bnd.typeName })
+    }
+    out
+}
+
+fn inspectLookupBindingType(entries: List<InspectBindingEntry>, patternIdx: Int) -> String {
+    if patternIdx < 0 {
+        return ""
+    }
+    for e in entries {
+        if e.node == patternIdx {
+            return e.typeName
+        }
+    }
+    ""
+}
+
+/// Recursively thread `hint` through container-style nodes, stopping at
+/// the first non-container or when the target slot is already occupied
+/// by a higher-priority hint (set by v1.9's direct-parent pass).
+fn inspectThreadHint(arena: AstArena, idx: Int, hint: String, hints: List<String>) {
+    let n = arena.nodes.len()
+    if idx < 0 || idx >= n {
+        return
+    }
+    if hint == "" {
+        return
+    }
+    if hints[idx] == "" {
+        hints[idx] = hint
+    }
+    let node = arena.nodes[idx]
+    if node.kind == AstNBlock {
+        let childCount = node.children.len()
+        if childCount == 0 {
+            return
+        }
+        let tailStmtIdx = node.children[childCount - 1]
+        if tailStmtIdx < 0 || tailStmtIdx >= n {
+            return
+        }
+        let tailStmt = arena.nodes[tailStmtIdx]
+        let tailExpr = if tailStmt.kind == AstNExprStmt { tailStmt.left } else { tailStmtIdx }
+        inspectThreadHint(arena, tailExpr, hint, hints)
+    } else if node.kind == AstNIf {
+        inspectThreadHint(arena, node.right, hint, hints)
+        let elseIdx = if node.children.len() > 0 { node.children[0] } else { -1 }
+        if elseIdx >= 0 {
+            inspectThreadHint(arena, elseIdx, hint, hints)
+        }
+    } else if node.kind == AstNParen {
+        inspectThreadHint(arena, node.left, hint, hints)
+    } else if node.kind == AstNClosure {
+        let sig = hintFnSignature(hint)
+        if sig.ok && sig.returnType != "" {
+            inspectThreadHint(arena, node.left, sig.returnType, hints)
+        }
+    } else if node.kind == AstNMatch {
+        // Each arm's body is evaluated against the outer expected type.
+        // Scrutinee (node.left) stays in synth mode — don't thread.
+        for armIdx in node.children {
+            if armIdx < 0 || armIdx >= n {
+                continue
+            }
+            let armNode = arena.nodes[armIdx]
+            if armNode.kind == AstNMatchArm && armNode.right >= 0 {
+                inspectThreadHint(arena, armNode.right, hint, hints)
+            }
+        }
+    }
+}
+
+struct InspectBindingEntry {
+    node: Int,
+    typeName: String,
+}
+
 fn inspectBuildRecords(
     checked: FrontCheckResult,
     letPatterns: List<Int>,
+    hintsByNode: List<String>,
 ) -> List<InspectRecord> {
     let mut out: List<InspectRecord> = []
     for tn in checked.typedNodes {
@@ -183,13 +494,14 @@ fn inspectBuildRecords(
         if rule == "" {
             continue
         }
+        let hint = inspectHintForNode(hintsByNode, tn.node)
         out.push(InspectRecord {
             start: tn.start,
             end: tn.end,
             nodeKind: tn.kind,
             rule,
             typeName: tn.typeName,
-            hintName: "",
+            hintName: hint,
             notes: [],
         })
     }
