@@ -22,10 +22,18 @@ type checkCacheEntry struct {
 }
 
 // stdlibCheckResult returns the check.Result for a stdlib module, lazily
-// running check.File the first time it is requested. Returns nil when
-// the module or its parsed file is absent — the caller passes that nil
-// straight through to ir.LowerFnDecl, which degrades to ErrTypeVal the
-// same way it does for any missing checker output.
+// running the selfhost checker the first time it is requested. Returns
+// nil when the module or its parsed file is absent — the caller passes
+// that nil straight through to ir.LowerFnDecl, which degrades to
+// ErrTypeVal the same way it does for any missing checker output.
+//
+// Uses check.SelfhostFile instead of check.File so stdlib compilation
+// skips the AST-level builder-desugar pass: stdlib sources are first-
+// party and don't exercise the user-facing `.builder()` / `.build()`
+// auto-derive chains that desugar targets. Shaves a linear walk per
+// module off the cold path; more importantly, makes the stdlib side of
+// the Phase 1c.4 migration the first production site to bypass the
+// check.File "everything" wrapper.
 //
 // Concurrency: sync.Once guarantees at-most-once checker invocation per
 // module even if multiple PrepareEntry calls race.
@@ -48,12 +56,12 @@ func stdlibCheckResult(reg *stdlib.Registry, module string) *check.Result {
 			TypeRefIdents: pf.TypeRefIdents,
 			FileScope:     pf.FileScope,
 		}
-		// Source bytes are required — the native checker boundary reads
-		// them to drive its parse + type inference pipeline. Without
-		// them it returns a "checker unavailable" diagnostic and leaves
-		// Types empty. Stdlib modules self-reference other stdlib modules
+		// Source bytes are required — the selfhost checker reads them
+		// to drive its parse + type inference pipeline. Without them it
+		// returns a "checker unavailable" diagnostic and leaves Types
+		// empty. Stdlib modules self-reference other stdlib modules
 		// (`use std.*`), so the registry itself supplies the provider.
-		entry.result = check.File(mod.File, rr, check.Opts{
+		entry.result = check.SelfhostFile(mod.File, rr, check.Opts{
 			Source: mod.Source,
 			Stdlib: reg,
 		})

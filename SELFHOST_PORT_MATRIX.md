@@ -69,14 +69,17 @@ compat 로 수락된다 (no-op).
       `internal/airepair/airepair.go:461`, `internal/bootstrap/seedgen/seedgen.go`,
       `internal/ir/lower_test.go`, `internal/ir/runtime_annot_propagation_test.go`
       등에서도 쓰임 — 의도적 Go baseline, migration 대상 아님.
-    - **구조적 의존 (4)**: `internal/lsp/server.go:709` (analyzeSingleFile —
+    - **구조적 의존 (3 남음)**: `internal/lsp/server.go:709` (analyzeSingleFile —
       코드 주석이 "legacy eager analysis path — retained"),
-      `internal/backend/stdlib_check.go:56` (stdlib per-module 캐시,
-      `*check.Result` 전체 구조 반환), `internal/airepair/airepair.go:322`
+      `internal/airepair/airepair.go:322`
       (`probe` — `ProbeStats` 가 `{Parse,Resolve,Check}.Errors` 단계별 카운트
       요구. `selfhost.CheckFromSource` 는 resolve+check 통합),
       `internal/airepair/semantic.go:401` (`validLengthFieldOffsets` →
       `semanticExprType(fe.X, res, chk)` Go-side 구조 type lookup).
+    - **2026-04-24 이전됨**: `internal/backend/stdlib_check.go:56` 는
+      `check.SelfhostFile` 신규 엔트리로 swap. check.File 의 AST-레벨 builder
+      desugar / decl-pass 기록 생략 — stdlib 은 first-party 소스라 사용자
+      auto-derive chain 이 없음. 1c.4 에서 첫 production swap.
   - **의미**: "모든 call site 통일" 은 실제로는 4 개 구조적 의존 사이트 각각
     별도 리팩터가 필요. Single-PR 은 불가능. 각 사이트마다 adapter/schema 변경
     동반 예상.

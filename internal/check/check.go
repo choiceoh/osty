@@ -168,6 +168,28 @@ func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	return result
 }
 
+// SelfhostFile drives the selfhost checker directly on a single resolved
+// source file, skipping the builder-desugar and decl-pass-record steps
+// that File performs. Intended for callers that know their input has no
+// builder-style auto-derive call chains (e.g. the stdlib module checker
+// in internal/backend/stdlib_check.go, where stdlib sources are
+// internal and don't exercise the user-facing builder auto-derive).
+//
+// Phase 1c.4 scaffolding: this is the first call-site swap away from
+// check.File as the "everything" entry point. Eventually check.File
+// and this helper become two variants of a single entry that the
+// caller picks based on whether they need the AST-level builder pass.
+// When 1c.4 is complete and builder desugar has moved into the HIR
+// lowerer, File's desugar step goes away entirely and SelfhostFile
+// becomes the only path.
+func SelfhostFile(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
+	opt := firstOpt(opts)
+	result := newResult()
+	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib, opt.Privileged)
+	diag.StampFile(result.Diags, opt.Path)
+	return result
+}
+
 // Package runs type checking across every file in a resolver Package
 // when a native checker boundary is available. Otherwise it returns an
 // unavailability diagnostic.
