@@ -163,6 +163,39 @@ pub fn mirIsStringPrimTypeText(typeText: String) -> Bool {
     typeText == "String"
 }
 
+/// mirIsStringOrderingSymbol reports whether the given operator symbol
+/// (the `mir.BinaryOp.String()` form — `"<"` / `"<="` / `">"` / `">="`)
+/// names one of the ordering comparisons that routes through
+/// `osty_rt_strings_Compare` when the operand type is `String`. Mirrors
+/// `isStringOrderingBinOp` in `internal/llvmgen/mir_generator.go`; the
+/// Go wrapper forwards `op.String()` so we keep the symbol-matching as a
+/// single source of truth here.
+pub fn mirIsStringOrderingSymbol(symbol: String) -> Bool {
+    symbol == "<" || symbol == "<=" || symbol == ">" || symbol == ">="
+}
+
+/// mirStringOrderingPredicate maps the operator symbol form of a MIR
+/// ordering binop (`"<"` / `"<="` / `">"` / `">="`) to the corresponding
+/// signed-integer LLVM icmp predicate (`"slt"` / `"sle"` / `"sgt"` /
+/// `"sge"`). Any other symbol returns `""` — callers that guard with
+/// `mirIsStringOrderingSymbol` first will never see the empty branch.
+/// Mirrors `stringOrderingPredicate` in `internal/llvmgen/mir_generator.go`.
+pub fn mirStringOrderingPredicate(symbol: String) -> String {
+    if symbol == "<" {
+        return "slt"
+    }
+    if symbol == "<=" {
+        return "sle"
+    }
+    if symbol == ">" {
+        return "sgt"
+    }
+    if symbol == ">=" {
+        return "sge"
+    }
+    ""
+}
+
 /// mirIsUnitTypeText reports whether the hir-style type text names the
 /// `Unit` / `()` / `Never` "no-value" types. Mirrors `isUnitType` in
 /// `internal/llvmgen/mir_generator.go` but operates on the textual
@@ -183,6 +216,29 @@ pub fn mirIsUnitTypeText(typeText: String) -> Bool {
 pub fn mirIsFloatTypeText(typeText: String) -> Bool {
     typeText == "Float" || typeText == "Float32" || typeText == "Float64" ||
         typeText == "double" || typeText == "float"
+}
+
+/// mirIsScalarLLVMType reports whether the given LLVM type name refers
+/// to a single-register scalar (`i1` / `i8` / `i16` / `i32` / `i64` /
+/// `float` / `double` / `ptr`). Mirrors `isScalarLLVMType` in
+/// `internal/llvmgen/mir_generator.go`. Used by the inline-asm shim to
+/// gate the `=r,0` tie constraint — composite types (structs, arrays)
+/// must return false so the emitter falls back to the safe path.
+pub fn mirIsScalarLLVMType(t: String) -> Bool {
+    t == "i1" || t == "i8" || t == "i16" || t == "i32" || t == "i64" ||
+        t == "float" || t == "double" || t == "ptr"
+}
+
+/// mirLlvmI1Text renders a Bool as its LLVM `i1` literal form —
+/// `"true"` or `"false"`. Mirrors `llvmStdIoI1Text` in
+/// `internal/llvmgen/mir_generator.go`. Extracted as a pure helper so
+/// callers that assemble `i1` operands (std.io writes, option disc
+/// stores, etc.) share the same stringification.
+pub fn mirLlvmI1Text(v: Bool) -> String {
+    if v {
+        return "true"
+    }
+    "false"
 }
 
 /// mirFirstNonEmpty returns the first non-empty entry in `vals`, or the

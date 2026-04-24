@@ -29,7 +29,7 @@ var (
 	mirGenContainsRE        = regexp.MustCompile("(?s)// Osty: .*\\nfunc ostyStringsContains\\(s string, substr string\\) bool \\{\\n\\treturn llvmStrings\\.Contains\\(s, substr\\)\\n\\}\\n\\n")
 	mirGenPrefixRE          = regexp.MustCompile("(?s)// Osty: .*\\nfunc ostyStringsHasPrefix\\(s string, prefix string\\) bool \\{\\n\\treturn llvmStrings\\.HasPrefix\\(s, prefix\\)\\n\\}\\n\\n")
 	mirGenSuffixRE          = regexp.MustCompile("(?s)// Osty: .*\\nfunc ostyStringsHasSuffix\\(s string, suffix string\\) bool \\{\\n\\treturn llvmStrings\\.HasSuffix\\(s, suffix\\)\\n\\}\\n\\n")
-	mirGenMergedCommentRE   = regexp.MustCompile(`// Osty: .*?/merged\.osty:(\d+):(\d+)`)
+	mirGenMergedCommentRE   = regexp.MustCompile(`// Osty: .*?[\\/]merged\.osty:(\d+):(\d+)`)
 )
 
 func main() {

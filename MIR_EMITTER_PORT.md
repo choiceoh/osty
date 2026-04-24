@@ -57,11 +57,11 @@ untouched.
 | 8 | concurrency intrinsics | 6762–7472 | ~20 | MEDIUM | Go-only |
 | 9 | terminators | 7473–7595 | ~5 | LOW | Go-only |
 | 10 | rvalue / operand | 7596–8937 | ~25 | HIGH | Go-only |
-| 11 | operators | 8938–9196 | ~12 | LOW | Partial — `isHeapEqualityType`, `isStringPrimType` ported |
+| 11 | operators | 8938–9196 | ~12 | LOW | Partial — `isHeapEqualityType`, `isStringPrimType`, `isStringOrderingBinOp`, `stringOrderingPredicate` ported |
 | 12 | strings | 9197–9284 | ~7 | LOW | Partial — `encodeLLVMString` / `earliestAfter` ported |
 | 13 | type mapping | 9285–9375 | ~8 | LOW | **Ported** (primitive + opaque-named + head-name + optional-surface) |
 | 14 | enum layout helpers | 9376–9575 | ~10 | LOW | Go-only |
-| 15 | helpers | 9576–9616 | ~5 | LOW | Partial — `firstNonEmpty`, `isUnitType`, `isFloatType` ported |
+| 15 | helpers | 9576–9616 | ~5 | LOW | Partial — `firstNonEmpty`, `isUnitType`, `isFloatType`, `isScalarLLVMType`, `llvmStdIoI1Text` ported |
 
 ## Phased plan
 
@@ -70,13 +70,15 @@ functions that have no `g.*` state dependency. Ship one section per PR
 with the compile-gate generator enforcing correctness.
 
 - ✅ §13 type mapping — first PR.
-- ⏳ §11 operators — predicates in, emit* bodies deferred (need state).
+- ⏳ §11 operators — pure predicates in (`isStringOrderingBinOp`,
+  `stringOrderingPredicate` delegate through `op.String()`); `emit*`
+  bodies deferred (need `g.fresh` / `g.fnBuf`).
 - ⏳ §12 strings — `encodeLLVMString` / `earliestAfter` in, `stringLiteral`
   / `emitStringPool` deferred (touch `g.strings`).
-- ⏳ §15 helpers — pure-side done (`firstNonEmpty`, unit/float predicates);
-  state-touching (`fresh`, `freshLabel`, `ostyEmitter`,
-  `flushOstyEmitter`, `storeIntrinsicResult`, `emitRuntimeRawNull`)
-  deferred to Phase B.
+- ⏳ §15 helpers — pure-side done (`firstNonEmpty`, unit/float/scalar
+  predicates, `llvmStdIoI1Text`); state-touching (`fresh`, `freshLabel`,
+  `ostyEmitter`, `flushOstyEmitter`, `storeIntrinsicResult`,
+  `emitRuntimeRawNull`) deferred to Phase B.
 - ⏳ §9 terminators — small (~120 LOC), single `emitTerm` switch. Cross-
   calls into §5 safepoint + §1 metadata — port after Phase B state.
 
@@ -147,8 +149,12 @@ list keeps new Osty clean of known landmines.
 | `mirLlvmTypeIsOptionalSurface` | `(typeText: String) -> Bool` | §13 | trailing-`?` + bracket-depth guard |
 | `mirIsHeapEqualityType` | `(typeText: String) -> Bool` | §11 | String/Bytes route to runtime equal |
 | `mirIsStringPrimTypeText` | `(typeText: String) -> Bool` | §11 | String-only ordering routing |
+| `mirIsStringOrderingSymbol` | `(symbol: String) -> Bool` | §11 | `<` / `<=` / `>` / `>=` symbol gate |
+| `mirStringOrderingPredicate` | `(symbol: String) -> String` | §11 | symbol → `slt` / `sle` / `sgt` / `sge` |
 | `mirIsUnitTypeText` | `(typeText: String) -> Bool` | §15 | Unit / `()` / Never |
 | `mirIsFloatTypeText` | `(typeText: String) -> Bool` | §15 | spec surface + LLVM text forms |
+| `mirIsScalarLLVMType` | `(t: String) -> Bool` | §15 | single-register LLVM scalar gate |
+| `mirLlvmI1Text` | `(v: Bool) -> String` | §15 | `true`/`false` i1 literal shim |
 | `mirFirstNonEmpty` | `(vals: List<String>) -> String` | §1 | variadic-erased first-non-empty |
 | `mirEarliestAfter` | `(input: String, needle: String) -> Int` | §12 | wrapper around `llvmStrings.Index` |
 | `mirEncodeLLVMString` | `(s: String) -> String` | §12 | printable-ASCII LLVM literal escaper |
