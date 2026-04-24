@@ -117,7 +117,7 @@ func TestEncodeSemTokensUsesSelfHostedDeltaEncoding(t *testing.T) {
 
 func TestDocAnalysisSemanticTokensMemoizesEncodedPayload(t *testing.T) {
 	s := NewServer(bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{})
-	a := s.analyzeSingleFile([]byte("pub fn main() { let value = 1 }\n"))
+	a := s.analyzeSingleFileViaEngine("untitled:SemtokMemoize.osty", []byte("pub fn main() { let value = 1 }\n"))
 
 	first := a.semanticTokens()
 	second := a.semanticTokens()

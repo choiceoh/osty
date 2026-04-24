@@ -695,37 +695,6 @@ func diagBelongsToFile(d *diag.Diagnostic, pf *resolve.PackageFile) bool {
 	return pos.Offset <= len(pf.Source)
 }
 
-// analyzeSingleFile is the legacy eager analysis path — retained for
-// call sites that still need it while the engine-backed path is
-// promoted. New callers should prefer analyzeSingleFileViaEngine so
-// repeated edits of the same buffer benefit from the incremental
-// cache and early cutoff.
-func (s *Server) analyzeSingleFile(src []byte) *docAnalysis {
-	run := parser.ParseRun(src)
-	file := selfhost.LowerPublicFileFromRun(run)
-	parseDiags := run.Diagnostics()
-	canonicalSrc, _ := canonical.SourceWithMap(src, file)
-	res := resolve.File(file, s.prelude)
-	chk := check.File(file, res, lspCheckOpts(canonicalSrc))
-	lr := lint.File(file, src, res, chk)
-	all := make([]*diag.Diagnostic, 0,
-		len(parseDiags)+len(res.Diags)+len(chk.Diags)+len(lr.Diags))
-	all = append(all, parseDiags...)
-	all = append(all, res.Diags...)
-	all = append(all, chk.Diags...)
-	all = append(all, lr.Diags...)
-	return &docAnalysis{
-		lines:      newLineIndex(src),
-		file:       file,
-		canonical:  canonicalSrc,
-		resolve:    res,
-		check:      chk,
-		lint:       lr,
-		diags:      all,
-		identIndex: buildIdentIndex(res),
-	}
-}
-
 // analyzeSingleFileViaEngine uses the Salsa-style incremental query
 // engine for file-mode analysis. The URI serves as the engine key
 // (normalized for `file://` URIs, verbatim for scratch buffers) so
@@ -735,8 +704,11 @@ func (s *Server) analyzeSingleFile(src []byte) *docAnalysis {
 // skips the entire Parse/Resolve/Check cascade; when the source
 // differs but the resolver's semantic output doesn't (e.g. whitespace
 // or comment-only edits), the early-cutoff path spares the checker
-// and linter re-runs. The result mirrors analyzeSingleFile's docAnalysis
-// shape so existing handlers need no changes.
+// and linter re-runs.
+//
+// Single-file mode's canonical entry since Phase 1c.4 retired the Go-
+// legacy analyzeSingleFile: scratch buffers synthesize an
+// `untitled:...` URI for cache identity.
 func (s *Server) analyzeSingleFileViaEngine(uri string, src []byte) *docAnalysis {
 	key := engineKeyForURI(uri)
 	s.engine.Inputs.SourceText.Set(s.engine.DB, key, src)

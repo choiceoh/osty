@@ -45,12 +45,18 @@ func TestAnalyzeSingleFileUsesNativeCompatibilityPath(t *testing.T) {
 	s := NewServer(bytes.NewReader(nil), &bytes.Buffer{}, &bytes.Buffer{})
 
 	selfhost.ResetAstbridgeLowerCount()
-	a := s.analyzeSingleFile(src)
+	a := s.analyzeSingleFileViaEngine("untitled:NativeCompat.osty", src)
 	if a == nil {
-		t.Fatal("analyzeSingleFile returned nil")
+		t.Fatal("analyzeSingleFileViaEngine returned nil")
 	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("AstbridgeLowerCount after single-file analyze = %d, want 0", got)
+	// Phase 1c.4 retired the Go-legacy \`analyzeSingleFile\` this test
+	// originally pinned to zero astbridge lowerings. The engine path
+	// reuses selfhost.LowerPublicFileFromRun for public-AST lift and
+	// still routes through a single astbridge step for the linter's
+	// diagnostic-stamping pass, so the invariant relaxed to "at most
+	// one" — the public-AST surface itself stays astbridge-free.
+	if got := selfhost.AstbridgeLowerCount(); got > 1 {
+		t.Fatalf("AstbridgeLowerCount after single-file analyze = %d, want <= 1", got)
 	}
 	if got := lspFirstFnName(a.file); got != "fresh" {
 		t.Fatalf("first function = %q, want %q", got, "fresh")

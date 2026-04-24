@@ -191,7 +191,7 @@ func TestFixAllActionUsesAIRepairForForeignSyntax(t *testing.T) {
 	doc := &document{
 		uri:      "file:///tmp/main.osty",
 		src:      src,
-		analysis: s.analyzeSingleFile(src),
+		analysis: s.analyzeSingleFileViaEngine("file:///tmp/main.osty", src),
 	}
 
 	action := fixAllAction(doc)
@@ -216,7 +216,7 @@ func TestFixAllActionUsesAIRepairForPythonBlocks(t *testing.T) {
 	doc := &document{
 		uri:      "file:///tmp/main.osty",
 		src:      src,
-		analysis: s.analyzeSingleFile(src),
+		analysis: s.analyzeSingleFileViaEngine("file:///tmp/main.osty", src),
 	}
 
 	action := fixAllAction(doc)
@@ -238,7 +238,7 @@ func TestFixAllActionUsesAIRepairForPythonElif(t *testing.T) {
 	doc := &document{
 		uri:      "file:///tmp/main.osty",
 		src:      src,
-		analysis: s.analyzeSingleFile(src),
+		analysis: s.analyzeSingleFileViaEngine("file:///tmp/main.osty", src),
 	}
 
 	action := fixAllAction(doc)
@@ -260,7 +260,7 @@ func TestFixAllActionUsesAIRepairForPythonBareTupleLoop(t *testing.T) {
 	doc := &document{
 		uri:      "file:///tmp/main.osty",
 		src:      src,
-		analysis: s.analyzeSingleFile(src),
+		analysis: s.analyzeSingleFileViaEngine("file:///tmp/main.osty", src),
 	}
 
 	action := fixAllAction(doc)
@@ -282,7 +282,7 @@ func TestFixAllActionUsesAIRepairForJSForOfLoop(t *testing.T) {
 	doc := &document{
 		uri:      "file:///tmp/main.osty",
 		src:      src,
-		analysis: s.analyzeSingleFile(src),
+		analysis: s.analyzeSingleFileViaEngine("file:///tmp/main.osty", src),
 	}
 
 	action := fixAllAction(doc)
@@ -304,7 +304,7 @@ func TestFixAllActionUsesAIRepairForJSDestructuringForOfLoop(t *testing.T) {
 	doc := &document{
 		uri:      "file:///tmp/main.osty",
 		src:      src,
-		analysis: s.analyzeSingleFile(src),
+		analysis: s.analyzeSingleFileViaEngine("file:///tmp/main.osty", src),
 	}
 
 	action := fixAllAction(doc)
@@ -326,7 +326,7 @@ func TestFixAllActionUsesAIRepairForPythonRangeLoop(t *testing.T) {
 	doc := &document{
 		uri:      "file:///tmp/main.osty",
 		src:      src,
-		analysis: s.analyzeSingleFile(src),
+		analysis: s.analyzeSingleFileViaEngine("file:///tmp/main.osty", src),
 	}
 
 	action := fixAllAction(doc)
@@ -348,7 +348,7 @@ func TestFixAllActionUsesAIRepairForPythonEnumerateLoop(t *testing.T) {
 	doc := &document{
 		uri:      "file:///tmp/main.osty",
 		src:      src,
-		analysis: s.analyzeSingleFile(src),
+		analysis: s.analyzeSingleFileViaEngine("file:///tmp/main.osty", src),
 	}
 
 	action := fixAllAction(doc)
@@ -370,7 +370,7 @@ func TestFixAllActionUsesAIRepairForSemanticHelpers(t *testing.T) {
 	doc := &document{
 		uri:      "file:///tmp/main.osty",
 		src:      src,
-		analysis: s.analyzeSingleFile(src),
+		analysis: s.analyzeSingleFileViaEngine("file:///tmp/main.osty", src),
 	}
 
 	action := fixAllAction(doc)
@@ -392,7 +392,7 @@ func TestFixAllActionUsesAIRepairForPythonMatchCase(t *testing.T) {
 	doc := &document{
 		uri:      "file:///tmp/main.osty",
 		src:      src,
-		analysis: s.analyzeSingleFile(src),
+		analysis: s.analyzeSingleFileViaEngine("file:///tmp/main.osty", src),
 	}
 
 	action := fixAllAction(doc)
