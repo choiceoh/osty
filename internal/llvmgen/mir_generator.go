@@ -341,13 +341,11 @@ func paramIsNoalias(fn *mir.Function, loc *mir.Local, llvmT string, names map[st
 	return ok
 }
 
+// firstNonEmpty thin-wraps the Osty-sourced `mirFirstNonEmpty` — Osty
+// has no Go-style variadics so the canonical signature over there takes
+// a `List<String>`, and we just slicify the variadic here to match.
 func firstNonEmpty(xs ...string) string {
-	for _, x := range xs {
-		if x != "" {
-			return x
-		}
-	}
-	return ""
+	return mirFirstNonEmpty(xs)
 }
 
 // nextLoopMD allocates a fresh distinct self-referential `!llvm.loop`
@@ -9101,7 +9099,7 @@ func isHeapEqualityType(t mir.Type) bool {
 	if !ok {
 		return false
 	}
-	return p.Kind == ir.PrimString || p.Kind == ir.PrimBytes
+	return mirIsHeapEqualityType(p.String())
 }
 
 // emitHeapEquality lowers `==` / `!=` on pointer-shaped runtime values
@@ -9139,7 +9137,10 @@ func (g *mirGen) emitHeapEquality(op mir.BinaryOp, left, right string) (string, 
 // runtime support yet and still hits the raw-icmp path.
 func isStringPrimType(t mir.Type) bool {
 	p, ok := t.(*ir.PrimType)
-	return ok && p.Kind == ir.PrimString
+	if !ok {
+		return false
+	}
+	return mirIsStringPrimTypeText(p.String())
 }
 
 func isStringOrderingBinOp(op mir.BinaryOp) bool {
@@ -9287,50 +9288,39 @@ func encodeLLVMString(s string) (string, int) {
 func (g *mirGen) llvmType(t mir.Type) string {
 	switch x := t.(type) {
 	case *ir.PrimType:
+		// Primitive → LLVM scalar dispatch lives in
+		// `toolchain/mir_generator.osty::mirLlvmTypeForPrim` so the
+		// selfhost port keeps a single source of truth for the
+		// primitive mapping. The Go wrapper here only covers the
+		// `*ir.PrimType` ↔ text-form adapter and falls back to the
+		// original switch when the Osty helper reports "unknown"
+		// (it never should, but the guard keeps behavior conservative
+		// until the port is complete).
+		if s := mirLlvmTypeForPrim(x.String()); s != "" {
+			return s
+		}
 		switch x.Kind {
-		case ir.PrimInt, ir.PrimInt64, ir.PrimUInt64:
-			return "i64"
-		case ir.PrimInt32, ir.PrimUInt32, ir.PrimChar:
-			return "i32"
-		case ir.PrimInt16, ir.PrimUInt16:
-			return "i16"
-		case ir.PrimInt8, ir.PrimUInt8, ir.PrimByte:
-			return "i8"
-		case ir.PrimBool:
-			return "i1"
-		case ir.PrimFloat, ir.PrimFloat64:
-			return "double"
-		case ir.PrimFloat32:
-			return "float"
-		case ir.PrimString, ir.PrimBytes:
-			return "ptr"
-		case ir.PrimRawPtr:
-			// LANG_SPEC §19.3 — RawPtr is an opaque pointer-shaped
-			// scalar; in opaque-pointer LLVM (the toolchain's required
-			// version) it lowers to `ptr`. Width is `sizeof(uintptr_t)`,
-			// 8 bytes on the supported 64-bit targets.
-			return "ptr"
 		case ir.PrimUnit:
 			return "void"
 		case ir.PrimNever:
 			return "void"
 		}
 	case *ir.NamedType:
-		// Builtin collection types flow through the runtime as
-		// opaque pointers; there's no LLVM struct for them. Same
-		// story for the MIR-lowerer-synthesised `ClosureEnv` which
-		// names a pointer into a closure env struct.
+		// Builtin collection + closure env: flow through the runtime
+		// as opaque pointers. The name table lives in the Osty port
+		// (`mirLlvmTypeForOpaqueNamed`) so callers that already have
+		// the text-form name (e.g. JSON IR dumps, diagnostic
+		// formatters) can share it without reconstructing the MIR
+		// type object.
 		if x.Builtin {
-			switch x.Name {
-			case "List", "Map", "Set", "Bytes", "ClosureEnv":
-				return "ptr"
+			if s := mirLlvmTypeForOpaqueNamed(x.Name); s != "" {
+				return s
 			}
 		}
-		// Concurrency runtime types are opaque pointers too — the
-		// runtime owns their representation.
-		switch x.Name {
-		case "Channel", "Handle", "Group", "TaskGroup", "Select", "Duration":
-			return "ptr"
+		// Concurrency runtime types fall into the same ptr-handle
+		// bucket; Osty helper handles both via name match.
+		if s := mirLlvmTypeForOpaqueNamed(x.Name); s != "" {
+			return s
 		}
 		// User-declared struct or enum — register the enum in the
 		// layout pool on first use and emit by name.
@@ -9575,11 +9565,21 @@ func (g *mirGen) emitRuntimeRawNull(i *mir.IntrinsicInstr) error {
 
 // ==== helpers ====
 
+// isUnitType / isFloatType delegate the actual name matching to their
+// Osty-sourced counterparts (`mirIsUnitTypeText` / `mirIsFloatTypeText`
+// in `toolchain/mir_generator.osty`). The Go wrapper just extracts the
+// `*ir.PrimType` and hands the canonical text form over — keeping a
+// single source of truth for the type-text predicates as the selfhost
+// port progresses.
 func isUnitType(t mir.Type) bool {
-	if p, ok := t.(*ir.PrimType); ok {
-		return p.Kind == ir.PrimUnit
+	p, ok := t.(*ir.PrimType)
+	if !ok {
+		return false
 	}
-	return false
+	// Treat PrimUnit specifically (Osty predicate also treats Never
+	// as unit-like because both lower to void, but a typed-dest slot
+	// only matters for PrimUnit so we keep the legacy semantics).
+	return p.Kind == ir.PrimUnit
 }
 
 func isFloatType(t mir.Type) bool {
@@ -9587,11 +9587,7 @@ func isFloatType(t mir.Type) bool {
 	if !ok {
 		return false
 	}
-	switch p.Kind {
-	case ir.PrimFloat, ir.PrimFloat32, ir.PrimFloat64:
-		return true
-	}
-	return false
+	return mirIsFloatTypeText(p.String())
 }
 
 func mirTypeString(t mir.Type) string {
