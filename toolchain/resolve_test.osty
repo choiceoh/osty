@@ -635,6 +635,50 @@ fn testSelfResolverRejectsJSONOptionalOnVariant() {
     testing.assertEq(selfResolveCodeCount(result, "E0739"), 1)
 }
 
+fn testSelfResolverRejectsJSONOptionalOnNonOptionalField() {
+    // `#[json(optional)]` requires a field whose type is `T?` or
+    // `Option<T>`. A plain `Int` field must produce E0739 — mirrors
+    // internal/resolve/resolve.go::checkJSONFieldArgs.
+    let result = selfResolveSource(
+        r"""
+            struct User {
+                #[json(optional)]
+                age: Int,
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0739"), 1)
+}
+
+fn testSelfResolverAcceptsJSONOptionalOnQuestionMarkField() {
+    // `T?` is the sugared optional type — `#[json(optional)]` is valid.
+    let result = selfResolveSource(
+        r"""
+            struct User {
+                #[json(optional)]
+                age: Int?,
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0739"), 0)
+}
+
+fn testSelfResolverAcceptsJSONOptionalOnOptionField() {
+    // Unqualified `Option<T>` is the other accepted shape.
+    let result = selfResolveSource(
+        r"""
+            struct User {
+                #[json(optional)]
+                age: Option<Int>,
+            }
+            """,
+    )
+
+    testing.assertEq(selfResolveCodeCount(result, "E0739"), 0)
+}
+
 fn testSelfResolverRejectsReprMissingArg() {
     let result = selfResolveSource(
         r"""

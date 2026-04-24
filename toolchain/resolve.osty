@@ -767,6 +767,7 @@ fn srCheckTypeMemberAnnotations(
             let member = srAstNode(file, memberIdx)
             if member.kind == AstNField_ {
                 out = srCheckDeclAnnotations(file, member.extra, srAnnotTargetField(), out)
+                out = srCheckJSONFieldArgs(file, member, out)
             } else if member.kind == AstNFnDecl {
                 out = srCheckDeclAnnotations(file, member.extra, srAnnotTargetMethod(), out)
             }
@@ -3061,6 +3062,66 @@ fn srCheckJSONArgs(
         out = srPushBadArg(out, "`skip` is mutually exclusive with `key` and `optional`", ann.start, ann.end)
     }
     out
+}
+
+/// srCheckJSONFieldArgs validates that `#[json(optional)]` is only
+/// attached to struct fields whose declared type is already optional —
+/// either the `T?` sugar or an unqualified `Option<T>`. Runs after the
+/// generic annotation walk so malformed args (unknown key, wrong value
+/// shape) are already reported; this pass only adds the type-shape
+/// check that needs the field node as context. Mirrors
+/// internal/resolve/resolve.go::checkJSONFieldArgs.
+fn srCheckJSONFieldArgs(
+    file: AstFile,
+    field: AstNode,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    if field.extra < 0 {
+        return result
+    }
+    let anns = srCollectAnnotationNodes(file, field.extra)
+    let mut out = result
+    for ann in anns {
+        if ann.text != "json" {
+            continue
+        }
+        for argIdx in ann.children {
+            let view = srAnnotArgView(file, argIdx)
+            if view.key != "optional" {
+                continue
+            }
+            if !srJsonFieldTypeAllowsOptional(file, field.right) {
+                out = srPushBadArg(
+                    out,
+                    "`#[json(optional)]` requires an optional field type",
+                    view.start,
+                    view.end,
+                )
+            }
+        }
+    }
+    out
+}
+
+/// srJsonFieldTypeAllowsOptional reports whether an AST type node
+/// represents `T?` or an unqualified `Option<T>` — the two shapes the
+/// JSON decoder treats as optional for `#[json(optional)]`. Mirrors
+/// internal/resolve/resolve.go::jsonFieldTypeAllowsOptional. Qualified
+/// `pkg.Option<T>` does not qualify because the Go resolver restricts
+/// the match to a single-component path.
+fn srJsonFieldTypeAllowsOptional(file: AstFile, typeIdx: Int) -> Bool {
+    if typeIdx < 0 {
+        return false
+    }
+    let t = srAstNode(file, typeIdx)
+    if t.kind != AstNType {
+        return false
+    }
+    if t.text == "optional" {
+        return true
+    }
+    let parts = strings.split(t.text, ".")
+    parts.len() == 1 && t.text == "Option"
 }
 
 fn srCheckDeprecatedArgs(
