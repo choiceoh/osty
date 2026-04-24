@@ -14,7 +14,7 @@ type FormatterCheckResult struct {
 	Output  []byte
 }
 
-// FormatSource runs the bootstrap-generated pure-Osty formatter. This exists
+// FormatSource runs the committed pure-Osty formatter seed. This exists
 // so Go-side tests and drift guards can exercise the self-host printer through
 // a stable adapter without routing user-facing formatting away from
 // internal/format.Source, which remains the canonical CLI contract.

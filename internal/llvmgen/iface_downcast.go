@@ -29,10 +29,9 @@ package llvmgen
 // only. The AST recognizer (`emitInterfaceDowncastCall`) is wired
 // into the `emitCall` dispatcher but will not fire until the
 // self-hosted checker (toolchain/elab.osty) teaches users'
-// `recv.downcast::<T>()` calls to type-check at the front end. That
-// change is blocked today on the bootstrap-gen regen pipeline, so
-// the path ships "ready to serve" with test coverage that drives it
-// directly rather than through the full compilation of a source
+// `recv.downcast::<T>()` calls to type-check at the front end. Until
+// then the path ships "ready to serve" with test coverage that drives
+// it directly rather than through the full compilation of a source
 // program that uses the syntax.
 
 import (

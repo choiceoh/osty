@@ -50,7 +50,7 @@ and workspace loaders for `pipeline`, `build`, `run`, `doc`, `lsp`, and
 still call `EnsureFiles` / `MaterializeCanonicalSources` to hand downstream
 passes the old `*ast.File` shape, while bump-free native paths use the
 structured adapters directly. The remaining astbridge cleanup is therefore
-lint/formatter/LSP/bootstrap-gen/backend consumer work, not the
+lint/formatter/LSP/backend consumer work, not the
 check/typecheck happy path.
 
 ## Package cheat sheet
@@ -331,16 +331,6 @@ wins over `allow`. Machine-applicable fixes are emitted for the unused
 supported so cross-file references to a `use` alias don't look unused
 locally. Wired as `osty lint` with `--strict` (CI mode: exit 1 on any
 warning). Rule-level policy logic lives in `toolchain/diag_policy.osty`.
-
-### `internal/bootstrap/gen`
-Developer-only Osty→Go transpiler used exclusively to regenerate
-`internal/selfhost/generated.go` from the `toolchain/*.osty` sources.
-Not reachable from the public `osty` CLI; the in-process caller is
-`internal/bootstrap/seedgen`, with `cmd/osty-bootstrap-gen` now just a
-thin developer wrapper. Consumes `*ast.File` + `*resolve.Result` +
-`*check.Result` and emits source-mapped Go. Will be retired once the
-LLVM backend can self-host the toolchain directly; no new feature work
-belongs here.
 
 ### `internal/lsp`
 JSON-RPC language server on stdio. Lifecycle (`initialize` / `shutdown`

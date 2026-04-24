@@ -15,7 +15,7 @@ Osty 레포 컨벤션(`CLAUDE.md` §커밋 메시지, §테스트 규칙)에 맞
 1. `git status --porcelain` 결과 비어있음 AND `git log @{u}..HEAD` 비어있음 → 보낼 게 없음
 2. 현재 브랜치가 `main` 또는 `master` → feature branch 에서만 ship
 3. diff에 `.env`, `*.key`, `*.pem`, `credentials*`, `*secret*` 포함 → 시크릿 차단
-4. 변경사항이 `internal/selfhost/generated.go` 뿐이고 `osty-bootstrap-gen` 실행 흔적 없음 → 수동 재생성 필요한 파일이므로 보류
+4. 변경사항이 `internal/selfhost/generated.go` 뿐 → 이 파일은 동결된 시드 산출물(부트스트랩 트랜스파일러 제거됨)이므로 직접 수정은 보류하고 의도 확인
 
 ## 1단계: 게이트
 

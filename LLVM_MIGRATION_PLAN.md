@@ -1,10 +1,9 @@
 # LLVM Migration Plan
 
 > **Status (2026-04): Historical.** 공개 백엔드는 이미 LLVM 하나뿐이며,
-> 기존 Go transpiler는 `internal/bootstrap/gen`으로 격리되어 `osty-bootstrap-gen`
-> 개발자 바이너리를 통해 `internal/selfhost/generated.go` 재생성용으로만 남아 있다.
-> 이 문서는 이주 과정의 기록이며, 아래 "현재 상태" 및 phase 설명은 당시 시점의
-> 기준이다.
+> 기존 Osty→Go 부트스트랩 트랜스파일러는 제거되었다 — `internal/selfhost/generated.go`
+> 는 커밋된 시드 산출물로 동결되어 있다. 이 문서는 이주 과정의 기록이며, 아래
+> "현재 상태" 및 phase 설명은 당시 시점의 기준이다.
 
 이 문서는 Osty의 실행 백엔드를 현재 Go transpiler 중심 구조에서 LLVM 기반
 네이티브 백엔드로 옮기기 위한 이주 계획이다. 목표는 기존 Go 백엔드를 즉시

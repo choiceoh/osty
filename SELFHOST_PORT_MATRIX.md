@@ -90,7 +90,7 @@ Go-native `runCheckFileLegacy` / `runCheckPackageLegacy` /
   `internal/resolve/prelude.go` (Go-side prelude builder),
   `internal/resolve/scope.go` (depth-based Go scope), `LoadPackage` /
   `ResolveAll` (Go-host) 전부 삭제. `--legacy` 플래그 제거는 완료됐지만,
-  lint / formatter / LSP / bootstrap-gen 등의 `*ast.File` identity 소비자가
+  lint / formatter / LSP 등의 `*ast.File` identity 소비자가
   남아 있어 매트릭스의 `ported` 행을 아직 전부 "완료" 로 볼 수는 없다.
 
   **2026-04-24 진행** (incremental deletion chain):

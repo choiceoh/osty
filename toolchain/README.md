@@ -17,14 +17,7 @@ Mainstream Go packages should call `internal/lexer`, `internal/parser`, and
 `internal/selfhost`; `internal/check` prefers the external native-checker
 boundary and falls back to the embedded selfhost bridge when needed.
 
-There is no `go generate ./toolchain` path anymore. To refresh the committed
-Go bridge, run:
-
-```sh
-go generate ./internal/selfhost
-```
-
-That regeneration flow is implemented in
-[`internal/selfhost/gen_selfhost.go`](../internal/selfhost/gen_selfhost.go) and
-invokes the in-process `internal/bootstrap/seedgen` wrapper plus the
-`astbridge` generator.
+`internal/selfhost/generated.go` is a committed seed — the Osty→Go bootstrap
+transpiler that produced it has been removed. Changes to `toolchain/*.osty`
+reach Go via the LLVM self-host path only; there is no `go generate` regen
+pipeline.
