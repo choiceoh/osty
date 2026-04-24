@@ -69,20 +69,27 @@ compat 로 수락된다 (no-op).
       `internal/airepair/airepair.go:461`, `internal/bootstrap/seedgen/seedgen.go`,
       `internal/ir/lower_test.go`, `internal/ir/runtime_annot_propagation_test.go`
       등에서도 쓰임 — 의도적 Go baseline, migration 대상 아님.
-    - **구조적 의존 (3 남음)**: `internal/lsp/server.go:709` (analyzeSingleFile —
-      코드 주석이 "legacy eager analysis path — retained"),
-      `internal/airepair/airepair.go:322`
-      (`probe` — `ProbeStats` 가 `{Parse,Resolve,Check}.Errors` 단계별 카운트
-      요구. `selfhost.CheckFromSource` 는 resolve+check 통합),
-      `internal/airepair/semantic.go:401` (`validLengthFieldOffsets` →
-      `semanticExprType(fe.X, res, chk)` Go-side 구조 type lookup).
-    - **2026-04-24 이전됨**: `internal/backend/stdlib_check.go:56` 는
-      `check.SelfhostFile` 신규 엔트리로 swap. check.File 의 AST-레벨 builder
-      desugar / decl-pass 기록 생략 — stdlib 은 first-party 소스라 사용자
-      auto-derive chain 이 없음. 1c.4 에서 첫 production swap.
-  - **의미**: "모든 call site 통일" 은 실제로는 4 개 구조적 의존 사이트 각각
-    별도 리팩터가 필요. Single-PR 은 불가능. 각 사이트마다 adapter/schema 변경
-    동반 예상.
+    - **구조적 의존 (0 남음)** — 2026-04-24 전부 이전됨:
+      - `internal/backend/stdlib_check.go:56` → `check.SelfhostFile` 로 swap.
+        stdlib 은 first-party 소스라 AST 레벨 builder desugar / decl-pass
+        기록이 불필요. 1c.4 첫 production swap.
+      - `internal/airepair/airepair.go:322` (`probe`) →
+        `selfhost.CheckFromSource` 로 swap. Selfhost 가 merge 한 diagnostics
+        를 `E05xx` 코드 prefix 로 `Resolve` / `Check` bucket 재분리해서
+        `ProbeStats` 의 per-stage 카운트 contract 유지 (`compareAutoAssist`
+        accept/reject logic 이 의존).
+      - `internal/airepair/semantic.go:401` (`validLengthFieldOffsets`) →
+        `check.SelfhostFile` 로 swap. `semanticExprType` 의
+        `chk.Types[e]` / `SymTypes` / `LetTypes` lookup 이 그대로 유지.
+      - `internal/lsp/server.go:703` (`analyzeSingleFile`) — 함수 자체 삭제.
+        11 test call site 를 `analyzeSingleFileViaEngine(uri, src)` 엔진 경로
+        로 이전 + URI 인자 추가 (scratch buffer 는 `untitled:...` URI 합성).
+        engine path 이 Salsa 인덱싱으로 parse/resolve/check/lint 를 URI 별
+        캐싱하므로 re-edit latency 가 오히려 개선됨.
+  - **의미**: 구조적 의존 사이트 전부 migration 완료. `check.File` 는
+    `run{Lint,Check,Typecheck}FileLegacy` 3종 + `pipeline.go` UseGolegacy
+    baseline 경로만 남음 — 모두 의도된 legacy. Phase 1c.4 주요 migration
+    목표 달성, 남은 건 `check.File` 삭제 자체 (1c.5 단계에서).
 
   잔여 Go check/ 파일 실측 LOC (2026-04-24 `wc -l`):
   - `host_boundary.go` 1986 (브릿지: `nativeCheckerExec` +

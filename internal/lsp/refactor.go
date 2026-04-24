@@ -386,7 +386,7 @@ func airepairFixAllEdit(doc *document) *TextEdit {
 // the cached analysis whose MachineApplicable bit is set, converts
 // each into a TextEdit, and returns them in the order they appeared.
 // The cache already contains parse + resolve + check + lint diags
-// (see analyzeSingleFile / analysisForFileInPackage), so this is a
+// (see analyzeSingleFileViaEngine / analysisForFileInPackage), so this is a
 // single pass with no redundant lint work.
 func collectMachineApplicable(doc *document) []TextEdit {
 	a := doc.analysis
