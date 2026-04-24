@@ -35,21 +35,23 @@ High-level map of the Osty front-end. For spec decisions see
 Each stage produces diagnostics as it goes; they accumulate in a single
 `[]*diag.Diagnostic` that the CLI renders at the end.
 
-### Default path: self-host arena (since Phase 1c.1, 2026-04-23)
+### Default path: self-host arena (since Phase 1c.1, updated 2026-04-24)
 
 `osty check` and `osty typecheck` now dispatch to the **self-host arena
 pipeline** by default: `parser.ParseRun` produces a selfhost `FrontendRun`
 (no astbridge lowering), then `selfhost.CheckStructuredFromRun` runs the
 Osty-native resolver + checker in one pass, emitting structured records
 that `selfhost.CheckDiagnosticsAsDiag` lifts into the CLI's `diag.Diagnostic`
-shape. `--legacy` routes back through the Go-hosted
-`parser.ParseDetailed` + `internal/resolve.ResolvePackage` + `check.File`
-triple for compatibility; see `SELFHOST_PORT_MATRIX.md`'s 1c roadmap for
-when this escape hatch retires. `osty resolve` has been self-host-first
-since 2026-04 and is unaffected by the 1c.1 flip. `pipeline.RunPackage`,
-`build`, `run`, `doc`, `lsp`, and `cihost` still use the Go-hosted loader
-in this tree — each is a dedicated 1c.2/1c.3 session that gates on a
-`selfhost.ResolveResult` → `PackageFile.RefsByID` adapter being written.
+shape. The old Go-hosted `--legacy` check/typecheck escape hatch and
+`check.File` entrypoint have been removed; `--native` remains accepted only as
+a backwards-compatible no-op. `osty resolve` is also self-host-first. Package
+and workspace loaders for `pipeline`, `build`, `run`, `doc`, `lsp`, and
+`cihost` use arena-first `FrontendRun` parsing. Some compatibility wrappers
+still call `EnsureFiles` / `MaterializeCanonicalSources` to hand downstream
+passes the old `*ast.File` shape, while bump-free native paths use the
+structured adapters directly. The remaining astbridge cleanup is therefore
+lint/formatter/LSP/bootstrap-gen/backend consumer work, not the
+check/typecheck happy path.
 
 ## Package cheat sheet
 
