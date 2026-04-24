@@ -701,9 +701,10 @@ const (
 	// of the runtime map_get helper (`get_<suffix>` returns bool and
 	// writes the value into an out slot), branching to the default
 	// operand on miss. Present directly as an intrinsic rather than
-	// as `map.get(key) ?? default` because the existing
-	// IntrinsicMapGet path emits the abort-on-miss runtime and a `??`
-	// over it would never see the default operand.
+	// as `map.get(key) ?? default` so the default operand is visible
+	// to the emitter without a separate `??` pass — this also avoids
+	// materialising an Option<V> struct and immediately unwrapping
+	// it, which `m.get(k) ?? d` would otherwise do.
 	IntrinsicMapGetOr
 )
 
