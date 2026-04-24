@@ -7792,6 +7792,27 @@ func (g *mirGen) evalRValue(rv mir.RValue, hintT mir.Type) (string, error) {
 		}
 		return g.emitUnary(r.Op, arg, r.T)
 	case *mir.BinaryRV:
+		if (r.Op == mir.BinEq || r.Op == mir.BinNeq) && isStringPrimType(r.Left.Type()) {
+			leftLit, leftIsLit := literalStringOperand(r.Left)
+			rightLit, rightIsLit := literalStringOperand(r.Right)
+			// Inline only the asymmetric case. literal==literal stays on
+			// the runtime: LLVM folds it anyway, and existing tests
+			// assert the runtime dispatch for that shape.
+			if leftIsLit != rightIsLit {
+				leftReg, err := g.evalOperand(r.Left, r.Left.Type())
+				if err != nil {
+					return "", err
+				}
+				rightReg, err := g.evalOperand(r.Right, r.Right.Type())
+				if err != nil {
+					return "", err
+				}
+				if leftIsLit {
+					return g.emitInlineStringEqLiteral(r.Op, rightReg, leftReg, leftLit)
+				}
+				return g.emitInlineStringEqLiteral(r.Op, leftReg, rightReg, rightLit)
+			}
+		}
 		left, err := g.evalOperand(r.Left, r.Left.Type())
 		if err != nil {
 			return "", err
@@ -9302,6 +9323,152 @@ func (g *mirGen) emitHeapEquality(op mir.BinaryOp, left, right string) (string, 
 	g.fnBuf.WriteString(", ptr ")
 	g.fnBuf.WriteString(right)
 	g.fnBuf.WriteString(")\n")
+	if op == mir.BinEq {
+		return eq, nil
+	}
+	neq := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(neq)
+	g.fnBuf.WriteString(" = xor i1 ")
+	g.fnBuf.WriteString(eq)
+	g.fnBuf.WriteString(", true\n")
+	return neq, nil
+}
+
+// stringEqInlineMaxBytes caps the literal length (excluding NUL) for
+// which `String == literal` / `!=` expands inline as a byte-wise
+// compare instead of dispatching to `osty_rt_strings_Equal`. Short
+// discriminator keywords dominate CSV / log parsing hot paths; inlining
+// eliminates the call overhead and the two strlen scans the runtime
+// performs. 16 covers common codes (regions, HTTP verbs, "enterprise",
+// etc.) while keeping the emitted IR compact.
+const stringEqInlineMaxBytes = 16
+
+// literalStringOperand returns (value, true) if op is a StringConst
+// with length ≤ stringEqInlineMaxBytes and no embedded NUL. Embedded
+// NULs are rejected because the inline compare terminates on the NUL
+// byte — such literals must keep routing to the runtime.
+func literalStringOperand(op mir.Operand) (string, bool) {
+	c, ok := op.(*mir.ConstOp)
+	if !ok {
+		return "", false
+	}
+	sc, ok := c.Const.(*mir.StringConst)
+	if !ok {
+		return "", false
+	}
+	if len(sc.Value) > stringEqInlineMaxBytes {
+		return "", false
+	}
+	for i := 0; i < len(sc.Value); i++ {
+		if sc.Value[i] == 0 {
+			return "", false
+		}
+	}
+	return sc.Value, true
+}
+
+// emitInlineStringEqLiteral lowers `String == literal` (or `!=`) as an
+// inline compare: pointer-equality fast path against the literal
+// symbol, then byte-by-byte compare with a terminating NUL check that
+// pins the length. This matches the runtime's full-length semantic
+// while saving the call and the two strlen scans
+// osty_rt_strings_Equal performs. Osty Strings are non-NULL by
+// invariant (MIR paths that could produce null route through Option),
+// so no NULL guard is emitted — the byte loads and the runtime's
+// other inline String paths share this assumption.
+func (g *mirGen) emitInlineStringEqLiteral(op mir.BinaryOp, dynReg, litSym, lit string) (string, error) {
+	matchLabel := g.freshLabel("streq.match")
+	nomatchLabel := g.freshLabel("streq.nomatch")
+	doneLabel := g.freshLabel("streq.done")
+
+	ptrEq := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(ptrEq)
+	g.fnBuf.WriteString(" = icmp eq ptr ")
+	g.fnBuf.WriteString(dynReg)
+	g.fnBuf.WriteString(", ")
+	g.fnBuf.WriteString(litSym)
+	g.fnBuf.WriteByte('\n')
+
+	byteLabels := make([]string, len(lit)+1)
+	for i := range byteLabels {
+		byteLabels[i] = g.freshLabel("streq.b" + strconv.Itoa(i))
+	}
+	g.fnBuf.WriteString("  br i1 ")
+	g.fnBuf.WriteString(ptrEq)
+	g.fnBuf.WriteString(", label %")
+	g.fnBuf.WriteString(matchLabel)
+	g.fnBuf.WriteString(", label %")
+	g.fnBuf.WriteString(byteLabels[0])
+	g.fnBuf.WriteByte('\n')
+
+	for i := 0; i <= len(lit); i++ {
+		g.fnBuf.WriteString(byteLabels[i])
+		g.fnBuf.WriteString(":\n")
+		ptrReg := dynReg
+		if i > 0 {
+			ptrReg = g.fresh()
+			g.fnBuf.WriteString("  ")
+			g.fnBuf.WriteString(ptrReg)
+			g.fnBuf.WriteString(" = getelementptr inbounds i8, ptr ")
+			g.fnBuf.WriteString(dynReg)
+			g.fnBuf.WriteString(", i64 ")
+			g.fnBuf.WriteString(strconv.Itoa(i))
+			g.fnBuf.WriteByte('\n')
+		}
+		byteReg := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(byteReg)
+		g.fnBuf.WriteString(" = load i8, ptr ")
+		g.fnBuf.WriteString(ptrReg)
+		g.fnBuf.WriteByte('\n')
+		var expected byte
+		if i < len(lit) {
+			expected = lit[i]
+		}
+		matchReg := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(matchReg)
+		g.fnBuf.WriteString(" = icmp eq i8 ")
+		g.fnBuf.WriteString(byteReg)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(strconv.Itoa(int(expected)))
+		g.fnBuf.WriteByte('\n')
+		nextLabel := matchLabel
+		if i < len(lit) {
+			nextLabel = byteLabels[i+1]
+		}
+		g.fnBuf.WriteString("  br i1 ")
+		g.fnBuf.WriteString(matchReg)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(nextLabel)
+		g.fnBuf.WriteString(", label %")
+		g.fnBuf.WriteString(nomatchLabel)
+		g.fnBuf.WriteByte('\n')
+	}
+
+	g.fnBuf.WriteString(matchLabel)
+	g.fnBuf.WriteString(":\n  br label %")
+	g.fnBuf.WriteString(doneLabel)
+	g.fnBuf.WriteByte('\n')
+
+	g.fnBuf.WriteString(nomatchLabel)
+	g.fnBuf.WriteString(":\n  br label %")
+	g.fnBuf.WriteString(doneLabel)
+	g.fnBuf.WriteByte('\n')
+
+	g.fnBuf.WriteString(doneLabel)
+	g.fnBuf.WriteString(":\n")
+	eq := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(eq)
+	g.fnBuf.WriteString(" = phi i1 [true, %")
+	g.fnBuf.WriteString(matchLabel)
+	g.fnBuf.WriteString("], [false, %")
+	g.fnBuf.WriteString(nomatchLabel)
+	g.fnBuf.WriteString("]\n")
+
 	if op == mir.BinEq {
 		return eq, nil
 	}
