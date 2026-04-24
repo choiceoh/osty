@@ -121,7 +121,13 @@ func TestAnalyzeCorpus(t *testing.T) {
 			minBeforeTotalErrs: 1,
 			wantAfterParseErrs: 0,
 			wantAfterTotalErrs: 0,
-			wantChangeKinds:    []string{"else_if_keyword", "python_if_block", "python_else_if_block", "python_else_block"},
+			// Phase 1c.4: probe() now drives the self-host checker; its
+			// diagnostic shape steers the pipeline through the direct
+			// python_elif_block rewrite rather than the two-step
+			// else_if_keyword → python_else_if_block path the Go-legacy
+			// checker triggered. Final repaired source is identical
+			// (expected fixture unchanged; wantAfterTotalErrs stays 0).
+			wantChangeKinds:    []string{"python_if_block", "python_elif_block", "python_else_block"},
 		},
 		{
 			name:               "js_for_of_loop",

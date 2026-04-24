@@ -8,13 +8,12 @@ package airepair
 
 import (
 	"bytes"
+	"strings"
 
-	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/repair"
-	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
 )
@@ -316,23 +315,44 @@ func (r Result) ResidualPrimaryHabit() string {
 }
 
 func probe(src []byte) (ProbeStats, []*diag.Diagnostic) {
-	parsed := parser.ParseDetailed(src)
-	file, parseDiags := parsed.File, parsed.Diagnostics
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
-	chk := check.File(file, res, checkOptsForSource(canonical.Source(src, file)))
+	// Phase 1c.4: drive the self-host checker directly. selfhost.CheckFromSource
+	// merges resolver + checker diagnostics into one CheckResult, so we split
+	// them back apart by diag code prefix (E05xx = resolve, everything else =
+	// check) to preserve the per-stage count contract ProbeStats exposes to
+	// accept/reject heuristics in Analyze().
+	//
+	// The E05xx = resolve contract is enforced at the codebase level: CLAUDE.md
+	// namespaces E0500-E0599 to name-resolution errors, and internal/diag/codes.go
+	// tracks every one. A resolve-phase diagnostic emitted outside that band
+	// would already break other tooling, so relying on the prefix here doesn't
+	// add a new fragility axis.
+	parseDiags, checked := selfhost.CheckFromSource(src)
+	convertedCheck := selfhost.CheckDiagnosticsAsDiag(src, checked.Diagnostics)
+
+	resolveDiags := make([]*diag.Diagnostic, 0, len(convertedCheck))
+	checkDiags := make([]*diag.Diagnostic, 0, len(convertedCheck))
+	for _, d := range convertedCheck {
+		if d == nil {
+			continue
+		}
+		if strings.HasPrefix(d.Code, "E05") {
+			resolveDiags = append(resolveDiags, d)
+		} else {
+			checkDiags = append(checkDiags, d)
+		}
+	}
 
 	stats := ProbeStats{
 		Parse:   count(parseDiags),
-		Resolve: count(res.Diags),
-		Check:   count(chk.Diags),
+		Resolve: count(resolveDiags),
+		Check:   count(checkDiags),
 	}
 	stats.TotalErrors = stats.Parse.Errors + stats.Resolve.Errors + stats.Check.Errors
 	stats.TotalWarnings = stats.Parse.Warnings + stats.Resolve.Warnings + stats.Check.Warnings
 
-	all := make([]*diag.Diagnostic, 0, len(parseDiags)+len(res.Diags)+len(chk.Diags))
+	all := make([]*diag.Diagnostic, 0, len(parseDiags)+len(convertedCheck))
 	all = append(all, parseDiags...)
-	all = append(all, res.Diags...)
-	all = append(all, chk.Diags...)
+	all = append(all, convertedCheck...)
 	return stats, all
 }
 
