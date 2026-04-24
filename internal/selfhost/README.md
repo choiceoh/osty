@@ -1,8 +1,7 @@
 # Selfhost Front End
 
-`internal/selfhost` contains the committed bootstrap-generated Go bridge for the
-Osty front end plus the adapters that let the rest of the Go codebase talk to
-it.
+`internal/selfhost` contains the committed frozen Osty→Go seed for the Osty
+front end plus the adapters that let the rest of the Go codebase talk to it.
 
 Today the public entrypoints are:
 
@@ -11,20 +10,15 @@ Today the public entrypoints are:
   compatibility lowerings
 - `internal/selfhost` — `FormatSource` / `FormatCheck` plus
   `ResolveSourceStructured` / `ResolvePackageStructured` expose stable Go
-  adapters over the bootstrap-generated pure-Osty formatter and resolver for
-  parity tests and self-host drift detection without changing the CLI
-  formatter contract
+  adapters over the seed pure-Osty formatter and resolver for parity tests
+  and self-host drift detection without changing the CLI formatter contract
 - `internal/check` — prefers the external native checker binary and uses the
   embedded selfhost bridge as the fallback / adaptation boundary
 
 The exact merged Osty inputs live in
 [`internal/selfhost/bundle/bundle.go`](./bundle/bundle.go):
 
-- `ToolchainCheckerFiles()` feeds both the native checker binary and the
-  `internal/selfhost/generated.go` regeneration path (via `gen_selfhost.go`)
-- `ToolchainLLVMGenFiles()` / `MergeToolchainLLVMGen()` expose the current
-  bootstrap-transpilable `toolchain/llvmgen.osty` bundle used by llvmgen
-  snapshot/selfhost smoke tests and future native llvmgen bridge work
+- `ToolchainCheckerFiles()` feeds the native checker binary
 
 Notable inputs currently include:
 
@@ -32,21 +26,10 @@ Notable inputs currently include:
 - `toolchain/lsp.osty`
 - `internal/selfhost/ast_lower.osty`
 
-Regenerate the Go bridge with:
+`internal/selfhost/generated.go` and `internal/selfhost/astbridge/generated.go`
+are committed seed artifacts — the Osty→Go bootstrap transpiler that produced
+them has been removed. Future updates to the toolchain must land through the
+LLVM self-host path rather than a Go-transpile regen.
 
-```sh
-go generate ./internal/selfhost
-```
-
-That flow:
-
-- regenerates `internal/selfhost/astbridge/generated.go`
-- merges the current toolchain/selfhost source bundle
-- invokes the in-process `internal/bootstrap/seedgen` wrapper to write `internal/selfhost/generated.go` (`cmd/osty-bootstrap-gen` is now just a thin developer CLI over the same path)
-- normalizes host-specific source markers and reapplies the small Go-side
-  compatibility/hot-path patches in `gen_selfhost.go`
-- installs the regenerated bridge only if `go build ./internal/selfhost/...`
-  still passes; rejected output is preserved as `generated.go.broken`
-
-`internal/check` then maps the checker output back onto the resolver symbols and
+`internal/check` maps the checker output back onto the resolver symbols and
 AST nodes consumed by codegen, LSP, and the rest of the host-side pipeline.

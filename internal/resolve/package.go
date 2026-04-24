@@ -66,9 +66,9 @@ type PackageFile struct {
 	// errors (best-effort partial trees support multi-error reporting).
 	// Packages loaded via LoadPackageForNative defer File materialization
 	// — they populate Run instead and leave this nil until EnsureFile is
-	// called. All Go-native passes (resolve.ResolvePackage,
-	// check.File, lint, bootstrap/gen) still require File, so callers
-	// that may hit those paths should EnsureFile first.
+	// called. All Go-native passes (resolve.ResolvePackage, check.File,
+	// lint) still require File, so callers that may hit those paths should
+	// EnsureFile first.
 	File *ast.File
 	// Run is the self-host FrontendRun that produced this file's
 	// arena. Populated by LoadPackageForNative (and by
@@ -136,7 +136,7 @@ func (pf *PackageFile) EnsureFile() *ast.File {
 
 // EnsureFiles forces File materialization on every PackageFile in pkg.
 // Call this before any code path that reads pf.File directly (the
-// Go-native resolver, checker, linter, bootstrap/gen).
+// Go-native resolver, checker, linter).
 func (pkg *Package) EnsureFiles() {
 	if pkg == nil {
 		return

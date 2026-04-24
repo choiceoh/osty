@@ -34,9 +34,8 @@ public LLVM runtime has zero `osty_sched_unimplemented` call sites left
 (concurrency spec §8 fully covered). This refresh revalidated the
 universal CLI / LLVM smoke path, re-ran the whole/native merged
 toolchain probes, and cross-checked the current code paths
-(`internal/check`, `internal/selfhost`, `internal/llvmgen`,
-`internal/bootstrap/gen`) so this report distinguishes historical
-samples from current-tree observations. Stage numbers shift
+(`internal/check`, `internal/selfhost`, `internal/llvmgen`) so this report
+distinguishes historical samples from current-tree observations. Stage numbers shift
 week-over-week; for the live MIR-direct coverage see
 [docs/mir_design.md](./mir_design.md) Stage 3.x + Stage 5 sections.
 

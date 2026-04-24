@@ -331,8 +331,8 @@ fn registerStdStringsAliasFns(env: CheckEnv, alias: String) {
         paramNames: ["s", "substr"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
     })
-    // Bootstrap MIR-LLVM helpers use Go-style stdlib names so the
-    // snapshot transpiler can route them straight to Go's strings package.
+    // Go-style capitalized aliases used by `toolchain/mir_generator.osty`'s
+    // `llvmStrings.*` prelude.
     checkRegisterFn(env, CheckFnSig {
         name: "Contains", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
         paramNames: ["s", "substr"], paramTys: [tString_, tString_],

@@ -7,12 +7,11 @@ import (
 
 // List<T>.clear() — truncate to length 0. The toolchain native-merged
 // probe first-walled on `buf.clear()` in ty.osty's generic-arg splitter
-// (where rebinding `buf = []` would've lost bootstrap-gen's element
-// inference on Windows regen) with LLVM015 [method_call_field] /
-// "only println calls are supported" because the statement-form list
-// method dispatcher only routed push/pop/insert. This test locks the
-// new osty_rt_list_clear runtime call so the regression re-surfaces
-// immediately if a future refactor drops the dispatch.
+// with LLVM015 [method_call_field] / "only println calls are supported"
+// because the statement-form list method dispatcher only routed
+// push/pop/insert. This test locks the osty_rt_list_clear runtime call
+// so the regression re-surfaces immediately if a future refactor drops
+// the dispatch.
 func TestListClearPtrElems(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn main() {
     let mut xs: List<String> = ["a", "b", "c"]

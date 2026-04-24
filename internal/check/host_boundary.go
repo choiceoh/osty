@@ -89,45 +89,6 @@ func (embeddedNativeChecker) CheckPackageStructured(input api.PackageCheckInput)
 
 var nativeCheckerFactory = defaultNativeChecker
 
-// UseEmbeddedNativeChecker forces the in-process selfhost checker for the
-// remainder of the process. Use only in developer tooling (bootstrap-gen)
-// where the exec + JSON boundary around the managed checker binary is
-// pure overhead — the embedded path calls selfhost.CheckSourceStructured
-// directly, avoiding the subprocess build step, fork/exec cost, and
-// marshal/unmarshal of the checker payload.
-func UseEmbeddedNativeChecker() {
-	nativeCheckerFactory = func() (nativeChecker, string) {
-		return embeddedNativeChecker{}, ""
-	}
-}
-
-// UseCachedEmbeddedNativeChecker forces the in-process selfhost checker and
-// persists structured results under cacheDir. validity scopes cached entries
-// to a specific checker version — callers typically pass a hex digest of
-// internal/selfhost/generated.go so cache entries are transparently
-// invalidated whenever the compiled-in checker changes.
-//
-// The regen pipeline is the primary consumer: iterating on
-// internal/bootstrap/gen/*.go rebuilds osty-bootstrap-gen but leaves the
-// merged toolchain source and the selfhost checker byte-identical, so the
-// ~tens-of-seconds CheckPackageStructured call collapses to a JSON read
-// on the second and subsequent runs.
-//
-// cacheDir is created on demand. A misformatted cache entry is silently
-// rebuilt. The cache is plain JSON so it is trivially introspectable
-// with `cat`; no schema migration is attempted, so bump validity if the
-// api.CheckResult shape changes.
-func UseCachedEmbeddedNativeChecker(cacheDir, validity string) {
-	checker := cachedNativeChecker{
-		backing:  embeddedNativeChecker{},
-		dir:      filepath.Join(cacheDir, validity),
-		validity: validity,
-	}
-	nativeCheckerFactory = func() (nativeChecker, string) {
-		return checker, ""
-	}
-}
-
 // EmbeddedCheckerFingerprint returns a cache-stable identifier for the Go
 // sources compiled into the embedded selfhost checker rooted at repoRoot. When
 // the bundled generated sources are unavailable it returns the empty string so

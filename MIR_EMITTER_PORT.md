@@ -1,5 +1,11 @@
 # MIR emitter selfhost port
 
+> **Status (2026-04): Historical.** 이 포팅 계획은 제거된 Osty→Go 부트스트랩
+> 트랜스파일러(`internal/bootstrap/gen`)를 전제로 작성되었다. 현재 `toolchain/
+> mir_generator.osty` 를 Go bridge 로 옮기는 공식 경로는 LLVM 셀프호스팅뿐이다.
+> 이 문서는 당시 시점의 기록이며, 아래 "Osty authoring rules" 섹션의 transpile-
+> safety 조언은 더 이상 구속력이 없다.
+
 Running plan + section-by-section status for moving
 `internal/llvmgen/mir_generator.go` (9,600 LOC hand-written Go) into the
 selfhost surface at `toolchain/mir_generator.osty`.
