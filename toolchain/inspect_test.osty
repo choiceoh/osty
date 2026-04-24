@@ -451,6 +451,30 @@ fn testInspectHintThreadsThroughIfArms() {
     testing.assert(intHintCount >= 2)
 }
 
+fn testInspectHintThreadsThroughMatchArms() {
+    let recs = inspectSource(
+        r"""
+            fn describe(n: Int) -> Int {
+                match n {
+                    0 -> 100,
+                    1 -> 200,
+                    _ -> 300,
+                }
+            }
+            """,
+    )
+
+    let mut intHintCount = 0
+    for rec in recs {
+        if rec.rule == "LIT-INT" && rec.hintName == "Int" {
+            intHintCount = intHintCount + 1
+        }
+    }
+    // 100/200/300 are arm bodies inside fn -> Int; all three should
+    // inherit the outer Int hint via the match-arm threading.
+    testing.assert(intHintCount >= 3)
+}
+
 fn testInspectHintThreadsThroughParen() {
     let recs = inspectSource(
         r"""
