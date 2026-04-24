@@ -789,11 +789,6 @@ fn checkResolveAliasDeepAt(env: CheckEnv, ty: Int, depth: Int) -> Int {
         return checkResolveAliasDeepAt(env, direct, depth + 1)
     }
     let kind = tyKindAt(env.tys, ty)
-    // Each compound-type arm delegates to a helper because the
-    // bootstrap Osty→Go transpiler miscompiles match arms whose
-    // body contains local let-bindings (emits a spurious bare
-    // `return` before the real one). Single-expression arms
-    // transpile cleanly.
     match kind {
         TkTuple    -> checkResolveAliasDeepTuple(env, ty, depth),
         TkFn       -> checkResolveAliasDeepFn(env, ty, depth),
@@ -851,9 +846,6 @@ pub fn checkSubstituteTy(env: CheckEnv, ty: Int, generics: List<String>, args: L
         return cached
     }
     let kind = tyKindAt(env.tys, ty)
-    // See note on checkResolveAliasDeepAt: match arms whose body
-    // carries local let-bindings miscompile through the bootstrap
-    // transpiler, so each compound arm delegates to a helper.
     let result = match kind {
         TkNamed    -> checkSubstituteTyNamed(env, ty, generics, args),
         TkTuple    -> checkSubstituteTyTuple(env, ty, generics, args),
