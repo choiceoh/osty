@@ -912,3 +912,83 @@ func TestDetectImportCyclesMultipleCyclesEmitsMultipleDiags(t *testing.T) {
 		t.Fatalf("expected 2 cycle diags, got %d: %#v", len(diags), diags)
 	}
 }
+
+// ---- Lookup package member (E0507 / E0508) ----------------------------
+
+func TestLookupPackageMemberPublicSymbolEmitsNothing(t *testing.T) {
+	res := selfhost.LookupPackageMember("fs", "readFile", false, true, true)
+	if res.Status != selfhost.MemberLookupOK {
+		t.Fatalf("expected MemberLookupOK, got status=%d (code=%q)", res.Status, res.Code)
+	}
+	if res.Code != "" || res.Message != "" {
+		t.Errorf("OK status should have empty strings, got %#v", res)
+	}
+}
+
+func TestLookupPackageMemberPrivateSymbolEmitsE0507(t *testing.T) {
+	res := selfhost.LookupPackageMember("fs", "internal", false, true, false)
+	if res.Status != selfhost.MemberLookupPrivate {
+		t.Fatalf("expected MemberLookupPrivate, got status=%d", res.Status)
+	}
+	if res.Code != "E0507" {
+		t.Errorf("expected E0507 for private symbol, got %q", res.Code)
+	}
+	wantMsg := "`fs.internal` is not exported from package `fs`"
+	if res.Message != wantMsg {
+		t.Errorf("message mismatch\n want: %q\n got:  %q", wantMsg, res.Message)
+	}
+	if res.Primary != "private across packages" {
+		t.Errorf("unexpected primary label: %q", res.Primary)
+	}
+	if res.Note != "declared without `pub` in package `fs`" {
+		t.Errorf("unexpected note: %q", res.Note)
+	}
+	wantHint := "add `pub` to the declaration of `internal` or access it only from within its package"
+	if res.Hint != wantHint {
+		t.Errorf("hint mismatch\n want: %q\n got:  %q", wantHint, res.Hint)
+	}
+}
+
+func TestLookupPackageMemberMissingSymbolEmitsE0508(t *testing.T) {
+	res := selfhost.LookupPackageMember("fs", "bogus", false, false, false)
+	if res.Status != selfhost.MemberLookupMissing {
+		t.Fatalf("expected MemberLookupMissing, got status=%d", res.Status)
+	}
+	if res.Code != "E0508" {
+		t.Errorf("expected E0508 for missing symbol, got %q", res.Code)
+	}
+	wantMsg := "package `fs` has no exported name `bogus`"
+	if res.Message != wantMsg {
+		t.Errorf("message mismatch\n want: %q\n got:  %q", wantMsg, res.Message)
+	}
+	if res.Primary != "unknown member" {
+		t.Errorf("unexpected primary label: %q", res.Primary)
+	}
+	if res.Note != "" || res.Hint != "" {
+		t.Errorf("missing-symbol should have no note/hint, got note=%q hint=%q", res.Note, res.Hint)
+	}
+}
+
+func TestLookupPackageMemberMissingInTypePosSwitchesWording(t *testing.T) {
+	// typePos=true tightens "name" → "type" in the E0508 message.
+	res := selfhost.LookupPackageMember("fs", "Handle", true, false, false)
+	if res.Code != "E0508" {
+		t.Fatalf("expected E0508, got %q", res.Code)
+	}
+	want := "package `fs` has no exported type `Handle`"
+	if res.Message != want {
+		t.Errorf("message mismatch\n want: %q\n got:  %q", want, res.Message)
+	}
+}
+
+func TestLookupPackageMemberPrivateIgnoresTypePos(t *testing.T) {
+	// E0507 wording does not branch on typePos — the surface name is the
+	// same whether the private symbol is referenced in a type or value
+	// position. Matches the Go resolver's pre-port behaviour.
+	valueRes := selfhost.LookupPackageMember("pkg", "x", false, true, false)
+	typeRes := selfhost.LookupPackageMember("pkg", "x", true, true, false)
+	if valueRes.Message != typeRes.Message {
+		t.Errorf("E0507 message must not vary with typePos\n  value: %q\n  type:  %q",
+			valueRes.Message, typeRes.Message)
+	}
+}

@@ -50732,6 +50732,52 @@ func selfCycleDfs(idx int, paths []string, usesLists [][]*SelfUseEdge, state *Se
 	return out
 }
 
+// Osty: /tmp/selfhost_merged.osty:25802:5
+type SelfMemberLookupResult struct {
+	status  int
+	code    string
+	message string
+	primary string
+	note    string
+	hint    string
+}
+
+// Osty: /tmp/selfhost_merged.osty:25824:5
+func selfLookupPackageMember(pkgName string, member string, typePos bool, found bool, public bool) *SelfMemberLookupResult {
+	// Osty: /tmp/selfhost_merged.osty:25831:5
+	if !found {
+		// Osty: /tmp/selfhost_merged.osty:25832:9
+		noun := func() string {
+			if typePos {
+				return "type"
+			} else {
+				return "name"
+			}
+		}()
+		_ = noun
+		// Osty: /tmp/selfhost_merged.osty:25833:9
+		message := "package `" + pkgName + "` has no exported " + noun + " `" + member + "`"
+		_ = message
+		// Osty: /tmp/selfhost_merged.osty:25834:9
+		return &SelfMemberLookupResult{status: 2, code: "E0508", message: message, primary: "unknown member", note: "", hint: ""}
+	}
+	// Osty: /tmp/selfhost_merged.osty:25843:5
+	if !public {
+		// Osty: /tmp/selfhost_merged.osty:25844:9
+		message := "`" + pkgName + "." + member + "` is not exported from package `" + pkgName + "`"
+		_ = message
+		// Osty: /tmp/selfhost_merged.osty:25845:9
+		note := "declared without `pub` in package `" + pkgName + "`"
+		_ = note
+		// Osty: /tmp/selfhost_merged.osty:25846:9
+		hint := "add `pub` to the declaration of `" + member + "` or access it only from within its package"
+		_ = hint
+		// Osty: /tmp/selfhost_merged.osty:25847:9
+		return &SelfMemberLookupResult{status: 1, code: "E0507", message: message, primary: "private across packages", note: note, hint: hint}
+	}
+	return &SelfMemberLookupResult{status: 0, code: "", message: "", primary: "", note: "", hint: ""}
+}
+
 // Osty: /tmp/selfhost_merged.osty:25938:5
 func selfResolveDiagnosticCount(result *SelfResolveResult) int {
 	return len(result.diagnostics)

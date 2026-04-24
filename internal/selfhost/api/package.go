@@ -168,3 +168,30 @@ type CycleDiag struct {
 	File     string
 	Message  string
 }
+
+// MemberLookupStatus is the outcome of a cross-package `pkg.member`
+// lookup. OK means the caller should return the looked-up symbol
+// with no diagnostic; Private and Missing both carry a rendered
+// diagnostic in the accompanying MemberLookupResult.
+type MemberLookupStatus int
+
+const (
+	MemberLookupOK      MemberLookupStatus = 0
+	MemberLookupPrivate MemberLookupStatus = 1
+	MemberLookupMissing MemberLookupStatus = 2
+)
+
+// MemberLookupResult carries the diagnostic wording decided by the
+// selfhost `pkg.member` access policy. When Status is MemberLookupOK
+// the string fields are all empty and the caller emits nothing.
+// Otherwise Code is the E0507 (private) or E0508 (missing) diagnostic
+// code and Message / Primary / Note / Hint are ready to hand to
+// diag.New.
+type MemberLookupResult struct {
+	Status  MemberLookupStatus
+	Code    string
+	Message string
+	Primary string
+	Note    string
+	Hint    string
+}
