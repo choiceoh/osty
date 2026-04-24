@@ -60,7 +60,7 @@ fn main() {
 	f := parseBuilderChainFile(t, src)
 	reg := stdlib.LoadCached()
 	res := resolve.FileWithStdlib(f, resolve.NewPrelude(), reg)
-	chk := File(f, res, Opts{
+	chk := SelfhostFile(f, res, Opts{
 		Source:     []byte(src),
 		Stdlib:     reg,
 		Primitives: reg.Primitives,
@@ -93,7 +93,7 @@ fn main() {
 	f := parseBuilderChainFile(t, src)
 	reg := stdlib.LoadCached()
 	res := resolve.FileWithStdlib(f, resolve.NewPrelude(), reg)
-	chk := File(f, res, Opts{
+	chk := SelfhostFile(f, res, Opts{
 		Source:     []byte(src),
 		Stdlib:     reg,
 		Primitives: reg.Primitives,
@@ -128,7 +128,7 @@ fn main() {
 	f := parseBuilderChainFile(t, src)
 	reg := stdlib.LoadCached()
 	res := resolve.FileWithStdlib(f, resolve.NewPrelude(), reg)
-	chk := File(f, res, Opts{
+	chk := SelfhostFile(f, res, Opts{
 		Source:     []byte(src),
 		Stdlib:     reg,
 		Primitives: reg.Primitives,

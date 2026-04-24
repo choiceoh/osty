@@ -468,7 +468,7 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 	// --- check ---
 	t0 = time.Now()
 	reg := stdlib.LoadCached()
-	checkOpts := check.Opts{UseGolegacy: true, Source: src, Stdlib: reg, Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
+	checkOpts := check.Opts{Source: src, Stdlib: reg, Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
 	if cfg.PerDecl {
 		checkOpts.OnDecl = func(d ast.Decl, phase string, dur time.Duration) {
 			r.PerDecl = append(r.PerDecl, DeclTiming{
@@ -480,7 +480,7 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 			})
 		}
 	}
-	chk := check.File(file, res, checkOpts)
+	chk := check.SelfhostFile(file, res, checkOpts)
 	r.Check = chk
 	r.AllDiags = append(r.AllDiags, chk.Diags...)
 	typedExprs := 0
@@ -643,7 +643,7 @@ func RunLoadedPackage(pkg *resolve.Package, stream io.Writer, cfg Config) Result
 	// --- check (whole-package) ---
 	t0 = time.Now()
 	reg := stdlib.LoadCached()
-	checkOpts := check.Opts{UseGolegacy: true, Stdlib: reg, Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
+	checkOpts := check.Opts{Stdlib: reg, Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
 	if cfg.PerDecl {
 		checkOpts.OnDecl = func(d ast.Decl, phase string, dur time.Duration) {
 			r.PerDecl = append(r.PerDecl, DeclTiming{
@@ -855,7 +855,7 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 	// --- check (cross-package) ---
 	t0 = time.Now()
 	reg := stdlib.LoadCached()
-	checkOpts := check.Opts{UseGolegacy: true, Stdlib: reg, Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
+	checkOpts := check.Opts{Stdlib: reg, Primitives: reg.Primitives, ResultMethods: reg.ResultMethods}
 	if cfg.PerDecl {
 		checkOpts.OnDecl = func(d ast.Decl, phase string, dur time.Duration) {
 			r.PerDecl = append(r.PerDecl, DeclTiming{

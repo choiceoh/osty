@@ -449,7 +449,7 @@ fn main() {}
 	}
 	reg := stdlib.LoadCached()
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{
+	chk := check.SelfhostFile(file, res, check.Opts{
 		Source: []byte(src),
 		Stdlib: reg,
 	})
@@ -516,7 +516,7 @@ func pipelineThroughMonomorph(t *testing.T, src string) *ir.Module {
 	}
 	reg := stdlib.LoadCached()
 	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.File(file, res, check.Opts{
+	chk := check.SelfhostFile(file, res, check.Opts{
 		Source: []byte(src),
 		Stdlib: reg,
 	})

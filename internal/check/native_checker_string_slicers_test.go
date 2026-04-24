@@ -46,7 +46,7 @@ func TestNativeBoundaryExecRecognizesStringSlicerMethods(t *testing.T) {
 	nativeCheckerFactory = defaultNativeChecker
 	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
 
-	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	chk := SelfhostFile(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
 	if len(chk.Diags) != 0 {
 		t.Fatalf("expected no diagnostics, got %v", chk.Diags)
 	}

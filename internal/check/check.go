@@ -85,13 +85,7 @@ func (r *Result) LookupType(e ast.Expr) types.Type {
 
 // Opts bundles optional inputs to File / Package / Workspace.
 type Opts struct {
-	// UseSelfhost is retained for source compatibility. Native checker
-	// selection now happens inside the host boundary instead.
-	UseSelfhost bool
 
-	// UseGolegacy is retained for callers that already switched names.
-	// It is currently ignored as well.
-	UseGolegacy bool
 
 	// Source is the raw source for File. Package and Workspace read
 	// sources from resolve.PackageFile.
@@ -142,39 +136,30 @@ func firstOpt(opts []Opts) Opts {
 	return opts[0]
 }
 
-// File runs type checking for one resolved source file when a native
-// checker boundary is available. Otherwise it returns an
-// unavailability diagnostic.
+// SelfhostFile runs type checking for one resolved source file through
+// the selfhost checker boundary. Returns a *Result populated from the
+// selfhost output (Types / LetTypes / SymTypes / InstantiationsByID /
+// Diags — the structured maps lint + IR lowering consume).
 //
 // The resolver's Result is consumed read-only: this package never
 // mutates symbol tables or the AST. Diagnostics from this pass are
 // returned in Result.Diags; they may be concatenated with the parser's
 // and resolver's diagnostics before display.
-func File(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
-	opt := firstOpt(opts)
-	result := newResult()
-	// opt.Path is the caller-supplied file path, when known. The File
-	// entry point is used from multi-file walkers that do not always
-	// bundle a resolve.PackageFile, so we pass the path through opts.
-	path := opt.Path
-	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib, opt.Privileged)
-	diag.StampFile(result.Diags, path)
-	recordSelfhostDeclPass(opt.OnDecl, f, "collect")
-	recordSelfhostDeclPass(opt.OnDecl, f, "check")
-	return result
-}
-
-// SelfhostFile drives the selfhost checker directly on a single resolved
-// source file and skips the decl-pass-record bookkeeping that File
-// performs. The native checker is now authoritative for builder-chain
-// typing and diagnostics; downstream IR lowering rewrites auto-derived
-// builder chains on demand, so File and SelfhostFile share the same
-// semantic checker path.
+//
+// Phase 1c.5 collapsed the earlier File / SelfhostFile pair into this
+// single entry. The native checker is authoritative for builder-chain
+// typing and diagnostics after #833 ported builder auto-derive into
+// the selfhost checker + on-demand IR rewriting; the Go-side
+// `DesugarBuildersInFile` prepass that File used to carry is gone.
+// OnDecl timing bookkeeping moved into this function so no caller
+// loses the per-decl phase dump `osty pipeline --per-decl` emits.
 func SelfhostFile(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
 	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib, opt.Privileged)
 	diag.StampFile(result.Diags, opt.Path)
+	recordSelfhostDeclPass(opt.OnDecl, f, "collect")
+	recordSelfhostDeclPass(opt.OnDecl, f, "check")
 	return result
 }
 

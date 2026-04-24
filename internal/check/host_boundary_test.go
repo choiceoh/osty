@@ -73,7 +73,7 @@ func TestNativeBoundaryPrefersStructuredPackageCheckerForFileMode(t *testing.T) 
 	nativeCheckerFactory = func() (nativeChecker, string) { return fake, "" }
 	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
 
-	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	chk := SelfhostFile(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
 	if fake.packageCalls != 1 {
 		t.Fatalf("packageCalls = %d, want 1", fake.packageCalls)
 	}
@@ -99,7 +99,7 @@ fn main() {
 	nativeCheckerFactory = func() (nativeChecker, string) { return fake, "" }
 	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
 
-	_ = File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	_ = SelfhostFile(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
 
 	if fake.packageCalls != 1 {
 		t.Fatalf("packageCalls = %d, want 1", fake.packageCalls)
@@ -151,7 +151,7 @@ fn main() {
 	}
 	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
 
-	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	chk := SelfhostFile(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
 	if len(chk.Diags) != 0 {
 		t.Fatalf("expected no diagnostics, got %v", chk.Diags)
 	}
@@ -198,7 +198,7 @@ fn main() {}
 	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
 
 	// Must not panic.
-	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	chk := SelfhostFile(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
 	if len(chk.Diags) != 0 {
 		t.Fatalf("expected no diagnostics, got %v", chk.Diags)
 	}
@@ -212,7 +212,7 @@ func TestNativeBoundaryReportsMissingExecutable(t *testing.T) {
 	nativeCheckerFactory = func() (nativeChecker, string) { return nil, "missing test native checker" }
 	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
 
-	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	chk := SelfhostFile(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
 	if len(chk.Diags) != 1 {
 		t.Fatalf("diagnostics = %#v, want one unavailability diagnostic", chk.Diags)
 	}
@@ -249,7 +249,7 @@ fn main() {}
 	}
 	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
 
-	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	chk := SelfhostFile(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
 	if len(chk.Diags) != 0 {
 		t.Fatalf("expected no diagnostics, got %v", chk.Diags)
 	}
@@ -306,7 +306,7 @@ pub fn raw_null() -> Int { 0 }
 	}
 	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
 
-	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	chk := SelfhostFile(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
 
 	got := 0
 	for _, d := range chk.Diags {
@@ -352,7 +352,7 @@ pub fn raw_null() -> Int { }
 	}
 	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
 
-	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached(), Privileged: true})
+	chk := SelfhostFile(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached(), Privileged: true})
 	if len(chk.Diags) != 0 {
 		t.Fatalf("expected privileged host boundary to suppress E0770 diagnostics, got %#v", chk.Diags)
 	}
@@ -396,7 +396,7 @@ func TestNativeBoundaryOverlaysCanonicalSourceSpansBackToOriginalAST(t *testing.
 	}
 	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
 
-	chk := File(file, res, Opts{Source: canonicalSrc, Stdlib: stdlib.LoadCached()})
+	chk := SelfhostFile(file, res, Opts{Source: canonicalSrc, Stdlib: stdlib.LoadCached()})
 	if len(chk.Diags) != 0 {
 		t.Fatalf("expected no diagnostics, got %v", chk.Diags)
 	}
@@ -423,7 +423,7 @@ fn main() {
 	nativeCheckerFactory = defaultNativeChecker
 	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
 
-	chk := File(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+	chk := SelfhostFile(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
 	if len(chk.Diags) != 0 {
 		t.Fatalf("expected no diagnostics, got %v", chk.Diags)
 	}

@@ -121,8 +121,8 @@ fn main() {
 			f := parseLLVMGenFile(t, c.src)
 			res := resolve.FileWithStdlib(f, resolve.NewPrelude(), stdlib.LoadCached())
 			reg := stdlib.LoadCached()
-			chk := check.File(f, res, check.Opts{
-				UseGolegacy: true, Stdlib: reg, Primitives: reg.Primitives,
+			chk := check.SelfhostFile(f, res, check.Opts{
+				Stdlib: reg, Primitives: reg.Primitives,
 				ResultMethods: reg.ResultMethods, Source: []byte(c.src),
 				Privileged: true,
 			})
