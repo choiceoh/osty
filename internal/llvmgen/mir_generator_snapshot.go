@@ -363,6 +363,28 @@ func mirBinaryForcesI1Type(symbol string) bool {
 	return symbol == "&&" || symbol == "||"
 }
 
+// Osty: toolchain/mir_generator.osty:307:5
+func mirUnaryIsIdentity(symbol string) bool {
+	return symbol == "+"
+}
+
+// Osty: toolchain/mir_generator.osty:323:5
+func mirUnaryInstruction(symbol string, argReg string, llvmTy string, isFloat bool) string {
+	if symbol == "-" {
+		if isFloat {
+			return "fneg " + llvmTy + " " + argReg
+		}
+		return "sub " + llvmTy + " 0, " + argReg
+	}
+	if symbol == "!" {
+		return "xor i1 " + argReg + ", 1"
+	}
+	if symbol == "~" {
+		return "xor " + llvmTy + " " + argReg + ", -1"
+	}
+	return ""
+}
+
 // Osty: toolchain/mir_generator.osty:318:5
 func mirLoopHintsActive(vectorizeHint bool, parallelHint bool, unrollHint bool) bool {
 	return vectorizeHint || parallelHint || unrollHint
@@ -401,6 +423,31 @@ func mirLoopMDUnrollCount(countDigits string) string {
 // Osty: toolchain/mir_generator.osty:375:5
 func mirLoopMDParallelAccesses(accessGroupRef string) string {
 	return "!{!\"llvm.loop.parallel_accesses\", " + accessGroupRef + "}"
+}
+
+// Osty: toolchain/mir_generator.osty:354:5
+func mirStringPoolLine(sym string, sizeDigits string, encoded string) string {
+	return sym + " = private unnamed_addr constant [" + sizeDigits + " x i8] c\"" + encoded + "\"\n"
+}
+
+// Osty: toolchain/mir_generator.osty:362:5
+func mirAliasScopeDomainLine(ref string) string {
+	return ref + " = distinct !{!\"osty.list.metadata.domain\"}"
+}
+
+// Osty: toolchain/mir_generator.osty:369:5
+func mirAliasScopeScopeLine(ref string, domainRef string) string {
+	return ref + " = distinct !{!\"osty.list.metadata.scope\", " + domainRef + "}"
+}
+
+// Osty: toolchain/mir_generator.osty:377:5
+func mirAliasScopeListLine(ref string, scopeRef string) string {
+	return ref + " = !{" + scopeRef + "}"
+}
+
+// Osty: toolchain/mir_generator.osty:385:5
+func mirAccessGroupLine(ref string) string {
+	return ref + " = distinct !{}"
 }
 
 // Osty: toolchain/mir_generator.osty:393:5
