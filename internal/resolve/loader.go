@@ -17,20 +17,21 @@ import (
 // parser sees them. nil preserves the on-disk bytes.
 type SourceTransform func(path string, src []byte) []byte
 
-// LoadPackage discovers and parses every `.osty` file directly under
-// dir (non-recursive) and returns them as a single Package ready for
-// ResolvePackage. Test files (`*_test.osty`) are excluded per v0.4 §11
-// so production builds don't drag test-only declarations into scope.
+// LoadPackageWithTransform discovers and parses every `.osty` file
+// directly under dir (non-recursive) and returns them as a single
+// Package ready for ResolvePackage. Test files (`*_test.osty`) are
+// excluded per v0.4 §11 so production builds don't drag test-only
+// declarations into scope. Accepts an optional pre-parse source
+// transform — callers can normalize foreign syntax or inject generated
+// source before diagnostics are computed.
 //
 // The returned Package has Files sorted lexicographically by path for
 // deterministic diagnostic ordering.
-func LoadPackage(dir string) (*Package, error) {
-	return LoadPackageWithTransform(dir, nil)
-}
-
-// LoadPackageWithTransform is LoadPackage plus an optional pre-parse
-// source transform. The callback can normalize foreign syntax or inject
-// generated source before diagnostics are computed.
+//
+// Public callers should prefer LoadPackageArenaFirst, which routes
+// through the selfhost arena-first loader. This function is retained
+// as the internal primitive workspace.go uses for its own loading
+// machinery.
 func LoadPackageWithTransform(dir string, transform SourceTransform) (*Package, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {

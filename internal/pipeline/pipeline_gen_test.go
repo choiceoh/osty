@@ -14,7 +14,7 @@ func TestRunLoadedPackageGenUsesPackageLoweringForSiblingFiles(t *testing.T) {
 	writePipelineTestFile(t, dir, "a.osty", "pub fn helper() -> Int { 1 }\n")
 	writePipelineTestFile(t, dir, "b.osty", "fn main() { println(helper()) }\n")
 
-	pkg, err := resolve.LoadPackage(dir)
+	pkg, err := resolve.LoadPackageArenaFirst(dir)
 	if err != nil {
 		t.Fatalf("LoadPackage() error = %v", err)
 	}
@@ -72,7 +72,7 @@ func TestRunLoadedPackageGenUsesManagedNativeLLVMGenWhenCovered(t *testing.T) {
 	writePipelineTestFile(t, dir, "a.osty", "pub fn helper() -> Int { 1 }\n")
 	writePipelineTestFile(t, dir, "b.osty", "fn main() { println(helper()) }\n")
 
-	pkg, err := resolve.LoadPackage(dir)
+	pkg, err := resolve.LoadPackageArenaFirst(dir)
 	if err != nil {
 		t.Fatalf("LoadPackage() error = %v", err)
 	}
@@ -102,7 +102,7 @@ func TestRunLoadedPackageGenSingleFileUsesManagedNativeLLVMGen(t *testing.T) {
 	dir := t.TempDir()
 	writePipelineTestFile(t, dir, "main.osty", "fn main() { println(1) }\n")
 
-	pkg, err := resolve.LoadPackage(dir)
+	pkg, err := resolve.LoadPackageArenaFirst(dir)
 	if err != nil {
 		t.Fatalf("LoadPackage() error = %v", err)
 	}
