@@ -1,0 +1,61 @@
+// builder_policy.osty — shared builder auto-derive classification.
+//
+// This file is part of both the checker bundle and the HIR bundle so
+// Go-side builder desugaring and Osty-side HIR lowering consume the
+// exact same rules for:
+//   - whether a struct qualifies for auto-derived builder support
+//   - which `pub` fields are still required at `.build()`
+
+/// CheckBuilderDeriveInfo is the shared result of classifying whether
+/// a struct qualifies for auto-derived builder support (LANG_SPEC
+/// §3.3).
+///
+/// `derivable` is true only when:
+///   - every non-`pub` field has a default
+///   - the type does not already define its own `builder` method
+///
+/// `required` lists the `pub` fields without defaults, in declaration
+/// order. Callers surface this in the `.build()` missing-field
+/// diagnostic (E0774).
+pub struct CheckBuilderDeriveInfo {
+    pub derivable: Bool,
+    pub required: List<String>,
+}
+
+/// checkClassifyBuilderDerive is the single source of truth for
+/// builder auto-derive classification used by both the Go pre-pass
+/// and the Osty HIR lowerer.
+pub fn checkClassifyBuilderDerive(
+    fieldNames: List<String>,
+    fieldExported: List<Bool>,
+    fieldHasDefaults: List<Bool>,
+    methodNames: List<String>,
+) -> CheckBuilderDeriveInfo {
+    let n = fieldNames.len()
+    if n != fieldExported.len() || n != fieldHasDefaults.len() {
+        return CheckBuilderDeriveInfo { derivable: false, required: [] }
+    }
+
+    let mut derivable = true
+    let mut required: List<String> = []
+    let mut i = 0
+    for i < n {
+        let isPub = fieldExported[i]
+        let hasDefault = fieldHasDefaults[i]
+        if !isPub && !hasDefault {
+            derivable = false
+        }
+        if isPub && !hasDefault {
+            required.push(fieldNames[i])
+        }
+        i = i + 1
+    }
+
+    for name in methodNames {
+        if name == "builder" {
+            derivable = false
+        }
+    }
+
+    CheckBuilderDeriveInfo { derivable, required }
+}
