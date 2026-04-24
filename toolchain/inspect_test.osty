@@ -411,6 +411,65 @@ fn testInspectHintsCallArguments() {
     testing.assert(intHintCount >= 2)
 }
 
+fn testInspectHintThreadsThroughBlock() {
+    let recs = inspectSource(
+        r"""
+            fn answer() -> Int {
+                42
+            }
+            """,
+    )
+
+    let mut sawThreaded = false
+    for rec in recs {
+        if rec.rule == "LIT-INT" && rec.hintName == "Int" {
+            sawThreaded = true
+        }
+    }
+    testing.assert(sawThreaded)
+}
+
+fn testInspectHintThreadsThroughIfArms() {
+    let recs = inspectSource(
+        r"""
+            fn pick(flag: Bool) -> Int {
+                if flag {
+                    1
+                } else {
+                    2
+                }
+            }
+            """,
+    )
+
+    let mut intHintCount = 0
+    for rec in recs {
+        if rec.rule == "LIT-INT" && rec.hintName == "Int" {
+            intHintCount = intHintCount + 1
+        }
+    }
+    testing.assert(intHintCount >= 2)
+}
+
+fn testInspectHintThreadsThroughParen() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let x: Int = (99)
+                let _ = x
+            }
+            """,
+    )
+
+    let mut sawHint = false
+    for rec in recs {
+        if rec.rule == "LIT-INT" && rec.hintName == "Int" {
+            sawHint = true
+        }
+    }
+    testing.assert(sawHint)
+}
+
 fn testInspectRecordFieldsStable() {
     let recs = inspectSource(
         r"""
