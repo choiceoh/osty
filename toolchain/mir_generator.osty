@@ -300,6 +300,92 @@ pub fn mirBinaryForcesI1Type(symbol: String) -> Bool {
     symbol == "&&" || symbol == "||"
 }
 
+/// mirUnaryIsIdentity reports whether a unary operator symbol is the
+/// no-op (unary-plus) form. The caller short-circuits before
+/// requesting an instruction body — unary plus emits nothing and just
+/// reuses the operand register.
+pub fn mirUnaryIsIdentity(symbol: String) -> Bool {
+    symbol == "+"
+}
+
+/// mirUnaryInstruction returns the LLVM instruction body for a unary
+/// operator, suitable for splicing between `<tmp> = ` and `\n`. Handles
+/// the four non-identity MIR unary ops with their distinct LLVM shapes:
+///   `-`  (float)  → `fneg <ty> <arg>`
+///   `-`  (int)    → `sub <ty> 0, <arg>`
+///   `!`           → `xor i1 <arg>, 1`
+///   `~`           → `xor <ty> <arg>, -1`
+/// The `argReg` and `llvmTy` come from the caller's existing register
+/// / type plumbing. Returns `""` when the symbol is unrecognised or is
+/// the identity `+` — the caller MUST guard with `mirUnaryIsIdentity`
+/// first so the empty string signals "unknown" unambiguously and maps
+/// to the `unsupported` diagnostic path.
+pub fn mirUnaryInstruction(
+    symbol: String,
+    argReg: String,
+    llvmTy: String,
+    isFloat: Bool,
+) -> String {
+    if symbol == "-" {
+        if isFloat {
+            return "fneg " + llvmTy + " " + argReg
+        }
+        return "sub " + llvmTy + " 0, " + argReg
+    }
+    // Boolean `!` always emits on i1 regardless of argument LLVM type —
+    // MIR guarantees the operand is already i1 at this point.
+    if symbol == "!" {
+        return "xor i1 " + argReg + ", 1"
+    }
+    // Bitwise `~` uses the operand's LLVM width; XOR with all-ones
+    // (`-1`) flips every bit at that width.
+    if symbol == "~" {
+        return "xor " + llvmTy + " " + argReg + ", -1"
+    }
+    ""
+}
+
+/// mirStringPoolLine returns one line of the LLVM string-pool section,
+/// suitable for appending to the emitter's module-tail buffer. The
+/// `sizeDigits` argument is the already-formatted decimal form of the
+/// array length (Go caller uses `strconv.Itoa` — Osty helpers stay on
+/// printable-ASCII string composition). The trailing `\n` matches the
+/// Go source's byte-for-byte output so the pool stays format-stable.
+pub fn mirStringPoolLine(sym: String, sizeDigits: String, encoded: String) -> String {
+    sym + " = private unnamed_addr constant [" + sizeDigits + " x i8] c\"" + encoded + "\"\n"
+}
+
+/// mirAliasScopeDomainLine renders the `!llvm.alias.scope`-domain
+/// metadata definition line used to tag list-snapshot reads. Pair with
+/// `mirAliasScopeScopeLine` and `mirAliasScopeListLine` to emit the
+/// three-node chain the Go source allocates in `listAliasScopeRef`.
+pub fn mirAliasScopeDomainLine(ref: String) -> String {
+    ref + " = distinct !\{!\"osty.list.metadata.domain\"\}"
+}
+
+/// mirAliasScopeScopeLine renders the `scope` node of the alias-scope
+/// chain: `!N = distinct !{!"...scope", !Domain}`. `domainRef` is the
+/// `!M` handle returned by `mirAliasScopeDomainLine`'s caller.
+pub fn mirAliasScopeScopeLine(ref: String, domainRef: String) -> String {
+    ref + " = distinct !\{!\"osty.list.metadata.scope\", " + domainRef + "\}"
+}
+
+/// mirAliasScopeListLine renders the one-element scope list node
+/// (`!N = !{!Scope}`) that loads/stores reference via
+/// `!alias.scope !N` / `!noalias !N`. Mirrors the last allocation in
+/// `listAliasScopeRef`.
+pub fn mirAliasScopeListLine(ref: String, scopeRef: String) -> String {
+    ref + " = !\{" + scopeRef + "\}"
+}
+
+/// mirAccessGroupLine renders the bare `!llvm.access.group` node
+/// `!N = distinct !{}` used once per `#[parallel]` function. Attached
+/// to individual loads/stores as `!llvm.access !N` and referenced from
+/// the loop property `!"llvm.loop.parallel_accesses", !N`.
+pub fn mirAccessGroupLine(ref: String) -> String {
+    ref + " = distinct !\{\}"
+}
+
 /// mirLoopHintsActive reports whether any v0.6 loop annotation is
 /// set for the current function — i.e. whether the loop-metadata
 /// emitter should attach an `!llvm.loop !N` reference to this

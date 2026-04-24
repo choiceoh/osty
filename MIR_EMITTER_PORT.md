@@ -53,7 +53,7 @@ untouched.
 
 | § | Section | Lines | Funcs | Risk | Status |
 | - | ------- | ----- | ----- | ---- | ------ |
-| 1 | generator state | 100–472 | ~10 | LOW | Partial — `firstNonEmpty`, `formatFnAttrs`, `loopHintsActive`, + loop-metadata constant templates ported (`mirFormatFnAttrs`, `mirLoopHintsActive`, `mirLoopMDVectorizeEnable`/`Scalable`/`Predicate`/`Width`, `mirLoopMDUnrollEnable`/`Count`, `mirLoopMDParallelAccesses`); state-touching (`nextLoopMD` body, `listAliasScopeRef`, `nextAccessGroupMD`) deferred to Phase B |
+| 1 | generator state | 100–472 | ~10 | LOW | Partial — `firstNonEmpty`, `formatFnAttrs`, `loopHintsActive`, loop-metadata + alias-scope + access-group templates ported (`mirFormatFnAttrs`, `mirLoopHintsActive`, `mirLoopMDVectorizeEnable`/`Scalable`/`Predicate`/`Width`, `mirLoopMDUnrollEnable`/`Count`, `mirLoopMDParallelAccesses`, `mirAliasScopeDomainLine`/`ScopeLine`/`ListLine`, `mirAccessGroupLine`); `nextLoopMD` body + `g.loopMDDefs` indexing stays on Go (state) |
 | 2 | support check | 473–1364 | ~20 | MEDIUM | Go-only |
 | 3 | header + runtime declares | 1365–1641 | ~8 | LOW | Go-only |
 | 4 | function emission | 1642–2384 | ~18 | MEDIUM | Go-only |
@@ -63,8 +63,8 @@ untouched.
 | 8 | concurrency intrinsics | 6762–7472 | ~20 | MEDIUM | Go-only |
 | 9 | terminators | 7473–7595 | ~5 | LOW | Go-only |
 | 10 | rvalue / operand | 7596–8937 | ~25 | HIGH | Go-only |
-| 11 | operators | 8938–9196 | ~12 | LOW | Partial — predicates + `emitBinary` opcode table ported (`isHeapEqualityType`, `isStringPrimType`, `isStringOrderingBinOp`, `stringOrderingPredicate`, `mirBinaryOpcode`, `mirBinaryForcesI1Type`); `emitUnary` / `emitInlineStringEqLiteral` deferred (touch `g.fresh` / `g.fnBuf`) |
-| 12 | strings | 9197–9284 | ~7 | LOW | Partial — `encodeLLVMString` / `earliestAfter` ported |
+| 11 | operators | 8938–9196 | ~12 | LOW | Partial — predicates + `emitBinary` opcode table + `emitUnary` instruction body ported (`isHeapEqualityType`, `isStringPrimType`, `isStringOrderingBinOp`, `stringOrderingPredicate`, `mirBinaryOpcode`, `mirBinaryForcesI1Type`, `mirUnaryIsIdentity`, `mirUnaryInstruction`); `emitInlineStringEqLiteral` deferred (needs `g.freshLabel` / `g.fnBuf`) |
+| 12 | strings | 9197–9284 | ~7 | LOW | Partial — `encodeLLVMString`, `earliestAfter`, and the string-pool line template ported (`mirEncodeLLVMString`, `mirEarliestAfter`, `mirStringPoolLine`); `stringLiteral` interning + `emitStringPool` orchestration stay on Go (touch `g.strings` / `g.out`) |
 | 13 | type mapping | 9285–9375 | ~8 | LOW | **Ported** (primitive + opaque-named + head-name + optional-surface) |
 | 14 | enum layout helpers | 9376–9575 | ~10 | LOW | Partial — `llvmTypeForTupleTag` Prim / Named branches + Optional / Option / Result / Tuple name-mangling ported (`mirTupleTagForPrim`, `mirTupleTagForNamed`, `mirOptionalTypeName`, `mirOptionTypeName`, `mirResultTypeName`, `mirTupleTypeNameFromTags`); `registerEnumLayout` + `g.tupleDefs` caches deferred to Phase B |
 | 15 | helpers | 9576–9616 | ~5 | LOW | Partial — `firstNonEmpty`, `isUnitType`, `isFloatType`, `isScalarLLVMType`, `llvmStdIoI1Text` ported |
@@ -181,6 +181,13 @@ list keeps new Osty clean of known landmines.
 | `mirLoopMDUnrollCount` | `(countDigits: String) -> String` | §1 | `!{!"llvm.loop.unroll.count", i32 <digits>}` body — caller pre-formats the Int |
 | `mirLoopMDParallelAccesses` | `(accessGroupRef: String) -> String` | §1 | `!{!"llvm.loop.parallel_accesses", <ref>}` body — A6 group reference |
 | `mirFormatFnAttrs` | `(inlineMode: Int, hot: Bool, cold: Bool, pureFn: Bool, targetFeatures: List<String>) -> String` | §1 | Space-joined v0.6 A8/A9/A10/A13 fn-attr string — `inlinehint`/`alwaysinline`/`noinline` + `hot`/`cold`/`readnone` + `"target-features"="+f1,+f2"` |
+| `mirUnaryIsIdentity` | `(symbol: String) -> Bool` | §11 | True for unary `+`, the identity op — caller short-circuits to reuse the operand register |
+| `mirUnaryInstruction` | `(symbol: String, argReg: String, llvmTy: String, isFloat: Bool) -> String` | §11 | LLVM instruction body for `-` / `!` / `~` — spliced between `%tmp = ` and `\n`; returns `""` on miss so caller stays on the unsupported diagnostic |
+| `mirStringPoolLine` | `(sym: String, sizeDigits: String, encoded: String) -> String` | §12 | One constant line of the string pool — `@.str.N = private unnamed_addr constant [<size> x i8] c"<encoded>"\n`; `sizeDigits` is pre-formatted by the Go caller |
+| `mirAliasScopeDomainLine` | `(ref: String) -> String` | §1 | `!N = distinct !{!"osty.list.metadata.domain"}` — root of the list-alias-scope chain |
+| `mirAliasScopeScopeLine` | `(ref: String, domainRef: String) -> String` | §1 | `!N = distinct !{!"osty.list.metadata.scope", !Domain}` — middle node of the chain |
+| `mirAliasScopeListLine` | `(ref: String, scopeRef: String) -> String` | §1 | `!N = !{!Scope}` — the one-element scope list attached via `!alias.scope`/`!noalias` |
+| `mirAccessGroupLine` | `(ref: String) -> String` | §1 | `!N = distinct !{}` — A6 parallel-access group root |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as

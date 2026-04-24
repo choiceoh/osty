@@ -390,14 +390,11 @@ func (g *mirGen) listAliasScopeRef() string {
 		return g.listMetaScopeList
 	}
 	domainRef := fmt.Sprintf("!%d", len(g.loopMDDefs))
-	g.loopMDDefs = append(g.loopMDDefs,
-		fmt.Sprintf(`%s = distinct !{!"osty.list.metadata.domain"}`, domainRef))
+	g.loopMDDefs = append(g.loopMDDefs, mirAliasScopeDomainLine(domainRef))
 	scopeRef := fmt.Sprintf("!%d", len(g.loopMDDefs))
-	g.loopMDDefs = append(g.loopMDDefs,
-		fmt.Sprintf(`%s = distinct !{!"osty.list.metadata.scope", %s}`, scopeRef, domainRef))
+	g.loopMDDefs = append(g.loopMDDefs, mirAliasScopeScopeLine(scopeRef, domainRef))
 	listRef := fmt.Sprintf("!%d", len(g.loopMDDefs))
-	g.loopMDDefs = append(g.loopMDDefs,
-		fmt.Sprintf("%s = !{%s}", listRef, scopeRef))
+	g.loopMDDefs = append(g.loopMDDefs, mirAliasScopeListLine(listRef, scopeRef))
 	g.listMetaScopeList = listRef
 	return listRef
 }
@@ -410,7 +407,7 @@ func (g *mirGen) listAliasScopeRef() string {
 // inside each loop's `llvm.loop.parallel_accesses` property.
 func (g *mirGen) nextAccessGroupMD() string {
 	ref := fmt.Sprintf("!%d", len(g.loopMDDefs))
-	g.loopMDDefs = append(g.loopMDDefs, fmt.Sprintf("%s = distinct !{}", ref))
+	g.loopMDDefs = append(g.loopMDDefs, mirAccessGroupLine(ref))
 	return ref
 }
 
@@ -9107,49 +9104,21 @@ func (g *mirGen) renderConst(c mir.Const, hintT mir.Type) (string, error) {
 // ==== operators ====
 
 func (g *mirGen) emitUnary(op mir.UnaryOp, arg string, t mir.Type) (string, error) {
-	llvmT := g.llvmType(t)
-	tmp := g.fresh()
-	switch op {
-	case mir.UnNeg:
-		if isFloatType(t) {
-			g.fnBuf.WriteString("  ")
-			g.fnBuf.WriteString(tmp)
-			g.fnBuf.WriteString(" = fneg ")
-			g.fnBuf.WriteString(llvmT)
-			g.fnBuf.WriteByte(' ')
-			g.fnBuf.WriteString(arg)
-			g.fnBuf.WriteByte('\n')
-			return tmp, nil
-		}
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = sub ")
-		g.fnBuf.WriteString(llvmT)
-		g.fnBuf.WriteString(" 0, ")
-		g.fnBuf.WriteString(arg)
-		g.fnBuf.WriteByte('\n')
-		return tmp, nil
-	case mir.UnPlus:
-		// identity
+	sym := op.String()
+	if mirUnaryIsIdentity(sym) {
 		return arg, nil
-	case mir.UnNot:
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = xor i1 ")
-		g.fnBuf.WriteString(arg)
-		g.fnBuf.WriteString(", 1\n")
-		return tmp, nil
-	case mir.UnBitNot:
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = xor ")
-		g.fnBuf.WriteString(llvmT)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(arg)
-		g.fnBuf.WriteString(", -1\n")
-		return tmp, nil
 	}
-	return "", unsupported("mir-mvp", fmt.Sprintf("unary op %d", op))
+	instr := mirUnaryInstruction(sym, arg, g.llvmType(t), isFloatType(t))
+	if instr == "" {
+		return "", unsupported("mir-mvp", fmt.Sprintf("unary op %d", op))
+	}
+	tmp := g.fresh()
+	g.fnBuf.WriteString("  ")
+	g.fnBuf.WriteString(tmp)
+	g.fnBuf.WriteString(" = ")
+	g.fnBuf.WriteString(instr)
+	g.fnBuf.WriteByte('\n')
+	return tmp, nil
 }
 
 func (g *mirGen) emitBinary(op mir.BinaryOp, left, right string, argT, resT mir.Type) (string, error) {
@@ -9465,12 +9434,7 @@ func (g *mirGen) emitStringPool() {
 	for _, s := range g.stringOrder {
 		sym := g.strings[s]
 		encoded, size := encodeLLVMString(s)
-		pool.WriteString(sym)
-		pool.WriteString(" = private unnamed_addr constant [")
-		pool.WriteString(strconv.Itoa(size))
-		pool.WriteString(" x i8] c\"")
-		pool.WriteString(encoded)
-		pool.WriteString("\"\n")
+		pool.WriteString(mirStringPoolLine(sym, strconv.Itoa(size), encoded))
 	}
 	pool.WriteByte('\n')
 	// Inject before the first "define " or "declare " line, whichever
