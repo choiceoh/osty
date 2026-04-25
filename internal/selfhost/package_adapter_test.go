@@ -375,7 +375,7 @@ fn main() {
 func findCheckedBindingType(result selfhost.CheckResult, name string) string {
 	for _, binding := range result.Bindings {
 		if binding.Name == name {
-			return binding.TypeName
+			return binding.Type.String()
 		}
 	}
 	return ""

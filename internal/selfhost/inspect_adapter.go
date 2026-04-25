@@ -30,7 +30,7 @@ func adaptInspectRecords(recs []*InspectRecord) []api.InspectRecord {
 			End:      r.end,
 			NodeKind: r.nodeKind,
 			Rule:     r.rule,
-			TypeName: r.typeName,
+			Type:     parseTypeRepr(r.typeName),
 			HintName: r.hintName,
 			Notes:    append([]string(nil), r.notes...),
 		})

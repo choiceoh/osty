@@ -839,7 +839,7 @@ func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked ap
 		if expr == nil {
 			continue
 		}
-		t := parseSelfhostTypeName(node.TypeName, idx.scopeFor(key))
+		t := typeReprToType(node.Type, idx.scopeFor(key))
 		if t == nil {
 			continue
 		}
@@ -847,7 +847,7 @@ func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked ap
 	}
 	for _, binding := range checked.Bindings {
 		key := selfhostSpanKey{start: binding.Start, end: binding.End}
-		t := parseSelfhostTypeName(binding.TypeName, idx.scopeFor(key))
+		t := typeReprToType(binding.Type, idx.scopeFor(key))
 		if t == nil {
 			continue
 		}
@@ -861,7 +861,7 @@ func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked ap
 	}
 	for _, symbol := range checked.Symbols {
 		key := selfhostSpanKey{start: symbol.Start, end: symbol.End}
-		t := parseSelfhostTypeName(symbol.TypeName, idx.scopeFor(key))
+		t := typeReprToType(symbol.Type, idx.scopeFor(key))
 		if t == nil {
 			continue
 		}
@@ -877,8 +877,8 @@ func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked ap
 			continue
 		}
 		args := make([]types.Type, 0, len(inst.TypeArgs))
-		for _, name := range inst.TypeArgs {
-			if t := parseSelfhostTypeName(name, idx.scopeFor(key)); t != nil {
+		for i := range inst.TypeArgs {
+			if t := typeReprToType(&inst.TypeArgs[i], idx.scopeFor(key)); t != nil {
 				args = append(args, t)
 			}
 		}
@@ -1441,158 +1441,85 @@ func bindingPatternName(p ast.Pattern) string {
 	}
 }
 
-func parseSelfhostTypeName(raw string, scope *resolve.Scope) types.Type {
-	text := strings.TrimSpace(raw)
-	switch text {
-	case "", "Invalid", "Poison":
+// typeReprToType converts a structured *api.TypeRepr to a types.Type using
+// the given scope for symbol resolution. This replaces the former string
+// round-trip through parseSelfhostTypeName. Returns nil when tr is nil so
+// callers can continue to use the `if t == nil { continue }` guard.
+func typeReprToType(tr *api.TypeRepr, scope *resolve.Scope) types.Type {
+	if tr == nil {
+		return nil
+	}
+	switch tr.Kind {
+	case "error", "poison":
 		return types.ErrorType
-	case "()", "Unit":
+	case "primitive":
+		switch tr.Name {
+		case "", "Invalid", "Poison":
+			return types.ErrorType
+		case "()", "Unit":
+			return types.Unit
+		case "Never":
+			return types.Never
+		case "UntypedInt":
+			return types.UntypedIntVal
+		case "UntypedFloat":
+			return types.UntypedFloatVal
+		default:
+			if p := types.PrimitiveByName(tr.Name); p != nil {
+				return p
+			}
+			return types.ErrorType
+		}
+	case "unit":
 		return types.Unit
-	case "Never":
+	case "never":
 		return types.Never
-	case "UntypedInt":
-		return types.UntypedIntVal
-	case "UntypedFloat":
-		return types.UntypedFloatVal
-	}
-	if strings.HasSuffix(text, "?") {
-		inner := parseSelfhostTypeName(strings.TrimSuffix(text, "?"), scope)
-		return &types.Optional{Inner: inner}
-	}
-	if strings.HasPrefix(text, "fn(") {
-		return parseSelfhostFnType(text, scope)
-	}
-	if strings.HasPrefix(text, "(") && strings.HasSuffix(text, ")") {
-		inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "("), ")"))
-		if inner == "" {
+	case "named":
+		sym := lookupSelfhostTypeSymbol(tr.Name, scope)
+		var args []types.Type
+		for i := range tr.Args {
+			args = append(args, typeReprToType(&tr.Args[i], scope))
+		}
+		if sym.Kind == resolve.SymGeneric {
+			return &types.TypeVar{Sym: sym}
+		}
+		return &types.Named{Sym: sym, Args: args}
+	case "optional":
+		if tr.Return != nil {
+			return &types.Optional{Inner: typeReprToType(tr.Return, scope)}
+		}
+		return types.ErrorType
+	case "tuple":
+		if len(tr.Args) == 0 {
 			return types.Unit
 		}
-		parts := splitSelfhostTypeList(inner)
-		if len(parts) == 1 {
-			return parseSelfhostTypeName(parts[0], scope)
+		if len(tr.Args) == 1 {
+			return typeReprToType(&tr.Args[0], scope)
 		}
-		elems := make([]types.Type, 0, len(parts))
-		for _, part := range parts {
-			elems = append(elems, parseSelfhostTypeName(part, scope))
+		elems := make([]types.Type, 0, len(tr.Args))
+		for i := range tr.Args {
+			elems = append(elems, typeReprToType(&tr.Args[i], scope))
 		}
 		return &types.Tuple{Elems: elems}
-	}
-	head, argText, hasArgs := splitSelfhostGeneric(text)
-	if p := types.PrimitiveByName(head); p != nil && !hasArgs {
-		return p
-	}
-	if head == "Option" && hasArgs {
-		args := splitSelfhostTypeList(argText)
-		if len(args) == 1 {
-			return &types.Optional{Inner: parseSelfhostTypeName(args[0], scope)}
+	case "fn":
+		var params []types.Type
+		for i := range tr.Args {
+			params = append(params, typeReprToType(&tr.Args[i], scope))
 		}
-	}
-	args := []types.Type(nil)
-	if hasArgs {
-		for _, part := range splitSelfhostTypeList(argText) {
-			args = append(args, parseSelfhostTypeName(part, scope))
+		ret := types.Type(types.Unit)
+		if tr.Return != nil {
+			ret = typeReprToType(tr.Return, scope)
 		}
-	}
-	sym := lookupSelfhostTypeSymbol(head, scope)
-	if sym.Kind == resolve.SymGeneric {
+		return &types.FnType{Params: params, Return: ret}
+	case "typevar":
+		sym := lookupSelfhostTypeSymbol(tr.Name, scope)
 		return &types.TypeVar{Sym: sym}
-	}
-	return &types.Named{Sym: sym, Args: args}
-}
-
-func parseSelfhostFnType(text string, scope *resolve.Scope) types.Type {
-	open := strings.IndexByte(text, '(')
-	if open < 0 {
+	case "self":
+		// Self type — approximated as error type for now
+		return types.ErrorType
+	default:
 		return types.ErrorType
 	}
-	close := matchingSelfhostParen(text, open)
-	if close < 0 {
-		return types.ErrorType
-	}
-	paramText := strings.TrimSpace(text[open+1 : close])
-	var params []types.Type
-	if paramText != "" {
-		for _, part := range splitSelfhostTypeList(paramText) {
-			params = append(params, parseSelfhostTypeName(part, scope))
-		}
-	}
-	ret := types.Type(types.Unit)
-	rest := strings.TrimSpace(text[close+1:])
-	if strings.HasPrefix(rest, "->") {
-		ret = parseSelfhostTypeName(strings.TrimSpace(strings.TrimPrefix(rest, "->")), scope)
-	}
-	return &types.FnType{Params: params, Return: ret}
-}
-
-func splitSelfhostGeneric(text string) (head, args string, ok bool) {
-	depth := 0
-	start := -1
-	for i, r := range text {
-		switch r {
-		case '<':
-			if depth == 0 {
-				start = i
-			}
-			depth++
-		case '>':
-			depth--
-			if depth == 0 && i == len(text)-1 && start >= 0 {
-				return strings.TrimSpace(text[:start]), strings.TrimSpace(text[start+1 : i]), true
-			}
-		}
-	}
-	return strings.TrimSpace(text), "", false
-}
-
-func splitSelfhostTypeList(text string) []string {
-	var out []string
-	start := 0
-	angle := 0
-	paren := 0
-	for i, r := range text {
-		switch r {
-		case '<':
-			angle++
-		case '>':
-			if angle > 0 {
-				angle--
-			}
-		case '(':
-			paren++
-		case ')':
-			if paren > 0 {
-				paren--
-			}
-		case ',':
-			if angle == 0 && paren == 0 {
-				part := strings.TrimSpace(text[start:i])
-				if part != "" {
-					out = append(out, part)
-				}
-				start = i + 1
-			}
-		}
-	}
-	if part := strings.TrimSpace(text[start:]); part != "" {
-		out = append(out, part)
-	}
-	return out
-}
-
-func matchingSelfhostParen(text string, open int) int {
-	depth := 0
-	for i := open; i < len(text); i++ {
-		switch text[i] {
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
 }
 
 func lookupSelfhostTypeSymbol(head string, scope *resolve.Scope) *resolve.Symbol {

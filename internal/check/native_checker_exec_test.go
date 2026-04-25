@@ -163,7 +163,7 @@ func TestNativeBoundaryExecChecksStructuredPackageInput(t *testing.T) {
 	}
 	found := false
 	for _, binding := range checked.Bindings {
-		if binding.Name == "value" && binding.TypeName == "Int" {
+		if binding.Name == "value" && binding.Type != nil && binding.Type.Kind == "primitive" && binding.Type.Name == "Int" {
 			found = true
 			break
 		}

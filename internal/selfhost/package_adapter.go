@@ -242,11 +242,11 @@ func adaptCheckResultWithTokenLayout(checked *FrontCheckResult, layout *selfhost
 		}
 		start, end := checkNodeOffsetsWithTokenLayout(layout, node.start, node.end)
 		result.TypedNodes = append(result.TypedNodes, CheckedNode{
-			Node:     node.node,
-			Kind:     node.kind,
-			TypeName: node.typeName,
-			Start:    start,
-			End:      end,
+			Node:  node.node,
+			Kind:  node.kind,
+			Type:  parseTypeRepr(node.typeName),
+			Start: start,
+			End:   end,
 		})
 	}
 	for _, binding := range checked.bindings {
@@ -255,12 +255,12 @@ func adaptCheckResultWithTokenLayout(checked *FrontCheckResult, layout *selfhost
 		}
 		start, end := checkNodeOffsetsWithTokenLayout(layout, binding.start, binding.end)
 		result.Bindings = append(result.Bindings, CheckedBinding{
-			Node:     binding.node,
-			Name:     binding.name,
-			TypeName: binding.typeName,
-			Mutable:  binding.mutable,
-			Start:    start,
-			End:      end,
+			Node:    binding.node,
+			Name:    binding.name,
+			Type:    parseTypeRepr(binding.typeName),
+			Mutable: binding.mutable,
+			Start:   start,
+			End:     end,
 		})
 	}
 	for _, symbol := range checked.symbols {
@@ -269,13 +269,13 @@ func adaptCheckResultWithTokenLayout(checked *FrontCheckResult, layout *selfhost
 		}
 		start, end := checkNodeOffsetsWithTokenLayout(layout, symbol.start, symbol.end)
 		result.Symbols = append(result.Symbols, CheckedSymbol{
-			Node:     symbol.node,
-			Kind:     symbol.kind,
-			Name:     symbol.name,
-			Owner:    symbol.owner,
-			TypeName: symbol.typeName,
-			Start:    start,
-			End:      end,
+			Node:  symbol.node,
+			Kind:  symbol.kind,
+			Name:  symbol.name,
+			Owner: symbol.owner,
+			Type:  parseTypeRepr(symbol.typeName),
+			Start: start,
+			End:   end,
 		})
 	}
 	for _, inst := range checked.instantiations {
@@ -286,8 +286,8 @@ func adaptCheckResultWithTokenLayout(checked *FrontCheckResult, layout *selfhost
 		result.Instantiations = append(result.Instantiations, CheckInstantiation{
 			Node:       inst.node,
 			Callee:     inst.callee,
-			TypeArgs:   append([]string(nil), inst.typeArgs...),
-			ResultType: inst.resultType,
+			TypeArgs:   parseTypeReprSlice(inst.typeArgs),
+			ResultType: parseTypeRepr(inst.resultType),
 			Start:      start,
 			End:        end,
 		})

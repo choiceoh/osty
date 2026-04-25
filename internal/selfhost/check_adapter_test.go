@@ -467,7 +467,7 @@ func TestCheckSourceStructuredRegistersPreludeFunctions(t *testing.T) {
 	got := map[string]string{}
 	for _, binding := range checked.Bindings {
 		if _, ok := want[binding.Name]; ok {
-			got[binding.Name] = binding.TypeName
+			got[binding.Name] = binding.Type.String()
 		}
 	}
 	for name, wantType := range want {
@@ -501,7 +501,7 @@ fn main() {
 
 	got := map[string]string{}
 	for _, binding := range checked.Bindings {
-		got[binding.Name] = binding.TypeName
+		got[binding.Name] = binding.Type.String()
 	}
 	if got["item"] != "host.Item" {
 		t.Fatalf("binding type for item = %q, want host.Item (all=%v)", got["item"], got)
@@ -580,7 +580,7 @@ fn main() {
 
 	got := map[string]string{}
 	for _, binding := range checked.Bindings {
-		got[binding.Name] = binding.TypeName
+		got[binding.Name] = binding.Type.String()
 	}
 	want := map[string]string{
 		"chain":        "List<Error>",
@@ -639,7 +639,7 @@ func TestCheckSourceStructuredAcceptsStdListMethods(t *testing.T) {
 
 	got := map[string]string{}
 	for _, binding := range checked.Bindings {
-		got[binding.Name] = binding.TypeName
+		got[binding.Name] = binding.Type.String()
 	}
 	want := map[string]string{
 		"idx":         "Int?",
@@ -711,7 +711,7 @@ fn main() {
 
 	got := map[string]string{}
 	for _, binding := range checked.Bindings {
-		got[binding.Name] = binding.TypeName
+		got[binding.Name] = binding.Type.String()
 	}
 	want := map[string]string{
 		"eqPoint":     "Bool",
@@ -830,7 +830,7 @@ fn main() {
 
 	got := map[string]string{}
 	for _, binding := range checked.Bindings {
-		got[binding.Name] = binding.TypeName
+		got[binding.Name] = binding.Type.String()
 	}
 	want := map[string]string{
 		"renamed":   "User",
@@ -875,7 +875,7 @@ fn main() {
 
 	got := map[string]string{}
 	for _, binding := range checked.Bindings {
-		got[binding.Name] = binding.TypeName
+		got[binding.Name] = binding.Type.String()
 	}
 	want := map[string]string{
 		"samePoint": "Bool",
@@ -950,7 +950,7 @@ fn main() {
 
 	got := map[string]string{}
 	for _, binding := range checked.Bindings {
-		got[binding.Name] = binding.TypeName
+		got[binding.Name] = binding.Type.String()
 	}
 	if got["described"] != "(String, Error?)" {
 		t.Fatalf("binding type for described = %q, want %q (all=%v)", got["described"], "(String, Error?)", got)
@@ -1033,7 +1033,7 @@ fn main() {
 
 	got := map[string]string{}
 	for _, binding := range checked.Bindings {
-		got[binding.Name] = binding.TypeName
+		got[binding.Name] = binding.Type.String()
 	}
 	if got["label"] != "String" {
 		t.Fatalf("binding type for label = %q, want %q (all=%v)", got["label"], "String", got)

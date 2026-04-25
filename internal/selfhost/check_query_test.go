@@ -159,7 +159,8 @@ func TestOffsetContainmentBoundary(t *testing.T) {
 	if outer == "" {
 		return // no outer node — End is exclusive, empty result is fine
 	}
-	if outer == litNode.TypeName {
+	litType := selfhost.TypeAtOffset(r, litNode.Start)
+	if outer == litType {
 		t.Errorf("TypeAtOffset at End offset returned same type as literal node; expected an enclosing node's type or empty, got %q", outer)
 	}
 }

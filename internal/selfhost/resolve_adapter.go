@@ -297,15 +297,15 @@ func adaptResolveResult(resolved *SelfResolveResult, file *AstFile, offsets func
 		}
 		start, end := offsets(sym.start, sym.end)
 		result.Symbols = append(result.Symbols, ResolvedSymbol{
-			Node:     sym.node,
-			Name:     sym.name,
-			Kind:     sym.kind,
-			TypeName: sym.typeName,
-			Arity:    sym.arity,
-			Depth:    sym.depth,
-			Start:    start,
-			End:      end,
-			Public:   sym.public,
+			Node:   sym.node,
+			Name:   sym.name,
+			Kind:   sym.kind,
+			Type:   parseTypeRepr(sym.typeName),
+			Arity:  sym.arity,
+			Depth:  sym.depth,
+			Start:  start,
+			End:    end,
+			Public: sym.public,
 		})
 	}
 	for _, ref := range resolved.refList {

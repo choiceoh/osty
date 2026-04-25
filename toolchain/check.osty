@@ -36,10 +36,120 @@ use std.strings as strings
 // Bridge record types (preserved for Go host compatibility).
 // ---------------------------------------------------------------------
 
+/// FrontTypeRepr is a structured type representation that crosses the
+/// selfhost boundary without string round-tripping. Each field mirrors
+/// the discriminated TyNode shape but is serializable.
+pub struct FrontTypeRepr {
+    pub kind: String,
+    pub name: String,
+    pub path: String,
+    pub args: List<FrontTypeRepr>,
+    pub ret: Option<FrontTypeRepr>,
+}
+
+/// tyToRepr converts a TyArena index into a structured FrontTypeRepr,
+/// eliminating the string-based round-trip on the Go ↔ Osty boundary.
+pub fn tyToRepr(arena: TyArena, idx: Int) -> FrontTypeRepr {
+    if idx < 0 {
+        return FrontTypeRepr { kind: "error", name: "Invalid", path: "", args: [], ret: None }
+    }
+    let node = tyGet(arena, idx)
+    match node.kind {
+        TkErr -> FrontTypeRepr { kind: "error", name: "Invalid", path: "", args: [], ret: None },
+        TkPoison -> FrontTypeRepr { kind: "poison", name: "Poison", path: "", args: [], ret: None },
+        TkPrim -> FrontTypeRepr { kind: "primitive", name: primKindName(node.prim), path: "", args: [], ret: None },
+        TkNamed -> {
+            let mut reprArgs: List<FrontTypeRepr> = []
+            for arg in node.args {
+                reprArgs.push(tyToRepr(arena, arg))
+            }
+            FrontTypeRepr { kind: "named", name: node.head, path: "", args: reprArgs, ret: None }
+        },
+        TkOptional -> FrontTypeRepr {
+            kind: "optional",
+            name: "",
+            path: "",
+            args: [],
+            ret: Some(tyToRepr(arena, node.ret)),
+        },
+        TkTuple -> {
+            let mut elems: List<FrontTypeRepr> = []
+            for e in node.args {
+                elems.push(tyToRepr(arena, e))
+            }
+            FrontTypeRepr { kind: "tuple", name: "", path: "", args: elems, ret: None }
+        },
+        TkFn -> {
+            let mut paramReprs: List<FrontTypeRepr> = []
+            for p in node.args {
+                paramReprs.push(tyToRepr(arena, p))
+            }
+            FrontTypeRepr {
+                kind: "fn",
+                name: "",
+                path: "",
+                args: paramReprs,
+                ret: Some(tyToRepr(arena, node.ret)),
+            }
+        },
+        TkVar -> {
+            let vName = node.varName
+            if vName == "" {
+                FrontTypeRepr { kind: "typevar", name: "?{node.varId}", path: "", args: [], ret: None }
+            } else {
+                FrontTypeRepr { kind: "typevar", name: vName, path: "", args: [], ret: None }
+            }
+        },
+        TkSelf -> FrontTypeRepr { kind: "self", name: "Self", path: "", args: [], ret: None },
+    }
+}
+
+/// frontTypeReprToString converts a structured FrontTypeRepr back into
+/// a human-readable string for legacy callers that still expect String
+/// output (hover, query helpers).
+pub fn frontTypeReprToString(repr: FrontTypeRepr) -> String {
+    if repr.kind == "primitive" || repr.kind == "error" || repr.kind == "poison" || repr.kind == "typevar" || repr.kind == "self" {
+        repr.name
+    } else if repr.kind == "named" {
+        if repr.args.len() == 0 {
+            repr.name
+        } else {
+            let mut parts: List<String> = []
+            for a in repr.args {
+                parts.push(frontTypeReprToString(a))
+            }
+            "{repr.name}<{strings.join(parts, ", ")}>"
+        }
+    } else if repr.kind == "optional" {
+        match repr.ret {
+            Some(inner) -> "{frontTypeReprToString(inner)}?",
+            None -> "?",
+        }
+    } else if repr.kind == "tuple" {
+        let mut parts: List<String> = []
+        for e in repr.args {
+            parts.push(frontTypeReprToString(e))
+        }
+        "({strings.join(parts, ", ")})"
+    } else if repr.kind == "fn" {
+        let mut parts: List<String> = []
+        for p in repr.args {
+            parts.push(frontTypeReprToString(p))
+        }
+        let retStr = match repr.ret {
+            Some(r) -> frontTypeReprToString(r),
+            None -> "()",
+        }
+        "fn({strings.join(parts, ", ")}) -> {retStr}"
+    } else {
+        repr.name
+    }
+}
+
 pub struct FrontCheckedNode {
     pub node: Int,
     pub kind: String,
-    pub typeName: String,
+    pub type: FrontTypeRepr,
     pub start: Int,
     pub end: Int,
 }
@@ -47,7 +157,7 @@ pub struct FrontCheckedNode {
 pub struct FrontCheckedBinding {
     pub node: Int,
     pub name: String,
-    pub typeName: String,
+    pub type: FrontTypeRepr,
     pub mutable: Bool,
     pub start: Int,
     pub end: Int,
@@ -58,7 +168,7 @@ pub struct FrontCheckedSymbol {
     pub kind: String,
     pub name: String,
     pub owner: String,
-    pub typeName: String,
+    pub type: FrontTypeRepr,
     pub start: Int,
     pub end: Int,
 }
@@ -66,8 +176,8 @@ pub struct FrontCheckedSymbol {
 pub struct FrontCheckInstantiation {
     pub node: Int,
     pub callee: String,
-    pub typeArgs: List<String>,
-    pub resultType: String,
+    pub typeArgs: List<FrontTypeRepr>,
+    pub resultType: FrontTypeRepr,
     pub start: Int,
     pub end: Int,
 }
@@ -1200,7 +1310,7 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
         typedNodes.push(FrontCheckedNode {
             node: node.originAst,
             kind,
-            typeName: tyToString(cx.env.tys, node.ty),
+            type: tyToRepr(cx.env.tys, node.ty),
             start: astNode.start,
             end: astNode.end,
         })
@@ -1211,7 +1321,7 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
         bindings.push(FrontCheckedBinding {
             node: b.node,
             name: b.name,
-            typeName: tyToString(cx.env.tys, b.ty),
+            type: tyToRepr(cx.env.tys, b.ty),
             mutable: b.mutable,
             start: b.start,
             end: b.end,
@@ -1225,7 +1335,7 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
             kind: s.kind,
             name: s.name,
             owner: s.owner,
-            typeName: tyToString(cx.env.tys, s.ty),
+            type: tyToRepr(cx.env.tys, s.ty),
             start: s.start,
             end: s.end,
         })
@@ -1233,15 +1343,15 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
 
     let mut instantiations: List<FrontCheckInstantiation> = []
     for inst in cx.env.instantiations {
-        let mut typeArgStrs: List<String> = []
+        let mut typeArgReprs: List<FrontTypeRepr> = []
         for tyArg in inst.typeArgs {
-            typeArgStrs.push(tyToString(cx.env.tys, tyArg))
+            typeArgReprs.push(tyToRepr(cx.env.tys, tyArg))
         }
         instantiations.push(FrontCheckInstantiation {
             node: inst.node,
             callee: inst.callee,
-            typeArgs: typeArgStrs,
-            resultType: tyToString(cx.env.tys, inst.resultTy),
+            typeArgs: typeArgReprs,
+            resultType: tyToRepr(cx.env.tys, inst.resultTy),
             start: inst.start,
             end: inst.end,
         })
@@ -1271,7 +1381,7 @@ pub fn frontCheckResultBindingType(result: FrontCheckResult, name: String) -> St
     let mut found = ""
     for b in result.bindings {
         if b.name == name {
-            found = b.typeName
+            found = frontTypeReprToString(b.type)
         }
     }
     found
@@ -1337,7 +1447,7 @@ pub fn selfCheckTypeNameAtOffset(result: FrontCheckResult, offset: Int) -> Strin
     if bestIdx < 0 {
         return ""
     }
-    result.typedNodes[bestIdx].typeName
+    frontTypeReprToString(result.typedNodes[bestIdx].type)
 }
 
 /// selfCheckLetTypeNameAtOffset returns the declared type-name of the
@@ -1347,7 +1457,7 @@ pub fn selfCheckTypeNameAtOffset(result: FrontCheckResult, offset: Int) -> Strin
 pub fn selfCheckLetTypeNameAtOffset(result: FrontCheckResult, offset: Int) -> String {
     for b in result.bindings {
         if selfCheckOffsetContains(b.start, b.end, offset) {
-            return b.typeName
+            return frontTypeReprToString(b.type)
         }
     }
     ""
@@ -1405,7 +1515,7 @@ pub fn selfCheckHoverAtOffset(result: FrontCheckResult, offset: Int) -> SelfChec
     if bestIdx >= 0 {
         info.symbolName = result.symbols[bestIdx].name
         info.symbolKind = result.symbols[bestIdx].kind
-        info.symbolType = result.symbols[bestIdx].typeName
+        info.symbolType = frontTypeReprToString(result.symbols[bestIdx].type)
     }
     info
 }

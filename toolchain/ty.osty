@@ -647,7 +647,7 @@ fn tyFnToString(arena: TyArena, params: List<Int>, ret: Int) -> String {
     "fn({strings.join(parts, sep)}) -> {tyToString(arena, ret)}"
 }
 
-fn primKindName(prim: PrimKind) -> String {
+pub fn primKindName(prim: PrimKind) -> String {
     match prim {
         PkInvalid -> "Invalid",
         PkInt -> "Int",
