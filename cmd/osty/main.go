@@ -525,18 +525,14 @@ func main() {
 			os.Exit(1)
 		}
 	case "lint":
-		// Respect [lint] exclude before parsing. loadLintConfigWithBase
-		// looks upward from the file for `osty.toml`, returning the
-		// config + the manifest's directory so globs can be resolved
-		// relative to the project root. Announce the skip so exit 0
-		// isn't read as "lint clean".
-		if cfg, base, ok := loadLintConfigWithBase(path); ok {
-			if pat, matched := cfg.MatchingExclude(path, base); matched {
+		lintCfg, lintBase, lintOk := loadLintConfigWithBase(path)
+		if lintOk {
+			if pat, matched := lintCfg.MatchingExclude(path, lintBase); matched {
 				fmt.Fprintf(os.Stderr, "osty lint: skipping %s ([lint] exclude matches %q)\n", path, pat)
 				return
 			}
 		}
-		if code := runLintFile(path, src, formatter, flags); code != 0 {
+		if code := runLintFile(path, src, formatter, flags, lintCfg, lintOk); code != 0 {
 			os.Exit(code)
 		}
 	default:
@@ -1162,14 +1158,14 @@ func byteOffsetLineCol(src []byte, offset int) (int, int) {
 // (desugar runs on check.Package for multi-file auto-derive chains),
 // so the selfhost-direct entry shaves that pass without altering the
 // `*check.Result` shape the lint engine consumes.
-func runLintFile(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
+func runLintFile(path string, src []byte, formatter *diag.Formatter, flags cliFlags, lintCfg lint.Config, lintCfgOk bool) int {
 	parsed := parser.ParseDetailed(src)
 	file, parseDiags := parsed.File, parsed.Diagnostics
 	res := resolveFile(file)
 	chk := check.SelfhostFile(file, res, checkOptsForFile(path, canonical.Source(src, file)))
 	lr := runLintEngine(file, src, res, chk)
-	if cfg, ok := loadLintConfigNear(path); ok {
-		lr = cfg.Apply(lr)
+	if lintCfgOk {
+		lr = lintCfg.Apply(lr)
 	}
 	all := append(append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...), chk.Diags...)
 	all = append(all, lr.Diags...)
@@ -1860,9 +1856,13 @@ func maybeAIRepairSource(path string, src []byte, prefix string, summary io.Writ
 	return src
 }
 
-// loadLintConfigWithBase is loadLintConfigNear that also returns the
-// manifest directory. Callers need the base to resolve Exclude globs
-// against the project root rather than the target path's parent.
+// loadLintConfigWithBase walks up from the target path collecting
+// every `osty.toml` [lint] section and merging them hierarchically:
+// the closest (child) config overrides Allow/Deny from parent
+// configs further up the tree, while Exclude patterns from all
+// levels are unioned. It also returns the manifest directory of the
+// closest osty.toml (even when it has no [lint] section) so callers
+// can resolve Exclude globs against the project root.
 func loadLintConfigWithBase(startPath string) (lint.Config, string, bool) {
 	dir := startPath
 	if info, err := os.Stat(startPath); err == nil && !info.IsDir() {
@@ -1872,75 +1872,58 @@ func loadLintConfigWithBase(startPath string) (lint.Config, string, bool) {
 	if err != nil {
 		return lint.Config{}, "", false
 	}
+	var cfg lint.Config
+	base := ""
+	found := false
 	for {
 		candidate := filepath.Join(abs, manifest.ManifestFile)
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			if base == "" {
+				// Record the closest manifest directory as base for
+				// Exclude glob resolution, regardless of [lint].
+				base = abs
+			}
 			raw, err := os.ReadFile(candidate)
 			if err != nil {
-				return lint.Config{}, "", false
+				break
 			}
 			m, err := manifest.Parse(raw)
 			if err != nil {
-				return lint.Config{}, "", false
+				break
 			}
-			if m.Lint == nil {
-				return lint.Config{}, abs, false
+			if m.Lint != nil {
+				layer := lint.Config{
+					Allow:   m.Lint.Allow,
+					Deny:    m.Lint.Deny,
+					Exclude: m.Lint.Exclude,
+				}
+				if !found {
+					cfg = lint.Config{}.Merge(layer)
+					found = true
+				} else {
+					// layer is a parent — merge child on top.
+					cfg = cfg.Merge(layer)
+				}
 			}
-			return lint.Config{
-				Allow:   m.Lint.Allow,
-				Deny:    m.Lint.Deny,
-				Exclude: m.Lint.Exclude,
-			}, abs, true
 		}
 		parent := filepath.Dir(abs)
 		if parent == abs {
-			return lint.Config{}, "", false
+			break
 		}
 		abs = parent
 	}
+	return cfg, base, found
 }
 
-// loadLintConfigNear walks up from the target path (file or dir)
-// looking for `osty.toml`. Returns the parsed `[lint]` section as a
-// lint.Config if found. Missing manifest or missing [lint] is a
-// no-op — linting proceeds with defaults.
-//
-// Malformed manifests are reported on stderr but do NOT abort the
-// lint run — the user can still want a quick lint check on broken
-// project metadata.
+// loadLintConfigNear returns the merged [lint] configuration for the
+// file or directory at startPath by walking up the directory tree and
+// merging every ancestor osty.toml. Exclude is not returned because
+// the caller does not have a base directory for glob resolution;
+// use loadLintConfigWithBase when Exclude is needed.
 func loadLintConfigNear(startPath string) (lint.Config, bool) {
-	dir := startPath
-	if info, err := os.Stat(startPath); err == nil && !info.IsDir() {
-		dir = filepath.Dir(startPath)
-	}
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return lint.Config{}, false
-	}
-	for {
-		candidate := filepath.Join(abs, manifest.ManifestFile)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			raw, err := os.ReadFile(candidate)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-				return lint.Config{}, false
-			}
-			m, err := manifest.Parse(raw)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "osty: %s: %v\n", candidate, err)
-				return lint.Config{}, false
-			}
-			if m.Lint == nil {
-				return lint.Config{}, false
-			}
-			return lint.Config{Allow: m.Lint.Allow, Deny: m.Lint.Deny}, true
-		}
-		parent := filepath.Dir(abs)
-		if parent == abs {
-			return lint.Config{}, false // reached the root
-		}
-		abs = parent
-	}
+	cfg, _, ok := loadLintConfigWithBase(startPath)
+	cfg.Exclude = nil
+	return cfg, ok
 }
 
 // printResolution writes a sorted table of every resolved identifier:

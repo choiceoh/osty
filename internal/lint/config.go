@@ -2,6 +2,7 @@ package lint
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/osty/osty/internal/diag"
@@ -44,6 +45,117 @@ type Config struct {
 	// directory (the directory of the osty.toml it came from). If the
 	// file lives outside that tree, the absolute path is tried instead.
 	Exclude []string
+}
+
+// Merge returns a new Config that layers child on top of parent
+// using additive workspace semantics:
+//
+//   - Allow: union of parent + child (child entries first, dedup).
+//   - Deny: union of parent + child (child entries first, dedup),
+//     expanded to concrete codes, minus any codes the child's Allow
+//     resolves to. This lets a child selectively cancel individual
+//     codes from a parent's category-level deny without losing the
+//     rest. After cancellation the Deny list contains concrete codes
+//     (L0001, L0002, …) rather than symbolic names; Apply handles
+//     both transparently.
+//   - Exclude: union of parent + child (parent-first, dedup).
+//
+// A nil or zero-value child returns a deep copy of the parent.
+// A nil or zero-value parent returns a deep copy of the child.
+func (c Config) Merge(parent Config) Config {
+	var out Config
+
+	// Allow: union, child-first, dedup.
+	out.Allow = mergeStringSlices(c.Allow, parent.Allow)
+
+	// Deny: union names → expand to concrete codes → subtract child.Allow.
+	mergedDenyNames := mergeStringSlices(c.Deny, parent.Deny)
+	if len(mergedDenyNames) > 0 {
+		denyCodes := expandCodeSet(mergedDenyNames)
+		if len(c.Allow) > 0 {
+			allowedCodes := expandCodeSet(c.Allow)
+			if allowedCodes["*"] {
+				denyCodes = nil
+			} else {
+				for code := range allowedCodes {
+					delete(denyCodes, code)
+				}
+			}
+		}
+		out.Deny = codeSetToSortedSlice(denyCodes)
+	}
+
+	// Exclude: union, parent-first, dedup.
+	out.Exclude = mergeExclude(parent.Exclude, c.Exclude)
+
+	return out
+}
+
+// mergeStringSlices returns the union of two string slices with dedup.
+// Entries from a come first, then entries from b that are not duplicates.
+func mergeStringSlices(a, b []string) []string {
+	if len(a) == 0 && len(b) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, s := range a {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	for _, s := range b {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// codeSetToSortedSlice converts a concrete code set (map[string]bool)
+// into a sorted slice of code strings. Sorted for deterministic output.
+// The wildcard set {"*": true} round-trips through expandCodeSet as
+// "all" — emitting "*" directly would not, since expandCodeSet only
+// recognizes "lint" and "all" as wildcard names.
+func codeSetToSortedSlice(codes map[string]bool) []string {
+	if len(codes) == 0 {
+		return nil
+	}
+	if codes["*"] {
+		return []string{"all"}
+	}
+	out := make([]string, 0, len(codes))
+	for code := range codes {
+		out = append(out, code)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// mergeExclude returns the union of two exclude lists, deduplicating
+// by exact pattern match. Parent patterns come first, then child
+// patterns that are not duplicates.
+func mergeExclude(parent, child []string) []string {
+	if len(parent) == 0 && len(child) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(parent)+len(child))
+	out := make([]string, 0, len(parent)+len(child))
+	for _, p := range parent {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, p := range child {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // MatchingExclude reports whether `path` matches any Exclude glob and
