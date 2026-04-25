@@ -1769,6 +1769,98 @@ pub fn mirUnreachableLine() -> String {
     "  unreachable\n"
 }
 
+// ============================================================
+// Specialised line builders for §1 vector-list fast-path metadata,
+// §5 GC bounds checks, and §7 list / map intrinsic chains.
+// ============================================================
+
+/// mirAndI1Line renders i1 logical-and `  <reg> = and i1 <lhs>, <rhs>\n`.
+/// Used by the bounds-check `nonNeg && inUpper` pattern in
+/// `emitListSafeGet` and similar predicate combinations.
+pub fn mirAndI1Line(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = and i1 " + lhs + ", " + rhs + "\n"
+}
+
+/// mirCallValueWithAliasScopeLine renders the snapshot-call form used
+/// by `snapshotVectorListLocal`:
+///   `  <reg> = call <retTy> @<sym>(<argList>), !alias.scope <scopeRef>\n`
+/// The `!alias.scope` metadata attachment is what unlocks LICM /
+/// vectorization of `osty_rt_list_data_*` / `osty_rt_list_len`
+/// snapshot reads — LLVM treats them as non-aliasing within the
+/// scope's domain. `scopeRef` is the `!N` ref returned by
+/// `MirSeq.listAliasScopeRef`.
+pub fn mirCallValueWithAliasScopeLine(
+    reg: String,
+    retTy: String,
+    sym: String,
+    argList: String,
+    scopeRef: String,
+) -> String {
+    "  " + reg + " = call " + retTy + " @" + sym + "(" + argList +
+        "), !alias.scope " + scopeRef + "\n"
+}
+
+/// mirLoadWithNoAliasLine renders a load tagged with `!noalias`
+/// metadata:
+///   `  <reg> = load <ty>, ptr <ptr>, !noalias <scopeRef>\n`
+/// Used by the vector-list fast-path read (`emitVectorListFastLoad`)
+/// to assert the buffer load doesn't clobber the snapshot calls
+/// already attached via `!alias.scope`. The pair `!alias.scope` on
+/// snapshot calls + `!noalias` on buffer loads is what lets LICM hoist
+/// snapshots out of mixed-traffic loops.
+pub fn mirLoadWithNoAliasLine(reg: String, ty: String, ptr: String, scopeRef: String) -> String {
+    "  " + reg + " = load " + ty + ", ptr " + ptr + ", !noalias " + scopeRef + "\n"
+}
+
+/// mirStoreWithNoAliasLine renders a store tagged with `!noalias`:
+///   `  store <ty> <val>, ptr <ptr>, !noalias <scopeRef>\n`
+/// Symmetric to `mirLoadWithNoAliasLine` for the vector-list fast-path
+/// write (`emitVectorListFastStore`).
+pub fn mirStoreWithNoAliasLine(ty: String, val: String, ptr: String, scopeRef: String) -> String {
+    "  store " + ty + " " + val + ", ptr " + ptr + ", !noalias " + scopeRef + "\n"
+}
+
+/// mirCallVoidNoReturnNoArgsLine renders the noreturn-attributed
+/// argumentless call:
+///   `  call void @<sym>() noreturn\n`
+/// The callsite `noreturn` attribute is belt-and-suspenders next to
+/// the function declaration's noreturn — both signal that control
+/// doesn't return past the call. Used for OOB-abort traps and similar
+/// dead-end runtime hooks.
+pub fn mirCallVoidNoReturnNoArgsLine(sym: String) -> String {
+    "  call void @" + sym + "() noreturn\n"
+}
+
+/// mirAllocaArrayLine renders `  <reg> = alloca <ty>, i64 <countDigits>\n`
+/// — the array-allocation form used when emitting a stack-allocated
+/// vector of N elements (GC root chunks: `alloca ptr, i64 5`).
+pub fn mirAllocaArrayLine(reg: String, ty: String, countDigits: String) -> String {
+    "  " + reg + " = alloca " + ty + ", i64 " + countDigits + "\n"
+}
+
+/// mirGEPLine renders the non-inbounds variant of `getelementptr`:
+///   `  <reg> = getelementptr <baseTy>, ptr <basePtr>, <idxTy> <idx>\n`
+/// Used by the GC root chunking path which writes pointer-stride
+/// offsets without the `inbounds` flag.
+pub fn mirGEPLine(
+    reg: String,
+    baseTy: String,
+    basePtr: String,
+    idxTy: String,
+    idx: String,
+) -> String {
+    "  " + reg + " = getelementptr " + baseTy +
+        ", ptr " + basePtr + ", " + idxTy + " " + idx + "\n"
+}
+
+/// mirStorePtrLine renders the pointer-payload store
+/// `  store ptr <val>, ptr <slot>\n`. Specialised because the GC root
+/// emitter writes ptr→ptr stores in a tight loop and the named
+/// builder reads cleaner than `mirStoreLine("ptr", val, slot)`.
+pub fn mirStorePtrLine(val: String, slot: String) -> String {
+    "  store ptr " + val + ", ptr " + slot + "\n"
+}
+
 /// §14 enum / tuple layout cache.
 ///
 /// MirLayoutCache owns the dedup + insertion-order side of the
