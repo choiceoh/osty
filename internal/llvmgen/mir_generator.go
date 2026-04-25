@@ -211,20 +211,10 @@ type mirGen struct {
 	// single rebind. Populated by planVectorListHoists pre-pass;
 	// consumed (and entries deleted) by maybeHoistSnapshotAfterAssign.
 	vectorListHoistLocals map[mir.LocalID]string
-	// loopMDDefs accumulates every metadata-node definition (loop
-	// hint chains + access groups) for the whole translation unit.
-	// Module-scoped numbering keeps IDs unique; flushed at module
-	// tail via emitLoopMetadata.
-	loopMDDefs []string
-	// listMetaScopeList is the `!alias.scope` node reference that
-	// tags `osty_rt_list_data_*` / `osty_rt_list_len` snapshot calls
-	// as reading the list-metadata scope. Fast-path loads and stores
-	// that go through the cached `data` pointer carry the matching
-	// `!noalias` attachment so LLVM can prove the buffer writes don't
-	// invalidate the metadata reads — which is what unlocks LICM on
-	// hot loops that interleave snapshot reuse with slot writes.
-	// Allocated once per module on first use via listAliasScopeRef.
-	listMetaScopeList string
+	// loopMDDefs + listMetaScopeList moved to MirSeq mirror —
+	// see `g.seq.LoopMDDefs` / `g.seq.ListMetaScopeList`. The
+	// metadata accumulator + alias-scope cache are module-scoped
+	// (NOT cleared by `g.seq.Reset()` at function boundaries).
 }
 
 type mirGCRootChunk struct {
@@ -332,83 +322,30 @@ func firstNonEmpty(xs ...string) string {
 // every metadata attachment in the translation unit; the HIR emitter
 // in `generator.go` uses the identical layout so the two paths remain
 // interchangeable from the LLVM verifier's perspective.
+// nextLoopMD / listAliasScopeRef / nextAccessGroupMD delegate to the
+// Osty-mirrored MirSeq state (`toolchain/mir_generator.osty:932`).
+// Per-function loop hints flow into `MirSeq.NextLoopMD` via the
+// `MirLoopHints` snapshot below; the `MirSeq` accumulator owns the
+// `!N` numbering + the alias-scope cache.
 func (g *mirGen) nextLoopMD() string {
-	var propRefs []string
-
-	alloc := func(line string) string {
-		ref := fmt.Sprintf("!%d", len(g.loopMDDefs))
-		g.loopMDDefs = append(g.loopMDDefs, fmt.Sprintf("%s = %s", ref, line))
-		return ref
-	}
-
-	if g.vectorizeHint {
-		propRefs = append(propRefs, alloc(mirLoopMDVectorizeEnable()))
-		if g.vectorizeWidth > 0 {
-			propRefs = append(propRefs, alloc(
-				mirLoopMDVectorizeWidth(strconv.Itoa(g.vectorizeWidth))))
-		}
-		if g.vectorizeScalable {
-			propRefs = append(propRefs, alloc(mirLoopMDVectorizeScalable()))
-		}
-		if g.vectorizePredicate {
-			propRefs = append(propRefs, alloc(mirLoopMDVectorizePredicate()))
-		}
-	}
-	if g.parallelHint && g.parallelAccessGroupRef != "" {
-		propRefs = append(propRefs, alloc(
-			mirLoopMDParallelAccesses(g.parallelAccessGroupRef)))
-	}
-	if g.unrollHint {
-		if g.unrollCount > 0 {
-			propRefs = append(propRefs, alloc(
-				mirLoopMDUnrollCount(strconv.Itoa(g.unrollCount))))
-		} else {
-			propRefs = append(propRefs, alloc(mirLoopMDUnrollEnable()))
-		}
-	}
-	if len(propRefs) == 0 {
-		// Nothing to attach — caller should not have invoked us.
-		return ""
-	}
-
-	loopRef := fmt.Sprintf("!%d", len(g.loopMDDefs))
-	children := append([]string{loopRef}, propRefs...)
-	g.loopMDDefs = append(g.loopMDDefs,
-		fmt.Sprintf("%s = distinct !{%s}", loopRef, strings.Join(children, ", ")))
-	return loopRef
+	return g.seq.NextLoopMD(MirLoopHints{
+		Vectorize:              g.vectorizeHint,
+		VectorizeWidth:         g.vectorizeWidth,
+		VectorizeScalable:      g.vectorizeScalable,
+		VectorizePredicate:     g.vectorizePredicate,
+		Parallel:               g.parallelHint,
+		ParallelAccessGroupRef: g.parallelAccessGroupRef,
+		Unroll:                 g.unrollHint,
+		UnrollCount:            g.unrollCount,
+	})
 }
 
-// listAliasScopeRef returns the module-level `!alias.scope` node
-// reference for the list-metadata scope, allocating the domain + scope
-// + list nodes lazily on first use. Call sites attach it via
-// `!alias.scope !N` (to declare a read is in the scope) or `!noalias !N`
-// (to declare a write is outside the scope). The combination lets LLVM
-// hoist `osty_rt_list_data_*` / `osty_rt_list_len` snapshot calls past
-// fast-path buffer stores that happen in the same loop body.
 func (g *mirGen) listAliasScopeRef() string {
-	if g.listMetaScopeList != "" {
-		return g.listMetaScopeList
-	}
-	domainRef := fmt.Sprintf("!%d", len(g.loopMDDefs))
-	g.loopMDDefs = append(g.loopMDDefs, mirAliasScopeDomainLine(domainRef))
-	scopeRef := fmt.Sprintf("!%d", len(g.loopMDDefs))
-	g.loopMDDefs = append(g.loopMDDefs, mirAliasScopeScopeLine(scopeRef, domainRef))
-	listRef := fmt.Sprintf("!%d", len(g.loopMDDefs))
-	g.loopMDDefs = append(g.loopMDDefs, mirAliasScopeListLine(listRef, scopeRef))
-	g.listMetaScopeList = listRef
-	return listRef
+	return g.seq.ListAliasScopeRef()
 }
 
-// nextAccessGroupMD allocates a fresh empty `!llvm.access.group`
-// metadata node (the LLVM convention for a parallel-accesses group is
-// a distinct empty tuple) and returns its reference. Used once per
-// `#[parallel]` function at emitFunction entry; the same reference
-// then appears both on load/store attachments (`!llvm.access !N`) and
-// inside each loop's `llvm.loop.parallel_accesses` property.
 func (g *mirGen) nextAccessGroupMD() string {
-	ref := fmt.Sprintf("!%d", len(g.loopMDDefs))
-	g.loopMDDefs = append(g.loopMDDefs, mirAccessGroupLine(ref))
-	return ref
+	return g.seq.NextAccessGroupMD()
 }
 
 // loopHintsActive reports whether the currently emitting function
@@ -421,13 +358,14 @@ func (g *mirGen) loopHintsActive() bool {
 
 // emitLoopMetadata appends every `!llvm.loop` node + vectorize-enable
 // property collected during function emission to the module tail. No
-// module footer is emitted when no `#[vectorize]` function ran.
+// module footer is emitted when no `#[vectorize]` function ran. The
+// accumulator now lives on `g.seq.LoopMDDefs` (MirSeq mirror).
 func (g *mirGen) emitLoopMetadata() {
-	if len(g.loopMDDefs) == 0 {
+	if len(g.seq.LoopMDDefs) == 0 {
 		return
 	}
 	g.out.WriteByte('\n')
-	for _, def := range g.loopMDDefs {
+	for _, def := range g.seq.LoopMDDefs {
 		g.out.WriteString(def)
 		g.out.WriteByte('\n')
 	}

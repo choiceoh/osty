@@ -931,6 +931,16 @@ pub fn mirGenDigitChar(d: Int) -> String {
 /// struct as the Go emitter shrinks.
 pub struct MirSeq {
     pub tempSeq: Int,
+    /// loopMDDefs accumulates every metadata-node definition the
+    /// emitter has produced so far (`!N = ...` lines). Module-scoped
+    /// numbering — the next allocator uses `loopMDDefs.len()` as its
+    /// `N`. Mirrors `g.loopMDDefs []string` on the Go side.
+    pub loopMDDefs: List<String>,
+    /// listMetaScopeList caches the `!alias.scope` list-node ref
+    /// (`!N` form) once `listAliasScopeRef` has lazily allocated the
+    /// 3-node domain/scope/list chain. Empty string means "not yet
+    /// allocated" — the singleton convention matches Go.
+    pub listMetaScopeList: String,
 
     /// fresh issues a fresh `%tN` SSA register name and bumps the
     /// counter. Mirrors `func (g *mirGen) fresh()` in the Go source —
@@ -951,9 +961,138 @@ pub struct MirSeq {
         name
     }
 
-    /// reset zeroes the counter at function-emission boundaries.
-    /// Mirrors `g.tempSeq = 0` at the top of `emitFunction`.
+    /// reset zeroes the SSA counter at function-emission boundaries.
+    /// `loopMDDefs` and `listMetaScopeList` are *module-scoped* — the
+    /// Go source also doesn't clear them at the per-function reset,
+    /// so they survive across functions deliberately.
     pub fn reset(mut self) {
         self.tempSeq = 0
     }
+
+    /// reserveMDRef returns the next `!N` reference for a metadata
+    /// node *without* appending. Pair with `commitMDLine` when the
+    /// caller composes the line via templates that already embed the
+    /// ref (e.g. `mirAliasScopeDomainLine(ref)`). For the simpler
+    /// "alloc and write" pattern use `allocMDNode` instead.
+    pub fn reserveMDRef(self) -> String {
+        "!" + mirGenIntToString(self.loopMDDefs.len())
+    }
+
+    /// commitMDLine appends a fully-formed metadata definition line
+    /// (already including its leading `!N = ...` prefix) to the
+    /// module accumulator. Pair with `reserveMDRef` — together they
+    /// implement the "ref reserved by caller, line composed by
+    /// template, accumulator updated by emitter" split that
+    /// `listAliasScopeRef` / `nextAccessGroupMD` use.
+    pub fn commitMDLine(mut self, line: String) {
+        self.loopMDDefs.push(line)
+    }
+
+    /// allocMDNode reserves the next `!N` ref, prepends `!N = ` to
+    /// the supplied body, appends the resulting line to the
+    /// accumulator, and returns the ref. Used by `nextLoopMD` for
+    /// child property nodes whose body shape is the LLVM payload
+    /// without a leading `!N = `.
+    pub fn allocMDNode(mut self, body: String) -> String {
+        let ref = self.reserveMDRef()
+        self.commitMDLine(ref + " = " + body)
+        ref
+    }
+
+    /// nextLoopMD allocates a fresh distinct self-referential
+    /// `!llvm.loop` metadata node whose property children reflect the
+    /// supplied per-function loop hints. Returns `""` when no hints
+    /// are active so the caller skips emitting the `!llvm.loop !N`
+    /// trailer entirely. Mirrors `func (g *mirGen) nextLoopMD()` —
+    /// the per-function flag values flow in via `MirLoopHints` so the
+    /// state on `MirSeq` stays narrow (just the accumulator + ref
+    /// counter).
+    pub fn nextLoopMD(mut self, hints: MirLoopHints) -> String {
+        let mut propRefs: List<String> = []
+        if hints.vectorize {
+            propRefs.push(self.allocMDNode(mirLoopMDVectorizeEnable()))
+            if hints.vectorizeWidth > 0 {
+                propRefs.push(self.allocMDNode(
+                    mirLoopMDVectorizeWidth(mirGenIntToString(hints.vectorizeWidth))))
+            }
+            if hints.vectorizeScalable {
+                propRefs.push(self.allocMDNode(mirLoopMDVectorizeScalable()))
+            }
+            if hints.vectorizePredicate {
+                propRefs.push(self.allocMDNode(mirLoopMDVectorizePredicate()))
+            }
+        }
+        if hints.parallel && hints.parallelAccessGroupRef != "" {
+            propRefs.push(self.allocMDNode(
+                mirLoopMDParallelAccesses(hints.parallelAccessGroupRef)))
+        }
+        if hints.unroll {
+            if hints.unrollCount > 0 {
+                propRefs.push(self.allocMDNode(
+                    mirLoopMDUnrollCount(mirGenIntToString(hints.unrollCount))))
+            } else {
+                propRefs.push(self.allocMDNode(mirLoopMDUnrollEnable()))
+            }
+        }
+        if propRefs.isEmpty() {
+            return ""
+        }
+        let loopRef = self.reserveMDRef()
+        let mut children = loopRef
+        for ref in propRefs {
+            children = children + ", " + ref
+        }
+        self.commitMDLine(loopRef + " = distinct !\{" + children + "\}")
+        loopRef
+    }
+
+    /// listAliasScopeRef returns the cached `!alias.scope` list-node
+    /// ref, allocating the 3-node domain/scope/list chain on first
+    /// call. Mirrors `func (g *mirGen) listAliasScopeRef()` — the
+    /// caching field (`listMetaScopeList`) lives on `MirSeq` now so
+    /// the lazy-init contract stays in one place.
+    pub fn listAliasScopeRef(mut self) -> String {
+        if self.listMetaScopeList != "" {
+            return self.listMetaScopeList
+        }
+        let domainRef = self.reserveMDRef()
+        self.commitMDLine(mirAliasScopeDomainLine(domainRef))
+        let scopeRef = self.reserveMDRef()
+        self.commitMDLine(mirAliasScopeScopeLine(scopeRef, domainRef))
+        let listRef = self.reserveMDRef()
+        self.commitMDLine(mirAliasScopeListLine(listRef, scopeRef))
+        self.listMetaScopeList = listRef
+        listRef
+    }
+
+    /// nextAccessGroupMD allocates a fresh empty `!llvm.access.group`
+    /// metadata node — the per-`#[parallel]`-function root that both
+    /// load/store `!llvm.access` attachments and per-loop
+    /// `llvm.loop.parallel_accesses` properties reference. Mirrors
+    /// `func (g *mirGen) nextAccessGroupMD()`.
+    pub fn nextAccessGroupMD(mut self) -> String {
+        let ref = self.reserveMDRef()
+        self.commitMDLine(mirAccessGroupLine(ref))
+        ref
+    }
+}
+
+/// MirLoopHints carries the per-function loop-optimization annotation
+/// flags consumed by `MirSeq.nextLoopMD`. Mirrors the equivalent
+/// `mirGen` fields (`vectorizeHint`, `vectorizeWidth`, … ,
+/// `unrollCount`). Plain data — no methods — since the values are
+/// snapshotted at the call site rather than mutated incrementally.
+pub struct MirLoopHints {
+    pub vectorize: Bool,
+    pub vectorizeWidth: Int,
+    pub vectorizeScalable: Bool,
+    pub vectorizePredicate: Bool,
+    pub parallel: Bool,
+    /// parallelAccessGroupRef is the `!N` ref allocated by
+    /// `MirSeq.nextAccessGroupMD` once per `#[parallel]` function;
+    /// empty string when `#[parallel]` is off or the group hasn't
+    /// been allocated yet (the latter shouldn't reach `nextLoopMD`).
+    pub parallelAccessGroupRef: String,
+    pub unroll: Bool,
+    pub unrollCount: Int,
 }
