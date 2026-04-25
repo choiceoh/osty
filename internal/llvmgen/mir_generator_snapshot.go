@@ -2053,3 +2053,50 @@ func mirFunctionDefineHeader(cconv string, retLLVM string, name string, paramLis
 func mirFunctionDefineFooter() string {
 	return "}\n\n"
 }
+
+// mirInlineAsmIdentityCallLine renders the LLVM inline-asm
+// identity-barrier shape used by `std.hint.black_box(x)`.
+// Osty: mirInlineAsmIdentityCallLine
+func mirInlineAsmIdentityCallLine(reg string, ty string, val string) string {
+	return "  " + reg + " = call " + ty +
+		` asm sideeffect "", "=r,0"(` + ty + " " + val + ")\n"
+}
+
+// mirCallVarargPrintfLine renders the LLVM-IR printf call shape
+// `  call i32 (ptr, ...) @printf(ptr <fmt>[, <args>])\n`.
+// Osty: mirCallVarargPrintfLine
+func mirCallVarargPrintfLine(fmtSym string, restArgs string) string {
+	if restArgs == "" {
+		return "  call i32 (ptr, ...) @printf(ptr " + fmtSym + ")\n"
+	}
+	return "  call i32 (ptr, ...) @printf(ptr " + fmtSym + ", " + restArgs + ")\n"
+}
+
+// mirCallExitLine renders the noreturn `exit(N)` runtime hook
+// `  call void @exit(i32 <codeDigits>)\n`.
+// Osty: mirCallExitLine
+func mirCallExitLine(codeDigits string) string {
+	return "  call void @exit(i32 " + codeDigits + ")\n"
+}
+
+// mirBrCondReversedLine renders the conditional branch with true /
+// false target order swapped — used by `emitTestingFailureCheck`
+// for the `assertFalse` shape where failure is on cond=true.
+// Osty: mirBrCondReversedLine
+func mirBrCondReversedLine(cond string, falseLabel string, trueLabel string) string {
+	return "  br i1 " + cond + ", label %" + falseLabel + ", label %" + trueLabel + "\n"
+}
+
+// mirCallIndirectVoidLine renders the void-return indirect call
+// `  call <callType> <fnPtrReg>(<argList>)\n`.
+// Osty: mirCallIndirectVoidLine
+func mirCallIndirectVoidLine(callType string, fnPtrReg string, argList string) string {
+	return "  call " + callType + " " + fnPtrReg + "(" + argList + ")\n"
+}
+
+// mirCallIndirectValueLine renders the typed indirect call
+// `  <reg> = call <callType> <fnPtrReg>(<argList>)\n`.
+// Osty: mirCallIndirectValueLine
+func mirCallIndirectValueLine(reg string, callType string, fnPtrReg string, argList string) string {
+	return "  " + reg + " = call " + callType + " " + fnPtrReg + "(" + argList + ")\n"
+}
