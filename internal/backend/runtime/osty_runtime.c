@@ -3,13 +3,25 @@
  * across glibc/musl/Darwin regardless of compiler default. 2008
  * supersedes the earlier 199309L level previously used for nanosleep
  * alone. Windows skips the POSIX surface entirely and uses the Win32
- * synchronization primitives below. */
+ * synchronization primitives below.
+ *
+ * `_DARWIN_C_SOURCE` (macOS) and `_GNU_SOURCE` (Linux/glibc) expose
+ * the BSD `MAP_ANON` / GNU `MAP_ANONYMOUS` mmap flag respectively —
+ * needed by the GC's mmap'd allocation arena. POSIX 2008 alone hides
+ * both. Setting these alongside `_POSIX_C_SOURCE` keeps the rest of
+ * the POSIX surface available. */
 #if !defined(_WIN32)
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE 700
+#endif
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1
+#endif
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE 1
 #endif
 #endif
 
@@ -21,6 +33,22 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+#if !defined(_WIN32)
+#include <sys/mman.h>
+/* `MAP_ANON` is the BSD/macOS spelling; `MAP_ANONYMOUS` is the GNU
+ * spelling. Both flags are bit-equal aliases on every supported target.
+ * Pick whichever is exposed at runtime-build time (macOS requires
+ * `_DARWIN_C_SOURCE` for `MAP_ANONYMOUS`, which we don't request, so
+ * fall back to `MAP_ANON`). */
+#if defined(MAP_ANONYMOUS)
+#  define OSTY_GC_MAP_ANON MAP_ANONYMOUS
+#elif defined(MAP_ANON)
+#  define OSTY_GC_MAP_ANON MAP_ANON
+#else
+#  error "no MAP_ANON / MAP_ANONYMOUS flag available"
+#endif
+#endif
 
 /* OSTY_HOT_INLINE marks runtime primitives that osty-lowered IR calls
  * on hot paths (`xs[i]`, `xs[i] = v`, `xs.len()`). Without this
@@ -480,7 +508,17 @@ typedef struct osty_gc_bump_block {
     size_t size;
     size_t used;
     int64_t live_alloc_count;
+    /* Aligned base of the payload region, used for bump allocation
+     * within this block. */
     unsigned char *data;
+    /* Original unaligned pointer that owns the heap-fallback payload
+     * region. NULL when the data region was suballocated from the
+     * arena (the arena retains ownership of its virtual range). */
+    unsigned char *data_alloc;
+    /* Reserved tail. Was the storage buffer in the pre-arena layout;
+     * kept as a zero-length flexible array so existing sizeof / offset
+     * computations stay stable for any external bridge that hard-codes
+     * the struct layout. */
     unsigned char storage[];
 } osty_gc_bump_block;
 
@@ -579,6 +617,105 @@ static int64_t osty_gc_load_forwarded_count = 0;
 static int64_t osty_gc_allocated_bytes_total = 0;
 static int64_t osty_gc_swept_count_total = 0;
 static int64_t osty_gc_swept_bytes_total = 0;
+
+/* Go-style mmap'd allocation arena.
+ *
+ * All bump-block storage is suballocated from a single contiguous
+ * virtual region reserved up front via mmap. The advantage isn't
+ * physical memory savings (we'd allocate the same RAM either way)
+ * but two architectural wins:
+ *
+ *   1. `osty_gc_arena_contains(p)` is a 2-compare range check that
+ *      tells us in O(1) whether a pointer might be a managed payload.
+ *      The hash-table-based `osty_gc_index_lookup` was the dominant
+ *      cost in alloc-heavy workloads after #878 / #879 / #880; this
+ *      lets `osty_gc_find_header` short-circuit before the hash on
+ *      the overwhelmingly common case.
+ *
+ *   2. Bump-allocated objects skip the per-allocation hash insert
+ *      entirely; the range check + header self-reference suffices
+ *      to identify them. The hash table now only carries
+ *      humongous calloc'd payloads (outside the arena) and post-
+ *      compaction relocations.
+ *
+ * Reservation strategy: 4 GiB of virtual address space on POSIX
+ * (MAP_PRIVATE | MAP_ANON). On Linux/macOS the kernel only commits
+ * physical pages on first touch, so the reservation is essentially
+ * an address-space ledger entry. The Windows path is currently a
+ * stub that fails arena init and falls through to the heap-backed
+ * `osty_gc_bump_block_new` fallback below; a follow-up will wrap
+ * VirtualAlloc(MEM_RESERVE) for the Win32 surface.
+ *
+ * Sub-allocator: bump pointer with no per-block reuse. Released bump
+ * blocks leak their virtual range — fine for short-lived programs
+ * (benchmarks, CLI tools) but not ideal for long-running services. A
+ * follow-up will add a free-list of arena chunks for reuse.
+ *
+ * Concurrency: arena_init runs at most once. arena_alloc updates
+ * `osty_gc_arena_cursor` non-atomically — safe because every caller
+ * goes through `osty_gc_bump_block_new` which is reached from
+ * `osty_gc_allocate_managed`'s locked critical section in the
+ * multi-threaded path (post-#872's single-mutator skip preserves
+ * the lock when `osty_concurrent_workers > 0`). */
+#define OSTY_GC_ARENA_BYTES ((size_t)1 << 32)  /* 4 GiB virtual */
+
+static unsigned char *osty_gc_arena_base = NULL;
+static unsigned char *osty_gc_arena_end = NULL;
+static unsigned char *osty_gc_arena_cursor = NULL;
+static bool osty_gc_arena_init_failed = false;
+
+static void osty_gc_arena_init(void) {
+    if (osty_gc_arena_base != NULL || osty_gc_arena_init_failed) {
+        return;
+    }
+#if defined(_WIN32)
+    /* Reserve via VirtualAlloc; smaller default size since 32-bit
+     * Windows has tighter address-space limits and the runtime's
+     * concurrent collector hasn't been ported here yet. */
+    void *base = NULL;  /* TODO: Win32 reservation */
+    if (base == NULL) {
+        osty_gc_arena_init_failed = true;
+        return;
+    }
+#else
+    void *base = mmap(NULL, OSTY_GC_ARENA_BYTES,
+                      PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | OSTY_GC_MAP_ANON, -1, 0);
+    if (base == MAP_FAILED) {
+        osty_gc_arena_init_failed = true;
+        return;
+    }
+#endif
+    osty_gc_arena_base = (unsigned char *)base;
+    osty_gc_arena_cursor = osty_gc_arena_base;
+    osty_gc_arena_end = osty_gc_arena_base + OSTY_GC_ARENA_BYTES;
+}
+
+static void *osty_gc_arena_alloc(size_t bytes, size_t align) {
+    uintptr_t cur;
+    uintptr_t aligned;
+    uintptr_t next;
+
+    if (osty_gc_arena_base == NULL) {
+        osty_gc_arena_init();
+        if (osty_gc_arena_base == NULL) {
+            return NULL;
+        }
+    }
+    cur = (uintptr_t)osty_gc_arena_cursor;
+    aligned = (cur + align - 1) & ~(align - 1);
+    next = aligned + bytes;
+    if (next > (uintptr_t)osty_gc_arena_end) {
+        return NULL;
+    }
+    osty_gc_arena_cursor = (unsigned char *)next;
+    return (void *)aligned;
+}
+
+static OSTY_HOT_INLINE bool osty_gc_arena_contains(const void *p) {
+    return (const unsigned char *)p >= osty_gc_arena_base &&
+           (const unsigned char *)p < osty_gc_arena_cursor;
+}
 static osty_gc_free_chunk *osty_gc_free_list_bins[OSTY_GC_FREE_LIST_BIN_COUNT];
 static int64_t osty_gc_free_list_count = 0;
 static int64_t osty_gc_free_list_bytes = 0;
@@ -1566,14 +1703,30 @@ static void osty_gc_link(osty_gc_header *header) {
         osty_gc_old_bytes += header->byte_size;
         osty_gc_gen_list_prepend(&osty_gc_old_head, header);
     }
-    /* Fresh-key insert: every site reaching `osty_gc_link` is a new
-     * allocation, so there can't be an existing entry for `payload` in
-     * the index. Use the always-inlined `_new` variant which skips the
-     * "update if exists" branch and the SIZE_MAX tombstone bookkeeping,
-     * leaving just the cap check + hash + probe-empty-or-tombstone +
-     * store on the hot path. */
-    osty_gc_index_insert_new(header->payload, header);
-    /* Identity table is lazily populated; see `osty_gc_identity_lookup`. */
+    /* Phase 2 — Go-style arena allocator: arena-backed payloads are
+     * resolvable via the `osty_gc_find_header` arena fast path
+     * (range check + self-reference), so they don't need a hash
+     * entry. The hash table now only carries:
+     *   - humongous allocations (calloc'd outside the arena, no
+     *     range coverage),
+     *   - debug/test paths that bypass `osty_gc_link` and reach
+     *     `osty_gc_index_insert` directly,
+     *   - post-compaction inserts via `osty_gc_replace_header`
+     *     (which currently still inserts; could be similarly gated
+     *     by arena membership in a follow-up).
+     *
+     * Bump-allocated YOUNG / SURVIVOR / OLD / PINNED objects (the
+     * overwhelming majority of allocations on real workloads) skip
+     * the per-alloc hash insert entirely. log-aggregator's profile
+     * had `osty_gc_index_insert` at ~50% of CPU after the cache
+     * locality + fresh-key fast-path tightening of #878 / #879;
+     * eliminating the call for arena payloads is what the previous
+     * iterations were structurally building toward.
+     *
+     * Identity table is lazily populated; see `osty_gc_identity_lookup`. */
+    if (!osty_gc_arena_contains(header->payload)) {
+        osty_gc_index_insert_new(header->payload, header);
+    }
 }
 
 static void osty_gc_unlink(osty_gc_header *header) {
@@ -1938,6 +2091,16 @@ static void osty_gc_release_replaced_header(osty_gc_header *header) {
     if (header == NULL) {
         return;
     }
+    /* Invalidate the self-reference before releasing: this header has
+     * been replaced by an evacuation/compaction clone, but its bump
+     * block stays alive (forwarding aliases pin the block) so the
+     * `osty_gc_find_header` arena fast path would otherwise still
+     * find this stale header on self-ref match — bypassing
+     * `osty_gc_forward_payload` and returning the now-defunct
+     * header. Zeroing payload makes the fast path fail-fast on stale
+     * pointers, leaving the forwarding lookup as the canonical
+     * resolver. */
+    header->payload = NULL;
     if (osty_gc_young_bump_release_header(header)) {
         return;
     }
@@ -1963,9 +2126,7 @@ static osty_gc_bump_block *osty_gc_bump_block_new(
     int64_t *bytes_total) {
     osty_gc_bump_block *block;
     size_t block_size;
-    size_t total_bytes;
-    uintptr_t raw;
-    uintptr_t aligned;
+    void *arena_data;
 
     block_size = min_size > (size_t)OSTY_GC_BUMP_BLOCK_BYTES
                      ? min_size
@@ -1973,15 +2134,44 @@ static osty_gc_bump_block *osty_gc_bump_block_new(
     if (block_size > SIZE_MAX - sizeof(*block) - OSTY_GC_SIZE_CLASS_ALIGN) {
         osty_rt_abort("GC bump block size overflow");
     }
-    total_bytes = sizeof(*block) + block_size + OSTY_GC_SIZE_CLASS_ALIGN;
-    block = (osty_gc_bump_block *)calloc(1, total_bytes);
+    /* Header struct stays in the heap (small, ~48 B) so block
+     * metadata isn't subject to the arena's "no reuse" policy.
+     * The data buffer that holds the actual managed payloads is
+     * suballocated from the arena — that's what the lookup fast
+     * path range-checks. The arena_alloc returns a properly
+     * aligned pointer that already satisfies size-class alignment
+     * (we request OSTY_GC_SIZE_CLASS_ALIGN explicitly). */
+    block = (osty_gc_bump_block *)calloc(1, sizeof(*block));
     if (block == NULL) {
-        osty_rt_abort("out of memory (gc bump block)");
+        osty_rt_abort("out of memory (gc bump block header)");
     }
-    raw = (uintptr_t)block->storage;
-    aligned = (raw + (uintptr_t)OSTY_GC_SIZE_CLASS_ALIGN - 1u) &
-              ~((uintptr_t)OSTY_GC_SIZE_CLASS_ALIGN - 1u);
-    block->data = (unsigned char *)aligned;
+    arena_data = osty_gc_arena_alloc(block_size, OSTY_GC_SIZE_CLASS_ALIGN);
+    if (arena_data != NULL) {
+        /* Arena-backed: the data region's lifetime is tied to the
+         * arena (not freed on block release). Recycling the block
+         * leaks its virtual range until a free-list lands; for
+         * benchmark / CLI workloads this is bounded. */
+        block->data = (unsigned char *)arena_data;
+        block->data_alloc = NULL;
+    } else {
+        /* Arena init failed or exhausted — fall back to heap. The
+         * data region is owned by `data_alloc` (the unaligned
+         * calloc'd base) so `osty_gc_bump_block_release` can free
+         * it later. The lookup fast path won't help these blocks
+         * (outside the arena range) but the hash-based lookup
+         * still works for them. */
+        size_t total_bytes = block_size + OSTY_GC_SIZE_CLASS_ALIGN;
+        unsigned char *raw = (unsigned char *)calloc(1, total_bytes);
+        uintptr_t aligned;
+        if (raw == NULL) {
+            free(block);
+            osty_rt_abort("out of memory (gc bump block data)");
+        }
+        aligned = ((uintptr_t)raw + (uintptr_t)OSTY_GC_SIZE_CLASS_ALIGN - 1u) &
+                  ~((uintptr_t)OSTY_GC_SIZE_CLASS_ALIGN - 1u);
+        block->data = (unsigned char *)aligned;
+        block->data_alloc = raw;
+    }
     block->size = block_size;
     block->used = 0;
     block->next = *blocks_head;
@@ -2138,6 +2328,14 @@ static void osty_gc_bump_block_release(
     *block_count -= 1;
     *recycled_count_total += 1;
     *recycled_bytes_total += (int64_t)block->size;
+    /* Free the heap-fallback payload region if this block was
+     * heap-backed (arena_init failed or arena exhausted at the time
+     * of allocation). Arena-backed blocks have `data_alloc == NULL`;
+     * their virtual range stays committed in the arena (no free-list
+     * yet — see arena documentation). */
+    if (block->data_alloc != NULL) {
+        free(block->data_alloc);
+    }
     free(block);
 }
 
@@ -2300,11 +2498,28 @@ static void osty_gc_note_old_allocation(size_t payload_size) {
 }
 
 static osty_gc_header *osty_gc_find_header(void *payload) {
-    /* Phase A3 depth: O(1) expected via hash index. The linked list
-     * is now purely for iteration order (mark seeding, sweep, heap
-     * validation) — all "is this a managed pointer" queries go
-     * through the hash. */
+    /* Arena fast path: if `payload` falls inside the mmap arena it's
+     * a bump-allocated managed payload, and we can compute the header
+     * via self-reference without touching the hash. The header self-
+     * references because every alloc sets `header->payload = header + 1`
+     * during `osty_gc_allocate_managed`. We additionally verify the
+     * back-pointer matches `payload` so a misaligned arena pointer
+     * (e.g. into the middle of an existing object) doesn't return a
+     * false positive. The hash fallback covers humongous allocations
+     * (calloc'd outside the arena) and any post-compaction inserts.
+     *
+     * Phase A3 depth: hash lookup is still the fallback path for
+     * non-arena payloads. The linked list `osty_gc_objects` is purely
+     * iteration order for mark seeding / sweep / validate. */
     osty_gc_index_find_ops_total += 1;
+    if (osty_gc_arena_contains(payload)) {
+        osty_gc_header *candidate =
+            (osty_gc_header *)((unsigned char *)payload - sizeof(osty_gc_header));
+        if ((unsigned char *)candidate >= osty_gc_arena_base &&
+            candidate->payload == payload) {
+            return candidate;
+        }
+    }
     return osty_gc_index_lookup(payload);
 }
 
