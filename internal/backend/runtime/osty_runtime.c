@@ -1126,14 +1126,20 @@ static void osty_gc_index_grow(int64_t new_capacity) {
 static OSTY_HOT_INLINE void osty_gc_index_insert_new(void *payload, osty_gc_header *header) {
     size_t mask;
     size_t idx;
-    if (osty_gc_index_keys == NULL ||
-        (osty_gc_index_count + osty_gc_index_tombstones + 1) * 4 >=
-            osty_gc_index_capacity * 3) {
+    if (__builtin_expect(osty_gc_index_keys == NULL ||
+                         (osty_gc_index_count + osty_gc_index_tombstones + 1) * 4 >=
+                             osty_gc_index_capacity * 3, 0)) {
         int64_t new_cap = osty_gc_index_capacity == 0 ? 128 : osty_gc_index_capacity * 2;
         osty_gc_index_grow(new_cap);
     }
     mask = (size_t)(osty_gc_index_capacity - 1);
     idx = osty_gc_index_hash(payload) & mask;
+    /* Prefetch the slot we're about to read. Hash-table cache misses
+     * to L2/L3 are the dominant cost on alloc-heavy programs (50K+
+     * allocs/iter on log-aggregator); issuing the prefetch concurrently
+     * with the surrounding header-init work gives the load a chance to
+     * overlap with that work instead of stalling the probe. */
+    __builtin_prefetch(&osty_gc_index_keys[idx], 1 /* write */, 1 /* moderate locality */);
     /* Walk past live entries. The first tombstone we hit is reusable;
      * since the caller guarantees `payload` is fresh, we don't need
      * to keep walking to confirm absence — we can short-circuit on
@@ -1185,12 +1191,16 @@ static void osty_gc_index_insert(void *payload, osty_gc_header *header) {
 static osty_gc_header *osty_gc_index_lookup(void *payload) {
     size_t mask;
     size_t idx;
-    if (osty_gc_index_keys == NULL || payload == NULL ||
-        payload == OSTY_GC_INDEX_TOMBSTONE) {
+    if (__builtin_expect(osty_gc_index_keys == NULL || payload == NULL ||
+                         payload == OSTY_GC_INDEX_TOMBSTONE, 0)) {
         return NULL;
     }
     mask = (size_t)(osty_gc_index_capacity - 1);
     idx = osty_gc_index_hash(payload) & mask;
+    /* Prefetch the first probe slot. Read-only locality hint: the
+     * caller is about to compare to payload, then maybe load a
+     * subsequent slot if there's a collision. */
+    __builtin_prefetch(&osty_gc_index_keys[idx], 0 /* read */, 1);
     while (osty_gc_index_keys[idx] != NULL) {
         if (osty_gc_index_keys[idx] == payload) {
             return osty_gc_index_values[idx];
