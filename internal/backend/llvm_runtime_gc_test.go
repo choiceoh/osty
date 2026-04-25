@@ -135,7 +135,14 @@ int main(void) {
 	// / 14 — the strings_Equal calls return 1, matching the expected
 	// content), and the post-release collect on idx 17 still sweeps
 	// the list cleanly.
-	if got, want := string(runOutput), "1\n0\n2\n1\n1\n1\n1\n1\n0\n2\n2\n0\n1\n1\n1\n8\n8\n0\n"; got != want {
+	//
+	// load_managed_count (idx 16) dropped from 8 to 6 in the SSO
+	// follow-up: `osty_gc_load_v1` no longer bumps load_managed_count
+	// for inline strings (they have no header → not GC-managed).
+	// load_count (idx 15) still bumps every call so it stays at 8.
+	// The two `osty_rt_list_get_ptr` calls on inline pieces (idx 13
+	// / 14) account for the delta.
+	if got, want := string(runOutput), "1\n0\n2\n1\n1\n1\n1\n1\n0\n2\n2\n0\n1\n1\n1\n8\n6\n0\n"; got != want {
 		t.Fatalf("runtime GC harness stdout = %q, want %q", got, want)
 	}
 }
