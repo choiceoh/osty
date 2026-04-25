@@ -1913,3 +1913,50 @@ func (t *MirThunkDefs) OrderedBodies() []string {
 func (t *MirThunkDefs) IsEmpty() bool {
 	return len(t.Order) == 0
 }
+
+// §3 vtable reference set (downcast support).
+//
+// MirVtableRefs mirrors `toolchain/mir_generator.osty: MirVtableRefs`.
+// Owns the dedup + insertion-order side of the emitter's vtable-symbol
+// pool. Replaces the `mirGen.vtableRefs map[string]struct{} +
+// vtableRefOrder []string` pair fields. Fifth member of the
+// dedup-with-order family alongside `MirLayoutCache`, `MirRuntimeDecls`,
+// `MirStringPool`, and `MirThunkDefs`.
+
+// Osty: MirVtableRefs
+type MirVtableRefs struct {
+	Seen  map[string]bool
+	Order []string
+}
+
+// Osty: MirVtableRefs.register
+func (v *MirVtableRefs) Register(symbol string) bool {
+	if v.Seen == nil {
+		v.Seen = map[string]bool{}
+	}
+	if _, ok := v.Seen[symbol]; ok {
+		return false
+	}
+	v.Seen[symbol] = true
+	v.Order = append(v.Order, symbol)
+	return true
+}
+
+// Osty: MirVtableRefs.contains
+func (v *MirVtableRefs) Contains(symbol string) bool {
+	if v.Seen == nil {
+		return false
+	}
+	_, ok := v.Seen[symbol]
+	return ok
+}
+
+// Osty: MirVtableRefs.orderedSymbols
+func (v *MirVtableRefs) OrderedSymbols() []string {
+	return v.Order
+}
+
+// Osty: MirVtableRefs.isEmpty
+func (v *MirVtableRefs) IsEmpty() bool {
+	return len(v.Order) == 0
+}

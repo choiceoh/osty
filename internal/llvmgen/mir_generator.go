@@ -185,9 +185,13 @@ type mirGen struct {
 	// call sites; each becomes an external constant declaration so the
 	// emitted module stays self-describing even before the MIR path
 	// grows full vtable-body emission.
-	ifaceTouched   bool
-	vtableRefs     map[string]struct{}
-	vtableRefOrder []string
+	ifaceTouched bool
+	// vtableRefs owns the downcast vtable-reference set —
+	// dedup + insertion-order, mirrored from
+	// `toolchain/mir_generator.osty: MirVtableRefs`. Replaces
+	// the previous `vtableRefs map[string]struct{} +
+	// vtableRefOrder []string` pair fields.
+	vtables MirVtableRefs
 
 	// v0.6 A5/A5.1/A6/A7: per-function loop-optimization hints,
 	// captured at `emitFunction` entry and cleared between functions.
@@ -256,7 +260,6 @@ func newMIRGen(m *mir.Module, opts Options) *mirGen {
 		src:           append([]byte(nil), opts.Source...),
 		functionTypes: map[string]mirFnSig{},
 		tupleDefs:     map[string][]mir.Type{},
-		vtableRefs:    map[string]struct{}{},
 	}
 }
 
@@ -1480,7 +1483,7 @@ func (g *mirGen) emitTypeDefs() {
 	// not yet emitted by the MIR path; the downcast-compare lowering
 	// only needs the symbol to exist so the `icmp eq ptr` is a legal
 	// reference.
-	for _, sym := range g.vtableRefOrder {
+	for _, sym := range g.vtables.OrderedSymbols() {
 		block.WriteString(mirLlvmVtableDeclLine(sym))
 	}
 	block.WriteByte('\n')
@@ -3908,10 +3911,7 @@ func (g *mirGen) tryEmitInterfaceDowncast(c *mir.CallInstr, fnRef *mir.FnRef) (b
 		return true, unsupportedf("mir-mvp",
 			"interface downcast target %q does not implement interface %q", targetT.Name, ifaceName)
 	}
-	if _, exists := g.vtableRefs[vtableSym]; !exists {
-		g.vtableRefs[vtableSym] = struct{}{}
-		g.vtableRefOrder = append(g.vtableRefOrder, vtableSym)
-	}
+	g.vtables.Register(vtableSym)
 	g.ifaceTouched = true
 
 	recvVal, err := g.evalOperand(c.Args[0], c.Args[0].Type())
