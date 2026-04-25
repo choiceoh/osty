@@ -15,6 +15,9 @@ node_modules/
 .idea/
 *.swp
 
+# Per-worktree scratch directory used by IDE/agent tooling.
+.claude/worktrees/
+
 # graphify knowledge graph (local dev artifact, rebuild with /graphify)
 graphify-out/
 
