@@ -61,10 +61,19 @@ jobs:
         run: |
           while IFS= read -r file; do
             case "$file" in
-              testdata/spec/negative/*) continue ;;
+              testdata/spec/negative/*|internal/airepair/testdata/corpus/*.input.osty) continue ;;
             esac
             "$OSTY_BIN" repair --check "$file"
           done < <(git ls-files '*.osty')
+
+      - name: Osty airepair backlog
+        if: always()
+        run: |
+          bash scripts/airepair-update-backlog.sh "$OSTY_BIN" "$RUNNER_TEMP/airepair-cases" /tmp/todo-airepair.md
+          if ! diff -q todo-airepair.md /tmp/todo-airepair.md >/dev/null 2>&1; then
+            echo "::warning::todo-airepair.md is stale — run \`just airepair-capture\` and commit the result"
+            diff -u todo-airepair.md /tmp/todo-airepair.md || true
+          fi
 
       - name: Osty CI
         run: |

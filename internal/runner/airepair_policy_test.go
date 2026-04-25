@@ -61,13 +61,13 @@ func TestParseAiRepairCaptureModeRejectsUnknown(t *testing.T) {
 }
 
 func TestUsesFrontEndAIRepair(t *testing.T) {
-	enabled := []string{"check", "typecheck", "resolve", "lint"}
+	enabled := []string{"check", "typecheck", "resolve", "lint", "pipeline"}
 	for _, cmd := range enabled {
 		if !UsesFrontEndAIRepair(cmd) {
 			t.Errorf("UsesFrontEndAIRepair(%q) = false, want true", cmd)
 		}
 	}
-	disabled := []string{"run", "build", "test", "gen", "pipeline", ""}
+	disabled := []string{"run", "build", "test", "gen", ""}
 	for _, cmd := range disabled {
 		if UsesFrontEndAIRepair(cmd) {
 			t.Errorf("UsesFrontEndAIRepair(%q) = true, want false", cmd)

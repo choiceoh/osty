@@ -4,6 +4,7 @@
 **/.osty/
 .profiles/
 .direnv/
+tmp/
 
 # VS Code extension dependencies and packages
 node_modules/

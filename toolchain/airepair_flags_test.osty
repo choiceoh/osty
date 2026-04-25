@@ -46,6 +46,7 @@ fn testUsesFrontEndAIRepairCoversCheckerCommands() {
     testing.assert(usesFrontEndAIRepair("typecheck"))
     testing.assert(usesFrontEndAIRepair("resolve"))
     testing.assert(usesFrontEndAIRepair("lint"))
+    testing.assert(usesFrontEndAIRepair("pipeline"))
 }
 
 fn testUsesFrontEndAIRepairRejectsOtherCommands() {

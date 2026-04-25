@@ -65,7 +65,7 @@ func ParseAiRepairCaptureMode(value string) AiRepairCaptureModeResult {
 // Osty: toolchain/airepair_flags.osty:71
 func UsesFrontEndAIRepair(cmd string) bool {
 	switch cmd {
-	case "check", "typecheck", "resolve", "lint":
+	case "check", "typecheck", "resolve", "lint", "pipeline":
 		return true
 	default:
 		return false

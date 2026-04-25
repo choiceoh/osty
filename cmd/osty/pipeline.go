@@ -37,7 +37,7 @@ import (
 // the full pipeline; memprofile is captured once the pipeline completes
 // (with one explicit `runtime.GC()` first so the snapshot reflects live
 // allocations rather than transient garbage).
-func runPipeline(args []string) {
+func runPipeline(args []string, flags cliFlags) {
 	fs := flag.NewFlagSet("pipeline", flag.ExitOnError)
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr,
@@ -103,10 +103,11 @@ func runPipeline(args []string) {
 		stream = os.Stderr
 	}
 	cfg := pipeline.Config{
-		PerDecl:    perDecl,
-		RunGen:     runGen,
-		GenBackend: backendID,
-		GenEmit:    emitMode,
+		PerDecl:         perDecl,
+		RunGen:          runGen,
+		GenBackend:      backendID,
+		GenEmit:         emitMode,
+		SourceTransform: aiRepairSourceTransform(aiRepairPrefix("pipeline"), os.Stderr, flags),
 	}
 
 	info, err := os.Stat(target)
