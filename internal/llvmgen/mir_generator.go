@@ -136,10 +136,14 @@ type mirGen struct {
 
 	// Module-level state.
 	functionTypes map[string]mirFnSig // symbol → declared signature
-	declares      map[string]string   // runtime name → full declaration line
-	declareOrder  []string            // insertion order, for stable output
-	strings       map[string]string   // literal value → global symbol
-	stringOrder   []string            // order-of-insertion
+	// runtimeDecls owns the runtime forward-declaration pool —
+	// dedup + insertion-order, mirrored from
+	// `toolchain/mir_generator.osty: MirRuntimeDecls`. Replaces
+	// the previous `declares map[string]string + declareOrder
+	// []string` pair fields.
+	runtimeDecls MirRuntimeDecls
+	strings      map[string]string // literal value → global symbol
+	stringOrder  []string          // order-of-insertion
 
 	// Aggregate type pools. Struct defs come from the module's
 	// LayoutTable; tuple / option / result defs are discovered
@@ -244,7 +248,6 @@ func newMIRGen(m *mir.Module, opts Options) *mirGen {
 		src:           append([]byte(nil), opts.Source...),
 		functionTypes: map[string]mirFnSig{},
 		thunkDefs:     map[string]string{},
-		declares:      map[string]string{},
 		strings:       map[string]string{},
 		tupleDefs:     map[string][]mir.Type{},
 		vtableRefs:    map[string]struct{}{},
@@ -1377,19 +1380,14 @@ func (g *mirGen) emitThunks() {
 func (g *mirGen) emitRuntimeDeclarations() {
 	// Note: emitFunction writes into fnBuf, which is flushed to out.
 	// emitRuntimeDeclarations is called after all functions have been
-	// emitted, so declares already contains everything we need.
-	if len(g.declareOrder) == 0 {
+	// emitted, so runtimeDecls already contains everything we need.
+	if g.runtimeDecls.IsEmpty() {
 		return
 	}
 	// Build the joined declare block via the Osty-sourced
-	// `mirJoinDeclareLines` (`toolchain/mir_generator.osty`); the
-	// caller still owns the dedupe / ordering map (`g.declares` /
-	// `g.declareOrder`).
-	ordered := make([]string, 0, len(g.declareOrder))
-	for _, name := range g.declareOrder {
-		ordered = append(ordered, g.declares[name])
-	}
-	header := mirJoinDeclareLines(ordered)
+	// `mirJoinDeclareLines` + `MirRuntimeDecls.OrderedSignatures`
+	// (`toolchain/mir_generator.osty`).
+	header := mirJoinDeclareLines(g.runtimeDecls.OrderedSignatures())
 	// Inject the declares before the first "define " line in out.
 	// Note: this uses only the `define ` marker (not `declare `) — new
 	// declares always slot AFTER any pre-existing declares so the
@@ -1493,12 +1491,13 @@ func (g *mirGen) emitTypeDefs() {
 	g.out.WriteString(rewritten.String())
 }
 
+// declareRuntime records the `declare <ret> @<sym>(<args>)` line for
+// a runtime symbol, deduplicating against any earlier declare. Now
+// delegates to the Osty-sourced `MirRuntimeDecls.declare`
+// (`toolchain/mir_generator.osty`) so the dedup state has a named
+// home and matches the `MirLayoutCache` shape.
 func (g *mirGen) declareRuntime(name, signature string) {
-	if _, ok := g.declares[name]; ok {
-		return
-	}
-	g.declares[name] = signature
-	g.declareOrder = append(g.declareOrder, name)
+	g.runtimeDecls.Declare(name, signature)
 }
 
 // ==== function emission ====
