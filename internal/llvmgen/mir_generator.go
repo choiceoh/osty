@@ -278,43 +278,12 @@ func formatFnAttrs(fn *mir.Function) string {
 	return mirFormatFnAttrs(fn.InlineMode, fn.Hot, fn.Cold, fn.Pure, fn.TargetFeatures)
 }
 
-// noaliasNameSet builds a lookup set of parameter names that should
-// receive the LLVM `noalias` attribute. Bare `#[noalias]` is encoded
-// as NoaliasAll, producing a nil set that the per-param check treats
-// as "yes for every pointer param". The explicit list form produces
-// a populated set and the all-flag is false.
-func noaliasNameSet(fn *mir.Function) map[string]struct{} {
-	if fn.NoaliasAll || len(fn.NoaliasParams) == 0 {
-		return nil
-	}
-	set := make(map[string]struct{}, len(fn.NoaliasParams))
-	for _, n := range fn.NoaliasParams {
-		set[n] = struct{}{}
-	}
-	return set
-}
-
-// paramIsNoalias decides whether a single parameter should receive
-// the `noalias` attribute on the LLVM signature line. LLVM rejects
-// the attribute on non-pointer types, so we gate on the LLVM-level
-// type being `ptr`. The lookup uses the parameter's source-level
-// name (from mir.Local.Name), not the emitted `%argN` symbol.
-func paramIsNoalias(fn *mir.Function, loc *mir.Local, llvmT string, names map[string]struct{}) bool {
-	if llvmT != "ptr" {
-		return false
-	}
-	if fn.NoaliasAll {
-		return true
-	}
-	if names == nil {
-		return false
-	}
-	if loc == nil {
-		return false
-	}
-	_, ok := names[loc.Name]
-	return ok
-}
+// (Per-param `noalias` decision is now `mirParamIsNoalias` in
+// `toolchain/mir_generator.osty`. The map-set helper that used to
+// build a `map[string]struct{}` from `fn.NoaliasParams` is gone too —
+// the Osty side does a linear scan over the slice directly, which is
+// O(small N) since `#[noalias(...)]` lists rarely exceed a handful
+// of names.)
 
 // firstNonEmpty thin-wraps the Osty-sourced `mirFirstNonEmpty` — Osty
 // has no Go-style variadics so the canonical signature over there takes
@@ -1548,16 +1517,13 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	if fn.ExportSymbol != "" {
 		emitName = fn.ExportSymbol
 	}
-	// `#[c_abi]` requests the platform C calling convention. LLVM
-	// IR syntax: `declare [cconv] <ret> @<name>(...)`. The `ccc`
-	// keyword goes before the return type. Default is also `ccc`,
-	// so the explicit keyword is currently a documentation/forward-
-	// compatibility marker rather than a behaviour change — but
-	// emitting it makes intent visible in the generated IR.
-	cconv := ""
-	if fn.CABI {
-		cconv = "ccc "
-	}
+	// `#[c_abi]` requests the platform C calling convention via
+	// the Osty-sourced `mirCConvKeyword` (`toolchain/mir_generator.osty`).
+	// Default is also `ccc`, so the explicit keyword is currently a
+	// documentation / forward-compatibility marker rather than a
+	// behaviour change — but emitting it makes intent visible in the
+	// generated IR.
+	cconv := mirCConvKeyword(fn.CABI)
 
 	// v0.6 A8/A9/A10: function-level LLVM attributes go between the
 	// closing paren of the param list and the `{` that opens the body.
@@ -1567,34 +1533,22 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	attrs := formatFnAttrs(fn)
 
 	if fn.IsExternal {
-		// External stub: just a declare.
+		// External stub: just a declare. Delegates to the Osty-sourced
+		// `mirExternalDeclareLine` (`toolchain/mir_generator.osty`).
 		sig := g.functionTypes[fn.Name]
-		g.out.WriteString("declare ")
-		g.out.WriteString(cconv)
-		g.out.WriteString(sig.retLLVM)
-		g.out.WriteString(" @")
-		g.out.WriteString(emitName)
-		g.out.WriteByte('(')
-		g.out.WriteString(strings.Join(sig.paramLLVM, ", "))
-		g.out.WriteByte(')')
-		if attrs != "" {
-			g.out.WriteByte(' ')
-			g.out.WriteString(attrs)
-		}
-		g.out.WriteString("\n\n")
+		g.out.WriteString(mirExternalDeclareLine(
+			cconv, sig.retLLVM, emitName, strings.Join(sig.paramLLVM, ", "), attrs))
 		return nil
 	}
 
-	// Allocate names for each block; entry is always `entry`.
+	// Allocate names for each block; entry is always `entry`. The
+	// `entry` / `bb<N>` shape is rendered by the Osty-sourced
+	// `mirBlockLabelName`.
 	for _, bb := range fn.Blocks {
 		if bb == nil {
 			continue
 		}
-		label := fmt.Sprintf("bb%d", bb.ID)
-		if bb.ID == fn.Entry {
-			label = "entry"
-		}
-		g.blockLabels[bb.ID] = label
+		g.blockLabels[bb.ID] = mirBlockLabelName(bb.ID == fn.Entry, strconv.Itoa(int(bb.ID)))
 	}
 
 	// Signature line.
@@ -1603,33 +1557,21 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	// applies. Bare `#[noalias]` stamps every pointer param;
 	// `#[noalias(p1, p2)]` stamps only the named ones. Non-pointer
 	// params (i64, double, etc.) ignore the attribute — LLVM rejects
-	// `noalias` on non-pointer types.
-	noaliasNames := noaliasNameSet(fn)
-	g.fnBuf.WriteString("define ")
-	g.fnBuf.WriteString(cconv)
-	g.fnBuf.WriteString(sig.retLLVM)
-	g.fnBuf.WriteString(" @")
-	g.fnBuf.WriteString(emitName)
-	g.fnBuf.WriteByte('(')
+	// `noalias` on non-pointer types. Per-param decision routes
+	// through the Osty-sourced `mirParamIsNoalias`.
+	noaliasNames := fn.NoaliasParams
+	paramParts := make([]string, 0, len(fn.Params))
 	for i, pid := range fn.Params {
-		if i > 0 {
-			g.fnBuf.WriteString(", ")
-		}
 		loc := fn.Local(pid)
 		llvmT := g.llvmType(loc.Type)
-		g.fnBuf.WriteString(llvmT)
-		if paramIsNoalias(fn, loc, llvmT, noaliasNames) {
-			g.fnBuf.WriteString(" noalias")
+		isNoalias := false
+		if loc != nil {
+			isNoalias = mirParamIsNoalias(llvmT, loc.Name, fn.NoaliasAll, noaliasNames)
 		}
-		g.fnBuf.WriteString(" %arg")
-		g.fnBuf.WriteString(strconv.Itoa(i))
+		paramParts = append(paramParts, mirFunctionParamPart(llvmT, isNoalias, strconv.Itoa(i)))
 	}
-	g.fnBuf.WriteByte(')')
-	if attrs != "" {
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(attrs)
-	}
-	g.fnBuf.WriteString(" {\n")
+	g.fnBuf.WriteString(mirFunctionDefineHeader(
+		cconv, sig.retLLVM, emitName, strings.Join(paramParts, ", "), attrs))
 
 	// Entry-block preamble: alloca one slot per non-parameter local,
 	// and store incoming params into their alloca slots.
