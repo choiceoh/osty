@@ -2353,3 +2353,77 @@ pub struct MirThunkDefs {
         self.order.isEmpty()
     }
 }
+
+/// §3 vtable reference set (downcast support).
+///
+/// MirVtableRefs owns the dedup + insertion-order side of the
+/// emitter's vtable-symbol pool — the `@osty.vtable.<impl>__<iface>`
+/// external constant declarations that must precede any
+/// `icmp eq ptr` downcast-compare callsite. Mirrors the
+/// `mirGen.vtableRefs map[string]struct{} + vtableRefOrder []string`
+/// Go fields. Fifth member of the dedup-with-order family alongside
+/// `MirLayoutCache` (#888), `MirRuntimeDecls` (#897), `MirStringPool`
+/// (#899), and `MirThunkDefs` (#900).
+///
+/// Why a struct: vtable refs are recorded once per distinct
+/// `<impl>__<iface>` pair across the whole module (one entry even
+/// if 1000 downcast sites mention it). The set form (no value
+/// payload, just presence) is what distinguishes this from the
+/// other four caches — no `body` / `signature` / `bodies`
+/// equivalent. The cache emits one `external constant [0 x ptr]`
+/// declaration per ref at the same module-tail injection point as
+/// type defs.
+pub struct MirVtableRefs {
+    /// seen tracks distinct `@osty.vtable.<impl>__<iface>` symbols
+    /// already recorded. The map's value type is `Bool` (always
+    /// `true`) — it's a presence-only set; the Bool slot exists
+    /// only because Osty's `Map<K, V>` doesn't have a parameterless
+    /// `Set<K>` form yet.
+    pub seen: Map<String, Bool>,
+    /// order is the insertion-ordered list of vtable symbols —
+    /// walked by `emitTypeDefs` when injecting the
+    /// `<sym> = external constant [0 x ptr]` declarations into
+    /// the module out buffer.
+    pub order: List<String>,
+
+    /// register adds `symbol` to the set if not already present.
+    /// Returns true when newly added, false when already seen —
+    /// caller can use the return to gate per-symbol side effects
+    /// (e.g. logging the first vtable touch). The Go side
+    /// (`tryEmitInterfaceDowncast`) flips `ifaceTouched`
+    /// unconditionally on any downcast emission, so the boolean
+    /// stays available for future tightening rather than being
+    /// load-bearing today.
+    pub fn register(mut self, symbol: String) -> Bool {
+        if self.seen.containsKey(symbol) {
+            return false
+        }
+        self.seen.insert(symbol, true)
+        self.order.push(symbol)
+        true
+    }
+
+    /// contains reports whether `symbol` has been registered.
+    /// Read-only check; `register` does the mutating add. Sibling
+    /// of `MirThunkDefs.contains` so cross-cache code reads
+    /// uniformly.
+    pub fn contains(self, symbol: String) -> Bool {
+        self.seen.containsKey(symbol)
+    }
+
+    /// orderedSymbols returns the registered vtable symbols in
+    /// insertion order. Used by `emitTypeDefs` to walk the set
+    /// deterministically when assembling the external-constant
+    /// block.
+    pub fn orderedSymbols(self) -> List<String> {
+        self.order
+    }
+
+    /// isEmpty reports whether the set holds no vtable refs — the
+    /// early-exit signal for callers that gate the
+    /// `@osty.vtable.* = external constant [0 x ptr]` block on
+    /// presence of any downcast site.
+    pub fn isEmpty(self) -> Bool {
+        self.order.isEmpty()
+    }
+}

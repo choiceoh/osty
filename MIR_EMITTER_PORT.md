@@ -270,6 +270,11 @@ list keeps new Osty clean of known landmines.
 | `MirThunkDefs.body` | `(self, symbol: String) -> String` | §4 | Looks up the IR for an already-registered thunk; returns `""` when not present |
 | `MirThunkDefs.orderedBodies` | `(self) -> List<String>` | §4 | Insertion-ordered thunk IR strings — `emitThunks` concatenates these directly (each body already ends with `}\n\n`) |
 | `MirThunkDefs.isEmpty` | `(self) -> Bool` | §4 | Early-exit gate for `emitThunks` — modules without closure-converted top-level fns emit no thunk block |
+| `MirVtableRefs` (struct) | `{ seen: Map<String, Bool>, order: List<String> }` | §3 | Vtable reference set (downcast support). Owns the dedup + insertion-order side of the emitter's `@osty.vtable.<impl>__<iface>` external constant declarations. Replaces `mirGen.vtableRefs + vtableRefOrder` Go fields. Fifth (and capping) member of the dedup-with-order family alongside `MirLayoutCache`, `MirRuntimeDecls`, `MirStringPool`, `MirThunkDefs` |
+| `MirVtableRefs.register` | `(mut self, symbol: String) -> Bool` | §3 | Adds `symbol` to the set; returns true when newly added, false when already seen |
+| `MirVtableRefs.contains` | `(self, symbol: String) -> Bool` | §3 | Read-only check; sibling of `MirThunkDefs.contains` so cross-cache code reads uniformly |
+| `MirVtableRefs.orderedSymbols` | `(self) -> List<String>` | §3 | Insertion-ordered list of registered symbols — drives `emitTypeDefs`'s walk over the external-constant block |
+| `MirVtableRefs.isEmpty` | `(self) -> Bool` | §3 | Early-exit signal for callers that gate the `@osty.vtable.* = external constant [0 x ptr]` block on presence of any downcast site |
 | `mirAndI1Line` | `(reg: String, lhs: String, rhs: String) -> String` | §6 | i1 logical-and `  <reg> = and i1 <lhs>, <rhs>\n` — used by bounds-check `nonNeg && inUpper` pattern in `emitListSafeGet` |
 | `mirCallValueWithAliasScopeLine` | `(reg, retTy, sym, argList, scopeRef) -> String` | §1 | Snapshot-call form with `!alias.scope` metadata: `  <reg> = call <retTy> @<sym>(<args>), !alias.scope <ref>\n`. Unlocks LICM of `osty_rt_list_data_*` / `osty_rt_list_len` snapshot reads |
 | `mirLoadWithNoAliasLine` | `(reg: String, ty: String, ptr: String, scopeRef: String) -> String` | §1 | Load tagged with `!noalias` metadata — vector-list fast-path read |
