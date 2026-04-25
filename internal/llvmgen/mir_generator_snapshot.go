@@ -1758,3 +1758,54 @@ func mirTerminatorSwitchInt(llvmType, scrutReg, defaultLabel string, cases []Mir
 func mirTerminatorReturnMain() string {
 	return "  ret i32 0\n"
 }
+
+// §3 runtime declaration cache.
+//
+// MirRuntimeDecls mirrors `toolchain/mir_generator.osty: MirRuntimeDecls`.
+// The struct owns the dedup + insertion-order side of the emitter's
+// runtime forward-declaration pool — the `declare <ret> @<sym>(<args>)`
+// lines that prepend any module calling `osty_rt_*` runtime symbols.
+// Replaces the `mirGen.declares map[string]string + declareOrder []string`
+// pair fields. Sibling of `MirLayoutCache` (#888) which does the same
+// dedup-with-order job for aggregate type defs.
+
+// Osty: MirRuntimeDecls
+type MirRuntimeDecls struct {
+	Names      []string
+	Signatures map[string]string
+}
+
+// Osty: MirRuntimeDecls.declare
+func (c *MirRuntimeDecls) Declare(name string, signature string) bool {
+	if c.Signatures == nil {
+		c.Signatures = map[string]string{}
+	}
+	if _, ok := c.Signatures[name]; ok {
+		return false
+	}
+	c.Signatures[name] = signature
+	c.Names = append(c.Names, name)
+	return true
+}
+
+// Osty: MirRuntimeDecls.signature
+func (c *MirRuntimeDecls) Signature(name string) string {
+	if c.Signatures == nil {
+		return ""
+	}
+	return c.Signatures[name]
+}
+
+// Osty: MirRuntimeDecls.orderedSignatures
+func (c *MirRuntimeDecls) OrderedSignatures() []string {
+	out := make([]string, 0, len(c.Names))
+	for _, name := range c.Names {
+		out = append(out, c.Signature(name))
+	}
+	return out
+}
+
+// Osty: MirRuntimeDecls.isEmpty
+func (c *MirRuntimeDecls) IsEmpty() bool {
+	return len(c.Names) == 0
+}

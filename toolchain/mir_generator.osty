@@ -2131,3 +2131,78 @@ pub fn mirTerminatorSwitchInt(
 pub fn mirTerminatorReturnMain() -> String {
     "  ret i32 0\n"
 }
+
+/// §3 runtime declaration cache.
+///
+/// MirRuntimeDecls owns the dedup + insertion-order side of the
+/// emitter's runtime forward-declaration pool — the `declare
+/// <ret> @<sym>(<args>)` lines that prepend any module that calls
+/// `osty_rt_*` runtime symbols. Mirrors the `mirGen.declares
+/// map[string]string + declareOrder []string` Go fields. Sibling of
+/// `MirLayoutCache` (#888) which does the same dedup-with-order job
+/// for aggregate type defs.
+///
+/// Why a struct: the declare cache is touched at 150+ call sites
+/// across §1/§3/§5/§6/§7/§8 — every runtime intrinsic emission
+/// declares its symbol (via `g.declareRuntime(sym, line)`) before
+/// emitting the call. Centralising the dedup state in a named
+/// struct makes the cache visible in the inventory + lets future
+/// emit work (e.g. external attribute tracking, alias-set keyed
+/// declares) extend the struct rather than the `mirGen` field list.
+pub struct MirRuntimeDecls {
+    /// names is the insertion-ordered list of declared runtime
+    /// symbol names. The order is what `emitRuntimeDeclarations`
+    /// walks when assembling the declare-block injected before the
+    /// first `define `.
+    pub names: List<String>,
+    /// signatures maps each declared symbol to its full `declare
+    /// <ret> @<sym>(<args>) [attrs]` line (already including any
+    /// `noreturn` / `memory(read)` / `cold` attribute trailers from
+    /// `mirRuntimeDeclareLine` family).
+    pub signatures: Map<String, String>,
+
+    /// declare records `name → signature` and bumps the insertion
+    /// list. Returns true when the symbol is newly added, false
+    /// when it was already declared (the caller can use the return
+    /// to gate any per-declare side effect, e.g. an `attributes
+    /// #N = { ... }` line keyed by the same symbol). Idempotent:
+    /// repeated calls with the same name + signature are no-ops.
+    pub fn declare(mut self, name: String, signature: String) -> Bool {
+        if self.signatures.containsKey(name) {
+            return false
+        }
+        self.signatures.insert(name, signature)
+        self.names.push(name)
+        true
+    }
+
+    /// signature returns the recorded declare line for `name`, or
+    /// the empty string when the symbol hasn't been declared. The
+    /// emitter doesn't currently care about the difference between
+    /// "not declared" and "declared with empty signature" — empty
+    /// signatures aren't a valid LLVM declare so the empty return
+    /// is unambiguous in practice.
+    pub fn signature(self, name: String) -> String {
+        self.signatures.get(name) ?? ""
+    }
+
+    /// orderedSignatures returns the declare lines in insertion
+    /// order, ready for `mirJoinDeclareLines` to glue with `\n`
+    /// separators. Used by `emitRuntimeDeclarations` to build the
+    /// runtime-declare block injected before the first `define `
+    /// in the module out buffer.
+    pub fn orderedSignatures(self) -> List<String> {
+        let mut out: List<String> = []
+        for name in self.names {
+            out.push(self.signature(name))
+        }
+        out
+    }
+
+    /// isEmpty reports whether the cache holds no declarations —
+    /// the early-exit gate in `emitRuntimeDeclarations` so
+    /// pointer-free / runtime-free modules emit no declare block.
+    pub fn isEmpty(self) -> Bool {
+        self.names.isEmpty()
+    }
+}
