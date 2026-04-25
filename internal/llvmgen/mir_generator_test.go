@@ -4062,6 +4062,139 @@ func TestGenerateFromMIRBytesLastIndexOf(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRSplitInLoopHoistsToSplitInto — end-to-end check
+// that a `for row in rows { let parts = row.split(",") ... }` shape
+// survives `mir.Lower → mir.Optimize → GenerateFromMIR` and emits the
+// in-place `osty_rt_strings_SplitInto` call rather than the per-iter
+// allocating `osty_rt_strings_Split`. Composes the unit tests for the
+// MIR escape pass (internal/mir) and the SplitInto codegen below.
+func TestGenerateFromMIRSplitInLoopHoistsToSplitInto(t *testing.T) {
+	listStrT := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "rowParts",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "rows", Type: listStrT}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name:  "total",
+					Type:  ir.TInt,
+					Mut:   true,
+					Value: &ir.IntLit{Text: "0", T: ir.TInt},
+				},
+				&ir.ForStmt{
+					Kind: ir.ForIn,
+					Var:  "row",
+					Iter: &ir.Ident{Name: "rows", Kind: ir.IdentParam, T: listStrT},
+					Body: &ir.Block{
+						Stmts: []ir.Stmt{
+							&ir.LetStmt{
+								Name: "parts",
+								Type: listStrT,
+								Value: &ir.MethodCall{
+									Receiver: &ir.Ident{Name: "row", Kind: ir.IdentLocal, T: ir.TString},
+									Name:     "split",
+									Args:     []ir.Arg{{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: ","}}}}},
+									T:        listStrT,
+								},
+							},
+							&ir.AssignStmt{
+								Op:      ir.AssignEq,
+								Targets: []ir.Expr{&ir.Ident{Name: "total", Kind: ir.IdentLocal, T: ir.TInt}},
+								Value: &ir.BinaryExpr{
+									Op:   ir.BinAdd,
+									Left: &ir.Ident{Name: "total", Kind: ir.IdentLocal, T: ir.TInt},
+									Right: &ir.MethodCall{
+										Receiver: &ir.Ident{Name: "parts", Kind: ir.IdentLocal, T: listStrT},
+										Name:     "len",
+										T:        ir.TInt,
+									},
+									T: ir.TInt,
+								},
+							},
+						},
+					},
+				},
+			},
+			Result: &ir.Ident{Name: "total", Kind: ir.IdentLocal, T: ir.TInt},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	mir.Optimize(m)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/split_in_loop.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare void @osty_rt_strings_SplitInto(ptr, ptr, ptr)",
+		"call void @osty_rt_strings_SplitInto(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	// The per-iter allocating `osty_rt_strings_Split` call must be gone
+	// — the escape pass replaced it. (The declare line for the symbol
+	// may still appear if some other code-path declares it; the
+	// load-bearing assertion is the absence of the call site in the
+	// rewritten loop body.)
+	if strings.Contains(got, "call ptr @osty_rt_strings_Split(") {
+		t.Fatalf("hoist did not remove per-iter osty_rt_strings_Split call:\n%s", got)
+	}
+}
+
+// TestGenerateFromMIRStringSplitInto — the void-returning in-place
+// split form synthesised by the `hoistNonEscapingSplitInLoops` MIR
+// pass must lower to `call void @osty_rt_strings_SplitInto(ptr, ptr,
+// ptr)`. Codegen-level smoke; the pass itself has unit tests in
+// internal/mir/escape_split_test.go.
+func TestGenerateFromMIRStringSplitInto(t *testing.T) {
+	listStrT := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	fn := &mir.Function{
+		Name:       "split_inplace",
+		ReturnType: ir.TUnit,
+	}
+	fn.ReturnLocal = fn.NewLocal("_return", ir.TUnit, false, mir.Span{})
+	fn.Locals[fn.ReturnLocal].IsReturn = true
+	out := fn.NewLocal("out", listStrT, true, mir.Span{})
+	val := fn.NewLocal("v", ir.TString, false, mir.Span{})
+	sep := fn.NewLocal("s", ir.TString, false, mir.Span{})
+	fn.Locals[out].IsParam = true
+	fn.Locals[val].IsParam = true
+	fn.Locals[sep].IsParam = true
+	fn.Params = []mir.LocalID{out, val, sep}
+	entry := fn.NewBlock(mir.Span{})
+	fn.Entry = entry
+	bb := fn.Block(entry)
+	bb.Instrs = append(bb.Instrs, &mir.IntrinsicInstr{
+		Kind: mir.IntrinsicStringSplitInto,
+		Args: []mir.Operand{
+			&mir.CopyOp{Place: mir.Place{Local: out}, T: listStrT},
+			&mir.CopyOp{Place: mir.Place{Local: val}, T: ir.TString},
+			&mir.CopyOp{Place: mir.Place{Local: sep}, T: ir.TString},
+		},
+	})
+	bb.SetTerminator(&mir.ReturnTerm{})
+	m := &mir.Module{
+		Functions: []*mir.Function{fn},
+	}
+	gen, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/split_into.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(gen)
+	for _, want := range []string{
+		"declare void @osty_rt_strings_SplitInto(ptr, ptr, ptr)",
+		"call void @osty_rt_strings_SplitInto(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 func TestGenerateFromMIRBytesSplit(t *testing.T) {
 	listBytes := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TBytes}, Builtin: true}
 	fn := &ir.FnDecl{
