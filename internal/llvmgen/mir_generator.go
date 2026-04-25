@@ -1662,30 +1662,20 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	// in the leader) and the cost is one linear scan per parallel
 	// function.
 	if g.parallelHint && g.parallelAccessGroupRef != "" {
-		g.out.WriteString(tagParallelAccesses(g.fnBuf.String(), g.parallelAccessGroupRef))
+		g.out.WriteString(mirTagParallelAccesses(g.fnBuf.String(), g.parallelAccessGroupRef))
 	} else {
 		g.out.WriteString(g.fnBuf.String())
 	}
 	return nil
 }
 
-// tagParallelAccesses appends `, !llvm.access.group !N` to every
-// load/store line in a function body that does not already carry a
-// metadata attachment. Lines outside memory-access shape (branches,
-// arithmetic, calls, labels, the function header / closing brace) are
-// passed through verbatim. The attachment kind is LLVM's
-// `llvm.access.group`, which is what `llvm.loop.parallel_accesses`
-// refers to.
-func tagParallelAccesses(body string, groupRef string) string {
-	return mirTagParallelAccesses(body, groupRef)
-}
-
-// isMemoryAccessLine recognises the two textual shapes the MIR emitter
-// produces for loads and stores. Delegates to the Osty-sourced
-// `mirIsMemoryAccessLine` (`toolchain/mir_generator.osty`).
-func isMemoryAccessLine(line string) bool {
-	return mirIsMemoryAccessLine(line)
-}
+// tagParallelAccesses + isMemoryAccessLine moved fully to the Osty
+// mirror (`mirTagParallelAccesses` / `mirIsMemoryAccessLine` in
+// `toolchain/mir_generator.osty`, snapshotted in
+// `mir_generator_snapshot.go`). The MIR emitter call site above and
+// `generator.go::tagParallelAccessesLines` now invoke the Osty-
+// mirrored helpers directly — the previous Go shim wrappers had no
+// remaining callers.
 
 func (g *mirGen) emitAllocaPreamble(fn *mir.Function) {
 	// Allocate slots. The return slot is _0.
