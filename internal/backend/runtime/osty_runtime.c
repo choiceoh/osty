@@ -361,6 +361,15 @@ enum {
     OSTY_GC_COLOR_BLACK = 2,
 };
 
+/* `osty_gc_allocate_managed`'s hot path elides explicit zero-stores
+ * to header->color and header->generation, relying on the fact that
+ * the chunk is zero-initialized at this point and both default
+ * values are zero. Lock the assumption with a build-time check so
+ * a future enum-value reshuffle doesn't silently miscolour fresh
+ * allocations. */
+_Static_assert(OSTY_GC_COLOR_WHITE == 0,
+               "alloc fast path assumes WHITE is the zero color");
+
 /* Phase B generation tags (RUNTIME_GC_DELTA §5.1-5.5).
  *
  * Every managed allocation is born YOUNG. A minor collection promotes
@@ -378,6 +387,10 @@ enum {
     OSTY_GC_GEN_YOUNG = 0,
     OSTY_GC_GEN_OLD = 1,
 };
+
+_Static_assert(OSTY_GC_GEN_YOUNG == 0,
+               "alloc fast path assumes YOUNG is the zero generation");
+
 #define OSTY_GC_PROMOTE_AGE_DEFAULT 3
 #define OSTY_GC_PROMOTE_AGE_ENV "OSTY_GC_PROMOTE_AGE"
 #define OSTY_GC_NURSERY_LIMIT_ENV "OSTY_GC_NURSERY_BYTES"
@@ -2576,19 +2589,27 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
     header->site = site;
     header->payload = (void *)(header + 1);
     header->storage_kind = storage_kind;
-    /* Phase B: every new allocation enters the nursery. Promotion to
-     * OLD happens inside a minor collection after
-     * `osty_gc_promote_age` survivals. */
-    header->generation = OSTY_GC_GEN_YOUNG;
-    header->age = 0;
-    /* Phase C: header starts WHITE. An incremental major in
-     * progress will NOT retroactively colour this allocation — it was
-     * born after the mark snapshot and stays white until the cycle
-     * ends, at which point sweep reclaims it if still unrooted. SATB
-     * plus mutator assist together keep the grey queue draining so
-     * this is a bounded pressure, not an allocation floodgate. */
-    header->color = OSTY_GC_COLOR_WHITE;
-    header->marked = false;
+    /* generation / age / color / marked are NOT explicitly stored:
+     * the freshly-acquired chunk is zero-initialized regardless of
+     * source — TLAB blocks come out of mmap'd arena pages (kernel-
+     * zeroed on first touch), heap fallback uses calloc, and the
+     * free-list path memsets the chunk to zero on reuse (line above).
+     * The four values we'd write are all zero anyway:
+     *   - OSTY_GC_GEN_YOUNG  = 0
+     *   - age                = 0
+     *   - OSTY_GC_COLOR_WHITE = 0
+     *   - marked / false     = 0
+     * Eliding the redundant stores trims four cache-line touches off
+     * the allocate_managed hot path; on log-aggregator's 50K-alloc
+     * × 100-iter stress run that's ~20M dropped writes.
+     *
+     * Phase B intent: every new allocation enters the nursery.
+     * Promotion to OLD happens inside a minor collection after
+     * `osty_gc_promote_age` survivals. Phase C intent: header starts
+     * WHITE; an incremental major in progress will NOT retroactively
+     * colour this allocation — it was born after the mark snapshot
+     * and stays white until the cycle ends, at which point sweep
+     * reclaims it if still unrooted. */
     if (!single_threaded) osty_gc_acquire();
     if (humongous) {
         osty_gc_humongous_alloc_count_total += 1;
