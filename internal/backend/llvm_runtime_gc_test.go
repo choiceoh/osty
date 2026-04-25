@@ -114,7 +114,17 @@ int main(void) {
 	// increment no longer shows up in the counter. The correctness of
 	// root tracking / collection counting is unaffected — verified by
 	// the live_count / write_count columns still matching.
-	if got, want := string(runOutput), "1\n0\n2\n1\n1\n1\n1\n1\n1\n2\n2\n0\n3\n1\n1\n8\n8\n0\n"; got != want {
+	//
+	// post_write_managed_count (idx 8 in the output) dropped from 1 to
+	// 0 when osty_gc_post_write_v1 grew a YOUNG-owner skip: the harness
+	// pushes `child` into `list` before `osty_gc_root_bind_v1(list)`,
+	// so at the moment of the store both owner and value are YOUNG and
+	// unpinned. The minor collector reaches YOUNG values transitively
+	// through their owner's fields, so the remembered-set entry is
+	// pure overhead in that case; the runtime now skips it and the
+	// counter reflects that. Marking via the pinned root after
+	// root_bind still works (verified by live_count = 3 on idx 12).
+	if got, want := string(runOutput), "1\n0\n2\n1\n1\n1\n1\n1\n0\n2\n2\n0\n3\n1\n1\n8\n8\n0\n"; got != want {
 		t.Fatalf("runtime GC harness stdout = %q, want %q", got, want)
 	}
 }

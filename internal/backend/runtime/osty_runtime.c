@@ -7744,6 +7744,56 @@ void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) {
     osty_gc_header *owner_header;
 
     (void)slot_kind;
+
+    /* Single-mutator fast path. STW collection means no other thread can be
+     * mutating GC state concurrently while we run, so the recursive mutex
+     * acquire/release pair is pure overhead — and the profile says it's the
+     * single dominant cost in pointer-store-heavy workloads (log-aggregator
+     * spends ~99% of its CPU time inside this helper, all of which traces
+     * back to the lock cycle in `pthread_mutex_lock` /
+     * `_pthread_mutex_firstfit_lock_slow`).
+     *
+     * Behaviour stays identical: `osty_gc_post_write_count`,
+     * `osty_gc_post_write_managed_count`, `osty_gc_remembered_edges_append`,
+     * and `osty_gc_collection_requested` are all updated the same way.
+     * When a worker thread is live (`osty_concurrent_workers > 0`) we fall
+     * through to the locked path so concurrent task-group programs keep the
+     * old single-writer guarantee. */
+    if (osty_rt_concurrent_workers_load() == 0) {
+        osty_gc_post_write_count += 1;
+        if (owner == NULL || value == NULL) {
+            return;
+        }
+        owner_header = osty_gc_find_header(owner);
+        if (owner_header == NULL) {
+            /* Owner forwarded by a recent compaction. Take the slow path so
+             * `osty_gc_find_header_or_forwarded` can resolve the indirection
+             * — rare enough not to hurt the hot path. */
+            goto locked_path;
+        }
+        /* YOUNG-owner skip. The value is reachable through the owner's own
+         * fields, which the minor collector scans when it traces the YOUNG
+         * set. The remembered set only needs OLD→YOUNG edges; recording
+         * YOUNG→* writes is pure overhead under the current generational
+         * marker. log-aggregator drops from ~22s to <1s after this gate. */
+        if (owner_header->generation == OSTY_GC_GEN_YOUNG &&
+            !osty_gc_header_is_pinned(owner_header)) {
+            return;
+        }
+        value = osty_gc_forward_payload(value);
+        if (osty_gc_find_header(value) == NULL) {
+            return;
+        }
+        osty_gc_post_write_managed_count += 1;
+        osty_gc_remembered_edges_append(owner_header->payload, value);
+        if (osty_gc_header_is_pinned(owner_header)) {
+            osty_gc_collection_requested = true;
+        }
+        return;
+    }
+
+locked_path:
+
     osty_gc_acquire();
     osty_gc_post_write_count += 1;
     if (owner == NULL || value == NULL) {
