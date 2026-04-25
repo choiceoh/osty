@@ -63,7 +63,6 @@ import (
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/scaffold"
-	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
@@ -561,200 +560,6 @@ func parseFlags() cliFlags {
 	flag.Usage = usage
 	flag.Parse()
 	return f
-}
-
-// newFormatter builds a Formatter that uses ANSI colors only when the
-// caller's stderr is a terminal — pipes and CI logs get plain text unless
-// --color is forced.
-// runCheckPackage runs lex + parse + resolve over dir. Two modes:
-//
-//   - **Single-package**: dir contains `.osty` files directly. Loaded
-//     via resolve.LoadPackageArenaFirst.
-//   - **Workspace**: dir has no top-level `.osty` files but one or
-//     more subdirectories do. The whole tree is loaded via Workspace
-//     so cross-package `use` declarations resolve.
-//
-// Always routes through the self-host native path since Phase 1c.5
-// retired the Go-hosted legacy alternative. Diagnostics are rendered
-// with each file's own formatter so source snippets point at the right
-// lines even when spanning packages.
-
-// manifestLookupNear reports whether an osty.toml is reachable from
-// dir (walking up). Used by runCheckPackage to decide whether to
-// apply manifest-level validation before source-file processing.
-// Returns the discovered root + "found" as (string, bool) via error
-// semantics so the helper composes with the existing err-returning
-// FindRoot.
-
-// isWorkspace is a thin wrapper around resolve.IsWorkspaceRoot so the
-// call sites below stay readable. Kept local because the CLI uses the
-// "no skip" variant exclusively.
-
-// runLintPackage runs the lint pass over every .osty file in dir as a
-// single package so cross-file uses of `use` aliases and top-level
-// declarations don't trigger false "unused" warnings. Workspace mode
-// (dir-of-packages) runs lint per contained package via
-// runLintWorkspace. Single-package path loads arena-first (Phase 1c.2)
-// so parse goes through selfhost.Run; pf.File / canonical materialize
-// lazily for the Go resolver + linter until lint moves onto the
-// engine path in a later Phase 1c.5 slice.
-
-// runLintWorkspace lints each package inside dir, aggregating diagnostics
-// so a single strict check covers the whole tree.
-
-// applyPackageFixes runs lint.ApplyFixes on each file in the package
-// using only diagnostics stamped for that file, then either rewrites the
-// files in place (--fix) or dumps a concatenated dry-run preview
-// (--fix-dry-run). Emits a final summary line counting fixes applied
-// and overlaps skipped across the whole package.
-//
-// Diagnostics whose File is empty are attached to the package's first
-// file — package-mode lint.Package does stamp File on every lint diag,
-// but the fallback keeps this robust against downstream regressions.
-
-// Prefix each file's post-fix content with a header so the
-// user can diff it against the original per file.
-
-// runResolveFile is the extracted body of `osty resolve FILE`. It
-// drives the single-file resolve happy path entirely through the
-// self-host arena (selfhost.ResolveFromSource); the astbridge
-// *ast.File is only materialized lazily via parser.ParseDiagnostics
-// when a fallback needs it (printResolution with no native rows, or
-// --show-scopes). Returns the subcommand's exit code: 0 on clean
-// input, 1 when any error-severity diagnostic surfaces. Extracting
-// this keeps the subcommand body testable in-process so the
-// astbridge counter can pin the end-to-end CLI
-// invariant (not just the library primitives).
-// runTypecheckPackageNative is the DIR sibling of
-// runTypecheckFileNative and the typecheck sibling of
-// runCheckPackageNative. After the package check runs astbridge-free
-// over the merged arena, it emits a per-file type dump with each
-// file's header so `osty typecheck --native DIR` output stays
-// readable for packages with more than one source file. Returns the
-// subcommand exit code.
-
-// printNativePackageTypes is the DIR renderer for --native typecheck:
-// buckets TypedNodes by owning file (same findOwningFile walker used
-// for diagnostics), relativizes byte offsets, and emits a
-// `# <path>` header followed by the single-file printNativeTypes
-// rows for each file that has at least one typed node. Files with
-// no typed nodes are silently skipped so the dump stays compact.
-
-// runCheckPackageNative is the DIR sibling of runCheckFileNative.
-// Loads the package via LoadPackageForNative (no eager *ast.File
-// materialization), runs selfhost.CheckPackageStructured over the
-// arena, and converts the resulting CheckDiagnosticRecord slice into
-// per-file *diag.Diagnostic values so printPackageDiags keeps its
-// file-bucketed rendering. Returns the subcommand exit code.
-
-func (nativeLazyStdlibProvider) LookupPackage(dotPath string) *resolve.Package {
-	if !strings.HasPrefix(dotPath, resolve.StdPrefix) {
-		return nil
-	}
-	return stdlib.LoadCached().LookupPackage(dotPath)
-}
-
-// nativePackageCheckDiags buckets records by owning file (using the
-// layout bases CheckPackageStructured emitted against), relativizes
-// their offsets into each file's own source, and runs the per-file
-// converter so line/column numbers print against the right file —
-// not the concatenated bundle. Records that don't land inside any
-// file range (should not happen for well-formed output) are dropped
-// with their bundle offsets preserved as a defensive fallback.
-
-// runTypecheckFileNative is runCheckFileNative plus the type dump.
-// After the check runs on the arena, prints every typed-node range
-// selfhost.CheckResult.TypedNodes recorded — one row per node with
-// line/column span and the inferred type. Zero astbridge lowerings
-// on the happy path (same counter invariant as runCheckFileNative).
-
-// printNativeTypes is the --native sibling of printTypes: it renders
-// selfhost.CheckResult.TypedNodes (node.Start, node.End are byte
-// offsets produced by the native checker) as
-// `line:col-line:col\tType` rows sorted by start position. Rows
-// with nil Type (the checker's signal-only placeholders) are
-// dropped so output stays compact.
-
-// byteOffsetLineCol is a single-pass scan equivalent of the
-// positionAtOffset helper that lives inside selfhost for the
-// diagnostic converter. Promoted to cmd/osty because the typed-node
-// renderer needs it inline — keep the two scanners in sync with
-// internal/selfhost/check_diag_convert.go:positionAtOffsetForDiag.
-
-// runLintFile is the extracted `osty lint FILE` body (minus the
-// exclude-config early-return, which stays in the caller so the "skip"
-// message fires before parse work begins). Runs parse → resolveFile →
-// check.SelfhostFile → lint engine; handles --fix / --fix-dry-run
-// stdout/disk side-effects inside the function.
-//
-// Uses check.SelfhostFile (not check.File) since Phase 1c.5 — lint on
-// a single file never exercises the AST-level builder-desugar rewrite
-// (desugar runs on check.Package for multi-file auto-derive chains),
-// so the selfhost-direct entry shaves that pass without altering the
-// `*check.Result` shape the lint engine consumes.
-
-// Write the would-be-applied source to stdout so users
-// can pipe it through `diff` / `less` before committing
-// to a real --fix pass. The file on disk is untouched.
-
-// runCheckFileNative drives `osty check --native FILE` end-to-end on
-// the self-host arena pipeline: selfhost.CheckFromSource parses once
-// and runs the native checker directly on the arena (arena-direct
-// gate included), and selfhost.CheckDiagnosticsAsDiag lifts the
-// structured records into the CLI's usual diag.Diagnostic shape.
-// Zero astbridge lowerings on the happy path — the counter stays at
-// 0 throughout, pinned by TestRunCheckFileNativeIsAstbridgeFree.
-// Returns the
-// subcommand's exit code (0 clean / 1 on any error-severity
-// diagnostic).
-
-func runResolveFile(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
-	parseDiags, resolved := selfhost.ResolveFromSource(src, path)
-	var (
-		res  *resolve.Result
-		file *ast.File
-	)
-	ensureLoweredFile := func() *ast.File {
-		if file == nil {
-			parsed, _ := parser.ParseDiagnostics(src)
-			file = parsed
-		}
-		return file
-	}
-	ensureGoResolve := func() *resolve.Result {
-		if res == nil {
-			res = resolveFile(ensureLoweredFile())
-		}
-		return res
-	}
-	all := append([]*diag.Diagnostic{}, parseDiags...)
-	nativeDiags := nativeResolveDiagnosticsFromResolved(resolved, src, path)
-	all = append(all, nativeDiags...)
-	printDiags(formatter, all, flags)
-	if rows := nativeResolveRowsFromResolved(resolved, src, path); len(rows) > 0 {
-		printNativeResolutionRows(rows)
-	} else {
-		// Native pass produced no rows — fall back to the Go
-		// resolver for printResolution so empty-source or
-		// resolver-disagreement cases stay visible.
-		printResolution(ensureLoweredFile(), ensureGoResolve())
-	}
-	if flags.showScopes {
-		r := ensureGoResolve()
-		// File scope's parent is the package scope (a child of the
-		// prelude). Rooting the dump at the package scope hides
-		// noisy prelude builtins while still showing every
-		// user-declared symbol.
-		if pkgScope := r.FileScope.Parent(); pkgScope != nil {
-			printScopeTree(pkgScope)
-		} else {
-			printScopeTree(r.FileScope)
-		}
-	}
-	if hasError(all) {
-		return 1
-	}
-	return 0
 }
 
 // runResolvePackage is runCheckPackage plus a resolution dump per file.
@@ -1330,25 +1135,6 @@ func maybeAIRepairSource(path string, src []byte, prefix string, summary io.Writ
 	}
 	return src
 }
-
-// loadLintConfigWithBase walks up from the target path collecting
-// every `osty.toml` [lint] section and merging them hierarchically:
-// the closest (child) config overrides Allow/Deny from parent
-// configs further up the tree, while Exclude patterns from all
-// levels are unioned. It also returns the manifest directory of the
-// closest osty.toml (even when it has no [lint] section) so callers
-// can resolve Exclude globs against the project root.
-
-// Record the closest manifest directory as base for
-// Exclude glob resolution, regardless of [lint].
-
-// layer is a parent — merge child on top.
-
-// loadLintConfigNear returns the merged [lint] configuration for the
-// file or directory at startPath by walking up the directory tree and
-// merging every ancestor osty.toml. Exclude is not returned because
-// the caller does not have a base directory for glob resolution;
-// use loadLintConfigWithBase when Exclude is needed.
 
 // printResolution writes a sorted table of every resolved identifier:
 // `line:col  Name  Kind  def-pos`. Useful for sanity-checking the
@@ -2209,10 +1995,3 @@ func takeFlag(args []string, name string) (rest []string, matched string) {
 	}
 	return args, ""
 }
-
-// runLintExplain prints a single rule's metadata and exits 0 on success,
-// 2 on unknown rule name. Accepts either a code (L0001) or a name
-// (unused_let).
-
-// runLintList prints every rule, grouped by category. Machine-readable
-// tab-separated format: CODE\tNAME\tCATEGORY\tSUMMARY.

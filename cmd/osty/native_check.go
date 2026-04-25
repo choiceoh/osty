@@ -9,11 +9,14 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/manifest"
+	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/stdlib"
 )
 
 // runCheckPackage runs lex + parse + resolve over dir. Two modes:
@@ -82,16 +85,61 @@ func nativeWorkspaceRoot(dir string, flags cliFlags) (string, bool, bool) {
 	return "", false, false
 }
 
-// runResolveFile is the extracted body of `osty resolve FILE`. It
-// drives the single-file resolve happy path entirely through the
-// self-host arena (selfhost.ResolveFromSource); the astbridge
-// *ast.File is only materialized lazily via parser.ParseDiagnostics
-// when a fallback needs it (printResolution with no native rows, or
-// --show-scopes). Returns the subcommand's exit code: 0 on clean
-// input, 1 when any error-severity diagnostic surfaces. Extracting
-// this keeps the subcommand body testable in-process so the
-// astbridge counter can pin the end-to-end CLI
-// invariant (not just the library primitives).
+// runResolveFile drives the single-file `osty resolve FILE` happy path
+// entirely through the self-host arena (selfhost.ResolveFromSource);
+// the astbridge *ast.File is only materialized lazily via
+// parser.ParseDiagnostics when a fallback needs it (printResolution
+// with no native rows, or --show-scopes). Returns the subcommand's
+// exit code: 0 on clean input, 1 when any error-severity diagnostic
+// surfaces. Keeping the body factored out lets the astbridge counter
+// pin the end-to-end CLI invariant in-process (not just the library
+// primitives).
+func runResolveFile(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
+	parseDiags, resolved := selfhost.ResolveFromSource(src, path)
+	var (
+		res  *resolve.Result
+		file *ast.File
+	)
+	ensureLoweredFile := func() *ast.File {
+		if file == nil {
+			parsed, _ := parser.ParseDiagnostics(src)
+			file = parsed
+		}
+		return file
+	}
+	ensureGoResolve := func() *resolve.Result {
+		if res == nil {
+			res = resolveFile(ensureLoweredFile())
+		}
+		return res
+	}
+	all := append([]*diag.Diagnostic{}, parseDiags...)
+	nativeDiags := nativeResolveDiagnosticsFromResolved(resolved, src, path)
+	all = append(all, nativeDiags...)
+	printDiags(formatter, all, flags)
+	if rows := nativeResolveRowsFromResolved(resolved, src, path); len(rows) > 0 {
+		printNativeResolutionRows(rows)
+	} else {
+		printResolution(ensureLoweredFile(), ensureGoResolve())
+	}
+	if flags.showScopes {
+		r := ensureGoResolve()
+		// File scope's parent is the package scope (a child of the
+		// prelude). Rooting the dump at the package scope hides
+		// noisy prelude builtins while still showing every
+		// user-declared symbol.
+		if pkgScope := r.FileScope.Parent(); pkgScope != nil {
+			printScopeTree(pkgScope)
+		} else {
+			printScopeTree(r.FileScope)
+		}
+	}
+	if hasError(all) {
+		return 1
+	}
+	return 0
+}
+
 // runTypecheckPackageNative is the DIR sibling of
 // runTypecheckFileNative and the typecheck sibling of
 // runCheckPackageNative. After the package check runs astbridge-free
@@ -251,6 +299,13 @@ func loadNativeWorkspace(dir, mode string, flags cliFlags) (*resolve.Workspace, 
 }
 
 type nativeLazyStdlibProvider struct{}
+
+func (nativeLazyStdlibProvider) LookupPackage(dotPath string) *resolve.Package {
+	if !strings.HasPrefix(dotPath, resolve.StdPrefix) {
+		return nil
+	}
+	return stdlib.LoadCached().LookupPackage(dotPath)
+}
 
 func nativeWorkspacePaths(ws *resolve.Workspace) []string {
 	if ws == nil {
