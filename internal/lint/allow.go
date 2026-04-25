@@ -204,7 +204,7 @@ func resolveAllowName(name string) []string {
 		return []string{
 			diag.CodeUnusedLet, diag.CodeUnusedParam, diag.CodeUnusedImport,
 			diag.CodeUnusedMut, diag.CodeUnusedField, diag.CodeUnusedMethod,
-			diag.CodeIgnoredResult,
+			diag.CodeIgnoredResult, diag.CodeDeadStore,
 		}
 	case "shadow", "shadowing":
 		return []string{diag.CodeShadowedBinding}

@@ -15,7 +15,8 @@ func TestMergeEmptyChildInheritsParent(t *testing.T) {
 	merged := child.Merge(parent)
 
 	assertStrings(t, merged.Allow, "L0001", "naming_value")
-	assertStrings(t, merged.Deny, "dead_code")
+	// "dead_code" resolves to L0020.
+	assertStrings(t, merged.Deny, "L0020")
 	assertStrings(t, merged.Exclude, "vendor/**")
 }
 
@@ -30,7 +31,8 @@ func TestMergeEmptyParentIsNoOp(t *testing.T) {
 	merged := child.Merge(parent)
 
 	assertStrings(t, merged.Allow, "L0003")
-	assertStrings(t, merged.Deny, "self_assign")
+	// "self_assign" resolves to L0042.
+	assertStrings(t, merged.Deny, "L0042")
 	assertStrings(t, merged.Exclude, "gen/**")
 }
 
@@ -81,13 +83,13 @@ func TestMergeDenyUnion(t *testing.T) {
 		Deny: []string{"dead_code"},
 	}
 	child := Config{
-		Deny: []string{"self_assign"},
+		Deny: []string{"naming_type"},
 	}
 
 	merged := child.Merge(parent)
 
-	// child-first, dedup.
-	assertStrings(t, merged.Deny, "self_assign", "dead_code")
+	// naming_type→L0030, dead_code→L0020; sorted concrete codes.
+	assertStrings(t, merged.Deny, "L0020", "L0030")
 }
 
 func TestMergeChildAllowCancelsParentDeny(t *testing.T) {
@@ -101,8 +103,8 @@ func TestMergeChildAllowCancelsParentDeny(t *testing.T) {
 	merged := child.Merge(parent)
 
 	assertStrings(t, merged.Allow, "unused_let")
-	// unused_let removed from Deny because child allows it.
-	assertStrings(t, merged.Deny, "dead_code")
+	// unused_let→L0001 cancelled from deny; dead_code→L0020 survives.
+	assertStrings(t, merged.Deny, "L0020")
 }
 
 func TestMergeChildAllowCancelsParentDenyForSameCode(t *testing.T) {
@@ -116,7 +118,7 @@ func TestMergeChildAllowCancelsParentDenyForSameCode(t *testing.T) {
 	merged := child.Merge(parent)
 
 	assertStrings(t, merged.Allow, "unused_let")
-	// completely cancelled.
+	// unused_let→L0001 cancelled → empty deny.
 	if len(merged.Deny) != 0 {
 		t.Errorf("expected empty Deny, got %v", merged.Deny)
 	}
@@ -175,12 +177,11 @@ func TestMergeFullScenario(t *testing.T) {
 	// Allow: child-first union = ["unused_let", "L0001"]
 	assertStrings(t, merged.Allow, "unused_let", "L0001")
 
-	// Deny: union of parent+child, minus child.Allow resolved codes.
-	// child.Allow "unused_let" resolves to {"L0001"}, which does not
-	// cancel any of parent's deny codes (dead_code→L0020, self_assign→L0042,
-	// shadow→shadowed_binding→L0010). So all survive:
-	// child-first: ["naming_type", "dead_code", "self_assign", "shadow"]
-	assertStrings(t, merged.Deny, "naming_type", "dead_code", "self_assign", "shadow")
+	// Deny names merged: ["naming_type", "dead_code", "self_assign", "shadow"]
+	// Expand: naming_type→L0030, dead_code→L0020, self_assign→L0042, shadow→L0010
+	// child Allow: unused_let→L0001 — no overlap with deny codes
+	// Result: sorted concrete codes.
+	assertStrings(t, merged.Deny, "L0010", "L0020", "L0030", "L0042")
 
 	// Exclude: parent-first union.
 	assertStrings(t, merged.Exclude, "vendor/**", "gen/**")
@@ -189,7 +190,7 @@ func TestMergeFullScenario(t *testing.T) {
 func TestMergeDoesNotAliasSlices(t *testing.T) {
 	parent := Config{
 		Allow:   []string{"L0001"},
-		Deny:    []string{"dead_code"},
+		Deny:    []string{"L0020"},
 		Exclude: []string{"vendor/**"},
 	}
 	child := Config{
@@ -224,7 +225,8 @@ func TestMergeWildcardAllowCancelsAllDeny(t *testing.T) {
 	merged := child.Merge(parent)
 
 	assertStrings(t, merged.Allow, "all")
-	// "all" expands to "*" which matches everything → all deny codes cancelled.
+	// "all" expands to {"*": true}; denyCodes has entries but wildcard
+	// allow cancels everything → Deny=[].
 	if len(merged.Deny) != 0 {
 		t.Errorf("expected empty Deny (wildcard \"all\" cancels all), got %v", merged.Deny)
 	}
@@ -240,12 +242,33 @@ func TestMergeCategoryAllowCancelsMatchingDeny(t *testing.T) {
 
 	merged := child.Merge(parent)
 
-	// "unused" resolves to {L0001, L0002, L0003, L0004, L0005, L0006, L0007}
-	// which covers all three parent deny codes → Deny becomes empty.
+	// "unused" resolves to {L0001,L0002,L0003,L0004,L0005,L0006,L0007}.
+	// All 3 parent deny codes are cancelled → Deny becomes empty.
 	if len(merged.Deny) != 0 {
 		t.Errorf("expected empty Deny (category \"unused\" cancels L0001-L0003), got %v", merged.Deny)
 	}
 	assertStrings(t, merged.Allow, "unused")
+}
+
+func TestMergeCategoryDenyMinusSpecificAllow(t *testing.T) {
+	parent := Config{
+		Deny: []string{"unused"},
+	}
+	child := Config{
+		Allow: []string{"unused_let"},
+	}
+
+	merged := child.Merge(parent)
+
+	// parent Deny: "unused" → {L0001,L0002,L0003,L0004,L0005,L0006,L0007,L0008}
+	// child Allow: "unused_let" → {L0001}
+	// L0001 is cancelled; remaining deny codes are L0002-L0008 sorted.
+	assertStrings(t, merged.Deny,
+		"L0002", "L0003", "L0004", "L0005", "L0006", "L0007", "L0008",
+	)
+
+	// Allow is child-only (parent has no Allow).
+	assertStrings(t, merged.Allow, "unused_let")
 }
 
 // --- helpers ---

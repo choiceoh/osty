@@ -2,6 +2,7 @@ package lint
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/osty/osty/internal/diag"
@@ -51,9 +52,12 @@ type Config struct {
 //
 //   - Allow: union of parent + child (child entries first, dedup).
 //   - Deny: union of parent + child (child entries first, dedup),
-//     minus any codes the child's Allow resolves to. This lets a
-//     child selectively cancel a parent's deny without losing the
-//     rest of the parent's deny list.
+//     expanded to concrete codes, minus any codes the child's Allow
+//     resolves to. This lets a child selectively cancel individual
+//     codes from a parent's category-level deny without losing the
+//     rest. After cancellation the Deny list contains concrete codes
+//     (L0001, L0002, …) rather than symbolic names; Apply handles
+//     both transparently.
 //   - Exclude: union of parent + child (parent-first, dedup).
 //
 // A nil or zero-value child returns a deep copy of the parent.
@@ -64,13 +68,21 @@ func (c Config) Merge(parent Config) Config {
 	// Allow: union, child-first, dedup.
 	out.Allow = mergeStringSlices(c.Allow, parent.Allow)
 
-	// Deny: union, child-first, dedup, then remove codes the child allows.
-	out.Deny = mergeStringSlices(c.Deny, parent.Deny)
-	if len(c.Allow) > 0 {
-		allowedCodes := expandCodeSet(c.Allow)
-		if len(allowedCodes) > 0 {
-			out.Deny = removeResolvedCodes(out.Deny, allowedCodes)
+	// Deny: union names → expand to concrete codes → subtract child.Allow.
+	mergedDenyNames := mergeStringSlices(c.Deny, parent.Deny)
+	if len(mergedDenyNames) > 0 {
+		denyCodes := expandCodeSet(mergedDenyNames)
+		if len(c.Allow) > 0 {
+			allowedCodes := expandCodeSet(c.Allow)
+			if allowedCodes["*"] {
+				denyCodes = nil
+			} else {
+				for code := range allowedCodes {
+					delete(denyCodes, code)
+				}
+			}
 		}
+		out.Deny = codeSetToSortedSlice(denyCodes)
 	}
 
 	// Exclude: union, parent-first, dedup.
@@ -102,31 +114,20 @@ func mergeStringSlices(a, b []string) []string {
 	return out
 }
 
-// removeResolvedCodes filters a list of symbolic lint names, removing
-// any entry that resolveAllowName maps into the given concrete code set.
-func removeResolvedCodes(names []string, codeSet map[string]bool) []string {
-	if len(names) == 0 || len(codeSet) == 0 {
-		return names
-	}
-	out := make([]string, 0, len(names))
-	for _, name := range names {
-		codes := resolveAllowName(name)
-		kept := true
-		for _, code := range codes {
-			if codeSet[code] || codeSet["*"] {
-				kept = false
-				break
-			}
-		}
-		// If the name didn't resolve to any matching code, keep it.
-		// Also keep it if it didn't resolve to anything at all (unknown alias).
-		if kept || len(codes) == 0 {
-			out = append(out, name)
-		}
-	}
-	if len(out) == 0 {
+// codeSetToSortedSlice converts a concrete code set (map[string]bool)
+// into a sorted slice of code strings. Sorted for deterministic output.
+func codeSetToSortedSlice(codes map[string]bool) []string {
+	if len(codes) == 0 {
 		return nil
 	}
+	if codes["*"] {
+		return []string{"*"}
+	}
+	out := make([]string, 0, len(codes))
+	for code := range codes {
+		out = append(out, code)
+	}
+	sort.Strings(out)
 	return out
 }
 
