@@ -67,7 +67,7 @@ untouched.
 | 12 | strings | 9197–9284 | ~7 | LOW | Partial — `encodeLLVMString`, `earliestAfter`, and the string-pool line template ported (`mirEncodeLLVMString`, `mirEarliestAfter`, `mirStringPoolLine`); `stringLiteral` interning + `emitStringPool` orchestration stay on Go (touch `g.strings` / `g.out`) |
 | 13 | type mapping | 9285–9375 | ~8 | LOW | **Ported** (primitive + opaque-named + head-name + optional-surface) |
 | 14 | enum layout helpers | 9376–9575 | ~10 | LOW | Partial — `llvmTypeForTupleTag` Prim / Named branches + Optional / Option / Result / Tuple name-mangling ported (`mirTupleTagForPrim`, `mirTupleTagForNamed`, `mirOptionalTypeName`, `mirOptionTypeName`, `mirResultTypeName`, `mirTupleTypeNameFromTags`); `registerEnumLayout` + `g.tupleDefs` caches deferred to Phase B |
-| 15 | helpers | 9576–9616 | ~5 | LOW | Partial — `firstNonEmpty`, `isUnitType`, `isFloatType`, `isScalarLLVMType`, `llvmStdIoI1Text` ported |
+| 15 | helpers | 9576–9616 | ~5 | LOW | Partial — pure (`firstNonEmpty`, `isUnitType`, `isFloatType`, `isScalarLLVMType`, `llvmStdIoI1Text`) + state-bearing (`MirSeq.fresh` / `MirSeq.freshLabel` / `MirSeq.reset`) ported. Phase B start: `tempSeq` field migrated from `mirGen` into Osty `MirSeq` struct mirror. `ostyEmitter` / `flushOstyEmitter` / `storeIntrinsicResult` / `emitRuntimeRawNull` still touch other state; landing as the mirror grows |
 
 ## Phased plan
 
@@ -200,6 +200,12 @@ list keeps new Osty clean of known landmines.
 | `mirRuntimeDeclareLine` | `(retTy: String, sym: String, argList: String) -> String` | §3 | Plain `declare <ret> @<sym>(<args>)` — no LLVM-attribute tuning |
 | `mirRuntimeDeclareMemoryRead` | `(retTy: String, sym: String, argList: String) -> String` | §3 | `declare ... ) nounwind willreturn memory(read)` — the attribute combo that unlocks LICM / CSE of snapshot calls (list-data / list-len / slow-path getters) |
 | `mirRuntimeDeclareNoReturn` | `(retTy: String, sym: String, argList: String, cold: Bool) -> String` | §3 | `declare ... ) noreturn` + optional ` cold nounwind` for bounds-check traps |
+| `mirGenIntToString` | `(n: Int) -> String` | §15 | Local Int→String for the MIR-emitter surface (self-host stdlib still lacks `Int.toString`); manual digit walk mirroring `mirLowerIntToString` |
+| `mirGenDigitChar` | `(d: Int) -> String` | §15 | ASCII decimal digit lookup for `mirGenIntToString`; out-of-range inputs return `"?"` |
+| `MirSeq` (struct) | `{ tempSeq: Int }` | §15 | First piece of `mirGen` state to land in Osty as a real mutable model. Methods below replace the Go `g.tempSeq` field + `g.fresh()` / `g.freshLabel()` direct accesses |
+| `MirSeq.fresh` | `(mut self) -> String` | §15 | Issue `%tN` SSA register name + bump counter — `mut self` mirrors the pointer-receiver Go method |
+| `MirSeq.freshLabel` | `(mut self, prefix: String) -> String` | §15 | Issue `<prefix>.N` basic-block label + bump counter (shares SSA namespace with `fresh`) |
+| `MirSeq.reset` | `(mut self) -> ()` | §15 | Zero the counter at function-emission boundaries — replaces `g.tempSeq = 0` at the top of `emitFunction` |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as
