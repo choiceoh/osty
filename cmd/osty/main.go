@@ -31,8 +31,7 @@
 // `fmt` subcommand flags (after the subcommand name):
 //
 //	--check        exit 1 if the file is not already formatted; print diff to stderr
-//	--engine NAME  formatter engine: go (default) or osty
-//	--no-airepair disable the default pre-format AI repair pass
+//	--no-airepair  disable the default pre-format AI repair pass
 //	--write        overwrite the file in place instead of printing to stdout
 package main
 
@@ -2064,7 +2063,6 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --inspect          check: emit one record per expression (rule, type, hint)")
 	fmt.Fprintln(os.Stderr, "fmt-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  --check            exit 1 if FILE is not already formatted")
-	fmt.Fprintln(os.Stderr, "  --engine NAME      formatter engine: go (default) or osty")
 	fmt.Fprintln(os.Stderr, "  --write            overwrite FILE in place")
 	fmt.Fprintln(os.Stderr, "  --airepair         enable the default pre-format AI repair pass")
 	fmt.Fprintln(os.Stderr, "  --no-airepair      disable the default pre-format AI repair pass")
@@ -2159,8 +2157,8 @@ func printTypes(r *check.Result) {
 
 // runFmt implements the `osty fmt` subcommand. The args slice holds
 // everything on the command line following `fmt` — zero or more of
-// --check/--write/--airepair/--no-airepair/--engine, then exactly
-// one file path.
+// --check/--write/--airepair/--no-airepair, then exactly one file
+// path.
 //
 // Exit codes match gofmt conventions:
 //
@@ -2170,11 +2168,13 @@ func printTypes(r *check.Result) {
 func runFmt(args []string) {
 	fs := flag.NewFlagSet("fmt", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty fmt [--check] [--write] [--airepair] [--no-airepair] [--engine go|osty] FILE")
+		fmt.Fprintln(os.Stderr, "usage: osty fmt [--check] [--write] [--airepair] [--no-airepair] FILE")
 	}
 	var checkMode, writeMode, noAIRepair bool
-	engine := "go"
 	repairMode := true
+	// Accepted but ignored — historical alias for the formatter engine
+	// selector. There is now only one engine (the self-host formatter).
+	var engineUnused string
 	fs.BoolVar(&checkMode, "check", false, "exit 1 if FILE is not already formatted")
 	fs.BoolVar(&checkMode, "c", false, "alias for --check")
 	fs.BoolVar(&writeMode, "write", false, "overwrite FILE in place")
@@ -2183,8 +2183,9 @@ func runFmt(args []string) {
 	fs.BoolVar(&repairMode, "repair", true, "alias for --airepair")
 	fs.BoolVar(&noAIRepair, "no-airepair", false, "disable automatic AI repair before formatting")
 	fs.BoolVar(&noAIRepair, "no-repair", false, "alias for --no-airepair")
-	fs.StringVar(&engine, "engine", engine, "formatter engine (go|osty)")
+	fs.StringVar(&engineUnused, "engine", "", "deprecated; the only engine is the self-host formatter")
 	_ = fs.Parse(args)
+	_ = engineUnused
 	if noAIRepair {
 		repairMode = false
 	}
@@ -2218,22 +2219,10 @@ func runFmt(args []string) {
 		diags []*diag.Diagnostic
 		ferr  error
 	)
-	switch engine {
-	case "", "go", "ast":
-		if !repairMode && parserCanonicalChanged {
-			out = formatSrc
-		} else {
-			out, diags, ferr = format.Source(formatSrc)
-		}
-	case "osty":
-		if !repairMode && parserCanonicalChanged {
-			out = formatSrc
-		} else {
-			out, diags, ferr = format.OstySource(formatSrc)
-		}
-	default:
-		fmt.Fprintf(os.Stderr, "osty fmt: unknown engine %q (want go or osty)\n", engine)
-		os.Exit(2)
+	if !repairMode && parserCanonicalChanged {
+		out = formatSrc
+	} else {
+		out, diags, ferr = format.Source(formatSrc)
 	}
 	if ferr != nil {
 		// Render parse diagnostics so the user can fix them.
