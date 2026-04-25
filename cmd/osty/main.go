@@ -334,7 +334,7 @@ func main() {
 	// timing/output table (or JSON). Has its own flag parser for
 	// --json and --trace.
 	if cmd == "pipeline" {
-		runPipeline(args[1:])
+		runPipeline(args[1:], flags)
 		return
 	}
 	// Build-profile / target / feature / cache inspection commands.

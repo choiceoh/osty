@@ -96,6 +96,11 @@ diag test=".":
 repair-check: build
     while IFS= read -r file; do case "$file" in testdata/spec/negative/*|internal/airepair/testdata/corpus/*.input.osty) continue ;; esac; {{bin}} repair --check "$file"; done < <(git ls-files '*.osty')
 
+# Capture residual airepair cases into tmp/airepair-cases/ and rewrite
+# todo-airepair.md with the ranked learning backlog. Non-blocking.
+airepair-capture: build
+    bash scripts/airepair-update-backlog.sh {{bin}}
+
 ci: build
     {{bin}} ci .
 
@@ -104,7 +109,7 @@ verify-selfhost:
 
 check: fmt-check vet front
 
-prepush: fmt-check vet repair-check ci
+prepush: fmt-check vet repair-check airepair-capture ci
 
 pipe target:
     test -x {{bin}} || just build

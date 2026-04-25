@@ -170,6 +170,12 @@ type Config struct {
 
 	// GenSourcePath is used for generated source anchors in single-file mode.
 	GenSourcePath string
+
+	// SourceTransform rewrites raw source bytes before parsing. The CLI sets
+	// this so directory/workspace pipeline runs go through the same airepair
+	// pre-pass as `osty check|build|run|test|lint` (Phase 1c arena flip).
+	// Nil keeps the historical raw-source loader.
+	SourceTransform resolve.SourceTransform
 }
 
 func genPackageName(cfgName, fallback string) string {
@@ -563,7 +569,7 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 // CLI can decide whether to abort. Uses the arena-first loader
 // (Phase 1c.2) so parse keeps the astbridge counter low.
 func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
-	pkg, err := resolve.LoadPackageArenaFirst(dir)
+	pkg, err := resolve.LoadPackageArenaFirstWithTransform(dir, cfg.SourceTransform)
 	if err != nil {
 		return Result{}, err
 	}
@@ -768,6 +774,7 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 		return r, err
 	}
 	ws.Stdlib = stdlib.LoadCached()
+	ws.SourceTransform = cfg.SourceTransform
 	for _, p := range resolve.WorkspacePackagePaths(dir) {
 		_, _ = ws.LoadPackageArenaFirst(p)
 	}
