@@ -1592,6 +1592,25 @@ func mirAndI1Line(reg string, lhs string, rhs string) string {
 	return "  " + reg + " = and i1 " + lhs + ", " + rhs + "\n"
 }
 
+// mirMulI64Line renders i64 multiplication.
+// Osty: mirMulI64Line
+func mirMulI64Line(reg string, lhs string, rhs string) string {
+	return "  " + reg + " = mul i64 " + lhs + ", " + rhs + "\n"
+}
+
+// mirSDivI64Line renders i64 signed division.
+// Osty: mirSDivI64Line
+func mirSDivI64Line(reg string, lhs string, rhs string) string {
+	return "  " + reg + " = sdiv i64 " + lhs + ", " + rhs + "\n"
+}
+
+// mirCallValueNoArgsLine renders argumentless typed call
+// `  <reg> = call <retTy> @<sym>()\n`.
+// Osty: mirCallValueNoArgsLine
+func mirCallValueNoArgsLine(reg string, retTy string, sym string) string {
+	return "  " + reg + " = call " + retTy + " @" + sym + "()\n"
+}
+
 // mirCallValueWithAliasScopeLine renders a typed call with an
 // `!alias.scope` metadata attachment.
 // Osty: mirCallValueWithAliasScopeLine

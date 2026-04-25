@@ -1870,6 +1870,31 @@ pub fn mirAndI1Line(reg: String, lhs: String, rhs: String) -> String {
     "  " + reg + " = and i1 " + lhs + ", " + rhs + "\n"
 }
 
+/// mirMulI64Line renders the i64 multiplication
+/// `  <reg> = mul i64 <lhs>, <rhs>\n`. Specialised for the bench
+/// harness which computes `target * probeIters` and similar i64
+/// products; other widths use `mirBinaryOpcode`'s general path.
+pub fn mirMulI64Line(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = mul i64 " + lhs + ", " + rhs + "\n"
+}
+
+/// mirSDivI64Line renders the i64 signed division
+/// `  <reg> = sdiv i64 <lhs>, <rhs>\n`. Specialised for the bench
+/// harness's `est = (target * probeIters) / probeSafe` clamp
+/// computation.
+pub fn mirSDivI64Line(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = sdiv i64 " + lhs + ", " + rhs + "\n"
+}
+
+/// mirCallValueNoArgsLine renders the argumentless typed call
+/// `  <reg> = call <retTy> @<sym>()\n`. Used by bench-harness clock
+/// reads (`osty_rt_bench_target_ns`, `osty_rt_bench_now_nanos`) and
+/// other zero-arg runtime probes. Sibling of `mirCallVoidNoArgsLine`
+/// for the void-return case.
+pub fn mirCallValueNoArgsLine(reg: String, retTy: String, sym: String) -> String {
+    "  " + reg + " = call " + retTy + " @" + sym + "()\n"
+}
+
 /// mirCallValueWithAliasScopeLine renders the snapshot-call form used
 /// by `snapshotVectorListLocal`:
 ///   `  <reg> = call <retTy> @<sym>(<argList>), !alias.scope <scopeRef>\n`
