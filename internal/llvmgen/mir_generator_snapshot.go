@@ -899,6 +899,11 @@ type MirSeq struct {
 	TempSeq           int
 	LoopMDDefs        []string
 	ListMetaScopeList string
+	// FnBuf is the per-function body accumulator. Mirrors the Osty
+	// MirSeq.fnBuf field added in the §15 stateful slice. Populated by
+	// AppendFnLine / AbsorbOstyEmitter; drained by FlushFnBuf at
+	// function-emission boundaries.
+	FnBuf []string
 }
 
 // MirLoopHints mirrors
@@ -1178,71 +1183,191 @@ func (s *MirSeq) EmitInlineStringEqLiteral(
 	nomatchLabel := s.FreshLabel("streq.nomatch")
 	doneLabel := s.FreshLabel("streq.done")
 
+	// Pointer-equality fast path.
 	ptrEq := s.Fresh()
-	lines = append(lines, "  "+ptrEq+" = icmp eq ptr "+dynReg+", "+litSym+"\n")
+	lines = append(lines, mirICmpEqLine(ptrEq, "ptr", dynReg, litSym))
 
 	n := len(litBytes)
 	byteLabels := make([]string, 0, n+1)
 	for k := 0; k <= n; k++ {
 		byteLabels = append(byteLabels, s.FreshLabel("streq.b"+strconv.Itoa(k)))
 	}
-	lines = append(lines,
-		"  br i1 "+ptrEq+
-			", label %"+matchLabel+
-			", label %"+byteLabels[0]+"\n",
-	)
+	lines = append(lines, mirBrCondLine(ptrEq, matchLabel, byteLabels[0]))
 
+	// Per-byte compare.
 	for i := 0; i <= n; i++ {
-		lines = append(lines, byteLabels[i]+":\n")
+		lines = append(lines, mirLabelLine(byteLabels[i]))
 		ptrReg := dynReg
 		if i > 0 {
 			ptrReg = s.Fresh()
-			lines = append(lines,
-				"  "+ptrReg+
-					" = getelementptr inbounds i8, ptr "+dynReg+
-					", i64 "+strconv.Itoa(i)+"\n",
-			)
+			lines = append(lines, mirGEPInboundsI8Line(ptrReg, dynReg, strconv.Itoa(i)))
 		}
 		byteReg := s.Fresh()
-		lines = append(lines, "  "+byteReg+" = load i8, ptr "+ptrReg+"\n")
+		lines = append(lines, mirLoadLine(byteReg, "i8", ptrReg))
 
 		expected := 0
 		if i < n {
 			expected = litBytes[i]
 		}
 		matchReg := s.Fresh()
-		lines = append(lines,
-			"  "+matchReg+
-				" = icmp eq i8 "+byteReg+
-				", "+strconv.Itoa(expected)+"\n",
-		)
+		lines = append(lines, mirICmpEqLine(matchReg, "i8", byteReg, strconv.Itoa(expected)))
 
 		nextLabel := matchLabel
 		if i < n {
 			nextLabel = byteLabels[i+1]
 		}
-		lines = append(lines,
-			"  br i1 "+matchReg+
-				", label %"+nextLabel+
-				", label %"+nomatchLabel+"\n",
-		)
+		lines = append(lines, mirBrCondLine(matchReg, nextLabel, nomatchLabel))
 	}
 
-	lines = append(lines, matchLabel+":\n  br label %"+doneLabel+"\n")
-	lines = append(lines, nomatchLabel+":\n  br label %"+doneLabel+"\n")
-	lines = append(lines, doneLabel+":\n")
+	// Joinpoint + i1 phi.
+	lines = append(lines, mirLabelHeadWithBranch(matchLabel, doneLabel))
+	lines = append(lines, mirLabelHeadWithBranch(nomatchLabel, doneLabel))
+	lines = append(lines, mirLabelLine(doneLabel))
 
 	eq := s.Fresh()
-	lines = append(lines,
-		"  "+eq+
-			" = phi i1 [true, %"+matchLabel+
-			"], [false, %"+nomatchLabel+"]\n",
-	)
+	lines = append(lines, mirPhiI1FromTwoLine(eq, matchLabel, nomatchLabel))
 
 	if opIsEq {
 		return MirInlineStringEqResult{FinalReg: eq, Lines: lines}
 	}
 	neq := s.Fresh()
-	lines = append(lines, "  "+neq+" = xor i1 "+eq+", true\n")
+	lines = append(lines, mirXorI1NegLine(neq, eq))
 	return MirInlineStringEqResult{FinalReg: neq, Lines: lines}
+}
+
+// AppendFnLine pushes a fully-formed line (including any leading
+// indent and trailing newline) onto MirSeq.FnBuf — the per-function
+// body accumulator. Mirrors `g.fnBuf.WriteString(line)` semantics on
+// the legacy Go path. Phase B foundation: future Osty-side state-
+// bearing emit methods push their lines here so callers don't have
+// to thread a Go strings.Builder through the call.
+//
+// Osty: MirSeq.appendFnLine
+func (s *MirSeq) AppendFnLine(line string) {
+	s.FnBuf = append(s.FnBuf, line)
+}
+
+// FlushFnBuf returns the accumulated function-body lines and clears
+// the buffer in one move. Caller drains into `g.fnBuf` so the
+// existing flush-to-`g.out` path stays unchanged.
+//
+// Osty: MirSeq.flushFnBuf
+func (s *MirSeq) FlushFnBuf() []string {
+	drained := s.FnBuf
+	s.FnBuf = nil
+	return drained
+}
+
+// AbsorbOstyEmitter syncs a Go-driven LlvmEmitter scope back into
+// MirSeq. Bumps TempSeq to the emitter's final value and drains
+// `em.body` into FnBuf — matches `func (g *mirGen) flushOstyEmitter`
+// byte-for-byte (modulo the destination buffer).
+//
+// Osty: MirSeq.absorbOstyEmitter
+func (s *MirSeq) AbsorbOstyEmitter(em *LlvmEmitter) {
+	s.TempSeq = em.temp
+	s.FnBuf = append(s.FnBuf, em.body...)
+}
+
+// LLVM-line builders. Each helper produces one fully-formed function-
+// body line ending with `\n`. Osty: toolchain/mir_generator.osty.
+
+// mirStoreLine renders `  store <ty> <val>, ptr <slot>\n`.
+// Osty: mirStoreLine
+func mirStoreLine(ty string, val string, slot string) string {
+	return "  store " + ty + " " + val + ", ptr " + slot + "\n"
+}
+
+// mirCallVoidLine renders `  call void @<sym>(<argList>)\n`.
+// Osty: mirCallVoidLine
+func mirCallVoidLine(sym string, argList string) string {
+	return "  call void @" + sym + "(" + argList + ")\n"
+}
+
+// mirCallValueLine renders `  <reg> = call <retTy> @<sym>(<argList>)\n`.
+// Osty: mirCallValueLine
+func mirCallValueLine(reg string, retTy string, sym string, argList string) string {
+	return "  " + reg + " = call " + retTy + " @" + sym + "(" + argList + ")\n"
+}
+
+// mirGEPInboundsI8Line renders the byte-stride GEP form:
+// `  <reg> = getelementptr inbounds i8, ptr <basePtr>, i64 <offDigits>\n`.
+// Osty: mirGEPInboundsI8Line
+func mirGEPInboundsI8Line(reg string, basePtr string, offDigits string) string {
+	return "  " + reg + " = getelementptr inbounds i8, ptr " + basePtr +
+		", i64 " + offDigits + "\n"
+}
+
+// mirLoadLine renders `  <reg> = load <ty>, ptr <ptr>\n`.
+// Osty: mirLoadLine
+func mirLoadLine(reg string, ty string, ptr string) string {
+	return "  " + reg + " = load " + ty + ", ptr " + ptr + "\n"
+}
+
+// mirICmpEqLine renders `  <reg> = icmp eq <ty> <lhs>, <rhs>\n`.
+// Osty: mirICmpEqLine
+func mirICmpEqLine(reg string, ty string, lhs string, rhs string) string {
+	return "  " + reg + " = icmp eq " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+// mirBrCondLine renders the conditional branch
+// `  br i1 <cond>, label %<trueLabel>, label %<falseLabel>\n`.
+// Osty: mirBrCondLine
+func mirBrCondLine(cond string, trueLabel string, falseLabel string) string {
+	return "  br i1 " + cond + ", label %" + trueLabel + ", label %" + falseLabel + "\n"
+}
+
+// mirBrUncondLine renders `  br label %<label>\n`.
+// Osty: mirBrUncondLine
+func mirBrUncondLine(label string) string {
+	return "  br label %" + label + "\n"
+}
+
+// mirLabelLine renders `<name>:\n`.
+// Osty: mirLabelLine
+func mirLabelLine(name string) string {
+	return name + ":\n"
+}
+
+// mirLabelHeadWithBranch renders `<name>:\n  br label %<target>\n` —
+// the head-of-block + tail-branch shape used at streq match /
+// nomatch sites.
+// Osty: mirLabelHeadWithBranch
+func mirLabelHeadWithBranch(name string, target string) string {
+	return name + ":\n  br label %" + target + "\n"
+}
+
+// mirPhiI1FromTwoLine renders the two-incoming-edge phi
+// `  <reg> = phi i1 [true, %<trueLabel>], [false, %<falseLabel>]\n`.
+// Osty: mirPhiI1FromTwoLine
+func mirPhiI1FromTwoLine(reg string, trueLabel string, falseLabel string) string {
+	return "  " + reg + " = phi i1 [true, %" + trueLabel +
+		"], [false, %" + falseLabel + "]\n"
+}
+
+// mirXorI1NegLine renders the i1 negation `  <reg> = xor i1 <src>, true\n`.
+// Osty: mirXorI1NegLine
+func mirXorI1NegLine(reg string, src string) string {
+	return "  " + reg + " = xor i1 " + src + ", true\n"
+}
+
+// mirStoreZeroinitLine renders `  store <ty> zeroinitializer, ptr <slot>\n`.
+// Osty: mirStoreZeroinitLine
+func mirStoreZeroinitLine(ty string, slot string) string {
+	return "  store " + ty + " zeroinitializer, ptr " + slot + "\n"
+}
+
+// mirInsertValueAggLine renders the insertvalue shape:
+// `  <reg> = insertvalue <aggTy> <baseVal>, <fieldTy> <val>, <idxDigits>\n`.
+// Osty: mirInsertValueAggLine
+func mirInsertValueAggLine(reg string, aggTy string, baseVal string, fieldTy string, val string, idxDigits string) string {
+	return "  " + reg + " = insertvalue " + aggTy + " " + baseVal +
+		", " + fieldTy + " " + val +
+		", " + idxDigits + "\n"
+}
+
+// mirSubI64Line renders i64 subtraction `  <reg> = sub i64 <lhs>, <rhs>\n`.
+// Osty: mirSubI64Line
+func mirSubI64Line(reg string, lhs string, rhs string) string {
+	return "  " + reg + " = sub i64 " + lhs + ", " + rhs + "\n"
 }

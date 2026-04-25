@@ -4828,24 +4828,27 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		destSlot := g.localSlots[i.Dest.Local]
 		lenSym := listRuntimeLenSymbol()
 		g.declareRuntime(lenSym, mirRuntimeDeclareMemoryRead("i64", lenSym, "ptr"))
+		// len-guarded Some/None wrap; uses the new Osty-sourced
+		// `mir*Line` builders so the LLVM-text shapes line up with the
+		// streq port's call style. SSA / label numbering unchanged.
 		lenReg := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
+		g.fnBuf.WriteString(mirCallValueLine(lenReg, "i64", lenSym, "ptr "+listReg))
 		isEmpty := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = icmp eq i64 %s, 0\n", isEmpty, lenReg)
+		g.fnBuf.WriteString(mirICmpEqLine(isEmpty, "i64", lenReg, "0"))
 		someLabel := g.freshLabel("list.opt.some")
 		noneLabel := g.freshLabel("list.opt.none")
 		endLabel := g.freshLabel("list.opt.end")
-		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", isEmpty, noneLabel, someLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
-		fmt.Fprintf(&g.fnBuf, "  store %s zeroinitializer, ptr %s\n", destLLVM, destSlot)
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+		g.fnBuf.WriteString(mirBrCondLine(isEmpty, noneLabel, someLabel))
+		g.fnBuf.WriteString(mirLabelLine(noneLabel))
+		g.fnBuf.WriteString(mirStoreZeroinitLine(destLLVM, destSlot))
+		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+		g.fnBuf.WriteString(mirLabelLine(someLabel))
 		var idxRef string
 		if i.Kind == mir.IntrinsicListFirst {
 			idxRef = "0"
 		} else {
 			idxRef = g.fresh()
-			fmt.Fprintf(&g.fnBuf, "  %s = sub i64 %s, 1\n", idxRef, lenReg)
+			g.fnBuf.WriteString(mirSubI64Line(idxRef, lenReg, "1"))
 		}
 		elemReg, err := g.emitListLoadElement(listReg, idxRef, elemLLVM)
 		if err != nil {
@@ -4856,19 +4859,19 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			return unsupported("mir-mvp", fmt.Sprintf("list_%s payload widen unsupported for %s", mirIntrinsicLabel(i.Kind), elemLLVM))
 		}
 		tagged := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 1, 0\n", tagged, destLLVM)
+		g.fnBuf.WriteString(mirInsertValueAggLine(tagged, destLLVM, "undef", "i64", "1", "0"))
 		filled := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n", filled, destLLVM, tagged, payloadReg)
-		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", destLLVM, filled, destSlot)
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
+		g.fnBuf.WriteString(mirInsertValueAggLine(filled, destLLVM, tagged, "i64", payloadReg, "1"))
+		g.fnBuf.WriteString(mirStoreLine(destLLVM, filled, destSlot))
+		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+		g.fnBuf.WriteString(mirLabelLine(endLabel))
 		return nil
 	case mir.IntrinsicListReverse:
 		// In-place reverse. Runtime walks elem_size-sized slots byte by
 		// byte so the call is element-type agnostic.
 		sym := "osty_rt_list_reverse"
 		g.declareRuntime(sym, "declare void @"+sym+"(ptr)")
-		fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s)\n", sym, listReg)
+		g.fnBuf.WriteString(mirCallVoidLine(sym, "ptr "+listReg))
 		return nil
 	case mir.IntrinsicListReversed:
 		// Returns a freshly allocated reversed copy. Same elem_size/
@@ -4926,7 +4929,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s, i64 %s)\n", spliceSym, listReg, idxReg)
+		g.fnBuf.WriteString(mirCallVoidLine(spliceSym, "ptr "+listReg+", i64 "+idxReg))
 		return g.storeIntrinsicResult(i, &LlvmValue{typ: elemLLVM, name: elemReg})
 	case mir.IntrinsicListIndexOf:
 		// `indexOf(x) -> Int?` — linear scan. Emit inline loop so we
@@ -9501,12 +9504,17 @@ func (g *mirGen) ostyEmitter() *LlvmEmitter {
 }
 
 // flushOstyEmitter writes the emitter's body lines into g.fnBuf and
-// syncs the temp counter back. Every Osty helper output line already
-// carries its leading 2-space indent — we only need to add the
-// trailing newline.
+// syncs the temp counter back. Routes through `MirSeq.AbsorbOstyEmitter`
+// (`toolchain/mir_generator.osty`) which bumps `TempSeq` and stages the
+// lines on `seq.FnBuf`; we then drain that buffer into `g.fnBuf` so the
+// existing flush-to-`g.out` path stays unchanged. The legacy LlvmEmitter
+// contract is "line WITHOUT trailing newline" — `g.fnBuf` adds the `\n`
+// here so existing `llvm*` helpers in `toolchain/llvmgen.osty` keep
+// working unchanged. New `mir*Line` builders bake the `\n` in and
+// should bypass this path (push directly via AppendFnLine).
 func (g *mirGen) flushOstyEmitter(em *LlvmEmitter) {
-	g.seq.TempSeq = em.temp
-	for _, line := range em.body {
+	g.seq.AbsorbOstyEmitter(em)
+	for _, line := range g.seq.FlushFnBuf() {
 		g.fnBuf.WriteString(line)
 		g.fnBuf.WriteByte('\n')
 	}
@@ -9516,7 +9524,9 @@ func (g *mirGen) flushOstyEmitter(em *LlvmEmitter) {
 // old emitSimpleCall path after an Osty-authored helper has produced
 // the value-returning call. Returns nil when the intrinsic has no
 // destination (call result discarded); coerces scalar widths when the
-// dest local's type differs from what the runtime returned.
+// dest local's type differs from what the runtime returned. The
+// final store-line is rendered via the Osty-sourced `mirStoreLine`
+// (`toolchain/mir_generator.osty`).
 func (g *mirGen) storeIntrinsicResult(i *mir.IntrinsicInstr, result *LlvmValue) error {
 	if i.Dest == nil {
 		return nil
@@ -9532,13 +9542,7 @@ func (g *mirGen) storeIntrinsicResult(i *mir.IntrinsicInstr, result *LlvmValue) 
 			stored = widened
 		}
 	}
-	g.fnBuf.WriteString("  store ")
-	g.fnBuf.WriteString(destLLVM)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(stored)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirStoreLine(destLLVM, stored, g.localSlots[i.Dest.Local]))
 	return nil
 }
 
