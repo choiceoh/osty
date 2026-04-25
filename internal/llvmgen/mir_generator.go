@@ -142,8 +142,12 @@ type mirGen struct {
 	// the previous `declares map[string]string + declareOrder
 	// []string` pair fields.
 	runtimeDecls MirRuntimeDecls
-	strings      map[string]string // literal value → global symbol
-	stringOrder  []string          // order-of-insertion
+	// stringPool owns the literal-interning pool — dedup +
+	// insertion-order, mirrored from
+	// `toolchain/mir_generator.osty: MirStringPool`. Replaces the
+	// previous `strings map[string]string + stringOrder []string`
+	// pair fields.
+	stringPool MirStringPool
 
 	// Aggregate type pools. Struct defs come from the module's
 	// LayoutTable; tuple / option / result defs are discovered
@@ -248,7 +252,6 @@ func newMIRGen(m *mir.Module, opts Options) *mirGen {
 		src:           append([]byte(nil), opts.Source...),
 		functionTypes: map[string]mirFnSig{},
 		thunkDefs:     map[string]string{},
-		strings:       map[string]string{},
 		tupleDefs:     map[string][]mir.Type{},
 		vtableRefs:    map[string]struct{}{},
 	}
@@ -8798,27 +8801,24 @@ func stringOrderingPredicate(op mir.BinaryOp) string {
 // stringLiteral interns a string constant and returns a `@.str.N`
 // global symbol suitable as a `ptr` operand. The pool is emitted at
 // the end of the module.
+// stringLiteral interns a string literal and returns its `@.str.N`
+// global symbol. Delegates to the Osty-sourced
+// `MirStringPool.Intern` (`toolchain/mir_generator.osty`).
 func (g *mirGen) stringLiteral(s string) string {
-	if sym, ok := g.strings[s]; ok {
-		return sym
-	}
-	sym := fmt.Sprintf("@.str.%d", len(g.strings))
-	g.strings[s] = sym
-	g.stringOrder = append(g.stringOrder, s)
-	return sym
+	return g.stringPool.Intern(s)
 }
 
 func (g *mirGen) emitStringPool() {
-	if len(g.strings) == 0 {
+	if g.stringPool.IsEmpty() {
 		return
 	}
-	// Deterministic order: insertion-order (stringOrder).
+	// Deterministic order: insertion-order (MirStringPool.OrderedKeys).
 	// We write the pool before the first function (injected after
 	// any runtime declares). For simplicity, append to the out buffer
 	// now — final layout has declares + string pool + functions.
 	var pool strings.Builder
-	for _, s := range g.stringOrder {
-		sym := g.strings[s]
+	for _, s := range g.stringPool.OrderedKeys() {
+		sym := g.stringPool.Symbol(s)
 		encoded, size := encodeLLVMString(s)
 		pool.WriteString(mirStringPoolLine(sym, strconv.Itoa(size), encoded))
 	}

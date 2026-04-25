@@ -2206,3 +2206,70 @@ pub struct MirRuntimeDecls {
         self.names.isEmpty()
     }
 }
+
+/// §12 string-literal interning pool.
+///
+/// MirStringPool owns the dedup + insertion-order side of the
+/// emitter's string-literal pool — `@.str.N = private unnamed_addr
+/// constant ...` lines that prepend any module that uses string
+/// constants. Mirrors the `mirGen.strings map[string]string +
+/// stringOrder []string` Go fields. Sibling of `MirRuntimeDecls`
+/// (this slice) and `MirLayoutCache` (#888) — the third member of
+/// the dedup-with-order family.
+///
+/// The interning convention: each unique literal content gets the
+/// next `@.str.N` symbol where `N = order.len()` before push. A
+/// repeat call with the same content returns the cached symbol
+/// rather than minting a new one — this is what lets `printf`
+/// callsites share format strings ("%s\n", "%ld\n", etc.) across
+/// the module without the binary growing per-callsite.
+pub struct MirStringPool {
+    /// byContent maps the literal content (the raw bytes between the
+    /// opening `c"` and closing `"` of the user's source-level string
+    /// literal) to its assigned `@.str.N` symbol. Same value
+    /// re-encoded later via `mirEncodeLLVMString` at emission time.
+    pub byContent: Map<String, String>,
+    /// order is the insertion-ordered list of literal contents — the
+    /// keys of `byContent` in the order they were interned. Walked by
+    /// `emitStringPool` to build the pool block deterministically
+    /// regardless of map iteration order.
+    pub order: List<String>,
+
+    /// intern returns the `@.str.N` symbol for `content`, allocating
+    /// a fresh one when this is the first call for that content and
+    /// returning the cached symbol on repeat calls. The N suffix is
+    /// `order.len()` at the moment of allocation, matching the Go
+    /// `fmt.Sprintf("@.str.%d", len(g.strings))` shape byte-for-byte.
+    pub fn intern(mut self, content: String) -> String {
+        let cached = self.byContent.get(content)
+        if cached.isSome() {
+            return cached.unwrap()
+        }
+        let sym = "@.str." + mirGenIntToString(self.order.len())
+        self.byContent.insert(content, sym)
+        self.order.push(content)
+        sym
+    }
+
+    /// symbol looks up the `@.str.N` symbol for an already-interned
+    /// content; returns `""` when not present. Used by
+    /// `emitStringPool`'s walk over `order` to recover each entry's
+    /// symbol without re-interning.
+    pub fn symbol(self, content: String) -> String {
+        self.byContent.get(content) ?? ""
+    }
+
+    /// orderedKeys returns the insertion-ordered list of literal
+    /// contents — the keys of `byContent` in the order interned.
+    /// Used by `emitStringPool` to walk the pool deterministically.
+    pub fn orderedKeys(self) -> List<String> {
+        self.order
+    }
+
+    /// isEmpty reports whether the pool holds no literals — the
+    /// early-exit gate in `emitStringPool` so modules that don't
+    /// use any string constants emit no pool block.
+    pub fn isEmpty(self) -> Bool {
+        self.order.isEmpty()
+    }
+}
