@@ -86,6 +86,31 @@ func TestFmtAIRepairFlagAliasesDisableAutomaticFixes(t *testing.T) {
 	}
 }
 
+func TestFmtRunsSemanticAIRepairBeforeFormatting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	source := "fn main() {\n    let items = [1, 2]\n    println(items.length)\n}\n"
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	got := runOstyCLI(t, "fmt", "--write", path)
+	if got.exit != 0 {
+		t.Fatalf("fmt --write exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+
+	out, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read formatted source: %v", err)
+	}
+	if strings.Contains(string(out), ".length") {
+		t.Fatalf("fmt left `.length` in source = %q; airepair semantic phase did not run", string(out))
+	}
+	if !strings.Contains(string(out), ".len()") {
+		t.Fatalf("fmt did not rewrite `.length` to `.len()`; source = %q", string(out))
+	}
+}
+
 func TestUsageOutputUsesCanonicalAIRepairNames(t *testing.T) {
 	t.Run("top-level", func(t *testing.T) {
 		got := runOstyCLI(t)

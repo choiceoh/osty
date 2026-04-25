@@ -2190,8 +2190,14 @@ func runFmt(args []string) {
 	formatSrc := src
 	var repairs repair.Result
 	if repairMode {
-		repairs = repair.Source(src)
-		formatSrc = repairs.Source
+		result := airepair.Analyze(airepair.Request{
+			Source:   src,
+			Filename: path,
+		})
+		if result.Accepted {
+			formatSrc = result.Repaired
+			repairs = result.Repair
+		}
 	}
 	parserCanonical, parserCanonicalChanged := parserCanonicalFmtSource(formatSrc)
 	if parserCanonicalChanged {
