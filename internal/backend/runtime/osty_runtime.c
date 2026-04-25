@@ -36,7 +36,6 @@
 
 #if !defined(_WIN32)
 #include <sys/mman.h>
-#include <unistd.h>
 /* `MAP_ANON` is the BSD/macOS spelling; `MAP_ANONYMOUS` is the GNU
  * spelling. Both flags are bit-equal aliases on every supported target.
  * Pick whichever is exposed at runtime-build time (macOS requires
@@ -509,7 +508,17 @@ typedef struct osty_gc_bump_block {
     size_t size;
     size_t used;
     int64_t live_alloc_count;
+    /* Aligned base of the payload region, used for bump allocation
+     * within this block. */
     unsigned char *data;
+    /* Original unaligned pointer that owns the heap-fallback payload
+     * region. NULL when the data region was suballocated from the
+     * arena (the arena retains ownership of its virtual range). */
+    unsigned char *data_alloc;
+    /* Reserved tail. Was the storage buffer in the pre-arena layout;
+     * kept as a zero-length flexible array so existing sizeof / offset
+     * computations stay stable for any external bridge that hard-codes
+     * the struct layout. */
     unsigned char storage[];
 } osty_gc_bump_block;
 
@@ -623,24 +632,31 @@ static int64_t osty_gc_swept_bytes_total = 0;
  *      lets `osty_gc_find_header` short-circuit before the hash on
  *      the overwhelmingly common case.
  *
- *   2. Future iterations can drop the per-allocation hash insert for
- *      arena-backed objects entirely, since the range check + header
- *      self-reference suffices to identify them. This PR establishes
- *      the infrastructure and the lookup fast path; the eager-insert
- *      skip is staged separately because it interacts with Phase-D
- *      Map / channel relocation and benefits from its own test pass.
+ *   2. Bump-allocated objects skip the per-allocation hash insert
+ *      entirely; the range check + header self-reference suffices
+ *      to identify them. The hash table now only carries
+ *      humongous calloc'd payloads (outside the arena) and post-
+ *      compaction relocations.
  *
  * Reservation strategy: 4 GiB of virtual address space on POSIX
- * (MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE). The OS only commits
- * physical pages on first touch, so reservation cost is essentially
- * the address-space ledger entry. On Windows the bridge falls back to
- * VirtualAlloc(MEM_RESERVE | MEM_COMMIT) at a smaller size; long-running
- * Windows programs would need lazy commit or per-block VirtualAlloc.
+ * (MAP_PRIVATE | MAP_ANON). On Linux/macOS the kernel only commits
+ * physical pages on first touch, so the reservation is essentially
+ * an address-space ledger entry. The Windows path is currently a
+ * stub that fails arena init and falls through to the heap-backed
+ * `osty_gc_bump_block_new` fallback below; a follow-up will wrap
+ * VirtualAlloc(MEM_RESERVE) for the Win32 surface.
  *
  * Sub-allocator: bump pointer with no per-block reuse. Released bump
  * blocks leak their virtual range — fine for short-lived programs
  * (benchmarks, CLI tools) but not ideal for long-running services. A
- * follow-up will add a free-list of arena chunks for reuse. */
+ * follow-up will add a free-list of arena chunks for reuse.
+ *
+ * Concurrency: arena_init runs at most once. arena_alloc updates
+ * `osty_gc_arena_cursor` non-atomically — safe because every caller
+ * goes through `osty_gc_bump_block_new` which is reached from
+ * `osty_gc_allocate_managed`'s locked critical section in the
+ * multi-threaded path (post-#872's single-mutator skip preserves
+ * the lock when `osty_concurrent_workers > 0`). */
 #define OSTY_GC_ARENA_BYTES ((size_t)1 << 32)  /* 4 GiB virtual */
 
 static unsigned char *osty_gc_arena_base = NULL;
@@ -2130,11 +2146,20 @@ static osty_gc_bump_block *osty_gc_bump_block_new(
         osty_rt_abort("out of memory (gc bump block header)");
     }
     arena_data = osty_gc_arena_alloc(block_size, OSTY_GC_SIZE_CLASS_ALIGN);
-    if (arena_data == NULL) {
-        /* Arena init failed or exhausted: fall back to heap data so
-         * the runtime stays functional. The lookup fast path won't
-         * help these blocks (they're outside the arena range) but
-         * the hash-based lookup still works. */
+    if (arena_data != NULL) {
+        /* Arena-backed: the data region's lifetime is tied to the
+         * arena (not freed on block release). Recycling the block
+         * leaks its virtual range until a free-list lands; for
+         * benchmark / CLI workloads this is bounded. */
+        block->data = (unsigned char *)arena_data;
+        block->data_alloc = NULL;
+    } else {
+        /* Arena init failed or exhausted — fall back to heap. The
+         * data region is owned by `data_alloc` (the unaligned
+         * calloc'd base) so `osty_gc_bump_block_release` can free
+         * it later. The lookup fast path won't help these blocks
+         * (outside the arena range) but the hash-based lookup
+         * still works for them. */
         size_t total_bytes = block_size + OSTY_GC_SIZE_CLASS_ALIGN;
         unsigned char *raw = (unsigned char *)calloc(1, total_bytes);
         uintptr_t aligned;
@@ -2144,13 +2169,9 @@ static osty_gc_bump_block *osty_gc_bump_block_new(
         }
         aligned = ((uintptr_t)raw + (uintptr_t)OSTY_GC_SIZE_CLASS_ALIGN - 1u) &
                   ~((uintptr_t)OSTY_GC_SIZE_CLASS_ALIGN - 1u);
-        arena_data = (void *)aligned;
-        /* Stash the original allocation in the high bits would be
-         * fragile; we leak this until a free-list lands. The arena
-         * path is the steady-state and fallback only fires on init
-         * failure, so the leak is bounded. */
+        block->data = (unsigned char *)aligned;
+        block->data_alloc = raw;
     }
-    block->data = (unsigned char *)arena_data;
     block->size = block_size;
     block->used = 0;
     block->next = *blocks_head;
@@ -2307,6 +2328,14 @@ static void osty_gc_bump_block_release(
     *block_count -= 1;
     *recycled_count_total += 1;
     *recycled_bytes_total += (int64_t)block->size;
+    /* Free the heap-fallback payload region if this block was
+     * heap-backed (arena_init failed or arena exhausted at the time
+     * of allocation). Arena-backed blocks have `data_alloc == NULL`;
+     * their virtual range stays committed in the arena (no free-list
+     * yet — see arena documentation). */
+    if (block->data_alloc != NULL) {
+        free(block->data_alloc);
+    }
     free(block);
 }
 
