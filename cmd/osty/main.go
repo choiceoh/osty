@@ -1860,9 +1860,13 @@ func maybeAIRepairSource(path string, src []byte, prefix string, summary io.Writ
 	return src
 }
 
-// loadLintConfigWithBase is loadLintConfigNear that also returns the
-// manifest directory. Callers need the base to resolve Exclude globs
-// against the project root rather than the target path's parent.
+// loadLintConfigWithBase walks up from the target path collecting
+// every `osty.toml` [lint] section and merging them hierarchically:
+// the closest (child) config overrides Allow/Deny from parent
+// configs further up the tree, while Exclude patterns from all
+// levels are unioned. It also returns the manifest directory of the
+// closest osty.toml (even when it has no [lint] section) so callers
+// can resolve Exclude globs against the project root.
 func loadLintConfigWithBase(startPath string) (lint.Config, string, bool) {
 	dir := startPath
 	if info, err := os.Stat(startPath); err == nil && !info.IsDir() {
@@ -1872,42 +1876,60 @@ func loadLintConfigWithBase(startPath string) (lint.Config, string, bool) {
 	if err != nil {
 		return lint.Config{}, "", false
 	}
+	var cfg lint.Config
+	base := ""
+	found := false
 	for {
 		candidate := filepath.Join(abs, manifest.ManifestFile)
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			if base == "" {
+				// Record the closest manifest directory as base for
+				// Exclude glob resolution, regardless of [lint].
+				base = abs
+			}
 			raw, err := os.ReadFile(candidate)
 			if err != nil {
-				return lint.Config{}, "", false
+				break
 			}
 			m, err := manifest.Parse(raw)
 			if err != nil {
-				return lint.Config{}, "", false
+				break
 			}
-			if m.Lint == nil {
-				return lint.Config{}, abs, false
+			if m.Lint != nil {
+				layer := lint.Config{
+					Allow:   m.Lint.Allow,
+					Deny:    m.Lint.Deny,
+					Exclude: m.Lint.Exclude,
+				}
+				if !found {
+					cfg = layer
+					found = true
+				} else {
+					// layer is a parent — merge child on top.
+					cfg = cfg.Merge(layer)
+				}
 			}
-			return lint.Config{
-				Allow:   m.Lint.Allow,
-				Deny:    m.Lint.Deny,
-				Exclude: m.Lint.Exclude,
-			}, abs, true
 		}
 		parent := filepath.Dir(abs)
 		if parent == abs {
-			return lint.Config{}, "", false
+			break
 		}
 		abs = parent
 	}
+	return cfg, base, found
 }
 
-// loadLintConfigNear walks up from the target path (file or dir)
-// looking for `osty.toml`. Returns the parsed `[lint]` section as a
-// lint.Config if found. Missing manifest or missing [lint] is a
-// no-op — linting proceeds with defaults.
+// loadLintConfigNear walks up from the target path collecting every
+// `osty.toml` [lint] section and merging them hierarchically: the
+// closest (child) config overrides Allow/Deny from parent configs
+// further up, while Exclude patterns from all levels are unioned.
+// Exclude is not returned because this function has no base directory
+// for glob resolution; use loadLintConfigWithBase when Exclude is needed.
 //
-// Malformed manifests are reported on stderr but do NOT abort the
-// lint run — the user can still want a quick lint check on broken
-// project metadata.
+// Missing manifest or missing [lint] in every ancestor is a no-op —
+// linting proceeds with defaults. Malformed manifests are reported on
+// stderr but do NOT abort the lint run — the user can still want a
+// quick lint check on broken project metadata.
 func loadLintConfigNear(startPath string) (lint.Config, bool) {
 	dir := startPath
 	if info, err := os.Stat(startPath); err == nil && !info.IsDir() {
@@ -1917,30 +1939,46 @@ func loadLintConfigNear(startPath string) (lint.Config, bool) {
 	if err != nil {
 		return lint.Config{}, false
 	}
+	var cfg lint.Config
+	found := false
 	for {
 		candidate := filepath.Join(abs, manifest.ManifestFile)
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			raw, err := os.ReadFile(candidate)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-				return lint.Config{}, false
+				break
 			}
 			m, err := manifest.Parse(raw)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "osty: %s: %v\n", candidate, err)
-				return lint.Config{}, false
+				break
 			}
-			if m.Lint == nil {
-				return lint.Config{}, false
+			if m.Lint != nil {
+				layer := lint.Config{
+					Allow:   m.Lint.Allow,
+					Deny:    m.Lint.Deny,
+					Exclude: m.Lint.Exclude,
+				}
+				if !found {
+					cfg = layer
+					found = true
+				} else {
+					cfg = cfg.Merge(layer)
+				}
 			}
-			return lint.Config{Allow: m.Lint.Allow, Deny: m.Lint.Deny}, true
 		}
 		parent := filepath.Dir(abs)
 		if parent == abs {
-			return lint.Config{}, false // reached the root
+			break
 		}
 		abs = parent
 	}
+	// loadLintConfigNear has no base directory for glob resolution,
+	// so Exclude is not carried forward. Callers that need Exclude
+	// should use loadLintConfigWithBase instead.
+	cfg.Exclude = nil
+	return cfg, found
 }
 
 // printResolution writes a sorted table of every resolved identifier:

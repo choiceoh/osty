@@ -46,6 +46,86 @@ type Config struct {
 	Exclude []string
 }
 
+// Merge returns a new Config that layers child on top of parent.
+// The merge semantics match typical workspace expectations:
+//
+//   - When the child sets any lint field (Allow, Deny, or Exclude),
+//     the child is treated as a complete override for Allow and Deny:
+//     the child's Allow and Deny lists are used verbatim, even when
+//     empty. This prevents a parent's Deny from leaking through when
+//     the child only wants to Allow a specific code.
+//   - When the child is completely empty (no Allow, no Deny, no
+//     Exclude), the parent's Allow and Deny are inherited.
+//   - Exclude patterns from both parent and child are always combined
+//     (union). A workspace root's broad exclusions ("vendor/**") are
+//     preserved even when a child package adds its own ("gen/**").
+//
+// A nil or zero-value child is treated as "no override" — the parent
+// is returned unchanged (as a shallow copy). A nil or zero-value parent
+// is likewise a no-op base.
+func (c Config) Merge(parent Config) Config {
+	var out Config
+
+	childHasLint := len(c.Allow) > 0 || len(c.Deny) > 0 || len(c.Exclude) > 0
+
+	if childHasLint {
+		// Child declared its own [lint] section — use child's Allow
+		// and Deny verbatim (even when empty). This prevents a parent's
+		// Deny from leaking through when the child only sets Allow, and
+		// vice versa.
+		if len(c.Allow) > 0 {
+			out.Allow = make([]string, len(c.Allow))
+			copy(out.Allow, c.Allow)
+		}
+		if len(c.Deny) > 0 {
+			out.Deny = make([]string, len(c.Deny))
+			copy(out.Deny, c.Deny)
+		}
+	} else {
+		// Child has no [lint] section at all — inherit from parent.
+		if len(parent.Allow) > 0 {
+			out.Allow = make([]string, len(parent.Allow))
+			copy(out.Allow, parent.Allow)
+		}
+		if len(parent.Deny) > 0 {
+			out.Deny = make([]string, len(parent.Deny))
+			copy(out.Deny, parent.Deny)
+		}
+	}
+
+	// Exclude: union of both, preserving order (parent first, then child).
+	out.Exclude = mergeExclude(parent.Exclude, c.Exclude)
+
+	return out
+}
+
+// mergeExclude returns the union of two exclude lists, deduplicating
+// by exact pattern match. Parent patterns come first, then child
+// patterns that are not duplicates.
+func mergeExclude(parent, child []string) []string {
+	if len(parent) == 0 && len(child) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(parent)+len(child))
+	out := make([]string, 0, len(parent)+len(child))
+	for _, p := range parent {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, p := range child {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // MatchingExclude reports whether `path` matches any Exclude glob and
 // returns the matched pattern so callers can surface it in user-facing
 // messages. `base` is the directory of the osty.toml that produced this
