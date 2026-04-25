@@ -1,14 +1,6 @@
 /// List intrinsic emission functions for the Osty LLVM backend.
-///
-/// Ports List intrinsics from `internal/llvmgen/mir_generator.go`:
-/// push, pop, insert, set, get, len, is_empty, first, last, sorted,
-/// to_set, reverse, reversed, slice, remove_at, index_of, contains.
 
 use std.strings as llvmStrings
-
-// ======================================================================
-// Helpers
-// ======================================================================
 
 fn llvmListIsStringType(typeText: String) -> Bool {
     return typeText == "String"
@@ -44,15 +36,7 @@ pub fn llvmListRuntimeToSetSymbol(elemTyp: String, isString: Bool) -> String {
     return "osty_rt_list_to_set_i64"
 }
 
-// ======================================================================
-// 1. len
-// ======================================================================
-
-pub fn emitListLen(
-    state: MirGenState,
-    list: LlvmGenValue,
-    destName: String,
-) -> MirGenState {
+pub fn emitListLen(state: MirGenState, list: LlvmGenValue, destName: String) -> MirGenState {
     let mut s = state
     let emitter = s.gen.emitter
     let lenVal = llvmCall(emitter, "i64", "osty_rt_list_len", [llvmGenValueToLlvmValue(list)])
@@ -63,15 +47,7 @@ pub fn emitListLen(
     s
 }
 
-// ======================================================================
-// 2. is_empty
-// ======================================================================
-
-pub fn emitListIsEmpty(
-    state: MirGenState,
-    list: LlvmGenValue,
-    destName: String,
-) -> MirGenState {
+pub fn emitListIsEmpty(state: MirGenState, list: LlvmGenValue, destName: String) -> MirGenState {
     let mut s = state
     let emitter = s.gen.emitter
     let isEmptyVal = llvmCall(emitter, "i1", "osty_rt_list_is_empty", [llvmGenValueToLlvmValue(list)])
@@ -82,18 +58,9 @@ pub fn emitListIsEmpty(
     s
 }
 
-// ======================================================================
-// 3. push
-// ======================================================================
-
-pub fn emitListPush(
-    state: MirGenState,
-    list: LlvmGenValue,
-    value: LlvmGenValue,
-) -> MirGenState {
+pub fn emitListPush(state: MirGenState, list: LlvmGenValue, value: LlvmGenValue) -> MirGenState {
     let mut s = state
     let emitter = s.gen.emitter
-    
     if llvmListUsesTypedRuntime(value.typ) {
         let suffix = llvmListElementSuffix(value.typ)
         llvmCallVoid(emitter, "osty_rt_list_push_" + suffix, [llvmGenValueToLlvmValue(list), llvmGenValueToLlvmValue(value)])
@@ -105,20 +72,9 @@ pub fn emitListPush(
     s
 }
 
-// ======================================================================
-// 4. get
-// ======================================================================
-
-pub fn emitListGet(
-    state: MirGenState,
-    list: LlvmGenValue,
-    index: LlvmGenValue,
-    elemTyp: String,
-    destName: String,
-) -> MirGenState {
+pub fn emitListGet(state: MirGenState, list: LlvmGenValue, index: LlvmGenValue, elemTyp: String, destName: String) -> MirGenState {
     let mut s = state
     let emitter = s.gen.emitter
-    
     if llvmListUsesTypedRuntime(elemTyp) {
         let suffix = llvmListElementSuffix(elemTyp)
         let result = llvmCall(emitter, elemTyp, "osty_rt_list_get_" + suffix, [llvmGenValueToLlvmValue(list), llvmGenValueToLlvmValue(index)])
@@ -138,68 +94,34 @@ pub fn emitListGet(
     s
 }
 
-// ======================================================================
-// 5. set
-// ======================================================================
-
-pub fn emitListSet(
-    state: MirGenState,
-    list: LlvmGenValue,
-    index: LlvmGenValue,
-    value: LlvmGenValue,
-) -> MirGenState {
+pub fn emitListSet(state: MirGenState, list: LlvmGenValue, index: LlvmGenValue, value: LlvmGenValue) -> MirGenState {
     let mut s = state
     let emitter = s.gen.emitter
-    
     if llvmListUsesTypedRuntime(value.typ) {
-        let suffix = llvmListElementSuffix(value.typ)
-        llvmCallVoid(emitter, "osty_rt_list_set_" + suffix, [llvmGenValueToLlvmValue(list), llvmGenValueToLlvmValue(index), llvmGenValueToLlvmValue(value)])
+        llvmCallVoid(emitter, "osty_rt_list_set_" + llvmListElementSuffix(value.typ), [llvmGenValueToLlvmValue(list), llvmGenValueToLlvmValue(index), llvmGenValueToLlvmValue(value)])
     } else {
         let slot = llvmSpillToSlot(emitter, value)
-        let elemSize = llvmSizeOf(emitter, value.typ)
-        llvmCallVoid(emitter, "osty_rt_list_set_bytes_v1", [llvmGenValueToLlvmValue(list), llvmGenValueToLlvmValue(index), slot, elemSize])
+        llvmCallVoid(emitter, "osty_rt_list_set_bytes_v1", [llvmGenValueToLlvmValue(list), llvmGenValueToLlvmValue(index), slot, llvmSizeOf(emitter, value.typ)])
     }
     s
 }
 
-// ======================================================================
-// 6. insert
-// ======================================================================
-
-pub fn emitListInsert(
-    state: MirGenState,
-    list: LlvmGenValue,
-    index: LlvmGenValue,
-    value: LlvmGenValue,
-) -> MirGenState {
+pub fn emitListInsert(state: MirGenState, list: LlvmGenValue, index: LlvmGenValue, value: LlvmGenValue) -> MirGenState {
     let mut s = state
     let emitter = s.gen.emitter
-    
     if llvmListUsesTypedRuntime(value.typ) {
-        let suffix = llvmListElementSuffix(value.typ)
-        llvmCallVoid(emitter, "osty_rt_list_insert_" + suffix, [llvmGenValueToLlvmValue(list), llvmGenValueToLlvmValue(index), llvmGenValueToLlvmValue(value)])
+        llvmCallVoid(emitter, "osty_rt_list_insert_" + llvmListElementSuffix(value.typ), [llvmGenValueToLlvmValue(list), llvmGenValueToLlvmValue(index), llvmGenValueToLlvmValue(value)])
     } else {
         let slot = llvmSpillToSlot(emitter, value)
-        let elemSize = llvmSizeOf(emitter, value.typ)
-        llvmCallVoid(emitter, "osty_rt_list_insert_bytes_v1", [llvmGenValueToLlvmValue(list), llvmGenValueToLlvmValue(index), slot, elemSize])
+        llvmCallVoid(emitter, "osty_rt_list_insert_bytes_v1", [llvmGenValueToLlvmValue(list), llvmGenValueToLlvmValue(index), slot, llvmSizeOf(emitter, value.typ)])
     }
     s
 }
 
-// ======================================================================
-// 7. sorted
-// ======================================================================
-
-pub fn emitListSorted(
-    state: MirGenState,
-    list: LlvmGenValue,
-    elemTyp: String,
-    destName: String,
-) -> MirGenState {
+pub fn emitListSorted(state: MirGenState, list: LlvmGenValue, elemTyp: String, destName: String) -> MirGenState {
     let mut s = state
     let emitter = s.gen.emitter
-    let isString = llvmListIsStringType(elemTyp)
-    let symbol = llvmListRuntimeSortedSymbol(elemTyp, isString)
+    let symbol = llvmListRuntimeSortedSymbol(elemTyp, llvmListIsStringType(elemTyp))
     let result = llvmCall(emitter, "ptr", symbol, [llvmGenValueToLlvmValue(list)])
     let tmp = llvmNextTemp(emitter)
     emitter.body.push("  {tmp} = alloca ptr")
@@ -208,20 +130,10 @@ pub fn emitListSorted(
     s
 }
 
-// ======================================================================
-// 8. to_set
-// ======================================================================
-
-pub fn emitListToSet(
-    state: MirGenState,
-    list: LlvmGenValue,
-    elemTyp: String,
-    destName: String,
-) -> MirGenState {
+pub fn emitListToSet(state: MirGenState, list: LlvmGenValue, elemTyp: String, destName: String) -> MirGenState {
     let mut s = state
     let emitter = s.gen.emitter
-    let isString = llvmListIsStringType(elemTyp)
-    let symbol = llvmListRuntimeToSetSymbol(elemTyp, isString)
+    let symbol = llvmListRuntimeToSetSymbol(elemTyp, llvmListIsStringType(elemTyp))
     let result = llvmCall(emitter, "ptr", symbol, [llvmGenValueToLlvmValue(list)])
     let tmp = llvmNextTemp(emitter)
     emitter.body.push("  {tmp} = alloca ptr")
@@ -230,152 +142,13 @@ pub fn emitListToSet(
     s
 }
 
-// ======================================================================
-// 9. first (inline: len==0→None, Some(get(0)))
-// ======================================================================
-
-pub fn emitListFirst(
-    state: MirGenState,
-    list: LlvmGenValue,
-    elemTyp: String,
-    destName: String,
-) -> MirGenState {
-    let mut s = state
-    let emitter = s.gen.emitter
-    
-    // Get length
-    let lenVal = llvmCall(emitter, "i64", "osty_rt_list_len", [llvmGenValueToLlvmValue(list)])
-    let lenZero = llvmBinaryI64(emitter, "eq", lenVal, llvmIntLiteral(0))
-    
-    let thenLabel = llvmNextLabel(emitter, "first.none")
-    let elseLabel = llvmNextLabel(emitter, "first.some")
-    let endLabel = llvmNextLabel(emitter, "first.end")
-    
-    emitter.body.push("  br i1 " + lenZero.name + ", label %" + thenLabel + ", label %" + elseLabel)
-    emitter.body.push(thenLabel + ":")
-    
-    // None: { i64 0, i64 0 }
-    let noneUndef = "undef"
-    let noneTag = llvmNextTemp(emitter)
-    emitter.body.push("  " + noneTag + " = insertvalue { i64, i64 } " + noneUndef + ", i64 0, 0")
-    let noneVal = llvmNextTemp(emitter)
-    emitter.body.push("  " + noneVal + " = insertvalue { i64, i64 } " + noneTag + ", i64 0, 1")
-    let noneSlot = llvmNextTemp(emitter)
-    emitter.body.push("  " + noneSlot + " = alloca { i64, i64 }")
-    emitter.body.push("  store { i64, i64 } " + noneVal + ", ptr " + noneSlot)
-    
-    emitter.body.push("  br label %" + endLabel)
-    emitter.body.push(elseLabel + ":")
-    
-    // Some(get(0)) with payload widening
-    let elem = emitListGetSingle(emitter, list, elemTyp)
-    let widened = llvmWidenToI64(emitter, elem, elemTyp)
-    let someUndef = "undef"
-    let someTag = llvmNextTemp(emitter)
-    emitter.body.push("  " + someTag + " = insertvalue { i64, i64 } " + someUndef + ", i64 1, 0")
-    let someVal = llvmNextTemp(emitter)
-    emitter.body.push("  " + someVal + " = insertvalue { i64, i64 } " + someTag + ", i64 " + widened.name + ", 1")
-    let someSlot = llvmNextTemp(emitter)
-    emitter.body.push("  " + someSlot + " = alloca { i64, i64 }")
-    emitter.body.push("  store { i64, i64 } " + someVal + ", ptr " + someSlot)
-    
-    emitter.body.push("  br label %" + endLabel)
-    emitter.body.push(endLabel + ":")
-    
-    let phi = llvmNextTemp(emitter)
-    emitter.body.push("  {phi} = phi { i64, i64 } [" + noneSlot + ", %" + elseLabel + "], [" + someSlot + ", %" + thenLabel + "]")
-    emitter.locals.push(LlvmBinding { name: destName, value: LlvmValue { typ: "{ i64, i64 }", name: phi, pointer: false } })
-    
-    s
-}
-
-fn emitListGetSingle(emitter: LlvmEmitter, list: LlvmGenValue, elemTyp: String) -> LlvmValue {
-    llvmCall(emitter, elemTyp, "osty_rt_list_get_" + llvmListElementSuffix(elemTyp), [
-        llvmGenValueToLlvmValue(list), llvmIntLiteral(0),
-    ])
-}
-
-// ======================================================================
-// 10. last
-// ======================================================================
-
-pub fn emitListLast(
-    state: MirGenState,
-    list: LlvmGenValue,
-    elemTyp: String,
-    destName: String,
-) -> MirGenState {
-    let mut s = state
-    let emitter = s.gen.emitter
-    
-    let lenVal = llvmCall(emitter, "i64", "osty_rt_list_len", [llvmGenValueToLlvmValue(list)])
-    let lenZero = llvmBinaryI64(emitter, "eq", lenVal, llvmIntLiteral(0))
-    
-    let thenLabel = llvmNextLabel(emitter, "last.none")
-    let elseLabel = llvmNextLabel(emitter, "last.some")
-    let endLabel = llvmNextLabel(emitter, "last.end")
-    
-    emitter.body.push("  br i1 " + lenZero.name + ", label %" + thenLabel + ", label %" + elseLabel)
-    emitter.body.push(thenLabel + ":")
-    
-    let noneUndef = "undef"
-    let noneTag = llvmNextTemp(emitter)
-    emitter.body.push("  " + noneTag + " = insertvalue { i64, i64 } " + noneUndef + ", i64 0, 0")
-    let noneVal = llvmNextTemp(emitter)
-    emitter.body.push("  " + noneVal + " = insertvalue { i64, i64 } " + noneTag + ", i64 0, 1")
-    let noneSlot = llvmNextTemp(emitter)
-    emitter.body.push("  " + noneSlot + " = alloca { i64, i64 }")
-    emitter.body.push("  store { i64, i64 } " + noneVal + ", ptr " + noneSlot)
-    
-    emitter.body.push("  br label %" + endLabel)
-    emitter.body.push(elseLabel + ":")
-    
-    let lenMinus1 = llvmBinaryI64(emitter, "sub", lenVal, llvmIntLiteral(1))
-    let elem = llvmCall(emitter, elemTyp, "osty_rt_list_get_" + llvmListElementSuffix(elemTyp), [
-        llvmGenValueToLlvmValue(list), lenMinus1,
-    ])
-    let widened = llvmWidenToI64(emitter, elem, elemTyp)
-    let someUndef = "undef"
-    let someTag = llvmNextTemp(emitter)
-    emitter.body.push("  " + someTag + " = insertvalue { i64, i64 } " + someUndef + ", i64 1, 0")
-    let someVal = llvmNextTemp(emitter)
-    emitter.body.push("  " + someVal + " = insertvalue { i64, i64 } " + someTag + ", i64 " + widened.name + ", 1")
-    let someSlot = llvmNextTemp(emitter)
-    emitter.body.push("  " + someSlot + " = alloca { i64, i64 }")
-    emitter.body.push("  store { i64, i64 } " + someVal + ", ptr " + someSlot)
-    
-    emitter.body.push("  br label %" + endLabel)
-    emitter.body.push(endLabel + ":")
-    
-    let phi = llvmNextTemp(emitter)
-    emitter.body.push("  {phi} = phi { i64, i64 } [" + noneSlot + ", %" + elseLabel + "], [" + someSlot + ", %" + thenLabel + "]")
-    emitter.locals.push(LlvmBinding { name: destName, value: LlvmValue { typ: "{ i64, i64 }", name: phi, pointer: false } })
-    
-    s
-}
-
-// ======================================================================
-// 11. reverse
-// ======================================================================
-
-pub fn emitListReverse(
-    state: MirGenState,
-    list: LlvmGenValue,
-) -> MirGenState {
+pub fn emitListReverse(state: MirGenState, list: LlvmGenValue) -> MirGenState {
     let mut s = state
     llvmCallVoid(s.gen.emitter, "osty_rt_list_reverse", [llvmGenValueToLlvmValue(list)])
     s
 }
 
-// ======================================================================
-// 12. reversed
-// ======================================================================
-
-pub fn emitListReversed(
-    state: MirGenState,
-    list: LlvmGenValue,
-    destName: String,
-) -> MirGenState {
+pub fn emitListReversed(state: MirGenState, list: LlvmGenValue, destName: String) -> MirGenState {
     let mut s = state
     let emitter = s.gen.emitter
     let result = llvmCall(emitter, "ptr", "osty_rt_list_reversed", [llvmGenValueToLlvmValue(list)])
@@ -386,22 +159,10 @@ pub fn emitListReversed(
     s
 }
 
-// ======================================================================
-// 13. slice
-// ======================================================================
-
-pub fn emitListSlice(
-    state: MirGenState,
-    list: LlvmGenValue,
-    start: LlvmGenValue,
-    stop: LlvmGenValue,
-    destName: String,
-) -> MirGenState {
+pub fn emitListSlice(state: MirGenState, list: LlvmGenValue, start: LlvmGenValue, stop: LlvmGenValue, destName: String) -> MirGenState {
     let mut s = state
     let emitter = s.gen.emitter
-    let result = llvmCall(emitter, "ptr", "osty_rt_list_slice", [
-        llvmGenValueToLlvmValue(list), llvmGenValueToLlvmValue(start), llvmGenValueToLlvmValue(stop),
-    ])
+    let result = llvmCall(emitter, "ptr", "osty_rt_list_slice", [llvmGenValueToLlvmValue(list), llvmGenValueToLlvmValue(start), llvmGenValueToLlvmValue(stop)])
     let tmp = llvmNextTemp(emitter)
     emitter.body.push("  {tmp} = alloca ptr")
     emitter.body.push("  store ptr " + result.name + ", ptr " + tmp)
@@ -409,252 +170,37 @@ pub fn emitListSlice(
     s
 }
 
-// ======================================================================
-// 14. remove_at
-// ======================================================================
-
-pub fn emitListRemoveAt(
-    state: MirGenState,
-    list: LlvmGenValue,
-    index: LlvmGenValue,
-    elemTyp: String,
-    destName: String,
-) -> MirGenState {
+pub fn emitListPop(state: MirGenState, list: LlvmGenValue, elemTyp: String, destName: String) -> MirGenState {
     let mut s = state
     let emitter = s.gen.emitter
-    
-    // Read element first (remove_at_discard doesn't return it)
-    let elem = llvmCall(emitter, elemTyp, "osty_rt_list_get_" + llvmListElementSuffix(elemTyp), [
-        llvmGenValueToLlvmValue(list), llvmGenValueToLlvmValue(index),
-    ])
-    let widened = llvmWidenToI64(emitter, elem, elemTyp)
-    let someUndef = "undef"
-    let someTag = llvmNextTemp(emitter)
-    emitter.body.push("  " + someTag + " = insertvalue { i64, i64 } " + someUndef + ", i64 1, 0")
-    let someVal = llvmNextTemp(emitter)
-    emitter.body.push("  " + someVal + " = insertvalue { i64, i64 } " + someTag + ", i64 " + widened.name + ", 1")
-    let someSlot = llvmNextTemp(emitter)
-    emitter.body.push("  " + someSlot + " = alloca { i64, i64 }")
-    emitter.body.push("  store { i64, i64 } " + someVal + ", ptr " + someSlot)
-    
-    llvmCallVoid(emitter, "osty_rt_list_remove_at_discard", [llvmGenValueToLlvmValue(list), llvmGenValueToLlvmValue(index)])
-    
-    let phi = llvmNextTemp(emitter)
-    emitter.body.push("  {phi} = phi { i64, i64 } [" + someSlot + ", %entry]")
-    emitter.locals.push(LlvmBinding { name: destName, value: LlvmValue { typ: "{ i64, i64 }", name: phi, pointer: false } })
-    
-    s
-}
-
-// ======================================================================
-// 15. index_of (inline linear scan)
-// ======================================================================
-
-pub fn emitListIndexOf(
-    state: MirGenState,
-    list: LlvmGenValue,
-    searchValue: LlvmGenValue,
-    elemTyp: String,
-    destName: String,
-) -> MirGenState {
-    let mut s = state
-    let emitter = s.gen.emitter
-    
-    // len==0 → None(0,0)
     let lenVal = llvmCall(emitter, "i64", "osty_rt_list_len", [llvmGenValueToLlvmValue(list)])
-    let lenZero = llvmBinaryI64(emitter, "eq", lenVal, llvmIntLiteral(0))
-    
-    let searchWid = llvmWidenToI64(emitter, searchValue, elemTyp)
-    
-    // Pre-allocate dest slot
-    let destSlot = llvmNextTemp(emitter)
-    emitter.body.push("  {destSlot} = alloca { i64, i64 }")
-    
-    // None init
-    let noneUndef = "undef"
-    let noneTag = llvmNextTemp(emitter)
-    emitter.body.push("  " + noneTag + " = insertvalue { i64, i64 } " + noneUndef + ", i64 0, 0")
-    let noneVal = llvmNextTemp(emitter)
-    emitter.body.push("  " + noneVal + " = insertvalue { i64, i64 } " + noneTag + ", i64 0, 1")
-    emitter.body.push("  store { i64, i64 } " + noneVal + ", ptr " + destSlot)
-    
-    // Inline loop: for i in 0..len { if get(i) == search { set(dest, Some(i)); break } }
-    let loopCond = llvmNextLabel(emitter, "indexOf.cond")
-    let loopBody = llvmNextLabel(emitter, "indexOf.body")
-    let loopEnd = llvmNextLabel(emitter, "indexOf.end")
-    
-    emitter.body.push("  br label %" + loopCond)
-    emitter.body.push(loopCond + ":")
-    
-    // i < len check
-    let foundTmp = llvmNextTemp(emitter)
-    emitter.body.push("  {foundTmp} = icmp slt i64 0, " + lenVal.name) // placeholder
-    emitter.body.push("  br i1 " + foundTmp.name + ", label %" + loopBody + ", label %" + loopEnd)
-    
-    emitter.body.push(loopBody + ":")
-    // Would need proper loop variable — simplified to skip for now
-    emitter.body.push("  br label %" + loopEnd)
-    
-    emitter.body.push(loopEnd + ":")
-    emitter.locals.push(LlvmBinding { name: destName, value: LlvmValue { typ: "{ i64, i64 }", name: destSlot, pointer: true } })
-    
-    s
-}
-
-// ======================================================================
-// 16. contains (inline linear scan)
-// ======================================================================
-
-pub fn emitListContains(
-    state: MirGenState,
-    list: LlvmGenValue,
-    searchValue: LlvmGenValue,
-    destName: String,
-) -> MirGenState {
-    let mut s = state
-    let emitter = s.gen.emitter
-    
-    // Pre-allocate dest slot with false
-    let destSlot = llvmNextTemp(emitter)
-    emitter.body.push("  {destSlot} = alloca i1")
-    emitter.body.push("  store i1 false, ptr " + destSlot)
-    
-    // Inline loop placeholder
-    emitter.locals.push(LlvmBinding { name: destName, value: LlvmValue { typ: "i1", name: destSlot, pointer: true } })
-    s
-}
-
-// ======================================================================
-// 17. pop
-// ======================================================================
-
-pub fn emitListPop(
-    state: MirGenState,
-    list: LlvmGenValue,
-    elemTyp: String,
-    destName: String,
-) -> MirGenState {
-    let mut s = state
-    let emitter = s.gen.emitter
-    
-    let lenVal = llvmCall(emitter, "i64", "osty_rt_list_len", [llvmGenValueToLlvmValue(list)])
-    let lenZero = llvmBinaryI64(emitter, "eq", lenVal, llvmIntLiteral(0))
-    
-    let thenLabel = llvmNextLabel(emitter, "pop.none")
-    let elseLabel = llvmNextLabel(emitter, "pop.some")
-    let endLabel = llvmNextLabel(emitter, "pop.end")
-    
-    emitter.body.push("  br i1 " + lenZero.name + ", label %" + thenLabel + ", label %" + elseLabel)
-    emitter.body.push(thenLabel + ":")
-    
-    let noneUndef = "undef"
-    let noneTag = llvmNextTemp(emitter)
-    emitter.body.push("  " + noneTag + " = insertvalue { i64, i64 } " + noneUndef + ", i64 0, 0")
-    let noneVal = llvmNextTemp(emitter)
-    emitter.body.push("  " + noneVal + " = insertvalue { i64, i64 } " + noneTag + ", i64 0, 1")
-    let noneSlot = llvmNextTemp(emitter)
-    emitter.body.push("  " + noneSlot + " = alloca { i64, i64 }")
-    emitter.body.push("  store { i64, i64 } " + noneVal + ", ptr " + noneSlot)
-    
-    emitter.body.push("  br label %" + endLabel)
-    emitter.body.push(elseLabel + ":")
-    
-    let lenMinus1 = llvmBinaryI64(emitter, "sub", lenVal, llvmIntLiteral(1))
-    let elem = llvmCall(emitter, elemTyp, "osty_rt_list_get_" + llvmListElementSuffix(elemTyp), [llvmGenValueToLlvmValue(list), lenMinus1])
+    let suffix = llvmListElementSuffix(elemTyp)
+    llvmCallVoid(emitter, "osty_rt_list_pop_discard_" + suffix, [llvmGenValueToLlvmValue(list)])
+    let elem = llvmCall(emitter, elemTyp, "osty_rt_list_get_" + suffix, [llvmGenValueToLlvmValue(list), llvmBinaryI64(emitter, "sub", lenVal, llvmIntLiteral(1))])
     let widened = llvmWidenToI64(emitter, elem, elemTyp)
-    llvmCallVoid(emitter, "osty_rt_list_pop_discard_" + llvmListElementSuffix(elemTyp), [llvmGenValueToLlvmValue(list)])
-    
-    let someUndef = "undef"
-    let someTag = llvmNextTemp(emitter)
-    emitter.body.push("  " + someTag + " = insertvalue { i64, i64 } " + someUndef + ", i64 1, 0")
-    let someVal = llvmNextTemp(emitter)
-    emitter.body.push("  " + someVal + " = insertvalue { i64, i64 } " + someTag + ", i64 " + widened.name + ", 1")
-    let someSlot = llvmNextTemp(emitter)
-    emitter.body.push("  " + someSlot + " = alloca { i64, i64 }")
-    emitter.body.push("  store { i64, i64 } " + someVal + ", ptr " + someSlot)
-    
-    emitter.body.push("  br label %" + endLabel)
-    emitter.body.push(endLabel + ":")
-    
-    let phi = llvmNextTemp(emitter)
-    emitter.body.push("  {phi} = phi { i64, i64 } [" + noneSlot + ", %" + elseLabel + "], [" + someSlot + ", %" + thenLabel + "]")
-    emitter.locals.push(LlvmBinding { name: destName, value: LlvmValue { typ: "{ i64, i64 }", name: phi, pointer: false } })
-    
+    let tmp = llvmNextTemp(emitter)
+    emitter.body.push("  {tmp} = alloca { i64, i64 }")
+    emitter.body.push("  store { i64, i64 } undef, ptr " + tmp)
+    emitter.locals.push(LlvmBinding { name: destName, value: LlvmValue { typ: "{ i64, i64 }", name: tmp, pointer: true } })
     s
 }
 
-// ======================================================================
-// 18. Dispatcher
-// ======================================================================
-
-pub fn emitListIntrinsic(
-    state: MirGenState,
-    intrinsicName: String,
-    list: LlvmGenValue,
-    elemTyp: String,
-    args: List<LlvmGenValue>,
-    destName: String,
-) -> MirGenState {
+pub fn emitListIntrinsic(state: MirGenState, intrinsicName: String, list: LlvmGenValue, elemTyp: String, args: List<LlvmGenValue>, destName: String) -> MirGenState {
     let mut s = state
-    
-    if intrinsicName == "len" {
-        s = emitListLen(s, list, destName)
-    } else if intrinsicName == "is_empty" {
-        s = emitListIsEmpty(s, list, destName)
-    } else if intrinsicName == "push" {
-        if args.len() > 0 {
-            s = emitListPush(s, list, args[0])
-        }
-    } else if intrinsicName == "get" {
-        if args.len() > 0 {
-            s = emitListGet(s, list, args[0], elemTyp, destName)
-        }
-    } else if intrinsicName == "set" {
-        if args.len() >= 2 {
-            s = emitListSet(s, list, args[0], args[1])
-        }
-    } else if intrinsicName == "insert" {
-        if args.len() >= 2 {
-            s = emitListInsert(s, list, args[0], args[1])
-        }
-    } else if intrinsicName == "sorted" {
-        s = emitListSorted(s, list, elemTyp, destName)
-    } else if intrinsicName == "to_set" {
-        s = emitListToSet(s, list, elemTyp, destName)
-    } else if intrinsicName == "first" {
-        s = emitListFirst(s, list, elemTyp, destName)
-    } else if intrinsicName == "last" {
-        s = emitListLast(s, list, elemTyp, destName)
-    } else if intrinsicName == "reverse" {
-        s = emitListReverse(s, list)
-    } else if intrinsicName == "reversed" {
-        s = emitListReversed(s, list, destName)
-    } else if intrinsicName == "slice" {
-        if args.len() >= 2 {
-            s = emitListSlice(s, list, args[0], args[1], destName)
-        }
-    } else if intrinsicName == "remove_at" {
-        if args.len() > 0 {
-            s = emitListRemoveAt(s, list, args[0], elemTyp, destName)
-        }
-    } else if intrinsicName == "index_of" {
-        if args.len() > 0 {
-            s = emitListIndexOf(s, list, args[0], elemTyp, destName)
-        }
-    } else if intrinsicName == "contains" {
-        if args.len() > 0 {
-            s = emitListContains(s, list, args[0], destName)
-        }
-    } else if intrinsicName == "pop" {
-        s = emitListPop(s, list, elemTyp, destName)
-    }
-    
+    if intrinsicName == "len" { s = emitListLen(s, list, destName) }
+    else if intrinsicName == "is_empty" { s = emitListIsEmpty(s, list, destName) }
+    else if intrinsicName == "push" && args.len() > 0 { s = emitListPush(s, list, args[0]) }
+    else if intrinsicName == "get" && args.len() > 0 { s = emitListGet(s, list, args[0], elemTyp, destName) }
+    else if intrinsicName == "set" && args.len() >= 2 { s = emitListSet(s, list, args[0], args[1]) }
+    else if intrinsicName == "insert" && args.len() >= 2 { s = emitListInsert(s, list, args[0], args[1]) }
+    else if intrinsicName == "sorted" { s = emitListSorted(s, list, elemTyp, destName) }
+    else if intrinsicName == "to_set" { s = emitListToSet(s, list, elemTyp, destName) }
+    else if intrinsicName == "reverse" { s = emitListReverse(s, list) }
+    else if intrinsicName == "reversed" { s = emitListReversed(s, list, destName) }
+    else if intrinsicName == "slice" && args.len() >= 2 { s = emitListSlice(s, list, args[0], args[1], destName) }
+    else if intrinsicName == "pop" { s = emitListPop(s, list, elemTyp, destName) }
     s
 }
-
-// ======================================================================
-// Utilities
-// ======================================================================
 
 fn llvmGenValueToLlvmValue(v: LlvmGenValue) -> LlvmValue {
     LlvmValue { typ: v.typ, name: v.name, pointer: v.pointer }
@@ -670,11 +216,6 @@ fn llvmWidenToI64(emitter: LlvmEmitter, val: LlvmValue, elemTyp: String) -> Llvm
     if elemTyp == "double" {
         let tmp = llvmNextTemp(emitter)
         emitter.body.push("  " + tmp + " = bitcast double " + val.name + " to i64")
-        return LlvmValue { typ: "i64", name: tmp, pointer: false }
-    }
-    if elemTyp == "ptr" {
-        let tmp = llvmNextTemp(emitter)
-        emitter.body.push("  " + tmp + " = ptrtoint ptr " + val.name + " to i64")
         return LlvmValue { typ: "i64", name: tmp, pointer: false }
     }
     return val
