@@ -8,7 +8,6 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/sourcemap"
@@ -35,14 +34,12 @@ const cacheLevels = 16
 
 var indentCache = strings.Repeat(Indent, cacheLevels)
 
-// Source formats the given Osty source bytes. It delegates to the
-// self-hosted Osty formatter compiled from toolchain/formatter_ast.osty;
-// the surviving Go printer below is used as the fallback when the
-// self-host formatter reports a failure.
-//
-// Returns the formatted output, any parse diagnostics produced along
-// the way, and an error only when the input cannot be parsed (i.e.
-// diagnostics contain at least one Error-severity entry).
+// Source formats the given Osty source bytes through the self-hosted
+// formatter (toolchain/formatter_ast.osty). It returns the formatted
+// output, any parse diagnostics produced along the way, and an error
+// only when the input cannot be parsed (diagnostics contain at least
+// one Error-severity entry) or the self-host formatter rejects the
+// shape.
 //
 // Warnings do not block formatting — the formatter works on a
 // best-effort AST when possible. Callers that want "format only clean
@@ -55,23 +52,10 @@ func Source(src []byte) ([]byte, []*diag.Diagnostic, error) {
 		}
 	}
 	out, _, err := selfhost.FormatSource(src)
-	if err == nil {
-		return out, diags, nil
+	if err != nil {
+		return nil, diags, err
 	}
-	return goPrinterFallback(src, diags)
-}
-
-// goPrinterFallback renders src with the legacy Go printer. It exists
-// so the self-host formatter can fall back without losing the parse
-// diagnostics or changing the public Source error contract.
-func goPrinterFallback(src []byte, diags []*diag.Diagnostic) ([]byte, []*diag.Diagnostic, error) {
-	l := lexer.New(src)
-	_ = l.Lex()
-	file, _ := parser.ParseDiagnostics(src)
-	p := newPrinter(l.Comments(), nil)
-	p.buf.Grow(len(src))
-	p.printFile(file)
-	return p.bytes(), diags, nil
+	return out, diags, nil
 }
 
 // File prints an already-parsed AST using the canonical Osty printer without
