@@ -2392,17 +2392,8 @@ func (g *mirGen) emitIndexedWrite(a *mir.AssignInstr, destLoc *mir.Local, ip *mi
 			}
 			sym := "osty_rt_list_set_" + listRuntimeSymbolSuffix(elemLLVM)
 			g.declareRuntime(sym, "declare void @"+sym+"(ptr, i64, "+elemLLVM+")")
-			g.fnBuf.WriteString("  call void @")
-			g.fnBuf.WriteString(sym)
-			g.fnBuf.WriteString("(ptr ")
-			g.fnBuf.WriteString(contReg)
-			g.fnBuf.WriteString(", i64 ")
-			g.fnBuf.WriteString(idxReg)
-			g.fnBuf.WriteString(", ")
-			g.fnBuf.WriteString(elemLLVM)
-			g.fnBuf.WriteByte(' ')
-			g.fnBuf.WriteString(valReg)
-			g.fnBuf.WriteString(")\n")
+			g.fnBuf.WriteString(mirCallVoidLine(sym,
+				"ptr "+contReg+", i64 "+idxReg+", "+elemLLVM+" "+valReg))
 			return nil
 		}
 		// Composite element path — spill the value to a stack slot
@@ -2415,17 +2406,11 @@ func (g *mirGen) emitIndexedWrite(a *mir.AssignInstr, destLoc *mir.Local, ip *mi
 		sizeReg := g.emitSizeOf(elemLLVM)
 		sym := "osty_rt_list_set_bytes_v1"
 		g.declareRuntime(sym, "declare void @"+sym+"(ptr, i64, ptr, i64, ptr)")
-		g.fnBuf.WriteString("  call void @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(contReg)
-		g.fnBuf.WriteString(", i64 ")
-		g.fnBuf.WriteString(idxReg)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(valSlot.name)
-		g.fnBuf.WriteString(", i64 ")
-		g.fnBuf.WriteString(sizeReg)
-		g.fnBuf.WriteString(", ptr null)\n")
+		g.fnBuf.WriteString(mirCallVoidLine(sym,
+			"ptr "+contReg+", i64 "+idxReg+
+				", ptr "+valSlot.name+
+				", i64 "+sizeReg+
+				", ptr null"))
 		return nil
 	case isMapPtrType(localT):
 		keyT, _ := mapKeyValueTypes(localT)
@@ -2849,15 +2834,8 @@ func (g *mirGen) emitStdIoWriteArgsMIR(args []mir.Operand, method string) error 
 		return unsupported("mir-mvp", "unsupported std.io method "+method)
 	}
 	g.declareRuntime(ostyRtIOWriteSymbol, "declare void @"+ostyRtIOWriteSymbol+"(ptr, i1, i1)")
-	g.fnBuf.WriteString("  call void @")
-	g.fnBuf.WriteString(ostyRtIOWriteSymbol)
-	g.fnBuf.WriteString("(ptr ")
-	g.fnBuf.WriteString(text)
-	g.fnBuf.WriteString(", i1 ")
-	g.fnBuf.WriteString(llvmStdIoI1Text(newline))
-	g.fnBuf.WriteString(", i1 ")
-	g.fnBuf.WriteString(llvmStdIoI1Text(toStderr))
-	g.fnBuf.WriteString(")\n")
+	g.fnBuf.WriteString(mirCallVoidLine(ostyRtIOWriteSymbol,
+		"ptr "+text+", i1 "+llvmStdIoI1Text(newline)+", i1 "+llvmStdIoI1Text(toStderr)))
 	return nil
 }
 
@@ -3342,13 +3320,8 @@ func (g *mirGen) emitTestingSnapshotMIR(c *mir.CallInstr) error {
 	}
 	g.declareRuntime("osty_rt_test_snapshot", "declare void @osty_rt_test_snapshot(ptr, ptr, ptr)")
 	sourceSym := g.stringLiteral(g.source)
-	g.fnBuf.WriteString("  call void @osty_rt_test_snapshot(ptr ")
-	g.fnBuf.WriteString(name)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(output)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(sourceSym)
-	g.fnBuf.WriteString(")\n")
+	g.fnBuf.WriteString(mirCallVoidLine("osty_rt_test_snapshot",
+		"ptr "+name+", ptr "+output+", ptr "+sourceSym))
 	return g.storeUnitDestIfAny(c)
 }
 
@@ -5915,16 +5888,9 @@ func (g *mirGen) emitStringParseResultIntrinsic(i *mir.IntrinsicInstr, strReg, v
 	okLabel := g.freshLabel("string.parse.ok")
 	errLabel := g.freshLabel("string.parse.err")
 	mergeLabel := g.freshLabel("string.parse.merge")
-	g.fnBuf.WriteString("  br i1 ")
-	g.fnBuf.WriteString(valid.name)
-	g.fnBuf.WriteString(", label %")
-	g.fnBuf.WriteString(okLabel)
-	g.fnBuf.WriteString(", label %")
-	g.fnBuf.WriteString(errLabel)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirBrCondLine(valid.name, okLabel, errLabel))
 
-	g.fnBuf.WriteString(okLabel)
-	g.fnBuf.WriteString(":\n")
+	g.fnBuf.WriteString(mirLabelLine(okLabel))
 	em = g.ostyEmitter()
 	parsed := llvmCall(em, parseLLVM, parseSym, []*LlvmValue{{typ: "ptr", name: strReg}})
 	g.flushOstyEmitter(em)
@@ -5933,68 +5899,22 @@ func (g *mirGen) emitStringParseResultIntrinsic(i *mir.IntrinsicInstr, strReg, v
 		return err
 	}
 	okStep1 := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(okStep1)
-	g.fnBuf.WriteString(" = insertvalue ")
-	g.fnBuf.WriteString(resultLLVM)
-	g.fnBuf.WriteString(" undef, i64 1, 0\n")
+	g.fnBuf.WriteString(mirInsertValueAggLine(okStep1, resultLLVM, "undef", "i64", "1", "0"))
 	okValue := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(okValue)
-	g.fnBuf.WriteString(" = insertvalue ")
-	g.fnBuf.WriteString(resultLLVM)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(okStep1)
-	g.fnBuf.WriteString(", i64 ")
-	g.fnBuf.WriteString(payload)
-	g.fnBuf.WriteString(", 1\n")
-	g.fnBuf.WriteString("  br label %")
-	g.fnBuf.WriteString(mergeLabel)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirInsertValueAggLine(okValue, resultLLVM, okStep1, "i64", payload, "1"))
+	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
-	g.fnBuf.WriteString(errLabel)
-	g.fnBuf.WriteString(":\n")
+	g.fnBuf.WriteString(mirLabelLine(errLabel))
 	errStep1 := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(errStep1)
-	g.fnBuf.WriteString(" = insertvalue ")
-	g.fnBuf.WriteString(resultLLVM)
-	g.fnBuf.WriteString(" undef, i64 0, 0\n")
+	g.fnBuf.WriteString(mirInsertValueAggLine(errStep1, resultLLVM, "undef", "i64", "0", "0"))
 	errValue := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(errValue)
-	g.fnBuf.WriteString(" = insertvalue ")
-	g.fnBuf.WriteString(resultLLVM)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(errStep1)
-	g.fnBuf.WriteString(", i64 0, 1\n")
-	g.fnBuf.WriteString("  br label %")
-	g.fnBuf.WriteString(mergeLabel)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirInsertValueAggLine(errValue, resultLLVM, errStep1, "i64", "0", "1"))
+	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
-	g.fnBuf.WriteString(mergeLabel)
-	g.fnBuf.WriteString(":\n")
+	g.fnBuf.WriteString(mirLabelLine(mergeLabel))
 	result := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(result)
-	g.fnBuf.WriteString(" = phi ")
-	g.fnBuf.WriteString(resultLLVM)
-	g.fnBuf.WriteString(" [ ")
-	g.fnBuf.WriteString(okValue)
-	g.fnBuf.WriteString(", %")
-	g.fnBuf.WriteString(okLabel)
-	g.fnBuf.WriteString(" ], [ ")
-	g.fnBuf.WriteString(errValue)
-	g.fnBuf.WriteString(", %")
-	g.fnBuf.WriteString(errLabel)
-	g.fnBuf.WriteString(" ]\n")
-	g.fnBuf.WriteString("  store ")
-	g.fnBuf.WriteString(resultLLVM)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(result)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirPhiTwoLine(result, resultLLVM, okValue, okLabel, errValue, errLabel))
+	g.fnBuf.WriteString(mirStoreLine(resultLLVM, result, g.localSlots[i.Dest.Local]))
 	return nil
 }
 
@@ -6292,19 +6212,9 @@ func (g *mirGen) emitSelectSend(i *mir.IntrinsicInstr) error {
 		suffix := llvmListElementSuffix(elemLLVM)
 		sym := "osty_rt_select_send_" + suffix
 		g.declareRuntime(sym, "declare void @"+sym+"(ptr, ptr, "+elemLLVM+", ptr)")
-		g.fnBuf.WriteString("  call void @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(builderReg)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(chReg)
-		g.fnBuf.WriteString(", ")
-		g.fnBuf.WriteString(elemLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(valReg)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(armReg)
-		g.fnBuf.WriteString(")\n")
+		g.fnBuf.WriteString(mirCallVoidLine(sym,
+			"ptr "+builderReg+", ptr "+chReg+
+				", "+elemLLVM+" "+valReg+", ptr "+armReg))
 		return nil
 	}
 	// Composite element — bytes_v1 route. Spill value to a stack slot,
@@ -6315,19 +6225,10 @@ func (g *mirGen) emitSelectSend(i *mir.IntrinsicInstr) error {
 	slot := llvmSpillToSlot(em, &LlvmValue{typ: elemLLVM, name: valReg})
 	size := llvmSizeOf(em, elemLLVM)
 	g.flushOstyEmitter(em)
-	g.fnBuf.WriteString("  call void @")
-	g.fnBuf.WriteString(sym)
-	g.fnBuf.WriteString("(ptr ")
-	g.fnBuf.WriteString(builderReg)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(chReg)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(slot.name)
-	g.fnBuf.WriteString(", i64 ")
-	g.fnBuf.WriteString(size.name)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(armReg)
-	g.fnBuf.WriteString(")\n")
+	g.fnBuf.WriteString(mirCallVoidLine(sym,
+		"ptr "+builderReg+", ptr "+chReg+
+			", ptr "+slot.name+", i64 "+size.name+
+			", ptr "+armReg))
 	return nil
 }
 
@@ -6346,29 +6247,17 @@ func (g *mirGen) emitCancelIntrinsic(i *mir.IntrinsicInstr) error {
 		sym := "osty_rt_cancel_check_cancelled"
 		g.declareRuntime(sym, "declare { i64, i64 } @"+sym+"()")
 		if i.Dest == nil {
-			g.fnBuf.WriteString("  call { i64, i64 } @")
-			g.fnBuf.WriteString(sym)
-			g.fnBuf.WriteString("()\n")
+			g.fnBuf.WriteString("  call { i64, i64 } @" + sym + "()\n")
 			return nil
 		}
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = call { i64, i64 } @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("()\n")
-		g.fnBuf.WriteString("  store { i64, i64 } ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirCallValueNoArgsLine(tmp, "{ i64, i64 }", sym))
+		g.fnBuf.WriteString(mirStoreLine("{ i64, i64 }", tmp, g.localSlots[i.Dest.Local]))
 		return nil
 	case mir.IntrinsicYield:
 		sym := "osty_rt_thread_yield"
 		g.declareRuntime(sym, "declare void @"+sym+"()")
-		g.fnBuf.WriteString("  call void @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("()\n")
+		g.fnBuf.WriteString(mirCallVoidNoArgsLine(sym))
 		return nil
 	case mir.IntrinsicSleep:
 		if len(i.Args) != 1 {
@@ -6380,11 +6269,7 @@ func (g *mirGen) emitCancelIntrinsic(i *mir.IntrinsicInstr) error {
 		}
 		sym := "osty_rt_thread_sleep"
 		g.declareRuntime(sym, "declare void @"+sym+"(ptr)")
-		g.fnBuf.WriteString("  call void @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(dur)
-		g.fnBuf.WriteString(")\n")
+		g.fnBuf.WriteString(mirCallVoidLine(sym, "ptr "+dur))
 		return nil
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("cancel intrinsic kind %d", i.Kind))
@@ -6427,27 +6312,14 @@ func (g *mirGen) emitConcurrencyHelperIntrinsic(i *mir.IntrinsicInstr) error {
 		}
 		sym := "osty_rt_task_race"
 		g.declareRuntime(sym, "declare { i64, i64 } @"+sym+"(ptr)")
+		argList := "ptr " + body
 		if i.Dest == nil {
-			g.fnBuf.WriteString("  call { i64, i64 } @")
-			g.fnBuf.WriteString(sym)
-			g.fnBuf.WriteString("(ptr ")
-			g.fnBuf.WriteString(body)
-			g.fnBuf.WriteString(")\n")
+			g.fnBuf.WriteString("  call { i64, i64 } @" + sym + "(" + argList + ")\n")
 			return nil
 		}
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = call { i64, i64 } @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(body)
-		g.fnBuf.WriteString(")\n")
-		g.fnBuf.WriteString("  store { i64, i64 } ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirCallValueLine(tmp, "{ i64, i64 }", sym, argList))
+		g.fnBuf.WriteString(mirStoreLine("{ i64, i64 }", tmp, g.localSlots[i.Dest.Local]))
 		return nil
 	case mir.IntrinsicCollectAll:
 		return g.emitSimpleConcurrencyCall(i, "osty_rt_task_collect_all", "ptr", nil)
@@ -6487,13 +6359,7 @@ func (g *mirGen) emitRuntimeVoidCall(i *mir.IntrinsicInstr, sym, argLLVM string)
 		return err
 	}
 	g.declareRuntime(sym, "declare void @"+sym+"("+argLLVM+")")
-	g.fnBuf.WriteString("  call void @")
-	g.fnBuf.WriteString(sym)
-	g.fnBuf.WriteByte('(')
-	g.fnBuf.WriteString(argLLVM)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(val)
-	g.fnBuf.WriteString(")\n")
+	g.fnBuf.WriteString(mirCallVoidLine(sym, argLLVM+" "+val))
 	return nil
 }
 
@@ -6502,26 +6368,17 @@ func (g *mirGen) emitRuntimeVoidCall(i *mir.IntrinsicInstr, sym, argLLVM string)
 func (g *mirGen) emitSimpleCall(i *mir.IntrinsicInstr, sym, retLLVM string, args []string) error {
 	joined := strings.Join(args, ", ")
 	if i.Dest == nil || retLLVM == "void" {
-		g.fnBuf.WriteString("  call ")
-		g.fnBuf.WriteString(retLLVM)
-		g.fnBuf.WriteString(" @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteByte('(')
-		g.fnBuf.WriteString(joined)
-		g.fnBuf.WriteString(")\n")
+		if retLLVM == "void" {
+			g.fnBuf.WriteString(mirCallVoidLine(sym, joined))
+		} else {
+			// Discarded return — emit `  call <retLLVM> @<sym>(<args>)\n` directly.
+			g.fnBuf.WriteString("  call " + retLLVM + " @" + sym + "(" + joined + ")\n")
+		}
 		return nil
 	}
 	destLoc := g.fn.Local(i.Dest.Local)
 	tmp := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(tmp)
-	g.fnBuf.WriteString(" = call ")
-	g.fnBuf.WriteString(retLLVM)
-	g.fnBuf.WriteString(" @")
-	g.fnBuf.WriteString(sym)
-	g.fnBuf.WriteByte('(')
-	g.fnBuf.WriteString(joined)
-	g.fnBuf.WriteString(")\n")
+	g.fnBuf.WriteString(mirCallValueLine(tmp, retLLVM, sym, joined))
 	if destLoc == nil {
 		return nil
 	}
@@ -6535,13 +6392,7 @@ func (g *mirGen) emitSimpleCall(i *mir.IntrinsicInstr, sym, retLLVM string, args
 			stored = widened
 		}
 	}
-	g.fnBuf.WriteString("  store ")
-	g.fnBuf.WriteString(destLLVM)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(stored)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirStoreLine(destLLVM, stored, g.localSlots[i.Dest.Local]))
 	return nil
 }
 
@@ -7234,52 +7085,26 @@ func (g *mirGen) toI64Slot(val string, t mir.Type) (string, error) {
 		return val, nil
 	case "i1":
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = zext i1 ")
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to i64\n")
+		g.fnBuf.WriteString(mirZExtLine(tmp, "i1", val, "i64"))
 		return tmp, nil
 	case "i8", "i16", "i32":
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = sext ")
-		g.fnBuf.WriteString(llvmT)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to i64\n")
+		g.fnBuf.WriteString(mirSExtLine(tmp, llvmT, val, "i64"))
 		return tmp, nil
 	case "double":
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = bitcast double ")
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to i64\n")
+		g.fnBuf.WriteString(mirBitcastLine(tmp, "double", val, "i64"))
 		return tmp, nil
 	case "float":
 		// widen to double, then bitcast
 		widened := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(widened)
-		g.fnBuf.WriteString(" = fpext float ")
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to double\n")
+		g.fnBuf.WriteString("  " + widened + " = fpext float " + val + " to double\n")
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = bitcast double ")
-		g.fnBuf.WriteString(widened)
-		g.fnBuf.WriteString(" to i64\n")
+		g.fnBuf.WriteString(mirBitcastLine(tmp, "double", widened, "i64"))
 		return tmp, nil
 	case "ptr":
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = ptrtoint ptr ")
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to i64\n")
+		g.fnBuf.WriteString(mirPtrToIntLine(tmp, val, "i64"))
 		return tmp, nil
 	case "void":
 		return "0", nil
@@ -7295,26 +7120,11 @@ func (g *mirGen) toI64Slot(val string, t mir.Type) (string, error) {
 		size := g.emitSizeOf(llvmT)
 		site := g.stringLiteral("mir.enum.box." + strings.TrimPrefix(llvmT, "%"))
 		box := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(box)
-		g.fnBuf.WriteString(" = call ptr @osty.gc.alloc_v1(i64 1, i64 ")
-		g.fnBuf.WriteString(size)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(site)
-		g.fnBuf.WriteString(")\n")
-		g.fnBuf.WriteString("  store ")
-		g.fnBuf.WriteString(llvmT)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(box)
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirCallValueLine(box, "ptr", "osty.gc.alloc_v1",
+			"i64 1, i64 "+size+", ptr "+site))
+		g.fnBuf.WriteString(mirStoreLine(llvmT, val, box))
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = ptrtoint ptr ")
-		g.fnBuf.WriteString(box)
-		g.fnBuf.WriteString(" to i64\n")
+		g.fnBuf.WriteString(mirPtrToIntLine(tmp, box, "i64"))
 		return tmp, nil
 	}
 	return "", unsupported("mir-mvp", "enum payload: cannot widen "+llvmT+" to i64")
@@ -7329,51 +7139,25 @@ func (g *mirGen) fromI64Slot(val string, targetT mir.Type) (string, error) {
 		return val, nil
 	case "i1":
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = trunc i64 ")
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to i1\n")
+		g.fnBuf.WriteString(mirTruncLine(tmp, "i64", val, "i1"))
 		return tmp, nil
 	case "i8", "i16", "i32":
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = trunc i64 ")
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to ")
-		g.fnBuf.WriteString(llvmT)
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirTruncLine(tmp, "i64", val, llvmT))
 		return tmp, nil
 	case "double":
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = bitcast i64 ")
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to double\n")
+		g.fnBuf.WriteString(mirBitcastLine(tmp, "i64", val, "double"))
 		return tmp, nil
 	case "float":
 		widened := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(widened)
-		g.fnBuf.WriteString(" = bitcast i64 ")
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to double\n")
+		g.fnBuf.WriteString(mirBitcastLine(widened, "i64", val, "double"))
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = fptrunc double ")
-		g.fnBuf.WriteString(widened)
-		g.fnBuf.WriteString(" to float\n")
+		g.fnBuf.WriteString("  " + tmp + " = fptrunc double " + widened + " to float\n")
 		return tmp, nil
 	case "ptr":
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = inttoptr i64 ")
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to ptr\n")
+		g.fnBuf.WriteString(mirIntToPtrLine(tmp, "i64", val))
 		return tmp, nil
 	case "void":
 		return "undef", nil
@@ -7383,19 +7167,9 @@ func (g *mirGen) fromI64Slot(val string, targetT mir.Type) (string, error) {
 	// the original aggregate value.
 	if strings.HasPrefix(llvmT, "%") {
 		boxPtr := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(boxPtr)
-		g.fnBuf.WriteString(" = inttoptr i64 ")
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to ptr\n")
+		g.fnBuf.WriteString(mirIntToPtrLine(boxPtr, "i64", val))
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = load ")
-		g.fnBuf.WriteString(llvmT)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(boxPtr)
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirLoadLine(tmp, llvmT, boxPtr))
 		return tmp, nil
 	}
 	return "", unsupported("mir-mvp", "variant payload read: cannot narrow i64 to "+llvmT)
@@ -7968,33 +7742,14 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 			}
 			// Composite element — use bytes_v1 out-pointer ABI.
 			slot := g.fresh()
-			g.fnBuf.WriteString("  ")
-			g.fnBuf.WriteString(slot)
-			g.fnBuf.WriteString(" = alloca ")
-			g.fnBuf.WriteString(elemLLVM)
-			g.fnBuf.WriteByte('\n')
+			g.fnBuf.WriteString(mirAllocaLine(slot, elemLLVM))
 			sizeReg := g.emitSizeOf(elemLLVM)
 			sym := "osty_rt_list_get_bytes_v1"
 			g.declareRuntime(sym, "declare void @"+sym+"(ptr, i64, ptr, i64)")
-			g.fnBuf.WriteString("  call void @")
-			g.fnBuf.WriteString(sym)
-			g.fnBuf.WriteString("(ptr ")
-			g.fnBuf.WriteString(curReg)
-			g.fnBuf.WriteString(", i64 ")
-			g.fnBuf.WriteString(idxVal)
-			g.fnBuf.WriteString(", ptr ")
-			g.fnBuf.WriteString(slot)
-			g.fnBuf.WriteString(", i64 ")
-			g.fnBuf.WriteString(sizeReg)
-			g.fnBuf.WriteString(")\n")
+			g.fnBuf.WriteString(mirCallVoidLine(sym,
+				"ptr "+curReg+", i64 "+idxVal+", ptr "+slot+", i64 "+sizeReg))
 			loaded := g.fresh()
-			g.fnBuf.WriteString("  ")
-			g.fnBuf.WriteString(loaded)
-			g.fnBuf.WriteString(" = load ")
-			g.fnBuf.WriteString(elemLLVM)
-			g.fnBuf.WriteString(", ptr ")
-			g.fnBuf.WriteString(slot)
-			g.fnBuf.WriteByte('\n')
+			g.fnBuf.WriteString(mirLoadLine(loaded, elemLLVM, slot))
 			curReg = loaded
 			curLLVM = elemLLVM
 			curT = elemT
