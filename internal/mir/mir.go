@@ -716,6 +716,18 @@ const (
 	// per-iteration call to this in-place form. Lowers to
 	// `osty_rt_strings_SplitInto(out, value, sep)`.
 	IntrinsicStringSplitInto
+
+	// IntrinsicStringNthSegment returns the `idx`-th split piece as a
+	// single allocated String, without ever materialising the full
+	// List<String>. Args: [value, sep, idx] where `idx` is a
+	// non-negative i64 constant. Synthesised by the
+	// `fuseNonEscapingSplitNth` MIR pass when a `let parts = expr.split(sep)`
+	// is followed by a single `parts[K]` read with a non-negative
+	// constant K and no other use of `parts`. Lowers to
+	// `osty_rt_strings_NthSegment(value, sep, idx)`. Eliminates the
+	// list allocation + (N-1) piece dups that the unfused
+	// `Split(...)[K]` pattern would have done.
+	IntrinsicStringNthSegment
 )
 
 // StorageLiveInstr marks a local as alive. Optional; backends that do
@@ -1700,6 +1712,8 @@ func (k IntrinsicKind) String() string {
 		return "map_get_or"
 	case IntrinsicStringSplitInto:
 		return "string_split_into"
+	case IntrinsicStringNthSegment:
+		return "string_nth_segment"
 	}
 	return "invalid"
 }

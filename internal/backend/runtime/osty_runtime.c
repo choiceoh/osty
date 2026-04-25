@@ -5888,6 +5888,101 @@ void *osty_rt_strings_Split(const char *value, const char *sep) {
     return out;
 }
 
+/* osty_rt_strings_NthSegment returns the `idx`-th (0-based) split
+ * piece as a single allocated String, without ever materialising the
+ * full List<String>. Mirrors `osty_rt_strings_Split(value, sep)[idx]`
+ * but skips:
+ *
+ *   - the `osty_rt_list_new` allocation
+ *   - the `osty_rt_list_push_ptr` calls for pieces 0..idx-1 (we just
+ *     advance the cursor past them; no piece dup)
+ *   - the dup of every piece > idx (we stop scanning past idx)
+ *
+ * The MIR pass `fuseNonEscapingSplitNth` rewrites
+ *
+ *     let parts = value.split(sep)
+ *     let first = parts[K]      // K is a non-negative compile-time const
+ *
+ * into a single `IntrinsicStringNthSegment` call when `parts` is
+ * otherwise unused and the index `K` is constant. Eliminates one
+ * list alloc + (N-1) piece dups per call site. markdown-stats's
+ * `classify(line)` pattern (`line.split(" ")[0]`) is the canonical
+ * target — 20k splits × 1 list alloc removed.
+ *
+ * Returns the empty interned String when `value` is NULL, when `idx`
+ * is negative, or when `idx` is past the last piece — same out-of-
+ * range behaviour as `Split()[idx]` would have raised, but turned
+ * into a sentinel here so the MIR rewrite can avoid emitting bounds-
+ * check IR around the fused call. The bounds check is done at
+ * compile time when the index is constant — out-of-range constants
+ * fall back to the unfused path. */
+OSTY_HOT_INLINE const char *osty_rt_strings_NthSegment(const char *value, const char *sep, int64_t idx) {
+    const char *cursor;
+    const char *next;
+    size_t sep_len;
+    int64_t i;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char sep_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+
+    if (value == NULL || idx < 0) {
+        return osty_rt_string_dup_range("", 0);
+    }
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    if (sep != NULL) {
+        osty_rt_string_decode_to_buf_if_inline(&sep, sep_buf);
+    }
+    /* Empty separator: split per byte (matches Split's empty-sep
+     * branch). The Nth piece is the byte at position idx. */
+    if (sep == NULL || sep[0] == '\0') {
+        for (i = 0; i < idx; i++) {
+            if (*value == '\0') {
+                return osty_rt_string_dup_range("", 0);
+            }
+            value += 1;
+        }
+        if (*value == '\0') {
+            return osty_rt_string_dup_range("", 0);
+        }
+        return osty_rt_string_dup_range(value, 1);
+    }
+    sep_len = strlen(sep);
+    cursor = value;
+    /* Walk past the first `idx` separators (1-char fast path mirrors
+     * the Split body). On match, the Nth piece runs from `cursor` up
+     * to the next separator (or NUL for the last piece). */
+    if (sep_len == 1) {
+        char ch = sep[0];
+        for (i = 0; i < idx; i++) {
+            next = strchr(cursor, ch);
+            if (next == NULL) {
+                /* Out of range — Split would have produced fewer
+                 * pieces. Match `[idx]` panic semantics by returning
+                 * the empty string here; the MIR fusion only fires
+                 * when the bounds-check is statically discharged
+                 * (idx < piece_count), so this path is reachable
+                 * only via direct runtime callers. */
+                return osty_rt_string_dup_range("", 0);
+            }
+            cursor = next + 1;
+        }
+        next = strchr(cursor, ch);
+    } else {
+        for (i = 0; i < idx; i++) {
+            next = strstr(cursor, sep);
+            if (next == NULL) {
+                return osty_rt_string_dup_range("", 0);
+            }
+            cursor = next + sep_len;
+        }
+        next = strstr(cursor, sep);
+    }
+    if (next == NULL) {
+        /* Last piece — runs to end of value. */
+        return osty_rt_string_dup_range(cursor, strlen(cursor));
+    }
+    return osty_rt_string_dup_range(cursor, (size_t)(next - cursor));
+}
+
 /* osty_rt_strings_SplitInto reuses an existing List<String> as the
  * destination instead of allocating a fresh one each call. The MIR
  * `hoistNonEscapingSplitInLoops` pass rewrites tight-loop calls of the
