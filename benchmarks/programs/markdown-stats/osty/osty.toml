@@ -1,0 +1,8 @@
+# markdown-stats — Osty side. Mirrors ../go/main.go.
+
+[package]
+name = "markdown-stats"
+version = "0.1.0"
+edition = "0.4"
+
+[dependencies]

@@ -1,0 +1,184 @@
+// dep-resolver — Osty side. Mirrors ../go/main.go byte-for-byte.
+
+use std.strings
+
+fn intToStr(n: Int) -> String {
+    let digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+    if n == 0 {
+        return "0"
+    }
+    let mut x = n
+    let mut neg = false
+    if x < 0 {
+        neg = true
+        x = 0 - x
+    }
+    let mut chunks: List<String> = []
+    for x > 0 {
+        chunks.push(digits[x % 10])
+        x = x / 10
+    }
+    let mut out = ""
+    if neg {
+        out = "-"
+    }
+    let mut i = chunks.len()
+    for i > 0 {
+        i = i - 1
+        out = out + chunks[i]
+    }
+    out
+}
+
+fn moduleNames() -> List<String> {
+    let prefix = ["alpha", "beta", "gamma", "delta", "epsilon",
+                  "zeta", "eta", "theta", "iota", "kappa",
+                  "lambda", "mu", "nu", "xi", "omicron",
+                  "pi", "rho", "sigma", "tau", "upsilon"]
+    let suffix = ["core", "net", "fs", "ipc", "log",
+                  "auth", "http", "json", "vm", "gc"]
+    let tag = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j",
+               "k", "l", "m", "n", "o", "p", "q", "r", "s", "t",
+               "u", "v", "w", "x", "y", "z", "aa", "bb", "cc", "dd",
+               "ee", "ff", "gg", "hh", "ii", "jj", "kk", "ll", "mm", "nn",
+               "oo", "pp", "qq", "rr", "ss", "tt", "uu", "vv", "ww", "xx"]
+    let mut out: List<String> = []
+    let mut p = 0
+    for p < prefix.len() {
+        let mut s = 0
+        for s < suffix.len() {
+            let mut t = 0
+            for t < tag.len() {
+                out.push(prefix[p] + "-" + suffix[s] + "-" + tag[t])
+                t = t + 1
+            }
+            s = s + 1
+        }
+        p = p + 1
+    }
+    out
+}
+
+fn buildDeps(n: Int) -> List<List<Int>> {
+    let mut deps: List<List<Int>> = []
+    let mut state = 1
+    let mut i = 0
+    for i < n {
+        state = (state * 1103515245 + 12345) % 2147483648
+        let mut my: List<Int> = []
+        if i > 0 {
+            let count = state % 4
+            let mut k = 0
+            for k < count {
+                state = (state * 1103515245 + 12345) % 2147483648
+                let target = (state / 4) % i
+                let mut dup = false
+                let mut j = 0
+                for j < my.len() {
+                    if my[j] == target {
+                        dup = true
+                    }
+                    j = j + 1
+                }
+                if !dup {
+                    my.push(target)
+                }
+                k = k + 1
+            }
+        }
+        deps.push(my)
+        i = i + 1
+    }
+    deps
+}
+
+fn main() {
+    let n = 10000
+    let names = moduleNames()
+    let deps = buildDeps(n)
+
+    // Forward depth pass.
+    let mut depth: List<Int> = []
+    let mut z = 0
+    for z < n {
+        depth.push(0)
+        z = z + 1
+    }
+    let mut totalEdges = 0
+    let mut i = 0
+    for i < n {
+        let myDeps = deps[i]
+        totalEdges = totalEdges + myDeps.len()
+        let mut maxD = 0
+        let mut k = 0
+        for k < myDeps.len() {
+            let cand = depth[myDeps[k]] + 1
+            if cand > maxD {
+                maxD = cand
+            }
+            k = k + 1
+        }
+        depth[i] = maxD
+        i = i + 1
+    }
+
+    let mut maxDepth = 0
+    let mut deepCount = 0
+    let mut d2 = 0
+    for d2 < n {
+        let v = depth[d2]
+        if v > maxDepth {
+            maxDepth = v
+        }
+        if v >= 5 {
+            deepCount = deepCount + 1
+        }
+        d2 = d2 + 1
+    }
+
+    // Prefix histogram.
+    let mut prefixCounts: Map<String, Int> = {:}
+    let mut ni = 0
+    for ni < names.len() {
+        let name = names[ni]
+        let parts = name.split("-")
+        let p = parts[0]
+        prefixCounts.insert(p, prefixCounts.getOr(p, 0) + 1)
+        ni = ni + 1
+    }
+
+    // Top 3 prefixes by count desc, prefix asc.
+    let prefixKeys = prefixCounts.keys().sorted()
+    let mut sorted = prefixKeys
+    let mut i2 = 1
+    for i2 < sorted.len() {
+        let mut j2 = i2
+        for j2 > 0 {
+            let prev = sorted[j2 - 1]
+            let cur = sorted[j2]
+            if prefixCounts.getOr(prev, 0) < prefixCounts.getOr(cur, 0) {
+                sorted[j2 - 1] = cur
+                sorted[j2] = prev
+                j2 = j2 - 1
+            } else {
+                break
+            }
+        }
+        i2 = i2 + 1
+    }
+    let topK = if sorted.len() < 3 { sorted.len() } else { 3 }
+
+    println("modules: " + intToStr(n))
+    println("edges: " + intToStr(totalEdges))
+    println("max_depth: " + intToStr(maxDepth))
+    println("deep_modules: " + intToStr(deepCount))
+    println("unique_prefixes: " + intToStr(prefixCounts.keys().len()))
+    println("top prefixes:")
+    let mut t2 = 0
+    for t2 < topK {
+        let k = sorted[t2]
+        let c = prefixCounts.getOr(k, 0)
+        println("  " + k + " count=" + intToStr(c))
+        t2 = t2 + 1
+    }
+}

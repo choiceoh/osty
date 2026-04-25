@@ -1,0 +1,8 @@
+# dep-resolver — Osty side. Mirrors ../go/main.go.
+
+[package]
+name = "dep-resolver"
+version = "0.1.0"
+edition = "0.4"
+
+[dependencies]

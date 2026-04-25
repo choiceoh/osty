@@ -1,0 +1,175 @@
+// lru-sim — Osty side. Mirrors ../go/main.go byte-for-byte.
+
+use std.strings
+
+fn intToStr(n: Int) -> String {
+    let digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+    if n == 0 {
+        return "0"
+    }
+    let mut x = n
+    let mut neg = false
+    if x < 0 {
+        neg = true
+        x = 0 - x
+    }
+    let mut chunks: List<String> = []
+    for x > 0 {
+        chunks.push(digits[x % 10])
+        x = x / 10
+    }
+    let mut out = ""
+    if neg {
+        out = "-"
+    }
+    let mut i = chunks.len()
+    for i > 0 {
+        i = i - 1
+        out = out + chunks[i]
+    }
+    out
+}
+
+fn keyspace() -> List<String> {
+    ["users:alice", "users:bob", "users:carol", "users:dave", "users:eve",
+     "users:frank", "users:grace", "users:heidi", "posts:101", "posts:102",
+     "posts:103", "posts:104", "posts:105", "posts:201", "posts:202",
+     "posts:203", "posts:204", "posts:205", "feed:home", "feed:trending",
+     "feed:hot", "feed:cold", "tags:go", "tags:rust", "tags:osty",
+     "tags:llvm", "tags:perf", "tags:bench", "search:1", "search:2",
+     "search:3", "search:4", "search:5", "auth:cookie", "auth:bearer",
+     "meta:version", "meta:build", "meta:host", "rate:default", "rate:burst",
+     "sess:001", "sess:002", "sess:003", "sess:004", "sess:005"]
+}
+
+fn generateOps(n: Int) -> List<String> {
+    let keys = keyspace()
+    let hotSize = 8
+    let coldSize = keys.len() - hotSize
+    let mut out: List<String> = []
+    let mut state = 1
+    let mut i = 0
+    for i < n {
+        state = (state * 1103515245 + 12345) % 2147483648
+        if state % 100 < 70 {
+            out.push(keys[(state / 4) % hotSize])
+        } else {
+            out.push(keys[hotSize + ((state / 4) % coldSize)])
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn main() {
+    let n = 50000
+    let capacity = 12
+    let ops = generateOps(n)
+
+    let mut tick: Map<String, Int> = {:}
+    let mut accessed: Map<String, Int> = {:}
+    let mut cache: List<String> = []
+
+    let mut hits = 0
+    let mut misses = 0
+    let mut clock = 0
+    let mut evictions = 0
+
+    for key in ops {
+        clock = clock + 1
+        if tick.containsKey(key) {
+            hits = hits + 1
+            tick.insert(key, clock)
+            accessed.insert(key, accessed.getOr(key, 0) + 1)
+            continue
+        }
+        misses = misses + 1
+        tick.insert(key, clock)
+        accessed.insert(key, accessed.getOr(key, 0) + 1)
+        cache.push(key)
+        if cache.len() > capacity {
+            // Evict by oldest tick.
+            let mut oldestIdx = 0
+            let mut oldestTick = tick.getOr(cache[0], 0)
+            let mut j = 1
+            for j < cache.len() {
+                let t = tick.getOr(cache[j], 0)
+                if t < oldestTick {
+                    oldestTick = t
+                    oldestIdx = j
+                }
+                j = j + 1
+            }
+            let evicted = cache[oldestIdx]
+            // remove cache[oldestIdx]: rebuild list (no removeAt in our hot code).
+            let mut next: List<String> = []
+            let mut k = 0
+            for k < cache.len() {
+                if k != oldestIdx {
+                    next.push(cache[k])
+                }
+                k = k + 1
+            }
+            cache = next
+            tick.remove(evicted)
+            evictions = evictions + 1
+        }
+    }
+
+    // Reaccessed = keys whose lifetime count > 1.
+    let mut rebound = 0
+    let allKeys = accessed.keys()
+    let mut ki = 0
+    for ki < allKeys.len() {
+        if accessed.getOr(allKeys[ki], 0) > 1 {
+            rebound = rebound + 1
+        }
+        ki = ki + 1
+    }
+
+    // Top 5 keys by count desc, then key asc.
+    // Iterate keyspace() in lex order to break ties deterministically;
+    // sort by count desc via insertion sort.
+    let canon = keyspace().sorted()
+    let mut presentKeys: List<String> = []
+    let mut ci = 0
+    for ci < canon.len() {
+        if accessed.containsKey(canon[ci]) {
+            presentKeys.push(canon[ci])
+        }
+        ci = ci + 1
+    }
+    let mut i2 = 1
+    for i2 < presentKeys.len() {
+        let mut j2 = i2
+        for j2 > 0 {
+            let prev = presentKeys[j2 - 1]
+            let cur = presentKeys[j2]
+            if accessed.getOr(prev, 0) < accessed.getOr(cur, 0) {
+                presentKeys[j2 - 1] = cur
+                presentKeys[j2] = prev
+                j2 = j2 - 1
+            } else {
+                break
+            }
+        }
+        i2 = i2 + 1
+    }
+    let topK = if presentKeys.len() < 5 { presentKeys.len() } else { 5 }
+
+    println("ops: " + intToStr(n))
+    println("hits: " + intToStr(hits))
+    println("misses: " + intToStr(misses))
+    println("evictions: " + intToStr(evictions))
+    println("final_size: " + intToStr(cache.len()))
+    println("unique_keys: " + intToStr(accessed.keys().len()))
+    println("reaccessed_keys: " + intToStr(rebound))
+    println("top keys:")
+    let mut t = 0
+    for t < topK {
+        let k = presentKeys[t]
+        let c = accessed.getOr(k, 0)
+        println("  " + k + " count=" + intToStr(c))
+        t = t + 1
+    }
+}

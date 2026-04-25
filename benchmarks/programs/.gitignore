@@ -1,0 +1,6 @@
+bin-go
+bin-go-release
+*/.osty/
+.last-run.json
+.last-results.md
+*/.last-run.json
