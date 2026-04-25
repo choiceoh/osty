@@ -2572,3 +2572,77 @@ pub fn mirFunctionDefineHeader(
 pub fn mirFunctionDefineFooter() -> String {
     "}\n\n"
 }
+
+/// mirInlineAsmIdentityCallLine renders the LLVM inline-asm
+/// identity-barrier shape used by `std.hint.black_box(x)`:
+///   `  <reg> = call <ty> asm sideeffect "", "=r,0"(<ty> <val>)\n`
+/// The empty asm body + `"=r,0"` constraint ties the output
+/// register to the input — semantically a no-op, but the
+/// `sideeffect` qualifier blocks DCE of the producing
+/// expression and the opaque asm output blocks const-fold
+/// across the call. That's what keeps `loop_sum(black_box(N))`
+/// from collapsing to `sum(N)` constant-folded at compile
+/// time. Scalar types only (i1/i8/.../i64/float/double/ptr) —
+/// composite types fall back to the memory-clobber path that
+/// no current caller uses.
+pub fn mirInlineAsmIdentityCallLine(reg: String, ty: String, val: String) -> String {
+    "  " + reg + " = call " + ty +
+        " asm sideeffect \"\", \"=r,0\"(" + ty + " " + val + ")\n"
+}
+
+/// mirCallVarargPrintfLine renders the LLVM-IR printf call shape
+///   `  call i32 (ptr, ...) @printf(ptr <fmtSym>, <restArgs>)\n`
+/// Used by the testing-abort, bench-error, and bench-summary
+/// emit paths. `restArgs` is already-joined by the caller (e.g.
+/// `"i64 5, i64 7"`). When the format takes no extra args (`%\n`-
+/// only fmt strings), the caller passes `restArgs = ""` and the
+/// helper drops the leading `, `.
+pub fn mirCallVarargPrintfLine(fmtSym: String, restArgs: String) -> String {
+    if restArgs == "" {
+        return "  call i32 (ptr, ...) @printf(ptr " + fmtSym + ")\n"
+    }
+    "  call i32 (ptr, ...) @printf(ptr " + fmtSym + ", " + restArgs + ")\n"
+}
+
+/// mirCallExitLine renders the noreturn `exit(N)` runtime hook:
+///   `  call void @exit(i32 <codeDigits>)\n`
+/// `codeDigits` is the already-formatted decimal exit code (`"0"`
+/// for normal exit, `"1"` for assertion-failure abort, etc.).
+/// Used as the second-to-last line in the `testing.abort` /
+/// `bench `?` failure` paths, just before the `unreachable`
+/// terminator.
+pub fn mirCallExitLine(codeDigits: String) -> String {
+    "  call void @exit(i32 " + codeDigits + ")\n"
+}
+
+/// mirBrCondReversedLine renders the conditional branch with
+/// the true / false target order swapped:
+///   `  br i1 <cond>, label %<falseLabel>, label %<trueLabel>\n`
+/// (note: still `label %<L>, label %<R>` syntax, but the
+/// "fail when true" path puts the abort label first.) Used by
+/// `emitTestingFailureCheck` for the `assertFalse` shape where
+/// failure is on cond=true. The complementary `mirBrCondLine`
+/// handles the normal `cond ? true-arm : false-arm` shape.
+pub fn mirBrCondReversedLine(cond: String, falseLabel: String, trueLabel: String) -> String {
+    "  br i1 " + cond + ", label %" + falseLabel + ", label %" + trueLabel + "\n"
+}
+
+/// mirCallIndirectVoidLine renders the void-return indirect call
+///   `  call <callType> <fnPtrReg>(<argList>)\n`
+/// Used at closure / fn-pointer call sites where the callee is an
+/// SSA value (loaded from `env[0]`) rather than an `@<symbol>`.
+/// `callType` is the already-formatted full LLVM function type
+/// `<retLLVM> (<params>)` — e.g. `"void (ptr, i64)"`. `argList`
+/// is the already-joined arg string. Sibling of
+/// `mirCallVoidLine` for the direct-symbol case.
+pub fn mirCallIndirectVoidLine(callType: String, fnPtrReg: String, argList: String) -> String {
+    "  call " + callType + " " + fnPtrReg + "(" + argList + ")\n"
+}
+
+/// mirCallIndirectValueLine renders the typed indirect call
+///   `  <reg> = call <callType> <fnPtrReg>(<argList>)\n`
+/// Used at closure / fn-pointer call sites that produce a result.
+/// Sibling of `mirCallValueLine` for the direct-symbol case.
+pub fn mirCallIndirectValueLine(reg: String, callType: String, fnPtrReg: String, argList: String) -> String {
+    "  " + reg + " = call " + callType + " " + fnPtrReg + "(" + argList + ")\n"
+}
