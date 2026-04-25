@@ -3061,7 +3061,15 @@ static int osty_rt_string_compare_bytes(const char *left, const char *right) {
     return strcmp(left, right);
 }
 
-static size_t osty_rt_map_key_hash(int64_t kind, const void *key) {
+/* OSTY_HOT_INLINE: this is a switch-on-`kind` whose argument is a
+ * compile-time constant in every Map op call site (the keyed wrapper
+ * passes `map->key_kind` which is a struct-load LLVM proves equal to
+ * the same load done by the cast / find_index path, and the C runtime
+ * sees the dispatch fold to a single arm because each call site
+ * threads through one keyed `_<suffix>` wrapper). Forcing inline lets
+ * ThinLTO collapse the switch to the chosen arm and CSE the load
+ * against neighboring map field reads. */
+static OSTY_HOT_INLINE size_t osty_rt_map_key_hash(int64_t kind, const void *key) {
     switch (kind) {
     case OSTY_RT_ABI_I64:
     case OSTY_RT_ABI_F64: {
@@ -6632,7 +6640,7 @@ static void osty_rt_map_reserve(osty_rt_map *map, int64_t min_cap) {
     map->cap = next_cap;
 }
 
-static int64_t osty_rt_map_find_index_linear(osty_rt_map *map, const void *key) {
+static OSTY_HOT_INLINE int64_t osty_rt_map_find_index_linear(osty_rt_map *map, const void *key) {
     int64_t i;
     size_t key_size = osty_rt_kind_size(map->key_kind);
     for (i = 0; i < map->len; i++) {
@@ -6666,14 +6674,21 @@ static int64_t osty_rt_map_find_index_indexed(osty_rt_map *map, const void *key)
     }
 }
 
-static int64_t osty_rt_map_find_index(osty_rt_map *map, const void *key) {
+/* OSTY_HOT_INLINE on the dispatcher only — `find_index_indexed` (with
+ * the probe loop) and `find_index_linear` (small-map scan) keep their
+ * out-of-line forms because either body has enough instructions that
+ * inlining at every Map call site would balloon code. ThinLTO still
+ * has the option to inline opportunistically, but the dispatcher
+ * itself is just a branch + call, worth always inlining so the
+ * branch can fold to the indexed path once `index_cap > 0`. */
+static OSTY_HOT_INLINE int64_t osty_rt_map_find_index(osty_rt_map *map, const void *key) {
     if (map->index_cap > 0 && map->index_slots != NULL) {
         return osty_rt_map_find_index_indexed(map, key);
     }
     return osty_rt_map_find_index_linear(map, key);
 }
 
-static osty_rt_map *osty_rt_map_cast(void *raw_map) {
+static OSTY_HOT_INLINE osty_rt_map *osty_rt_map_cast(void *raw_map) {
     if (raw_map == NULL) {
         osty_rt_abort("map is null");
     }
@@ -6726,7 +6741,15 @@ void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, 
 // In pure-main-thread programs that's 100% overhead on every
 // Map op — common case for CLI tools, build workloads, and the
 // whole osty-vs-go benchmark suite.
-void osty_rt_map_lock(void *raw_map) {
+/* OSTY_HOT_INLINE on lock/unlock: in single-mutator programs (every
+ * benchmark in the suite, every CLI tool) every Map op pays a
+ * lock+unlock pair where both bodies short-circuit on the
+ * `osty_concurrent_workers == 0` check. Forcing inline lets ThinLTO
+ * collapse the pair to a pair of branches, then CSE the `cast` /
+ * `gc_load_v1` against the actual `_raw` op's cast, then DCE the
+ * branches once it sees the constant flag flow. Net: 2 cross-TU
+ * function calls + 2 redundant `gc_load_v1`s removed per Map op. */
+OSTY_HOT_INLINE void osty_rt_map_lock(void *raw_map) {
     if (!osty_rt_runtime_has_concurrency()) return;
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     if (map == NULL || !map->mu_init) return;
@@ -6734,7 +6757,7 @@ void osty_rt_map_lock(void *raw_map) {
     osty_rt_rmu_lock(&map->mu);
 }
 
-void osty_rt_map_unlock(void *raw_map) {
+OSTY_HOT_INLINE void osty_rt_map_unlock(void *raw_map) {
     if (!osty_rt_runtime_has_concurrency()) return;
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     if (map == NULL || !map->mu_init) return;
@@ -6742,12 +6765,12 @@ void osty_rt_map_unlock(void *raw_map) {
     osty_rt_rmu_unlock(&map->mu);
 }
 
-static bool osty_rt_map_contains_raw(void *raw_map, const void *key) {
+static OSTY_HOT_INLINE bool osty_rt_map_contains_raw(void *raw_map, const void *key) {
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     return map != NULL && osty_rt_map_find_index(map, key) >= 0;
 }
 
-static void osty_rt_map_insert_raw(void *raw_map, const void *key, const void *value) {
+static OSTY_HOT_INLINE void osty_rt_map_insert_raw(void *raw_map, const void *key, const void *value) {
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     int64_t index;
     size_t key_size;
@@ -6803,7 +6826,7 @@ static bool osty_rt_map_remove_raw(void *raw_map, const void *key) {
     return true;
 }
 
-static void osty_rt_map_get_or_abort_raw(void *raw_map, const void *key, void *out_value) {
+static OSTY_HOT_INLINE void osty_rt_map_get_or_abort_raw(void *raw_map, const void *key, void *out_value) {
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     int64_t index;
     if (map == NULL || key == NULL || out_value == NULL) {
@@ -6822,7 +6845,7 @@ static void osty_rt_map_get_or_abort_raw(void *raw_map, const void *key, void *o
 // the LLVM layer use the return to construct an Option<V>, then feed
 // it into `??`, `match`, `.isSome()`, etc. without needing per-helper
 // special-case lowering.
-static bool osty_rt_map_get_raw(void *raw_map, const void *key, void *out_value) {
+static OSTY_HOT_INLINE bool osty_rt_map_get_raw(void *raw_map, const void *key, void *out_value) {
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     int64_t index;
     if (map == NULL || key == NULL || out_value == NULL) {
@@ -6957,32 +6980,43 @@ void *osty_rt_map_keys_sorted_i64(void *raw_map) {
 // from a user callback (e.g. counts.len() inside f) don't deadlock.
 // key_at snapshots the key under the lock — the return is by-value so
 // the caller doesn't hold any reference past unlock.
+/* OSTY_HOT_INLINE on the keyed Map wrappers: every Map op the IR emits
+ * lands on one of these (`get_<suffix>`, `contains_<suffix>`, etc.).
+ * Without `always_inline`, ThinLTO weighs the wrapper body — lock +
+ * raw + unlock — against its size budget and routinely leaves it
+ * out-of-line, even though every part is itself a tiny inlinable
+ * helper. Forcing inline lets ThinLTO unfold the whole get path at
+ * the call site so it can CSE the three internal `osty_gc_load_v1`
+ * calls (cast inside lock, raw, unlock) and DCE the
+ * single-mutator-skip branches in lock/unlock against the constant
+ * `osty_concurrent_workers` flag. Mirrors the rationale for List
+ * ops at the top of this file (`OSTY_HOT_INLINE` doc). */
 #define OSTY_RT_DEFINE_MAP_KEY_OPS(suffix, ctype) \
-bool osty_rt_map_contains_##suffix(void *raw_map, ctype key) { \
+OSTY_HOT_INLINE bool osty_rt_map_contains_##suffix(void *raw_map, ctype key) { \
     bool r; \
     osty_rt_map_lock(raw_map); \
     r = osty_rt_map_contains_raw(raw_map, &key); \
     osty_rt_map_unlock(raw_map); \
     return r; \
 } \
-void osty_rt_map_insert_##suffix(void *raw_map, ctype key, const void *value) { \
+OSTY_HOT_INLINE void osty_rt_map_insert_##suffix(void *raw_map, ctype key, const void *value) { \
     osty_rt_map_lock(raw_map); \
     osty_rt_map_insert_raw(raw_map, &key, value); \
     osty_rt_map_unlock(raw_map); \
 } \
-bool osty_rt_map_remove_##suffix(void *raw_map, ctype key) { \
+OSTY_HOT_INLINE bool osty_rt_map_remove_##suffix(void *raw_map, ctype key) { \
     bool r; \
     osty_rt_map_lock(raw_map); \
     r = osty_rt_map_remove_raw(raw_map, &key); \
     osty_rt_map_unlock(raw_map); \
     return r; \
 } \
-void osty_rt_map_get_or_abort_##suffix(void *raw_map, ctype key, void *out_value) { \
+OSTY_HOT_INLINE void osty_rt_map_get_or_abort_##suffix(void *raw_map, ctype key, void *out_value) { \
     osty_rt_map_lock(raw_map); \
     osty_rt_map_get_or_abort_raw(raw_map, &key, out_value); \
     osty_rt_map_unlock(raw_map); \
 } \
-bool osty_rt_map_get_##suffix(void *raw_map, ctype key, void *out_value) { \
+OSTY_HOT_INLINE bool osty_rt_map_get_##suffix(void *raw_map, ctype key, void *out_value) { \
     bool r; \
     osty_rt_map_lock(raw_map); \
     r = osty_rt_map_get_raw(raw_map, &key, out_value); \

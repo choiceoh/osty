@@ -2190,6 +2190,21 @@ pub fn llvmClangLinkBinaryArgs(
     // pre-LTO runtime archives.
     args.push("-O3")
     args.push("-flto=thin")
+    // Bump ThinLTO's per-callsite import-instruction budget. The
+    // default `-import-instr-limit=100` is tuned for general C/C++
+    // workloads where most cross-TU calls are tiny accessors;
+    // Osty's runtime hot path (`osty_rt_map_get_string` and friends)
+    // expands to ~150-300 instructions once the lock+raw+unlock
+    // chain inlines, so the importer leaves the wrapper out-of-line
+    // even though it carries `__attribute__((always_inline))`.
+    // Lifting the limit lets the importer pull in the full body and
+    // honour the directive — observable as the wrapper symbol no
+    // longer appearing as a `bl` target in the benchmark binaries'
+    // hot loops. 500 is enough for every Map-keyed wrapper's
+    // transitive expansion without bloating import time on cold
+    // call sites (the importer still respects function-attribute
+    // hints, so cold calls don't pay the import cost).
+    args.push("-Wl,-mllvm,-import-instr-limit=500")
     for objectPath in objectPaths {
         args.push(objectPath)
     }
