@@ -108,8 +108,8 @@ type mirGen struct {
 	out strings.Builder
 
 	// Per-function state (cleared between functions).
-	fn          *mir.Function
-	tempSeq     int
+	fn  *mir.Function
+	seq MirSeq // SSA / label sequence counter — Phase B Osty mirror
 	blockLabels map[mir.BlockID]string
 	localSlots  map[mir.LocalID]string
 	fnBuf       strings.Builder
@@ -1572,7 +1572,7 @@ func (g *mirGen) declareRuntime(name, signature string) {
 
 func (g *mirGen) emitFunction(fn *mir.Function) error {
 	g.fn = fn
-	g.tempSeq = 0
+	g.seq.Reset()
 	g.blockLabels = map[mir.BlockID]string{}
 	g.localSlots = map[mir.LocalID]string{}
 	g.fnBuf.Reset()
@@ -9635,26 +9635,26 @@ func (g *mirGen) llvmTypeForTupleTag(t mir.Type) string {
 	return "opaque"
 }
 
+// fresh / freshLabel delegate to the Osty-mirrored MirSeq state
+// (`toolchain/mir_generator.osty:932`). Keeping the wrapper methods
+// preserves the call shape across the 290+ existing call sites; the
+// counter itself moves to `g.seq`.
 func (g *mirGen) fresh() string {
-	name := fmt.Sprintf("%%t%d", g.tempSeq)
-	g.tempSeq++
-	return name
+	return g.seq.Fresh()
 }
 
 func (g *mirGen) freshLabel(prefix string) string {
-	label := fmt.Sprintf("%s.%d", prefix, g.tempSeq)
-	g.tempSeq++
-	return label
+	return g.seq.FreshLabel(prefix)
 }
 
 // ostyEmitter returns an LlvmEmitter whose temp counter is seeded from
-// g.tempSeq. Call any Osty-authored emission helper (llvmListNew,
+// `g.seq.TempSeq`. Call any Osty-authored emission helper (llvmListNew,
 // llvmListPush, …) against the returned emitter, then splice the
 // accumulated body into g.fnBuf via flushOstyEmitter. This is the
 // adapter that lets mir_generator.go delegate actual LLVM text to
 // toolchain/llvmgen.osty without double-counting temps.
 func (g *mirGen) ostyEmitter() *LlvmEmitter {
-	return &LlvmEmitter{temp: g.tempSeq, body: nil}
+	return &LlvmEmitter{temp: g.seq.TempSeq, body: nil}
 }
 
 // flushOstyEmitter writes the emitter's body lines into g.fnBuf and
@@ -9662,7 +9662,7 @@ func (g *mirGen) ostyEmitter() *LlvmEmitter {
 // carries its leading 2-space indent — we only need to add the
 // trailing newline.
 func (g *mirGen) flushOstyEmitter(em *LlvmEmitter) {
-	g.tempSeq = em.temp
+	g.seq.TempSeq = em.temp
 	for _, line := range em.body {
 		g.fnBuf.WriteString(line)
 		g.fnBuf.WriteByte('\n')

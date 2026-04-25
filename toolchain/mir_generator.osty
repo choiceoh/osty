@@ -869,3 +869,91 @@ pub fn mirRuntimeDeclareNoReturn(retTy: String, sym: String, argList: String, co
     }
     prefix
 }
+
+/// mirGenIntToString converts a non-negative integer to its decimal
+/// representation. Mirrors `mirLowerIntToString` in
+/// `toolchain/mir_lower.osty`; kept local here so the MIR-emitter
+/// surface stays self-contained while self-host stdlib still lacks
+/// `Int.toString`. Negative inputs prepend a `-` for completeness even
+/// though the emitter never feeds negative SSA / label sequence numbers.
+pub fn mirGenIntToString(n: Int) -> String {
+    if n == 0 {
+        return "0"
+    }
+    let mut negative = false
+    let mut value = n
+    if value < 0 {
+        negative = true
+        value = 0 - value
+    }
+    let mut digits: List<String> = []
+    for value > 0 {
+        let d = value % 10
+        digits.push(mirGenDigitChar(d))
+        value = value / 10
+    }
+    let mut out = ""
+    if negative {
+        out = "-"
+    }
+    let mut i = digits.len() - 1
+    for i >= 0 {
+        out = out + digits[i]
+        i = i - 1
+    }
+    out
+}
+
+/// mirGenDigitChar returns the ASCII decimal character for a digit
+/// `d` in `[0..9]`. Used by `mirGenIntToString`'s reverse-walk
+/// accumulator. Out-of-range inputs return `"?"` so a malformed
+/// digit is visible in the output rather than silently swallowed.
+pub fn mirGenDigitChar(d: Int) -> String {
+    if d == 0 { return "0" }
+    if d == 1 { return "1" }
+    if d == 2 { return "2" }
+    if d == 3 { return "3" }
+    if d == 4 { return "4" }
+    if d == 5 { return "5" }
+    if d == 6 { return "6" }
+    if d == 7 { return "7" }
+    if d == 8 { return "8" }
+    if d == 9 { return "9" }
+    "?"
+}
+
+/// MirSeq is the SSA / basic-block sequence-number state carried by
+/// the MIR emitter. Mirrors `g.tempSeq` on the Go side. This is the
+/// first piece of `MirGen` state to land in Osty as a real mutable
+/// model — the `mut self` methods bump the counter so callers don't
+/// have to thread the increment through. Phase B start: subsequent
+/// state moves (`g.fnBuf`, `g.declares`, etc.) will join this
+/// struct as the Go emitter shrinks.
+pub struct MirSeq {
+    pub tempSeq: Int,
+
+    /// fresh issues a fresh `%tN` SSA register name and bumps the
+    /// counter. Mirrors `func (g *mirGen) fresh()` in the Go source —
+    /// the only behavioural difference is that the seq lives on
+    /// `MirSeq` instead of directly on `mirGen`.
+    pub fn fresh(mut self) -> String {
+        let name = "%t" + mirGenIntToString(self.tempSeq)
+        self.tempSeq = self.tempSeq + 1
+        name
+    }
+
+    /// freshLabel issues a fresh basic-block label `<prefix>.N` and
+    /// bumps the counter. Same SSA-namespace as `fresh` so labels and
+    /// register names never collide on `N`.
+    pub fn freshLabel(mut self, prefix: String) -> String {
+        let name = prefix + "." + mirGenIntToString(self.tempSeq)
+        self.tempSeq = self.tempSeq + 1
+        name
+    }
+
+    /// reset zeroes the counter at function-emission boundaries.
+    /// Mirrors `g.tempSeq = 0` at the top of `emitFunction`.
+    pub fn reset(mut self) {
+        self.tempSeq = 0
+    }
+}
