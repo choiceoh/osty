@@ -436,6 +436,21 @@ typedef struct osty_gc_header {
     void *payload;
 } osty_gc_header;
 
+/* Inline storage for short lists. The Split / Fields / `[lit]` /
+ * cache-rebuild patterns that dominate the benchmark suite typically
+ * produce 1-4 element lists; without inline storage each one paid a
+ * `realloc(NULL, 32)` data buffer alloc on first push (initial
+ * `cap=4`, ptr elements). That malloc is the second-largest alloc
+ * source after Concat strings on the String-heavy benches.
+ *
+ * 32 bytes covers the 4-element ptr / i64 / f64 case without
+ * inflating the list header by more than a cache line. Element
+ * sizes 1/4 (i8/i32) get more inline slots (32/8 elements); the
+ * struct-element path (List<Record>) never fits inline because
+ * record sizes are typically >= 16 bytes. Larger lists transparently
+ * spill to a heap data buffer once `len * elem_size > 32`. */
+#define OSTY_RT_LIST_INLINE_BYTES 32
+
 typedef struct osty_rt_list {
     int64_t len;
     int64_t cap;
@@ -445,6 +460,13 @@ typedef struct osty_rt_list {
     int64_t gc_offset_count;
     int64_t *gc_offsets;
     unsigned char *data;
+    /* Inline storage: `data` points here while the list fits, and
+     * gets repointed to a heap buffer once `osty_rt_list_reserve`
+     * needs more bytes. `osty_rt_list_destroy` distinguishes the
+     * two cases by `data == inline_storage` to avoid `free`-ing the
+     * inline region. The trace callback walks `data` regardless,
+     * so it just works for both layouts. */
+    unsigned char inline_storage[OSTY_RT_LIST_INLINE_BYTES];
 } osty_rt_list;
 
 #define OSTY_RT_MAP_INLINE_INDEX_CAP 64
@@ -2911,7 +2933,12 @@ static void osty_rt_list_destroy(void *payload) {
     osty_rt_list *list = (osty_rt_list *)payload;
     if (list != NULL) {
         free(list->gc_offsets);
-        free(list->data);
+        /* `inline_storage` is part of the managed allocation, not a
+         * separate malloc, so only free `data` if it was spilled
+         * to heap. */
+        if (list->data != list->inline_storage) {
+            free(list->data);
+        }
     }
 }
 
@@ -3605,6 +3632,20 @@ static osty_gc_header *osty_gc_clone_header_to_bump_region(
         return NULL;
     }
     memcpy(clone->payload, header->payload, (size_t)header->byte_size);
+    /* Post-copy: fix up self-referential pointers in the cloned
+     * payload. List uses `data == &inline_storage` while small;
+     * the byte-by-byte memcpy carries the OLD inline_storage
+     * address into the new payload, so subsequent destroy/access
+     * would dereference the stale region. Repoint to the new
+     * inline_storage. Map / Channel handle their own self-refs
+     * via dedicated clone helpers above. */
+    if (header->object_kind == OSTY_GC_KIND_LIST) {
+        osty_rt_list *old_list = (osty_rt_list *)header->payload;
+        osty_rt_list *new_list = (osty_rt_list *)clone->payload;
+        if (new_list->data == old_list->inline_storage) {
+            new_list->data = new_list->inline_storage;
+        }
+    }
     return clone;
 }
 
@@ -4588,6 +4629,18 @@ static void osty_rt_list_reserve(osty_rt_list *list, int64_t min_cap) {
     if (list->elem_size == 0) {
         osty_rt_abort("list element size is zero");
     }
+    /* Inline-storage fast path. While the requested element count
+     * fits in OSTY_RT_LIST_INLINE_BYTES, just bump `cap` to the
+     * inline ceiling — no allocation. `data` was set to
+     * `inline_storage` by `osty_rt_list_new` and stays there until
+     * the first time we spill to heap below. The first spill copies
+     * the inline contents into the new heap buffer; subsequent
+     * grows are plain `realloc`s. */
+    int64_t inline_cap = (int64_t)(OSTY_RT_LIST_INLINE_BYTES / list->elem_size);
+    if (list->cap == 0 && list->data == list->inline_storage && min_cap <= inline_cap) {
+        list->cap = inline_cap;
+        return;
+    }
     if (next_cap < 4) {
         next_cap = 4;
     }
@@ -4602,9 +4655,23 @@ static void osty_rt_list_reserve(osty_rt_list *list, int64_t min_cap) {
     if (list->elem_size != 0 && want_bytes / list->elem_size != (size_t)next_cap) {
         osty_rt_abort("list allocation overflow");
     }
-    next_data = realloc(list->data, want_bytes);
-    if (next_data == NULL) {
-        osty_rt_abort("out of memory");
+    /* Spill from inline → heap: malloc + memcpy the inline contents.
+     * Subsequent calls hit the regular realloc path because `data`
+     * now points outside the inline region. */
+    if (list->data == list->inline_storage) {
+        next_data = malloc(want_bytes);
+        if (next_data == NULL) {
+            osty_rt_abort("out of memory");
+        }
+        if (list->len > 0) {
+            memcpy(next_data, list->inline_storage,
+                   (size_t)list->len * list->elem_size);
+        }
+    } else {
+        next_data = realloc(list->data, want_bytes);
+        if (next_data == NULL) {
+            osty_rt_abort("out of memory");
+        }
     }
     list->data = (unsigned char *)next_data;
     list->cap = next_cap;
@@ -4741,9 +4808,20 @@ static bool osty_rt_f64_same_bits(double left, double right) {
  * Repeat/etc. internal helper lower to a list_new at the call site.
  * Body is one `osty_gc_allocate_managed` + zero-init of the small
  * header; inlining lets ThinLTO see the const-zero stores and
- * fold them away when the immediate next use is a push. */
+ * fold them away when the immediate next use is a push.
+ *
+ * Post-inline-storage: `data` is initialised to the inline region so
+ * the first push doesn't have to malloc a separate buffer. The
+ * `cap` stays 0 — `osty_rt_list_reserve` populates it lazily once
+ * `elem_size` is known (the list_new path doesn't yet know the
+ * element type; that gets locked in at first push via
+ * `osty_rt_list_ensure_layout`). */
 OSTY_HOT_INLINE void *osty_rt_list_new(void) {
-    return osty_gc_allocate_managed(sizeof(osty_rt_list), OSTY_GC_KIND_LIST, "runtime.list", osty_rt_list_trace, osty_rt_list_destroy);
+    osty_rt_list *list = (osty_rt_list *)osty_gc_allocate_managed(
+        sizeof(osty_rt_list), OSTY_GC_KIND_LIST, "runtime.list",
+        osty_rt_list_trace, osty_rt_list_destroy);
+    list->data = list->inline_storage;
+    return list;
 }
 
 /* osty_rt_list_cast_fast — direct cast without the osty_gc_load_v1
