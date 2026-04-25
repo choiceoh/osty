@@ -1,0 +1,140 @@
+// id-tracker — Osty side of the end-to-end runtime program benchmark.
+//
+// Mirrors benchmarks/programs/id-tracker/go/main.go byte-for-byte
+// (same deterministic LCG, same id partitioning, same output
+// format) so hyperfine can compare wall-clock cost on a
+// Map<Int, Int>-heavy workload — each iteration does 3 Map ops on
+// i64-keyed maps. Companion to the String-keyed log-aggregator /
+// lru-sim / markdown-stats benches; this one exercises the i64
+// key intrinsic path.
+//
+// Backend constraints:
+//   * No `Int.toString()` / Int interpolation — local `intToStr`.
+//   * Only intrinsic Map<Int, Int> ops (insert/get/getOr/keys/containsKey).
+//   * Insertion sort for top-K so we don't need a comparator-bearing
+//     `sorted` for List<Int>.
+
+fn intToStr(n: Int) -> String {
+    let digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+    if n == 0 {
+        return "0"
+    }
+    let mut x = n
+    let mut neg = false
+    if x < 0 {
+        neg = true
+        x = 0 - x
+    }
+    let mut chunks: List<String> = []
+    for x > 0 {
+        chunks.push(digits[x % 10])
+        x = x / 10
+    }
+    let mut out = ""
+    if neg {
+        out = "-"
+    }
+    let mut i = chunks.len()
+    for i > 0 {
+        i = i - 1
+        out = out + chunks[i]
+    }
+    out
+}
+
+fn generateEvents(n: Int) -> List<Int> {
+    let mut out: List<Int> = []
+    let mut state = 1
+    let mut i = 0
+    for i < n {
+        state = (state * 1103515245 + 12345) % 2147483648
+        out.push(state)
+        i = i + 1
+    }
+    out
+}
+
+fn main() {
+    let n = 50000
+    let events = generateEvents(n)
+    // 256 distinct ids; ~70% bias toward hot bucket.
+    let hotKeys = 32
+    let coldKeys = 224
+    let mut counts: Map<Int, Int> = {:}
+    let mut sums: Map<Int, Int> = {:}
+    let mut firstSeen: Map<Int, Int> = {:}
+
+    let mut idx = 0
+    for idx < events.len() {
+        let ev = events[idx]
+        let mut id = 0
+        if ev % 100 < 70 {
+            id = ev % hotKeys
+        } else {
+            id = hotKeys + (ev / 8) % coldKeys
+        }
+        let value = (ev / 1024) % 1000
+        counts.insert(id, counts.getOr(id, 0) + 1)
+        sums.insert(id, sums.getOr(id, 0) + value)
+        if !firstSeen.containsKey(id) {
+            firstSeen.insert(id, idx)
+        }
+        idx = idx + 1
+    }
+
+    // Aggregate totals (verifier sanity columns).
+    let mut totalCount = 0
+    let mut totalSum = 0
+    let allIds = counts.keys()
+    let mut k = 0
+    for k < allIds.len() {
+        totalCount = totalCount + counts.getOr(allIds[k], 0)
+        totalSum = totalSum + sums.getOr(allIds[k], 0)
+        k = k + 1
+    }
+
+    // Top 10 by count desc, id asc tiebreak.
+    // First build present-id list in id-asc order so insertion sort
+    // by count desc preserves id-asc on ties.
+    let mut ids: List<Int> = []
+    let totalKeys = hotKeys + coldKeys
+    let mut bid = 0
+    for bid < totalKeys {
+        if counts.containsKey(bid) {
+            ids.push(bid)
+        }
+        bid = bid + 1
+    }
+    let mut i2 = 1
+    for i2 < ids.len() {
+        let mut j = i2
+        for j > 0 {
+            let prev = ids[j - 1]
+            let cur = ids[j]
+            if counts.getOr(prev, 0) < counts.getOr(cur, 0) {
+                ids[j - 1] = cur
+                ids[j] = prev
+                j = j - 1
+            } else {
+                break
+            }
+        }
+        i2 = i2 + 1
+    }
+    let topK = if ids.len() < 10 { ids.len() } else { 10 }
+
+    println("events: " + intToStr(n))
+    println("distinct: " + intToStr(allIds.len()))
+    println("total_count: " + intToStr(totalCount))
+    println("total_sum: " + intToStr(totalSum))
+    println("top:")
+    let mut t = 0
+    for t < topK {
+        let id = ids[t]
+        let c = counts.getOr(id, 0)
+        let s = sums.getOr(id, 0)
+        let f = firstSeen.getOr(id, 0)
+        println("  id=" + intToStr(id) + " count=" + intToStr(c) + " sum=" + intToStr(s) + " first=" + intToStr(f))
+        t = t + 1
+    }
+}

@@ -1,0 +1,17 @@
+# id-tracker — Osty side of the end-to-end runtime program benchmark.
+# Mirrors benchmarks/programs/id-tracker/go/main.go.
+#
+# Map<Int, Int>-heavy workload: each event does 3 Map ops on i64-keyed
+# maps (counts / sums / firstSeen). Designed to exercise the i64 key
+# Map intrinsic path the way log-aggregator/lru-sim/markdown-stats
+# exercise the String key path.
+#
+#     osty build
+#     osty run
+
+[package]
+name = "id-tracker"
+version = "0.1.0"
+edition = "0.4"
+
+[dependencies]
