@@ -3091,9 +3091,16 @@ int main(void) {
 	}
 }
 
-// TestBundledRuntimeValidateHeapNegativeInvariantsPhaseD locks the two
-// new Phase D groundwork invariants: stable ids must stay valid and the
-// stable-id index must agree with the live heap walk.
+// TestBundledRuntimeValidateHeapNegativeInvariantsPhaseD locks the
+// stable-id sanity invariant: a header whose `stable_id` is forged to
+// 0 must surface as VALIDATE_INVALID_STABLE_ID. The companion
+// "identity_index" sub-case (which used to assert that removing a
+// header from the identity hash surfaced as a mismatch) was retired
+// alongside the lazy identity-insert change in osty_runtime.c — the
+// alloc path no longer mirrors live headers into the hash, so the
+// "remove from hash → mismatch" injection is a no-op in steady state.
+// Per-header lookup still walks the gen lists to detect a forged
+// stable_id (covered by the surviving sub-case).
 func TestBundledRuntimeValidateHeapNegativeInvariantsPhaseD(t *testing.T) {
 	parallelClangBackendTest(t)
 
@@ -3121,7 +3128,6 @@ void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_
 
 int64_t osty_gc_debug_validate_heap(void);
 void osty_gc_debug_unsafe_zero_stable_id(void);
-void osty_gc_debug_unsafe_remove_identity_index_live(void);
 
 static int run_case(const char *name, void (*setup)(void), void (*inject)(void), int64_t expected) {
     pid_t pid = fork();
@@ -3150,7 +3156,6 @@ static void setup_one_object(void) {
 
 int main(void) {
     printf("%d\n", run_case("invalid_stable_id", setup_one_object, osty_gc_debug_unsafe_zero_stable_id, -20));
-    printf("%d\n", run_case("identity_index", setup_one_object, osty_gc_debug_unsafe_remove_identity_index_live, -21));
     return 0;
 }
 `), 0o644); err != nil {
@@ -3165,7 +3170,7 @@ int main(void) {
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
-	if got, want := string(runOutput), "0\n0\n"; got != want {
+	if got, want := string(runOutput), "0\n"; got != want {
 		t.Fatalf("phase-D validate negative harness stdout = %q, want %q", got, want)
 	}
 }
