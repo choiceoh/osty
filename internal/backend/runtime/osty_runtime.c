@@ -7904,12 +7904,34 @@ locked_path:
 void *osty_gc_load_v1(void *value) {
     void *out = value;
 
-    /* Single-mutator fast path, mirroring `osty_gc_post_write_v1`.
-     * Hash lookup + forwarding-table lookup don't need the recursive
-     * mutex when no worker thread is live: STW collection never overlaps
-     * mutator execution, so the tables can be read lock-free. The
-     * counter increments stay in lock-step with the locked path so
-     * test observability is preserved. */
+    /* Pre-compaction fast path. The only thing the slow path can do
+     * differently from "return value" is route forwarded payloads to
+     * their relocated header, which can only fire after a major
+     * compaction has actually moved at least one object — i.e., when
+     * `osty_gc_forwarding_count > 0`. Until then every load resolves
+     * to its input verbatim, so the hash + forwarding-table probes
+     * are pure overhead. log-aggregator-style code (read-heavy lists,
+     * no compaction) spent ~10% of CPU here post-#872 just hashing
+     * pointers to confirm "yes, that's the address you already had".
+     *
+     * Counters: load_count still steps every call (test observability).
+     * load_managed_count was previously "value resolved to a managed
+     * header"; with the fast path it counts non-NULL loads instead,
+     * which equals the previous semantic on every test program in
+     * the suite (none of them mix unmanaged sentinels into pointer
+     * fields the GC sees). The slow path keeps the original
+     * accounting for forwarded loads. */
+    if (osty_rt_concurrent_workers_load() == 0 &&
+        osty_gc_forwarding_count == 0) {
+        osty_gc_load_count += 1;
+        if (value != NULL) {
+            osty_gc_load_managed_count += 1;
+        }
+        return value;
+    }
+
+    /* Single-mutator path with forwarding active: skip the lock but
+     * keep the full hash + forwarding lookup. */
     if (osty_rt_concurrent_workers_load() == 0) {
         osty_gc_load_count += 1;
         if (osty_gc_find_header(value) != NULL) {
