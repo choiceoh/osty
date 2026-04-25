@@ -570,6 +570,104 @@ enum {
     OSTY_GC_STORAGE_BUMP_PINNED = 4,
 };
 
+/* Small-string optimization (SSO).
+ *
+ * Strings of up to 7 bytes are encoded directly inside the
+ * `const char *` pointer rather than allocated on the heap. Eliminates
+ * the `osty_gc_allocate_managed` call entirely for the short-piece
+ * case (split tokens, short interpolation fragments, LCG corpus tags
+ * like "INFO" / "alice" / "login").
+ *
+ * The tag lives in bit 63 — the kernel/user split bit on every
+ * supported 64-bit platform (macOS arm64 / Linux x86_64 / Linux arm64
+ * all use 48-bit virtual addresses for user space, so bit 63 is
+ * always 0 for valid pointers). Bit 0 cannot be used because string
+ * literals from `.rodata` are byte-aligned, not pointer-aligned —
+ * only arena slot allocations have bit 0 == 0.
+ *
+ * Layout:
+ *     bit 63        — tag (always 1 for inline)
+ *     bits 56..58   — length 0..7
+ *     bits 48..55   — reserved (0)
+ *     bits 0..55    — up to 7 bytes of content, byte i at bits (i*8)..(i*8+7)
+ *
+ * Hot paths check the tag and route inline strings through pack /
+ * unpack helpers that operate on the pointer bits directly;
+ * everything else (libc memcpy, strchr, hash cache, fputs) sees a
+ * stack-decoded NUL-terminated buffer when needed. The decode is 7
+ * byte writes plus a NUL — comparable to a strlen on the heap side
+ * and amortized away by the alloc skip on every short-piece dup. */
+#define OSTY_RT_SSO_TAG (((uintptr_t)1) << 63)
+#define OSTY_RT_SSO_MAX_LEN ((size_t)7)
+#define OSTY_RT_SSO_DECODE_BUF_BYTES ((size_t)8)
+#define OSTY_RT_SSO_LEN_SHIFT 56
+
+static inline bool osty_rt_string_is_inline(const char *value) {
+    return ((uintptr_t)value & OSTY_RT_SSO_TAG) != 0;
+}
+
+static inline size_t osty_rt_string_inline_len(const char *value) {
+    return ((uintptr_t)value >> OSTY_RT_SSO_LEN_SHIFT) & 0x7;
+}
+
+static inline unsigned char osty_rt_string_inline_byte(const char *value, size_t i) {
+    /* Returns `unsigned char` for parity with `osty_rt_string_pack_inline`,
+     * which round-trips through `(unsigned char)`. The `char` form would
+     * sign-extend for bytes >= 0x80 in any caller doing arithmetic
+     * promotion (e.g., `b >= 0x80` would always be false on signed-char
+     * platforms because `b` would compare as a negative int). */
+    return (unsigned char)(((uintptr_t)value >> (i * 8)) & 0xff);
+}
+
+static inline const char *osty_rt_string_pack_inline(const char *src, size_t len) {
+    uintptr_t packed = OSTY_RT_SSO_TAG |
+                       (((uintptr_t)len & 0x7) << OSTY_RT_SSO_LEN_SHIFT);
+    size_t i;
+    /* Defensive: if `src` is itself an inline-tagged pointer (the
+     * caller spliced bytes from a Split piece without decoding) we
+     * must read bytes from the pointer bits, not via `src[i]` which
+     * would dereference the encoded content. The branch costs one
+     * tag-bit test on the heap path. */
+    if (osty_rt_string_is_inline(src)) {
+        for (i = 0; i < len; i++) {
+            packed |= ((uintptr_t)(unsigned char)osty_rt_string_inline_byte(src, i)) << (i * 8);
+        }
+    } else {
+        for (i = 0; i < len; i++) {
+            packed |= ((uintptr_t)(unsigned char)src[i]) << (i * 8);
+        }
+    }
+    return (const char *)packed;
+}
+
+static inline void osty_rt_string_inline_decode(const char *value, char *out) {
+    size_t len = osty_rt_string_inline_len(value);
+    size_t i;
+    for (i = 0; i < len; i++) {
+        out[i] = (char)osty_rt_string_inline_byte(value, i);
+    }
+    out[len] = '\0';
+}
+
+static inline void osty_rt_string_decode_to_buf_if_inline(const char **value,
+                                                          char *buf) {
+    if (osty_rt_string_is_inline(*value)) {
+        osty_rt_string_inline_decode(*value, buf);
+        *value = buf;
+    }
+}
+
+static inline void osty_rt_string_copy_bytes(char *dest, const char *src, size_t len) {
+    if (osty_rt_string_is_inline(src)) {
+        size_t i;
+        for (i = 0; i < len; i++) {
+            dest[i] = (char)osty_rt_string_inline_byte(src, i);
+        }
+    } else if (len != 0) {
+        memcpy(dest, src, len);
+    }
+}
+
 /* Closure environment payload. The thunk ABI is preserved — the LLVM
  * call site still does `load ptr, ptr %env` — because `fn_ptr` stays
  * at offset 0. `capture_count` and `pointer_bitmap` follow so the
@@ -2525,6 +2623,13 @@ static osty_gc_header *osty_gc_find_header(void *payload) {
      * non-arena payloads. The linked list `osty_gc_objects` is purely
      * iteration order for mark seeding / sweep / validate. */
     osty_gc_index_find_ops_total += 1;
+    /* SSO inline strings live entirely in the pointer bits and have
+     * no managed header. Reject the tagged form before any range
+     * check or hash probe — both would otherwise interpret the
+     * encoded content as an address. */
+    if (osty_rt_string_is_inline((const char *)payload)) {
+        return NULL;
+    }
     if (osty_gc_arena_contains(payload)) {
         osty_gc_header *candidate =
             (osty_gc_header *)((unsigned char *)payload - sizeof(osty_gc_header));
@@ -2881,7 +2986,21 @@ static void osty_rt_string_measure(const char *value,
                                    size_t *hash_out) {
     size_t len = 0;
     size_t hash = (size_t)osty_rt_hash_mix64(0ULL);
-    if (value != NULL) {
+    if (osty_rt_string_is_inline(value)) {
+        /* SSO fast path: length is in the tag bits and bytes are
+         * packed in the pointer itself. Skip the per-pointer cache
+         * (hashing 7 bytes is cheap and the cache index would
+         * collapse all inline encodings into a small region of
+         * the slot space). */
+        size_t i;
+        uint64_t h = 1469598103934665603ULL;
+        len = osty_rt_string_inline_len(value);
+        for (i = 0; i < len; i++) {
+            h ^= (uint64_t)(unsigned char)osty_rt_string_inline_byte(value, i);
+            h *= 1099511628211ULL;
+        }
+        hash = (size_t)osty_rt_hash_mix64(h);
+    } else if (value != NULL) {
         size_t idx = (size_t)osty_rt_hash_mix64(
                          ((uint64_t)(uintptr_t)value) >> 4) &
                      (OSTY_RT_STRING_CACHE_SLOTS - 1);
@@ -2924,6 +3043,8 @@ static inline size_t osty_rt_string_hash(const char *value) {
 }
 
 static int osty_rt_string_compare_bytes(const char *left, const char *right) {
+    char left_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char right_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
     if (left == right) {
         return 0;
     }
@@ -2933,6 +3054,10 @@ static int osty_rt_string_compare_bytes(const char *left, const char *right) {
     if (right == NULL) {
         return 1;
     }
+    /* SSO: strcmp walks bytes from a real address — decode any
+     * inline operand into a stack buffer first. */
+    osty_rt_string_decode_to_buf_if_inline(&left, left_buf);
+    osty_rt_string_decode_to_buf_if_inline(&right, right_buf);
     return strcmp(left, right);
 }
 
@@ -4529,15 +4654,42 @@ static void osty_rt_list_set_raw(void *raw_list, int64_t index, const void *valu
 
 static char *osty_rt_string_dup_site(const char *start, size_t len, const char *site) {
     char *out = (char *)osty_gc_allocate_managed(len + 1, OSTY_GC_KIND_STRING, site, NULL, NULL);
-    if (len != 0) {
-        memcpy(out, start, len);
-    }
+    /* `start` may be an inline-tagged pointer (caller spliced bytes
+     * out of a Split piece without decoding). `osty_rt_string_copy_bytes`
+     * branches on the tag — heap source uses memcpy, inline source
+     * unpacks byte-by-byte from the pointer bits. The cost is a single
+     * tag-bit test on the heap path, and dup_site is the choke point
+     * for every heap-bound string copy in the runtime. */
+    osty_rt_string_copy_bytes(out, start, len);
     out[len] = '\0';
     return out;
 }
 
+/* SSO-eligible dup. Strings up to 7 bytes pack into the pointer
+ * itself, eliminating the `osty_gc_allocate_managed` call on the
+ * hottest source of short-string allocs (split pieces). The other
+ * `dup_site` callers (int_to_string / bool_to_string / chars / bytes
+ * / case helpers) keep producing heap strings via the unsuffixed
+ * variant — they all flow through `dup_site` whose body is now SSO-
+ * input-safe (`osty_rt_string_copy_bytes`), so callers that splice
+ * bytes from an inline source still work, but the OUTPUT of those
+ * sites stays heap-resident. SSO output is opt-in via this `_sso`
+ * variant so concat/IO-bound producers don't accidentally hand a
+ * tagged pointer to libc.
+ *
+ * `static inline`: single hot caller (`osty_rt_string_dup_range`)
+ * benefits from inlining the length-branch so the constant-length
+ * call sites (single-byte split pieces) fold to a direct
+ * `pack_inline`. */
+static inline char *osty_rt_string_dup_site_sso(const char *start, size_t len, const char *site) {
+    if (len <= OSTY_RT_SSO_MAX_LEN) {
+        return (char *)osty_rt_string_pack_inline(start, len);
+    }
+    return osty_rt_string_dup_site(start, len, site);
+}
+
 static char *osty_rt_string_dup_range(const char *start, size_t len) {
-    return osty_rt_string_dup_site(start, len, "runtime.strings.split.part");
+    return osty_rt_string_dup_site_sso(start, len, "runtime.strings.split.part");
 }
 
 static bool osty_rt_f64_same_bits(double left, double right) {
@@ -5083,12 +5235,29 @@ void *osty_rt_list_slice(void *raw_list, int64_t start, int64_t end) {
 bool osty_rt_strings_Equal(const char *left, const char *right) {
     size_t left_len = 0;
     size_t right_len = 0;
+    char left_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char right_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
     if (left == right) {
+        /* Two SSO inline encodings with identical content always
+         * produce the same packed pointer, so this short-circuit
+         * handles inline-vs-inline equality at no cost. */
         return true;
     }
     if (left == NULL || right == NULL) {
         return false;
     }
+    /* Measure on the ORIGINAL pointers (pre-decode). `osty_rt_string_measure`
+     * is SSO-aware: for inline pointers it pulls length from tag bits;
+     * for heap pointers it walks bytes via the per-pointer length cache.
+     *
+     * Decoding inline operands BEFORE measuring would feed
+     * `osty_rt_string_measure` the address of a stack buffer, and the
+     * length cache (keyed by pointer) would persist stale len/hash for
+     * that stack slot across calls — every subsequent function with the
+     * same stack frame layout would hit a cached entry that says
+     * "length 1, hash X" even though the bytes at that address have
+     * changed. Doing measure first avoids the stack-buffer pollution
+     * and is also faster: if lengths differ, we never need to decode. */
     osty_rt_string_measure(left, &left_len, NULL);
     osty_rt_string_measure(right, &right_len, NULL);
     if (left_len != right_len) {
@@ -5097,6 +5266,11 @@ bool osty_rt_strings_Equal(const char *left, const char *right) {
     if (left_len == 0) {
         return true;
     }
+    /* Now decode inline operands so memcmp sees real bytes. The
+     * decoded buffer's lifetime is this function frame and is only
+     * read by memcmp below — no further measure() calls follow. */
+    osty_rt_string_decode_to_buf_if_inline(&left, left_buf);
+    osty_rt_string_decode_to_buf_if_inline(&right, right_buf);
     return memcmp(left, right, left_len) == 0;
 }
 
@@ -5272,14 +5446,19 @@ const char *osty_rt_float_to_string(double value) {
 
 int64_t osty_rt_strings_Compare(const char *left, const char *right) {
     int result;
+    /* `osty_rt_string_compare_bytes` decodes any inline operand
+     * itself, so we only need to handle the NULL / empty-string
+     * boundary cases here. Inline-tagged pointers always carry
+     * non-zero length (the runtime never packs an empty string),
+     * so `is_inline(x)` implies `x` is non-empty. */
     if (left == NULL) {
-        if (right == NULL || right[0] == '\0') {
+        if (right == NULL || (!osty_rt_string_is_inline(right) && right[0] == '\0')) {
             return 0;
         }
         return -1;
     }
     if (right == NULL) {
-        return left[0] == '\0' ? 0 : 1;
+        return (!osty_rt_string_is_inline(left) && left[0] == '\0') ? 0 : 1;
     }
     result = osty_rt_string_compare_bytes(left, right);
     if (result < 0) {
@@ -5297,9 +5476,13 @@ int64_t osty_rt_strings_Count(const char *value, const char *substr) {
     size_t value_len;
     size_t substr_len;
     int64_t total;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char substr_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     value = (value == NULL) ? "" : value;
     substr = (substr == NULL) ? "" : substr;
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    osty_rt_string_decode_to_buf_if_inline(&substr, substr_buf);
     value_len = strlen(value);
     substr_len = strlen(substr);
     if (substr_len == 0) {
@@ -5317,9 +5500,13 @@ int64_t osty_rt_strings_Count(const char *value, const char *substr) {
 
 int64_t osty_rt_strings_IndexOf(const char *value, const char *substr) {
     const char *next;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char substr_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     value = (value == NULL) ? "" : value;
     substr = (substr == NULL) ? "" : substr;
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    osty_rt_string_decode_to_buf_if_inline(&substr, substr_buf);
     if (substr[0] == '\0') {
         return 0;
     }
@@ -5337,14 +5524,18 @@ int64_t osty_rt_strings_ByteLen(const char *value) {
 const char *osty_rt_strings_Concat(const char *left, const char *right) {
     size_t left_len = osty_rt_string_len(left);
     size_t right_len = osty_rt_string_len(right);
-    char *out = (char *)osty_gc_allocate_managed(left_len + right_len + 1, OSTY_GC_KIND_STRING, "runtime.strings.concat", NULL, NULL);
-    if (left_len != 0) {
-        memcpy(out, left, left_len);
-    }
-    if (right_len != 0) {
-        memcpy(out + left_len, right, right_len);
-    }
-    out[left_len + right_len] = '\0';
+    size_t total_len = left_len + right_len;
+    char *out;
+
+    /* Concat always returns a heap string. SSO is intentionally
+     * scoped to `osty_rt_string_dup_range` (split pieces) so the
+     * pointer-tagged form never escapes to runtime callers that
+     * pass strings to libc directly (printf %s, fputs, etc.).
+     * Inline operands are decoded via `osty_rt_string_copy_bytes`. */
+    out = (char *)osty_gc_allocate_managed(total_len + 1, OSTY_GC_KIND_STRING, "runtime.strings.concat", NULL, NULL);
+    osty_rt_string_copy_bytes(out, left, left_len);
+    osty_rt_string_copy_bytes(out + left_len, right, right_len);
+    out[total_len] = '\0';
     return out;
 }
 
@@ -5359,6 +5550,9 @@ const char *osty_rt_strings_Concat(const char *left, const char *right) {
 const char *osty_rt_strings_ConcatN(int64_t count, const char *const *parts) {
     size_t total = 0;
     int64_t i;
+    char *out;
+    char *cursor;
+
     if (count > 0 && parts != NULL) {
         for (i = 0; i < count; i++) {
             if (parts[i] != NULL) {
@@ -5366,18 +5560,20 @@ const char *osty_rt_strings_ConcatN(int64_t count, const char *const *parts) {
             }
         }
     }
-    char *out = (char *)osty_gc_allocate_managed(total + 1, OSTY_GC_KIND_STRING, "runtime.strings.concat_n", NULL, NULL);
-    char *cursor = out;
+    /* Same heap-only contract as `osty_rt_strings_Concat`: SSO is
+     * confined to `osty_rt_string_dup_range`. Concat results stay
+     * heap-resident so callers passing the pointer to libc routines
+     * (printf %s, fputs) don't crash. */
+    out = (char *)osty_gc_allocate_managed(total + 1, OSTY_GC_KIND_STRING, "runtime.strings.concat_n", NULL, NULL);
+    cursor = out;
     if (count > 0 && parts != NULL) {
         for (i = 0; i < count; i++) {
             if (parts[i] == NULL) {
                 continue;
             }
             size_t n = osty_rt_string_len(parts[i]);
-            if (n != 0) {
-                memcpy(cursor, parts[i], n);
-                cursor += n;
-            }
+            osty_rt_string_copy_bytes(cursor, parts[i], n);
+            cursor += n;
         }
     }
     *cursor = '\0';
@@ -5385,9 +5581,15 @@ const char *osty_rt_strings_ConcatN(int64_t count, const char *const *parts) {
 }
 
 bool osty_rt_strings_Contains(const char *value, const char *substr) {
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char substr_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
     if (value == NULL || substr == NULL) {
         return false;
     }
+    /* SSO: decode inline operands so libc's strstr sees real
+     * NUL-terminated bytes. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    osty_rt_string_decode_to_buf_if_inline(&substr, substr_buf);
     if (substr[0] == '\0') {
         return true;
     }
@@ -5396,24 +5598,35 @@ bool osty_rt_strings_Contains(const char *value, const char *substr) {
 
 bool osty_rt_strings_HasPrefix(const char *value, const char *prefix) {
     size_t prefix_len;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char prefix_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
     if (value == NULL || prefix == NULL) {
         return false;
     }
+    /* Measure pre-decode to avoid the stack-buffer cache pollution
+     * described in `osty_rt_strings_Equal`. */
     prefix_len = osty_rt_string_len(prefix);
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    osty_rt_string_decode_to_buf_if_inline(&prefix, prefix_buf);
     return strncmp(value, prefix, prefix_len) == 0;
 }
 
 bool osty_rt_strings_HasSuffix(const char *value, const char *suffix) {
     size_t value_len;
     size_t suffix_len;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char suffix_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
     if (value == NULL || suffix == NULL) {
         return false;
     }
+    /* Same pre-decode measurement: see `osty_rt_strings_Equal`. */
     value_len = osty_rt_string_len(value);
     suffix_len = osty_rt_string_len(suffix);
     if (suffix_len > value_len) {
         return false;
     }
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    osty_rt_string_decode_to_buf_if_inline(&suffix, suffix_buf);
     return strncmp(value + (value_len - suffix_len), suffix, suffix_len) == 0;
 }
 
@@ -5422,10 +5635,20 @@ void *osty_rt_strings_Split(const char *value, const char *sep) {
     const char *cursor;
     const char *next;
     size_t sep_len;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char sep_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     if (value == NULL) {
         return out;
     }
+    /* SSO: decode inline operands so the libc routines (strchr /
+     * strstr / strlen) and the byte-walking inner loop see real
+     * addresses. The decoded buffer's lifetime is this function
+     * frame — fine because we re-dup every piece via
+     * `osty_rt_string_dup_range` (which itself may pack inline)
+     * before `value_buf` goes out of scope. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    osty_rt_string_decode_to_buf_if_inline(&sep, sep_buf);
     if (sep == NULL || sep[0] == '\0') {
         while (*value != '\0') {
             char *piece = osty_rt_string_dup_range(value, 1);
@@ -5476,6 +5699,8 @@ void osty_rt_strings_SplitInto(void *raw_out, const char *value, const char *sep
     const char *cursor;
     const char *next;
     size_t sep_len;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char sep_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     if (raw_out == NULL) {
         osty_rt_abort("split_into out is null");
@@ -5488,6 +5713,9 @@ void osty_rt_strings_SplitInto(void *raw_out, const char *value, const char *sep
     if (value == NULL) {
         return;
     }
+    /* SSO: see `osty_rt_strings_Split` rationale. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    osty_rt_string_decode_to_buf_if_inline(&sep, sep_buf);
     if (sep == NULL || sep[0] == '\0') {
         while (*value != '\0') {
             char *piece = osty_rt_string_dup_range(value, 1);
@@ -5536,6 +5764,8 @@ void *osty_rt_strings_SplitN(const char *value, const char *sep, int64_t n) {
     const char *next;
     size_t sep_len;
     int64_t produced;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char sep_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     if (n == 0) {
         return osty_rt_list_new();
@@ -5547,6 +5777,14 @@ void *osty_rt_strings_SplitN(const char *value, const char *sep, int64_t n) {
     if (value == NULL) {
         osty_rt_list_push_ptr(out, osty_rt_string_dup_range("", 0));
         return out;
+    }
+    /* SSO: byte-walking + strstr/strlen below need real addresses.
+     * Pieces are still re-dup'd via `osty_rt_string_dup_range` (which
+     * itself may pack them inline) before `value_buf` goes out of
+     * scope, so the stack lifetime is safe. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    if (sep != NULL) {
+        osty_rt_string_decode_to_buf_if_inline(&sep, sep_buf);
     }
     if (n == 1) {
         osty_rt_list_push_ptr(out, osty_rt_string_dup_range(value, strlen(value)));
@@ -5585,10 +5823,13 @@ void *osty_rt_strings_Fields(const char *value) {
     osty_rt_list *out = (osty_rt_list *)osty_rt_list_new();
     const char *cursor;
     const char *start;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     if (value == NULL) {
         return out;
     }
+    /* SSO: per-byte iteration via `*cursor` requires a real address. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
     cursor = value;
     while (*cursor != '\0') {
         while (*cursor == ' ' || *cursor == '\t' || *cursor == '\n' ||
@@ -5624,9 +5865,12 @@ void *osty_rt_strings_Fields(const char *value) {
 // + `load i32` on the read side mirrors the push layout.
 void *osty_rt_strings_Chars(const char *value) {
     osty_rt_list *out = (osty_rt_list *)osty_rt_list_new();
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
     if (value == NULL) {
         return out;
     }
+    /* SSO: byte iteration via `*cursor++` requires a real address. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
 
     const unsigned char *cursor = (const unsigned char *)value;
     while (*cursor != '\0') {
@@ -5724,11 +5968,13 @@ void *osty_rt_strings_Bytes(const char *value) {
     size_t n;
     size_t i;
     int8_t item;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     out = (osty_rt_list *)osty_rt_list_new();
     if (value == NULL) {
         return out;
     }
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
     cursor = (const unsigned char *)value;
     n = osty_rt_string_len(value);
     for (i = 0; i < n; i++) {
@@ -5774,12 +6020,18 @@ const char *osty_rt_strings_Join(void *raw_parts, const char *sep) {
         if (piece != NULL) {
             piece_len = osty_rt_string_len(piece);
             if (piece_len != 0) {
-                memcpy(cursor, piece, piece_len);
+                /* SSO: list elements may be inline-tagged (Split
+                 * pieces are the typical Join input), so the copy
+                 * routes through `osty_rt_string_copy_bytes` which
+                 * branches on the tag. */
+                osty_rt_string_copy_bytes(cursor, piece, piece_len);
                 cursor += piece_len;
             }
         }
         if (i + 1 < count && sep_len != 0) {
-            memcpy(cursor, sep, sep_len);
+            /* `sep` may also be inline (e.g., a single-char Split
+             * delimiter that was itself stored as a tagged constant). */
+            osty_rt_string_copy_bytes(cursor, sep, sep_len);
             cursor += sep_len;
         }
     }
@@ -5793,11 +6045,17 @@ const char *osty_rt_strings_Repeat(const char *value, int64_t n) {
     char *out;
     char *cursor;
     int64_t i;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     value = (value == NULL) ? "" : value;
     if (n <= 0) {
         return osty_rt_string_dup_site("", 0, "runtime.strings.repeat.empty");
     }
+    /* SSO: `osty_rt_string_len` is tag-aware, but the body's
+     * `memcpy(cursor, value, value_len)` reads from `value` directly
+     * — decode inline operands once at entry so the per-iteration
+     * copy stays a plain memcpy. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
     value_len = osty_rt_string_len(value);
     if (value_len == 0) {
         return osty_rt_string_dup_site("", 0, "runtime.strings.repeat.empty");
@@ -5825,10 +6083,17 @@ const char *osty_rt_strings_Replace(const char *value, const char *old, const ch
     size_t suffix_len;
     size_t total;
     char *out;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char old_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char new_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     value = (value == NULL) ? "" : value;
     old = (old == NULL) ? "" : old;
     new_value = (new_value == NULL) ? "" : new_value;
+    /* SSO: strstr/strlen/memcpy below all need real addresses. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    osty_rt_string_decode_to_buf_if_inline(&old, old_buf);
+    osty_rt_string_decode_to_buf_if_inline(&new_value, new_buf);
     value_len = strlen(value);
     old_len = strlen(old);
     new_len = strlen(new_value);
@@ -5884,10 +6149,17 @@ const char *osty_rt_strings_ReplaceAll(const char *value, const char *old, const
     int64_t count;
     char *out;
     char *dst;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char old_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char new_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     value = (value == NULL) ? "" : value;
     old = (old == NULL) ? "" : old;
     new_value = (new_value == NULL) ? "" : new_value;
+    /* SSO: strstr/strlen/memcpy below all need real addresses. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    osty_rt_string_decode_to_buf_if_inline(&old, old_buf);
+    osty_rt_string_decode_to_buf_if_inline(&new_value, new_buf);
     value_len = strlen(value);
     old_len = strlen(old);
     new_len = strlen(new_value);
@@ -5959,8 +6231,12 @@ const char *osty_rt_strings_ReplaceAll(const char *value, const char *old, const
 
 const char *osty_rt_strings_Slice(const char *value, int64_t start, int64_t end) {
     size_t value_len;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     value = (value == NULL) ? "" : value;
+    /* SSO: strlen + the `value + start` slice both need a real
+     * address. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
     value_len = strlen(value);
     if (start < 0 || end < start) {
         osty_rt_abort("runtime.strings.slice: invalid bounds");
@@ -5975,8 +6251,14 @@ const char *osty_rt_strings_ToUpper(const char *value) {
     size_t len;
     char *out;
     size_t i;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     value = (value == NULL) ? "" : value;
+    /* SSO: strlen needs a real address. dup_site itself is now SSO-
+     * input-aware so it could accept the inline pointer directly,
+     * but decoding once at entry lets us call libc strlen instead
+     * of `osty_rt_string_len`'s tag dispatch. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
     len = strlen(value);
     out = (char *)osty_rt_string_dup_site(value, len, "runtime.strings.to_upper");
     for (i = 0; i < len; i++) {
@@ -5992,8 +6274,11 @@ const char *osty_rt_strings_ToLower(const char *value) {
 	size_t len;
 	char *out;
 	size_t i;
+	char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     value = (value == NULL) ? "" : value;
+    /* SSO: see `osty_rt_strings_ToUpper`. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
     len = strlen(value);
     out = (char *)osty_rt_string_dup_site(value, len, "runtime.strings.to_lower");
     for (i = 0; i < len; i++) {
@@ -6007,8 +6292,11 @@ const char *osty_rt_strings_ToLower(const char *value) {
 
 bool osty_rt_strings_IsValidInt(const char *value) {
 	char *end = NULL;
+	char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
 	value = (value == NULL) ? "" : value;
+	/* SSO: strtoll + the leading-byte checks need a real address. */
+	osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
 	if (value[0] == '\0' ||
 		value[0] == ' ' || value[0] == '\t' || value[0] == '\n' ||
 		value[0] == '\r' || value[0] == '\v' || value[0] == '\f') {
@@ -6025,8 +6313,13 @@ bool osty_rt_strings_IsValidInt(const char *value) {
 int64_t osty_rt_strings_ToInt(const char *value) {
 	char *end = NULL;
 	long long parsed;
+	char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
 	value = (value == NULL) ? "" : value;
+	/* SSO: decode once at entry — both `IsValidInt` and `strtoll`
+	 * below need a real address. Decoding here means `IsValidInt`
+	 * receives an already-heap pointer and skips its own decode. */
+	osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
 	if (!osty_rt_strings_IsValidInt(value)) {
 		osty_rt_abort("runtime.strings.to_int: invalid integer");
 	}
@@ -6040,8 +6333,11 @@ int64_t osty_rt_strings_ToInt(const char *value) {
 
 bool osty_rt_strings_IsValidFloat(const char *value) {
 	char *end = NULL;
+	char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
 	value = (value == NULL) ? "" : value;
+	/* SSO: strtod + the leading-byte checks need a real address. */
+	osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
 	if (value[0] == '\0' ||
 		value[0] == ' ' || value[0] == '\t' || value[0] == '\n' ||
 		value[0] == '\r' || value[0] == '\v' || value[0] == '\f') {
@@ -6058,8 +6354,11 @@ bool osty_rt_strings_IsValidFloat(const char *value) {
 double osty_rt_strings_ToFloat(const char *value) {
 	char *end = NULL;
 	double parsed;
+	char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
 	value = (value == NULL) ? "" : value;
+	/* SSO: see `osty_rt_strings_ToInt`. */
+	osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
 	if (!osty_rt_strings_IsValidFloat(value)) {
 		osty_rt_abort("runtime.strings.to_float: invalid float");
 	}
@@ -6073,9 +6372,16 @@ double osty_rt_strings_ToFloat(const char *value) {
 
 const char *osty_rt_strings_TrimPrefix(const char *value, const char *prefix) {
 	const char *start;
+	char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+	char prefix_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     if (value == NULL) {
         return osty_rt_string_dup_site("", 0, "runtime.strings.trim_prefix.empty");
+    }
+    /* SSO: strlen + strncmp need real addresses. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    if (prefix != NULL) {
+        osty_rt_string_decode_to_buf_if_inline(&prefix, prefix_buf);
     }
     start = value;
     if (prefix != NULL) {
@@ -6090,9 +6396,16 @@ const char *osty_rt_strings_TrimPrefix(const char *value, const char *prefix) {
 const char *osty_rt_strings_TrimSuffix(const char *value, const char *suffix) {
     size_t value_len;
     size_t suffix_len;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char suffix_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     if (value == NULL) {
         return osty_rt_string_dup_site("", 0, "runtime.strings.trim_suffix.empty");
+    }
+    /* SSO: strlen + strncmp need real addresses. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    if (suffix != NULL) {
+        osty_rt_string_decode_to_buf_if_inline(&suffix, suffix_buf);
     }
     value_len = strlen(value);
     suffix_len = (suffix == NULL) ? 0 : strlen(suffix);
@@ -6105,10 +6418,13 @@ const char *osty_rt_strings_TrimSuffix(const char *value, const char *suffix) {
 
 const char *osty_rt_strings_TrimStart(const char *value) {
     const char *start;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     if (value == NULL) {
         return osty_rt_string_dup_site("", 0, "runtime.strings.trim_start.empty");
     }
+    /* SSO: byte-walking + strlen need a real address. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
     start = value;
     while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r' || *start == '\v' || *start == '\f') {
         start++;
@@ -6119,10 +6435,13 @@ const char *osty_rt_strings_TrimStart(const char *value) {
 const char *osty_rt_strings_TrimEnd(const char *value) {
     const char *end;
     size_t len;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     if (value == NULL) {
         return osty_rt_string_dup_site("", 0, "runtime.strings.trim_end.empty");
     }
+    /* SSO: strlen + tail-walking need a real address. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
     end = value + strlen(value);
     while (end > value) {
         char c = *(end - 1);
@@ -6140,12 +6459,15 @@ const char *osty_rt_strings_TrimSpace(const char *value) {
     const char *end;
     size_t len;
     char *out;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     if (value == NULL) {
         out = (char *)osty_gc_allocate_managed(1, OSTY_GC_KIND_STRING, "runtime.strings.trim_space.empty", NULL, NULL);
         out[0] = '\0';
         return out;
     }
+    /* SSO: byte-walking from both ends + strlen-equivalent. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
     start = value;
     while (*start == ' ' || *start == '\t' || *start == '\n' || *start == '\r' || *start == '\v' || *start == '\f') {
         start++;
@@ -6172,8 +6494,11 @@ void *osty_rt_strings_ToBytes(const char *value) {
     size_t total;
     osty_rt_bytes *out;
     unsigned char *data;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
 
     value = (value == NULL) ? "" : value;
+    /* SSO: strlen + memcpy below need a real address. */
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
     len = strlen(value);
     if (len > SIZE_MAX - sizeof(osty_rt_bytes)) {
         osty_rt_abort("runtime.strings.to_bytes: size overflow");
@@ -8259,6 +8584,19 @@ void *osty_gc_load_v1(void *value) {
      * the suite (none of them mix unmanaged sentinels into pointer
      * fields the GC sees). The slow path keeps the original
      * accounting for forwarded loads. */
+    /* SSO inline strings have all their content in the pointer; no
+     * header to look up, no forwarding to follow. Pass through
+     * before either the fast or slow path interprets the encoded
+     * content as an address. They are NOT GC-managed (no header,
+     * no payload allocation), so `load_managed_count` is not bumped
+     * — that counter pins what the live-set tests check. The
+     * `live_count` semantic in `llvm_runtime_gc_test` already
+     * reflects this (split pieces drop from contributing to the
+     * live count once they're inline). */
+    if (osty_rt_string_is_inline((const char *)value)) {
+        osty_gc_load_count += 1;
+        return value;
+    }
     if (osty_rt_concurrent_workers_load() == 0 &&
         osty_gc_forwarding_count == 0) {
         osty_gc_load_count += 1;
@@ -12452,6 +12790,16 @@ void osty_rt_test_snapshot(const char *name, const char *output, const char *sou
     const char *name_s = (name == NULL) ? "" : name;
     const char *output_s = (output == NULL) ? "" : output;
     const char *src_s = (source_path == NULL) ? "" : source_path;
+    char name_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char output_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char src_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+
+    /* SSO: `name`/`output`/`source_path` flow into `fprintf %s`,
+     * `strlen`, `memcmp`, and the resolver's path-builder, all of
+     * which need real addresses. Decode at the door. */
+    osty_rt_string_decode_to_buf_if_inline(&name_s, name_buf);
+    osty_rt_string_decode_to_buf_if_inline(&output_s, output_buf);
+    osty_rt_string_decode_to_buf_if_inline(&src_s, src_buf);
 
     char *snap_path = osty_rt_snapshot_resolve_path(src_s, name_s);
     char *snap_dir = osty_rt_snapshot_dirname(snap_path);
@@ -12505,6 +12853,11 @@ void osty_rt_test_snapshot(const char *name, const char *output, const char *sou
 void osty_rt_io_write(const char *text, bool newline, bool to_stderr) {
     FILE *out = to_stderr ? stderr : stdout;
     const char *safe = text != NULL ? text : "";
+    char inline_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    /* SSO: an inline-tagged String would crash `fputs` (the pointer
+     * is encoded content, not a real address). Decode to a stack
+     * buffer first. */
+    osty_rt_string_decode_to_buf_if_inline(&safe, inline_buf);
     fputs(safe, out);
     if (newline) {
         fputc('\n', out);
