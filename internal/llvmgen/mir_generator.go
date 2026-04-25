@@ -4568,16 +4568,16 @@ func (g *mirGen) emitOptionIntrinsic(i *mir.IntrinsicInstr) error {
 		return err
 	}
 	discReg := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = extractvalue %s %s, 0\n", discReg, optLLVM, optVal)
+	g.fnBuf.WriteString(mirExtractValueLine(discReg, optLLVM, optVal, "0"))
 
 	switch i.Kind {
 	case mir.IntrinsicOptionIsSome:
 		res := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = icmp ne i64 %s, 0\n", res, discReg)
+		g.fnBuf.WriteString(mirICmpLine(res, "ne", "i64", discReg, "0"))
 		return g.storeIntrinsicResult(i, &LlvmValue{typ: "i1", name: res})
 	case mir.IntrinsicOptionIsNone:
 		res := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = icmp eq i64 %s, 0\n", res, discReg)
+		g.fnBuf.WriteString(mirICmpEqLine(res, "i64", discReg, "0"))
 		return g.storeIntrinsicResult(i, &LlvmValue{typ: "i1", name: res})
 	case mir.IntrinsicOptionUnwrap:
 		if i.Dest == nil {
@@ -4590,23 +4590,23 @@ func (g *mirGen) emitOptionIntrinsic(i *mir.IntrinsicInstr) error {
 		destLLVM := g.llvmType(destLoc.Type)
 		destSlot := g.localSlots[i.Dest.Local]
 		isNone := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = icmp eq i64 %s, 0\n", isNone, discReg)
+		g.fnBuf.WriteString(mirICmpEqLine(isNone, "i64", discReg, "0"))
 		noneLabel := g.freshLabel("opt.unwrap.none")
 		someLabel := g.freshLabel("opt.unwrap.some")
-		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", isNone, noneLabel, someLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
+		g.fnBuf.WriteString(mirBrCondLine(isNone, noneLabel, someLabel))
+		g.fnBuf.WriteString(mirLabelLine(noneLabel))
 		abortSym := "osty_rt_option_unwrap_none"
 		g.declareRuntime(abortSym, mirRuntimeDeclareNoReturn("void", abortSym, "", false))
-		fmt.Fprintf(&g.fnBuf, "  call void @%s()\n", abortSym)
-		g.fnBuf.WriteString("  unreachable\n")
-		fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+		g.fnBuf.WriteString(mirCallVoidNoArgsLine(abortSym))
+		g.fnBuf.WriteString(mirUnreachableLine())
+		g.fnBuf.WriteString(mirLabelLine(someLabel))
 		payload := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = extractvalue %s %s, 1\n", payload, optLLVM, optVal)
+		g.fnBuf.WriteString(mirExtractValueLine(payload, optLLVM, optVal, "1"))
 		narrowed, err := g.narrowOptionPayload(payload, destLLVM)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", destLLVM, narrowed, destSlot)
+		g.fnBuf.WriteString(mirStoreLine(destLLVM, narrowed, destSlot))
 		return nil
 	case mir.IntrinsicOptionUnwrapOr:
 		if len(i.Args) != 2 {
@@ -4622,33 +4622,32 @@ func (g *mirGen) emitOptionIntrinsic(i *mir.IntrinsicInstr) error {
 		destLLVM := g.llvmType(destLoc.Type)
 		destSlot := g.localSlots[i.Dest.Local]
 		isNone := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = icmp eq i64 %s, 0\n", isNone, discReg)
+		g.fnBuf.WriteString(mirICmpEqLine(isNone, "i64", discReg, "0"))
 		noneLabel := g.freshLabel("opt.unwrapor.none")
 		someLabel := g.freshLabel("opt.unwrapor.some")
 		endLabel := g.freshLabel("opt.unwrapor.end")
-		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", isNone, noneLabel, someLabel)
+		g.fnBuf.WriteString(mirBrCondLine(isNone, noneLabel, someLabel))
 		// None arm: evaluate and propagate fallback.
-		fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
+		g.fnBuf.WriteString(mirLabelLine(noneLabel))
 		fallback, err := g.evalOperand(i.Args[1], destLoc.Type)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
 		// Some arm: extract and narrow payload.
-		fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+		g.fnBuf.WriteString(mirLabelLine(someLabel))
 		payload := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = extractvalue %s %s, 1\n", payload, optLLVM, optVal)
+		g.fnBuf.WriteString(mirExtractValueLine(payload, optLLVM, optVal, "1"))
 		narrowed, err := g.narrowOptionPayload(payload, destLLVM)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
 		// Join.
-		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
+		g.fnBuf.WriteString(mirLabelLine(endLabel))
 		merged := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = phi %s [ %s, %%%s ], [ %s, %%%s ]\n",
-			merged, destLLVM, fallback, noneLabel, narrowed, someLabel)
-		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", destLLVM, merged, destSlot)
+		g.fnBuf.WriteString(mirPhiTwoLine(merged, destLLVM, fallback, noneLabel, narrowed, someLabel))
+		g.fnBuf.WriteString(mirStoreLine(destLLVM, merged, destSlot))
 		return nil
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("option intrinsic kind %d", i.Kind))
@@ -4658,21 +4657,23 @@ func (g *mirGen) emitOptionIntrinsic(i *mir.IntrinsicInstr) error {
 // Maybe constructors use at insertvalue time (see emitListIntrinsic's
 // IntrinsicListFirst/Last arm). Payload is always stored as i64; on
 // extraction we truncate / bitcast back to the caller's concrete T.
+// Uses the Osty-sourced cast builders (`mirTruncLine`, `mirBitcastLine`,
+// `mirIntToPtrLine`).
 func (g *mirGen) narrowOptionPayload(payloadI64, destLLVM string) (string, error) {
 	switch destLLVM {
 	case "i64":
 		return payloadI64, nil
 	case "i1", "i8", "i16", "i32":
 		narrow := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = trunc i64 %s to %s\n", narrow, payloadI64, destLLVM)
+		g.fnBuf.WriteString(mirTruncLine(narrow, "i64", payloadI64, destLLVM))
 		return narrow, nil
 	case "double":
 		narrow := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = bitcast i64 %s to double\n", narrow, payloadI64)
+		g.fnBuf.WriteString(mirBitcastLine(narrow, "i64", payloadI64, "double"))
 		return narrow, nil
 	case "ptr":
 		narrow := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = inttoptr i64 %s to ptr\n", narrow, payloadI64)
+		g.fnBuf.WriteString(mirIntToPtrLine(narrow, "i64", payloadI64))
 		return narrow, nil
 	}
 	return "", unsupported("mir-mvp", "option payload narrow unsupported for "+destLLVM)
@@ -4966,50 +4967,51 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			stringEq = llvmStringRuntimeEqualSymbol()
 			g.declareRuntime(stringEq, mirRuntimeDeclareMemoryRead("i1", stringEq, "ptr, ptr"))
 		}
+		// Linear-scan loop emission via Osty-sourced builders. Pre-store
+		// None into dest; iterate, on first match overwrite with Some(idx).
 		lenReg := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
-		// Pre-store None; overwritten with Some(idx) on match.
-		fmt.Fprintf(&g.fnBuf, "  store %s zeroinitializer, ptr %s\n", destLLVM, destSlot)
+		g.fnBuf.WriteString(mirCallValueLine(lenReg, "i64", lenSym, "ptr "+listReg))
+		g.fnBuf.WriteString(mirStoreZeroinitLine(destLLVM, destSlot))
 		iSlot := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = alloca i64\n", iSlot)
-		fmt.Fprintf(&g.fnBuf, "  store i64 0, ptr %s\n", iSlot)
+		g.fnBuf.WriteString(mirAllocaLine(iSlot, "i64"))
+		g.fnBuf.WriteString(mirStoreLine("i64", "0", iSlot))
 		headLabel := g.freshLabel("list.indexof.head")
 		bodyLabel := g.freshLabel("list.indexof.body")
 		matchLabel := g.freshLabel("list.indexof.match")
 		contLabel := g.freshLabel("list.indexof.cont")
 		endLabel := g.freshLabel("list.indexof.end")
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", headLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", headLabel)
+		g.fnBuf.WriteString(mirBrUncondLine(headLabel))
+		g.fnBuf.WriteString(mirLabelLine(headLabel))
 		iReg := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = load i64, ptr %s\n", iReg, iSlot)
+		g.fnBuf.WriteString(mirLoadLine(iReg, "i64", iSlot))
 		cont := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = icmp slt i64 %s, %s\n", cont, iReg, lenReg)
-		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", cont, bodyLabel, endLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", bodyLabel)
+		g.fnBuf.WriteString(mirICmpLine(cont, "slt", "i64", iReg, lenReg))
+		g.fnBuf.WriteString(mirBrCondLine(cont, bodyLabel, endLabel))
+		g.fnBuf.WriteString(mirLabelLine(bodyLabel))
 		elemReg := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, iReg)
+		g.fnBuf.WriteString(mirCallValueLine(elemReg, elemLLVM, getSym, "ptr "+listReg+", i64 "+iReg))
 		eqReg := g.fresh()
 		if stringEq != "" {
-			fmt.Fprintf(&g.fnBuf, "  %s = call i1 @%s(ptr %s, ptr %s)\n", eqReg, stringEq, elemReg, needleReg)
+			g.fnBuf.WriteString(mirCallValueLine(eqReg, "i1", stringEq, "ptr "+elemReg+", ptr "+needleReg))
 		} else if elemLLVM == "double" {
-			fmt.Fprintf(&g.fnBuf, "  %s = fcmp oeq double %s, %s\n", eqReg, elemReg, needleReg)
+			g.fnBuf.WriteString(mirFCmpLine(eqReg, "oeq", "double", elemReg, needleReg))
 		} else {
-			fmt.Fprintf(&g.fnBuf, "  %s = icmp eq %s %s, %s\n", eqReg, elemLLVM, elemReg, needleReg)
+			g.fnBuf.WriteString(mirICmpEqLine(eqReg, elemLLVM, elemReg, needleReg))
 		}
-		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", eqReg, matchLabel, contLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", matchLabel)
+		g.fnBuf.WriteString(mirBrCondLine(eqReg, matchLabel, contLabel))
+		g.fnBuf.WriteString(mirLabelLine(matchLabel))
 		tagged := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 1, 0\n", tagged, destLLVM)
+		g.fnBuf.WriteString(mirInsertValueAggLine(tagged, destLLVM, "undef", "i64", "1", "0"))
 		filled := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n", filled, destLLVM, tagged, iReg)
-		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", destLLVM, filled, destSlot)
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", contLabel)
+		g.fnBuf.WriteString(mirInsertValueAggLine(filled, destLLVM, tagged, "i64", iReg, "1"))
+		g.fnBuf.WriteString(mirStoreLine(destLLVM, filled, destSlot))
+		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+		g.fnBuf.WriteString(mirLabelLine(contLabel))
 		next := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = add i64 %s, 1\n", next, iReg)
-		fmt.Fprintf(&g.fnBuf, "  store i64 %s, ptr %s\n", next, iSlot)
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", headLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
+		g.fnBuf.WriteString(mirAddI64Line(next, iReg, "1"))
+		g.fnBuf.WriteString(mirStoreLine("i64", next, iSlot))
+		g.fnBuf.WriteString(mirBrUncondLine(headLabel))
+		g.fnBuf.WriteString(mirLabelLine(endLabel))
 		return nil
 	case mir.IntrinsicListContains:
 		// `contains(x) -> Bool` — inline linear scan. Same shape as
@@ -5043,46 +5045,48 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			stringEq = llvmStringRuntimeEqualSymbol()
 			g.declareRuntime(stringEq, mirRuntimeDeclareMemoryRead("i1", stringEq, "ptr, ptr"))
 		}
+		// Linear-scan loop emission via Osty-sourced builders. Pre-store
+		// false into dest; iterate, on first match overwrite with true
+		// and break to end.
 		lenReg := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
-		// Pre-store false; overwrite with true on first match.
-		fmt.Fprintf(&g.fnBuf, "  store i1 false, ptr %s\n", destSlot)
+		g.fnBuf.WriteString(mirCallValueLine(lenReg, "i64", lenSym, "ptr "+listReg))
+		g.fnBuf.WriteString(mirStoreLine("i1", "false", destSlot))
 		iSlot := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = alloca i64\n", iSlot)
-		fmt.Fprintf(&g.fnBuf, "  store i64 0, ptr %s\n", iSlot)
+		g.fnBuf.WriteString(mirAllocaLine(iSlot, "i64"))
+		g.fnBuf.WriteString(mirStoreLine("i64", "0", iSlot))
 		headLabel := g.freshLabel("list.contains.head")
 		bodyLabel := g.freshLabel("list.contains.body")
 		matchLabel := g.freshLabel("list.contains.match")
 		contLabel := g.freshLabel("list.contains.cont")
 		endLabel := g.freshLabel("list.contains.end")
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", headLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", headLabel)
+		g.fnBuf.WriteString(mirBrUncondLine(headLabel))
+		g.fnBuf.WriteString(mirLabelLine(headLabel))
 		iReg := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = load i64, ptr %s\n", iReg, iSlot)
+		g.fnBuf.WriteString(mirLoadLine(iReg, "i64", iSlot))
 		cont := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = icmp slt i64 %s, %s\n", cont, iReg, lenReg)
-		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", cont, bodyLabel, endLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", bodyLabel)
+		g.fnBuf.WriteString(mirICmpLine(cont, "slt", "i64", iReg, lenReg))
+		g.fnBuf.WriteString(mirBrCondLine(cont, bodyLabel, endLabel))
+		g.fnBuf.WriteString(mirLabelLine(bodyLabel))
 		elemReg := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, iReg)
+		g.fnBuf.WriteString(mirCallValueLine(elemReg, elemLLVM, getSym, "ptr "+listReg+", i64 "+iReg))
 		eqReg := g.fresh()
 		if stringEq != "" {
-			fmt.Fprintf(&g.fnBuf, "  %s = call i1 @%s(ptr %s, ptr %s)\n", eqReg, stringEq, elemReg, needleReg)
+			g.fnBuf.WriteString(mirCallValueLine(eqReg, "i1", stringEq, "ptr "+elemReg+", ptr "+needleReg))
 		} else if elemLLVM == "double" {
-			fmt.Fprintf(&g.fnBuf, "  %s = fcmp oeq double %s, %s\n", eqReg, elemReg, needleReg)
+			g.fnBuf.WriteString(mirFCmpLine(eqReg, "oeq", "double", elemReg, needleReg))
 		} else {
-			fmt.Fprintf(&g.fnBuf, "  %s = icmp eq %s %s, %s\n", eqReg, elemLLVM, elemReg, needleReg)
+			g.fnBuf.WriteString(mirICmpEqLine(eqReg, elemLLVM, elemReg, needleReg))
 		}
-		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", eqReg, matchLabel, contLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", matchLabel)
-		fmt.Fprintf(&g.fnBuf, "  store i1 true, ptr %s\n", destSlot)
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", contLabel)
+		g.fnBuf.WriteString(mirBrCondLine(eqReg, matchLabel, contLabel))
+		g.fnBuf.WriteString(mirLabelLine(matchLabel))
+		g.fnBuf.WriteString(mirStoreLine("i1", "true", destSlot))
+		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+		g.fnBuf.WriteString(mirLabelLine(contLabel))
 		next := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = add i64 %s, 1\n", next, iReg)
-		fmt.Fprintf(&g.fnBuf, "  store i64 %s, ptr %s\n", next, iSlot)
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", headLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
+		g.fnBuf.WriteString(mirAddI64Line(next, iReg, "1"))
+		g.fnBuf.WriteString(mirStoreLine("i64", next, iSlot))
+		g.fnBuf.WriteString(mirBrUncondLine(headLabel))
+		g.fnBuf.WriteString(mirLabelLine(endLabel))
 		return nil
 	case mir.IntrinsicListPop:
 		// `xs.pop()` returns `Option<T>` — the last element wrapped in
@@ -5096,12 +5100,12 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		if i.Dest == nil {
 			// Statement-position `xs.pop()` with no dest: fall back
 			// to the classic discard-and-abort path.
-			fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s)\n", discardSym, listReg)
+			g.fnBuf.WriteString(mirCallVoidLine(discardSym, "ptr "+listReg))
 			return nil
 		}
 		destLoc := g.fn.Local(i.Dest.Local)
 		if destLoc == nil {
-			fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s)\n", discardSym, listReg)
+			g.fnBuf.WriteString(mirCallVoidLine(discardSym, "ptr "+listReg))
 			return nil
 		}
 		destLLVM := g.llvmType(destLoc.Type)
@@ -5109,35 +5113,35 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		lenSym := listRuntimeLenSymbol()
 		g.declareRuntime(lenSym, mirRuntimeDeclareMemoryRead("i64", lenSym, "ptr"))
 		lenReg := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
+		g.fnBuf.WriteString(mirCallValueLine(lenReg, "i64", lenSym, "ptr "+listReg))
 		isEmpty := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = icmp eq i64 %s, 0\n", isEmpty, lenReg)
+		g.fnBuf.WriteString(mirICmpEqLine(isEmpty, "i64", lenReg, "0"))
 		someLabel := g.freshLabel("list.pop.some")
 		noneLabel := g.freshLabel("list.pop.none")
 		endLabel := g.freshLabel("list.pop.end")
-		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", isEmpty, noneLabel, someLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
-		fmt.Fprintf(&g.fnBuf, "  store %s zeroinitializer, ptr %s\n", destLLVM, destSlot)
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+		g.fnBuf.WriteString(mirBrCondLine(isEmpty, noneLabel, someLabel))
+		g.fnBuf.WriteString(mirLabelLine(noneLabel))
+		g.fnBuf.WriteString(mirStoreZeroinitLine(destLLVM, destSlot))
+		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+		g.fnBuf.WriteString(mirLabelLine(someLabel))
 		lastIdx := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = sub i64 %s, 1\n", lastIdx, lenReg)
+		g.fnBuf.WriteString(mirSubI64Line(lastIdx, lenReg, "1"))
 		elemReg, err := g.emitListLoadElement(listReg, lastIdx, elemLLVM)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s)\n", discardSym, listReg)
+		g.fnBuf.WriteString(mirCallVoidLine(discardSym, "ptr "+listReg))
 		payloadReg, err := g.listOptionalPayloadToI64(elemReg, elemLLVM, elemT)
 		if err != nil {
 			return unsupported("mir-mvp", fmt.Sprintf("list_pop payload widen unsupported for %s", elemLLVM))
 		}
 		tagged := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 1, 0\n", tagged, destLLVM)
+		g.fnBuf.WriteString(mirInsertValueAggLine(tagged, destLLVM, "undef", "i64", "1", "0"))
 		filled := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n", filled, destLLVM, tagged, payloadReg)
-		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", destLLVM, filled, destSlot)
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
+		g.fnBuf.WriteString(mirInsertValueAggLine(filled, destLLVM, tagged, "i64", payloadReg, "1"))
+		g.fnBuf.WriteString(mirStoreLine(destLLVM, filled, destSlot))
+		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+		g.fnBuf.WriteString(mirLabelLine(endLabel))
 		return nil
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("list intrinsic kind %d", i.Kind))
@@ -5148,15 +5152,15 @@ func (g *mirGen) emitListLoadElement(listReg, idxReg string, elemLLVM string) (s
 		getSym := listRuntimeGetSymbol(elemLLVM)
 		g.declareRuntime(getSym, mirRuntimeDeclareMemoryRead(elemLLVM, getSym, "ptr, i64"))
 		elemReg := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, idxReg)
+		g.fnBuf.WriteString(mirCallValueLine(elemReg, elemLLVM, getSym, "ptr "+listReg+", i64 "+idxReg))
 		return elemReg, nil
 	}
 	slot := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = alloca %s\n", slot, elemLLVM)
+	g.fnBuf.WriteString(mirAllocaLine(slot, elemLLVM))
 	sizeReg := g.emitSizeOf(elemLLVM)
 	sym := listRuntimeGetBytesV1Symbol()
 	g.declareRuntime(sym, "declare void @"+sym+"(ptr, i64, ptr, i64)")
-	fmt.Fprintf(&g.fnBuf, "  call void @%s(ptr %s, i64 %s, ptr %s, i64 %s)\n", sym, listReg, idxReg, slot, sizeReg)
+	g.fnBuf.WriteString(mirCallVoidLine(sym, "ptr "+listReg+", i64 "+idxReg+", ptr "+slot+", i64 "+sizeReg))
 	elemReg := g.fresh()
 	fmt.Fprintf(&g.fnBuf, "  %s = load %s, ptr %s\n", elemReg, elemLLVM, slot)
 	return elemReg, nil
@@ -9498,9 +9502,15 @@ func (g *mirGen) freshLabel(prefix string) string {
 // llvmListPush, …) against the returned emitter, then splice the
 // accumulated body into g.fnBuf via flushOstyEmitter. This is the
 // adapter that lets mir_generator.go delegate actual LLVM text to
-// toolchain/llvmgen.osty without double-counting temps.
+// toolchain/llvmgen.osty without double-counting temps. Now delegates
+// to the Osty-sourced `MirSeq.ostyEmitter`
+// (`toolchain/mir_generator.osty`) so the seeding logic lives in one
+// place. The Go LlvmEmitter has fields the Osty struct doesn't model
+// (nextLoopMD / loopMDDefs / vectorize hints) — those are the native-
+// owned-function emission state, separate from the MIR ostyEmitter
+// path; they stay zero-init.
 func (g *mirGen) ostyEmitter() *LlvmEmitter {
-	return &LlvmEmitter{temp: g.seq.TempSeq, body: nil}
+	return g.seq.OstyEmitter()
 }
 
 // flushOstyEmitter writes the emitter's body lines into g.fnBuf and
