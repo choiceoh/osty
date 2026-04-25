@@ -890,11 +890,30 @@ func mirGenDigitChar(d int) string {
 // MirSeq mirrors `toolchain/mir_generator.osty:932 MirSeq`. The
 // pointer-receiver methods below are the Go counterparts of the
 // `mut self` Osty methods — calling `mirGen.seq.Fresh()` consumes
-// the current counter and bumps it for the next caller. First piece
-// of `MirGen` state to land in the Osty mirror; future state moves
-// (fnBuf, declares, etc.) attach to this struct.
+// the current counter and bumps it for the next caller. Phase B
+// state package: `TempSeq` (SSA / label numbering), `LoopMDDefs`
+// (module-scoped metadata accumulator), `ListMetaScopeList` (cached
+// `!alias.scope` ref). Future moves (fnBuf, declares, …) attach to
+// this struct as the Osty mirror grows.
 type MirSeq struct {
-	TempSeq int
+	TempSeq           int
+	LoopMDDefs        []string
+	ListMetaScopeList string
+}
+
+// MirLoopHints mirrors
+// `toolchain/mir_generator.osty: MirLoopHints`. Plain data — fed
+// into `MirSeq.NextLoopMD` so the per-function flag values flow
+// in explicitly rather than living on `MirSeq` itself.
+type MirLoopHints struct {
+	Vectorize              bool
+	VectorizeWidth         int
+	VectorizeScalable      bool
+	VectorizePredicate     bool
+	Parallel               bool
+	ParallelAccessGroupRef string
+	Unroll                 bool
+	UnrollCount            int
 }
 
 // Osty: toolchain/mir_generator.osty:945:9 (MirSeq.fresh)
@@ -914,4 +933,83 @@ func (s *MirSeq) FreshLabel(prefix string) string {
 // Osty: toolchain/mir_generator.osty:961:9 (MirSeq.reset)
 func (s *MirSeq) Reset() {
 	s.TempSeq = 0
+}
+
+// Osty: MirSeq.reserveMDRef
+func (s *MirSeq) ReserveMDRef() string {
+	return "!" + strconv.Itoa(len(s.LoopMDDefs))
+}
+
+// Osty: MirSeq.commitMDLine
+func (s *MirSeq) CommitMDLine(line string) {
+	s.LoopMDDefs = append(s.LoopMDDefs, line)
+}
+
+// Osty: MirSeq.allocMDNode
+func (s *MirSeq) AllocMDNode(body string) string {
+	ref := s.ReserveMDRef()
+	s.CommitMDLine(ref + " = " + body)
+	return ref
+}
+
+// Osty: MirSeq.nextLoopMD
+func (s *MirSeq) NextLoopMD(hints MirLoopHints) string {
+	var propRefs []string
+	if hints.Vectorize {
+		propRefs = append(propRefs, s.AllocMDNode(mirLoopMDVectorizeEnable()))
+		if hints.VectorizeWidth > 0 {
+			propRefs = append(propRefs, s.AllocMDNode(
+				mirLoopMDVectorizeWidth(strconv.Itoa(hints.VectorizeWidth))))
+		}
+		if hints.VectorizeScalable {
+			propRefs = append(propRefs, s.AllocMDNode(mirLoopMDVectorizeScalable()))
+		}
+		if hints.VectorizePredicate {
+			propRefs = append(propRefs, s.AllocMDNode(mirLoopMDVectorizePredicate()))
+		}
+	}
+	if hints.Parallel && hints.ParallelAccessGroupRef != "" {
+		propRefs = append(propRefs, s.AllocMDNode(
+			mirLoopMDParallelAccesses(hints.ParallelAccessGroupRef)))
+	}
+	if hints.Unroll {
+		if hints.UnrollCount > 0 {
+			propRefs = append(propRefs, s.AllocMDNode(
+				mirLoopMDUnrollCount(strconv.Itoa(hints.UnrollCount))))
+		} else {
+			propRefs = append(propRefs, s.AllocMDNode(mirLoopMDUnrollEnable()))
+		}
+	}
+	if len(propRefs) == 0 {
+		return ""
+	}
+	loopRef := s.ReserveMDRef()
+	children := loopRef
+	for _, ref := range propRefs {
+		children += ", " + ref
+	}
+	s.CommitMDLine(loopRef + " = distinct !{" + children + "}")
+	return loopRef
+}
+
+// Osty: MirSeq.listAliasScopeRef
+func (s *MirSeq) ListAliasScopeRef() string {
+	if s.ListMetaScopeList != "" {
+		return s.ListMetaScopeList
+	}
+	domainRef := s.ReserveMDRef()
+	s.CommitMDLine(mirAliasScopeDomainLine(domainRef))
+	scopeRef := s.ReserveMDRef()
+	s.CommitMDLine(mirAliasScopeScopeLine(scopeRef, domainRef))
+	listRef := s.ReserveMDRef()
+	s.CommitMDLine(mirAliasScopeListLine(listRef, scopeRef))
+	s.ListMetaScopeList = listRef
+	return listRef
+}
+
+// Osty: MirSeq.nextAccessGroupMD
+func (s *MirSeq) NextAccessGroupMD() string {
+	ref := s.ReserveMDRef()
+	s.CommitMDLine(mirAccessGroupLine(ref))
+	return ref
 }

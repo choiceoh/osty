@@ -53,7 +53,7 @@ untouched.
 
 | § | Section | Lines | Funcs | Risk | Status |
 | - | ------- | ----- | ----- | ---- | ------ |
-| 1 | generator state | 100–472 | ~10 | LOW | Partial — `firstNonEmpty`, `formatFnAttrs`, `loopHintsActive`, loop-metadata + alias-scope + access-group templates ported (`mirFormatFnAttrs`, `mirLoopHintsActive`, `mirLoopMDVectorizeEnable`/`Scalable`/`Predicate`/`Width`, `mirLoopMDUnrollEnable`/`Count`, `mirLoopMDParallelAccesses`, `mirAliasScopeDomainLine`/`ScopeLine`/`ListLine`, `mirAccessGroupLine`); `nextLoopMD` body + `g.loopMDDefs` indexing stays on Go (state) |
+| 1 | generator state | 100–472 | ~10 | LOW | Partial — pure templates (`mirFormatFnAttrs`, `mirLoopHintsActive`, `mirLoopMDVectorizeEnable`/`Scalable`/`Predicate`/`Width`, `mirLoopMDUnrollEnable`/`Count`, `mirLoopMDParallelAccesses`, `mirAliasScopeDomainLine`/`ScopeLine`/`ListLine`, `mirAccessGroupLine`) + state-bearing ports via `MirSeq` (`nextLoopMD`, `listAliasScopeRef`, `nextAccessGroupMD` — `g.loopMDDefs` and `g.listMetaScopeList` migrated to the mirror) |
 | 2 | support check | 473–1364 | ~20 | MEDIUM | Go-only |
 | 3 | header + runtime declares | 1365–1641 | ~8 | LOW | Partial — global-var, ctor, iface/struct/enum/tuple/vtable type-def lines + three runtime-declare shapes ported (`mirLlvmGlobalVarLine`, `mirLlvmIfaceTypeDefLine`, `mirLlvmStructTypeDefLine`, `mirLlvmEnumLayoutTypeDefLine`, `mirLlvmVtableDeclLine`, `mirGlobalCtorsRegistration`, `mirInitGlobalsCtorHeader`/`Footer`/`StoreSequence`, `mirRuntimeDeclareLine`, `mirRuntimeDeclareMemoryRead`, `mirRuntimeDeclareNoReturn`); orchestration (`emitGlobalVars`/`emitTypeDefs`/`emitRuntimeDeclarations`) + state (`g.declares`/`g.out`) stays on Go |
 | 4 | function emission | 1642–2384 | ~18 | MEDIUM | Go-only |
@@ -206,6 +206,13 @@ list keeps new Osty clean of known landmines.
 | `MirSeq.fresh` | `(mut self) -> String` | §15 | Issue `%tN` SSA register name + bump counter — `mut self` mirrors the pointer-receiver Go method |
 | `MirSeq.freshLabel` | `(mut self, prefix: String) -> String` | §15 | Issue `<prefix>.N` basic-block label + bump counter (shares SSA namespace with `fresh`) |
 | `MirSeq.reset` | `(mut self) -> ()` | §15 | Zero the counter at function-emission boundaries — replaces `g.tempSeq = 0` at the top of `emitFunction` |
+| `MirSeq.reserveMDRef` | `(self) -> String` | §1 | Read-only `!N` reservation — caller emits the line via a template that embeds the ref then calls `commitMDLine` |
+| `MirSeq.commitMDLine` | `(mut self, line: String) -> ()` | §1 | Append a fully-formed `!N = …` line to the module accumulator |
+| `MirSeq.allocMDNode` | `(mut self, body: String) -> String` | §1 | One-shot reserve+commit when the caller only has the LLVM payload (no `!N = ` prefix) |
+| `MirSeq.nextLoopMD` | `(mut self, hints: MirLoopHints) -> String` | §1 | Self-referential `!llvm.loop` node + per-property children driven by `MirLoopHints` snapshot; returns `""` when no hints active |
+| `MirSeq.listAliasScopeRef` | `(mut self) -> String` | §1 | Cached lazy 3-node domain/scope/list chain (`!alias.scope` family); singleton per module |
+| `MirSeq.nextAccessGroupMD` | `(mut self) -> String` | §1 | One `distinct !{}` per `#[parallel]` function — load/store attachments + per-loop `parallel_accesses` reference it |
+| `MirLoopHints` (struct) | `{ vectorize, vectorizeWidth, vectorizeScalable, vectorizePredicate, parallel, parallelAccessGroupRef, unroll, unrollCount }` | §1 | Plain-data snapshot of per-function loop annotation flags fed into `MirSeq.nextLoopMD` |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as
