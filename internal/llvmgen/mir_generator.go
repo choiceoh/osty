@@ -108,8 +108,8 @@ type mirGen struct {
 	out strings.Builder
 
 	// Per-function state (cleared between functions).
-	fn  *mir.Function
-	seq MirSeq // SSA / label sequence counter — Phase B Osty mirror
+	fn          *mir.Function
+	seq         MirSeq // SSA / label sequence counter — Phase B Osty mirror
 	blockLabels map[mir.BlockID]string
 	localSlots  map[mir.LocalID]string
 	fnBuf       strings.Builder
@@ -145,11 +145,17 @@ type mirGen struct {
 	// LayoutTable; tuple / option / result defs are discovered
 	// on-demand as the emitter walks the function bodies. All are
 	// rendered once before the first function definition.
-	structOrder     []string              // struct name in LayoutTable order (sorted)
-	enumLayoutOrder []string              // enum-shaped type names in first-use order
-	enumLayouts     map[string]mir.Type   // mangled enum/option name → payload inner type
-	tupleDefs       map[string][]mir.Type // mangled tuple name → element types
-	tupleOrder      []string              // first-use order of tuple names
+	//
+	// `layoutCache` mirrors `toolchain/mir_generator.osty: MirLayoutCache`
+	// — Osty owns the dedup + insertion-order side
+	// (`EnumLayoutOrder` / `TupleOrder`). The element-type map for
+	// tuples (`tupleDefs`) stays here because its value is `[]mir.Type`,
+	// a Go-only interface slice. Enum-shaped types have no
+	// element-type map: their LLVM layout is the fixed
+	// `{ i64 disc, i64 payload }` regardless of payload type.
+	structOrder []string              // struct name in LayoutTable order (sorted)
+	layoutCache MirLayoutCache        // §14 enum / tuple order cache (Osty mirror)
+	tupleDefs   map[string][]mir.Type // mangled tuple name → element types
 
 	// Closure-env thunks generated on demand when a bare `FnConst`
 	// (top-level fn used as a value) reaches an indirect-call site.
@@ -241,7 +247,6 @@ func newMIRGen(m *mir.Module, opts Options) *mirGen {
 		declares:      map[string]string{},
 		strings:       map[string]string{},
 		tupleDefs:     map[string][]mir.Type{},
-		enumLayouts:   map[string]mir.Type{},
 		vtableRefs:    map[string]struct{}{},
 	}
 }
@@ -1427,10 +1432,10 @@ func (g *mirGen) emitTypeDefs() {
 		}
 		sort.Strings(enumNames)
 		for _, name := range enumNames {
-			g.registerEnumLayout(name, nil)
+			g.registerEnumLayout(name)
 		}
 	}
-	if len(g.structOrder) == 0 && len(g.tupleOrder) == 0 && len(g.enumLayoutOrder) == 0 && !g.ifaceTouched {
+	if len(g.structOrder) == 0 && g.layoutCache.IsEmpty() && !g.ifaceTouched {
 		return
 	}
 
@@ -1452,10 +1457,10 @@ func (g *mirGen) emitTypeDefs() {
 		}
 		block.WriteString(mirLlvmStructTypeDefLine(name, strings.Join(parts, ", ")))
 	}
-	for _, name := range g.enumLayoutOrder {
+	for _, name := range g.layoutCache.EnumLayoutOrder {
 		block.WriteString(mirLlvmEnumLayoutTypeDefLine(name))
 	}
-	for _, name := range g.tupleOrder {
+	for _, name := range g.layoutCache.TupleOrder {
 		elems := g.tupleDefs[name]
 		parts := make([]string, len(elems))
 		for i, e := range elems {
@@ -7533,6 +7538,13 @@ func (g *mirGen) emitPrintlnLike(op mir.Operand, newline bool) error {
 
 // ==== terminators ====
 
+// emitTerm dispatches a MIR terminator to its LLVM text-shape
+// template. Each arm is a thin orchestrator: it resolves operands,
+// emits any GC / safepoint scaffolding, then asks the Osty-sourced
+// `mirTerminator*` helper for the final IR text. Byte-level shape
+// changes belong in `toolchain/mir_generator.osty` — this dispatcher
+// only owns control flow and side effects against `mirGen` state
+// (g.fnBuf, g.evalOperand, g.emitLoopSafepointKind, …).
 func (g *mirGen) emitTerm(t mir.Terminator) error {
 	switch x := t.(type) {
 	case *mir.GotoTerm:
@@ -7552,15 +7564,11 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 		if g.opts.EmitGC && isBackedge && !g.vectorizeHint {
 			g.emitLoopSafepointKind()
 		}
-		g.fnBuf.WriteString("  br label %")
-		g.fnBuf.WriteString(g.blockLabels[x.Target])
+		loopMD := ""
 		if isBackedge && g.loopHintsActive() {
-			if ref := g.nextLoopMD(); ref != "" {
-				g.fnBuf.WriteString(", !llvm.loop ")
-				g.fnBuf.WriteString(ref)
-			}
+			loopMD = g.nextLoopMD()
 		}
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirTerminatorBranchUnconditional(g.blockLabels[x.Target], loopMD))
 	case *mir.BranchTerm:
 		// Same throttled back-edge rule applied to conditional
 		// branches — covers `while cond { ... }` style loops where
@@ -7575,19 +7583,16 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 		if err != nil {
 			return err
 		}
-		g.fnBuf.WriteString("  br i1 ")
-		g.fnBuf.WriteString(cond)
-		g.fnBuf.WriteString(", label %")
-		g.fnBuf.WriteString(g.blockLabels[x.Then])
-		g.fnBuf.WriteString(", label %")
-		g.fnBuf.WriteString(g.blockLabels[x.Else])
+		loopMD := ""
 		if isBackedge && g.loopHintsActive() {
-			if ref := g.nextLoopMD(); ref != "" {
-				g.fnBuf.WriteString(", !llvm.loop ")
-				g.fnBuf.WriteString(ref)
-			}
+			loopMD = g.nextLoopMD()
 		}
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirTerminatorBranchConditional(
+			cond,
+			g.blockLabels[x.Then],
+			g.blockLabels[x.Else],
+			loopMD,
+		))
 	case *mir.SwitchIntTerm:
 		scrutT := x.Scrutinee.Type()
 		scrut, err := g.evalOperand(x.Scrutinee, scrutT)
@@ -7595,27 +7600,23 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 			return err
 		}
 		llvmT := g.llvmType(scrutT)
-		g.fnBuf.WriteString("  switch ")
-		g.fnBuf.WriteString(llvmT)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(scrut)
-		g.fnBuf.WriteString(", label %")
-		g.fnBuf.WriteString(g.blockLabels[x.Default])
-		g.fnBuf.WriteString(" [\n")
-		for _, c := range x.Cases {
-			g.fnBuf.WriteString("    ")
-			g.fnBuf.WriteString(llvmT)
-			g.fnBuf.WriteByte(' ')
-			g.fnBuf.WriteString(strconv.FormatInt(c.Value, 10))
-			g.fnBuf.WriteString(", label %")
-			g.fnBuf.WriteString(g.blockLabels[c.Target])
-			g.fnBuf.WriteByte('\n')
+		cases := make([]MirSwitchCase, len(x.Cases))
+		for i, c := range x.Cases {
+			cases[i] = MirSwitchCase{
+				ValueText:   strconv.FormatInt(c.Value, 10),
+				TargetLabel: g.blockLabels[c.Target],
+			}
 		}
-		g.fnBuf.WriteString("  ]\n")
+		g.fnBuf.WriteString(mirTerminatorSwitchInt(
+			llvmT,
+			scrut,
+			g.blockLabels[x.Default],
+			cases,
+		))
 	case *mir.ReturnTerm:
 		if g.fn != nil && g.fn.Name == "main" && len(g.fn.Params) == 0 && isUnitType(g.fn.ReturnType) {
 			g.emitGCReleaseRoots()
-			g.fnBuf.WriteString("  ret i32 0\n")
+			g.fnBuf.WriteString(mirTerminatorReturnMain())
 			return nil
 		}
 		if g.fn.ReturnType == nil || isUnitType(g.fn.ReturnType) {
@@ -7623,31 +7624,20 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 			// keep the hook in place so return lowering stays uniform if we
 			// grow per-function GC epilog work later.
 			g.emitGCReleaseRoots()
-			g.fnBuf.WriteString("  ret void\n")
+			g.fnBuf.WriteString(mirRetVoidLine())
 			return nil
 		}
 		retSlot := g.localSlots[g.fn.ReturnLocal]
 		llvmT := g.llvmType(g.fn.ReturnType)
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = load ")
-		g.fnBuf.WriteString(llvmT)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(retSlot)
-		g.fnBuf.WriteByte('\n')
-		// Keep the legacy hook between load and ret for symmetry with the
-		// unit-return path; explicit safepoint roots mean this is currently
-		// a no-op.
+		// Hook collapses to no-op today; if it ever grows real work
+		// it must move back between the load and the ret.
 		g.emitGCReleaseRoots()
-		g.fnBuf.WriteString("  ret ")
-		g.fnBuf.WriteString(llvmT)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirLoadLine(tmp, llvmT, retSlot))
+		g.fnBuf.WriteString(mirRetLine(llvmT, tmp))
 	case *mir.UnreachableTerm:
 		g.emitGCReleaseRoots()
-		g.fnBuf.WriteString("  unreachable\n")
+		g.fnBuf.WriteString(mirUnreachableLine())
 	default:
 		return unsupported("mir-mvp", fmt.Sprintf("terminator %T", t))
 	}
@@ -8329,9 +8319,8 @@ func (g *mirGen) closureEnvTypeName(elems []mir.Type) string {
 		parts[i] = g.llvmTypeForTupleTag(t)
 	}
 	name := "ClosureEnv." + strings.Join(parts, ".")
-	if _, ok := g.tupleDefs[name]; !ok {
+	if g.layoutCache.RegisterTuple(name) {
 		g.tupleDefs[name] = append([]mir.Type(nil), elems...)
-		g.tupleOrder = append(g.tupleOrder, name)
 	}
 	return name
 }
@@ -9351,7 +9340,7 @@ func (g *mirGen) llvmType(t mir.Type) string {
 				return "%" + x.Name
 			}
 			if _, ok := g.mod.Layouts.Enums[x.Name]; ok {
-				g.registerEnumLayout(x.Name, nil)
+				g.registerEnumLayout(x.Name)
 				return "%" + x.Name
 			}
 			// Interface values are fat pointers `{data, vtable}`. The
@@ -9389,23 +9378,21 @@ func (g *mirGen) llvmType(t mir.Type) string {
 
 // optionalTypeName returns a mangled `Option.<T>` name for a surface
 // `T?` optional. The pure mangling step delegates to the Osty-sourced
-// `mirOptionalTypeName`; `registerEnumLayout` stays on Go because it
-// mutates `g.enumLayouts` module state.
+// `mirOptionalTypeName`; the order list lives on the Osty-mirrored
+// `g.layoutCache` (`MirLayoutCache.RegisterEnumLayout`).
 func (g *mirGen) optionalTypeName(t *ir.OptionalType) string {
 	name := mirOptionalTypeName(g.llvmTypeForTupleTag(t.Inner))
-	g.registerEnumLayout(name, t.Inner)
+	g.registerEnumLayout(name)
 	return name
 }
 
 func (g *mirGen) optionTypeName(t *ir.NamedType) string {
-	inner := mir.Type(nil)
 	innerTag := ""
 	if len(t.Args) > 0 {
-		inner = t.Args[0]
-		innerTag = g.llvmTypeForTupleTag(inner)
+		innerTag = g.llvmTypeForTupleTag(t.Args[0])
 	}
 	name := mirOptionTypeName(innerTag)
-	g.registerEnumLayout(name, inner)
+	g.registerEnumLayout(name)
 	return name
 }
 
@@ -9413,50 +9400,45 @@ func (g *mirGen) optionTypeName(t *ir.NamedType) string {
 // i64 width and Err payload (usually an Error ptr) reuses it via
 // bitcast — matching the legacy emitter's `%Result.T.E` convention.
 func (g *mirGen) resultTypeName(t *ir.NamedType) string {
-	var inner mir.Type
 	okTag, errTag := "", ""
 	if len(t.Args) >= 1 {
-		inner = t.Args[0]
 		okTag = g.llvmTypeForTupleTag(t.Args[0])
 		if len(t.Args) >= 2 {
 			errTag = g.llvmTypeForTupleTag(t.Args[1])
 		}
 	}
 	name := mirResultTypeName(okTag, errTag)
-	g.registerEnumLayout(name, inner)
+	g.registerEnumLayout(name)
 	return name
 }
 
-// registerEnumLayout records an enum-shaped type's payload for type
-// emission. The MIR emitter always uses `{ i64, <payload> }` where
-// payload is the wider of i64 / the inner type's LLVM form. For
-// scalar payloads smaller than i64 we upcast at construction;
-// pointer payloads sit in an i64 via ptrtoint so the layout stays
-// uniform with the legacy convention `%Maybe = type { i64, i64 }`.
-func (g *mirGen) registerEnumLayout(name string, inner mir.Type) {
-	if _, ok := g.enumLayouts[name]; ok {
-		return
-	}
-	g.enumLayouts[name] = inner
-	g.enumLayoutOrder = append(g.enumLayoutOrder, name)
+// registerEnumLayout records an enum-shaped type for type-def
+// emission. Layout is always `{ i64 disc, i64 payload }` regardless
+// of inner type — narrow payloads upcast, pointers ptrtoint into the
+// payload slot. Forwards to `MirLayoutCache.RegisterEnumLayout`
+// (Osty mirror) for the dedup + order bookkeeping.
+func (g *mirGen) registerEnumLayout(name string) {
+	g.layoutCache.RegisterEnumLayout(name)
 }
 
 // tupleName returns the mangled LLVM type name for a tuple and
 // ensures its type definition is emitted at least once per module.
-// The mangling step delegates to the Osty-sourced
-// `mirTupleTypeNameFromTags`; tuple layout registration stays on Go
-// because it mutates `g.tupleDefs` / `g.tupleOrder` module state.
+// The mangling delegates to the Osty-sourced
+// `mirTupleTypeNameFromTags`; the order list lives on the
+// Osty-mirrored `layoutCache`. The element-type slice
+// (`g.tupleDefs[name]`) stays on the Go side because its values are
+// `mir.Type` interface — we only populate the slice on the first
+// registration (signalled by `RegisterTuple` returning `true`).
 func (g *mirGen) tupleName(t *ir.TupleType) string {
 	tags := make([]string, 0, len(t.Elems))
 	for _, e := range t.Elems {
 		tags = append(tags, g.llvmTypeForTupleTag(e))
 	}
 	name := mirTupleTypeNameFromTags(tags)
-	if _, ok := g.tupleDefs[name]; !ok {
+	if g.layoutCache.RegisterTuple(name) {
 		// Defer the actual `%Tuple.* = type { ... }` line until the
 		// emitter flushes its type pool so the order is stable.
 		g.tupleDefs[name] = append([]mir.Type(nil), t.Elems...)
-		g.tupleOrder = append(g.tupleOrder, name)
 	}
 	return name
 }

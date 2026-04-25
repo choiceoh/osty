@@ -1527,3 +1527,106 @@ func mirCallVoidNoArgsLine(sym string) string {
 func mirUnreachableLine() string {
 	return "  unreachable\n"
 }
+
+// §14 enum / tuple layout cache.
+//
+// MirLayoutCache mirrors `toolchain/mir_generator.osty: MirLayoutCache`.
+// The struct owns the dedup + insertion-order side of the emitter's
+// aggregate-type pool. The matching map values (`g.tupleDefs
+// map[string][]mir.Type`) stay on the Go side because their payload
+// type is `mir.Type` — a Go interface that has no Osty mirror.
+
+// Osty: MirLayoutCache
+type MirLayoutCache struct {
+	EnumLayoutOrder []string
+	TupleOrder      []string
+}
+
+// Osty: MirLayoutCache.registerEnumLayout
+func (c *MirLayoutCache) RegisterEnumLayout(name string) bool {
+	for _, existing := range c.EnumLayoutOrder {
+		if existing == name {
+			return false
+		}
+	}
+	c.EnumLayoutOrder = append(c.EnumLayoutOrder, name)
+	return true
+}
+
+// Osty: MirLayoutCache.registerTuple
+func (c *MirLayoutCache) RegisterTuple(name string) bool {
+	for _, existing := range c.TupleOrder {
+		if existing == name {
+			return false
+		}
+	}
+	c.TupleOrder = append(c.TupleOrder, name)
+	return true
+}
+
+// Osty: MirLayoutCache.isEmpty
+func (c *MirLayoutCache) IsEmpty() bool {
+	return len(c.EnumLayoutOrder) == 0 && len(c.TupleOrder) == 0
+}
+
+// §9 terminator templates. Unit-return / typed-return / unreachable
+// shapes route through the existing line builders (`mirRetVoidLine`,
+// `mirLoadLine` + `mirRetLine`, `mirUnreachableLine`); this section
+// only owns the terminator-specific shapes that don't fit the
+// per-instruction line-builder mold.
+
+// Osty: mirTerminatorBranchUnconditional
+func mirTerminatorBranchUnconditional(targetLabel, loopMDRef string) string {
+	if loopMDRef != "" {
+		return "  br label %" + targetLabel + ", !llvm.loop " + loopMDRef + "\n"
+	}
+	return "  br label %" + targetLabel + "\n"
+}
+
+// Osty: mirTerminatorBranchConditional
+func mirTerminatorBranchConditional(condReg, thenLabel, elseLabel, loopMDRef string) string {
+	head := "  br i1 " + condReg + ", label %" + thenLabel + ", label %" + elseLabel
+	if loopMDRef != "" {
+		return head + ", !llvm.loop " + loopMDRef + "\n"
+	}
+	return head + "\n"
+}
+
+// Osty: MirSwitchCase
+type MirSwitchCase struct {
+	ValueText   string
+	TargetLabel string
+}
+
+// Osty: mirTerminatorSwitchInt
+//
+// Builds the switch IR text via `strings.Builder` rather than the
+// `out += ...` shape the Osty source uses literally — large enum
+// dispatches with hundreds of cases would otherwise be O(n²) on the
+// Go side. The emitted bytes are identical.
+func mirTerminatorSwitchInt(llvmType, scrutReg, defaultLabel string, cases []MirSwitchCase) string {
+	var b llvmStrings.Builder
+	b.WriteString("  switch ")
+	b.WriteString(llvmType)
+	b.WriteByte(' ')
+	b.WriteString(scrutReg)
+	b.WriteString(", label %")
+	b.WriteString(defaultLabel)
+	b.WriteString(" [\n")
+	for _, c := range cases {
+		b.WriteString("    ")
+		b.WriteString(llvmType)
+		b.WriteByte(' ')
+		b.WriteString(c.ValueText)
+		b.WriteString(", label %")
+		b.WriteString(c.TargetLabel)
+		b.WriteByte('\n')
+	}
+	b.WriteString("  ]\n")
+	return b.String()
+}
+
+// Osty: mirTerminatorReturnMain
+func mirTerminatorReturnMain() string {
+	return "  ret i32 0\n"
+}

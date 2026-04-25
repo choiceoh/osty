@@ -2935,11 +2935,11 @@ func TestGenerateFromMIRStringEqualityInlineLiteral(t *testing.T) {
 	for _, want := range []string{
 		"icmp eq ptr",
 		"load i8, ptr",
-		", 117\n",                      // 'u'
-		", 115\n",                      // 's'
+		", 117\n", // 'u'
+		", 115\n", // 's'
 		"getelementptr inbounds i8, ptr",
-		", i64 2\n",                    // offset past content
-		", 0\n",                        // NUL terminator compare
+		", i64 2\n", // offset past content
+		", 0\n",     // NUL terminator compare
 		"phi i1 [true, %streq.match",
 		"], [false, %streq.nomatch",
 	} {
