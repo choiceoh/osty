@@ -771,14 +771,17 @@ static int64_t osty_gc_collection_nanos_max = 0;
  * real payload pointer so probes can skip erased slots without
  * treating them as empty.
  */
-typedef struct osty_gc_index_slot {
-    void *payload;
-    osty_gc_header *header;
-} osty_gc_index_slot;
-
+/* Split-arrays layout: probing only reads keys, so the hot loop
+ * touches half as many cache lines as the previous packed-pair layout
+ * (`struct {payload, header}` = 16 B/slot, 4 slots/64 B line vs.
+ * 8 keys/line). Headers are loaded only on a key match. With a
+ * working set of tens of thousands of slots in a multi-MB index, the
+ * difference is the dominant alloc-path savings for non-compacting
+ * programs after #875 / #876. */
 #define OSTY_GC_INDEX_TOMBSTONE ((void *)(uintptr_t)1)
 
-static osty_gc_index_slot *osty_gc_index_slots = NULL;
+static void **osty_gc_index_keys = NULL;
+static osty_gc_header **osty_gc_index_values = NULL;
 static int64_t osty_gc_index_capacity = 0;
 static int64_t osty_gc_index_count = 0;
 static int64_t osty_gc_index_tombstones = 0;
@@ -1076,25 +1079,28 @@ static size_t osty_gc_forwarding_hash(void *payload) {
 }
 
 static void osty_gc_index_grow(int64_t new_capacity) {
-    osty_gc_index_slot *old_slots = osty_gc_index_slots;
+    void **old_keys = osty_gc_index_keys;
+    osty_gc_header **old_values = osty_gc_index_values;
     int64_t old_cap = osty_gc_index_capacity;
     int64_t i;
-    osty_gc_index_slots = (osty_gc_index_slot *)calloc((size_t)new_capacity,
-                                                       sizeof(osty_gc_index_slot));
-    if (osty_gc_index_slots == NULL) {
+    osty_gc_index_keys = (void **)calloc((size_t)new_capacity, sizeof(void *));
+    osty_gc_index_values = (osty_gc_header **)calloc((size_t)new_capacity,
+                                                     sizeof(osty_gc_header *));
+    if (osty_gc_index_keys == NULL || osty_gc_index_values == NULL) {
         osty_rt_abort("out of memory (gc index)");
     }
     osty_gc_index_capacity = new_capacity;
     osty_gc_index_count = 0;
     osty_gc_index_tombstones = 0;
-    if (old_slots != NULL) {
+    if (old_keys != NULL) {
         for (i = 0; i < old_cap; i++) {
-            void *p = old_slots[i].payload;
+            void *p = old_keys[i];
             if (p != NULL && p != OSTY_GC_INDEX_TOMBSTONE) {
-                osty_gc_index_insert(p, old_slots[i].header);
+                osty_gc_index_insert(p, old_values[i]);
             }
         }
-        free(old_slots);
+        free(old_keys);
+        free(old_values);
     }
 }
 
@@ -1104,7 +1110,7 @@ static void osty_gc_index_insert(void *payload, osty_gc_header *header) {
     size_t first_tombstone = SIZE_MAX;
     /* Keep load factor ≤ 0.75 including tombstones so probes stay
      * short. Capacity is always a power of two — start at 128. */
-    if (osty_gc_index_slots == NULL ||
+    if (osty_gc_index_keys == NULL ||
         (osty_gc_index_count + osty_gc_index_tombstones + 1) * 4 >=
             osty_gc_index_capacity * 3) {
         int64_t new_cap = osty_gc_index_capacity == 0 ? 128 : osty_gc_index_capacity * 2;
@@ -1112,13 +1118,13 @@ static void osty_gc_index_insert(void *payload, osty_gc_header *header) {
     }
     mask = (size_t)(osty_gc_index_capacity - 1);
     idx = osty_gc_index_hash(payload) & mask;
-    while (osty_gc_index_slots[idx].payload != NULL) {
-        if (osty_gc_index_slots[idx].payload == OSTY_GC_INDEX_TOMBSTONE) {
+    while (osty_gc_index_keys[idx] != NULL) {
+        if (osty_gc_index_keys[idx] == OSTY_GC_INDEX_TOMBSTONE) {
             if (first_tombstone == SIZE_MAX) {
                 first_tombstone = idx;
             }
-        } else if (osty_gc_index_slots[idx].payload == payload) {
-            osty_gc_index_slots[idx].header = header;
+        } else if (osty_gc_index_keys[idx] == payload) {
+            osty_gc_index_values[idx] = header;
             return;
         }
         idx = (idx + 1) & mask;
@@ -1127,23 +1133,23 @@ static void osty_gc_index_insert(void *payload, osty_gc_header *header) {
         idx = first_tombstone;
         osty_gc_index_tombstones -= 1;
     }
-    osty_gc_index_slots[idx].payload = payload;
-    osty_gc_index_slots[idx].header = header;
+    osty_gc_index_keys[idx] = payload;
+    osty_gc_index_values[idx] = header;
     osty_gc_index_count += 1;
 }
 
 static osty_gc_header *osty_gc_index_lookup(void *payload) {
     size_t mask;
     size_t idx;
-    if (osty_gc_index_slots == NULL || payload == NULL ||
+    if (osty_gc_index_keys == NULL || payload == NULL ||
         payload == OSTY_GC_INDEX_TOMBSTONE) {
         return NULL;
     }
     mask = (size_t)(osty_gc_index_capacity - 1);
     idx = osty_gc_index_hash(payload) & mask;
-    while (osty_gc_index_slots[idx].payload != NULL) {
-        if (osty_gc_index_slots[idx].payload == payload) {
-            return osty_gc_index_slots[idx].header;
+    while (osty_gc_index_keys[idx] != NULL) {
+        if (osty_gc_index_keys[idx] == payload) {
+            return osty_gc_index_values[idx];
         }
         idx = (idx + 1) & mask;
     }
@@ -1153,16 +1159,16 @@ static osty_gc_header *osty_gc_index_lookup(void *payload) {
 static void osty_gc_index_remove(void *payload) {
     size_t mask;
     size_t idx;
-    if (osty_gc_index_slots == NULL || payload == NULL ||
+    if (osty_gc_index_keys == NULL || payload == NULL ||
         payload == OSTY_GC_INDEX_TOMBSTONE) {
         return;
     }
     mask = (size_t)(osty_gc_index_capacity - 1);
     idx = osty_gc_index_hash(payload) & mask;
-    while (osty_gc_index_slots[idx].payload != NULL) {
-        if (osty_gc_index_slots[idx].payload == payload) {
-            osty_gc_index_slots[idx].payload = OSTY_GC_INDEX_TOMBSTONE;
-            osty_gc_index_slots[idx].header = NULL;
+    while (osty_gc_index_keys[idx] != NULL) {
+        if (osty_gc_index_keys[idx] == payload) {
+            osty_gc_index_keys[idx] = OSTY_GC_INDEX_TOMBSTONE;
+            osty_gc_index_values[idx] = NULL;
             osty_gc_index_count -= 1;
             osty_gc_index_tombstones += 1;
             return;
