@@ -2,16 +2,15 @@
 
 > **Date**: 2026-04-26
 > **Status**: Active — four parallel workstreams in flight
-> **Owner**: LLVM backend migration team
 
 ---
 
 ## 1. Executive Summary
 
-This plan coordinates four parallel workstreams porting the Osty backend from
-Go to native Osty. The overall goal is to shift the execution backend from
-`internal/gen` (Go transpiler) to a self-hosted LLVM native backend owned by
-`toolchain/llvmgen.osty`.
+This plan coordinates the porting of the Osty LLVM backend from Go to
+native Osty. The overall goal is to shift the execution backend from
+`internal/gen` (Go transpiler) to a self-hosted LLVM native backend
+owned by `toolchain/llvmgen.osty`.
 
 ### Current State Snapshot
 
@@ -21,7 +20,6 @@ Go to native Osty. The overall goal is to shift the execution backend from
 | **B. MIR→LLVM Lowering** | `mir_lowering.osty` (707 lines) | ~25% |
 | **C. Runtime ABI & Symbols** | `runtime_symbols.osty` (385 lines) | ~60% |
 | **D. Smoke Tests** | `smoke_corpus.osty` (806 lines, 22 fixtures) | ~40% |
-| **Core Merge** | `toolchain/llvmgen.osty` (+1,038 lines) | ✅ Done |
 
 ### Architecture
 
@@ -35,8 +33,6 @@ Osty Source → lexer → parser → resolve → check
               internal/llvmgen/ (Go bootstrap)   toolchain/llvmgen.osty
                            ↓                    ↑
               support_snapshot.go ←── drift guard ──→ llvmgen.osty
-                           ↓
-                    LLVM IR (.ll) → clang → binary
 ```
 
 ---
@@ -58,23 +54,23 @@ Osty Source → lexer → parser → resolve → check
 
 ---
 
-## 3. Recommended PR Order
+## 3. PR Sequence
 
 | PR | Scope | Depends On |
 |----|-------|------------|
-| #1 | Function setup + runtime symbols (this branch) | — |
-| #2 | AST lowering patterns into llvmgen.osty | #1 |
-| #3 | MIR `?` optional chaining | #2 |
-| #4 | Container intrinsics (~150 symbols) | #3 |
-| #5 | Call site lowering + indirect calls | #4 |
-| #6 | Module-level emission | #5 |
-| #7 | String runtime C implementation | #6 |
-| #8 | Concurrency/scheduler C runtime | #7 |
-| #9 | Close Tier A blockers | #8 |
-| #10–14 | Self-host progression | #9 |
-| #15–16 | Multi-file package emission | #14 |
-| #17 | Default backend switch | #16 |
-| #18 | Remove Go bootstrap bridge | #17 |
+| #863 | Function setup + runtime symbols | — |
+| #866 | AST lowering patterns | #863 |
+| #867 | MIR `?` optional chaining | #866 |
+| #868 | Container intrinsics (~150 symbols) | #867 |
+| #869 | Call site lowering + indirect calls | #868 |
+| #870 | Module-level emission | #869 |
+| #871 | String runtime C implementation | #870 |
+| #872 | Concurrency/scheduler C runtime | #871 |
+| #873 | Close Tier A blockers | #872 |
+| #874–878 | Self-host progression (stdlib, pkgmgr, core toolchain) | #873 |
+| #879–880 | Multi-file package / workspace emission | #878 |
+| #881 | Default backend switch | #880 |
+| #882 | Remove Go bootstrap bridge | #881 |
 
 ---
 
@@ -89,10 +85,10 @@ Osty Source → lexer → parser → resolve → check
 
 ---
 
-## 5. Completion Criteria
+## 5. Success Criteria
 
 1. `toolchain/llvmgen.osty` owns all LLVM backend semantics
-2. `internal/llvmgen/support_snapshot.go` shows zero diff on smoke corpus
+2. `support_snapshot.go` shows zero diff on smoke corpus
 3. `osty build --backend=llvm` produces identical output to `--backend=go`
 4. smoke corpus (80+ fixtures) passes on LLVM backend
 5. `osty check toolchain` has no NEW errors from LLVM backend

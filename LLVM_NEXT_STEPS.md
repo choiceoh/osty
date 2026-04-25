@@ -6,44 +6,51 @@
 
 ## Immediate Actions (Next 2 Weeks)
 
-### 1. Port Function-Level Setup ✅ DONE
+### 1. Port Function-Level Setup ✅ DONE (PR #863)
 
-**Status**: Completed in PR #1 (this branch).
+**Status**: Completed in PR #863.
 - `beginFunction()`, `render()`, `renderFunction()` added to `toolchain/llvmgen.osty`
 - GC state, safepoints, loop hints, defer, attributes all merged
 
-### 2. Port Scope Management (Workstream A)
+### 2. Port AST Lowering Patterns ✅ DONE (PR #866)
 
-**Task**: Port `captureScopeState`, `restoreScopeState`, `popScope`.
+**Status**: Completed in PR #866.
+- `llvmTypeFor`, `llvmTypeHeadName` — type mapping
+- `emitLetLowering`, `emitAssignLowering` — bindings
+- `emitIfStmtLowering`, `emitIfExprLowering` — conditionals
+- `emitForRangeLowering`, `emitForWhileLowering` — loops
+- `emitCallLowering`, `emitReturnLowering` — calls/returns
+- `emitStructLitLowering`, `emitClosureEnvAllocation` — aggregates/closures
 
-**Why**: Nested function bodies, closures, and block expressions require scope save/restore.
-
-### 3. Close Tier A Blockers (Workstream A + C)
+### 3. Close Tier A Blockers (Workstream A + C) — 🟡 Priority
 
 **Current blocker**: `List<String>` literal + method lowering (974 usage sites),
 `String` concat/slice (most toolchain files), Closure + env capture.
 
 **Recommended approach**:
 1. Run `osty check toolchain` on this branch
-2. Group errors by category, address top 3 first
-3. Each fix should include a regression test
+2. Group errors by category, address the top 3 first
+3. Each fix should include a regression test in `testdata/backend/llvm_smoke/`
 
-### 4. Fill MIR Stage 5 Gaps (Workstream B)
+### 4. Fill MIR Stage 5 Gaps (Workstream B) — 🟡 Priority
 
 **Task**: Implement MIR lowering for `?` / optional chaining → branches.
 
 **After `?`**: `match` patterns → CFG, then `if let` / `for let` destructuring.
 
-### 5. String Runtime Completion (Workstream C)
+### 5. String Runtime Completion (Workstream C) — 🟡 Priority
 
 **Task**: Complete `osty_runtime.c` string operations:
-- `slice` (all four forms)
+- `concat` (already has runtime intrinsic, needs C implementation)
+- `slice` (all four forms: range, half-open, inclusive, open-high)
 - `chars()` and `bytes()` — returns `List<Char>` / `List<Byte>`
 
-### 6. Add Generic/Interface Smoke Tests (Workstream D)
+### 6. Add Generic/Interface Smoke Tests (Workstream D) — 🟢 Priority
 
-**Task**: Create smoke fixtures exercising generic function instantiation,
-generic struct, interface boxing and dispatch.
+**Task**: Create smoke fixtures that exercise:
+- Generic function instantiation (`id::<Int>`)
+- Generic struct (`Pair<Int, Float>`)
+- Interface boxing and dispatch
 
 ---
 
