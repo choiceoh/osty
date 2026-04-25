@@ -288,6 +288,14 @@ list keeps new Osty clean of known landmines.
 | `mirBrCondReversedLine` | `(cond: String, falseLabel: String, trueLabel: String) -> String` | §6 | Conditional branch with true/false target order swapped — `assertFalse` shape where failure is on cond=true |
 | `mirCallIndirectVoidLine` | `(callType: String, fnPtrReg: String, argList: String) -> String` | §6 | Void-return indirect call `  call <callType> <fnPtrReg>(<args>)\n` — closure / fn-pointer call sites where callee is an SSA value |
 | `mirCallIndirectValueLine` | `(reg: String, callType: String, fnPtrReg: String, argList: String) -> String` | §6 | Typed indirect call sibling of `mirCallIndirectVoidLine` |
+| `MirAggregatePair` (struct) | `{ step1Reg: String, finalReg: String, lines: List<String> }` | §10 | Output of an Option / Result 2-step aggregate construction. Caller iterates `lines` into `g.fnBuf` and uses `finalReg` as the result; `step1Reg` exposed for cases that need to reference the partial |
+| `mirSomeI64Aggregate` | `(step1Reg, finalReg, optLLVM, payloadI64) -> MirAggregatePair` | §10 | Builds the Some(payload) shape: 2 insertvalue lines (disc=1, payload=runtime value) into `%Option.<T>` |
+| `mirNoneAggregate` | `(step1Reg, finalReg, optLLVM) -> MirAggregatePair` | §10 | Builds the None shape: 2 insertvalue lines (disc=0, payload=0) into `%Option.<T>` |
+| `mirResultOkI64Aggregate` | `(step1Reg, finalReg, resultLLVM, payloadI64) -> MirAggregatePair` | §10 | Builds the Ok(payload) shape — same insertvalue pair but for `%Result.<Ok>.<Err>` |
+| `mirResultErrI64Aggregate` | `(step1Reg, finalReg, resultLLVM, payloadI64) -> MirAggregatePair` | §10 | Builds the Err(payload) shape — used by string-parse + checked-cancellation paths |
+| `mirGCAllocCallLine` | `(reg: String, traceKindDigits: String, size: String, site: String) -> String` | §10 | GC heap allocator call `<reg> = call ptr @osty.gc.alloc_v1(i64 <kind>, i64 <size>, ptr <site>)` — used by `toI64Slot`'s aggregate-payload heap-box path |
+| `mirFPTruncDoubleToFloatLine` | `(reg: String, val: String) -> String` | §6 | FP-truncate from `double` to `float` |
+| `mirFPExtFloatToDoubleLine` | `(reg: String, val: String) -> String` | §6 | FP-extend from `float` to `double` |
 | `mirAndI1Line` | `(reg: String, lhs: String, rhs: String) -> String` | §6 | i1 logical-and `  <reg> = and i1 <lhs>, <rhs>\n` — used by bounds-check `nonNeg && inUpper` pattern in `emitListSafeGet` |
 | `mirCallValueWithAliasScopeLine` | `(reg, retTy, sym, argList, scopeRef) -> String` | §1 | Snapshot-call form with `!alias.scope` metadata: `  <reg> = call <retTy> @<sym>(<args>), !alias.scope <ref>\n`. Unlocks LICM of `osty_rt_list_data_*` / `osty_rt_list_len` snapshot reads |
 | `mirLoadWithNoAliasLine` | `(reg: String, ty: String, ptr: String, scopeRef: String) -> String` | §1 | Load tagged with `!noalias` metadata — vector-list fast-path read |
