@@ -913,16 +913,18 @@ func spliceFnAttrs(rendered, attrs string) string {
 }
 
 // tagParallelAccessesLines is the `[]string` twin of the MIR path's
-// tagParallelAccesses — it walks each body line and appends
+// `mirTagParallelAccesses` — it walks each body line and appends
 // `, !llvm.access.group !N` to load/store lines that do not already
 // carry that attachment. The HIR emitter accumulates the body in a
 // `[]string`, so we operate on the slice directly rather than on a
-// single joined string.
+// single joined string. The line predicate is shared with the MIR side
+// via `mirIsMemoryAccessLine` (Osty-mirrored in
+// `toolchain/mir_generator.osty`).
 func tagParallelAccessesLines(body []string, groupRef string) []string {
 	suffix := ", !llvm.access.group " + groupRef
 	out := make([]string, len(body))
 	for i, line := range body {
-		if isMemoryAccessLine(line) && !strings.Contains(line, "!llvm.access.group") {
+		if mirIsMemoryAccessLine(line) && !strings.Contains(line, "!llvm.access.group") {
 			out[i] = line + suffix
 			continue
 		}
