@@ -2259,13 +2259,23 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
     bool humongous;
     bool reused = false;
     uint8_t storage_kind = OSTY_GC_STORAGE_DIRECT;
+    bool single_threaded;
 
     total_size = osty_gc_total_size_for_payload_size(payload_size);
     payload_size = total_size - sizeof(osty_gc_header);
     humongous = osty_gc_total_size_is_humongous(total_size);
     header = NULL;
+
+    /* Single-mutator skip for both lock cycles in this function. STW
+     * collection means the mutator and GC never run at the same time,
+     * so the recursive mutex is unnecessary on the hot alloc path when
+     * no worker thread is live. Profile post-#870 had ~13% of CPU
+     * sitting in `_pthread_mutex_firstfit_*` under
+     * `osty_gc_allocate_managed` + `osty_gc_load_v1` combined. */
+    single_threaded = (osty_rt_concurrent_workers_load() == 0);
+
     if (!humongous) {
-        osty_gc_acquire();
+        if (!single_threaded) osty_gc_acquire();
         header = osty_gc_free_list_take(total_size, &chunk_size, &storage_kind);
         if (header != NULL) {
             reused = true;
@@ -2275,7 +2285,7 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
                 storage_kind = OSTY_GC_STORAGE_BUMP_YOUNG;
             }
         }
-        osty_gc_release();
+        if (!single_threaded) osty_gc_release();
     }
     if (reused && header != NULL) {
         memset(header, 0, chunk_size);
@@ -2307,7 +2317,7 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
      * this is a bounded pressure, not an allocation floodgate. */
     header->color = OSTY_GC_COLOR_WHITE;
     header->marked = false;
-    osty_gc_acquire();
+    if (!single_threaded) osty_gc_acquire();
     if (humongous) {
         osty_gc_humongous_alloc_count_total += 1;
         osty_gc_humongous_alloc_bytes_total += (int64_t)payload_size;
@@ -2330,7 +2340,7 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
             osty_gc_mutator_assist_calls_total += 1;
         }
     }
-    osty_gc_release();
+    if (!single_threaded) osty_gc_release();
     return header->payload;
 }
 
@@ -7893,6 +7903,27 @@ locked_path:
 
 void *osty_gc_load_v1(void *value) {
     void *out = value;
+
+    /* Single-mutator fast path, mirroring `osty_gc_post_write_v1`.
+     * Hash lookup + forwarding-table lookup don't need the recursive
+     * mutex when no worker thread is live: STW collection never overlaps
+     * mutator execution, so the tables can be read lock-free. The
+     * counter increments stay in lock-step with the locked path so
+     * test observability is preserved. */
+    if (osty_rt_concurrent_workers_load() == 0) {
+        osty_gc_load_count += 1;
+        if (osty_gc_find_header(value) != NULL) {
+            osty_gc_load_managed_count += 1;
+        } else {
+            out = osty_gc_forward_payload(value);
+            if (out != value) {
+                osty_gc_load_managed_count += 1;
+                osty_gc_load_forwarded_count += 1;
+            }
+        }
+        return out;
+    }
+
     osty_gc_acquire();
     osty_gc_load_count += 1;
     if (osty_gc_find_header(value) != NULL) {
