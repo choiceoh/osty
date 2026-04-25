@@ -3472,9 +3472,24 @@ static void osty_gc_replace_header(osty_gc_header *old_header,
         new_header->next_gen->prev_gen = new_header;
     }
 
+    /* `osty_gc_index_remove` is a no-op for arena-backed payloads
+     * (they were never inserted), and otherwise drops the old hash
+     * entry as before. The new-header insert is similarly gated on
+     * arena membership: arena-backed clones (the overwhelming
+     * majority — survivor / old / pinned-bump regions all use the
+     * arena since #881) are findable via `osty_gc_find_header`'s
+     * range + self-reference check, so a hash entry is redundant.
+     * Without this gate every minor compaction inserted ~one entry
+     * per evacuated header (~50K per iteration on log-aggregator),
+     * which showed up as `osty_gc_index_grow` traffic in the
+     * post-#881 profile.
+     *
+     * Identity inserts stay deferred (lazy population on first
+     * lookup), same as the alloc path. */
     osty_gc_index_remove(old_header->payload);
-    osty_gc_index_insert(new_header->payload, new_header);
-    osty_gc_identity_insert(new_header->stable_id, new_header);
+    if (!osty_gc_arena_contains(new_header->payload)) {
+        osty_gc_index_insert(new_header->payload, new_header);
+    }
 }
 
 static int64_t osty_gc_compact_major_with_stack_roots(
