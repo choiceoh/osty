@@ -2046,3 +2046,10 @@ func mirFunctionDefineHeader(cconv string, retLLVM string, name string, paramLis
 	}
 	return "define " + cconv + retLLVM + " @" + name + "(" + paramListJoined + ")" + attrSuffix + " {\n"
 }
+
+// mirFunctionDefineFooter renders the closing `}\n\n` of a function
+// definition.
+// Osty: mirFunctionDefineFooter
+func mirFunctionDefineFooter() string {
+	return "}\n\n"
+}

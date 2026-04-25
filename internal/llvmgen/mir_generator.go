@@ -1590,8 +1590,7 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 			continue
 		}
 		if bb.ID != fn.Entry {
-			g.fnBuf.WriteString(g.blockLabels[bb.ID])
-			g.fnBuf.WriteString(":\n")
+			g.fnBuf.WriteString(mirLabelLine(g.blockLabels[bb.ID]))
 		}
 		g.curBlockID = bb.ID
 		for _, inst := range bb.Instrs {
@@ -1604,7 +1603,7 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 		}
 	}
 
-	g.fnBuf.WriteString("}\n\n")
+	g.fnBuf.WriteString(mirFunctionDefineFooter())
 
 	// v0.6 A6: if `#[parallel]` is in effect, annotate every load/store
 	// we just emitted inside this function body with `!llvm.access.group
@@ -2187,13 +2186,10 @@ func (g *mirGen) emitGCSafepointKind(kind safepointKind) {
 	g.nextSafepoint += len(plan)
 	for i, chunk := range plan {
 		rootChunk := g.gcRootChunks[i]
-		g.fnBuf.WriteString("  call void @osty.gc.safepoint_v1(i64 ")
-		g.fnBuf.WriteString(strconv.Itoa(chunk.id))
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(rootChunk.slotsPtr)
-		g.fnBuf.WriteString(", i64 ")
-		g.fnBuf.WriteString(strconv.Itoa(rootChunk.count))
-		g.fnBuf.WriteString(")\n")
+		g.fnBuf.WriteString(mirCallVoidLine("osty.gc.safepoint_v1",
+			"i64 "+strconv.Itoa(chunk.id)+
+				", ptr "+rootChunk.slotsPtr+
+				", i64 "+strconv.Itoa(rootChunk.count)))
 	}
 }
 
@@ -3685,37 +3681,17 @@ func (g *mirGen) emitBenchErrorCheck(retRef, prefix string) {
 	errFmt := g.stringLiteral("bench `?` propagated failure at %s\n")
 	pathSym := g.stringLiteral(g.source)
 	tag := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(tag)
-	g.fnBuf.WriteString(" = extractvalue %Result.unit.Error ")
-	g.fnBuf.WriteString(retRef)
-	g.fnBuf.WriteString(", 0\n")
+	g.fnBuf.WriteString(mirExtractValueLine(tag, "%Result.unit.Error", retRef, "0"))
 	isErr := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(isErr)
-	g.fnBuf.WriteString(" = icmp eq i64 ")
-	g.fnBuf.WriteString(tag)
-	g.fnBuf.WriteString(", 0\n")
+	g.fnBuf.WriteString(mirICmpEqLine(isErr, "i64", tag, "0"))
 	errLabel := g.freshLabel(prefix + ".err")
 	okLabel := g.freshLabel(prefix + ".ok")
-	g.fnBuf.WriteString("  br i1 ")
-	g.fnBuf.WriteString(isErr)
-	g.fnBuf.WriteString(", label %")
-	g.fnBuf.WriteString(errLabel)
-	g.fnBuf.WriteString(", label %")
-	g.fnBuf.WriteString(okLabel)
-	g.fnBuf.WriteByte('\n')
-	g.fnBuf.WriteString(errLabel)
-	g.fnBuf.WriteString(":\n")
-	g.fnBuf.WriteString("  call i32 (ptr, ...) @printf(ptr ")
-	g.fnBuf.WriteString(errFmt)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(pathSym)
-	g.fnBuf.WriteString(")\n")
-	g.fnBuf.WriteString("  call void @exit(i32 1)\n")
-	g.fnBuf.WriteString("  unreachable\n")
-	g.fnBuf.WriteString(okLabel)
-	g.fnBuf.WriteString(":\n")
+	g.fnBuf.WriteString(mirBrCondLine(isErr, errLabel, okLabel))
+	g.fnBuf.WriteString(mirLabelLine(errLabel))
+	g.fnBuf.WriteString("  call i32 (ptr, ...) @printf(ptr " + errFmt + ", ptr " + pathSym + ")\n")
+	g.fnBuf.WriteString(mirCallVoidLine("exit", "i32 1"))
+	g.fnBuf.WriteString(mirUnreachableLine())
+	g.fnBuf.WriteString(mirLabelLine(okLabel))
 }
 
 // invokeClosureOperand calls a closure value through its env pointer
@@ -3739,32 +3715,14 @@ func (g *mirGen) invokeClosureOperand(op mir.Operand) error {
 		}
 	}
 	fnPtr := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(fnPtr)
-	g.fnBuf.WriteString(" = load ptr, ptr ")
-	g.fnBuf.WriteString(envPtr)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirLoadLine(fnPtr, "ptr", envPtr))
 	callType := retLLVM + " (" + strings.Join(paramParts, ", ") + ")"
 	if retLLVM == "void" {
-		g.fnBuf.WriteString("  call ")
-		g.fnBuf.WriteString(callType)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(fnPtr)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(envPtr)
-		g.fnBuf.WriteString(")\n")
+		g.fnBuf.WriteString("  call " + callType + " " + fnPtr + "(ptr " + envPtr + ")\n")
 		return nil
 	}
 	tmp := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(tmp)
-	g.fnBuf.WriteString(" = call ")
-	g.fnBuf.WriteString(callType)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(fnPtr)
-	g.fnBuf.WriteString("(ptr ")
-	g.fnBuf.WriteString(envPtr)
-	g.fnBuf.WriteString(")\n")
+	g.fnBuf.WriteString("  " + tmp + " = call " + callType + " " + fnPtr + "(ptr " + envPtr + ")\n")
 	return nil
 }
 
