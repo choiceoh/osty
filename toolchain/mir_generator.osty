@@ -1075,6 +1075,109 @@ pub struct MirSeq {
         self.commitMDLine(mirAccessGroupLine(ref))
         ref
     }
+
+    /// emitInlineStringEqLiteral builds the byte-by-byte string-
+    /// equality switch the legacy emitter inlined directly into
+    /// `g.fnBuf`. `litBytes` is the per-byte integer view of the
+    /// literal (caller converts via `int(lit[i])` because the self-host
+    /// stdlib still lacks a `Char` / `Byte` primitive — see CLAUDE.md
+    /// "LLVM backend capability state"). `opIsEq` selects the `==`
+    /// (true) vs `!=` (false) form; the `!=` path adds one final
+    /// `xor i1 ..., true` line so callers always receive the
+    /// post-negation register without having to track the op
+    /// themselves. Returns lines + final result reg; callers splice the
+    /// lines into their function body and use `finalReg` as the i1
+    /// value.
+    ///
+    /// Implementation parity: every `freshLabel` / `fresh` call here
+    /// matches `func (g *mirGen) emitInlineStringEqLiteral` in
+    /// `internal/llvmgen/mir_generator.go` one-for-one so `tempSeq`
+    /// advances by exactly the same amount the legacy stream did,
+    /// keeping SSA / label numbering byte-stable across the port.
+    pub fn emitInlineStringEqLiteral(
+        mut self,
+        opIsEq: Bool,
+        dynReg: String,
+        litSym: String,
+        litBytes: List<Int>,
+    ) -> MirInlineStringEqResult {
+        let mut lines: List<String> = []
+        let matchLabel = self.freshLabel("streq.match")
+        let nomatchLabel = self.freshLabel("streq.nomatch")
+        let doneLabel = self.freshLabel("streq.done")
+
+        let ptrEq = self.fresh()
+        lines.push("  " + ptrEq + " = icmp eq ptr " + dynReg + ", " + litSym + "\n")
+
+        let n = litBytes.len()
+        let mut byteLabels: List<String> = []
+        let mut k = 0
+        for k <= n {
+            byteLabels.push(self.freshLabel("streq.b" + mirGenIntToString(k)))
+            k = k + 1
+        }
+        lines.push(
+            "  br i1 " + ptrEq +
+                ", label %" + matchLabel +
+                ", label %" + byteLabels[0] + "\n",
+        )
+
+        let mut i = 0
+        for i <= n {
+            lines.push(byteLabels[i] + ":\n")
+            let mut ptrReg = dynReg
+            if i > 0 {
+                ptrReg = self.fresh()
+                lines.push(
+                    "  " + ptrReg +
+                        " = getelementptr inbounds i8, ptr " + dynReg +
+                        ", i64 " + mirGenIntToString(i) + "\n",
+                )
+            }
+            let byteReg = self.fresh()
+            lines.push("  " + byteReg + " = load i8, ptr " + ptrReg + "\n")
+
+            let mut expected = 0
+            if i < n {
+                expected = litBytes[i]
+            }
+            let matchReg = self.fresh()
+            lines.push(
+                "  " + matchReg +
+                    " = icmp eq i8 " + byteReg +
+                    ", " + mirGenIntToString(expected) + "\n",
+            )
+
+            let mut nextLabel = matchLabel
+            if i < n {
+                nextLabel = byteLabels[i + 1]
+            }
+            lines.push(
+                "  br i1 " + matchReg +
+                    ", label %" + nextLabel +
+                    ", label %" + nomatchLabel + "\n",
+            )
+            i = i + 1
+        }
+
+        lines.push(matchLabel + ":\n  br label %" + doneLabel + "\n")
+        lines.push(nomatchLabel + ":\n  br label %" + doneLabel + "\n")
+        lines.push(doneLabel + ":\n")
+
+        let eq = self.fresh()
+        lines.push(
+            "  " + eq +
+                " = phi i1 [true, %" + matchLabel +
+                "], [false, %" + nomatchLabel + "]\n",
+        )
+
+        if opIsEq {
+            return MirInlineStringEqResult { finalReg: eq, lines }
+        }
+        let neq = self.fresh()
+        lines.push("  " + neq + " = xor i1 " + eq + ", true\n")
+        MirInlineStringEqResult { finalReg: neq, lines }
+    }
 }
 
 /// MirLoopHints carries the per-function loop-optimization annotation
@@ -1096,3 +1199,192 @@ pub struct MirLoopHints {
     pub unroll: Bool,
     pub unrollCount: Int,
 }
+
+/// mirChanRecvSuffix maps a channel element LLVM type to the `_<suffix>`
+/// used by the `osty_rt_thread_chan_recv_<suffix>` runtime symbol.
+/// Mirrors `chanRecvSuffix` in `internal/llvmgen/mir_generator.go` —
+/// thin delegating wrapper so the scalar/composite split stays in
+/// lockstep with `llvmChanRecv` (`toolchain/llvmgen.osty`). Composite
+/// element types fall through to the byte-based `bytes_v1` slow path.
+pub fn mirChanRecvSuffix(elemLLVM: String) -> String {
+    llvmChanElementSuffix(elemLLVM)
+}
+
+/// mirMapValueSizeBytes maps an LLVM value type name to the byte width
+/// used when memcpy-ing map values into out-slots. Mirrors
+/// `mapValueSizeBytes` in `internal/llvmgen/mir_generator.go`. Returns
+/// `0` for unrecognised types so the caller can stay on a slower
+/// element-agnostic path; `i64`/`double`/`ptr` collapse to 8 bytes
+/// (the LP64 / opaque-pointer ABI is the only one the runtime supports).
+pub fn mirMapValueSizeBytes(llvmTyp: String) -> Int {
+    if llvmTyp == "i64" || llvmTyp == "double" || llvmTyp == "ptr" {
+        return 8
+    }
+    if llvmTyp == "i32" {
+        return 4
+    }
+    if llvmTyp == "i8" || llvmTyp == "i1" {
+        return 1
+    }
+    0
+}
+
+/// mirIntLLVMBits returns the bit-width carried by an `iN` LLVM type
+/// name. Mirrors `intLLVMBits` in `internal/llvmgen/mir_generator.go`;
+/// non-`iN` inputs (`double` / `ptr` / `void` / unknown) return `0` so
+/// callers can reject them without having to enumerate every legal
+/// width. Used by the operand-coercion path to gate sext / trunc.
+pub fn mirIntLLVMBits(t: String) -> Int {
+    if t == "i1" { return 1 }
+    if t == "i8" { return 8 }
+    if t == "i16" { return 16 }
+    if t == "i32" { return 32 }
+    if t == "i64" { return 64 }
+    0
+}
+
+/// mirThunkName builds the closure-thunk LLVM symbol name from the
+/// captured function symbol. Mirrors `thunkName` in
+/// `internal/llvmgen/mir_generator.go` — single-line concatenation,
+/// extracted so the prefix lives in one place if the convention ever
+/// changes (e.g. when the GC needs a distinct shim section).
+pub fn mirThunkName(symbol: String) -> String {
+    "__osty_closure_thunk_" + symbol
+}
+
+/// mirIsMemoryAccessLine recognises the two textual shapes the MIR
+/// emitter produces for loads and stores — the lines that
+/// `tagParallelAccesses` tags with `!llvm.access.group <ref>` for the
+/// v0.6 `#[parallel]` annotation. Mirrors `isMemoryAccessLine` in
+/// `internal/llvmgen/mir_generator.go`. Pure: leading-space-strip +
+/// `store ` prefix probe + ` = load ` substring probe; everything else
+/// (branches, `icmp`, `select`, `call`, `br`, `alloca`, GEP, `phi`,
+/// labels, arithmetic) falls through unannotated.
+pub fn mirIsMemoryAccessLine(line: String) -> Bool {
+    let n = line.len()
+    let mut i = 0
+    for i < n && line[i..(i + 1)] == " " {
+        i = i + 1
+    }
+    let trimmed = line[i..n]
+    if llvmStrings.HasPrefix(trimmed, "store ") {
+        return true
+    }
+    llvmStrings.Contains(line, " = load ")
+}
+
+/// mirTagParallelAccesses walks `body` line-by-line and appends
+/// `, !llvm.access.group <groupRef>` to every load / store line that
+/// doesn't already carry the metadata. Mirrors `tagParallelAccesses`
+/// in `internal/llvmgen/mir_generator.go`. Pure: scans `body` byte-
+/// by-byte rather than relying on a Go-style `strings.SplitAfter`
+/// helper that the self-host stdlib doesn't expose. Lines without a
+/// trailing `\n` (file tail, single-line body) are also handled.
+pub fn mirTagParallelAccesses(body: String, groupRef: String) -> String {
+    let suffix = ", !llvm.access.group " + groupRef
+    let n = body.len()
+    let mut out = ""
+    let mut start = 0
+    let mut i = 0
+    for i < n {
+        if body[i..(i + 1)] == "\n" {
+            let line = body[start..i]
+            if mirIsMemoryAccessLine(line) && !llvmStrings.Contains(line, "!llvm.access.group") {
+                out = out + line + suffix + "\n"
+            } else {
+                out = out + body[start..(i + 1)]
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n {
+        let line = body[start..n]
+        if mirIsMemoryAccessLine(line) && !llvmStrings.Contains(line, "!llvm.access.group") {
+            out = out + line + suffix
+        } else {
+            out = out + line
+        }
+    }
+    out
+}
+
+/// mirEmitHeaderBlock returns the four-line module preamble the MIR
+/// emitter writes before any type definition / declare / function. The
+/// `target triple` line is omitted when `target` is empty so the host
+/// LLVM tool picks its native default. Trailing newline matches the
+/// Go source byte-for-byte so downstream `injectBeforeFirstFn` calls
+/// don't have to special-case a missing separator.
+pub fn mirEmitHeaderBlock(source: String, target: String) -> String {
+    let mut out = "; Code generated by osty LLVM MIR backend. DO NOT EDIT.\n"
+    out = out + "; Osty: " + source + "\n"
+    out = out + "source_filename = \"" + source + "\"\n"
+    if target != "" {
+        out = out + "target triple = \"" + target + "\"\n"
+    }
+    out + "\n"
+}
+
+/// mirEarliestAfterAny returns the smallest non-negative byte offset of
+/// any needle in `needles` inside `input`, or `-1` when none is
+/// present. Mirrors the multi-needle `earliestAfter([]string{...})`
+/// helper in `internal/llvmgen/mir_generator.go`. The single-needle
+/// `mirEarliestAfter` stays as the leaf primitive — this version just
+/// composes it across a list so the orchestration sites
+/// (`emitGlobalVars`, `emitStringPool`) get a one-call replacement
+/// for the Go-side variadic shape.
+pub fn mirEarliestAfterAny(input: String, needles: List<String>) -> Int {
+    let mut best = -1
+    for needle in needles {
+        let idx = llvmStrings.Index(input, needle)
+        if idx >= 0 {
+            if best < 0 || idx < best {
+                best = idx
+            }
+        }
+    }
+    best
+}
+
+/// mirInjectBeforeFirstFn splices `block` into `body` immediately
+/// before the first `define ` / `declare ` line, returning the
+/// rewritten string. Mirrors the inject-before-first-fn pattern used
+/// by `emitGlobalVars` / `emitStringPool` / `emitTypeDefs` /
+/// `emitRuntimeDeclarations` in `internal/llvmgen/mir_generator.go`.
+/// When neither marker is present (e.g. the body is empty or the
+/// module emits no functions), `block` is appended at the end so the
+/// caller never silently drops content.
+pub fn mirInjectBeforeFirstFn(body: String, block: String) -> String {
+    let markers: List<String> = ["define ", "declare "]
+    let idx = mirEarliestAfterAny(body, markers)
+    if idx < 0 {
+        return body + block
+    }
+    body[0..idx] + block + body[idx..body.len()]
+}
+
+/// mirJoinDeclareLines concatenates a list of `declare ...` strings
+/// with trailing newlines so they form one contiguous block ready for
+/// `mirInjectBeforeFirstFn`. Mirrors the assembly loop in
+/// `emitRuntimeDeclarations` (`internal/llvmgen/mir_generator.go`).
+/// The Go caller still owns the dedupe / ordering map (`g.declares` /
+/// `g.declareOrder`) — this helper just writes the final block once
+/// the caller has resolved the order.
+pub fn mirJoinDeclareLines(orderedDecls: List<String>) -> String {
+    let mut out = ""
+    for decl in orderedDecls {
+        out = out + decl + "\n"
+    }
+    out
+}
+
+/// MirInlineStringEqResult is the value/code split returned by
+/// `MirSeq.emitInlineStringEqLiteral`. The Go caller iterates `lines`
+/// (each already including leading 2-space indent and trailing newline,
+/// matching `g.fnBuf.WriteString` output byte-for-byte) and appends to
+/// `g.fnBuf`, then uses `finalReg` as the i1 result of the compare.
+pub struct MirInlineStringEqResult {
+    pub finalReg: String,
+    pub lines: List<String>,
+}
+

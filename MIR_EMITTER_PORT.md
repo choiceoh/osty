@@ -63,8 +63,8 @@ untouched.
 | 8 | concurrency intrinsics | 6762–7472 | ~20 | MEDIUM | Go-only |
 | 9 | terminators | 7473–7595 | ~5 | LOW | Go-only |
 | 10 | rvalue / operand | 7596–8937 | ~25 | HIGH | Go-only |
-| 11 | operators | 8938–9196 | ~12 | LOW | Partial — predicates + `emitBinary` opcode table + `emitUnary` instruction body ported (`isHeapEqualityType`, `isStringPrimType`, `isStringOrderingBinOp`, `stringOrderingPredicate`, `mirBinaryOpcode`, `mirBinaryForcesI1Type`, `mirUnaryIsIdentity`, `mirUnaryInstruction`); `emitInlineStringEqLiteral` deferred (needs `g.freshLabel` / `g.fnBuf`) |
-| 12 | strings | 9197–9284 | ~7 | LOW | Partial — `encodeLLVMString`, `earliestAfter`, and the string-pool line template ported (`mirEncodeLLVMString`, `mirEarliestAfter`, `mirStringPoolLine`); `stringLiteral` interning + `emitStringPool` orchestration stay on Go (touch `g.strings` / `g.out`) |
+| 11 | operators | 8938–9196 | ~12 | LOW | Partial — predicates + `emitBinary` opcode table + `emitUnary` instruction body + `emitInlineStringEqLiteral` byte-by-byte streq lowering ported (`isHeapEqualityType`, `isStringPrimType`, `isStringOrderingBinOp`, `stringOrderingPredicate`, `mirBinaryOpcode`, `mirBinaryForcesI1Type`, `mirUnaryIsIdentity`, `mirUnaryInstruction`, `MirSeq.emitInlineStringEqLiteral` → `MirInlineStringEqResult`). Go side pre-converts `lit` to `[]int` (Char/Byte primitive blocked — see CLAUDE.md backend caps) and splices `result.Lines` into `g.fnBuf`. |
+| 12 | strings | 9197–9284 | ~7 | LOW | Partial — `encodeLLVMString`, `earliestAfter` (single + multi-needle: `mirEarliestAfter` + `mirEarliestAfterAny`), `mirInjectBeforeFirstFn` inject orchestration, and the string-pool line template ported (`mirEncodeLLVMString`, `mirStringPoolLine`); `stringLiteral` interning stays on Go (touches `g.strings`). `emitStringPool` / `emitGlobalVars` inject step now delegates through `mirInjectBeforeFirstFn`. |
 | 13 | type mapping | 9285–9375 | ~8 | LOW | **Ported** (primitive + opaque-named + head-name + optional-surface) |
 | 14 | enum layout helpers | 9376–9575 | ~10 | LOW | Partial — `llvmTypeForTupleTag` Prim / Named branches + Optional / Option / Result / Tuple name-mangling ported (`mirTupleTagForPrim`, `mirTupleTagForNamed`, `mirOptionalTypeName`, `mirOptionTypeName`, `mirResultTypeName`, `mirTupleTypeNameFromTags`); `registerEnumLayout` + `g.tupleDefs` caches deferred to Phase B |
 | 15 | helpers | 9576–9616 | ~5 | LOW | Partial — pure (`firstNonEmpty`, `isUnitType`, `isFloatType`, `isScalarLLVMType`, `llvmStdIoI1Text`) + state-bearing (`MirSeq.fresh` / `MirSeq.freshLabel` / `MirSeq.reset`) ported. Phase B start: `tempSeq` field migrated from `mirGen` into Osty `MirSeq` struct mirror. `ostyEmitter` / `flushOstyEmitter` / `storeIntrinsicResult` / `emitRuntimeRawNull` still touch other state; landing as the mirror grows |
@@ -76,11 +76,15 @@ functions that have no `g.*` state dependency. Ship one section per PR
 with the compile-gate generator enforcing correctness.
 
 - ✅ §13 type mapping — first PR.
-- ⏳ §11 operators — pure predicates in (`isStringOrderingBinOp`,
-  `stringOrderingPredicate` delegate through `op.String()`); `emit*`
-  bodies deferred (need `g.fresh` / `g.fnBuf`).
-- ⏳ §12 strings — `encodeLLVMString` / `earliestAfter` in, `stringLiteral`
-  / `emitStringPool` deferred (touch `g.strings`).
+- ✅ §11 operators — pure predicates + opcode table + unary
+  instruction body + `emitInlineStringEqLiteral` (the byte-by-byte
+  streq switch) all ported; the streq port lives on `MirSeq` so
+  `self.fresh` / `self.freshLabel` keep SSA / label numbering byte-
+  stable with the legacy stream.
+- ⏳ §12 strings — `encodeLLVMString`, multi-needle `earliestAfter`,
+  inject-before-first-fn orchestration in (`mirEarliestAfterAny`,
+  `mirInjectBeforeFirstFn`); `stringLiteral` interning still touches
+  `g.strings` and stays on Go.
 - ⏳ §15 helpers — pure-side done (`firstNonEmpty`, unit/float/scalar
   predicates, `llvmStdIoI1Text`); state-touching (`fresh`, `freshLabel`,
   `ostyEmitter`, `flushOstyEmitter`, `storeIntrinsicResult`,
@@ -213,6 +217,18 @@ list keeps new Osty clean of known landmines.
 | `MirSeq.listAliasScopeRef` | `(mut self) -> String` | §1 | Cached lazy 3-node domain/scope/list chain (`!alias.scope` family); singleton per module |
 | `MirSeq.nextAccessGroupMD` | `(mut self) -> String` | §1 | One `distinct !{}` per `#[parallel]` function — load/store attachments + per-loop `parallel_accesses` reference it |
 | `MirLoopHints` (struct) | `{ vectorize, vectorizeWidth, vectorizeScalable, vectorizePredicate, parallel, parallelAccessGroupRef, unroll, unrollCount }` | §1 | Plain-data snapshot of per-function loop annotation flags fed into `MirSeq.nextLoopMD` |
+| `mirChanRecvSuffix` | `(elemLLVM: String) -> String` | §7 | Channel `recv_<suffix>` runtime symbol picker — thin wrapper over `llvmChanElementSuffix` so the scalar/composite split stays in lockstep with `llvmChanRecv` |
+| `mirMapValueSizeBytes` | `(llvmTyp: String) -> Int` | §7 | LLVM type → byte width for memcpy of map values (`i64`/`double`/`ptr` → 8, `i32` → 4, `i8`/`i1` → 1, else 0) |
+| `mirIntLLVMBits` | `(t: String) -> Int` | §7 | `iN` width extractor (`i1`→1 … `i64`→64, else 0); used by operand-coercion to gate sext / trunc |
+| `mirThunkName` | `(symbol: String) -> String` | §6 | Closure-thunk LLVM symbol-name builder — `"__osty_closure_thunk_" + symbol` |
+| `mirIsMemoryAccessLine` | `(line: String) -> Bool` | §1 | Recognises the two textual shapes the MIR emitter produces for loads / stores (leading-space-strip + `store ` prefix probe + ` = load ` substring probe) |
+| `mirTagParallelAccesses` | `(body: String, groupRef: String) -> String` | §1 | Walks `body` line-by-line and appends `, !llvm.access.group <groupRef>` to every load / store line that doesn't already carry the metadata. Pure (manual byte-walk; no `strings.SplitAfter` dependency) |
+| `mirEmitHeaderBlock` | `(source: String, target: String) -> String` | §3 | Four-line module preamble (`; Code generated...` + `; Osty: ...` + `source_filename = ...` + optional `target triple = ...` + blank). Replaces `emitHeader`'s inline `WriteString` chain |
+| `mirEarliestAfterAny` | `(input: String, needles: List<String>) -> Int` | §12 | Multi-needle `earliestAfter` — smallest non-negative offset of any needle, `-1` when none present. The Go `earliestAfter([]string{...})` now delegates here |
+| `mirInjectBeforeFirstFn` | `(body: String, block: String) -> String` | §3 | Splices `block` into `body` before the first `define ` / `declare ` line; appends at the end when neither marker is present. Replaces the inline rewrite-buffer pattern in `emitGlobalVars` / `emitStringPool` |
+| `mirJoinDeclareLines` | `(orderedDecls: List<String>) -> String` | §3 | Concatenates ordered `declare ...` strings with trailing newlines into one block ready for `mirInjectBeforeFirstFn`. Caller still owns the dedupe / ordering map |
+| `MirInlineStringEqResult` (struct) | `{ finalReg: String, lines: List<String> }` | §11 | Value/code split returned by `MirSeq.emitInlineStringEqLiteral`. Caller iterates `lines` (each already including leading 2-space indent + trailing newline) into `g.fnBuf`, then uses `finalReg` as the i1 result |
+| `MirSeq.emitInlineStringEqLiteral` | `(mut self, opIsEq: Bool, dynReg: String, litSym: String, litBytes: List<Int>) -> MirInlineStringEqResult` | §11 | Byte-by-byte string-equality switch with pointer-equality fast path + per-byte compare + terminating NUL check. `litBytes` is the per-byte int view of the literal (Go converts via `int(lit[i])`). Every `freshLabel` / `fresh` call mirrors the legacy emitter so `tempSeq` advances byte-stably across the port |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as
