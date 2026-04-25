@@ -411,8 +411,16 @@ typedef struct osty_gc_header {
     struct osty_gc_header *prev_gen;
     int64_t object_kind;
     int64_t byte_size;
-    int64_t root_count;
-    int64_t pin_count;
+    /* root_count / pin_count are bounded by the number of active
+     * `osty_gc_root_bind` / `_pin` handles. 32 bits (~2.1B) is far
+     * past anything an Osty program would credibly hold simultaneously
+     * — a real program would OOM long before. Shrinking these from
+     * i64 to i32 saves 8 bytes per header (post-`site` removal the
+     * struct lands at 96 bytes from the original 112). The
+     * INT*_MAX overflow guards in the bind/pin paths are updated
+     * accordingly. */
+    int32_t root_count;
+    int32_t pin_count;
     /* Phase C: explicit tri-colour (`OSTY_GC_COLOR_*`). `marked` is
      * retained as a convenience alias — `marked == true` iff
      * `color != WHITE`. The sweep loop reads `color` directly; the
@@ -432,9 +440,20 @@ typedef struct osty_gc_header {
     uint64_t stable_id;
     osty_gc_trace_fn trace;
     osty_gc_destroy_fn destroy;
-    const char *site;
     void *payload;
 } osty_gc_header;
+/* `site` was historically a `const char *` debug label written by the
+ * two `osty_gc_header_init*` paths but never read anywhere — `grep
+ * '->site'` returns only the two writes. Dropping it shaves 8 bytes
+ * per header (out of 112), which compounds on alloc-heavy benches:
+ * markdown-stats allocates ~20k strings → 160 KB header memory
+ * removed, lower L1/L2 pressure during the GC's `osty_gc_objects`
+ * walk. The init functions still take the `site` parameter (unused)
+ * so external callers — including the runtime's own
+ * `osty_gc_allocate_managed` — keep their signatures and their
+ * call sites stay readable as alloc-site labels in source. The
+ * parameter is suppressed via `(void)site` to avoid the unused-arg
+ * warning. */
 
 /* Inline storage for short lists. The Split / Fields / `[lit]` /
  * cache-rebuild patterns that dominate the benchmark suite typically
@@ -2713,7 +2732,10 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
     header->byte_size = (int64_t)payload_size;
     header->trace = trace;
     header->destroy = destroy;
-    header->site = site;
+    /* `site` field removed — see osty_gc_header definition. The
+     * parameter still flows in so call-site labels remain visible in
+     * source, but isn't stored. */
+    (void)site;
     header->payload = (void *)(header + 1);
     header->storage_kind = storage_kind;
     /* generation / age / color / marked are NOT explicitly stored:
@@ -2797,7 +2819,10 @@ static void *osty_gc_allocate_pinned_managed(size_t byte_size,
     header->byte_size = (int64_t)payload_size;
     header->trace = trace;
     header->destroy = destroy;
-    header->site = site;
+    /* `site` field removed — see osty_gc_header definition. The
+     * parameter still flows in so call-site labels remain visible in
+     * source, but isn't stored. */
+    (void)site;
     header->payload = (void *)(header + 1);
     header->storage_kind = storage_kind;
     header->generation = OSTY_GC_GEN_OLD;
@@ -8889,7 +8914,7 @@ void osty_gc_root_bind_v1(void *root) {
         osty_gc_release();
         return;
     }
-    if (header->root_count == INT64_MAX) {
+    if (header->root_count == INT32_MAX) {
         osty_gc_release();
         osty_rt_abort("GC root count overflow");
     }
@@ -8921,7 +8946,7 @@ void osty_gc_pin_v1(void *root) {
         osty_gc_release();
         return;
     }
-    if (header->pin_count == INT64_MAX) {
+    if (header->pin_count == INT32_MAX) {
         osty_gc_release();
         osty_rt_abort("GC pin count overflow");
     }
