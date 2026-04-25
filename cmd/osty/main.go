@@ -846,7 +846,7 @@ func printNativePackageTypes(result selfhost.CheckResult, files []selfhost.Packa
 	}
 	buckets := make(map[int][]selfhost.CheckedNode, len(files))
 	for _, n := range result.TypedNodes {
-		if n.TypeName == "" {
+		if n.Type == nil {
 			continue
 		}
 		idx := findOwningFile(files, n.Start)
@@ -1094,8 +1094,8 @@ func runTypecheckFileNative(path string, src []byte, formatter *diag.Formatter, 
 // printNativeTypes is the --native sibling of printTypes: it renders
 // selfhost.CheckResult.TypedNodes (node.Start, node.End are byte
 // offsets produced by the native checker) as
-// `line:col-line:col\tTypeName` rows sorted by start position. Rows
-// with empty TypeName (the checker's signal-only placeholders) are
+// `line:col-line:col\tType` rows sorted by start position. Rows
+// with nil Type (the checker's signal-only placeholders) are
 // dropped so output stays compact.
 func printNativeTypes(src []byte, result selfhost.CheckResult) {
 	type row struct {
@@ -1104,10 +1104,10 @@ func printNativeTypes(src []byte, result selfhost.CheckResult) {
 	}
 	rows := make([]row, 0, len(result.TypedNodes))
 	for _, n := range result.TypedNodes {
-		if n.TypeName == "" {
+		if n.Type == nil {
 			continue
 		}
-		rows = append(rows, row{start: n.Start, end: n.End, text: n.TypeName})
+		rows = append(rows, row{start: n.Start, end: n.End, text: n.Type.String()})
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].start != rows[j].start {

@@ -61,10 +61,10 @@ func TestNativeBoundaryPrefersStructuredPackageCheckerForFileMode(t *testing.T) 
 		result: api.CheckResult{
 			Summary: api.CheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
 			Bindings: []api.CheckedBinding{{
-				Name:     "value",
-				TypeName: "UntypedInt",
-				Start:    letStmt.Pattern.Pos().Offset,
-				End:      letStmt.Pattern.End().Offset,
+				Name:  "value",
+				Type:  &api.TypeRepr{Kind: "primitive", Name: "UntypedInt"},
+				Start: letStmt.Pattern.Pos().Offset,
+				End:   letStmt.Pattern.End().Offset,
 			}},
 		},
 	}
@@ -135,17 +135,17 @@ fn main() {
 		return fakeNativeChecker{result: api.CheckResult{
 			Summary: api.CheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
 			TypedNodes: []api.CheckedNode{
-				{Kind: "Call", TypeName: "Int", Start: call.Pos().Offset, End: call.End().Offset},
-				{Kind: "IntLit", TypeName: "Int", Start: lit.Pos().Offset, End: lit.End().Offset},
+				{Kind: "Call", Type: &api.TypeRepr{Kind: "primitive", Name: "Int"}, Start: call.Pos().Offset, End: call.End().Offset},
+				{Kind: "IntLit", Type: &api.TypeRepr{Kind: "primitive", Name: "Int"}, Start: lit.Pos().Offset, End: lit.End().Offset},
 			},
 			Bindings: []api.CheckedBinding{
-				{Name: "answer", TypeName: "Int", Start: letStmt.Pattern.Pos().Offset, End: letStmt.Pattern.End().Offset},
+				{Name: "answer", Type: &api.TypeRepr{Kind: "primitive", Name: "Int"}, Start: letStmt.Pattern.Pos().Offset, End: letStmt.Pattern.End().Offset},
 			},
 			Symbols: []api.CheckedSymbol{
-				{Name: "id", Kind: "fn", TypeName: "fn(T) -> T", Start: idDecl.Pos().Offset, End: idDecl.End().Offset},
+				{Name: "id", Kind: "fn", Type: &api.TypeRepr{Kind: "fn", Args: []api.TypeRepr{{Kind: "typevar", Name: "T"}}, Return: &api.TypeRepr{Kind: "typevar", Name: "T"}}, Start: idDecl.Pos().Offset, End: idDecl.End().Offset},
 			},
 			Instantiations: []api.CheckInstantiation{
-				{Callee: "id", TypeArgs: []string{"Int"}, Start: call.Pos().Offset, End: call.End().Offset},
+				{Callee: "id", TypeArgs: []api.TypeRepr{{Kind: "primitive", Name: "Int"}}, Start: call.Pos().Offset, End: call.End().Offset},
 			},
 		}}, ""
 	}
@@ -240,10 +240,10 @@ fn main() {}
 		return fakeNativeChecker{result: api.CheckResult{
 			Summary: api.CheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
 			Bindings: []api.CheckedBinding{
-				{Name: "value", TypeName: "Int", Start: param.Pos().Offset, End: param.End().Offset},
+				{Name: "value", Type: &api.TypeRepr{Kind: "primitive", Name: "Int"}, Start: param.Pos().Offset, End: param.End().Offset},
 			},
 			Symbols: []api.CheckedSymbol{
-				{Name: "unused", Kind: "fn", TypeName: "fn(Int) -> Int", Start: unusedDecl.Pos().Offset, End: unusedDecl.End().Offset},
+				{Name: "unused", Kind: "fn", Type: &api.TypeRepr{Kind: "fn", Args: []api.TypeRepr{{Kind: "primitive", Name: "Int"}}, Return: &api.TypeRepr{Kind: "primitive", Name: "Int"}}, Start: unusedDecl.Pos().Offset, End: unusedDecl.End().Offset},
 			},
 		}}, ""
 	}
@@ -390,7 +390,7 @@ func TestNativeBoundaryOverlaysCanonicalSourceSpansBackToOriginalAST(t *testing.
 		return fakeNativeChecker{result: api.CheckResult{
 			Summary: api.CheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
 			TypedNodes: []api.CheckedNode{
-				{Kind: "Call", TypeName: "Int", Start: start, End: end},
+				{Kind: "Call", Type: &api.TypeRepr{Kind: "primitive", Name: "Int"}, Start: start, End: end},
 			},
 		}}, ""
 	}

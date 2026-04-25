@@ -47,7 +47,7 @@ func TypeAtOffset(r CheckResult, offset int) string {
 	if bestIdx < 0 {
 		return ""
 	}
-	return r.TypedNodes[bestIdx].TypeName
+	return r.TypedNodes[bestIdx].Type.String()
 }
 
 // LetTypeAtOffset returns the declared type-name of the let/param
@@ -56,7 +56,7 @@ func TypeAtOffset(r CheckResult, offset int) string {
 func LetTypeAtOffset(r CheckResult, offset int) string {
 	for _, b := range r.Bindings {
 		if offsetContains(b.Start, b.End, offset) {
-			return b.TypeName
+			return b.Type.String()
 		}
 	}
 	return ""
@@ -109,7 +109,7 @@ func HoverAtOffset(r CheckResult, offset int) HoverInfo {
 		sym := r.Symbols[bestIdx]
 		info.SymbolName = sym.Name
 		info.SymbolKind = sym.Kind
-		info.SymbolType = sym.TypeName
+		info.SymbolType = sym.Type.String()
 	}
 	return info
 }
