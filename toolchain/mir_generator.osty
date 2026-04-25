@@ -2427,3 +2427,139 @@ pub struct MirVtableRefs {
         self.order.isEmpty()
     }
 }
+
+// ============================================================
+// §4 function emission templates.
+//
+// Pure shape builders for the function header / param list /
+// external-declare / cconv keyword shapes. The state-bearing
+// orchestration in `emitFunction` (block-label allocation,
+// per-fn flag capture, alloca preamble, fnBuf flush) stays on
+// the Go side — these helpers cover the LLVM-text leaves that
+// don't depend on `mirGen` state.
+// ============================================================
+
+/// mirCConvKeyword returns the LLVM calling-convention keyword
+/// to splice between `define`/`declare` and the return type.
+/// `cabi=true` (the v0.6 `#[c_abi]` annotation) renders the
+/// platform C calling convention as `"ccc "`. `cabi=false` (the
+/// default) returns the empty string — LLVM treats absent cconv
+/// as `ccc` anyway, so emitting the keyword is currently a
+/// documentation / forward-compatibility marker rather than a
+/// behaviour change. The trailing space is part of the return
+/// because callers splice it directly between `define `/`declare `
+/// and the return type without a separator.
+pub fn mirCConvKeyword(cabi: Bool) -> String {
+    if cabi {
+        return "ccc "
+    }
+    ""
+}
+
+/// mirParamIsNoalias decides whether a single parameter should
+/// receive the LLVM `noalias` attribute on the function
+/// signature line. Mirrors `paramIsNoalias` in
+/// `internal/llvmgen/mir_generator.go`. LLVM rejects `noalias`
+/// on non-pointer types, so we gate first on `llvmT == "ptr"`.
+/// The source-name check uses the parameter's mir-level `Name`
+/// (the Go caller extracts it from `*mir.Local`), not the
+/// emitted `%argN` symbol.
+///
+/// `noaliasAll = true` corresponds to the bare `#[noalias]`
+/// annotation: every pointer param gets the attribute, the
+/// explicit-name set is ignored. `noaliasAll = false` plus a
+/// populated `noaliasNames` corresponds to `#[noalias(p1, p2)]`:
+/// only those names match.
+pub fn mirParamIsNoalias(
+    llvmT: String,
+    locName: String,
+    noaliasAll: Bool,
+    noaliasNames: List<String>,
+) -> Bool {
+    if llvmT != "ptr" {
+        return false
+    }
+    if noaliasAll {
+        return true
+    }
+    let mut i = 0
+    let n = noaliasNames.len()
+    for i < n {
+        if noaliasNames[i] == locName {
+            return true
+        }
+        i = i + 1
+    }
+    false
+}
+
+/// mirFunctionParamPart renders one parameter entry of a
+/// function signature: `<llvmT>[ noalias] %arg<idxDigits>`. The
+/// caller pre-decides whether to stamp the `noalias` attribute
+/// via `mirParamIsNoalias` and concatenates entries with `", "`
+/// to form the body of the `(...)` param list.
+pub fn mirFunctionParamPart(llvmT: String, isNoalias: Bool, idxDigits: String) -> String {
+    let suffix = if isNoalias {
+        " noalias %arg" + idxDigits
+    } else {
+        " %arg" + idxDigits
+    }
+    llvmT + suffix
+}
+
+/// mirBlockLabelName returns the LLVM basic-block label name for
+/// MIR block ID `blockID` — `"entry"` when it's the function's
+/// entry block, `"bb<N>"` otherwise (where N is the block ID).
+/// `blockIDDigits` is the already-formatted decimal block ID
+/// (the Go caller uses `strconv.Itoa(int(bb.ID))` since Osty's
+/// self-host stdlib doesn't lower the int's `.toString` yet).
+pub fn mirBlockLabelName(isEntry: Bool, blockIDDigits: String) -> String {
+    if isEntry {
+        return "entry"
+    }
+    "bb" + blockIDDigits
+}
+
+/// mirExternalDeclareLine renders the `declare` line for an
+/// external (non-defined) function:
+///   `declare [cconv]<retLLVM> @<name>(<paramListJoined>) [<attrs>]\n\n`
+/// Used by `emitFunction` when `fn.IsExternal` — the function's
+/// body lives in another translation unit and we just stub it.
+/// The trailing `\n\n` matches the legacy emitter's spacing
+/// (one blank line before the next `define`/`declare`).
+///
+/// `cconv` is the calling-convention keyword from
+/// `mirCConvKeyword` (already includes its trailing space). When
+/// no fn-level attributes apply (`attrs == ""`), the space
+/// before the attrs is also omitted to match the legacy output
+/// byte-for-byte.
+pub fn mirExternalDeclareLine(
+    cconv: String,
+    retLLVM: String,
+    name: String,
+    paramListJoined: String,
+    attrs: String,
+) -> String {
+    let attrSuffix = if attrs == "" { "" } else { " " + attrs }
+    "declare " + cconv + retLLVM + " @" + name + "(" + paramListJoined + ")" + attrSuffix + "\n\n"
+}
+
+/// mirFunctionDefineHeader renders the opening line of a
+/// function definition:
+///   `define [cconv]<retLLVM> @<name>(<paramListJoined>) [<attrs>] {\n`
+/// Used by `emitFunction` for non-external functions — the
+/// header opens the brace; the alloca-preamble lines and block
+/// label / instruction emission append below it. Mirrors the
+/// `mirExternalDeclareLine` shape but with `define` instead of
+/// `declare`, the trailing `{`, and a single `\n` rather than
+/// the double-newline of the declare form.
+pub fn mirFunctionDefineHeader(
+    cconv: String,
+    retLLVM: String,
+    name: String,
+    paramListJoined: String,
+    attrs: String,
+) -> String {
+    let attrSuffix = if attrs == "" { "" } else { " " + attrs }
+    "define " + cconv + retLLVM + " @" + name + "(" + paramListJoined + ")" + attrSuffix + " {\n"
+}

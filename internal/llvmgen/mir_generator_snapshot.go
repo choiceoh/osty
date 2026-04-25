@@ -1960,3 +1960,89 @@ func (v *MirVtableRefs) OrderedSymbols() []string {
 func (v *MirVtableRefs) IsEmpty() bool {
 	return len(v.Order) == 0
 }
+
+// §4 function emission templates.
+//
+// Pure shape builders for the function header / param list /
+// external-declare / cconv keyword shapes. The state-bearing
+// orchestration in `emitFunction` (block-label allocation,
+// per-fn flag capture, alloca preamble, fnBuf flush) stays on
+// the Go side — these helpers cover the LLVM-text leaves that
+// don't depend on `mirGen` state.
+
+// mirCConvKeyword returns the LLVM calling-convention keyword
+// (`"ccc "` for `#[c_abi]` / `""` for default). Trailing space
+// is part of the return — caller splices directly between
+// `define `/`declare ` and the return type.
+// Osty: mirCConvKeyword
+func mirCConvKeyword(cabi bool) string {
+	if cabi {
+		return "ccc "
+	}
+	return ""
+}
+
+// mirParamIsNoalias decides whether a single parameter should
+// receive the LLVM `noalias` attribute. Mirrors the predicate
+// from `paramIsNoalias` but takes the parameter's source-name
+// + the noalias-set as plain strings so the Osty side can
+// implement the check without modeling `*mir.Local`.
+// Osty: mirParamIsNoalias
+func mirParamIsNoalias(llvmT string, locName string, noaliasAll bool, noaliasNames []string) bool {
+	if llvmT != "ptr" {
+		return false
+	}
+	if noaliasAll {
+		return true
+	}
+	for _, n := range noaliasNames {
+		if n == locName {
+			return true
+		}
+	}
+	return false
+}
+
+// mirFunctionParamPart renders one parameter entry of a function
+// signature: `<llvmT>[ noalias] %arg<idxDigits>`.
+// Osty: mirFunctionParamPart
+func mirFunctionParamPart(llvmT string, isNoalias bool, idxDigits string) string {
+	if isNoalias {
+		return llvmT + " noalias %arg" + idxDigits
+	}
+	return llvmT + " %arg" + idxDigits
+}
+
+// mirBlockLabelName returns `"entry"` when isEntry / `"bb<N>"`
+// otherwise. `blockIDDigits` is the already-formatted decimal
+// block ID.
+// Osty: mirBlockLabelName
+func mirBlockLabelName(isEntry bool, blockIDDigits string) string {
+	if isEntry {
+		return "entry"
+	}
+	return "bb" + blockIDDigits
+}
+
+// mirExternalDeclareLine renders the `declare` line for an
+// external function. Trailing `\n\n` matches legacy spacing.
+// Osty: mirExternalDeclareLine
+func mirExternalDeclareLine(cconv string, retLLVM string, name string, paramListJoined string, attrs string) string {
+	attrSuffix := ""
+	if attrs != "" {
+		attrSuffix = " " + attrs
+	}
+	return "declare " + cconv + retLLVM + " @" + name + "(" + paramListJoined + ")" + attrSuffix + "\n\n"
+}
+
+// mirFunctionDefineHeader renders the opening line of a function
+// definition (the `{` is included; the body / closing `}` come
+// from the caller).
+// Osty: mirFunctionDefineHeader
+func mirFunctionDefineHeader(cconv string, retLLVM string, name string, paramListJoined string, attrs string) string {
+	attrSuffix := ""
+	if attrs != "" {
+		attrSuffix = " " + attrs
+	}
+	return "define " + cconv + retLLVM + " @" + name + "(" + paramListJoined + ")" + attrSuffix + " {\n"
+}
