@@ -1769,3 +1769,159 @@ pub fn mirUnreachableLine() -> String {
     "  unreachable\n"
 }
 
+/// §14 enum / tuple layout cache.
+///
+/// MirLayoutCache owns the dedup + insertion-order side of the
+/// emitter's aggregate-type pool. Mirrors the four `mirGen` fields
+/// `enumLayoutOrder` / `tupleOrder` (kept here) and `enumLayouts` /
+/// `tupleDefs` (Go side; presence-set on Osty, value map on Go).
+///
+/// The Go map values stay on the Go side because their payload type
+/// is `mir.Type` — a Go interface that has no Osty mirror. The Osty
+/// cache returns a `Bool` from each register call so the Go caller
+/// only stores its `[]mir.Type` element list when the registration is
+/// actually new. For enums the Go map is an unused vestige (no read
+/// site outside the dedup check itself), so the order list + this
+/// presence set are sufficient.
+pub struct MirLayoutCache {
+    /// enumLayoutOrder records enum-shaped type names in first-use
+    /// order. Consumed by `emitTypeDefs` to render
+    /// `%<name> = type \{ i64, i64 \}` lines via
+    /// `mirLlvmEnumLayoutTypeDefLine`.
+    pub enumLayoutOrder: List<String>,
+    /// tupleOrder records mangled tuple type names in first-use order.
+    /// Consumed by `emitTypeDefs` to render
+    /// `%<name> = type \{ <fields> \}` lines via
+    /// `mirLlvmStructTypeDefLine` — the Go side looks up the element
+    /// `mir.Type` list in its own `tupleDefs` map keyed by the same
+    /// name string.
+    pub tupleOrder: List<String>,
+
+    /// registerEnumLayout adds `name` to the enum-layout order list
+    /// if it isn't already present. Returns `true` on first
+    /// registration so callers can chain in extra setup keyed off the
+    /// "newly inserted" signal (the Go wrapper currently ignores it).
+    pub fn registerEnumLayout(mut self, name: String) -> Bool {
+        if listContainsString(self.enumLayoutOrder, name) {
+            return false
+        }
+        self.enumLayoutOrder.push(name)
+        true
+    }
+
+    /// registerTuple adds `name` to the tuple order list if it isn't
+    /// already present. Returns `true` on first registration — the Go
+    /// caller uses that signal to also populate its `[]mir.Type`
+    /// element-list map (`tupleDefs`) keyed by the same name.
+    pub fn registerTuple(mut self, name: String) -> Bool {
+        if listContainsString(self.tupleOrder, name) {
+            return false
+        }
+        self.tupleOrder.push(name)
+        true
+    }
+
+    /// isEmpty reports whether both order lists are empty. Used
+    /// together with `structOrder` + `ifaceTouched` to short-circuit
+    /// the type-def block in `emitTypeDefs`.
+    pub fn isEmpty(self) -> Bool {
+        self.enumLayoutOrder.isEmpty() && self.tupleOrder.isEmpty()
+    }
+}
+
+/// §9 terminator templates.
+///
+/// Each helper returns the full LLVM text — including the leading
+/// 2-space indent and trailing newline — for one terminator shape.
+/// The Go `emitTerm` orchestrator (in `internal/llvmgen/mir_generator.go`)
+/// resolves operands / labels / types and then calls one of these
+/// templates so the byte-level shape lives in a single place.
+///
+/// The orchestration that surrounds each template — operand
+/// evaluation, GC root release, loop safepoint emission, fresh-tmp
+/// allocation — stays on the Go side because it touches `mirGen`
+/// state (g.fnBuf, g.evalOperand, g.emitGCReleaseRoots, g.fresh).
+/// `loopMDRef` flows in as `""` when no loop metadata applies — the
+/// templates skip the `, !llvm.loop !N` suffix in that case so the
+/// caller doesn't have to fork on the predicate themselves.
+///
+/// `MirSwitchCase` represents one (value, target-label) pair of a
+/// `switch i<N>` terminator. The value text is pre-formatted by the
+/// Go caller because `mir.SwitchIntCase.Value` is `int64` and Osty's
+/// `Int` ↔ Go `int` bridge prefers narrow scalars at the boundary —
+/// `strconv.FormatInt(c.Value, 10)` happens once on the Go side.
+
+/// mirTerminatorBranchUnconditional renders an unconditional
+/// `br label %<target>` terminator. When `loopMDRef` is non-empty
+/// (the back-edge-with-loop-hints case), the
+/// `, !llvm.loop !N` trailer is appended before the newline. Mirrors
+/// the GotoTerm arm of `emitTerm` in
+/// `internal/llvmgen/mir_generator.go`.
+pub fn mirTerminatorBranchUnconditional(targetLabel: String, loopMDRef: String) -> String {
+    if loopMDRef != "" {
+        return "  br label %" + targetLabel + ", !llvm.loop " + loopMDRef + "\n"
+    }
+    "  br label %" + targetLabel + "\n"
+}
+
+/// mirTerminatorBranchConditional renders a conditional
+/// `br i1 <cond>, label %<then>, label %<else>` terminator. The
+/// optional `, !llvm.loop !N` trailer behaves exactly as
+/// `mirTerminatorBranchUnconditional`. Mirrors the BranchTerm arm of
+/// `emitTerm`.
+pub fn mirTerminatorBranchConditional(
+    condReg: String,
+    thenLabel: String,
+    elseLabel: String,
+    loopMDRef: String,
+) -> String {
+    let head = "  br i1 " + condReg + ", label %" + thenLabel + ", label %" + elseLabel
+    if loopMDRef != "" {
+        return head + ", !llvm.loop " + loopMDRef + "\n"
+    }
+    head + "\n"
+}
+
+/// MirSwitchCase carries one case row of a `switch i<N>` terminator
+/// in the form already rendered for IR emission — `valueText` is the
+/// pre-formatted decimal value (the Go caller produces it via
+/// `strconv.FormatInt(c.Value, 10)`), `targetLabel` is the resolved
+/// basic-block label.
+pub struct MirSwitchCase {
+    pub valueText: String,
+    pub targetLabel: String,
+}
+
+/// mirTerminatorSwitchInt renders a `switch <ty> <scrut>, label
+/// %<default> [ ... ]` terminator with the case rows joined inside
+/// the bracket block. Each case row uses the same LLVM type as the
+/// scrutinee — MIR guarantees the case value fits in the scrutinee's
+/// width, so `llvmType` is reused verbatim. Mirrors the
+/// SwitchIntTerm arm of `emitTerm`.
+pub fn mirTerminatorSwitchInt(
+    llvmType: String,
+    scrutReg: String,
+    defaultLabel: String,
+    cases: List<MirSwitchCase>,
+) -> String {
+    let mut out = "  switch " + llvmType + " " + scrutReg +
+        ", label %" + defaultLabel + " [\n"
+    for c in cases {
+        out = out + "    " + llvmType + " " + c.valueText +
+            ", label %" + c.targetLabel + "\n"
+    }
+    out + "  ]\n"
+}
+
+/// mirTerminatorReturnMain renders the `main`-special `ret i32 0`
+/// terminator emitted when the function is a parameter-less unit
+/// `main`. The `i32 0` shape matches the C `main()` ABI — LLVM lowers
+/// it to the process exit code. The unit-return / typed-return /
+/// unreachable shapes route through the existing line builders
+/// (`mirRetVoidLine`, `mirLoadLine` + `mirRetLine`,
+/// `mirUnreachableLine`) so this section only owns the
+/// terminator-specific shapes (loop-MD-trailed branches, switch case
+/// blocks, the `i32 0` main-special return).
+pub fn mirTerminatorReturnMain() -> String {
+    "  ret i32 0\n"
+}

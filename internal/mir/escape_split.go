@@ -130,9 +130,9 @@ func findBackEdges(fn *Function) []backEdge {
 	)
 	color := make([]int, len(fn.Blocks))
 	type frame struct {
-		bid       BlockID
+		bid        BlockID
 		successors []BlockID
-		nextIdx   int
+		nextIdx    int
 	}
 	push := func(stack []frame, b BlockID) []frame {
 		if int(b) < 0 || int(b) >= len(fn.Blocks) || color[b] != white {
