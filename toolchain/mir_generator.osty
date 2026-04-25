@@ -2563,3 +2563,12 @@ pub fn mirFunctionDefineHeader(
     let attrSuffix = if attrs == "" { "" } else { " " + attrs }
     "define " + cconv + retLLVM + " @" + name + "(" + paramListJoined + ")" + attrSuffix + " {\n"
 }
+
+/// mirFunctionDefineFooter renders the closing of a function
+/// definition: `}\n\n`. Pair with `mirFunctionDefineHeader` to
+/// bookend every emitted function body. The trailing two
+/// newlines match the legacy emitter's spacing — one blank line
+/// between consecutive definitions in the module out buffer.
+pub fn mirFunctionDefineFooter() -> String {
+    "}\n\n"
+}

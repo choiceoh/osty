@@ -281,6 +281,7 @@ list keeps new Osty clean of known landmines.
 | `mirBlockLabelName` | `(isEntry: Bool, blockIDDigits: String) -> String` | §4 | `"entry"` for the function's entry block, `"bb<N>"` otherwise. Used by `emitFunction`'s block-label allocation loop |
 | `mirExternalDeclareLine` | `(cconv, retLLVM, name, paramListJoined, attrs) -> String` | §4 | `declare` line for an external (non-defined) function. Trailing `\n\n` matches legacy spacing — one blank line before the next `define`/`declare` |
 | `mirFunctionDefineHeader` | `(cconv, retLLVM, name, paramListJoined, attrs) -> String` | §4 | Opening line of a function definition — `define [cconv]<retLLVM> @<name>(<params>) [attrs] {\n`. The `{` is included; body / closing `}` come from caller |
+| `mirFunctionDefineFooter` | `() -> String` | §4 | Closing `}\n\n` of a function definition. Pair with `mirFunctionDefineHeader` to bookend every emitted function body |
 | `mirAndI1Line` | `(reg: String, lhs: String, rhs: String) -> String` | §6 | i1 logical-and `  <reg> = and i1 <lhs>, <rhs>\n` — used by bounds-check `nonNeg && inUpper` pattern in `emitListSafeGet` |
 | `mirCallValueWithAliasScopeLine` | `(reg, retTy, sym, argList, scopeRef) -> String` | §1 | Snapshot-call form with `!alias.scope` metadata: `  <reg> = call <retTy> @<sym>(<args>), !alias.scope <ref>\n`. Unlocks LICM of `osty_rt_list_data_*` / `osty_rt_list_len` snapshot reads |
 | `mirLoadWithNoAliasLine` | `(reg: String, ty: String, ptr: String, scopeRef: String) -> String` | §1 | Load tagged with `!noalias` metadata — vector-list fast-path read |
