@@ -46,56 +46,87 @@ type Config struct {
 	Exclude []string
 }
 
-// Merge returns a new Config that layers child on top of parent.
-// The merge semantics match typical workspace expectations:
+// Merge returns a new Config that layers child on top of parent
+// using additive workspace semantics:
 //
-//   - When the child sets any lint field (Allow, Deny, or Exclude),
-//     the child is treated as a complete override for Allow and Deny:
-//     the child's Allow and Deny lists are used verbatim, even when
-//     empty. This prevents a parent's Deny from leaking through when
-//     the child only wants to Allow a specific code.
-//   - When the child is completely empty (no Allow, no Deny, no
-//     Exclude), the parent's Allow and Deny are inherited.
-//   - Exclude patterns from both parent and child are always combined
-//     (union). A workspace root's broad exclusions ("vendor/**") are
-//     preserved even when a child package adds its own ("gen/**").
+//   - Allow: union of parent + child (child entries first, dedup).
+//   - Deny: union of parent + child (child entries first, dedup),
+//     minus any codes the child's Allow resolves to. This lets a
+//     child selectively cancel a parent's deny without losing the
+//     rest of the parent's deny list.
+//   - Exclude: union of parent + child (parent-first, dedup).
 //
-// A nil or zero-value child is treated as "no override" — the parent
-// is returned unchanged (as a shallow copy). A nil or zero-value parent
-// is likewise a no-op base.
+// A nil or zero-value child returns a deep copy of the parent.
+// A nil or zero-value parent returns a deep copy of the child.
 func (c Config) Merge(parent Config) Config {
 	var out Config
 
-	childHasLint := len(c.Allow) > 0 || len(c.Deny) > 0 || len(c.Exclude) > 0
+	// Allow: union, child-first, dedup.
+	out.Allow = mergeStringSlices(c.Allow, parent.Allow)
 
-	if childHasLint {
-		// Child declared its own [lint] section — use child's Allow
-		// and Deny verbatim (even when empty). This prevents a parent's
-		// Deny from leaking through when the child only sets Allow, and
-		// vice versa.
-		if len(c.Allow) > 0 {
-			out.Allow = make([]string, len(c.Allow))
-			copy(out.Allow, c.Allow)
-		}
-		if len(c.Deny) > 0 {
-			out.Deny = make([]string, len(c.Deny))
-			copy(out.Deny, c.Deny)
-		}
-	} else {
-		// Child has no [lint] section at all — inherit from parent.
-		if len(parent.Allow) > 0 {
-			out.Allow = make([]string, len(parent.Allow))
-			copy(out.Allow, parent.Allow)
-		}
-		if len(parent.Deny) > 0 {
-			out.Deny = make([]string, len(parent.Deny))
-			copy(out.Deny, parent.Deny)
+	// Deny: union, child-first, dedup, then remove codes the child allows.
+	out.Deny = mergeStringSlices(c.Deny, parent.Deny)
+	if len(c.Allow) > 0 {
+		allowedCodes := expandCodeSet(c.Allow)
+		if len(allowedCodes) > 0 {
+			out.Deny = removeResolvedCodes(out.Deny, allowedCodes)
 		}
 	}
 
-	// Exclude: union of both, preserving order (parent first, then child).
+	// Exclude: union, parent-first, dedup.
 	out.Exclude = mergeExclude(parent.Exclude, c.Exclude)
 
+	return out
+}
+
+// mergeStringSlices returns the union of two string slices with dedup.
+// Entries from a come first, then entries from b that are not duplicates.
+func mergeStringSlices(a, b []string) []string {
+	if len(a) == 0 && len(b) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, s := range a {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	for _, s := range b {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// removeResolvedCodes filters a list of symbolic lint names, removing
+// any entry that resolveAllowName maps into the given concrete code set.
+func removeResolvedCodes(names []string, codeSet map[string]bool) []string {
+	if len(names) == 0 || len(codeSet) == 0 {
+		return names
+	}
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		codes := resolveAllowName(name)
+		kept := true
+		for _, code := range codes {
+			if codeSet[code] || codeSet["*"] {
+				kept = false
+				break
+			}
+		}
+		// If the name didn't resolve to any matching code, keep it.
+		// Also keep it if it didn't resolve to anything at all (unknown alias).
+		if kept || len(codes) == 0 {
+			out = append(out, name)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
 	return out
 }
 
@@ -119,9 +150,6 @@ func mergeExclude(parent, child []string) []string {
 			seen[p] = true
 			out = append(out, p)
 		}
-	}
-	if len(out) == 0 {
-		return nil
 	}
 	return out
 }
