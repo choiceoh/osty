@@ -1,0 +1,129 @@
+// markdown-stats — Osty side. Mirrors ../go/main.go byte-for-byte.
+//
+// Structurally cloned from log-aggregator so the Osty build dispatches
+// through the MIR LLVM lowering path (the native-llvmgen path
+// mishandles String + chains in this program shape).
+
+use std.strings
+
+fn intToStr(n: Int) -> String {
+    let digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+    if n == 0 {
+        return "0"
+    }
+    let mut x = n
+    let mut neg = false
+    if x < 0 {
+        neg = true
+        x = 0 - x
+    }
+    let mut chunks: List<String> = []
+    for x > 0 {
+        chunks.push(digits[x % 10])
+        x = x / 10
+    }
+    let mut out = ""
+    if neg {
+        out = "-"
+    }
+    let mut i = chunks.len()
+    for i > 0 {
+        i = i - 1
+        out = out + chunks[i]
+    }
+    out
+}
+
+fn generateLines(n: Int) -> List<String> {
+    let words = ["alpha", "beta", "gamma", "delta", "epsilon",
+                 "zeta", "eta", "theta", "iota", "kappa",
+                 "lambda", "mu", "nu", "xi", "omicron"]
+    let mut out: List<String> = []
+    let mut state = 1
+    let mut i = 0
+    for i < n {
+        state = (state * 1103515245 + 12345) % 2147483648
+        let kind = state % 100
+        let w1 = words[(state / 2) % 15]
+        let w2 = words[(state / 8) % 15]
+        let w3 = words[(state / 32) % 15]
+        if kind < 10 {
+            out.push("## " + w1 + " " + w2 + " " + w3)
+        } else if kind < 20 {
+            out.push("# " + w1 + " " + w2 + " " + w3)
+        } else if kind < 50 {
+            out.push("- " + w1 + " " + w2 + " " + w3)
+        } else if kind < 60 {
+            out.push("> " + w1 + " " + w2 + " " + w3)
+        } else if kind < 70 {
+            out.push("")
+        } else {
+            out.push(w1 + " " + w2 + " " + w3)
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn classify(line: String) -> String {
+    let n = line.len()
+    if n == 0 {
+        return "empty"
+    }
+    // First-token classification — mirrors Go's startsWith chain via
+    // split(" ")[0]. Slower but routes through Map<String,Int>+split
+    // ops that the MIR backend lowers correctly.
+    let first = line.split(" ")[0]
+    if first == "##" {
+        return "subheading"
+    }
+    if first == "#" {
+        return "heading"
+    }
+    if first == "-" {
+        return "bullet"
+    }
+    if first == ">" {
+        return "quote"
+    }
+    "plain"
+}
+
+fn main() {
+    let lines = generateLines(20000)
+    let mut counts: Map<String, Int> = {:}
+    let mut chars: Map<String, Int> = {:}
+    let mut total = 0
+    let mut totalChars = 0
+
+    for line in lines {
+        total = total + 1
+        let n = line.len()
+        totalChars = totalChars + n
+        let kind = classify(line)
+        counts.insert(kind, counts.getOr(kind, 0) + 1)
+        // Collect char totals for the "heading" group (heading + subheading
+        // share a bucket per Go side), bullet, plain.
+        if kind == "heading" {
+            chars.insert("heading", chars.getOr("heading", 0) + n)
+        } else if kind == "subheading" {
+            chars.insert("heading", chars.getOr("heading", 0) + n)
+        } else if kind == "bullet" {
+            chars.insert("bullet", chars.getOr("bullet", 0) + n)
+        } else if kind == "plain" {
+            chars.insert("plain", chars.getOr("plain", 0) + n)
+        }
+    }
+
+    println("total: " + intToStr(total))
+    println("headings: " + intToStr(counts.getOr("heading", 0)))
+    println("subheadings: " + intToStr(counts.getOr("subheading", 0)))
+    println("bullets: " + intToStr(counts.getOr("bullet", 0)))
+    println("quotes: " + intToStr(counts.getOr("quote", 0)))
+    println("empty: " + intToStr(counts.getOr("empty", 0)))
+    println("plain: " + intToStr(counts.getOr("plain", 0)))
+    println("total_chars: " + intToStr(totalChars))
+    println("heading_chars: " + intToStr(chars.getOr("heading", 0)))
+    println("bullet_chars: " + intToStr(chars.getOr("bullet", 0)))
+    println("plain_chars: " + intToStr(chars.getOr("plain", 0)))
+}

@@ -1,0 +1,8 @@
+# lru-sim — Osty side. Mirrors ../go/main.go.
+
+[package]
+name = "lru-sim"
+version = "0.1.0"
+edition = "0.4"
+
+[dependencies]

@@ -1,0 +1,12 @@
+# log-aggregator — Osty side of the end-to-end runtime program benchmark.
+# Mirrors benchmarks/programs/log-aggregator/go/main.go.
+#
+#     osty build
+#     osty run
+
+[package]
+name = "log-aggregator"
+version = "0.1.0"
+edition = "0.4"
+
+[dependencies]
