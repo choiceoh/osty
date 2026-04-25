@@ -1,0 +1,298 @@
+/// AST→IR Lowering for Osty LLVM backend.
+///
+/// This file ports the key AST→IR lowering patterns from
+/// `internal/llvmgen/generator.go`, `expr.go`, `stmt.go`, `type.go`,
+/// and `decl.go` to self-hosted Osty.
+
+use std.strings as llvmStrings
+
+// ======================================================================
+// 1. Type mapping
+// ======================================================================
+
+pub fn llvmTypeFor(typeText: String) -> String {
+    let head = llvmTypeHeadName(typeText)
+    if head == "Int" || head == "Int8" || head == "Int16" || head == "Int32" || head == "Int64" {
+        return "i64"
+    }
+    if head == "UInt" || head == "UInt8" || head == "UInt16" || head == "UInt32" || head == "UInt64" {
+        return "i64"
+    }
+    if head == "Bool" || head == "Byte" {
+        return "i1"
+    }
+    if head == "Float" || head == "Float32" || head == "Float64" {
+        return "double"
+    }
+    if head == "Char" {
+        return "i32"
+    }
+    if head == "List" || head == "Map" || head == "Set" || head == "Channel" || head == "Bytes" {
+        return "ptr"
+    }
+    if head == "String" {
+        return "ptr"
+    }
+    if typeText == "Unit" || typeText == "()" {
+        return "void"
+    }
+    if typeText.startsWith("%") {
+        return typeText
+    }
+    return "ptr"
+}
+
+pub fn llvmTypeHeadName(typeText: String) -> String {
+    let idx = llvmStrings.indexOf(typeText, ".")
+    let name = if idx >= 0 { typeText[idx + 1..] } else { typeText }
+    let ltIdx = llvmStrings.indexOf(name, "<")
+    if ltIdx >= 0 {
+        return name[0..ltIdx]
+    }
+    return name
+}
+
+// ======================================================================
+// 2. Let bindings
+// ======================================================================
+
+pub fn emitLetLowering(
+    state: LlvmGenState,
+    name: String,
+    value: LlvmGenValue,
+) -> LlvmGenState {
+    let mut s = state
+    let emitter = s.gen.emitter
+    
+    if value.pointer {
+        let slotTemp = llvmNextTemp(emitter)
+        emitter.body.push("  {slotTemp} = alloca {value.typ}")
+        emitter.body.push("  store {value.typ} {value.name}, ptr {slotTemp}")
+        let slotValue = LlvmGenValue {
+            typ: value.typ, name: slotTemp, pointer: true, mutable: true,
+            gcManaged: value.gcManaged,
+            listElemTyp: value.listElemTyp, listElemString: value.listElemString,
+            mapKeyTyp: value.mapKeyTyp, mapValueTyp: value.mapValueTyp, mapKeyString: value.mapKeyString,
+            setElemTyp: value.setElemTyp, setElemString: value.setElemString,
+            sourceType: value.sourceType, rootPaths: value.rootPaths,
+        }
+        emitter.locals.push(LlvmBinding { name, value: llvmGenValueToLlvmValue(slotValue) })
+        s.gen.gc = bindGCRootIfManagedPointer(emitter, s.gen.gc, slotValue)
+    } else {
+        let genValue = LlvmGenValue {
+            typ: value.typ, name: value.name, pointer: false, mutable: false,
+            gcManaged: value.gcManaged,
+            listElemTyp: value.listElemTyp, listElemString: value.listElemString,
+            mapKeyTyp: value.mapKeyTyp, mapValueTyp: value.mapValueTyp, mapKeyString: value.mapKeyString,
+            setElemTyp: value.setElemTyp, setElemString: value.setElemString,
+            sourceType: value.sourceType, rootPaths: value.rootPaths,
+        }
+        emitter.locals.push(LlvmBinding { name, value: llvmGenValueToLlvmValue(genValue) })
+        s.gen.gc = bindGCRootIfManagedPointer(emitter, s.gen.gc, genValue)
+    }
+    s
+}
+
+// ======================================================================
+// 3. Assignment
+// ======================================================================
+
+pub fn emitAssignLowering(
+    state: LlvmGenState,
+    name: String,
+    value: LlvmGenValue,
+    compoundOp: String,
+) -> LlvmGenState {
+    let mut s = state
+    let emitter = s.gen.emitter
+    
+    let existing = llvmLookup(emitter, name)
+    if !(existing.found) {
+        return s
+    }
+    
+    let genValue = LlvmGenValue {
+        typ: value.typ, name: value.name, pointer: value.pointer, mutable: true,
+        gcManaged: value.gcManaged,
+        listElemTyp: value.listElemTyp, listElemString: value.listElemString,
+        mapKeyTyp: value.mapKeyTyp, mapValueTyp: value.mapValueTyp, mapKeyString: value.mapKeyString,
+        setElemTyp: value.setElemTyp, setElemString: value.setElemString,
+        sourceType: value.sourceType, rootPaths: value.rootPaths,
+    }
+    
+    if compoundOp == "" {
+        if existing.value.pointer {
+            emitter.body.push("  store {value.typ} {value.name}, ptr {existing.value.name}")
+        }
+    } else {
+        let currentValue = llvmLoad(emitter, existing.value)
+        let result = llvmBinaryI64(emitter, compoundOp, currentValue, llvmGenValueToLlvmValue(genValue))
+        emitter.body.push("  store {result.typ} {result.name}, ptr {existing.value.name}")
+    }
+    
+    s.gen.gc = postGCWriteIfPointer(emitter, s.gen.gc, existing.value, genValue)
+    s
+}
+
+// ======================================================================
+// 4. If/else
+// ======================================================================
+
+pub fn emitIfStmtLowering(
+    state: LlvmGenState,
+    condValue: LlvmGenValue,
+    thenBody: List<String>,
+    elseBody: List<String>,
+) -> LlvmGenState {
+    let mut s = state
+    let emitter = s.gen.emitter
+    
+    let labels = llvmIfStart(emitter, llvmGenValueToLlvmValue(condValue))
+    for line in thenBody {
+        emitter.body.push(line)
+    }
+    llvmIfElse(emitter, labels)
+    for line in elseBody {
+        emitter.body.push(line)
+    }
+    llvmIfEnd(emitter, labels)
+    s
+}
+
+// ======================================================================
+// 5. For loops
+// ======================================================================
+
+pub fn emitForRangeLowering(
+    state: LlvmGenState,
+    iterName: String,
+    startValue: LlvmGenValue,
+    stopValue: LlvmGenValue,
+    inclusive: Bool,
+    body: List<String>,
+) -> LlvmGenState {
+    let mut s = state
+    let emitter = s.gen.emitter
+    
+    let loop = if inclusive {
+        llvmInclusiveRangeStart(emitter, iterName, llvmGenValueToLlvmValue(startValue), llvmGenValueToLlvmValue(stopValue))
+    } else {
+        llvmRangeStart(emitter, iterName, llvmGenValueToLlvmValue(startValue), llvmGenValueToLlvmValue(stopValue), inclusive)
+    }
+    
+    for line in body {
+        emitter.body.push(line)
+    }
+    llvmRangeEnd(emitter, loop)
+    s
+}
+
+// ======================================================================
+// 6. Return
+// ======================================================================
+
+pub fn emitReturnLowering(
+    state: LlvmGenState,
+    value: LlvmGenValue,
+) -> LlvmGenState {
+    let mut s = state
+    s.gen.emitter.body.push("  ret {value.typ} {value.name}")
+    s
+}
+
+// ======================================================================
+// 7. Function call
+// ======================================================================
+
+pub fn emitCallLowering(
+    state: LlvmGenState,
+    returnType: String,
+    funcName: String,
+    args: List<LlvmGenValue>,
+) -> (LlvmGenState, LlvmGenValue) {
+    let mut s = state
+    let emitter = s.gen.emitter
+    
+    let llvmArgs: List<LlvmValue> = []
+    for arg in args {
+        if arg.pointer {
+            s.gen.gc = bindGCRootIfManagedPointer(emitter, s.gen.gc, arg)
+        }
+        llvmArgs.push(llvmGenValueToLlvmValue(arg))
+    }
+    
+    let result = llvmCall(emitter, returnType, funcName, llvmArgs)
+    s.gen.gc = emitGCSafepointForCall(emitter, s.gen.gc)
+    
+    let genResult = LlvmGenValue {
+        typ: result.typ, name: result.name, pointer: result.pointer, mutable: false,
+        gcManaged: false, listElemTyp: "", listElemString: false,
+        mapKeyTyp: "", mapValueTyp: "", mapKeyString: false,
+        setElemTyp: "", setElemString: false, sourceType: "", rootPaths: [],
+    }
+    (s, genResult)
+}
+
+// ======================================================================
+// 8. Struct literal
+// ======================================================================
+
+pub fn emitStructLitLowering(
+    state: LlvmGenState,
+    structType: String,
+    fields: List<LlvmGenValue>,
+) -> LlvmGenState {
+    let mut s = state
+    let emitter = s.gen.emitter
+    
+    let llvmFields: List<LlvmValue> = []
+    for field in fields {
+        llvmFields.push(llvmGenValueToLlvmValue(field))
+    }
+    let result = llvmStructLiteral(emitter, structType, llvmFields)
+    let temp = llvmNextTemp(emitter)
+    emitter.body.push("  {temp} = alloca {result.typ}")
+    emitter.body.push("  store {result.typ} {result.name}, ptr {temp}")
+    s
+}
+
+// ======================================================================
+// 9. Closure env allocation
+// ======================================================================
+
+pub fn emitClosureEnvAllocation(
+    state: LlvmGenState,
+    fnSymbol: String,
+    captureTypes: List<String>,
+    captures: List<LlvmGenValue>,
+    resultName: String,
+) -> LlvmGenState {
+    let mut s = state
+    let emitter = s.gen.emitter
+    
+    let elemTags = captureTypes.clone()
+    elemTags.insert(0, "ptr")
+    let envTypeName = llvmClosureEnvTypeName(elemTags)
+    
+    let envPtr = llvmClosureEnvAlloc(emitter, envTypeName)
+    llvmClosureEnvStoreFn(emitter, envPtr, envTypeName, fnSymbol)
+    
+    for i in captures.len() {
+        if i + 1 <= captures.len() {
+            llvmClosureEnvStoreCapture(
+                emitter, envPtr, envTypeName, i + 1,
+                llvmGenValueToLlvmValue(captures[i]),
+            )
+        }
+    }
+    
+    emitter.locals.push(LlvmBinding {
+        name: resultName,
+        value: LlvmValue { typ: "ptr", name: envPtr.name, pointer: false },
+    })
+    s
+}
+
+fn llvmGenValueToLlvmValue(v: LlvmGenValue) -> LlvmValue {
+    LlvmValue { typ: v.typ, name: v.name, pointer: v.pointer }
+}

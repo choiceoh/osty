@@ -1,0 +1,345 @@
+/// MIR→LLVM Lowering for Osty LLVM backend.
+///
+/// Ports key MIR→LLVM lowering patterns from `internal/llvmgen/mir_generator.go`.
+
+use std.strings as llvmStrings
+
+// ======================================================================
+// 1. Type predicates
+// ======================================================================
+
+pub fn mirIsUnitType(typeText: String) -> Bool {
+    return typeText == "Unit" || typeText == "()" || typeText == ""
+}
+
+pub fn mirIsFloatType(typeText: String) -> Bool {
+    return typeText == "Float" || typeText == "Float32" || typeText == "Float64"
+}
+
+pub fn mirIsScalarLLVMType(llvmType: String) -> Bool {
+    return llvmType == "i64" || llvmType == "i1" || llvmType == "double" || llvmType == "i32"
+}
+
+pub fn mirIsHeapEqualityType(typeText: String) -> Bool {
+    let head = mirLlvmTypeHeadName(typeText)
+    return head == "String" || head == "List" || head == "Map" || head == "Set" || head == "Bytes"
+}
+
+pub fn mirIsStringPrimType(typeText: String) -> Bool {
+    return typeText == "String" || typeText == "std.strings.String"
+}
+
+pub fn mirStringOrderingPredicate(symbol: String) -> String {
+    if symbol == "<" { return "slt" }
+    if symbol == "<=" { return "sle" }
+    if symbol == ">" { return "sgt" }
+    if symbol == ">=" { return "sge" }
+    return "eq"
+}
+
+pub fn mirLlvmTypeHeadName(typeText: String) -> String {
+    let head = llvmTypeHeadName(typeText)
+    return head
+}
+
+// ======================================================================
+// 2. Container detection
+// ======================================================================
+
+pub fn mirIsListPtrType(llvmType: String) -> Bool {
+    return llvmType == "ptr"
+}
+
+pub fn mirListUsesRawDataFastPath(elemLLVMType: String) -> Bool {
+    return elemLLVMType == "i64" || elemLLVMType == "i1" || elemLLVMType == "double" || elemLLVMType == "i32"
+}
+
+// ======================================================================
+// 3. Emitter state
+// ======================================================================
+
+pub struct MirGenState {
+    pub gen: LlvmGenState,
+    pub sourcePath: String,
+    pub target: String,
+    pub blockIndex: Int,
+    pub currentBlock: String,
+    pub reachable: Bool,
+}
+
+pub fn mirGenNew(sourcePath: String, target: String) -> MirGenState {
+    MirGenState {
+        gen: beginFunction(),
+        sourcePath,
+        target,
+        blockIndex: 0,
+        currentBlock: "entry",
+        reachable: true,
+    }
+}
+
+pub fn mirFresh(state: MirGenState) -> (String, MirGenState) {
+    let name = "%t" + state.gen.emitter.temp.toString()
+    state.gen.emitter.temp = state.gen.emitter.temp + 1
+    return (name, state)
+}
+
+pub fn mirFreshLabel(state: MirGenState, prefix: String) -> (String, MirGenState) {
+    let name = prefix + state.gen.emitter.label.toString()
+    state.gen.emitter.label = state.gen.emitter.label + 1
+    return (name, state)
+}
+
+// ======================================================================
+// 4. Operand evaluation
+// ======================================================================
+
+pub fn mirEvalOperand(
+    state: MirGenState,
+    operand: String,
+) -> (LlvmValue, MirGenState) {
+    let mut s = state
+    
+    if operand.startsWith("%") {
+        let localName = operand[1..]
+        let lookup = llvmLookup(s.gen.emitter, localName)
+        if lookup.found {
+            if lookup.value.pointer {
+                return (llvmLoad(s.gen.emitter, lookup.value), s)
+            }
+            return (lookup.value, s)
+        }
+        return (LlvmValue { typ: "i64", name: "0", pointer: false }, s)
+    }
+    
+    return (mirRenderConst(operand), s)
+}
+
+pub fn mirRenderConst(text: String) -> LlvmValue {
+    let intVal = text.toInt()
+    if intVal >= 0 {
+        return llvmI64(text)
+    }
+    if text.contains(".") {
+        return llvmF64(text)
+    }
+    if text == "true" {
+        return llvmI1("true")
+    }
+    if text == "false" {
+        return llvmI1("false")
+    }
+    return llvmI64(text)
+}
+
+// ======================================================================
+// 5. RValue evaluation
+// ======================================================================
+
+pub fn mirEvalRValue(
+    state: MirGenState,
+    rvalue: String,
+    operands: List<String>,
+    llvmType: String,
+) -> (LlvmValue, MirGenState) {
+    let mut s = state
+    
+    if rvalue == "Binary" && operands.len() >= 2 {
+        let (left, s2) = mirEvalOperand(s, operands[0])
+        let (right, s3) = mirEvalOperand(s2, operands[1])
+        let tmp = llvmNextTemp(s3.gen.emitter)
+        s3.gen.emitter.body.push("  {tmp} = add {left.typ} {left.name}, {right.name}")
+        return (llvmI64(tmp), s3)
+    }
+    
+    if rvalue == "Unary" && operands.len() >= 1 {
+        let (val, s2) = mirEvalOperand(s, operands[0])
+        let tmp = llvmNextTemp(s2.gen.emitter)
+        s2.gen.emitter.body.push("  {tmp} = sub {val.typ} 0, {val.name}")
+        return (val, s2)
+    }
+    
+    if operands.len() > 0 {
+        return mirEvalOperand(s, operands[0])
+    }
+    
+    return (LlvmValue { typ: llvmType, name: "0", pointer: false }, s)
+}
+
+// ======================================================================
+// 6. Assign emission
+// ======================================================================
+
+pub fn mirEmitAssign(
+    state: MirGenState,
+    destLocal: String,
+    rvalue: String,
+    operands: List<String>,
+    llvmType: String,
+) -> MirGenState {
+    let mut s = state
+    let emitter = s.gen.emitter
+    
+    let (val, s2) = mirEvalRValue(s, rvalue, operands, llvmType)
+    let lookup = llvmLookup(emitter, destLocal)
+    
+    if lookup.found && lookup.value.pointer {
+        emitter.body.push("  store {val.typ} {val.name}, ptr {lookup.value.name}")
+    }
+    
+    s2
+}
+
+// ======================================================================
+// 7. Term emission
+// ======================================================================
+
+pub fn mirEmitTerm(
+    state: MirGenState,
+    termKind: String,
+    operands: List<String>,
+) -> MirGenState {
+    let mut s = state
+    let emitter = s.gen.emitter
+    
+    if termKind == "Goto" && operands.len() > 0 {
+        emitter.body.push("  br label %" + operands[0])
+    }
+    else if termKind == "Branch" && operands.len() >= 3 {
+        let (cond, s2) = mirEvalOperand(s, operands[0])
+        s = s2
+        emitter.body.push("  br i1 " + cond.name + ", label %" + operands[1] + ", label %" + operands[2])
+    }
+    else if termKind == "Return" {
+        if operands.len() > 0 {
+            let (val, s2) = mirEvalOperand(s, operands[0])
+            s = s2
+            emitter.body.push("  ret " + val.typ + " " + val.name)
+        } else {
+            emitter.body.push("  ret void")
+        }
+    }
+    else if termKind == "Unreachable" {
+        emitter.body.push("  unreachable")
+    }
+    
+    s.reachable = termKind != "Goto" && termKind != "Branch"
+    s
+}
+
+// ======================================================================
+// 8. Loop metadata
+// ======================================================================
+
+pub struct MirLoopMDState {
+    pub defs: List<String>,
+    pub accessGroupRef: String,
+}
+
+pub fn mirLoopMDNew() -> MirLoopMDState {
+    MirLoopMDState { defs: [], accessGroupRef: "" }
+}
+
+pub fn mirNextLoopMD(state: MirLoopMDState, hintsActive: Bool) -> (String, MirLoopMDState) {
+    let mut s = state
+    if hintsActive {
+        let ref = "!" + s.defs.len().toString()
+        s.defs.push(ref + " = distinct !{}")
+        return (ref, s)
+    }
+    return ("", s)
+}
+
+pub fn mirTagParallelAccesses(
+    body: List<String>,
+    accessGroupRef: String,
+) -> List<String> {
+    if accessGroupRef == "" {
+        return body
+    }
+    let mut tagged: List<String> = []
+    for line in body {
+        if line.contains(" = load") || line.contains(" = store") {
+            tagged.push(line + ", !llvm.access.group " + accessGroupRef)
+        } else {
+            tagged.push(line)
+        }
+    }
+    return tagged
+}
+
+// ======================================================================
+// 9. Vectorization fast-path
+// ======================================================================
+
+pub fn mirEmitVectorListFastLoad(
+    emitter: LlvmEmitter,
+    listData: LlvmValue,
+    indexVal: LlvmValue,
+    elemType: String,
+) -> LlvmValue {
+    let gep = llvmNextTemp(emitter)
+    emitter.body.push(
+        "  " + gep + " = getelementptr " + elemType + ", ptr " + listData.name + ", i64 " + indexVal.name,
+    )
+    let load = llvmNextTemp(emitter)
+    emitter.body.push("  " + load + " = load " + elemType + ", ptr " + gep)
+    LlvmValue { typ: elemType, name: load, pointer: false }
+}
+
+pub fn mirEmitVectorListFastStore(
+    emitter: LlvmEmitter,
+    listData: LlvmValue,
+    indexVal: LlvmValue,
+    storeVal: LlvmValue,
+) -> () {
+    let gep = llvmNextTemp(emitter)
+    emitter.body.push(
+        "  " + gep + " = getelementptr " + storeVal.typ + ", ptr " + listData.name + ", i64 " + indexVal.name,
+    )
+    emitter.body.push("  store " + storeVal.typ + " " + storeVal.name + ", ptr " + gep)
+}
+
+// ======================================================================
+// 10. Interface downcast
+// ======================================================================
+
+pub fn mirTryEmitInterfaceDowncast(
+    emitter: LlvmEmitter,
+    ifaceValue: LlvmValue,
+    targetInterface: String,
+    targetType: String,
+) -> LlvmValue {
+    let vtableTmp = llvmNextTemp(emitter)
+    emitter.body.push(
+        "  " + vtableTmp + " = extractvalue " + ifaceValue.typ + " " + ifaceValue.name + ", 1",
+    )
+    let icmpTmp = llvmNextTemp(emitter)
+    emitter.body.push(
+        "  " + icmpTmp + " = icmp eq ptr " + vtableTmp + ", @osty.vtable." + targetType + "__" + targetInterface,
+    )
+    let selectTmp = llvmNextTemp(emitter)
+    let dataTmp = llvmNextTemp(emitter)
+    emitter.body.push(
+        "  " + dataTmp + " = extractvalue " + ifaceValue.typ + " " + ifaceValue.name + ", 0",
+    )
+    emitter.body.push(
+        "  " + selectTmp + " = select i1 " + icmpTmp + ", ptr " + dataTmp + ", ptr null",
+    )
+    LlvmValue { typ: "ptr", name: selectTmp, pointer: false }
+}
+
+// ======================================================================
+// 11. Helpers
+// ======================================================================
+
+pub fn mirIntToString(n: Int) -> String { return n.toString() }
+
+pub fn mirLlvmTypeForPrim_(prim: String) -> String {
+    if prim == "Int" || prim == "Int64" { return "i64" }
+    if prim == "Bool" { return "i1" }
+    if prim == "Float" { return "double" }
+    if prim == "Char" { return "i32" }
+    if prim == "Unit" { return "void" }
+    return "i64"
+}
