@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -429,12 +431,23 @@ func (s *Server) analyzePackageContaining(path string, src []byte) *docAnalysis 
 	// Package-only mode kicks in when none of the above applies but
 	// dir has other `.osty` files sitting alongside this one.
 	if resolve.IsWorkspaceRoot(dir, "") {
+		if a := s.analyzeWorkspaceViaEngine(dir, path, src); a != nil {
+			return a
+		}
 		return s.analyzeWorkspace(dir, path, src)
 	}
 	if parent := filepath.Dir(dir); parent != dir && resolve.IsWorkspaceRoot(parent, dir) {
+		if a := s.analyzeWorkspaceViaEngine(parent, path, src); a != nil {
+			return a
+		}
 		return s.analyzeWorkspace(parent, path, src)
 	}
 	if dirHasOstySiblings(dir, path) {
+		// Try the incremental engine path first; fall back to
+		// legacy if the engine cannot handle the package.
+		if a := s.analyzePackageViaEngine(dir, path, src); a != nil {
+			return a
+		}
 		return s.analyzePackage(dir, path, src)
 	}
 	return nil
@@ -488,6 +501,264 @@ func (s *Server) analyzePackage(pkgDir, path string, src []byte) *docAnalysis {
 		a.packages = []*resolve.Package{pkg}
 	}
 	return a
+}
+
+// analyzePackageViaEngine seeds sibling file contents into the Salsa
+// engine and pulls the per-file analysis via the existing query chain.
+// Unlike the legacy analyzePackage, this path gets incremental caching:
+// unchanged siblings hit the Parse cache, and semantically-identical
+// edits trigger early cutoff, sparing the checker and linter.
+//
+// Returns nil if the package cannot be analyzed through the engine
+// (e.g. no source files found).
+func (s *Server) analyzePackageViaEngine(pkgDir, path string, src []byte) *docAnalysis {
+	entries, err := os.ReadDir(pkgDir)
+	if err != nil {
+		return nil
+	}
+
+	key := ostyquery.NormalizePath(path)
+	dir := ostyquery.NormalizePath(pkgDir)
+
+	// Discover .osty files in the package (excluding _test.osty),
+	// matching LoadPackageForNativeWithTransform's behavior.
+	var filePaths []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
+			continue
+		}
+		filePaths = append(filePaths, ostyquery.NormalizePath(filepath.Join(pkgDir, name)))
+	}
+	sort.Strings(filePaths)
+
+	if len(filePaths) == 0 {
+		return nil
+	}
+
+	// Build a lookup of open-document buffers keyed by normalized path
+	// so unsaved edits in sibling files are honoured.
+	openBuffers := s.openBuffersByPath()
+
+	// Seed SourceText for every file in the package.
+	for _, fp := range filePaths {
+		if fp == key {
+			// The file being edited: use the live buffer.
+			s.engine.Inputs.SourceText.Set(s.engine.DB, fp, src)
+			continue
+		}
+		if buf, ok := openBuffers[fp]; ok {
+			// Sibling with unsaved edits: use its buffer.
+			s.engine.Inputs.SourceText.Set(s.engine.DB, fp, buf)
+			continue
+		}
+		// Not open in the editor: read from disk. Skip if already
+		// seeded (common on second and subsequent edits of any file
+		// in the same package).
+		if s.engine.Inputs.SourceText.Has(s.engine.DB, fp) {
+			continue
+		}
+		diskSrc, err := os.ReadFile(fp)
+		if err != nil {
+			return nil
+		}
+		s.engine.Inputs.SourceText.Set(s.engine.DB, fp, diskSrc)
+	}
+
+	// Seed PackageFiles so BuildPackage can assemble the resolve.Package.
+	s.engine.Inputs.PackageFiles.Set(s.engine.DB, dir, filePaths)
+
+	// Pull per-file results from the engine query chain.
+	pr := s.engine.Queries.Parse.Get(s.engine.DB, key)
+	rr := s.engine.Queries.ResolveFile.Get(s.engine.DB, key)
+	chk := s.engine.Queries.CheckFile.Get(s.engine.DB, key)
+	lr := s.engine.Queries.LintFile.Get(s.engine.DB, key)
+	idx := s.engine.Queries.IdentIndex.Get(s.engine.DB, key)
+	all := s.engine.Queries.FileDiagnostics.Get(s.engine.DB, key)
+
+	// Retrieve the resolved package for cross-file handlers (references,
+	// rename, workspaceSymbol).
+	var packages []*resolve.Package
+	rp := s.engine.Queries.ResolvePackage.Get(s.engine.DB, dir)
+	if rp != nil && rp.Package() != nil {
+		packages = []*resolve.Package{rp.Package()}
+	}
+
+	return &docAnalysis{
+		lines:      newLineIndex(src),
+		file:       pr.File,
+		provenance: pr.Provenance,
+		canonical:  pr.CanonicalSource,
+		resolve:    rr,
+		check:      chk,
+		lint:       lr,
+		diags:      all,
+		identIndex: idx,
+		packages:   packages,
+	}
+}
+
+// openBuffersByPath returns a map from normalized file path to the
+// current unsaved buffer for every open document. Used by
+// analyzePackageViaEngine to honour unsaved edits in sibling files.
+func (s *Server) openBuffersByPath() map[string][]byte {
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+	out := make(map[string][]byte, len(s.docs.m))
+	for uri, doc := range s.docs.m {
+		path, ok := fileURIPath(uri)
+		if !ok {
+			continue
+		}
+		out[ostyquery.NormalizePath(path)] = doc.src
+	}
+	return out
+}
+
+// analyzeWorkspaceViaEngine seeds the entire workspace into the Salsa
+// engine and pulls the per-file analysis via the workspace query chain
+// (ResolveWorkspace → CheckWorkspace). Unlike the legacy
+// analyzeWorkspace, this path gets incremental caching across edits:
+// unchanged packages hit the Parse cache, and semantically-identical
+// edits trigger early cutoff in ResolveWorkspace / CheckWorkspace,
+// sparing the checker and linter re-runs.
+//
+// Returns nil if the workspace cannot be analyzed through the engine
+// (e.g. no packages found, disk read failure).
+func (s *Server) analyzeWorkspaceViaEngine(root, path string, src []byte) *docAnalysis {
+	rootNorm := ostyquery.NormalizePath(root)
+	key := ostyquery.NormalizePath(path)
+	dir := ostyquery.PackageDirOf(path)
+	openBuffers := s.openBuffersByPath()
+
+	// Discover every package directory in the workspace.
+	pkgPaths := resolve.WorkspacePackagePaths(root)
+	if len(pkgPaths) == 0 {
+		return nil
+	}
+
+	// Build the list of normalized package directories.
+	pkgDirs := make([]string, 0, len(pkgPaths))
+	for _, pp := range pkgPaths {
+		var absDir string
+		if pp == "" {
+			absDir = root
+		} else {
+			absDir = filepath.Join(root, pp)
+		}
+		pkgDirs = append(pkgDirs, ostyquery.NormalizePath(absDir))
+	}
+
+	// For each package, discover .osty files, seed SourceText and
+	// PackageFiles.
+	for _, pkgDir := range pkgDirs {
+		entries, err := os.ReadDir(pkgDir)
+		if err != nil {
+			return nil
+		}
+		var filePaths []string
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
+				continue
+			}
+			filePaths = append(filePaths, ostyquery.NormalizePath(filepath.Join(pkgDir, name)))
+		}
+		sort.Strings(filePaths)
+
+		if len(filePaths) == 0 {
+			continue
+		}
+
+		// Seed SourceText for every file in this package.
+		for _, fp := range filePaths {
+			if fp == key {
+				s.engine.Inputs.SourceText.Set(s.engine.DB, fp, src)
+				continue
+			}
+			if buf, ok := openBuffers[fp]; ok {
+				s.engine.Inputs.SourceText.Set(s.engine.DB, fp, buf)
+				continue
+			}
+			if s.engine.Inputs.SourceText.Has(s.engine.DB, fp) {
+				continue
+			}
+			diskSrc, err := os.ReadFile(fp)
+			if err != nil {
+				return nil
+			}
+			s.engine.Inputs.SourceText.Set(s.engine.DB, fp, diskSrc)
+		}
+
+		s.engine.Inputs.PackageFiles.Set(s.engine.DB, pkgDir, filePaths)
+	}
+
+	// Seed WorkspaceMembers so ResolveWorkspace knows which packages
+	// to include.
+	s.engine.Inputs.WorkspaceMembers.Set(s.engine.DB, struct{}{}, pkgDirs)
+
+	// Pull workspace-level results from the engine.
+	rw := s.engine.Queries.ResolveWorkspace.Get(s.engine.DB, rootNorm)
+	if rw == nil {
+		return nil
+	}
+	cw := s.engine.Queries.CheckWorkspace.Get(s.engine.DB, rootNorm)
+
+	// Find the owning package and file for the edited document.
+	pkg := rw.PackageByDir(dir)
+	if pkg == nil {
+		return nil
+	}
+	var pf *resolve.PackageFile
+	for _, f := range pkg.Files {
+		if f.Path == path {
+			pf = f
+			break
+		}
+	}
+	if pf == nil {
+		return nil
+	}
+
+	// Slice out per-file results.
+	rr := rw.FileResult(path)
+	if rr == nil {
+		rr = &resolve.Result{}
+	}
+	var chk *check.Result
+	if cw != nil {
+		chk = cw.ResultByDir(dir)
+	}
+	if chk == nil {
+		chk = &check.Result{}
+	}
+
+	// Lint only the owning package — sibling packages aren't relevant
+	// for the diagnostics we publish to the editor, and linting every
+	// package on every keystroke is too expensive.
+	pr := rw.ResultByDir(dir)
+	lr := lint.Package(pkg, pr, chk)
+
+	allDiags := collectDiagsForFile(pr, chk, lr, pf)
+
+	return &docAnalysis{
+		lines:      newLineIndex(src),
+		file:       pf.File,
+		provenance: pf.ParseProvenance,
+		canonical:  pf.CanonicalSource,
+		resolve:    rr,
+		check:      chk,
+		lint:       lr,
+		diags:      allDiags,
+		identIndex: buildIdentIndex(rr),
+		packages:   rw.Packages(),
+	}
 }
 
 // analyzeWorkspace loads the full workspace rooted at `root`, runs
@@ -774,7 +1045,83 @@ func (s *Server) refreshDoc(uri string, version int32, src []byte) *document {
 	s.docs.put(doc)
 	s.wsIndex.invalidate()
 	s.publishDiagnostics(doc)
+	s.refreshSiblingDiagnostics(uri)
 	return doc
+}
+
+// refreshSiblingDiagnostics re-publishes diagnostics for other open
+// documents that share the same package directory as changedURI.
+//
+// When the engine's package-mode path is active (i.e. PackageFiles has
+// been seeded for the directory), editing one file can change
+// diagnostics in siblings — for example, removing an exported function
+// causes type errors in files that call it. This method pulls fresh
+// FileDiagnostics from the engine for each sibling and pushes them to
+// the editor without running a full re-analysis.
+//
+// No-op when the engine has no PackageFiles slot for the directory
+// (single-file mode, scratch buffers, or legacy fallback).
+func (s *Server) refreshSiblingDiagnostics(changedURI string) {
+	path, ok := fileURIPath(changedURI)
+	if !ok {
+		return
+	}
+	dir := ostyquery.NormalizePath(filepath.Dir(path))
+
+	// Only proceed when the engine has package-level data, meaning
+	// analyzePackageViaEngine seeded the directory.
+	if !s.engine.Inputs.PackageFiles.Has(s.engine.DB, dir) {
+		return
+	}
+
+	// Snapshot the set of open sibling documents.
+	s.docs.mu.Lock()
+	type sibRef struct {
+		uri string
+		key string
+		src []byte
+	}
+	var siblings []sibRef
+	for uri, doc := range s.docs.m {
+		if uri == changedURI {
+			continue
+		}
+		sibPath, sibOK := fileURIPath(uri)
+		if !sibOK {
+			continue
+		}
+		sibDir := ostyquery.NormalizePath(filepath.Dir(sibPath))
+		if sibDir != dir {
+			continue
+		}
+		siblings = append(siblings, sibRef{
+			uri: uri,
+			key: ostyquery.NormalizePath(sibPath),
+			src: doc.src,
+		})
+	}
+	s.docs.mu.Unlock()
+
+	if len(siblings) == 0 {
+		return
+	}
+
+	// Pull fresh diagnostics for each sibling from the engine and
+	// republish. The engine reuses cached Parse/Resolve/Check results
+	// for unchanged files, so this is cheap when the edit doesn't
+	// affect siblings semantically.
+	for _, sib := range siblings {
+		engineDiags := s.engine.Queries.FileDiagnostics.Get(s.engine.DB, sib.key)
+		s.docs.mu.Lock()
+		doc, ok := s.docs.m[sib.uri]
+		if !ok || doc.analysis == nil {
+			s.docs.mu.Unlock()
+			continue
+		}
+		doc.analysis.diags = engineDiags
+		s.docs.mu.Unlock()
+		s.publishDiagnostics(doc)
+	}
 }
 
 // ensureWorkspaceIndex makes sure wsIndex is populated with every
