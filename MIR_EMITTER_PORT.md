@@ -264,6 +264,12 @@ list keeps new Osty clean of known landmines.
 | `MirStringPool.symbol` | `(self, content: String) -> String` | §12 | Looks up the symbol for an already-interned content; returns `""` when not present |
 | `MirStringPool.orderedKeys` | `(self) -> List<String>` | §12 | Insertion-ordered list of literal contents — drives `emitStringPool`'s deterministic walk over the pool |
 | `MirStringPool.isEmpty` | `(self) -> Bool` | §12 | Early-exit gate for `emitStringPool` — modules without string constants emit no pool block |
+| `MirThunkDefs` (struct) | `{ bodies: Map<String, String>, order: List<String> }` | §4 | Closure-thunk definition cache. Owns the dedup + insertion-order side of the emitter's `define private <ret> @__osty_closure_thunk_<sym>(ptr env, ...)` shim functions. Replaces `mirGen.thunkDefs + thunkOrder` Go fields. Fourth member of the dedup-with-order family alongside `MirLayoutCache`, `MirRuntimeDecls`, `MirStringPool` |
+| `MirThunkDefs.contains` | `(self, symbol: String) -> Bool` | §4 | Reports whether a thunk for `symbol` has already been generated. Used by `ensureThunk` as an early-exit gate before doing the (non-trivial) work of formatting the thunk's IR body |
+| `MirThunkDefs.register` | `(mut self, symbol: String, body: String) -> Bool` | §4 | Records a freshly-generated thunk body. Returns true when newly added, false when already present |
+| `MirThunkDefs.body` | `(self, symbol: String) -> String` | §4 | Looks up the IR for an already-registered thunk; returns `""` when not present |
+| `MirThunkDefs.orderedBodies` | `(self) -> List<String>` | §4 | Insertion-ordered thunk IR strings — `emitThunks` concatenates these directly (each body already ends with `}\n\n`) |
+| `MirThunkDefs.isEmpty` | `(self) -> Bool` | §4 | Early-exit gate for `emitThunks` — modules without closure-converted top-level fns emit no thunk block |
 | `mirAndI1Line` | `(reg: String, lhs: String, rhs: String) -> String` | §6 | i1 logical-and `  <reg> = and i1 <lhs>, <rhs>\n` — used by bounds-check `nonNeg && inUpper` pattern in `emitListSafeGet` |
 | `mirCallValueWithAliasScopeLine` | `(reg, retTy, sym, argList, scopeRef) -> String` | §1 | Snapshot-call form with `!alias.scope` metadata: `  <reg> = call <retTy> @<sym>(<args>), !alias.scope <ref>\n`. Unlocks LICM of `osty_rt_list_data_*` / `osty_rt_list_len` snapshot reads |
 | `mirLoadWithNoAliasLine` | `(reg: String, ty: String, ptr: String, scopeRef: String) -> String` | §1 | Load tagged with `!noalias` metadata — vector-list fast-path read |

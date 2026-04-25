@@ -170,8 +170,12 @@ type mirGen struct {
 	// Under the uniform env ABI every closure call takes an env as
 	// implicit first arg; top-level fns have no env, so the thunk
 	// ignores env and delegates to the real fn.
-	thunkDefs  map[string]string // symbol → full thunk IR
-	thunkOrder []string
+	// thunkDefs owns the closure-thunk definition pool — dedup +
+	// insertion-order, mirrored from
+	// `toolchain/mir_generator.osty: MirThunkDefs`. Replaces the
+	// previous `thunkDefs map[string]string + thunkOrder []string`
+	// pair fields.
+	thunks MirThunkDefs
 
 	// Interface-related state. `ifaceTouched` is flipped when any code
 	// path emits a value typed as `%osty.iface` — either a parameter
@@ -251,7 +255,6 @@ func newMIRGen(m *mir.Module, opts Options) *mirGen {
 		source:        filepath.ToSlash(firstNonEmpty(opts.SourcePath, "<unknown>")),
 		src:           append([]byte(nil), opts.Source...),
 		functionTypes: map[string]mirFnSig{},
-		thunkDefs:     map[string]string{},
 		tupleDefs:     map[string][]mir.Type{},
 		vtableRefs:    map[string]struct{}{},
 	}
@@ -1367,12 +1370,14 @@ func (g *mirGen) emitGlobalVars() {
 // emitThunks appends any closure thunks generated during function
 // emission. Thunks live below the normal user function definitions so
 // the output reads top-down: user fns first, then closure shims.
+// Delegates to the Osty-sourced `MirThunkDefs.IsEmpty` /
+// `OrderedBodies` (`toolchain/mir_generator.osty`).
 func (g *mirGen) emitThunks() {
-	if len(g.thunkOrder) == 0 {
+	if g.thunks.IsEmpty() {
 		return
 	}
-	for _, sym := range g.thunkOrder {
-		g.out.WriteString(g.thunkDefs[sym])
+	for _, body := range g.thunks.OrderedBodies() {
+		g.out.WriteString(body)
 	}
 }
 
@@ -8157,9 +8162,11 @@ func (g *mirGen) emitFnValueWrapper(symbol string, fnT mir.Type) (string, error)
 
 // ensureThunk generates (once per symbol) a thunk function with
 // signature `ret (ptr env, user_params...) -> ret`. The body
-// discards env and tail-calls the real symbol.
+// discards env and tail-calls the real symbol. Dedup gate routes
+// through the Osty-sourced `MirThunkDefs.Contains`
+// (`toolchain/mir_generator.osty`).
 func (g *mirGen) ensureThunk(symbol string, fnT *ir.FnType) {
-	if _, ok := g.thunkDefs[symbol]; ok {
+	if g.thunks.Contains(symbol) {
 		return
 	}
 	retLLVM := "void"
@@ -8205,8 +8212,7 @@ func (g *mirGen) ensureThunk(symbol string, fnT *ir.FnType) {
 		b.WriteString(" %ret\n")
 	}
 	b.WriteString("}\n\n")
-	g.thunkDefs[symbol] = b.String()
-	g.thunkOrder = append(g.thunkOrder, symbol)
+	g.thunks.Register(symbol, b.String())
 }
 
 // thunkName builds the closure-thunk LLVM symbol name. Delegates to
