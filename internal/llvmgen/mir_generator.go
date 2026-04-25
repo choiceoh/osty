@@ -1944,40 +1944,20 @@ func (g *mirGen) snapshotVectorListLocal(local mir.LocalID, elemLLVM string) {
 		return
 	}
 	listReg := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(listReg)
-	g.fnBuf.WriteString(" = load ptr, ptr ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirLoadLine(listReg, "ptr", slot))
 
 	scopeList := g.listAliasScopeRef()
 
 	dataSym := listRuntimeDataSymbol(elemLLVM)
 	g.declareRuntime(dataSym, mirRuntimeDeclareMemoryRead("ptr", dataSym, "ptr"))
 	dataReg := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(dataReg)
-	g.fnBuf.WriteString(" = call ptr @")
-	g.fnBuf.WriteString(dataSym)
-	g.fnBuf.WriteString("(ptr ")
-	g.fnBuf.WriteString(listReg)
-	g.fnBuf.WriteString("), !alias.scope ")
-	g.fnBuf.WriteString(scopeList)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirCallValueWithAliasScopeLine(dataReg, "ptr", dataSym, "ptr "+listReg, scopeList))
 	g.vectorListData[local] = dataReg
 
 	lenSym := listRuntimeLenSymbol()
 	g.declareRuntime(lenSym, mirRuntimeDeclareMemoryRead("i64", lenSym, "ptr"))
 	lenReg := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(lenReg)
-	g.fnBuf.WriteString(" = call i64 @")
-	g.fnBuf.WriteString(lenSym)
-	g.fnBuf.WriteString("(ptr ")
-	g.fnBuf.WriteString(listReg)
-	g.fnBuf.WriteString("), !alias.scope ")
-	g.fnBuf.WriteString(scopeList)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirCallValueWithAliasScopeLine(lenReg, "i64", lenSym, "ptr "+listReg, scopeList))
 	g.vectorListLens[local] = lenReg
 	g.vectorListSnapDef[local] = g.curBlockID
 }
@@ -2010,37 +1990,16 @@ func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM stri
 		return "", false
 	}
 	inBounds := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(inBounds)
-	g.fnBuf.WriteString(" = icmp ult i64 ")
-	g.fnBuf.WriteString(idxVal)
-	g.fnBuf.WriteString(", ")
-	g.fnBuf.WriteString(lenReg)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString("  " + inBounds + " = icmp ult i64 " + idxVal + ", " + lenReg + "\n")
 
 	fastLabel := g.freshLabel("list.fast")
 	slowLabel := g.freshLabel("list.slow")
 	mergeLabel := g.freshLabel("list.merge")
-	g.fnBuf.WriteString("  br i1 ")
-	g.fnBuf.WriteString(inBounds)
-	g.fnBuf.WriteString(", label %")
-	g.fnBuf.WriteString(fastLabel)
-	g.fnBuf.WriteString(", label %")
-	g.fnBuf.WriteString(slowLabel)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirBrCondLine(inBounds, fastLabel, slowLabel))
 
-	g.fnBuf.WriteString(fastLabel)
-	g.fnBuf.WriteString(":\n")
+	g.fnBuf.WriteString(mirLabelLine(fastLabel))
 	elemPtr := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(elemPtr)
-	g.fnBuf.WriteString(" = getelementptr inbounds ")
-	g.fnBuf.WriteString(elemLLVM)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(dataReg)
-	g.fnBuf.WriteString(", i64 ")
-	g.fnBuf.WriteString(idxVal)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirGEPInboundsLine(elemPtr, elemLLVM, dataReg, "i64", idxVal))
 	// Fast-path read touches the data buffer, which is outside the
 	// list-metadata alias scope — tagging the load with `!noalias`
 	// lets LLVM prove the buffer load doesn't clobber the snapshot
@@ -2049,18 +2008,8 @@ func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM stri
 	// buffer traffic.
 	scopeList := g.listAliasScopeRef()
 	fastVal := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(fastVal)
-	g.fnBuf.WriteString(" = load ")
-	g.fnBuf.WriteString(elemLLVM)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(elemPtr)
-	g.fnBuf.WriteString(", !noalias ")
-	g.fnBuf.WriteString(scopeList)
-	g.fnBuf.WriteByte('\n')
-	g.fnBuf.WriteString("  br label %")
-	g.fnBuf.WriteString(mergeLabel)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirLoadWithNoAliasLine(fastVal, elemLLVM, elemPtr, scopeList))
+	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
 	slowSym := listRuntimeGetSymbol(elemLLVM)
 	// memory(read): the typed slow-path read is semantically pure
@@ -2069,46 +2018,16 @@ func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM stri
 	// the loop vectorizable even when the slow path is theoretically
 	// reachable for OOB indices.
 	g.declareRuntime(slowSym, mirRuntimeDeclareMemoryRead(elemLLVM, slowSym, "ptr, i64"))
-	g.fnBuf.WriteString(slowLabel)
-	g.fnBuf.WriteString(":\n")
+	g.fnBuf.WriteString(mirLabelLine(slowLabel))
 	listReg := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(listReg)
-	g.fnBuf.WriteString(" = load ptr, ptr ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirLoadLine(listReg, "ptr", slot))
 	slowVal := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(slowVal)
-	g.fnBuf.WriteString(" = call ")
-	g.fnBuf.WriteString(elemLLVM)
-	g.fnBuf.WriteString(" @")
-	g.fnBuf.WriteString(slowSym)
-	g.fnBuf.WriteString("(ptr ")
-	g.fnBuf.WriteString(listReg)
-	g.fnBuf.WriteString(", i64 ")
-	g.fnBuf.WriteString(idxVal)
-	g.fnBuf.WriteString(")\n")
-	g.fnBuf.WriteString("  br label %")
-	g.fnBuf.WriteString(mergeLabel)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirCallValueLine(slowVal, elemLLVM, slowSym, "ptr "+listReg+", i64 "+idxVal))
+	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
-	g.fnBuf.WriteString(mergeLabel)
-	g.fnBuf.WriteString(":\n")
+	g.fnBuf.WriteString(mirLabelLine(mergeLabel))
 	merged := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(merged)
-	g.fnBuf.WriteString(" = phi ")
-	g.fnBuf.WriteString(elemLLVM)
-	g.fnBuf.WriteString(" [")
-	g.fnBuf.WriteString(fastVal)
-	g.fnBuf.WriteString(", %")
-	g.fnBuf.WriteString(fastLabel)
-	g.fnBuf.WriteString("], [")
-	g.fnBuf.WriteString(slowVal)
-	g.fnBuf.WriteString(", %")
-	g.fnBuf.WriteString(slowLabel)
-	g.fnBuf.WriteString("]\n")
+	g.fnBuf.WriteString(mirPhiTwoLine(merged, elemLLVM, fastVal, fastLabel, slowVal, slowLabel))
 	return merged, true
 }
 
@@ -2148,37 +2067,16 @@ func (g *mirGen) emitVectorListFastStore(local mir.LocalID, idxVal, valReg, elem
 	}
 
 	inBounds := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(inBounds)
-	g.fnBuf.WriteString(" = icmp ult i64 ")
-	g.fnBuf.WriteString(idxVal)
-	g.fnBuf.WriteString(", ")
-	g.fnBuf.WriteString(lenReg)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString("  " + inBounds + " = icmp ult i64 " + idxVal + ", " + lenReg + "\n")
 
 	fastLabel := g.freshLabel("list.set.fast")
 	slowLabel := g.freshLabel("list.set.slow")
 	mergeLabel := g.freshLabel("list.set.merge")
-	g.fnBuf.WriteString("  br i1 ")
-	g.fnBuf.WriteString(inBounds)
-	g.fnBuf.WriteString(", label %")
-	g.fnBuf.WriteString(fastLabel)
-	g.fnBuf.WriteString(", label %")
-	g.fnBuf.WriteString(slowLabel)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirBrCondLine(inBounds, fastLabel, slowLabel))
 
-	g.fnBuf.WriteString(fastLabel)
-	g.fnBuf.WriteString(":\n")
+	g.fnBuf.WriteString(mirLabelLine(fastLabel))
 	elemPtr := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(elemPtr)
-	g.fnBuf.WriteString(" = getelementptr inbounds ")
-	g.fnBuf.WriteString(elemLLVM)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(dataReg)
-	g.fnBuf.WriteString(", i64 ")
-	g.fnBuf.WriteString(idxVal)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirGEPInboundsLine(elemPtr, elemLLVM, dataReg, "i64", idxVal))
 	// `!noalias` tags the buffer store as outside the list-metadata
 	// scope, disjoint from the `osty_rt_list_data_*` / `osty_rt_list_len`
 	// snapshot calls. That's the alias fact LLVM needs to hoist those
@@ -2186,18 +2084,8 @@ func (g *mirGen) emitVectorListFastStore(local mir.LocalID, idxVal, valReg, elem
 	// conservatively assumed to clobber the metadata memory the calls
 	// read from, pinning the snapshot inside the loop.
 	scopeList := g.listAliasScopeRef()
-	g.fnBuf.WriteString("  store ")
-	g.fnBuf.WriteString(elemLLVM)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(valReg)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(elemPtr)
-	g.fnBuf.WriteString(", !noalias ")
-	g.fnBuf.WriteString(scopeList)
-	g.fnBuf.WriteByte('\n')
-	g.fnBuf.WriteString("  br label %")
-	g.fnBuf.WriteString(mergeLabel)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirStoreWithNoAliasLine(elemLLVM, valReg, elemPtr, scopeList))
+	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
 	// Slow path: call a dedicated noreturn helper that aborts with the
 	// same "list index out of range" message the typed runtime set
@@ -2210,15 +2098,11 @@ func (g *mirGen) emitVectorListFastStore(local mir.LocalID, idxVal, valReg, elem
 	// matmul and quicksort's partition step.
 	const oobSym = "osty_rt_list_oob_abort_v1"
 	g.declareRuntime(oobSym, mirRuntimeDeclareNoReturn("void", oobSym, "", true))
-	g.fnBuf.WriteString(slowLabel)
-	g.fnBuf.WriteString(":\n")
-	g.fnBuf.WriteString("  call void @")
-	g.fnBuf.WriteString(oobSym)
-	g.fnBuf.WriteString("() noreturn\n")
-	g.fnBuf.WriteString("  unreachable\n")
+	g.fnBuf.WriteString(mirLabelLine(slowLabel))
+	g.fnBuf.WriteString(mirCallVoidNoReturnNoArgsLine(oobSym))
+	g.fnBuf.WriteString(mirUnreachableLine())
 
-	g.fnBuf.WriteString(mergeLabel)
-	g.fnBuf.WriteString(":\n")
+	g.fnBuf.WriteString(mirLabelLine(mergeLabel))
 	return true
 }
 
@@ -2325,25 +2209,11 @@ func (g *mirGen) prepareGCSafepointRootChunks() {
 		}
 		window := roots[start:end]
 		slotsPtr := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(slotsPtr)
-		g.fnBuf.WriteString(" = alloca ptr, i64 ")
-		g.fnBuf.WriteString(strconv.Itoa(len(window)))
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirAllocaArrayLine(slotsPtr, "ptr", strconv.Itoa(len(window))))
 		for i, addr := range window {
 			slotPtr := g.fresh()
-			g.fnBuf.WriteString("  ")
-			g.fnBuf.WriteString(slotPtr)
-			g.fnBuf.WriteString(" = getelementptr ptr, ptr ")
-			g.fnBuf.WriteString(slotsPtr)
-			g.fnBuf.WriteString(", i64 ")
-			g.fnBuf.WriteString(strconv.Itoa(i))
-			g.fnBuf.WriteByte('\n')
-			g.fnBuf.WriteString("  store ptr ")
-			g.fnBuf.WriteString(addr)
-			g.fnBuf.WriteString(", ptr ")
-			g.fnBuf.WriteString(slotPtr)
-			g.fnBuf.WriteByte('\n')
+			g.fnBuf.WriteString(mirGEPLine(slotPtr, "ptr", slotsPtr, "i64", strconv.Itoa(i)))
+			g.fnBuf.WriteString(mirStorePtrLine(addr, slotPtr))
 		}
 		g.gcRootChunks = append(g.gcRootChunks, mirGCRootChunk{
 			slotsPtr: slotsPtr,
@@ -2394,55 +2264,21 @@ func (g *mirGen) emitLoopSafepointKind() {
 		return
 	}
 	count := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(count)
-	g.fnBuf.WriteString(" = load i64, ptr ")
-	g.fnBuf.WriteString(g.loopSafepointSlot)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirLoadLine(count, "i64", g.loopSafepointSlot))
 	next := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(next)
-	g.fnBuf.WriteString(" = add i64 ")
-	g.fnBuf.WriteString(count)
-	g.fnBuf.WriteString(", 1\n")
+	g.fnBuf.WriteString("  " + next + " = add i64 " + count + ", 1\n")
 	shouldPoll := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(shouldPoll)
-	g.fnBuf.WriteString(" = icmp eq i64 ")
-	g.fnBuf.WriteString(next)
-	g.fnBuf.WriteString(", ")
-	g.fnBuf.WriteString(strconv.FormatInt(loopSafepointStride, 10))
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirICmpEqLine(shouldPoll, "i64", next, strconv.FormatInt(loopSafepointStride, 10)))
 	stored := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(stored)
-	g.fnBuf.WriteString(" = select i1 ")
-	g.fnBuf.WriteString(shouldPoll)
-	g.fnBuf.WriteString(", i64 0, i64 ")
-	g.fnBuf.WriteString(next)
-	g.fnBuf.WriteByte('\n')
-	g.fnBuf.WriteString("  store i64 ")
-	g.fnBuf.WriteString(stored)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(g.loopSafepointSlot)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirSelectLine(stored, "i64", shouldPoll, "0", next))
+	g.fnBuf.WriteString(mirStoreLine("i64", stored, g.loopSafepointSlot))
 	pollLabel := g.freshLabel("gc.loop.poll")
 	afterLabel := g.freshLabel("gc.loop.after")
-	g.fnBuf.WriteString("  br i1 ")
-	g.fnBuf.WriteString(shouldPoll)
-	g.fnBuf.WriteString(", label %")
-	g.fnBuf.WriteString(pollLabel)
-	g.fnBuf.WriteString(", label %")
-	g.fnBuf.WriteString(afterLabel)
-	g.fnBuf.WriteByte('\n')
-	g.fnBuf.WriteString(pollLabel)
-	g.fnBuf.WriteString(":\n")
+	g.fnBuf.WriteString(mirBrCondLine(shouldPoll, pollLabel, afterLabel))
+	g.fnBuf.WriteString(mirLabelLine(pollLabel))
 	g.emitGCSafepointKind(safepointKindLoop)
-	g.fnBuf.WriteString("  br label %")
-	g.fnBuf.WriteString(afterLabel)
-	g.fnBuf.WriteByte('\n')
-	g.fnBuf.WriteString(afterLabel)
-	g.fnBuf.WriteString(":\n")
+	g.fnBuf.WriteString(mirBrUncondLine(afterLabel))
+	g.fnBuf.WriteString(mirLabelLine(afterLabel))
 }
 
 // declareSafepoint registers @osty.gc.safepoint_v1 — split from
@@ -5167,7 +5003,7 @@ func (g *mirGen) emitListLoadElement(listReg, idxReg string, elemLLVM string) (s
 	g.declareRuntime(sym, "declare void @"+sym+"(ptr, i64, ptr, i64)")
 	g.fnBuf.WriteString(mirCallVoidLine(sym, "ptr "+listReg+", i64 "+idxReg+", ptr "+slot+", i64 "+sizeReg))
 	elemReg := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = load %s, ptr %s\n", elemReg, elemLLVM, slot)
+	g.fnBuf.WriteString(mirLoadLine(elemReg, elemLLVM, slot))
 	return elemReg, nil
 }
 
@@ -5177,15 +5013,15 @@ func (g *mirGen) listOptionalPayloadToI64(elemReg, elemLLVM string, elemT mir.Ty
 		return elemReg, nil
 	case "i1", "i8", "i16", "i32":
 		widened := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = zext %s %s to i64\n", widened, elemLLVM, elemReg)
+		g.fnBuf.WriteString(mirZExtLine(widened, elemLLVM, elemReg, "i64"))
 		return widened, nil
 	case "double":
 		cast := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = bitcast double %s to i64\n", cast, elemReg)
+		g.fnBuf.WriteString(mirBitcastLine(cast, "double", elemReg, "i64"))
 		return cast, nil
 	case "ptr":
 		cast := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = ptrtoint ptr %s to i64\n", cast, elemReg)
+		g.fnBuf.WriteString(mirPtrToIntLine(cast, elemReg, "i64"))
 		return cast, nil
 	default:
 		if strings.HasPrefix(elemLLVM, "%") {
@@ -5315,24 +5151,24 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		someLabel := g.freshLabel("map.get.some")
 		noneLabel := g.freshLabel("map.get.none")
 		endLabel := g.freshLabel("map.get.end")
-		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", present, someLabel, noneLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+		g.fnBuf.WriteString(mirBrCondLine(present, someLabel, noneLabel))
+		g.fnBuf.WriteString(mirLabelLine(someLabel))
 		loaded := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = load %s, ptr %s\n", loaded, vLLVM, slot)
+		g.fnBuf.WriteString(mirLoadLine(loaded, vLLVM, slot))
 		payloadI64, err := g.listOptionalPayloadToI64(loaded, vLLVM, valT)
 		if err != nil {
 			return unsupportedf("mir-mvp", "map_get payload widen unsupported for %s", vLLVM)
 		}
 		someStep := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 1, 0\n", someStep, optLLVM)
+		g.fnBuf.WriteString(mirInsertValueAggLine(someStep, optLLVM, "undef", "i64", "1", "0"))
 		someValue := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n", someValue, optLLVM, someStep, payloadI64)
-		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", optLLVM, someValue, destSlot)
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
-		fmt.Fprintf(&g.fnBuf, "  store %s zeroinitializer, ptr %s\n", optLLVM, destSlot)
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
-		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
+		g.fnBuf.WriteString(mirInsertValueAggLine(someValue, optLLVM, someStep, "i64", payloadI64, "1"))
+		g.fnBuf.WriteString(mirStoreLine(optLLVM, someValue, destSlot))
+		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+		g.fnBuf.WriteString(mirLabelLine(noneLabel))
+		g.fnBuf.WriteString(mirStoreZeroinitLine(optLLVM, destSlot))
+		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+		g.fnBuf.WriteString(mirLabelLine(endLabel))
 		return nil
 	case mir.IntrinsicMapGetOr:
 		// `m.getOr(k, d) -> V` lowered without allocating an Option
@@ -5368,26 +5204,25 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		hitLabel := g.freshLabel("map.getOr.hit")
 		missLabel := g.freshLabel("map.getOr.miss")
 		endLabel := g.freshLabel("map.getOr.end")
-		fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", present, hitLabel, missLabel)
+		g.fnBuf.WriteString(mirBrCondLine(present, hitLabel, missLabel))
 		// Hit: load payload from the out-slot the runtime filled.
-		fmt.Fprintf(&g.fnBuf, "%s:\n", hitLabel)
+		g.fnBuf.WriteString(mirLabelLine(hitLabel))
 		loaded := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = load %s, ptr %s\n", loaded, vLLVM, slot)
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		g.fnBuf.WriteString(mirLoadLine(loaded, vLLVM, slot))
+		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
 		// Miss: evaluate the default operand. Deferred until this arm
 		// so it isn't computed on a hit path.
-		fmt.Fprintf(&g.fnBuf, "%s:\n", missLabel)
+		g.fnBuf.WriteString(mirLabelLine(missLabel))
 		fallback, err := g.evalOperand(i.Args[2], destLoc.Type)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
+		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
 		// Join.
-		fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
+		g.fnBuf.WriteString(mirLabelLine(endLabel))
 		merged := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = phi %s [ %s, %%%s ], [ %s, %%%s ]\n",
-			merged, vLLVM, loaded, hitLabel, fallback, missLabel)
-		fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", vLLVM, merged, g.localSlots[i.Dest.Local])
+		g.fnBuf.WriteString(mirPhiTwoLine(merged, vLLVM, loaded, hitLabel, fallback, missLabel))
+		g.fnBuf.WriteString(mirStoreLine(vLLVM, merged, g.localSlots[i.Dest.Local]))
 		return nil
 	case mir.IntrinsicMapSet:
 		if len(i.Args) != 3 {
@@ -5517,10 +5352,10 @@ func (g *mirGen) emitMapGetProbe(mapReg, keyReg, keyLLVM string, keyString bool,
 	getSym := mapRuntimeGetSymbol(keyLLVM, keyString)
 	g.declareRuntime(getSym, "declare i1 @"+getSym+"(ptr, "+keyLLVM+", ptr)")
 	slot = g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = alloca %s\n", slot, valLLVM)
+	g.fnBuf.WriteString(mirAllocaLine(slot, valLLVM))
 	present = g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = call i1 @%s(ptr %s, %s %s, ptr %s)\n",
-		present, getSym, mapReg, keyLLVM, keyReg, slot)
+	g.fnBuf.WriteString(mirCallValueLine(present, "i1", getSym,
+		"ptr "+mapReg+", "+keyLLVM+" "+keyReg+", ptr "+slot))
 	return present, slot
 }
 
@@ -6463,30 +6298,30 @@ func (g *mirGen) emitStringIndexOf(i *mir.IntrinsicInstr, strReg string) error {
 func (g *mirGen) storeOptionalIntFromNegativeOneIndex(i *mir.IntrinsicInstr, optT *ir.OptionalType, indexReg, labelPrefix string) error {
 	optLLVM := g.llvmType(optT)
 	present := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = icmp sge i64 %s, 0\n", present, indexReg)
+	g.fnBuf.WriteString(mirICmpLine(present, "sge", "i64", indexReg, "0"))
 	someLabel := g.freshLabel(labelPrefix + ".some")
 	noneLabel := g.freshLabel(labelPrefix + ".none")
 	mergeLabel := g.freshLabel(labelPrefix + ".merge")
-	fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", present, someLabel, noneLabel)
+	g.fnBuf.WriteString(mirBrCondLine(present, someLabel, noneLabel))
 
-	fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+	g.fnBuf.WriteString(mirLabelLine(someLabel))
 	someStep := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 1, 0\n", someStep, optLLVM)
+	g.fnBuf.WriteString(mirInsertValueAggLine(someStep, optLLVM, "undef", "i64", "1", "0"))
 	someValue := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n", someValue, optLLVM, someStep, indexReg)
-	fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", mergeLabel)
+	g.fnBuf.WriteString(mirInsertValueAggLine(someValue, optLLVM, someStep, "i64", indexReg, "1"))
+	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
-	fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
+	g.fnBuf.WriteString(mirLabelLine(noneLabel))
 	noneStep := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 0, 0\n", noneStep, optLLVM)
+	g.fnBuf.WriteString(mirInsertValueAggLine(noneStep, optLLVM, "undef", "i64", "0", "0"))
 	noneValue := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 0, 1\n", noneValue, optLLVM, noneStep)
-	fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", mergeLabel)
+	g.fnBuf.WriteString(mirInsertValueAggLine(noneValue, optLLVM, noneStep, "i64", "0", "1"))
+	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
-	fmt.Fprintf(&g.fnBuf, "%s:\n", mergeLabel)
+	g.fnBuf.WriteString(mirLabelLine(mergeLabel))
 	result := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = phi %s [ %s, %%%s ], [ %s, %%%s ]\n", result, optLLVM, someValue, someLabel, noneValue, noneLabel)
-	fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", optLLVM, result, g.localSlots[i.Dest.Local])
+	g.fnBuf.WriteString(mirPhiTwoLine(result, optLLVM, someValue, someLabel, noneValue, noneLabel))
+	g.fnBuf.WriteString(mirStoreLine(optLLVM, result, g.localSlots[i.Dest.Local]))
 	return nil
 }
 
@@ -8396,48 +8231,48 @@ func (g *mirGen) emitListSafeGet(i *mir.IntrinsicInstr, listReg, idxReg, elemLLV
 	getSym := listRuntimeGetSymbol(elemLLVM)
 	g.declareRuntime(getSym, mirRuntimeDeclareMemoryRead(elemLLVM, getSym, "ptr, i64"))
 	lenReg := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = call i64 @%s(ptr %s)\n", lenReg, lenSym, listReg)
+	g.fnBuf.WriteString(mirCallValueLine(lenReg, "i64", lenSym, "ptr "+listReg))
 	nonNeg := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = icmp sge i64 %s, 0\n", nonNeg, idxReg)
+	g.fnBuf.WriteString(mirICmpLine(nonNeg, "sge", "i64", idxReg, "0"))
 	inUpper := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = icmp slt i64 %s, %s\n", inUpper, idxReg, lenReg)
+	g.fnBuf.WriteString(mirICmpLine(inUpper, "slt", "i64", idxReg, lenReg))
 	inBounds := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = and i1 %s, %s\n", inBounds, nonNeg, inUpper)
+	g.fnBuf.WriteString(mirAndI1Line(inBounds, nonNeg, inUpper))
 	someLabel := g.freshLabel("list.safeget.some")
 	noneLabel := g.freshLabel("list.safeget.none")
 	endLabel := g.freshLabel("list.safeget.end")
-	fmt.Fprintf(&g.fnBuf, "  br i1 %s, label %%%s, label %%%s\n", inBounds, someLabel, noneLabel)
-	fmt.Fprintf(&g.fnBuf, "%s:\n", noneLabel)
-	fmt.Fprintf(&g.fnBuf, "  store %s zeroinitializer, ptr %s\n", destLLVM, destSlot)
-	fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
-	fmt.Fprintf(&g.fnBuf, "%s:\n", someLabel)
+	g.fnBuf.WriteString(mirBrCondLine(inBounds, someLabel, noneLabel))
+	g.fnBuf.WriteString(mirLabelLine(noneLabel))
+	g.fnBuf.WriteString(mirStoreZeroinitLine(destLLVM, destSlot))
+	g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+	g.fnBuf.WriteString(mirLabelLine(someLabel))
 	elemReg := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = call %s @%s(ptr %s, i64 %s)\n", elemReg, elemLLVM, getSym, listReg, idxReg)
+	g.fnBuf.WriteString(mirCallValueLine(elemReg, elemLLVM, getSym, "ptr "+listReg+", i64 "+idxReg))
 	payloadReg := elemReg
 	switch elemLLVM {
 	case "i64":
 	case "i1", "i8", "i16", "i32":
 		widened := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = zext %s %s to i64\n", widened, elemLLVM, elemReg)
+		g.fnBuf.WriteString(mirZExtLine(widened, elemLLVM, elemReg, "i64"))
 		payloadReg = widened
 	case "double":
 		cast := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = bitcast double %s to i64\n", cast, elemReg)
+		g.fnBuf.WriteString(mirBitcastLine(cast, "double", elemReg, "i64"))
 		payloadReg = cast
 	case "ptr":
 		cast := g.fresh()
-		fmt.Fprintf(&g.fnBuf, "  %s = ptrtoint ptr %s to i64\n", cast, elemReg)
+		g.fnBuf.WriteString(mirPtrToIntLine(cast, elemReg, "i64"))
 		payloadReg = cast
 	default:
 		return unsupported("mir-mvp", fmt.Sprintf("list_get safe payload widen unsupported for %s", elemLLVM))
 	}
 	tagged := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s undef, i64 1, 0\n", tagged, destLLVM)
+	g.fnBuf.WriteString(mirInsertValueAggLine(tagged, destLLVM, "undef", "i64", "1", "0"))
 	filled := g.fresh()
-	fmt.Fprintf(&g.fnBuf, "  %s = insertvalue %s %s, i64 %s, 1\n", filled, destLLVM, tagged, payloadReg)
-	fmt.Fprintf(&g.fnBuf, "  store %s %s, ptr %s\n", destLLVM, filled, destSlot)
-	fmt.Fprintf(&g.fnBuf, "  br label %%%s\n", endLabel)
-	fmt.Fprintf(&g.fnBuf, "%s:\n", endLabel)
+	g.fnBuf.WriteString(mirInsertValueAggLine(filled, destLLVM, tagged, "i64", payloadReg, "1"))
+	g.fnBuf.WriteString(mirStoreLine(destLLVM, filled, destSlot))
+	g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+	g.fnBuf.WriteString(mirLabelLine(endLabel))
 	return nil
 }
 

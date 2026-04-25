@@ -1583,6 +1583,60 @@ func mirUnreachableLine() string {
 	return "  unreachable\n"
 }
 
+// Specialised line builders for §1 vector-list fast-path metadata,
+// §5 GC bounds checks, and §7 list / map intrinsic chains.
+
+// mirAndI1Line renders i1 logical-and `  <reg> = and i1 <lhs>, <rhs>\n`.
+// Osty: mirAndI1Line
+func mirAndI1Line(reg string, lhs string, rhs string) string {
+	return "  " + reg + " = and i1 " + lhs + ", " + rhs + "\n"
+}
+
+// mirCallValueWithAliasScopeLine renders a typed call with an
+// `!alias.scope` metadata attachment.
+// Osty: mirCallValueWithAliasScopeLine
+func mirCallValueWithAliasScopeLine(reg string, retTy string, sym string, argList string, scopeRef string) string {
+	return "  " + reg + " = call " + retTy + " @" + sym + "(" + argList +
+		"), !alias.scope " + scopeRef + "\n"
+}
+
+// mirLoadWithNoAliasLine renders a load tagged with `!noalias` metadata.
+// Osty: mirLoadWithNoAliasLine
+func mirLoadWithNoAliasLine(reg string, ty string, ptr string, scopeRef string) string {
+	return "  " + reg + " = load " + ty + ", ptr " + ptr + ", !noalias " + scopeRef + "\n"
+}
+
+// mirStoreWithNoAliasLine renders a store tagged with `!noalias` metadata.
+// Osty: mirStoreWithNoAliasLine
+func mirStoreWithNoAliasLine(ty string, val string, ptr string, scopeRef string) string {
+	return "  store " + ty + " " + val + ", ptr " + ptr + ", !noalias " + scopeRef + "\n"
+}
+
+// mirCallVoidNoReturnNoArgsLine renders `  call void @<sym>() noreturn\n`.
+// Osty: mirCallVoidNoReturnNoArgsLine
+func mirCallVoidNoReturnNoArgsLine(sym string) string {
+	return "  call void @" + sym + "() noreturn\n"
+}
+
+// mirAllocaArrayLine renders `  <reg> = alloca <ty>, i64 <countDigits>\n`.
+// Osty: mirAllocaArrayLine
+func mirAllocaArrayLine(reg string, ty string, countDigits string) string {
+	return "  " + reg + " = alloca " + ty + ", i64 " + countDigits + "\n"
+}
+
+// mirGEPLine renders the non-inbounds GEP form.
+// Osty: mirGEPLine
+func mirGEPLine(reg string, baseTy string, basePtr string, idxTy string, idx string) string {
+	return "  " + reg + " = getelementptr " + baseTy +
+		", ptr " + basePtr + ", " + idxTy + " " + idx + "\n"
+}
+
+// mirStorePtrLine renders `  store ptr <val>, ptr <slot>\n`.
+// Osty: mirStorePtrLine
+func mirStorePtrLine(val string, slot string) string {
+	return "  store ptr " + val + ", ptr " + slot + "\n"
+}
+
 // §14 enum / tuple layout cache.
 //
 // MirLayoutCache mirrors `toolchain/mir_generator.osty: MirLayoutCache`.
