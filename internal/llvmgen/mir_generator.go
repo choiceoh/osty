@@ -1185,7 +1185,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
 		mir.IntrinsicStringEndsWith, mir.IntrinsicStringIndexOf, mir.IntrinsicStringSplit,
-		mir.IntrinsicStringSplitInto,
+		mir.IntrinsicStringSplitInto, mir.IntrinsicStringNthSegment,
 		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring:
 		return true
 	// Concurrency — channels / tasks / select / cancellation / helpers.
@@ -3824,7 +3824,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
 		mir.IntrinsicStringEndsWith, mir.IntrinsicStringIndexOf, mir.IntrinsicStringSplit,
-		mir.IntrinsicStringSplitInto,
+		mir.IntrinsicStringSplitInto, mir.IntrinsicStringNthSegment,
 		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring:
 		return g.emitStringIntrinsic(i)
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
@@ -5440,6 +5440,9 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 	if i.Kind == mir.IntrinsicStringSplitInto {
 		return g.emitStringSplitInto(i)
 	}
+	if i.Kind == mir.IntrinsicStringNthSegment {
+		return g.emitStringNthSegment(i)
+	}
 	if i.Kind == mir.IntrinsicStringConcat {
 		if len(i.Args) == 0 {
 			return unsupported("mir-mvp", "string_concat with no args")
@@ -5838,6 +5841,46 @@ func (g *mirGen) emitStringSplitInto(i *mir.IntrinsicInstr) error {
 	em.body = append(em.body, fmt.Sprintf("  call void @%s(ptr %s, ptr %s, ptr %s)", sym, outReg, valReg, sepReg))
 	g.flushOstyEmitter(em)
 	return nil
+}
+
+// emitStringNthSegment lowers the fused `expr.split(sep)[K]` form
+// produced by the `fuseNonEscapingSplitNth` MIR pass. Args are
+// `[value, sep, idx]`; the runtime walks `value` past the first
+// `idx` separators and dups the segment that follows, returning a
+// single allocated String without ever materialising the
+// List<String>. Dest must be a String local.
+func (g *mirGen) emitStringNthSegment(i *mir.IntrinsicInstr) error {
+	if len(i.Args) != 3 {
+		return unsupported("mir-mvp", "string_nth_segment arity")
+	}
+	if !isStringLLVMType(i.Args[0].Type()) {
+		return unsupported("mir-mvp", fmt.Sprintf("string_nth_segment value type %s", mirTypeString(i.Args[0].Type())))
+	}
+	if !isStringLLVMType(i.Args[1].Type()) {
+		return unsupported("mir-mvp", fmt.Sprintf("string_nth_segment sep type %s", mirTypeString(i.Args[1].Type())))
+	}
+	valReg, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+	if err != nil {
+		return err
+	}
+	sepReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+	if err != nil {
+		return err
+	}
+	idxReg, err := g.evalOperand(i.Args[2], i.Args[2].Type())
+	if err != nil {
+		return err
+	}
+	sym := "osty_rt_strings_NthSegment"
+	g.declareRuntime(sym, "declare ptr @"+sym+"(ptr, ptr, i64)")
+	em := g.ostyEmitter()
+	result := llvmCall(em, "ptr", sym, []*LlvmValue{
+		{typ: "ptr", name: valReg},
+		{typ: "ptr", name: sepReg},
+		{typ: "i64", name: idxReg},
+	})
+	g.flushOstyEmitter(em)
+	return g.storeIntrinsicResult(i, result)
 }
 
 // emitStringBinaryBoolIntrinsic dispatches `.startsWith(s)` /

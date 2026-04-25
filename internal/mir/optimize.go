@@ -49,9 +49,13 @@ func optimizeFunction(fn *Function) {
 	if fn == nil || fn.IsExternal || fn.IsIntrinsic {
 		return
 	}
-	// Structural rewrite — runs once before the peephole fixed point so
+	// Structural rewrites — run once before the peephole fixed point so
 	// the alias copy / new buffer local feed copy-prop / dead-assign
-	// elimination on the same Optimize call.
+	// elimination on the same Optimize call. Order matters:
+	// `fuseNonEscapingSplitNth` runs first so the constant-index
+	// pattern wins over the loop-hoist transform, which would still
+	// allocate a List and dup every piece.
+	fuseNonEscapingSplitNth(fn)
 	hoistNonEscapingSplitInLoops(fn)
 	const maxIters = 16
 	for i := 0; i < maxIters; i++ {
