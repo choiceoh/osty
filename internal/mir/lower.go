@@ -2382,6 +2382,28 @@ func isStringReceiver(t ir.Type) bool {
 	return false
 }
 
+// flattenStringConcatChain walks left-deep into a `String + String +
+// ...` tree and returns the flat list of leaf operands in evaluation
+// (left-to-right) order. Stops descending whenever the child is no
+// longer a String `+` BinaryExpr — explicitly parenthesized
+// `(a + b) + (c + d)` flattens fully because both subtrees are
+// homogeneous String + chains; mixed-op subtrees stop the descent so
+// the binary path still handles them verbatim.
+func (bs *bodyState) flattenStringConcatChain(x *ir.BinaryExpr) []Operand {
+	out := make([]Operand, 0, 4)
+	bs.appendStringConcatLeaves(x, &out)
+	return out
+}
+
+func (bs *bodyState) appendStringConcatLeaves(e ir.Expr, out *[]Operand) {
+	if be, ok := e.(*ir.BinaryExpr); ok && be.Op == ir.BinAdd && isStringReceiver(be.T) {
+		bs.appendStringConcatLeaves(be.Left, out)
+		bs.appendStringConcatLeaves(be.Right, out)
+		return
+	}
+	*out = append(*out, bs.lowerExprAsOperand(e))
+}
+
 // pathQualifier returns the "." joined Path of a UseDecl, so
 // `use std.strings as strings` yields "std.strings" even when RawPath
 // is empty (path-only imports).
@@ -2432,6 +2454,27 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 			T:   x.T,
 		}
 	case *ir.BinaryExpr:
+		// String + String + ... chains coalesce into a single
+		// `IntrinsicStringConcat` so the runtime sees one
+		// `osty_rt_strings_ConcatN` call instead of N-1 binary
+		// `osty_rt_strings_Concat` calls. Each binary call allocates a
+		// fresh GC-managed buffer; collapsing the chain saves N-2
+		// allocations per concat site, which directly cuts
+		// `osty_gc_index_insert` traffic on alloc-heavy programs.
+		// `a + b + c` with String type lowers from 2 allocs to 1.
+		if x.Op == ir.BinAdd && isStringReceiver(x.T) {
+			parts := bs.flattenStringConcatChain(x)
+			if len(parts) >= 3 {
+				tmp := bs.freshTemp(TString, exprSpan(x))
+				bs.emit(&IntrinsicInstr{
+					Dest:  &Place{Local: tmp},
+					Kind:  IntrinsicStringConcat,
+					Args:  parts,
+					SpanV: exprSpan(x),
+				})
+				return &UseRV{Op: &CopyOp{Place: Place{Local: tmp}, T: TString}}
+			}
+		}
 		return &BinaryRV{
 			Op:    mapBinaryOp(x.Op),
 			Left:  bs.lowerExprAsOperand(x.Left),
