@@ -298,6 +298,13 @@ func loadNativeWorkspace(dir, mode string, flags cliFlags) (*resolve.Workspace, 
 	return ws, nil
 }
 
+// nativeLazyStdlibProvider defers stdlib.LoadCached() until a `use
+// std.*` import actually needs resolving. The eager alternative
+// (assigning stdlib.LoadCached() directly) triggers astbridge
+// lowering at workspace setup time, which violates the
+// astbridge-free invariant pinned by
+// TestRunCheckPackageNativeIsAstbridgeFree on packages that import
+// no stdlib.
 type nativeLazyStdlibProvider struct{}
 
 func (nativeLazyStdlibProvider) LookupPackage(dotPath string) *resolve.Package {
