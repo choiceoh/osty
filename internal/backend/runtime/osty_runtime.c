@@ -3080,7 +3080,13 @@ static inline size_t osty_rt_string_len(const char *value) {
     return len;
 }
 
-static inline size_t osty_rt_string_hash(const char *value) {
+/* OSTY_HOT_INLINE on top of `static inline`: ThinLTO sometimes emits
+ * an out-of-line copy when `osty_rt_string_measure` is large enough
+ * that the inlined body bloats above the importer's instruction
+ * budget (5 sites still showed up as `bl _osty_rt_string_hash` in
+ * the markdown-stats hot loop without this directive). The
+ * always-inline attribute forces the body in regardless. */
+static OSTY_HOT_INLINE size_t osty_rt_string_hash(const char *value) {
     size_t hash = (size_t)osty_rt_hash_mix64(0ULL);
     osty_rt_string_measure(value, NULL, &hash);
     return hash;
@@ -4559,7 +4565,14 @@ static osty_rt_list *osty_rt_list_cast(void *raw_list) {
     return (osty_rt_list *)osty_gc_load_v1(raw_list);
 }
 
-static void osty_rt_list_ensure_layout(osty_rt_list *list, size_t elem_size, osty_rt_trace_slot_fn trace_elem) {
+/* OSTY_HOT_INLINE: called from every push/get/set on a typed list.
+ * Body is two field-equality checks + one type-mismatch abort path
+ * (cold). Inlining lets ThinLTO see the wrapper's constant
+ * `elem_size` and `trace_elem` arguments and DCE the comparisons
+ * to a no-op once the layout is locked in (which happens on the
+ * first push). The IR-side caller then sees reserve+memcpy as a
+ * single inline blob. */
+static OSTY_HOT_INLINE void osty_rt_list_ensure_layout(osty_rt_list *list, size_t elem_size, osty_rt_trace_slot_fn trace_elem) {
     if (list->elem_size == 0) {
         list->elem_size = elem_size;
         list->trace_elem = trace_elem;
@@ -4573,7 +4586,13 @@ static void osty_rt_list_ensure_layout(osty_rt_list *list, size_t elem_size, ost
     }
 }
 
-static void osty_rt_list_ensure_gc_offsets(osty_rt_list *list, const int64_t *gc_offsets, int64_t gc_offset_count) {
+/* OSTY_HOT_INLINE: companion to `ensure_layout` for struct-element
+ * lists (List<Record>). Same pattern — first call locks in the
+ * offset table, subsequent calls hit the equality short-circuit.
+ * Inlining lets the offset comparison loop fold to nothing once
+ * the count and pointer values are constant from the wrapper's
+ * call site. */
+static OSTY_HOT_INLINE void osty_rt_list_ensure_gc_offsets(osty_rt_list *list, const int64_t *gc_offsets, int64_t gc_offset_count) {
     int64_t i;
 
     if (gc_offset_count < 0) {
@@ -4618,7 +4637,17 @@ static void osty_rt_list_ensure_gc_offsets(osty_rt_list *list, const int64_t *gc
     }
 }
 
-static void osty_rt_list_reserve(osty_rt_list *list, int64_t min_cap) {
+/* OSTY_HOT_INLINE: hottest cross-TU call left in the suite — 95
+ * sites in log-aggregator's hot loop, 61 in lru-sim, 31 in
+ * markdown-stats. Body is a small fast-path (`min_cap <= cap`
+ * early return) wrapping a cold growth path (inline-spill or
+ * realloc). Inlining lets ThinLTO peel the fast path at every
+ * push call site so the steady-state `out.push(...)` lowering
+ * collapses to the load-cap + compare + memcpy + store-len
+ * sequence the IR call site expected post-#906. The cold growth
+ * path stays out-of-line via the early return so we don't bloat
+ * IR for the 99% case where cap was already enough. */
+static OSTY_HOT_INLINE void osty_rt_list_reserve(osty_rt_list *list, int64_t min_cap) {
     int64_t next_cap = list->cap;
     void *next_data;
     size_t want_bytes;
