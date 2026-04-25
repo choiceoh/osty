@@ -2925,7 +2925,16 @@ static void osty_rt_map_mutex_init_or_abort(osty_rt_map *map) {
     map->mu_init = 1;
 }
 
-static bool osty_rt_value_equals(const void *left, const void *right, size_t size, int64_t kind) {
+/* OSTY_HOT_INLINE: called from every Map probe iteration after the
+ * fingerprint match short-circuit. The `kind` argument is a struct-
+ * load LLVM cannot statically constant-fold across the kind dispatch,
+ * but inlining at the keyed Map wrapper call sites lets ThinLTO see
+ * the wrapper's own constant `kind` value (set at osty_rt_map_new
+ * time and never mutated) and DCE the unmatched arms when the
+ * importer pulls in enough surrounding context. Even without that
+ * fold, eliminating the cross-TU call is a measurable win on
+ * String-key probes. */
+static OSTY_HOT_INLINE bool osty_rt_value_equals(const void *left, const void *right, size_t size, int64_t kind) {
     if (kind == OSTY_RT_ABI_PTR) {
         void *left_value = NULL;
         void *right_value = NULL;
@@ -2981,9 +2990,17 @@ typedef struct osty_rt_string_cache_entry {
 static OSTY_RT_TLS osty_rt_string_cache_entry
     osty_rt_string_cache[OSTY_RT_STRING_CACHE_SLOTS];
 
-static void osty_rt_string_measure(const char *value,
-                                   size_t *len_out,
-                                   size_t *hash_out) {
+/* OSTY_HOT_INLINE: called twice per `osty_rt_strings_Equal` (one for
+ * each operand) and once per `osty_rt_string_hash`. The SSO branch
+ * is O(1) tag-bit math; the heap branch is a per-pointer length-
+ * cache lookup with FNV walk on miss. Inlining lets the SSO branch
+ * fold to a few register ops at the call site and lets LLVM see
+ * across the cache-lookup boundary so it can CSE the cache slot
+ * computation when measure is called twice on operands with the
+ * same hash low bits. */
+static OSTY_HOT_INLINE void osty_rt_string_measure(const char *value,
+                                                   size_t *len_out,
+                                                   size_t *hash_out) {
     size_t len = 0;
     size_t hash = (size_t)osty_rt_hash_mix64(0ULL);
     if (osty_rt_string_is_inline(value)) {
@@ -3042,7 +3059,11 @@ static inline size_t osty_rt_string_hash(const char *value) {
     return hash;
 }
 
-static int osty_rt_string_compare_bytes(const char *left, const char *right) {
+/* OSTY_HOT_INLINE: called from `osty_rt_strings_Compare` (which
+ * dep-resolver's sort comparator hits per element). With this
+ * inlined the strcmp call site sees both operands' SSO-decode
+ * branches and can CSE the tag-bit tests. */
+static OSTY_HOT_INLINE int osty_rt_string_compare_bytes(const char *left, const char *right) {
     char left_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
     char right_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
     if (left == right) {
@@ -4638,7 +4659,15 @@ static void osty_rt_list_copy_initialized(void *raw_list, osty_rt_list *list, co
     osty_rt_list_emit_copied_write_barriers(raw_list, list, count);
 }
 
-static void osty_rt_list_push_raw(void *raw_list, const void *value, size_t elem_size, osty_rt_trace_slot_fn trace_elem) {
+/* OSTY_HOT_INLINE: previously the inner helper for `list_push_ptr` /
+ * `_push_i64` / `_push_bytes_v1`. Once those wrappers became
+ * always-inline (see `list_push_ptr`'s comment) this body became
+ * the new boundary and was visible at 90 call sites in the
+ * log-aggregator hot loop. Inlining it lets ThinLTO see the entire
+ * push at the user-code call site so the elem_size + trace_elem
+ * arguments fold to constants and the resize-or-store branch
+ * specializes per element type. */
+static OSTY_HOT_INLINE void osty_rt_list_push_raw(void *raw_list, const void *value, size_t elem_size, osty_rt_trace_slot_fn trace_elem) {
     osty_rt_list *list = osty_rt_list_cast(raw_list);
     osty_rt_list_ensure_layout(list, elem_size, trace_elem);
     osty_rt_list_reserve(list, list->len + 1);
@@ -4708,7 +4737,12 @@ static bool osty_rt_f64_same_bits(double left, double right) {
     return left_bits == right_bits;
 }
 
-void *osty_rt_list_new(void) {
+/* OSTY_HOT_INLINE: `[]` literals + every Split/Fields/Chars/Bytes/
+ * Repeat/etc. internal helper lower to a list_new at the call site.
+ * Body is one `osty_gc_allocate_managed` + zero-init of the small
+ * header; inlining lets ThinLTO see the const-zero stores and
+ * fold them away when the immediate next use is a push. */
+OSTY_HOT_INLINE void *osty_rt_list_new(void) {
     return osty_gc_allocate_managed(sizeof(osty_rt_list), OSTY_GC_KIND_LIST, "runtime.list", osty_rt_list_trace, osty_rt_list_destroy);
 }
 
@@ -4893,7 +4927,14 @@ void osty_rt_list_push_f64(void *raw_list, double value) {
     osty_rt_list_push_raw(raw_list, &value, sizeof(value), NULL);
 }
 
-void osty_rt_list_push_ptr(void *raw_list, void *value) {
+/* OSTY_HOT_INLINE: 86 call sites in log-aggregator's hot loop alone
+ * (every `out.push(...)` lowering hits this). The body is a tiny
+ * shim over `osty_rt_list_push_raw` + a remembered-set update;
+ * inlining lets ThinLTO collapse the push at every list-builder
+ * call site so the cross-TU function call disappears. The
+ * remembered-set helper is itself a single tag-bit branch
+ * post-#867. */
+OSTY_HOT_INLINE void osty_rt_list_push_ptr(void *raw_list, void *value) {
     osty_rt_list_push_raw(raw_list, &value, sizeof(value), osty_gc_mark_slot_v1);
     osty_gc_post_write_v1(raw_list, value, OSTY_GC_KIND_LIST);
 }
@@ -5014,7 +5055,12 @@ void *osty_rt_list_data_f64(void *raw_list) {
     return list->data;
 }
 
-void *osty_rt_list_get_ptr(void *raw_list, int64_t index) {
+/* OSTY_HOT_INLINE: every `xs[i]` lowering on a List<T> with
+ * pointer payload hits this (25 sites in log-aggregator). The body
+ * is `osty_rt_list_get_raw + osty_gc_load_v1` — both are themselves
+ * inline post-#883 / #875, so collapsing the wrapper folds the
+ * full read into a couple of loads at the call site. */
+OSTY_HOT_INLINE void *osty_rt_list_get_ptr(void *raw_list, int64_t index) {
     void *value;
     memcpy(&value, osty_rt_list_get_raw(raw_list, index, sizeof(value), osty_gc_mark_slot_v1), sizeof(value));
     return osty_gc_load_v1(value);
@@ -5240,7 +5286,15 @@ void *osty_rt_list_slice(void *raw_list, int64_t start, int64_t end) {
     return out_raw;
 }
 
-bool osty_rt_strings_Equal(const char *left, const char *right) {
+/* OSTY_HOT_INLINE: every Map<String, V> probe iteration calls this
+ * on the heap-side equality compare (after the fingerprint-fast-path
+ * filters out non-matches). The body is short — pointer-eq fast
+ * path, two SSO-aware measure calls, a length compare, then memcmp
+ * — so the cross-TU function call was a meaningful fraction of
+ * the per-probe cost in log-aggregator / lru-sim / markdown-stats.
+ * Forcing inline lets ThinLTO collapse the call site into the
+ * Map probe loop. */
+OSTY_HOT_INLINE bool osty_rt_strings_Equal(const char *left, const char *right) {
     size_t left_len = 0;
     size_t right_len = 0;
     char left_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
@@ -5529,7 +5583,12 @@ int64_t osty_rt_strings_ByteLen(const char *value) {
     return (int64_t)osty_rt_string_len(value);
 }
 
-const char *osty_rt_strings_Concat(const char *left, const char *right) {
+/* OSTY_HOT_INLINE: every `a + b` String concat in user code lowers
+ * to this. Body computes both lengths (SSO-aware), allocates,
+ * memcpys both halves with SSO-decode, and NUL-terminates. Small
+ * enough to inline; eliminates the call frame on every concat
+ * expression. */
+OSTY_HOT_INLINE const char *osty_rt_strings_Concat(const char *left, const char *right) {
     size_t left_len = osty_rt_string_len(left);
     size_t right_len = osty_rt_string_len(right);
     size_t total_len = left_len + right_len;
@@ -5555,7 +5614,13 @@ const char *osty_rt_strings_Concat(const char *left, const char *right) {
  * N-2 intermediate allocations per interpolation site. Per-row cost
  * on record_pipeline's `"{service}/{region}/{level}"` key drops from
  * 4 allocs to 1. */
-const char *osty_rt_strings_ConcatN(int64_t count, const char *const *parts) {
+/* OSTY_HOT_INLINE: ConcatN coalesces `a + b + c + ...` chains into
+ * one call (#873). For an N-arg chain the IR emits one ConcatN per
+ * loop iteration in the corpus generator and parsers — log-aggregator
+ * has 11-arg builds. Inlining lets ThinLTO unroll the per-part
+ * length+memcpy loop when N is a compile-time constant from the IR
+ * call site. */
+OSTY_HOT_INLINE const char *osty_rt_strings_ConcatN(int64_t count, const char *const *parts) {
     size_t total = 0;
     int64_t i;
     char *out;
@@ -5702,7 +5767,12 @@ void *osty_rt_strings_Split(const char *value, const char *sep) {
  * stabilises after the first iteration so subsequent calls only allocate
  * the per-piece strings. csv_parse-style 100k×5-piece splits drop ~100k
  * `osty_rt_list_new` allocs and the early `realloc` grows. */
-void osty_rt_strings_SplitInto(void *raw_out, const char *value, const char *sep) {
+/* OSTY_HOT_INLINE: log-aggregator's parse loop calls SplitInto twice
+ * per kept line (line.split(" ") + ts.split(":")). Body walks the
+ * source bytes once and pushes pieces — small enough to inline so
+ * the per-line cost drops to the byte walk + the (now-inline) push
+ * loop body without a call frame. */
+OSTY_HOT_INLINE void osty_rt_strings_SplitInto(void *raw_out, const char *value, const char *sep) {
     osty_rt_list *out;
     const char *cursor;
     const char *next;
@@ -6651,7 +6721,15 @@ static OSTY_HOT_INLINE int64_t osty_rt_map_find_index_linear(osty_rt_map *map, c
     return -1;
 }
 
-static int64_t osty_rt_map_find_index_indexed(osty_rt_map *map, const void *key) {
+/* OSTY_HOT_INLINE: this is the Map probe loop body. Inlining it at
+ * each keyed wrapper call site lets ThinLTO specialize the loop on
+ * the wrapper's constant `key_kind` field (folding the dispatch in
+ * `osty_rt_value_equals` and `osty_rt_map_key_hash` to the matching
+ * arm), and CSE the load of `map->index_cap` / `map->index_slots`
+ * etc. against neighbouring map struct accesses. Code growth at the
+ * call site is bounded by ThinLTO's import-instr-limit (500 post-#898);
+ * the probe body is well under that even with inlines pulled in. */
+static OSTY_HOT_INLINE int64_t osty_rt_map_find_index_indexed(osty_rt_map *map, const void *key) {
     size_t key_hash = osty_rt_map_key_hash(map->key_kind, key);
     uint32_t key_fingerprint = osty_rt_map_key_fingerprint(key_hash);
     size_t key_size = osty_rt_kind_size(map->key_kind);
