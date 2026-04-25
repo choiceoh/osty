@@ -1809,3 +1809,49 @@ func (c *MirRuntimeDecls) OrderedSignatures() []string {
 func (c *MirRuntimeDecls) IsEmpty() bool {
 	return len(c.Names) == 0
 }
+
+// §12 string-literal interning pool.
+//
+// MirStringPool mirrors `toolchain/mir_generator.osty: MirStringPool`.
+// Owns the dedup + insertion-order side of the emitter's string-literal
+// pool. Replaces the `mirGen.strings map[string]string + stringOrder
+// []string` pair fields. Sibling of `MirRuntimeDecls` and
+// `MirLayoutCache` — the third member of the dedup-with-order family.
+
+// Osty: MirStringPool
+type MirStringPool struct {
+	ByContent map[string]string
+	Order     []string
+}
+
+// Osty: MirStringPool.intern
+func (p *MirStringPool) Intern(content string) string {
+	if p.ByContent == nil {
+		p.ByContent = map[string]string{}
+	}
+	if sym, ok := p.ByContent[content]; ok {
+		return sym
+	}
+	sym := "@.str." + strconv.Itoa(len(p.Order))
+	p.ByContent[content] = sym
+	p.Order = append(p.Order, content)
+	return sym
+}
+
+// Osty: MirStringPool.symbol
+func (p *MirStringPool) Symbol(content string) string {
+	if p.ByContent == nil {
+		return ""
+	}
+	return p.ByContent[content]
+}
+
+// Osty: MirStringPool.orderedKeys
+func (p *MirStringPool) OrderedKeys() []string {
+	return p.Order
+}
+
+// Osty: MirStringPool.isEmpty
+func (p *MirStringPool) IsEmpty() bool {
+	return len(p.Order) == 0
+}
