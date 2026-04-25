@@ -57,7 +57,6 @@ import (
 	"github.com/osty/osty/internal/lexer"
 	"github.com/osty/osty/internal/lint"
 	"github.com/osty/osty/internal/lsp"
-	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/pipeline"
 	"github.com/osty/osty/internal/repair"
@@ -579,23 +578,6 @@ func parseFlags() cliFlags {
 // retired the Go-hosted legacy alternative. Diagnostics are rendered
 // with each file's own formatter so source snippets point at the right
 // lines even when spanning packages.
-func runCheckPackage(dir string, flags cliFlags) {
-	if flags.inspect {
-		fmt.Fprintf(os.Stderr, "osty: --inspect is not supported on the self-host check path\n")
-		os.Exit(2)
-	}
-	if root, ok, abort := nativeWorkspaceRoot(dir, flags); abort {
-		os.Exit(2)
-	} else if ok {
-		if runCheckWorkspaceNative(root, flags) != 0 {
-			os.Exit(1)
-		}
-		return
-	}
-	if runCheckPackageNative(dir, flags) != 0 {
-		os.Exit(1)
-	}
-}
 
 // manifestLookupNear reports whether an osty.toml is reachable from
 // dir (walking up). Used by runCheckPackage to decide whether to
@@ -603,36 +585,10 @@ func runCheckPackage(dir string, flags cliFlags) {
 // Returns the discovered root + "found" as (string, bool) via error
 // semantics so the helper composes with the existing err-returning
 // FindRoot.
-func manifestLookupNear(dir string) (string, bool, error) {
-	root, err := manifest.FindRoot(dir)
-	if err != nil {
-		return "", false, err
-	}
-	return root, true, nil
-}
 
 // isWorkspace is a thin wrapper around resolve.IsWorkspaceRoot so the
 // call sites below stay readable. Kept local because the CLI uses the
 // "no skip" variant exclusively.
-func isWorkspace(dir string) bool {
-	return resolve.IsWorkspaceRoot(dir, "")
-}
-
-func nativeWorkspaceRoot(dir string, flags cliFlags) (string, bool, bool) {
-	if _, _, err := manifestLookupNear(dir); err == nil {
-		m, root, abort := loadManifestWithDiag(dir, flags)
-		if abort {
-			return root, false, true
-		}
-		if m != nil && m.Workspace != nil {
-			return root, true, false
-		}
-	}
-	if isWorkspace(dir) {
-		return dir, true, false
-	}
-	return "", false, false
-}
 
 // runLintPackage runs the lint pass over every .osty file in dir as a
 // single package so cross-file uses of `use` aliases and top-level
@@ -642,87 +598,9 @@ func nativeWorkspaceRoot(dir string, flags cliFlags) (string, bool, bool) {
 // so parse goes through selfhost.Run; pf.File / canonical materialize
 // lazily for the Go resolver + linter until lint moves onto the
 // engine path in a later Phase 1c.5 slice.
-func runLintPackage(dir string, flags cliFlags) {
-	if isWorkspace(dir) {
-		runLintWorkspace(dir, flags)
-		return
-	}
-	pkg, err := resolve.LoadPackageArenaFirstWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("lint"), os.Stderr, flags))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-		os.Exit(1)
-	}
-	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
-	chk := check.Package(pkg, res, checkOpts())
-	cfg, cfgBase, hasCfg := loadLintConfigWithBase(dir)
-	outcome := runLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)
-	if outcome.anyErr || (flags.strict && outcome.anyWarn) {
-		os.Exit(1)
-	}
-}
 
 // runLintWorkspace lints each package inside dir, aggregating diagnostics
 // so a single strict check covers the whole tree.
-func runLintWorkspace(dir string, flags cliFlags) {
-	ws, err := resolve.NewWorkspace(dir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-		os.Exit(1)
-	}
-	ws.SourceTransform = aiRepairSourceTransform(aiRepairPrefix("lint"), os.Stderr, flags)
-	ws.Stdlib = stdlib.LoadCached()
-	anyErr, anyWarn := false, false
-	runOne := func(path string) {
-		pkg, err := ws.LoadPackageArenaFirst(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-			anyErr = true
-			return
-		}
-		res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
-		chk := check.Package(pkg, res, checkOpts())
-		cfg, cfgBase, hasCfg := loadLintConfigWithBase(pkg.Dir)
-		outcome := runLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)
-		if outcome.anyErr {
-			anyErr = true
-		}
-		if outcome.anyWarn {
-			anyWarn = true
-		}
-	}
-	for _, p := range resolve.WorkspacePackagePaths(dir) {
-		runOne(p)
-	}
-	if anyErr || (flags.strict && anyWarn) {
-		os.Exit(1)
-	}
-}
-
-type lintPackageOutcome struct {
-	anyErr  bool
-	anyWarn bool
-}
-
-func runLintLoadedPackage(
-	pkg *resolve.Package,
-	res *resolve.PackageResult,
-	chk *check.Result,
-	flags cliFlags,
-	cfg lint.Config,
-	cfgBase string,
-	hasCfg bool,
-) lintPackageOutcome {
-	lr := lint.Package(pkg, res, chk)
-	if hasCfg {
-		lr = cfg.Apply(lr)
-	}
-	all := append(append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...), lr.Diags...)
-	printPackageDiags(pkg, all, flags)
-	if flags.fix || flags.fixDryRun {
-		applyPackageFixes(pkg, lr.Diags, flags)
-	}
-	return lintPackageOutcome{anyErr: hasError(all), anyWarn: hasWarning(all)}
-}
 
 // applyPackageFixes runs lint.ApplyFixes on each file in the package
 // using only diagnostics stamped for that file, then either rewrites the
@@ -733,60 +611,9 @@ func runLintLoadedPackage(
 // Diagnostics whose File is empty are attached to the package's first
 // file — package-mode lint.Package does stamp File on every lint diag,
 // but the fallback keeps this robust against downstream regressions.
-func applyPackageFixes(pkg *resolve.Package, diags []*diag.Diagnostic, flags cliFlags) {
-	if pkg == nil || len(pkg.Files) == 0 {
-		return
-	}
-	byFile := map[string][]*diag.Diagnostic{}
-	for _, d := range diags {
-		path := d.File
-		if path == "" {
-			path = pkg.Files[0].Path
-		}
-		byFile[path] = append(byFile[path], d)
-	}
-	totalApplied, totalSkipped := 0, 0
-	mode := "osty lint"
-	for _, f := range pkg.Files {
-		ds := byFile[f.Path]
-		if len(ds) == 0 {
-			continue
-		}
-		newSrc, applied, skipped := lint.ApplyFixes(f.Source, ds)
-		totalApplied += applied
-		totalSkipped += skipped
-		switch {
-		case flags.fixDryRun:
-			if applied == 0 {
-				continue
-			}
-			// Prefix each file's post-fix content with a header so the
-			// user can diff it against the original per file.
-			fmt.Fprintf(os.Stdout, "// ==== %s ====\n", f.Path)
-			if _, err := os.Stdout.Write(newSrc); err != nil {
-				fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %v\n", mode, err)
-				os.Exit(1)
-			}
-			if len(newSrc) > 0 && newSrc[len(newSrc)-1] != '\n' {
-				fmt.Fprintln(os.Stdout)
-			}
-		case flags.fix:
-			if applied == 0 {
-				continue
-			}
-			if err := os.WriteFile(f.Path, newSrc, 0o644); err != nil {
-				fmt.Fprintf(os.Stderr, "%s --fix: %v\n", mode, err)
-				os.Exit(1)
-			}
-		}
-	}
-	switch {
-	case flags.fixDryRun:
-		fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %d fix(es) would apply, %d overlap(s) would be skipped\n", mode, totalApplied, totalSkipped)
-	case flags.fix:
-		fmt.Fprintf(os.Stderr, "%s --fix: applied %d fix(es), skipped %d overlap(s)\n", mode, totalApplied, totalSkipped)
-	}
-}
+
+// Prefix each file's post-fix content with a header so the
+// user can diff it against the original per file.
 
 // runResolveFile is the extracted body of `osty resolve FILE`. It
 // drives the single-file resolve happy path entirely through the
@@ -805,34 +632,6 @@ func applyPackageFixes(pkg *resolve.Package, diags []*diag.Diagnostic, flags cli
 // file's header so `osty typecheck --native DIR` output stays
 // readable for packages with more than one source file. Returns the
 // subcommand exit code.
-func runTypecheckPackageNative(dir string, flags cliFlags) int {
-	pkg, err := resolve.LoadPackageForNativeWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("typecheck"), os.Stderr, flags))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-		return 1
-	}
-	input := nativePackageCheckInput(pkg, nil)
-	checked, err := selfhost.CheckPackageStructured(input)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
-		return 1
-	}
-	diags := packageParseDiags(pkg)
-	diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
-	printPackageDiags(pkg, diags, flags)
-	printNativePackageTypes(checked, input.Files)
-	if flags.dumpNativeDiags {
-		dumpNativeDiagsForSummary(dir, checked.Summary)
-	}
-	if hasError(diags) {
-		return 1
-	}
-	return 0
-}
-
-func runTypecheckWorkspaceNative(dir string, flags cliFlags) int {
-	return runNativeWorkspaceCheck(dir, "typecheck", flags, true)
-}
 
 // printNativePackageTypes is the DIR renderer for --native typecheck:
 // buckets TypedNodes by owning file (same findOwningFile walker used
@@ -840,39 +639,6 @@ func runTypecheckWorkspaceNative(dir string, flags cliFlags) int {
 // `# <path>` header followed by the single-file printNativeTypes
 // rows for each file that has at least one typed node. Files with
 // no typed nodes are silently skipped so the dump stays compact.
-func printNativePackageTypes(result selfhost.CheckResult, files []selfhost.PackageCheckFile) {
-	if len(result.TypedNodes) == 0 || len(files) == 0 {
-		return
-	}
-	buckets := make(map[int][]selfhost.CheckedNode, len(files))
-	for _, n := range result.TypedNodes {
-		if n.Type == nil {
-			continue
-		}
-		idx := findOwningFile(files, n.Start)
-		if idx < 0 {
-			continue
-		}
-		rel := n
-		rel.Start -= files[idx].Base
-		rel.End -= files[idx].Base
-		if rel.Start < 0 {
-			rel.Start = 0
-		}
-		if rel.End < rel.Start {
-			rel.End = rel.Start
-		}
-		buckets[idx] = append(buckets[idx], rel)
-	}
-	for i, f := range files {
-		bucket, ok := buckets[i]
-		if !ok || len(bucket) == 0 {
-			continue
-		}
-		fmt.Printf("# %s\n", f.Path)
-		printNativeTypes(f.Source, selfhost.CheckResult{TypedNodes: bucket})
-	}
-}
 
 // runCheckPackageNative is the DIR sibling of runCheckFileNative.
 // Loads the package via LoadPackageForNative (no eager *ast.File
@@ -880,139 +646,12 @@ func printNativePackageTypes(result selfhost.CheckResult, files []selfhost.Packa
 // arena, and converts the resulting CheckDiagnosticRecord slice into
 // per-file *diag.Diagnostic values so printPackageDiags keeps its
 // file-bucketed rendering. Returns the subcommand exit code.
-func runCheckPackageNative(dir string, flags cliFlags) int {
-	pkg, err := resolve.LoadPackageForNativeWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("check"), os.Stderr, flags))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-		return 1
-	}
-	input := nativePackageCheckInput(pkg, nil)
-	checked, err := selfhost.CheckPackageStructured(input)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
-		return 1
-	}
-	diags := packageParseDiags(pkg)
-	diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
-	printPackageDiags(pkg, diags, flags)
-	if flags.dumpNativeDiags {
-		dumpNativeDiagsForSummary(dir, checked.Summary)
-	}
-	if hasError(diags) {
-		return 1
-	}
-	return 0
-}
-
-func runCheckWorkspaceNative(dir string, flags cliFlags) int {
-	return runNativeWorkspaceCheck(dir, "check", flags, false)
-}
-
-func runNativeWorkspaceCheck(dir, mode string, flags cliFlags, emitTypes bool) int {
-	ws, err := loadNativeWorkspace(dir, mode, flags)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-		return 1
-	}
-	anyErr := false
-	for _, path := range nativeWorkspacePaths(ws) {
-		pkg := ws.Packages[path]
-		if pkg == nil {
-			continue
-		}
-		input := nativePackageCheckInput(pkg, check.PackageImportSurfacesForSelfhost(pkg, ws, ws.Stdlib))
-		checked, err := selfhost.CheckPackageStructured(input)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
-			return 1
-		}
-		diags := packageParseDiags(pkg)
-		diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
-		printPackageDiags(pkg, diags, flags)
-		if emitTypes {
-			printNativePackageTypes(checked, input.Files)
-		}
-		if flags.dumpNativeDiags {
-			dumpNativeDiagsForSummary(path, checked.Summary)
-		}
-		if hasError(diags) {
-			anyErr = true
-		}
-	}
-	if anyErr {
-		return 1
-	}
-	return 0
-}
-
-func loadNativeWorkspace(dir, mode string, flags cliFlags) (*resolve.Workspace, error) {
-	ws, err := resolve.NewWorkspace(dir)
-	if err != nil {
-		return nil, err
-	}
-	ws.SourceTransform = aiRepairSourceTransform(aiRepairPrefix(mode), os.Stderr, flags)
-	ws.Stdlib = nativeLazyStdlibProvider{}
-	for _, p := range resolve.WorkspacePackagePaths(dir) {
-		if _, err := ws.LoadPackageNative(p); err != nil {
-			return nil, err
-		}
-	}
-	return ws, nil
-}
-
-type nativeLazyStdlibProvider struct{}
 
 func (nativeLazyStdlibProvider) LookupPackage(dotPath string) *resolve.Package {
 	if !strings.HasPrefix(dotPath, resolve.StdPrefix) {
 		return nil
 	}
 	return stdlib.LoadCached().LookupPackage(dotPath)
-}
-
-func nativeWorkspacePaths(ws *resolve.Workspace) []string {
-	if ws == nil {
-		return nil
-	}
-	paths := make([]string, 0, len(ws.Packages))
-	for path := range ws.Packages {
-		if strings.HasPrefix(path, resolve.StdPrefix) {
-			continue
-		}
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-	return paths
-}
-
-func nativePackageCheckInput(pkg *resolve.Package, imports []selfhost.PackageCheckImport) selfhost.PackageCheckInput {
-	input := selfhost.PackageCheckInput{
-		Files: make([]selfhost.PackageCheckFile, 0, len(pkg.Files)),
-	}
-	if len(imports) == 0 {
-		imports = check.PackageImportSurfacesForSelfhost(pkg, nil, nativeLazyStdlibProvider{})
-	}
-	if len(imports) > 0 {
-		input.Imports = append([]selfhost.PackageCheckImport(nil), imports...)
-	}
-	base := 0
-	for _, pf := range pkg.Files {
-		if pf == nil {
-			continue
-		}
-		src := pf.CheckerSource()
-		if len(src) == 0 {
-			continue
-		}
-		name := filepath.Base(pf.Path)
-		input.Files = append(input.Files, selfhost.PackageCheckFile{
-			Source: append([]byte(nil), src...),
-			Base:   base,
-			Name:   name,
-			Path:   pf.Path,
-		})
-		base += len(src) + 1
-	}
-	return input
 }
 
 // nativePackageCheckDiags buckets records by owning file (using the
@@ -1022,74 +661,12 @@ func nativePackageCheckInput(pkg *resolve.Package, imports []selfhost.PackageChe
 // not the concatenated bundle. Records that don't land inside any
 // file range (should not happen for well-formed output) are dropped
 // with their bundle offsets preserved as a defensive fallback.
-func nativePackageCheckDiags(records []selfhost.CheckDiagnosticRecord, files []selfhost.PackageCheckFile) []*diag.Diagnostic {
-	if len(records) == 0 || len(files) == 0 {
-		return nil
-	}
-	buckets := make(map[int][]selfhost.CheckDiagnosticRecord, len(files))
-	for _, rec := range records {
-		idx := findOwningFile(files, rec.Start)
-		if idx < 0 {
-			continue
-		}
-		rel := rec
-		rel.File = files[idx].Path
-		rel.Start -= files[idx].Base
-		rel.End -= files[idx].Base
-		if rel.Start < 0 {
-			rel.Start = 0
-		}
-		if rel.End < rel.Start {
-			rel.End = rel.Start
-		}
-		buckets[idx] = append(buckets[idx], rel)
-	}
-	out := make([]*diag.Diagnostic, 0, len(records))
-	for i := range files {
-		bucket, ok := buckets[i]
-		if !ok {
-			continue
-		}
-		out = append(out, selfhost.CheckDiagnosticsAsDiag(files[i].Source, bucket)...)
-	}
-	return out
-}
-
-func findOwningFile(files []selfhost.PackageCheckFile, offset int) int {
-	for i, f := range files {
-		end := f.Base + len(f.Source)
-		if offset >= f.Base && offset <= end {
-			return i
-		}
-	}
-	return -1
-}
 
 // runTypecheckFileNative is runCheckFileNative plus the type dump.
 // After the check runs on the arena, prints every typed-node range
 // selfhost.CheckResult.TypedNodes recorded — one row per node with
 // line/column span and the inferred type. Zero astbridge lowerings
 // on the happy path (same counter invariant as runCheckFileNative).
-func runTypecheckFileNative(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
-	parseDiags, checked := selfhost.CheckFromSource(src)
-	checkDiags := selfhost.CheckDiagnosticsAsDiag(src, checked.Diagnostics)
-	for _, d := range checkDiags {
-		if d != nil && d.File == "" {
-			d.File = path
-		}
-	}
-	all := append([]*diag.Diagnostic{}, parseDiags...)
-	all = append(all, checkDiags...)
-	printDiags(formatter, all, flags)
-	printNativeTypes(src, checked)
-	if flags.dumpNativeDiags {
-		dumpNativeDiagsForSummary(path, checked.Summary)
-	}
-	if hasError(all) {
-		return 1
-	}
-	return 0
-}
 
 // printNativeTypes is the --native sibling of printTypes: it renders
 // selfhost.CheckResult.TypedNodes (node.Start, node.End are byte
@@ -1097,55 +674,12 @@ func runTypecheckFileNative(path string, src []byte, formatter *diag.Formatter, 
 // `line:col-line:col\tType` rows sorted by start position. Rows
 // with nil Type (the checker's signal-only placeholders) are
 // dropped so output stays compact.
-func printNativeTypes(src []byte, result selfhost.CheckResult) {
-	type row struct {
-		start, end int
-		text       string
-	}
-	rows := make([]row, 0, len(result.TypedNodes))
-	for _, n := range result.TypedNodes {
-		if n.Type == nil {
-			continue
-		}
-		rows = append(rows, row{start: n.Start, end: n.End, text: n.Type.String()})
-	}
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].start != rows[j].start {
-			return rows[i].start < rows[j].start
-		}
-		return rows[i].end < rows[j].end
-	})
-	for _, r := range rows {
-		sl, sc := byteOffsetLineCol(src, r.start)
-		el, ec := byteOffsetLineCol(src, r.end)
-		fmt.Printf("%d:%d-%d:%d\t%s\n", sl, sc, el, ec, r.text)
-	}
-}
 
 // byteOffsetLineCol is a single-pass scan equivalent of the
 // positionAtOffset helper that lives inside selfhost for the
 // diagnostic converter. Promoted to cmd/osty because the typed-node
 // renderer needs it inline — keep the two scanners in sync with
 // internal/selfhost/check_diag_convert.go:positionAtOffsetForDiag.
-func byteOffsetLineCol(src []byte, offset int) (int, int) {
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > len(src) {
-		offset = len(src)
-	}
-	line := 1
-	col := 1
-	for i := 0; i < offset; i++ {
-		if src[i] == '\n' {
-			line++
-			col = 1
-			continue
-		}
-		col++
-	}
-	return line, col
-}
 
 // runLintFile is the extracted `osty lint FILE` body (minus the
 // exclude-config early-return, which stays in the caller so the "skip"
@@ -1158,46 +692,10 @@ func byteOffsetLineCol(src []byte, offset int) (int, int) {
 // (desugar runs on check.Package for multi-file auto-derive chains),
 // so the selfhost-direct entry shaves that pass without altering the
 // `*check.Result` shape the lint engine consumes.
-func runLintFile(path string, src []byte, formatter *diag.Formatter, flags cliFlags, lintCfg lint.Config, lintCfgOk bool) int {
-	parsed := parser.ParseDetailed(src)
-	file, parseDiags := parsed.File, parsed.Diagnostics
-	res := resolveFile(file)
-	chk := check.SelfhostFile(file, res, checkOptsForFile(path, canonical.Source(src, file)))
-	lr := runLintEngine(file, src, res, chk)
-	if lintCfgOk {
-		lr = lintCfg.Apply(lr)
-	}
-	all := append(append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...), chk.Diags...)
-	all = append(all, lr.Diags...)
-	printDiags(formatter, all, flags)
-	if flags.fix || flags.fixDryRun {
-		newSrc, applied, skipped := lint.ApplyFixes(src, lr.Diags)
-		mode := "osty lint"
-		switch {
-		case flags.fixDryRun:
-			// Write the would-be-applied source to stdout so users
-			// can pipe it through `diff` / `less` before committing
-			// to a real --fix pass. The file on disk is untouched.
-			if _, err := os.Stdout.Write(newSrc); err != nil {
-				fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %v\n", mode, err)
-				return 1
-			}
-			fmt.Fprintf(os.Stderr, "%s --fix-dry-run: %d fix(es) would apply, %d overlap(s) would be skipped\n", mode, applied, skipped)
-		case flags.fix:
-			if applied > 0 {
-				if err := os.WriteFile(path, newSrc, 0o644); err != nil {
-					fmt.Fprintf(os.Stderr, "%s --fix: %v\n", mode, err)
-					return 1
-				}
-			}
-			fmt.Fprintf(os.Stderr, "%s --fix: applied %d fix(es), skipped %d overlap(s)\n", mode, applied, skipped)
-		}
-	}
-	if hasError(all) || (flags.strict && hasWarning(all)) {
-		return 1
-	}
-	return 0
-}
+
+// Write the would-be-applied source to stdout so users
+// can pipe it through `diff` / `less` before committing
+// to a real --fix pass. The file on disk is untouched.
 
 // runCheckFileNative drives `osty check --native FILE` end-to-end on
 // the self-host arena pipeline: selfhost.CheckFromSource parses once
@@ -1209,25 +707,6 @@ func runLintFile(path string, src []byte, formatter *diag.Formatter, flags cliFl
 // Returns the
 // subcommand's exit code (0 clean / 1 on any error-severity
 // diagnostic).
-func runCheckFileNative(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
-	parseDiags, checked := selfhost.CheckFromSource(src)
-	checkDiags := selfhost.CheckDiagnosticsAsDiag(src, checked.Diagnostics)
-	for _, d := range checkDiags {
-		if d != nil && d.File == "" {
-			d.File = path
-		}
-	}
-	all := append([]*diag.Diagnostic{}, parseDiags...)
-	all = append(all, checkDiags...)
-	printDiags(formatter, all, flags)
-	if flags.dumpNativeDiags {
-		dumpNativeDiagsForSummary(path, checked.Summary)
-	}
-	if hasError(all) {
-		return 1
-	}
-	return 0
-}
 
 func runResolveFile(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
 	parseDiags, resolved := selfhost.ResolveFromSource(src, path)
@@ -1718,10 +1197,6 @@ func resolveFile(file *ast.File) *resolve.Result {
 	return resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
 }
 
-func runLintEngine(file *ast.File, src []byte, res *resolve.Result, chk *check.Result) *lint.Result {
-	return lint.File(file, src, res, chk)
-}
-
 // checkOpts builds the check.Opts every subcommand passes to the type
 // checker. Sourcing from the cached registry keeps the stdlib Load
 // cost paid once per process.
@@ -1863,68 +1338,17 @@ func maybeAIRepairSource(path string, src []byte, prefix string, summary io.Writ
 // levels are unioned. It also returns the manifest directory of the
 // closest osty.toml (even when it has no [lint] section) so callers
 // can resolve Exclude globs against the project root.
-func loadLintConfigWithBase(startPath string) (lint.Config, string, bool) {
-	dir := startPath
-	if info, err := os.Stat(startPath); err == nil && !info.IsDir() {
-		dir = filepath.Dir(startPath)
-	}
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return lint.Config{}, "", false
-	}
-	var cfg lint.Config
-	base := ""
-	found := false
-	for {
-		candidate := filepath.Join(abs, manifest.ManifestFile)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			if base == "" {
-				// Record the closest manifest directory as base for
-				// Exclude glob resolution, regardless of [lint].
-				base = abs
-			}
-			raw, err := os.ReadFile(candidate)
-			if err != nil {
-				break
-			}
-			m, err := manifest.Parse(raw)
-			if err != nil {
-				break
-			}
-			if m.Lint != nil {
-				layer := lint.Config{
-					Allow:   m.Lint.Allow,
-					Deny:    m.Lint.Deny,
-					Exclude: m.Lint.Exclude,
-				}
-				if !found {
-					cfg = lint.Config{}.Merge(layer)
-					found = true
-				} else {
-					// layer is a parent — merge child on top.
-					cfg = cfg.Merge(layer)
-				}
-			}
-		}
-		parent := filepath.Dir(abs)
-		if parent == abs {
-			break
-		}
-		abs = parent
-	}
-	return cfg, base, found
-}
+
+// Record the closest manifest directory as base for
+// Exclude glob resolution, regardless of [lint].
+
+// layer is a parent — merge child on top.
 
 // loadLintConfigNear returns the merged [lint] configuration for the
 // file or directory at startPath by walking up the directory tree and
 // merging every ancestor osty.toml. Exclude is not returned because
 // the caller does not have a base directory for glob resolution;
 // use loadLintConfigWithBase when Exclude is needed.
-func loadLintConfigNear(startPath string) (lint.Config, bool) {
-	cfg, _, ok := loadLintConfigWithBase(startPath)
-	cfg.Exclude = nil
-	return cfg, ok
-}
 
 // printResolution writes a sorted table of every resolved identifier:
 // `line:col  Name  Kind  def-pos`. Useful for sanity-checking the
@@ -2789,23 +2213,6 @@ func takeFlag(args []string, name string) (rest []string, matched string) {
 // runLintExplain prints a single rule's metadata and exits 0 on success,
 // 2 on unknown rule name. Accepts either a code (L0001) or a name
 // (unused_let).
-func runLintExplain(name string) {
-	r, ok := lint.LookupRule(name)
-	if !ok {
-		fmt.Fprintf(os.Stderr, "osty lint --explain: unknown rule %q\n", name)
-		fmt.Fprintln(os.Stderr, "use `osty lint --list` to see every rule")
-		os.Exit(2)
-	}
-	fmt.Printf("%s  %s\n", r.Code, r.Name)
-	fmt.Printf("category: %s\n", r.Category)
-	fmt.Printf("summary:  %s\n\n", r.Summary)
-	fmt.Println(r.Description)
-}
 
 // runLintList prints every rule, grouped by category. Machine-readable
 // tab-separated format: CODE\tNAME\tCATEGORY\tSUMMARY.
-func runLintList() {
-	for _, r := range lint.Rules() {
-		fmt.Printf("%s\t%s\t%s\t%s\n", r.Code, r.Name, r.Category, r.Summary)
-	}
-}
