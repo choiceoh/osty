@@ -122,9 +122,20 @@ int main(void) {
 	// unpinned. The minor collector reaches YOUNG values transitively
 	// through their owner's fields, so the remembered-set entry is
 	// pure overhead in that case; the runtime now skips it and the
-	// counter reflects that. Marking via the pinned root after
-	// root_bind still works (verified by live_count = 3 on idx 12).
-	if got, want := string(runOutput), "1\n0\n2\n1\n1\n1\n1\n1\n0\n2\n2\n0\n3\n1\n1\n8\n8\n0\n"; got != want {
+	// counter reflects that.
+	//
+	// live_count after the split (idx 12) dropped from 3 to 1 when
+	// the SSO landed: `osty_rt_strings_Split("gc,llvm", ",")` returns
+	// a list whose pieces are 2-character strings ("gc", "llvm")
+	// — both fit in 7 bytes and pack into the pointer itself, so
+	// they aren't separately GC-tracked. Only the list itself counts
+	// as a live header; the inline pieces have no header. The
+	// list's elements still resolve correctly through
+	// `osty_rt_list_get_ptr` (verified by the bytes printed in idx 13
+	// / 14 — the strings_Equal calls return 1, matching the expected
+	// content), and the post-release collect on idx 17 still sweeps
+	// the list cleanly.
+	if got, want := string(runOutput), "1\n0\n2\n1\n1\n1\n1\n1\n0\n2\n2\n0\n1\n1\n1\n8\n8\n0\n"; got != want {
 		t.Fatalf("runtime GC harness stdout = %q, want %q", got, want)
 	}
 }

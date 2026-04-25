@@ -1141,24 +1141,32 @@ pub struct MirSeq {
         }
     }
 
-    /// emitInlineStringEqLiteral builds the byte-by-byte string-
-    /// equality switch the legacy emitter inlined directly into
-    /// `g.fnBuf`. `litBytes` is the per-byte integer view of the
-    /// literal (caller converts via `int(lit[i])` because the self-host
-    /// stdlib still lacks a `Char` / `Byte` primitive — see CLAUDE.md
-    /// "LLVM backend capability state"). `opIsEq` selects the `==`
-    /// (true) vs `!=` (false) form; the `!=` path adds one final
-    /// `xor i1 ..., true` line so callers always receive the
-    /// post-negation register without having to track the op
-    /// themselves. Returns lines + final result reg; callers splice the
-    /// lines into their function body and use `finalReg` as the i1
-    /// value.
+    /// emitInlineStringEqLiteral builds the SSO-aware string-equality
+    /// switch the legacy emitter inlined directly into `g.fnBuf`.
+    /// Layout:
+    ///
+    ///   1. Pointer-equality fast path against the literal symbol.
+    ///   2. SSO tag check (bit 63 of the dynamic operand pointer).
+    ///      If set, the operand is an inline-tagged string with
+    ///      content packed in the pointer bits — see
+    ///      `osty_rt_string_pack_inline` in the runtime. For literals
+    ///      of length ≤ 7 the operand bits are compared directly to
+    ///      a compile-time constant packed encoding; longer literals
+    ///      can never match an inline operand and shortcut to false.
+    ///   3. Heap path: byte-by-byte compare with NUL terminator (the
+    ///      pre-SSO body, unchanged).
+    ///
+    /// `litBytes` is the per-byte integer view of the literal (caller
+    /// converts via `int(lit[i])` because the self-host stdlib still
+    /// lacks a `Char` / `Byte` primitive — see CLAUDE.md "LLVM
+    /// backend capability state"). `opIsEq` selects the `==` (true)
+    /// vs `!=` (false) form; the `!=` path adds one final
+    /// `xor i1 ..., true` line. Returns lines + final result reg.
     ///
     /// Implementation parity: every `freshLabel` / `fresh` call here
-    /// matches `func (g *mirGen) emitInlineStringEqLiteral` in
-    /// `internal/llvmgen/mir_generator.go` one-for-one so `tempSeq`
-    /// advances by exactly the same amount the legacy stream did,
-    /// keeping SSA / label numbering byte-stable across the port.
+    /// mirrors `MirSeq.EmitInlineStringEqLiteral` in
+    /// `internal/llvmgen/mir_generator_snapshot.go` one-for-one so
+    /// `tempSeq` advances by exactly the same amount on both paths.
     pub fn emitInlineStringEqLiteral(
         mut self,
         opIsEq: Bool,
@@ -1170,20 +1178,57 @@ pub struct MirSeq {
         let matchLabel = self.freshLabel("streq.match")
         let nomatchLabel = self.freshLabel("streq.nomatch")
         let doneLabel = self.freshLabel("streq.done")
+        let tagCheckLabel = self.freshLabel("streq.tag")
+        let heapLabel = self.freshLabel("streq.heap")
 
-        // Pointer-equality fast path: if both Strings hold the same
-        // global symbol, skip the byte-by-byte walk entirely.
+        // (1) Pointer-equality fast path: if both Strings hold the
+        // same global symbol, skip everything else.
         let ptrEq = self.fresh()
         lines.push(mirICmpEqLine(ptrEq, "ptr", dynReg, litSym))
+        lines.push(mirBrCondLine(ptrEq, matchLabel, tagCheckLabel))
+
+        // (2) SSO tag check on the dynamic operand. Bit 63 is the
+        // runtime's small-string tag (always 0 for valid user-space
+        // addresses on every supported 64-bit platform).
+        lines.push(mirLabelLine(tagCheckLabel))
+        let rawInt = self.fresh()
+        lines.push(mirPtrToIntLine(rawInt, dynReg, "i64"))
+        let tagBit = self.fresh()
+        // 1<<63 = -9223372036854775808 in i64 signed canonical form.
+        lines.push(mirAndI64Line(tagBit, rawInt, "-9223372036854775808"))
+        let isInline = self.fresh()
+        lines.push(mirICmpLine(isInline, "ne", "i64", tagBit, "0"))
 
         let n = litBytes.len()
+        if n <= 7 {
+            // Inline operand can match this literal — compare the
+            // packed encoding bit-equal against a compile-time const.
+            let inlineLabel = self.freshLabel("streq.inline")
+            lines.push(mirBrCondLine(isInline, inlineLabel, heapLabel))
+            lines.push(mirLabelLine(inlineLabel))
+            // packed = TAG_BIT | (len << 56) | byte0<<0 | ... | byte_{n-1}<<((n-1)*8)
+            // Build the constant via shift+or in Int (i64) arithmetic.
+            // The TAG_BIT can't be expressed as a positive i64 literal
+            // since it's the sign bit, so we build via subtraction:
+            // `(0 - max_i64) - 1` = -2^63 = 1<<63 in two's complement.
+            // mir_generator builds the decimal string directly.
+            let packedStr = mirSsoPackedDecimal(n, litBytes)
+            let inlineEq = self.fresh()
+            lines.push(mirICmpEqLine(inlineEq, "i64", rawInt, packedStr))
+            lines.push(mirBrCondLine(inlineEq, matchLabel, nomatchLabel))
+        } else {
+            // Inline length capped at 7; tagged operand can't match.
+            lines.push(mirBrCondLine(isInline, nomatchLabel, heapLabel))
+        }
+
+        // (3) Heap path: byte-by-byte with NUL terminator.
         let mut byteLabels: List<String> = []
         let mut k = 0
         for k <= n {
             byteLabels.push(self.freshLabel("streq.b" + mirGenIntToString(k)))
             k = k + 1
         }
-        lines.push(mirBrCondLine(ptrEq, matchLabel, byteLabels[0]))
+        lines.push(mirLabelHeadWithBranch(heapLabel, byteLabels[0]))
 
         // Per-byte compare: byteLabels[i] holds the load + compare for
         // litBytes[i] (or the trailing NUL when i == n).
@@ -1592,6 +1637,50 @@ pub fn mirSubI64Line(reg: String, lhs: String, rhs: String) -> String {
 /// for the `i = i + 1` step.
 pub fn mirAddI64Line(reg: String, lhs: String, rhs: String) -> String {
     "  " + reg + " = add i64 " + lhs + ", " + rhs + "\n"
+}
+
+/// mirAndI64Line renders the i64 bitwise-and
+/// `  <reg> = and i64 <lhs>, <rhs>\n`. Used by the SSO tag-bit check
+/// in `emitInlineStringEqLiteral` to test bit 63 of the dynamic
+/// operand pointer (the runtime's small-string-optimization tag).
+pub fn mirAndI64Line(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = and i64 " + lhs + ", " + rhs + "\n"
+}
+
+/// mirSsoPackedDecimal returns the signed-i64 decimal string for the
+/// packed inline encoding of a string literal, matching the runtime's
+/// `osty_rt_string_pack_inline`:
+///
+///     packed = TAG_BIT | (n << 56) | byte_0<<0 | byte_1<<8 | ... | byte_{n-1}<<((n-1)*8)
+///
+/// where TAG_BIT = 1<<63. The signed-i64 form is what LLVM's textual
+/// IR expects for `icmp eq i64 <reg>, <const>`.
+///
+/// Computation in Osty Int (i64 with wrap) avoids requiring an unsigned
+/// type. We compute the low 63 bits in `q` (always positive since
+/// `literalStringOperand` rejects NUL bytes, so for `n >= 1` at least
+/// one byte slot is non-zero) and subtract `2^63` to flip the sign
+/// bit. The empty-literal case (`n == 0`) is special-cased because
+/// the result would be exactly `i64::MIN`, which overflows the
+/// `0 - value` branch in `mirGenIntToString`.
+pub fn mirSsoPackedDecimal(n: Int, litBytes: List<Int>) -> String {
+    if n == 0 {
+        return "-9223372036854775808"
+    }
+    let TWO_TO_56 = 72057594037927936
+    let TAG_HALF = 4611686018427387904
+    let mut q = n * TWO_TO_56
+    let mut shift = 1
+    let mut i = 0
+    for i < n {
+        q = q + litBytes[i] * shift
+        shift = shift * 256
+        i = i + 1
+    }
+    // q - 2^63 = q - 2^62 - 2^62. q is in (0, 2^59), so the result
+    // is in (-2^63, -2^63 + 2^59), which `mirGenIntToString` handles.
+    let result = q - TAG_HALF - TAG_HALF
+    mirGenIntToString(result)
 }
 
 /// mirFCmpLine renders the general floating-point compare shape

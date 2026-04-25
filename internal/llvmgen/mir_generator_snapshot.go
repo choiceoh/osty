@@ -1159,17 +1159,29 @@ type MirInlineStringEqResult struct {
 }
 
 // EmitInlineStringEqLiteral mirrors MirSeq.emitInlineStringEqLiteral —
-// builds the byte-by-byte string-equality switch the legacy emitter
-// inlined directly into g.fnBuf. `litBytes` is the per-byte int view of
-// the literal (caller converts via int(lit[i])); the !=  path appends
-// one final `xor i1 ..., true` so callers always receive the post-
-// negation register without tracking the op themselves.
+// builds the SSO-aware string-equality switch the legacy emitter
+// inlined directly into g.fnBuf. Layout:
 //
-// Implementation parity: every FreshLabel / Fresh call here matches the
-// Go source (mir_generator.go: emitInlineStringEqLiteral) one-for-one
-// so MirSeq.TempSeq advances by exactly the same amount the legacy
-// stream did, keeping SSA / label numbering byte-stable across the
-// port.
+//  1. Pointer-equality fast path against the literal symbol.
+//  2. SSO tag check (bit 63 of the dynamic operand pointer). If set,
+//     the operand is an inline-tagged string with content packed in
+//     the pointer bits — see `osty_rt_string_pack_inline` in the
+//     runtime. For literals of length ≤ 7 the operand bits are
+//     compared directly to a compile-time constant packed encoding;
+//     longer literals can never match an inline operand and shortcut
+//     to false.
+//  3. Heap path: byte-by-byte compare with NUL terminator (the
+//     pre-SSO body, unchanged).
+//
+// `litBytes` is the per-byte int view of the literal (caller converts
+// via int(lit[i])). The != path appends one final `xor i1 ..., true`
+// so callers always receive the post-negation register without
+// tracking the op themselves.
+//
+// Implementation parity: every FreshLabel / Fresh call here mirrors
+// the Osty source (toolchain/mir_generator.osty:
+// emitInlineStringEqLiteral) one-for-one so MirSeq.TempSeq advances
+// by exactly the same amount on both paths.
 //
 // Osty: MirSeq.emitInlineStringEqLiteral
 func (s *MirSeq) EmitInlineStringEqLiteral(
@@ -1182,19 +1194,55 @@ func (s *MirSeq) EmitInlineStringEqLiteral(
 	matchLabel := s.FreshLabel("streq.match")
 	nomatchLabel := s.FreshLabel("streq.nomatch")
 	doneLabel := s.FreshLabel("streq.done")
+	tagCheckLabel := s.FreshLabel("streq.tag")
+	heapLabel := s.FreshLabel("streq.heap")
 
-	// Pointer-equality fast path.
+	// (1) Pointer-equality fast path.
 	ptrEq := s.Fresh()
 	lines = append(lines, mirICmpEqLine(ptrEq, "ptr", dynReg, litSym))
+	lines = append(lines, mirBrCondLine(ptrEq, matchLabel, tagCheckLabel))
+
+	// (2) SSO tag check on the dynamic operand. Bit 63 of the pointer
+	// is the runtime's small-string tag (always 0 for valid user-space
+	// addresses on every supported 64-bit platform).
+	lines = append(lines, mirLabelLine(tagCheckLabel))
+	rawInt := s.Fresh()
+	lines = append(lines, mirPtrToIntLine(rawInt, dynReg, "i64"))
+	tagBit := s.Fresh()
+	// 1<<63 = -9223372036854775808 in i64 signed canonical form.
+	lines = append(lines, mirAndI64Line(tagBit, rawInt, "-9223372036854775808"))
+	isInline := s.Fresh()
+	lines = append(lines, mirICmpLine(isInline, "ne", "i64", tagBit, "0"))
 
 	n := len(litBytes)
+	if n <= 7 {
+		// Inline operand can match this literal — compare the packed
+		// encoding bit-equal against a compile-time constant.
+		inlineLabel := s.FreshLabel("streq.inline")
+		lines = append(lines, mirBrCondLine(isInline, inlineLabel, heapLabel))
+		lines = append(lines, mirLabelLine(inlineLabel))
+		// packed = TAG_BIT | (len << 56) | byte0<<0 | ... | byte_{n-1}<<((n-1)*8)
+		var packed uint64 = uint64(1) << 63
+		packed |= uint64(n&0x7) << 56
+		for i := 0; i < n; i++ {
+			packed |= uint64(uint8(litBytes[i])) << uint(i*8)
+		}
+		inlineEq := s.Fresh()
+		// Render as signed i64 (LLVM canonical for negative values).
+		lines = append(lines, mirICmpEqLine(inlineEq, "i64", rawInt, strconv.FormatInt(int64(packed), 10)))
+		lines = append(lines, mirBrCondLine(inlineEq, matchLabel, nomatchLabel))
+	} else {
+		// Inline length capped at 7; tagged operand can't match.
+		lines = append(lines, mirBrCondLine(isInline, nomatchLabel, heapLabel))
+	}
+
+	// (3) Heap path: byte-by-byte with NUL terminator.
 	byteLabels := make([]string, 0, n+1)
 	for k := 0; k <= n; k++ {
 		byteLabels = append(byteLabels, s.FreshLabel("streq.b"+strconv.Itoa(k)))
 	}
-	lines = append(lines, mirBrCondLine(ptrEq, matchLabel, byteLabels[0]))
+	lines = append(lines, mirLabelHeadWithBranch(heapLabel, byteLabels[0]))
 
-	// Per-byte compare.
 	for i := 0; i <= n; i++ {
 		lines = append(lines, mirLabelLine(byteLabels[i]))
 		ptrReg := dynReg
@@ -1401,6 +1449,13 @@ func mirSubI64Line(reg string, lhs string, rhs string) string {
 // Osty: mirAddI64Line
 func mirAddI64Line(reg string, lhs string, rhs string) string {
 	return "  " + reg + " = add i64 " + lhs + ", " + rhs + "\n"
+}
+
+// mirAndI64Line renders i64 bitwise-and `  <reg> = and i64 <lhs>, <rhs>\n`.
+// Used by the SSO tag-bit check in `emitInlineStringEqLiteral`.
+// Osty: mirAndI64Line
+func mirAndI64Line(reg string, lhs string, rhs string) string {
+	return "  " + reg + " = and i64 " + lhs + ", " + rhs + "\n"
 }
 
 // mirFCmpLine renders the general floating-point compare shape
