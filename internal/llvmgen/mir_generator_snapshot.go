@@ -2100,3 +2100,85 @@ func mirCallIndirectVoidLine(callType string, fnPtrReg string, argList string) s
 func mirCallIndirectValueLine(reg string, callType string, fnPtrReg string, argList string) string {
 	return "  " + reg + " = call " + callType + " " + fnPtrReg + "(" + argList + ")\n"
 }
+
+// Higher-level Option / Result aggregate builders.
+
+// MirAggregatePair captures the output of an Option / Result
+// 2-step aggregate construction.
+// Osty: MirAggregatePair
+type MirAggregatePair struct {
+	Step1Reg string
+	FinalReg string
+	Lines    []string
+}
+
+// mirSomeI64Aggregate builds the Some(payload) shape (2 insertvalue lines).
+// Osty: mirSomeI64Aggregate
+func mirSomeI64Aggregate(step1Reg string, finalReg string, optLLVM string, payloadI64 string) MirAggregatePair {
+	return MirAggregatePair{
+		Step1Reg: step1Reg,
+		FinalReg: finalReg,
+		Lines: []string{
+			mirInsertValueAggLine(step1Reg, optLLVM, "undef", "i64", "1", "0"),
+			mirInsertValueAggLine(finalReg, optLLVM, step1Reg, "i64", payloadI64, "1"),
+		},
+	}
+}
+
+// mirNoneAggregate builds the None shape (disc=0, payload=0).
+// Osty: mirNoneAggregate
+func mirNoneAggregate(step1Reg string, finalReg string, optLLVM string) MirAggregatePair {
+	return MirAggregatePair{
+		Step1Reg: step1Reg,
+		FinalReg: finalReg,
+		Lines: []string{
+			mirInsertValueAggLine(step1Reg, optLLVM, "undef", "i64", "0", "0"),
+			mirInsertValueAggLine(finalReg, optLLVM, step1Reg, "i64", "0", "1"),
+		},
+	}
+}
+
+// mirResultOkI64Aggregate builds the Ok(payload) shape.
+// Osty: mirResultOkI64Aggregate
+func mirResultOkI64Aggregate(step1Reg string, finalReg string, resultLLVM string, payloadI64 string) MirAggregatePair {
+	return MirAggregatePair{
+		Step1Reg: step1Reg,
+		FinalReg: finalReg,
+		Lines: []string{
+			mirInsertValueAggLine(step1Reg, resultLLVM, "undef", "i64", "1", "0"),
+			mirInsertValueAggLine(finalReg, resultLLVM, step1Reg, "i64", payloadI64, "1"),
+		},
+	}
+}
+
+// mirResultErrI64Aggregate builds the Err(payload) shape.
+// Osty: mirResultErrI64Aggregate
+func mirResultErrI64Aggregate(step1Reg string, finalReg string, resultLLVM string, payloadI64 string) MirAggregatePair {
+	return MirAggregatePair{
+		Step1Reg: step1Reg,
+		FinalReg: finalReg,
+		Lines: []string{
+			mirInsertValueAggLine(step1Reg, resultLLVM, "undef", "i64", "0", "0"),
+			mirInsertValueAggLine(finalReg, resultLLVM, step1Reg, "i64", payloadI64, "1"),
+		},
+	}
+}
+
+// mirGCAllocCallLine renders the GC heap allocator call.
+// Osty: mirGCAllocCallLine
+func mirGCAllocCallLine(reg string, traceKindDigits string, size string, site string) string {
+	return "  " + reg + " = call ptr @osty.gc.alloc_v1(i64 " +
+		traceKindDigits + ", i64 " + size + ", ptr " + site + ")\n"
+}
+
+// mirFPTruncDoubleToFloatLine renders FP-truncate from double to float.
+// Osty: mirFPTruncDoubleToFloatLine
+func mirFPTruncDoubleToFloatLine(reg string, val string) string {
+	return "  " + reg + " = fptrunc double " + val + " to float\n"
+}
+
+// mirFPExtFloatToDoubleLine renders FP-extend from float to double.
+// Osty: mirFPExtFloatToDoubleLine
+func mirFPExtFloatToDoubleLine(reg string, val string) string {
+	return "  " + reg + " = fpext float " + val + " to double\n"
+}

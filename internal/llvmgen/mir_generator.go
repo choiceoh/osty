@@ -6537,11 +6537,7 @@ func (g *mirGen) emitPrintlnLike(op mir.Operand, newline bool) error {
 		callT = "i32"
 	case "float":
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = fpext float ")
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to double\n")
+		g.fnBuf.WriteString(mirFPExtFloatToDoubleLine(tmp, val))
 		callArg = tmp
 		callT = "double"
 	}
@@ -7098,7 +7094,7 @@ func (g *mirGen) toI64Slot(val string, t mir.Type) (string, error) {
 	case "float":
 		// widen to double, then bitcast
 		widened := g.fresh()
-		g.fnBuf.WriteString("  " + widened + " = fpext float " + val + " to double\n")
+		g.fnBuf.WriteString(mirFPExtFloatToDoubleLine(widened, val))
 		tmp := g.fresh()
 		g.fnBuf.WriteString(mirBitcastLine(tmp, "double", widened, "i64"))
 		return tmp, nil
@@ -7120,8 +7116,7 @@ func (g *mirGen) toI64Slot(val string, t mir.Type) (string, error) {
 		size := g.emitSizeOf(llvmT)
 		site := g.stringLiteral("mir.enum.box." + strings.TrimPrefix(llvmT, "%"))
 		box := g.fresh()
-		g.fnBuf.WriteString(mirCallValueLine(box, "ptr", "osty.gc.alloc_v1",
-			"i64 1, i64 "+size+", ptr "+site))
+		g.fnBuf.WriteString(mirGCAllocCallLine(box, "1", size, site))
 		g.fnBuf.WriteString(mirStoreLine(llvmT, val, box))
 		tmp := g.fresh()
 		g.fnBuf.WriteString(mirPtrToIntLine(tmp, box, "i64"))
@@ -7153,7 +7148,7 @@ func (g *mirGen) fromI64Slot(val string, targetT mir.Type) (string, error) {
 		widened := g.fresh()
 		g.fnBuf.WriteString(mirBitcastLine(widened, "i64", val, "double"))
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  " + tmp + " = fptrunc double " + widened + " to float\n")
+		g.fnBuf.WriteString(mirFPTruncDoubleToFloatLine(tmp, widened))
 		return tmp, nil
 	case "ptr":
 		tmp := g.fresh()

@@ -2646,3 +2646,140 @@ pub fn mirCallIndirectVoidLine(callType: String, fnPtrReg: String, argList: Stri
 pub fn mirCallIndirectValueLine(reg: String, callType: String, fnPtrReg: String, argList: String) -> String {
     "  " + reg + " = call " + callType + " " + fnPtrReg + "(" + argList + ")\n"
 }
+
+// ============================================================
+// Higher-level Option / Result aggregate builders.
+//
+// The `%Option.<T>` / `%Result.<Ok>.<Err>` enum layouts are
+// `{ i64 disc, i64 payload }`. Every Some(v) / None / Ok(v) /
+// Err(v) construction follows the same 2-step insertvalue
+// chain: insert disc into undef, insert payload into the result.
+// Centralising the pair into one helper eliminates per-step
+// register naming + argument plumbing at every callsite.
+//
+// MirAggregatePair carries the (`step1Reg`, `finalReg`, `lines`)
+// triple the caller splices — `lines` already include trailing
+// newlines, ready for `g.fnBuf.WriteString` per entry.
+// ============================================================
+
+/// MirAggregatePair captures the output of an Option / Result
+/// 2-step aggregate construction. `step1Reg` is the intermediate
+/// SSA register holding the disc-only value (rarely needed by
+/// the caller, but exposed for the cases that store the partial
+/// or feed into subsequent aggregate builds). `finalReg` is the
+/// completed `{ disc, payload }` value the caller stores into
+/// the dest slot. `lines` is the rendered IR (each entry already
+/// `\n`-terminated) — the caller iterates and writes to fnBuf.
+pub struct MirAggregatePair {
+    pub step1Reg: String,
+    pub finalReg: String,
+    pub lines: List<String>,
+}
+
+/// mirSomeI64Aggregate builds the Some(payload) shape:
+///   `  <step1> = insertvalue <optLLVM> undef, i64 1, 0\n`
+///   `  <final> = insertvalue <optLLVM> <step1>, i64 <payloadI64>, 1\n`
+/// The caller (Go bridge) supplies pre-allocated SSA register
+/// names for `step1Reg` / `finalReg` (via `g.fresh()`) so the
+/// MirSeq counter stays consistent with the legacy stream.
+/// `payloadI64` is the already-widened i64 payload slot value.
+pub fn mirSomeI64Aggregate(
+    step1Reg: String,
+    finalReg: String,
+    optLLVM: String,
+    payloadI64: String,
+) -> MirAggregatePair {
+    let mut lines: List<String> = []
+    lines.push(mirInsertValueAggLine(step1Reg, optLLVM, "undef", "i64", "1", "0"))
+    lines.push(mirInsertValueAggLine(finalReg, optLLVM, step1Reg, "i64", payloadI64, "1"))
+    MirAggregatePair { step1Reg, finalReg, lines }
+}
+
+/// mirNoneAggregate builds the None shape:
+///   `  <step1> = insertvalue <optLLVM> undef, i64 0, 0\n`
+///   `  <final> = insertvalue <optLLVM> <step1>, i64 0, 1\n`
+/// Symmetric to `mirSomeI64Aggregate` — disc=0, payload=0. The
+/// `i64 0, 1` suffix is the conventional zero-payload shape used
+/// across `IntrinsicListIndexOf` / `BytesIndexOf` / etc. None
+/// arms.
+pub fn mirNoneAggregate(
+    step1Reg: String,
+    finalReg: String,
+    optLLVM: String,
+) -> MirAggregatePair {
+    let mut lines: List<String> = []
+    lines.push(mirInsertValueAggLine(step1Reg, optLLVM, "undef", "i64", "0", "0"))
+    lines.push(mirInsertValueAggLine(finalReg, optLLVM, step1Reg, "i64", "0", "1"))
+    MirAggregatePair { step1Reg, finalReg, lines }
+}
+
+/// mirResultOkI64Aggregate builds the Ok(payload) shape — same
+/// as `mirSomeI64Aggregate` but with the Result tagging
+/// convention: disc=1 means Ok, disc=0 means Err. The result
+/// LLVM type is `%Result.<Ok>.<Err>` rather than `%Option.<T>`,
+/// but the `{ disc, payload }` shape is identical so the
+/// builder reuses the same insertvalue pair.
+pub fn mirResultOkI64Aggregate(
+    step1Reg: String,
+    finalReg: String,
+    resultLLVM: String,
+    payloadI64: String,
+) -> MirAggregatePair {
+    let mut lines: List<String> = []
+    lines.push(mirInsertValueAggLine(step1Reg, resultLLVM, "undef", "i64", "1", "0"))
+    lines.push(mirInsertValueAggLine(finalReg, resultLLVM, step1Reg, "i64", payloadI64, "1"))
+    MirAggregatePair { step1Reg, finalReg, lines }
+}
+
+/// mirResultErrI64Aggregate builds the Err(payload) shape —
+/// disc=0, payload=Err value. Used by string-parse + checked-
+/// cancellation paths.
+pub fn mirResultErrI64Aggregate(
+    step1Reg: String,
+    finalReg: String,
+    resultLLVM: String,
+    payloadI64: String,
+) -> MirAggregatePair {
+    let mut lines: List<String> = []
+    lines.push(mirInsertValueAggLine(step1Reg, resultLLVM, "undef", "i64", "0", "0"))
+    lines.push(mirInsertValueAggLine(finalReg, resultLLVM, step1Reg, "i64", payloadI64, "1"))
+    MirAggregatePair { step1Reg, finalReg, lines }
+}
+
+/// mirGCAllocCallLine renders the GC heap allocator call:
+///   `  <reg> = call ptr @osty.gc.alloc_v1(i64 <traceKindDigits>, i64 <size>, ptr <site>)\n`
+/// Used by `toI64Slot`'s aggregate-payload heap-box path. The
+/// `traceKindDigits` is `"1"` for trace-aware allocations
+/// (managed pointer payloads) and `"0"` for no-trace (pure
+/// scalar payloads) — caller decides per-payload-type. `size`
+/// is the SSA register holding the byte size of the payload
+/// type, `site` is the `@.str.N` symbol naming the allocation
+/// site for GC debugging.
+pub fn mirGCAllocCallLine(
+    reg: String,
+    traceKindDigits: String,
+    size: String,
+    site: String,
+) -> String {
+    "  " + reg + " = call ptr @osty.gc.alloc_v1(i64 " +
+        traceKindDigits + ", i64 " + size + ", ptr " + site + ")\n"
+}
+
+/// mirFPTruncDoubleToFloatLine renders the LLVM FP-truncate from
+/// `double` to `float`:
+///   `  <reg> = fptrunc double <val> to float\n`
+/// Used by `fromI64Slot`'s float branch where the i64 slot is
+/// first bitcast to double, then narrowed to float. The reverse
+/// (float → double widening) uses an inline LLVM `fpext` since
+/// it's only one site.
+pub fn mirFPTruncDoubleToFloatLine(reg: String, val: String) -> String {
+    "  " + reg + " = fptrunc double " + val + " to float\n"
+}
+
+/// mirFPExtFloatToDoubleLine renders the FP-extend from `float`
+/// to `double`: `  <reg> = fpext float <val> to double\n`. Used
+/// by `toI64Slot`'s float branch where the float widens to
+/// double before bitcasting to i64.
+pub fn mirFPExtFloatToDoubleLine(reg: String, val: String) -> String {
+    "  " + reg + " = fpext float " + val + " to double\n"
+}
