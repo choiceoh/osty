@@ -2273,3 +2273,83 @@ pub struct MirStringPool {
         self.order.isEmpty()
     }
 }
+
+/// §4 closure-thunk definition cache.
+///
+/// MirThunkDefs owns the dedup + insertion-order side of the
+/// emitter's closure-thunk pool — the `define private <ret>
+/// @__osty_closure_thunk_<sym>(ptr env, <user_params>...)` shim
+/// functions that adapt a top-level function symbol to the
+/// uniform-env closure ABI. Mirrors the `mirGen.thunkDefs
+/// map[string]string + thunkOrder []string` Go fields. Fourth
+/// member of the dedup-with-order family alongside
+/// `MirLayoutCache` (#888), `MirRuntimeDecls`, and `MirStringPool`.
+///
+/// Why a struct: thunks are generated lazily (one per
+/// closure-converted top-level fn referenced as a value) and the
+/// dedup check at call time (`contains(symbol)`) is on the hot
+/// `evalClosureFnConst` path. Centralising the cache makes the
+/// "have I seen this thunk?" check a named method instead of a
+/// raw map probe.
+pub struct MirThunkDefs {
+    /// bodies maps the user-fn symbol (e.g. `main_renderReport`)
+    /// to its complete thunk IR — the full `define private ... { ... }`
+    /// block ready to be appended to `g.out` by `emitThunks`. The
+    /// IR string ends with `}\n\n` so concatenation with the next
+    /// thunk's IR produces well-spaced output.
+    pub bodies: Map<String, String>,
+    /// order is the insertion-ordered list of user-fn symbols —
+    /// the keys of `bodies` in the order the thunks were
+    /// generated. Walked by `emitThunks` to append the thunk pool
+    /// deterministically regardless of map iteration order.
+    pub order: List<String>,
+
+    /// contains reports whether a thunk for `symbol` has already
+    /// been generated. Used by `ensureThunk` as an early-exit gate
+    /// before doing the (non-trivial) work of formatting the
+    /// thunk's IR body.
+    pub fn contains(self, symbol: String) -> Bool {
+        self.bodies.containsKey(symbol)
+    }
+
+    /// register records a freshly-generated thunk body for
+    /// `symbol`. Returns true when newly added, false when the
+    /// symbol already had a thunk (the caller's body work is
+    /// then discarded — `ensureThunk` instead pre-checks via
+    /// `contains` to skip the work entirely).
+    pub fn register(mut self, symbol: String, body: String) -> Bool {
+        if self.bodies.containsKey(symbol) {
+            return false
+        }
+        self.bodies.insert(symbol, body)
+        self.order.push(symbol)
+        true
+    }
+
+    /// body looks up the IR for an already-registered thunk;
+    /// returns `""` when not present. Used by `emitThunks` to
+    /// recover each entry's IR without re-registering.
+    pub fn body(self, symbol: String) -> String {
+        self.bodies.get(symbol) ?? ""
+    }
+
+    /// orderedBodies returns the thunk IR strings in insertion
+    /// order — `emitThunks` concatenates these directly to
+    /// `g.out` (each body already ends with `}\n\n` so no
+    /// separator is needed).
+    pub fn orderedBodies(self) -> List<String> {
+        let mut out: List<String> = []
+        for sym in self.order {
+            out.push(self.body(sym))
+        }
+        out
+    }
+
+    /// isEmpty reports whether the cache holds no thunks —
+    /// the early-exit gate in `emitThunks` so modules that
+    /// don't pass any top-level functions as closures emit no
+    /// thunk block.
+    pub fn isEmpty(self) -> Bool {
+        self.order.isEmpty()
+    }
+}

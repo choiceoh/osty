@@ -1855,3 +1855,61 @@ func (p *MirStringPool) OrderedKeys() []string {
 func (p *MirStringPool) IsEmpty() bool {
 	return len(p.Order) == 0
 }
+
+// §4 closure-thunk definition cache.
+//
+// MirThunkDefs mirrors `toolchain/mir_generator.osty: MirThunkDefs`.
+// Owns the dedup + insertion-order side of the emitter's closure-thunk
+// pool. Replaces the `mirGen.thunkDefs map[string]string + thunkOrder
+// []string` pair fields. Fourth member of the dedup-with-order family
+// alongside `MirLayoutCache`, `MirRuntimeDecls`, and `MirStringPool`.
+
+// Osty: MirThunkDefs
+type MirThunkDefs struct {
+	Bodies map[string]string
+	Order  []string
+}
+
+// Osty: MirThunkDefs.contains
+func (t *MirThunkDefs) Contains(symbol string) bool {
+	if t.Bodies == nil {
+		return false
+	}
+	_, ok := t.Bodies[symbol]
+	return ok
+}
+
+// Osty: MirThunkDefs.register
+func (t *MirThunkDefs) Register(symbol string, body string) bool {
+	if t.Bodies == nil {
+		t.Bodies = map[string]string{}
+	}
+	if _, ok := t.Bodies[symbol]; ok {
+		return false
+	}
+	t.Bodies[symbol] = body
+	t.Order = append(t.Order, symbol)
+	return true
+}
+
+// Osty: MirThunkDefs.body
+func (t *MirThunkDefs) Body(symbol string) string {
+	if t.Bodies == nil {
+		return ""
+	}
+	return t.Bodies[symbol]
+}
+
+// Osty: MirThunkDefs.orderedBodies
+func (t *MirThunkDefs) OrderedBodies() []string {
+	out := make([]string, 0, len(t.Order))
+	for _, sym := range t.Order {
+		out = append(out, t.Body(sym))
+	}
+	return out
+}
+
+// Osty: MirThunkDefs.isEmpty
+func (t *MirThunkDefs) IsEmpty() bool {
+	return len(t.Order) == 0
+}
