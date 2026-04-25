@@ -1119,6 +1119,28 @@ pub struct MirSeq {
         }
     }
 
+    /// ostyEmitter constructs a fresh LlvmEmitter seeded from the
+    /// current `tempSeq`. The Go bridge `func (g *mirGen) ostyEmitter`
+    /// now delegates here so the seeding logic lives in one place.
+    /// All other counter / accumulator fields start fresh — the Osty
+    /// `llvm*` helpers don't read them through the call boundary; the
+    /// Go side maintains the persistent state on `mirGen` across the
+    /// many short-lived emitter scopes.
+    pub fn ostyEmitter(self) -> LlvmEmitter {
+        LlvmEmitter {
+            temp: self.tempSeq,
+            label: 0,
+            stringId: 0,
+            body: [],
+            locals: [],
+            stringGlobals: [],
+            nativeBoundedLens: {:},
+            nativeSafeIndices: {:},
+            nativeListData: {:},
+            nativeListLens: {:},
+        }
+    }
+
     /// emitInlineStringEqLiteral builds the byte-by-byte string-
     /// equality switch the legacy emitter inlined directly into
     /// `g.fnBuf`. `litBytes` is the per-byte integer view of the
@@ -1555,12 +1577,195 @@ pub fn mirInsertValueAggLine(
         ", " + idxDigits + "\n"
 }
 
-/// mirSubLine renders the i64 subtraction
+/// mirSubI64Line renders the i64 subtraction
 /// `  <reg> = sub i64 <lhs>, <rhs>\n`. Specialised to i64 because the
 /// hot uses (computing `len - 1` for `IntrinsicListLast`, byte offsets
 /// in iteration) all operate at i64 width — other widths use
 /// `mirBinaryOpcode`'s general path.
 pub fn mirSubI64Line(reg: String, lhs: String, rhs: String) -> String {
     "  " + reg + " = sub i64 " + lhs + ", " + rhs + "\n"
+}
+
+/// mirAddI64Line renders the i64 addition
+/// `  <reg> = add i64 <lhs>, <rhs>\n`. Sibling of `mirSubI64Line` —
+/// used by linear-scan loops (`IntrinsicListIndexOf`, `IntrinsicListContains`)
+/// for the `i = i + 1` step.
+pub fn mirAddI64Line(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = add i64 " + lhs + ", " + rhs + "\n"
+}
+
+/// mirFCmpLine renders the general floating-point compare shape
+/// `  <reg> = fcmp <pred> <ty> <lhs>, <rhs>\n`. `pred` is the LLVM
+/// FP predicate (`oeq` / `one` / `olt` / `ole` / `ogt` / `oge` /
+/// `ueq` / `une` / `ord` / `uno`). Used by typed list scans where
+/// the element type is `Float`/`Float64`.
+pub fn mirFCmpLine(reg: String, pred: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = fcmp " + pred + " " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+// ============================================================
+// Generalised line builders (Phase B: fixes the over-specialisation
+// of the first slice). Specialised builders above stay as one-liner
+// wrappers so existing call sites don't churn.
+// ============================================================
+
+/// mirGEPInboundsLine renders the general
+/// `  <reg> = getelementptr inbounds <baseTy>, ptr <basePtr>, <idxTy> <idx>\n`
+/// shape. Use for arbitrary single-index GEPs; multi-index struct-field
+/// access goes through `mirGEPStructFieldLine`. The byte-stride form
+/// (`mirGEPInboundsI8Line`) stays as a thin wrapper so hot paths read
+/// at a glance.
+pub fn mirGEPInboundsLine(
+    reg: String,
+    baseTy: String,
+    basePtr: String,
+    idxTy: String,
+    idx: String,
+) -> String {
+    "  " + reg + " = getelementptr inbounds " + baseTy +
+        ", ptr " + basePtr + ", " + idxTy + " " + idx + "\n"
+}
+
+/// mirGEPStructFieldLine renders the two-index struct-field GEP
+/// `  <reg> = getelementptr inbounds <structTy>, ptr <basePtr>, i32 0, i32 <fieldDigits>\n`
+/// — the canonical "field N of aggregate at p" pattern. `fieldDigits`
+/// is the already-formatted decimal field index.
+pub fn mirGEPStructFieldLine(
+    reg: String,
+    structTy: String,
+    basePtr: String,
+    fieldDigits: String,
+) -> String {
+    "  " + reg + " = getelementptr inbounds " + structTy +
+        ", ptr " + basePtr +
+        ", i32 0, i32 " + fieldDigits + "\n"
+}
+
+/// mirICmpLine renders the general icmp shape
+/// `  <reg> = icmp <pred> <ty> <lhs>, <rhs>\n`. `pred` is the LLVM
+/// predicate keyword (`eq`, `ne`, `slt`, `sle`, `sgt`, `sge`, `ult`,
+/// `ule`, `ugt`, `uge`). The eq-only `mirICmpEqLine` stays for
+/// readability at hot sites (streq, length probes).
+pub fn mirICmpLine(reg: String, pred: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = icmp " + pred + " " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+/// mirAllocaLine renders `  <reg> = alloca <ty>\n` — the function-
+/// preamble slot allocation form. No `align N` / addrspace tuning;
+/// LLVM's natural alignment from the type is sufficient for the
+/// shapes the MIR emitter produces.
+pub fn mirAllocaLine(reg: String, ty: String) -> String {
+    "  " + reg + " = alloca " + ty + "\n"
+}
+
+/// mirRetLine renders `  ret <ty> <val>\n` — value return.
+pub fn mirRetLine(ty: String, val: String) -> String {
+    "  ret " + ty + " " + val + "\n"
+}
+
+/// mirRetVoidLine renders `  ret void\n`.
+pub fn mirRetVoidLine() -> String {
+    "  ret void\n"
+}
+
+/// mirSelectLine renders the i1 select
+/// `  <reg> = select i1 <cond>, <ty> <lhs>, <ty> <rhs>\n`. The two
+/// arms share a type because that's the only shape the emitter
+/// produces (mismatched arms would have already been coerced earlier).
+pub fn mirSelectLine(
+    reg: String,
+    ty: String,
+    cond: String,
+    lhs: String,
+    rhs: String,
+) -> String {
+    "  " + reg + " = select i1 " + cond +
+        ", " + ty + " " + lhs +
+        ", " + ty + " " + rhs + "\n"
+}
+
+/// mirSExtLine renders sign-extension `  <reg> = sext <fromTy> <val> to <toTy>\n`.
+pub fn mirSExtLine(reg: String, fromTy: String, val: String, toTy: String) -> String {
+    "  " + reg + " = sext " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+/// mirZExtLine renders zero-extension `  <reg> = zext <fromTy> <val> to <toTy>\n`.
+pub fn mirZExtLine(reg: String, fromTy: String, val: String, toTy: String) -> String {
+    "  " + reg + " = zext " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+/// mirTruncLine renders truncation `  <reg> = trunc <fromTy> <val> to <toTy>\n`.
+pub fn mirTruncLine(reg: String, fromTy: String, val: String, toTy: String) -> String {
+    "  " + reg + " = trunc " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+/// mirPtrToIntLine renders `  <reg> = ptrtoint ptr <val> to <toTy>\n`
+/// — the pointer-payload upcast used to widen `Option<T*>` payloads
+/// into the i64 enum slot.
+pub fn mirPtrToIntLine(reg: String, val: String, toTy: String) -> String {
+    "  " + reg + " = ptrtoint ptr " + val + " to " + toTy + "\n"
+}
+
+/// mirIntToPtrLine renders `  <reg> = inttoptr <fromTy> <val> to ptr\n`
+/// — the inverse of `mirPtrToIntLine`, used when reading a pointer
+/// payload back out of the i64 enum slot.
+pub fn mirIntToPtrLine(reg: String, fromTy: String, val: String) -> String {
+    "  " + reg + " = inttoptr " + fromTy + " " + val + " to ptr\n"
+}
+
+/// mirCommentLine renders `  ; <text>\n` — an LLVM IR comment line at
+/// the per-instruction indent. Used by debug / annotation paths to
+/// mark optimization boundaries without emitting actual instructions.
+pub fn mirCommentLine(text: String) -> String {
+    "  ; " + text + "\n"
+}
+
+/// mirExtractValueLine renders `  <reg> = extractvalue <aggTy> <aggVal>, <idxDigits>\n`.
+/// The single-index field projection used to read Option<T> /
+/// Result<T,E> discriminants and payloads out of their aggregate
+/// values.
+pub fn mirExtractValueLine(reg: String, aggTy: String, aggVal: String, idxDigits: String) -> String {
+    "  " + reg + " = extractvalue " + aggTy + " " + aggVal + ", " + idxDigits + "\n"
+}
+
+/// mirBitcastLine renders `  <reg> = bitcast <fromTy> <val> to <toTy>\n`.
+/// Same-width type reinterpretation — used for `i64`↔`double` Option
+/// payload narrows and pointer aggregate field reads.
+pub fn mirBitcastLine(reg: String, fromTy: String, val: String, toTy: String) -> String {
+    "  " + reg + " = bitcast " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+/// mirPhiTwoLine renders the two-incoming-edge phi
+/// `  <reg> = phi <ty> [ <val1>, %<label1> ], [ <val2>, %<label2> ]\n`.
+/// General-purpose two-arm phi for Option<T> unwrap-or merges,
+/// conditional value joins, etc. The i1-specialised
+/// `mirPhiI1FromTwoLine` (with `[true, ...]` / `[false, ...]` baked
+/// in) stays as a streq-readability shortcut.
+pub fn mirPhiTwoLine(
+    reg: String,
+    ty: String,
+    val1: String,
+    label1: String,
+    val2: String,
+    label2: String,
+) -> String {
+    "  " + reg + " = phi " + ty +
+        " [ " + val1 + ", %" + label1 +
+        " ], [ " + val2 + ", %" + label2 + " ]\n"
+}
+
+/// mirCallVoidNoArgsLine renders `  call void @<sym>()\n` — the
+/// argumentless action call (Option-unwrap abort, runtime init/teardown
+/// hooks). `mirCallVoidLine` requires the caller to pass `""` as
+/// `argList`; this variant skips that round-trip.
+pub fn mirCallVoidNoArgsLine(sym: String) -> String {
+    "  call void @" + sym + "()\n"
+}
+
+/// mirUnreachableLine renders `  unreachable\n` — the LLVM terminator
+/// emitted after a `noreturn` call or in dead-code paths the optimizer
+/// proves can't be entered.
+pub fn mirUnreachableLine() -> String {
+    "  unreachable\n"
 }
 

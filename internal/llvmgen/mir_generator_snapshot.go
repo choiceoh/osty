@@ -1269,6 +1269,31 @@ func (s *MirSeq) AbsorbOstyEmitter(em *LlvmEmitter) {
 	s.FnBuf = append(s.FnBuf, em.body...)
 }
 
+// OstyEmitter constructs a fresh LlvmEmitter seeded from the current
+// TempSeq. The Go bridge `func (g *mirGen) ostyEmitter` now delegates
+// here so the seeding logic lives in one place. The Go LlvmEmitter
+// has fields the Osty source struct doesn't model (nextLoopMD,
+// loopMDDefs, vectorizeHint, parallelAccessHint, parallelAccessGroupRef)
+// — those are native-owned-function emission state, separate from the
+// MIR ostyEmitter path. They zero-init here, matching the original
+// `&LlvmEmitter{temp: g.seq.TempSeq, body: nil}` semantics.
+//
+// Osty: MirSeq.ostyEmitter
+func (s *MirSeq) OstyEmitter() *LlvmEmitter {
+	return &LlvmEmitter{
+		temp:              s.TempSeq,
+		label:             0,
+		stringId:          0,
+		body:              nil,
+		locals:            nil,
+		stringGlobals:     nil,
+		nativeBoundedLens: nil,
+		nativeSafeIndices: nil,
+		nativeListData:    nil,
+		nativeListLens:    nil,
+	}
+}
+
 // LLVM-line builders. Each helper produces one fully-formed function-
 // body line ending with `\n`. Osty: toolchain/mir_generator.osty.
 
@@ -1370,4 +1395,135 @@ func mirInsertValueAggLine(reg string, aggTy string, baseVal string, fieldTy str
 // Osty: mirSubI64Line
 func mirSubI64Line(reg string, lhs string, rhs string) string {
 	return "  " + reg + " = sub i64 " + lhs + ", " + rhs + "\n"
+}
+
+// mirAddI64Line renders i64 addition `  <reg> = add i64 <lhs>, <rhs>\n`.
+// Osty: mirAddI64Line
+func mirAddI64Line(reg string, lhs string, rhs string) string {
+	return "  " + reg + " = add i64 " + lhs + ", " + rhs + "\n"
+}
+
+// mirFCmpLine renders the general floating-point compare shape
+// `  <reg> = fcmp <pred> <ty> <lhs>, <rhs>\n`.
+// Osty: mirFCmpLine
+func mirFCmpLine(reg string, pred string, ty string, lhs string, rhs string) string {
+	return "  " + reg + " = fcmp " + pred + " " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+// Generalised line builders — fixes the over-specialisation of the
+// first slice. Specialised builders above stay as compat callers.
+
+// mirGEPInboundsLine renders the general single-index GEP shape.
+// Osty: mirGEPInboundsLine
+func mirGEPInboundsLine(reg string, baseTy string, basePtr string, idxTy string, idx string) string {
+	return "  " + reg + " = getelementptr inbounds " + baseTy +
+		", ptr " + basePtr + ", " + idxTy + " " + idx + "\n"
+}
+
+// mirGEPStructFieldLine renders the two-index struct-field GEP form.
+// Osty: mirGEPStructFieldLine
+func mirGEPStructFieldLine(reg string, structTy string, basePtr string, fieldDigits string) string {
+	return "  " + reg + " = getelementptr inbounds " + structTy +
+		", ptr " + basePtr +
+		", i32 0, i32 " + fieldDigits + "\n"
+}
+
+// mirICmpLine renders the general icmp shape with arbitrary predicate.
+// Osty: mirICmpLine
+func mirICmpLine(reg string, pred string, ty string, lhs string, rhs string) string {
+	return "  " + reg + " = icmp " + pred + " " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+// mirAllocaLine renders `  <reg> = alloca <ty>\n`.
+// Osty: mirAllocaLine
+func mirAllocaLine(reg string, ty string) string {
+	return "  " + reg + " = alloca " + ty + "\n"
+}
+
+// mirRetLine renders `  ret <ty> <val>\n`.
+// Osty: mirRetLine
+func mirRetLine(ty string, val string) string {
+	return "  ret " + ty + " " + val + "\n"
+}
+
+// mirRetVoidLine renders `  ret void\n`.
+// Osty: mirRetVoidLine
+func mirRetVoidLine() string {
+	return "  ret void\n"
+}
+
+// mirSelectLine renders the i1 select form.
+// Osty: mirSelectLine
+func mirSelectLine(reg string, ty string, cond string, lhs string, rhs string) string {
+	return "  " + reg + " = select i1 " + cond +
+		", " + ty + " " + lhs +
+		", " + ty + " " + rhs + "\n"
+}
+
+// mirSExtLine renders sign-extension.
+// Osty: mirSExtLine
+func mirSExtLine(reg string, fromTy string, val string, toTy string) string {
+	return "  " + reg + " = sext " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+// mirZExtLine renders zero-extension.
+// Osty: mirZExtLine
+func mirZExtLine(reg string, fromTy string, val string, toTy string) string {
+	return "  " + reg + " = zext " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+// mirTruncLine renders truncation.
+// Osty: mirTruncLine
+func mirTruncLine(reg string, fromTy string, val string, toTy string) string {
+	return "  " + reg + " = trunc " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+// mirPtrToIntLine renders ptr→int conversion.
+// Osty: mirPtrToIntLine
+func mirPtrToIntLine(reg string, val string, toTy string) string {
+	return "  " + reg + " = ptrtoint ptr " + val + " to " + toTy + "\n"
+}
+
+// mirIntToPtrLine renders int→ptr conversion.
+// Osty: mirIntToPtrLine
+func mirIntToPtrLine(reg string, fromTy string, val string) string {
+	return "  " + reg + " = inttoptr " + fromTy + " " + val + " to ptr\n"
+}
+
+// mirCommentLine renders `  ; <text>\n`.
+// Osty: mirCommentLine
+func mirCommentLine(text string) string {
+	return "  ; " + text + "\n"
+}
+
+// mirExtractValueLine renders `  <reg> = extractvalue <aggTy> <aggVal>, <idxDigits>\n`.
+// Osty: mirExtractValueLine
+func mirExtractValueLine(reg string, aggTy string, aggVal string, idxDigits string) string {
+	return "  " + reg + " = extractvalue " + aggTy + " " + aggVal + ", " + idxDigits + "\n"
+}
+
+// mirBitcastLine renders `  <reg> = bitcast <fromTy> <val> to <toTy>\n`.
+// Osty: mirBitcastLine
+func mirBitcastLine(reg string, fromTy string, val string, toTy string) string {
+	return "  " + reg + " = bitcast " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+// mirPhiTwoLine renders the two-incoming-edge phi.
+// Osty: mirPhiTwoLine
+func mirPhiTwoLine(reg string, ty string, val1 string, label1 string, val2 string, label2 string) string {
+	return "  " + reg + " = phi " + ty +
+		" [ " + val1 + ", %" + label1 +
+		" ], [ " + val2 + ", %" + label2 + " ]\n"
+}
+
+// mirCallVoidNoArgsLine renders `  call void @<sym>()\n`.
+// Osty: mirCallVoidNoArgsLine
+func mirCallVoidNoArgsLine(sym string) string {
+	return "  call void @" + sym + "()\n"
+}
+
+// mirUnreachableLine renders `  unreachable\n`.
+// Osty: mirUnreachableLine
+func mirUnreachableLine() string {
+	return "  unreachable\n"
 }

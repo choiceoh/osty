@@ -63,6 +63,19 @@ pub struct LlvmEmitter {
     /// consults this to skip the runtime bounds-check branch — that
     /// branch's slow-path call is what blocks LLVM's LoopVectorizer.
     pub nativeSafeIndices: Map<String, Map<String, Int>>,
+    /// nativeListData caches the `data` snapshot register for each
+    /// list parameter that the native module-entry slice has already
+    /// hoisted. Keyed by the list-param's source name (e.g. `"xs"`);
+    /// the value is the SSA register holding the `osty_rt_list_data_<T>`
+    /// result. Mirrors the `emitter.nativeListData` slot used by
+    /// `internal/llvmgen/native_entry_snapshot.go` — adding here so
+    /// the Osty struct shape matches what the snapshot accesses.
+    pub nativeListData: Map<String, LlvmValue>,
+    /// nativeListLens caches the `len` snapshot register for the same
+    /// hoisted list params as `nativeListData`. Stored as
+    /// `Map<String, LlvmValue>` so consumers can copy the typed handle
+    /// out without re-allocating.
+    pub nativeListLens: Map<String, LlvmValue>,
 }
 
 pub struct LlvmIfLabels {
@@ -102,6 +115,8 @@ pub fn llvmEmitter() -> LlvmEmitter {
         stringGlobals: [],
         nativeBoundedLens: {:},
         nativeSafeIndices: {:},
+        nativeListData: {:},
+        nativeListLens: {:},
     }
 }
 

@@ -250,6 +250,24 @@ list keeps new Osty clean of known landmines.
 | `mirStoreZeroinitLine` | `(ty: String, slot: String) -> String` | §6 | `  store <ty> zeroinitializer, ptr <slot>\n` — None-branch slot zeroing for Option<T> in `IntrinsicListFirst`/`IntrinsicListLast`/`IntrinsicMapGet` |
 | `mirInsertValueAggLine` | `(reg: String, aggTy: String, baseVal: String, fieldTy: String, val: String, idxDigits: String) -> String` | §6 | `  <reg> = insertvalue <aggTy> <baseVal>, <fieldTy> <val>, <idxDigits>\n` — field-by-field aggregate construction (Some payload, tuple, Result) |
 | `mirSubI64Line` | `(reg: String, lhs: String, rhs: String) -> String` | §6 | i64 subtraction `  <reg> = sub i64 <lhs>, <rhs>\n` — len-1 / byte-offset hot uses; other widths route through `mirBinaryOpcode` |
+| `mirAddI64Line` | `(reg: String, lhs: String, rhs: String) -> String` | §6 | i64 addition `  <reg> = add i64 <lhs>, <rhs>\n` — sibling of sub; used by linear-scan loops for the `i = i + 1` step |
+| `mirFCmpLine` | `(reg: String, pred: String, ty: String, lhs: String, rhs: String) -> String` | §6 | General floating-point compare `  <reg> = fcmp <pred> <ty> <lhs>, <rhs>\n` — used by typed list scans on Float/Float64 elements |
+| `mirGEPInboundsLine` | `(reg: String, baseTy: String, basePtr: String, idxTy: String, idx: String) -> String` | §6 | General single-index GEP — supersedes the over-specialised `mirGEPInboundsI8Line` (which stays as a thin wrapper for hot byte-stride sites) |
+| `mirGEPStructFieldLine` | `(reg: String, structTy: String, basePtr: String, fieldDigits: String) -> String` | §6 | Two-index struct-field GEP `  <reg> = getelementptr inbounds <T>, ptr <p>, i32 0, i32 <N>\n` — canonical "field N of aggregate at p" |
+| `mirICmpLine` | `(reg: String, pred: String, ty: String, lhs: String, rhs: String) -> String` | §6 | General icmp with arbitrary predicate (`eq`/`ne`/`slt`/`sle`/...). The eq-only `mirICmpEqLine` stays for streq/length probes |
+| `mirAllocaLine` | `(reg: String, ty: String) -> String` | §3 | Function-preamble slot allocation `  <reg> = alloca <ty>\n` |
+| `mirRetLine` | `(ty: String, val: String) -> String` | §9 | Value return `  ret <ty> <val>\n` |
+| `mirRetVoidLine` | `() -> String` | §9 | Void return `  ret void\n` |
+| `mirSelectLine` | `(reg: String, ty: String, cond: String, lhs: String, rhs: String) -> String` | §6 | i1 select `  <reg> = select i1 <c>, <ty> <l>, <ty> <r>\n` |
+| `mirSExtLine` / `mirZExtLine` / `mirTruncLine` | `(reg, fromTy, val, toTy) -> String` | §6 | Width conversions: sign-extend / zero-extend / truncate |
+| `mirPtrToIntLine` / `mirIntToPtrLine` | various | §6 | Pointer↔int conversions used by Option<T*> payload narrows / widens |
+| `mirCommentLine` | `(text: String) -> String` | §6 | LLVM IR comment line `  ; <text>\n` |
+| `mirExtractValueLine` | `(reg: String, aggTy: String, aggVal: String, idxDigits: String) -> String` | §6 | Aggregate field projection `  <reg> = extractvalue <aggTy> <aggVal>, <idx>\n` — Option/Result disc + payload reads |
+| `mirBitcastLine` | `(reg: String, fromTy: String, val: String, toTy: String) -> String` | §6 | Same-width type reinterpretation — `i64`↔`double` Option payload narrows |
+| `mirPhiTwoLine` | `(reg: String, ty: String, val1: String, label1: String, val2: String, label2: String) -> String` | §6 | General two-arm phi `  <reg> = phi <ty> [ <v1>, %<l1> ], [ <v2>, %<l2> ]\n` — Option unwrap-or merges, conditional value joins |
+| `mirCallVoidNoArgsLine` | `(sym: String) -> String` | §6 | `  call void @<sym>()\n` — argumentless action call (unwrap abort, runtime hooks) |
+| `mirUnreachableLine` | `() -> String` | §9 | LLVM `  unreachable\n` terminator after `noreturn` calls |
+| `MirSeq.ostyEmitter` | `(self) -> LlvmEmitter` | §15 | Constructs a fresh `LlvmEmitter` seeded from `tempSeq`. Replaces the inline `&LlvmEmitter{temp:...,body:nil}` Go shim — drift fix added two missing fields (`nativeListData`, `nativeListLens`) to the Osty `LlvmEmitter` struct so the snapshot mirror compiles |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as
