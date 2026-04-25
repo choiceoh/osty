@@ -271,6 +271,19 @@ func TestMergeCategoryDenyMinusSpecificAllow(t *testing.T) {
 	assertStrings(t, merged.Allow, "unused_let")
 }
 
+// Wildcard deny in parent must round-trip through Merge so Apply still
+// sees a wildcard deny set. Storing the wildcard as "*" would break
+// because expandCodeSet only recognizes "lint" and "all" as wildcards.
+func TestMergeWildcardDenyRoundTrips(t *testing.T) {
+	parent := Config{Deny: []string{"all"}}
+	merged := Config{}.Merge(parent)
+
+	denySet := expandCodeSet(merged.Deny)
+	if !denySet["*"] {
+		t.Errorf("wildcard deny lost in merge: merged.Deny=%v expandsTo=%v", merged.Deny, denySet)
+	}
+}
+
 // --- helpers ---
 
 func assertStrings(t *testing.T, got []string, want ...string) {

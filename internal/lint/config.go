@@ -116,12 +116,15 @@ func mergeStringSlices(a, b []string) []string {
 
 // codeSetToSortedSlice converts a concrete code set (map[string]bool)
 // into a sorted slice of code strings. Sorted for deterministic output.
+// The wildcard set {"*": true} round-trips through expandCodeSet as
+// "all" — emitting "*" directly would not, since expandCodeSet only
+// recognizes "lint" and "all" as wildcard names.
 func codeSetToSortedSlice(codes map[string]bool) []string {
 	if len(codes) == 0 {
 		return nil
 	}
 	if codes["*"] {
-		return []string{"*"}
+		return []string{"all"}
 	}
 	out := make([]string, 0, len(codes))
 	for code := range codes {
