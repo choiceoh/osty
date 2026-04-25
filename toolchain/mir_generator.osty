@@ -941,6 +941,17 @@ pub struct MirSeq {
     /// 3-node domain/scope/list chain. Empty string means "not yet
     /// allocated" — the singleton convention matches Go.
     pub listMetaScopeList: String,
+    /// fnBuf is the per-function body accumulator. Mirrors `g.fnBuf
+    /// strings.Builder` on the Go side. Populated by the new
+    /// `appendFnLine` method and by `absorbOstyEmitter` when a Go-
+    /// driven LlvmEmitter scope drains its body lines into the
+    /// MirSeq accumulator. `flushFnBuf` returns the lines and
+    /// clears the buffer — paired with `g.out.WriteString` on the
+    /// Go side at function-emission boundaries. Phase B foundation:
+    /// future Osty-side state-bearing emit methods (`emitTerm`,
+    /// instruction lowering, etc.) push their lines here without
+    /// having to thread a Go strings.Builder through the call.
+    pub fnBuf: List<String>,
 
     /// fresh issues a fresh `%tN` SSA register name and bumps the
     /// counter. Mirrors `func (g *mirGen) fresh()` in the Go source —
@@ -1076,6 +1087,38 @@ pub struct MirSeq {
         ref
     }
 
+    /// appendFnLine pushes a fully-formed line (including any leading
+    /// indent and trailing newline) onto the per-function body
+    /// accumulator. Mirrors the legacy `g.fnBuf.WriteString(line)`
+    /// pattern. The Go bridge drains `fnBuf` into `g.fnBuf` at the
+    /// function-emission boundary via `flushFnBuf`.
+    pub fn appendFnLine(mut self, line: String) {
+        self.fnBuf.push(line)
+    }
+
+    /// flushFnBuf returns the accumulated function-body lines and
+    /// clears the buffer in one move. Caller (Go bridge) writes the
+    /// returned list to its own `g.fnBuf` strings.Builder so the
+    /// existing flush-to-`g.out` path stays unchanged.
+    pub fn flushFnBuf(mut self) -> List<String> {
+        let drained = self.fnBuf
+        self.fnBuf = []
+        drained
+    }
+
+    /// absorbOstyEmitter syncs a Go-driven `LlvmEmitter` scope back
+    /// into MirSeq. The Go pattern is: build emitter (seeded from
+    /// `seq.tempSeq`), call Osty `llvm*` helpers that push to
+    /// `em.body`, then absorb the result here. Bumps `tempSeq` to
+    /// the emitter's final value and drains `em.body` into `fnBuf`,
+    /// matching `func (g *mirGen) flushOstyEmitter` byte-for-byte.
+    pub fn absorbOstyEmitter(mut self, em: LlvmEmitter) {
+        self.tempSeq = em.temp
+        for line in em.body {
+            self.fnBuf.push(line)
+        }
+    }
+
     /// emitInlineStringEqLiteral builds the byte-by-byte string-
     /// equality switch the legacy emitter inlined directly into
     /// `g.fnBuf`. `litBytes` is the per-byte integer view of the
@@ -1106,8 +1149,10 @@ pub struct MirSeq {
         let nomatchLabel = self.freshLabel("streq.nomatch")
         let doneLabel = self.freshLabel("streq.done")
 
+        // Pointer-equality fast path: if both Strings hold the same
+        // global symbol, skip the byte-by-byte walk entirely.
         let ptrEq = self.fresh()
-        lines.push("  " + ptrEq + " = icmp eq ptr " + dynReg + ", " + litSym + "\n")
+        lines.push(mirICmpEqLine(ptrEq, "ptr", dynReg, litSym))
 
         let n = litBytes.len()
         let mut byteLabels: List<String> = []
@@ -1116,66 +1161,50 @@ pub struct MirSeq {
             byteLabels.push(self.freshLabel("streq.b" + mirGenIntToString(k)))
             k = k + 1
         }
-        lines.push(
-            "  br i1 " + ptrEq +
-                ", label %" + matchLabel +
-                ", label %" + byteLabels[0] + "\n",
-        )
+        lines.push(mirBrCondLine(ptrEq, matchLabel, byteLabels[0]))
 
+        // Per-byte compare: byteLabels[i] holds the load + compare for
+        // litBytes[i] (or the trailing NUL when i == n).
         let mut i = 0
         for i <= n {
-            lines.push(byteLabels[i] + ":\n")
+            lines.push(mirLabelLine(byteLabels[i]))
             let mut ptrReg = dynReg
             if i > 0 {
                 ptrReg = self.fresh()
-                lines.push(
-                    "  " + ptrReg +
-                        " = getelementptr inbounds i8, ptr " + dynReg +
-                        ", i64 " + mirGenIntToString(i) + "\n",
-                )
+                lines.push(mirGEPInboundsI8Line(ptrReg, dynReg, mirGenIntToString(i)))
             }
             let byteReg = self.fresh()
-            lines.push("  " + byteReg + " = load i8, ptr " + ptrReg + "\n")
+            lines.push(mirLoadLine(byteReg, "i8", ptrReg))
 
             let mut expected = 0
             if i < n {
                 expected = litBytes[i]
             }
             let matchReg = self.fresh()
-            lines.push(
-                "  " + matchReg +
-                    " = icmp eq i8 " + byteReg +
-                    ", " + mirGenIntToString(expected) + "\n",
-            )
+            lines.push(mirICmpEqLine(matchReg, "i8", byteReg, mirGenIntToString(expected)))
 
             let mut nextLabel = matchLabel
             if i < n {
                 nextLabel = byteLabels[i + 1]
             }
-            lines.push(
-                "  br i1 " + matchReg +
-                    ", label %" + nextLabel +
-                    ", label %" + nomatchLabel + "\n",
-            )
+            lines.push(mirBrCondLine(matchReg, nextLabel, nomatchLabel))
             i = i + 1
         }
 
-        lines.push(matchLabel + ":\n  br label %" + doneLabel + "\n")
-        lines.push(nomatchLabel + ":\n  br label %" + doneLabel + "\n")
-        lines.push(doneLabel + ":\n")
+        // Joinpoint: matchLabel/nomatchLabel each branch to doneLabel,
+        // then a phi node selects the i1 result.
+        lines.push(mirLabelHeadWithBranch(matchLabel, doneLabel))
+        lines.push(mirLabelHeadWithBranch(nomatchLabel, doneLabel))
+        lines.push(mirLabelLine(doneLabel))
 
         let eq = self.fresh()
-        lines.push(
-            "  " + eq +
-                " = phi i1 [true, %" + matchLabel +
-                "], [false, %" + nomatchLabel + "]\n",
-        )
+        lines.push(mirPhiI1FromTwoLine(eq, matchLabel, nomatchLabel))
 
         if opIsEq {
             return MirInlineStringEqResult { finalReg: eq, lines }
         }
         let neq = self.fresh()
-        lines.push("  " + neq + " = xor i1 " + eq + ", true\n")
+        lines.push(mirXorI1NegLine(neq, eq))
         MirInlineStringEqResult { finalReg: neq, lines }
     }
 }
@@ -1386,5 +1415,152 @@ pub fn mirJoinDeclareLines(orderedDecls: List<String>) -> String {
 pub struct MirInlineStringEqResult {
     pub finalReg: String,
     pub lines: List<String>,
+}
+
+// ============================================================
+// LLVM-line builders (small pure templates).
+//
+// Each helper produces one fully-formed function-body line ending
+// with `\n`, including the leading 2-space indent the legacy
+// emitter writes via `g.fnBuf.WriteString("  ")`. Pair with
+// `MirSeq.appendFnLine` (Phase B) or splice directly into a
+// `List<String>` accumulator (the streq path).
+// ============================================================
+
+/// mirStoreLine renders `  store <ty> <val>, ptr <slot>\n`. Mirrors
+/// the most common emit shape across `mir_generator.go` —
+/// intrinsic-result stores, alloca initialisations, optional-payload
+/// writes. `slot` already includes its `%` / `@` sigil.
+pub fn mirStoreLine(ty: String, val: String, slot: String) -> String {
+    "  store " + ty + " " + val + ", ptr " + slot + "\n"
+}
+
+/// mirCallVoidLine renders `  call void @<sym>(<argList>)\n`.
+/// `argList` is pre-joined by the caller (e.g. `"ptr %list, i64 5"`).
+/// The void return shape is the runtime-action call (push/pop/clear/
+/// reverse/etc.) — caller typically discards the result.
+pub fn mirCallVoidLine(sym: String, argList: String) -> String {
+    "  call void @" + sym + "(" + argList + ")\n"
+}
+
+/// mirCallValueLine renders `  <reg> = call <retTy> @<sym>(<argList>)\n`.
+/// `reg` is the SSA register name (already `%`-prefixed). Used for
+/// runtime helpers that return a scalar — `osty_rt_list_len`,
+/// `osty_rt_strings_Compare`, etc.
+pub fn mirCallValueLine(reg: String, retTy: String, sym: String, argList: String) -> String {
+    "  " + reg + " = call " + retTy + " @" + sym + "(" + argList + ")\n"
+}
+
+/// mirGEPInboundsI8Line renders the byte-stride GEP form that hot
+/// loops use to index into a list's data area:
+///   `  <reg> = getelementptr inbounds i8, ptr <basePtr>, i64 <offDigits>\n`
+/// `offDigits` is the already-formatted decimal byte offset.
+pub fn mirGEPInboundsI8Line(reg: String, basePtr: String, offDigits: String) -> String {
+    "  " + reg + " = getelementptr inbounds i8, ptr " + basePtr +
+        ", i64 " + offDigits + "\n"
+}
+
+/// mirLoadLine renders `  <reg> = load <ty>, ptr <ptr>\n`. The plain
+/// `load` form (no `align` / `!nontemporal` / metadata hints) — the
+/// LLVM optimizer inserts the alignment from the pointer-defining
+/// instruction.
+pub fn mirLoadLine(reg: String, ty: String, ptr: String) -> String {
+    "  " + reg + " = load " + ty + ", ptr " + ptr + "\n"
+}
+
+/// mirICmpEqLine renders `  <reg> = icmp eq <ty> <lhs>, <rhs>\n`.
+/// Specialised to the `eq` predicate because that's the dominant
+/// shape (pointer equality, byte-by-byte compare in streq, etc.);
+/// other predicates use `mirBinaryOpcode`.
+pub fn mirICmpEqLine(reg: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = icmp eq " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+/// mirBrCondLine renders the conditional branch
+/// `  br i1 <cond>, label %<trueLabel>, label %<falseLabel>\n`.
+/// `cond` is the i1 SSA register. Labels are bare names (no leading
+/// `%`); the helper adds the `label %` prefix.
+pub fn mirBrCondLine(cond: String, trueLabel: String, falseLabel: String) -> String {
+    "  br i1 " + cond + ", label %" + trueLabel + ", label %" + falseLabel + "\n"
+}
+
+/// mirBrUncondLine renders the unconditional branch
+/// `  br label %<label>\n`. Caller passes a bare label name.
+pub fn mirBrUncondLine(label: String) -> String {
+    "  br label %" + label + "\n"
+}
+
+/// mirLabelLine renders `<name>:\n` — the basic-block header. Caller
+/// passes the bare label name (no leading `%`); the helper adds the
+/// trailing `:` and newline.
+pub fn mirLabelLine(name: String) -> String {
+    name + ":\n"
+}
+
+/// mirLabelHeadWithBranch renders the combined head-of-block + tail-
+/// branch shape used at the matchLabel / nomatchLabel sites of the
+/// streq lowering: `<name>:\n  br label %<target>\n`. Single helper
+/// because the legacy emitter writes both pieces in one
+/// `WriteString(":\n  br label %")` chain — mirroring the byte
+/// sequence keeps SSA / label numbering stable.
+pub fn mirLabelHeadWithBranch(name: String, target: String) -> String {
+    name + ":\n  br label %" + target + "\n"
+}
+
+/// mirPhiI1FromTwoLine renders the two-incoming-edge phi node
+/// `  <reg> = phi i1 [true, %<trueLabel>], [false, %<falseLabel>]\n`.
+/// Specialised for the i1 streq result; the constants are baked in
+/// because every site that wants this exact phi shape passes
+/// `[true, falseLabel]` and `[false, falseLabel]` (the boolean
+/// joinpoint pattern).
+pub fn mirPhiI1FromTwoLine(reg: String, trueLabel: String, falseLabel: String) -> String {
+    "  " + reg + " = phi i1 [true, %" + trueLabel +
+        "], [false, %" + falseLabel + "]\n"
+}
+
+/// mirXorI1NegLine renders the i1 negation `  <reg> = xor i1 <src>, true\n`.
+/// Used by the streq lowering to flip the equality result for the
+/// `!=` form. `src` is the SSA register holding the i1 value.
+pub fn mirXorI1NegLine(reg: String, src: String) -> String {
+    "  " + reg + " = xor i1 " + src + ", true\n"
+}
+
+/// mirStoreZeroinitLine renders `  store <ty> zeroinitializer, ptr <slot>\n`.
+/// The "zero out a slot" shape used heavily by the None / default
+/// branches in `IntrinsicListFirst` / `IntrinsicListLast` /
+/// `IntrinsicMapGet` (Option<T> result with payload zero-initialised).
+/// `ty` is the destination's full LLVM aggregate type (e.g.
+/// `%Option.i64`); `slot` is the alloca / GEP target.
+pub fn mirStoreZeroinitLine(ty: String, slot: String) -> String {
+    "  store " + ty + " zeroinitializer, ptr " + slot + "\n"
+}
+
+/// mirInsertValueAggLine renders the LLVM `insertvalue` shape used to
+/// build a struct/aggregate value field-by-field:
+///   `  <reg> = insertvalue <aggTy> <baseVal>, <fieldTy> <val>, <idxDigits>\n`
+/// `idxDigits` is the already-formatted decimal field index; `baseVal`
+/// is either `undef` for the first insert or the previous insertvalue's
+/// result register. Used to assemble Option<T> Some payloads, tuple
+/// constructions, and Result<Ok,Err> aggregates.
+pub fn mirInsertValueAggLine(
+    reg: String,
+    aggTy: String,
+    baseVal: String,
+    fieldTy: String,
+    val: String,
+    idxDigits: String,
+) -> String {
+    "  " + reg + " = insertvalue " + aggTy + " " + baseVal +
+        ", " + fieldTy + " " + val +
+        ", " + idxDigits + "\n"
+}
+
+/// mirSubLine renders the i64 subtraction
+/// `  <reg> = sub i64 <lhs>, <rhs>\n`. Specialised to i64 because the
+/// hot uses (computing `len - 1` for `IntrinsicListLast`, byte offsets
+/// in iteration) all operate at i64 width — other widths use
+/// `mirBinaryOpcode`'s general path.
+pub fn mirSubI64Line(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = sub i64 " + lhs + ", " + rhs + "\n"
 }
 

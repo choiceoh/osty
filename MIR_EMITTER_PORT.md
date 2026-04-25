@@ -67,7 +67,7 @@ untouched.
 | 12 | strings | 9197–9284 | ~7 | LOW | Partial — `encodeLLVMString`, `earliestAfter` (single + multi-needle: `mirEarliestAfter` + `mirEarliestAfterAny`), `mirInjectBeforeFirstFn` inject orchestration, and the string-pool line template ported (`mirEncodeLLVMString`, `mirStringPoolLine`); `stringLiteral` interning stays on Go (touches `g.strings`). `emitStringPool` / `emitGlobalVars` inject step now delegates through `mirInjectBeforeFirstFn`. |
 | 13 | type mapping | 9285–9375 | ~8 | LOW | **Ported** (primitive + opaque-named + head-name + optional-surface) |
 | 14 | enum layout helpers | 9376–9575 | ~10 | LOW | Partial — `llvmTypeForTupleTag` Prim / Named branches + Optional / Option / Result / Tuple name-mangling ported (`mirTupleTagForPrim`, `mirTupleTagForNamed`, `mirOptionalTypeName`, `mirOptionTypeName`, `mirResultTypeName`, `mirTupleTypeNameFromTags`); `registerEnumLayout` + `g.tupleDefs` caches deferred to Phase B |
-| 15 | helpers | 9576–9616 | ~5 | LOW | Partial — pure (`firstNonEmpty`, `isUnitType`, `isFloatType`, `isScalarLLVMType`, `llvmStdIoI1Text`) + state-bearing (`MirSeq.fresh` / `MirSeq.freshLabel` / `MirSeq.reset`) ported. Phase B start: `tempSeq` field migrated from `mirGen` into Osty `MirSeq` struct mirror. `ostyEmitter` / `flushOstyEmitter` / `storeIntrinsicResult` / `emitRuntimeRawNull` still touch other state; landing as the mirror grows |
+| 15 | helpers | 9576–9616 | ~5 | LOW | Partial — pure (`firstNonEmpty`, `isUnitType`, `isFloatType`, `isScalarLLVMType`, `llvmStdIoI1Text`) + state-bearing leaves (`MirSeq.fresh` / `MirSeq.freshLabel` / `MirSeq.reset`) + Phase B fnBuf mirror (`MirSeq.fnBuf`, `MirSeq.appendFnLine`, `MirSeq.flushFnBuf`, `MirSeq.absorbOstyEmitter`) ported. `flushOstyEmitter` Go bridge now routes through `MirSeq.absorbOstyEmitter` (Osty drains `em.body` into `seq.fnBuf`; Go drains back to `g.fnBuf`). `storeIntrinsicResult` Go body now uses the Osty `mirStoreLine` builder. `ostyEmitter` constructor stays on Go (Go `LlvmEmitter` has fields the Osty struct doesn't model — `nativeListData`/`nativeListLens`). `emitRuntimeRawNull` is mir-internal routing, no Osty change. |
 
 ## Phased plan
 
@@ -85,10 +85,12 @@ with the compile-gate generator enforcing correctness.
   inject-before-first-fn orchestration in (`mirEarliestAfterAny`,
   `mirInjectBeforeFirstFn`); `stringLiteral` interning still touches
   `g.strings` and stays on Go.
-- ⏳ §15 helpers — pure-side done (`firstNonEmpty`, unit/float/scalar
-  predicates, `llvmStdIoI1Text`); state-touching (`fresh`, `freshLabel`,
-  `ostyEmitter`, `flushOstyEmitter`, `storeIntrinsicResult`,
-  `emitRuntimeRawNull`) deferred to Phase B.
+- ✅ §15 helpers — pure-side + state-bearing leaves (`fresh`,
+  `freshLabel`, `reset`) + Phase B fnBuf mirror (`fnBuf`,
+  `appendFnLine`, `flushFnBuf`, `absorbOstyEmitter`) done.
+  `flushOstyEmitter` routes through `MirSeq.absorbOstyEmitter`;
+  `storeIntrinsicResult` uses the Osty `mirStoreLine` builder.
+  `ostyEmitter` constructor stays on Go (Go-only LlvmEmitter fields).
 - ⏳ §9 terminators — small (~120 LOC), single `emitTerm` switch. Cross-
   calls into §5 safepoint + §1 metadata — port after Phase B state.
 
@@ -228,7 +230,26 @@ list keeps new Osty clean of known landmines.
 | `mirInjectBeforeFirstFn` | `(body: String, block: String) -> String` | §3 | Splices `block` into `body` before the first `define ` / `declare ` line; appends at the end when neither marker is present. Replaces the inline rewrite-buffer pattern in `emitGlobalVars` / `emitStringPool` |
 | `mirJoinDeclareLines` | `(orderedDecls: List<String>) -> String` | §3 | Concatenates ordered `declare ...` strings with trailing newlines into one block ready for `mirInjectBeforeFirstFn`. Caller still owns the dedupe / ordering map |
 | `MirInlineStringEqResult` (struct) | `{ finalReg: String, lines: List<String> }` | §11 | Value/code split returned by `MirSeq.emitInlineStringEqLiteral`. Caller iterates `lines` (each already including leading 2-space indent + trailing newline) into `g.fnBuf`, then uses `finalReg` as the i1 result |
-| `MirSeq.emitInlineStringEqLiteral` | `(mut self, opIsEq: Bool, dynReg: String, litSym: String, litBytes: List<Int>) -> MirInlineStringEqResult` | §11 | Byte-by-byte string-equality switch with pointer-equality fast path + per-byte compare + terminating NUL check. `litBytes` is the per-byte int view of the literal (Go converts via `int(lit[i])`). Every `freshLabel` / `fresh` call mirrors the legacy emitter so `tempSeq` advances byte-stably across the port |
+| `MirSeq.emitInlineStringEqLiteral` | `(mut self, opIsEq: Bool, dynReg: String, litSym: String, litBytes: List<Int>) -> MirInlineStringEqResult` | §11 | Byte-by-byte string-equality switch with pointer-equality fast path + per-byte compare + terminating NUL check. Now expressed in terms of the small `mir*Line` builders (`mirICmpEqLine`, `mirBrCondLine`, `mirGEPInboundsI8Line`, `mirLoadLine`, `mirLabelLine`, `mirLabelHeadWithBranch`, `mirPhiI1FromTwoLine`, `mirXorI1NegLine`); SSA / label numbering still byte-stable with the legacy stream |
+| `MirSeq.fnBuf` (field) | `List<String>` | §15 | Per-function body accumulator. Phase B foundation — Osty-side mirror of `g.fnBuf strings.Builder`. Populated by `appendFnLine` / `absorbOstyEmitter`; drained by `flushFnBuf` |
+| `MirSeq.appendFnLine` | `(mut self, line: String) -> ()` | §15 | Push one fully-formed line (including indent + trailing newline) onto `fnBuf`. Mirrors `g.fnBuf.WriteString(line)` |
+| `MirSeq.flushFnBuf` | `(mut self) -> List<String>` | §15 | Return the accumulated lines and clear the buffer in one move; caller drains into `g.fnBuf` so the existing flush-to-`g.out` path stays unchanged |
+| `MirSeq.absorbOstyEmitter` | `(mut self, em: LlvmEmitter) -> ()` | §15 | Sync a Go-driven LlvmEmitter scope back into MirSeq — bumps `tempSeq` to `em.temp` and drains `em.body` into `fnBuf`. The `flushOstyEmitter` Go bridge routes through here |
+| `mirStoreLine` | `(ty: String, val: String, slot: String) -> String` | §6 | `  store <ty> <val>, ptr <slot>\n` — the most common emit shape across `mir_generator.go`. `storeIntrinsicResult` now delegates here |
+| `mirCallVoidLine` | `(sym: String, argList: String) -> String` | §6 | `  call void @<sym>(<argList>)\n` — runtime-action call (push/pop/clear/etc.); caller pre-joins `argList` |
+| `mirCallValueLine` | `(reg: String, retTy: String, sym: String, argList: String) -> String` | §6 | `  <reg> = call <retTy> @<sym>(<argList>)\n` — runtime helper that returns a scalar |
+| `mirGEPInboundsI8Line` | `(reg: String, basePtr: String, offDigits: String) -> String` | §6 | Byte-stride GEP form `  <reg> = getelementptr inbounds i8, ptr <basePtr>, i64 <offDigits>\n`; `offDigits` pre-formatted decimal |
+| `mirLoadLine` | `(reg: String, ty: String, ptr: String) -> String` | §6 | Plain load `  <reg> = load <ty>, ptr <ptr>\n` (no `align` / `!nontemporal` hints) |
+| `mirICmpEqLine` | `(reg: String, ty: String, lhs: String, rhs: String) -> String` | §6 | `  <reg> = icmp eq <ty> <lhs>, <rhs>\n` — eq-only specialisation; other predicates use `mirBinaryOpcode` |
+| `mirBrCondLine` | `(cond: String, trueLabel: String, falseLabel: String) -> String` | §9 | Conditional branch `  br i1 <cond>, label %<trueLabel>, label %<falseLabel>\n`; labels are bare names |
+| `mirBrUncondLine` | `(label: String) -> String` | §9 | Unconditional branch `  br label %<label>\n` |
+| `mirLabelLine` | `(name: String) -> String` | §9 | Basic-block header `<name>:\n`; bare label name input |
+| `mirLabelHeadWithBranch` | `(name: String, target: String) -> String` | §9 | Combined head-of-block + tail-branch `<name>:\n  br label %<target>\n` — match / nomatch joinpoint shape |
+| `mirPhiI1FromTwoLine` | `(reg: String, trueLabel: String, falseLabel: String) -> String` | §6 | Two-incoming-edge i1 phi `  <reg> = phi i1 [true, %<trueLabel>], [false, %<falseLabel>]\n` — boolean joinpoint |
+| `mirXorI1NegLine` | `(reg: String, src: String) -> String` | §6 | i1 negation `  <reg> = xor i1 <src>, true\n` — used by streq for the `!=` form |
+| `mirStoreZeroinitLine` | `(ty: String, slot: String) -> String` | §6 | `  store <ty> zeroinitializer, ptr <slot>\n` — None-branch slot zeroing for Option<T> in `IntrinsicListFirst`/`IntrinsicListLast`/`IntrinsicMapGet` |
+| `mirInsertValueAggLine` | `(reg: String, aggTy: String, baseVal: String, fieldTy: String, val: String, idxDigits: String) -> String` | §6 | `  <reg> = insertvalue <aggTy> <baseVal>, <fieldTy> <val>, <idxDigits>\n` — field-by-field aggregate construction (Some payload, tuple, Result) |
+| `mirSubI64Line` | `(reg: String, lhs: String, rhs: String) -> String` | §6 | i64 subtraction `  <reg> = sub i64 <lhs>, <rhs>\n` — len-1 / byte-offset hot uses; other widths route through `mirBinaryOpcode` |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as
