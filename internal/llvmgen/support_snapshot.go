@@ -1634,6 +1634,17 @@ func llvmClangLinkBinaryArgs(target string, objectPaths []string, binaryPath str
 	// the LTO inlining step and the runtime helpers stay un-inlined.
 	func() struct{} { args = append(args, "-O3"); return struct{}{} }()
 	func() struct{} { args = append(args, "-flto=thin"); return struct{}{} }()
+	// Bump ThinLTO's per-callsite import-instruction budget. Default
+	// `-import-instr-limit=100` is tuned for tiny accessors; Osty's
+	// runtime hot path (`osty_rt_map_get_string` and friends) expands
+	// to ~150-300 instructions when lock+raw+unlock collapses, so the
+	// importer leaves the wrapper out-of-line despite
+	// `__attribute__((always_inline))`. Lifting the limit lets the
+	// importer pull in the full body and honour the directive.
+	func() struct{} {
+		args = append(args, "-Wl,-mllvm,-import-instr-limit=500")
+		return struct{}{}
+	}()
 	// Osty: toolchain/llvmgen.osty:1197:5
 	for _, objectPath := range objectPaths {
 		// Osty: toolchain/llvmgen.osty:1198:9
