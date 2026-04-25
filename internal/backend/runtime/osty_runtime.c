@@ -409,14 +409,30 @@ typedef struct osty_gc_header {
      * list is untouched. */
     struct osty_gc_header *next_gen;
     struct osty_gc_header *prev_gen;
-    int64_t object_kind;
-    int64_t byte_size;
-    /* root_count / pin_count are bounded by the number of active
-     * `osty_gc_root_bind` / `_pin` handles. 32 bits (~2.1B) is far
-     * past anything an Osty program would credibly hold simultaneously
-     * — a real program would OOM long before. Shrinking these from
-     * i64 to i32 saves 8 bytes per header. The INT*_MAX overflow
-     * guards in the bind/pin paths are updated accordingly. */
+    /* Aggressive shrink follow-up to #910 (which took the header from
+     * 112 to 96 bytes via `site` removal + i32 counters). Tighten
+     * `object_kind` and `byte_size` so the kind/size/counter
+     * quadruple fits in 16 bytes instead of 32:
+     *
+     * - `object_kind`: u16. Values are sparse (1, 1024-1030) but all
+     *                  fit in 16 bits. Keeping the original sparse
+     *                  constants avoids touching the IR-side
+     *                  `llvmClosureEnvGcKind = 1029` literal and the
+     *                  `OSTY_GC_KIND_GENERIC = 1` initialiser flow
+     *                  in `osty_gc_alloc_v1`.
+     * - `byte_size`:   u32. Single-payload allocations are capped
+     *                  at 4 GiB by the surrounding alloc paths.
+     *                  Programs that need more either go humongous
+     *                  or stream through bytes/list slabs. An
+     *                  explicit `payload_size > UINT32_MAX` guard
+     *                  is added at every alloc entry so the
+     *                  truncation in `osty_gc_header_init*` is safe.
+     *
+     * Combined with the #910 i32 counters, this row goes from 32
+     * bytes (4× i64) down to 16 bytes (u16 + u32 + 2× i32 with
+     * natural alignment). */
+    uint16_t object_kind;
+    uint32_t byte_size;
     int32_t root_count;
     int32_t pin_count;
     /* Phase C: explicit tri-colour (`OSTY_GC_COLOR_*`). `marked` is
@@ -2072,7 +2088,9 @@ static size_t osty_gc_total_size_for_payload_size(size_t payload_size) {
 }
 
 static size_t osty_gc_header_total_size(const osty_gc_header *header) {
-    if (header == NULL || header->byte_size <= 0) {
+    /* `byte_size` is now u32, so it can't be negative — only
+     * zero is invalid. */
+    if (header == NULL || header->byte_size == 0) {
         osty_rt_abort("invalid GC header size");
     }
     if ((size_t)header->byte_size > SIZE_MAX - sizeof(osty_gc_header)) {
@@ -2614,8 +2632,12 @@ static void osty_gc_note_allocation(size_t payload_size) {
     int64_t pressure_limit = osty_gc_pressure_limit_now();
     int64_t nursery_limit = osty_gc_nursery_limit_now();
 
-    if (payload_size > (size_t)INT64_MAX) {
-        osty_rt_abort("GC payload size overflow");
+    /* `byte_size` field is now u32. Reject allocations > 4 GiB up
+     * front so the truncation in `osty_gc_header_init*` is safe.
+     * Programs that need a larger single payload should stream
+     * through bytes/list slabs. */
+    if (payload_size > (size_t)UINT32_MAX) {
+        osty_rt_abort("GC payload size exceeds 4 GiB limit");
     }
     osty_gc_allocated_since_collect += (int64_t)payload_size;
     osty_gc_allocated_since_minor += (int64_t)payload_size;
@@ -2635,8 +2657,12 @@ static void osty_gc_note_allocation(size_t payload_size) {
 static void osty_gc_note_old_allocation(size_t payload_size) {
     int64_t pressure_limit = osty_gc_pressure_limit_now();
 
-    if (payload_size > (size_t)INT64_MAX) {
-        osty_rt_abort("GC payload size overflow");
+    /* `byte_size` field is now u32. Reject allocations > 4 GiB up
+     * front so the truncation in `osty_gc_header_init*` is safe.
+     * Programs that need a larger single payload should stream
+     * through bytes/list slabs. */
+    if (payload_size > (size_t)UINT32_MAX) {
+        osty_rt_abort("GC payload size exceeds 4 GiB limit");
     }
     osty_gc_allocated_since_collect += (int64_t)payload_size;
     osty_gc_allocated_bytes_total += (int64_t)payload_size;
@@ -2726,8 +2752,13 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind, con
             }
         }
     }
-    header->object_kind = object_kind;
-    header->byte_size = (int64_t)payload_size;
+    /* Cast to the narrower header types. `payload_size` is bounded
+     * by the `payload_size > UINT32_MAX` reject in
+     * `osty_gc_note_allocation` / `_old_allocation`, so the
+     * truncation here is safe; `object_kind` fits in u16 by the
+     * sparse-but-bounded constants in the OSTY_GC_KIND_* enum. */
+    header->object_kind = (uint16_t)object_kind;
+    header->byte_size = (uint32_t)payload_size;
     header->trace = trace;
     header->destroy = destroy;
     /* `site` field removed — see osty_gc_header definition. The
@@ -2813,8 +2844,13 @@ static void *osty_gc_allocate_pinned_managed(size_t byte_size,
             osty_rt_abort("out of memory");
         }
     }
-    header->object_kind = object_kind;
-    header->byte_size = (int64_t)payload_size;
+    /* Cast to the narrower header types. `payload_size` is bounded
+     * by the `payload_size > UINT32_MAX` reject in
+     * `osty_gc_note_allocation` / `_old_allocation`, so the
+     * truncation here is safe; `object_kind` fits in u16 by the
+     * sparse-but-bounded constants in the OSTY_GC_KIND_* enum. */
+    header->object_kind = (uint16_t)object_kind;
+    header->byte_size = (uint32_t)payload_size;
     header->trace = trace;
     header->destroy = destroy;
     /* `site` field removed — see osty_gc_header definition. The
