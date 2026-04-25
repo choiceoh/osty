@@ -706,6 +706,16 @@ const (
 	// materialising an Option<V> struct and immediately unwrapping
 	// it, which `m.get(k) ?? d` would otherwise do.
 	IntrinsicMapGetOr
+
+	// IntrinsicStringSplitInto reuses an existing List<String> as the
+	// split destination instead of allocating a fresh one. Void result
+	// (Dest must be nil). Args: [out_list, value, sep]. Synthesised by
+	// the `hoistNonEscapingSplitInLoops` MIR pass when a loop-body
+	// `let parts = expr.split(sep)` does not escape — the pass moves
+	// the list allocation to the loop preheader and switches the
+	// per-iteration call to this in-place form. Lowers to
+	// `osty_rt_strings_SplitInto(out, value, sep)`.
+	IntrinsicStringSplitInto
 )
 
 // StorageLiveInstr marks a local as alive. Optional; backends that do
@@ -1688,6 +1698,8 @@ func (k IntrinsicKind) String() string {
 		return "list_slice"
 	case IntrinsicMapGetOr:
 		return "map_get_or"
+	case IntrinsicStringSplitInto:
+		return "string_split_into"
 	}
 	return "invalid"
 }

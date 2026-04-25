@@ -1199,6 +1199,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
 		mir.IntrinsicStringEndsWith, mir.IntrinsicStringIndexOf, mir.IntrinsicStringSplit,
+		mir.IntrinsicStringSplitInto,
 		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring:
 		return true
 	// Concurrency — channels / tasks / select / cancellation / helpers.
@@ -4549,6 +4550,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicStringToInt, mir.IntrinsicStringToFloat,
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
 		mir.IntrinsicStringEndsWith, mir.IntrinsicStringIndexOf, mir.IntrinsicStringSplit,
+		mir.IntrinsicStringSplitInto,
 		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring:
 		return g.emitStringIntrinsic(i)
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
@@ -6314,6 +6316,9 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 // MIR `{i64 disc, i64 payload}` Result layout after validating the
 // parse at the runtime boundary.
 func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
+	if i.Kind == mir.IntrinsicStringSplitInto {
+		return g.emitStringSplitInto(i)
+	}
 	if i.Kind == mir.IntrinsicStringConcat {
 		if len(i.Args) == 0 {
 			return unsupported("mir-mvp", "string_concat with no args")
@@ -6674,6 +6679,44 @@ func (g *mirGen) emitStringSplit(i *mir.IntrinsicInstr, strReg string) error {
 	result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: strReg}, {typ: "ptr", name: sepReg}})
 	g.flushOstyEmitter(em)
 	return g.storeIntrinsicResult(i, result)
+}
+
+// emitStringSplitInto lowers the void-returning in-place split form
+// produced by the `hoistNonEscapingSplitInLoops` MIR pass. Args are
+// `[out_list, value, sep]` — the runtime clears `out_list` then
+// refills it with the pieces, reusing the previously-grown backing
+// array. Dest must be nil (the side effect is the only result).
+func (g *mirGen) emitStringSplitInto(i *mir.IntrinsicInstr) error {
+	if len(i.Args) != 3 {
+		return unsupported("mir-mvp", "string_split_into arity")
+	}
+	if i.Dest != nil {
+		return unsupported("mir-mvp", "string_split_into has Dest")
+	}
+	outReg, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+	if err != nil {
+		return err
+	}
+	if !isStringLLVMType(i.Args[1].Type()) {
+		return unsupported("mir-mvp", fmt.Sprintf("string_split_into value type %s", mirTypeString(i.Args[1].Type())))
+	}
+	valReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+	if err != nil {
+		return err
+	}
+	if !isStringLLVMType(i.Args[2].Type()) {
+		return unsupported("mir-mvp", fmt.Sprintf("string_split_into sep type %s", mirTypeString(i.Args[2].Type())))
+	}
+	sepReg, err := g.evalOperand(i.Args[2], i.Args[2].Type())
+	if err != nil {
+		return err
+	}
+	sym := "osty_rt_strings_SplitInto"
+	g.declareRuntime(sym, "declare void @"+sym+"(ptr, ptr, ptr)")
+	em := g.ostyEmitter()
+	em.body = append(em.body, fmt.Sprintf("  call void @%s(ptr %s, ptr %s, ptr %s)", sym, outReg, valReg, sepReg))
+	g.flushOstyEmitter(em)
+	return nil
 }
 
 // emitStringBinaryBoolIntrinsic dispatches `.startsWith(s)` /

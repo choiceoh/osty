@@ -49,6 +49,10 @@ func optimizeFunction(fn *Function) {
 	if fn == nil || fn.IsExternal || fn.IsIntrinsic {
 		return
 	}
+	// Structural rewrite — runs once before the peephole fixed point so
+	// the alias copy / new buffer local feed copy-prop / dead-assign
+	// elimination on the same Optimize call.
+	hoistNonEscapingSplitInLoops(fn)
 	const maxIters = 16
 	for i := 0; i < maxIters; i++ {
 		changed := false

@@ -5098,6 +5098,50 @@ void *osty_rt_strings_Split(const char *value, const char *sep) {
     return out;
 }
 
+/* osty_rt_strings_SplitInto reuses an existing List<String> as the
+ * destination instead of allocating a fresh one each call. The MIR
+ * `hoistNonEscapingSplitInLoops` pass rewrites tight-loop calls of the
+ * shape `let parts = row.split(",")` (where `parts` doesn't escape the
+ * loop body) into a hoisted `out = list_new()` at the preheader plus a
+ * per-iteration `SplitInto(out, row, ",")` here. The list backing array
+ * stabilises after the first iteration so subsequent calls only allocate
+ * the per-piece strings. csv_parse-style 100k×5-piece splits drop ~100k
+ * `osty_rt_list_new` allocs and the early `realloc` grows. */
+void osty_rt_strings_SplitInto(void *raw_out, const char *value, const char *sep) {
+    osty_rt_list *out;
+    const char *cursor;
+    const char *next;
+    size_t sep_len;
+
+    if (raw_out == NULL) {
+        osty_rt_abort("split_into out is null");
+    }
+    out = (osty_rt_list *)raw_out;
+    /* Preserve the previously-stamped layout (elem_size = sizeof(ptr),
+     * trace_elem = osty_gc_mark_slot_v1) by replaying push_ptr through
+     * osty_rt_list_clear then push. clear() leaves data/cap untouched. */
+    osty_rt_list_clear(out);
+    if (value == NULL) {
+        return;
+    }
+    if (sep == NULL || sep[0] == '\0') {
+        while (*value != '\0') {
+            char *piece = osty_rt_string_dup_range(value, 1);
+            osty_rt_list_push_ptr(out, piece);
+            value += 1;
+        }
+        return;
+    }
+    sep_len = strlen(sep);
+    cursor = value;
+    while ((next = strstr(cursor, sep)) != NULL) {
+        char *piece = osty_rt_string_dup_range(cursor, (size_t)(next - cursor));
+        osty_rt_list_push_ptr(out, piece);
+        cursor = next + sep_len;
+    }
+    osty_rt_list_push_ptr(out, osty_rt_string_dup_range(cursor, strlen(cursor)));
+}
+
 // osty_rt_strings_SplitN caps the output at `n` pieces, matching the
 // pure-Osty body in internal/stdlib/modules/strings.osty:
 //   n == 0 → empty list
