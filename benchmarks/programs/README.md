@@ -66,47 +66,49 @@ multiple seconds per invocation on most programs, so the small default
 ```
 program          go (ms)    osty (ms)   osty/go
 ---------------  -------    ---------   -------
-lru-sim             8.15        66.11       8x
-dep-resolver        3.40       436.14     128x
-markdown-stats      3.52      1103.92     314x
-expr-calc           3.81      2087.49     548x
-log-aggregator      9.25     21730.98    2349x
+lru-sim             9.07        65.89      7.3x
+expr-calc           5.53        48.56      8.8x
+markdown-stats      3.87        41.42     10.7x
+dep-resolver        2.95        31.86     10.8x
+log-aggregator     12.06       248.84     20.6x
 ```
 
-(macOS/arm64, Apple Silicon, `--runs 5 --warmup 1`. Reproduce with
+(macOS/arm64, Apple Silicon, `--runs 10 --warmup 2`. Reproduce with
 `./run-all.sh`; raw JSON per-program in `<prog>/.last-run.json`,
 suite summary in `.last-results.md`.)
 
-**What the spread is telling us.** Every program does roughly the
-same kind of work (parse-ish → loop → group → format) but the gap
-ranges from 8× to 2349×. The signal that pops out:
+### Where this is from
 
-- **lru-sim — 8×**: keys come from a 45-entry namespace and are
-  reused throughout. Map ops touch already-interned strings; almost
-  no String allocation in the hot loop.
-- **dep-resolver — 128×**: 10,000 module names *are* reused (built
-  once, then read), so the bulk of the run is List<List<Int>>
-  traversal and Int math. The `split("-")` for prefix histogram is
-  the only hot allocator.
-- **markdown-stats — 314×**: 20,000 lines × `"## " + w1 + " " + w2 + " " + w3`
-  → ~5 String allocs per line. Hot path is `String + String` and
-  `Map<String,Int>` insert.
-- **expr-calc — 548×**: 5,000 expressions, each goes through
-  String.split → shunting-yard with String stack → postfix String list →
-  evaluator. String-heavy at every stage; even tiny per-token allocs
-  multiply by ~9 tokens × 5,000 expressions.
-- **log-aggregator — 2349×**: 50,000 log lines, each rebuilt via 6
-  concats during generation, then split twice during processing.
-  Maximum String pressure of the suite.
+Initial measurements ranged from 8× (lru-sim) to **2349×**
+(log-aggregator). Profiling the worst case showed ~99% of
+log-aggregator's CPU sat inside `osty_gc_post_write_v1` — the GC
+write barrier — almost entirely in the recursive-mutex acquire/release
+that wrapped every barrier call, plus a remembered-set append that
+the current generational marker doesn't actually consume for YOUNG
+owners. Two surgical changes to `internal/backend/runtime/osty_runtime.c`:
 
-The takeaway is the **String allocator and Map<String,_> hash path**
-are the dominant Osty-side cost. Programs that reuse a small fixed
-set of Strings (lru-sim) close the gap to single-digit ratios;
-programs that allocate a new String per item (log-aggregator) pay
-~2000× per item. Native `String + String` and `Map<String,_>`
-inlining are the two perf-backlog items that would compress this
-spread the most (MEMORY: `bench_perf_backlog`,
-`stdlib_injection_hang`).
+- **Single-mutator skip** for the recursive lock (the barrier runs
+  in mutator code, the only writer to GC state under the STW
+  marker).
+- **YOUNG-owner skip** for the remembered-set append: the minor
+  collector reaches YOUNG values transitively through their owner's
+  fields, so the entry is pure overhead unless the owner is OLD or
+  pinned.
+
+Both are correctness-preserving — the remembered set still records
+exactly the OLD→YOUNG edges the minor collector relies on. The
+spread collapsed from **8×–2349× → 7×–21×**, a ~114× speedup on
+log-aggregator alone (21.7 s → 0.25 s wall-clock for the same 50,000
+lines).
+
+### What's left
+
+The next visible costs are still String-shaped — `Map<String,_>`
+insert/get hashing and `String + String` concat each allocate fresh
+managed buffers per call. Both are perf-backlog items
+(MEMORY: `bench_perf_backlog`, `stdlib_injection_hang`) and would
+close the remaining gap further; lru-sim's 7× floor is roughly
+where the suite would settle once those land.
 
 ## What this is measuring vs. osty-vs-go
 
