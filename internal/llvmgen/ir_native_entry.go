@@ -2692,7 +2692,23 @@ func nativeFieldAssignPathFromIR(
 		return nil, nil, false
 	}
 	fieldPath := make([]*llvmNativeFieldPath, 0, len(fields))
+	// Recovery: when the IR Ident's per-node type wasn't populated
+	// by the embedded checker (the `let pair = Pair {...}` shorthand
+	// records `Decl == IdentPat` whose type isn't filled by the
+	// SymTypes overlay), consult the native-owned scope binding map
+	// for the name. `bindScopeName` records `pair → struct(Pair)`
+	// when lowering the let stmt, so the fallback covers the same
+	// shape the AST checker missed without dragging the synthesized
+	// type back into the IR (which would regress MIR's mut-receiver
+	// path that depends on poisoned-type fallback ABI).
 	currentType := base.Type()
+	if currentType == nil || currentType == ostyir.ErrTypeVal {
+		if info, ok := ctx.lookupScopeName(base.Name); ok && info.kind == nativeExprInfoStruct {
+			if structInfo := ctx.structsByName[info.structName]; structInfo != nil {
+				currentType = &ostyir.NamedType{Name: info.structName}
+			}
+		}
+	}
 	for _, fieldExpr := range fields {
 		info, ok := nativeStructInfoFromType(ctx, currentType)
 		if !ok {
@@ -2707,6 +2723,19 @@ func nativeFieldAssignPathFromIR(
 			fieldIndex: field.index,
 		})
 		currentType = fieldExpr.Type()
+		// Cascade the same recovery: when the field's per-node type
+		// is also poisoned (or `nil`), reconstruct it from the
+		// resolved struct field's recorded LLVM shape so a
+		// subsequent projection step still has a concrete type to
+		// look up. Today this only fires on shallow `pair.left =
+		// 3` patterns; deeper chains follow the same recovery via
+		// the loop, so `inner.pair.left = 3` works as long as the
+		// outer struct binding was registered in scopeNames.
+		if currentType == nil || currentType == ostyir.ErrTypeVal {
+			if fieldInfo, ok := info.byName[fieldExpr.Name]; ok {
+				currentType = fieldInfo.irType
+			}
+		}
 	}
 	return base, fieldPath, true
 }
@@ -2848,6 +2877,16 @@ func nativeConstFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (nativeConstV
 		return nativeBinaryConst(left, right, e.Op)
 	case *ostyir.StructLit:
 		info, ok := nativeStructInfoFromType(ctx, e.Type())
+		if !ok && e.TypeName != "" {
+			// Recovery: fall back to the syntactic head TypeName
+			// when the embedded checker didn't pin the StructLit's
+			// `T` field. The native ctx already has the struct info
+			// indexed by name from the project pass; this avoids a
+			// false bail-out for `let g: Point = Point{...}` shapes
+			// where the literal's T was dropped to ErrType.
+			info = ctx.structsByName[e.TypeName]
+			ok = info != nil
+		}
 		if !ok || e.Spread != nil {
 			return nativeConstValue{}, false
 		}
@@ -3481,6 +3520,21 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 			return nil, false
 		}
 		ownerName, ok := nativeMethodOwnerName(e.Receiver.Type())
+		if !ok {
+			// Recovery: if the receiver Ident's per-node type wasn't
+			// populated by the embedded checker, look up the
+			// scoped-binding type recorded by the let-stmt handler.
+			// Mirrors the AssignStmt-side recovery in
+			// `nativeFieldAssignPathFromIR`.
+			if recvIdent, recvOk := e.Receiver.(*ostyir.Ident); recvOk {
+				if info, scopeOk := ctx.lookupScopeName(recvIdent.Name); scopeOk && info.kind == nativeExprInfoStruct {
+					if _, exists := ctx.structsByName[info.structName]; exists {
+						ownerName = info.structName
+						ok = true
+					}
+				}
+			}
+		}
 		if !ok {
 			return nil, false
 		}
