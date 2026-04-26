@@ -585,6 +585,11 @@ func llvmNativeFnAttrString(fn *llvmNativeFunction) string {
 // list's closing paren and the opening brace. `fnAttrs == ""` produces
 // output byte-identical to `llvmRenderFunction`.
 func llvmRenderFunctionWithAttrs(ret string, name string, params []*LlvmParam, fnAttrs string, body []string) string {
+	// See llvmRenderFunction / alloca_hoist.go: emitter writes `alloca`
+	// straight into emitter.body at whatever cursor position is current,
+	// so loop-body lets accumulate stack slots per iteration. Hoisting
+	// to the entry block makes the slot reusable.
+	body = hoistAllocasToEntry(body)
 	var header string
 	if fnAttrs == "" {
 		header = fmt.Sprintf("define %s @%s(%s) {", ret, name, llvmParams(params))
