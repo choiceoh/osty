@@ -52,10 +52,13 @@ Pipeline-Clean timeout 도 풀렸다 (5분+ → 246s 정상 종료, 다음 wall 
   fallback 경로에서 발생. struct field 의 default value 가 LLVM runtime type
   surface 미지원. surface 확장 또는 default 제거 필요. `LLVM_BACKEND_CORPUS.md`
   에 LLVM011 추적 항목.
-- **426 ErrType locals (floor=40)** — Phase 0 가 PR #921 의 12개 type-error 중
-  11개를 제거했지만 (474 → 426, -48), 잔여 ~386 leaks 는 **checker 가 통과한
+- **374 ErrType locals (floor=40)** — Phase 0 가 PR #921 의 12개 type-error
+  중 11개를 제거하고 (474 → 426), Phase 3a 가 추가로 -52 (426 → 374,
+  `lowerMatch` scrutinee recovery). 잔여 ~334 leaks 는 **checker 가 통과한
   소스인데 ir.Lower / ir.Monomorphize 에서 타입을 못 잡는 사이트** 다 (`osty
-  check toolchain` 자체는 EXIT=0). 분포 (probe 결과 상위 10개):
+  check toolchain` 자체는 EXIT=0).
+
+  Phase 3a 분포 (probe 결과 상위 10개, 167 functions affected):
 
   | count | function |
   |---:|---|
@@ -64,17 +67,30 @@ Pipeline-Clean timeout 도 풀렸다 (5분+ → 246s 정상 종료, 다음 wall 
   | 12 | `llvmNativeEmitStmt` |
   | 10 | `hirOptimizeVisitModule` |
   | 9  | `hirReachExpr` |
-  | 8  | `pmTryCompileLitSwitch` |
-  | 7  | `hirReachExprAsMethods` |
   | 7  | `llvmNativeEmitFieldAssign` |
-  | 6  | `hirWalkVisitExpr` (×2 — same name in different scopes) |
+  | 7  | `hirReachExprAsMethods` |
+  | 6  | `mirDeadAssignElimBlock` |
+  | 6  | `hirWalkVisitExpr` |
   | 6  | `monoScanRoots` |
 
-  공통 패턴: 큰 `match expr.kind` 디스패치에서 매 arm 의 local binding (`let
-  folded = ...`) 이 ErrType 으로 떨어진다. 단일 파일 머지가 만드는 generic
-  instantiation context 에서 monomorph 이 inference 를 못 하는 케이스로 추정.
-  실제 multi-file 컴파일에서는 발생 안 함. 후속 fix 는 ir/mir lowering 의
-  recovery helper 를 generic-call site 에 확장하는 작업.
+  공통 패턴: 큰 `match expr.kind` 디스패치에서 `let folded = call(...)` 또는
+  `let kind = e.field` 이 ErrType 으로 떨어진다. Phase 3a (`lowerMatch`
+  scrutinee recovery) 가 cascade 의 seed (`_scrut` local) 를 차단했지만,
+  arm 안의 사용자 정의 enum variant ident 와 chained field/index access 의
+  recovery 는 아직 미흡. 단일 파일 머지가 만드는 generic instantiation
+  context 에서 monomorph 이 inference 를 못 하는 케이스로 추정. 실제
+  multi-file 컴파일에서는 발생 안 함.
+
+  Phase 3b 후보 (추가 진입 비용 낮음):
+  - `identTypeFromDecl` (`internal/ir/lower.go`) 에 `*ast.Variant` case 추가
+    — 현재 nil 반환 → 부모 enum 이름으로 `&ast.NamedType` 합성. 변수
+    `let mut kind = HirSwitchUnknown` 같은 bare variant ident 가 ErrType
+    으로 안 떨어지게 된다. (resolver 가 Variant Symbol 에 부모 enum 백포인터
+    를 안 보존하므로 lookup 헬퍼 신설 필요.)
+  - `bindingTypeFromAST` (`internal/ir/lower.go`) 가 `StructLit/ParenExpr`
+    만 처리 — `CallExpr` (recoverFnDeclReturnType 재사용), `IfExpr` (양쪽
+    branch 결과 type), `FieldExpr` (recoverFieldType 재사용), `IndexExpr`
+    (List<T>[i]→T) 추가.
 
 이 두 wall 은 현재 Phase 1 (E0553) 또는 1c.5 (Go resolver 삭제) 와는 독립이라
 별도 트랙으로 추적.

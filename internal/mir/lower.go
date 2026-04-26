@@ -1636,6 +1636,16 @@ func (bs *bodyState) lowerMatchExprInto(m *ir.MatchExpr, dest LocalID, destT Typ
 func (bs *bodyState) lowerMatch(scrutinee ir.Expr, arms []*ir.MatchArm, tree ir.DecisionNode, sp Span, dest *LocalID, destT Type) {
 	bs.pushScope()
 	scrutT := scrutinee.Type()
+	// Recover when the scrutinee carries an ErrType — same recovery
+	// chain that lowerLet uses. Otherwise `_scrut` becomes the seed of
+	// the cascade in `match e.kind { ... }` (the dominant pattern in
+	// the merged toolchain probe), and every arm-pattern binding
+	// inherits ErrType via UseRV propagation.
+	if isPoisonType(scrutT) {
+		if rt := bs.recoverOperandType(scrutinee); rt != nil && !isPoisonType(rt) {
+			scrutT = rt
+		}
+	}
 	if scrutT == nil {
 		scrutT = ir.ErrTypeVal
 	}
