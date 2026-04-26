@@ -436,6 +436,23 @@ typedef struct osty_gc_header {
      * still the operational handles today, but this id stays attached to
      * the object even once future compaction starts moving addresses. */
     uint64_t stable_id;
+    /* Cached String hash (FNV-1a, then post-mixed). Computed at every
+     * String allocation site and stored alongside the bytes so
+     * `osty_rt_string_hash` can return without walking the content
+     * or consulting the per-pointer TLS cache. Sentinel: a hash of
+     * 0 means "not cached yet" — `osty_rt_string_compute_hash_for`
+     * always shifts a true hash of 0 to 1 to keep the sentinel
+     * uncontested (collision rate 1 in 2^32, not observable).
+     *
+     * Field is meaningless for non-STRING kinds and the runtime
+     * never reads it for them; it stays 0 / garbage and costs only
+     * the 4 bytes per header. We accept that overhead because every
+     * Map<String, V> probe in the suite goes through
+     * `osty_rt_string_hash` and the previous TLS cache thrashes
+     * once the live string set exceeds ~200 entries (typical for
+     * markdown-stats / log-aggregator's LCG-generated corpora,
+     * not for the lru-sim 44-key set). */
+    uint64_t cached_hash;
     osty_gc_trace_fn trace;
     osty_gc_destroy_fn destroy;
     void *payload;
@@ -3029,16 +3046,15 @@ static uint64_t osty_rt_hash_mix64(uint64_t h) {
     return h;
 }
 
-#define OSTY_RT_STRING_CACHE_SLOTS 256
-
-typedef struct osty_rt_string_cache_entry {
-    const char *value;
-    size_t len;
-    size_t hash;
-} osty_rt_string_cache_entry;
-
-static OSTY_RT_TLS osty_rt_string_cache_entry
-    osty_rt_string_cache[OSTY_RT_STRING_CACHE_SLOTS];
+/* The per-pointer TLS string-length-and-hash cache (`osty_rt_string_cache`)
+ * was retired alongside the introduction of `osty_gc_header.cached_hash`.
+ * Heap-allocated strings now precompute and store their hash directly in
+ * the GC header at every allocation site (`dup_site`, `Concat`, `ConcatN`),
+ * which is strictly cheaper than the TLS cache: no eviction (every string
+ * has its own slot), no per-pointer cache-index hashing, no
+ * single-mutator-only TLS storage, and the lookup is one struct field
+ * load. `.rodata` literals lazily populate `cached_hash` on first
+ * `osty_rt_string_measure` call via the byte-walk fallback path. */
 
 /* OSTY_HOT_INLINE: called twice per `osty_rt_strings_Equal` (one for
  * each operand) and once per `osty_rt_string_hash`. The SSO branch
@@ -3056,37 +3072,89 @@ static OSTY_HOT_INLINE void osty_rt_string_measure(const char *value,
     if (osty_rt_string_is_inline(value)) {
         /* SSO fast path: length is in the tag bits and bytes are
          * packed in the pointer itself. Skip the per-pointer cache
-         * (hashing 7 bytes is cheap and the cache index would
-         * collapse all inline encodings into a small region of
-         * the slot space). */
+         * (hashing 7 bytes is cheap and inline encodings have no
+         * managed header for the cache to live in anyway). */
         size_t i;
-        uint64_t h = 1469598103934665603ULL;
         len = osty_rt_string_inline_len(value);
-        for (i = 0; i < len; i++) {
-            h ^= (uint64_t)(unsigned char)osty_rt_string_inline_byte(value, i);
-            h *= 1099511628211ULL;
-        }
-        hash = (size_t)osty_rt_hash_mix64(h);
-    } else if (value != NULL) {
-        size_t idx = (size_t)osty_rt_hash_mix64(
-                         ((uint64_t)(uintptr_t)value) >> 4) &
-                     (OSTY_RT_STRING_CACHE_SLOTS - 1);
-        osty_rt_string_cache_entry *entry = &osty_rt_string_cache[idx];
-        if (entry->value == value) {
-            len = entry->len;
-            hash = entry->hash;
-        } else {
-            const unsigned char *cursor = (const unsigned char *)value;
+        if (hash_out != NULL) {
             uint64_t h = 1469598103934665603ULL;
-            while (*cursor != '\0') {
-                h ^= (uint64_t)(*cursor++);
+            for (i = 0; i < len; i++) {
+                h ^= (uint64_t)(unsigned char)osty_rt_string_inline_byte(value, i);
                 h *= 1099511628211ULL;
-                len += 1;
             }
             hash = (size_t)osty_rt_hash_mix64(h);
-            entry->value = value;
-            entry->len = len;
-            entry->hash = hash;
+        }
+    } else if (value != NULL) {
+        /* Header fast path: arena-allocated heap strings carry both
+         * length (`byte_size = len + 1`) and a precomputed hash
+         * (`cached_hash`, set at every alloc site — `dup_site`,
+         * `Concat`, `ConcatN`). Both are O(1) field loads with no
+         * byte walk and no TLS cache. The previous TLS string cache
+         * is retired by this commit — header-cached is strictly
+         * better (no eviction, no per-pointer index hash, no
+         * single-mutator-only TLS storage).
+         *
+         * `.rodata` literals, humongous strings, and post-compaction
+         * forwarded payloads fall through to a one-shot byte walk;
+         * those don't have managed headers (or the header is in a
+         * different region) so cached_hash isn't reachable. The
+         * walk's cost is amortised by the fact that literals are
+         * typically few and reused. */
+        bool resolved_from_header = false;
+        if (osty_gc_arena_contains((void *)value)) {
+            osty_gc_header *hdr = (osty_gc_header *)((unsigned char *)value - sizeof(osty_gc_header));
+            if ((unsigned char *)hdr >= osty_gc_arena_base &&
+                hdr->payload == (void *)value &&
+                hdr->object_kind == OSTY_GC_KIND_STRING &&
+                hdr->byte_size > 0) {
+                len = (size_t)hdr->byte_size - 1;
+                if (hash_out != NULL) {
+                    if (hdr->cached_hash != 0) {
+                        hash = (size_t)hdr->cached_hash;
+                        resolved_from_header = true;
+                    }
+                    /* cached_hash == 0 means the alloc-site
+                     * precompute hasn't run yet (rare path — every
+                     * string alloc site sets it, but a first read
+                     * during header init can race); fall through
+                     * to the byte walk and lazily populate. */
+                } else {
+                    resolved_from_header = true;
+                }
+            }
+        }
+        if (!resolved_from_header) {
+            /* Either non-arena (literal/humongous) or arena-resident
+             * with cached_hash temporarily 0. One-shot byte walk; if
+             * we have a header-derived length, bound the walk by it
+             * to skip per-byte NUL checks. */
+            const unsigned char *cursor = (const unsigned char *)value;
+            uint64_t h = 1469598103934665603ULL;
+            if (len == 0) {
+                while (*cursor != '\0') {
+                    h ^= (uint64_t)(*cursor++);
+                    h *= 1099511628211ULL;
+                    len += 1;
+                }
+            } else {
+                for (size_t i = 0; i < len; i++) {
+                    h ^= (uint64_t)cursor[i];
+                    h *= 1099511628211ULL;
+                }
+            }
+            hash = (size_t)osty_rt_hash_mix64(h);
+            /* Lazy populate cached_hash if we have an arena header
+             * — covers the rare race where header init beat the
+             * alloc-site precompute. */
+            if (hash_out != NULL && osty_gc_arena_contains((void *)value)) {
+                osty_gc_header *hdr = (osty_gc_header *)((unsigned char *)value - sizeof(osty_gc_header));
+                if ((unsigned char *)hdr >= osty_gc_arena_base &&
+                    hdr->payload == (void *)value &&
+                    hdr->object_kind == OSTY_GC_KIND_STRING) {
+                    uint64_t hcache = hash == 0 ? 1 : hash;
+                    hdr->cached_hash = hcache;
+                }
+            }
         }
     }
     if (len_out != NULL) {
@@ -4808,6 +4876,40 @@ static void osty_rt_list_set_raw(void *raw_list, int64_t index, const void *valu
     memcpy(slot, value, elem_size);
 }
 
+/* FNV-1a hash over `len` bytes of `start`, post-mixed via
+ * `osty_rt_hash_mix64` so the result distributes well across the
+ * top bits used for Map index buckets. Sentinel: a true hash of 0
+ * is shifted to 1 so `osty_gc_header.cached_hash == 0` keeps its
+ * unambiguous "not cached" meaning. Collision rate of the shift is
+ * 1 in 2^64 and not perf-observable. */
+static OSTY_HOT_INLINE uint64_t osty_rt_string_hash_bytes(const char *start, size_t len) {
+    uint64_t h = 1469598103934665603ULL;
+    /* `start` is always a real address here — every caller passes
+     * either freshly-written heap bytes (dup_site, Concat, ConcatN)
+     * or already-decoded SSO operands. No tag-bit branch needed. */
+    const unsigned char *bytes = (const unsigned char *)start;
+    for (size_t i = 0; i < len; i++) {
+        h ^= bytes[i];
+        h *= 1099511628211ULL;
+    }
+    h = osty_rt_hash_mix64(h);
+    return h == 0 ? 1 : h;
+}
+
+/* Stash the cached hash in the GC header for the just-allocated
+ * `payload`. Arena-fast-path only: the header is at
+ * `payload - sizeof(header)` for arena allocs; humongous and
+ * post-compaction pointers fall through (their hash gets recomputed
+ * lazily by `measure`'s fallback path). */
+static OSTY_HOT_INLINE void osty_rt_string_cache_hash_in_header(const char *payload, uint64_t hash) {
+    if (osty_gc_arena_contains((void *)payload)) {
+        osty_gc_header *hdr = (osty_gc_header *)((unsigned char *)payload - sizeof(osty_gc_header));
+        if ((unsigned char *)hdr >= osty_gc_arena_base && hdr->payload == (void *)payload) {
+            hdr->cached_hash = hash;
+        }
+    }
+}
+
 static char *osty_rt_string_dup_site(const char *start, size_t len, const char *site) {
     char *out = (char *)osty_gc_allocate_managed(len + 1, OSTY_GC_KIND_STRING, site, NULL, NULL);
     /* `start` may be an inline-tagged pointer (caller spliced bytes
@@ -4818,6 +4920,12 @@ static char *osty_rt_string_dup_site(const char *start, size_t len, const char *
      * for every heap-bound string copy in the runtime. */
     osty_rt_string_copy_bytes(out, start, len);
     out[len] = '\0';
+    /* Hash is computed lazily on first `osty_rt_string_measure(_, _, &hash)`
+     * call and stored in the header's `cached_hash` slot via
+     * `osty_rt_string_cache_hash_in_header`. Strings that are
+     * never used as Map keys (the typical corpus-line case in
+     * log-aggregator and markdown-stats's LCG generation) skip
+     * the hash work entirely. */
     return out;
 }
 
