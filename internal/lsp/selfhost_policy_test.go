@@ -10,6 +10,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -89,9 +90,7 @@ func TestWantsKindUsesSelfHostedPrefixPolicy(t *testing.T) {
 }
 
 func TestDisplayTextUsesSelfHostedPolicy(t *testing.T) {
-	var b strings.Builder
-	writeSymSignature(&b, &resolve.Symbol{Name: "User", Kind: resolve.SymStruct}, nil)
-	if got := b.String(); got != "struct User\n" {
+	if got := LSPHoverSignatureLine("struct", "User", ""); got != "struct User" {
 		t.Fatalf("hover signature = %q", got)
 	}
 	if got := LSPHoverSignatureLine("binding", "value", "Int"); got != "let value: Int" {
@@ -99,6 +98,22 @@ func TestDisplayTextUsesSelfHostedPolicy(t *testing.T) {
 	}
 	if got := LSPCompletionDetail("function", "map", "fn(Int) -> String"); got != "fn map(Int) -> String" {
 		t.Fatalf("completion detail = %q", got)
+	}
+}
+
+func TestHoverMarkdownWrapsSelfHostedPolicy(t *testing.T) {
+	view := hoverSymbolView(&resolve.Symbol{Name: "User", Kind: resolve.SymStruct}, "", nil)
+	if !view.HasSym || view.Kind != "struct" || view.Name != "User" {
+		t.Fatalf("view = %+v", view)
+	}
+	got := selfhost.LSPHoverMarkdown(view)
+	if want := "```osty\nstruct User\n```"; got != want {
+		t.Fatalf("hover markdown = %q, want %q", got, want)
+	}
+
+	fallback := selfhost.LSPHoverMarkdown(hoverSymbolView(nil, "raw", nil))
+	if want := "```osty\nraw\n```"; fallback != want {
+		t.Fatalf("fallback markdown = %q, want %q", fallback, want)
 	}
 }
 
@@ -479,56 +494,63 @@ func TestDiagnosticPayloadUsesSelfHostedPolicy(t *testing.T) {
 }
 
 func TestImportOrganizeHelpersUseSelfHost(t *testing.T) {
-	std := &ast.UseDecl{Path: []string{"std", "fmt"}, PosV: token.Pos{Offset: 0}, EndV: token.Pos{Offset: len("use std.fmt  \n")}}
+	stdSrc := []byte("use std.fmt  \n")
+	std := &ast.UseDecl{Path: []string{"std", "fmt"}, PosV: token.Pos{Offset: 0}, EndV: token.Pos{Offset: len(stdSrc)}}
 	raw := &ast.UseDecl{RawPath: "github.com/acme/pkg"}
 	goFFI := &ast.UseDecl{IsGoFFI: true, GoPath: "net/http"}
+	views := useDeclViews([]*ast.UseDecl{std, raw, goFFI})
+	if len(views) != 3 {
+		t.Fatalf("view count = %d, want 3", len(views))
+	}
 
-	if got := useGroup(std); got != 0 {
+	if got := LSPUseGroup(views[0].IsFFI, views[0].Path); got != 0 {
 		t.Fatalf("std group = %d, want 0", got)
 	}
-	if got := useGroup(raw); got != 1 {
+	if got := LSPUseGroup(views[1].IsFFI, views[1].Path); got != 1 {
 		t.Fatalf("external group = %d, want 1", got)
 	}
-	if got := useGroup(goFFI); got != 2 {
+	if got := LSPUseGroup(views[2].IsFFI, views[2].Path); got != 2 {
 		t.Fatalf("go group = %d, want 2", got)
 	}
-	if got := useKey(std); got != "std.fmt" {
+	if got := LSPUseKey(views[0].IsFFI, views[0].FFIPath, views[0].RawPath, views[0].Path); got != "std.fmt" {
 		t.Fatalf("std key = %q", got)
 	}
-	if got := useKey(raw); got != "github.com/acme/pkg" {
+	if got := LSPUseKey(views[1].IsFFI, views[1].FFIPath, views[1].RawPath, views[1].Path); got != "github.com/acme/pkg" {
 		t.Fatalf("raw key = %q", got)
 	}
-	if got := useKey(goFFI); got != "net/http" {
+	if got := LSPUseKey(views[2].IsFFI, views[2].FFIPath, views[2].RawPath, views[2].Path); got != "net/http" {
 		t.Fatalf("go key = %q", got)
 	}
-	if got := keyWithAlias(1, "pkg", "alias"); got != "1|pkg|alias" {
+	if got := LSPKeyWithAlias(1, "pkg", "alias"); got != "1|pkg|alias" {
 		t.Fatalf("dedup key = %q", got)
 	}
 	sorted := sortImportEntries([]keyedUse{
-		{u: &ast.UseDecl{}, group: 1, key: "zeta"},
-		{u: &ast.UseDecl{}, group: 0, key: "fmt"},
-		{u: &ast.UseDecl{Alias: "b"}, group: 1, key: "alpha"},
-		{u: &ast.UseDecl{Alias: "a"}, group: 1, key: "alpha"},
+		{view: selfhost.LSPUseDeclView{}, group: 1, key: "zeta"},
+		{view: selfhost.LSPUseDeclView{}, group: 0, key: "fmt"},
+		{view: selfhost.LSPUseDeclView{Alias: "b"}, group: 1, key: "alpha"},
+		{view: selfhost.LSPUseDeclView{Alias: "a"}, group: 1, key: "alpha"},
 	})
-	if got := []string{sorted[0].key, sorted[1].u.Alias, sorted[2].u.Alias, sorted[3].key}; !reflect.DeepEqual(got, []string{"fmt", "a", "b", "zeta"}) {
+	if got := []string{sorted[0].key, sorted[1].view.Alias, sorted[2].view.Alias, sorted[3].key}; !reflect.DeepEqual(got, []string{"fmt", "a", "b", "zeta"}) {
 		t.Fatalf("import order = %#v", got)
 	}
-	if got := useSourceText([]byte("use std.fmt  \n"), std); got != "use std.fmt" {
+	if got := LSPUseSourceText(stdSrc, views[0].PosOffset, views[0].EndOffset); got != "use std.fmt" {
 		t.Fatalf("source text = %q", got)
 	}
-	if got := endOfLineOffset([]byte("use a  \r\nnext"), 5); got != 9 {
+	if got := LSPEndOfLineOffset([]byte("use a  \r\nnext"), 5); got != 9 {
 		t.Fatalf("line end = %d, want 9", got)
 	}
-	if hasTriviaBetweenUses([]byte("use a\n\nuse b"), []*ast.UseDecl{
-		{EndV: token.Pos{Offset: 5}},
-		{PosV: token.Pos{Offset: 7}},
-	}) {
+	gapOK := []selfhost.LSPUseDeclView{
+		{EndOffset: 5},
+		{PosOffset: 7},
+	}
+	if hasTriviaBetweenUseViews([]byte("use a\n\nuse b"), gapOK) {
 		t.Fatal("blank line gap should be safe")
 	}
-	if !hasTriviaBetweenUses([]byte("use a\n// note\nuse b"), []*ast.UseDecl{
-		{EndV: token.Pos{Offset: 5}},
-		{PosV: token.Pos{Offset: 13}},
-	}) {
+	gapBad := []selfhost.LSPUseDeclView{
+		{EndOffset: 5},
+		{PosOffset: 13},
+	}
+	if !hasTriviaBetweenUseViews([]byte("use a\n// note\nuse b"), gapBad) {
 		t.Fatal("comment gap should be treated as trivia")
 	}
 }

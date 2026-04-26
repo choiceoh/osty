@@ -1,6 +1,9 @@
 package selfhost
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 type LSPSemanticToken struct {
 	Line      int
@@ -57,6 +60,35 @@ type LSPDiagnosticPayload struct {
 	Message  string
 }
 
+// LSPSymbolView is the value-typed snapshot the LSP policy layer
+// consumes when rendering hover / signature / completion text. The
+// extractor at the LSP boundary (which still holds *resolve.Symbol)
+// projects into this struct exactly once; every downstream formatter
+// stays pointer-free, which keeps the policy a candidate for
+// migration to toolchain/lsp.osty when the LLVM self-host LSP lands.
+type LSPSymbolView struct {
+	Name     string
+	Kind     string
+	TypeText string
+	DocText  string
+	HasSym   bool
+}
+
+// LSPUseDeclView is the value-typed projection of an *ast.UseDecl
+// the refactor / organize-imports policy consumes. PosOffset and
+// EndOffset cover the source range; the rest mirror the fields the
+// existing selfhost helpers (LSPUseGroup / LSPUseKey / LSPUseSourceText)
+// already accept as plain values.
+type LSPUseDeclView struct {
+	PosOffset int
+	EndOffset int
+	Path      []string
+	RawPath   string
+	Alias     string
+	IsFFI     bool
+	FFIPath   string
+}
+
 type LSPPosition struct {
 	Line      int
 	Character int
@@ -97,6 +129,26 @@ func LSPCompletionDetail(kind, label, typeText string) string {
 
 func LSPHoverSignatureLine(kind, name, typeText string) string {
 	return lspHoverSignatureLine(kind, name, typeText)
+}
+
+// LSPHoverMarkdown renders the markdown body shown on hover from a
+// pre-extracted symbol view. Wraps the signature line in an `osty`
+// fenced block and appends the doc comment when present; the no-sym
+// path emits the fallback identifier text alone.
+func LSPHoverMarkdown(view LSPSymbolView) string {
+	var b strings.Builder
+	b.WriteString("```osty\n")
+	if view.HasSym {
+		b.WriteString(LSPHoverSignatureLine(view.Kind, view.Name, view.TypeText))
+	} else {
+		b.WriteString(view.Name)
+	}
+	b.WriteString("\n```")
+	if view.HasSym && view.DocText != "" {
+		b.WriteString("\n\n")
+		b.WriteString(view.DocText)
+	}
+	return b.String()
 }
 
 func LSPPathToURI(path string) string {
