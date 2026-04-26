@@ -6824,9 +6824,9 @@ int main(void) {
      * for young; now we exercise the descriptor route end-to-end. */
     osty_gc_debug_collect();
 
-    /* live_count is the headerful count: rooted box + cap0 (which
-     * survived because the trace marked it). Pre-fix this would
-     * have been 1 (just the box) since the trace would never fire. */
+    /* live_count is the headerful count: rooted box only — the
+     * captured String stays in the young arena so it doesn't bump
+     * the headerful count even when reachable through the trace. */
     int64_t live_after = osty_gc_debug_live_count();
     printf("%lld\n", (long long)live_after);
 
@@ -7348,14 +7348,11 @@ int main(void) {
     int64_t hdr = osty_gc_debug_header_size_bytes();
     printf("header_size:%lld\n", (long long)hdr);
 
-    /* 2. enum_scalar (KIND_GENERIC + NONE pattern) carries
-     *    generic_pattern == NONE. enum_ptr (KIND_GENERIC_ENUM_PTR
-     *    after the kind split) reaches its trace via the kind_table
-     *    descriptor; the headerful path leaves generic_pattern at
-     *    NONE for any non-KIND_GENERIC alloc, so the readout here
-     *    is also NONE. The pattern field is only meaningful for
-     *    true KIND_GENERIC allocs (the remaining TASK_HANDLE
-     *    pattern). */
+    /* 2. enum_scalar carries generic_pattern == NONE (its
+     *    KIND_GENERIC alloc resolves trace/destroy through the
+     *    pattern table). enum_ptr's pattern field reads NONE
+     *    because KIND_GENERIC_ENUM_PTR routes through kind_table
+     *    instead — the field is only meaningful for KIND_GENERIC. */
     void *enum_ptr = osty_rt_enum_alloc_ptr_v1("phase4.enum_ptr");
     void *enum_scalar = osty_rt_enum_alloc_scalar_v1("phase4.enum_scalar");
     osty_gc_root_bind_v1(enum_ptr);

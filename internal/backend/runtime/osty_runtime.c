@@ -701,10 +701,10 @@ static uint8_t osty_gc_pattern_of(osty_gc_trace_fn trace,
                                   osty_gc_destroy_fn destroy);
 
 /* Indexed by `kind - OSTY_GC_KIND_LIST`. Lookup is O(1) — Phase 2 routes
- * mark drain and every sweep through this table, so a 7-element linear
- * scan would land in the hot path. The static assertions below pin the
- * layout: any new kind must extend the contiguous range and append a row
- * here in the same order. */
+ * mark drain and every sweep through this table, so a linear scan over
+ * the kinds would land in the hot path. The static assertions below pin
+ * the layout: any new kind must extend the contiguous range and append a
+ * row here in the same order. */
 static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
     [OSTY_GC_KIND_LIST - OSTY_GC_KIND_LIST] =
         {osty_rt_list_trace, osty_rt_list_destroy},
@@ -3172,12 +3172,10 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
  *      GENERIC_ENUM_PTR (boxed enum payload — `Option<ptr>` /
  *      `Result<ptr, _>`) has its own dedicated kind so the trace
  *      (`osty_rt_enum_ptr_payload_trace`) is reachable from
- *      `osty_gc_kind_table` at cheney scan time. No destroy.
- *      Allocations route through `osty_rt_enum_alloc_ptr_v1` which
- *      now passes the new kind. The remaining GENERIC pattern
- *      (TASK_HANDLE) keeps using OSTY_GC_KIND_GENERIC because its
- *      destroy frees pthread sync state — same long-lived /
- *      pthread-teardown story as Map/Channel.
+ *      `osty_gc_kind_table` at cheney scan time. No destroy. The
+ *      remaining GENERIC pattern (TASK_HANDLE) keeps using
+ *      OSTY_GC_KIND_GENERIC; same pthread-teardown rationale as
+ *      Map/Channel below.
  *      SET has a destroy callback (frees the `items` heap buffer).
  *      It rides the same dead-from-space scan as LIST: the cheney
  *      pass calls `free(set->items)` on UNFORWARDED young Sets
@@ -10220,12 +10218,6 @@ void *osty_rt_closure_env_alloc_v2(int64_t capture_count, const char *site, uint
 }
 
 void *osty_rt_enum_alloc_ptr_v1(const char *site) {
-    /* Use the dedicated KIND_GENERIC_ENUM_PTR so the trace fn is
-     * recoverable from the kind-table descriptor — lets cheney
-     * dispatch the trace on young allocs (the 16-byte micro-header
-     * has no `generic_pattern` byte to hold a per-instance trace
-     * lookup). The headerful path resolves the same trace via the
-     * descriptor too, so behavior is identical. */
     return osty_gc_allocate_managed(8, OSTY_GC_KIND_GENERIC_ENUM_PTR, site, osty_rt_enum_ptr_payload_trace, NULL);
 }
 
