@@ -1659,15 +1659,18 @@ int main(void) {
      * Allocate three managed payloads and store them into capture
      * slots. They are NOT root-bound — their only liveness path is
      * through the env's trace. If the trace is not wired, they're
-     * swept. */
+     * swept.
+     *
+     * Captures populated BEFORE root_bind — see osty_gc_young_eligible
+     * in osty_runtime.c for the contract. */
     osty_rt_closure_env *env = (osty_rt_closure_env *)osty_rt_closure_env_alloc_v2(3, "env3", 0x7ULL);
-    osty_gc_root_bind_v1(env);
     void *cap0 = osty_gc_alloc_v1(7, 32, "cap0");
     void *cap1 = osty_gc_alloc_v1(7, 32, "cap1");
     void *cap2 = osty_gc_alloc_v1(7, 32, "cap2");
     env->captures[0] = cap0;
     env->captures[1] = cap1;
     env->captures[2] = cap2;
+    osty_gc_root_bind_v1(env);
 
     int64_t live_before = osty_gc_debug_live_count();
     osty_gc_debug_collect();
@@ -1677,10 +1680,16 @@ int main(void) {
      * After collect: env0 and env still rooted, captures survive via
      * trace → same count. Would drop by 3 if trace were broken. */
     printf("%lld %lld\n", (long long)live_before, (long long)live_after);
+    /* Refresh env via load_v1 to follow the PROMOTED tag (root_bind
+     * promoted the young env to OLD; the local env handle is now
+     * stale). Both sides use load_v1 so the comparison stays valid
+     * even when major compaction has relocated the OLD capture
+     * targets. */
+    osty_rt_closure_env *live_env = (osty_rt_closure_env *)osty_gc_load_v1(env);
     printf("%d %d %d\n",
-        env->captures[0] == osty_gc_load_v1(cap0),
-        env->captures[1] == osty_gc_load_v1(cap1),
-        env->captures[2] == osty_gc_load_v1(cap2));
+        live_env->captures[0] == osty_gc_load_v1(cap0),
+        live_env->captures[1] == osty_gc_load_v1(cap1),
+        live_env->captures[2] == osty_gc_load_v1(cap2));
     return 0;
 }
 `), 0o644); err != nil {
@@ -1748,9 +1757,11 @@ int64_t osty_gc_debug_live_count(void);
 
 int main(void) {
     /* Two captures: slot 0 scalar (bit 0 cleared), slot 1 pointer
-     * (bit 1 set). Bitmap = 0b10 = 0x2. */
+     * (bit 1 set). Bitmap = 0b10 = 0x2.
+     *
+     * Captures populated BEFORE root_bind — see osty_gc_young_eligible
+     * in osty_runtime.c for the contract. */
     osty_rt_closure_env *env = (osty_rt_closure_env *)osty_rt_closure_env_alloc_v2(2, "env2", 0x2ULL);
-    osty_gc_root_bind_v1(env);
 
     /* Payload P: allocate but do not root. Its only potential
      * liveness path is through env's scalar capture slot. */
@@ -1768,6 +1779,8 @@ int main(void) {
      * Must survive collection. */
     void *q = osty_gc_alloc_v1(7, 32, "pointer_capture");
     env->captures[1] = q;
+
+    osty_gc_root_bind_v1(env);
 
     int64_t live_before = osty_gc_debug_live_count();
     osty_gc_debug_collect();
@@ -6265,11 +6278,14 @@ int main(void) {
 // (flag off / GENERIC / has-destroy / oversized / zero-size) keep
 // behaving as designed even when no production caller uses it yet.
 //
-// Allowed kinds today: STRING, BYTES (immutable byte payloads).
-// Rejected: CLOSURE_ENV (callers mutate captures after alloc, breaks
-// auto-promote-on-pin), LIST/MAP/SET/CHANNEL (have destroy callbacks
-// Cheney can't invoke), GENERIC (per-instance callbacks not on the
-// micro-header), humongous (size > threshold).
+// Allowed kinds today: STRING, BYTES (immutable byte payloads),
+// LIST (load_v1 PROMOTED follow + cheney self-ref fixup + dead-list
+// scan), CLOSURE_ENV (captures populated synchronously at
+// construction before the env escapes; promote-on-bind copies a
+// fully-populated env to OLD).
+// Rejected: MAP/SET/CHANNEL (have destroy callbacks Cheney can't
+// invoke), GENERIC (per-instance callbacks not on the micro-header),
+// humongous (size > threshold).
 func TestBundledRuntimeYoungEligibilityFilter(t *testing.T) {
 	parallelClangBackendTest(t)
 
@@ -6359,7 +6375,7 @@ int main(void) {
 				"1026 0 0", // MAP: has destroy (free's keys/values arrays — needs typed sweep)
 				"1027 0 0", // SET: has destroy
 				"1028 1 1", // BYTES: eligible
-				"1029 0 0", // CLOSURE_ENV: post-alloc captures mutation breaks auto-promote
+				"1029 1 1", // CLOSURE_ENV: eligible (captures populated synchronously before escape)
 				"1030 0 0", // CHANNEL: has destroy
 			},
 		},
@@ -6600,13 +6616,12 @@ int main(void) {
 			wantClass: [6]string{"0", "0", "0", "0", "0", "0"},
 		},
 		{
-			// Default (Phase 8 step 2 cutover + Phase E follow-up):
-			// STRING + BYTES + LIST route to young arena.
-			// CLOSURE_ENV / GENERIC / MAP / CHANNEL stay headerful.
+			// Default routing: STRING + BYTES + LIST + CLOSURE_ENV →
+			// young arena; GENERIC / MAP / CHANNEL stay headerful.
 			name:      "default",
 			env:       nil,
-			wantDelta: "3",
-			wantClass: [6]string{"1", "1", "0", "1", "0", "0"},
+			wantDelta: "4",
+			wantClass: [6]string{"1", "1", "1", "1", "0", "0"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
