@@ -14,7 +14,7 @@ package mir
 //   - lru-sim: `accessed.insert(key, accessed.getOr(key, 0) + 1)`
 //   - log-aggregator: `levelCounts.insert(level, levelCounts.getOr(level, 0) + 1)`
 //   - markdown-stats: `counts.insert(kind, counts.getOr(kind, 0) + 1)`
-//                     `chars.insert("heading", chars.getOr("heading", 0) + n)`
+//     `chars.insert("heading", chars.getOr("heading", 0) + n)`
 //
 // At the MIR level the user expression lowers to three instructions
 // in the same basic block, with two intermediate locals threading

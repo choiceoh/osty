@@ -5,6 +5,7 @@ import (
 
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 // handleCompletion answers `textDocument/completion`. Behavior splits
@@ -143,24 +144,49 @@ func sortCompletionItems(in []CompletionItem) []CompletionItem {
 }
 
 // completionItemFromSym maps a resolver Symbol to a user-facing
-// CompletionItem. Kind, detail (type signature), and documentation
-// (doc comment) are all pulled from check.Result + ast decl nodes.
+// CompletionItem. The pointer-typed extraction lives in
+// completionSymbolView; the assembly itself runs off the value-typed
+// LSPSymbolView so the policy is portable.
 func completionItemFromSym(label string, sym *resolve.Symbol, r *check.Result) CompletionItem {
-	item := CompletionItem{
-		Label: label,
-		Kind:  CompletionItemKind(LSPCompletionKindForSymbolKind(sym.Kind.String())),
-	}
+	return completionItemFromView(completionSymbolView(label, sym, r))
+}
+
+// completionSymbolView projects a resolver Symbol into the
+// value-typed view consumed by completionItemFromView.
+func completionSymbolView(label string, sym *resolve.Symbol, r *check.Result) selfhost.LSPSymbolView {
+	typeText := ""
 	if r != nil {
 		if t := r.LookupSymType(sym); t != nil {
-			item.Detail = LSPCompletionDetail(sym.Kind.String(), label, t.String())
+			typeText = t.String()
 		}
 	}
-	if doc := symbolDoc(sym); doc != "" {
+	return selfhost.LSPSymbolView{
+		Name:     label,
+		Kind:     sym.Kind.String(),
+		TypeText: typeText,
+		DocText:  symbolDoc(sym),
+		HasSym:   true,
+	}
+}
+
+// completionItemFromView assembles a CompletionItem from a
+// pre-extracted view. Kind/Detail/SortText delegate to the
+// self-hosted policy; the markdown documentation flows through as a
+// raw doc string.
+func completionItemFromView(view selfhost.LSPSymbolView) CompletionItem {
+	item := CompletionItem{
+		Label:    view.Name,
+		Kind:     CompletionItemKind(LSPCompletionKindForSymbolKind(view.Kind)),
+		SortText: LSPCompletionSortTextForSymbolKind(view.Kind, view.Name),
+	}
+	if view.TypeText != "" {
+		item.Detail = LSPCompletionDetail(view.Kind, view.Name, view.TypeText)
+	}
+	if view.DocText != "" {
 		item.Documentation = &MarkupContent{
 			Kind:  MarkupKindMarkdown,
-			Value: doc,
+			Value: view.DocText,
 		}
 	}
-	item.SortText = LSPCompletionSortTextForSymbolKind(sym.Kind.String(), label)
 	return item
 }
