@@ -3,8 +3,6 @@ package lsp
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"strings"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
@@ -12,6 +10,7 @@ import (
 	"github.com/osty/osty/internal/format"
 	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -251,39 +250,39 @@ func (s *Server) handleHover(req *rpcRequest) {
 	replyJSON(s.conn, req.ID, h)
 }
 
-// hoverForSymbol formats the markdown block shown on hover. When sym
-// is nil we fall back to nameFallback (the raw identifier text) so
-// unresolved references still get a minimal popup.
+// hoverForSymbol formats the markdown block shown on hover. The
+// pointer-typed extraction is contained in hoverSymbolView; the
+// markdown rendering itself goes through the value-typed
+// selfhost.LSPHoverMarkdown so the policy stays portable.
 func hoverForSymbol(sym *resolve.Symbol, nameFallback string, r *check.Result) *Hover {
-	var b strings.Builder
-	b.WriteString("```osty\n")
-	if sym != nil {
-		writeSymSignature(&b, sym, r)
-	} else {
-		fmt.Fprintf(&b, "%s\n", nameFallback)
-	}
-	b.WriteString("```")
-	if sym != nil {
-		if doc := symbolDoc(sym); doc != "" {
-			b.WriteString("\n\n")
-			b.WriteString(doc)
-		}
-	}
-	return &Hover{Contents: MarkupContent{Kind: MarkupKindMarkdown, Value: b.String()}}
+	view := hoverSymbolView(sym, nameFallback, r)
+	return &Hover{Contents: MarkupContent{
+		Kind:  MarkupKindMarkdown,
+		Value: selfhost.LSPHoverMarkdown(view),
+	}}
 }
 
-// writeSymSignature emits a one-line declaration-shaped summary for
-// a symbol. For values (let/param/fn) the checker's type is shown;
-// for types (struct/enum/interface) we lead with the keyword.
-func writeSymSignature(b *strings.Builder, sym *resolve.Symbol, r *check.Result) {
+// hoverSymbolView projects a *resolve.Symbol (plus its type from the
+// checker result) into the value-typed view consumed by the markdown
+// formatter. nameFallback is shown when sym is nil so unresolved
+// references still get a minimal popup.
+func hoverSymbolView(sym *resolve.Symbol, nameFallback string, r *check.Result) selfhost.LSPSymbolView {
+	if sym == nil {
+		return selfhost.LSPSymbolView{Name: nameFallback}
+	}
 	typeText := ""
 	if r != nil {
 		if t := r.LookupSymType(sym); t != nil {
 			typeText = t.String()
 		}
 	}
-	b.WriteString(LSPHoverSignatureLine(sym.Kind.String(), sym.Name, typeText))
-	b.WriteByte('\n')
+	return selfhost.LSPSymbolView{
+		Name:     sym.Name,
+		Kind:     sym.Kind.String(),
+		TypeText: typeText,
+		DocText:  symbolDoc(sym),
+		HasSym:   true,
+	}
 }
 
 // symbolDoc extracts the leading `///` comment from a symbol's

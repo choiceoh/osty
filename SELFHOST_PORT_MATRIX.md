@@ -358,6 +358,39 @@ type** 을 소비하기 때문에 단순 포팅이 아니라 identity-model migr
 - `symbolDoc` 의 AST decl → doc comment switch 를 `ast_lower.osty` 에 쌍둥이로 이관하고 Go 는 1-line delegator 로 축소
 - orchestration-layer identity 전환 (arena NodeID) 가 선행되면 `organizeImportsAction` / `completionItemFromSym` 전체 이관 검토
 
+**2026-04-26 Phase 0 착륙 — value-typed view boundary**:
+`generated.go` frozen seed 제약 때문에 정책을 lsp.osty 로 더 옮겨도 Go LSP
+런타임에 닿지 않는다 (PR #854). 대신 **leaf consumer 함수의 pointer-arg 표면을
+value-typed view 로 깎아 내** orchestration 자체를 LLVM self-host LSP 가
+catch up 할 때 trivial-portable 하게 만드는 경로로 전환.
+
+`selfhost/lsp_policy.go` 에 두 개의 view 타입 신설:
+- `LSPSymbolView{Name, Kind, TypeText, DocText, HasSym}` — hover/completion 공용.
+- `LSPUseDeclView{PosOffset, EndOffset, Path, RawPath, Alias, IsFFI, FFIPath}` —
+  organize-imports / refactor 공용.
+
+착륙한 phase:
+
+| phase | 파일 | 변경 |
+|---|---|---|
+| 0a | `internal/lsp/handlers.go` | `hoverForSymbol` → `hoverSymbolView` extractor + `selfhost.LSPHoverMarkdown(view)`. `writeSymSignature` 삭제. |
+| 0b | `internal/lsp/completion.go` | `completionItemFromSym` → `completionSymbolView` + `completionItemFromView`. 모든 정책 (Kind/Detail/SortText) 가 view 통과. |
+| 0d | `internal/lsp/refactor.go` | `keyedUse.u *ast.UseDecl` → `keyedUse.view LSPUseDeclView`. `unusedUseSet map[*ast.UseDecl]bool` → `unusedUseOffsets map[int]bool`. `useGroup`/`useKey`/`useSourceText`/`endOfLineOffset`/`hasTriviaBetweenUses`/`keyWithAlias` 1-line shim 6 종 삭제 — 모두 `LSP*` 직접 호출. `useDeclViews([]*ast.UseDecl) []LSPUseDeclView` 가 유일 pointer-touch site. |
+
+평가 결과 보류 (별도 design 필요):
+
+- **0c (signature.go)**: 단일 `symbolDoc` call 외에는 `*types.FnType` /
+  `*ast.FnDecl` 포인터에 직접 의존. extraction layer 를 추가해도 가치 낮음.
+- **0e (references.go)**: `if refs[id.ID] != target` 의 **포인터 동등 비교가
+  알고리즘 그 자체**. value-typed view 로 깎을 수 없고 `SymbolID`
+  (`internal/resolve/symbolid.go`) 또는 NodeID 기반 identity 모델을 도입해야
+  한다. `containsNode` 의 `ast.Node(d) == decl` 도 같은 종류. 별도 PR.
+
+후속 항목:
+- `references.go` SymbolID identity 도입 (별도 design 문서 선행 권장)
+- `signature.go::buildSignatureInfo` 는 `LSPBuildSignatureText` 가 이미
+  selfhost 라 추가 작업 가치 낮음 — close as won't-fix 후보
+
 ---
 
 ## 3. Hidden hazards
