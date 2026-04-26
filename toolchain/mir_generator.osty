@@ -12727,3 +12727,41 @@ pub fn mirListPrimitiveKindID(elemTyp: String, elemIsString: Bool) -> Int {
     if elemTyp == "ptr" && elemIsString { return 4 }
     0
 }
+
+/// §18 (cont'd) — target-triple canonicalization helpers ported from
+/// `internal/llvmgen/target.go`. The host-boundary `runtime.GOOS` /
+/// `runtime.GOARCH` probe stays Go-side; the pure (arch, os) → LLVM
+/// triple / arch-component mapping moves to Osty.
+
+/// mirLinuxArch maps Go's GOARCH to the LLVM arch component used on
+/// Linux / Windows triples. The Apple ecosystem prefers `arm64` over
+/// `aarch64`, so `mirDarwinArch` keeps that spelling separate.
+pub fn mirLinuxArch(arch: String) -> String {
+    if arch == "amd64" { return "x86_64" }
+    if arch == "386" { return "i386" }
+    if arch == "arm64" { return "aarch64" }
+    arch
+}
+
+/// mirDarwinArch maps Go's GOARCH to the LLVM arch component used on
+/// Apple-sys (apple-darwin / apple-macos) triples. Apple's own
+/// triples write `arm64-apple-darwin`, not `aarch64`.
+pub fn mirDarwinArch(arch: String) -> String {
+    if arch == "amd64" { return "x86_64" }
+    if arch == "arm64" { return "arm64" }
+    arch
+}
+
+/// mirLLVMTripleFor maps a (Go-style arch, Go-style os) pair to the
+/// LLVM triple the host toolchain uses by default. Mirrors
+/// `llvmTripleFor` in `internal/llvmgen/target.go`.
+///
+/// The `js` / Emscripten case hard-codes `wasm32-unknown-emscripten`
+/// — the only wasm pairing the Osty toolchain ships today.
+pub fn mirLLVMTripleFor(arch: String, osName: String) -> String {
+    if osName == "darwin" { return mirDarwinArch(arch) + "-apple-darwin" }
+    if osName == "linux" { return mirLinuxArch(arch) + "-unknown-linux-gnu" }
+    if osName == "windows" { return mirLinuxArch(arch) + "-pc-windows-msvc" }
+    if osName == "js" { return "wasm32-unknown-emscripten" }
+    mirLinuxArch(arch) + "-unknown-" + osName
+}

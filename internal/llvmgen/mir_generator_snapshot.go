@@ -7717,3 +7717,45 @@ func mirListPrimitiveKindID(elemTyp string, elemIsString bool) int {
 	}
 	return 0
 }
+
+// §18 (cont'd) — target-triple canonicalization helpers ported from
+// internal/llvmgen/target.go.
+
+// Osty: mirLinuxArch
+func mirLinuxArch(arch string) string {
+	switch arch {
+	case "amd64":
+		return "x86_64"
+	case "386":
+		return "i386"
+	case "arm64":
+		return "aarch64"
+	}
+	return arch
+}
+
+// Osty: mirDarwinArch
+func mirDarwinArch(arch string) string {
+	switch arch {
+	case "amd64":
+		return "x86_64"
+	case "arm64":
+		return "arm64"
+	}
+	return arch
+}
+
+// Osty: mirLLVMTripleFor
+func mirLLVMTripleFor(arch, osName string) string {
+	switch osName {
+	case "darwin":
+		return mirDarwinArch(arch) + "-apple-darwin"
+	case "linux":
+		return mirLinuxArch(arch) + "-unknown-linux-gnu"
+	case "windows":
+		return mirLinuxArch(arch) + "-pc-windows-msvc"
+	case "js":
+		return "wasm32-unknown-emscripten"
+	}
+	return mirLinuxArch(arch) + "-unknown-" + osName
+}
