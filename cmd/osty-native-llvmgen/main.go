@@ -9,9 +9,7 @@ import (
 
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
-	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/nativellvmgen"
-	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
 )
@@ -60,34 +58,19 @@ func run(stdin io.Reader, stdout io.Writer) error {
 }
 
 func prepareSourceEntry(req llvmgenRequest) (backend.Entry, error) {
-	src := []byte(req.Source)
-	file, diags := parser.ParseDiagnostics(src)
-	if err := firstErrorDiagnostic(diags); err != nil {
-		return backend.Entry{}, err
+	// Wrap the single source as a one-file package and reuse the
+	// workspace/arena pipeline — identical to preparePackageEntry
+	// but without requiring req.Package to be set.
+	synthetic := llvmgenRequest{
+		Path: req.Path,
+		Package: &llvmgenPackageInput{
+			Files: []llvmgenPackageFile{{
+				Path:   req.Path,
+				Source: req.Source,
+			}},
+		},
 	}
-	if file == nil {
-		return backend.Entry{}, fmt.Errorf("prepare llvmgen source: parse produced no AST")
-	}
-	reg := stdlib.LoadCached()
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
-	chk := check.SelfhostFile(file, res, check.Opts{
-
-		Stdlib:        reg,
-		Primitives:    reg.Primitives,
-		ResultMethods: reg.ResultMethods,
-		Source:        src,
-		Path:          req.Path,
-	})
-	sourcePath := req.Path
-	if sourcePath == "" {
-		sourcePath = "<input>"
-	}
-	entry, err := backend.PrepareEntry("main", sourcePath, file, res, chk)
-	if err != nil {
-		return backend.Entry{}, err
-	}
-	entry.Source = append([]byte(nil), src...)
-	return entry, nil
+	return preparePackageEntry(synthetic)
 }
 
 func preparePackageEntry(req llvmgenRequest) (backend.Entry, error) {
@@ -212,11 +195,4 @@ func renderWarnings(warnings []error) []string {
 	return out
 }
 
-func firstErrorDiagnostic(diags []*diag.Diagnostic) error {
-	for _, d := range diags {
-		if d != nil && d.Severity == diag.Error {
-			return d
-		}
-	}
-	return nil
-}
+
