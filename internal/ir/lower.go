@@ -2770,9 +2770,11 @@ func tupleIndex(name string) (int, bool) {
 
 func (l *lowerer) lowerStructLit(s *ast.StructLit) Expr {
 	name := ""
+	var headIdent *ast.Ident
 	switch h := s.Type.(type) {
 	case *ast.Ident:
 		name = h.Name
+		headIdent = h
 	case *ast.FieldExpr:
 		// `pkg.Type { ... }` — keep the trailing name; the IR doesn't
 		// model packages yet.
@@ -2783,6 +2785,7 @@ func (l *lowerer) lowerStructLit(s *ast.StructLit) Expr {
 		T:        l.exprType(s),
 		SpanV:    nodeSpan(s),
 	}
+	explicit := map[string]bool{}
 	for _, f := range s.Fields {
 		field := StructLitField{
 			Name:  f.Name,
@@ -2792,9 +2795,32 @@ func (l *lowerer) lowerStructLit(s *ast.StructLit) Expr {
 			field.Value = l.lowerExpr(f.Value)
 		}
 		out.Fields = append(out.Fields, field)
+		explicit[f.Name] = true
 	}
 	if s.Spread != nil {
 		out.Spread = l.lowerExpr(s.Spread)
+	}
+	// Inject defaults for unspecified fields when no spread is present.
+	// With a spread, missing fields come from the spread base — defaults
+	// are only relevant on the bare `T { explicit, ... }` shape. Defaults
+	// are pure literals per spec (§3.4: literal-only default values), so
+	// `lowerExpr` produces a self-contained IR Expr per construction site.
+	if s.Spread == nil && headIdent != nil {
+		if sd := l.structDeclByIdent(headIdent); sd != nil {
+			for _, df := range sd.Fields {
+				if df == nil || df.Default == nil || df.Name == "" {
+					continue
+				}
+				if explicit[df.Name] {
+					continue
+				}
+				out.Fields = append(out.Fields, StructLitField{
+					Name:  df.Name,
+					Value: l.lowerExpr(df.Default),
+					SpanV: nodeSpan(s),
+				})
+			}
+		}
 	}
 	return out
 }

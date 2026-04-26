@@ -1037,7 +1037,13 @@ func collectStructFields(info *structInfo, env typeEnv) error {
 		if field == nil {
 			return unsupportedf("source-layout", "struct %q has nil field", info.name)
 		}
-		if diag := llvmStructFieldDiagnostic(info.name, field.Name, llvmIsIdent(field.Name), field.Default != nil, false, false, ""); diag.kind != "" {
+		// Field-level default values do not affect struct layout (the
+		// type sits unchanged); they only matter at construction time
+		// where lowerStructLit injects them for unspecified fields. So
+		// pass `hasDefault=false` to the diagnostic check — the layout
+		// pass should not reject decls that the construction-site path
+		// already handles.
+		if diag := llvmStructFieldDiagnostic(info.name, field.Name, llvmIsIdent(field.Name), false, false, false, ""); diag.kind != "" {
 			return unsupported(diag.kind, diag.message)
 		}
 		if _, exists := info.byName[field.Name]; exists {
