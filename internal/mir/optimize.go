@@ -54,8 +54,12 @@ func optimizeFunction(fn *Function) {
 	// elimination on the same Optimize call. Order matters:
 	// `fuseNonEscapingSplitNth` runs first so the constant-index
 	// pattern wins over the loop-hoist transform, which would still
-	// allocate a List and dup every piece.
+	// allocate a List and dup every piece. `fuseMapInsertGetOrAdd`
+	// is order-independent (it touches a local triple in one BB)
+	// but runs alongside the others to land all fusions before
+	// dead-assign elim sees the rewriters' newly-orphaned producers.
 	fuseNonEscapingSplitNth(fn)
+	fuseMapInsertGetOrAdd(fn)
 	hoistNonEscapingSplitInLoops(fn)
 	const maxIters = 16
 	for i := 0; i < maxIters; i++ {
