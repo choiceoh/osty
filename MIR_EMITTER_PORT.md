@@ -724,6 +724,39 @@ The historical rules:
 | `mirIncrementLoopCounterLine` / `mirDecrementLoopCounterLine` | `(reg, iReg) -> String` | §9 | Loop-counter increment / decrement aliases |
 | `mirLoadStoreLine` / `I64Line` / `I1Line` / `PtrLine` / `DoubleLine` | `(args...) -> String` | §9 | 2-line typed load + store (read-modify-write) shapes |
 | `mirLabel{Ok,Err,Done,LoopHead,LoopBody,LoopExit,LoopLatch,MatchArmPrefix,MatchExit,IfThen,IfElse,IfEnd,OptionSome,OptionNone,ResultOk,ResultErr}` | `() -> String` | §9 | Canonical label-name tokens (centralise for future renaming) |
+| `mirRtBytes{IndexOf,LastIndexOf,Split,Join,Concat,Repeat,Replace,ReplaceAll,TrimLeft,TrimRight,Trim,TrimSpace,ToUpper,ToLower,ToHex,Slice,Contains,StartsWith,EndsWith}Symbol` | `() -> String` | §10 | Bytes runtime fixed-symbol composers (long-tail) |
+| `mirRtString{Chars,Bytes,ByteLen,ToUpper,ToLower,IsValidInt,ToInt,IsValidFloat,ToFloat,Count,Slice,SplitInto,NthSegment,IndexOf,LastIndexOf,Contains,StartsWith,EndsWith,Trim,Split,Join,Replace,Repeat,Hash,IsEmpty,Len}Symbol` | `() -> String` | §10 | String runtime fixed-symbol composers |
+| `mirRtMap{Insert,Get,Remove,Keys,ContainsKey,Update,MapValues,RetainIf,GetOr}Symbol` | `() -> String` | §10 | Map runtime fixed-symbol composers |
+| `mirRtSet{Add,Remove,Contains,IsEmpty,Union,Intersection,Difference}Symbol` | `() -> String` | §10 | Set runtime fixed-symbol composers |
+| `mirRtList{New,Push,Pop,Insert,Contains,Map,Filter,Fold,Slice,Sorted,Extend,GroupBy}Symbol` | `() -> String` | §10 | List runtime fixed-symbol composers |
+| `mirRtChan{New,IsClosed,Len,Cap}Symbol` | `() -> String` | §10 | Channel runtime fixed-symbol composers |
+| `mirRtGC{Alloc,Safepoint,Barrier,AllocatedBytes}Symbol` / `mirRtGCDebugAllocatedBytesTotalSymbol` | `() -> String` | §10 | GC runtime fixed-symbol composers |
+| `mirRtMath{Floor,Ceil,Round,Trunc,Mod,Pow,Sqrt,Abs,Sin,Cos,Tan,Exp,Log,Log2,Log10,Min,Max}Symbol` | `() -> String` | §10 | Math runtime fixed-symbol composers |
+| `mirRtRandom{I64,Double,RangeI64,Shuffle,Choice}Symbol` / `mirRtJson{Parse,Stringify}Symbol` / `mirRtFmt{Sprintf,Printf,PrintLine}Symbol` / `mirRtIO{Read,Write,ReadLine,ReadAll,Flush}Symbol` | `() -> String` | §10 | Random / Json / Fmt / IO runtime fixed-symbol composers |
+| `mirCallI64FromPtrI64Line` / `NoArgsLine` / `mirCallPtr{FromThreePtr,FromPtrI64,FromPtrI64I64,FromI64,FromI64I64,NoArgs}Line` | `(reg, sym, args...) -> String` | §11 | Generic typed-call shape composers |
+| `mirCallI1NoArgsLine` / `mirCallVoid{FromPtrI64,FromI64,NoArgsTrampoline}Line` | `(reg, sym, args...) -> String` | §11 | i1-noargs / void-call shape composers |
+| `mirCallDouble{FromDouble,FromTwoDouble,FromI64,NoArgs}Line` / `mirCallI64FromDoubleLine` | `(reg, sym, args...) -> String` | §11 | fp-result typed-call shape composers |
+| `mirInsertValue{I64,Ptr,I1,Double}Line` | `(reg, aggTy, prev, val, idx) -> String` | §11 | Typed insertvalue shape composers |
+| `mirTargetFeaturesAttr` / `mirTargetCpuAttr` / `mirNoFramePointerAttr` / `mirAllFramePointerAttr` | `(args...) -> String` | §11 | LLVM target-feature / target-cpu attribute helpers |
+| `mirLoopMDLine` / `mirLoopBranchWithMDLine` / `mirLoopIDNodeBody` | `(args...) -> String` | §11 | Per-loop metadata attachment / id-node helpers |
+| `mirModuleFlagsList` / `mirIdentList` / `mirCompilerInfoLine` | `(args...) -> String` | §11 | Module-level named-MD declaration helpers |
+| `mirFastMathFlagsForArith` | `() -> String` | §11 | Fastmath flags composite for fp arithmetic |
+| `mirNullPtrConst` / `mirZero{I64,I32,Double}Const` / `mirOne{I64,I32,Double}Const` / `mir{True,False}I1Const` / `mirMinusOne{I64,I32,I8}Const` | `() -> String` | §11 | Common LLVM constant tokens |
+| `mirRangeInclusiveBoundLine` / `mirRangeStepLine` / `mirRangeIterationCondLine` / `mirListIter{Cond,Step}Line` | `(args...) -> String` | §11 | Range / list iteration shape composers |
+| `mirRuntimeDeclareNoReturnVoid{,NoArgs}` | `(sym, [args]) -> String` | §11 | Noreturn-decl line composers |
+| `mirCallColdAttr` / `mirCallHotAttr` | `() -> String` | §11 | Per-call cold / hot attribute markers |
+| `mirICmpZeroI64Line` / `NonZeroI64Line` / `NullPtrLine` / `NonNullPtrLine` | `(reg, a) -> String` | §11 | Common typed-comparison composite shapes |
+| `mirRtTask{Spawn,GroupSpawn,HandleJoin,GroupCancel,GroupIsCancelled,Race,CollectAll}Symbol` / `mirRtSelect{,Recv,Timeout,Default,SendBytesV1}Symbol` | `() -> String` | §12 | Task / select / race runtime fixed-symbol composers |
+| `mirRtList{SetBytesV1,GetBytesV1,SetSuffix,GetSuffix}Symbol` / `mirRtMapKeysSortedSuffixSymbol` / `mirRtSelectSendSuffixSymbol` | `(suffix?) -> String` | §12 | Suffix-keyed runtime symbol composers |
+| `mirArgSlot{I64,I32,I8,I1}Imm` / `mirArgSlotPtr{Null,Sym}` | `(args...) -> String` | §12 | Immediate / null / global arg-slot composers |
+| `mirAlloca2Line` / `mirAllocaInit{I64,I1,Ptr,Double}Line` | `(slot, [ty,] val) -> String` | §12 | 2-line typed alloca + store composite shapes |
+| `mirLoadAndZExt{I8,I1}ToI64Line` / `mirLoadAndSExtI8ToI64Line` / `mirLoadI64AndTruncTo{I8,I1}Line` | `(loadReg, castReg, slot) -> String` | §12 | 2-line typed-load + typed-cast composite shapes |
+| `mirEntryEpilogueBlocksLine` / `mirIfElseEndBlocksLine` | `(args...) -> String` | §12 | Canonical-shape block-emit composites |
+| `mirAttributeGroupLine` / `mirAttributeGroupNoReturnCold` / `mirAttributeGroupHotPure` | `(idDigits, [attrs]) -> String` | §12 | Module-level attribute-group declaration composers |
+| `mirCastI64ToPtrLine` / `mirCastPtrToI64Line` / `mirCastDoubleToI64Line` / `mirCastI64ToDoubleLine` | `(reg, val) -> String` | §12 | RawPtr / fp bitcast composite shapes |
+| `mirRefToGlobal` / `mirRefToMD` / `mirRefToReg` | `(name) -> String` | §12 | Reference-encoding semantic aliases |
+| `mirTypedZeroForLine` / `mirTypedOneForLine` | `(ty) -> String` | §12 | Typed-zero / typed-one constant composites |
+| `mirOptionNoneConst` / `mirOptionPtrNoneConst` / `mirResultOkUnitConst` / `mirResultErrPtrConst` | `([err]) -> String` | §12 | Canonical zero-aggregate constant composites |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as
