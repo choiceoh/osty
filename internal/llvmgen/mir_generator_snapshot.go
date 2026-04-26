@@ -7674,3 +7674,33 @@ func mirIsAllocaLine(line string) bool {
 	tail := rest[eq+len(separator):]
 	return llvmStrings.HasPrefix(tail, "alloca ") || tail == "alloca"
 }
+
+// §18 (cont'd) — primitive scrutinee / std.io output / list-primitive
+// kind helpers ported from expr.go / stdlib_io_shim.go / stmt.go.
+
+// Osty: mirIsPrimitiveLiteralMatchScrutineeType
+func mirIsPrimitiveLiteralMatchScrutineeType(typ string) bool {
+	return typ == "i64" || typ == "i32" || typ == "i8" || typ == "i1"
+}
+
+// Osty: mirIsStdIoOutputMethod
+func mirIsStdIoOutputMethod(name string) bool {
+	return name == "print" || name == "println" || name == "eprint" || name == "eprintln"
+}
+
+// Osty: mirListPrimitiveKindID
+func mirListPrimitiveKindID(elemTyp string, elemIsString bool) int {
+	switch elemTyp {
+	case "i64":
+		return 1
+	case "double":
+		return 2
+	case "i1":
+		return 3
+	case "ptr":
+		if elemIsString {
+			return 4
+		}
+	}
+	return 0
+}

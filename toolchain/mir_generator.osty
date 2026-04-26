@@ -12695,3 +12695,35 @@ pub fn mirIsAllocaLine(line: String) -> Bool {
     let tail = rest[tailStart..rest.len()]
     llvmStrings.HasPrefix(tail, "alloca ") || tail == "alloca"
 }
+
+/// §18 (cont'd) — primitive scrutinee predicate ported from
+/// `isPrimitiveLiteralMatchScrutineeType` in
+/// `internal/llvmgen/expr.go`. Reports whether a match scrutinee
+/// LLVM type can use the literal-dispatch fast path (i64 / i32 / i8
+/// / i1 — the integer family that fits the `select`-chain shape).
+pub fn mirIsPrimitiveLiteralMatchScrutineeType(typ: String) -> Bool {
+    typ == "i64" || typ == "i32" || typ == "i8" || typ == "i1"
+}
+
+/// §18 (cont'd) — std.io output-method predicate ported from
+/// `isStdIoOutputMethod` in `internal/llvmgen/stdlib_io_shim.go`.
+/// Recognises the four `print` / `println` / `eprint` / `eprintln`
+/// std.io output methods.
+pub fn mirIsStdIoOutputMethod(name: String) -> Bool {
+    name == "print" || name == "println" || name == "eprint" || name == "eprintln"
+}
+
+/// §18 (cont'd) — list-primitive kind ID ported from
+/// `listPrimitiveKindID` in `internal/llvmgen/stmt.go`.
+///
+/// Returns the runtime-side kind ID for `osty_rt_list_primitive_to_string`
+/// — 1=Int, 2=Float, 3=Bool, 4=String. Returns 0 when the element type
+/// is not a supported primitive (struct, enum, Map payload, nested
+/// list); caller falls back to no-diff rendering.
+pub fn mirListPrimitiveKindID(elemTyp: String, elemIsString: Bool) -> Int {
+    if elemTyp == "i64" { return 1 }
+    if elemTyp == "double" { return 2 }
+    if elemTyp == "i1" { return 3 }
+    if elemTyp == "ptr" && elemIsString { return 4 }
+    0
+}

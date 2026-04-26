@@ -2016,22 +2016,11 @@ func (g *generator) buildAssertCompareMessage(call *ast.CallExpr, name, leftText
 
 // listPrimitiveKindID maps an LLVM element type to the elem_kind
 // argument accepted by osty_rt_list_primitive_to_string. Returns 0
-// when the element type is not a supported primitive (struct, enum,
-// Map payload, nested list) — caller falls back to no-diff rendering.
+// when the element type is not a supported primitive — caller falls
+// back to no-diff rendering. Delegates to the Osty-sourced
+// `mirListPrimitiveKindID` (`toolchain/mir_generator.osty`).
 func listPrimitiveKindID(elemTyp string, elemIsString bool) int {
-	switch elemTyp {
-	case "i64":
-		return 1
-	case "double":
-		return 2
-	case "i1":
-		return 3
-	case "ptr":
-		if elemIsString {
-			return 4
-		}
-	}
-	return 0
+	return mirListPrimitiveKindID(elemTyp, elemIsString)
 }
 
 // stringifyForStructuralDiff returns (leftStr, rightStr, true) when

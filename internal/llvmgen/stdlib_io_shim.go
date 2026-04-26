@@ -26,13 +26,11 @@ func collectStdIoAliases(file *ast.File) map[string]bool {
 	return out
 }
 
+// isStdIoOutputMethod reports whether `name` is one of the four
+// std.io output methods. Delegates to the Osty-sourced
+// `mirIsStdIoOutputMethod` (`toolchain/mir_generator.osty`).
 func isStdIoOutputMethod(name string) bool {
-	switch name {
-	case "print", "println", "eprint", "eprintln":
-		return true
-	default:
-		return false
-	}
+	return mirIsStdIoOutputMethod(name)
 }
 
 func stdIoWriteFlags(name string) (newline bool, toStderr bool, ok bool) {

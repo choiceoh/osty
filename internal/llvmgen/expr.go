@@ -2265,13 +2265,12 @@ func isPrimitiveLiteralMatchArms(arms []*ast.MatchArm) bool {
 	return sawLiteral
 }
 
+// isPrimitiveLiteralMatchScrutineeType reports whether a match
+// scrutinee LLVM type can use the literal-dispatch fast path.
+// Delegates to the Osty-sourced `mirIsPrimitiveLiteralMatchScrutineeType`
+// (`toolchain/mir_generator.osty`).
 func isPrimitiveLiteralMatchScrutineeType(typ string) bool {
-	switch typ {
-	case "i64", "i32", "i8", "i1":
-		return true
-	default:
-		return false
-	}
+	return mirIsPrimitiveLiteralMatchScrutineeType(typ)
 }
 
 // emitPrimitiveLiteralMatchExprValue lowers `match n { 0 -> A, 1 -> B,
