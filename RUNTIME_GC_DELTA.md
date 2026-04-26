@@ -497,14 +497,23 @@ String/Bytes 객체가 매번 96 B 헤더를 들고 있는 게 alloc-heavy bench
     Color BLACK으로 dedup, cycle 안전. Cheney_minor entry가
     `osty_gc_young_head` + `osty_gc_old_head` 모두 walk해서 pinned/
     rooted owner 시드. 6 새 helper.
-  - **Cutover narrowing — STRING 보류**: transitive OLD trace로
-    `Map<String, _>`의 String key가 forward되어 to-space에 정착하지만,
-    Map의 indexed find path (`map->len >= 8`)가 어떤 이유로 first
-    slot만 정확히 매치하고 나머지 슬롯에서 hits=0 발화. Index slot/
-    fingerprint는 content-based이고 forward 후에도 content 변함이 없는데도
-    이런 거동이 나오는 이유는 추가 조사 필요. 즉시 안전조치로
-    eligibility를 BYTES 단일로 좁힘 — String/CLOSURE_ENV는 후속
-    PR에서 Map index handover 검증 후 복원.
+  - **Cutover follow-up — string cache 핵심 버그 (Map<String> 진단
+    결과)**: `Map<String, _>` 회귀의 root cause는 cheney가 아니라
+    `osty_rt_string_cache` (TLS, 256-slot per-pointer 캐시) 였다.
+    Cache가 포인터로만 키잉되고 cached len/hash 외에 content 검증이
+    없어서, 콜러가 stack-local buffer를 재사용하는 패턴 (`char
+    keybuf[16]; for (i…) { snprintf(keybuf, …, i);
+    map.contains(keybuf) }`)에서 첫 호출이 캐시한 (len, hash) 가 두
+    번째 호출 (같은 stack addr, 다른 content) 에 그대로 반환됨 →
+    Map의 indexed find가 잘못된 hash로 probe → first slot만 우연히
+    매치. Phase E와 무관한 pre-existing 버그였으나 PR #930의 alloc
+    pattern (young arena 주소 재사용 빈도 증가) 때문에 production
+    style 테스트에서 처음 surface. **Fix**: cache entry에 4-byte
+    content fingerprint (`uint32_t first4`) 추가, hit 시
+    `entry->value == value && entry->first4 == first4` 둘 다 일치
+    필요. STRING eligibility 즉시 복원 (BYTES + STRING 모두 young).
+    회귀 게이트: `TestBundledRuntimeMapWithYoungStringKeysSurvivesCheneyMinor`
+    (200 unique keys, 모두 hit).
 
 #### Phase E 인프라 / 데이터 layout
 

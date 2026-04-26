@@ -6329,7 +6329,7 @@ int main(void) {
 			wantRows: []string{
 				"1 0 0",    // GENERIC: no descriptor
 				"1024 0 0", // LIST: has destroy
-				"1025 0 0", // STRING: ineligible during cutover (Map<String> regression)
+				"1025 1 1", // STRING: eligible (Map<String> regression was a string-cache bug, fixed)
 				"1026 0 0", // MAP: has destroy
 				"1027 0 0", // SET: has destroy
 				"1028 1 1", // BYTES: pass
@@ -6574,12 +6574,13 @@ int main(void) {
 			wantClass: [6]string{"0", "0", "0", "0", "0", "0"},
 		},
 		{
-			// Default (Phase 8 step 2 cutover, narrowed):
-			// only BYTES routes to young arena.
+			// Default (Phase 8 step 2 cutover): STRING + BYTES
+			// route to young arena. CLOSURE_ENV / GENERIC /
+			// LIST / MAP / CHANNEL stay headerful.
 			name:      "default",
 			env:       nil,
-			wantDelta: "1",
-			wantClass: [6]string{"0", "1", "0", "0", "0", "0"},
+			wantDelta: "2",
+			wantClass: [6]string{"1", "1", "0", "0", "0", "0"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -6801,14 +6802,19 @@ int main(void) {
 	}
 }
 
-// Phase E follow-up regression DISABLED post-narrowing: STRING is no
-// longer young-eligible during the cutover (caused Map<String, _>
-// hits=0 — the cheney transitive OLD-trace forwards keys correctly
-// but the Map's content-keyed index probe converges to a single
-// matching slot once `map->len >= 8`. Investigation deferred). When
-// String routing returns to young space, this test becomes the
-// regression gate.
-func disabled_TestBundledRuntimeMapWithYoungStringKeysSurvivesCheneyMinor(t *testing.T) {
+// Phase E follow-up regression: an OLD `Map<String, _>` whose String
+// keys live in the young arena must keep them after a minor cycle.
+// Map.insert bypasses `osty_gc_post_write_v1`, so the remembered set
+// is empty and the OLD Map is invisible to a cheney pass that only
+// walks stack roots. The transitive OLD-trace fix (cheney_slot
+// enqueues OLD owners → drain runs descriptor.trace under CHENEY
+// mode) handles the forwarding. The `osty_rt_string_cache`
+// fingerprint fix (4-byte content prefix verification) handles the
+// stack-buffer-reuse pattern of `for (i…) { snprintf(keybuf, …, i);
+// map.contains(keybuf) }` that previously returned hits=1 (only the
+// first key matched because subsequent calls received stale len/hash
+// from the cache slot keyed solely by `keybuf`'s reused address).
+func TestBundledRuntimeMapWithYoungStringKeysSurvivesCheneyMinor(t *testing.T) {
 	parallelClangBackendTest(t)
 
 	dir := t.TempDir()
