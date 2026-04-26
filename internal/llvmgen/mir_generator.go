@@ -127,6 +127,7 @@ type mirGen struct {
 	// current block's ID) and emit a safepoint.
 	gcRoots           []mir.LocalID
 	gcRootChunks      []mirGCRootChunk
+	gcRootFrames      []string // SSA names of alloca'd shadow-stack frame descriptors, one per chunk
 	curBlockID        mir.BlockID
 	loopSafepointSlot string
 
@@ -1496,6 +1497,7 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	g.fnBuf.Reset()
 	g.gcRoots = g.gcRoots[:0]
 	g.gcRootChunks = g.gcRootChunks[:0]
+	g.gcRootFrames = g.gcRootFrames[:0]
 	// v0.6 A5.2: fn.Vectorize is already default-true unless
 	// `#[no_vectorize]` was present (ir.Lower sets it). Mirror here
 	// verbatim — the per-fn state machine doesn't need to re-derive
@@ -2098,14 +2100,50 @@ func (g *mirGen) emitGCEntry(fn *mir.Function) {
 		g.fnBuf.WriteString(mirStoreNullPtrLine(g.localSlots[id]))
 	}
 	g.prepareGCSafepointRootChunks()
+	g.emitShadowStackFramePush()
 	// Entry safepoint.
 	g.emitGCSafepointKind(safepointKindEntry)
 }
 
-// emitGCReleaseRoots is a legacy hook kept for call-site stability.
-// MIR GC lowering now uses explicit safepoint root arrays, so there is
-// no function-exit release work left to do.
+// emitShadowStackFramePush allocates one shadow-stack frame descriptor
+// per root chunk and threads it onto the thread-local chain. The chain
+// is what makes cross-frame root tracking work — without it, an inner
+// safepoint would mark only its own locals and sweep the caller's
+// Map/List payloads as unreachable. Each frame is a 24-byte struct
+// `{prev_ptr, slots_ptr, count_i64}`; the runtime helper writes the
+// fields and pushes the frame in one call. Pops happen in
+// `emitGCReleaseRoots` before every return.
+func (g *mirGen) emitShadowStackFramePush() {
+	if !g.opts.EmitGC || len(g.gcRootChunks) == 0 {
+		return
+	}
+	g.declareRuntime("osty.gc.root_frame_enter_v1", mirRuntimeDeclareRootFrameEnterV1())
+	g.declareRuntime("osty.gc.root_frame_leave_v1", mirRuntimeDeclareRootFrameLeaveV1())
+	g.gcRootFrames = g.gcRootFrames[:0]
+	for _, chunk := range g.gcRootChunks {
+		frame := g.fresh()
+		// `{prev:ptr, slots:ptr, count:i64}` — 24 bytes on 64-bit hosts.
+		g.fnBuf.WriteString(frame + " = alloca { ptr, ptr, i64 }\n")
+		g.fnBuf.WriteString("  call void @osty.gc.root_frame_enter_v1(ptr " + frame +
+			", ptr " + chunk.slotsPtr + ", i64 " + strconv.Itoa(chunk.count) + ")\n")
+		g.gcRootFrames = append(g.gcRootFrames, frame)
+	}
+}
+
+// emitGCReleaseRoots emits the shadow-stack pop sequence — one
+// `root_frame_leave_v1` call per frame pushed at entry. Called before
+// every ret terminator so the chain unwinds in LIFO order even on
+// early-return paths.
 func (g *mirGen) emitGCReleaseRoots() {
+	if !g.opts.EmitGC {
+		return
+	}
+	// Pop in reverse push order so the chain unwinds LIFO. The runtime
+	// is defensive against out-of-order pops, but matching push order
+	// keeps the common path branch-free.
+	for i := len(g.gcRootFrames) - 1; i >= 0; i-- {
+		g.fnBuf.WriteString("  call void @osty.gc.root_frame_leave_v1(ptr " + g.gcRootFrames[i] + ")\n")
+	}
 }
 
 func (g *mirGen) visibleGCSafepointRoots() []string {

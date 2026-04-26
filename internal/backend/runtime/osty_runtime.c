@@ -1314,6 +1314,43 @@ static int64_t osty_gc_forwarding_tombstones = 0;
 #define OSTY_GC_SAFEPOINT_MAX_ROOTS ((int64_t)65536)
 static int64_t osty_gc_safepoint_max_roots_seen = 0;
 
+/* Forward decl of the shadow-stack frame so internal helpers can reach
+ * the chain head when a collection fires. The actual struct + entry/
+ * leave runtime symbols are defined alongside `osty_gc_safepoint_v1`.
+ *
+ * Layout must mirror the typedef declared near `osty_gc_safepoint_v1`.
+ * The frames are alloca'd in callee stacks; the chain head is
+ * thread-local so each mutator sees only its own roots. */
+struct osty_gc_root_frame {
+    struct osty_gc_root_frame *prev;
+    void *const *slots;
+    int64_t count;
+};
+static OSTY_RT_TLS struct osty_gc_root_frame *osty_gc_root_chain_top = NULL;
+
+/* Forward decl for the string-len/hash cache invalidator. The cache
+ * itself is defined further down (alongside `osty_rt_string_measure`),
+ * but `osty_gc_cheney_swap_arenas` needs to wipe it before any young
+ * arena address gets reused to hold different content. */
+static void osty_rt_string_cache_invalidate_all(void);
+
+/* Walk the shadow-stack chain and apply a per-slot action. The current
+ * stack-roots argument to `collect_now_with_stack_roots` covers only the
+ * deepest frame; the chain extends that to all ancestor frames so cross-
+ * frame Maps / Lists stay reachable. Each helper that sweeps the explicit
+ * `root_slots` array also calls one of these to cover the rest. */
+#define OSTY_GC_FOR_EACH_CHAIN_ROOT(action_call) do { \
+    struct osty_gc_root_frame *_f = osty_gc_root_chain_top; \
+    while (_f != NULL) { \
+        int64_t _i; \
+        for (_i = 0; _i < _f->count; _i++) { \
+            void *_slot = (void *)_f->slots[_i]; \
+            action_call; \
+        } \
+        _f = _f->prev; \
+    } \
+} while (0)
+
 /* Phase A5 safepoint kind taxonomy (RUNTIME_GC_DELTA §10.1).
  *
  * Every emitted safepoint poll now encodes a "kind" in the high bits of
@@ -3278,12 +3315,23 @@ static void *osty_gc_cheney_forward(void *from_payload) {
  * the new from-space starts with whatever the old to-space accumulated,
  * and the new to-space's cursor resets to its base so the next minor
  * starts with a clean slate. Phase 6 step 3 calls this at the tail of
- * `osty_gc_collect_minor_cheney` once the scan finishes. */
+ * `osty_gc_collect_minor_cheney` once the scan finishes.
+ *
+ * Cache invalidation: the per-thread `osty_rt_string_cache` keys entries
+ * by pointer address. Young arena addresses get reused across swaps —
+ * an address P that held "8" before the swap may hold "22" after, and
+ * the cache would otherwise return the stale len/hash. The cache lookup
+ * compares `entry->value == value`, so any address reuse silently hits
+ * the wrong entry. Clearing on swap keeps the cache correct without
+ * tracking which entries are young (the alternative would mean a
+ * per-entry "young" flag and a walk-and-clear pass; the unconditional
+ * memset is simpler and fits in the swap's existing critical section). */
 static void osty_gc_cheney_swap_arenas(void) {
     osty_gc_young_arena tmp = osty_gc_young_from;
     osty_gc_young_from = osty_gc_young_to;
     osty_gc_young_to = tmp;
     osty_gc_young_to.cursor = osty_gc_young_to.base;
+    osty_rt_string_cache_invalidate_all();
     osty_gc_young_cheney_swap_count_total += 1;
 }
 
@@ -3649,6 +3697,10 @@ static void osty_gc_collect_minor_cheney_with_stack_roots(
     for (i = 0; i < root_slot_count; i++) {
         osty_gc_cheney_slot((void *)root_slots[i]);
     }
+    /* Walk the shadow-stack chain so caller-frame roots reach cheney
+     * forwarding too — without this, an inner safepoint would forward
+     * its own slots but leave the caller's pointers stale. */
+    OSTY_GC_FOR_EACH_CHAIN_ROOT(osty_gc_cheney_slot(_slot));
     for (i = 0; i < osty_gc_global_root_count; i++) {
         osty_gc_cheney_slot(osty_gc_global_root_slots[i]);
     }
@@ -4225,6 +4277,15 @@ typedef struct osty_rt_string_cache_entry {
 
 static OSTY_RT_TLS osty_rt_string_cache_entry
     osty_rt_string_cache[OSTY_RT_STRING_CACHE_SLOTS];
+
+/* Wipe every cache slot. Called from `osty_gc_cheney_swap_arenas` so
+ * young arena addresses can't be observed via stale `len`/`hash`
+ * entries from a prior cycle's tenant. The full memset is fine — the
+ * cache is 256 entries × ~32 bytes ≈ 8 KiB, well under one cache line
+ * fault budget per minor cycle. */
+static void osty_rt_string_cache_invalidate_all(void) {
+    memset(osty_rt_string_cache, 0, sizeof(osty_rt_string_cache));
+}
 
 /* OSTY_HOT_INLINE: called twice per `osty_rt_strings_Equal` (one for
  * each operand) and once per `osty_rt_string_hash`. The SSO branch
@@ -5049,6 +5110,11 @@ static int64_t osty_gc_compact_major_with_stack_roots(
     for (i = 0; i < root_slot_count; i++) {
         osty_gc_remap_slot((void *)root_slots[i]);
     }
+    /* Walk the shadow-stack chain — same reason as the cheney slot
+     * loop above. Without this the caller's slot still points to the
+     * pre-compaction payload while the new clone lives at a different
+     * address, so the next caller-side load reads garbage. */
+    OSTY_GC_FOR_EACH_CHAIN_ROOT(osty_gc_remap_slot(_slot));
     for (i = 0; i < osty_gc_global_root_count; i++) {
         osty_gc_remap_slot(osty_gc_global_root_slots[i]);
     }
@@ -5101,6 +5167,12 @@ static int64_t osty_gc_compact_major_with_stack_roots(
     osty_gc_compaction_count_total += 1;
     osty_gc_forwarded_objects_last = moved;
     osty_gc_forwarded_bytes_last = moved_bytes;
+    /* Same address-reuse hazard as cheney_swap_arenas: major compaction
+     * releases the OLD bump regions back to the recycler, and the next
+     * allocation can land at an address whose string-cache slot still
+     * holds the pre-compaction tenant's len/hash. Wipe the cache so
+     * lookups go through measure() once before re-caching. */
+    osty_rt_string_cache_invalidate_all();
     return moved;
 }
 
@@ -5175,6 +5247,11 @@ static int64_t osty_gc_compact_minor_with_stack_roots(
     for (i = 0; i < root_slot_count; i++) {
         osty_gc_remap_slot((void *)root_slots[i]);
     }
+    /* Walk the shadow-stack chain — same reason as the cheney slot
+     * loop above. Without this the caller's slot still points to the
+     * pre-compaction payload while the new clone lives at a different
+     * address, so the next caller-side load reads garbage. */
+    OSTY_GC_FOR_EACH_CHAIN_ROOT(osty_gc_remap_slot(_slot));
     for (i = 0; i < osty_gc_global_root_count; i++) {
         osty_gc_remap_slot(osty_gc_global_root_slots[i]);
     }
@@ -5315,6 +5392,11 @@ static void osty_gc_collect_major_with_stack_roots(void *const *root_slots, int6
     for (i = 0; i < root_slot_count; i++) {
         osty_gc_mark_root_slot((void *)root_slots[i]);
     }
+    /* Walk the shadow-stack chain so caller frames' managed locals get
+     * marked as reachable. Without this, an inner safepoint would only
+     * see its own roots, sweep the caller's Map/List/etc as garbage,
+     * and free their backing storage out from under the caller. */
+    OSTY_GC_FOR_EACH_CHAIN_ROOT(osty_gc_mark_root_slot(_slot));
     /* 3. Seed from registered global slots. */
     for (i = 0; i < osty_gc_global_root_count; i++) {
         osty_gc_mark_root_slot(osty_gc_global_root_slots[i]);
@@ -5402,6 +5484,11 @@ static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int6
     for (i = 0; i < root_slot_count; i++) {
         osty_gc_mark_root_slot((void *)root_slots[i]);
     }
+    /* Walk the shadow-stack chain so caller frames' managed locals get
+     * marked as reachable. Without this, an inner safepoint would only
+     * see its own roots, sweep the caller's Map/List/etc as garbage,
+     * and free their backing storage out from under the caller. */
+    OSTY_GC_FOR_EACH_CHAIN_ROOT(osty_gc_mark_root_slot(_slot));
     /* 3. Global roots. */
     for (i = 0; i < osty_gc_global_root_count; i++) {
         osty_gc_mark_root_slot(osty_gc_global_root_slots[i]);
@@ -5689,6 +5776,11 @@ static void osty_gc_incremental_seed_roots(void *const *root_slots, int64_t root
     for (i = 0; i < root_slot_count; i++) {
         osty_gc_mark_root_slot((void *)root_slots[i]);
     }
+    /* Walk the shadow-stack chain so caller frames' managed locals get
+     * marked as reachable. Without this, an inner safepoint would only
+     * see its own roots, sweep the caller's Map/List/etc as garbage,
+     * and free their backing storage out from under the caller. */
+    OSTY_GC_FOR_EACH_CHAIN_ROOT(osty_gc_mark_root_slot(_slot));
     for (i = 0; i < osty_gc_global_root_count; i++) {
         osty_gc_mark_root_slot(osty_gc_global_root_slots[i]);
     }
@@ -9971,6 +10063,22 @@ void osty_gc_unpin_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.unpin_v1"));
 void osty_gc_global_root_register_v1(void *slot) __asm__(OSTY_GC_SYMBOL("osty.gc.global_root_register_v1"));
 void osty_gc_global_root_unregister_v1(void *slot) __asm__(OSTY_GC_SYMBOL("osty.gc.global_root_unregister_v1"));
 void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t root_slot_count) __asm__(OSTY_GC_SYMBOL("osty.gc.safepoint_v1"));
+
+/* Shadow-stack frame descriptor. Each callee with managed locals allocas
+ * one of these on its own stack and registers it via root_frame_enter_v1
+ * at function entry, then unregisters via root_frame_leave_v1 before
+ * every return. Ordering forms a thread-local linked list: the deepest
+ * caller is the head, root frames threaded back through `prev`.
+ *
+ * Why this exists: safepoint_v1 only ever sees the *current* frame's
+ * roots — not the caller's. Without a chain, an inner call's safepoint
+ * would mark only its own locals, sweep the caller's Map / List
+ * payloads as unreachable, and free them out from under the caller.
+ * The chain is what makes cross-frame root tracking work. The struct
+ * itself is forward-declared above (alongside the chain head); only
+ * the runtime entry / leave symbols live here. */
+void osty_gc_root_frame_enter_v1(struct osty_gc_root_frame *frame, void *const *slots, int64_t count) __asm__(OSTY_GC_SYMBOL("osty.gc.root_frame_enter_v1"));
+void osty_gc_root_frame_leave_v1(struct osty_gc_root_frame *frame) __asm__(OSTY_GC_SYMBOL("osty.gc.root_frame_leave_v1"));
 void *osty_rt_enum_alloc_ptr_v1(const char *site) __asm__(OSTY_GC_SYMBOL("osty.rt.enum_alloc_ptr_v1"));
 void *osty_rt_enum_alloc_scalar_v1(const char *site) __asm__(OSTY_GC_SYMBOL("osty.rt.enum_alloc_scalar_v1"));
 
@@ -10395,11 +10503,24 @@ static void osty_gc_cheney_slot(void *slot_addr) {
         memcpy(slot_addr, &forwarded, sizeof(forwarded));
         payload = forwarded;
     }
-    /* If the (possibly-forwarded) target lives in OLD, enqueue its
-     * header for the transitive trace. The push de-dupes via the
-     * BLACK colour so cycles + repeated edges drain in O(1). */
+    /* Enqueue the (possibly-forwarded) target for transitive trace.
+     *
+     * Originally gated on generation == OLD, on the assumption that
+     * young objects already get walked by `cheney_scan_loop`. That's
+     * true for tinytag young (no header) — they live in young from-
+     * space and the scan loop visits them all. But HEADERFUL YOUNG
+     * objects (Map / Set / Channel / Closure-env / GENERIC) are NOT
+     * visited by the scan loop (scan walks young to-space which only
+     * contains tinytag survivors, never headerful payloads). So if a
+     * Map is headerful-young (i.e., never been promoted) and holds
+     * young-arena String keys, those keys went un-forwarded — the
+     * Map's slots kept stale from-space addresses, content vanished
+     * on the next swap, and `containsKey` started returning false
+     * positives because empty-len cached lookups on dead memory
+     * silently succeeded. Pushing for any non-NULL header covers all
+     * cases; the BLACK-colour dedup keeps the queue O(reachable). */
     header = osty_gc_find_header(payload);
-    if (header != NULL && header->generation == OSTY_GC_GEN_OLD) {
+    if (header != NULL) {
         osty_gc_cheney_old_stack_push(header);
     }
 }
@@ -10647,6 +10768,41 @@ void osty_gc_safepoint_v1(int64_t safepoint_id, void *const *root_slots, int64_t
     }
     osty_gc_collect_now_with_stack_roots(root_slots, root_slot_count);
     osty_gc_release();
+}
+
+/* Shadow-stack push: register the current frame's root chunk so the
+ * GC can see it when a callee triggers a safepoint. The frame itself is
+ * an alloca'd `osty_gc_root_frame` in the caller's stack — the linked
+ * list lives off thread-local storage. */
+void osty_gc_root_frame_enter_v1(struct osty_gc_root_frame *frame, void *const *slots, int64_t count) {
+    if (frame == NULL) {
+        return;
+    }
+    frame->prev = osty_gc_root_chain_top;
+    frame->slots = slots;
+    frame->count = count;
+    osty_gc_root_chain_top = frame;
+}
+
+/* Shadow-stack pop: walk back to `frame->prev`. Defensive — if some
+ * exotic flow pops out of order we don't underflow, just no-op. The
+ * chain is thread-local so no locking required. */
+void osty_gc_root_frame_leave_v1(struct osty_gc_root_frame *frame) {
+    if (frame == NULL) {
+        return;
+    }
+    if (osty_gc_root_chain_top == frame) {
+        osty_gc_root_chain_top = frame->prev;
+        return;
+    }
+    /* Out-of-order pop. Try to splice frame out of the chain. */
+    struct osty_gc_root_frame *cur = osty_gc_root_chain_top;
+    while (cur != NULL && cur->prev != frame) {
+        cur = cur->prev;
+    }
+    if (cur != NULL) {
+        cur->prev = frame->prev;
+    }
 }
 
 void osty_gc_debug_collect(void) {

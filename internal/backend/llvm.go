@@ -161,6 +161,7 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 		Source:      entry.Source,
 		Target:      target,
 		UseMIR:      useMIRBackend(features, emit),
+		EmitGC:      true,
 	}
 	// IR is the sole input contract. The backend dispatcher never reaches
 	// for entry.File — the AST is a front-end artifact that the LLVM
