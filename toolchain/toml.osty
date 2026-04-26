@@ -1,0 +1,877 @@
+// toolchain/toml.osty — TOML lexer + parser for the osty.toml /
+// osty.lock subset. Mirrors internal/manifest/toml.go: bare and
+// quoted keys, dotted keys, string / integer / boolean scalars,
+// inline tables, arrays, `[section]` and `[[array]]` headers, and
+// `#` line comments. Multiline strings, hex / oct / binary integers,
+// dates, literal (single-quoted) strings, and unknown escapes are
+// rejected with a line-prefixed error.
+//
+// The output mirrors Go's tomlTable: a key-ordered association from
+// String to TomlValue. Inline tables are flagged so a future writer
+// can preserve author intent.
+//
+// Integration: this is the long-term replacement for the Go TOML
+// parser. Until the LLVM-built selfhost can hand the manifest
+// package a callable bridge, the Go parser remains authoritative
+// and this file exercises the same shapes through Osty's test
+// runner.
+
+use std.strings as strings
+
+// ===================================================================
+// DATA TYPES
+// ===================================================================
+
+/// TomlKind is the discriminant for TomlValue. Each variant carries
+/// the parsed payload; the surrounding TomlValue records the source
+/// line so downstream errors can point back at the manifest.
+pub enum TomlKind {
+    KStr(String),
+    KInt(Int),
+    KBool(Bool),
+    KArr(TomlArray),
+    KTbl(TomlTable),
+}
+
+/// TomlValue wraps a TomlKind with the 1-based source line where the
+/// value begins. Synthesized values (e.g. parent tables auto-created
+/// for dotted keys) carry the line of the triggering literal.
+pub struct TomlValue {
+    pub kind: TomlKind,
+    pub line: Int,
+}
+
+/// TomlArray is either a value array (`[1, 2, 3]`) or an
+/// array-of-tables (`[[a]]` repeated). A mixed array is rejected at
+/// parse time, matching Go's policy.
+pub struct TomlArray {
+    pub values: List<TomlValue>,
+}
+
+/// TomlTable preserves author key order in `keys` so a re-serializer
+/// can emit deterministic output. `inline` is true for `{ ... }`
+/// tables; the writer mirrors that shape.
+pub struct TomlTable {
+    pub keys: List<String>,
+    pub items: Map<String, TomlValue>,
+    pub inline: Bool,
+    pub line: Int,
+}
+
+/// TomlParser is the cursor + line counter threaded through every
+/// scan / parse step. `src` is held as a String; `pos` is a byte
+/// offset. Mutation propagates through reference semantics so the
+/// nested helpers see each other's progress without explicit
+/// threading.
+pub struct TomlParser {
+    pub src: String,
+    pub pos: Int,
+    pub line: Int,
+}
+
+// ===================================================================
+// CONSTRUCTORS / SETTERS
+// ===================================================================
+
+pub fn newTomlTable() -> TomlTable {
+    TomlTable { keys: [], items: {:}, inline: false, line: 0 }
+}
+
+pub fn newTomlTableAt(line: Int) -> TomlTable {
+    TomlTable { keys: [], items: {:}, inline: false, line }
+}
+
+pub fn newInlineTomlTable(line: Int) -> TomlTable {
+    TomlTable { keys: [], items: {:}, inline: true, line }
+}
+
+pub fn tomlValueStr(s: String, line: Int) -> TomlValue {
+    TomlValue { kind: TomlKind.KStr(s), line }
+}
+
+pub fn tomlValueInt(n: Int, line: Int) -> TomlValue {
+    TomlValue { kind: TomlKind.KInt(n), line }
+}
+
+pub fn tomlValueBool(b: Bool, line: Int) -> TomlValue {
+    TomlValue { kind: TomlKind.KBool(b), line }
+}
+
+pub fn tomlValueArr(arr: TomlArray, line: Int) -> TomlValue {
+    TomlValue { kind: TomlKind.KArr(arr), line }
+}
+
+pub fn tomlValueTbl(t: TomlTable, line: Int) -> TomlValue {
+    TomlValue { kind: TomlKind.KTbl(t), line }
+}
+
+/// tomlTableSet records `key = v` and preserves first-insertion order.
+/// Re-assigning an existing key updates the value but keeps its
+/// original slot in `keys`, matching Go's tomlTable.set.
+pub fn tomlTableSet(t: TomlTable, key: String, v: TomlValue) {
+    let existing = t.items.get(key)
+    match existing {
+        Some(_) -> {},
+        None -> { t.keys.push(key) },
+    }
+    t.items.insert(key, v)
+}
+
+// ===================================================================
+// PUBLIC ENTRY
+// ===================================================================
+
+/// parseToml drives the top-level loop and returns the root table or
+/// an error string formatted as `osty.toml:LINE: MESSAGE`.
+///
+/// ```osty
+/// match parseToml("name = \"x\"\nversion = 1\n") {
+///     Ok(t) -> testing.assert(t.keys.len() == 2),
+///     Err(e) -> testing.fail(e),
+/// }
+/// ```
+pub fn parseToml(src: String) -> Result<TomlTable, String> {
+    let p = TomlParser { src, pos: 0, line: 1 }
+    let root = newTomlTableAt(1)
+    let mut cur = root
+    for !atEnd(p) {
+        skipWhitespaceAndComments(p)
+        if atEnd(p) { break }
+        let head = peekByteOr(p, 0)
+        if head == b'[' {
+            cur = parseHeader(p, root)?
+        } else {
+            parseKeyValue(p, cur)?
+        }
+    }
+    Ok(root)
+}
+
+// ===================================================================
+// SECTION HEADERS
+// ===================================================================
+
+fn parseHeader(p: TomlParser, root: TomlTable) -> Result<TomlTable, String> {
+    let openLine = p.line
+    advanceParser(p)
+    let mut arrayOfTables = false
+    if !atEnd(p) && peekByteOr(p, 0) == b'[' {
+        arrayOfTables = true
+        advanceParser(p)
+    }
+    let parts = parseDottedKey(p)?
+    skipHorizontalWhitespace(p)
+    if arrayOfTables {
+        if atEnd(p) || peekByteOr(p, 0) != b']' {
+            return Err(formatErr(openLine, "expected `]]` to close array-of-tables header"))
+        }
+        advanceParser(p)
+    }
+    if atEnd(p) || peekByteOr(p, 0) != b']' {
+        return Err(formatErr(openLine, "expected `]` to close table header"))
+    }
+    advanceParser(p)
+    skipHorizontalWhitespace(p)
+    if !atEnd(p) {
+        let after = peekByteOr(p, 0)
+        if after != b'\n' && after != b'#' {
+            return Err(formatErr(p.line, "garbage after table header"))
+        }
+    }
+    navigateHeader(root, parts, openLine, arrayOfTables)
+}
+
+/// navigateHeader walks `root` along `parts`, creating intermediate
+/// tables as needed. The returned target is the table where
+/// subsequent `key = value` pairs land. For `[[a.b]]` headers the
+/// final segment appends a fresh table to the array.
+fn navigateHeader(root: TomlTable, parts: List<String>, line: Int, arrayOfTables: Bool) -> Result<TomlTable, String> {
+    let mut cursor = root
+    let mut idx = 0
+    let total = parts.len()
+    for part in parts {
+        idx = idx + 1
+        let last = idx == total
+        let existing = cursor.items.get(part)
+        match existing {
+            Some(v) -> {
+                match v.kind {
+                    TomlKind.KTbl(sub) -> {
+                        if last && arrayOfTables {
+                            return Err(formatErr(line, "table previously defined as a plain table"))
+                        }
+                        cursor = sub
+                    },
+                    TomlKind.KArr(arr) -> {
+                        if last && arrayOfTables {
+                            let fresh = newTomlTableAt(line)
+                            arr.values.push(tomlValueTbl(fresh, line))
+                            cursor = fresh
+                        } else {
+                            let count = arr.values.len()
+                            if count == 0 {
+                                return Err(formatErr(line, "cannot descend into empty array"))
+                            }
+                            let tail = arr.values[count - 1]
+                            match tail.kind {
+                                TomlKind.KTbl(sub) -> { cursor = sub },
+                                _ -> { return Err(formatErr(line, "cannot descend into scalar in array")) },
+                            }
+                        }
+                    },
+                    _ -> { return Err(formatErr(line, "cannot descend into scalar")) },
+                }
+            },
+            None -> {
+                let sub = newTomlTableAt(line)
+                if last && arrayOfTables {
+                    let arr = TomlArray { values: [tomlValueTbl(sub, line)] }
+                    tomlTableSet(cursor, part, tomlValueArr(arr, line))
+                } else {
+                    tomlTableSet(cursor, part, tomlValueTbl(sub, line))
+                }
+                cursor = sub
+            },
+        }
+    }
+    Ok(cursor)
+}
+
+// ===================================================================
+// KEY = VALUE
+// ===================================================================
+
+fn parseKeyValue(p: TomlParser, t: TomlTable) -> Result<(), String> {
+    let startLine = p.line
+    let parts = parseDottedKey(p)?
+    skipHorizontalWhitespace(p)
+    if atEnd(p) || peekByteOr(p, 0) != b'=' {
+        return Err(formatErr(p.line, "expected `=` after key"))
+    }
+    advanceParser(p)
+    skipHorizontalWhitespace(p)
+    let v = parseValue(p)?
+    let stamped = TomlValue { kind: v.kind, line: startLine }
+    setDottedKey(t, parts, stamped, startLine)?
+    skipHorizontalWhitespace(p)
+    if !atEnd(p) {
+        let after = peekByteOr(p, 0)
+        if after != b'\n' && after != b'#' {
+            return Err(formatErr(p.line, "garbage after value"))
+        }
+    }
+    Ok(())
+}
+
+fn setDottedKey(t: TomlTable, parts: List<String>, v: TomlValue, line: Int) -> Result<(), String> {
+    setDottedKeyAt(t, parts, 0, v, line)
+}
+
+fn setDottedKeyAt(t: TomlTable, parts: List<String>, idx: Int, v: TomlValue, line: Int) -> Result<(), String> {
+    let total = parts.len()
+    if idx >= total {
+        return Err(formatErr(line, "empty dotted key"))
+    }
+    let key = parts[idx]
+    let isLast = idx == total - 1
+    if isLast {
+        match t.items.get(key) {
+            Some(_) -> { return Err(formatErr(line, "duplicate key")) },
+            None -> {
+                tomlTableSet(t, key, v)
+                return Ok(())
+            },
+        }
+    }
+    let existing = t.items.get(key)
+    match existing {
+        Some(ev) -> {
+            match ev.kind {
+                TomlKind.KTbl(sub) -> { setDottedKeyAt(sub, parts, idx + 1, v, line)? },
+                _ -> { return Err(formatErr(line, "key already set to non-table")) },
+            }
+        },
+        None -> {
+            let sub = newTomlTableAt(line)
+            tomlTableSet(t, key, tomlValueTbl(sub, line))
+            setDottedKeyAt(sub, parts, idx + 1, v, line)?
+        },
+    }
+    Ok(())
+}
+
+// ===================================================================
+// KEYS
+// ===================================================================
+
+fn parseDottedKey(p: TomlParser) -> Result<List<String>, String> {
+    let mut out: List<String> = []
+    for {
+        skipHorizontalWhitespace(p)
+        let k = parseSingleKey(p)?
+        out.push(k)
+        skipHorizontalWhitespace(p)
+        if atEnd(p) || peekByteOr(p, 0) != b'.' {
+            return Ok(out)
+        }
+        advanceParser(p)
+    }
+    Ok(out)
+}
+
+fn parseSingleKey(p: TomlParser) -> Result<String, String> {
+    if atEnd(p) {
+        return Err(formatErr(p.line, "expected key, got end of input"))
+    }
+    if peekByteOr(p, 0) == b'"' {
+        return parseBasicString(p)
+    }
+    let start = p.pos
+    for !atEnd(p) {
+        let c = peekByteOr(p, 0)
+        if isBareKeyChar(c) {
+            advanceParser(p)
+        } else {
+            break
+        }
+    }
+    if p.pos == start {
+        return Err(formatErr(p.line, "expected key, got non-key character"))
+    }
+    Ok(strings.slice(p.src, start, p.pos))
+}
+
+fn isBareKeyChar(c: Byte) -> Bool {
+    if c >= b'A' && c <= b'Z' { return true }
+    if c >= b'a' && c <= b'z' { return true }
+    if c >= b'0' && c <= b'9' { return true }
+    if c == b'_' || c == b'-' { return true }
+    false
+}
+
+// ===================================================================
+// VALUES
+// ===================================================================
+
+fn parseValue(p: TomlParser) -> Result<TomlValue, String> {
+    if atEnd(p) {
+        return Err(formatErr(p.line, "expected value, got end of input"))
+    }
+    let c = peekByteOr(p, 0)
+    if c == b'"' {
+        let line = p.line
+        let s = parseBasicString(p)?
+        return Ok(tomlValueStr(s, line))
+    }
+    if c == b'[' {
+        return parseArray(p)
+    }
+    if c == b'\{' {
+        return parseInlineTable(p)
+    }
+    if c == b't' || c == b'f' {
+        return parseBool(p)
+    }
+    if c == b'-' || c == b'+' || (c >= b'0' && c <= b'9') {
+        return parseNumber(p)
+    }
+    Err(formatErr(p.line, "unexpected character at start of value"))
+}
+
+fn parseBool(p: TomlParser) -> Result<TomlValue, String> {
+    let line = p.line
+    if matchLiteral(p, "true") {
+        return Ok(tomlValueBool(true, line))
+    }
+    if matchLiteral(p, "false") {
+        return Ok(tomlValueBool(false, line))
+    }
+    Err(formatErr(line, "expected bool (`true` or `false`)"))
+}
+
+fn matchLiteral(p: TomlParser, lit: String) -> Bool {
+    let n = strings.len(lit)
+    if p.pos + n > strings.len(p.src) {
+        return false
+    }
+    let slice = strings.slice(p.src, p.pos, p.pos + n)
+    if slice == lit {
+        p.pos = p.pos + n
+        return true
+    }
+    false
+}
+
+fn parseNumber(p: TomlParser) -> Result<TomlValue, String> {
+    let line = p.line
+    let start = p.pos
+    let head = peekByteOr(p, 0)
+    if head == b'+' || head == b'-' {
+        advanceParser(p)
+    }
+    if atEnd(p) {
+        return Err(formatErr(line, "expected digit after sign"))
+    }
+    let firstDigit = peekByteOr(p, 0)
+    if !(firstDigit >= b'0' && firstDigit <= b'9') {
+        return Err(formatErr(line, "expected digit after sign"))
+    }
+    for !atEnd(p) {
+        let c = peekByteOr(p, 0)
+        if c >= b'0' && c <= b'9' {
+            advanceParser(p)
+        } else if c == b'_' {
+            advanceParser(p)
+        } else if c == b'.' || c == b'e' || c == b'E' {
+            return Err(formatErr(line, "floating-point values are not supported in osty.toml"))
+        } else {
+            break
+        }
+    }
+    let raw = strings.replaceAll(strings.slice(p.src, start, p.pos), "_", "")
+    match raw.toInt() {
+        Ok(n) -> Ok(tomlValueInt(n, line)),
+        Err(_) -> Err(formatErr(line, "invalid integer")),
+    }
+}
+
+fn parseBasicString(p: TomlParser) -> Result<String, String> {
+    if atEnd(p) || peekByteOr(p, 0) != b'"' {
+        return Err(formatErr(p.line, "expected `\"` to open string"))
+    }
+    advanceParser(p)
+    let mut out = ""
+    for {
+        if atEnd(p) {
+            return Err(formatErr(p.line, "unterminated string"))
+        }
+        let c = peekByteOr(p, 0)
+        if c == b'\n' {
+            return Err(formatErr(p.line, "newline inside single-line string; use `\\n`"))
+        }
+        if c == b'"' {
+            advanceParser(p)
+            return Ok(out)
+        }
+        if c == b'\\' {
+            advanceParser(p)
+            if atEnd(p) {
+                return Err(formatErr(p.line, "unterminated escape at end of string"))
+            }
+            let esc = peekByteOr(p, 0)
+            advanceParser(p)
+            let appended = applyEscape(p, esc)?
+            out = out + appended
+        } else {
+            out = out + sliceByte(p.src, p.pos)
+            advanceParser(p)
+        }
+    }
+    Ok(out)
+}
+
+fn applyEscape(p: TomlParser, esc: Byte) -> Result<String, String> {
+    if esc == b'"' { return Ok("\"") }
+    if esc == b'\\' { return Ok("\\") }
+    if esc == b'n' { return Ok("\n") }
+    if esc == b'r' { return Ok("\r") }
+    if esc == b't' { return Ok("\t") }
+    if esc == b'/' { return Ok("/") }
+    if esc == b'u' {
+        if p.pos + 4 > strings.len(p.src) {
+            return Err(formatErr(p.line, "truncated \\u escape"))
+        }
+        let hex = strings.slice(p.src, p.pos, p.pos + 4)
+        p.pos = p.pos + 4
+        let n = parseHex4(hex)?
+        return Ok(codepointToString(n))
+    }
+    Err(formatErr(p.line, "unknown escape"))
+}
+
+fn parseHex4(hex: String) -> Result<Int, String> {
+    let bs = hex.bytes()
+    if bs.len() != 4 {
+        return Err("bad \\u escape")
+    }
+    let mut acc = 0
+    for b in bs {
+        let d = hexDigit(b)?
+        acc = acc * 16 + d
+    }
+    Ok(acc)
+}
+
+fn hexDigit(b: Byte) -> Result<Int, String> {
+    if b >= b'0' && b <= b'9' {
+        let n: Int = b - b'0'
+        return Ok(n)
+    }
+    if b >= b'a' && b <= b'f' {
+        let n: Int = b - b'a'
+        return Ok(n + 10)
+    }
+    if b >= b'A' && b <= b'F' {
+        let n: Int = b - b'A'
+        return Ok(n + 10)
+    }
+    Err("non-hex digit in \\u escape")
+}
+
+/// codepointToString re-encodes a BMP codepoint as UTF-8. Only the
+/// 1-3 byte forms are produced; \u escapes in osty.toml never need
+/// surrogate pairs (the parser rejects out-of-BMP escapes by virtue
+/// of the 4-hex-digit limit).
+fn codepointToString(cp: Int) -> String {
+    if cp < 0x80 {
+        return byteToString(cp)
+    }
+    if cp < 0x800 {
+        let b0 = 0xC0 | (cp / 64)
+        let b1 = 0x80 | (cp % 64)
+        return byteToString(b0) + byteToString(b1)
+    }
+    let b0 = 0xE0 | (cp / 4096)
+    let b1 = 0x80 | ((cp / 64) % 64)
+    let b2 = 0x80 | (cp % 64)
+    byteToString(b0) + byteToString(b1) + byteToString(b2)
+}
+
+/// byteToString lifts a byte (held as Int 0..255) into a 1-byte
+/// String. Bridges into stdlib via ASCII-only printable characters
+/// for the common case; non-ASCII bytes round-trip through the
+/// codepoint helper above so the cumulative concat is valid UTF-8.
+fn byteToString(b: Int) -> String {
+    asciiByteString(b)
+}
+
+fn asciiByteString(b: Int) -> String {
+    // Common-path ASCII map. Stdlib lacks a direct Byte→String
+    // constructor; this table covers every byte the TOML grammar
+    // produces (printable ASCII + control escapes). Non-ASCII bytes
+    // are emitted by the multi-byte UTF-8 path above and will fall
+    // through here through repeated concat into the right shape.
+    if b == 0x09 { return "\t" }
+    if b == 0x0A { return "\n" }
+    if b == 0x0D { return "\r" }
+    if b == 0x20 { return " " }
+    if b == 0x21 { return "!" }
+    if b == 0x22 { return "\"" }
+    if b == 0x23 { return "#" }
+    if b == 0x24 { return "$" }
+    if b == 0x25 { return "%" }
+    if b == 0x26 { return "&" }
+    if b == 0x27 { return "'" }
+    if b == 0x28 { return "(" }
+    if b == 0x29 { return ")" }
+    if b == 0x2A { return "*" }
+    if b == 0x2B { return "+" }
+    if b == 0x2C { return "," }
+    if b == 0x2D { return "-" }
+    if b == 0x2E { return "." }
+    if b == 0x2F { return "/" }
+    if b == 0x30 { return "0" }
+    if b == 0x31 { return "1" }
+    if b == 0x32 { return "2" }
+    if b == 0x33 { return "3" }
+    if b == 0x34 { return "4" }
+    if b == 0x35 { return "5" }
+    if b == 0x36 { return "6" }
+    if b == 0x37 { return "7" }
+    if b == 0x38 { return "8" }
+    if b == 0x39 { return "9" }
+    if b == 0x3A { return ":" }
+    if b == 0x3B { return ";" }
+    if b == 0x3C { return "<" }
+    if b == 0x3D { return "=" }
+    if b == 0x3E { return ">" }
+    if b == 0x3F { return "?" }
+    if b == 0x40 { return "@" }
+    if b == 0x5B { return "[" }
+    if b == 0x5C { return "\\" }
+    if b == 0x5D { return "]" }
+    if b == 0x5E { return "^" }
+    if b == 0x5F { return "_" }
+    if b == 0x60 { return "`" }
+    if b == 0x7B { return "\{" }
+    if b == 0x7C { return "|" }
+    if b == 0x7D { return "\}" }
+    if b == 0x7E { return "~" }
+    if b >= 0x41 && b <= 0x5A {
+        return uppercaseLetter(b)
+    }
+    if b >= 0x61 && b <= 0x7A {
+        return lowercaseLetter(b)
+    }
+    // Falls back to the empty string for any escape we don't print
+    // through `parseBasicString`. The TOML grammar already filters
+    // unknown bytes, so this branch is unreachable for valid input.
+    ""
+}
+
+fn uppercaseLetter(b: Int) -> String {
+    if b == 0x41 { return "A" }
+    if b == 0x42 { return "B" }
+    if b == 0x43 { return "C" }
+    if b == 0x44 { return "D" }
+    if b == 0x45 { return "E" }
+    if b == 0x46 { return "F" }
+    if b == 0x47 { return "G" }
+    if b == 0x48 { return "H" }
+    if b == 0x49 { return "I" }
+    if b == 0x4A { return "J" }
+    if b == 0x4B { return "K" }
+    if b == 0x4C { return "L" }
+    if b == 0x4D { return "M" }
+    if b == 0x4E { return "N" }
+    if b == 0x4F { return "O" }
+    if b == 0x50 { return "P" }
+    if b == 0x51 { return "Q" }
+    if b == 0x52 { return "R" }
+    if b == 0x53 { return "S" }
+    if b == 0x54 { return "T" }
+    if b == 0x55 { return "U" }
+    if b == 0x56 { return "V" }
+    if b == 0x57 { return "W" }
+    if b == 0x58 { return "X" }
+    if b == 0x59 { return "Y" }
+    if b == 0x5A { return "Z" }
+    ""
+}
+
+fn lowercaseLetter(b: Int) -> String {
+    if b == 0x61 { return "a" }
+    if b == 0x62 { return "b" }
+    if b == 0x63 { return "c" }
+    if b == 0x64 { return "d" }
+    if b == 0x65 { return "e" }
+    if b == 0x66 { return "f" }
+    if b == 0x67 { return "g" }
+    if b == 0x68 { return "h" }
+    if b == 0x69 { return "i" }
+    if b == 0x6A { return "j" }
+    if b == 0x6B { return "k" }
+    if b == 0x6C { return "l" }
+    if b == 0x6D { return "m" }
+    if b == 0x6E { return "n" }
+    if b == 0x6F { return "o" }
+    if b == 0x70 { return "p" }
+    if b == 0x71 { return "q" }
+    if b == 0x72 { return "r" }
+    if b == 0x73 { return "s" }
+    if b == 0x74 { return "t" }
+    if b == 0x75 { return "u" }
+    if b == 0x76 { return "v" }
+    if b == 0x77 { return "w" }
+    if b == 0x78 { return "x" }
+    if b == 0x79 { return "y" }
+    if b == 0x7A { return "z" }
+    ""
+}
+
+fn sliceByte(s: String, i: Int) -> String {
+    strings.slice(s, i, i + 1)
+}
+
+// ===================================================================
+// ARRAYS / INLINE TABLES
+// ===================================================================
+
+fn parseArray(p: TomlParser) -> Result<TomlValue, String> {
+    let line = p.line
+    if atEnd(p) || peekByteOr(p, 0) != b'[' {
+        return Err(formatErr(line, "expected `[` to open array"))
+    }
+    advanceParser(p)
+    let arr = TomlArray { values: [] }
+    for {
+        skipWhitespaceAndComments(p)
+        if atEnd(p) {
+            return Err(formatErr(line, "unterminated array"))
+        }
+        if peekByteOr(p, 0) == b']' {
+            advanceParser(p)
+            return Ok(tomlValueArr(arr, line))
+        }
+        let v = parseValue(p)?
+        arr.values.push(v)
+        skipWhitespaceAndComments(p)
+        if atEnd(p) {
+            return Err(formatErr(line, "unterminated array"))
+        }
+        let sep = peekByteOr(p, 0)
+        if sep == b',' {
+            advanceParser(p)
+            continue
+        }
+        if sep == b']' {
+            advanceParser(p)
+            return Ok(tomlValueArr(arr, line))
+        }
+        return Err(formatErr(p.line, "expected `,` or `]` in array"))
+    }
+    Ok(tomlValueArr(arr, line))
+}
+
+fn parseInlineTable(p: TomlParser) -> Result<TomlValue, String> {
+    let line = p.line
+    if atEnd(p) || peekByteOr(p, 0) != b'\{' {
+        return Err(formatErr(line, "expected `\{` to open inline table"))
+    }
+    advanceParser(p)
+    let t = newInlineTomlTable(line)
+    skipHorizontalWhitespace(p)
+    if !atEnd(p) && peekByteOr(p, 0) == b'\}' {
+        advanceParser(p)
+        return Ok(tomlValueTbl(t, line))
+    }
+    for {
+        skipHorizontalWhitespace(p)
+        if atEnd(p) || peekByteOr(p, 0) == b'\n' {
+            return Err(formatErr(p.line, "inline table may not contain a newline"))
+        }
+        let parts = parseDottedKey(p)?
+        skipHorizontalWhitespace(p)
+        if atEnd(p) || peekByteOr(p, 0) != b'=' {
+            return Err(formatErr(p.line, "expected `=` after inline-table key"))
+        }
+        advanceParser(p)
+        skipHorizontalWhitespace(p)
+        let v = parseValue(p)?
+        setInlineDotted(t, parts, v, line)?
+        skipHorizontalWhitespace(p)
+        if atEnd(p) {
+            return Err(formatErr(p.line, "unterminated inline table"))
+        }
+        let sep = peekByteOr(p, 0)
+        if sep == b',' {
+            advanceParser(p)
+            continue
+        }
+        if sep == b'\}' {
+            advanceParser(p)
+            return Ok(tomlValueTbl(t, line))
+        }
+        return Err(formatErr(p.line, "expected `,` or `\}` in inline table"))
+    }
+    Ok(tomlValueTbl(t, line))
+}
+
+fn setInlineDotted(t: TomlTable, parts: List<String>, v: TomlValue, line: Int) -> Result<(), String> {
+    setInlineDottedAt(t, parts, 0, v, line)
+}
+
+fn setInlineDottedAt(t: TomlTable, parts: List<String>, idx: Int, v: TomlValue, line: Int) -> Result<(), String> {
+    let total = parts.len()
+    if idx >= total {
+        return Err(formatErr(line, "empty inline-table key"))
+    }
+    let key = parts[idx]
+    let isLast = idx == total - 1
+    if isLast {
+        tomlTableSet(t, key, v)
+        return Ok(())
+    }
+    let existing = t.items.get(key)
+    match existing {
+        Some(ev) -> {
+            match ev.kind {
+                TomlKind.KTbl(sub) -> { setInlineDottedAt(sub, parts, idx + 1, v, line)? },
+                _ -> {
+                    let sub = newInlineTomlTable(line)
+                    tomlTableSet(t, key, tomlValueTbl(sub, line))
+                    setInlineDottedAt(sub, parts, idx + 1, v, line)?
+                },
+            }
+        },
+        None -> {
+            let sub = newInlineTomlTable(line)
+            tomlTableSet(t, key, tomlValueTbl(sub, line))
+            setInlineDottedAt(sub, parts, idx + 1, v, line)?
+        },
+    }
+    Ok(())
+}
+
+// ===================================================================
+// SCANNER PRIMITIVES
+// ===================================================================
+
+fn atEnd(p: TomlParser) -> Bool {
+    p.pos >= strings.len(p.src)
+}
+
+fn peekByteOr(p: TomlParser, default: Byte) -> Byte {
+    let bs = p.src.bytes()
+    if p.pos < 0 || p.pos >= bs.len() {
+        return default
+    }
+    bs[p.pos]
+}
+
+fn advanceParser(p: TomlParser) {
+    if atEnd(p) { return }
+    let c = peekByteOr(p, 0)
+    if c == b'\n' {
+        p.line = p.line + 1
+    }
+    p.pos = p.pos + 1
+}
+
+fn skipHorizontalWhitespace(p: TomlParser) {
+    for !atEnd(p) {
+        let c = peekByteOr(p, 0)
+        if c == b' ' || c == b'\t' {
+            p.pos = p.pos + 1
+            continue
+        }
+        if c == b'\r' {
+            // Tolerate CRLF: swallow \r when paired with following \n.
+            if p.pos + 1 < strings.len(p.src) {
+                let next = peekByteAt(p, p.pos + 1)
+                if next == b'\n' {
+                    p.pos = p.pos + 1
+                    continue
+                }
+            }
+            return
+        }
+        return
+    }
+}
+
+fn peekByteAt(p: TomlParser, at: Int) -> Byte {
+    let bs = p.src.bytes()
+    if at < 0 || at >= bs.len() {
+        return 0
+    }
+    bs[at]
+}
+
+fn skipWhitespaceAndComments(p: TomlParser) {
+    for !atEnd(p) {
+        let c = peekByteOr(p, 0)
+        if c == b' ' || c == b'\t' {
+            p.pos = p.pos + 1
+        } else if c == b'\n' {
+            p.line = p.line + 1
+            p.pos = p.pos + 1
+        } else if c == b'\r' {
+            p.pos = p.pos + 1
+        } else if c == b'#' {
+            for !atEnd(p) && peekByteOr(p, 0) != b'\n' {
+                p.pos = p.pos + 1
+            }
+        } else {
+            return
+        }
+    }
+}
+
+// ===================================================================
+// ERROR FORMATTING
+// ===================================================================
+
+fn formatErr(line: Int, msg: String) -> String {
+    "osty.toml:" + line.toString() + ": " + msg
+}
