@@ -3089,11 +3089,15 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
  *   1. Feature flag must be on. With the flag off the young arena is
  *      dormant and every alloc takes the headerful path, preserving
  *      pre-Phase-5 behaviour exactly.
- *   2. The kind must be one of the immutable byte-payload kinds —
- *      STRING or BYTES. Both have `alloc → fill → read → discard`
- *      lifecycles with no per-instance fields a caller mutates after
- *      the typed allocator returns; that's the structural prerequisite
- *      for auto-promote-on-pin (Phase 7 step 2) to be safe.
+ *   2. The kind must be one of the young-safe kinds — STRING, BYTES,
+ *      LIST. STRING/BYTES are immutable byte payloads. LIST has a
+ *      destroy callback (frees spilled `data` + `gc_offsets`), but
+ *      Phase E follow-up adds a from-space dead-list scan in
+ *      cheney_minor that runs the destroy work just before the
+ *      arena swap reclaims the bytes — making LIST safe to route
+ *      through the no-header path despite the external resource.
+ *      The scan also handles the self-referential `data` ptr
+ *      fixup on the to-space copy when a forwarded List was inline.
  *
  *      Why not the other no-destroy kinds:
  *        - CLOSURE_ENV: callers populate `captures[i]` after alloc
@@ -3101,19 +3105,15 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
  *          dead young addr while the OLD copy holds zero captures.
  *        - GENERIC: per-instance trace/destroy callbacks not on the
  *          micro-header.
- *        - LIST/MAP/SET/CHANNEL: have destroy callbacks Cheney can't
- *          invoke on dead from-space bytes.
+ *        - MAP/SET/CHANNEL: destroy frees pthread sync state,
+ *          backing arrays, etc. Same dead-from-space scan path
+ *          could handle them but the typed-allocator surface is
+ *          larger and the perf payoff smaller (these are typically
+ *          long-lived).
  *   3. Payload size must fit comfortably under the humongous
  *      threshold. Humongous allocs already take a separate path in
  *      the headerful allocator and have no benefit from being
- *      bump-allocated.
- *
- * Note: the cutover-narrowing-to-BYTES-only state was a temporary
- * mitigation for a `Map<String, _>` regression that turned out to
- * be in `osty_rt_string_cache` (pointer-keyed cache returning stale
- * len/hash for stack-buffer-reused lookup keys), not in the cheney
- * path itself. With the cache fingerprint fix in place,
- * STRING is back on the young path. */
+ *      bump-allocated. */
 static bool osty_gc_young_eligible(int64_t object_kind, size_t payload_size) {
     if (!osty_gc_tinytag_young_now()) {
         return false;
@@ -3210,6 +3210,22 @@ static void *osty_gc_cheney_forward(void *from_payload) {
     to_payload = (void *)((unsigned char *)to_slot +
                           sizeof(osty_gc_micro_header));
     memcpy(to_payload, from_payload, payload_size);
+    /* Phase E follow-up: per-kind post-copy fixup for self-referential
+     * payload pointers. `osty_rt_list` keeps a `data` pointer that
+     * either points to a heap buffer (spilled) or to its OWN
+     * `inline_storage[]` field. Memcpy preserves the pointer value
+     * verbatim, so a forwarded list whose original was inline now
+     * points at the SOURCE's inline_storage (in dead from-space)
+     * instead of its own. Re-anchor it to the to-space copy's
+     * inline_storage. Spilled lists' data pointers point at heap
+     * buffers and stay valid (the buffer wasn't moved). */
+    if (object_kind == OSTY_GC_KIND_LIST) {
+        osty_rt_list *src_list = (osty_rt_list *)from_payload;
+        osty_rt_list *dst_list = (osty_rt_list *)to_payload;
+        if (dst_list->data == src_list->inline_storage) {
+            dst_list->data = dst_list->inline_storage;
+        }
+    }
     src->forward_or_meta = (uint64_t)(uintptr_t)to_payload |
                            OSTY_GC_FORWARD_TAG_FORWARDED;
     osty_gc_young_cheney_forwarded_count_total += 1;
@@ -3228,6 +3244,59 @@ static void osty_gc_cheney_swap_arenas(void) {
     osty_gc_young_to = tmp;
     osty_gc_young_to.cursor = osty_gc_young_to.base;
     osty_gc_young_cheney_swap_count_total += 1;
+}
+
+/* Phase E follow-up: free external resources held by dead from-space
+ * objects.
+ *
+ * Cheney's normal "reclamation = cursor reset" is fine for objects
+ * whose only memory is the payload bytes themselves (STRING/BYTES).
+ * `osty_rt_list`, however, may hold a heap-allocated `data` buffer
+ * (when the list spilled past inline storage) or a heap-allocated
+ * `gc_offsets` array (struct-element lists). Without an explicit
+ * destroy pass these external buffers leak when their owning list
+ * becomes unreachable in young.
+ *
+ * The scan walks from-space from base to the recorded pre-swap
+ * cursor. Forwarded objects (`FORWARDED` / `PROMOTED` tag) are
+ * skipped — their external resources moved with them. Unforwarded
+ * (UNFORWARDED tag) objects are dead; for kinds that own external
+ * memory we run a per-kind cleanup before the swap reclaims the
+ * arena bytes. */
+static int64_t osty_gc_young_cheney_dead_lists_freed_total = 0;
+static int64_t osty_gc_young_cheney_dead_buffer_bytes_freed_total = 0;
+
+static size_t osty_gc_micro_object_total_size(int32_t payload_size);
+
+static void osty_gc_cheney_destroy_dead_from_space(unsigned char *from_base,
+                                                   unsigned char *from_end_cursor) {
+    unsigned char *scan = from_base;
+    while (scan < from_end_cursor) {
+        osty_gc_micro_header *micro = (osty_gc_micro_header *)scan;
+        int32_t payload_size = micro->byte_size;
+        size_t total = osty_gc_micro_object_total_size(payload_size);
+        uint64_t tag = micro->forward_or_meta & OSTY_GC_FORWARD_TAG_MASK;
+        if (tag == OSTY_GC_FORWARD_TAG_UNFORWARDED) {
+            /* Dead. Per-kind external-resource cleanup. */
+            void *payload = (void *)(scan + sizeof(osty_gc_micro_header));
+            if (micro->object_kind == OSTY_GC_KIND_LIST) {
+                osty_rt_list *list = (osty_rt_list *)payload;
+                if (list->gc_offsets != NULL) {
+                    free(list->gc_offsets);
+                }
+                if (list->data != NULL &&
+                    list->data != list->inline_storage) {
+                    osty_gc_young_cheney_dead_buffer_bytes_freed_total +=
+                        (int64_t)((size_t)list->cap * list->elem_size);
+                    free(list->data);
+                }
+                osty_gc_young_cheney_dead_lists_freed_total += 1;
+            }
+            /* STRING / BYTES carry no external buffers — payload bytes
+             * are reclaimed by the cursor reset, no destroy needed. */
+        }
+        scan += total;
+    }
 }
 
 static void osty_gc_cheney_slot(void *slot_addr);
@@ -3334,6 +3403,17 @@ static void *osty_gc_promote_young_to_old(void *young_payload) {
         payload_size, object_kind, "runtime.gc.promote_young",
         desc->trace, desc->destroy);
     memcpy(new_payload, young_payload, payload_size);
+    /* Same self-referential `data` fixup as cheney_forward —
+     * a promoted inline list still points its `data` at the source
+     * payload's inline_storage. Re-anchor so destroy/grow paths see
+     * the OLD copy's own inline region. */
+    if (object_kind == OSTY_GC_KIND_LIST) {
+        osty_rt_list *src_list = (osty_rt_list *)young_payload;
+        osty_rt_list *dst_list = (osty_rt_list *)new_payload;
+        if (dst_list->data == src_list->inline_storage) {
+            dst_list->data = dst_list->inline_storage;
+        }
+    }
     micro->forward_or_meta = (uint64_t)(uintptr_t)new_payload |
                              OSTY_GC_FORWARD_TAG_PROMOTED;
     osty_gc_young_promoted_to_old_count_total += 1;
@@ -3464,11 +3544,24 @@ static void osty_gc_collect_minor_cheney_with_stack_roots(
     previous_mode = osty_gc_trace_slot_mode_current;
     osty_gc_trace_slot_mode_current = OSTY_GC_TRACE_SLOT_MODE_CHENEY;
     scan_start = osty_gc_young_to.cursor;
-    /* Seed from manual roots and pins. Both generation lists are
-     * walked because a Map/List that just got `root_bind`'d hasn't
-     * been promoted yet (still on `osty_gc_young_head`) — and either
-     * way, a pinned headerful owner can transitively reach young-
-     * arena children whose forwarding cheney has to drive. */
+    /* Seed from the remembered set first: every (OLD owner, young
+     * value) edge logged by `osty_gc_post_write_v1` (Map.insert,
+     * Set.insert, List.push) gets its owner pushed for transitive
+     * trace. Color BLACK dedups so each Map traces at most once
+     * even if many edges point at it. */
+    for (i = 0; i < osty_gc_remembered_edge_count; i++) {
+        osty_gc_header *owner =
+            osty_gc_find_header(osty_gc_remembered_edges[i].owner);
+        if (owner != NULL) {
+            osty_gc_cheney_old_stack_push(owner);
+        }
+    }
+    /* Safety net: walk both generation lists and push any pinned
+     * owner. Catches OLD-resident objects whose write paths don't
+     * fire `post_write_v1` (most notably CLOSURE_ENV captures
+     * populated via direct LLVM-emitted memcpy). The pinned filter
+     * keeps the walk's overhead bounded to objects the user
+     * explicitly retained. */
     {
         osty_gc_header *h;
         for (h = osty_gc_young_head; h != NULL; h = h->next_gen) {
@@ -3482,6 +3575,9 @@ static void osty_gc_collect_minor_cheney_with_stack_roots(
             }
         }
     }
+    /* Stack roots take the standard cheney_slot path: forward young,
+     * enqueue OLD for owner-tracing if the slot's value is OLD-
+     * resident. */
     for (i = 0; i < root_slot_count; i++) {
         osty_gc_cheney_slot((void *)root_slots[i]);
     }
@@ -3502,6 +3598,10 @@ static void osty_gc_collect_minor_cheney_with_stack_roots(
              scan_start < osty_gc_young_to.cursor);
     osty_gc_cheney_reset_old_colors();
     osty_gc_trace_slot_mode_current = previous_mode;
+    /* Free external buffers held by dead from-space objects (List
+     * spilled `data` + `gc_offsets`) BEFORE swap reclaims the bytes. */
+    osty_gc_cheney_destroy_dead_from_space(osty_gc_young_from.base,
+                                           osty_gc_young_from.cursor);
     osty_gc_cheney_swap_arenas();
 }
 
@@ -4043,18 +4143,16 @@ typedef struct osty_rt_string_cache_entry {
     const char *value;
     size_t len;
     size_t hash;
-    /* First 4 content bytes (or all available bytes for shorter
-     * strings, padded with NULs). Fingerprint that disambiguates
-     * the same buffer pointer holding different content across
-     * calls — typical stack-buffer reuse pattern (`char keybuf[16];
-     * for (i...) { snprintf(keybuf, ..., i); map.contains(keybuf) }`)
-     * where every iteration writes a fresh string to the same
-     * stack slot. A single-byte fingerprint isn't enough — common
-     * key prefixes ("k0", "k1", ...) all share the first byte and
-     * would still alias. Reading 4 bytes is one unaligned load,
-     * cheap, and disambiguates virtually every realistic key
-     * series. */
-    uint32_t first4;
+    /* Cache stores the (len, hash) for `value` — but only when
+     * `value` is arena-resident. Stack / `.rodata` strings reuse
+     * the same pointer across calls with potentially different
+     * content (canonical case: `for (i...) { snprintf(keybuf, ...,
+     * i); map.contains(keybuf) }`), and no fixed-size content
+     * fingerprint is enough to disambiguate every realistic key
+     * pattern (common-prefix keys like "key_0", "key_1", … alias
+     * over any short fingerprint). The eligibility check is the
+     * only safe answer: only managed-arena pointers are stable
+     * for their pointer's lifetime, so only those get cached. */
     bool has_entry;
 } osty_rt_string_cache_entry;
 
@@ -4124,31 +4222,25 @@ static OSTY_HOT_INLINE void osty_rt_string_measure(const char *value,
                              ((uint64_t)(uintptr_t)value) >> 4) &
                          (OSTY_RT_STRING_CACHE_SLOTS - 1);
             osty_rt_string_cache_entry *entry = &osty_rt_string_cache[idx];
-            /* Read up to 4 bytes (stop at NUL). For strings ≥ 4
-             * chars this is a single unaligned load. For shorter
-             * strings the post-NUL bytes are still inside the
-             * payload allocation (we always alloc len+1 with the
-             * trailing NUL, and arena slots are 16-byte aligned),
-             * so it's safe to read 4. */
-            uint32_t first4 = 0;
-            {
-                size_t i;
-                for (i = 0; i < 4; i++) {
-                    char c = value[i];
-                    first4 |= (uint32_t)(unsigned char)c << (i * 8);
-                    if (c == '\0') break;
-                }
-            }
-            /* Hit only when both the pointer AND the cached
-             * fingerprint match. Same-pointer-different-content
-             * (stack-buffer reuse: `snprintf(keybuf, ..., i)` in a
-             * loop) reuses `value` but mutates `*value`, so the
-             * fingerprint mismatches and we recompute. Without this
-             * check the cached len/hash from the previous iteration's
-             * key would convince Map.contains it found a slot that
-             * doesn't actually match. */
-            if (entry->has_entry && entry->value == value &&
-                entry->first4 == first4) {
+            /* Cache eligibility: only arena-resident pointers (managed
+             * payloads in either the headerful arena or the young
+             * arena) have stable content for their pointer's lifetime.
+             * Stack buffers and `.rodata` strings reuse the same
+             * pointer with potentially different content (the canonical
+             * case is `for (i...) { snprintf(keybuf, ..., i);
+             * map.contains(keybuf) }` — `keybuf` is a stack address
+             * that gets a fresh string written into it each iteration).
+             * For those, no fixed-size content fingerprint is enough
+             * to disambiguate every realistic key pattern (e.g.,
+             * "key_0", "key_1", … share the first 4-8 bytes), so we
+             * skip the cache entirely and recompute every call.
+             *
+             * Cache stays effective for the dominant case: hashing the
+             * SAME arena-resident string repeatedly (e.g., a Map value
+             * scanned during iteration). */
+            bool cacheable = osty_gc_arena_contains((void *)value) ||
+                             osty_gc_arena_is_young_page((void *)value);
+            if (cacheable && entry->has_entry && entry->value == value) {
                 if (!len_from_header) {
                     len = entry->len;
                 }
@@ -4173,11 +4265,16 @@ static OSTY_HOT_INLINE void osty_rt_string_measure(const char *value,
                     }
                 }
                 hash = (size_t)osty_rt_hash_mix64(h);
-                entry->value = value;
-                entry->len = len;
-                entry->hash = hash;
-                entry->first4 = first4;
-                entry->has_entry = true;
+                /* Store in cache only for arena-resident pointers
+                 * (stable content for pointer's lifetime). Stack /
+                 * rodata pointers skip the store too — caching them
+                 * would just churn the slot without ever hitting. */
+                if (cacheable) {
+                    entry->value = value;
+                    entry->len = len;
+                    entry->hash = hash;
+                    entry->has_entry = true;
+                }
             }
         }
     }
@@ -8207,6 +8304,29 @@ static OSTY_HOT_INLINE void osty_rt_map_insert_raw(void *raw_map, const void *ke
     }
     memcpy(osty_rt_map_key_slot(map, index), key, key_size);
     memcpy(osty_rt_map_value_slot(map, index), value, map->value_size);
+    /* Phase E follow-up: post-write barrier for managed keys/values.
+     * Without this `Map<String, _>` writes go untracked — cheney_minor
+     * has to walk every pinned OLD owner and re-trace its full payload
+     * to find OLD→YOUNG edges, paying O(map.len) per Map per minor
+     * cycle. Wiring the barrier feeds remembered_edges so cheney can
+     * forward only the actual managed pointers without invoking the
+     * full tracer. STRING and PTR key/value kinds are the managed-
+     * pointer cases; scalar kinds (i64/i1/f64) skip the barrier. */
+    if (map->key_kind == OSTY_RT_ABI_STRING || map->key_kind == OSTY_RT_ABI_PTR) {
+        void *key_value = NULL;
+        memcpy(&key_value, key, sizeof(key_value));
+        if (key_value != NULL) {
+            osty_gc_post_write_v1(map, key_value, OSTY_GC_KIND_MAP);
+        }
+    }
+    if (map->value_kind == OSTY_RT_ABI_STRING ||
+        map->value_kind == OSTY_RT_ABI_PTR) {
+        void *value_value = NULL;
+        memcpy(&value_value, value, sizeof(value_value));
+        if (value_value != NULL) {
+            osty_gc_post_write_v1(map, value_value, OSTY_GC_KIND_MAP);
+        }
+    }
     if (inserted) {
         if (map->len >= 8) {
             if (map->index_cap == 0 || map->index_slots == NULL || map->index_hashes == NULL ||
@@ -8705,6 +8825,18 @@ bool osty_rt_set_insert_##suffix(void *raw_set, ctype item) { \
     osty_rt_set_reserve(set, set->len + 1); \
     memcpy(set->items + ((size_t)set->len * elem_size), &item, elem_size); \
     set->len += 1; \
+    /* Phase E follow-up: post-write barrier for managed elements. \
+     * Same rationale as Map.insert — without this cheney has to walk \
+     * every pinned Set's full payload looking for OLD→YOUNG edges, \
+     * paying O(set.len) per Set per minor cycle. Scalar elem kinds \
+     * (i64/i1/f64) skip; STRING/PTR feed remembered_edges. */ \
+    if (set->elem_kind == OSTY_RT_ABI_STRING || set->elem_kind == OSTY_RT_ABI_PTR) { \
+        void *item_value = NULL; \
+        memcpy(&item_value, &item, sizeof(item_value)); \
+        if (item_value != NULL) { \
+            osty_gc_post_write_v1(set, item_value, OSTY_GC_KIND_SET); \
+        } \
+    } \
     return true; \
 } \
 bool osty_rt_set_remove_##suffix(void *raw_set, ctype item) { \
