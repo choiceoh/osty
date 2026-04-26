@@ -330,6 +330,30 @@ list keeps new Osty clean of known landmines.
 | `mirCallStmtNoArgsLine` | `(retTy: String, sym: String) -> String` | §6 | No-argument variant of `mirCallStmtLine` — `  call <retTy> @<sym>()\n`. Used by bounded-thread poll helpers whose result is conditionally retained (dest=nil → through this builder, dest≠nil → through `mirCallValueNoArgsLine`) |
 | `mirBinaryOpLine` | `(reg: String, opcode: String, ty: String, lhs: String, rhs: String) -> String` | §6 | Two-operand instruction shape `  <reg> = <opcode> <ty> <lhs>, <rhs>\n` — the canonical generic shape that `emitBinary` lowers to after picking the opcode via `mirBinaryOpcode`. Scalar-typed `mirAddI64Line`/`mirShlI64Line` family stays for hot paths while the generic dispatcher reaches for one builder |
 | `mirICmpLineFromPred` | `(reg, pred, ty, lhs, rhs) -> String` | §6 | Thin alias of `mirICmpLine` used at sites that thread the predicate string from `mirBinaryOpcode` — keeps the call site self-documenting |
+| `mirCallI64MapKeyDeltaLine` | `(reg, sym, mapReg, keyLLVM, key, delta) -> String` | §6 | Fused `map.incr` ABI call `  <reg> = call i64 @<sym>(ptr <map>, <keyLLVM> <key>, i64 <delta>)\n`. Drains the 13-line inline chain at the `IntrinsicMapIncr` site (the `m.insert(k, m.getOr(k,0)+delta)` peephole). Mirror of `mirCallValueLine` specialised for this 3-arg shape |
+| `mirCallVoidMapKeyValuePtrLine` | `(sym, mapReg, keyLLVM, key, valSlot) -> String` | §6 | Runtime map-set ABI `  call void @<sym>(ptr <map>, <keyLLVM> <key>, ptr <valSlot>)\n` that `IntrinsicMapSet` lowers to. Memcpy's `value_size` bytes from `valSlot` into the map's storage |
+| `mirCallI1MapKeyOutPtrLine` | `(reg, sym, mapReg, keyLLVM, key, outSlot) -> String` | §6 | Runtime map-probe ABI `  <reg> = call i1 @<sym>(ptr <map>, <keyLLVM> <key>, ptr <outSlot>)\n`. Used by `IntrinsicMapGet` / `IntrinsicMapGetOr` — the runtime returns true-on-hit and writes the value into `outSlot` only on the hit path |
+| `mirCallVoidListPtrI64ValueLine` | `(sym, listReg, idxReg, elemLLVM, valReg) -> String` | §6 | Typed-element list-set runtime ABI `  call void @<sym>(ptr <list>, i64 <idx>, <elemLLVM> <val>)\n`. Used by the typed-element fast path of `osty_rt_list_set_<suffix>` |
+| `mirCallVoidListBytesV1SetLine` | `(sym, listReg, idxReg, slot, size) -> String` | §6 | Bytes-v1 list-set ABI `  call void @<sym>(ptr <list>, i64 <idx>, ptr <slot>, i64 <size>)\n`. Composite element types (struct / tuple) go through this shape |
+| `mirCallVoidListBytesV1GetLine` | `(sym, listReg, idxReg, outSlot, size) -> String` | §6 | Bytes-v1 list-get ABI — symmetric with `mirCallVoidListBytesV1SetLine`. Memcpy's `size` bytes from the list's storage into the caller's `out` slot |
+| `mirCallVoidListPushBytesV1Line` | `(sym, listReg, slot, size) -> String` | §6 | Bytes-v1 list-push ABI `  call void @<sym>(ptr <list>, ptr <slot>, i64 <size>)\n`. Used by `emitListPushOperand`'s composite-element path |
+| `mirGEPNullSizeLine` | `(reg, ty) -> String` | §6 | `getelementptr <ty>, ptr null, i32 1` — the size-of stride GEP. Half of the standard sizeof idiom |
+| `mirPtrToIntSizeLine` | `(reg, gepReg) -> String` | §6 | `<reg> = ptrtoint ptr <gepReg> to i64` — second half of the GEP-null sizeof idiom |
+| `mirSizeOfLines` | `(gepReg, sizeReg, ty) -> String` | §6 | Renders both halves of the GEP-null sizeof idiom in one helper. Centralises the two-step sequence so order stays stable |
+| `mirThunkHeaderLine` | `(retLLVM, thunkName, headerParams) -> String` | §4 | Opening line of a closure-thunk definition: `define private <retLLVM> @<thunkName>(<headerParams>) {\n` |
+| `mirThunkEntryLine` | `() -> String` | §4 | Literal `entry:\n` block label header used by every thunk body |
+| `mirThunkVoidCallLine` | `(symbol, argList) -> String` | §4 | Void-return thunk body: `call void @<sym>(<args>)` + `ret void` |
+| `mirThunkValueCallLine` | `(retLLVM, symbol, argList) -> String` | §4 | Value-return thunk body: `%ret = call <retTy> @<sym>(<args>)` + `ret <retTy> %ret` |
+| `mirThunkFooterLine` | `() -> String` | §4 | Literal `}\n\n` that closes a thunk definition. Trailing two newlines match legacy emitter spacing |
+| `mirThunkBody` | `(retLLVM, thunkName, symbol, headerParams, argList) -> String` | §4 | Assembles the entire closure-thunk text in one builder. Replaces the 30-line inline `strings.Builder` block in `ensureThunk` |
+| `mirThunkParamPart` | `(llvmT, idxDigits) -> String` | §4 | One parameter entry of a thunk's user-param list: `<llvmT> %arg<idxDigits>`. Mirror of `mirFunctionParamPart` for the thunk surface (no `noalias` attribute) |
+| `mirCallVarargPrintfPathLine` | `(fmtSym, pathSym) -> String` | §6 | Path-prefixed printf shape `  call i32 (ptr, ...) @printf(ptr <fmt>, ptr <path>)\n`. Used by `emitBenchErrorCheck` and `emitTestingAbortString` |
+| `mirICmpEqI64Line` | `(reg, lhs, rhs) -> String` | §6 | eq-on-i64 specialisation of `mirICmpEqLine`. Hot sites (Result tag check, discriminant-zero probe) use this directly |
+| `mirICmpEqI1Line` | `(reg, lhs, rhs) -> String` | §6 | eq-on-i1 specialisation of `mirICmpEqLine`. Used by the bool-equality fast path |
+| `mirICmpEqPtrLine` | `(reg, lhs, rhs) -> String` | §6 | eq-on-ptr specialisation of `mirICmpEqLine`. Used by the inline string-equality literal pointer-equality fast path and managed-handle null checks |
+| `mirCallVarargPrintfTwoArgLine` | `(fmtSym, arg1, arg2) -> String` | §6 | printf with two variadic args. Used by testing-summary `(seed 0x%x)` lines |
+| `mirCallVarargPrintfThreeArgLine` | `(fmtSym, arg1, arg2, arg3) -> String` | §6 | printf with three variadic args. Used by bench summary preludes |
+| `mirAllocaSpillStoreLine` | `(slot, ty, val) -> String` | §6 | `alloca <ty>` + `store <ty> <val>, ptr <slot>` — canonical "spill an SSA value into a stack slot" preamble before bytes-v1 runtime calls |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as

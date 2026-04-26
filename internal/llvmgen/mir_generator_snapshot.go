@@ -2377,3 +2377,262 @@ func mirURemI64Line(reg string, lhs string, rhs string) string {
 func mirXorI64Line(reg string, lhs string, rhs string) string {
 	return "  " + reg + " = xor i64 " + lhs + ", " + rhs + "\n"
 }
+
+// §6 emit-shape builders — Go mirror of the helpers appended to
+// `toolchain/mir_generator.osty`. Each replaces a 4–13 line inline
+// `g.fnBuf.WriteString(...)` chain with a single named helper.
+
+// mirCallI64MapKeyDeltaLine renders the fused map.incr ABI call:
+// `  <reg> = call i64 @<sym>(ptr <map>, <keyLLVM> <key>, i64 <delta>)\n`.
+// Osty: mirCallI64MapKeyDeltaLine
+func mirCallI64MapKeyDeltaLine(reg, sym, mapReg, keyLLVM, key, delta string) string {
+	return mirCallValueLine(reg, "i64", sym, "ptr "+mapReg+", "+keyLLVM+" "+key+", i64 "+delta)
+}
+
+// mirCallVoidMapKeyValuePtrLine renders the runtime map-set ABI:
+// `  call void @<sym>(ptr <map>, <keyLLVM> <key>, ptr <valSlot>)\n`.
+// Osty: mirCallVoidMapKeyValuePtrLine
+func mirCallVoidMapKeyValuePtrLine(sym, mapReg, keyLLVM, key, valSlot string) string {
+	return mirCallVoidLine(sym, "ptr "+mapReg+", "+keyLLVM+" "+key+", ptr "+valSlot)
+}
+
+// mirCallI1MapKeyOutPtrLine renders the runtime map-probe ABI:
+// `  <reg> = call i1 @<sym>(ptr <map>, <keyLLVM> <key>, ptr <outSlot>)\n`.
+// Osty: mirCallI1MapKeyOutPtrLine
+func mirCallI1MapKeyOutPtrLine(reg, sym, mapReg, keyLLVM, key, outSlot string) string {
+	return mirCallValueLine(reg, "i1", sym, "ptr "+mapReg+", "+keyLLVM+" "+key+", ptr "+outSlot)
+}
+
+// mirCallVoidListPtrI64ValueLine renders the typed-element list-set
+// runtime ABI: `  call void @<sym>(ptr <list>, i64 <idx>, <elemLLVM>
+// <val>)\n`.
+// Osty: mirCallVoidListPtrI64ValueLine
+func mirCallVoidListPtrI64ValueLine(sym, listReg, idxReg, elemLLVM, valReg string) string {
+	return mirCallVoidLine(sym, "ptr "+listReg+", i64 "+idxReg+", "+elemLLVM+" "+valReg)
+}
+
+// mirCallVoidListBytesV1SetLine renders the bytes-v1 list-set ABI:
+// `  call void @<sym>(ptr <list>, i64 <idx>, ptr <slot>, i64 <size>)\n`.
+// Osty: mirCallVoidListBytesV1SetLine
+func mirCallVoidListBytesV1SetLine(sym, listReg, idxReg, slot, size string) string {
+	return mirCallVoidLine(sym, "ptr "+listReg+", i64 "+idxReg+", ptr "+slot+", i64 "+size)
+}
+
+// mirCallVoidListBytesV1GetLine renders the bytes-v1 list-get ABI:
+// `  call void @<sym>(ptr <list>, i64 <idx>, ptr <out>, i64 <size>)\n`.
+// Osty: mirCallVoidListBytesV1GetLine
+func mirCallVoidListBytesV1GetLine(sym, listReg, idxReg, outSlot, size string) string {
+	return mirCallVoidLine(sym, "ptr "+listReg+", i64 "+idxReg+", ptr "+outSlot+", i64 "+size)
+}
+
+// mirCallVoidListPushBytesV1Line renders the bytes-v1 list-push ABI:
+// `  call void @<sym>(ptr <list>, ptr <slot>, i64 <size>)\n`.
+// Osty: mirCallVoidListPushBytesV1Line
+func mirCallVoidListPushBytesV1Line(sym, listReg, slot, size string) string {
+	return mirCallVoidLine(sym, "ptr "+listReg+", ptr "+slot+", i64 "+size)
+}
+
+// mirGEPNullSizeLine renders `getelementptr <ty>, ptr null, i32 1`
+// — the size-of stride GEP.
+// Osty: mirGEPNullSizeLine
+func mirGEPNullSizeLine(reg, ty string) string {
+	return "  " + reg + " = getelementptr " + ty + ", ptr null, i32 1\n"
+}
+
+// mirPtrToIntSizeLine renders `<reg> = ptrtoint ptr <gepReg> to i64`
+// — second half of the GEP-null sizeof idiom.
+// Osty: mirPtrToIntSizeLine
+func mirPtrToIntSizeLine(reg, gepReg string) string {
+	return "  " + reg + " = ptrtoint ptr " + gepReg + " to i64\n"
+}
+
+// mirSizeOfLines renders both halves of the GEP-null sizeof idiom
+// in one call. Returns a two-line block.
+// Osty: mirSizeOfLines
+func mirSizeOfLines(gepReg, sizeReg, ty string) string {
+	return mirGEPNullSizeLine(gepReg, ty) + mirPtrToIntSizeLine(sizeReg, gepReg)
+}
+
+// mirThunkHeaderLine renders the opening line of a closure-thunk
+// definition: `define private <retLLVM> @<thunkName>(<headerParams>) {`.
+// Osty: mirThunkHeaderLine
+func mirThunkHeaderLine(retLLVM, thunkName, headerParams string) string {
+	return "define private " + retLLVM + " @" + thunkName + "(" + headerParams + ") {\n"
+}
+
+// mirThunkEntryLine returns the literal `entry:\n` block label.
+// Osty: mirThunkEntryLine
+func mirThunkEntryLine() string {
+	return "entry:\n"
+}
+
+// mirThunkVoidCallLine renders the body of a void-return thunk.
+// Osty: mirThunkVoidCallLine
+func mirThunkVoidCallLine(symbol, argList string) string {
+	return "  call void @" + symbol + "(" + argList + ")\n  ret void\n"
+}
+
+// mirThunkValueCallLine renders the body of a value-return thunk.
+// Osty: mirThunkValueCallLine
+func mirThunkValueCallLine(retLLVM, symbol, argList string) string {
+	return "  %ret = call " + retLLVM + " @" + symbol + "(" + argList + ")\n  ret " + retLLVM + " %ret\n"
+}
+
+// mirThunkFooterLine returns the literal `}\n\n` that closes a
+// thunk definition.
+// Osty: mirThunkFooterLine
+func mirThunkFooterLine() string {
+	return "}\n\n"
+}
+
+// mirThunkBody assembles the entire closure-thunk text in one call.
+// Osty: mirThunkBody
+func mirThunkBody(retLLVM, thunkName, symbol, headerParams, argList string) string {
+	header := mirThunkHeaderLine(retLLVM, thunkName, headerParams)
+	entry := mirThunkEntryLine()
+	var body string
+	if retLLVM == "void" {
+		body = mirThunkVoidCallLine(symbol, argList)
+	} else {
+		body = mirThunkValueCallLine(retLLVM, symbol, argList)
+	}
+	footer := mirThunkFooterLine()
+	return header + entry + body + footer
+}
+
+// mirThunkParamPart renders one parameter entry of a thunk's
+// user-param list: `<llvmT> %arg<idxDigits>`.
+// Osty: mirThunkParamPart
+func mirThunkParamPart(llvmT, idxDigits string) string {
+	return llvmT + " %arg" + idxDigits
+}
+
+// mirCallVarargPrintfPathLine renders the path-prefixed printf
+// shape: `  call i32 (ptr, ...) @printf(ptr <fmt>, ptr <path>)\n`.
+// Osty: mirCallVarargPrintfPathLine
+func mirCallVarargPrintfPathLine(fmtSym, pathSym string) string {
+	return mirCallVarargPrintfLine(fmtSym, "ptr "+pathSym)
+}
+
+// mirICmpEqI64Line renders the eq-on-i64 specialisation.
+// Osty: mirICmpEqI64Line
+func mirICmpEqI64Line(reg, lhs, rhs string) string {
+	return mirICmpEqLine(reg, "i64", lhs, rhs)
+}
+
+// mirICmpEqI1Line renders the eq-on-i1 specialisation.
+// Osty: mirICmpEqI1Line
+func mirICmpEqI1Line(reg, lhs, rhs string) string {
+	return mirICmpEqLine(reg, "i1", lhs, rhs)
+}
+
+// mirICmpEqPtrLine renders the eq-on-ptr specialisation.
+// Osty: mirICmpEqPtrLine
+func mirICmpEqPtrLine(reg, lhs, rhs string) string {
+	return mirICmpEqLine(reg, "ptr", lhs, rhs)
+}
+
+// mirCallVarargPrintfTwoArgLine renders the printf shape with two
+// variadic args.
+// Osty: mirCallVarargPrintfTwoArgLine
+func mirCallVarargPrintfTwoArgLine(fmtSym, arg1, arg2 string) string {
+	return mirCallVarargPrintfLine(fmtSym, arg1+", "+arg2)
+}
+
+// mirCallVarargPrintfThreeArgLine renders printf with three
+// variadic args.
+// Osty: mirCallVarargPrintfThreeArgLine
+func mirCallVarargPrintfThreeArgLine(fmtSym, arg1, arg2, arg3 string) string {
+	return mirCallVarargPrintfLine(fmtSym, arg1+", "+arg2+", "+arg3)
+}
+
+// mirAllocaSpillStoreLine renders alloca + store for spilling an
+// SSA value into a stack slot before a bytes-v1 runtime call.
+// Osty: mirAllocaSpillStoreLine
+func mirAllocaSpillStoreLine(slot, ty, val string) string {
+	return mirAllocaLine(slot, ty) + mirStoreLine(ty, val, slot)
+}
+
+// mirCallVoidListBytesV1SetWithBarrierLine renders the bytes-v1
+// list-set ABI with a trailing GC write-barrier slot pointer.
+// Osty: mirCallVoidListBytesV1SetWithBarrierLine
+func mirCallVoidListBytesV1SetWithBarrierLine(sym, listReg, idxReg, slot, size, barrier string) string {
+	return mirCallVoidLine(sym, "ptr "+listReg+", i64 "+idxReg+", ptr "+slot+", i64 "+size+", ptr "+barrier)
+}
+
+// mirCallVoidLikeRuntimeNoArgsLine — synonym of mirCallVoidNoArgsLine
+// for the GC entry hook emission sites.
+// Osty: mirCallVoidLikeRuntimeNoArgsLine
+func mirCallVoidLikeRuntimeNoArgsLine(sym string) string {
+	return mirCallVoidNoArgsLine(sym)
+}
+
+// mirSpillToBytesV1Lines renders the spill+sizeof preamble before a
+// bytes-v1 runtime call: alloca + store + GEP-null + ptrtoint.
+// Osty: mirSpillToBytesV1Lines
+func mirSpillToBytesV1Lines(slot, slotTy, val, gepReg, sizeReg string) string {
+	return mirAllocaSpillStoreLine(slot, slotTy, val) + mirSizeOfLines(gepReg, sizeReg, slotTy)
+}
+
+// mirRuntimeDeclareListBytesV1SetLine renders the canonical declare
+// shape for the bytes-v1 list-set runtime ABI.
+// Osty: mirRuntimeDeclareListBytesV1SetLine
+func mirRuntimeDeclareListBytesV1SetLine(sym string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, i64, ptr, i64, ptr")
+}
+
+// mirRuntimeDeclareListBytesV1GetLine renders the canonical declare
+// shape for the bytes-v1 list-get runtime ABI.
+// Osty: mirRuntimeDeclareListBytesV1GetLine
+func mirRuntimeDeclareListBytesV1GetLine(sym string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, i64, ptr, i64")
+}
+
+// mirRuntimeDeclareListPushBytesV1Line renders the canonical declare
+// shape for the bytes-v1 list-push runtime ABI.
+// Osty: mirRuntimeDeclareListPushBytesV1Line
+func mirRuntimeDeclareListPushBytesV1Line(sym string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, ptr, i64")
+}
+
+// mirRuntimeDeclareMapInsertLine renders the canonical declare shape
+// for the runtime map-insert ABI.
+// Osty: mirRuntimeDeclareMapInsertLine
+func mirRuntimeDeclareMapInsertLine(sym, keyLLVM string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, "+keyLLVM+", ptr")
+}
+
+// mirRuntimeDeclareMapGetLine renders the canonical declare shape
+// for the runtime map-probe ABI.
+// Osty: mirRuntimeDeclareMapGetLine
+func mirRuntimeDeclareMapGetLine(sym, keyLLVM string) string {
+	return mirRuntimeDeclareLine("i1", sym, "ptr, "+keyLLVM+", ptr")
+}
+
+// mirRuntimeDeclareMapIncrLine renders the canonical declare shape
+// for the fused map-incr runtime ABI.
+// Osty: mirRuntimeDeclareMapIncrLine
+func mirRuntimeDeclareMapIncrLine(sym, keyLLVM string) string {
+	return mirRuntimeDeclareLine("i64", sym, "ptr, "+keyLLVM+", i64")
+}
+
+// mirRuntimeDeclareMapContainsLine renders the canonical declare
+// shape for the runtime map-contains ABI.
+// Osty: mirRuntimeDeclareMapContainsLine
+func mirRuntimeDeclareMapContainsLine(sym, keyLLVM string) string {
+	return mirRuntimeDeclareLine("i1", sym, "ptr, "+keyLLVM)
+}
+
+// mirRuntimeDeclareMapRemoveLine renders the canonical declare shape
+// for the runtime map-remove ABI.
+// Osty: mirRuntimeDeclareMapRemoveLine
+func mirRuntimeDeclareMapRemoveLine(sym, keyLLVM string) string {
+	return mirRuntimeDeclareLine("i1", sym, "ptr, "+keyLLVM)
+}
+
+// mirRuntimeDeclareListSetSimpleLine renders the canonical declare
+// shape for the typed-element list-set runtime ABI.
+// Osty: mirRuntimeDeclareListSetSimpleLine
+func mirRuntimeDeclareListSetSimpleLine(sym, elemLLVM string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, i64, "+elemLLVM)
+}
