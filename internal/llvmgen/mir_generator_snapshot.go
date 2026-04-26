@@ -2999,3 +2999,190 @@ func mirCallValueI8FromPtrI64Line(reg, sym, ptr, idx string) string {
 func mirCallValueElemFromPtrI64Line(reg, elemLLVM, sym, ptr, idx string) string {
 	return mirCallValueLine(reg, elemLLVM, sym, "ptr "+ptr+", i64 "+idx)
 }
+
+// §6 abort-and-exit shape builders.
+
+// mirAbortPrintfExitLines renders printf+exit+unreachable+nextLabel.
+// Osty: mirAbortPrintfExitLines
+func mirAbortPrintfExitLines(fmtSym, messagePtr, nextLabel string) string {
+	return mirCallVarargPrintfPathLine(fmtSym, messagePtr) +
+		mirCallExitLine("1") +
+		mirUnreachableLine() +
+		mirLabelLine(nextLabel)
+}
+
+// mirBranchToErrorTrapLines renders `br i1 <isErr> + errLabel:`.
+// Osty: mirBranchToErrorTrapLines
+func mirBranchToErrorTrapLines(isErr, errLabel, okLabel string) string {
+	return mirBrCondLine(isErr, errLabel, okLabel) + mirLabelLine(errLabel)
+}
+
+// mirNoneBranchLines renders Option-miss branch (label + zeroinit + br).
+// Osty: mirNoneBranchLines
+func mirNoneBranchLines(noneLabel, optLLVM, destSlot, endLabel string) string {
+	return mirLabelLine(noneLabel) + mirNoneStoreThenJumpLines(optLLVM, destSlot, endLabel)
+}
+
+// mirSomeBranchLines renders Option-hit branch (label + Some + store + br).
+// Osty: mirSomeBranchLines
+func mirSomeBranchLines(someLabel, taggedReg, filledReg, optLLVM, payloadI64, destSlot, endLabel string) string {
+	return mirLabelLine(someLabel) + mirSomeStoreThenJumpLines(taggedReg, filledReg, optLLVM, payloadI64, destSlot, endLabel)
+}
+
+// mirSomeNoneJoinLines renders the convergence label.
+// Osty: mirSomeNoneJoinLines
+func mirSomeNoneJoinLines(endLabel string) string {
+	return mirLabelLine(endLabel)
+}
+
+// mirCallExitOneLine returns canonical `call void @exit(i32 1)`.
+// Osty: mirCallExitOneLine
+func mirCallExitOneLine() string {
+	return mirCallExitLine("1")
+}
+
+// mirCallExitZeroLine returns canonical `call void @exit(i32 0)`.
+// Osty: mirCallExitZeroLine
+func mirCallExitZeroLine() string {
+	return mirCallExitLine("0")
+}
+
+// mirAbortBlockLines renders the full abort block.
+// Osty: mirAbortBlockLines
+func mirAbortBlockLines(errLabel, fmtSym, messagePtr, nextLabel string) string {
+	return mirLabelLine(errLabel) + mirAbortPrintfExitLines(fmtSym, messagePtr, nextLabel)
+}
+
+// mirCallI64FromTwoPtrLine renders `<reg> = call i64 @<sym>(ptr, ptr)`.
+// Osty: mirCallI64FromTwoPtrLine
+func mirCallI64FromTwoPtrLine(reg, sym, left, right string) string {
+	return mirCallValueLine(reg, "i64", sym, "ptr "+left+", ptr "+right)
+}
+
+// mirCallI1FromTwoPtrLine renders `<reg> = call i1 @<sym>(ptr, ptr)`.
+// Osty: mirCallI1FromTwoPtrLine
+func mirCallI1FromTwoPtrLine(reg, sym, left, right string) string {
+	return mirCallValueLine(reg, "i1", sym, "ptr "+left+", ptr "+right)
+}
+
+// mirCallPtrFromTwoPtrLine renders `<reg> = call ptr @<sym>(ptr, ptr)`.
+// Osty: mirCallPtrFromTwoPtrLine
+func mirCallPtrFromTwoPtrLine(reg, sym, left, right string) string {
+	return mirCallValueLine(reg, "ptr", sym, "ptr "+left+", ptr "+right)
+}
+
+// mirCallVoidFromTwoPtrLine renders `call void @<sym>(ptr, ptr)`.
+// Osty: mirCallVoidFromTwoPtrLine
+func mirCallVoidFromTwoPtrLine(sym, left, right string) string {
+	return mirCallVoidLine(sym, "ptr "+left+", ptr "+right)
+}
+
+// mirCallVoidFromThreePtrLine renders `call void @<sym>(ptr, ptr, ptr)`.
+// Osty: mirCallVoidFromThreePtrLine
+func mirCallVoidFromThreePtrLine(sym, a, b, c string) string {
+	return mirCallVoidLine(sym, "ptr "+a+", ptr "+b+", ptr "+c)
+}
+
+// mirInsertValueI64IndexLine renders `<reg> = insertvalue <aggTy> <base>, i64 <val>, <idx>`.
+// Osty: mirInsertValueI64IndexLine
+func mirInsertValueI64IndexLine(reg, aggTy, baseVal, val, idxDigits string) string {
+	return mirInsertValueAggLine(reg, aggTy, baseVal, "i64", val, idxDigits)
+}
+
+// mirExtractValueI64IndexLine renders `<reg> = extractvalue <aggTy> <agg>, <idx>`.
+// Osty: mirExtractValueI64IndexLine
+func mirExtractValueI64IndexLine(reg, aggTy, aggVal, idxDigits string) string {
+	return "  " + reg + " = extractvalue " + aggTy + " " + aggVal + ", " + idxDigits + "\n"
+}
+
+// mirCallVoidI64Line renders `call void @<sym>(i64 <arg>)`.
+// Osty: mirCallVoidI64Line
+func mirCallVoidI64Line(sym, arg string) string {
+	return mirCallVoidLine(sym, "i64 "+arg)
+}
+
+// mirCallVoidI32Line renders `call void @<sym>(i32 <arg>)`.
+// Osty: mirCallVoidI32Line
+func mirCallVoidI32Line(sym, arg string) string {
+	return mirCallVoidLine(sym, "i32 "+arg)
+}
+
+// mirGEPInboundsI64IdxLine renders i64-indexed inbounds GEP.
+// Osty: mirGEPInboundsI64IdxLine
+func mirGEPInboundsI64IdxLine(reg, elemTy, basePtr, idx string) string {
+	return "  " + reg + " = getelementptr inbounds " + elemTy + ", ptr " + basePtr + ", i64 " + idx + "\n"
+}
+
+// mirZExtToI64Line / mirSExtToI64Line / mirBitcastToI64Line / mirPtrToInt64Line — i64-payload widen specializations.
+// Osty: mirZExtToI64Line
+func mirZExtToI64Line(reg, fromTy, val string) string { return mirZExtLine(reg, fromTy, val, "i64") }
+
+// Osty: mirSExtToI64Line
+func mirSExtToI64Line(reg, fromTy, val string) string { return mirSExtLine(reg, fromTy, val, "i64") }
+
+// Osty: mirBitcastToI64Line
+func mirBitcastToI64Line(reg, val string) string { return mirBitcastLine(reg, "double", val, "i64") }
+
+// Osty: mirPtrToInt64Line
+func mirPtrToInt64Line(reg, val string) string { return mirPtrToIntLine(reg, val, "i64") }
+
+// mirCallStringConcatLine specialisation for osty_rt_strings_Concat.
+// Osty: mirCallStringConcatLine
+func mirCallStringConcatLine(reg, left, right string) string {
+	return mirCallPtrFromTwoPtrLine(reg, "osty_rt_strings_Concat", left, right)
+}
+
+// mirCallStringEqualLine specialisation for osty_rt_strings_Equal.
+// Osty: mirCallStringEqualLine
+func mirCallStringEqualLine(reg, left, right string) string {
+	return mirCallI1FromTwoPtrLine(reg, "osty_rt_strings_Equal", left, right)
+}
+
+// mirCallStringCompareLine specialisation for osty_rt_strings_Compare.
+// Osty: mirCallStringCompareLine
+func mirCallStringCompareLine(reg, left, right string) string {
+	return mirCallI64FromTwoPtrLine(reg, "osty_rt_strings_Compare", left, right)
+}
+
+// mirCallStringSubstringLine specialisation for osty_rt_strings_Substring.
+// Osty: mirCallStringSubstringLine
+func mirCallStringSubstringLine(reg, src, startIdx, endIdx string) string {
+	return mirCallValueLine(reg, "ptr", "osty_rt_strings_Substring", "ptr "+src+", i64 "+startIdx+", i64 "+endIdx)
+}
+
+// mirCallListNewLine renders osty_rt_list_new() call.
+// Osty: mirCallListNewLine
+func mirCallListNewLine(reg string) string {
+	return mirCallValueNoArgsLine(reg, "ptr", "osty_rt_list_new")
+}
+
+// mirCallMapNewLine renders osty_rt_map_new(...) call.
+// Osty: mirCallMapNewLine
+func mirCallMapNewLine(reg, keyKind, valKind, valSize string) string {
+	return mirCallValueLine(reg, "ptr", "osty_rt_map_new", "i64 "+keyKind+", i64 "+valKind+", i64 "+valSize+", ptr null")
+}
+
+// mirCallSetNewLine renders osty_rt_set_new(elemKind) call.
+// Osty: mirCallSetNewLine
+func mirCallSetNewLine(reg, elemKind string) string {
+	return mirCallValueLine(reg, "ptr", "osty_rt_set_new", "i64 "+elemKind)
+}
+
+// mirSizeOf*Line — canonical sizeof literals.
+// Osty: mirSizeOfDoubleLine
+func mirSizeOfDoubleLine() string { return "8" }
+
+// Osty: mirSizeOfI64Line
+func mirSizeOfI64Line() string { return "8" }
+
+// Osty: mirSizeOfI32Line
+func mirSizeOfI32Line() string { return "4" }
+
+// Osty: mirSizeOfI8Line
+func mirSizeOfI8Line() string { return "1" }
+
+// Osty: mirSizeOfPtrLine
+func mirSizeOfPtrLine() string { return "8" }
+
+// Osty: mirSizeOfI1Line
+func mirSizeOfI1Line() string { return "1" }
