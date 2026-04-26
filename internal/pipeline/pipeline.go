@@ -456,7 +456,7 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 
 	// --- resolve ---
 	t0 = time.Now()
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 	r.Resolve = res
 	r.AllDiags = append(r.AllDiags, res.Diags...)
 	emit(Stage{
@@ -627,7 +627,7 @@ func RunLoadedPackage(pkg *resolve.Package, stream io.Writer, cfg Config) Result
 
 	// --- resolve (whole-package) ---
 	t0 = time.Now()
-	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+	res := resolve.ResolvePackageDefault(pkg)
 	r.AllDiags = append(r.AllDiags, res.Diags...)
 	totalRefs, totalTypeRefs := 0, 0
 	for _, pf := range pkg.Files {

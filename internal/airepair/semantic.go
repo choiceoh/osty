@@ -397,7 +397,7 @@ func validLengthFieldOffsets(src []byte) map[int]bool {
 	if parsed.File == nil {
 		return nil
 	}
-	res := resolve.FileWithStdlib(parsed.File, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(parsed.File, stdlib.LoadCached())
 	chk := check.SelfhostFile(parsed.File, res, checkOptsForSource(canonical.Source(src, parsed.File)))
 	if chk == nil {
 		return nil

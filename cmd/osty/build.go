@@ -409,7 +409,7 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 		fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
 		os.Exit(1)
 	}
-	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+	res := resolve.ResolvePackageDefault(pkg)
 	chk := check.Package(pkg, res, checkOpts())
 	ds := append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...)
 	printPackageDiags(pkg, ds, flags)

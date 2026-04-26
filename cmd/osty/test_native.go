@@ -690,7 +690,7 @@ func prepareNativeTestBackendEntry(sourcePath string, pkg *resolve.Package) (bac
 		}
 	}
 	if countLowerableFiles(pkg) > 0 {
-		res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+		res := resolve.ResolvePackageDefault(pkg)
 		chk := check.Package(pkg, res, checkOpts())
 		return backend.PreparePackage("main", sourcePath, pkg, entryFile, chk)
 	}

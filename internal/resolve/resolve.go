@@ -2297,3 +2297,23 @@ func (r *resolver) defineLocal(name string, sym *Symbol) {
 	}
 	r.current.DefineForce(sym)
 }
+
+// ResolvePackageDefault resolves a single package using the standard
+// prelude (NewPrelude). This is the convenience entry point for callers
+// that do not share a prelude across multiple packages; internally it
+// allocates a fresh prelude on each call.
+//
+// Callers that resolve many packages in a loop (workspace mode, CI,
+// stdlib loading) should prefer Workspace.ResolveAll or explicitly
+// reuse a single prelude with ResolvePackage to avoid redundant
+// allocations.
+func ResolvePackageDefault(pkg *Package) *PackageResult {
+	return ResolvePackage(pkg, NewPrelude())
+}
+
+// ResolveFileDefault runs single-file name resolution using the
+// standard prelude and the given stdlib provider. It is the
+// one-call replacement for FileWithStdlib(file, NewPrelude(), stdlib).
+func ResolveFileDefault(file *ast.File, stdlib StdlibProvider) *Result {
+	return FileWithStdlib(file, NewPrelude(), stdlib)
+}
