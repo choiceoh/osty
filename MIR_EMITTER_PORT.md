@@ -757,6 +757,55 @@ The historical rules:
 | `mirRefToGlobal` / `mirRefToMD` / `mirRefToReg` | `(name) -> String` | §12 | Reference-encoding semantic aliases |
 | `mirTypedZeroForLine` / `mirTypedOneForLine` | `(ty) -> String` | §12 | Typed-zero / typed-one constant composites |
 | `mirOptionNoneConst` / `mirOptionPtrNoneConst` / `mirResultOkUnitConst` / `mirResultErrPtrConst` | `([err]) -> String` | §12 | Canonical zero-aggregate constant composites |
+| `mirOptionSomeI64BuildLine` / `SomePtrBuildLine` / `mirResultOk{I64,Ptr}BuildLine` / `mirResultErrPtrBuildLine` | `(args...) -> String` | §14 | 2-line Option/Result aggregate-construction shapes |
+| `mirOption{,Ptr}UnwrapDestructureLine` / `mirResultUnwrapDestructureLine` | `(disc, payload, agg) -> String` | §14 | 2-line discriminant+payload extract composites |
+| `mirOptionIs{Some,None}Line` / `mirResultIs{Ok,Err}Line` | `(disc, isReg, agg) -> String` | §14 | 2-line discriminant test composites |
+| `mirBranchOn{Option,Result}DiscLine` | `(args...) -> String` | §14 | 3-line discriminant-branch composites |
+| `mirInternedStringPoolLine` / `mirInternedFormatPoolLine` | `(args...) -> String` | §14 | String/format pool emit aliases |
+| `mirArgPtrCastFromI64Line` / `mirArgI64CastFromPtrLine` | `(reg, val) -> String` | §14 | Cast-arg shape aliases |
+| `mirForRangePreludeLine` / `mirForRangeHeadLine` | `(args...) -> String` | §14 | For-range loop prelude / head composites |
+| `mirMatchArmHeadLine` / `mirMatchArmBodyLine` | `(args...) -> String` | §14 | Match-arm head / body shape composers |
+| `mirArrayBoundsCheckLine` | `(args...) -> String` | §14 | 4-line array bounds check composite |
+| `mirVectorListSnapshot3Line` | `(args...) -> String` | §14 | 3-line vector-list snapshot + branch composite |
+| `mirCastFPToSIWithRTZLine` / `mirCastSIToFPDefaultLine` | `(reg, fromTy, val, toTy) -> String` | §14 | FP-cast semantic aliases |
+| `mirAllocaThenMemcpyLine` | `(args...) -> String` | §14 | Alloca + memcpy 2-line composite |
+| `mirEmitOption{None,NonePtr}Line` | `(reg) -> String` | §14 | Canonical None aggregate emit (1-line) |
+| `mirInterned{I64,Ptr}GlobalLine` / `mirMutable{I64,Ptr}GlobalLine` | `(args...) -> String` | §14 | Module-globals emit aliases |
+| `mirCall{I64,I1,Ptr}NoArgsAndStoreLine` | `(reg, sym, slot) -> String` | §14 | Call-and-store 2-line shapes |
+| `mirLoadPtrThenCall{Void,Value,I64,I1}Line` | `(args...) -> String` | §15 | Load + call 2-line shapes |
+| `mirICmp{Eq,Ne,Slt,Sgt,Sle,Sge}I64ThenBranchLine` / `mirICmpEqPtrThenBranchLine` / `mirICmpNullPtrThenBranchLine` | `(args...) -> String` | §15 | Predicate + branch 2-line shapes |
+| `mirRuntimeProbeAndStoreLine` | `(args...) -> String` | §15 | Generic call + store 2-line shape |
+| `mirLoadI64ThenCmp{Eq,Ne,Zero}Line` / `mirLoadPtrThenCmpNullLine` | `(args...) -> String` | §15 | Load + cmp 2-line shapes |
+| `mirLoadI1ThenStoreLine` / `mirLoadDoubleThenStoreLine` | `(args...) -> String` | §15 | Load + store typed shapes |
+| `mirCallVoidWithI64ResultLine` | `(reg, sym, slot) -> String` | §15 | Alias for call-and-store i64 |
+| `mirReturnConstant{I64,Ptr,I1,Double}Line` / `mirReturn{ZeroI64,NullPtr,FalseI1,TrueI1,ZeroDouble}Line` | `([val]) -> String` | §15 | Return-constant 1-line shapes |
+| `mirArgListPtrPtr` / `mirArgListPtrI64Slot` / `mirArgListThreePtrSlot` | `(args...) -> String` | §15 | Arg-list shape aliases |
+| `mirAddI64ImmediateThenStoreLine` / `mirSubI64ImmediateThenStoreLine` | `(args...) -> String` | §15 | Arith + store composites |
+| `mirIfThenElseSkeletonLine` | `(args...) -> String` | §15 | If-then-else block skeleton composite |
+| `mirStoreOption{,Ptr}AggregateLine` / `mirStoreResult{,Ptr}AggregateLine` | `(agg, slot) -> String` | §15 | Aggregate-store 1-line shapes |
+| `mirLoadOption{,Ptr}AggregateLine` / `mirLoadResult{,Ptr}AggregateLine` | `(reg, slot) -> String` | §15 | Aggregate-load 1-line shapes |
+| `mirCall{Sqrt,FAbs,Sin,Cos,Tan,Log,Log2,Log10,Exp,Exp2,Pow,MinNum,MaxNum}DoubleLine` | `(reg, args...) -> String` | §16 | LLVM math intrinsic call aliases |
+| `mirCall{Ctlz,Cttz,Ctpop,BSwap{I64,I32,I16},BitReverse}I64Line` | `(reg, x) -> String` | §16 | LLVM bit-manip intrinsic call aliases |
+| `mirCallLifetime{Start,End}Line` / `mirCallAssumeLine` / `mirCallExpectI1Line` | `(args...) -> String` | §16 | Lifetime / assume / branch-hint call aliases |
+| `mirCallMemcpy{Volatile,NonVolatile}Line` / `mirCallMemmoveNonVolatileLine` / `mirCallMemsetZeroLine` | `(args...) -> String` | §16 | Memcpy/memmove/memset typed call shapes |
+| `mirCallTest{Abort,ContextEnter,ContextExit,ExpectOk,ExpectError}Line` | `(args...) -> String` | §16 | Test-runtime call aliases |
+| `mirCallBench{NowNanos,TargetNs}Line` / `mirCallGC{Alloc,Safepoint,Barrier,AllocatedBytes}Line` / `mirCallDiffLinesLine` | `(args...) -> String` | §16 | Bench / GC / diff-debug call aliases |
+| `mirCallVoidWithI1ResultDiscardLine` | `(reg, sym, args) -> String` | §16 | Discard-result i1-call shape |
+| `mirSpillOption{,Ptr}AggregateLine` / `mirSpillResult{,Ptr}AggregateLine` | `(slot, agg) -> String` | §16 | Aggregate spill 2-line composites |
+| `mirArgListFour/Five/SixMixed` | `(args...) -> String` | §16 | Pre-typed 4/5/6-elem arg-list joiners |
+| `mirModulePreambleLine` / `mirModuleEpilogueLine` | `(args...) -> String` | §16 | Module preamble (3-line) / epilogue composites |
+| `mirCastI64ToPtrThenCallLine` / `mirCastPtrToI64ThenCallLine` | `(args...) -> String` | §16 | Cast + call 2-line composites |
+| `mirZExtI{8,1}ToI64ThenCallLine` | `(args...) -> String` | §16 | ZExt + call 2-line composites |
+| `mirTruncI64To{I8,I1,I32}ThenStoreLine` | `(args...) -> String` | §16 | Trunc + store 2-line composites |
+| `mirCallList{Length,Reverse,Reversed,Clear,PopDiscard,IsEmptyTyped}Line` | `(args...) -> String` | §17 | Typed list runtime call composites |
+| `mirCall{Map,Set}LengthLine` / `mirCallStringLengthLine` / `mirCallBytesLengthLine` | `(reg, handle) -> String` | §17 | Typed length / size runtime call composites |
+| `mirCallSetToListLine` / `mirCallMap{Values,Entries}Line` | `(reg, handle) -> String` | §17 | Container conversion call composites |
+| `mirCallChannel{Close,IsClosed,Len,Cap}Line` | `(args...) -> String` | §17 | Channel-state runtime call composites |
+| `mirCallCancel{Check,IsCancelled,Cancel}Line` / `mirCallThread{Yield,Sleep}Line` | `(args...) -> String` | §17 | Cancel / thread runtime call composites |
+| `mirCallString{ConcatTwo,Hash,IsEmpty,ToUpper,ToLower,Trim,Repeat}Line` | `(reg, args...) -> String` | §17 | String runtime operation call composites |
+| `mirCallBytes{IsEmpty,GetTyped,Contains,StartsWith,EndsWith}Line` | `(reg, args...) -> String` | §17 | Bytes runtime operation call composites |
+| `mirCallMap{Insert,Remove}Line` / `mirCallSet{Add,Remove}Line` | `(handle, args) -> String` | §17 | Map / set mutation call composites |
+| `mirCallTaskGroup{New,Cancel,IsCancelled}Line` / `mirCallTaskHandleJoinLine` / `mirCallTaskCollectAllLine` / `mirCallTaskRaceLine` | `(args...) -> String` | §17 | Structured-concurrency runtime call composites |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as

@@ -6801,3 +6801,793 @@ func mirGEPThenStorePtrLine(slotReg, ty, basePtr, idxDigits, val string) string 
 	return mirGEPPtrStrideLine(slotReg, basePtr, idxDigits) +
 		"  " + mirInstrStore() + " ptr " + val + ", ptr " + slotReg + "\n"
 }
+
+// §14 LLVM-text aggregate-construction composite shapes.
+
+// Osty: mirOptionSomeI64BuildLine / mirOptionSomePtrBuildLine /
+//       mirResultOk{I64,Ptr}BuildLine / mirResultErrPtrBuildLine
+func mirOptionSomeI64BuildLine(stepReg, fullReg, payload string) string {
+	return mirInsertValueI64Line(stepReg, mirOptionAggregateType(), mirAggregateUndef(), mirDiscriminantSome(), "0") +
+		mirInsertValueI64Line(fullReg, mirOptionAggregateType(), stepReg, payload, "1")
+}
+func mirOptionSomePtrBuildLine(stepReg, fullReg, payloadPtr string) string {
+	return mirInsertValueI64Line(stepReg, mirOptionPtrAggregateType(), mirAggregateUndef(), mirDiscriminantSome(), "0") +
+		mirInsertValuePtrLine(fullReg, mirOptionPtrAggregateType(), stepReg, payloadPtr, "1")
+}
+func mirResultOkI64BuildLine(stepReg, fullReg, payload string) string {
+	return mirInsertValueI64Line(stepReg, mirOptionAggregateType(), mirAggregateUndef(), mirDiscriminantOk(), "0") +
+		mirInsertValueI64Line(fullReg, mirOptionAggregateType(), stepReg, payload, "1")
+}
+func mirResultOkPtrBuildLine(stepReg, fullReg, payloadPtr string) string {
+	return mirInsertValueI64Line(stepReg, mirOptionPtrAggregateType(), mirAggregateUndef(), mirDiscriminantOk(), "0") +
+		mirInsertValuePtrLine(fullReg, mirOptionPtrAggregateType(), stepReg, payloadPtr, "1")
+}
+func mirResultErrPtrBuildLine(stepReg, fullReg, errPtr string) string {
+	return mirInsertValueI64Line(stepReg, mirOptionPtrAggregateType(), mirAggregateUndef(), mirDiscriminantErr(), "0") +
+		mirInsertValuePtrLine(fullReg, mirOptionPtrAggregateType(), stepReg, errPtr, "1")
+}
+
+// §14 LLVM-text Option / Result destructure helpers.
+
+// Osty: mirOptionUnwrapDestructureLine / mirOptionPtrUnwrapDestructureLine /
+//       mirResultUnwrapDestructureLine
+func mirOptionUnwrapDestructureLine(discReg, payloadReg, agg string) string {
+	return mirOptionDiscProbeLine(discReg, agg) + mirOptionPayloadProbeLine(payloadReg, agg)
+}
+func mirOptionPtrUnwrapDestructureLine(discReg, payloadReg, agg string) string {
+	return mirOptionPtrDiscProbeLine(discReg, agg) + mirOptionPtrPayloadProbeLine(payloadReg, agg)
+}
+func mirResultUnwrapDestructureLine(discReg, payloadReg, agg string) string {
+	return mirResultDiscProbeLine(discReg, agg) + mirResultPayloadProbeLine(payloadReg, agg)
+}
+
+// §14 LLVM-text discriminant-comparison composite shapes.
+
+// Osty: mirOptionIsSomeLine / mirOptionIsNoneLine / mirResultIsOkLine / mirResultIsErrLine
+func mirOptionIsSomeLine(discReg, isSomeReg, agg string) string {
+	return mirOptionDiscProbeLine(discReg, agg) +
+		mirICmpI64EqLine(isSomeReg, discReg, mirDiscriminantSome())
+}
+func mirOptionIsNoneLine(discReg, isNoneReg, agg string) string {
+	return mirOptionDiscProbeLine(discReg, agg) +
+		mirICmpI64EqLine(isNoneReg, discReg, mirDiscriminantNone())
+}
+func mirResultIsOkLine(discReg, isOkReg, agg string) string {
+	return mirResultDiscProbeLine(discReg, agg) +
+		mirICmpI64EqLine(isOkReg, discReg, mirDiscriminantOk())
+}
+func mirResultIsErrLine(discReg, isErrReg, agg string) string {
+	return mirResultDiscProbeLine(discReg, agg) +
+		mirICmpI64EqLine(isErrReg, discReg, mirDiscriminantErr())
+}
+
+// §14 LLVM-text branch-on-discriminant composite shapes.
+
+// Osty: mirBranchOnOptionDiscLine / mirBranchOnResultDiscLine
+func mirBranchOnOptionDiscLine(discReg, cmpReg, agg, someLbl, noneLbl string) string {
+	return mirOptionDiscProbeLine(discReg, agg) +
+		mirICmpI64EqLine(cmpReg, discReg, mirDiscriminantSome()) +
+		mirBrCondLine(cmpReg, someLbl, noneLbl)
+}
+func mirBranchOnResultDiscLine(discReg, cmpReg, agg, okLbl, errLbl string) string {
+	return mirResultDiscProbeLine(discReg, agg) +
+		mirICmpI64EqLine(cmpReg, discReg, mirDiscriminantOk()) +
+		mirBrCondLine(cmpReg, okLbl, errLbl)
+}
+
+// §14 LLVM-text typed-string-pool global emit helpers.
+
+// Osty: mirInternedStringPoolLine / mirInternedFormatPoolLine
+func mirInternedStringPoolLine(sym, sizeDigits, encoded string) string {
+	return mirGlobalStringPoolDeclLine(sym, sizeDigits, encoded)
+}
+func mirInternedFormatPoolLine(sym, sizeDigits, encoded string) string {
+	return mirGlobalStringPoolDeclLine(sym, sizeDigits, encoded)
+}
+
+// §14 LLVM-text typed-cast call-arg shape composers.
+
+// Osty: mirArgPtrCastFromI64Line / mirArgI64CastFromPtrLine
+func mirArgPtrCastFromI64Line(castReg, val string) string {
+	return mirCastI64ToPtrLine(castReg, val)
+}
+func mirArgI64CastFromPtrLine(castReg, val string) string {
+	return mirCastPtrToI64Line(castReg, val)
+}
+
+// §14 LLVM-text Range / Iter shape composite helpers.
+
+// Osty: mirForRangePreludeLine / mirForRangeHeadLine
+func mirForRangePreludeLine(slotReg, start, headLbl string) string {
+	return mirAllocaInitI64Line(slotReg, start) + mirBrLabelLine(headLbl)
+}
+func mirForRangeHeadLine(headLbl, iReg, slot, cmpReg, bound, bodyLbl, exitLbl string) string {
+	return mirBlockHeaderLine(headLbl) +
+		mirLoadI64Line(iReg, slot) +
+		mirICmpI64SltLine(cmpReg, iReg, bound) +
+		mirBrCondLine(cmpReg, bodyLbl, exitLbl)
+}
+
+// §14 LLVM-text Match-arm head-body shape helpers.
+
+// Osty: mirMatchArmHeadLine / mirMatchArmBodyLine
+func mirMatchArmHeadLine(idxDigits string) string {
+	return mirLabelMatchArmPrefix() + "." + idxDigits + ":\n"
+}
+func mirMatchArmBodyLine(exitLbl string) string {
+	return mirBrLabelLine(exitLbl)
+}
+
+// §14 LLVM-text bounds-check composite shapes.
+
+// Osty: mirArrayBoundsCheckLine
+func mirArrayBoundsCheckLine(nonNegReg, ltLenReg, andReg, idx, lenReg, okLbl, oobLbl string) string {
+	return mirICmpI64SgeLine(nonNegReg, idx, "0") +
+		mirICmpI64SltLine(ltLenReg, idx, lenReg) +
+		mirAndI1Line(andReg, nonNegReg, ltLenReg) +
+		mirBrCondLine(andReg, okLbl, oobLbl)
+}
+
+// §14 LLVM-text vector-list snapshot 3-line composite.
+
+// Osty: mirVectorListSnapshot3Line
+func mirVectorListSnapshot3Line(dataReg, dataSym, lenReg, listReg, scopeRef, headLbl string) string {
+	return mirVectorListSnapshot2Line(dataReg, dataSym, lenReg, listReg, scopeRef) +
+		mirBrLabelLine(headLbl)
+}
+
+// §14 LLVM-text typed-numerical-cast composites.
+
+// Osty: mirCastFPToSIWithRTZLine / mirCastSIToFPDefaultLine
+func mirCastFPToSIWithRTZLine(reg, fromTy, val, toTy string) string {
+	return mirFPToSILine(reg, fromTy, val, toTy)
+}
+func mirCastSIToFPDefaultLine(reg, fromTy, val, toTy string) string {
+	return mirSIToFPLine(reg, fromTy, val, toTy)
+}
+
+// §14 Generic memcpy composite — alloca + memcpy 2-line.
+
+// Osty: mirAllocaThenMemcpyLine
+func mirAllocaThenMemcpyLine(slotReg, ty, src, sizeBytesDigits string) string {
+	return mirAllocaSingleLine(slotReg, ty) +
+		mirCallVoidLLVMMemcpyLine(slotReg, src, sizeBytesDigits, "false")
+}
+
+// §14 LLVM-text typed-aggregate field-extract composite shapes.
+
+// Osty: mirExtractValueI64FieldLine
+func mirExtractValueI64FieldLine(reg, aggTy, agg, idx string) string {
+	return mirExtractValueI64Line(reg, aggTy, agg, idx)
+}
+
+// §14 LLVM-text canonical zero-aggregate emit helpers.
+
+// Osty: mirEmitOptionNoneI64Line / mirEmitOptionNonePtrLine
+func mirEmitOptionNoneI64Line(reg string) string {
+	return mirInsertValueI64Line(reg, mirOptionAggregateType(), mirAggregateUndef(), mirDiscriminantNone(), "0")
+}
+func mirEmitOptionNonePtrLine(reg string) string {
+	return mirInsertValueI64Line(reg, mirOptionPtrAggregateType(), mirAggregateUndef(), mirDiscriminantNone(), "0")
+}
+
+// §14 Module-globals helpers.
+
+// Osty: mirInternedI64GlobalLine / mirInternedPtrGlobalLine /
+//       mirMutableI64GlobalLine / mirMutablePtrGlobalLine
+func mirInternedI64GlobalLine(sym, val string) string {
+	return mirGlobalConstantI64DeclLine(sym, val)
+}
+func mirInternedPtrGlobalLine(sym, val string) string {
+	return mirGlobalConstantPtrDeclLine(sym, val)
+}
+func mirMutableI64GlobalLine(sym, init string) string {
+	return mirGlobalMutableI64DeclLine(sym, init)
+}
+func mirMutablePtrGlobalLine(sym, init string) string {
+	return mirGlobalMutablePtrDeclLine(sym, init)
+}
+
+// §14 LLVM-text typed-call-shape with no-args + result-store
+// composite helpers.
+
+// Osty: mirCallI64NoArgsAndStoreLine / mirCallI1NoArgsAndStoreLine /
+//       mirCallPtrNoArgsAndStoreLine
+func mirCallI64NoArgsAndStoreLine(reg, sym, slot string) string {
+	return mirCallI64NoArgsLine(reg, sym) +
+		"  " + mirInstrStore() + " i64 " + reg + ", ptr " + slot + "\n"
+}
+func mirCallI1NoArgsAndStoreLine(reg, sym, slot string) string {
+	return mirCallI1NoArgsLine(reg, sym) +
+		"  " + mirInstrStore() + " i1 " + reg + ", ptr " + slot + "\n"
+}
+func mirCallPtrNoArgsAndStoreLine(reg, sym, slot string) string {
+	return mirCallPtrNoArgsLine(reg, sym) +
+		"  " + mirInstrStore() + " ptr " + reg + ", ptr " + slot + "\n"
+}
+
+// §15 LLVM-text load-then-call composite helpers.
+
+// Osty: mirLoadPtrThenCall{Void,Value,I64,I1}Line
+func mirLoadPtrThenCallVoidLine(reg, slot, sym string) string {
+	return mirLoadPtrLine(reg, slot) + mirCallVoidPtrLine(sym, reg)
+}
+func mirLoadPtrThenCallValueLine(loadReg, slot, resultReg, sym string) string {
+	return mirLoadPtrLine(loadReg, slot) + mirCallValuePtrFromPtrLine(resultReg, sym, loadReg)
+}
+func mirLoadPtrThenCallI64Line(loadReg, slot, resultReg, sym string) string {
+	return mirLoadPtrLine(loadReg, slot) + mirCallValueI64FromPtrLine(resultReg, sym, loadReg)
+}
+func mirLoadPtrThenCallI1Line(loadReg, slot, resultReg, sym string) string {
+	return mirLoadPtrLine(loadReg, slot) + mirCallValueI1FromPtrLine(resultReg, sym, loadReg)
+}
+
+// §15 LLVM-text predicate-then-branch composite helpers.
+
+// Osty: mirICmp{Eq,Ne,Slt,Sgt,Sle,Sge}I64ThenBranchLine / mirICmpEqPtrThenBranchLine /
+//       mirICmpNullPtrThenBranchLine
+func mirICmpEqI64ThenBranchLine(cmpReg, a, b, thenLbl, elseLbl string) string {
+	return mirICmpI64EqLine(cmpReg, a, b) + mirBrCondLine(cmpReg, thenLbl, elseLbl)
+}
+func mirICmpNeI64ThenBranchLine(cmpReg, a, b, thenLbl, elseLbl string) string {
+	return mirICmpI64NeLine(cmpReg, a, b) + mirBrCondLine(cmpReg, thenLbl, elseLbl)
+}
+func mirICmpSltI64ThenBranchLine(cmpReg, a, b, thenLbl, elseLbl string) string {
+	return mirICmpI64SltLine(cmpReg, a, b) + mirBrCondLine(cmpReg, thenLbl, elseLbl)
+}
+func mirICmpSgtI64ThenBranchLine(cmpReg, a, b, thenLbl, elseLbl string) string {
+	return mirICmpI64SgtLine(cmpReg, a, b) + mirBrCondLine(cmpReg, thenLbl, elseLbl)
+}
+func mirICmpSleI64ThenBranchLine(cmpReg, a, b, thenLbl, elseLbl string) string {
+	return mirICmpI64SleLine(cmpReg, a, b) + mirBrCondLine(cmpReg, thenLbl, elseLbl)
+}
+func mirICmpSgeI64ThenBranchLine(cmpReg, a, b, thenLbl, elseLbl string) string {
+	return mirICmpI64SgeLine(cmpReg, a, b) + mirBrCondLine(cmpReg, thenLbl, elseLbl)
+}
+func mirICmpEqPtrThenBranchLine(cmpReg, a, b, thenLbl, elseLbl string) string {
+	return mirICmpPtrEqLine(cmpReg, a, b) + mirBrCondLine(cmpReg, thenLbl, elseLbl)
+}
+func mirICmpNullPtrThenBranchLine(cmpReg, a, thenLbl, elseLbl string) string {
+	return mirICmpNullPtrLine(cmpReg, a) + mirBrCondLine(cmpReg, thenLbl, elseLbl)
+}
+
+// §15 LLVM-text typed-runtime-call sequencing composites.
+
+// Osty: mirRuntimeProbeAndStoreLine
+func mirRuntimeProbeAndStoreLine(reg, retTy, sym, args, slot string) string {
+	return "  " + reg + " = " + mirInstrCall() + " " + retTy + " @" + sym + "(" + args + ")\n" +
+		"  " + mirInstrStore() + " " + retTy + " " + reg + ", ptr " + slot + "\n"
+}
+
+// §15 LLVM-text typed-load-then-cmp composite helpers.
+
+// Osty: mirLoadI64ThenCmp{Eq,Ne,Zero}Line / mirLoadPtrThenCmpNullLine
+func mirLoadI64ThenCmpEqLine(loadReg, slot, cmpReg, b string) string {
+	return mirLoadI64Line(loadReg, slot) + mirICmpI64EqLine(cmpReg, loadReg, b)
+}
+func mirLoadI64ThenCmpNeLine(loadReg, slot, cmpReg, b string) string {
+	return mirLoadI64Line(loadReg, slot) + mirICmpI64NeLine(cmpReg, loadReg, b)
+}
+func mirLoadI64ThenCmpZeroLine(loadReg, slot, cmpReg string) string {
+	return mirLoadI64Line(loadReg, slot) + mirICmpZeroI64Line(cmpReg, loadReg)
+}
+func mirLoadPtrThenCmpNullLine(loadReg, slot, cmpReg string) string {
+	return mirLoadPtrLine(loadReg, slot) + mirICmpNullPtrLine(cmpReg, loadReg)
+}
+
+// §15 LLVM-text typed-load-then-store composite helpers.
+
+// Osty: mirLoadI1ThenStoreLine / mirLoadDoubleThenStoreLine
+func mirLoadI1ThenStoreLine(loadReg, src, dst string) string {
+	return mirLoadStoreI1Line(loadReg, src, dst)
+}
+func mirLoadDoubleThenStoreLine(loadReg, src, dst string) string {
+	return mirLoadStoreDoubleLine(loadReg, src, dst)
+}
+
+// §15 LLVM-text typed-runtime-call composite shapes (no result).
+
+// Osty: mirCallVoidWithI64ResultLine
+func mirCallVoidWithI64ResultLine(reg, sym, slot string) string {
+	return mirCallI64NoArgsAndStoreLine(reg, sym, slot)
+}
+
+// §15 Common emit-pass shape composers — return-constant 1-line shapes.
+
+// Osty: mirReturnConstant{I64,Ptr,I1,Double}Line / mirReturn{ZeroI64,NullPtr,FalseI1,TrueI1,ZeroDouble}Line
+func mirReturnConstantI64Line(val string) string    { return mirRetTypedLine(mirTypeI64(), val) }
+func mirReturnConstantPtrLine(val string) string    { return mirRetTypedLine(mirTypePtr(), val) }
+func mirReturnConstantI1Line(val string) string     { return mirRetTypedLine(mirTypeI1(), val) }
+func mirReturnConstantDoubleLine(val string) string { return mirRetTypedLine(mirTypeDouble(), val) }
+func mirReturnZeroI64Line() string                  { return mirReturnConstantI64Line("0") }
+func mirReturnNullPtrLine() string                  { return mirReturnConstantPtrLine("null") }
+func mirReturnFalseI1Line() string                  { return mirReturnConstantI1Line("0") }
+func mirReturnTrueI1Line() string                   { return mirReturnConstantI1Line("1") }
+func mirReturnZeroDoubleLine() string               { return mirReturnConstantDoubleLine("0.0") }
+
+// §15 LLVM-text typed call-arg list compositions (siblings).
+
+// Osty: mirArgListPtrPtr / mirArgListPtrI64Slot / mirArgListThreePtrSlot
+func mirArgListPtrPtr(a, b string) string {
+	return mirArgSlotPtr(a) + ", " + mirArgSlotPtr(b)
+}
+func mirArgListPtrI64Slot(a, b string) string {
+	return mirArgSlotPtr(a) + ", " + mirArgSlotI64(b)
+}
+func mirArgListThreePtrSlot(a, b, c string) string {
+	return mirArgSlotPtr(a) + ", " + mirArgSlotPtr(b) + ", " + mirArgSlotPtr(c)
+}
+
+// §15 LLVM-text typed-i64-add-with-immediate composites.
+
+// Osty: mirAddI64ImmediateThenStoreLine / mirSubI64ImmediateThenStoreLine
+func mirAddI64ImmediateThenStoreLine(addReg, base, imm, slot string) string {
+	return mirAddI64ImmediateLine(addReg, base, imm) +
+		"  " + mirInstrStore() + " i64 " + addReg + ", ptr " + slot + "\n"
+}
+func mirSubI64ImmediateThenStoreLine(subReg, base, imm, slot string) string {
+	return mirSubI64ImmediateLine(subReg, base, imm) +
+		"  " + mirInstrStore() + " i64 " + subReg + ", ptr " + slot + "\n"
+}
+
+// §15 Block-builder composites — for typical 3-block "if-then-else"
+// pattern.
+
+// Osty: mirIfThenElseSkeletonLine
+func mirIfThenElseSkeletonLine(cmpReg, cond, thenLbl, elseLbl string) string {
+	return mirICmpI1NeLine(cmpReg, cond, "0") +
+		mirBrCondLine(cmpReg, thenLbl, elseLbl) +
+		mirBlockHeaderLine(thenLbl)
+}
+
+// §15 LLVM-text typed-aggregate-store composite helpers.
+
+// Osty: mirStoreOptionAggregateLine / mirStoreOptionPtrAggregateLine /
+//       mirStoreResultAggregateLine / mirStoreResultPtrAggregateLine
+func mirStoreOptionAggregateLine(agg, slot string) string {
+	return "  " + mirInstrStore() + " " + mirOptionAggregateType() + " " + agg + ", ptr " + slot + "\n"
+}
+func mirStoreOptionPtrAggregateLine(agg, slot string) string {
+	return "  " + mirInstrStore() + " " + mirOptionPtrAggregateType() + " " + agg + ", ptr " + slot + "\n"
+}
+func mirStoreResultAggregateLine(agg, slot string) string {
+	return mirStoreOptionAggregateLine(agg, slot)
+}
+func mirStoreResultPtrAggregateLine(agg, slot string) string {
+	return mirStoreOptionPtrAggregateLine(agg, slot)
+}
+
+// §15 LLVM-text typed-aggregate-load composite helpers.
+
+// Osty: mirLoadOptionAggregateLine / mirLoadOptionPtrAggregateLine /
+//       mirLoadResultAggregateLine / mirLoadResultPtrAggregateLine
+func mirLoadOptionAggregateLine(reg, slot string) string {
+	return "  " + reg + " = " + mirInstrLoad() + " " + mirOptionAggregateType() + ", ptr " + slot + "\n"
+}
+func mirLoadOptionPtrAggregateLine(reg, slot string) string {
+	return "  " + reg + " = " + mirInstrLoad() + " " + mirOptionPtrAggregateType() + ", ptr " + slot + "\n"
+}
+func mirLoadResultAggregateLine(reg, slot string) string {
+	return mirLoadOptionAggregateLine(reg, slot)
+}
+func mirLoadResultPtrAggregateLine(reg, slot string) string {
+	return mirLoadOptionPtrAggregateLine(reg, slot)
+}
+
+// §16 LLVM-text intrinsic-builder helpers (semantic aliases).
+
+// Osty: mirCall{Sqrt,FAbs,Sin,Cos,Tan,Log,Log2,Log10,Exp,Exp2}DoubleLine
+func mirCallSqrtDoubleLine(reg, x string) string  { return mirCallValueLLVMSqrtF64Line(reg, x) }
+func mirCallFAbsDoubleLine(reg, x string) string  { return mirCallValueLLVMFAbsF64Line(reg, x) }
+func mirCallSinDoubleLine(reg, x string) string   { return mirCallValueLLVMSinF64Line(reg, x) }
+func mirCallCosDoubleLine(reg, x string) string   { return mirCallValueLLVMCosF64Line(reg, x) }
+func mirCallTanDoubleLine(reg, x string) string   { return mirCallValueLLVMTanF64Line(reg, x) }
+func mirCallLogDoubleLine(reg, x string) string   { return mirCallValueLLVMLogF64Line(reg, x) }
+func mirCallLog2DoubleLine(reg, x string) string  { return mirCallValueLLVMLog2F64Line(reg, x) }
+func mirCallLog10DoubleLine(reg, x string) string { return mirCallValueLLVMLog10F64Line(reg, x) }
+func mirCallExpDoubleLine(reg, x string) string   { return mirCallValueLLVMExpF64Line(reg, x) }
+func mirCallExp2DoubleLine(reg, x string) string  { return mirCallValueLLVMExp2F64Line(reg, x) }
+
+// Osty: mirCallPowDoubleLine / MinNumDoubleLine / MaxNumDoubleLine
+func mirCallPowDoubleLine(reg, base, exp string) string {
+	return mirCallValueLLVMPowF64Line(reg, base, exp)
+}
+func mirCallMinNumDoubleLine(reg, a, b string) string {
+	return mirCallValueLLVMMinNumF64Line(reg, a, b)
+}
+func mirCallMaxNumDoubleLine(reg, a, b string) string {
+	return mirCallValueLLVMMaxNumF64Line(reg, a, b)
+}
+
+// §16 LLVM-text bit-manipulation typed-call composites.
+
+// Osty: mirCall{Ctlz,Cttz,Ctpop,BSwapI{64,32,16},BitReverse}I64Line
+func mirCallCtlzI64Line(reg, x string) string       { return mirCallValueLLVMCtlzI64Line(reg, x) }
+func mirCallCttzI64Line(reg, x string) string       { return mirCallValueLLVMCttzI64Line(reg, x) }
+func mirCallCtpopI64Line(reg, x string) string      { return mirCallValueLLVMCtpopI64Line(reg, x) }
+func mirCallBSwapI64Line(reg, x string) string      { return mirCallValueLLVMBSwapI64Line(reg, x) }
+func mirCallBSwapI32Line(reg, x string) string      { return mirCallValueLLVMBSwapI32Line(reg, x) }
+func mirCallBSwapI16Line(reg, x string) string      { return mirCallValueLLVMBSwapI16Line(reg, x) }
+func mirCallBitReverseI64Line(reg, x string) string { return mirCallValueLLVMBitReverseI64Line(reg, x) }
+
+// §16 LLVM-text typed-runtime-callable lifetime intrinsics.
+
+// Osty: mirCallLifetime{Start,End}Line / mirCallAssumeLine / mirCallExpectI1Line
+func mirCallLifetimeStartLine(sizeBytes, slot string) string {
+	return mirCallVoidLLVMLifetimeStartLine(sizeBytes, slot)
+}
+func mirCallLifetimeEndLine(sizeBytes, slot string) string {
+	return mirCallVoidLLVMLifetimeEndLine(sizeBytes, slot)
+}
+func mirCallAssumeLine(cond string) string {
+	return mirCallVoidLLVMAssumeLine(cond)
+}
+func mirCallExpectI1Line(reg, cond, expected string) string {
+	return mirCallValueLLVMExpectI1Line(reg, cond, expected)
+}
+
+// §16 LLVM-text mem-intrinsic typed call shapes.
+
+// Osty: mirCallMemcpy{Volatile,NonVolatile}Line / MemmoveNonVolatileLine / MemsetZeroLine
+func mirCallMemcpyVolatileLine(dst, src, sizeBytes string) string {
+	return mirCallVoidLLVMMemcpyLine(dst, src, sizeBytes, "true")
+}
+func mirCallMemcpyNonVolatileLine(dst, src, sizeBytes string) string {
+	return mirCallVoidLLVMMemcpyLine(dst, src, sizeBytes, "false")
+}
+func mirCallMemmoveNonVolatileLine(dst, src, sizeBytes string) string {
+	return mirCallVoidLLVMMemmoveLine(dst, src, sizeBytes, "false")
+}
+func mirCallMemsetZeroLine(dst, sizeBytes string) string {
+	return mirCallVoidLLVMMemsetLine(dst, "0", sizeBytes, "false")
+}
+
+// §16 LLVM-text typed-runtime-callable testing helpers.
+
+// Osty: mirCallTest{Abort,ContextEnter,ContextExit,ExpectOk,ExpectError}Line
+func mirCallTestAbortLine(messagePtr string) string {
+	return mirCallVoidTestingAbortLine(messagePtr)
+}
+func mirCallTestContextEnterLine(nameReg string) string {
+	return mirCallVoidTestingContextEnterLine(nameReg)
+}
+func mirCallTestContextExitLine() string {
+	return mirCallVoidTestingContextExitLine()
+}
+func mirCallTestExpectOkLine(reg, resultReg string) string {
+	return mirCallValueTestingExpectOkLine(reg, resultReg)
+}
+func mirCallTestExpectErrorLine(reg, resultReg string) string {
+	return mirCallValueTestingExpectErrorLine(reg, resultReg)
+}
+
+// §16 LLVM-text typed runtime-callable bench helpers.
+
+// Osty: mirCallBench{NowNanos,TargetNs}Line
+func mirCallBenchNowNanosLine(reg string) string {
+	return mirCallValueBenchNowNanosLine(reg)
+}
+func mirCallBenchTargetNsLine(reg string) string {
+	return mirCallValueBenchTargetNsLine(reg)
+}
+
+// §16 LLVM-text typed-runtime-callable GC helpers.
+
+// Osty: mirCallGC{Alloc,Safepoint,Barrier,AllocatedBytes}Line
+func mirCallGCAllocLine(reg, sizeBytes, kind string) string {
+	return mirCallValueGCAllocLine(reg, sizeBytes, kind)
+}
+func mirCallGCSafepointLine(slotsPtr, slotCount string) string {
+	return mirCallVoidGCSafepointLine(slotsPtr, slotCount)
+}
+func mirCallGCBarrierLine(targetPtr, valuePtr string) string {
+	return mirCallVoidGCBarrierLine(targetPtr, valuePtr)
+}
+func mirCallGCAllocatedBytesLine(reg string) string {
+	return mirCallValueGCAllocatedBytesLine(reg)
+}
+
+// §16 LLVM-text typed runtime-callable string-debug helpers.
+
+// Osty: mirCallDiffLinesLine
+func mirCallDiffLinesLine(reg, expectedReg, actualReg string) string {
+	return mirCallValueStringDiffLinesLine(reg, expectedReg, actualReg)
+}
+
+// §16 LLVM-text typed-call-and-no-store composites.
+
+// Osty: mirCallVoidWithI1ResultDiscardLine
+func mirCallVoidWithI1ResultDiscardLine(reg, sym, args string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i1 @" + sym + "(" + args + ")\n"
+}
+
+// §16 LLVM-text option/result spilling helpers.
+
+// Osty: mirSpill{Option,OptionPtr,Result,ResultPtr}AggregateLine
+func mirSpillOptionAggregateLine(slotReg, agg string) string {
+	return mirAllocaSingleLine(slotReg, mirOptionAggregateType()) +
+		mirStoreOptionAggregateLine(agg, slotReg)
+}
+func mirSpillOptionPtrAggregateLine(slotReg, agg string) string {
+	return mirAllocaSingleLine(slotReg, mirOptionPtrAggregateType()) +
+		mirStoreOptionPtrAggregateLine(agg, slotReg)
+}
+func mirSpillResultAggregateLine(slotReg, agg string) string {
+	return mirSpillOptionAggregateLine(slotReg, agg)
+}
+func mirSpillResultPtrAggregateLine(slotReg, agg string) string {
+	return mirSpillOptionPtrAggregateLine(slotReg, agg)
+}
+
+// §16 LLVM-text typed-arg list 4/5/6-elem composers (aliases).
+
+// Osty: mirArgListFour/Five/SixMixed
+func mirArgListFourMixed(a, b, c, d string) string {
+	return mirJoinCommaFour(a, b, c, d)
+}
+func mirArgListFiveMixed(a, b, c, d, e string) string {
+	return mirJoinCommaFive(a, b, c, d, e)
+}
+func mirArgListSixMixed(a, b, c, d, e, f string) string {
+	return mirJoinCommaSix(a, b, c, d, e, f)
+}
+
+// §16 LLVM-text emit-pass header / footer helpers.
+
+// Osty: mirModulePreambleLine / mirModuleEpilogueLine
+func mirModulePreambleLine(sourcePath, triple, layout string) string {
+	return mirModuleHeaderSourceFilename(sourcePath) +
+		mirModuleHeaderTargetTriple(triple) +
+		mirModuleHeaderDataLayout(layout)
+}
+func mirModuleEpilogueLine(version string) string {
+	return mirIdentList(mirCompilerInfoLine(version))
+}
+
+// §16 LLVM-text typed-cast-then-call composite shapes.
+
+// Osty: mirCastI64ToPtrThenCallLine / mirCastPtrToI64ThenCallLine
+func mirCastI64ToPtrThenCallLine(castReg, val, resultReg, sym string) string {
+	return mirCastI64ToPtrLine(castReg, val) +
+		mirCallValuePtrFromPtrLine(resultReg, sym, castReg)
+}
+func mirCastPtrToI64ThenCallLine(castReg, val, resultReg, sym, args string) string {
+	return mirCastPtrToI64Line(castReg, val) +
+		"  " + resultReg + " = " + mirInstrCall() + " i64 @" + sym + "(" + args + ")\n"
+}
+
+// §16 LLVM-text typed-zext-then-call composite shapes.
+
+// Osty: mirZExtI{8,1}ToI64ThenCallLine
+func mirZExtI8ToI64ThenCallLine(zextReg, val, resultReg, sym string) string {
+	return mirZExtI8ToI64Line(zextReg, val) +
+		mirCallValueI64FromPtrLine(resultReg, sym, zextReg)
+}
+func mirZExtI1ToI64ThenCallLine(zextReg, val, resultReg, sym string) string {
+	return mirZExtI1ToI64Line(zextReg, val) +
+		mirCallValueI64FromPtrLine(resultReg, sym, zextReg)
+}
+
+// §16 LLVM-text typed-trunc-then-store composite shapes.
+
+// Osty: mirTruncI64To{I8,I1,I32}ThenStoreLine
+func mirTruncI64ToI8ThenStoreLine(truncReg, val, slot string) string {
+	return mirTruncI64ToI8Line(truncReg, val) + mirStoreI8Line(truncReg, slot)
+}
+func mirTruncI64ToI1ThenStoreLine(truncReg, val, slot string) string {
+	return mirTruncI64ToI1Line(truncReg, val) +
+		"  " + mirInstrStore() + " i1 " + truncReg + ", ptr " + slot + "\n"
+}
+func mirTruncI64ToI32ThenStoreLine(truncReg, val, slot string) string {
+	return mirTruncI64ToI32Line(truncReg, val) + mirStoreI32Line(truncReg, slot)
+}
+
+// §17 LLVM-text typed list / map / set runtime call aliases.
+
+// Osty: mirCallListLengthLine / MapLengthLine / SetLengthLine /
+//       StringLengthLine / BytesLengthLine
+func mirCallListLengthLine(reg, listReg string) string {
+	return mirCallListLenLine(reg, listReg)
+}
+func mirCallMapLengthLine(reg, mapReg string) string {
+	return mirCallMapLenLine(reg, mapReg)
+}
+func mirCallSetLengthLine(reg, setReg string) string {
+	return mirCallSetLenLine(reg, setReg)
+}
+func mirCallStringLengthLine(reg, strReg string) string {
+	return mirCallValueI64FromPtrLine(reg, mirRtStringLenSymbol(), strReg)
+}
+func mirCallBytesLengthLine(reg, bytesReg string) string {
+	return mirCallBytesLenLine(reg, bytesReg)
+}
+
+// §17 LLVM-text typed iterator-call shapes.
+
+// Osty: mirCallList{Reverse,Reversed,Clear,PopDiscard,IsEmptyTyped}Line /
+//       mirCallMapClearLine / mirCallSetClearLine
+func mirCallListReverseLine(listReg string) string {
+	return mirCallVoidPtrLine(mirRtListReverseSymbol(), listReg)
+}
+func mirCallListReversedLine(reg, listReg string) string {
+	return mirCallValuePtrFromPtrLine(reg, mirRtListReversedSymbol(), listReg)
+}
+func mirCallListClearLine(listReg string) string {
+	return mirCallVoidPtrLine(mirRtListClearSymbol(), listReg)
+}
+func mirCallMapClearLine(mapReg string) string {
+	return mirCallVoidPtrLine(mirRtMapClearSymbol(), mapReg)
+}
+func mirCallSetClearLine(setReg string) string {
+	return mirCallVoidPtrLine(mirRtSetClearSymbol(), setReg)
+}
+func mirCallListPopDiscardLine(listReg string) string {
+	return mirCallVoidPtrLine(mirRtListPopDiscardSymbol(), listReg)
+}
+func mirCallListIsEmptyTypedLine(reg, listReg string) string {
+	return mirCallValueI1FromPtrLine(reg, mirRtListIsEmptySymbol(), listReg)
+}
+
+// §17 LLVM-text typed-runtime-callable container-conversion helpers.
+
+// Osty: mirCallSetToListLine / MapValuesLine / MapEntriesLine
+func mirCallSetToListLine(reg, setReg string) string {
+	return mirCallValuePtrFromPtrLine(reg, mirRtSetToListSymbol(), setReg)
+}
+func mirCallMapValuesLine(reg, mapReg string) string {
+	return mirCallValuePtrFromPtrLine(reg, mirRtMapValuesSymbol(), mapReg)
+}
+func mirCallMapEntriesLine(reg, mapReg string) string {
+	return mirCallValuePtrFromPtrLine(reg, mirRtMapEntriesSymbol(), mapReg)
+}
+
+// §17 LLVM-text typed-runtime-callable channel-state helpers.
+
+// Osty: mirCallChannel{Close,IsClosed,Len,Cap}Line
+func mirCallChannelCloseLine(chanReg string) string {
+	return mirCallVoidPtrLine(mirRtChanCloseSymbol(), chanReg)
+}
+func mirCallChannelIsClosedLine(reg, chanReg string) string {
+	return mirCallValueI1FromPtrLine(reg, mirRtChanIsClosedSymbol(), chanReg)
+}
+func mirCallChannelLenLine(reg, chanReg string) string {
+	return mirCallValueI64FromPtrLine(reg, mirRtChanLenSymbol(), chanReg)
+}
+func mirCallChannelCapLine(reg, chanReg string) string {
+	return mirCallValueI64FromPtrLine(reg, mirRtChanCapSymbol(), chanReg)
+}
+
+// §17 LLVM-text typed-runtime-callable cancel helpers.
+
+// Osty: mirCallCancel{Check,IsCancelled,Cancel}Line
+func mirCallCancelCheckLine(reg string) string {
+	return mirCallI1NoArgsLine(reg, mirRtCancelCheckCancelledSymbol())
+}
+func mirCallCancelIsCancelledLine(reg string) string {
+	return mirCallI1NoArgsLine(reg, mirRtCancelIsCancelledSymbol())
+}
+func mirCallCancelCancelLine() string {
+	return mirCallVoidNoArgsLine(mirRtCancelCancelSymbol())
+}
+
+// §17 LLVM-text typed-runtime-callable thread-state helpers.
+
+// Osty: mirCallThread{Yield,Sleep}Line
+func mirCallThreadYieldLine() string {
+	return mirCallVoidNoArgsLine(mirRtThreadYieldSymbol())
+}
+func mirCallThreadSleepLine(nsReg string) string {
+	return mirCallVoidFromI64Line(mirRtThreadSleepSymbol(), nsReg)
+}
+
+// §17 LLVM-text typed-runtime-callable string operations.
+
+// Osty: mirCallStringConcatTwoLine / Hash / IsEmpty / ToUpper / ToLower / Trim / Repeat
+func mirCallStringConcatTwoLine(reg, leftReg, rightReg string) string {
+	return mirCallValuePtrFromPtrLine(reg, mirRtStringConcatSymbol(), leftReg) +
+		mirCallValuePtrFromPtrLine(reg, mirRtStringConcatSymbol(), rightReg)
+}
+func mirCallStringHashLine(reg, strReg string) string {
+	return mirCallValueI64FromPtrLine(reg, mirRtStringHashSymbol(), strReg)
+}
+func mirCallStringIsEmptyLine(reg, strReg string) string {
+	return mirCallValueI1FromPtrLine(reg, mirRtStringIsEmptySymbol(), strReg)
+}
+func mirCallStringToUpperLine(reg, strReg string) string {
+	return mirCallValuePtrFromPtrLine(reg, mirRtStringToUpperSymbol(), strReg)
+}
+func mirCallStringToLowerLine(reg, strReg string) string {
+	return mirCallValuePtrFromPtrLine(reg, mirRtStringToLowerSymbol(), strReg)
+}
+func mirCallStringTrimLine(reg, strReg string) string {
+	return mirCallValuePtrFromPtrLine(reg, mirRtStringTrimSymbol(), strReg)
+}
+func mirCallStringRepeatLine(reg, strReg, nReg string) string {
+	return mirCallPtrFromPtrI64Line(reg, mirRtStringRepeatSymbol(), strReg, nReg)
+}
+
+// §17 LLVM-text typed-runtime-callable bytes operations.
+
+// Osty: mirCallBytesIsEmptyLine / GetTypedLine / ContainsLine / StartsWithLine / EndsWithLine
+func mirCallBytesIsEmptyLine(reg, bytesReg string) string {
+	return mirCallValueI1FromPtrLine(reg, mirRtBytesIsEmptySymbol(), bytesReg)
+}
+func mirCallBytesGetTypedLine(reg, bytesReg, idxReg string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i8 @" + mirRtBytesGetSymbol() + "(ptr " + bytesReg + ", i64 " + idxReg + ")\n"
+}
+func mirCallBytesContainsLine(reg, bytesReg, needleReg string) string {
+	return mirCallValueI1FromPtrLine(reg, mirRtBytesContainsSymbol(), bytesReg) +
+		mirCallValueI1FromPtrLine(reg, mirRtBytesContainsSymbol(), needleReg)
+}
+func mirCallBytesStartsWithLine(reg, bytesReg, prefixReg string) string {
+	return mirCallValueI1FromPtrLine(reg, mirRtBytesStartsWithSymbol(), bytesReg) +
+		mirCallValueI1FromPtrLine(reg, mirRtBytesStartsWithSymbol(), prefixReg)
+}
+func mirCallBytesEndsWithLine(reg, bytesReg, suffixReg string) string {
+	return mirCallValueI1FromPtrLine(reg, mirRtBytesEndsWithSymbol(), bytesReg) +
+		mirCallValueI1FromPtrLine(reg, mirRtBytesEndsWithSymbol(), suffixReg)
+}
+
+// §17 LLVM-text typed runtime-callable map / set operations.
+
+// Osty: mirCallMap{Insert,Remove}Line / mirCallSet{Add,Remove}Line
+func mirCallMapInsertLine(mapReg, keyArgs, valArgs string) string {
+	return "  " + mirInstrCallVoid() + " void @" + mirRtMapInsertSymbol() + "(ptr " + mapReg + ", " + keyArgs + ", " + valArgs + ")\n"
+}
+func mirCallMapRemoveLine(mapReg, keyArgs string) string {
+	return "  " + mirInstrCallVoid() + " void @" + mirRtMapRemoveSymbol() + "(ptr " + mapReg + ", " + keyArgs + ")\n"
+}
+func mirCallSetAddLine(setReg, elemArgs string) string {
+	return "  " + mirInstrCallVoid() + " void @" + mirRtSetAddSymbol() + "(ptr " + setReg + ", " + elemArgs + ")\n"
+}
+func mirCallSetRemoveLine(setReg, elemArgs string) string {
+	return "  " + mirInstrCallVoid() + " void @" + mirRtSetRemoveSymbol() + "(ptr " + setReg + ", " + elemArgs + ")\n"
+}
+
+// §17 LLVM-text typed runtime-callable structured-concurrency.
+
+// Osty: mirCallTaskGroup{New,Cancel,IsCancelled}Line / mirCallTaskHandleJoinLine /
+//       mirCallTaskCollectAllLine / mirCallTaskRaceLine
+func mirCallTaskGroupNewLine(reg string) string {
+	return mirCallPtrNoArgsLine(reg, mirRtTaskGroupRootSymbol())
+}
+func mirCallTaskGroupCancelLine(groupReg string) string {
+	return mirCallVoidPtrLine(mirRtTaskGroupCancelSymbol(), groupReg)
+}
+func mirCallTaskGroupIsCancelledLine(reg, groupReg string) string {
+	return mirCallValueI1FromPtrLine(reg, mirRtTaskGroupIsCancelledSymbol(), groupReg)
+}
+func mirCallTaskHandleJoinLine(reg, handleReg string) string {
+	return mirCallValuePtrFromPtrLine(reg, mirRtTaskHandleJoinSymbol(), handleReg)
+}
+func mirCallTaskCollectAllLine(reg, listReg string) string {
+	return mirCallValuePtrFromPtrLine(reg, mirRtTaskCollectAllSymbol(), listReg)
+}
+func mirCallTaskRaceLine(reg, bodyReg string) string {
+	return mirCallValuePtrFromPtrLine(reg, mirRtTaskRaceSymbol(), bodyReg)
+}
+
+// §17 LLVM-text typed runtime-callable panic / abort helpers.
+
+// Osty: mirCall{Panic,Unreachable,Todo,Abort}Line / mirCall{OptionUnwrapNone,ResultUnwrapErr,ExpectFailed}Line
+func mirCallPanicLine(messagePtr string) string {
+	return mirCallVoidPtrLine(mirRtPanicSymbol(), messagePtr)
+}
+func mirCallUnreachableLine() string {
+	return mirCallVoidNoArgsLine(mirRtUnreachableSymbol())
+}
+func mirCallTodoLine() string {
+	return mirCallVoidNoArgsLine(mirRtTodoSymbol())
+}
+func mirCallAbortLine() string {
+	return mirCallVoidNoArgsLine(mirRtAbortSymbol())
+}
+func mirCallOptionUnwrapNoneLine() string {
+	return mirCallVoidNoArgsLine(mirRtOptionUnwrapNoneSymbol())
+}
+func mirCallResultUnwrapErrLine() string {
+	return mirCallVoidNoArgsLine(mirRtResultUnwrapErrSymbol())
+}
+func mirCallExpectFailedLine() string {
+	return mirCallVoidNoArgsLine(mirRtExpectFailedSymbol())
+}
