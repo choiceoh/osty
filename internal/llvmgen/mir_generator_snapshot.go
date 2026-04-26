@@ -2636,3 +2636,194 @@ func mirRuntimeDeclareMapRemoveLine(sym, keyLLVM string) string {
 func mirRuntimeDeclareListSetSimpleLine(sym, elemLLVM string) string {
 	return mirRuntimeDeclareLine("void", sym, "ptr, i64, "+elemLLVM)
 }
+
+// §3 runtime-declare canonical-shape builders — drain the
+// `"declare <ret> @"+sym+"(<args>)"` string-concat pattern at every
+// call site in `mir_generator.go`. Each helper covers one common
+// (ret, args) shape.
+
+// mirRuntimeDeclarePrintf returns `declare i32 @printf(ptr, ...)`.
+// Osty: mirRuntimeDeclarePrintf
+func mirRuntimeDeclarePrintf() string {
+	return "declare i32 @printf(ptr, ...)"
+}
+
+// mirRuntimeDeclareExit returns `declare void @exit(i32)`.
+// Osty: mirRuntimeDeclareExit
+func mirRuntimeDeclareExit() string {
+	return "declare void @exit(i32)"
+}
+
+// mirRuntimeDeclarePtrFromPtrLine renders `declare ptr @<sym>(ptr)`.
+// Osty: mirRuntimeDeclarePtrFromPtrLine
+func mirRuntimeDeclarePtrFromPtrLine(sym string) string {
+	return mirRuntimeDeclareLine("ptr", sym, "ptr")
+}
+
+// mirRuntimeDeclareI1FromPtrLine renders `declare i1 @<sym>(ptr)`.
+// Osty: mirRuntimeDeclareI1FromPtrLine
+func mirRuntimeDeclareI1FromPtrLine(sym string) string {
+	return mirRuntimeDeclareLine("i1", sym, "ptr")
+}
+
+// mirRuntimeDeclareVoidFromPtrLine renders `declare void @<sym>(ptr)`.
+// Osty: mirRuntimeDeclareVoidFromPtrLine
+func mirRuntimeDeclareVoidFromPtrLine(sym string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr")
+}
+
+// mirRuntimeDeclareI64FromPtrLine renders `declare i64 @<sym>(ptr)`.
+// Osty: mirRuntimeDeclareI64FromPtrLine
+func mirRuntimeDeclareI64FromPtrLine(sym string) string {
+	return mirRuntimeDeclareLine("i64", sym, "ptr")
+}
+
+// mirRuntimeDeclarePtrFromScalarLine renders `declare ptr @<sym>(<scalar>)`.
+// Osty: mirRuntimeDeclarePtrFromScalarLine
+func mirRuntimeDeclarePtrFromScalarLine(sym, scalarLLVM string) string {
+	return mirRuntimeDeclareLine("ptr", sym, scalarLLVM)
+}
+
+// mirRuntimeDeclareI64NoArgsLine renders `declare i64 @<sym>()`.
+// Osty: mirRuntimeDeclareI64NoArgsLine
+func mirRuntimeDeclareI64NoArgsLine(sym string) string {
+	return mirRuntimeDeclareLine("i64", sym, "")
+}
+
+// mirRuntimeDeclareVoidI32Line renders `declare void @<sym>(i32)`.
+// Osty: mirRuntimeDeclareVoidI32Line
+func mirRuntimeDeclareVoidI32Line(sym string) string {
+	return mirRuntimeDeclareLine("void", sym, "i32")
+}
+
+// mirRuntimeDeclareSafepointV1 returns the GC safepoint decl shape.
+// Osty: mirRuntimeDeclareSafepointV1
+func mirRuntimeDeclareSafepointV1() string {
+	return "declare void @osty.gc.safepoint_v1(i64, ptr, i64)"
+}
+
+// mirRuntimeDeclareGcAllocV1 returns the GC allocator decl shape.
+// Osty: mirRuntimeDeclareGcAllocV1
+func mirRuntimeDeclareGcAllocV1() string {
+	return "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)"
+}
+
+// mirRuntimeDeclareStringConcat returns the String concat decl shape.
+// Osty: mirRuntimeDeclareStringConcat
+func mirRuntimeDeclareStringConcat() string {
+	return "declare ptr @osty_rt_strings_Concat(ptr, ptr)"
+}
+
+// §6 Some-aggregate builders — repeating the Some(payload) two-
+// insertvalue construction.
+
+// mirSomeAggregateLines renders the canonical Some(payload) two-
+// insertvalue pair into one block.
+// Osty: mirSomeAggregateLines
+func mirSomeAggregateLines(taggedReg, filledReg, optLLVM, payloadI64 string) string {
+	return mirInsertValueAggLine(taggedReg, optLLVM, "undef", "i64", "1", "0") +
+		mirInsertValueAggLine(filledReg, optLLVM, taggedReg, "i64", payloadI64, "1")
+}
+
+// mirSomeStoreLines renders Some-aggregate construction + store.
+// Osty: mirSomeStoreLines
+func mirSomeStoreLines(taggedReg, filledReg, optLLVM, payloadI64, destSlot string) string {
+	return mirSomeAggregateLines(taggedReg, filledReg, optLLVM, payloadI64) +
+		mirStoreLine(optLLVM, filledReg, destSlot)
+}
+
+// mirSomeStoreThenJumpLines renders Some-arm body: aggregate +
+// store + br to join label.
+// Osty: mirSomeStoreThenJumpLines
+func mirSomeStoreThenJumpLines(taggedReg, filledReg, optLLVM, payloadI64, destSlot, endLabel string) string {
+	return mirSomeStoreLines(taggedReg, filledReg, optLLVM, payloadI64, destSlot) +
+		mirBrUncondLine(endLabel)
+}
+
+// mirNoneStoreThenJumpLines renders None-arm body: store
+// zeroinitializer + br to join label.
+// Osty: mirNoneStoreThenJumpLines
+func mirNoneStoreThenJumpLines(optLLVM, destSlot, endLabel string) string {
+	return mirStoreZeroinitLine(optLLVM, destSlot) + mirBrUncondLine(endLabel)
+}
+
+// mirICmpSltI64Line renders the loop-bound check `icmp slt i64`.
+// Osty: mirICmpSltI64Line
+func mirICmpSltI64Line(reg, lhs, rhs string) string {
+	return mirICmpLine(reg, "slt", "i64", lhs, rhs)
+}
+
+// mirICmpSgeI64Line renders the lower-bound check `icmp sge i64`.
+// Osty: mirICmpSgeI64Line
+func mirICmpSgeI64Line(reg, lhs, rhs string) string {
+	return mirICmpLine(reg, "sge", "i64", lhs, rhs)
+}
+
+// mirLinearScanLoopHeadLines renders the loop-head block of the
+// linear-scan idiom: label + load + slt + cond-br.
+// Osty: mirLinearScanLoopHeadLines
+func mirLinearScanLoopHeadLines(headLabel, iReg, iSlot, cont, lenReg, bodyLabel, endLabel string) string {
+	return mirLabelLine(headLabel) +
+		mirLoadLine(iReg, "i64", iSlot) +
+		mirICmpSltI64Line(cont, iReg, lenReg) +
+		mirBrCondLine(cont, bodyLabel, endLabel)
+}
+
+// mirLinearScanLoopTailLines renders the loop-tail block: cont
+// label + add + store + jump to head.
+// Osty: mirLinearScanLoopTailLines
+func mirLinearScanLoopTailLines(contLabel, nextReg, iReg, iSlot, headLabel string) string {
+	return mirLabelLine(contLabel) +
+		mirAddI64Line(nextReg, iReg, "1") +
+		mirStoreLine("i64", nextReg, iSlot) +
+		mirBrUncondLine(headLabel)
+}
+
+// mirNoneAggregateLines renders the canonical None two-insertvalue
+// construction.
+// Osty: mirNoneAggregateLines
+func mirNoneAggregateLines(stepReg, valueReg, optLLVM string) string {
+	return mirInsertValueAggLine(stepReg, optLLVM, "undef", "i64", "0", "0") +
+		mirInsertValueAggLine(valueReg, optLLVM, stepReg, "i64", "0", "1")
+}
+
+// mirOkAggregateLines renders the canonical Ok(payload) two-
+// insertvalue construction.
+// Osty: mirOkAggregateLines
+func mirOkAggregateLines(stepReg, valueReg, resultLLVM, payloadI64 string) string {
+	return mirInsertValueAggLine(stepReg, resultLLVM, "undef", "i64", "1", "0") +
+		mirInsertValueAggLine(valueReg, resultLLVM, stepReg, "i64", payloadI64, "1")
+}
+
+// mirErrAggregateLines renders the canonical Err(payload) two-
+// insertvalue construction.
+// Osty: mirErrAggregateLines
+func mirErrAggregateLines(stepReg, valueReg, resultLLVM, payloadI64 string) string {
+	return mirInsertValueAggLine(stepReg, resultLLVM, "undef", "i64", "0", "0") +
+		mirInsertValueAggLine(valueReg, resultLLVM, stepReg, "i64", payloadI64, "1")
+}
+
+// mirCallVoidI64TagAndPtrLine renders the safepoint chunk-call
+// shape `call void @<sym>(i64, ptr, i64)`.
+// Osty: mirCallVoidI64TagAndPtrLine
+func mirCallVoidI64TagAndPtrLine(sym, tag, slot, count string) string {
+	return mirCallVoidLine(sym, "i64 "+tag+", ptr "+slot+", i64 "+count)
+}
+
+// mirAllocaI64ZeroSlot renders alloca i64 + store i64 0.
+// Osty: mirAllocaI64ZeroSlot
+func mirAllocaI64ZeroSlot(slot string) string {
+	return mirAllocaWithStoreLine(slot, "i64", "0")
+}
+
+// mirAllocaI1FalseSlot renders alloca i1 + store i1 false.
+// Osty: mirAllocaI1FalseSlot
+func mirAllocaI1FalseSlot(slot string) string {
+	return mirAllocaWithStoreLine(slot, "i1", "false")
+}
+
+// mirStoreI1TrueLine renders `store i1 true, ptr <slot>`.
+// Osty: mirStoreI1TrueLine
+func mirStoreI1TrueLine(slot string) string {
+	return mirStoreLine("i1", "true", slot)
+}
