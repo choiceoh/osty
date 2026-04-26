@@ -12414,10 +12414,9 @@ pub fn mirCallThreadSleepLine(nsReg: String) -> String {
 /// §17 LLVM-text typed-runtime-callable string operations.
 
 /// mirCallStringConcatTwoLine renders the canonical 2-arg string-
-/// concat call.
+/// concat call: `<reg> = call ptr @osty_rt_strings_Concat(ptr <left>, ptr <right>)`.
 pub fn mirCallStringConcatTwoLine(reg: String, leftReg: String, rightReg: String) -> String {
-    mirCallValuePtrFromPtrLine(reg, mirRtStringConcatSymbol(), leftReg) +
-    mirCallValuePtrFromPtrLine(reg, mirRtStringConcatSymbol(), rightReg)
+    mirCallPtrFromTwoPtrLine(reg, mirRtStringConcatSymbol(), leftReg, rightReg)
 }
 
 /// mirCallStringHashLine renders the canonical string-hash call.
@@ -12464,10 +12463,10 @@ pub fn mirCallBytesGetTypedLine(reg: String, bytesReg: String, idxReg: String) -
     "  " + reg + " = " + mirInstrCall() + " i8 @" + mirRtBytesGetSymbol() + "(ptr " + bytesReg + ", i64 " + idxReg + ")\n"
 }
 
-/// mirCallBytesContainsLine renders the canonical bytes-contains call.
+/// mirCallBytesContainsLine renders the canonical bytes-contains call:
+/// `<reg> = call i1 @osty_rt_bytes_contains(ptr <bytes>, ptr <needle>)`.
 pub fn mirCallBytesContainsLine(reg: String, bytesReg: String, needleReg: String) -> String {
-    mirCallValueI1FromPtrLine(reg, mirRtBytesContainsSymbol(), bytesReg) +
-    mirCallValueI1FromPtrLine(reg, mirRtBytesContainsSymbol(), needleReg)
+    mirCallI1FromTwoPtrLine(reg, mirRtBytesContainsSymbol(), bytesReg, needleReg)
 }
 
 /// mirCallBytesStartsWithLine renders the canonical bytes-starts-with call.

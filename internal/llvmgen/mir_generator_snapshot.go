@@ -7484,8 +7484,7 @@ func mirCallThreadSleepLine(nsReg string) string {
 
 // Osty: mirCallStringConcatTwoLine / Hash / IsEmpty / ToUpper / ToLower / Trim / Repeat
 func mirCallStringConcatTwoLine(reg, leftReg, rightReg string) string {
-	return mirCallValuePtrFromPtrLine(reg, mirRtStringConcatSymbol(), leftReg) +
-		mirCallValuePtrFromPtrLine(reg, mirRtStringConcatSymbol(), rightReg)
+	return mirCallPtrFromTwoPtrLine(reg, mirRtStringConcatSymbol(), leftReg, rightReg)
 }
 func mirCallStringHashLine(reg, strReg string) string {
 	return mirCallValueI64FromPtrLine(reg, mirRtStringHashSymbol(), strReg)
@@ -7516,16 +7515,13 @@ func mirCallBytesGetTypedLine(reg, bytesReg, idxReg string) string {
 	return "  " + reg + " = " + mirInstrCall() + " i8 @" + mirRtBytesGetSymbol() + "(ptr " + bytesReg + ", i64 " + idxReg + ")\n"
 }
 func mirCallBytesContainsLine(reg, bytesReg, needleReg string) string {
-	return mirCallValueI1FromPtrLine(reg, mirRtBytesContainsSymbol(), bytesReg) +
-		mirCallValueI1FromPtrLine(reg, mirRtBytesContainsSymbol(), needleReg)
+	return mirCallI1FromTwoPtrLine(reg, mirRtBytesContainsSymbol(), bytesReg, needleReg)
 }
 func mirCallBytesStartsWithLine(reg, bytesReg, prefixReg string) string {
-	return mirCallValueI1FromPtrLine(reg, mirRtBytesStartsWithSymbol(), bytesReg) +
-		mirCallValueI1FromPtrLine(reg, mirRtBytesStartsWithSymbol(), prefixReg)
+	return mirCallI1FromTwoPtrLine(reg, mirRtBytesStartsWithSymbol(), bytesReg, prefixReg)
 }
 func mirCallBytesEndsWithLine(reg, bytesReg, suffixReg string) string {
-	return mirCallValueI1FromPtrLine(reg, mirRtBytesEndsWithSymbol(), bytesReg) +
-		mirCallValueI1FromPtrLine(reg, mirRtBytesEndsWithSymbol(), suffixReg)
+	return mirCallI1FromTwoPtrLine(reg, mirRtBytesEndsWithSymbol(), bytesReg, suffixReg)
 }
 
 // §17 LLVM-text typed runtime-callable map / set operations.
