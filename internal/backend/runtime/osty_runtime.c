@@ -455,18 +455,32 @@ typedef struct osty_gc_header {
 
 /* Inline storage for short lists. The Split / Fields / `[lit]` /
  * cache-rebuild patterns that dominate the benchmark suite typically
- * produce 1-4 element lists; without inline storage each one paid a
- * `realloc(NULL, 32)` data buffer alloc on first push (initial
- * `cap=4`, ptr elements). That malloc is the second-largest alloc
- * source after Concat strings on the String-heavy benches.
+ * produce 1-16 element lists; without enough inline capacity each
+ * one paid a `realloc(NULL, 32)` data buffer alloc on first push
+ * (initial `cap=4`, ptr elements) AND a doubling realloc as it grew
+ * past 8 / 16 elements. That malloc + memcpy chain showed up as
+ * **40% of lru-sim wall time** under `sample` (16 of 41 main-thread
+ * samples in `_realloc`/`xzm_realloc`/`_xzm_free`), driven by the
+ * eviction loop's "rebuild list excluding one index" pattern that
+ * allocates a fresh `next: List<String>` and pushes 12 elements
+ * into it per eviction (~14k evictions per 50k-op run).
  *
- * 32 bytes covers the 4-element ptr / i64 / f64 case without
- * inflating the list header by more than a cache line. Element
- * sizes 1/4 (i8/i32) get more inline slots (32/8 elements); the
- * struct-element path (List<Record>) never fits inline because
+ * 128 bytes covers the 16-element ptr / i64 / f64 case (lru-sim's
+ * 12-element ephemeral lists fit entirely inline now). Element
+ * sizes 1/4 (i8/i32) get even more inline slots (128/32 elements);
+ * the struct-element path (List<Record>) never fits inline because
  * record sizes are typically >= 16 bytes. Larger lists transparently
- * spill to a heap data buffer once `len * elem_size > 32`. */
-#define OSTY_RT_LIST_INLINE_BYTES 32
+ * spill to a heap data buffer once `len * elem_size > 128`.
+ *
+ * Cost: list header grows from 88 → 184 bytes (~96 bytes / list).
+ * For workloads with thousands of short-lived lists (lru-sim,
+ * dep-resolver, log-aggregator) that's 1-5 MB extra in the young
+ * generation — well under the nursery's default 8 MB budget, and
+ * the existing GC sweep collects them at the same rate. The win
+ * is one fewer malloc + memcpy per list spill, plus the inline
+ * storage stays prefetched alongside the list header in the same
+ * cache line stream so per-element access has no extra indirection. */
+#define OSTY_RT_LIST_INLINE_BYTES 128
 
 typedef struct osty_rt_list {
     int64_t len;
