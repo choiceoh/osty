@@ -354,6 +354,33 @@ list keeps new Osty clean of known landmines.
 | `mirCallVarargPrintfTwoArgLine` | `(fmtSym, arg1, arg2) -> String` | §6 | printf with two variadic args. Used by testing-summary `(seed 0x%x)` lines |
 | `mirCallVarargPrintfThreeArgLine` | `(fmtSym, arg1, arg2, arg3) -> String` | §6 | printf with three variadic args. Used by bench summary preludes |
 | `mirAllocaSpillStoreLine` | `(slot, ty, val) -> String` | §6 | `alloca <ty>` + `store <ty> <val>, ptr <slot>` — canonical "spill an SSA value into a stack slot" preamble before bytes-v1 runtime calls |
+| `mirRuntimeDeclarePrintf` | `() -> String` | §3 | `declare i32 @printf(ptr, ...)` — drains the literal printf decl at testing-abort, bench-summary, and println-like emit sites |
+| `mirRuntimeDeclareExit` | `() -> String` | §3 | `declare void @exit(i32)` — drains the literal exit decl at testing-abort, bench-error, panic-helper sites |
+| `mirRuntimeDeclarePtrFromPtrLine` | `(sym: String) -> String` | §3 | `declare ptr @<sym>(ptr)` — the most common runtime ABI shape (~22 sites: list_keys/data, set_to_list, etc.) |
+| `mirRuntimeDeclareI1FromPtrLine` | `(sym: String) -> String` | §3 | `declare i1 @<sym>(ptr)` — predicate runtime shape (is_empty/is_closed/pop_check) |
+| `mirRuntimeDeclareVoidFromPtrLine` | `(sym: String) -> String` | §3 | `declare void @<sym>(ptr)` — side-effect runtime shape (clear/reverse/close/pop_discard) |
+| `mirRuntimeDeclareI64FromPtrLine` | `(sym: String) -> String` | §3 | `declare i64 @<sym>(ptr)` — scalar-returning ptr-handle probe shape (plain, no LICM attrs). Distinct from `mirRuntimeDeclareMemoryRead` |
+| `mirRuntimeDeclarePtrFromScalarLine` | `(sym, scalarLLVM) -> String` | §3 | `declare ptr @<sym>(<scalar>)` — scalar-to-string family (int_to_string/float_to_string/bool/char/byte) |
+| `mirRuntimeDeclareI64NoArgsLine` | `(sym: String) -> String` | §3 | `declare i64 @<sym>()` — zero-arg scalar probe (bench clock reads, GC-debug allocators) |
+| `mirRuntimeDeclareVoidI32Line` | `(sym: String) -> String` | §3 | `declare void @<sym>(i32)` — abstract-symbol form for noreturn exit-like helpers |
+| `mirRuntimeDeclareSafepointV1` | `() -> String` | §3 | `declare void @osty.gc.safepoint_v1(i64, ptr, i64)` — GC safepoint runtime ABI canonical decl |
+| `mirRuntimeDeclareGcAllocV1` | `() -> String` | §3 | `declare ptr @osty.gc.alloc_v1(i64, i64, ptr)` — GC allocator runtime ABI canonical decl |
+| `mirRuntimeDeclareStringConcat` | `() -> String` | §3 | `declare ptr @osty_rt_strings_Concat(ptr, ptr)` — String concat runtime ABI canonical decl |
+| `mirSomeAggregateLines` | `(taggedReg, filledReg, optLLVM, payloadI64) -> String` | §6 | Canonical Some(payload) two-insertvalue construction. Drains the 7-site repetition at IntrinsicListFirst/Last/Pop/IndexOf/Contains/MapGet/ListSafeGet |
+| `mirSomeStoreLines` | `(taggedReg, filledReg, optLLVM, payloadI64, destSlot) -> String` | §6 | Some-aggregate construction + store into dest slot — 3-line block |
+| `mirSomeStoreThenJumpLines` | `(taggedReg, filledReg, optLLVM, payloadI64, destSlot, endLabel) -> String` | §6 | Full Some-arm body: aggregate + store + br to join — 4-line block |
+| `mirNoneStoreThenJumpLines` | `(optLLVM, destSlot, endLabel) -> String` | §6 | None-arm body: zeroinitializer store + br to join — 2-line block |
+| `mirNoneAggregateLines` | `(stepReg, valueReg, optLLVM) -> String` | §6 | Canonical None two-insertvalue (disc=0, payload=0) for phi-merge sites |
+| `mirOkAggregateLines` | `(stepReg, valueReg, resultLLVM, payloadI64) -> String` | §6 | Canonical Ok(payload) two-insertvalue for `Result<Ok, Err>` |
+| `mirErrAggregateLines` | `(stepReg, valueReg, resultLLVM, payloadI64) -> String` | §6 | Canonical Err(payload) two-insertvalue for `Result<Ok, Err>` (disc=0) |
+| `mirICmpSltI64Line` | `(reg, lhs, rhs) -> String` | §6 | Loop-bound check `icmp slt i64` — hot-path predicate for linear scans |
+| `mirICmpSgeI64Line` | `(reg, lhs, rhs) -> String` | §6 | Lower-bound check `icmp sge i64` for negative-index detection |
+| `mirLinearScanLoopHeadLines` | `(headLabel, iReg, iSlot, cont, lenReg, bodyLabel, endLabel) -> String` | §6 | Loop-head block of the linear-scan idiom (label + load + slt + cond-br) — 4-line block |
+| `mirLinearScanLoopTailLines` | `(contLabel, nextReg, iReg, iSlot, headLabel) -> String` | §6 | Loop-tail block of the linear-scan idiom (cont label + add + store + jump) — 4-line block |
+| `mirCallVoidI64TagAndPtrLine` | `(sym, tag, slot, count) -> String` | §6 | `call void @<sym>(i64, ptr, i64)` — safepoint chunk-call shape |
+| `mirAllocaI64ZeroSlot` | `(slot: String) -> String` | §6 | Canonical "fresh i64 counter slot initialised to zero" preamble for linear-scan loops |
+| `mirAllocaI1FalseSlot` | `(slot: String) -> String` | §6 | Canonical "fresh i1 result slot initialised to false" preamble for IntrinsicListContains |
+| `mirStoreI1TrueLine` | `(slot: String) -> String` | §6 | `store i1 true, ptr <slot>` — IntrinsicListContains match arm flip |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as

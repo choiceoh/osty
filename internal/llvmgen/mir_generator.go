@@ -2204,7 +2204,7 @@ func (g *mirGen) emitLoopSafepointKind() {
 // the explicit-root machinery so pointer-free functions don't pull in
 // any unused GC declarations.
 func (g *mirGen) declareSafepoint() {
-	g.declareRuntime("osty.gc.safepoint_v1", "declare void @osty.gc.safepoint_v1(i64, ptr, i64)")
+	g.declareRuntime("osty.gc.safepoint_v1", mirRuntimeDeclareSafepointV1())
 }
 
 // ==== instructions ====
@@ -2987,8 +2987,8 @@ func (g *mirGen) emitTestingFailureCheck(cond string, failWhenTrue bool, buildMe
 }
 
 func (g *mirGen) emitTestingAbortString(message *LlvmValue, nextLabel string) {
-	g.declareRuntime("printf", "declare i32 @printf(ptr, ...)")
-	g.declareRuntime("exit", "declare void @exit(i32)")
+	g.declareRuntime("printf", mirRuntimeDeclarePrintf())
+	g.declareRuntime("exit", mirRuntimeDeclareExit())
 	fmtPtr := g.stringLiteral("%s\n")
 	g.fnBuf.WriteString(mirCallVarargPrintfPathLine(fmtPtr, message.name))
 	g.fnBuf.WriteString(mirCallExitLine("1"))
@@ -3132,31 +3132,31 @@ func (g *mirGen) emitAssertValueToStringMIR(reg string, t mir.Type) (*LlvmValue,
 	llvmT := g.llvmType(t)
 	switch llvmT {
 	case "i64":
-		g.declareRuntime("osty_rt_int_to_string", "declare ptr @osty_rt_int_to_string(i64)")
+		g.declareRuntime("osty_rt_int_to_string", mirRuntimeDeclarePtrFromScalarLine("osty_rt_int_to_string", "i64"))
 		em := g.ostyEmitter()
 		out := llvmIntRuntimeToString(em, &LlvmValue{typ: "i64", name: reg})
 		g.flushOstyEmitter(em)
 		return out, true, nil
 	case "double":
-		g.declareRuntime("osty_rt_float_to_string", "declare ptr @osty_rt_float_to_string(double)")
+		g.declareRuntime("osty_rt_float_to_string", mirRuntimeDeclarePtrFromScalarLine("osty_rt_float_to_string", "double"))
 		em := g.ostyEmitter()
 		out := llvmFloatRuntimeToString(em, &LlvmValue{typ: "double", name: reg})
 		g.flushOstyEmitter(em)
 		return out, true, nil
 	case "i1":
-		g.declareRuntime("osty_rt_bool_to_string", "declare ptr @osty_rt_bool_to_string(i1)")
+		g.declareRuntime("osty_rt_bool_to_string", mirRuntimeDeclarePtrFromScalarLine("osty_rt_bool_to_string", "i1"))
 		em := g.ostyEmitter()
 		out := llvmBoolRuntimeToString(em, &LlvmValue{typ: "i1", name: reg})
 		g.flushOstyEmitter(em)
 		return out, true, nil
 	case "i32":
-		g.declareRuntime("osty_rt_char_to_string", "declare ptr @osty_rt_char_to_string(i32)")
+		g.declareRuntime("osty_rt_char_to_string", mirRuntimeDeclarePtrFromScalarLine("osty_rt_char_to_string", "i32"))
 		em := g.ostyEmitter()
 		out := llvmCall(em, "ptr", "osty_rt_char_to_string", []*LlvmValue{{typ: "i32", name: reg}})
 		g.flushOstyEmitter(em)
 		return out, true, nil
 	case "i8":
-		g.declareRuntime("osty_rt_byte_to_string", "declare ptr @osty_rt_byte_to_string(i8)")
+		g.declareRuntime("osty_rt_byte_to_string", mirRuntimeDeclarePtrFromScalarLine("osty_rt_byte_to_string", "i8"))
 		em := g.ostyEmitter()
 		out := llvmCall(em, "ptr", "osty_rt_byte_to_string", []*LlvmValue{{typ: "i8", name: reg}})
 		g.flushOstyEmitter(em)
@@ -3319,10 +3319,10 @@ func (g *mirGen) emitTestingBenchmarkMIR(c *mir.CallInstr) error {
 	}
 	// Declare the runtime helpers we'll call. These are idempotent — a
 	// later benchmark in the same module reuses the same declare lines.
-	g.declareRuntime("osty_rt_bench_now_nanos", "declare i64 @osty_rt_bench_now_nanos()")
-	g.declareRuntime("osty_rt_bench_target_ns", "declare i64 @osty_rt_bench_target_ns()")
-	g.declareRuntime("osty_gc_debug_allocated_bytes_total", "declare i64 @osty_gc_debug_allocated_bytes_total()")
-	g.declareRuntime("printf", "declare i32 @printf(ptr, ...)")
+	g.declareRuntime("osty_rt_bench_now_nanos", mirRuntimeDeclareI64NoArgsLine("osty_rt_bench_now_nanos"))
+	g.declareRuntime("osty_rt_bench_target_ns", mirRuntimeDeclareI64NoArgsLine("osty_rt_bench_target_ns"))
+	g.declareRuntime("osty_gc_debug_allocated_bytes_total", mirRuntimeDeclareI64NoArgsLine("osty_gc_debug_allocated_bytes_total"))
+	g.declareRuntime("printf", mirRuntimeDeclarePrintf())
 
 	// `@.bench_fmt` is the summary format string. Extended with
 	// `bytes/op=%ld` so the osty-vs-go runner can surface per-iter GC
@@ -3533,7 +3533,7 @@ func (g *mirGen) emitBenchCountedLoopMIR(closureOp mir.Operand, itersRef, prefix
 // failure at <path>:<line>\n" line and exits 1. Emitted inline so the
 // counted-loop doesn't need its own error return.
 func (g *mirGen) emitBenchErrorCheck(retRef, prefix string) {
-	g.declareRuntime("exit", "declare void @exit(i32)")
+	g.declareRuntime("exit", mirRuntimeDeclareExit())
 	errFmt := g.stringLiteral("bench `?` propagated failure at %s\n")
 	pathSym := g.stringLiteral(g.source)
 	tag := g.fresh()
@@ -4009,7 +4009,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicListIsEmpty:
 		sym := "osty_rt_list_is_empty"
-		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareI1FromPtrLine(sym))
 		return g.emitSimpleCall(i, sym, "i1", []string{"ptr " + listReg})
 	case mir.IntrinsicListGet:
 		if len(i.Args) != 2 {
@@ -4060,7 +4060,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		if sym == "" {
 			return unsupported("mir-mvp", "list_sorted on element type "+elemLLVM)
 		}
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: listReg}})
 		g.flushOstyEmitter(em)
@@ -4071,7 +4071,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		if sym == "" {
 			return unsupported("mir-mvp", "list_to_set on element type "+elemLLVM)
 		}
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: listReg}})
 		g.flushOstyEmitter(em)
@@ -4122,18 +4122,15 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			return unsupported("mir-mvp", fmt.Sprintf("list_%s payload widen unsupported for %s", mirIntrinsicLabel(i.Kind), elemLLVM))
 		}
 		tagged := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(tagged, destLLVM, "undef", "i64", "1", "0"))
 		filled := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(filled, destLLVM, tagged, "i64", payloadReg, "1"))
-		g.fnBuf.WriteString(mirStoreLine(destLLVM, filled, destSlot))
-		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+		g.fnBuf.WriteString(mirSomeStoreThenJumpLines(tagged, filled, destLLVM, payloadReg, destSlot, endLabel))
 		g.fnBuf.WriteString(mirLabelLine(endLabel))
 		return nil
 	case mir.IntrinsicListReverse:
 		// In-place reverse. Runtime walks elem_size-sized slots byte by
 		// byte so the call is element-type agnostic.
 		sym := "osty_rt_list_reverse"
-		g.declareRuntime(sym, "declare void @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareVoidFromPtrLine(sym))
 		g.fnBuf.WriteString(mirCallVoidLine(sym, "ptr "+listReg))
 		return nil
 	case mir.IntrinsicListReversed:
@@ -4142,7 +4139,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		// across the allocation because the source list stays
 		// reachable through the caller's local.
 		sym := "osty_rt_list_reversed"
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: listReg}})
 		g.flushOstyEmitter(em)
@@ -4235,8 +4232,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		g.fnBuf.WriteString(mirCallValueLine(lenReg, "i64", lenSym, "ptr "+listReg))
 		g.fnBuf.WriteString(mirStoreZeroinitLine(destLLVM, destSlot))
 		iSlot := g.fresh()
-		g.fnBuf.WriteString(mirAllocaLine(iSlot, "i64"))
-		g.fnBuf.WriteString(mirStoreLine("i64", "0", iSlot))
+		g.fnBuf.WriteString(mirAllocaI64ZeroSlot(iSlot))
 		headLabel := g.freshLabel("list.indexof.head")
 		bodyLabel := g.freshLabel("list.indexof.body")
 		matchLabel := g.freshLabel("list.indexof.match")
@@ -4263,16 +4259,10 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		g.fnBuf.WriteString(mirBrCondLine(eqReg, matchLabel, contLabel))
 		g.fnBuf.WriteString(mirLabelLine(matchLabel))
 		tagged := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(tagged, destLLVM, "undef", "i64", "1", "0"))
 		filled := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(filled, destLLVM, tagged, "i64", iReg, "1"))
-		g.fnBuf.WriteString(mirStoreLine(destLLVM, filled, destSlot))
-		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
-		g.fnBuf.WriteString(mirLabelLine(contLabel))
+		g.fnBuf.WriteString(mirSomeStoreThenJumpLines(tagged, filled, destLLVM, iReg, destSlot, endLabel))
 		next := g.fresh()
-		g.fnBuf.WriteString(mirAddI64Line(next, iReg, "1"))
-		g.fnBuf.WriteString(mirStoreLine("i64", next, iSlot))
-		g.fnBuf.WriteString(mirBrUncondLine(headLabel))
+		g.fnBuf.WriteString(mirLinearScanLoopTailLines(contLabel, next, iReg, iSlot, headLabel))
 		g.fnBuf.WriteString(mirLabelLine(endLabel))
 		return nil
 	case mir.IntrinsicListContains:
@@ -4314,8 +4304,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		g.fnBuf.WriteString(mirCallValueLine(lenReg, "i64", lenSym, "ptr "+listReg))
 		g.fnBuf.WriteString(mirStoreLine("i1", "false", destSlot))
 		iSlot := g.fresh()
-		g.fnBuf.WriteString(mirAllocaLine(iSlot, "i64"))
-		g.fnBuf.WriteString(mirStoreLine("i64", "0", iSlot))
+		g.fnBuf.WriteString(mirAllocaI64ZeroSlot(iSlot))
 		headLabel := g.freshLabel("list.contains.head")
 		bodyLabel := g.freshLabel("list.contains.body")
 		matchLabel := g.freshLabel("list.contains.match")
@@ -4398,11 +4387,8 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			return unsupported("mir-mvp", fmt.Sprintf("list_pop payload widen unsupported for %s", elemLLVM))
 		}
 		tagged := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(tagged, destLLVM, "undef", "i64", "1", "0"))
 		filled := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(filled, destLLVM, tagged, "i64", payloadReg, "1"))
-		g.fnBuf.WriteString(mirStoreLine(destLLVM, filled, destSlot))
-		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+		g.fnBuf.WriteString(mirSomeStoreThenJumpLines(tagged, filled, destLLVM, payloadReg, destSlot, endLabel))
 		g.fnBuf.WriteString(mirLabelLine(endLabel))
 		return nil
 	}
@@ -4506,14 +4492,14 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 	switch i.Kind {
 	case mir.IntrinsicMapLen:
 		sym := llvmMapRuntimeLenSymbol()
-		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareI64FromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmMapLen(em, &LlvmValue{typ: "ptr", name: mapReg})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicMapKeys:
 		sym := mapRuntimeKeysSymbol()
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmMapKeys(em, &LlvmValue{typ: "ptr", name: mapReg})
 		g.flushOstyEmitter(em)
@@ -4581,14 +4567,10 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 			return unsupportedf("mir-mvp", "map_get payload widen unsupported for %s", vLLVM)
 		}
 		someStep := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(someStep, optLLVM, "undef", "i64", "1", "0"))
 		someValue := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(someValue, optLLVM, someStep, "i64", payloadI64, "1"))
-		g.fnBuf.WriteString(mirStoreLine(optLLVM, someValue, destSlot))
-		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+		g.fnBuf.WriteString(mirSomeStoreThenJumpLines(someStep, someValue, optLLVM, payloadI64, destSlot, endLabel))
 		g.fnBuf.WriteString(mirLabelLine(noneLabel))
-		g.fnBuf.WriteString(mirStoreZeroinitLine(optLLVM, destSlot))
-		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+		g.fnBuf.WriteString(mirNoneStoreThenJumpLines(optLLVM, destSlot, endLabel))
 		g.fnBuf.WriteString(mirLabelLine(endLabel))
 		return nil
 	case mir.IntrinsicMapGetOr:
@@ -4734,7 +4716,7 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 			suffix = llvmMapKeySuffix(keyLLVM, false)
 		}
 		sym := "osty_rt_map_keys_sorted_" + suffix
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		tmp := g.fresh()
 		g.fnBuf.WriteString(mirCallValueLine(tmp, "ptr", sym, "ptr "+mapReg))
 		if i.Dest != nil {
@@ -4825,14 +4807,14 @@ func (g *mirGen) emitSetIntrinsic(i *mir.IntrinsicInstr) error {
 	switch i.Kind {
 	case mir.IntrinsicSetLen:
 		sym := setRuntimeLenSymbol()
-		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareI64FromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmSetLen(em, &LlvmValue{typ: "ptr", name: setReg})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicSetToList:
 		sym := setRuntimeToListSymbol()
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmSetToList(em, &LlvmValue{typ: "ptr", name: setReg})
 		g.flushOstyEmitter(em)
@@ -4911,14 +4893,14 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 	switch i.Kind {
 	case mir.IntrinsicBytesLen:
 		sym := "osty_rt_bytes_len"
-		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareI64FromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "i64", sym, []*LlvmValue{{typ: "ptr", name: bytesReg}})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicBytesIsEmpty:
 		sym := "osty_rt_bytes_is_empty"
-		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareI1FromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "i1", sym, []*LlvmValue{{typ: "ptr", name: bytesReg}})
 		g.flushOstyEmitter(em)
@@ -4969,16 +4951,14 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		someStep1 := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(someStep1, optLLVM, "undef", "i64", "1", "0"))
 		someValue := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(someValue, optLLVM, someStep1, "i64", payload, "1"))
+		g.fnBuf.WriteString(mirSomeAggregateLines(someStep1, someValue, optLLVM, payload))
 		g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
 		g.fnBuf.WriteString(mirLabelLine(noneLabel))
 		noneStep1 := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(noneStep1, optLLVM, "undef", "i64", "0", "0"))
 		noneValue := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(noneValue, optLLVM, noneStep1, "i64", "0", "1"))
+		g.fnBuf.WriteString(mirNoneAggregateLines(noneStep1, noneValue, optLLVM))
 		g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
 		g.fnBuf.WriteString(mirLabelLine(mergeLabel))
@@ -5086,16 +5066,14 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 
 		g.fnBuf.WriteString(mirLabelLine(someLabel))
 		someStep1 := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(someStep1, optLLVM, "undef", "i64", "1", "0"))
 		someValue := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(someValue, optLLVM, someStep1, "i64", index.name, "1"))
+		g.fnBuf.WriteString(mirSomeAggregateLines(someStep1, someValue, optLLVM, index.name))
 		g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
 		g.fnBuf.WriteString(mirLabelLine(noneLabel))
 		noneStep1 := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(noneStep1, optLLVM, "undef", "i64", "0", "0"))
 		noneValue := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(noneValue, optLLVM, noneStep1, "i64", "0", "1"))
+		g.fnBuf.WriteString(mirNoneAggregateLines(noneStep1, noneValue, optLLVM))
 		g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
 		g.fnBuf.WriteString(mirLabelLine(mergeLabel))
@@ -5141,16 +5119,14 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 
 		g.fnBuf.WriteString(mirLabelLine(someLabel))
 		someStep1 := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(someStep1, optLLVM, "undef", "i64", "1", "0"))
 		someValue := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(someValue, optLLVM, someStep1, "i64", index.name, "1"))
+		g.fnBuf.WriteString(mirSomeAggregateLines(someStep1, someValue, optLLVM, index.name))
 		g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
 		g.fnBuf.WriteString(mirLabelLine(noneLabel))
 		noneStep1 := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(noneStep1, optLLVM, "undef", "i64", "0", "0"))
 		noneValue := g.fresh()
-		g.fnBuf.WriteString(mirInsertValueAggLine(noneValue, optLLVM, noneStep1, "i64", "0", "1"))
+		g.fnBuf.WriteString(mirNoneAggregateLines(noneStep1, noneValue, optLLVM))
 		g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
 		g.fnBuf.WriteString(mirLabelLine(mergeLabel))
@@ -5326,7 +5302,7 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 			return unsupported("mir-mvp", "bytes_trim_space arity")
 		}
 		sym := "osty_rt_bytes_trim_space"
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{
 			{typ: "ptr", name: bytesReg},
@@ -5338,7 +5314,7 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 			return unsupported("mir-mvp", "bytes_to_upper arity")
 		}
 		sym := "osty_rt_bytes_to_upper"
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{
 			{typ: "ptr", name: bytesReg},
@@ -5350,7 +5326,7 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 			return unsupported("mir-mvp", "bytes_to_lower arity")
 		}
 		sym := "osty_rt_bytes_to_lower"
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{
 			{typ: "ptr", name: bytesReg},
@@ -5362,7 +5338,7 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 			return unsupported("mir-mvp", "bytes_to_hex arity")
 		}
 		sym := "osty_rt_bytes_to_hex"
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{
 			{typ: "ptr", name: bytesReg},
@@ -5471,21 +5447,21 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 	switch i.Kind {
 	case mir.IntrinsicStringChars:
 		sym := "osty_rt_strings_Chars"
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicStringBytes:
 		sym := "osty_rt_strings_Bytes"
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicStringLen:
 		sym := "osty_rt_strings_ByteLen"
-		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareI64FromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "i64", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
 		g.flushOstyEmitter(em)
@@ -5494,7 +5470,7 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		// Runtime has no `_IsEmpty`; reuse `ByteLen` and emit an eq-0
 		// compare, matching the legacy emitter's shape.
 		sym := "osty_rt_strings_ByteLen"
-		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareI64FromPtrLine(sym))
 		em := g.ostyEmitter()
 		size := llvmCall(em, "i64", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
 		result := llvmCompare(em, "eq", size, llvmIntLiteral(0))
@@ -5502,21 +5478,21 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicStringTrim:
 		sym := llvmStringRuntimeTrimSpaceSymbol()
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmStringRuntimeTrimSpace(em, &LlvmValue{typ: "ptr", name: strReg})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicStringToUpper:
 		sym := "osty_rt_strings_ToUpper"
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicStringToLower:
 		sym := "osty_rt_strings_ToLower"
-		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
 		g.flushOstyEmitter(em)
@@ -5588,16 +5564,14 @@ func (g *mirGen) storeOptionalIntFromNegativeOneIndex(i *mir.IntrinsicInstr, opt
 
 	g.fnBuf.WriteString(mirLabelLine(someLabel))
 	someStep := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueAggLine(someStep, optLLVM, "undef", "i64", "1", "0"))
 	someValue := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueAggLine(someValue, optLLVM, someStep, "i64", indexReg, "1"))
+	g.fnBuf.WriteString(mirSomeAggregateLines(someStep, someValue, optLLVM, indexReg))
 	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
 	g.fnBuf.WriteString(mirLabelLine(noneLabel))
 	noneStep := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueAggLine(noneStep, optLLVM, "undef", "i64", "0", "0"))
 	noneValue := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueAggLine(noneValue, optLLVM, noneStep, "i64", "0", "1"))
+	g.fnBuf.WriteString(mirNoneAggregateLines(noneStep, noneValue, optLLVM))
 	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
 	g.fnBuf.WriteString(mirLabelLine(mergeLabel))
@@ -5914,16 +5888,14 @@ func (g *mirGen) emitStringParseResultIntrinsic(i *mir.IntrinsicInstr, strReg, v
 		return err
 	}
 	okStep1 := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueAggLine(okStep1, resultLLVM, "undef", "i64", "1", "0"))
 	okValue := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueAggLine(okValue, resultLLVM, okStep1, "i64", payload, "1"))
+	g.fnBuf.WriteString(mirOkAggregateLines(okStep1, okValue, resultLLVM, payload))
 	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
 	g.fnBuf.WriteString(mirLabelLine(errLabel))
 	errStep1 := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueAggLine(errStep1, resultLLVM, "undef", "i64", "0", "0"))
 	errValue := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueAggLine(errValue, resultLLVM, errStep1, "i64", "0", "1"))
+	g.fnBuf.WriteString(mirErrAggregateLines(errStep1, errValue, resultLLVM, "0"))
 	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
 	g.fnBuf.WriteString(mirLabelLine(mergeLabel))
@@ -6044,7 +6016,7 @@ func (g *mirGen) emitChannelIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		sym := llvmChanRuntimeCloseSymbol()
-		g.declareRuntime(sym, "declare void @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareVoidFromPtrLine(sym))
 		em := g.ostyEmitter()
 		llvmChanClose(em, &LlvmValue{typ: "ptr", name: chReg})
 		g.flushOstyEmitter(em)
@@ -6058,7 +6030,7 @@ func (g *mirGen) emitChannelIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		sym := llvmChanRuntimeIsClosedSymbol()
-		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareI1FromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmChanIsClosed(em, &LlvmValue{typ: "ptr", name: chReg})
 		g.flushOstyEmitter(em)
@@ -6162,7 +6134,7 @@ func (g *mirGen) emitTaskIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		sym := "osty_rt_task_group_is_cancelled"
-		g.declareRuntime(sym, "declare i1 @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareI1FromPtrLine(sym))
 		return g.emitSimpleCall(i, sym, "i1", []string{"ptr " + group})
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("task intrinsic kind %d", i.Kind))
@@ -6283,7 +6255,7 @@ func (g *mirGen) emitCancelIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		sym := "osty_rt_thread_sleep"
-		g.declareRuntime(sym, "declare void @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareVoidFromPtrLine(sym))
 		g.fnBuf.WriteString(mirCallVoidLine(sym, "ptr "+dur))
 		return nil
 	}
@@ -6538,7 +6510,7 @@ func (g *mirGen) emitPrintlnLike(op mir.Operand, newline bool) error {
 		callArg = tmp
 		callT = "double"
 	}
-	g.declareRuntime("printf", "declare i32 @printf(ptr, ...)")
+	g.declareRuntime("printf", mirRuntimeDeclarePrintf())
 	g.fnBuf.WriteString(mirCallVarargPrintfLine(fmtSym, callT+" "+callArg))
 	return nil
 }
@@ -6760,31 +6732,31 @@ func (g *mirGen) emitLenRV(rv *mir.LenRV) (string, error) {
 	switch {
 	case isListPtrType(placeT):
 		sym := listRuntimeLenSymbol()
-		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareI64FromPtrLine(sym))
 		result := llvmListLen(em, &LlvmValue{typ: "ptr", name: valueReg})
 		g.flushOstyEmitter(em)
 		return result.name, nil
 	case isMapPtrType(placeT):
 		sym := mapRuntimeLenSymbol()
-		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareI64FromPtrLine(sym))
 		result := llvmMapLen(em, &LlvmValue{typ: "ptr", name: valueReg})
 		g.flushOstyEmitter(em)
 		return result.name, nil
 	case isSetPtrType(placeT):
 		sym := setRuntimeLenSymbol()
-		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareI64FromPtrLine(sym))
 		result := llvmSetLen(em, &LlvmValue{typ: "ptr", name: valueReg})
 		g.flushOstyEmitter(em)
 		return result.name, nil
 	case isStringLLVMType(placeT):
 		sym := llvmStringRuntimeByteLenSymbol()
-		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareI64FromPtrLine(sym))
 		result := llvmStringByteLen(em, &LlvmValue{typ: "ptr", name: valueReg})
 		g.flushOstyEmitter(em)
 		return result.name, nil
 	case isBytesType(placeT):
 		sym := "osty_rt_bytes_len"
-		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr)")
+		g.declareRuntime(sym, mirRuntimeDeclareI64FromPtrLine(sym))
 		result := llvmCall(em, "i64", sym, []*LlvmValue{{typ: "ptr", name: valueReg}})
 		g.flushOstyEmitter(em)
 		return result.name, nil
@@ -7013,7 +6985,7 @@ func (g *mirGen) toI64Slot(val string, t mir.Type) (string, error) {
 	// inttoptr + load. Heap (not stack) because Result/Option can
 	// escape the constructing frame via returns / stores.
 	if strings.HasPrefix(llvmT, "%") {
-		g.declareRuntime("osty.gc.alloc_v1", "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)")
+		g.declareRuntime("osty.gc.alloc_v1", mirRuntimeDeclareGcAllocV1())
 		size := g.emitSizeOf(llvmT)
 		site := g.stringLiteral("mir.enum.box." + strings.TrimPrefix(llvmT, "%"))
 		box := g.fresh()
@@ -7247,11 +7219,8 @@ func (g *mirGen) emitListSafeGet(i *mir.IntrinsicInstr, listReg, idxReg, elemLLV
 		return unsupported("mir-mvp", fmt.Sprintf("list_get safe payload widen unsupported for %s", elemLLVM))
 	}
 	tagged := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueAggLine(tagged, destLLVM, "undef", "i64", "1", "0"))
 	filled := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueAggLine(filled, destLLVM, tagged, "i64", payloadReg, "1"))
-	g.fnBuf.WriteString(mirStoreLine(destLLVM, filled, destSlot))
-	g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+	g.fnBuf.WriteString(mirSomeStoreThenJumpLines(tagged, filled, destLLVM, payloadReg, destSlot, endLabel))
 	g.fnBuf.WriteString(mirLabelLine(endLabel))
 	return nil
 }
@@ -7742,7 +7711,7 @@ func (g *mirGen) emitUnary(op mir.UnaryOp, arg string, t mir.Type) (string, erro
 
 func (g *mirGen) emitBinary(op mir.BinaryOp, left, right string, argT, resT mir.Type) (string, error) {
 	if op == mir.BinAdd && isStringPrimType(argT) {
-		g.declareRuntime("osty_rt_strings_Concat", "declare ptr @osty_rt_strings_Concat(ptr, ptr)")
+		g.declareRuntime("osty_rt_strings_Concat", mirRuntimeDeclareStringConcat())
 		em := g.ostyEmitter()
 		out := llvmStringConcat(em, &LlvmValue{typ: "ptr", name: left}, &LlvmValue{typ: "ptr", name: right})
 		g.flushOstyEmitter(em)
