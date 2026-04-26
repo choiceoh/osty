@@ -57,7 +57,7 @@ fn selfDocAddRefsFromText(
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 		Stdlib:        reg,
@@ -141,7 +141,7 @@ func TestSelfhostHirOptimizeCharToDigitMIRDirect(t *testing.T) {
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 		Stdlib:        reg,
@@ -206,7 +206,7 @@ func TestSelfhostHintListElemTrimMIRDirect(t *testing.T) {
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 		Stdlib:        reg,
@@ -269,7 +269,7 @@ fn mirLlvmTypeHeadName(typeText: String) -> String {
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 		Stdlib:        reg,
@@ -336,7 +336,7 @@ fn checkDiagRender(d: CheckDiagnostic) -> String {
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 		Stdlib:        reg,
@@ -393,7 +393,7 @@ fn popBinding(xs: List<CheckBinding>) -> CheckBinding? {
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 		Stdlib:        reg,

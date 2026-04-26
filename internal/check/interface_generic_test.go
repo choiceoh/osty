@@ -26,7 +26,7 @@ func TestResolveGenericInterfaceBindsTypeParams(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatalf("parse diagnostics: %v", diags)
 	}
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 	for _, d := range res.Diags {
 		if d.Severity == diag.Error {
 			t.Fatalf("unexpected resolver error: %s (%s)", d.Message, d.Code)
@@ -52,7 +52,7 @@ func TestResolveUnknownInterfaceBoundEmitsUndefinedName(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatalf("parse diagnostics: %v", diags)
 	}
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 
 	var found bool
 	for _, d := range res.Diags {

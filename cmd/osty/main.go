@@ -590,7 +590,7 @@ func runResolvePackageInner(dir string, flags cliFlags) int {
 		// Go-native resolver reads pf.File directly; materialize
 		// before calling so Run-only loaded files are lowered once.
 		pkg.EnsureFiles()
-		res = resolve.ResolvePackage(pkg, resolve.NewPrelude())
+		res = resolve.ResolvePackageDefault(pkg)
 		return res
 	}
 	diags := []*diag.Diagnostic(nil)
@@ -999,7 +999,7 @@ func isTraceableSingleFileCmd(cmd string) bool {
 // registry attached. Collapses what would otherwise be a three-line
 // incantation in every single-file subcommand.
 func resolveFile(file *ast.File) *resolve.Result {
-	return resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	return resolve.ResolveFileDefault(file, stdlib.LoadCached())
 }
 
 // checkOpts builds the check.Opts every subcommand passes to the type

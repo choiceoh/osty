@@ -21,7 +21,7 @@ func lowerSrcLLVM(t *testing.T, src string) *ostyir.Module {
 	if len(diags) != 0 {
 		t.Fatalf("parse: %v", diags)
 	}
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 

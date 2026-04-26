@@ -270,7 +270,7 @@ func TestProbeNativeToolchainMergedMIR(t *testing.T) {
 	if file == nil {
 		t.Fatalf("native-toolchain merged parse returned nil (%d files, %d bytes)", len(files), len(merged))
 	}
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 

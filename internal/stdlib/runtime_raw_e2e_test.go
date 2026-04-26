@@ -32,7 +32,7 @@ pub fn demo() -> Int {
 		t.Fatalf("parse diagnostics: %v", parseDiags)
 	}
 	reg := Load()
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	res := resolve.ResolveFileDefault(file, reg)
 
 	// The resolver binds `raw.alloc`, `raw.write`, `raw.read`, `raw.free`
 	// against the imported package. `Pod` in the turbofish bound is also
@@ -64,7 +64,7 @@ pub fn takesLocal(raw: Int) -> Int {
 		t.Fatalf("parse diagnostics: %v", parseDiags)
 	}
 	reg := Load()
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	res := resolve.ResolveFileDefault(file, reg)
 	for _, d := range res.Diags {
 		if d == nil || d.Severity != diag.Error {
 			continue

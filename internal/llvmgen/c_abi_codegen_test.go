@@ -111,7 +111,7 @@ pub fn cabi_v1() -> Int {
 fn main() {}
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 

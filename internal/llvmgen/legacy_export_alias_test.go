@@ -144,7 +144,7 @@ func buildLegacyIR(t *testing.T, src string) []byte {
 func buildLegacyIRResult(t *testing.T, src string) ([]byte, error) {
 	t.Helper()
 	file := parseLLVMGenFile(t, src)
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 

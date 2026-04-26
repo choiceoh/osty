@@ -49,7 +49,7 @@ func loadSelectedPackageFilesWithTransform(sourcePath string, files []string, tr
 	if err != nil {
 		return nil, err
 	}
-	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+	res := resolve.ResolvePackageDefault(pkg)
 	chk := check.Package(pkg, res, checkOpts())
 	var entryFile *resolve.PackageFile
 	for _, pf := range pkg.Files {
