@@ -2990,10 +2990,7 @@ func (g *mirGen) emitTestingAbortString(message *LlvmValue, nextLabel string) {
 	g.declareRuntime("printf", mirRuntimeDeclarePrintf())
 	g.declareRuntime("exit", mirRuntimeDeclareExit())
 	fmtPtr := g.stringLiteral("%s\n")
-	g.fnBuf.WriteString(mirCallVarargPrintfPathLine(fmtPtr, message.name))
-	g.fnBuf.WriteString(mirCallExitLine("1"))
-	g.fnBuf.WriteString(mirUnreachableLine())
-	g.fnBuf.WriteString(mirLabelLine(nextLabel))
+	g.fnBuf.WriteString(mirAbortPrintfExitLines(fmtPtr, message.name, nextLabel))
 }
 
 func (g *mirGen) testingFailureMessage(line int, method string) string {
@@ -3293,8 +3290,7 @@ func (g *mirGen) emitTestingSnapshotMIR(c *mir.CallInstr) error {
 	}
 	g.declareRuntime("osty_rt_test_snapshot", mirRuntimeDeclareThreePtrVoidLine("osty_rt_test_snapshot"))
 	sourceSym := g.stringLiteral(g.source)
-	g.fnBuf.WriteString(mirCallVoidLine("osty_rt_test_snapshot",
-		"ptr "+name+", ptr "+output+", ptr "+sourceSym))
+	g.fnBuf.WriteString(mirCallVoidFromThreePtrLine("osty_rt_test_snapshot", name, output, sourceSym))
 	return g.storeUnitDestIfAny(c)
 }
 
@@ -3542,12 +3538,8 @@ func (g *mirGen) emitBenchErrorCheck(retRef, prefix string) {
 	g.fnBuf.WriteString(mirICmpEqI64Line(isErr, tag, "0"))
 	errLabel := g.freshLabel(prefix + ".err")
 	okLabel := g.freshLabel(prefix + ".ok")
-	g.fnBuf.WriteString(mirBrCondLine(isErr, errLabel, okLabel))
-	g.fnBuf.WriteString(mirLabelLine(errLabel))
-	g.fnBuf.WriteString(mirCallVarargPrintfPathLine(errFmt, pathSym))
-	g.fnBuf.WriteString(mirCallExitLine("1"))
-	g.fnBuf.WriteString(mirUnreachableLine())
-	g.fnBuf.WriteString(mirLabelLine(okLabel))
+	g.fnBuf.WriteString(mirBranchToErrorTrapLines(isErr, errLabel, okLabel))
+	g.fnBuf.WriteString(mirAbortPrintfExitLines(errFmt, pathSym, okLabel))
 }
 
 // invokeClosureOperand calls a closure value through its env pointer
@@ -4101,8 +4093,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		noneLabel := g.freshLabel("list.opt.none")
 		endLabel := g.freshLabel("list.opt.end")
 		g.fnBuf.WriteString(mirBrCondLine(isEmpty, noneLabel, someLabel))
-		g.fnBuf.WriteString(mirLabelLine(noneLabel))
-		g.fnBuf.WriteString(mirNoneStoreThenJumpLines(destLLVM, destSlot, endLabel))
+		g.fnBuf.WriteString(mirNoneBranchLines(noneLabel, destLLVM, destSlot, endLabel))
 		g.fnBuf.WriteString(mirLabelLine(someLabel))
 		var idxRef string
 		if i.Kind == mir.IntrinsicListFirst {
@@ -4245,7 +4236,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		g.fnBuf.WriteString(mirCallValueLine(elemReg, elemLLVM, getSym, "ptr "+listReg+", i64 "+iReg))
 		eqReg := g.fresh()
 		if stringEq != "" {
-			g.fnBuf.WriteString(mirCallValueLine(eqReg, "i1", stringEq, "ptr "+elemReg+", ptr "+needleReg))
+			g.fnBuf.WriteString(mirCallI1FromTwoPtrLine(eqReg, stringEq, elemReg, needleReg))
 		} else if elemLLVM == "double" {
 			g.fnBuf.WriteString(mirFCmpLine(eqReg, "oeq", "double", elemReg, needleReg))
 		} else {
@@ -4314,7 +4305,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		g.fnBuf.WriteString(mirCallValueLine(elemReg, elemLLVM, getSym, "ptr "+listReg+", i64 "+iReg))
 		eqReg := g.fresh()
 		if stringEq != "" {
-			g.fnBuf.WriteString(mirCallValueLine(eqReg, "i1", stringEq, "ptr "+elemReg+", ptr "+needleReg))
+			g.fnBuf.WriteString(mirCallI1FromTwoPtrLine(eqReg, stringEq, elemReg, needleReg))
 		} else if elemLLVM == "double" {
 			g.fnBuf.WriteString(mirFCmpLine(eqReg, "oeq", "double", elemReg, needleReg))
 		} else {
@@ -4359,8 +4350,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		noneLabel := g.freshLabel("list.pop.none")
 		endLabel := g.freshLabel("list.pop.end")
 		g.fnBuf.WriteString(mirBrCondLine(isEmpty, noneLabel, someLabel))
-		g.fnBuf.WriteString(mirLabelLine(noneLabel))
-		g.fnBuf.WriteString(mirNoneStoreThenJumpLines(destLLVM, destSlot, endLabel))
+		g.fnBuf.WriteString(mirNoneBranchLines(noneLabel, destLLVM, destSlot, endLabel))
 		g.fnBuf.WriteString(mirLabelLine(someLabel))
 		lastIdx := g.fresh()
 		g.fnBuf.WriteString(mirSubI64MinusOneLine(lastIdx, lenReg))
@@ -4556,8 +4546,7 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		someStep := g.fresh()
 		someValue := g.fresh()
 		g.fnBuf.WriteString(mirSomeStoreThenJumpLines(someStep, someValue, optLLVM, payloadI64, destSlot, endLabel))
-		g.fnBuf.WriteString(mirLabelLine(noneLabel))
-		g.fnBuf.WriteString(mirNoneStoreThenJumpLines(optLLVM, destSlot, endLabel))
+		g.fnBuf.WriteString(mirNoneBranchLines(noneLabel, optLLVM, destSlot, endLabel))
 		g.fnBuf.WriteString(mirLabelLine(endLabel))
 		return nil
 	case mir.IntrinsicMapGetOr:
@@ -7181,9 +7170,7 @@ func (g *mirGen) emitListSafeGet(i *mir.IntrinsicInstr, listReg, idxReg, elemLLV
 	noneLabel := g.freshLabel("list.safeget.none")
 	endLabel := g.freshLabel("list.safeget.end")
 	g.fnBuf.WriteString(mirBrCondLine(inBounds, someLabel, noneLabel))
-	g.fnBuf.WriteString(mirLabelLine(noneLabel))
-	g.fnBuf.WriteString(mirStoreZeroinitLine(destLLVM, destSlot))
-	g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+	g.fnBuf.WriteString(mirNoneBranchLines(noneLabel, destLLVM, destSlot, endLabel))
 	g.fnBuf.WriteString(mirLabelLine(someLabel))
 	elemReg := g.fresh()
 	g.fnBuf.WriteString(mirCallValueLine(elemReg, elemLLVM, getSym, "ptr "+listReg+", i64 "+idxReg))
@@ -7748,7 +7735,7 @@ func (g *mirGen) emitHeapEquality(op mir.BinaryOp, left, right string) (string, 
 	sym := llvmStringRuntimeEqualSymbol()
 	g.declareRuntime(sym, fmt.Sprintf("declare i1 @%s(ptr, ptr)", sym))
 	eq := g.fresh()
-	g.fnBuf.WriteString(mirCallValueLine(eq, "i1", sym, "ptr "+left+", ptr "+right))
+	g.fnBuf.WriteString(mirCallI1FromTwoPtrLine(eq, sym, left, right))
 	if op == mir.BinEq {
 		return eq, nil
 	}
@@ -7847,7 +7834,7 @@ func (g *mirGen) emitStringOrdering(op mir.BinaryOp, left, right string) (string
 	sym := llvmStringRuntimeCompareSymbol()
 	g.declareRuntime(sym, fmt.Sprintf("declare i64 @%s(ptr, ptr)", sym))
 	cmp := g.fresh()
-	g.fnBuf.WriteString(mirCallValueLine(cmp, "i64", sym, "ptr "+left+", ptr "+right))
+	g.fnBuf.WriteString(mirCallI64FromTwoPtrLine(cmp, sym, left, right))
 	pred := stringOrderingPredicate(op)
 	out := g.fresh()
 	g.fnBuf.WriteString(mirICmpLine(out, pred, "i64", cmp, "0"))

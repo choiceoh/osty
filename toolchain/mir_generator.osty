@@ -3979,3 +3979,299 @@ pub fn mirCallValueI8FromPtrI64Line(reg: String, sym: String, ptr: String, idx: 
 pub fn mirCallValueElemFromPtrI64Line(reg: String, elemLLVM: String, sym: String, ptr: String, idx: String) -> String {
     mirCallValueLine(reg, elemLLVM, sym, "ptr " + ptr + ", i64 " + idx)
 }
+
+/// §6 abort-and-exit shape builders — drain the canonical
+/// "print error message, exit, unreachable, then continue at next
+/// label" sequence used by every testing-abort and bench-error
+/// site. Keeps the four-line block as one builder so the order
+/// stays stable across refactors.
+
+/// mirAbortPrintfExitLines renders the canonical abort sequence
+/// after the abort branch has been entered:
+///   `  call i32 (ptr, ...) @printf(ptr <fmt>, ptr <message>)\n`
+///   `  call void @exit(i32 1)\n`
+///   `  unreachable\n`
+///   `<nextLabel>:\n`
+/// Four-line block. Used by `emitTestingAbortString`,
+/// `emitBenchErrorCheck`, and any future panic-helper emitter.
+/// `fmtSym` is the format-string literal symbol; `messagePtr` is
+/// the SSA register or symbol holding the message ptr; `nextLabel`
+/// is the post-abort continuation label (typically a fresh
+/// `test.dead` / `bench.ok` label).
+pub fn mirAbortPrintfExitLines(fmtSym: String, messagePtr: String, nextLabel: String) -> String {
+    mirCallVarargPrintfPathLine(fmtSym, messagePtr) +
+    mirCallExitLine("1") +
+    mirUnreachableLine() +
+    mirLabelLine(nextLabel)
+}
+
+/// mirBranchToErrorTrapLines renders the gate that routes Result
+/// `Err` into an abort:
+///   `  br i1 <isErr>, label %<errLabel>, label %<okLabel>\n`
+///   `<errLabel>:\n`
+/// Two-line block. Caller chains it with `mirAbortPrintfExitLines`
+/// (or its equivalent) to build the full error-trap path. Sibling
+/// of `mirNoneBranchLines` for the Result rather than Option case.
+pub fn mirBranchToErrorTrapLines(isErr: String, errLabel: String, okLabel: String) -> String {
+    mirBrCondLine(isErr, errLabel, okLabel) +
+    mirLabelLine(errLabel)
+}
+
+/// mirNoneBranchLines renders the canonical Option-miss branch:
+///   `<noneLabel>:\n`
+///   `  store <optTy> zeroinitializer, ptr <destSlot>\n`
+///   `  br label %<endLabel>\n`
+/// Three-line block. Caller pairs it with `mirSomeBranchLines` for
+/// the hit path. Drains the label+store+br pattern repeated at
+/// every list/map probe site that produces Option<T>.
+pub fn mirNoneBranchLines(noneLabel: String, optLLVM: String, destSlot: String, endLabel: String) -> String {
+    mirLabelLine(noneLabel) +
+    mirNoneStoreThenJumpLines(optLLVM, destSlot, endLabel)
+}
+
+/// mirSomeBranchLines renders the canonical Option-hit branch:
+///   `<someLabel>:\n`
+///   `  <tagged> = insertvalue <optTy> undef, i64 1, 0\n`
+///   `  <filled> = insertvalue <optTy> <tagged>, i64 <payload>, 1\n`
+///   `  store <optTy> <filled>, ptr <destSlot>\n`
+///   `  br label %<endLabel>\n`
+/// Five-line block. Combines the Some-aggregate construction with
+/// the canonical store+jump pattern. Sibling of
+/// `mirNoneBranchLines` for the hit path.
+pub fn mirSomeBranchLines(someLabel: String, taggedReg: String, filledReg: String, optLLVM: String, payloadI64: String, destSlot: String, endLabel: String) -> String {
+    mirLabelLine(someLabel) +
+    mirSomeStoreThenJumpLines(taggedReg, filledReg, optLLVM, payloadI64, destSlot, endLabel)
+}
+
+/// mirSomeNoneJoinLines renders the convergence label of an
+/// Option probe — the join block that both Some and None paths
+/// branch to:
+///   `<endLabel>:\n`
+/// One-line block. Trivial pass-through to `mirLabelLine`, named
+/// for readability so callers can grep for the join site separately
+/// from the dozens of other label emissions.
+pub fn mirSomeNoneJoinLines(endLabel: String) -> String {
+    mirLabelLine(endLabel)
+}
+
+/// mirCallExitOneLine returns the canonical `call void @exit(i32 1)`
+/// line — the most common call-exit pattern (testing-abort,
+/// bench-error, panic-helper). Specialisation of `mirCallExitLine`
+/// for the literal exit code "1" so callers don't thread the digit
+/// through every call site.
+pub fn mirCallExitOneLine() -> String {
+    mirCallExitLine("1")
+}
+
+/// mirCallExitZeroLine returns the canonical `call void @exit(i32
+/// 0)` line — the success-exit pattern used by the bench summary's
+/// final exit. Sibling of `mirCallExitOneLine` for the success
+/// case.
+pub fn mirCallExitZeroLine() -> String {
+    mirCallExitLine("0")
+}
+
+/// mirAbortBlockLines renders the full abort block as one helper:
+///   `<errLabel>:\n`
+///   `  call i32 (ptr, ...) @printf(ptr <fmt>, ptr <message>)\n`
+///   `  call void @exit(i32 1)\n`
+///   `  unreachable\n`
+///   `<nextLabel>:\n`
+/// Five-line block. Combines `mirLabelLine(errLabel)` with
+/// `mirAbortPrintfExitLines`. Drains the entire error-trap body
+/// at sites that already bail with cond-br to errLabel.
+pub fn mirAbortBlockLines(errLabel: String, fmtSym: String, messagePtr: String, nextLabel: String) -> String {
+    mirLabelLine(errLabel) +
+    mirAbortPrintfExitLines(fmtSym, messagePtr, nextLabel)
+}
+
+/// mirCallI64FromTwoPtrLine renders the canonical i64-from-two-ptr
+/// runtime call: `<reg> = call i64 @<sym>(ptr <left>, ptr <right>)`.
+/// Used by `osty_rt_strings_Compare`'s ordering call and similar
+/// two-pointer scalar-returning probes. Sibling of
+/// `mirCallValueI64FromPtrLine` for the two-arg case.
+pub fn mirCallI64FromTwoPtrLine(reg: String, sym: String, left: String, right: String) -> String {
+    mirCallValueLine(reg, "i64", sym, "ptr " + left + ", ptr " + right)
+}
+
+/// mirCallI1FromTwoPtrLine renders the canonical i1-from-two-ptr
+/// runtime call: `<reg> = call i1 @<sym>(ptr <left>, ptr <right>)`.
+/// Used by `osty_rt_strings_Equal` / `osty_rt_bytes_starts_with` /
+/// `osty_rt_bytes_ends_with` and the inline string-equality
+/// runtime hook. Sibling of `mirCallI64FromTwoPtrLine` for the
+/// boolean-returning case.
+pub fn mirCallI1FromTwoPtrLine(reg: String, sym: String, left: String, right: String) -> String {
+    mirCallValueLine(reg, "i1", sym, "ptr " + left + ", ptr " + right)
+}
+
+/// mirCallPtrFromTwoPtrLine renders the canonical ptr-from-two-ptr
+/// runtime call: `<reg> = call ptr @<sym>(ptr <left>, ptr <right>)`.
+/// Used by `osty_rt_strings_Concat`, `osty_rt_strings_DiffLines`,
+/// and other two-string runtime constructors.
+pub fn mirCallPtrFromTwoPtrLine(reg: String, sym: String, left: String, right: String) -> String {
+    mirCallValueLine(reg, "ptr", sym, "ptr " + left + ", ptr " + right)
+}
+
+/// mirCallVoidFromTwoPtrLine renders the canonical void-from-two-
+/// ptr runtime call: `call void @<sym>(ptr <left>, ptr <right>)`.
+/// Used by side-effect runtimes that operate on a pair of handles.
+pub fn mirCallVoidFromTwoPtrLine(sym: String, left: String, right: String) -> String {
+    mirCallVoidLine(sym, "ptr " + left + ", ptr " + right)
+}
+
+/// mirCallVoidFromThreePtrLine renders `call void @<sym>(ptr, ptr, ptr)`
+/// — the three-pointer side-effect ABI used by
+/// `osty_rt_test_snapshot(name, expected, actual)`.
+pub fn mirCallVoidFromThreePtrLine(sym: String, a: String, b: String, c: String) -> String {
+    mirCallVoidLine(sym, "ptr " + a + ", ptr " + b + ", ptr " + c)
+}
+
+/// mirInsertValueI64IndexLine renders an insertvalue specialised
+/// for the `i64` field type — the most common shape inside
+/// Option/Result aggregate construction:
+///   `  <reg> = insertvalue <aggTy> <baseVal>, i64 <val>, <idxDigits>\n`
+/// Companion to `mirInsertValueAggLine` for the i64-typed case
+/// (which is every disc + payload slot for Option/Result).
+pub fn mirInsertValueI64IndexLine(reg: String, aggTy: String, baseVal: String, val: String, idxDigits: String) -> String {
+    mirInsertValueAggLine(reg, aggTy, baseVal, "i64", val, idxDigits)
+}
+
+/// mirExtractValueI64IndexLine renders an extractvalue specialised
+/// for the `i64` field type — used by every Option / Result
+/// discriminant + payload read.
+pub fn mirExtractValueI64IndexLine(reg: String, aggTy: String, aggVal: String, idxDigits: String) -> String {
+    "  " + reg + " = extractvalue " + aggTy + " " + aggVal + ", " + idxDigits + "\n"
+}
+
+/// mirCallVoidI64Line renders `  call void @<sym>(i64 <arg>)\n`
+/// — the single-i64-arg side-effect call, mirroring the
+/// `call void @exit(i32 1)` shape but for i64 callees. Used by
+/// some debug / runtime hooks that take a single i64 token.
+pub fn mirCallVoidI64Line(sym: String, arg: String) -> String {
+    mirCallVoidLine(sym, "i64 " + arg)
+}
+
+/// mirCallVoidI32Line renders `  call void @<sym>(i32 <arg>)\n`
+/// — the i32-typed sibling of `mirCallVoidI64Line`. The literal
+/// `mirCallExitLine` covers the exact `@exit` symbol; this builder
+/// is the abstract form for any i32-arg side-effect call.
+pub fn mirCallVoidI32Line(sym: String, arg: String) -> String {
+    mirCallVoidLine(sym, "i32 " + arg)
+}
+
+/// mirGEPInboundsI64IdxLine renders the i64-indexed inbounds GEP
+/// shape used by per-element list iteration:
+///   `  <reg> = getelementptr inbounds <elemTy>, ptr <basePtr>, i64 <idx>\n`
+/// The MIR emitter's vector-list fast path currently spells this out
+/// inline at every load/store site. Combining the type tag with the
+/// i64-stride convention keeps the GEP shape stable across refactors.
+pub fn mirGEPInboundsI64IdxLine(reg: String, elemTy: String, basePtr: String, idx: String) -> String {
+    "  " + reg + " = getelementptr inbounds " + elemTy + ", ptr " + basePtr + ", i64 " + idx + "\n"
+}
+
+/// mirZExtToI64Line / mirSExtToI64Line render the canonical "widen
+/// to i64 payload slot" shape used by Option / Result aggregate
+/// construction:
+///   `  <reg> = zext <fromTy> <val> to i64\n`
+///   `  <reg> = sext <fromTy> <val> to i64\n`
+/// Specialise `mirZExtLine` / `mirSExtLine` for the common destination
+/// width — every payload-slot widen lands at i64, so the helper saves
+/// the trailing `"i64"` thread at every call site.
+pub fn mirZExtToI64Line(reg: String, fromTy: String, val: String) -> String {
+    mirZExtLine(reg, fromTy, val, "i64")
+}
+
+pub fn mirSExtToI64Line(reg: String, fromTy: String, val: String) -> String {
+    mirSExtLine(reg, fromTy, val, "i64")
+}
+
+/// mirBitcastToI64Line / mirPtrToInt64Line render canonical "narrow
+/// to i64 payload slot" shapes for double / ptr payloads:
+///   `  <reg> = bitcast double <val> to i64\n`
+///   `  <reg> = ptrtoint ptr <val> to i64\n`
+pub fn mirBitcastToI64Line(reg: String, val: String) -> String {
+    mirBitcastLine(reg, "double", val, "i64")
+}
+
+pub fn mirPtrToInt64Line(reg: String, val: String) -> String {
+    mirPtrToIntLine(reg, val, "i64")
+}
+
+/// mirCallStringConcatLine renders the canonical String concat call
+/// shape: `<reg> = call ptr @osty_rt_strings_Concat(ptr <left>, ptr <right>)`.
+/// Specialisation of `mirCallPtrFromTwoPtrLine` for the literal
+/// `osty_rt_strings_Concat` symbol — the most-called runtime symbol
+/// in a typical program (every `+` on String, every interpolation
+/// segment chain).
+pub fn mirCallStringConcatLine(reg: String, left: String, right: String) -> String {
+    mirCallPtrFromTwoPtrLine(reg, "osty_rt_strings_Concat", left, right)
+}
+
+/// mirCallStringEqualLine renders the canonical String equal call
+/// shape: `<reg> = call i1 @osty_rt_strings_Equal(ptr <left>, ptr <right>)`.
+/// Specialisation of `mirCallI1FromTwoPtrLine` for the
+/// `osty_rt_strings_Equal` symbol used by `==` on String.
+pub fn mirCallStringEqualLine(reg: String, left: String, right: String) -> String {
+    mirCallI1FromTwoPtrLine(reg, "osty_rt_strings_Equal", left, right)
+}
+
+/// mirCallStringCompareLine renders the canonical String lex-compare
+/// call: `<reg> = call i64 @osty_rt_strings_Compare(ptr <left>, ptr <right>)`.
+/// Returns negative / zero / positive in the libc strcmp convention.
+/// Used by `<` / `<=` / `>` / `>=` on String.
+pub fn mirCallStringCompareLine(reg: String, left: String, right: String) -> String {
+    mirCallI64FromTwoPtrLine(reg, "osty_rt_strings_Compare", left, right)
+}
+
+/// mirCallStringSubstringLine renders the canonical String substring
+/// call: `<reg> = call ptr @osty_rt_strings_Substring(ptr <s>, i64 <start>, i64 <end>)`.
+/// Specialisation for the slice-shape ABI.
+pub fn mirCallStringSubstringLine(reg: String, src: String, startIdx: String, endIdx: String) -> String {
+    mirCallValueLine(reg, "ptr", "osty_rt_strings_Substring", "ptr " + src + ", i64 " + startIdx + ", i64 " + endIdx)
+}
+
+/// mirCallListNewLine renders `<reg> = call ptr @osty_rt_list_new()`
+/// — the no-arg list constructor used at every `[]` literal /
+/// IntrinsicListNew site. Specialisation of
+/// `mirCallValueNoArgsLine` for the literal symbol.
+pub fn mirCallListNewLine(reg: String) -> String {
+    mirCallValueNoArgsLine(reg, "ptr", "osty_rt_list_new")
+}
+
+/// mirCallMapNewLine renders the canonical map constructor call:
+///   `<reg> = call ptr @osty_rt_map_new(i64 <keyKind>, i64 <valKind>, i64 <valSize>, ptr null)`
+/// Used by `{:}` literal / IntrinsicMapNew site. The fourth `ptr null`
+/// is the optional GC site-token.
+pub fn mirCallMapNewLine(reg: String, keyKind: String, valKind: String, valSize: String) -> String {
+    mirCallValueLine(reg, "ptr", "osty_rt_map_new", "i64 " + keyKind + ", i64 " + valKind + ", i64 " + valSize + ", ptr null")
+}
+
+/// mirCallSetNewLine renders the canonical set constructor call:
+///   `<reg> = call ptr @osty_rt_set_new(i64 <elemKind>)`
+/// One-arg version for set; the runtime infers element layout from
+/// the kind tag.
+pub fn mirCallSetNewLine(reg: String, elemKind: String) -> String {
+    mirCallValueLine(reg, "ptr", "osty_rt_set_new", "i64 " + elemKind)
+}
+
+/// mirSizeOfDoubleLine returns the canonical sizeof(double) literal
+/// "8" — the constant that bench's `bytes_total / safeN` divisor and
+/// other sites use directly. Centralised so a future ABI change
+/// (e.g. f128 elements) only touches one site.
+pub fn mirSizeOfDoubleLine() -> String { "8" }
+
+/// mirSizeOfI64Line returns the canonical sizeof(i64) literal "8".
+pub fn mirSizeOfI64Line() -> String { "8" }
+
+/// mirSizeOfI32Line returns the canonical sizeof(i32) literal "4".
+pub fn mirSizeOfI32Line() -> String { "4" }
+
+/// mirSizeOfI8Line returns the canonical sizeof(i8) literal "1".
+pub fn mirSizeOfI8Line() -> String { "1" }
+
+/// mirSizeOfPtrLine returns the canonical sizeof(ptr) literal "8".
+pub fn mirSizeOfPtrLine() -> String { "8" }
+
+/// mirSizeOfI1Line returns the canonical sizeof(i1)-as-i8 literal "1"
+/// (LLVM materialises i1 in a byte-wide slot for storage).
+pub fn mirSizeOfI1Line() -> String { "1" }
