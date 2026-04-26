@@ -547,6 +547,17 @@ const (
 	IntrinsicStringIsEmpty
 	// IntrinsicStringContains returns Bool. Args: [string, needle].
 	IntrinsicStringContains
+	// IntrinsicStringCount returns Int — non-overlapping occurrences
+	// of `needle` within `string`. Args: [string, needle].
+	//
+	// Synthesised by the `fuseNonEscapingSplitNth` MIR pass to replace
+	// `parts.len()` reads when fusing `let parts = X.split(sep);
+	// parts[K0]; parts[K1]; ... parts.len()` patterns: a list len of a
+	// freshly-split list equals `Count(value, sep) + 1` for every
+	// non-empty separator (the only shape the fusion targets — empty
+	// separators take a different path in the runtime). Lowers to
+	// `osty_rt_strings_Count(value, needle)`.
+	IntrinsicStringCount
 	// IntrinsicStringStartsWith returns Bool. Args: [string, prefix].
 	IntrinsicStringStartsWith
 	// IntrinsicStringEndsWith returns Bool. Args: [string, suffix].
@@ -1628,6 +1639,8 @@ func (k IntrinsicKind) String() string {
 		return "string_is_empty"
 	case IntrinsicStringContains:
 		return "string_contains"
+	case IntrinsicStringCount:
+		return "string_count"
 	case IntrinsicStringStartsWith:
 		return "string_starts_with"
 	case IntrinsicStringEndsWith:

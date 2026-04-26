@@ -182,11 +182,17 @@ func TestFuseSplitNth_BailsOnRepeatedIndex(t *testing.T) {
 	}
 }
 
-func TestFuseSplitNth_BailsOnPartsLen(t *testing.T) {
-	// `parts.len()` lowers to an IntrinsicInstr that takes `parts`
-	// as an argument — that's a non-IndexProj read, which the
-	// safety check counts as `otherReads` and forces the unfused
-	// Split path to remain.
+func TestFuseSplitNth_PartsLen_FusesViaCountPlusOne(t *testing.T) {
+	// log-aggregator's defensive-bounds-check shape:
+	//   let parts = line.split(",")
+	//   if parts.len() < 3 { continue }
+	//   let p0 = parts[0]
+	//
+	// The pass should rewrite `parts.len()` into `Count(value, sep)
+	// + 1` (a 2-instruction sequence: IntrinsicStringCount writing
+	// a fresh tmp local, then AssignInstr adding 1 to that tmp into
+	// the original len destination), AND fuse the `parts[0]` read
+	// into a NthSegment call. The originating Split disappears.
 	fn, bb, parts := buildStraightLineSplitFn(t)
 	addPartsKRead(fn, bb, parts, 0)
 	lenLocal := fn.NewLocal("count", TInt, false, Span{})
@@ -202,15 +208,113 @@ func TestFuseSplitNth_BailsOnPartsLen(t *testing.T) {
 	)
 	bb.SetTerminator(&ReturnTerm{})
 
-	// Note: the test function returns String per newTestFunction,
-	// but ReturnTerm.Value carries an Int. The pass under test
-	// doesn't validate types, only structure; this is fine for
-	// driving the read-shape analysis.
+	if !fuseNonEscapingSplitNth(fn) {
+		t.Fatalf("expected fusion to apply — parts.len() with non-empty StringConst sep")
+	}
+	if _, n := findIntrinsic(bb, IntrinsicStringSplit); n != 0 {
+		t.Fatalf("Split should be removed; %d remaining", n)
+	}
+	nths := findAllIntrinsics(bb, IntrinsicStringNthSegment)
+	if len(nths) != 1 {
+		t.Fatalf("expected 1 NthSegment, got %d", len(nths))
+	}
+	counts := findAllIntrinsics(bb, IntrinsicStringCount)
+	if len(counts) != 1 {
+		t.Fatalf("expected 1 StringCount, got %d", len(counts))
+	}
+	// Verify the AssignInstr `+1` was inserted right after the
+	// StringCount call, and writes back into the original len local.
+	var sawAddOne bool
+	for _, instr := range bb.Instrs {
+		if a, ok := instr.(*AssignInstr); ok && a.Dest.Local == lenLocal {
+			if br, ok := a.Src.(*BinaryRV); ok && br.Op == BinAdd {
+				if rco, ok := br.Right.(*ConstOp); ok {
+					if ic, ok := rco.Const.(*IntConst); ok && ic.Value == 1 {
+						sawAddOne = true
+					}
+				}
+			}
+		}
+	}
+	if !sawAddOne {
+		t.Fatalf("expected AssignInstr writing `tmp + 1` into the original len local")
+	}
+}
+
+func TestFuseSplitNth_BailsOnPartsLenWithEmptySep(t *testing.T) {
+	// Empty separator: Split returns N pieces (byte-level expansion)
+	// while Count returns N+1, so the rewrite would be off by one.
+	// Fusion must bail and leave the original Split + ListLen intact.
+	fn, bb := newTestFunction("split_nth_empty_sep", TString)
+	value := fn.NewLocal("value", TString, false, Span{})
+	fn.Locals[value].IsParam = true
+	fn.Params = []LocalID{value}
+	parts := fn.NewLocal("parts", listOfStringT(), false, Span{})
+	bb.Instrs = append(bb.Instrs,
+		&StorageLiveInstr{Local: parts},
+		&IntrinsicInstr{
+			Kind: IntrinsicStringSplit,
+			Dest: &Place{Local: parts},
+			Args: []Operand{
+				&CopyOp{Place: Place{Local: value}, T: TString},
+				&ConstOp{Const: &StringConst{Value: ""}, T: TString}, // EMPTY sep
+			},
+		},
+	)
+	addPartsKRead(fn, bb, parts, 0)
+	lenLocal := fn.NewLocal("count", TInt, false, Span{})
+	bb.Instrs = append(bb.Instrs,
+		&StorageLiveInstr{Local: lenLocal},
+		&IntrinsicInstr{
+			Kind: IntrinsicListLen,
+			Dest: &Place{Local: lenLocal},
+			Args: []Operand{
+				&CopyOp{Place: Place{Local: parts}, T: listOfStringT()},
+			},
+		},
+	)
+	bb.SetTerminator(&ReturnTerm{})
+
 	if fuseNonEscapingSplitNth(fn) {
-		t.Fatalf("expected NO transform — parts.len() should disable fusion")
+		t.Fatalf("expected NO transform — empty separator disables Count+1 rewrite")
 	}
 	if _, n := findIntrinsic(bb, IntrinsicStringSplit); n != 1 {
-		t.Fatalf("Split should remain; got %d", n)
+		t.Fatalf("Split should remain when sep is empty; got %d", n)
+	}
+}
+
+func TestFuseSplitNth_PartsLen_MultiIndex(t *testing.T) {
+	// log-aggregator's actual shape: `parts.len() < 3 { continue };
+	// parts[0]; parts[1]`. All three reads should be handled in a
+	// single fusion: 2 NthSegment calls, 1 StringCount + AssignInstr,
+	// originating Split gone.
+	fn, bb, parts := buildStraightLineSplitFn(t)
+	addPartsKRead(fn, bb, parts, 0)
+	addPartsKRead(fn, bb, parts, 1)
+	lenLocal := fn.NewLocal("count", TInt, false, Span{})
+	bb.Instrs = append(bb.Instrs,
+		&StorageLiveInstr{Local: lenLocal},
+		&IntrinsicInstr{
+			Kind: IntrinsicListLen,
+			Dest: &Place{Local: lenLocal},
+			Args: []Operand{
+				&CopyOp{Place: Place{Local: parts}, T: listOfStringT()},
+			},
+		},
+	)
+	bb.SetTerminator(&ReturnTerm{})
+
+	if !fuseNonEscapingSplitNth(fn) {
+		t.Fatalf("expected fusion to apply for multi-index + parts.len() shape")
+	}
+	if _, n := findIntrinsic(bb, IntrinsicStringSplit); n != 0 {
+		t.Fatalf("Split should be removed; %d remaining", n)
+	}
+	if got := len(findAllIntrinsics(bb, IntrinsicStringNthSegment)); got != 2 {
+		t.Fatalf("expected 2 NthSegment, got %d", got)
+	}
+	if got := len(findAllIntrinsics(bb, IntrinsicStringCount)); got != 1 {
+		t.Fatalf("expected 1 StringCount, got %d", got)
 	}
 }
 
