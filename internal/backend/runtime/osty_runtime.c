@@ -3100,8 +3100,8 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
  *      dormant and every alloc takes the headerful path, preserving
  *      pre-Phase-5 behaviour exactly.
  *   2. The kind must be one of the young-safe kinds — STRING, BYTES,
- *      LIST, CLOSURE_ENV, or GENERIC with the NONE pattern (NULL
- *      trace + NULL destroy). STRING/BYTES are immutable byte
+ *      LIST, CLOSURE_ENV, SET, or GENERIC with the NONE pattern
+ *      (NULL trace + NULL destroy). STRING/BYTES are immutable byte
  *      payloads. LIST has a destroy callback (frees spilled `data` +
  *      `gc_offsets`), but Phase E follow-up adds a from-space
  *      dead-list scan in cheney_minor that runs the destroy work just
@@ -3125,11 +3125,18 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
  *      per-instance pattern to be recoverable at cheney scan time —
  *      not yet possible since the micro-header has no
  *      `generic_pattern` byte — so they stay headerful.
+ *      SET has a destroy callback (frees the `items` heap buffer).
+ *      It rides the same dead-from-space scan as LIST: the cheney
+ *      pass calls `free(set->items)` on UNFORWARDED young Sets
+ *      before the arena swap reclaims their micro-header bytes.
+ *      No self-ref fixup needed — Set has no inline-storage union;
+ *      `items` is always a separate heap allocation.
  *
  *      Why not the other kinds:
- *        - MAP/SET/CHANNEL: destroy frees pthread sync state and
- *          backing arrays — typed-allocator surface is larger and
- *          these are typically long-lived.
+ *        - MAP/CHANNEL: destroy frees pthread sync state in addition
+ *          to backing arrays — the recursive-mutex teardown +
+ *          pthread_cond_destroy surface is larger and these are
+ *          typically long-lived, so the perf payoff is smaller.
  *   3. Payload size must fit comfortably under the humongous
  *      threshold. Humongous allocs already take a separate path in
  *      the headerful allocator and have no benefit from being
@@ -3155,7 +3162,8 @@ static bool osty_gc_young_eligible(int64_t object_kind, size_t payload_size,
     } else if (object_kind != OSTY_GC_KIND_STRING &&
                object_kind != OSTY_GC_KIND_BYTES &&
                object_kind != OSTY_GC_KIND_LIST &&
-               object_kind != OSTY_GC_KIND_CLOSURE_ENV) {
+               object_kind != OSTY_GC_KIND_CLOSURE_ENV &&
+               object_kind != OSTY_GC_KIND_SET) {
         return false;
     }
     if (payload_size == 0 ||
@@ -3291,23 +3299,29 @@ static void osty_gc_cheney_swap_arenas(void) {
  * objects.
  *
  * Cheney's normal "reclamation = cursor reset" is fine for objects
- * whose only memory is the payload bytes themselves (STRING/BYTES).
- * `osty_rt_list`, however, may hold a heap-allocated `data` buffer
- * (when the list spilled past inline storage) or a heap-allocated
- * `gc_offsets` array (struct-element lists). Without an explicit
- * destroy pass these external buffers leak when their owning list
+ * whose only memory is the payload bytes themselves (STRING/BYTES /
+ * GENERIC NONE / CLOSURE_ENV). `osty_rt_list`, however, may hold a
+ * heap-allocated `data` buffer (when the list spilled past inline
+ * storage) or a heap-allocated `gc_offsets` array (struct-element
+ * lists). `osty_rt_set` always holds a heap-allocated `items`
+ * buffer (no inline-storage union). Without an explicit destroy
+ * pass these external buffers leak when their owning collection
  * becomes unreachable in young.
  *
  * The scan walks from-space from base to the recorded pre-swap
  * cursor. Forwarded objects (`FORWARDED` / `PROMOTED` tag) are
- * skipped — their external resources moved with them. Unforwarded
+ * skipped — their external resources moved with them (the to-space
+ * or OLD copy carries the same `items`/`data` pointer; freeing here
+ * would double-free when that copy is later destroyed). Unforwarded
  * (UNFORWARDED tag) objects are dead; for kinds that own external
  * memory we run a per-kind cleanup before the swap reclaims the
  * arena bytes. */
 static int64_t osty_gc_young_cheney_dead_lists_freed_total = 0;
+static int64_t osty_gc_young_cheney_dead_sets_freed_total = 0;
 static int64_t osty_gc_young_cheney_dead_buffer_bytes_freed_total = 0;
 
 static size_t osty_gc_micro_object_total_size(int32_t payload_size);
+static size_t osty_rt_kind_size(int64_t kind);
 
 static void osty_gc_cheney_destroy_dead_from_space(unsigned char *from_base,
                                                    unsigned char *from_end_cursor) {
@@ -3332,9 +3346,19 @@ static void osty_gc_cheney_destroy_dead_from_space(unsigned char *from_base,
                     free(list->data);
                 }
                 osty_gc_young_cheney_dead_lists_freed_total += 1;
+            } else if (micro->object_kind == OSTY_GC_KIND_SET) {
+                osty_rt_set *set = (osty_rt_set *)payload;
+                if (set->items != NULL) {
+                    osty_gc_young_cheney_dead_buffer_bytes_freed_total +=
+                        (int64_t)((size_t)set->cap *
+                                  osty_rt_kind_size(set->elem_kind));
+                    free(set->items);
+                }
+                osty_gc_young_cheney_dead_sets_freed_total += 1;
             }
-            /* STRING / BYTES carry no external buffers — payload bytes
-             * are reclaimed by the cursor reset, no destroy needed. */
+            /* STRING / BYTES / CLOSURE_ENV / GENERIC NONE carry no
+             * external buffers — payload bytes are reclaimed by the
+             * cursor reset, no destroy needed. */
         }
         scan += total;
     }
@@ -10879,6 +10903,18 @@ int64_t osty_gc_debug_young_cheney_forwarded_bytes_total(void) {
 
 int64_t osty_gc_debug_young_cheney_swap_count_total(void) {
     return osty_gc_young_cheney_swap_count_total;
+}
+
+int64_t osty_gc_debug_young_cheney_dead_lists_freed_total(void) {
+    return osty_gc_young_cheney_dead_lists_freed_total;
+}
+
+int64_t osty_gc_debug_young_cheney_dead_sets_freed_total(void) {
+    return osty_gc_young_cheney_dead_sets_freed_total;
+}
+
+int64_t osty_gc_debug_young_cheney_dead_buffer_bytes_freed_total(void) {
+    return osty_gc_young_cheney_dead_buffer_bytes_freed_total;
 }
 
 /* Decode the forwarding tag for testing. Returns the tag value
