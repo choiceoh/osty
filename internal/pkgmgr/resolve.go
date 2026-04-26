@@ -7,8 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 
 	"github.com/osty/osty/internal/lockfile"
 	"github.com/osty/osty/internal/manifest"
@@ -409,85 +407,14 @@ func (r *resolver) ensureCompatible(existing *ResolvedNode, candidate Source, d 
 // Deterministic: children are visited in alphabetical order so
 // repeated resolves produce identical Order slices.
 func (r *resolver) topoOrder() []string {
-	order := GolegacyTopoOrder(r.graph)
-	if len(order) > 0 || r.graph == nil || len(r.graph.Nodes) == 0 {
-		return order
-	}
-	return r.topoOrderGo()
-}
-
-func (r *resolver) topoOrderGo() []string {
-	visited := map[string]bool{}
-	var out []string
-	var visit func(name string)
-	visit = func(name string) {
-		if visited[name] {
-			return
-		}
-		visited[name] = true
-		n := r.graph.Nodes[name]
-		if n == nil {
-			return
-		}
-		deps := append([]string(nil), n.Deps...)
-		sort.Strings(deps)
-		for _, d := range deps {
-			visit(d)
-		}
-		out = append(out, name)
-	}
-	names := make([]string, 0, len(r.graph.Nodes))
-	for k := range r.graph.Nodes {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		visit(n)
-	}
-	return out
+	return GolegacyTopoOrder(r.graph)
 }
 
 // LockFromGraph builds a fresh Lock that records every node in g.
 // The order + per-entry sort matches lockfile.Marshal's determinism
 // policy.
-func LockFromGraph(g *Graph) *lockfile.Lock {
-	lock, err := GolegacyLockFromGraph(g)
-	if err == nil {
-		return lock
-	}
-	return lockFromGraphGo(g)
-}
-
-func lockFromGraphGo(g *Graph) *lockfile.Lock {
-	if g == nil {
-		return &lockfile.Lock{Version: lockfile.SchemaVersion}
-	}
-	out := &lockfile.Lock{Version: lockfile.SchemaVersion}
-	for _, name := range g.Order {
-		n := g.Nodes[name]
-		if n == nil || n.Fetched == nil {
-			continue
-		}
-		var deps []lockfile.Dependency
-		for _, c := range n.Deps {
-			cn := g.Nodes[c]
-			if cn == nil || cn.Fetched == nil {
-				continue
-			}
-			deps = append(deps, lockfile.Dependency{
-				Name:    c,
-				Version: cn.Fetched.Version,
-			})
-		}
-		out.Packages = append(out.Packages, lockfile.Package{
-			Name:         n.Name,
-			Version:      n.Fetched.Version,
-			Source:       n.Source.URI(),
-			Checksum:     n.Fetched.Checksum,
-			Dependencies: deps,
-		})
-	}
-	return out
+func LockFromGraph(g *Graph) (*lockfile.Lock, error) {
+	return GolegacyLockFromGraph(g)
 }
 
 // Vendor materializes every node in g into env.VendorDir so the
@@ -691,73 +618,6 @@ func (c LockfileChange) String() string {
 // treated as "every package is added"; a nil new lock as "every
 // package is removed". Order is sorted by package name for stable
 // reporting.
-func DiffLock(old, new *lockfile.Lock) []LockfileChange {
-	if changes, err := GolegacyDiffLock(old, new); err == nil {
-		return changes
-	}
-	return diffLockGo(old, new)
-}
-
-func diffLockGo(old, new *lockfile.Lock) []LockfileChange {
-	o := map[string]lockfile.Package{}
-	if old != nil {
-		for _, p := range old.Packages {
-			o[p.Name] = p
-		}
-	}
-	n := map[string]lockfile.Package{}
-	if new != nil {
-		for _, p := range new.Packages {
-			n[p.Name] = p
-		}
-	}
-	names := map[string]bool{}
-	for k := range o {
-		names[k] = true
-	}
-	for k := range n {
-		names[k] = true
-	}
-	keys := make([]string, 0, len(names))
-	for k := range names {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var out []LockfileChange
-	for _, k := range keys {
-		op, oOK := o[k]
-		np, nOK := n[k]
-		switch {
-		case !oOK && nOK:
-			out = append(out, LockfileChange{Name: k, Kind: "added", NewVersion: np.Version})
-		case oOK && !nOK:
-			out = append(out, LockfileChange{Name: k, Kind: "removed", OldVersion: op.Version})
-		case op.Version != np.Version:
-			out = append(out, LockfileChange{
-				Name: k, Kind: "version",
-				OldVersion: op.Version, NewVersion: np.Version,
-			})
-		case op.Checksum != np.Checksum:
-			out = append(out, LockfileChange{
-				Name: k, Kind: "checksum",
-				NewVersion: np.Version,
-				Detail:     fmt.Sprintf("%s -> %s", short(op.Checksum), short(np.Checksum)),
-			})
-		case op.Source != np.Source:
-			out = append(out, LockfileChange{
-				Name: k, Kind: "source",
-				Detail: fmt.Sprintf("%s -> %s", op.Source, np.Source),
-			})
-		}
-	}
-	return out
-}
-
-func short(s string) string {
-	const prefix = "sha256:"
-	t := strings.TrimPrefix(s, prefix)
-	if len(t) > 12 {
-		return prefix + t[:12]
-	}
-	return s
+func DiffLock(old, new *lockfile.Lock) ([]LockfileChange, error) {
+	return GolegacyDiffLock(old, new)
 }

@@ -1,6 +1,15 @@
 // validate_snapshot.go snapshots the Osty-authored manifest validation
 // support into the native manifest package while toolchain sources remain
 // the long-term owner.
+//
+// FROZEN SEED. The authoritative source is
+// toolchain/manifest_validation.osty. Edits to the Osty file do NOT
+// auto-propagate — the rendering transpiler was retired in #854. If
+// the Osty source changes, hand-port the change into this file using
+// the same `// Osty: ...` line cites as the surrounding code, or
+// revert. Once the LLVM-built Osty toolchain self-hosts and the
+// manifest package can call into a selfhost.* bridge, this file is
+// slated for deletion.
 
 package manifest
 
