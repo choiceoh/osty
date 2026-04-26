@@ -1875,13 +1875,13 @@ func (g *mirGen) snapshotVectorListLocal(local mir.LocalID, elemLLVM string) {
 	dataSym := listRuntimeDataSymbol(elemLLVM)
 	g.declareRuntime(dataSym, mirRuntimeDeclareMemoryRead("ptr", dataSym, "ptr"))
 	dataReg := g.fresh()
-	g.fnBuf.WriteString(mirCallValueWithAliasScopeLine(dataReg, "ptr", dataSym, "ptr "+listReg, scopeList))
+	g.fnBuf.WriteString(mirCallValueListDataNoAliasLine(dataReg, dataSym, listReg, scopeList))
 	g.vectorListData[local] = dataReg
 
 	lenSym := listRuntimeLenSymbol()
 	g.declareRuntime(lenSym, mirRuntimeDeclareMemoryRead("i64", lenSym, "ptr"))
 	lenReg := g.fresh()
-	g.fnBuf.WriteString(mirCallValueWithAliasScopeLine(lenReg, "i64", lenSym, "ptr "+listReg, scopeList))
+	g.fnBuf.WriteString(mirCallValueListLenWithScopeLine(lenReg, listReg, scopeList))
 	g.vectorListLens[local] = lenReg
 	g.vectorListSnapDef[local] = g.curBlockID
 }
@@ -1946,7 +1946,7 @@ func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM stri
 	listReg := g.fresh()
 	g.fnBuf.WriteString(mirLoadLine(listReg, "ptr", slot))
 	slowVal := g.fresh()
-	g.fnBuf.WriteString(mirCallValueLine(slowVal, elemLLVM, slowSym, "ptr "+listReg+", i64 "+idxVal))
+	g.fnBuf.WriteString(mirCallValueListSlowGetLine(slowVal, elemLLVM, slowSym, listReg, idxVal))
 	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
 
 	g.fnBuf.WriteString(mirLabelLine(mergeLabel))
@@ -3331,7 +3331,7 @@ func (g *mirGen) emitTestingBenchmarkMIR(c *mir.CallInstr) error {
 	// seconds probing before we know what N to settle on.
 	probeIters := int64(10)
 	target := g.fresh()
-	g.fnBuf.WriteString(mirCallValueNoArgsLine(target, "i64", "osty_rt_bench_target_ns"))
+	g.fnBuf.WriteString(mirCallValueBenchTargetNsLine(target))
 	nslot := g.fresh()
 	g.fnBuf.WriteString(mirAllocaLine(nslot, "i64"))
 	g.fnBuf.WriteString(mirStoreLine("i64", declaredN, nslot))
@@ -3345,12 +3345,12 @@ func (g *mirGen) emitTestingBenchmarkMIR(c *mir.CallInstr) error {
 	// probe: run the closure probeIters times and measure.
 	g.fnBuf.WriteString(mirLabelLine(probeLabel))
 	probeStart := g.fresh()
-	g.fnBuf.WriteString(mirCallValueNoArgsLine(probeStart, "i64", "osty_rt_bench_now_nanos"))
+	g.fnBuf.WriteString(mirCallValueBenchNowNanosLine(probeStart))
 	if err := g.emitBenchCountedLoopMIR(c.Args[1], fmt.Sprintf("%d", probeIters), "bench.probe_i"); err != nil {
 		return err
 	}
 	probeEnd := g.fresh()
-	g.fnBuf.WriteString(mirCallValueNoArgsLine(probeEnd, "i64", "osty_rt_bench_now_nanos"))
+	g.fnBuf.WriteString(mirCallValueBenchNowNanosLine(probeEnd))
 	probeElapsed := g.fresh()
 	g.fnBuf.WriteString(mirSubI64Line(probeElapsed, probeEnd, probeStart))
 	probePos := g.fresh()
@@ -3404,16 +3404,16 @@ func (g *mirGen) emitTestingBenchmarkMIR(c *mir.CallInstr) error {
 	// loop — the delta divided by finalN is the per-iter bytes/op
 	// we'll surface in the summary line.
 	bytesStart := g.fresh()
-	g.fnBuf.WriteString(mirCallValueNoArgsLine(bytesStart, "i64", "osty_gc_debug_allocated_bytes_total"))
+	g.fnBuf.WriteString(mirCallValueGcDebugAllocatedBytesLine(bytesStart))
 	timedStart := g.fresh()
-	g.fnBuf.WriteString(mirCallValueNoArgsLine(timedStart, "i64", "osty_rt_bench_now_nanos"))
+	g.fnBuf.WriteString(mirCallValueBenchNowNanosLine(timedStart))
 	if err := g.emitBenchCountedLoopMIR(c.Args[1], finalN, "bench.run_i"); err != nil {
 		return err
 	}
 	timedEnd := g.fresh()
-	g.fnBuf.WriteString(mirCallValueNoArgsLine(timedEnd, "i64", "osty_rt_bench_now_nanos"))
+	g.fnBuf.WriteString(mirCallValueBenchNowNanosLine(timedEnd))
 	bytesEnd := g.fresh()
-	g.fnBuf.WriteString(mirCallValueNoArgsLine(bytesEnd, "i64", "osty_gc_debug_allocated_bytes_total"))
+	g.fnBuf.WriteString(mirCallValueGcDebugAllocatedBytesLine(bytesEnd))
 	total := g.fresh()
 	g.fnBuf.WriteString(mirSubI64Line(total, timedEnd, timedStart))
 	bytesTotal := g.fresh()
@@ -3446,11 +3446,13 @@ func (g *mirGen) emitTestingBenchmarkMIR(c *mir.CallInstr) error {
 	// yet, so we emit zeros — the keys are present for downstream tooling,
 	// the values are honest placeholders. Per-iter sampling is a follow-up.
 	distFmt := g.stringLiteral("  min=%ldns p50=%ldns p99=%ldns max=%ldns\n")
-	distArgs := "i64 " + avg +
-		", i64 " + avg +
-		", i64 " + avg +
-		", i64 " + avg
-	g.fnBuf.WriteString(mirCallVarargPrintfLine(distFmt, distArgs))
+	g.fnBuf.WriteString(mirCallVarargPrintfFourArgLine(
+		distFmt,
+		mirIntLiteralI64(avg),
+		mirIntLiteralI64(avg),
+		mirIntLiteralI64(avg),
+		mirIntLiteralI64(avg),
+	))
 
 	return g.storeUnitDestIfAny(c)
 }
@@ -3581,16 +3583,11 @@ func (g *mirGen) storeUnitDestIfAny(c *mir.CallInstr) error {
 		return nil
 	}
 	destLLVM := g.llvmType(destLoc.Type)
-	zero := "zeroinitializer"
-	switch destLLVM {
-	case "i1":
+	zero := mirZeroOfType(destLLVM)
+	if destLLVM == "i1" {
+		// destLLVM uses LLVM-text "false" for i1 zero; this site historically
+		// emitted "0" for i1 — preserve byte-stable parity.
 		zero = "0"
-	case "i8", "i16", "i32", "i64":
-		zero = "0"
-	case "float", "double":
-		zero = "0.0"
-	case "ptr":
-		zero = "null"
 	}
 	g.fnBuf.WriteString(mirStoreLine(destLLVM, zero, g.localSlots[c.Dest.Local]))
 	return nil
@@ -4226,7 +4223,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		g.fnBuf.WriteString(mirLinearScanLoopHeadLines(headLabel, iReg, iSlot, cont, lenReg, bodyLabel, endLabel))
 		g.fnBuf.WriteString(mirLabelLine(bodyLabel))
 		elemReg := g.fresh()
-		g.fnBuf.WriteString(mirCallValueLine(elemReg, elemLLVM, getSym, "ptr "+listReg+", i64 "+iReg))
+		g.fnBuf.WriteString(mirCallValueListGetTypedLine(elemReg, elemLLVM, getSym, listReg, iReg))
 		eqReg := g.fresh()
 		if stringEq != "" {
 			g.fnBuf.WriteString(mirCallI1FromTwoPtrLine(eqReg, stringEq, elemReg, needleReg))
@@ -4295,7 +4292,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		g.fnBuf.WriteString(mirLinearScanLoopHeadLines(headLabel, iReg, iSlot, cont, lenReg, bodyLabel, endLabel))
 		g.fnBuf.WriteString(mirLabelLine(bodyLabel))
 		elemReg := g.fresh()
-		g.fnBuf.WriteString(mirCallValueLine(elemReg, elemLLVM, getSym, "ptr "+listReg+", i64 "+iReg))
+		g.fnBuf.WriteString(mirCallValueListGetTypedLine(elemReg, elemLLVM, getSym, listReg, iReg))
 		eqReg := g.fresh()
 		if stringEq != "" {
 			g.fnBuf.WriteString(mirCallI1FromTwoPtrLine(eqReg, stringEq, elemReg, needleReg))
@@ -4370,7 +4367,7 @@ func (g *mirGen) emitListLoadElement(listReg, idxReg string, elemLLVM string) (s
 		getSym := listRuntimeGetSymbol(elemLLVM)
 		g.declareRuntime(getSym, mirRuntimeDeclareMemoryRead(elemLLVM, getSym, "ptr, i64"))
 		elemReg := g.fresh()
-		g.fnBuf.WriteString(mirCallValueLine(elemReg, elemLLVM, getSym, "ptr "+listReg+", i64 "+idxReg))
+		g.fnBuf.WriteString(mirCallValueListGetTypedLine(elemReg, elemLLVM, getSym, listReg, idxReg))
 		return elemReg, nil
 	}
 	slot := g.fresh()
@@ -4441,10 +4438,10 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		sym := "osty_rt_map_new"
 		g.declareRuntime(sym, mirRuntimeDeclareLine("ptr", sym, "i64, i64, i64, ptr"))
 		args := []string{
-			fmt.Sprintf("i64 %d", keyKind),
-			fmt.Sprintf("i64 %d", valKind),
-			fmt.Sprintf("i64 %d", valueSize),
-			"ptr null",
+			mirIntLiteralI64(strconv.Itoa(keyKind)),
+			mirIntLiteralI64(strconv.Itoa(valKind)),
+			mirIntLiteralI64(strconv.Itoa(valueSize)),
+			mirPtrNullLiteral(),
 		}
 		return g.emitSimpleCall(i, sym, "ptr", args)
 	}
@@ -6250,7 +6247,11 @@ func (g *mirGen) emitConcurrencyHelperIntrinsic(i *mir.IntrinsicInstr) error {
 		}
 		sym := "osty_rt_parallel"
 		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrI64PtrLine(sym))
-		return g.emitSimpleCall(i, sym, "ptr", []string{"ptr " + items, "i64 " + conc, "ptr " + f})
+		return g.emitSimpleCall(i, sym, "ptr", []string{
+			mirPtrLiteralLine(items),
+			mirIntLiteralI64(conc),
+			mirPtrLiteralLine(f),
+		})
 	case mir.IntrinsicRace:
 		// Returns Result<T, Error> — runtime uses the `{i64, i64}` enum
 		// layout matching chan_recv / check_cancelled.
@@ -7161,7 +7162,7 @@ func (g *mirGen) emitListSafeGet(i *mir.IntrinsicInstr, listReg, idxReg, elemLLV
 	g.fnBuf.WriteString(mirNoneBranchLines(noneLabel, destLLVM, destSlot, endLabel))
 	g.fnBuf.WriteString(mirLabelLine(someLabel))
 	elemReg := g.fresh()
-	g.fnBuf.WriteString(mirCallValueLine(elemReg, elemLLVM, getSym, "ptr "+listReg+", i64 "+idxReg))
+	g.fnBuf.WriteString(mirCallValueListGetTypedLine(elemReg, elemLLVM, getSym, listReg, idxReg))
 	payloadReg := elemReg
 	switch elemLLVM {
 	case "i64":

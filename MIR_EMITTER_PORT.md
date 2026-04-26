@@ -447,6 +447,68 @@ list keeps new Osty clean of known landmines.
 | `mirCallVoidListClearLine` / `mirCallVoidMapClearLine` / `mirCallVoidSetClearLine` | `(handle) -> String` | §6 | Container clear specialisations |
 | `mirCallVoidPopDiscardLine` | `(list) -> String` | §6 | `osty_rt_list_pop_discard` literal-symbol specialisation |
 | `mirCallValueIsEmptyLine` | `(reg, sym, handle) -> String` | §6 | Generic is-empty predicate probe |
+| `mirCallValueListGetTypedLine` / `mirCallValueListSlowGetLine` | `(reg, elemLLVM, sym, list, idx) -> String` | §6 | Synonyms of `mirCallValueElemFromPtrI64Line` named for the linear-scan body / vector-list slow-path read sites |
+| `mirCallValueBenchTargetNsLine` / `mirCallValueBenchNowNanosLine` / `mirCallValueGcDebugAllocatedBytesLine` | `(reg) -> String` | §6 | Bench harness probe / clock / GC-counter call shape specialisations |
+| `mirCallVoidOptionUnwrapNoneLine` / `mirCallVoidResultUnwrapErrLine` / `mirCallVoidExpectFailedLine` | `() -> String` | §6 | Panic-helper specialisations for Option / Result unwrap and testing.expect* failure |
+| `mirCallValueRuntimeProbe` / `mirCallStmtRuntimeProbe` | `(reg?, sym, argList) -> String` | §6 | Generic `{ i64, i64 }` Option/Result-returning runtime hook shapes |
+| `mirCallValueOpaqueLine` / `mirCallVoidOpaqueLine` | `(reg?, sym, argList) -> String` | §6 | ptr-returning generic call shapes for FnConst-thunk trampolines |
+| `mirCommentBlockHeader` / `mirCommentSourceLine` / `mirSectionSeparator` | `(text?) -> String` | §6 | LLVM-text comment / annotation builders for emit-section markers |
+| `mirIntegerWidenZExt{I8,I16,I32,I1}Line` | `(reg, val) -> String` | §6 | i64-payload widen specialisations for Some/Ok aggregate construction |
+| `mirIntegerNarrowTruncI64{,ToI1,ToI8,ToI16,ToI32}Line` | `(reg, val) -> String` | §6 | i64-payload narrow specialisations for non-i64 element widths |
+| `mirBitcastI64ToDoubleLine` / `mirIntToPtrI64Line` | `(reg, val) -> String` | §6 | Float / RawPtr payload narrows |
+| `mirStoreI64Line` / `mirStoreI1Line` / `mirStorePtrTypedLine` | `(val, slot) -> String` | §6 | Common-width store specialisations |
+| `mirLoadI64Line` / `mirLoadI1Line` / `mirLoadPtrLine` / `mirLoadDoubleLine` | `(reg, ptr) -> String` | §6 | Common-width load specialisations |
+| `mirGEPI64StrideLine` / `mirGEPDoubleStrideLine` / `mirGEPPtrStrideLine` | `(reg, basePtr, idx) -> String` | §6 | Hot-loop GEP specialisations for List<Int> / List<Float> / List<Ptr> |
+| `mirBrUncondToHeadLine` / `mirBrUncondToEndLine` | `(label) -> String` | §6 | Linear-scan loop tail / exit branch synonyms |
+| `mirPhiI64FromTwoLine` / `mirPhiPtrFromTwoLine` / `mirPhiI1FromTwoValuesLine` / `mirPhiDoubleFromTwoLine` | `(reg, v1, l1, v2, l2) -> String` | §6 | Type-specialised two-arm phi shapes |
+| `mirSelectI64Line` / `mirSelectPtrLine` / `mirSelectI1Line` / `mirSelectDoubleLine` | `(reg, cond, l, r) -> String` | §6 | Type-specialised select shapes for branchless minmax / clamp / Option payload merge |
+| `mirInBoundsLines` | `(nonNeg, inUpper, inBounds, idx, lenReg) -> String` | §6 | "non-neg AND in-upper" 3-line bounds check |
+| `mirOutOfBoundsTrapLines` | `(oobSym) -> String` | §6 | OOB-abort body (call+unreachable) — 2-line block |
+| `mirIncrementI64Line` / `mirDecrementI64Line` | `(reg, iReg, delta) -> String` | §6 | Loop-counter increment / decrement synonyms |
+| `mirReturnI64Line` / `mirReturnPtrLine` / `mirReturnI1Line` / `mirReturnDoubleLine` | `(val) -> String` | §9 | Type-specialised value-return terminators |
+| `mirRuntimeDeclareNoReturnVoidNoArgsLine` / `mirRuntimeDeclareNoReturnColdVoidNoArgsLine` | `(sym) -> String` | §3 | Panic-helper / abort-trap canonical declares (with optional cold attribute) |
+| `mirIndirectCallVoidLine` / `mirIndirectCallValueLine` | `(reg?, callType, fnPtrReg, argList) -> String` | §6 | Closure / fn-pointer indirect call synonyms |
+| `mirStoreFromOperandLine` / `mirLoadIntoOperandLine` | `(ty, val, slot)/(reg, ty, slot) -> String` | §6 | Synonyms for MIR's `lowerExprInto` / `evalOperand` shapes |
+| `mirCallValueStringLenLine` / `HashLine` / `IsEmptyLine` | `(reg, sReg) -> String` | §6 | String runtime ABI canonical specialisations |
+| `mirCallValueStringTrimLine` / `ToUpperLine` / `ToLowerLine` | `(reg, [sym], sReg) -> String` | §6 | String case / trim runtime calls |
+| `mirCallValueStringStartsWith/EndsWith/ContainsLine` | `(reg, sReg, needleReg) -> String` | §6 | String-pair predicate runtime shapes |
+| `mirCallValueStringIndexOf/LastIndexOfLine` | `(reg, sReg, needleReg) -> String` | §6 | String-search i64-returning shapes |
+| `mirCallValueStringSplit/Join/Replace/Repeat/DiffLinesLine` | `(reg, args...) -> String` | §6 | String runtime ABI builders for collection-returning / multi-arg cases |
+| `mirCallValueBytesLen/Get/IndexOf/LastIndexOf/Contains/StartsWith/EndsWith/SubstringLine` | `(reg, args...) -> String` | §6 | Bytes runtime ABI canonical specialisations |
+| `mirCallValueListSliceLine` / `Map/Filter/FoldLine` | `(reg, args...) -> String` | §6 | List combinator runtime entrypoints |
+| `mirCallValueMapValuesLine` / `EntriesLine` / `mirCallVoidMapMergeWithLine` | `(reg, args...) -> String` | §6 | Map iteration / merge runtime shapes |
+| `mirCallValueSetContainsLine` / `mirCallVoidSetAdd/RemoveLine` / `mirCallValueSetToListLine` | `(reg?, args...) -> String` | §6 | Set runtime ABI canonical specialisations |
+| `mirCallValueListDataNoAliasLine` / `mirCallValueListLenWithScopeLine` | `(reg, [sym], list, scopeRef) -> String` | §6 | Vector-list snapshot data / len call shapes (alias-scope tagged for LICM hoist) |
+| `mirCallValueStringConcatChainLine` / `mirCallValueListGetSliceLine` | `(reg, args...) -> String` | §6 | Synonyms for the interpolation-chain concat / IndexExpr-with-Range slice paths |
+| `mirIntLiteralI64` / `I32` / `I8` / `I1` | `(digits) -> String` | §6 | Canonical typed-integer literal tokens for runtime call arg lists |
+| `mirPtrLiteralLine` / `mirPtrNullLiteral` | `(symbol)/() -> String` | §6 | Ptr-typed literal token + canonical `ptr null` constant |
+| `mirDoubleLiteralLine` | `(digits) -> String` | §6 | Double-typed literal token |
+| `mirCallVarargPrintfFourArgLine` / `FiveArgLine` / `SixArgLine` | `(fmtSym, a1..aN) -> String` | §6 | 4/5/6-arg printf shapes — drains inline arg-list concat |
+| `mirCallVoidTestingAbortLine` / `ContextEnterLine` / `ContextExitLine` | `([msgPtr]/[name]/) -> String` | §6 | Testing context-stack / abort runtime helper shapes |
+| `mirCallValueTestingExpectOkLine` / `ExpectErrorLine` | `(reg, resultReg) -> String` | §6 | Result<T,E> assertion predicates (i1-returning) |
+| `mirGCRootSlotsAllocaLine` / `mirGCRootSlotStoreLine` | `(slotsPtr, count)/(slotPtr, slotsPtr, idx, addr) -> String` | §6 | Safepoint chunk slots-array allocation + per-slot store builders |
+| `mirCommentNoteLine` / `mirCommentTodoLine` | `(text) -> String` | §6 | NOTE / TODO comment helpers for emit-pass leave-behinds |
+| `mirZeroOfType` / `mirOneOfType` | `(llvmTy) -> String` | §6 | Canonical zero / one literal text for any LLVM scalar type |
+| `mirIndentedLine` / `mirRawLine` | `(body)/(line) -> String` | §6 | 2-space indent wrapper / raw passthrough for pre-formatted lines |
+| `mirFnAttrInlineHint` / `AlwaysInline` / `NoInline` / `Hot` / `Cold` / `Pure` / `NoUnwind` / `WillReturn` / `MemoryRead` / `MemoryWrite` / `NoReturn` | `() -> String` | §6 | LLVM fn-attribute single-token returns (centralised so style changes touch one place) |
+| `mirLinkageInternal` / `Private` / `External` | `() -> String` | §6 | LLVM linkage tag tokens |
+| `mirUnnamedAddrTag` / `mirConstantTag` / `mirGlobalTag` | `() -> String` | §6 | LLVM-text constant / global / unnamed-addr tokens |
+| `mirNullMDRef` / `mirZeroinitializerLiteral` / `mirUndefLiteral` / `mirPoisonLiteral` | `() -> String` | §6 | LLVM literal-constant text returns (null/zeroinitializer/undef/poison) |
+| `mirCalleeFnRefText` / `mirCalleeIndirectText` | `(symbol)/(reg) -> String` | §6 | Direct fn-pointer (`@<sym>`) vs indirect (SSA-reg) callee shape rendering |
+| `mirEqualsAssign` / `mirAttachComma` / `mirAttachSpace` / `mirNewline` | `() -> String` | §6 | Canonical text separators (`= `, `, `, ` `, `\n`) — centralise for future style flips |
+| `mirPrivateUnnamedAddrConstantTag` / `mirInternalUnnamedAddrConstantTag` / `mirInternalGlobalTag` | `() -> String` | §6 | Composite linkage+attr tokens for global / constant declarations |
+| `mirAggregateUndef` / `mirAggregatePoison` / `mirAggregateZero` | `() -> String` | §6 | Aggregate-init starter tokens (semantic aliases over `undef` / `poison` / `zeroinitializer`) |
+| `mirLocalReg` / `mirGlobalSym` / `mirMetadataRef` | `(name) -> String` | §6 | LLVM-text sigil prefix helpers (`%name` / `@name` / `!name`) |
+| `mirArgSlotPtr` / `I64` / `I32` / `I1` / `I8` / `Double` | `(reg) -> String` | §6 | Single-arg type-prefixed slot tokens for runtime call arg lists |
+| `mirArgListTwoPtr` / `mirArgListPtrI64` / `mirArgListPtrI64I64` / `mirArgListThreePtr` | `(args...) -> String` | §6 | Common 2/3-arg list shapes for runtime call arg lists |
+| `mirTypeI64` / `I32` / `I16` / `I8` / `I1` / `mirTypePtr` / `mirTypeDouble` / `mirTypeFloat` / `mirTypeVoid` | `() -> String` | §6 | LLVM type-token returns — centralise for hypothetical typed-load model port |
+| `mirCallAttrTail` / `MustTail` / `NoTail` | `() -> String` | §6 | LLVM call-attribute tokens for tail-call control |
+| `mirParamAttrNoAlias` / `NoCapture` / `ReadOnly` / `WriteOnly` | `() -> String` | §6 | LLVM ParamAttr tokens for `#[noalias]` / pointer-flow annotations |
+| `mirICmpEq` / `Ne` / `Slt` / `Sle` / `Sgt` / `Sge` / `Ult` / `Ule` / `Ugt` / `Uge` | `() -> String` | §6 | LLVM icmp predicate tokens (signed + unsigned variants) |
+| `mirFCmpOEq` / `One` / `Olt` / `Ole` / `Ogt` / `Oge` | `() -> String` | §6 | LLVM fcmp ordered-predicate tokens for `Float64` / `Float32` ops |
+| `mirOpAdd` / `Sub` / `Mul` / `SDiv` / `SRem` / `UDiv` / `URem` | `() -> String` | §6 | LLVM signed / unsigned integer-arithmetic op-name tokens |
+| `mirOpFAdd` / `FSub` / `FMul` / `FDiv` / `FRem` | `() -> String` | §6 | LLVM floating-point arithmetic op-name tokens |
+| `mirOpAnd` / `Or` / `Xor` / `Shl` / `LShr` / `AShr` | `() -> String` | §6 | LLVM bitwise + shift op-name tokens |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as
