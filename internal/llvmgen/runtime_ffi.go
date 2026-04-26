@@ -284,15 +284,15 @@ func listRuntimeNewSymbol() string {
 }
 
 func listRuntimePushBytesSymbol() string {
-	return "osty_rt_list_push_bytes"
+	return mirRtListSymbol("push_bytes")
 }
 
 func listRuntimeGetBytesSymbol() string {
-	return "osty_rt_list_get_bytes"
+	return mirRtListSymbol("get_bytes")
 }
 
 func listRuntimeSetBytesSymbol() string {
-	return "osty_rt_list_set_bytes"
+	return mirRtListSymbol("set_bytes")
 }
 
 func listRuntimeLenSymbol() string {
@@ -300,27 +300,27 @@ func listRuntimeLenSymbol() string {
 }
 
 func listRuntimeDataSymbol(elemTyp string) string {
-	return "osty_rt_list_data_" + llvmListElementSuffix(elemTyp)
+	return mirRtListSymbol("data_" + llvmListElementSuffix(elemTyp))
 }
 
 func listRuntimePopDiscardSymbol() string {
-	return "osty_rt_list_pop_discard"
+	return mirRtListPopDiscardSymbol()
 }
 
 func listRuntimeClearSymbol() string {
-	return "osty_rt_list_clear"
+	return mirRtListClearSymbol()
 }
 
 func listRuntimePushBytesV1Symbol() string {
-	return "osty_rt_list_push_bytes_v1"
+	return mirRtListSymbol("push_bytes_v1")
 }
 
 func listRuntimePushBytesRootsSymbol() string {
-	return "osty_rt_list_push_bytes_roots_v1"
+	return mirRtListSymbol("push_bytes_roots_v1")
 }
 
 func listRuntimeGetBytesV1Symbol() string {
-	return "osty_rt_list_get_bytes_v1"
+	return mirRtListGetBytesV1Symbol()
 }
 
 func listRuntimePushSymbol(elemTyp string) string {
@@ -340,11 +340,11 @@ func listRuntimeInsertSymbol(elemTyp string) string {
 }
 
 func listRuntimeInsertBytesV1Symbol() string {
-	return "osty_rt_list_insert_bytes_v1"
+	return mirRtListSymbol("insert_bytes_v1")
 }
 
 func listRuntimeInsertBytesRootsSymbol() string {
-	return "osty_rt_list_insert_bytes_roots_v1"
+	return mirRtListSymbol("insert_bytes_roots_v1")
 }
 
 func listRuntimeSortedSymbol(elemTyp string, elemString bool) string {
@@ -360,7 +360,7 @@ func listRuntimeToSetSymbol(elemTyp string, elemString bool) string {
 // the slice is a pure byte-level copy — the elem_size stored on the
 // list header is enough, so one symbol covers every T.
 func listRuntimeSliceSymbol() string {
-	return "osty_rt_list_slice"
+	return mirRtListSliceSymbol()
 }
 
 func mapRuntimeNewSymbol() string {
@@ -389,7 +389,7 @@ func mapRuntimeGetOrAbortSymbol(keyTyp string, keyString bool) string {
 // (null ptr = None, boxed payload ptr = Some) without inlining the
 // stdlib body per callsite.
 func mapRuntimeGetSymbol(keyTyp string, keyString bool) string {
-	return "osty_rt_map_get_" + llvmMapKeySuffix(keyTyp, keyString)
+	return mirRtMapSymbol("get_" + llvmMapKeySuffix(keyTyp, keyString))
 }
 
 // mapRuntimeIncrI64Symbol returns the runtime symbol for the
@@ -398,19 +398,19 @@ func mapRuntimeGetSymbol(keyTyp string, keyString bool) string {
 // probe + in-place update on hit, falls through to insert on miss.
 // Targeted by the `IntrinsicMapIncr` lowering.
 func mapRuntimeIncrI64Symbol(keyTyp string, keyString bool) string {
-	return "osty_rt_map_incr_i64_" + llvmMapKeySuffix(keyTyp, keyString)
+	return mirRtMapSymbol("incr_i64_" + llvmMapKeySuffix(keyTyp, keyString))
 }
 
 // mapRuntimeKeyAtSymbol returns the K-at-slot accessor used by
 // `for (k, v) in m` iteration. `osty_rt_map_key_at_<ksuf>(map, i) -> K`.
 func mapRuntimeKeyAtSymbol(keyTyp string, keyString bool) string {
-	return "osty_rt_map_key_at_" + llvmMapKeySuffix(keyTyp, keyString)
+	return mirRtMapSymbol("key_at_" + llvmMapKeySuffix(keyTyp, keyString))
 }
 
 // mapRuntimeValueAtSymbol returns the V-at-slot accessor — V-agnostic,
 // takes an out-pointer. `osty_rt_map_value_at(map, i, out_ptr)`.
 func mapRuntimeValueAtSymbol() string {
-	return "osty_rt_map_value_at"
+	return mirRtMapSymbol("value_at")
 }
 
 // mapRuntimeEntryAtSymbol returns the combined K+V accessor used by
@@ -418,7 +418,7 @@ func mapRuntimeValueAtSymbol() string {
 // under the map lock and memcpy-writes the value into the caller's
 // out-slot in the same critical section.
 func mapRuntimeEntryAtSymbol(keyTyp string, keyString bool) string {
-	return "osty_rt_map_entry_at_" + llvmMapKeySuffix(keyTyp, keyString)
+	return mirRtMapSymbol("entry_at_" + llvmMapKeySuffix(keyTyp, keyString))
 }
 
 // mapRuntimeLockSymbol / mapRuntimeUnlockSymbol expose the per-map
@@ -427,11 +427,11 @@ func mapRuntimeEntryAtSymbol(keyTyp string, keyString bool) string {
 // callback can re-enter the same map (e.g. read self.len()) without
 // self-deadlock.
 func mapRuntimeLockSymbol() string {
-	return "osty_rt_map_lock"
+	return mirRtMapSymbol("lock")
 }
 
 func mapRuntimeUnlockSymbol() string {
-	return "osty_rt_map_unlock"
+	return mirRtMapSymbol("unlock")
 }
 
 func mapRuntimeKeysSymbol() string {
@@ -443,7 +443,7 @@ func mapRuntimeLenSymbol() string {
 }
 
 func mapRuntimeClearSymbol() string {
-	return "osty_rt_map_clear"
+	return mirRtMapClearSymbol()
 }
 
 func setRuntimeNewSymbol() string {

@@ -236,7 +236,7 @@ func (g *generator) emitInterpolatedString(lit *ast.StringLit) (value, error) {
 // The array of parts is materialized in a stack alloca at the current
 // block — free for the caller and automatically dead after the call.
 func (g *generator) emitRuntimeStringConcatN(pieces []value) (value, error) {
-	symbol := "osty_rt_strings_ConcatN"
+	symbol := mirRtStringConcatNSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{
 		{typ: "i64"},
 		{typ: "ptr"},
@@ -1673,7 +1673,7 @@ func (g *generator) emitRuntimeBoolToString(v value) (value, error) {
 // The helper handles all four UTF-8 width classes plus the out-of-range
 // replacement-char fallback — see internal/backend/runtime/osty_runtime.c.
 func (g *generator) emitRuntimeCharToString(v value) (value, error) {
-	symbol := "osty_rt_char_to_string"
+	symbol := mirRtCharToStringSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "i32"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(v)})
@@ -1687,7 +1687,7 @@ func (g *generator) emitRuntimeCharToString(v value) (value, error) {
 // (i8) via osty_rt_byte_to_string. Treats the byte as a raw octet; useful
 // when iterating over text.bytes() and rebuilding the original bytes.
 func (g *generator) emitRuntimeByteToString(v value) (value, error) {
-	symbol := "osty_rt_byte_to_string"
+	symbol := mirRtByteToStringSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "i8"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(v)})
@@ -1700,7 +1700,7 @@ func (g *generator) emitRuntimeByteToString(v value) (value, error) {
 func (g *generator) emitRuntimeStringCompare(op token.Kind, left, right value) (value, error) {
 	switch op {
 	case token.EQ, token.NEQ:
-		g.declareRuntimeSymbol("osty_rt_strings_Equal", "i1", []paramInfo{
+		g.declareRuntimeSymbol(mirRtStringSymbol("Equal"), "i1", []paramInfo{
 			{typ: "ptr"},
 			{typ: "ptr"},
 		})
@@ -3932,7 +3932,7 @@ func (g *generator) emitBytesMethodCall(call *ast.CallExpr) (value, bool, error)
 		if len(call.Args) != 0 {
 			return value{}, true, unsupported("call", "Bytes.len requires no arguments")
 		}
-		symbol := "osty_rt_bytes_len"
+		symbol := mirRtBytesLenSymbolName()
 		g.declareRuntimeSymbol(symbol, "i64", []paramInfo{{typ: "ptr"}})
 		emitter := g.toOstyEmitter()
 		out := llvmCall(emitter, "i64", symbol, []*LlvmValue{toOstyValue(base)})
@@ -3942,7 +3942,7 @@ func (g *generator) emitBytesMethodCall(call *ast.CallExpr) (value, bool, error)
 		if len(call.Args) != 0 {
 			return value{}, true, unsupported("call", "Bytes.isEmpty requires no arguments")
 		}
-		symbol := "osty_rt_bytes_is_empty"
+		symbol := mirRtBytesIsEmptySymbol()
 		g.declareRuntimeSymbol(symbol, "i1", []paramInfo{{typ: "ptr"}})
 		emitter := g.toOstyEmitter()
 		out := llvmCall(emitter, "i1", symbol, []*LlvmValue{toOstyValue(base)})
@@ -4345,8 +4345,8 @@ func (g *generator) emitBytesMethodCall(call *ast.CallExpr) (value, bool, error)
 }
 
 func (g *generator) emitBytesGetRuntime(base, index value) (value, error) {
-	lenSymbol := "osty_rt_bytes_len"
-	getSymbol := "osty_rt_bytes_get"
+	lenSymbol := mirRtBytesLenSymbolName()
+	getSymbol := mirRtBytesGetSymbol()
 	g.declareRuntimeSymbol(lenSymbol, "i64", []paramInfo{{typ: "ptr"}})
 	g.declareRuntimeSymbol(getSymbol, "i8", []paramInfo{{typ: "ptr"}, {typ: "i64"}})
 	emitter := g.toOstyEmitter()
@@ -4385,7 +4385,7 @@ func (g *generator) emitBytesGetRuntime(base, index value) (value, error) {
 }
 
 func (g *generator) emitBytesLastIndexRaw(base, needle value) (value, error) {
-	symbol := "osty_rt_bytes_last_index_of"
+	symbol := mirRtBytesLastIndexOfSymbol()
 	g.declareRuntimeSymbol(symbol, "i64", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	index := llvmCall(emitter, "i64", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(needle)})
@@ -4394,7 +4394,7 @@ func (g *generator) emitBytesLastIndexRaw(base, needle value) (value, error) {
 }
 
 func (g *generator) emitBytesIndexOfRuntime(base, needle value) (value, error) {
-	symbol := "osty_rt_bytes_index_of"
+	symbol := mirRtBytesIndexOfSymbol()
 	g.declareRuntimeSymbol(symbol, "i64", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	index := llvmCall(emitter, "i64", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(needle)})
@@ -4403,7 +4403,7 @@ func (g *generator) emitBytesIndexOfRuntime(base, needle value) (value, error) {
 }
 
 func (g *generator) emitBytesContainsRuntime(base, needle value) (value, error) {
-	symbol := "osty_rt_bytes_index_of"
+	symbol := mirRtBytesIndexOfSymbol()
 	g.declareRuntimeSymbol(symbol, "i64", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	index := llvmCall(emitter, "i64", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(needle)})
@@ -4413,7 +4413,7 @@ func (g *generator) emitBytesContainsRuntime(base, needle value) (value, error) 
 }
 
 func (g *generator) emitBytesStartsWithRuntime(base, prefix value) (value, error) {
-	symbol := "osty_rt_bytes_index_of"
+	symbol := mirRtBytesIndexOfSymbol()
 	g.declareRuntimeSymbol(symbol, "i64", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	index := llvmCall(emitter, "i64", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(prefix)})
@@ -4423,7 +4423,7 @@ func (g *generator) emitBytesStartsWithRuntime(base, prefix value) (value, error
 }
 
 func (g *generator) emitBytesEndsWithRuntime(base, suffix value) (value, error) {
-	lenSymbol := "osty_rt_bytes_len"
+	lenSymbol := mirRtBytesLenSymbolName()
 	g.declareRuntimeSymbol(lenSymbol, "i64", []paramInfo{{typ: "ptr"}})
 	lastIndex, err := g.emitBytesLastIndexRaw(base, suffix)
 	if err != nil {
@@ -4450,7 +4450,7 @@ func (g *generator) emitBytesLastIndexOfRuntime(base, needle value) (value, erro
 }
 
 func (g *generator) emitBytesFromListRuntime(items value) (value, error) {
-	symbol := "osty_rt_bytes_from_list"
+	symbol := mirRtBytesSymbol("from_list")
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(items)})
@@ -4487,7 +4487,7 @@ func (g *generator) emitBytesListOfBytesExpr(expr ast.Expr, label string) (value
 }
 
 func (g *generator) emitBytesSplitRuntime(base, sep value) (value, error) {
-	symbol := "osty_rt_bytes_split"
+	symbol := mirRtBytesSplitSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(sep)})
@@ -4501,7 +4501,7 @@ func (g *generator) emitBytesSplitRuntime(base, sep value) (value, error) {
 }
 
 func (g *generator) emitBytesJoinRuntime(parts, sep value) (value, error) {
-	symbol := "osty_rt_bytes_join"
+	symbol := mirRtBytesJoinSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(parts), toOstyValue(sep)})
@@ -4513,7 +4513,7 @@ func (g *generator) emitBytesJoinRuntime(parts, sep value) (value, error) {
 }
 
 func (g *generator) emitBytesConcatRuntime(left, right value) (value, error) {
-	symbol := "osty_rt_bytes_concat"
+	symbol := mirRtBytesConcatSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(left), toOstyValue(right)})
@@ -4525,7 +4525,7 @@ func (g *generator) emitBytesConcatRuntime(left, right value) (value, error) {
 }
 
 func (g *generator) emitBytesRepeatRuntime(base, n value) (value, error) {
-	symbol := "osty_rt_bytes_repeat"
+	symbol := mirRtBytesRepeatSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "i64"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(n)})
@@ -4537,7 +4537,7 @@ func (g *generator) emitBytesRepeatRuntime(base, n value) (value, error) {
 }
 
 func (g *generator) emitBytesReplaceRuntime(base, oldValue, newValue value) (value, error) {
-	symbol := "osty_rt_bytes_replace"
+	symbol := mirRtBytesReplaceSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(oldValue), toOstyValue(newValue)})
@@ -4549,7 +4549,7 @@ func (g *generator) emitBytesReplaceRuntime(base, oldValue, newValue value) (val
 }
 
 func (g *generator) emitBytesReplaceAllRuntime(base, oldValue, newValue value) (value, error) {
-	symbol := "osty_rt_bytes_replace_all"
+	symbol := mirRtBytesReplaceAllSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(oldValue), toOstyValue(newValue)})
@@ -4561,7 +4561,7 @@ func (g *generator) emitBytesReplaceAllRuntime(base, oldValue, newValue value) (
 }
 
 func (g *generator) emitBytesTrimLeftRuntime(base, strip value) (value, error) {
-	symbol := "osty_rt_bytes_trim_left"
+	symbol := mirRtBytesTrimLeftSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(strip)})
@@ -4573,7 +4573,7 @@ func (g *generator) emitBytesTrimLeftRuntime(base, strip value) (value, error) {
 }
 
 func (g *generator) emitBytesTrimRightRuntime(base, strip value) (value, error) {
-	symbol := "osty_rt_bytes_trim_right"
+	symbol := mirRtBytesTrimRightSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(strip)})
@@ -4585,7 +4585,7 @@ func (g *generator) emitBytesTrimRightRuntime(base, strip value) (value, error) 
 }
 
 func (g *generator) emitBytesTrimRuntime(base, strip value) (value, error) {
-	symbol := "osty_rt_bytes_trim"
+	symbol := mirRtBytesTrimSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(strip)})
@@ -4597,7 +4597,7 @@ func (g *generator) emitBytesTrimRuntime(base, strip value) (value, error) {
 }
 
 func (g *generator) emitBytesTrimSpaceRuntime(base value) (value, error) {
-	symbol := "osty_rt_bytes_trim_space"
+	symbol := mirRtBytesTrimSpaceSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base)})
@@ -4609,7 +4609,7 @@ func (g *generator) emitBytesTrimSpaceRuntime(base value) (value, error) {
 }
 
 func (g *generator) emitBytesToUpperRuntime(base value) (value, error) {
-	symbol := "osty_rt_bytes_to_upper"
+	symbol := mirRtBytesToUpperSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base)})
@@ -4621,7 +4621,7 @@ func (g *generator) emitBytesToUpperRuntime(base value) (value, error) {
 }
 
 func (g *generator) emitBytesToLowerRuntime(base value) (value, error) {
-	symbol := "osty_rt_bytes_to_lower"
+	symbol := mirRtBytesToLowerSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base)})
@@ -4633,7 +4633,7 @@ func (g *generator) emitBytesToLowerRuntime(base value) (value, error) {
 }
 
 func (g *generator) emitBytesToHexRuntime(base value) (value, error) {
-	symbol := "osty_rt_bytes_to_hex"
+	symbol := mirRtBytesToHexSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base)})
@@ -4650,8 +4650,8 @@ func (g *generator) emitBytesFromHexResult(text value) (value, error) {
 	if !ok {
 		return value{}, unsupported("type-system", "Bytes.fromHex Result<Bytes, Error> type is unavailable")
 	}
-	validateSymbol := "osty_rt_bytes_is_valid_hex"
-	fromHexSymbol := "osty_rt_bytes_from_hex"
+	validateSymbol := mirRtBytesSymbol("is_valid_hex")
+	fromHexSymbol := mirRtBytesSymbol("from_hex")
 	g.declareRuntimeSymbol(validateSymbol, "i1", []paramInfo{{typ: "ptr"}})
 	g.declareRuntimeSymbol(fromHexSymbol, "ptr", []paramInfo{{typ: "ptr"}})
 
@@ -4707,7 +4707,7 @@ func (g *generator) emitBytesFromHexResult(text value) (value, error) {
 }
 
 func (g *generator) emitBytesSliceRuntime(base, start, end value) (value, error) {
-	symbol := "osty_rt_bytes_slice"
+	symbol := mirRtBytesSliceSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "i64"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(start), toOstyValue(end)})
@@ -4724,8 +4724,8 @@ func (g *generator) emitBytesToStringResult(base value) (value, error) {
 	if !ok {
 		return value{}, unsupported("type-system", "Bytes.toString Result<String, Error> type is unavailable")
 	}
-	validateSymbol := "osty_rt_bytes_is_valid_utf8"
-	toStringSymbol := "osty_rt_bytes_to_string"
+	validateSymbol := mirRtBytesSymbol("is_valid_utf8")
+	toStringSymbol := mirRtBytesSymbol("to_string")
 	g.declareRuntimeSymbol(validateSymbol, "i1", []paramInfo{{typ: "ptr"}})
 	g.declareRuntimeSymbol(toStringSymbol, "ptr", []paramInfo{{typ: "ptr"}})
 
@@ -4911,7 +4911,7 @@ func (g *generator) emitBytesNamespaceCall(call *ast.CallExpr) (value, bool, err
 		if base.typ != "ptr" {
 			return value{}, true, unsupportedf("type-system", "Bytes.len arg 1 type %s, want Bytes", base.typ)
 		}
-		symbol := "osty_rt_bytes_len"
+		symbol := mirRtBytesLenSymbolName()
 		g.declareRuntimeSymbol(symbol, "i64", []paramInfo{{typ: "ptr"}})
 		emitter := g.toOstyEmitter()
 		out := llvmCall(emitter, "i64", symbol, []*LlvmValue{toOstyValue(base)})
@@ -4932,7 +4932,7 @@ func (g *generator) emitBytesNamespaceCall(call *ast.CallExpr) (value, bool, err
 		if base.typ != "ptr" {
 			return value{}, true, unsupportedf("type-system", "Bytes.isEmpty arg 1 type %s, want Bytes", base.typ)
 		}
-		symbol := "osty_rt_bytes_is_empty"
+		symbol := mirRtBytesIsEmptySymbol()
 		g.declareRuntimeSymbol(symbol, "i1", []paramInfo{{typ: "ptr"}})
 		emitter := g.toOstyEmitter()
 		out := llvmCall(emitter, "i1", symbol, []*LlvmValue{toOstyValue(base)})

@@ -277,7 +277,7 @@ func (g *generator) tryEmitMapIncrPattern(first, second ast.Stmt) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	symbol := "osty_rt_map_incr_i64_" + suffix
+	symbol := mirRtMapSymbol("incr_i64_" + suffix)
 	keyTyp := mapInfo.mapKeyTyp
 	if mapInfo.mapKeyString {
 		keyTyp = "ptr"
@@ -1704,8 +1704,8 @@ func (g *generator) emitTestingBenchmarkStmt(call *ast.CallExpr) error {
 	return nil
 }
 
-func benchClockRuntimeSymbol() string  { return "osty_rt_bench_now_nanos" }
-func benchTargetRuntimeSymbol() string { return "osty_rt_bench_target_ns" }
+func benchClockRuntimeSymbol() string  { return mirRtBenchNowNanosSymbol() }
+func benchTargetRuntimeSymbol() string { return mirRtBenchTargetNsSymbol() }
 
 // emitBenchAutoTuneN probes the body when --benchtime is active and
 // picks N from that sample. Returns an alloca that downstream code
@@ -1858,10 +1858,10 @@ func (g *generator) emitBenchInlineLoop(stmts []ast.Stmt, count value, labelPref
 	return nil
 }
 
-func benchSamplesNewSymbol() string    { return "osty_rt_bench_samples_new" }
-func benchSamplesRecordSymbol() string { return "osty_rt_bench_samples_record" }
-func benchSamplesReportSymbol() string { return "osty_rt_bench_samples_report" }
-func benchSamplesFreeSymbol() string   { return "osty_rt_bench_samples_free" }
+func benchSamplesNewSymbol() string    { return mirRtBenchSymbol("samples_new") }
+func benchSamplesRecordSymbol() string { return mirRtBenchSymbol("samples_record") }
+func benchSamplesReportSymbol() string { return mirRtBenchSymbol("samples_report") }
+func benchSamplesFreeSymbol() string   { return mirRtBenchSymbol("samples_free") }
 
 // benchQuestionFailMessage is the runtime message printed when `?`
 // inside a bench closure sees Err / None. The shape mirrors

@@ -1,5 +1,26 @@
 # MIR emitter selfhost port
 
+> **Phase 1 (LLVM-text builder library): COMPLETE (2026-04-27).**
+>
+> The §1–§17 builder library at `toolchain/mir_generator.osty`
+> (~1,665 `mir*` builders) covers every inline LLVM-text literal
+> shape the emit pass produces. After PR #962 + this slice, only 4
+> raw `g.fnBuf.WriteString` sites remain in `mir_generator.go` —
+> all of them flush pre-built helper output (`llvmRenderSafepointEmpty`,
+> `mirNoneAggregate.Lines`), not raw inline literals. **99.9% inline
+> literal coverage; further builder additions would create dormant
+> code without active call sites.**
+>
+> **Phase 2 (function port): IN PROGRESS (2026-04-27).**
+>
+> Now porting individual helper functions from `mir_generator.go` to
+> `toolchain/mir_generator.osty`. First port: `localDisplayName` →
+> `mirLocalDisplayNameFromText`. The `*mir.Local` host-boundary
+> stays Go-side; the name-extraction policy moves to Osty.
+>
+> Smaller PRs from this point forward — function porting is per-
+> function, not bulk drain. The "2k insertion" cadence ends here.
+
 > **Status (2026-04-26, post-rebase to #955): Partially historical.**
 >
 > - The bootstrap Osty→Go transpiler (`internal/bootstrap/gen`) was
