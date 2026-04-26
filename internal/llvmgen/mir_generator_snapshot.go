@@ -7916,3 +7916,36 @@ func mirLLVMTripleFor(arch, osName string) string {
 	}
 	return mirLinuxArch(arch) + "-unknown-" + osName
 }
+
+// §18 (cont'd) — specialized-builtin name predicate ported from
+// internal/llvmgen/ir_module.go.
+
+// Osty: mirIsSpecializedBuiltinStructName
+func mirIsSpecializedBuiltinStructName(name string) bool {
+	return llvmStrings.HasPrefix(name, "_ZTS")
+}
+
+// §18 (cont'd) — LLVM aggregate name-part sanitizer ported from
+// internal/llvmgen/type.go.
+
+// Osty: mirLLVMBuiltinAggregatePart
+func mirLLVMBuiltinAggregatePart(part string) string {
+	if part == "" {
+		return "void"
+	}
+	var b llvmStrings.Builder
+	sawValid := false
+	for i := 0; i < len(part); i++ {
+		c := part[i]
+		if c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') {
+			b.WriteByte(c)
+			sawValid = true
+			continue
+		}
+		b.WriteByte('_')
+	}
+	if !sawValid {
+		return "value"
+	}
+	return b.String()
+}

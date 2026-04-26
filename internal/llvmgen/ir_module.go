@@ -827,8 +827,10 @@ func legacyStructDeclFromIR(sd *ostyir.StructDecl) (*ast.StructDecl, error) {
 // keep their source name unless explicitly specialized via the same
 // mangler, and in that case they are equally free of bodyless
 // methods (user structs don't carry intrinsic placeholders).
+// isSpecializedBuiltinStructName delegates to the Osty-sourced
+// `mirIsSpecializedBuiltinStructName` (`toolchain/mir_generator.osty`).
 func isSpecializedBuiltinStructName(name string) bool {
-	return strings.HasPrefix(name, "_ZTS")
+	return mirIsSpecializedBuiltinStructName(name)
 }
 
 func legacyFieldFromIR(field *ostyir.Field) (*ast.Field, error) {
