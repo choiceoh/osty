@@ -2702,6 +2702,19 @@ func mirRuntimeDeclareSafepointV1() string {
 	return "declare void @osty.gc.safepoint_v1(i64, ptr, i64)"
 }
 
+// mirRuntimeDeclareRootFrameEnterV1 / LeaveV1 register the shadow-stack
+// push/pop runtime helpers. Each function with managed locals allocas a
+// 24-byte frame descriptor on its own stack and threads it onto the
+// thread-local chain via these calls so callee safepoints can mark the
+// caller's roots.
+func mirRuntimeDeclareRootFrameEnterV1() string {
+	return "declare void @osty.gc.root_frame_enter_v1(ptr, ptr, i64)"
+}
+
+func mirRuntimeDeclareRootFrameLeaveV1() string {
+	return "declare void @osty.gc.root_frame_leave_v1(ptr)"
+}
+
 // mirRuntimeDeclareGcAllocV1 returns the GC allocator decl shape.
 // Osty: mirRuntimeDeclareGcAllocV1
 func mirRuntimeDeclareGcAllocV1() string {
