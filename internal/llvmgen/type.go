@@ -257,11 +257,18 @@ func (g *generator) enumInfoByName(name string) *enumInfo {
 }
 
 func unwrapOptionalSourceType(t ast.Type) (ast.Type, bool) {
-	opt, ok := t.(*ast.OptionalType)
-	if !ok || opt == nil || opt.Inner == nil {
-		return nil, false
+	if opt, ok := t.(*ast.OptionalType); ok && opt != nil && opt.Inner != nil {
+		return opt.Inner, true
 	}
-	return opt.Inner, true
+	// Long form `Option<T>` is semantically identical to the `T?`
+	// shorthand — both lower to a ptr-backed Option in the LLVM
+	// runtime. Unwrap it the same way so context-sensitive paths
+	// (None literal, Option-aware coalesce, etc.) work for either
+	// surface.
+	if nt, ok := t.(*ast.NamedType); ok && nt != nil && len(nt.Path) == 1 && nt.Path[0] == "Option" && len(nt.Args) == 1 && nt.Args[0] != nil {
+		return nt.Args[0], true
+	}
+	return nil, false
 }
 
 func wrapOptionalSourceType(t ast.Type) ast.Type {
