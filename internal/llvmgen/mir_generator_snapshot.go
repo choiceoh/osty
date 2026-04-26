@@ -2827,3 +2827,175 @@ func mirAllocaI1FalseSlot(slot string) string {
 func mirStoreI1TrueLine(slot string) string {
 	return mirStoreLine("i1", "true", slot)
 }
+
+// §3 runtime-declare canonical-shape builders (continued).
+
+// mirRuntimeDeclarePtrFromTwoPtrLine renders `declare ptr @<sym>(ptr, ptr)`.
+// Osty: mirRuntimeDeclarePtrFromTwoPtrLine
+func mirRuntimeDeclarePtrFromTwoPtrLine(sym string) string {
+	return mirRuntimeDeclareLine("ptr", sym, "ptr, ptr")
+}
+
+// mirRuntimeDeclareI64FromTwoPtrLine renders `declare i64 @<sym>(ptr, ptr)`.
+// Osty: mirRuntimeDeclareI64FromTwoPtrLine
+func mirRuntimeDeclareI64FromTwoPtrLine(sym string) string {
+	return mirRuntimeDeclareLine("i64", sym, "ptr, ptr")
+}
+
+// mirRuntimeDeclareI1FromTwoPtrLine renders `declare i1 @<sym>(ptr, ptr)`.
+// Osty: mirRuntimeDeclareI1FromTwoPtrLine
+func mirRuntimeDeclareI1FromTwoPtrLine(sym string) string {
+	return mirRuntimeDeclareLine("i1", sym, "ptr, ptr")
+}
+
+// mirRuntimeDeclarePtrFromPtrI64I64Line renders `declare ptr @<sym>(ptr, i64, i64)`.
+// Osty: mirRuntimeDeclarePtrFromPtrI64I64Line
+func mirRuntimeDeclarePtrFromPtrI64I64Line(sym string) string {
+	return mirRuntimeDeclareLine("ptr", sym, "ptr, i64, i64")
+}
+
+// mirRuntimeDeclarePtrFromThreePtrLine renders `declare ptr @<sym>(ptr, ptr, ptr)`.
+// Osty: mirRuntimeDeclarePtrFromThreePtrLine
+func mirRuntimeDeclarePtrFromThreePtrLine(sym string) string {
+	return mirRuntimeDeclareLine("ptr", sym, "ptr, ptr, ptr")
+}
+
+// mirRuntimeDeclarePtrFromPtrPtrI64Line renders `declare ptr @<sym>(ptr, ptr, i64)`.
+// Osty: mirRuntimeDeclarePtrFromPtrPtrI64Line
+func mirRuntimeDeclarePtrFromPtrPtrI64Line(sym string) string {
+	return mirRuntimeDeclareLine("ptr", sym, "ptr, ptr, i64")
+}
+
+// mirRuntimeDeclarePtrFromPtrI64PtrLine renders `declare ptr @<sym>(ptr, i64, ptr)`.
+// Osty: mirRuntimeDeclarePtrFromPtrI64PtrLine
+func mirRuntimeDeclarePtrFromPtrI64PtrLine(sym string) string {
+	return mirRuntimeDeclareLine("ptr", sym, "ptr, i64, ptr")
+}
+
+// mirRuntimeDeclarePtrFromPtrI64Line renders `declare ptr @<sym>(ptr, i64)`.
+// Osty: mirRuntimeDeclarePtrFromPtrI64Line
+func mirRuntimeDeclarePtrFromPtrI64Line(sym string) string {
+	return mirRuntimeDeclareLine("ptr", sym, "ptr, i64")
+}
+
+// mirRuntimeDeclarePtrFromI64Line renders `declare ptr @<sym>(i64)`.
+// Osty: mirRuntimeDeclarePtrFromI64Line
+func mirRuntimeDeclarePtrFromI64Line(sym string) string {
+	return mirRuntimeDeclareLine("ptr", sym, "i64")
+}
+
+// mirRuntimeDeclarePtrFromI64PtrLine renders `declare ptr @<sym>(i64, ptr)`.
+// Osty: mirRuntimeDeclarePtrFromI64PtrLine
+func mirRuntimeDeclarePtrFromI64PtrLine(sym string) string {
+	return mirRuntimeDeclareLine("ptr", sym, "i64, ptr")
+}
+
+// mirRuntimeDeclareEnumLayoutFromPtrLine renders `declare { i64, i64 } @<sym>(ptr)`.
+// Osty: mirRuntimeDeclareEnumLayoutFromPtrLine
+func mirRuntimeDeclareEnumLayoutFromPtrLine(sym string) string {
+	return mirRuntimeDeclareLine("{ i64, i64 }", sym, "ptr")
+}
+
+// mirRuntimeDeclareEnumLayoutNoArgsLine renders `declare { i64, i64 } @<sym>()`.
+// Osty: mirRuntimeDeclareEnumLayoutNoArgsLine
+func mirRuntimeDeclareEnumLayoutNoArgsLine(sym string) string {
+	return mirRuntimeDeclareLine("{ i64, i64 }", sym, "")
+}
+
+// mirRuntimeDeclareBytesV1GetLine renders the bytes-v1 list-get
+// runtime decl `void @<sym>(ptr, i64, ptr, i64)`.
+// Osty: mirRuntimeDeclareBytesV1GetLine
+func mirRuntimeDeclareBytesV1GetLine(sym string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, i64, ptr, i64")
+}
+
+// mirRuntimeDeclareBytesV1PushLine renders the bytes-v1 list-push
+// runtime decl `void @<sym>(ptr, ptr, i64)`.
+// Osty: mirRuntimeDeclareBytesV1PushLine
+func mirRuntimeDeclareBytesV1PushLine(sym string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, ptr, i64")
+}
+
+// mirRuntimeDeclareBytesV1SetWithBarrierLine renders
+// `declare void @<sym>(ptr, i64, ptr, i64, ptr)`.
+// Osty: mirRuntimeDeclareBytesV1SetWithBarrierLine
+func mirRuntimeDeclareBytesV1SetWithBarrierLine(sym string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, i64, ptr, i64, ptr")
+}
+
+// mirRuntimeDeclareThreePtrVoidLine renders `declare void @<sym>(ptr, ptr, ptr)`.
+// Osty: mirRuntimeDeclareThreePtrVoidLine
+func mirRuntimeDeclareThreePtrVoidLine(sym string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, ptr, ptr")
+}
+
+// mirRuntimeDeclareTaskGroupSplitLine renders the task-group spawn
+// 5-arg ABI `void @<sym>(ptr, ptr, ptr, i64, ptr)`.
+// Osty: mirRuntimeDeclareTaskGroupSplitLine
+func mirRuntimeDeclareTaskGroupSplitLine(sym string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, ptr, ptr, i64, ptr")
+}
+
+// §6 list-pop / list-front read-projection helpers.
+
+// mirSubI64MinusOneLine renders `<reg> = sub i64 <lenReg>, 1`.
+// Osty: mirSubI64MinusOneLine
+func mirSubI64MinusOneLine(reg, lenReg string) string {
+	return mirSubI64Line(reg, lenReg, "1")
+}
+
+// mirAddI64PlusOneLine renders `<reg> = add i64 <iReg>, 1`.
+// Osty: mirAddI64PlusOneLine
+func mirAddI64PlusOneLine(reg, iReg string) string {
+	return mirAddI64Line(reg, iReg, "1")
+}
+
+// mirLenGuardLines renders the canonical "is non-empty?" preamble
+// used by every list intrinsic that returns Option<T>.
+// Osty: mirLenGuardLines
+func mirLenGuardLines(lenReg, isEmpty, lenSym, listReg string) string {
+	return mirCallValueLine(lenReg, "i64", lenSym, "ptr "+listReg) +
+		mirICmpEqI64Line(isEmpty, lenReg, "0")
+}
+
+// mirCallVoidPtrLine renders `call void @<sym>(ptr <ptr>)`.
+// Osty: mirCallVoidPtrLine
+func mirCallVoidPtrLine(sym, ptr string) string {
+	return mirCallVoidLine(sym, "ptr "+ptr)
+}
+
+// mirCallValueI64FromPtrLine renders `<reg> = call i64 @<sym>(ptr <ptr>)`.
+// Osty: mirCallValueI64FromPtrLine
+func mirCallValueI64FromPtrLine(reg, sym, ptr string) string {
+	return mirCallValueLine(reg, "i64", sym, "ptr "+ptr)
+}
+
+// mirCallValuePtrFromPtrLine renders `<reg> = call ptr @<sym>(ptr <ptr>)`.
+// Osty: mirCallValuePtrFromPtrLine
+func mirCallValuePtrFromPtrLine(reg, sym, ptr string) string {
+	return mirCallValueLine(reg, "ptr", sym, "ptr "+ptr)
+}
+
+// mirCallValueI1FromPtrLine renders `<reg> = call i1 @<sym>(ptr <ptr>)`.
+// Osty: mirCallValueI1FromPtrLine
+func mirCallValueI1FromPtrLine(reg, sym, ptr string) string {
+	return mirCallValueLine(reg, "i1", sym, "ptr "+ptr)
+}
+
+// mirRuntimeDeclareI8FromPtrI64Line renders `declare i8 @<sym>(ptr, i64)`.
+// Osty: mirRuntimeDeclareI8FromPtrI64Line
+func mirRuntimeDeclareI8FromPtrI64Line(sym string) string {
+	return mirRuntimeDeclareLine("i8", sym, "ptr, i64")
+}
+
+// mirCallValueI8FromPtrI64Line renders `<reg> = call i8 @<sym>(ptr <ptr>, i64 <idx>)`.
+// Osty: mirCallValueI8FromPtrI64Line
+func mirCallValueI8FromPtrI64Line(reg, sym, ptr, idx string) string {
+	return mirCallValueLine(reg, "i8", sym, "ptr "+ptr+", i64 "+idx)
+}
+
+// mirCallValueElemFromPtrI64Line renders typed-element list-get runtime call.
+// Osty: mirCallValueElemFromPtrI64Line
+func mirCallValueElemFromPtrI64Line(reg, elemLLVM, sym, ptr, idx string) string {
+	return mirCallValueLine(reg, elemLLVM, sym, "ptr "+ptr+", i64 "+idx)
+}

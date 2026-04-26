@@ -381,6 +381,33 @@ list keeps new Osty clean of known landmines.
 | `mirAllocaI64ZeroSlot` | `(slot: String) -> String` | §6 | Canonical "fresh i64 counter slot initialised to zero" preamble for linear-scan loops |
 | `mirAllocaI1FalseSlot` | `(slot: String) -> String` | §6 | Canonical "fresh i1 result slot initialised to false" preamble for IntrinsicListContains |
 | `mirStoreI1TrueLine` | `(slot: String) -> String` | §6 | `store i1 true, ptr <slot>` — IntrinsicListContains match arm flip |
+| `mirRuntimeDeclarePtrFromTwoPtrLine` | `(sym: String) -> String` | §3 | `declare ptr @<sym>(ptr, ptr)` — two-ptr ABI shape (string-pair runtimes: Concat / Replace / Split, etc.) |
+| `mirRuntimeDeclareI64FromTwoPtrLine` | `(sym: String) -> String` | §3 | `declare i64 @<sym>(ptr, ptr)` — i64-from-two-ptr ABI (strings.Compare, bytes.IndexOf) |
+| `mirRuntimeDeclareI1FromTwoPtrLine` | `(sym: String) -> String` | §3 | `declare i1 @<sym>(ptr, ptr)` — i1-from-two-ptr predicate (strings.Equal, bytes.starts_with/ends_with) |
+| `mirRuntimeDeclarePtrFromPtrI64I64Line` | `(sym: String) -> String` | §3 | `declare ptr @<sym>(ptr, i64, i64)` — slice-like ABI shape (strings.Substring, list.slice) |
+| `mirRuntimeDeclarePtrFromThreePtrLine` | `(sym: String) -> String` | §3 | `declare ptr @<sym>(ptr, ptr, ptr)` — three-ptr ABI (strings.Replace) |
+| `mirRuntimeDeclarePtrFromPtrPtrI64Line` | `(sym: String) -> String` | §3 | `declare ptr @<sym>(ptr, ptr, i64)` — (ptr, ptr, i64) ABI (strings.ReplaceN) |
+| `mirRuntimeDeclarePtrFromPtrI64PtrLine` | `(sym: String) -> String` | §3 | `declare ptr @<sym>(ptr, i64, ptr)` — (ptr, i64, ptr) ABI |
+| `mirRuntimeDeclarePtrFromPtrI64Line` | `(sym: String) -> String` | §3 | `declare ptr @<sym>(ptr, i64)` — (ptr, i64) ABI (list_primitive_to_string) |
+| `mirRuntimeDeclarePtrFromI64Line` | `(sym: String) -> String` | §3 | `declare ptr @<sym>(i64)` — int-derived constructor shape |
+| `mirRuntimeDeclarePtrFromI64PtrLine` | `(sym: String) -> String` | §3 | `declare ptr @<sym>(i64, ptr)` — handle-with-context constructor |
+| `mirRuntimeDeclareEnumLayoutFromPtrLine` | `(sym: String) -> String` | §3 | `declare { i64, i64 } @<sym>(ptr)` — Option/Result-returning runtime (chan-recv) |
+| `mirRuntimeDeclareEnumLayoutNoArgsLine` | `(sym: String) -> String` | §3 | `declare { i64, i64 } @<sym>()` — zero-arg Option/Result-returning runtime (cancel-check) |
+| `mirRuntimeDeclareBytesV1GetLine` | `(sym: String) -> String` | §3 | `declare void @<sym>(ptr, i64, ptr, i64)` — bytes-v1 list-get/insert |
+| `mirRuntimeDeclareBytesV1PushLine` | `(sym: String) -> String` | §3 | `declare void @<sym>(ptr, ptr, i64)` — bytes-v1 list-push |
+| `mirRuntimeDeclareBytesV1SetWithBarrierLine` | `(sym: String) -> String` | §3 | `declare void @<sym>(ptr, i64, ptr, i64, ptr)` — bytes-v1 list-set + GC barrier |
+| `mirRuntimeDeclareThreePtrVoidLine` | `(sym: String) -> String` | §3 | `declare void @<sym>(ptr, ptr, ptr)` — used by `osty_rt_test_snapshot` |
+| `mirRuntimeDeclareTaskGroupSplitLine` | `(sym: String) -> String` | §3 | `declare void @<sym>(ptr, ptr, ptr, i64, ptr)` — task-group spawn 5-arg ABI |
+| `mirSubI64MinusOneLine` | `(reg: String, lenReg: String) -> String` | §6 | `<reg> = sub i64 <len>, 1` — len-1 step for IntrinsicListLast / IntrinsicListPop |
+| `mirAddI64PlusOneLine` | `(reg: String, iReg: String) -> String` | §6 | `<reg> = add i64 <i>, 1` — increment for linear-scan loop tails |
+| `mirLenGuardLines` | `(lenReg, isEmpty, lenSym, listReg) -> String` | §6 | "Is the list non-empty?" preamble: len call + eq-zero check (2-line block) |
+| `mirCallVoidPtrLine` | `(sym: String, ptr: String) -> String` | §6 | `call void @<sym>(ptr <ptr>)` — single-ptr-arg side-effect call |
+| `mirCallValueI64FromPtrLine` | `(reg, sym, ptr) -> String` | §6 | `<reg> = call i64 @<sym>(ptr <ptr>)` — single-handle scalar probe |
+| `mirCallValuePtrFromPtrLine` | `(reg, sym, ptr) -> String` | §6 | `<reg> = call ptr @<sym>(ptr <ptr>)` — single-handle ptr-returning call |
+| `mirCallValueI1FromPtrLine` | `(reg, sym, ptr) -> String` | §6 | `<reg> = call i1 @<sym>(ptr <ptr>)` — single-handle predicate call |
+| `mirRuntimeDeclareI8FromPtrI64Line` | `(sym: String) -> String` | §3 | `declare i8 @<sym>(ptr, i64)` — byte-typed list/bytes element-get shape |
+| `mirCallValueI8FromPtrI64Line` | `(reg, sym, ptr, idx) -> String` | §6 | `<reg> = call i8 @<sym>(ptr <ptr>, i64 <idx>)` — paired with i8 declare |
+| `mirCallValueElemFromPtrI64Line` | `(reg, elemLLVM, sym, ptr, idx) -> String` | §6 | Generalises i8 form for any element type — typed-element list-get runtime call |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as

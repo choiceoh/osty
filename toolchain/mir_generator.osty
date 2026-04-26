@@ -3734,3 +3734,248 @@ pub fn mirAllocaI1FalseSlot(slot: String) -> String {
 pub fn mirStoreI1TrueLine(slot: String) -> String {
     mirStoreLine("i1", "true", slot)
 }
+
+/// §3 runtime-declare canonical-shape builders (continued) — drain
+/// the remaining common `(ret, argList)` shapes still inlined as
+/// string-concat at call sites.
+
+/// mirRuntimeDeclarePtrFromTwoPtrLine renders `declare ptr @<sym>(ptr, ptr)`
+/// — the two-ptr ABI shape for string-pair runtimes
+/// (`osty_rt_strings_Concat`, `*_Replace`, `*_Split`, etc.). The
+/// literal `mirRuntimeDeclareStringConcat` covers the named exact
+/// shape; this builder is the abstract-symbol form for the same
+/// arity.
+pub fn mirRuntimeDeclarePtrFromTwoPtrLine(sym: String) -> String {
+    mirRuntimeDeclareLine("ptr", sym, "ptr, ptr")
+}
+
+/// mirRuntimeDeclareI64FromTwoPtrLine renders `declare i64 @<sym>(ptr, ptr)`
+/// — the i64-from-two-ptr ABI shape. Used by `osty_rt_strings_Compare`
+/// (the lexicographic compare runtime), `osty_rt_bytes_index_of`, and
+/// other two-pointer scalar-returning probes.
+pub fn mirRuntimeDeclareI64FromTwoPtrLine(sym: String) -> String {
+    mirRuntimeDeclareLine("i64", sym, "ptr, ptr")
+}
+
+/// mirRuntimeDeclareI1FromTwoPtrLine renders `declare i1 @<sym>(ptr, ptr)`
+/// — the i1-from-two-ptr predicate shape: `osty_rt_strings_Equal`,
+/// `osty_rt_bytes_starts_with`, `osty_rt_bytes_ends_with`. Sibling
+/// of `mirRuntimeDeclareI64FromTwoPtrLine` for the boolean-returning
+/// case.
+pub fn mirRuntimeDeclareI1FromTwoPtrLine(sym: String) -> String {
+    mirRuntimeDeclareLine("i1", sym, "ptr, ptr")
+}
+
+/// mirRuntimeDeclarePtrFromPtrI64I64Line renders
+///   `declare ptr @<sym>(ptr, i64, i64)`
+/// — the slice-like ABI shape used by `osty_rt_strings_Substring`,
+/// `osty_rt_list_slice`, `osty_rt_bytes_substring`. Three-arg form
+/// where the first ptr is the input handle and the trailing pair
+/// is `(start, end)` byte / element offsets.
+pub fn mirRuntimeDeclarePtrFromPtrI64I64Line(sym: String) -> String {
+    mirRuntimeDeclareLine("ptr", sym, "ptr, i64, i64")
+}
+
+/// mirRuntimeDeclarePtrFromThreePtrLine renders
+///   `declare ptr @<sym>(ptr, ptr, ptr)`
+/// — the three-ptr ABI shape used by `osty_rt_strings_Replace`
+/// (input + needle + replacement → new string).
+pub fn mirRuntimeDeclarePtrFromThreePtrLine(sym: String) -> String {
+    mirRuntimeDeclareLine("ptr", sym, "ptr, ptr, ptr")
+}
+
+/// mirRuntimeDeclarePtrFromPtrPtrI64Line renders
+///   `declare ptr @<sym>(ptr, ptr, i64)`
+/// — the (ptr, ptr, i64) ABI shape used by `osty_rt_strings_ReplaceN`
+/// (input + needle + max_count → new string).
+pub fn mirRuntimeDeclarePtrFromPtrPtrI64Line(sym: String) -> String {
+    mirRuntimeDeclareLine("ptr", sym, "ptr, ptr, i64")
+}
+
+/// mirRuntimeDeclarePtrFromPtrI64PtrLine renders
+///   `declare ptr @<sym>(ptr, i64, ptr)`
+/// — the (ptr, i64, ptr) ABI shape used by some list intrinsic
+/// helpers (e.g. `osty_rt_list_slice_with_ctx`).
+pub fn mirRuntimeDeclarePtrFromPtrI64PtrLine(sym: String) -> String {
+    mirRuntimeDeclareLine("ptr", sym, "ptr, i64, ptr")
+}
+
+/// mirRuntimeDeclarePtrFromPtrI64Line renders
+///   `declare ptr @<sym>(ptr, i64)`
+/// — the (ptr, i64) ABI shape used by indexed-getter runtimes
+/// (`osty_rt_list_primitive_to_string` (ptr + count form)).
+pub fn mirRuntimeDeclarePtrFromPtrI64Line(sym: String) -> String {
+    mirRuntimeDeclareLine("ptr", sym, "ptr, i64")
+}
+
+/// mirRuntimeDeclarePtrFromI64Line renders `declare ptr @<sym>(i64)`
+/// — used by some int-derived constructors (e.g. allocator-like
+/// helpers that take a size and return a fresh handle).
+pub fn mirRuntimeDeclarePtrFromI64Line(sym: String) -> String {
+    mirRuntimeDeclareLine("ptr", sym, "i64")
+}
+
+/// mirRuntimeDeclarePtrFromI64PtrLine renders
+///   `declare ptr @<sym>(i64, ptr)`
+/// — used by handle-with-context constructors (some chan helpers).
+pub fn mirRuntimeDeclarePtrFromI64PtrLine(sym: String) -> String {
+    mirRuntimeDeclareLine("ptr", sym, "i64, ptr")
+}
+
+/// mirRuntimeDeclareEnumLayoutFromPtrLine renders the enum-layout
+/// runtime decl shape:
+///   `declare { i64, i64 } @<sym>(ptr)`
+/// Used by runtimes that return Option<T> / Result<T, E> directly
+/// (channel-recv, cancel-check, etc.). The fixed `{ i64, i64 }`
+/// matches the MIR/LLVM enum layout convention.
+pub fn mirRuntimeDeclareEnumLayoutFromPtrLine(sym: String) -> String {
+    mirRuntimeDeclareLine("\{ i64, i64 \}", sym, "ptr")
+}
+
+/// mirRuntimeDeclareEnumLayoutNoArgsLine renders the no-arg enum-
+/// layout runtime decl shape:
+///   `declare { i64, i64 } @<sym>()`
+/// Used by `osty_rt_cancel_check_cancelled` and other zero-arg
+/// Option/Result-returning runtimes.
+pub fn mirRuntimeDeclareEnumLayoutNoArgsLine(sym: String) -> String {
+    mirRuntimeDeclareLine("\{ i64, i64 \}", sym, "")
+}
+
+/// mirRuntimeDeclareBytesV1GetLine renders the bytes-v1 list-get
+/// runtime decl, which is `void @<sym>(ptr, i64, ptr, i64)`. Three
+/// sites (list-set / list-get / list-insert) produce the same shape.
+/// Specialisation of `mirRuntimeDeclareLine` for the four-arg
+/// (ptr, i64, ptr, i64) signature.
+pub fn mirRuntimeDeclareBytesV1GetLine(sym: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, i64, ptr, i64")
+}
+
+/// mirRuntimeDeclareBytesV1PushLine renders the bytes-v1 list-push
+/// runtime decl: `void @<sym>(ptr, ptr, i64)`. Used at the
+/// IntrinsicListPush composite-element site and the chan-send-
+/// bytes runtime decl.
+pub fn mirRuntimeDeclareBytesV1PushLine(sym: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, ptr, i64")
+}
+
+/// mirRuntimeDeclareBytesV1SetWithBarrierLine renders
+///   `declare void @<sym>(ptr, i64, ptr, i64, ptr)`
+/// — the bytes-v1 list-set ABI with trailing GC write-barrier slot.
+/// One inline site at `emitIndexedWrite` for composite list-set.
+pub fn mirRuntimeDeclareBytesV1SetWithBarrierLine(sym: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, i64, ptr, i64, ptr")
+}
+
+/// mirRuntimeDeclareThreePtrVoidLine renders `declare void @<sym>(ptr, ptr, ptr)`
+/// — used by `osty_rt_test_snapshot(name, expected, actual)`.
+pub fn mirRuntimeDeclareThreePtrVoidLine(sym: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, ptr, ptr")
+}
+
+/// mirRuntimeDeclareTaskGroupSplitLine renders the special 5-arg
+/// task-group spawn ABI:
+///   `declare void @<sym>(ptr, ptr, ptr, i64, ptr)`
+/// Used by `osty_rt_task_group_spawn_with_args`. The longest
+/// runtime-decl shape; centralised so the param tuple stays in
+/// lockstep between decl + call.
+pub fn mirRuntimeDeclareTaskGroupSplitLine(sym: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, ptr, ptr, i64, ptr")
+}
+
+/// §6 list-pop / list-front read-projection helpers — drain the
+/// repeating "len-guarded read of last/first element" body.
+
+/// mirSubI64MinusOneLine renders the `len - 1` step used by
+/// `IntrinsicListLast` and `IntrinsicListPop` to compute the last
+/// element index:
+///   `  <reg> = sub i64 <lenReg>, 1\n`
+/// Specialisation of `mirSubI64Line` for the `lenReg, "1"` operand
+/// pair; reads cleaner than the general form because the constant
+/// is the same at every call site.
+pub fn mirSubI64MinusOneLine(reg: String, lenReg: String) -> String {
+    mirSubI64Line(reg, lenReg, "1")
+}
+
+/// mirAddI64PlusOneLine renders the `i + 1` step used by every
+/// linear-scan loop's tail:
+///   `  <reg> = add i64 <iReg>, 1\n`
+/// Specialisation of `mirAddI64Line` mirroring `mirSubI64MinusOneLine`
+/// for the increment side. Companion to `mirLinearScanLoopTailLines`
+/// which already inlines this pattern.
+pub fn mirAddI64PlusOneLine(reg: String, iReg: String) -> String {
+    mirAddI64Line(reg, iReg, "1")
+}
+
+/// mirLenGuardLines renders the canonical "is the list non-empty?"
+/// preamble used by every list intrinsic that returns Option<T>
+/// (first/last/pop/safe_get/index_of):
+///   `  <lenReg> = call i64 @<lenSym>(ptr <listReg>)\n`
+///   `  <isEmpty> = icmp eq i64 <lenReg>, 0\n`
+/// Two-line block. Caller threads the runtime symbol; the helper
+/// produces the canonical len-then-eq probe pair so call sites
+/// don't need to remember the eq-on-i64 specialisation.
+pub fn mirLenGuardLines(lenReg: String, isEmpty: String, lenSym: String, listReg: String) -> String {
+    mirCallValueLine(lenReg, "i64", lenSym, "ptr " + listReg) +
+    mirICmpEqI64Line(isEmpty, lenReg, "0")
+}
+
+/// mirCallVoidPtrLine renders `  call void @<sym>(ptr <ptr>)\n` —
+/// the single-ptr-arg side-effect runtime call. Used by
+/// `osty_rt_list_clear`, `osty_rt_list_reverse`, `osty_rt_chan_close`,
+/// `osty_rt_list_pop_discard`, etc. Sibling of the existing
+/// `mirCallVoidLine` for the specific 1-ptr-arg case so callers
+/// don't thread the literal "ptr " prefix at every site.
+pub fn mirCallVoidPtrLine(sym: String, ptr: String) -> String {
+    mirCallVoidLine(sym, "ptr " + ptr)
+}
+
+/// mirCallValueI64FromPtrLine renders the canonical i64-from-ptr
+/// probe call: `  <reg> = call i64 @<sym>(ptr <ptr>)\n`. Used by
+/// `osty_rt_list_len`, `osty_rt_set_len`, `osty_rt_map_len` — the
+/// single-handle scalar probe shape that's inlined as
+/// `mirCallValueLine(reg, "i64", sym, "ptr "+listReg)` at every
+/// call site today.
+pub fn mirCallValueI64FromPtrLine(reg: String, sym: String, ptr: String) -> String {
+    mirCallValueLine(reg, "i64", sym, "ptr " + ptr)
+}
+
+/// mirCallValuePtrFromPtrLine renders the canonical ptr-from-ptr
+/// runtime call: `  <reg> = call ptr @<sym>(ptr <ptr>)\n`. Used by
+/// `osty_rt_list_keys`, `osty_rt_set_to_list`, `osty_rt_list_data_*`,
+/// etc. Mirror of `mirCallValueI64FromPtrLine` for the ptr-returning
+/// case.
+pub fn mirCallValuePtrFromPtrLine(reg: String, sym: String, ptr: String) -> String {
+    mirCallValueLine(reg, "ptr", sym, "ptr " + ptr)
+}
+
+/// mirCallValueI1FromPtrLine renders the canonical i1-from-ptr
+/// predicate call: `  <reg> = call i1 @<sym>(ptr <ptr>)\n`. Used by
+/// `osty_rt_list_is_empty`, `osty_rt_chan_is_closed`,
+/// `osty_rt_cancel_is_cancelled`, etc. Boolean-returning probe.
+pub fn mirCallValueI1FromPtrLine(reg: String, sym: String, ptr: String) -> String {
+    mirCallValueLine(reg, "i1", sym, "ptr " + ptr)
+}
+
+/// mirRuntimeDeclareI8FromPtrI64Line renders `declare i8 @<sym>(ptr, i64)`
+/// — the byte-typed list/bytes element-get shape used by
+/// `osty_rt_bytes_get` and `osty_rt_list_get_i8`. Sibling of
+/// `mirCallValueI64FromPtrLine` for the i8 element width.
+pub fn mirRuntimeDeclareI8FromPtrI64Line(sym: String) -> String {
+    mirRuntimeDeclareLine("i8", sym, "ptr, i64")
+}
+
+/// mirCallValueI8FromPtrI64Line renders `<reg> = call i8 @<sym>(ptr <ptr>, i64 <idx>)`
+/// — paired with `mirRuntimeDeclareI8FromPtrI64Line` at every byte
+/// list/string element-get site.
+pub fn mirCallValueI8FromPtrI64Line(reg: String, sym: String, ptr: String, idx: String) -> String {
+    mirCallValueLine(reg, "i8", sym, "ptr " + ptr + ", i64 " + idx)
+}
+
+/// mirCallValueElemFromPtrI64Line renders the typed-element list-get
+/// runtime call `<reg> = call <elemLLVM> @<sym>(ptr <list>, i64
+/// <idx>)`. Generalises `mirCallValueI8FromPtrI64Line` for any
+/// element type. Used at every IntrinsicListGet / inline list-get
+/// site that goes through the typed-element fast path.
+pub fn mirCallValueElemFromPtrI64Line(reg: String, elemLLVM: String, sym: String, ptr: String, idx: String) -> String {
+    mirCallValueLine(reg, elemLLVM, sym, "ptr " + ptr + ", i64 " + idx)
+}
