@@ -3100,19 +3100,24 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
  *      dormant and every alloc takes the headerful path, preserving
  *      pre-Phase-5 behaviour exactly.
  *   2. The kind must be one of the young-safe kinds — STRING, BYTES,
- *      LIST. STRING/BYTES are immutable byte payloads. LIST has a
- *      destroy callback (frees spilled `data` + `gc_offsets`), but
- *      Phase E follow-up adds a from-space dead-list scan in
- *      cheney_minor that runs the destroy work just before the
- *      arena swap reclaims the bytes — making LIST safe to route
- *      through the no-header path despite the external resource.
- *      The scan also handles the self-referential `data` ptr
- *      fixup on the to-space copy when a forwarded List was inline.
+ *      LIST, CLOSURE_ENV. STRING/BYTES are immutable byte payloads.
+ *      LIST has a destroy callback (frees spilled `data` +
+ *      `gc_offsets`), but Phase E follow-up adds a from-space
+ *      dead-list scan in cheney_minor that runs the destroy work just
+ *      before the arena swap reclaims the bytes — making LIST safe to
+ *      route through the no-header path despite the external resource.
+ *      The scan also handles the self-referential `data` ptr fixup on
+ *      the to-space copy when a forwarded List was inline.
+ *      CLOSURE_ENV has no destroy callback (captures live inline in
+ *      the flexible array) and trace just walks `captures[]` under
+ *      the `pointer_bitmap`. The mutator contract is that captures
+ *      are populated synchronously at construction (single basic
+ *      block in LLVM emit) before the env escapes to a slot that
+ *      could trigger root_bind — so promote-on-bind copies a fully
+ *      populated env to OLD and post-promote stale-pointer writes
+ *      do not occur in production.
  *
  *      Why not the other no-destroy kinds:
- *        - CLOSURE_ENV: callers populate `captures[i]` after alloc
- *          and root-bind the env. Auto-promote would land on the
- *          dead young addr while the OLD copy holds zero captures.
  *        - GENERIC: per-instance trace/destroy callbacks not on the
  *          micro-header.
  *        - MAP/SET/CHANNEL: destroy frees pthread sync state,
@@ -3130,7 +3135,8 @@ static bool osty_gc_young_eligible(int64_t object_kind, size_t payload_size) {
     }
     if (object_kind != OSTY_GC_KIND_STRING &&
         object_kind != OSTY_GC_KIND_BYTES &&
-        object_kind != OSTY_GC_KIND_LIST) {
+        object_kind != OSTY_GC_KIND_LIST &&
+        object_kind != OSTY_GC_KIND_CLOSURE_ENV) {
         return false;
     }
     if (payload_size == 0 ||
