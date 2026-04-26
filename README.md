@@ -189,16 +189,21 @@ osty/
 │   ├── ast/                 # AST node types
 │   ├── parser/              # Thin Go facade + compatibility lowerings over internal/selfhost
 │   ├── selfhost/            # Committed frozen Osty→Go seed (front end + adapters)
+│   ├── cst/                 # Concrete syntax tree (Red/Green tree for lossless round-trip)
+│   ├── query/               # Salsa-style incremental query engine (LSP backbone)
+│   ├── airepair/            # AI-powered source adaptation / auto-repair
 │   ├── diag/                # Diagnostics + Rust-style renderer
 │   ├── resolve/             # Name resolution (single + multi-file)
-│   ├── stdlib/              # Built-in prelude symbols + `modules/*.osty`
+│   ├── stdlib/              # Built-in prelude symbols + 37 `modules/*.osty` + 6 primitives
 │   ├── types/               # Semantic types (shared by checker + LSP)
 │   ├── check/               # Type checker
 │   ├── lint/                # Style/correctness lint rules (L0xxx codes)
 │   ├── format/              # Canonical-style formatter
 │   ├── ir/                  # Independent intermediate representation
+│   ├── mir/                 # Middle-end IR (lowering, escape analysis, optimize)
 │   ├── backend/             # Backend names, emit modes, native artifact layout
 │   ├── llvmgen/             # LLVM bridge generated from Osty toolchain backend logic
+│   ├── nativellvmgen/       # Native LLVM codegen execution
 │   ├── docgen/              # Osty-authored API doc generator (HTML + markdown; `osty doc`)
 │   ├── ci/                  # CI quality tooling (`osty ci`, generated core)
 │   ├── cihost/              # Go host bridge for generated CI core
