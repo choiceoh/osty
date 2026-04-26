@@ -2362,7 +2362,7 @@ func (g *mirGen) emitIndexedWrite(a *mir.AssignInstr, destLoc *mir.Local, ip *mi
 					return nil
 				}
 			}
-			sym := "osty_rt_list_set_" + listRuntimeSymbolSuffix(elemLLVM)
+			sym := mirRtListSetSuffixSymbol(listRuntimeSymbolSuffix(elemLLVM))
 			g.declareRuntime(sym, mirRuntimeDeclareListSetSimpleLine(sym, elemLLVM))
 			g.fnBuf.WriteString(mirCallVoidListPtrI64ValueLine(sym, contReg, idxReg, elemLLVM, valReg))
 			return nil
@@ -3685,10 +3685,10 @@ func (g *mirGen) tryEmitInterfaceDowncast(c *mir.CallInstr, fnRef *mir.FnRef) (b
 	g.fnBuf.WriteString(mirPtrToIntLine(payload, optPtr, "i64"))
 
 	optStep1 := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueAggLine(optStep1, optLLVM, "undef", "i64", disc, "0"))
+	g.fnBuf.WriteString(mirInsertValueI64Line(optStep1, optLLVM, "undef", disc, "0"))
 
 	optFull := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueAggLine(optFull, optLLVM, optStep1, "i64", payload, "1"))
+	g.fnBuf.WriteString(mirInsertValueI64Line(optFull, optLLVM, optStep1, payload, "1"))
 
 	g.fnBuf.WriteString(mirStoreLine(optLLVM, optFull, g.localSlots[c.Dest.Local]))
 	return true, nil
@@ -4685,7 +4685,7 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		if !keyString {
 			suffix = llvmMapKeySuffix(keyLLVM, false)
 		}
-		sym := "osty_rt_map_keys_sorted_" + suffix
+		sym := mirRtMapKeysSortedSuffixSymbol(suffix)
 		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		tmp := g.fresh()
 		g.fnBuf.WriteString(mirCallValuePtrFromPtrLine(tmp, sym, mapReg))
@@ -6194,7 +6194,7 @@ func (g *mirGen) emitSelectSend(i *mir.IntrinsicInstr) error {
 	elemLLVM := g.llvmType(elemT)
 	if listUsesTypedRuntime(elemLLVM) {
 		suffix := llvmListElementSuffix(elemLLVM)
-		sym := "osty_rt_select_send_" + suffix
+		sym := mirRtSelectSendSuffixSymbol(suffix)
 		g.declareRuntime(sym, mirRuntimeDeclareSelectSendLine(sym, elemLLVM))
 		g.fnBuf.WriteString(mirCallVoidSelectSendLine(sym, builderReg, chReg, elemLLVM, valReg, armReg))
 		return nil
@@ -6911,7 +6911,7 @@ func (g *mirGen) emitEnumVariant(rv *mir.AggregateRV, aggT mir.Type) (string, er
 	// Step 1: insert discriminant.
 	disc := strconv.Itoa(rv.VariantIdx)
 	tmp1 := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueAggLine(tmp1, aggLLVM, "undef", "i64", disc, "0"))
+	g.fnBuf.WriteString(mirInsertValueI64Line(tmp1, aggLLVM, "undef", disc, "0"))
 
 	// Step 2: insert payload. For single scalar payloads the value
 	// lives directly in the i64 slot. For no-payload variants we
@@ -6935,7 +6935,7 @@ func (g *mirGen) emitEnumVariant(rv *mir.AggregateRV, aggT mir.Type) (string, er
 		return "", unsupported("mir-mvp", fmt.Sprintf("enum variant with %d payload fields (only scalar / 0-arity supported)", len(rv.Fields)))
 	}
 	tmp2 := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueAggLine(tmp2, aggLLVM, tmp1, "i64", payloadI64, "1"))
+	g.fnBuf.WriteString(mirInsertValueI64Line(tmp2, aggLLVM, tmp1, payloadI64, "1"))
 	return tmp2, nil
 }
 
@@ -7513,7 +7513,7 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 						continue
 					}
 				}
-				sym := "osty_rt_list_get_" + listRuntimeSymbolSuffix(elemLLVM)
+				sym := mirRtListGetSuffixSymbol(listRuntimeSymbolSuffix(elemLLVM))
 				g.declareRuntime(sym, mirRuntimeDeclareLine(elemLLVM, sym, "ptr, i64"))
 				next := g.fresh()
 				g.fnBuf.WriteString(mirCallValueLine(next, elemLLVM, sym,
