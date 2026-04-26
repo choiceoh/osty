@@ -2650,7 +2650,7 @@ pub fn mirFunctionDefineHeader(
     attrs: String,
 ) -> String {
     let attrSuffix = if attrs == "" { "" } else { " " + attrs }
-    "define " + cconv + retLLVM + " @" + name + "(" + paramListJoined + ")" + attrSuffix + " {\n"
+    "define " + cconv + retLLVM + " @" + name + "(" + paramListJoined + ")" + attrSuffix + " \{\n"
 }
 
 /// mirFunctionDefineFooter renders the closing of a function

@@ -149,7 +149,7 @@ pub fn frontTypeReprToString(repr: FrontTypeRepr) -> String {
 pub struct FrontCheckedNode {
     pub node: Int,
     pub kind: String,
-    pub type: FrontTypeRepr,
+    pub typeRepr: FrontTypeRepr,
     pub start: Int,
     pub end: Int,
 }
@@ -157,7 +157,7 @@ pub struct FrontCheckedNode {
 pub struct FrontCheckedBinding {
     pub node: Int,
     pub name: String,
-    pub type: FrontTypeRepr,
+    pub typeRepr: FrontTypeRepr,
     pub mutable: Bool,
     pub start: Int,
     pub end: Int,
@@ -168,7 +168,7 @@ pub struct FrontCheckedSymbol {
     pub kind: String,
     pub name: String,
     pub owner: String,
-    pub type: FrontTypeRepr,
+    pub typeRepr: FrontTypeRepr,
     pub start: Int,
     pub end: Int,
 }
@@ -1310,7 +1310,7 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
         typedNodes.push(FrontCheckedNode {
             node: node.originAst,
             kind,
-            type: tyToRepr(cx.env.tys, node.ty),
+            typeRepr: tyToRepr(cx.env.tys, node.ty),
             start: astNode.start,
             end: astNode.end,
         })
@@ -1321,7 +1321,7 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
         bindings.push(FrontCheckedBinding {
             node: b.node,
             name: b.name,
-            type: tyToRepr(cx.env.tys, b.ty),
+            typeRepr: tyToRepr(cx.env.tys, b.ty),
             mutable: b.mutable,
             start: b.start,
             end: b.end,
@@ -1335,7 +1335,7 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
             kind: s.kind,
             name: s.name,
             owner: s.owner,
-            type: tyToRepr(cx.env.tys, s.ty),
+            typeRepr: tyToRepr(cx.env.tys, s.ty),
             start: s.start,
             end: s.end,
         })
@@ -1381,7 +1381,7 @@ pub fn frontCheckResultBindingType(result: FrontCheckResult, name: String) -> St
     let mut found = ""
     for b in result.bindings {
         if b.name == name {
-            found = frontTypeReprToString(b.type)
+            found = frontTypeReprToString(b.typeRepr)
         }
     }
     found
@@ -1447,7 +1447,7 @@ pub fn selfCheckTypeNameAtOffset(result: FrontCheckResult, offset: Int) -> Strin
     if bestIdx < 0 {
         return ""
     }
-    frontTypeReprToString(result.typedNodes[bestIdx].type)
+    frontTypeReprToString(result.typedNodes[bestIdx].typeRepr)
 }
 
 /// selfCheckLetTypeNameAtOffset returns the declared type-name of the
@@ -1457,7 +1457,7 @@ pub fn selfCheckTypeNameAtOffset(result: FrontCheckResult, offset: Int) -> Strin
 pub fn selfCheckLetTypeNameAtOffset(result: FrontCheckResult, offset: Int) -> String {
     for b in result.bindings {
         if selfCheckOffsetContains(b.start, b.end, offset) {
-            return frontTypeReprToString(b.type)
+            return frontTypeReprToString(b.typeRepr)
         }
     }
     ""
@@ -1515,7 +1515,7 @@ pub fn selfCheckHoverAtOffset(result: FrontCheckResult, offset: Int) -> SelfChec
     if bestIdx >= 0 {
         info.symbolName = result.symbols[bestIdx].name
         info.symbolKind = result.symbols[bestIdx].kind
-        info.symbolType = frontTypeReprToString(result.symbols[bestIdx].type)
+        info.symbolType = frontTypeReprToString(result.symbols[bestIdx].typeRepr)
     }
     info
 }
