@@ -34,6 +34,17 @@
 #include <string.h>
 #include <time.h>
 
+/* NEON SIMD intrinsics for the SwissTable Map probe. ARM64 / Apple
+ * Silicon ships them by default; on x86_64 we fall back to a scalar
+ * group probe that still uses the same control-byte layout but
+ * iterates byte-by-byte. */
+#if defined(__aarch64__) || defined(__ARM_NEON)
+#include <arm_neon.h>
+#define OSTY_RT_MAP_HAS_NEON 1
+#else
+#define OSTY_RT_MAP_HAS_NEON 0
+#endif
+
 #if !defined(_WIN32)
 #include <sys/mman.h>
 /* `MAP_ANON` is the BSD/macOS spelling; `MAP_ANONYMOUS` is the GNU
@@ -486,7 +497,35 @@ typedef struct osty_rt_list {
     unsigned char inline_storage[OSTY_RT_LIST_INLINE_BYTES];
 } osty_rt_list;
 
+/* SwissTable layout — replaces the previous parallel `index_slots[]`
+ * (i64 slot+1) + `index_hashes[]` (u32 fingerprint) arrays with two
+ * narrower arrays designed for SIMD-parallel probing:
+ *
+ *   - `ctrl[]`: 1 byte per entry. Top bit set ⇒ sentinel:
+ *       0xFF = empty (probe terminates here)
+ *       0xFE = tombstone (skip but probe continues)
+ *     Top bit clear ⇒ full, with low 7 bits = fingerprint
+ *     (top 7 bits of the hash above the bucket selector).
+ *
+ *   - `slots[]`: u32 per entry, the index into `keys[]`/`values[]`.
+ *     Only meaningful when the paired ctrl byte is full.
+ *
+ * Probe iterates 16-byte groups: `vld1q_u8` loads 16 ctrl bytes,
+ * `vceqq_u8` parallel-compares against the broadcast query
+ * fingerprint, the `vshrn_n_u16` movemask trick collapses the
+ * 16-byte mask to a 64-bit lane mask, and `__builtin_ctzll`
+ * iterates set lanes. `index_cap` is always a power of 2 ≥ 16, so
+ * groups are aligned and traversal never crosses the cap boundary.
+ *
+ * Memory: 64-cap index = 64 ctrl + 256 slots = 320 bytes (5 cache
+ * lines), vs the old 64×8 + 64×4 = 768 bytes (12 cache lines). One
+ * NEON load covers an entire group. */
+
 #define OSTY_RT_MAP_INLINE_INDEX_CAP 64
+#define OSTY_RT_MAP_GROUP_SIZE 16
+#define OSTY_RT_MAP_CTRL_EMPTY 0xFFu
+#define OSTY_RT_MAP_CTRL_TOMBSTONE 0xFEu
+#define OSTY_RT_MAP_FINGERPRINT_MASK 0x7Fu
 
 typedef struct osty_rt_map {
     int64_t len;
@@ -497,22 +536,22 @@ typedef struct osty_rt_map {
     osty_rt_trace_slot_fn value_trace;
     unsigned char *keys;
     unsigned char *values;
-    // Lookup side index: open-addressed hash table storing slot+1 so
-    // `Map` keeps its insertion-ordered key/value arrays while get /
-    // contains / insert avoid an O(n) scan once the map grows past the
-    // tiny-list regime.
     int64_t index_cap;
     int64_t index_len;
-    int64_t *index_slots;
-    uint32_t *index_hashes;
-    int64_t index_inline[OSTY_RT_MAP_INLINE_INDEX_CAP];
-    uint32_t index_hashes_inline[OSTY_RT_MAP_INLINE_INDEX_CAP];
-    // Per-map recursive mutex. Public ops elide it while the runtime
-    // is still single-threaded, then enable it permanently on first
-    // task spawn so concurrent mutation can't realloc the slot arrays
-    // mid-read, drop the len mid-walk, or interleave an insert's
-    // memmove. Recursive so that `update` callbacks that touch the
-    // same map from within the lock don't self-deadlock.
+    uint8_t *ctrl;
+    uint32_t *slots;
+    /* Inline storage for small maps. The 7-byte trailing pad keeps
+     * the `slots_inline` array u32-aligned without bloating the
+     * struct beyond what the previous layout used (since the old
+     * design carried two 8-byte-aligned arrays anyway). */
+    uint8_t ctrl_inline[OSTY_RT_MAP_INLINE_INDEX_CAP];
+    uint32_t slots_inline[OSTY_RT_MAP_INLINE_INDEX_CAP];
+    /* Per-map recursive mutex. Public ops elide it while the runtime
+     * is still single-threaded, then enable it permanently on first
+     * task spawn so concurrent mutation can't realloc the slot arrays
+     * mid-read, drop the len mid-walk, or interleave an insert's
+     * memmove. Recursive so that `update` callbacks that touch the
+     * same map from within the lock don't self-deadlock. */
     osty_rt_rmu_t mu;
     int mu_init;
 } osty_rt_map;
@@ -3249,11 +3288,11 @@ static void osty_rt_map_trace(void *payload) {
 static void osty_rt_map_destroy(void *payload) {
     osty_rt_map *map = (osty_rt_map *)payload;
     if (map != NULL) {
-        if (map->index_slots != NULL && map->index_slots != map->index_inline) {
-            free(map->index_slots);
+        if (map->ctrl != NULL && map->ctrl != map->ctrl_inline) {
+            free(map->ctrl);
         }
-        if (map->index_hashes != NULL && map->index_hashes != map->index_hashes_inline) {
-            free(map->index_hashes);
+        if (map->slots != NULL && map->slots != map->slots_inline) {
+            free(map->slots);
         }
         free(map->keys);
         free(map->values);
@@ -6871,79 +6910,112 @@ static void *osty_rt_map_key_slot(osty_rt_map *map, int64_t index) {
 }
 
 static void osty_rt_map_index_clear(osty_rt_map *map) {
-    if (map->index_slots != NULL && map->index_slots != map->index_inline) {
-        free(map->index_slots);
+    if (map->ctrl != NULL && map->ctrl != map->ctrl_inline) {
+        free(map->ctrl);
     }
-    if (map->index_hashes != NULL && map->index_hashes != map->index_hashes_inline) {
-        free(map->index_hashes);
+    if (map->slots != NULL && map->slots != map->slots_inline) {
+        free(map->slots);
     }
-    map->index_slots = NULL;
-    map->index_hashes = NULL;
+    map->ctrl = NULL;
+    map->slots = NULL;
     map->index_cap = 0;
     map->index_len = 0;
 }
 
+/* SwissTable insert. Probes 16-byte groups starting at the
+ * fingerprint-derived bucket; first empty/tombstone slot wins.
+ * Caller guarantees `index_cap > 0` and at least one available
+ * slot (load factor management is `osty_rt_map_index_rebuild`'s
+ * job). */
 static void osty_rt_map_index_insert_slot_hashed(osty_rt_map *map, int64_t slot, size_t hash) {
     uint64_t mask = (uint64_t)(map->index_cap - 1);
-    uint64_t idx = (uint64_t)hash & mask;
-    uint32_t fingerprint = osty_rt_map_key_fingerprint(hash);
-    while (map->index_slots[idx] != 0) {
-        idx = (idx + 1) & mask;
+    uint64_t pos = (hash >> 7) & mask;
+    /* Align to group boundary so each iteration loads exactly
+     * 16 ctrl bytes starting from `pos`. */
+    pos &= ~(uint64_t)(OSTY_RT_MAP_GROUP_SIZE - 1);
+    uint8_t fp = (uint8_t)(hash & OSTY_RT_MAP_FINGERPRINT_MASK);
+
+    for (;;) {
+        /* Find first empty (0xFF) or tombstone (0xFE) byte in the
+         * group. Both have the high bit set; full bytes have it
+         * clear. So an "available" slot is any byte ≥ 0x80. We
+         * use the SwissTable trick: subtract 0x80 from each byte;
+         * available bytes become >= 0x00 (no carry), full bytes
+         * wrap via signed-overflow producing a "negative" byte
+         * value. The high-bit mask of the result identifies
+         * available bytes. NEON makes this trivial via `vcgeq`
+         * against 0x80; scalar fallback below.
+         *
+         * For correctness it's enough to find ANY available byte;
+         * we don't need to prefer empty over tombstone (insertion
+         * sequence walks groups left-to-right, eventually
+         * reclaiming tombstones in subsequent rebuilds). */
+        for (int lane = 0; lane < OSTY_RT_MAP_GROUP_SIZE; lane++) {
+            uint8_t c = map->ctrl[pos + lane];
+            if ((c & 0x80) != 0) {
+                map->ctrl[pos + lane] = fp;
+                map->slots[pos + lane] = (uint32_t)slot;
+                map->index_len += 1;
+                return;
+            }
+        }
+        pos = (pos + OSTY_RT_MAP_GROUP_SIZE) & mask;
     }
-    map->index_slots[idx] = slot + 1;
-    map->index_hashes[idx] = fingerprint;
-    map->index_len += 1;
+}
+
+static void osty_rt_map_index_fill_empty(uint8_t *ctrl, int64_t cap) {
+    memset(ctrl, OSTY_RT_MAP_CTRL_EMPTY, (size_t)cap);
 }
 
 static void osty_rt_map_index_rebuild(osty_rt_map *map, int64_t live_len) {
-    int64_t cap = 8;
+    int64_t cap = OSTY_RT_MAP_GROUP_SIZE;
     int64_t i;
 
-    if (live_len < 8) {
+    if (live_len < OSTY_RT_MAP_GROUP_SIZE / 2) {
         osty_rt_map_index_clear(map);
         return;
     }
-    while (cap < live_len * 2) {
+    /* Target ~75% load factor (cap = ⌈len * 4/3⌉ rounded up to
+     * power of 2 ≥ 16). SwissTable tolerates higher loads (87.5%)
+     * but this matches the previous design's headroom and keeps
+     * the resize threshold predictable. */
+    while (cap < live_len + (live_len + 2) / 3) {
         if (cap > INT64_MAX / 2) {
             cap = live_len * 2;
             break;
         }
         cap *= 2;
     }
-    if (cap <= 0) {
+    if (cap <= 0 || cap < OSTY_RT_MAP_GROUP_SIZE) {
         osty_rt_abort("map index capacity overflow");
     }
     if (cap <= OSTY_RT_MAP_INLINE_INDEX_CAP) {
-        if (map->index_slots != NULL && map->index_slots != map->index_inline) {
-            free(map->index_slots);
+        if (map->ctrl != NULL && map->ctrl != map->ctrl_inline) {
+            free(map->ctrl);
         }
-        if (map->index_hashes != NULL && map->index_hashes != map->index_hashes_inline) {
-            free(map->index_hashes);
+        if (map->slots != NULL && map->slots != map->slots_inline) {
+            free(map->slots);
         }
-        map->index_slots = map->index_inline;
-        map->index_hashes = map->index_hashes_inline;
-        memset(map->index_slots, 0, (size_t)cap * sizeof(int64_t));
-        memset(map->index_hashes, 0, (size_t)cap * sizeof(uint32_t));
+        map->ctrl = map->ctrl_inline;
+        map->slots = map->slots_inline;
+        osty_rt_map_index_fill_empty(map->ctrl, cap);
         map->index_cap = cap;
     } else {
-        if (map->index_cap != cap || map->index_slots == NULL || map->index_slots == map->index_inline ||
-            map->index_hashes == NULL || map->index_hashes == map->index_hashes_inline) {
-            if (map->index_slots != NULL && map->index_slots != map->index_inline) {
-                free(map->index_slots);
+        if (map->index_cap != cap || map->ctrl == NULL || map->ctrl == map->ctrl_inline) {
+            if (map->ctrl != NULL && map->ctrl != map->ctrl_inline) {
+                free(map->ctrl);
             }
-            if (map->index_hashes != NULL && map->index_hashes != map->index_hashes_inline) {
-                free(map->index_hashes);
+            if (map->slots != NULL && map->slots != map->slots_inline) {
+                free(map->slots);
             }
-            map->index_slots = (int64_t *)calloc((size_t)cap, sizeof(int64_t));
-            map->index_hashes = (uint32_t *)calloc((size_t)cap, sizeof(uint32_t));
-            if (map->index_slots == NULL || map->index_hashes == NULL) {
+            map->ctrl = (uint8_t *)malloc((size_t)cap);
+            map->slots = (uint32_t *)malloc((size_t)cap * sizeof(uint32_t));
+            if (map->ctrl == NULL || map->slots == NULL) {
                 osty_rt_abort("out of memory");
             }
             map->index_cap = cap;
-        } else {
-            memset(map->index_slots, 0, (size_t)map->index_cap * sizeof(int64_t));
-            memset(map->index_hashes, 0, (size_t)map->index_cap * sizeof(uint32_t));
         }
+        osty_rt_map_index_fill_empty(map->ctrl, cap);
     }
     map->index_len = 0;
     for (i = 0; i < map->len; i++) {
@@ -6991,35 +7063,89 @@ static OSTY_HOT_INLINE int64_t osty_rt_map_find_index_linear(osty_rt_map *map, c
     return -1;
 }
 
-/* OSTY_HOT_INLINE: this is the Map probe loop body. Inlining it at
- * each keyed wrapper call site lets ThinLTO specialize the loop on
- * the wrapper's constant `key_kind` field (folding the dispatch in
- * `osty_rt_value_equals` and `osty_rt_map_key_hash` to the matching
- * arm), and CSE the load of `map->index_cap` / `map->index_slots`
- * etc. against neighbouring map struct accesses. Code growth at the
- * call site is bounded by ThinLTO's import-instr-limit (500 post-#898);
- * the probe body is well under that even with inlines pulled in. */
+/* SwissTable probe with NEON SIMD parallel ctrl byte compare.
+ *
+ * Each iteration loads a 16-byte group of ctrl bytes via `vld1q_u8`,
+ * broadcasts the 7-bit query fingerprint via `vdupq_n_u8`, and runs
+ * `vceqq_u8` to produce a 16-byte mask of lane-wise matches. The
+ * `vshrn_n_u16` movemask trick collapses the 16-byte mask to a
+ * 64-bit value where each 4-bit nibble is `0xF` (match) or `0x0`
+ * (no match). `__builtin_ctzll` then iterates set lanes in O(1)
+ * per match.
+ *
+ * Probe terminates when the loaded group contains any 0xFF (empty)
+ * byte — those are detected via a parallel `vceqq_u8` against the
+ * empty sentinel. Tombstones (0xFE) are skipped by the fingerprint
+ * mismatch (their high bit is set so they never match a 7-bit
+ * fingerprint).
+ *
+ * x86_64 fallback (Windows builds) walks the group byte-by-byte;
+ * the runtime works correctness-wise but loses the SIMD speedup. */
 static OSTY_HOT_INLINE int64_t osty_rt_map_find_index_indexed(osty_rt_map *map, const void *key) {
     size_t key_hash = osty_rt_map_key_hash(map->key_kind, key);
-    uint32_t key_fingerprint = osty_rt_map_key_fingerprint(key_hash);
+    uint8_t fp = (uint8_t)(key_hash & OSTY_RT_MAP_FINGERPRINT_MASK);
     size_t key_size = osty_rt_kind_size(map->key_kind);
     uint64_t mask = (uint64_t)(map->index_cap - 1);
-    uint64_t idx = (uint64_t)key_hash & mask;
+    uint64_t pos = (key_hash >> 7) & mask;
+    pos &= ~(uint64_t)(OSTY_RT_MAP_GROUP_SIZE - 1);
 
+#if OSTY_RT_MAP_HAS_NEON
+    uint8x16_t fp_vec = vdupq_n_u8(fp);
+    uint8x16_t empty_vec = vdupq_n_u8(OSTY_RT_MAP_CTRL_EMPTY);
     for (;;) {
-        int64_t entry = map->index_slots[idx];
-        int64_t slot;
-        if (entry == 0) {
+        uint8x16_t ctrl_vec = vld1q_u8(&map->ctrl[pos]);
+        /* Match mask: byte == fp ⇒ 0xFF, else 0x00. Compress 16
+         * bytes to 8 bytes (each lane → 4 bits of high-nibble)
+         * via `vshrn_n_u16`, read as u64. Each set nibble = match
+         * at that lane. */
+        uint8x16_t match_vec = vceqq_u8(ctrl_vec, fp_vec);
+        uint64_t match_mask = vget_lane_u64(
+            vreinterpret_u64_u8(vshrn_n_u16(vreinterpretq_u16_u8(match_vec), 4)),
+            0);
+        while (match_mask != 0) {
+            int lane_x4 = __builtin_ctzll(match_mask);
+            int lane = lane_x4 >> 2;
+            match_mask &= ~(0xFULL << lane_x4);
+            uint32_t slot = map->slots[pos + (uint64_t)lane];
+            if ((int64_t)slot < map->len &&
+                osty_rt_value_equals(osty_rt_map_key_slot(map, (int64_t)slot),
+                                     key, key_size, map->key_kind)) {
+                return (int64_t)slot;
+            }
+        }
+        /* Probe terminates here if any byte in the group is empty.
+         * Empty implies "the key was never inserted into this
+         * probe sequence" — tombstones don't terminate. */
+        uint8x16_t empty_match = vceqq_u8(ctrl_vec, empty_vec);
+        if (vmaxvq_u8(empty_match) != 0) {
             return -1;
         }
-        slot = entry - 1;
-        if (slot >= 0 && slot < map->len &&
-            map->index_hashes[idx] == key_fingerprint &&
-            osty_rt_value_equals(osty_rt_map_key_slot(map, slot), key, key_size, map->key_kind)) {
-            return slot;
-        }
-        idx = (idx + 1) & mask;
+        pos = (pos + OSTY_RT_MAP_GROUP_SIZE) & mask;
     }
+#else
+    /* Scalar fallback for x86_64 / non-NEON. Same SwissTable
+     * semantics, just without the parallel compare. */
+    for (;;) {
+        bool saw_empty = false;
+        for (int lane = 0; lane < OSTY_RT_MAP_GROUP_SIZE; lane++) {
+            uint8_t c = map->ctrl[pos + (uint64_t)lane];
+            if (c == fp) {
+                uint32_t slot = map->slots[pos + (uint64_t)lane];
+                if ((int64_t)slot < map->len &&
+                    osty_rt_value_equals(osty_rt_map_key_slot(map, (int64_t)slot),
+                                         key, key_size, map->key_kind)) {
+                    return (int64_t)slot;
+                }
+            } else if (c == OSTY_RT_MAP_CTRL_EMPTY) {
+                saw_empty = true;
+            }
+        }
+        if (saw_empty) {
+            return -1;
+        }
+        pos = (pos + OSTY_RT_MAP_GROUP_SIZE) & mask;
+    }
+#endif
 }
 
 /* OSTY_HOT_INLINE on the dispatcher only — `find_index_indexed` (with
@@ -7030,7 +7156,7 @@ static OSTY_HOT_INLINE int64_t osty_rt_map_find_index_indexed(osty_rt_map *map, 
  * itself is just a branch + call, worth always inlining so the
  * branch can fold to the indexed path once `index_cap > 0`. */
 static OSTY_HOT_INLINE int64_t osty_rt_map_find_index(osty_rt_map *map, const void *key) {
-    if (map->index_cap > 0 && map->index_slots != NULL) {
+    if (map->index_cap > 0 && map->ctrl != NULL) {
         return osty_rt_map_find_index_indexed(map, key);
     }
     return osty_rt_map_find_index_linear(map, key);
@@ -7058,8 +7184,8 @@ void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, 
     map->value_trace = value_trace;
     map->index_cap = 0;
     map->index_len = 0;
-    map->index_slots = NULL;
-    map->index_hashes = NULL;
+    map->ctrl = NULL;
+    map->slots = NULL;
     osty_rt_map_mutex_init_or_abort(map);
     return map;
 }
@@ -7138,7 +7264,7 @@ static OSTY_HOT_INLINE void osty_rt_map_insert_raw(void *raw_map, const void *ke
     memcpy(osty_rt_map_value_slot(map, index), value, map->value_size);
     if (inserted) {
         if (map->len >= 8) {
-            if (map->index_cap == 0 || map->index_slots == NULL || map->index_hashes == NULL ||
+            if (map->index_cap == 0 || map->ctrl == NULL ||
                 (map->index_len + 1) * 10 >= map->index_cap * 7) {
                 osty_rt_map_index_rebuild(map, map->len);
             } else {
@@ -7168,7 +7294,7 @@ static bool osty_rt_map_remove_raw(void *raw_map, const void *key) {
         memmove(osty_rt_map_value_slot(map, index), osty_rt_map_value_slot(map, index + 1), (size_t)(map->len - index - 1) * value_size);
     }
     map->len -= 1;
-    if (map->index_cap != 0 || map->index_slots != NULL) {
+    if (map->index_cap != 0 || map->ctrl != NULL) {
         osty_rt_map_index_rebuild(map, map->len);
     }
     return true;
