@@ -1793,8 +1793,8 @@ func mirTerminatorBranchConditional(condReg, thenLabel, elseLabel, loopMDRef str
 	return head + "\n"
 }
 
-// Osty: MirSwitchCase
-type MirSwitchCase struct {
+// Osty: MirGenSwitchCase
+type MirGenSwitchCase struct {
 	ValueText   string
 	TargetLabel string
 }
@@ -1805,7 +1805,7 @@ type MirSwitchCase struct {
 // `out += ...` shape the Osty source uses literally — large enum
 // dispatches with hundreds of cases would otherwise be O(n²) on the
 // Go side. The emitted bytes are identical.
-func mirTerminatorSwitchInt(llvmType, scrutReg, defaultLabel string, cases []MirSwitchCase) string {
+func mirTerminatorSwitchInt(llvmType, scrutReg, defaultLabel string, cases []MirGenSwitchCase) string {
 	var b llvmStrings.Builder
 	b.WriteString("  switch ")
 	b.WriteString(llvmType)

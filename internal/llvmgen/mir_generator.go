@@ -6620,9 +6620,9 @@ func (g *mirGen) emitTerm(t mir.Terminator) error {
 			return err
 		}
 		llvmT := g.llvmType(scrutT)
-		cases := make([]MirSwitchCase, len(x.Cases))
+		cases := make([]MirGenSwitchCase, len(x.Cases))
 		for i, c := range x.Cases {
-			cases[i] = MirSwitchCase{
+			cases[i] = MirGenSwitchCase{
 				ValueText:   strconv.FormatInt(c.Value, 10),
 				TargetLabel: g.blockLabels[c.Target],
 			}
