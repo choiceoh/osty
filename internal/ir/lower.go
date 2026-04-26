@@ -107,6 +107,16 @@ type lowerer struct {
 
 	// issues collects non-fatal issues.
 	issues []error
+
+	// bindingPatTypes records the inferred IR-side type for `let
+	// p = <expr>` bindings keyed by the binding pattern node. The
+	// embedded selfhost checker doesn't populate `Types[ident]` /
+	// `SymTypes[sym]` for value-bound idents whose Symbol.Decl is
+	// the IdentPat (rather than the LetStmt), so `lowerIdent`'s
+	// last-resort fallback consults this map by walking the symbol
+	// to its IdentPat and looking up the type the lowerer recorded
+	// when it processed the LetStmt earlier in the same function.
+	bindingPatTypes map[*ast.IdentPat]Type
 }
 
 // ==== Top level ====
@@ -888,33 +898,52 @@ func (l *lowerer) lowerBlock(b *ast.Block) *Block {
 	}
 	if es, ok := last.(*ast.ExprStmt); ok && l.expressionYieldsValue(es.X) {
 		out.Result = l.lowerExpr(es.X)
-	} else {
-		out.Stmts = append(out.Stmts, l.lowerStmt(last))
+		return out
 	}
+	out.Stmts = append(out.Stmts, l.lowerStmt(last))
 	return out
 }
 
 // expressionYieldsValue reports whether treating the expression as a
 // block-final implicit result is appropriate: the checker assigned it
-// a non-unit type.
+// a non-unit type, or — when the checker didn't cover this surface
+// — its syntactic shape unambiguously evaluates to a value.
 func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 	if l.chk == nil {
 		// No checker; be conservative: don't promote.
 		return false
 	}
-	t := l.chk.Types[e]
-	if t == nil {
-		return false
-	}
-	if p, ok := t.(*types.Primitive); ok {
-		if p.Kind == types.PUnit || p.Kind == types.PNever {
-			return false
+	if t := l.chk.Types[e]; t != nil {
+		if p, ok := t.(*types.Primitive); ok {
+			if p.Kind == types.PUnit || p.Kind == types.PNever {
+				return false
+			}
 		}
+		if _, ok := t.(*types.Error); !ok {
+			return true
+		}
+		// Error type: fall through to the syntactic fallback so
+		// non-error literal shapes still promote when the checker
+		// didn't infer them.
 	}
-	if _, ok := t.(*types.Error); ok {
-		return false
+	// Syntactic fallback: the embedded selfhost checker doesn't
+	// always populate `Types[e]` for expressions in tail-of-block
+	// position (notably `StructLit` interior surfaces). For shapes
+	// that always evaluate to a value of definite non-unit type,
+	// promote them to `Block.Result` even when the checker entry is
+	// missing or error-typed — otherwise `mir.Lower` treats the body
+	// as returning Unit and emits `unreachable` in place of the
+	// value return, producing IR that fails LLVM verification for
+	// any non-Unit return type. Restricted to shapes that always
+	// evaluate to a value (no Block / IfExpr / MatchExpr — those
+	// have their own promotion paths).
+	switch e.(type) {
+	case *ast.StructLit, *ast.IntLit, *ast.FloatLit, *ast.StringLit,
+		*ast.CharLit, *ast.BoolLit, *ast.ListExpr, *ast.MapExpr,
+		*ast.TupleExpr, *ast.RangeExpr:
+		return true
 	}
-	return true
+	return false
 }
 
 func (l *lowerer) lowerStmt(s ast.Stmt) Stmt {
@@ -983,7 +1012,56 @@ func (l *lowerer) lowerLetStmt(s *ast.LetStmt) Stmt {
 			out.Type = out.Value.Type()
 		}
 	}
+	// Record the inferred binding-pattern type so later references
+	// to the same name in this function can recover their type via
+	// the resolver Symbol → IdentPat → recorded type chain. The
+	// embedded selfhost checker doesn't always populate `Types[lit]`
+	// for the let RHS, so when the IR-side `out.Type` is poisoned we
+	// fall back to deriving the type from the AST shape directly
+	// (StructLit head ident → `&NamedType{Name: ...}`). Only the
+	// bare `let x = <expr>` shape is recorded; richer patterns
+	// (tuple / struct destructure) carry a different per-element
+	// shape and would need a structured recovery pass.
+	if ip, ok := s.Pattern.(*ast.IdentPat); ok && ip != nil {
+		recorded := out.Type
+		if recorded == nil || recorded == ErrTypeVal {
+			recorded = bindingTypeFromAST(s.Value)
+		}
+		if recorded != nil && recorded != ErrTypeVal {
+			if l.bindingPatTypes == nil {
+				l.bindingPatTypes = map[*ast.IdentPat]Type{}
+			}
+			l.bindingPatTypes[ip] = recorded
+		}
+	}
 	return out
+}
+
+// bindingTypeFromAST derives a syntactic IR Type from a let RHS
+// expression when the checker hasn't populated the per-node Types
+// map. Conservative: only handles shapes whose syntactic head names
+// the type unambiguously (StructLit, Type-named call). Returns nil
+// for anything else.
+func bindingTypeFromAST(e ast.Expr) Type {
+	switch n := e.(type) {
+	case *ast.StructLit:
+		if n == nil {
+			return nil
+		}
+		switch h := n.Type.(type) {
+		case *ast.Ident:
+			if h.Name != "" {
+				return &NamedType{Name: h.Name}
+			}
+		case *ast.FieldExpr:
+			if h.Name != "" {
+				return &NamedType{Name: h.Name}
+			}
+		}
+	case *ast.ParenExpr:
+		return bindingTypeFromAST(n.X)
+	}
+	return nil
 }
 
 // simpleBindName returns (name, true) when the pattern is just a bare
@@ -1728,14 +1806,27 @@ func (l *lowerer) tryLowerBuilderChain(call *ast.CallExpr, build *ast.FieldExpr)
 			if len(inner.Args) != 0 {
 				return nil
 			}
+			// Lower the receiver up front so we can use the IR expr's
+			// type as a fallback when AST-side struct-decl lookup
+			// fails — the embedded selfhost checker doesn't always
+			// populate `Types[ident]` for value-bound idents (`let p
+			// = Point{...}` followed by `p.toBuilder()`). The lowered
+			// IR Ident's `T` field is filled by `lowerIdent`'s
+			// `bindingPatTypes` fallback whenever the binding's
+			// resolver Symbol points at an `IdentPat` recorded by
+			// `lowerLetStmt`.
+			recv := l.lowerExpr(fe.X)
 			sd := l.structDeclFromReceiver(fe.X)
+			if sd == nil && recv != nil {
+				sd = l.structDeclByType(recv.Type())
+			}
 			if sd == nil {
 				return nil
 			}
 			if !check.ClassifyBuilderDerive(sd).Derivable {
 				return nil
 			}
-			return l.lowerBuilderStructLit(call, sd, l.lowerExpr(fe.X), setters)
+			return l.lowerBuilderStructLit(call, sd, recv, setters)
 		}
 		if len(inner.Args) != 1 {
 			return nil
@@ -1775,8 +1866,103 @@ func (l *lowerer) structDeclFromReceiver(e ast.Expr) *ast.StructDecl {
 		}
 	case *ast.ParenExpr:
 		return l.structDeclFromReceiver(n.X)
+	case *ast.Ident:
+		// Type-name idents resolve directly via the resolver symbol.
+		if sd := l.structDeclByIdent(n); sd != nil {
+			return sd
+		}
+		// Value-bound idents (let p = Point{...}) carry their inferred
+		// type on the per-node Types map or on the resolver Symbol's
+		// SymTypes entry. Mirror the lowerIdent fallback chain so
+		// `p.toBuilder()` resolves to Point's StructDecl when one of
+		// those maps covers the receiver.
+		if sd := l.structDeclByType(l.exprType(e)); sd != nil {
+			return sd
+		}
+		if l.chk != nil {
+			if sym := l.symbol(n); sym != nil {
+				if st := l.chk.SymTypes[sym]; st != nil {
+					if sd := l.structDeclByType(l.fromCheckerType(st)); sd != nil {
+						return sd
+					}
+				}
+				// Walk to the declared type on the symbol's
+				// declaration node. Covers `let p: Point = ...` and
+				// `fn f(p: Point)` with explicit annotations.
+				if sd := l.structDeclFromSymbolDecl(sym); sd != nil {
+					return sd
+				}
+				// Final fallback: consult `bindingPatTypes` populated
+				// by `lowerLetStmt` for the case `let p = Point
+				// {...}` where the binding's `Decl` points at the
+				// IdentPat (without an explicit Type node). Read here
+				// rather than in `lowerIdent` to keep the per-Ident
+				// type-fill path untouched — downstream MIR
+				// mut-receiver write-back logic depends on the
+				// existing ErrTypeVal-poisoned receiver shape and
+				// regresses when value-side idents start carrying
+				// real types via the per-node `T` field.
+				if l.bindingPatTypes != nil {
+					if ip, ok := sym.Decl.(*ast.IdentPat); ok {
+						if t := l.bindingPatTypes[ip]; t != nil {
+							if sd := l.structDeclByType(t); sd != nil {
+								return sd
+							}
+						}
+					}
+				}
+			}
+		}
+		return nil
 	}
 	return l.structDeclByType(l.exprType(e))
+}
+
+// structDeclFromSymbolDecl walks the declaration node carried by a
+// resolved Symbol and extracts the struct decl behind the binding's
+// declared / inferred type. Mirrors the LetStmt / Param branch logic
+// the AST checker uses to seed the `Types` map; callers fall back to
+// this when neither the per-node Types map nor SymTypes covers the
+// receiver's identifier.
+func (l *lowerer) structDeclFromSymbolDecl(sym *resolve.Symbol) *ast.StructDecl {
+	if sym == nil || sym.Decl == nil {
+		return nil
+	}
+	switch d := sym.Decl.(type) {
+	case *ast.LetStmt:
+		if d.Type != nil {
+			return l.structDeclFromTypeNode(d.Type)
+		}
+		return l.structDeclFromReceiver(d.Value)
+	case *ast.LetDecl:
+		if d.Type != nil {
+			return l.structDeclFromTypeNode(d.Type)
+		}
+		return l.structDeclFromReceiver(d.Value)
+	case *ast.Param:
+		if d.Type != nil {
+			return l.structDeclFromTypeNode(d.Type)
+		}
+	}
+	return nil
+}
+
+// structDeclFromTypeNode unwraps an `ast.Type` written in source (e.g.
+// the `Point` in `let p: Point = ...`) and returns its StructDecl.
+// Only the bare `Ident` and `FieldExpr` (qualified) shapes are
+// handled — those are what the receiver chain needs; richer type
+// expressions (Optional, List<T>, etc.) don't resolve to a struct.
+func (l *lowerer) structDeclFromTypeNode(t ast.Type) *ast.StructDecl {
+	switch n := t.(type) {
+	case *ast.NamedType:
+		if len(n.Path) == 1 {
+			return l.structDeclByName(n.Path[0])
+		}
+		if len(n.Path) > 0 {
+			return l.structDeclByName(n.Path[len(n.Path)-1])
+		}
+	}
+	return nil
 }
 
 func (l *lowerer) structDeclByType(t Type) *ast.StructDecl {
