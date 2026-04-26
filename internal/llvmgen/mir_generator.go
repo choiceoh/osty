@@ -2535,6 +2535,15 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 	if handled, err := g.tryEmitInterfaceDowncast(c, fnRef); handled {
 		return err
 	}
+	// Intercept `#[intrinsic_methods]` primitive arithmetic methods.
+	// These are pure branchless LLVM ops (select/icmp/sub) — no C
+	// runtime function call needed. The symbol is mangled as
+	// `Type__method` (e.g. "int__abs"). Mirrors the legacy path in
+	// expr.go which handles toString/toInt/toChar/charPredicate but
+	// does not cover abs/min/max/clamp/signum.
+	if handled, err := g.emitPrimitiveMethodCall(c, fnRef); handled {
+		return err
+	}
 	// Intercept stdlib `std.testing.*` helpers. The legacy AST emitter
 	// inlines these (see stmt.go:emitTestingCallStmt); the MIR path
 	// mirrors that dispatch in-place instead of trying to resolve the
@@ -2580,6 +2589,208 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 		argStrs = append(argStrs, g.llvmType(paramT)+" "+val)
 	}
 	return g.emitCallSiteByName(c, fnRef.Symbol, sig.retLLVM, argStrs)
+}
+
+// emitPrimitiveMethodCall intercepts `#[intrinsic_methods]` integer
+// arithmetic methods (abs, min, max, clamp, signum) and lowers them
+// to branchless LLVM IR. These methods are declared in
+// `primitives/int.osty`, `primitives/char.osty`, and
+// `primitives/bytes.osty` as placeholder bodies; the legacy AST
+// emitter in `expr.go` handles toString/toInt/toChar/charPredicate
+// but not these arithmetic methods, so they fall through to
+// unsupported. The MIR path mirrors that gap and adds the missing
+// lowering here.
+//
+// Supported methods (all branchless):
+//
+//	abs — sub + icmp + select
+//	min / max — icmp + select
+//	clamp — icmp + select (two-pass)
+//	signum — icmp + select (two-pass)
+//
+// Scope: Int/Int64 (i64), Int32/Char (i32), Int16 (i16),
+// Int8/UInt8/Byte (i8). UInt variants: abs/signum are identity
+// (unsigned never negative), min/max/clamp use signed-icmp.
+func (g *mirGen) emitPrimitiveMethodCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
+	sym := fnRef.Symbol
+	if sym == "" {
+		return false, nil
+	}
+
+	// Extract the owner type and method name from the mangled symbol.
+	// Convention: "Type__method" → owner="Type", method="method".
+	owner, method, ok := strings.Cut(sym, "__")
+	if !ok {
+		return false, nil
+	}
+
+	// Only handle integer-like types: Int, Int8, Int16, Int32,
+	// Int64, UInt8, UInt16, UInt32, UInt64, Byte, Char.
+	// Derive the actual LLVM width from the receiver type so that
+	// Int32 emits i32 ops, Int16 emits i16 ops, etc.
+	if len(c.Args) < 1 {
+		return false, nil
+	}
+	recv, err := g.evalOperand(c.Args[0], c.Args[0].Type())
+	if err != nil {
+		return true, err
+	}
+	llvmTy := g.llvmType(c.Args[0].Type())
+
+	var isSigned bool
+	switch owner {
+	case "Int", "Int64", "Int32", "Int16", "Int8", "Char":
+		isSigned = true
+	case "Byte":
+		llvmTy = "i8"
+	default:
+		return false, nil
+	}
+
+	// Emit the branchless body, capturing the result register so we
+	// can store it into the destination. g.fresh() must be called
+	// once and reused — never call it inline in a string concatenation.
+	var body string
+	var resultReg string
+	switch method {
+	case "abs":
+		if !isSigned {
+			// abs on unsigned is identity.
+			return g.storePrimitiveResult(c, recv)
+		}
+		resultReg = g.fresh()
+		switch llvmTy {
+		case "i64":
+			body = mirAbsI64Line(g.fresh(), g.fresh(), recv, resultReg)
+		case "i32":
+			body = mirAbsI32Line(g.fresh(), g.fresh(), recv, resultReg)
+		case "i16":
+			body = mirAbsI16Line(g.fresh(), g.fresh(), recv, resultReg)
+		default: // i8
+			body = mirAbsI8Line(g.fresh(), g.fresh(), recv, resultReg)
+		}
+
+	case "min":
+		if len(c.Args) < 2 {
+			return true, nil
+		}
+		other, err := g.evalOperand(c.Args[1], c.Args[1].Type())
+		if err != nil {
+			return true, err
+		}
+		resultReg = g.fresh()
+		switch llvmTy {
+		case "i64":
+			body = mirMinI64Line(g.fresh(), recv, other, resultReg)
+		case "i32":
+			body = mirMinI32Line(g.fresh(), recv, other, resultReg)
+		case "i16":
+			body = mirMinI16Line(g.fresh(), recv, other, resultReg)
+		default: // i8
+			body = mirMinI8Line(g.fresh(), recv, other, resultReg)
+		}
+
+	case "max":
+		if len(c.Args) < 2 {
+			return true, nil
+		}
+		other, err := g.evalOperand(c.Args[1], c.Args[1].Type())
+		if err != nil {
+			return true, err
+		}
+		resultReg = g.fresh()
+		switch llvmTy {
+		case "i64":
+			body = mirMaxI64Line(g.fresh(), recv, other, resultReg)
+		case "i32":
+			body = mirMaxI32Line(g.fresh(), recv, other, resultReg)
+		case "i16":
+			body = mirMaxI16Line(g.fresh(), recv, other, resultReg)
+		default: // i8
+			body = mirMaxI8Line(g.fresh(), recv, other, resultReg)
+		}
+
+	case "clamp":
+		// a.clamp(lo, hi) → Args = [a, lo, hi]
+		// a is the receiver (already evaluated).
+		if len(c.Args) < 3 {
+			return true, nil
+		}
+		lo, err := g.evalOperand(c.Args[1], c.Args[1].Type())
+		if err != nil {
+			return true, err
+		}
+		hi, err := g.evalOperand(c.Args[2], c.Args[2].Type())
+		if err != nil {
+			return true, err
+		}
+		// Clamp: val < lo → lo, val > hi → hi, else val.
+		// Branchless two-pass: first upper-bound clamp, then lower-bound clamp.
+		resultReg = g.fresh()
+		switch llvmTy {
+		case "i64":
+			body = mirClampI64Line(g.fresh(), g.fresh(), g.fresh(), resultReg, recv, lo, hi)
+		case "i32":
+			body = mirClampI32Line(g.fresh(), g.fresh(), g.fresh(), resultReg, recv, lo, hi)
+		case "i16":
+			body = mirClampI16Line(g.fresh(), g.fresh(), g.fresh(), resultReg, recv, lo, hi)
+		default: // i8
+			body = mirClampI8Line(g.fresh(), g.fresh(), g.fresh(), resultReg, recv, lo, hi)
+		}
+
+	case "signum":
+		if !isSigned {
+			// signum on unsigned: 0 → 0, else 1.
+			resultReg = g.fresh()
+			eqZero := g.fresh()
+			switch llvmTy {
+			case "i64":
+				body = mirICmpLine(eqZero, "eq", "i64", recv, "0") +
+					mirSelectI64Line(resultReg, eqZero, "0", "1")
+			case "i32":
+				body = mirICmpLine(eqZero, "eq", "i32", recv, "0") +
+					mirSelectLine(resultReg, "i32", eqZero, "0", "1")
+			default:
+				body = mirICmpLine(eqZero, "eq", llvmTy, recv, "0") +
+					mirSelectLine(resultReg, llvmTy, eqZero, "0", "1")
+			}
+		} else {
+			// signum: val > 0 → 1, val < 0 → -1, val == 0 → 0.
+			// Branchless: %gt = icmp sgt val, 0; %lt = icmp slt val, 0;
+			// %pos = select gt, 1, 0; %result = select lt, -1, pos.
+			resultReg = g.fresh()
+			switch llvmTy {
+			case "i64":
+				body = mirSignumI64Line(g.fresh(), g.fresh(), g.fresh(), resultReg, recv)
+			case "i32":
+				body = mirSignumI32Line(g.fresh(), g.fresh(), g.fresh(), resultReg, recv)
+			default:
+				body = mirSignumSignLine(llvmTy, g.fresh(), g.fresh(), g.fresh(), resultReg, recv)
+			}
+		}
+
+	default:
+		return false, nil
+	}
+
+	// Write the emitted lines and store the result.
+	g.fnBuf.WriteString(body)
+	return g.storePrimitiveResult(c, resultReg)
+}
+
+// storePrimitiveResult stores the intrinsic result register into the
+// destination local. Used by emitPrimitiveMethodCall after the
+// branchless body has been written to g.fnBuf.
+func (g *mirGen) storePrimitiveResult(c *mir.CallInstr, resultReg string) (bool, error) {
+	if c.Dest == nil {
+		return true, nil
+	}
+	destLoc := g.fn.Local(c.Dest.Local)
+	if destLoc == nil {
+		return true, nil
+	}
+	g.fnBuf.WriteString(mirStoreLine(g.llvmType(destLoc.Type), resultReg, g.localSlots[c.Dest.Local]))
+	return true, nil
 }
 
 // emitIndirectCall handles calls through a closure env pointer. The
