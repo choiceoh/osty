@@ -6278,17 +6278,9 @@ int main(void) {
 // (flag off / GENERIC / has-destroy / oversized / zero-size) keep
 // behaving as designed even when no production caller uses it yet.
 //
-// Allowed kinds today: STRING, BYTES (immutable byte payloads),
-// LIST (load_v1 PROMOTED follow + cheney self-ref fixup + dead-list
-// scan), CLOSURE_ENV (captures populated synchronously at
-// construction before the env escapes; promote-on-bind copies a
-// fully-populated env to OLD), GENERIC NONE pattern (NULL trace +
-// NULL destroy — opaque payload, nothing for cheney to follow). The
-// debug entry assumes NONE for GENERIC; the production allocator
-// also rejects ENUM_PTR / TASK_HANDLE because the per-instance
-// pattern can't be recovered from the 16-byte micro-header.
-// Rejected: MAP/SET/CHANNEL (have destroy callbacks Cheney can't
-// invoke), humongous (size > threshold).
+// Per-kind eligibility verdicts and rationale live next to
+// `osty_gc_young_eligible` in the runtime — this test pins the
+// verdicts (one row per kind), not the reasoning.
 func TestBundledRuntimeYoungEligibilityFilter(t *testing.T) {
 	parallelClangBackendTest(t)
 
@@ -6375,8 +6367,8 @@ int main(void) {
 				"1 1 1",    // GENERIC: eligible under NONE pattern (debug entry assumes NULL trace/destroy)
 				"1024 1 1", // LIST: eligible (load_v1 PROMOTED follow + cheney self-ref fixup + dead-list scan)
 				"1025 1 1", // STRING: eligible
-				"1026 0 0", // MAP: has destroy (free's keys/values arrays — needs typed sweep)
-				"1027 0 0", // SET: has destroy
+				"1026 0 0", // MAP: has destroy (frees pthread state + key/value arrays — needs typed sweep)
+				"1027 1 1", // SET: eligible (dead-from-space scan frees items buffer; no inline-storage union)
 				"1028 1 1", // BYTES: eligible
 				"1029 1 1", // CLOSURE_ENV: eligible (captures populated synchronously before escape)
 				"1030 0 0", // CHANNEL: has destroy
@@ -6633,6 +6625,125 @@ int main(void) {
 	}, "\n")
 	if got := string(runOutput); got != want {
 		t.Fatalf("generic-none harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestBundledRuntimeSetYoungLifecycle covers the SET young
+// eligibility addition: a fresh `osty_rt_set_new` lands in the young
+// arena, `set_insert_*` keeps working through `osty_gc_load_v1`'s
+// PROMOTED follow after `root_bind` promotes the young Set to OLD,
+// the inserted items survive a forced collect, and the items heap
+// buffer is freed (not leaked) when an UNFORWARDED young Set is
+// reclaimed by `osty_gc_cheney_destroy_dead_from_space`.
+func TestBundledRuntimeSetYoungLifecycle(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_set_young_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_set_young_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_rt_set_new(int64_t elem_kind);
+int64_t osty_rt_set_len(void *raw_set);
+int osty_rt_set_insert_i64(void *raw_set, int64_t item);
+int osty_rt_set_contains_i64(void *raw_set, int64_t item);
+void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+int64_t osty_gc_debug_arena_is_young_page(void *payload);
+int64_t osty_gc_debug_young_forward_tag(void *from_payload);
+int64_t osty_gc_debug_young_cheney_dead_sets_freed_total(void);
+void osty_gc_debug_collect(void);
+
+#define ABI_I64 1
+
+int main(void) {
+    /* Fresh Set goes young. Inserts before root_bind populate the
+     * heap items buffer through the still-young set pointer. */
+    void *raw = osty_rt_set_new(ABI_I64);
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(raw));
+
+    osty_rt_set_insert_i64(raw, 10);
+    osty_rt_set_insert_i64(raw, 20);
+    osty_rt_set_insert_i64(raw, 30);
+
+    /* root_bind promotes the young Set to OLD. The OLD copy carries
+     * the same items pointer (memcpy of payload bytes). */
+    osty_gc_root_bind_v1(raw);
+    printf("%lld\n", (long long)osty_gc_debug_young_forward_tag(raw));
+
+    /* Inserts via the stale young handle work because the typed
+     * insert macros run through osty_rt_set_cast then osty_gc_load_v1,
+     * which follows the PROMOTED tag. Verify the OLD copy got the
+     * write. */
+    osty_rt_set_insert_i64(raw, 40);
+    printf("%lld\n", (long long)osty_rt_set_len(raw));
+    printf("%d %d %d %d\n",
+        osty_rt_set_contains_i64(raw, 10),
+        osty_rt_set_contains_i64(raw, 20),
+        osty_rt_set_contains_i64(raw, 30),
+        osty_rt_set_contains_i64(raw, 40));
+
+    /* Forced collect: cheney_minor processes the (PROMOTED) young
+     * Set, the major mark keeps OLD alive via the root binding, and
+     * the items buffer survives because the OLD copy still owns it. */
+    osty_gc_debug_collect();
+    printf("%lld\n", (long long)osty_rt_set_len(raw));
+
+    /* Allocate + drop a fresh young Set to exercise the dead-Set
+     * cleanup path: insert one item to force items-buffer
+     * allocation, then never root the Set so the next collect
+     * reclaims it as UNFORWARDED. The cleanup counter increments
+     * iff cheney_destroy_dead_from_space ran the SET branch. */
+    int64_t freed_before = osty_gc_debug_young_cheney_dead_sets_freed_total();
+    void *transient = osty_rt_set_new(ABI_I64);
+    osty_rt_set_insert_i64(transient, 99);
+    osty_gc_debug_collect();
+    int64_t freed_after = osty_gc_debug_young_cheney_dead_sets_freed_total();
+    printf("%lld\n", (long long)(freed_after - freed_before));
+
+    /* Release the rooted Set. The OLD copy's destroy fires on the
+     * subsequent collect, freeing items via the headerful destroy
+     * path (not the young dead-Set scan). */
+    osty_gc_root_release_v1(raw);
+    osty_gc_debug_collect();
+
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"1",         // fresh Set landed in young arena
+		"2",         // forward tag = PROMOTED after root_bind
+		"4",         // post-promote insert via stale young handle worked (load_v1 follow)
+		"1 1 1 1",   // all four items contained
+		"4",         // items survived forced collect (still rooted)
+		"1",         // dead-Set cleanup fired on the unrooted transient
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("set-young harness output mismatch\n got: %q\nwant: %q", got, want)
 	}
 }
 
