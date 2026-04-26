@@ -5995,3 +5995,1430 @@ pub fn mirOpLShr() -> String {
 pub fn mirOpAShr() -> String {
     "ashr"
 }
+
+/// §6 cast-op token names — centralise the LLVM cast-instruction
+/// names so a future hypothetical port to a typed-cast model only
+/// touches these.
+
+/// mirCastSExt / ZExt / Trunc return the LLVM op-name tokens for
+/// integer width-changing casts. SExt sign-extends, ZExt zero-
+/// extends, Trunc narrows.
+pub fn mirCastSExt() -> String {
+    "sext"
+}
+
+pub fn mirCastZExt() -> String {
+    "zext"
+}
+
+pub fn mirCastTrunc() -> String {
+    "trunc"
+}
+
+/// mirCastSIToFP / UIToFP / FPToSI / FPToUI return the LLVM op-name
+/// tokens for integer↔float conversions. SI/UI prefixes denote
+/// signed vs unsigned interpretation of the integer side.
+pub fn mirCastSIToFP() -> String {
+    "sitofp"
+}
+
+pub fn mirCastUIToFP() -> String {
+    "uitofp"
+}
+
+pub fn mirCastFPToSI() -> String {
+    "fptosi"
+}
+
+pub fn mirCastFPToUI() -> String {
+    "fptoui"
+}
+
+/// mirCastFPExt / FPTrunc return the LLVM op-name tokens for
+/// floating-point width-changing casts.
+pub fn mirCastFPExt() -> String {
+    "fpext"
+}
+
+pub fn mirCastFPTrunc() -> String {
+    "fptrunc"
+}
+
+/// mirCastBitcast returns `bitcast` — used at type-punning sites
+/// (e.g. RawPtr ↔ Int64 reinterpretation).
+pub fn mirCastBitcast() -> String {
+    "bitcast"
+}
+
+/// mirCastPtrToInt / IntToPtr return the LLVM cast tokens for
+/// pointer↔integer punning. `inttoptr` is used by `RawPtr.fromInt`,
+/// `ptrtoint` by `RawPtr.toInt`.
+pub fn mirCastPtrToInt() -> String {
+    "ptrtoint"
+}
+
+pub fn mirCastIntToPtr() -> String {
+    "inttoptr"
+}
+
+/// mirCastAddrSpace returns `addrspacecast` — the cross-address-
+/// space cast token. Currently unused by Osty's emit (single
+/// address space) but reserved for future GPU / tagged-pointer
+/// experiments.
+pub fn mirCastAddrSpace() -> String {
+    "addrspacecast"
+}
+
+/// §6 terminator-name token helpers.
+
+/// mirTermBr returns `br` — the LLVM unconditional / conditional
+/// branch terminator name.
+pub fn mirTermBr() -> String {
+    "br"
+}
+
+/// mirTermSwitch returns `switch` — the multi-way integer dispatch
+/// terminator name.
+pub fn mirTermSwitch() -> String {
+    "switch"
+}
+
+/// mirTermRet returns `ret` — the function-return terminator name.
+pub fn mirTermRet() -> String {
+    "ret"
+}
+
+/// mirTermUnreachable returns `unreachable` — the LLVM UB-on-reach
+/// terminator. Emitted after panic / abort calls, after exhaustive
+/// switch defaults that the optimiser should eliminate, and after
+/// noreturn calls to inform downstream passes.
+pub fn mirTermUnreachable() -> String {
+    "unreachable"
+}
+
+/// mirTermInvoke returns `invoke` — the LLVM call-with-landing-pad
+/// terminator. Reserved for future structured exception-style
+/// support; currently unused (Osty errors propagate via Result, not
+/// landing pads).
+pub fn mirTermInvoke() -> String {
+    "invoke"
+}
+
+/// mirTermResume returns `resume` — the LLVM unwind-continuation
+/// terminator. Sibling of `mirTermInvoke`; reserved.
+pub fn mirTermResume() -> String {
+    "resume"
+}
+
+/// §6 instruction-name token helpers.
+
+/// mirInstrAlloca / Load / Store return the LLVM memory-instruction
+/// op-name tokens. Centralised so a future flip (e.g. typed-load
+/// model resurrection) only touches these.
+pub fn mirInstrAlloca() -> String {
+    "alloca"
+}
+
+pub fn mirInstrLoad() -> String {
+    "load"
+}
+
+pub fn mirInstrStore() -> String {
+    "store"
+}
+
+/// mirInstrGEP / GEPInBounds return the LLVM getelementptr op-name
+/// tokens. `inbounds` form is the safe-default — emitter uses it
+/// at every well-defined index (e.g. element access on a known-
+/// sized list).
+pub fn mirInstrGEP() -> String {
+    "getelementptr"
+}
+
+pub fn mirInstrGEPInBounds() -> String {
+    "getelementptr inbounds"
+}
+
+/// mirInstrCall / mirInstrCallVoid return the LLVM call-instruction
+/// op-name tokens. The `void` variant is just `call` (LLVM
+/// distinguishes by the return-type slot, not a separate op name)
+/// but the named alias makes intent visible at call sites.
+pub fn mirInstrCall() -> String {
+    "call"
+}
+
+pub fn mirInstrCallVoid() -> String {
+    "call"
+}
+
+/// mirInstrPhi / Select / InsertValue / ExtractValue return the LLVM
+/// SSA-construction op-name tokens.
+pub fn mirInstrPhi() -> String {
+    "phi"
+}
+
+pub fn mirInstrSelect() -> String {
+    "select"
+}
+
+pub fn mirInstrInsertValue() -> String {
+    "insertvalue"
+}
+
+pub fn mirInstrExtractValue() -> String {
+    "extractvalue"
+}
+
+/// mirInstrICmp / FCmp return the LLVM comparison-instruction op-
+/// name tokens. The predicate (eq/ne/slt/...) is composed
+/// separately by `mirICmp*` / `mirFCmp*`.
+pub fn mirInstrICmp() -> String {
+    "icmp"
+}
+
+pub fn mirInstrFCmp() -> String {
+    "fcmp"
+}
+
+/// mirInstrAtomicRMW / CmpXchg / Fence return the LLVM atomic-
+/// instruction op-name tokens. Currently unused by Osty's emit
+/// (Mutex / Once / atomic-counter primitives go through the
+/// runtime ABI) but reserved for future first-class atomic typing.
+pub fn mirInstrAtomicRMW() -> String {
+    "atomicrmw"
+}
+
+pub fn mirInstrCmpXchg() -> String {
+    "cmpxchg"
+}
+
+pub fn mirInstrFence() -> String {
+    "fence"
+}
+
+/// §6 atomic ordering tokens — used by the Mutex / atomic primitives
+/// once they migrate from the runtime shim to first-class LLVM
+/// atomic ops.
+
+/// mirAtomicUnordered / Monotonic / Acquire / Release / AcqRel /
+/// SeqCst return the LLVM atomic-ordering tokens.
+pub fn mirAtomicUnordered() -> String {
+    "unordered"
+}
+
+pub fn mirAtomicMonotonic() -> String {
+    "monotonic"
+}
+
+pub fn mirAtomicAcquire() -> String {
+    "acquire"
+}
+
+pub fn mirAtomicRelease() -> String {
+    "release"
+}
+
+pub fn mirAtomicAcqRel() -> String {
+    "acq_rel"
+}
+
+pub fn mirAtomicSeqCst() -> String {
+    "seq_cst"
+}
+
+/// §6 typed-return shape helpers.
+
+/// mirRetTypedLine renders `  ret <ty> <val>\n`. Centralises the
+/// canonical typed-value-return shape; specialised siblings
+/// (`mirReturnI64Line` etc.) call through here. Sibling of the
+/// existing void-return / unreachable / br shape helpers earlier
+/// in this file — those continue to live at their original sites
+/// for byte-stable provenance.
+pub fn mirRetTypedLine(ty: String, val: String) -> String {
+    "  " + mirTermRet() + " " + ty + " " + val + "\n"
+}
+
+/// §6 unconditional-branch shape helper — drain inline `br ...` writes.
+
+/// mirBrLabelLine renders `  br label %<dst>\n` — the canonical
+/// unconditional branch line. Sibling of `mirBrUncondToHeadLine` /
+/// `mirBrUncondToEndLine` named generically.
+pub fn mirBrLabelLine(dst: String) -> String {
+    "  " + mirTermBr() + " label %" + dst + "\n"
+}
+
+/// §6 switch-shape helpers.
+
+/// mirSwitchHeaderLine renders the switch-header line:
+///   `  switch <ty> <val>, label %<defaultLbl> [\n`
+/// Caller follows up with case lines + `mirSwitchFooterLine`.
+pub fn mirSwitchHeaderLine(ty: String, val: String, defaultLbl: String) -> String {
+    "  " + mirTermSwitch() + " " + ty + " " + val + ", label %" + defaultLbl + " [\n"
+}
+
+/// mirSwitchCaseLine renders one switch-case line:
+///   `    <ty> <val>, label %<caseLbl>\n`
+/// 4-space indent (under the switch header).
+pub fn mirSwitchCaseLine(ty: String, val: String, caseLbl: String) -> String {
+    "    " + ty + " " + val + ", label %" + caseLbl + "\n"
+}
+
+/// mirSwitchFooterLine renders the closing `  ]\n` of the switch
+/// block.
+pub fn mirSwitchFooterLine() -> String {
+    "  ]\n"
+}
+
+/// §6 LLVM math-intrinsic name helpers.
+
+/// mirIntrinsicLLVMSqrtF64 / SqrtF32 return the LLVM math-intrinsic
+/// names for the `sqrt` family. Used by `Math.sqrt` lowering on the
+/// Float64 / Float32 paths.
+pub fn mirIntrinsicLLVMSqrtF64() -> String {
+    "llvm.sqrt.f64"
+}
+
+pub fn mirIntrinsicLLVMSqrtF32() -> String {
+    "llvm.sqrt.f32"
+}
+
+/// mirIntrinsicLLVMFAbsF64 / FAbsF32 return the floating-point
+/// absolute-value intrinsic names.
+pub fn mirIntrinsicLLVMFAbsF64() -> String {
+    "llvm.fabs.f64"
+}
+
+pub fn mirIntrinsicLLVMFAbsF32() -> String {
+    "llvm.fabs.f32"
+}
+
+/// mirIntrinsicLLVMFMAF64 / FMAF32 return the fused-multiply-add
+/// intrinsic names.
+pub fn mirIntrinsicLLVMFMAF64() -> String {
+    "llvm.fma.f64"
+}
+
+pub fn mirIntrinsicLLVMFMAF32() -> String {
+    "llvm.fma.f32"
+}
+
+/// mirIntrinsicLLVMSinF64 / CosF64 / TanF64 return the trig
+/// intrinsic names. Used by `Math.sin` / `cos` / `tan` lowering.
+pub fn mirIntrinsicLLVMSinF64() -> String {
+    "llvm.sin.f64"
+}
+
+pub fn mirIntrinsicLLVMCosF64() -> String {
+    "llvm.cos.f64"
+}
+
+pub fn mirIntrinsicLLVMTanF64() -> String {
+    "llvm.tan.f64"
+}
+
+/// mirIntrinsicLLVMLogF64 / Log2F64 / Log10F64 return the logarithm
+/// intrinsic names.
+pub fn mirIntrinsicLLVMLogF64() -> String {
+    "llvm.log.f64"
+}
+
+pub fn mirIntrinsicLLVMLog2F64() -> String {
+    "llvm.log2.f64"
+}
+
+pub fn mirIntrinsicLLVMLog10F64() -> String {
+    "llvm.log10.f64"
+}
+
+/// mirIntrinsicLLVMExpF64 / Exp2F64 return the exponential intrinsic
+/// names.
+pub fn mirIntrinsicLLVMExpF64() -> String {
+    "llvm.exp.f64"
+}
+
+pub fn mirIntrinsicLLVMExp2F64() -> String {
+    "llvm.exp2.f64"
+}
+
+/// mirIntrinsicLLVMPowF64 / PowI64 return the power intrinsic names.
+/// `pow.f64` takes two F64s; `powi.i32` takes an F64 base + i32
+/// exponent (specialised for integer powers).
+pub fn mirIntrinsicLLVMPowF64() -> String {
+    "llvm.pow.f64"
+}
+
+pub fn mirIntrinsicLLVMPowI64() -> String {
+    "llvm.powi.f64.i32"
+}
+
+/// mirIntrinsicLLVMMinNumF64 / MaxNumF64 return the IEEE-754
+/// minNum / maxNum intrinsic names. Used by `Math.min` / `Math.max`
+/// on Float64 (integer paths use plain `select` over icmp).
+pub fn mirIntrinsicLLVMMinNumF64() -> String {
+    "llvm.minnum.f64"
+}
+
+pub fn mirIntrinsicLLVMMaxNumF64() -> String {
+    "llvm.maxnum.f64"
+}
+
+/// §6 LLVM bit-manipulation intrinsic names.
+
+/// mirIntrinsicLLVMCtlzI64 / CttzI64 return the count-leading-zeros
+/// / count-trailing-zeros intrinsic names. Used by `Int.leadingZeros`
+/// / `trailingZeros` lowering.
+pub fn mirIntrinsicLLVMCtlzI64() -> String {
+    "llvm.ctlz.i64"
+}
+
+pub fn mirIntrinsicLLVMCttzI64() -> String {
+    "llvm.cttz.i64"
+}
+
+/// mirIntrinsicLLVMCtpopI64 returns the population-count intrinsic
+/// name. Used by `Int.popcount` lowering.
+pub fn mirIntrinsicLLVMCtpopI64() -> String {
+    "llvm.ctpop.i64"
+}
+
+/// mirIntrinsicLLVMBSwapI64 / BSwapI32 / BSwapI16 return the byte-
+/// swap intrinsic names. Used by `Int.byteSwap` and endianness
+/// conversion sites.
+pub fn mirIntrinsicLLVMBSwapI64() -> String {
+    "llvm.bswap.i64"
+}
+
+pub fn mirIntrinsicLLVMBSwapI32() -> String {
+    "llvm.bswap.i32"
+}
+
+pub fn mirIntrinsicLLVMBSwapI16() -> String {
+    "llvm.bswap.i16"
+}
+
+/// mirIntrinsicLLVMBitReverseI64 returns the bit-reverse intrinsic
+/// name. Used by `Int.bitReverse` lowering.
+pub fn mirIntrinsicLLVMBitReverseI64() -> String {
+    "llvm.bitreverse.i64"
+}
+
+/// §6 LLVM checked-arithmetic intrinsic names — these return
+/// `{T, i1}` aggregates with the second slot indicating overflow.
+
+/// mirIntrinsicLLVMSAddOverflowI64 / SSubOverflowI64 / SMulOverflowI64
+/// return the signed checked-arithmetic intrinsic names. Used by
+/// `Int.checkedAdd` / `checkedSub` / `checkedMul` lowering when
+/// `--check-int-overflow` is on.
+pub fn mirIntrinsicLLVMSAddOverflowI64() -> String {
+    "llvm.sadd.with.overflow.i64"
+}
+
+pub fn mirIntrinsicLLVMSSubOverflowI64() -> String {
+    "llvm.ssub.with.overflow.i64"
+}
+
+pub fn mirIntrinsicLLVMSMulOverflowI64() -> String {
+    "llvm.smul.with.overflow.i64"
+}
+
+/// mirIntrinsicLLVMUAddOverflowI64 / USubOverflowI64 / UMulOverflowI64
+/// return the unsigned variants.
+pub fn mirIntrinsicLLVMUAddOverflowI64() -> String {
+    "llvm.uadd.with.overflow.i64"
+}
+
+pub fn mirIntrinsicLLVMUSubOverflowI64() -> String {
+    "llvm.usub.with.overflow.i64"
+}
+
+pub fn mirIntrinsicLLVMUMulOverflowI64() -> String {
+    "llvm.umul.with.overflow.i64"
+}
+
+/// §6 LLVM saturating-arithmetic intrinsic names.
+
+/// mirIntrinsicLLVMSAddSatI64 / SSubSatI64 / SShlSatI64 return the
+/// signed saturating-arithmetic intrinsic names. Used by
+/// `Int.saturatingAdd` / `saturatingSub` / `saturatingShl`.
+pub fn mirIntrinsicLLVMSAddSatI64() -> String {
+    "llvm.sadd.sat.i64"
+}
+
+pub fn mirIntrinsicLLVMSSubSatI64() -> String {
+    "llvm.ssub.sat.i64"
+}
+
+pub fn mirIntrinsicLLVMSShlSatI64() -> String {
+    "llvm.sshl.sat.i64"
+}
+
+/// mirIntrinsicLLVMUAddSatI64 / USubSatI64 / UShlSatI64 return the
+/// unsigned variants.
+pub fn mirIntrinsicLLVMUAddSatI64() -> String {
+    "llvm.uadd.sat.i64"
+}
+
+pub fn mirIntrinsicLLVMUSubSatI64() -> String {
+    "llvm.usub.sat.i64"
+}
+
+pub fn mirIntrinsicLLVMUShlSatI64() -> String {
+    "llvm.ushl.sat.i64"
+}
+
+/// §6 LLVM memory / lifecycle intrinsic names.
+
+/// mirIntrinsicLLVMMemcpy / Memmove / Memset return the LLVM memory-
+/// op intrinsic names. Centralised so future ABI flips (e.g. opaque-
+/// pointer overloads) only touch these. Note the `.p0` / `.i64`
+/// suffixes pin the parameter / size types.
+pub fn mirIntrinsicLLVMMemcpy() -> String {
+    "llvm.memcpy.p0.p0.i64"
+}
+
+pub fn mirIntrinsicLLVMMemmove() -> String {
+    "llvm.memmove.p0.p0.i64"
+}
+
+pub fn mirIntrinsicLLVMMemset() -> String {
+    "llvm.memset.p0.i64"
+}
+
+/// mirIntrinsicLLVMLifetimeStart / LifetimeEnd return the LLVM
+/// stack-slot lifetime intrinsics. Used by the GC root-bracketing
+/// pass to scope alloca slots tightly so the optimiser can DCE
+/// dead spill stores.
+pub fn mirIntrinsicLLVMLifetimeStart() -> String {
+    "llvm.lifetime.start.p0"
+}
+
+pub fn mirIntrinsicLLVMLifetimeEnd() -> String {
+    "llvm.lifetime.end.p0"
+}
+
+/// mirIntrinsicLLVMInvariantStart / InvariantEnd return the LLVM
+/// memory-invariance markers. Used at sites where a write region
+/// becomes effectively read-only after initialisation (e.g. interned
+/// constant pools).
+pub fn mirIntrinsicLLVMInvariantStart() -> String {
+    "llvm.invariant.start.p0"
+}
+
+pub fn mirIntrinsicLLVMInvariantEnd() -> String {
+    "llvm.invariant.end.p0"
+}
+
+/// mirIntrinsicLLVMAssume returns `llvm.assume` — the optimiser
+/// hint that asserts an i1 expression is always true. Used at the
+/// emitter's branch-elimination sites where the program invariant
+/// is already proven by the type system but the optimiser can't
+/// rediscover it.
+pub fn mirIntrinsicLLVMAssume() -> String {
+    "llvm.assume"
+}
+
+/// mirIntrinsicLLVMExpectI1 returns `llvm.expect.i1` — the branch-
+/// hint intrinsic for biasing CFG layout (hot vs cold). Used at
+/// `if let Some` short-circuit paths where the typical case is
+/// "Some" not "None".
+pub fn mirIntrinsicLLVMExpectI1() -> String {
+    "llvm.expect.i1"
+}
+
+/// §6 LLVM stack-protector / debug-info intrinsic names.
+
+/// mirIntrinsicLLVMStackSave / StackRestore return the LLVM stack-
+/// pointer save / restore intrinsics. Reserved for future
+/// alloca-in-loop scoping (currently Osty hoists alloca to entry
+/// block, so these are unused).
+pub fn mirIntrinsicLLVMStackSave() -> String {
+    "llvm.stacksave"
+}
+
+pub fn mirIntrinsicLLVMStackRestore() -> String {
+    "llvm.stackrestore"
+}
+
+/// mirIntrinsicLLVMDbgDeclare / DbgValue return the LLVM debug-info
+/// intrinsics. Reserved for future DWARF emission (currently the
+/// MIR emitter only emits IR-level position metadata via
+/// `mirCommentSourceLine`).
+pub fn mirIntrinsicLLVMDbgDeclare() -> String {
+    "llvm.dbg.declare"
+}
+
+pub fn mirIntrinsicLLVMDbgValue() -> String {
+    "llvm.dbg.value"
+}
+
+/// §6 LLVM-text instruction shape helpers — for instructions that
+/// don't fit the 2-arg / 3-arg call shape.
+
+/// mirAddIntLine renders `<reg> = add <ty> <a>, <b>\n` — the
+/// generic typed-add shape. Specialisations like
+/// `mirAddI64Line` call through here.
+pub fn mirAddIntLine(reg: String, ty: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirOpAdd() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+/// mirSubIntLine renders the typed-sub shape.
+pub fn mirSubIntLine(reg: String, ty: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirOpSub() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+/// mirMulIntLine renders the typed-mul shape.
+pub fn mirMulIntLine(reg: String, ty: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirOpMul() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+/// mirSDivIntLine renders the typed signed-div shape.
+pub fn mirSDivIntLine(reg: String, ty: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirOpSDiv() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+/// mirSRemIntLine renders the typed signed-rem shape.
+pub fn mirSRemIntLine(reg: String, ty: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirOpSRem() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+/// mirAndIntLine / OrIntLine / XorIntLine render the typed bitwise
+/// shapes.
+pub fn mirAndIntLine(reg: String, ty: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirOpAnd() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+pub fn mirOrIntLine(reg: String, ty: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirOpOr() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+pub fn mirXorIntLine(reg: String, ty: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirOpXor() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+/// mirShlIntLine / LShrIntLine / AShrIntLine render the typed shift
+/// shapes.
+pub fn mirShlIntLine(reg: String, ty: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirOpShl() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+pub fn mirLShrIntLine(reg: String, ty: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirOpLShr() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+pub fn mirAShrIntLine(reg: String, ty: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirOpAShr() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+/// mirFRemLine renders the typed floating-point remainder shape.
+/// Sibling of the existing mirFAddLine / FSubLine / FMulLine / FDivLine
+/// (defined earlier in this file) named for the new fp-rem path.
+pub fn mirFRemLine(reg: String, ty: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirOpFRem() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+/// §6 cast-instruction shape helpers — render the generic cast
+/// instruction lines. All have the same shape:
+///   `<reg> = <op> <fromTy> <val> to <toTy>\n`
+/// Specialised siblings (e.g. mirIntegerWidenZExtI8Line) call
+/// through here.
+
+/// mirCastLine renders the generic cast-instruction line. Used by
+/// every specialised cast builder as the underlying composer.
+pub fn mirCastLine(reg: String, op: String, fromTy: String, val: String, toTy: String) -> String {
+    "  " + reg + " = " + op + " " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+/// mirUIToFPLine renders the generic unsigned-int → float cast.
+/// Sibling of the existing mirSIToFPLine / mirFPToSILine /
+/// mirBitcastLine / mirPtrToIntLine / mirIntToPtrLine (defined
+/// earlier in this file) named for the unsigned-int / unsigned-out
+/// / fp-widen / fp-narrow cast paths. Those continue to live at
+/// their original sites for byte-stable provenance.
+pub fn mirUIToFPLine(reg: String, fromTy: String, val: String, toTy: String) -> String {
+    mirCastLine(reg, mirCastUIToFP(), fromTy, val, toTy)
+}
+
+/// mirFPToUILine renders the generic float → unsigned-int cast.
+pub fn mirFPToUILine(reg: String, fromTy: String, val: String, toTy: String) -> String {
+    mirCastLine(reg, mirCastFPToUI(), fromTy, val, toTy)
+}
+
+/// mirFPExtLine renders the generic float-widen cast.
+pub fn mirFPExtLine(reg: String, fromTy: String, val: String, toTy: String) -> String {
+    mirCastLine(reg, mirCastFPExt(), fromTy, val, toTy)
+}
+
+/// mirFPTruncLine renders the generic float-narrow cast.
+pub fn mirFPTruncLine(reg: String, fromTy: String, val: String, toTy: String) -> String {
+    mirCastLine(reg, mirCastFPTrunc(), fromTy, val, toTy)
+}
+
+/// §6 specialised cast shapes — common width transitions at known
+/// types. Drain sites where the from / to widths are statically
+/// known so callers don't have to thread the type tokens.
+
+/// mirSExtI32ToI64Line / I16ToI64Line / I8ToI64Line / I1ToI64Line
+/// render the canonical i32/i16/i8/i1 → i64 sign-extends. Used at
+/// every site that widens narrower integer arithmetic into i64-sized
+/// MIR slots (e.g. checked-arith intermediate steps, Int.toLong).
+pub fn mirSExtI32ToI64Line(reg: String, val: String) -> String {
+    mirSExtLine(reg, mirTypeI32(), val, mirTypeI64())
+}
+
+pub fn mirSExtI16ToI64Line(reg: String, val: String) -> String {
+    mirSExtLine(reg, mirTypeI16(), val, mirTypeI64())
+}
+
+pub fn mirSExtI8ToI64Line(reg: String, val: String) -> String {
+    mirSExtLine(reg, mirTypeI8(), val, mirTypeI64())
+}
+
+pub fn mirSExtI1ToI64Line(reg: String, val: String) -> String {
+    mirSExtLine(reg, mirTypeI1(), val, mirTypeI64())
+}
+
+/// mirZExtI32ToI64Line / I16ToI64Line / I8ToI64Line / I1ToI64Line
+/// render the canonical i32/i16/i8/i1 → i64 zero-extends. Used at
+/// the unsigned-interpretation sites (bytes / chars / hash buckets).
+pub fn mirZExtI32ToI64Line(reg: String, val: String) -> String {
+    mirZExtLine(reg, mirTypeI32(), val, mirTypeI64())
+}
+
+pub fn mirZExtI16ToI64Line(reg: String, val: String) -> String {
+    mirZExtLine(reg, mirTypeI16(), val, mirTypeI64())
+}
+
+pub fn mirZExtI8ToI64Line(reg: String, val: String) -> String {
+    mirZExtLine(reg, mirTypeI8(), val, mirTypeI64())
+}
+
+pub fn mirZExtI1ToI64Line(reg: String, val: String) -> String {
+    mirZExtLine(reg, mirTypeI1(), val, mirTypeI64())
+}
+
+/// mirTruncI64ToI32Line / I16Line / I8Line / I1Line render the
+/// canonical i64 → narrower truncates. Used at the down-cast sites
+/// (e.g. Long.toInt, Long.toByte).
+pub fn mirTruncI64ToI32Line(reg: String, val: String) -> String {
+    mirTruncLine(reg, mirTypeI64(), val, mirTypeI32())
+}
+
+pub fn mirTruncI64ToI16Line(reg: String, val: String) -> String {
+    mirTruncLine(reg, mirTypeI64(), val, mirTypeI16())
+}
+
+pub fn mirTruncI64ToI8Line(reg: String, val: String) -> String {
+    mirTruncLine(reg, mirTypeI64(), val, mirTypeI8())
+}
+
+pub fn mirTruncI64ToI1Line(reg: String, val: String) -> String {
+    mirTruncLine(reg, mirTypeI64(), val, mirTypeI1())
+}
+
+/// mirSIToFPI64ToDoubleLine / mirFPToSIDoubleToI64Line render the
+/// canonical i64 ↔ double conversions. Sibling of the existing
+/// mirFPExtFloatToDoubleLine / mirFPTruncDoubleToFloatLine /
+/// mirICmpLine / mirFCmpLine builders earlier in this file — those
+/// continue to live at their original sites for byte-stable
+/// provenance.
+pub fn mirSIToFPI64ToDoubleLine(reg: String, val: String) -> String {
+    mirSIToFPLine(reg, mirTypeI64(), val, mirTypeDouble())
+}
+
+pub fn mirFPToSIDoubleToI64Line(reg: String, val: String) -> String {
+    mirFPToSILine(reg, mirTypeDouble(), val, mirTypeI64())
+}
+
+/// mirICmpI64EqLine / NeLine / SltLine / SleLine / SgtLine / SgeLine
+/// render canonical i64-typed signed-integer comparisons.
+pub fn mirICmpI64EqLine(reg: String, a: String, b: String) -> String {
+    mirICmpLine(reg, mirICmpEq(), mirTypeI64(), a, b)
+}
+
+pub fn mirICmpI64NeLine(reg: String, a: String, b: String) -> String {
+    mirICmpLine(reg, mirICmpNe(), mirTypeI64(), a, b)
+}
+
+pub fn mirICmpI64SltLine(reg: String, a: String, b: String) -> String {
+    mirICmpLine(reg, mirICmpSlt(), mirTypeI64(), a, b)
+}
+
+pub fn mirICmpI64SleLine(reg: String, a: String, b: String) -> String {
+    mirICmpLine(reg, mirICmpSle(), mirTypeI64(), a, b)
+}
+
+pub fn mirICmpI64SgtLine(reg: String, a: String, b: String) -> String {
+    mirICmpLine(reg, mirICmpSgt(), mirTypeI64(), a, b)
+}
+
+pub fn mirICmpI64SgeLine(reg: String, a: String, b: String) -> String {
+    mirICmpLine(reg, mirICmpSge(), mirTypeI64(), a, b)
+}
+
+/// mirICmpPtrEqLine / NeLine render canonical ptr equality checks.
+/// Used at every nil / sentinel ptr comparison (Option<T?> ==,
+/// Result<*, *> error-tag dispatch, etc.).
+pub fn mirICmpPtrEqLine(reg: String, a: String, b: String) -> String {
+    mirICmpLine(reg, mirICmpEq(), mirTypePtr(), a, b)
+}
+
+pub fn mirICmpPtrNeLine(reg: String, a: String, b: String) -> String {
+    mirICmpLine(reg, mirICmpNe(), mirTypePtr(), a, b)
+}
+
+/// mirICmpI1EqLine / NeLine render canonical i1 equality checks.
+pub fn mirICmpI1EqLine(reg: String, a: String, b: String) -> String {
+    mirICmpLine(reg, mirICmpEq(), mirTypeI1(), a, b)
+}
+
+pub fn mirICmpI1NeLine(reg: String, a: String, b: String) -> String {
+    mirICmpLine(reg, mirICmpNe(), mirTypeI1(), a, b)
+}
+
+/// mirFCmpDoubleOEqLine / OneLine / OltLine / OleLine / OgtLine /
+/// OgeLine render canonical double-typed ordered-fp comparisons.
+pub fn mirFCmpDoubleOEqLine(reg: String, a: String, b: String) -> String {
+    mirFCmpLine(reg, mirFCmpOEq(), mirTypeDouble(), a, b)
+}
+
+pub fn mirFCmpDoubleOneLine(reg: String, a: String, b: String) -> String {
+    mirFCmpLine(reg, mirFCmpOne(), mirTypeDouble(), a, b)
+}
+
+pub fn mirFCmpDoubleOltLine(reg: String, a: String, b: String) -> String {
+    mirFCmpLine(reg, mirFCmpOlt(), mirTypeDouble(), a, b)
+}
+
+pub fn mirFCmpDoubleOleLine(reg: String, a: String, b: String) -> String {
+    mirFCmpLine(reg, mirFCmpOle(), mirTypeDouble(), a, b)
+}
+
+pub fn mirFCmpDoubleOgtLine(reg: String, a: String, b: String) -> String {
+    mirFCmpLine(reg, mirFCmpOgt(), mirTypeDouble(), a, b)
+}
+
+pub fn mirFCmpDoubleOgeLine(reg: String, a: String, b: String) -> String {
+    mirFCmpLine(reg, mirFCmpOge(), mirTypeDouble(), a, b)
+}
+
+/// §6 bitwise specialised shapes.
+/// (mirAndI64Line / OrI64Line / XorI64Line / ShlI64Line / LShrI64Line /
+/// AShrI64Line / AndI1Line / OrI1Line continue to live at their
+/// original sites earlier in this file. The new sibling below covers
+/// the remaining xor-i1 path used at boolean-NEG lowering.)
+
+/// mirXorI1Line renders the canonical i1-typed xor.
+pub fn mirXorI1Line(reg: String, a: String, b: String) -> String {
+    mirXorIntLine(reg, mirTypeI1(), a, b)
+}
+
+/// §6 specialised arith shapes.
+
+/// mirSubI64ImmediateLine renders `<reg> = sub i64 <a>, <imm>` —
+/// the canonical i64 sub with an immediate-typed RHS. Many callers
+/// thread an immediate digit string for `b`, so the explicit name
+/// makes intent visible. Sibling of the existing mirMulI64Line /
+/// mirSDivI64Line builders earlier in this file.
+pub fn mirSubI64ImmediateLine(reg: String, a: String, imm: String) -> String {
+    mirSubIntLine(reg, mirTypeI64(), a, imm)
+}
+
+/// mirAddI64ImmediateLine renders the canonical i64 add with an
+/// immediate-typed RHS. Sibling of `mirSubI64ImmediateLine`.
+pub fn mirAddI64ImmediateLine(reg: String, a: String, imm: String) -> String {
+    mirAddIntLine(reg, mirTypeI64(), a, imm)
+}
+
+/// mirSRemI64Line renders the canonical i64 signed-remainder.
+pub fn mirSRemI64Line(reg: String, a: String, b: String) -> String {
+    mirSRemIntLine(reg, mirTypeI64(), a, b)
+}
+
+/// mirFAddDoubleLine / FSubDoubleLine / FMulDoubleLine / FDivDoubleLine /
+/// FRemDoubleLine render canonical double-typed fp arithmetic.
+pub fn mirFAddDoubleLine(reg: String, a: String, b: String) -> String {
+    mirFAddLine(reg, mirTypeDouble(), a, b)
+}
+
+pub fn mirFSubDoubleLine(reg: String, a: String, b: String) -> String {
+    mirFSubLine(reg, mirTypeDouble(), a, b)
+}
+
+pub fn mirFMulDoubleLine(reg: String, a: String, b: String) -> String {
+    mirFMulLine(reg, mirTypeDouble(), a, b)
+}
+
+pub fn mirFDivDoubleLine(reg: String, a: String, b: String) -> String {
+    mirFDivLine(reg, mirTypeDouble(), a, b)
+}
+
+pub fn mirFRemDoubleLine(reg: String, a: String, b: String) -> String {
+    mirFRemLine(reg, mirTypeDouble(), a, b)
+}
+
+/// §6 LLVM math-intrinsic typed-call shapes.
+
+/// mirCallValueDoubleFromDoubleLine renders the canonical
+/// `<reg> = call double @<sym>(double <x>)` shape — the underlying
+/// composer for every unary fp-intrinsic call (sqrt / fabs / sin /
+/// cos / tan / log / exp etc.).
+pub fn mirCallValueDoubleFromDoubleLine(reg: String, sym: String, x: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " double @" + sym + "(double " + x + ")\n"
+}
+
+/// mirCallValueLLVMSqrtF64Line renders the canonical LLVM sqrt call:
+///   `<reg> = call double @llvm.sqrt.f64(double <x>)`
+/// Used by Math.sqrt lowering.
+pub fn mirCallValueLLVMSqrtF64Line(reg: String, x: String) -> String {
+    mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMSqrtF64(), x)
+}
+
+/// mirCallValueLLVMFAbsF64Line renders the canonical LLVM fabs call.
+/// Used by Math.abs on Float64.
+pub fn mirCallValueLLVMFAbsF64Line(reg: String, x: String) -> String {
+    mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMFAbsF64(), x)
+}
+
+/// mirCallValueLLVMSinF64Line / CosF64Line / TanF64Line render the
+/// canonical LLVM trig calls.
+pub fn mirCallValueLLVMSinF64Line(reg: String, x: String) -> String {
+    mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMSinF64(), x)
+}
+
+pub fn mirCallValueLLVMCosF64Line(reg: String, x: String) -> String {
+    mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMCosF64(), x)
+}
+
+pub fn mirCallValueLLVMTanF64Line(reg: String, x: String) -> String {
+    mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMTanF64(), x)
+}
+
+/// mirCallValueLLVMLogF64Line / Log2F64Line / Log10F64Line render
+/// the canonical LLVM log calls.
+pub fn mirCallValueLLVMLogF64Line(reg: String, x: String) -> String {
+    mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMLogF64(), x)
+}
+
+pub fn mirCallValueLLVMLog2F64Line(reg: String, x: String) -> String {
+    mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMLog2F64(), x)
+}
+
+pub fn mirCallValueLLVMLog10F64Line(reg: String, x: String) -> String {
+    mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMLog10F64(), x)
+}
+
+/// mirCallValueLLVMExpF64Line / Exp2F64Line render the canonical
+/// LLVM exp calls.
+pub fn mirCallValueLLVMExpF64Line(reg: String, x: String) -> String {
+    mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMExpF64(), x)
+}
+
+pub fn mirCallValueLLVMExp2F64Line(reg: String, x: String) -> String {
+    mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMExp2F64(), x)
+}
+
+/// mirCallValueLLVMPowF64Line renders `<reg> = call double
+/// @llvm.pow.f64(double <base>, double <exp>)` — the canonical
+/// LLVM power call.
+pub fn mirCallValueLLVMPowF64Line(reg: String, base: String, exp: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " double @" + mirIntrinsicLLVMPowF64() + "(double " + base + ", double " + exp + ")\n"
+}
+
+/// mirCallValueLLVMMinNumF64Line / MaxNumF64Line render the canonical
+/// IEEE-754 minNum / maxNum calls.
+pub fn mirCallValueLLVMMinNumF64Line(reg: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " double @" + mirIntrinsicLLVMMinNumF64() + "(double " + a + ", double " + b + ")\n"
+}
+
+pub fn mirCallValueLLVMMaxNumF64Line(reg: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " double @" + mirIntrinsicLLVMMaxNumF64() + "(double " + a + ", double " + b + ")\n"
+}
+
+/// §6 LLVM bit-manipulation typed-call shapes.
+
+/// mirCallValueLLVMCtlzI64Line / mirCallValueLLVMCttzI64Line render
+/// the canonical count-leading / trailing zeros calls. The second
+/// arg is `i1 false` / `i1 true` indicating whether zero-input is
+/// poison or defined; Osty's Int.leadingZeros uses the defined-on-
+/// zero form (`i1 false`).
+pub fn mirCallValueLLVMCtlzI64Line(reg: String, x: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i64 @" + mirIntrinsicLLVMCtlzI64() + "(i64 " + x + ", i1 false)\n"
+}
+
+pub fn mirCallValueLLVMCttzI64Line(reg: String, x: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i64 @" + mirIntrinsicLLVMCttzI64() + "(i64 " + x + ", i1 false)\n"
+}
+
+/// mirCallValueLLVMCtpopI64Line renders the canonical popcount call.
+pub fn mirCallValueLLVMCtpopI64Line(reg: String, x: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i64 @" + mirIntrinsicLLVMCtpopI64() + "(i64 " + x + ")\n"
+}
+
+/// mirCallValueLLVMBSwapI64Line / I32Line / I16Line render the
+/// canonical byte-swap calls.
+pub fn mirCallValueLLVMBSwapI64Line(reg: String, x: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i64 @" + mirIntrinsicLLVMBSwapI64() + "(i64 " + x + ")\n"
+}
+
+pub fn mirCallValueLLVMBSwapI32Line(reg: String, x: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i32 @" + mirIntrinsicLLVMBSwapI32() + "(i32 " + x + ")\n"
+}
+
+pub fn mirCallValueLLVMBSwapI16Line(reg: String, x: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i16 @" + mirIntrinsicLLVMBSwapI16() + "(i16 " + x + ")\n"
+}
+
+/// mirCallValueLLVMBitReverseI64Line renders the canonical bit-
+/// reverse call.
+pub fn mirCallValueLLVMBitReverseI64Line(reg: String, x: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i64 @" + mirIntrinsicLLVMBitReverseI64() + "(i64 " + x + ")\n"
+}
+
+/// §6 alloca-shape helpers.
+
+/// mirAllocaSingleLine renders `<reg> = alloca <ty>\n` — the canonical
+/// single-slot alloca shape (not array).
+pub fn mirAllocaSingleLine(reg: String, ty: String) -> String {
+    "  " + reg + " = " + mirInstrAlloca() + " " + ty + "\n"
+}
+
+/// mirAllocaSingleAlignedLine renders `<reg> = alloca <ty>, align <n>\n`
+/// — the alignment-tagged single-slot alloca shape. Used for vector-
+/// typed slots that need 16/32-byte alignment for the SIMD load/store.
+pub fn mirAllocaSingleAlignedLine(reg: String, ty: String, alignDigits: String) -> String {
+    "  " + reg + " = " + mirInstrAlloca() + " " + ty + ", align " + alignDigits + "\n"
+}
+
+/// §6 typed-alloca shape helpers.
+
+/// mirAllocaPtrLine renders `<reg> = alloca ptr\n` — the most common
+/// alloca shape (single ptr-typed slot).
+pub fn mirAllocaPtrLine(reg: String) -> String {
+    mirAllocaSingleLine(reg, mirTypePtr())
+}
+
+/// mirAllocaI64Line / I32Line / I8Line / I1Line render canonical
+/// alloca shapes for the common scalar widths.
+pub fn mirAllocaI64Line(reg: String) -> String {
+    mirAllocaSingleLine(reg, mirTypeI64())
+}
+
+pub fn mirAllocaI32Line(reg: String) -> String {
+    mirAllocaSingleLine(reg, mirTypeI32())
+}
+
+pub fn mirAllocaI8Line(reg: String) -> String {
+    mirAllocaSingleLine(reg, mirTypeI8())
+}
+
+pub fn mirAllocaI1Line(reg: String) -> String {
+    mirAllocaSingleLine(reg, mirTypeI1())
+}
+
+pub fn mirAllocaDoubleLine(reg: String) -> String {
+    mirAllocaSingleLine(reg, mirTypeDouble())
+}
+
+/// §6 lifetime / invariant intrinsic call shapes.
+
+/// mirCallVoidLLVMLifetimeStartLine renders `call void @llvm.lifetime.start.p0(i64 <size>, ptr <slot>)`.
+/// Used at GC root-bracketing entry points to scope alloca slots
+/// tightly.
+pub fn mirCallVoidLLVMLifetimeStartLine(sizeDigits: String, slot: String) -> String {
+    "  " + mirInstrCallVoid() + " void @" + mirIntrinsicLLVMLifetimeStart() + "(i64 " + sizeDigits + ", ptr " + slot + ")\n"
+}
+
+/// mirCallVoidLLVMLifetimeEndLine renders the matching end marker.
+pub fn mirCallVoidLLVMLifetimeEndLine(sizeDigits: String, slot: String) -> String {
+    "  " + mirInstrCallVoid() + " void @" + mirIntrinsicLLVMLifetimeEnd() + "(i64 " + sizeDigits + ", ptr " + slot + ")\n"
+}
+
+/// mirCallVoidLLVMAssumeLine renders `call void @llvm.assume(i1 <cond>)`.
+/// Used at branch-elimination sites where the program invariant is
+/// already proven by the type system.
+pub fn mirCallVoidLLVMAssumeLine(cond: String) -> String {
+    "  " + mirInstrCallVoid() + " void @" + mirIntrinsicLLVMAssume() + "(i1 " + cond + ")\n"
+}
+
+/// mirCallValueLLVMExpectI1Line renders `<reg> = call i1 @llvm.expect.i1(i1 <cond>, i1 <expected>)`.
+/// Used at branch-hint sites for biasing CFG layout (hot vs cold).
+pub fn mirCallValueLLVMExpectI1Line(reg: String, cond: String, expected: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i1 @" + mirIntrinsicLLVMExpectI1() + "(i1 " + cond + ", i1 " + expected + ")\n"
+}
+
+/// §6 memcpy / memmove / memset intrinsic call shapes.
+
+/// mirCallVoidLLVMMemcpyLine renders the canonical memcpy intrinsic call:
+///   `call void @llvm.memcpy.p0.p0.i64(ptr <dst>, ptr <src>, i64 <size>, i1 <isVolatile>)`
+/// Used at sites that copy fixed-size aggregates between heap slots.
+pub fn mirCallVoidLLVMMemcpyLine(dst: String, src: String, sizeDigits: String, isVolatile: String) -> String {
+    "  " + mirInstrCallVoid() + " void @" + mirIntrinsicLLVMMemcpy() + "(ptr " + dst + ", ptr " + src + ", i64 " + sizeDigits + ", i1 " + isVolatile + ")\n"
+}
+
+/// mirCallVoidLLVMMemmoveLine renders the canonical memmove intrinsic call.
+pub fn mirCallVoidLLVMMemmoveLine(dst: String, src: String, sizeDigits: String, isVolatile: String) -> String {
+    "  " + mirInstrCallVoid() + " void @" + mirIntrinsicLLVMMemmove() + "(ptr " + dst + ", ptr " + src + ", i64 " + sizeDigits + ", i1 " + isVolatile + ")\n"
+}
+
+/// mirCallVoidLLVMMemsetLine renders the canonical memset intrinsic call.
+/// Note `val` is i8-typed (the fill byte).
+pub fn mirCallVoidLLVMMemsetLine(dst: String, val: String, sizeDigits: String, isVolatile: String) -> String {
+    "  " + mirInstrCallVoid() + " void @" + mirIntrinsicLLVMMemset() + "(ptr " + dst + ", i8 " + val + ", i64 " + sizeDigits + ", i1 " + isVolatile + ")\n"
+}
+
+/// §6 more linkage tag combos.
+
+/// mirInternalConstantTag returns `internal constant` — sibling of
+/// `mirInternalUnnamedAddrConstantTag` for sites that need named
+/// (addressable) constants.
+pub fn mirInternalConstantTag() -> String {
+    mirLinkageInternal() + " " + mirConstantTag()
+}
+
+/// mirPrivateConstantTag returns `private constant`.
+pub fn mirPrivateConstantTag() -> String {
+    mirLinkagePrivate() + " " + mirConstantTag()
+}
+
+/// mirExternalGlobalTag returns `external global` — for module-
+/// imported global declarations.
+pub fn mirExternalGlobalTag() -> String {
+    mirLinkageExternal() + " " + mirGlobalTag()
+}
+
+/// mirExternalFnTag returns `external` — used at the head of
+/// runtime-imported function declarations (`declare`-form, but
+/// some IR style tags it explicitly).
+pub fn mirExternalFnTag() -> String {
+    mirLinkageExternal()
+}
+
+/// §6 string-pool / global-data shape helpers — drain the inline
+/// emit sites that build `@.str0 = private unnamed_addr constant ...`
+/// declarations.
+
+/// mirGlobalStringPoolDeclLine renders the canonical interned-string
+/// pool declaration:
+///   `<sym> = private unnamed_addr constant [<size> x i8] c"<encoded>"\n`
+/// Specialisation of `mirStringPoolLine` that exposes the linkage
+/// attributes via the new `mirPrivateUnnamedAddrConstantTag` token.
+pub fn mirGlobalStringPoolDeclLine(sym: String, sizeDigits: String, encoded: String) -> String {
+    sym + " = " + mirPrivateUnnamedAddrConstantTag() + " [" + sizeDigits + " x i8] c\"" + encoded + "\"\n"
+}
+
+/// mirGlobalConstantI64DeclLine renders `<sym> = internal constant i64 <val>\n`.
+/// Used for module-private numeric constants (e.g. computed page-size
+/// thresholds, default capacity limits).
+pub fn mirGlobalConstantI64DeclLine(sym: String, val: String) -> String {
+    sym + " = " + mirInternalConstantTag() + " i64 " + val + "\n"
+}
+
+/// mirGlobalConstantPtrDeclLine renders `<sym> = internal constant ptr <val>\n`.
+/// Used for vtable / dispatch-table entries.
+pub fn mirGlobalConstantPtrDeclLine(sym: String, val: String) -> String {
+    sym + " = " + mirInternalConstantTag() + " ptr " + val + "\n"
+}
+
+/// mirGlobalMutableI64DeclLine renders `<sym> = internal global i64 <init>\n`.
+/// Used for module-private mutable counters (bench harness state,
+/// debug-only accumulators).
+pub fn mirGlobalMutableI64DeclLine(sym: String, init: String) -> String {
+    sym + " = " + mirInternalGlobalTag() + " i64 " + init + "\n"
+}
+
+/// mirGlobalMutablePtrDeclLine renders `<sym> = internal global ptr <init>\n`.
+/// Used for module-private heap-handle slots.
+pub fn mirGlobalMutablePtrDeclLine(sym: String, init: String) -> String {
+    sym + " = " + mirInternalGlobalTag() + " ptr " + init + "\n"
+}
+
+/// §6 store / load specialisation helpers.
+
+/// mirStoreI8Line renders `store i8 <val>, ptr <slot>\n` — the
+/// canonical i8-typed store shape (sibling of `mirStoreI64Line` /
+/// `mirStoreI1Line` for byte-typed slots).
+pub fn mirStoreI8Line(val: String, slot: String) -> String {
+    "  " + mirInstrStore() + " i8 " + val + ", ptr " + slot + "\n"
+}
+
+/// mirStoreI32Line renders `store i32 <val>, ptr <slot>\n` — the
+/// canonical i32-typed store shape.
+pub fn mirStoreI32Line(val: String, slot: String) -> String {
+    "  " + mirInstrStore() + " i32 " + val + ", ptr " + slot + "\n"
+}
+
+/// mirStoreDoubleLine renders the double-typed store shape.
+pub fn mirStoreDoubleLine(val: String, slot: String) -> String {
+    "  " + mirInstrStore() + " double " + val + ", ptr " + slot + "\n"
+}
+
+/// mirStoreFloatLine renders the float-typed store shape.
+pub fn mirStoreFloatLine(val: String, slot: String) -> String {
+    "  " + mirInstrStore() + " float " + val + ", ptr " + slot + "\n"
+}
+
+/// mirLoadI8Line renders the canonical i8-typed load shape.
+pub fn mirLoadI8Line(reg: String, slot: String) -> String {
+    "  " + reg + " = " + mirInstrLoad() + " i8, ptr " + slot + "\n"
+}
+
+/// mirLoadI32Line renders the canonical i32-typed load shape.
+pub fn mirLoadI32Line(reg: String, slot: String) -> String {
+    "  " + reg + " = " + mirInstrLoad() + " i32, ptr " + slot + "\n"
+}
+
+/// mirLoadFloatLine renders the canonical float-typed load shape.
+pub fn mirLoadFloatLine(reg: String, slot: String) -> String {
+    "  " + reg + " = " + mirInstrLoad() + " float, ptr " + slot + "\n"
+}
+
+/// §6 GEP-shape specialisation helpers.
+
+/// mirGEPI8StrideLine renders `<reg> = getelementptr inbounds i8, ptr <basePtr>, i64 <idx>\n`
+/// — i8-typed GEP stride for byte-array indexing. Used at every
+/// Bytes / String element-access site.
+pub fn mirGEPI8StrideLine(reg: String, basePtr: String, idx: String) -> String {
+    "  " + reg + " = " + mirInstrGEPInBounds() + " i8, ptr " + basePtr + ", i64 " + idx + "\n"
+}
+
+/// mirGEPI32StrideLine renders the canonical i32-typed GEP stride.
+pub fn mirGEPI32StrideLine(reg: String, basePtr: String, idx: String) -> String {
+    "  " + reg + " = " + mirInstrGEPInBounds() + " i32, ptr " + basePtr + ", i64 " + idx + "\n"
+}
+
+/// mirGEPI16StrideLine renders the canonical i16-typed GEP stride.
+pub fn mirGEPI16StrideLine(reg: String, basePtr: String, idx: String) -> String {
+    "  " + reg + " = " + mirInstrGEPInBounds() + " i16, ptr " + basePtr + ", i64 " + idx + "\n"
+}
+
+/// mirGEPFloatStrideLine renders the canonical float-typed GEP stride.
+pub fn mirGEPFloatStrideLine(reg: String, basePtr: String, idx: String) -> String {
+    "  " + reg + " = " + mirInstrGEPInBounds() + " float, ptr " + basePtr + ", i64 " + idx + "\n"
+}
+
+/// §6 alloca-array shape specialisations.
+
+/// mirAllocaArrayPtrLine renders `<reg> = alloca ptr, i64 <count>\n`
+/// — the canonical pointer-array allocation. Specialisation of
+/// `mirAllocaArrayLine` for the most common case (GC root slots,
+/// argv-style ptr arrays).
+pub fn mirAllocaArrayPtrLine(reg: String, countDigits: String) -> String {
+    mirAllocaArrayLine(reg, mirTypePtr(), countDigits)
+}
+
+/// mirAllocaArrayI64Line renders the canonical i64-array allocation.
+pub fn mirAllocaArrayI64Line(reg: String, countDigits: String) -> String {
+    mirAllocaArrayLine(reg, mirTypeI64(), countDigits)
+}
+
+/// mirAllocaArrayI8Line renders the canonical byte-array allocation.
+/// Used at sites that build Bytes literals on the stack.
+pub fn mirAllocaArrayI8Line(reg: String, countDigits: String) -> String {
+    mirAllocaArrayLine(reg, mirTypeI8(), countDigits)
+}
+
+/// §6 LLVM `phi` shape specialisations.
+
+/// mirPhiI8FromTwoLine renders the canonical i8-typed two-arm phi.
+pub fn mirPhiI8FromTwoLine(reg: String, v1: String, l1: String, v2: String, l2: String) -> String {
+    "  " + reg + " = " + mirInstrPhi() + " i8 [ " + v1 + ", %" + l1 + " ], [ " + v2 + ", %" + l2 + " ]\n"
+}
+
+/// mirPhiI32FromTwoLine renders the canonical i32-typed two-arm phi.
+pub fn mirPhiI32FromTwoLine(reg: String, v1: String, l1: String, v2: String, l2: String) -> String {
+    "  " + reg + " = " + mirInstrPhi() + " i32 [ " + v1 + ", %" + l1 + " ], [ " + v2 + ", %" + l2 + " ]\n"
+}
+
+/// mirPhiFloatFromTwoLine renders the canonical float-typed two-arm phi.
+pub fn mirPhiFloatFromTwoLine(reg: String, v1: String, l1: String, v2: String, l2: String) -> String {
+    "  " + reg + " = " + mirInstrPhi() + " float [ " + v1 + ", %" + l1 + " ], [ " + v2 + ", %" + l2 + " ]\n"
+}
+
+/// §6 `select` shape specialisations.
+
+/// mirSelectI8Line renders the canonical i8-typed select.
+pub fn mirSelectI8Line(reg: String, cond: String, l: String, r: String) -> String {
+    "  " + reg + " = " + mirInstrSelect() + " i1 " + cond + ", i8 " + l + ", i8 " + r + "\n"
+}
+
+/// mirSelectI32Line renders the canonical i32-typed select.
+pub fn mirSelectI32Line(reg: String, cond: String, l: String, r: String) -> String {
+    "  " + reg + " = " + mirInstrSelect() + " i1 " + cond + ", i32 " + l + ", i32 " + r + "\n"
+}
+
+/// mirSelectFloatLine renders the canonical float-typed select.
+pub fn mirSelectFloatLine(reg: String, cond: String, l: String, r: String) -> String {
+    "  " + reg + " = " + mirInstrSelect() + " i1 " + cond + ", float " + l + ", float " + r + "\n"
+}
+
+/// §6 `extractvalue` / `insertvalue` typed-aggregate shape helpers.
+
+/// mirExtractValueI64Line renders the canonical extractvalue from
+/// an i64-result aggregate (e.g. Option<Int>'s i64 payload slot).
+pub fn mirExtractValueI64Line(reg: String, aggTy: String, aggVal: String, idxDigits: String) -> String {
+    mirExtractValueLine(reg, aggTy, aggVal, idxDigits)
+}
+
+/// mirExtractValueI1Line / PtrLine / DoubleLine — sibling specialisations
+/// for the common payload widths.
+pub fn mirExtractValueI1Line(reg: String, aggTy: String, aggVal: String, idxDigits: String) -> String {
+    mirExtractValueLine(reg, aggTy, aggVal, idxDigits)
+}
+
+pub fn mirExtractValuePtrLine(reg: String, aggTy: String, aggVal: String, idxDigits: String) -> String {
+    mirExtractValueLine(reg, aggTy, aggVal, idxDigits)
+}
+
+pub fn mirExtractValueDoubleLine(reg: String, aggTy: String, aggVal: String, idxDigits: String) -> String {
+    mirExtractValueLine(reg, aggTy, aggVal, idxDigits)
+}
+
+/// §6 LLVM-text constant patterns — drain the remaining literal-
+/// concatenation sites that build canonical fragments.
+
+/// mirAlignAttr renders `align <N>` — the LLVM alignment attribute
+/// used at alloca / load / store sites that need explicit alignment.
+pub fn mirAlignAttr(alignDigits: String) -> String {
+    "align " + alignDigits
+}
+
+/// mirZeroAttr returns `zeroinit` — the typed-zero param attribute.
+/// Centralised for future style flips.
+pub fn mirZeroAttr() -> String {
+    "zeroinit"
+}
+
+/// mirRangeAttrI64 renders `range(i64 <lo>, <hi>)` — the LLVM range
+/// metadata attribute that tells the optimiser the bounded-int range
+/// of a return value. Used at sites where the type system already
+/// proves a tighter bound than i64 max.
+pub fn mirRangeAttrI64(lo: String, hi: String) -> String {
+    "range(i64 " + lo + ", " + hi + ")"
+}
+
+/// §6 fastmath flag tokens — used at fcmp / fadd / fmul / fdiv sites
+/// to enable IEEE-754-relaxed optimisations.
+
+/// mirFastMathNNan returns `nnan` — assert no-NaN inputs.
+pub fn mirFastMathNNan() -> String {
+    "nnan"
+}
+
+/// mirFastMathNInf returns `ninf` — assert no-Inf inputs.
+pub fn mirFastMathNInf() -> String {
+    "ninf"
+}
+
+/// mirFastMathNSz returns `nsz` — assert no-signed-zero
+/// distinction.
+pub fn mirFastMathNSz() -> String {
+    "nsz"
+}
+
+/// mirFastMathArcp returns `arcp` — allow reciprocal-form division.
+pub fn mirFastMathArcp() -> String {
+    "arcp"
+}
+
+/// mirFastMathContract returns `contract` — allow fp ops to be
+/// fused (e.g. fmul+fadd → fma).
+pub fn mirFastMathContract() -> String {
+    "contract"
+}
+
+/// mirFastMathAfn returns `afn` — allow approximate-function lowering.
+pub fn mirFastMathAfn() -> String {
+    "afn"
+}
+
+/// mirFastMathReassoc returns `reassoc` — allow associativity-
+/// preserving reordering.
+pub fn mirFastMathReassoc() -> String {
+    "reassoc"
+}
+
+/// mirFastMathFast returns `fast` — composite flag enabling all of
+/// the above. Used at sites tagged `#[fastmath]` once that surface
+/// is added.
+pub fn mirFastMathFast() -> String {
+    "fast"
+}
+
+/// §6 nuw / nsw flag tokens — overflow-poison flags for integer
+/// arithmetic.
+
+/// mirArithNUW returns `nuw` — no-unsigned-wrap (UB on unsigned-overflow).
+pub fn mirArithNUW() -> String {
+    "nuw"
+}
+
+/// mirArithNSW returns `nsw` — no-signed-wrap (UB on signed-overflow).
+/// Used at every site that wants the optimiser to assume no signed
+/// overflow (the `+` lowering on Int when overflow checks are off).
+pub fn mirArithNSW() -> String {
+    "nsw"
+}
+
+/// mirArithExact returns `exact` — sdiv / udiv flag asserting no
+/// remainder. Used at sites that statically prove the divisor
+/// divides evenly.
+pub fn mirArithExact() -> String {
+    "exact"
+}
+
+/// §6 GC-statepoint helpers (reserved for future LLVM gc.statepoint
+/// migration — currently Osty's GC uses runtime-managed safepoint
+/// chunks via the `osty_rt_gc_*` runtime).
+
+/// mirIntrinsicLLVMGCStatepoint returns `llvm.experimental.gc.statepoint`.
+pub fn mirIntrinsicLLVMGCStatepoint() -> String {
+    "llvm.experimental.gc.statepoint"
+}
+
+/// mirIntrinsicLLVMGCResult returns `llvm.experimental.gc.result`.
+pub fn mirIntrinsicLLVMGCResult() -> String {
+    "llvm.experimental.gc.result"
+}
+
+/// mirIntrinsicLLVMGCRelocate returns `llvm.experimental.gc.relocate`.
+pub fn mirIntrinsicLLVMGCRelocate() -> String {
+    "llvm.experimental.gc.relocate"
+}
+
+/// mirGCStatepointIDPlaceholder returns `0` — the canonical ID for
+/// a "no-statepoint-yet" placeholder. The migration reserves a
+/// non-zero per-callsite ID once gc.statepoint comes online.
+pub fn mirGCStatepointIDPlaceholder() -> String {
+    "0"
+}
+
+/// §6 visibility / DLL-storage tokens (Windows-specific; reserved
+/// for future cross-platform packaging).
+
+/// mirVisibilityDefault returns `default` — the LLVM symbol
+/// visibility default.
+pub fn mirVisibilityDefault() -> String {
+    "default"
+}
+
+/// mirVisibilityHidden returns `hidden` — module-private symbol
+/// visibility (Linux ELF).
+pub fn mirVisibilityHidden() -> String {
+    "hidden"
+}
+
+/// mirVisibilityProtected returns `protected` — local-binding-only
+/// visibility.
+pub fn mirVisibilityProtected() -> String {
+    "protected"
+}
+
+/// mirDLLImport returns `dllimport` — Windows DLL import storage.
+pub fn mirDLLImport() -> String {
+    "dllimport"
+}
+
+/// mirDLLExport returns `dllexport` — Windows DLL export storage.
+pub fn mirDLLExport() -> String {
+    "dllexport"
+}

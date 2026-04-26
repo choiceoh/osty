@@ -509,6 +509,46 @@ list keeps new Osty clean of known landmines.
 | `mirOpAdd` / `Sub` / `Mul` / `SDiv` / `SRem` / `UDiv` / `URem` | `() -> String` | §6 | LLVM signed / unsigned integer-arithmetic op-name tokens |
 | `mirOpFAdd` / `FSub` / `FMul` / `FDiv` / `FRem` | `() -> String` | §6 | LLVM floating-point arithmetic op-name tokens |
 | `mirOpAnd` / `Or` / `Xor` / `Shl` / `LShr` / `AShr` | `() -> String` | §6 | LLVM bitwise + shift op-name tokens |
+| `mirCastSExt` / `ZExt` / `Trunc` / `SIToFP` / `UIToFP` / `FPToSI` / `FPToUI` / `FPExt` / `FPTrunc` / `Bitcast` / `PtrToInt` / `IntToPtr` / `AddrSpace` | `() -> String` | §6 | LLVM cast-instruction op-name tokens |
+| `mirTermBr` / `Switch` / `Ret` / `Unreachable` / `Invoke` / `Resume` | `() -> String` | §6 | LLVM terminator-name tokens |
+| `mirInstrAlloca` / `Load` / `Store` / `GEP` / `GEPInBounds` / `Call` / `CallVoid` / `Phi` / `Select` / `InsertValue` / `ExtractValue` / `ICmp` / `FCmp` / `AtomicRMW` / `CmpXchg` / `Fence` | `() -> String` | §6 | LLVM instruction-name tokens (centralise for future flip) |
+| `mirAtomicUnordered` / `Monotonic` / `Acquire` / `Release` / `AcqRel` / `SeqCst` | `() -> String` | §6 | LLVM atomic-ordering tokens (reserved for first-class atomics) |
+| `mirRetTypedLine` / `mirBrLabelLine` | `(args...) -> String` | §6 | Generic typed-value-return / unconditional-branch shapes |
+| `mirSwitchHeaderLine` / `mirSwitchCaseLine` / `mirSwitchFooterLine` | `(args...) -> String` | §6 | Switch terminator emit shapes (header + case + footer) |
+| `mirIntrinsicLLVM{Sqrt,FAbs,FMA}{F64,F32}` / `Sin/Cos/Tan/Log/Log2/Log10/Exp/Exp2/Pow/PowI/MinNum/MaxNum`F64 | `() -> String` | §6 | LLVM math-intrinsic name tokens |
+| `mirIntrinsicLLVM{Ctlz,Cttz,Ctpop,BitReverse}I64` / `BSwap{I64,I32,I16}` | `() -> String` | §6 | LLVM bit-manipulation intrinsic names |
+| `mirIntrinsicLLVM{S,U}{Add,Sub,Mul}OverflowI64` | `() -> String` | §6 | LLVM checked-arithmetic intrinsic names |
+| `mirIntrinsicLLVM{S,U}{Add,Sub,Shl}SatI64` | `() -> String` | §6 | LLVM saturating-arithmetic intrinsic names |
+| `mirIntrinsicLLVMMemcpy` / `Memmove` / `Memset` / `LifetimeStart` / `LifetimeEnd` / `InvariantStart` / `InvariantEnd` / `Assume` / `ExpectI1` / `StackSave` / `StackRestore` / `DbgDeclare` / `DbgValue` | `() -> String` | §6 | LLVM memory / lifecycle / debug intrinsic names |
+| `mirAddIntLine` / `Sub/Mul/SDiv/SRem/And/Or/Xor/Shl/LShr/AShrIntLine` | `(reg, ty, a, b) -> String` | §6 | Generic typed integer arithmetic / bitwise / shift shapes |
+| `mirFRemLine` | `(reg, ty, a, b) -> String` | §6 | Generic typed fp-remainder shape (sibling of existing FAdd/FSub/FMul/FDiv) |
+| `mirCastLine` | `(reg, op, fromTy, val, toTy) -> String` | §6 | Generic cast-instruction line composer |
+| `mirSIToFPI64ToDoubleLine` / `mirFPToSIDoubleToI64Line` | `(reg, val) -> String` | §6 | Common width-known cast specialisations |
+| `mirSExtI{32,16,8,1}ToI64Line` / `mirZExtI{32,16,8,1}ToI64Line` / `mirTruncI64ToI{32,16,8,1}Line` | `(reg, val) -> String` | §6 | Width-known integer cast specialisations |
+| `mirICmpI64{Eq,Ne,Slt,Sle,Sgt,Sge}Line` / `mirICmpPtr{Eq,Ne}Line` / `mirICmpI1{Eq,Ne}Line` | `(reg, a, b) -> String` | §6 | Width-known icmp specialisations |
+| `mirFCmpDouble{OEq,One,Olt,Ole,Ogt,Oge}Line` | `(reg, a, b) -> String` | §6 | Width-known fcmp specialisations |
+| `mirSubI64ImmediateLine` / `mirAddI64ImmediateLine` / `mirSRemI64Line` / `mirXorI1Line` | `(reg, args...) -> String` | §6 | Common arith / bitwise specialisations |
+| `mirFAddDoubleLine` / `FSubDoubleLine` / `FMulDoubleLine` / `FDivDoubleLine` / `FRemDoubleLine` | `(reg, a, b) -> String` | §6 | Width-known double-typed fp arithmetic |
+| `mirCallValueDoubleFromDoubleLine` | `(reg, sym, x) -> String` | §6 | Generic unary fp-intrinsic call shape composer |
+| `mirCallValueLLVM{Sqrt,FAbs,Sin,Cos,Tan,Log,Log2,Log10,Exp,Exp2,Pow,MinNum,MaxNum}F64Line` | `(reg, args...) -> String` | §6 | LLVM math-intrinsic typed-call shapes |
+| `mirCallValueLLVM{Ctlz,Cttz,Ctpop,BitReverse}I64Line` / `BSwap{I64,I32,I16}Line` | `(reg, x) -> String` | §6 | LLVM bit-manipulation typed-call shapes |
+| `mirAllocaSingleLine` / `mirAllocaSingleAlignedLine` | `(reg, ty[, align]) -> String` | §6 | Generic single-slot alloca shapes |
+| `mirAllocaPtrLine` / `I64Line` / `I32Line` / `I8Line` / `I1Line` / `DoubleLine` | `(reg) -> String` | §6 | Width-known typed-alloca specialisations |
+| `mirCallVoidLLVMLifetime{Start,End}Line` / `mirCallVoidLLVMAssumeLine` / `mirCallValueLLVMExpectI1Line` | `(args...) -> String` | §6 | Lifetime / assume / branch-hint intrinsic call shapes |
+| `mirCallVoidLLVM{Memcpy,Memmove,Memset}Line` | `(args...) -> String` | §6 | Memory-intrinsic typed-call shapes |
+| `mirInternalConstantTag` / `mirPrivateConstantTag` / `mirExternalGlobalTag` / `mirExternalFnTag` | `() -> String` | §6 | Additional linkage tag combos |
+| `mirGlobalStringPoolDeclLine` / `mirGlobalConstantI64DeclLine` / `mirGlobalConstantPtrDeclLine` / `mirGlobalMutableI64DeclLine` / `mirGlobalMutablePtrDeclLine` | `(sym, args...) -> String` | §6 | Global declaration shape composers |
+| `mirStoreI8Line` / `I32Line` / `DoubleLine` / `FloatLine` / `mirLoadI8Line` / `I32Line` / `FloatLine` | `(val, slot)/(reg, slot) -> String` | §6 | Store / load specialisations for additional widths |
+| `mirGEPI8StrideLine` / `I32StrideLine` / `I16StrideLine` / `FloatStrideLine` | `(reg, basePtr, idx) -> String` | §6 | Hot-loop GEP specialisations for additional widths |
+| `mirAllocaArrayPtrLine` / `I64Line` / `I8Line` | `(reg, count) -> String` | §6 | Common typed-array alloca specialisations |
+| `mirPhiI8FromTwoLine` / `I32FromTwoLine` / `FloatFromTwoLine` | `(reg, args...) -> String` | §6 | Two-arm phi specialisations for additional widths |
+| `mirSelectI8Line` / `I32Line` / `FloatLine` | `(reg, cond, l, r) -> String` | §6 | Select specialisations for additional widths |
+| `mirExtractValueI64Line` / `I1Line` / `PtrLine` / `DoubleLine` | `(reg, args...) -> String` | §6 | Width-tagged extractvalue specialisations (semantic aliases) |
+| `mirAlignAttr` / `mirZeroAttr` / `mirRangeAttrI64` | `(args...) -> String` | §6 | LLVM attribute-text helpers |
+| `mirFastMathNNan` / `NInf` / `NSz` / `Arcp` / `Contract` / `Afn` / `Reassoc` / `Fast` | `() -> String` | §6 | LLVM fastmath flag tokens |
+| `mirArithNUW` / `NSW` / `Exact` | `() -> String` | §6 | LLVM integer-arith poison-flag tokens |
+| `mirIntrinsicLLVMGCStatepoint` / `GCResult` / `GCRelocate` / `mirGCStatepointIDPlaceholder` | `() -> String` | §6 | Reserved gc.statepoint intrinsic names |
+| `mirVisibilityDefault` / `Hidden` / `Protected` / `mirDLLImport` / `DLLExport` | `() -> String` | §6 | LLVM symbol visibility / DLL-storage tokens |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as
