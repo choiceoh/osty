@@ -1187,6 +1187,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
 		mir.IntrinsicStringEndsWith, mir.IntrinsicStringIndexOf, mir.IntrinsicStringSplit,
 		mir.IntrinsicStringSplitInto, mir.IntrinsicStringNthSegment,
+		mir.IntrinsicStringCount,
 		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring:
 		return true
 	// Concurrency — channels / tasks / select / cancellation / helpers.
@@ -3772,6 +3773,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
 		mir.IntrinsicStringEndsWith, mir.IntrinsicStringIndexOf, mir.IntrinsicStringSplit,
 		mir.IntrinsicStringSplitInto, mir.IntrinsicStringNthSegment,
+		mir.IntrinsicStringCount,
 		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring:
 		return g.emitStringIntrinsic(i)
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
@@ -5475,6 +5477,8 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitStringBinaryBoolIntrinsic(i, strReg, llvmStringRuntimeHasSuffixSymbol())
 	case mir.IntrinsicStringContains:
 		return g.emitStringBinaryBoolIntrinsic(i, strReg, llvmStringRuntimeContainsSymbol())
+	case mir.IntrinsicStringCount:
+		return g.emitStringCount(i, strReg)
 	case mir.IntrinsicStringIndexOf:
 		return g.emitStringIndexOf(i, strReg)
 	case mir.IntrinsicStringSplit:
@@ -5519,6 +5523,31 @@ func (g *mirGen) emitStringIndexOf(i *mir.IntrinsicInstr, strReg string) error {
 		return g.storeOptionalIntFromNegativeOneIndex(i, optT, index.name, "string.index_of")
 	}
 	return g.storeIntrinsicResult(i, index)
+}
+
+// emitStringCount lowers `IntrinsicStringCount(value, needle)` to a
+// direct `osty_rt_strings_Count(value, needle)` runtime call returning
+// i64. Synthesised by `fuseNonEscapingSplitNth` to replace
+// `parts.len()` reads when the originating Split is being eliminated;
+// the rewrite path emits an `Add 1` after this call so callers see the
+// same `len(Split(value, sep))` value.
+func (g *mirGen) emitStringCount(i *mir.IntrinsicInstr, strReg string) error {
+	if len(i.Args) != 2 {
+		return unsupported("mir-mvp", "string_count arity")
+	}
+	needleReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+	if err != nil {
+		return err
+	}
+	sym := "osty_rt_strings_Count"
+	g.declareRuntime(sym, mirRuntimeDeclareI64FromTwoPtrLine(sym))
+	em := g.ostyEmitter()
+	count := llvmCall(em, "i64", sym, []*LlvmValue{
+		{typ: "ptr", name: strReg},
+		{typ: "ptr", name: needleReg},
+	})
+	g.flushOstyEmitter(em)
+	return g.storeIntrinsicResult(i, count)
 }
 
 func (g *mirGen) storeOptionalIntFromNegativeOneIndex(i *mir.IntrinsicInstr, optT *ir.OptionalType, indexReg, labelPrefix string) error {
