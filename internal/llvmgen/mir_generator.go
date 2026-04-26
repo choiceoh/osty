@@ -2779,7 +2779,7 @@ func (g *mirGen) emitStdIoReadLineMIR(c *mir.CallInstr) error {
 	if len(c.Args) != 0 {
 		return unsupported("mir-mvp", "std.io.readLine requires no arguments")
 	}
-	g.declareRuntime(ostyRtIOReadLineSymbol, mirRuntimeDeclareLine("ptr", ostyRtIOReadLineSymbol, ""))
+	g.declareRuntime(ostyRtIOReadLineSymbol, mirRuntimeDeclarePtrNoArgsLine(ostyRtIOReadLineSymbol))
 	return g.emitCallSiteByName(c, ostyRtIOReadLineSymbol, "ptr", nil)
 }
 
@@ -4165,7 +4165,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		spliceSym := "osty_rt_list_remove_at_discard"
-		g.declareRuntime(spliceSym, mirRuntimeDeclareLine("void", spliceSym, "ptr, i64"))
+		g.declareRuntime(spliceSym, mirRuntimeDeclareVoidFromPtrI64Line(spliceSym))
 		elemReg, err := g.emitListLoadElement(listReg, idxReg, elemLLVM)
 		if err != nil {
 			return err
@@ -6189,7 +6189,7 @@ func (g *mirGen) emitCancelIntrinsic(i *mir.IntrinsicInstr) error {
 	switch i.Kind {
 	case mir.IntrinsicIsCancelled:
 		sym := "osty_rt_cancel_is_cancelled"
-		g.declareRuntime(sym, mirRuntimeDeclareLine("i1", sym, ""))
+		g.declareRuntime(sym, mirRuntimeDeclareI1NoArgsLine(sym))
 		return g.emitSimpleCall(i, sym, "i1", nil)
 	case mir.IntrinsicCheckCancelled:
 		// Returns Result<(), Error> — runtime uses the `{i64, i64}`

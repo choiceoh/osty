@@ -549,6 +549,41 @@ list keeps new Osty clean of known landmines.
 | `mirArithNUW` / `NSW` / `Exact` | `() -> String` | §6 | LLVM integer-arith poison-flag tokens |
 | `mirIntrinsicLLVMGCStatepoint` / `GCResult` / `GCRelocate` / `mirGCStatepointIDPlaceholder` | `() -> String` | §6 | Reserved gc.statepoint intrinsic names |
 | `mirVisibilityDefault` / `Hidden` / `Protected` / `mirDLLImport` / `DLLExport` | `() -> String` | §6 | LLVM symbol visibility / DLL-storage tokens |
+| `mirModuleHeaderTargetTriple` / `DataLayout` / `SourceFilename` / `ModuleAsm` / `SectionDirective` | `(args...) -> String` | §6 | LLVM module-preamble shape composers |
+| `mirRuntimeDeclareVoidFromTwoPtrLine` / `ThreePtrLine` / `PtrI64Line` / `I64FromPtrI64Line` / `PtrFromI64I64Line` / `PtrNoArgsLine` / `I1NoArgsLine` | `(sym) -> String` | §3 | Additional runtime-declare specialisations |
+| `mirClosureEnvLoadLine` / `FnPtrLoadLine` / `CallTypeLine` / `mirInterfaceVTableLoadLine` / `MethodPtrLoadLine` / `DataPtrLoadLine` | `(args...) -> String` | §6 | Closure / interface dispatch shape composers |
+| `mirVTableEntryGEPLine` / `ConstantArrayLine` / `EntryLine` / `EntryNullLine` | `(args...) -> String` | §6 | Dispatch-table emit shapes |
+| `mirDICompileUnit` / `DIFile` / `DISubprogram` / `DILocation` / `DIBasicTypeInt` / `DIBasicTypeFloat` | `(args...) -> String` | §6 | LLVM debug-info metadata literal shapes (reserved) |
+| `mirParamAttrReadOnlyNoAlias` / `WriteOnlyNoAlias` / `NoAliasNoCapture` / `mirFnAttrInlineHotPure` / `ColdNoReturn` / `AlwaysInlineNoUnwind` / `PureWillReturn` | `() -> String` | §6 | Common attribute composite tokens |
+| `mirRuntimeDeclareReadOnly{Ptr,I64,I1}FromPtrLine` | `(sym) -> String` | §3 | Read-only runtime-decl specialisations |
+| `mirFunctionDefineHeaderLine` / `FooterLine` / `mirEntryBlockHeaderLine` / `BlockHeaderLine` | `(args...) -> String` | §1 | Function-define / block-header emit shapes |
+| `mirEmitBuffer{Entry,GCRoot,Safepoint,LoopHeader}Line` | `() -> String` | §1 | Section-header comment helpers |
+| `mirTBAA{Root,ScalarType,StructType,Tag}Line` | `(args...) -> String` | §6 | LLVM TBAA metadata literal shapes (reserved) |
+| `mirProfileBranchWeightsLine` / `FunctionEntryCountLine` | `(args...) -> String` | §6 | LLVM PGO metadata helpers (reserved) |
+| `mirSanitizer{Address,Thread,Memory,HWAddress,UBSan}` / `mirSSP{None,Basic,Strong,Required}` | `() -> String` | §6 | Sanitizer + stack-protector fn-attribute tokens (reserved) |
+| `mirOptionAggregateType` / `OptionPtrAggregateType` / `ResultAggregateType` / `InterfaceFatPointerType` | `() -> String` | §6 | Common LLVM aggregate-type tokens |
+| `mirChannelHandleType` / `ListHandleType` / `MapHandleType` / `SetHandleType` / `StringHandleType` / `BytesHandleType` | `() -> String` | §6 | Semantic ptr aliases at runtime call sites |
+| `mirSizeOf{Ptr,I64,I32,I16,I8,Double,Float}Bytes` | `() -> String` | §6 | Canonical scalar-byte-count tokens |
+| `mirCallValueChanNewLine` / `mirCallValueTaskGroupNewLine` / `mirCallVoidTaskGroupCloseLine` / `mirCallValueTaskGroupSpawnLine` / `mirCallValueHandleJoinLine` / `mirCallVoidHandleCancelLine` | `(args...) -> String` | §6 | Channel / task-group runtime ABI shapes |
+| `mirCallValueGCAllocLine` / `mirCallVoidGCSafepointLine` / `mirCallVoidGCBarrierLine` / `mirCallValueGCAllocatedBytesLine` | `(args...) -> String` | §6 | GC bridge runtime ABI shapes |
+| `mirCallVoidPanicMessageLine` / `mirCallVoidUnreachableUncheckedLine` / `mirCallVoidTodoLine` / `mirCallVoidAbortLine` | `(args...) -> String` | §6 | Panic / abort runtime helper call shapes |
+| `mirCallValueStdMath{Floor,Ceil,Round,Trunc,Mod}Line` / `mirCallValueStdRandom{I64,Double,RangeI64}Line` | `(reg, args...) -> String` | §6 | Standard math / random runtime call shapes |
+| `mirAggregateType{2,3,4}` / `mirArrayType` / `mirOptionTypeForElem` / `mirResultTypeForElem` | `(args...) -> String` | §6 | LLVM aggregate-type composers |
+| `mirAggregateConstantTwoPtr` / `I64I64` / `I64Ptr` | `(args...) -> String` | §6 | LLVM constant-aggregate emit shapes |
+| `mirClosureEnvAllocLine` / `mirClosureCaptureFieldGEPLine` / `mirClosureFnPtrFieldGEPLine` | `(args...) -> String` | §6 | Closure-env GEP / alloc shapes |
+| `mirStructFieldGEPLine` / `LoadLine` / `StoreLine` | `(args...) -> String` | §6 | Struct-field GEP + load/store emit shapes |
+| `mirSizeLiteral{I64,I32,I16,I8,Double,Float,Ptr}Bytes` | `() -> String` | §6 | Typed `i64 <byte-count>` literal tokens |
+| `mirLinkageWithVisibility` / `mirOpenBrace` / `CloseBrace` / `OpenBracket` / `CloseBracket` / `OpenParen` / `CloseParen` / `mirToKeyword` / `mirLabelKeyword` | `(args...) -> String` | §6 | Linkage + visibility / brace / paren / keyword tokens |
+| `mirIntWidthBits{I64,I32,I16,I8,I1}` / `mirFloatWidthBits{Double,Float}` / `mirIntTypeForBits` | `(args...) -> String` | §6 | Numeric width / encoding tokens |
+| `mirStore{I64,Double,Ptr}WithAlignLine` / `mirLoad{I64,Double,Ptr}WithAlignLine` | `(args...) -> String` | §6 | Alignment-tagged store / load shapes |
+| `mirLoadPtrNonNullLine` / `mirLoadPtrDereferenceableLine` | `(args...) -> String` | §6 | Metadata-attached load shapes |
+| `mirArgListI64I64` / `I64I64I64` / `PtrI64Ptr` / `FourPtr` / `PtrI1` / `PtrPtrI64I64` / `PtrI8` / `PtrDouble` / `I64Ptr` / `I64I64Ptr` | `(args...) -> String` | §6 | Common ABI arg-list shapes |
+| `mirAddrOfGlobal` / `mirAddrOfLocal` / `mirJoinComma{Two,Three,Four,Five,Six}` | `(args...) -> String` | §6 | Address-of / comma-join helpers |
+| `mirRuntimeDeclareDoubleFromDouble` / `TwoDouble` / `DoubleFromI64` / `I64FromDouble` / `DoubleNoArgs` / `I64FromI64I64` / `VoidFromI64` / `I1FromI64I64`Line | `(sym) -> String` | §3 | Additional runtime-declare specialisations (fp / int variants) |
+| `mirContainerKind{List,Map,Set,String,Bytes,Channel,ClosureEnv,Struct}` / `mirElementKind{I64,I32,I8,I1,Double,Ptr,String,Struct}` | `() -> String` | §6 | Container / element kind tag constants |
+| `mirDiscriminant{None,Some,Ok,Err}` / `mirBoolTrueLiteral` / `mirBoolFalseLiteral` / `mirBoolFromOsty` | `(args...) -> String` | §6 | Discriminant / boolean-literal tokens |
+| `mirGEPI64FieldZeroLine` / `mirGEPDoubleIndexLine` / `mirGEPNamedFieldLine` | `(args...) -> String` | §6 | Common GEP shape composers (zero-index / double-index / named-field) |
+| `mirRtSymbol` / `mirRtListSymbol` / `mirRtMapSymbol` / `mirRtSetSymbol` / `mirRtStringSymbol` / `mirRtBytesSymbol` / `mirRtChanSymbol` / `mirRtTaskGroupSymbol` / `mirRtGCSymbol` / `mirRtTestSymbol` / `mirRtMathSymbol` / `mirRtRandomSymbol` / `mirRtCancelSymbol` | `(suffix) -> String` | §6 | Runtime-symbol prefix composers (centralise `osty_rt_*` namespace) |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as
