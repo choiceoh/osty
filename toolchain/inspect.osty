@@ -34,8 +34,8 @@
 //   - ❌ Hint propagation (`hintName`) is still empty. Go reconstructs
 //        the hint by re-walking the AST with expected-type threading.
 //        Porting needs a small type-string parser on top of
-//        `FrontCheckedNode.typeName` (since the self-host path only
-//        exposes types as rendered strings, not structured `types.Type`).
+//        `FrontCheckedNode.typeRepr` (rendered via `frontTypeReprToString`
+//        for the legacy string-based hint helpers).
 //
 // Entry points:
 //
@@ -237,7 +237,7 @@ fn inspectTypeNameByNode(arena: AstArena, checked: FrontCheckResult) -> List<Str
     }
     for tn in checked.typedNodes {
         if tn.node >= 0 && tn.node < n {
-            out[tn.node] = tn.typeName
+            out[tn.node] = frontTypeReprToString(tn.typeRepr)
         }
     }
     out
@@ -367,7 +367,7 @@ fn inspectThreadHintsThroughContainers(
         }
         let declNode = arena.nodes[sym.node]
         if sym.kind == "fn" {
-            let sig = hintFnSignature(sym.typeName)
+            let sig = hintFnSignature(frontTypeReprToString(sym.typeRepr))
             if !sig.ok || sig.returnType == "" {
                 continue
             }
@@ -375,11 +375,12 @@ fn inspectThreadHintsThroughContainers(
                 inspectThreadHint(arena, declNode.right, sig.returnType, hints)
             }
         } else if sym.kind == "let" {
-            if sym.typeName == "" {
+            let typeStr = frontTypeReprToString(sym.typeRepr)
+            if typeStr == "" {
                 continue
             }
             if (declNode.kind == AstNLet || declNode.kind == AstNLetDecl) && declNode.right >= 0 {
-                inspectThreadHint(arena, declNode.right, sym.typeName, hints)
+                inspectThreadHint(arena, declNode.right, typeStr, hints)
             }
         }
     }
@@ -406,7 +407,7 @@ fn inspectThreadHintsThroughContainers(
 fn inspectBindingTypeByPattern(checked: FrontCheckResult) -> List<InspectBindingEntry> {
     let mut out: List<InspectBindingEntry> = []
     for bnd in checked.bindings {
-        out.push(InspectBindingEntry { node: bnd.node, typeName: bnd.typeName })
+        out.push(InspectBindingEntry { node: bnd.node, typeName: frontTypeReprToString(bnd.typeRepr) })
     }
     out
 }
@@ -500,7 +501,7 @@ fn inspectBuildRecords(
             end: tn.end,
             nodeKind: tn.kind,
             rule,
-            typeName: tn.typeName,
+            typeName: frontTypeReprToString(tn.typeRepr),
             hintName: hint,
             notes: [],
         })
@@ -522,7 +523,7 @@ fn inspectBuildRecords(
             end: sym.end,
             nodeKind: inspectNodeKindForSymbolKind(sym.kind),
             rule,
-            typeName: sym.typeName,
+            typeName: frontTypeReprToString(sym.typeRepr),
             hintName: "",
             notes,
         })
@@ -544,7 +545,7 @@ fn inspectBuildRecords(
             end: bnd.end,
             nodeKind,
             rule,
-            typeName: bnd.typeName,
+            typeName: frontTypeReprToString(bnd.typeRepr),
             hintName: "",
             notes,
         })
