@@ -7993,8 +7993,37 @@ static OSTY_HOT_INLINE int64_t osty_rt_map_find_index_indexed(osty_rt_map *map, 
             return -1;
         }
         slot = entry - 1;
-        if (slot >= 0 && slot < map->len &&
-            map->index_hashes[idx] == key_fingerprint &&
+        if (slot < 0 || slot >= map->len) {
+            /* Stale slot index (e.g., post-remove compaction left a
+             * dangling entry). Keep walking; fingerprint match is the
+             * load-bearing guard. */
+            idx = (idx + 1) & mask;
+            continue;
+        }
+        /* Prefetch the candidate key BEFORE the fingerprint compare.
+         *
+         * `slot` lands at a hash-derived position in `keys[]` — NOT
+         * sequential with `idx` — so this load is a likely L2/L3 miss
+         * on every fresh probe. Issuing the prefetch here overlaps
+         * the cache fill with the cheap `index_hashes[idx] == fp`
+         * register compare and the conditional branch, so by the time
+         * `osty_rt_value_equals` actually dereferences `keys[slot]`
+         * (1-2 cycles later) the line is in L1.
+         *
+         * Locality `3` (T0 / keep-in-L1) because every fingerprint
+         * match consumes the line in the very next call frame —
+         * `osty_rt_value_equals` issues a memcpy on it, and for
+         * STRING/PTR kinds an `osty_gc_load_v1` plus the pointed-to
+         * payload follow. Lower temporal hints would route to L2 and
+         * force a re-fetch on the consume.
+         *
+         * Wasted on the rare fingerprint-mismatch path (~0.01% on a
+         * 32-bit fingerprint with low collision rate) — at one
+         * hardware prefetch per iteration this stays well under the
+         * LSU's outstanding-load budget on Apple Silicon and any
+         * current x86_64. */
+        __builtin_prefetch(osty_rt_map_key_slot(map, slot), 0, 3);
+        if (map->index_hashes[idx] == key_fingerprint &&
             osty_rt_value_equals(osty_rt_map_key_slot(map, slot), key, key_size, map->key_kind)) {
             return slot;
         }
