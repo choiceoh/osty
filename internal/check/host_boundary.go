@@ -830,12 +830,41 @@ type selfhostSpanIndex struct {
 	// equally large scopes map; the previous full-map scan was effectively
 	// O(N²) and timed the pipeline-clean test out at 5 minutes.
 	scopeQueries map[selfhostSpanKey]*resolve.Scope
+
+	// exprSpans is `exprKeys` sorted by exprKey.start asc, materialised
+	// lazily on the first lookupExpr fallback. Same shape as scopeSpans
+	// (sibling slow-path defence). exprQueries memoises results keyed by
+	// (key, kind) so repeated misses don't re-walk.
+	exprSpans   []exprSpanEntry
+	exprQueries map[exprQueryKey]ast.Expr
+
+	// callSpans / callQueries mirror exprSpans / exprQueries for
+	// lookupCall — same O(N²) fallback used to dominate the merged
+	// toolchain probe alongside scopeFor.
+	callSpans   []callSpanEntry
+	callQueries map[selfhostSpanKey]*ast.CallExpr
 }
 
 // scopeSpanEntry is one row of the sorted scope candidate list.
 type scopeSpanEntry struct {
 	span  selfhostSpanKey
 	scope *resolve.Scope
+}
+
+type exprSpanEntry struct {
+	span selfhostSpanKey
+	expr ast.Expr
+	kind string
+}
+
+type callSpanEntry struct {
+	span selfhostSpanKey
+	call *ast.CallExpr
+}
+
+type exprQueryKey struct {
+	span selfhostSpanKey
+	kind string
 }
 
 func (idx *selfhostSpanIndex) bindNode(key selfhostNameSpanKey, n ast.Node) {
@@ -1319,7 +1348,9 @@ func lookupLocalDeclSymbol(scope *resolve.Scope, name string, decl ast.Node) *re
 
 func (idx *selfhostSpanIndex) lookupExpr(key selfhostSpanKey, kind string) ast.Expr {
 	if expr := idx.exprs[key]; expr != nil {
-		return expr
+		if kind == "" || selfhostExprKind(expr) == kind {
+			return expr
+		}
 	}
 	var best ast.Expr
 	bestSize := int(^uint(0) >> 1)
@@ -1340,20 +1371,58 @@ func (idx *selfhostSpanIndex) lookupExpr(key selfhostSpanKey, kind string) ast.E
 	if best != nil {
 		return best
 	}
-	for expr, exprKey := range idx.exprKeys {
-		if kind != "" && selfhostExprKind(expr) != kind {
+	cacheKey := exprQueryKey{span: key, kind: kind}
+	if cached, ok := idx.exprQueries[cacheKey]; ok {
+		return cached
+	}
+	idx.ensureExprSpans()
+
+	list := idx.exprSpans
+	lo, hi := 0, len(list)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if list[mid].span.start <= key.start {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	for i := 0; i < lo; i++ {
+		e := list[i]
+		if kind != "" && e.kind != kind {
 			continue
 		}
-		if exprKey.start > key.start || exprKey.end < key.end {
+		if e.span.end < key.end {
 			continue
 		}
-		size := exprKey.end - exprKey.start
+		size := e.span.end - e.span.start
 		if size < bestSize {
-			best = expr
+			best = e.expr
 			bestSize = size
 		}
 	}
+	if idx.exprQueries == nil {
+		idx.exprQueries = map[exprQueryKey]ast.Expr{}
+	}
+	idx.exprQueries[cacheKey] = best
 	return best
+}
+
+func (idx *selfhostSpanIndex) ensureExprSpans() {
+	if idx.exprSpans != nil {
+		return
+	}
+	list := make([]exprSpanEntry, 0, len(idx.exprKeys))
+	for expr, span := range idx.exprKeys {
+		list = append(list, exprSpanEntry{span: span, expr: expr, kind: selfhostExprKind(expr)})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].span.start < list[j].span.start
+	})
+	if list == nil {
+		list = []exprSpanEntry{}
+	}
+	idx.exprSpans = list
 }
 
 func (idx *selfhostSpanIndex) lookupCall(key selfhostSpanKey) *ast.CallExpr {
@@ -1376,17 +1445,54 @@ func (idx *selfhostSpanIndex) lookupCall(key selfhostSpanKey) *ast.CallExpr {
 	if best != nil {
 		return best
 	}
-	for call, callKey := range idx.callKeys {
-		if callKey.start > key.start || callKey.end < key.end {
+	if cached, ok := idx.callQueries[key]; ok {
+		return cached
+	}
+	idx.ensureCallSpans()
+
+	list := idx.callSpans
+	lo, hi := 0, len(list)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if list[mid].span.start <= key.start {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	for i := 0; i < lo; i++ {
+		e := list[i]
+		if e.span.end < key.end {
 			continue
 		}
-		size := callKey.end - callKey.start
+		size := e.span.end - e.span.start
 		if size < bestSize {
-			best = call
+			best = e.call
 			bestSize = size
 		}
 	}
+	if idx.callQueries == nil {
+		idx.callQueries = map[selfhostSpanKey]*ast.CallExpr{}
+	}
+	idx.callQueries[key] = best
 	return best
+}
+
+func (idx *selfhostSpanIndex) ensureCallSpans() {
+	if idx.callSpans != nil {
+		return
+	}
+	list := make([]callSpanEntry, 0, len(idx.callKeys))
+	for call, span := range idx.callKeys {
+		list = append(list, callSpanEntry{span: span, call: call})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].span.start < list[j].span.start
+	})
+	if list == nil {
+		list = []callSpanEntry{}
+	}
+	idx.callSpans = list
 }
 
 func selfhostExprKind(expr ast.Expr) string {
