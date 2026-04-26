@@ -35,7 +35,76 @@ High-level map of the Osty front-end. For spec decisions see
 Each stage produces diagnostics as it goes; they accumulate in a single
 `[]*diag.Diagnostic` that the CLI renders at the end.
 
-### Default path: self-host arena (since Phase 1c.1, updated 2026-04-24)
+### Self-hosted toolchain (Osty-authored compiler core)
+
+The repo ships ~110 `.osty` files under `toolchain/` that reimplement
+the compiler pipeline in Osty itself. These are merged into a single
+bootstrap core by `internal/selfhost/bundle/bundle.go`, compiled to
+Go via the frozen seed in `internal/selfhost/generated.go`, and wired
+through adapter layers (`check_adapter.go`, `parse.go`, `resolve_adapter.go`,
+`format_adapter.go`) so the Go CLI can consume native results. Key modules:
+
+| Module | Lines | Purpose |
+|---|---|---|
+| `frontend.osty` | ~5,700 | Token types (`FrontTokenKind`), lexer stream, source normalization |
+| `lexer.osty` | ~640 | `OstyLexer` — self-hosted lexer with rich tokens, trivia, error formatting |
+| `lossless_lex.osty` | ~1,200 | Lossless layer — attaches whitespace/comments/shebang/BOM to tokens for byte-for-byte reconstruction |
+| `parser.osty` | ~2,620 | `AstNodeKind` enum (~40+ variants), arena-based `AstFile` production |
+| `resolve.osty` | ~3,700 | Self-hosted name resolver — symbol table, scope resolution, `SelfSymbol` records |
+| `elab.osty` | ~5,400 | Bidirectional elaborator — type inference engine (`elabInfer` / `elabCheck`) |
+| `solve.osty` | ~390 | Local constraint solver for generic type inference |
+| `check.osty` | ~1,530 | Type checker entry point — orchestrates lexer → parser → elaboration → serialization |
+| `check_env.osty` | ~3,010 | Elaboration environment — lexical binding stack, generic bounds, `Ty` arena indices |
+| `check_diag.osty` | ~700 | Structured diagnostics with stable `Exxxx` codes (E0700–E0799) |
+| `check_gates.osty` | ~1,110 | Post-elaboration policy gates — LANG_SPEC privilege/shape rules |
+| `ty.osty` | ~915 | Type arena — `TyArena` with interned primitives, structural key interning |
+| `core.osty` | ~1,800 | Core IR — typed intermediate representation, arena-based kind discriminators |
+| `ir.osty` | ~1,400 | Legacy untyped IR — `IrNodeKind` enum, AST-based bridge |
+| `hir.osty` | ~3,500 | High-level IR — typed monomorphic HIR, flat structs with `kind` tags |
+| `hir_lower.osty` | ~4,300 | AST → HIR lowerer — hybrid approach (AST decls + Core typed exprs) |
+| `hir_optimize.osty` | ~790 | Conservative cleanup — const-fold, dead-code elim, branch opt |
+| `hir_validate.osty` | ~780 | Structural validation — catches internal lowering/rewriting bugs |
+| `hir_print.osty` | ~980 | Debug rendering — stable text output per shape |
+| `hir_walk.osty` | ~430 | Preorder traversal — collector recording nodes by category |
+| `hir_reach.osty` | ~680 | Reachability scans — qualified reference tracking |
+| `mir.osty` | ~1,950 | Middle-end IR — data model + printer + CFG helpers |
+| `mir_lower.osty` | ~5,500 | HIR → MIR lowerer — Stage 4a–4e incremental port |
+| `mir_optimize.osty` | — | MIR optimization passes |
+| `mir_validator.osty` | — | MIR structural validation |
+| `pmcompile.osty` | ~530 | Pattern-match decision tree compiler |
+| `monomorph.osty` | ~360 | Generic monomorphization — Itanium ABI mangling |
+| `monomorph_pass.osty` | ~2,240 | Stage A — generic type environment, deep clone + substitution |
+| `monomorph_rewrite.osty` | ~470 | Stage B — HIR node type-field rewriting |
+| `hir_clone.osty` | ~640 | Deep-clone helpers for HIR |
+| `diagnostic.osty` | ~250 | Diagnostic types — severity, family classification |
+| `diag_manifest.osty` | ~220 | AUTO-GENERATED — code → family mapping |
+| `diag_policy.osty` | ~65 | CLI diagnostic classification policy |
+| `lint.osty` | ~3,970 | Self-hosted lint rules — unused bindings, naming, complexity |
+| `lsp.osty` | ~1,220 | LSP semantic token shapes, fix-all overlap resolution |
+| `formatter_ast.osty` | ~745 | AST-based code formatter |
+| `docgen.osty` | ~1,680 | Documentation generator — extracts public API declarations |
+| `inspect.osty` | ~690 | Per-node type-inference observations |
+| `runner.osty` | — | `osty run` pure policy |
+| `ci.osty` | ~1,090 | CI commands — host handles, build/test result shapes |
+| `airepair_flags.osty` | ~90 | `osty airepair` flag-parsing policy |
+| `profile_flags.osty` | ~65 | Profile/feature flag resolution |
+| `pkgmgr.osty` | ~1,240 | Package manager core — sources, manifest, lockfile |
+| `pkgmgr_sat.osty` | — | PubGrub-style dependency solver |
+| `registry.osty` | ~35 | Registry index — version records, yanked filtering |
+| `package_entry.osty` | ~55 | Package file classification |
+| `manifest_features.osty` | ~50 | Feature spec parsing and validation |
+| `manifest_validation.osty` | ~820 | `[package]`/`[workspace]` table parsing |
+| `toml.osty` | ~880 | TOML lexer + parser for `osty.toml`/`osty.lock` |
+| `semver.osty` | ~235 | SemVer type — comparison, caret/tilde requirements |
+| `semver_parse.osty` | ~240 | SemVer string parsing |
+| `semver_req.osty` | ~145 | SemVer requirement operators |
+| `pipeline.osty` | ~110 | Pipeline report — aggregate counters per stage |
+
+Builder/derive policy: `builder_policy.osty` (~60 lines), `check_bridge.osty` (~9 lines), `check_env.osty`, `inspect_hint.osty` (~200 lines).
+
+Test files: ~59 `*_test.osty` covering all production modules.
+
+### Default path: self-host arena (since Phase 1c.1, updated 2026-04-27)
 
 `osty check` and `osty typecheck` now dispatch to the **self-host arena
 pipeline** by default: `parser.ParseRun` produces a selfhost `FrontendRun`
@@ -268,15 +337,18 @@ switches the output to NDJSON.
 ### `internal/stdlib`
 Built-in prelude symbols injected into every file before resolution.
 `NewPrelude` returns the root scope; individual modules are Osty
-source files under `modules/` with primitive method stubs under
-`primitives/`. Tier 1 is loadable by the front-end; Tier 2 stubs are
-checked `.osty` bodies that parse / resolve / check cleanly. 36
-modules ship today (fs, json, io, strings, fmt, thread, time, url,
-uuid, collections, …), and the Map helper family (`update`, `getOr`,
-`mergeWith`, `groupBy`, `mapValues`, `retainIf`) ships as bodied Osty
-per the §B.9.1 contract — runtime execution of those bodied helpers
-currently blocks on the `LLVM015` Map-method lowering gap documented
-in `docs/toolchain_llvm_status.md`.
+source files under `modules/` (37 modules: bytes, cmp, char,
+collections, compress, crypto, csv, debug, encoding, env, error, fmt,
+fs, hint, http, io, iter, json, log, math, net, option, os, process,
+random, ref, regex, result, runtime/raw, sync, testing, testing_gen,
+thread, time, strings, url, uuid) with primitive method stubs under
+`primitives/` (bool, bytes, char, float, int, string). Tier 1 is
+loadable by the front-end; Tier 2 stubs are checked `.osty` bodies
+that parse / resolve / check cleanly. The Map helper family (`update`,
+`getOr`, `mergeWith`, `groupBy`, `mapValues`, `retainIf`) ships as
+bodied Osty per the §B.9.1 contract — runtime execution of those bodied
+helpers currently blocks on the `LLVM015` Map-method lowering gap
+documented in `docs/toolchain_llvm_status.md`.
 
 ### `internal/format`
 Canonical-style formatter. `format.Source` reparses → pretty-prints →
@@ -393,6 +465,41 @@ front-end in `scaffold_test.go`, so regressions in the compiler that
 would break a newly-scaffolded project fail their tests before they
 land. Diagnostics use `E2050–E2069`; callers render them through the
 shared `diag.Formatter`.
+
+### `internal/cst`
+Concrete syntax tree machinery using the Red/Green tree pattern.
+`GreenKind` mirrors `ast.*` plus token/trivia/error kinds.
+`GreenArena` owns all nodes with structural sharing via content-based
+interning. `Red` is a lazy view adding absolute source positions and
+parent pointers. Byte-coverage invariant: every source byte is covered
+by exactly one token or trivia — foundation for round-trip verification.
+Wired through `selfhost.ParseCST()` and `lossless_lex.osty` in the
+toolchain.
+
+### `internal/query`
+Salsa-style incremental query engine with revision tracking, dependency
+graphs, cycle detection, and early cutoff. `Database` holds global
+revision counter + slot storage. `Frame` tracks the execution stack.
+Cached records per `(QueryID, key)` implement early cutoff: if a
+re-run produces the same hash, downstream dependents skip. The `osty`
+subpackage binds it to the compiler pipeline: `Engine` bundles
+`Database` + `Inputs` (`SourceText`, `PackageFiles`, `WorkspaceMembers`)
++ registered queries (`Parse`, `ResolvePackage`, `CheckFile`,
+`FileDiagnostics`). The LSP server uses `analyzeSingleFileViaEngine`
+as its default path for a single dirty buffer.
+
+### `internal/airepair`
+Chains conservative lexical, structural, semantic, and diagnostic-driven
+rewrite phases to automatically fix common code patterns from other
+languages (Go, Python, JavaScript) into idiomatic Osty. Measures
+diagnostic improvement before/after each accepted rewrite. Phases:
+lexical (foreign lexemes) → structural (token normalization) → semantic
+(AST-level type fixes) → diagnostic-driven (front-end analysis). Also
+handles foreign loop patterns (Python `for i in range(n)`, `enumerate`)
+and tuple loops. Produces `ReportSummary` with error delta counts and
+`ReportMetadata` with phase/source_habit/confidence for tooling.
+Corpus tests live under `testdata/corpus/` with `.input.osty` →
+`.expected.osty` pairs.
 
 ### `internal/pkgmgr` & `internal/lockfile` & `internal/registry`
 Dependency resolver, lockfile reader/writer, registry HTTP client,
