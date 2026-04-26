@@ -18,6 +18,9 @@ node_modules/
 # Per-worktree scratch directory used by IDE/agent tooling.
 .claude/worktrees/
 
+# opencode runtime state (node_modules, lockfiles, session state) — machine-local.
+.opencode/
+
 # graphify knowledge graph (local dev artifact, rebuild with /graphify)
 graphify-out/
 
