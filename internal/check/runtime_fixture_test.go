@@ -46,7 +46,7 @@ func TestRuntimeFixtureResolverResolvesRawOperations(t *testing.T) {
 	if reg.LookupPackage("std.runtime.raw") == nil {
 		t.Fatal("stdlib registry is missing std.runtime.raw (regression in #319)")
 	}
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), reg)
+	res := resolve.ResolveFileDefault(file, reg)
 	for _, d := range res.Diags {
 		if d == nil {
 			continue

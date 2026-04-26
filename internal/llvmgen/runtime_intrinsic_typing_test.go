@@ -95,7 +95,7 @@ func lowerPrivileged(t *testing.T, src string) *ir.Module {
 	if len(parseDiags) != 0 {
 		t.Fatalf("parse: %v", parseDiags)
 	}
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 

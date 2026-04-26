@@ -33,7 +33,7 @@ func TestLintPackageStampsPerFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadPackage: %v", err)
 	}
-	pr := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+	pr := resolve.ResolvePackageDefault(pkg)
 	res := Package(pkg, pr, nil)
 
 	if len(res.Diags) == 0 {

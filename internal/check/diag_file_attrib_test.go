@@ -32,7 +32,7 @@ pub fn violator() -> Int { 42 }
 	if err != nil {
 		t.Fatalf("LoadPackage: %v", err)
 	}
-	pr := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+	pr := resolve.ResolvePackageDefault(pkg)
 	res := Package(pkg, pr)
 
 	var intrinsicDiag *diag.Diagnostic
