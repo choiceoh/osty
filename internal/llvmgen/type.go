@@ -32,23 +32,11 @@ func llvmBuiltinAggregateName(prefix string, parts ...string) string {
 	return "%" + strings.Join(names, ".")
 }
 
+// llvmBuiltinAggregatePart folds a type-name fragment into the LLVM
+// identifier alphabet. Delegates to the Osty-sourced
+// `mirLLVMBuiltinAggregatePart` (`toolchain/mir_generator.osty`).
 func llvmBuiltinAggregatePart(part string) string {
-	if part == "" {
-		return "void"
-	}
-	var b strings.Builder
-	for i := 0; i < len(part); i++ {
-		c := part[i]
-		if c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') {
-			b.WriteByte(c)
-			continue
-		}
-		b.WriteByte('_')
-	}
-	if b.Len() == 0 {
-		return "value"
-	}
-	return b.String()
+	return mirLLVMBuiltinAggregatePart(part)
 }
 
 func llvmResultTypeName(okTyp, errTyp string) string {

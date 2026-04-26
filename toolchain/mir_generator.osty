@@ -12958,3 +12958,46 @@ pub fn mirLLVMTripleFor(arch: String, osName: String) -> String {
     if osName == "js" { return "wasm32-unknown-emscripten" }
     mirLinuxArch(arch) + "-unknown-" + osName
 }
+
+/// §18 (cont'd) — specialized-builtin name predicate ported from
+/// `isSpecializedBuiltinStructName` in `internal/llvmgen/ir_module.go`.
+///
+/// Reports whether a struct name is the `_ZTS`-prefixed Itanium
+/// type-info form used for stdlib built-in template specialisations
+/// (Map, List, Set, Option, Result). User struct names keep their
+/// source spelling.
+pub fn mirIsSpecializedBuiltinStructName(name: String) -> Bool {
+    llvmStrings.HasPrefix(name, "_ZTS")
+}
+
+/// §18 (cont'd) — LLVM aggregate name-part sanitizer ported from
+/// `llvmBuiltinAggregatePart` in `internal/llvmgen/type.go`.
+///
+/// Folds a single Osty type-name fragment into the LLVM identifier
+/// alphabet ([A-Za-z0-9_]) for use as a piece of an aggregate
+/// type-name (e.g. `%Range_i64`, `%Result_i64_String`). Non-alnum
+/// characters become `_`; an empty input becomes `void`; an all-
+/// non-alnum input collapses to `value`.
+pub fn mirLLVMBuiltinAggregatePart(part: String) -> String {
+    if part == "" { return "void" }
+    let mut buf = ""
+    let mut sawValid = false
+    let mut i = 0
+    let n = part.len()
+    for i < n {
+        let c = part[i]
+        let isUnderscore = c == "_"
+        let isLower = c >= "a" && c <= "z"
+        let isUpper = c >= "A" && c <= "Z"
+        let isDigit = c >= "0" && c <= "9"
+        if isUnderscore || isLower || isUpper || isDigit {
+            buf = buf + c
+            sawValid = true
+        } else {
+            buf = buf + "_"
+        }
+        i = i + 1
+    }
+    if !sawValid { return "value" }
+    buf
+}
