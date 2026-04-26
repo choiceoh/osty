@@ -3072,6 +3072,16 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
     micro->byte_size = (int32_t)payload_size;
     micro->forward_or_meta =
         osty_gc_micro_pack_meta(OSTY_GC_COLOR_WHITE, 0);
+    /* Zero the payload bytes to match the headerful allocator's
+     * calloc / free-list-memset semantics. Cheney swap recycles
+     * arena slots without zeroing, so without this fresh allocs
+     * inherit the previous occupant's payload bytes — `osty_rt_list`
+     * would see a garbage `len` / `elem_size` from the dead List
+     * that lived at this offset, blow `ensure_layout` on first
+     * push, etc. (Bisected from the property-generator subset
+     * test failure.) */
+    memset((unsigned char *)slot + sizeof(osty_gc_micro_header), 0,
+           payload_size);
     osty_gc_young_alloc_count_total += 1;
     osty_gc_young_alloc_bytes_total += (int64_t)payload_size;
     /* Phase 8 step 1: feed the same nursery-pressure counter the
@@ -3119,7 +3129,8 @@ static bool osty_gc_young_eligible(int64_t object_kind, size_t payload_size) {
         return false;
     }
     if (object_kind != OSTY_GC_KIND_STRING &&
-        object_kind != OSTY_GC_KIND_BYTES) {
+        object_kind != OSTY_GC_KIND_BYTES &&
+        object_kind != OSTY_GC_KIND_LIST) {
         return false;
     }
     if (payload_size == 0 ||
@@ -3416,6 +3427,26 @@ static void *osty_gc_promote_young_to_old(void *young_payload) {
     }
     micro->forward_or_meta = (uint64_t)(uintptr_t)new_payload |
                              OSTY_GC_FORWARD_TAG_PROMOTED;
+    /* Phase E follow-up: register in Phase D's persistent forwarding
+     * table too. The PROMOTED tag in the micro-header is fast (one
+     * memory read per load) but ephemeral — cheney swaps eventually
+     * recycle the from-space slot and overwrite the tag bytes with
+     * fresh young allocations. The forwarding table survives swaps
+     * and serves as the permanent fallback for callers that retain
+     * the original young pointer indefinitely.
+     *
+     * Cost: bumps `osty_gc_forwarding_count`, switching `load_v1`
+     * out of its zero-forward fast path for the rest of the
+     * process. Acceptable trade-off for correctness — without this,
+     * `osty_rt_list_cast` could resolve to a stale young address
+     * once enough cheney cycles have passed, and the next
+     * `ensure_layout` would see a corrupt elem_size. */
+    {
+        osty_gc_header *new_header = osty_gc_find_header(new_payload);
+        if (new_header != NULL) {
+            osty_gc_forwarding_insert(young_payload, new_header);
+        }
+    }
     osty_gc_young_promoted_to_old_count_total += 1;
     osty_gc_young_promoted_to_old_bytes_total += (int64_t)payload_size;
     return new_payload;
@@ -6089,18 +6120,30 @@ OSTY_HOT_INLINE void *osty_rt_list_new(void) {
     return list;
 }
 
-/* osty_rt_list_cast_fast — direct cast without the osty_gc_load_v1
- * barrier. Safe under the Phase A-C non-moving collector invariant
- * (RUNTIME_GC.md §: "the collector does not relocate yet (compaction
- * lands in Phase D)") — the payload pointer never changes for the
- * lifetime of an allocation, so the find-header / forward-payload
- * lookups are redundant. Only use this from primitive-typed list
- * accessors (get_i64, set_i64, len) where the call was the dominant
- * cost in tight-loop List<Int> code (quicksort, matmul, lane_route).
- * Flip these callers back to osty_rt_list_cast when Phase D lands. */
+/* osty_rt_list_cast_fast — like `osty_rt_list_cast` but skips the
+ * full `osty_gc_load_v1` barrier (no Phase D forwarding-table probe).
+ * Safe under Phase A-C non-moving semantics + Phase E young arena:
+ * the only address mutation that can happen for a List payload is
+ * the cheney PROMOTED redirect on root_bind, which we follow here
+ * inline. Hot tight-loop accessors (get_i64, set_i64, len) call
+ * this to dodge the lock cycle / hash probe in load_v1. */
 OSTY_HOT_INLINE static osty_rt_list *osty_rt_list_cast_fast(void *raw_list) {
     if (raw_list == NULL) {
         osty_rt_abort("list is null");
+    }
+    /* Phase E follow-up: same PROMOTED / FORWARDED follow as
+     * `osty_gc_load_v1`. A young List that gets root_bind'd
+     * promotes to OLD; callers that retained the pre-promote young
+     * pointer would otherwise read stale young bytes here. */
+    if (osty_gc_arena_is_young_page(raw_list)) {
+        osty_gc_micro_header *micro =
+            osty_gc_micro_header_for_payload(raw_list);
+        uint64_t fom = micro->forward_or_meta;
+        uint64_t tag = fom & OSTY_GC_FORWARD_TAG_MASK;
+        if (tag == OSTY_GC_FORWARD_TAG_PROMOTED ||
+            tag == OSTY_GC_FORWARD_TAG_FORWARDED) {
+            raw_list = (void *)(uintptr_t)(fom & ~OSTY_GC_FORWARD_TAG_MASK);
+        }
     }
     return (osty_rt_list *)raw_list;
 }
@@ -6514,13 +6557,19 @@ static int osty_rt_compare_string_ascending(const void *left, const void *right)
     return osty_rt_string_compare_bytes(left_value, right_value);
 }
 
+/* Root-bind FIRST, cast SECOND. Phase E follow-up: with List in
+ * the young arena eligibility set, `osty_gc_root_bind_v1` on a
+ * young list auto-promotes it to OLD; the cast that follows
+ * resolves to the OLD payload via load_v1's PROMOTED follow.
+ * The pre-Phase-E ordering (cast first, captured local, then
+ * root_bind) left the local pointing at the now-stale young
+ * payload and writes silently went to dead from-space bytes. */
 void *osty_rt_list_sorted_i64(void *raw_list) {
-    osty_rt_list *list = osty_rt_list_cast(raw_list);
     void *out = osty_rt_list_new();
-    osty_rt_list *sorted = osty_rt_list_cast(out);
-
     osty_gc_root_bind_v1(raw_list);
     osty_gc_root_bind_v1(out);
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    osty_rt_list *sorted = osty_rt_list_cast(out);
     osty_rt_list_ensure_layout(list, sizeof(int64_t), NULL);
     osty_rt_list_ensure_layout(sorted, sizeof(int64_t), NULL);
     osty_rt_list_copy_initialized(out, sorted, list->data, list->len);
@@ -6531,12 +6580,11 @@ void *osty_rt_list_sorted_i64(void *raw_list) {
 }
 
 void *osty_rt_list_sorted_i1(void *raw_list) {
-    osty_rt_list *list = osty_rt_list_cast(raw_list);
     void *out = osty_rt_list_new();
-    osty_rt_list *sorted = osty_rt_list_cast(out);
-
     osty_gc_root_bind_v1(raw_list);
     osty_gc_root_bind_v1(out);
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    osty_rt_list *sorted = osty_rt_list_cast(out);
     osty_rt_list_ensure_layout(list, sizeof(bool), NULL);
     osty_rt_list_ensure_layout(sorted, sizeof(bool), NULL);
     osty_rt_list_copy_initialized(out, sorted, list->data, list->len);
@@ -6547,12 +6595,11 @@ void *osty_rt_list_sorted_i1(void *raw_list) {
 }
 
 void *osty_rt_list_sorted_f64(void *raw_list) {
-    osty_rt_list *list = osty_rt_list_cast(raw_list);
     void *out = osty_rt_list_new();
-    osty_rt_list *sorted = osty_rt_list_cast(out);
-
     osty_gc_root_bind_v1(raw_list);
     osty_gc_root_bind_v1(out);
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    osty_rt_list *sorted = osty_rt_list_cast(out);
     osty_rt_list_ensure_layout(list, sizeof(double), NULL);
     osty_rt_list_ensure_layout(sorted, sizeof(double), NULL);
     osty_rt_list_copy_initialized(out, sorted, list->data, list->len);
@@ -6563,12 +6610,11 @@ void *osty_rt_list_sorted_f64(void *raw_list) {
 }
 
 void *osty_rt_list_sorted_string(void *raw_list) {
-    osty_rt_list *list = osty_rt_list_cast(raw_list);
     void *out = osty_rt_list_new();
-    osty_rt_list *sorted = osty_rt_list_cast(out);
-
     osty_gc_root_bind_v1(raw_list);
     osty_gc_root_bind_v1(out);
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    osty_rt_list *sorted = osty_rt_list_cast(out);
     osty_rt_list_ensure_layout(list, sizeof(void *), osty_gc_mark_slot_v1);
     osty_rt_list_ensure_layout(sorted, sizeof(void *), osty_gc_mark_slot_v1);
     osty_rt_list_copy_initialized(out, sorted, list->data, list->len);
@@ -8448,14 +8494,22 @@ void osty_rt_map_clear(void *raw_map) {
 
 void *osty_rt_map_keys(void *raw_map) {
     osty_rt_map *map = osty_rt_map_cast(raw_map);
-    void *out = osty_rt_list_new();
-    osty_rt_list *keys = osty_rt_list_cast(out);
-    int64_t count = 0;
     if (map == NULL) {
         osty_rt_abort("map is null");
     }
+    void *out = osty_rt_list_new();
+    /* Root-bind BEFORE casting `out`. With List young-eligible,
+     * root_bind auto-promotes the freshly-allocated young list to
+     * OLD; doing the cast after means the cast resolves through
+     * `osty_gc_load_v1`'s PROMOTED tag follow and returns the OLD
+     * payload. Casting first would freeze a stale young pointer
+     * in `keys` and every subsequent op would write to the dead
+     * from-space copy. Same reorder applied to every helper that
+     * pairs `cast → root_bind` on the same raw payload. */
     osty_gc_root_bind_v1(raw_map);
     osty_gc_root_bind_v1(out);
+    osty_rt_list *keys = osty_rt_list_cast(out);
+    int64_t count = 0;
     osty_rt_map_lock(raw_map);
     switch (map->key_kind) {
     case OSTY_RT_ABI_I64:
@@ -10203,6 +10257,34 @@ void *osty_gc_load_v1(void *value) {
         osty_gc_load_count += 1;
         return value;
     }
+    /* Phase E follow-up: cheney PROMOTED / FORWARDED tag follow.
+     * When `osty_gc_promote_young_to_old` (root_bind / pin path)
+     * moves a young payload to OLD, callers that retained the
+     * pre-promote young pointer would otherwise read dead bytes
+     * on subsequent `osty_rt_list_cast` / `_map_cast` / `_set_cast`
+     * (every list/map/set op funnels through here). Following the
+     * tag here keeps the cast site cheap (no per-typed-cast check)
+     * and centralises the "stale young addr → live OLD addr"
+     * redirect. The arena range check is a 4-compare on the young
+     * mmap; only addresses inside young arena pay the additional
+     * micro-header read. Non-young loads (the dominant case) take
+     * the cheap fast path below. */
+    if (value != NULL && osty_gc_arena_is_young_page(value)) {
+        osty_gc_micro_header *micro =
+            osty_gc_micro_header_for_payload(value);
+        uint64_t fom = micro->forward_or_meta;
+        uint64_t tag = fom & OSTY_GC_FORWARD_TAG_MASK;
+        if (tag == OSTY_GC_FORWARD_TAG_PROMOTED ||
+            tag == OSTY_GC_FORWARD_TAG_FORWARDED) {
+            void *redirected = (void *)(uintptr_t)(fom & ~OSTY_GC_FORWARD_TAG_MASK);
+            osty_gc_load_count += 1;
+            osty_gc_load_managed_count += 1;
+            if (redirected != value) {
+                osty_gc_load_forwarded_count += 1;
+            }
+            return redirected;
+        }
+    }
     if (osty_rt_concurrent_workers_load() == 0 &&
         osty_gc_forwarding_count == 0) {
         osty_gc_load_count += 1;
@@ -10315,15 +10397,50 @@ static osty_gc_header *osty_gc_root_binding_header(void *root) {
     return header;
 }
 
+/* Phase E follow-up: auto-promote a young payload before binding
+ * so root_count lands on the persistent OLD header. Two shapes
+ * accepted (matching `osty_gc_root_binding_header`):
+ *   1. `root` is a payload — promote in place, return new addr.
+ *   2. `root` is a stack slot whose first 8 bytes are a payload
+ *      (LLVM convention) — deref, promote, rewrite the slot.
+ * The slot-rewriting case is critical: without it the LLVM-emitted
+ * release call later hits `osty_gc_root_binding_header` and reads
+ * the same slot to find a matching header. If the slot still
+ * pointed at the dead young payload, find_header would return the
+ * read-only shim, root_count writes from bind would have gone
+ * nowhere, and release would underflow. */
+static void *osty_gc_root_bind_promote_if_young(void *root) {
+    if (root == NULL) {
+        return root;
+    }
+    if (osty_gc_arena_is_young_page(root)) {
+        return osty_gc_promote_young_to_old(root);
+    }
+    /* Slot-addr path: only chase if root isn't already a recognised
+     * managed payload (otherwise dereferencing reads the payload's
+     * first 8 bytes as if they were a child pointer). */
+    if (osty_gc_find_header(root) != NULL) {
+        return root;
+    }
+    void *payload = NULL;
+    memcpy(&payload, root, sizeof(payload));
+    if (payload != NULL && osty_gc_arena_is_young_page(payload)) {
+        void *promoted = osty_gc_promote_young_to_old(payload);
+        if (promoted != payload) {
+            memcpy(root, &promoted, sizeof(promoted));
+        }
+    }
+    return root;
+}
+
 void osty_gc_root_bind_v1(void *root) {
     osty_gc_header *header;
-    /* Phase 7 step 2: a young (no-header) payload can't carry a
-     * persistent root_count, so binding promotes it to OLD first.
-     * Done outside the lock since `osty_gc_allocate_managed` runs its
-     * own acquire/release internally. */
-    if (osty_gc_arena_is_young_page(root)) {
-        root = osty_gc_promote_young_to_old(root);
-    }
+    /* Phase 7 step 2 (extended in Phase E follow-up): a young
+     * payload can't carry a persistent root_count, so binding
+     * promotes it to OLD first. Done outside the lock since
+     * `osty_gc_allocate_managed` runs its own acquire/release
+     * internally. */
+    root = osty_gc_root_bind_promote_if_young(root);
     osty_gc_acquire();
     header = osty_gc_root_binding_header(root);
     if (header == NULL) {
@@ -10356,12 +10473,11 @@ void osty_gc_root_release_v1(void *root) {
 
 void osty_gc_pin_v1(void *root) {
     osty_gc_header *header;
-    /* Phase 7 step 2: pin auto-promotes young payloads to OLD so the
-     * pin_count survives the next minor cycle (Cheney would otherwise
-     * leave the pin behind in the dead from-space). */
-    if (osty_gc_arena_is_young_page(root)) {
-        root = osty_gc_promote_young_to_old(root);
-    }
+    /* Phase 7 step 2 (extended in Phase E follow-up): pin
+     * auto-promotes young payloads (and slot-addr-to-young) to
+     * OLD so pin_count survives the next minor cycle. Same
+     * promote helper as `root_bind_v1` for consistency. */
+    root = osty_gc_root_bind_promote_if_young(root);
     osty_gc_acquire();
     header = osty_gc_find_header_or_forwarded(root);
     if (header == NULL) {

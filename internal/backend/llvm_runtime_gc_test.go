@@ -101,7 +101,18 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_THRESHOLD_BYTES=1")
+	/* Phase E: this test exercises end-to-end live_count + counter
+	 * semantics across mixed alloc patterns + split-returns-list. The
+	 * counters were calibrated against the headerful-young topology
+	 * (list goes on `osty_gc_young_head`, contributes to live_count,
+	 * load_v1 returns input verbatim). With LIST routing to the cheney
+	 * young arena, several columns shift (list not in live_count,
+	 * load_v1 follows PROMOTED and returns the OLD copy ≠ input,
+	 * load_managed_count gets one extra bump per follow). Updating
+	 * each column individually is brittle; opting this test out of
+	 * young List routing keeps the existing semantics intact. */
+	runCmd.Env = append(os.Environ(), "OSTY_GC_THRESHOLD_BYTES=1",
+		"OSTY_GC_TINYTAG_YOUNG=0")
 	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
@@ -211,7 +222,11 @@ int main(void) {
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
-	if got, want := string(runOutput), "1\n0\n2\n1\n0\n"; got != want {
+	/* LIST is young-eligible — `osty_rt_list_new()` lands in the
+	 * young arena and doesn't bump the headerful live_count. The
+	 * third value reflects only headerful objects: the kind=8
+	 * GENERIC child stays OLD; the list is young. */
+	if got, want := string(runOutput), "1\n0\n1\n1\n0\n"; got != want {
 		t.Fatalf("runtime safepoint harness stdout = %q, want %q", got, want)
 	}
 }
@@ -3276,7 +3291,14 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_THRESHOLD_BYTES=1")
+	/* Force the headerful path so the test exercises Phase D
+	 * compaction on the same OLD-generation List allocations the
+	 * pre-Phase-E version assumed. With Phase E's List young
+	 * eligibility on, those Lists would route to the cheney young
+	 * arena instead, where Phase D forwarding semantics don't
+	 * apply (cheney has its own forward/swap mechanic). */
+	runCmd.Env = append(os.Environ(), "OSTY_GC_THRESHOLD_BYTES=1",
+		"OSTY_GC_TINYTAG_YOUNG=0")
 	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
@@ -4903,7 +4925,11 @@ int main(void) {
 	if err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	runCmd := exec.Command(binaryPath)
+	/* Same Phase D opt-out as `TestBundledRuntimeCompactsStackRootedPayloadsPhaseD`:
+	 * Lists need to be headerful for the compaction-forwarding asserts. */
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=0")
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -5647,25 +5673,24 @@ int64_t osty_gc_debug_live_count(void);
 int64_t osty_gc_debug_tinytag_young_enabled(void);
 int64_t osty_gc_debug_arena_is_young_page(void *payload);
 
-void *osty_rt_list_new(void);
+void *osty_rt_map_new(int64_t k, int64_t v, int64_t vsz, void *vt);
 
 int main(void) {
     /* Print the flag state first; the test process either sets the env
      * var or doesn't. */
     printf("%lld\n", (long long)osty_gc_debug_tinytag_young_enabled());
 
-    /* Allocate a regular arena-backed payload and confirm the young-page
-     * predicate still classifies it as not-young. Phase 5 will flip this
-     * to true only for payloads that come out of the dedicated young
-     * arena, which doesn't exist yet. */
-    void *list = osty_rt_list_new();
-    osty_gc_root_bind_v1(list);
-    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(list));
+    /* Map is reliably headerful (KIND_MAP has destroy → ineligible
+     * for young arena regardless of flag state). The predicate must
+     * classify it as not-young in both default and envOff modes. */
+    void *map = osty_rt_map_new(1, 1, 8, 0);
+    osty_gc_root_bind_v1(map);
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(map));
 
     /* Mark/sweep cycle still works through the new dispatcher. */
     osty_gc_debug_collect();
     printf("%lld\n", (long long)osty_gc_debug_live_count());
-    osty_gc_root_release_v1(list);
+    osty_gc_root_release_v1(map);
     osty_gc_debug_collect();
     printf("%lld\n", (long long)osty_gc_debug_live_count());
     return 0;
@@ -5757,15 +5782,16 @@ int64_t osty_gc_debug_young_header_object_kind(void *payload);
 int64_t osty_gc_debug_young_header_byte_size(void *payload);
 int64_t osty_gc_debug_young_header_generation(void *payload);
 
-void *osty_rt_list_new(void);
+void *osty_rt_map_new(int64_t k, int64_t v, int64_t vsz, void *vt);
 
 #define KIND_LIST 1024
 #define KIND_STRING 1025
 
 int main(void) {
-    /* OLD-arena List should not be classified as a young-arena page. */
-    void *list = osty_rt_list_new();
-    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(list));
+    /* OLD-arena Map should not be classified as a young-arena page
+     * (KIND_MAP has destroy → ineligible regardless of flag). */
+    void *map = osty_rt_map_new(1, 1, 8, 0);
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(map));
 
     /* Direct young alloc (Phase 6 will route real allocators here). */
     void *young = osty_gc_debug_allocate_young(48, KIND_STRING);
@@ -6311,7 +6337,7 @@ int main(void) {
 			env:  []string{"OSTY_GC_TINYTAG_YOUNG=0"},
 			wantRows: []string{
 				"1 0 0",    // GENERIC
-				"1024 0 0", // LIST
+				"1024 0 0", // LIST: opt-out forces headerful
 				"1025 0 0", // STRING
 				"1026 0 0", // MAP
 				"1027 0 0", // SET
@@ -6328,12 +6354,12 @@ int main(void) {
 			env:  nil,
 			wantRows: []string{
 				"1 0 0",    // GENERIC: no descriptor
-				"1024 0 0", // LIST: has destroy
-				"1025 1 1", // STRING: eligible (Map<String> regression was a string-cache bug, fixed)
-				"1026 0 0", // MAP: has destroy
+				"1024 1 1", // LIST: eligible (load_v1 PROMOTED follow + cheney self-ref fixup + dead-list scan)
+				"1025 1 1", // STRING: eligible
+				"1026 0 0", // MAP: has destroy (free's keys/values arrays — needs typed sweep)
 				"1027 0 0", // SET: has destroy
-				"1028 1 1", // BYTES: pass
-				"1029 0 0", // CLOSURE_ENV: ineligible (post-alloc captures mutation breaks auto-promote)
+				"1028 1 1", // BYTES: eligible
+				"1029 0 0", // CLOSURE_ENV: post-alloc captures mutation breaks auto-promote
 				"1030 0 0", // CHANNEL: has destroy
 			},
 		},
@@ -6519,7 +6545,7 @@ int64_t osty_gc_debug_young_alloc_count_total(void);
 
 void *osty_rt_strings_ToBytes(const char *value);   /* KIND_BYTES via headerful or young */
 const char *osty_rt_strings_Repeat(const char *value, int64_t n);  /* KIND_STRING */
-void *osty_rt_list_new(void);                       /* KIND_LIST (ineligible) */
+void *osty_rt_list_new(void);                       /* KIND_LIST (eligible — cheney handles destroy) */
 void *osty_rt_map_new(int64_t k, int64_t v, int64_t vsz, void *vt); /* KIND_MAP (ineligible) */
 
 int main(void) {
@@ -6532,9 +6558,9 @@ int main(void) {
     void *b = osty_rt_strings_ToBytes("hello");          /* KIND_BYTES (NULL/NULL) */
     void *e = osty_rt_closure_env_alloc_v2(0, "t.env", 0); /* KIND_CLOSURE_ENV (env_trace/NULL) */
 
-    /* Ineligible kinds — must take the headerful path regardless of
-     * the feature flag. */
-    void *l = osty_rt_list_new();                        /* KIND_LIST (has destroy) */
+    /* LIST is eligible — cheney handles its destroy via the
+     * dead-from-space scan. MAP / GENERIC stay headerful. */
+    void *l = osty_rt_list_new();                        /* KIND_LIST (young-eligible) */
     void *m = osty_rt_map_new(1, 1, 8, 0);               /* KIND_MAP (has destroy) */
     void *g = osty_gc_alloc_v1(1, 16, "test.generic");   /* KIND_GENERIC (no descriptor) */
 
@@ -6574,13 +6600,13 @@ int main(void) {
 			wantClass: [6]string{"0", "0", "0", "0", "0", "0"},
 		},
 		{
-			// Default (Phase 8 step 2 cutover): STRING + BYTES
-			// route to young arena. CLOSURE_ENV / GENERIC /
-			// LIST / MAP / CHANNEL stay headerful.
+			// Default (Phase 8 step 2 cutover + Phase E follow-up):
+			// STRING + BYTES + LIST route to young arena.
+			// CLOSURE_ENV / GENERIC / MAP / CHANNEL stay headerful.
 			name:      "default",
 			env:       nil,
-			wantDelta: "2",
-			wantClass: [6]string{"1", "1", "0", "0", "0", "0"},
+			wantDelta: "3",
+			wantClass: [6]string{"1", "1", "0", "1", "0", "0"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
