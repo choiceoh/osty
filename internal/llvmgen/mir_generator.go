@@ -2167,10 +2167,8 @@ func (g *mirGen) emitGCSafepointKind(kind safepointKind) {
 	g.nextSafepoint += len(plan)
 	for i, chunk := range plan {
 		rootChunk := g.gcRootChunks[i]
-		g.fnBuf.WriteString(mirCallVoidLine("osty.gc.safepoint_v1",
-			"i64 "+strconv.Itoa(chunk.id)+
-				", ptr "+rootChunk.slotsPtr+
-				", i64 "+strconv.Itoa(rootChunk.count)))
+		g.fnBuf.WriteString(mirCallVoidI64TagAndPtrLine("osty.gc.safepoint_v1",
+			strconv.Itoa(chunk.id), rootChunk.slotsPtr, strconv.Itoa(rootChunk.count)))
 	}
 }
 
@@ -2365,8 +2363,7 @@ func (g *mirGen) emitIndexedWrite(a *mir.AssignInstr, destLoc *mir.Local, ip *mi
 			}
 			sym := "osty_rt_list_set_" + listRuntimeSymbolSuffix(elemLLVM)
 			g.declareRuntime(sym, mirRuntimeDeclareListSetSimpleLine(sym, elemLLVM))
-			g.fnBuf.WriteString(mirCallVoidLine(sym,
-				"ptr "+contReg+", i64 "+idxReg+", "+elemLLVM+" "+valReg))
+			g.fnBuf.WriteString(mirCallVoidListPtrI64ValueLine(sym, contReg, idxReg, elemLLVM, valReg))
 			return nil
 		}
 		// Composite element path — spill the value to a stack slot
@@ -2379,11 +2376,7 @@ func (g *mirGen) emitIndexedWrite(a *mir.AssignInstr, destLoc *mir.Local, ip *mi
 		sizeReg := g.emitSizeOf(elemLLVM)
 		sym := "osty_rt_list_set_bytes_v1"
 		g.declareRuntime(sym, mirRuntimeDeclareBytesV1SetWithBarrierLine(sym))
-		g.fnBuf.WriteString(mirCallVoidLine(sym,
-			"ptr "+contReg+", i64 "+idxReg+
-				", ptr "+valSlot.name+
-				", i64 "+sizeReg+
-				", ptr null"))
+		g.fnBuf.WriteString(mirCallVoidListBytesV1SetWithBarrierLine(sym, contReg, idxReg, valSlot.name, sizeReg, "null"))
 		return nil
 	case isMapPtrType(localT):
 		keyT, _ := mapKeyValueTypes(localT)
@@ -4120,7 +4113,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		// byte so the call is element-type agnostic.
 		sym := "osty_rt_list_reverse"
 		g.declareRuntime(sym, mirRuntimeDeclareVoidFromPtrLine(sym))
-		g.fnBuf.WriteString(mirCallVoidLine(sym, "ptr "+listReg))
+		g.fnBuf.WriteString(mirCallVoidPtrLine(sym, listReg))
 		return nil
 	case mir.IntrinsicListReversed:
 		// Returns a freshly allocated reversed copy. Same elem_size/
@@ -4178,7 +4171,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
-		g.fnBuf.WriteString(mirCallVoidLine(spliceSym, "ptr "+listReg+", i64 "+idxReg))
+		g.fnBuf.WriteString(mirCallVoidPtrI64Line(spliceSym, listReg, idxReg))
 		return g.storeIntrinsicResult(i, &LlvmValue{typ: elemLLVM, name: elemReg})
 	case mir.IntrinsicListIndexOf:
 		// `indexOf(x) -> Int?` — linear scan. Emit inline loop so we
@@ -4385,7 +4378,7 @@ func (g *mirGen) emitListLoadElement(listReg, idxReg string, elemLLVM string) (s
 	sizeReg := g.emitSizeOf(elemLLVM)
 	sym := listRuntimeGetBytesV1Symbol()
 	g.declareRuntime(sym, mirRuntimeDeclareBytesV1GetLine(sym))
-	g.fnBuf.WriteString(mirCallVoidLine(sym, "ptr "+listReg+", i64 "+idxReg+", ptr "+slot+", i64 "+sizeReg))
+	g.fnBuf.WriteString(mirCallVoidListBytesV1GetLine(sym, listReg, idxReg, slot, sizeReg))
 	elemReg := g.fresh()
 	g.fnBuf.WriteString(mirLoadLine(elemReg, elemLLVM, slot))
 	return elemReg, nil
@@ -6174,24 +6167,19 @@ func (g *mirGen) emitSelectSend(i *mir.IntrinsicInstr) error {
 	if listUsesTypedRuntime(elemLLVM) {
 		suffix := llvmListElementSuffix(elemLLVM)
 		sym := "osty_rt_select_send_" + suffix
-		g.declareRuntime(sym, mirRuntimeDeclareLine("void", sym, "ptr, ptr, "+elemLLVM+", ptr"))
-		g.fnBuf.WriteString(mirCallVoidLine(sym,
-			"ptr "+builderReg+", ptr "+chReg+
-				", "+elemLLVM+" "+valReg+", ptr "+armReg))
+		g.declareRuntime(sym, mirRuntimeDeclareSelectSendLine(sym, elemLLVM))
+		g.fnBuf.WriteString(mirCallVoidSelectSendLine(sym, builderReg, chReg, elemLLVM, valReg, armReg))
 		return nil
 	}
 	// Composite element — bytes_v1 route. Spill value to a stack slot,
 	// hand the runtime a (ptr, size) pair; it copies into GC storage.
 	sym := "osty_rt_select_send_bytes_v1"
-	g.declareRuntime(sym, mirRuntimeDeclareTaskGroupSplitLine(sym))
+	g.declareRuntime(sym, mirRuntimeDeclareSelectSendBytesLine(sym))
 	em := g.ostyEmitter()
 	slot := llvmSpillToSlot(em, &LlvmValue{typ: elemLLVM, name: valReg})
 	size := llvmSizeOf(em, elemLLVM)
 	g.flushOstyEmitter(em)
-	g.fnBuf.WriteString(mirCallVoidLine(sym,
-		"ptr "+builderReg+", ptr "+chReg+
-			", ptr "+slot.name+", i64 "+size.name+
-			", ptr "+armReg))
+	g.fnBuf.WriteString(mirCallVoidSelectSendBytesLine(sym, builderReg, chReg, slot.name, size.name, armReg))
 	return nil
 }
 
@@ -6232,7 +6220,7 @@ func (g *mirGen) emitCancelIntrinsic(i *mir.IntrinsicInstr) error {
 		}
 		sym := "osty_rt_thread_sleep"
 		g.declareRuntime(sym, mirRuntimeDeclareVoidFromPtrLine(sym))
-		g.fnBuf.WriteString(mirCallVoidLine(sym, "ptr "+dur))
+		g.fnBuf.WriteString(mirCallVoidPtrLine(sym, dur))
 		return nil
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("cancel intrinsic kind %d", i.Kind))
