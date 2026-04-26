@@ -1363,6 +1363,21 @@ func mirCallValueLine(reg string, retTy string, sym string, argList string) stri
 	return "  " + reg + " = call " + retTy + " @" + sym + "(" + argList + ")\n"
 }
 
+// mirCallStmtLine renders `  call <retTy> @<sym>(<argList>)\n` — the
+// statement-position call where the return value is discarded.
+// Osty: mirCallStmtLine
+func mirCallStmtLine(retTy string, sym string, argList string) string {
+	return "  call " + retTy + " @" + sym + "(" + argList + ")\n"
+}
+
+// mirCallStmtNoArgsLine renders `  call <retTy> @<sym>()\n` — the
+// no-argument variant of `mirCallStmtLine`. Used by bounded thread
+// poll helpers whose result is conditionally retained.
+// Osty: mirCallStmtNoArgsLine
+func mirCallStmtNoArgsLine(retTy string, sym string) string {
+	return "  call " + retTy + " @" + sym + "()\n"
+}
+
 // mirGEPInboundsI8Line renders the byte-stride GEP form:
 // `  <reg> = getelementptr inbounds i8, ptr <basePtr>, i64 <offDigits>\n`.
 // Osty: mirGEPInboundsI8Line
@@ -1654,6 +1669,64 @@ func mirGEPLine(reg string, baseTy string, basePtr string, idxTy string, idx str
 // Osty: mirStorePtrLine
 func mirStorePtrLine(val string, slot string) string {
 	return "  store ptr " + val + ", ptr " + slot + "\n"
+}
+
+// mirStoreNullPtrLine renders `  store ptr null, ptr <slot>\n` — the
+// GC-managed slot zeroing pattern used by the entry safepoint preamble
+// and the cancellation-aware Handle slot zeroer.
+// Osty: mirStoreNullPtrLine
+func mirStoreNullPtrLine(slot string) string {
+	return "  store ptr null, ptr " + slot + "\n"
+}
+
+// mirRawAssignLine renders `  <reg> = <rhs>\n` — the catch-all for
+// SSA assignments whose right-hand side is computed by a separate
+// formatter (e.g. `mirUnaryInstruction`, predicate string concat).
+// Osty: mirRawAssignLine
+func mirRawAssignLine(reg string, rhs string) string {
+	return "  " + reg + " = " + rhs + "\n"
+}
+
+// mirBinaryOpLine renders `  <reg> = <opcode> <ty> <lhs>, <rhs>\n` —
+// the canonical two-operand instruction shape that `emitBinary`
+// lowers to after picking the opcode via `mirBinaryOpcode`.
+// Osty: mirBinaryOpLine
+func mirBinaryOpLine(reg string, opcode string, ty string, lhs string, rhs string) string {
+	return "  " + reg + " = " + opcode + " " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+// mirICmpLineFromPred is a thin alias of `mirICmpLine` used at sites
+// that thread the predicate string from `mirBinaryOpcode`.
+// Osty: mirICmpLineFromPred
+func mirICmpLineFromPred(reg string, pred string, ty string, lhs string, rhs string) string {
+	return mirICmpLine(reg, pred, ty, lhs, rhs)
+}
+
+// mirAllocaWithStoreLine renders `  <reg> = alloca <ty>` followed by
+// `  store <ty> <init>, ptr <reg>` — the canonical "freshly-zeroed
+// scalar slot" preamble. Used by the loop-safepoint poll counter and
+// the cancellation flag slot.
+// Osty: mirAllocaWithStoreLine
+func mirAllocaWithStoreLine(reg string, ty string, init string) string {
+	return mirAllocaLine(reg, ty) + mirStoreLine(ty, init, reg)
+}
+
+// mirAllocaWithStorePtrLine is the pointer-typed variant —
+// `alloca ptr` then `store ptr <val>, ptr <reg>`. Closure-thunk
+// materialization and indirect-call argument prep both spell this out
+// inline; the named builder captures the intent.
+// Osty: mirAllocaWithStorePtrLine
+func mirAllocaWithStorePtrLine(reg string, val string) string {
+	return mirAllocaLine(reg, "ptr") + mirStorePtrLine(val, reg)
+}
+
+// mirAllocaWithStoreNullPtrLine renders `alloca ptr` + `store ptr
+// null` at once — the canonical zero-init managed-pointer slot used
+// by `emitNullaryRV` for `Some(None)` payload synthesis and the GC
+// root preamble for non-param roots.
+// Osty: mirAllocaWithStoreNullPtrLine
+func mirAllocaWithStoreNullPtrLine(reg string) string {
+	return mirAllocaLine(reg, "ptr") + mirStoreNullPtrLine(reg)
 }
 
 // §14 enum / tuple layout cache.
@@ -2181,4 +2254,126 @@ func mirFPTruncDoubleToFloatLine(reg string, val string) string {
 // Osty: mirFPExtFloatToDoubleLine
 func mirFPExtFloatToDoubleLine(reg string, val string) string {
 	return "  " + reg + " = fpext float " + val + " to double\n"
+}
+
+// §10 cast / arithmetic builders.
+
+// mirSIToFPLine renders signed-int → float cast.
+// Osty: mirSIToFPLine
+func mirSIToFPLine(reg string, fromTy string, val string, toTy string) string {
+	return "  " + reg + " = sitofp " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+// mirFPToSILine renders float → signed-int cast.
+// Osty: mirFPToSILine
+func mirFPToSILine(reg string, fromTy string, val string, toTy string) string {
+	return "  " + reg + " = fptosi " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+// mirFPResizeLine renders fpext / fptrunc with a parameterised opcode.
+// Osty: mirFPResizeLine
+func mirFPResizeLine(reg string, op string, fromTy string, val string, toTy string) string {
+	return "  " + reg + " = " + op + " " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+// mirIntResizeLine renders sext / trunc with a parameterised opcode.
+// Osty: mirIntResizeLine
+func mirIntResizeLine(reg string, op string, fromTy string, val string, toTy string) string {
+	return "  " + reg + " = " + op + " " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+// mirOrI1Line renders i1 logical-or.
+// Osty: mirOrI1Line
+func mirOrI1Line(reg string, lhs string, rhs string) string {
+	return "  " + reg + " = or i1 " + lhs + ", " + rhs + "\n"
+}
+
+// mirShlI64Line renders i64 left shift.
+// Osty: mirShlI64Line
+func mirShlI64Line(reg string, lhs string, rhs string) string {
+	return "  " + reg + " = shl i64 " + lhs + ", " + rhs + "\n"
+}
+
+// mirAShrI64Line renders i64 arithmetic shift right.
+// Osty: mirAShrI64Line
+func mirAShrI64Line(reg string, lhs string, rhs string) string {
+	return "  " + reg + " = ashr i64 " + lhs + ", " + rhs + "\n"
+}
+
+// mirLShrI64Line renders i64 logical shift right.
+// Osty: mirLShrI64Line
+func mirLShrI64Line(reg string, lhs string, rhs string) string {
+	return "  " + reg + " = lshr i64 " + lhs + ", " + rhs + "\n"
+}
+
+// mirFAddLine renders floating-point addition.
+// Osty: mirFAddLine
+func mirFAddLine(reg string, ty string, lhs string, rhs string) string {
+	return "  " + reg + " = fadd " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+// mirFSubLine renders floating-point subtraction.
+// Osty: mirFSubLine
+func mirFSubLine(reg string, ty string, lhs string, rhs string) string {
+	return "  " + reg + " = fsub " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+// mirFMulLine renders floating-point multiplication.
+// Osty: mirFMulLine
+func mirFMulLine(reg string, ty string, lhs string, rhs string) string {
+	return "  " + reg + " = fmul " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+// mirFDivLine renders floating-point division.
+// Osty: mirFDivLine
+func mirFDivLine(reg string, ty string, lhs string, rhs string) string {
+	return "  " + reg + " = fdiv " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+// mirFNegLine renders floating-point negation.
+// Osty: mirFNegLine
+func mirFNegLine(reg string, ty string, val string) string {
+	return "  " + reg + " = fneg " + ty + " " + val + "\n"
+}
+
+// mirSubGenericLine renders integer subtraction at an arbitrary width.
+// Osty: mirSubGenericLine
+func mirSubGenericLine(reg string, ty string, lhs string, rhs string) string {
+	return "  " + reg + " = sub " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+// mirAddGenericLine renders integer addition at an arbitrary width.
+// Osty: mirAddGenericLine
+func mirAddGenericLine(reg string, ty string, lhs string, rhs string) string {
+	return "  " + reg + " = add " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+// mirMulGenericLine renders integer multiplication at an arbitrary width.
+// Osty: mirMulGenericLine
+func mirMulGenericLine(reg string, ty string, lhs string, rhs string) string {
+	return "  " + reg + " = mul " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+// mirSDivGenericLine renders integer signed division.
+// Osty: mirSDivGenericLine
+func mirSDivGenericLine(reg string, ty string, lhs string, rhs string) string {
+	return "  " + reg + " = sdiv " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+// mirSRemGenericLine renders integer signed modulo.
+// Osty: mirSRemGenericLine
+func mirSRemGenericLine(reg string, ty string, lhs string, rhs string) string {
+	return "  " + reg + " = srem " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+// mirURemI64Line renders i64 unsigned modulo.
+// Osty: mirURemI64Line
+func mirURemI64Line(reg string, lhs string, rhs string) string {
+	return "  " + reg + " = urem i64 " + lhs + ", " + rhs + "\n"
+}
+
+// mirXorI64Line renders i64 bitwise xor.
+// Osty: mirXorI64Line
+func mirXorI64Line(reg string, lhs string, rhs string) string {
+	return "  " + reg + " = xor i64 " + lhs + ", " + rhs + "\n"
 }
