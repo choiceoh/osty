@@ -3431,3 +3431,306 @@ pub fn mirRuntimeDeclareMapRemoveLine(sym: String, keyLLVM: String) -> String {
 pub fn mirRuntimeDeclareListSetSimpleLine(sym: String, elemLLVM: String) -> String {
     mirRuntimeDeclareLine("void", sym, "ptr, i64, " + elemLLVM)
 }
+
+/// §3 runtime-declare canonical-shape builders — drain the `"declare
+/// <ret> @"+sym+"(<args>)"` string-concat pattern at every call site
+/// in `mir_generator.go`. Each helper covers one common (ret, args)
+/// shape and produces the exact bytes the existing inline form
+/// generated, so the swap is byte-stable.
+
+/// mirRuntimeDeclarePrintf returns the canonical printf decl shape:
+///   `declare i32 @printf(ptr, ...)`
+/// Centralised so every printf-emitting site uses the same shape.
+pub fn mirRuntimeDeclarePrintf() -> String {
+    "declare i32 @printf(ptr, ...)"
+}
+
+/// mirRuntimeDeclareExit returns the canonical exit decl shape:
+///   `declare void @exit(i32)`
+/// Centralised so the noreturn-emitting sites (testing-abort,
+/// bench-error, panic-helper) all reach for the same builder.
+pub fn mirRuntimeDeclareExit() -> String {
+    "declare void @exit(i32)"
+}
+
+/// mirRuntimeDeclarePtrFromPtrLine renders `declare ptr @<sym>(ptr)` —
+/// the most common runtime ABI shape (~22 sites): `osty_rt_list_keys`,
+/// `osty_rt_list_data_*`, `osty_rt_set_to_list`, etc. Single ptr arg
+/// returning a ptr handle.
+pub fn mirRuntimeDeclarePtrFromPtrLine(sym: String) -> String {
+    mirRuntimeDeclareLine("ptr", sym, "ptr")
+}
+
+/// mirRuntimeDeclareI1FromPtrLine renders `declare i1 @<sym>(ptr)` —
+/// the predicate runtime shape used by `is_empty`, `is_closed`,
+/// `is_cancelled`, `osty_rt_list_pop_check`, etc.
+pub fn mirRuntimeDeclareI1FromPtrLine(sym: String) -> String {
+    mirRuntimeDeclareLine("i1", sym, "ptr")
+}
+
+/// mirRuntimeDeclareVoidFromPtrLine renders `declare void @<sym>(ptr)` —
+/// the side-effect runtime shape used by `osty_rt_list_clear`,
+/// `osty_rt_list_reverse`, `osty_rt_chan_close`, `*_pop_discard`,
+/// etc. The list/map/chan/set runtimes that act on a handle in-
+/// place all reach for this shape.
+pub fn mirRuntimeDeclareVoidFromPtrLine(sym: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr")
+}
+
+/// mirRuntimeDeclareI64FromPtrLine renders `declare i64 @<sym>(ptr)` —
+/// scalar-returning ptr-handle probe shape for `osty_rt_list_len`,
+/// `osty_rt_map_len`, `osty_rt_set_len`, etc. Distinct from
+/// `mirRuntimeDeclareMemoryRead` (which adds the `nounwind willreturn
+/// memory(read)` attribute combo for snapshot-LICM); this is the
+/// plain shape used at sites where the LICM hoist isn't desired.
+pub fn mirRuntimeDeclareI64FromPtrLine(sym: String) -> String {
+    mirRuntimeDeclareLine("i64", sym, "ptr")
+}
+
+/// mirRuntimeDeclarePtrFromScalarLine renders `declare ptr @<sym>(<scalar>)`
+/// — the scalar-to-string family: `osty_rt_int_to_string(i64)`,
+/// `osty_rt_float_to_string(double)`, `osty_rt_bool_to_string(i1)`,
+/// `osty_rt_char_to_string(i32)`, `osty_rt_byte_to_string(i8)`. All
+/// take a single scalar param and return an interned String ptr.
+pub fn mirRuntimeDeclarePtrFromScalarLine(sym: String, scalarLLVM: String) -> String {
+    mirRuntimeDeclareLine("ptr", sym, scalarLLVM)
+}
+
+/// mirRuntimeDeclareI64NoArgsLine renders `declare i64 @<sym>()` —
+/// the zero-arg scalar probe used by the bench harness clock reads
+/// (`osty_rt_bench_now_nanos`, `osty_rt_bench_target_ns`,
+/// `osty_gc_debug_allocated_bytes_total`).
+pub fn mirRuntimeDeclareI64NoArgsLine(sym: String) -> String {
+    mirRuntimeDeclareLine("i64", sym, "")
+}
+
+/// mirRuntimeDeclareVoidI32Line renders `declare void @<sym>(i32)` —
+/// shape exemplified by the libc `exit(i32)` decl. `mirRuntimeDeclareExit`
+/// covers the literal `@exit` symbol; this builder is the
+/// abstract-symbol form for any noreturn exit-like helper.
+pub fn mirRuntimeDeclareVoidI32Line(sym: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "i32")
+}
+
+/// mirRuntimeDeclareSafepointV1 returns the canonical decl for the
+/// GC safepoint runtime ABI:
+///   `declare void @osty.gc.safepoint_v1(i64, ptr, i64)`
+/// Tag + slots-array + count. The MIR emitter's safepoint chunker
+/// passes the per-chunk slots-array slot through this hook; the C
+/// runtime walks it to trace the live root set without pinning.
+pub fn mirRuntimeDeclareSafepointV1() -> String {
+    "declare void @osty.gc.safepoint_v1(i64, ptr, i64)"
+}
+
+/// mirRuntimeDeclareGcAllocV1 returns the canonical decl for the
+/// GC allocator runtime ABI:
+///   `declare ptr @osty.gc.alloc_v1(i64, i64, ptr)`
+/// Trace-kind + size + site-token. Used by the stack-spill heap-box
+/// path inside `toI64Slot` for aggregate-payload Option/Result
+/// constructions where the payload exceeds the i64 inline budget.
+pub fn mirRuntimeDeclareGcAllocV1() -> String {
+    "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)"
+}
+
+/// mirRuntimeDeclareStringConcat returns the canonical decl for the
+/// String concat runtime ABI:
+///   `declare ptr @osty_rt_strings_Concat(ptr, ptr)`
+/// Two ptr-typed strings → joined String ptr. The most-called
+/// runtime symbol in a typical program (every `+` on String, every
+/// interpolation segment chain).
+pub fn mirRuntimeDeclareStringConcat() -> String {
+    "declare ptr @osty_rt_strings_Concat(ptr, ptr)"
+}
+
+/// §6 Some-aggregate builders — repeating the `Some(payload)` two-
+/// insertvalue construction that appears at every list/map probe
+/// site. Centralising the pair keeps the disc=1 / payload=val order
+/// stable and produces a four-line block (two insertvalues + store +
+/// store-zero-on-miss) that downstream readers can spot as a unit.
+
+/// mirSomeAggregateLines renders the canonical Some(payload)
+/// aggregate construction:
+///   `  <tagged> = insertvalue <optTy> undef, i64 1, 0\n`
+///   `  <filled> = insertvalue <optTy> <tagged>, i64 <payload>, 1\n`
+/// Caller passes freshly-allocated SSA registers for both
+/// intermediates and the i64-widened payload value. The returned
+/// 2-line block goes into `g.fnBuf` ahead of the `store <opt>
+/// <filled>, ptr <slot>` terminator. Drains the two-`mirInsertValueAggLine`
+/// pattern repeated at IntrinsicListFirst / IntrinsicListLast /
+/// IntrinsicListPop / IntrinsicListIndexOf / IntrinsicListContains
+/// / IntrinsicMapGet / IntrinsicListSafeGet sites.
+pub fn mirSomeAggregateLines(taggedReg: String, filledReg: String, optLLVM: String, payloadI64: String) -> String {
+    mirInsertValueAggLine(taggedReg, optLLVM, "undef", "i64", "1", "0") +
+    mirInsertValueAggLine(filledReg, optLLVM, taggedReg, "i64", payloadI64, "1")
+}
+
+/// mirSomeStoreLines renders the Some-aggregate construction
+/// followed by the store into the destination slot:
+///   `  <tagged> = insertvalue <optTy> undef, i64 1, 0\n`
+///   `  <filled> = insertvalue <optTy> <tagged>, i64 <payload>, 1\n`
+///   `  store <optTy> <filled>, ptr <destSlot>\n`
+/// Three-line block. Wraps `mirSomeAggregateLines` with the trailing
+/// store via `mirStoreLine`. The destSlot is the function-local
+/// alloca for the Option<T>-typed dest; the i64-widened payload is
+/// produced by the caller via `listOptionalPayloadToI64`.
+pub fn mirSomeStoreLines(taggedReg: String, filledReg: String, optLLVM: String, payloadI64: String, destSlot: String) -> String {
+    mirSomeAggregateLines(taggedReg, filledReg, optLLVM, payloadI64) +
+    mirStoreLine(optLLVM, filledReg, destSlot)
+}
+
+/// mirSomeStoreThenJumpLines renders the full Some-arm body of a
+/// list/map probe match: aggregate construction + dest store + br
+/// to the join label.
+///   `  <tagged> = insertvalue <optTy> undef, i64 1, 0\n`
+///   `  <filled> = insertvalue <optTy> <tagged>, i64 <payload>, 1\n`
+///   `  store <optTy> <filled>, ptr <destSlot>\n`
+///   `  br label %<endLabel>\n`
+/// Four-line block. Drains the canonical "Some-arm exit" sequence
+/// at the seven sites listed under `mirSomeAggregateLines`. The br
+/// is unconditional because the Some-arm's match has already been
+/// proved by an earlier conditional.
+pub fn mirSomeStoreThenJumpLines(taggedReg: String, filledReg: String, optLLVM: String, payloadI64: String, destSlot: String, endLabel: String) -> String {
+    mirSomeStoreLines(taggedReg, filledReg, optLLVM, payloadI64, destSlot) +
+    mirBrUncondLine(endLabel)
+}
+
+/// mirNoneStoreThenJumpLines renders the canonical "None-arm exit"
+/// sequence: write zeroinitializer into the dest slot then jump to
+/// the join label.
+///   `  store <optTy> zeroinitializer, ptr <destSlot>\n`
+///   `  br label %<endLabel>\n`
+/// Two-line block. Sibling of `mirSomeStoreThenJumpLines` for the
+/// miss / empty / oob branch where None is the payload.
+pub fn mirNoneStoreThenJumpLines(optLLVM: String, destSlot: String, endLabel: String) -> String {
+    mirStoreZeroinitLine(optLLVM, destSlot) +
+    mirBrUncondLine(endLabel)
+}
+
+/// mirICmpSltI64Line renders the loop-bound check that drives every
+/// inline list/string scan loop:
+///   `  <reg> = icmp slt i64 <iReg>, <lenReg>\n`
+/// Specialised because `slt`-on-i64 is the hot-path predicate for
+/// linear scans. The general `mirICmpLine(reg, "slt", "i64", lhs,
+/// rhs)` form covers other widths; this is the typed shorthand.
+pub fn mirICmpSltI64Line(reg: String, lhs: String, rhs: String) -> String {
+    mirICmpLine(reg, "slt", "i64", lhs, rhs)
+}
+
+/// mirICmpSgeI64Line renders the lower-bound check for negative-
+/// index detection in `safe_get` / `index_of` style intrinsics:
+///   `  <reg> = icmp sge i64 <iReg>, 0\n`
+/// Sibling of `mirICmpSltI64Line` — `nonNeg && inUpper` is the
+/// canonical bounds check that gates the typed-element fast path.
+pub fn mirICmpSgeI64Line(reg: String, lhs: String, rhs: String) -> String {
+    mirICmpLine(reg, "sge", "i64", lhs, rhs)
+}
+
+/// mirLinearScanLoopHeadLines renders the loop-head block of the
+/// linear-scan idiom used by `IntrinsicListIndexOf` /
+/// `IntrinsicListContains`:
+///   `<headLabel>:\n`
+///   `  <iReg> = load i64, ptr <iSlot>\n`
+///   `  <cont> = icmp slt i64 <iReg>, <lenReg>\n`
+///   `  br i1 <cont>, label %<bodyLabel>, label %<endLabel>\n`
+/// Four-line block. Caller pre-allocates <iReg> and <cont>; the
+/// helper threads the labels and slot together. The `iSlot` was
+/// initialised to 0 in the preamble; the `<endLabel>` is the
+/// scan's exit block.
+pub fn mirLinearScanLoopHeadLines(headLabel: String, iReg: String, iSlot: String, cont: String, lenReg: String, bodyLabel: String, endLabel: String) -> String {
+    mirLabelLine(headLabel) +
+    mirLoadLine(iReg, "i64", iSlot) +
+    mirICmpSltI64Line(cont, iReg, lenReg) +
+    mirBrCondLine(cont, bodyLabel, endLabel)
+}
+
+/// mirLinearScanLoopTailLines renders the loop-tail block of the
+/// linear-scan idiom: continue-label header, increment, store back,
+/// jump to head.
+///   `<contLabel>:\n`
+///   `  <next> = add i64 <iReg>, 1\n`
+///   `  store i64 <next>, ptr <iSlot>\n`
+///   `  br label %<headLabel>\n`
+/// Four-line block. The `<contLabel>` is the post-match-fail
+/// fall-through that every iteration takes when the body's match
+/// missed.
+pub fn mirLinearScanLoopTailLines(contLabel: String, nextReg: String, iReg: String, iSlot: String, headLabel: String) -> String {
+    mirLabelLine(contLabel) +
+    mirAddI64Line(nextReg, iReg, "1") +
+    mirStoreLine("i64", nextReg, iSlot) +
+    mirBrUncondLine(headLabel)
+}
+
+/// mirNoneAggregateLines renders the canonical None two-insertvalue
+/// construction:
+///   `  <step> = insertvalue <optTy> undef, i64 0, 0\n`
+///   `  <value> = insertvalue <optTy> <step>, i64 0, 1\n`
+/// Two-line block. Sibling of `mirSomeAggregateLines` for the
+/// "build a None value" surface — `bytes.get` / `list.find` /
+/// `map.get` phi-merge sites where the two arms produce the value
+/// shape (Some/None) rather than storing into a slot directly. The
+/// caller phi-merges Some/None into a single Option<T>.
+pub fn mirNoneAggregateLines(stepReg: String, valueReg: String, optLLVM: String) -> String {
+    mirInsertValueAggLine(stepReg, optLLVM, "undef", "i64", "0", "0") +
+    mirInsertValueAggLine(valueReg, optLLVM, stepReg, "i64", "0", "1")
+}
+
+/// mirOkAggregateLines renders the canonical Ok(payload) two-
+/// insertvalue construction:
+///   `  <step> = insertvalue <resultTy> undef, i64 1, 0\n`
+///   `  <value> = insertvalue <resultTy> <step>, i64 <payload>, 1\n`
+/// Sibling of `mirSomeAggregateLines` but for `Result<Ok, Err>`
+/// where `Ok` shares the disc=1 tag with Some. Used by the bench
+/// harness `Ok(())` synthesis and the `?` propagation Ok-arm.
+pub fn mirOkAggregateLines(stepReg: String, valueReg: String, resultLLVM: String, payloadI64: String) -> String {
+    mirInsertValueAggLine(stepReg, resultLLVM, "undef", "i64", "1", "0") +
+    mirInsertValueAggLine(valueReg, resultLLVM, stepReg, "i64", payloadI64, "1")
+}
+
+/// mirErrAggregateLines renders the canonical Err(payload) two-
+/// insertvalue construction:
+///   `  <step> = insertvalue <resultTy> undef, i64 0, 0\n`
+///   `  <value> = insertvalue <resultTy> <step>, i64 <payload>, 1\n`
+/// Sibling of `mirOkAggregateLines` for the Err arm of Result.
+/// Note that for Result, disc=0 is Err (not None as in Option) —
+/// the discriminant convention is shared between Result and Option
+/// at the i64-tag level but the variant assignment differs.
+pub fn mirErrAggregateLines(stepReg: String, valueReg: String, resultLLVM: String, payloadI64: String) -> String {
+    mirInsertValueAggLine(stepReg, resultLLVM, "undef", "i64", "0", "0") +
+    mirInsertValueAggLine(valueReg, resultLLVM, stepReg, "i64", payloadI64, "1")
+}
+
+/// mirCallVoidI64TagAndPtrLine renders `call void @<sym>(i64 <tag>,
+/// ptr <slot>, i64 <count>)\n` — the safepoint chunk-call shape.
+/// Used by `emitGCSafepointKind` to invoke the runtime safepoint
+/// hook with a per-chunk slots array.
+pub fn mirCallVoidI64TagAndPtrLine(sym: String, tag: String, slot: String, count: String) -> String {
+    mirCallVoidLine(sym, "i64 " + tag + ", ptr " + slot + ", i64 " + count)
+}
+
+/// mirAllocaI64ZeroSlot renders the canonical "fresh i64 counter
+/// slot initialised to zero" preamble used by linear-scan loops:
+///   `  <slot> = alloca i64\n`
+///   `  store i64 0, ptr <slot>\n`
+/// Two-line block. Companion to the existing `mirAllocaWithStoreLine`
+/// but specialised for the (i64, "0") init case so call sites can
+/// grep for the "scan-counter slot" idiom.
+pub fn mirAllocaI64ZeroSlot(slot: String) -> String {
+    mirAllocaWithStoreLine(slot, "i64", "0")
+}
+
+/// mirAllocaI1FalseSlot renders the canonical "fresh i1 result
+/// slot initialised to false" preamble used by `IntrinsicListContains`:
+///   `  <slot> = alloca i1\n`
+///   `  store i1 false, ptr <slot>\n`
+/// Two-line block. Used so the contains scan can pre-store false
+/// and only flip to true on the first match without needing a phi.
+pub fn mirAllocaI1FalseSlot(slot: String) -> String {
+    mirAllocaWithStoreLine(slot, "i1", "false")
+}
+
+/// mirStoreI1TrueLine renders the literal "store i1 true" — used
+/// by `IntrinsicListContains`'s match arm to flip the result slot
+/// to true without recomputing.
+pub fn mirStoreI1TrueLine(slot: String) -> String {
+    mirStoreLine("i1", "true", slot)
+}
