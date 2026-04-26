@@ -52,13 +52,18 @@ compiler path is now native-only through the LLVM backend.
 | `osty run` (build + exec through backend) | wired — resolves manifest, vendors deps, emits the native entry artifact, runs the backend binary with profile/feature flags, and rejects cross-target execution |
 | `osty publish` (pack + upload tarball to a registry) | wired — deterministic gzipped tar, sha256 checksum, bearer-auth POST; `--dry-run` stops before upload |
 
-Status note (revalidated 2026-04-24): the universal LLVM CLI wedge called out
-in older status docs is closed. A hello-world `osty gen --backend=llvm` run is
-not the blocker anymore; current selfhosting/toolchain tracking is about two
-much narrower gaps: checked-in bootstrap output drift and the merged native
-toolchain backend gate.
+Status note (revalidated 2026-04-26, post-rebase to PR #921): the universal
+LLVM CLI wedge called out in older status docs is closed. A hello-world
+`osty gen --backend=llvm` run is not the blocker anymore. The bootstrap
+Osty→Go transpiler was retired in PR #854 (2026-04-23), so the older
+"checked-in bootstrap output drift" framing no longer applies —
+`internal/selfhost/generated.go` is now a frozen seed with no `go generate`
+regen pipeline, and the corresponding "verify selfhost regen is clean" CI
+step was removed. Current self-hosting tracking is about three gaps:
+internal toolchain source drift, the merged native MIR pipeline gate, and
+selfhost-overlay scaling.
 
-Code-level re-audit on 2026-04-24: the tree is not yet "fully self-hosted"
+Code-level re-audit on 2026-04-26: the tree is not yet "fully self-hosted"
 end-to-end, but the front-end CLI path is ahead of several older documents.
 `osty check`, `osty typecheck`, and `osty resolve` now run the self-host arena
 path by default, and the Go-hosted `--legacy` check/typecheck escape hatch has
@@ -70,26 +75,59 @@ The front-end astbridge-free guards currently pass for the CLI and the
 selfhost adapters (`TestRun{Resolve,Check,Typecheck}*AstbridgeFree`,
 `TestCheckCLIDefaultPathExitsZero`, and the selfhost
 `Check*Structured*AstbridgeFree` tests). `just front` and `just verify-selfhost`
-also pass in the same audit.
+also pass in the same audit (note: `verify-selfhost` is narrow — it runs
+`SnapshotParity|CoreSnapshotParity` under `internal/ci` and `internal/runner`,
+not the merged toolchain MIR pipeline).
 
-The two red lights are explicit:
+The current red lights are explicit:
 
-- `TestGoGenerateSelfhostLeavesGeneratedArtifactsClean` fails because
-  `go generate ./internal/selfhost` would change
-  `internal/selfhost/generated.go`: `toolchain/check.osty` now registers
-  extra `std.strings` aliases such as `Contains`, `Index`, and `HasPrefix`
-  that the checked-in generated file does not yet contain.
-- `TestNativeToolchainMergedMIRPipelineIsClean` fails. The info-only
-  AST probes (`TestProbeWholeToolchainMerged` and
-  `TestProbeNativeToolchainMerged`, with `ci.osty` skipped in the latter)
-  both first-wall on `LLVM011 type-system: struct "CheckFnSig" field
-  "hasReceiver" has a default value`. The MIR probe reaches
-  `GenerateFromMIR` with zero checker diagnostics and first-walls on
-  `LLVM000 unsupported-source: indirect call on non-function type
-  SelfDocDecl`; the production-style fallback then hits the same
-  `CheckFnSig.hasReceiver` default-value wall. `TestNativeToolchainMergedMIRErrTypeFloor`
-  passes with ErrType count 0, so the current blocker is backend/runtime
-  coverage, not checker ErrType leakage.
+- **`osty check toolchain` fails with 11 type errors.** The merged toolchain
+  package no longer type-checks cleanly through the production CLI path:
+  - `E0702 no field 'typeName'` × 9 sites in [toolchain/inspect.osty](toolchain/inspect.osty)
+    and [toolchain/lint.osty](toolchain/lint.osty:2884) — drift from PR #892
+    (`refactor(selfhost): replace string-based typeName round-trip with
+    structured TypeRepr`), which renamed `typeName: String` → `typeRepr:
+    FrontTypeRepr` on `FrontCheckedNode` / `FrontCheckedBinding` /
+    `FrontCheckedSymbol` in `toolchain/check.osty` but did not migrate the
+    `inspect.osty` / `lint.osty` consumers.
+  - `E0708 missing field 'valueText' / 'targetLabel'` × 2 in
+    [toolchain/mir.osty:895](toolchain/mir.osty:895) — duplicate `pub struct
+    MirSwitchCase` declarations: [toolchain/mir.osty:888](toolchain/mir.osty:888)
+    has `value/target/label` and [toolchain/mir_generator.osty:2185](toolchain/mir_generator.osty:2185)
+    has `valueText/targetLabel`. Same name, different fields, same package
+    — landed during recent §-template porting (#891–#915).
+- **Merged-toolchain probes wall on the same duplicate.** The info-only
+  AST probes report `LLVM010 source-layout: duplicate struct "MirSwitchCase"`
+  as their first wall ([TestProbeWholeToolchainMerged](internal/llvmgen/multifile_probe_test.go:151)
+  and `TestProbeNativeToolchainMerged`, with `ci.osty` skipped in the
+  latter). The MIR-path probe
+  ([TestProbeNativeToolchainMergedMIR](internal/llvmgen/multifile_probe_test.go:252))
+  reports 12 checker diagnostics and first-walls inside `mir.Lower` on
+  `LLVM000 unsupported-source: unsupported local type <error> in
+  tyToRepr` — `<error>` types are leaking into the MIR boundary because
+  the upstream `osty check toolchain` failures poison the type table.
+  Older status notes citing `LLVM000 SelfDocDecl indirect call` and
+  `LLVM011 CheckFnSig.hasReceiver default value` as the merged walls
+  reflect a previous tree state and no longer match.
+- **`TestNativeToolchainMergedMIRErrTypeFloor` regressed.** The floor
+  is 40 ErrType locals; the merged native pipeline currently produces
+  **474** (~12× over), driven by the same poisoned-type cascade. Earlier
+  revisions of this section claiming the floor "passes with ErrType count
+  0" were stale.
+- **`TestNativeToolchainMergedMIRPipelineIsClean` times out.** The
+  enforcing version of the probe (the same pipeline minus the info-only
+  logging) fails its 300s timeout inside
+  [internal/check/host_boundary.go:930](internal/check/host_boundary.go:930)
+  `selfhostSpanIndex.scopeFor` — a linear scan over every span on every
+  cache miss, which becomes effectively O(N²) once `applySelfhostFileResult`
+  feeds the merged toolchain through `overlaySelfhostResult`. The non-
+  enforcing MIR probe finishes the same path in ~280s with sparser
+  bookkeeping, which is how the LLVM010/LLVM000 walls above are observable
+  at all.
+
+The `TestGoGenerateSelfhostLeavesGeneratedArtifactsClean` red light cited
+in earlier revisions of this section is gone — that test was removed when
+the bootstrap transpiler was retired in PR #854.
 
 Earlier walls for `Char` / `Byte` lowering, `list_mixed_ptr`, non-ASCII string
 literals, match-as-statement, nested-field assignment, `List<T>.clear()`, and
