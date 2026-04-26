@@ -3583,7 +3583,12 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_THRESHOLD_BYTES=1")
+	/* Opt out of young arena: this test pins Phase D's headerful
+	 * compaction + remap path for Map. With Map young-eligible, the
+	 * Map alloc lands young instead and the headerful forwarded count
+	 * drops by one (Map goes through cheney_forward, not compaction). */
+	runCmd.Env = append(os.Environ(),
+		"OSTY_GC_THRESHOLD_BYTES=1", "OSTY_GC_TINYTAG_YOUNG=0")
 	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
@@ -3687,7 +3692,10 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_THRESHOLD_BYTES=1")
+	/* Same opt-out as TestBundledRuntimeMapRemapsCompactionPhaseD —
+	 * pin the headerful compaction + remap path. */
+	runCmd.Env = append(os.Environ(),
+		"OSTY_GC_THRESHOLD_BYTES=1", "OSTY_GC_TINYTAG_YOUNG=0")
 	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
@@ -5693,9 +5701,11 @@ int main(void) {
      * var or doesn't. */
     printf("%lld\n", (long long)osty_gc_debug_tinytag_young_enabled());
 
-    /* Map is reliably headerful (KIND_MAP has destroy → ineligible
-     * for young arena regardless of flag state). The predicate must
-     * classify it as not-young in both default and envOff modes. */
+    /* Map alloc — KIND_MAP is young-eligible when the flag is on
+     * (the safe-clone Map handoff in cheney_forward + promote
+     * destroys/re-inits the embedded mutex), headerful otherwise.
+     * The predicate's young/old classification of the local handle
+     * tracks the flag. */
     void *map = osty_rt_map_new(1, 1, 8, 0);
     osty_gc_root_bind_v1(map);
     printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(map));
@@ -5724,7 +5734,11 @@ int main(void) {
 	}{
 		// Default is on (Phase 8 step 2 cutover). Opt out via
 		// `OSTY_GC_TINYTAG_YOUNG=0`.
-		{name: "default", env: nil, wantFlag: "1", wantYoung: "0"},
+		// Default-on: Map alloc lands young; the local handle stays
+		// pointing at the young address even after root_bind promotes
+		// it (root_bind takes the pointer by value, doesn't rewrite
+		// the caller's slot), so the predicate reports 1.
+		{name: "default", env: nil, wantFlag: "1", wantYoung: "1"},
 		{name: "envOff", env: []string{"OSTY_GC_TINYTAG_YOUNG=0"}, wantFlag: "0", wantYoung: "0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -5795,16 +5809,18 @@ int64_t osty_gc_debug_young_header_object_kind(void *payload);
 int64_t osty_gc_debug_young_header_byte_size(void *payload);
 int64_t osty_gc_debug_young_header_generation(void *payload);
 
-void *osty_rt_map_new(int64_t k, int64_t v, int64_t vsz, void *vt);
+void *osty_rt_thread_chan_make(int64_t capacity);
 
 #define KIND_LIST 1024
 #define KIND_STRING 1025
 
 int main(void) {
-    /* OLD-arena Map should not be classified as a young-arena page
-     * (KIND_MAP has destroy → ineligible regardless of flag). */
-    void *map = osty_rt_map_new(1, 1, 8, 0);
-    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(map));
+    /* Channel stays headerful (KIND_CHANNEL has a pthread-rich
+     * destroy that the dead-from-space scan doesn't yet cover), so
+     * the predicate must classify it as not-young regardless of
+     * flag state. Picked over Map because Map is now young-eligible. */
+    void *chan = osty_rt_thread_chan_make(1);
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(chan));
 
     /* Direct young alloc (Phase 6 will route real allocators here). */
     void *young = osty_gc_debug_allocate_young(48, KIND_STRING);
@@ -6371,7 +6387,7 @@ int main(void) {
 				"1 1 1",    // GENERIC: eligible under NONE pattern (debug entry assumes NULL trace/destroy)
 				"1024 1 1", // LIST: eligible (load_v1 PROMOTED follow + cheney self-ref fixup + dead-list scan)
 				"1025 1 1", // STRING: eligible
-				"1026 0 0", // MAP: has destroy (frees pthread state + key/value arrays — needs typed sweep)
+				"1026 1 1", // MAP: eligible (cheney_forward + promote re-init mutex; dead-from-space calls map_destroy)
 				"1027 1 1", // SET: eligible (dead-from-space scan frees items buffer; no inline-storage union)
 				"1028 1 1", // BYTES: eligible
 				"1029 1 1", // CLOSURE_ENV: eligible (captures populated synchronously before escape)
@@ -6752,6 +6768,133 @@ int main(void) {
 	}
 }
 
+// TestBundledRuntimeMapYoungLifecycle covers the MAP young addition:
+// a fresh `osty_rt_map_new` lands in the young arena, insert/get
+// follow the PROMOTED tag via `osty_gc_load_v1` after `root_bind`
+// promotes it, and the items + recursive mutex are reclaimed cleanly
+// when an UNFORWARDED young Map is swept by
+// `osty_gc_cheney_destroy_dead_from_space`.
+//
+// The mutex memcpy concern is covered by the safe-clone path in
+// `osty_gc_promote_young_to_old`: the source mutex is destroyed and
+// the destination's is freshly initialised, so no two live mutex
+// copies share kernel-tracked state.
+func TestBundledRuntimeMapYoungLifecycle(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_map_young_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_map_young_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, void *value_trace);
+int64_t osty_rt_map_len(void *raw_map);
+void osty_rt_map_insert_i64(void *raw_map, int64_t key, const void *value);
+void osty_rt_map_get_or_abort_i64(void *raw_map, int64_t key, void *out_value);
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+int64_t osty_gc_debug_arena_is_young_page(void *payload);
+int64_t osty_gc_debug_young_forward_tag(void *from_payload);
+int64_t osty_gc_debug_young_cheney_dead_maps_freed_total(void);
+void osty_gc_debug_collect(void);
+
+#define ABI_I64 1
+
+int main(void) {
+    /* Fresh Map goes young: KIND_MAP is now in the eligibility list,
+     * sizeof(osty_rt_map) sits well under the humongous threshold. */
+    void *raw = osty_rt_map_new(ABI_I64, ABI_I64, (int64_t)sizeof(int64_t), 0);
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(raw));
+
+    /* Inserts before root_bind populate the heap-owned keys/values
+     * buffers through the still-young map handle. */
+    int64_t v100 = 100, v200 = 200, v300 = 300;
+    osty_rt_map_insert_i64(raw, 1, &v100);
+    osty_rt_map_insert_i64(raw, 2, &v200);
+
+    /* root_bind promotes the young Map to OLD. The safe-clone path
+     * destroys the source mutex + re-inits the OLD copy's, then
+     * steals keys/values/index pointers so dead-from-space can't
+     * double-free what the OLD copy now owns. */
+    osty_gc_root_bind_v1(raw);
+    printf("%lld\n", (long long)osty_gc_debug_young_forward_tag(raw));
+
+    /* Inserts via the stale young handle work because the typed
+     * insert macros run through osty_rt_map_cast then osty_gc_load_v1,
+     * which follows the PROMOTED tag. */
+    osty_rt_map_insert_i64(raw, 3, &v300);
+    printf("%lld\n", (long long)osty_rt_map_len(raw));
+    int64_t got1 = 0, got2 = 0, got3 = 0;
+    osty_rt_map_get_or_abort_i64(raw, 1, &got1);
+    osty_rt_map_get_or_abort_i64(raw, 2, &got2);
+    osty_rt_map_get_or_abort_i64(raw, 3, &got3);
+    printf("%lld %lld %lld\n", (long long)got1, (long long)got2, (long long)got3);
+
+    /* Forced collect: cheney processes the (PROMOTED) young Map, the
+     * major sweep keeps OLD alive, the keys/values heap buffers
+     * survive because the OLD copy still owns them. */
+    osty_gc_debug_collect();
+    printf("%lld\n", (long long)osty_rt_map_len(raw));
+
+    /* Allocate + drop a fresh young Map to exercise the dead-Map
+     * cleanup path: insert one entry to force reservation, then
+     * never root the Map so the next collect reclaims it as
+     * UNFORWARDED. The cleanup counter increments iff
+     * cheney_destroy_dead_from_space ran the MAP branch (which
+     * delegates to osty_rt_map_destroy — frees keys + values + the
+     * inline-or-heap index buffers + destroys the mutex). */
+    int64_t freed_before = osty_gc_debug_young_cheney_dead_maps_freed_total();
+    void *transient = osty_rt_map_new(ABI_I64, ABI_I64, (int64_t)sizeof(int64_t), 0);
+    int64_t v9900 = 9900;
+    osty_rt_map_insert_i64(transient, 99, &v9900);
+    osty_gc_debug_collect();
+    int64_t freed_after = osty_gc_debug_young_cheney_dead_maps_freed_total();
+    printf("%lld\n", (long long)(freed_after - freed_before));
+
+    /* Release the rooted Map. Subsequent collect sweeps the OLD copy
+     * via the headerful destroy path. */
+    osty_gc_root_release_v1(raw);
+    osty_gc_debug_collect();
+
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"1",           // fresh Map landed in young arena
+		"2",           // forward tag = PROMOTED after root_bind
+		"3",           // post-promote insert via stale young handle worked (load_v1 follow)
+		"100 200 300", // all three values readable
+		"3",           // values survived forced collect (still rooted)
+		"1",           // dead-Map cleanup fired on the unrooted transient
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("map-young harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
 // TestBundledRuntimeGenericEnumPtrYoungTraceFollows covers the
 // KIND_GENERIC_ENUM_PTR young addition: an `osty_rt_enum_alloc_ptr_v1`
 // box lands young, and during cheney_minor the kind_table descriptor
@@ -6956,14 +7099,14 @@ int main(void) {
 		},
 		{
 			// Default routing: STRING + BYTES + LIST + CLOSURE_ENV +
-			// GENERIC NONE → young arena; MAP / CHANNEL stay headerful
+			// GENERIC NONE + MAP → young arena; CHANNEL stays headerful
 			// (GENERIC ENUM_PTR / TASK_HANDLE patterns also stay
-			// headerful, but `osty_gc_alloc_v1(1, …)` constructs the
-			// NONE pattern via NULL trace + NULL destroy).
+			// headerful via `osty_gc_alloc_v1(1, …)`'s NONE pattern
+			// with NULL trace + NULL destroy).
 			name:      "default",
 			env:       nil,
-			wantDelta: "5",
-			wantClass: [6]string{"1", "1", "1", "1", "0", "1"},
+			wantDelta: "6",
+			wantClass: [6]string{"1", "1", "1", "1", "1", "1"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
