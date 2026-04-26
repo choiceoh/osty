@@ -27,8 +27,8 @@ Pipeline-Clean timeout 도 풀렸다 (5분+ → 246s 정상 종료, 다음 wall 
 | `TestProbeWholeToolchainMerged` (AST-only) | 2.4s | ✅ 통과 |
 | `TestProbeNativeToolchainMerged` (AST, ci.osty 제외) | 2.3s | ✅ 통과 |
 | `TestProbeNativeToolchainMergedMIR` (full MIR, info-only) | ~280s | ✅ 통과 (info log only) |
-| `TestNativeToolchainMergedMIRPipelineIsClean` | 246s | ⚠️ FAIL — `LLVM011 type-system: struct "CheckFnSig" field "hasReceiver" has a default value` (legacy fallback wall, 더 이상 timeout 아님) |
-| `TestNativeToolchainMergedMIRErrTypeFloor` | 242s | ⚠️ FAIL — 426 ErrType locals (이전 474 → -48; floor=40 까지는 386 잔여) |
+| `TestNativeToolchainMergedMIRPipelineIsClean` | ~210s | ⚠️ FAIL — `LLVM016 name: unknown identifier "None"` (legacy fallback wall, LLVM011 default-value walls 모두 해소 후 다음 wall 진입) |
+| `TestNativeToolchainMergedMIRErrTypeFloor` | 242s | ⚠️ FAIL — 374 ErrType locals (이전 474 → -100; floor=40 까지는 334 잔여) |
 
 ### 해소된 Phase 0 항목 (2026-04-26 착륙)
 
@@ -48,10 +48,16 @@ Pipeline-Clean timeout 도 풀렸다 (5분+ → 246s 정상 종료, 다음 wall 
 
 ### 잔여 walls
 
-- **LLVM011 CheckFnSig.hasReceiver default value** — `Pipeline-Clean` 의 legacy
-  fallback 경로에서 발생. struct field 의 default value 가 LLVM runtime type
-  surface 미지원. surface 확장 또는 default 제거 필요. `LLVM_BACKEND_CORPUS.md`
-  에 LLVM011 추적 항목.
+- ~~**LLVM011 CheckFnSig.hasReceiver default value**~~ — **Phase 4a 착륙
+  (2026-04-26)**. `pub hasReceiver: Bool = false` default 를 제거하고 251 개
+  CheckFnSig literal 사이트 (`toolchain/check.osty` 57 + `toolchain/check_env.osty`
+  189 + `toolchain/elab.osty` 5) 모두 명시적 `hasReceiver: false/true`
+  지정 — 값은 `receiverTy: -1` 이면 `false`, 아니면 `true`.
+  `checkSpecializeMethodSelf` 는 입력 sig 의 hasReceiver 를 그대로 전달
+  (`hasReceiver: sig.hasReceiver`). `CheckFieldSig.exported` 도 같은 패턴
+  으로 default 제거 (`emptyCheckFieldSig` 1 사이트만 영향). 다음 legacy
+  fallback wall 은 **LLVM016 unknown identifier "None"** (Option/Result
+  builtin variant name resolution — 별 카테고리, 별 PR).
 - **374 ErrType locals (floor=40)** — Phase 0 가 PR #921 의 12개 type-error
   중 11개를 제거하고 (474 → 426), Phase 3a 가 추가로 -52 (426 → 374,
   `lowerMatch` scrutinee recovery). 잔여 ~334 leaks 는 **checker 가 통과한
