@@ -2801,7 +2801,7 @@ func (g *mirGen) emitStdIoWriteArgsMIR(args []mir.Operand, method string) error 
 	}
 	g.declareRuntime(ostyRtIOWriteSymbol, mirRuntimeDeclareLine("void", ostyRtIOWriteSymbol, "ptr, i1, i1"))
 	g.fnBuf.WriteString(mirCallVoidLine(ostyRtIOWriteSymbol,
-		"ptr "+text+", i1 "+llvmStdIoI1Text(newline)+", i1 "+llvmStdIoI1Text(toStderr)))
+		mirArgSlotPtr(text)+", "+mirArgSlotI1(llvmStdIoI1Text(newline))+", "+mirArgSlotI1(llvmStdIoI1Text(toStderr))))
 	return nil
 }
 
@@ -3432,13 +3432,15 @@ func (g *mirGen) emitTestingBenchmarkMIR(c *mir.CallInstr) error {
 	g.fnBuf.WriteString(mirSDivI64Line(bytesPerOp, bytesTotal, safeN))
 
 	// --- Phase 4: summary line + distribution line. ---
-	summaryArgs := "ptr " + pathSym +
-		", i64 " + strconv.FormatInt(line, 10) +
-		", i64 " + finalN +
-		", i64 " + total +
-		", i64 " + avg +
-		", i64 " + bytesPerOp
-	g.fnBuf.WriteString(mirCallVarargPrintfLine(benchFmt, summaryArgs))
+	g.fnBuf.WriteString(mirCallVarargPrintfSixArgLine(
+		benchFmt,
+		mirArgSlotPtr(pathSym),
+		mirArgSlotI64(strconv.FormatInt(line, 10)),
+		mirArgSlotI64(finalN),
+		mirArgSlotI64(total),
+		mirArgSlotI64(avg),
+		mirArgSlotI64(bytesPerOp),
+	))
 
 	// Distribution stub: the §11.4 spec contract requires `min=/p50=/p99=/max=`
 	// alongside the summary whenever the bench ran. The AST path fills these
@@ -3561,11 +3563,11 @@ func (g *mirGen) invokeClosureOperand(op mir.Operand) error {
 	g.fnBuf.WriteString(mirLoadLine(fnPtr, "ptr", envPtr))
 	callType := retLLVM + " (" + strings.Join(paramParts, ", ") + ")"
 	if retLLVM == "void" {
-		g.fnBuf.WriteString(mirCallIndirectVoidLine(callType, fnPtr, "ptr "+envPtr))
+		g.fnBuf.WriteString(mirCallIndirectVoidLine(callType, fnPtr, mirArgSlotPtr(envPtr)))
 		return nil
 	}
 	tmp := g.fresh()
-	g.fnBuf.WriteString(mirCallIndirectValueLine(tmp, callType, fnPtr, "ptr "+envPtr))
+	g.fnBuf.WriteString(mirCallIndirectValueLine(tmp, callType, fnPtr, mirArgSlotPtr(envPtr)))
 	return nil
 }
 
@@ -7486,7 +7488,7 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 				g.declareRuntime(sym, mirRuntimeDeclareLine(elemLLVM, sym, "ptr, i64"))
 				next := g.fresh()
 				g.fnBuf.WriteString(mirCallValueLine(next, elemLLVM, sym,
-					"ptr "+curReg+", i64 "+idxVal))
+					mirArgListPtrI64(curReg, idxVal)))
 				curReg = next
 				curLLVM = elemLLVM
 				curT = elemT
@@ -7499,7 +7501,7 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 			sym := "osty_rt_list_get_bytes_v1"
 			g.declareRuntime(sym, mirRuntimeDeclareBytesV1GetLine(sym))
 			g.fnBuf.WriteString(mirCallVoidLine(sym,
-				"ptr "+curReg+", i64 "+idxVal+", ptr "+slot+", i64 "+sizeReg))
+				mirArgSlotPtr(curReg)+", "+mirArgSlotI64(idxVal)+", "+mirArgSlotPtr(slot)+", "+mirArgSlotI64(sizeReg)))
 			loaded := g.fresh()
 			g.fnBuf.WriteString(mirLoadLine(loaded, elemLLVM, slot))
 			curReg = loaded
