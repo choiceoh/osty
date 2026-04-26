@@ -3521,17 +3521,18 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 		}
 		ownerName, ok := nativeMethodOwnerName(e.Receiver.Type())
 		if !ok {
-			// Recovery: if the receiver Ident's per-node type wasn't
-			// populated by the embedded checker, look up the
-			// scoped-binding type recorded by the let-stmt handler.
-			// Mirrors the AssignStmt-side recovery in
-			// `nativeFieldAssignPathFromIR`.
-			if recvIdent, recvOk := e.Receiver.(*ostyir.Ident); recvOk {
-				if info, scopeOk := ctx.lookupScopeName(recvIdent.Name); scopeOk && info.kind == nativeExprInfoStruct {
-					if _, exists := ctx.structsByName[info.structName]; exists {
-						ownerName = info.structName
-						ok = true
-					}
+			// Recovery: when the receiver's per-node type wasn't
+			// populated by the embedded checker, derive the owner
+			// name from the receiver-shape directly. For Ident
+			// receivers, consult the scope binding recorded by the
+			// let-stmt handler. For FieldExpr receivers, walk the
+			// projection path through `nativeExprTypeInfo` (which
+			// already chains the scope-binding fallback at each
+			// level) to recover the final field's struct name.
+			if info, scopeOk := nativeExprTypeInfo(ctx, e.Receiver); scopeOk && info.kind == nativeExprInfoStruct {
+				if _, exists := ctx.structsByName[info.structName]; exists {
+					ownerName = info.structName
+					ok = true
 				}
 			}
 		}
