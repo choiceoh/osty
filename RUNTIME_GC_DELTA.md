@@ -388,7 +388,146 @@ user struct capture도 지원할 수 있다 — 다음 실용적 candidate.
 | B     | 세대 GC (nursery/tenured, 승격, minor, 2-tier pressure) | ✅ |
 | C     | Incremental marking (tri-color, budget step, SATB, mutator assist, auto-dispatcher) | ✅ |
 | D     | Compaction + pin + region heap + 후속 audit | ✅ |
-| 후속  | concurrent mark / full TLAB policy / card table / pinned FFI lowering / async roots | ❌ (스펙·컨슈머 선행) |
+| E     | Tiny-tag young space (Cheney + 16B micro-header, no per-young-object header) | ✅ |
+| 후속  | concurrent mark / full TLAB policy / card table / pinned FFI lowering / async roots / Phase 4 header trace+destroy 제거 (-16B/old header) | ❌ (스펙·컨슈머 선행) |
+
+### Phase E 진행 상태 — Tiny-tag young space
+
+배경: 직전 Phase D 마지막에 헤더가 96 B (PR #910에서 14% shrink 후)였고 minor
+GC가 헤더풀 young 리스트를 mark-sweep으로 처리. 영의 vast majority인
+String/Bytes 객체가 매번 96 B 헤더를 들고 있는 게 alloc-heavy benchmark의
+주요 cache pressure 요인. Phase E는 **young space에서 헤더를 완전히 제거**
+해서 micro-header(16 B)로 대체하고 minor GC를 mark-sweep에서 Cheney copy로
+교체한다.
+
+세부 step 8개로 분할 랜딩 (모든 step 이전 step의 위에 비파괴적으로 추가):
+
+- ✅ **Phase 1 — Kind descriptor table** — `OSTY_GC_KIND_*` → (trace, destroy)
+  static table + parity gate 가 every alloc의 (trace, destroy) 인자를 검증.
+  Step 2 cutover 시 헤더풀 path가 같은 callback set을 보유함이 정적으로 보장.
+  테스트 `TestBundledRuntimeKindDescriptorParityCoversAllAllocators`.
+- ✅ **Phase 2 — Descriptor dispatch** — mark drain + 3개 sweep 사이트가
+  `header->trace`/`header->destroy`를 직접 읽지 않고 descriptor table을
+  consult. GENERIC kind만 per-instance fallback. `dispatch_via_descriptor_total`
+  / `dispatch_via_header_total` 카운터로 양 경로 발화 증명. 테스트
+  `TestBundledRuntimeDispatchRoutesThroughKindDescriptor`.
+- ✅ **Phase 3 — find_header 분기 abstraction** — SSO → young arena hook →
+  헤더풀 arena → hash fallback 순서 명시. `OSTY_GC_TINYTAG_YOUNG` env flag
+  도입 (이때 default off). `arena_is_young_page()` / `reconstruct_young_header()`
+  자리 마련. 테스트 `TestBundledRuntimeFindHeaderBranchingParity`.
+- ⏸ **Phase 4 — Header trace+destroy 필드 제거** — 보류. 별도 cleanup
+  PR로 추후. 16 B per OLD header 추가 절감 가능하지만 Phase E 핵심
+  목표(young space)와 직교.
+- ✅ **Phase 5 — Micro-header + young arena** — 16-byte
+  `osty_gc_micro_header` `{int32 kind; int32 byte_size; uint64 forward_or_meta}`
+  + 256 MiB 별도 mmap young arena. `osty_gc_allocate_young()` micro-header만
+  쓰고 link/stable_id/hash 모두 skip. `osty_gc_reconstruct_young_header()`이
+  per-thread `__thread` scratch에 micro-header 데이터를 unpack해 read-only
+  shim 반환. 테스트 `TestBundledRuntimeYoungArenaAllocAndShimReconstructs`.
+- ✅ **Phase 6 — Cheney copy mechanic** — 3 step:
+  - **6.1** `young_from` / `young_to` semi-space pair, `cheney_forward(payload)`
+    이 copy + FORWARDED tag 설치 (16-byte alignment 덕에 low 2 bits = tag,
+    high bits = addr 그대로 인코딩), `cheney_swap_arenas()`이 pointer-only swap
+    + new to-space cursor reset. 테스트
+    `TestBundledRuntimeCheneyForwardCopiesAndSwapsArenas`.
+  - **6.2** `OSTY_GC_TRACE_SLOT_MODE_CHENEY` 추가 + `osty_gc_cheney_slot()`
+    helper. `osty_gc_mark_slot_v1` dispatcher가 mode 따라 MARK/REMAP/CHENEY
+    분기. 모든 기존 tracer (path 1: `list->trace_elem == mark_slot_v1`)가
+    자동 Cheney-aware. 테스트
+    `TestBundledRuntimeMarkSlotCheneyForwardsAndRewrites`.
+  - **6.3** `osty_gc_collect_minor_cheney_with_stack_roots()` entry — stack root
+    forward → scan loop (to-space cursor 따라가며 descriptor.trace를 CHENEY
+    mode로 호출, child slot이 forward되며 cursor 전진) → arena swap. 테스트
+    `TestBundledRuntimeCheneyMinorForwardsRootsAndSwaps`.
+- ✅ **Phase 7 — Eligibility + auto-promote** — 2 step:
+  - **7.1** `osty_gc_young_eligible(kind, size)`: flag on + kind이
+    explicit whitelist (STRING / BYTES) + size in (0, humongous_threshold].
+    초기 설계는 "no destroy" descriptor 전체 (CLOSURE_ENV 포함)였으나
+    Phase 8 step 2 cutover 시 CLOSURE_ENV 패턴 — 콜러가 alloc 후
+    `captures[i]`를 mutate하고 root_bind하는 것 — 이 auto-promote 모델과
+    충돌 (promote 시점에 captures 안 채워져 있어 promote된 OLD copy가
+    빈 상태로 살아남고 stale young 주소에 caller가 writes 계속). 안전한
+    cutover를 위해 immutable value-shape kind만 (STRING/BYTES) 허용으로
+    좁힘. CLOSURE_ENV는 후속 작업에서 별도 lifecycle helper와 함께 재고려
+    가능. 테스트 `TestBundledRuntimeYoungEligibilityFilter`.
+  - **7.2** Pin/root_bind이 young payload면 `promote_young_to_old()` 자동
+    호출 — micro-header에서 kind/size 읽고 descriptor lookup, headerful OLD
+    `_headerful` 경로로 alloc + memcpy + micro-header에 PROMOTED tag + new
+    addr 인코딩. `reconstruct_young_header()`이 PROMOTED/FORWARDED tag 만나면
+    redirect. 테스트 `TestBundledRuntimeYoungPinAndRootBindAutoPromote`.
+- ✅ **Phase 8 — Production cutover** — 2 step:
+  - **8.1** `osty_gc_allocate_managed`을 thin wrapper로 분리:
+    `_if_eligible` 시도 → 실패 시 `_headerful` fallback. 디스패처가
+    minor 후 cheney_minor 추가 호출 (flag on 시). `allocate_young`이
+    `note_allocation` 호출해 nursery_limit pressure trigger 공유. **버그
+    수정**: `promote_young_to_old`이 `_headerful` 직접 호출하도록 분기 —
+    wrapper 거치면 routing이 다시 young으로 돌려보내 무한 루프. 테스트
+    `TestBundledRuntimeAllocV1RoutesToYoungWhenFlagOn`.
+  - **8.2** Default flag flip ON. Loader 수정: env unset 시
+    compile-time default 보존, "0"/"false"만 force-off. Opt-out:
+    `OSTY_GC_TINYTAG_YOUNG=0`. 모든 기존 backend 테스트 (~80개) green.
+
+#### Phase E 인프라 / 데이터 layout
+
+```
+Young 객체 메모리 layout:
+  [int32 object_kind][int32 byte_size][uint64 forward_or_meta][payload bytes...]
+   <----------- 16-byte micro-header ---------->|<--- payload --->
+
+forward_or_meta tag bits 0..1:
+  00 UNFORWARDED — high bits packed: bits 2..3 color, bits 4..11 age
+  01 FORWARDED   — high bits = to-space payload addr (16-byte aligned)
+  10 PROMOTED    — high bits = headerful OLD payload addr (16-byte aligned)
+
+Young arena: 256 MiB virtual mmap × 2 semi-spaces (from, to). Pointer-only
+swap on cycle complete. arena_is_young_page = 4-compare range check
+(both semi-spaces).
+```
+
+#### Phase E 측정 가능한 효과 (이론적, 벤치 미실행)
+
+- Young alloc당 메모리: **80 B 절감** (96 B headerful → 16 B micro-header)
+- Eligible kinds (STRING/BYTES/CLOSURE_ENV)이 alloc volume의 majority인
+  workload (log-aggregator, word-count, markdown-stats)에서 직접 이득
+- Minor GC 모델: mark-sweep + 별도 promote → Cheney copy (live만 따라감,
+  dead 자동 reclaim via cursor reset). Allocation rate ≫ survival rate일 때
+  Cheney가 mark-sweep보다 work proportional to live data 측면에서 유리
+- find_header arena fast path: 분기 추가로 ~1-2 cycle 비용 (predictable
+  branch). 헤더풀 path 자체는 변경 없음
+
+#### Phase E 한계 / 후속 작업
+
+- **GENERIC kind는 여전히 헤더풀** — per-instance trace/destroy callback이
+  micro-header에 fit하지 않음. 가능한 follow-up: Phase 4의 generic_pattern
+  enum 도입 (3개 패턴 — NONE / ENUM_PTR / TASK_HANDLE)으로 GENERIC도 sub-kind
+  별 lookup으로 collapse. 그러면 GENERIC도 young 가능.
+- **Map / Channel / Set / List는 destroy callback 때문에 young 불가** —
+  Cheney가 dead 객체에 destroy 호출하지 않음 (cursor reset으로 reclaim).
+  destroy가 외부 리소스(pthread sync, allocated buffers)를 해제해야 하는
+  kinds는 mark-sweep 경로 필수. 구조적 한계, 변경 불가.
+- **Phase 4 deferred** — 헤더에서 trace/destroy 필드 제거하면 OLD 객체별
+  16 B 추가 절감. Phase 1/2가 인프라 준비 완료, layout 변경만 남음. 별도
+  PR로.
+- **Stack root scanning은 헤더풀 minor + cheney_minor 둘 다 처리** —
+  헤더풀 minor가 mark_slot_v1로 root 스캔 (CHENEY mode 아님 → MARK), cheney
+  minor가 동일 root list를 cheney_slot으로 forward. 헤더풀 path는 young
+  payload를 만나도 mark가 shim에 가서 no-op이고, cheney path는 헤더풀
+  payload를 cheney_forward에 넣으면 pass-through. 양쪽 독립 안전.
+- **Concurrent mutator 미고려** — single-threaded mutator 전제. 멀티스레드
+  young alloc은 후속 (TLAB-style young arena per thread).
+
+#### Phase E 신규 테스트 (모두 PASS, 1 pre-existing main fail 외)
+
+- `TestBundledRuntimeKindDescriptorParityCoversAllAllocators`
+- `TestBundledRuntimeDispatchRoutesThroughKindDescriptor`
+- `TestBundledRuntimeFindHeaderBranchingParity` (default + envOff)
+- `TestBundledRuntimeYoungArenaAllocAndShimReconstructs`
+- `TestBundledRuntimeCheneyForwardCopiesAndSwapsArenas`
+- `TestBundledRuntimeMarkSlotCheneyForwardsAndRewrites`
+- `TestBundledRuntimeCheneyMinorForwardsRootsAndSwaps`
+- `TestBundledRuntimeYoungEligibilityFilter` (default + envOff)
+- `TestBundledRuntimeYoungPinAndRootBindAutoPromote`
+- `TestBundledRuntimeAllocV1RoutesToYoungWhenFlagOn` (default + envOff)
 
 ### Phase D 진행 상태
 
