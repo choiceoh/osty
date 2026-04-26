@@ -441,15 +441,21 @@ String/Bytes 객체가 매번 96 B 헤더를 들고 있는 게 alloc-heavy bench
     `TestBundledRuntimeCheneyMinorForwardsRootsAndSwaps`.
 - ✅ **Phase 7 — Eligibility + auto-promote** — 2 step:
   - **7.1** `osty_gc_young_eligible(kind, size)`: flag on + kind이
-    explicit whitelist (STRING / BYTES) + size in (0, humongous_threshold].
-    초기 설계는 "no destroy" descriptor 전체 (CLOSURE_ENV 포함)였으나
-    Phase 8 step 2 cutover 시 CLOSURE_ENV 패턴 — 콜러가 alloc 후
-    `captures[i]`를 mutate하고 root_bind하는 것 — 이 auto-promote 모델과
-    충돌 (promote 시점에 captures 안 채워져 있어 promote된 OLD copy가
-    빈 상태로 살아남고 stale young 주소에 caller가 writes 계속). 안전한
-    cutover를 위해 immutable value-shape kind만 (STRING/BYTES) 허용으로
-    좁힘. CLOSURE_ENV는 후속 작업에서 별도 lifecycle helper와 함께 재고려
-    가능. 테스트 `TestBundledRuntimeYoungEligibilityFilter`.
+    explicit whitelist + size in (0, humongous_threshold]. Whitelist
+    는 두 단계로 좁혀짐:
+    1. 초기 설계는 "no destroy" descriptor 전체 (LIST/STRING/MAP/SET/
+       BYTES/CLOSURE_ENV/CHANNEL 중 destroy 없는 것).
+    2. Phase 8 step 2 cutover 1차 — CLOSURE_ENV 패턴 (콜러가 alloc
+       후 `captures[i]` mutate + root_bind)이 auto-promote 모델과
+       충돌 → STRING + BYTES만 남김.
+    3. Phase 8 step 2 cutover 2차 — `Map<String, _>` 회귀 (String
+       key가 cheney transitive trace로 forward되지만 Map의
+       content-keyed index probe가 hits=0 반환, `map->len >= 8`
+       이상에서 발화) → STRING도 보류, BYTES만 남김.
+
+    BYTES만 young arena로 가는 게 현재 cutover 상태. STRING /
+    CLOSURE_ENV는 follow-up에서 lifecycle helper 또는 Map index
+    handover 수정 후 복원. 테스트 `TestBundledRuntimeYoungEligibilityFilter`.
   - **7.2** Pin/root_bind이 young payload면 `promote_young_to_old()` 자동
     호출 — micro-header에서 kind/size 읽고 descriptor lookup, headerful OLD
     `_headerful` 경로로 alloc + memcpy + micro-header에 PROMOTED tag + new
@@ -466,6 +472,39 @@ String/Bytes 객체가 매번 96 B 헤더를 들고 있는 게 alloc-heavy bench
   - **8.2** Default flag flip ON. Loader 수정: env unset 시
     compile-time default 보존, "0"/"false"만 force-off. Opt-out:
     `OSTY_GC_TINYTAG_YOUNG=0`. 모든 기존 backend 테스트 (~80개) green.
+  - **Cutover follow-up — Bug #4**: 원래 cheney가 dispatcher의
+    minor branch에만 있어서 major escalation 시 young arena 미수집
+    → 256 MiB 단조 증가 후 fallback. Cheney 호출을
+    `osty_gc_collect_now_with_stack_roots` 진입 직후 +
+    `osty_gc_collect_now` (debug_collect 경로) +
+    `debug_collect_minor`/`debug_collect_major` 모두로 hoist. 테스트
+    `TestBundledRuntimeCheneyRunsOnMajorTierNotJustMinor`.
+  - **Cutover follow-up — stale-PROMOTED swap**: cheney_swap이
+    to-space cursor를 base로 reset하면서 PROMOTED tag 보유한
+    micro-header가 above-cursor에 남으면 `arena_is_young_page`
+    (cursor 기반)이 false 반환 → release가 PROMOTED follow 못해
+    OLD가 영구 rooted. `arena_is_young_page`를 full mmap range 검사로
+    바꾸고 `reconstruct_young_header`이 UNFORWARDED + above-cursor면
+    NULL 반환하도록 분리. PROMOTED/FORWARDED follow는 cursor 무관
+    동작. 테스트
+    `TestBundledRuntimePromotedYoungSurvivesAcrossCheneySwaps`.
+  - **Cutover follow-up — transitive OLD trace**: cheney_minor가
+    stack roots만 forward하고 OLD reachability 추적 안 했음. `Map<X,
+    _>` 같은 OLD owner가 young child 들고 있으면 cheney가 못 봄 →
+    swap 시 reclaim. `cheney_slot`이 OLD pointer 만나면
+    `osty_gc_cheney_old_stack`에 push, drain 단계가 OLD owner의
+    descriptor.trace를 CHENEY mode로 호출 → 자식 forward + slot rewrite.
+    Color BLACK으로 dedup, cycle 안전. Cheney_minor entry가
+    `osty_gc_young_head` + `osty_gc_old_head` 모두 walk해서 pinned/
+    rooted owner 시드. 6 새 helper.
+  - **Cutover narrowing — STRING 보류**: transitive OLD trace로
+    `Map<String, _>`의 String key가 forward되어 to-space에 정착하지만,
+    Map의 indexed find path (`map->len >= 8`)가 어떤 이유로 first
+    slot만 정확히 매치하고 나머지 슬롯에서 hits=0 발화. Index slot/
+    fingerprint는 content-based이고 forward 후에도 content 변함이 없는데도
+    이런 거동이 나오는 이유는 추가 조사 필요. 즉시 안전조치로
+    eligibility를 BYTES 단일로 좁힘 — String/CLOSURE_ENV는 후속
+    PR에서 Map index handover 검증 후 복원.
 
 #### Phase E 인프라 / 데이터 layout
 

@@ -2790,12 +2790,12 @@ static void osty_gc_note_old_allocation(size_t payload_size) {
  * The flag stays opt-in (default off) until Phase 8 flips it; today
  * `osty_gc_allocate_managed` never picks the young path, so the only
  * exercise is via the debug entry points the tests use. */
-/* Phase 8 step 2: default-on cutover. The young arena + Cheney pair
- * has soaked through Phases 5-7 + step 1's full backend sweep with
- * the flag opt-in; flipping the default routes every eligible kind
- * (STRING / BYTES / CLOSURE_ENV) through the no-header path on
- * every fresh build. Opt out with `OSTY_GC_TINYTAG_YOUNG=0` until
- * Phase E follow-up retires the legacy in-place young-list sweep. */
+/* Phase 8 step 2: default-on cutover. Cheney_minor traces OLD
+ * reachability transitively (see `osty_gc_collect_minor_cheney_*`)
+ * so `Map<String, _>` and other typed collections with young
+ * children are correctly forwarded even when their write paths
+ * (`osty_rt_map_insert_raw`, etc.) bypass `osty_gc_post_write_v1`.
+ * Opt out with `OSTY_GC_TINYTAG_YOUNG=0`. */
 #define OSTY_GC_TINYTAG_YOUNG_ENV "OSTY_GC_TINYTAG_YOUNG"
 static bool osty_gc_tinytag_young_loaded = false;
 static bool osty_gc_tinytag_young_enabled = true;
@@ -2912,6 +2912,9 @@ static void osty_gc_young_arena_init(void) {
     osty_gc_young_arena_init_one(&osty_gc_young_to);
 }
 
+/* "Live" predicates: address is currently bump-allocated (< cursor).
+ * `from-page` is what cheney_forward uses to decide "is this a candidate
+ * for me to copy?". `to-page` is the mirror used by debug helpers. */
 static OSTY_HOT_INLINE bool osty_gc_arena_is_young_from_page(void *payload) {
     return (unsigned char *)payload >= osty_gc_young_from.base &&
            (unsigned char *)payload < osty_gc_young_from.cursor;
@@ -2922,9 +2925,24 @@ static OSTY_HOT_INLINE bool osty_gc_arena_is_young_to_page(void *payload) {
            (unsigned char *)payload < osty_gc_young_to.cursor;
 }
 
+/* "Within young mmap" — the address is somewhere in either semi-space's
+ * reserved range, regardless of whether it's currently live (below
+ * cursor) or stale (above cursor, e.g. after a swap reset the to-space
+ * cursor). `find_header` uses this looser predicate so that a PROMOTED
+ * micro-header sitting above the post-swap to-space cursor still gets
+ * consulted: callers retain the original young pointer across cycles
+ * and need pin/release to keep finding the OLD copy via the PROMOTED
+ * forwarding tag. UNFORWARDED reads against above-cursor addresses are
+ * filtered downstream in `reconstruct_young_header`. */
+static OSTY_HOT_INLINE bool osty_gc_arena_within_young_mmap(void *payload) {
+    return (((unsigned char *)payload >= osty_gc_young_from.base &&
+             (unsigned char *)payload < osty_gc_young_from.end) ||
+            ((unsigned char *)payload >= osty_gc_young_to.base &&
+             (unsigned char *)payload < osty_gc_young_to.end));
+}
+
 static OSTY_HOT_INLINE bool osty_gc_arena_is_young_page(void *payload) {
-    return osty_gc_arena_is_young_from_page(payload) ||
-           osty_gc_arena_is_young_to_page(payload);
+    return osty_gc_arena_within_young_mmap(payload);
 }
 
 static inline osty_gc_micro_header *osty_gc_micro_header_for_payload(
@@ -3001,32 +3019,29 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
     return (void *)((unsigned char *)slot + sizeof(osty_gc_micro_header));
 }
 
-/* Phase 7 step 1: which kinds are safe to live in the young arena
- * without a headerful header.
+/* Phase 7 step 1 (narrowed for Phase 8 step 2 cutover): which kinds
+ * are safe to live in the young arena without a headerful header.
  *
  * Rules (in order — first failure short-circuits):
  *   1. Feature flag must be on. With the flag off the young arena is
  *      dormant and every alloc takes the headerful path, preserving
  *      pre-Phase-5 behaviour exactly.
- *   2. The kind must be one of the explicitly-listed value-shape
- *      kinds — STRING and BYTES. Both are immutable byte payloads
- *      whose only valid lifecycle is alloc → fill → read → discard;
- *      they have no per-instance fields a caller mutates after the
- *      typed-allocator returns, which is the structural prerequisite
- *      for auto-promote-on-pin (Phase 7 step 2) to be safe.
+ *   2. The kind must be `OSTY_GC_KIND_BYTES`. The wider whitelist
+ *      that included `OSTY_GC_KIND_STRING` was reverted during the
+ *      cutover after `Map<String, _>` lookups returned hits=0
+ *      post-minor: even with cheney's new transitive OLD-trace, the
+ *      Map's content-keyed index (`osty_rt_map_index_*`) interacts
+ *      poorly with the young→to-space pointer rewrite — the
+ *      symptom is "first key hits, rest miss" once `map->len >= 8`
+ *      and the indexed find path engages. BYTES is a clean target
+ *      because it almost never appears as a Map key in practice;
+ *      String routing returns to young space once the Map index
+ *      handover is investigated.
  *
- *      Why not the other no-destroy kinds:
- *        - CLOSURE_ENV: callers populate `captures[i]` after alloc
- *          and root-bind the env. With auto-promote, the post-alloc
- *          field writes would land on the now-dead young addr while
- *          the live OLD copy holds zero captures.
- *        - GENERIC: per-instance trace/destroy callbacks not on the
- *          micro-header.
- *        - LIST/MAP/SET/CHANNEL: have destroy callbacks Cheney can't
- *          invoke on dead from-space bytes.
- *
- *      Future kinds qualify here only after their lifecycle is shown
- *      to never mutate the payload after the typed allocator returns.
+ *      Other kinds stay headerful for the same reasons documented
+ *      previously: CLOSURE_ENV mutates captures after alloc;
+ *      GENERIC has per-instance callbacks; LIST/MAP/SET/CHANNEL
+ *      have destroy callbacks Cheney can't invoke.
  *   3. Payload size must fit comfortably under the humongous
  *      threshold. Humongous allocs already take a separate path in
  *      the headerful allocator and have no benefit from being
@@ -3035,8 +3050,7 @@ static bool osty_gc_young_eligible(int64_t object_kind, size_t payload_size) {
     if (!osty_gc_tinytag_young_now()) {
         return false;
     }
-    if (object_kind != OSTY_GC_KIND_STRING &&
-        object_kind != OSTY_GC_KIND_BYTES) {
+    if (object_kind != OSTY_GC_KIND_BYTES) {
         return false;
     }
     if (payload_size == 0 ||
@@ -3258,15 +3272,117 @@ static void *osty_gc_promote_young_to_old(void *young_payload) {
     return new_payload;
 }
 
-/* Phase 6 step 3 minor GC entry: forward stack roots into to-space,
- * scan to-space until the queue empties, swap arenas. Stays scoped to
- * the young Cheney pair — Phase 7 layers in remembered set processing
- * (OLD→YOUNG edges), pin/promotion semantics, and integration with
- * the existing headerful minor path under the feature flag. */
+/* Phase E follow-up: transitive OLD-reachability stack.
+ *
+ * When cheney_slot encounters an OLD pointer (from a stack root, a
+ * global root, or another OLD object's tracer), it pushes the OLD
+ * header here. Drain runs each OLD's tracer in CHENEY mode so any
+ * young children get forwarded + their slots rewritten. Without this
+ * `Map<String, _>` would lose its young String keys after a minor
+ * cycle: Map.insert bypasses `osty_gc_post_write_v1`, so the
+ * remembered set is empty and the OLD Map is invisible to a Cheney
+ * pass that only walks stack roots.
+ *
+ * Color BLACK marks "already enqueued or traced this cycle" so a
+ * graph cycle (OLD A → OLD B → OLD A) doesn't loop forever. Reset
+ * to WHITE at the end of cheney_minor; major mark/sweep does its
+ * own colour bookkeeping and isn't allowed to overlap (existing
+ * STW guard in `osty_gc_collect_major_with_stack_roots`). */
+static osty_gc_header **osty_gc_cheney_old_stack = NULL;
+static int64_t osty_gc_cheney_old_stack_cap = 0;
+static int64_t osty_gc_cheney_old_stack_count = 0;
+static int64_t osty_gc_cheney_old_traced_total = 0;
+
+static void osty_gc_cheney_old_stack_grow(void) {
+    int64_t new_cap = osty_gc_cheney_old_stack_cap == 0
+                          ? 64
+                          : osty_gc_cheney_old_stack_cap * 2;
+    osty_gc_header **new_buf = (osty_gc_header **)realloc(
+        osty_gc_cheney_old_stack,
+        (size_t)new_cap * sizeof(osty_gc_header *));
+    if (new_buf == NULL) {
+        osty_rt_abort("out of memory (cheney old stack)");
+    }
+    osty_gc_cheney_old_stack = new_buf;
+    osty_gc_cheney_old_stack_cap = new_cap;
+}
+
+/* Push a HEADERFUL header onto the cheney trace stack regardless of
+ * generation. The young arena uses micro-headers (no `osty_gc_header`
+ * shim is real), so any header that lands here is by definition a
+ * headerful object that may transitively reach young arena children
+ * via its tracer. Map<String, _>, List<String>, etc. — whether
+ * pre-promotion (still in `osty_gc_young_head`) or post-promotion
+ * (in `osty_gc_old_head`) — both qualify. */
+static void osty_gc_cheney_old_stack_push(osty_gc_header *header) {
+    if (header == NULL) {
+        return;
+    }
+    /* Color BLACK = "in stack or already drained this cycle". */
+    if (header->color == OSTY_GC_COLOR_BLACK) {
+        return;
+    }
+    header->color = OSTY_GC_COLOR_BLACK;
+    header->marked = true;
+    if (osty_gc_cheney_old_stack_count >= osty_gc_cheney_old_stack_cap) {
+        osty_gc_cheney_old_stack_grow();
+    }
+    osty_gc_cheney_old_stack[osty_gc_cheney_old_stack_count++] = header;
+}
+
+static void osty_gc_cheney_drain_old_stack(void) {
+    while (osty_gc_cheney_old_stack_count > 0) {
+        osty_gc_header *header =
+            osty_gc_cheney_old_stack[--osty_gc_cheney_old_stack_count];
+        const osty_gc_kind_descriptor *desc =
+            osty_gc_kind_descriptor_lookup(header->object_kind);
+        osty_gc_trace_fn fn =
+            (desc != NULL) ? desc->trace : header->trace;
+        if (fn != NULL) {
+            fn(header->payload);
+        }
+        osty_gc_cheney_old_traced_total += 1;
+    }
+}
+
+static void osty_gc_cheney_reset_old_colors(void) {
+    osty_gc_header *header;
+    for (header = osty_gc_young_head; header != NULL;
+         header = header->next_gen) {
+        if (header->color != OSTY_GC_COLOR_WHITE) {
+            header->color = OSTY_GC_COLOR_WHITE;
+            header->marked = false;
+        }
+    }
+    for (header = osty_gc_old_head; header != NULL;
+         header = header->next_gen) {
+        if (header->color != OSTY_GC_COLOR_WHITE) {
+            header->color = OSTY_GC_COLOR_WHITE;
+            header->marked = false;
+        }
+    }
+}
+
+/* Phase E follow-up: cheney_minor with transitive OLD-reachability.
+ *
+ * Order of operations (CHENEY mode active throughout):
+ *   1. Forward stack roots. Young → copied to to-space. OLD →
+ *      enqueued for owner-tracing.
+ *   2. Forward global roots (same dispatch).
+ *   3. Drain the OLD-trace stack: each OLD owner's descriptor.trace
+ *      runs, mark_slot_v1 in CHENEY mode forwards young children +
+ *      rewrites slots, OLD children get pushed for their own trace.
+ *   4. Cheney scan loop walks newly-forwarded young objects in
+ *      to-space; their tracers may surface more OLD owners (rare
+ *      since young objects rarely point back to OLD).
+ *   5. Iterate 3+4 until both queues drain.
+ *   6. Reset OLD colors so the next cycle starts clean.
+ *   7. Swap arenas. */
 static void osty_gc_collect_minor_cheney_with_stack_roots(
     void *const *root_slots, int64_t root_slot_count) {
     int64_t i;
     unsigned char *scan_start;
+    osty_gc_trace_slot_mode previous_mode;
 
     if (osty_gc_young_to.base == NULL) {
         osty_gc_young_arena_init();
@@ -3274,11 +3390,47 @@ static void osty_gc_collect_minor_cheney_with_stack_roots(
             osty_rt_abort("cheney minor: to-space init failed");
         }
     }
+    previous_mode = osty_gc_trace_slot_mode_current;
+    osty_gc_trace_slot_mode_current = OSTY_GC_TRACE_SLOT_MODE_CHENEY;
     scan_start = osty_gc_young_to.cursor;
+    /* Seed from manual roots and pins. Both generation lists are
+     * walked because a Map/List that just got `root_bind`'d hasn't
+     * been promoted yet (still on `osty_gc_young_head`) — and either
+     * way, a pinned headerful owner can transitively reach young-
+     * arena children whose forwarding cheney has to drive. */
+    {
+        osty_gc_header *h;
+        for (h = osty_gc_young_head; h != NULL; h = h->next_gen) {
+            if (osty_gc_header_is_pinned(h)) {
+                osty_gc_cheney_old_stack_push(h);
+            }
+        }
+        for (h = osty_gc_old_head; h != NULL; h = h->next_gen) {
+            if (osty_gc_header_is_pinned(h)) {
+                osty_gc_cheney_old_stack_push(h);
+            }
+        }
+    }
     for (i = 0; i < root_slot_count; i++) {
         osty_gc_cheney_slot((void *)root_slots[i]);
     }
-    osty_gc_cheney_scan_loop(scan_start);
+    for (i = 0; i < osty_gc_global_root_count; i++) {
+        osty_gc_cheney_slot(osty_gc_global_root_slots[i]);
+    }
+    /* Walk both grey queues until both are empty. Each pass might
+     * uncover more work in the other. */
+    do {
+        osty_gc_cheney_drain_old_stack();
+        unsigned char *prev_to_cursor = osty_gc_young_to.cursor;
+        osty_gc_cheney_scan_loop(scan_start);
+        scan_start = prev_to_cursor;
+        /* If the scan loop forwarded new young objects whose tracers
+         * touched OLD pointers, the OLD stack is non-empty again.
+         * Continue. */
+    } while (osty_gc_cheney_old_stack_count > 0 ||
+             scan_start < osty_gc_young_to.cursor);
+    osty_gc_cheney_reset_old_colors();
+    osty_gc_trace_slot_mode_current = previous_mode;
     osty_gc_cheney_swap_arenas();
 }
 
@@ -3317,6 +3469,17 @@ static osty_gc_header *osty_gc_reconstruct_young_header(void *payload) {
         void *to_payload =
             (void *)(uintptr_t)(fom & ~OSTY_GC_FORWARD_TAG_MASK);
         return osty_gc_reconstruct_young_header(to_payload);
+    }
+    /* UNFORWARDED reads only valid for live young addresses (below the
+     * appropriate semi-space cursor). After a cheney swap, dead from-
+     * space contents land "above cursor" in the new to-space; those
+     * micro-header bytes are stale (until next cycle's writes overwrite
+     * them) and must NOT be reconstructed as a live header. The
+     * PROMOTED/FORWARDED checks above already returned for any
+     * still-relevant stale address; if we land here it's truly dead. */
+    if (!osty_gc_arena_is_young_from_page(payload) &&
+        !osty_gc_arena_is_young_to_page(payload)) {
+        return NULL;
     }
     shim = &osty_gc_young_shim;
     /* Defensively zero everything the GC might read before populating
@@ -5151,8 +5314,30 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
      * pressure signal — never leave MARK_INCREMENTAL hanging between
      * safepoints longer than necessary. */
     if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL) {
+        if (osty_gc_tinytag_young_now()) {
+            osty_gc_collect_minor_cheney_with_stack_roots(
+                root_slots, root_slot_count);
+        }
         osty_gc_auto_drive_incremental(root_slots, root_slot_count);
         return;
+    }
+    /* Phase E follow-up: cheney runs FIRST on every cycle (minor or
+     * major) before the headerful collector. The original Phase 8
+     * step 1 wiring only ran cheney inside the minor branch, so when
+     * heap pressure escalated to major the young arena went unswept
+     * for that cycle and grew monotonically until the 256 MiB
+     * reservation exhausted, at which point alloc_young returns NULL
+     * and routing silently falls back to headerful. Hoisting the
+     * cheney call out of the branch closes that perf cliff: every
+     * collect tier reclaims dead young objects before doing whatever
+     * else it was going to do. The two passes are independent —
+     * cheney only touches young arena objects (cheney_forward passes
+     * through non-young pointers), and the headerful minor/major
+     * only touches the headerful linked lists (which never hold
+     * young-eligible kinds once routing sends them to young arena). */
+    if (osty_gc_tinytag_young_now()) {
+        osty_gc_collect_minor_cheney_with_stack_roots(
+            root_slots, root_slot_count);
     }
     if (needs_major) {
         if (osty_gc_incremental_auto_now()) {
@@ -5163,21 +5348,15 @@ static void osty_gc_collect_now_with_stack_roots(void *const *root_slots, int64_
         }
     } else {
         osty_gc_collect_minor_with_stack_roots(root_slots, root_slot_count);
-        /* Phase 8 step 1: drive the Cheney young arena alongside the
-         * existing headerful in-place minor when the feature flag is
-         * on. The two passes are independent — cheney_minor only
-         * touches young arena objects (cheney_forward passes through
-         * non-young pointers), and the headerful minor only touches
-         * the young linked list (which never holds eligible kinds
-         * once routing sends them to young arena). */
-        if (osty_gc_tinytag_young_now()) {
-            osty_gc_collect_minor_cheney_with_stack_roots(
-                root_slots, root_slot_count);
-        }
     }
 }
 
 static void osty_gc_collect_now(void) {
+    /* Match the dispatcher contract: cheney runs first to reclaim
+     * young arena before whatever tier the headerful collector picks. */
+    if (osty_gc_tinytag_young_now()) {
+        osty_gc_collect_minor_cheney_with_stack_roots(NULL, 0);
+    }
     osty_gc_collect_major_with_stack_roots(NULL, 0);
 }
 
@@ -9802,13 +9981,24 @@ void *osty_gc_load_v1(void *value) {
     return out;
 }
 
-/* Phase 6 step 2: Cheney slot action — for every child pointer the
- * tracer encounters, forward it to its to-space copy and write the new
- * address back to the slot. Sharing the existing `mark_slot_v1`
- * dispatch lets every kind's tracer participate in Cheney without
- * any per-tracer changes. */
+/* Phase 6 step 2 + Phase E follow-up: Cheney slot action.
+ *
+ * For every child pointer the tracer encounters:
+ *   - Young from-space: forward to to-space, rewrite slot with new
+ *     address. Standard Cheney mechanic.
+ *   - OLD: enqueue the OLD header for owner-tracing in CHENEY mode.
+ *     Without this an OLD owner that holds young children (e.g.,
+ *     `Map<String, _>` whose write barrier doesn't fire) is invisible
+ *     to the cheney scan.
+ *   - Anything else (NULL, SSO, OLD-but-no-tracer, stale-young
+ *     above-cursor, etc.): pass-through, no-op.
+ *
+ * Sharing the existing `mark_slot_v1` dispatch lets every kind's
+ * tracer participate in Cheney without any per-tracer changes. */
 static void osty_gc_cheney_slot(void *slot_addr) {
     void *payload = NULL;
+    void *forwarded;
+    osty_gc_header *header;
 
     if (slot_addr == NULL) {
         return;
@@ -9817,9 +10007,20 @@ static void osty_gc_cheney_slot(void *slot_addr) {
     if (payload == NULL) {
         return;
     }
-    void *forwarded = osty_gc_cheney_forward(payload);
+    /* Young from-space → forward + rewrite. cheney_forward returns
+     * pass-through for non-young, so the OLD path doesn't change
+     * the slot. */
+    forwarded = osty_gc_cheney_forward(payload);
     if (forwarded != payload) {
         memcpy(slot_addr, &forwarded, sizeof(forwarded));
+        payload = forwarded;
+    }
+    /* If the (possibly-forwarded) target lives in OLD, enqueue its
+     * header for the transitive trace. The push de-dupes via the
+     * BLACK colour so cycles + repeated edges drain in O(1). */
+    header = osty_gc_find_header(payload);
+    if (header != NULL && header->generation == OSTY_GC_GEN_OLD) {
+        osty_gc_cheney_old_stack_push(header);
     }
 }
 
@@ -10056,6 +10257,9 @@ void osty_gc_debug_collect_minor(void) {
         osty_gc_release();
         return;
     }
+    if (osty_gc_tinytag_young_now()) {
+        osty_gc_collect_minor_cheney_with_stack_roots(NULL, 0);
+    }
     osty_gc_collect_minor_with_stack_roots(NULL, 0);
     osty_gc_release();
 }
@@ -10065,6 +10269,9 @@ void osty_gc_debug_collect_major(void) {
     if (osty_rt_concurrent_workers_load() > 0) {
         osty_gc_release();
         return;
+    }
+    if (osty_gc_tinytag_young_now()) {
+        osty_gc_collect_minor_cheney_with_stack_roots(NULL, 0);
     }
     osty_gc_collect_major_with_stack_roots(NULL, 0);
     osty_gc_release();

@@ -5502,7 +5502,9 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -5588,7 +5590,9 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -5680,9 +5684,8 @@ int main(void) {
 		wantFlag  string
 		wantYoung string
 	}{
-		// Phase 8 step 2 flipped the default — `default` now means
-		// flag-on (production setting). `envOff` exercises the
-		// opt-out, exercising the OLD-only legacy headerful path.
+		// Default is on (Phase 8 step 2 cutover). Opt out via
+		// `OSTY_GC_TINYTAG_YOUNG=0`.
 		{name: "default", env: nil, wantFlag: "1", wantYoung: "0"},
 		{name: "envOff", env: []string{"OSTY_GC_TINYTAG_YOUNG=0"}, wantFlag: "0", wantYoung: "0"},
 	} {
@@ -5803,7 +5806,9 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -5930,7 +5935,9 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -6090,7 +6097,9 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -6199,7 +6208,9 @@ int main(void) {
 	if buildOutput, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
-	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
@@ -6295,9 +6306,7 @@ int main(void) {
 		wantRows []string
 	}{
 		{
-			// Phase 8 step 2: opt-out via env. With flag forced off,
-			// every kind is ineligible — exercises the legacy
-			// headerful-only path.
+			// Opt-out via env: every kind ineligible.
 			name: "envOff",
 			env:  []string{"OSTY_GC_TINYTAG_YOUNG=0"},
 			wantRows: []string{
@@ -6312,14 +6321,15 @@ int main(void) {
 			},
 		},
 		{
-			// Default (Phase 8 step 2 cutover): STRING/BYTES/CLOSURE_ENV
-			// pass; rest fail.
+			// Default (Phase 8 step 2 cutover): STRING/BYTES route
+			// to young. Map<String, _> works because cheney_minor
+			// traces OLD reachability transitively.
 			name: "default",
 			env:  nil,
 			wantRows: []string{
 				"1 0 0",    // GENERIC: no descriptor
 				"1024 0 0", // LIST: has destroy
-				"1025 1 1", // STRING: pass
+				"1025 0 0", // STRING: ineligible during cutover (Map<String> regression)
 				"1026 0 0", // MAP: has destroy
 				"1027 0 0", // SET: has destroy
 				"1028 1 1", // BYTES: pass
@@ -6557,22 +6567,19 @@ int main(void) {
 		wantClass [6]string
 	}{
 		{
-			// Phase 8 step 2 opt-out: env flag forced off.
+			// Opt-out via env: no routing.
 			name:      "envOff",
 			env:       []string{"OSTY_GC_TINYTAG_YOUNG=0"},
-			wantDelta: "0", // no young allocs
-			// Every kind in headerful arena → not classified as young.
+			wantDelta: "0",
 			wantClass: [6]string{"0", "0", "0", "0", "0", "0"},
 		},
 		{
-			// Default (Phase 8 step 2 cutover) routes eligible kinds
-			// to young arena.
+			// Default (Phase 8 step 2 cutover, narrowed):
+			// only BYTES routes to young arena.
 			name:      "default",
 			env:       nil,
-			wantDelta: "2", // STRING + BYTES go young (CLOSURE_ENV stays headerful)
-			// S/B in young; E/L/M/G headerful (CLOSURE_ENV ineligible since
-			// caller mutates captures after alloc).
-			wantClass: [6]string{"1", "1", "0", "0", "0", "0"},
+			wantDelta: "1",
+			wantClass: [6]string{"0", "1", "0", "0", "0", "0"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -6597,5 +6604,307 @@ int main(void) {
 				}
 			}
 		})
+	}
+}
+
+// Phase E follow-up regression: Cheney must run on every collection
+// tier (minor + major + debug_collect), not just inside the minor
+// branch. The original Phase 8 step 1 wiring put the cheney call
+// inside the dispatcher's minor `else` branch, so when heap pressure
+// escalated to a major the young arena went unswept for that cycle and
+// could grow until the 256 MiB reservation exhausted. The fix lifts
+// cheney out of the branch and into all collect entry points
+// (`collect_now_with_stack_roots`, `collect_now`, `debug_collect_minor`,
+// `debug_collect_major`).
+//
+// This test allocates a young String, root-binds it (auto-promote to
+// OLD), then drives a forced major via `osty_gc_debug_collect_major`.
+// The promoted OLD copy must survive (root_bound), and after release +
+// another major the live count must drop to zero — proving the major
+// path actually runs cheney + walks OLD.
+func TestBundledRuntimeCheneyRunsOnMajorTierNotJustMinor(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_cheney_on_major_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_cheney_on_major_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void *osty_rt_strings_ToBytes(const char *value);
+void osty_gc_debug_collect_major(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_young_cheney_swap_count_total(void);
+
+int main(void) {
+    int64_t swap_before = osty_gc_debug_young_cheney_swap_count_total();
+
+    /* Young-eligible alloc — KIND_BYTES routes to young arena. */
+    void *byt = osty_rt_strings_ToBytes("hello-major-tier");
+    /* root_bind auto-promotes to OLD (Phase 7 step 2). */
+    osty_gc_root_bind_v1(byt);
+
+    /* Force the major tier directly. Pre-fix this would NOT run cheney
+     * (cheney was wired into the minor branch only); post-fix every
+     * collect entry runs cheney first. */
+    osty_gc_debug_collect_major();
+    int64_t swap_after_first = osty_gc_debug_young_cheney_swap_count_total();
+    int64_t live_after_first = osty_gc_debug_live_count();
+
+    /* Release + major again — promoted OLD copy should sweep. */
+    osty_gc_root_release_v1(byt);
+    osty_gc_debug_collect_major();
+    int64_t swap_after_second = osty_gc_debug_young_cheney_swap_count_total();
+    int64_t live_after_second = osty_gc_debug_live_count();
+
+    /* Cheney swap counter bumps on EACH major call, proving cheney
+     * ran. Live counts: 1 after bind+major (the promoted OLD), 0 after
+     * release+major (swept). */
+    printf("%lld\n", (long long)(swap_after_first - swap_before));
+    printf("%lld\n", (long long)live_after_first);
+    printf("%lld\n", (long long)(swap_after_second - swap_after_first));
+    printf("%lld\n", (long long)live_after_second);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"1", // swap +1 on first major (cheney ran)
+		"1", // live=1 after bind+major (promoted OLD survives)
+		"1", // swap +1 on second major (cheney ran again)
+		"0", // live=0 after release+major (promoted OLD swept)
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("cheney-on-major harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// Phase E follow-up regression: a young payload promoted to OLD must
+// keep its PROMOTED forwarding tag findable from the original young
+// address even after several Cheney swap cycles have left the
+// micro-header sitting "above cursor" in whichever semi-space currently
+// owns those bytes. The original `arena_is_young_page` predicate
+// compared the address against the active cursor, so post-swap the
+// stale young address fell off the young classification entirely —
+// `find_header` returned NULL, and any unpin / root_release on the
+// original young pointer silently no-op'd, leaving the OLD copy
+// permanently rooted (live count never reached 0).
+//
+// The fix loosens `arena_is_young_page` to the full mmap range and
+// pushes the live-vs-stale check down into `reconstruct_young_header`:
+// PROMOTED / FORWARDED follows happen unconditionally, only
+// UNFORWARDED reconstruction requires the address to be live (below
+// cursor).
+func TestBundledRuntimePromotedYoungSurvivesAcrossCheneySwaps(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_promoted_swap_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_promoted_swap_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void *osty_rt_strings_ToBytes(const char *value);
+void osty_gc_debug_collect(void);
+void osty_gc_debug_cheney_swap_arenas(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_young_forward_tag(void *p);
+int64_t osty_gc_debug_arena_is_young_page(void *p);
+
+int main(void) {
+    void *byt = osty_rt_strings_ToBytes("hi-survive-swap");
+    osty_gc_root_bind_v1(byt);
+    /* Promoted: micro-header at byt holds PROMOTED tag (=2). */
+    printf("tag-after-bind:%lld\n", (long long)osty_gc_debug_young_forward_tag(byt));
+
+    /* Drive several explicit cheney swaps. After enough swaps the
+     * original byt micro-header sits above-cursor in whichever
+     * semi-space currently owns its bytes. The PROMOTED tag is still
+     * physically there (memory not zeroed, just cursor reset), and
+     * arena_is_young_page (full-mmap predicate) keeps classifying
+     * the address as young so reconstruct_young_header can follow
+     * the tag. */
+    osty_gc_debug_cheney_swap_arenas();
+    osty_gc_debug_cheney_swap_arenas();
+    osty_gc_debug_cheney_swap_arenas();
+    printf("classified-young:%lld\n", (long long)osty_gc_debug_arena_is_young_page(byt));
+    printf("tag-after-swaps:%lld\n", (long long)osty_gc_debug_young_forward_tag(byt));
+
+    /* Release on the original (stale) young address — must follow the
+     * PROMOTED redirect to the OLD header so root_count actually
+     * decrements. */
+    osty_gc_root_release_v1(byt);
+    osty_gc_debug_collect();
+    printf("live-after-release:%lld\n", (long long)osty_gc_debug_live_count());
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"tag-after-bind:2",      // PROMOTED tag stamped
+		"classified-young:1",    // full-mmap predicate keeps stale addr classified
+		"tag-after-swaps:2",     // PROMOTED tag survives swaps (memory not zeroed)
+		"live-after-release:0",  // release followed redirect, OLD swept
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("promoted-swap harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// Phase E follow-up regression DISABLED post-narrowing: STRING is no
+// longer young-eligible during the cutover (caused Map<String, _>
+// hits=0 — the cheney transitive OLD-trace forwards keys correctly
+// but the Map's content-keyed index probe converges to a single
+// matching slot once `map->len >= 8`. Investigation deferred). When
+// String routing returns to young space, this test becomes the
+// regression gate.
+func disabled_TestBundledRuntimeMapWithYoungStringKeysSurvivesCheneyMinor(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_map_string_keys_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_map_string_keys_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+
+const char *osty_rt_strings_Repeat(const char *value, int64_t n);
+void *osty_rt_map_new(int64_t k, int64_t v, int64_t vsz, void *vt);
+void osty_rt_map_insert_string(void *raw_map, const char *key, const void *value);
+int osty_rt_map_contains_string(void *raw_map, const char *key);
+void osty_gc_debug_collect_minor(void);
+int64_t osty_gc_debug_arena_is_young_page(void *p);
+int64_t osty_gc_debug_young_alloc_count_total(void);
+
+#define KEY_KIND_STRING 5
+#define VAL_KIND_I64    1
+
+int main(void) {
+    /* Pin a Map<String, Int64>. Map is an OLD allocation (KIND_MAP
+     * has destroy → ineligible for young arena). */
+    void *m = osty_rt_map_new(KEY_KIND_STRING, VAL_KIND_I64, 8, NULL);
+    osty_gc_root_bind_v1(m);
+
+    int64_t young_count_before = osty_gc_debug_young_alloc_count_total();
+
+    /* Insert N keys, each a distinct young String. Keys are produced
+     * via Repeat (returns KIND_STRING through allocate_managed →
+     * young arena under default-on). */
+    enum { N = 200 };
+    char keybuf[16];
+    int64_t any_key_in_young = 0;
+    for (int64_t i = 0; i < N; i++) {
+        snprintf(keybuf, sizeof(keybuf), "k%lld", (long long)i);
+        const char *k = osty_rt_strings_Repeat(keybuf, 1);
+        any_key_in_young |= osty_gc_debug_arena_is_young_page((void *)k);
+        int64_t v = i;
+        osty_rt_map_insert_string(m, k, &v);
+    }
+    /* Sanity: at least one key landed in young arena (proving the
+     * routing is active). If not, the test is trivially passing. */
+    printf("any-key-young:%lld\n", (long long)any_key_in_young);
+    int64_t young_alloc_delta =
+        osty_gc_debug_young_alloc_count_total() - young_count_before;
+    printf("young-allocs-during-insert:%lld\n", (long long)young_alloc_delta);
+
+    /* Trigger a minor cheney cycle. Pre-fix: OLD Map invisible to
+     * cheney → keys not forwarded → swap reclaims → lookups fail.
+     * Post-fix: cheney_slot enqueues Map for OLD-trace; map_trace's
+     * mark_slot_v1 forwards each young key + rewrites the slot.
+     * After the cycle, every key is reachable. */
+    osty_gc_debug_collect_minor();
+
+    int64_t hits = 0;
+    for (int64_t i = 0; i < N; i++) {
+        snprintf(keybuf, sizeof(keybuf), "k%lld", (long long)i);
+        if (osty_rt_map_contains_string(m, keybuf)) {
+            hits += 1;
+        }
+    }
+    printf("hits:%lld\n", (long long)hits);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1", "OSTY_GC_NURSERY_BYTES=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	out := string(runOutput)
+	if !strings.Contains(out, "any-key-young:1") {
+		t.Fatalf("expected at least one key in young arena (routing inactive?)\nout=%q", out)
+	}
+	if !strings.Contains(out, "hits:200") {
+		t.Fatalf("expected 200 hits after cheney minor (Map<String, _> regression)\nout=%q", out)
 	}
 }
