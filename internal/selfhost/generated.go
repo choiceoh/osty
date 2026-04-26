@@ -21127,16 +21127,20 @@ func opParseStructLit(p *OstyParser, name int) int {
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
 		// Osty: /tmp/selfhost_merged.osty:8144:9
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontDotDot{})) {
-			// Osty: /tmp/selfhost_merged.osty:8145:13
+			// Osty: toolchain/parser.osty:1288 (G26 hand-port: allow spread + fields)
 			_ = opAdvance(p)
-			// Osty: /tmp/selfhost_merged.osty:8146:13
-			spreadIdx = opParseExpr(p)
-			// Osty: /tmp/selfhost_merged.osty:8147:13
+			exprIdx := opParseExpr(p)
+			if spreadIdx >= 0 {
+				opErrorFull(p, "struct literal allows at most one `..` spread", "remove the duplicate spread", "spec R5: `..` in a struct literal is a spread-update and may appear at most once", "E0204")
+			} else {
+				spreadIdx = exprIdx
+			}
 			opSkipNewlines(p)
-			// Osty: /tmp/selfhost_merged.osty:8148:13
-			_ = opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))
-			// Osty: /tmp/selfhost_merged.osty:8149:13
-			break
+			if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
+				break
+			}
+			opSkipNewlines(p)
+			continue
 		}
 		// Osty: /tmp/selfhost_merged.osty:8151:9
 		fs := p.pos

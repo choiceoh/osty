@@ -1286,10 +1286,16 @@ fn opParseStructLit(p: OstyParser, name: Int) -> Int {
     for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
         if opAt(p, FrontDotDot) {
             let _ = opAdvance(p)
-            spreadIdx = opParseExpr(p)
+            let exprIdx = opParseExpr(p)
+            if spreadIdx >= 0 {
+                opErrorFull(p, "struct literal allows at most one `..` spread", "remove the duplicate spread", "spec R5: `..` in a struct literal is a spread-update and may appear at most once", "E0204")
+            } else {
+                spreadIdx = exprIdx
+            }
             opSkipNewlines(p)
-            let _ = opEat(p, FrontComma)
-            break
+            if !(opEat(p, FrontComma)) { break }
+            opSkipNewlines(p)
+            continue
         }
         let fs = p.pos
         let fn_ = opAdvance(p).text
