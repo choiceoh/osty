@@ -11,6 +11,7 @@ package llvmgen
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
@@ -1490,7 +1491,7 @@ func (g *generator) traceCallbackSymbol(typ string, rootPaths [][]int) string {
 	if name, ok := g.traceHelpers[key]; ok {
 		return name
 	}
-	name := fmt.Sprintf("osty_rt_trace_%d", len(g.traceHelpers))
+	name := mirRtSymbol("trace_" + strconv.Itoa(len(g.traceHelpers)))
 	g.traceHelpers[key] = name
 	g.declareRuntimeSymbol("osty.gc.mark_slot_v1", "void", []paramInfo{{typ: "ptr"}})
 	g.needsGCRuntime = true

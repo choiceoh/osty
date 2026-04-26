@@ -445,7 +445,7 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		if err != nil {
 			return value{}, true, err
 		}
-		symbol := "osty_rt_bytes_len"
+		symbol := mirRtBytesLenSymbolName()
 		g.declareRuntimeSymbol(symbol, "i64", []paramInfo{{typ: "ptr"}})
 		emitter := g.toOstyEmitter()
 		out := llvmCall(emitter, "i64", symbol, []*LlvmValue{toOstyValue(b)})
@@ -459,7 +459,7 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		if err != nil {
 			return value{}, true, err
 		}
-		symbol := "osty_rt_bytes_is_empty"
+		symbol := mirRtBytesIsEmptySymbol()
 		g.declareRuntimeSymbol(symbol, "i1", []paramInfo{{typ: "ptr"}})
 		emitter := g.toOstyEmitter()
 		out := llvmCall(emitter, "i1", symbol, []*LlvmValue{toOstyValue(b)})
@@ -717,7 +717,7 @@ func (g *generator) emitStdStringsSplit(call *ast.CallExpr) (value, error) {
 	if err != nil {
 		return value{}, err
 	}
-	symbol := "osty_rt_strings_Split"
+	symbol := mirRtStringSplitSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(s), toOstyValue(sep)})
@@ -786,7 +786,7 @@ func (g *generator) emitStdStringsFields(call *ast.CallExpr) (value, error) {
 	if err != nil {
 		return value{}, err
 	}
-	symbol := "osty_rt_strings_Fields"
+	symbol := mirRtStringSymbol("Fields")
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(s)})

@@ -7587,3 +7587,39 @@ func mirCallResultUnwrapErrLine() string {
 func mirCallExpectFailedLine() string {
 	return mirCallVoidNoArgsLine(mirRtExpectFailedSymbol())
 }
+
+// §18 Phase-2 function ports — small pure helpers ported from
+// internal/llvmgen/mir_generator.go.
+
+// Osty: mirLocalDisplayNameFromText
+func mirLocalDisplayNameFromText(name string) string {
+	if name == "" {
+		return "<temp>"
+	}
+	return name
+}
+
+// Osty: mirIntrinsicKindLabel
+func mirIntrinsicKindLabel(kind int, kindFallback string) string {
+	switch kind {
+	case 1:
+		return "print"
+	case 2:
+		return "println"
+	case 3:
+		return "eprint"
+	case 4:
+		return "eprintln"
+	case 6:
+		return "string_concat"
+	}
+	return kindFallback
+}
+
+// Osty: mirIntrinsicKindFallbackLabel
+func mirIntrinsicKindFallbackLabel(kindDigits string) string {
+	return "kind=" + kindDigits
+}
+
+// (mirChannelRecvSuffix / mirElemSizeBytes are not added — mirChanRecvSuffix /
+// mirMapValueSizeBytes already serve the same role; aliases would shadow them.)

@@ -563,14 +563,16 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 // When the local is a synthetic temp (no Name), append the first
 // instruction that *writes* the temp — that's usually the expression
 // whose checker-inferred type leaked through as <error>.
+// localDisplayName returns a human-readable display name for a MIR
+// local. Delegates the name-extraction policy to the Osty-sourced
+// `mirLocalDisplayNameFromText` (`toolchain/mir_generator.osty`); the
+// nil-Local case stays Go-side since it's a host-boundary concern
+// (`*mir.Local` is a Go pointer type).
 func localDisplayName(loc *mir.Local) string {
 	if loc == nil {
 		return "<nil>"
 	}
-	if loc.Name == "" {
-		return "<temp>"
-	}
-	return loc.Name
+	return mirLocalDisplayNameFromText(loc.Name)
 }
 
 // localDefiningSiteHint walks fn's blocks to find the first
