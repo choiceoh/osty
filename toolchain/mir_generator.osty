@@ -10041,3 +10041,1367 @@ pub fn mirLabelResultOk() -> String {
 pub fn mirLabelResultErr() -> String {
     "result.err"
 }
+
+/// §10 expanded fixed-symbol composers — Bytes runtime long-tail.
+
+/// mirRtBytesIndexOfSymbol returns `osty_rt_bytes_index_of`.
+pub fn mirRtBytesIndexOfSymbol() -> String {
+    mirRtBytesSymbol("index_of")
+}
+
+/// mirRtBytesLastIndexOfSymbol returns `osty_rt_bytes_last_index_of`.
+pub fn mirRtBytesLastIndexOfSymbol() -> String {
+    mirRtBytesSymbol("last_index_of")
+}
+
+/// mirRtBytesSplitSymbol returns `osty_rt_bytes_split`.
+pub fn mirRtBytesSplitSymbol() -> String {
+    mirRtBytesSymbol("split")
+}
+
+/// mirRtBytesJoinSymbol returns `osty_rt_bytes_join`.
+pub fn mirRtBytesJoinSymbol() -> String {
+    mirRtBytesSymbol("join")
+}
+
+/// mirRtBytesConcatSymbol returns `osty_rt_bytes_concat`.
+pub fn mirRtBytesConcatSymbol() -> String {
+    mirRtBytesSymbol("concat")
+}
+
+/// mirRtBytesRepeatSymbol returns `osty_rt_bytes_repeat`.
+pub fn mirRtBytesRepeatSymbol() -> String {
+    mirRtBytesSymbol("repeat")
+}
+
+/// mirRtBytesReplaceSymbol returns `osty_rt_bytes_replace`.
+pub fn mirRtBytesReplaceSymbol() -> String {
+    mirRtBytesSymbol("replace")
+}
+
+/// mirRtBytesReplaceAllSymbol returns `osty_rt_bytes_replace_all`.
+pub fn mirRtBytesReplaceAllSymbol() -> String {
+    mirRtBytesSymbol("replace_all")
+}
+
+/// mirRtBytesTrimLeftSymbol / TrimRightSymbol / TrimSymbol / TrimSpaceSymbol
+/// return the canonical Bytes-trim runtime symbol names.
+pub fn mirRtBytesTrimLeftSymbol() -> String {
+    mirRtBytesSymbol("trim_left")
+}
+
+pub fn mirRtBytesTrimRightSymbol() -> String {
+    mirRtBytesSymbol("trim_right")
+}
+
+pub fn mirRtBytesTrimSymbol() -> String {
+    mirRtBytesSymbol("trim")
+}
+
+pub fn mirRtBytesTrimSpaceSymbol() -> String {
+    mirRtBytesSymbol("trim_space")
+}
+
+/// mirRtBytesToUpperSymbol / ToLowerSymbol / ToHexSymbol — case /
+/// hex-encode runtime symbol names.
+pub fn mirRtBytesToUpperSymbol() -> String {
+    mirRtBytesSymbol("to_upper")
+}
+
+pub fn mirRtBytesToLowerSymbol() -> String {
+    mirRtBytesSymbol("to_lower")
+}
+
+pub fn mirRtBytesToHexSymbol() -> String {
+    mirRtBytesSymbol("to_hex")
+}
+
+/// mirRtBytesSliceSymbol returns `osty_rt_bytes_slice`.
+pub fn mirRtBytesSliceSymbol() -> String {
+    mirRtBytesSymbol("slice")
+}
+
+/// mirRtBytesContainsSymbol / StartsWithSymbol / EndsWithSymbol —
+/// Bytes-search runtime symbol names.
+pub fn mirRtBytesContainsSymbol() -> String {
+    mirRtBytesSymbol("contains")
+}
+
+pub fn mirRtBytesStartsWithSymbol() -> String {
+    mirRtBytesSymbol("starts_with")
+}
+
+pub fn mirRtBytesEndsWithSymbol() -> String {
+    mirRtBytesSymbol("ends_with")
+}
+
+/// §10 String runtime symbol composers (capitalised method names).
+
+/// mirRtStringCharsSymbol returns `osty_rt_strings_Chars`.
+pub fn mirRtStringCharsSymbol() -> String {
+    mirRtStringSymbol("Chars")
+}
+
+/// mirRtStringBytesSymbol returns `osty_rt_strings_Bytes`.
+pub fn mirRtStringBytesSymbol() -> String {
+    mirRtStringSymbol("Bytes")
+}
+
+/// mirRtStringByteLenSymbol returns `osty_rt_strings_ByteLen`.
+pub fn mirRtStringByteLenSymbol() -> String {
+    mirRtStringSymbol("ByteLen")
+}
+
+/// mirRtStringToUpperSymbol returns `osty_rt_strings_ToUpper`.
+pub fn mirRtStringToUpperSymbol() -> String {
+    mirRtStringSymbol("ToUpper")
+}
+
+/// mirRtStringToLowerSymbol returns `osty_rt_strings_ToLower`.
+pub fn mirRtStringToLowerSymbol() -> String {
+    mirRtStringSymbol("ToLower")
+}
+
+/// mirRtStringIsValidIntSymbol / ToIntSymbol / IsValidFloatSymbol /
+/// ToFloatSymbol — String-parsing runtime symbol names.
+pub fn mirRtStringIsValidIntSymbol() -> String {
+    mirRtStringSymbol("IsValidInt")
+}
+
+pub fn mirRtStringToIntSymbol() -> String {
+    mirRtStringSymbol("ToInt")
+}
+
+pub fn mirRtStringIsValidFloatSymbol() -> String {
+    mirRtStringSymbol("IsValidFloat")
+}
+
+pub fn mirRtStringToFloatSymbol() -> String {
+    mirRtStringSymbol("ToFloat")
+}
+
+/// mirRtStringCountSymbol / SliceSymbol / SplitIntoSymbol /
+/// NthSegmentSymbol — String-iter runtime symbol names.
+pub fn mirRtStringCountSymbol() -> String {
+    mirRtStringSymbol("Count")
+}
+
+pub fn mirRtStringSliceSymbol() -> String {
+    mirRtStringSymbol("Slice")
+}
+
+pub fn mirRtStringSplitIntoSymbol() -> String {
+    mirRtStringSymbol("SplitInto")
+}
+
+pub fn mirRtStringNthSegmentSymbol() -> String {
+    mirRtStringSymbol("NthSegment")
+}
+
+/// mirRtStringIndexOfSymbol / LastIndexOfSymbol / ContainsSymbol /
+/// StartsWithSymbol / EndsWithSymbol — String-search runtime symbol
+/// names.
+pub fn mirRtStringIndexOfSymbol() -> String {
+    mirRtStringSymbol("IndexOf")
+}
+
+pub fn mirRtStringLastIndexOfSymbol() -> String {
+    mirRtStringSymbol("LastIndexOf")
+}
+
+pub fn mirRtStringContainsSymbol() -> String {
+    mirRtStringSymbol("Contains")
+}
+
+pub fn mirRtStringStartsWithSymbol() -> String {
+    mirRtStringSymbol("StartsWith")
+}
+
+pub fn mirRtStringEndsWithSymbol() -> String {
+    mirRtStringSymbol("EndsWith")
+}
+
+/// mirRtStringTrimSymbol / SplitSymbol / JoinSymbol / ReplaceSymbol /
+/// RepeatSymbol / HashSymbol / IsEmptySymbol / LenSymbol — String-
+/// transform runtime symbol names.
+pub fn mirRtStringTrimSymbol() -> String {
+    mirRtStringSymbol("Trim")
+}
+
+pub fn mirRtStringSplitSymbol() -> String {
+    mirRtStringSymbol("Split")
+}
+
+pub fn mirRtStringJoinSymbol() -> String {
+    mirRtStringSymbol("Join")
+}
+
+pub fn mirRtStringReplaceSymbol() -> String {
+    mirRtStringSymbol("Replace")
+}
+
+pub fn mirRtStringRepeatSymbol() -> String {
+    mirRtStringSymbol("Repeat")
+}
+
+pub fn mirRtStringHashSymbol() -> String {
+    mirRtStringSymbol("Hash")
+}
+
+pub fn mirRtStringIsEmptySymbol() -> String {
+    mirRtStringSymbol("IsEmpty")
+}
+
+pub fn mirRtStringLenSymbol() -> String {
+    mirRtStringSymbol("Len")
+}
+
+/// §10 Map runtime symbol composers (long-tail keys).
+
+pub fn mirRtMapInsertSymbol() -> String {
+    mirRtMapSymbol("insert")
+}
+
+pub fn mirRtMapGetSymbol() -> String {
+    mirRtMapSymbol("get")
+}
+
+pub fn mirRtMapRemoveSymbol() -> String {
+    mirRtMapSymbol("remove")
+}
+
+pub fn mirRtMapKeysSymbol() -> String {
+    mirRtMapSymbol("keys")
+}
+
+pub fn mirRtMapContainsKeySymbol() -> String {
+    mirRtMapSymbol("contains_key")
+}
+
+pub fn mirRtMapUpdateSymbol() -> String {
+    mirRtMapSymbol("update")
+}
+
+pub fn mirRtMapMapValuesSymbol() -> String {
+    mirRtMapSymbol("map_values")
+}
+
+pub fn mirRtMapRetainIfSymbol() -> String {
+    mirRtMapSymbol("retain_if")
+}
+
+pub fn mirRtMapGetOrSymbol() -> String {
+    mirRtMapSymbol("get_or")
+}
+
+/// §10 Set runtime symbol composers (long-tail keys).
+
+pub fn mirRtSetAddSymbol() -> String {
+    mirRtSetSymbol("add")
+}
+
+pub fn mirRtSetRemoveSymbol() -> String {
+    mirRtSetSymbol("remove")
+}
+
+pub fn mirRtSetContainsSymbol() -> String {
+    mirRtSetSymbol("contains")
+}
+
+pub fn mirRtSetIsEmptySymbol() -> String {
+    mirRtSetSymbol("is_empty")
+}
+
+pub fn mirRtSetUnionSymbol() -> String {
+    mirRtSetSymbol("union")
+}
+
+pub fn mirRtSetIntersectionSymbol() -> String {
+    mirRtSetSymbol("intersection")
+}
+
+pub fn mirRtSetDifferenceSymbol() -> String {
+    mirRtSetSymbol("difference")
+}
+
+/// §10 List runtime symbol composers (long-tail keys).
+
+pub fn mirRtListNewSymbol() -> String {
+    mirRtListSymbol("new")
+}
+
+pub fn mirRtListPushSymbol() -> String {
+    mirRtListSymbol("push")
+}
+
+pub fn mirRtListPopSymbol() -> String {
+    mirRtListSymbol("pop")
+}
+
+pub fn mirRtListInsertSymbol() -> String {
+    mirRtListSymbol("insert")
+}
+
+pub fn mirRtListContainsSymbol() -> String {
+    mirRtListSymbol("contains")
+}
+
+pub fn mirRtListMapSymbol() -> String {
+    mirRtListSymbol("map")
+}
+
+pub fn mirRtListFilterSymbol() -> String {
+    mirRtListSymbol("filter")
+}
+
+pub fn mirRtListFoldSymbol() -> String {
+    mirRtListSymbol("fold")
+}
+
+pub fn mirRtListSliceSymbol() -> String {
+    mirRtListSymbol("slice")
+}
+
+pub fn mirRtListSortedSymbol() -> String {
+    mirRtListSymbol("sorted")
+}
+
+pub fn mirRtListExtendSymbol() -> String {
+    mirRtListSymbol("extend")
+}
+
+pub fn mirRtListGroupBySymbol() -> String {
+    mirRtListSymbol("group_by")
+}
+
+/// §10 Channel runtime symbol composers (long-tail keys).
+
+pub fn mirRtChanNewSymbol() -> String {
+    mirRtChanSymbol("new")
+}
+
+pub fn mirRtChanIsClosedSymbol() -> String {
+    mirRtChanSymbol("is_closed")
+}
+
+pub fn mirRtChanLenSymbol() -> String {
+    mirRtChanSymbol("len")
+}
+
+pub fn mirRtChanCapSymbol() -> String {
+    mirRtChanSymbol("cap")
+}
+
+/// §10 GC runtime symbol composers.
+
+pub fn mirRtGCAllocSymbol() -> String {
+    mirRtGCSymbol("alloc")
+}
+
+pub fn mirRtGCSafepointSymbol() -> String {
+    mirRtGCSymbol("safepoint")
+}
+
+pub fn mirRtGCBarrierSymbol() -> String {
+    mirRtGCSymbol("barrier")
+}
+
+pub fn mirRtGCAllocatedBytesSymbol() -> String {
+    mirRtGCSymbol("allocated_bytes")
+}
+
+/// mirRtGCDebugAllocatedBytesTotalSymbol returns the canonical
+/// debug-counter symbol — note this one isn't `osty_rt_gc_*` but
+/// `osty_gc_debug_*`, so emitted directly.
+pub fn mirRtGCDebugAllocatedBytesTotalSymbol() -> String {
+    "osty_gc_debug_allocated_bytes_total"
+}
+
+/// §10 Math runtime symbol composers.
+
+pub fn mirRtMathFloorSymbol() -> String {
+    mirRtMathSymbol("floor")
+}
+
+pub fn mirRtMathCeilSymbol() -> String {
+    mirRtMathSymbol("ceil")
+}
+
+pub fn mirRtMathRoundSymbol() -> String {
+    mirRtMathSymbol("round")
+}
+
+pub fn mirRtMathTruncSymbol() -> String {
+    mirRtMathSymbol("trunc")
+}
+
+pub fn mirRtMathModSymbol() -> String {
+    mirRtMathSymbol("mod")
+}
+
+pub fn mirRtMathPowSymbol() -> String {
+    mirRtMathSymbol("pow")
+}
+
+pub fn mirRtMathSqrtSymbol() -> String {
+    mirRtMathSymbol("sqrt")
+}
+
+pub fn mirRtMathAbsSymbol() -> String {
+    mirRtMathSymbol("abs")
+}
+
+pub fn mirRtMathSinSymbol() -> String {
+    mirRtMathSymbol("sin")
+}
+
+pub fn mirRtMathCosSymbol() -> String {
+    mirRtMathSymbol("cos")
+}
+
+pub fn mirRtMathTanSymbol() -> String {
+    mirRtMathSymbol("tan")
+}
+
+pub fn mirRtMathExpSymbol() -> String {
+    mirRtMathSymbol("exp")
+}
+
+pub fn mirRtMathLogSymbol() -> String {
+    mirRtMathSymbol("log")
+}
+
+pub fn mirRtMathLog2Symbol() -> String {
+    mirRtMathSymbol("log2")
+}
+
+pub fn mirRtMathLog10Symbol() -> String {
+    mirRtMathSymbol("log10")
+}
+
+pub fn mirRtMathMinSymbol() -> String {
+    mirRtMathSymbol("min")
+}
+
+pub fn mirRtMathMaxSymbol() -> String {
+    mirRtMathSymbol("max")
+}
+
+/// §10 Random runtime symbol composers.
+
+pub fn mirRtRandomI64Symbol() -> String {
+    mirRtRandomSymbol("i64")
+}
+
+pub fn mirRtRandomDoubleSymbol() -> String {
+    mirRtRandomSymbol("double")
+}
+
+pub fn mirRtRandomRangeI64Symbol() -> String {
+    mirRtRandomSymbol("range_i64")
+}
+
+pub fn mirRtRandomShuffleSymbol() -> String {
+    mirRtRandomSymbol("shuffle")
+}
+
+pub fn mirRtRandomChoiceSymbol() -> String {
+    mirRtRandomSymbol("choice")
+}
+
+/// §10 Json runtime symbol composers.
+
+pub fn mirRtJsonParseSymbol() -> String {
+    mirRtJsonSymbol("parse")
+}
+
+pub fn mirRtJsonStringifySymbol() -> String {
+    mirRtJsonSymbol("stringify")
+}
+
+/// §10 Fmt runtime symbol composers.
+
+pub fn mirRtFmtSprintfSymbol() -> String {
+    mirRtFmtSymbol("sprintf")
+}
+
+pub fn mirRtFmtPrintfSymbol() -> String {
+    mirRtFmtSymbol("printf")
+}
+
+pub fn mirRtFmtPrintLineSymbol() -> String {
+    mirRtFmtSymbol("println")
+}
+
+/// §10 IO runtime symbol composers.
+
+pub fn mirRtIOReadSymbol() -> String {
+    mirRtIOSymbol("read")
+}
+
+pub fn mirRtIOWriteSymbol() -> String {
+    mirRtIOSymbol("write")
+}
+
+pub fn mirRtIOReadLineSymbol() -> String {
+    mirRtIOSymbol("read_line")
+}
+
+pub fn mirRtIOReadAllSymbol() -> String {
+    mirRtIOSymbol("read_all")
+}
+
+pub fn mirRtIOFlushSymbol() -> String {
+    mirRtIOSymbol("flush")
+}
+
+/// §11 LLVM-text typed-call shape composers — generic call shapes
+/// keyed by the result + arg type families.
+
+/// (mirCallI64FromPtrLine / TwoPtrLine continue to live at their
+/// original sites earlier in this file.)
+
+/// mirCallI64FromPtrI64Line renders `<reg> = call i64 @<sym>(ptr <a>, i64 <b>)`.
+pub fn mirCallI64FromPtrI64Line(reg: String, sym: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i64 @" + sym + "(ptr " + a + ", i64 " + b + ")\n"
+}
+
+/// mirCallI64NoArgsLine renders `<reg> = call i64 @<sym>()`.
+pub fn mirCallI64NoArgsLine(reg: String, sym: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i64 @" + sym + "()\n"
+}
+
+/// (mirCallPtrFromPtrLine / TwoPtrLine continue to live at their
+/// original sites earlier in this file.)
+
+/// mirCallPtrFromThreePtrLine renders `<reg> = call ptr @<sym>(ptr <a>, ptr <b>, ptr <c>)`.
+pub fn mirCallPtrFromThreePtrLine(reg: String, sym: String, a: String, b: String, c: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " ptr @" + sym + "(ptr " + a + ", ptr " + b + ", ptr " + c + ")\n"
+}
+
+/// mirCallPtrFromPtrI64Line renders `<reg> = call ptr @<sym>(ptr <a>, i64 <b>)`.
+pub fn mirCallPtrFromPtrI64Line(reg: String, sym: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " ptr @" + sym + "(ptr " + a + ", i64 " + b + ")\n"
+}
+
+/// mirCallPtrFromPtrI64I64Line renders `<reg> = call ptr @<sym>(ptr <a>, i64 <b>, i64 <c>)`.
+pub fn mirCallPtrFromPtrI64I64Line(reg: String, sym: String, a: String, b: String, c: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " ptr @" + sym + "(ptr " + a + ", i64 " + b + ", i64 " + c + ")\n"
+}
+
+/// mirCallPtrFromI64Line renders `<reg> = call ptr @<sym>(i64 <a>)`.
+pub fn mirCallPtrFromI64Line(reg: String, sym: String, a: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " ptr @" + sym + "(i64 " + a + ")\n"
+}
+
+/// mirCallPtrFromI64I64Line renders `<reg> = call ptr @<sym>(i64 <a>, i64 <b>)`.
+pub fn mirCallPtrFromI64I64Line(reg: String, sym: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " ptr @" + sym + "(i64 " + a + ", i64 " + b + ")\n"
+}
+
+/// mirCallPtrNoArgsLine renders `<reg> = call ptr @<sym>()`.
+pub fn mirCallPtrNoArgsLine(reg: String, sym: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " ptr @" + sym + "()\n"
+}
+
+/// (mirCallI1FromPtrLine / TwoPtrLine continue to live at their
+/// original sites earlier in this file.)
+
+/// mirCallI1NoArgsLine renders `<reg> = call i1 @<sym>()`.
+pub fn mirCallI1NoArgsLine(reg: String, sym: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i1 @" + sym + "()\n"
+}
+
+/// (mirCallVoidFromPtrLine / TwoPtrLine continue to live at their
+/// original sites earlier in this file.)
+
+/// mirCallVoidFromPtrI64Line renders `call void @<sym>(ptr <a>, i64 <b>)`.
+pub fn mirCallVoidFromPtrI64Line(sym: String, a: String, b: String) -> String {
+    "  " + mirInstrCallVoid() + " void @" + sym + "(ptr " + a + ", i64 " + b + ")\n"
+}
+
+/// mirCallVoidFromI64Line renders `call void @<sym>(i64 <a>)`.
+pub fn mirCallVoidFromI64Line(sym: String, a: String) -> String {
+    "  " + mirInstrCallVoid() + " void @" + sym + "(i64 " + a + ")\n"
+}
+
+/// mirCallVoidNoArgsTrampolineLine renders `call void @<sym>()`.
+pub fn mirCallVoidNoArgsTrampolineLine(sym: String) -> String {
+    "  " + mirInstrCallVoid() + " void @" + sym + "()\n"
+}
+
+/// §11 LLVM-text typed-runtime call shapes for double-result paths.
+
+/// mirCallDoubleFromDoubleLine renders `<reg> = call double @<sym>(double <x>)`.
+pub fn mirCallDoubleFromDoubleLine(reg: String, sym: String, x: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " double @" + sym + "(double " + x + ")\n"
+}
+
+/// mirCallDoubleFromTwoDoubleLine renders the canonical 2-arg fp call.
+pub fn mirCallDoubleFromTwoDoubleLine(reg: String, sym: String, a: String, b: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " double @" + sym + "(double " + a + ", double " + b + ")\n"
+}
+
+/// mirCallDoubleFromI64Line renders `<reg> = call double @<sym>(i64 <x>)`.
+pub fn mirCallDoubleFromI64Line(reg: String, sym: String, x: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " double @" + sym + "(i64 " + x + ")\n"
+}
+
+/// mirCallDoubleNoArgsLine renders `<reg> = call double @<sym>()`.
+pub fn mirCallDoubleNoArgsLine(reg: String, sym: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " double @" + sym + "()\n"
+}
+
+/// mirCallI64FromDoubleLine renders `<reg> = call i64 @<sym>(double <x>)`.
+pub fn mirCallI64FromDoubleLine(reg: String, sym: String, x: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i64 @" + sym + "(double " + x + ")\n"
+}
+
+/// §11 LLVM-text typed insertvalue shape composers.
+
+/// mirInsertValueI64Line renders the canonical i64-typed insertvalue:
+///   `<reg> = insertvalue <aggTy> <prev>, i64 <val>, <fieldIdx>\n`
+pub fn mirInsertValueI64Line(reg: String, aggTy: String, prev: String, val: String, fieldIdx: String) -> String {
+    mirInsertValueAggLine(reg, aggTy, prev, mirTypeI64(), val, fieldIdx)
+}
+
+/// mirInsertValuePtrLine renders the canonical ptr-typed insertvalue.
+pub fn mirInsertValuePtrLine(reg: String, aggTy: String, prev: String, val: String, fieldIdx: String) -> String {
+    mirInsertValueAggLine(reg, aggTy, prev, mirTypePtr(), val, fieldIdx)
+}
+
+/// mirInsertValueI1Line renders the canonical i1-typed insertvalue.
+pub fn mirInsertValueI1Line(reg: String, aggTy: String, prev: String, val: String, fieldIdx: String) -> String {
+    mirInsertValueAggLine(reg, aggTy, prev, mirTypeI1(), val, fieldIdx)
+}
+
+/// mirInsertValueDoubleLine renders the canonical double-typed
+/// insertvalue.
+pub fn mirInsertValueDoubleLine(reg: String, aggTy: String, prev: String, val: String, fieldIdx: String) -> String {
+    mirInsertValueAggLine(reg, aggTy, prev, mirTypeDouble(), val, fieldIdx)
+}
+
+/// §11 LLVM-text per-target-feature attribute helpers.
+
+/// mirTargetFeaturesAttr renders the canonical target-features
+/// attribute string body: `"target-features"="+f1,+f2,..."`.
+/// Used at sites that build #[target_feature(...)] attribute groups.
+pub fn mirTargetFeaturesAttr(featuresWithPlus: String) -> String {
+    "\"target-features\"=\"" + featuresWithPlus + "\""
+}
+
+/// mirTargetCpuAttr renders `"target-cpu"="<cpu>"`.
+pub fn mirTargetCpuAttr(cpu: String) -> String {
+    "\"target-cpu\"=\"" + cpu + "\""
+}
+
+/// mirNoFramePointerAttr renders `"frame-pointer"="none"`.
+pub fn mirNoFramePointerAttr() -> String {
+    "\"frame-pointer\"=\"none\""
+}
+
+/// mirAllFramePointerAttr renders `"frame-pointer"="all"`.
+pub fn mirAllFramePointerAttr() -> String {
+    "\"frame-pointer\"=\"all\""
+}
+
+/// §11 LLVM-text per-loop metadata helpers.
+
+/// mirLoopMDLine renders the canonical loop-metadata attachment
+/// trailer: `, !llvm.loop <ref>`. Used at every loop-latch branch
+/// to thread the per-loop metadata.
+pub fn mirLoopMDLine(ref: String) -> String {
+    ", !llvm.loop " + ref
+}
+
+/// mirLoopBranchWithMDLine renders a complete loop-latch branch:
+///   `  br i1 <cond>, label %<header>, label %<exit>, !llvm.loop <mdRef>\n`
+pub fn mirLoopBranchWithMDLine(cond: String, header: String, exit: String, mdRef: String) -> String {
+    "  " + mirTermBr() + " i1 " + cond + ", label %" + header + ", label %" + exit + mirLoopMDLine(mdRef) + "\n"
+}
+
+/// §11 LLVM-text loop-id metadata-node body composers.
+
+/// mirLoopIDNodeBody composes the canonical loop-id metadata node
+/// body: `!\{!<self>, <body...>\}`. The first slot is always a
+/// self-reference; the remaining slots are the per-loop annotation
+/// metadata refs.
+pub fn mirLoopIDNodeBody(selfRef: String, body: String) -> String {
+    if body == "" {
+        "!\{" + selfRef + "\}"
+    } else {
+        "!\{" + selfRef + ", " + body + "\}"
+    }
+}
+
+/// §11 LLVM-text named-metadata global-list helpers.
+
+/// mirModuleFlagsList renders the canonical `!llvm.module.flags`
+/// named-MD declaration body.
+pub fn mirModuleFlagsList(entries: String) -> String {
+    "!llvm.module.flags = !\{" + entries + "\}\n"
+}
+
+/// mirIdentList renders the canonical `!llvm.ident` named-MD
+/// declaration body.
+pub fn mirIdentList(entries: String) -> String {
+    "!llvm.ident = !\{" + entries + "\}\n"
+}
+
+/// mirCompilerInfoLine renders the canonical "Osty <version>" string
+/// inside a `!llvm.ident` ref.
+pub fn mirCompilerInfoLine(version: String) -> String {
+    "!\{!\"Osty " + version + "\"\}"
+}
+
+/// §11 LLVM-text fastmath-flag composite helpers.
+
+/// mirFastMathFlagsForArith composes the canonical fastmath-flag
+/// set used at fp arithmetic instructions when the function is
+/// tagged `#[fastmath]`. Returns the space-joined flag string.
+pub fn mirFastMathFlagsForArith() -> String {
+    mirFastMathNNan() + " " + mirFastMathNInf() + " " + mirFastMathNSz() + " " +
+        mirFastMathContract() + " " + mirFastMathArcp() + " " + mirFastMathReassoc()
+}
+
+/// §11 LLVM-text small-helper shapes.
+
+/// mirNullPtrConst returns the canonical `ptr null` constant.
+/// Synonym of `mirPtrNullLiteral`.
+pub fn mirNullPtrConst() -> String {
+    mirPtrNullLiteral()
+}
+
+/// mirZeroI64Const returns `i64 0` — the canonical zero-i64 constant.
+pub fn mirZeroI64Const() -> String {
+    "i64 0"
+}
+
+/// mirZeroI32Const returns `i32 0`.
+pub fn mirZeroI32Const() -> String {
+    "i32 0"
+}
+
+/// mirZeroDoubleConst returns `double 0.0`.
+pub fn mirZeroDoubleConst() -> String {
+    "double 0.0"
+}
+
+/// mirOneI64Const returns `i64 1`.
+pub fn mirOneI64Const() -> String {
+    "i64 1"
+}
+
+/// mirOneI32Const returns `i32 1`.
+pub fn mirOneI32Const() -> String {
+    "i32 1"
+}
+
+/// mirOneDoubleConst returns `double 1.0`.
+pub fn mirOneDoubleConst() -> String {
+    "double 1.0"
+}
+
+/// mirTrueI1Const returns `i1 1`.
+pub fn mirTrueI1Const() -> String {
+    "i1 1"
+}
+
+/// mirFalseI1Const returns `i1 0`.
+pub fn mirFalseI1Const() -> String {
+    "i1 0"
+}
+
+/// §11 LLVM-text minus-one constant tokens (sentinel / signed-overflow
+/// poison values).
+
+/// mirMinusOneI64Const returns `i64 -1`.
+pub fn mirMinusOneI64Const() -> String {
+    "i64 -1"
+}
+
+/// mirMinusOneI32Const returns `i32 -1`.
+pub fn mirMinusOneI32Const() -> String {
+    "i32 -1"
+}
+
+/// mirMinusOneI8Const returns `i8 -1`.
+pub fn mirMinusOneI8Const() -> String {
+    "i8 -1"
+}
+
+/// §11 LLVM-text Range-loop init / step / bound shape helpers.
+
+/// mirRangeInclusiveBoundLine renders the canonical inclusive-range
+/// bound: `<reg> = add i64 <end>, 1\n` (end+1 to convert inclusive
+/// to exclusive in the loop test).
+pub fn mirRangeInclusiveBoundLine(reg: String, end: String) -> String {
+    mirAddI64ImmediateLine(reg, end, "1")
+}
+
+/// mirRangeStepLine renders the canonical range-step: `<reg> = add i64 <i>, <step>\n`.
+pub fn mirRangeStepLine(reg: String, i: String, step: String) -> String {
+    mirAddIntLine(reg, mirTypeI64(), i, step)
+}
+
+/// mirRangeIterationCondLine renders the canonical range-iter cond:
+///   `<reg> = icmp slt i64 <i>, <bound>\n`
+pub fn mirRangeIterationCondLine(reg: String, i: String, bound: String) -> String {
+    mirICmpI64SltLine(reg, i, bound)
+}
+
+/// §11 LLVM-text List-iteration loop shape helpers.
+
+/// mirListIterCondLine renders the canonical list-iter cond:
+///   `<reg> = icmp slt i64 <i>, <len>\n`
+/// (List iteration always uses i64 indices and slt comparison.)
+pub fn mirListIterCondLine(reg: String, i: String, lenReg: String) -> String {
+    mirICmpI64SltLine(reg, i, lenReg)
+}
+
+/// mirListIterStepLine renders the canonical list-iter step.
+pub fn mirListIterStepLine(reg: String, i: String) -> String {
+    mirAddI64ImmediateLine(reg, i, "1")
+}
+
+/// §11 LLVM-text noreturn-decl line composer.
+
+/// mirRuntimeDeclareNoReturnVoid renders the canonical noreturn
+/// runtime decl: `declare void @<sym>(<args>) #1\n`. Used for
+/// panic / abort helpers that the optimiser must know don't return.
+pub fn mirRuntimeDeclareNoReturnVoid(sym: String, args: String) -> String {
+    "declare void @" + sym + "(" + args + ") #1\n"
+}
+
+/// mirRuntimeDeclareNoReturnVoidNoArgs renders the no-args variant.
+pub fn mirRuntimeDeclareNoReturnVoidNoArgs(sym: String) -> String {
+    mirRuntimeDeclareNoReturnVoid(sym, "")
+}
+
+/// §11 LLVM-text per-call cold-attribute markers.
+
+/// mirCallColdAttr renders the canonical cold-call attribute group:
+/// `cold`. Used at sites that invoke an error-handler.
+pub fn mirCallColdAttr() -> String {
+    mirFnAttrCold()
+}
+
+/// mirCallHotAttr renders the canonical hot-call attribute.
+pub fn mirCallHotAttr() -> String {
+    mirFnAttrHot()
+}
+
+/// §11 LLVM-text typed-comparison composite shapes.
+
+/// mirICmpZeroI64Line renders `<reg> = icmp eq i64 <a>, 0\n` — the
+/// canonical zero-equality check on an i64.
+pub fn mirICmpZeroI64Line(reg: String, a: String) -> String {
+    mirICmpI64EqLine(reg, a, "0")
+}
+
+/// mirICmpNonZeroI64Line renders the canonical non-zero check.
+pub fn mirICmpNonZeroI64Line(reg: String, a: String) -> String {
+    mirICmpI64NeLine(reg, a, "0")
+}
+
+/// mirICmpNullPtrLine renders the canonical null-ptr check:
+///   `<reg> = icmp eq ptr <a>, null\n`
+pub fn mirICmpNullPtrLine(reg: String, a: String) -> String {
+    mirICmpPtrEqLine(reg, a, "null")
+}
+
+/// mirICmpNonNullPtrLine renders the canonical non-null-ptr check.
+pub fn mirICmpNonNullPtrLine(reg: String, a: String) -> String {
+    mirICmpPtrNeLine(reg, a, "null")
+}
+
+/// §12 task / select / race runtime symbol composers.
+
+/// mirRtTaskSpawnSymbol returns `osty_rt_task_spawn`.
+pub fn mirRtTaskSpawnSymbol() -> String {
+    mirRtSymbol("task_spawn")
+}
+
+/// mirRtTaskGroupSpawnSymbol returns `osty_rt_task_group_spawn`.
+pub fn mirRtTaskGroupSpawnSymbol() -> String {
+    mirRtSymbol("task_group_spawn")
+}
+
+/// mirRtTaskHandleJoinSymbol returns `osty_rt_task_handle_join`.
+pub fn mirRtTaskHandleJoinSymbol() -> String {
+    mirRtSymbol("task_handle_join")
+}
+
+/// mirRtTaskGroupCancelSymbol returns `osty_rt_task_group_cancel`.
+pub fn mirRtTaskGroupCancelSymbol() -> String {
+    mirRtSymbol("task_group_cancel")
+}
+
+/// mirRtTaskGroupIsCancelledSymbol returns `osty_rt_task_group_is_cancelled`.
+pub fn mirRtTaskGroupIsCancelledSymbol() -> String {
+    mirRtSymbol("task_group_is_cancelled")
+}
+
+/// mirRtTaskRaceSymbol returns `osty_rt_task_race`.
+pub fn mirRtTaskRaceSymbol() -> String {
+    mirRtSymbol("task_race")
+}
+
+/// mirRtTaskCollectAllSymbol returns `osty_rt_task_collect_all`.
+pub fn mirRtTaskCollectAllSymbol() -> String {
+    mirRtSymbol("task_collect_all")
+}
+
+/// mirRtSelectSymbol returns `osty_rt_select`.
+pub fn mirRtSelectSymbol() -> String {
+    mirRtSymbol("select")
+}
+
+/// mirRtSelectRecvSymbol returns `osty_rt_select_recv`.
+pub fn mirRtSelectRecvSymbol() -> String {
+    mirRtSymbol("select_recv")
+}
+
+/// mirRtSelectTimeoutSymbol returns `osty_rt_select_timeout`.
+pub fn mirRtSelectTimeoutSymbol() -> String {
+    mirRtSymbol("select_timeout")
+}
+
+/// mirRtSelectDefaultSymbol returns `osty_rt_select_default`.
+pub fn mirRtSelectDefaultSymbol() -> String {
+    mirRtSymbol("select_default")
+}
+
+/// mirRtSelectSendBytesV1Symbol returns `osty_rt_select_send_bytes_v1` —
+/// the canonical generic-payload select-send symbol.
+pub fn mirRtSelectSendBytesV1Symbol() -> String {
+    mirRtSymbol("select_send_bytes_v1")
+}
+
+/// mirRtListSetBytesV1Symbol returns `osty_rt_list_set_bytes_v1`.
+pub fn mirRtListSetBytesV1Symbol() -> String {
+    mirRtListSymbol("set_bytes_v1")
+}
+
+/// mirRtListGetBytesV1Symbol returns `osty_rt_list_get_bytes_v1`.
+pub fn mirRtListGetBytesV1Symbol() -> String {
+    mirRtListSymbol("get_bytes_v1")
+}
+
+/// mirRtListSetSuffixSymbol composes `osty_rt_list_set_<suffix>` —
+/// the runtime-symbol composer for typed-list set calls.
+pub fn mirRtListSetSuffixSymbol(suffix: String) -> String {
+    mirRtListSymbol("set_" + suffix)
+}
+
+/// mirRtListGetSuffixSymbol composes `osty_rt_list_get_<suffix>`.
+pub fn mirRtListGetSuffixSymbol(suffix: String) -> String {
+    mirRtListSymbol("get_" + suffix)
+}
+
+/// mirRtMapKeysSortedSuffixSymbol composes `osty_rt_map_keys_sorted_<suffix>`.
+pub fn mirRtMapKeysSortedSuffixSymbol(suffix: String) -> String {
+    mirRtMapSymbol("keys_sorted_" + suffix)
+}
+
+/// mirRtSelectSendSuffixSymbol composes `osty_rt_select_send_<suffix>`.
+pub fn mirRtSelectSendSuffixSymbol(suffix: String) -> String {
+    mirRtSymbol("select_send_" + suffix)
+}
+
+/// §12 LLVM-text typed-arg slot composer specialisations.
+
+/// mirArgSlotI64Imm renders `i64 <imm>` for an immediate digit value.
+/// Specialisation of `mirArgSlotI64` named for the immediate-RHS path.
+pub fn mirArgSlotI64Imm(digits: String) -> String {
+    mirIntLiteralI64(digits)
+}
+
+/// mirArgSlotI32Imm renders `i32 <imm>`.
+pub fn mirArgSlotI32Imm(digits: String) -> String {
+    mirIntLiteralI32(digits)
+}
+
+/// mirArgSlotI8Imm renders `i8 <imm>`.
+pub fn mirArgSlotI8Imm(digits: String) -> String {
+    mirIntLiteralI8(digits)
+}
+
+/// mirArgSlotI1Imm renders `i1 <imm>` (always 0 or 1).
+pub fn mirArgSlotI1Imm(digits: String) -> String {
+    mirIntLiteralI1(digits)
+}
+
+/// mirArgSlotPtrNull renders the canonical `ptr null` arg-slot.
+pub fn mirArgSlotPtrNull() -> String {
+    mirPtrNullLiteral()
+}
+
+/// mirArgSlotPtrSym renders `ptr @<sym>` — the canonical address-of-
+/// global arg-slot.
+pub fn mirArgSlotPtrSym(sym: String) -> String {
+    "ptr @" + sym
+}
+
+/// §12 LLVM-text emit-shape composite helpers — drain inline 2/3-line
+/// patterns that sit just above the call site.
+
+/// mirAlloca2Line renders the canonical 2-line ptr-alloca + i64-store
+/// pattern: alloca a slot + store an i64 into it.
+pub fn mirAlloca2Line(slotReg: String, ty: String, val: String) -> String {
+    mirAllocaSingleLine(slotReg, ty) +
+    "  " + mirInstrStore() + " " + ty + " " + val + ", ptr " + slotReg + "\n"
+}
+
+/// mirAllocaInitI64Line renders the canonical i64 alloca + init.
+pub fn mirAllocaInitI64Line(slotReg: String, val: String) -> String {
+    mirAlloca2Line(slotReg, mirTypeI64(), val)
+}
+
+/// mirAllocaInitI1Line renders the canonical i1 alloca + init.
+pub fn mirAllocaInitI1Line(slotReg: String, val: String) -> String {
+    mirAlloca2Line(slotReg, mirTypeI1(), val)
+}
+
+/// mirAllocaInitPtrLine renders the canonical ptr alloca + init.
+pub fn mirAllocaInitPtrLine(slotReg: String, val: String) -> String {
+    mirAlloca2Line(slotReg, mirTypePtr(), val)
+}
+
+/// mirAllocaInitDoubleLine renders the canonical double alloca + init.
+pub fn mirAllocaInitDoubleLine(slotReg: String, val: String) -> String {
+    mirAlloca2Line(slotReg, mirTypeDouble(), val)
+}
+
+/// §12 LLVM-text typed-load + typed-cast composite helpers.
+
+/// mirLoadAndZExtI8ToI64Line renders the canonical i8-load + zext-to-i64
+/// 2-line pattern.
+pub fn mirLoadAndZExtI8ToI64Line(loadReg: String, zextReg: String, slot: String) -> String {
+    mirLoadI8Line(loadReg, slot) +
+    mirZExtI8ToI64Line(zextReg, loadReg)
+}
+
+/// mirLoadAndSExtI8ToI64Line renders the canonical i8-load + sext-to-i64.
+pub fn mirLoadAndSExtI8ToI64Line(loadReg: String, sextReg: String, slot: String) -> String {
+    mirLoadI8Line(loadReg, slot) +
+    mirSExtI8ToI64Line(sextReg, loadReg)
+}
+
+/// mirLoadAndZExtI1ToI64Line renders the canonical i1-load + zext-to-i64.
+pub fn mirLoadAndZExtI1ToI64Line(loadReg: String, zextReg: String, slot: String) -> String {
+    mirLoadI1Line(loadReg, slot) +
+    mirZExtI1ToI64Line(zextReg, loadReg)
+}
+
+/// mirLoadI64AndTruncToI8Line renders the canonical i64-load + trunc-to-i8.
+pub fn mirLoadI64AndTruncToI8Line(loadReg: String, truncReg: String, slot: String) -> String {
+    mirLoadI64Line(loadReg, slot) +
+    mirTruncI64ToI8Line(truncReg, loadReg)
+}
+
+/// mirLoadI64AndTruncToI1Line renders the canonical i64-load + trunc-to-i1.
+pub fn mirLoadI64AndTruncToI1Line(loadReg: String, truncReg: String, slot: String) -> String {
+    mirLoadI64Line(loadReg, slot) +
+    mirTruncI64ToI1Line(truncReg, loadReg)
+}
+
+/// §12 LLVM-text canonical-block emit helpers.
+
+/// mirEntryEpilogueBlocksLine renders the canonical 2-block entry +
+/// epilogue pair: `entry:\n  <body>\n  br label %exit\n exit:\n`.
+/// Used at sites that build a fixed-shape function body (e.g. trivial
+/// shim functions).
+pub fn mirEntryEpilogueBlocksLine(entryBody: String, exitLbl: String, exitBody: String) -> String {
+    mirEntryBlockHeaderLine() +
+    entryBody +
+    mirBrLabelLine(exitLbl) +
+    mirBlockHeaderLine(exitLbl) +
+    exitBody
+}
+
+/// §12 LLVM-text canonical-emit shape compositions.
+
+/// mirIfElseEndBlocksLine renders the canonical if-else-end 3-block
+/// triple of label headers. Caller fills in the bodies separately.
+pub fn mirIfElseEndBlocksLine(thenLbl: String, elseLbl: String, endLbl: String) -> String {
+    mirBlockHeaderLine(thenLbl) +
+    mirBlockHeaderLine(elseLbl) +
+    mirBlockHeaderLine(endLbl)
+}
+
+/// §12 LLVM-text generic-fn-attr group composer.
+
+/// mirAttributeGroupLine renders the canonical attribute-group decl:
+///   `attributes #<id> = \{ <attrs> \}\n`
+/// Used at module-level to declare the panic / abort / hot / cold
+/// fn-attribute groups.
+pub fn mirAttributeGroupLine(idDigits: String, attrs: String) -> String {
+    "attributes #" + idDigits + " = \{ " + attrs + " \}\n"
+}
+
+/// mirAttributeGroupNoReturnCold renders the canonical noreturn-cold
+/// attr-group #1 used by panic / abort / unreachable helpers.
+pub fn mirAttributeGroupNoReturnCold(idDigits: String) -> String {
+    mirAttributeGroupLine(idDigits, mirFnAttrColdNoReturn())
+}
+
+/// mirAttributeGroupHotPure renders the canonical hot-pure attr-group
+/// for tiny pure helpers.
+pub fn mirAttributeGroupHotPure(idDigits: String) -> String {
+    mirAttributeGroupLine(idDigits, mirFnAttrInlineHotPure())
+}
+
+/// §12 LLVM-text RawPtr conversion composite helpers.
+
+/// mirCastI64ToPtrLine renders the canonical `<reg> = inttoptr i64 <val> to ptr\n`.
+/// Sibling of `mirIntToPtrI64Line` named for the explicit i64-to-ptr
+/// path.
+pub fn mirCastI64ToPtrLine(reg: String, val: String) -> String {
+    mirIntToPtrLine(reg, mirTypeI64(), val)
+}
+
+/// mirCastPtrToI64Line renders the canonical `<reg> = ptrtoint ptr <val> to i64\n`.
+pub fn mirCastPtrToI64Line(reg: String, val: String) -> String {
+    mirPtrToIntLine(reg, val, mirTypeI64())
+}
+
+/// mirCastDoubleToI64Line / I64ToDoubleLine — bitcast composite shapes.
+
+/// mirCastDoubleToI64Line renders the canonical double-to-i64 bitcast.
+pub fn mirCastDoubleToI64Line(reg: String, val: String) -> String {
+    mirBitcastLine(reg, mirTypeDouble(), val, mirTypeI64())
+}
+
+/// mirCastI64ToDoubleLine renders the canonical i64-to-double bitcast.
+pub fn mirCastI64ToDoubleLine(reg: String, val: String) -> String {
+    mirBitcastLine(reg, mirTypeI64(), val, mirTypeDouble())
+}
+
+/// §12 LLVM-text global / metadata reference helpers.
+
+/// mirRefToGlobal renders the canonical reference-to-global expression.
+/// Sibling of `mirGlobalRef`/`mirAddrOfGlobal` for emit-pass call sites
+/// that thread the reference as a value (vs slot).
+pub fn mirRefToGlobal(sym: String) -> String {
+    mirGlobalRef(sym)
+}
+
+/// mirRefToMD renders the canonical reference-to-metadata expression.
+pub fn mirRefToMD(name: String) -> String {
+    mirMDRef(name)
+}
+
+/// mirRefToReg renders the canonical reference-to-register expression.
+pub fn mirRefToReg(name: String) -> String {
+    mirRegRef(name)
+}
+
+/// §12 LLVM-text typed-zero / typed-one constant composites.
+
+/// mirTypedZeroForLine renders the canonical typed-zero for a given
+/// LLVM type, suffixed with the type tag (e.g. `i64 0`).
+pub fn mirTypedZeroForLine(ty: String) -> String {
+    ty + " " + mirZeroOfType(ty)
+}
+
+/// mirTypedOneForLine renders the canonical typed-one for a given
+/// LLVM type.
+pub fn mirTypedOneForLine(ty: String) -> String {
+    ty + " " + mirOneOfType(ty)
+}
+
+/// §12 LLVM-text canonical zero-aggregate constants.
+
+/// mirOptionNoneConst renders the canonical None aggregate constant:
+///   `\{ i64, i64 \} \{ i64 0, i64 0 \}`
+pub fn mirOptionNoneConst() -> String {
+    mirAggregateConstantI64I64(mirDiscriminantNone(), "0")
+}
+
+/// mirOptionPtrNoneConst renders the Option<Ptr-typed> None constant.
+pub fn mirOptionPtrNoneConst() -> String {
+    mirAggregateConstantI64Ptr(mirDiscriminantNone(), "null")
+}
+
+/// mirResultOkUnitConst renders the canonical Result<(), E> Ok-unit
+/// constant.
+pub fn mirResultOkUnitConst() -> String {
+    mirAggregateConstantI64I64(mirDiscriminantOk(), "0")
+}
+
+/// mirResultErrPtrConst renders the canonical Result<T, Error> Err
+/// constant for a given error-handle ptr.
+pub fn mirResultErrPtrConst(errPtr: String) -> String {
+    mirAggregateConstantI64Ptr(mirDiscriminantErr(), errPtr)
+}
+
+/// §13 LLVM-text struct field projection helpers — drain inline
+/// `getelementptr` patterns at struct-field load / store sites.
+
+/// mirStructFieldI32GEPLine renders the canonical i32-typed struct
+/// field GEP: `<reg> = getelementptr inbounds <structTy>, ptr <basePtr>, i32 0, i32 <fieldIdx>\n`.
+/// Specialisation of `mirStructFieldGEPLine` named for the i32-
+/// indexed path (the canonical struct-field shape in LLVM IR).
+pub fn mirStructFieldI32GEPLine(reg: String, structTy: String, basePtr: String, fieldIdxDigits: String) -> String {
+    mirStructFieldGEPLine(reg, structTy, basePtr, fieldIdxDigits)
+}
+
+/// mirAggregateFieldExtractI32 composes the canonical struct-field
+/// extractvalue with i32 idx: `<reg> = extractvalue <ty> <agg>, <i>\n`.
+/// Sibling of `mirExtractValueI64Line` / `PtrLine` named for the
+/// struct-field path (vs Option/Result discriminant).
+pub fn mirAggregateFieldExtractI32(reg: String, aggTy: String, agg: String, fieldIdx: String) -> String {
+    mirExtractValueLine(reg, aggTy, agg, fieldIdx)
+}
+
+/// §13 LLVM-text vtable-slot computation helpers.
+
+/// mirVTableMethodLoadLine renders the canonical 2-line vtable
+/// method-load shape: GEP + load.
+///
+/// `  <slotReg> = getelementptr inbounds [N x ptr], ptr <vtable>, i64 0, i64 <idx>\n`
+/// `  <fnReg> = load ptr, ptr <slotReg>\n`
+pub fn mirVTableMethodLoadLine(slotReg: String, fnReg: String, arrSize: String, vtable: String, idxDigits: String) -> String {
+    mirVTableEntryGEPLine(slotReg, arrSize, vtable, idxDigits) +
+    mirLoadPtrLine(fnReg, slotReg)
+}
+
+/// §13 LLVM-text typed-aggregate field-store / field-load composite
+/// shapes.
+
+/// mirAggregateFieldStoreI64Line renders the canonical aggregate-
+/// field-store 2-line shape: GEP + i64 store.
+pub fn mirAggregateFieldStoreI64Line(slotReg: String, structTy: String, basePtr: String, fieldIdxDigits: String, val: String) -> String {
+    mirStructFieldGEPLine(slotReg, structTy, basePtr, fieldIdxDigits) +
+    "  " + mirInstrStore() + " i64 " + val + ", ptr " + slotReg + "\n"
+}
+
+/// mirAggregateFieldStorePtrLine renders the canonical aggregate-
+/// field-store ptr 2-line shape.
+pub fn mirAggregateFieldStorePtrLine(slotReg: String, structTy: String, basePtr: String, fieldIdxDigits: String, val: String) -> String {
+    mirStructFieldGEPLine(slotReg, structTy, basePtr, fieldIdxDigits) +
+    "  " + mirInstrStore() + " ptr " + val + ", ptr " + slotReg + "\n"
+}
+
+/// mirAggregateFieldLoadI64Line renders the canonical aggregate-
+/// field-load 2-line shape: GEP + i64 load.
+pub fn mirAggregateFieldLoadI64Line(slotReg: String, valReg: String, structTy: String, basePtr: String, fieldIdxDigits: String) -> String {
+    mirStructFieldGEPLine(slotReg, structTy, basePtr, fieldIdxDigits) +
+    mirLoadI64Line(valReg, slotReg)
+}
+
+/// mirAggregateFieldLoadPtrLine renders the canonical aggregate-
+/// field-load ptr 2-line shape.
+pub fn mirAggregateFieldLoadPtrLine(slotReg: String, valReg: String, structTy: String, basePtr: String, fieldIdxDigits: String) -> String {
+    mirStructFieldGEPLine(slotReg, structTy, basePtr, fieldIdxDigits) +
+    mirLoadPtrLine(valReg, slotReg)
+}
+
+/// §13 LLVM-text closure-emit composite helpers.
+
+/// mirClosureEnvFieldStoreLine renders the canonical closure-env
+/// field-store 2-line shape: GEP + ptr-store.
+pub fn mirClosureEnvFieldStoreLine(slotReg: String, envTy: String, envPtr: String, fieldIdxDigits: String, capturedPtr: String) -> String {
+    mirClosureCaptureFieldGEPLine(slotReg, envTy, envPtr, fieldIdxDigits) +
+    "  " + mirInstrStore() + " ptr " + capturedPtr + ", ptr " + slotReg + "\n"
+}
+
+/// mirClosureEnvFieldLoadLine renders the canonical closure-env
+/// field-load 2-line shape: GEP + ptr-load.
+pub fn mirClosureEnvFieldLoadLine(slotReg: String, valReg: String, envTy: String, envPtr: String, fieldIdxDigits: String) -> String {
+    mirClosureCaptureFieldGEPLine(slotReg, envTy, envPtr, fieldIdxDigits) +
+    mirLoadPtrLine(valReg, slotReg)
+}
+
+/// §13 Sized-aggregate alloca + memcpy composite helpers.
+
+/// mirAllocaWithSizeAndZeroLine renders the canonical
+///   `<reg> = alloca <ty>\n`
+///   `  call void @llvm.memset.p0.i64(ptr <reg>, i8 0, i64 <bytes>, i1 false)\n`
+/// 2-line zeroed-aggregate alloca shape. Used for sites that
+/// initialise a stack aggregate to zero before in-place fills.
+pub fn mirAllocaWithSizeAndZeroLine(reg: String, ty: String, sizeBytesDigits: String) -> String {
+    mirAllocaSingleLine(reg, ty) +
+    mirCallVoidLLVMMemsetLine(reg, "0", sizeBytesDigits, "false")
+}
+
+/// §13 Common composite shapes for runtime-call sequencing.
+
+/// mirSpillThenCallVoidLine renders the canonical spill + call-void
+/// 2-line shape: spill a value to a slot then call a void-returning
+/// runtime helper that reads the slot.
+pub fn mirSpillThenCallVoidLine(slotReg: String, ty: String, val: String, sym: String, args: String) -> String {
+    mirAlloca2Line(slotReg, ty, val) +
+    "  " + mirInstrCallVoid() + " void @" + sym + "(" + args + ")\n"
+}
+
+/// mirCallThenStoreI64Line renders the canonical call + store i64
+/// 2-line shape: call returns an i64 result and stores it into a
+/// pre-existing slot.
+pub fn mirCallThenStoreI64Line(reg: String, sym: String, args: String, slot: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i64 @" + sym + "(" + args + ")\n" +
+    "  " + mirInstrStore() + " i64 " + reg + ", ptr " + slot + "\n"
+}
+
+/// mirCallThenStorePtrLine renders the canonical call + store ptr
+/// 2-line shape.
+pub fn mirCallThenStorePtrLine(reg: String, sym: String, args: String, slot: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " ptr @" + sym + "(" + args + ")\n" +
+    "  " + mirInstrStore() + " ptr " + reg + ", ptr " + slot + "\n"
+}
+
+/// §13 LLVM-text typed bool-not / bool-and / bool-or shape helpers.
+
+/// mirBoolNotLine renders the canonical i1 bool-not shape:
+///   `<reg> = xor i1 <a>, true\n`
+/// (Bool inversion via xor with true.)
+pub fn mirBoolNotLine(reg: String, a: String) -> String {
+    mirXorIntLine(reg, mirTypeI1(), a, "true")
+}
+
+/// mirBoolAndShortCircuitLine renders the canonical 3-line short-
+/// circuit AND pattern: cmp + br + new block label header.
+pub fn mirBoolAndShortCircuitLine(cmpReg: String, lhs: String, falseLbl: String, mergeLbl: String) -> String {
+    mirICmpI1NeLine(cmpReg, lhs, "0") +
+    mirBrCondLine(cmpReg, mergeLbl, falseLbl) +
+    mirBlockHeaderLine(mergeLbl)
+}
+
+/// mirBoolOrShortCircuitLine renders the canonical 3-line short-
+/// circuit OR pattern.
+pub fn mirBoolOrShortCircuitLine(cmpReg: String, lhs: String, trueLbl: String, mergeLbl: String) -> String {
+    mirICmpI1NeLine(cmpReg, lhs, "0") +
+    mirBrCondLine(cmpReg, trueLbl, mergeLbl) +
+    mirBlockHeaderLine(mergeLbl)
+}
+
+/// §13 Common GEP-then-load / GEP-then-store composite shapes.
+
+/// mirGEPThenLoadI64Line renders the canonical GEP + i64-load
+/// 2-line shape.
+pub fn mirGEPThenLoadI64Line(slotReg: String, valReg: String, ty: String, basePtr: String, idxDigits: String) -> String {
+    mirGEPI64StrideLine(slotReg, basePtr, idxDigits) +
+    mirLoadI64Line(valReg, slotReg)
+}
+
+/// mirGEPThenLoadPtrLine renders the canonical GEP + ptr-load
+/// 2-line shape.
+pub fn mirGEPThenLoadPtrLine(slotReg: String, valReg: String, ty: String, basePtr: String, idxDigits: String) -> String {
+    mirGEPPtrStrideLine(slotReg, basePtr, idxDigits) +
+    mirLoadPtrLine(valReg, slotReg)
+}
+
+/// mirGEPThenStoreI64Line renders the canonical GEP + i64-store
+/// 2-line shape.
+pub fn mirGEPThenStoreI64Line(slotReg: String, ty: String, basePtr: String, idxDigits: String, val: String) -> String {
+    mirGEPI64StrideLine(slotReg, basePtr, idxDigits) +
+    "  " + mirInstrStore() + " i64 " + val + ", ptr " + slotReg + "\n"
+}
+
+/// mirGEPThenStorePtrLine renders the canonical GEP + ptr-store
+/// 2-line shape.
+pub fn mirGEPThenStorePtrLine(slotReg: String, ty: String, basePtr: String, idxDigits: String, val: String) -> String {
+    mirGEPPtrStrideLine(slotReg, basePtr, idxDigits) +
+    "  " + mirInstrStore() + " ptr " + val + ", ptr " + slotReg + "\n"
+}
