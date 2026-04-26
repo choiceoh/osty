@@ -7623,3 +7623,22 @@ func mirIntrinsicKindFallbackLabel(kindDigits string) string {
 
 // (mirChannelRecvSuffix / mirElemSizeBytes are not added — mirChanRecvSuffix /
 // mirMapValueSizeBytes already serve the same role; aliases would shadow them.)
+
+// §18 (cont'd) — built-in named-type predicates ported from
+// is{List,Map,Set}PtrType in mir_generator.go.
+
+// Osty: mirIsBuiltinNamedType
+func mirIsBuiltinNamedType(name string, isBuiltin bool, expected string) bool {
+	return name == expected && isBuiltin
+}
+
+// Osty: mirIsBuiltin{List,Map,Set}
+func mirIsBuiltinList(name string, isBuiltin bool) bool {
+	return mirIsBuiltinNamedType(name, isBuiltin, "List")
+}
+func mirIsBuiltinMap(name string, isBuiltin bool) bool {
+	return mirIsBuiltinNamedType(name, isBuiltin, "Map")
+}
+func mirIsBuiltinSet(name string, isBuiltin bool) bool {
+	return mirIsBuiltinNamedType(name, isBuiltin, "Set")
+}

@@ -858,34 +858,36 @@ func (g *mirGen) checkProjectionsSupported(fn *mir.Function, p mir.Place, ctx st
 }
 
 // isListPtrType reports whether t is a `List<T>` builtin (which
-// lowers to a ptr at the LLVM boundary).
+// lowers to a ptr at the LLVM boundary). The host-boundary
+// `*ir.NamedType` type assertion stays Go-side; the name-and-Builtin
+// policy delegates to `mirIsBuiltinList` (`toolchain/mir_generator.osty`).
 func isListPtrType(t mir.Type) bool {
 	if nt, ok := t.(*ir.NamedType); ok {
-		return nt.Name == "List" && nt.Builtin
+		return mirIsBuiltinList(nt.Name, nt.Builtin)
 	}
 	return false
 }
 
-// isMapPtrType reports whether t is a `Map<K, V>` builtin (which
-// lowers to a ptr at the LLVM boundary). Used by the IndexProj read
-// path to dispatch to the map_get_or_abort runtime when the base is
-// a map rather than a list.
+// isMapPtrType reports whether t is a `Map<K, V>` builtin. Delegates
+// to `mirIsBuiltinMap`.
 func isMapPtrType(t mir.Type) bool {
 	if nt, ok := t.(*ir.NamedType); ok {
-		return nt.Name == "Map" && nt.Builtin
+		return mirIsBuiltinMap(nt.Name, nt.Builtin)
 	}
 	return false
 }
 
+// isSetPtrType reports whether t is a `Set<T>` builtin. Delegates to
+// `mirIsBuiltinSet`.
 func isSetPtrType(t mir.Type) bool {
 	if nt, ok := t.(*ir.NamedType); ok {
-		return nt.Name == "Set" && nt.Builtin
+		return mirIsBuiltinSet(nt.Name, nt.Builtin)
 	}
 	return false
 }
 
 func vectorListElemType(t mir.Type) mir.Type {
-	if nt, ok := t.(*ir.NamedType); ok && nt.Name == "List" && nt.Builtin && len(nt.Args) > 0 {
+	if nt, ok := t.(*ir.NamedType); ok && mirIsBuiltinList(nt.Name, nt.Builtin) && len(nt.Args) > 0 {
 		return nt.Args[0]
 	}
 	return nil

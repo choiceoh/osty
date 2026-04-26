@@ -12612,3 +12612,36 @@ pub fn mirIntrinsicKindFallbackLabel(kindDigits: String) -> String {
 /// (mirChannelRecvSuffix / mirElemSizeBytes are not added — the
 /// existing mirChanRecvSuffix / mirMapValueSizeBytes already serve
 /// the same role; aliases would just shadow them.)
+
+/// §18 (cont'd) — built-in named-type predicates ported from
+/// `is{List,Map,Set}PtrType` in `internal/llvmgen/mir_generator.go`.
+/// Caller (Go side) keeps the `*ir.NamedType` type assertion since
+/// `ir.Type` is a Go interface tree that doesn't cross the host
+/// boundary; the name-and-Builtin policy moves to Osty.
+
+/// mirIsBuiltinNamedType returns true when a named type is the named
+/// builtin `expected` (e.g. `"List"`, `"Map"`, `"Set"`). Both the
+/// `name` match and the `isBuiltin` flag must hold — user-defined
+/// types named `List` (e.g. in a custom module) are explicitly NOT
+/// matched.
+pub fn mirIsBuiltinNamedType(name: String, isBuiltin: Bool, expected: String) -> Bool {
+    name == expected && isBuiltin
+}
+
+/// mirIsBuiltinList returns true when (name, isBuiltin) names the
+/// built-in `List<T>`.
+pub fn mirIsBuiltinList(name: String, isBuiltin: Bool) -> Bool {
+    mirIsBuiltinNamedType(name, isBuiltin, "List")
+}
+
+/// mirIsBuiltinMap returns true when (name, isBuiltin) names the
+/// built-in `Map<K, V>`.
+pub fn mirIsBuiltinMap(name: String, isBuiltin: Bool) -> Bool {
+    mirIsBuiltinNamedType(name, isBuiltin, "Map")
+}
+
+/// mirIsBuiltinSet returns true when (name, isBuiltin) names the
+/// built-in `Set<T>`.
+pub fn mirIsBuiltinSet(name: String, isBuiltin: Bool) -> Bool {
+    mirIsBuiltinNamedType(name, isBuiltin, "Set")
+}
