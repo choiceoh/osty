@@ -482,13 +482,12 @@ func listUsesTypedRuntime(elemTyp string) bool {
 	return llvmListUsesTypedRuntime(elemTyp)
 }
 
+// listUsesRawDataFastPath delegates to the Osty-sourced
+// `mirListUsesRawDataFastPath` (`toolchain/mir_generator.osty`). The
+// fast set (i64 / i1 / double) is the same source-of-truth for both
+// the snapshot read path and the typed-runtime dispatch.
 func listUsesRawDataFastPath(elemTyp string) bool {
-	switch elemTyp {
-	case "i64", "i1", "double":
-		return true
-	default:
-		return false
-	}
+	return mirListUsesRawDataFastPath(elemTyp)
 }
 
 func listRuntimeSymbolSuffix(typ string) string {
