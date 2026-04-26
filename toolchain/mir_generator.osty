@@ -2140,11 +2140,14 @@ pub struct MirLayoutCache {
 /// templates skip the `, !llvm.loop !N` suffix in that case so the
 /// caller doesn't have to fork on the predicate themselves.
 ///
-/// `MirSwitchCase` represents one (value, target-label) pair of a
+/// `MirGenSwitchCase` represents one (value, target-label) pair of a
 /// `switch i<N>` terminator. The value text is pre-formatted by the
 /// Go caller because `mir.SwitchIntCase.Value` is `int64` and Osty's
 /// `Int` ↔ Go `int` bridge prefers narrow scalars at the boundary —
 /// `strconv.FormatInt(c.Value, 10)` happens once on the Go side.
+/// Distinct from `mir.MirSwitchCase` (the MIR-level case carrying the
+/// raw Int value + block-index target); this rendering mirror only
+/// holds pre-resolved strings.
 
 /// mirTerminatorBranchUnconditional renders an unconditional
 /// `br label %<target>` terminator. When `loopMDRef` is non-empty
@@ -2177,12 +2180,12 @@ pub fn mirTerminatorBranchConditional(
     head + "\n"
 }
 
-/// MirSwitchCase carries one case row of a `switch i<N>` terminator
+/// MirGenSwitchCase carries one case row of a `switch i<N>` terminator
 /// in the form already rendered for IR emission — `valueText` is the
 /// pre-formatted decimal value (the Go caller produces it via
 /// `strconv.FormatInt(c.Value, 10)`), `targetLabel` is the resolved
 /// basic-block label.
-pub struct MirSwitchCase {
+pub struct MirGenSwitchCase {
     pub valueText: String,
     pub targetLabel: String,
 }
@@ -2197,7 +2200,7 @@ pub fn mirTerminatorSwitchInt(
     llvmType: String,
     scrutReg: String,
     defaultLabel: String,
-    cases: List<MirSwitchCase>,
+    cases: List<MirGenSwitchCase>,
 ) -> String {
     let mut out = "  switch " + llvmType + " " + scrutReg +
         ", label %" + defaultLabel + " [\n"
