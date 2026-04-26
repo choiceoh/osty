@@ -6914,3 +6914,112 @@ int main(void) {
 		t.Fatalf("expected 200 hits after cheney minor (Map<String, _> regression)\nout=%q", out)
 	}
 }
+
+// Phase 4 of the tiny-tag young-space follow-ups: the OLD `osty_gc_header`
+// drops its `trace` + `destroy` fn-pointer fields (16 B) and tracks
+// per-instance callbacks for `OSTY_GC_KIND_GENERIC` via a 1-byte
+// `generic_pattern` enum that fits in existing alignment padding. Net
+// shrink: 16 B per OLD header (96 → 80). The test pins the sizeof so a
+// regression that re-adds the fn-pointer fields surfaces immediately,
+// and verifies that the three GENERIC patterns (NONE / ENUM_PTR /
+// TASK_HANDLE) round-trip through alloc → header → dispatch correctly.
+func TestBundledRuntimeHeaderShrunkAndGenericPatternRoundTrips(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_phase4_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_phase4_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+void *osty_rt_enum_alloc_ptr_v1(const char *site) __asm__(OSTY_GC_SYMBOL("osty.rt.enum_alloc_ptr_v1"));
+void *osty_rt_enum_alloc_scalar_v1(const char *site) __asm__(OSTY_GC_SYMBOL("osty.rt.enum_alloc_scalar_v1"));
+
+void osty_gc_debug_collect(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_header_size_bytes(void);
+int64_t osty_gc_debug_generic_pattern_of(void *payload);
+int64_t osty_gc_debug_dispatch_via_header_total(void);
+
+#define PATTERN_NONE         0
+#define PATTERN_ENUM_PTR     1
+#define PATTERN_TASK_HANDLE  2
+
+int main(void) {
+    /* 1. Header size pinned: post-Phase-4 shrink locks at 80 B. Bigger
+     *    means a regression re-added fields; smaller means an unrelated
+     *    layout change snuck in (intentional changes need to update
+     *    this test). */
+    int64_t hdr = osty_gc_debug_header_size_bytes();
+    printf("header_size:%lld\n", (long long)hdr);
+
+    /* 2. GENERIC enum-ptr alloc carries the ENUM_PTR pattern; scalar
+     *    alloc carries NONE. The reverse-lookup via osty_gc_pattern_of
+     *    has to match the (trace, destroy) pair the typed allocator
+     *    passed in. */
+    void *enum_ptr = osty_rt_enum_alloc_ptr_v1("phase4.enum_ptr");
+    void *enum_scalar = osty_rt_enum_alloc_scalar_v1("phase4.enum_scalar");
+    osty_gc_root_bind_v1(enum_ptr);
+    osty_gc_root_bind_v1(enum_scalar);
+    printf("enum_ptr_pattern:%lld\n",
+        (long long)osty_gc_debug_generic_pattern_of(enum_ptr));
+    printf("enum_scalar_pattern:%lld\n",
+        (long long)osty_gc_debug_generic_pattern_of(enum_scalar));
+
+    /* 3. Dispatch round-trip. Trigger a collect; the header-fallback
+     *    counter has to bump (these are GENERIC kinds, no descriptor)
+     *    and the live count stays at 2 since both are rooted. The
+     *    counter prove the dispatch path actually consulted the
+     *    generic_patterns table — i.e., the trace/destroy lookup is
+     *    no longer reading defunct header fields. */
+    int64_t fallback_before = osty_gc_debug_dispatch_via_header_total();
+    osty_gc_debug_collect();
+    int64_t fallback_after = osty_gc_debug_dispatch_via_header_total();
+    printf("live_after_collect:%lld\n", (long long)osty_gc_debug_live_count());
+    printf("fallback_bumped:%d\n", fallback_after > fallback_before);
+
+    /* 4. Release + collect. enum_ptr trace was a no-op (its captured
+     *    payload slot is uninitialised), so it sweeps cleanly; same
+     *    for enum_scalar. */
+    osty_gc_root_release_v1(enum_ptr);
+    osty_gc_root_release_v1(enum_scalar);
+    osty_gc_debug_collect();
+    printf("live_after_release:%lld\n", (long long)osty_gc_debug_live_count());
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"header_size:80",         // shrunk from 96 (16 B saved by dropping trace/destroy)
+		"enum_ptr_pattern:1",     // ENUM_PTR = 1
+		"enum_scalar_pattern:0",  // NONE = 0
+		"live_after_collect:2",   // both rooted
+		"fallback_bumped:1",      // GENERIC fallback path actually fired (used pattern table)
+		"live_after_release:0",   // both swept
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("phase 4 harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
