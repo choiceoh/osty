@@ -117,6 +117,12 @@ type lowerer struct {
 	// to its IdentPat and looking up the type the lowerer recorded
 	// when it processed the LetStmt earlier in the same function.
 	bindingPatTypes map[*ast.IdentPat]Type
+
+	// fieldTypeCache memoises (typeName, fieldName) → field IR Type
+	// resolutions for `recoverFieldType`. Without the memo, every
+	// field access on a partial struct re-walks the file's decls
+	// looking for the matching StructDecl.
+	fieldTypeCache map[fieldKey]Type
 }
 
 // ==== Top level ====
@@ -2718,9 +2724,10 @@ func (l *lowerer) lowerFieldExpr(e *ast.FieldExpr) Expr {
 
 // recoverFieldType resolves a field access `receiverType.fieldName`
 // back to the declared field type by consulting the resolver's type
-// decl for receiverType. Only handles user structs today —
-// enums/interfaces/tuples use different access shapes that do not
-// flow through lowerFieldExpr in the same way.
+// decl for receiverType. Handles partial struct declarations (multiple
+// `pub struct X { ... }` blocks across the same package) by walking
+// `l.file.Decls` for any StructDecl with the same head name when the
+// resolver-anchored decl doesn't carry the requested field.
 func (l *lowerer) recoverFieldType(receiverType Type, fieldName string) Type {
 	if receiverType == nil || receiverType == ErrTypeVal {
 		return nil
@@ -2729,27 +2736,64 @@ func (l *lowerer) recoverFieldType(receiverType Type, fieldName string) Type {
 	if !ok || nt.Builtin {
 		return nil
 	}
-	if l.res == nil {
+	return l.lookupStructFieldType(nt.Name, fieldName)
+}
+
+// lookupStructFieldType returns the declared type of a field on a
+// (possibly partial) struct. Memoised per (typeName, fieldName) so the
+// merged-toolchain hot path doesn't re-walk file decls per access.
+func (l *lowerer) lookupStructFieldType(typeName, fieldName string) Type {
+	if l.fieldTypeCache != nil {
+		if v, ok := l.fieldTypeCache[fieldKey{typeName, fieldName}]; ok {
+			return v
+		}
+	}
+	t := l.lookupStructFieldTypeUncached(typeName, fieldName)
+	if l.fieldTypeCache == nil {
+		l.fieldTypeCache = map[fieldKey]Type{}
+	}
+	l.fieldTypeCache[fieldKey{typeName, fieldName}] = t
+	return t
+}
+
+func (l *lowerer) lookupStructFieldTypeUncached(typeName, fieldName string) Type {
+	if l.res != nil {
+		if sym := l.res.FileScope.Lookup(typeName); sym != nil && sym.Decl != nil {
+			if sd, ok := sym.Decl.(*ast.StructDecl); ok && sd != nil {
+				if t := structFieldType(sd, fieldName); t != nil {
+					return l.lowerType(t)
+				}
+			}
+		}
+	}
+	if l.file == nil {
 		return nil
 	}
-	sym := l.res.FileScope.Lookup(nt.Name)
-	if sym == nil || sym.Decl == nil {
-		return nil
+	for _, d := range l.file.Decls {
+		sd, ok := d.(*ast.StructDecl)
+		if !ok || sd == nil || sd.Name != typeName {
+			continue
+		}
+		if t := structFieldType(sd, fieldName); t != nil {
+			return l.lowerType(t)
+		}
 	}
-	sd, ok := sym.Decl.(*ast.StructDecl)
-	if !ok || sd == nil {
-		return nil
-	}
+	return nil
+}
+
+func structFieldType(sd *ast.StructDecl, fieldName string) ast.Type {
 	for _, f := range sd.Fields {
 		if f == nil || f.Name != fieldName {
 			continue
 		}
-		if f.Type == nil {
-			return nil
-		}
-		return l.lowerType(f.Type)
+		return f.Type
 	}
 	return nil
+}
+
+type fieldKey struct {
+	typeName  string
+	fieldName string
 }
 
 // tupleIndex parses a field name like "0" or "12" as a tuple index.
