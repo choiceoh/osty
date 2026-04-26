@@ -176,7 +176,7 @@ func TestNativeLetTupleDestructureRejectsNonIdentElement(t *testing.T) {
 	if ok {
 		t.Fatal("TryGenerateNativeOwnedModule unexpectedly covered nested tuple destructure — stage-1 should defer")
 	}
-	_ = resolve.FileWithStdlib // force import used on other tests
+	_ = resolve.ResolveFileDefault // force import used on other tests
 	_ = check.SelfhostFile
 	_ = stdlib.LoadCached
 	_ = ostyir.ForIn

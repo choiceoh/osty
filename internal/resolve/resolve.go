@@ -37,11 +37,13 @@ type Result struct {
 	Diags []*diag.Diagnostic
 }
 
-// FileWithStdlib runs name resolution over a single parsed source file
+// fileWithStdlib runs name resolution over a single parsed source file
 // with an optional StdlibProvider: `use std.*` imports in
 // the source resolve through the provider before falling back to the
 // opaque-stub behavior. Passing a nil provider is equivalent to File.
-func FileWithStdlib(file *ast.File, prelude *Scope, stdlib StdlibProvider) *Result {
+//
+// Unexported — external callers should use ResolveFileDefault.
+func fileWithStdlib(file *ast.File, prelude *Scope, stdlib StdlibProvider) *Result {
 	pkg := &Package{
 		Name: "<file>",
 		Files: []*PackageFile{{
@@ -2315,5 +2317,5 @@ func ResolvePackageDefault(pkg *Package) *PackageResult {
 // standard prelude and the given stdlib provider. It is the
 // one-call replacement for FileWithStdlib(file, NewPrelude(), stdlib).
 func ResolveFileDefault(file *ast.File, stdlib StdlibProvider) *Result {
-	return FileWithStdlib(file, NewPrelude(), stdlib)
+	return fileWithStdlib(file, NewPrelude(), stdlib)
 }
