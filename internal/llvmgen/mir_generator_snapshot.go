@@ -4121,3 +4121,706 @@ func mirOpXor() string { return "xor" }
 func mirOpShl() string  { return "shl" }
 func mirOpLShr() string { return "lshr" }
 func mirOpAShr() string { return "ashr" }
+
+// §6 cast-op token names.
+
+// Osty: mirCastSExt / ZExt / Trunc
+func mirCastSExt() string  { return "sext" }
+func mirCastZExt() string  { return "zext" }
+func mirCastTrunc() string { return "trunc" }
+
+// Osty: mirCastSIToFP / UIToFP / FPToSI / FPToUI
+func mirCastSIToFP() string { return "sitofp" }
+func mirCastUIToFP() string { return "uitofp" }
+func mirCastFPToSI() string { return "fptosi" }
+func mirCastFPToUI() string { return "fptoui" }
+
+// Osty: mirCastFPExt / FPTrunc / Bitcast / PtrToInt / IntToPtr / AddrSpace
+func mirCastFPExt() string     { return "fpext" }
+func mirCastFPTrunc() string   { return "fptrunc" }
+func mirCastBitcast() string   { return "bitcast" }
+func mirCastPtrToInt() string  { return "ptrtoint" }
+func mirCastIntToPtr() string  { return "inttoptr" }
+func mirCastAddrSpace() string { return "addrspacecast" }
+
+// §6 terminator-name token helpers.
+
+// Osty: mirTermBr / Switch / Ret / Unreachable / Invoke / Resume
+func mirTermBr() string          { return "br" }
+func mirTermSwitch() string      { return "switch" }
+func mirTermRet() string         { return "ret" }
+func mirTermUnreachable() string { return "unreachable" }
+func mirTermInvoke() string      { return "invoke" }
+func mirTermResume() string      { return "resume" }
+
+// §6 instruction-name token helpers.
+
+// Osty: mirInstrAlloca / Load / Store / GEP / GEPInBounds / Call / CallVoid
+func mirInstrAlloca() string      { return "alloca" }
+func mirInstrLoad() string        { return "load" }
+func mirInstrStore() string       { return "store" }
+func mirInstrGEP() string         { return "getelementptr" }
+func mirInstrGEPInBounds() string { return "getelementptr inbounds" }
+func mirInstrCall() string        { return "call" }
+func mirInstrCallVoid() string    { return "call" }
+
+// Osty: mirInstrPhi / Select / InsertValue / ExtractValue / ICmp / FCmp
+func mirInstrPhi() string          { return "phi" }
+func mirInstrSelect() string       { return "select" }
+func mirInstrInsertValue() string  { return "insertvalue" }
+func mirInstrExtractValue() string { return "extractvalue" }
+func mirInstrICmp() string         { return "icmp" }
+func mirInstrFCmp() string         { return "fcmp" }
+
+// Osty: mirInstrAtomicRMW / CmpXchg / Fence
+func mirInstrAtomicRMW() string { return "atomicrmw" }
+func mirInstrCmpXchg() string   { return "cmpxchg" }
+func mirInstrFence() string     { return "fence" }
+
+// §6 atomic ordering tokens.
+
+// Osty: mirAtomicUnordered / Monotonic / Acquire / Release / AcqRel / SeqCst
+func mirAtomicUnordered() string { return "unordered" }
+func mirAtomicMonotonic() string { return "monotonic" }
+func mirAtomicAcquire() string   { return "acquire" }
+func mirAtomicRelease() string   { return "release" }
+func mirAtomicAcqRel() string    { return "acq_rel" }
+func mirAtomicSeqCst() string    { return "seq_cst" }
+
+// §6 typed-return shape helpers.
+
+// Osty: mirRetTypedLine — generic typed-value-return composer.
+// (mirRetVoidLine / mirUnreachableLine continue to live at their
+// original sites earlier in this file.)
+func mirRetTypedLine(ty, val string) string {
+	return "  " + mirTermRet() + " " + ty + " " + val + "\n"
+}
+
+// §6 unconditional-branch shape helper.
+
+// Osty: mirBrLabelLine — generic unconditional branch.
+// (mirBrCondLine continues to live at its original site.)
+func mirBrLabelLine(dst string) string {
+	return "  " + mirTermBr() + " label %" + dst + "\n"
+}
+
+// §6 switch-shape helpers.
+
+// Osty: mirSwitchHeaderLine / mirSwitchCaseLine / mirSwitchFooterLine
+func mirSwitchHeaderLine(ty, val, defaultLbl string) string {
+	return "  " + mirTermSwitch() + " " + ty + " " + val + ", label %" + defaultLbl + " [\n"
+}
+func mirSwitchCaseLine(ty, val, caseLbl string) string {
+	return "    " + ty + " " + val + ", label %" + caseLbl + "\n"
+}
+func mirSwitchFooterLine() string { return "  ]\n" }
+
+// §6 LLVM math-intrinsic name helpers.
+
+// Osty: mirIntrinsicLLVMSqrtF64 / SqrtF32 / FAbsF64 / FAbsF32 / FMAF64 / FMAF32
+func mirIntrinsicLLVMSqrtF64() string { return "llvm.sqrt.f64" }
+func mirIntrinsicLLVMSqrtF32() string { return "llvm.sqrt.f32" }
+func mirIntrinsicLLVMFAbsF64() string { return "llvm.fabs.f64" }
+func mirIntrinsicLLVMFAbsF32() string { return "llvm.fabs.f32" }
+func mirIntrinsicLLVMFMAF64() string  { return "llvm.fma.f64" }
+func mirIntrinsicLLVMFMAF32() string  { return "llvm.fma.f32" }
+
+// Osty: SinF64 / CosF64 / TanF64 / LogF64 / Log2F64 / Log10F64 / ExpF64 / Exp2F64 / PowF64 / PowI64
+func mirIntrinsicLLVMSinF64() string   { return "llvm.sin.f64" }
+func mirIntrinsicLLVMCosF64() string   { return "llvm.cos.f64" }
+func mirIntrinsicLLVMTanF64() string   { return "llvm.tan.f64" }
+func mirIntrinsicLLVMLogF64() string   { return "llvm.log.f64" }
+func mirIntrinsicLLVMLog2F64() string  { return "llvm.log2.f64" }
+func mirIntrinsicLLVMLog10F64() string { return "llvm.log10.f64" }
+func mirIntrinsicLLVMExpF64() string   { return "llvm.exp.f64" }
+func mirIntrinsicLLVMExp2F64() string  { return "llvm.exp2.f64" }
+func mirIntrinsicLLVMPowF64() string   { return "llvm.pow.f64" }
+func mirIntrinsicLLVMPowI64() string   { return "llvm.powi.f64.i32" }
+
+// Osty: MinNumF64 / MaxNumF64
+func mirIntrinsicLLVMMinNumF64() string { return "llvm.minnum.f64" }
+func mirIntrinsicLLVMMaxNumF64() string { return "llvm.maxnum.f64" }
+
+// §6 LLVM bit-manipulation intrinsic names.
+
+// Osty: CtlzI64 / CttzI64 / CtpopI64 / BSwap{I64,I32,I16} / BitReverseI64
+func mirIntrinsicLLVMCtlzI64() string       { return "llvm.ctlz.i64" }
+func mirIntrinsicLLVMCttzI64() string       { return "llvm.cttz.i64" }
+func mirIntrinsicLLVMCtpopI64() string      { return "llvm.ctpop.i64" }
+func mirIntrinsicLLVMBSwapI64() string      { return "llvm.bswap.i64" }
+func mirIntrinsicLLVMBSwapI32() string      { return "llvm.bswap.i32" }
+func mirIntrinsicLLVMBSwapI16() string      { return "llvm.bswap.i16" }
+func mirIntrinsicLLVMBitReverseI64() string { return "llvm.bitreverse.i64" }
+
+// §6 LLVM checked-arithmetic intrinsic names.
+
+// Osty: SAddOverflowI64 / SSubOverflowI64 / SMulOverflowI64 / U-variants
+func mirIntrinsicLLVMSAddOverflowI64() string { return "llvm.sadd.with.overflow.i64" }
+func mirIntrinsicLLVMSSubOverflowI64() string { return "llvm.ssub.with.overflow.i64" }
+func mirIntrinsicLLVMSMulOverflowI64() string { return "llvm.smul.with.overflow.i64" }
+func mirIntrinsicLLVMUAddOverflowI64() string { return "llvm.uadd.with.overflow.i64" }
+func mirIntrinsicLLVMUSubOverflowI64() string { return "llvm.usub.with.overflow.i64" }
+func mirIntrinsicLLVMUMulOverflowI64() string { return "llvm.umul.with.overflow.i64" }
+
+// §6 LLVM saturating-arithmetic intrinsic names.
+
+// Osty: SAddSatI64 / SSubSatI64 / SShlSatI64 / U-variants
+func mirIntrinsicLLVMSAddSatI64() string { return "llvm.sadd.sat.i64" }
+func mirIntrinsicLLVMSSubSatI64() string { return "llvm.ssub.sat.i64" }
+func mirIntrinsicLLVMSShlSatI64() string { return "llvm.sshl.sat.i64" }
+func mirIntrinsicLLVMUAddSatI64() string { return "llvm.uadd.sat.i64" }
+func mirIntrinsicLLVMUSubSatI64() string { return "llvm.usub.sat.i64" }
+func mirIntrinsicLLVMUShlSatI64() string { return "llvm.ushl.sat.i64" }
+
+// §6 LLVM memory / lifecycle intrinsic names.
+
+// Osty: Memcpy / Memmove / Memset / LifetimeStart / LifetimeEnd / InvariantStart / InvariantEnd / Assume / ExpectI1
+func mirIntrinsicLLVMMemcpy() string         { return "llvm.memcpy.p0.p0.i64" }
+func mirIntrinsicLLVMMemmove() string        { return "llvm.memmove.p0.p0.i64" }
+func mirIntrinsicLLVMMemset() string         { return "llvm.memset.p0.i64" }
+func mirIntrinsicLLVMLifetimeStart() string  { return "llvm.lifetime.start.p0" }
+func mirIntrinsicLLVMLifetimeEnd() string    { return "llvm.lifetime.end.p0" }
+func mirIntrinsicLLVMInvariantStart() string { return "llvm.invariant.start.p0" }
+func mirIntrinsicLLVMInvariantEnd() string   { return "llvm.invariant.end.p0" }
+func mirIntrinsicLLVMAssume() string         { return "llvm.assume" }
+func mirIntrinsicLLVMExpectI1() string       { return "llvm.expect.i1" }
+
+// Osty: StackSave / StackRestore / DbgDeclare / DbgValue
+func mirIntrinsicLLVMStackSave() string    { return "llvm.stacksave" }
+func mirIntrinsicLLVMStackRestore() string { return "llvm.stackrestore" }
+func mirIntrinsicLLVMDbgDeclare() string   { return "llvm.dbg.declare" }
+func mirIntrinsicLLVMDbgValue() string     { return "llvm.dbg.value" }
+
+// §6 LLVM-text instruction shape helpers.
+
+// Osty: mirAddIntLine / SubIntLine / MulIntLine / SDivIntLine / SRemIntLine
+func mirAddIntLine(reg, ty, a, b string) string {
+	return "  " + reg + " = " + mirOpAdd() + " " + ty + " " + a + ", " + b + "\n"
+}
+func mirSubIntLine(reg, ty, a, b string) string {
+	return "  " + reg + " = " + mirOpSub() + " " + ty + " " + a + ", " + b + "\n"
+}
+func mirMulIntLine(reg, ty, a, b string) string {
+	return "  " + reg + " = " + mirOpMul() + " " + ty + " " + a + ", " + b + "\n"
+}
+func mirSDivIntLine(reg, ty, a, b string) string {
+	return "  " + reg + " = " + mirOpSDiv() + " " + ty + " " + a + ", " + b + "\n"
+}
+func mirSRemIntLine(reg, ty, a, b string) string {
+	return "  " + reg + " = " + mirOpSRem() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+// Osty: mirAndIntLine / OrIntLine / XorIntLine
+func mirAndIntLine(reg, ty, a, b string) string {
+	return "  " + reg + " = " + mirOpAnd() + " " + ty + " " + a + ", " + b + "\n"
+}
+func mirOrIntLine(reg, ty, a, b string) string {
+	return "  " + reg + " = " + mirOpOr() + " " + ty + " " + a + ", " + b + "\n"
+}
+func mirXorIntLine(reg, ty, a, b string) string {
+	return "  " + reg + " = " + mirOpXor() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+// Osty: mirShlIntLine / LShrIntLine / AShrIntLine
+func mirShlIntLine(reg, ty, a, b string) string {
+	return "  " + reg + " = " + mirOpShl() + " " + ty + " " + a + ", " + b + "\n"
+}
+func mirLShrIntLine(reg, ty, a, b string) string {
+	return "  " + reg + " = " + mirOpLShr() + " " + ty + " " + a + ", " + b + "\n"
+}
+func mirAShrIntLine(reg, ty, a, b string) string {
+	return "  " + reg + " = " + mirOpAShr() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+// Osty: mirFRemLine — typed fp-rem shape (mirFAddLine / FSubLine /
+// FMulLine / FDivLine continue to live at their original sites
+// earlier in this file).
+func mirFRemLine(reg, ty, a, b string) string {
+	return "  " + reg + " = " + mirOpFRem() + " " + ty + " " + a + ", " + b + "\n"
+}
+
+// §6 cast-instruction shape helpers.
+
+// Osty: mirCastLine — generic cast-instruction line composer
+func mirCastLine(reg, op, fromTy, val, toTy string) string {
+	return "  " + reg + " = " + op + " " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+// Osty: mirUIToFPLine / mirFPToUILine / mirFPExtLine / mirFPTruncLine
+// (mirSIToFPLine / mirFPToSILine / mirBitcastLine / mirPtrToIntLine /
+// mirIntToPtrLine / mirSExtLine / mirZExtLine / mirTruncLine continue
+// to live at their original sites earlier in this file.)
+func mirUIToFPLine(reg, fromTy, val, toTy string) string {
+	return mirCastLine(reg, mirCastUIToFP(), fromTy, val, toTy)
+}
+func mirFPToUILine(reg, fromTy, val, toTy string) string {
+	return mirCastLine(reg, mirCastFPToUI(), fromTy, val, toTy)
+}
+func mirFPExtLine(reg, fromTy, val, toTy string) string {
+	return mirCastLine(reg, mirCastFPExt(), fromTy, val, toTy)
+}
+func mirFPTruncLine(reg, fromTy, val, toTy string) string {
+	return mirCastLine(reg, mirCastFPTrunc(), fromTy, val, toTy)
+}
+
+// §6 specialised cast shapes — common width transitions.
+
+// Osty: mirSExtI32ToI64Line / I16ToI64Line / I8ToI64Line / I1ToI64Line
+func mirSExtI32ToI64Line(reg, val string) string {
+	return mirSExtLine(reg, mirTypeI32(), val, mirTypeI64())
+}
+func mirSExtI16ToI64Line(reg, val string) string {
+	return mirSExtLine(reg, mirTypeI16(), val, mirTypeI64())
+}
+func mirSExtI8ToI64Line(reg, val string) string {
+	return mirSExtLine(reg, mirTypeI8(), val, mirTypeI64())
+}
+func mirSExtI1ToI64Line(reg, val string) string {
+	return mirSExtLine(reg, mirTypeI1(), val, mirTypeI64())
+}
+
+// Osty: mirZExtI32ToI64Line / I16ToI64Line / I8ToI64Line / I1ToI64Line
+func mirZExtI32ToI64Line(reg, val string) string {
+	return mirZExtLine(reg, mirTypeI32(), val, mirTypeI64())
+}
+func mirZExtI16ToI64Line(reg, val string) string {
+	return mirZExtLine(reg, mirTypeI16(), val, mirTypeI64())
+}
+func mirZExtI8ToI64Line(reg, val string) string {
+	return mirZExtLine(reg, mirTypeI8(), val, mirTypeI64())
+}
+func mirZExtI1ToI64Line(reg, val string) string {
+	return mirZExtLine(reg, mirTypeI1(), val, mirTypeI64())
+}
+
+// Osty: mirTruncI64ToI32Line / I16Line / I8Line / I1Line
+func mirTruncI64ToI32Line(reg, val string) string {
+	return mirTruncLine(reg, mirTypeI64(), val, mirTypeI32())
+}
+func mirTruncI64ToI16Line(reg, val string) string {
+	return mirTruncLine(reg, mirTypeI64(), val, mirTypeI16())
+}
+func mirTruncI64ToI8Line(reg, val string) string {
+	return mirTruncLine(reg, mirTypeI64(), val, mirTypeI8())
+}
+func mirTruncI64ToI1Line(reg, val string) string {
+	return mirTruncLine(reg, mirTypeI64(), val, mirTypeI1())
+}
+
+// Osty: mirSIToFPI64ToDoubleLine / mirFPToSIDoubleToI64Line
+// (mirFPExtFloatToDoubleLine / mirFPTruncDoubleToFloatLine continue
+// to live at their original sites earlier in this file.)
+func mirSIToFPI64ToDoubleLine(reg, val string) string {
+	return mirSIToFPLine(reg, mirTypeI64(), val, mirTypeDouble())
+}
+func mirFPToSIDoubleToI64Line(reg, val string) string {
+	return mirFPToSILine(reg, mirTypeDouble(), val, mirTypeI64())
+}
+
+// §6 icmp / fcmp instruction shape helpers.
+// (mirICmpLine / mirFCmpLine continue to live at their original sites
+// earlier in this file. The new specialised siblings below call
+// through to the existing generic composers.)
+
+// Osty: mirICmpI64EqLine / NeLine / SltLine / SleLine / SgtLine / SgeLine
+func mirICmpI64EqLine(reg, a, b string) string {
+	return mirICmpLine(reg, mirICmpEq(), mirTypeI64(), a, b)
+}
+func mirICmpI64NeLine(reg, a, b string) string {
+	return mirICmpLine(reg, mirICmpNe(), mirTypeI64(), a, b)
+}
+func mirICmpI64SltLine(reg, a, b string) string {
+	return mirICmpLine(reg, mirICmpSlt(), mirTypeI64(), a, b)
+}
+func mirICmpI64SleLine(reg, a, b string) string {
+	return mirICmpLine(reg, mirICmpSle(), mirTypeI64(), a, b)
+}
+func mirICmpI64SgtLine(reg, a, b string) string {
+	return mirICmpLine(reg, mirICmpSgt(), mirTypeI64(), a, b)
+}
+func mirICmpI64SgeLine(reg, a, b string) string {
+	return mirICmpLine(reg, mirICmpSge(), mirTypeI64(), a, b)
+}
+
+// Osty: mirICmpPtrEqLine / NeLine
+func mirICmpPtrEqLine(reg, a, b string) string {
+	return mirICmpLine(reg, mirICmpEq(), mirTypePtr(), a, b)
+}
+func mirICmpPtrNeLine(reg, a, b string) string {
+	return mirICmpLine(reg, mirICmpNe(), mirTypePtr(), a, b)
+}
+
+// Osty: mirICmpI1EqLine / NeLine
+func mirICmpI1EqLine(reg, a, b string) string {
+	return mirICmpLine(reg, mirICmpEq(), mirTypeI1(), a, b)
+}
+func mirICmpI1NeLine(reg, a, b string) string {
+	return mirICmpLine(reg, mirICmpNe(), mirTypeI1(), a, b)
+}
+
+// Osty: mirFCmpDoubleOEqLine / OneLine / OltLine / OleLine / OgtLine / OgeLine
+func mirFCmpDoubleOEqLine(reg, a, b string) string {
+	return mirFCmpLine(reg, mirFCmpOEq(), mirTypeDouble(), a, b)
+}
+func mirFCmpDoubleOneLine(reg, a, b string) string {
+	return mirFCmpLine(reg, mirFCmpOne(), mirTypeDouble(), a, b)
+}
+func mirFCmpDoubleOltLine(reg, a, b string) string {
+	return mirFCmpLine(reg, mirFCmpOlt(), mirTypeDouble(), a, b)
+}
+func mirFCmpDoubleOleLine(reg, a, b string) string {
+	return mirFCmpLine(reg, mirFCmpOle(), mirTypeDouble(), a, b)
+}
+func mirFCmpDoubleOgtLine(reg, a, b string) string {
+	return mirFCmpLine(reg, mirFCmpOgt(), mirTypeDouble(), a, b)
+}
+func mirFCmpDoubleOgeLine(reg, a, b string) string {
+	return mirFCmpLine(reg, mirFCmpOge(), mirTypeDouble(), a, b)
+}
+
+// §6 bitwise specialised shapes.
+// (mirAndI64Line / OrI64Line / XorI64Line / ShlI64Line / LShrI64Line /
+// AShrI64Line / AndI1Line continue to live at their original sites
+// earlier in this file. The new sibling builders below cover the
+// remaining I1 / immediate variants.)
+
+// Osty: mirXorI1Line — sibling of existing AndI1Line / OrI1Line.
+func mirXorI1Line(reg, a, b string) string {
+	return mirXorIntLine(reg, mirTypeI1(), a, b)
+}
+
+// §6 specialised arith shapes.
+
+// Osty: mirSubI64ImmediateLine / mirAddI64ImmediateLine / mirSRemI64Line
+// (mirMulI64Line / mirSDivI64Line continue to live at their original
+// sites earlier in this file.)
+func mirSubI64ImmediateLine(reg, a, imm string) string {
+	return mirSubIntLine(reg, mirTypeI64(), a, imm)
+}
+func mirAddI64ImmediateLine(reg, a, imm string) string {
+	return mirAddIntLine(reg, mirTypeI64(), a, imm)
+}
+func mirSRemI64Line(reg, a, b string) string {
+	return mirSRemIntLine(reg, mirTypeI64(), a, b)
+}
+
+// Osty: mirFAddDoubleLine / FSubDoubleLine / FMulDoubleLine / FDivDoubleLine / FRemDoubleLine
+func mirFAddDoubleLine(reg, a, b string) string {
+	return mirFAddLine(reg, mirTypeDouble(), a, b)
+}
+func mirFSubDoubleLine(reg, a, b string) string {
+	return mirFSubLine(reg, mirTypeDouble(), a, b)
+}
+func mirFMulDoubleLine(reg, a, b string) string {
+	return mirFMulLine(reg, mirTypeDouble(), a, b)
+}
+func mirFDivDoubleLine(reg, a, b string) string {
+	return mirFDivLine(reg, mirTypeDouble(), a, b)
+}
+func mirFRemDoubleLine(reg, a, b string) string {
+	return mirFRemLine(reg, mirTypeDouble(), a, b)
+}
+
+// §6 LLVM math-intrinsic typed-call shapes.
+
+// Osty: mirCallValueDoubleFromDoubleLine — base composer
+func mirCallValueDoubleFromDoubleLine(reg, sym, x string) string {
+	return "  " + reg + " = " + mirInstrCall() + " double @" + sym + "(double " + x + ")\n"
+}
+
+// Osty: mirCallValueLLVMSqrtF64Line / FAbsF64Line
+func mirCallValueLLVMSqrtF64Line(reg, x string) string {
+	return mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMSqrtF64(), x)
+}
+func mirCallValueLLVMFAbsF64Line(reg, x string) string {
+	return mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMFAbsF64(), x)
+}
+
+// Osty: SinF64Line / CosF64Line / TanF64Line / LogF64Line / Log2F64Line / Log10F64Line / ExpF64Line / Exp2F64Line
+func mirCallValueLLVMSinF64Line(reg, x string) string {
+	return mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMSinF64(), x)
+}
+func mirCallValueLLVMCosF64Line(reg, x string) string {
+	return mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMCosF64(), x)
+}
+func mirCallValueLLVMTanF64Line(reg, x string) string {
+	return mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMTanF64(), x)
+}
+func mirCallValueLLVMLogF64Line(reg, x string) string {
+	return mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMLogF64(), x)
+}
+func mirCallValueLLVMLog2F64Line(reg, x string) string {
+	return mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMLog2F64(), x)
+}
+func mirCallValueLLVMLog10F64Line(reg, x string) string {
+	return mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMLog10F64(), x)
+}
+func mirCallValueLLVMExpF64Line(reg, x string) string {
+	return mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMExpF64(), x)
+}
+func mirCallValueLLVMExp2F64Line(reg, x string) string {
+	return mirCallValueDoubleFromDoubleLine(reg, mirIntrinsicLLVMExp2F64(), x)
+}
+
+// Osty: mirCallValueLLVMPowF64Line / MinNumF64Line / MaxNumF64Line
+func mirCallValueLLVMPowF64Line(reg, base, exp string) string {
+	return "  " + reg + " = " + mirInstrCall() + " double @" + mirIntrinsicLLVMPowF64() + "(double " + base + ", double " + exp + ")\n"
+}
+func mirCallValueLLVMMinNumF64Line(reg, a, b string) string {
+	return "  " + reg + " = " + mirInstrCall() + " double @" + mirIntrinsicLLVMMinNumF64() + "(double " + a + ", double " + b + ")\n"
+}
+func mirCallValueLLVMMaxNumF64Line(reg, a, b string) string {
+	return "  " + reg + " = " + mirInstrCall() + " double @" + mirIntrinsicLLVMMaxNumF64() + "(double " + a + ", double " + b + ")\n"
+}
+
+// §6 LLVM bit-manipulation typed-call shapes.
+
+// Osty: CtlzI64Line / CttzI64Line
+func mirCallValueLLVMCtlzI64Line(reg, x string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i64 @" + mirIntrinsicLLVMCtlzI64() + "(i64 " + x + ", i1 false)\n"
+}
+func mirCallValueLLVMCttzI64Line(reg, x string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i64 @" + mirIntrinsicLLVMCttzI64() + "(i64 " + x + ", i1 false)\n"
+}
+
+// Osty: CtpopI64Line
+func mirCallValueLLVMCtpopI64Line(reg, x string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i64 @" + mirIntrinsicLLVMCtpopI64() + "(i64 " + x + ")\n"
+}
+
+// Osty: BSwapI64Line / I32Line / I16Line
+func mirCallValueLLVMBSwapI64Line(reg, x string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i64 @" + mirIntrinsicLLVMBSwapI64() + "(i64 " + x + ")\n"
+}
+func mirCallValueLLVMBSwapI32Line(reg, x string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i32 @" + mirIntrinsicLLVMBSwapI32() + "(i32 " + x + ")\n"
+}
+func mirCallValueLLVMBSwapI16Line(reg, x string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i16 @" + mirIntrinsicLLVMBSwapI16() + "(i16 " + x + ")\n"
+}
+
+// Osty: BitReverseI64Line
+func mirCallValueLLVMBitReverseI64Line(reg, x string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i64 @" + mirIntrinsicLLVMBitReverseI64() + "(i64 " + x + ")\n"
+}
+
+// §6 alloca-shape helpers.
+
+// Osty: mirAllocaSingleLine / mirAllocaSingleAlignedLine
+func mirAllocaSingleLine(reg, ty string) string {
+	return "  " + reg + " = " + mirInstrAlloca() + " " + ty + "\n"
+}
+func mirAllocaSingleAlignedLine(reg, ty, alignDigits string) string {
+	return "  " + reg + " = " + mirInstrAlloca() + " " + ty + ", align " + alignDigits + "\n"
+}
+
+// §6 typed-alloca shape helpers.
+
+// Osty: mirAllocaPtrLine / I64Line / I32Line / I8Line / I1Line / DoubleLine
+func mirAllocaPtrLine(reg string) string    { return mirAllocaSingleLine(reg, mirTypePtr()) }
+func mirAllocaI64Line(reg string) string    { return mirAllocaSingleLine(reg, mirTypeI64()) }
+func mirAllocaI32Line(reg string) string    { return mirAllocaSingleLine(reg, mirTypeI32()) }
+func mirAllocaI8Line(reg string) string     { return mirAllocaSingleLine(reg, mirTypeI8()) }
+func mirAllocaI1Line(reg string) string     { return mirAllocaSingleLine(reg, mirTypeI1()) }
+func mirAllocaDoubleLine(reg string) string { return mirAllocaSingleLine(reg, mirTypeDouble()) }
+
+// §6 lifetime / invariant intrinsic call shapes.
+
+// Osty: mirCallVoidLLVMLifetimeStartLine / EndLine / AssumeLine / mirCallValueLLVMExpectI1Line
+func mirCallVoidLLVMLifetimeStartLine(sizeDigits, slot string) string {
+	return "  " + mirInstrCallVoid() + " void @" + mirIntrinsicLLVMLifetimeStart() + "(i64 " + sizeDigits + ", ptr " + slot + ")\n"
+}
+func mirCallVoidLLVMLifetimeEndLine(sizeDigits, slot string) string {
+	return "  " + mirInstrCallVoid() + " void @" + mirIntrinsicLLVMLifetimeEnd() + "(i64 " + sizeDigits + ", ptr " + slot + ")\n"
+}
+func mirCallVoidLLVMAssumeLine(cond string) string {
+	return "  " + mirInstrCallVoid() + " void @" + mirIntrinsicLLVMAssume() + "(i1 " + cond + ")\n"
+}
+func mirCallValueLLVMExpectI1Line(reg, cond, expected string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i1 @" + mirIntrinsicLLVMExpectI1() + "(i1 " + cond + ", i1 " + expected + ")\n"
+}
+
+// §6 memcpy / memmove / memset intrinsic call shapes.
+
+// Osty: mirCallVoidLLVMMemcpyLine / MemmoveLine / MemsetLine
+func mirCallVoidLLVMMemcpyLine(dst, src, sizeDigits, isVolatile string) string {
+	return "  " + mirInstrCallVoid() + " void @" + mirIntrinsicLLVMMemcpy() + "(ptr " + dst + ", ptr " + src + ", i64 " + sizeDigits + ", i1 " + isVolatile + ")\n"
+}
+func mirCallVoidLLVMMemmoveLine(dst, src, sizeDigits, isVolatile string) string {
+	return "  " + mirInstrCallVoid() + " void @" + mirIntrinsicLLVMMemmove() + "(ptr " + dst + ", ptr " + src + ", i64 " + sizeDigits + ", i1 " + isVolatile + ")\n"
+}
+func mirCallVoidLLVMMemsetLine(dst, val, sizeDigits, isVolatile string) string {
+	return "  " + mirInstrCallVoid() + " void @" + mirIntrinsicLLVMMemset() + "(ptr " + dst + ", i8 " + val + ", i64 " + sizeDigits + ", i1 " + isVolatile + ")\n"
+}
+
+// §6 more linkage tag combos.
+
+// Osty: mirInternalConstantTag / mirPrivateConstantTag / mirExternalGlobalTag / mirExternalFnTag
+func mirInternalConstantTag() string { return mirLinkageInternal() + " " + mirConstantTag() }
+func mirPrivateConstantTag() string  { return mirLinkagePrivate() + " " + mirConstantTag() }
+func mirExternalGlobalTag() string   { return mirLinkageExternal() + " " + mirGlobalTag() }
+func mirExternalFnTag() string       { return mirLinkageExternal() }
+
+// §6 string-pool / global-data shape helpers.
+
+// Osty: mirGlobalStringPoolDeclLine / mirGlobalConstantI64DeclLine / mirGlobalConstantPtrDeclLine
+//
+//	/ mirGlobalMutableI64DeclLine / mirGlobalMutablePtrDeclLine
+func mirGlobalStringPoolDeclLine(sym, sizeDigits, encoded string) string {
+	return sym + " = " + mirPrivateUnnamedAddrConstantTag() + " [" + sizeDigits + " x i8] c\"" + encoded + "\"\n"
+}
+func mirGlobalConstantI64DeclLine(sym, val string) string {
+	return sym + " = " + mirInternalConstantTag() + " i64 " + val + "\n"
+}
+func mirGlobalConstantPtrDeclLine(sym, val string) string {
+	return sym + " = " + mirInternalConstantTag() + " ptr " + val + "\n"
+}
+func mirGlobalMutableI64DeclLine(sym, init string) string {
+	return sym + " = " + mirInternalGlobalTag() + " i64 " + init + "\n"
+}
+func mirGlobalMutablePtrDeclLine(sym, init string) string {
+	return sym + " = " + mirInternalGlobalTag() + " ptr " + init + "\n"
+}
+
+// §6 store / load specialisation helpers.
+
+// Osty: mirStoreI8Line / I32Line / DoubleLine / FloatLine
+func mirStoreI8Line(val, slot string) string {
+	return "  " + mirInstrStore() + " i8 " + val + ", ptr " + slot + "\n"
+}
+func mirStoreI32Line(val, slot string) string {
+	return "  " + mirInstrStore() + " i32 " + val + ", ptr " + slot + "\n"
+}
+func mirStoreDoubleLine(val, slot string) string {
+	return "  " + mirInstrStore() + " double " + val + ", ptr " + slot + "\n"
+}
+func mirStoreFloatLine(val, slot string) string {
+	return "  " + mirInstrStore() + " float " + val + ", ptr " + slot + "\n"
+}
+
+// Osty: mirLoadI8Line / I32Line / FloatLine
+func mirLoadI8Line(reg, slot string) string {
+	return "  " + reg + " = " + mirInstrLoad() + " i8, ptr " + slot + "\n"
+}
+func mirLoadI32Line(reg, slot string) string {
+	return "  " + reg + " = " + mirInstrLoad() + " i32, ptr " + slot + "\n"
+}
+func mirLoadFloatLine(reg, slot string) string {
+	return "  " + reg + " = " + mirInstrLoad() + " float, ptr " + slot + "\n"
+}
+
+// §6 GEP-shape specialisation helpers.
+
+// Osty: mirGEPI8StrideLine / I32StrideLine / I16StrideLine / FloatStrideLine
+func mirGEPI8StrideLine(reg, basePtr, idx string) string {
+	return "  " + reg + " = " + mirInstrGEPInBounds() + " i8, ptr " + basePtr + ", i64 " + idx + "\n"
+}
+func mirGEPI32StrideLine(reg, basePtr, idx string) string {
+	return "  " + reg + " = " + mirInstrGEPInBounds() + " i32, ptr " + basePtr + ", i64 " + idx + "\n"
+}
+func mirGEPI16StrideLine(reg, basePtr, idx string) string {
+	return "  " + reg + " = " + mirInstrGEPInBounds() + " i16, ptr " + basePtr + ", i64 " + idx + "\n"
+}
+func mirGEPFloatStrideLine(reg, basePtr, idx string) string {
+	return "  " + reg + " = " + mirInstrGEPInBounds() + " float, ptr " + basePtr + ", i64 " + idx + "\n"
+}
+
+// §6 alloca-array shape specialisations.
+
+// Osty: mirAllocaArrayPtrLine / I64Line / I8Line
+func mirAllocaArrayPtrLine(reg, countDigits string) string {
+	return mirAllocaArrayLine(reg, mirTypePtr(), countDigits)
+}
+func mirAllocaArrayI64Line(reg, countDigits string) string {
+	return mirAllocaArrayLine(reg, mirTypeI64(), countDigits)
+}
+func mirAllocaArrayI8Line(reg, countDigits string) string {
+	return mirAllocaArrayLine(reg, mirTypeI8(), countDigits)
+}
+
+// §6 LLVM `phi` shape specialisations.
+
+// Osty: mirPhiI8FromTwoLine / I32FromTwoLine / FloatFromTwoLine
+func mirPhiI8FromTwoLine(reg, v1, l1, v2, l2 string) string {
+	return "  " + reg + " = " + mirInstrPhi() + " i8 [ " + v1 + ", %" + l1 + " ], [ " + v2 + ", %" + l2 + " ]\n"
+}
+func mirPhiI32FromTwoLine(reg, v1, l1, v2, l2 string) string {
+	return "  " + reg + " = " + mirInstrPhi() + " i32 [ " + v1 + ", %" + l1 + " ], [ " + v2 + ", %" + l2 + " ]\n"
+}
+func mirPhiFloatFromTwoLine(reg, v1, l1, v2, l2 string) string {
+	return "  " + reg + " = " + mirInstrPhi() + " float [ " + v1 + ", %" + l1 + " ], [ " + v2 + ", %" + l2 + " ]\n"
+}
+
+// §6 `select` shape specialisations.
+
+// Osty: mirSelectI8Line / I32Line / FloatLine
+func mirSelectI8Line(reg, cond, l, r string) string {
+	return "  " + reg + " = " + mirInstrSelect() + " i1 " + cond + ", i8 " + l + ", i8 " + r + "\n"
+}
+func mirSelectI32Line(reg, cond, l, r string) string {
+	return "  " + reg + " = " + mirInstrSelect() + " i1 " + cond + ", i32 " + l + ", i32 " + r + "\n"
+}
+func mirSelectFloatLine(reg, cond, l, r string) string {
+	return "  " + reg + " = " + mirInstrSelect() + " i1 " + cond + ", float " + l + ", float " + r + "\n"
+}
+
+// §6 extractvalue specialisations.
+
+// Osty: mirExtractValueI64Line / I1Line / PtrLine / DoubleLine
+func mirExtractValueI64Line(reg, aggTy, aggVal, idxDigits string) string {
+	return mirExtractValueLine(reg, aggTy, aggVal, idxDigits)
+}
+func mirExtractValueI1Line(reg, aggTy, aggVal, idxDigits string) string {
+	return mirExtractValueLine(reg, aggTy, aggVal, idxDigits)
+}
+func mirExtractValuePtrLine(reg, aggTy, aggVal, idxDigits string) string {
+	return mirExtractValueLine(reg, aggTy, aggVal, idxDigits)
+}
+func mirExtractValueDoubleLine(reg, aggTy, aggVal, idxDigits string) string {
+	return mirExtractValueLine(reg, aggTy, aggVal, idxDigits)
+}
+
+// §6 LLVM-text constant patterns.
+
+// Osty: mirAlignAttr / mirZeroAttr / mirRangeAttrI64
+func mirAlignAttr(alignDigits string) string { return "align " + alignDigits }
+func mirZeroAttr() string                    { return "zeroinit" }
+func mirRangeAttrI64(lo, hi string) string {
+	return "range(i64 " + lo + ", " + hi + ")"
+}
+
+// §6 fastmath flag tokens.
+
+// Osty: mirFastMathNNan / NInf / NSz / Arcp / Contract / Afn / Reassoc / Fast
+func mirFastMathNNan() string     { return "nnan" }
+func mirFastMathNInf() string     { return "ninf" }
+func mirFastMathNSz() string      { return "nsz" }
+func mirFastMathArcp() string     { return "arcp" }
+func mirFastMathContract() string { return "contract" }
+func mirFastMathAfn() string      { return "afn" }
+func mirFastMathReassoc() string  { return "reassoc" }
+func mirFastMathFast() string     { return "fast" }
+
+// §6 nuw / nsw flag tokens.
+
+// Osty: mirArithNUW / NSW / Exact
+func mirArithNUW() string   { return "nuw" }
+func mirArithNSW() string   { return "nsw" }
+func mirArithExact() string { return "exact" }
+
+// §6 GC-statepoint helpers (reserved).
+
+// Osty: mirIntrinsicLLVMGCStatepoint / GCResult / GCRelocate / mirGCStatepointIDPlaceholder
+func mirIntrinsicLLVMGCStatepoint() string { return "llvm.experimental.gc.statepoint" }
+func mirIntrinsicLLVMGCResult() string     { return "llvm.experimental.gc.result" }
+func mirIntrinsicLLVMGCRelocate() string   { return "llvm.experimental.gc.relocate" }
+func mirGCStatepointIDPlaceholder() string { return "0" }
+
+// §6 visibility / DLL-storage tokens.
+
+// Osty: mirVisibilityDefault / Hidden / Protected / mirDLLImport / DLLExport
+func mirVisibilityDefault() string   { return "default" }
+func mirVisibilityHidden() string    { return "hidden" }
+func mirVisibilityProtected() string { return "protected" }
+func mirDLLImport() string           { return "dllimport" }
+func mirDLLExport() string           { return "dllexport" }
