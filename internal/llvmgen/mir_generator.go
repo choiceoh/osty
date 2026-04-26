@@ -1167,7 +1167,8 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		return true
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapGetOr,
 		mir.IntrinsicMapSet, mir.IntrinsicMapContains, mir.IntrinsicMapLen,
-		mir.IntrinsicMapKeys, mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted:
+		mir.IntrinsicMapKeys, mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted,
+		mir.IntrinsicMapIncr:
 		return true
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
@@ -3810,7 +3811,8 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitListIntrinsic(i)
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapGetOr,
 		mir.IntrinsicMapSet, mir.IntrinsicMapContains, mir.IntrinsicMapLen,
-		mir.IntrinsicMapKeys, mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted:
+		mir.IntrinsicMapKeys, mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted,
+		mir.IntrinsicMapIncr:
 		return g.emitMapIntrinsic(i)
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
@@ -4719,6 +4721,46 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 			slot,
 			keyString)
 		g.flushOstyEmitter(em)
+		return nil
+	case mir.IntrinsicMapIncr:
+		// Fused `m[k] = (m.getOr(k, 0)) + delta` produced by
+		// `fuseMapInsertGetOrAdd`. Lowers to
+		// `osty_rt_map_incr_i64_<keysuffix>(map, key, delta) -> i64`.
+		// The runtime probes once, updates in place on hit, falls
+		// through to insert on miss. Result is the new map value;
+		// MIR may discard it (the typical case — counter benchmarks
+		// only care about the side effect) but the declaration must
+		// match the runtime ABI.
+		if len(i.Args) != 3 {
+			return unsupported("mir-mvp", "map_incr arity")
+		}
+		kReg, err := g.evalOperand(i.Args[1], keyT)
+		if err != nil {
+			return err
+		}
+		dReg, err := g.evalOperand(i.Args[2], i.Args[2].Type())
+		if err != nil {
+			return err
+		}
+		sym := mapRuntimeIncrI64Symbol(keyLLVM, keyString)
+		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr, "+keyLLVM+", i64)")
+		tmp := g.fresh()
+		g.fnBuf.WriteString("  ")
+		g.fnBuf.WriteString(tmp)
+		g.fnBuf.WriteString(" = call i64 @")
+		g.fnBuf.WriteString(sym)
+		g.fnBuf.WriteString("(ptr ")
+		g.fnBuf.WriteString(mapReg)
+		g.fnBuf.WriteString(", ")
+		g.fnBuf.WriteString(keyLLVM)
+		g.fnBuf.WriteString(" ")
+		g.fnBuf.WriteString(kReg)
+		g.fnBuf.WriteString(", i64 ")
+		g.fnBuf.WriteString(dReg)
+		g.fnBuf.WriteString(")\n")
+		if i.Dest != nil {
+			g.fnBuf.WriteString(mirStoreLine("i64", tmp, g.localSlots[i.Dest.Local]))
+		}
 		return nil
 	case mir.IntrinsicMapRemove:
 		if len(i.Args) != 2 {

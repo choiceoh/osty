@@ -728,6 +728,24 @@ const (
 	// list allocation + (N-1) piece dups that the unfused
 	// `Split(...)[K]` pattern would have done.
 	IntrinsicStringNthSegment
+
+	// IntrinsicMapIncr fuses the `m.insert(k, m.getOr(k, 0) + delta)`
+	// counter pattern into a single probe-and-update operation.
+	// Args: [map, key, delta]. The runtime helper
+	// `osty_rt_map_incr_i64_<suffix>` performs find_index once,
+	// updates the value slot in place on hit, falls through to
+	// insert_raw on miss. Synthesised by the
+	// `fuseMapInsertGetOrAdd` MIR pass when the canonical
+	// counter pattern is detected:
+	//
+	//     m.insert(k, m.getOr(k, 0) + delta)
+	//
+	// where the same `m` and `k` operands appear in both the getOr
+	// and insert calls. Saves one map probe per call site (50k+
+	// per benchmark on counter-heavy benches like lru-sim and
+	// log-aggregator). Result type matches the map's value type
+	// (always Int for now).
+	IntrinsicMapIncr
 )
 
 // StorageLiveInstr marks a local as alive. Optional; backends that do
@@ -1714,6 +1732,8 @@ func (k IntrinsicKind) String() string {
 		return "string_split_into"
 	case IntrinsicStringNthSegment:
 		return "string_nth_segment"
+	case IntrinsicMapIncr:
+		return "map_incr"
 	}
 	return "invalid"
 }

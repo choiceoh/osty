@@ -392,6 +392,15 @@ func mapRuntimeGetSymbol(keyTyp string, keyString bool) string {
 	return "osty_rt_map_get_" + llvmMapKeySuffix(keyTyp, keyString)
 }
 
+// mapRuntimeIncrI64Symbol returns the runtime symbol for the
+// fused `m[k] = (m.get(k) ?? 0) + delta` operation.
+// `osty_rt_map_incr_i64_<ksuf>(map, key, delta) -> i64` does one
+// probe + in-place update on hit, falls through to insert on miss.
+// Targeted by the `IntrinsicMapIncr` lowering.
+func mapRuntimeIncrI64Symbol(keyTyp string, keyString bool) string {
+	return "osty_rt_map_incr_i64_" + llvmMapKeySuffix(keyTyp, keyString)
+}
+
 // mapRuntimeKeyAtSymbol returns the K-at-slot accessor used by
 // `for (k, v) in m` iteration. `osty_rt_map_key_at_<ksuf>(map, i) -> K`.
 func mapRuntimeKeyAtSymbol(keyTyp string, keyString bool) string {

@@ -7367,17 +7367,38 @@ OSTY_RT_DEFINE_MAP_KEY_OPS(string, const char *)
 // counters — one hash lookup instead of three, one lock-pair
 // instead of three.
 //
-// Returns the new value. Used by Map<K, Int>.incrBy stdlib method
-// and by the compiler pattern-matcher that recognises the
-// legacy anti-pattern in user code.
+// Hot-path single-probe: on hit (`find_index >= 0`) the runtime
+// updates the value slot in place — no second probe via
+// `insert_raw`. On miss it falls through to `insert_raw` which
+// handles the index resize / rebuild bookkeeping. Hits dominate
+// counter workloads (lru-sim's `accessed` map sees the same key
+// 70% of the time, log-aggregator's level/hour counts converge to
+// ~5/24 hot keys), so the single-probe path is the steady state.
+//
+// Returns the new value. Used by Map<K, Int>.incrBy stdlib method,
+// by `IntrinsicMapIncr` lowering (the compiler-detected
+// `insert(k, getOr(k, 0) + delta)` pattern), and by the legacy
+// stdlib `update` callback path.
+//
+// OSTY_HOT_INLINE: now a hot-path runtime call from MIR-fused
+// `IntrinsicMapIncr` sites; ThinLTO inlines the body so the
+// in-place update on hits collapses to a single probe + memcpy
+// at the IR call site.
 #define OSTY_RT_DEFINE_MAP_INCR_I64_OPS(suffix, ctype) \
-int64_t osty_rt_map_incr_i64_##suffix(void *raw_map, ctype key, int64_t delta) { \
-    int64_t current = 0; \
+OSTY_HOT_INLINE int64_t osty_rt_map_incr_i64_##suffix(void *raw_map, ctype key, int64_t delta) { \
     int64_t next; \
     osty_rt_map_lock(raw_map); \
-    osty_rt_map_get_raw(raw_map, &key, &current); \
-    next = current + delta; \
-    osty_rt_map_insert_raw(raw_map, &key, &next); \
+    osty_rt_map *map = osty_rt_map_cast(raw_map); \
+    int64_t index = osty_rt_map_find_index(map, &key); \
+    if (index >= 0) { \
+        int64_t current; \
+        memcpy(&current, osty_rt_map_value_slot(map, index), sizeof(current)); \
+        next = current + delta; \
+        memcpy(osty_rt_map_value_slot(map, index), &next, sizeof(next)); \
+    } else { \
+        next = delta; \
+        osty_rt_map_insert_raw(raw_map, &key, &next); \
+    } \
     osty_rt_map_unlock(raw_map); \
     return next; \
 }
