@@ -408,6 +408,22 @@ list keeps new Osty clean of known landmines.
 | `mirRuntimeDeclareI8FromPtrI64Line` | `(sym: String) -> String` | §3 | `declare i8 @<sym>(ptr, i64)` — byte-typed list/bytes element-get shape |
 | `mirCallValueI8FromPtrI64Line` | `(reg, sym, ptr, idx) -> String` | §6 | `<reg> = call i8 @<sym>(ptr <ptr>, i64 <idx>)` — paired with i8 declare |
 | `mirCallValueElemFromPtrI64Line` | `(reg, elemLLVM, sym, ptr, idx) -> String` | §6 | Generalises i8 form for any element type — typed-element list-get runtime call |
+| `mirAbortPrintfExitLines` | `(fmtSym, messagePtr, nextLabel) -> String` | §6 | Canonical "printf+exit+unreachable+next-label" 4-line block — drains every testing-abort / bench-error error-trap body |
+| `mirBranchToErrorTrapLines` | `(isErr, errLabel, okLabel) -> String` | §6 | Result-Err gate: cond-br + err-label header — pairs with `mirAbortPrintfExitLines` |
+| `mirNoneBranchLines` | `(noneLabel, optLLVM, destSlot, endLabel) -> String` | §6 | Option-miss branch (label + zeroinit + br) — 3-line block |
+| `mirSomeBranchLines` | `(someLabel, taggedReg, filledReg, optLLVM, payloadI64, destSlot, endLabel) -> String` | §6 | Option-hit branch (label + Some + store + br) — 5-line block |
+| `mirSomeNoneJoinLines` | `(endLabel) -> String` | §6 | Convergence-label pass-through (named for grep-ability) |
+| `mirCallExitOneLine` / `mirCallExitZeroLine` | `() -> String` | §6 | Canonical exit(1) / exit(0) line specialisations |
+| `mirAbortBlockLines` | `(errLabel, fmtSym, messagePtr, nextLabel) -> String` | §6 | Full abort block (label + printf + exit + unreachable + next-label) — 5-line block |
+| `mirCallI64FromTwoPtrLine` / `mirCallI1FromTwoPtrLine` / `mirCallPtrFromTwoPtrLine` / `mirCallVoidFromTwoPtrLine` | `(reg?, sym, left, right) -> String` | §6 | Two-ptr-arg runtime call shapes (Compare / Equal / Concat / void-side-effect) |
+| `mirCallVoidFromThreePtrLine` | `(sym, a, b, c) -> String` | §6 | Three-ptr-arg side-effect call (test_snapshot) |
+| `mirInsertValueI64IndexLine` / `mirExtractValueI64IndexLine` | `(reg, aggTy, base, val, idx) -> String` | §6 | i64-typed insertvalue/extractvalue specialisations for Option/Result disc + payload |
+| `mirCallVoidI64Line` / `mirCallVoidI32Line` | `(sym, arg) -> String` | §6 | Single-scalar-arg side-effect calls |
+| `mirGEPInboundsI64IdxLine` | `(reg, elemTy, basePtr, idx) -> String` | §6 | i64-indexed inbounds GEP — vector-list per-element load/store |
+| `mirZExtToI64Line` / `mirSExtToI64Line` / `mirBitcastToI64Line` / `mirPtrToInt64Line` | `(reg, fromTy?, val) -> String` | §6 | i64-payload widen specialisations for Option/Result aggregate construction |
+| `mirCallStringConcatLine` / `mirCallStringEqualLine` / `mirCallStringCompareLine` / `mirCallStringSubstringLine` | `(reg, left, right, ...) -> String` | §6 | Literal-symbol specialisations for the String runtime ABI most-called sites |
+| `mirCallListNewLine` / `mirCallMapNewLine` / `mirCallSetNewLine` | `(reg, ...) -> String` | §6 | Constructor calls for `[]` / `{:}` / `{}` literals |
+| `mirSizeOfDoubleLine` / `mirSizeOfI64Line` / `mirSizeOfI32Line` / `mirSizeOfI8Line` / `mirSizeOfPtrLine` / `mirSizeOfI1Line` | `() -> String` | §6 | Canonical sizeof literal returns — centralise the byte-width constants |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as
