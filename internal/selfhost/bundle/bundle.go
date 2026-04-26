@@ -32,6 +32,7 @@ var toolchainCheckerFiles = []string{
 	"toolchain/lsp.osty",
 	"toolchain/inspect.osty",
 	"toolchain/inspect_hint.osty",
+	"toolchain/toml.osty",
 	"internal/selfhost/ast_lower.osty",
 }
 
