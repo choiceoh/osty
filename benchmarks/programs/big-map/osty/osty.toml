@@ -1,0 +1,7 @@
+[package]
+name = "big-map"
+version = "0.1.0"
+
+[[bin]]
+name = "big-map"
+path = "main.osty"
