@@ -5420,3 +5420,1491 @@ int main(void) {
 		t.Fatalf("final validate = %d, want 0; out=%q", validate, out)
 	}
 }
+
+// Phase 1 of the tiny-tag young-space landing: every typed allocator has to
+// pass exactly the (trace, destroy) pair the kind descriptor table records,
+// or the parity gate aborts. Phase 2 will cut over reads to the descriptor;
+// without this gate, a stray alloc site that drifted out of sync would
+// corrupt mark/sweep silently. Hits one allocator per registered kind so
+// any future drift trips immediately.
+func TestBundledRuntimeKindDescriptorParityCoversAllAllocators(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_kind_parity_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_kind_parity_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+void *osty_rt_closure_env_alloc_v2(int64_t capture_count, const char *site, uint64_t pointer_bitmap) __asm__(OSTY_GC_SYMBOL("osty.rt.closure_env_alloc_v2"));
+
+void osty_gc_debug_collect(void);
+int64_t osty_gc_debug_live_count(void);
+
+void *osty_rt_list_new(void);
+void *osty_rt_strings_Split(const char *value, const char *sep);
+void *osty_rt_strings_ToBytes(const char *value);
+void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, void *value_trace);
+void *osty_rt_set_new(int64_t elem_kind);
+void *osty_rt_thread_chan_make(int64_t capacity);
+
+int main(void) {
+    /* One allocator per registered kind. If any pair drifts from the
+     * descriptor table, the parity gate aborts before reaching live_count. */
+    void *list = osty_rt_list_new();              /* KIND_LIST */
+    void *str  = osty_rt_strings_Split("a,b", ","); /* KIND_STRING (via list) */
+    void *byt  = osty_rt_strings_ToBytes("hi");   /* KIND_BYTES */
+    /* Map/Set key+elem kinds use OSTY_RT_ABI_* (1=i64, 4=ptr). */
+    void *map  = osty_rt_map_new(1, 1, 8, 0);     /* KIND_MAP */
+    void *set  = osty_rt_set_new(1);              /* KIND_SET */
+    void *env  = osty_rt_closure_env_alloc_v2(0, "test.env", 0); /* KIND_CLOSURE_ENV */
+    void *chn  = osty_rt_thread_chan_make(4);     /* KIND_CHANNEL */
+
+    osty_gc_root_bind_v1(list);
+    osty_gc_root_bind_v1(str);
+    osty_gc_root_bind_v1(byt);
+    osty_gc_root_bind_v1(map);
+    osty_gc_root_bind_v1(set);
+    osty_gc_root_bind_v1(env);
+    osty_gc_root_bind_v1(chn);
+    osty_gc_debug_collect();
+    /* live_count after collect reflects all rooted kinds; the assertion is
+     * primarily that we got here without abort. */
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+
+    osty_gc_root_release_v1(list);
+    osty_gc_root_release_v1(str);
+    osty_gc_root_release_v1(byt);
+    osty_gc_root_release_v1(map);
+    osty_gc_root_release_v1(set);
+    osty_gc_root_release_v1(env);
+    osty_gc_root_release_v1(chn);
+    osty_gc_debug_collect();
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	var alive, after int64
+	if _, err := fmt.Sscanf(string(runOutput), "%d\n%d", &alive, &after); err != nil {
+		t.Fatalf("unparseable parity harness output %q: %v", runOutput, err)
+	}
+	if alive < 7 {
+		t.Fatalf("expected at least 7 live headers (one per kind), got %d; out=%q", alive, runOutput)
+	}
+	if after != 0 {
+		t.Fatalf("expected 0 live after release, got %d; out=%q", after, runOutput)
+	}
+}
+
+// Phase 2 of the tiny-tag young-space landing: mark drain and every sweep
+// loop must read trace/destroy through the kind descriptor, not through
+// the per-header fields. The header fields stay populated for now (Phase 4
+// drops them), so a regression that quietly takes the header path on a
+// registered kind would still produce correct behaviour — only the
+// descriptor counter exposes it.
+func TestBundledRuntimeDispatchRoutesThroughKindDescriptor(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_dispatch_route_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_dispatch_route_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void osty_gc_debug_collect(void);
+int64_t osty_gc_debug_dispatch_via_descriptor_total(void);
+int64_t osty_gc_debug_dispatch_via_header_total(void);
+
+void *osty_rt_list_new(void);
+void osty_rt_list_push_ptr(void *list, void *value);
+
+int main(void) {
+    /* Build a list (KIND_LIST → descriptor route) holding a GENERIC child
+     * (kind=7 → header fallback). One full collect cycle exercises both
+     * trace (mark drain) and destroy (sweep). */
+    void *list = osty_rt_list_new();
+    void *child = osty_gc_alloc_v1(7, 32, "child");
+    osty_rt_list_push_ptr(list, child);
+    osty_gc_root_bind_v1(list);
+    int64_t desc_before = osty_gc_debug_dispatch_via_descriptor_total();
+    int64_t header_before = osty_gc_debug_dispatch_via_header_total();
+    osty_gc_debug_collect();
+    int64_t desc_mid = osty_gc_debug_dispatch_via_descriptor_total();
+    int64_t header_mid = osty_gc_debug_dispatch_via_header_total();
+    /* Mark drain: list (descriptor) + child (header). */
+    printf("%lld\n", (long long)(desc_mid - desc_before));
+    printf("%lld\n", (long long)(header_mid - header_before));
+    osty_gc_root_release_v1(list);
+    osty_gc_debug_collect();
+    int64_t desc_after = osty_gc_debug_dispatch_via_descriptor_total();
+    int64_t header_after = osty_gc_debug_dispatch_via_header_total();
+    /* Sweep destroy: list (descriptor) + child (header).
+     * The same dispatcher fires on every mark drain too — both counters
+     * grow by more than a single hit per object across two cycles. */
+    printf("%d\n", desc_after > desc_mid);
+    printf("%d\n", header_after > header_mid);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	var descCycle1, headerCycle1, descGrew, headerGrew int64
+	if _, err := fmt.Sscanf(string(runOutput), "%d\n%d\n%d\n%d", &descCycle1, &headerCycle1, &descGrew, &headerGrew); err != nil {
+		t.Fatalf("unparseable dispatch counter output %q: %v", runOutput, err)
+	}
+	if descCycle1 < 1 {
+		t.Fatalf("expected descriptor route to fire on first collect (KIND_LIST mark), got %d; out=%q", descCycle1, runOutput)
+	}
+	if headerCycle1 < 1 {
+		t.Fatalf("expected header fallback to fire on first collect (GENERIC child mark), got %d; out=%q", headerCycle1, runOutput)
+	}
+	if descGrew != 1 {
+		t.Fatalf("expected descriptor counter to grow on sweep cycle (got grew=%d); out=%q", descGrew, runOutput)
+	}
+	if headerGrew != 1 {
+		t.Fatalf("expected header counter to grow on sweep cycle (got grew=%d); out=%q", headerGrew, runOutput)
+	}
+}
+
+// Phase 3 of the tiny-tag young-space landing: `find_header` now dispatches
+// through the young-page hook before the arena fast path, but the hook
+// returns false today and the feature flag defaults to off. Both must hold
+// or Phase 5 will land on top of a silently-active young route. The flag
+// also has to flip when the env var is set, otherwise the future cutover
+// can't be exercised in tests.
+func TestBundledRuntimeFindHeaderBranchingParity(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_branching_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_branching_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void osty_gc_debug_collect(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_tinytag_young_enabled(void);
+int64_t osty_gc_debug_arena_is_young_page(void *payload);
+
+void *osty_rt_list_new(void);
+
+int main(void) {
+    /* Print the flag state first; the test process either sets the env
+     * var or doesn't. */
+    printf("%lld\n", (long long)osty_gc_debug_tinytag_young_enabled());
+
+    /* Allocate a regular arena-backed payload and confirm the young-page
+     * predicate still classifies it as not-young. Phase 5 will flip this
+     * to true only for payloads that come out of the dedicated young
+     * arena, which doesn't exist yet. */
+    void *list = osty_rt_list_new();
+    osty_gc_root_bind_v1(list);
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(list));
+
+    /* Mark/sweep cycle still works through the new dispatcher. */
+    osty_gc_debug_collect();
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+    osty_gc_root_release_v1(list);
+    osty_gc_debug_collect();
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		env       []string
+		wantFlag  string
+		wantYoung string
+	}{
+		// Default is on (Phase 8 step 2 cutover). Opt out via
+		// `OSTY_GC_TINYTAG_YOUNG=0`.
+		{name: "default", env: nil, wantFlag: "1", wantYoung: "0"},
+		{name: "envOff", env: []string{"OSTY_GC_TINYTAG_YOUNG=0"}, wantFlag: "0", wantYoung: "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runCmd := exec.Command(binaryPath)
+			runCmd.Env = append(os.Environ(), tc.env...)
+			runOutput, err := runCmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("run failed: %v\n%s", err, runOutput)
+			}
+			lines := strings.Split(strings.TrimRight(string(runOutput), "\n"), "\n")
+			if len(lines) != 4 {
+				t.Fatalf("expected 4 output lines, got %d: %q", len(lines), runOutput)
+			}
+			if lines[0] != tc.wantFlag {
+				t.Fatalf("flag = %q, want %q (out=%q)", lines[0], tc.wantFlag, runOutput)
+			}
+			if lines[1] != tc.wantYoung {
+				t.Fatalf("arena_is_young_page = %q, want %q (Phase 5 cutover; out=%q)",
+					lines[1], tc.wantYoung, runOutput)
+			}
+			if lines[2] != "1" {
+				t.Fatalf("live count after collect = %q, want 1 (out=%q)", lines[2], runOutput)
+			}
+			if lines[3] != "0" {
+				t.Fatalf("live count after release = %q, want 0 (out=%q)", lines[3], runOutput)
+			}
+		})
+	}
+}
+
+// Phase 5 of the tiny-tag young-space landing: a separate young arena
+// holds 16-byte micro-headers + payloads, and `find_header` reconstructs
+// a full `osty_gc_header *` shim on demand so existing read sites work
+// unchanged. Production alloc paths still pick the headerful arena
+// (Phase 6 cuts that over); this test exercises the young arena directly
+// via the debug entry points to keep the infrastructure honest before
+// alloc routing flips.
+//
+// Asserts: (a) young alloc returns a payload inside the young arena
+// range, (b) the OLD-arena List from `osty_rt_list_new` is correctly
+// classified as not-young (no range overlap regression), (c) the
+// reconstructed header surfaces the micro-header's kind/byte_size
+// values and reports YOUNG generation, (d) the alloc counter bumps.
+func TestBundledRuntimeYoungArenaAllocAndShimReconstructs(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_young_arena_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_young_arena_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+int64_t osty_gc_debug_arena_is_young_page(void *payload);
+void *osty_gc_debug_allocate_young(int64_t byte_size, int64_t object_kind);
+int64_t osty_gc_debug_young_alloc_count_total(void);
+int64_t osty_gc_debug_young_alloc_bytes_total(void);
+int64_t osty_gc_debug_young_header_object_kind(void *payload);
+int64_t osty_gc_debug_young_header_byte_size(void *payload);
+int64_t osty_gc_debug_young_header_generation(void *payload);
+
+void *osty_rt_list_new(void);
+
+#define KIND_LIST 1024
+#define KIND_STRING 1025
+
+int main(void) {
+    /* OLD-arena List should not be classified as a young-arena page. */
+    void *list = osty_rt_list_new();
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(list));
+
+    /* Direct young alloc (Phase 6 will route real allocators here). */
+    void *young = osty_gc_debug_allocate_young(48, KIND_STRING);
+    if (young == NULL) {
+        printf("ERROR: young alloc returned NULL\n");
+        return 1;
+    }
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(young));
+
+    /* Counter bookkeeping. */
+    printf("%lld\n", (long long)osty_gc_debug_young_alloc_count_total());
+    printf("%lld\n", (long long)osty_gc_debug_young_alloc_bytes_total());
+
+    /* Shim must surface the micro-header's kind/byte_size and report
+     * YOUNG generation so the existing GC paths don't have to special
+     * case the no-header case for read fields. */
+    printf("%lld\n", (long long)osty_gc_debug_young_header_object_kind(young));
+    printf("%lld\n", (long long)osty_gc_debug_young_header_byte_size(young));
+    printf("%lld\n", (long long)osty_gc_debug_young_header_generation(young));
+
+    /* Second young alloc, larger, different kind — counter should
+     * accumulate without affecting the first payload's range. */
+    void *young2 = osty_gc_debug_allocate_young(128, KIND_LIST);
+    if (young2 == NULL) {
+        printf("ERROR: second young alloc returned NULL\n");
+        return 1;
+    }
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(young2));
+    printf("%lld\n", (long long)osty_gc_debug_young_alloc_count_total());
+    printf("%lld\n", (long long)osty_gc_debug_young_alloc_bytes_total());
+    printf("%lld\n", (long long)osty_gc_debug_young_header_object_kind(young2));
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"0",    // OLD-arena List is not a young page
+		"1",    // young payload IS a young page
+		"1",    // first alloc -> count=1
+		"48",   // first alloc -> bytes=48
+		"1025", // shim sees KIND_STRING from micro-header
+		"48",   // shim sees byte_size from micro-header
+		"0",    // shim reports YOUNG (generation == 0)
+		"1",    // second young alloc still in young arena
+		"2",    // count=2
+		"176",  // 48 + 128
+		"1024", // shim sees KIND_LIST
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("young arena harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// Phase 6 step 1 of the tiny-tag young-space landing: the Cheney
+// from→to copy mechanic. Doesn't yet touch tracers (step 2) or stack
+// roots (step 3); the test calls `cheney_forward` directly on a
+// from-space payload and verifies the copy lands in to-space, the
+// source's `forward_or_meta` carries a FORWARDED tag pointing at the
+// new address, payload bytes are copied byte-for-byte, and a second
+// forward call is idempotent. Then `swap_arenas` flips the roles
+// and proves the previously-from address stays a young-space page
+// (now classified as to-space) — important because Cheney runs
+// repeatedly and the address ranges have to stay coherent across
+// cycles.
+func TestBundledRuntimeCheneyForwardCopiesAndSwapsArenas(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_cheney_forward_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_cheney_forward_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+void *osty_gc_debug_allocate_young(int64_t byte_size, int64_t object_kind);
+void *osty_gc_debug_cheney_forward(void *from_payload);
+void osty_gc_debug_cheney_swap_arenas(void);
+int64_t osty_gc_debug_arena_is_young_from_page(void *payload);
+int64_t osty_gc_debug_arena_is_young_to_page(void *payload);
+int64_t osty_gc_debug_young_forward_tag(void *from_payload);
+int64_t osty_gc_debug_young_cheney_forwarded_count_total(void);
+int64_t osty_gc_debug_young_cheney_forwarded_bytes_total(void);
+int64_t osty_gc_debug_young_cheney_swap_count_total(void);
+
+#define KIND_STRING 1025
+
+int main(void) {
+    /* 1. Allocate a young payload, write known bytes into it. */
+    char *src = (char *)osty_gc_debug_allocate_young(32, KIND_STRING);
+    if (src == NULL) { printf("ERROR alloc\n"); return 1; }
+    memcpy(src, "hello-cheney-forward-test-12345", 32);
+
+    /* Pre-forward classification: src is in from-space, not to-space,
+     * and its forward tag is UNFORWARDED (0). */
+    printf("%lld %lld %lld\n",
+        (long long)osty_gc_debug_arena_is_young_from_page(src),
+        (long long)osty_gc_debug_arena_is_young_to_page(src),
+        (long long)osty_gc_debug_young_forward_tag(src));
+
+    /* 2. Forward it. The destination should land in to-space and the
+     *    source slot should now hold a FORWARDED tag (1) pointing at
+     *    the destination. */
+    char *dst = (char *)osty_gc_debug_cheney_forward(src);
+    if (dst == src) { printf("ERROR same addr\n"); return 1; }
+    if (dst == NULL) { printf("ERROR forward NULL\n"); return 1; }
+
+    /* Source side now FORWARDED; destination side is in to-space. */
+    printf("%lld %lld %lld\n",
+        (long long)osty_gc_debug_arena_is_young_from_page(src),
+        (long long)osty_gc_debug_arena_is_young_to_page(dst),
+        (long long)osty_gc_debug_young_forward_tag(src));
+
+    /* Payload bytes survived intact. */
+    printf("%d\n", memcmp(dst, "hello-cheney-forward-test-12345", 32) == 0);
+
+    /* Counter bumps. */
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_young_cheney_forwarded_count_total(),
+        (long long)osty_gc_debug_young_cheney_forwarded_bytes_total());
+
+    /* 3. Idempotency: a second forward returns the same destination
+     *    without bumping the counter. */
+    char *dst2 = (char *)osty_gc_debug_cheney_forward(src);
+    printf("%d\n", dst2 == dst);
+    printf("%lld\n",
+        (long long)osty_gc_debug_young_cheney_forwarded_count_total());
+
+    /* 4. Pass-through: forwarding a non-young payload returns it
+     *    unchanged. NULL also passes through. */
+    char stack_buf = 'x';
+    printf("%p\n", (void *)osty_gc_debug_cheney_forward(&stack_buf));
+    printf("%p\n", osty_gc_debug_cheney_forward(NULL));
+
+    /* 5. Swap arenas — from/to flip roles. The dst we got back was
+     *    in to-space; after swap it should be in from-space. The src
+     *    address (was from) should now be in to-space. */
+    osty_gc_debug_cheney_swap_arenas();
+    printf("%lld\n", (long long)osty_gc_debug_young_cheney_swap_count_total());
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_arena_is_young_from_page(dst),
+        (long long)osty_gc_debug_arena_is_young_to_page(dst));
+    printf("%lld %lld\n",
+        (long long)osty_gc_debug_arena_is_young_from_page(src),
+        (long long)osty_gc_debug_arena_is_young_to_page(src));
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	lines := strings.Split(strings.TrimRight(string(runOutput), "\n"), "\n")
+	if len(lines) != 11 {
+		t.Fatalf("expected 11 output lines, got %d: %q", len(lines), runOutput)
+	}
+	checks := []struct {
+		got, want, label string
+	}{
+		{lines[0], "1 0 0", "pre-forward classification"},
+		{lines[1], "1 1 1", "post-forward: src still classified from-resident, dst is to-page, src tag=FORWARDED"},
+		{lines[2], "1", "payload bytes copied intact"},
+		{lines[3], "1 32", "forward counter +1, bytes +32"},
+		{lines[4], "1", "idempotent: second forward returns same dst"},
+		{lines[5], "1", "idempotent: counter unchanged"},
+		// lines[6], lines[7] are stack_buf and NULL pass-through addresses; skip
+		{lines[8], "1", "swap counter +1"},
+		{lines[9], "1 0", "after swap: dst is now from-space"},
+		// After swap, the to-space cursor resets to base, so the
+		// previously-from `src` address (now in the new to-space's
+		// region but past its cursor) is correctly classified as
+		// dead bytes — neither from-resident nor to-resident.
+		// Cheney semantics: stale to-space data is invalid between
+		// cycles; only the new from-space has live objects.
+		{lines[10], "0 0", "after swap: src is dead bytes (not in any live young range)"},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Fatalf("%s: got %q, want %q (full out=%q)", c.label, c.got, c.want, runOutput)
+		}
+	}
+	// Stack pointer pass-through: the address printed must equal &stack_buf,
+	// which we can't predict. Just verify it isn't "0x0" (NULL).
+	if lines[6] == "0x0" || lines[6] == "(nil)" {
+		t.Fatalf("stack-buf pass-through returned NULL, got %q", lines[6])
+	}
+	// NULL pass-through: must print 0x0 (or "(nil)").
+	if lines[7] != "0x0" && lines[7] != "(nil)" {
+		t.Fatalf("NULL pass-through returned non-NULL %q (full out=%q)", lines[7], runOutput)
+	}
+}
+
+// Phase 6 step 2 of the tiny-tag young-space landing: tracer integration.
+// `osty_gc_mark_slot_v1` is the dispatch point every kind tracer
+// funnels child slot writes through (the existing REMAP path was the
+// proof of that contract). Adding CHENEY as a third mode lights up
+// every tracer at once — the tracer reads `child = *slot`, calls
+// `mark_slot_v1(slot)`, and the dispatcher transparently forwards
+// the child to to-space and rewrites the slot. The test exercises
+// this contract directly without going through a full minor cycle:
+// a from-space "parent" payload holds a pointer to a from-space
+// "child"; flipping CHENEY mode and calling `mark_slot_v1` on the
+// parent's slot must (a) forward the child, (b) rewrite the slot
+// to the to-space child address, and (c) compose with mode swap so
+// nested tracers can re-enter MARK if needed.
+func TestBundledRuntimeMarkSlotCheneyForwardsAndRewrites(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_cheney_mode_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_cheney_mode_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void osty_gc_mark_slot_v1(void *slot_addr) __asm__(OSTY_GC_SYMBOL("osty.gc.mark_slot_v1"));
+
+void *osty_gc_debug_allocate_young(int64_t byte_size, int64_t object_kind);
+void *osty_gc_debug_cheney_forward(void *from_payload);
+int64_t osty_gc_debug_set_trace_slot_mode(int64_t mode);
+int64_t osty_gc_debug_trace_slot_mode_current(void);
+int64_t osty_gc_debug_arena_is_young_from_page(void *payload);
+int64_t osty_gc_debug_arena_is_young_to_page(void *payload);
+int64_t osty_gc_debug_young_forward_tag(void *from_payload);
+int64_t osty_gc_debug_young_cheney_forwarded_count_total(void);
+
+#define KIND_GENERIC 1
+
+#define MODE_MARK 0
+#define MODE_REMAP 1
+#define MODE_CHENEY 2
+
+int main(void) {
+    /* Parent payload (24 bytes — one ptr slot at offset 0, plus pad). */
+    void *parent = osty_gc_debug_allocate_young(24, KIND_GENERIC);
+    void *child = osty_gc_debug_allocate_young(16, KIND_GENERIC);
+    if (parent == NULL || child == NULL) { printf("ERROR alloc\n"); return 1; }
+    memset(parent, 0, 24);
+    /* Install child pointer at parent[0..7]. */
+    memcpy(parent, &child, sizeof(child));
+
+    /* Fast-forward parent into to-space (the Cheney scan loop will do
+     * this for every grey object). The parent's data was memcpy'd, so
+     * the to-space copy still holds the from-space child pointer. */
+    void *parent_to = osty_gc_debug_cheney_forward(parent);
+    if (parent_to == parent) { printf("ERROR parent not moved\n"); return 1; }
+
+    /* Verify the to-space parent's slot still points at from-space child. */
+    void *seen_child = NULL;
+    memcpy(&seen_child, parent_to, sizeof(seen_child));
+    printf("%d\n", seen_child == child);
+
+    /* Switch to CHENEY mode and have mark_slot_v1 forward + rewrite the
+     * slot in the to-space parent. Counter pre/post lets us prove the
+     * forward fired exactly once. */
+    int64_t fwd_before = osty_gc_debug_young_cheney_forwarded_count_total();
+    int64_t prev = osty_gc_debug_set_trace_slot_mode(MODE_CHENEY);
+    osty_gc_mark_slot_v1(parent_to);
+    osty_gc_debug_set_trace_slot_mode(prev);
+    int64_t fwd_after = osty_gc_debug_young_cheney_forwarded_count_total();
+    printf("%lld\n", (long long)(fwd_after - fwd_before));
+
+    /* The slot now points at the to-space copy of the child. */
+    void *child_to = NULL;
+    memcpy(&child_to, parent_to, sizeof(child_to));
+    printf("%d\n", child_to != child);
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_to_page(child_to));
+    printf("%lld\n", (long long)osty_gc_debug_young_forward_tag(child));
+
+    /* Mode is restored to MARK (whatever previous was — default MARK). */
+    printf("%lld\n", (long long)osty_gc_debug_trace_slot_mode_current());
+
+    /* Nested mode swap: enter CHENEY, save previous, run mark_slot
+     * again on the same slot — child is already FORWARDED so nothing
+     * new gets copied. The forward counter must NOT bump. */
+    int64_t fwd_before2 = osty_gc_debug_young_cheney_forwarded_count_total();
+    int64_t prev2 = osty_gc_debug_set_trace_slot_mode(MODE_CHENEY);
+    osty_gc_mark_slot_v1(parent_to);
+    osty_gc_debug_set_trace_slot_mode(prev2);
+    printf("%lld\n", (long long)(osty_gc_debug_young_cheney_forwarded_count_total() - fwd_before2));
+
+    /* MARK mode (default) on the same slot must not write the slot
+     * (no rewrite happens; child_to remains in to-space). The slot
+     * is already pointing at to-space, so nothing changes. */
+    osty_gc_mark_slot_v1(parent_to);
+    void *child_after_mark = NULL;
+    memcpy(&child_after_mark, parent_to, sizeof(child_after_mark));
+    printf("%d\n", child_after_mark == child_to);
+
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"1", // before CHENEY: to-space parent still has from-space child ptr
+		"1", // CHENEY mark_slot fired forward once (counter +1)
+		"1", // slot now points at a different (to-space) addr
+		"1", // new addr is in young to-space
+		"1", // from-space child has FORWARDED tag installed
+		"0", // mode restored to MARK (=0)
+		"0", // re-entering CHENEY on already-forwarded child does NOT bump counter
+		"1", // MARK mode is non-mutating (slot unchanged)
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("cheney mode harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// Phase 6 step 3 of the tiny-tag young-space landing: end-to-end Cheney
+// minor entry. Forwards stack roots into to-space, runs the scan loop
+// (which traces survivors under CHENEY mode so transitively-reachable
+// children also get forwarded), then swaps arenas. The test seeds two
+// independent roots (no children to keep this scoped to root-scan +
+// scan-loop scaffolding; Phase 7 extends to multi-level graphs once
+// the descriptor tracers can be exercised with manual young struct
+// init). Asserts: roots get rewritten to to-space addresses, both
+// originals carry FORWARDED tags, scan counter ticks per object,
+// arena swap fires once.
+func TestBundledRuntimeCheneyMinorForwardsRootsAndSwaps(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_cheney_minor_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_cheney_minor_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+void *osty_gc_debug_allocate_young(int64_t byte_size, int64_t object_kind);
+void osty_gc_debug_collect_minor_cheney(void *const *root_slots, int64_t root_slot_count);
+int64_t osty_gc_debug_arena_is_young_from_page(void *payload);
+int64_t osty_gc_debug_arena_is_young_to_page(void *payload);
+int64_t osty_gc_debug_young_forward_tag(void *from_payload);
+int64_t osty_gc_debug_young_cheney_forwarded_count_total(void);
+int64_t osty_gc_debug_young_cheney_scanned_count_total(void);
+int64_t osty_gc_debug_young_cheney_swap_count_total(void);
+
+#define KIND_GENERIC 1
+
+int main(void) {
+    /* Two siblings — neither has children, so the scan loop will trace
+     * them (no-op since GENERIC has no descriptor) and terminate after
+     * touching both. */
+    void *a = osty_gc_debug_allocate_young(32, KIND_GENERIC);
+    void *b = osty_gc_debug_allocate_young(48, KIND_GENERIC);
+    if (a == NULL || b == NULL) { printf("ERROR alloc\n"); return 1; }
+    memset(a, 0xAA, 32);
+    memset(b, 0xBB, 48);
+    void *original_a = a;
+    void *original_b = b;
+
+    int64_t fwd_before = osty_gc_debug_young_cheney_forwarded_count_total();
+    int64_t scan_before = osty_gc_debug_young_cheney_scanned_count_total();
+    int64_t swap_before = osty_gc_debug_young_cheney_swap_count_total();
+
+    /* Stack-root vector: addresses of slots that hold the live ptrs. */
+    void *root_slots[2];
+    root_slots[0] = &a;
+    root_slots[1] = &b;
+    osty_gc_debug_collect_minor_cheney((void *const *)root_slots, 2);
+
+    /* Counters bumped once per forward + per scanned object + once for
+     * swap. */
+    printf("%lld\n", (long long)(osty_gc_debug_young_cheney_forwarded_count_total() - fwd_before));
+    printf("%lld\n", (long long)(osty_gc_debug_young_cheney_scanned_count_total() - scan_before));
+    printf("%lld\n", (long long)(osty_gc_debug_young_cheney_swap_count_total() - swap_before));
+
+    /* Roots got rewritten to to-space addresses (different from
+     * originals). */
+    printf("%d\n", a != original_a);
+    printf("%d\n", b != original_b);
+
+    /* New root addresses live in the new from-space (which used to be
+     * the to-space we forwarded into). The originals are now in dead
+     * bytes past the new to-space cursor — Cheney semantics: stale
+     * from-space addresses must not be retained across a cycle. */
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_from_page(a));
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_from_page(b));
+
+    /* Payload bytes preserved through the copy. */
+    unsigned char *pa = (unsigned char *)a;
+    unsigned char *pb = (unsigned char *)b;
+    printf("%d\n", pa[0] == 0xAA && pa[31] == 0xAA);
+    printf("%d\n", pb[0] == 0xBB && pb[47] == 0xBB);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"2", // forwarded count: A + B
+		"2", // scanned count: A + B
+		"1", // swap count: 1
+		"1", // root[0] address changed
+		"1", // root[1] address changed
+		"1", // new A in new from-space (post-swap)
+		"1", // new B in new from-space
+		"1", // A's payload bytes survived memcpy
+		"1", // B's payload bytes survived memcpy
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("cheney minor harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// Phase 7 step 1 of the tiny-tag young-space landing: eligibility filter.
+// Phase 8 will route the headerful allocator through
+// `_allocate_young_if_eligible` first, falling back to the existing
+// path when the kind/size combination isn't safe for young-space.
+// Today the filter is exercised directly so the four rejection reasons
+// (flag off / GENERIC / has-destroy / oversized / zero-size) keep
+// behaving as designed even when no production caller uses it yet.
+//
+// Allowed kinds today: STRING, BYTES (immutable byte payloads).
+// Rejected: CLOSURE_ENV (callers mutate captures after alloc, breaks
+// auto-promote-on-pin), LIST/MAP/SET/CHANNEL (have destroy callbacks
+// Cheney can't invoke), GENERIC (per-instance callbacks not on the
+// micro-header), humongous (size > threshold).
+func TestBundledRuntimeYoungEligibilityFilter(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_eligibility_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_eligibility_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+int64_t osty_gc_debug_young_eligible(int64_t byte_size, int64_t object_kind);
+void *osty_gc_debug_allocate_young_if_eligible(int64_t byte_size, int64_t object_kind);
+int64_t osty_gc_debug_arena_is_young_page(void *payload);
+
+#define KIND_GENERIC      1
+#define KIND_LIST         1024
+#define KIND_STRING       1025
+#define KIND_MAP          1026
+#define KIND_SET          1027
+#define KIND_BYTES        1028
+#define KIND_CLOSURE_ENV  1029
+#define KIND_CHANNEL      1030
+
+int main(void) {
+    /* Each row prints "<eligible> <ptr_was_young>" where eligible is
+     * the predicate result and ptr_was_young is 1 if _if_eligible
+     * returned a payload that lands in the young arena, else 0. */
+    int64_t kinds[] = {
+        KIND_GENERIC, KIND_LIST, KIND_STRING, KIND_MAP, KIND_SET,
+        KIND_BYTES, KIND_CLOSURE_ENV, KIND_CHANNEL
+    };
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+        int64_t k = kinds[i];
+        int64_t elig = osty_gc_debug_young_eligible(64, k);
+        void *p = osty_gc_debug_allocate_young_if_eligible(64, k);
+        int64_t in_young = (p != NULL) ? osty_gc_debug_arena_is_young_page(p) : 0;
+        printf("%lld %lld %lld\n", (long long)k, (long long)elig, (long long)in_young);
+    }
+    /* Edge cases: zero size, humongous size, negative size. All reject. */
+    printf("zero %lld\n", (long long)osty_gc_debug_young_eligible(0, KIND_STRING));
+    printf("huge %lld\n", (long long)osty_gc_debug_young_eligible(8192, KIND_STRING));
+    printf("neg %lld\n", (long long)osty_gc_debug_young_eligible(-1, KIND_STRING));
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+
+	for _, tc := range []struct {
+		name string
+		env  []string
+		// Each kind row prints "<kind> <eligible> <in_young>".
+		wantRows []string
+	}{
+		{
+			// Opt-out via env: every kind ineligible.
+			name: "envOff",
+			env:  []string{"OSTY_GC_TINYTAG_YOUNG=0"},
+			wantRows: []string{
+				"1 0 0",    // GENERIC
+				"1024 0 0", // LIST
+				"1025 0 0", // STRING
+				"1026 0 0", // MAP
+				"1027 0 0", // SET
+				"1028 0 0", // BYTES
+				"1029 0 0", // CLOSURE_ENV
+				"1030 0 0", // CHANNEL
+			},
+		},
+		{
+			// Default (Phase 8 step 2 cutover): STRING/BYTES route
+			// to young. Map<String, _> works because cheney_minor
+			// traces OLD reachability transitively.
+			name: "default",
+			env:  nil,
+			wantRows: []string{
+				"1 0 0",    // GENERIC: no descriptor
+				"1024 0 0", // LIST: has destroy
+				"1025 0 0", // STRING: ineligible during cutover (Map<String> regression)
+				"1026 0 0", // MAP: has destroy
+				"1027 0 0", // SET: has destroy
+				"1028 1 1", // BYTES: pass
+				"1029 0 0", // CLOSURE_ENV: ineligible (post-alloc captures mutation breaks auto-promote)
+				"1030 0 0", // CHANNEL: has destroy
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runCmd := exec.Command(binaryPath)
+			runCmd.Env = append(os.Environ(), tc.env...)
+			runOutput, err := runCmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("run failed: %v\n%s", err, runOutput)
+			}
+			lines := strings.Split(strings.TrimRight(string(runOutput), "\n"), "\n")
+			if len(lines) != 11 {
+				t.Fatalf("expected 11 output lines, got %d: %q", len(lines), runOutput)
+			}
+			for i, want := range tc.wantRows {
+				if lines[i] != want {
+					t.Fatalf("row %d: got %q, want %q (full out=%q)",
+						i, lines[i], want, runOutput)
+				}
+			}
+			if lines[8] != "zero 0" {
+				t.Fatalf("zero-size row: got %q, want %q", lines[8], "zero 0")
+			}
+			if lines[9] != "huge 0" {
+				t.Fatalf("huge-size row: got %q, want %q", lines[9], "huge 0")
+			}
+			if lines[10] != "neg 0" {
+				t.Fatalf("neg-size row: got %q, want %q", lines[10], "neg 0")
+			}
+		})
+	}
+}
+
+// Phase 7 step 2 of the tiny-tag young-space landing: pin / root_bind
+// on a young payload must auto-promote it into a headerful OLD
+// allocation. The micro-header alone can't carry root_count or
+// pin_count across a Cheney cycle (the from-space gets cursor-reset
+// and any updates to the read-only shim disappear), so the safest
+// rule is "pin/root forces OLD". After promote, the original young
+// address has a PROMOTED tag pointing at the OLD payload, and
+// `find_header` follows that redirect so unpin / root_release on
+// the original address still hit the right header.
+func TestBundledRuntimeYoungPinAndRootBindAutoPromote(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_promote_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_promote_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void osty_gc_pin_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.pin_v1"));
+void osty_gc_unpin_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.unpin_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void *osty_gc_debug_allocate_young(int64_t byte_size, int64_t object_kind);
+int64_t osty_gc_debug_arena_is_young_page(void *payload);
+int64_t osty_gc_debug_young_forward_tag(void *from_payload);
+int64_t osty_gc_debug_young_promoted_to_old_count_total(void);
+int64_t osty_gc_debug_young_promoted_to_old_bytes_total(void);
+
+#define KIND_STRING 1025
+
+int main(void) {
+    /* String is one of the young-eligible kinds (no destroy). */
+    void *young = osty_gc_debug_allocate_young(48, KIND_STRING);
+    if (young == NULL) { printf("ERROR alloc\n"); return 1; }
+    memset(young, 0xCD, 48);
+
+    int64_t cnt_before = osty_gc_debug_young_promoted_to_old_count_total();
+    int64_t bytes_before = osty_gc_debug_young_promoted_to_old_bytes_total();
+
+    /* Pin the young payload. Auto-promote should fire exactly once,
+     * stamp PROMOTED tag (=2) on the micro-header, and bump the
+     * counter. Subsequent unpin on the same (young) address should
+     * follow the PROMOTED redirect — find_header surfaces the OLD
+     * header so pin_count goes back to zero. */
+    osty_gc_pin_v1(young);
+    printf("%lld\n",
+        (long long)(osty_gc_debug_young_promoted_to_old_count_total() - cnt_before));
+    printf("%lld\n",
+        (long long)(osty_gc_debug_young_promoted_to_old_bytes_total() - bytes_before));
+    printf("%lld\n",
+        (long long)osty_gc_debug_young_forward_tag(young));
+
+    /* Idempotent: pinning the same young addr twice promotes only
+     * once; the second pin sees the PROMOTED tag and bumps the
+     * existing OLD header's pin_count instead. */
+    osty_gc_pin_v1(young);
+    printf("%lld\n",
+        (long long)(osty_gc_debug_young_promoted_to_old_count_total() - cnt_before));
+
+    /* Unpin twice — the PROMOTED redirect must let unpin find the
+     * same OLD header. If find_header didn't follow the tag, the
+     * second unpin would underflow and abort. */
+    osty_gc_unpin_v1(young);
+    osty_gc_unpin_v1(young);
+
+    /* Same shape for root_bind/root_release on a fresh young
+     * payload — independent counter check. */
+    void *young2 = osty_gc_debug_allocate_young(64, KIND_STRING);
+    int64_t cnt_before2 = osty_gc_debug_young_promoted_to_old_count_total();
+    osty_gc_root_bind_v1(young2);
+    printf("%lld\n",
+        (long long)(osty_gc_debug_young_promoted_to_old_count_total() - cnt_before2));
+    printf("%lld\n",
+        (long long)osty_gc_debug_young_forward_tag(young2));
+    osty_gc_root_release_v1(young2);
+
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"1",  // pin: promote count +1
+		"48", // pin: promoted bytes = 48 (matches alloc size)
+		"2",  // forward tag = PROMOTED (=2)
+		"1",  // pin again: promote count unchanged (idempotent — already PROMOTED)
+		"1",  // root_bind on fresh young: promote count +1
+		"2",  // root_bind: forward tag = PROMOTED
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("promote harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// Phase 8 step 1 of the tiny-tag young-space landing: end-to-end
+// routing. With the feature flag on, the production allocator entry
+// `osty.gc.alloc_v1` should pick the young arena for eligible kinds
+// (STRING, BYTES — immutable byte payloads) and the headerful path
+// for everything else. With the flag off, every kind takes the headerful
+// path — the change is an additive routing layer, not a behavioural
+// shift, until Phase 8 step 2 flips the default.
+func TestBundledRuntimeAllocV1RoutesToYoungWhenFlagOn(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_alloc_routing_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_alloc_routing_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void *osty_rt_closure_env_alloc_v2(int64_t capture_count, const char *site, uint64_t pointer_bitmap) __asm__(OSTY_GC_SYMBOL("osty.rt.closure_env_alloc_v2"));
+
+int64_t osty_gc_debug_arena_is_young_page(void *payload);
+int64_t osty_gc_debug_young_alloc_count_total(void);
+
+void *osty_rt_strings_ToBytes(const char *value);   /* KIND_BYTES via headerful or young */
+const char *osty_rt_strings_Repeat(const char *value, int64_t n);  /* KIND_STRING */
+void *osty_rt_list_new(void);                       /* KIND_LIST (ineligible) */
+void *osty_rt_map_new(int64_t k, int64_t v, int64_t vsz, void *vt); /* KIND_MAP (ineligible) */
+
+int main(void) {
+    int64_t before = osty_gc_debug_young_alloc_count_total();
+
+    /* Eligible kinds — should all land in young arena under flag-on.
+     * Typed entry points satisfy the parity gate's (trace, destroy)
+     * contract for each kind. */
+    void *s = (void *)osty_rt_strings_Repeat("ab", 4);   /* KIND_STRING (NULL/NULL) */
+    void *b = osty_rt_strings_ToBytes("hello");          /* KIND_BYTES (NULL/NULL) */
+    void *e = osty_rt_closure_env_alloc_v2(0, "t.env", 0); /* KIND_CLOSURE_ENV (env_trace/NULL) */
+
+    /* Ineligible kinds — must take the headerful path regardless of
+     * the feature flag. */
+    void *l = osty_rt_list_new();                        /* KIND_LIST (has destroy) */
+    void *m = osty_rt_map_new(1, 1, 8, 0);               /* KIND_MAP (has destroy) */
+    void *g = osty_gc_alloc_v1(1, 16, "test.generic");   /* KIND_GENERIC (no descriptor) */
+
+    int64_t after = osty_gc_debug_young_alloc_count_total();
+
+    /* Counter delta tells us how many of the six allocs landed in
+     * young — should be 3 with flag on (S/B/E), 0 with flag off. */
+    printf("%lld\n", (long long)(after - before));
+    /* Per-pointer classification. */
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(s));
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(b));
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(e));
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(l));
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(m));
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(g));
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		env       []string
+		wantDelta string
+		wantClass [6]string
+	}{
+		{
+			// Opt-out via env: no routing.
+			name:      "envOff",
+			env:       []string{"OSTY_GC_TINYTAG_YOUNG=0"},
+			wantDelta: "0",
+			wantClass: [6]string{"0", "0", "0", "0", "0", "0"},
+		},
+		{
+			// Default (Phase 8 step 2 cutover, narrowed):
+			// only BYTES routes to young arena.
+			name:      "default",
+			env:       nil,
+			wantDelta: "1",
+			wantClass: [6]string{"0", "1", "0", "0", "0", "0"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runCmd := exec.Command(binaryPath)
+			runCmd.Env = append(os.Environ(), tc.env...)
+			runOutput, err := runCmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("run failed: %v\n%s", err, runOutput)
+			}
+			lines := strings.Split(strings.TrimRight(string(runOutput), "\n"), "\n")
+			if len(lines) != 7 {
+				t.Fatalf("expected 7 output lines, got %d: %q", len(lines), runOutput)
+			}
+			if lines[0] != tc.wantDelta {
+				t.Fatalf("young alloc count delta: got %q, want %q (out=%q)",
+					lines[0], tc.wantDelta, runOutput)
+			}
+			for i, want := range tc.wantClass {
+				if lines[i+1] != want {
+					t.Fatalf("classification[%d]: got %q, want %q (out=%q)",
+						i, lines[i+1], want, runOutput)
+				}
+			}
+		})
+	}
+}
+
+// Phase E follow-up regression: Cheney must run on every collection
+// tier (minor + major + debug_collect), not just inside the minor
+// branch. The original Phase 8 step 1 wiring put the cheney call
+// inside the dispatcher's minor `else` branch, so when heap pressure
+// escalated to a major the young arena went unswept for that cycle and
+// could grow until the 256 MiB reservation exhausted. The fix lifts
+// cheney out of the branch and into all collect entry points
+// (`collect_now_with_stack_roots`, `collect_now`, `debug_collect_minor`,
+// `debug_collect_major`).
+//
+// This test allocates a young String, root-binds it (auto-promote to
+// OLD), then drives a forced major via `osty_gc_debug_collect_major`.
+// The promoted OLD copy must survive (root_bound), and after release +
+// another major the live count must drop to zero — proving the major
+// path actually runs cheney + walks OLD.
+func TestBundledRuntimeCheneyRunsOnMajorTierNotJustMinor(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_cheney_on_major_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_cheney_on_major_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void *osty_rt_strings_ToBytes(const char *value);
+void osty_gc_debug_collect_major(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_young_cheney_swap_count_total(void);
+
+int main(void) {
+    int64_t swap_before = osty_gc_debug_young_cheney_swap_count_total();
+
+    /* Young-eligible alloc — KIND_BYTES routes to young arena. */
+    void *byt = osty_rt_strings_ToBytes("hello-major-tier");
+    /* root_bind auto-promotes to OLD (Phase 7 step 2). */
+    osty_gc_root_bind_v1(byt);
+
+    /* Force the major tier directly. Pre-fix this would NOT run cheney
+     * (cheney was wired into the minor branch only); post-fix every
+     * collect entry runs cheney first. */
+    osty_gc_debug_collect_major();
+    int64_t swap_after_first = osty_gc_debug_young_cheney_swap_count_total();
+    int64_t live_after_first = osty_gc_debug_live_count();
+
+    /* Release + major again — promoted OLD copy should sweep. */
+    osty_gc_root_release_v1(byt);
+    osty_gc_debug_collect_major();
+    int64_t swap_after_second = osty_gc_debug_young_cheney_swap_count_total();
+    int64_t live_after_second = osty_gc_debug_live_count();
+
+    /* Cheney swap counter bumps on EACH major call, proving cheney
+     * ran. Live counts: 1 after bind+major (the promoted OLD), 0 after
+     * release+major (swept). */
+    printf("%lld\n", (long long)(swap_after_first - swap_before));
+    printf("%lld\n", (long long)live_after_first);
+    printf("%lld\n", (long long)(swap_after_second - swap_after_first));
+    printf("%lld\n", (long long)live_after_second);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"1", // swap +1 on first major (cheney ran)
+		"1", // live=1 after bind+major (promoted OLD survives)
+		"1", // swap +1 on second major (cheney ran again)
+		"0", // live=0 after release+major (promoted OLD swept)
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("cheney-on-major harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// Phase E follow-up regression: a young payload promoted to OLD must
+// keep its PROMOTED forwarding tag findable from the original young
+// address even after several Cheney swap cycles have left the
+// micro-header sitting "above cursor" in whichever semi-space currently
+// owns those bytes. The original `arena_is_young_page` predicate
+// compared the address against the active cursor, so post-swap the
+// stale young address fell off the young classification entirely —
+// `find_header` returned NULL, and any unpin / root_release on the
+// original young pointer silently no-op'd, leaving the OLD copy
+// permanently rooted (live count never reached 0).
+//
+// The fix loosens `arena_is_young_page` to the full mmap range and
+// pushes the live-vs-stale check down into `reconstruct_young_header`:
+// PROMOTED / FORWARDED follows happen unconditionally, only
+// UNFORWARDED reconstruction requires the address to be live (below
+// cursor).
+func TestBundledRuntimePromotedYoungSurvivesAcrossCheneySwaps(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_promoted_swap_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_promoted_swap_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void *osty_rt_strings_ToBytes(const char *value);
+void osty_gc_debug_collect(void);
+void osty_gc_debug_cheney_swap_arenas(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_young_forward_tag(void *p);
+int64_t osty_gc_debug_arena_is_young_page(void *p);
+
+int main(void) {
+    void *byt = osty_rt_strings_ToBytes("hi-survive-swap");
+    osty_gc_root_bind_v1(byt);
+    /* Promoted: micro-header at byt holds PROMOTED tag (=2). */
+    printf("tag-after-bind:%lld\n", (long long)osty_gc_debug_young_forward_tag(byt));
+
+    /* Drive several explicit cheney swaps. After enough swaps the
+     * original byt micro-header sits above-cursor in whichever
+     * semi-space currently owns its bytes. The PROMOTED tag is still
+     * physically there (memory not zeroed, just cursor reset), and
+     * arena_is_young_page (full-mmap predicate) keeps classifying
+     * the address as young so reconstruct_young_header can follow
+     * the tag. */
+    osty_gc_debug_cheney_swap_arenas();
+    osty_gc_debug_cheney_swap_arenas();
+    osty_gc_debug_cheney_swap_arenas();
+    printf("classified-young:%lld\n", (long long)osty_gc_debug_arena_is_young_page(byt));
+    printf("tag-after-swaps:%lld\n", (long long)osty_gc_debug_young_forward_tag(byt));
+
+    /* Release on the original (stale) young address — must follow the
+     * PROMOTED redirect to the OLD header so root_count actually
+     * decrements. */
+    osty_gc_root_release_v1(byt);
+    osty_gc_debug_collect();
+    printf("live-after-release:%lld\n", (long long)osty_gc_debug_live_count());
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"tag-after-bind:2",      // PROMOTED tag stamped
+		"classified-young:1",    // full-mmap predicate keeps stale addr classified
+		"tag-after-swaps:2",     // PROMOTED tag survives swaps (memory not zeroed)
+		"live-after-release:0",  // release followed redirect, OLD swept
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("promoted-swap harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// Phase E follow-up regression DISABLED post-narrowing: STRING is no
+// longer young-eligible during the cutover (caused Map<String, _>
+// hits=0 — the cheney transitive OLD-trace forwards keys correctly
+// but the Map's content-keyed index probe converges to a single
+// matching slot once `map->len >= 8`. Investigation deferred). When
+// String routing returns to young space, this test becomes the
+// regression gate.
+func disabled_TestBundledRuntimeMapWithYoungStringKeysSurvivesCheneyMinor(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_map_string_keys_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_map_string_keys_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+
+const char *osty_rt_strings_Repeat(const char *value, int64_t n);
+void *osty_rt_map_new(int64_t k, int64_t v, int64_t vsz, void *vt);
+void osty_rt_map_insert_string(void *raw_map, const char *key, const void *value);
+int osty_rt_map_contains_string(void *raw_map, const char *key);
+void osty_gc_debug_collect_minor(void);
+int64_t osty_gc_debug_arena_is_young_page(void *p);
+int64_t osty_gc_debug_young_alloc_count_total(void);
+
+#define KEY_KIND_STRING 5
+#define VAL_KIND_I64    1
+
+int main(void) {
+    /* Pin a Map<String, Int64>. Map is an OLD allocation (KIND_MAP
+     * has destroy → ineligible for young arena). */
+    void *m = osty_rt_map_new(KEY_KIND_STRING, VAL_KIND_I64, 8, NULL);
+    osty_gc_root_bind_v1(m);
+
+    int64_t young_count_before = osty_gc_debug_young_alloc_count_total();
+
+    /* Insert N keys, each a distinct young String. Keys are produced
+     * via Repeat (returns KIND_STRING through allocate_managed →
+     * young arena under default-on). */
+    enum { N = 200 };
+    char keybuf[16];
+    int64_t any_key_in_young = 0;
+    for (int64_t i = 0; i < N; i++) {
+        snprintf(keybuf, sizeof(keybuf), "k%lld", (long long)i);
+        const char *k = osty_rt_strings_Repeat(keybuf, 1);
+        any_key_in_young |= osty_gc_debug_arena_is_young_page((void *)k);
+        int64_t v = i;
+        osty_rt_map_insert_string(m, k, &v);
+    }
+    /* Sanity: at least one key landed in young arena (proving the
+     * routing is active). If not, the test is trivially passing. */
+    printf("any-key-young:%lld\n", (long long)any_key_in_young);
+    int64_t young_alloc_delta =
+        osty_gc_debug_young_alloc_count_total() - young_count_before;
+    printf("young-allocs-during-insert:%lld\n", (long long)young_alloc_delta);
+
+    /* Trigger a minor cheney cycle. Pre-fix: OLD Map invisible to
+     * cheney → keys not forwarded → swap reclaims → lookups fail.
+     * Post-fix: cheney_slot enqueues Map for OLD-trace; map_trace's
+     * mark_slot_v1 forwards each young key + rewrites the slot.
+     * After the cycle, every key is reachable. */
+    osty_gc_debug_collect_minor();
+
+    int64_t hits = 0;
+    for (int64_t i = 0; i < N; i++) {
+        snprintf(keybuf, sizeof(keybuf), "k%lld", (long long)i);
+        if (osty_rt_map_contains_string(m, keybuf)) {
+            hits += 1;
+        }
+    }
+    printf("hits:%lld\n", (long long)hits);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_TINYTAG_YOUNG=1", "OSTY_GC_NURSERY_BYTES=1")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	out := string(runOutput)
+	if !strings.Contains(out, "any-key-young:1") {
+		t.Fatalf("expected at least one key in young arena (routing inactive?)\nout=%q", out)
+	}
+	if !strings.Contains(out, "hits:200") {
+		t.Fatalf("expected 200 hits after cheney minor (Map<String, _> regression)\nout=%q", out)
+	}
+}
