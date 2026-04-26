@@ -5531,7 +5531,30 @@ const char *osty_rt_int_to_string(int64_t value) {
     if (written < 0) {
         osty_rt_abort("failed to format Int as String");
     }
-    return osty_rt_string_dup_site(buffer, (size_t)written, "runtime.int.to_string");
+    /* SSO output: ≤7-byte results pack into the pointer tag bits and
+     * skip the GC alloc entirely. That covers most realistic ranges:
+     * unsigned 0..9999999 (7 digits), signed -999999..9999999, and
+     * 6-digit-bounded counters typical for IDs / row indices /
+     * timestamp seconds-since-launch. Larger magnitudes (≥ 10⁷ unsigned,
+     * negative ≥ 10⁶) fall back to the heap path automatically.
+     *
+     * The output flows safely into every existing caller because every
+     * String consumer in the runtime is SSO-aware: `osty_rt_io_write`
+     * decodes via `osty_rt_string_decode_to_buf_if_inline` before
+     * `fputs`, `osty_rt_strings_Concat`/`ConcatN` use
+     * `osty_rt_string_copy_bytes` which branches on the SSO tag,
+     * `osty_rt_string_hash`/`_compare_bytes`/`_measure` all decode SSO,
+     * and Map/Set String key paths read through the same `_measure` /
+     * `_equal_bytes` helpers. Only direct `fputs(p)` / `printf("%s", p)`
+     * with the raw pointer would crash, and the runtime emits no such
+     * site (everything routes through `osty_rt_io_write`).
+     *
+     * Hot win: big-map's per-iteration `m.insert("key:" + i.toString(), i)`
+     * was paying one `osty_gc_allocate_managed(...STRING)` per
+     * Int.toString call — at 200K inserts + 1M lookups that's 1.2M
+     * allocations now skipped. The Concat call still allocates the
+     * combined `"key:N"` string, but the per-toString alloc is gone. */
+    return osty_rt_string_dup_site_sso(buffer, (size_t)written, "runtime.int.to_string");
 }
 
 /* Monotonic-clock sample in nanoseconds, exported for the benchmark
@@ -5633,10 +5656,14 @@ int64_t osty_rt_bench_target_ns(void) {
 }
 
 const char *osty_rt_bool_to_string(bool value) {
+    /* "true" (4 bytes) and "false" (5 bytes) both fit in the 7-byte
+     * SSO budget. Sibling rationale to `osty_rt_int_to_string`: every
+     * runtime caller is SSO-aware, no libc-direct sites exist, the
+     * pointer tag carries the bytes inline so the GC alloc disappears. */
     if (value) {
-        return osty_rt_string_dup_site("true", 4, "runtime.bool.to_string");
+        return osty_rt_string_dup_site_sso("true", 4, "runtime.bool.to_string");
     }
-    return osty_rt_string_dup_site("false", 5, "runtime.bool.to_string");
+    return osty_rt_string_dup_site_sso("false", 5, "runtime.bool.to_string");
 }
 
 const char *osty_rt_char_to_string(int32_t codepoint) {
@@ -5668,31 +5695,43 @@ const char *osty_rt_char_to_string(int32_t codepoint) {
         buffer[2] = 0xBDU;
         len = 3;
     }
-    return osty_rt_string_dup_site((const char *)buffer, len, "runtime.char.to_string");
+    /* Char.toString output is always 1-4 UTF-8 bytes (REPLACEMENT
+     * CHAR is 3 bytes), well within the 7-byte SSO budget. Same SSO
+     * safety story as `osty_rt_int_to_string`: every consumer of the
+     * returned String routes through SSO-aware decoders. */
+    return osty_rt_string_dup_site_sso((const char *)buffer, len, "runtime.char.to_string");
 }
 
 const char *osty_rt_byte_to_string(int8_t value) {
     unsigned char byte = (unsigned char)value;
-    return osty_rt_string_dup_site((const char *)&byte, 1, "runtime.byte.to_string");
+    /* 1-byte payload — trivially SSO-eligible. */
+    return osty_rt_string_dup_site_sso((const char *)&byte, 1, "runtime.byte.to_string");
 }
 
 const char *osty_rt_float_to_string(double value) {
     char buffer[64];
 
+    /* Sentinel strings ("NaN", "-Inf", "+Inf") all fit in SSO. */
     if (isnan(value)) {
-        return osty_rt_string_dup_site("NaN", 3, "runtime.float.to_string");
+        return osty_rt_string_dup_site_sso("NaN", 3, "runtime.float.to_string");
     }
     if (isinf(value)) {
         if (value < 0) {
-            return osty_rt_string_dup_site("-Inf", 4, "runtime.float.to_string");
+            return osty_rt_string_dup_site_sso("-Inf", 4, "runtime.float.to_string");
         }
-        return osty_rt_string_dup_site("+Inf", 4, "runtime.float.to_string");
+        return osty_rt_string_dup_site_sso("+Inf", 4, "runtime.float.to_string");
     }
 
     if (snprintf(buffer, sizeof(buffer), "%.6f", value) < 0) {
         osty_rt_abort("failed to format Float as String");
     }
-    return osty_rt_string_dup_site(buffer, strlen(buffer), "runtime.float.to_string");
+    /* `%.6f` for typical values produces 8+ chars (e.g. "0.000000",
+     * "1.234567"), which exceeds the 7-byte SSO budget. `_sso` handles
+     * that gracefully by falling back to the heap path; the no-cost
+     * branch only triggers for tiny outputs (currently unreachable
+     * with `%.6f` but cheap insurance against future format changes
+     * like compact "1e3" / "0" representations). */
+    return osty_rt_string_dup_site_sso(buffer, strlen(buffer), "runtime.float.to_string");
 }
 
 int64_t osty_rt_strings_Compare(const char *left, const char *right) {
