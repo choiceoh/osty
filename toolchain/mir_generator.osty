@@ -8715,3 +8715,1329 @@ pub fn mirRtJsonSymbol(suffix: String) -> String {
 pub fn mirRtFmtSymbol(suffix: String) -> String {
     "osty_rt_fmt_" + suffix
 }
+
+/// §7 emit-pass per-block helpers — the pieces of code that the
+/// mid-level emitter writes once per basic-block.
+
+/// mirBlockSeparatorComment renders a canonical inter-block divider
+/// comment: `; ---- next block ----\n`.
+pub fn mirBlockSeparatorComment() -> String {
+    "; ---- next block ----\n"
+}
+
+/// mirBlockTraceLine renders a per-block trace comment.
+pub fn mirBlockTraceLine(blockId: String, kind: String) -> String {
+    "; block " + blockId + " (" + kind + ")\n"
+}
+
+/// mirInstrTraceLine renders a per-instruction trace comment.
+pub fn mirInstrTraceLine(kind: String, line: String, col: String) -> String {
+    "; " + kind + " at " + line + ":" + col + "\n"
+}
+
+/// §7 LLVM-text predicate composers (without leading indent / SSA
+/// assignment — used at sites that thread the predicate as a value
+/// into a select / extract chain).
+
+/// mirPredI64Eq composes `icmp eq i64 <a>, <b>`.
+pub fn mirPredI64Eq(a: String, b: String) -> String {
+    mirInstrICmp() + " " + mirICmpEq() + " " + mirTypeI64() + " " + a + ", " + b
+}
+
+/// mirPredI64Ne composes the inequality predicate.
+pub fn mirPredI64Ne(a: String, b: String) -> String {
+    mirInstrICmp() + " " + mirICmpNe() + " " + mirTypeI64() + " " + a + ", " + b
+}
+
+/// mirPredPtrEq composes the ptr-typed equality predicate.
+pub fn mirPredPtrEq(a: String, b: String) -> String {
+    mirInstrICmp() + " " + mirICmpEq() + " " + mirTypePtr() + " " + a + ", " + b
+}
+
+/// mirPredPtrNe composes the ptr-typed inequality predicate.
+pub fn mirPredPtrNe(a: String, b: String) -> String {
+    mirInstrICmp() + " " + mirICmpNe() + " " + mirTypePtr() + " " + a + ", " + b
+}
+
+/// mirPredI1Eq composes the i1 equality predicate.
+pub fn mirPredI1Eq(a: String, b: String) -> String {
+    mirInstrICmp() + " " + mirICmpEq() + " " + mirTypeI1() + " " + a + ", " + b
+}
+
+/// §7 typed-store / typed-load shapes with `!alias.scope` metadata.
+
+/// mirStoreI64WithAliasScopeLine renders the alias-scope-tagged i64
+/// store.
+pub fn mirStoreI64WithAliasScopeLine(val: String, slot: String, scopeRef: String) -> String {
+    "  " + mirInstrStore() + " i64 " + val + ", ptr " + slot + ", !alias.scope " + scopeRef + "\n"
+}
+
+/// mirStoreDoubleWithAliasScopeLine renders the alias-scope-tagged
+/// double store.
+pub fn mirStoreDoubleWithAliasScopeLine(val: String, slot: String, scopeRef: String) -> String {
+    "  " + mirInstrStore() + " double " + val + ", ptr " + slot + ", !alias.scope " + scopeRef + "\n"
+}
+
+/// mirStorePtrWithAliasScopeLine renders the alias-scope-tagged ptr
+/// store.
+pub fn mirStorePtrWithAliasScopeLine(val: String, slot: String, scopeRef: String) -> String {
+    "  " + mirInstrStore() + " ptr " + val + ", ptr " + slot + ", !alias.scope " + scopeRef + "\n"
+}
+
+/// mirLoadI64WithAliasScopeLine renders the alias-scope-tagged i64
+/// load.
+pub fn mirLoadI64WithAliasScopeLine(reg: String, slot: String, scopeRef: String) -> String {
+    "  " + reg + " = " + mirInstrLoad() + " i64, ptr " + slot + ", !alias.scope " + scopeRef + "\n"
+}
+
+/// mirLoadDoubleWithAliasScopeLine renders the alias-scope-tagged
+/// double load.
+pub fn mirLoadDoubleWithAliasScopeLine(reg: String, slot: String, scopeRef: String) -> String {
+    "  " + reg + " = " + mirInstrLoad() + " double, ptr " + slot + ", !alias.scope " + scopeRef + "\n"
+}
+
+/// mirLoadPtrWithAliasScopeLine renders the alias-scope-tagged ptr
+/// load.
+pub fn mirLoadPtrWithAliasScopeLine(reg: String, slot: String, scopeRef: String) -> String {
+    "  " + reg + " = " + mirInstrLoad() + " ptr, ptr " + slot + ", !alias.scope " + scopeRef + "\n"
+}
+
+/// §7 typed-store / typed-load shapes with `!noalias` metadata.
+
+/// mirStoreI64WithNoAliasLine renders the noalias-tagged i64 store.
+pub fn mirStoreI64WithNoAliasLine(val: String, slot: String, ref: String) -> String {
+    "  " + mirInstrStore() + " i64 " + val + ", ptr " + slot + ", !noalias " + ref + "\n"
+}
+
+/// mirStorePtrWithNoAliasLine renders the noalias-tagged ptr store.
+pub fn mirStorePtrWithNoAliasLine(val: String, slot: String, ref: String) -> String {
+    "  " + mirInstrStore() + " ptr " + val + ", ptr " + slot + ", !noalias " + ref + "\n"
+}
+
+/// mirLoadI64WithNoAliasLine renders the noalias-tagged i64 load.
+pub fn mirLoadI64WithNoAliasLine(reg: String, slot: String, ref: String) -> String {
+    "  " + reg + " = " + mirInstrLoad() + " i64, ptr " + slot + ", !noalias " + ref + "\n"
+}
+
+/// mirLoadPtrWithNoAliasLine renders the noalias-tagged ptr load.
+pub fn mirLoadPtrWithNoAliasLine(reg: String, slot: String, ref: String) -> String {
+    "  " + reg + " = " + mirInstrLoad() + " ptr, ptr " + slot + ", !noalias " + ref + "\n"
+}
+
+/// §7 LLVM `!llvm.access.group` — composite metadata for parallel
+/// loops (per v0.6 A6 `#[parallel]`).
+
+/// mirLLVMAccessGroupRef renders the canonical `!access_group <ref>`
+/// metadata attachment.
+pub fn mirLLVMAccessGroupRef(ref: String) -> String {
+    "!access_group " + ref
+}
+
+/// mirStoreI64WithAccessGroupLine renders the access-group-tagged
+/// i64 store.
+pub fn mirStoreI64WithAccessGroupLine(val: String, slot: String, ref: String) -> String {
+    "  " + mirInstrStore() + " i64 " + val + ", ptr " + slot + ", !access_group " + ref + "\n"
+}
+
+/// mirStoreDoubleWithAccessGroupLine renders the access-group-tagged
+/// double store.
+pub fn mirStoreDoubleWithAccessGroupLine(val: String, slot: String, ref: String) -> String {
+    "  " + mirInstrStore() + " double " + val + ", ptr " + slot + ", !access_group " + ref + "\n"
+}
+
+/// mirLoadI64WithAccessGroupLine renders the access-group-tagged i64
+/// load.
+pub fn mirLoadI64WithAccessGroupLine(reg: String, slot: String, ref: String) -> String {
+    "  " + reg + " = " + mirInstrLoad() + " i64, ptr " + slot + ", !access_group " + ref + "\n"
+}
+
+/// mirLoadDoubleWithAccessGroupLine renders the access-group-tagged
+/// double load.
+pub fn mirLoadDoubleWithAccessGroupLine(reg: String, slot: String, ref: String) -> String {
+    "  " + reg + " = " + mirInstrLoad() + " double, ptr " + slot + ", !access_group " + ref + "\n"
+}
+
+/// §7 fixed-symbol composers — drain the inline `"osty_rt_*"` literal
+/// references at runtime-symbol declaration sites.
+
+/// mirRtListOOBAbortSymbol returns `osty_rt_list_oob_abort_v1`.
+pub fn mirRtListOOBAbortSymbol() -> String {
+    mirRtListSymbol("oob_abort_v1")
+}
+
+/// mirRtListPopDiscardSymbol returns `osty_rt_list_pop_discard`.
+pub fn mirRtListPopDiscardSymbol() -> String {
+    mirRtListSymbol("pop_discard")
+}
+
+/// mirRtListIsEmptySymbol returns `osty_rt_list_is_empty`.
+pub fn mirRtListIsEmptySymbol() -> String {
+    mirRtListSymbol("is_empty")
+}
+
+/// mirRtListLenSymbolName returns `osty_rt_list_len`.
+pub fn mirRtListLenSymbolName() -> String {
+    mirRtListSymbol("len")
+}
+
+/// mirRtListReverseSymbol / ReversedSymbol return the reverse-runtime
+/// symbol names.
+pub fn mirRtListReverseSymbol() -> String {
+    mirRtListSymbol("reverse")
+}
+
+pub fn mirRtListReversedSymbol() -> String {
+    mirRtListSymbol("reversed")
+}
+
+/// mirRtListClearSymbol returns `osty_rt_list_clear`.
+pub fn mirRtListClearSymbol() -> String {
+    mirRtListSymbol("clear")
+}
+
+/// mirRtListRemoveAtDiscardSymbol returns `osty_rt_list_remove_at_discard`.
+pub fn mirRtListRemoveAtDiscardSymbol() -> String {
+    mirRtListSymbol("remove_at_discard")
+}
+
+/// mirRtMapNewSymbol returns `osty_rt_map_new`.
+pub fn mirRtMapNewSymbol() -> String {
+    mirRtMapSymbol("new")
+}
+
+/// mirRtMapClearSymbol returns `osty_rt_map_clear`.
+pub fn mirRtMapClearSymbol() -> String {
+    mirRtMapSymbol("clear")
+}
+
+/// mirRtMapLenSymbolName returns `osty_rt_map_len`.
+pub fn mirRtMapLenSymbolName() -> String {
+    mirRtMapSymbol("len")
+}
+
+/// mirRtMapValuesSymbol / EntriesSymbol / MergeWithSymbol — iteration
+/// / merge entry-point names.
+pub fn mirRtMapValuesSymbol() -> String {
+    mirRtMapSymbol("values")
+}
+
+pub fn mirRtMapEntriesSymbol() -> String {
+    mirRtMapSymbol("entries")
+}
+
+pub fn mirRtMapMergeWithSymbol() -> String {
+    mirRtMapSymbol("merge_with")
+}
+
+/// mirRtSetClearSymbol / LenSymbolName / ToListSymbol — Set-runtime
+/// symbol names.
+pub fn mirRtSetClearSymbol() -> String {
+    mirRtSetSymbol("clear")
+}
+
+pub fn mirRtSetLenSymbolName() -> String {
+    mirRtSetSymbol("len")
+}
+
+pub fn mirRtSetToListSymbol() -> String {
+    mirRtSetSymbol("to_list")
+}
+
+/// mirRtBytesLenSymbolName / IsEmptySymbol / GetSymbol — Bytes-runtime
+/// symbol names.
+pub fn mirRtBytesLenSymbolName() -> String {
+    mirRtBytesSymbol("len")
+}
+
+pub fn mirRtBytesIsEmptySymbol() -> String {
+    mirRtBytesSymbol("is_empty")
+}
+
+pub fn mirRtBytesGetSymbol() -> String {
+    mirRtBytesSymbol("get")
+}
+
+/// mirRtStringConcatSymbol / ConcatNSymbol / DiffLinesSymbol —
+/// String-runtime symbol names.
+pub fn mirRtStringConcatSymbol() -> String {
+    mirRtStringSymbol("Concat")
+}
+
+pub fn mirRtStringConcatNSymbol() -> String {
+    mirRtStringSymbol("ConcatN")
+}
+
+pub fn mirRtStringDiffLinesSymbol() -> String {
+    mirRtStringSymbol("DiffLines")
+}
+
+/// mirRtCancelCheckCancelledSymbol / IsCancelledSymbol / CancelSymbol
+/// — cancellation runtime symbol names.
+pub fn mirRtCancelCheckCancelledSymbol() -> String {
+    mirRtCancelSymbol("check_cancelled")
+}
+
+pub fn mirRtCancelIsCancelledSymbol() -> String {
+    mirRtCancelSymbol("is_cancelled")
+}
+
+pub fn mirRtCancelCancelSymbol() -> String {
+    mirRtCancelSymbol("cancel")
+}
+
+/// mirRtChanCloseSymbol / RecvSymbol / SendSymbolName — channel
+/// runtime symbol names.
+pub fn mirRtChanCloseSymbol() -> String {
+    mirRtChanSymbol("close")
+}
+
+pub fn mirRtChanRecvSymbol() -> String {
+    mirRtChanSymbol("recv")
+}
+
+pub fn mirRtChanSendSymbolName() -> String {
+    mirRtChanSymbol("send")
+}
+
+/// mirRtThreadYieldSymbol / SleepSymbol / SpawnSymbol — thread-
+/// runtime symbol names.
+pub fn mirRtThreadYieldSymbol() -> String {
+    mirRtThreadSymbol("yield")
+}
+
+pub fn mirRtThreadSleepSymbol() -> String {
+    mirRtThreadSymbol("sleep")
+}
+
+pub fn mirRtThreadSpawnSymbol() -> String {
+    mirRtThreadSymbol("spawn")
+}
+
+/// mirRtBenchNowNanosSymbol / TargetNsSymbol — bench-harness runtime
+/// symbol names.
+pub fn mirRtBenchNowNanosSymbol() -> String {
+    mirRtBenchSymbol("now_nanos")
+}
+
+pub fn mirRtBenchTargetNsSymbol() -> String {
+    mirRtBenchSymbol("target_ns")
+}
+
+/// mirRtTestSnapshotSymbol / AbortSymbol / ContextEnterSymbol /
+/// ContextExitSymbol / ExpectOkSymbol / ExpectErrorSymbol — test-
+/// harness runtime symbol names.
+pub fn mirRtTestSnapshotSymbol() -> String {
+    mirRtTestSymbol("snapshot")
+}
+
+pub fn mirRtTestAbortSymbol() -> String {
+    mirRtTestSymbol("abort")
+}
+
+pub fn mirRtTestContextEnterSymbol() -> String {
+    mirRtTestSymbol("context_enter")
+}
+
+pub fn mirRtTestContextExitSymbol() -> String {
+    mirRtTestSymbol("context_exit")
+}
+
+pub fn mirRtTestExpectOkSymbol() -> String {
+    mirRtTestSymbol("expect_ok")
+}
+
+pub fn mirRtTestExpectErrorSymbol() -> String {
+    mirRtTestSymbol("expect_error")
+}
+
+/// mirRtPanicSymbol / mirRtUnreachableSymbol / mirRtTodoSymbol /
+/// mirRtAbortSymbol — bare runtime symbols.
+pub fn mirRtPanicSymbol() -> String {
+    mirRtSymbol("panic")
+}
+
+pub fn mirRtUnreachableSymbol() -> String {
+    mirRtSymbol("unreachable")
+}
+
+pub fn mirRtTodoSymbol() -> String {
+    mirRtSymbol("todo")
+}
+
+pub fn mirRtAbortSymbol() -> String {
+    mirRtSymbol("abort")
+}
+
+/// mirRtOptionUnwrapNoneSymbol / mirRtResultUnwrapErrSymbol /
+/// mirRtExpectFailedSymbol — option / result panic-helper symbols.
+pub fn mirRtOptionUnwrapNoneSymbol() -> String {
+    mirRtSymbol("option_unwrap_none")
+}
+
+pub fn mirRtResultUnwrapErrSymbol() -> String {
+    mirRtSymbol("result_unwrap_err")
+}
+
+pub fn mirRtExpectFailedSymbol() -> String {
+    mirRtSymbol("expect_failed")
+}
+
+/// mirRtIntToStringSymbol / FloatToStringSymbol / BoolToStringSymbol /
+/// CharToStringSymbol / ByteToStringSymbol / ListPrimitiveToStringSymbol
+/// — to-string runtime symbol names.
+pub fn mirRtIntToStringSymbol() -> String {
+    mirRtSymbol("int_to_string")
+}
+
+pub fn mirRtFloatToStringSymbol() -> String {
+    mirRtSymbol("float_to_string")
+}
+
+pub fn mirRtBoolToStringSymbol() -> String {
+    mirRtSymbol("bool_to_string")
+}
+
+pub fn mirRtCharToStringSymbol() -> String {
+    mirRtSymbol("char_to_string")
+}
+
+pub fn mirRtByteToStringSymbol() -> String {
+    mirRtSymbol("byte_to_string")
+}
+
+pub fn mirRtListPrimitiveToStringSymbol() -> String {
+    mirRtListSymbol("primitive_to_string")
+}
+
+/// mirRtParallelSymbol / RaceSymbol — structured-concurrency runtime
+/// symbol names.
+pub fn mirRtParallelSymbol() -> String {
+    mirRtSymbol("parallel")
+}
+
+pub fn mirRtRaceSymbol() -> String {
+    mirRtSymbol("race")
+}
+
+/// mirRtTaskGroupRootSymbol returns `osty_rt_task_group` — the
+/// canonical task-group factory symbol (different from the
+/// namespace-prefixed `mirRtTaskGroupSymbol(suffix)` composer).
+pub fn mirRtTaskGroupRootSymbol() -> String {
+    mirRtSymbol("task_group")
+}
+
+/// §7 LLVM-text type-text composers (semantic aliases for the
+/// existing aggregate-type tokens; named for the call-site context).
+
+/// mirListTypeText composes the LLVM-text List<T> handle type.
+pub fn mirListTypeText() -> String {
+    mirTypePtr()
+}
+
+/// mirMapTypeText composes the LLVM-text Map<K,V> handle type.
+pub fn mirMapTypeText() -> String {
+    mirTypePtr()
+}
+
+/// mirSetTypeText composes the LLVM-text Set<T> handle type.
+pub fn mirSetTypeText() -> String {
+    mirTypePtr()
+}
+
+/// mirOptionTypeTextScalar / mirOptionTypeTextPtr — Option aggregate
+/// variant aliases.
+pub fn mirOptionTypeTextScalar() -> String {
+    mirOptionAggregateType()
+}
+
+pub fn mirOptionTypeTextPtr() -> String {
+    mirOptionPtrAggregateType()
+}
+
+/// mirResultTypeTextScalar / mirResultTypeTextPtr — Result aggregate
+/// variant aliases.
+pub fn mirResultTypeTextScalar() -> String {
+    mirOptionAggregateType()
+}
+
+pub fn mirResultTypeTextPtr() -> String {
+    mirOptionPtrAggregateType()
+}
+
+/// §7 LLVM-text discriminant probe / payload-extract shapes.
+
+/// mirOptionDiscProbeLine renders the canonical Option discriminant
+/// extract.
+pub fn mirOptionDiscProbeLine(reg: String, aggReg: String) -> String {
+    mirExtractValueLine(reg, mirOptionAggregateType(), aggReg, "0")
+}
+
+/// mirOptionPayloadProbeLine renders the canonical Option payload
+/// extract.
+pub fn mirOptionPayloadProbeLine(reg: String, aggReg: String) -> String {
+    mirExtractValueLine(reg, mirOptionAggregateType(), aggReg, "1")
+}
+
+/// mirOptionPtrDiscProbeLine / PayloadProbeLine — Option<Ptr>
+/// variant.
+pub fn mirOptionPtrDiscProbeLine(reg: String, aggReg: String) -> String {
+    mirExtractValueLine(reg, mirOptionPtrAggregateType(), aggReg, "0")
+}
+
+pub fn mirOptionPtrPayloadProbeLine(reg: String, aggReg: String) -> String {
+    mirExtractValueLine(reg, mirOptionPtrAggregateType(), aggReg, "1")
+}
+
+/// mirResultDiscProbeLine / PayloadProbeLine — Result variant.
+pub fn mirResultDiscProbeLine(reg: String, aggReg: String) -> String {
+    mirOptionDiscProbeLine(reg, aggReg)
+}
+
+pub fn mirResultPayloadProbeLine(reg: String, aggReg: String) -> String {
+    mirOptionPayloadProbeLine(reg, aggReg)
+}
+
+/// §7 LLVM-text Option / Result aggregate-construction shapes.
+
+/// mirOptionNoneAggregateLine renders the canonical None-aggregate
+/// construction.
+pub fn mirOptionNoneAggregateLine(reg: String) -> String {
+    mirInsertValueAggLine(reg, mirOptionAggregateType(), mirAggregateUndef(), mirTypeI64(), mirDiscriminantNone(), "0")
+}
+
+/// mirOptionSomeDiscAggregateLine renders the canonical Some-disc
+/// step.
+pub fn mirOptionSomeDiscAggregateLine(reg: String) -> String {
+    mirInsertValueAggLine(reg, mirOptionAggregateType(), mirAggregateUndef(), mirTypeI64(), mirDiscriminantSome(), "0")
+}
+
+/// mirOptionSomePayloadAggregateLine renders the Some-payload step.
+pub fn mirOptionSomePayloadAggregateLine(reg: String, prev: String, payload: String) -> String {
+    mirInsertValueAggLine(reg, mirOptionAggregateType(), prev, mirTypeI64(), payload, "1")
+}
+
+/// mirResultOkDiscAggregateLine / mirResultErrDiscAggregateLine —
+/// Result-aggregate construction.
+pub fn mirResultOkDiscAggregateLine(reg: String) -> String {
+    mirInsertValueAggLine(reg, mirOptionAggregateType(), mirAggregateUndef(), mirTypeI64(), mirDiscriminantOk(), "0")
+}
+
+pub fn mirResultErrDiscAggregateLine(reg: String) -> String {
+    mirInsertValueAggLine(reg, mirOptionAggregateType(), mirAggregateUndef(), mirTypeI64(), mirDiscriminantErr(), "0")
+}
+
+/// §7 LLVM-text panic-trap shape composers.
+
+/// mirPanicTrapLine renders the canonical 2-line panic trap:
+/// `call void @<sym>(ptr <message>)\n  unreachable\n`.
+pub fn mirPanicTrapLine(sym: String, messagePtr: String) -> String {
+    mirCallVoidPtrLine(sym, messagePtr) + mirUnreachableLine()
+}
+
+/// mirAbortTrapLine renders the canonical no-arg abort trap:
+/// `call void @<sym>()\n  unreachable\n`.
+pub fn mirAbortTrapLine(sym: String) -> String {
+    mirCallVoidNoArgsLine(sym) + mirUnreachableLine()
+}
+
+/// §7 LLVM-text Cond-branch shape composers.
+
+/// mirConditionalBranch3Line renders a 3-line guard pattern: cmp +
+/// branch.
+pub fn mirConditionalBranch3Line(cmpReg: String, ty: String, a: String, b: String, thenLbl: String, elseLbl: String) -> String {
+    mirICmpLine(cmpReg, mirICmpEq(), ty, a, b) +
+    mirBrCondLine(cmpReg, thenLbl, elseLbl)
+}
+
+/// §7 LLVM-text loop-prelude shape helpers.
+
+/// mirLoopHeaderBlockLine renders the canonical loop-header block
+/// label.
+pub fn mirLoopHeaderBlockLine(head: String) -> String {
+    mirBlockHeaderLine(head)
+}
+
+/// mirLoopBodyBlockLine / ExitBlockLine / LatchBlockLine — loop block
+/// labels at the well-known prelude positions.
+pub fn mirLoopBodyBlockLine(body: String) -> String {
+    mirBlockHeaderLine(body)
+}
+
+pub fn mirLoopExitBlockLine(exit: String) -> String {
+    mirBlockHeaderLine(exit)
+}
+
+pub fn mirLoopLatchBlockLine(latch: String) -> String {
+    mirBlockHeaderLine(latch)
+}
+
+/// §7 LLVM-text typed-Range-loop preamble helpers.
+
+/// mirRangeLoopInitLine renders the canonical range-loop init step.
+pub fn mirRangeLoopInitLine(initReg: String, start: String) -> String {
+    mirAddIntLine(initReg, mirTypeI64(), start, "0")
+}
+
+/// mirRangeLoopBoundLine renders the canonical range-loop bound
+/// computation.
+pub fn mirRangeLoopBoundLine(boundReg: String, end: String) -> String {
+    mirAddIntLine(boundReg, mirTypeI64(), end, "0")
+}
+
+/// §7 vector-list snapshot composite helper.
+
+/// mirVectorListSnapshot2Line renders the canonical 2-line vector-
+/// list snapshot prelude: data + len calls.
+pub fn mirVectorListSnapshot2Line(dataReg: String, dataSym: String, lenReg: String, listReg: String, scopeRef: String) -> String {
+    mirCallValueListDataNoAliasLine(dataReg, dataSym, listReg, scopeRef) +
+    mirCallValueListLenWithScopeLine(lenReg, listReg, scopeRef)
+}
+
+/// §8 monomorphisation key / sig composers — drain remaining
+/// inline patterns where the emitter forms canonical Osty-side
+/// keys for monomorphised entries.
+
+/// mirMonomorphKey composes the canonical monomorphised-fn key:
+///   `<base>::<ty1>,<ty2>,...`
+/// Used at every `<T> -> Concrete<T>` lookup site that wants a
+/// stable string for cache hashing.
+pub fn mirMonomorphKey(base: String, typeArgs: List<String>) -> String {
+    if typeArgs.isEmpty() { return base }
+    let mut parts = base + "::"
+    let mut first = true
+    for a in typeArgs {
+        if !first { parts = parts + "," }
+        parts = parts + a
+        first = false
+    }
+    parts
+}
+
+/// mirGenericInstanceKey composes a key for a generic-struct /
+/// enum instance: `<base>[<ty1>,<ty2>,...]`. Sibling of
+/// `mirMonomorphKey` named for the type-instance path.
+pub fn mirGenericInstanceKey(base: String, typeArgs: List<String>) -> String {
+    if typeArgs.isEmpty() { return base }
+    let mut parts = base + "["
+    let mut first = true
+    for a in typeArgs {
+        if !first { parts = parts + "," }
+        parts = parts + a
+        first = false
+    }
+    parts + "]"
+}
+
+/// mirClosureSignatureKey composes the canonical closure-signature
+/// key: `closure[<retTy>](<paramTypes>)`. Used at the closure-table
+/// dedup pass.
+pub fn mirClosureSignatureKey(retTy: String, paramTypes: List<String>) -> String {
+    let mut parts = "closure[" + retTy + "]("
+    let mut first = true
+    for p in paramTypes {
+        if !first { parts = parts + ", " }
+        parts = parts + p
+        first = false
+    }
+    parts + ")"
+}
+
+/// §8 LLVM-text fn-signature composers.
+
+/// mirFnSignatureType composes the canonical LLVM function-pointer
+/// type: `<retTy> (<paramTypes>)`. Used at every fn-pointer typing
+/// site (closure call, vtable method, indirect call).
+pub fn mirFnSignatureType(retTy: String, paramTypes: List<String>) -> String {
+    let mut parts = retTy + " ("
+    let mut first = true
+    for p in paramTypes {
+        if !first { parts = parts + ", " }
+        parts = parts + p
+        first = false
+    }
+    parts + ")"
+}
+
+/// mirFnPointerTypeWithEnv composes `<retTy> (ptr, <restParams>)` —
+/// the canonical closure fn-pointer type that prepends the env
+/// pointer. Sibling of `mirClosureCallTypeLine` exposed as a value.
+pub fn mirFnPointerTypeWithEnv(retTy: String, restParamTypes: List<String>) -> String {
+    let mut parts = retTy + " (ptr"
+    for p in restParamTypes {
+        parts = parts + ", " + p
+    }
+    parts + ")"
+}
+
+/// §8 LLVM-text param-list shape helpers.
+
+/// mirParamSlotPtr renders `ptr %<name>` — the canonical ptr-typed
+/// parameter slot in a function-define header. Sibling of
+/// `mirArgSlotPtr` for the param-list (vs arg-list) usage.
+pub fn mirParamSlotPtr(name: String) -> String {
+    "ptr %" + name
+}
+
+/// mirParamSlotI64 / I32 / I1 / I8 / Double — typed-parameter slots.
+pub fn mirParamSlotI64(name: String) -> String {
+    "i64 %" + name
+}
+
+pub fn mirParamSlotI32(name: String) -> String {
+    "i32 %" + name
+}
+
+pub fn mirParamSlotI1(name: String) -> String {
+    "i1 %" + name
+}
+
+pub fn mirParamSlotI8(name: String) -> String {
+    "i8 %" + name
+}
+
+pub fn mirParamSlotDouble(name: String) -> String {
+    "double %" + name
+}
+
+/// §8 LLVM-text typed-parameter list composers.
+
+/// mirParamListEnvPtr renders the canonical closure-env-only param
+/// list: `ptr %env`. Used at every closure define's first param.
+pub fn mirParamListEnvPtr() -> String {
+    "ptr %env"
+}
+
+/// mirParamListEnvPtrAndOne / Two / Three — composed env-prefixed
+/// param lists.
+pub fn mirParamListEnvPtrAndOne(p1: String) -> String {
+    mirParamListEnvPtr() + ", " + p1
+}
+
+pub fn mirParamListEnvPtrAndTwo(p1: String, p2: String) -> String {
+    mirParamListEnvPtr() + ", " + p1 + ", " + p2
+}
+
+pub fn mirParamListEnvPtrAndThree(p1: String, p2: String, p3: String) -> String {
+    mirParamListEnvPtr() + ", " + p1 + ", " + p2 + ", " + p3
+}
+
+/// §8 LLVM-text fn-name composers.
+
+/// mirOstyFnName composes the canonical Osty-side fn name:
+///   `osty_<package>_<fnname>`
+/// Used at every Osty fn definition / call site.
+pub fn mirOstyFnName(packageName: String, fnName: String) -> String {
+    "osty_" + packageName + "_" + fnName
+}
+
+/// mirOstyMethodName composes `osty_<package>_<typename>_<methodname>`.
+/// Used at every Osty method definition / call site.
+pub fn mirOstyMethodName(packageName: String, typeName: String, methodName: String) -> String {
+    "osty_" + packageName + "_" + typeName + "_" + methodName
+}
+
+/// mirOstyClosureName composes `osty_closure_<id>` — the canonical
+/// closure-implementation symbol name.
+pub fn mirOstyClosureName(idDigits: String) -> String {
+    "osty_closure_" + idDigits
+}
+
+/// mirOstyVTableName composes `osty_vt_<typename>__<interfacename>` —
+/// the canonical vtable-symbol name.
+pub fn mirOstyVTableName(typeName: String, interfaceName: String) -> String {
+    "osty_vt_" + typeName + "__" + interfaceName
+}
+
+/// mirOstyStringPoolName composes the canonical string-pool entry
+/// name: `@.str<idDigits>`.
+pub fn mirOstyStringPoolName(idDigits: String) -> String {
+    "@.str" + idDigits
+}
+
+/// mirOstyFormatPoolName composes `@.fmt<idDigits>` — the format-
+/// string pool entry name.
+pub fn mirOstyFormatPoolName(idDigits: String) -> String {
+    "@.fmt" + idDigits
+}
+
+/// §8 LLVM-text local-name composers.
+
+/// mirLocalSlotName composes the canonical local slot name:
+///   `%l<idDigits>`. Sibling of the existing emit pattern.
+pub fn mirLocalSlotName(idDigits: String) -> String {
+    "%l" + idDigits
+}
+
+/// mirParamSlotName composes `%p<idDigits>` — the canonical param
+/// slot name.
+pub fn mirParamSlotName(idDigits: String) -> String {
+    "%p" + idDigits
+}
+
+/// mirTempRegName composes `%t<idDigits>` — the canonical temporary
+/// register name.
+pub fn mirTempRegName(idDigits: String) -> String {
+    "%t" + idDigits
+}
+
+/// (mirBlockLabelName continues to live at its original site
+/// earlier in this file.)
+
+/// §8 LLVM-text alias-scope metadata helpers.
+
+/// mirAliasScopeMetadataNode renders the canonical alias-scope-
+/// list metadata-node body:
+///   `!\{!<scopeRef>\}` (single-element scope list)
+pub fn mirAliasScopeMetadataNode(scopeRef: String) -> String {
+    "!\{!" + scopeRef + "\}"
+}
+
+/// mirAliasScopeListMetadataNode renders an alias-scope-list with
+/// multiple scopes. Caller comma-joins the refs.
+pub fn mirAliasScopeListMetadataNode(refs: String) -> String {
+    "!\{" + refs + "\}"
+}
+
+/// mirAliasScopeReference renders the canonical scope-attachment:
+///   `!alias.scope <ref>`
+/// Used inside instruction metadata-attachment lists.
+pub fn mirAliasScopeReference(ref: String) -> String {
+    "!alias.scope " + ref
+}
+
+/// mirNoAliasReference renders the canonical noalias attachment.
+pub fn mirNoAliasReference(ref: String) -> String {
+    "!noalias " + ref
+}
+
+/// §8 LLVM-text comma-joined list helpers — for runtime call arg
+/// list formation.
+
+/// mirJoinCommaList joins a list of strings with `, ` separator.
+/// Sibling of `mirJoinCommaTwo/Three/Four/Five/Six` for variadic
+/// arg lists.
+pub fn mirJoinCommaList(parts: List<String>) -> String {
+    let mut joined = ""
+    let mut first = true
+    for p in parts {
+        if !first { joined = joined + ", " }
+        joined = joined + p
+        first = false
+    }
+    joined
+}
+
+/// mirJoinSpaceList joins a list of strings with ` ` separator.
+/// Used at sites that build attribute strings (e.g. `inlinehint hot`).
+pub fn mirJoinSpaceList(parts: List<String>) -> String {
+    let mut joined = ""
+    let mut first = true
+    for p in parts {
+        if !first { joined = joined + " " }
+        joined = joined + p
+        first = false
+    }
+    joined
+}
+
+/// §8 LLVM-text constant-array body composers.
+
+/// mirConstantArrayBody composes the canonical `[<entries>]` body
+/// of an array-constant initializer. Caller threads the entries
+/// already-comma-joined.
+pub fn mirConstantArrayBody(entries: String) -> String {
+    "[" + entries + "]"
+}
+
+/// mirConstantArrayBodyOfList joins the entry list and wraps in
+/// brackets.
+pub fn mirConstantArrayBodyOfList(entries: List<String>) -> String {
+    "[" + mirJoinCommaList(entries) + "]"
+}
+
+/// mirConstantStructBody composes `\{<fields>\}` — the struct-
+/// constant initializer body.
+pub fn mirConstantStructBody(fields: String) -> String {
+    "\{" + fields + "\}"
+}
+
+/// mirConstantStructBodyOfList joins the field list and wraps in
+/// braces.
+pub fn mirConstantStructBodyOfList(fields: List<String>) -> String {
+    "\{" + mirJoinCommaList(fields) + "\}"
+}
+
+/// §8 LLVM-text typed-constant fragment helpers.
+
+/// mirTypedConstFragment composes `<ty> <val>` — the canonical
+/// typed-const fragment. Sibling of `mirArgSlot*` for the
+/// constant-context (vs runtime register).
+pub fn mirTypedConstFragment(ty: String, val: String) -> String {
+    ty + " " + val
+}
+
+/// mirTypedConstFragmentI64 composes `i64 <val>`.
+pub fn mirTypedConstFragmentI64(val: String) -> String {
+    mirTypedConstFragment(mirTypeI64(), val)
+}
+
+/// mirTypedConstFragmentI1 composes `i1 <val>`.
+pub fn mirTypedConstFragmentI1(val: String) -> String {
+    mirTypedConstFragment(mirTypeI1(), val)
+}
+
+/// mirTypedConstFragmentPtr composes `ptr <val>`.
+pub fn mirTypedConstFragmentPtr(val: String) -> String {
+    mirTypedConstFragment(mirTypePtr(), val)
+}
+
+/// mirTypedConstFragmentDouble composes `double <val>`.
+pub fn mirTypedConstFragmentDouble(val: String) -> String {
+    mirTypedConstFragment(mirTypeDouble(), val)
+}
+
+/// §8 LLVM-text comments-by-purpose helpers.
+
+/// mirCommentSafepoint renders the canonical safepoint annotation
+/// comment.
+pub fn mirCommentSafepoint() -> String {
+    "  ; safepoint\n"
+}
+
+/// mirCommentNoSafepoint renders the canonical no-safepoint annotation.
+pub fn mirCommentNoSafepoint() -> String {
+    "  ; no-safepoint\n"
+}
+
+/// mirCommentVectorize renders the canonical vectorize-eligible
+/// annotation.
+pub fn mirCommentVectorize() -> String {
+    "  ; vectorize-eligible\n"
+}
+
+/// mirCommentNoVectorize renders the canonical no-vectorize annotation.
+pub fn mirCommentNoVectorize() -> String {
+    "  ; no-vectorize\n"
+}
+
+/// mirCommentParallel renders the canonical parallel annotation.
+pub fn mirCommentParallel() -> String {
+    "  ; parallel\n"
+}
+
+/// mirCommentInline renders the canonical inline-hint annotation.
+pub fn mirCommentInline() -> String {
+    "  ; inline-hint\n"
+}
+
+/// mirCommentNoInline renders the canonical no-inline annotation.
+pub fn mirCommentNoInline() -> String {
+    "  ; no-inline\n"
+}
+
+/// mirCommentHot renders the canonical hot-path annotation.
+pub fn mirCommentHot() -> String {
+    "  ; hot\n"
+}
+
+/// mirCommentCold renders the canonical cold-path annotation.
+pub fn mirCommentCold() -> String {
+    "  ; cold\n"
+}
+
+/// §8 LLVM-text parameter-binding helpers.
+
+/// mirParamBindingPtr renders `<paramSlot> = alloca ptr\n  store ptr <argName>, ptr <paramSlot>\n`.
+/// The 2-line param-binding pattern the emitter uses for every ptr-
+/// typed function parameter.
+pub fn mirParamBindingPtr(paramSlot: String, argName: String) -> String {
+    mirAllocaPtrLine(paramSlot) +
+    "  " + mirInstrStore() + " ptr " + argName + ", ptr " + paramSlot + "\n"
+}
+
+/// mirParamBindingI64 renders the i64-typed param-binding 2-line
+/// pattern.
+pub fn mirParamBindingI64(paramSlot: String, argName: String) -> String {
+    mirAllocaI64Line(paramSlot) +
+    "  " + mirInstrStore() + " i64 " + argName + ", ptr " + paramSlot + "\n"
+}
+
+/// mirParamBindingI1 renders the i1-typed param-binding 2-line
+/// pattern.
+pub fn mirParamBindingI1(paramSlot: String, argName: String) -> String {
+    mirAllocaI1Line(paramSlot) +
+    "  " + mirInstrStore() + " i1 " + argName + ", ptr " + paramSlot + "\n"
+}
+
+/// mirParamBindingDouble renders the double-typed param-binding
+/// 2-line pattern.
+pub fn mirParamBindingDouble(paramSlot: String, argName: String) -> String {
+    mirAllocaDoubleLine(paramSlot) +
+    "  " + mirInstrStore() + " double " + argName + ", ptr " + paramSlot + "\n"
+}
+
+/// §8 GC root array setup composite helpers.
+
+/// mirGCRootSlotsAllocaWithCommentLine renders the canonical
+/// root-slots alloca prefixed by a `; gc roots` comment.
+pub fn mirGCRootSlotsAllocaWithCommentLine(slotsPtr: String, countDigits: String) -> String {
+    "  ; gc roots\n" + mirGCRootSlotsAllocaLine(slotsPtr, countDigits)
+}
+
+/// mirGCRootSafepointWithCommentLine renders the canonical
+/// safepoint-call line prefixed by a `; safepoint` comment.
+pub fn mirGCRootSafepointWithCommentLine(slotsPtr: String, slotCount: String) -> String {
+    mirCommentSafepoint() + mirCallVoidGCSafepointLine(slotsPtr, slotCount)
+}
+
+/// §8 LLVM-text builder-buffer helpers.
+
+/// mirBuildLines2 concatenates two lines into a single string. Used
+/// at sites that batch a 2-line emit into one string for less
+/// fnBuf flushing.
+pub fn mirBuildLines2(a: String, b: String) -> String {
+    a + b
+}
+
+/// mirBuildLines3 concatenates three lines.
+pub fn mirBuildLines3(a: String, b: String, c: String) -> String {
+    a + b + c
+}
+
+/// mirBuildLines4 concatenates four lines.
+pub fn mirBuildLines4(a: String, b: String, c: String, d: String) -> String {
+    a + b + c + d
+}
+
+/// mirBuildLines5 concatenates five lines.
+pub fn mirBuildLines5(a: String, b: String, c: String, d: String, e: String) -> String {
+    a + b + c + d + e
+}
+
+/// §8 LLVM-text type alias helpers.
+
+/// mirTypeAliasLine renders the canonical type-alias emit line:
+///   `%<name> = type <body>\n`
+/// Used at sites that name aggregate types for legibility (e.g.
+/// vtable struct types).
+pub fn mirTypeAliasLine(name: String, body: String) -> String {
+    "%" + name + " = type " + body + "\n"
+}
+
+/// mirNamedAggregateType composes `%<name>` — a reference to a
+/// previously-named aggregate type. Used at sites that thread the
+/// alias through fn signatures / GEP instructions.
+pub fn mirNamedAggregateType(name: String) -> String {
+    "%" + name
+}
+
+/// §8 LLVM-text emit-pass abbreviation helpers.
+
+/// mirEmitVoidCallStmt composes the canonical void-call statement:
+///   `call void @<sym>(<args>)`
+/// (No leading indent, no trailing newline — for sites that compose
+/// the line manually.)
+pub fn mirEmitVoidCallStmt(sym: String, args: String) -> String {
+    mirInstrCallVoid() + " void @" + sym + "(" + args + ")"
+}
+
+/// mirEmitValueCallStmt composes `<reg> = call <retTy> @<sym>(<args>)`.
+pub fn mirEmitValueCallStmt(reg: String, retTy: String, sym: String, args: String) -> String {
+    reg + " = " + mirInstrCall() + " " + retTy + " @" + sym + "(" + args + ")"
+}
+
+/// §8 LLVM-text noreturn-call shape helpers.
+
+/// mirCallNoReturnVoidLine renders the canonical noreturn-tagged
+/// void call: `call void @<sym>(<args>) #<attrId>\n`. The `#<attrId>`
+/// is a per-decl noreturn attribute group; we use `#1` by emitter
+/// convention for cold/noreturn helpers.
+pub fn mirCallNoReturnVoidLine(sym: String, args: String) -> String {
+    "  " + mirEmitVoidCallStmt(sym, args) + " #1\n"
+}
+
+/// mirCallNoReturnVoidNoArgsAttrLine renders the canonical noreturn-
+/// tagged no-arg void call.
+pub fn mirCallNoReturnVoidNoArgsAttrLine(sym: String) -> String {
+    "  " + mirInstrCallVoid() + " void @" + sym + "() #1\n"
+}
+
+/// §8 LLVM-text named-md-tuple helpers.
+
+/// mirNamedMDTuple renders the canonical named-MD-tuple emit line:
+///   `!<name> = !\{<entries>\}\n`
+/// Used at sites that emit module-level metadata (e.g. compile-unit
+/// reference, named subprogram list).
+pub fn mirNamedMDTuple(name: String, entries: String) -> String {
+    "!" + name + " = !\{" + entries + "\}\n"
+}
+
+/// mirNamedMDDistinctTuple renders `!<name> = distinct !\{<entries>\}\n`.
+pub fn mirNamedMDDistinctTuple(name: String, entries: String) -> String {
+    "!" + name + " = distinct !\{" + entries + "\}\n"
+}
+
+/// mirAnonymousMDTuple renders the canonical anonymous-MD-tuple ref:
+///   `!\{<entries>\}` (no leading `!<name> =`, no trailing newline)
+pub fn mirAnonymousMDTuple(entries: String) -> String {
+    "!\{" + entries + "\}"
+}
+
+/// §9 LLVM-text emit-pass section markers.
+
+/// mirSectionDeclares renders the canonical "; declares" header.
+pub fn mirSectionDeclares() -> String {
+    "; declares\n"
+}
+
+/// mirSectionGlobals renders the canonical "; globals" header.
+pub fn mirSectionGlobals() -> String {
+    "; globals\n"
+}
+
+/// mirSectionFunctions renders the canonical "; functions" header.
+pub fn mirSectionFunctions() -> String {
+    "; functions\n"
+}
+
+/// mirSectionMetadata renders the canonical "; metadata" header.
+pub fn mirSectionMetadata() -> String {
+    "; metadata\n"
+}
+
+/// mirSectionPrelude renders the canonical "; prelude" header.
+pub fn mirSectionPrelude() -> String {
+    "; prelude\n"
+}
+
+/// mirSectionEpilogue renders the canonical "; epilogue" header.
+pub fn mirSectionEpilogue() -> String {
+    "; epilogue\n"
+}
+
+/// §9 LLVM-text reference-encoding helpers.
+
+/// mirGlobalRef renders the canonical address-of-global expression
+/// without type prefix: `@<sym>`. Sibling of `mirArgSlotPtr` /
+/// `mirAddrOfGlobal` for the no-type-prefix usage path.
+pub fn mirGlobalRef(sym: String) -> String {
+    "@" + sym
+}
+
+/// mirRegRef renders `%<name>` — the canonical local-register
+/// reference (no type prefix).
+pub fn mirRegRef(name: String) -> String {
+    "%" + name
+}
+
+/// mirMDRef renders `!<name>` — the canonical metadata reference.
+pub fn mirMDRef(name: String) -> String {
+    "!" + name
+}
+
+/// §9 LLVM-text label-emit shape helpers.
+
+/// mirLabelHeaderLine renders `<name>:\n` — the canonical block
+/// header. Sibling of `mirBlockHeaderLine` named for the
+/// terminator-end-of-block usage.
+pub fn mirLabelHeaderLine(name: String) -> String {
+    name + ":\n"
+}
+
+/// mirJumpToLabelLine renders `  br label %<dst>\n` — the
+/// canonical unconditional jump. Sibling of `mirBrLabelLine`.
+pub fn mirJumpToLabelLine(dst: String) -> String {
+    mirBrLabelLine(dst)
+}
+
+/// §9 LLVM-text typed-arg list extension helpers — for arg lists
+/// the emitter forms incrementally.
+
+/// mirAppendArgPtr appends `, ptr <reg>` to an existing arg list.
+pub fn mirAppendArgPtr(prev: String, reg: String) -> String {
+    prev + ", ptr " + reg
+}
+
+/// mirAppendArgI64 appends `, i64 <reg>` to an existing arg list.
+pub fn mirAppendArgI64(prev: String, reg: String) -> String {
+    prev + ", i64 " + reg
+}
+
+/// mirAppendArgI1 appends `, i1 <reg>` to an existing arg list.
+pub fn mirAppendArgI1(prev: String, reg: String) -> String {
+    prev + ", i1 " + reg
+}
+
+/// mirAppendArgDouble appends `, double <reg>` to an existing arg
+/// list.
+pub fn mirAppendArgDouble(prev: String, reg: String) -> String {
+    prev + ", double " + reg
+}
+
+/// mirAppendArgI8 appends `, i8 <reg>` to an existing arg list.
+pub fn mirAppendArgI8(prev: String, reg: String) -> String {
+    prev + ", i8 " + reg
+}
+
+/// mirAppendArgI32 appends `, i32 <reg>` to an existing arg list.
+pub fn mirAppendArgI32(prev: String, reg: String) -> String {
+    prev + ", i32 " + reg
+}
+
+/// §9 LLVM-text list-len / list-isEmpty common shape composers.
+
+/// mirCallListLenLine renders the canonical list-len call:
+///   `<reg> = call i64 @osty_rt_list_len(ptr <list>)`
+/// Specialisation of `mirCallValueListLenLine` named for the
+/// value-only call (no alias-scope tag).
+pub fn mirCallListLenLine(reg: String, listReg: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i64 @" + mirRtListLenSymbolName() + "(ptr " + listReg + ")\n"
+}
+
+/// mirCallListIsEmptyLine renders the canonical list-isEmpty call.
+pub fn mirCallListIsEmptyLine(reg: String, listReg: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i1 @" + mirRtListIsEmptySymbol() + "(ptr " + listReg + ")\n"
+}
+
+/// mirCallMapLenLine renders the canonical map-len call.
+pub fn mirCallMapLenLine(reg: String, mapReg: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i64 @" + mirRtMapLenSymbolName() + "(ptr " + mapReg + ")\n"
+}
+
+/// mirCallSetLenLine renders the canonical set-len call.
+pub fn mirCallSetLenLine(reg: String, setReg: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i64 @" + mirRtSetLenSymbolName() + "(ptr " + setReg + ")\n"
+}
+
+/// mirCallBytesLenLine renders the canonical bytes-len call.
+pub fn mirCallBytesLenLine(reg: String, bytesReg: String) -> String {
+    "  " + reg + " = " + mirInstrCall() + " i64 @" + mirRtBytesLenSymbolName() + "(ptr " + bytesReg + ")\n"
+}
+
+/// §9 LLVM-text loop-iter increment shape helpers.
+
+/// mirIncrementLoopCounterLine renders `<next> = add i64 <i>, 1\n`
+/// — the canonical loop-counter increment. Sibling of
+/// `mirIncrementI64Line` named for the loop-counter usage path.
+pub fn mirIncrementLoopCounterLine(nextReg: String, iReg: String) -> String {
+    mirAddIntLine(nextReg, mirTypeI64(), iReg, "1")
+}
+
+/// mirDecrementLoopCounterLine renders the canonical loop-counter
+/// decrement.
+pub fn mirDecrementLoopCounterLine(nextReg: String, iReg: String) -> String {
+    mirSubIntLine(nextReg, mirTypeI64(), iReg, "1")
+}
+
+/// §9 LLVM-text typed-load-store with align tag composite helpers.
+
+/// mirLoadStoreLine renders the canonical load + store 2-line
+/// pattern (read-modify-write style):
+///   `<tmpReg> = load <ty>, ptr <src>\n  store <ty> <tmpReg>, ptr <dst>\n`
+pub fn mirLoadStoreLine(tmpReg: String, ty: String, src: String, dst: String) -> String {
+    "  " + tmpReg + " = " + mirInstrLoad() + " " + ty + ", ptr " + src + "\n" +
+    "  " + mirInstrStore() + " " + ty + " " + tmpReg + ", ptr " + dst + "\n"
+}
+
+/// mirLoadStoreI64Line / I1Line / PtrLine / DoubleLine — typed
+/// load+store specialisations.
+pub fn mirLoadStoreI64Line(tmpReg: String, src: String, dst: String) -> String {
+    mirLoadStoreLine(tmpReg, mirTypeI64(), src, dst)
+}
+
+pub fn mirLoadStoreI1Line(tmpReg: String, src: String, dst: String) -> String {
+    mirLoadStoreLine(tmpReg, mirTypeI1(), src, dst)
+}
+
+pub fn mirLoadStorePtrLine(tmpReg: String, src: String, dst: String) -> String {
+    mirLoadStoreLine(tmpReg, mirTypePtr(), src, dst)
+}
+
+pub fn mirLoadStoreDoubleLine(tmpReg: String, src: String, dst: String) -> String {
+    mirLoadStoreLine(tmpReg, mirTypeDouble(), src, dst)
+}
+
+/// §9 LLVM-text label-helper specialisations — for the canonical
+/// label names the emitter uses.
+
+/// mirLabelOk renders the canonical "ok" label name (e.g. for a
+/// match-arm exit).
+pub fn mirLabelOk() -> String {
+    "ok"
+}
+
+/// mirLabelErr renders the canonical "err" label name.
+pub fn mirLabelErr() -> String {
+    "err"
+}
+
+/// mirLabelDone renders the canonical "done" label name.
+pub fn mirLabelDone() -> String {
+    "done"
+}
+
+/// mirLabelLoopHead renders the canonical "loop.head" label name.
+pub fn mirLabelLoopHead() -> String {
+    "loop.head"
+}
+
+/// mirLabelLoopBody renders the canonical "loop.body" label name.
+pub fn mirLabelLoopBody() -> String {
+    "loop.body"
+}
+
+/// mirLabelLoopExit renders the canonical "loop.exit" label name.
+pub fn mirLabelLoopExit() -> String {
+    "loop.exit"
+}
+
+/// mirLabelLoopLatch renders the canonical "loop.latch" label name.
+pub fn mirLabelLoopLatch() -> String {
+    "loop.latch"
+}
+
+/// mirLabelMatchArm renders the canonical "match.arm" label name
+/// prefix (caller appends the arm index).
+pub fn mirLabelMatchArmPrefix() -> String {
+    "match.arm"
+}
+
+/// mirLabelMatchExit renders the canonical "match.exit" label name.
+pub fn mirLabelMatchExit() -> String {
+    "match.exit"
+}
+
+/// mirLabelIfThen renders the canonical "if.then" label name.
+pub fn mirLabelIfThen() -> String {
+    "if.then"
+}
+
+/// mirLabelIfElse renders the canonical "if.else" label name.
+pub fn mirLabelIfElse() -> String {
+    "if.else"
+}
+
+/// mirLabelIfEnd renders the canonical "if.end" label name.
+pub fn mirLabelIfEnd() -> String {
+    "if.end"
+}
+
+/// mirLabelOptionSome renders the canonical "option.some" label name.
+pub fn mirLabelOptionSome() -> String {
+    "option.some"
+}
+
+/// mirLabelOptionNone renders the canonical "option.none" label name.
+pub fn mirLabelOptionNone() -> String {
+    "option.none"
+}
+
+/// mirLabelResultOk renders the canonical "result.ok" label name.
+pub fn mirLabelResultOk() -> String {
+    "result.ok"
+}
+
+/// mirLabelResultErr renders the canonical "result.err" label name.
+pub fn mirLabelResultErr() -> String {
+    "result.err"
+}

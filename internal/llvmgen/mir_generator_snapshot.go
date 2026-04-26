@@ -5496,3 +5496,674 @@ func mirRtBenchSymbol(suffix string) string     { return "osty_rt_bench_" + suff
 func mirRtIOSymbol(suffix string) string        { return "osty_rt_io_" + suffix }
 func mirRtJsonSymbol(suffix string) string      { return "osty_rt_json_" + suffix }
 func mirRtFmtSymbol(suffix string) string       { return "osty_rt_fmt_" + suffix }
+
+// §7 emit-pass per-block helpers.
+
+// Osty: mirBlockSeparatorComment / mirBlockTraceLine / mirInstrTraceLine
+func mirBlockSeparatorComment() string { return "; ---- next block ----\n" }
+func mirBlockTraceLine(blockId, kind string) string {
+	return "; block " + blockId + " (" + kind + ")\n"
+}
+func mirInstrTraceLine(kind, line, col string) string {
+	return "; " + kind + " at " + line + ":" + col + "\n"
+}
+
+// §7 LLVM-text predicate composers.
+
+// Osty: mirPredI64Eq / Ne / mirPredPtrEq / Ne / mirPredI1Eq
+func mirPredI64Eq(a, b string) string {
+	return mirInstrICmp() + " " + mirICmpEq() + " " + mirTypeI64() + " " + a + ", " + b
+}
+func mirPredI64Ne(a, b string) string {
+	return mirInstrICmp() + " " + mirICmpNe() + " " + mirTypeI64() + " " + a + ", " + b
+}
+func mirPredPtrEq(a, b string) string {
+	return mirInstrICmp() + " " + mirICmpEq() + " " + mirTypePtr() + " " + a + ", " + b
+}
+func mirPredPtrNe(a, b string) string {
+	return mirInstrICmp() + " " + mirICmpNe() + " " + mirTypePtr() + " " + a + ", " + b
+}
+func mirPredI1Eq(a, b string) string {
+	return mirInstrICmp() + " " + mirICmpEq() + " " + mirTypeI1() + " " + a + ", " + b
+}
+
+// §7 typed-store / typed-load shapes with !alias.scope metadata.
+
+// Osty: mirStoreI64WithAliasScopeLine / DoubleWithAliasScopeLine / PtrWithAliasScopeLine /
+//       LoadI64WithAliasScopeLine / DoubleWithAliasScopeLine / PtrWithAliasScopeLine
+func mirStoreI64WithAliasScopeLine(val, slot, scopeRef string) string {
+	return "  " + mirInstrStore() + " i64 " + val + ", ptr " + slot + ", !alias.scope " + scopeRef + "\n"
+}
+func mirStoreDoubleWithAliasScopeLine(val, slot, scopeRef string) string {
+	return "  " + mirInstrStore() + " double " + val + ", ptr " + slot + ", !alias.scope " + scopeRef + "\n"
+}
+func mirStorePtrWithAliasScopeLine(val, slot, scopeRef string) string {
+	return "  " + mirInstrStore() + " ptr " + val + ", ptr " + slot + ", !alias.scope " + scopeRef + "\n"
+}
+func mirLoadI64WithAliasScopeLine(reg, slot, scopeRef string) string {
+	return "  " + reg + " = " + mirInstrLoad() + " i64, ptr " + slot + ", !alias.scope " + scopeRef + "\n"
+}
+func mirLoadDoubleWithAliasScopeLine(reg, slot, scopeRef string) string {
+	return "  " + reg + " = " + mirInstrLoad() + " double, ptr " + slot + ", !alias.scope " + scopeRef + "\n"
+}
+func mirLoadPtrWithAliasScopeLine(reg, slot, scopeRef string) string {
+	return "  " + reg + " = " + mirInstrLoad() + " ptr, ptr " + slot + ", !alias.scope " + scopeRef + "\n"
+}
+
+// §7 typed-store / typed-load shapes with !noalias metadata.
+
+// Osty: mirStoreI64WithNoAliasLine / PtrWithNoAliasLine / LoadI64WithNoAliasLine / PtrWithNoAliasLine
+func mirStoreI64WithNoAliasLine(val, slot, ref string) string {
+	return "  " + mirInstrStore() + " i64 " + val + ", ptr " + slot + ", !noalias " + ref + "\n"
+}
+func mirStorePtrWithNoAliasLine(val, slot, ref string) string {
+	return "  " + mirInstrStore() + " ptr " + val + ", ptr " + slot + ", !noalias " + ref + "\n"
+}
+func mirLoadI64WithNoAliasLine(reg, slot, ref string) string {
+	return "  " + reg + " = " + mirInstrLoad() + " i64, ptr " + slot + ", !noalias " + ref + "\n"
+}
+func mirLoadPtrWithNoAliasLine(reg, slot, ref string) string {
+	return "  " + reg + " = " + mirInstrLoad() + " ptr, ptr " + slot + ", !noalias " + ref + "\n"
+}
+
+// §7 LLVM access-group metadata helpers.
+
+// Osty: mirLLVMAccessGroupRef / mirStoreI64WithAccessGroupLine /
+//       DoubleWithAccessGroupLine / LoadI64WithAccessGroupLine /
+//       DoubleWithAccessGroupLine
+func mirLLVMAccessGroupRef(ref string) string {
+	return "!access_group " + ref
+}
+func mirStoreI64WithAccessGroupLine(val, slot, ref string) string {
+	return "  " + mirInstrStore() + " i64 " + val + ", ptr " + slot + ", !access_group " + ref + "\n"
+}
+func mirStoreDoubleWithAccessGroupLine(val, slot, ref string) string {
+	return "  " + mirInstrStore() + " double " + val + ", ptr " + slot + ", !access_group " + ref + "\n"
+}
+func mirLoadI64WithAccessGroupLine(reg, slot, ref string) string {
+	return "  " + reg + " = " + mirInstrLoad() + " i64, ptr " + slot + ", !access_group " + ref + "\n"
+}
+func mirLoadDoubleWithAccessGroupLine(reg, slot, ref string) string {
+	return "  " + reg + " = " + mirInstrLoad() + " double, ptr " + slot + ", !access_group " + ref + "\n"
+}
+
+// §7 fixed-symbol composers.
+
+// Osty: mirRtList* fixed-symbols
+func mirRtListOOBAbortSymbol() string        { return mirRtListSymbol("oob_abort_v1") }
+func mirRtListPopDiscardSymbol() string      { return mirRtListSymbol("pop_discard") }
+func mirRtListIsEmptySymbol() string         { return mirRtListSymbol("is_empty") }
+func mirRtListLenSymbolName() string         { return mirRtListSymbol("len") }
+func mirRtListReverseSymbol() string         { return mirRtListSymbol("reverse") }
+func mirRtListReversedSymbol() string        { return mirRtListSymbol("reversed") }
+func mirRtListClearSymbol() string           { return mirRtListSymbol("clear") }
+func mirRtListRemoveAtDiscardSymbol() string { return mirRtListSymbol("remove_at_discard") }
+
+// Osty: mirRtMap* fixed-symbols
+func mirRtMapNewSymbol() string       { return mirRtMapSymbol("new") }
+func mirRtMapClearSymbol() string     { return mirRtMapSymbol("clear") }
+func mirRtMapLenSymbolName() string   { return mirRtMapSymbol("len") }
+func mirRtMapValuesSymbol() string    { return mirRtMapSymbol("values") }
+func mirRtMapEntriesSymbol() string   { return mirRtMapSymbol("entries") }
+func mirRtMapMergeWithSymbol() string { return mirRtMapSymbol("merge_with") }
+
+// Osty: mirRtSet* fixed-symbols
+func mirRtSetClearSymbol() string   { return mirRtSetSymbol("clear") }
+func mirRtSetLenSymbolName() string { return mirRtSetSymbol("len") }
+func mirRtSetToListSymbol() string  { return mirRtSetSymbol("to_list") }
+
+// Osty: mirRtBytes* fixed-symbols
+func mirRtBytesLenSymbolName() string { return mirRtBytesSymbol("len") }
+func mirRtBytesIsEmptySymbol() string { return mirRtBytesSymbol("is_empty") }
+func mirRtBytesGetSymbol() string     { return mirRtBytesSymbol("get") }
+
+// Osty: mirRtString* fixed-symbols
+func mirRtStringConcatSymbol() string    { return mirRtStringSymbol("Concat") }
+func mirRtStringConcatNSymbol() string   { return mirRtStringSymbol("ConcatN") }
+func mirRtStringDiffLinesSymbol() string { return mirRtStringSymbol("DiffLines") }
+
+// Osty: mirRtCancel* fixed-symbols
+func mirRtCancelCheckCancelledSymbol() string { return mirRtCancelSymbol("check_cancelled") }
+func mirRtCancelIsCancelledSymbol() string    { return mirRtCancelSymbol("is_cancelled") }
+func mirRtCancelCancelSymbol() string         { return mirRtCancelSymbol("cancel") }
+
+// Osty: mirRtChan* fixed-symbols
+func mirRtChanCloseSymbol() string    { return mirRtChanSymbol("close") }
+func mirRtChanRecvSymbol() string     { return mirRtChanSymbol("recv") }
+func mirRtChanSendSymbolName() string { return mirRtChanSymbol("send") }
+
+// Osty: mirRtThread* fixed-symbols
+func mirRtThreadYieldSymbol() string { return mirRtThreadSymbol("yield") }
+func mirRtThreadSleepSymbol() string { return mirRtThreadSymbol("sleep") }
+func mirRtThreadSpawnSymbol() string { return mirRtThreadSymbol("spawn") }
+
+// Osty: mirRtBench* fixed-symbols
+func mirRtBenchNowNanosSymbol() string { return mirRtBenchSymbol("now_nanos") }
+func mirRtBenchTargetNsSymbol() string { return mirRtBenchSymbol("target_ns") }
+
+// Osty: mirRtTest* fixed-symbols
+func mirRtTestSnapshotSymbol() string     { return mirRtTestSymbol("snapshot") }
+func mirRtTestAbortSymbol() string        { return mirRtTestSymbol("abort") }
+func mirRtTestContextEnterSymbol() string { return mirRtTestSymbol("context_enter") }
+func mirRtTestContextExitSymbol() string  { return mirRtTestSymbol("context_exit") }
+func mirRtTestExpectOkSymbol() string     { return mirRtTestSymbol("expect_ok") }
+func mirRtTestExpectErrorSymbol() string  { return mirRtTestSymbol("expect_error") }
+
+// Osty: bare runtime symbols
+func mirRtPanicSymbol() string       { return mirRtSymbol("panic") }
+func mirRtUnreachableSymbol() string { return mirRtSymbol("unreachable") }
+func mirRtTodoSymbol() string        { return mirRtSymbol("todo") }
+func mirRtAbortSymbol() string       { return mirRtSymbol("abort") }
+
+// Osty: option / result panic-helper symbols
+func mirRtOptionUnwrapNoneSymbol() string { return mirRtSymbol("option_unwrap_none") }
+func mirRtResultUnwrapErrSymbol() string  { return mirRtSymbol("result_unwrap_err") }
+func mirRtExpectFailedSymbol() string     { return mirRtSymbol("expect_failed") }
+
+// Osty: to-string runtime symbols
+func mirRtIntToStringSymbol() string           { return mirRtSymbol("int_to_string") }
+func mirRtFloatToStringSymbol() string         { return mirRtSymbol("float_to_string") }
+func mirRtBoolToStringSymbol() string          { return mirRtSymbol("bool_to_string") }
+func mirRtCharToStringSymbol() string          { return mirRtSymbol("char_to_string") }
+func mirRtByteToStringSymbol() string          { return mirRtSymbol("byte_to_string") }
+func mirRtListPrimitiveToStringSymbol() string { return mirRtListSymbol("primitive_to_string") }
+
+// Osty: structured-concurrency runtime symbols
+func mirRtParallelSymbol() string      { return mirRtSymbol("parallel") }
+func mirRtRaceSymbol() string          { return mirRtSymbol("race") }
+func mirRtTaskGroupRootSymbol() string { return mirRtSymbol("task_group") }
+
+// §7 LLVM-text type-text composers.
+
+// Osty: mirListTypeText / MapTypeText / SetTypeText / mirOptionTypeTextScalar /
+//       OptionTypeTextPtr / mirResultTypeTextScalar / ResultTypeTextPtr
+func mirListTypeText() string         { return mirTypePtr() }
+func mirMapTypeText() string          { return mirTypePtr() }
+func mirSetTypeText() string          { return mirTypePtr() }
+func mirOptionTypeTextScalar() string { return mirOptionAggregateType() }
+func mirOptionTypeTextPtr() string    { return mirOptionPtrAggregateType() }
+func mirResultTypeTextScalar() string { return mirOptionAggregateType() }
+func mirResultTypeTextPtr() string    { return mirOptionPtrAggregateType() }
+
+// §7 LLVM-text discriminant probe / payload-extract shapes.
+
+// Osty: mirOptionDiscProbeLine / PayloadProbeLine / mirOptionPtrDiscProbeLine /
+//       PtrPayloadProbeLine / mirResultDiscProbeLine / PayloadProbeLine
+func mirOptionDiscProbeLine(reg, aggReg string) string {
+	return mirExtractValueLine(reg, mirOptionAggregateType(), aggReg, "0")
+}
+func mirOptionPayloadProbeLine(reg, aggReg string) string {
+	return mirExtractValueLine(reg, mirOptionAggregateType(), aggReg, "1")
+}
+func mirOptionPtrDiscProbeLine(reg, aggReg string) string {
+	return mirExtractValueLine(reg, mirOptionPtrAggregateType(), aggReg, "0")
+}
+func mirOptionPtrPayloadProbeLine(reg, aggReg string) string {
+	return mirExtractValueLine(reg, mirOptionPtrAggregateType(), aggReg, "1")
+}
+func mirResultDiscProbeLine(reg, aggReg string) string {
+	return mirOptionDiscProbeLine(reg, aggReg)
+}
+func mirResultPayloadProbeLine(reg, aggReg string) string {
+	return mirOptionPayloadProbeLine(reg, aggReg)
+}
+
+// §7 LLVM-text Option / Result aggregate-construction shapes.
+
+// Osty: mirOptionNoneAggregateLine / SomeDiscAggregateLine / SomePayloadAggregateLine /
+//       mirResultOkDiscAggregateLine / ErrDiscAggregateLine
+func mirOptionNoneAggregateLine(reg string) string {
+	return mirInsertValueAggLine(reg, mirOptionAggregateType(), mirAggregateUndef(), mirTypeI64(), mirDiscriminantNone(), "0")
+}
+func mirOptionSomeDiscAggregateLine(reg string) string {
+	return mirInsertValueAggLine(reg, mirOptionAggregateType(), mirAggregateUndef(), mirTypeI64(), mirDiscriminantSome(), "0")
+}
+func mirOptionSomePayloadAggregateLine(reg, prev, payload string) string {
+	return mirInsertValueAggLine(reg, mirOptionAggregateType(), prev, mirTypeI64(), payload, "1")
+}
+func mirResultOkDiscAggregateLine(reg string) string {
+	return mirInsertValueAggLine(reg, mirOptionAggregateType(), mirAggregateUndef(), mirTypeI64(), mirDiscriminantOk(), "0")
+}
+func mirResultErrDiscAggregateLine(reg string) string {
+	return mirInsertValueAggLine(reg, mirOptionAggregateType(), mirAggregateUndef(), mirTypeI64(), mirDiscriminantErr(), "0")
+}
+
+// §7 LLVM-text panic-trap shape composers.
+
+// Osty: mirPanicTrapLine / mirAbortTrapLine
+func mirPanicTrapLine(sym, messagePtr string) string {
+	return mirCallVoidPtrLine(sym, messagePtr) + mirUnreachableLine()
+}
+func mirAbortTrapLine(sym string) string {
+	return mirCallVoidNoArgsLine(sym) + mirUnreachableLine()
+}
+
+// §7 LLVM-text Cond-branch shape composers.
+
+// Osty: mirConditionalBranch3Line
+func mirConditionalBranch3Line(cmpReg, ty, a, b, thenLbl, elseLbl string) string {
+	return mirICmpLine(cmpReg, mirICmpEq(), ty, a, b) +
+		mirBrCondLine(cmpReg, thenLbl, elseLbl)
+}
+
+// §7 LLVM-text loop-prelude shape helpers.
+
+// Osty: mirLoopHeaderBlockLine / mirLoopBodyBlockLine / mirLoopExitBlockLine /
+//       mirLoopLatchBlockLine
+func mirLoopHeaderBlockLine(head string) string { return mirBlockHeaderLine(head) }
+func mirLoopBodyBlockLine(body string) string   { return mirBlockHeaderLine(body) }
+func mirLoopExitBlockLine(exit string) string   { return mirBlockHeaderLine(exit) }
+func mirLoopLatchBlockLine(latch string) string { return mirBlockHeaderLine(latch) }
+
+// §7 LLVM-text typed-Range-loop preamble helpers.
+
+// Osty: mirRangeLoopInitLine / mirRangeLoopBoundLine
+func mirRangeLoopInitLine(initReg, start string) string {
+	return mirAddIntLine(initReg, mirTypeI64(), start, "0")
+}
+func mirRangeLoopBoundLine(boundReg, end string) string {
+	return mirAddIntLine(boundReg, mirTypeI64(), end, "0")
+}
+
+// §7 vector-list snapshot composite helper.
+
+// Osty: mirVectorListSnapshot2Line
+func mirVectorListSnapshot2Line(dataReg, dataSym, lenReg, listReg, scopeRef string) string {
+	return mirCallValueListDataNoAliasLine(dataReg, dataSym, listReg, scopeRef) +
+		mirCallValueListLenWithScopeLine(lenReg, listReg, scopeRef)
+}
+
+// §8 monomorphisation key / sig composers.
+
+// Osty: mirMonomorphKey / mirGenericInstanceKey / mirClosureSignatureKey
+func mirMonomorphKey(base string, typeArgs []string) string {
+	if len(typeArgs) == 0 {
+		return base
+	}
+	parts := base + "::"
+	first := true
+	for _, a := range typeArgs {
+		if !first {
+			parts = parts + ","
+		}
+		parts = parts + a
+		first = false
+	}
+	return parts
+}
+func mirGenericInstanceKey(base string, typeArgs []string) string {
+	if len(typeArgs) == 0 {
+		return base
+	}
+	parts := base + "["
+	first := true
+	for _, a := range typeArgs {
+		if !first {
+			parts = parts + ","
+		}
+		parts = parts + a
+		first = false
+	}
+	return parts + "]"
+}
+func mirClosureSignatureKey(retTy string, paramTypes []string) string {
+	parts := "closure[" + retTy + "]("
+	first := true
+	for _, p := range paramTypes {
+		if !first {
+			parts = parts + ", "
+		}
+		parts = parts + p
+		first = false
+	}
+	return parts + ")"
+}
+
+// §8 LLVM-text fn-signature composers.
+
+// Osty: mirFnSignatureType / mirFnPointerTypeWithEnv
+func mirFnSignatureType(retTy string, paramTypes []string) string {
+	parts := retTy + " ("
+	first := true
+	for _, p := range paramTypes {
+		if !first {
+			parts = parts + ", "
+		}
+		parts = parts + p
+		first = false
+	}
+	return parts + ")"
+}
+func mirFnPointerTypeWithEnv(retTy string, restParamTypes []string) string {
+	parts := retTy + " (ptr"
+	for _, p := range restParamTypes {
+		parts = parts + ", " + p
+	}
+	return parts + ")"
+}
+
+// §8 LLVM-text param-list shape helpers.
+
+// Osty: mirParamSlot{Ptr,I64,I32,I1,I8,Double}
+func mirParamSlotPtr(name string) string    { return "ptr %" + name }
+func mirParamSlotI64(name string) string    { return "i64 %" + name }
+func mirParamSlotI32(name string) string    { return "i32 %" + name }
+func mirParamSlotI1(name string) string     { return "i1 %" + name }
+func mirParamSlotI8(name string) string     { return "i8 %" + name }
+func mirParamSlotDouble(name string) string { return "double %" + name }
+
+// §8 LLVM-text typed-parameter list composers.
+
+// Osty: mirParamListEnvPtr / EnvPtrAndOne / Two / Three
+func mirParamListEnvPtr() string { return "ptr %env" }
+func mirParamListEnvPtrAndOne(p1 string) string {
+	return mirParamListEnvPtr() + ", " + p1
+}
+func mirParamListEnvPtrAndTwo(p1, p2 string) string {
+	return mirParamListEnvPtr() + ", " + p1 + ", " + p2
+}
+func mirParamListEnvPtrAndThree(p1, p2, p3 string) string {
+	return mirParamListEnvPtr() + ", " + p1 + ", " + p2 + ", " + p3
+}
+
+// §8 LLVM-text fn-name composers.
+
+// Osty: mirOstyFnName / MethodName / ClosureName / VTableName / StringPoolName / FormatPoolName
+func mirOstyFnName(packageName, fnName string) string {
+	return "osty_" + packageName + "_" + fnName
+}
+func mirOstyMethodName(packageName, typeName, methodName string) string {
+	return "osty_" + packageName + "_" + typeName + "_" + methodName
+}
+func mirOstyClosureName(idDigits string) string {
+	return "osty_closure_" + idDigits
+}
+func mirOstyVTableName(typeName, interfaceName string) string {
+	return "osty_vt_" + typeName + "__" + interfaceName
+}
+func mirOstyStringPoolName(idDigits string) string { return "@.str" + idDigits }
+func mirOstyFormatPoolName(idDigits string) string { return "@.fmt" + idDigits }
+
+// §8 LLVM-text local-name composers.
+
+// Osty: mirLocalSlotName / ParamSlotName / TempRegName / BlockLabelName
+// (mirBlockLabelName continues to live at its original site earlier in this file.)
+func mirLocalSlotName(idDigits string) string { return "%l" + idDigits }
+func mirParamSlotName(idDigits string) string { return "%p" + idDigits }
+func mirTempRegName(idDigits string) string   { return "%t" + idDigits }
+
+// §8 LLVM-text alias-scope metadata helpers.
+
+// Osty: mirAliasScopeMetadataNode / ListMetadataNode / Reference / mirNoAliasReference
+func mirAliasScopeMetadataNode(scopeRef string) string {
+	return "!{!" + scopeRef + "}"
+}
+func mirAliasScopeListMetadataNode(refs string) string {
+	return "!{" + refs + "}"
+}
+func mirAliasScopeReference(ref string) string {
+	return "!alias.scope " + ref
+}
+func mirNoAliasReference(ref string) string {
+	return "!noalias " + ref
+}
+
+// §8 LLVM-text comma-joined / space-joined list helpers.
+
+// Osty: mirJoinCommaList / mirJoinSpaceList
+func mirJoinCommaList(parts []string) string {
+	joined := ""
+	first := true
+	for _, p := range parts {
+		if !first {
+			joined = joined + ", "
+		}
+		joined = joined + p
+		first = false
+	}
+	return joined
+}
+func mirJoinSpaceList(parts []string) string {
+	joined := ""
+	first := true
+	for _, p := range parts {
+		if !first {
+			joined = joined + " "
+		}
+		joined = joined + p
+		first = false
+	}
+	return joined
+}
+
+// §8 LLVM-text constant-array body composers.
+
+// Osty: mirConstantArrayBody / OfList / mirConstantStructBody / OfList
+func mirConstantArrayBody(entries string) string {
+	return "[" + entries + "]"
+}
+func mirConstantArrayBodyOfList(entries []string) string {
+	return "[" + mirJoinCommaList(entries) + "]"
+}
+func mirConstantStructBody(fields string) string {
+	return "{" + fields + "}"
+}
+func mirConstantStructBodyOfList(fields []string) string {
+	return "{" + mirJoinCommaList(fields) + "}"
+}
+
+// §8 LLVM-text typed-constant fragment helpers.
+
+// Osty: mirTypedConstFragment / I64 / I1 / Ptr / Double
+func mirTypedConstFragment(ty, val string) string {
+	return ty + " " + val
+}
+func mirTypedConstFragmentI64(val string) string {
+	return mirTypedConstFragment(mirTypeI64(), val)
+}
+func mirTypedConstFragmentI1(val string) string {
+	return mirTypedConstFragment(mirTypeI1(), val)
+}
+func mirTypedConstFragmentPtr(val string) string {
+	return mirTypedConstFragment(mirTypePtr(), val)
+}
+func mirTypedConstFragmentDouble(val string) string {
+	return mirTypedConstFragment(mirTypeDouble(), val)
+}
+
+// §8 LLVM-text comments-by-purpose helpers.
+
+// Osty: mirComment{Safepoint,NoSafepoint,Vectorize,NoVectorize,Parallel,Inline,NoInline,Hot,Cold}
+func mirCommentSafepoint() string   { return "  ; safepoint\n" }
+func mirCommentNoSafepoint() string { return "  ; no-safepoint\n" }
+func mirCommentVectorize() string   { return "  ; vectorize-eligible\n" }
+func mirCommentNoVectorize() string { return "  ; no-vectorize\n" }
+func mirCommentParallel() string    { return "  ; parallel\n" }
+func mirCommentInline() string      { return "  ; inline-hint\n" }
+func mirCommentNoInline() string    { return "  ; no-inline\n" }
+func mirCommentHot() string         { return "  ; hot\n" }
+func mirCommentCold() string        { return "  ; cold\n" }
+
+// §8 LLVM-text parameter-binding helpers.
+
+// Osty: mirParamBinding{Ptr,I64,I1,Double}
+func mirParamBindingPtr(paramSlot, argName string) string {
+	return mirAllocaPtrLine(paramSlot) +
+		"  " + mirInstrStore() + " ptr " + argName + ", ptr " + paramSlot + "\n"
+}
+func mirParamBindingI64(paramSlot, argName string) string {
+	return mirAllocaI64Line(paramSlot) +
+		"  " + mirInstrStore() + " i64 " + argName + ", ptr " + paramSlot + "\n"
+}
+func mirParamBindingI1(paramSlot, argName string) string {
+	return mirAllocaI1Line(paramSlot) +
+		"  " + mirInstrStore() + " i1 " + argName + ", ptr " + paramSlot + "\n"
+}
+func mirParamBindingDouble(paramSlot, argName string) string {
+	return mirAllocaDoubleLine(paramSlot) +
+		"  " + mirInstrStore() + " double " + argName + ", ptr " + paramSlot + "\n"
+}
+
+// §8 GC root array setup composite helpers.
+
+// Osty: mirGCRootSlotsAllocaWithCommentLine / mirGCRootSafepointWithCommentLine
+func mirGCRootSlotsAllocaWithCommentLine(slotsPtr, countDigits string) string {
+	return "  ; gc roots\n" + mirGCRootSlotsAllocaLine(slotsPtr, countDigits)
+}
+func mirGCRootSafepointWithCommentLine(slotsPtr, slotCount string) string {
+	return mirCommentSafepoint() + mirCallVoidGCSafepointLine(slotsPtr, slotCount)
+}
+
+// §8 LLVM-text builder-buffer helpers.
+
+// Osty: mirBuildLines{2,3,4,5}
+func mirBuildLines2(a, b string) string             { return a + b }
+func mirBuildLines3(a, b, c string) string          { return a + b + c }
+func mirBuildLines4(a, b, c, d string) string       { return a + b + c + d }
+func mirBuildLines5(a, b, c, d, e string) string    { return a + b + c + d + e }
+
+// §8 LLVM-text type alias helpers.
+
+// Osty: mirTypeAliasLine / mirNamedAggregateType
+func mirTypeAliasLine(name, body string) string {
+	return "%" + name + " = type " + body + "\n"
+}
+func mirNamedAggregateType(name string) string {
+	return "%" + name
+}
+
+// §8 LLVM-text emit-pass abbreviation helpers.
+
+// Osty: mirEmitVoidCallStmt / mirEmitValueCallStmt
+func mirEmitVoidCallStmt(sym, args string) string {
+	return mirInstrCallVoid() + " void @" + sym + "(" + args + ")"
+}
+func mirEmitValueCallStmt(reg, retTy, sym, args string) string {
+	return reg + " = " + mirInstrCall() + " " + retTy + " @" + sym + "(" + args + ")"
+}
+
+// §8 LLVM-text noreturn-call shape helpers.
+
+// Osty: mirCallNoReturnVoidLine / NoArgsAttrLine
+func mirCallNoReturnVoidLine(sym, args string) string {
+	return "  " + mirEmitVoidCallStmt(sym, args) + " #1\n"
+}
+func mirCallNoReturnVoidNoArgsAttrLine(sym string) string {
+	return "  " + mirInstrCallVoid() + " void @" + sym + "() #1\n"
+}
+
+// §8 LLVM-text named-md-tuple helpers.
+
+// Osty: mirNamedMDTuple / mirNamedMDDistinctTuple / mirAnonymousMDTuple
+func mirNamedMDTuple(name, entries string) string {
+	return "!" + name + " = !{" + entries + "}\n"
+}
+func mirNamedMDDistinctTuple(name, entries string) string {
+	return "!" + name + " = distinct !{" + entries + "}\n"
+}
+func mirAnonymousMDTuple(entries string) string {
+	return "!{" + entries + "}"
+}
+
+// §9 LLVM-text emit-pass section markers.
+
+// Osty: mirSection{Declares,Globals,Functions,Metadata,Prelude,Epilogue}
+func mirSectionDeclares() string  { return "; declares\n" }
+func mirSectionGlobals() string   { return "; globals\n" }
+func mirSectionFunctions() string { return "; functions\n" }
+func mirSectionMetadata() string  { return "; metadata\n" }
+func mirSectionPrelude() string   { return "; prelude\n" }
+func mirSectionEpilogue() string  { return "; epilogue\n" }
+
+// §9 LLVM-text reference-encoding helpers.
+
+// Osty: mirGlobalRef / mirRegRef / mirMDRef
+func mirGlobalRef(sym string) string { return "@" + sym }
+func mirRegRef(name string) string   { return "%" + name }
+func mirMDRef(name string) string    { return "!" + name }
+
+// §9 LLVM-text label-emit shape helpers.
+
+// Osty: mirLabelHeaderLine / mirJumpToLabelLine
+func mirLabelHeaderLine(name string) string { return name + ":\n" }
+func mirJumpToLabelLine(dst string) string  { return mirBrLabelLine(dst) }
+
+// §9 LLVM-text typed-arg list extension helpers.
+
+// Osty: mirAppendArg{Ptr,I64,I1,Double,I8,I32}
+func mirAppendArgPtr(prev, reg string) string    { return prev + ", ptr " + reg }
+func mirAppendArgI64(prev, reg string) string    { return prev + ", i64 " + reg }
+func mirAppendArgI1(prev, reg string) string     { return prev + ", i1 " + reg }
+func mirAppendArgDouble(prev, reg string) string { return prev + ", double " + reg }
+func mirAppendArgI8(prev, reg string) string     { return prev + ", i8 " + reg }
+func mirAppendArgI32(prev, reg string) string    { return prev + ", i32 " + reg }
+
+// §9 LLVM-text list-len / list-isEmpty common shape composers.
+
+// Osty: mirCallListLenLine / mirCallListIsEmptyLine / mirCallMapLenLine /
+//       mirCallSetLenLine / mirCallBytesLenLine
+func mirCallListLenLine(reg, listReg string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i64 @" + mirRtListLenSymbolName() + "(ptr " + listReg + ")\n"
+}
+func mirCallListIsEmptyLine(reg, listReg string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i1 @" + mirRtListIsEmptySymbol() + "(ptr " + listReg + ")\n"
+}
+func mirCallMapLenLine(reg, mapReg string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i64 @" + mirRtMapLenSymbolName() + "(ptr " + mapReg + ")\n"
+}
+func mirCallSetLenLine(reg, setReg string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i64 @" + mirRtSetLenSymbolName() + "(ptr " + setReg + ")\n"
+}
+func mirCallBytesLenLine(reg, bytesReg string) string {
+	return "  " + reg + " = " + mirInstrCall() + " i64 @" + mirRtBytesLenSymbolName() + "(ptr " + bytesReg + ")\n"
+}
+
+// §9 LLVM-text loop-iter increment shape helpers.
+
+// Osty: mirIncrementLoopCounterLine / mirDecrementLoopCounterLine
+func mirIncrementLoopCounterLine(nextReg, iReg string) string {
+	return mirAddIntLine(nextReg, mirTypeI64(), iReg, "1")
+}
+func mirDecrementLoopCounterLine(nextReg, iReg string) string {
+	return mirSubIntLine(nextReg, mirTypeI64(), iReg, "1")
+}
+
+// §9 LLVM-text typed-load-store with align tag composite helpers.
+
+// Osty: mirLoadStoreLine / I64Line / I1Line / PtrLine / DoubleLine
+func mirLoadStoreLine(tmpReg, ty, src, dst string) string {
+	return "  " + tmpReg + " = " + mirInstrLoad() + " " + ty + ", ptr " + src + "\n" +
+		"  " + mirInstrStore() + " " + ty + " " + tmpReg + ", ptr " + dst + "\n"
+}
+func mirLoadStoreI64Line(tmpReg, src, dst string) string {
+	return mirLoadStoreLine(tmpReg, mirTypeI64(), src, dst)
+}
+func mirLoadStoreI1Line(tmpReg, src, dst string) string {
+	return mirLoadStoreLine(tmpReg, mirTypeI1(), src, dst)
+}
+func mirLoadStorePtrLine(tmpReg, src, dst string) string {
+	return mirLoadStoreLine(tmpReg, mirTypePtr(), src, dst)
+}
+func mirLoadStoreDoubleLine(tmpReg, src, dst string) string {
+	return mirLoadStoreLine(tmpReg, mirTypeDouble(), src, dst)
+}
+
+// §9 LLVM-text label-helper specialisations.
+
+// Osty: mirLabel{Ok,Err,Done,LoopHead,LoopBody,LoopExit,LoopLatch,MatchArmPrefix,MatchExit,IfThen,IfElse,IfEnd,OptionSome,OptionNone,ResultOk,ResultErr}
+func mirLabelOk() string             { return "ok" }
+func mirLabelErr() string            { return "err" }
+func mirLabelDone() string           { return "done" }
+func mirLabelLoopHead() string       { return "loop.head" }
+func mirLabelLoopBody() string       { return "loop.body" }
+func mirLabelLoopExit() string       { return "loop.exit" }
+func mirLabelLoopLatch() string      { return "loop.latch" }
+func mirLabelMatchArmPrefix() string { return "match.arm" }
+func mirLabelMatchExit() string      { return "match.exit" }
+func mirLabelIfThen() string         { return "if.then" }
+func mirLabelIfElse() string         { return "if.else" }
+func mirLabelIfEnd() string          { return "if.end" }
+func mirLabelOptionSome() string     { return "option.some" }
+func mirLabelOptionNone() string     { return "option.none" }
+func mirLabelResultOk() string       { return "result.ok" }
+func mirLabelResultErr() string      { return "result.err" }

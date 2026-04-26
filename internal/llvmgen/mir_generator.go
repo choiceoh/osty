@@ -2021,7 +2021,7 @@ func (g *mirGen) emitVectorListFastStore(local mir.LocalID, idxVal, valReg, elem
 	// previous slow-path `osty_rt_list_set_*` call (which was declared
 	// as a memory writer) is what unlocks the in-loop LICM win on
 	// matmul and quicksort's partition step.
-	const oobSym = "osty_rt_list_oob_abort_v1"
+	oobSym := mirRtListOOBAbortSymbol()
 	g.declareRuntime(oobSym, mirRuntimeDeclareNoReturn("void", oobSym, "", true))
 	g.fnBuf.WriteString(mirLabelLine(slowLabel))
 	g.fnBuf.WriteString(mirCallVoidNoReturnNoArgsLine(oobSym))
@@ -3123,33 +3123,33 @@ func (g *mirGen) emitAssertValueToStringMIR(reg string, t mir.Type) (*LlvmValue,
 	llvmT := g.llvmType(t)
 	switch llvmT {
 	case "i64":
-		g.declareRuntime("osty_rt_int_to_string", mirRuntimeDeclarePtrFromScalarLine("osty_rt_int_to_string", "i64"))
+		g.declareRuntime(mirRtIntToStringSymbol(), mirRuntimeDeclarePtrFromScalarLine(mirRtIntToStringSymbol(), "i64"))
 		em := g.ostyEmitter()
 		out := llvmIntRuntimeToString(em, &LlvmValue{typ: "i64", name: reg})
 		g.flushOstyEmitter(em)
 		return out, true, nil
 	case "double":
-		g.declareRuntime("osty_rt_float_to_string", mirRuntimeDeclarePtrFromScalarLine("osty_rt_float_to_string", "double"))
+		g.declareRuntime(mirRtFloatToStringSymbol(), mirRuntimeDeclarePtrFromScalarLine(mirRtFloatToStringSymbol(), "double"))
 		em := g.ostyEmitter()
 		out := llvmFloatRuntimeToString(em, &LlvmValue{typ: "double", name: reg})
 		g.flushOstyEmitter(em)
 		return out, true, nil
 	case "i1":
-		g.declareRuntime("osty_rt_bool_to_string", mirRuntimeDeclarePtrFromScalarLine("osty_rt_bool_to_string", "i1"))
+		g.declareRuntime(mirRtBoolToStringSymbol(), mirRuntimeDeclarePtrFromScalarLine(mirRtBoolToStringSymbol(), "i1"))
 		em := g.ostyEmitter()
 		out := llvmBoolRuntimeToString(em, &LlvmValue{typ: "i1", name: reg})
 		g.flushOstyEmitter(em)
 		return out, true, nil
 	case "i32":
-		g.declareRuntime("osty_rt_char_to_string", mirRuntimeDeclarePtrFromScalarLine("osty_rt_char_to_string", "i32"))
+		g.declareRuntime(mirRtCharToStringSymbol(), mirRuntimeDeclarePtrFromScalarLine(mirRtCharToStringSymbol(), "i32"))
 		em := g.ostyEmitter()
-		out := llvmCall(em, "ptr", "osty_rt_char_to_string", []*LlvmValue{{typ: "i32", name: reg}})
+		out := llvmCall(em, "ptr", mirRtCharToStringSymbol(), []*LlvmValue{{typ: "i32", name: reg}})
 		g.flushOstyEmitter(em)
 		return out, true, nil
 	case "i8":
-		g.declareRuntime("osty_rt_byte_to_string", mirRuntimeDeclarePtrFromScalarLine("osty_rt_byte_to_string", "i8"))
+		g.declareRuntime(mirRtByteToStringSymbol(), mirRuntimeDeclarePtrFromScalarLine(mirRtByteToStringSymbol(), "i8"))
 		em := g.ostyEmitter()
-		out := llvmCall(em, "ptr", "osty_rt_byte_to_string", []*LlvmValue{{typ: "i8", name: reg}})
+		out := llvmCall(em, "ptr", mirRtByteToStringSymbol(), []*LlvmValue{{typ: "i8", name: reg}})
 		g.flushOstyEmitter(em)
 		return out, true, nil
 	case "ptr":
@@ -3202,9 +3202,9 @@ func testingListPrimitiveKind(t mir.Type) int {
 }
 
 func (g *mirGen) emitRuntimeListPrimitiveToStringMIR(reg string, kind int) (*LlvmValue, error) {
-	g.declareRuntime("osty_rt_list_primitive_to_string", mirRuntimeDeclarePtrFromPtrI64Line("osty_rt_list_primitive_to_string"))
+	g.declareRuntime(mirRtListPrimitiveToStringSymbol(), mirRuntimeDeclarePtrFromPtrI64Line(mirRtListPrimitiveToStringSymbol()))
 	em := g.ostyEmitter()
-	out := llvmCall(em, "ptr", "osty_rt_list_primitive_to_string", []*LlvmValue{
+	out := llvmCall(em, "ptr", mirRtListPrimitiveToStringSymbol(), []*LlvmValue{
 		{typ: "ptr", name: reg},
 		llvmIntLiteral(kind),
 	})
@@ -3213,9 +3213,9 @@ func (g *mirGen) emitRuntimeListPrimitiveToStringMIR(reg string, kind int) (*Llv
 }
 
 func (g *mirGen) emitRuntimeStringDiffMIR(left, right *LlvmValue) (*LlvmValue, error) {
-	g.declareRuntime("osty_rt_strings_DiffLines", mirRuntimeDeclarePtrFromTwoPtrLine("osty_rt_strings_DiffLines"))
+	g.declareRuntime(mirRtStringDiffLinesSymbol(), mirRuntimeDeclarePtrFromTwoPtrLine(mirRtStringDiffLinesSymbol()))
 	em := g.ostyEmitter()
-	out := llvmCall(em, "ptr", "osty_rt_strings_DiffLines", []*LlvmValue{left, right})
+	out := llvmCall(em, "ptr", mirRtStringDiffLinesSymbol(), []*LlvmValue{left, right})
 	g.flushOstyEmitter(em)
 	return out, nil
 }
@@ -3282,9 +3282,9 @@ func (g *mirGen) emitTestingSnapshotMIR(c *mir.CallInstr) error {
 	if err != nil {
 		return err
 	}
-	g.declareRuntime("osty_rt_test_snapshot", mirRuntimeDeclareThreePtrVoidLine("osty_rt_test_snapshot"))
+	g.declareRuntime(mirRtTestSnapshotSymbol(), mirRuntimeDeclareThreePtrVoidLine(mirRtTestSnapshotSymbol()))
 	sourceSym := g.stringLiteral(g.source)
-	g.fnBuf.WriteString(mirCallVoidFromThreePtrLine("osty_rt_test_snapshot", name, output, sourceSym))
+	g.fnBuf.WriteString(mirCallVoidFromThreePtrLine(mirRtTestSnapshotSymbol(), name, output, sourceSym))
 	return g.storeUnitDestIfAny(c)
 }
 
@@ -3309,8 +3309,8 @@ func (g *mirGen) emitTestingBenchmarkMIR(c *mir.CallInstr) error {
 	}
 	// Declare the runtime helpers we'll call. These are idempotent — a
 	// later benchmark in the same module reuses the same declare lines.
-	g.declareRuntime("osty_rt_bench_now_nanos", mirRuntimeDeclareI64NoArgsLine("osty_rt_bench_now_nanos"))
-	g.declareRuntime("osty_rt_bench_target_ns", mirRuntimeDeclareI64NoArgsLine("osty_rt_bench_target_ns"))
+	g.declareRuntime(mirRtBenchNowNanosSymbol(), mirRuntimeDeclareI64NoArgsLine(mirRtBenchNowNanosSymbol()))
+	g.declareRuntime(mirRtBenchTargetNsSymbol(), mirRuntimeDeclareI64NoArgsLine(mirRtBenchTargetNsSymbol()))
 	g.declareRuntime("osty_gc_debug_allocated_bytes_total", mirRuntimeDeclareI64NoArgsLine("osty_gc_debug_allocated_bytes_total"))
 	g.declareRuntime("printf", mirRuntimeDeclarePrintf())
 
@@ -3851,7 +3851,7 @@ func (g *mirGen) emitOptionIntrinsic(i *mir.IntrinsicInstr) error {
 		someLabel := g.freshLabel("opt.unwrap.some")
 		g.fnBuf.WriteString(mirBrCondLine(isNone, noneLabel, someLabel))
 		g.fnBuf.WriteString(mirLabelLine(noneLabel))
-		abortSym := "osty_rt_option_unwrap_none"
+		abortSym := mirRtOptionUnwrapNoneSymbol()
 		g.declareRuntime(abortSym, mirRuntimeDeclareNoReturn("void", abortSym, "", false))
 		g.fnBuf.WriteString(mirCallVoidNoArgsLine(abortSym))
 		g.fnBuf.WriteString(mirUnreachableLine())
@@ -3994,7 +3994,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicListIsEmpty:
-		sym := "osty_rt_list_is_empty"
+		sym := mirRtListIsEmptySymbol()
 		g.declareRuntime(sym, mirRuntimeDeclareI1FromPtrLine(sym))
 		return g.emitSimpleCall(i, sym, "i1", []string{"ptr " + listReg})
 	case mir.IntrinsicListGet:
@@ -4112,7 +4112,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 	case mir.IntrinsicListReverse:
 		// In-place reverse. Runtime walks elem_size-sized slots byte by
 		// byte so the call is element-type agnostic.
-		sym := "osty_rt_list_reverse"
+		sym := mirRtListReverseSymbol()
 		g.declareRuntime(sym, mirRuntimeDeclareVoidFromPtrLine(sym))
 		g.fnBuf.WriteString(mirCallVoidPtrLine(sym, listReg))
 		return nil
@@ -4121,7 +4121,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		// trace handling inside the runtime; GC roots remain valid
 		// across the allocation because the source list stays
 		// reachable through the caller's local.
-		sym := "osty_rt_list_reversed"
+		sym := mirRtListReversedSymbol()
 		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: listReg}})
@@ -4166,7 +4166,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
-		spliceSym := "osty_rt_list_remove_at_discard"
+		spliceSym := mirRtListRemoveAtDiscardSymbol()
 		g.declareRuntime(spliceSym, mirRuntimeDeclareVoidFromPtrI64Line(spliceSym))
 		elemReg, err := g.emitListLoadElement(listReg, idxReg, elemLLVM)
 		if err != nil {
@@ -4320,7 +4320,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		// empty, so we gate it behind a `len > 0` check and compute the
 		// returned value via `list_get_<kind>(list, len-1)` before the
 		// discard so the element is captured.
-		discardSym := "osty_rt_list_pop_discard"
+		discardSym := mirRtListPopDiscardSymbol()
 		g.declareRuntime(discardSym, mirRuntimeDeclareVoidFromPtrLine(discardSym))
 		if i.Dest == nil {
 			// Statement-position `xs.pop()` with no dest: fall back
@@ -4439,7 +4439,7 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		if valueSize <= 0 {
 			return unsupported("mir-mvp", fmt.Sprintf("map_new unsupported value type %s", valLLVM))
 		}
-		sym := "osty_rt_map_new"
+		sym := mirRtMapNewSymbol()
 		g.declareRuntime(sym, mirRuntimeDeclareLine("ptr", sym, "i64, i64, i64, ptr"))
 		args := []string{
 			mirIntLiteralI64(strconv.Itoa(keyKind)),
@@ -4862,14 +4862,14 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 	}
 	switch i.Kind {
 	case mir.IntrinsicBytesLen:
-		sym := "osty_rt_bytes_len"
+		sym := mirRtBytesLenSymbolName()
 		g.declareRuntime(sym, mirRuntimeDeclareI64FromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "i64", sym, []*LlvmValue{{typ: "ptr", name: bytesReg}})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicBytesIsEmpty:
-		sym := "osty_rt_bytes_is_empty"
+		sym := mirRtBytesIsEmptySymbol()
 		g.declareRuntime(sym, mirRuntimeDeclareI1FromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "i1", sym, []*LlvmValue{{typ: "ptr", name: bytesReg}})
@@ -4894,8 +4894,8 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
-		lenSym := "osty_rt_bytes_len"
-		getSym := "osty_rt_bytes_get"
+		lenSym := mirRtBytesLenSymbolName()
+		getSym := mirRtBytesGetSymbol()
 		g.declareRuntime(lenSym, mirRuntimeDeclareI64FromPtrLine(lenSym))
 		g.declareRuntime(getSym, mirRuntimeDeclareLine("i8", getSym, "ptr, i64"))
 		em := g.ostyEmitter()
@@ -4981,7 +4981,7 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		lastSym := "osty_rt_bytes_last_index_of"
-		lenSym := "osty_rt_bytes_len"
+		lenSym := mirRtBytesLenSymbolName()
 		g.declareRuntime(lastSym, mirRuntimeDeclareI64FromTwoPtrLine(lastSym))
 		g.declareRuntime(lenSym, mirRuntimeDeclareI64FromPtrLine(lenSym))
 		em := g.ostyEmitter()
@@ -5632,7 +5632,7 @@ func (g *mirGen) emitStringJoin(i *mir.IntrinsicInstr, partsReg string) error {
 }
 
 func (g *mirGen) emitStringConcatN(parts []*LlvmValue) *LlvmValue {
-	sym := "osty_rt_strings_ConcatN"
+	sym := mirRtStringConcatNSymbol()
 	g.declareRuntime(sym, mirRuntimeDeclarePtrFromI64PtrLine(sym))
 	em := g.ostyEmitter()
 	arr := llvmNextTemp(em)
@@ -5681,7 +5681,7 @@ func (g *mirGen) emitStringConcatBoxed(op mir.Operand) (*LlvmValue, error) {
 		if err != nil {
 			return nil, err
 		}
-		sym := "osty_rt_char_to_string"
+		sym := mirRtCharToStringSymbol()
 		g.declareRuntime(sym, mirRuntimeDeclarePtrFromScalarLine(sym, "i32"))
 		em := g.ostyEmitter()
 		out := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "i32", name: reg}})
@@ -5692,7 +5692,7 @@ func (g *mirGen) emitStringConcatBoxed(op mir.Operand) (*LlvmValue, error) {
 		if err != nil {
 			return nil, err
 		}
-		sym := "osty_rt_byte_to_string"
+		sym := mirRtByteToStringSymbol()
 		g.declareRuntime(sym, mirRuntimeDeclarePtrFromScalarLine(sym, "i8"))
 		em := g.ostyEmitter()
 		out := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "i8", name: reg}})
@@ -6217,13 +6217,13 @@ func (g *mirGen) emitSelectSend(i *mir.IntrinsicInstr) error {
 func (g *mirGen) emitCancelIntrinsic(i *mir.IntrinsicInstr) error {
 	switch i.Kind {
 	case mir.IntrinsicIsCancelled:
-		sym := "osty_rt_cancel_is_cancelled"
+		sym := mirRtCancelIsCancelledSymbol()
 		g.declareRuntime(sym, mirRuntimeDeclareI1NoArgsLine(sym))
 		return g.emitSimpleCall(i, sym, "i1", nil)
 	case mir.IntrinsicCheckCancelled:
 		// Returns Result<(), Error> — runtime uses the `{i64, i64}`
 		// enum layout like chan_recv.
-		sym := "osty_rt_cancel_check_cancelled"
+		sym := mirRtCancelCheckCancelledSymbol()
 		g.declareRuntime(sym, mirRuntimeDeclareEnumLayoutNoArgsLine(sym))
 		if i.Dest == nil {
 			g.fnBuf.WriteString(mirCallStmtNoArgsLine("{ i64, i64 }", sym))
@@ -6234,7 +6234,7 @@ func (g *mirGen) emitCancelIntrinsic(i *mir.IntrinsicInstr) error {
 		g.fnBuf.WriteString(mirStoreLine("{ i64, i64 }", tmp, g.localSlots[i.Dest.Local]))
 		return nil
 	case mir.IntrinsicYield:
-		sym := "osty_rt_thread_yield"
+		sym := mirRtThreadYieldSymbol()
 		g.declareRuntime(sym, mirRuntimeDeclareLine("void", sym, ""))
 		g.fnBuf.WriteString(mirCallVoidNoArgsLine(sym))
 		return nil
@@ -6246,7 +6246,7 @@ func (g *mirGen) emitCancelIntrinsic(i *mir.IntrinsicInstr) error {
 		if err != nil {
 			return err
 		}
-		sym := "osty_rt_thread_sleep"
+		sym := mirRtThreadSleepSymbol()
 		g.declareRuntime(sym, mirRuntimeDeclareVoidFromPtrLine(sym))
 		g.fnBuf.WriteString(mirCallVoidPtrLine(sym, dur))
 		return nil
@@ -6751,7 +6751,7 @@ func (g *mirGen) emitLenRV(rv *mir.LenRV) (string, error) {
 		g.flushOstyEmitter(em)
 		return result.name, nil
 	case isBytesType(placeT):
-		sym := "osty_rt_bytes_len"
+		sym := mirRtBytesLenSymbolName()
 		g.declareRuntime(sym, mirRuntimeDeclareI64FromPtrLine(sym))
 		result := llvmCall(em, "i64", sym, []*LlvmValue{{typ: "ptr", name: valueReg}})
 		g.flushOstyEmitter(em)
@@ -7705,7 +7705,7 @@ func (g *mirGen) emitUnary(op mir.UnaryOp, arg string, t mir.Type) (string, erro
 
 func (g *mirGen) emitBinary(op mir.BinaryOp, left, right string, argT, resT mir.Type) (string, error) {
 	if op == mir.BinAdd && isStringPrimType(argT) {
-		g.declareRuntime("osty_rt_strings_Concat", mirRuntimeDeclareStringConcat())
+		g.declareRuntime(mirRtStringConcatSymbol(), mirRuntimeDeclareStringConcat())
 		em := g.ostyEmitter()
 		out := llvmStringConcat(em, &LlvmValue{typ: "ptr", name: left}, &LlvmValue{typ: "ptr", name: right})
 		g.flushOstyEmitter(em)

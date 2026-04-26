@@ -675,6 +675,55 @@ The historical rules:
 | `mirDiscriminant{None,Some,Ok,Err}` / `mirBoolTrueLiteral` / `mirBoolFalseLiteral` / `mirBoolFromOsty` | `(args...) -> String` | §6 | Discriminant / boolean-literal tokens |
 | `mirGEPI64FieldZeroLine` / `mirGEPDoubleIndexLine` / `mirGEPNamedFieldLine` | `(args...) -> String` | §6 | Common GEP shape composers (zero-index / double-index / named-field) |
 | `mirRtSymbol` / `mirRtListSymbol` / `mirRtMapSymbol` / `mirRtSetSymbol` / `mirRtStringSymbol` / `mirRtBytesSymbol` / `mirRtChanSymbol` / `mirRtTaskGroupSymbol` / `mirRtGCSymbol` / `mirRtTestSymbol` / `mirRtMathSymbol` / `mirRtRandomSymbol` / `mirRtCancelSymbol` | `(suffix) -> String` | §6 | Runtime-symbol prefix composers (centralise `osty_rt_*` namespace) |
+| `mirBlockSeparatorComment` / `mirBlockTraceLine` / `mirInstrTraceLine` | `(args...) -> String` | §7 | Per-block / per-instruction trace comment helpers |
+| `mirPredI64Eq` / `Ne` / `mirPredPtrEq` / `Ne` / `mirPredI1Eq` | `(a, b) -> String` | §7 | Predicate-value composers (no leading SSA assignment) |
+| `mirStore{I64,Double,Ptr}WithAliasScopeLine` / `mirLoad{I64,Double,Ptr}WithAliasScopeLine` | `(args...) -> String` | §7 | Alias-scope-tagged store / load shapes |
+| `mirStore{I64,Ptr}WithNoAliasLine` / `mirLoad{I64,Ptr}WithNoAliasLine` | `(args...) -> String` | §7 | Noalias-tagged store / load shapes |
+| `mirLLVMAccessGroupRef` / `mirStore{I64,Double}WithAccessGroupLine` / `mirLoad{I64,Double}WithAccessGroupLine` | `(args...) -> String` | §7 | Access-group metadata-tagged shapes |
+| `mirRtList{OOBAbort,PopDiscard,IsEmpty,LenSymbolName,Reverse,Reversed,Clear,RemoveAtDiscard}Symbol` | `() -> String` | §7 | Fixed List-runtime symbol composers |
+| `mirRtMap{New,Clear,LenSymbolName,Values,Entries,MergeWith}Symbol` | `() -> String` | §7 | Fixed Map-runtime symbol composers |
+| `mirRtSet{Clear,LenSymbolName,ToList}Symbol` | `() -> String` | §7 | Fixed Set-runtime symbol composers |
+| `mirRtBytes{LenSymbolName,IsEmpty,Get}Symbol` | `() -> String` | §7 | Fixed Bytes-runtime symbol composers |
+| `mirRtString{Concat,ConcatN,DiffLines}Symbol` | `() -> String` | §7 | Fixed String-runtime symbol composers |
+| `mirRtCancel{CheckCancelled,IsCancelled,Cancel}Symbol` | `() -> String` | §7 | Fixed cancel-runtime symbol composers |
+| `mirRtChan{Close,Recv,SendSymbolName}Symbol` | `() -> String` | §7 | Fixed channel-runtime symbol composers |
+| `mirRtThread{Yield,Sleep,Spawn}Symbol` | `() -> String` | §7 | Fixed thread-runtime symbol composers |
+| `mirRtBench{NowNanos,TargetNs}Symbol` | `() -> String` | §7 | Fixed bench-runtime symbol composers |
+| `mirRtTest{Snapshot,Abort,ContextEnter,ContextExit,ExpectOk,ExpectError}Symbol` | `() -> String` | §7 | Fixed test-runtime symbol composers |
+| `mirRt{Panic,Unreachable,Todo,Abort}Symbol` / `mirRt{OptionUnwrapNone,ResultUnwrapErr,ExpectFailed}Symbol` / `mirRt{Int,Float,Bool,Char,Byte}ToStringSymbol` / `mirRt{Parallel,Race,TaskGroupRoot}Symbol` | `() -> String` | §7 | Fixed bare runtime symbol composers |
+| `mirListTypeText` / `mirMapTypeText` / `mirSetTypeText` / `mirOptionTypeText{Scalar,Ptr}` / `mirResultTypeText{Scalar,Ptr}` | `() -> String` | §7 | LLVM-text type-text composers (semantic aliases) |
+| `mirOption{Disc,Payload}ProbeLine` / `mirOptionPtr{Disc,Payload}ProbeLine` / `mirResult{Disc,Payload}ProbeLine` | `(reg, agg) -> String` | §7 | Option / Result discriminant-extract / payload-extract shapes |
+| `mirOption{None,SomeDisc,SomePayload}AggregateLine` / `mirResult{Ok,Err}DiscAggregateLine` | `(args...) -> String` | §7 | Option / Result aggregate-construction shapes |
+| `mirPanicTrapLine` / `mirAbortTrapLine` | `(sym, [msg]) -> String` | §7 | Canonical 2-line panic / abort trap composers |
+| `mirConditionalBranch3Line` | `(cmp, ty, a, b, then, else) -> String` | §7 | 3-line guard pattern composer |
+| `mirLoop{Header,Body,Exit,Latch}BlockLine` | `(name) -> String` | §7 | Loop-prelude block-label aliases |
+| `mirRangeLoopInitLine` / `mirRangeLoopBoundLine` | `(reg, val) -> String` | §7 | Range-loop init / bound preamble shapes |
+| `mirVectorListSnapshot2Line` | `(args...) -> String` | §7 | 2-line vector-list snapshot composite |
+| `mirMonomorphKey` / `mirGenericInstanceKey` / `mirClosureSignatureKey` | `(args...) -> String` | §8 | Monomorphisation / generic-instance / closure-sig key composers |
+| `mirFnSignatureType` / `mirFnPointerTypeWithEnv` | `(retTy, params) -> String` | §8 | LLVM fn-signature / fn-pointer-type composers |
+| `mirParamSlot{Ptr,I64,I32,I1,I8,Double}` / `mirParamListEnvPtr{,AndOne,AndTwo,AndThree}` | `(args...) -> String` | §8 | LLVM param-list shape helpers |
+| `mirOstyFnName` / `mirOstyMethodName` / `mirOstyClosureName` / `mirOstyVTableName` / `mirOstyStringPoolName` / `mirOstyFormatPoolName` | `(args...) -> String` | §8 | Osty-side fn / method / vtable / pool symbol-name composers |
+| `mirLocalSlotName` / `mirParamSlotName` / `mirTempRegName` | `(idDigits) -> String` | §8 | Canonical SSA-local slot / param / temp register name composers |
+| `mirAliasScopeMetadataNode` / `mirAliasScopeListMetadataNode` / `mirAliasScopeReference` / `mirNoAliasReference` | `(args...) -> String` | §8 | Alias-scope metadata-node body / reference helpers |
+| `mirJoinCommaList` / `mirJoinSpaceList` | `(parts) -> String` | §8 | Comma / space joiner for variadic parts |
+| `mirConstantArrayBody` / `OfList` / `mirConstantStructBody` / `OfList` | `(args...) -> String` | §8 | LLVM constant-array / constant-struct body composers |
+| `mirTypedConstFragment` / `I64` / `I1` / `Ptr` / `Double` | `(args...) -> String` | §8 | Typed constant-fragment composers |
+| `mirComment{Safepoint,NoSafepoint,Vectorize,NoVectorize,Parallel,Inline,NoInline,Hot,Cold}` | `() -> String` | §8 | Annotation-purpose comment helpers |
+| `mirParamBinding{Ptr,I64,I1,Double}` | `(slot, name) -> String` | §8 | 2-line typed param-binding (alloca + store) shapes |
+| `mirGCRootSlotsAllocaWithCommentLine` / `mirGCRootSafepointWithCommentLine` | `(args...) -> String` | §8 | GC-root setup with comment annotation composites |
+| `mirBuildLines{2,3,4,5}` | `(args...) -> String` | §8 | N-line concatenation helpers |
+| `mirTypeAliasLine` / `mirNamedAggregateType` | `(args...) -> String` | §8 | LLVM type-alias emit / reference composers |
+| `mirEmitVoidCallStmt` / `mirEmitValueCallStmt` | `(args...) -> String` | §8 | Call-instruction stmt composers |
+| `mirCallNoReturnVoidLine` / `mirCallNoReturnVoidNoArgsAttrLine` | `(args...) -> String` | §8 | Noreturn-tagged void-call shapes |
+| `mirNamedMDTuple` / `mirNamedMDDistinctTuple` / `mirAnonymousMDTuple` | `(args...) -> String` | §8 | Named / distinct / anonymous metadata-tuple emit shapes |
+| `mirSection{Declares,Globals,Functions,Metadata,Prelude,Epilogue}` | `() -> String` | §9 | Emit-pass section-marker comment helpers |
+| `mirGlobalRef` / `mirRegRef` / `mirMDRef` | `(name) -> String` | §9 | LLVM-text reference encoders (`@`, `%`, `!` prefixed names) |
+| `mirLabelHeaderLine` / `mirJumpToLabelLine` | `(name) -> String` | §9 | Label-emit aliases for terminator-block usage path |
+| `mirAppendArg{Ptr,I64,I1,Double,I8,I32}` | `(prev, reg) -> String` | §9 | Incremental typed-arg list extension helpers |
+| `mirCall{List,Map,Set,Bytes}LenLine` / `mirCallListIsEmptyLine` | `(reg, handle) -> String` | §9 | Container-len / isEmpty common shape composers |
+| `mirIncrementLoopCounterLine` / `mirDecrementLoopCounterLine` | `(reg, iReg) -> String` | §9 | Loop-counter increment / decrement aliases |
+| `mirLoadStoreLine` / `I64Line` / `I1Line` / `PtrLine` / `DoubleLine` | `(args...) -> String` | §9 | 2-line typed load + store (read-modify-write) shapes |
+| `mirLabel{Ok,Err,Done,LoopHead,LoopBody,LoopExit,LoopLatch,MatchArmPrefix,MatchExit,IfThen,IfElse,IfEnd,OptionSome,OptionNone,ResultOk,ResultErr}` | `() -> String` | §9 | Canonical label-name tokens (centralise for future renaming) |
 
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as
