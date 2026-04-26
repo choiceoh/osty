@@ -3019,38 +3019,44 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
     return (void *)((unsigned char *)slot + sizeof(osty_gc_micro_header));
 }
 
-/* Phase 7 step 1 (narrowed for Phase 8 step 2 cutover): which kinds
- * are safe to live in the young arena without a headerful header.
+/* Phase 7 step 1: which kinds are safe to live in the young arena
+ * without a headerful header.
  *
  * Rules (in order — first failure short-circuits):
  *   1. Feature flag must be on. With the flag off the young arena is
  *      dormant and every alloc takes the headerful path, preserving
  *      pre-Phase-5 behaviour exactly.
- *   2. The kind must be `OSTY_GC_KIND_BYTES`. The wider whitelist
- *      that included `OSTY_GC_KIND_STRING` was reverted during the
- *      cutover after `Map<String, _>` lookups returned hits=0
- *      post-minor: even with cheney's new transitive OLD-trace, the
- *      Map's content-keyed index (`osty_rt_map_index_*`) interacts
- *      poorly with the young→to-space pointer rewrite — the
- *      symptom is "first key hits, rest miss" once `map->len >= 8`
- *      and the indexed find path engages. BYTES is a clean target
- *      because it almost never appears as a Map key in practice;
- *      String routing returns to young space once the Map index
- *      handover is investigated.
+ *   2. The kind must be one of the immutable byte-payload kinds —
+ *      STRING or BYTES. Both have `alloc → fill → read → discard`
+ *      lifecycles with no per-instance fields a caller mutates after
+ *      the typed allocator returns; that's the structural prerequisite
+ *      for auto-promote-on-pin (Phase 7 step 2) to be safe.
  *
- *      Other kinds stay headerful for the same reasons documented
- *      previously: CLOSURE_ENV mutates captures after alloc;
- *      GENERIC has per-instance callbacks; LIST/MAP/SET/CHANNEL
- *      have destroy callbacks Cheney can't invoke.
+ *      Why not the other no-destroy kinds:
+ *        - CLOSURE_ENV: callers populate `captures[i]` after alloc
+ *          and root-bind the env. Auto-promote would land on the
+ *          dead young addr while the OLD copy holds zero captures.
+ *        - GENERIC: per-instance trace/destroy callbacks not on the
+ *          micro-header.
+ *        - LIST/MAP/SET/CHANNEL: have destroy callbacks Cheney can't
+ *          invoke on dead from-space bytes.
  *   3. Payload size must fit comfortably under the humongous
  *      threshold. Humongous allocs already take a separate path in
  *      the headerful allocator and have no benefit from being
- *      bump-allocated. */
+ *      bump-allocated.
+ *
+ * Note: the cutover-narrowing-to-BYTES-only state was a temporary
+ * mitigation for a `Map<String, _>` regression that turned out to
+ * be in `osty_rt_string_cache` (pointer-keyed cache returning stale
+ * len/hash for stack-buffer-reused lookup keys), not in the cheney
+ * path itself. With the cache fingerprint fix in place,
+ * STRING is back on the young path. */
 static bool osty_gc_young_eligible(int64_t object_kind, size_t payload_size) {
     if (!osty_gc_tinytag_young_now()) {
         return false;
     }
-    if (object_kind != OSTY_GC_KIND_BYTES) {
+    if (object_kind != OSTY_GC_KIND_STRING &&
+        object_kind != OSTY_GC_KIND_BYTES) {
         return false;
     }
     if (payload_size == 0 ||
@@ -3957,6 +3963,19 @@ typedef struct osty_rt_string_cache_entry {
     const char *value;
     size_t len;
     size_t hash;
+    /* First 4 content bytes (or all available bytes for shorter
+     * strings, padded with NULs). Fingerprint that disambiguates
+     * the same buffer pointer holding different content across
+     * calls — typical stack-buffer reuse pattern (`char keybuf[16];
+     * for (i...) { snprintf(keybuf, ..., i); map.contains(keybuf) }`)
+     * where every iteration writes a fresh string to the same
+     * stack slot. A single-byte fingerprint isn't enough — common
+     * key prefixes ("k0", "k1", ...) all share the first byte and
+     * would still alias. Reading 4 bytes is one unaligned load,
+     * cheap, and disambiguates virtually every realistic key
+     * series. */
+    uint32_t first4;
+    bool has_entry;
 } osty_rt_string_cache_entry;
 
 static OSTY_RT_TLS osty_rt_string_cache_entry
@@ -4025,7 +4044,31 @@ static OSTY_HOT_INLINE void osty_rt_string_measure(const char *value,
                              ((uint64_t)(uintptr_t)value) >> 4) &
                          (OSTY_RT_STRING_CACHE_SLOTS - 1);
             osty_rt_string_cache_entry *entry = &osty_rt_string_cache[idx];
-            if (entry->value == value) {
+            /* Read up to 4 bytes (stop at NUL). For strings ≥ 4
+             * chars this is a single unaligned load. For shorter
+             * strings the post-NUL bytes are still inside the
+             * payload allocation (we always alloc len+1 with the
+             * trailing NUL, and arena slots are 16-byte aligned),
+             * so it's safe to read 4. */
+            uint32_t first4 = 0;
+            {
+                size_t i;
+                for (i = 0; i < 4; i++) {
+                    char c = value[i];
+                    first4 |= (uint32_t)(unsigned char)c << (i * 8);
+                    if (c == '\0') break;
+                }
+            }
+            /* Hit only when both the pointer AND the cached
+             * fingerprint match. Same-pointer-different-content
+             * (stack-buffer reuse: `snprintf(keybuf, ..., i)` in a
+             * loop) reuses `value` but mutates `*value`, so the
+             * fingerprint mismatches and we recompute. Without this
+             * check the cached len/hash from the previous iteration's
+             * key would convince Map.contains it found a slot that
+             * doesn't actually match. */
+            if (entry->has_entry && entry->value == value &&
+                entry->first4 == first4) {
                 if (!len_from_header) {
                     len = entry->len;
                 }
@@ -4053,6 +4096,8 @@ static OSTY_HOT_INLINE void osty_rt_string_measure(const char *value,
                 entry->value = value;
                 entry->len = len;
                 entry->hash = hash;
+                entry->first4 = first4;
+                entry->has_entry = true;
             }
         }
     }
@@ -6458,30 +6503,7 @@ const char *osty_rt_int_to_string(int64_t value) {
     if (written < 0) {
         osty_rt_abort("failed to format Int as String");
     }
-    /* SSO output: ≤7-byte results pack into the pointer tag bits and
-     * skip the GC alloc entirely. That covers most realistic ranges:
-     * unsigned 0..9999999 (7 digits), signed -999999..9999999, and
-     * 6-digit-bounded counters typical for IDs / row indices /
-     * timestamp seconds-since-launch. Larger magnitudes (≥ 10⁷ unsigned,
-     * negative ≥ 10⁶) fall back to the heap path automatically.
-     *
-     * The output flows safely into every existing caller because every
-     * String consumer in the runtime is SSO-aware: `osty_rt_io_write`
-     * decodes via `osty_rt_string_decode_to_buf_if_inline` before
-     * `fputs`, `osty_rt_strings_Concat`/`ConcatN` use
-     * `osty_rt_string_copy_bytes` which branches on the SSO tag,
-     * `osty_rt_string_hash`/`_compare_bytes`/`_measure` all decode SSO,
-     * and Map/Set String key paths read through the same `_measure` /
-     * `_equal_bytes` helpers. Only direct `fputs(p)` / `printf("%s", p)`
-     * with the raw pointer would crash, and the runtime emits no such
-     * site (everything routes through `osty_rt_io_write`).
-     *
-     * Hot win: big-map's per-iteration `m.insert("key:" + i.toString(), i)`
-     * was paying one `osty_gc_allocate_managed(...STRING)` per
-     * Int.toString call — at 200K inserts + 1M lookups that's 1.2M
-     * allocations now skipped. The Concat call still allocates the
-     * combined `"key:N"` string, but the per-toString alloc is gone. */
-    return osty_rt_string_dup_site_sso(buffer, (size_t)written, "runtime.int.to_string");
+    return osty_rt_string_dup_site(buffer, (size_t)written, "runtime.int.to_string");
 }
 
 /* Monotonic-clock sample in nanoseconds, exported for the benchmark
@@ -6583,14 +6605,10 @@ int64_t osty_rt_bench_target_ns(void) {
 }
 
 const char *osty_rt_bool_to_string(bool value) {
-    /* "true" (4 bytes) and "false" (5 bytes) both fit in the 7-byte
-     * SSO budget. Sibling rationale to `osty_rt_int_to_string`: every
-     * runtime caller is SSO-aware, no libc-direct sites exist, the
-     * pointer tag carries the bytes inline so the GC alloc disappears. */
     if (value) {
-        return osty_rt_string_dup_site_sso("true", 4, "runtime.bool.to_string");
+        return osty_rt_string_dup_site("true", 4, "runtime.bool.to_string");
     }
-    return osty_rt_string_dup_site_sso("false", 5, "runtime.bool.to_string");
+    return osty_rt_string_dup_site("false", 5, "runtime.bool.to_string");
 }
 
 const char *osty_rt_char_to_string(int32_t codepoint) {
@@ -6622,43 +6640,31 @@ const char *osty_rt_char_to_string(int32_t codepoint) {
         buffer[2] = 0xBDU;
         len = 3;
     }
-    /* Char.toString output is always 1-4 UTF-8 bytes (REPLACEMENT
-     * CHAR is 3 bytes), well within the 7-byte SSO budget. Same SSO
-     * safety story as `osty_rt_int_to_string`: every consumer of the
-     * returned String routes through SSO-aware decoders. */
-    return osty_rt_string_dup_site_sso((const char *)buffer, len, "runtime.char.to_string");
+    return osty_rt_string_dup_site((const char *)buffer, len, "runtime.char.to_string");
 }
 
 const char *osty_rt_byte_to_string(int8_t value) {
     unsigned char byte = (unsigned char)value;
-    /* 1-byte payload — trivially SSO-eligible. */
-    return osty_rt_string_dup_site_sso((const char *)&byte, 1, "runtime.byte.to_string");
+    return osty_rt_string_dup_site((const char *)&byte, 1, "runtime.byte.to_string");
 }
 
 const char *osty_rt_float_to_string(double value) {
     char buffer[64];
 
-    /* Sentinel strings ("NaN", "-Inf", "+Inf") all fit in SSO. */
     if (isnan(value)) {
-        return osty_rt_string_dup_site_sso("NaN", 3, "runtime.float.to_string");
+        return osty_rt_string_dup_site("NaN", 3, "runtime.float.to_string");
     }
     if (isinf(value)) {
         if (value < 0) {
-            return osty_rt_string_dup_site_sso("-Inf", 4, "runtime.float.to_string");
+            return osty_rt_string_dup_site("-Inf", 4, "runtime.float.to_string");
         }
-        return osty_rt_string_dup_site_sso("+Inf", 4, "runtime.float.to_string");
+        return osty_rt_string_dup_site("+Inf", 4, "runtime.float.to_string");
     }
 
     if (snprintf(buffer, sizeof(buffer), "%.6f", value) < 0) {
         osty_rt_abort("failed to format Float as String");
     }
-    /* `%.6f` for typical values produces 8+ chars (e.g. "0.000000",
-     * "1.234567"), which exceeds the 7-byte SSO budget. `_sso` handles
-     * that gracefully by falling back to the heap path; the no-cost
-     * branch only triggers for tiny outputs (currently unreachable
-     * with `%.6f` but cheap insurance against future format changes
-     * like compact "1e3" / "0" representations). */
-    return osty_rt_string_dup_site_sso(buffer, strlen(buffer), "runtime.float.to_string");
+    return osty_rt_string_dup_site(buffer, strlen(buffer), "runtime.float.to_string");
 }
 
 int64_t osty_rt_strings_Compare(const char *left, const char *right) {
@@ -7993,37 +7999,8 @@ static OSTY_HOT_INLINE int64_t osty_rt_map_find_index_indexed(osty_rt_map *map, 
             return -1;
         }
         slot = entry - 1;
-        if (slot < 0 || slot >= map->len) {
-            /* Stale slot index (e.g., post-remove compaction left a
-             * dangling entry). Keep walking; fingerprint match is the
-             * load-bearing guard. */
-            idx = (idx + 1) & mask;
-            continue;
-        }
-        /* Prefetch the candidate key BEFORE the fingerprint compare.
-         *
-         * `slot` lands at a hash-derived position in `keys[]` — NOT
-         * sequential with `idx` — so this load is a likely L2/L3 miss
-         * on every fresh probe. Issuing the prefetch here overlaps
-         * the cache fill with the cheap `index_hashes[idx] == fp`
-         * register compare and the conditional branch, so by the time
-         * `osty_rt_value_equals` actually dereferences `keys[slot]`
-         * (1-2 cycles later) the line is in L1.
-         *
-         * Locality `3` (T0 / keep-in-L1) because every fingerprint
-         * match consumes the line in the very next call frame —
-         * `osty_rt_value_equals` issues a memcpy on it, and for
-         * STRING/PTR kinds an `osty_gc_load_v1` plus the pointed-to
-         * payload follow. Lower temporal hints would route to L2 and
-         * force a re-fetch on the consume.
-         *
-         * Wasted on the rare fingerprint-mismatch path (~0.01% on a
-         * 32-bit fingerprint with low collision rate) — at one
-         * hardware prefetch per iteration this stays well under the
-         * LSU's outstanding-load budget on Apple Silicon and any
-         * current x86_64. */
-        __builtin_prefetch(osty_rt_map_key_slot(map, slot), 0, 3);
-        if (map->index_hashes[idx] == key_fingerprint &&
+        if (slot >= 0 && slot < map->len &&
+            map->index_hashes[idx] == key_fingerprint &&
             osty_rt_value_equals(osty_rt_map_key_slot(map, slot), key, key_size, map->key_kind)) {
             return slot;
         }
