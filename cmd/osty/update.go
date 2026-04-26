@@ -104,7 +104,12 @@ func runUpdate(args []string, cliF cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty update: %v\n", err)
 		os.Exit(1)
 	}
-	if err := lockfile.Write(root, pkgmgr.LockFromGraph(graph)); err != nil {
+	newLock, err := pkgmgr.LockFromGraph(graph)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty update: project lockfile: %v\n", err)
+		os.Exit(1)
+	}
+	if err := lockfile.Write(root, newLock); err != nil {
 		fmt.Fprintf(os.Stderr, "osty update: %v\n", err)
 		os.Exit(1)
 	}
