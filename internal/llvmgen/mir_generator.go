@@ -2187,7 +2187,7 @@ func (g *mirGen) emitLoopSafepointKind() {
 	next := g.fresh()
 	g.fnBuf.WriteString(mirAddI64Line(next, count, "1"))
 	shouldPoll := g.fresh()
-	g.fnBuf.WriteString(mirICmpEqLine(shouldPoll, "i64", next, strconv.FormatInt(loopSafepointStride, 10)))
+	g.fnBuf.WriteString(mirICmpEqI64Line(shouldPoll, next, strconv.FormatInt(loopSafepointStride, 10)))
 	stored := g.fresh()
 	g.fnBuf.WriteString(mirSelectLine(stored, "i64", shouldPoll, "0", next))
 	g.fnBuf.WriteString(mirStoreLine("i64", stored, g.loopSafepointSlot))
@@ -2930,7 +2930,7 @@ func (g *mirGen) emitTestingExpectMIR(c *mir.CallInstr, method string) error {
 	tag := g.fresh()
 	g.fnBuf.WriteString(mirExtractValueLine(tag, resultLLVM, resultReg, "0"))
 	cond := g.fresh()
-	g.fnBuf.WriteString(mirICmpEqLine(cond, "i64", tag, strconv.FormatInt(wantTag, 10)))
+	g.fnBuf.WriteString(mirICmpEqI64Line(cond, tag, strconv.FormatInt(wantTag, 10)))
 	exprText := g.operandSourceText(c.Args[0])
 	if err := g.emitTestingFailureCheck(cond, false, func() (*LlvmValue, error) {
 		return g.buildAssertCondMessageMIR(c.SpanV.Start.Line, method, exprText), nil
@@ -2990,7 +2990,7 @@ func (g *mirGen) emitTestingAbortString(message *LlvmValue, nextLabel string) {
 	g.declareRuntime("printf", "declare i32 @printf(ptr, ...)")
 	g.declareRuntime("exit", "declare void @exit(i32)")
 	fmtPtr := g.stringLiteral("%s\n")
-	g.fnBuf.WriteString(mirCallVarargPrintfLine(fmtPtr, "ptr "+message.name))
+	g.fnBuf.WriteString(mirCallVarargPrintfPathLine(fmtPtr, message.name))
 	g.fnBuf.WriteString(mirCallExitLine("1"))
 	g.fnBuf.WriteString(mirUnreachableLine())
 	g.fnBuf.WriteString(mirLabelLine(nextLabel))
@@ -3539,12 +3539,12 @@ func (g *mirGen) emitBenchErrorCheck(retRef, prefix string) {
 	tag := g.fresh()
 	g.fnBuf.WriteString(mirExtractValueLine(tag, "%Result.unit.Error", retRef, "0"))
 	isErr := g.fresh()
-	g.fnBuf.WriteString(mirICmpEqLine(isErr, "i64", tag, "0"))
+	g.fnBuf.WriteString(mirICmpEqI64Line(isErr, tag, "0"))
 	errLabel := g.freshLabel(prefix + ".err")
 	okLabel := g.freshLabel(prefix + ".ok")
 	g.fnBuf.WriteString(mirBrCondLine(isErr, errLabel, okLabel))
 	g.fnBuf.WriteString(mirLabelLine(errLabel))
-	g.fnBuf.WriteString(mirCallVarargPrintfLine(errFmt, "ptr "+pathSym))
+	g.fnBuf.WriteString(mirCallVarargPrintfPathLine(errFmt, pathSym))
 	g.fnBuf.WriteString(mirCallExitLine("1"))
 	g.fnBuf.WriteString(mirUnreachableLine())
 	g.fnBuf.WriteString(mirLabelLine(okLabel))
@@ -3685,7 +3685,7 @@ func (g *mirGen) tryEmitInterfaceDowncast(c *mir.CallInstr, fnRef *mir.FnRef) (b
 	g.fnBuf.WriteString(mirExtractValueLine(data, "%osty.iface", recvVal, "0"))
 
 	isT := g.fresh()
-	g.fnBuf.WriteString(mirICmpEqLine(isT, "ptr", vt, vtableSym))
+	g.fnBuf.WriteString(mirICmpEqPtrLine(isT, vt, vtableSym))
 
 	// `select i1` produces the data ptr when the tag matches, null
 	// otherwise; widening it back via `ptrtoint` yields the i64 payload
@@ -3847,7 +3847,7 @@ func (g *mirGen) emitOptionIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.storeIntrinsicResult(i, &LlvmValue{typ: "i1", name: res})
 	case mir.IntrinsicOptionIsNone:
 		res := g.fresh()
-		g.fnBuf.WriteString(mirICmpEqLine(res, "i64", discReg, "0"))
+		g.fnBuf.WriteString(mirICmpEqI64Line(res, discReg, "0"))
 		return g.storeIntrinsicResult(i, &LlvmValue{typ: "i1", name: res})
 	case mir.IntrinsicOptionUnwrap:
 		if i.Dest == nil {
@@ -3860,7 +3860,7 @@ func (g *mirGen) emitOptionIntrinsic(i *mir.IntrinsicInstr) error {
 		destLLVM := g.llvmType(destLoc.Type)
 		destSlot := g.localSlots[i.Dest.Local]
 		isNone := g.fresh()
-		g.fnBuf.WriteString(mirICmpEqLine(isNone, "i64", discReg, "0"))
+		g.fnBuf.WriteString(mirICmpEqI64Line(isNone, discReg, "0"))
 		noneLabel := g.freshLabel("opt.unwrap.none")
 		someLabel := g.freshLabel("opt.unwrap.some")
 		g.fnBuf.WriteString(mirBrCondLine(isNone, noneLabel, someLabel))
@@ -3892,7 +3892,7 @@ func (g *mirGen) emitOptionIntrinsic(i *mir.IntrinsicInstr) error {
 		destLLVM := g.llvmType(destLoc.Type)
 		destSlot := g.localSlots[i.Dest.Local]
 		isNone := g.fresh()
-		g.fnBuf.WriteString(mirICmpEqLine(isNone, "i64", discReg, "0"))
+		g.fnBuf.WriteString(mirICmpEqI64Line(isNone, discReg, "0"))
 		noneLabel := g.freshLabel("opt.unwrapor.none")
 		someLabel := g.freshLabel("opt.unwrapor.some")
 		endLabel := g.freshLabel("opt.unwrapor.end")
@@ -4097,7 +4097,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		lenReg := g.fresh()
 		g.fnBuf.WriteString(mirCallValueLine(lenReg, "i64", lenSym, "ptr "+listReg))
 		isEmpty := g.fresh()
-		g.fnBuf.WriteString(mirICmpEqLine(isEmpty, "i64", lenReg, "0"))
+		g.fnBuf.WriteString(mirICmpEqI64Line(isEmpty, lenReg, "0"))
 		someLabel := g.freshLabel("list.opt.some")
 		noneLabel := g.freshLabel("list.opt.none")
 		endLabel := g.freshLabel("list.opt.end")
@@ -4377,7 +4377,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		lenReg := g.fresh()
 		g.fnBuf.WriteString(mirCallValueLine(lenReg, "i64", lenSym, "ptr "+listReg))
 		isEmpty := g.fresh()
-		g.fnBuf.WriteString(mirICmpEqLine(isEmpty, "i64", lenReg, "0"))
+		g.fnBuf.WriteString(mirICmpEqI64Line(isEmpty, lenReg, "0"))
 		someLabel := g.freshLabel("list.pop.some")
 		noneLabel := g.freshLabel("list.pop.none")
 		endLabel := g.freshLabel("list.pop.end")
@@ -4698,19 +4698,7 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		sym := mapRuntimeIncrI64Symbol(keyLLVM, keyString)
 		g.declareRuntime(sym, "declare i64 @"+sym+"(ptr, "+keyLLVM+", i64)")
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = call i64 @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(mapReg)
-		g.fnBuf.WriteString(", ")
-		g.fnBuf.WriteString(keyLLVM)
-		g.fnBuf.WriteString(" ")
-		g.fnBuf.WriteString(kReg)
-		g.fnBuf.WriteString(", i64 ")
-		g.fnBuf.WriteString(dReg)
-		g.fnBuf.WriteString(")\n")
+		g.fnBuf.WriteString(mirCallI64MapKeyDeltaLine(tmp, sym, mapReg, keyLLVM, kReg, dReg))
 		if i.Dest != nil {
 			g.fnBuf.WriteString(mirStoreLine("i64", tmp, g.localSlots[i.Dest.Local]))
 		}
@@ -4805,8 +4793,7 @@ func (g *mirGen) emitMapGetProbe(mapReg, keyReg, keyLLVM string, keyString bool,
 	slot = g.fresh()
 	g.fnBuf.WriteString(mirAllocaLine(slot, valLLVM))
 	present = g.fresh()
-	g.fnBuf.WriteString(mirCallValueLine(present, "i1", getSym,
-		"ptr "+mapReg+", "+keyLLVM+" "+keyReg+", ptr "+slot))
+	g.fnBuf.WriteString(mirCallI1MapKeyOutPtrLine(present, getSym, mapReg, keyLLVM, keyReg, slot))
 	return present, slot
 }
 
@@ -7413,46 +7400,23 @@ func (g *mirGen) ensureThunk(symbol string, fnT *ir.FnType) {
 	if fnT.Return != nil && !isUnitType(fnT.Return) {
 		retLLVM = g.llvmType(fnT.Return)
 	}
+	// `paramParts` and `argParts` carry the same `<llvmT> %arg<i>`
+	// shape; the only structural difference is the leading `ptr %env`
+	// entry that the thunk's header carries but the underlying-fn
+	// call drops.
 	paramParts := make([]string, 0, len(fnT.Params))
 	argParts := make([]string, 0, len(fnT.Params))
 	for i, p := range fnT.Params {
-		paramParts = append(paramParts, g.llvmType(p)+" %arg"+strconv.Itoa(i))
-		argParts = append(argParts, g.llvmType(p)+" %arg"+strconv.Itoa(i))
+		part := mirThunkParamPart(g.llvmType(p), strconv.Itoa(i))
+		paramParts = append(paramParts, part)
+		argParts = append(argParts, part)
 	}
 	headerParams := "ptr %env"
 	if len(paramParts) > 0 {
 		headerParams += ", " + strings.Join(paramParts, ", ")
 	}
-	var b strings.Builder
-	b.WriteString("define private ")
-	b.WriteString(retLLVM)
-	b.WriteString(" @")
-	b.WriteString(thunkName(symbol))
-	b.WriteByte('(')
-	b.WriteString(headerParams)
-	b.WriteString(") {\n")
-	b.WriteString("entry:\n")
-	if retLLVM == "void" {
-		b.WriteString("  call void @")
-		b.WriteString(symbol)
-		b.WriteByte('(')
-		b.WriteString(strings.Join(argParts, ", "))
-		b.WriteString(")\n")
-		b.WriteString("  ret void\n")
-	} else {
-		b.WriteString("  %ret = call ")
-		b.WriteString(retLLVM)
-		b.WriteString(" @")
-		b.WriteString(symbol)
-		b.WriteByte('(')
-		b.WriteString(strings.Join(argParts, ", "))
-		b.WriteString(")\n")
-		b.WriteString("  ret ")
-		b.WriteString(retLLVM)
-		b.WriteString(" %ret\n")
-	}
-	b.WriteString("}\n\n")
-	g.thunks.Register(symbol, b.String())
+	body := mirThunkBody(retLLVM, thunkName(symbol), symbol, headerParams, strings.Join(argParts, ", "))
+	g.thunks.Register(symbol, body)
 }
 
 // thunkName builds the closure-thunk LLVM symbol name. Delegates to

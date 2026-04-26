@@ -3060,3 +3060,371 @@ pub fn mirURemI64Line(reg: String, lhs: String, rhs: String) -> String {
 pub fn mirXorI64Line(reg: String, lhs: String, rhs: String) -> String {
     "  " + reg + " = xor i64 " + lhs + ", " + rhs + "\n"
 }
+
+/// §6 emit-shape builders — drained from the high-cluster sites in
+/// `mir_generator.go`. Each replaces a 4–13 line inline
+/// `g.fnBuf.WriteString(...)` chain with a single named helper. The
+/// signatures track operand-evaluation order so callers thread
+/// freshly-allocated SSA registers and pre-formatted operand tokens
+/// directly without intermediate string formatting in the Go side.
+
+/// mirCallI64MapKeyDeltaLine renders the fused `map.incr` ABI call
+///   `  <reg> = call i64 @<sym>(ptr <map>, <keyLLVM> <key>, i64 <delta>)\n`
+/// for `IntrinsicMapIncr` (the `m.insert(k, m.getOr(k,0)+delta)`
+/// peephole). One call replaces the 13-line inline chain at the
+/// IntrinsicMapIncr site. `keyLLVM` is the key's LLVM scalar type
+/// (`i64` / `i1` / `ptr` for hashed-string keys); `key` and `delta`
+/// are pre-formatted operand tokens (typically SSA registers or
+/// integer literals).
+pub fn mirCallI64MapKeyDeltaLine(reg: String, sym: String, mapReg: String, keyLLVM: String, key: String, delta: String) -> String {
+    mirCallValueLine(reg, "i64", sym, "ptr " + mapReg + ", " + keyLLVM + " " + key + ", i64 " + delta)
+}
+
+/// mirCallVoidMapKeyValuePtrLine renders the runtime map-set ABI
+///   `  call void @<sym>(ptr <map>, <keyLLVM> <key>, ptr <valSlot>)\n`
+/// that `IntrinsicMapSet` lowers to. The runtime memcpy's
+/// `value_size` bytes from `valSlot` into the map's storage; callers
+/// spill the value into a stack slot first via the existing
+/// `llvmSpillToSlot` shim. Mirror of `mirCallI64MapKeyDeltaLine` for
+/// the void-return setter shape.
+pub fn mirCallVoidMapKeyValuePtrLine(sym: String, mapReg: String, keyLLVM: String, key: String, valSlot: String) -> String {
+    mirCallVoidLine(sym, "ptr " + mapReg + ", " + keyLLVM + " " + key + ", ptr " + valSlot)
+}
+
+/// mirCallI1MapKeyOutPtrLine renders the runtime map-probe ABI
+///   `  <reg> = call i1 @<sym>(ptr <map>, <keyLLVM> <key>, ptr <outSlot>)\n`
+/// used by `IntrinsicMapGet` / `IntrinsicMapGetOr`. The runtime
+/// returns true-on-hit and writes the value into `outSlot` only on
+/// the hit path; callers branch on the i1 and load the slot in the
+/// hit arm. `keyLLVM` is the key's scalar LLVM type. The same line
+/// shape covers both the present-flag probe and the future
+/// `osty_rt_map_remove_<suf>` decl (also returns i1 on present).
+pub fn mirCallI1MapKeyOutPtrLine(reg: String, sym: String, mapReg: String, keyLLVM: String, key: String, outSlot: String) -> String {
+    mirCallValueLine(reg, "i1", sym, "ptr " + mapReg + ", " + keyLLVM + " " + key + ", ptr " + outSlot)
+}
+
+/// mirCallVoidListPtrI64ValueLine renders the typed-element list-set
+/// runtime ABI `  call void @<sym>(ptr <list>, i64 <idx>, <elemLLVM>
+/// <val>)\n`. Used by the typed-element fast path of
+/// `osty_rt_list_set_<suffix>`. Mirror of the typed-element list-get
+/// (`mirCallValueLine` directly) for the store side.
+pub fn mirCallVoidListPtrI64ValueLine(sym: String, listReg: String, idxReg: String, elemLLVM: String, valReg: String) -> String {
+    mirCallVoidLine(sym, "ptr " + listReg + ", i64 " + idxReg + ", " + elemLLVM + " " + valReg)
+}
+
+/// mirCallVoidListBytesV1SetLine renders the bytes-v1 list-set ABI
+///   `  call void @<sym>(ptr <list>, i64 <idx>, ptr <slot>, i64 <size>)\n`.
+/// Composite element types (struct / tuple) go through this shape
+/// because the runtime can't know the element layout at compile
+/// time. `slot` is a stack-allocated buffer the caller spills the
+/// value into; `size` is the `getelementptr null, 1` byte-count
+/// idiom.
+pub fn mirCallVoidListBytesV1SetLine(sym: String, listReg: String, idxReg: String, slot: String, size: String) -> String {
+    mirCallVoidLine(sym, "ptr " + listReg + ", i64 " + idxReg + ", ptr " + slot + ", i64 " + size)
+}
+
+/// mirCallVoidListBytesV1GetLine renders the bytes-v1 list-get ABI
+///   `  call void @<sym>(ptr <list>, i64 <idx>, ptr <out>, i64 <size>)\n`.
+/// Symmetric with `mirCallVoidListBytesV1SetLine`; the runtime
+/// memcpys `size` bytes from the list's storage into the caller's
+/// `out` slot, then the caller loads through it.
+pub fn mirCallVoidListBytesV1GetLine(sym: String, listReg: String, idxReg: String, outSlot: String, size: String) -> String {
+    mirCallVoidLine(sym, "ptr " + listReg + ", i64 " + idxReg + ", ptr " + outSlot + ", i64 " + size)
+}
+
+/// mirCallVoidListPushBytesV1Line renders the bytes-v1 list-push ABI
+///   `  call void @<sym>(ptr <list>, ptr <slot>, i64 <size>)\n`.
+/// Used by `emitListPushOperand`'s composite-element path. The
+/// runtime memcpys `size` bytes into a fresh tail slot; callers
+/// spill the value beforehand and pass `getelementptr null, 1` for
+/// `size`.
+pub fn mirCallVoidListPushBytesV1Line(sym: String, listReg: String, slot: String, size: String) -> String {
+    mirCallVoidLine(sym, "ptr " + listReg + ", ptr " + slot + ", i64 " + size)
+}
+
+/// mirGEPNullSizeLine renders the `getelementptr null, 1` size-of
+/// idiom: `  <reg> = getelementptr <ty>, ptr null, i32 1\n`. The
+/// resulting register holds the byte stride for `<ty>` — used as the
+/// `size` arg to bytes-v1 runtime helpers when the LLVM `sizeof`
+/// constant fold can't be expressed inline. Mirrors what
+/// `llvmSizeOf(em, ty)` produces, but as a bare line so callers that
+/// don't go through the LlvmEmitter can still emit it.
+pub fn mirGEPNullSizeLine(reg: String, ty: String) -> String {
+    "  " + reg + " = getelementptr " + ty + ", ptr null, i32 1\n"
+}
+
+/// mirPtrToIntSizeLine renders the second half of the size-of idiom:
+///   `  <reg> = ptrtoint ptr <gepReg> to i64\n`
+/// Callers chain it after `mirGEPNullSizeLine` to materialise the
+/// byte width as an i64 register. The combined two-line sequence is
+/// the LLVM-level rendering of the `sizeof(<ty>)` constant.
+pub fn mirPtrToIntSizeLine(reg: String, gepReg: String) -> String {
+    "  " + reg + " = ptrtoint ptr " + gepReg + " to i64\n"
+}
+
+/// mirSizeOfLines renders both halves of the GEP-null sizeof idiom
+/// in one helper: `getelementptr <ty>, ptr null, i32 1` followed by
+/// `ptrtoint ptr <gep> to i64`. Callers pass freshly-allocated
+/// register names for both intermediaries; the returned string is a
+/// two-line block ready to splice into `g.fnBuf`. Centralising the
+/// two-step sequence keeps the order stable and removes a class of
+/// "GEP / ptrtoint reordered" diff churn from refactors.
+pub fn mirSizeOfLines(gepReg: String, sizeReg: String, ty: String) -> String {
+    mirGEPNullSizeLine(gepReg, ty) + mirPtrToIntSizeLine(sizeReg, gepReg)
+}
+
+/// mirThunkHeaderLine renders the opening line of a closure-thunk
+/// definition: `define private <retLLVM> @<thunkName>(<headerParams>) {\n`.
+/// `headerParams` is the pre-joined param list including the
+/// leading `ptr %env`. Callers compose the full thunk body via
+/// `mirThunkBody`; this builder is exposed standalone for sites
+/// that want to splice the header into a custom body.
+pub fn mirThunkHeaderLine(retLLVM: String, thunkName: String, headerParams: String) -> String {
+    "define private " + retLLVM + " @" + thunkName + "(" + headerParams + ") \{\n"
+}
+
+/// mirThunkEntryLine returns the literal `entry:\n` block label
+/// header used by every thunk body. Centralised so the label name
+/// stays consistent with the existing emitter convention; if the
+/// project ever switches to a different entry-block name (e.g.
+/// `bb0:`) only this builder needs updating.
+pub fn mirThunkEntryLine() -> String {
+    "entry:\n"
+}
+
+/// mirThunkVoidCallLine renders the body of a void-return thunk:
+///   `  call void @<symbol>(<argList>)\n  ret void\n`
+/// The thunk discards its env and tail-calls the real symbol with
+/// the user args. `argList` is pre-joined by the caller.
+pub fn mirThunkVoidCallLine(symbol: String, argList: String) -> String {
+    "  call void @" + symbol + "(" + argList + ")\n  ret void\n"
+}
+
+/// mirThunkValueCallLine renders the body of a value-return thunk:
+///   `  %ret = call <retLLVM> @<symbol>(<argList>)\n  ret <retLLVM> %ret\n`
+/// Sibling of `mirThunkVoidCallLine` for non-void returns.
+pub fn mirThunkValueCallLine(retLLVM: String, symbol: String, argList: String) -> String {
+    "  %ret = call " + retLLVM + " @" + symbol + "(" + argList + ")\n  ret " + retLLVM + " %ret\n"
+}
+
+/// mirThunkFooterLine returns the literal `}\n\n` that closes a
+/// thunk definition. The trailing two newlines match the legacy
+/// emitter's spacing (one blank line between consecutive
+/// `define`s) so the thunk-pool layout stays byte-stable.
+pub fn mirThunkFooterLine() -> String {
+    "\}\n\n"
+}
+
+/// mirThunkBody assembles the entire closure-thunk text in one
+/// builder. Inputs:
+///   `retLLVM`       — `void` for unit-returning closures, otherwise
+///                     the closure's lowered return LLVM type.
+///   `thunkName`     — the thunk's exported symbol (built by
+///                     `mirThunkName`).
+///   `symbol`        — the underlying real-fn symbol the thunk
+///                     forwards to. The `__osty_closure_thunk_*`
+///                     prefix is stripped by `mirThunkName`.
+///   `headerParams`  — pre-joined param list including `ptr %env`.
+///   `argList`       — pre-joined arg list passed to the underlying
+///                     fn, identical shape to `headerParams` minus
+///                     the `ptr %env` prefix (env is dropped).
+/// The returned string is a complete `define private … {…}` block
+/// terminated by the two-newline footer.
+pub fn mirThunkBody(retLLVM: String, thunkName: String, symbol: String, headerParams: String, argList: String) -> String {
+    let header = mirThunkHeaderLine(retLLVM, thunkName, headerParams)
+    let entry = mirThunkEntryLine()
+    let body = if retLLVM == "void" {
+        mirThunkVoidCallLine(symbol, argList)
+    } else {
+        mirThunkValueCallLine(retLLVM, symbol, argList)
+    }
+    let footer = mirThunkFooterLine()
+    header + entry + body + footer
+}
+
+/// mirThunkParamPart renders one parameter entry of a thunk's user-
+/// param list: `<llvmT> %arg<idxDigits>`. Mirrors the equivalent
+/// `mirFunctionParamPart` shape but specialised for the thunk
+/// surface (no `noalias` annotation — the thunk forwards verbatim
+/// and the underlying fn already owns the alias contract).
+pub fn mirThunkParamPart(llvmT: String, idxDigits: String) -> String {
+    llvmT + " %arg" + idxDigits
+}
+
+/// mirCallVarargPrintfPathLine renders the path-prefixed printf
+/// shape used by the bench `?` propagation error message:
+///   `  call i32 (ptr, ...) @printf(ptr <fmtSym>, ptr <pathSym>)\n`
+/// Combines `mirCallVarargPrintfLine` with the single-pointer arg
+/// preamble that `emitBenchErrorCheck` emits inline today.
+pub fn mirCallVarargPrintfPathLine(fmtSym: String, pathSym: String) -> String {
+    mirCallVarargPrintfLine(fmtSym, "ptr " + pathSym)
+}
+
+/// mirICmpEqI64Line renders the eq-on-i64 specialisation of
+/// `mirICmpEqLine`: `  <reg> = icmp eq i64 <lhs>, <rhs>\n`. Hot
+/// sites (Result tag check, discriminant-zero probe) use this
+/// directly to avoid threading the type literal at every call.
+pub fn mirICmpEqI64Line(reg: String, lhs: String, rhs: String) -> String {
+    mirICmpEqLine(reg, "i64", lhs, rhs)
+}
+
+/// mirICmpEqI1Line renders the eq-on-i1 specialisation of
+/// `mirICmpEqLine`. Used by the bool-equality fast path that the
+/// HIR-side `==` lowering threads through MIR.
+pub fn mirICmpEqI1Line(reg: String, lhs: String, rhs: String) -> String {
+    mirICmpEqLine(reg, "i1", lhs, rhs)
+}
+
+/// mirICmpEqPtrLine renders the eq-on-ptr specialisation of
+/// `mirICmpEqLine`. Used by the inline string-equality literal
+/// pointer-equality fast path and managed-handle null checks.
+pub fn mirICmpEqPtrLine(reg: String, lhs: String, rhs: String) -> String {
+    mirICmpEqLine(reg, "ptr", lhs, rhs)
+}
+
+/// mirCallVarargPrintfTwoArgLine renders the printf shape with two
+/// variadic args: `  call i32 (ptr, ...) @printf(ptr <fmt>, <a1>,
+/// <a2>)\n`. Used by the testing-summary line that prints `(seed
+/// 0x%x)` after the test count, and by bench summaries that print
+/// `iter=%d total=%lldns`.
+pub fn mirCallVarargPrintfTwoArgLine(fmtSym: String, arg1: String, arg2: String) -> String {
+    mirCallVarargPrintfLine(fmtSym, arg1 + ", " + arg2)
+}
+
+/// mirCallVarargPrintfThreeArgLine renders printf with three
+/// variadic args. Used by bench summaries (iter=N total=Tns
+/// avg=Ans) where three operands follow the format string.
+pub fn mirCallVarargPrintfThreeArgLine(fmtSym: String, arg1: String, arg2: String, arg3: String) -> String {
+    mirCallVarargPrintfLine(fmtSym, arg1 + ", " + arg2 + ", " + arg3)
+}
+
+/// mirAllocaSpillStoreLine renders the canonical "spill an SSA
+/// value into a stack slot" preamble used before bytes-v1 runtime
+/// calls: `alloca <ty>` + `store <ty> <val>, ptr <slot>`. The slot
+/// register is freshly allocated by the caller; the helper threads
+/// the type once. Sibling of `mirAllocaWithStoreLine` (which is
+/// integer-typed at the call site) for the generic-typed case
+/// where the caller already knows the LLVM type string.
+pub fn mirAllocaSpillStoreLine(slot: String, ty: String, val: String) -> String {
+    mirAllocaLine(slot, ty) + mirStoreLine(ty, val, slot)
+}
+
+/// mirCallVoidListBytesV1SetWithBarrierLine renders the bytes-v1
+/// list-set ABI with a trailing GC write-barrier slot pointer:
+///   `  call void @<sym>(ptr <list>, i64 <idx>, ptr <slot>, i64 <size>, ptr <barrier>)\n`
+/// Used by `emitIndexedWrite`'s composite-element list-set path to
+/// pass the GC's per-write-barrier slot (`ptr null` when the list
+/// is unmanaged or the barrier is elided). The four-arg variant
+/// `mirCallVoidListBytesV1SetLine` covers the no-barrier shape.
+pub fn mirCallVoidListBytesV1SetWithBarrierLine(sym: String, listReg: String, idxReg: String, slot: String, size: String, barrier: String) -> String {
+    mirCallVoidLine(sym, "ptr " + listReg + ", i64 " + idxReg + ", ptr " + slot + ", i64 " + size + ", ptr " + barrier)
+}
+
+/// mirCallVoidLikeRuntimeNoArgsLine renders `  call void @<sym>()\n`
+/// for runtime hooks that take no arguments. Companion to
+/// `mirCallVoidNoArgsLine` (already present); kept as a synonym so
+/// the call-site comment stays self-documenting at the GC entry hook
+/// emission sites that explicitly note "noargs runtime hook".
+pub fn mirCallVoidLikeRuntimeNoArgsLine(sym: String) -> String {
+    mirCallVoidNoArgsLine(sym)
+}
+
+/// mirSpillToBytesV1Lines renders the canonical "spill SSA + size-of"
+/// preamble used before a bytes-v1 runtime call: alloca + store +
+/// GEP-null + ptrtoint. Returns the four-line block ready to splice
+/// into `g.fnBuf`. Inputs:
+///   `slot`     — fresh register for the spill slot.
+///   `slotTy`   — LLVM type of the value being spilled (the slot's
+///                element type).
+///   `val`      — SSA register holding the value to spill.
+///   `gepReg`   — fresh register for the GEP-null intermediate.
+///   `sizeReg`  — fresh register holding the resulting i64 byte
+///                count.
+/// Centralising the 4-line preamble keeps the spill-then-size
+/// sequence stable and lets refactors swap the underlying spill
+/// strategy in one place.
+pub fn mirSpillToBytesV1Lines(slot: String, slotTy: String, val: String, gepReg: String, sizeReg: String) -> String {
+    mirAllocaSpillStoreLine(slot, slotTy, val) + mirSizeOfLines(gepReg, sizeReg, slotTy)
+}
+
+/// mirRuntimeDeclareListBytesV1SetLine renders the canonical declare
+/// shape for the bytes-v1 list-set runtime ABI:
+///   `declare void @<sym>(ptr, i64, ptr, i64, ptr)`
+/// Companion to `mirRuntimeDeclareLine` for the specific 5-arg
+/// shape. Centralised so the param-list literal stays consistent
+/// between the declare and the call sites.
+pub fn mirRuntimeDeclareListBytesV1SetLine(sym: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, i64, ptr, i64, ptr")
+}
+
+/// mirRuntimeDeclareListBytesV1GetLine renders the canonical declare
+/// shape for the bytes-v1 list-get runtime ABI:
+///   `declare void @<sym>(ptr, i64, ptr, i64)`
+/// Symmetric with `mirRuntimeDeclareListBytesV1SetLine`; the get
+/// side has no write-barrier slot so the param list is one shorter.
+pub fn mirRuntimeDeclareListBytesV1GetLine(sym: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, i64, ptr, i64")
+}
+
+/// mirRuntimeDeclareListPushBytesV1Line renders the canonical
+/// declare shape for the bytes-v1 list-push runtime ABI:
+///   `declare void @<sym>(ptr, ptr, i64)`
+/// Used at the IntrinsicListPush composite-element site.
+pub fn mirRuntimeDeclareListPushBytesV1Line(sym: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, ptr, i64")
+}
+
+/// mirRuntimeDeclareMapInsertLine renders the canonical declare
+/// shape for the runtime map-insert ABI:
+///   `declare void @<sym>(ptr, <keyLLVM>, ptr)`
+/// `keyLLVM` is the key's scalar LLVM type. The trailing `ptr` is
+/// the value-payload buffer the runtime memcpys from.
+pub fn mirRuntimeDeclareMapInsertLine(sym: String, keyLLVM: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, " + keyLLVM + ", ptr")
+}
+
+/// mirRuntimeDeclareMapGetLine renders the canonical declare shape
+/// for the runtime map-probe ABI:
+///   `declare i1 @<sym>(ptr, <keyLLVM>, ptr)`
+/// Returns true-on-hit; the trailing `ptr` is the out-slot the
+/// runtime writes the value into on the hit path.
+pub fn mirRuntimeDeclareMapGetLine(sym: String, keyLLVM: String) -> String {
+    mirRuntimeDeclareLine("i1", sym, "ptr, " + keyLLVM + ", ptr")
+}
+
+/// mirRuntimeDeclareMapIncrLine renders the canonical declare shape
+/// for the fused map-incr runtime ABI:
+///   `declare i64 @<sym>(ptr, <keyLLVM>, i64)`
+/// Returns the new map value; the trailing `i64` is the delta to
+/// add (probe-and-update fast path).
+pub fn mirRuntimeDeclareMapIncrLine(sym: String, keyLLVM: String) -> String {
+    mirRuntimeDeclareLine("i64", sym, "ptr, " + keyLLVM + ", i64")
+}
+
+/// mirRuntimeDeclareMapContainsLine renders the canonical declare
+/// shape for the runtime map-contains ABI:
+///   `declare i1 @<sym>(ptr, <keyLLVM>)`
+/// Returns true-on-hit; no out-slot, no value transfer — used for
+/// the `m.contains(k)` predicate.
+pub fn mirRuntimeDeclareMapContainsLine(sym: String, keyLLVM: String) -> String {
+    mirRuntimeDeclareLine("i1", sym, "ptr, " + keyLLVM)
+}
+
+/// mirRuntimeDeclareMapRemoveLine renders the canonical declare
+/// shape for the runtime map-remove ABI:
+///   `declare i1 @<sym>(ptr, <keyLLVM>)`
+/// Returns true if the key was present (and removed). MIR usually
+/// discards the result but the declaration must match the C
+/// runtime so the verifier accepts the call.
+pub fn mirRuntimeDeclareMapRemoveLine(sym: String, keyLLVM: String) -> String {
+    mirRuntimeDeclareLine("i1", sym, "ptr, " + keyLLVM)
+}
+
+/// mirRuntimeDeclareListSetSimpleLine renders the canonical declare
+/// shape for the typed-element list-set runtime ABI:
+///   `declare void @<sym>(ptr, i64, <elemLLVM>)`
+/// Used by the typed-element fast path of
+/// `osty_rt_list_set_<suffix>` (i64/i1/double/ptr).
+pub fn mirRuntimeDeclareListSetSimpleLine(sym: String, elemLLVM: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, i64, " + elemLLVM)
+}
