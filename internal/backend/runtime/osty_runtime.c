@@ -3060,33 +3060,78 @@ static OSTY_HOT_INLINE void osty_rt_string_measure(const char *value,
          * collapse all inline encodings into a small region of
          * the slot space). */
         size_t i;
-        uint64_t h = 1469598103934665603ULL;
         len = osty_rt_string_inline_len(value);
-        for (i = 0; i < len; i++) {
-            h ^= (uint64_t)(unsigned char)osty_rt_string_inline_byte(value, i);
-            h *= 1099511628211ULL;
-        }
-        hash = (size_t)osty_rt_hash_mix64(h);
-    } else if (value != NULL) {
-        size_t idx = (size_t)osty_rt_hash_mix64(
-                         ((uint64_t)(uintptr_t)value) >> 4) &
-                     (OSTY_RT_STRING_CACHE_SLOTS - 1);
-        osty_rt_string_cache_entry *entry = &osty_rt_string_cache[idx];
-        if (entry->value == value) {
-            len = entry->len;
-            hash = entry->hash;
-        } else {
-            const unsigned char *cursor = (const unsigned char *)value;
+        if (hash_out != NULL) {
             uint64_t h = 1469598103934665603ULL;
-            while (*cursor != '\0') {
-                h ^= (uint64_t)(*cursor++);
+            for (i = 0; i < len; i++) {
+                h ^= (uint64_t)(unsigned char)osty_rt_string_inline_byte(value, i);
                 h *= 1099511628211ULL;
-                len += 1;
             }
             hash = (size_t)osty_rt_hash_mix64(h);
-            entry->value = value;
-            entry->len = len;
-            entry->hash = hash;
+        }
+    } else if (value != NULL) {
+        /* Length fast path via the GC header. Every heap-allocated
+         * string carries `byte_size = len + 1` (alloc size includes
+         * the trailing NUL), so reading the header gives us length
+         * in O(1) — no `strlen` walk, no per-pointer cache lookup.
+         *
+         * Arena allocations (the dominant case post-#881) put the
+         * header at exactly `payload - sizeof(header)`. Non-arena
+         * payloads — `.rodata` string literals, humongous strings,
+         * forwarded objects — skip this path and fall through to
+         * the existing cache + strlen logic.
+         *
+         * Hash still uses the 256-slot per-pointer cache; deriving
+         * hash from the header would require an extra `cached_hash`
+         * field which we'll add only if profiling shows it's worth
+         * the layout change. */
+        bool len_from_header = false;
+        if (osty_gc_arena_contains((void *)value)) {
+            osty_gc_header *hdr = (osty_gc_header *)((unsigned char *)value - sizeof(osty_gc_header));
+            if ((unsigned char *)hdr >= osty_gc_arena_base &&
+                hdr->payload == (void *)value &&
+                hdr->object_kind == OSTY_GC_KIND_STRING &&
+                hdr->byte_size > 0) {
+                len = (size_t)hdr->byte_size - 1;
+                len_from_header = true;
+            }
+        }
+        if (hash_out != NULL || !len_from_header) {
+            /* Need hash, or header-derived length wasn't available.
+             * Use the existing cache + strlen path. */
+            size_t idx = (size_t)osty_rt_hash_mix64(
+                             ((uint64_t)(uintptr_t)value) >> 4) &
+                         (OSTY_RT_STRING_CACHE_SLOTS - 1);
+            osty_rt_string_cache_entry *entry = &osty_rt_string_cache[idx];
+            if (entry->value == value) {
+                if (!len_from_header) {
+                    len = entry->len;
+                }
+                hash = entry->hash;
+            } else {
+                /* Cache miss. If we have len-from-header, walk only
+                 * for the hash — skip the length count. Otherwise
+                 * walk for both. */
+                const unsigned char *cursor = (const unsigned char *)value;
+                uint64_t h = 1469598103934665603ULL;
+                if (len_from_header) {
+                    size_t i;
+                    for (i = 0; i < len; i++) {
+                        h ^= (uint64_t)cursor[i];
+                        h *= 1099511628211ULL;
+                    }
+                } else {
+                    while (*cursor != '\0') {
+                        h ^= (uint64_t)(*cursor++);
+                        h *= 1099511628211ULL;
+                        len += 1;
+                    }
+                }
+                hash = (size_t)osty_rt_hash_mix64(h);
+                entry->value = value;
+                entry->len = len;
+                entry->hash = hash;
+            }
         }
     }
     if (len_out != NULL) {
