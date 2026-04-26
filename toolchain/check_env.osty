@@ -2987,6 +2987,54 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         paramNames: [], paramTys: [],
         generics: [], genericBounds: [],
     })
+
+    // ----- Integer arithmetic methods (`primitives/int.osty`) -----
+    // Each method has a `Self`-shaped signature; substitute the owner
+    // kind for `Self` in receiver / param / return positions so user
+    // code's `Int.abs()` / `Int8.clamp(lo, hi)` / `Byte.min(other)`
+    // resolve uniformly. The LLVM-side coverage (i64/i32/i8) is the
+    // backend's concern; the checker accepts every width listed in
+    // `#[intrinsic_methods(Int, Int8, Int16, Int32, Int64, UInt8,
+    // UInt16, UInt32, UInt64, Byte)]`.
+    let intArithKinds: List<(String, Int)> = [
+        ("Int", tInt(tys)),
+        ("Int8", tInt8(tys)),
+        ("Int16", tInt16(tys)),
+        ("Int32", tInt32(tys)),
+        ("Int64", tInt64(tys)),
+        ("UInt8", tUInt8(tys)),
+        ("UInt16", tUInt16(tys)),
+        ("UInt32", tUInt32(tys)),
+        ("UInt64", tUInt64(tys)),
+        ("Byte", tByte(tys)),
+    ]
+    for (ownerName, ty) in intArithKinds {
+        checkRegisterFn(env, CheckFnSig {
+            name: "abs", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "signum", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "min", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+            paramNames: ["other"], paramTys: [ty],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "max", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+            paramNames: ["other"], paramTys: [ty],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "clamp", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+            paramNames: ["lo", "hi"], paramTys: [ty, ty],
+            generics: [], genericBounds: [],
+        })
+    }
 }
 
 // Preserve a surface-level mirror of `frontCheckResult*`-style bridge

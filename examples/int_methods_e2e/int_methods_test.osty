@@ -1,0 +1,117 @@
+// int_methods_e2e — regression coverage for the branchless lowerings
+// of `Int.{abs,min,max,clamp,signum}` added to the MIR path. Each
+// test exercises the boundary cases that the algorithm must handle
+// correctly: zero, positive, negative, and saturated inputs.
+
+use std.testing
+
+// ─── abs ──────────────────────────────────────────────────────────
+
+fn testAbsZero() {
+    let n: Int = 0
+    testing.assertEq(n.abs(), 0)
+}
+
+fn testAbsPositive() {
+    let n: Int = 42
+    testing.assertEq(n.abs(), 42)
+}
+
+fn testAbsNegative() {
+    let n: Int = -7
+    testing.assertEq(n.abs(), 7)
+}
+
+// ─── min / max ────────────────────────────────────────────────────
+
+fn testMinLeftSmaller() {
+    let a: Int = 3
+    let b: Int = 9
+    testing.assertEq(a.min(b), 3)
+}
+
+fn testMinRightSmaller() {
+    let a: Int = 9
+    let b: Int = 3
+    testing.assertEq(a.min(b), 3)
+}
+
+fn testMinEqual() {
+    let a: Int = 5
+    testing.assertEq(a.min(5), 5)
+}
+
+fn testMaxLeftLarger() {
+    let a: Int = 9
+    let b: Int = 3
+    testing.assertEq(a.max(b), 9)
+}
+
+fn testMaxRightLarger() {
+    let a: Int = 3
+    let b: Int = 9
+    testing.assertEq(a.max(b), 9)
+}
+
+fn testMinNegative() {
+    let a: Int = -10
+    let b: Int = -3
+    testing.assertEq(a.min(b), -10)
+    testing.assertEq(a.max(b), -3)
+}
+
+// ─── clamp ────────────────────────────────────────────────────────
+// The algorithm is `min(max(val, lo), hi)`. The previous lowering
+// returned `hi` when val < lo and `lo` when val > hi — these tests
+// pin the correct behaviour.
+
+fn testClampInRange() {
+    let v: Int = 5
+    testing.assertEq(v.clamp(0, 10), 5)
+}
+
+fn testClampBelowLo() {
+    let v: Int = -3
+    testing.assertEq(v.clamp(0, 10), 0)
+}
+
+fn testClampAboveHi() {
+    let v: Int = 99
+    testing.assertEq(v.clamp(0, 10), 10)
+}
+
+fn testClampAtLo() {
+    let v: Int = 0
+    testing.assertEq(v.clamp(0, 10), 0)
+}
+
+fn testClampAtHi() {
+    let v: Int = 10
+    testing.assertEq(v.clamp(0, 10), 10)
+}
+
+fn testClampNegativeRange() {
+    let v: Int = -50
+    testing.assertEq(v.clamp(-10, -1), -10)
+}
+
+// ─── signum ───────────────────────────────────────────────────────
+// The algorithm is `(val < 0) ? -1 : ((val > 0) ? 1 : 0)`. The
+// previous lowering reused the same SSA register twice (LLVM rejects)
+// and inverted the branches so 0 mapped to -1 and negative inputs to
+// 0; these tests pin the correct three-way return.
+
+fn testSignumZero() {
+    let n: Int = 0
+    testing.assertEq(n.signum(), 0)
+}
+
+fn testSignumPositive() {
+    let n: Int = 42
+    testing.assertEq(n.signum(), 1)
+}
+
+fn testSignumNegative() {
+    let n: Int = -7
+    testing.assertEq(n.signum(), -1)
+}

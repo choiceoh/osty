@@ -5073,6 +5073,12 @@ func typeNameOf(t ir.Type) string {
 		return x.Name
 	case *ir.OptionalType:
 		return "Option"
+	case *ir.PrimType:
+		// `Int`, `Int8`, …, `Char`, `Bool`, … — matches the owner
+		// strings used by `intrinsic_methods` registrations so calls
+		// like `n.abs()` mangle to `Int__abs` instead of falling
+		// through as the bare method name.
+		return x.String()
 	}
 	return ""
 }

@@ -4912,6 +4912,199 @@ pub fn mirSelectDoubleLine(reg: String, cond: String, l: String, r: String) -> S
     mirSelectLine(reg, "double", cond, l, r)
 }
 
+/// §6 primitive method builders (abs, min, max, clamp, signum).
+///
+/// These lower `#[intrinsic_methods]` placeholder methods on integer
+/// types to branchless LLVM IR using `select` / `icmp` / `sub`.
+/// No C runtime function is needed — they are pure LLVM arithmetic.
+/// All builders take pre-allocated SSA register names as string
+/// parameters; the Go caller generates them via `g.fresh()`.
+
+/// mirAbsI64Line renders the branchless i64 absolute value:
+///   `  %neg = sub i64 0, <val>\n`
+///   `  %cmp = icmp slt i64 <val>, 0\n`
+///   `  %result = select i1 %cmp, i64 %neg, i64 <val>\n`
+pub fn mirAbsI64Line(negReg: String, cmpReg: String, valReg: String, resultReg: String) -> String {
+    mirRawAssignLine(negReg, "sub i64 0, " + valReg) +
+    mirICmpLine(cmpReg, "slt", "i64", valReg, "0") +
+    mirSelectI64Line(resultReg, cmpReg, negReg, valReg)
+}
+
+/// mirAbsI32Line renders the branchless i32 absolute value (Char).
+pub fn mirAbsI32Line(negReg: String, cmpReg: String, valReg: String, resultReg: String) -> String {
+    mirRawAssignLine(negReg, "sub i32 0, " + valReg) +
+    mirICmpLine(cmpReg, "slt", "i32", valReg, "0") +
+    mirSelectLine(resultReg, "i32", cmpReg, negReg, valReg)
+}
+
+/// mirAbsI16Line renders the branchless i16 absolute value.
+pub fn mirAbsI16Line(negReg: String, cmpReg: String, valReg: String, resultReg: String) -> String {
+    mirRawAssignLine(negReg, "sub i16 0, " + valReg) +
+    mirICmpLine(cmpReg, "slt", "i16", valReg, "0") +
+    mirSelectLine(resultReg, "i16", cmpReg, negReg, valReg)
+}
+
+/// mirAbsI8Line renders the branchless i8 absolute value (Byte).
+pub fn mirAbsI8Line(negReg: String, cmpReg: String, valReg: String, resultReg: String) -> String {
+    mirRawAssignLine(negReg, "sub i8 0, " + valReg) +
+    mirICmpLine(cmpReg, "slt", "i8", valReg, "0") +
+    mirSelectLine(resultReg, "i8", cmpReg, negReg, valReg)
+}
+
+/// mirMinI64Line renders the branchless i64 minimum:
+///   `  %cmp = icmp slt i64 <l>, <r>\n`
+///   `  %result = select i1 %cmp, i64 <l>, i64 <r>\n`
+pub fn mirMinI64Line(cmpReg: String, l: String, r: String, resultReg: String) -> String {
+    mirICmpLine(cmpReg, "slt", "i64", l, r) +
+    mirSelectI64Line(resultReg, cmpReg, l, r)
+}
+
+/// mirMaxI64Line renders the branchless i64 maximum:
+///   `  %cmp = icmp sgt i64 <l>, <r>\n`
+///   `  %result = select i1 %cmp, i64 <l>, i64 <r>\n`
+pub fn mirMaxI64Line(cmpReg: String, l: String, r: String, resultReg: String) -> String {
+    mirICmpLine(cmpReg, "sgt", "i64", l, r) +
+    mirSelectI64Line(resultReg, cmpReg, l, r)
+}
+
+/// mirMinI32Line renders the branchless i32 minimum (Char).
+pub fn mirMinI32Line(cmpReg: String, l: String, r: String, resultReg: String) -> String {
+    mirICmpLine(cmpReg, "slt", "i32", l, r) +
+    mirSelectLine(resultReg, "i32", cmpReg, l, r)
+}
+
+/// mirMaxI32Line renders the branchless i32 maximum (Char).
+pub fn mirMaxI32Line(cmpReg: String, l: String, r: String, resultReg: String) -> String {
+    mirICmpLine(cmpReg, "sgt", "i32", l, r) +
+    mirSelectLine(resultReg, "i32", cmpReg, l, r)
+}
+
+/// mirMinI16Line renders the branchless i16 minimum.
+pub fn mirMinI16Line(cmpReg: String, l: String, r: String, resultReg: String) -> String {
+    mirICmpLine(cmpReg, "slt", "i16", l, r) +
+    mirSelectLine(resultReg, "i16", cmpReg, l, r)
+}
+
+/// mirMaxI16Line renders the branchless i16 maximum.
+pub fn mirMaxI16Line(cmpReg: String, l: String, r: String, resultReg: String) -> String {
+    mirICmpLine(cmpReg, "sgt", "i16", l, r) +
+    mirSelectLine(resultReg, "i16", cmpReg, l, r)
+}
+
+/// mirMinI8Line renders the branchless i8 minimum (Byte).
+pub fn mirMinI8Line(cmpReg: String, l: String, r: String, resultReg: String) -> String {
+    mirICmpLine(cmpReg, "slt", "i8", l, r) +
+    mirSelectLine(resultReg, "i8", cmpReg, l, r)
+}
+
+/// mirMaxI8Line renders the branchless i8 maximum (Byte).
+pub fn mirMaxI8Line(cmpReg: String, l: String, r: String, resultReg: String) -> String {
+    mirICmpLine(cmpReg, "sgt", "i8", l, r) +
+    mirSelectLine(resultReg, "i8", cmpReg, l, r)
+}
+
+/// mirClampI64Line renders the branchless i64 clamp to [lo, hi]:
+///   `  %cmpHi = icmp sgt i64 <val>, <hi>\n`
+///   `  %clampedHi = select i1 %cmpHi, i64 <hi>, i64 <val>\n`  (val > hi → hi)
+///   `  %cmpLo = icmp slt i64 %clampedHi, <lo>\n`
+///   `  %result = select i1 %cmpLo, i64 <lo>, i64 %clampedHi\n` (clampedHi < lo → lo)
+/// Result: max(lo, min(val, hi)).
+pub fn mirClampI64Line(
+    cmpHi: String,
+    clampedHi: String,
+    cmpLo: String,
+    result: String,
+    val: String,
+    lo: String,
+    hi: String,
+) -> String {
+    mirICmpLine(cmpHi, "sgt", "i64", val, hi) +
+    mirSelectI64Line(clampedHi, cmpHi, hi, val) +
+    mirICmpLine(cmpLo, "slt", "i64", clampedHi, lo) +
+    mirSelectI64Line(result, cmpLo, lo, clampedHi)
+}
+
+/// mirClampI32Line renders the branchless i32 clamp to [lo, hi].
+pub fn mirClampI32Line(
+    cmpHi: String,
+    clampedHi: String,
+    cmpLo: String,
+    result: String,
+    val: String,
+    lo: String,
+    hi: String,
+) -> String {
+    mirICmpLine(cmpHi, "sgt", "i32", val, hi) +
+    mirSelectLine(clampedHi, "i32", cmpHi, hi, val) +
+    mirICmpLine(cmpLo, "slt", "i32", clampedHi, lo) +
+    mirSelectLine(result, "i32", cmpLo, lo, clampedHi)
+}
+
+/// mirClampI16Line renders the branchless i16 clamp to [lo, hi].
+pub fn mirClampI16Line(
+    cmpHi: String,
+    clampedHi: String,
+    cmpLo: String,
+    result: String,
+    val: String,
+    lo: String,
+    hi: String,
+) -> String {
+    mirICmpLine(cmpHi, "sgt", "i16", val, hi) +
+    mirSelectLine(clampedHi, "i16", cmpHi, hi, val) +
+    mirICmpLine(cmpLo, "slt", "i16", clampedHi, lo) +
+    mirSelectLine(result, "i16", cmpLo, lo, clampedHi)
+}
+
+/// mirClampI8Line renders the branchless i8 clamp to [lo, hi].
+pub fn mirClampI8Line(
+    cmpHi: String,
+    clampedHi: String,
+    cmpLo: String,
+    result: String,
+    val: String,
+    lo: String,
+    hi: String,
+) -> String {
+    mirICmpLine(cmpHi, "sgt", "i8", val, hi) +
+    mirSelectLine(clampedHi, "i8", cmpHi, hi, val) +
+    mirICmpLine(cmpLo, "slt", "i8", clampedHi, lo) +
+    mirSelectLine(result, "i8", cmpLo, lo, clampedHi)
+}
+
+/// mirSignumI64Line renders the branchless i64 signum (-1/0/1):
+///   `  %gt = icmp sgt i64 <val>, 0\n`
+///   `  %lt = icmp slt i64 <val>, 0\n`
+///   `  %pos = select i1 %gt, i64 1, i64 0\n`
+///   `  %result = select i1 %lt, i64 -1, i64 %pos\n`
+/// Uses separate posVal register to avoid SSA violation.
+pub fn mirSignumI64Line(
+    gt: String,
+    lt: String,
+    posVal: String,
+    result: String,
+    val: String,
+) -> String {
+    mirICmpLine(gt, "sgt", "i64", val, "0") +
+    mirICmpLine(lt, "slt", "i64", val, "0") +
+    mirSelectI64Line(posVal, gt, "1", "0") +
+    mirSelectI64Line(result, lt, "-1", posVal)
+}
+
+/// mirSignumI32Line renders the branchless i32 signum (-1/0/1).
+pub fn mirSignumI32Line(
+    gt: String,
+    lt: String,
+    posVal: String,
+    result: String,
+    val: String,
+) -> String {
+    mirICmpLine(gt, "sgt", "i32", val, "0") +
+    mirICmpLine(lt, "slt", "i32", val, "0") +
+    mirSelectLine(posVal, "i32", gt, "1", "0") +
+    mirSelectLine(result, "i32", lt, "-1", posVal)
+}
+
 /// §6 compound conditional / boolean-helper builders.
 
 /// mirInBoundsLines renders the canonical "non-negative AND below

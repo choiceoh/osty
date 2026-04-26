@@ -36267,6 +36267,11 @@ func checkInstallPrelude(env *CheckEnv) {
 	checkInstallErrorIntrinsics(env)
 	// Osty: /tmp/selfhost_merged.osty:16127:5
 	checkInstallImplicitModules(env)
+	// Mirror of `installPrimitiveArithMethods` in
+	// toolchain/check_env.osty: registers abs/min/max/clamp/signum on
+	// Int / Int8 / … / Byte. Defined alongside this file (not inside
+	// the generated body) so the frozen seed stays minimally touched.
+	installPrimitiveArithMethods(env)
 }
 
 // Osty: /tmp/selfhost_merged.osty:16134:1

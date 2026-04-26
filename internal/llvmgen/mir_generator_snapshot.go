@@ -3628,6 +3628,163 @@ func mirSelectDoubleLine(reg, cond, l, r string) string {
 	return mirSelectLine(reg, "double", cond, l, r)
 }
 
+// §6 primitive method builders (abs, min, max, clamp, signum).
+
+// mirAbsI64Line — branchless i64 absolute value.
+// Osty: mirAbsI64Line
+func mirAbsI64Line(negReg, cmpReg, valReg, resultReg string) string {
+	return mirRawAssignLine(negReg, "sub i64 0, "+valReg) +
+		mirICmpLine(cmpReg, "slt", "i64", valReg, "0") +
+		mirSelectI64Line(resultReg, cmpReg, negReg, valReg)
+}
+
+// mirAbsI32Line — branchless i32 absolute value (Char).
+// Osty: mirAbsI32Line
+func mirAbsI32Line(negReg, cmpReg, valReg, resultReg string) string {
+	return mirRawAssignLine(negReg, "sub i32 0, "+valReg) +
+		mirICmpLine(cmpReg, "slt", "i32", valReg, "0") +
+		mirSelectLine(resultReg, "i32", cmpReg, negReg, valReg)
+}
+
+// mirAbsI16Line — branchless i16 absolute value.
+// Osty: mirAbsI16Line
+func mirAbsI16Line(negReg, cmpReg, valReg, resultReg string) string {
+	return mirRawAssignLine(negReg, "sub i16 0, "+valReg) +
+		mirICmpLine(cmpReg, "slt", "i16", valReg, "0") +
+		mirSelectLine(resultReg, "i16", cmpReg, negReg, valReg)
+}
+
+// mirAbsI8Line — branchless i8 absolute value (Byte).
+// Osty: mirAbsI8Line
+func mirAbsI8Line(negReg, cmpReg, valReg, resultReg string) string {
+	return mirRawAssignLine(negReg, "sub i8 0, "+valReg) +
+		mirICmpLine(cmpReg, "slt", "i8", valReg, "0") +
+		mirSelectLine(resultReg, "i8", cmpReg, negReg, valReg)
+}
+
+// mirMinI64Line — branchless i64 minimum.
+// Osty: mirMinI64Line
+func mirMinI64Line(cmpReg, l, r, resultReg string) string {
+	return mirICmpLine(cmpReg, "slt", "i64", l, r) +
+		mirSelectI64Line(resultReg, cmpReg, l, r)
+}
+
+// mirMaxI64Line — branchless i64 maximum.
+// Osty: mirMaxI64Line
+func mirMaxI64Line(cmpReg, l, r, resultReg string) string {
+	return mirICmpLine(cmpReg, "sgt", "i64", l, r) +
+		mirSelectI64Line(resultReg, cmpReg, l, r)
+}
+
+// mirMinI32Line — branchless i32 minimum (Char).
+// Osty: mirMinI32Line
+func mirMinI32Line(cmpReg, l, r, resultReg string) string {
+	return mirICmpLine(cmpReg, "slt", "i32", l, r) +
+		mirSelectLine(resultReg, "i32", cmpReg, l, r)
+}
+
+// mirMaxI32Line — branchless i32 maximum (Char).
+// Osty: mirMaxI32Line
+func mirMaxI32Line(cmpReg, l, r, resultReg string) string {
+	return mirICmpLine(cmpReg, "sgt", "i32", l, r) +
+		mirSelectLine(resultReg, "i32", cmpReg, l, r)
+}
+
+// mirMinI16Line — branchless i16 minimum.
+// Osty: mirMinI16Line
+func mirMinI16Line(cmpReg, l, r, resultReg string) string {
+	return mirICmpLine(cmpReg, "slt", "i16", l, r) +
+		mirSelectLine(resultReg, "i16", cmpReg, l, r)
+}
+
+// mirMaxI16Line — branchless i16 maximum.
+// Osty: mirMaxI16Line
+func mirMaxI16Line(cmpReg, l, r, resultReg string) string {
+	return mirICmpLine(cmpReg, "sgt", "i16", l, r) +
+		mirSelectLine(resultReg, "i16", cmpReg, l, r)
+}
+
+// mirMinI8Line — branchless i8 minimum (Byte).
+// Osty: mirMinI8Line
+func mirMinI8Line(cmpReg, l, r, resultReg string) string {
+	return mirICmpLine(cmpReg, "slt", "i8", l, r) +
+		mirSelectLine(resultReg, "i8", cmpReg, l, r)
+}
+
+// mirMaxI8Line — branchless i8 maximum (Byte).
+// Osty: mirMaxI8Line
+func mirMaxI8Line(cmpReg, l, r, resultReg string) string {
+	return mirICmpLine(cmpReg, "sgt", "i8", l, r) +
+		mirSelectLine(resultReg, "i8", cmpReg, l, r)
+}
+
+// mirClampI64Line — branchless i64 clamp to [lo, hi].
+// Osty: mirClampI64Line
+// Algorithm: first upper-bound clamp (val > hi → hi), then lower-bound
+// clamp (clampedHi < lo → lo). Result: max(lo, min(val, hi)).
+func mirClampI64Line(cmpHi, clampedHi, cmpLo, result, val, lo, hi string) string {
+	return mirICmpLine(cmpHi, "sgt", "i64", val, hi) +
+		mirSelectI64Line(clampedHi, cmpHi, hi, val) +
+		mirICmpLine(cmpLo, "slt", "i64", clampedHi, lo) +
+		mirSelectI64Line(result, cmpLo, lo, clampedHi)
+}
+
+// mirClampI32Line — branchless i32 clamp to [lo, hi].
+// Osty: mirClampI32Line
+func mirClampI32Line(cmpHi, clampedHi, cmpLo, result, val, lo, hi string) string {
+	return mirICmpLine(cmpHi, "sgt", "i32", val, hi) +
+		mirSelectLine(clampedHi, "i32", cmpHi, hi, val) +
+		mirICmpLine(cmpLo, "slt", "i32", clampedHi, lo) +
+		mirSelectLine(result, "i32", cmpLo, lo, clampedHi)
+}
+
+// mirClampI16Line — branchless i16 clamp to [lo, hi].
+// Osty: mirClampI16Line
+func mirClampI16Line(cmpHi, clampedHi, cmpLo, result, val, lo, hi string) string {
+	return mirICmpLine(cmpHi, "sgt", "i16", val, hi) +
+		mirSelectLine(clampedHi, "i16", cmpHi, hi, val) +
+		mirICmpLine(cmpLo, "slt", "i16", clampedHi, lo) +
+		mirSelectLine(result, "i16", cmpLo, lo, clampedHi)
+}
+
+// mirClampI8Line — branchless i8 clamp to [lo, hi].
+// Osty: mirClampI8Line
+func mirClampI8Line(cmpHi, clampedHi, cmpLo, result, val, lo, hi string) string {
+	return mirICmpLine(cmpHi, "sgt", "i8", val, hi) +
+		mirSelectLine(clampedHi, "i8", cmpHi, hi, val) +
+		mirICmpLine(cmpLo, "slt", "i8", clampedHi, lo) +
+		mirSelectLine(result, "i8", cmpLo, lo, clampedHi)
+}
+
+// mirSignumI64Line — branchless i64 signum (-1/0/1).
+// Osty: mirSignumI64Line
+// Algorithm: %gt = icmp sgt val, 0; %lt = icmp slt val, 0;
+// %pos = select gt, 1, 0; %result = select lt, -1, pos.
+// Uses separate posVal register to avoid SSA violation.
+func mirSignumI64Line(gt, lt, posVal, result, val string) string {
+	return mirICmpLine(gt, "sgt", "i64", val, "0") +
+		mirICmpLine(lt, "slt", "i64", val, "0") +
+		mirSelectI64Line(posVal, gt, "1", "0") +
+		mirSelectI64Line(result, lt, "-1", posVal)
+}
+
+// mirSignumI32Line — branchless i32 signum (-1/0/1).
+// Osty: mirSignumI32Line
+func mirSignumI32Line(gt, lt, posVal, result, val string) string {
+	return mirICmpLine(gt, "sgt", "i32", val, "0") +
+		mirICmpLine(lt, "slt", "i32", val, "0") +
+		mirSelectLine(posVal, "i32", gt, "1", "0") +
+		mirSelectLine(result, "i32", lt, "-1", posVal)
+}
+
+// mirSignumSignLine — branchless signum for arbitrary signed width (i16/i8).
+func mirSignumSignLine(width string, gt, lt, posVal, result, val string) string {
+	return mirICmpLine(gt, "sgt", width, val, "0") +
+		mirICmpLine(lt, "slt", width, val, "0") +
+		mirSelectLine(posVal, width, gt, "1", "0") +
+		mirSelectLine(result, width, lt, "-1", posVal)
+}
+
 // §6 compound conditional / boolean-helper builders.
 
 // mirInBoundsLines — non-neg AND in-upper bounds check (3-line block).
