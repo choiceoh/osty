@@ -3117,14 +3117,12 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
  *      populated env to OLD and post-promote stale-pointer writes
  *      do not occur in production.
  *
- *      Why not the other no-destroy kinds:
+ *      Why not the other kinds:
  *        - GENERIC: per-instance trace/destroy callbacks not on the
  *          micro-header.
- *        - MAP/SET/CHANNEL: destroy frees pthread sync state,
- *          backing arrays, etc. Same dead-from-space scan path
- *          could handle them but the typed-allocator surface is
- *          larger and the perf payoff smaller (these are typically
- *          long-lived).
+ *        - MAP/SET/CHANNEL: destroy frees pthread sync state and
+ *          backing arrays — typed-allocator surface is larger and
+ *          these are typically long-lived.
  *   3. Payload size must fit comfortably under the humongous
  *      threshold. Humongous allocs already take a separate path in
  *      the headerful allocator and have no benefit from being

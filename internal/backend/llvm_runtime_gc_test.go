@@ -1661,13 +1661,8 @@ int main(void) {
      * through the env's trace. If the trace is not wired, they're
      * swept.
      *
-     * Order matters: captures are populated BEFORE root_bind. This
-     * matches the production LLVM-emit order (alloc + store thunk +
-     * store captures land in a single basic block before the env
-     * ever escapes to a slot that triggers root_bind). On young
-     * eligibility, root_bind auto-promotes the young env to OLD via
-     * memcpy — captures populated beforehand survive the copy; later
-     * writes via the now-stale young pointer would not propagate. */
+     * Captures populated BEFORE root_bind — see osty_gc_young_eligible
+     * in osty_runtime.c for the contract. */
     osty_rt_closure_env *env = (osty_rt_closure_env *)osty_rt_closure_env_alloc_v2(3, "env3", 0x7ULL);
     void *cap0 = osty_gc_alloc_v1(7, 32, "cap0");
     void *cap1 = osty_gc_alloc_v1(7, 32, "cap1");
@@ -1764,12 +1759,8 @@ int main(void) {
     /* Two captures: slot 0 scalar (bit 0 cleared), slot 1 pointer
      * (bit 1 set). Bitmap = 0b10 = 0x2.
      *
-     * Order matters (matches production LLVM-emit order): captures
-     * are populated BEFORE root_bind. With CLOSURE_ENV young
-     * eligibility, root_bind auto-promotes the env to OLD via
-     * memcpy — populating captures beforehand keeps them in the
-     * promoted copy; writes via a stale young pointer afterward
-     * would not propagate. */
+     * Captures populated BEFORE root_bind — see osty_gc_young_eligible
+     * in osty_runtime.c for the contract. */
     osty_rt_closure_env *env = (osty_rt_closure_env *)osty_rt_closure_env_alloc_v2(2, "env2", 0x2ULL);
 
     /* Payload P: allocate but do not root. Its only potential
@@ -6625,9 +6616,8 @@ int main(void) {
 			wantClass: [6]string{"0", "0", "0", "0", "0", "0"},
 		},
 		{
-			// Default (Phase 8 step 2 cutover + Phase E follow-up):
-			// STRING + BYTES + LIST + CLOSURE_ENV route to young arena.
-			// GENERIC / MAP / CHANNEL stay headerful.
+			// Default routing: STRING + BYTES + LIST + CLOSURE_ENV →
+			// young arena; GENERIC / MAP / CHANNEL stay headerful.
 			name:      "default",
 			env:       nil,
 			wantDelta: "4",
