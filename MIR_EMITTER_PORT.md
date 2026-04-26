@@ -1,22 +1,67 @@
 # MIR emitter selfhost port
 
-> **Status (2026-04): Historical.** 이 포팅 계획은 제거된 Osty→Go 부트스트랩
-> 트랜스파일러(`internal/bootstrap/gen`)를 전제로 작성되었다. 현재 `toolchain/
-> mir_generator.osty` 를 Go bridge 로 옮기는 공식 경로는 LLVM 셀프호스팅뿐이다.
-> 이 문서는 당시 시점의 기록이며, 아래 "Osty authoring rules" 섹션의 transpile-
-> safety 조언은 더 이상 구속력이 없다.
+> **Status (2026-04-26, post-rebase to #955): Partially historical.**
+>
+> - The bootstrap Osty→Go transpiler (`internal/bootstrap/gen`) was
+>   retired in PR #854 (2026-04-23). `internal/bootstrap` is gone;
+>   there is no `go:generate` regen directive on the snapshots; the
+>   "Pipeline" diagram below describing
+>   `internal/selfhost/bundle/mir_generator_bundle.go → /tmp/merged.osty
+>   → seedgen → mir_generator_snapshot.go` no longer reflects reality.
+>   Snapshots (`mir_generator_snapshot.go`, `support_snapshot.go`,
+>   `native_entry_snapshot.go`) are now **hand-maintained mirrors** —
+>   the file header in `mir_generator_snapshot.go` says so explicitly.
+> - The "Osty authoring rules (transpile-safe)" section enumerates
+>   transpiler landmines that no longer exist. Treat as historical.
+> - The "Phased plan" Phase A/B/C/D framing was scoped around the
+>   transpiler's incremental landings. The actual current cadence is
+>   "drain N inline literal sites + add M builders per PR" with PR
+>   batches that don't map cleanly onto Phase A/B/C/D.
+> - Section-table line ranges have been re-measured for the current
+>   tree (the original ranges captured 9,616 LOC; file is now 8,214
+>   LOC = **-1,402 LOC drained**). Every cell in the section map
+>   now reflects the current line range and a measured drain
+>   percentage.
+> - Earlier revisions of the section map marked §5/§6/§10 "Go-only"
+>   despite measurable drain progress. The "## 2026-04-26 — measured
+>   state" subsection has the corrected per-section drain numbers.
+> - The function inventory at the bottom is current — recent PRs
+>   (#952, #955, #946, #939, #933, #928, #923) update it on landing.
 
 Running plan + section-by-section status for moving
-`internal/llvmgen/mir_generator.go` (9,600 LOC hand-written Go) into the
-selfhost surface at `toolchain/mir_generator.osty`.
+`internal/llvmgen/mir_generator.go` (originally 9,616 LOC hand-written
+Go, currently 8,214 LOC) into the selfhost surface at
+`toolchain/mir_generator.osty` (currently 7,424 LOC, 793 `mir*`
+functions).
 
-Every hand-written Go edit under `internal/llvmgen/mir_generator.go` is
-throwaway effort once the MIR emitter flips to selfhost. This document
-is the shared landing target: any perf / correctness change to the MIR
-emitter should ship alongside (or instead of) the Osty counterpart
-here.
+Every hand-written Go edit under `internal/llvmgen/mir_generator.go`
+is throwaway effort once the MIR emitter flips to selfhost. This
+document is the shared landing target: any perf / correctness change
+to the MIR emitter should ship alongside (or instead of) the Osty
+counterpart here.
 
-## Pipeline
+## Workflow (post-#854)
+
+The bootstrap-transpile flow described in the historical "Pipeline"
+section below was retired. Current workflow:
+
+1. Edit `toolchain/mir_generator.osty` — add or update the builder.
+2. Hand-mirror the change in
+   `internal/llvmgen/mir_generator_snapshot.go` — every Go function
+   carries a `// Osty: toolchain/mir_generator.osty:L:C` comment
+   anchoring it to the Osty source. Keep them in lockstep.
+3. Drain the matching inline literal site in
+   `internal/llvmgen/mir_generator.go` — replace the `WriteString` /
+   `Sprintf` chain with a call to the new builder.
+4. Verify with `go test ./internal/llvmgen` — byte-stable parity is
+   the gate, not test-pass count (the merged-toolchain native suite
+   has known pre-existing failures tracked separately).
+
+There is no compile-gated regen, no `go:generate` directive, no
+auto-rebuild-on-edit. The hand-maintained mirror is the cost of
+having killed the transpiler.
+
+## Historical Pipeline (pre-#854, retained for context)
 
 ```
 toolchain/mir_generator.osty
@@ -36,40 +81,78 @@ internal/llvmgen/mir_generator_snapshot.go
 compile-gated install (`go test -run ^$ ./internal/llvmgen`)
 ```
 
-Regenerate with `go generate ./internal/llvmgen` (runs both the
-existing `support_snapshot` directive and the new
-`gen_mir_generator_snapshot.go`). The compile gate rolls the snapshot
-back on build failure, so bad Osty never lands. Do **not** hand-edit
-`mir_generator_snapshot.go`.
+This pipeline existed when this document was first written. PR #854
+retired `internal/bootstrap` entirely; the diagram is dead but kept
+here so that searches for retired filenames find an explanation.
 
 ## Section map
 
 Tracks the 15 `// ==== X ====` sections in `mir_generator.go`. Each row
-shows the line range, rough function count, approximate size, and the
-current port status. "Ported" means the Osty source owns the logic and
-the Go call site delegates; "Stub" means the Osty source exposes
-helpers but the Go site still has its own body; "Go-only" means
-untouched.
+shows the **current** line range (post-rebase, 2026-04-26), function
+count, current size, and the port status. "Ported" means the Osty
+source owns the logic and the Go call site delegates; "Stub" means
+the Osty source exposes helpers but the Go site still has its own
+body; "Go-only" means the section's logic still lives in Go (it may
+still be partially drained by builder reuse).
 
-| § | Section | Lines | Funcs | Risk | Status |
-| - | ------- | ----- | ----- | ---- | ------ |
-| 1 | generator state | 100–472 | ~10 | LOW | Partial — pure templates (`mirFormatFnAttrs`, `mirLoopHintsActive`, `mirLoopMDVectorizeEnable`/`Scalable`/`Predicate`/`Width`, `mirLoopMDUnrollEnable`/`Count`, `mirLoopMDParallelAccesses`, `mirAliasScopeDomainLine`/`ScopeLine`/`ListLine`, `mirAccessGroupLine`) + state-bearing ports via `MirSeq` (`nextLoopMD`, `listAliasScopeRef`, `nextAccessGroupMD` — `g.loopMDDefs` and `g.listMetaScopeList` migrated to the mirror) |
-| 2 | support check | 473–1364 | ~20 | MEDIUM | Go-only |
-| 3 | header + runtime declares | 1365–1641 | ~8 | LOW | Partial — global-var, ctor, iface/struct/enum/tuple/vtable type-def lines + three runtime-declare shapes ported (`mirLlvmGlobalVarLine`, `mirLlvmIfaceTypeDefLine`, `mirLlvmStructTypeDefLine`, `mirLlvmEnumLayoutTypeDefLine`, `mirLlvmVtableDeclLine`, `mirGlobalCtorsRegistration`, `mirInitGlobalsCtorHeader`/`Footer`/`StoreSequence`, `mirRuntimeDeclareLine`, `mirRuntimeDeclareMemoryRead`, `mirRuntimeDeclareNoReturn`); orchestration (`emitGlobalVars`/`emitTypeDefs`/`emitRuntimeDeclarations`) + state (`g.declares`/`g.out`) stays on Go |
-| 4 | function emission | 1642–2384 | ~18 | MEDIUM | Partial — pure post-process leaves + Phase C entry templates ported (`mirIsMemoryAccessLine`, `mirTagParallelAccesses`, `mirCConvKeyword`, `mirParamIsNoalias`, `mirFunctionParamPart`, `mirBlockLabelName`, `mirExternalDeclareLine`, `mirFunctionDefineHeader`). `emitFunction` external-declare path + define-header signature line both delegate; per-fn loop hint capture + alloca preamble + block emission still on Go (touch `g.fn` / `g.fnBuf` / `g.localSlots`). Removed dead `noaliasNameSet` + `paramIsNoalias` Go helpers (now `mirParamIsNoalias`). |
-| 5 | GC instrumentation | 2385–2614 | ~8 | LOW | Go-only |
-| 6 | instructions | 2615–4873 | ~35 | HIGH | Go-only |
-| 7 | list/map/set intrinsics | 4874–6761 | ~50 | MEDIUM | Go-only |
-| 8 | concurrency intrinsics | 6762–7472 | ~20 | MEDIUM | Go-only |
-| 9 | terminators | 7473–7595 | ~5 | LOW | Go-only |
-| 10 | rvalue / operand | 7596–8937 | ~25 | HIGH | Go-only |
-| 11 | operators | 8938–9196 | ~12 | LOW | Partial — predicates + `emitBinary` opcode table + `emitUnary` instruction body + `emitInlineStringEqLiteral` byte-by-byte streq lowering ported (`isHeapEqualityType`, `isStringPrimType`, `isStringOrderingBinOp`, `stringOrderingPredicate`, `mirBinaryOpcode`, `mirBinaryForcesI1Type`, `mirUnaryIsIdentity`, `mirUnaryInstruction`, `MirSeq.emitInlineStringEqLiteral` → `MirInlineStringEqResult`). Go side pre-converts `lit` to `[]int` (Char/Byte primitive blocked — see CLAUDE.md backend caps) and splices `result.Lines` into `g.fnBuf`. |
-| 12 | strings | 9197–9284 | ~7 | LOW | Partial — `encodeLLVMString`, `earliestAfter` (single + multi-needle: `mirEarliestAfter` + `mirEarliestAfterAny`), `mirInjectBeforeFirstFn` inject orchestration, and the string-pool line template ported (`mirEncodeLLVMString`, `mirStringPoolLine`); `stringLiteral` interning stays on Go (touches `g.strings`). `emitStringPool` / `emitGlobalVars` inject step now delegates through `mirInjectBeforeFirstFn`. |
-| 13 | type mapping | 9285–9375 | ~8 | LOW | **Ported** (primitive + opaque-named + head-name + optional-surface) |
-| 14 | enum layout helpers | 9376–9575 | ~10 | LOW | Partial — `llvmTypeForTupleTag` Prim / Named branches + Optional / Option / Result / Tuple name-mangling ported (`mirTupleTagForPrim`, `mirTupleTagForNamed`, `mirOptionalTypeName`, `mirOptionTypeName`, `mirResultTypeName`, `mirTupleTypeNameFromTags`); `registerEnumLayout` + `g.tupleDefs` caches deferred to Phase B |
-| 15 | helpers | 9576–9616 | ~5 | LOW | Partial — pure (`firstNonEmpty`, `isUnitType`, `isFloatType`, `isScalarLLVMType`, `llvmStdIoI1Text`) + state-bearing leaves (`MirSeq.fresh` / `MirSeq.freshLabel` / `MirSeq.reset`) + Phase B fnBuf mirror (`MirSeq.fnBuf`, `MirSeq.appendFnLine`, `MirSeq.flushFnBuf`, `MirSeq.absorbOstyEmitter`) ported. `flushOstyEmitter` Go bridge now routes through `MirSeq.absorbOstyEmitter` (Osty drains `em.body` into `seq.fnBuf`; Go drains back to `g.fnBuf`). `storeIntrinsicResult` Go body now uses the Osty `mirStoreLine` builder. `ostyEmitter` constructor stays on Go (Go `LlvmEmitter` has fields the Osty struct doesn't model — `nativeListData`/`nativeListLens`). `emitRuntimeRawNull` is mir-internal routing, no Osty change. |
+Drain % = `1 - current / original`. Original sizes captured when
+`mir_generator.go` was 9,616 LOC.
 
-## Phased plan
+| § | Section | Now (line / LOC) | Was | Drain | Funcs | Risk | Status |
+| - | ------- | ---------------- | --- | ----- | ----- | ---- | ------ |
+| 1 | generator state | 100–359 / 259 | 370 | **30%** | ~10 | LOW | Mostly ported — pure templates (`mirFormatFnAttrs`, `mirLoopHintsActive`, `mirLoopMD*`, `mirAliasScope*Line`, `mirAccessGroupLine`) + state-bearing ports via `MirSeq` (`nextLoopMD`, `listAliasScopeRef`, `nextAccessGroupMD`). Remaining: orchestration that still touches `g.*` directly. |
+| 2 | support check | 360–1254 / 894 | 890 | **0%** | ~20 | MEDIUM | Go-only — no porting started. Largest untouched section after §7. |
+| 3 | header + runtime declares | 1255–1483 / 228 | 280 | **17%** | ~8 | LOW | Heavily ported — global-var, ctor, iface/struct/enum/tuple/vtable type-def lines + 20+ runtime-declare shapes (most recent: #897 MirRuntimeDecls struct, #928 Some/None/Ok/Err runtime-decl drain, #933 *all* inline declareRuntime strings drained, #946 +concurrency runtime-decl shapes). Orchestration (`emitGlobalVars`/`emitTypeDefs`/`emitRuntimeDeclarations`) stays on Go. |
+| 4 | function emission | 1484–2032 / 548 | 740 | **26%** | ~18 | MEDIUM | Partial — pure post-process leaves + Phase C entry templates ported (`mirIsMemoryAccessLine`, `mirTagParallelAccesses`, `mirCConvKeyword`, `mirParamIsNoalias`, `mirFunctionParamPart`, `mirBlockLabelName`, `mirExternalDeclareLine`, `mirFunctionDefineHeader`/`Footer`, `MirThunkDefs` struct + `mirThunk{Header,Entry,Void/ValueCall,Footer,Body,ParamPart}Line` — see #900 #905 #913 #946). `emitFunction` external-declare path + define-header signature line both delegate; per-fn loop hint capture + alloca preamble + block emission still on Go. |
+| 5 | GC instrumentation | 2033–2207 / 174 | 230 | **24%** | ~8 | LOW | Drain-only — `mirGCRootSlotsAllocaLine` / `mirGCRootSlotStoreLine` / `mirCallVoidI64TagAndPtrLine` / `mirAllocaArrayPtrLine` builders take the inline literal sites. Logic itself still on Go. Doc previously said "Go-only" but text composition is half drained. |
+| 6 | instructions | 2208–3953 / **1,745** | 2,260 | **23%** | ~35 | HIGH | Drain-heavy — 200+ §6 token / shape / arg builders added across #923/#928/#933/#939/#946/#952/#955 (cast, terminator, instruction, intrinsic, atomic, linkage, ICmp/FCmp predicate, op-name, fastmath, poison-flag, GC-statepoint, visibility, DLL-storage). Inline literal sites systematically drained. **Selection-logic body still Go** — the dispatcher `emitInstr` switch is the irreducible core. Doc previously said "Go-only" but the text-emission half is largely Osty-mirrored now. |
+| 7 | list/map/set intrinsics | 3954–5875 / 1,921 | 1,890 | **0%** | ~50 | MEDIUM | Genuinely Go-only — section actually grew slightly (+34 LOC). #946 added "container-runtime call shapes" but those landed in §6 builders, not in §7's intrinsic-dispatcher logic. **Largest unported section.** |
+| 8 | concurrency intrinsics | 5876–6484 / 608 | 710 | **14%** | ~20 | MEDIUM | Drain-only — chan-recv / select-send / cancel / yield / task-group call shape specialisations from #946 take the obvious literal sites. Intrinsic-dispatcher body still Go. |
+| 9 | terminators | 6485–6592 / 107 | 120 | **13%** | ~5 | LOW | Tokens fully ported (#955: `mirTermBr/Switch/Ret/Unreachable/Invoke/Resume`) + composers (`mirRetTypedLine`, `mirBrLabelLine`, `mirSwitch{Header,Case,Footer}Line`, `mirCondBrLine`, `mirRetVoidLine`, `mirReturnI64/Ptr/I1/DoubleLine`). The section is small and most line shapes have a builder; only the dispatcher routing remains. |
+| 10 | rvalue / operand | 6593–7660 / 1,067 | 1,340 | **20%** | ~25 | HIGH | Drain-heavy — `MirAggregatePair` + `mirSomeI64Aggregate` / `mirNoneAggregate` / `mirResult{Ok,Err}I64Aggregate` (#913) + `mirGCAllocCallLine` take the obvious aggregate-construction sites. **rvalue dispatch logic still Go.** Doc previously said "Go-only HIGH risk" — the HIGH risk is real (selection logic) but text composition is 20% drained. |
+| 11 | operators | 7661–7842 / 181 | 260 | **30%** | ~12 | LOW | Mostly ported — predicates + `emitBinary` opcode table + `emitUnary` instruction body + `emitInlineStringEqLiteral` byte-by-byte streq lowering. Only the dispatcher glue remains. |
+| 12 | strings | 7843–7912 / 69 | 90 | **23%** | ~7 | LOW | Mostly ported — `encodeLLVMString`, `earliestAfter` (single + multi-needle), `mirInjectBeforeFirstFn`, string-pool line template, `MirStringPool` struct (#899). `stringLiteral` interning Go-side wrapper still touches `g.strings`. |
+| 13 | type mapping | 7913–7992 / 79 | 90 | 12% | ~8 | LOW | **✅ Ported** (primitive + opaque-named + head-name + optional-surface). Go-side LOC didn't drop much because Go retains thin call-through wrappers; semantic owner = Osty. |
+| 14 | enum layout helpers | 7993–8167 / 174 | 200 | 13% | ~10 | LOW | Partial — `llvmTypeForTupleTag` Prim/Named branches + Optional/Option/Result/Tuple name-mangling ported (`mirTupleTagFor{Prim,Named}`, `mirOptionalTypeName`, `mirOptionTypeName`, `mirResultTypeName`, `mirTupleTypeNameFromTags`); `MirLayoutCache` (#888) drains the dedup+order side. `registerEnumLayout` + `g.tupleDefs` cache wiring to be ported. |
+| 15 | helpers | 8168–8214 / 46 | 40 | 0% | ~5 | LOW | Mostly ported — pure (`firstNonEmpty`, `isUnitType`, `isFloatType`, `isScalarLLVMType`, `llvmStdIoI1Text`) + state-bearing leaves (`MirSeq.fresh` / `MirSeq.freshLabel` / `MirSeq.reset`) + Phase B fnBuf mirror (`MirSeq.fnBuf`, `MirSeq.appendFnLine`, `MirSeq.flushFnBuf`, `MirSeq.absorbOstyEmitter`). `ostyEmitter` constructor stays on Go (Go `LlvmEmitter` has fields the Osty struct doesn't model — `nativeListData`/`nativeListLens`). |
+
+### 2026-04-26 — measured state
+
+- `mir_generator.go`: **8,214 LOC** (down from 9,616 = **-1,402 LOC drained**)
+- `mir_generator.osty`: **7,424 LOC** (793 `mir*` functions defined)
+- `mir_generator_snapshot.go`: **4,826 LOC** (792 `mir*` functions — 1:1 mirror, hand-maintained)
+- Hand-written `mir`-prefix functions remaining in `mir_generator.go`: **14**
+
+Drain bucket totals:
+- 🟢 ≥17% drained (text composition mostly ported): §1, §3, §4, §5, §6, §10, §11, §12 — **5,233 LOC remaining out of 6,950 original (-25%)**
+- 🟡 13-15% (small sections, ports done): §9, §13, §14, §15 — **406 LOC remaining out of 450 original**
+- 🔴 0% (untouched): §2, §7 — **2,815 LOC out of 2,780 original (slight growth)**
+
+Real remaining work, by selection-logic body (excludes already-drained text composition):
+
+| Bucket | Sections | Remaining LOC | Character |
+| ---- | -------- | ------------- | --------- |
+| Untouched MEDIUM | §2 (894) + §7 (1,921) | **2,815** | Mechanical dispatch, runtime ABIs well understood, splittable into PRs |
+| HIGH-risk dispatchers | §6 body + §10 body | **~2,800** (estimated; selection logic, hard to measure exactly because draining shrinks the file but not the dispatcher) | Dense cross-call, instruction selection — Phase D irreducible core |
+| LOW-risk loose ends | §1, §3, §4, §5, §8, §9, §11, §12, §13, §14, §15 leftovers | ~600 | 1-2 PRs to mop up |
+
+**Pace (last 14 days):** 7 dedicated llvmgen-port PRs landing 261 builders, draining ~1,400 LOC out of `mir_generator.go`. At that pace **2-4 months** until selection-logic dispatchers are the only thing left, then 1-2 large PRs to port those + delete `mir_generator.go`.
+
+## Phased plan (historical — Phase A/B/C/D framing predates the actual cadence)
+
+> **Status (2026-04-26): Historical.** This phased plan was written
+> for the bootstrap-transpiler workflow that landed one section per PR
+> behind a compile gate. The current cadence is "PR drains N inline
+> literal sites + adds M builders" without strict per-section scoping
+> — Phase A is "complete" by the original definition (pure leaves
+> done), Phase B is partially done (`MirSeq` exists with most state),
+> Phases C and D are intermixed: §3 (Phase B in the original plan) is
+> 17% drained, §6 (Phase D) is 23% drained, §10 (Phase D) is 20%
+> drained, §7 (Phase C) is 0% drained.
+>
+> The "## 2026-04-26 — measured state" table above replaces this
+> section as the source of truth. The text below is kept for context
+> on the original strategy.
 
 **Phase A — pure leaves** (~400 LOC combined). Current phase. Port
 functions that have no `g.*` state dependency. Ship one section per PR
@@ -114,11 +197,19 @@ PRs so call-site updates stay atomic. Once they land,
 `mir_generator.go` is effectively empty and can be deleted; callers of
 `GenerateFromMIR` route through the Osty-sourced path.
 
-## Osty authoring rules (transpile-safe)
+## Osty authoring rules (transpile-safe — historical)
 
-Collected while porting the first leaves. The bootstrap transpiler
-(`internal/bootstrap/gen` via `seedgen`) still has rough edges — this
-list keeps new Osty clean of known landmines.
+> **Status (2026-04-26): Historical.** These rules were workarounds for
+> bugs in the bootstrap transpiler (`internal/bootstrap/gen` via
+> `seedgen`) that was retired in PR #854. Some of the underlying Osty
+> stdlib gaps may still exist (e.g. `Int.toString`), but the
+> transpile-safety constraints below — `=>` in doc comments, `panic`
+> not recognised, hex formatting choking — no longer apply because the
+> generated mirror is now hand-maintained, not transpiled. Use
+> idiomatic Osty when authoring new builders; copy whatever shape
+> matches the existing 793 ported functions in `mir_generator.osty`.
+
+The historical rules:
 
 - **String methods** — `.indexOf`, `.hasSuffix`, `.hasPrefix`,
   `.contains` don't lower. Use the imported `llvmStrings.*` functions
