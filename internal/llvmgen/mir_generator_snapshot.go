@@ -7642,3 +7642,35 @@ func mirIsBuiltinMap(name string, isBuiltin bool) bool {
 func mirIsBuiltinSet(name string, isBuiltin bool) bool {
 	return mirIsBuiltinNamedType(name, isBuiltin, "Set")
 }
+
+// §18 (cont'd) — typed-list runtime fast-path predicate ported from
+// listUsesRawDataFastPath in runtime_ffi.go.
+
+// Osty: mirListUsesRawDataFastPath
+func mirListUsesRawDataFastPath(elemLLVM string) bool {
+	return elemLLVM == "i64" || elemLLVM == "i1" || elemLLVM == "double"
+}
+
+// §18 (cont'd) — alloca-hoist scanner predicates ported from
+// alloca_hoist.go.
+
+// Osty: mirIsBrTerminatorLine
+func mirIsBrTerminatorLine(line string) bool {
+	return llvmStrings.HasPrefix(line, "  br ")
+}
+
+// Osty: mirIsAllocaLine
+func mirIsAllocaLine(line string) bool {
+	const prefix = "  %"
+	if !llvmStrings.HasPrefix(line, prefix) {
+		return false
+	}
+	rest := line[len(prefix):]
+	eq := llvmStrings.Index(rest, " = ")
+	if eq < 0 {
+		return false
+	}
+	const separator = " = "
+	tail := rest[eq+len(separator):]
+	return llvmStrings.HasPrefix(tail, "alloca ") || tail == "alloca"
+}

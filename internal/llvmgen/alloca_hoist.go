@@ -1,7 +1,5 @@
 package llvmgen
 
-import "strings"
-
 // hoistAllocasToEntry rewrites a function body so every `alloca`
 // instruction lives in the entry block.
 //
@@ -91,29 +89,15 @@ func hoistAllocasToEntry(body []string) []string {
 // isAllocaLine reports whether `line` is an LLVM `alloca` instruction
 // emitted by the snapshot helpers. They all write the form
 // `"  %<name> = alloca <ty>..."` via fmt.Sprintf with a leading two-
-// space indent. We match that prefix conservatively: leading two
-// spaces, a `%`-named SSA value, an `=`, and the literal token
-// `alloca` separated by spaces.
+// space indent. Delegates to the Osty-sourced `mirIsAllocaLine`
+// (`toolchain/mir_generator.osty`).
 func isAllocaLine(line string) bool {
-	const prefix = "  %"
-	if !strings.HasPrefix(line, prefix) {
-		return false
-	}
-	rest := line[len(prefix):]
-	eq := strings.Index(rest, " = ")
-	if eq < 0 {
-		return false
-	}
-	tail := rest[eq+len(" = "):]
-	return strings.HasPrefix(tail, "alloca ") || tail == "alloca"
+	return mirIsAllocaLine(line)
 }
 
 // isBrTerminator reports whether `line` is the unconditional or
-// conditional `br` instruction that terminates a basic block. Used to
-// locate the entry block's boundary so hoisted allocas land just
-// before the terminator (LLVM requires terminators to be the last
-// instruction in their block).
+// conditional `br` instruction that terminates a basic block.
+// Delegates to `mirIsBrTerminatorLine`.
 func isBrTerminator(line string) bool {
-	const prefix = "  br "
-	return strings.HasPrefix(line, prefix)
+	return mirIsBrTerminatorLine(line)
 }

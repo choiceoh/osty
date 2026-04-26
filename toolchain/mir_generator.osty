@@ -12645,3 +12645,53 @@ pub fn mirIsBuiltinMap(name: String, isBuiltin: Bool) -> Bool {
 pub fn mirIsBuiltinSet(name: String, isBuiltin: Bool) -> Bool {
     mirIsBuiltinNamedType(name, isBuiltin, "Set")
 }
+
+/// §18 (cont'd) — typed-list runtime fast-path predicate ported from
+/// `listUsesRawDataFastPath` in `internal/llvmgen/runtime_ffi.go`.
+///
+/// Returns true when the List<elem> element type can use the raw-
+/// data fast path (direct GEP into the backing buffer, no bytes-v1
+/// out-pointer ABI). The fast set is i64 / i1 / double — fixed-width
+/// scalars whose stride is power-of-two and whose snapshot doesn't
+/// need a per-element copy.
+///
+/// Distinct from `mirListUsesTypedRuntime` (the existing predicate at
+/// `toolchain/llvmgen.osty`) which adds `ptr` to the typed runtime
+/// set — pointers go through a typed `osty_rt_list_*_ptr` runtime
+/// shape but cannot use the raw-data fast path because of GC
+/// barriers on the backing pointer reads.
+pub fn mirListUsesRawDataFastPath(elemLLVM: String) -> Bool {
+    elemLLVM == "i64" || elemLLVM == "i1" || elemLLVM == "double"
+}
+
+/// §18 (cont'd) — alloca-hoist scanner predicates ported from
+/// `isAllocaLine` / `isBrTerminator` in
+/// `internal/llvmgen/alloca_hoist.go`. Pure string scanners that
+/// classify pre-formatted LLVM-text lines emitted by the emit pass.
+
+/// mirIsBrTerminatorLine reports whether `line` is an unconditional
+/// or conditional `br` terminator. Used by the alloca-hoist pass to
+/// locate the entry-block boundary so hoisted allocas land just
+/// before the terminator.
+pub fn mirIsBrTerminatorLine(line: String) -> Bool {
+    llvmStrings.HasPrefix(line, "  br ")
+}
+
+/// mirIsAllocaLine reports whether `line` is an `alloca`-shaped
+/// instruction (the prefix is `  %<name> = alloca`). Used by the
+/// alloca-hoist pass to find candidates to lift to the entry block.
+///
+/// Accepts both `alloca <ty>` (with a trailing token) and the
+/// degenerate bare `alloca` form (no type — currently unreachable
+/// from the emit pass but left in for parser-symmetry).
+pub fn mirIsAllocaLine(line: String) -> Bool {
+    let prefix = "  %"
+    if !llvmStrings.HasPrefix(line, prefix) { return false }
+    let rest = line[prefix.len()..line.len()]
+    let eq = llvmStrings.Index(rest, " = ")
+    if eq < 0 { return false }
+    let separator = " = "
+    let tailStart = eq + separator.len()
+    let tail = rest[tailStart..rest.len()]
+    llvmStrings.HasPrefix(tail, "alloca ") || tail == "alloca"
+}
