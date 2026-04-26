@@ -2947,6 +2947,11 @@ func (bs *bodyState) lowerIfLetExprInto(ife *ir.IfLetExpr, dest Place, destT Typ
 	bs.pushScope()
 	scrut := ife.Scrutinee
 	scrutT := scrut.Type()
+	if isPoisonType(scrutT) {
+		if rt := bs.recoverOperandType(scrut); rt != nil && !isPoisonType(rt) {
+			scrutT = rt
+		}
+	}
 	scrutLocal := bs.newLocal("_iflet", scrutT, false, ife.SpanV)
 	bs.emit(&StorageLiveInstr{Local: scrutLocal, SpanV: ife.SpanV})
 	bs.lowerExprInto(scrut, scrutLocal, scrutT)
@@ -3049,6 +3054,11 @@ func (bs *bodyState) lowerMatchExprIntoPlace(m *ir.MatchExpr, dest Place, destT 
 func (bs *bodyState) lowerCoalesceInto(c *ir.CoalesceExpr, dest Place, destT Type) {
 	bs.pushScope()
 	leftT := c.Left.Type()
+	if isPoisonType(leftT) {
+		if rt := bs.recoverOperandType(c.Left); rt != nil && !isPoisonType(rt) {
+			leftT = rt
+		}
+	}
 	leftLocal := bs.newLocal("_coalesce", leftT, false, c.SpanV)
 	bs.emit(&StorageLiveInstr{Local: leftLocal, SpanV: c.SpanV})
 	bs.lowerExprInto(c.Left, leftLocal, leftT)
@@ -3095,6 +3105,11 @@ func (bs *bodyState) lowerCoalesceInto(c *ir.CoalesceExpr, dest Place, destT Typ
 func (bs *bodyState) lowerQuestionInto(q *ir.QuestionExpr, dest Place, destT Type) {
 	bs.pushScope()
 	xT := q.X.Type()
+	if isPoisonType(xT) {
+		if rt := bs.recoverOperandType(q.X); rt != nil && !isPoisonType(rt) {
+			xT = rt
+		}
+	}
 	tmp := bs.newLocal("_q", xT, false, q.SpanV)
 	bs.emit(&StorageLiveInstr{Local: tmp, SpanV: q.SpanV})
 	bs.lowerExprInto(q.X, tmp, xT)
@@ -3242,6 +3257,11 @@ func typesMatch(a, b Type) bool {
 // lowerOptionalFieldInto handles `x?.field`.
 func (bs *bodyState) lowerOptionalFieldInto(fe *ir.FieldExpr, dest Place, destT Type) {
 	recvT := fe.X.Type()
+	if isPoisonType(recvT) {
+		if rt := bs.recoverOperandType(fe.X); rt != nil && !isPoisonType(rt) {
+			recvT = rt
+		}
+	}
 	recvLocal := bs.newLocal("_opt", recvT, false, fe.SpanV)
 	bs.emit(&StorageLiveInstr{Local: recvLocal, SpanV: fe.SpanV})
 	bs.lowerExprInto(fe.X, recvLocal, recvT)
