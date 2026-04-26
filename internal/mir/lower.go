@@ -3404,7 +3404,14 @@ func (bs *bodyState) resolveCall(c *ir.CallExpr) ([]Operand, Callee) {
 		// generic path; revisit if that shape becomes common.
 		if cal.Kind == ir.IdentLocal || cal.Kind == ir.IdentParam {
 			calleeOp := bs.lowerIdent(cal)
-			args := bs.orderArgs(c.Args, nil)
+			// Extract param types from the closure / fn-pointer's
+			// FnType when available, so `None` / typed-default args
+			// receive the same hint propagation as direct fn calls.
+			// Without this, `let f = |n: Int?| n ?? 0; f(None)`
+			// would emit `None` as `%Option.opaque` and fail LLVM
+			// verification at the call site (mismatch with the
+			// closure's `%Option.i64` param ABI).
+			args := bs.orderArgsByTypes(c.Args, paramTypesOf(cal.T))
 			return args, &IndirectCall{Callee: calleeOp}
 		}
 		sig := bs.l.signatureForFn(cal.Name)
@@ -3500,6 +3507,41 @@ func (l *lowerer) useAliasFor(e ir.Expr) *ir.UseDecl {
 	return l.useAliases[id.Name]
 }
 
+// paramTypesOf extracts a parameter-type slice from an FnType, or nil
+// when `t` is anything else. Used by indirect-call orderArgs to
+// thread closure / fn-pointer signatures through the same hint-based
+// arg-lowering path that direct calls use via `fnSignature`.
+func paramTypesOf(t Type) []Type {
+	if ft, ok := t.(*ir.FnType); ok {
+		return ft.Params
+	}
+	return nil
+}
+
+// orderArgsByTypes lowers each argument with a per-position type hint
+// pulled from `paramTypes`. Source order is preserved; keyword
+// arguments fall back to `lowerExprAsOperand` because indirect calls
+// have no name table to resolve `kw` against. When `paramTypes` is
+// nil the helper degenerates to the no-hint variant.
+func (bs *bodyState) orderArgsByTypes(args []ir.Arg, paramTypes []Type) []Operand {
+	if paramTypes == nil {
+		return bs.orderArgs(args, nil)
+	}
+	out := make([]Operand, len(args))
+	for i, a := range args {
+		var hint Type
+		if i < len(paramTypes) {
+			hint = paramTypes[i]
+		}
+		if a.IsKeyword() || hint == nil {
+			out[i] = bs.lowerExprAsOperand(a.Value)
+			continue
+		}
+		out[i] = bs.lowerExprAsOperandHint(a.Value, hint)
+	}
+	return out
+}
+
 func (bs *bodyState) orderArgs(args []ir.Arg, sig *fnSignature) []Operand {
 	if sig == nil {
 		// No signature available — preserve source order, ignore kw
@@ -3520,7 +3562,7 @@ func (bs *bodyState) orderArgs(args []ir.Arg, sig *fnSignature) []Operand {
 		if a.IsKeyword() {
 			for i, p := range sig.params {
 				if p.Name == a.Name {
-					out[i] = bs.lowerExprAsOperand(a.Value)
+					out[i] = bs.lowerExprAsOperandHint(a.Value, p.Type)
 					filled[i] = true
 					break
 				}
@@ -3528,7 +3570,7 @@ func (bs *bodyState) orderArgs(args []ir.Arg, sig *fnSignature) []Operand {
 			continue
 		}
 		if pos < paramCount {
-			out[pos] = bs.lowerExprAsOperand(a.Value)
+			out[pos] = bs.lowerExprAsOperandHint(a.Value, sig.params[pos].Type)
 			filled[pos] = true
 		}
 		pos++
@@ -3540,7 +3582,7 @@ func (bs *bodyState) orderArgs(args []ir.Arg, sig *fnSignature) []Operand {
 		}
 		p := sig.params[i]
 		if p.Default != nil {
-			out[i] = bs.lowerExprAsOperand(p.Default)
+			out[i] = bs.lowerExprAsOperandHint(p.Default, p.Type)
 			continue
 		}
 		// leave nil; validator catches it if backend relies on arity.
@@ -3837,7 +3879,17 @@ func (bs *bodyState) lowerStructLit(sl *ir.StructLit, hint Type) RValue {
 
 func (bs *bodyState) lowerVariantLit(v *ir.VariantLit, hint Type) RValue {
 	t := v.T
+	// Prefer the destination hint when the literal's own type is
+	// missing or carries a poisoned (`<error>`) type-arg. The
+	// embedded selfhost checker drops the second arg of
+	// `Result<Int, UserError>` to `<error>` whenever the inner
+	// `UserError` reference doesn't resolve, which propagates an
+	// opaque LLVM type into the variant's AggregateRV; using the
+	// hint (the function-return / parent-aggregate slot's type)
+	// gives the codegen a fully-resolved shape to render.
 	if t == nil {
+		t = hint
+	} else if hint != nil && irHasPoisonedTypeArg(t) && !irHasPoisonedTypeArg(hint) {
 		t = hint
 	}
 	idx := bs.l.variantIndexByName(t, v.Variant)
@@ -3852,6 +3904,46 @@ func (bs *bodyState) lowerVariantLit(v *ir.VariantLit, hint Type) RValue {
 		VariantIdx: idx,
 		VariantTag: v.Variant,
 	}
+}
+
+// irHasPoisonedTypeArg mirrors `ir.HasPoisonedTypeArg`'s recursive
+// poison check at the MIR boundary. Caller is expected to import
+// nothing extra from `ir`; we walk the IR types directly because
+// MIR's `Type` alias resolves to `ir.Type`.
+func irHasPoisonedTypeArg(t ir.Type) bool {
+	if t == nil || t == ir.ErrTypeVal {
+		return false
+	}
+	switch x := t.(type) {
+	case *ir.NamedType:
+		for _, a := range x.Args {
+			if a == ir.ErrTypeVal || irHasPoisonedTypeArg(a) {
+				return true
+			}
+		}
+	case *ir.OptionalType:
+		if x.Inner == ir.ErrTypeVal {
+			return true
+		}
+		return irHasPoisonedTypeArg(x.Inner)
+	case *ir.TupleType:
+		for _, e := range x.Elems {
+			if e == ir.ErrTypeVal || irHasPoisonedTypeArg(e) {
+				return true
+			}
+		}
+	case *ir.FnType:
+		for _, p := range x.Params {
+			if p == ir.ErrTypeVal || irHasPoisonedTypeArg(p) {
+				return true
+			}
+		}
+		if x.Return == ir.ErrTypeVal {
+			return true
+		}
+		return irHasPoisonedTypeArg(x.Return)
+	}
+	return false
 }
 
 // ==== concurrency intrinsic recognition ====
@@ -4997,10 +5089,31 @@ func channelElementType(t ir.Type) Type {
 // name in `match xs.first() { Some(v) -> … }` got typed `Int?`
 // instead of `Int`.
 func isScalarPayload(t ir.Type) bool {
-	switch t.(type) {
+	switch x := t.(type) {
 	case *ir.PrimType:
 		return true
 	case *ir.FnType:
+		return true
+	case *ir.NamedType:
+		// User structs and unwrapped Error / interface payloads land
+		// here after a ProjVariant has already descended past the
+		// enum boundary. A subsequent ProjVariantN(0) on this type
+		// is a redundant single-payload extraction — treat it as
+		// identity so the type doesn't degrade to ErrType through
+		// the variantLookupPayloadType fallback.
+		switch x.Name {
+		case "Option", "Maybe", "Result":
+			return false
+		}
+		return true
+	case *ir.OptionalType:
+		// `T?` retains its enum shape — ProjVariantN should still
+		// route through the variant lookup.
+		return false
+	case *ir.TupleType:
+		// Tuple payloads are accessed via ProjTuple, not
+		// ProjVariantN; treat the tuple itself as already-extracted
+		// for the purposes of this no-op projection check.
 		return true
 	}
 	return false

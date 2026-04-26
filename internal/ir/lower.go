@@ -1750,8 +1750,32 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 	}
 	callee := l.lowerExpr(fn)
 	t := l.exprType(e)
-	if t == ErrTypeVal {
-		t = recoverCallReturnType(callee)
+	if t == ErrTypeVal || t == nil || hasPoisonedTypeArg(t) {
+		// Prefer the callee's FnType.Return when the call's own
+		// type is missing or carries a poisoned type-arg (the
+		// embedded checker sometimes records `Result<Int, Error>`
+		// as `Result<Int, <error>>` because the inner `Error`
+		// reference doesn't resolve at the native-checker
+		// boundary). The callee's FnType is seeded from the
+		// resolver's symbol table for top-level fns and tends to
+		// carry a fully-resolved return shape.
+		if recovered := recoverCallReturnType(callee); recovered != nil && recovered != ErrTypeVal && !hasPoisonedTypeArg(recovered) {
+			t = recovered
+		}
+		// Final fallback for bare-Ident callees whose FnType is
+		// also poisoned: re-lower the resolved fn declaration's AST
+		// return type. The resolver's Symbol.Decl points at the
+		// originating ast.FnDecl, whose ReturnType node carries
+		// fully-syntactic names — re-running lowerType on it
+		// produces a fresh, non-poisoned IR Type even when the
+		// checker's typed-node table dropped the inner reference.
+		if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) {
+			if id, ok := fn.(*ast.Ident); ok {
+				if rec := l.recoverFnDeclReturnType(id); rec != nil && rec != ErrTypeVal && !hasPoisonedTypeArg(rec) {
+					t = rec
+				}
+			}
+		}
 	}
 	out := &CallExpr{
 		Callee:   callee,
@@ -2036,6 +2060,84 @@ func (l *lowerer) lowerBuilderStructLit(
 	return out
 }
 
+// hasPoisonedTypeArg reports whether `t` carries an `<error>` /
+// `ErrTypeVal` somewhere in its type-argument tree. The embedded
+// selfhost checker sometimes records `Result<Int, Error>` with the
+// second arg dropped to `<error>` because the inner `Error` lookup
+// missed at the native-checker boundary; downstream MIR / LLVM
+// rendering then produces opaque suffixes (`%Result.i64.opaque`
+// instead of `%Result.i64.Error`) that fail LLVM verification when
+// the Aggregate's slot type was rendered from the function's
+// non-poisoned return type. Callers gate their stdlib-signature
+// recovery on this so partial poisoning still routes through the
+// recoverMethodReturnType / recoverCallReturnType chain.
+func hasPoisonedTypeArg(t Type) bool {
+	if t == nil || t == ErrTypeVal {
+		return false
+	}
+	switch x := t.(type) {
+	case *NamedType:
+		for _, a := range x.Args {
+			if a == ErrTypeVal {
+				return true
+			}
+			if hasPoisonedTypeArg(a) {
+				return true
+			}
+		}
+	case *OptionalType:
+		if x.Inner == ErrTypeVal {
+			return true
+		}
+		return hasPoisonedTypeArg(x.Inner)
+	case *TupleType:
+		for _, e := range x.Elems {
+			if e == ErrTypeVal {
+				return true
+			}
+			if hasPoisonedTypeArg(e) {
+				return true
+			}
+		}
+	case *FnType:
+		for _, p := range x.Params {
+			if p == ErrTypeVal {
+				return true
+			}
+			if hasPoisonedTypeArg(p) {
+				return true
+			}
+		}
+		if x.Return == ErrTypeVal {
+			return true
+		}
+		return hasPoisonedTypeArg(x.Return)
+	}
+	return false
+}
+
+// recoverFnDeclReturnType walks the resolver Symbol behind a callee
+// Ident, fetches the originating ast.FnDecl, and re-lowers its
+// declared return type via `lowerType`. Used as the last-resort
+// fallback when both the call's own checker entry and the callee
+// Ident's FnType carry poisoned (`<error>`) type args — the AST node
+// still has the fully-syntactic source form, so a fresh round-trip
+// through `lowerType` produces a non-poisoned IR shape.
+func (l *lowerer) recoverFnDeclReturnType(id *ast.Ident) Type {
+	if id == nil || l.res == nil {
+		return nil
+	}
+	sym := l.res.RefsByID[id.ID]
+	if sym == nil || sym.Decl == nil {
+		return nil
+	}
+	fn, ok := sym.Decl.(*ast.FnDecl)
+	if !ok || fn == nil || fn.ReturnType == nil {
+		return nil
+	}
+	return l.lowerType(fn.ReturnType)
+}
+
 // recoverCallReturnType pulls the return type off the callee's FnType
 // when the checker did not record a type for the call expression. The
 // resolver seeds symbol types for top-level fns and `use`-imported
@@ -2233,18 +2335,24 @@ func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs [
 	}
 	recv := l.lowerExpr(fx.X)
 	t := l.exprType(e)
-	if t == ErrTypeVal || t == nil {
+	if t == ErrTypeVal || t == nil || hasPoisonedTypeArg(t) {
 		if recovered := recoverMethodCallType(fx.Name, typeArgs); recovered != ErrTypeVal {
 			t = recovered
 		}
 		// Recover from builtin method signatures when the checker
-		// left the call type unpopulated. Covers the common shapes
-		// from List / Map / Set / String / Bytes: `.len()`, `.isEmpty()`,
-		// `.contains(x)`, `.startsWith(s)`, etc. Without this, one
-		// `.len()` call with a checker-skipped receiver poisons
-		// every enclosing expression to ErrType and blocks MIR.
-		if recovered := recoverMethodReturnType(fx.Name, recv); (t == nil || t == ErrTypeVal) && recovered != nil {
-			t = recovered
+		// left the call type unpopulated or recorded it with poisoned
+		// type args. Covers the common shapes from List / Map / Set /
+		// String / Bytes: `.len()`, `.isEmpty()`, `.contains(x)`,
+		// `.startsWith(s)`, etc., and `.toInt()` / `.toFloat()` on
+		// String which produce a `Result<T, Error>` whose `Error`
+		// arg the embedded checker sometimes records as `<error>`.
+		// Without these, one method call with a checker-skipped
+		// receiver poisons every enclosing expression and blocks
+		// MIR / propagates `<error>` into Match scrutinee shapes.
+		if recovered := recoverMethodReturnType(fx.Name, recv); recovered != nil {
+			if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) {
+				t = recovered
+			}
 		}
 	}
 	out := &MethodCall{
@@ -2304,6 +2412,32 @@ func recoverMethodReturnType(name string, recv Expr) Type {
 		// `parts.join(sep)` on List<String> returns String.
 		if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "List" {
 			return TString
+		}
+	case "toInt":
+		// `String.toInt(self) -> Result<Int, Error>`. Char.toInt returns
+		// a bare Int, but the prelude / primitive shape disambiguates by
+		// receiver type — only the String surface routes through `?`
+		// propagation, so we restrict the recovery to that.
+		if isPrim(rt, PrimString) {
+			return &NamedType{
+				Name:    "Result",
+				Builtin: true,
+				Args: []Type{
+					TInt,
+					&NamedType{Name: "Error", Builtin: true},
+				},
+			}
+		}
+	case "toFloat":
+		if isPrim(rt, PrimString) {
+			return &NamedType{
+				Name:    "Result",
+				Builtin: true,
+				Args: []Type{
+					TFloat,
+					&NamedType{Name: "Error", Builtin: true},
+				},
+			}
 		}
 	}
 	// Element-type returns: List<T>.first / .last / .get → T?, .push → Unit.
@@ -2386,6 +2520,17 @@ func (l *lowerer) lowerList(e *ast.ListExpr) Expr {
 	}
 	if out.Elem == nil && len(out.Elems) > 0 {
 		out.Elem = out.Elems[0].Type()
+	}
+	// Final fallback: when both the checker's list type and the
+	// first lowered element's type are poisoned (`<error>`),
+	// inspect the first AST element's syntactic shape to recover a
+	// concrete element type. The `[Point {...}]` shorthand is the
+	// common case — the literal's head ident names the struct
+	// without going through the per-node Types map.
+	if (out.Elem == nil || out.Elem == ErrTypeVal) && len(e.Elems) > 0 {
+		if t := bindingTypeFromAST(e.Elems[0]); t != nil {
+			out.Elem = t
+		}
 	}
 	if out.Elem == nil {
 		out.Elem = ErrTypeVal
