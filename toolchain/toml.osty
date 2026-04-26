@@ -251,7 +251,7 @@ fn parseKeyValue(p: TomlParser, t: TomlTable) -> Result<(), String> {
     advanceParser(p)
     skipHorizontalWhitespace(p)
     let v = parseValue(p)?
-    let stamped = TomlValue { kind: v.kind, line: startLine }
+    let stamped = TomlValue { ..v, line: startLine }
     setDottedKey(t, parts, stamped, startLine)?
     skipHorizontalWhitespace(p)
     if !atEnd(p) {
