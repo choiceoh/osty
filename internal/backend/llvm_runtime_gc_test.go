@@ -6280,7 +6280,9 @@ int main(void) {
 //
 // Per-kind eligibility verdicts and rationale live next to
 // `osty_gc_young_eligible` in the runtime — this test pins the
-// verdicts (one row per kind), not the reasoning.
+// verdicts (one row per kind), not the reasoning. New kinds added
+// to the enum need a row in `kinds[]` below and a matching
+// expectation in both subtest cases.
 func TestBundledRuntimeYoungEligibilityFilter(t *testing.T) {
 	parallelClangBackendTest(t)
 
@@ -6298,14 +6300,15 @@ int64_t osty_gc_debug_young_eligible(int64_t byte_size, int64_t object_kind);
 void *osty_gc_debug_allocate_young_if_eligible(int64_t byte_size, int64_t object_kind);
 int64_t osty_gc_debug_arena_is_young_page(void *payload);
 
-#define KIND_GENERIC      1
-#define KIND_LIST         1024
-#define KIND_STRING       1025
-#define KIND_MAP          1026
-#define KIND_SET          1027
-#define KIND_BYTES        1028
-#define KIND_CLOSURE_ENV  1029
-#define KIND_CHANNEL      1030
+#define KIND_GENERIC           1
+#define KIND_LIST              1024
+#define KIND_STRING            1025
+#define KIND_MAP               1026
+#define KIND_SET               1027
+#define KIND_BYTES             1028
+#define KIND_CLOSURE_ENV       1029
+#define KIND_CHANNEL           1030
+#define KIND_GENERIC_ENUM_PTR  1031
 
 int main(void) {
     /* Each row prints "<eligible> <ptr_was_young>" where eligible is
@@ -6313,7 +6316,7 @@ int main(void) {
      * returned a payload that lands in the young arena, else 0. */
     int64_t kinds[] = {
         KIND_GENERIC, KIND_LIST, KIND_STRING, KIND_MAP, KIND_SET,
-        KIND_BYTES, KIND_CLOSURE_ENV, KIND_CHANNEL
+        KIND_BYTES, KIND_CLOSURE_ENV, KIND_CHANNEL, KIND_GENERIC_ENUM_PTR
     };
     for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
         int64_t k = kinds[i];
@@ -6355,6 +6358,7 @@ int main(void) {
 				"1028 0 0", // BYTES
 				"1029 0 0", // CLOSURE_ENV
 				"1030 0 0", // CHANNEL
+				"1031 0 0", // GENERIC_ENUM_PTR
 			},
 		},
 		{
@@ -6372,6 +6376,7 @@ int main(void) {
 				"1028 1 1", // BYTES: eligible
 				"1029 1 1", // CLOSURE_ENV: eligible (captures populated synchronously before escape)
 				"1030 0 0", // CHANNEL: has destroy
+				"1031 1 1", // GENERIC_ENUM_PTR: eligible (kind_table dispatch reaches the trace)
 			},
 		},
 	} {
@@ -6383,8 +6388,8 @@ int main(void) {
 				t.Fatalf("run failed: %v\n%s", err, runOutput)
 			}
 			lines := strings.Split(strings.TrimRight(string(runOutput), "\n"), "\n")
-			if len(lines) != 11 {
-				t.Fatalf("expected 11 output lines, got %d: %q", len(lines), runOutput)
+			if len(lines) != 12 {
+				t.Fatalf("expected 12 output lines, got %d: %q", len(lines), runOutput)
 			}
 			for i, want := range tc.wantRows {
 				if lines[i] != want {
@@ -6392,14 +6397,14 @@ int main(void) {
 						i, lines[i], want, runOutput)
 				}
 			}
-			if lines[8] != "zero 0" {
-				t.Fatalf("zero-size row: got %q, want %q", lines[8], "zero 0")
+			if lines[9] != "zero 0" {
+				t.Fatalf("zero-size row: got %q, want %q", lines[9], "zero 0")
 			}
-			if lines[9] != "huge 0" {
-				t.Fatalf("huge-size row: got %q, want %q", lines[9], "huge 0")
+			if lines[10] != "huge 0" {
+				t.Fatalf("huge-size row: got %q, want %q", lines[10], "huge 0")
 			}
-			if lines[10] != "neg 0" {
-				t.Fatalf("neg-size row: got %q, want %q", lines[10], "neg 0")
+			if lines[11] != "neg 0" {
+				t.Fatalf("neg-size row: got %q, want %q", lines[11], "neg 0")
 			}
 		})
 	}
@@ -6744,6 +6749,120 @@ int main(void) {
 	}, "\n")
 	if got := string(runOutput); got != want {
 		t.Fatalf("set-young harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestBundledRuntimeGenericEnumPtrYoungTraceFollows covers the
+// KIND_GENERIC_ENUM_PTR young addition: an `osty_rt_enum_alloc_ptr_v1`
+// box lands young, and during cheney_minor the kind_table descriptor
+// reaches the trace fn (`osty_rt_enum_ptr_payload_trace`) so a
+// managed payload stored at the box keeps reachable. Before the kind
+// split this could not work — KIND_GENERIC's per-instance trace fn
+// is only resolvable through `header->generic_pattern`, which the
+// 16-byte micro-header doesn't carry.
+//
+// Harness: alloc young box, store an unrooted String into the box's
+// payload slot, root the box, force collect. The String survives
+// only if cheney's scan calls the trace fn on the young box.
+func TestBundledRuntimeGenericEnumPtrYoungTraceFollows(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_generic_enum_ptr_young_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_generic_enum_ptr_young_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_rt_enum_alloc_ptr_v1(const char *site) __asm__(OSTY_GC_SYMBOL("osty.rt.enum_alloc_ptr_v1"));
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+int64_t osty_gc_debug_arena_is_young_page(void *payload);
+int64_t osty_gc_debug_young_forward_tag(void *from_payload);
+int64_t osty_gc_debug_live_count(void);
+void osty_gc_debug_collect(void);
+
+#define KIND_STRING 1025
+
+int main(void) {
+    /* Box lands young (KIND_GENERIC_ENUM_PTR is one of the eligible
+     * kinds). The 8-byte payload starts zero — we'll store a String
+     * pointer at offset 0, mirroring how the LLVM emit lowers
+     * Some(<ptr_payload>). */
+    void **box = (void **)osty_rt_enum_alloc_ptr_v1("test.enum_ptr_young");
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(box));
+
+    /* Captured String: allocated via alloc_v1 with kind STRING (also
+     * young-eligible). Not separately rooted — its only liveness path
+     * is the box's trace fn. */
+    void *captured = osty_gc_alloc_v1(KIND_STRING, 16, "captured.string");
+    *box = captured;
+
+    /* Root the box. Promote-on-bind copies the box payload (pointer
+     * to captured) to OLD via memcpy — captured pointer survives
+     * the move. */
+    osty_gc_root_bind_v1(box);
+    printf("%lld\n", (long long)osty_gc_debug_young_forward_tag(box));
+
+    /* Forced collect. cheney_minor's scan loop dispatches via
+     * kind_table for the young String (forwards it to to-space) and
+     * via the OLD box's trace (which calls mark_slot_v1 on the
+     * captured slot, finding the freshly-forwarded young String).
+     * Without the kind split, the box would have been ineligible
+     * for young; now we exercise the descriptor route end-to-end. */
+    osty_gc_debug_collect();
+
+    /* live_count is the headerful count: rooted box + cap0 (which
+     * survived because the trace marked it). Pre-fix this would
+     * have been 1 (just the box) since the trace would never fire. */
+    int64_t live_after = osty_gc_debug_live_count();
+    printf("%lld\n", (long long)live_after);
+
+    /* Refresh the box pointer through the PROMOTED tag and read the
+     * captured slot back. Passes through load_v1 in case major
+     * compaction relocated either pointer. */
+    void **live_box = (void **)osty_gc_load_v1(box);
+    void *live_captured = osty_gc_load_v1(*live_box);
+    printf("%d\n", live_captured != 0);
+
+    osty_gc_root_release_v1(box);
+    osty_gc_debug_collect();
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"1", // box landed in young arena
+		"2", // forward tag = PROMOTED after root_bind
+		"1", // OLD box rooted; captured String not separately counted (still young after promote forwarded it)
+		"1", // captured String was reachable through the box trace
+		"0", // release + collect reclaims everything
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("generic-enum-ptr-young harness output mismatch\n got: %q\nwant: %q", got, want)
 	}
 }
 
@@ -7229,10 +7348,14 @@ int main(void) {
     int64_t hdr = osty_gc_debug_header_size_bytes();
     printf("header_size:%lld\n", (long long)hdr);
 
-    /* 2. GENERIC enum-ptr alloc carries the ENUM_PTR pattern; scalar
-     *    alloc carries NONE. The reverse-lookup via osty_gc_pattern_of
-     *    has to match the (trace, destroy) pair the typed allocator
-     *    passed in. */
+    /* 2. enum_scalar (KIND_GENERIC + NONE pattern) carries
+     *    generic_pattern == NONE. enum_ptr (KIND_GENERIC_ENUM_PTR
+     *    after the kind split) reaches its trace via the kind_table
+     *    descriptor; the headerful path leaves generic_pattern at
+     *    NONE for any non-KIND_GENERIC alloc, so the readout here
+     *    is also NONE. The pattern field is only meaningful for
+     *    true KIND_GENERIC allocs (the remaining TASK_HANDLE
+     *    pattern). */
     void *enum_ptr = osty_rt_enum_alloc_ptr_v1("phase4.enum_ptr");
     void *enum_scalar = osty_rt_enum_alloc_scalar_v1("phase4.enum_scalar");
     osty_gc_root_bind_v1(enum_ptr);
@@ -7242,12 +7365,13 @@ int main(void) {
     printf("enum_scalar_pattern:%lld\n",
         (long long)osty_gc_debug_generic_pattern_of(enum_scalar));
 
-    /* 3. Dispatch round-trip. Trigger a collect; the header-fallback
-     *    counter has to bump (these are GENERIC kinds, no descriptor)
-     *    and the live count stays at 2 since both are rooted. The
-     *    counter prove the dispatch path actually consulted the
-     *    generic_patterns table — i.e., the trace/destroy lookup is
-     *    no longer reading defunct header fields. */
+    /* 3. Dispatch round-trip. Trigger a collect; the live count stays
+     *    at 2 since both are rooted. enum_scalar is still KIND_GENERIC
+     *    so its dispatch goes through the header-fallback path, and
+     *    the fallback counter bumps at least once. enum_ptr now
+     *    dispatches via the kind_table descriptor (KIND_GENERIC_ENUM_PTR)
+     *    so it does NOT bump the fallback counter — but the scalar
+     *    bump alone is enough to keep fallback_bumped true. */
     int64_t fallback_before = osty_gc_debug_dispatch_via_header_total();
     osty_gc_debug_collect();
     int64_t fallback_after = osty_gc_debug_dispatch_via_header_total();
@@ -7276,10 +7400,10 @@ int main(void) {
 	}
 	want := strings.Join([]string{
 		"header_size:80",         // shrunk from 96 (16 B saved by dropping trace/destroy)
-		"enum_ptr_pattern:1",     // ENUM_PTR = 1
+		"enum_ptr_pattern:0",     // KIND_GENERIC_ENUM_PTR uses kind_table dispatch; header pattern stays NONE
 		"enum_scalar_pattern:0",  // NONE = 0
 		"live_after_collect:2",   // both rooted
-		"fallback_bumped:1",      // GENERIC fallback path actually fired (used pattern table)
+		"fallback_bumped:1",      // enum_scalar (KIND_GENERIC) still fires the GENERIC fallback path
 		"live_after_release:0",   // both swept
 		"",
 	}, "\n")
