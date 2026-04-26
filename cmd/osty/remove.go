@@ -88,7 +88,12 @@ func runRemove(args []string, cliF cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty remove: vendor: %v\n", err)
 		os.Exit(1)
 	}
-	if err := lockfile.Write(root, pkgmgr.LockFromGraph(graph)); err != nil {
+	newLock, err := pkgmgr.LockFromGraph(graph)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty remove: project lockfile: %v\n", err)
+		os.Exit(1)
+	}
+	if err := lockfile.Write(root, newLock); err != nil {
 		fmt.Fprintf(os.Stderr, "osty remove: write lockfile: %v\n", err)
 		os.Exit(1)
 	}

@@ -139,7 +139,12 @@ func runAdd(args []string, cliF cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty add: vendor: %v\n", err)
 		os.Exit(1)
 	}
-	if err := lockfile.Write(root, pkgmgr.LockFromGraph(graph)); err != nil {
+	newLock, err := pkgmgr.LockFromGraph(graph)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty add: project lockfile: %v\n", err)
+		os.Exit(1)
+	}
+	if err := lockfile.Write(root, newLock); err != nil {
 		fmt.Fprintf(os.Stderr, "osty add: write lockfile: %v\n", err)
 		os.Exit(1)
 	}

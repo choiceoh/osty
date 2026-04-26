@@ -59,7 +59,13 @@ func TestGolegacyDiffLockMatchesGoDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := diffLockGo(old, new)
+	want := []LockfileChange{
+		{Name: "alpha", Kind: "checksum", NewVersion: "1.0.0", Detail: "sha256:aaaaaaaaaaaa -> sha256:eeeeeeeeeeee"},
+		{Name: "beta", Kind: "source", Detail: "registry+old -> registry+new"},
+		{Name: "delta", Kind: "added", NewVersion: "0.1.0"},
+		{Name: "gamma", Kind: "removed", OldVersion: "1.0.0"},
+		{Name: "zed", Kind: "version", OldVersion: "1.0.0", NewVersion: "1.1.0"},
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("golegacy diff mismatch\nwant: %#v\ngot:  %#v", want, got)
 	}
@@ -193,20 +199,20 @@ func TestGolegacyLookupDependency(t *testing.T) {
 	}
 }
 
-func TestGolegacyTopoOrderMatchesGoOrder(t *testing.T) {
+func TestGolegacyTopoOrderLeavesFirst(t *testing.T) {
 	graph := &Graph{Nodes: map[string]*ResolvedNode{
 		"app":  {Name: "app", Deps: []string{"util"}},
 		"util": {Name: "util", Deps: []string{"leaf"}},
 		"leaf": {Name: "leaf"},
 	}}
-	want := (&resolver{graph: graph}).topoOrderGo()
+	want := []string{"leaf", "util", "app"}
 	got := GolegacyTopoOrder(graph)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("golegacy topo mismatch\nwant: %#v\ngot:  %#v", want, got)
 	}
 }
 
-func TestGolegacyLockFromGraphMatchesGoProjection(t *testing.T) {
+func TestGolegacyLockFromGraphProjection(t *testing.T) {
 	graph := &Graph{Nodes: map[string]*ResolvedNode{
 		"app": {
 			Name:   "app",
@@ -226,17 +232,28 @@ func TestGolegacyLockFromGraphMatchesGoProjection(t *testing.T) {
 			},
 		},
 	}}
-	graph.Order = (&resolver{graph: graph}).topoOrderGo()
+
+	want := &lockfile.Lock{
+		Version: lockfile.SchemaVersion,
+		Packages: []lockfile.Package{
+			{Name: "util", Version: "0.2.0", Source: "path+../util", Checksum: "sha256:util"},
+			{Name: "app", Version: "1.0.0", Source: "path+../app", Checksum: "sha256:app",
+				Dependencies: []lockfile.Dependency{{Name: "util", Version: "0.2.0"}}},
+		},
+	}
 
 	got, err := GolegacyLockFromGraph(graph)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := lockFromGraphGo(graph)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("golegacy lock projection mismatch\nwant: %#v\ngot:  %#v", want, got)
 	}
-	if projected := LockFromGraph(graph); !reflect.DeepEqual(projected, want) {
+	projected, err := LockFromGraph(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(projected, want) {
 		t.Fatalf("public lock projection mismatch\nwant: %#v\ngot:  %#v", want, projected)
 	}
 }

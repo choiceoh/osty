@@ -101,9 +101,15 @@ func resolveAndVendorEnvOpts(m *manifest.Manifest, root string, opts resolveOpts
 	if err != nil {
 		return nil, env, fmt.Errorf("resolve: %w", err)
 	}
-	newLock := pkgmgr.LockFromGraph(graph)
+	newLock, err := pkgmgr.LockFromGraph(graph)
+	if err != nil {
+		return graph, env, fmt.Errorf("project lockfile: %w", err)
+	}
 	if opts.Locked {
-		changes := pkgmgr.DiffLock(priorLock, newLock)
+		changes, err := pkgmgr.DiffLock(priorLock, newLock)
+		if err != nil {
+			return graph, env, fmt.Errorf("diff lockfile: %w", err)
+		}
 		changeStrs := make([]string, 0, len(changes))
 		for _, c := range changes {
 			changeStrs = append(changeStrs, c.String())
