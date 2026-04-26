@@ -6278,20 +6278,9 @@ int main(void) {
 // (flag off / GENERIC / has-destroy / oversized / zero-size) keep
 // behaving as designed even when no production caller uses it yet.
 //
-// Allowed kinds today: STRING, BYTES (immutable byte payloads),
-// LIST (load_v1 PROMOTED follow + cheney self-ref fixup + dead-list
-// scan), CLOSURE_ENV (captures populated synchronously at
-// construction before the env escapes; promote-on-bind copies a
-// fully-populated env to OLD), GENERIC NONE pattern (NULL trace +
-// NULL destroy — opaque payload, nothing for cheney to follow), SET
-// (cheney_destroy_dead_from_space frees the `items` heap buffer for
-// UNFORWARDED young Sets). The debug entry assumes NONE for
-// GENERIC; the production allocator also rejects ENUM_PTR /
-// TASK_HANDLE because the per-instance pattern can't be recovered
-// from the 16-byte micro-header.
-// Rejected: MAP/CHANNEL (destroy frees pthread sync state in
-// addition to backing arrays — larger surface, less perf payoff
-// since these are typically long-lived), humongous (size > threshold).
+// Per-kind eligibility verdicts and rationale live next to
+// `osty_gc_young_eligible` in the runtime — this test pins the
+// verdicts (one row per kind), not the reasoning.
 func TestBundledRuntimeYoungEligibilityFilter(t *testing.T) {
 	parallelClangBackendTest(t)
 
@@ -6646,9 +6635,6 @@ int main(void) {
 // the inserted items survive a forced collect, and the items heap
 // buffer is freed (not leaked) when an UNFORWARDED young Set is
 // reclaimed by `osty_gc_cheney_destroy_dead_from_space`.
-//
-// This is the dual of the LIST young test (#960): same dead-buffer
-// scan, no self-ref fixup since Set has no inline-storage union.
 func TestBundledRuntimeSetYoungLifecycle(t *testing.T) {
 	parallelClangBackendTest(t)
 

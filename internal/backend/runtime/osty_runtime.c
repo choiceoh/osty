@@ -4053,7 +4053,6 @@ static void *osty_gc_allocate_pinned_managed(size_t byte_size,
 }
 
 static void osty_gc_mark_payload(void *payload);
-static size_t osty_rt_kind_size(int64_t kind);
 static void osty_rt_chan_sync_init_or_abort(osty_rt_chan_impl *ch,
                                             const char *op);
 static void osty_rt_chan_ensure_elem_kind(osty_rt_chan_impl *ch,
