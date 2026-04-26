@@ -37,11 +37,13 @@ type Result struct {
 	Diags []*diag.Diagnostic
 }
 
-// FileWithStdlib runs name resolution over a single parsed source file
+// fileWithStdlib runs name resolution over a single parsed source file
 // with an optional StdlibProvider: `use std.*` imports in
 // the source resolve through the provider before falling back to the
 // opaque-stub behavior. Passing a nil provider is equivalent to File.
-func FileWithStdlib(file *ast.File, prelude *Scope, stdlib StdlibProvider) *Result {
+//
+// Unexported — external callers should use ResolveFileDefault.
+func fileWithStdlib(file *ast.File, prelude *Scope, stdlib StdlibProvider) *Result {
 	pkg := &Package{
 		Name: "<file>",
 		Files: []*PackageFile{{
@@ -2296,4 +2298,24 @@ func (r *resolver) defineLocal(name string, sym *Symbol) {
 		return
 	}
 	r.current.DefineForce(sym)
+}
+
+// ResolvePackageDefault resolves a single package using the standard
+// prelude (NewPrelude). This is the convenience entry point for callers
+// that do not share a prelude across multiple packages; internally it
+// allocates a fresh prelude on each call.
+//
+// Callers that resolve many packages in a loop (workspace mode, CI,
+// stdlib loading) should prefer Workspace.ResolveAll or explicitly
+// reuse a single prelude with ResolvePackage to avoid redundant
+// allocations.
+func ResolvePackageDefault(pkg *Package) *PackageResult {
+	return ResolvePackage(pkg, NewPrelude())
+}
+
+// ResolveFileDefault runs single-file name resolution using the
+// standard prelude and the given stdlib provider. It is the
+// one-call replacement for FileWithStdlib(file, NewPrelude(), stdlib).
+func ResolveFileDefault(file *ast.File, stdlib StdlibProvider) *Result {
+	return fileWithStdlib(file, NewPrelude(), stdlib)
 }

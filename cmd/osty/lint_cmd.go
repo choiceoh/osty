@@ -37,7 +37,7 @@ func runLintPackage(dir string, flags cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
-	res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+	res := resolve.ResolvePackageDefault(pkg)
 	chk := check.Package(pkg, res, checkOpts())
 	cfg, cfgBase, hasCfg := loadLintConfigWithBase(dir)
 	outcome := runLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)
@@ -64,7 +64,7 @@ func runLintWorkspace(dir string, flags cliFlags) {
 			anyErr = true
 			return
 		}
-		res := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+		res := resolve.ResolvePackageDefault(pkg)
 		chk := check.Package(pkg, res, checkOpts())
 		cfg, cfgBase, hasCfg := loadLintConfigWithBase(pkg.Dir)
 		outcome := runLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)

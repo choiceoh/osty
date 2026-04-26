@@ -456,7 +456,7 @@ func parseResolvedFile(t *testing.T, src []byte) (*ast.File, *resolve.Result) {
 	if len(diags) != 0 {
 		t.Fatalf("parse diagnostics: %v", diags)
 	}
-	res := resolve.FileWithStdlib(file, resolve.NewPrelude(), stdlib.LoadCached())
+	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
 	if len(res.Diags) != 0 {
 		t.Fatalf("resolve diagnostics: %v", res.Diags)
 	}

@@ -113,7 +113,7 @@ func LoadRunnerState(root string, preloaded *manifest.Manifest) LoadResult {
 	}
 	filterPackageCIFiles(pkg)
 	r.Packages = []*resolve.Package{pkg}
-	pr := resolve.ResolvePackage(pkg, resolve.NewPrelude())
+	pr := resolve.ResolvePackageDefault(pkg)
 	r.Results = []*resolve.PackageResult{pr}
 	return *r
 }
@@ -275,7 +275,7 @@ func CheckLint(m *manifest.Manifest, packages []*resolve.Package, results []*res
 			pr = results[i]
 		}
 		if pr == nil {
-			pr = resolve.ResolvePackage(pkg, resolve.NewPrelude())
+			pr = resolve.ResolvePackageDefault(pkg)
 		}
 		chk := check.Package(pkg, pr, opts)
 		lr := lint.Package(pkg, pr, chk)

@@ -119,7 +119,7 @@ fn main() {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
 			f := parseLLVMGenFile(t, c.src)
-			res := resolve.FileWithStdlib(f, resolve.NewPrelude(), stdlib.LoadCached())
+			res := resolve.ResolveFileDefault(f, stdlib.LoadCached())
 			reg := stdlib.LoadCached()
 			chk := check.SelfhostFile(f, res, check.Opts{
 				Stdlib: reg, Primitives: reg.Primitives,
