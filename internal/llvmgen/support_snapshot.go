@@ -1473,6 +1473,11 @@ func llvmRenderSkeleton(packageName string, sourcePath string, emit string, targ
 
 // Osty: toolchain/llvmgen.osty:1107:5
 func llvmRenderFunction(ret string, name string, params []*LlvmParam, body []string) string {
+	// `body` may contain `alloca` lines emitted into non-entry basic
+	// blocks (loop bodies, conditional branches). Hoist them to the
+	// entry block so each iteration reuses the same stack slot — see
+	// alloca_hoist.go for the rationale and the O(N²) bug it fixes.
+	body = hoistAllocasToEntry(body)
 	// Osty: toolchain/llvmgen.osty:1113:5
 	lines := []string{fmt.Sprintf("define %s @%s(%s) {", ostyToString(ret), ostyToString(name), ostyToString(llvmParams(params))), "entry:"}
 	_ = lines
