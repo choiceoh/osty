@@ -2521,6 +2521,17 @@ func (l *lowerer) lowerList(e *ast.ListExpr) Expr {
 	if out.Elem == nil && len(out.Elems) > 0 {
 		out.Elem = out.Elems[0].Type()
 	}
+	// Final fallback: when both the checker's list type and the
+	// first lowered element's type are poisoned (`<error>`),
+	// inspect the first AST element's syntactic shape to recover a
+	// concrete element type. The `[Point {...}]` shorthand is the
+	// common case — the literal's head ident names the struct
+	// without going through the per-node Types map.
+	if (out.Elem == nil || out.Elem == ErrTypeVal) && len(e.Elems) > 0 {
+		if t := bindingTypeFromAST(e.Elems[0]); t != nil {
+			out.Elem = t
+		}
+	}
 	if out.Elem == nil {
 		out.Elem = ErrTypeVal
 	}
