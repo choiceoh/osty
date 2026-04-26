@@ -438,12 +438,20 @@ typedef struct osty_gc_header {
     uint8_t age;
     uint8_t generation;
     uint8_t storage_kind;
+    /* Phase 4 (RUNTIME_GC_DELTA Phase E follow-up): per-object
+     * generic-pattern selector. Indexes `osty_gc_generic_patterns[]`
+     * to recover the (trace, destroy) pair for `OSTY_GC_KIND_GENERIC`
+     * objects. Non-GENERIC kinds resolve through `osty_gc_kind_table`
+     * and ignore this field. The slot reuses existing 8-byte
+     * alignment padding (5 u8 fields → 6 u8 + 2 padding), so the
+     * field is free; dropping the per-header `trace`/`destroy` fn
+     * pointers is the actual win — net header shrink: 16 B per OLD
+     * object (96 → 80). */
+    uint8_t generic_pattern;
     /* Phase D groundwork: stable logical identity. Payload pointers are
      * still the operational handles today, but this id stays attached to
      * the object even once future compaction starts moving addresses. */
     uint64_t stable_id;
-    osty_gc_trace_fn trace;
-    osty_gc_destroy_fn destroy;
     void *payload;
 } osty_gc_header;
 /* `site` was historically a `const char *` debug label written by the
@@ -642,11 +650,46 @@ static void osty_rt_set_destroy(void *payload);
 static void osty_rt_closure_env_trace(void *payload);
 static void osty_rt_chan_trace(void *payload);
 static void osty_rt_chan_destroy(void *payload);
+static void osty_rt_enum_ptr_payload_trace(void *payload);
+static void osty_rt_task_handle_destroy(void *payload);
 
 typedef struct osty_gc_kind_descriptor {
     osty_gc_trace_fn trace;
     osty_gc_destroy_fn destroy;
 } osty_gc_kind_descriptor;
+
+/* Phase 4 generic-pattern table (RUNTIME_GC_DELTA Phase E follow-up).
+ *
+ * `OSTY_GC_KIND_GENERIC` covers every alloc that doesn't have a
+ * dedicated runtime kind — enum payloads, task handles, struct boxes,
+ * hand-rolled copies. Pre-Phase-4 each instance carried its own
+ * `trace` + `destroy` fn pointers on the header (16 B / object). In
+ * practice only THREE patterns ever appeared, so Phase 4 collapses
+ * them into a small enum + lookup table. The header gains a
+ * `uint8_t generic_pattern` field that fits in existing alignment
+ * padding (cost: 0 B), and drops the two fn-pointer fields
+ * (saving: 16 B). Net header shrink: 16 B per OLD object — on top
+ * of the 16 B saved by going from 112 → 96 in PR #910.
+ *
+ * New GENERIC users add a row here, not a new fn-pointer field. */
+enum {
+    OSTY_GC_GENERIC_NONE = 0,
+    OSTY_GC_GENERIC_ENUM_PTR = 1,
+    OSTY_GC_GENERIC_TASK_HANDLE = 2,
+};
+
+static const osty_gc_kind_descriptor osty_gc_generic_patterns[] = {
+    [OSTY_GC_GENERIC_NONE] = {NULL, NULL},
+    [OSTY_GC_GENERIC_ENUM_PTR] = {osty_rt_enum_ptr_payload_trace, NULL},
+    [OSTY_GC_GENERIC_TASK_HANDLE] = {NULL, osty_rt_task_handle_destroy},
+};
+
+#define OSTY_GC_GENERIC_PATTERN_COUNT \
+    (sizeof(osty_gc_generic_patterns) / sizeof(osty_gc_generic_patterns[0]))
+
+/* `osty_gc_pattern_of` defined later (after `osty_rt_abort`). */
+static uint8_t osty_gc_pattern_of(osty_gc_trace_fn trace,
+                                  osty_gc_destroy_fn destroy);
 
 /* Indexed by `kind - OSTY_GC_KIND_LIST`. Lookup is O(1) — Phase 2 routes
  * mark drain and every sweep through this table, so a 7-element linear
@@ -704,8 +747,10 @@ static inline void osty_gc_dispatch_trace(osty_gc_header *header) {
         osty_gc_dispatch_via_descriptor_total += 1;
         fn = desc->trace;
     } else {
+        /* GENERIC fallback: pattern lookup replaces the per-header
+         * fn-pointer field that Phase 4 dropped. */
         osty_gc_dispatch_via_header_total += 1;
-        fn = header->trace;
+        fn = osty_gc_generic_patterns[header->generic_pattern].trace;
     }
     if (fn != NULL) {
         fn(header->payload);
@@ -721,7 +766,7 @@ static inline void osty_gc_dispatch_destroy(osty_gc_header *header) {
         fn = desc->destroy;
     } else {
         osty_gc_dispatch_via_header_total += 1;
-        fn = header->destroy;
+        fn = osty_gc_generic_patterns[header->generic_pattern].destroy;
     }
     if (fn != NULL) {
         fn(header->payload);
@@ -1376,6 +1421,22 @@ void osty_gc_mark_slot_v1(void *slot_addr) __asm__(OSTY_GC_SYMBOL("osty.gc.mark_
 static void osty_rt_abort(const char *message) {
     fprintf(stderr, "osty llvm runtime: %s\n", message);
     abort();
+}
+
+/* Phase 4 reverse-lookup body. Forward-declared near
+ * `osty_gc_generic_patterns` since alloc paths (which are above
+ * `osty_rt_abort`) need to call it. */
+static uint8_t osty_gc_pattern_of(osty_gc_trace_fn trace,
+                                  osty_gc_destroy_fn destroy) {
+    size_t i;
+    for (i = 0; i < OSTY_GC_GENERIC_PATTERN_COUNT; i++) {
+        if (osty_gc_generic_patterns[i].trace == trace &&
+            osty_gc_generic_patterns[i].destroy == destroy) {
+            return (uint8_t)i;
+        }
+    }
+    osty_rt_abort("unrecognised GENERIC (trace, destroy) pair — register a new pattern in osty_gc_generic_patterns");
+    return 0;
 }
 
 // Public abort helper called from LLVM IR when `Option.unwrap()` fires on
@@ -2060,7 +2121,9 @@ static bool osty_gc_header_is_movable(const osty_gc_header *header) {
         header->object_kind == OSTY_GC_KIND_CLOSURE_ENV) {
         return true;
     }
-    return header->destroy == NULL;
+    /* GENERIC fallback: movable iff its pattern has no destroy
+     * (NONE / ENUM_PTR — no external resource to free). */
+    return osty_gc_generic_patterns[header->generic_pattern].destroy == NULL;
 }
 
 static void osty_gc_note_pin_acquire(osty_gc_header *header) {
@@ -3343,7 +3406,9 @@ static void osty_gc_cheney_drain_old_stack(void) {
         const osty_gc_kind_descriptor *desc =
             osty_gc_kind_descriptor_lookup(header->object_kind);
         osty_gc_trace_fn fn =
-            (desc != NULL) ? desc->trace : header->trace;
+            (desc != NULL)
+                ? desc->trace
+                : osty_gc_generic_patterns[header->generic_pattern].trace;
         if (fn != NULL) {
             fn(header->payload);
         }
@@ -3631,8 +3696,17 @@ static void *osty_gc_allocate_managed_headerful(size_t byte_size,
     /* Parity gate already ran at function entry. */
     header->object_kind = object_kind;
     header->byte_size = (int64_t)payload_size;
-    header->trace = trace;
-    header->destroy = destroy;
+    /* Phase 4: collapse per-instance (trace, destroy) into the
+     * generic_pattern enum for GENERIC kinds. Non-GENERIC kinds
+     * resolve through the kind descriptor table and ignore this
+     * field — pass NONE so the field is well-defined either way. */
+    if (object_kind == OSTY_GC_KIND_GENERIC) {
+        header->generic_pattern = osty_gc_pattern_of(trace, destroy);
+    } else {
+        header->generic_pattern = OSTY_GC_GENERIC_NONE;
+        (void)trace;
+        (void)destroy;
+    }
     /* `site` field removed — see osty_gc_header definition. The
      * parameter still flows in so call-site labels remain visible in
      * source, but isn't stored. */
@@ -3743,8 +3817,14 @@ static void *osty_gc_allocate_pinned_managed(size_t byte_size,
     osty_gc_kind_descriptor_assert_parity(object_kind, trace, destroy);
     header->object_kind = object_kind;
     header->byte_size = (int64_t)payload_size;
-    header->trace = trace;
-    header->destroy = destroy;
+    /* Phase 4: same generic_pattern handoff as the regular alloc path. */
+    if (object_kind == OSTY_GC_KIND_GENERIC) {
+        header->generic_pattern = osty_gc_pattern_of(trace, destroy);
+    } else {
+        header->generic_pattern = OSTY_GC_GENERIC_NONE;
+        (void)trace;
+        (void)destroy;
+    }
     /* `site` field removed — see osty_gc_header definition. The
      * parameter still flows in so call-site labels remain visible in
      * source, but isn't stored. */
@@ -4493,7 +4573,12 @@ static void osty_gc_remap_header_payload(osty_gc_header *header) {
     default:
         break;
     }
-    if (header->trace != NULL && header->byte_size == (int64_t)sizeof(void *)) {
+    /* GENERIC fallback path — same shape as Phase 2's dispatch:
+     * resolve the trace fn from the generic_patterns table for kinds
+     * not handled by the switch above. The `byte_size == sizeof(ptr)`
+     * filter still pins this to the enum-ptr-payload case. */
+    if (osty_gc_generic_patterns[header->generic_pattern].trace != NULL &&
+        header->byte_size == (int64_t)sizeof(void *)) {
         osty_gc_remap_slot(header->payload);
     }
 }
@@ -10615,6 +10700,21 @@ int64_t osty_gc_debug_age_of(void *payload) {
 
 int64_t osty_gc_debug_live_count(void) {
     return osty_gc_live_count;
+}
+
+/* Phase 4: header-size invariant accessor. Tests pin the size to the
+ * post-shrink value so a future regression that reintroduces the
+ * trace/destroy fn-pointer fields shows up immediately. */
+int64_t osty_gc_debug_header_size_bytes(void) {
+    return (int64_t)sizeof(osty_gc_header);
+}
+
+int64_t osty_gc_debug_generic_pattern_of(void *payload) {
+    osty_gc_header *header = osty_gc_find_header(payload);
+    if (header == NULL) {
+        return -1;
+    }
+    return (int64_t)header->generic_pattern;
 }
 
 int64_t osty_gc_debug_collection_count(void) {
