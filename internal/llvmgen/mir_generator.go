@@ -1643,11 +1643,7 @@ func (g *mirGen) emitAllocaPreamble(fn *mir.Function) {
 			slot := fmt.Sprintf("%%p%d", loc.ID)
 			g.localSlots[loc.ID] = slot
 			if !isUnitType(loc.Type) {
-				g.fnBuf.WriteString("  ")
-				g.fnBuf.WriteString(slot)
-				g.fnBuf.WriteString(" = alloca ")
-				g.fnBuf.WriteString(g.llvmType(loc.Type))
-				g.fnBuf.WriteByte('\n')
+				g.fnBuf.WriteString(mirAllocaLine(slot, g.llvmType(loc.Type)))
 			}
 			continue
 		}
@@ -1657,11 +1653,7 @@ func (g *mirGen) emitAllocaPreamble(fn *mir.Function) {
 			// Unit has no storage.
 			continue
 		}
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(slot)
-		g.fnBuf.WriteString(" = alloca ")
-		g.fnBuf.WriteString(g.llvmType(loc.Type))
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirAllocaLine(slot, g.llvmType(loc.Type)))
 	}
 	// Store incoming args into their param alloca slots.
 	for i, pid := range fn.Params {
@@ -1670,22 +1662,12 @@ func (g *mirGen) emitAllocaPreamble(fn *mir.Function) {
 			continue
 		}
 		slot := g.localSlots[pid]
-		g.fnBuf.WriteString("  store ")
-		g.fnBuf.WriteString(g.llvmType(loc.Type))
-		g.fnBuf.WriteString(" %arg")
-		g.fnBuf.WriteString(strconv.Itoa(i))
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(slot)
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirStoreLine(g.llvmType(loc.Type),
+			"%arg"+strconv.Itoa(i), slot))
 	}
 	if g.opts.EmitGC && loopSafepointStride > 1 {
 		g.loopSafepointSlot = "%gc.loop.poll"
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(g.loopSafepointSlot)
-		g.fnBuf.WriteString(" = alloca i64\n")
-		g.fnBuf.WriteString("  store i64 0, ptr ")
-		g.fnBuf.WriteString(g.loopSafepointSlot)
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirAllocaWithStoreLine(g.loopSafepointSlot, "i64", "0"))
 	} else {
 		g.loopSafepointSlot = ""
 	}
@@ -1931,7 +1913,7 @@ func (g *mirGen) emitVectorListFastLoad(local mir.LocalID, idxVal, elemLLVM stri
 		return "", false
 	}
 	inBounds := g.fresh()
-	g.fnBuf.WriteString("  " + inBounds + " = icmp ult i64 " + idxVal + ", " + lenReg + "\n")
+	g.fnBuf.WriteString(mirICmpLine(inBounds, "ult", "i64", idxVal, lenReg))
 
 	fastLabel := g.freshLabel("list.fast")
 	slowLabel := g.freshLabel("list.slow")
@@ -2008,7 +1990,7 @@ func (g *mirGen) emitVectorListFastStore(local mir.LocalID, idxVal, valReg, elem
 	}
 
 	inBounds := g.fresh()
-	g.fnBuf.WriteString("  " + inBounds + " = icmp ult i64 " + idxVal + ", " + lenReg + "\n")
+	g.fnBuf.WriteString(mirICmpLine(inBounds, "ult", "i64", idxVal, lenReg))
 
 	fastLabel := g.freshLabel("list.set.fast")
 	slowLabel := g.freshLabel("list.set.slow")
@@ -2107,9 +2089,7 @@ func (g *mirGen) emitGCEntry(fn *mir.Function) {
 		if loc == nil || loc.IsParam {
 			continue
 		}
-		g.fnBuf.WriteString("  store ptr null, ptr ")
-		g.fnBuf.WriteString(g.localSlots[id])
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirStoreNullPtrLine(g.localSlots[id]))
 	}
 	g.prepareGCSafepointRootChunks()
 	// Entry safepoint.
@@ -2204,7 +2184,7 @@ func (g *mirGen) emitLoopSafepointKind() {
 	count := g.fresh()
 	g.fnBuf.WriteString(mirLoadLine(count, "i64", g.loopSafepointSlot))
 	next := g.fresh()
-	g.fnBuf.WriteString("  " + next + " = add i64 " + count + ", 1\n")
+	g.fnBuf.WriteString(mirAddI64Line(next, count, "1"))
 	shouldPoll := g.fresh()
 	g.fnBuf.WriteString(mirICmpEqLine(shouldPoll, "i64", next, strconv.FormatInt(loopSafepointStride, 10)))
 	stored := g.fresh()
@@ -2301,9 +2281,7 @@ func (g *mirGen) emitStorageDead(dead *mir.StorageDeadInstr) error {
 	// The safepoint root arrays cache slot addresses, not values. Nulling
 	// the managed slot on StorageDead retires that root without rebuilding
 	// the array scaffolding at each poll site.
-	g.fnBuf.WriteString("  store ptr null, ptr ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirStoreNullPtrLine(slot))
 	return nil
 }
 
@@ -2317,13 +2295,7 @@ func (g *mirGen) emitIndexedWrite(a *mir.AssignInstr, destLoc *mir.Local, ip *mi
 	slot := g.localSlots[a.Dest.Local]
 	localLLVM := g.llvmType(localT)
 	contReg := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(contReg)
-	g.fnBuf.WriteString(" = load ")
-	g.fnBuf.WriteString(localLLVM)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirLoadLine(contReg, localLLVM, slot))
 
 	// Walk field/tuple/variant projections preceding the final
 	// IndexProj, extractvalue-ing into the next aggregate each step.
@@ -2694,7 +2666,7 @@ func (g *mirGen) emitCallSiteByName(c *mir.CallInstr, symbol, retLLVM string, ar
 	// Statement-position call (no dest): emit `  call <retLLVM> @<sym>(<args>)\n`
 	// directly. retLLVM may be void (action call) or a value type (result
 	// discarded); both paths share the same shape.
-	g.fnBuf.WriteString("  call " + retLLVM + " @" + symbol + "(" + strings.Join(argStrs, ", ") + ")\n")
+	g.fnBuf.WriteString(mirCallStmtLine(retLLVM, symbol, strings.Join(argStrs, ", ")))
 	return nil
 }
 
@@ -3547,21 +3519,10 @@ func (g *mirGen) emitBenchCountedLoopMIR(closureOp mir.Operand, itersRef, prefix
 		}
 	}
 	iNext := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(iNext)
-	g.fnBuf.WriteString(" = add i64 ")
-	g.fnBuf.WriteString(iCur)
-	g.fnBuf.WriteString(", 1\n")
-	g.fnBuf.WriteString("  store i64 ")
-	g.fnBuf.WriteString(iNext)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(iSlot)
-	g.fnBuf.WriteByte('\n')
-	g.fnBuf.WriteString("  br label %")
-	g.fnBuf.WriteString(condLabel)
-	g.fnBuf.WriteByte('\n')
-	g.fnBuf.WriteString(endLabel)
-	g.fnBuf.WriteString(":\n")
+	g.fnBuf.WriteString(mirAddI64Line(iNext, iCur, "1"))
+	g.fnBuf.WriteString(mirStoreLine("i64", iNext, iSlot))
+	g.fnBuf.WriteString(mirBrUncondLine(condLabel))
+	g.fnBuf.WriteString(mirLabelLine(endLabel))
 	return nil
 }
 
@@ -4000,15 +3961,7 @@ func (g *mirGen) emitIntegerWidenIntrinsic(i *mir.IntrinsicInstr, fromLLVM, toLL
 		return err
 	}
 	next := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(next)
-	g.fnBuf.WriteString(" = zext ")
-	g.fnBuf.WriteString(fromLLVM)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(reg)
-	g.fnBuf.WriteString(" to ")
-	g.fnBuf.WriteString(toLLVM)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirZExtLine(next, fromLLVM, reg, toLLVM))
 	return g.storeIntrinsicResult(i, &LlvmValue{typ: toLLVM, name: next})
 }
 
@@ -4753,19 +4706,9 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		sym := "osty_rt_map_keys_sorted_" + suffix
 		g.declareRuntime(sym, "declare ptr @"+sym+"(ptr)")
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = call ptr @")
-		g.fnBuf.WriteString(sym)
-		g.fnBuf.WriteString("(ptr ")
-		g.fnBuf.WriteString(mapReg)
-		g.fnBuf.WriteString(")\n")
+		g.fnBuf.WriteString(mirCallValueLine(tmp, "ptr", sym, "ptr "+mapReg))
 		if i.Dest != nil {
-			g.fnBuf.WriteString("  store ptr ")
-			g.fnBuf.WriteString(tmp)
-			g.fnBuf.WriteString(", ptr ")
-			g.fnBuf.WriteString(g.localSlots[i.Dest.Local])
-			g.fnBuf.WriteByte('\n')
+			g.fnBuf.WriteString(mirStorePtrLine(tmp, g.localSlots[i.Dest.Local]))
 		}
 		return nil
 	}
@@ -6290,7 +6233,7 @@ func (g *mirGen) emitCancelIntrinsic(i *mir.IntrinsicInstr) error {
 		sym := "osty_rt_cancel_check_cancelled"
 		g.declareRuntime(sym, "declare { i64, i64 } @"+sym+"()")
 		if i.Dest == nil {
-			g.fnBuf.WriteString("  call { i64, i64 } @" + sym + "()\n")
+			g.fnBuf.WriteString(mirCallStmtNoArgsLine("{ i64, i64 }", sym))
 			return nil
 		}
 		tmp := g.fresh()
@@ -6357,7 +6300,7 @@ func (g *mirGen) emitConcurrencyHelperIntrinsic(i *mir.IntrinsicInstr) error {
 		g.declareRuntime(sym, "declare { i64, i64 } @"+sym+"(ptr)")
 		argList := "ptr " + body
 		if i.Dest == nil {
-			g.fnBuf.WriteString("  call { i64, i64 } @" + sym + "(" + argList + ")\n")
+			g.fnBuf.WriteString(mirCallStmtLine("{ i64, i64 }", sym, argList))
 			return nil
 		}
 		tmp := g.fresh()
@@ -6415,7 +6358,7 @@ func (g *mirGen) emitSimpleCall(i *mir.IntrinsicInstr, sym, retLLVM string, args
 			g.fnBuf.WriteString(mirCallVoidLine(sym, joined))
 		} else {
 			// Discarded return — emit `  call <retLLVM> @<sym>(<args>)\n` directly.
-			g.fnBuf.WriteString("  call " + retLLVM + " @" + sym + "(" + joined + ")\n")
+			g.fnBuf.WriteString(mirCallStmtLine(retLLVM, sym, joined))
 		}
 		return nil
 	}
@@ -6450,13 +6393,7 @@ func (g *mirGen) coerceValue(val, from, to string) (string, error) {
 	}
 	if from == "i1" && intLLVMBits(to) > 1 {
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = zext i1 ")
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to ")
-		g.fnBuf.WriteString(to)
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirZExtLine(tmp, "i1", val, to))
 		return tmp, nil
 	}
 	return val, nil
@@ -6558,24 +6495,12 @@ func (g *mirGen) emitPrintlnLike(op mir.Operand, newline bool) error {
 	switch llvmT {
 	case "i8", "i16":
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = ")
-		g.fnBuf.WriteString(signExt)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(llvmT)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to i32\n")
+		g.fnBuf.WriteString(mirIntResizeLine(tmp, signExt, llvmT, val, "i32"))
 		callArg = tmp
 		callT = "i32"
 	case "i1":
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = zext i1 ")
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(" to i32\n")
+		g.fnBuf.WriteString(mirZExtLine(tmp, "i1", val, "i32"))
 		callArg = tmp
 		callT = "i32"
 	case "float":
@@ -6761,13 +6686,7 @@ func (g *mirGen) evalRValue(rv mir.RValue, hintT mir.Type) (string, error) {
 		// global. The ctor initialises it before user code runs, so
 		// the value is always valid when this load executes.
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = load ")
-		g.fnBuf.WriteString(g.llvmType(r.T))
-		g.fnBuf.WriteString(", ptr @")
-		g.fnBuf.WriteString(r.Name)
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirLoadLine(tmp, g.llvmType(r.T), "@"+r.Name))
 		return tmp, nil
 	}
 	return "", unsupported("mir-mvp", fmt.Sprintf("rvalue %T", rv))
@@ -6789,21 +6708,9 @@ func (g *mirGen) emitDiscriminantRV(rv *mir.DiscriminantRV) (string, error) {
 		return "", fmt.Errorf("mir-mvp: discriminant from unknown local %d", rv.Place.Local)
 	}
 	agg := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(agg)
-	g.fnBuf.WriteString(" = load ")
-	g.fnBuf.WriteString(g.llvmType(baseT))
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirLoadLine(agg, g.llvmType(baseT), slot))
 	tmp := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(tmp)
-	g.fnBuf.WriteString(" = extractvalue ")
-	g.fnBuf.WriteString(g.llvmType(baseT))
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(agg)
-	g.fnBuf.WriteString(", 0\n")
+	g.fnBuf.WriteString(mirExtractValueLine(tmp, g.llvmType(baseT), agg, "0"))
 	return tmp, nil
 }
 
@@ -6873,19 +6780,11 @@ func (g *mirGen) emitNullaryRV(rv *mir.NullaryRV, hintT mir.Type) (string, error
 	}
 	aggLLVM := g.llvmType(target)
 	step1 := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(step1)
-	g.fnBuf.WriteString(" = insertvalue ")
-	g.fnBuf.WriteString(aggLLVM)
-	g.fnBuf.WriteString(" undef, i64 0, 0\n")
 	step2 := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(step2)
-	g.fnBuf.WriteString(" = insertvalue ")
-	g.fnBuf.WriteString(aggLLVM)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(step1)
-	g.fnBuf.WriteString(", i64 0, 1\n")
+	pair := mirNoneAggregate(step1, step2, aggLLVM)
+	for _, line := range pair.Lines {
+		g.fnBuf.WriteString(line)
+	}
 	return step2, nil
 }
 
@@ -6908,27 +6807,11 @@ func (g *mirGen) emitCastRV(rv *mir.CastRV) (string, error) {
 		return g.emitIntResize(arg, fromLLVM, toLLVM)
 	case mir.CastIntToFloat:
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = sitofp ")
-		g.fnBuf.WriteString(fromLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(arg)
-		g.fnBuf.WriteString(" to ")
-		g.fnBuf.WriteString(toLLVM)
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirSIToFPLine(tmp, fromLLVM, arg, toLLVM))
 		return tmp, nil
 	case mir.CastFloatToInt:
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = fptosi ")
-		g.fnBuf.WriteString(fromLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(arg)
-		g.fnBuf.WriteString(" to ")
-		g.fnBuf.WriteString(toLLVM)
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirFPToSILine(tmp, fromLLVM, arg, toLLVM))
 		return tmp, nil
 	case mir.CastFloatResize:
 		op := "fpext"
@@ -6936,32 +6819,14 @@ func (g *mirGen) emitCastRV(rv *mir.CastRV) (string, error) {
 			op = "fptrunc"
 		}
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = ")
-		g.fnBuf.WriteString(op)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(fromLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(arg)
-		g.fnBuf.WriteString(" to ")
-		g.fnBuf.WriteString(toLLVM)
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirFPResizeLine(tmp, op, fromLLVM, arg, toLLVM))
 		return tmp, nil
 	case mir.CastBitcast:
 		if fromLLVM == toLLVM {
 			return arg, nil
 		}
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = bitcast ")
-		g.fnBuf.WriteString(fromLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(arg)
-		g.fnBuf.WriteString(" to ")
-		g.fnBuf.WriteString(toLLVM)
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirBitcastLine(tmp, fromLLVM, arg, toLLVM))
 		return tmp, nil
 	case mir.CastOptionalWrap, mir.CastOptionalUnwrap:
 		// Identity at this stage — the MIR lowerer normally materialises
@@ -6986,17 +6851,7 @@ func (g *mirGen) emitIntResize(arg, fromLLVM, toLLVM string) (string, error) {
 		op = "trunc"
 	}
 	tmp := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(tmp)
-	g.fnBuf.WriteString(" = ")
-	g.fnBuf.WriteString(op)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(fromLLVM)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(arg)
-	g.fnBuf.WriteString(" to ")
-	g.fnBuf.WriteString(toLLVM)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirIntResizeLine(tmp, op, fromLLVM, arg, toLLVM))
 	return tmp, nil
 }
 
@@ -7044,19 +6899,7 @@ func (g *mirGen) emitAggregate(rv *mir.AggregateRV, hintT mir.Type) (string, err
 			return "", err
 		}
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = insertvalue ")
-		g.fnBuf.WriteString(aggLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(acc)
-		g.fnBuf.WriteString(", ")
-		g.fnBuf.WriteString(g.llvmType(elems[i]))
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(", ")
-		g.fnBuf.WriteString(strconv.Itoa(i))
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirInsertValueAggLine(tmp, aggLLVM, acc, g.llvmType(elems[i]), val, strconv.Itoa(i)))
 		acc = tmp
 	}
 	return acc, nil
@@ -7071,13 +6914,7 @@ func (g *mirGen) emitEnumVariant(rv *mir.AggregateRV, aggT mir.Type) (string, er
 	// Step 1: insert discriminant.
 	disc := strconv.Itoa(rv.VariantIdx)
 	tmp1 := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(tmp1)
-	g.fnBuf.WriteString(" = insertvalue ")
-	g.fnBuf.WriteString(aggLLVM)
-	g.fnBuf.WriteString(" undef, i64 ")
-	g.fnBuf.WriteString(disc)
-	g.fnBuf.WriteString(", 0\n")
+	g.fnBuf.WriteString(mirInsertValueAggLine(tmp1, aggLLVM, "undef", "i64", disc, "0"))
 
 	// Step 2: insert payload. For single scalar payloads the value
 	// lives directly in the i64 slot. For no-payload variants we
@@ -7101,15 +6938,7 @@ func (g *mirGen) emitEnumVariant(rv *mir.AggregateRV, aggT mir.Type) (string, er
 		return "", unsupported("mir-mvp", fmt.Sprintf("enum variant with %d payload fields (only scalar / 0-arity supported)", len(rv.Fields)))
 	}
 	tmp2 := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(tmp2)
-	g.fnBuf.WriteString(" = insertvalue ")
-	g.fnBuf.WriteString(aggLLVM)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(tmp1)
-	g.fnBuf.WriteString(", i64 ")
-	g.fnBuf.WriteString(payloadI64)
-	g.fnBuf.WriteString(", 1\n")
+	g.fnBuf.WriteString(mirInsertValueAggLine(tmp2, aggLLVM, tmp1, "i64", payloadI64, "1"))
 	return tmp2, nil
 }
 
@@ -7242,11 +7071,7 @@ func (g *mirGen) emitClosureEnv(rv *mir.AggregateRV) (string, error) {
 	envName := g.closureEnvTypeName(elemTs)
 	// Alloca the env.
 	slot := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteString(" = alloca %")
-	g.fnBuf.WriteString(envName)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirAllocaLine(slot, "%"+envName))
 	// Store each field. Slot 0 is the fn ptr; slots 1..N are captures.
 	for i, op := range rv.Fields {
 		var val string
@@ -7264,22 +7089,8 @@ func (g *mirGen) emitClosureEnv(rv *mir.AggregateRV) (string, error) {
 		}
 		elemLLVM := g.llvmType(elemTs[i])
 		gep := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(gep)
-		g.fnBuf.WriteString(" = getelementptr %")
-		g.fnBuf.WriteString(envName)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(slot)
-		g.fnBuf.WriteString(", i32 0, i32 ")
-		g.fnBuf.WriteString(strconv.Itoa(i))
-		g.fnBuf.WriteByte('\n')
-		g.fnBuf.WriteString("  store ")
-		g.fnBuf.WriteString(elemLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(val)
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(gep)
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirGEPStructFieldLine(gep, "%"+envName, slot, strconv.Itoa(i)))
+		g.fnBuf.WriteString(mirStoreLine(elemLLVM, val, gep))
 	}
 	return slot, nil
 }
@@ -7542,16 +7353,8 @@ func (g *mirGen) emitFnValueWrapper(symbol string, fnT mir.Type) (string, error)
 	// Alloca a 1-field env, store the thunk ptr.
 	envTypeName := g.closureEnvTypeName([]mir.Type{mirClosureEnvType()})
 	envPtr := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(envPtr)
-	g.fnBuf.WriteString(" = alloca %")
-	g.fnBuf.WriteString(envTypeName)
-	g.fnBuf.WriteByte('\n')
-	g.fnBuf.WriteString("  store ptr @")
-	g.fnBuf.WriteString(thunkName(symbol))
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(envPtr)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirAllocaLine(envPtr, "%"+envTypeName))
+	g.fnBuf.WriteString(mirStorePtrLine("@"+thunkName(symbol), envPtr))
 	return envPtr, nil
 }
 
@@ -7652,13 +7455,7 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 	}
 	if !place.HasProjections() {
 		tmp := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(tmp)
-		g.fnBuf.WriteString(" = load ")
-		g.fnBuf.WriteString(g.llvmType(t))
-		g.fnBuf.WriteString(", ptr ")
-		g.fnBuf.WriteString(slot)
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirLoadLine(tmp, g.llvmType(t), slot))
 		return tmp, nil
 	}
 	// Projected read: load the whole aggregate once, then chain
@@ -7670,13 +7467,7 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 	baseT := g.localType(place.Local)
 	baseLLVM := g.llvmType(baseT)
 	aggReg := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(aggReg)
-	g.fnBuf.WriteString(" = load ")
-	g.fnBuf.WriteString(baseLLVM)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(slot)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirLoadLine(aggReg, baseLLVM, slot))
 
 	curLLVM := baseLLVM
 	curReg := aggReg
@@ -7699,13 +7490,7 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 			}
 			innerLLVM := g.llvmType(innerT)
 			loaded := g.fresh()
-			g.fnBuf.WriteString("  ")
-			g.fnBuf.WriteString(loaded)
-			g.fnBuf.WriteString(" = load ")
-			g.fnBuf.WriteString(innerLLVM)
-			g.fnBuf.WriteString(", ptr ")
-			g.fnBuf.WriteString(curReg)
-			g.fnBuf.WriteByte('\n')
+			g.fnBuf.WriteString(mirLoadLine(loaded, innerLLVM, curReg))
 			curReg = loaded
 			curLLVM = innerLLVM
 			curT = innerT
@@ -7762,17 +7547,8 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 				sym := "osty_rt_list_get_" + listRuntimeSymbolSuffix(elemLLVM)
 				g.declareRuntime(sym, "declare "+elemLLVM+" @"+sym+"(ptr, i64)")
 				next := g.fresh()
-				g.fnBuf.WriteString("  ")
-				g.fnBuf.WriteString(next)
-				g.fnBuf.WriteString(" = call ")
-				g.fnBuf.WriteString(elemLLVM)
-				g.fnBuf.WriteString(" @")
-				g.fnBuf.WriteString(sym)
-				g.fnBuf.WriteString("(ptr ")
-				g.fnBuf.WriteString(curReg)
-				g.fnBuf.WriteString(", i64 ")
-				g.fnBuf.WriteString(idxVal)
-				g.fnBuf.WriteString(")\n")
+				g.fnBuf.WriteString(mirCallValueLine(next, elemLLVM, sym,
+					"ptr "+curReg+", i64 "+idxVal))
 				curReg = next
 				curLLVM = elemLLVM
 				curT = elemT
@@ -7811,13 +7587,7 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 			// Variant payload lives in the i64 slot; extract i64,
 			// then narrow to the declared payload type.
 			rawSlot := g.fresh()
-			g.fnBuf.WriteString("  ")
-			g.fnBuf.WriteString(rawSlot)
-			g.fnBuf.WriteString(" = extractvalue ")
-			g.fnBuf.WriteString(curLLVM)
-			g.fnBuf.WriteByte(' ')
-			g.fnBuf.WriteString(curReg)
-			g.fnBuf.WriteString(", 1\n")
+			g.fnBuf.WriteString(mirExtractValueLine(rawSlot, curLLVM, curReg, "1"))
 			narrowed, err := g.fromI64Slot(rawSlot, elemT)
 			if err != nil {
 				return "", err
@@ -7829,15 +7599,7 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 		}
 		elemLLVM := g.llvmType(elemT)
 		next := g.fresh()
-		g.fnBuf.WriteString("  ")
-		g.fnBuf.WriteString(next)
-		g.fnBuf.WriteString(" = extractvalue ")
-		g.fnBuf.WriteString(curLLVM)
-		g.fnBuf.WriteByte(' ')
-		g.fnBuf.WriteString(curReg)
-		g.fnBuf.WriteString(", ")
-		g.fnBuf.WriteString(strconv.Itoa(idx))
-		g.fnBuf.WriteByte('\n')
+		g.fnBuf.WriteString(mirExtractValueLine(next, curLLVM, curReg, strconv.Itoa(idx)))
 		curLLVM = elemLLVM
 		curReg = next
 		curT = elemT
@@ -7968,11 +7730,7 @@ func (g *mirGen) emitUnary(op mir.UnaryOp, arg string, t mir.Type) (string, erro
 		return "", unsupported("mir-mvp", fmt.Sprintf("unary op %d", op))
 	}
 	tmp := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(tmp)
-	g.fnBuf.WriteString(" = ")
-	g.fnBuf.WriteString(instr)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirRawAssignLine(tmp, instr))
 	return tmp, nil
 }
 
@@ -8003,17 +7761,7 @@ func (g *mirGen) emitBinary(op mir.BinaryOp, left, right string, argT, resT mir.
 		ty = "i1"
 	}
 	tmp := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(tmp)
-	g.fnBuf.WriteString(" = ")
-	g.fnBuf.WriteString(opcode)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(ty)
-	g.fnBuf.WriteByte(' ')
-	g.fnBuf.WriteString(left)
-	g.fnBuf.WriteString(", ")
-	g.fnBuf.WriteString(right)
-	g.fnBuf.WriteByte('\n')
+	g.fnBuf.WriteString(mirBinaryOpLine(tmp, opcode, ty, left, right))
 	return tmp, nil
 }
 
@@ -8038,24 +7786,12 @@ func (g *mirGen) emitHeapEquality(op mir.BinaryOp, left, right string) (string, 
 	sym := llvmStringRuntimeEqualSymbol()
 	g.declareRuntime(sym, fmt.Sprintf("declare i1 @%s(ptr, ptr)", sym))
 	eq := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(eq)
-	g.fnBuf.WriteString(" = call i1 @")
-	g.fnBuf.WriteString(sym)
-	g.fnBuf.WriteString("(ptr ")
-	g.fnBuf.WriteString(left)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(right)
-	g.fnBuf.WriteString(")\n")
+	g.fnBuf.WriteString(mirCallValueLine(eq, "i1", sym, "ptr "+left+", ptr "+right))
 	if op == mir.BinEq {
 		return eq, nil
 	}
 	neq := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(neq)
-	g.fnBuf.WriteString(" = xor i1 ")
-	g.fnBuf.WriteString(eq)
-	g.fnBuf.WriteString(", true\n")
+	g.fnBuf.WriteString(mirXorI1NegLine(neq, eq))
 	return neq, nil
 }
 
@@ -8149,24 +7885,10 @@ func (g *mirGen) emitStringOrdering(op mir.BinaryOp, left, right string) (string
 	sym := llvmStringRuntimeCompareSymbol()
 	g.declareRuntime(sym, fmt.Sprintf("declare i64 @%s(ptr, ptr)", sym))
 	cmp := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(cmp)
-	g.fnBuf.WriteString(" = call i64 @")
-	g.fnBuf.WriteString(sym)
-	g.fnBuf.WriteString("(ptr ")
-	g.fnBuf.WriteString(left)
-	g.fnBuf.WriteString(", ptr ")
-	g.fnBuf.WriteString(right)
-	g.fnBuf.WriteString(")\n")
+	g.fnBuf.WriteString(mirCallValueLine(cmp, "i64", sym, "ptr "+left+", ptr "+right))
 	pred := stringOrderingPredicate(op)
 	out := g.fresh()
-	g.fnBuf.WriteString("  ")
-	g.fnBuf.WriteString(out)
-	g.fnBuf.WriteString(" = icmp ")
-	g.fnBuf.WriteString(pred)
-	g.fnBuf.WriteString(" i64 ")
-	g.fnBuf.WriteString(cmp)
-	g.fnBuf.WriteString(", 0\n")
+	g.fnBuf.WriteString(mirICmpLine(out, pred, "i64", cmp, "0"))
 	return out, nil
 }
 

@@ -1518,6 +1518,27 @@ pub fn mirCallValueLine(reg: String, retTy: String, sym: String, argList: String
     "  " + reg + " = call " + retTy + " @" + sym + "(" + argList + ")\n"
 }
 
+/// mirCallStmtLine renders `  call <retTy> @<sym>(<argList>)\n` —
+/// the statement-position call where the return value is discarded.
+/// `retTy` may be `void` (action call) or any non-void type when the
+/// result is intentionally unused. Distinct from `mirCallVoidLine`
+/// because the latter hard-codes the return type to `void`; this one
+/// lets the caller pass `{ i64, i64 }` or other shapes for sites like
+/// the unused panic-helper return.
+pub fn mirCallStmtLine(retTy: String, sym: String, argList: String) -> String {
+    "  call " + retTy + " @" + sym + "(" + argList + ")\n"
+}
+
+/// mirCallStmtNoArgsLine is the no-argument variant of
+/// `mirCallStmtLine`. Renders `  call <retTy> @<sym>()\n`. Used by
+/// the bounded thread-poll helpers which read no arguments and whose
+/// return is conditionally retained — when the dest slot is `nil` the
+/// emitter goes through this builder, otherwise through
+/// `mirCallValueNoArgsLine`.
+pub fn mirCallStmtNoArgsLine(retTy: String, sym: String) -> String {
+    "  call " + retTy + " @" + sym + "()\n"
+}
+
 /// mirGEPInboundsI8Line renders the byte-stride GEP form that hot
 /// loops use to index into a list's data area:
 ///   `  <reg> = getelementptr inbounds i8, ptr <basePtr>, i64 <offDigits>\n`
@@ -1973,6 +1994,74 @@ pub fn mirGEPLine(
 /// builder reads cleaner than `mirStoreLine("ptr", val, slot)`.
 pub fn mirStorePtrLine(val: String, slot: String) -> String {
     "  store ptr " + val + ", ptr " + slot + "\n"
+}
+
+/// mirRawAssignLine renders `  <reg> = <rhs>\n` — the catch-all for
+/// SSA assignments whose right-hand side is computed by a separate
+/// formatter (`mirUnaryInstruction`, predicate string concatenation,
+/// or any pre-built operand suffix). Use this when no specialised
+/// builder fits; cuts five-call inline chains down to one.
+pub fn mirRawAssignLine(reg: String, rhs: String) -> String {
+    "  " + reg + " = " + rhs + "\n"
+}
+
+/// mirBinaryOpLine renders `  <reg> = <opcode> <ty> <lhs>, <rhs>\n`
+/// — the canonical two-operand instruction shape (add/sub/mul/sdiv/
+/// srem/and/or/xor/shl/ashr/lshr/fadd/fsub/fmul/fdiv) that
+/// `emitBinary` lowers to after picking the opcode via
+/// `mirBinaryOpcode`. Centralising the shape here means the existing
+/// scalar-typed `mirAddI64Line`/`mirShlI64Line` family stays for hot
+/// paths while the generic dispatcher reaches for one builder.
+pub fn mirBinaryOpLine(reg: String, opcode: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = " + opcode + " " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+/// mirICmpLineFromPred is a thin alias of `mirICmpLine` used at sites
+/// that thread the predicate string from `mirBinaryOpcode` —
+/// the alias keeps the call site self-documenting (`fromPred(eq)`)
+/// without forcing the caller to remember the parameter order.
+pub fn mirICmpLineFromPred(reg: String, pred: String, ty: String, lhs: String, rhs: String) -> String {
+    mirICmpLine(reg, pred, ty, lhs, rhs)
+}
+
+/// mirStoreNullPtrLine renders `  store ptr null, ptr <slot>\n` —
+/// the GC-managed slot zeroing pattern used by the entry safepoint
+/// preamble (zeroing non-param roots before the first poll) and the
+/// cancellation-aware Handle slot zeroer. Cleaner site call than
+/// `mirStorePtrLine("null", slot)` because the literal "null" is what
+/// the LLVM verifier reads back, and the named builder lets readers
+/// grep for the canonical zero-init pattern.
+pub fn mirStoreNullPtrLine(slot: String) -> String {
+    "  store ptr null, ptr " + slot + "\n"
+}
+
+/// mirAllocaWithStoreLine renders the two-line preamble pattern
+/// `  <reg> = alloca <ty>\n  store <ty> <init>, ptr <reg>\n` — used
+/// by the loop-safepoint poll counter (`alloca i64` / `store i64 0`),
+/// the cancellation flag slot (`alloca i32` / `store i32 0`), and any
+/// site that wants a freshly-zeroed scalar slot returned in one call.
+/// Centralising the two writes keeps the order stable and removes a
+/// class of "alloca + store reordered" diff churn from refactors.
+pub fn mirAllocaWithStoreLine(reg: String, ty: String, init: String) -> String {
+    mirAllocaLine(reg, ty) + mirStoreLine(ty, init, reg)
+}
+
+/// mirAllocaWithStorePtrLine is the pointer-typed variant of
+/// `mirAllocaWithStoreLine` — `  <reg> = alloca ptr` followed by
+/// `  store ptr <val>, ptr <reg>`. The closure-thunk emitter and the
+/// indirect-call argument materializer both spell this pattern out
+/// inline; the named builder is what they want.
+pub fn mirAllocaWithStorePtrLine(reg: String, val: String) -> String {
+    mirAllocaLine(reg, "ptr") + mirStorePtrLine(val, reg)
+}
+
+/// mirAllocaWithStoreNullPtrLine renders `alloca ptr` + `store ptr
+/// null` at once — the canonical zero-init managed-pointer slot.
+/// `emitNullaryRV` synthesises a `Some(None)` payload by allocating a
+/// pointer slot and zeroing it; the GC root preamble does the same for
+/// non-param roots. One call captures the intent.
+pub fn mirAllocaWithStoreNullPtrLine(reg: String) -> String {
+    mirAllocaLine(reg, "ptr") + mirStoreNullPtrLine(reg)
 }
 
 /// §14 enum / tuple layout cache.
@@ -2782,4 +2871,192 @@ pub fn mirFPTruncDoubleToFloatLine(reg: String, val: String) -> String {
 /// double before bitcasting to i64.
 pub fn mirFPExtFloatToDoubleLine(reg: String, val: String) -> String {
     "  " + reg + " = fpext float " + val + " to double\n"
+}
+
+// ============================================================
+// §10 cast / arithmetic builders.
+//
+// MIR's `CastRV` family lowers to LLVM's int↔float, fp-resize,
+// and bitcast instructions. Each variant has a fixed shape:
+// `<reg> = <op> <fromTy> <val> to <toTy>`. These builders
+// parameterise the shape with explicit types so callers don't
+// re-assemble the byte sequence per site. Sibling line builders
+// for shifts / float arithmetic / i1 logical-or fill out the
+// arithmetic vocabulary that `emitBinary` and `emitUnary` use.
+// ============================================================
+
+/// mirSIToFPLine renders the signed-int-to-float cast:
+///   `  <reg> = sitofp <fromTy> <val> to <toTy>\n`
+/// `fromTy` is `iN`; `toTy` is `float` or `double`. Used by
+/// `emitCast`'s `CastIntToFloat` arm.
+pub fn mirSIToFPLine(reg: String, fromTy: String, val: String, toTy: String) -> String {
+    "  " + reg + " = sitofp " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+/// mirFPToSILine renders the float-to-signed-int cast:
+///   `  <reg> = fptosi <fromTy> <val> to <toTy>\n`
+/// `fromTy` is `float` / `double`; `toTy` is `iN`. Used by
+/// `emitCast`'s `CastFloatToInt` arm. Out-of-range float values
+/// are LLVM-undefined-behaviour — caller is expected to gate
+/// with a runtime range check before reaching this lowering.
+pub fn mirFPToSILine(reg: String, fromTy: String, val: String, toTy: String) -> String {
+    "  " + reg + " = fptosi " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+/// mirFPResizeLine renders the float-resize cast — `fpext` for
+/// widening (float → double) or `fptrunc` for narrowing (double
+/// → float). Caller picks the opcode by comparing fromTy/toTy;
+/// the helper just stitches the resulting line. Pair with
+/// `mirFPExtFloatToDoubleLine` / `mirFPTruncDoubleToFloatLine`
+/// for the specialised hot-path forms.
+pub fn mirFPResizeLine(
+    reg: String,
+    op: String,
+    fromTy: String,
+    val: String,
+    toTy: String,
+) -> String {
+    "  " + reg + " = " + op + " " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+/// mirIntResizeLine renders the integer-resize cast — `sext`
+/// for widening or `trunc` for narrowing. Like `mirFPResizeLine`,
+/// the caller (`emitIntResize`) compares from/to bit widths to
+/// pick the opcode. Specialised `mirSExtLine` / `mirZExtLine` /
+/// `mirTruncLine` cover the typed sites with a fixed opcode.
+pub fn mirIntResizeLine(
+    reg: String,
+    op: String,
+    fromTy: String,
+    val: String,
+    toTy: String,
+) -> String {
+    "  " + reg + " = " + op + " " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+/// mirOrI1Line renders the i1 logical-or
+///   `  <reg> = or i1 <lhs>, <rhs>\n`
+/// Sibling of `mirAndI1Line` for the disjunction half of the
+/// short-circuited boolean truth table once both operands are
+/// pre-evaluated.
+pub fn mirOrI1Line(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = or i1 " + lhs + ", " + rhs + "\n"
+}
+
+/// mirShlI64Line renders the i64 left shift
+///   `  <reg> = shl i64 <lhs>, <rhs>\n`
+/// `rhs` is the shift amount (also i64). Used by bit-manipulation
+/// intrinsics; the general `mirBinaryOpcode` table picks the
+/// `shl` opcode for the spec `<<` operator and feeds it through
+/// the standard `<reg> = shl <ty> <lhs>, <rhs>` line shape — this
+/// helper just bakes the i64 width in for the common case.
+pub fn mirShlI64Line(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = shl i64 " + lhs + ", " + rhs + "\n"
+}
+
+/// mirAShrI64Line renders the i64 arithmetic-shift-right
+///   `  <reg> = ashr i64 <lhs>, <rhs>\n`
+/// Sign-preserving right shift — the spec `>>` operator on
+/// signed ints lowers to this. For unsigned right shift use
+/// `mirLShrI64Line`.
+pub fn mirAShrI64Line(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = ashr i64 " + lhs + ", " + rhs + "\n"
+}
+
+/// mirLShrI64Line renders the i64 logical-shift-right
+///   `  <reg> = lshr i64 <lhs>, <rhs>\n`
+/// Zero-fill right shift used by `UInt64.>>` and bit-manipulation
+/// helpers that don't want sign extension.
+pub fn mirLShrI64Line(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = lshr i64 " + lhs + ", " + rhs + "\n"
+}
+
+/// mirFAddLine renders floating-point addition
+///   `  <reg> = fadd <ty> <lhs>, <rhs>\n`
+/// `ty` is `float` or `double`. The `mirBinaryOpcode` general
+/// path covers this for `+` on floats — the dedicated builder
+/// is the typed-emit-site choice when arithmetic is being
+/// composed inline (e.g. bench-stat helpers, vector dot loops).
+pub fn mirFAddLine(reg: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = fadd " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+/// mirFSubLine renders floating-point subtraction
+///   `  <reg> = fsub <ty> <lhs>, <rhs>\n`
+pub fn mirFSubLine(reg: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = fsub " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+/// mirFMulLine renders floating-point multiplication
+///   `  <reg> = fmul <ty> <lhs>, <rhs>\n`
+pub fn mirFMulLine(reg: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = fmul " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+/// mirFDivLine renders floating-point division
+///   `  <reg> = fdiv <ty> <lhs>, <rhs>\n`
+pub fn mirFDivLine(reg: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = fdiv " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+/// mirFNegLine renders floating-point negation
+///   `  <reg> = fneg <ty> <val>\n`
+/// LLVM's IEEE-754 negation. Used by the unary `-` lowering on
+/// `Float` / `Float64` — distinct from integer `0 - val` because
+/// the FP form preserves the sign of zero / NaN.
+pub fn mirFNegLine(reg: String, ty: String, val: String) -> String {
+    "  " + reg + " = fneg " + ty + " " + val + "\n"
+}
+
+/// mirSubGenericLine renders integer subtraction at an arbitrary
+/// width: `  <reg> = sub <ty> <lhs>, <rhs>\n`. The `mirSubI64Line`
+/// specialisation is for the common i64 case; this generalisation
+/// covers the unary integer negation lowering (`<ty> = sub <ty> 0,
+/// <val>`) at any width and any other non-i64 sub site.
+pub fn mirSubGenericLine(reg: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = sub " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+/// mirAddGenericLine renders integer addition at an arbitrary
+/// width: `  <reg> = add <ty> <lhs>, <rhs>\n`. Generalises
+/// `mirAddI64Line` for non-i64 widths.
+pub fn mirAddGenericLine(reg: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = add " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+/// mirMulGenericLine renders integer multiplication at an
+/// arbitrary width: `  <reg> = mul <ty> <lhs>, <rhs>\n`.
+pub fn mirMulGenericLine(reg: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = mul " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+/// mirSDivGenericLine renders integer signed division
+///   `  <reg> = sdiv <ty> <lhs>, <rhs>\n`
+pub fn mirSDivGenericLine(reg: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = sdiv " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+/// mirSRemGenericLine renders integer signed modulo
+///   `  <reg> = srem <ty> <lhs>, <rhs>\n`
+pub fn mirSRemGenericLine(reg: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = srem " + ty + " " + lhs + ", " + rhs + "\n"
+}
+
+/// mirURemI64Line renders the i64 unsigned modulo
+///   `  <reg> = urem i64 <lhs>, <rhs>\n`
+/// Used by hash / digit-extraction utilities (e.g. `n % 10` for
+/// digit char rendering) where the operand is known non-negative
+/// and unsigned modulo's faster lowering applies. Signed callers
+/// use `mirSRemGenericLine`.
+pub fn mirURemI64Line(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = urem i64 " + lhs + ", " + rhs + "\n"
+}
+
+/// mirXorI64Line renders the i64 bitwise xor
+///   `  <reg> = xor i64 <lhs>, <rhs>\n`
+/// Covers both bitwise-xor (`^` operator on Int) and the
+/// "negate i64" idiom (`xor i64 <val>, -1`). The i1-specific
+/// `mirXorI1NegLine` already covers the i1 boolean negation.
+pub fn mirXorI64Line(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = xor i64 " + lhs + ", " + rhs + "\n"
 }
