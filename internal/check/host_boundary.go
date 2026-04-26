@@ -819,6 +819,23 @@ type selfhostSpanIndex struct {
 	scopes      map[selfhostSpanKey]*resolve.Scope
 	bindings    map[selfhostNameSpanKey]ast.Node
 	symbols     map[selfhostNameSpanKey]*resolve.Symbol
+
+	// scopeSpans is `scopes` sorted by span.start asc, materialised lazily on
+	// the first scopeFor cache miss. Lets the slow path binary-search the
+	// upper bound on candidates instead of scanning the full map every time.
+	scopeSpans []scopeSpanEntry
+	// scopeQueries memoises scopeFor results (including nil) so each unique
+	// query span pays the slow walk at most once. Required because the merged
+	// toolchain probe issues hundreds of thousands of queries against an
+	// equally large scopes map; the previous full-map scan was effectively
+	// O(N²) and timed the pipeline-clean test out at 5 minutes.
+	scopeQueries map[selfhostSpanKey]*resolve.Scope
+}
+
+// scopeSpanEntry is one row of the sorted scope candidate list.
+type scopeSpanEntry struct {
+	span  selfhostSpanKey
+	scope *resolve.Scope
 }
 
 func (idx *selfhostSpanIndex) bindNode(key selfhostNameSpanKey, n ast.Node) {
@@ -925,22 +942,63 @@ func (idx *selfhostSpanIndex) scopeFor(key selfhostSpanKey) *resolve.Scope {
 	if scope := idx.scopes[key]; scope != nil {
 		return scope
 	}
+	if scope, ok := idx.scopeQueries[key]; ok {
+		return scope
+	}
+	idx.ensureScopeSpans()
+
+	// Binary search for the first index whose span.start exceeds key.start —
+	// every candidate enclosing `key` must satisfy span.start ≤ key.start, so
+	// only entries in [0, lo) need to be considered.
+	list := idx.scopeSpans
+	lo, hi := 0, len(list)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if list[mid].span.start <= key.start {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+
 	var best *resolve.Scope
 	bestSize := int(^uint(0) >> 1)
+	for i := 0; i < lo; i++ {
+		e := list[i]
+		if e.span.end < key.end {
+			continue
+		}
+		size := e.span.end - e.span.start
+		if size < bestSize {
+			best = e.scope
+			bestSize = size
+		}
+	}
+	if idx.scopeQueries == nil {
+		idx.scopeQueries = map[selfhostSpanKey]*resolve.Scope{}
+	}
+	idx.scopeQueries[key] = best
+	return best
+}
+
+func (idx *selfhostSpanIndex) ensureScopeSpans() {
+	if idx.scopeSpans != nil {
+		return
+	}
+	list := make([]scopeSpanEntry, 0, len(idx.scopes))
 	for span, scope := range idx.scopes {
 		if scope == nil {
 			continue
 		}
-		if span.start > key.start || span.end < key.end {
-			continue
-		}
-		size := span.end - span.start
-		if size < bestSize {
-			best = scope
-			bestSize = size
-		}
+		list = append(list, scopeSpanEntry{span: span, scope: scope})
 	}
-	return best
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].span.start < list[j].span.start
+	})
+	if list == nil {
+		list = []scopeSpanEntry{}
+	}
+	idx.scopeSpans = list
 }
 
 func (idx *selfhostSpanIndex) addNode(n ast.Node, base int, scope *resolve.Scope, sm *sourcemap.Map) {
