@@ -6282,10 +6282,13 @@ int main(void) {
 // LIST (load_v1 PROMOTED follow + cheney self-ref fixup + dead-list
 // scan), CLOSURE_ENV (captures populated synchronously at
 // construction before the env escapes; promote-on-bind copies a
-// fully-populated env to OLD).
+// fully-populated env to OLD), GENERIC NONE pattern (NULL trace +
+// NULL destroy — opaque payload, nothing for cheney to follow). The
+// debug entry assumes NONE for GENERIC; the production allocator
+// also rejects ENUM_PTR / TASK_HANDLE because the per-instance
+// pattern can't be recovered from the 16-byte micro-header.
 // Rejected: MAP/SET/CHANNEL (have destroy callbacks Cheney can't
-// invoke), GENERIC (per-instance callbacks not on the micro-header),
-// humongous (size > threshold).
+// invoke), humongous (size > threshold).
 func TestBundledRuntimeYoungEligibilityFilter(t *testing.T) {
 	parallelClangBackendTest(t)
 
@@ -6363,13 +6366,13 @@ int main(void) {
 			},
 		},
 		{
-			// Default (Phase 8 step 2 cutover): STRING/BYTES route
-			// to young. Map<String, _> works because cheney_minor
-			// traces OLD reachability transitively.
+			// Default routing: cheney_minor traces OLD reachability
+			// transitively, so Map<String, _> still works even with
+			// young String keys.
 			name: "default",
 			env:  nil,
 			wantRows: []string{
-				"1 0 0",    // GENERIC: no descriptor
+				"1 1 1",    // GENERIC: eligible under NONE pattern (debug entry assumes NULL trace/destroy)
 				"1024 1 1", // LIST: eligible (load_v1 PROMOTED follow + cheney self-ref fixup + dead-list scan)
 				"1025 1 1", // STRING: eligible
 				"1026 0 0", // MAP: has destroy (free's keys/values arrays — needs typed sweep)
@@ -6527,6 +6530,112 @@ int main(void) {
 	}
 }
 
+// TestBundledRuntimeGenericNoneYoungRoundTrip covers the GENERIC
+// young-eligibility addition: an `osty.gc.alloc_v1(KIND_GENERIC, …)`
+// with implicit NULL trace + NULL destroy lands in the young arena,
+// promotes cleanly to OLD on root_bind (where headerful would carry
+// `generic_pattern == OSTY_GC_GENERIC_NONE`), survives a forced
+// collect, and unbinds without underflowing find_header. Before the
+// runtime change, promote_young_to_old aborted with "kind missing
+// descriptor" because GENERIC isn't in `osty_gc_kind_table` — this
+// test pins the new descriptor-less promotion path.
+func TestBundledRuntimeGenericNoneYoungRoundTrip(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_generic_none_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_generic_none_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+int64_t osty_gc_debug_arena_is_young_page(void *payload);
+int64_t osty_gc_debug_young_forward_tag(void *from_payload);
+int64_t osty_gc_debug_generic_pattern_of(void *payload);
+int64_t osty_gc_debug_live_count(void);
+void osty_gc_debug_collect(void);
+
+#define KIND_GENERIC 1
+
+int main(void) {
+    /* GENERIC NONE pattern: alloc_v1 routes to NULL trace + NULL
+     * destroy, which is the only GENERIC pattern the eligibility
+     * filter admits. Should land in young. */
+    void *young = osty_gc_alloc_v1(KIND_GENERIC, 16, "scalar.enum");
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(young));
+
+    /* Stash a recognizable bit pattern so we can confirm the bytes
+     * survive promotion (memcpy young → OLD) and the subsequent
+     * collect. Cast through uint64_t to avoid strict-aliasing UB. */
+    *(uint64_t *)young = 0xDEADBEEFCAFEBABEULL;
+
+    /* root_bind → promote_young_to_old. Pre-fix, this aborted on
+     * GENERIC because kind_descriptor_lookup returned NULL. */
+    osty_gc_root_bind_v1(young);
+    printf("%lld\n", (long long)osty_gc_debug_young_forward_tag(young));
+
+    /* Resolve the OLD copy via PROMOTED tag follow and inspect its
+     * generic_pattern. Promotion picks NULL trace + NULL destroy →
+     * OSTY_GC_GENERIC_NONE (= 0). */
+    void *old = osty_gc_load_v1(young);
+    printf("%lld\n", (long long)osty_gc_debug_generic_pattern_of(old));
+    printf("%llx\n", (unsigned long long)*(uint64_t *)old);
+
+    /* Forced collect: cheney processes the (PROMOTED) young, the
+     * major sweep keeps OLD alive via the root binding. */
+    int64_t live_before = osty_gc_debug_live_count();
+    osty_gc_debug_collect();
+    int64_t live_after = osty_gc_debug_live_count();
+    printf("%lld %lld\n", (long long)live_before, (long long)live_after);
+
+    /* Release: root_count drops to 0, next collect sweeps the OLD
+     * copy. find_header following the PROMOTED tag is what makes
+     * release-with-stale-young-addr work. */
+    osty_gc_root_release_v1(young);
+    osty_gc_debug_collect();
+    printf("%lld\n", (long long)osty_gc_debug_live_count());
+
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"1",            // young alloc landed in young arena
+		"2",            // forward tag = PROMOTED after root_bind
+		"0",            // OLD copy carries OSTY_GC_GENERIC_NONE
+		"deadbeefcafebabe", // payload bytes survived young → OLD memcpy
+		"1 1",          // collect kept the rooted OLD copy alive
+		"0",            // release + collect reclaimed the OLD copy
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("generic-none harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
 // Phase 8 step 1 of the tiny-tag young-space landing: end-to-end
 // routing. With the feature flag on, the production allocator entry
 // `osty.gc.alloc_v1` should pick the young arena for eligible kinds
@@ -6616,12 +6725,15 @@ int main(void) {
 			wantClass: [6]string{"0", "0", "0", "0", "0", "0"},
 		},
 		{
-			// Default routing: STRING + BYTES + LIST + CLOSURE_ENV →
-			// young arena; GENERIC / MAP / CHANNEL stay headerful.
+			// Default routing: STRING + BYTES + LIST + CLOSURE_ENV +
+			// GENERIC NONE → young arena; MAP / CHANNEL stay headerful
+			// (GENERIC ENUM_PTR / TASK_HANDLE patterns also stay
+			// headerful, but `osty_gc_alloc_v1(1, …)` constructs the
+			// NONE pattern via NULL trace + NULL destroy).
 			name:      "default",
 			env:       nil,
-			wantDelta: "4",
-			wantClass: [6]string{"1", "1", "1", "1", "0", "0"},
+			wantDelta: "5",
+			wantClass: [6]string{"1", "1", "1", "1", "0", "1"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

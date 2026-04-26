@@ -3100,8 +3100,9 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
  *      dormant and every alloc takes the headerful path, preserving
  *      pre-Phase-5 behaviour exactly.
  *   2. The kind must be one of the young-safe kinds — STRING, BYTES,
- *      LIST, CLOSURE_ENV. STRING/BYTES are immutable byte payloads.
- *      LIST has a destroy callback (frees spilled `data` +
+ *      LIST, CLOSURE_ENV, or GENERIC with the NONE pattern (NULL
+ *      trace + NULL destroy). STRING/BYTES are immutable byte
+ *      payloads. LIST has a destroy callback (frees spilled `data` +
  *      `gc_offsets`), but Phase E follow-up adds a from-space
  *      dead-list scan in cheney_minor that runs the destroy work just
  *      before the arena swap reclaims the bytes — making LIST safe to
@@ -3116,25 +3117,45 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
  *      could trigger root_bind — so promote-on-bind copies a fully
  *      populated env to OLD and post-promote stale-pointer writes
  *      do not occur in production.
+ *      GENERIC NONE pattern (e.g. `osty_rt_enum_alloc_scalar_v1` —
+ *      unboxed enum scalar payload) has no trace or destroy, so the
+ *      micro-header carries everything cheney needs (opaque copy +
+ *      no destroy on dead-from-space). The other GENERIC patterns
+ *      (ENUM_PTR has trace, TASK_HANDLE has destroy) need their
+ *      per-instance pattern to be recoverable at cheney scan time —
+ *      not yet possible since the micro-header has no
+ *      `generic_pattern` byte — so they stay headerful.
  *
  *      Why not the other kinds:
- *        - GENERIC: per-instance trace/destroy callbacks not on the
- *          micro-header.
  *        - MAP/SET/CHANNEL: destroy frees pthread sync state and
  *          backing arrays — typed-allocator surface is larger and
  *          these are typically long-lived.
  *   3. Payload size must fit comfortably under the humongous
  *      threshold. Humongous allocs already take a separate path in
  *      the headerful allocator and have no benefit from being
- *      bump-allocated. */
-static bool osty_gc_young_eligible(int64_t object_kind, size_t payload_size) {
+ *      bump-allocated.
+ *
+ * `trace` and `destroy` are passed through so the GENERIC-pattern
+ * filter can reject ENUM_PTR (non-NULL trace) and TASK_HANDLE
+ * (non-NULL destroy). For non-GENERIC kinds the pair is determined
+ * by `osty_gc_kind_table` so the params are ignored. */
+static bool osty_gc_young_eligible(int64_t object_kind, size_t payload_size,
+                                   osty_gc_trace_fn trace,
+                                   osty_gc_destroy_fn destroy) {
     if (!osty_gc_tinytag_young_now()) {
         return false;
     }
-    if (object_kind != OSTY_GC_KIND_STRING &&
-        object_kind != OSTY_GC_KIND_BYTES &&
-        object_kind != OSTY_GC_KIND_LIST &&
-        object_kind != OSTY_GC_KIND_CLOSURE_ENV) {
+    if (object_kind == OSTY_GC_KIND_GENERIC) {
+        /* Only the NONE pattern (no trace, no destroy) is young-safe;
+         * ENUM_PTR / TASK_HANDLE need the per-instance pattern at
+         * cheney time, which the 16-byte micro-header doesn't carry. */
+        if (trace != NULL || destroy != NULL) {
+            return false;
+        }
+    } else if (object_kind != OSTY_GC_KIND_STRING &&
+               object_kind != OSTY_GC_KIND_BYTES &&
+               object_kind != OSTY_GC_KIND_LIST &&
+               object_kind != OSTY_GC_KIND_CLOSURE_ENV) {
         return false;
     }
     if (payload_size == 0 ||
@@ -3148,10 +3169,15 @@ static bool osty_gc_young_eligible(int64_t object_kind, size_t payload_size) {
  * (Phase 8 cutover) consult before falling through to the headerful
  * path. Returns NULL when the kind/size combination is ineligible
  * or when the young arena is exhausted, signalling the caller to
- * use the headerful allocator. */
+ * use the headerful allocator.
+ *
+ * `trace` and `destroy` are forwarded to `osty_gc_young_eligible` so
+ * the GENERIC-pattern filter can reject ENUM_PTR / TASK_HANDLE. */
 static void *osty_gc_allocate_young_if_eligible(size_t byte_size,
-                                                int64_t object_kind) {
-    if (!osty_gc_young_eligible(object_kind, byte_size)) {
+                                                int64_t object_kind,
+                                                osty_gc_trace_fn trace,
+                                                osty_gc_destroy_fn destroy) {
+    if (!osty_gc_young_eligible(object_kind, byte_size, trace, destroy)) {
         return NULL;
     }
     return osty_gc_allocate_young(byte_size, object_kind);
@@ -3402,11 +3428,18 @@ static void *osty_gc_promote_young_to_old(void *young_payload) {
     object_kind = (int64_t)micro->object_kind;
     payload_size = (size_t)micro->byte_size;
     desc = osty_gc_kind_descriptor_lookup(object_kind);
-    if (desc == NULL) {
-        /* Eligibility filter (Phase 7 step 1) keeps GENERIC out of
-         * young, so any young payload's kind has a descriptor. If
-         * this fires, something allocated young directly without
-         * going through `_if_eligible`. */
+    osty_gc_trace_fn promote_trace;
+    osty_gc_destroy_fn promote_destroy;
+    if (desc != NULL) {
+        promote_trace = desc->trace;
+        promote_destroy = desc->destroy;
+    } else if (object_kind == OSTY_GC_KIND_GENERIC) {
+        /* GENERIC is not in `osty_gc_kind_table`; the eligibility
+         * filter only admits the NONE pattern (NULL trace + NULL
+         * destroy), so promotion lands a NONE-pattern OLD copy. */
+        promote_trace = NULL;
+        promote_destroy = NULL;
+    } else {
         osty_rt_abort("promote_young_to_old: kind missing descriptor");
     }
     /* Bypass the Phase 8 young-routing wrapper: promotion exists
@@ -3416,7 +3449,7 @@ static void *osty_gc_promote_young_to_old(void *young_payload) {
      * make persistent). */
     new_payload = osty_gc_allocate_managed_headerful(
         payload_size, object_kind, "runtime.gc.promote_young",
-        desc->trace, desc->destroy);
+        promote_trace, promote_destroy);
     memcpy(new_payload, young_payload, payload_size);
     /* Same self-referential `data` fixup as cheney_forward —
      * a promoted inline list still points its `data` at the source
@@ -3909,11 +3942,10 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind,
     void *young_payload;
 
     osty_gc_kind_descriptor_assert_parity(object_kind, trace, destroy);
-    young_payload = osty_gc_allocate_young_if_eligible(byte_size, object_kind);
+    young_payload = osty_gc_allocate_young_if_eligible(byte_size, object_kind,
+                                                       trace, destroy);
     if (young_payload != NULL) {
         (void)site;
-        (void)trace;
-        (void)destroy;
         return young_payload;
     }
     return osty_gc_allocate_managed_headerful(byte_size, object_kind, site,
@@ -10904,7 +10936,12 @@ int64_t osty_gc_debug_young_eligible(int64_t byte_size, int64_t object_kind) {
     if (byte_size < 0) {
         return 0;
     }
-    return osty_gc_young_eligible(object_kind, (size_t)byte_size) ? 1 : 0;
+    /* Debug entry assumes the GENERIC NONE pattern (NULL trace +
+     * NULL destroy) — the per-instance trace/destroy aren't part of
+     * this filter's surface, and NONE is the only GENERIC pattern
+     * the eligibility filter can admit. */
+    return osty_gc_young_eligible(object_kind, (size_t)byte_size, NULL, NULL)
+               ? 1 : 0;
 }
 
 void *osty_gc_debug_allocate_young_if_eligible(int64_t byte_size,
@@ -10912,7 +10949,8 @@ void *osty_gc_debug_allocate_young_if_eligible(int64_t byte_size,
     if (byte_size < 0) {
         return NULL;
     }
-    return osty_gc_allocate_young_if_eligible((size_t)byte_size, object_kind);
+    return osty_gc_allocate_young_if_eligible((size_t)byte_size, object_kind,
+                                              NULL, NULL);
 }
 
 /* Phase 7 step 2 accessors. The promote path is exercised via the
