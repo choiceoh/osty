@@ -425,6 +425,29 @@ list keeps new Osty clean of known landmines.
 | `mirCallListNewLine` / `mirCallMapNewLine` / `mirCallSetNewLine` | `(reg, ...) -> String` | §6 | Constructor calls for `[]` / `{:}` / `{}` literals |
 | `mirSizeOfDoubleLine` / `mirSizeOfI64Line` / `mirSizeOfI32Line` / `mirSizeOfI8Line` / `mirSizeOfPtrLine` / `mirSizeOfI1Line` | `() -> String` | §6 | Canonical sizeof literal returns — centralise the byte-width constants |
 
+| `mirCallVoidPtrI64Line` | `(sym, ptr, idx) -> String` | §6 | `call void @<sym>(ptr <ptr>, i64 <i>)` — (ptr, i64) side-effect call shape (list_pop_n, list_splice_at) |
+| `mirCallValuePtrI64Line` | `(reg, retTy, sym, ptr, idx) -> String` | §6 | Typed-return sibling of `mirCallVoidPtrI64Line` |
+| `mirCallVoidSelectSendLine` | `(sym, builder, ch, elemLLVM, val, arm) -> String` | §6 | Typed-element select-send call (5-arg shape) |
+| `mirCallVoidSelectSendBytesLine` | `(sym, builder, ch, slot, size, arm) -> String` | §6 | Bytes-v1 select-send call (5-arg shape with size) |
+| `mirRuntimeDeclareSelectSendLine` | `(sym, elemLLVM) -> String` | §3 | `declare void @<sym>(ptr, ptr, <elem>, ptr)` — typed select-send decl |
+| `mirRuntimeDeclareSelectSendBytesLine` | `(sym) -> String` | §3 | `declare void @<sym>(ptr, ptr, ptr, i64, ptr)` — bytes-v1 select-send decl |
+| `mirCallVoidArgValueLine` | `(sym, argLLVM, val) -> String` | §6 | `call void @<sym>(<argLLVM> <val>)` — single-typed-arg side-effect call |
+| `mirRuntimeDeclareVoidSingleArgLine` | `(sym, argLLVM) -> String` | §3 | Matching decl for single-typed-arg side-effect call |
+| `mirCallValueListLenLine` / `mirCallValueMapLenLine` / `mirCallValueSetLenLine` | `(reg, handle) -> String` | §6 | Canonical container-len call specialisations (literal symbol per container kind) |
+| `mirCallValueChanRecvLine` | `(reg, sym, ch) -> String` | §6 | Typed `{ i64, i64 }` chan-recv call shape |
+| `mirCallValueCancelCheckLine` | `(reg) -> String` | §6 | `osty_rt_cancel_check_cancelled()` — `?`-style cancellation propagation |
+| `mirCallValueCancelIsCancelledLine` | `(reg) -> String` | §6 | `osty_rt_cancel_is_cancelled()` — boolean predicate |
+| `mirSpillThenSizeOfLines` | `(slot, ty, val, gepReg, sizeReg) -> String` | §6 | spill + sizeof preamble (4-line block) |
+| `mirCallValueListSortedLine` / `mirCallValueMapKeysSortedLine` | `(reg, sym, handle) -> String` | §6 | Sorted-allocator call specialisations |
+| `mirCallVoidListPushTypedLine` | `(sym, list, elemLLVM, val) -> String` | §6 | Typed-element list-push call |
+| `mirRuntimeDeclareListPushTypedLine` | `(sym, elemLLVM) -> String` | §3 | Typed-element list-push decl |
+| `mirCallVoidChanCloseLine` | `(ch) -> String` | §6 | `osty_rt_chan_close` literal-symbol specialisation |
+| `mirCallVoidCancelCancelLine` / `mirCallVoidYieldLine` | `() -> String` | §6 | No-arg concurrency runtime calls |
+| `mirCallValueListReversedLine` / `mirCallVoidListReverseLine` | `(reg, list)/(list) -> String` | §6 | List reverse: allocator vs in-place |
+| `mirCallVoidListClearLine` / `mirCallVoidMapClearLine` / `mirCallVoidSetClearLine` | `(handle) -> String` | §6 | Container clear specialisations |
+| `mirCallVoidPopDiscardLine` | `(list) -> String` | §6 | `osty_rt_list_pop_discard` literal-symbol specialisation |
+| `mirCallValueIsEmptyLine` | `(reg, sym, handle) -> String` | §6 | Generic is-empty predicate probe |
+
 Keep this table updated as each section lands. New entries go in
 insertion order so the provenance columns (`Origin §`) stay useful as
 the file grows.

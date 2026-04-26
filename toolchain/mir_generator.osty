@@ -4275,3 +4275,304 @@ pub fn mirSizeOfPtrLine() -> String { "8" }
 /// mirSizeOfI1Line returns the canonical sizeof(i1)-as-i8 literal "1"
 /// (LLVM materialises i1 in a byte-wide slot for storage).
 pub fn mirSizeOfI1Line() -> String { "1" }
+
+/// §6 concurrency-shape and additional emit-shape builders — drain
+/// the remaining `mirCallVoidLine(sym, "ptr "+x+...)` and
+/// `mirCallValueLine(reg, ty, sym, "ptr "+x+...)` inline patterns
+/// at sites where the call signature fits a small number of fixed
+/// shapes.
+
+/// mirCallVoidPtrI64Line renders `call void @<sym>(ptr <ptr>, i64 <i>)`
+/// — the (ptr, i64) side-effect call shape used by `osty_rt_list_pop_n`,
+/// `osty_rt_list_splice_at`, and similar one-handle + index runtimes.
+pub fn mirCallVoidPtrI64Line(sym: String, ptr: String, idx: String) -> String {
+    mirCallVoidLine(sym, "ptr " + ptr + ", i64 " + idx)
+}
+
+/// mirCallValuePtrI64Line renders `<reg> = call <retTy> @<sym>(ptr <ptr>, i64 <i>)`
+/// — the typed-return sibling of `mirCallVoidPtrI64Line`. Used by
+/// `osty_rt_list_get_<elem>` and other typed-element list-get
+/// runtimes (which `mirCallValueElemFromPtrI64Line` already covers
+/// for the elem-typed case; this is the abstract form).
+pub fn mirCallValuePtrI64Line(reg: String, retTy: String, sym: String, ptr: String, idx: String) -> String {
+    mirCallValueLine(reg, retTy, sym, "ptr " + ptr + ", i64 " + idx)
+}
+
+/// mirCallVoidSelectSendLine renders the typed-element select-send
+/// runtime call: `call void @<sym>(ptr <builder>, ptr <chan>, <elemLLVM> <val>, ptr <arm>)`.
+/// Used at the IntrinsicSelectSend typed-element fast path.
+pub fn mirCallVoidSelectSendLine(sym: String, builderReg: String, chReg: String, elemLLVM: String, valReg: String, armReg: String) -> String {
+    mirCallVoidLine(sym, "ptr " + builderReg + ", ptr " + chReg + ", " + elemLLVM + " " + valReg + ", ptr " + armReg)
+}
+
+/// mirCallVoidSelectSendBytesLine renders the bytes-v1 select-send
+/// runtime call: `call void @<sym>(ptr <builder>, ptr <chan>, ptr <slot>, i64 <size>, ptr <arm>)`.
+/// Used at the IntrinsicSelectSend composite-element path.
+pub fn mirCallVoidSelectSendBytesLine(sym: String, builderReg: String, chReg: String, slot: String, size: String, armReg: String) -> String {
+    mirCallVoidLine(sym, "ptr " + builderReg + ", ptr " + chReg + ", ptr " + slot + ", i64 " + size + ", ptr " + armReg)
+}
+
+/// mirRuntimeDeclareSelectSendLine renders the canonical select-
+/// send decl shape: `declare void @<sym>(ptr, ptr, <elemLLVM>, ptr)`.
+pub fn mirRuntimeDeclareSelectSendLine(sym: String, elemLLVM: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, ptr, " + elemLLVM + ", ptr")
+}
+
+/// mirRuntimeDeclareSelectSendBytesLine renders the canonical
+/// bytes-v1 select-send decl: `declare void @<sym>(ptr, ptr, ptr, i64, ptr)`.
+pub fn mirRuntimeDeclareSelectSendBytesLine(sym: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, ptr, ptr, i64, ptr")
+}
+
+/// mirCallVoidArgValueLine renders `call void @<sym>(<argLLVM> <val>)`
+/// — the single-typed-arg side-effect call. Used by
+/// `emitRuntimeVoidCall` for one-arg runtime hooks (e.g.
+/// thread.sleep(duration)).
+pub fn mirCallVoidArgValueLine(sym: String, argLLVM: String, val: String) -> String {
+    mirCallVoidLine(sym, argLLVM + " " + val)
+}
+
+/// mirRuntimeDeclareVoidSingleArgLine renders `declare void @<sym>(<argLLVM>)`
+/// — the matching decl for `mirCallVoidArgValueLine`.
+pub fn mirRuntimeDeclareVoidSingleArgLine(sym: String, argLLVM: String) -> String {
+    mirRuntimeDeclareLine("void", sym, argLLVM)
+}
+
+/// mirCallValueListLenLine renders the canonical list-len call:
+///   `<reg> = call i64 @osty_rt_list_len(ptr <list>)`
+/// Specialisation of `mirCallValueI64FromPtrLine` for the literal
+/// `osty_rt_list_len` symbol — every IntrinsicListLen / .len() probe
+/// site reaches for this.
+pub fn mirCallValueListLenLine(reg: String, listReg: String) -> String {
+    mirCallValueI64FromPtrLine(reg, "osty_rt_list_len", listReg)
+}
+
+/// mirCallValueMapLenLine renders the canonical map-len call:
+///   `<reg> = call i64 @osty_rt_map_len(ptr <map>)`
+pub fn mirCallValueMapLenLine(reg: String, mapReg: String) -> String {
+    mirCallValueI64FromPtrLine(reg, "osty_rt_map_len", mapReg)
+}
+
+/// mirCallValueSetLenLine renders the canonical set-len call:
+///   `<reg> = call i64 @osty_rt_set_len(ptr <set>)`
+pub fn mirCallValueSetLenLine(reg: String, setReg: String) -> String {
+    mirCallValueI64FromPtrLine(reg, "osty_rt_set_len", setReg)
+}
+
+/// mirCallValueChanRecvLine renders the canonical chan-recv call:
+///   `<reg> = call { i64, i64 } @<sym>(ptr <chan>)`
+/// Used by IntrinsicChanRecv / IntrinsicSelectRecv. The runtime
+/// returns Option<T>-shaped `{i64, i64}` tuple matching the MIR
+/// enum layout convention.
+pub fn mirCallValueChanRecvLine(reg: String, sym: String, chReg: String) -> String {
+    mirCallValueLine(reg, "\{ i64, i64 \}", sym, "ptr " + chReg)
+}
+
+/// mirCallValueCancelCheckLine renders the canonical cancel-check
+/// call: `<reg> = call { i64, i64 } @osty_rt_cancel_check_cancelled()`.
+/// Used at every `?`-style cancellation propagation site.
+pub fn mirCallValueCancelCheckLine(reg: String) -> String {
+    mirCallValueNoArgsLine(reg, "\{ i64, i64 \}", "osty_rt_cancel_check_cancelled")
+}
+
+/// mirCallValueCancelIsCancelledLine renders the canonical
+/// is-cancelled probe: `<reg> = call i1 @osty_rt_cancel_is_cancelled()`.
+pub fn mirCallValueCancelIsCancelledLine(reg: String) -> String {
+    mirCallValueNoArgsLine(reg, "i1", "osty_rt_cancel_is_cancelled")
+}
+
+/// mirSpillThenSizeOfLines renders the canonical "spill an SSA
+/// value into a stack slot then compute its sizeof" preamble:
+///   `  <slot> = alloca <ty>\n`
+///   `  store <ty> <val>, ptr <slot>\n`
+///   `  <gepReg> = getelementptr <ty>, ptr null, i32 1\n`
+///   `  <sizeReg> = ptrtoint ptr <gepReg> to i64\n`
+/// Four-line block. Sibling of `mirAllocaSpillStoreLine` +
+/// `mirSizeOfLines` chained, but exposed as one builder so the four
+/// fresh registers are passed up-front and the order stays stable.
+pub fn mirSpillThenSizeOfLines(slot: String, ty: String, val: String, gepReg: String, sizeReg: String) -> String {
+    mirAllocaSpillStoreLine(slot, ty, val) + mirSizeOfLines(gepReg, sizeReg, ty)
+}
+
+/// mirCallValueListSortedLine renders the canonical list-sorted
+/// call: `<reg> = call ptr @<sym>(ptr <list>)`. The runtime returns
+/// a freshly-allocated sorted copy. Specialisation of
+/// `mirCallValuePtrFromPtrLine` for the literal sorted-helper
+/// symbols (osty_rt_list_sorted_i64 / _string / etc.).
+pub fn mirCallValueListSortedLine(reg: String, sym: String, listReg: String) -> String {
+    mirCallValuePtrFromPtrLine(reg, sym, listReg)
+}
+
+/// mirCallValueMapKeysSortedLine renders the canonical fused
+/// `map.keys().sorted()` call: `<reg> = call ptr @<sym>(ptr <map>)`.
+pub fn mirCallValueMapKeysSortedLine(reg: String, sym: String, mapReg: String) -> String {
+    mirCallValuePtrFromPtrLine(reg, sym, mapReg)
+}
+
+/// mirCallVoidListPushTypedLine renders the typed-element list-push
+/// call: `call void @<sym>(ptr <list>, <elemLLVM> <val>)`. Used at
+/// every IntrinsicListPush typed-element fast path.
+pub fn mirCallVoidListPushTypedLine(sym: String, listReg: String, elemLLVM: String, valReg: String) -> String {
+    mirCallVoidLine(sym, "ptr " + listReg + ", " + elemLLVM + " " + valReg)
+}
+
+/// mirRuntimeDeclareListPushTypedLine renders the canonical
+/// typed-element list-push decl: `declare void @<sym>(ptr, <elemLLVM>)`.
+pub fn mirRuntimeDeclareListPushTypedLine(sym: String, elemLLVM: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, " + elemLLVM)
+}
+
+/// mirCallVoidChanCloseLine renders the canonical chan-close call:
+///   `call void @osty_rt_chan_close(ptr <chan>)`
+/// Specialisation of `mirCallVoidPtrLine` for the literal
+/// `osty_rt_chan_close` symbol used at every IntrinsicChanClose /
+/// `ch.close()` site.
+pub fn mirCallVoidChanCloseLine(chReg: String) -> String {
+    mirCallVoidPtrLine("osty_rt_chan_close", chReg)
+}
+
+/// mirCallVoidCancelCancelLine renders the canonical group-cancel
+/// call: `call void @osty_rt_cancel_cancel()`.
+pub fn mirCallVoidCancelCancelLine() -> String {
+    mirCallVoidNoArgsLine("osty_rt_cancel_cancel")
+}
+
+/// mirCallVoidYieldLine renders the canonical task-yield call:
+///   `call void @osty_rt_task_yield()`.
+pub fn mirCallVoidYieldLine() -> String {
+    mirCallVoidNoArgsLine("osty_rt_task_yield")
+}
+
+/// mirCallValueListReversedLine renders the canonical list-reversed
+/// allocator call: `<reg> = call ptr @osty_rt_list_reversed(ptr <list>)`.
+pub fn mirCallValueListReversedLine(reg: String, listReg: String) -> String {
+    mirCallValuePtrFromPtrLine(reg, "osty_rt_list_reversed", listReg)
+}
+
+/// mirCallVoidListReverseLine renders the canonical in-place
+/// list-reverse call: `call void @osty_rt_list_reverse(ptr <list>)`.
+pub fn mirCallVoidListReverseLine(listReg: String) -> String {
+    mirCallVoidPtrLine("osty_rt_list_reverse", listReg)
+}
+
+/// mirCallVoidListClearLine / MapClearLine / SetClearLine —
+/// canonical clear-helpers per container. All share the one-ptr-arg
+/// void call shape.
+pub fn mirCallVoidListClearLine(listReg: String) -> String {
+    mirCallVoidPtrLine("osty_rt_list_clear", listReg)
+}
+
+pub fn mirCallVoidMapClearLine(mapReg: String) -> String {
+    mirCallVoidPtrLine("osty_rt_map_clear", mapReg)
+}
+
+pub fn mirCallVoidSetClearLine(setReg: String) -> String {
+    mirCallVoidPtrLine("osty_rt_set_clear", setReg)
+}
+
+/// mirCallVoidPopDiscardLine renders the canonical list-pop-discard
+/// call: `call void @osty_rt_list_pop_discard(ptr <list>)`.
+/// Used by IntrinsicListPop's no-dest path and by the `pop` arm
+/// inside the dest-bearing path after the element has been read.
+pub fn mirCallVoidPopDiscardLine(listReg: String) -> String {
+    mirCallVoidPtrLine("osty_rt_list_pop_discard", listReg)
+}
+
+/// mirCallValueIsEmptyLine renders the canonical is-empty probe:
+///   `<reg> = call i1 @<sym>(ptr <handle>)`
+/// Used by IntrinsicListIsEmpty, IntrinsicMapIsEmpty,
+/// IntrinsicSetIsEmpty, IntrinsicChanIsClosed, etc.
+pub fn mirCallValueIsEmptyLine(reg: String, sym: String, handleReg: String) -> String {
+    mirCallValueI1FromPtrLine(reg, sym, handleReg)
+}
+
+/// mirCallI1MapKeyLine renders `<reg> = call i1 @<sym>(ptr <map>, <keyLLVM> <key>)`
+/// — the map-contains / map-remove call shape used by IntrinsicMapContains
+/// / IntrinsicMapRemove.
+pub fn mirCallI1MapKeyLine(reg: String, sym: String, mapReg: String, keyLLVM: String, keyReg: String) -> String {
+    mirCallValueLine(reg, "i1", sym, "ptr " + mapReg + ", " + keyLLVM + " " + keyReg)
+}
+
+/// mirCallI1SetElemLine renders `<reg> = call i1 @<sym>(ptr <set>, <elemLLVM> <elem>)`
+/// — the set-contains / set-add probe shape (sibling of
+/// `mirCallI1MapKeyLine` for set's single-arg key surface).
+pub fn mirCallI1SetElemLine(reg: String, sym: String, setReg: String, elemLLVM: String, elemReg: String) -> String {
+    mirCallValueLine(reg, "i1", sym, "ptr " + setReg + ", " + elemLLVM + " " + elemReg)
+}
+
+/// mirCallVoidSetElemLine renders `call void @<sym>(ptr <set>, <elemLLVM> <elem>)`
+/// — the set-add / set-remove side-effect shape.
+pub fn mirCallVoidSetElemLine(sym: String, setReg: String, elemLLVM: String, elemReg: String) -> String {
+    mirCallVoidLine(sym, "ptr " + setReg + ", " + elemLLVM + " " + elemReg)
+}
+
+/// mirRuntimeDeclareI1FromPtrAndElemLine renders `declare i1 @<sym>(ptr, <elemLLVM>)`
+/// — used by set-contains / set-add probes, map-contains, etc.
+pub fn mirRuntimeDeclareI1FromPtrAndElemLine(sym: String, elemLLVM: String) -> String {
+    mirRuntimeDeclareLine("i1", sym, "ptr, " + elemLLVM)
+}
+
+/// mirRuntimeDeclareVoidFromPtrAndElemLine renders
+///   `declare void @<sym>(ptr, <elemLLVM>)`
+/// — set-add / set-remove side-effect shape.
+pub fn mirRuntimeDeclareVoidFromPtrAndElemLine(sym: String, elemLLVM: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, " + elemLLVM)
+}
+
+/// mirCallValueElemFromPtrAndElemLine renders
+///   `<reg> = call <retTy> @<sym>(ptr <handle>, <elemLLVM> <elem>)`
+/// — the typed-return sibling of `mirCallVoidSetElemLine`.
+pub fn mirCallValueElemFromPtrAndElemLine(reg: String, retTy: String, sym: String, handleReg: String, elemLLVM: String, elemReg: String) -> String {
+    mirCallValueLine(reg, retTy, sym, "ptr " + handleReg + ", " + elemLLVM + " " + elemReg)
+}
+
+/// mirCallValueChanSendLine / mirCallVoidChanSendLine — typed
+/// chan-send shape `[ptr <ch>, <elemLLVM> <val>]`. Send is void-
+/// returning today; the value form is reserved for future ABI
+/// changes that surface back-pressure as a return value.
+pub fn mirCallVoidChanSendLine(sym: String, chReg: String, elemLLVM: String, valReg: String) -> String {
+    mirCallVoidLine(sym, "ptr " + chReg + ", " + elemLLVM + " " + valReg)
+}
+
+/// mirRuntimeDeclareChanSendLine renders the canonical chan-send decl:
+///   `declare void @<sym>(ptr, <elemLLVM>)`
+pub fn mirRuntimeDeclareChanSendLine(sym: String, elemLLVM: String) -> String {
+    mirRuntimeDeclareLine("void", sym, "ptr, " + elemLLVM)
+}
+
+/// mirCallVoidChanSendBytesLine renders the bytes-v1 chan-send call:
+///   `call void @<sym>(ptr <ch>, ptr <slot>, i64 <size>)`
+pub fn mirCallVoidChanSendBytesLine(sym: String, chReg: String, slot: String, size: String) -> String {
+    mirCallVoidLine(sym, "ptr " + chReg + ", ptr " + slot + ", i64 " + size)
+}
+
+/// mirCallVoidIntrinsicArgsLine renders a void runtime call where
+/// the arg list is pre-joined (one or more args). Thin re-export of
+/// `mirCallVoidLine` for consistency with the typed-return surface
+/// — names the call style at the call site so refactors that swap
+/// shapes only have to edit one builder.
+pub fn mirCallVoidIntrinsicArgsLine(sym: String, argList: String) -> String {
+    mirCallVoidLine(sym, argList)
+}
+
+/// mirCallValueIntrinsicArgsLine — typed-return sibling.
+pub fn mirCallValueIntrinsicArgsLine(reg: String, retTy: String, sym: String, argList: String) -> String {
+    mirCallValueLine(reg, retTy, sym, argList)
+}
+
+/// mirCallVoidGcAllocLine renders the canonical gc-alloc call:
+///   `<reg> = call ptr @osty.gc.alloc_v1(i64 <kind>, i64 <size>, ptr <site>)`
+/// Specialisation of `mirCallValueLine` for the literal allocator
+/// symbol — every site that boxes a payload onto the GC heap reaches
+/// for this.
+pub fn mirCallGcAllocV1Line(reg: String, kind: String, size: String, site: String) -> String {
+    mirCallValueLine(reg, "ptr", "osty.gc.alloc_v1", "i64 " + kind + ", i64 " + size + ", ptr " + site)
+}
+
+/// mirCallSafepointLine renders the canonical safepoint chunk call:
+///   `call void @osty.gc.safepoint_v1(i64 <tag>, ptr <slots>, i64 <count>)`
+/// Specialisation of `mirCallVoidI64TagAndPtrLine` for the literal
+/// safepoint symbol — the GC's main probe entry point.
+pub fn mirCallSafepointLine(tag: String, slots: String, count: String) -> String {
+    mirCallVoidI64TagAndPtrLine("osty.gc.safepoint_v1", tag, slots, count)
+}

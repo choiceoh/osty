@@ -3186,3 +3186,253 @@ func mirSizeOfPtrLine() string { return "8" }
 
 // Osty: mirSizeOfI1Line
 func mirSizeOfI1Line() string { return "1" }
+
+// §6 concurrency-shape and additional emit-shape builders.
+
+// mirCallVoidPtrI64Line — call void @<sym>(ptr, i64).
+// Osty: mirCallVoidPtrI64Line
+func mirCallVoidPtrI64Line(sym, ptr, idx string) string {
+	return mirCallVoidLine(sym, "ptr "+ptr+", i64 "+idx)
+}
+
+// mirCallValuePtrI64Line — typed-return sibling.
+// Osty: mirCallValuePtrI64Line
+func mirCallValuePtrI64Line(reg, retTy, sym, ptr, idx string) string {
+	return mirCallValueLine(reg, retTy, sym, "ptr "+ptr+", i64 "+idx)
+}
+
+// mirCallVoidSelectSendLine — typed select-send call shape.
+// Osty: mirCallVoidSelectSendLine
+func mirCallVoidSelectSendLine(sym, builderReg, chReg, elemLLVM, valReg, armReg string) string {
+	return mirCallVoidLine(sym, "ptr "+builderReg+", ptr "+chReg+", "+elemLLVM+" "+valReg+", ptr "+armReg)
+}
+
+// mirCallVoidSelectSendBytesLine — bytes-v1 select-send call.
+// Osty: mirCallVoidSelectSendBytesLine
+func mirCallVoidSelectSendBytesLine(sym, builderReg, chReg, slot, size, armReg string) string {
+	return mirCallVoidLine(sym, "ptr "+builderReg+", ptr "+chReg+", ptr "+slot+", i64 "+size+", ptr "+armReg)
+}
+
+// mirRuntimeDeclareSelectSendLine — declare void @<sym>(ptr, ptr, <elem>, ptr).
+// Osty: mirRuntimeDeclareSelectSendLine
+func mirRuntimeDeclareSelectSendLine(sym, elemLLVM string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, ptr, "+elemLLVM+", ptr")
+}
+
+// mirRuntimeDeclareSelectSendBytesLine — bytes-v1 select-send decl.
+// Osty: mirRuntimeDeclareSelectSendBytesLine
+func mirRuntimeDeclareSelectSendBytesLine(sym string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, ptr, ptr, i64, ptr")
+}
+
+// mirCallVoidArgValueLine — call void @<sym>(<argLLVM> <val>).
+// Osty: mirCallVoidArgValueLine
+func mirCallVoidArgValueLine(sym, argLLVM, val string) string {
+	return mirCallVoidLine(sym, argLLVM+" "+val)
+}
+
+// mirRuntimeDeclareVoidSingleArgLine — declare void @<sym>(<argLLVM>).
+// Osty: mirRuntimeDeclareVoidSingleArgLine
+func mirRuntimeDeclareVoidSingleArgLine(sym, argLLVM string) string {
+	return mirRuntimeDeclareLine("void", sym, argLLVM)
+}
+
+// mirCallValueListLenLine / MapLenLine / SetLenLine — canonical
+// container-len call specialisations.
+// Osty: mirCallValueListLenLine
+func mirCallValueListLenLine(reg, listReg string) string {
+	return mirCallValueI64FromPtrLine(reg, "osty_rt_list_len", listReg)
+}
+
+// Osty: mirCallValueMapLenLine
+func mirCallValueMapLenLine(reg, mapReg string) string {
+	return mirCallValueI64FromPtrLine(reg, "osty_rt_map_len", mapReg)
+}
+
+// Osty: mirCallValueSetLenLine
+func mirCallValueSetLenLine(reg, setReg string) string {
+	return mirCallValueI64FromPtrLine(reg, "osty_rt_set_len", setReg)
+}
+
+// mirCallValueChanRecvLine — typed `{ i64, i64 }` chan-recv call.
+// Osty: mirCallValueChanRecvLine
+func mirCallValueChanRecvLine(reg, sym, chReg string) string {
+	return mirCallValueLine(reg, "{ i64, i64 }", sym, "ptr "+chReg)
+}
+
+// mirCallValueCancelCheckLine — osty_rt_cancel_check_cancelled() call.
+// Osty: mirCallValueCancelCheckLine
+func mirCallValueCancelCheckLine(reg string) string {
+	return mirCallValueNoArgsLine(reg, "{ i64, i64 }", "osty_rt_cancel_check_cancelled")
+}
+
+// mirCallValueCancelIsCancelledLine — osty_rt_cancel_is_cancelled() call.
+// Osty: mirCallValueCancelIsCancelledLine
+func mirCallValueCancelIsCancelledLine(reg string) string {
+	return mirCallValueNoArgsLine(reg, "i1", "osty_rt_cancel_is_cancelled")
+}
+
+// mirSpillThenSizeOfLines — spill + sizeof preamble.
+// Osty: mirSpillThenSizeOfLines
+func mirSpillThenSizeOfLines(slot, ty, val, gepReg, sizeReg string) string {
+	return mirAllocaSpillStoreLine(slot, ty, val) + mirSizeOfLines(gepReg, sizeReg, ty)
+}
+
+// mirCallValueListSortedLine — osty_rt_list_sorted_<elem>(list) call.
+// Osty: mirCallValueListSortedLine
+func mirCallValueListSortedLine(reg, sym, listReg string) string {
+	return mirCallValuePtrFromPtrLine(reg, sym, listReg)
+}
+
+// mirCallValueMapKeysSortedLine — fused map.keys().sorted() call.
+// Osty: mirCallValueMapKeysSortedLine
+func mirCallValueMapKeysSortedLine(reg, sym, mapReg string) string {
+	return mirCallValuePtrFromPtrLine(reg, sym, mapReg)
+}
+
+// mirCallVoidListPushTypedLine — typed-element list-push call.
+// Osty: mirCallVoidListPushTypedLine
+func mirCallVoidListPushTypedLine(sym, listReg, elemLLVM, valReg string) string {
+	return mirCallVoidLine(sym, "ptr "+listReg+", "+elemLLVM+" "+valReg)
+}
+
+// mirRuntimeDeclareListPushTypedLine — typed-element list-push decl.
+// Osty: mirRuntimeDeclareListPushTypedLine
+func mirRuntimeDeclareListPushTypedLine(sym, elemLLVM string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, "+elemLLVM)
+}
+
+// mirCallVoidChanCloseLine — osty_rt_chan_close specialisation.
+// Osty: mirCallVoidChanCloseLine
+func mirCallVoidChanCloseLine(chReg string) string {
+	return mirCallVoidPtrLine("osty_rt_chan_close", chReg)
+}
+
+// mirCallVoidCancelCancelLine — osty_rt_cancel_cancel call.
+// Osty: mirCallVoidCancelCancelLine
+func mirCallVoidCancelCancelLine() string {
+	return mirCallVoidNoArgsLine("osty_rt_cancel_cancel")
+}
+
+// mirCallVoidYieldLine — osty_rt_task_yield call.
+// Osty: mirCallVoidYieldLine
+func mirCallVoidYieldLine() string {
+	return mirCallVoidNoArgsLine("osty_rt_task_yield")
+}
+
+// mirCallValueListReversedLine — osty_rt_list_reversed allocator call.
+// Osty: mirCallValueListReversedLine
+func mirCallValueListReversedLine(reg, listReg string) string {
+	return mirCallValuePtrFromPtrLine(reg, "osty_rt_list_reversed", listReg)
+}
+
+// mirCallVoidListReverseLine — in-place osty_rt_list_reverse call.
+// Osty: mirCallVoidListReverseLine
+func mirCallVoidListReverseLine(listReg string) string {
+	return mirCallVoidPtrLine("osty_rt_list_reverse", listReg)
+}
+
+// mirCallVoidListClearLine / MapClearLine / SetClearLine.
+// Osty: mirCallVoidListClearLine
+func mirCallVoidListClearLine(listReg string) string {
+	return mirCallVoidPtrLine("osty_rt_list_clear", listReg)
+}
+
+// Osty: mirCallVoidMapClearLine
+func mirCallVoidMapClearLine(mapReg string) string {
+	return mirCallVoidPtrLine("osty_rt_map_clear", mapReg)
+}
+
+// Osty: mirCallVoidSetClearLine
+func mirCallVoidSetClearLine(setReg string) string {
+	return mirCallVoidPtrLine("osty_rt_set_clear", setReg)
+}
+
+// mirCallVoidPopDiscardLine — osty_rt_list_pop_discard call.
+// Osty: mirCallVoidPopDiscardLine
+func mirCallVoidPopDiscardLine(listReg string) string {
+	return mirCallVoidPtrLine("osty_rt_list_pop_discard", listReg)
+}
+
+// mirCallValueIsEmptyLine — generic is-empty probe.
+// Osty: mirCallValueIsEmptyLine
+func mirCallValueIsEmptyLine(reg, sym, handleReg string) string {
+	return mirCallValueI1FromPtrLine(reg, sym, handleReg)
+}
+
+// mirCallI1MapKeyLine renders `<reg> = call i1 @<sym>(ptr <map>, <keyLLVM> <key>)`.
+// Osty: mirCallI1MapKeyLine
+func mirCallI1MapKeyLine(reg, sym, mapReg, keyLLVM, keyReg string) string {
+	return mirCallValueLine(reg, "i1", sym, "ptr "+mapReg+", "+keyLLVM+" "+keyReg)
+}
+
+// mirCallI1SetElemLine renders `<reg> = call i1 @<sym>(ptr <set>, <elemLLVM> <elem>)`.
+// Osty: mirCallI1SetElemLine
+func mirCallI1SetElemLine(reg, sym, setReg, elemLLVM, elemReg string) string {
+	return mirCallValueLine(reg, "i1", sym, "ptr "+setReg+", "+elemLLVM+" "+elemReg)
+}
+
+// mirCallVoidSetElemLine renders `call void @<sym>(ptr <set>, <elemLLVM> <elem>)`.
+// Osty: mirCallVoidSetElemLine
+func mirCallVoidSetElemLine(sym, setReg, elemLLVM, elemReg string) string {
+	return mirCallVoidLine(sym, "ptr "+setReg+", "+elemLLVM+" "+elemReg)
+}
+
+// mirRuntimeDeclareI1FromPtrAndElemLine — declare i1 @<sym>(ptr, <elem>).
+// Osty: mirRuntimeDeclareI1FromPtrAndElemLine
+func mirRuntimeDeclareI1FromPtrAndElemLine(sym, elemLLVM string) string {
+	return mirRuntimeDeclareLine("i1", sym, "ptr, "+elemLLVM)
+}
+
+// mirRuntimeDeclareVoidFromPtrAndElemLine — declare void @<sym>(ptr, <elem>).
+// Osty: mirRuntimeDeclareVoidFromPtrAndElemLine
+func mirRuntimeDeclareVoidFromPtrAndElemLine(sym, elemLLVM string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, "+elemLLVM)
+}
+
+// mirCallValueElemFromPtrAndElemLine — typed-return sibling of mirCallVoidSetElemLine.
+// Osty: mirCallValueElemFromPtrAndElemLine
+func mirCallValueElemFromPtrAndElemLine(reg, retTy, sym, handleReg, elemLLVM, elemReg string) string {
+	return mirCallValueLine(reg, retTy, sym, "ptr "+handleReg+", "+elemLLVM+" "+elemReg)
+}
+
+// mirCallVoidChanSendLine — typed chan-send call.
+// Osty: mirCallVoidChanSendLine
+func mirCallVoidChanSendLine(sym, chReg, elemLLVM, valReg string) string {
+	return mirCallVoidLine(sym, "ptr "+chReg+", "+elemLLVM+" "+valReg)
+}
+
+// mirRuntimeDeclareChanSendLine — declare void @<sym>(ptr, <elem>).
+// Osty: mirRuntimeDeclareChanSendLine
+func mirRuntimeDeclareChanSendLine(sym, elemLLVM string) string {
+	return mirRuntimeDeclareLine("void", sym, "ptr, "+elemLLVM)
+}
+
+// mirCallVoidChanSendBytesLine — bytes-v1 chan-send call.
+// Osty: mirCallVoidChanSendBytesLine
+func mirCallVoidChanSendBytesLine(sym, chReg, slot, size string) string {
+	return mirCallVoidLine(sym, "ptr "+chReg+", ptr "+slot+", i64 "+size)
+}
+
+// mirCallVoidIntrinsicArgsLine / mirCallValueIntrinsicArgsLine — re-exports.
+// Osty: mirCallVoidIntrinsicArgsLine
+func mirCallVoidIntrinsicArgsLine(sym, argList string) string {
+	return mirCallVoidLine(sym, argList)
+}
+
+// Osty: mirCallValueIntrinsicArgsLine
+func mirCallValueIntrinsicArgsLine(reg, retTy, sym, argList string) string {
+	return mirCallValueLine(reg, retTy, sym, argList)
+}
+
+// mirCallGcAllocV1Line — osty.gc.alloc_v1 specialisation.
+// Osty: mirCallGcAllocV1Line
+func mirCallGcAllocV1Line(reg, kind, size, site string) string {
+	return mirCallValueLine(reg, "ptr", "osty.gc.alloc_v1", "i64 "+kind+", i64 "+size+", ptr "+site)
+}
+
+// mirCallSafepointLine — osty.gc.safepoint_v1 specialisation.
+// Osty: mirCallSafepointLine
+func mirCallSafepointLine(tag, slots, count string) string {
+	return mirCallVoidI64TagAndPtrLine("osty.gc.safepoint_v1", tag, slots, count)
+}
