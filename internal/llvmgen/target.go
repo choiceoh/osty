@@ -135,51 +135,20 @@ func hostLLVMTriple() string {
 }
 
 // llvmTripleFor maps a (Go-style arch, Go-style os) pair to the LLVM
-// triple the host toolchain uses by default. Unknown archs pass
-// through unchanged so exotic targets still produce *something*
-// deterministic rather than silently falling back to host.
+// triple the host toolchain uses by default. Delegates to the Osty-
+// sourced `mirLLVMTripleFor` (`toolchain/mir_generator.osty`).
 func llvmTripleFor(arch, osName string) string {
-	switch osName {
-	case "darwin":
-		return darwinArch(arch) + "-apple-darwin"
-	case "linux":
-		return linuxArch(arch) + "-unknown-linux-gnu"
-	case "windows":
-		return linuxArch(arch) + "-pc-windows-msvc"
-	case "js":
-		// Emscripten is the only pairing the Osty toolchain ships for
-		// wasm today; keep the shape explicit rather than invent a
-		// generic unknown triple that clang would reject.
-		return "wasm32-unknown-emscripten"
-	default:
-		return linuxArch(arch) + "-unknown-" + osName
-	}
+	return mirLLVMTripleFor(arch, osName)
 }
 
 // linuxArch maps Go's GOARCH to the LLVM arch component used on
-// Linux / Windows triples. The Apple ecosystem prefers `arm64` over
-// `aarch64`, so darwinArch keeps that spelling separate.
+// Linux / Windows triples. Delegates to `mirLinuxArch`.
 func linuxArch(arch string) string {
-	switch arch {
-	case "amd64":
-		return "x86_64"
-	case "386":
-		return "i386"
-	case "arm64":
-		return "aarch64"
-	default:
-		return arch
-	}
+	return mirLinuxArch(arch)
 }
 
+// darwinArch maps Go's GOARCH to the LLVM arch component used on
+// Apple-sys triples. Delegates to `mirDarwinArch`.
 func darwinArch(arch string) string {
-	switch arch {
-	case "amd64":
-		return "x86_64"
-	case "arm64":
-		// Apple's own triples write `arm64-apple-darwin`, not aarch64.
-		return "arm64"
-	default:
-		return arch
-	}
+	return mirDarwinArch(arch)
 }
