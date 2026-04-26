@@ -1499,7 +1499,7 @@ fn elabInferVariantCall(
     let constructorSig = CheckFnSig {
         name: variant.name,
         owner: "",
-        receiverTy: -1,
+        receiverTy: -1, hasReceiver: false,
         retTy: tyNamed(tys, variant.owner, genericListToTyArgs(cx, variant.generics)),
         paramNames: [],
         paramTys: variant.fieldTys,
@@ -1721,28 +1721,28 @@ fn elabBuiltinErrorMethodSig(env: CheckEnv, name: String) -> CheckFnSig {
     let tString_ = tString(tys)
     if name == "message" {
         return CheckFnSig {
-            name: "message", owner: "Error", receiverTy: tError, retTy: tString_,
+            name: "message", owner: "Error", receiverTy: tError, hasReceiver: true, retTy: tString_,
             paramNames: [], paramTys: [],
             generics: [], genericBounds: [],
         }
     }
     if name == "source" {
         return CheckFnSig {
-            name: "source", owner: "Error", receiverTy: tError, retTy: tyOptional(tys, tError),
+            name: "source", owner: "Error", receiverTy: tError, hasReceiver: true, retTy: tyOptional(tys, tError),
             paramNames: [], paramTys: [],
             generics: [], genericBounds: [],
         }
     }
     if name == "wrap" {
         return CheckFnSig {
-            name: "wrap", owner: "Error", receiverTy: tError, retTy: tError,
+            name: "wrap", owner: "Error", receiverTy: tError, hasReceiver: true, retTy: tError,
             paramNames: ["context"], paramTys: [tString_],
             generics: [], genericBounds: [],
         }
     }
     if name == "chain" {
         return CheckFnSig {
-            name: "chain", owner: "Error", receiverTy: tError, retTy: tyNamed(tys, "List", [tError]),
+            name: "chain", owner: "Error", receiverTy: tError, hasReceiver: true, retTy: tyNamed(tys, "List", [tError]),
             paramNames: [], paramTys: [],
             generics: [], genericBounds: [],
         }
