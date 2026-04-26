@@ -1285,9 +1285,13 @@ func nativePopulateStructDecl(ctx *nativeProjectionCtx, decl *ostyir.StructDecl)
 		return info != nil
 	}
 	for i, field := range decl.Fields {
-		if field == nil || field.Name == "" || field.Default != nil {
+		if field == nil || field.Name == "" {
 			return false
 		}
+		// Defaults are construction-site concerns (lowerStructLit injects
+		// them); the native projection only needs the field's name + type
+		// for layout. Skipping the default-bail keeps fields like
+		// `CheckFnSig.hasReceiver: Bool = false` projectable.
 		if _, exists := info.byName[field.Name]; exists {
 			return false
 		}
