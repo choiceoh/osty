@@ -1,0 +1,327 @@
+use std.testing
+
+fn parseOk(src: String) -> TomlTable {
+    match parseToml(src) {
+        Ok(t) -> t,
+        Err(e) -> {
+            testing.fail("expected Ok, got error: " + e)
+            newTomlTable()
+        },
+    }
+}
+
+fn parseErr(src: String) -> String {
+    match parseToml(src) {
+        Ok(_) -> {
+            testing.fail("expected parse failure, got Ok")
+            ""
+        },
+        Err(e) -> e,
+    }
+}
+
+fn intAt(t: TomlTable, key: String) -> Int {
+    match t.items.get(key) {
+        Some(v) -> match v.kind {
+            TomlKind.KInt(n) -> n,
+            _ -> {
+                testing.fail("key " + key + " not Int")
+                0
+            },
+        },
+        None -> {
+            testing.fail("missing key " + key)
+            0
+        },
+    }
+}
+
+fn strAt(t: TomlTable, key: String) -> String {
+    match t.items.get(key) {
+        Some(v) -> match v.kind {
+            TomlKind.KStr(s) -> s,
+            _ -> {
+                testing.fail("key " + key + " not Str")
+                ""
+            },
+        },
+        None -> {
+            testing.fail("missing key " + key)
+            ""
+        },
+    }
+}
+
+fn boolAt(t: TomlTable, key: String) -> Bool {
+    match t.items.get(key) {
+        Some(v) -> match v.kind {
+            TomlKind.KBool(b) -> b,
+            _ -> {
+                testing.fail("key " + key + " not Bool")
+                false
+            },
+        },
+        None -> {
+            testing.fail("missing key " + key)
+            false
+        },
+    }
+}
+
+fn tableAt(t: TomlTable, key: String) -> TomlTable {
+    match t.items.get(key) {
+        Some(v) -> match v.kind {
+            TomlKind.KTbl(sub) -> sub,
+            _ -> {
+                testing.fail("key " + key + " not Tbl")
+                newTomlTable()
+            },
+        },
+        None -> {
+            testing.fail("missing key " + key)
+            newTomlTable()
+        },
+    }
+}
+
+fn arrayAt(t: TomlTable, key: String) -> TomlArray {
+    match t.items.get(key) {
+        Some(v) -> match v.kind {
+            TomlKind.KArr(arr) -> arr,
+            _ -> {
+                testing.fail("key " + key + " not Arr")
+                TomlArray { values: [] }
+            },
+        },
+        None -> {
+            testing.fail("missing key " + key)
+            TomlArray { values: [] }
+        },
+    }
+}
+
+// ===================================================================
+// POSITIVE CASES
+// ===================================================================
+
+fn test_empty_input() {
+    let t = parseOk("")
+    testing.assertEq(t.keys.len(), 0)
+}
+
+fn test_only_whitespace() {
+    let t = parseOk("\n\n  \t\n")
+    testing.assertEq(t.keys.len(), 0)
+}
+
+fn test_only_comment() {
+    let t = parseOk("# hello\n# world\n")
+    testing.assertEq(t.keys.len(), 0)
+}
+
+fn test_string_value() {
+    let t = parseOk("name = \"alice\"\n")
+    testing.assertEq(strAt(t, "name"), "alice")
+}
+
+fn test_int_positive() {
+    let t = parseOk("port = 8080\n")
+    testing.assertEq(intAt(t, "port"), 8080)
+}
+
+fn test_int_negative() {
+    let t = parseOk("offset = -42\n")
+    testing.assertEq(intAt(t, "offset"), -42)
+}
+
+fn test_int_with_underscore() {
+    let t = parseOk("big = 1_000_000\n")
+    testing.assertEq(intAt(t, "big"), 1000000)
+}
+
+fn test_int_explicit_plus() {
+    let t = parseOk("n = +7\n")
+    testing.assertEq(intAt(t, "n"), 7)
+}
+
+fn test_bool_true_false() {
+    let t = parseOk("a = true\nb = false\n")
+    testing.assertEq(boolAt(t, "a"), true)
+    testing.assertEq(boolAt(t, "b"), false)
+}
+
+fn test_quoted_key() {
+    let t = parseOk("\"with space\" = 1\n")
+    testing.assertEq(intAt(t, "with space"), 1)
+}
+
+fn test_string_escapes() {
+    let t = parseOk("s = \"a\\nb\\tc\\\\d\\\"e\"\n")
+    testing.assertEq(strAt(t, "s"), "a\nb\tc\\d\"e")
+}
+
+fn test_keeps_first_insertion_order() {
+    let t = parseOk("z = 1\na = 2\nm = 3\n")
+    testing.assertEq(t.keys.len(), 3)
+    match t.keys.get(0) {
+        Some(k) -> testing.assertEq(k, "z"),
+        None -> testing.fail("missing key 0"),
+    }
+    match t.keys.get(1) {
+        Some(k) -> testing.assertEq(k, "a"),
+        None -> testing.fail("missing key 1"),
+    }
+    match t.keys.get(2) {
+        Some(k) -> testing.assertEq(k, "m"),
+        None -> testing.fail("missing key 2"),
+    }
+}
+
+fn test_section_header() {
+    let t = parseOk("[server]\nport = 80\n")
+    let server = tableAt(t, "server")
+    testing.assertEq(intAt(server, "port"), 80)
+}
+
+fn test_dotted_section_header() {
+    let t = parseOk("[a.b.c]\nx = 1\n")
+    let a = tableAt(t, "a")
+    let b = tableAt(a, "b")
+    let c = tableAt(b, "c")
+    testing.assertEq(intAt(c, "x"), 1)
+}
+
+fn test_dotted_key() {
+    let t = parseOk("a.b.c = 5\n")
+    let a = tableAt(t, "a")
+    let b = tableAt(a, "b")
+    testing.assertEq(intAt(b, "c"), 5)
+}
+
+fn test_array_of_ints() {
+    let t = parseOk("xs = [1, 2, 3]\n")
+    let arr = arrayAt(t, "xs")
+    testing.assertEq(arr.values.len(), 3)
+}
+
+fn test_empty_array() {
+    let t = parseOk("xs = []\n")
+    let arr = arrayAt(t, "xs")
+    testing.assertEq(arr.values.len(), 0)
+}
+
+fn test_array_with_trailing_newlines() {
+    let t = parseOk("xs = [\n  1,\n  2,\n]\n")
+    let arr = arrayAt(t, "xs")
+    testing.assertEq(arr.values.len(), 2)
+}
+
+fn test_inline_table() {
+    let t = parseOk("user = \{ name = \"x\", age = 30 \}\n")
+    let user = tableAt(t, "user")
+    testing.assertEq(user.inline, true)
+    testing.assertEq(strAt(user, "name"), "x")
+    testing.assertEq(intAt(user, "age"), 30)
+}
+
+fn test_empty_inline_table() {
+    let t = parseOk("u = \{\}\n")
+    let u = tableAt(t, "u")
+    testing.assertEq(u.keys.len(), 0)
+    testing.assertEq(u.inline, true)
+}
+
+fn test_array_of_tables() {
+    let t = parseOk("[[pkg]]\nname = \"a\"\n[[pkg]]\nname = \"b\"\n")
+    let arr = arrayAt(t, "pkg")
+    testing.assertEq(arr.values.len(), 2)
+}
+
+fn test_comment_after_value() {
+    let t = parseOk("x = 1 # a comment\ny = 2\n")
+    testing.assertEq(intAt(t, "x"), 1)
+    testing.assertEq(intAt(t, "y"), 2)
+}
+
+fn test_comment_after_header() {
+    let t = parseOk("[server] # primary\nport = 80\n")
+    let s = tableAt(t, "server")
+    testing.assertEq(intAt(s, "port"), 80)
+}
+
+fn test_line_numbers_in_value() {
+    let t = parseOk("# header\n# header 2\nx = 1\n")
+    match t.items.get("x") {
+        Some(v) -> testing.assertEq(v.line, 3),
+        None -> testing.fail("missing x"),
+    }
+}
+
+// ===================================================================
+// NEGATIVE CASES
+// ===================================================================
+
+fn test_unterminated_string() {
+    let e = parseErr("name = \"alice\n")
+    testing.assert(strings.contains(e, "newline"))
+}
+
+fn test_missing_eq() {
+    let e = parseErr("name 5\n")
+    testing.assert(strings.contains(e, "expected `=`"))
+}
+
+fn test_garbage_after_value() {
+    let e = parseErr("x = 1 garbage\n")
+    testing.assert(strings.contains(e, "garbage after value"))
+}
+
+fn test_unknown_escape() {
+    let e = parseErr("s = \"a\\zb\"\n")
+    testing.assert(strings.contains(e, "unknown escape"))
+}
+
+fn test_floating_point_rejected() {
+    let e = parseErr("pi = 3.14\n")
+    testing.assert(strings.contains(e, "floating-point"))
+}
+
+fn test_unterminated_array() {
+    let e = parseErr("xs = [1, 2,\n")
+    testing.assert(strings.contains(e, "unterminated array"))
+}
+
+fn test_unterminated_inline_table() {
+    let e = parseErr("u = \{ a = 1\n")
+    testing.assert(strings.contains(e, "newline"))
+}
+
+fn test_unclosed_section_header() {
+    let e = parseErr("[server\nport = 80\n")
+    testing.assert(strings.contains(e, "expected `]`"))
+}
+
+fn test_duplicate_key() {
+    let e = parseErr("x = 1\nx = 2\n")
+    testing.assert(strings.contains(e, "duplicate key"))
+}
+
+fn test_garbage_after_header() {
+    let e = parseErr("[a] garbage\nport = 80\n")
+    testing.assert(strings.contains(e, "garbage after table header"))
+}
+
+fn test_error_includes_line() {
+    let e = parseErr("\n\nname = \"alice\nbroken")
+    testing.assert(strings.contains(e, "osty.toml:"))
+}
+
+fn test_missing_value() {
+    let e = parseErr("x =\n")
+    testing.assert(strings.contains(e, "value"))
+}
+
+fn test_bad_number_after_sign() {
+    let e = parseErr("x = +abc\n")
+    testing.assert(strings.contains(e, "digit"))
+}
