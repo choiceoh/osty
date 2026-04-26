@@ -868,20 +868,20 @@ func (g *generator) formatFnAttrs() string {
 	parts := make([]string, 0, 4)
 	switch g.inlineMode {
 	case 1:
-		parts = append(parts, "inlinehint")
+		parts = append(parts, mirFnAttrInlineHint())
 	case 2:
-		parts = append(parts, "alwaysinline")
+		parts = append(parts, mirFnAttrAlwaysInline())
 	case 3:
-		parts = append(parts, "noinline")
+		parts = append(parts, mirFnAttrNoInline())
 	}
 	if g.hotHint {
-		parts = append(parts, "hot")
+		parts = append(parts, mirFnAttrHot())
 	}
 	if g.coldHint {
-		parts = append(parts, "cold")
+		parts = append(parts, mirFnAttrCold())
 	}
 	if g.pureHint {
-		parts = append(parts, "readnone")
+		parts = append(parts, mirFnAttrPure())
 	}
 	if len(g.targetFeatures) > 0 {
 		prefixed := make([]string, len(g.targetFeatures))

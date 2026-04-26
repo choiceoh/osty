@@ -559,11 +559,11 @@ func llvmNativeEmitFunction(fn *llvmNativeFunction, globals []*llvmNativeGlobal,
 func llvmNativeInlineAttrKeyword(mode int) string {
 	switch mode {
 	case 1:
-		return "inlinehint"
+		return mirFnAttrInlineHint()
 	case 2:
-		return "alwaysinline"
+		return mirFnAttrAlwaysInline()
 	case 3:
-		return "noinline"
+		return mirFnAttrNoInline()
 	default:
 		return ""
 	}
