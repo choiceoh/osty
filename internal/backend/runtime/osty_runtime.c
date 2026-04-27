@@ -3182,12 +3182,24 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
  *      before the arena swap reclaims their micro-header bytes.
  *      No self-ref fixup needed — Set has no inline-storage union;
  *      `items` is always a separate heap allocation.
+ *      MAP has a destroy callback (frees keys/values/index buffers
+ *      and the recursive mutex). Its memcpy-on-promote is normally
+ *      UB for the embedded `pthread_mutex_t`, so cheney_forward and
+ *      promote_young_to_old both special-case MAP: they re-init the
+ *      destination's mutex and destroy the source's, mirroring
+ *      `osty_gc_clone_map_header_to_bump_region`. They also fix up
+ *      the inline-index self-refs and null the source's
+ *      keys/values/index pointers so dead-from-space's free path
+ *      can't double-free a forwarded Map's buffers. The
+ *      dead-from-space scan calls `osty_rt_map_destroy` directly on
+ *      UNFORWARDED young Maps.
  *
  *      Why not the other kinds:
- *        - MAP/CHANNEL: destroy frees pthread sync state in addition
- *          to backing arrays — the recursive-mutex teardown +
- *          pthread_cond_destroy surface is larger and these are
- *          typically long-lived, so the perf payoff is smaller.
+ *        - CHANNEL: destroy frees mutex + 2 condvars + slot buffer.
+ *          Same pthread-teardown family as Map but the safe-clone
+ *          surface is larger (cond_destroy doesn't have an
+ *          equivalent re-init helper) and channels are typically
+ *          long-lived, so the perf payoff is smaller.
  *   3. Payload size must fit comfortably under the humongous
  *      threshold. Humongous allocs already take a separate path in
  *      the headerful allocator and have no benefit from being
@@ -3215,7 +3227,8 @@ static bool osty_gc_young_eligible(int64_t object_kind, size_t payload_size,
                object_kind != OSTY_GC_KIND_LIST &&
                object_kind != OSTY_GC_KIND_CLOSURE_ENV &&
                object_kind != OSTY_GC_KIND_SET &&
-               object_kind != OSTY_GC_KIND_GENERIC_ENUM_PTR) {
+               object_kind != OSTY_GC_KIND_GENERIC_ENUM_PTR &&
+               object_kind != OSTY_GC_KIND_MAP) {
         return false;
     }
     if (payload_size == 0 ||
@@ -3242,6 +3255,12 @@ static void *osty_gc_allocate_young_if_eligible(size_t byte_size,
     }
     return osty_gc_allocate_young(byte_size, object_kind);
 }
+
+/* Forward decls for Map's safe-clone path used by `cheney_forward`,
+ * `promote_young_to_old`, and `cheney_destroy_dead_from_space` —
+ * defined further down with the rest of the Map runtime. */
+static void osty_rt_map_mutex_init_or_abort(osty_rt_map *map);
+static void osty_rt_map_destroy(void *payload);
 
 /* Phase 6 step 1: Cheney semi-space copy mechanic.
  *
@@ -3326,6 +3345,42 @@ static void *osty_gc_cheney_forward(void *from_payload) {
         if (dst_list->data == src_list->inline_storage) {
             dst_list->data = dst_list->inline_storage;
         }
+    } else if (object_kind == OSTY_GC_KIND_MAP) {
+        /* Map carries a `pthread_mutex_t` inline. Bit-copying it via
+         * memcpy is UB (the kernel-tracked state is keyed on the
+         * mutex address; aliased copies would race the destroy
+         * sequence). Re-init the to-space mutex from scratch and
+         * destroy the from-space original — same handoff
+         * `osty_gc_clone_map_header_to_bump_region` uses for
+         * headerful compaction.
+         *
+         * The inline-index self-refs (`index_inline[]` /
+         * `index_hashes_inline[]`) need the same re-anchoring as
+         * List's `inline_storage`: a forwarded inline-mode Map's
+         * `index_slots` would otherwise point at the from-space
+         * inline region (about to be reclaimed by the arena swap).
+         *
+         * Null the from-space's owned-buffer pointers so that any
+         * later traversal of from-space (today only the
+         * dead-from-space scan, which already filters by tag) can
+         * never reach a buffer the to-space copy still owns. */
+        osty_rt_map *src_map = (osty_rt_map *)from_payload;
+        osty_rt_map *dst_map = (osty_rt_map *)to_payload;
+        if (dst_map->index_slots == src_map->index_inline) {
+            dst_map->index_slots = dst_map->index_inline;
+        }
+        if (dst_map->index_hashes == src_map->index_hashes_inline) {
+            dst_map->index_hashes = dst_map->index_hashes_inline;
+        }
+        if (src_map->mu_init) {
+            osty_rt_map_mutex_init_or_abort(dst_map);
+            osty_rt_rmu_destroy(&src_map->mu);
+            src_map->mu_init = 0;
+        }
+        src_map->keys = NULL;
+        src_map->values = NULL;
+        src_map->index_slots = NULL;
+        src_map->index_hashes = NULL;
     }
     src->forward_or_meta = (uint64_t)(uintptr_t)to_payload |
                            OSTY_GC_FORWARD_TAG_FORWARDED;
@@ -3381,6 +3436,7 @@ static void osty_gc_cheney_swap_arenas(void) {
  * arena bytes. */
 static int64_t osty_gc_young_cheney_dead_lists_freed_total = 0;
 static int64_t osty_gc_young_cheney_dead_sets_freed_total = 0;
+static int64_t osty_gc_young_cheney_dead_maps_freed_total = 0;
 static int64_t osty_gc_young_cheney_dead_buffer_bytes_freed_total = 0;
 
 static size_t osty_gc_micro_object_total_size(int32_t payload_size);
@@ -3418,10 +3474,19 @@ static void osty_gc_cheney_destroy_dead_from_space(unsigned char *from_base,
                     free(set->items);
                 }
                 osty_gc_young_cheney_dead_sets_freed_total += 1;
+            } else if (micro->object_kind == OSTY_GC_KIND_MAP) {
+                /* Map's full destroy: keys, values, index buffers
+                 * (if not aliased to inline arrays), and the
+                 * recursive mutex if it was init'd. Reuses the
+                 * headerful destroy fn so the cleanup logic stays
+                 * in one place. */
+                osty_rt_map_destroy(payload);
+                osty_gc_young_cheney_dead_maps_freed_total += 1;
             }
-            /* STRING / BYTES / CLOSURE_ENV / GENERIC NONE carry no
-             * external buffers — payload bytes are reclaimed by the
-             * cursor reset, no destroy needed. */
+            /* STRING / BYTES / CLOSURE_ENV / GENERIC NONE /
+             * GENERIC_ENUM_PTR carry no external buffers — payload
+             * bytes are reclaimed by the cursor reset, no destroy
+             * needed. */
         }
         scan += total;
     }
@@ -3548,6 +3613,30 @@ static void *osty_gc_promote_young_to_old(void *young_payload) {
         if (dst_list->data == src_list->inline_storage) {
             dst_list->data = dst_list->inline_storage;
         }
+    } else if (object_kind == OSTY_GC_KIND_MAP) {
+        /* Same safe-clone Map handoff as cheney_forward (see comment
+         * there for rationale): re-anchor inline-index self-refs,
+         * destroy the from-space mutex + init the OLD copy's, null
+         * the source's owned-buffer pointers so the from-space
+         * payload can be reclaimed without double-freeing what the
+         * OLD copy now owns. */
+        osty_rt_map *src_map = (osty_rt_map *)young_payload;
+        osty_rt_map *dst_map = (osty_rt_map *)new_payload;
+        if (dst_map->index_slots == src_map->index_inline) {
+            dst_map->index_slots = dst_map->index_inline;
+        }
+        if (dst_map->index_hashes == src_map->index_hashes_inline) {
+            dst_map->index_hashes = dst_map->index_hashes_inline;
+        }
+        if (src_map->mu_init) {
+            osty_rt_map_mutex_init_or_abort(dst_map);
+            osty_rt_rmu_destroy(&src_map->mu);
+            src_map->mu_init = 0;
+        }
+        src_map->keys = NULL;
+        src_map->values = NULL;
+        src_map->index_slots = NULL;
+        src_map->index_hashes = NULL;
     }
     micro->forward_or_meta = (uint64_t)(uintptr_t)new_payload |
                              OSTY_GC_FORWARD_TAG_PROMOTED;
@@ -4846,6 +4935,50 @@ static void osty_gc_remap_header_payload(osty_gc_header *header) {
     }
 }
 
+/* Phase E follow-up: live young objects also hold OLD pointers
+ * (e.g. a young Map<String, _> with OLD String values; a young
+ * GENERIC_ENUM_PTR box pointing at an OLD enum payload). The
+ * headerful remap loops in `osty_gc_compact_*_with_stack_roots`
+ * only walk `osty_gc_objects`, so without this pass the young
+ * survivors' buffer entries would still reference pre-compact
+ * addresses. Walk the young from-space (cheney just swapped
+ * survivors here) and dispatch the kind-specific remap helper —
+ * the same helpers `osty_gc_remap_header_payload` calls. */
+static void osty_gc_remap_young_arena_payloads(void) {
+    if (!osty_gc_tinytag_young_now() || osty_gc_young_from.base == NULL) {
+        return;
+    }
+    unsigned char *scan = osty_gc_young_from.base;
+    while (scan < osty_gc_young_from.cursor) {
+        osty_gc_micro_header *micro = (osty_gc_micro_header *)scan;
+        int32_t payload_size = micro->byte_size;
+        void *payload = (void *)(scan + sizeof(osty_gc_micro_header));
+        switch (micro->object_kind) {
+        case OSTY_GC_KIND_LIST:
+            osty_gc_remap_list_payload((osty_rt_list *)payload);
+            break;
+        case OSTY_GC_KIND_MAP:
+            osty_gc_remap_map_payload((osty_rt_map *)payload);
+            break;
+        case OSTY_GC_KIND_SET:
+            osty_gc_remap_set_payload((osty_rt_set *)payload);
+            break;
+        case OSTY_GC_KIND_CLOSURE_ENV:
+            osty_gc_remap_closure_env_payload(
+                (osty_rt_closure_env *)payload);
+            break;
+        case OSTY_GC_KIND_GENERIC_ENUM_PTR:
+            osty_gc_remap_slot(payload);
+            break;
+        default:
+            /* STRING / BYTES / GENERIC NONE carry no managed-pointer
+             * buffers — payload bytes are opaque from the GC's view. */
+            break;
+        }
+        scan += osty_gc_micro_object_total_size(payload_size);
+    }
+}
+
 static osty_gc_header *osty_gc_clone_header_storage_to_bump_region(
     osty_gc_header *header,
     uint8_t storage_kind,
@@ -5166,6 +5299,7 @@ static int64_t osty_gc_compact_major_with_stack_roots(
         osty_gc_remap_header_payload(current);
         header = header->next;
     }
+    osty_gc_remap_young_arena_payloads();
 
     header = osty_gc_objects;
     while (header != NULL) {
@@ -5303,6 +5437,7 @@ static int64_t osty_gc_compact_minor_with_stack_roots(
         osty_gc_remap_header_payload(current);
         header = header->next;
     }
+    osty_gc_remap_young_arena_payloads();
 
     header = osty_gc_objects;
     while (header != NULL) {
@@ -11081,6 +11216,10 @@ int64_t osty_gc_debug_young_cheney_dead_lists_freed_total(void) {
 
 int64_t osty_gc_debug_young_cheney_dead_sets_freed_total(void) {
     return osty_gc_young_cheney_dead_sets_freed_total;
+}
+
+int64_t osty_gc_debug_young_cheney_dead_maps_freed_total(void) {
+    return osty_gc_young_cheney_dead_maps_freed_total;
 }
 
 int64_t osty_gc_debug_young_cheney_dead_buffer_bytes_freed_total(void) {
