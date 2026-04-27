@@ -675,6 +675,9 @@ static void osty_rt_task_handle_destroy(void *payload);
 typedef struct osty_gc_kind_descriptor {
     osty_gc_trace_fn trace;
     osty_gc_destroy_fn destroy;
+    /* Whether the no-header young arena can carry this kind. Toggle
+     * at the table row, not in `osty_gc_young_eligible`. */
+    bool young_eligible;
 } osty_gc_kind_descriptor;
 
 /* Phase 4 generic-pattern table (RUNTIME_GC_DELTA Phase E follow-up).
@@ -698,9 +701,15 @@ enum {
 };
 
 static const osty_gc_kind_descriptor osty_gc_generic_patterns[] = {
-    [OSTY_GC_GENERIC_NONE] = {NULL, NULL},
-    [OSTY_GC_GENERIC_ENUM_PTR] = {osty_rt_enum_ptr_payload_trace, NULL},
-    [OSTY_GC_GENERIC_TASK_HANDLE] = {NULL, osty_rt_task_handle_destroy},
+    /* NONE — opaque payload, cheney handles it as raw bytes. */
+    [OSTY_GC_GENERIC_NONE] = {NULL, NULL, true},
+    /* ENUM_PTR routes through `OSTY_GC_KIND_GENERIC_ENUM_PTR`'s row
+     * in the kind table; this row is only consulted on the headerful
+     * fallback dispatch, so the young flag stays false. */
+    [OSTY_GC_GENERIC_ENUM_PTR] = {osty_rt_enum_ptr_payload_trace, NULL, false},
+    /* TASK_HANDLE has a pthread-rich destroy — not yet covered by
+     * the safe-clone path that Map uses. */
+    [OSTY_GC_GENERIC_TASK_HANDLE] = {NULL, osty_rt_task_handle_destroy, false},
 };
 
 #define OSTY_GC_GENERIC_PATTERN_COUNT \
@@ -717,19 +726,29 @@ static uint8_t osty_gc_pattern_of(osty_gc_trace_fn trace,
  * row here in the same order. */
 static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
     [OSTY_GC_KIND_LIST - OSTY_GC_KIND_LIST] =
-        {osty_rt_list_trace, osty_rt_list_destroy},
-    [OSTY_GC_KIND_STRING - OSTY_GC_KIND_LIST] = {NULL, NULL},
+        {osty_rt_list_trace, osty_rt_list_destroy, true},
+    [OSTY_GC_KIND_STRING - OSTY_GC_KIND_LIST] = {NULL, NULL, true},
     [OSTY_GC_KIND_MAP - OSTY_GC_KIND_LIST] =
-        {osty_rt_map_trace, osty_rt_map_destroy},
+        {osty_rt_map_trace, osty_rt_map_destroy, true},
     [OSTY_GC_KIND_SET - OSTY_GC_KIND_LIST] =
-        {osty_rt_set_trace, osty_rt_set_destroy},
-    [OSTY_GC_KIND_BYTES - OSTY_GC_KIND_LIST] = {NULL, NULL},
+        {osty_rt_set_trace, osty_rt_set_destroy, true},
+    [OSTY_GC_KIND_BYTES - OSTY_GC_KIND_LIST] = {NULL, NULL, true},
+    /* CLOSURE_ENV's young safety relies on a mutator-side contract:
+     * captures are populated synchronously at construction (single
+     * basic block in LLVM emit) before the env can escape to a slot
+     * that triggers root_bind. promote-on-bind copies a fully
+     * populated env to OLD; nothing in cheney_forward / promote
+     * special-cases this kind. */
     [OSTY_GC_KIND_CLOSURE_ENV - OSTY_GC_KIND_LIST] =
-        {osty_rt_closure_env_trace, NULL},
+        {osty_rt_closure_env_trace, NULL, true},
+    /* CHANNEL stays headerful — destroy frees a mutex + 2 condvars
+     * + slots buffer, and the safe-clone primitives that Map uses
+     * for the cheney/promote path don't yet cover condvar
+     * destroy/init pairs. */
     [OSTY_GC_KIND_CHANNEL - OSTY_GC_KIND_LIST] =
-        {osty_rt_chan_trace, osty_rt_chan_destroy},
+        {osty_rt_chan_trace, osty_rt_chan_destroy, false},
     [OSTY_GC_KIND_GENERIC_ENUM_PTR - OSTY_GC_KIND_LIST] =
-        {osty_rt_enum_ptr_payload_trace, NULL},
+        {osty_rt_enum_ptr_payload_trace, NULL, true},
 };
 
 _Static_assert(OSTY_GC_KIND_LIST == 1024,
@@ -2982,6 +3001,17 @@ typedef struct osty_gc_micro_header {
 _Static_assert(sizeof(osty_gc_micro_header) == 16,
                "tiny-tag young micro-header must stay at 16 bytes");
 
+/* Map's payload + micro-header must stay below the humongous
+ * threshold so it remains young-arena eligible. The struct is
+ * large (~900 B with the inline-index arrays + the embedded
+ * pthread_mutex_t) and pthread_mutex_t size varies by platform —
+ * a single new field could push it over and silently disable the
+ * young path. This guard fails at compile time before that
+ * happens. */
+_Static_assert(sizeof(osty_rt_map) + sizeof(osty_gc_micro_header) <=
+                   (size_t)OSTY_GC_HUMONGOUS_THRESHOLD_BYTES,
+               "osty_rt_map outgrew the young arena humongous threshold");
+
 enum {
     OSTY_GC_FORWARD_TAG_UNFORWARDED = 0,
     OSTY_GC_FORWARD_TAG_FORWARDED = 1,
@@ -3159,75 +3189,35 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
     return (void *)((unsigned char *)slot + sizeof(osty_gc_micro_header));
 }
 
-/* Phase 7 step 1: which kinds are safe to live in the young arena
- * without a headerful header.
+/* Whether a (kind, payload_size, trace, destroy) tuple may live in
+ * the no-header young arena.
  *
- * Rules (in order — first failure short-circuits):
- *   1. Feature flag must be on. With the flag off the young arena is
- *      dormant and every alloc takes the headerful path, preserving
- *      pre-Phase-5 behaviour exactly.
- *   2. The kind must be one of the young-safe kinds — STRING, BYTES,
- *      LIST, CLOSURE_ENV, SET, or GENERIC with the NONE pattern
- *      (NULL trace + NULL destroy). STRING/BYTES are immutable byte
- *      payloads. LIST has a destroy callback (frees spilled `data` +
- *      `gc_offsets`), but Phase E follow-up adds a from-space
- *      dead-list scan in cheney_minor that runs the destroy work just
- *      before the arena swap reclaims the bytes — making LIST safe to
- *      route through the no-header path despite the external resource.
- *      The scan also handles the self-referential `data` ptr fixup on
- *      the to-space copy when a forwarded List was inline.
- *      CLOSURE_ENV has no destroy callback (captures live inline in
- *      the flexible array) and trace just walks `captures[]` under
- *      the `pointer_bitmap`. The mutator contract is that captures
- *      are populated synchronously at construction (single basic
- *      block in LLVM emit) before the env escapes to a slot that
- *      could trigger root_bind — so promote-on-bind copies a fully
- *      populated env to OLD and post-promote stale-pointer writes
- *      do not occur in production.
- *      GENERIC NONE pattern (e.g. `osty_rt_enum_alloc_scalar_v1` —
- *      unboxed enum scalar payload) has no trace or destroy, so the
- *      micro-header carries everything cheney needs (opaque copy +
- *      no destroy on dead-from-space).
- *      GENERIC_ENUM_PTR (boxed enum payload — `Option<ptr>` /
- *      `Result<ptr, _>`) has its own dedicated kind so the trace
- *      (`osty_rt_enum_ptr_payload_trace`) is reachable from
- *      `osty_gc_kind_table` at cheney scan time. No destroy. The
- *      remaining GENERIC pattern (TASK_HANDLE) keeps using
- *      OSTY_GC_KIND_GENERIC; same pthread-teardown rationale as
- *      Map/Channel below.
- *      SET has a destroy callback (frees the `items` heap buffer).
- *      It rides the same dead-from-space scan as LIST: the cheney
- *      pass calls `free(set->items)` on UNFORWARDED young Sets
- *      before the arena swap reclaims their micro-header bytes.
- *      No self-ref fixup needed — Set has no inline-storage union;
- *      `items` is always a separate heap allocation.
- *      MAP has a destroy callback (frees keys/values/index buffers
- *      and the recursive mutex). Its memcpy-on-promote is normally
- *      UB for the embedded `pthread_mutex_t`, so cheney_forward and
- *      promote_young_to_old both special-case MAP: they re-init the
- *      destination's mutex and destroy the source's, mirroring
- *      `osty_gc_clone_map_header_to_bump_region`. They also fix up
- *      the inline-index self-refs and null the source's
- *      keys/values/index pointers so dead-from-space's free path
- *      can't double-free a forwarded Map's buffers. The
- *      dead-from-space scan calls `osty_rt_map_destroy` directly on
- *      UNFORWARDED young Maps.
- *
- *      Why not the other kinds:
- *        - CHANNEL: destroy frees mutex + 2 condvars + slot buffer.
- *          Same pthread-teardown family as Map but the safe-clone
- *          surface is larger (cond_destroy doesn't have an
- *          equivalent re-init helper) and channels are typically
- *          long-lived, so the perf payoff is smaller.
+ * Rules (first failure short-circuits):
+ *   1. Feature flag (`OSTY_GC_TINYTAG_YOUNG`) must be on.
+ *   2. Kind eligibility:
+ *        - For non-GENERIC kinds, look up `young_eligible` on the
+ *          kind descriptor (`osty_gc_kind_table`). Each row carries
+ *          its own bit; new young-eligible kinds set this true at
+ *          their table row instead of editing this predicate.
+ *        - For OSTY_GC_KIND_GENERIC, look up the matching pattern
+ *          row in `osty_gc_generic_patterns` via (trace, destroy).
+ *          The NONE pattern (NULL/NULL) is young-eligible; ENUM_PTR
+ *          uses its own dedicated kind (KIND_GENERIC_ENUM_PTR) and
+ *          TASK_HANDLE has a pthread-rich destroy that the young
+ *          arena's safe-clone primitives don't yet cover.
  *   3. Payload size must fit comfortably under the humongous
  *      threshold. Humongous allocs already take a separate path in
  *      the headerful allocator and have no benefit from being
  *      bump-allocated.
  *
- * `trace` and `destroy` are passed through so the GENERIC-pattern
- * filter can reject ENUM_PTR (non-NULL trace) and TASK_HANDLE
- * (non-NULL destroy). For non-GENERIC kinds the pair is determined
- * by `osty_gc_kind_table` so the params are ignored. */
+ * `trace` and `destroy` are passed through so the GENERIC arm can
+ * resolve the per-instance pattern. For non-GENERIC kinds the pair
+ * is determined by the kind table and the params are ignored.
+ *
+ * Why each currently-eligible kind is safe — see the kind-table
+ * comment block and the matching cheney_forward / promote /
+ * dead-from-space special cases for the per-kind safe-clone +
+ * cleanup invariants. */
 static bool osty_gc_young_eligible(int64_t object_kind, size_t payload_size,
                                    osty_gc_trace_fn trace,
                                    osty_gc_destroy_fn destroy) {
@@ -3235,20 +3225,16 @@ static bool osty_gc_young_eligible(int64_t object_kind, size_t payload_size,
         return false;
     }
     if (object_kind == OSTY_GC_KIND_GENERIC) {
-        /* Only the NONE pattern (no trace, no destroy) is young-safe;
-         * ENUM_PTR / TASK_HANDLE need the per-instance pattern at
-         * cheney time, which the 16-byte micro-header doesn't carry. */
-        if (trace != NULL || destroy != NULL) {
+        uint8_t pattern = osty_gc_pattern_of(trace, destroy);
+        if (!osty_gc_generic_patterns[pattern].young_eligible) {
             return false;
         }
-    } else if (object_kind != OSTY_GC_KIND_STRING &&
-               object_kind != OSTY_GC_KIND_BYTES &&
-               object_kind != OSTY_GC_KIND_LIST &&
-               object_kind != OSTY_GC_KIND_CLOSURE_ENV &&
-               object_kind != OSTY_GC_KIND_SET &&
-               object_kind != OSTY_GC_KIND_GENERIC_ENUM_PTR &&
-               object_kind != OSTY_GC_KIND_MAP) {
-        return false;
+    } else {
+        const osty_gc_kind_descriptor *desc =
+            osty_gc_kind_descriptor_lookup(object_kind);
+        if (desc == NULL || !desc->young_eligible) {
+            return false;
+        }
     }
     if (payload_size == 0 ||
         payload_size > (size_t)OSTY_GC_HUMONGOUS_THRESHOLD_BYTES) {
@@ -3275,11 +3261,11 @@ static void *osty_gc_allocate_young_if_eligible(size_t byte_size,
     return osty_gc_allocate_young(byte_size, object_kind);
 }
 
-/* Forward decls for Map's safe-clone path used by `cheney_forward`,
- * `promote_young_to_old`, and `cheney_destroy_dead_from_space` —
- * defined further down with the rest of the Map runtime. */
-static void osty_rt_map_mutex_init_or_abort(osty_rt_map *map);
-static void osty_rt_map_destroy(void *payload);
+/* Forward decl for Map's safe-clone helper — used by
+ * `cheney_forward`, `promote_young_to_old`, and
+ * `osty_gc_clone_map_header_to_bump_region`. Defined further down
+ * with the rest of the Map runtime. */
+static void osty_gc_map_safe_handoff(osty_rt_map *src, osty_rt_map *dst);
 
 /* Phase 6 step 1: Cheney semi-space copy mechanic.
  *
@@ -3365,41 +3351,11 @@ static void *osty_gc_cheney_forward(void *from_payload) {
             dst_list->data = dst_list->inline_storage;
         }
     } else if (object_kind == OSTY_GC_KIND_MAP) {
-        /* Map carries a `pthread_mutex_t` inline. Bit-copying it via
-         * memcpy is UB (the kernel-tracked state is keyed on the
-         * mutex address; aliased copies would race the destroy
-         * sequence). Re-init the to-space mutex from scratch and
-         * destroy the from-space original — same handoff
-         * `osty_gc_clone_map_header_to_bump_region` uses for
-         * headerful compaction.
-         *
-         * The inline-index self-refs (`index_inline[]` /
-         * `index_hashes_inline[]`) need the same re-anchoring as
-         * List's `inline_storage`: a forwarded inline-mode Map's
-         * `index_slots` would otherwise point at the from-space
-         * inline region (about to be reclaimed by the arena swap).
-         *
-         * Null the from-space's owned-buffer pointers so that any
-         * later traversal of from-space (today only the
-         * dead-from-space scan, which already filters by tag) can
-         * never reach a buffer the to-space copy still owns. */
-        osty_rt_map *src_map = (osty_rt_map *)from_payload;
-        osty_rt_map *dst_map = (osty_rt_map *)to_payload;
-        if (dst_map->index_slots == src_map->index_inline) {
-            dst_map->index_slots = dst_map->index_inline;
-        }
-        if (dst_map->index_hashes == src_map->index_hashes_inline) {
-            dst_map->index_hashes = dst_map->index_hashes_inline;
-        }
-        if (src_map->mu_init) {
-            osty_rt_map_mutex_init_or_abort(dst_map);
-            osty_rt_rmu_destroy(&src_map->mu);
-            src_map->mu_init = 0;
-        }
-        src_map->keys = NULL;
-        src_map->values = NULL;
-        src_map->index_slots = NULL;
-        src_map->index_hashes = NULL;
+        /* Bit-copying the embedded pthread_mutex_t is UB — see
+         * osty_gc_map_safe_handoff for the destroy/re-init dance
+         * and inline-index self-ref re-anchoring. */
+        osty_gc_map_safe_handoff((osty_rt_map *)from_payload,
+                                 (osty_rt_map *)to_payload);
     }
     src->forward_or_meta = (uint64_t)(uintptr_t)to_payload |
                            OSTY_GC_FORWARD_TAG_FORWARDED;
@@ -3633,29 +3589,9 @@ static void *osty_gc_promote_young_to_old(void *young_payload) {
             dst_list->data = dst_list->inline_storage;
         }
     } else if (object_kind == OSTY_GC_KIND_MAP) {
-        /* Same safe-clone Map handoff as cheney_forward (see comment
-         * there for rationale): re-anchor inline-index self-refs,
-         * destroy the from-space mutex + init the OLD copy's, null
-         * the source's owned-buffer pointers so the from-space
-         * payload can be reclaimed without double-freeing what the
-         * OLD copy now owns. */
-        osty_rt_map *src_map = (osty_rt_map *)young_payload;
-        osty_rt_map *dst_map = (osty_rt_map *)new_payload;
-        if (dst_map->index_slots == src_map->index_inline) {
-            dst_map->index_slots = dst_map->index_inline;
-        }
-        if (dst_map->index_hashes == src_map->index_hashes_inline) {
-            dst_map->index_hashes = dst_map->index_hashes_inline;
-        }
-        if (src_map->mu_init) {
-            osty_rt_map_mutex_init_or_abort(dst_map);
-            osty_rt_rmu_destroy(&src_map->mu);
-            src_map->mu_init = 0;
-        }
-        src_map->keys = NULL;
-        src_map->values = NULL;
-        src_map->index_slots = NULL;
-        src_map->index_hashes = NULL;
+        /* Same handoff as cheney_forward — see osty_gc_map_safe_handoff. */
+        osty_gc_map_safe_handoff((osty_rt_map *)young_payload,
+                                 (osty_rt_map *)new_payload);
     }
     micro->forward_or_meta = (uint64_t)(uintptr_t)new_payload |
                              OSTY_GC_FORWARD_TAG_PROMOTED;
@@ -4346,6 +4282,42 @@ static void osty_rt_map_mutex_init_or_abort(osty_rt_map *map) {
         osty_rt_abort("map lock: mutex_init failed");
     }
     map->mu_init = 1;
+}
+
+/* Move Map ownership from `src` to `dst` after a bit-copy of the
+ * payload bytes. Used by cheney_forward (young → young) and
+ * promote_young_to_old (young → OLD). Constraints handled here:
+ *   - The embedded pthread_mutex_t can't be byte-copied (the kernel
+ *     state is keyed on the mutex address). Init a fresh mutex on
+ *     `dst` and destroy `src`'s.
+ *   - `index_slots` / `index_hashes` may alias the inline arrays
+ *     (`index_inline[]` / `index_hashes_inline[]`). After memcpy,
+ *     `dst`'s aliased pointers still point at `src`'s inline region;
+ *     re-anchor to `dst`'s own.
+ *   - Null `src`'s owned-buffer pointers so the from-space copy
+ *     can't be reached by any later traversal that would double-free
+ *     buffers `dst` now owns.
+ *
+ * The headerful compactor's `osty_gc_clone_map_header_to_bump_region`
+ * does field-by-field copy (not memcpy) and relies on `src`'s
+ * destroy freeing its non-stolen index buffers — so it can't share
+ * this helper without changing those semantics. */
+static void osty_gc_map_safe_handoff(osty_rt_map *src, osty_rt_map *dst) {
+    if (dst->index_slots == src->index_inline) {
+        dst->index_slots = dst->index_inline;
+    }
+    if (dst->index_hashes == src->index_hashes_inline) {
+        dst->index_hashes = dst->index_hashes_inline;
+    }
+    if (src->mu_init) {
+        osty_rt_map_mutex_init_or_abort(dst);
+        osty_rt_rmu_destroy(&src->mu);
+        src->mu_init = 0;
+    }
+    src->keys = NULL;
+    src->values = NULL;
+    src->index_slots = NULL;
+    src->index_hashes = NULL;
 }
 
 /* OSTY_HOT_INLINE: called from every Map probe iteration after the
