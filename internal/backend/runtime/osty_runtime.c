@@ -400,7 +400,17 @@ _Static_assert(OSTY_GC_GEN_YOUNG == 0,
 #define OSTY_GC_PROMOTE_AGE_DEFAULT 3
 #define OSTY_GC_PROMOTE_AGE_ENV "OSTY_GC_PROMOTE_AGE"
 #define OSTY_GC_NURSERY_LIMIT_ENV "OSTY_GC_NURSERY_BYTES"
-#define OSTY_GC_NURSERY_LIMIT_DEFAULT 8192
+/* 1 MiB nursery (was 8 KiB). The 8 KiB pre-#977 default was small
+ * enough to mask correctness bugs (every allocation triggered a
+ * cheney pass) but expensive — big-map at 200 K inserts × 1 M
+ * lookups never finished within an hour because each iteration
+ * paid for a full collection. Now that Map joined the no-header
+ * young arena (#977) and cheney handles every kind safely,
+ * collecting only every megabyte of allocation matches what real
+ * generational GCs (Go, Java young gen) ship with. Tests that
+ * pin specific cheney behaviour still set the env var explicitly
+ * — those overrides keep working. */
+#define OSTY_GC_NURSERY_LIMIT_DEFAULT (1 << 20)
 
 typedef struct osty_gc_header {
     /* Global doubly-linked list — used by major collection, sweep, and
@@ -931,7 +941,16 @@ static int64_t osty_gc_allocated_since_collect = 0;
 static bool osty_gc_safepoint_stress_loaded = false;
 static bool osty_gc_safepoint_stress_enabled = false;
 static bool osty_gc_pressure_limit_loaded = false;
-static int64_t osty_gc_pressure_limit_bytes = 32768;
+/* 16 MiB major-collect pressure threshold (was 32 KiB). Same
+ * rationale as the nursery bump above: the tiny default fired
+ * a STW major on every Map insertion past the first few. With
+ * Map young-eligible (#977), most allocations turn over in the
+ * young arena and the major collector only needs to run when
+ * objects survive past the promote age and pile up in OLD. The
+ * test suite overrides via `OSTY_GC_THRESHOLD_BYTES=1` (single-
+ * step semantics) or specific byte counts where collection
+ * timing matters. */
+static int64_t osty_gc_pressure_limit_bytes = (16 << 20);
 static bool osty_gc_collection_requested = false;
 static int64_t osty_gc_pre_write_count = 0;
 static int64_t osty_gc_pre_write_managed_count = 0;
@@ -8794,21 +8813,26 @@ void osty_rt_map_clear(void *raw_map) {
 }
 
 void *osty_rt_map_keys(void *raw_map) {
+    if (raw_map == NULL) {
+        osty_rt_abort("map is null");
+    }
+    /* Root-bind BEFORE casting `raw_map` AND `out`. With Map
+     * young-eligible (#977), `root_bind` auto-promotes the live young
+     * Map to OLD via the safe-clone handoff that NULLs the source's
+     * keys/values pointers. If we cast first, `map` freezes the stale
+     * young address and the subsequent `map->keys` read finds NULL →
+     * `list_copy_initialized` aborts with "list copy source is null".
+     * Bind first so the cast resolves through `osty_gc_load_v1`'s
+     * PROMOTED follow and returns the OLD payload. Same reorder also
+     * applies to `out` (List young-eligibility hit the identical
+     * pattern). */
+    osty_gc_root_bind_v1(raw_map);
+    void *out = osty_rt_list_new();
+    osty_gc_root_bind_v1(out);
     osty_rt_map *map = osty_rt_map_cast(raw_map);
     if (map == NULL) {
         osty_rt_abort("map is null");
     }
-    void *out = osty_rt_list_new();
-    /* Root-bind BEFORE casting `out`. With List young-eligible,
-     * root_bind auto-promotes the freshly-allocated young list to
-     * OLD; doing the cast after means the cast resolves through
-     * `osty_gc_load_v1`'s PROMOTED tag follow and returns the OLD
-     * payload. Casting first would freeze a stale young pointer
-     * in `keys` and every subsequent op would write to the dead
-     * from-space copy. Same reorder applied to every helper that
-     * pairs `cast → root_bind` on the same raw payload. */
-    osty_gc_root_bind_v1(raw_map);
-    osty_gc_root_bind_v1(out);
     osty_rt_list *keys = osty_rt_list_cast(out);
     int64_t count = 0;
     osty_rt_map_lock(raw_map);
