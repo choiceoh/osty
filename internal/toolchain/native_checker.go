@@ -24,7 +24,7 @@ var (
 
 // Version returns the toolchain version stamp used to scope managed artifacts.
 // Release builds can override this variable via -ldflags.
-var VersionStamp = "osty-dev"
+var VersionStamp = "v0.0.1-beta"
 
 func Version() string {
 	return VersionStamp
