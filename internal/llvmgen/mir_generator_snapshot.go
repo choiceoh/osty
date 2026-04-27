@@ -7949,3 +7949,34 @@ func mirLLVMBuiltinAggregatePart(part string) string {
 	}
 	return b.String()
 }
+
+// §18 (cont'd) — LLVM datalayout mapping ported from
+// internal/llvmgen/target.go.
+
+// Osty: mirDataLayoutFor
+func mirDataLayoutFor(target string) string {
+	isWindows := llvmStrings.Contains(target, "-windows-msvc") || llvmStrings.Contains(target, "-pc-windows-msvc")
+	if isWindows {
+		if llvmStrings.HasPrefix(target, "aarch64") || llvmStrings.HasPrefix(target, "arm64") {
+			return "e-m:w-p:64:64-i32:32-i64:64-i128:128-n32:64-S128"
+		}
+		return "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+	}
+	isApple := llvmStrings.Contains(target, "-apple-darwin") || llvmStrings.Contains(target, "-apple-macos")
+	if isApple {
+		if llvmStrings.HasPrefix(target, "aarch64") || llvmStrings.HasPrefix(target, "arm64") {
+			return "e-m:o-i64:64-i128:128-n32:64-S128"
+		}
+		return "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+	}
+	isLinux := llvmStrings.Contains(target, "-linux-gnu") || llvmStrings.Contains(target, "-linux-musl")
+	if isLinux {
+		if llvmStrings.HasPrefix(target, "aarch64") {
+			return "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"
+		}
+		if llvmStrings.HasPrefix(target, "x86_64") {
+			return "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+		}
+	}
+	return ""
+}
