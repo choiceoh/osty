@@ -2963,6 +2963,17 @@ typedef struct osty_gc_micro_header {
 _Static_assert(sizeof(osty_gc_micro_header) == 16,
                "tiny-tag young micro-header must stay at 16 bytes");
 
+/* Map's payload + micro-header must stay below the humongous
+ * threshold so it remains young-arena eligible. The struct is
+ * large (~900 B with the inline-index arrays + the embedded
+ * pthread_mutex_t) and pthread_mutex_t size varies by platform —
+ * a single new field could push it over and silently disable the
+ * young path. This guard fails at compile time before that
+ * happens. */
+_Static_assert(sizeof(osty_rt_map) + sizeof(osty_gc_micro_header) <=
+                   (size_t)OSTY_GC_HUMONGOUS_THRESHOLD_BYTES,
+               "osty_rt_map outgrew the young arena humongous threshold");
+
 enum {
     OSTY_GC_FORWARD_TAG_UNFORWARDED = 0,
     OSTY_GC_FORWARD_TAG_FORWARDED = 1,
@@ -3256,11 +3267,11 @@ static void *osty_gc_allocate_young_if_eligible(size_t byte_size,
     return osty_gc_allocate_young(byte_size, object_kind);
 }
 
-/* Forward decls for Map's safe-clone path used by `cheney_forward`,
- * `promote_young_to_old`, and `cheney_destroy_dead_from_space` —
- * defined further down with the rest of the Map runtime. */
-static void osty_rt_map_mutex_init_or_abort(osty_rt_map *map);
-static void osty_rt_map_destroy(void *payload);
+/* Forward decl for Map's safe-clone helper — used by
+ * `cheney_forward`, `promote_young_to_old`, and
+ * `osty_gc_clone_map_header_to_bump_region`. Defined further down
+ * with the rest of the Map runtime. */
+static void osty_gc_map_safe_handoff(osty_rt_map *src, osty_rt_map *dst);
 
 /* Phase 6 step 1: Cheney semi-space copy mechanic.
  *
@@ -3346,41 +3357,11 @@ static void *osty_gc_cheney_forward(void *from_payload) {
             dst_list->data = dst_list->inline_storage;
         }
     } else if (object_kind == OSTY_GC_KIND_MAP) {
-        /* Map carries a `pthread_mutex_t` inline. Bit-copying it via
-         * memcpy is UB (the kernel-tracked state is keyed on the
-         * mutex address; aliased copies would race the destroy
-         * sequence). Re-init the to-space mutex from scratch and
-         * destroy the from-space original — same handoff
-         * `osty_gc_clone_map_header_to_bump_region` uses for
-         * headerful compaction.
-         *
-         * The inline-index self-refs (`index_inline[]` /
-         * `index_hashes_inline[]`) need the same re-anchoring as
-         * List's `inline_storage`: a forwarded inline-mode Map's
-         * `index_slots` would otherwise point at the from-space
-         * inline region (about to be reclaimed by the arena swap).
-         *
-         * Null the from-space's owned-buffer pointers so that any
-         * later traversal of from-space (today only the
-         * dead-from-space scan, which already filters by tag) can
-         * never reach a buffer the to-space copy still owns. */
-        osty_rt_map *src_map = (osty_rt_map *)from_payload;
-        osty_rt_map *dst_map = (osty_rt_map *)to_payload;
-        if (dst_map->index_slots == src_map->index_inline) {
-            dst_map->index_slots = dst_map->index_inline;
-        }
-        if (dst_map->index_hashes == src_map->index_hashes_inline) {
-            dst_map->index_hashes = dst_map->index_hashes_inline;
-        }
-        if (src_map->mu_init) {
-            osty_rt_map_mutex_init_or_abort(dst_map);
-            osty_rt_rmu_destroy(&src_map->mu);
-            src_map->mu_init = 0;
-        }
-        src_map->keys = NULL;
-        src_map->values = NULL;
-        src_map->index_slots = NULL;
-        src_map->index_hashes = NULL;
+        /* Bit-copying the embedded pthread_mutex_t is UB — see
+         * osty_gc_map_safe_handoff for the destroy/re-init dance
+         * and inline-index self-ref re-anchoring. */
+        osty_gc_map_safe_handoff((osty_rt_map *)from_payload,
+                                 (osty_rt_map *)to_payload);
     }
     src->forward_or_meta = (uint64_t)(uintptr_t)to_payload |
                            OSTY_GC_FORWARD_TAG_FORWARDED;
@@ -3614,29 +3595,9 @@ static void *osty_gc_promote_young_to_old(void *young_payload) {
             dst_list->data = dst_list->inline_storage;
         }
     } else if (object_kind == OSTY_GC_KIND_MAP) {
-        /* Same safe-clone Map handoff as cheney_forward (see comment
-         * there for rationale): re-anchor inline-index self-refs,
-         * destroy the from-space mutex + init the OLD copy's, null
-         * the source's owned-buffer pointers so the from-space
-         * payload can be reclaimed without double-freeing what the
-         * OLD copy now owns. */
-        osty_rt_map *src_map = (osty_rt_map *)young_payload;
-        osty_rt_map *dst_map = (osty_rt_map *)new_payload;
-        if (dst_map->index_slots == src_map->index_inline) {
-            dst_map->index_slots = dst_map->index_inline;
-        }
-        if (dst_map->index_hashes == src_map->index_hashes_inline) {
-            dst_map->index_hashes = dst_map->index_hashes_inline;
-        }
-        if (src_map->mu_init) {
-            osty_rt_map_mutex_init_or_abort(dst_map);
-            osty_rt_rmu_destroy(&src_map->mu);
-            src_map->mu_init = 0;
-        }
-        src_map->keys = NULL;
-        src_map->values = NULL;
-        src_map->index_slots = NULL;
-        src_map->index_hashes = NULL;
+        /* Same handoff as cheney_forward — see osty_gc_map_safe_handoff. */
+        osty_gc_map_safe_handoff((osty_rt_map *)young_payload,
+                                 (osty_rt_map *)new_payload);
     }
     micro->forward_or_meta = (uint64_t)(uintptr_t)new_payload |
                              OSTY_GC_FORWARD_TAG_PROMOTED;
@@ -4327,6 +4288,42 @@ static void osty_rt_map_mutex_init_or_abort(osty_rt_map *map) {
         osty_rt_abort("map lock: mutex_init failed");
     }
     map->mu_init = 1;
+}
+
+/* Move Map ownership from `src` to `dst` after a bit-copy of the
+ * payload bytes. Used by cheney_forward (young → young) and
+ * promote_young_to_old (young → OLD). Constraints handled here:
+ *   - The embedded pthread_mutex_t can't be byte-copied (the kernel
+ *     state is keyed on the mutex address). Init a fresh mutex on
+ *     `dst` and destroy `src`'s.
+ *   - `index_slots` / `index_hashes` may alias the inline arrays
+ *     (`index_inline[]` / `index_hashes_inline[]`). After memcpy,
+ *     `dst`'s aliased pointers still point at `src`'s inline region;
+ *     re-anchor to `dst`'s own.
+ *   - Null `src`'s owned-buffer pointers so the from-space copy
+ *     can't be reached by any later traversal that would double-free
+ *     buffers `dst` now owns.
+ *
+ * The headerful compactor's `osty_gc_clone_map_header_to_bump_region`
+ * does field-by-field copy (not memcpy) and relies on `src`'s
+ * destroy freeing its non-stolen index buffers — so it can't share
+ * this helper without changing those semantics. */
+static void osty_gc_map_safe_handoff(osty_rt_map *src, osty_rt_map *dst) {
+    if (dst->index_slots == src->index_inline) {
+        dst->index_slots = dst->index_inline;
+    }
+    if (dst->index_hashes == src->index_hashes_inline) {
+        dst->index_hashes = dst->index_hashes_inline;
+    }
+    if (src->mu_init) {
+        osty_rt_map_mutex_init_or_abort(dst);
+        osty_rt_rmu_destroy(&src->mu);
+        src->mu_init = 0;
+    }
+    src->keys = NULL;
+    src->values = NULL;
+    src->index_slots = NULL;
+    src->index_hashes = NULL;
 }
 
 /* OSTY_HOT_INLINE: called from every Map probe iteration after the
