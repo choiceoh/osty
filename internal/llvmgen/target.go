@@ -62,35 +62,10 @@ func CanonicalLLVMTarget(target string) string {
 
 // dataLayoutFor returns the LLVM datalayout string matching target.
 // Returns "" when no bundled mapping covers the triple; callers should
-// skip emission in that case rather than guess.
-//
-// Datalayouts are lifted verbatim from clang's
-// `llvm::TargetMachine::createDataLayout` output for the corresponding
-// triple so they round-trip cleanly through `llc`, `opt`, and `clang`.
+// skip emission in that case rather than guess. Delegates to the
+// Osty-sourced `mirDataLayoutFor` (`toolchain/mir_generator.osty`).
 func dataLayoutFor(target string) string {
-	switch {
-	case strings.Contains(target, "-windows-msvc"),
-		strings.Contains(target, "-pc-windows-msvc"):
-		if strings.HasPrefix(target, "aarch64") || strings.HasPrefix(target, "arm64") {
-			return "e-m:w-p:64:64-i32:32-i64:64-i128:128-n32:64-S128"
-		}
-		return "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-	case strings.Contains(target, "-apple-darwin"),
-		strings.Contains(target, "-apple-macos"):
-		if strings.HasPrefix(target, "aarch64") || strings.HasPrefix(target, "arm64") {
-			return "e-m:o-i64:64-i128:128-n32:64-S128"
-		}
-		return "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-	case strings.Contains(target, "-linux-gnu"),
-		strings.Contains(target, "-linux-musl"):
-		switch {
-		case strings.HasPrefix(target, "aarch64"):
-			return "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"
-		case strings.HasPrefix(target, "x86_64"):
-			return "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-		}
-	}
-	return ""
+	return mirDataLayoutFor(target)
 }
 
 // withDataLayout injects a `target datalayout = ...` directive
