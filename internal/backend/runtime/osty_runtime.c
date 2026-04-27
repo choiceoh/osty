@@ -4578,15 +4578,22 @@ static OSTY_HOT_INLINE void osty_rt_string_measure(const char *value,
         }
     } else if (value != NULL) {
         /* Length fast path via the GC header. Every heap-allocated
-         * string carries `byte_size = len + 1` (alloc size includes
-         * the trailing NUL), so reading the header gives us length
-         * in O(1) — no `strlen` walk, no per-pointer cache lookup.
+         * string carries its allocated byte size (= len + 1 for the
+         * trailing NUL), so reading the header gives us length in
+         * O(1) — no `strlen` walk, no per-pointer cache lookup.
          *
-         * Arena allocations (the dominant case post-#881) put the
-         * header at exactly `payload - sizeof(header)`. Non-arena
-         * payloads — `.rodata` string literals, humongous strings,
-         * forwarded objects — skip this path and fall through to
-         * the existing cache + strlen logic.
+         * Two paths:
+         *   1. Headerful arena (the dominant case before #977 made
+         *      String young-eligible) — header is at
+         *      `payload - sizeof(osty_gc_header)`.
+         *   2. Tinytag young arena (post-#977 every freshly Concat'd
+         *      key, every intToStr return, every Split piece that's
+         *      heap-bound) — micro-header is at
+         *      `payload - sizeof(osty_gc_micro_header)` and the
+         *      `byte_size` field has the same `len + 1` semantic.
+         *
+         * `.rodata` string literals, humongous strings, and forwarded
+         * objects fall through to the cache + strlen path.
          *
          * Hash still uses the 256-slot per-pointer cache; deriving
          * hash from the header would require an extra `cached_hash`
@@ -4600,6 +4607,22 @@ static OSTY_HOT_INLINE void osty_rt_string_measure(const char *value,
                 hdr->object_kind == OSTY_GC_KIND_STRING &&
                 hdr->byte_size > 0) {
                 len = (size_t)hdr->byte_size - 1;
+                len_from_header = true;
+            }
+        } else if (osty_gc_arena_is_young_page((void *)value)) {
+            osty_gc_micro_header *micro =
+                osty_gc_micro_header_for_payload((void *)value);
+            uint64_t fom = micro->forward_or_meta;
+            uint64_t tag = fom & OSTY_GC_FORWARD_TAG_MASK;
+            /* UNFORWARDED tinytag-young string — byte_size is
+             * authoritative. FORWARDED / PROMOTED would mean the
+             * payload moved (the to-space copy has its own header
+             * with a fresh byte_size), so trust micro->byte_size
+             * only when the slot isn't tagged. */
+            if (tag == OSTY_GC_FORWARD_TAG_UNFORWARDED &&
+                micro->object_kind == OSTY_GC_KIND_STRING &&
+                micro->byte_size > 0) {
+                len = (size_t)micro->byte_size - 1;
                 len_from_header = true;
             }
         }
