@@ -7280,12 +7280,12 @@ int main(void) {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
 	want := strings.Join([]string{
-		"1",            // young alloc landed in young arena
-		"2",            // forward tag = PROMOTED after root_bind
-		"0",            // OLD copy carries OSTY_GC_GENERIC_NONE
+		"1",                // young alloc landed in young arena
+		"2",                // forward tag = PROMOTED after root_bind
+		"0",                // OLD copy carries OSTY_GC_GENERIC_NONE
 		"deadbeefcafebabe", // payload bytes survived young → OLD memcpy
-		"1 1",          // collect kept the rooted OLD copy alive
-		"0",            // release + collect reclaimed the OLD copy
+		"1 1",              // collect kept the rooted OLD copy alive
+		"0",                // release + collect reclaimed the OLD copy
 		"",
 	}, "\n")
 	if got := string(runOutput); got != want {
@@ -7399,12 +7399,12 @@ int main(void) {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
 	want := strings.Join([]string{
-		"1",         // fresh Set landed in young arena
-		"2",         // forward tag = PROMOTED after root_bind
-		"4",         // post-promote insert via stale young handle worked (load_v1 follow)
-		"1 1 1 1",   // all four items contained
-		"4",         // items survived forced collect (still rooted)
-		"1",         // dead-Set cleanup fired on the unrooted transient
+		"1",       // fresh Set landed in young arena
+		"2",       // forward tag = PROMOTED after root_bind
+		"4",       // post-promote insert via stale young handle worked (load_v1 follow)
+		"1 1 1 1", // all four items contained
+		"4",       // items survived forced collect (still rooted)
+		"1",       // dead-Set cleanup fired on the unrooted transient
 		"",
 	}, "\n")
 	if got := string(runOutput); got != want {
@@ -8164,10 +8164,10 @@ int main(void) {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
 	want := strings.Join([]string{
-		"tag-after-bind:2",      // PROMOTED tag stamped
-		"classified-young:1",    // full-mmap predicate keeps stale addr classified
-		"tag-after-swaps:2",     // PROMOTED tag survives swaps (memory not zeroed)
-		"live-after-release:0",  // release followed redirect, OLD swept
+		"tag-after-bind:2",     // PROMOTED tag stamped
+		"classified-young:1",   // full-mmap predicate keeps stale addr classified
+		"tag-after-swaps:2",    // PROMOTED tag survives swaps (memory not zeroed)
+		"live-after-release:0", // release followed redirect, OLD swept
 		"",
 	}, "\n")
 	if got := string(runOutput); got != want {
@@ -8386,12 +8386,12 @@ int main(void) {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
 	want := strings.Join([]string{
-		"header_size:80",         // shrunk from 96 (16 B saved by dropping trace/destroy)
-		"enum_ptr_pattern:0",     // KIND_GENERIC_ENUM_PTR uses kind_table dispatch; header pattern stays NONE
-		"enum_scalar_pattern:0",  // NONE = 0
-		"live_after_collect:2",   // both rooted
-		"fallback_bumped:1",      // enum_scalar (KIND_GENERIC) still fires the GENERIC fallback path
-		"live_after_release:0",   // both swept
+		"header_size:80",        // shrunk from 96 (16 B saved by dropping trace/destroy)
+		"enum_ptr_pattern:0",    // KIND_GENERIC_ENUM_PTR uses kind_table dispatch; header pattern stays NONE
+		"enum_scalar_pattern:0", // NONE = 0
+		"live_after_collect:2",  // both rooted
+		"fallback_bumped:1",     // enum_scalar (KIND_GENERIC) still fires the GENERIC fallback path
+		"live_after_release:0",  // both swept
 		"",
 	}, "\n")
 	if got := string(runOutput); got != want {
