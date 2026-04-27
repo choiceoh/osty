@@ -7749,6 +7749,113 @@ int main(void) {
 	}
 }
 
+// TestBundledRuntimeChannelTraceForwardsYoungChildren pins the
+// round-trip of a young managed payload through a ptr-typed
+// channel across cheney_minor. Before this PR, chan_trace used
+// mark_payload instead of mark_slot_v1 — under CHENEY mode the
+// young child was never forwarded and the slot stayed stale.
+// load_v1's PROMOTED/FORWARDED follow masked the bug under
+// single-cycle pressure, but the slot would resolve to overwritten
+// bytes once enough subsequent allocation churn recycled the
+// young arena. With the trace fix the slot gets rewritten
+// in-cycle.
+func TestBundledRuntimeChannelTraceForwardsYoungChildren(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_chan_managed_young_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_chan_managed_young_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_rt_thread_chan_make(int64_t capacity);
+void osty_rt_thread_chan_send_ptr(void *raw, void *value);
+
+typedef struct osty_rt_chan_recv_result {
+    int64_t value;
+    int64_t ok;
+} osty_rt_chan_recv_result;
+osty_rt_chan_recv_result osty_rt_thread_chan_recv_ptr(void *raw);
+
+const char *osty_rt_strings_Repeat(const char *value, int64_t n);
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+void *osty_gc_load_v1(void *value) __asm__(OSTY_GC_SYMBOL("osty.gc.load_v1"));
+
+int64_t osty_gc_debug_arena_is_young_page(void *payload);
+void osty_gc_debug_collect(void);
+
+int main(void) {
+    /* Heap-allocated young String — strings_Repeat returns a fresh
+     * KIND_STRING payload via allocate_managed → young arena. */
+    const char *child = osty_rt_strings_Repeat("ab", 8);
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page((void *)child));
+
+    /* Ptr-typed Channel, also young. Send the young String — slot
+     * holds the int64_t cast of the young String address. */
+    void *chan = osty_rt_thread_chan_make(2);
+    osty_rt_thread_chan_send_ptr(chan, (void *)child);
+
+    /* Root the channel; the String is NOT separately rooted, so its
+     * only liveness path is the channel's slot. With the trace fix,
+     * cheney forwards the young String + rewrites the slot. */
+    osty_gc_root_bind_v1(chan);
+
+    /* Forced collect: cheney processes the (PROMOTED) young channel,
+     * the trace forwards the young String to to-space and rewrites
+     * the slot. */
+    osty_gc_debug_collect();
+
+    /* Recv the String. load_v1 inside recv_ptr follows any forwarding,
+     * but the critical bit is that the channel's slot was rewritten
+     * to the live address — without the trace fix, the slot held a
+     * stale young addr that subsequent young allocs would overwrite. */
+    osty_rt_chan_recv_result r = osty_rt_thread_chan_recv_ptr(chan);
+    if (!r.ok) {
+        printf("recv ok=0\n");
+        return 1;
+    }
+    const char *got = (const char *)(uintptr_t)r.value;
+    /* The string is "abababababababab" (8 * "ab" = 16 chars). Compare
+     * the first 16 bytes to confirm the payload survived intact. */
+    printf("%d\n", strncmp(got, "abababababababab", 16) == 0);
+
+    osty_gc_root_release_v1(chan);
+    osty_gc_debug_collect();
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"1", // young String landed in young arena
+		"1", // recv'd String content matches "abababababababab"
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("chan-managed-young harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
 // Phase 8 step 1 of the tiny-tag young-space landing: end-to-end
 // routing. With the feature flag on, the production allocator entry
 // `osty.gc.alloc_v1` should pick the young arena for eligible kinds
