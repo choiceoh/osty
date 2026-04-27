@@ -1266,13 +1266,6 @@ func (g *generator) emitBuiltinOptionSomeCall(call *ast.CallExpr) (value, bool, 
 // payload, or (0, false) when the type is not a recognized primitive
 // the backend already materializes at this width.
 func scalarSomeBoxByteSize(typ string) (int, bool) {
-	switch typ {
-	case "i64", "double":
-		return 8, true
-	case "i32":
-		return 4, true
-	case "i8", "i1":
-		return 1, true
-	}
-	return 0, false
+	size := mirScalarSomeBoxByteSize(typ)
+	return size, size > 0
 }

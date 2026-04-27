@@ -2158,10 +2158,7 @@ func legacyTypeExpr(name string, start, end token.Pos) ast.Expr {
 }
 
 func splitQualifiedName(name string) []string {
-	if name == "" {
-		return nil
-	}
-	return strings.Split(name, ".")
+	return mirSplitQualifiedName(name)
 }
 
 func legacySpan(span ostyir.Span) (token.Pos, token.Pos) {

@@ -24,12 +24,7 @@ type typeEnv struct {
 }
 
 func llvmBuiltinAggregateName(prefix string, parts ...string) string {
-	names := make([]string, 0, len(parts)+1)
-	names = append(names, prefix)
-	for _, part := range parts {
-		names = append(names, llvmBuiltinAggregatePart(part))
-	}
-	return "%" + strings.Join(names, ".")
+	return mirLlvmBuiltinAggregateName(prefix, parts)
 }
 
 // llvmBuiltinAggregatePart folds a type-name fragment into the LLVM
@@ -40,11 +35,11 @@ func llvmBuiltinAggregatePart(part string) string {
 }
 
 func llvmResultTypeName(okTyp, errTyp string) string {
-	return llvmBuiltinAggregateName("Result", okTyp, errTyp)
+	return mirLlvmResultTypeName(okTyp, errTyp)
 }
 
 func llvmTupleTypeName(elemTypes []string) string {
-	return llvmBuiltinAggregateName("Tuple", elemTypes...)
+	return mirLlvmTupleTypeName(elemTypes)
 }
 
 func llvmRuntimeABIType(t ast.Type, env typeEnv) (string, error) {

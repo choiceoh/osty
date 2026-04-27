@@ -244,14 +244,15 @@ func (g *generator) emitRuntimeStringConcatN(pieces []value) (value, error) {
 	emitter := g.toOstyEmitter()
 	// Stack-allocate `[N x ptr]` and store each piece into the slot.
 	arr := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca [%d x ptr]", arr, len(pieces)))
+	piecesN := strconv.Itoa(len(pieces))
+	emitter.body = append(emitter.body, mirAllocaArrayPtrText(arr, piecesN))
 	for i, piece := range pieces {
 		slot := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr [%d x ptr], ptr %s, i64 0, i64 %d", slot, len(pieces), arr, i))
-		emitter.body = append(emitter.body, fmt.Sprintf("  store ptr %s, ptr %s", piece.ref, slot))
+		emitter.body = append(emitter.body, mirGEPArrayElementText(slot, piecesN, arr, strconv.Itoa(i)))
+		emitter.body = append(emitter.body, mirStorePtrText(piece.ref, slot))
 	}
 	out := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call ptr @%s(i64 %d, ptr %s)", out, symbol, len(pieces), arr))
+	emitter.body = append(emitter.body, mirCallRuntimePtrI64PtrText(out, symbol, piecesN, arr))
 	g.takeOstyEmitter(emitter)
 	joined := value{typ: "ptr", ref: out, gcManaged: true}
 	return joined, nil
@@ -457,7 +458,7 @@ func (g *generator) loadTypedPointerValue(addr value, typ string) (value, error)
 	}
 	emitter := g.toOstyEmitter()
 	tmp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load %s, ptr %s", tmp, typ, addr.ref))
+	emitter.body = append(emitter.body, mirLoadText(tmp, typ, addr.ref))
 	g.takeOstyEmitter(emitter)
 	out := value{typ: typ, ref: tmp}
 	out.rootPaths = g.rootPathsForType(typ)
@@ -473,8 +474,8 @@ func (g *generator) emitOptionalPtrExpr(base value, then func() (value, error)) 
 	thenLabel := llvmNextLabel(emitter, "optional.then")
 	nilLabel := llvmNextLabel(emitter, "optional.nil")
 	endLabel := llvmNextLabel(emitter, "optional.end")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil.name, nilLabel, thenLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", thenLabel))
+	emitter.body = append(emitter.body, mirBrCondText(isNil.name, nilLabel, thenLabel))
+	emitter.body = append(emitter.body, mirLabelText(thenLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(thenLabel)
 
@@ -491,11 +492,11 @@ func (g *generator) emitOptionalPtrExpr(base value, then func() (value, error)) 
 	}
 
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", nilLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	emitter.body = append(emitter.body, mirLabelText(nilLabel))
+	emitter.body = append(emitter.body, mirBrUncondText(endLabel))
+	emitter.body = append(emitter.body, mirLabelText(endLabel))
 	tmp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi ptr [ %s, %%%s ], [ null, %%%s ]", tmp, thenValue.ref, thenPred, nilLabel))
+	emitter.body = append(emitter.body, mirPhiPtrFromValueOrNullText(tmp, thenValue.ref, thenPred, nilLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
 
@@ -515,8 +516,8 @@ func (g *generator) emitOptionalPtrStmt(base value, then func() error) error {
 	thenLabel := llvmNextLabel(emitter, "optional.then")
 	nilLabel := llvmNextLabel(emitter, "optional.nil")
 	endLabel := llvmNextLabel(emitter, "optional.end")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil.name, nilLabel, thenLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", thenLabel))
+	emitter.body = append(emitter.body, mirBrCondText(isNil.name, nilLabel, thenLabel))
+	emitter.body = append(emitter.body, mirLabelText(thenLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(thenLabel)
 	if err := then(); err != nil {
@@ -526,9 +527,9 @@ func (g *generator) emitOptionalPtrStmt(base value, then func() error) error {
 		g.branchTo(endLabel)
 	}
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", nilLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	emitter.body = append(emitter.body, mirLabelText(nilLabel))
+	emitter.body = append(emitter.body, mirBrUncondText(endLabel))
+	emitter.body = append(emitter.body, mirLabelText(endLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
 	return nil
@@ -790,11 +791,10 @@ func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
 		traceSymbol := g.traceCallbackSymbol(base.listElemTyp, g.rootPathsForType(base.listElemTyp))
 		emitter := g.toOstyEmitter()
 		slot := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, base.listElemTyp))
+		emitter.body = append(emitter.body, mirAllocaText(slot, base.listElemTyp))
 		sizeValue := g.emitTypeSize(emitter, base.listElemTyp)
 		g.declareRuntimeSymbol(listRuntimeGetBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			listRuntimeGetBytesSymbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(index), {typ: "ptr", name: slot}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
 		))
@@ -814,9 +814,8 @@ func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
 		g.declareRuntimeSymbol(symbol, "void", []paramInfo{{typ: "ptr"}, {typ: base.mapKeyTyp}, {typ: "ptr"}})
 		emitter := g.toOstyEmitter()
 		slot := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, base.mapValueTyp))
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirAllocaText(slot, base.mapValueTyp))
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			symbol,
 			llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(loadedKey), {typ: "ptr", name: slot}}),
 		))
@@ -884,7 +883,7 @@ func (g *generator) emitSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr) (val
 		if rng.Inclusive {
 			emitter := g.toOstyEmitter()
 			tmp := llvmNextTemp(emitter)
-			emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", tmp, endVal.ref))
+			emitter.body = append(emitter.body, mirAddI64OneText(tmp, endVal.ref))
 			g.takeOstyEmitter(emitter)
 			endVal = value{typ: "i64", ref: tmp}
 		}
@@ -943,7 +942,7 @@ func (g *generator) emitListSliceIndex(expr *ast.IndexExpr, rng *ast.RangeExpr, 
 		if rng.Inclusive {
 			emitter := g.toOstyEmitter()
 			tmp := llvmNextTemp(emitter)
-			emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", tmp, endVal.ref))
+			emitter.body = append(emitter.body, mirAddI64OneText(tmp, endVal.ref))
 			g.takeOstyEmitter(emitter)
 			endVal = value{typ: "i64", ref: tmp}
 		}
@@ -1015,15 +1014,15 @@ func (g *generator) emitSliceIndexByRangeValue(expr *ast.IndexExpr, base value, 
 	inclusive := llvmExtractValue(emitter, toOstyValue(rangeVal), "i1", rangeFieldInclusive)
 
 	startSel := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 %s, i64 0", startSel, hasStart.name, startRaw.name))
+	emitter.body = append(emitter.body, mirSelectI64LiteralRhsText(startSel, hasStart.name, startRaw.name, "0"))
 	stopPlus := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", stopPlus, stopRaw.name))
+	emitter.body = append(emitter.body, mirAddI64OneText(stopPlus, stopRaw.name))
 	stopIncl := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 %s, i64 %s", stopIncl, inclusive.name, stopPlus, stopRaw.name))
+	emitter.body = append(emitter.body, mirSelectI64Text(stopIncl, inclusive.name, stopPlus, stopRaw.name))
 
 	lenVal := llvmCall(emitter, "i64", lenSym, []*LlvmValue{toOstyValue(baseLoaded)})
 	endSel := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 %s, i64 %s", endSel, hasStop.name, stopIncl, lenVal.name))
+	emitter.body = append(emitter.body, mirSelectI64Text(endSel, hasStop.name, stopIncl, lenVal.name))
 
 	startVal := value{typ: "i64", ref: startSel}
 	endVal := value{typ: "i64", ref: endSel}
@@ -1148,8 +1147,8 @@ func (g *generator) emitEnumPayloadVariant(info *enumInfo, variant variantInfo, 
 			heapPtr := llvmGcAlloc(emitter, 1, byteSize, site)
 			for i, p := range payloads {
 				gep := llvmNextTemp(emitter)
-				emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr i8, ptr %s, i64 %d", gep, heapPtr.name, i*8))
-				emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", p.typ, p.ref, gep))
+				emitter.body = append(emitter.body, mirGEPInboundsI8Text(gep, heapPtr.name, strconv.Itoa(i*8)))
+				emitter.body = append(emitter.body, mirStoreText(p.typ, p.ref, gep))
 			}
 			out := llvmStructLiteral(emitter, info.typ, []*LlvmValue{llvmEnumVariant(info.typ, variant.tag), heapPtr})
 			g.takeOstyEmitter(emitter)
@@ -1365,8 +1364,8 @@ func (g *generator) emitCoalesce(e *ast.BinaryExpr) (value, error) {
 	someLabel := llvmNextLabel(emitter, "coalesce.some")
 	noneLabel := llvmNextLabel(emitter, "coalesce.none")
 	endLabel := llvmNextLabel(emitter, "coalesce.end")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil.name, noneLabel, someLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", someLabel))
+	emitter.body = append(emitter.body, mirBrCondText(isNil.name, noneLabel, someLabel))
+	emitter.body = append(emitter.body, mirLabelText(someLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(someLabel)
 
@@ -1386,7 +1385,7 @@ func (g *generator) emitCoalesce(e *ast.BinaryExpr) (value, error) {
 	g.branchTo(endLabel)
 
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", noneLabel))
+	emitter.body = append(emitter.body, mirLabelText(noneLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(noneLabel)
 
@@ -1401,12 +1400,9 @@ func (g *generator) emitCoalesce(e *ast.BinaryExpr) (value, error) {
 	g.branchTo(endLabel)
 
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	emitter.body = append(emitter.body, mirLabelText(endLabel))
 	tmp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  %s = phi %s [ %s, %%%s ], [ %s, %%%s ]",
-		tmp, innerTyp, leftUnwrapped.ref, somePred, right.ref, nonePred,
-	))
+	emitter.body = append(emitter.body, mirPhiTypedTwoEdgeText(tmp, innerTyp, leftUnwrapped.ref, somePred, right.ref, nonePred))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
 
@@ -1529,14 +1525,14 @@ func (g *generator) emitQuestionExpr(expr *ast.QuestionExpr) (value, error) {
 	isNil := llvmCompare(emitter, "eq", toOstyValue(base), toOstyValue(value{typ: "ptr", ref: "null"}))
 	nilLabel := llvmNextLabel(emitter, "optional.return")
 	contLabel := llvmNextLabel(emitter, "optional.cont")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil.name, nilLabel, contLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", nilLabel))
+	emitter.body = append(emitter.body, mirBrCondText(isNil.name, nilLabel, contLabel))
+	emitter.body = append(emitter.body, mirLabelText(nilLabel))
 	if inBench {
 		g.emitTestingAbortWithEmitter(emitter, g.benchQuestionFailMessage(expr), contLabel)
 	} else {
 		g.releaseGCRoots(emitter)
 		emitter.body = append(emitter.body, "  ret ptr null")
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", contLabel))
+		emitter.body = append(emitter.body, mirLabelText(contLabel))
 	}
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(contLabel)
@@ -1584,9 +1580,9 @@ func (g *generator) emitQuestionExprResult(expr *ast.QuestionExpr, info builtinR
 	isErr := llvmCompare(emitter, "eq", tag, toOstyValue(value{typ: "i64", ref: "1"}))
 	errLabel := llvmNextLabel(emitter, "result.err")
 	okLabel := llvmNextLabel(emitter, "result.ok")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isErr.name, errLabel, okLabel))
+	emitter.body = append(emitter.body, mirBrCondText(isErr.name, errLabel, okLabel))
 
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", errLabel))
+	emitter.body = append(emitter.body, mirLabelText(errLabel))
 	if inBench {
 		g.emitTestingAbortWithEmitter(emitter, g.benchQuestionFailMessage(expr), okLabel)
 	} else {
@@ -1601,8 +1597,8 @@ func (g *generator) emitQuestionExprResult(expr *ast.QuestionExpr, info builtinR
 		}
 		retStruct := llvmStructLiteral(emitter, returnInfo.typ, retFields)
 		g.releaseGCRoots(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  ret %s %s", returnInfo.typ, retStruct.name))
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", okLabel))
+		emitter.body = append(emitter.body, mirRetText(returnInfo.typ, retStruct.name))
+		emitter.body = append(emitter.body, mirLabelText(okLabel))
 	}
 	okSlot := llvmExtractValue(emitter, toOstyValue(base), info.okTyp, 1)
 	g.takeOstyEmitter(emitter)
@@ -1831,18 +1827,10 @@ func (g *generator) emitIfExprPhi(labels *LlvmIfLabels, thenPred, elsePred strin
 		return value{}, unsupportedf("type-system", "if expression branch types %s/%s", thenValue.typ, elseValue.typ)
 	}
 	emitter := g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+	emitter.body = append(emitter.body, mirBrUncondText(labels.endLabel))
+	emitter.body = append(emitter.body, mirLabelText(labels.endLabel))
 	tmp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  %s = phi %s [ %s, %%%s ], [ %s, %%%s ]",
-		tmp,
-		thenValue.typ,
-		thenValue.ref,
-		thenPred,
-		elseValue.ref,
-		elsePred,
-	))
+	emitter.body = append(emitter.body, mirPhiTypedTwoEdgeText(tmp, thenValue.typ, thenValue.ref, thenPred, elseValue.ref, elsePred))
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = labels.endLabel
 	out := value{typ: thenValue.typ, ref: tmp}
@@ -2056,7 +2044,7 @@ func (g *generator) emitOptionalMatchExprValue(scrutinee value, innerSource ast.
 
 	emitter := g.toOstyEmitter()
 	isNil := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNil, scrutinee.ref))
+	emitter.body = append(emitter.body, mirICmpEqPtrNullText(isNil, scrutinee.ref))
 	// `cond=true` selects the then-label per llvmIfExprStart; isNil=true
 	// → the None arm runs in `then`, the Some arm in `else`.
 	labels := llvmIfExprStart(emitter, &LlvmValue{typ: "i1", name: isNil})
@@ -2105,10 +2093,7 @@ type resultPatternInfo struct {
 }
 
 func resultVariantName(tag int) string {
-	if tag == 1 {
-		return "Err"
-	}
-	return "Ok"
+	return mirResultVariantName(tag)
 }
 
 func (g *generator) matchResultPattern(info builtinResultType, pattern ast.Pattern) (resultPatternInfo, bool, error) {
@@ -2683,7 +2668,7 @@ func (g *generator) emitSelectValue(cond *LlvmValue, thenValue, elseValue value)
 	}
 	emitter := g.toOstyEmitter()
 	tmp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, %s %s, %s %s", tmp, cond.name, thenValue.typ, thenValue.ref, elseValue.typ, elseValue.ref))
+	emitter.body = append(emitter.body, mirSelectTypedText(tmp, thenValue.typ, cond.name, thenValue.ref, elseValue.ref))
 	g.takeOstyEmitter(emitter)
 	out := value{typ: thenValue.typ, ref: tmp}
 	mergeContainerMetadata(&out, thenValue, elseValue)
@@ -2863,16 +2848,16 @@ func (g *generator) usesAggregateListABI(elemTyp string) bool {
 
 func (g *generator) emitAggregateByteSize(emitter *LlvmEmitter, typ string) value {
 	sizePtr := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr %s, ptr null, i32 1", sizePtr, typ))
+	emitter.body = append(emitter.body, mirGEPSizeofText(sizePtr, typ))
 	size := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = ptrtoint ptr %s to i64", size, sizePtr))
+	emitter.body = append(emitter.body, mirPtrToIntI64Text(size, sizePtr))
 	return value{typ: "i64", ref: size}
 }
 
 func (g *generator) emitAggregateScratchSlot(emitter *LlvmEmitter, typ, initial string) value {
 	slot := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, typ))
-	emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", typ, initial, slot))
+	emitter.body = append(emitter.body, mirAllocaText(slot, typ))
+	emitter.body = append(emitter.body, mirStoreText(typ, initial, slot))
 	return value{typ: typ, ref: slot, ptr: true}
 }
 
@@ -2883,23 +2868,18 @@ func (g *generator) emitAggregateRootOffsets(emitter *LlvmEmitter, typ string) (
 	}
 	arrayTyp := fmt.Sprintf("[%d x i64]", len(paths))
 	arrayPtr := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", arrayPtr, arrayTyp))
+	emitter.body = append(emitter.body, mirAllocaText(arrayPtr, arrayTyp))
 	for i, path := range paths {
 		offsetPtr := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  %s = getelementptr inbounds %s, ptr null, %s",
-			offsetPtr,
-			typ,
-			llvmAggregatePathIndices(path),
-		))
+		emitter.body = append(emitter.body, mirGEPInboundsNullRawIndicesText(offsetPtr, typ, llvmAggregatePathIndices(path)))
 		offsetValue := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = ptrtoint ptr %s to i64", offsetValue, offsetPtr))
+		emitter.body = append(emitter.body, mirPtrToIntI64Text(offsetValue, offsetPtr))
 		slotPtr := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d", slotPtr, arrayTyp, arrayPtr, i))
-		emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", offsetValue, slotPtr))
+		emitter.body = append(emitter.body, mirGEPInboundsFieldText(slotPtr, arrayTyp, arrayPtr, strconv.Itoa(i)))
+		emitter.body = append(emitter.body, mirStoreI64Text(offsetValue, slotPtr))
 	}
 	firstPtr := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr inbounds %s, ptr %s, i32 0, i32 0", firstPtr, arrayTyp, arrayPtr))
+	emitter.body = append(emitter.body, mirGEPInboundsZeroText(firstPtr, arrayTyp, arrayPtr))
 	return value{typ: "ptr", ref: firstPtr}, len(paths), nil
 }
 
@@ -2913,15 +2893,13 @@ func (g *generator) emitListAggregatePush(listValue, elem value) error {
 	}
 	if offsetCount == 0 {
 		g.declareRuntimeSymbol(listRuntimePushBytesV1Symbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}})
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			listRuntimePushBytesV1Symbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(value{typ: "ptr", ref: slot.ref}), toOstyValue(size)}),
 		))
 	} else {
 		g.declareRuntimeSymbol(listRuntimePushBytesRootsSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}})
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			listRuntimePushBytesRootsSymbol(),
 			llvmCallArgs([]*LlvmValue{
 				toOstyValue(listValue),
@@ -2950,15 +2928,13 @@ func (g *generator) emitListAggregateInsert(listValue, idx, elem value) error {
 	}
 	if offsetCount == 0 {
 		g.declareRuntimeSymbol(listRuntimeInsertBytesV1Symbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}})
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			listRuntimeInsertBytesV1Symbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(idx), toOstyValue(value{typ: "ptr", ref: slot.ref}), toOstyValue(size)}),
 		))
 	} else {
 		g.declareRuntimeSymbol(listRuntimeInsertBytesRootsSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}})
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			listRuntimeInsertBytesRootsSymbol(),
 			llvmCallArgs([]*LlvmValue{
 				toOstyValue(listValue),
@@ -2979,8 +2955,7 @@ func (g *generator) emitListAggregateGet(listValue value, index value, elemTyp s
 	emitter := g.toOstyEmitter()
 	slot := g.emitAggregateScratchSlot(emitter, elemTyp, "zeroinitializer")
 	size := g.emitAggregateByteSize(emitter, elemTyp)
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  call void @%s(%s)",
+	emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 		listRuntimeGetBytesV1Symbol(),
 		llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(index), toOstyValue(value{typ: "ptr", ref: slot.ref}), toOstyValue(size)}),
 	))
@@ -3064,8 +3039,7 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, elemSource ast.Type
 		if listUsesTypedRuntime(elemTyp) {
 			pushSymbol := listRuntimePushSymbol(elemTyp)
 			g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
-			emitter.body = append(emitter.body, fmt.Sprintf(
-				"  call void @%s(%s)",
+			emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 				pushSymbol,
 				llvmCallArgs([]*LlvmValue{toOstyValue(listValue), toOstyValue(loaded)}),
 			))
@@ -3073,8 +3047,7 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, elemSource ast.Type
 			addr := g.spillValueAddress(emitter, "list.elem", loaded)
 			sizeValue := g.emitTypeSize(emitter, elemTyp)
 			g.declareRuntimeSymbol(listRuntimePushBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
-			emitter.body = append(emitter.body, fmt.Sprintf(
-				"  call void @%s(%s)",
+			emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 				listRuntimePushBytesSymbol(),
 				llvmCallArgs([]*LlvmValue{
 					toOstyValue(listValue),
@@ -3181,8 +3154,7 @@ func (g *generator) emitMapInsert(base, key, val value) error {
 	emitter := g.toOstyEmitter()
 	valAddr := g.spillValueAddress(emitter, "map.insert.value", valLoaded)
 	g.declareRuntimeSymbol(insertSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: base.mapKeyTyp}, {typ: "ptr"}})
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  call void @%s(%s)",
+	emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 		insertSymbol,
 		llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(keyLoaded), {typ: "ptr", name: valAddr}}),
 	))
@@ -3228,15 +3200,15 @@ func (g *generator) emitCharByteConversionCall(call *ast.CallExpr) (value, bool,
 	tmp := llvmNextTemp(emitter)
 	switch {
 	case field.Name == "toInt" && base.typ == "i32":
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = zext i32 %s to i64", tmp, base.ref))
+		emitter.body = append(emitter.body, mirZExtI32ToI64Text(tmp, base.ref))
 		g.takeOstyEmitter(emitter)
 		return value{typ: "i64", ref: tmp}, true, nil
 	case field.Name == "toInt" && base.typ == "i8":
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = zext i8 %s to i64", tmp, base.ref))
+		emitter.body = append(emitter.body, mirZExtI8ToI64Text(tmp, base.ref))
 		g.takeOstyEmitter(emitter)
 		return value{typ: "i64", ref: tmp}, true, nil
 	case field.Name == "toChar" && base.typ == "i64":
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = trunc i64 %s to i32", tmp, base.ref))
+		emitter.body = append(emitter.body, mirTruncI64ToI32Text(tmp, base.ref))
 		g.takeOstyEmitter(emitter)
 		return value{typ: "i32", ref: tmp}, true, nil
 	case field.Name == "toByte" && base.typ == "i64":
@@ -3246,14 +3218,14 @@ func (g *generator) emitCharByteConversionCall(call *ast.CallExpr) (value, bool,
 		// Lower as plain `trunc i64 to i8` so the comparisons that
 		// follow (`b == '\\'.toInt().toByte()`) type-check against the
 		// Byte receiver without an extra `.unwrap()` layer.
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = trunc i64 %s to i8", tmp, base.ref))
+		emitter.body = append(emitter.body, mirTruncI64ToI8Text(tmp, base.ref))
 		g.takeOstyEmitter(emitter)
 		return value{typ: "i8", ref: tmp}, true, nil
 	case field.Name == "toChar" && base.typ == "i8":
 		// Byte → Char widens a u8 to a Char code point via zero extend.
 		// `b.toChar().toString()` in the llvmgen C-string escape loop
 		// materialises a one-byte UTF-8 string for printable ASCII.
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = zext i8 %s to i32", tmp, base.ref))
+		emitter.body = append(emitter.body, mirZExtI8ToI32Text(tmp, base.ref))
 		g.takeOstyEmitter(emitter)
 		return value{typ: "i32", ref: tmp}, true, nil
 	}
@@ -3324,7 +3296,7 @@ func (g *generator) emitCharPredicateCall(call *ast.CallExpr) (value, bool, erro
 		up := llvmCharAsciiRangeCheck(emitter, base.ref, 'A', 26)
 		lo := llvmCharAsciiRangeCheck(emitter, base.ref, 'a', 26)
 		out := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = or i1 %s, %s", out, up, lo))
+		emitter.body = append(emitter.body, mirOrI1Text(out, up, lo))
 		return value{typ: "i1", ref: out}, true, nil
 	case "isAlphanumeric":
 		// isDigit || isUpper || isLower
@@ -3332,9 +3304,9 @@ func (g *generator) emitCharPredicateCall(call *ast.CallExpr) (value, bool, erro
 		up := llvmCharAsciiRangeCheck(emitter, base.ref, 'A', 26)
 		lo := llvmCharAsciiRangeCheck(emitter, base.ref, 'a', 26)
 		al := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = or i1 %s, %s", al, up, lo))
+		emitter.body = append(emitter.body, mirOrI1Text(al, up, lo))
 		out := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = or i1 %s, %s", out, dg, al))
+		emitter.body = append(emitter.body, mirOrI1Text(out, dg, al))
 		return value{typ: "i1", ref: out}, true, nil
 	case "isWhitespace":
 		// Spec-relevant ASCII whitespace: SPACE / TAB / LF / CR.
@@ -3342,35 +3314,35 @@ func (g *generator) emitCharPredicateCall(call *ast.CallExpr) (value, bool, erro
 		// any current stdlib body and matching libc isspace() too
 		// closely is a Unicode follow-up concern.)
 		eqSp := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i32 %s, 32", eqSp, base.ref))
+		emitter.body = append(emitter.body, mirICmpEqI32LiteralText(eqSp, base.ref, "32"))
 		eqTab := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i32 %s, 9", eqTab, base.ref))
+		emitter.body = append(emitter.body, mirICmpEqI32LiteralText(eqTab, base.ref, "9"))
 		eqLf := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i32 %s, 10", eqLf, base.ref))
+		emitter.body = append(emitter.body, mirICmpEqI32LiteralText(eqLf, base.ref, "10"))
 		eqCr := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i32 %s, 13", eqCr, base.ref))
+		emitter.body = append(emitter.body, mirICmpEqI32LiteralText(eqCr, base.ref, "13"))
 		o1 := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = or i1 %s, %s", o1, eqSp, eqTab))
+		emitter.body = append(emitter.body, mirOrI1Text(o1, eqSp, eqTab))
 		o2 := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = or i1 %s, %s", o2, eqLf, eqCr))
+		emitter.body = append(emitter.body, mirOrI1Text(o2, eqLf, eqCr))
 		out := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = or i1 %s, %s", out, o1, o2))
+		emitter.body = append(emitter.body, mirOrI1Text(out, o1, o2))
 		return value{typ: "i1", ref: out}, true, nil
 	case "toLower":
 		// if c is ASCII upper, c + 32; else c. select form keeps it
 		// branch-free (downstream phi avoidance).
 		isUp := llvmCharAsciiRangeCheck(emitter, base.ref, 'A', 26)
 		shifted := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i32 %s, 32", shifted, base.ref))
+		emitter.body = append(emitter.body, mirAddI32LiteralText(shifted, base.ref, "32"))
 		out := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i32 %s, i32 %s", out, isUp, shifted, base.ref))
+		emitter.body = append(emitter.body, mirSelectI32Text(out, isUp, shifted, base.ref))
 		return value{typ: "i32", ref: out}, true, nil
 	case "toUpper":
 		isLo := llvmCharAsciiRangeCheck(emitter, base.ref, 'a', 26)
 		shifted := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = sub i32 %s, 32", shifted, base.ref))
+		emitter.body = append(emitter.body, mirSubI32LiteralText(shifted, base.ref, "32"))
 		out := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i32 %s, i32 %s", out, isLo, shifted, base.ref))
+		emitter.body = append(emitter.body, mirSelectI32Text(out, isLo, shifted, base.ref))
 		return value{typ: "i32", ref: out}, true, nil
 	}
 	return value{}, false, nil
@@ -3381,9 +3353,9 @@ func (g *generator) emitCharPredicateCall(call *ast.CallExpr) (value, bool, erro
 // compare against the count. Returns the i1 temp name.
 func llvmCharAsciiRangeCheck(emitter *LlvmEmitter, charRef string, low int, count int) string {
 	shifted := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sub i32 %s, %d", shifted, charRef, low))
+	emitter.body = append(emitter.body, mirSubI32LiteralText(shifted, charRef, strconv.Itoa(low)))
 	cmp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp ult i32 %s, %d", cmp, shifted, count))
+	emitter.body = append(emitter.body, mirICmpULTI32LiteralText(cmp, shifted, strconv.Itoa(count)))
 	return cmp
 }
 
@@ -3567,7 +3539,7 @@ func (g *generator) emitStringMethodCall(call *ast.CallExpr) (value, bool, error
 		emitter = g.toOstyEmitter()
 		item := llvmCall(emitter, "i8", getSym, []*LlvmValue{bytes, toOstyValue(index)})
 		box := llvmGcAlloc(emitter, 1, 1, "string.get.byte")
-		emitter.body = append(emitter.body, fmt.Sprintf("  store i8 %s, ptr %s", item.name, box.name))
+		emitter.body = append(emitter.body, mirStoreI8Text(item.name, box.name))
 		g.takeOstyEmitter(emitter)
 		g.needsGCRuntime = true
 		someVal := value{typ: "ptr", ref: box.name, gcManaged: true}
@@ -3864,7 +3836,7 @@ func (g *generator) emitOptionalBoxedI64(index value, site string) (value, error
 
 	emitter = g.toOstyEmitter()
 	box := llvmGcAlloc(emitter, 1, 8, site)
-	emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", index.ref, box.name))
+	emitter.body = append(emitter.body, mirStoreI64Text(index.ref, box.name))
 	g.takeOstyEmitter(emitter)
 	g.needsGCRuntime = true
 	someVal := value{typ: "ptr", ref: box.name, gcManaged: true}
@@ -4360,7 +4332,7 @@ func (g *generator) emitBytesGetRuntime(base, index value) (value, error) {
 	emitter = g.toOstyEmitter()
 	item := llvmCall(emitter, "i8", getSymbol, []*LlvmValue{toOstyValue(base), toOstyValue(index)})
 	box := llvmGcAlloc(emitter, 1, 1, "bytes.get.byte")
-	emitter.body = append(emitter.body, fmt.Sprintf("  store i8 %s, ptr %s", item.name, box.name))
+	emitter.body = append(emitter.body, mirStoreI8Text(item.name, box.name))
 	g.takeOstyEmitter(emitter)
 	g.needsGCRuntime = true
 	someVal := value{typ: "ptr", ref: box.name, gcManaged: true}
@@ -4432,7 +4404,7 @@ func (g *generator) emitBytesEndsWithRuntime(base, suffix value) (value, error) 
 	baseLen := llvmCall(emitter, "i64", lenSymbol, []*LlvmValue{toOstyValue(base)})
 	suffixLen := llvmCall(emitter, "i64", lenSymbol, []*LlvmValue{toOstyValue(suffix)})
 	expectedName := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sub i64 %s, %s", expectedName, baseLen.name, suffixLen.name))
+	emitter.body = append(emitter.body, mirSubI64Text(expectedName, baseLen.name, suffixLen.name))
 	found := llvmCompare(emitter, "sge", toOstyValue(lastIndex), llvmIntLiteral(0))
 	atEnd := llvmCompare(emitter, "eq", toOstyValue(lastIndex), &LlvmValue{typ: "i64", name: expectedName})
 	out := llvmLogicalI1(emitter, "and", found, atEnd)
@@ -5598,7 +5570,7 @@ func (g *generator) emitListMethodCall(call *ast.CallExpr) (value, bool, error) 
 		emitter := g.toOstyEmitter()
 		lenVal := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
 		cmp := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i64 %s, 0", cmp, lenVal.name))
+		emitter.body = append(emitter.body, mirICmpEqI64LiteralText(cmp, lenVal.name, "0"))
 		g.takeOstyEmitter(emitter)
 		return value{typ: "i1", ref: cmp}, true, nil
 	case "sorted":
@@ -5689,18 +5661,18 @@ func (g *generator) emitListGetCall(call *ast.CallExpr, base value, elemTyp stri
 	emitter := g.toOstyEmitter()
 	lenVal := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
 	geq0 := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp sge i64 %s, 0", geq0, idx.ref))
+	emitter.body = append(emitter.body, mirICmpSGEI64ZeroText(geq0, idx.ref))
 	ltlen := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp slt i64 %s, %s", ltlen, idx.ref, lenVal.name))
+	emitter.body = append(emitter.body, mirICmpSLTI64Text(ltlen, idx.ref, lenVal.name))
 	inBounds := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = and i1 %s, %s", inBounds, geq0, ltlen))
+	emitter.body = append(emitter.body, mirAndI1Text(inBounds, geq0, ltlen))
 
 	inLabel := llvmNextLabel(emitter, "list.get.in")
 	outLabel := llvmNextLabel(emitter, "list.get.out")
 	endLabel := llvmNextLabel(emitter, "list.get.end")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", inBounds, inLabel, outLabel))
+	emitter.body = append(emitter.body, mirBrCondText(inBounds, inLabel, outLabel))
 
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", inLabel))
+	emitter.body = append(emitter.body, mirLabelText(inLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(inLabel)
 
@@ -5713,7 +5685,7 @@ func (g *generator) emitListGetCall(call *ast.CallExpr, base value, elemTyp stri
 		got := llvmCall(emitter, elemTyp, getSym, []*LlvmValue{toOstyValue(base), toOstyValue(idx)})
 		site := "list.get.box." + elemTyp
 		box := llvmGcAlloc(emitter, 1, byteSize, site)
-		emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", elemTyp, got.name, box.name))
+		emitter.body = append(emitter.body, mirStoreText(elemTyp, got.name, box.name))
 		someRef = box.name
 		g.needsGCRuntime = true
 	} else {
@@ -5722,12 +5694,12 @@ func (g *generator) emitListGetCall(call *ast.CallExpr, base value, elemTyp stri
 		someRef = got.name
 	}
 	inPred := g.currentBlock
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", outLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", endLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	emitter.body = append(emitter.body, mirBrUncondText(endLabel))
+	emitter.body = append(emitter.body, mirLabelText(outLabel))
+	emitter.body = append(emitter.body, mirBrUncondText(endLabel))
+	emitter.body = append(emitter.body, mirLabelText(endLabel))
 	tmp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi ptr [ %s, %%%s ], [ null, %%%s ]", tmp, someRef, inPred, outLabel))
+	emitter.body = append(emitter.body, mirPhiPtrFromValueOrNullText(tmp, someRef, inPred, outLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
 
@@ -5792,7 +5764,7 @@ func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
 		emitter := g.toOstyEmitter()
 		lenVal := llvmCall(emitter, "i64", mapRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
 		cmp := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i64 %s, 0", cmp, lenVal.name))
+		emitter.body = append(emitter.body, mirICmpEqI64LiteralText(cmp, lenVal.name, "0"))
 		g.takeOstyEmitter(emitter)
 		return value{typ: "i1", ref: cmp}, true, nil
 	case "get":
@@ -5940,10 +5912,9 @@ func (g *generator) emitMapGetCore(base value, loadedKey value, keyTyp string, k
 		// ptr (= Some). No branch needed.
 		emitter := g.toOstyEmitter()
 		slot := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca ptr", slot))
-		emitter.body = append(emitter.body, fmt.Sprintf("  store ptr null, ptr %s", slot))
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  %s = call i1 @%s(%s)",
+		emitter.body = append(emitter.body, mirAllocaPtrText(slot))
+		emitter.body = append(emitter.body, mirStorePtrNullText(slot))
+		emitter.body = append(emitter.body, mirCallI1FromArgsText(
 			llvmNextTemp(emitter),
 			getSym,
 			llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(loadedKey), {typ: "ptr", name: slot}}),
@@ -5971,7 +5942,7 @@ func (g *generator) emitMapGetCore(base value, loadedKey value, keyTyp string, k
 	// unchanged by ?? / match / .isSome().
 	emitter := g.toOstyEmitter()
 	slot := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, valTyp))
+	emitter.body = append(emitter.body, mirAllocaText(slot, valTyp))
 	present := llvmCall(emitter, "i1", getSym, []*LlvmValue{
 		toOstyValue(base),
 		toOstyValue(loadedKey),
@@ -5985,7 +5956,7 @@ func (g *generator) emitMapGetCore(base value, loadedKey value, keyTyp string, k
 	emitter = g.toOstyEmitter()
 	box := llvmGcAlloc(emitter, 1, byteSize, "map.get.box."+valTyp)
 	payload := llvmLoad(emitter, &LlvmValue{typ: valTyp, name: slot, pointer: true})
-	emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", valTyp, payload.name, box.name))
+	emitter.body = append(emitter.body, mirStoreText(valTyp, payload.name, box.name))
 	g.takeOstyEmitter(emitter)
 	g.needsGCRuntime = true
 	someVal := value{typ: "ptr", ref: box.name, gcManaged: true}
@@ -6089,7 +6060,7 @@ func (g *generator) emitMapIterate(mapVal value, keyTyp, valTyp string, keyStrin
 	// if opt is null → skip; else → unwrap and run body.
 	emitter = g.toOstyEmitter()
 	isNil := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNil, optV.ref))
+	emitter.body = append(emitter.body, mirICmpEqPtrNullText(isNil, optV.ref))
 	labels := llvmIfExprStart(emitter, &LlvmValue{typ: "i1", name: isNil})
 	g.takeOstyEmitter(emitter)
 	// then = none (skip)
@@ -6118,8 +6089,8 @@ func (g *generator) emitMapIterate(mapVal value, keyTyp, valTyp string, keyStrin
 
 	// Merge branches at labels.endLabel.
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+	emitter.body = append(emitter.body, mirBrUncondText(labels.endLabel))
+	emitter.body = append(emitter.body, mirLabelText(labels.endLabel))
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = labels.endLabel
 
@@ -6128,7 +6099,7 @@ func (g *generator) emitMapIterate(mapVal value, keyTyp, valTyp string, keyStrin
 		g.branchTo(cont)
 	}
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", cont))
+	emitter.body = append(emitter.body, mirLabelText(cont))
 	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
@@ -6220,7 +6191,7 @@ func (g *generator) emitMapMergeWith(call *ast.CallExpr, base value, keyTyp stri
 		// branch on opt null-ness
 		emitter := g.toOstyEmitter()
 		isNil := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNil, existingOpt.ref))
+		emitter.body = append(emitter.body, mirICmpEqPtrNullText(isNil, existingOpt.ref))
 		labels := llvmIfExprStart(emitter, &LlvmValue{typ: "i1", name: isNil})
 		g.takeOstyEmitter(emitter)
 
@@ -6255,8 +6226,8 @@ func (g *generator) emitMapMergeWith(call *ast.CallExpr, base value, keyTyp stri
 			return err
 		}
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+		emitter.body = append(emitter.body, mirBrUncondText(labels.endLabel))
+		emitter.body = append(emitter.body, mirLabelText(labels.endLabel))
 		g.takeOstyEmitter(emitter)
 		g.currentBlock = labels.endLabel
 		return nil
@@ -6364,7 +6335,7 @@ func (g *generator) emitMapGetOr(call *ast.CallExpr, base value, keyTyp string, 
 
 		emitter := g.toOstyEmitter()
 		slot := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, valTyp))
+		emitter.body = append(emitter.body, mirAllocaText(slot, valTyp))
 		present := llvmCall(emitter, "i1", getSym, []*LlvmValue{
 			toOstyValue(base),
 			toOstyValue(loadedKey),
@@ -6403,7 +6374,7 @@ func (g *generator) emitMapGetOr(call *ast.CallExpr, base value, keyTyp string, 
 
 	emitter := g.toOstyEmitter()
 	isNil := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNil, optVal.ref))
+	emitter.body = append(emitter.body, mirICmpEqPtrNullText(isNil, optVal.ref))
 	labels := llvmIfExprStart(emitter, &LlvmValue{typ: "i1", name: isNil})
 	g.takeOstyEmitter(emitter)
 
@@ -6489,7 +6460,7 @@ func (g *generator) emitOptionMethodCall(call *ast.CallExpr) (value, bool, error
 	if field.Name == "isNone" {
 		op = "eq"
 	}
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp %s ptr %s, null", cmp, op, base.ref))
+	emitter.body = append(emitter.body, mirICmpEqPtrText(cmp, op, base.ref))
 	g.takeOstyEmitter(emitter)
 	return value{typ: "i1", ref: cmp}, true, nil
 }
@@ -6548,11 +6519,11 @@ func (g *generator) emitResultAbortCall(call *ast.CallExpr) (value, error) {
 func (g *generator) emitOptionUnwrap(base value, optType *ast.OptionalType, call *ast.CallExpr) (value, bool, error) {
 	emitter := g.toOstyEmitter()
 	isNone := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNone, base.ref))
+	emitter.body = append(emitter.body, mirICmpEqPtrNullText(isNone, base.ref))
 	someLabel := llvmNextLabel(emitter, "unwrap.some")
 	noneLabel := llvmNextLabel(emitter, "unwrap.none")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNone, noneLabel, someLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", noneLabel))
+	emitter.body = append(emitter.body, mirBrCondText(isNone, noneLabel, someLabel))
+	emitter.body = append(emitter.body, mirLabelText(noneLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(noneLabel)
 
@@ -6563,7 +6534,7 @@ func (g *generator) emitOptionUnwrap(base value, optType *ast.OptionalType, call
 	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
 	emitter.body = append(emitter.body, "  call void @exit(i32 1)")
 	emitter.body = append(emitter.body, "  unreachable")
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", someLabel))
+	emitter.body = append(emitter.body, mirLabelText(someLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(someLabel)
 
@@ -6578,7 +6549,7 @@ func (g *generator) emitOptionUnwrap(base value, optType *ast.OptionalType, call
 	if innerLLVM, ok := scalarLLVMTypeForOptionInner(inner); ok {
 		emitter = g.toOstyEmitter()
 		loaded := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = load %s, ptr %s", loaded, innerLLVM, base.ref))
+		emitter.body = append(emitter.body, mirLoadText(loaded, innerLLVM, base.ref))
 		g.takeOstyEmitter(emitter)
 		return value{typ: innerLLVM, ref: loaded, sourceType: inner}, true, nil
 	}
@@ -6641,7 +6612,7 @@ func (g *generator) emitSetMethodCall(call *ast.CallExpr) (value, bool, error) {
 		emitter := g.toOstyEmitter()
 		lenVal := llvmCall(emitter, "i64", setRuntimeLenSymbol(), []*LlvmValue{toOstyValue(base)})
 		cmp := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i64 %s, 0", cmp, lenVal.name))
+		emitter.body = append(emitter.body, mirICmpEqI64LiteralText(cmp, lenVal.name, "0"))
 		g.takeOstyEmitter(emitter)
 		return value{typ: "i1", ref: cmp}, true, nil
 	case "contains", "remove":
@@ -6813,9 +6784,9 @@ func (g *generator) bindPayloadEnumPattern(scrutinee value, pattern enumPatternI
 					continue
 				}
 				gep := llvmNextTemp(emitter)
-				emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr i8, ptr %s, i64 %d", gep, heapPtr.name, i*8))
+				emitter.body = append(emitter.body, mirGEPInboundsI8Text(gep, heapPtr.name, strconv.Itoa(i*8)))
 				loadTmp := llvmNextTemp(emitter)
-				emitter.body = append(emitter.body, fmt.Sprintf("  %s = load %s, ptr %s", loadTmp, b.typ, gep))
+				emitter.body = append(emitter.body, mirLoadText(loadTmp, b.typ, gep))
 				payloadValue := value{typ: b.typ, ref: loadTmp}
 				payloadValue.rootPaths = g.rootPathsForType(b.typ)
 				if err := decoratePayload(i, &payloadValue); err != nil {
@@ -7798,25 +7769,19 @@ func (g *generator) emitInterfaceMethodCall(call *ast.CallExpr) (value, bool, er
 	}
 	emitter := g.toOstyEmitter()
 	dataPtr := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = extractvalue %%osty.iface %s, 0", dataPtr, recv.ref))
+	emitter.body = append(emitter.body, mirExtractValueIfacePtrText(dataPtr, recv.ref))
 	vtable := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = extractvalue %%osty.iface %s, 1", vtable, recv.ref))
+	emitter.body = append(emitter.body, mirExtractValueIfaceVtableText(vtable, recv.ref))
 	fnPtrSlot := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  %s = getelementptr [%d x ptr], ptr %s, i64 0, i64 %d",
-		fnPtrSlot, len(iface.methods), vtable, slot,
-	))
+	emitter.body = append(emitter.body, mirGEPArrayElementText(fnPtrSlot, strconv.Itoa(len(iface.methods)), vtable, strconv.Itoa(slot)))
 	fnPtr := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load ptr, ptr %s", fnPtr, fnPtrSlot))
+	emitter.body = append(emitter.body, mirLoadPtrText(fnPtr, fnPtrSlot))
 	callArgList := fmt.Sprintf("ptr %s", dataPtr)
 	for _, p := range argPairs {
 		callArgList += fmt.Sprintf(", %s %s", p[0], p[1])
 	}
 	ret := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  %s = call %s %s(%s)",
-		ret, retTyp, fnPtr, callArgList,
-	))
+	emitter.body = append(emitter.body, mirCallTypedFnPtrText(ret, retTyp, fnPtr, callArgList))
 	g.takeOstyEmitter(emitter)
 	return value{typ: retTyp, ref: ret}, true, nil
 }

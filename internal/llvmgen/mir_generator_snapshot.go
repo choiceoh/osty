@@ -7980,3 +7980,642 @@ func mirDataLayoutFor(target string) string {
 	}
 	return ""
 }
+
+// §19 — pure string helpers ported from
+// internal/llvmgen/{expr,generator,ir_module,stdlib_shim,stmt,type}.go.
+
+// Osty: mirResultVariantName
+func mirResultVariantName(tag int) string {
+	if tag == 1 {
+		return "Err"
+	}
+	return "Ok"
+}
+
+// Osty: mirLlvmPointerOperand
+func mirLlvmPointerOperand(name string) string {
+	if name == "" || name == "null" {
+		return name
+	}
+	if llvmStrings.HasPrefix(name, "@") || llvmStrings.HasPrefix(name, "%") {
+		return name
+	}
+	return "@" + name
+}
+
+// Osty: mirSplitQualifiedName
+func mirSplitQualifiedName(name string) []string {
+	if name == "" {
+		return nil
+	}
+	return llvmStrings.Split(name, ".")
+}
+
+// Osty: mirScalarSomeBoxByteSize
+func mirScalarSomeBoxByteSize(typ string) int {
+	if typ == "i64" || typ == "double" {
+		return 8
+	}
+	if typ == "i32" {
+		return 4
+	}
+	if typ == "i8" || typ == "i1" {
+		return 1
+	}
+	return 0
+}
+
+// Osty: mirLlvmBuiltinAggregateName
+func mirLlvmBuiltinAggregateName(prefix string, parts []string) string {
+	names := make([]string, 0, len(parts)+1)
+	names = append(names, prefix)
+	for _, p := range parts {
+		names = append(names, mirLLVMBuiltinAggregatePart(p))
+	}
+	return "%" + llvmStrings.Join(names, ".")
+}
+
+// Osty: mirLlvmResultTypeName
+func mirLlvmResultTypeName(okTyp, errTyp string) string {
+	return mirLlvmBuiltinAggregateName("Result", []string{okTyp, errTyp})
+}
+
+// Osty: mirLlvmTupleTypeName
+func mirLlvmTupleTypeName(elemTypes []string) string {
+	return mirLlvmBuiltinAggregateName("Tuple", elemTypes)
+}
+
+// Osty: mirNormalizeAssertExprText
+func mirNormalizeAssertExprText(text string) string {
+	var buf llvmStrings.Builder
+	prevSpace := false
+	for i := 0; i < len(text); i++ {
+		ch := text[i]
+		if ch == '\n' || ch == '\r' || ch == '\t' {
+			ch = ' '
+		}
+		if ch == ' ' {
+			if prevSpace {
+				continue
+			}
+			prevSpace = true
+		} else {
+			prevSpace = false
+		}
+		buf.WriteByte(ch)
+	}
+	out := buf.String()
+	lo, hi := 0, len(out)
+	if hi > 0 && out[0] == ' ' {
+		lo = 1
+	}
+	if hi > lo && out[hi-1] == ' ' {
+		hi--
+	}
+	return out[lo:hi]
+}
+
+// §20 — Text variants of common Line builders, for `body []string`
+// callers that join entries on "\n". Same shapes as the Line builders
+// minus the trailing "\n"; lets emitter sites in expr.go / stmt.go /
+// generator.go drop fmt.Sprintf("  %s = ...") in favor of named
+// helpers without flipping the surrounding append-then-join idiom.
+
+// Osty: mirAllocaText
+func mirAllocaText(reg, ty string) string {
+	return "  " + reg + " = alloca " + ty
+}
+
+// Osty: mirAllocaI64Text
+func mirAllocaI64Text(reg string) string {
+	return "  " + reg + " = alloca i64"
+}
+
+// Osty: mirAllocaPtrText
+func mirAllocaPtrText(reg string) string {
+	return "  " + reg + " = alloca ptr"
+}
+
+// Osty: mirAllocaArrayPtrText
+func mirAllocaArrayPtrText(reg, n string) string {
+	return "  " + reg + " = alloca [" + n + " x ptr]"
+}
+
+// Osty: mirLoadText
+func mirLoadText(reg, ty, ptr string) string {
+	return "  " + reg + " = load " + ty + ", ptr " + ptr
+}
+
+// Osty: mirLoadI64Text
+func mirLoadI64Text(reg, ptr string) string {
+	return "  " + reg + " = load i64, ptr " + ptr
+}
+
+// Osty: mirLoadPtrText
+func mirLoadPtrText(reg, slot string) string {
+	return "  " + reg + " = load ptr, ptr " + slot
+}
+
+// Osty: mirStoreText
+func mirStoreText(ty, val, slot string) string {
+	return "  store " + ty + " " + val + ", ptr " + slot
+}
+
+// Osty: mirStoreI64Text
+func mirStoreI64Text(val, slot string) string {
+	return "  store i64 " + val + ", ptr " + slot
+}
+
+// Osty: mirStoreI8Text
+func mirStoreI8Text(val, slot string) string {
+	return "  store i8 " + val + ", ptr " + slot
+}
+
+// Osty: mirStorePtrText
+func mirStorePtrText(val, slot string) string {
+	return "  store ptr " + val + ", ptr " + slot
+}
+
+// Osty: mirStorePtrNullText
+func mirStorePtrNullText(slot string) string {
+	return "  store ptr null, ptr " + slot
+}
+
+// Osty: mirStoreI64ZeroText
+func mirStoreI64ZeroText(slot string) string {
+	return "  store i64 0, ptr " + slot
+}
+
+// Osty: mirBrCondText
+func mirBrCondText(cond, trueLabel, falseLabel string) string {
+	return "  br i1 " + cond + ", label %" + trueLabel + ", label %" + falseLabel
+}
+
+// Osty: mirBrUncondText
+func mirBrUncondText(label string) string {
+	return "  br label %" + label
+}
+
+// Osty: mirLabelText
+func mirLabelText(name string) string {
+	return name + ":"
+}
+
+// Osty: mirRetText
+func mirRetText(ty, val string) string {
+	return "  ret " + ty + " " + val
+}
+
+// Osty: mirRetVoidText
+func mirRetVoidText() string {
+	return "  ret void"
+}
+
+// Osty: mirICmpEqText
+func mirICmpEqText(reg, ty, lhs, rhs string) string {
+	return "  " + reg + " = icmp eq " + ty + " " + lhs + ", " + rhs
+}
+
+// Osty: mirICmpEqI64Text
+func mirICmpEqI64Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = icmp eq i64 " + lhs + ", " + rhs
+}
+
+// Osty: mirICmpEqPtrNullText
+func mirICmpEqPtrNullText(reg, ptr string) string {
+	return "  " + reg + " = icmp eq ptr " + ptr + ", null"
+}
+
+// Osty: mirICmpText
+func mirICmpText(reg, pred, ty, lhs, rhs string) string {
+	return "  " + reg + " = icmp " + pred + " " + ty + " " + lhs + ", " + rhs
+}
+
+// Osty: mirICmpSGTI64ZeroText
+func mirICmpSGTI64ZeroText(reg, lhs string) string {
+	return "  " + reg + " = icmp sgt i64 " + lhs + ", 0"
+}
+
+// Osty: mirICmpSLTI64Text
+func mirICmpSLTI64Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = icmp slt i64 " + lhs + ", " + rhs
+}
+
+// Osty: mirICmpSGEI64ZeroText
+func mirICmpSGEI64ZeroText(reg, lhs string) string {
+	return "  " + reg + " = icmp sge i64 " + lhs + ", 0"
+}
+
+// Osty: mirICmpSLTI64LiteralText
+func mirICmpSLTI64LiteralText(reg, lhs, lit string) string {
+	return "  " + reg + " = icmp slt i64 " + lhs + ", " + lit
+}
+
+// Osty: mirICmpSGTI64LiteralText
+func mirICmpSGTI64LiteralText(reg, lhs, lit string) string {
+	return "  " + reg + " = icmp sgt i64 " + lhs + ", " + lit
+}
+
+// Osty: mirICmpEqI64LiteralText
+func mirICmpEqI64LiteralText(reg, lhs, lit string) string {
+	return "  " + reg + " = icmp eq i64 " + lhs + ", " + lit
+}
+
+// Osty: mirICmpEqI32LiteralText
+func mirICmpEqI32LiteralText(reg, lhs, lit string) string {
+	return "  " + reg + " = icmp eq i32 " + lhs + ", " + lit
+}
+
+// Osty: mirICmpULTI32LiteralText
+func mirICmpULTI32LiteralText(reg, lhs, lit string) string {
+	return "  " + reg + " = icmp ult i32 " + lhs + ", " + lit
+}
+
+// Osty: mirICmpEqPtrText
+func mirICmpEqPtrText(reg, pred, lhs string) string {
+	return "  " + reg + " = icmp " + pred + " ptr " + lhs + ", null"
+}
+
+// Osty: mirAddI64OneText
+func mirAddI64OneText(reg, lhs string) string {
+	return "  " + reg + " = add i64 " + lhs + ", 1"
+}
+
+// Osty: mirAddI64Text
+func mirAddI64Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = add i64 " + lhs + ", " + rhs
+}
+
+// Osty: mirAddI32LiteralText
+func mirAddI32LiteralText(reg, lhs, lit string) string {
+	return "  " + reg + " = add i32 " + lhs + ", " + lit
+}
+
+// Osty: mirSubI64Text
+func mirSubI64Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = sub i64 " + lhs + ", " + rhs
+}
+
+// Osty: mirSubI32LiteralText
+func mirSubI32LiteralText(reg, lhs, lit string) string {
+	return "  " + reg + " = sub i32 " + lhs + ", " + lit
+}
+
+// Osty: mirMulI64Text
+func mirMulI64Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = mul i64 " + lhs + ", " + rhs
+}
+
+// Osty: mirMulI64LiteralText
+func mirMulI64LiteralText(reg, lhs, lit string) string {
+	return "  " + reg + " = mul i64 " + lhs + ", " + lit
+}
+
+// Osty: mirSDivI64Text
+func mirSDivI64Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = sdiv i64 " + lhs + ", " + rhs
+}
+
+// Osty: mirSDivI64LiteralText
+func mirSDivI64LiteralText(reg, lhs, lit string) string {
+	return "  " + reg + " = sdiv i64 " + lhs + ", " + lit
+}
+
+// Osty: mirOrI1Text
+func mirOrI1Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = or i1 " + lhs + ", " + rhs
+}
+
+// Osty: mirAndI1Text
+func mirAndI1Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = and i1 " + lhs + ", " + rhs
+}
+
+// Osty: mirXorI1NegText
+func mirXorI1NegText(reg, src string) string {
+	return "  " + reg + " = xor i1 " + src + ", true"
+}
+
+// Osty: mirSelectI64Text
+func mirSelectI64Text(reg, cond, lhs, rhs string) string {
+	return "  " + reg + " = select i1 " + cond + ", i64 " + lhs + ", i64 " + rhs
+}
+
+// Osty: mirSelectI32Text
+func mirSelectI32Text(reg, cond, lhs, rhs string) string {
+	return "  " + reg + " = select i1 " + cond + ", i32 " + lhs + ", i32 " + rhs
+}
+
+// Osty: mirSelectI64LiteralRhsText
+func mirSelectI64LiteralRhsText(reg, cond, lhs, lit string) string {
+	return "  " + reg + " = select i1 " + cond + ", i64 " + lhs + ", i64 " + lit
+}
+
+// Osty: mirSelectI64LiteralLhsText
+func mirSelectI64LiteralLhsText(reg, cond, lit, rhs string) string {
+	return "  " + reg + " = select i1 " + cond + ", i64 " + lit + ", i64 " + rhs
+}
+
+// Osty: mirSelectTypedText
+func mirSelectTypedText(reg, ty, cond, lhs, rhs string) string {
+	return "  " + reg + " = select i1 " + cond + ", " + ty + " " + lhs + ", " + ty + " " + rhs
+}
+
+// Osty: mirZExtI8ToI32Text
+func mirZExtI8ToI32Text(reg, src string) string {
+	return "  " + reg + " = zext i8 " + src + " to i32"
+}
+
+// Osty: mirZExtI8ToI64Text
+func mirZExtI8ToI64Text(reg, src string) string {
+	return "  " + reg + " = zext i8 " + src + " to i64"
+}
+
+// Osty: mirZExtI32ToI64Text
+func mirZExtI32ToI64Text(reg, src string) string {
+	return "  " + reg + " = zext i32 " + src + " to i64"
+}
+
+// Osty: mirTruncI64ToI8Text
+func mirTruncI64ToI8Text(reg, src string) string {
+	return "  " + reg + " = trunc i64 " + src + " to i8"
+}
+
+// Osty: mirTruncI64ToI32Text
+func mirTruncI64ToI32Text(reg, src string) string {
+	return "  " + reg + " = trunc i64 " + src + " to i32"
+}
+
+// Osty: mirPtrToIntI64Text
+func mirPtrToIntI64Text(reg, ptr string) string {
+	return "  " + reg + " = ptrtoint ptr " + ptr + " to i64"
+}
+
+// Osty: mirGEPInboundsZeroText
+func mirGEPInboundsZeroText(reg, ty, basePtr string) string {
+	return "  " + reg + " = getelementptr inbounds " + ty + ", ptr " + basePtr + ", i32 0, i32 0"
+}
+
+// Osty: mirGEPInboundsFieldText
+func mirGEPInboundsFieldText(reg, ty, basePtr, idx string) string {
+	return "  " + reg + " = getelementptr inbounds " + ty + ", ptr " + basePtr + ", i32 0, i32 " + idx
+}
+
+// Osty: mirGEPInboundsI8Text
+func mirGEPInboundsI8Text(reg, basePtr, offDigits string) string {
+	return "  " + reg + " = getelementptr i8, ptr " + basePtr + ", i64 " + offDigits
+}
+
+// Osty: mirGEPSizeofText
+func mirGEPSizeofText(reg, ty string) string {
+	return "  " + reg + " = getelementptr " + ty + ", ptr null, i32 1"
+}
+
+// Osty: mirGEPArrayElementText
+func mirGEPArrayElementText(reg, n, arr, idx string) string {
+	return "  " + reg + " = getelementptr [" + n + " x ptr], ptr " + arr + ", i64 0, i64 " + idx
+}
+
+// Osty: mirCallRuntimeI64NoArgsText
+func mirCallRuntimeI64NoArgsText(reg, symbol string) string {
+	return "  " + reg + " = call i64 @" + symbol + "()"
+}
+
+// Osty: mirCallRuntimeVoidOneArgText
+func mirCallRuntimeVoidOneArgText(symbol, arg string) string {
+	return "  call void @" + symbol + "(" + arg + ")"
+}
+
+// Osty: mirCallRuntimeVoidPtrText
+func mirCallRuntimeVoidPtrText(symbol, arg string) string {
+	return "  call void @" + symbol + "(ptr " + arg + ")"
+}
+
+// Osty: mirCallRuntimeVoidPtrI64Text
+func mirCallRuntimeVoidPtrI64Text(symbol, a, n string) string {
+	return "  call void @" + symbol + "(ptr " + a + ", i64 " + n + ")"
+}
+
+// Osty: mirCallRuntimeVoidPtrI64I64Text
+func mirCallRuntimeVoidPtrI64I64Text(symbol, a, n, m string) string {
+	return "  call void @" + symbol + "(ptr " + a + ", i64 " + n + ", i64 " + m + ")"
+}
+
+// Osty: mirCallRuntimePtrI64Text
+func mirCallRuntimePtrI64Text(reg, symbol, n string) string {
+	return "  " + reg + " = call ptr @" + symbol + "(i64 " + n + ")"
+}
+
+// Osty: mirCallRuntimePtrI64PtrText
+func mirCallRuntimePtrI64PtrText(reg, symbol, n, p string) string {
+	return "  " + reg + " = call ptr @" + symbol + "(i64 " + n + ", ptr " + p + ")"
+}
+
+// Osty: mirGCMarkSlotText
+func mirGCMarkSlotText(addr string) string {
+	return "  call void @osty.gc.mark_slot_v1(ptr " + addr + ")"
+}
+
+// Osty: mirInsertValueIfaceCtorText
+func mirInsertValueIfaceCtorText(reg, slot string) string {
+	return "  " + reg + " = insertvalue %osty.iface zeroinitializer, ptr " + slot + ", 0"
+}
+
+// Osty: mirInsertValueIfaceVtableText
+func mirInsertValueIfaceVtableText(reg, iface, vtable string) string {
+	return "  " + reg + " = insertvalue %osty.iface " + iface + ", ptr " + vtable + ", 1"
+}
+
+// Osty: mirExtractValueIfacePtrText
+func mirExtractValueIfacePtrText(reg, iface string) string {
+	return "  " + reg + " = extractvalue %osty.iface " + iface + ", 0"
+}
+
+// Osty: mirExtractValueIfaceVtableText
+func mirExtractValueIfaceVtableText(reg, iface string) string {
+	return "  " + reg + " = extractvalue %osty.iface " + iface + ", 1"
+}
+
+// Osty: mirPhiPtrFromValueOrNullText
+func mirPhiPtrFromValueOrNullText(reg, val, valLabel, nullLabel string) string {
+	return "  " + reg + " = phi ptr [ " + val + ", %" + valLabel +
+		" ], [ null, %" + nullLabel + " ]"
+}
+
+// Osty: mirPhiI64FromValueOrZeroText
+func mirPhiI64FromValueOrZeroText(reg, val, valLabel, zeroLabel string) string {
+	return "  " + reg + " = phi i64 [ " + val + ", %" + valLabel +
+		" ], [ 0, %" + zeroLabel + " ]"
+}
+
+// Osty: mirPhiTypedTwoEdgeText
+func mirPhiTypedTwoEdgeText(reg, ty, a, la, b, lb string) string {
+	return "  " + reg + " = phi " + ty + " [ " + a + ", %" + la +
+		" ], [ " + b + ", %" + lb + " ]"
+}
+
+// Osty: mirGEPInboundsRawIndicesText
+func mirGEPInboundsRawIndicesText(reg, ty, basePtr, indices string) string {
+	return "  " + reg + " = getelementptr inbounds " + ty + ", ptr " + basePtr +
+		", " + indices
+}
+
+// Osty: mirGEPInboundsNullRawIndicesText
+func mirGEPInboundsNullRawIndicesText(reg, ty, indices string) string {
+	return "  " + reg + " = getelementptr inbounds " + ty + ", ptr null, " + indices
+}
+
+// Osty: mirCallTypedFnPtrText
+func mirCallTypedFnPtrText(reg, retTyp, fnPtr, argList string) string {
+	return "  " + reg + " = call " + retTyp + " " + fnPtr + "(" + argList + ")"
+}
+
+// Osty: mirCallI1FromArgsText
+func mirCallI1FromArgsText(reg, symbol, argList string) string {
+	return "  " + reg + " = call i1 @" + symbol + "(" + argList + ")"
+}
+
+// Osty: mirCallTypedFromArgsText
+func mirCallTypedFromArgsText(reg, retTyp, symbol, argList string) string {
+	return "  " + reg + " = call " + retTyp + " @" + symbol + "(" + argList + ")"
+}
+
+// Osty: mirICmpEqI32ZeroText
+func mirICmpEqI32ZeroText(reg, lhs string) string {
+	return "  " + reg + " = icmp eq i32 " + lhs + ", 0"
+}
+
+// Osty: mirICmpNEI64ZeroText
+func mirICmpNEI64ZeroText(reg, lhs string) string {
+	return "  " + reg + " = icmp ne i64 " + lhs + ", 0"
+}
+
+// Osty: mirICmpEqI1Text
+func mirICmpEqI1Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = icmp eq i1 " + lhs + ", " + rhs
+}
+
+// Osty: mirAddI64LiteralText
+func mirAddI64LiteralText(reg, lhs, lit string) string {
+	return "  " + reg + " = add i64 " + lhs + ", " + lit
+}
+
+// Osty: mirSubI64LiteralText
+func mirSubI64LiteralText(reg, lhs, lit string) string {
+	return "  " + reg + " = sub i64 " + lhs + ", " + lit
+}
+
+// Osty: mirSubI64OneText
+func mirSubI64OneText(reg, lhs string) string {
+	return "  " + reg + " = sub i64 " + lhs + ", 1"
+}
+
+// Osty: mirShlI64Text
+func mirShlI64Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = shl i64 " + lhs + ", " + rhs
+}
+
+// Osty: mirShlI64LiteralText
+func mirShlI64LiteralText(reg, lhs, lit string) string {
+	return "  " + reg + " = shl i64 " + lhs + ", " + lit
+}
+
+// Osty: mirLShrI64Text
+func mirLShrI64Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = lshr i64 " + lhs + ", " + rhs
+}
+
+// Osty: mirAShrI64Text
+func mirAShrI64Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = ashr i64 " + lhs + ", " + rhs
+}
+
+// Osty: mirAndI64Text
+func mirAndI64Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = and i64 " + lhs + ", " + rhs
+}
+
+// Osty: mirOrI64Text
+func mirOrI64Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = or i64 " + lhs + ", " + rhs
+}
+
+// Osty: mirXorI64Text
+func mirXorI64Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = xor i64 " + lhs + ", " + rhs
+}
+
+// Osty: mirSremI64Text
+func mirSremI64Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = srem i64 " + lhs + ", " + rhs
+}
+
+// Osty: mirURemI64Text
+func mirURemI64Text(reg, lhs, rhs string) string {
+	return "  " + reg + " = urem i64 " + lhs + ", " + rhs
+}
+
+// Osty: mirFAddText
+func mirFAddText(reg, lhs, rhs string) string {
+	return "  " + reg + " = fadd double " + lhs + ", " + rhs
+}
+
+// Osty: mirFSubText
+func mirFSubText(reg, lhs, rhs string) string {
+	return "  " + reg + " = fsub double " + lhs + ", " + rhs
+}
+
+// Osty: mirFMulText
+func mirFMulText(reg, lhs, rhs string) string {
+	return "  " + reg + " = fmul double " + lhs + ", " + rhs
+}
+
+// Osty: mirFDivText
+func mirFDivText(reg, lhs, rhs string) string {
+	return "  " + reg + " = fdiv double " + lhs + ", " + rhs
+}
+
+// Osty: mirFCmpOEqText
+func mirFCmpOEqText(reg, lhs, rhs string) string {
+	return "  " + reg + " = fcmp oeq double " + lhs + ", " + rhs
+}
+
+// Osty: mirFCmpText
+func mirFCmpText(reg, pred, lhs, rhs string) string {
+	return "  " + reg + " = fcmp " + pred + " double " + lhs + ", " + rhs
+}
+
+// Osty: mirSIToFPText
+func mirSIToFPText(reg, src string) string {
+	return "  " + reg + " = sitofp i64 " + src + " to double"
+}
+
+// Osty: mirFPToSIText
+func mirFPToSIText(reg, src string) string {
+	return "  " + reg + " = fptosi double " + src + " to i64"
+}
+
+// Osty: mirAllocaI8Text
+func mirAllocaI8Text(reg string) string {
+	return "  " + reg + " = alloca i8"
+}
+
+// Osty: mirAllocaDoubleText
+func mirAllocaDoubleText(reg string) string {
+	return "  " + reg + " = alloca double"
+}
+
+// Osty: mirLoadDoubleText
+func mirLoadDoubleText(reg, slot string) string {
+	return "  " + reg + " = load double, ptr " + slot
+}
+
+// Osty: mirLoadI8Text
+func mirLoadI8Text(reg, slot string) string {
+	return "  " + reg + " = load i8, ptr " + slot
+}
+
+// Osty: mirStoreDoubleText
+func mirStoreDoubleText(val, slot string) string {
+	return "  store double " + val + ", ptr " + slot
+}
