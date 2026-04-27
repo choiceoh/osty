@@ -74,6 +74,7 @@ pub fn checkCodePodShapeViolation() -> String { "E0771" }
 pub fn checkCodeNoAllocViolation() -> String { "E0772" }
 pub fn checkCodeIntrinsicNonEmptyBody() -> String { "E0773" }
 pub fn checkCodeBuilderMissingRequiredField() -> String { "E0774" }
+pub fn checkCodePureViolation() -> String { "E0775" }
 
 // ---------------------------------------------------------------------
 // Low-level builder. Higher-level constructors below wrap this so call
@@ -497,6 +498,26 @@ pub fn diagIntrinsicNonEmptyBody(fnName: String, start: Int, end: Int) -> CheckD
             "LANG_SPEC §19.6: intrinsic implementations are supplied by the lowering layer; the source body is ignored",
             "hint: keep the signature and drop the body, or use an empty block",
         ],
+    )
+}
+
+/// diagPureViolation reports a side-effectful operation inside a
+/// `#[pure]` function body. `what` names the rejected operation; the
+/// hint points at either removing `#[pure]` or making the callee/body
+/// obey the readnone contract that LLVM receives.
+pub fn diagPureViolation(fnName: String, what: String, fixHint: String, start: Int, end: Int) -> CheckDiagnostic {
+    let mut notes: List<String> = [
+        "LANG_SPEC v0.6 A13: `#[pure]` lowers to LLVM `readnone`, so the body must not write non-local state, perform I/O, allocate, or call impure functions",
+    ]
+    if fixHint != "" {
+        notes.push("hint: {fixHint}")
+    }
+    checkDiagWithNotes(
+        checkCodePureViolation(),
+        "`#[pure]` function `{fnName}` cannot {what}",
+        start,
+        end,
+        notes,
     )
 }
 

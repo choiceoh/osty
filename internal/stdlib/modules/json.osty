@@ -50,17 +50,13 @@ pub interface Decode {
 // Generic wrappers (codegen-lowered)
 // ---------------------------------------------------------------------------
 
-pub fn encode<T>(value: T) -> String {
-    ""
-}
+pub fn encode<T>(value: T) -> String
 
 pub fn stringify<T>(value: T) -> String {
     encode(value)
 }
 
-pub fn decode<T>(text: String) -> Result<T, Error> {
-    decode::<T>(text)
-}
+pub fn decode<T>(text: String) -> Result<T, Error>
 
 pub fn parse<T>(text: String) -> Result<T, Error> {
     decode(text)
@@ -99,15 +95,16 @@ fn stringifyArray(arr: JsonArray) -> String {
 }
 
 fn stringifyObject(obj: JsonObject) -> String {
-    let entries = obj.entries()
-    let len = entries.len()
+    let keys = obj.keys().sorted()
+    let len = keys.len()
     if len == 0 {
         return "\{\}"
     }
     let mut out = "\{"
     let mut i = 0
     for i < len {
-        let (key, val) = entries[i]
+        let key = keys[i]
+        let val = obj.get(key).unwrap()
         if i > 0 {
             out = "{out},"
         }
@@ -120,38 +117,58 @@ fn stringifyObject(obj: JsonObject) -> String {
 fn escapeJsonString(s: String) -> String {
     let bs = s.bytes()
     let len = bs.len()
-    let mut out = "\""
+    let mut out: List<Byte> = []
+    pushByte(out, 0x22)
     let mut i = 0
     for i < len {
         let b = bs[i]
         let c = b.toInt()
         if c == 0x22 {
-            out = "{out}\\\""
+            pushAscii(out, "\\\"")
         } else if c == 0x5C {
-            out = "{out}\\\\"
+            pushAscii(out, "\\\\")
         } else if c == 0x08 {
-            out = "{out}\\b"
+            pushAscii(out, "\\b")
         } else if c == 0x0C {
-            out = "{out}\\f"
+            pushAscii(out, "\\f")
         } else if c == 0x0A {
-            out = "{out}\\n"
+            pushAscii(out, "\\n")
         } else if c == 0x0D {
-            out = "{out}\\r"
+            pushAscii(out, "\\r")
         } else if c == 0x09 {
-            out = "{out}\\t"
+            pushAscii(out, "\\t")
         } else if c < 0x20 {
-            out = "{out}\\u{hexNibble(c >> 12)}{hexNibble((c >> 8) & 0x0F)}{hexNibble((c >> 4) & 0x0F)}{hexNibble(c & 0x0F)}"
+            pushUnicodeEscape(out, c)
         } else {
-            out = "{out}{b.toChar()}"
+            out.push(b)
         }
         i = i + 1
     }
-    "{out}\""
+    pushByte(out, 0x22)
+    bytes.from(out).toString().unwrap()
 }
 
-fn hexNibble(n: Int) -> Char {
-    let lut = "0123456789abcdef"
-    lut[n & 0x0F].toChar()
+fn pushAscii(buf: List<Byte>, s: String) {
+    let bs = s.bytes()
+    let len = bs.len()
+    let mut i = 0
+    for i < len {
+        buf.push(bs[i])
+        i = i + 1
+    }
+}
+
+fn pushUnicodeEscape(buf: List<Byte>, cp: Int) {
+    pushAscii(buf, "\\u")
+    pushHexNibbleByte(buf, cp >> 12)
+    pushHexNibbleByte(buf, (cp >> 8) & 0x0F)
+    pushHexNibbleByte(buf, (cp >> 4) & 0x0F)
+    pushHexNibbleByte(buf, cp & 0x0F)
+}
+
+fn pushHexNibbleByte(buf: List<Byte>, n: Int) {
+    let lut = "0123456789abcdef".bytes()
+    buf.push(lut[n & 0x0F])
 }
 
 fn formatJsonNumber(n: Float) -> String {
@@ -415,6 +432,9 @@ fn parseNum(bs: List<Byte>, pos: Int, len: Int) -> Result<(Json, Int), Error> {
     }
     let numStr = bytes.from(numBuf).toString()?
     let n = numStr.toFloat()?
+    if n.isNaN() || n.isInfinite() {
+        return Err(error.new("json: number out of range"))
+    }
     Ok((Number(n), i))
 }
 

@@ -1085,7 +1085,7 @@ forward-compatibility hatch.
 
 ---
 
-## Runtime sublanguage (E0771–E0774)
+## Runtime sublanguage (E0771–E0775)
 
 ### E0771 — `CodePodShapeViolation`
 
@@ -1142,6 +1142,14 @@ let p = Point.builder().x(3).build()
 ```
 
 **Fix**: add `.y(<value>)` to the chain before `.build()`, or set
+
+### E0775 — `CodePureViolation`
+
+CodePureViolation: a function carrying `#[pure]` contains a body operation that would make the LLVM `readnone` promise unsound: non-local write, I/O, managed allocation, or a call to a function that is not itself proven `#[pure]`.
+
+Spec: v0.6 A13
+
+**Fix**: remove `#[pure]`, prove and mark the callee `#[pure]`, or rewrite the body to local scalar computation.
 
 ---
 

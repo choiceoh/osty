@@ -1031,6 +1031,15 @@ const (
 	// to drop it from the required set.
 	CodeBuilderMissingRequiredField = "E0774"
 
+	// CodePureViolation: a function carrying `#[pure]` contains a body
+	// operation that would make the LLVM `readnone` promise unsound:
+	// non-local write, I/O, managed allocation, or a call to a function
+	// that is not itself proven `#[pure]`.
+	//
+	// Spec: v0.6 A13
+	// Fix: remove `#[pure]`, prove and mark the callee `#[pure]`, or rewrite the body to local scalar computation.
+	CodePureViolation = "E0775"
+
 	// Manifest — TOML syntax.
 
 	// Fallback TOML syntax error in `osty.toml`.

@@ -200,6 +200,50 @@ fn sawDiagnosticWithNote(result: FrontCheckResult, code: String, note: String) -
     false
 }
 
+fn sawDiagnosticCode(result: FrontCheckResult, code: String) -> Bool {
+    for d in result.diagnostics {
+        if d.code == code {
+            return true
+        }
+    }
+    false
+}
+
+fn testSelfCheckerRejectsImpurePureFunctionBodies() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn impure() -> Int { 1 }
+
+            #[pure]
+            fn bad() -> Int {
+                let xs = [1]
+                impure()
+            }
+            """,
+    )
+
+    testing.assert(checked.summary.errors > 0)
+    testing.assert(sawDiagnosticCode(checked, "E0775"))
+}
+
+fn testSelfCheckerAllowsPureCallsAndLocalMutationInPureFunction() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            #[pure]
+            fn mix(a: Int, b: Int) -> Int { a * 31 + b }
+
+            #[pure]
+            fn caller(a: Int, b: Int) -> Int {
+                let mut acc = 0
+                acc = acc + mix(a, b)
+                acc
+            }
+            """,
+    )
+
+    testing.assertEq(checked.summary.errors, 0)
+}
+
 fn testSelfCheckerReportsAssignmentReturnAndCallErrors() {
     let checked = frontendCheckSource(
         r"""

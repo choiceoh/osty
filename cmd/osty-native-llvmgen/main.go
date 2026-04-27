@@ -194,5 +194,3 @@ func renderWarnings(warnings []error) []string {
 	}
 	return out
 }
-
-
