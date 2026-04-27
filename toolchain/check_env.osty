@@ -997,6 +997,13 @@ pub fn checkExpectAssignable(env: CheckEnv, expected: Int, got: Int, start: Int,
 /// Ty arena. Mirrors the legacy rules (`toolchain/check.osty:1419-1495`)
 /// while dropping the repeated string parsing.
 pub fn checkIsAssignable(env: CheckEnv, dst: Int, src: Int) -> Bool {
+    checkIsAssignableDepth(env, dst, src, 0)
+}
+
+fn checkIsAssignableDepth(env: CheckEnv, dst: Int, src: Int, depth: Int) -> Bool {
+    if depth > 128 {
+        return true
+    }
     let d = checkResolveAliasDeep(env, dst)
     let s = checkResolveAliasDeep(env, src)
     if tyIsBad(env.tys, d) || tyIsBad(env.tys, s) {
@@ -1042,7 +1049,7 @@ pub fn checkIsAssignable(env: CheckEnv, dst: Int, src: Int) -> Bool {
         }
         let mut i = 0
         for de in da {
-            if !(checkIsAssignable(env, de, sa[i])) {
+            if !(checkIsAssignableDepth(env, de, sa[i], depth + 1)) {
                 return false
             }
             i = i + 1
@@ -1060,12 +1067,12 @@ pub fn checkIsAssignable(env: CheckEnv, dst: Int, src: Int) -> Bool {
             let spe = sp[i]
             // Function parameters are invariant (contravariant treated
             // as equivalence to keep the checker predictable).
-            if !(checkIsAssignable(env, dpe, spe)) || !(checkIsAssignable(env, spe, dpe)) {
+            if !(checkIsAssignableDepth(env, dpe, spe, depth + 1)) || !(checkIsAssignableDepth(env, spe, dpe, depth + 1)) {
                 return false
             }
             i = i + 1
         }
-        return checkIsAssignable(env, tyRetAt(env.tys, d), tyRetAt(env.tys, s))
+        return checkIsAssignableDepth(env, tyRetAt(env.tys, d), tyRetAt(env.tys, s), depth + 1)
     }
     if dk == TkNamed && sk == TkNamed && tyHeadAt(env.tys, d) == tyHeadAt(env.tys, s) {
         let da = tyArgsAt(env.tys, d)
@@ -1075,7 +1082,7 @@ pub fn checkIsAssignable(env: CheckEnv, dst: Int, src: Int) -> Bool {
         }
         let mut i = 0
         for de in da {
-            if !(checkIsAssignable(env, de, sa[i])) {
+            if !(checkIsAssignableDepth(env, de, sa[i], depth + 1)) {
                 return false
             }
             i = i + 1
@@ -1083,33 +1090,44 @@ pub fn checkIsAssignable(env: CheckEnv, dst: Int, src: Int) -> Bool {
         return true
     }
     if dk == TkOptional && sk == TkOptional {
-        return checkIsAssignable(env, tyInnerAt(env.tys, d), tyInnerAt(env.tys, s))
+        return checkIsAssignableDepth(env, tyInnerAt(env.tys, d), tyInnerAt(env.tys, s), depth + 1)
     }
     // `T?` (TkOptional) and `Option<T>` (TkNamed "Option") are the
     // same type spelled two ways. Normalise before comparing.
     if dk == TkOptional && sk == TkNamed && tyHeadAt(env.tys, s) == "Option" {
         let sa = tyArgsAt(env.tys, s)
         if checkIntListLen(sa) == 1 {
-            return checkIsAssignable(env, tyInnerAt(env.tys, d), sa[0])
+            return checkIsAssignableDepth(env, tyInnerAt(env.tys, d), sa[0], depth + 1)
         }
     }
     if dk == TkNamed && tyHeadAt(env.tys, d) == "Option" && sk == TkOptional {
         let da = tyArgsAt(env.tys, d)
         if checkIntListLen(da) == 1 {
-            return checkIsAssignable(env, da[0], tyInnerAt(env.tys, s))
+            return checkIsAssignableDepth(env, da[0], tyInnerAt(env.tys, s), depth + 1)
         }
     }
     if dk == TkNamed && checkIsInterface(env, tyHeadAt(env.tys, d)) {
-        return checkTypeSatisfiesInterface(env, s, d)
+        return checkTypeSatisfiesInterfaceDepth(env, s, d, depth + 1)
     }
     false
 }
 
 pub fn checkTypeSatisfiesInterface(env: CheckEnv, concrete: Int, iface: Int) -> Bool {
-    checkTypeSatisfiesInterfaceSeen(env, concrete, iface, [])
+    checkTypeSatisfiesInterfaceDepth(env, concrete, iface, 0)
+}
+
+fn checkTypeSatisfiesInterfaceDepth(env: CheckEnv, concrete: Int, iface: Int, depth: Int) -> Bool {
+    checkTypeSatisfiesInterfaceSeenDepth(env, concrete, iface, [], depth)
 }
 
 fn checkTypeSatisfiesInterfaceSeen(env: CheckEnv, concrete: Int, iface: Int, seen: List<String>) -> Bool {
+    checkTypeSatisfiesInterfaceSeenDepth(env, concrete, iface, seen, 0)
+}
+
+fn checkTypeSatisfiesInterfaceSeenDepth(env: CheckEnv, concrete: Int, iface: Int, seen: List<String>, depth: Int) -> Bool {
+    if depth > 128 {
+        return true
+    }
     let concreteResolved = checkResolveAliasDeep(env, concrete)
     let ifaceResolved = checkResolveAliasDeep(env, iface)
     if tyIsBad(env.tys, concreteResolved) || tyIsBad(env.tys, ifaceResolved) {
@@ -1139,14 +1157,14 @@ fn checkTypeSatisfiesInterfaceSeen(env: CheckEnv, concrete: Int, iface: Int, see
     if tyKindAt(env.tys, concreteResolved) == TkNamed {
         let concreteHead = tyHeadAt(env.tys, concreteResolved)
         for boundTy in checkGenericBoundsFor(env, concreteHead) {
-            if checkTypeSatisfiesInterfaceSeen(env, boundTy, ifaceResolved, nextSeen) {
+            if checkTypeSatisfiesInterfaceSeenDepth(env, boundTy, ifaceResolved, nextSeen, depth + 1) {
                 return true
             }
         }
         let methods = checkInterfaceMethodSet(env, ifaceHead)
         let required = checkInterfaceRequiredMethodSet(env, ifaceHead)
         for req in required {
-            if !(checkConcreteMethodSatisfiesInterfaceMethod(env, concreteResolved, concreteHead, ifaceResolved, req, true)) {
+            if !(checkConcreteMethodSatisfiesInterfaceMethodDepth(env, concreteResolved, concreteHead, ifaceResolved, req, true, depth + 1)) {
                 return false
             }
         }
@@ -1154,7 +1172,7 @@ fn checkTypeSatisfiesInterfaceSeen(env: CheckEnv, concrete: Int, iface: Int, see
             if !(checkFnHasBody(env, req.name, req.owner)) {
                 continue
             }
-            if !(checkConcreteMethodSatisfiesInterfaceMethod(env, concreteResolved, concreteHead, ifaceResolved, req, false)) {
+            if !(checkConcreteMethodSatisfiesInterfaceMethodDepth(env, concreteResolved, concreteHead, ifaceResolved, req, false, depth + 1)) {
                 return false
             }
         }
@@ -1389,13 +1407,25 @@ fn checkConcreteMethodSatisfiesInterfaceMethod(
     req: CheckFnSig,
     required: Bool,
 ) -> Bool {
+    checkConcreteMethodSatisfiesInterfaceMethodDepth(env, concreteResolved, concreteHead, ifaceResolved, req, required, 0)
+}
+
+fn checkConcreteMethodSatisfiesInterfaceMethodDepth(
+    env: CheckEnv,
+    concreteResolved: Int,
+    concreteHead: String,
+    ifaceResolved: Int,
+    req: CheckFnSig,
+    required: Bool,
+    depth: Int,
+) -> Bool {
     let found = checkLookupMethod(env, concreteHead, req.name)
     if found.name == "" {
         return !(required)
     }
     let wantTy = checkConcreteMethodTy(env, req, ifaceResolved, concreteResolved)
     let gotTy = checkConcreteMethodTy(env, found, concreteResolved, concreteResolved)
-    checkIsAssignable(env, wantTy, gotTy)
+    checkIsAssignableDepth(env, wantTy, gotTy, depth + 1)
 }
 
 fn checkCollectInterfaceMethods(env: CheckEnv, owner: String, out: List<CheckFnSig>, seen: List<String>) -> List<CheckFnSig> {

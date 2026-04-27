@@ -743,6 +743,7 @@ fn srAstCollectDecl(
                 out = srCheckDeclAnnotations(file, member.extra, srAnnotTargetMethod(), out)
             }
         }
+        out = srCheckDuplicateVariantJSONTags(file, idx, out)
     } else if node.kind == AstNLet {
         let names = srAstPatternNames(file, node.left, [])
         for item in names {
@@ -3122,6 +3123,89 @@ fn srJsonFieldTypeAllowsOptional(file: AstFile, typeIdx: Int) -> Bool {
     }
     let parts = strings.split(t.text, ".")
     parts.len() == 1 && t.text == "Option"
+}
+
+/// srJsonVariantTag returns the JSON tag for a variant node, or None if
+/// the variant has `#[json(skip)]`. Mirrors
+/// internal/resolve/resolve.go::jsonVariantTag.
+fn srJsonVariantTag(file: AstFile, variantIdx: Int) -> Option<String> {
+    let node = srAstNode(file, variantIdx)
+    let mut tag = node.text
+    let mut skipped = false
+    if node.extra >= 0 {
+        let anns = srCollectAnnotationNodes(file, node.extra)
+        for ann in anns {
+            if ann.text != "json" {
+                continue
+            }
+            for argIdx in ann.children {
+                let view = srAnnotArgView(file, argIdx)
+                if view.key == "key" {
+                    if srIsStringLitAtIdx(file, view.valueIdx) {
+                        tag = srAstNode(file, view.valueIdx).text
+                    }
+                } else if view.key == "skip" {
+                    skipped = true
+                }
+            }
+        }
+    }
+    if skipped { None } else { Some(tag) }
+}
+
+/// srCheckDuplicateVariantJSONTags checks for duplicate JSON tags
+/// across variants of a single enum. Mirrors
+/// internal/resolve/resolve.go::checkDuplicateVariantJSONTags.
+fn srCheckDuplicateVariantJSONTags(
+    file: AstFile,
+    enumIdx: Int,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let node = srAstNode(file, enumIdx)
+    let mut out = result
+    let mut seenTags: List<String> = []
+    let mut seenStarts: List<Int> = []
+    let mut seenEnds: List<Int> = []
+    for memberIdx in node.children {
+        let member = srAstNode(file, memberIdx)
+        if member.kind != AstNVariant {
+            continue
+        }
+        let tagOpt = srJsonVariantTag(file, memberIdx)
+        if tagOpt == None {
+            continue
+        }
+        let tag = match tagOpt { Some(t) -> t, None -> "" }
+        let mut dup = false
+        for i in 0..seenTags.len() {
+            if seenTags[i] == tag {
+                dup = true
+                out.diagnostics.push(selfResolveDiagnostic(
+                    "E0501",
+                    "enum `{node.text}` has duplicate JSON tag `{tag}`",
+                    "",
+                    member.start,
+                    member.end,
+                ))
+                out.diagnostics.push(selfResolveDiagnosticHintAtNode(
+                    "E0501",
+                    "previous JSON tag here",
+                    "",
+                    seenStarts[i],
+                    seenEnds[i],
+                    -1,
+                    "",
+                ))
+                break
+            }
+        }
+        if !dup {
+            seenTags.push(tag)
+            seenStarts.push(member.start)
+            seenEnds.push(member.end)
+        }
+    }
+    out
 }
 
 fn srCheckDeprecatedArgs(

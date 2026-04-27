@@ -35046,14 +35046,33 @@ func checkExpectAssignable(env *CheckEnv, expected int, got int, start int, end 
 	return false
 }
 
+var checkIsAssignableRecursionDepth int
+var checkIsAssignableActive = map[string]int{}
+
 // Osty: /tmp/selfhost_merged.osty:15205:5
 func checkIsAssignable(env *CheckEnv, dst int, src int) bool {
+	checkIsAssignableRecursionDepth++
+	defer func() { checkIsAssignableRecursionDepth-- }()
+	if checkIsAssignableRecursionDepth > 128 {
+		return true
+	}
 	// Osty: /tmp/selfhost_merged.osty:15206:5
 	d := checkResolveAliasDeep(env, dst)
 	_ = d
 	// Osty: /tmp/selfhost_merged.osty:15207:5
 	s := checkResolveAliasDeep(env, src)
 	_ = s
+	activeKey := fmt.Sprintf("%d:%d", d, s)
+	if checkIsAssignableActive[activeKey] > 0 {
+		return true
+	}
+	checkIsAssignableActive[activeKey]++
+	defer func() {
+		checkIsAssignableActive[activeKey]--
+		if checkIsAssignableActive[activeKey] == 0 {
+			delete(checkIsAssignableActive, activeKey)
+		}
+	}()
 	// Osty: /tmp/selfhost_merged.osty:15208:5
 	if tyIsBad(env.tys, d) || tyIsBad(env.tys, s) {
 		// Osty: /tmp/selfhost_merged.osty:15209:9

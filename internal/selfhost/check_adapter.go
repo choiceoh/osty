@@ -45,6 +45,7 @@ func CheckSourceStructured(src []byte) CheckResult {
 	}
 	result := adaptCheckResult(checked, lexed)
 	selfhostAppendIntrinsicBodyGateForSource(&result, src)
+	selfhostAppendPureGateForSource(&result, src)
 	return result
 }
 
@@ -88,6 +89,7 @@ func CheckStructuredFromRun(run *FrontendRun) CheckResult {
 	}
 	result := adaptCheckResultFromRuneStream(checked, run.rt, run.stream)
 	selfhostAppendIntrinsicBodyGateForRun(&result, run)
+	selfhostAppendPureGateForRun(&result, run)
 	return result
 }
 
