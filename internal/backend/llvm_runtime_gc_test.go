@@ -3455,6 +3455,141 @@ int main(void) {
 	}
 }
 
+// TestBundledRuntimeBackgroundMarkerConcurrentSweep covers Phase 0e —
+// once the bg marker drains the mark queue, it transitions the cycle
+// to SWEEPING and reclaims dead headers in batches concurrently with
+// the mutator. By the time `incremental_finish` runs, the bg thread
+// should already have set `sweep_reclaim_done`, so the finish path
+// only needs to walk surviving BLACKs to reset them to WHITE.
+func TestBundledRuntimeBackgroundMarkerConcurrentSweep(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_bg_marker_sweep_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_bg_marker_sweep_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <time.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
+void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void *osty_rt_list_new(void);
+void osty_rt_list_push_ptr(void *list, void *value);
+
+void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count);
+void osty_gc_collect_incremental_finish(void);
+
+int64_t osty_gc_debug_state(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_bg_marker_drained_total(void);
+int64_t osty_gc_debug_bg_marker_swept_total(void);
+int64_t osty_gc_debug_sweep_reclaim_done(void);
+int64_t osty_gc_debug_sweep_steps_total(void);
+
+static void nap_ms(int ms) {
+    struct timespec ts;
+    ts.tv_sec  = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000 * 1000;
+    nanosleep(&ts, NULL);
+}
+
+int main(void) {
+    /* Mix of rooted survivors (50) and dangling allocations (200).
+     * The cycle should reclaim all 200 dangling via the bg sweep
+     * path. */
+    enum { N = 50, M = 200 };
+    void *list = osty_rt_list_new();
+    osty_gc_root_bind_v1(list);
+    for (int i = 0; i < N; i++) {
+        void *child = osty_gc_alloc_v1(7, 16, "child");
+        osty_gc_pre_write_v1(list, NULL, 0);
+        osty_rt_list_push_ptr(list, child);
+        osty_gc_post_write_v1(list, child, 0);
+    }
+    for (int i = 0; i < M; i++) {
+        (void)osty_gc_alloc_v1(7, 16, "drop");
+    }
+
+    osty_gc_collect_incremental_start_with_stack_roots(NULL, 0);
+
+    /* Generous nap so bg marker drains mark + completes sweep before
+     * finish runs. With 51 mark items and ~250 sweep items at the
+     * default per-iter budget, this fits comfortably in 100ms. */
+    nap_ms(100);
+
+    long long mid_swept     = (long long)osty_gc_debug_bg_marker_swept_total();
+    long long mid_reclaim   = (long long)osty_gc_debug_sweep_reclaim_done();
+    long long mid_steps     = (long long)osty_gc_debug_sweep_steps_total();
+
+    osty_gc_collect_incremental_finish();
+
+    long long final_state   = (long long)osty_gc_debug_state();
+    long long final_live    = (long long)osty_gc_debug_live_count();
+
+    printf("mid_swept=%lld mid_reclaim_done=%lld mid_steps=%lld final_state=%lld final_live=%lld\n",
+        mid_swept, mid_reclaim, mid_steps, final_state, final_live);
+
+    osty_gc_root_release_v1(list);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(),
+		"OSTY_GC_BG_MARKER=1",
+		"OSTY_GC_ASSIST_BYTES_PER_UNIT=0",
+	)
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	out := string(runOutput)
+	/* Required:
+	 *   - mid_swept >= 1: bg sweep ran concurrently with the mutator
+	 *     (mid_swept=0 would mean the bg path never reached SWEEPING).
+	 *   - mid_reclaim_done == 1: bg finished the reclaim phase before
+	 *     the mutator hit finish — the load-bearing concurrent-sweep
+	 *     proof. Regression signal: mid_reclaim_done=0 means finish_locked
+	 *     did the heap walk itself (Phase 0a/0d behaviour).
+	 *   - final_state == 0 (IDLE) and final_live == 51 (list + N
+	 *     children survived; M dangling reclaimed). */
+	mustContain := []string{
+		"mid_reclaim_done=1 ",
+		"final_state=0 ",
+		"final_live=51",
+	}
+	for _, frag := range mustContain {
+		if !strings.Contains(out, frag) {
+			t.Fatalf("concurrent sweep harness missing %q\nfull output:\n%s",
+				frag, out)
+		}
+	}
+	if strings.Contains(out, "mid_swept=0 ") {
+		t.Fatalf("bg sweep did not engage; full output:\n%s", out)
+	}
+}
+
 // TestBundledRuntimeBackgroundMarkerMultiThreadCycle covers Phase 0b —
 // when user worker threads are live, incremental_start (previously
 // hard-gated to early-return on workers > 0) must instead drive an STW
