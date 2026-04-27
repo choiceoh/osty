@@ -19,13 +19,201 @@ fn abortString() -> String {
     empty[0]
 }
 
+fn textWidth(s: String) -> Int {
+    strings.graphemes(s).len()
+}
+
+fn graphemeSlice(parts: List<String>, start: Int, end: Int) -> String {
+    let mut out = ""
+    for i in start..end {
+        out = "{out}{parts[i]}"
+    }
+    out
+}
+
+fn trimNumberZeros(s: String) -> String {
+    if !strings.contains(s, ".") {
+        return s
+    }
+    let chars = s.chars()
+    let mut end = chars.len()
+    for end > 0 && chars[end - 1] == '0' {
+        end = end - 1
+    }
+    if end > 0 && chars[end - 1] == '.' {
+        end = end - 1
+    }
+    let mut out = ""
+    for i in 0..end {
+        out = "{out}{chars[i]}"
+    }
+    out
+}
+
+fn isAlignSpec(c: Char) -> Bool {
+    c == '<' || c == '>' || c == '^'
+}
+
+fn alignBySpec(s: String, width: Int, mode: Char, fill: Char) -> String {
+    if mode == '<' {
+        return padRight(s, width, fill)
+    }
+    if mode == '^' {
+        return center(s, width, fill)
+    }
+    padLeft(s, width, fill)
+}
+
+fn applyFormatSpec(value: String, spec: String) -> String {
+    let chars = spec.chars()
+    if chars.len() == 0 {
+        return value
+    }
+
+    let mut fill = ' '
+    let mut mode = '>'
+    let mut pos = 0
+
+    if isAlignSpec(chars[0]) {
+        mode = chars[0]
+        pos = 1
+    } else if chars.len() >= 2 && isAlignSpec(chars[1]) {
+        fill = chars[0]
+        mode = chars[1]
+        pos = 2
+    }
+
+    let mut width = 0
+    let mut hasWidth = false
+    for pos < chars.len() && chars[pos].isDigit() {
+        hasWidth = true
+        width = width * 10 + (chars[pos].toInt() - '0'.toInt())
+        pos = pos + 1
+    }
+
+    let mut precision = -1
+    if pos < chars.len() && chars[pos] == '.' {
+        precision = 0
+        pos = pos + 1
+        for pos < chars.len() && chars[pos].isDigit() {
+            precision = precision * 10 + (chars[pos].toInt() - '0'.toInt())
+            pos = pos + 1
+        }
+    }
+
+    let mut out = value
+    if precision >= 0 {
+        out = truncate(out, precision, "")
+    }
+    if hasWidth {
+        out = alignBySpec(out, width, mode, fill)
+    }
+    out
+}
+
+fn formatSpecValid(spec: String) -> Bool {
+    let chars = spec.chars()
+    if chars.len() == 0 {
+        return true
+    }
+
+    let mut pos = 0
+    if isAlignSpec(chars[0]) {
+        pos = 1
+    } else if chars.len() >= 2 && isAlignSpec(chars[1]) {
+        pos = 2
+    }
+
+    for pos < chars.len() && chars[pos].isDigit() {
+        pos = pos + 1
+    }
+
+    if pos < chars.len() && chars[pos] == '.' {
+        pos = pos + 1
+        for pos < chars.len() && chars[pos].isDigit() {
+            pos = pos + 1
+        }
+    }
+
+    pos == chars.len()
+}
+
+fn literalField(content: String, lbrace: Char, rbrace: Char) -> String {
+    "{lbrace}{content}{rbrace}"
+}
+
+fn renderIndexedField(content: String, args: List<String>, lbrace: Char, rbrace: Char) -> String {
+    let colon: Char = ':'
+    let chars = content.chars()
+    let mut idxText = ""
+    let mut spec = ""
+    let mut inSpec = false
+    for c in chars {
+        if !inSpec && c == colon {
+            inSpec = true
+        } else if inSpec {
+            spec = "{spec}{c}"
+        } else {
+            idxText = "{idxText}{c}"
+        }
+    }
+
+    let idx = idxText.toInt()
+    if idx.isOk() {
+        let index = idx.unwrap()
+        if index >= 0 && index < args.len() {
+            if !formatSpecValid(spec) {
+                return literalField(content, lbrace, rbrace)
+            }
+            return applyFormatSpec(args[index], spec)
+        }
+    }
+    literalField(content, lbrace, rbrace)
+}
+
+fn autoFieldConsumes(content: String) -> Bool {
+    if content == "" {
+        return true
+    }
+    let chars = content.chars()
+    if chars.len() == 0 || chars[0] != ':' {
+        return false
+    }
+    let mut spec = ""
+    for i in 1..chars.len() {
+        spec = "{spec}{chars[i]}"
+    }
+    formatSpecValid(spec)
+}
+
+fn renderAutoField(content: String, args: List<String>, index: Int, lbrace: Char, rbrace: Char) -> String {
+    if index < 0 || index >= args.len() {
+        return literalField(content, lbrace, rbrace)
+    }
+    if content == "" {
+        return args[index]
+    }
+    let chars = content.chars()
+    if chars.len() > 0 && chars[0] == ':' {
+        let mut spec = ""
+        for i in 1..chars.len() {
+            spec = "{spec}{chars[i]}"
+        }
+        if !formatSpecValid(spec) {
+            return literalField(content, lbrace, rbrace)
+        }
+        return applyFormatSpec(args[index], spec)
+    }
+    literalField(content, lbrace, rbrace)
+}
+
 // ---------------------------------------------------------------------------
 // String alignment / padding
 // ---------------------------------------------------------------------------
 
 // padLeft pads s on the left with fill until it reaches at least width.
 pub fn padLeft(s: String, width: Int, fill: Char = ' ') -> String {
-    let sLen = s.chars().len()
+    let sLen = textWidth(s)
     if sLen >= width {
         return s
     }
@@ -35,7 +223,7 @@ pub fn padLeft(s: String, width: Int, fill: Char = ' ') -> String {
 
 // padRight pads s on the right with fill until it reaches at least width.
 pub fn padRight(s: String, width: Int, fill: Char = ' ') -> String {
-    let sLen = s.chars().len()
+    let sLen = textWidth(s)
     if sLen >= width {
         return s
     }
@@ -46,7 +234,7 @@ pub fn padRight(s: String, width: Int, fill: Char = ' ') -> String {
 // center pads s equally on both sides. When the padding is odd, the
 // extra character goes on the right.
 pub fn center(s: String, width: Int, fill: Char = ' ') -> String {
-    let sLen = s.chars().len()
+    let sLen = textWidth(s)
     if sLen >= width {
         return s
     }
@@ -58,23 +246,84 @@ pub fn center(s: String, width: Int, fill: Char = ' ') -> String {
     "{lp}{s}{rp}"
 }
 
-// truncate limits s to at most maxLen characters, appending suffix
+// visibleWidth returns the number of Unicode grapheme clusters in s.
+pub fn visibleWidth(s: String) -> Int {
+    textWidth(s)
+}
+
+// align pads s to width. mode accepts "left", "right", or "center".
+pub fn align(s: String, width: Int, mode: String = "left", fill: Char = ' ') -> String {
+    if mode == "right" {
+        return padLeft(s, width, fill)
+    }
+    if mode == "center" {
+        return center(s, width, fill)
+    }
+    padRight(s, width, fill)
+}
+
+// truncate limits s to at most maxLen grapheme clusters, appending suffix
 // (default "...") when truncation occurs.
 pub fn truncate(s: String, maxLen: Int, suffix: String = "...") -> String {
-    let chars = s.chars()
-    if chars.len() <= maxLen {
+    let parts = strings.graphemes(s)
+    if parts.len() <= maxLen {
         return s
     }
-    let suffixLen = suffix.chars().len()
+    let suffixLen = textWidth(suffix)
     if maxLen <= suffixLen {
         return suffix
     }
-    let mut out = ""
     let limit = maxLen - suffixLen
-    for i in 0..limit {
-        out = "{out}{chars[i]}"
-    }
+    let out = graphemeSlice(parts, 0, limit)
     "{out}{suffix}"
+}
+
+// truncateStart keeps the right side of s and prefixes it with suffix.
+pub fn truncateStart(s: String, maxLen: Int, suffix: String = "...") -> String {
+    let parts = strings.graphemes(s)
+    if parts.len() <= maxLen {
+        return s
+    }
+    let suffixLen = textWidth(suffix)
+    if maxLen <= suffixLen {
+        return suffix
+    }
+    let keep = maxLen - suffixLen
+    let start = parts.len() - keep
+    let out = graphemeSlice(parts, start, parts.len())
+    "{suffix}{out}"
+}
+
+// truncateMiddle preserves both ends of s and places suffix in the middle.
+pub fn truncateMiddle(s: String, maxLen: Int, suffix: String = "...") -> String {
+    let parts = strings.graphemes(s)
+    if parts.len() <= maxLen {
+        return s
+    }
+    let suffixLen = textWidth(suffix)
+    if maxLen <= suffixLen {
+        return suffix
+    }
+    let keep = maxLen - suffixLen
+    let left = keep / 2
+    let right = keep - left
+    let head = graphemeSlice(parts, 0, left)
+    let tail = graphemeSlice(parts, parts.len() - right, parts.len())
+    "{head}{suffix}{tail}"
+}
+
+// escape returns a double-quoted-string-safe representation without quotes.
+pub fn escape(s: String) -> String {
+    let slash = strings.replaceAll(s, "\\", "\\\\")
+    let quote = strings.replaceAll(slash, "\"", "\\\"")
+    let newline = strings.replaceAll(quote, "\n", "\\n")
+    let tab = strings.replaceAll(newline, "\t", "\\t")
+    strings.replaceAll(tab, "\r", "\\r")
+}
+
+// quote wraps s in double quotes and escapes control characters.
+pub fn quote(s: String) -> String {
+    "\"{escape(s)}\""
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +402,32 @@ pub fn hexUpper(n: Int) -> String {
     hex(n, true)
 }
 
+// prefixedBase formats n in base and inserts prefix after the sign.
+pub fn prefixedBase(n: Int, base: Int, prefix: String, upper: Bool = false) -> String {
+    let raw = intToBase(n, base)
+    let body = if upper { strings.toUpper(raw) } else { raw }
+    if n < 0 {
+        "-{prefix}{body[1..]}"
+    } else {
+        "{prefix}{body}"
+    }
+}
+
+// hexPrefixed formats n as 0xff, preserving the sign as -0xff.
+pub fn hexPrefixed(n: Int, upper: Bool = false) -> String {
+    prefixedBase(n, 16, "0x", upper)
+}
+
+// binaryPrefixed formats n as 0b1010, preserving the sign as -0b1010.
+pub fn binaryPrefixed(n: Int) -> String {
+    prefixedBase(n, 2, "0b")
+}
+
+// octalPrefixed formats n as 0o10, preserving the sign as -0o10.
+pub fn octalPrefixed(n: Int) -> String {
+    prefixedBase(n, 8, "0o")
+}
+
 // zeroPad pads an integer with leading zeros to at least width digits.
 pub fn zeroPad(n: Int, width: Int) -> String {
     let s = n.toString()
@@ -166,9 +441,9 @@ pub fn zeroPad(n: Int, width: Int) -> String {
 // Float formatting
 // ---------------------------------------------------------------------------
 
-// fixed formats f with exactly decimals digits after the decimal point.
+// fixed formats f with exactly precision digits after the decimal point.
 // Accurate up to 18 decimal places (clamped by 64-bit integer range).
-pub fn fixed(f: Float, decimals: Int) -> String {
+pub fn fixed(f: Float, precision: Int) -> String {
     if f.isNaN() {
         return "NaN"
     }
@@ -179,7 +454,7 @@ pub fn fixed(f: Float, decimals: Int) -> String {
         return "Inf"
     }
     let negative = f < 0.0 || isNegZero(f)
-    if decimals <= 0 {
+    if precision <= 0 {
         let s = f.abs().toIntRound().unwrap().toString()
         if negative {
             return "-{s}"
@@ -187,7 +462,7 @@ pub fn fixed(f: Float, decimals: Int) -> String {
         return s
     }
     let abs = f.abs()
-    let clampedDec = if decimals > 18 { 18 } else { decimals }
+    let clampedDec = if precision > 18 { 18 } else { precision }
 
     let mut power = 1.0
     let mut i = 0
@@ -217,7 +492,7 @@ pub fn toFixed(f: Float, precision: Int) -> String {
 }
 
 // scientific formats f in scientific notation (e.g. "1.23e+4").
-pub fn scientific(f: Float, decimals: Int = 6) -> String {
+pub fn scientific(f: Float, precision: Int = 6) -> String {
     if f.isNaN() {
         return "NaN"
     }
@@ -227,7 +502,7 @@ pub fn scientific(f: Float, decimals: Int = 6) -> String {
         }
         return "Inf"
     }
-    let digits = if decimals < 0 { 0 } else { decimals }
+    let digits = if precision < 0 { 0 } else { precision }
     let negative = f < 0.0 || isNegZero(f)
     if f == 0.0 {
         let prefix = if negative { "-" } else { "" }
@@ -264,9 +539,9 @@ pub fn scientific(f: Float, decimals: Int = 6) -> String {
     "{prefix}{mantissa}e{expSign}{expStr}"
 }
 
-// percentage formats f as a percentage with the given decimal places.
-pub fn percentage(f: Float, decimals: Int = 0) -> String {
-    "{fixed(f * 100.0, decimals)}%"
+// percentage formats f as a percentage with the given precision.
+pub fn percentage(f: Float, precision: Int = 0) -> String {
+    "{fixed(f * 100.0, precision)}%"
 }
 
 // repeat returns s repeated n times.
@@ -361,13 +636,53 @@ pub fn sign(n: Int) -> String {
 }
 
 // signFloat formats f with an explicit sign prefix.
-pub fn signFloat(f: Float, decimals: Int = -1) -> String {
-    let s = if decimals >= 0 { fixed(f, decimals) } else { f.toString() }
+pub fn signFloat(f: Float, precision: Int = -1) -> String {
+    let s = if precision >= 0 { fixed(f, precision) } else { f.toString() }
     if f > 0.0 {
         "+{s}"
     } else {
         s
     }
+}
+
+// trimTrailingZeros removes a fractional tail like ".5000" -> ".5".
+pub fn trimTrailingZeros(s: String) -> String {
+    trimNumberZeros(s)
+}
+
+// compact formats large integers with short SI suffixes: 1200 -> "1.2K".
+pub fn compact(n: Int, precision: Int = 1) -> String {
+    let units = ["", "K", "M", "B", "T", "P"]
+    let negative = n < 0
+    let mut val = n.toFloat().abs()
+    let mut ui = 0
+    for val >= 1000.0 && ui < units.len() - 1 {
+        val = val / 1000.0
+        ui = ui + 1
+    }
+    if ui == 0 {
+        return n.toString()
+    }
+    let prefix = if negative { "-" } else { "" }
+    let places = if precision < 0 { 0 } else { precision }
+    let text = trimNumberZeros(fixed(val, places))
+    "{prefix}{text}{units[ui]}"
+}
+
+fn bytesWithUnits(n: Int, unitBase: Float, decimals: Int, units: List<String>) -> String {
+    let negative = n < 0
+    let mut val = n.toFloat().abs()
+    if val < unitBase {
+        return "{n} {units[0]}"
+    }
+    let mut ui = 0
+    for val >= unitBase && ui < units.len() - 1 {
+        val = val / unitBase
+        ui = ui + 1
+    }
+    let prefix = if negative { "-" } else { "" }
+    let places = if decimals < 0 { 0 } else { decimals }
+    "{prefix}{fixed(val, places)} {units[ui]}"
 }
 
 // bytes formats a byte count as a human-readable string using binary
@@ -394,14 +709,24 @@ pub fn bytes(n: Int) -> String {
     }
 }
 
+// bytesFixed formats a byte count with a caller-selected precision.
+pub fn bytesFixed(n: Int, precision: Int = 2) -> String {
+    bytesWithUnits(n, 1024.0, precision, ["B", "KiB", "MiB", "GiB", "TiB", "PiB"])
+}
+
+// metricBytes formats bytes with decimal SI units: KB, MB, GB, ...
+pub fn metricBytes(n: Int, precision: Int = 2) -> String {
+    bytesWithUnits(n, 1000.0, precision, ["B", "KB", "MB", "GB", "TB", "PB"])
+}
+
 // ---------------------------------------------------------------------------
 // Sprintf-style formatting
 // ---------------------------------------------------------------------------
 
-// format replaces positional placeholders in template with args.
-// Template uses brace-delimited indices: the character sequence
-// opening-brace 0 closing-brace is replaced by args[0], etc.
-// Doubled opening/closing braces produce a single literal brace.
+// format replaces placeholders in template with args. Placeholders may be
+// positional ({0}), automatic ({}), or carry a string spec such as {0:>8},
+// {0:<8}, {0:^8}, {0:0>4}, or {0:.5}. Width and precision count grapheme
+// clusters. Doubled opening/closing braces produce a single literal brace.
 // Callers must use raw strings (r"...") or escape braces (\{ \})
 // to prevent Osty's own interpolation from consuming the placeholders.
 pub fn format(template: String, args: List<String>) -> String {
@@ -411,6 +736,7 @@ pub fn format(template: String, args: List<String>) -> String {
     let templateLen = chars.len()
     let mut out = ""
     let mut i = 0
+    let mut autoIndex = 0
     for i < templateLen {
         let c = chars[i]
         if c == lbrace {
@@ -426,16 +752,14 @@ pub fn format(template: String, args: List<String>) -> String {
                 j = j + 1
             }
             if j < templateLen && chars[j] == rbrace {
-                let idx = numStr.toInt()
-                if idx.isOk() {
-                    let index = idx.unwrap()
-                    if index >= 0 && index < args.len() {
-                        out = "{out}{args[index]}"
-                    } else {
-                        out = "{out}{lbrace}{numStr}{rbrace}"
+                let fieldChars = numStr.chars()
+                if numStr == "" || (fieldChars.len() > 0 && fieldChars[0] == ':') {
+                    out = "{out}{renderAutoField(numStr, args, autoIndex, lbrace, rbrace)}"
+                    if autoFieldConsumes(numStr) {
+                        autoIndex = autoIndex + 1
                     }
                 } else {
-                    out = "{out}{lbrace}{numStr}{rbrace}"
+                    out = "{out}{renderIndexedField(numStr, args, lbrace, rbrace)}"
                 }
                 i = j + 1
             } else {
@@ -524,22 +848,52 @@ pub fn numbered(items: List<String>) -> String {
     strings.join(lines, "\n")
 }
 
+// indent prefixes every line in text.
+pub fn indent(text: String, prefix: String) -> String {
+    let lines = strings.splitLines(text)
+    if lines.isEmpty() {
+        return ""
+    }
+    let mut out: List<String> = []
+    for line in lines {
+        out.push("{prefix}{line}")
+    }
+    strings.join(out, "\n")
+}
+
 // ---------------------------------------------------------------------------
 // Table formatting
 // ---------------------------------------------------------------------------
 
+fn tableAlignFor(alignments: List<String>, ci: Int) -> String {
+    if ci >= 0 && ci < alignments.len() {
+        let mode = alignments[ci]
+        if mode == "right" || mode == "center" {
+            return mode
+        }
+    }
+    "left"
+}
+
 // table renders a list of rows as an aligned text table.
 pub fn table(headers: List<String>, rows: List<List<String>>, sep: String = " | ") -> String {
+    let alignments: List<String> = []
+    tableAligned(headers, rows, alignments, sep)
+}
+
+// tableAligned renders a text table with per-column alignment. Alignment
+// entries accept "left", "right", or "center"; missing entries default left.
+pub fn tableAligned(headers: List<String>, rows: List<List<String>>, alignments: List<String>, sep: String = " | ") -> String {
     let cols = headers.len()
 
     let mut widths: List<Int> = []
     for h in headers {
-        widths.push(h.chars().len())
+        widths.push(textWidth(h))
     }
     for row in rows {
         for ci in 0..cols {
             if ci < row.len() {
-                let cellLen = row[ci].chars().len()
+                let cellLen = textWidth(row[ci])
                 if cellLen > widths[ci] {
                     widths[ci] = cellLen
                 }
@@ -549,7 +903,7 @@ pub fn table(headers: List<String>, rows: List<List<String>>, sep: String = " | 
 
     let mut headerCells: List<String> = []
     for ci in 0..cols {
-        headerCells.push(padRight(headers[ci], widths[ci], ' '))
+        headerCells.push(align(headers[ci], widths[ci], tableAlignFor(alignments, ci), ' '))
     }
     let headerLine = strings.join(headerCells, sep)
 
@@ -564,7 +918,7 @@ pub fn table(headers: List<String>, rows: List<List<String>>, sep: String = " | 
         let mut cells: List<String> = []
         for ci in 0..cols {
             let cell = if ci < row.len() { row[ci] } else { "" }
-            cells.push(padRight(cell, widths[ci], ' '))
+            cells.push(align(cell, widths[ci], tableAlignFor(alignments, ci), ' '))
         }
         lines.push(strings.join(cells, sep))
     }
