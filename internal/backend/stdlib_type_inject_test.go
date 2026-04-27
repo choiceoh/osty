@@ -66,7 +66,7 @@ fn main() {}
 			// Every canonical helper listed in
 			// internal/llvmgen/stdlib_method_lookup.go should appear
 			// on the injected generic template.
-			for _, want := range []string{"containsKey", "getOr", "update", "retainIf", "mergeWith", "mapValues"} {
+			for _, want := range []string{"containsKey", "getOr", "getOrInsert", "getOrInsertWith", "update", "retainIf", "mergeWith", "mapValues"} {
 				hit := false
 				for _, m := range sd.Methods {
 					if m != nil && m.Name == want {
@@ -128,7 +128,7 @@ fn main() {}
 	// Helpers without method-local generics: struct-level K/V are
 	// enough to specialize, so they must appear on the concrete
 	// Map$String$Int decl after monomorph.
-	for _, want := range []string{"containsKey", "getOr", "update", "retainIf", "mergeWith"} {
+	for _, want := range []string{"containsKey", "getOr", "getOrInsert", "getOrInsertWith", "update", "retainIf", "mergeWith"} {
 		hit := false
 		for _, m := range specialized.Methods {
 			if m != nil && m.Name == want {

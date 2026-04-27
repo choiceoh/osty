@@ -24,14 +24,23 @@ find(pred: fn(T) -> Bool) -> T?
 map<R>(f: fn(T) -> R) -> List<R>
 filter(pred: fn(T) -> Bool) -> List<T>
 fold<A>(init: A, f: fn(A, T) -> A) -> A
+reduce(f: fn(T, T) -> T) -> T?
+scan<A>(init: A, f: fn(A, T) -> A) -> List<A>
+flatMap<R>(f: fn(T) -> List<R>) -> List<R>
 sorted() -> List<T>                          // T: Ordered
 sortedBy(key: fn(T) -> K) -> List<T>         // K: Ordered
 reversed() -> List<T>
+take(n: Int) -> List<T>
+drop(n: Int) -> List<T>
 appended(item: T) -> List<T>
 concat(other: List<T>) -> List<T>
 zip<U>(other: List<U>) -> List<(T, U)>
+zip3<U, V>(other1: List<U>, other2: List<V>) -> List<(T, U, V)>
 enumerate() -> List<(Int, T)>
 groupBy<K>(key: fn(T) -> K) -> Map<K, List<T>>  // K: Hashable
+chunked(size: Int) -> List<List<T>>          // aborts when size <= 0
+windowed(size: Int, step: Int) -> List<List<T>> // aborts when size/step <= 0
+partition(pred: fn(T) -> Bool) -> (List<T>, List<T>)
 
 push(item: T)
 pop() -> T?
@@ -49,6 +58,8 @@ len() -> Int
 isEmpty() -> Bool
 get(key: K) -> V?
 getOr(key: K, default: V) -> V
+getOrInsert(key: K, default: V) -> V             // eager default; inserts on miss
+getOrInsertWith(key: K, make: fn() -> V) -> V    // lazy supplier; inserts on miss
 containsKey(key: K) -> Bool
 keys() -> List<K>
 values() -> List<V>

@@ -19,8 +19,8 @@ import (
 // buildStraightLineSplitFn synthesises a simple straight-line function
 // that:
 //
-//   parts = value.split(sep)
-//   ... callers append `parts[K]`-style reads here
+//	parts = value.split(sep)
+//	... callers append `parts[K]`-style reads here
 //
 // Returns the function, its only block, the value local, the sep
 // local (filled in from a string literal), and the parts local for

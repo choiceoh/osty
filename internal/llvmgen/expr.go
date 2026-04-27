@@ -5771,6 +5771,10 @@ func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
 		return g.emitMapGet(call, base, keyTyp, keyString)
 	case "getOr":
 		return g.emitMapGetOr(call, base, keyTyp, keyString)
+	case "getOrInsert":
+		return g.emitMapGetOrInsert(call, base, keyTyp, keyString)
+	case "getOrInsertWith":
+		return g.emitMapGetOrInsertWith(call, base, keyTyp, keyString)
 	case "mergeWith":
 		return g.emitMapMergeWith(call, base, keyTyp, keyString)
 	case "mapValues":
@@ -6407,6 +6411,260 @@ func (g *generator) emitMapGetOr(call *ast.CallExpr, base value, keyTyp string, 
 	out.gcManaged = valTyp == "ptr"
 	out.rootPaths = g.rootPathsForType(valTyp)
 	return out, true, nil
+}
+
+// emitMapGetOrInsert lowers `m.getOrInsert(key, default) -> V`.
+// The default operand follows normal call semantics: it is evaluated
+// before the helper executes, even when the key is already present.
+func (g *generator) emitMapGetOrInsert(call *ast.CallExpr, base value, keyTyp string, keyString bool) (value, bool, error) {
+	if len(call.Args) != 2 ||
+		call.Args[0].Name != "" || call.Args[1].Name != "" ||
+		call.Args[0].Value == nil || call.Args[1].Value == nil {
+		return value{}, true, unsupported("call", "map.getOrInsert requires two positional arguments")
+	}
+	var keySource, valueSource ast.Type
+	if field, ok := fieldExprOfCallFn(call); ok {
+		keySource, valueSource, _ = g.iterableMapSourceTypes(field.X)
+	}
+	key, err := g.emitExprWithSourceType(call.Args[0].Value, keySource)
+	if err != nil {
+		return value{}, true, err
+	}
+	if key.typ != keyTyp {
+		return value{}, true, unsupportedf("type-system", "map.getOrInsert key type %s, want %s", key.typ, keyTyp)
+	}
+	loadedKey, err := g.loadIfPointer(key)
+	if err != nil {
+		return value{}, true, err
+	}
+	def, err := g.emitExprWithSourceType(call.Args[1].Value, valueSource)
+	if err != nil {
+		return value{}, true, err
+	}
+	valTyp := base.mapValueTyp
+	if def.typ != valTyp {
+		return value{}, true, unsupportedf("type-system", "map.getOrInsert default type %s, want %s", def.typ, valTyp)
+	}
+	return g.emitMapGetOrInsertValue(base, value{typ: keyTyp, ref: loadedKey.ref}, def, keyTyp, keyString)
+}
+
+// emitMapGetOrInsertWith lowers `m.getOrInsertWith(key, make) -> V`.
+// The supplier is invoked only on misses and the lookup/insert sequence
+// runs under the same per-map lock used by `Map.update`.
+func (g *generator) emitMapGetOrInsertWith(call *ast.CallExpr, base value, keyTyp string, keyString bool) (value, bool, error) {
+	if len(call.Args) != 2 ||
+		call.Args[0].Name != "" || call.Args[1].Name != "" ||
+		call.Args[0].Value == nil || call.Args[1].Value == nil {
+		return value{}, true, unsupported("call", "map.getOrInsertWith requires two positional arguments")
+	}
+	var keySource ast.Type
+	if field, ok := fieldExprOfCallFn(call); ok {
+		keySource, _, _ = g.iterableMapSourceTypes(field.X)
+	}
+	key, err := g.emitExprWithSourceType(call.Args[0].Value, keySource)
+	if err != nil {
+		return value{}, true, err
+	}
+	if key.typ != keyTyp {
+		return value{}, true, unsupportedf("type-system", "map.getOrInsertWith key type %s, want %s", key.typ, keyTyp)
+	}
+	loadedKey, err := g.loadIfPointer(key)
+	if err != nil {
+		return value{}, true, err
+	}
+	makeVal, err := g.emitExpr(call.Args[1].Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	makeHeld, sig, err := g.protectFnValueCallback("getorinsertwith.make", makeVal, "map.getOrInsertWith callback")
+	if err != nil {
+		return value{}, true, err
+	}
+	if len(sig.params) != 0 || sig.ret != base.mapValueTyp {
+		return value{}, true, unsupportedf("call", "map.getOrInsertWith make must be fn() -> V")
+	}
+	return g.emitMapGetOrInsertWithCallback(base, value{typ: keyTyp, ref: loadedKey.ref}, makeHeld, sig, keyTyp, keyString)
+}
+
+func (g *generator) emitMapGetOrInsertValue(base value, loadedKey value, missValue value, keyTyp string, keyString bool) (value, bool, error) {
+	valTyp := base.mapValueTyp
+	if err := g.emitMapLock(base); err != nil {
+		return value{}, true, err
+	}
+	var out value
+	var err error
+	if valTyp != "ptr" {
+		out, err = g.emitMapGetOrInsertScalar(base, loadedKey, missValue, keyTyp, keyString)
+	} else {
+		out, err = g.emitMapGetOrInsertPtr(base, loadedKey, func() (value, error) {
+			return missValue, nil
+		}, keyTyp, keyString)
+	}
+	if err != nil {
+		return value{}, true, err
+	}
+	if err := g.emitMapUnlock(base); err != nil {
+		return value{}, true, err
+	}
+	out.gcManaged = valTyp == "ptr"
+	out.rootPaths = g.rootPathsForType(valTyp)
+	return out, true, nil
+}
+
+func (g *generator) emitMapGetOrInsertWithCallback(base value, loadedKey value, makeHeld value, sig *fnSig, keyTyp string, keyString bool) (value, bool, error) {
+	valTyp := base.mapValueTyp
+	if err := g.emitMapLock(base); err != nil {
+		return value{}, true, err
+	}
+	var out value
+	var err error
+	if valTyp != "ptr" {
+		out, err = g.emitMapGetOrInsertScalarWithCallback(base, loadedKey, makeHeld, sig, keyTyp, keyString)
+	} else {
+		out, err = g.emitMapGetOrInsertPtr(base, loadedKey, func() (value, error) {
+			return g.emitProtectedFnValueCall(makeHeld, sig, nil)
+		}, keyTyp, keyString)
+	}
+	if err != nil {
+		return value{}, true, err
+	}
+	if err := g.emitMapUnlock(base); err != nil {
+		return value{}, true, err
+	}
+	out.gcManaged = valTyp == "ptr"
+	out.rootPaths = g.rootPathsForType(valTyp)
+	return out, true, nil
+}
+
+func (g *generator) emitMapGetOrInsertScalar(base value, loadedKey value, missValue value, keyTyp string, keyString bool) (value, error) {
+	valTyp := base.mapValueTyp
+	getSym := mapRuntimeGetSymbol(keyTyp, keyString)
+	g.declareRuntimeSymbol(getSym, "i1", []paramInfo{{typ: "ptr"}, {typ: keyTyp}, {typ: "ptr"}})
+
+	emitter := g.toOstyEmitter()
+	slot := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, mirAllocaText(slot, valTyp))
+	present := llvmCall(emitter, "i1", getSym, []*LlvmValue{
+		toOstyValue(base),
+		toOstyValue(loadedKey),
+		{typ: "ptr", name: slot},
+	})
+	labels := llvmIfExprStart(emitter, present)
+	g.takeOstyEmitter(emitter)
+
+	g.currentBlock = labels.thenLabel
+	emitter = g.toOstyEmitter()
+	payload := llvmLoad(emitter, &LlvmValue{typ: valTyp, name: slot, pointer: true})
+	g.takeOstyEmitter(emitter)
+	hitPred := g.currentBlock
+	hitVal := value{typ: valTyp, ref: payload.name}
+
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+	if err := g.emitMapInsert(base, loadedKey, missValue); err != nil {
+		return value{}, err
+	}
+	missPred := g.currentBlock
+	return g.emitIfExprPhi(labels, hitPred, missPred, hitVal, missValue)
+}
+
+func (g *generator) emitMapGetOrInsertScalarWithCallback(base value, loadedKey value, makeHeld value, sig *fnSig, keyTyp string, keyString bool) (value, error) {
+	valTyp := base.mapValueTyp
+	getSym := mapRuntimeGetSymbol(keyTyp, keyString)
+	g.declareRuntimeSymbol(getSym, "i1", []paramInfo{{typ: "ptr"}, {typ: keyTyp}, {typ: "ptr"}})
+
+	emitter := g.toOstyEmitter()
+	slot := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, mirAllocaText(slot, valTyp))
+	present := llvmCall(emitter, "i1", getSym, []*LlvmValue{
+		toOstyValue(base),
+		toOstyValue(loadedKey),
+		{typ: "ptr", name: slot},
+	})
+	labels := llvmIfExprStart(emitter, present)
+	g.takeOstyEmitter(emitter)
+
+	g.currentBlock = labels.thenLabel
+	emitter = g.toOstyEmitter()
+	payload := llvmLoad(emitter, &LlvmValue{typ: valTyp, name: slot, pointer: true})
+	g.takeOstyEmitter(emitter)
+	hitPred := g.currentBlock
+	hitVal := value{typ: valTyp, ref: payload.name}
+
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+	missValue, err := g.emitProtectedFnValueCall(makeHeld, sig, nil)
+	if err != nil {
+		return value{}, err
+	}
+	if missValue.typ != valTyp {
+		return value{}, unsupportedf("type-system", "map.getOrInsertWith make return %s, want %s", missValue.typ, valTyp)
+	}
+	if err := g.emitMapInsert(base, loadedKey, missValue); err != nil {
+		return value{}, err
+	}
+	missPred := g.currentBlock
+	return g.emitIfExprPhi(labels, hitPred, missPred, hitVal, missValue)
+}
+
+func (g *generator) emitMapGetOrInsertPtr(base value, loadedKey value, miss func() (value, error), keyTyp string, keyString bool) (value, error) {
+	optVal, err := g.emitMapGetCore(base, loadedKey, keyTyp, keyString)
+	if err != nil {
+		return value{}, err
+	}
+
+	emitter := g.toOstyEmitter()
+	isNil := llvmNextTemp(emitter)
+	emitter.body = append(emitter.body, mirICmpEqPtrNullText(isNil, optVal.ref))
+	labels := llvmIfExprStart(emitter, &LlvmValue{typ: "i1", name: isNil})
+	g.takeOstyEmitter(emitter)
+
+	g.currentBlock = labels.thenLabel
+	missValue, err := miss()
+	if err != nil {
+		return value{}, err
+	}
+	if missValue.typ != base.mapValueTyp {
+		return value{}, unsupportedf("type-system", "map.getOrInsert miss value %s, want %s", missValue.typ, base.mapValueTyp)
+	}
+	if err := g.emitMapInsert(base, loadedKey, missValue); err != nil {
+		return value{}, err
+	}
+	missPred := g.currentBlock
+
+	emitter = g.toOstyEmitter()
+	llvmIfExprElse(emitter, labels)
+	g.takeOstyEmitter(emitter)
+	g.currentBlock = labels.elseLabel
+	hitPred := g.currentBlock
+
+	return g.emitIfExprPhi(labels, missPred, hitPred, missValue, optVal)
+}
+
+func (g *generator) emitMapLock(base value) error {
+	g.declareRuntimeSymbol(mapRuntimeLockSymbol(), "void", []paramInfo{{typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
+		mapRuntimeLockSymbol(),
+		llvmCallArgs([]*LlvmValue{toOstyValue(base)}),
+	))
+	g.takeOstyEmitter(emitter)
+	return nil
+}
+
+func (g *generator) emitMapUnlock(base value) error {
+	g.declareRuntimeSymbol(mapRuntimeUnlockSymbol(), "void", []paramInfo{{typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
+		mapRuntimeUnlockSymbol(),
+		llvmCallArgs([]*LlvmValue{toOstyValue(base)}),
+	))
+	g.takeOstyEmitter(emitter)
+	return nil
 }
 
 // emitOptionMethodCall lowers `opt.isSome()` and `opt.isNone()` as a

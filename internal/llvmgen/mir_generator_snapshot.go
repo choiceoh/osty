@@ -5645,9 +5645,10 @@ func mirGEPNamedFieldLine(reg, ty, basePtr, fieldIdxDigits string) string {
 // §6 runtime-symbol composers.
 
 // Osty: mirRtSymbol / mirRtListSymbol / mirRtMapSymbol / mirRtSetSymbol /
-//       mirRtStringSymbol / mirRtBytesSymbol / mirRtChanSymbol /
-//       mirRtTaskGroupSymbol / mirRtGCSymbol / mirRtTestSymbol /
-//       mirRtMathSymbol / mirRtRandomSymbol / mirRtCancelSymbol
+//
+//	mirRtStringSymbol / mirRtBytesSymbol / mirRtChanSymbol /
+//	mirRtTaskGroupSymbol / mirRtGCSymbol / mirRtTestSymbol /
+//	mirRtMathSymbol / mirRtRandomSymbol / mirRtCancelSymbol
 func mirRtSymbol(suffix string) string          { return "osty_rt_" + suffix }
 func mirRtListSymbol(suffix string) string      { return "osty_rt_list_" + suffix }
 func mirRtMapSymbol(suffix string) string       { return "osty_rt_map_" + suffix }
@@ -5700,7 +5701,8 @@ func mirPredI1Eq(a, b string) string {
 // §7 typed-store / typed-load shapes with !alias.scope metadata.
 
 // Osty: mirStoreI64WithAliasScopeLine / DoubleWithAliasScopeLine / PtrWithAliasScopeLine /
-//       LoadI64WithAliasScopeLine / DoubleWithAliasScopeLine / PtrWithAliasScopeLine
+//
+//	LoadI64WithAliasScopeLine / DoubleWithAliasScopeLine / PtrWithAliasScopeLine
 func mirStoreI64WithAliasScopeLine(val, slot, scopeRef string) string {
 	return "  " + mirInstrStore() + " i64 " + val + ", ptr " + slot + ", !alias.scope " + scopeRef + "\n"
 }
@@ -5739,8 +5741,9 @@ func mirLoadPtrWithNoAliasLine(reg, slot, ref string) string {
 // §7 LLVM access-group metadata helpers.
 
 // Osty: mirLLVMAccessGroupRef / mirStoreI64WithAccessGroupLine /
-//       DoubleWithAccessGroupLine / LoadI64WithAccessGroupLine /
-//       DoubleWithAccessGroupLine
+//
+//	DoubleWithAccessGroupLine / LoadI64WithAccessGroupLine /
+//	DoubleWithAccessGroupLine
 func mirLLVMAccessGroupRef(ref string) string {
 	return "!access_group " + ref
 }
@@ -5846,7 +5849,8 @@ func mirRtTaskGroupRootSymbol() string { return mirRtSymbol("task_group") }
 // §7 LLVM-text type-text composers.
 
 // Osty: mirListTypeText / MapTypeText / SetTypeText / mirOptionTypeTextScalar /
-//       OptionTypeTextPtr / mirResultTypeTextScalar / ResultTypeTextPtr
+//
+//	OptionTypeTextPtr / mirResultTypeTextScalar / ResultTypeTextPtr
 func mirListTypeText() string         { return mirTypePtr() }
 func mirMapTypeText() string          { return mirTypePtr() }
 func mirSetTypeText() string          { return mirTypePtr() }
@@ -5858,7 +5862,8 @@ func mirResultTypeTextPtr() string    { return mirOptionPtrAggregateType() }
 // §7 LLVM-text discriminant probe / payload-extract shapes.
 
 // Osty: mirOptionDiscProbeLine / PayloadProbeLine / mirOptionPtrDiscProbeLine /
-//       PtrPayloadProbeLine / mirResultDiscProbeLine / PayloadProbeLine
+//
+//	PtrPayloadProbeLine / mirResultDiscProbeLine / PayloadProbeLine
 func mirOptionDiscProbeLine(reg, aggReg string) string {
 	return mirExtractValueLine(reg, mirOptionAggregateType(), aggReg, "0")
 }
@@ -5881,7 +5886,8 @@ func mirResultPayloadProbeLine(reg, aggReg string) string {
 // §7 LLVM-text Option / Result aggregate-construction shapes.
 
 // Osty: mirOptionNoneAggregateLine / SomeDiscAggregateLine / SomePayloadAggregateLine /
-//       mirResultOkDiscAggregateLine / ErrDiscAggregateLine
+//
+//	mirResultOkDiscAggregateLine / ErrDiscAggregateLine
 func mirOptionNoneAggregateLine(reg string) string {
 	return mirInsertValueAggLine(reg, mirOptionAggregateType(), mirAggregateUndef(), mirTypeI64(), mirDiscriminantNone(), "0")
 }
@@ -5919,7 +5925,8 @@ func mirConditionalBranch3Line(cmpReg, ty, a, b, thenLbl, elseLbl string) string
 // §7 LLVM-text loop-prelude shape helpers.
 
 // Osty: mirLoopHeaderBlockLine / mirLoopBodyBlockLine / mirLoopExitBlockLine /
-//       mirLoopLatchBlockLine
+//
+//	mirLoopLatchBlockLine
 func mirLoopHeaderBlockLine(head string) string { return mirBlockHeaderLine(head) }
 func mirLoopBodyBlockLine(body string) string   { return mirBlockHeaderLine(body) }
 func mirLoopExitBlockLine(exit string) string   { return mirBlockHeaderLine(exit) }
@@ -6187,10 +6194,10 @@ func mirGCRootSafepointWithCommentLine(slotsPtr, slotCount string) string {
 // §8 LLVM-text builder-buffer helpers.
 
 // Osty: mirBuildLines{2,3,4,5}
-func mirBuildLines2(a, b string) string             { return a + b }
-func mirBuildLines3(a, b, c string) string          { return a + b + c }
-func mirBuildLines4(a, b, c, d string) string       { return a + b + c + d }
-func mirBuildLines5(a, b, c, d, e string) string    { return a + b + c + d + e }
+func mirBuildLines2(a, b string) string          { return a + b }
+func mirBuildLines3(a, b, c string) string       { return a + b + c }
+func mirBuildLines4(a, b, c, d string) string    { return a + b + c + d }
+func mirBuildLines5(a, b, c, d, e string) string { return a + b + c + d + e }
 
 // §8 LLVM-text type alias helpers.
 
@@ -6271,7 +6278,8 @@ func mirAppendArgI32(prev, reg string) string    { return prev + ", i32 " + reg 
 // §9 LLVM-text list-len / list-isEmpty common shape composers.
 
 // Osty: mirCallListLenLine / mirCallListIsEmptyLine / mirCallMapLenLine /
-//       mirCallSetLenLine / mirCallBytesLenLine
+//
+//	mirCallSetLenLine / mirCallBytesLenLine
 func mirCallListLenLine(reg, listReg string) string {
 	return "  " + reg + " = " + mirInstrCall() + " i64 @" + mirRtListLenSymbolName() + "(ptr " + listReg + ")\n"
 }
@@ -6341,8 +6349,9 @@ func mirLabelResultErr() string      { return "result.err" }
 // §10 expanded fixed-symbol composers — Bytes runtime long-tail.
 
 // Osty: mirRtBytes{IndexOf,LastIndexOf,Split,Join,Concat,Repeat,Replace,ReplaceAll,
-//       TrimLeft,TrimRight,Trim,TrimSpace,ToUpper,ToLower,ToHex,Slice,Contains,
-//       StartsWith,EndsWith}Symbol
+//
+//	TrimLeft,TrimRight,Trim,TrimSpace,ToUpper,ToLower,ToHex,Slice,Contains,
+//	StartsWith,EndsWith}Symbol
 func mirRtBytesIndexOfSymbol() string     { return mirRtBytesSymbol("index_of") }
 func mirRtBytesLastIndexOfSymbol() string { return mirRtBytesSymbol("last_index_of") }
 func mirRtBytesSplitSymbol() string       { return mirRtBytesSymbol("split") }
@@ -6366,9 +6375,10 @@ func mirRtBytesEndsWithSymbol() string    { return mirRtBytesSymbol("ends_with")
 // §10 String runtime symbol composers.
 
 // Osty: mirRtString{Chars,Bytes,ByteLen,ToUpper,ToLower,IsValidInt,ToInt,
-//       IsValidFloat,ToFloat,Count,Slice,SplitInto,NthSegment,IndexOf,
-//       LastIndexOf,Contains,StartsWith,EndsWith,Trim,Split,Join,Replace,
-//       Repeat,Hash,IsEmpty,Len}Symbol
+//
+//	IsValidFloat,ToFloat,Count,Slice,SplitInto,NthSegment,IndexOf,
+//	LastIndexOf,Contains,StartsWith,EndsWith,Trim,Split,Join,Replace,
+//	Repeat,Hash,IsEmpty,Len}Symbol
 func mirRtStringCharsSymbol() string        { return mirRtStringSymbol("Chars") }
 func mirRtStringBytesSymbol() string        { return mirRtStringSymbol("Bytes") }
 func mirRtStringByteLenSymbol() string      { return mirRtStringSymbol("ByteLen") }
@@ -6646,15 +6656,15 @@ func mirFastMathFlagsForArith() string {
 // §11 LLVM-text small-helper shapes.
 
 // Osty: mirNullPtrConst / Zero{I64,I32,Double}Const / One{I64,I32,Double}Const / True{I1}Const / FalseI1Const
-func mirNullPtrConst() string     { return mirPtrNullLiteral() }
-func mirZeroI64Const() string     { return "i64 0" }
-func mirZeroI32Const() string     { return "i32 0" }
-func mirZeroDoubleConst() string  { return "double 0.0" }
-func mirOneI64Const() string      { return "i64 1" }
-func mirOneI32Const() string      { return "i32 1" }
-func mirOneDoubleConst() string   { return "double 1.0" }
-func mirTrueI1Const() string      { return "i1 1" }
-func mirFalseI1Const() string     { return "i1 0" }
+func mirNullPtrConst() string    { return mirPtrNullLiteral() }
+func mirZeroI64Const() string    { return "i64 0" }
+func mirZeroI32Const() string    { return "i32 0" }
+func mirZeroDoubleConst() string { return "double 0.0" }
+func mirOneI64Const() string     { return "i64 1" }
+func mirOneI32Const() string     { return "i32 1" }
+func mirOneDoubleConst() string  { return "double 1.0" }
+func mirTrueI1Const() string     { return "i1 1" }
+func mirFalseI1Const() string    { return "i1 0" }
 
 // §11 LLVM-text minus-one constant tokens.
 
@@ -6717,29 +6727,32 @@ func mirICmpNonNullPtrLine(reg, a string) string {
 // §12 task / select / race runtime symbol composers.
 
 // Osty: mirRtTask{Spawn,GroupSpawn,HandleJoin,GroupCancel,GroupIsCancelled,Race,CollectAll}Symbol
-func mirRtTaskSpawnSymbol() string             { return mirRtSymbol("task_spawn") }
-func mirRtTaskGroupSpawnSymbol() string        { return mirRtSymbol("task_group_spawn") }
-func mirRtTaskHandleJoinSymbol() string        { return mirRtSymbol("task_handle_join") }
-func mirRtTaskGroupCancelSymbol() string       { return mirRtSymbol("task_group_cancel") }
-func mirRtTaskGroupIsCancelledSymbol() string  { return mirRtSymbol("task_group_is_cancelled") }
-func mirRtTaskRaceSymbol() string              { return mirRtSymbol("task_race") }
-func mirRtTaskCollectAllSymbol() string        { return mirRtSymbol("task_collect_all") }
+func mirRtTaskSpawnSymbol() string            { return mirRtSymbol("task_spawn") }
+func mirRtTaskGroupSpawnSymbol() string       { return mirRtSymbol("task_group_spawn") }
+func mirRtTaskHandleJoinSymbol() string       { return mirRtSymbol("task_handle_join") }
+func mirRtTaskGroupCancelSymbol() string      { return mirRtSymbol("task_group_cancel") }
+func mirRtTaskGroupIsCancelledSymbol() string { return mirRtSymbol("task_group_is_cancelled") }
+func mirRtTaskRaceSymbol() string             { return mirRtSymbol("task_race") }
+func mirRtTaskCollectAllSymbol() string       { return mirRtSymbol("task_collect_all") }
 
 // Osty: mirRtSelect{,Recv,Timeout,Default}Symbol / mirRtSelectSendBytesV1Symbol
-func mirRtSelectSymbol() string             { return mirRtSymbol("select") }
-func mirRtSelectRecvSymbol() string         { return mirRtSymbol("select_recv") }
-func mirRtSelectTimeoutSymbol() string      { return mirRtSymbol("select_timeout") }
-func mirRtSelectDefaultSymbol() string      { return mirRtSymbol("select_default") }
-func mirRtSelectSendBytesV1Symbol() string  { return mirRtSymbol("select_send_bytes_v1") }
+func mirRtSelectSymbol() string            { return mirRtSymbol("select") }
+func mirRtSelectRecvSymbol() string        { return mirRtSymbol("select_recv") }
+func mirRtSelectTimeoutSymbol() string     { return mirRtSymbol("select_timeout") }
+func mirRtSelectDefaultSymbol() string     { return mirRtSymbol("select_default") }
+func mirRtSelectSendBytesV1Symbol() string { return mirRtSymbol("select_send_bytes_v1") }
 
 // Osty: mirRtListSetBytesV1Symbol / GetBytesV1Symbol / SetSuffixSymbol / GetSuffixSymbol /
-//       MapKeysSortedSuffixSymbol / SelectSendSuffixSymbol
-func mirRtListSetBytesV1Symbol() string                   { return mirRtListSymbol("set_bytes_v1") }
-func mirRtListGetBytesV1Symbol() string                   { return mirRtListSymbol("get_bytes_v1") }
-func mirRtListSetSuffixSymbol(suffix string) string       { return mirRtListSymbol("set_" + suffix) }
-func mirRtListGetSuffixSymbol(suffix string) string       { return mirRtListSymbol("get_" + suffix) }
-func mirRtMapKeysSortedSuffixSymbol(suffix string) string { return mirRtMapSymbol("keys_sorted_" + suffix) }
-func mirRtSelectSendSuffixSymbol(suffix string) string    { return mirRtSymbol("select_send_" + suffix) }
+//
+//	MapKeysSortedSuffixSymbol / SelectSendSuffixSymbol
+func mirRtListSetBytesV1Symbol() string             { return mirRtListSymbol("set_bytes_v1") }
+func mirRtListGetBytesV1Symbol() string             { return mirRtListSymbol("get_bytes_v1") }
+func mirRtListSetSuffixSymbol(suffix string) string { return mirRtListSymbol("set_" + suffix) }
+func mirRtListGetSuffixSymbol(suffix string) string { return mirRtListSymbol("get_" + suffix) }
+func mirRtMapKeysSortedSuffixSymbol(suffix string) string {
+	return mirRtMapSymbol("keys_sorted_" + suffix)
+}
+func mirRtSelectSendSuffixSymbol(suffix string) string { return mirRtSymbol("select_send_" + suffix) }
 
 // §12 LLVM-text typed-arg slot composer specialisations.
 
@@ -6774,8 +6787,9 @@ func mirAllocaInitDoubleLine(slotReg, val string) string {
 // §12 LLVM-text typed-load + typed-cast composite helpers.
 
 // Osty: mirLoadAndZExtI8ToI64Line / mirLoadAndSExtI8ToI64Line /
-//       mirLoadAndZExtI1ToI64Line / mirLoadI64AndTruncToI8Line /
-//       mirLoadI64AndTruncToI1Line
+//
+//	mirLoadAndZExtI1ToI64Line / mirLoadI64AndTruncToI8Line /
+//	mirLoadI64AndTruncToI1Line
 func mirLoadAndZExtI8ToI64Line(loadReg, zextReg, slot string) string {
 	return mirLoadI8Line(loadReg, slot) + mirZExtI8ToI64Line(zextReg, loadReg)
 }
@@ -6975,7 +6989,8 @@ func mirGEPThenStorePtrLine(slotReg, ty, basePtr, idxDigits, val string) string 
 // §14 LLVM-text aggregate-construction composite shapes.
 
 // Osty: mirOptionSomeI64BuildLine / mirOptionSomePtrBuildLine /
-//       mirResultOk{I64,Ptr}BuildLine / mirResultErrPtrBuildLine
+//
+//	mirResultOk{I64,Ptr}BuildLine / mirResultErrPtrBuildLine
 func mirOptionSomeI64BuildLine(stepReg, fullReg, payload string) string {
 	return mirInsertValueI64Line(stepReg, mirOptionAggregateType(), mirAggregateUndef(), mirDiscriminantSome(), "0") +
 		mirInsertValueI64Line(fullReg, mirOptionAggregateType(), stepReg, payload, "1")
@@ -7000,7 +7015,8 @@ func mirResultErrPtrBuildLine(stepReg, fullReg, errPtr string) string {
 // §14 LLVM-text Option / Result destructure helpers.
 
 // Osty: mirOptionUnwrapDestructureLine / mirOptionPtrUnwrapDestructureLine /
-//       mirResultUnwrapDestructureLine
+//
+//	mirResultUnwrapDestructureLine
 func mirOptionUnwrapDestructureLine(discReg, payloadReg, agg string) string {
 	return mirOptionDiscProbeLine(discReg, agg) + mirOptionPayloadProbeLine(payloadReg, agg)
 }
@@ -7144,7 +7160,8 @@ func mirEmitOptionNonePtrLine(reg string) string {
 // §14 Module-globals helpers.
 
 // Osty: mirInternedI64GlobalLine / mirInternedPtrGlobalLine /
-//       mirMutableI64GlobalLine / mirMutablePtrGlobalLine
+//
+//	mirMutableI64GlobalLine / mirMutablePtrGlobalLine
 func mirInternedI64GlobalLine(sym, val string) string {
 	return mirGlobalConstantI64DeclLine(sym, val)
 }
@@ -7162,7 +7179,8 @@ func mirMutablePtrGlobalLine(sym, init string) string {
 // composite helpers.
 
 // Osty: mirCallI64NoArgsAndStoreLine / mirCallI1NoArgsAndStoreLine /
-//       mirCallPtrNoArgsAndStoreLine
+//
+//	mirCallPtrNoArgsAndStoreLine
 func mirCallI64NoArgsAndStoreLine(reg, sym, slot string) string {
 	return mirCallI64NoArgsLine(reg, sym) +
 		"  " + mirInstrStore() + " i64 " + reg + ", ptr " + slot + "\n"
@@ -7195,7 +7213,8 @@ func mirLoadPtrThenCallI1Line(loadReg, slot, resultReg, sym string) string {
 // §15 LLVM-text predicate-then-branch composite helpers.
 
 // Osty: mirICmp{Eq,Ne,Slt,Sgt,Sle,Sge}I64ThenBranchLine / mirICmpEqPtrThenBranchLine /
-//       mirICmpNullPtrThenBranchLine
+//
+//	mirICmpNullPtrThenBranchLine
 func mirICmpEqI64ThenBranchLine(cmpReg, a, b, thenLbl, elseLbl string) string {
 	return mirICmpI64EqLine(cmpReg, a, b) + mirBrCondLine(cmpReg, thenLbl, elseLbl)
 }
@@ -7313,7 +7332,8 @@ func mirIfThenElseSkeletonLine(cmpReg, cond, thenLbl, elseLbl string) string {
 // §15 LLVM-text typed-aggregate-store composite helpers.
 
 // Osty: mirStoreOptionAggregateLine / mirStoreOptionPtrAggregateLine /
-//       mirStoreResultAggregateLine / mirStoreResultPtrAggregateLine
+//
+//	mirStoreResultAggregateLine / mirStoreResultPtrAggregateLine
 func mirStoreOptionAggregateLine(agg, slot string) string {
 	return "  " + mirInstrStore() + " " + mirOptionAggregateType() + " " + agg + ", ptr " + slot + "\n"
 }
@@ -7330,7 +7350,8 @@ func mirStoreResultPtrAggregateLine(agg, slot string) string {
 // §15 LLVM-text typed-aggregate-load composite helpers.
 
 // Osty: mirLoadOptionAggregateLine / mirLoadOptionPtrAggregateLine /
-//       mirLoadResultAggregateLine / mirLoadResultPtrAggregateLine
+//
+//	mirLoadResultAggregateLine / mirLoadResultPtrAggregateLine
 func mirLoadOptionAggregateLine(reg, slot string) string {
 	return "  " + reg + " = " + mirInstrLoad() + " " + mirOptionAggregateType() + ", ptr " + slot + "\n"
 }
@@ -7555,7 +7576,8 @@ func mirTruncI64ToI32ThenStoreLine(truncReg, val, slot string) string {
 // §17 LLVM-text typed list / map / set runtime call aliases.
 
 // Osty: mirCallListLengthLine / MapLengthLine / SetLengthLine /
-//       StringLengthLine / BytesLengthLine
+//
+//	StringLengthLine / BytesLengthLine
 func mirCallListLengthLine(reg, listReg string) string {
 	return mirCallListLenLine(reg, listReg)
 }
@@ -7575,7 +7597,8 @@ func mirCallBytesLengthLine(reg, bytesReg string) string {
 // §17 LLVM-text typed iterator-call shapes.
 
 // Osty: mirCallList{Reverse,Reversed,Clear,PopDiscard,IsEmptyTyped}Line /
-//       mirCallMapClearLine / mirCallSetClearLine
+//
+//	mirCallMapClearLine / mirCallSetClearLine
 func mirCallListReverseLine(listReg string) string {
 	return mirCallVoidPtrLine(mirRtListReverseSymbol(), listReg)
 }
@@ -7713,7 +7736,8 @@ func mirCallSetRemoveLine(setReg, elemArgs string) string {
 // §17 LLVM-text typed runtime-callable structured-concurrency.
 
 // Osty: mirCallTaskGroup{New,Cancel,IsCancelled}Line / mirCallTaskHandleJoinLine /
-//       mirCallTaskCollectAllLine / mirCallTaskRaceLine
+//
+//	mirCallTaskCollectAllLine / mirCallTaskRaceLine
 func mirCallTaskGroupNewLine(reg string) string {
 	return mirCallPtrNoArgsLine(reg, mirRtTaskGroupRootSymbol())
 }
