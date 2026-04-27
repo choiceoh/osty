@@ -7116,20 +7116,14 @@ int main(void) {
 
 // TestBundledRuntimeChannelTraceForwardsYoungChildren pins the
 // round-trip of a young managed payload through a ptr-typed
-// channel across cheney_minor. Before this PR, chan_trace called
-// `osty_gc_mark_payload(child)` (mark-only) instead of
-// `osty_gc_mark_slot_v1(&slot)` — the dispatch under CHENEY mode
-// then never invoked cheney_forward on the young child and never
-// rewrote the slot. Correctness held under single-cycle pressure
-// because load_v1's PROMOTED/FORWARDED tag follow saved us, but
-// the slot stayed stale (and could resolve to overwritten bytes
-// after enough subsequent allocation pressure).
-//
-// With the chan_trace fix, the slot gets rewritten in-cycle,
-// matching how Map/Set/List/CLOSURE_ENV/GENERIC_ENUM_PTR all
-// route managed children. This test pins the round-trip end to
-// end: alloc young String, send, root channel, collect, recv,
-// verify content intact.
+// channel across cheney_minor. Before this PR, chan_trace used
+// mark_payload instead of mark_slot_v1 — under CHENEY mode the
+// young child was never forwarded and the slot stayed stale.
+// load_v1's PROMOTED/FORWARDED follow masked the bug under
+// single-cycle pressure, but the slot would resolve to overwritten
+// bytes once enough subsequent allocation churn recycled the
+// young arena. With the trace fix the slot gets rewritten
+// in-cycle.
 func TestBundledRuntimeChannelTraceForwardsYoungChildren(t *testing.T) {
 	parallelClangBackendTest(t)
 

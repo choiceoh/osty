@@ -14060,12 +14060,10 @@ static void osty_rt_chan_trace(void *payload) {
         !osty_gc_chan_elem_kind_is_managed(ch->elem_kind)) {
         return;
     }
-    /* Pass slot ADDRESSES to mark_slot_v1 (not pre-loaded payloads
-     * to mark_payload) so the cheney path can forward young
-     * children + rewrite the slot. The slots are int64_t (8 bytes)
-     * holding ptr-cast values; on 64-bit systems mark_slot_v1's
-     * `memcpy(&payload, slot_addr, sizeof(void *))` reads exactly
-     * the 8-byte slot. */
+    /* Pass slot ADDRESSES to mark_slot_v1 so the CHENEY path can
+     * forward young children + rewrite the slot. Slots are int64_t
+     * holding ptr-cast values; mark_slot_v1's `memcpy(sizeof(void *))`
+     * reads the pointer back. */
     for (i = 0; i < ch->count; i++) {
         int64_t idx = (ch->head + i) % ch->cap;
         osty_gc_mark_slot_v1((void *)&ch->slots[idx]);
