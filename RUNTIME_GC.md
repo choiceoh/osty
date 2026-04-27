@@ -24,6 +24,7 @@ Today the runtime collector is a precise root-driven mark/sweep collector with:
 - allocation-pressure-triggered collection requests fulfilled at safepoints
 - write-barrier edge logging — `osty.gc.pre_write_v1` accumulates a SATB log of overwritten values, `osty.gc.post_write_v1` records deduplicated (owner, value) edges; both cleared at the end of each collection. The live STW marker does not yet consume these logs, but they are produced so that generational minor collection and concurrent / incremental marking can plug in without revisiting emit sites.
 - managed temporary protection in LLVM lowering for params, locals, aggregates, loop iterables, and nested call arguments
+- **opt-in background marker thread** (Phase 0a) — when `OSTY_GC_BG_MARKER=1`, `osty_gc_collect_incremental_start_with_stack_roots` lazily spawns a single OS thread that drains the grey queue while the cycle is in `MARK_INCREMENTAL`. Initial root scan and final remark/sweep stay STW; mid-cycle mark work runs concurrently with the mutator. Telemetry: `osty_gc_debug_bg_marker_{started,kicks,drained,loops,naps,active}`. Lock-skip fast paths in alloc / load / post_write / map ops route through `osty_gc_serialized_now()` so they re-engage the recursive mutex while the marker is live.
 
 This is the implementation we are extending toward end-to-end native execution.
 
