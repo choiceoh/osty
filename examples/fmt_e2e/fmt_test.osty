@@ -2,7 +2,7 @@
 // via the LLVM backend. Covers every pub fn with happy-path + edge
 // cases.
 //
-// Current status (2026-04-19): all 28 tests still fail under the LLVM
+// Current status (2026-04-19): these tests still fail under the LLVM
 // backend, but the dominant wall has shifted. Backend gaps that fmt
 // depends on:
 //
@@ -54,6 +54,20 @@ fn testTruncate() {
     testing.assertEq(fmt.truncate("hello world", 8), "hello...")
     testing.assertEq(fmt.truncate("abc", 3), "abc")
     testing.assertEq(fmt.truncate("abcd", 2), "...")
+    testing.assertEq(fmt.truncateStart("abcdef", 5), "...ef")
+    testing.assertEq(fmt.truncateMiddle("abcdef", 5), "a...f")
+}
+
+fn testAlignmentHelpers() {
+    testing.assertEq(fmt.align("x", 3), "x  ")
+    testing.assertEq(fmt.align("x", 3, "right"), "  x")
+    testing.assertEq(fmt.align("x", 3, "center"), " x ")
+    testing.assertEq(fmt.visibleWidth("abc"), 3)
+}
+
+fn testQuoteAndEscape() {
+    testing.assertEq(fmt.escape("a\n\t\"b\""), "a\\n\\t\\\"b\\\"")
+    testing.assertEq(fmt.quote("a\nb"), "\"a\\nb\"")
 }
 
 // ─── Integer formatting ───────────────────────────────────────────
@@ -85,6 +99,9 @@ fn testHex() {
     testing.assertEq(fmt.hex(255), "ff")
     testing.assertEq(fmt.hex(255, true), "FF")
     testing.assertEq(fmt.hexUpper(255), "FF")
+    testing.assertEq(fmt.hexPrefixed(-255), "-0xff")
+    testing.assertEq(fmt.binaryPrefixed(10), "0b1010")
+    testing.assertEq(fmt.octalPrefixed(8), "0o10")
 }
 
 fn testZeroPad() {
@@ -162,11 +179,21 @@ fn testBytes() {
     testing.assertEq(fmt.bytes(1024), "1.00 KiB")
     testing.assertEq(fmt.bytes(1536), "1.50 KiB")
     testing.assertEq(fmt.bytes(1048576), "1.00 MiB")
+    testing.assertEq(fmt.bytesFixed(1536, 1), "1.5 KiB")
+    testing.assertEq(fmt.metricBytes(1500, 1), "1.5 KB")
+}
+
+fn testCompact() {
+    testing.assertEq(fmt.trimTrailingZeros("1.2300"), "1.23")
+    testing.assertEq(fmt.compact(999), "999")
+    testing.assertEq(fmt.compact(1200), "1.2K")
+    testing.assertEq(fmt.compact(-1234000), "-1.2M")
 }
 
 // ─── Sprintf ──────────────────────────────────────────────────────
 
 fn testFormatBasic() {
+    testing.assertEq(fmt.format(r"hello {}", ["world"]), "hello world")
     testing.assertEq(fmt.format(r"hello {0}", ["world"]), "hello world")
     testing.assertEq(fmt.format(r"{0} + {1} = {2}", ["1", "2", "3"]), "1 + 2 = 3")
 }
@@ -178,6 +205,12 @@ fn testFormatEscapes() {
 
 fn testFormatOutOfRange() {
     testing.assertEq(fmt.format(r"{5}", ["only"]), r"{5}")
+}
+
+fn testFormatSpecs() {
+    testing.assertEq(fmt.format(r"|{0:>5}|{1:<5}|{2:^5}|", ["a", "b", "c"]), "|    a|b    |  c  |")
+    testing.assertEq(fmt.format(r"{:0>4} {:.3}", ["7", "abcdef"]), "0007 abc")
+    testing.assertEq(fmt.format(r"{0:bad} {}", ["x"]), r"{0:bad} x")
 }
 
 // ─── Lists ────────────────────────────────────────────────────────
@@ -208,10 +241,22 @@ fn testNumbered() {
     testing.assertEq(fmt.numbered(["a", "b"]), "1. a\n2. b")
 }
 
+fn testIndent() {
+    testing.assertEq(fmt.indent("a\nb", "> "), "> a\n> b")
+}
+
 fn testTable() {
     let headers = ["Name", "Age"]
     let rows = [["Alice", "30"], ["Bob", "5"]]
     let result = fmt.table(headers, rows)
     let expected = "Name  | Age\n----- | ---\nAlice | 30 \nBob   | 5  "
+    testing.assertEq(result, expected)
+}
+
+fn testTableAligned() {
+    let headers = ["Name", "Age"]
+    let rows = [["Alice", "30"], ["Bob", "5"]]
+    let result = fmt.tableAligned(headers, rows, ["left", "right"])
+    let expected = "Name  | Age\n----- | ---\nAlice |  30\nBob   |   5"
     testing.assertEq(result, expected)
 }
