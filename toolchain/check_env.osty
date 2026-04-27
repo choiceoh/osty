@@ -2963,6 +2963,11 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         generics: [], genericBounds: [],
     })
     checkRegisterFn(env, CheckFnSig {
+        name: "toString", owner: "Char", receiverTy: tChar(tys), hasReceiver: true, retTy: tString_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
         name: "toInt", owner: "Byte", receiverTy: tByte(tys), hasReceiver: true, retTy: tInt(tys),
         paramNames: [], paramTys: [],
         generics: [], genericBounds: [],
