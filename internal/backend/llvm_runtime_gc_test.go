@@ -3311,6 +3311,150 @@ int main(void) {
 	}
 }
 
+// TestBundledRuntimeBackgroundMarkerWorkSplit covers Phase 0d — when
+// multiple bg workers share the queue, the smaller per-iteration
+// drain batch (budget/4) gives siblings a chance to grab the lock
+// between batches. The test sets a small OSTY_GC_BG_MARKER_BUDGET so
+// per_iter is small, and a graph large enough that no single worker
+// can drain it in one batch. At least 2 workers must show non-zero
+// per-worker drained — proves real parallelism rather than
+// theoretical N-thread spawn.
+func TestBundledRuntimeBackgroundMarkerWorkSplit(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_bg_marker_split_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_bg_marker_split_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <time.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
+void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void *osty_rt_list_new(void);
+void osty_rt_list_push_ptr(void *list, void *value);
+
+void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count);
+void osty_gc_collect_incremental_finish(void);
+
+int64_t osty_gc_debug_state(void);
+int64_t osty_gc_debug_bg_marker_workers(void);
+int64_t osty_gc_debug_bg_marker_drained_total(void);
+int64_t osty_gc_debug_bg_marker_per_worker_drained(int64_t worker_id);
+
+static void nap_ms(int ms) {
+    struct timespec ts;
+    ts.tv_sec  = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000 * 1000;
+    nanosleep(&ts, NULL);
+}
+
+int main(void) {
+    /* 800-element graph to give 4 workers room to interleave across
+     * multiple batches. With OSTY_GC_BG_MARKER_BUDGET=256 and 4
+     * workers, per_iter is 64 (256/4). 800 items / 64 = 12.5 batches
+     * → fair distribution should put non-zero counts on all 4. */
+    enum { N = 800 };
+    void *list = osty_rt_list_new();
+    osty_gc_root_bind_v1(list);
+    for (int i = 0; i < N; i++) {
+        void *child = osty_gc_alloc_v1(7, 16, "child");
+        osty_gc_pre_write_v1(list, NULL, 0);
+        osty_rt_list_push_ptr(list, child);
+        osty_gc_post_write_v1(list, child, 0);
+    }
+
+    osty_gc_collect_incremental_start_with_stack_roots(NULL, 0);
+
+    /* Generous nap so all workers cycle through several drain
+     * iterations. */
+    nap_ms(200);
+
+    osty_gc_collect_incremental_finish();
+
+    int64_t workers = osty_gc_debug_bg_marker_workers();
+    int64_t drained = osty_gc_debug_bg_marker_drained_total();
+
+    int active = 0;
+    for (int64_t i = 0; i < workers; i++) {
+        int64_t w = osty_gc_debug_bg_marker_per_worker_drained(i);
+        if (w > 0) active++;
+        if (i < 8) printf("w%lld=%lld ", i, w);
+    }
+    printf("\nworkers=%lld drained=%lld active=%d state=%lld\n",
+        workers, drained, active, (long long)osty_gc_debug_state());
+
+    osty_gc_root_release_v1(list);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(),
+		"OSTY_GC_BG_MARKER=1",
+		"OSTY_GC_BG_WORKERS=4",
+		/* Small budget so per_iter (budget/4) is small enough that
+		 * the 800-item graph requires many drain batches and
+		 * siblings interleave. */
+		"OSTY_GC_BG_MARKER_BUDGET=256",
+		"OSTY_GC_ASSIST_BYTES_PER_UNIT=0",
+	)
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	out := string(runOutput)
+	if !strings.Contains(out, "workers=4 ") {
+		t.Fatalf("workers!=4\nfull output:\n%s", out)
+	}
+	if !strings.Contains(out, "state=0") {
+		t.Fatalf("state!=IDLE\nfull output:\n%s", out)
+	}
+	/* Parse active count and assert >= 2. With Phase 0d's smaller
+	 * per-iteration batch, 800 items / per_iter=64 = 12+ batches,
+	 * which 4 workers should split. The regression signal is
+	 * active=1 — the old behaviour where worker 0 monopolises the
+	 * lock and drains everything alone. */
+	var active int
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "workers=") {
+			continue
+		}
+		var workers, drained int64
+		var state int
+		if _, err := fmt.Sscanf(line, "workers=%d drained=%d active=%d state=%d",
+			&workers, &drained, &active, &state); err != nil {
+			t.Fatalf("could not parse %q: %v", line, err)
+		}
+		break
+	}
+	if active < 2 {
+		t.Fatalf("only %d worker(s) contributed; Phase 0d batch split failed to engage parallelism\nfull output:\n%s",
+			active, out)
+	}
+}
+
 // TestBundledRuntimeBackgroundMarkerMultiThreadCycle covers Phase 0b —
 // when user worker threads are live, incremental_start (previously
 // hard-gated to early-return on workers > 0) must instead drive an STW

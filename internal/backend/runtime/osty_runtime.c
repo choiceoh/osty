@@ -6522,6 +6522,20 @@ static void *osty_gc_bg_marker_main(void *arg) {
     /* arg encodes the worker_id (0..N-1) for per-worker counters. */
     osty_gc_bg_marker_worker_id = (int)(intptr_t)arg;
     int64_t budget = osty_gc_bg_marker_budget_now();
+    /* Phase 0d: when multiple workers share the queue, drain in
+     * smaller per-iteration batches so the lock cycles more often
+     * and siblings actually get a turn. The N==1 path keeps the full
+     * budget for max throughput (no contention to share). The factor
+     * 4× is heuristic — small enough that N=4 workers get multiple
+     * turns on a few-hundred-item graph, large enough to amortise the
+     * per-batch acquire/release cycle. */
+    int n = osty_gc_bg_marker_worker_count;
+    int64_t per_iter = budget;
+    if (n >= 2) {
+        per_iter = budget / 4;
+        if (per_iter < 64) per_iter = 64;
+        if (per_iter > budget) per_iter = budget;
+    }
     for (;;) {
         osty_rt_mu_lock(&osty_gc_bg_marker_mu);
         while (__atomic_load_n(&osty_gc_bg_marker_active,
@@ -6541,7 +6555,7 @@ static void *osty_gc_bg_marker_main(void *arg) {
                 osty_gc_release();
                 break;
             }
-            int64_t done = osty_gc_mark_drain_budget(budget);
+            int64_t done = osty_gc_mark_drain_budget(per_iter);
             /* Atomic adds — N>=2 workers race here. The per-worker
              * slot is single-writer so a relaxed add suffices; the
              * aggregate counter aggregates across writers so it
