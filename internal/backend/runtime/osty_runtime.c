@@ -511,7 +511,6 @@ typedef struct osty_rt_list {
     int64_t cap;
     size_t elem_size;
     osty_rt_trace_slot_fn trace_elem;
-    bool pointer_elems;
     int64_t gc_offset_count;
     int64_t *gc_offsets;
     unsigned char *data;
@@ -4535,18 +4534,12 @@ static void osty_rt_list_trace(void *payload) {
         }
         return;
     }
-    if (list->pointer_elems) {
-        /* Pass slot addresses to mark_slot_v1 so cheney can forward
-         * young children + rewrite the slot. mark_payload would only
-         * mark via the headerful path — broken under CHENEY mode. */
-        for (i = 0; i < list->len; i++) {
-            osty_gc_mark_slot_v1((void *)(list->data + ((size_t)i * list->elem_size)));
-        }
-        return;
-    }
     if (list->gc_offset_count <= 0 || list->gc_offsets == NULL) {
         return;
     }
+    /* Pass slot addresses to mark_slot_v1 so cheney can forward
+     * young children + rewrite the slot. mark_payload would only
+     * mark via the headerful path — broken under CHENEY mode. */
     for (i = 0; i < list->len; i++) {
         unsigned char *elem = list->data + ((size_t)i * list->elem_size);
         for (j = 0; j < list->gc_offset_count; j++) {
@@ -5141,13 +5134,6 @@ static void osty_gc_remap_list_payload(void *payload) {
         return;
     }
     if (list->trace_elem == osty_gc_mark_slot_v1) {
-        for (i = 0; i < list->len; i++) {
-            osty_gc_remap_slot((void *)(list->data +
-                                        ((size_t)i * list->elem_size)));
-        }
-        return;
-    }
-    if (list->pointer_elems) {
         for (i = 0; i < list->len; i++) {
             osty_gc_remap_slot((void *)(list->data +
                                         ((size_t)i * list->elem_size)));
@@ -6712,9 +6698,6 @@ static OSTY_HOT_INLINE void osty_rt_list_ensure_gc_offsets(osty_rt_list *list, c
     }
     if (gc_offsets == NULL) {
         osty_rt_abort("list GC offsets pointer is null");
-    }
-    if (list->pointer_elems) {
-        osty_rt_abort("list pointer elements cannot also use GC offsets");
     }
     if (list->elem_size < sizeof(void *)) {
         osty_rt_abort("list element size too small for GC offsets");
