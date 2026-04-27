@@ -13163,3 +13163,788 @@ pub fn mirNormalizeAssertExprText(text: String) -> String {
     if hi > lo && buf[(hi - 1)..hi] == " " { hi = hi - 1 }
     buf[lo..hi]
 }
+
+/// §20 — newline-free (`Text`) variants of common Line builders, for
+/// `body []string` callers in `internal/llvmgen/{expr,stmt,generator}.go`
+/// that join entries on `\n`. Same shapes as the §3 / §6 / §13 Line
+/// builders but without the trailing `\n` — the join inserts the
+/// separator. The split exists so that hot inline-IR sites in the
+/// emitter can drain `fmt.Sprintf("  %s = ...", ...)` calls into a
+/// named helper without flipping the surrounding append-then-join
+/// idiom to direct buffer writes.
+
+/// mirAllocaText renders `  <reg> = alloca <ty>` (no trailing newline,
+/// for callers appending to a `body []string` slice that joins on
+/// "\n"). Mirrors `mirAllocaLine` minus the terminator.
+pub fn mirAllocaText(reg: String, ty: String) -> String {
+    "  " + reg + " = alloca " + ty
+}
+
+/// mirAllocaI64Text renders `  <reg> = alloca i64`. Specialised
+/// shape for the loop-counter / scratch-int-slot pattern that the
+/// emitter uses ubiquitously (safepoint-poll counter, range cursors).
+pub fn mirAllocaI64Text(reg: String) -> String {
+    "  " + reg + " = alloca i64"
+}
+
+/// mirAllocaPtrText renders `  <reg> = alloca ptr`. The opaque-pointer
+/// slot form used by Option<ptr-shape> spills.
+pub fn mirAllocaPtrText(reg: String) -> String {
+    "  " + reg + " = alloca ptr"
+}
+
+/// mirAllocaArrayPtrText renders `  <reg> = alloca [<n> x ptr]`. The
+/// fixed-arity ptr-array form used for argv-style call payload
+/// staging in interpolation lowering and varargs marshalling. `n`
+/// comes in as a String of decimal digits — caller formats with
+/// `Itoa` since osty `Int` does not auto-format.
+pub fn mirAllocaArrayPtrText(reg: String, n: String) -> String {
+    "  " + reg + " = alloca [" + n + " x ptr]"
+}
+
+/// mirLoadText renders `  <reg> = load <ty>, ptr <ptr>` (no trailing
+/// newline). Mirrors `mirLoadLine` minus the terminator.
+pub fn mirLoadText(reg: String, ty: String, ptr: String) -> String {
+    "  " + reg + " = load " + ty + ", ptr " + ptr
+}
+
+/// mirLoadI64Text renders `  <reg> = load i64, ptr <ptr>`. The
+/// scalar-int reload form used by counter / length probes.
+pub fn mirLoadI64Text(reg: String, ptr: String) -> String {
+    "  " + reg + " = load i64, ptr " + ptr
+}
+
+/// mirLoadPtrText renders `  <reg> = load ptr, ptr <slot>`. The
+/// opaque-pointer reload form used by Option<ptr-shape> takeout.
+pub fn mirLoadPtrText(reg: String, slot: String) -> String {
+    "  " + reg + " = load ptr, ptr " + slot
+}
+
+/// mirStoreText renders `  store <ty> <val>, ptr <slot>` (no trailing
+/// newline). Mirrors `mirStoreLine` minus the terminator.
+pub fn mirStoreText(ty: String, val: String, slot: String) -> String {
+    "  store " + ty + " " + val + ", ptr " + slot
+}
+
+/// mirStoreI64Text renders `  store i64 <val>, ptr <slot>`. The
+/// scalar-int store form used by counter / length spills.
+pub fn mirStoreI64Text(val: String, slot: String) -> String {
+    "  store i64 " + val + ", ptr " + slot
+}
+
+/// mirStoreI8Text renders `  store i8 <val>, ptr <slot>`. The byte-
+/// width store form used for char / bool slot spills.
+pub fn mirStoreI8Text(val: String, slot: String) -> String {
+    "  store i8 " + val + ", ptr " + slot
+}
+
+/// mirStorePtrText renders `  store ptr <val>, ptr <slot>`. The
+/// opaque-pointer store form used by Option<ptr-shape> spills and
+/// argv-style call payload staging.
+pub fn mirStorePtrText(val: String, slot: String) -> String {
+    "  store ptr " + val + ", ptr " + slot
+}
+
+/// mirStorePtrNullText renders `  store ptr null, ptr <slot>`. The
+/// None-initialiser form used by Option<ptr-shape> default branches.
+pub fn mirStorePtrNullText(slot: String) -> String {
+    "  store ptr null, ptr " + slot
+}
+
+/// mirStoreI64ZeroText renders `  store i64 0, ptr <slot>`. The
+/// zero-initialiser form used by counter slots at function entry.
+pub fn mirStoreI64ZeroText(slot: String) -> String {
+    "  store i64 0, ptr " + slot
+}
+
+/// mirBrCondText renders the conditional branch
+/// `  br i1 <cond>, label %<trueLabel>, label %<falseLabel>` (no
+/// trailing newline). Mirrors `mirBrCondLine` minus the terminator.
+pub fn mirBrCondText(cond: String, trueLabel: String, falseLabel: String) -> String {
+    "  br i1 " + cond + ", label %" + trueLabel + ", label %" + falseLabel
+}
+
+/// mirBrUncondText renders the unconditional branch
+/// `  br label %<label>` (no trailing newline). Mirrors
+/// `mirBrUncondLine` minus the terminator.
+pub fn mirBrUncondText(label: String) -> String {
+    "  br label %" + label
+}
+
+/// mirLabelText renders `<name>:` — the bare basic-block header
+/// (no trailing newline). Caller passes the label name without
+/// leading `%`; the helper adds the trailing `:`.
+pub fn mirLabelText(name: String) -> String {
+    name + ":"
+}
+
+/// mirRetText renders `  ret <ty> <val>` (no trailing newline).
+pub fn mirRetText(ty: String, val: String) -> String {
+    "  ret " + ty + " " + val
+}
+
+/// mirRetVoidText renders `  ret void` (no trailing newline).
+pub fn mirRetVoidText() -> String {
+    "  ret void"
+}
+
+/// mirICmpEqText renders `  <reg> = icmp eq <ty> <lhs>, <rhs>` (no
+/// trailing newline). Specialised to the `eq` predicate; other
+/// predicates use `mirICmpText` with an explicit pred keyword.
+pub fn mirICmpEqText(reg: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = icmp eq " + ty + " " + lhs + ", " + rhs
+}
+
+/// mirICmpEqI64Text renders `  <reg> = icmp eq i64 <lhs>, <rhs>`.
+/// Width-specialised eq form for hot loop-bound checks.
+pub fn mirICmpEqI64Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = icmp eq i64 " + lhs + ", " + rhs
+}
+
+/// mirICmpEqPtrNullText renders `  <reg> = icmp eq ptr <ptr>, null`.
+/// The pointer-nullity check form used by Option<ptr-shape>
+/// discrimination and FFI null guards.
+pub fn mirICmpEqPtrNullText(reg: String, ptr: String) -> String {
+    "  " + reg + " = icmp eq ptr " + ptr + ", null"
+}
+
+/// mirICmpText renders `  <reg> = icmp <pred> <ty> <lhs>, <rhs>` (no
+/// trailing newline). General predicate form; `pred` is the LLVM
+/// keyword (`eq`, `ne`, `slt`, `sle`, `sgt`, `sge`, `ult`, `ule`,
+/// `ugt`, `uge`).
+pub fn mirICmpText(reg: String, pred: String, ty: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = icmp " + pred + " " + ty + " " + lhs + ", " + rhs
+}
+
+/// mirICmpSGTI64ZeroText renders `  <reg> = icmp sgt i64 <lhs>, 0`.
+/// Specialised positive-int probe used by the warmup-count guard
+/// and length-positivity checks.
+pub fn mirICmpSGTI64ZeroText(reg: String, lhs: String) -> String {
+    "  " + reg + " = icmp sgt i64 " + lhs + ", 0"
+}
+
+/// mirICmpSLTI64Text renders `  <reg> = icmp slt i64 <lhs>, <rhs>`.
+/// Width-specialised signed-less-than form used by loop-cond
+/// emission.
+pub fn mirICmpSLTI64Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = icmp slt i64 " + lhs + ", " + rhs
+}
+
+/// mirICmpSGEI64ZeroText renders `  <reg> = icmp sge i64 <lhs>, 0`.
+/// The non-negative probe used by absolute-value lowerings and
+/// signum normalisations.
+pub fn mirICmpSGEI64ZeroText(reg: String, lhs: String) -> String {
+    "  " + reg + " = icmp sge i64 " + lhs + ", 0"
+}
+
+/// mirICmpSLTI64LiteralText renders
+/// `  <reg> = icmp slt i64 <lhs>, <lit>`. The signed-less-than
+/// against a baked literal — used by the warmup cap and similar
+/// constant comparisons. `lit` is a decimal-digit String.
+pub fn mirICmpSLTI64LiteralText(reg: String, lhs: String, lit: String) -> String {
+    "  " + reg + " = icmp slt i64 " + lhs + ", " + lit
+}
+
+/// mirICmpSGTI64LiteralText renders
+/// `  <reg> = icmp sgt i64 <lhs>, <lit>`. The signed-greater-than
+/// against a baked literal — used by the iteration-count cap.
+pub fn mirICmpSGTI64LiteralText(reg: String, lhs: String, lit: String) -> String {
+    "  " + reg + " = icmp sgt i64 " + lhs + ", " + lit
+}
+
+/// mirICmpEqI64LiteralText renders
+/// `  <reg> = icmp eq i64 <lhs>, <lit>`. The equality-with-literal
+/// probe used by the safepoint-stride trigger.
+pub fn mirICmpEqI64LiteralText(reg: String, lhs: String, lit: String) -> String {
+    "  " + reg + " = icmp eq i64 " + lhs + ", " + lit
+}
+
+/// mirICmpEqI32LiteralText renders
+/// `  <reg> = icmp eq i32 <lhs>, <lit>`. The equality-with-literal
+/// form for char-class probes (digit, whitespace, newline checks).
+pub fn mirICmpEqI32LiteralText(reg: String, lhs: String, lit: String) -> String {
+    "  " + reg + " = icmp eq i32 " + lhs + ", " + lit
+}
+
+/// mirICmpULTI32LiteralText renders
+/// `  <reg> = icmp ult i32 <lhs>, <lit>`. Unsigned-less-than against
+/// a baked literal — used by char-class range tests.
+pub fn mirICmpULTI32LiteralText(reg: String, lhs: String, lit: String) -> String {
+    "  " + reg + " = icmp ult i32 " + lhs + ", " + lit
+}
+
+/// mirICmpEqPtrText renders `  <reg> = icmp <pred> ptr <lhs>, null`.
+/// Pointer-vs-null comparisons with an explicit predicate keyword
+/// (e.g. `ne`); the null-RHS specialisation lives in
+/// `mirICmpEqPtrNullText`.
+pub fn mirICmpEqPtrText(reg: String, pred: String, lhs: String) -> String {
+    "  " + reg + " = icmp " + pred + " ptr " + lhs + ", null"
+}
+
+/// mirAddI64OneText renders `  <reg> = add i64 <lhs>, 1`. The
+/// increment-by-one form used by counter advance and inclusive
+/// range bound adjustment.
+pub fn mirAddI64OneText(reg: String, lhs: String) -> String {
+    "  " + reg + " = add i64 " + lhs + ", 1"
+}
+
+/// mirAddI64Text renders `  <reg> = add i64 <lhs>, <rhs>`. General
+/// i64 addition.
+pub fn mirAddI64Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = add i64 " + lhs + ", " + rhs
+}
+
+/// mirAddI32LiteralText renders
+/// `  <reg> = add i32 <lhs>, <lit>`. i32 addition with a baked
+/// literal — used by char-class case-folding offsets.
+pub fn mirAddI32LiteralText(reg: String, lhs: String, lit: String) -> String {
+    "  " + reg + " = add i32 " + lhs + ", " + lit
+}
+
+/// mirSubI64Text renders `  <reg> = sub i64 <lhs>, <rhs>`. General
+/// i64 subtraction (timing intervals, range deltas).
+pub fn mirSubI64Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = sub i64 " + lhs + ", " + rhs
+}
+
+/// mirSubI32LiteralText renders
+/// `  <reg> = sub i32 <lhs>, <lit>`. i32 subtraction with a baked
+/// literal — used by char-class case-folding offsets.
+pub fn mirSubI32LiteralText(reg: String, lhs: String, lit: String) -> String {
+    "  " + reg + " = sub i32 " + lhs + ", " + lit
+}
+
+/// mirMulI64Text renders `  <reg> = mul i64 <lhs>, <rhs>`. General
+/// i64 multiplication.
+pub fn mirMulI64Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = mul i64 " + lhs + ", " + rhs
+}
+
+/// mirMulI64LiteralText renders
+/// `  <reg> = mul i64 <lhs>, <lit>`. i64 multiplication with a baked
+/// literal — used by stride / stripe arithmetic.
+pub fn mirMulI64LiteralText(reg: String, lhs: String, lit: String) -> String {
+    "  " + reg + " = mul i64 " + lhs + ", " + lit
+}
+
+/// mirSDivI64Text renders `  <reg> = sdiv i64 <lhs>, <rhs>`. Signed
+/// i64 division.
+pub fn mirSDivI64Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = sdiv i64 " + lhs + ", " + rhs
+}
+
+/// mirSDivI64LiteralText renders
+/// `  <reg> = sdiv i64 <lhs>, <lit>`. Signed division by a baked
+/// literal — used by warmup / sample-rate scaling (`/ 10`, `/ 5`).
+pub fn mirSDivI64LiteralText(reg: String, lhs: String, lit: String) -> String {
+    "  " + reg + " = sdiv i64 " + lhs + ", " + lit
+}
+
+/// mirOrI1Text renders `  <reg> = or i1 <lhs>, <rhs>`. Bool-disjunct
+/// form used by Option / Result discriminator merges.
+pub fn mirOrI1Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = or i1 " + lhs + ", " + rhs
+}
+
+/// mirAndI1Text renders `  <reg> = and i1 <lhs>, <rhs>`. Bool-conjunct
+/// form used by guarded predicate composition.
+pub fn mirAndI1Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = and i1 " + lhs + ", " + rhs
+}
+
+/// mirXorI1NegText renders `  <reg> = xor i1 <src>, true`. The
+/// i1-negation form used to flip predicate results.
+pub fn mirXorI1NegText(reg: String, src: String) -> String {
+    "  " + reg + " = xor i1 " + src + ", true"
+}
+
+/// mirSelectI64Text renders
+/// `  <reg> = select i1 <cond>, i64 <lhs>, i64 <rhs>`. Width-
+/// specialised i64 select form.
+pub fn mirSelectI64Text(reg: String, cond: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = select i1 " + cond + ", i64 " + lhs + ", i64 " + rhs
+}
+
+/// mirSelectI32Text renders
+/// `  <reg> = select i1 <cond>, i32 <lhs>, i32 <rhs>`. Width-
+/// specialised i32 select form.
+pub fn mirSelectI32Text(reg: String, cond: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = select i1 " + cond + ", i32 " + lhs + ", i32 " + rhs
+}
+
+/// mirSelectI64LiteralRhsText renders
+/// `  <reg> = select i1 <cond>, i64 <lhs>, i64 <lit>`. Specialised
+/// for the `select <reg>, <reg>, <lit>` pattern (e.g. warmup cap).
+pub fn mirSelectI64LiteralRhsText(reg: String, cond: String, lhs: String, lit: String) -> String {
+    "  " + reg + " = select i1 " + cond + ", i64 " + lhs + ", i64 " + lit
+}
+
+/// mirSelectI64LiteralLhsText renders
+/// `  <reg> = select i1 <cond>, i64 <lit>, i64 <rhs>`. Specialised
+/// for the `select <reg>, <lit>, <reg>` pattern (e.g. zero-default).
+pub fn mirSelectI64LiteralLhsText(reg: String, cond: String, lit: String, rhs: String) -> String {
+    "  " + reg + " = select i1 " + cond + ", i64 " + lit + ", i64 " + rhs
+}
+
+/// mirSelectTypedText renders
+/// `  <reg> = select i1 <cond>, <ty> <lhs>, <ty> <rhs>`. General
+/// arbitrary-type select form.
+pub fn mirSelectTypedText(
+    reg: String,
+    ty: String,
+    cond: String,
+    lhs: String,
+    rhs: String,
+) -> String {
+    "  " + reg + " = select i1 " + cond + ", " + ty + " " + lhs + ", " + ty + " " + rhs
+}
+
+/// mirZExtI8ToI32Text renders
+/// `  <reg> = zext i8 <src> to i32`. Byte→int widening for char
+/// classification arithmetic.
+pub fn mirZExtI8ToI32Text(reg: String, src: String) -> String {
+    "  " + reg + " = zext i8 " + src + " to i32"
+}
+
+/// mirZExtI8ToI64Text renders
+/// `  <reg> = zext i8 <src> to i64`. Byte→int widening into the
+/// canonical i64 width.
+pub fn mirZExtI8ToI64Text(reg: String, src: String) -> String {
+    "  " + reg + " = zext i8 " + src + " to i64"
+}
+
+/// mirZExtI32ToI64Text renders
+/// `  <reg> = zext i32 <src> to i64`. i32→i64 widening.
+pub fn mirZExtI32ToI64Text(reg: String, src: String) -> String {
+    "  " + reg + " = zext i32 " + src + " to i64"
+}
+
+/// mirTruncI64ToI8Text renders
+/// `  <reg> = trunc i64 <src> to i8`. i64→byte narrowing for char
+/// store paths.
+pub fn mirTruncI64ToI8Text(reg: String, src: String) -> String {
+    "  " + reg + " = trunc i64 " + src + " to i8"
+}
+
+/// mirTruncI64ToI32Text renders
+/// `  <reg> = trunc i64 <src> to i32`. i64→i32 narrowing.
+pub fn mirTruncI64ToI32Text(reg: String, src: String) -> String {
+    "  " + reg + " = trunc i64 " + src + " to i32"
+}
+
+/// mirPtrToIntI64Text renders
+/// `  <reg> = ptrtoint ptr <ptr> to i64`. Pointer-as-integer cast
+/// used by hash mixing and identity-key derivation.
+pub fn mirPtrToIntI64Text(reg: String, ptr: String) -> String {
+    "  " + reg + " = ptrtoint ptr " + ptr + " to i64"
+}
+
+/// mirGEPInboundsZeroText renders
+/// `  <reg> = getelementptr inbounds <ty>, ptr <basePtr>, i32 0, i32 0`.
+/// The first-field projection form used by builtin-aggregate
+/// destructuring (e.g. tuple/Option payload pickoff).
+pub fn mirGEPInboundsZeroText(reg: String, ty: String, basePtr: String) -> String {
+    "  " + reg + " = getelementptr inbounds " + ty + ", ptr " + basePtr + ", i32 0, i32 0"
+}
+
+/// mirGEPInboundsFieldText renders
+/// `  <reg> = getelementptr inbounds <ty>, ptr <basePtr>, i32 0, i32 <idx>`.
+/// The Nth-field projection form. `idx` is a decimal-digit String
+/// (caller formats with `Itoa`).
+pub fn mirGEPInboundsFieldText(reg: String, ty: String, basePtr: String, idx: String) -> String {
+    "  " + reg + " = getelementptr inbounds " + ty + ", ptr " + basePtr + ", i32 0, i32 " + idx
+}
+
+/// mirGEPInboundsI8Text renders
+/// `  <reg> = getelementptr i8, ptr <basePtr>, i64 <offDigits>`. The
+/// byte-stride GEP form used by struct field stride math. `offDigits`
+/// is a decimal-digit String.
+pub fn mirGEPInboundsI8Text(reg: String, basePtr: String, offDigits: String) -> String {
+    "  " + reg + " = getelementptr i8, ptr " + basePtr + ", i64 " + offDigits
+}
+
+/// mirGEPSizeofText renders
+/// `  <reg> = getelementptr <ty>, ptr null, i32 1`. The "compute size
+/// of <ty> in bytes" idiom — null-base + i32 1 stride yields the
+/// element-stride pointer; ptrtoint converts it to a byte count.
+pub fn mirGEPSizeofText(reg: String, ty: String) -> String {
+    "  " + reg + " = getelementptr " + ty + ", ptr null, i32 1"
+}
+
+/// mirGEPArrayElementText renders
+/// `  <reg> = getelementptr [<n> x ptr], ptr <arr>, i64 0, i64 <idx>`.
+/// The array-element pickoff form used by argv-style call payload
+/// staging. `n` and `idx` are decimal-digit Strings.
+pub fn mirGEPArrayElementText(reg: String, n: String, arr: String, idx: String) -> String {
+    "  " + reg + " = getelementptr [" + n + " x ptr], ptr " + arr + ", i64 0, i64 " + idx
+}
+
+/// mirCallRuntimeI64NoArgsText renders
+/// `  <reg> = call i64 @<symbol>()`. The zero-arg i64-returning
+/// runtime call form used by clock / sample-counter probes.
+pub fn mirCallRuntimeI64NoArgsText(reg: String, symbol: String) -> String {
+    "  " + reg + " = call i64 @" + symbol + "()"
+}
+
+/// mirCallRuntimeVoidOneArgText renders
+/// `  call void @<symbol>(<arg>)`. The single-arg void-returning
+/// runtime call form. `arg` is the full pre-formatted operand
+/// (`ptr %x` or `i64 %n`).
+pub fn mirCallRuntimeVoidOneArgText(symbol: String, arg: String) -> String {
+    "  call void @" + symbol + "(" + arg + ")"
+}
+
+/// mirCallRuntimeVoidPtrText renders
+/// `  call void @<symbol>(ptr <arg>)`. The single-ptr-arg void-
+/// returning runtime call form used by GC mark / trace helpers.
+pub fn mirCallRuntimeVoidPtrText(symbol: String, arg: String) -> String {
+    "  call void @" + symbol + "(ptr " + arg + ")"
+}
+
+/// mirCallRuntimeVoidPtrI64Text renders
+/// `  call void @<symbol>(ptr <a>, i64 <n>)`. The two-arg
+/// (ptr+length) void-returning runtime call form.
+pub fn mirCallRuntimeVoidPtrI64Text(symbol: String, a: String, n: String) -> String {
+    "  call void @" + symbol + "(ptr " + a + ", i64 " + n + ")"
+}
+
+/// mirCallRuntimeVoidPtrI64I64Text renders
+/// `  call void @<symbol>(ptr <a>, i64 <n>, i64 <m>)`. The three-arg
+/// (ptr+two-int) void-returning runtime call form used by sample
+/// emission and benchmark publish.
+pub fn mirCallRuntimeVoidPtrI64I64Text(symbol: String, a: String, n: String, m: String) -> String {
+    "  call void @" + symbol + "(ptr " + a + ", i64 " + n + ", i64 " + m + ")"
+}
+
+/// mirCallRuntimePtrI64Text renders
+/// `  <reg> = call ptr @<symbol>(i64 <n>)`. The single-int-arg ptr-
+/// returning runtime call form used by allocator probes (samples_new,
+/// etc.).
+pub fn mirCallRuntimePtrI64Text(reg: String, symbol: String, n: String) -> String {
+    "  " + reg + " = call ptr @" + symbol + "(i64 " + n + ")"
+}
+
+/// mirCallRuntimePtrI64PtrText renders
+/// `  <reg> = call ptr @<symbol>(i64 <n>, ptr <p>)`. The (count, ptr)
+/// ptr-returning runtime call form used by interpolation / argv
+/// marshalling. `n` is a decimal-digit String.
+pub fn mirCallRuntimePtrI64PtrText(reg: String, symbol: String, n: String, p: String) -> String {
+    "  " + reg + " = call ptr @" + symbol + "(i64 " + n + ", ptr " + p + ")"
+}
+
+/// mirGCMarkSlotText renders
+/// `  call void @osty.gc.mark_slot_v1(ptr <addr>)`. The GC root-mark
+/// helper called at every safepoint slot.
+pub fn mirGCMarkSlotText(addr: String) -> String {
+    "  call void @osty.gc.mark_slot_v1(ptr " + addr + ")"
+}
+
+/// mirInsertValueIfaceCtorText renders
+/// `  <reg> = insertvalue %osty.iface zeroinitializer, ptr <slot>, 0`.
+/// The first-step iface-constructor form used by interface-boxing
+/// dispatch.
+pub fn mirInsertValueIfaceCtorText(reg: String, slot: String) -> String {
+    "  " + reg + " = insertvalue %osty.iface zeroinitializer, ptr " + slot + ", 0"
+}
+
+/// mirInsertValueIfaceVtableText renders
+/// `  <reg> = insertvalue %osty.iface <iface>, ptr <vtable>, 1`. The
+/// second-step iface-constructor form (vtable slot fill).
+pub fn mirInsertValueIfaceVtableText(reg: String, iface: String, vtable: String) -> String {
+    "  " + reg + " = insertvalue %osty.iface " + iface + ", ptr " + vtable + ", 1"
+}
+
+/// mirExtractValueIfacePtrText renders
+/// `  <reg> = extractvalue %osty.iface <iface>, 0`. Extract the
+/// data-pointer from an iface value (ABI slot 0).
+pub fn mirExtractValueIfacePtrText(reg: String, iface: String) -> String {
+    "  " + reg + " = extractvalue %osty.iface " + iface + ", 0"
+}
+
+/// mirExtractValueIfaceVtableText renders
+/// `  <reg> = extractvalue %osty.iface <iface>, 1`. Extract the
+/// vtable-pointer from an iface value (ABI slot 1).
+pub fn mirExtractValueIfaceVtableText(reg: String, iface: String) -> String {
+    "  " + reg + " = extractvalue %osty.iface " + iface + ", 1"
+}
+
+/// mirPhiPtrFromValueOrNullText renders
+/// `  <reg> = phi ptr [ <val>, %<valLabel> ], [ null, %<nullLabel> ]`.
+/// The Option<ptr-shape> joinpoint phi: one incoming with a
+/// concrete pointer, the other with null.
+pub fn mirPhiPtrFromValueOrNullText(
+    reg: String,
+    val: String,
+    valLabel: String,
+    nullLabel: String,
+) -> String {
+    "  " + reg + " = phi ptr [ " + val + ", %" + valLabel +
+        " ], [ null, %" + nullLabel + " ]"
+}
+
+/// mirPhiI64FromValueOrZeroText renders
+/// `  <reg> = phi i64 [ <val>, %<valLabel> ], [ 0, %<zeroLabel> ]`.
+/// The two-incoming-edge i64 phi: one branch carries a computed
+/// value, the other zero.
+pub fn mirPhiI64FromValueOrZeroText(
+    reg: String,
+    val: String,
+    valLabel: String,
+    zeroLabel: String,
+) -> String {
+    "  " + reg + " = phi i64 [ " + val + ", %" + valLabel +
+        " ], [ 0, %" + zeroLabel + " ]"
+}
+
+/// mirPhiTypedTwoEdgeText renders
+/// `  <reg> = phi <ty> [ <a>, %<la> ], [ <b>, %<lb> ]`. The general
+/// two-incoming-edge phi form for arbitrary types — used by ?? and
+/// if-expr joinpoints when the merge type isn't ptr-or-null.
+pub fn mirPhiTypedTwoEdgeText(
+    reg: String,
+    ty: String,
+    a: String,
+    la: String,
+    b: String,
+    lb: String,
+) -> String {
+    "  " + reg + " = phi " + ty + " [ " + a + ", %" + la +
+        " ], [ " + b + ", %" + lb + " ]"
+}
+
+/// mirGEPInboundsRawIndicesText renders
+/// `  <reg> = getelementptr inbounds <ty>, ptr <basePtr>, <indices>`.
+/// The raw-indices form for nested-aggregate offset computation —
+/// `indices` is a pre-formatted comma-separated index list (e.g.
+/// `i32 0, i32 0, i32 1` for `Tuple.0.field1`). The struct-field
+/// helpers above are specialisations of this.
+pub fn mirGEPInboundsRawIndicesText(
+    reg: String,
+    ty: String,
+    basePtr: String,
+    indices: String,
+) -> String {
+    "  " + reg + " = getelementptr inbounds " + ty + ", ptr " + basePtr +
+        ", " + indices
+}
+
+/// mirGEPInboundsNullRawIndicesText renders
+/// `  <reg> = getelementptr inbounds <ty>, ptr null, <indices>`. The
+/// null-base form used by aggregate root-offset computation —
+/// `indices` is the pre-formatted index list (e.g. `i32 0, i32 1`).
+/// The result ptr-to-int converts to the byte offset of that field.
+pub fn mirGEPInboundsNullRawIndicesText(
+    reg: String,
+    ty: String,
+    indices: String,
+) -> String {
+    "  " + reg + " = getelementptr inbounds " + ty + ", ptr null, " + indices
+}
+
+/// mirCallTypedFnPtrText renders
+/// `  <reg> = call <retTyp> <fnPtr>(<argList>)`. The indirect-call
+/// form for vtable dispatch through a function pointer — `argList`
+/// is a pre-formatted comma-separated typed-arg list. The direct-
+/// symbol forms (`mirCallRuntime*Text`) live separately so call
+/// sites that just call a named runtime symbol stay readable.
+pub fn mirCallTypedFnPtrText(
+    reg: String,
+    retTyp: String,
+    fnPtr: String,
+    argList: String,
+) -> String {
+    "  " + reg + " = call " + retTyp + " " + fnPtr + "(" + argList + ")"
+}
+
+/// mirCallI1FromArgsText renders
+/// `  <reg> = call i1 @<symbol>(<argList>)`. The i1-returning runtime
+/// call form used by Map.get probe / boolean predicate helpers.
+pub fn mirCallI1FromArgsText(reg: String, symbol: String, argList: String) -> String {
+    "  " + reg + " = call i1 @" + symbol + "(" + argList + ")"
+}
+
+/// mirCallTypedFromArgsText renders
+/// `  <reg> = call <retTyp> @<symbol>(<argList>)`. The general
+/// typed-return runtime-call form. Specialisations of this shape
+/// (`mirCallRuntimeI64NoArgsText`, `mirCallRuntimePtrI64Text`,
+/// `mirCallI1FromArgsText`) stay separate for readability at hot
+/// shape sites.
+pub fn mirCallTypedFromArgsText(reg: String, retTyp: String, symbol: String, argList: String) -> String {
+    "  " + reg + " = call " + retTyp + " @" + symbol + "(" + argList + ")"
+}
+
+/// mirICmpEqI32ZeroText renders `  <reg> = icmp eq i32 <lhs>, 0`.
+/// Width-specialised i32-zero probe — used by char-class and width-
+/// shrunken int comparisons.
+pub fn mirICmpEqI32ZeroText(reg: String, lhs: String) -> String {
+    "  " + reg + " = icmp eq i32 " + lhs + ", 0"
+}
+
+/// mirICmpNEI64ZeroText renders `  <reg> = icmp ne i64 <lhs>, 0`.
+/// The non-zero probe used by Result tag-checking and pointer-
+/// truthiness.
+pub fn mirICmpNEI64ZeroText(reg: String, lhs: String) -> String {
+    "  " + reg + " = icmp ne i64 " + lhs + ", 0"
+}
+
+/// mirICmpEqI1Text renders `  <reg> = icmp eq i1 <lhs>, <rhs>`. The
+/// bool-equality probe — used by Option<Bool> match-arm dispatch.
+pub fn mirICmpEqI1Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = icmp eq i1 " + lhs + ", " + rhs
+}
+
+/// mirAddI64LiteralText renders
+/// `  <reg> = add i64 <lhs>, <lit>`. i64 addition with a baked
+/// literal — used by stride / offset arithmetic.
+pub fn mirAddI64LiteralText(reg: String, lhs: String, lit: String) -> String {
+    "  " + reg + " = add i64 " + lhs + ", " + lit
+}
+
+/// mirSubI64LiteralText renders
+/// `  <reg> = sub i64 <lhs>, <lit>`. i64 subtraction with a baked
+/// literal — used by index normalisation and length adjustments.
+pub fn mirSubI64LiteralText(reg: String, lhs: String, lit: String) -> String {
+    "  " + reg + " = sub i64 " + lhs + ", " + lit
+}
+
+/// mirSubI64OneText renders `  <reg> = sub i64 <lhs>, 1`. The
+/// decrement-by-one form — symmetric counterpart to
+/// `mirAddI64OneText` for inclusive-range upper-bound math.
+pub fn mirSubI64OneText(reg: String, lhs: String) -> String {
+    "  " + reg + " = sub i64 " + lhs + ", 1"
+}
+
+/// mirShlI64Text renders `  <reg> = shl i64 <lhs>, <rhs>`. General
+/// i64 left-shift (bit-mixing, hash-finalisation, log2 derivation).
+pub fn mirShlI64Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = shl i64 " + lhs + ", " + rhs
+}
+
+/// mirShlI64LiteralText renders
+/// `  <reg> = shl i64 <lhs>, <lit>`. i64 left-shift by a baked
+/// literal count — used by stride / power-of-two bucket math.
+pub fn mirShlI64LiteralText(reg: String, lhs: String, lit: String) -> String {
+    "  " + reg + " = shl i64 " + lhs + ", " + lit
+}
+
+/// mirLShrI64Text renders `  <reg> = lshr i64 <lhs>, <rhs>`. Logical
+/// (unsigned) i64 right-shift.
+pub fn mirLShrI64Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = lshr i64 " + lhs + ", " + rhs
+}
+
+/// mirAShrI64Text renders `  <reg> = ashr i64 <lhs>, <rhs>`.
+/// Arithmetic (sign-preserving) i64 right-shift.
+pub fn mirAShrI64Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = ashr i64 " + lhs + ", " + rhs
+}
+
+/// mirAndI64Text renders `  <reg> = and i64 <lhs>, <rhs>`. General
+/// i64 bitwise-and.
+pub fn mirAndI64Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = and i64 " + lhs + ", " + rhs
+}
+
+/// mirOrI64Text renders `  <reg> = or i64 <lhs>, <rhs>`. General
+/// i64 bitwise-or.
+pub fn mirOrI64Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = or i64 " + lhs + ", " + rhs
+}
+
+/// mirXorI64Text renders `  <reg> = xor i64 <lhs>, <rhs>`. General
+/// i64 bitwise-xor.
+pub fn mirXorI64Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = xor i64 " + lhs + ", " + rhs
+}
+
+/// mirSremI64Text renders `  <reg> = srem i64 <lhs>, <rhs>`. Signed
+/// i64 remainder.
+pub fn mirSremI64Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = srem i64 " + lhs + ", " + rhs
+}
+
+/// mirURemI64Text renders `  <reg> = urem i64 <lhs>, <rhs>`. Unsigned
+/// i64 remainder.
+pub fn mirURemI64Text(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = urem i64 " + lhs + ", " + rhs
+}
+
+/// mirFAddText renders `  <reg> = fadd double <lhs>, <rhs>`. Double-
+/// precision floating-point addition.
+pub fn mirFAddText(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = fadd double " + lhs + ", " + rhs
+}
+
+/// mirFSubText renders `  <reg> = fsub double <lhs>, <rhs>`. Double-
+/// precision floating-point subtraction.
+pub fn mirFSubText(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = fsub double " + lhs + ", " + rhs
+}
+
+/// mirFMulText renders `  <reg> = fmul double <lhs>, <rhs>`. Double-
+/// precision floating-point multiplication.
+pub fn mirFMulText(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = fmul double " + lhs + ", " + rhs
+}
+
+/// mirFDivText renders `  <reg> = fdiv double <lhs>, <rhs>`. Double-
+/// precision floating-point division.
+pub fn mirFDivText(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = fdiv double " + lhs + ", " + rhs
+}
+
+/// mirFCmpOEqText renders `  <reg> = fcmp oeq double <lhs>, <rhs>`.
+/// Ordered-equality double comparison (returns false when either
+/// operand is NaN).
+pub fn mirFCmpOEqText(reg: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = fcmp oeq double " + lhs + ", " + rhs
+}
+
+/// mirFCmpText renders `  <reg> = fcmp <pred> double <lhs>, <rhs>`.
+/// General floating-point compare with explicit predicate keyword
+/// (`oeq`, `one`, `olt`, `ogt`, `ole`, `oge`, `ord`, `uno`, ...).
+pub fn mirFCmpText(reg: String, pred: String, lhs: String, rhs: String) -> String {
+    "  " + reg + " = fcmp " + pred + " double " + lhs + ", " + rhs
+}
+
+/// mirSIToFPText renders `  <reg> = sitofp i64 <src> to double`.
+/// Signed-int → double conversion.
+pub fn mirSIToFPText(reg: String, src: String) -> String {
+    "  " + reg + " = sitofp i64 " + src + " to double"
+}
+
+/// mirFPToSIText renders `  <reg> = fptosi double <src> to i64`.
+/// Double → signed-int truncation.
+pub fn mirFPToSIText(reg: String, src: String) -> String {
+    "  " + reg + " = fptosi double " + src + " to i64"
+}
+
+/// mirAllocaI8Text renders `  <reg> = alloca i8`. Byte-width slot —
+/// used by Char and Bool spills.
+pub fn mirAllocaI8Text(reg: String) -> String {
+    "  " + reg + " = alloca i8"
+}
+
+/// mirAllocaDoubleText renders `  <reg> = alloca double`. Double-
+/// width slot — used by Float64 spills.
+pub fn mirAllocaDoubleText(reg: String) -> String {
+    "  " + reg + " = alloca double"
+}
+
+/// mirLoadDoubleText renders `  <reg> = load double, ptr <slot>`.
+/// Double-precision FP load.
+pub fn mirLoadDoubleText(reg: String, slot: String) -> String {
+    "  " + reg + " = load double, ptr " + slot
+}
+
+/// mirLoadI8Text renders `  <reg> = load i8, ptr <slot>`. Byte-width
+/// load — used by Char / Bool reload.
+pub fn mirLoadI8Text(reg: String, slot: String) -> String {
+    "  " + reg + " = load i8, ptr " + slot
+}
+
+/// mirStoreDoubleText renders `  store double <val>, ptr <slot>`.
+/// Double-precision FP store.
+pub fn mirStoreDoubleText(val: String, slot: String) -> String {
+    "  store double " + val + ", ptr " + slot
+}

@@ -512,12 +512,12 @@ func (g *generator) boxInterfaceValue(ifaceType ast.Type, v value) (value, error
 	}
 	emitter := g.toOstyEmitter()
 	slot := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, v.typ))
-	emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", v.typ, v.ref, slot))
+	emitter.body = append(emitter.body, mirAllocaText(slot, v.typ))
+	emitter.body = append(emitter.body, mirStoreText(v.typ, v.ref, slot))
 	step1 := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %%osty.iface zeroinitializer, ptr %s, 0", step1, slot))
+	emitter.body = append(emitter.body, mirInsertValueIfaceCtorText(step1, slot))
 	step2 := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = insertvalue %%osty.iface %s, ptr %s, 1", step2, step1, vtableSym))
+	emitter.body = append(emitter.body, mirInsertValueIfaceVtableText(step2, step1, vtableSym))
 	g.takeOstyEmitter(emitter)
 	// Phase 6e: tag the boxed value with its interface AST type so
 	// downstream slots (e.g. `let mut s: Iface = …`) remember the
@@ -906,8 +906,7 @@ func (g *generator) emitListAssignValue(base, index, v value) error {
 	if listUsesTypedRuntime(base.listElemTyp) {
 		symbol := listRuntimeSetSymbol(base.listElemTyp)
 		g.declareRuntimeSymbol(symbol, "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: base.listElemTyp}})
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			symbol,
 			llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(index), toOstyValue(v)}),
 		))
@@ -916,8 +915,7 @@ func (g *generator) emitListAssignValue(base, index, v value) error {
 		addr := g.spillValueAddress(emitter, "list.set", v)
 		sizeValue := g.emitTypeSize(emitter, base.listElemTyp)
 		g.declareRuntimeSymbol(listRuntimeSetBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			listRuntimeSetBytesSymbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(index), {typ: "ptr", name: addr}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
 		))
@@ -947,11 +945,10 @@ func (g *generator) emitListElementValue(base, index value) (value, error) {
 	traceSymbol := g.traceCallbackSymbol(base.listElemTyp, g.rootPathsForType(base.listElemTyp))
 	emitter := g.toOstyEmitter()
 	slot := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, base.listElemTyp))
+	emitter.body = append(emitter.body, mirAllocaText(slot, base.listElemTyp))
 	sizeValue := g.emitTypeSize(emitter, base.listElemTyp)
 	g.declareRuntimeSymbol(listRuntimeGetBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  call void @%s(%s)",
+	emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 		listRuntimeGetBytesSymbol(),
 		llvmCallArgs([]*LlvmValue{toOstyValue(base), toOstyValue(index), {typ: "ptr", name: slot}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
 	))
@@ -1052,7 +1049,7 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 		g.branchTo(continueLabel)
 	}
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	emitter.body = append(emitter.body, mirLabelText(continueLabel))
 	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	llvmRangeEnd(emitter, loop)
 	g.attachVectorizeMD(emitter, loop.condLabel)
@@ -1068,15 +1065,15 @@ func (g *generator) emitWhileFor(stmt *ast.ForStmt) error {
 	bodyLabel := llvmNextLabel(emitter, "for.body")
 	continueLabel := llvmNextLabel(emitter, "for.cont")
 	endLabel := llvmNextLabel(emitter, "for.end")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", condLabel))
+	emitter.body = append(emitter.body, mirBrUncondText(condLabel))
+	emitter.body = append(emitter.body, mirLabelText(condLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(condLabel)
 
 	if stmt.Iter == nil {
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", bodyLabel))
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", bodyLabel))
+		emitter.body = append(emitter.body, mirBrUncondText(bodyLabel))
+		emitter.body = append(emitter.body, mirLabelText(bodyLabel))
 		g.takeOstyEmitter(emitter)
 	} else {
 		cond, err := g.emitExpr(stmt.Iter)
@@ -1087,13 +1084,8 @@ func (g *generator) emitWhileFor(stmt *ast.ForStmt) error {
 			return unsupportedf("type-system", "for condition type %s, want i1", cond.typ)
 		}
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  br i1 %s, label %%%s, label %%%s",
-			toOstyValue(cond).name,
-			bodyLabel,
-			endLabel,
-		))
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", bodyLabel))
+		emitter.body = append(emitter.body, mirBrCondText(toOstyValue(cond).name, bodyLabel, endLabel))
+		emitter.body = append(emitter.body, mirLabelText(bodyLabel))
 		g.takeOstyEmitter(emitter)
 	}
 	g.enterBlock(bodyLabel)
@@ -1121,14 +1113,14 @@ func (g *generator) emitWhileFor(stmt *ast.ForStmt) error {
 	}
 
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	emitter.body = append(emitter.body, mirLabelText(continueLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(continueLabel)
 	emitter = g.toOstyEmitter()
 	g.emitLoopSafepoint(emitter, loopSafepointSlot)
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
+	emitter.body = append(emitter.body, mirBrUncondText(condLabel))
 	g.attachVectorizeMD(emitter, condLabel)
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	emitter.body = append(emitter.body, mirLabelText(endLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
 	return nil
@@ -1150,8 +1142,8 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 	bodyLabel := llvmNextLabel(emitter, "for.body")
 	continueLabel := llvmNextLabel(emitter, "for.cont")
 	endLabel := llvmNextLabel(emitter, "for.end")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", condLabel))
+	emitter.body = append(emitter.body, mirBrUncondText(condLabel))
+	emitter.body = append(emitter.body, mirLabelText(condLabel))
 	g.takeOstyEmitter(emitter)
 
 	scrutinee, err := g.emitExpr(stmt.Iter)
@@ -1163,8 +1155,8 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 		return err
 	}
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, bodyLabel, endLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", bodyLabel))
+	emitter.body = append(emitter.body, mirBrCondText(cond.name, bodyLabel, endLabel))
+	emitter.body = append(emitter.body, mirLabelText(bodyLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(bodyLabel)
 
@@ -1200,14 +1192,14 @@ func (g *generator) emitForLet(stmt *ast.ForStmt) error {
 	}
 
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	emitter.body = append(emitter.body, mirLabelText(continueLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(continueLabel)
 	emitter = g.toOstyEmitter()
 	g.emitLoopSafepoint(emitter, loopSafepointSlot)
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", condLabel))
+	emitter.body = append(emitter.body, mirBrUncondText(condLabel))
 	g.attachVectorizeMD(emitter, condLabel)
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	emitter.body = append(emitter.body, mirLabelText(endLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
 	return nil
@@ -1499,8 +1491,8 @@ func (g *generator) emitTestingExpect(call *ast.CallExpr, wantErr bool) (value, 
 	cond := llvmCompare(emitter, "eq", tag, toOstyValue(value{typ: "i64", ref: wantTag}))
 	okLabel := llvmNextLabel(emitter, "test.expect.ok")
 	failLabel := llvmNextLabel(emitter, "test.expect.fail")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, okLabel, failLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", failLabel))
+	emitter.body = append(emitter.body, mirBrCondText(cond.name, okLabel, failLabel))
+	emitter.body = append(emitter.body, mirLabelText(failLabel))
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = failLabel
 	exprText := g.sourceSpanText(call.Args[0].Value)
@@ -1513,7 +1505,7 @@ func (g *generator) emitTestingExpect(call *ast.CallExpr, wantErr bool) (value, 
 	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
 	emitter.body = append(emitter.body, "  call void @exit(i32 1)")
 	emitter.body = append(emitter.body, "  unreachable")
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", okLabel))
+	emitter.body = append(emitter.body, mirLabelText(okLabel))
 	payload := llvmExtractValue(emitter, toOstyValue(result), payloadType, payloadIndex)
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = okLabel
@@ -1602,19 +1594,19 @@ func (g *generator) emitTestingBenchmarkStmt(call *ast.CallExpr) error {
 
 	emitter := g.toOstyEmitter()
 	effectiveN := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load i64, ptr %s", effectiveN, nslot))
+	emitter.body = append(emitter.body, mirLoadI64Text(effectiveN, nslot))
 	// Warmup: clamp(N/10, 1, 1000). Cold-cache / branch-predictor misses
 	// get amortized before the first clock sample.
 	warmupDiv := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sdiv i64 %s, 10", warmupDiv, effectiveN))
+	emitter.body = append(emitter.body, mirSDivI64LiteralText(warmupDiv, effectiveN, "10"))
 	warmupGE1Cond := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp sgt i64 %s, 0", warmupGE1Cond, warmupDiv))
+	emitter.body = append(emitter.body, mirICmpSGTI64ZeroText(warmupGE1Cond, warmupDiv))
 	warmupGE1 := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 %s, i64 1", warmupGE1, warmupGE1Cond, warmupDiv))
+	emitter.body = append(emitter.body, mirSelectI64LiteralRhsText(warmupGE1, warmupGE1Cond, warmupDiv, "1"))
 	warmupCapCond := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp slt i64 %s, 1000", warmupCapCond, warmupGE1))
+	emitter.body = append(emitter.body, mirICmpSLTI64LiteralText(warmupCapCond, warmupGE1, "1000"))
 	warmupTemp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 %s, i64 1000", warmupTemp, warmupCapCond, warmupGE1))
+	emitter.body = append(emitter.body, mirSelectI64LiteralRhsText(warmupTemp, warmupCapCond, warmupGE1, "1000"))
 	g.takeOstyEmitter(emitter)
 
 	if err := g.emitBenchInlineLoop(stmts, value{typ: "i64", ref: warmupTemp}, "bench.warm", ""); err != nil {
@@ -1630,11 +1622,11 @@ func (g *generator) emitTestingBenchmarkStmt(call *ast.CallExpr) error {
 	g.declareRuntimeSymbol(benchSamplesFreeSymbol(), "void", []paramInfo{{typ: "ptr"}})
 	emitter = g.toOstyEmitter()
 	finalN := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load i64, ptr %s", finalN, nslot))
+	emitter.body = append(emitter.body, mirLoadI64Text(finalN, nslot))
 	samplesPtr := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call ptr @%s(i64 %s)", samplesPtr, benchSamplesNewSymbol(), finalN))
+	emitter.body = append(emitter.body, mirCallRuntimePtrI64Text(samplesPtr, benchSamplesNewSymbol(), finalN))
 	startTemp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", startTemp, benchClockRuntimeSymbol()))
+	emitter.body = append(emitter.body, mirCallRuntimeI64NoArgsText(startTemp, benchClockRuntimeSymbol()))
 	g.takeOstyEmitter(emitter)
 
 	if err := g.emitBenchInlineLoop(stmts, value{typ: "i64", ref: finalN}, "bench.run", samplesPtr); err != nil {
@@ -1643,26 +1635,26 @@ func (g *generator) emitTestingBenchmarkStmt(call *ast.CallExpr) error {
 
 	emitter = g.toOstyEmitter()
 	endTemp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", endTemp, benchClockRuntimeSymbol()))
+	emitter.body = append(emitter.body, mirCallRuntimeI64NoArgsText(endTemp, benchClockRuntimeSymbol()))
 	totalTemp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sub i64 %s, %s", totalTemp, endTemp, startTemp))
+	emitter.body = append(emitter.body, mirSubI64Text(totalTemp, endTemp, startTemp))
 	finalNReload := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load i64, ptr %s", finalNReload, nslot))
+	emitter.body = append(emitter.body, mirLoadI64Text(finalNReload, nslot))
 	nonZero := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp sgt i64 %s, 0", nonZero, finalNReload))
+	emitter.body = append(emitter.body, mirICmpSGTI64ZeroText(nonZero, finalNReload))
 	divLabel := llvmNextLabel(emitter, "bench.div")
 	skipLabel := llvmNextLabel(emitter, "bench.skip")
 	joinLabel := llvmNextLabel(emitter, "bench.join")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", nonZero, divLabel, skipLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", divLabel))
+	emitter.body = append(emitter.body, mirBrCondText(nonZero, divLabel, skipLabel))
+	emitter.body = append(emitter.body, mirLabelText(divLabel))
 	divTemp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sdiv i64 %s, %s", divTemp, totalTemp, finalNReload))
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", joinLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", skipLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", joinLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", joinLabel))
+	emitter.body = append(emitter.body, mirSDivI64Text(divTemp, totalTemp, finalNReload))
+	emitter.body = append(emitter.body, mirBrUncondText(joinLabel))
+	emitter.body = append(emitter.body, mirLabelText(skipLabel))
+	emitter.body = append(emitter.body, mirBrUncondText(joinLabel))
+	emitter.body = append(emitter.body, mirLabelText(joinLabel))
 	avgTemp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi i64 [ %s, %%%s ], [ 0, %%%s ]", avgTemp, divTemp, divLabel, skipLabel))
+	emitter.body = append(emitter.body, mirPhiI64FromValueOrZeroText(avgTemp, divTemp, divLabel, skipLabel))
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = joinLabel
 	g.currentReachable = true
@@ -1698,8 +1690,8 @@ func (g *generator) emitTestingBenchmarkStmt(call *ast.CallExpr) error {
 	}
 	emitter = g.toOstyEmitter()
 	llvmPrintlnString(emitter, toOstyValue(msg))
-	emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(ptr %s, i64 %s)", benchSamplesReportSymbol(), samplesPtr, finalNReload))
-	emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(ptr %s)", benchSamplesFreeSymbol(), samplesPtr))
+	emitter.body = append(emitter.body, mirCallRuntimeVoidPtrI64Text(benchSamplesReportSymbol(), samplesPtr, finalNReload))
+	emitter.body = append(emitter.body, mirCallRuntimeVoidPtrText(benchSamplesFreeSymbol(), samplesPtr))
 	g.takeOstyEmitter(emitter)
 	return nil
 }
@@ -1727,18 +1719,18 @@ func benchTargetRuntimeSymbol() string { return mirRtBenchTargetNsSymbol() }
 func (g *generator) emitBenchAutoTuneN(stmts []ast.Stmt, declaredN string) (string, error) {
 	emitter := g.toOstyEmitter()
 	nslot := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca i64", nslot))
-	emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", declaredN, nslot))
+	emitter.body = append(emitter.body, mirAllocaI64Text(nslot))
+	emitter.body = append(emitter.body, mirStoreI64Text(declaredN, nslot))
 	target := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", target, benchTargetRuntimeSymbol()))
+	emitter.body = append(emitter.body, mirCallRuntimeI64NoArgsText(target, benchTargetRuntimeSymbol()))
 	autoCond := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp sgt i64 %s, 0", autoCond, target))
+	emitter.body = append(emitter.body, mirICmpSGTI64ZeroText(autoCond, target))
 	probeLabel := llvmNextLabel(emitter, "bench.probe")
 	afterLabel := llvmNextLabel(emitter, "bench.after_probe")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", autoCond, probeLabel, afterLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", probeLabel))
+	emitter.body = append(emitter.body, mirBrCondText(autoCond, probeLabel, afterLabel))
+	emitter.body = append(emitter.body, mirLabelText(probeLabel))
 	probeStart := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", probeStart, benchClockRuntimeSymbol()))
+	emitter.body = append(emitter.body, mirCallRuntimeI64NoArgsText(probeStart, benchClockRuntimeSymbol()))
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = probeLabel
 
@@ -1750,34 +1742,34 @@ func (g *generator) emitBenchAutoTuneN(stmts []ast.Stmt, declaredN string) (stri
 
 	emitter = g.toOstyEmitter()
 	probeEnd := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", probeEnd, benchClockRuntimeSymbol()))
+	emitter.body = append(emitter.body, mirCallRuntimeI64NoArgsText(probeEnd, benchClockRuntimeSymbol()))
 	probeElapsed := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sub i64 %s, %s", probeElapsed, probeEnd, probeStart))
+	emitter.body = append(emitter.body, mirSubI64Text(probeElapsed, probeEnd, probeStart))
 	// Guard against 0-ns elapsed (clock resolution floor): treat as 1ns
 	// so the subsequent sdiv can't trap or explode.
 	elapsedPos := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp sgt i64 %s, 0", elapsedPos, probeElapsed))
+	emitter.body = append(emitter.body, mirICmpSGTI64ZeroText(elapsedPos, probeElapsed))
 	elapsedSafe := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 %s, i64 1", elapsedSafe, elapsedPos, probeElapsed))
+	emitter.body = append(emitter.body, mirSelectI64LiteralRhsText(elapsedSafe, elapsedPos, probeElapsed, "1"))
 	targetScaled := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = mul i64 %s, %d", targetScaled, target, probeIters))
+	emitter.body = append(emitter.body, mirMulI64LiteralText(targetScaled, target, strconv.FormatInt(probeIters, 10)))
 	estRaw := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sdiv i64 %s, %s", estRaw, targetScaled, elapsedSafe))
+	emitter.body = append(emitter.body, mirSDivI64Text(estRaw, targetScaled, elapsedSafe))
 	estHead := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = mul i64 %s, 6", estHead, estRaw))
+	emitter.body = append(emitter.body, mirMulI64LiteralText(estHead, estRaw, "6"))
 	estAdj := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = sdiv i64 %s, 5", estAdj, estHead))
+	emitter.body = append(emitter.body, mirSDivI64LiteralText(estAdj, estHead, "5"))
 	estFloorCond := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp slt i64 %s, 10", estFloorCond, estAdj))
+	emitter.body = append(emitter.body, mirICmpSLTI64LiteralText(estFloorCond, estAdj, "10"))
 	estFloored := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 10, i64 %s", estFloored, estFloorCond, estAdj))
+	emitter.body = append(emitter.body, mirSelectI64LiteralLhsText(estFloored, estFloorCond, "10", estAdj))
 	estCapCond := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp sgt i64 %s, 100000000", estCapCond, estFloored))
+	emitter.body = append(emitter.body, mirICmpSGTI64LiteralText(estCapCond, estFloored, "100000000"))
 	estFinal := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 100000000, i64 %s", estFinal, estCapCond, estFloored))
-	emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", estFinal, nslot))
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", afterLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", afterLabel))
+	emitter.body = append(emitter.body, mirSelectI64LiteralLhsText(estFinal, estCapCond, "100000000", estFloored))
+	emitter.body = append(emitter.body, mirStoreI64Text(estFinal, nslot))
+	emitter.body = append(emitter.body, mirBrUncondText(afterLabel))
+	emitter.body = append(emitter.body, mirLabelText(afterLabel))
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = afterLabel
 	g.currentReachable = true
@@ -1801,15 +1793,15 @@ func (g *generator) emitBenchInlineLoop(stmts []ast.Stmt, count value, labelPref
 		// the loop body — LLVM treats alloca-in-loop as an explicit
 		// stack-growing op and mem2reg won't promote it.
 		iterStartSlot = llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca i64", iterStartSlot))
+		emitter.body = append(emitter.body, mirAllocaI64Text(iterStartSlot))
 	}
 	zeroV := &LlvmValue{name: "0", typ: "i64"}
 	stopV := &LlvmValue{name: count.ref, typ: "i64"}
 	loop := llvmRangeStart(emitter, g.hiddenBenchIterName(), zeroV, stopV, false)
 	if samplesPtr != "" {
 		tstart := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", tstart, benchClockRuntimeSymbol()))
-		emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", tstart, iterStartSlot))
+		emitter.body = append(emitter.body, mirCallRuntimeI64NoArgsText(tstart, benchClockRuntimeSymbol()))
+		emitter.body = append(emitter.body, mirStoreI64Text(tstart, iterStartSlot))
 	}
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.bodyLabel)
@@ -1838,19 +1830,19 @@ func (g *generator) emitBenchInlineLoop(stmts []ast.Stmt, count value, labelPref
 	if samplesPtr != "" && g.currentReachable {
 		emitter = g.toOstyEmitter()
 		tstart := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = load i64, ptr %s", tstart, iterStartSlot))
+		emitter.body = append(emitter.body, mirLoadI64Text(tstart, iterStartSlot))
 		tend := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = call i64 @%s()", tend, benchClockRuntimeSymbol()))
+		emitter.body = append(emitter.body, mirCallRuntimeI64NoArgsText(tend, benchClockRuntimeSymbol()))
 		delta := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = sub i64 %s, %s", delta, tend, tstart))
-		emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(ptr %s, i64 %s, i64 %s)", benchSamplesRecordSymbol(), samplesPtr, loop.current, delta))
+		emitter.body = append(emitter.body, mirSubI64Text(delta, tend, tstart))
+		emitter.body = append(emitter.body, mirCallRuntimeVoidPtrI64I64Text(benchSamplesRecordSymbol(), samplesPtr, loop.current, delta))
 		g.takeOstyEmitter(emitter)
 	}
 	if g.currentReachable {
 		g.branchTo(continueLabel)
 	}
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	emitter.body = append(emitter.body, mirLabelText(continueLabel))
 	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
@@ -1889,8 +1881,8 @@ func (g *generator) emitTestingAssertion(cond value, message string) error {
 	emitter := g.toOstyEmitter()
 	okLabel := llvmNextLabel(emitter, "test.ok")
 	failLabel := llvmNextLabel(emitter, "test.fail")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.ref, okLabel, failLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", failLabel))
+	emitter.body = append(emitter.body, mirBrCondText(cond.ref, okLabel, failLabel))
+	emitter.body = append(emitter.body, mirLabelText(failLabel))
 	g.emitTestingAbortWithEmitter(emitter, message, okLabel)
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = okLabel
@@ -1911,7 +1903,7 @@ func (g *generator) emitTestingAbortWithEmitter(emitter *LlvmEmitter, message st
 	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
 	emitter.body = append(emitter.body, "  call void @exit(i32 1)")
 	emitter.body = append(emitter.body, "  unreachable")
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", nextLabel))
+	emitter.body = append(emitter.body, mirLabelText(nextLabel))
 }
 
 func (g *generator) testingFailureMessage(call *ast.CallExpr, name string) string {
@@ -1952,8 +1944,8 @@ func (g *generator) emitTestingAssertionLazy(cond value, buildMessage func() (va
 	emitter := g.toOstyEmitter()
 	okLabel := llvmNextLabel(emitter, "test.ok")
 	failLabel := llvmNextLabel(emitter, "test.fail")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.ref, okLabel, failLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", failLabel))
+	emitter.body = append(emitter.body, mirBrCondText(cond.ref, okLabel, failLabel))
+	emitter.body = append(emitter.body, mirLabelText(failLabel))
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = failLabel
 	msg, err := buildMessage()
@@ -1965,7 +1957,7 @@ func (g *generator) emitTestingAssertionLazy(cond value, buildMessage func() (va
 	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
 	emitter.body = append(emitter.body, "  call void @exit(i32 1)")
 	emitter.body = append(emitter.body, "  unreachable")
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", okLabel))
+	emitter.body = append(emitter.body, mirLabelText(okLabel))
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = okLabel
 	return nil
@@ -2270,7 +2262,7 @@ func (g *generator) emitIfStmt(expr *ast.IfExpr) error {
 	}
 	g.restoreScopeState(baseState)
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.elseLabel))
+	emitter.body = append(emitter.body, mirLabelText(labels.elseLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(labels.elseLabel)
 	if expr.Else != nil {
@@ -2285,7 +2277,7 @@ func (g *generator) emitIfStmt(expr *ast.IfExpr) error {
 	g.restoreScopeState(baseState)
 	if thenReachable || elseReachable {
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+		emitter.body = append(emitter.body, mirLabelText(labels.endLabel))
 		g.takeOstyEmitter(emitter)
 		g.enterBlock(labels.endLabel)
 		return nil
@@ -2336,7 +2328,7 @@ func (g *generator) emitIfLetStmt(expr *ast.IfExpr) error {
 	}
 	g.restoreScopeState(baseState)
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.elseLabel))
+	emitter.body = append(emitter.body, mirLabelText(labels.elseLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(labels.elseLabel)
 	if expr.Else != nil {
@@ -2351,7 +2343,7 @@ func (g *generator) emitIfLetStmt(expr *ast.IfExpr) error {
 	g.restoreScopeState(baseState)
 	if thenReachable || elseReachable {
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+		emitter.body = append(emitter.body, mirLabelText(labels.endLabel))
 		g.takeOstyEmitter(emitter)
 		g.enterBlock(labels.endLabel)
 		return nil
@@ -2464,8 +2456,8 @@ func (g *generator) emitResultMatchStmt(scrutinee value, info builtinResultType,
 	thenLabel := llvmNextLabel(emitter, "match.result.first")
 	elseLabel := llvmNextLabel(emitter, "match.result.second")
 	endLabel := llvmNextLabel(emitter, "match.result.end")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, thenLabel, elseLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", thenLabel))
+	emitter.body = append(emitter.body, mirBrCondText(cond.name, thenLabel, elseLabel))
+	emitter.body = append(emitter.body, mirLabelText(thenLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(thenLabel)
 
@@ -2482,7 +2474,7 @@ func (g *generator) emitResultMatchStmt(scrutinee value, info builtinResultType,
 	g.restoreScopeState(baseState)
 
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", elseLabel))
+	emitter.body = append(emitter.body, mirLabelText(elseLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(elseLabel)
 
@@ -2499,7 +2491,7 @@ func (g *generator) emitResultMatchStmt(scrutinee value, info builtinResultType,
 	g.restoreScopeState(baseState)
 
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	emitter.body = append(emitter.body, mirLabelText(endLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
 	return nil
@@ -2618,7 +2610,7 @@ func (g *generator) emitOptionalMatchStmt(scrutinee value, innerSource ast.Type,
 	emitter := g.toOstyEmitter()
 	endLabel := llvmNextLabel(emitter, "match.end")
 	isNil := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", isNil, scrutinee.ref))
+	emitter.body = append(emitter.body, mirICmpEqPtrNullText(isNil, scrutinee.ref))
 	g.takeOstyEmitter(emitter)
 
 	anyReached := false
@@ -2657,11 +2649,11 @@ func (g *generator) emitOptionalMatchStmt(scrutinee value, innerSource ast.Type,
 		armLabel := llvmNextLabel(emitter, "match.arm")
 		nextLabel := llvmNextLabel(emitter, "match.next")
 		if pattern.isSome {
-			emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil, nextLabel, armLabel))
+			emitter.body = append(emitter.body, mirBrCondText(isNil, nextLabel, armLabel))
 		} else {
-			emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", isNil, armLabel, nextLabel))
+			emitter.body = append(emitter.body, mirBrCondText(isNil, armLabel, nextLabel))
 		}
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", armLabel))
+		emitter.body = append(emitter.body, mirLabelText(armLabel))
 		g.takeOstyEmitter(emitter)
 		g.enterBlock(armLabel)
 
@@ -2684,7 +2676,7 @@ func (g *generator) emitOptionalMatchStmt(scrutinee value, innerSource ast.Type,
 		g.restoreScopeState(baseState)
 
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", nextLabel))
+		emitter.body = append(emitter.body, mirLabelText(nextLabel))
 		g.takeOstyEmitter(emitter)
 		g.enterBlock(nextLabel)
 	}
@@ -2694,7 +2686,7 @@ func (g *generator) emitOptionalMatchStmt(scrutinee value, innerSource ast.Type,
 		anyReached = true
 	}
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	emitter.body = append(emitter.body, mirLabelText(endLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
 	g.currentReachable = anyReached
@@ -2719,8 +2711,8 @@ func (g *generator) emitMatchArmGuard(arm *ast.MatchArm, failLabel string) error
 	}
 	emitter := g.toOstyEmitter()
 	guardOk := llvmNextLabel(emitter, "match.guardOk")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", guard.ref, guardOk, failLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", guardOk))
+	emitter.body = append(emitter.body, mirBrCondText(guard.ref, guardOk, failLabel))
+	emitter.body = append(emitter.body, mirLabelText(guardOk))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(guardOk)
 	return nil
@@ -2770,8 +2762,8 @@ func (g *generator) emitTagEnumMatchStmt(scrutinee value, arms []*ast.MatchArm) 
 		cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(value{typ: "i64", ref: strconv.Itoa(tag)}))
 		armLabel := llvmNextLabel(emitter, "match.arm")
 		nextLabel := llvmNextLabel(emitter, "match.next")
-		emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, armLabel, nextLabel))
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", armLabel))
+		emitter.body = append(emitter.body, mirBrCondText(cond.name, armLabel, nextLabel))
+		emitter.body = append(emitter.body, mirLabelText(armLabel))
 		g.takeOstyEmitter(emitter)
 		g.enterBlock(armLabel)
 
@@ -2789,7 +2781,7 @@ func (g *generator) emitTagEnumMatchStmt(scrutinee value, arms []*ast.MatchArm) 
 		g.restoreScopeState(baseState)
 
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", nextLabel))
+		emitter.body = append(emitter.body, mirLabelText(nextLabel))
 		g.takeOstyEmitter(emitter)
 		g.enterBlock(nextLabel)
 	}
@@ -2805,7 +2797,7 @@ func (g *generator) emitTagEnumMatchStmt(scrutinee value, arms []*ast.MatchArm) 
 	}
 
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	emitter.body = append(emitter.body, mirLabelText(endLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
 	g.currentReachable = anyReached
@@ -2860,8 +2852,8 @@ func (g *generator) emitPrimitiveLiteralMatchStmt(scrutinee value, arms []*ast.M
 		cond := llvmCompare(emitter, "eq", toOstyValue(scrutinee), toOstyValue(litValue))
 		armLabel := llvmNextLabel(emitter, "match.arm")
 		nextLabel := llvmNextLabel(emitter, "match.next")
-		emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, armLabel, nextLabel))
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", armLabel))
+		emitter.body = append(emitter.body, mirBrCondText(cond.name, armLabel, nextLabel))
+		emitter.body = append(emitter.body, mirLabelText(armLabel))
 		g.takeOstyEmitter(emitter)
 		g.enterBlock(armLabel)
 
@@ -2879,7 +2871,7 @@ func (g *generator) emitPrimitiveLiteralMatchStmt(scrutinee value, arms []*ast.M
 		g.restoreScopeState(baseState)
 
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", nextLabel))
+		emitter.body = append(emitter.body, mirLabelText(nextLabel))
 		g.takeOstyEmitter(emitter)
 		g.enterBlock(nextLabel)
 	}
@@ -2889,7 +2881,7 @@ func (g *generator) emitPrimitiveLiteralMatchStmt(scrutinee value, arms []*ast.M
 		anyReached = true
 	}
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	emitter.body = append(emitter.body, mirLabelText(endLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
 	g.currentReachable = anyReached
@@ -2978,8 +2970,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 		}
 		g.declareRuntimeSymbol(listRuntimePopDiscardSymbol(), "void", []paramInfo{{typ: "ptr"}})
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			listRuntimePopDiscardSymbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue)}),
 		))
@@ -2992,8 +2983,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 		}
 		g.declareRuntimeSymbol(listRuntimeClearSymbol(), "void", []paramInfo{{typ: "ptr"}})
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			listRuntimeClearSymbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue)}),
 		))
@@ -3035,8 +3025,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 		insertSymbol := listRuntimeInsertSymbol(elemTyp)
 		g.declareRuntimeSymbol(insertSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: elemTyp}})
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			insertSymbol,
 			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue), toOstyValue(idxValue), toOstyValue(argValue)}),
 		))
@@ -3077,8 +3066,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	emitter = g.toOstyEmitter()
 	if listUsesTypedRuntime(elemTyp) {
 		g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			pushSymbol,
 			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue), toOstyValue(argValue)}),
 		))
@@ -3087,8 +3075,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 		addr := g.spillValueAddress(emitter, "list.push", argValue)
 		sizeValue := g.emitTypeSize(emitter, elemTyp)
 		g.declareRuntimeSymbol(listRuntimePushBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			listRuntimePushBytesSymbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue), {typ: "ptr", name: addr}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
 		))
@@ -3125,8 +3112,7 @@ func (g *generator) emitMapMethodCallStmt(call *ast.CallExpr) (bool, error) {
 		}
 		g.declareRuntimeSymbol(mapRuntimeClearSymbol(), "void", []paramInfo{{typ: "ptr"}})
 		emitter := g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			mapRuntimeClearSymbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(baseLoaded)}),
 		))
@@ -3218,8 +3204,7 @@ func (g *generator) emitMapUpdateStmt(call *ast.CallExpr, base value, keyTyp str
 	g.declareRuntimeSymbol(mapRuntimeLockSymbol(), "void", []paramInfo{{typ: "ptr"}})
 	g.declareRuntimeSymbol(mapRuntimeUnlockSymbol(), "void", []paramInfo{{typ: "ptr"}})
 	emitter := g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  call void @%s(%s)",
+	emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 		mapRuntimeLockSymbol(),
 		llvmCallArgs([]*LlvmValue{toOstyValue(base)}),
 	))
@@ -3245,8 +3230,7 @@ func (g *generator) emitMapUpdateStmt(call *ast.CallExpr, base value, keyTyp str
 		return err
 	}
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  call void @%s(%s)",
+	emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 		mapRuntimeUnlockSymbol(),
 		llvmCallArgs([]*LlvmValue{toOstyValue(base)}),
 	))
@@ -3302,7 +3286,7 @@ func (g *generator) emitMapRetainIfStmt(call *ast.CallExpr, base value, keyTyp s
 		}
 		emitter := g.toOstyEmitter()
 		notCond := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = xor i1 %s, true", notCond, cond.ref))
+		emitter.body = append(emitter.body, mirXorI1NegText(notCond, cond.ref))
 		labels := llvmIfExprStart(emitter, &LlvmValue{typ: "i1", name: notCond})
 		g.takeOstyEmitter(emitter)
 		g.currentBlock = labels.thenLabel
@@ -3314,8 +3298,7 @@ func (g *generator) emitMapRetainIfStmt(call *ast.CallExpr, base value, keyTyp s
 		pushSym := listRuntimePushSymbol(keyTyp)
 		g.declareRuntimeSymbol(pushSym, "void", []paramInfo{{typ: "ptr"}, {typ: keyTyp}})
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			pushSym,
 			llvmCallArgs([]*LlvmValue{toOstyValue(victimsLoaded), {typ: keyTyp, name: k.ref}}),
 		))
@@ -3323,8 +3306,8 @@ func (g *generator) emitMapRetainIfStmt(call *ast.CallExpr, base value, keyTyp s
 		g.takeOstyEmitter(emitter)
 		g.currentBlock = labels.elseLabel
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", labels.endLabel))
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", labels.endLabel))
+		emitter.body = append(emitter.body, mirBrUncondText(labels.endLabel))
+		emitter.body = append(emitter.body, mirLabelText(labels.endLabel))
 		g.takeOstyEmitter(emitter)
 		g.currentBlock = labels.endLabel
 		return nil
@@ -3374,7 +3357,7 @@ func (g *generator) emitMapRetainIfStmt(call *ast.CallExpr, base value, keyTyp s
 		g.branchTo(cont2)
 	}
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", cont2))
+	emitter.body = append(emitter.body, mirLabelText(cont2))
 	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	llvmRangeEnd(emitter, loop2)
 	g.takeOstyEmitter(emitter)
@@ -3473,7 +3456,7 @@ func (g *generator) emitMapFor(stmt *ast.ForStmt, kName, vName, keyTyp, valTyp s
 	g.declareRuntimeSymbol(entryAtSym, keyTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
 	emitter = g.toOstyEmitter()
 	vslot := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", vslot, valTyp))
+	emitter.body = append(emitter.body, mirAllocaText(vslot, valTyp))
 	keyLoaded := llvmCall(emitter, keyTyp, entryAtSym, []*LlvmValue{
 		toOstyValue(iterableValue),
 		toOstyValue(indexValue),
@@ -3522,7 +3505,7 @@ func (g *generator) emitMapFor(stmt *ast.ForStmt, kName, vName, keyTyp, valTyp s
 		g.branchTo(continueLabel)
 	}
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	emitter.body = append(emitter.body, mirLabelText(continueLabel))
 	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	llvmRangeEnd(emitter, loop)
 	g.attachVectorizeMD(emitter, loop.condLabel)
@@ -3603,11 +3586,10 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 		traceSymbol := g.traceCallbackSymbol(elemTyp, g.rootPathsForType(elemTyp))
 		emitter = g.toOstyEmitter()
 		slot := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, elemTyp))
+		emitter.body = append(emitter.body, mirAllocaText(slot, elemTyp))
 		sizeValue := g.emitTypeSize(emitter, elemTyp)
 		g.declareRuntimeSymbol(listRuntimeGetBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			listRuntimeGetBytesSymbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(iterableValue), llvmI64(loop.current), {typ: "ptr", name: slot}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
 		))
@@ -3638,7 +3620,7 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 		g.branchTo(continueLabel)
 	}
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	emitter.body = append(emitter.body, mirLabelText(continueLabel))
 	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	llvmRangeEnd(emitter, loop)
 	g.attachVectorizeMD(emitter, loop.condLabel)
@@ -3718,11 +3700,10 @@ func (g *generator) emitSetFor(stmt *ast.ForStmt, iterName, elemTyp string, elem
 		traceSymbol := g.traceCallbackSymbol(elemTyp, g.rootPathsForType(elemTyp))
 		emitter = g.toOstyEmitter()
 		slot := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, elemTyp))
+		emitter.body = append(emitter.body, mirAllocaText(slot, elemTyp))
 		sizeValue := g.emitTypeSize(emitter, elemTyp)
 		g.declareRuntimeSymbol(listRuntimeGetBytesSymbol(), "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  call void @%s(%s)",
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			listRuntimeGetBytesSymbol(),
 			llvmCallArgs([]*LlvmValue{toOstyValue(snapshotV), llvmI64(loop.current), {typ: "ptr", name: slot}, sizeValue, {typ: "ptr", name: llvmPointerOperand(traceSymbol)}}),
 		))
@@ -3749,7 +3730,7 @@ func (g *generator) emitSetFor(stmt *ast.ForStmt, iterName, elemTyp string, elem
 		g.branchTo(continueLabel)
 	}
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	emitter.body = append(emitter.body, mirLabelText(continueLabel))
 	g.emitLoopSafepoint(emitter, loopSafepointSlot)
 	llvmRangeEnd(emitter, loop)
 	g.attachVectorizeMD(emitter, loop.condLabel)
@@ -3787,7 +3768,7 @@ func (g *generator) emitOptionalUserCallStmt(call *ast.CallExpr) (bool, error) {
 		}
 		emitter := g.toOstyEmitter()
 		if sig.ret == "void" {
-			emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(%s)", sig.irName, llvmCallArgs(args)))
+			emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(sig.irName, llvmCallArgs(args)))
 		} else {
 			llvmCall(emitter, sig.ret, sig.irName, args)
 		}
@@ -3820,7 +3801,7 @@ func (g *generator) emitUserCallStmt(call *ast.CallExpr) (bool, error) {
 	}
 	emitter := g.toOstyEmitter()
 	if sig.ret == "void" {
-		emitter.body = append(emitter.body, fmt.Sprintf("  call void @%s(%s)", sig.irName, llvmCallArgs(args)))
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(sig.irName, llvmCallArgs(args)))
 	} else {
 		llvmCall(emitter, sig.ret, sig.irName, args)
 	}

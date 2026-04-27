@@ -457,8 +457,8 @@ func (g *generator) allocLoopSafepointCounter(emitter *LlvmEmitter) string {
 		return ""
 	}
 	slot := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca i64", slot))
-	emitter.body = append(emitter.body, fmt.Sprintf("  store i64 0, ptr %s", slot))
+	emitter.body = append(emitter.body, mirAllocaI64Text(slot))
+	emitter.body = append(emitter.body, mirStoreI64ZeroText(slot))
 	return slot
 }
 
@@ -474,21 +474,21 @@ func (g *generator) emitLoopSafepoint(emitter *LlvmEmitter, counterSlot string) 
 		return
 	}
 	count := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = load i64, ptr %s", count, counterSlot))
+	emitter.body = append(emitter.body, mirLoadI64Text(count, counterSlot))
 	next := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, 1", next, count))
+	emitter.body = append(emitter.body, mirAddI64OneText(next, count))
 	shouldPoll := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq i64 %s, %d", shouldPoll, next, loopSafepointStride))
+	emitter.body = append(emitter.body, mirICmpEqI64LiteralText(shouldPoll, next, strconv.FormatInt(loopSafepointStride, 10)))
 	stored := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = select i1 %s, i64 0, i64 %s", stored, shouldPoll, next))
-	emitter.body = append(emitter.body, fmt.Sprintf("  store i64 %s, ptr %s", stored, counterSlot))
+	emitter.body = append(emitter.body, mirSelectI64LiteralLhsText(stored, shouldPoll, "0", next))
+	emitter.body = append(emitter.body, mirStoreI64Text(stored, counterSlot))
 	pollLabel := llvmNextLabel(emitter, "gc.loop.poll")
 	afterLabel := llvmNextLabel(emitter, "gc.loop.after")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", shouldPoll, pollLabel, afterLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", pollLabel))
+	emitter.body = append(emitter.body, mirBrCondText(shouldPoll, pollLabel, afterLabel))
+	emitter.body = append(emitter.body, mirLabelText(pollLabel))
 	g.emitGCSafepointKind(emitter, safepointKindLoop)
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", afterLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", afterLabel))
+	emitter.body = append(emitter.body, mirBrUncondText(afterLabel))
+	emitter.body = append(emitter.body, mirLabelText(afterLabel))
 }
 
 func llvmZeroValue(typ string) value {
@@ -1034,7 +1034,7 @@ func (g *generator) leaveBlock() {
 
 func (g *generator) branchTo(label string) {
 	emitter := g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", label))
+	emitter.body = append(emitter.body, mirBrUncondText(label))
 	g.takeOstyEmitter(emitter)
 	g.leaveBlock()
 }
@@ -1455,13 +1455,7 @@ func (g *generator) safepointRootAddress(emitter *LlvmEmitter, root gcSafepointR
 	currentType := root.slot.typ
 	for _, index := range root.path {
 		fieldPtr := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  %s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d",
-			fieldPtr,
-			currentType,
-			addr,
-			index,
-		))
+		emitter.body = append(emitter.body, mirGEPInboundsFieldText(fieldPtr, currentType, addr, strconv.Itoa(index)))
 		nextType, ok := g.aggregateFieldType(currentType, index)
 		if !ok {
 			return addr
@@ -1499,13 +1493,7 @@ func (g *generator) traceCallbackSymbol(typ string, rootPaths [][]int) string {
 		currentType = typ
 		for _, index := range path {
 			fieldPtr := fmt.Sprintf("%%trace.field.%d.%d", len(body), index)
-			body = append(body, fmt.Sprintf(
-				"  %s = getelementptr inbounds %s, ptr %s, i32 0, i32 %d",
-				fieldPtr,
-				currentType,
-				addr,
-				index,
-			))
+			body = append(body, mirGEPInboundsFieldText(fieldPtr, currentType, addr, strconv.Itoa(index)))
 			nextType, ok := g.aggregateFieldType(currentType, index)
 			if !ok {
 				currentType = ""
@@ -1517,7 +1505,7 @@ func (g *generator) traceCallbackSymbol(typ string, rootPaths [][]int) string {
 		if currentType == "" {
 			continue
 		}
-		body = append(body, fmt.Sprintf("  call void @osty.gc.mark_slot_v1(ptr %s)", addr))
+		body = append(body, mirGCMarkSlotText(addr))
 	}
 	body = append(body, "  ret void")
 	g.traceHelperDefs = append(g.traceHelperDefs, llvmRenderFunction("void", name, []*LlvmParam{llvmParam("value.addr", "ptr")}, body))
@@ -1526,8 +1514,8 @@ func (g *generator) traceCallbackSymbol(typ string, rootPaths [][]int) string {
 
 func (g *generator) spillValueAddress(emitter *LlvmEmitter, prefix string, v value) string {
 	slot := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = alloca %s", slot, v.typ))
-	emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", v.typ, v.ref, slot))
+	emitter.body = append(emitter.body, mirAllocaText(slot, v.typ))
+	emitter.body = append(emitter.body, mirStoreText(v.typ, v.ref, slot))
 	return slot
 }
 
@@ -1544,9 +1532,9 @@ func (g *generator) emitTypeSize(emitter *LlvmEmitter, typ string) *LlvmValue {
 		return llvmI64("1")
 	}
 	ptr := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr %s, ptr null, i32 1", ptr, typ))
+	emitter.body = append(emitter.body, mirGEPSizeofText(ptr, typ))
 	out := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = ptrtoint ptr %s to i64", out, ptr))
+	emitter.body = append(emitter.body, mirPtrToIntI64Text(out, ptr))
 	return llvmI64(out)
 }
 
