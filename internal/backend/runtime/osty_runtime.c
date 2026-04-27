@@ -671,6 +671,16 @@ static void osty_rt_chan_trace(void *payload);
 static void osty_rt_chan_destroy(void *payload);
 static void osty_rt_enum_ptr_payload_trace(void *payload);
 static void osty_rt_task_handle_destroy(void *payload);
+/* Per-kind dispatch helpers wired into the descriptor — defined
+ * with the rest of the cheney young-arena machinery further down. */
+static void osty_gc_cleanup_young_dead_list(void *payload);
+static void osty_gc_cleanup_young_dead_set(void *payload);
+static void osty_gc_cleanup_young_dead_map(void *payload);
+static void osty_gc_remap_young_list(void *payload);
+static void osty_gc_remap_young_map(void *payload);
+static void osty_gc_remap_young_set(void *payload);
+static void osty_gc_remap_young_closure_env(void *payload);
+static void osty_gc_remap_young_generic_enum_ptr(void *payload);
 
 typedef struct osty_gc_kind_descriptor {
     osty_gc_trace_fn trace;
@@ -678,6 +688,17 @@ typedef struct osty_gc_kind_descriptor {
     /* Whether the no-header young arena can carry this kind. Toggle
      * at the table row, not in `osty_gc_young_eligible`. */
     bool young_eligible;
+    /* Per-kind cleanup for UNFORWARDED young objects swept by
+     * `cheney_destroy_dead_from_space`. Null for kinds with no
+     * external resources (STRING/BYTES/CLOSURE_ENV/GENERIC NONE/
+     * GENERIC_ENUM_PTR — payload bytes are reclaimed by the cursor
+     * reset). */
+    osty_gc_destroy_fn cleanup_young_dead;
+    /* Per-kind pointer-rewrite for the young-arena pass that runs
+     * after major compaction (`osty_gc_remap_young_arena_payloads`).
+     * Null for kinds whose payload carries no managed pointers
+     * (STRING/BYTES/GENERIC NONE). */
+    osty_gc_destroy_fn remap_young;
 } osty_gc_kind_descriptor;
 
 /* Phase 4 generic-pattern table (RUNTIME_GC_DELTA Phase E follow-up).
@@ -702,14 +723,17 @@ enum {
 
 static const osty_gc_kind_descriptor osty_gc_generic_patterns[] = {
     /* NONE — opaque payload, cheney handles it as raw bytes. */
-    [OSTY_GC_GENERIC_NONE] = {NULL, NULL, true},
+    [OSTY_GC_GENERIC_NONE] =
+        {NULL, NULL, true, NULL, NULL},
     /* ENUM_PTR routes through `OSTY_GC_KIND_GENERIC_ENUM_PTR`'s row
      * in the kind table; this row is only consulted on the headerful
      * fallback dispatch, so the young flag stays false. */
-    [OSTY_GC_GENERIC_ENUM_PTR] = {osty_rt_enum_ptr_payload_trace, NULL, false},
+    [OSTY_GC_GENERIC_ENUM_PTR] =
+        {osty_rt_enum_ptr_payload_trace, NULL, false, NULL, NULL},
     /* TASK_HANDLE has a pthread-rich destroy — not yet covered by
      * the safe-clone path that Map uses. */
-    [OSTY_GC_GENERIC_TASK_HANDLE] = {NULL, osty_rt_task_handle_destroy, false},
+    [OSTY_GC_GENERIC_TASK_HANDLE] =
+        {NULL, osty_rt_task_handle_destroy, false, NULL, NULL},
 };
 
 #define OSTY_GC_GENERIC_PATTERN_COUNT \
@@ -725,30 +749,45 @@ static uint8_t osty_gc_pattern_of(osty_gc_trace_fn trace,
  * the layout: any new kind must extend the contiguous range and append a
  * row here in the same order. */
 static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
-    [OSTY_GC_KIND_LIST - OSTY_GC_KIND_LIST] =
-        {osty_rt_list_trace, osty_rt_list_destroy, true},
-    [OSTY_GC_KIND_STRING - OSTY_GC_KIND_LIST] = {NULL, NULL, true},
-    [OSTY_GC_KIND_MAP - OSTY_GC_KIND_LIST] =
-        {osty_rt_map_trace, osty_rt_map_destroy, true},
-    [OSTY_GC_KIND_SET - OSTY_GC_KIND_LIST] =
-        {osty_rt_set_trace, osty_rt_set_destroy, true},
-    [OSTY_GC_KIND_BYTES - OSTY_GC_KIND_LIST] = {NULL, NULL, true},
+    [OSTY_GC_KIND_LIST - OSTY_GC_KIND_LIST] = {
+        osty_rt_list_trace, osty_rt_list_destroy, true,
+        osty_gc_cleanup_young_dead_list, osty_gc_remap_young_list,
+    },
+    [OSTY_GC_KIND_STRING - OSTY_GC_KIND_LIST] = {
+        NULL, NULL, true, NULL, NULL,
+    },
+    [OSTY_GC_KIND_MAP - OSTY_GC_KIND_LIST] = {
+        osty_rt_map_trace, osty_rt_map_destroy, true,
+        osty_gc_cleanup_young_dead_map, osty_gc_remap_young_map,
+    },
+    [OSTY_GC_KIND_SET - OSTY_GC_KIND_LIST] = {
+        osty_rt_set_trace, osty_rt_set_destroy, true,
+        osty_gc_cleanup_young_dead_set, osty_gc_remap_young_set,
+    },
+    [OSTY_GC_KIND_BYTES - OSTY_GC_KIND_LIST] = {
+        NULL, NULL, true, NULL, NULL,
+    },
     /* CLOSURE_ENV's young safety relies on a mutator-side contract:
      * captures are populated synchronously at construction (single
      * basic block in LLVM emit) before the env can escape to a slot
      * that triggers root_bind. promote-on-bind copies a fully
      * populated env to OLD; nothing in cheney_forward / promote
      * special-cases this kind. */
-    [OSTY_GC_KIND_CLOSURE_ENV - OSTY_GC_KIND_LIST] =
-        {osty_rt_closure_env_trace, NULL, true},
+    [OSTY_GC_KIND_CLOSURE_ENV - OSTY_GC_KIND_LIST] = {
+        osty_rt_closure_env_trace, NULL, true,
+        NULL, osty_gc_remap_young_closure_env,
+    },
     /* CHANNEL stays headerful — destroy frees a mutex + 2 condvars
      * + slots buffer, and the safe-clone primitives that Map uses
      * for the cheney/promote path don't yet cover condvar
      * destroy/init pairs. */
-    [OSTY_GC_KIND_CHANNEL - OSTY_GC_KIND_LIST] =
-        {osty_rt_chan_trace, osty_rt_chan_destroy, false},
-    [OSTY_GC_KIND_GENERIC_ENUM_PTR - OSTY_GC_KIND_LIST] =
-        {osty_rt_enum_ptr_payload_trace, NULL, true},
+    [OSTY_GC_KIND_CHANNEL - OSTY_GC_KIND_LIST] = {
+        osty_rt_chan_trace, osty_rt_chan_destroy, false, NULL, NULL,
+    },
+    [OSTY_GC_KIND_GENERIC_ENUM_PTR - OSTY_GC_KIND_LIST] = {
+        osty_rt_enum_ptr_payload_trace, NULL, true,
+        NULL, osty_gc_remap_young_generic_enum_ptr,
+    },
 };
 
 _Static_assert(OSTY_GC_KIND_LIST == 1024,
@@ -3417,6 +3456,43 @@ static int64_t osty_gc_young_cheney_dead_buffer_bytes_freed_total = 0;
 static size_t osty_gc_micro_object_total_size(int32_t payload_size);
 static size_t osty_rt_kind_size(int64_t kind);
 
+/* Per-kind cleanup helpers wired into `osty_gc_kind_descriptor::
+ * cleanup_young_dead`. Each one frees the dead young payload's
+ * external buffers and bumps the per-kind freed-count + global
+ * buffer-bytes-freed counters. */
+static void osty_gc_cleanup_young_dead_list(void *payload) {
+    osty_rt_list *list = (osty_rt_list *)payload;
+    if (list->gc_offsets != NULL) {
+        free(list->gc_offsets);
+    }
+    if (list->data != NULL && list->data != list->inline_storage) {
+        osty_gc_young_cheney_dead_buffer_bytes_freed_total +=
+            (int64_t)((size_t)list->cap * list->elem_size);
+        free(list->data);
+    }
+    osty_gc_young_cheney_dead_lists_freed_total += 1;
+}
+
+static void osty_gc_cleanup_young_dead_set(void *payload) {
+    osty_rt_set *set = (osty_rt_set *)payload;
+    if (set->items != NULL) {
+        osty_gc_young_cheney_dead_buffer_bytes_freed_total +=
+            (int64_t)((size_t)set->cap *
+                      osty_rt_kind_size(set->elem_kind));
+        free(set->items);
+    }
+    osty_gc_young_cheney_dead_sets_freed_total += 1;
+}
+
+static void osty_gc_cleanup_young_dead_map(void *payload) {
+    /* Map's full destroy: keys, values, index buffers (if not
+     * aliased to inline arrays), and the recursive mutex if it
+     * was init'd. Reuses the headerful destroy fn so the cleanup
+     * logic stays in one place. */
+    osty_rt_map_destroy(payload);
+    osty_gc_young_cheney_dead_maps_freed_total += 1;
+}
+
 static void osty_gc_cheney_destroy_dead_from_space(unsigned char *from_base,
                                                    unsigned char *from_end_cursor) {
     unsigned char *scan = from_base;
@@ -3426,42 +3502,16 @@ static void osty_gc_cheney_destroy_dead_from_space(unsigned char *from_base,
         size_t total = osty_gc_micro_object_total_size(payload_size);
         uint64_t tag = micro->forward_or_meta & OSTY_GC_FORWARD_TAG_MASK;
         if (tag == OSTY_GC_FORWARD_TAG_UNFORWARDED) {
-            /* Dead. Per-kind external-resource cleanup. */
-            void *payload = (void *)(scan + sizeof(osty_gc_micro_header));
-            if (micro->object_kind == OSTY_GC_KIND_LIST) {
-                osty_rt_list *list = (osty_rt_list *)payload;
-                if (list->gc_offsets != NULL) {
-                    free(list->gc_offsets);
-                }
-                if (list->data != NULL &&
-                    list->data != list->inline_storage) {
-                    osty_gc_young_cheney_dead_buffer_bytes_freed_total +=
-                        (int64_t)((size_t)list->cap * list->elem_size);
-                    free(list->data);
-                }
-                osty_gc_young_cheney_dead_lists_freed_total += 1;
-            } else if (micro->object_kind == OSTY_GC_KIND_SET) {
-                osty_rt_set *set = (osty_rt_set *)payload;
-                if (set->items != NULL) {
-                    osty_gc_young_cheney_dead_buffer_bytes_freed_total +=
-                        (int64_t)((size_t)set->cap *
-                                  osty_rt_kind_size(set->elem_kind));
-                    free(set->items);
-                }
-                osty_gc_young_cheney_dead_sets_freed_total += 1;
-            } else if (micro->object_kind == OSTY_GC_KIND_MAP) {
-                /* Map's full destroy: keys, values, index buffers
-                 * (if not aliased to inline arrays), and the
-                 * recursive mutex if it was init'd. Reuses the
-                 * headerful destroy fn so the cleanup logic stays
-                 * in one place. */
-                osty_rt_map_destroy(payload);
-                osty_gc_young_cheney_dead_maps_freed_total += 1;
+            const osty_gc_kind_descriptor *desc =
+                osty_gc_kind_descriptor_lookup((int64_t)micro->object_kind);
+            if (desc != NULL && desc->cleanup_young_dead != NULL) {
+                void *payload = (void *)(scan + sizeof(osty_gc_micro_header));
+                desc->cleanup_young_dead(payload);
             }
-            /* STRING / BYTES / CLOSURE_ENV / GENERIC NONE /
-             * GENERIC_ENUM_PTR carry no external buffers — payload
-             * bytes are reclaimed by the cursor reset, no destroy
-             * needed. */
+            /* Kinds with no cleanup_young_dead (STRING / BYTES /
+             * CLOSURE_ENV / GENERIC NONE / GENERIC_ENUM_PTR) carry no
+             * external buffers — payload bytes are reclaimed by the
+             * cursor reset. */
         }
         scan += total;
     }
@@ -4935,6 +4985,31 @@ static void osty_gc_remap_header_payload(osty_gc_header *header) {
  * addresses. Walk the young from-space (cheney just swapped
  * survivors here) and dispatch the kind-specific remap helper —
  * the same helpers `osty_gc_remap_header_payload` calls. */
+/* Per-kind young-arena remap helpers wired into
+ * `osty_gc_kind_descriptor::remap_young`. Each casts the void*
+ * payload and forwards to the existing kind-specific remap fn
+ * (the same fn `osty_gc_remap_header_payload` uses for the OLD
+ * dispatch, so headerful and young remap stay in sync). */
+static void osty_gc_remap_young_list(void *payload) {
+    osty_gc_remap_list_payload((osty_rt_list *)payload);
+}
+
+static void osty_gc_remap_young_map(void *payload) {
+    osty_gc_remap_map_payload((osty_rt_map *)payload);
+}
+
+static void osty_gc_remap_young_set(void *payload) {
+    osty_gc_remap_set_payload((osty_rt_set *)payload);
+}
+
+static void osty_gc_remap_young_closure_env(void *payload) {
+    osty_gc_remap_closure_env_payload((osty_rt_closure_env *)payload);
+}
+
+static void osty_gc_remap_young_generic_enum_ptr(void *payload) {
+    osty_gc_remap_slot(payload);
+}
+
 static void osty_gc_remap_young_arena_payloads(void) {
     if (!osty_gc_tinytag_young_now() || osty_gc_young_from.base == NULL) {
         return;
@@ -4943,29 +5018,15 @@ static void osty_gc_remap_young_arena_payloads(void) {
     while (scan < osty_gc_young_from.cursor) {
         osty_gc_micro_header *micro = (osty_gc_micro_header *)scan;
         int32_t payload_size = micro->byte_size;
-        void *payload = (void *)(scan + sizeof(osty_gc_micro_header));
-        switch (micro->object_kind) {
-        case OSTY_GC_KIND_LIST:
-            osty_gc_remap_list_payload((osty_rt_list *)payload);
-            break;
-        case OSTY_GC_KIND_MAP:
-            osty_gc_remap_map_payload((osty_rt_map *)payload);
-            break;
-        case OSTY_GC_KIND_SET:
-            osty_gc_remap_set_payload((osty_rt_set *)payload);
-            break;
-        case OSTY_GC_KIND_CLOSURE_ENV:
-            osty_gc_remap_closure_env_payload(
-                (osty_rt_closure_env *)payload);
-            break;
-        case OSTY_GC_KIND_GENERIC_ENUM_PTR:
-            osty_gc_remap_slot(payload);
-            break;
-        default:
-            /* STRING / BYTES / GENERIC NONE carry no managed-pointer
-             * buffers — payload bytes are opaque from the GC's view. */
-            break;
+        const osty_gc_kind_descriptor *desc =
+            osty_gc_kind_descriptor_lookup((int64_t)micro->object_kind);
+        if (desc != NULL && desc->remap_young != NULL) {
+            void *payload = (void *)(scan + sizeof(osty_gc_micro_header));
+            desc->remap_young(payload);
         }
+        /* Kinds with no remap_young (STRING / BYTES / GENERIC NONE)
+         * carry no managed-pointer buffers — payload bytes are
+         * opaque from the GC's view. */
         scan += osty_gc_micro_object_total_size(payload_size);
     }
 }
