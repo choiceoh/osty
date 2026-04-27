@@ -400,17 +400,17 @@ _Static_assert(OSTY_GC_GEN_YOUNG == 0,
 #define OSTY_GC_PROMOTE_AGE_DEFAULT 3
 #define OSTY_GC_PROMOTE_AGE_ENV "OSTY_GC_PROMOTE_AGE"
 #define OSTY_GC_NURSERY_LIMIT_ENV "OSTY_GC_NURSERY_BYTES"
-/* 1 MiB nursery (was 8 KiB). The 8 KiB pre-#977 default was small
- * enough to mask correctness bugs (every allocation triggered a
- * cheney pass) but expensive — big-map at 200 K inserts × 1 M
- * lookups never finished within an hour because each iteration
- * paid for a full collection. Now that Map joined the no-header
- * young arena (#977) and cheney handles every kind safely,
- * collecting only every megabyte of allocation matches what real
- * generational GCs (Go, Java young gen) ship with. Tests that
- * pin specific cheney behaviour still set the env var explicitly
- * — those overrides keep working. */
-#define OSTY_GC_NURSERY_LIMIT_DEFAULT (1 << 20)
+/* 64 MiB nursery (was 1 MiB pre-#979 bump, 8 KiB pre-#977). #979's
+ * 1 MiB default already unblocked big-map (1+ hour timeout → 9.2 s),
+ * but a sweep across 1 / 8 / 16 / 64 MiB nurseries showed continued
+ * speedup up to 64 MiB (12.4 / 2.7 / 2.0 / 1.1 s on big-map at the
+ * time of measurement) where survivors per cycle become small enough
+ * that further bumps add nothing. The young arena's virtual
+ * reservation stays fixed at 256 MiB regardless — only when cheney
+ * triggers changes. Actual page commit peaks around the cursor and
+ * resets on swap. Tests that pin specific cheney behaviour set the
+ * env var directly. */
+#define OSTY_GC_NURSERY_LIMIT_DEFAULT (64 << 20)
 
 typedef struct osty_gc_header {
     /* Global doubly-linked list — used by major collection, sweep, and
@@ -960,16 +960,17 @@ static int64_t osty_gc_allocated_since_collect = 0;
 static bool osty_gc_safepoint_stress_loaded = false;
 static bool osty_gc_safepoint_stress_enabled = false;
 static bool osty_gc_pressure_limit_loaded = false;
-/* 16 MiB major-collect pressure threshold (was 32 KiB). Same
- * rationale as the nursery bump above: the tiny default fired
- * a STW major on every Map insertion past the first few. With
- * Map young-eligible (#977), most allocations turn over in the
- * young arena and the major collector only needs to run when
- * objects survive past the promote age and pile up in OLD. The
- * test suite overrides via `OSTY_GC_THRESHOLD_BYTES=1` (single-
- * step semantics) or specific byte counts where collection
- * timing matters. */
-static int64_t osty_gc_pressure_limit_bytes = (16 << 20);
+/* 128 MiB major-collect pressure threshold (was 16 MiB pre-bump,
+ * 32 KiB pre-#977). With Map/List/Set/Closure-env all young-
+ * eligible, most allocations turn over in the young arena and major
+ * only needs to run when objects survive past the promote age and
+ * pile up in OLD. STW major walks the full OLD generation, so the
+ * threshold also caps worst-case pause: 128 MiB walk lands in the
+ * tens of ms even on slow hardware. Bigger thresholds give marginal
+ * throughput gains but stretch the STW window — 128 MiB is the
+ * balance point between throughput and latency. Tests pin specific
+ * values via `OSTY_GC_THRESHOLD_BYTES` directly. */
+static int64_t osty_gc_pressure_limit_bytes = (128 << 20);
 static bool osty_gc_collection_requested = false;
 static int64_t osty_gc_pre_write_count = 0;
 static int64_t osty_gc_pre_write_managed_count = 0;
