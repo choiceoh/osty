@@ -744,8 +744,9 @@ static const osty_gc_kind_descriptor osty_gc_generic_patterns[] = {
     [OSTY_GC_GENERIC_ENUM_PTR] = {
         .trace = osty_rt_enum_ptr_payload_trace,
     },
-    /* TASK_HANDLE has a pthread-rich destroy — not yet covered by
-     * the safe-clone path that Map uses. */
+    /* Same shape as ENUM_PTR — TASK_HANDLE now routes through
+     * `OSTY_GC_KIND_GENERIC_TASK_HANDLE`'s row in the kind table.
+     * This row is parity-only for the headerful fallback dispatch. */
     [OSTY_GC_GENERIC_TASK_HANDLE] = {
         .destroy = osty_rt_task_handle_destroy,
     },
@@ -3277,10 +3278,11 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
  *          their table row instead of editing this predicate.
  *        - For OSTY_GC_KIND_GENERIC, look up the matching pattern
  *          row in `osty_gc_generic_patterns` via (trace, destroy).
- *          The NONE pattern (NULL/NULL) is young-eligible; ENUM_PTR
- *          uses its own dedicated kind (KIND_GENERIC_ENUM_PTR) and
- *          TASK_HANDLE has a pthread-rich destroy that the young
- *          arena's safe-clone primitives don't yet cover.
+ *          Only the NONE pattern (NULL/NULL) lands here today —
+ *          ENUM_PTR and TASK_HANDLE both have their own dedicated
+ *          kinds (KIND_GENERIC_ENUM_PTR / KIND_GENERIC_TASK_HANDLE)
+ *          so cheney can dispatch their trace/destroy via the
+ *          kind-table descriptor.
  *   3. Payload size must fit comfortably under the humongous
  *      threshold. Humongous allocs already take a separate path in
  *      the headerful allocator and have no benefit from being
@@ -12593,10 +12595,10 @@ extern int sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
 typedef int64_t (*osty_task_group_body_fn)(void *env, void *group);
 typedef int64_t (*osty_task_spawn_body_fn)(void *env);
 
-/* `osty_rt_task_handle_impl` typedef is forward-declared earlier
- * (near `osty_rt_chan_impl`) so cheney's safe-handoff helpers can
- * cast `void *` payloads to it. The full struct body follows below. */
-struct osty_rt_task_handle_impl_;
+/* `osty_rt_task_handle_impl` typedef + struct tag are
+ * forward-declared earlier (near `osty_rt_chan_impl`) so cheney's
+ * safe-handoff helpers can cast `void *` payloads. Full struct
+ * body follows below. */
 
 typedef struct osty_rt_task_handle_node {
     osty_rt_task_handle_impl *handle;
@@ -13346,7 +13348,7 @@ static void osty_rt_task_handle_destroy(void *payload) {
  * pauses collection so the pointer the task item carries cannot be
  * freed underneath it. */
 static osty_rt_task_handle_impl *osty_sched_alloc_handle(void) {
-    /* Use the dedicated KIND_GENERIC_GENERIC_TASK_HANDLE so cheney's
+    /* Use the dedicated KIND_GENERIC_TASK_HANDLE so cheney's
      * young dispatch can find the destroy + safe-handoff via the
      * kind table. The headerful path resolves the same destroy
      * via the descriptor too, so behavior is identical. */
