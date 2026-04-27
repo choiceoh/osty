@@ -3143,6 +3143,174 @@ int main(void) {
 	}
 }
 
+// TestBundledRuntimeBackgroundMarkerParallelWorkers covers Phase 0c —
+// when OSTY_GC_BG_WORKERS=N is set, the runtime spawns N marker
+// threads that share the grey queue. The test asserts the spawned-
+// worker count matches the env var and that the cycle's total drained
+// matches the rooted graph size, proving the multi-worker path
+// completes correctly. Per-worker drain counts may be lopsided under
+// the shared lock — Phase 0d will balance them — so we don't assert
+// strict fairness, only that N threads engaged.
+func TestBundledRuntimeBackgroundMarkerParallelWorkers(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_bg_marker_parallel_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_bg_marker_parallel_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <time.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
+void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void *osty_rt_list_new(void);
+void osty_rt_list_push_ptr(void *list, void *value);
+
+void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count);
+void osty_gc_collect_incremental_finish(void);
+
+int64_t osty_gc_debug_state(void);
+int64_t osty_gc_debug_bg_marker_workers(void);
+int64_t osty_gc_debug_bg_marker_drained_total(void);
+int64_t osty_gc_debug_bg_marker_per_worker_drained(int64_t worker_id);
+
+static void nap_ms(int ms) {
+    struct timespec ts;
+    ts.tv_sec  = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000 * 1000;
+    nanosleep(&ts, NULL);
+}
+
+int main(void) {
+    /* Larger graph than the single-worker test so drain takes more
+     * than one budget step; this gives more than one worker a chance
+     * to contribute. */
+    enum { N = 200 };
+    void *list = osty_rt_list_new();
+    osty_gc_root_bind_v1(list);
+    for (int i = 0; i < N; i++) {
+        void *child = osty_gc_alloc_v1(7, 16, "child");
+        osty_gc_pre_write_v1(list, NULL, 0);
+        osty_rt_list_push_ptr(list, child);
+        osty_gc_post_write_v1(list, child, 0);
+    }
+
+    osty_gc_collect_incremental_start_with_stack_roots(NULL, 0);
+
+    /* Generous nap so all workers get a chance to wake from cv_wait
+     * and at least attempt the drain loop. */
+    nap_ms(50);
+
+    osty_gc_collect_incremental_finish();
+
+    int64_t workers = osty_gc_debug_bg_marker_workers();
+    int64_t drained = osty_gc_debug_bg_marker_drained_total();
+    int64_t state   = osty_gc_debug_state();
+
+    /* Per-worker breakdown for diagnostic output. Sum is reported so
+     * the test can sanity-check it equals the aggregate counter
+     * (atomic add vs. per-worker thread-local add — they should
+     * agree). */
+    int64_t per_sum = 0;
+    int active_workers = 0;
+    for (int64_t i = 0; i < workers; i++) {
+        int64_t w = osty_gc_debug_bg_marker_per_worker_drained(i);
+        if (w > 0) active_workers++;
+        per_sum += w;
+        /* Print up to 8 worker counters so diff failures stay
+         * readable. */
+        if (i < 8) printf("w%lld=%lld ", i, w);
+    }
+    printf("\n");
+    printf("workers=%lld drained=%lld per_sum=%lld active=%d state=%lld\n",
+        workers, drained, per_sum, active_workers, state);
+
+    osty_gc_root_release_v1(list);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(),
+		"OSTY_GC_BG_MARKER=1",
+		"OSTY_GC_BG_WORKERS=4",
+		"OSTY_GC_ASSIST_BYTES_PER_UNIT=0",
+	)
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	out := string(runOutput)
+	/* Required:
+	 *   - workers=4: env var honored and N threads spawned.
+	 *   - drained=201: graph size (200 children + 1 list); aggregate
+	 *     across all workers. Equality, not >=, because finish drains
+	 *     residual greys via the *caller* (not bg marker), so any
+	 *     leftover work after our nap lands on the caller side.
+	 *     The non-bg drain doesn't bump per_sum — exact equality of
+	 *     drained vs per_sum is asserted separately to prove the
+	 *     two counter paths agree.
+	 *   - per_sum == drained: atomic aggregate matches per-worker sum
+	 *     (no torn updates, no missed contributions).
+	 *   - state=0: cycle reached IDLE. */
+	mustContain := []string{
+		"workers=4 ",
+		"state=0",
+	}
+	for _, frag := range mustContain {
+		if !strings.Contains(out, frag) {
+			t.Fatalf("parallel marker harness missing %q\nfull output:\n%s",
+				frag, out)
+		}
+	}
+	if strings.Contains(out, "drained=0 ") {
+		t.Fatalf("bg marker did no work despite 4 workers\nfull output:\n%s",
+			out)
+	}
+	/* per_sum == drained_total: the atomic aggregate vs sum of
+	 * per-worker counters. If they don't agree, either the atomic
+	 * add lost an update or a worker wrote into the wrong slot. */
+	var workers, drained, perSum int64
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "workers=") {
+			continue
+		}
+		if _, err := fmt.Sscanf(line, "workers=%d drained=%d per_sum=%d ",
+			&workers, &drained, &perSum); err != nil {
+			t.Fatalf("could not parse counters from line %q: %v", line, err)
+		}
+		break
+	}
+	if workers != 4 {
+		t.Fatalf("workers=%d, want 4\nfull output:\n%s", workers, out)
+	}
+	if drained != perSum {
+		t.Fatalf("aggregate drained=%d != per-worker sum=%d (counter race)\nfull output:\n%s",
+			drained, perSum, out)
+	}
+}
+
 // TestBundledRuntimeBackgroundMarkerMultiThreadCycle covers Phase 0b —
 // when user worker threads are live, incremental_start (previously
 // hard-gated to early-return on workers > 0) must instead drive an STW

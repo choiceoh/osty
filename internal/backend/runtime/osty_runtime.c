@@ -1721,13 +1721,26 @@ static void osty_sched_workers_dec(void) {
  * marker responsive without spinning. */
 #define OSTY_GC_BG_MARKER_IDLE_NAP_NS 200000ULL  /* 200 µs */
 
+/* Phase 0c: parallel marker workers. `OSTY_GC_BG_WORKERS` controls the
+ * worker count (default 1, max OSTY_GC_BG_MARKER_MAX_WORKERS). All N
+ * workers share the same grey queue under `osty_gc_lock`; lock
+ * contention is the limiting factor — Phase 0d reduces it with a
+ * segregated push/pop path. Per-worker drain counters expose the work
+ * split so tests can prove parallelism actually engaged. */
+#define OSTY_GC_BG_WORKERS_ENV "OSTY_GC_BG_WORKERS"
+#define OSTY_GC_BG_WORKERS_DEFAULT 1
+#define OSTY_GC_BG_MARKER_MAX_WORKERS 16
+
 static int osty_gc_bg_marker_enabled_loaded = 0;
 static int osty_gc_bg_marker_enabled_value = 0;
 static int osty_gc_bg_marker_budget_loaded = 0;
 static int64_t osty_gc_bg_marker_budget_value = OSTY_GC_BG_MARKER_BUDGET_DEFAULT;
+static int osty_gc_bg_workers_loaded = 0;
+static int osty_gc_bg_workers_value = OSTY_GC_BG_WORKERS_DEFAULT;
 
-static osty_rt_thread_t osty_gc_bg_marker_thread;
+static osty_rt_thread_t osty_gc_bg_marker_threads[OSTY_GC_BG_MARKER_MAX_WORKERS];
 static int osty_gc_bg_marker_started = 0;
+static int osty_gc_bg_marker_worker_count = 0;
 static osty_rt_mu_t osty_gc_bg_marker_mu;
 static osty_rt_cond_t osty_gc_bg_marker_cv;
 /* `active` flag: 1 between incremental.start and finish, 0 otherwise.
@@ -1735,10 +1748,20 @@ static osty_rt_cond_t osty_gc_bg_marker_cv;
  * the kick mutex on every iteration. */
 static int osty_gc_bg_marker_active = 0;
 
+/* Atomic counters because N>=2 marker threads update them concurrently.
+ * For N==1 the atomics still compile to plain loads/stores on x86 +
+ * release-store on ARM — overhead in the noise vs. the trace work
+ * itself. */
 static int64_t osty_gc_bg_marker_drained_total = 0;
 static int64_t osty_gc_bg_marker_loops_total = 0;
 static int64_t osty_gc_bg_marker_naps_total = 0;
 static int64_t osty_gc_bg_marker_kicks_total = 0;
+/* Per-worker drained counter for parallelism observability. Each
+ * worker owns one slot indexed by its TLS worker_id. The aggregate
+ * `drained_total` is the sum of these but is also tracked atomically
+ * so a reader doesn't have to walk the array. */
+static int64_t osty_gc_bg_marker_per_worker_drained[OSTY_GC_BG_MARKER_MAX_WORKERS];
+static OSTY_RT_TLS int osty_gc_bg_marker_worker_id = -1;
 
 static bool osty_gc_bg_marker_enabled_now(void) {
     if (osty_gc_bg_marker_enabled_loaded) {
@@ -1771,6 +1794,27 @@ static int64_t osty_gc_bg_marker_budget_now(void) {
     }
     osty_gc_bg_marker_budget_value = (int64_t)parsed;
     return osty_gc_bg_marker_budget_value;
+}
+
+static int osty_gc_bg_workers_now(void) {
+    if (osty_gc_bg_workers_loaded) {
+        return osty_gc_bg_workers_value;
+    }
+    osty_gc_bg_workers_loaded = 1;
+    const char *value = getenv(OSTY_GC_BG_WORKERS_ENV);
+    if (value == NULL || value[0] == '\0') {
+        return osty_gc_bg_workers_value;
+    }
+    char *end = NULL;
+    long long parsed = strtoll(value, &end, 10);
+    if (end == value || (end != NULL && *end != '\0') || parsed <= 0) {
+        osty_rt_abort("invalid " OSTY_GC_BG_WORKERS_ENV);
+    }
+    if (parsed > OSTY_GC_BG_MARKER_MAX_WORKERS) {
+        parsed = OSTY_GC_BG_MARKER_MAX_WORKERS;
+    }
+    osty_gc_bg_workers_value = (int)parsed;
+    return osty_gc_bg_workers_value;
 }
 
 /* True when no other thread can read or mutate GC-managed state, so
@@ -6475,7 +6519,8 @@ void osty_gc_collect_incremental_finish_with_stack_roots(
  * `incremental_finish_locked`. The `active` flag is flipped to 0
  * before that transition, which is the primary exit signal. */
 static void *osty_gc_bg_marker_main(void *arg) {
-    (void)arg;
+    /* arg encodes the worker_id (0..N-1) for per-worker counters. */
+    osty_gc_bg_marker_worker_id = (int)(intptr_t)arg;
     int64_t budget = osty_gc_bg_marker_budget_now();
     for (;;) {
         osty_rt_mu_lock(&osty_gc_bg_marker_mu);
@@ -6497,14 +6542,28 @@ static void *osty_gc_bg_marker_main(void *arg) {
                 break;
             }
             int64_t done = osty_gc_mark_drain_budget(budget);
-            osty_gc_bg_marker_drained_total += done;
-            osty_gc_bg_marker_loops_total += 1;
+            /* Atomic adds — N>=2 workers race here. The per-worker
+             * slot is single-writer so a relaxed add suffices; the
+             * aggregate counter aggregates across writers so it
+             * needs RELAXED + ACQ_REL semantics on test reads (we
+             * use ACQUIRE on the reader side). */
+            (void)__atomic_add_fetch(&osty_gc_bg_marker_drained_total,
+                                     done, __ATOMIC_RELAXED);
+            (void)__atomic_add_fetch(&osty_gc_bg_marker_loops_total,
+                                     1, __ATOMIC_RELAXED);
+            if (osty_gc_bg_marker_worker_id >= 0 &&
+                osty_gc_bg_marker_worker_id <
+                    OSTY_GC_BG_MARKER_MAX_WORKERS) {
+                osty_gc_bg_marker_per_worker_drained
+                    [osty_gc_bg_marker_worker_id] += done;
+            }
             int64_t remaining = osty_gc_mark_stack_count;
             osty_gc_release();
             if (remaining == 0) {
                 /* Queue empty — nap and re-check. SATB barriers may
                  * push more before finish runs. */
-                osty_gc_bg_marker_naps_total += 1;
+                (void)__atomic_add_fetch(&osty_gc_bg_marker_naps_total,
+                                         1, __ATOMIC_RELAXED);
                 osty_rt_sleep_ns(OSTY_GC_BG_MARKER_IDLE_NAP_NS);
             } else {
                 osty_rt_plat_yield();
@@ -6524,26 +6583,38 @@ static void osty_gc_bg_marker_lazy_init(void) {
 
 static osty_rt_once_t osty_gc_bg_marker_once = OSTY_RT_ONCE_INIT;
 
-/* Caller holds `osty_gc_lock`. Lazy: starts the thread on first call,
- * no-ops on subsequent calls. Enables the runtime-concurrency flag so
- * `osty_rt_map_lock` / `osty_rt_map_unlock` engage their per-map
- * mutexes — the marker traces map internals concurrently with mutator
- * inserts, and the per-map mutex serializes index/slot reallocation. */
+/* Caller holds `osty_gc_lock`. Lazy: starts N marker threads on first
+ * call (N from `OSTY_GC_BG_WORKERS`, default 1, capped at
+ * `OSTY_GC_BG_MARKER_MAX_WORKERS`), no-ops on subsequent calls.
+ * Enables the runtime-concurrency flag so `osty_rt_map_lock` /
+ * `osty_rt_map_unlock` engage their per-map mutexes — the marker
+ * traces map internals concurrently with mutator inserts, and the
+ * per-map mutex serializes index/slot reallocation. */
 static void osty_gc_bg_marker_ensure_started(void) {
     osty_rt_once(&osty_gc_bg_marker_once, osty_gc_bg_marker_lazy_init);
     if (osty_gc_bg_marker_started) {
         return;
     }
-    if (osty_rt_thread_start(&osty_gc_bg_marker_thread,
-                             osty_gc_bg_marker_main, NULL) != 0) {
-        osty_rt_abort("bg marker: thread start failed");
+    int n = osty_gc_bg_workers_now();
+    if (n < 1) n = 1;
+    if (n > OSTY_GC_BG_MARKER_MAX_WORKERS) {
+        n = OSTY_GC_BG_MARKER_MAX_WORKERS;
     }
+    for (int i = 0; i < n; i++) {
+        if (osty_rt_thread_start(&osty_gc_bg_marker_threads[i],
+                                 osty_gc_bg_marker_main,
+                                 (void *)(intptr_t)i) != 0) {
+            osty_rt_abort("bg marker: thread start failed");
+        }
+    }
+    osty_gc_bg_marker_worker_count = n;
     osty_gc_bg_marker_started = 1;
     osty_rt_enable_concurrency_runtime();
 }
 
-/* Caller holds `osty_gc_lock`. Sets active=1 and signals the cv so the
- * marker wakes from its outer cv-wait. */
+/* Caller holds `osty_gc_lock`. Sets active=1 and broadcasts the cv so
+ * every marker thread wakes from its outer cv-wait. Broadcast (not
+ * signal) because N >= 1 workers may be parked. */
 static void osty_gc_bg_marker_kick(void) {
     if (!osty_gc_bg_marker_enabled_now()) {
         return;
@@ -6551,8 +6622,9 @@ static void osty_gc_bg_marker_kick(void) {
     osty_gc_bg_marker_ensure_started();
     osty_rt_mu_lock(&osty_gc_bg_marker_mu);
     __atomic_store_n(&osty_gc_bg_marker_active, 1, __ATOMIC_RELEASE);
-    osty_gc_bg_marker_kicks_total += 1;
-    osty_rt_cond_signal(&osty_gc_bg_marker_cv);
+    (void)__atomic_add_fetch(&osty_gc_bg_marker_kicks_total,
+                             1, __ATOMIC_RELAXED);
+    osty_rt_cond_broadcast(&osty_gc_bg_marker_cv);
     osty_rt_mu_unlock(&osty_gc_bg_marker_mu);
 }
 
@@ -11571,33 +11643,50 @@ int64_t osty_gc_debug_satb_barrier_greyed_total(void) {
     return osty_gc_satb_barrier_greyed_total;
 }
 
-/* Phase 0a background marker accessors. Tests assert these advance
+/* Phase 0a/0c background marker accessors. Tests assert these advance
  * when `OSTY_GC_BG_MARKER=1` is enabled and a cycle runs. Counters
- * are written without atomic stores because they're only mutated by
- * the marker thread and read by mutator-side debug calls; a stale
- * read just lags one step behind which is acceptable for telemetry. */
+ * are atomically updated by the marker threads (potentially N>=2)
+ * so reads use ACQUIRE to pair with the writers' RELEASE/RELAXED
+ * adds. Per-worker counters are single-writer so a plain load is
+ * fine. */
 int64_t osty_gc_debug_bg_marker_started(void) {
     return osty_gc_bg_marker_started ? 1 : 0;
 }
 
+int64_t osty_gc_debug_bg_marker_workers(void) {
+    return (int64_t)osty_gc_bg_marker_worker_count;
+}
+
 int64_t osty_gc_debug_bg_marker_drained_total(void) {
-    return osty_gc_bg_marker_drained_total;
+    return __atomic_load_n(&osty_gc_bg_marker_drained_total,
+                           __ATOMIC_ACQUIRE);
 }
 
 int64_t osty_gc_debug_bg_marker_loops_total(void) {
-    return osty_gc_bg_marker_loops_total;
+    return __atomic_load_n(&osty_gc_bg_marker_loops_total,
+                           __ATOMIC_ACQUIRE);
 }
 
 int64_t osty_gc_debug_bg_marker_naps_total(void) {
-    return osty_gc_bg_marker_naps_total;
+    return __atomic_load_n(&osty_gc_bg_marker_naps_total,
+                           __ATOMIC_ACQUIRE);
 }
 
 int64_t osty_gc_debug_bg_marker_kicks_total(void) {
-    return osty_gc_bg_marker_kicks_total;
+    return __atomic_load_n(&osty_gc_bg_marker_kicks_total,
+                           __ATOMIC_ACQUIRE);
 }
 
 int64_t osty_gc_debug_bg_marker_active(void) {
     return __atomic_load_n(&osty_gc_bg_marker_active, __ATOMIC_ACQUIRE) ? 1 : 0;
+}
+
+/* Per-worker drained — index 0..workers-1. Returns -1 for OOB. */
+int64_t osty_gc_debug_bg_marker_per_worker_drained(int64_t worker_id) {
+    if (worker_id < 0 || worker_id >= OSTY_GC_BG_MARKER_MAX_WORKERS) {
+        return -1;
+    }
+    return osty_gc_bg_marker_per_worker_drained[(int)worker_id];
 }
 
 int64_t osty_gc_debug_color_of(void *payload) {
