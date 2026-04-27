@@ -737,7 +737,7 @@ func (g *generator) staticCollectionMethodSourceType(call *ast.CallExpr) (ast.Ty
 			return &ast.NamedType{Path: []string{"Bool"}}, true
 		case "get":
 			return &ast.OptionalType{Inner: valAST}, true
-		case "getOr":
+		case "getOr", "getOrInsert", "getOrInsertWith":
 			return valAST, true
 		case "keys":
 			return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{keyAST}}, true
@@ -1291,7 +1291,7 @@ func (g *generator) staticBytesNamespaceCallSourceType(call *ast.CallExpr) (ast.
 //	get(K)           → V?           (Option<V>, what feeds `??`)
 //	keys()           → List<K>
 //
-// Other map methods (getOr / update / retainIf / mergeWith /
+// Other map methods (update / retainIf / mergeWith /
 // mapValues / …) are either bodied (their source type flows from the
 // body) or not yet exercised at this layer.
 func (g *generator) staticMapMethodSourceType(call *ast.CallExpr) (ast.Type, bool) {
@@ -1323,6 +1323,8 @@ func (g *generator) staticMapMethodSourceType(call *ast.CallExpr) (ast.Type, boo
 	case "get":
 		// V? — wraps the Map's value type.
 		return &ast.OptionalType{Inner: valAST}, true
+	case "getOr", "getOrInsert", "getOrInsertWith":
+		return valAST, true
 	case "keys":
 		return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{keyAST}}, true
 	}
@@ -1812,7 +1814,7 @@ func (g *generator) mapMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, s
 		return nil, "", "", false, false
 	}
 	switch field.Name {
-	case "containsKey", "insert", "remove", "keys", "len", "isEmpty", "get", "getOr", "update", "retainIf", "mergeWith", "mapValues", "clear":
+	case "containsKey", "insert", "remove", "keys", "len", "isEmpty", "get", "getOr", "getOrInsert", "getOrInsertWith", "update", "retainIf", "mergeWith", "mapValues", "clear":
 	default:
 		return nil, "", "", false, false
 	}

@@ -316,6 +316,25 @@ pub struct Map<K: Hashable, V> {
     pub fn getOr(self, key: K, default: V) -> V {
         self.get(key) ?? default
     }
+    pub fn getOrInsert(mut self, key: K, default: V) -> V {
+        match self.get(key) {
+            Some(value) -> value,
+            None        -> {
+                self.insert(key, default)
+                default
+            },
+        }
+    }
+    pub fn getOrInsertWith(mut self, key: K, make: fn() -> V) -> V {
+        match self.get(key) {
+            Some(value) -> value,
+            None        -> {
+                let value = make()
+                self.insert(key, value)
+                value
+            },
+        }
+    }
     pub fn containsKey(self, key: K) -> Bool {
         self.get(key).isSome()
     }

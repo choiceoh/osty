@@ -2288,9 +2288,20 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
     let tFnKV_Bool = tyFn(tys, [tK, tV], tBool(tys))
     let tFnVV_V = tyFn(tys, [tV, tV], tV)
     let tFnV_R_map = tyFn(tys, [tV], tR_map)
+    let tFnUnitV = tyFn(tys, [], tV)
     checkRegisterFn(env, CheckFnSig {
         name: "getOr", owner: "Map", receiverTy: tMapKV, hasReceiver: true, retTy: tV,
         paramNames: ["key", "default"], paramTys: [tK, tV],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "getOrInsert", owner: "Map", receiverTy: tMapKV, hasReceiver: true, retTy: tV,
+        paramNames: ["key", "default"], paramTys: [tK, tV],
+        generics: ["K", "V"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "getOrInsertWith", owner: "Map", receiverTy: tMapKV, hasReceiver: true, retTy: tV,
+        paramNames: ["key", "make"], paramTys: [tK, tFnUnitV],
         generics: ["K", "V"], genericBounds: [],
     })
     checkRegisterFn(env, CheckFnSig {
