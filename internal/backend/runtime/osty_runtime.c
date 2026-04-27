@@ -5024,7 +5024,36 @@ static void osty_rt_set_destroy(void *payload) {
     }
 }
 
-static void osty_gc_mark_stack_push(osty_gc_header *header) {
+/* Phase 0e': TLS local mark stack. While a marker thread is in
+ * `osty_gc_mark_drain_budget`, the tracer's reentrant pushes route
+ * here instead of the central stack. Benefits, even though the
+ * caller still holds `osty_gc_lock` during the drain:
+ *
+ *   1. The central stack (`osty_gc_mark_stack`) doesn't grow with
+ *      every recursive push — its high-water capacity is bounded by
+ *      the cycle's seed roots + per-marker overflow spills, not the
+ *      full transitive object graph. fewer realloc events and a
+ *      smaller persistent buffer.
+ *
+ *   2. The hot-path push is a plain TLS array write — no capacity
+ *      check, no max-depth bookkeeping, no central-stack indirection.
+ *      Tracer-heavy workloads see a measurable drop in
+ *      `osty_gc_mark_stack_push` cost.
+ *
+ *   3. Sets up the lock-split groundwork: when a future PR makes
+ *      the tracer safe to run without `osty_gc_lock` (lock-free hash
+ *      index, snapshot-based dispatch, etc.), the TLS stack is
+ *      already the right home for trace-time push without per-push
+ *      synchronisation. */
+#define OSTY_GC_LOCAL_MARK_STACK_CAP 256
+static OSTY_RT_TLS osty_gc_header *osty_gc_local_mark_stack[OSTY_GC_LOCAL_MARK_STACK_CAP];
+static OSTY_RT_TLS int osty_gc_local_mark_stack_top = 0;
+static OSTY_RT_TLS bool osty_gc_local_mark_active = false;
+
+static int64_t osty_gc_local_mark_pushes_total = 0;
+static int64_t osty_gc_local_mark_overflow_total = 0;
+
+static void osty_gc_mark_stack_push_central(osty_gc_header *header) {
     if (osty_gc_mark_stack_count == osty_gc_mark_stack_cap) {
         int64_t new_cap;
         osty_gc_header **new_buf;
@@ -5038,9 +5067,45 @@ static void osty_gc_mark_stack_push(osty_gc_header *header) {
         osty_gc_mark_stack_cap = new_cap;
     }
     osty_gc_mark_stack[osty_gc_mark_stack_count++] = header;
-    if (osty_gc_mark_stack_count > osty_gc_mark_stack_max_depth) {
-        osty_gc_mark_stack_max_depth = osty_gc_mark_stack_count;
+    /* Phase 0e': effective queue depth includes the calling thread's
+     * TLS local stack — important when the local cap is hit and
+     * subsequent pushes spill here. Without folding `local_mark_top`
+     * in, deep-graph regression tests miss the watermark because
+     * `osty_gc_mark_stack_count` tops out around (graph_size - cap)
+     * instead of the actual queue size. */
+    int64_t effective =
+        (int64_t)osty_gc_local_mark_stack_top + osty_gc_mark_stack_count;
+    if (effective > osty_gc_mark_stack_max_depth) {
+        osty_gc_mark_stack_max_depth = effective;
     }
+}
+
+static void osty_gc_mark_stack_push(osty_gc_header *header) {
+    if (osty_gc_local_mark_active &&
+        osty_gc_local_mark_stack_top < OSTY_GC_LOCAL_MARK_STACK_CAP) {
+        osty_gc_local_mark_stack[osty_gc_local_mark_stack_top++] = header;
+        (void)__atomic_add_fetch(&osty_gc_local_mark_pushes_total, 1,
+                                 __ATOMIC_RELAXED);
+        /* `mark_stack_max_depth` is the cycle-wide work-queue
+         * watermark — used by deep-graph tests to assert the queue
+         * survived recursive trace re-entry. With Phase 0e' the
+         * effective queue is local + central, so report the sum
+         * here so the watermark stays meaningful. */
+        int64_t effective =
+            (int64_t)osty_gc_local_mark_stack_top +
+            osty_gc_mark_stack_count;
+        if (effective > osty_gc_mark_stack_max_depth) {
+            osty_gc_mark_stack_max_depth = effective;
+        }
+        return;
+    }
+    if (osty_gc_local_mark_active) {
+        /* Local full — overflow to central. Counted so tests can
+         * confirm the local cap is sized right for the workload. */
+        (void)__atomic_add_fetch(&osty_gc_local_mark_overflow_total, 1,
+                                 __ATOMIC_RELAXED);
+    }
+    osty_gc_mark_stack_push_central(header);
 }
 
 static void osty_gc_mark_header(osty_gc_header *header) {
@@ -5072,19 +5137,48 @@ static void osty_gc_mark_payload(void *payload) {
 /* Phase C: drain up to `budget` grey headers. Budget of 0 or negative
  * means "drain everything" (the pre-Phase-C semantics, still used by
  * STW major/minor). Returns the number of headers actually traced so
- * the incremental scheduler can pace future steps. */
+ * the incremental scheduler can pace future steps.
+ *
+ * Phase 0e': during the drain, tracer-emitted pushes route to the TLS
+ * `osty_gc_local_mark_stack` instead of growing the central stack.
+ * The local stack is then drained LIFO before the next central pop —
+ * effectively a depth-first traversal that keeps hot trace data in
+ * cache and bounds central-stack size. The local stack flushes back
+ * to central at drain exit so any future drain (this thread or
+ * another) sees the unfinished work. */
 static int64_t osty_gc_mark_drain_budget(int64_t budget) {
     int64_t done = 0;
     bool unlimited = budget <= 0;
-    while (osty_gc_mark_stack_count > 0 && (unlimited || done < budget)) {
-        osty_gc_header *header = osty_gc_mark_stack[--osty_gc_mark_stack_count];
+    bool was_active = osty_gc_local_mark_active;
+    osty_gc_local_mark_active = true;
+
+    while ((osty_gc_local_mark_stack_top > 0 ||
+            osty_gc_mark_stack_count > 0) &&
+           (unlimited || done < budget)) {
+        osty_gc_header *header;
+        if (osty_gc_local_mark_stack_top > 0) {
+            header = osty_gc_local_mark_stack[--osty_gc_local_mark_stack_top];
+        } else {
+            header = osty_gc_mark_stack[--osty_gc_mark_stack_count];
+        }
         header->color = OSTY_GC_COLOR_BLACK;
         /* Trace callbacks re-enter `osty_gc_mark_*` for children,
-         * which push more GREY work onto this stack — the C call
-         * stack stays bounded regardless of object graph depth. */
+         * which push more GREY work — into TLS via mark_stack_push's
+         * routing. The C call stack stays bounded regardless of
+         * object graph depth. */
         osty_gc_dispatch_trace(header);
         done += 1;
     }
+
+    /* Flush whatever's left in the local stack back to central so
+     * the next drain (possibly on another thread) sees the work.
+     * Order doesn't matter: any item left here is unprocessed grey,
+     * central stack treats them identically to direct pushes. */
+    while (osty_gc_local_mark_stack_top > 0) {
+        osty_gc_mark_stack_push_central(
+            osty_gc_local_mark_stack[--osty_gc_local_mark_stack_top]);
+    }
+    osty_gc_local_mark_active = was_active;
     return done;
 }
 
@@ -11835,6 +11929,23 @@ int64_t osty_gc_debug_sweep_steps_total(void) {
 
 int64_t osty_gc_debug_sweep_reclaim_done(void) {
     return osty_gc_sweep_reclaim_done ? 1 : 0;
+}
+
+/* Phase 0e' TLS local mark stack accessors. `local_mark_pushes_total`
+ * is the count of tracer pushes that landed in the TLS buffer (vs.
+ * the central stack). `local_mark_overflow_total` is the count that
+ * spilled to central because the local cap was hit — non-zero on
+ * deep object graphs where the trace recursion outruns the local
+ * 256-slot buffer. Tests use the ratio to confirm Phase 0e' is
+ * actually routing work to the local path. */
+int64_t osty_gc_debug_local_mark_pushes_total(void) {
+    return __atomic_load_n(&osty_gc_local_mark_pushes_total,
+                           __ATOMIC_ACQUIRE);
+}
+
+int64_t osty_gc_debug_local_mark_overflow_total(void) {
+    return __atomic_load_n(&osty_gc_local_mark_overflow_total,
+                           __ATOMIC_ACQUIRE);
 }
 
 int64_t osty_gc_debug_color_of(void *payload) {

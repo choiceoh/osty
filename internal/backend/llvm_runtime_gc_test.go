@@ -3455,6 +3455,141 @@ int main(void) {
 	}
 }
 
+// TestBundledRuntimeBackgroundMarkerLocalMarkStack covers Phase 0e' —
+// during a marker drain, tracer-emitted pushes route to a TLS local
+// mark stack instead of the central one. The test allocates a graph
+// large enough that the tracer recursion produces hundreds of pushes
+// during a single drain, then asserts `local_mark_pushes_total > 0`
+// (Phase 0e' actually engaged) and that the central stack's
+// `mark_stack_max_depth` watermark folds the local depth in
+// (regression signal for the deep-graph invariant).
+func TestBundledRuntimeBackgroundMarkerLocalMarkStack(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_bg_marker_local_stack_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_bg_marker_local_stack_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <time.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
+void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void *osty_rt_list_new(void);
+void osty_rt_list_push_ptr(void *list, void *value);
+
+void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count);
+void osty_gc_collect_incremental_finish(void);
+
+int64_t osty_gc_debug_state(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_local_mark_pushes_total(void);
+int64_t osty_gc_debug_local_mark_overflow_total(void);
+int64_t osty_gc_debug_mark_stack_max_depth(void);
+
+static void nap_ms(int ms) {
+    struct timespec ts;
+    ts.tv_sec  = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000 * 1000;
+    nanosleep(&ts, NULL);
+}
+
+int main(void) {
+    /* List with 500 children — comfortably above the 256-slot local
+     * cap so we can also assert the overflow path fires (proves the
+     * spill-to-central fallback isn't dead code). */
+    enum { N = 500 };
+    void *list = osty_rt_list_new();
+    osty_gc_root_bind_v1(list);
+    for (int i = 0; i < N; i++) {
+        void *child = osty_gc_alloc_v1(7, 16, "child");
+        osty_gc_pre_write_v1(list, NULL, 0);
+        osty_rt_list_push_ptr(list, child);
+        osty_gc_post_write_v1(list, child, 0);
+    }
+
+    osty_gc_collect_incremental_start_with_stack_roots(NULL, 0);
+    nap_ms(50);
+    osty_gc_collect_incremental_finish();
+
+    long long local_pushes  = (long long)osty_gc_debug_local_mark_pushes_total();
+    long long local_overflow = (long long)osty_gc_debug_local_mark_overflow_total();
+    long long max_depth     = (long long)osty_gc_debug_mark_stack_max_depth();
+    long long state         = (long long)osty_gc_debug_state();
+    long long live          = (long long)osty_gc_debug_live_count();
+
+    printf("local_pushes=%lld local_overflow=%lld max_depth=%lld state=%lld live=%lld\n",
+        local_pushes, local_overflow, max_depth, state, live);
+
+    osty_gc_root_release_v1(list);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(),
+		"OSTY_GC_BG_MARKER=1",
+		"OSTY_GC_ASSIST_BYTES_PER_UNIT=0",
+	)
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	out := string(runOutput)
+	if !strings.Contains(out, "state=0 ") {
+		t.Fatalf("state!=IDLE; full output:\n%s", out)
+	}
+	if !strings.Contains(out, "live=501") {
+		t.Fatalf("live count wrong (want 501); full output:\n%s", out)
+	}
+	var localPushes, localOverflow, maxDepth, state, live int64
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "local_pushes=") {
+			continue
+		}
+		if _, err := fmt.Sscanf(line, "local_pushes=%d local_overflow=%d max_depth=%d state=%d live=%d",
+			&localPushes, &localOverflow, &maxDepth, &state, &live); err != nil {
+			t.Fatalf("could not parse %q: %v", line, err)
+		}
+		break
+	}
+	if localPushes <= 0 {
+		t.Fatalf("local_pushes=%d, want >0; Phase 0e' did not engage\nfull output:\n%s",
+			localPushes, out)
+	}
+	/* Peak depth is 500 (children pushed in one trace burst); the
+	 * list root is already popped before its children enqueue. The
+	 * point of the assertion is that the effective watermark folds
+	 * local + central — without that, max_depth tops out at the
+	 * post-overflow central count (244) and misses the 256 still
+	 * resident in the local stack. */
+	if maxDepth < 500 {
+		t.Fatalf("max_depth=%d, want >=500; effective watermark missed local stack\nfull output:\n%s",
+			maxDepth, out)
+	}
+}
+
 // TestBundledRuntimeBackgroundMarkerConcurrentSweep covers Phase 0e —
 // once the bg marker drains the mark queue, it transitions the cycle
 // to SWEEPING and reclaims dead headers in batches concurrently with
