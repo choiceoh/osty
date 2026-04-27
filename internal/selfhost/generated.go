@@ -36916,6 +36916,7 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "toInt", owner: "Char", receiverTy: tChar(tys), retTy: tInt(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:17165:5
 	checkRegisterFn(env, &CheckFnSig{name: "toByte", owner: "Char", receiverTy: tChar(tys), retTy: tByte(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "toString", owner: "Char", receiverTy: tChar(tys), retTy: tString_, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:17170:5
 	checkRegisterFn(env, &CheckFnSig{name: "toInt", owner: "Byte", receiverTy: tByte(tys), retTy: tInt(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:17175:5

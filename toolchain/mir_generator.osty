@@ -12487,7 +12487,7 @@ pub fn mirCallSetLengthLine(reg: String, setReg: String) -> String {
 
 /// mirCallStringLengthLine renders the canonical string-length call.
 pub fn mirCallStringLengthLine(reg: String, strReg: String) -> String {
-    mirCallI64FromPtrLine(reg, mirRtStringLenSymbol(), strReg)
+    mirCallValueI64FromPtrLine(reg, mirRtStringLenSymbol(), strReg)
 }
 
 /// mirCallBytesLengthLine renders the canonical bytes-length call.
@@ -12986,12 +12986,12 @@ pub fn mirLLVMBuiltinAggregatePart(part: String) -> String {
     let n = part.len()
     for i < n {
         let c = part[i]
-        let isUnderscore = c == "_"
-        let isLower = c >= "a" && c <= "z"
-        let isUpper = c >= "A" && c <= "Z"
-        let isDigit = c >= "0" && c <= "9"
+        let isUnderscore = c == '_'
+        let isLower = c >= 'a' && c <= 'z'
+        let isUpper = c >= 'A' && c <= 'Z'
+        let isDigit = c >= '0' && c <= '9'
         if isUnderscore || isLower || isUpper || isDigit {
-            buf = buf + c
+            buf = buf + c.toString()
             sawValid = true
         } else {
             buf = buf + "_"
