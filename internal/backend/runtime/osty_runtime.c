@@ -665,15 +665,8 @@ static void osty_rt_task_handle_destroy(void *payload);
 typedef struct osty_gc_kind_descriptor {
     osty_gc_trace_fn trace;
     osty_gc_destroy_fn destroy;
-    /* Whether the no-header young arena can carry this kind. Each
-     * young-eligible row also requires the supporting cheney work
-     * to be in place (self-ref fixup in cheney_forward / promote,
-     * dead-from-space cleanup, young-arena remap dispatch). The
-     * per-PR doc comment on `osty_gc_young_eligible` explains the
-     * specific arrangement for each kind. Replaces the explicit
-     * `kind != X && kind != Y && ...` whitelist that grew with
-     * every PR; new young-eligible kinds set this to true here
-     * instead of editing the predicate. */
+    /* Whether the no-header young arena can carry this kind. Toggle
+     * at the table row, not in `osty_gc_young_eligible`. */
     bool young_eligible;
 } osty_gc_kind_descriptor;
 
@@ -698,12 +691,11 @@ enum {
 };
 
 static const osty_gc_kind_descriptor osty_gc_generic_patterns[] = {
-    /* GENERIC NONE — opaque payload, cheney handles it as raw bytes. */
+    /* NONE — opaque payload, cheney handles it as raw bytes. */
     [OSTY_GC_GENERIC_NONE] = {NULL, NULL, true},
-    /* ENUM_PTR has its own dedicated kind (KIND_GENERIC_ENUM_PTR) for
-     * the young path, so this row is parity-only — the headerful
-     * fallback dispatch still consults it but young eligibility is
-     * driven by the kind table, not this entry. */
+    /* ENUM_PTR routes through `OSTY_GC_KIND_GENERIC_ENUM_PTR`'s row
+     * in the kind table; this row is only consulted on the headerful
+     * fallback dispatch, so the young flag stays false. */
     [OSTY_GC_GENERIC_ENUM_PTR] = {osty_rt_enum_ptr_payload_trace, NULL, false},
     /* TASK_HANDLE has a pthread-rich destroy — not yet covered by
      * the safe-clone path that Map uses. */
@@ -731,6 +723,12 @@ static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
     [OSTY_GC_KIND_SET - OSTY_GC_KIND_LIST] =
         {osty_rt_set_trace, osty_rt_set_destroy, true},
     [OSTY_GC_KIND_BYTES - OSTY_GC_KIND_LIST] = {NULL, NULL, true},
+    /* CLOSURE_ENV's young safety relies on a mutator-side contract:
+     * captures are populated synchronously at construction (single
+     * basic block in LLVM emit) before the env can escape to a slot
+     * that triggers root_bind. promote-on-bind copies a fully
+     * populated env to OLD; nothing in cheney_forward / promote
+     * special-cases this kind. */
     [OSTY_GC_KIND_CLOSURE_ENV - OSTY_GC_KIND_LIST] =
         {osty_rt_closure_env_trace, NULL, true},
     /* CHANNEL stays headerful — destroy frees a mutex + 2 condvars
