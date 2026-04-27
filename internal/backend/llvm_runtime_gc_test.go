@@ -2984,6 +2984,165 @@ int main(void) {
 	}
 }
 
+// TestBundledRuntimeBackgroundMarkerDrainsCycle covers Phase 0a — when
+// OSTY_GC_BG_MARKER=1 is set, an incremental cycle started without any
+// step calls should still drain to completion via the background marker
+// thread, leaving the queue empty and the live set correct after finish.
+//
+// The test is the smallest end-to-end proof that the marker thread is
+// actually running concurrently with the mutator: the harness sleeps
+// between start and finish without itself doing any mark work, and
+// asserts the bg marker advanced the cycle.
+func TestBundledRuntimeBackgroundMarkerDrainsCycle(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_bg_marker_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_bg_marker_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <time.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
+void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count);
+void osty_gc_collect_incremental_finish(void);
+
+int64_t osty_gc_debug_state(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_mark_stack_count(void);
+int64_t osty_gc_debug_bg_marker_started(void);
+int64_t osty_gc_debug_bg_marker_kicks_total(void);
+int64_t osty_gc_debug_bg_marker_drained_total(void);
+int64_t osty_gc_debug_bg_marker_loops_total(void);
+int64_t osty_gc_debug_bg_marker_active(void);
+
+void *osty_rt_list_new(void);
+void osty_rt_list_push_ptr(void *list, void *value);
+
+static void nap_ms(int ms) {
+    struct timespec ts;
+    ts.tv_sec  = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000 * 1000;
+    nanosleep(&ts, NULL);
+}
+
+int main(void) {
+    /* 50 children reachable through a rooted list, plus 30 dangling
+     * allocations. The bg marker must trace 51 reachable headers
+     * (list + 50 children) and the sweep must reclaim 30. */
+    enum { N = 50, M = 30 };
+    void *list = osty_rt_list_new();
+    osty_gc_root_bind_v1(list);
+    for (int i = 0; i < N; i++) {
+        void *child = osty_gc_alloc_v1(7, 16, "child");
+        osty_gc_pre_write_v1(list, NULL, 0);
+        osty_rt_list_push_ptr(list, child);
+        osty_gc_post_write_v1(list, child, 0);
+    }
+    for (int i = 0; i < M; i++) {
+        (void)osty_gc_alloc_v1(7, 16, "drop");
+    }
+
+    /* Kick a cycle. Crucially, do NOT call osty_gc_collect_incremental_step
+     * here — without the bg marker, this leaves the queue intact until
+     * finish drains it inline. With the bg marker, the queue empties in
+     * the background. */
+    osty_gc_collect_incremental_start_with_stack_roots(NULL, 0);
+
+    /* Wait long enough for the bg marker to drain and nap at least once.
+     * Marker default budget is 1024 — the 51 grey objects clear in a
+     * single drain step plus a 200µs nap. 50 ms is multiple orders of
+     * magnitude slack so the test stays robust under CI load. */
+    nap_ms(50);
+
+    /* Snapshot mid-cycle counters before finish parks the marker. */
+    long long mid_started = (long long)osty_gc_debug_bg_marker_started();
+    long long mid_kicks   = (long long)osty_gc_debug_bg_marker_kicks_total();
+    long long mid_drained = (long long)osty_gc_debug_bg_marker_drained_total();
+    long long mid_active  = (long long)osty_gc_debug_bg_marker_active();
+    long long mid_stack   = (long long)osty_gc_debug_mark_stack_count();
+
+    osty_gc_collect_incremental_finish();
+
+    long long final_state   = (long long)osty_gc_debug_state();
+    long long final_live    = (long long)osty_gc_debug_live_count();
+    long long final_active  = (long long)osty_gc_debug_bg_marker_active();
+    long long final_drained = (long long)osty_gc_debug_bg_marker_drained_total();
+
+    printf("started=%lld kicks=%lld mid_active=%lld mid_stack=%lld mid_drained=%lld\n",
+        mid_started, mid_kicks, mid_active, mid_stack, mid_drained);
+    printf("state=%lld live=%lld active=%lld final_drained=%lld\n",
+        final_state, final_live, final_active, final_drained);
+
+    osty_gc_root_release_v1(list);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	/* Enable bg marker; disable mutator assist so the marker is the
+	 * sole non-mutator drain channel — without this, assist could
+	 * trace everything via the alloc path and the test would not
+	 * actually exercise the bg thread. */
+	runCmd.Env = append(os.Environ(),
+		"OSTY_GC_BG_MARKER=1",
+		"OSTY_GC_ASSIST_BYTES_PER_UNIT=0",
+	)
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	out := string(runOutput)
+	/* Required invariants:
+	 *   - started=1: thread spawned on first kick.
+	 *   - kicks=1:   exactly one start-side kick this run.
+	 *   - mid_drained > 0:  bg marker did real work between start and
+	 *                       finish — this is the load-bearing concurrent
+	 *                       proof. mid_stack should be 0 (drained) but
+	 *                       under heavy CI load could still hold a few;
+	 *                       what matters is that drained > 0.
+	 *   - state=0 (IDLE), final_active=0 (parked) after finish.
+	 *   - live=51 (list + 50 children). 30 dangling reclaimed by sweep.
+	 *   - final_drained >= mid_drained (monotonic). */
+	mustContain := []string{
+		"started=1 ",
+		" kicks=1 ",
+		"state=0 live=51 active=0",
+	}
+	for _, frag := range mustContain {
+		if !strings.Contains(out, frag) {
+			t.Fatalf("bg marker harness output missing %q\nfull output:\n%s",
+				frag, out)
+		}
+	}
+	if strings.Contains(out, "mid_drained=0\n") {
+		t.Fatalf("bg marker did no work — mid_drained=0; full output:\n%s",
+			out)
+	}
+}
+
 // TestBundledRuntimeValidateHeapNegativeInvariantsPhaseC covers the
 // Phase C1 depth follow-up — three new tri-colour invariants each get
 // a dedicated injector that trips exactly one error code.
