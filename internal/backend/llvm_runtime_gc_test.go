@@ -3143,6 +3143,170 @@ int main(void) {
 	}
 }
 
+// TestBundledRuntimeBackgroundMarkerMultiThreadCycle covers Phase 0b —
+// when user worker threads are live, incremental_start (previously
+// hard-gated to early-return on workers > 0) must instead drive an STW
+// handshake that parks every worker, unions their published roots into
+// the seed set, kicks the bg marker for concurrent drain, and finishes
+// via a second handshake. The test spawns one worker that runs a
+// safepoint+alloc+sleep loop, kicks an incremental cycle from the main
+// thread mid-flight, and asserts the cycle actually started (state went
+// to MARK_INCREMENTAL — the regression signal would be state == 0
+// because of the old early-return) and reached IDLE on finish.
+func TestBundledRuntimeBackgroundMarkerMultiThreadCycle(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_bg_marker_mt_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_bg_marker_mt_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <time.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
+void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void *osty_rt_task_spawn(void *body_env);
+int64_t osty_rt_task_handle_join(void *handle);
+void osty_rt_sched_preempt_check_v1(void);
+void osty_rt_thread_sleep(int64_t nanos);
+
+void *osty_rt_list_new(void);
+void osty_rt_list_push_ptr(void *list, void *value);
+
+void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count);
+void osty_gc_collect_incremental_finish(void);
+
+int64_t osty_gc_debug_state(void);
+int64_t osty_gc_debug_bg_marker_kicks_total(void);
+int64_t osty_gc_debug_bg_marker_drained_total(void);
+
+typedef struct env_slot { void *fn; int64_t capture; } env_slot;
+
+/* Worker body: 200ms of safepoint + alloc + sleep. The safepoint
+ * check makes the worker observe stop_request and park promptly; the
+ * alloc burns through the lock-skip-disabled fast path so we exercise
+ * the bg marker reading the index concurrently. */
+static int64_t worker_body(void *env) {
+    (void)env;
+    for (int i = 0; i < 200; i++) {
+        (void)osty_gc_alloc_v1(7, 16, "mt_worker");
+        osty_rt_sched_preempt_check_v1();
+        osty_rt_thread_sleep(1000000LL);  /* 1ms */
+    }
+    return 0;
+}
+
+int main(void) {
+    /* Build a rooted graph BEFORE starting workers so the cycle has
+     * real work to drain. 50 children reachable through a pinned
+     * list — bg marker should trace 51 headers between start and
+     * finish. */
+    enum { N = 50 };
+    void *list = osty_rt_list_new();
+    osty_gc_root_bind_v1(list);
+    for (int i = 0; i < N; i++) {
+        void *child = osty_gc_alloc_v1(7, 16, "main_child");
+        osty_gc_pre_write_v1(list, NULL, 0);
+        osty_rt_list_push_ptr(list, child);
+        osty_gc_post_write_v1(list, child, 0);
+    }
+
+    env_slot e = { (void *)worker_body, 0 };
+    void *h = osty_rt_task_spawn((void *)&e);
+
+    /* Let the worker actually start running so concurrent_workers > 0
+     * is observed by incremental_start. */
+    osty_rt_thread_sleep(20000000LL);  /* 20ms */
+
+    long long pre_state = (long long)osty_gc_debug_state();
+
+    /* Phase 0b critical path: previously this would early-return
+     * silently because of the workers > 0 gate. With the STW
+     * handshake the cycle actually starts. */
+    osty_gc_collect_incremental_start_with_stack_roots(NULL, 0);
+    long long mid_state = (long long)osty_gc_debug_state();
+    long long mid_kicks = (long long)osty_gc_debug_bg_marker_kicks_total();
+
+    /* Concurrent drain window. Worker keeps running, bg marker
+     * traces. */
+    osty_rt_thread_sleep(50000000LL);  /* 50ms */
+
+    long long mid_drained = (long long)osty_gc_debug_bg_marker_drained_total();
+
+    /* Finish parks the worker again, drains residual greys, sweeps. */
+    osty_gc_collect_incremental_finish();
+
+    long long final_state    = (long long)osty_gc_debug_state();
+    long long final_drained  = (long long)osty_gc_debug_bg_marker_drained_total();
+
+    /* Wait for the worker to finish its loop. */
+    (void)osty_rt_task_handle_join(h);
+
+    printf("pre_state=%lld mid_state=%lld mid_kicks=%lld mid_drained=%lld final_state=%lld final_drained=%lld\n",
+        pre_state, mid_state, mid_kicks, mid_drained, final_state, final_drained);
+
+    osty_gc_root_release_v1(list);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(),
+		"OSTY_GC_BG_MARKER=1",
+		"OSTY_GC_ASSIST_BYTES_PER_UNIT=0",
+	)
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	out := string(runOutput)
+	/* Required:
+	 *   - pre_state=0: IDLE before start.
+	 *   - mid_state=1: MARK_INCREMENTAL — Phase 0b cycle actually
+	 *     started despite workers > 0 (the regression signal is mid_state=0,
+	 *     meaning the old early-return is still in place).
+	 *   - mid_kicks>=1: bg marker was signalled.
+	 *   - mid_drained>=1: bg marker did real work concurrently with the
+	 *     running worker.
+	 *   - final_state=0: IDLE after finish (sweep done). */
+	mustContain := []string{
+		"pre_state=0 ",
+		"mid_state=1 ",
+		"final_state=0 ",
+	}
+	for _, frag := range mustContain {
+		if !strings.Contains(out, frag) {
+			t.Fatalf("multi-thread cycle harness missing %q\nfull output:\n%s",
+				frag, out)
+		}
+	}
+	if strings.Contains(out, "mid_kicks=0 ") || strings.Contains(out, "mid_drained=0 ") {
+		t.Fatalf("bg marker did not engage during multi-thread cycle\nfull output:\n%s",
+			out)
+	}
+}
+
 // TestBundledRuntimeValidateHeapNegativeInvariantsPhaseC covers the
 // Phase C1 depth follow-up — three new tri-colour invariants each get
 // a dedicated injector that trips exactly one error code.

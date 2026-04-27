@@ -1787,6 +1787,37 @@ static inline bool osty_gc_serialized_now(void) {
 static void osty_gc_bg_marker_kick(void);
 static void osty_gc_bg_marker_park(void);
 
+/* Phase 0b: STW handshake helper for multi-thread incremental cycles.
+ *
+ * `osty_gc_collect_incremental_start_with_stack_roots` and its finish
+ * counterpart are normally driven by the main thread of a
+ * single-mutator program. When user worker threads are live
+ * (`osty_concurrent_workers > 0`), the caller's own root slots are
+ * not enough — sibling mutators hold roots on their own stacks that
+ * the cycle must scan. The handshake parks every worker at a
+ * safepoint, walks the published-roots registry built up by
+ * `osty_rt_sched_preempt_park_for_collector`, and unions those roots
+ * with the caller's into a flat array suitable for
+ * `osty_gc_incremental_seed_roots` or
+ * `osty_gc_collect_incremental_finish_locked`.
+ *
+ * Caller contract: must NOT be a pool worker (`osty_sched_is_worker`
+ * = false). A worker calling this would have to park itself and
+ * deadlock the wait_all_parked loop. Tests and main-thread runtime
+ * paths satisfy this naturally; auto-drive paths route around it via
+ * the existing single-thread gate. */
+typedef struct osty_gc_stw_handshake_state {
+    void **flat_roots;
+    int64_t total_count;
+    int held;
+} osty_gc_stw_handshake_state;
+
+static void osty_gc_stw_handshake_acquire(
+    void *const *caller_roots, int64_t caller_count,
+    osty_gc_stw_handshake_state *out);
+static void osty_gc_stw_handshake_release(
+    osty_gc_stw_handshake_state *state);
+
 /* SplitMix64-style mixing for pointer hashing. Pointers on x86_64 / ARM64
  * have alignment-induced low-bit correlation (headers are 16-byte aligned
  * thanks to `calloc`), so naive `& mask` would cluster. This finaliser
@@ -6232,17 +6263,32 @@ static void osty_gc_incremental_sweep(void) {
  * calls it with an empty stack-slot array so tests / callers without
  * visible frame descriptors can still drive the machinery. */
 void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
+    /* Phase 0b: when user worker threads are live, drive an STW
+     * handshake so every parked mutator's roots get folded into the
+     * cycle's seed set. Single-threaded path stays branch-free.
+     *
+     * The handshake itself is the only STW window for cycle start —
+     * after `seed_roots` returns and we kick the bg marker, mutators
+     * resume and mark proceeds concurrently in the bg thread. */
+    bool multi_thread = osty_rt_concurrent_workers_load() > 0;
+    osty_gc_stw_handshake_state hs = {0};
+    void *const *seed_roots = root_slots;
+    int64_t seed_count = root_slot_count;
+    if (multi_thread) {
+        osty_gc_stw_handshake_acquire(root_slots, root_slot_count, &hs);
+        seed_roots = (void *const *)hs.flat_roots;
+        seed_count = hs.total_count;
+    }
     osty_gc_acquire();
     if (osty_gc_state != OSTY_GC_STATE_IDLE) {
         osty_gc_release();
+        if (multi_thread) {
+            osty_gc_stw_handshake_release(&hs);
+        }
         osty_rt_abort("incremental start called while collection already in progress");
     }
-    if (osty_rt_concurrent_workers_load() > 0) {
-        osty_gc_release();
-        return;
-    }
     osty_gc_state = OSTY_GC_STATE_MARK_INCREMENTAL;
-    osty_gc_incremental_seed_roots(root_slots, root_slot_count);
+    osty_gc_incremental_seed_roots(seed_roots, seed_count);
     /* Phase 0a: kick the background marker after seeding so it has
      * grey work waiting. The kick promotes the cycle from
      * "budgeted-incremental" (mutator-driven) to truly concurrent —
@@ -6252,6 +6298,9 @@ void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots,
      * flag set inside `bg_marker_kick`. */
     osty_gc_bg_marker_kick();
     osty_gc_release();
+    if (multi_thread) {
+        osty_gc_stw_handshake_release(&hs);
+    }
 }
 
 /* Returns true if more mark work remains; false when the queue is
@@ -6326,17 +6375,29 @@ static void osty_gc_collect_incremental_finish_locked(
 
 void osty_gc_collect_incremental_finish(void) {
     int64_t t_start = osty_gc_now_nanos();
+    /* Phase 0b: park mutators before the final drain + sweep so SATB
+     * barriers have flushed and no new edges race the sweep. The
+     * compact path is skipped here (`compact = false`) because we
+     * lack frame descriptors for the caller — callers that need
+     * compaction must use the `_with_stack_roots` variant. */
+    bool multi_thread = osty_rt_concurrent_workers_load() > 0;
+    osty_gc_stw_handshake_state hs = {0};
+    if (multi_thread) {
+        osty_gc_stw_handshake_acquire(NULL, 0, &hs);
+    }
     osty_gc_acquire();
     if (osty_gc_state == OSTY_GC_STATE_IDLE) {
         osty_gc_release();
+        if (multi_thread) {
+            osty_gc_stw_handshake_release(&hs);
+        }
         return;
     }
-    /* No-stack-roots path: skip compaction (see rationale in
-     * `osty_gc_collect_incremental_finish_locked`). Callers that own
-     * their frame descriptors should prefer the `_with_stack_roots`
-     * variant so Phase D compaction runs. */
     osty_gc_collect_incremental_finish_locked(NULL, 0, false);
     osty_gc_release();
+    if (multi_thread) {
+        osty_gc_stw_handshake_release(&hs);
+    }
 
     int64_t t_end = osty_gc_now_nanos();
     if (t_start != 0 && t_end >= t_start) {
@@ -6357,14 +6418,33 @@ void osty_gc_collect_incremental_finish(void) {
 void osty_gc_collect_incremental_finish_with_stack_roots(
     void *const *root_slots, int64_t root_slot_count) {
     int64_t t_start = osty_gc_now_nanos();
+    /* Phase 0b: park mutators and union their published roots with
+     * the caller's so compaction can remap every live stack slot.
+     * Without the union, the compaction step in `finish_locked` would
+     * leave dangling pointers on parked mutators' stacks. */
+    bool multi_thread = osty_rt_concurrent_workers_load() > 0;
+    osty_gc_stw_handshake_state hs = {0};
+    void *const *finish_roots = root_slots;
+    int64_t finish_count = root_slot_count;
+    if (multi_thread) {
+        osty_gc_stw_handshake_acquire(root_slots, root_slot_count, &hs);
+        finish_roots = (void *const *)hs.flat_roots;
+        finish_count = hs.total_count;
+    }
     osty_gc_acquire();
     if (osty_gc_state == OSTY_GC_STATE_IDLE) {
         osty_gc_release();
+        if (multi_thread) {
+            osty_gc_stw_handshake_release(&hs);
+        }
         return;
     }
     osty_gc_collect_incremental_finish_locked(
-        root_slots, root_slot_count, true);
+        finish_roots, finish_count, true);
     osty_gc_release();
+    if (multi_thread) {
+        osty_gc_stw_handshake_release(&hs);
+    }
 
     int64_t t_end = osty_gc_now_nanos();
     if (t_start != 0 && t_end >= t_start) {
@@ -13936,6 +14016,83 @@ void osty_rt_sched_concurrent_stop_release_v1(void) {
                      __ATOMIC_RELEASE);
     osty_rt_cond_broadcast(&osty_gc_stop_cv);
     osty_rt_mu_unlock(&osty_gc_stop_mu);
+}
+
+/* Forward decl for the helper below; full definition lives further
+ * down with the rest of the scheduler-side preempt machinery. */
+void osty_rt_sched_kick_worker_v1(int64_t worker_id);
+
+/* Phase 0b: STW root handshake helper. Definitions of the forward
+ * declarations near the top of the file. Used by the multi-thread
+ * branch of `incremental_start_with_stack_roots` and `incremental_finish*`
+ * to bring every pool worker to a safepoint and union published roots
+ * with the caller's. */
+static void osty_gc_stw_handshake_acquire(
+    void *const *caller_roots, int64_t caller_count,
+    osty_gc_stw_handshake_state *out) {
+    out->flat_roots = NULL;
+    out->total_count = 0;
+    out->held = 0;
+    if (caller_count < 0) {
+        caller_count = 0;
+    }
+
+    osty_rt_sched_concurrent_stop_request_v1();
+    osty_rt_sched_kick_worker_v1(-1);
+
+    osty_rt_mu_lock(&osty_gc_stop_mu);
+    for (;;) {
+        int64_t inflight =
+            __atomic_load_n(&osty_concurrent_workers, __ATOMIC_ACQUIRE);
+        if (osty_gc_parked_mutator_count >= inflight) {
+            break;
+        }
+        osty_rt_cond_wait(&osty_gc_stop_cv, &osty_gc_stop_mu);
+    }
+
+    int64_t total = caller_count;
+    for (osty_gc_parked_roots_entry *e = osty_gc_parked_roots_head;
+         e != NULL; e = e->next) {
+        total += e->count;
+    }
+    void **flat = NULL;
+    if (total > 0) {
+        flat = (void **)calloc((size_t)total, sizeof(void *));
+        if (flat == NULL) {
+            osty_rt_mu_unlock(&osty_gc_stop_mu);
+            osty_rt_sched_concurrent_stop_release_v1();
+            osty_rt_abort("stw handshake: flat union OOM");
+        }
+        int64_t idx = 0;
+        for (int64_t i = 0; i < caller_count; i++) {
+            flat[idx++] = (void *)caller_roots[i];
+        }
+        for (osty_gc_parked_roots_entry *e = osty_gc_parked_roots_head;
+             e != NULL; e = e->next) {
+            for (int64_t i = 0; i < e->count; i++) {
+                flat[idx++] = (void *)e->slots[i];
+            }
+        }
+    }
+    osty_rt_mu_unlock(&osty_gc_stop_mu);
+
+    out->flat_roots = flat;
+    out->total_count = total;
+    out->held = 1;
+}
+
+static void osty_gc_stw_handshake_release(
+    osty_gc_stw_handshake_state *state) {
+    if (!state->held) {
+        return;
+    }
+    if (state->flat_roots != NULL) {
+        free(state->flat_roots);
+        state->flat_roots = NULL;
+    }
+    state->total_count = 0;
+    state->held = 0;
+    osty_rt_sched_concurrent_stop_release_v1();
 }
 
 /* Phase 3 step 2 — concurrent collection driver.
