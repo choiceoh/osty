@@ -4353,12 +4353,11 @@ static void osty_rt_list_trace(void *payload) {
         return;
     }
     if (list->pointer_elems) {
+        /* Pass slot addresses to mark_slot_v1 so cheney can forward
+         * young children + rewrite the slot. mark_payload would only
+         * mark via the headerful path — broken under CHENEY mode. */
         for (i = 0; i < list->len; i++) {
-            void *child = NULL;
-            memcpy(&child, list->data + ((size_t)i * list->elem_size), sizeof(child));
-            if (child != NULL) {
-                osty_gc_mark_payload(child);
-            }
+            osty_gc_mark_slot_v1((void *)(list->data + ((size_t)i * list->elem_size)));
         }
         return;
     }
@@ -4368,11 +4367,7 @@ static void osty_rt_list_trace(void *payload) {
     for (i = 0; i < list->len; i++) {
         unsigned char *elem = list->data + ((size_t)i * list->elem_size);
         for (j = 0; j < list->gc_offset_count; j++) {
-            void *child = NULL;
-            memcpy(&child, elem + (size_t)list->gc_offsets[j], sizeof(child));
-            if (child != NULL) {
-                osty_gc_mark_payload(child);
-            }
+            osty_gc_mark_slot_v1((void *)(elem + (size_t)list->gc_offsets[j]));
         }
     }
 }
@@ -10411,7 +10406,11 @@ void *osty_gc_alloc_pinned_v1(int64_t object_kind, int64_t byte_size, const char
 }
 
 static void osty_rt_enum_ptr_payload_trace(void *payload) {
-    osty_gc_mark_root_slot(payload);
+    /* `payload` IS the slot — the box's payload is a single
+     * pointer-sized slot holding the inner managed pointer.
+     * `mark_slot_v1` dispatches by current trace_slot_mode so the
+     * cheney path can forward young inners + rewrite the slot. */
+    osty_gc_mark_slot_v1(payload);
 }
 
 /* Phase A4 depth (RUNTIME_GC_DELTA §2.4). Trace callback for closure
@@ -14061,12 +14060,15 @@ static void osty_rt_chan_trace(void *payload) {
         !osty_gc_chan_elem_kind_is_managed(ch->elem_kind)) {
         return;
     }
+    /* Pass slot ADDRESSES to mark_slot_v1 (not pre-loaded payloads
+     * to mark_payload) so the cheney path can forward young
+     * children + rewrite the slot. The slots are int64_t (8 bytes)
+     * holding ptr-cast values; on 64-bit systems mark_slot_v1's
+     * `memcpy(&payload, slot_addr, sizeof(void *))` reads exactly
+     * the 8-byte slot. */
     for (i = 0; i < ch->count; i++) {
         int64_t idx = (ch->head + i) % ch->cap;
-        void *child = (void *)(uintptr_t)ch->slots[idx];
-        if (child != NULL) {
-            osty_gc_mark_payload(child);
-        }
+        osty_gc_mark_slot_v1((void *)&ch->slots[idx]);
     }
 }
 
