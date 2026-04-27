@@ -5373,15 +5373,32 @@ static int64_t osty_gc_compact_major_with_stack_roots(
 
     snapshots = osty_gc_forwarding_snapshot_take(&snapshot_count);
     osty_gc_forwarding_clear();
+    /* Fused sweep + clone walk: WHITE → destroy + unlink + reclaim
+     * (caller no longer runs a separate sweep loop). BLACK → reset
+     * colour for the next cycle and, when movable, clone into the
+     * OLD bump region so subsequent remap/replace passes can swap
+     * the original out. Saving `next` before `osty_gc_unlink`
+     * mirrors the previous standalone sweep pattern. */
     header = osty_gc_objects;
     while (header != NULL) {
-        if (osty_gc_header_is_movable(header)) {
-            osty_gc_header *clone = osty_gc_clone_header(header);
-            osty_gc_forwarding_insert(header->payload, clone);
-            moved += 1;
-            moved_bytes += header->byte_size;
+        next = header->next;
+        if (header->color == OSTY_GC_COLOR_WHITE) {
+            osty_gc_swept_count_total += 1;
+            osty_gc_swept_bytes_total += header->byte_size;
+            osty_gc_dispatch_destroy(header);
+            osty_gc_unlink(header);
+            osty_gc_reclaim_swept_header(header);
+        } else {
+            header->color = OSTY_GC_COLOR_WHITE;
+            header->marked = false;
+            if (osty_gc_header_is_movable(header)) {
+                osty_gc_header *clone = osty_gc_clone_header(header);
+                osty_gc_forwarding_insert(header->payload, clone);
+                moved += 1;
+                moved_bytes += header->byte_size;
+            }
         }
-        header = header->next;
+        header = next;
     }
     if (moved == 0) {
         osty_gc_forwarding_retain_history(snapshots, snapshot_count);
@@ -5423,23 +5440,23 @@ static int64_t osty_gc_compact_major_with_stack_roots(
         osty_gc_remap_slot(osty_gc_global_root_slots[i]);
     }
 
-    header = osty_gc_objects;
-    while (header != NULL) {
-        osty_gc_header *current = osty_gc_forwarding_lookup(header->payload);
-        if (current == NULL) {
-            current = header;
-        }
-        osty_gc_remap_header_payload(current);
-        header = header->next;
-    }
-    osty_gc_remap_young_arena_payloads();
-
+    /* Fused remap + replace walk. For each surviving header in the
+     * LL: remap the canonical (clone if forwarded, else original) so
+     * its payload pointers point at the post-compact addresses; if a
+     * clone exists, splice it into the LL position and release the
+     * original's storage. Used to be two separate passes —
+     * `osty_gc_replace_header` does not modify `old_header->next/prev`,
+     * so the iterator's pre-saved `next` stays valid across the
+     * splice + release. */
     header = osty_gc_objects;
     while (header != NULL) {
         next = header->next;
         {
             osty_gc_header *replacement =
                 osty_gc_forwarding_lookup(header->payload);
+            osty_gc_header *current =
+                replacement != NULL ? replacement : header;
+            osty_gc_remap_header_payload(current);
             if (replacement != NULL) {
                 osty_gc_replace_header(header, replacement);
                 osty_gc_release_replaced_header(header);
@@ -5447,6 +5464,7 @@ static int64_t osty_gc_compact_major_with_stack_roots(
         }
         header = next;
     }
+    osty_gc_remap_young_arena_payloads();
     osty_gc_forwarding_retain_history(snapshots, snapshot_count);
     free(snapshots);
     osty_gc_bump_recycle_empty_blocks(
@@ -5495,31 +5513,46 @@ static int64_t osty_gc_compact_minor_with_stack_roots(
     osty_gc_forwarding_clear();
     osty_gc_survivor_bump_current = NULL;
     osty_gc_survivor_tlab_current = NULL;
+    /* Fused sweep + clone walk over the young gen list. WHITE → free
+     * via the standard sweep helpers; BLACK → reset colour and, when
+     * movable, evacuate to survivor or old bump depending on the
+     * promote age. Caller no longer runs a separate sweep loop. */
     header = osty_gc_young_head;
     while (header != NULL) {
-        if (osty_gc_header_is_movable(header)) {
-            bool will_promote = (int64_t)header->age + 1 >= promote_age;
-            osty_gc_header *clone = osty_gc_clone_header_to_bump_region(
-                header,
-                will_promote ? OSTY_GC_STORAGE_BUMP_OLD
-                             : OSTY_GC_STORAGE_BUMP_SURVIVOR,
-                will_promote ? &osty_gc_old_bump_blocks
-                             : &osty_gc_survivor_bump_blocks,
-                will_promote ? &osty_gc_old_bump_current
-                             : &osty_gc_survivor_bump_current,
-                will_promote ? &osty_gc_old_bump_block_count
-                             : &osty_gc_survivor_bump_block_count,
-                will_promote ? &osty_gc_old_bump_block_bytes_total
-                             : &osty_gc_survivor_bump_block_bytes_total,
-                will_promote ? &osty_gc_old_bump_alloc_count_total
-                             : &osty_gc_survivor_bump_alloc_count_total,
-                will_promote ? &osty_gc_old_bump_alloc_bytes_total
-                             : &osty_gc_survivor_bump_alloc_bytes_total);
-            osty_gc_forwarding_insert(header->payload, clone);
-            moved += 1;
-            moved_bytes += header->byte_size;
+        next = header->next_gen;
+        if (header->color == OSTY_GC_COLOR_WHITE) {
+            osty_gc_swept_count_total += 1;
+            osty_gc_swept_bytes_total += header->byte_size;
+            osty_gc_dispatch_destroy(header);
+            osty_gc_unlink(header);
+            osty_gc_reclaim_swept_header(header);
+        } else {
+            header->color = OSTY_GC_COLOR_WHITE;
+            header->marked = false;
+            if (osty_gc_header_is_movable(header)) {
+                bool will_promote = (int64_t)header->age + 1 >= promote_age;
+                osty_gc_header *clone = osty_gc_clone_header_to_bump_region(
+                    header,
+                    will_promote ? OSTY_GC_STORAGE_BUMP_OLD
+                                 : OSTY_GC_STORAGE_BUMP_SURVIVOR,
+                    will_promote ? &osty_gc_old_bump_blocks
+                                 : &osty_gc_survivor_bump_blocks,
+                    will_promote ? &osty_gc_old_bump_current
+                                 : &osty_gc_survivor_bump_current,
+                    will_promote ? &osty_gc_old_bump_block_count
+                                 : &osty_gc_survivor_bump_block_count,
+                    will_promote ? &osty_gc_old_bump_block_bytes_total
+                                 : &osty_gc_survivor_bump_block_bytes_total,
+                    will_promote ? &osty_gc_old_bump_alloc_count_total
+                                 : &osty_gc_survivor_bump_alloc_count_total,
+                    will_promote ? &osty_gc_old_bump_alloc_bytes_total
+                                 : &osty_gc_survivor_bump_alloc_bytes_total);
+                osty_gc_forwarding_insert(header->payload, clone);
+                moved += 1;
+                moved_bytes += header->byte_size;
+            }
         }
-        header = header->next_gen;
+        header = next;
     }
     if (moved == 0) {
         osty_gc_forwarding_retain_history(snapshots, snapshot_count);
@@ -5561,23 +5594,23 @@ static int64_t osty_gc_compact_minor_with_stack_roots(
         osty_gc_remap_slot(osty_gc_global_root_slots[i]);
     }
 
-    header = osty_gc_objects;
-    while (header != NULL) {
-        osty_gc_header *current = osty_gc_forwarding_lookup(header->payload);
-        if (current == NULL) {
-            current = header;
-        }
-        osty_gc_remap_header_payload(current);
-        header = header->next;
-    }
-    osty_gc_remap_young_arena_payloads();
-
+    /* Fused remap + replace walk. For each surviving header in the
+     * LL: remap the canonical (clone if forwarded, else original) so
+     * its payload pointers point at the post-compact addresses; if a
+     * clone exists, splice it into the LL position and release the
+     * original's storage. Used to be two separate passes —
+     * `osty_gc_replace_header` does not modify `old_header->next/prev`,
+     * so the iterator's pre-saved `next` stays valid across the
+     * splice + release. */
     header = osty_gc_objects;
     while (header != NULL) {
         next = header->next;
         {
             osty_gc_header *replacement =
                 osty_gc_forwarding_lookup(header->payload);
+            osty_gc_header *current =
+                replacement != NULL ? replacement : header;
+            osty_gc_remap_header_payload(current);
             if (replacement != NULL) {
                 osty_gc_replace_header(header, replacement);
                 osty_gc_release_replaced_header(header);
@@ -5585,6 +5618,7 @@ static int64_t osty_gc_compact_minor_with_stack_roots(
         }
         header = next;
     }
+    osty_gc_remap_young_arena_payloads();
     osty_gc_forwarding_retain_history(snapshots, snapshot_count);
     free(snapshots);
     osty_gc_bump_recycle_empty_blocks(
@@ -5671,7 +5705,6 @@ static void osty_gc_remembered_edges_compact_after_minor(void) {
  * forwarding table so stale payload pointers can still resolve. */
 static void osty_gc_collect_major_with_stack_roots(void *const *root_slots, int64_t root_slot_count) {
     osty_gc_header *header;
-    osty_gc_header *next;
     int64_t i;
     int64_t t_start;
     int64_t t_end;
@@ -5709,24 +5742,10 @@ static void osty_gc_collect_major_with_stack_roots(void *const *root_slots, int6
     }
     /* 4. Drain the work queue iteratively. */
     osty_gc_mark_drain();
-    /* 5. Sweep unreachable across both generations. Survivors get
-     *    their colour reset to WHITE so the next cycle starts from a
-     *    clean slate. */
-    header = osty_gc_objects;
-    while (header != NULL) {
-        next = header->next;
-        if (header->color == OSTY_GC_COLOR_WHITE) {
-            osty_gc_swept_count_total += 1;
-            osty_gc_swept_bytes_total += header->byte_size;
-            osty_gc_dispatch_destroy(header);
-            osty_gc_unlink(header);
-            osty_gc_reclaim_swept_header(header);
-        } else {
-            header->color = OSTY_GC_COLOR_WHITE;
-            header->marked = false;
-        }
-        header = next;
-    }
+    /* 5. Sweep + compact in a single fused walk. The compact's first
+     *    walk now also frees WHITE headers and resets surviving BLACK
+     *    colours, which used to be a separate sweep pass over
+     *    `osty_gc_objects`. Halves the post-mark heap-walk count. */
     (void)osty_gc_compact_major_with_stack_roots(root_slots, root_slot_count);
     osty_gc_collection_count += 1;
     osty_gc_major_count += 1;
@@ -5813,24 +5832,11 @@ static void osty_gc_collect_minor_with_stack_roots(void *const *root_slots, int6
     /* 5. Drain. */
     osty_gc_mark_drain();
     osty_gc_minor_in_progress = false;
-    /* 6. Sweep YOUNG unreachable; promote YOUNG survivors whose age
-     *    reaches the threshold. We walk the young list exclusively —
-     *    OLD is never touched by a minor. */
-    header = osty_gc_young_head;
-    while (header != NULL) {
-        next = header->next_gen;
-        if (header->color == OSTY_GC_COLOR_WHITE) {
-            osty_gc_swept_count_total += 1;
-            osty_gc_swept_bytes_total += header->byte_size;
-            osty_gc_dispatch_destroy(header);
-            osty_gc_unlink(header);
-            osty_gc_reclaim_swept_header(header);
-        } else {
-            header->color = OSTY_GC_COLOR_WHITE;
-            header->marked = false;
-        }
-        header = next;
-    }
+    /* 6. Sweep + compact YOUNG in a single fused walk. The compact's
+     *    first walk now also frees WHITE young headers and resets
+     *    surviving BLACK colours, replacing what used to be a separate
+     *    sweep loop over `osty_gc_young_head`. The promote/age pass
+     *    below still iterates the post-compact young list. */
     (void)osty_gc_compact_minor_with_stack_roots(
         root_slots, root_slot_count, promote_age);
     header = osty_gc_young_head;
@@ -5965,15 +5971,11 @@ static void osty_gc_auto_drive_incremental(void *const *root_slots, int64_t root
         osty_gc_incremental_steps_total += 1;
         osty_gc_incremental_work_total += done;
         if (osty_gc_mark_stack_count == 0) {
-            /* Cycle done — finish it inline. */
+            /* Cycle done — finish it inline. compact_major's first
+             * walk now fuses the sweep, so no separate
+             * `osty_gc_incremental_sweep()` call is needed when we
+             * compact. */
             osty_gc_state = OSTY_GC_STATE_SWEEPING;
-            osty_gc_incremental_sweep();
-            /* Phase D: after sweep, evacuate movable survivors and
-             * remap stack/global/object slots so an incremental major
-             * delivers the same forwarding semantics as the STW major
-             * path at line 3388. Without this, OSTY_GC_INCREMENTAL=1
-             * silently bypasses Phase D compaction — a regression the
-             * doc-claim ✅ did not actually deliver. */
             (void)osty_gc_compact_major_with_stack_roots(
                 root_slots, root_slot_count);
             osty_gc_collection_count += 1;
@@ -6169,15 +6171,21 @@ static void osty_gc_collect_incremental_finish_locked(
      * dropped new greys on us between the last step and this call. */
     (void)osty_gc_mark_drain_budget(0);
     osty_gc_state = OSTY_GC_STATE_SWEEPING;
-    osty_gc_incremental_sweep();
     if (compact) {
         /* Phase D: incremental major matches STW major — evacuate
          * movable survivors and remap every slot the STW path would
          * remap. Safety: SWEEPING state plus the lock, no mutator
          * barrier mid-flight, compact_major never re-enters the
-         * mark queue. */
+         * mark queue. compact_major's first walk fuses the sweep, so
+         * no separate sweep call is needed on this branch. */
         (void)osty_gc_compact_major_with_stack_roots(
             root_slots, root_slot_count);
+    } else {
+        /* No-stack-roots / concurrent finish path: compaction is
+         * unsafe (parked-thread frames not visible). Run the
+         * standalone sweep so WHITEs still get destroyed and reclaimed
+         * even though no evacuation happens this cycle. */
+        osty_gc_incremental_sweep();
     }
     osty_gc_collection_count += 1;
     osty_gc_major_count += 1;
