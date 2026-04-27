@@ -114,7 +114,7 @@ const (
 // CurrentEdition is the spec version the scaffolder records in
 // osty.toml when Options.Edition is empty. Kept in sync with the
 // language spec directory name in the repo root.
-const CurrentEdition = "0.4"
+const CurrentEdition = "0.5"
 
 // Options configures a scaffold run.
 type Options struct {

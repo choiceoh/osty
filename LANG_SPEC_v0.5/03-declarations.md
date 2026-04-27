@@ -564,9 +564,9 @@ same outputs as a vectorized one.
 
 | Arg | Form | Default | LLVM property | Effect |
 |---|---|---|---|---|
-| `scalable` | flag | absent | `llvm.loop.vectorize.scalable.enable=true` | Prefer scalable vector ISAs (ARM SVE, RISC-V RVV) over fixed-width (NEON) on targets that support both |
+| `scalable` | flag | absent | `llvm.loop.vectorize.scalable.enable=true` | Prefer scalable vector ISAs (ARM SVE, RISC-V RVV) over fixed-width (NEON) on targets that support both. macOS/iOS aarch64 do not expose SVE, so Apple Silicon falls back to fixed-width NEON even when this hint is present |
 | `predicate` | flag | absent | `llvm.loop.vectorize.predicate.enable=true` | Enable tail folding — process trip counts that are not a multiple of the vector width via masked ops instead of a scalar tail loop. Biggest win on SVE / AVX-512 / RVV with native mask registers |
-| `width` | `width = <1..1024>` | compiler chooses | `llvm.loop.vectorize.width, i32 N` | Force a specific vectorization factor. Unlocks AVX-512 ZMM registers on Intel, where the default cost model otherwise prefers 256-bit YMM because of historical downclocking. Note: the LLVM cost model may still override this hint; use `-mllvm -force-vector-width=N` at the build-time flag level when the override is required |
+| `width` | `width = <1..1024>` | compiler chooses | `llvm.loop.vectorize.width, i32 N` | Force a specific vectorization factor. Can unlock AVX-512 ZMM registers on Intel, where the default cost model otherwise prefers 256-bit YMM because of historical downclocking. The LLVM cost model may still override this hint; use `-mllvm -force-vector-width=N` at the build-time flag level when the override is required. Future target profiles may inject that flag for AVX-512 server presets |
 
 ```osty
 // Default: no annotation needed. Every loop gets vectorize metadata
@@ -605,9 +605,10 @@ with `E0739` (`CodeAnnotationBadArg`).
 
 Scope rules:
 
-- The hint is **function-scoped**. A loop in an unannotated sibling
-  function receives no metadata even when the two functions live in
-  the same module.
+- The tuning arguments are **function-scoped**. Every function receives
+  the default vectorize metadata unless it carries `#[no_vectorize]`,
+  but `scalable`, `predicate`, and `width = N` apply only to loops in
+  the function where `#[vectorize(...)]` appears.
 - Only loops originating from a user-written `for` statement carry the
   hint. Loops synthesized by the compiler (e.g. the per-iteration
   scaffold inside `testing.benchmark`, or the key-snapshot traversal

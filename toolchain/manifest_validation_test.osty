@@ -96,7 +96,7 @@ fn testManifestValidationExamplesEmitDiagnosticSpecs() {
     testing.assertEq(diagnostics[1].code, "E2015")
     testing.assertEq(diagnostics[1].line, 12)
     testing.assertEq(diagnostics[2].severity, "warning")
-    testing.assertEq(diagnostics[2].hint, "add edition = \"0.4\" to pin the spec version")
+    testing.assertEq(diagnostics[2].hint, "add edition = \"0.5\" to pin the spec version")
     testing.assertEq(diagnostics[3].line, 30)
     testing.assertEq(diagnostics[4].line, 40)
     testing.assertEq(diagnostics[5].message, "dependencies.bad has invalid version requirement \"1.*.3\"")
@@ -128,7 +128,7 @@ fn testManifestValidationExamplesCheckProfiles() {
         manifestProfileSpec("b", "a", false, 0),
     ]
     let spec = manifestSpec(
-        manifestPackageSpec(true, "demo", "1.2.3", "0.4"),
+        manifestPackageSpec(true, "demo", "1.2.3", "0.5"),
         manifestWorkspaceSpec(false, []),
         profiles,
         [],
@@ -146,7 +146,7 @@ fn testManifestValidationExamplesCheckProfiles() {
 
 fn testManifestValidationExamplesCheckTargetTriples() {
     let spec = manifestSpec(
-        manifestPackageSpec(true, "demo", "1.2.3", "0.4"),
+        manifestPackageSpec(true, "demo", "1.2.3", "0.5"),
         manifestWorkspaceSpec(false, []),
         [],
         [
@@ -181,7 +181,7 @@ fn testManifestValidationExamplesCheckDependencyRequirements() {
     testing.assert(!(manifestVersionReqValid("^")))
 
     let spec = manifestSpecWithDeps(
-        manifestPackageSpec(true, "demo", "1.2.3", "0.4"),
+        manifestPackageSpec(true, "demo", "1.2.3", "0.5"),
         manifestWorkspaceSpec(false, []),
         [
             manifestDependencySpec("ok", "^1.0", "", ""),
@@ -204,7 +204,7 @@ fn testManifestValidationExamplesCheckDependencyRequirements() {
 
 fn testManifestValidationExamplesComposeFeatureGraph() {
     let spec = manifestSpec(
-        manifestPackageSpec(true, "demo", "1.2.3", "0.4"),
+        manifestPackageSpec(true, "demo", "1.2.3", "0.5"),
         manifestWorkspaceSpec(false, []),
         [],
         [],
