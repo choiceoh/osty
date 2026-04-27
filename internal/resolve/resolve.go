@@ -94,6 +94,9 @@ func newStdlibOnlyWorkspace(stdlib StdlibProvider) *Workspace {
 // passes across every package separately so that cross-package member
 // lookups succeed regardless of iteration order.
 func ResolvePackage(pkg *Package, prelude *Scope) *PackageResult {
+	if canResolveViaNative(pkg) {
+		return resolvePackageViaNative(pkg, prelude)
+	}
 	r := newPkgResolver(pkg, prelude)
 	r.declarePass(pkg)
 	r.bodyPass(pkg)
@@ -101,6 +104,18 @@ func ResolvePackage(pkg *Package, prelude *Scope) *PackageResult {
 		PackageScope: pkg.PkgScope,
 		Diags:        r.diags,
 	}
+}
+
+func canResolveViaNative(pkg *Package) bool {
+	if len(pkg.Files) == 0 {
+		return false
+	}
+	for _, pf := range pkg.Files {
+		if len(pf.Source) == 0 && len(pf.CanonicalSource) == 0 && pf.File != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // newPkgResolver initializes shared resolver state for a package walk.
