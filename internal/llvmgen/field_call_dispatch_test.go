@@ -1513,6 +1513,75 @@ fn tally(m: Map<String, Int>, k: String) {
 	}
 }
 
+func TestGenerateMapGetOrInsertLocksLookupAndInsert(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn upsert(m: Map<String, Int>, k: String) -> Int {
+    m.getOrInsert(k, 7)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_get_or_insert.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare void @osty_rt_map_lock(ptr)",
+		"declare void @osty_rt_map_unlock(ptr)",
+		"call void @osty_rt_map_lock(",
+		"call i1 @osty_rt_map_get_string(",
+		"call void @osty_rt_map_insert_string(",
+		"call void @osty_rt_map_unlock(",
+		"= phi i64 [",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "osty_rt_map_get_or_abort_string") {
+		t.Fatalf("getOrInsert wrongly routed through legacy get_or_abort:\n%s", got)
+	}
+}
+
+func TestGenerateMapGetOrInsertWithCallsSupplierOnlyOnMiss(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn makeDefault() -> Int {
+    7
+}
+
+fn upsert(m: Map<String, Int>, k: String) -> Int {
+    m.getOrInsertWith(k, makeDefault)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_get_or_insert_with.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call void @osty_rt_map_lock(",
+		"call i1 @osty_rt_map_get_string(",
+		"__osty_closure_thunk_makeDefault",
+		"= call i64 (ptr)",
+		"call void @osty_rt_map_insert_string(",
+		"call void @osty_rt_map_unlock(",
+		"= phi i64 [",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	getIdx := strings.Index(got, "call i1 @osty_rt_map_get_string(")
+	callIdx := strings.Index(got, "= call i64 (ptr)")
+	insertIdx := strings.Index(got, "call void @osty_rt_map_insert_string(")
+	if getIdx < 0 || callIdx < 0 || insertIdx < 0 || !(getIdx < callIdx && callIdx < insertIdx) {
+		t.Fatalf("supplier must run after miss-check get and before insert (get=%d call=%d insert=%d):\n%s", getIdx, callIdx, insertIdx, got)
+	}
+}
+
 // TestGenerateMapMergeWithCombinesOnCollision locks the mergeWith
 // shape: new map allocation, two-pass snapshot iteration (copy self,
 // then merge other with combine-on-collision), and the get+branch-on-

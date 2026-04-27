@@ -28,9 +28,12 @@ fn demoMapMutate(tokens: List<String>) -> Map<String, Int> {
         counts.update(t, |n| (n ?? 0) + 1)
     }
 
+    let eager = counts.getOrInsert("missing", 1)
+    let lazy = counts.getOrInsertWith("computed", || 2)
     let patch: Map<String, Int> = {:}
     counts.insertAll(patch)
     counts.retainIf(|_k, v| v > 0)
+    let _ = (eager, lazy)
     counts
 }
 

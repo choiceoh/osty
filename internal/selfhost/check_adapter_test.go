@@ -662,6 +662,40 @@ func TestCheckSourceStructuredAcceptsStdListMethods(t *testing.T) {
 	}
 }
 
+func TestCheckSourceStructuredAcceptsStdMapUpsertMethods(t *testing.T) {
+	src := []byte(`fn makeDefault() -> Int {
+    42
+}
+
+fn main() {
+    let mut counts: Map<String, Int> = {:}
+    let eager: Int = counts.getOrInsert("a", 1)
+    let lazy: Int = counts.getOrInsertWith("b", makeDefault)
+
+    let _ = (eager, lazy, counts)
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+
+	got := map[string]string{}
+	for _, binding := range checked.Bindings {
+		got[binding.Name] = binding.Type.String()
+	}
+	want := map[string]string{
+		"eager": "Int",
+		"lazy":  "Int",
+	}
+	for name, wantType := range want {
+		if got[name] != wantType {
+			t.Fatalf("binding type for %s = %q, want %q (all=%v)", name, got[name], wantType, got)
+		}
+	}
+}
+
 func TestCheckSourceStructuredAcceptsDerivedStructEnumEqualHashableBounds(t *testing.T) {
 	src := []byte(`struct Point {
     x: Int

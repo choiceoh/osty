@@ -36562,8 +36562,12 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	// Osty: /tmp/selfhost_merged.osty:16465:5
 	tFnV_R_map := tyFn(tys, []int{tV}, tR_map)
 	_ = tFnV_R_map
+	tFnUnitV := tyFn(tys, make([]int, 0, 1), tV)
+	_ = tFnUnitV
 	// Osty: /tmp/selfhost_merged.osty:16466:5
 	checkRegisterFn(env, &CheckFnSig{name: "getOr", owner: "Map", receiverTy: tMapKV, retTy: tV, paramNames: []string{"key", "default"}, paramTys: []int{tK, tV}, generics: []string{"K", "V"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "getOrInsert", owner: "Map", receiverTy: tMapKV, retTy: tV, paramNames: []string{"key", "default"}, paramTys: []int{tK, tV}, generics: []string{"K", "V"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "getOrInsertWith", owner: "Map", receiverTy: tMapKV, retTy: tV, paramNames: []string{"key", "make"}, paramTys: []int{tK, tFnUnitV}, generics: []string{"K", "V"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16471:5
 	checkRegisterFn(env, &CheckFnSig{name: "update", owner: "Map", receiverTy: tMapKV, retTy: tUnit(tys), paramNames: []string{"key", "f"}, paramTys: []int{tK, tFnOptV_V}, generics: []string{"K", "V"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16476:5

@@ -70,8 +70,8 @@
 //     for the future dispatcher that decides whether a given callsite
 //     should route to monomorphization or intrinsic.
 //
-// Tests in `stdlib_method_lookup_test.go` pin the registry has all
-// six Map canonical helpers plus Option's isSome/isNone, so a stdlib
+// Tests in `stdlib_method_lookup_test.go` pin the registry has the
+// Map canonical helpers plus Option's isSome/isNone, so a stdlib
 // refactor that drops one surfaces here immediately.
 package llvmgen
 
@@ -92,6 +92,8 @@ import (
 var MapCanonicalHelperNames = []string{
 	"containsKey",
 	"getOr",
+	"getOrInsert",
+	"getOrInsertWith",
 	"update",
 	"mergeWith",
 	"mapValues",
