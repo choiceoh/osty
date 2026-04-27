@@ -299,7 +299,7 @@ pub fn validateManifestDiagnostics(spec: ManifestSpec) -> List<ManifestDiagnosti
                 "E2011",
                 "[package] missing `edition`; defaulting to {manifestCurrentEdition()}",
                 spec.pkg.tableLine,
-                "add edition = \"0.4\" to pin the spec version",
+                "add edition = \"0.5\" to pin the spec version",
             ))
         } else if !(manifestEditionKnown(spec.pkg.edition)) {
             out.push(manifestError(
@@ -399,7 +399,7 @@ pub fn manifestPackageVersionValid(version: String) -> Bool {
 }
 
 pub fn manifestEditionKnown(edition: String) -> Bool {
-    edition == "0.3" || edition == "0.4"
+    edition == "0.3" || edition == "0.4" || edition == "0.5"
 }
 
 pub fn manifestTargetTripleValid(triple: String) -> Bool {
@@ -510,11 +510,11 @@ fn manifestLine(line: Int) -> Int {
 }
 
 fn manifestCurrentEdition() -> String {
-    "0.4"
+    "0.5"
 }
 
 fn manifestKnownEditionsText() -> String {
-    "0.3, 0.4"
+    "0.3, 0.4, 0.5"
 }
 
 fn manifestProfileDiagnostics(

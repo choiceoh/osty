@@ -19,8 +19,9 @@
 vectorize 가 default-ON 이 됐고, `#[no_vectorize]` 로만 opt-out.
 `#[vectorize(width=N, scalable, predicate)]` 는 tuning args, `#[parallel]`
 와 `#[unroll]` 은 별개 opt-in 힌트. Safepoint poll blocker 해소됨
-(§3.8.6 공통 GC contract). 남은 gap 은 iterator-protocol 루프 커버리지와
-AVX-512 cost model 우회 문서화.
+(§3.8.6 공통 GC contract). AVX-512 cost-model 우회와 Apple Silicon
+SVE fallback 은 §3.8.3 에 문서화 완료. 남은 gap 은 iterator-protocol
+루프 커버리지뿐이다.
 
 1. ~~**Safepoint poll hoisting.**~~ **해소됨 (A5).** `#[vectorize]` /
    `#[parallel]` / `#[unroll]` 중 하나라도 붙은 함수는
@@ -49,21 +50,21 @@ AVX-512 cost model 우회 문서화.
    `Iterable<T>` 프로토콜을 구현하는 타입들 중 countable 가능한 것들
    (예: `Array`, `Slice`) 에 한해 index-driven lowering 으로 전환하는
    것. 언어 쪽 스펙은 그대로 둔다 — 어디까지나 backend 구현 선택지.
-3. **AVX-512 cost model 우회.** `#[vectorize(width = 8)]` 가 i64 loop
+3. ~~**AVX-512 cost model 우회 문서화.**~~ **해소됨.** `#[vectorize(width = 8)]` 가 i64 loop
    에 걸려도 LLVM 의 x86 cost model 이 historically downclocking
    penalty 때문에 256-bit YMM 만 선택하는 경우가 있다 (실측: width=8
    요청했으나 vectorizer 가 width=4 선택, ZMM 미사용). 사용자가
    `-mllvm -force-vector-width=8` build-time flag 로 override 할 수
-   있으며 §3.8.3 표 각주에 명시. 향후 `osty build` 가 target profile
-   (예: `--target x86_64-avx512-server`) 에서 이 flag 를 자동 주입하는
-   manifest 단축키를 제공하는 것이 이 gap 의 자연스러운 해소.
-4. **SVE on Linux aarch64.** `#[vectorize(scalable)]` + `-mcpu=neoverse-v1`
+   있음을 §3.8.3 `width` 행에 명시했다. 향후 `osty build` 가 target
+   profile (예: `--target x86_64-avx512-server`) 에서 이 flag 를 자동
+   주입하는 manifest 단축키를 제공하는 것은 별도 target-profile 개선
+   작업으로 추적한다.
+4. ~~**SVE / Apple Silicon target caveat 문서화.**~~ **해소됨.** `#[vectorize(scalable)]` + `-mcpu=neoverse-v1`
    조합이 `vscale x 8` SVE 루프 + 45 개 `z<N>.d` 명령을 생성하는 것을
    실측 확인. 그러나 **macOS/iOS aarch64 는 SVE 를 ISA 로 노출하지
    않으므로** (Apple Silicon 은 NEON 만) scalable hint 가 NEON 2-wide
-   로 폴백한다. 이건 hardware 한계이지 gap 이 아니므로 별도 작업
-   항목 없음. 문서화만 필요 — §3.8.3 표의 scalable 행에 "Apple
-   Silicon 은 NEON 폴백" 각주 추가.
+   로 폴백한다. 이건 hardware 한계이지 gap 이 아니며, §3.8.3
+   `scalable` 행에 Apple Silicon fallback 을 명시했다.
 
 향후 gap 을 닫을 때 같은 entry 에 해결 요지 + 관련 PR 을 기록한다.
 

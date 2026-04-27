@@ -70,7 +70,7 @@ tolerated for forward-compatibility with future additions.
 [package]                        # required unless [workspace] is present
 name        = "myapp"            # required; [A-Za-z_][A-Za-z0-9_-]*
 version     = "0.1.0"            # required; strict semver X.Y.Z[-pre][+build]
-edition     = "0.4"              # required; must be a known spec version
+edition     = "0.5"              # required; must be a known spec version
 description = "A short blurb."   # optional
 authors     = ["Alice <a@x>"]    # optional
 license     = "MIT"              # optional (SPDX identifier recommended)

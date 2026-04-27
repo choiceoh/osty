@@ -160,10 +160,10 @@ under v0.5 grammar. Code that wants to opt in today can do so for
 the **shipped** list above; anything under "Not yet shipped" is a
 spec-level commitment, not a usable surface, until regen lands.
 
-The project edition remains `edition = "0.4"` in `osty.toml` — there
-is no `edition = "0.5"` yet because several of the shipped forms
-(scoped imports, `pub use`, `#[cfg]`, `#[test]`) are grammar-additive
-and readable by 0.4 tooling.
+The project edition is now `edition = "0.5"` in newly scaffolded
+`osty.toml` files. Manifest validation keeps accepting historical
+`0.3` and `0.4` projects so existing workspaces can migrate
+incrementally.
 
 ## Implementation history
 

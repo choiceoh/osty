@@ -15,11 +15,11 @@ declared packages, API documentation generation (`osty doc`), CI quality
 tooling (`osty ci`), profile/target/feature/cache inspection commands, and a
 package manager (`osty add` / `osty update` / `osty publish`) backed by a
 file-backed HTTP registry server for local/private registries. The repository
-tracks spec/grammar work in v0.5, but the shipped manifest/scaffolder path is
-still pinned to edition v0.4 today (`osty new` / `osty init` write
-`edition = "0.4"`, and checked-in fixtures still exercise legacy v0.3/v0.4
-inputs). The next work is native implementation/runtime coverage. The public
-compiler path is now native-only through the LLVM backend.
+tracks spec/grammar work in v0.5, and the shipped manifest/scaffolder path now
+defaults new projects to `edition = "0.5"` while manifest validation continues
+to accept legacy `0.3` / `0.4` inputs for existing projects. The next work is
+native implementation/runtime coverage. The public compiler path is now
+native-only through the LLVM backend.
 
 ## Status
 
@@ -31,7 +31,7 @@ compiler path is now native-only through the LLVM backend.
 | Diagnostics (`error[E0002]:` with caret, hints, notes) | done |
 | Name resolution (single + multi-file, workspace, typo suggestions) | done |
 | Formatter (`internal/format`) | done |
-| Type checker (`internal/check`) | done for the shipped v0.4 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params. Algorithm: bidirectional + local unification, spec in [`LANG_SPEC_v0.5/02a-type-inference.md`](./LANG_SPEC_v0.5/02a-type-inference.md); `osty check --inspect` observes it at runtime |
+| Type checker (`internal/check`) | done for the shipped v0.5 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params. Algorithm: bidirectional + local unification, spec in [`LANG_SPEC_v0.5/02a-type-inference.md`](./LANG_SPEC_v0.5/02a-type-inference.md); `osty check --inspect` observes it at runtime |
 | Linter (`internal/lint`, 28 codes across L0001–L0070 spanning unused / dead-code / naming / simplify / complexity / docs, `--fix` / `--fix-dry-run`, policy via `[lint]` in `osty.toml`) | done |
 | Multi-file packages (`resolve` loader/package/workspace) | done |
 | LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by toolchain sources |
@@ -495,7 +495,7 @@ create multi-file binary starters with tests. `--workspace` creates a
 root manifest plus one default member package. `osty new` never
 overwrites an existing directory; `osty init` writes into the current
 directory after checking for conflicting files. The scaffolder currently
-pins `edition = "0.4"`.
+pins `edition = "0.5"`.
 
 `build` / `run` / `test` / `add` / `update` / `fetch`-specific flags
 (after the subcommand):
@@ -737,17 +737,16 @@ regenerations.
 ## Contributing
 
 Spec work in this repo is tracked under **v0.5**
-(`LANG_SPEC_v0.5/`, `OSTY_GRAMMAR_v0.5.md`), but the shipped project
-edition is still **0.4** today: `osty new` / `osty init` write
-`edition = "0.4"`, and manifest validation still accepts the
-historical `0.3` / `0.4` range used by checked-in examples. Future
-surface changes follow the normal versioning process and land in a new
-spec directory. See [`SPEC_GAPS.md`](./SPEC_GAPS.md) for the full
-decision log and [`CHANGELOG_v0.5.md`](./CHANGELOG_v0.5.md) for which
-parts of the v0.5 surface are wired in the CLI today versus still
-waiting on regen. When docs discuss newer surface area, be explicit
-about whether it is a design target or behavior already wired in the
-CLI and tests.
+(`LANG_SPEC_v0.5/`, `OSTY_GRAMMAR_v0.5.md`), and the shipped project
+edition is **0.5** today: `osty new` / `osty init` write
+`edition = "0.5"`, while manifest validation still accepts the
+historical `0.3` / `0.4` range for existing projects. Future surface
+changes follow the normal versioning process and land in a new spec
+directory. See [`SPEC_GAPS.md`](./SPEC_GAPS.md) for the full decision
+log and [`CHANGELOG_v0.5.md`](./CHANGELOG_v0.5.md) for which parts of
+the v0.5 surface are wired in the CLI today versus still waiting on
+regen. When docs discuss newer surface area, be explicit about whether
+it is a design target or behavior already wired in the CLI and tests.
 
 Conventions:
 - Every new error site gets a stable `Exxxx` code in

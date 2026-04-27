@@ -14,7 +14,7 @@ func TestValidateUsesSelfHostedManifestCore(t *testing.T) {
 [package]
 name = "demo"
 version = "1.2.3"
-edition = "0.4"
+edition = "0.5"
 
 [dependencies]
 ok = "^1.0"
@@ -76,7 +76,7 @@ version = "1.2.3"
 	if got := d.PrimaryPos().Line; got != 2 {
 		t.Fatalf("line = %d, want package table line 2", got)
 	}
-	if d.Hint != `add edition = "0.4" to pin the spec version` {
+	if d.Hint != `add edition = "0.5" to pin the spec version` {
 		t.Fatalf("hint = %q", d.Hint)
 	}
 }
@@ -84,7 +84,7 @@ version = "1.2.3"
 func TestParseDefersManifestSemanticsToSelfHostedValidation(t *testing.T) {
 	m, err := Parse([]byte(`
 [package]
-edition = "0.4"
+edition = "0.5"
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestReadRejectsSelfHostedValidationErrors(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ManifestFile)
 	if err := os.WriteFile(path, []byte(`
 [package]
-edition = "0.4"
+edition = "0.5"
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}

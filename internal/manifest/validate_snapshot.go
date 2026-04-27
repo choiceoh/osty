@@ -1224,7 +1224,7 @@ func validateManifestDiagnostics(spec *ManifestSpec) []*ManifestDiagnosticSpec {
 		if spec.pkg.edition == "" {
 			// Osty: /tmp/manifest_validate_core.osty:735:13
 			func() struct{} {
-				out = append(out, manifestWarning("E2011", fmt.Sprintf("[package] missing `edition`; defaulting to %s", ostyToString(manifestCurrentEdition())), spec.pkg.tableLine, "add edition = \"0.4\" to pin the spec version"))
+				out = append(out, manifestWarning("E2011", fmt.Sprintf("[package] missing `edition`; defaulting to %s", ostyToString(manifestCurrentEdition())), spec.pkg.tableLine, "add edition = \"0.5\" to pin the spec version"))
 				return struct{}{}
 			}()
 		} else if !(manifestEditionKnown(spec.pkg.edition)) {
@@ -1525,7 +1525,7 @@ func manifestPackageVersionValid(version string) bool {
 
 // Osty: /tmp/manifest_validate_core.osty:838:5
 func manifestEditionKnown(edition string) bool {
-	return edition == "0.3" || edition == "0.4"
+	return edition == "0.3" || edition == "0.4" || edition == "0.5"
 }
 
 // Osty: /tmp/manifest_validate_core.osty:842:5
@@ -1711,12 +1711,12 @@ func manifestLine(line int) int {
 
 // Osty: /tmp/manifest_validate_core.osty:949:1
 func manifestCurrentEdition() string {
-	return "0.4"
+	return "0.5"
 }
 
 // Osty: /tmp/manifest_validate_core.osty:953:1
 func manifestKnownEditionsText() string {
-	return "0.3, 0.4"
+	return "0.3, 0.4, 0.5"
 }
 
 // Osty: /tmp/manifest_validate_core.osty:957:1
