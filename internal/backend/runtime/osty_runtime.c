@@ -581,6 +581,13 @@ typedef struct osty_rt_chan_impl {
     int64_t *slots;
 } osty_rt_chan_impl;
 
+/* Forward typedef for the task-handle struct; full definition lives
+ * with the rest of the scheduler down below. The cheney_forward /
+ * promote young paths only need the typedef name to cast the void*
+ * payload — the safe-handoff body that touches struct fields lives
+ * next to the full definition. */
+typedef struct osty_rt_task_handle_impl_ osty_rt_task_handle_impl;
+
 typedef struct osty_gc_free_chunk {
     struct osty_gc_free_chunk *next;
     size_t total_size;
@@ -643,9 +650,15 @@ enum {
      * `header->generic_pattern` byte). Lets `osty_rt_enum_alloc_ptr_v1`
      * route through the no-header young arena: the trace
      * (`osty_rt_enum_ptr_payload_trace`) follows a single managed
-     * pointer payload, and there's no destroy callback. The other
-     * GENERIC patterns (NONE, TASK_HANDLE) keep using OSTY_GC_KIND_GENERIC. */
+     * pointer payload, and there's no destroy callback. */
     OSTY_GC_KIND_GENERIC_ENUM_PTR = 1031,
+    /* Same split for TASK_HANDLE so cheney's young dispatch can find
+     * the destroy + safe-handoff via the kind table. The destroy
+     * tears down the embedded mutex + condvar, so the safe-clone
+     * pattern (re-init dst's sync, destroy src's) is required at
+     * cheney_forward / promote_young_to_old. The remaining GENERIC
+     * pattern (NONE) keeps using OSTY_GC_KIND_GENERIC. */
+    OSTY_GC_KIND_GENERIC_TASK_HANDLE = 1032,
 };
 
 /* Phase 1 of the tiny-tag young space landing: a per-kind descriptor table
@@ -682,6 +695,8 @@ static void osty_gc_remap_set_payload(void *payload);
 static void osty_gc_remap_closure_env_payload(void *payload);
 static void osty_gc_remap_chan_payload(void *payload);
 static void osty_gc_remap_slot(void *slot_addr);
+static void osty_gc_cleanup_young_dead_chan(void *payload);
+static void osty_gc_cleanup_young_dead_task_handle(void *payload);
 
 typedef struct osty_gc_kind_descriptor {
     osty_gc_trace_fn trace;
@@ -783,13 +798,17 @@ static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
         .young_eligible = true,
         .remap = osty_gc_remap_closure_env_payload,
     },
-    /* CHANNEL stays headerful — destroy frees a mutex + 2 condvars
-     * + slots buffer, and the safe-clone primitives that Map uses
-     * for the cheney/promote path don't yet cover condvar
-     * destroy/init pairs. */
+    /* CHANNEL young-safe through the same handoff pattern as Map:
+     * `osty_gc_chan_safe_handoff` re-inits dst's mutex + 2 condvars
+     * and destroys src's, then null-steals the slots pointer. The
+     * cleanup helper delegates to `osty_rt_chan_destroy` to free
+     * the slots buffer + tear down sync state on UNFORWARDED young
+     * channels. */
     [OSTY_GC_KIND_CHANNEL - OSTY_GC_KIND_LIST] = {
         .trace = osty_rt_chan_trace,
         .destroy = osty_rt_chan_destroy,
+        .young_eligible = true,
+        .cleanup_young_dead = osty_gc_cleanup_young_dead_chan,
         .remap = osty_gc_remap_chan_payload,
     },
     [OSTY_GC_KIND_GENERIC_ENUM_PTR - OSTY_GC_KIND_LIST] = {
@@ -797,18 +816,26 @@ static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
         .young_eligible = true,
         .remap = osty_gc_remap_slot,
     },
+    /* TASK_HANDLE young-safe through `osty_gc_task_handle_safe_handoff`
+     * (mutex + 1 condvar). No managed pointers in the payload, so no
+     * remap entry. */
+    [OSTY_GC_KIND_GENERIC_TASK_HANDLE - OSTY_GC_KIND_LIST] = {
+        .destroy = osty_rt_task_handle_destroy,
+        .young_eligible = true,
+        .cleanup_young_dead = osty_gc_cleanup_young_dead_task_handle,
+    },
 };
 
 _Static_assert(OSTY_GC_KIND_LIST == 1024,
                "kind descriptor table indexed off OSTY_GC_KIND_LIST");
-_Static_assert(OSTY_GC_KIND_GENERIC_ENUM_PTR - OSTY_GC_KIND_LIST + 1 ==
+_Static_assert(OSTY_GC_KIND_GENERIC_TASK_HANDLE - OSTY_GC_KIND_LIST + 1 ==
                    sizeof(osty_gc_kind_table) /
                        sizeof(osty_gc_kind_table[0]),
                "kind descriptor table size mismatches enum range");
 
 static inline const osty_gc_kind_descriptor *osty_gc_kind_descriptor_lookup(
     int64_t kind) {
-    if (kind < OSTY_GC_KIND_LIST || kind > OSTY_GC_KIND_GENERIC_ENUM_PTR) {
+    if (kind < OSTY_GC_KIND_LIST || kind > OSTY_GC_KIND_GENERIC_TASK_HANDLE) {
         return NULL;
     }
     return &osty_gc_kind_table[kind - OSTY_GC_KIND_LIST];
@@ -3310,11 +3337,15 @@ static void *osty_gc_allocate_young_if_eligible(size_t byte_size,
     return osty_gc_allocate_young(byte_size, object_kind);
 }
 
-/* Forward decl for Map's safe-clone helper — used by
- * `cheney_forward`, `promote_young_to_old`, and
- * `osty_gc_clone_map_header_to_bump_region`. Defined further down
- * with the rest of the Map runtime. */
+/* Forward decls for safe-clone helpers used by `cheney_forward`,
+ * `promote_young_to_old`, and (Map only) the headerful compactor's
+ * `osty_gc_clone_map_header_to_bump_region`. Bodies live with each
+ * kind's runtime further down. */
 static void osty_gc_map_safe_handoff(osty_rt_map *src, osty_rt_map *dst);
+static void osty_gc_chan_safe_handoff(osty_rt_chan_impl *src,
+                                      osty_rt_chan_impl *dst);
+static void osty_gc_task_handle_safe_handoff(osty_rt_task_handle_impl *src,
+                                             osty_rt_task_handle_impl *dst);
 
 /* Phase 6 step 1: Cheney semi-space copy mechanic.
  *
@@ -3405,6 +3436,13 @@ static void *osty_gc_cheney_forward(void *from_payload) {
          * and inline-index self-ref re-anchoring. */
         osty_gc_map_safe_handoff((osty_rt_map *)from_payload,
                                  (osty_rt_map *)to_payload);
+    } else if (object_kind == OSTY_GC_KIND_CHANNEL) {
+        osty_gc_chan_safe_handoff((osty_rt_chan_impl *)from_payload,
+                                  (osty_rt_chan_impl *)to_payload);
+    } else if (object_kind == OSTY_GC_KIND_GENERIC_TASK_HANDLE) {
+        osty_gc_task_handle_safe_handoff(
+            (osty_rt_task_handle_impl *)from_payload,
+            (osty_rt_task_handle_impl *)to_payload);
     }
     src->forward_or_meta = (uint64_t)(uintptr_t)to_payload |
                            OSTY_GC_FORWARD_TAG_FORWARDED;
@@ -3461,6 +3499,8 @@ static void osty_gc_cheney_swap_arenas(void) {
 static int64_t osty_gc_young_cheney_dead_lists_freed_total = 0;
 static int64_t osty_gc_young_cheney_dead_sets_freed_total = 0;
 static int64_t osty_gc_young_cheney_dead_maps_freed_total = 0;
+static int64_t osty_gc_young_cheney_dead_chans_freed_total = 0;
+static int64_t osty_gc_young_cheney_dead_task_handles_freed_total = 0;
 static int64_t osty_gc_young_cheney_dead_buffer_bytes_freed_total = 0;
 
 static size_t osty_gc_micro_object_total_size(int32_t payload_size);
@@ -3498,6 +3538,16 @@ static void osty_gc_cleanup_young_dead_set(void *payload) {
 static void osty_gc_cleanup_young_dead_map(void *payload) {
     osty_rt_map_destroy(payload);
     osty_gc_young_cheney_dead_maps_freed_total += 1;
+}
+
+static void osty_gc_cleanup_young_dead_chan(void *payload) {
+    osty_rt_chan_destroy(payload);
+    osty_gc_young_cheney_dead_chans_freed_total += 1;
+}
+
+static void osty_gc_cleanup_young_dead_task_handle(void *payload) {
+    osty_rt_task_handle_destroy(payload);
+    osty_gc_young_cheney_dead_task_handles_freed_total += 1;
 }
 
 static void osty_gc_cheney_destroy_dead_from_space(unsigned char *from_base,
@@ -3649,6 +3699,13 @@ static void *osty_gc_promote_young_to_old(void *young_payload) {
         /* Same handoff as cheney_forward — see osty_gc_map_safe_handoff. */
         osty_gc_map_safe_handoff((osty_rt_map *)young_payload,
                                  (osty_rt_map *)new_payload);
+    } else if (object_kind == OSTY_GC_KIND_CHANNEL) {
+        osty_gc_chan_safe_handoff((osty_rt_chan_impl *)young_payload,
+                                  (osty_rt_chan_impl *)new_payload);
+    } else if (object_kind == OSTY_GC_KIND_GENERIC_TASK_HANDLE) {
+        osty_gc_task_handle_safe_handoff(
+            (osty_rt_task_handle_impl *)young_payload,
+            (osty_rt_task_handle_impl *)new_payload);
     }
     micro->forward_or_meta = (uint64_t)(uintptr_t)new_payload |
                              OSTY_GC_FORWARD_TAG_PROMOTED;
@@ -4376,6 +4433,32 @@ static void osty_gc_map_safe_handoff(osty_rt_map *src, osty_rt_map *dst) {
     src->index_slots = NULL;
     src->index_hashes = NULL;
 }
+
+/* Move Channel ownership from `src` to `dst` after a bit-copy.
+ * Same shape as osty_gc_map_safe_handoff but with three sync
+ * primitives (mutex + 2 condvars) instead of one. The slots
+ * pointer is heap-allocated (no inline-storage union to fix up). */
+static void osty_gc_chan_safe_handoff(osty_rt_chan_impl *src,
+                                      osty_rt_chan_impl *dst) {
+    if (src->sync_init) {
+        if (osty_rt_mu_init(&dst->mu) != 0 ||
+            osty_rt_cond_init(&dst->not_full) != 0 ||
+            osty_rt_cond_init(&dst->not_empty) != 0) {
+            osty_rt_abort("chan safe-handoff: sync init failed");
+        }
+        dst->sync_init = 1;
+        osty_rt_mu_destroy(&src->mu);
+        osty_rt_cond_destroy(&src->not_full);
+        osty_rt_cond_destroy(&src->not_empty);
+        src->sync_init = 0;
+    }
+    src->slots = NULL;
+}
+
+/* TASK_HANDLE safe-handoff body lives after the
+ * `osty_rt_task_handle_impl_` struct definition (the helper needs
+ * the full layout). Forward-declared earlier next to chan/map
+ * handoffs. */
 
 /* OSTY_HOT_INLINE: called from every Map probe iteration after the
  * fingerprint match short-circuit. The `kind` argument is a struct-
@@ -12510,8 +12593,10 @@ extern int sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
 typedef int64_t (*osty_task_group_body_fn)(void *env, void *group);
 typedef int64_t (*osty_task_spawn_body_fn)(void *env);
 
+/* `osty_rt_task_handle_impl` typedef is forward-declared earlier
+ * (near `osty_rt_chan_impl`) so cheney's safe-handoff helpers can
+ * cast `void *` payloads to it. The full struct body follows below. */
 struct osty_rt_task_handle_impl_;
-typedef struct osty_rt_task_handle_impl_ osty_rt_task_handle_impl;
 
 typedef struct osty_rt_task_handle_node {
     osty_rt_task_handle_impl *handle;
@@ -12533,6 +12618,23 @@ struct osty_rt_task_handle_impl_ {
     osty_rt_cond_t cv;
     int sync_live;                       /* 1 iff mu/cv initialised */
 };
+
+/* TASK_HANDLE safe-handoff (forward-declared earlier with the
+ * cheney young-arena machinery). Mutex + condvar; no external
+ * buffers. Same pattern as osty_gc_chan_safe_handoff. */
+static void osty_gc_task_handle_safe_handoff(osty_rt_task_handle_impl *src,
+                                             osty_rt_task_handle_impl *dst) {
+    if (src->sync_live) {
+        if (osty_rt_mu_init(&dst->mu) != 0 ||
+            osty_rt_cond_init(&dst->cv) != 0) {
+            osty_rt_abort("task_handle safe-handoff: sync init failed");
+        }
+        dst->sync_live = 1;
+        osty_rt_mu_destroy(&src->mu);
+        osty_rt_cond_destroy(&src->cv);
+        src->sync_live = 0;
+    }
+}
 
 typedef struct osty_rt_task_item {
     void *body_env;
@@ -13244,10 +13346,14 @@ static void osty_rt_task_handle_destroy(void *payload) {
  * pauses collection so the pointer the task item carries cannot be
  * freed underneath it. */
 static osty_rt_task_handle_impl *osty_sched_alloc_handle(void) {
+    /* Use the dedicated KIND_GENERIC_GENERIC_TASK_HANDLE so cheney's
+     * young dispatch can find the destroy + safe-handoff via the
+     * kind table. The headerful path resolves the same destroy
+     * via the descriptor too, so behavior is identical. */
     osty_rt_task_handle_impl *h =
         (osty_rt_task_handle_impl *)osty_gc_allocate_managed(
             sizeof(osty_rt_task_handle_impl),
-            OSTY_GC_KIND_GENERIC,
+            OSTY_GC_KIND_GENERIC_TASK_HANDLE,
             "runtime.task.handle",
             NULL, osty_rt_task_handle_destroy);
     if (osty_rt_mu_init(&h->mu) != 0 ||

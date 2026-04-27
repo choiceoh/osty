@@ -3782,7 +3782,11 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_THRESHOLD_BYTES=1")
+	/* Same opt-out as the Map remap tests — pin the headerful
+	 * Phase D compaction + remap path. Channel is now young-eligible
+	 * by default, so without this it goes through cheney instead. */
+	runCmd.Env = append(os.Environ(),
+		"OSTY_GC_THRESHOLD_BYTES=1", "OSTY_GC_TINYTAG_YOUNG=0")
 	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
@@ -5809,18 +5813,18 @@ int64_t osty_gc_debug_young_header_object_kind(void *payload);
 int64_t osty_gc_debug_young_header_byte_size(void *payload);
 int64_t osty_gc_debug_young_header_generation(void *payload);
 
-void *osty_rt_thread_chan_make(int64_t capacity);
+void *osty_gc_alloc_pinned_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_pinned_v1"));
 
 #define KIND_LIST 1024
 #define KIND_STRING 1025
 
 int main(void) {
-    /* Channel stays headerful (KIND_CHANNEL has a pthread-rich
-     * destroy that the dead-from-space scan doesn't yet cover), so
-     * the predicate must classify it as not-young regardless of
-     * flag state. Picked over Map because Map is now young-eligible. */
-    void *chan = osty_rt_thread_chan_make(1);
-    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(chan));
+    /* Pinned allocs always go headerful regardless of kind / flag
+     * (the pinned arena is a separate bump region — never young).
+     * Picked because every kind in the eligibility set is now
+     * young-eligible by default. */
+    void *headerful = osty_gc_alloc_pinned_v1(KIND_STRING, 32, "non-young");
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(headerful));
 
     /* Direct young alloc (Phase 6 will route real allocators here). */
     void *young = osty_gc_debug_allocate_young(48, KIND_STRING);
@@ -6316,15 +6320,16 @@ int64_t osty_gc_debug_young_eligible(int64_t byte_size, int64_t object_kind);
 void *osty_gc_debug_allocate_young_if_eligible(int64_t byte_size, int64_t object_kind);
 int64_t osty_gc_debug_arena_is_young_page(void *payload);
 
-#define KIND_GENERIC           1
-#define KIND_LIST              1024
-#define KIND_STRING            1025
-#define KIND_MAP               1026
-#define KIND_SET               1027
-#define KIND_BYTES             1028
-#define KIND_CLOSURE_ENV       1029
-#define KIND_CHANNEL           1030
-#define KIND_GENERIC_ENUM_PTR  1031
+#define KIND_GENERIC              1
+#define KIND_LIST                 1024
+#define KIND_STRING               1025
+#define KIND_MAP                  1026
+#define KIND_SET                  1027
+#define KIND_BYTES                1028
+#define KIND_CLOSURE_ENV          1029
+#define KIND_CHANNEL              1030
+#define KIND_GENERIC_ENUM_PTR     1031
+#define KIND_GENERIC_TASK_HANDLE  1032
 
 int main(void) {
     /* Each row prints "<eligible> <ptr_was_young>" where eligible is
@@ -6332,7 +6337,8 @@ int main(void) {
      * returned a payload that lands in the young arena, else 0. */
     int64_t kinds[] = {
         KIND_GENERIC, KIND_LIST, KIND_STRING, KIND_MAP, KIND_SET,
-        KIND_BYTES, KIND_CLOSURE_ENV, KIND_CHANNEL, KIND_GENERIC_ENUM_PTR
+        KIND_BYTES, KIND_CLOSURE_ENV, KIND_CHANNEL,
+        KIND_GENERIC_ENUM_PTR, KIND_GENERIC_TASK_HANDLE
     };
     for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++) {
         int64_t k = kinds[i];
@@ -6375,24 +6381,27 @@ int main(void) {
 				"1029 0 0", // CLOSURE_ENV
 				"1030 0 0", // CHANNEL
 				"1031 0 0", // GENERIC_ENUM_PTR
+				"1032 0 0", // GENERIC_TASK_HANDLE
 			},
 		},
 		{
-			// Default routing: cheney_minor traces OLD reachability
-			// transitively, so Map<String, _> still works even with
-			// young String keys.
+			// Default routing: every kind with a wired safe-clone
+			// path lands young. CHANNEL and GENERIC_TASK_HANDLE
+			// joined the eligible set via the Map-style mutex
+			// + condvar handoff in cheney_forward / promote.
 			name: "default",
 			env:  nil,
 			wantRows: []string{
 				"1 1 1",    // GENERIC: eligible under NONE pattern (debug entry assumes NULL trace/destroy)
 				"1024 1 1", // LIST: eligible (load_v1 PROMOTED follow + cheney self-ref fixup + dead-list scan)
 				"1025 1 1", // STRING: eligible
-				"1026 1 1", // MAP: eligible (cheney_forward + promote re-init mutex; dead-from-space calls map_destroy)
-				"1027 1 1", // SET: eligible (dead-from-space scan frees items buffer; no inline-storage union)
+				"1026 1 1", // MAP: eligible (mutex safe-handoff + dead-from-space delegate)
+				"1027 1 1", // SET: eligible (dead-from-space scan frees items buffer)
 				"1028 1 1", // BYTES: eligible
 				"1029 1 1", // CLOSURE_ENV: eligible (captures populated synchronously before escape)
-				"1030 0 0", // CHANNEL: has destroy
+				"1030 1 1", // CHANNEL: eligible (mutex + 2 condvar safe-handoff)
 				"1031 1 1", // GENERIC_ENUM_PTR: eligible (kind_table dispatch reaches the trace)
+				"1032 1 1", // GENERIC_TASK_HANDLE: eligible (mutex + condvar safe-handoff)
 			},
 		},
 	} {
@@ -6404,8 +6413,8 @@ int main(void) {
 				t.Fatalf("run failed: %v\n%s", err, runOutput)
 			}
 			lines := strings.Split(strings.TrimRight(string(runOutput), "\n"), "\n")
-			if len(lines) != 12 {
-				t.Fatalf("expected 12 output lines, got %d: %q", len(lines), runOutput)
+			if len(lines) != 13 {
+				t.Fatalf("expected 13 output lines, got %d: %q", len(lines), runOutput)
 			}
 			for i, want := range tc.wantRows {
 				if lines[i] != want {
@@ -6413,14 +6422,14 @@ int main(void) {
 						i, lines[i], want, runOutput)
 				}
 			}
-			if lines[9] != "zero 0" {
-				t.Fatalf("zero-size row: got %q, want %q", lines[9], "zero 0")
+			if lines[10] != "zero 0" {
+				t.Fatalf("zero-size row: got %q, want %q", lines[10], "zero 0")
 			}
-			if lines[10] != "huge 0" {
-				t.Fatalf("huge-size row: got %q, want %q", lines[10], "huge 0")
+			if lines[11] != "huge 0" {
+				t.Fatalf("huge-size row: got %q, want %q", lines[11], "huge 0")
 			}
-			if lines[11] != "neg 0" {
-				t.Fatalf("neg-size row: got %q, want %q", lines[11], "neg 0")
+			if lines[12] != "neg 0" {
+				t.Fatalf("neg-size row: got %q, want %q", lines[12], "neg 0")
 			}
 		})
 	}
@@ -7006,6 +7015,102 @@ int main(void) {
 	}, "\n")
 	if got := string(runOutput); got != want {
 		t.Fatalf("generic-enum-ptr-young harness output mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
+// TestBundledRuntimeChannelYoungLifecycle covers Channel young
+// eligibility: a fresh `osty_rt_thread_chan_make` lands in the
+// young arena, send/recv keep working through `osty_gc_load_v1`'s
+// PROMOTED follow after `root_bind` promotes the channel to OLD,
+// and the slots heap buffer + mutex + 2 condvars are reclaimed
+// cleanly when an UNFORWARDED young Channel is swept by
+// `osty_gc_cheney_destroy_dead_from_space`.
+func TestBundledRuntimeChannelYoungLifecycle(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_chan_young_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_chan_young_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_rt_thread_chan_make(int64_t capacity);
+void osty_rt_thread_chan_send_i64(void *raw, int64_t value);
+int64_t osty_rt_thread_chan_recv_i64(void *raw);
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+int64_t osty_gc_debug_arena_is_young_page(void *payload);
+int64_t osty_gc_debug_young_forward_tag(void *from_payload);
+void osty_gc_debug_collect(void);
+
+int main(void) {
+    /* Fresh Channel goes young (KIND_CHANNEL is now in the
+     * eligibility list; sizeof(osty_rt_chan_impl) is well under
+     * the humongous threshold). */
+    void *raw = osty_rt_thread_chan_make(4);
+    printf("%lld\n", (long long)osty_gc_debug_arena_is_young_page(raw));
+
+    /* Send before root_bind populates slots through the still-young
+     * channel handle. */
+    osty_rt_thread_chan_send_i64(raw, 100);
+    osty_rt_thread_chan_send_i64(raw, 200);
+
+    /* root_bind promotes the young Channel to OLD via the safe-clone
+     * handoff: re-init dst's mutex + 2 condvars, destroy src's,
+     * null-steal the slots pointer. */
+    osty_gc_root_bind_v1(raw);
+    printf("%lld\n", (long long)osty_gc_debug_young_forward_tag(raw));
+
+    /* Send via the stale young handle works — chan_cast goes through
+     * load_v1 which follows the PROMOTED tag. */
+    osty_rt_thread_chan_send_i64(raw, 300);
+
+    /* Forced collect: cheney processes the (PROMOTED) young channel,
+     * the major sweep keeps OLD alive via the root binding. The
+     * slots buffer survives because the OLD copy now owns it. */
+    osty_gc_debug_collect();
+
+    /* Recv all three values to confirm the slots buffer survived
+     * the cheney + major cycle intact. */
+    int64_t v1 = osty_rt_thread_chan_recv_i64(raw);
+    int64_t v2 = osty_rt_thread_chan_recv_i64(raw);
+    int64_t v3 = osty_rt_thread_chan_recv_i64(raw);
+    printf("%lld %lld %lld\n", (long long)v1, (long long)v2, (long long)v3);
+
+    osty_gc_root_release_v1(raw);
+    osty_gc_debug_collect();
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath)
+	if buildOutput, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	want := strings.Join([]string{
+		"1",           // fresh Channel landed in young arena
+		"2",           // forward tag = PROMOTED after root_bind
+		"100 200 300", // all three values readable via load_v1 follow + cheney survival
+		"",
+	}, "\n")
+	if got := string(runOutput); got != want {
+		t.Fatalf("chan-young harness output mismatch\n got: %q\nwant: %q", got, want)
 	}
 }
 
