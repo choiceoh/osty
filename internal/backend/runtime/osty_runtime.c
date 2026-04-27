@@ -10517,6 +10517,21 @@ void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) {
         if (owner == NULL || value == NULL) {
             return;
         }
+        /* Tinytag-young owner fast path. Pin / root-bind on a young
+         * payload promotes it out of the no-header arena (Phase 7
+         * step 2 contract), so any address we observe inside the
+         * young arena range is by construction unpinned. The minor
+         * collector scans every YOUNG-generation owner and forwards
+         * its children, so a YOUNG→* write doesn't need a
+         * remembered-set entry — and we don't even need to
+         * reconstruct a header to know the generation. The 4-compare
+         * `is_young_page` range check replaces the hash + arena
+         * fast-path inside `find_header`, which used to take ~10%
+         * of CPU on intToStr-heavy workloads (every list_push on a
+         * young List paid for it). */
+        if (osty_gc_arena_is_young_page(owner)) {
+            return;
+        }
         owner_header = osty_gc_find_header(owner);
         if (owner_header == NULL) {
             /* Owner forwarded by a recent compaction. Take the slow path so
@@ -10524,11 +10539,13 @@ void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) {
              * — rare enough not to hurt the hot path. */
             goto locked_path;
         }
-        /* YOUNG-owner skip. The value is reachable through the owner's own
-         * fields, which the minor collector scans when it traces the YOUNG
-         * set. The remembered set only needs OLD→YOUNG edges; recording
-         * YOUNG→* writes is pure overhead under the current generational
-         * marker. log-aggregator drops from ~22s to <1s after this gate. */
+        /* Headerful-young owner skip — pre-#977 this was the only
+         * young-skip path. Headerful YOUNG owners (Maps before they
+         * promoted, etc.) need the same skip as tinytag young: the
+         * minor scans them via the normal mark/trace pipeline. The
+         * tinytag fast path above sidesteps `find_header` for the
+         * common case; this one keeps the same semantic for
+         * objects that stayed headerful. */
         if (owner_header->generation == OSTY_GC_GEN_YOUNG &&
             !osty_gc_header_is_pinned(owner_header)) {
             return;
