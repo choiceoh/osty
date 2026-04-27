@@ -1697,6 +1697,16 @@ fn elabOwnerNameForReceiver(tys: TyArena, ty: Int) -> String {
     if prim == PkChar { return "Char" }
     if prim == PkString { return "String" }
     if prim == PkBytes { return "Bytes" }
+    // Literal-typed receivers default to their canonical type for
+    // method lookup. Without this, `let n = 42; n.toString()` reports
+    // "no method `toString` on type ``" because `n`'s inferred type
+    // is `UntypedInt` (the literal-default marker) and the owner-name
+    // lookup falls through to "". The Osty default-numeric rule says
+    // a method receiver context promotes UntypedInt → Int and
+    // UntypedFloat → Float; surface that here so methods registered
+    // under "Int" / "Float" (toString, abs, …) resolve as expected.
+    if prim == PkUntypedInt { return "Int" }
+    if prim == PkUntypedFloat { return "Float" }
     ""
 }
 

@@ -40530,6 +40530,17 @@ func elabOwnerNameForReceiver(tys *TyArena, ty int) string {
 		// Osty: /tmp/selfhost_merged.osty:19379:26
 		return "Bytes"
 	}
+	// Literal-typed receivers default to their canonical type for
+	// method lookup. `let n = 42; n.toString()` previously reported
+	// "no method `toString` on type ``" because `n` is UntypedInt
+	// without contextual unification. Promote UntypedInt → Int and
+	// UntypedFloat → Float so primitive methods resolve.
+	if ostyEqual(prim, PrimKind(&PrimKind_PkUntypedInt{})) {
+		return "Int"
+	}
+	if ostyEqual(prim, PrimKind(&PrimKind_PkUntypedFloat{})) {
+		return "Float"
+	}
 	return ""
 }
 
