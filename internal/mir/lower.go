@@ -2472,6 +2472,15 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 		// allocations per concat site, which directly cuts
 		// `osty_gc_index_insert` traffic on alloc-heavy programs.
 		// `a + b + c` with String type lowers from 2 allocs to 1.
+		//
+		// `flattenStringConcatChain` lowers each leaf as it walks (calls,
+		// literals, etc.) so the operands it returns ARE the already-
+		// evaluated values. The earlier shape re-lowered Left/Right via
+		// `lowerExprAsOperand` whenever it fell through to BinaryRV (the
+		// 2-leaf case), which emitted call leaves twice — once
+		// discarded, once kept — turning every `"prefix" + f(x)` site
+		// into a hidden double-call. Reuse `parts` for the binary case
+		// too so leaves lower exactly once.
 		if x.Op == ir.BinAdd && isStringReceiver(x.T) {
 			parts := bs.flattenStringConcatChain(x)
 			if len(parts) >= 3 {
@@ -2483,6 +2492,14 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 					SpanV: exprSpan(x),
 				})
 				return &UseRV{Op: &CopyOp{Place: Place{Local: tmp}, T: TString}}
+			}
+			if len(parts) == 2 {
+				return &BinaryRV{
+					Op:    mapBinaryOp(x.Op),
+					Left:  parts[0],
+					Right: parts[1],
+					T:     x.T,
+				}
 			}
 		}
 		return &BinaryRV{
