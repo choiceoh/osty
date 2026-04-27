@@ -47,6 +47,11 @@ use std.strings as strings
 //     raw), and calls into callees that are not themselves
 //     `#[no_alloc]` in the same file (with a `raw.*` / `self.*`
 //     escape hatch matching the Go gate's spike behaviour).
+//
+//   runPureGate           — E0775 (v0.6 A13)
+//     Inside the body of a `#[pure]` function, reject operations that
+//     would make the LLVM `readnone` promise unsound: non-local writes,
+//     I/O/impure calls, managed allocation, and closures.
 
 // ---------------------------------------------------------------------
 // Entry point — called from check.osty:elabFile after elaborateDecls.
@@ -57,6 +62,7 @@ pub fn runCheckGates(cx: ElabCx) {
     runPodShapeGate(cx)
     runPrivilegeGate(cx)
     runNoAllocGate(cx)
+    runPureGate(cx)
 }
 
 // ---------------------------------------------------------------------
@@ -1113,4 +1119,323 @@ fn containsInterpolation(text: String) -> Bool {
 
 fn checkGateStringListLen(xs: List<String>) -> Int {
     xs.len()
+}
+
+// ---------------------------------------------------------------------
+// E0775 — `#[pure]` body discipline (v0.6 A13).
+//
+// `#[pure]` is not just an optimization hint: the LLVM backend lowers it
+// to `readnone`. The body must therefore be side-effect free. This gate is
+// intentionally file-local for calls, matching `#[no_alloc]`: a direct call
+// is accepted only when the target function/method in this file is also
+// annotated `#[pure]`. Unknown function values and external calls are
+// rejected instead of silently trusting them.
+// ---------------------------------------------------------------------
+
+fn runPureGate(cx: ElabCx) {
+    let arena = cx.ast.arena
+    let pureNames = collectPureFnNames(arena)
+    if pureNames.len() == 0 {
+        return
+    }
+    for declIdx in arena.decls {
+        let node = astArenaNodeAt(arena, declIdx)
+        match node.kind {
+            AstNFnDecl -> pureCheckFn(cx, arena, node, pureNames),
+            AstNStructDecl -> pureCheckMethods(cx, arena, node, pureNames),
+            AstNEnumDecl -> pureCheckMethods(cx, arena, node, pureNames),
+            _ -> {},
+        }
+    }
+}
+
+fn collectPureFnNames(arena: AstArena) -> List<String> {
+    let mut out: List<String> = []
+    for declIdx in arena.decls {
+        let node = astArenaNodeAt(arena, declIdx)
+        if node.kind == AstNFnDecl {
+            if fnHasPureAnnotationAndBody(arena, node) {
+                out.push(node.text)
+            }
+        } else if node.kind == AstNStructDecl || node.kind == AstNEnumDecl {
+            for memberIdx in node.children {
+                let member = astArenaNodeAt(arena, memberIdx)
+                if member.kind == AstNFnDecl && fnHasPureAnnotationAndBody(arena, member) {
+                    out.push(member.text)
+                }
+            }
+        }
+    }
+    out
+}
+
+fn fnHasPureAnnotationAndBody(arena: AstArena, fn_: AstNode) -> Bool {
+    if fn_.right < 0 {
+        return false
+    }
+    checkGateAnnotationContains(arena, fn_.extra, "pure")
+}
+
+fn pureCheckFn(cx: ElabCx, arena: AstArena, fn_: AstNode, pureNames: List<String>) {
+    if !fnHasPureAnnotationAndBody(arena, fn_) {
+        return
+    }
+    let mut locals: List<String> = []
+    for paramIdx in fn_.children {
+        let param = astArenaNodeAt(arena, paramIdx)
+        if param.kind == AstNParam && param.text != "self" && param.text != "" {
+            locals.push(param.text)
+        }
+    }
+    pureWalkBlock(cx, arena, fn_.right, fn_.text, pureNames, locals)
+}
+
+fn pureCheckMethods(cx: ElabCx, arena: AstArena, parent: AstNode, pureNames: List<String>) {
+    for memberIdx in parent.children {
+        let member = astArenaNodeAt(arena, memberIdx)
+        if member.kind == AstNFnDecl {
+            pureCheckFn(cx, arena, member, pureNames)
+        }
+    }
+}
+
+fn pureWalkBlock(cx: ElabCx, arena: AstArena, blockIdx: Int, fnName: String, pureNames: List<String>, locals: List<String>) {
+    if blockIdx < 0 {
+        return
+    }
+    let node = astArenaNodeAt(arena, blockIdx)
+    if node.kind != AstNBlock {
+        pureWalkExpr(cx, arena, blockIdx, fnName, pureNames, locals)
+        return
+    }
+    for stmtIdx in node.children {
+        pureWalkExpr(cx, arena, stmtIdx, fnName, pureNames, locals)
+    }
+}
+
+fn pureEmit(cx: ElabCx, fnName: String, what: String, fixHint: String, start: Int, end: Int) {
+    cx.env.diagnostics.push(diagPureViolation(fnName, what, fixHint, start, end))
+}
+
+fn pureWalkExpr(cx: ElabCx, arena: AstArena, idx: Int, fnName: String, pureNames: List<String>, locals: List<String>) {
+    if idx < 0 {
+        return
+    }
+    let node = astArenaNodeAt(arena, idx)
+    match node.kind {
+        AstNList -> {
+            pureEmit(cx, fnName, "allocate a list literal", "remove `#[pure]`, pass in precomputed data, or rewrite without managed allocation", node.start, node.end)
+            for elIdx in node.children {
+                pureWalkExpr(cx, arena, elIdx, fnName, pureNames, locals)
+            }
+        },
+        AstNMap -> {
+            pureEmit(cx, fnName, "allocate a map literal", "remove `#[pure]`, pass in precomputed data, or rewrite without managed allocation", node.start, node.end)
+            for entryIdx in node.children {
+                let entry = astArenaNodeAt(arena, entryIdx)
+                pureWalkExpr(cx, arena, entry.left, fnName, pureNames, locals)
+                pureWalkExpr(cx, arena, entry.right, fnName, pureNames, locals)
+            }
+        },
+        AstNStructLit -> {
+            pureEmit(cx, fnName, "allocate a struct literal", "return scalar data or drop `#[pure]` until the value construction can be proven allocation-free", node.start, node.end)
+            for fieldIdx in node.children {
+                let field = astArenaNodeAt(arena, fieldIdx)
+                pureWalkExpr(cx, arena, field.left, fnName, pureNames, locals)
+            }
+            pureWalkExpr(cx, arena, node.right, fnName, pureNames, locals)
+        },
+        AstNClosure -> {
+            pureEmit(cx, fnName, "allocate a closure", "closures capture an environment; use a direct `#[pure]` helper function instead", node.start, node.end)
+        },
+        AstNStringLit -> {
+            if isAllocatingStringText(node.text) {
+                let what = classifyAllocatingString(node.text)
+                pureEmit(cx, fnName, what, "only plain `\"...\"` literals are accepted in `#[pure]` bodies", node.start, node.end)
+            }
+        },
+        AstNCall -> {
+            if !pureCalleeAllowed(arena, node.left, pureNames) {
+                let what = if pureCalleeLooksLikeIO(arena, node.left) {
+                    "perform I/O"
+                } else {
+                    "call a function that is not `#[pure]`"
+                }
+                pureEmit(cx, fnName, what, "mark the callee `#[pure]` only if it is side-effect free, or remove `#[pure]` from this function", node.start, node.end)
+            }
+            pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+            for argIdx in node.children {
+                pureWalkExpr(cx, arena, argIdx, fnName, pureNames, locals)
+            }
+        },
+        AstNAssign -> {
+            if !pureAssignTargetLocal(arena, node.left, locals) {
+                pureEmit(cx, fnName, "write non-local state", "only assignment to local bindings declared inside the `#[pure]` function is allowed", node.start, node.end)
+            }
+            pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+            pureWalkExpr(cx, arena, node.right, fnName, pureNames, locals)
+        },
+        AstNChanSend -> {
+            pureEmit(cx, fnName, "send on a channel", "channel sends are observable side effects; remove `#[pure]`", node.start, node.end)
+            pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+            pureWalkExpr(cx, arena, node.right, fnName, pureNames, locals)
+        },
+        AstNDefer -> {
+            pureEmit(cx, fnName, "register a deferred effect", "defer runs code after the function returns and is not allowed in `#[pure]` bodies", node.start, node.end)
+            pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+        },
+        AstNLet -> {
+            pureWalkExpr(cx, arena, node.right, fnName, pureNames, locals)
+        },
+        AstNBlock -> {
+            let mut scopedLocals = locals
+            for stmtIdx in node.children {
+                let stmt = astArenaNodeAt(arena, stmtIdx)
+                pureWalkExpr(cx, arena, stmtIdx, fnName, pureNames, scopedLocals)
+                if stmt.kind == AstNLet {
+                    scopedLocals = pureAddPatternBindings(arena, stmt.left, scopedLocals)
+                }
+            }
+        },
+        AstNExprStmt -> pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals),
+        AstNReturn -> pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals),
+        AstNFor -> {
+            let loopLocals = pureAddPatternBindings(arena, node.left, locals)
+            pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+            if node.children.len() >= 2 {
+                pureWalkExpr(cx, arena, node.children[1], fnName, pureNames, locals)
+            }
+            pureWalkBlock(cx, arena, node.right, fnName, pureNames, loopLocals)
+        },
+        AstNIf -> {
+            pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+            pureWalkExpr(cx, arena, node.right, fnName, pureNames, locals)
+            if node.children.len() > 0 {
+                pureWalkExpr(cx, arena, node.children[0], fnName, pureNames, locals)
+            }
+        },
+        AstNMatch -> {
+            pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+            for armIdx in node.children {
+                let arm = astArenaNodeAt(arena, armIdx)
+                if arm.kind == AstNMatchArm {
+                    let armLocals = pureAddPatternBindings(arena, arm.left, locals)
+                    if arm.children.len() > 0 {
+                        pureWalkExpr(cx, arena, arm.children[0], fnName, pureNames, armLocals)
+                    }
+                    pureWalkExpr(cx, arena, arm.right, fnName, pureNames, armLocals)
+                }
+            }
+        },
+        AstNUnary -> pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals),
+        AstNBinary -> {
+            pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+            pureWalkExpr(cx, arena, node.right, fnName, pureNames, locals)
+        },
+        AstNQuestion -> pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals),
+        AstNField -> pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals),
+        AstNIndex -> {
+            pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+            pureWalkExpr(cx, arena, node.right, fnName, pureNames, locals)
+        },
+        AstNRange -> {
+            pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+            pureWalkExpr(cx, arena, node.right, fnName, pureNames, locals)
+        },
+        AstNParen -> pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals),
+        AstNTurbofish -> pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals),
+        AstNTuple -> {
+            for elIdx in node.children {
+                pureWalkExpr(cx, arena, elIdx, fnName, pureNames, locals)
+            }
+        },
+        _ -> {},
+    }
+}
+
+fn pureAssignTargetLocal(arena: AstArena, targetIdx: Int, locals: List<String>) -> Bool {
+    if targetIdx < 0 {
+        return false
+    }
+    let target = astArenaNodeAt(arena, targetIdx)
+    if target.kind == AstNIdent {
+        return listContainsString(locals, target.text)
+    }
+    false
+}
+
+fn pureCalleeAllowed(arena: AstArena, calleeIdx: Int, pureNames: List<String>) -> Bool {
+    if calleeIdx < 0 {
+        return false
+    }
+    let callee = astArenaNodeAt(arena, calleeIdx)
+    if callee.kind == AstNIdent {
+        return listContainsString(pureNames, callee.text)
+    }
+    if callee.kind == AstNField {
+        return listContainsString(pureNames, callee.text)
+    }
+    if callee.kind == AstNTurbofish {
+        return pureCalleeAllowed(arena, callee.left, pureNames)
+    }
+    false
+}
+
+fn pureCalleeLooksLikeIO(arena: AstArena, calleeIdx: Int) -> Bool {
+    let name = pureCalleeLastName(arena, calleeIdx)
+    name == "print"
+        || name == "println"
+        || name == "eprint"
+        || name == "eprintln"
+        || name == "read"
+        || name == "readAll"
+        || name == "readToString"
+        || name == "write"
+        || name == "writeAll"
+        || name == "open"
+        || name == "create"
+}
+
+fn pureCalleeLastName(arena: AstArena, calleeIdx: Int) -> String {
+    if calleeIdx < 0 {
+        return ""
+    }
+    let callee = astArenaNodeAt(arena, calleeIdx)
+    if callee.kind == AstNIdent || callee.kind == AstNField {
+        return callee.text
+    }
+    if callee.kind == AstNTurbofish {
+        return pureCalleeLastName(arena, callee.left)
+    }
+    ""
+}
+
+fn pureAddPatternBindings(arena: AstArena, patIdx: Int, locals: List<String>) -> List<String> {
+    let mut out = locals
+    pureCollectPatternBindings(arena, patIdx, out)
+    out
+}
+
+fn pureCollectPatternBindings(arena: AstArena, patIdx: Int, out: List<String>) {
+    if patIdx < 0 {
+        return
+    }
+    let pat = astArenaNodeAt(arena, patIdx)
+    if pat.kind != AstNPattern {
+        return
+    }
+    if pat.extra == astPatternIdentKind() || pat.extra == astPatternBindingKind() {
+        if pat.text != "_" && pat.text != "" && !(listContainsString(out, pat.text)) {
+            out.push(pat.text)
+        }
+    }
+    if pat.left >= 0 {
+        pureCollectPatternBindings(arena, pat.left, out)
+    }
+    if pat.right >= 0 {
+        pureCollectPatternBindings(arena, pat.right, out)
+    }
+    for childIdx in pat.children {
+        pureCollectPatternBindings(arena, childIdx, out)
+    }
 }

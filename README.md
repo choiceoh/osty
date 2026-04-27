@@ -45,25 +45,24 @@ native-only through the LLVM backend.
 | CI quality tooling (`internal/ci`, `osty ci`) | done — Osty-authored generated CI core, signature-aware snapshots, workspace coverage, JSON reports |
 | Pipeline visualizer (`osty pipeline`) | done — per-stage timing, workspace mode, backend-aware gen, baseline diff, LSP trace, `--explain` |
 | Profiles / targets / features / cache (`internal/profile`, `osty profiles` / `targets` / `features` / `cache`) | done — built-in and manifest profiles, cross-target env, feature closure + file pragmas, backend-aware fingerprints |
-| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | executable — textual IR / object / binary through `clang` for scalar / control-flow / Bool / String (ASCII + multi-byte UTF-8), all four payload-free/single-scalar/struct/enum-payload `Result<T, E>` shapes with `?` propagation (phase 54-63 + phase 74 closed), match-as-expression and match-as-statement over bare-variant and wildcard arms, nested field assignment, `Char`/`Byte` parameter + return lowering with width/sign conversions, interface vtable dispatch with generic monomorphization, list / map / set literals and intrinsics (`isEmpty`, `pop` discard, nested `IndexExpr`, source-type tracked list literals), payload-free enum match and `Float` / String payload enums, simple struct aggregates and method calls, `String.bytes` / `String.chars` lowering, host `clang` driver, and categorized `LLVM00x` / `LLVM01x` Osty-authored diagnostics for source shapes that still skeletonize. The merged toolchain native gate is not clean yet; current first walls are tracked below. |
+| LLVM backend (`internal/backend`, `internal/llvmgen`, `--backend llvm`) | executable — textual IR / object / binary through `clang` for scalar / control-flow / Bool / String (ASCII + multi-byte UTF-8), all four payload-free/single-scalar/struct/enum-payload `Result<T, E>` shapes with `?` propagation (phase 54-63 + phase 74 closed), match-as-expression and match-as-statement over bare-variant and wildcard arms, nested field assignment, `Char`/`Byte` parameter + return lowering with width/sign conversions, interface vtable dispatch with generic monomorphization, list / map / set literals and intrinsics (`isEmpty`, `pop` discard, nested `IndexExpr`, source-type tracked list literals), payload-free enum match and `Float` / String payload enums, simple struct aggregates and method calls, `String.bytes` / `String.chars` lowering, host `clang` driver, and categorized `LLVM00x` / `LLVM01x` Osty-authored diagnostics for source shapes that still skeletonize. The merged toolchain native gate is not clean yet; current short-suite blockers are tracked below. |
 | Package registry backend / `osty registry serve` | done — file-backed HTTP server for index/search/download/publish/yank, with ETag index responses and bearer-token write auth |
 | Package registry / `osty add` / `osty update` / `osty run` | done (resolve + vendor + lockfile-honoring re-resolves, ETag-cached registry index, copy fallback for symlink-less filesystems; CLI: `add`, `remove`/`rm`, `update`, `run`, `fetch`, `publish`, `search`, `info`, `yank`/`unyank`, `login`/`logout`; `--locked` / `--frozen` CI guards) |
 | Package manager (`osty add` / `osty update`, path + git + registry sources, SemVer resolver, deterministic lockfile) | wired — `add` mutates `osty.toml` and re-vendors; `update` re-resolves selectively or in full |
 | `osty run` (build + exec through backend) | wired — resolves manifest, vendors deps, emits the native entry artifact, runs the backend binary with profile/feature flags, and rejects cross-target execution |
 | `osty publish` (pack + upload tarball to a registry) | wired — deterministic gzipped tar, sha256 checksum, bearer-auth POST; `--dry-run` stops before upload |
 
-Status note (revalidated 2026-04-26, post-rebase to PR #921): the universal
+Status note (revalidated 2026-04-28): the universal
 LLVM CLI wedge called out in older status docs is closed. A hello-world
 `osty gen --backend=llvm` run is not the blocker anymore. The bootstrap
 Osty→Go transpiler was retired in PR #854 (2026-04-23), so the older
 "checked-in bootstrap output drift" framing no longer applies —
 `internal/selfhost/generated.go` is now a frozen seed with no `go generate`
 regen pipeline, and the corresponding "verify selfhost regen is clean" CI
-step was removed. Current self-hosting tracking is about three gaps:
-internal toolchain source drift, the merged native MIR pipeline gate, and
-selfhost-overlay scaling.
+step was removed. Current self-hosting tracking is about the native LLVM
+coverage gate rather than front-end type-check drift.
 
-Code-level re-audit on 2026-04-26: the tree is not yet "fully self-hosted"
+Code-level re-audit on 2026-04-28: the tree is not yet "fully self-hosted"
 end-to-end, but the front-end CLI path is ahead of several older documents.
 `osty check`, `osty typecheck`, and `osty resolve` now run the self-host arena
 path by default, and the Go-hosted `--legacy` check/typecheck escape hatch has
@@ -74,56 +73,29 @@ been removed. `--native` is still accepted only as a backwards-compatible no-op.
 The front-end astbridge-free guards currently pass for the CLI and the
 selfhost adapters (`TestRun{Resolve,Check,Typecheck}*AstbridgeFree`,
 `TestCheckCLIDefaultPathExitsZero`, and the selfhost
-`Check*Structured*AstbridgeFree` tests). `just front` and `just verify-selfhost`
-also pass in the same audit (note: `verify-selfhost` is narrow — it runs
+`Check*Structured*AstbridgeFree` tests). `just front`, `just spec`,
+`just verify-selfhost`, and `go run ./cmd/osty check toolchain` pass in the
+same audit (note: `verify-selfhost` is narrow — it runs
 `SnapshotParity|CoreSnapshotParity` under `internal/ci` and `internal/runner`,
 not the merged toolchain MIR pipeline).
 
-The current red lights are explicit:
+The current red lights are explicit native LLVM/backend coverage gaps from
+`go test -count=1 -vet=off -short ./...`:
 
-- **`osty check toolchain` fails with 11 type errors.** The merged toolchain
-  package no longer type-checks cleanly through the production CLI path:
-  - `E0702 no field 'typeName'` × 9 sites in [toolchain/inspect.osty](toolchain/inspect.osty)
-    and [toolchain/lint.osty](toolchain/lint.osty:2884) — drift from PR #892
-    (`refactor(selfhost): replace string-based typeName round-trip with
-    structured TypeRepr`), which renamed `typeName: String` → `typeRepr:
-    FrontTypeRepr` on `FrontCheckedNode` / `FrontCheckedBinding` /
-    `FrontCheckedSymbol` in `toolchain/check.osty` but did not migrate the
-    `inspect.osty` / `lint.osty` consumers.
-  - `E0708 missing field 'valueText' / 'targetLabel'` × 2 in
-    [toolchain/mir.osty:895](toolchain/mir.osty:895) — duplicate `pub struct
-    MirSwitchCase` declarations: [toolchain/mir.osty:888](toolchain/mir.osty:888)
-    has `value/target/label` and [toolchain/mir_generator.osty:2185](toolchain/mir_generator.osty:2185)
-    has `valueText/targetLabel`. Same name, different fields, same package
-    — landed during recent §-template porting (#891–#915).
-- **Merged-toolchain probes wall on the same duplicate.** The info-only
-  AST probes report `LLVM010 source-layout: duplicate struct "MirSwitchCase"`
-  as their first wall ([TestProbeWholeToolchainMerged](internal/llvmgen/multifile_probe_test.go:151)
-  and `TestProbeNativeToolchainMerged`, with `ci.osty` skipped in the
-  latter). The MIR-path probe
-  ([TestProbeNativeToolchainMergedMIR](internal/llvmgen/multifile_probe_test.go:252))
-  reports 12 checker diagnostics and first-walls inside `mir.Lower` on
-  `LLVM000 unsupported-source: unsupported local type <error> in
-  tyToRepr` — `<error>` types are leaking into the MIR boundary because
-  the upstream `osty check toolchain` failures poison the type table.
-  Older status notes citing `LLVM000 SelfDocDecl indirect call` and
-  `LLVM011 CheckFnSig.hasReceiver default value` as the merged walls
-  reflect a previous tree state and no longer match.
-- **`TestNativeToolchainMergedMIRErrTypeFloor` regressed.** The floor
-  is 40 ErrType locals; the merged native pipeline currently produces
-  **474** (~12× over), driven by the same poisoned-type cascade. Earlier
-  revisions of this section claiming the floor "passes with ErrType count
-  0" were stale.
-- **`TestNativeToolchainMergedMIRPipelineIsClean` times out.** The
-  enforcing version of the probe (the same pipeline minus the info-only
-  logging) fails its 300s timeout inside
-  [internal/check/host_boundary.go:930](internal/check/host_boundary.go:930)
-  `selfhostSpanIndex.scopeFor` — a linear scan over every span on every
-  cache miss, which becomes effectively O(N²) once `applySelfhostFileResult`
-  feeds the merged toolchain through `overlaySelfhostResult`. The non-
-  enforcing MIR probe finishes the same path in ~280s with sparser
-  bookkeeping, which is how the LLVM010/LLVM000 walls above are observable
-  at all.
+- **`osty test` benchmark error propagation.**
+  `TestRunTestMainBenchModeQuestionMarkErrPathFails` currently treats a
+  benchmark closure whose `?` propagates `Err` as a passing benchmark instead
+  of a failing run.
+- **Native-owned aggregate and pattern lowering.** The native path still lacks
+  complete coverage for `Profile?` struct payload `?`, optional field chains
+  (`profile?.name`), and nested binding/destructuring patterns such as
+  `outer @ Outer { inner: Inner { x } }`.
+- **Native-owned generic and interface calls.** Generic method turbofish calls
+  (`b.get::<Int>(7)`) and interface boxing / indirect dispatch with non-self
+  arguments remain short-suite failures.
+- **Map helper lowering.** `Map.update(k, callback)` must keep its dedicated
+  locked lowering (`osty_rt_map_lock` / `osty_rt_map_unlock`) instead of
+  falling through to the specialized stdlib body path.
 
 The `TestGoGenerateSelfhostLeavesGeneratedArtifactsClean` red light cited
 in earlier revisions of this section is gone — that test was removed when
@@ -455,9 +427,9 @@ newline-separated `else`.
   String / List / Map / Set / GC / scheduler / channel ABIs.
   Unsupported shapes still prepare skeleton artifacts and report
   `LLVM00x` / `LLVM01x` diagnostics authored by the toolchain backend
-  policy. The merged native toolchain first-walls are currently
-  `CheckFnSig.hasReceiver` default-field lowering on the AST path and
-  `SelfDocDecl` indirect-call lowering on the MIR path)
+  policy. Current short-suite native gaps are optional aggregate lowering,
+  nested struct binding patterns, generic method turbofish calls, interface
+  boxing/dispatch, and `Map.update` locked lowering)
 - `--emit MODE` — requested text artifact. `llvm-ir` emits LLVM IR.
 
 `pipeline --gen` accepts the same source-artifact backend selection:

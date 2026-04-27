@@ -316,6 +316,45 @@ fn main() {
 	}
 }
 
+func TestCheckPackageStructuredASTNativeRunsPureGate(t *testing.T) {
+	input := canonicalSelfhostInput(t, []byte(`fn impure() -> Int { 1 }
+
+#[pure]
+fn bad() -> Int {
+    let items = [1]
+    impure()
+}
+`), 0)
+	checked, err := selfhost.CheckPackageStructured(selfhost.PackageCheckInput{
+		Files: []selfhost.PackageCheckFile{input},
+	})
+	if err != nil {
+		t.Fatalf("CheckPackageStructured: %v", err)
+	}
+	if got := findDiagnosticCode(checked, "E0775"); got == nil {
+		t.Fatalf("expected E0775, got diagnostics %#v", checked.Diagnostics)
+	}
+	if got := checked.Summary.ErrorsByContext["E0775"]; got == 0 {
+		t.Fatalf("summary E0775 count = %d, want non-zero (summary=%#v)", got, checked.Summary)
+	}
+}
+
+func TestCheckSourceStructuredAcceptsPureLocalComputation(t *testing.T) {
+	checked := selfhost.CheckSourceStructured([]byte(`#[pure]
+fn mix(a: Int, b: Int) -> Int { a * 31 + b }
+
+#[pure]
+fn caller(a: Int, b: Int) -> Int {
+    let mut acc = 0
+    acc = acc + mix(a, b)
+    acc
+}
+`))
+	if got := findDiagnosticCode(checked, "E0775"); got != nil {
+		t.Fatalf("unexpected E0775: %#v", checked.Diagnostics)
+	}
+}
+
 func TestCheckPackageStructuredImportedDefaultMethodBoundsASTNative(t *testing.T) {
 	input := canonicalSelfhostInput(t, []byte(`use dep
 

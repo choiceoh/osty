@@ -42,6 +42,9 @@ Mapping:
 - **Lone surrogates in strings** (e.g. `"\uD800"`) are a decode `Err`.
   Osty's `String` is strict UTF-8 (§2.1) and does not represent
   surrogate code points.
+- **Non-finite or out-of-range numbers are rejected.** JSON has no
+  representation for `NaN` or infinities, and numbers that overflow the
+  implementation's `Float` range decode as `Err`.
 
 Custom serialization via `Encode`/`Decode` interfaces:
 
@@ -57,3 +60,11 @@ interface Decode {
 
 `Json` is an enum of `Object`, `Array`, `String`, `Number`, `Bool`,
 `Null`.
+
+Value-level helpers:
+
+- `json.parseValue(text)` parses UTF-8 JSON text into `Json`.
+- `json.stringifyValue(value)` serializes a `Json` tree as compact JSON.
+  Object keys are emitted in sorted order so output is deterministic.
+  String contents preserve their UTF-8 bytes and escape only JSON-required
+  characters/control bytes.

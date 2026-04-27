@@ -40,6 +40,7 @@ func CheckPackageStructured(input PackageCheckInput) (CheckResult, error) {
 	elabFile(cx)
 	result := adaptCheckResultWithTokenLayout(serializeCheckResult(cx), layout)
 	selfhostAppendIntrinsicBodyGateForPackage(&result, input)
+	selfhostAppendPureGateForPackage(&result, input)
 	return result, nil
 }
 

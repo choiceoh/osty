@@ -1,61 +1,49 @@
 # LLVM Migration Plan
 
-> **Status (2026-04): Historical.** 공개 백엔드는 이미 LLVM 하나뿐이며,
+> **Status (2026-04-28): Historical with current sync notes.** 공개 백엔드는 이미 LLVM 하나뿐이며,
 > 기존 Osty→Go 부트스트랩 트랜스파일러는 제거되었다 — `internal/selfhost/generated.go`
-> 는 커밋된 시드 산출물로 동결되어 있다. 이 문서는 이주 과정의 기록이며, 아래
-> "현재 상태" 및 phase 설명은 당시 시점의 기준이다.
+> 는 커밋된 시드 산출물로 동결되어 있다. 이 문서는 이주 과정의 기록이며, phase
+> 설명은 당시 시점의 기준이다. 현재 pass/fail 상태는 바로 아래 동기화 노트가
+> 기준이다.
 
 이 문서는 Osty의 실행 백엔드를 현재 Go transpiler 중심 구조에서 LLVM 기반
 네이티브 백엔드로 옮기기 위한 이주 계획이다. 목표는 기존 Go 백엔드를 즉시
 제거하는 것이 아니라, front-end 안정성을 유지한 채 LLVM 백엔드를 병렬로
 도입하고 충분한 parity가 확보된 뒤 기본 경로를 전환하는 것이다.
 
-## 현재 상태
+## 현재 동기화 상태 (2026-04-28)
 
-- Front-end는 `lexer -> parser -> resolve -> check`까지 안정적으로 분리되어
-  있고, diagnostics/source position 모델도 CLI와 테스트에 이미 공유된다.
-- 실행 경로는 `internal/gen` Go transpiler가 담당한다. `osty gen`, `osty build`,
-  `osty run`, `osty test`는 Go source를 만들고 `go build` 또는 `go run`으로
-  이어진다.
-- `internal/ir`는 backend-agnostic IR로 이미 존재하지만, 현재 Go transpiler는
-  AST와 `resolve/check` 결과를 직접 소비한다.
-- Runtime helper는 Go 출력물 안에 조건부로 주입되는 구조다. LLVM으로 가려면
-  ABI가 고정된 별도 runtime surface가 필요하다.
-- Manifest profile/target은 Go toolchain 플래그와 `GOOS/GOARCH/CGO_ENABLED`
-  중심이다. LLVM target triple, linker, sysroot, runtime artifact 위치를
-  표현할 수 있도록 확장해야 한다.
-- Multi-file package, vendored dependency, workspace build의 실제 code emission은
-  아직 제한이 있다. LLVM 전환 전에 package 단위 emit/link 모델을 분명히 해야
-  한다.
-- 현재 Phase 45까지의 LLVM backend 의미는 `toolchain/llvmgen.osty`
-  쪽으로 옮겨지고 있다. 여기에는 smoke IR builder, skeleton renderer,
-  toolchain command plan, executable parity corpus, go-only diagnostic, 그리고
-  unsupported source-shape taxonomy가 포함된다. 성공 경로의 scalar instruction
-  strings, temp/label naming, plain/escaped ASCII `String` `println` module
-  constant/formatting shape, immutable/mutable local String value paths, and
-  simple String function return/parameter paths, simple named struct type
-  definitions, struct literals, field reads, struct function boundaries, and
-  mutable struct locals, plus bare enum tag values across simple function and
-  mutable-local paths와 그 다음 payload-free enum match-expression paths도 같은
-  toolchain에서 생성한다. `Float`는 현재 double-subset로만 `Float`-smoke
-  경로를 처리하며, `Float32`/`Float64` width/ABI 정책은 후속 단계로 미룬다.
+- 공개 실행 백엔드는 LLVM만 남았다. 이전 Osty→Go transpiler 경로는 제거됐고,
+  `internal/selfhost/generated.go`는 재생성 대상이 아니라 frozen seed다.
+- `osty check`, `osty typecheck`, `osty resolve`의 happy path는 self-host arena
+  구조체를 직접 소비한다. 현재 기준 `just front`, `just spec`,
+  `just verify-selfhost`, `go run ./cmd/osty check toolchain`은 통과한다.
+- 남은 release gate는 front-end type-check drift가 아니라 native LLVM/backend
+  coverage다. `go test -count=1 -vet=off -short ./...`의 현재 빨간 항목은
+  `cmd/osty` benchmark `?` Err-path, `cmd/osty-native-llvmgen` nested struct
+  binding pattern, `internal/backend` `Map.update` locked lowering,
+  `internal/llvmgen` generic method turbofish, optional aggregate/field
+  lowering, interface boxing/dispatch, nested struct binding pattern이다.
+- 아래 phase 설명은 migration history로 보존한다. 새 작업 우선순위는 이
+  동기화 노트와 다음 critical-path 표를 기준으로 판단한다.
 
-## 셀프호스팅 critical path (2026-04 실사용 기반 재감사)
+## 셀프호스팅 critical path (2026-04-28 재동기화)
 
-기존 phase 번호(0~73)는 feature-slice 중심으로 쌓아왔다. 실제
-`toolchain/*.osty` 非-test 파일의 usage grep으로 재감사한 결과,
-셀프호스팅까지의 blocker 순서는 다음과 같다.
+기존 phase 번호(0~73)는 feature-slice 중심으로 쌓아왔다. 현재는 프론트엔드
+toolchain check가 통과하므로, blocker 순서는 native LLVM 경로가 실제로 아직
+cover하지 못하는 source shape 기준으로 본다.
 
 ### Tier A — 核 toolchain (`lexer → parser → check → ir → llvmgen`) 자가 컴파일 blocker
 
-| 기능 | 非-test 사용 | 현재 상태 | 관련 phase |
+| 기능 | 현재 상태 | 현재 증거 | 다음 초점 |
 |---|---|---|---|
-| `List<T>` literal + 메서드 lowering | 974회 | 🟡 부분 구현 — legacy AST emitter가 list literal + `push` 및 일부 컬렉션 브리지를 낮춘다. 다만 whole-toolchain coverage는 아직 incomplete | TBD (Tier A-1) |
-| `Map<K,V>` literal + 메서드 lowering | 심볼 테이블 등 다수 | 🟡 부분 구현 — legacy AST emitter가 map literal + `insert` / `remove`를 낮춘다. 더 넓은 toolchain surface는 아직 incomplete | TBD (Tier A-2) |
-| `String` concat/slice/interpolation | 대부분 파일 | 🟡 부분 구현 — ASCII / runtime-backed concat / interpolation은 존재하지만 `Char`/`Byte` iteration (`String.chars` / `bytes`)과 더 넓은 string ABI가 blocker | TBD (Tier A-3) |
-| Closure + env capture | AST visitor 전반 | 🟡 부분 구현 — MIR path에는 capturing-closure env emission + tests가 있다. legacy AST emitter의 first-class fn-value/capture surface는 아직 incomplete | TBD (Tier A-4) |
-| Multi-file package emit + link | 37개 non-test 파일 | ❌ merged-probe가 주 검증 경로이며 package-level native self-compile/link는 아직 blocker | TBD (Tier A-5) |
-| `std.strings` 함수 구현 | 20+ 파일에서 import | 🟡 부분 구현 — legacy llvmgen이 일부 함수를 runtime shim으로 우회하지만 pure-Osty body는 여전히 `Char` / `List<Char>` lowering에 막힘 | TBD (Tier A-6) |
+| `List<T>` literal + 메서드 lowering | 🟡 기본 literal/intrinsic 경로는 있음 | README status + green front-end tests | whole-toolchain native probe에서 residual collection helper shape 확인 |
+| `Map<K,V>` literal + 메서드 lowering | 🔴 `Map.update` 전용 locked lowering 회귀 | `TestPhase2gUpdateUserCallsiteKeepsLockedLowering` | `get + callback + insert`를 `osty_rt_map_lock/unlock` 안에 유지 |
+| Optional aggregate lowering | 🔴 struct payload `?` / `?.field` 미커버 | `TestNativeOwnedModuleEntryOptionalQuestionStructBatch`, `TestNativeOwnedModuleEntryOptionalFieldBatch` | `%Struct` load/extract + null phi shape |
+| Generic / interface call lowering | 🔴 generic method turbofish + interface boxing/dispatch 미커버 | `TestGenerateModuleMethodLocalGenericGetMonomorphized`, interface dispatch tests | monomorphized method symbol selection, `%osty.iface` boxing, vtable indirect call args |
+| Pattern lowering | 🔴 nested binding/destructuring 미커버 | `TestRunCoversNestedStructBindingPattern`, `TestTryGenerateNativeOwnedModuleCoversNestedStructBindingPattern` | recursive `extractvalue` plus `name @ pattern` alias |
+| Multi-file package emit + link | 🟡 native self-compile/link gate는 아직 최종 green 아님 | short-suite backend gaps block merged native confidence | P0 native shape failures 해소 후 merged toolchain probe 재측정 |
+| `String` / `std.strings` surface | 🟡 runtime-backed paths expanded; pure-body coverage는 계속 추적 | previous `String.bytes()` / `String.chars()` walls are closed | pure Osty helper bodies and remaining ABI edge cases |
 
 ### Tier B — pkgmgr (`semver`, `manifest`, `registry`, `solve`, `pkgmgr`) 자가 컴파일 blocker
 
@@ -83,12 +71,14 @@ single-scalar-payload + bare tag이다.
 
 ### 관심 순서
 
-1. Tier A-1 (List) + A-3 (String concat/slice) — 모든 frontend 경로가 의존.
-2. Tier A-6 (`std.strings` 순수 구현) — 현재 native probe first-wall이 `Char`이므로 A-3와 사실상 한 묶음.
-3. Tier A-2 (Map) + A-4 (Closure) — resolve/check/visitor가 의존.
-4. Tier A-5 (Multi-file linking) — Tier A가 한 파일에서 되면 즉시 다음 관문.
-5. Tier B — pkgmgr 경로. 核 셀프호스트와 독립적으로 진행 가능.
-6. 非-blocker는 유저 코드 예시 호환성 위주로 여유 시 진행.
+1. P0 short-suite failures — benchmark `?` Err-path, `Map.update`, optional
+   aggregate lowering, generic method turbofish, interface dispatch, nested
+   binding patterns.
+2. Merged native toolchain probes — P0 shape failures를 닫은 뒤 AST/MIR probe를
+   다시 측정해 실제 first wall을 갱신한다.
+3. Multi-file native emit/link — package-level self-compile/link 관문.
+4. Pure stdlib helper bodies — runtime shim이 아닌 Osty body native lowering.
+5. 非-blocker는 유저 코드 예시 호환성 위주로 여유 시 진행.
 
 ---
 
@@ -742,11 +732,20 @@ match 분해)를 추가한다.
 
 ### Probe 쌍
 
-- `TestProbeWholeToolchainMerged` — 모든 파일 포함. 2026-04-24 실측 첫 wall: **LLVM011 `type-system`** on `CheckFnSig.hasReceiver` default field (`struct "CheckFnSig" field "hasReceiver" has a default value`). `ci.osty` 의 `runtime.cihost` 는 AST probe 에서도 더 이상 첫 wall 이 아니다.
-- `TestProbeNativeToolchainMerged` — bootstrap-only 파일 제외. 2026-04-24 실측: `ci.osty` 1개를 스킵하고도 첫 wall 은 **동일한 `CheckFnSig.hasReceiver` default field** 다. 이전 `list_mixed_ptr`, `Char`/`Byte`, match-as-statement, nested-field assignment, parser precedence, `String.bytes()` / `String.chars()` 계열 벽은 닫혔다.
-- `TestProbeNativeToolchainMergedMIR` — real self-host 측정에 가장 가까운 info-only probe. 2026-04-24 실측: checker diagnostics 0, MIR first wall **LLVM000 `unsupported-source`** (`indirect call on non-function type SelfDocDecl`). `TestNativeToolchainMergedMIRPipelineIsClean` 은 MIR refusal 뒤 legacy fallback 이 `CheckFnSig.hasReceiver` default-field wall 에 걸려 실패한다. 반면 `TestNativeToolchainMergedMIRErrTypeFloor` 는 ErrType count 0 으로 통과한다.
+- `TestProbeWholeToolchainMerged` — 모든 파일 포함. 2026-04-28 기준
+  이전 AST default-field wall은 현재 red list가 아니다. P0 native shape
+  failures를 먼저 닫고 재측정해야 한다.
+- `TestProbeNativeToolchainMerged` — bootstrap-only 파일 제외. 이전
+  `list_mixed_ptr`, `Char`/`Byte`, match-as-statement, nested-field assignment,
+  parser precedence, `String.bytes()` / `String.chars()` 계열 벽은 닫혔다.
+- `TestProbeNativeToolchainMergedMIR` — real self-host 측정에 가장 가까운
+  info-only probe. 2026-04-28 기준 이전 indirect-call wall은 현재 short-suite
+  red list가 아니며, 실제 다음 wall은 P0 native shape failures 해소 후 다시
+  측정해야 한다.
 
-AST probe 쌍의 첫-wall 차이는 현재 0 이다. migration 진전은 `CheckFnSig` default-field lowering 과 MIR `SelfDocDecl` indirect-call lowering 이 움직이는지로 측정한다.
+현재 migration 진전은 오래된 probe wall 문구가 아니라, short-suite에 남은
+generic method turbofish, optional aggregate, interface boxing/dispatch,
+nested binding pattern, `Map.update` locked lowering이 움직이는지로 측정한다.
 
 ### astbridge 제거 경로
 
