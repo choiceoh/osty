@@ -665,6 +665,16 @@ static void osty_rt_task_handle_destroy(void *payload);
 typedef struct osty_gc_kind_descriptor {
     osty_gc_trace_fn trace;
     osty_gc_destroy_fn destroy;
+    /* Whether the no-header young arena can carry this kind. Each
+     * young-eligible row also requires the supporting cheney work
+     * to be in place (self-ref fixup in cheney_forward / promote,
+     * dead-from-space cleanup, young-arena remap dispatch). The
+     * per-PR doc comment on `osty_gc_young_eligible` explains the
+     * specific arrangement for each kind. Replaces the explicit
+     * `kind != X && kind != Y && ...` whitelist that grew with
+     * every PR; new young-eligible kinds set this to true here
+     * instead of editing the predicate. */
+    bool young_eligible;
 } osty_gc_kind_descriptor;
 
 /* Phase 4 generic-pattern table (RUNTIME_GC_DELTA Phase E follow-up).
@@ -688,9 +698,16 @@ enum {
 };
 
 static const osty_gc_kind_descriptor osty_gc_generic_patterns[] = {
-    [OSTY_GC_GENERIC_NONE] = {NULL, NULL},
-    [OSTY_GC_GENERIC_ENUM_PTR] = {osty_rt_enum_ptr_payload_trace, NULL},
-    [OSTY_GC_GENERIC_TASK_HANDLE] = {NULL, osty_rt_task_handle_destroy},
+    /* GENERIC NONE — opaque payload, cheney handles it as raw bytes. */
+    [OSTY_GC_GENERIC_NONE] = {NULL, NULL, true},
+    /* ENUM_PTR has its own dedicated kind (KIND_GENERIC_ENUM_PTR) for
+     * the young path, so this row is parity-only — the headerful
+     * fallback dispatch still consults it but young eligibility is
+     * driven by the kind table, not this entry. */
+    [OSTY_GC_GENERIC_ENUM_PTR] = {osty_rt_enum_ptr_payload_trace, NULL, false},
+    /* TASK_HANDLE has a pthread-rich destroy — not yet covered by
+     * the safe-clone path that Map uses. */
+    [OSTY_GC_GENERIC_TASK_HANDLE] = {NULL, osty_rt_task_handle_destroy, false},
 };
 
 #define OSTY_GC_GENERIC_PATTERN_COUNT \
@@ -707,19 +724,23 @@ static uint8_t osty_gc_pattern_of(osty_gc_trace_fn trace,
  * row here in the same order. */
 static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
     [OSTY_GC_KIND_LIST - OSTY_GC_KIND_LIST] =
-        {osty_rt_list_trace, osty_rt_list_destroy},
-    [OSTY_GC_KIND_STRING - OSTY_GC_KIND_LIST] = {NULL, NULL},
+        {osty_rt_list_trace, osty_rt_list_destroy, true},
+    [OSTY_GC_KIND_STRING - OSTY_GC_KIND_LIST] = {NULL, NULL, true},
     [OSTY_GC_KIND_MAP - OSTY_GC_KIND_LIST] =
-        {osty_rt_map_trace, osty_rt_map_destroy},
+        {osty_rt_map_trace, osty_rt_map_destroy, true},
     [OSTY_GC_KIND_SET - OSTY_GC_KIND_LIST] =
-        {osty_rt_set_trace, osty_rt_set_destroy},
-    [OSTY_GC_KIND_BYTES - OSTY_GC_KIND_LIST] = {NULL, NULL},
+        {osty_rt_set_trace, osty_rt_set_destroy, true},
+    [OSTY_GC_KIND_BYTES - OSTY_GC_KIND_LIST] = {NULL, NULL, true},
     [OSTY_GC_KIND_CLOSURE_ENV - OSTY_GC_KIND_LIST] =
-        {osty_rt_closure_env_trace, NULL},
+        {osty_rt_closure_env_trace, NULL, true},
+    /* CHANNEL stays headerful — destroy frees a mutex + 2 condvars
+     * + slots buffer, and the safe-clone primitives that Map uses
+     * for the cheney/promote path don't yet cover condvar
+     * destroy/init pairs. */
     [OSTY_GC_KIND_CHANNEL - OSTY_GC_KIND_LIST] =
-        {osty_rt_chan_trace, osty_rt_chan_destroy},
+        {osty_rt_chan_trace, osty_rt_chan_destroy, false},
     [OSTY_GC_KIND_GENERIC_ENUM_PTR - OSTY_GC_KIND_LIST] =
-        {osty_rt_enum_ptr_payload_trace, NULL},
+        {osty_rt_enum_ptr_payload_trace, NULL, true},
 };
 
 _Static_assert(OSTY_GC_KIND_LIST == 1024,
@@ -3151,75 +3172,35 @@ static void *osty_gc_allocate_young(size_t payload_size, int64_t object_kind) {
     return (void *)((unsigned char *)slot + sizeof(osty_gc_micro_header));
 }
 
-/* Phase 7 step 1: which kinds are safe to live in the young arena
- * without a headerful header.
+/* Whether a (kind, payload_size, trace, destroy) tuple may live in
+ * the no-header young arena.
  *
- * Rules (in order — first failure short-circuits):
- *   1. Feature flag must be on. With the flag off the young arena is
- *      dormant and every alloc takes the headerful path, preserving
- *      pre-Phase-5 behaviour exactly.
- *   2. The kind must be one of the young-safe kinds — STRING, BYTES,
- *      LIST, CLOSURE_ENV, SET, or GENERIC with the NONE pattern
- *      (NULL trace + NULL destroy). STRING/BYTES are immutable byte
- *      payloads. LIST has a destroy callback (frees spilled `data` +
- *      `gc_offsets`), but Phase E follow-up adds a from-space
- *      dead-list scan in cheney_minor that runs the destroy work just
- *      before the arena swap reclaims the bytes — making LIST safe to
- *      route through the no-header path despite the external resource.
- *      The scan also handles the self-referential `data` ptr fixup on
- *      the to-space copy when a forwarded List was inline.
- *      CLOSURE_ENV has no destroy callback (captures live inline in
- *      the flexible array) and trace just walks `captures[]` under
- *      the `pointer_bitmap`. The mutator contract is that captures
- *      are populated synchronously at construction (single basic
- *      block in LLVM emit) before the env escapes to a slot that
- *      could trigger root_bind — so promote-on-bind copies a fully
- *      populated env to OLD and post-promote stale-pointer writes
- *      do not occur in production.
- *      GENERIC NONE pattern (e.g. `osty_rt_enum_alloc_scalar_v1` —
- *      unboxed enum scalar payload) has no trace or destroy, so the
- *      micro-header carries everything cheney needs (opaque copy +
- *      no destroy on dead-from-space).
- *      GENERIC_ENUM_PTR (boxed enum payload — `Option<ptr>` /
- *      `Result<ptr, _>`) has its own dedicated kind so the trace
- *      (`osty_rt_enum_ptr_payload_trace`) is reachable from
- *      `osty_gc_kind_table` at cheney scan time. No destroy. The
- *      remaining GENERIC pattern (TASK_HANDLE) keeps using
- *      OSTY_GC_KIND_GENERIC; same pthread-teardown rationale as
- *      Map/Channel below.
- *      SET has a destroy callback (frees the `items` heap buffer).
- *      It rides the same dead-from-space scan as LIST: the cheney
- *      pass calls `free(set->items)` on UNFORWARDED young Sets
- *      before the arena swap reclaims their micro-header bytes.
- *      No self-ref fixup needed — Set has no inline-storage union;
- *      `items` is always a separate heap allocation.
- *      MAP has a destroy callback (frees keys/values/index buffers
- *      and the recursive mutex). Its memcpy-on-promote is normally
- *      UB for the embedded `pthread_mutex_t`, so cheney_forward and
- *      promote_young_to_old both special-case MAP: they re-init the
- *      destination's mutex and destroy the source's, mirroring
- *      `osty_gc_clone_map_header_to_bump_region`. They also fix up
- *      the inline-index self-refs and null the source's
- *      keys/values/index pointers so dead-from-space's free path
- *      can't double-free a forwarded Map's buffers. The
- *      dead-from-space scan calls `osty_rt_map_destroy` directly on
- *      UNFORWARDED young Maps.
- *
- *      Why not the other kinds:
- *        - CHANNEL: destroy frees mutex + 2 condvars + slot buffer.
- *          Same pthread-teardown family as Map but the safe-clone
- *          surface is larger (cond_destroy doesn't have an
- *          equivalent re-init helper) and channels are typically
- *          long-lived, so the perf payoff is smaller.
+ * Rules (first failure short-circuits):
+ *   1. Feature flag (`OSTY_GC_TINYTAG_YOUNG`) must be on.
+ *   2. Kind eligibility:
+ *        - For non-GENERIC kinds, look up `young_eligible` on the
+ *          kind descriptor (`osty_gc_kind_table`). Each row carries
+ *          its own bit; new young-eligible kinds set this true at
+ *          their table row instead of editing this predicate.
+ *        - For OSTY_GC_KIND_GENERIC, look up the matching pattern
+ *          row in `osty_gc_generic_patterns` via (trace, destroy).
+ *          The NONE pattern (NULL/NULL) is young-eligible; ENUM_PTR
+ *          uses its own dedicated kind (KIND_GENERIC_ENUM_PTR) and
+ *          TASK_HANDLE has a pthread-rich destroy that the young
+ *          arena's safe-clone primitives don't yet cover.
  *   3. Payload size must fit comfortably under the humongous
  *      threshold. Humongous allocs already take a separate path in
  *      the headerful allocator and have no benefit from being
  *      bump-allocated.
  *
- * `trace` and `destroy` are passed through so the GENERIC-pattern
- * filter can reject ENUM_PTR (non-NULL trace) and TASK_HANDLE
- * (non-NULL destroy). For non-GENERIC kinds the pair is determined
- * by `osty_gc_kind_table` so the params are ignored. */
+ * `trace` and `destroy` are passed through so the GENERIC arm can
+ * resolve the per-instance pattern. For non-GENERIC kinds the pair
+ * is determined by the kind table and the params are ignored.
+ *
+ * Why each currently-eligible kind is safe — see the kind-table
+ * comment block and the matching cheney_forward / promote /
+ * dead-from-space special cases for the per-kind safe-clone +
+ * cleanup invariants. */
 static bool osty_gc_young_eligible(int64_t object_kind, size_t payload_size,
                                    osty_gc_trace_fn trace,
                                    osty_gc_destroy_fn destroy) {
@@ -3227,20 +3208,16 @@ static bool osty_gc_young_eligible(int64_t object_kind, size_t payload_size,
         return false;
     }
     if (object_kind == OSTY_GC_KIND_GENERIC) {
-        /* Only the NONE pattern (no trace, no destroy) is young-safe;
-         * ENUM_PTR / TASK_HANDLE need the per-instance pattern at
-         * cheney time, which the 16-byte micro-header doesn't carry. */
-        if (trace != NULL || destroy != NULL) {
+        uint8_t pattern = osty_gc_pattern_of(trace, destroy);
+        if (!osty_gc_generic_patterns[pattern].young_eligible) {
             return false;
         }
-    } else if (object_kind != OSTY_GC_KIND_STRING &&
-               object_kind != OSTY_GC_KIND_BYTES &&
-               object_kind != OSTY_GC_KIND_LIST &&
-               object_kind != OSTY_GC_KIND_CLOSURE_ENV &&
-               object_kind != OSTY_GC_KIND_SET &&
-               object_kind != OSTY_GC_KIND_GENERIC_ENUM_PTR &&
-               object_kind != OSTY_GC_KIND_MAP) {
-        return false;
+    } else {
+        const osty_gc_kind_descriptor *desc =
+            osty_gc_kind_descriptor_lookup(object_kind);
+        if (desc == NULL || !desc->young_eligible) {
+            return false;
+        }
     }
     if (payload_size == 0 ||
         payload_size > (size_t)OSTY_GC_HUMONGOUS_THRESHOLD_BYTES) {
