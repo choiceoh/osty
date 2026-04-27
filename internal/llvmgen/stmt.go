@@ -2239,24 +2239,7 @@ func (g *generator) sourceSpanText(expr ast.Expr) string {
 // runs of whitespace so multi-line argument expressions (list literals,
 // struct literals) do not break the single-line failure message layout.
 func normalizeAssertExprText(text string) string {
-	var b strings.Builder
-	prevSpace := false
-	for _, r := range text {
-		switch r {
-		case '\n', '\r', '\t':
-			r = ' '
-		}
-		if r == ' ' {
-			if prevSpace {
-				continue
-			}
-			prevSpace = true
-		} else {
-			prevSpace = false
-		}
-		b.WriteRune(r)
-	}
-	return strings.TrimSpace(b.String())
+	return mirNormalizeAssertExprText(text)
 }
 
 func (g *generator) emitIfStmt(expr *ast.IfExpr) error {

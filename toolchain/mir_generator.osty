@@ -13043,3 +13043,123 @@ pub fn mirDataLayoutFor(target: String) -> String {
     }
     ""
 }
+
+/// §19 — pure string helpers ported from `internal/llvmgen/{expr,
+/// generator,ir_module,stdlib_shim,stmt,type}.go`. Each one produces
+/// LLVM-text or symbol fragments without touching `*ast.*` / `*mir.*`
+/// types, so they belong on the Osty side; the Go callers stay as
+/// thin wrappers.
+
+/// mirResultVariantName returns the canonical Osty `Result<...>` enum
+/// variant name for a runtime tag. The MIR lowering stores the
+/// discriminant as `tag = 0` for `Ok` and `tag = 1` for `Err`; the
+/// LLVM emitter translates that back into the source-level variant
+/// when synthesizing payload type lookups for `match` arms.
+pub fn mirResultVariantName(tag: Int) -> String {
+    if tag == 1 { return "Err" }
+    "Ok"
+}
+
+/// mirLlvmPointerOperand canonicalizes a pointer operand for LLVM-IR
+/// rendering. Empty or `null` strings round-trip; values already
+/// prefixed with `@` (global) or `%` (local) round-trip; bare names
+/// are reified as global references with a leading `@`. Used by every
+/// runtime trace-symbol callsite that drops a `ptr` operand into an
+/// `osty.gc.*` or `osty.runtime.*` call argument list.
+pub fn mirLlvmPointerOperand(name: String) -> String {
+    if name == "" || name == "null" { return name }
+    if llvmStrings.HasPrefix(name, "@") || llvmStrings.HasPrefix(name, "%") {
+        return name
+    }
+    "@" + name
+}
+
+/// mirSplitQualifiedName splits a dotted-qualified symbol name (e.g.
+/// `pkg.Type.method`) into its path components. Empty input yields
+/// an empty list — the IR-module emitter relies on this for the
+/// `Package == ""` fast-path when collecting external decl paths.
+pub fn mirSplitQualifiedName(name: String) -> List<String> {
+    if name == "" { return [] }
+    llvmStrings.split(name, ".")
+}
+
+/// mirScalarSomeBoxByteSize returns the heap-box payload size in
+/// bytes for a scalar `Some(...)` constructor, or `0` when the LLVM
+/// type isn't a recognized primitive width. Mirrors
+/// `listGetBoxByteSize` for the Some-construction path: the result
+/// pins the `osty.gc.alloc_v1` byte size so `Option<T>` stays
+/// uniformly ptr-backed at the LLVM layer regardless of T.
+///
+/// The Go-side wrapper rebuilds the original `(int, bool)` shape via
+/// `size > 0`; callers that only need the boolean check can compare
+/// the result to zero directly.
+pub fn mirScalarSomeBoxByteSize(typ: String) -> Int {
+    if typ == "i64" || typ == "double" { return 8 }
+    if typ == "i32" { return 4 }
+    if typ == "i8" || typ == "i1" { return 1 }
+    0
+}
+
+/// mirLlvmBuiltinAggregateName composes the canonical aggregate type
+/// name for a builtin shape (`Tuple`, `Result`, ...). Each part is
+/// folded through `mirLLVMBuiltinAggregatePart` so non-identifier
+/// fragments collapse to underscores; the result joins on `.` with a
+/// leading `%` so it lands as an LLVM type reference.
+pub fn mirLlvmBuiltinAggregateName(prefix: String, parts: List<String>) -> String {
+    let mut names = [prefix]
+    for p in parts { names.push(mirLLVMBuiltinAggregatePart(p)) }
+    "%" + llvmStrings.join(names, ".")
+}
+
+/// mirLlvmResultTypeName returns the canonical LLVM aggregate name
+/// for `Result<Ok, Err>`. The two payload type names are folded
+/// through the aggregate sanitizer the same way the tuple form does.
+pub fn mirLlvmResultTypeName(okTyp: String, errTyp: String) -> String {
+    mirLlvmBuiltinAggregateName("Result", [okTyp, errTyp])
+}
+
+/// mirLlvmTupleTypeName returns the canonical LLVM aggregate name
+/// for an N-ary tuple. An empty list yields the unit-tuple name
+/// `%Tuple`; otherwise each element type folds through the aggregate
+/// sanitizer.
+pub fn mirLlvmTupleTypeName(elemTypes: List<String>) -> String {
+    mirLlvmBuiltinAggregateName("Tuple", elemTypes)
+}
+
+/// mirNormalizeAssertExprText folds whitespace runs in the source
+/// text of an `assert` expression so the captured text fits cleanly
+/// inside a one-line diagnostic message. Newlines, carriage returns,
+/// and tabs collapse to a single space; trailing/leading whitespace
+/// is trimmed. The Go caller re-slices the original source bytes
+/// before calling this; we operate on the byte stream directly.
+pub fn mirNormalizeAssertExprText(text: String) -> String {
+    let mut buf = ""
+    let mut prevSpace = false
+    let n = text.len()
+    let mut i = 0
+    for i < n {
+        let mut ch = text[i..(i + 1)]
+        if ch == "\n" || ch == "\r" || ch == "\t" {
+            ch = " "
+        }
+        if ch == " " {
+            if prevSpace {
+                i = i + 1
+                continue
+            }
+            prevSpace = true
+        } else {
+            prevSpace = false
+        }
+        buf = buf + ch
+        i = i + 1
+    }
+    // Trim leading / trailing single-space (the run-collapse leaves at
+    // most one).
+    let blen = buf.len()
+    let mut lo = 0
+    let mut hi = blen
+    if hi > 0 && buf[0..1] == " " { lo = 1 }
+    if hi > lo && buf[(hi - 1)..hi] == " " { hi = hi - 1 }
+    buf[lo..hi]
+}

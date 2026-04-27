@@ -1408,10 +1408,7 @@ func prependRootIndex(index int, paths [][]int) [][]int {
 }
 
 func llvmPointerOperand(name string) string {
-	if name == "" || name == "null" || strings.HasPrefix(name, "@") || strings.HasPrefix(name, "%") {
-		return name
-	}
-	return "@" + name
+	return mirLlvmPointerOperand(name)
 }
 
 func (g *generator) visibleSafepointRoots() []gcSafepointRoot {

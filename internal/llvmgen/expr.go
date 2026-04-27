@@ -2105,10 +2105,7 @@ type resultPatternInfo struct {
 }
 
 func resultVariantName(tag int) string {
-	if tag == 1 {
-		return "Err"
-	}
-	return "Ok"
+	return mirResultVariantName(tag)
 }
 
 func (g *generator) matchResultPattern(info builtinResultType, pattern ast.Pattern) (resultPatternInfo, bool, error) {

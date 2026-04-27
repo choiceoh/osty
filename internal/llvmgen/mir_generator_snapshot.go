@@ -7980,3 +7980,97 @@ func mirDataLayoutFor(target string) string {
 	}
 	return ""
 }
+
+// §19 — pure string helpers ported from
+// internal/llvmgen/{expr,generator,ir_module,stdlib_shim,stmt,type}.go.
+
+// Osty: mirResultVariantName
+func mirResultVariantName(tag int) string {
+	if tag == 1 {
+		return "Err"
+	}
+	return "Ok"
+}
+
+// Osty: mirLlvmPointerOperand
+func mirLlvmPointerOperand(name string) string {
+	if name == "" || name == "null" {
+		return name
+	}
+	if llvmStrings.HasPrefix(name, "@") || llvmStrings.HasPrefix(name, "%") {
+		return name
+	}
+	return "@" + name
+}
+
+// Osty: mirSplitQualifiedName
+func mirSplitQualifiedName(name string) []string {
+	if name == "" {
+		return nil
+	}
+	return llvmStrings.Split(name, ".")
+}
+
+// Osty: mirScalarSomeBoxByteSize
+func mirScalarSomeBoxByteSize(typ string) int {
+	if typ == "i64" || typ == "double" {
+		return 8
+	}
+	if typ == "i32" {
+		return 4
+	}
+	if typ == "i8" || typ == "i1" {
+		return 1
+	}
+	return 0
+}
+
+// Osty: mirLlvmBuiltinAggregateName
+func mirLlvmBuiltinAggregateName(prefix string, parts []string) string {
+	names := make([]string, 0, len(parts)+1)
+	names = append(names, prefix)
+	for _, p := range parts {
+		names = append(names, mirLLVMBuiltinAggregatePart(p))
+	}
+	return "%" + llvmStrings.Join(names, ".")
+}
+
+// Osty: mirLlvmResultTypeName
+func mirLlvmResultTypeName(okTyp, errTyp string) string {
+	return mirLlvmBuiltinAggregateName("Result", []string{okTyp, errTyp})
+}
+
+// Osty: mirLlvmTupleTypeName
+func mirLlvmTupleTypeName(elemTypes []string) string {
+	return mirLlvmBuiltinAggregateName("Tuple", elemTypes)
+}
+
+// Osty: mirNormalizeAssertExprText
+func mirNormalizeAssertExprText(text string) string {
+	var buf llvmStrings.Builder
+	prevSpace := false
+	for i := 0; i < len(text); i++ {
+		ch := text[i]
+		if ch == '\n' || ch == '\r' || ch == '\t' {
+			ch = ' '
+		}
+		if ch == ' ' {
+			if prevSpace {
+				continue
+			}
+			prevSpace = true
+		} else {
+			prevSpace = false
+		}
+		buf.WriteByte(ch)
+	}
+	out := buf.String()
+	lo, hi := 0, len(out)
+	if hi > 0 && out[0] == ' ' {
+		lo = 1
+	}
+	if hi > lo && out[hi-1] == ' ' {
+		hi--
+	}
+	return out[lo:hi]
+}
