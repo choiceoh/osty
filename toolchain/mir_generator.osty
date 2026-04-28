@@ -14597,13 +14597,6 @@ pub fn mirSelectI1Text(reg: String, cond: String, thenV: String, elseV: String) 
     "  " + reg + " = select i1 " + cond + ", i1 " + thenV + ", i1 " + elseV
 }
 
-/// mirSelectI64Text renders `<reg> = select i1 <cond>, i64 <thenV>, i64 <elseV>`
-/// for body-slice callers (no trailing newline). Sibling of the line
-/// form already in §6.
-pub fn mirSelectI64Text(reg: String, cond: String, thenV: String, elseV: String) -> String {
-    "  " + reg + " = select i1 " + cond + ", i64 " + thenV + ", i64 " + elseV
-}
-
 /// mirSelectDoubleText renders `<reg> = select i1 <cond>, double <a>, double <b>`.
 pub fn mirSelectDoubleText(reg: String, cond: String, thenV: String, elseV: String) -> String {
     "  " + reg + " = select i1 " + cond + ", double " + thenV +
@@ -16631,7 +16624,7 @@ pub fn mirAsciiToLower(text: String) -> String {
     let mut out = ""
     let mut i = 0
     for i < n {
-        let chs = text.charAt(i)
+        let chs = text[i..(i + 1)]
         out = out + mirAsciiUpperToLowerChar(chs)
         i = i + 1
     }
@@ -16685,7 +16678,7 @@ pub fn mirSubstringRange(text: String, start: Int, end: Int) -> String {
     let mut out = ""
     let mut i = lo
     for i < hi {
-        out = out + text.charAt(i)
+        out = out + text[i..(i + 1)]
         i = i + 1
     }
     out
@@ -16738,7 +16731,7 @@ pub fn mirAsciiOrd(s: String) -> Int {
     if s == "d" { return 100 }
     if s == "e" { return 101 }
     if s == "f" { return 102 }
-    -1
+    return -1
 }
 
 /// mirAsciiChr returns a single-character String for the given ASCII
@@ -16813,7 +16806,7 @@ pub fn mirHexDigitValue(s: String) -> Int {
     if s == "d" || s == "D" { return 13 }
     if s == "e" || s == "E" { return 14 }
     if s == "f" || s == "F" { return 15 }
-    -1
+    return -1
 }
 
 /// mirNativeMapSetKeySupportedScalar reports whether a scalar map/set
@@ -16856,7 +16849,7 @@ pub fn mirTestingConstSourceTextBool(value: Bool) -> String {
 pub fn mirBuiltinResultIRTypeArgIndex(constructor: String) -> Int {
     if constructor == "Err" { return 1 }
     if constructor == "Ok" { return 0 }
-    -1
+    return -1
 }
 
 /// mirIsListPtrTypeName reports whether a NamedType.Name plus its
