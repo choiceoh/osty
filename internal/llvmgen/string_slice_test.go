@@ -34,6 +34,68 @@ fn main() {
 	}
 }
 
+func TestStringSliceThenStringMethodKeepsSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn elemHint(hint: String) -> String {
+    let n = hint.len()
+    hint[5..n - 1].trim()
+}
+
+fn main() {
+    println(elemHint("List< Int >"))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/string_slice_then_trim.osty"})
+	if err != nil {
+		t.Fatalf("slice-then-trim errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_strings_Slice",
+		"@osty_rt_strings_TrimSpace",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("slice-then-trim missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStringIndexReturnsCharAndToStringComposes(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn aggregatePart(part: String) -> String {
+    let mut buf = ""
+    let mut i = 0
+    let n = part.len()
+    for i < n {
+        let c = part[i]
+        if (c >= 'a' && c <= 'z') || c == '_' {
+            buf = buf + c.toString()
+        } else {
+            buf = buf + "_"
+        }
+        i = i + 1
+    }
+    buf
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/string_index_char.osty",
+	})
+	if err != nil {
+		t.Fatalf("String[Int] Char indexing errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare i32 @osty_rt_strings_CharAt(ptr, i64)",
+		"declare ptr @osty_rt_char_to_string(i32)",
+		"call i32 @osty_rt_strings_CharAt",
+		"call ptr @osty_rt_char_to_string",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStringSliceInclusiveRange(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn firstTwo(s: String) -> String {
     s[0..=1]

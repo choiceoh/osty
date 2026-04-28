@@ -1202,11 +1202,12 @@ func signatureOf(fn *ast.FnDecl, ownerName string, env typeEnv) (*fnSig, error) 
 		sig.receiverType = ownerType
 		sig.receiverMut = fn.Recv.Mut
 		selfInfo := paramInfo{
-			name:    "self",
-			typ:     ownerType,
-			irTyp:   llvmMethodReceiverIRType(ownerType, fn.Recv.Mut),
-			mutable: fn.Recv.Mut,
-			byRef:   fn.Recv.Mut,
+			name:       "self",
+			typ:        ownerType,
+			irTyp:      llvmMethodReceiverIRType(ownerType, fn.Recv.Mut),
+			sourceType: &ast.NamedType{Path: []string{ownerName}},
+			mutable:    fn.Recv.Mut,
+			byRef:      fn.Recv.Mut,
 		}
 		// Option B Phase 2d: when the owner struct/enum is a
 		// specialized stdlib built-in (Map / List / Set / Option /

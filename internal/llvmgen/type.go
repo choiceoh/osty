@@ -181,6 +181,16 @@ func llvmNamedTypeIsByte(t ast.Type) bool {
 	return mirIsLegacyZeroArgPathName(len(named.Path), firstPathOrEmpty(named.Path), len(named.Args), "Byte")
 }
 
+// llvmNamedTypeIsChar reports whether `t` is the bare `Char` named
+// type.
+func llvmNamedTypeIsChar(t ast.Type) bool {
+	named, ok := t.(*ast.NamedType)
+	if !ok {
+		return false
+	}
+	return mirIsLegacyZeroArgPathName(len(named.Path), firstPathOrEmpty(named.Path), len(named.Args), "Char")
+}
+
 // firstPathOrEmpty returns `path[0]` when `path` is non-empty, else
 // `""`. Used by the shape predicates to keep the call sites tidy.
 func firstPathOrEmpty(path []string) string {
@@ -579,6 +589,19 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		named, ok := resolved.(*ast.NamedType)
 		if !ok || len(named.Path) != 1 {
 			return nil, false
+		}
+		if llvmNamedTypeIsString(named) {
+			if _, ok := e.Index.(*ast.RangeExpr); ok {
+				return &ast.NamedType{Path: []string{"String"}}, true
+			}
+			if rangeSource, ok := g.staticExprSourceType(e.Index); ok {
+				if rangeResolved, err := llvmResolveAliasType(rangeSource, g.typeEnv(), map[string]bool{}); err == nil {
+					if rangeNamed, ok := rangeResolved.(*ast.NamedType); ok && len(rangeNamed.Path) == 1 && rangeNamed.Path[0] == "Range" {
+						return &ast.NamedType{Path: []string{"String"}}, true
+					}
+				}
+			}
+			return &ast.NamedType{Path: []string{"Char"}}, true
 		}
 		switch named.Path[0] {
 		case "List":
@@ -1050,6 +1073,13 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 			case baseInfo.mapKeyTyp != "":
 				out := value{typ: baseInfo.mapValueTyp, gcManaged: baseInfo.mapValueTyp == "ptr", rootPaths: g.rootPathsForType(baseInfo.mapValueTyp)}
 				return g.decorateStaticValueFromSourceType(out, e), true
+			case baseInfo.typ == "ptr":
+				if sourceType, ok := g.staticExprSourceType(e.X); ok {
+					if resolved, err := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{}); err == nil && llvmNamedTypeIsString(resolved) {
+						out := value{typ: "i32", sourceType: &ast.NamedType{Path: []string{"Char"}}}
+						return g.decorateStaticValueFromSourceType(out, e), true
+					}
+				}
 			}
 		}
 	}
@@ -1271,10 +1301,12 @@ func (g *generator) staticStdStringsCallSourceType(call *ast.CallExpr) (ast.Type
 		return nil, false
 	}
 	stringT := &ast.NamedType{Path: []string{"String"}}
-	switch field.Name {
+	switch canonicalStdStringsCallName(field.Name) {
 	case "compare", "count":
 		return &ast.NamedType{Path: []string{"Int"}}, true
-	case "indexOf":
+	case "Index", "LastIndex":
+		return &ast.NamedType{Path: []string{"Int"}}, true
+	case "indexOf", "lastIndexOf":
 		return &ast.OptionalType{Inner: &ast.NamedType{Path: []string{"Int"}}}, true
 	case "toInt":
 		return stringToIntResultSourceType(), true

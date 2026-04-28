@@ -64,6 +64,93 @@ fn main() {
 	}
 }
 
+func TestStdStringsGoStyleAliasesRouteToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as llvmStrings
+
+fn main() {
+    let left = llvmStrings.Index("banana", "na")
+    let right = llvmStrings.LastIndex("banana", "na")
+    let parts = llvmStrings.Split("a,b,c", ",")
+    let joined = llvmStrings.Join(parts, ":")
+    if llvmStrings.HasPrefix(joined, "a") && llvmStrings.Contains(joined, "b") && llvmStrings.HasSuffix(joined, "c") && right >= left {
+        println(right)
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_strings_go_style_aliases.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare i64 @osty_rt_strings_IndexOf(ptr, ptr)",
+		"declare i64 @osty_rt_strings_LastIndexOf(ptr, ptr)",
+		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
+		"declare ptr @osty_rt_strings_Join(ptr, ptr)",
+		"declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)",
+		"declare i1 @osty_rt_strings_Contains(ptr, ptr)",
+		"declare i1 @osty_rt_strings_HasSuffix(ptr, ptr)",
+		"call i64 @osty_rt_strings_IndexOf",
+		"call i64 @osty_rt_strings_LastIndexOf",
+		"call ptr @osty_rt_strings_Split",
+		"call ptr @osty_rt_strings_Join",
+		"call i1 @osty_rt_strings_HasPrefix",
+		"call i1 @osty_rt_strings_Contains",
+		"call i1 @osty_rt_strings_HasSuffix",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStdStringsGoStyleIndexStaysRawInt(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as llvmStrings
+
+fn typeHead(typeText: String) -> String {
+    let ltIdx = llvmStrings.Index(typeText, "<")
+    let stripped = if ltIdx >= 0 {
+        typeText[0..ltIdx]
+    } else {
+        typeText
+    }
+    let dotIdx = llvmStrings.Index(stripped, ".")
+    if dotIdx >= 0 {
+        stripped[(dotIdx + 1)..stripped.len()]
+    } else {
+        stripped
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_strings_go_style_index.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	if strings.Contains(got, "string.index_of.int") {
+		t.Fatalf("Go-style strings.Index should not box Option<Int>:\n%s", got)
+	}
+	for _, want := range []string{
+		"define ptr @typeHead(",
+		"call i64 @osty_rt_strings_IndexOf",
+		"call ptr @osty_rt_strings_Slice",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStdNetAliasCollectorRespectsRename(t *testing.T) {
 	file := parseLLVMGenFile(t, `use std.net as network
 

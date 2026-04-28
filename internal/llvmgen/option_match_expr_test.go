@@ -58,6 +58,53 @@ fn main() {
 	}
 }
 
+func TestOptionLongFormStructFieldMatchExprAndMethods(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct Child {
+    name: String
+}
+
+struct Holder {
+    child: Option<Child>
+}
+
+fn render(h: Holder) -> String {
+    match h.child {
+        Some(c) -> "{c.name}!",
+        None -> "none",
+    }
+}
+
+fn hasChild(h: Holder) -> Bool {
+    h.child.isSome()
+}
+
+fn forceName(h: Holder) -> String {
+    h.child.unwrap().name
+}
+
+fn debugChild(h: Holder) -> String {
+    h.child.toString()
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/option_long_form_struct_field_expr.osty"})
+	if err != nil {
+		t.Fatalf("Option<Child> field expression paths errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"define ptr @render(%Holder %h)",
+		"icmp eq ptr",
+		"load %Child, ptr",
+		"define i1 @hasChild(%Holder %h)",
+		"define ptr @forceName(%Holder %h)",
+		"define ptr @debugChild(%Holder %h)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // Wildcard arm fills the missing side. `match opt { None -> 0, _ -> 1 }`
 // (or symmetrically `_ -> -1, Some(x) -> x`) both lower; the
 // arm-resolution loop consults wildcardArm whenever Some or None is

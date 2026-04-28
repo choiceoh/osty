@@ -143,6 +143,9 @@ func TestBundledRuntimeStringsHelpersPreserveSemantics(t *testing.T) {
 
 int64_t osty_rt_strings_ByteLen(const char *value);
 int64_t osty_rt_strings_Compare(const char *left, const char *right);
+int64_t osty_rt_strings_IndexOf(const char *value, const char *substr);
+int64_t osty_rt_strings_LastIndexOf(const char *value, const char *substr);
+int32_t osty_rt_strings_CharAt(const char *value, int64_t index);
 int osty_rt_strings_Equal(const char *left, const char *right);
 const char *osty_rt_strings_Concat(const char *left, const char *right);
 const char *osty_rt_strings_ConcatN(int64_t count, const char *const *parts);
@@ -168,6 +171,16 @@ int main(void) {
            (long long)osty_rt_strings_Compare("a", "b"),
            (long long)osty_rt_strings_Compare("same", "same"),
            (long long)osty_rt_strings_Compare(NULL, ""));
+    printf("%lld %lld %lld %lld\n",
+           (long long)osty_rt_strings_IndexOf("banana", "na"),
+           (long long)osty_rt_strings_LastIndexOf("banana", "na"),
+           (long long)osty_rt_strings_LastIndexOf("banana", ""),
+           (long long)osty_rt_strings_LastIndexOf("banana", "zz"));
+    printf("%ld %ld %ld %ld\n",
+           (long)osty_rt_strings_CharAt("banana", 1),
+           (long)osty_rt_strings_CharAt("\xE6\xBC\xA2", 0),
+           (long)osty_rt_strings_CharAt("banana", 99),
+           (long)osty_rt_strings_CharAt("\xC3", 0));
 
     void *items = osty_rt_list_new();
     osty_rt_list_push_ptr(items, (void *)"runtime");
@@ -196,6 +209,8 @@ int main(void) {
 	want := "8 7\n" +
 		"1 1 1\n" +
 		"-1 0 0\n" +
+		"2 4 6 -1\n" +
+		"97 28450 0 65533\n" +
 		"compiler\n" +
 		"runtime\n" +
 		"runtime\n"

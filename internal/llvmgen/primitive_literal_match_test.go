@@ -164,3 +164,81 @@ fn main() {
 		t.Fatalf("emitted LLVM013 unsupported diagnostic where char-literal match lowering should fire:\n%s", got)
 	}
 }
+
+func TestGenerateIntLiteralNarrowsWithByteAndCharSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn byteOr(default: Byte) -> Byte {
+    default
+}
+
+fn charOr(default: Char) -> Char {
+    default
+}
+
+fn b() -> Byte {
+    byteOr(0)
+}
+
+fn c() -> Char {
+    charOr(65)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/int_literal_byte_char_hint.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"define i8 @byteOr(i8 %default)",
+		"define i32 @charOr(i32 %default)",
+		"call i8 @byteOr(i8 0)",
+		"call i32 @charOr(i32 65)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateIntLiteralNarrowsInsideByteContainersAndFallbacks(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn fromList() -> Byte {
+    let xs: List<Byte> = [0, 255]
+    xs[1]
+}
+
+fn fromMap(m: Map<String, Byte>) -> Byte {
+    m.getOr("x", 0)
+}
+
+fn fromOption(x: Byte?) -> Byte {
+    x.unwrapOr(0)
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/int_literal_byte_containers.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"store i8 0, ptr",
+		"store i8 255, ptr",
+		"call i1 @osty_rt_map_get_string(",
+		"load i8, ptr",
+		"phi i8",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "function \"byteOr\" arg 1 type i64") ||
+		strings.Contains(got, "want i8") {
+		t.Fatalf("Byte-hinted Int literals regressed to i64:\n%s", got)
+	}
+}

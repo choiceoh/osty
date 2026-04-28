@@ -67,6 +67,123 @@ fn main() {
 	}
 }
 
+func TestGenerateRuntimeStringsDeclaredAliasesUseCanonicalRuntimeABI(t *testing.T) {
+	file := parseLLVMGenFile(t, `use runtime.strings as strings {
+    fn len(s: String) -> Int
+    fn indexOf(s: String, needle: String) -> Int
+    fn LastIndex(s: String, needle: String) -> Int
+    fn startsWith(s: String, prefix: String) -> Bool
+    fn endsWith(s: String, suffix: String) -> Bool
+    fn trim(s: String) -> String
+    fn trimLeft(s: String) -> String
+    fn trimRight(s: String) -> String
+}
+
+fn score(s: String, needle: String) -> Int {
+    let mut n = strings.len(s) + strings.indexOf(s, needle) + strings.LastIndex(s, needle)
+    if strings.startsWith(s, needle) {
+        n = n + strings.len(strings.trim(s))
+    }
+    if strings.endsWith(s, needle) {
+        n = n + strings.len(strings.trimLeft(strings.trimRight(s)))
+    }
+    n
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/runtime_strings_aliases.osty",
+		Target:      "x86_64-unknown-linux-gnu",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, forbidden := range []string{
+		"@osty_rt_strings_len",
+		"@osty_rt_strings_indexOf",
+		"@osty_rt_strings_startsWith",
+		"@osty_rt_strings_endsWith",
+		"@osty_rt_strings_trim",
+		"LLVM002",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("generated IR used non-canonical runtime strings symbol %q:\n%s", forbidden, got)
+		}
+	}
+	for _, want := range []string{
+		"declare i64 @osty_rt_strings_ByteLen(ptr)",
+		"declare i64 @osty_rt_strings_IndexOf(ptr, ptr)",
+		"declare i64 @osty_rt_strings_LastIndexOf(ptr, ptr)",
+		"declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)",
+		"declare i1 @osty_rt_strings_HasSuffix(ptr, ptr)",
+		"declare ptr @osty_rt_strings_TrimSpace(ptr)",
+		"declare ptr @osty_rt_strings_TrimStart(ptr)",
+		"declare ptr @osty_rt_strings_TrimEnd(ptr)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateRuntimeStringsSyntheticSurfaceCarriesListMetadata(t *testing.T) {
+	file := parseLLVMGenFile(t, `use runtime.strings as strings {
+    fn join(parts: List<String>, sep: String) -> String
+}
+
+fn stitch(s: String) -> String {
+    let parts = strings.split(s, ",")
+    let capped = strings.splitN(s, ",", 2)
+    let words = strings.fields(s)
+    let chars = strings.chars(s)
+    let bytes = strings.bytes(s)
+    if chars.len() > 0 && bytes.len() > 0 {
+        return strings.join(parts, "|") + strings.join(capped, ":") + strings.join(words, "/")
+    }
+    strings.toUpper(strings.join(parts, "|"))
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/runtime_strings_synthetic.osty",
+		Target:      "x86_64-unknown-linux-gnu",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, forbidden := range []string{
+		"LLVM002",
+		"runtime-ffi",
+		"@osty_rt_strings_split",
+		"@osty_rt_strings_join",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("generated IR kept unsupported synthetic runtime strings surface %q:\n%s", forbidden, got)
+		}
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
+		"declare ptr @osty_rt_strings_SplitN(ptr, ptr, i64)",
+		"declare ptr @osty_rt_strings_Fields(ptr)",
+		"declare ptr @osty_rt_strings_Chars(ptr)",
+		"declare ptr @osty_rt_strings_Bytes(ptr)",
+		"declare ptr @osty_rt_strings_Join(ptr, ptr)",
+		"declare ptr @osty_rt_strings_ToUpper(ptr)",
+		"call ptr @osty_rt_strings_Split",
+		"call ptr @osty_rt_strings_Join",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateUseCSurfaceCharByteCoverage exercises `use c` with the
 // Char (i32) and Byte (i8) primitives that the runtime ABI gained in
 // LLVM011 follow-up work (#404). This is the regression net for
