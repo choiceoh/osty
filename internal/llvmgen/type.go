@@ -434,6 +434,9 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		if src, ok := g.staticStdBytesCallSourceType(e); ok {
 			return src, true
 		}
+		if src, ok := g.staticStdCompressCallSourceType(e); ok {
+			return src, true
+		}
 		if src, ok := g.staticStdStringsCallSourceType(e); ok {
 			return src, true
 		}
@@ -921,6 +924,9 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 			return value{typ: fn.ret, listElemTyp: fn.listElemTyp, gcManaged: fn.listElemTyp != ""}, true
 		}
 		if out, ok := g.stdBytesCallStaticResult(e); ok {
+			return out, true
+		}
+		if out, ok := g.stdCompressCallStaticResult(e); ok {
 			return out, true
 		}
 		if out, ok := g.stdStringsCallStaticResult(e); ok {
