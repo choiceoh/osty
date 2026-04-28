@@ -938,7 +938,11 @@ fn inspectInstantiationNotesByNode(
         if inst.typeArgs.len() == 0 {
             continue
         }
-        notes[inst.node] = "instantiated [" + strings.join(inst.typeArgs, ", ") + "]"
+        let mut argStrs: List<String> = []
+        for ta in inst.typeArgs {
+            argStrs.push(frontTypeReprToString(ta))
+        }
+        notes[inst.node] = "instantiated [" + strings.join(argStrs, ", ") + "]"
     }
     notes
 }
