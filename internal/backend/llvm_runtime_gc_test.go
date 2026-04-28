@@ -3485,6 +3485,164 @@ int main(void) {
 	}
 }
 
+// TestBundledRuntimeMapAndSetLockfreeTraceWithDeferredFree covers
+// Phase 0j (Map) and Phase 0k (Set) — both kinds flip
+// `trace_lockfree_safe = true`. Their grow paths route old keys /
+// values / items arrays through `osty_gc_defer_or_free` so a
+// concurrent marker reading those buffers sees them stay alive
+// for the duration of its trace. The test allocates a map and a
+// set, starts a cycle, then mid-cycle inserts force realloc + defer
+// on both backing arrays.
+func TestBundledRuntimeMapAndSetLockfreeTraceWithDeferredFree(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_map_set_lockfree_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_map_set_lockfree_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdbool.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+#define OSTY_RT_ABI_PTR 4
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+
+void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, void *value_trace);
+void osty_rt_map_insert_ptr(void *raw_map, void *key, const void *value);
+
+void *osty_rt_set_new(int64_t elem_kind);
+bool osty_rt_set_insert_ptr(void *raw_set, void *item);
+
+void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count);
+bool osty_gc_collect_incremental_step(int64_t budget);
+void osty_gc_collect_incremental_finish(void);
+
+int64_t osty_gc_debug_state(void);
+int64_t osty_gc_debug_live_count(void);
+int64_t osty_gc_debug_deferred_free_queued_total(void);
+int64_t osty_gc_debug_deferred_free_drained_total(void);
+int64_t osty_gc_debug_lockfree_trace_total(void);
+
+int main(void) {
+    /* Map (PTR -> PTR) and Set (PTR), seeded with a small number of
+     * entries so the first insert pre-cycle establishes heap-backed
+     * storage and a subsequent insert grows it. */
+    void *map = osty_rt_map_new(OSTY_RT_ABI_PTR, OSTY_RT_ABI_PTR,
+                                (int64_t)sizeof(void *), NULL);
+    osty_gc_root_bind_v1(map);
+    void *set = osty_rt_set_new(OSTY_RT_ABI_PTR);
+    osty_gc_root_bind_v1(set);
+
+    enum { PRE = 12 };
+    void *map_keys[PRE], *map_values[PRE], *set_items[PRE];
+    for (int i = 0; i < PRE; i++) {
+        map_keys[i] = osty_gc_alloc_v1(7, 16, "k");
+        map_values[i] = osty_gc_alloc_v1(7, 16, "v");
+        osty_rt_map_insert_ptr(map, map_keys[i], &map_values[i]);
+        set_items[i] = osty_gc_alloc_v1(7, 16, "item");
+        osty_rt_set_insert_ptr(set, set_items[i]);
+    }
+
+    long long queued_before  = (long long)osty_gc_debug_deferred_free_queued_total();
+    long long drained_before = (long long)osty_gc_debug_deferred_free_drained_total();
+    long long lockfree_before = (long long)osty_gc_debug_lockfree_trace_total();
+
+    osty_gc_collect_incremental_start_with_stack_roots(NULL, 0);
+
+    /* Mid-cycle inserts to force realloc + defer-free on both
+     * containers. The doubling cap means a few inserts trigger a
+     * grow; we do 30 to be safely past the next-power-of-two
+     * boundary. */
+    enum { MID = 30 };
+    void *mid_map_keys[MID], *mid_map_values[MID], *mid_set_items[MID];
+    for (int i = 0; i < MID; i++) {
+        mid_map_keys[i] = osty_gc_alloc_v1(7, 16, "mk");
+        mid_map_values[i] = osty_gc_alloc_v1(7, 16, "mv");
+        osty_rt_map_insert_ptr(map, mid_map_keys[i], &mid_map_values[i]);
+        mid_set_items[i] = osty_gc_alloc_v1(7, 16, "mitem");
+        osty_rt_set_insert_ptr(set, mid_set_items[i]);
+    }
+
+    while (osty_gc_collect_incremental_step(100)) {}
+    osty_gc_collect_incremental_finish();
+
+    long long queued_after  = (long long)osty_gc_debug_deferred_free_queued_total();
+    long long drained_after = (long long)osty_gc_debug_deferred_free_drained_total();
+    long long lockfree_after = (long long)osty_gc_debug_lockfree_trace_total();
+    long long state         = (long long)osty_gc_debug_state();
+    long long live          = (long long)osty_gc_debug_live_count();
+
+    printf("queued_delta=%lld drained_delta=%lld lockfree_delta=%lld state=%lld live=%lld\n",
+        queued_after - queued_before,
+        drained_after - drained_before,
+        lockfree_after - lockfree_before,
+        state, live);
+
+    osty_gc_root_release_v1(map);
+    osty_gc_root_release_v1(set);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := exec.Command("clang", "-std=c11", "-lz", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	buildOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(), "OSTY_GC_ASSIST_BYTES_PER_UNIT=0")
+	runOutput, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+	out := string(runOutput)
+	if !strings.Contains(out, "state=0 ") {
+		t.Fatalf("state!=IDLE; full output:\n%s", out)
+	}
+	/* live count: map + set + (PRE+MID) keys + (PRE+MID) values
+	 *           + (PRE+MID) items = 2 + 3*(12+30) = 128. */
+	if !strings.Contains(out, "live=128") {
+		t.Fatalf("live count wrong (want 128); full output:\n%s", out)
+	}
+	var queuedDelta, drainedDelta, lockfreeDelta, state, live int64
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "queued_delta=") {
+			continue
+		}
+		if _, err := fmt.Sscanf(line,
+			"queued_delta=%d drained_delta=%d lockfree_delta=%d state=%d live=%d",
+			&queuedDelta, &drainedDelta, &lockfreeDelta, &state, &live); err != nil {
+			t.Fatalf("could not parse %q: %v", line, err)
+		}
+		break
+	}
+	if queuedDelta < 1 {
+		t.Fatalf("queued_delta=%d, want >=1 (mid-cycle realloc should defer at least one buffer)\nfull output:\n%s",
+			queuedDelta, out)
+	}
+	if drainedDelta != queuedDelta {
+		t.Fatalf("drained_delta=%d != queued_delta=%d (finish should drain the queue exactly)\nfull output:\n%s",
+			drainedDelta, queuedDelta, out)
+	}
+	if lockfreeDelta < 1 {
+		t.Fatalf("lockfree_delta=%d, want >=1 (map/set traces must dispatch lockfree)\nfull output:\n%s",
+			lockfreeDelta, out)
+	}
+}
+
 // TestBundledRuntimeListLockfreeTraceWithDeferredFree covers Phase 0i —
 // LIST kind now flips to trace_lockfree_safe and `osty_rt_list_reserve`
 // always allocates a new buffer + memcpys + defers the old buffer's
