@@ -8812,6 +8812,14 @@ func mirPrependRootIndex(index int, paths [][]int) [][]int {
 }
 
 // Osty: mirIntrinsicKindLabelFull
+//
+// Slice 11 extension: covers every IntrinsicKind iota value from
+// IntrinsicPrint (1) through IntrinsicMapIncr (113). Diagnostics that
+// formerly rendered "kind=NN" now produce a symbolic label —
+// "list.push", "map.get_or", "select.recv" — making the failure mode
+// substantially easier to read at a glance. The label table is kept on
+// the Osty side so the canonical text lives next to the rest of the
+// MIR-emitter literal surface.
 func mirIntrinsicKindLabelFull(kind int, kindFallback string) string {
 	switch kind {
 	case 1:
@@ -8822,22 +8830,224 @@ func mirIntrinsicKindLabelFull(kind int, kindFallback string) string {
 		return "eprint"
 	case 4:
 		return "eprintln"
+	case 5:
+		return "abort"
 	case 6:
 		return "string_concat"
+	case 7:
+		return "chan.make"
+	case 8:
+		return "chan.send"
+	case 9:
+		return "chan.recv"
+	case 10:
+		return "chan.close"
+	case 11:
+		return "chan.is_closed"
+	case 12:
+		return "task_group"
+	case 13:
+		return "spawn"
+	case 14:
+		return "handle.join"
+	case 15:
+		return "group.cancel"
+	case 16:
+		return "group.is_cancelled"
+	case 17:
+		return "parallel"
+	case 18:
+		return "race"
+	case 19:
+		return "collect_all"
+	case 20:
+		return "select"
+	case 21:
+		return "select.recv"
+	case 22:
+		return "select.send"
+	case 23:
+		return "select.timeout"
+	case 24:
+		return "select.default"
+	case 25:
+		return "is_cancelled"
+	case 26:
+		return "check_cancelled"
+	case 27:
+		return "yield"
+	case 28:
+		return "sleep"
+	case 29:
+		return "list.push"
+	case 30:
+		return "list.len"
+	case 31:
+		return "list.get"
+	case 32:
+		return "list.is_empty"
+	case 33:
+		return "list.first"
+	case 34:
+		return "list.last"
+	case 35:
+		return "list.sorted"
+	case 36:
+		return "list.contains"
+	case 37:
+		return "list.index_of"
+	case 38:
+		return "list.to_set"
+	case 39:
+		return "list.remove_at"
+	case 40:
+		return "list.reverse"
+	case 41:
+		return "list.reversed"
+	case 42:
+		return "map.new"
+	case 43:
+		return "map.get"
+	case 44:
+		return "map.set"
+	case 45:
+		return "map.contains"
+	case 46:
+		return "map.len"
+	case 47:
+		return "map.keys"
+	case 48:
+		return "map.values"
+	case 49:
+		return "map.remove"
+	case 50:
+		return "map.keys_sorted"
+	case 51:
+		return "set.new"
+	case 52:
+		return "set.insert"
+	case 53:
+		return "set.contains"
+	case 54:
+		return "set.len"
+	case 55:
+		return "set.to_list"
+	case 56:
+		return "set.remove"
 	case 57:
 		return "string_len"
 	case 58:
 		return "string_is_empty"
+	case 59:
+		return "string_contains"
+	case 60:
+		return "string_count"
+	case 61:
+		return "string_starts_with"
+	case 62:
+		return "string_ends_with"
+	case 63:
+		return "string_index_of"
+	case 64:
+		return "string_split"
+	case 65:
+		return "string_trim"
+	case 66:
+		return "string_to_upper"
+	case 67:
+		return "string_to_lower"
 	case 68:
 		return "string_to_int"
 	case 69:
 		return "string_to_float"
+	case 70:
+		return "string_replace"
 	case 71:
 		return "string_chars"
 	case 72:
 		return "string_bytes"
+	case 73:
+		return "bytes.len"
+	case 74:
+		return "bytes.is_empty"
+	case 75:
+		return "bytes.get"
+	case 76:
+		return "bytes.contains"
+	case 77:
+		return "bytes.starts_with"
+	case 78:
+		return "bytes.ends_with"
+	case 79:
+		return "bytes.index_of"
+	case 80:
+		return "bytes.last_index_of"
+	case 81:
+		return "bytes.split"
+	case 82:
+		return "bytes.join"
+	case 83:
+		return "bytes.concat"
+	case 84:
+		return "bytes.repeat"
+	case 85:
+		return "bytes.replace"
+	case 86:
+		return "bytes.replace_all"
+	case 87:
+		return "bytes.trim_left"
+	case 88:
+		return "bytes.trim_right"
+	case 89:
+		return "bytes.trim"
+	case 90:
+		return "bytes.trim_space"
+	case 91:
+		return "bytes.to_upper"
+	case 92:
+		return "bytes.to_lower"
+	case 93:
+		return "bytes.to_hex"
+	case 94:
+		return "bytes.slice"
+	case 95:
+		return "option.is_some"
+	case 96:
+		return "option.is_none"
+	case 97:
+		return "option.unwrap"
+	case 98:
+		return "option.unwrap_or"
+	case 99:
+		return "result.is_ok"
+	case 100:
+		return "result.is_err"
+	case 101:
+		return "result.unwrap"
+	case 102:
+		return "result.unwrap_or"
 	case 103:
 		return "raw.null"
+	case 104:
+		return "string_join"
+	case 105:
+		return "list.pop"
+	case 106:
+		return "string_substring"
+	case 107:
+		return "byte.to_int"
+	case 108:
+		return "char.to_int"
+	case 109:
+		return "list.slice"
+	case 110:
+		return "map.get_or"
+	case 111:
+		return "string_split_into"
+	case 112:
+		return "string_nth_segment"
+	case 113:
+		return "map.incr"
 	}
 	return kindFallback
 }
@@ -9448,4 +9658,907 @@ func mirIfaceStructLayout() string {
 // Osty: mirRootFrameStructLayout
 func mirRootFrameStructLayout() string {
 	return "{ ptr, ptr, i64 }"
+}
+
+// Osty: mirSpliceFnAttrs
+func mirSpliceFnAttrs(rendered, attrs string) string {
+	const needle = ") {"
+	idx := llvmStrings.Index(rendered, needle)
+	if idx < 0 {
+		return rendered
+	}
+	return rendered[:idx] + ") " + attrs + " {" + rendered[idx+len(needle):]
+}
+
+// Osty: mirSpliceNoaliasParams
+//
+// Rewrites the first `define ... (<params>) {` line of rendered IR so
+// that pointer parameters whose type is `ptr` and (when `all` is false)
+// whose name appears in `selectedNames` carry the LLVM `noalias`
+// parameter attribute. Mirrors `spliceNoaliasParams` in
+// `internal/llvmgen/generator.go`.
+func mirSpliceNoaliasParams(
+	rendered string,
+	paramTypes, paramNames []string,
+	all bool,
+	selectedNames []string,
+) string {
+	lineEnd := llvmStrings.Index(rendered, "\n")
+	if lineEnd < 0 {
+		return rendered
+	}
+	line := rendered[:lineEnd]
+	rest := rendered[lineEnd:]
+	openParen := llvmStrings.Index(line, "(")
+	closeParen := llvmStrings.LastIndex(line, ")")
+	if openParen < 0 || closeParen < 0 || closeParen <= openParen {
+		return rendered
+	}
+	prefix := line[:openParen+1]
+	suffix := line[closeParen:]
+	inner := line[openParen+1 : closeParen]
+	if inner == "" {
+		return rendered
+	}
+	pieces := mirSplitCommaSep(inner)
+	out := make([]string, 0, len(pieces))
+	for i, piece := range pieces {
+		if i >= len(paramTypes) {
+			out = append(out, piece)
+			continue
+		}
+		if paramTypes[i] != "ptr" {
+			out = append(out, piece)
+			continue
+		}
+		if !all {
+			name := paramNames[i]
+			matched := false
+			for _, sn := range selectedNames {
+				if sn == name {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				out = append(out, piece)
+				continue
+			}
+		}
+		spaceIdx := llvmStrings.Index(piece, " ")
+		if spaceIdx < 0 {
+			out = append(out, piece)
+			continue
+		}
+		head := piece[:spaceIdx]
+		if head != "ptr" {
+			out = append(out, piece)
+			continue
+		}
+		regPart := piece[spaceIdx+1:]
+		out = append(out, "ptr noalias "+regPart)
+	}
+	return prefix + llvmStrings.Join(out, ", ") + suffix + rest
+}
+
+// Osty: mirSplitCommaSep
+func mirSplitCommaSep(input string) []string {
+	if input == "" {
+		return []string{""}
+	}
+	return llvmStrings.Split(input, ", ")
+}
+
+// Osty: mirTagParallelAccessesLines
+//
+// `[]string` twin of mirTagParallelAccesses.
+func mirTagParallelAccessesLines(body []string, groupRef string) []string {
+	suffix := ", !llvm.access.group " + groupRef
+	out := make([]string, len(body))
+	for i, line := range body {
+		if mirIsMemoryAccessLine(line) && !llvmStrings.Contains(line, "!llvm.access.group") {
+			out[i] = line + suffix
+			continue
+		}
+		out[i] = line
+	}
+	return out
+}
+
+// Osty: mirLlvmAggregatePathIndices
+func mirLlvmAggregatePathIndices(path []int) string {
+	parts := make([]string, 0, len(path)+1)
+	parts = append(parts, "i32 0")
+	for _, idx := range path {
+		parts = append(parts, "i32 "+strconv.Itoa(idx))
+	}
+	return llvmStrings.Join(parts, ", ")
+}
+
+// Osty: mirConstIntBinary
+//
+// 0 sentinel for failure (caller must consult mirConstIntBinaryStatus
+// to distinguish "computed 0" from "unsupported / divide-by-zero"):
+// 0 = success, 1 = div0, 2 = mod0, 3 = unsupported op.
+func mirConstIntBinary(
+	op int,
+	left, right int64,
+	plus, minus, star, slash, percent int,
+	bitAnd, bitOr, bitXor int,
+	shl, shr int,
+) int64 {
+	switch op {
+	case plus:
+		return left + right
+	case minus:
+		return left - right
+	case star:
+		return left * right
+	case slash:
+		if right == 0 {
+			return 0
+		}
+		return left / right
+	case percent:
+		if right == 0 {
+			return 0
+		}
+		return left % right
+	case bitAnd:
+		return left & right
+	case bitOr:
+		return left | right
+	case bitXor:
+		return left ^ right
+	case shl:
+		return left << uint(right)
+	case shr:
+		return left >> uint(right)
+	}
+	return 0
+}
+
+// Osty: mirConstIntBinaryStatus
+func mirConstIntBinaryStatus(
+	op int,
+	right int64,
+	plus, minus, star, slash, percent int,
+	bitAnd, bitOr, bitXor int,
+	shl, shr int,
+) int {
+	switch op {
+	case plus, minus, star, bitAnd, bitOr, bitXor, shl, shr:
+		return 0
+	case slash:
+		if right == 0 {
+			return 1
+		}
+		return 0
+	case percent:
+		if right == 0 {
+			return 2
+		}
+		return 0
+	}
+	return 3
+}
+
+// Osty: mirLegacyAssignOpCode
+func mirLegacyAssignOpCode(
+	op int,
+	assignEq, assignAdd, assignSub, assignMul, assignDiv, assignMod int,
+	assignAnd, assignOr, assignXor int,
+	assignShl, assignShr int,
+	tokAssign, tokPlusEq, tokMinusEq, tokStarEq, tokSlashEq, tokPercentEq int,
+	tokBitAndEq, tokBitOrEq, tokBitXorEq int,
+	tokShlEq, tokShrEq int,
+) int {
+	switch op {
+	case assignEq:
+		return tokAssign
+	case assignAdd:
+		return tokPlusEq
+	case assignSub:
+		return tokMinusEq
+	case assignMul:
+		return tokStarEq
+	case assignDiv:
+		return tokSlashEq
+	case assignMod:
+		return tokPercentEq
+	case assignAnd:
+		return tokBitAndEq
+	case assignOr:
+		return tokBitOrEq
+	case assignXor:
+		return tokBitXorEq
+	case assignShl:
+		return tokShlEq
+	case assignShr:
+		return tokShrEq
+	}
+	return tokAssign
+}
+
+// Osty: mirLegacyUnaryOpCode
+func mirLegacyUnaryOpCode(
+	op int,
+	unNeg, unPlus, unNot, unBitNot int,
+	tokMinus, tokPlus, tokNot, tokBitNot int,
+	tokIllegal int,
+) int {
+	switch op {
+	case unNeg:
+		return tokMinus
+	case unPlus:
+		return tokPlus
+	case unNot:
+		return tokNot
+	case unBitNot:
+		return tokBitNot
+	}
+	return tokIllegal
+}
+
+// Osty: mirLegacyBinaryOpCode
+func mirLegacyBinaryOpCode(
+	op int,
+	binAdd, binSub, binMul, binDiv, binMod int,
+	binEq, binNeq, binLt, binLeq, binGt, binGeq int,
+	binAnd, binOr int,
+	binBitAnd, binBitOr, binBitXor int,
+	binShl, binShr int,
+	tokPlus, tokMinus, tokStar, tokSlash, tokPercent int,
+	tokEQ, tokNEQ, tokLT, tokLEQ, tokGT, tokGEQ int,
+	tokAnd, tokOr int,
+	tokBitAnd, tokBitOr, tokBitXor int,
+	tokShl, tokShr int,
+	tokIllegal int,
+) int {
+	switch op {
+	case binAdd:
+		return tokPlus
+	case binSub:
+		return tokMinus
+	case binMul:
+		return tokStar
+	case binDiv:
+		return tokSlash
+	case binMod:
+		return tokPercent
+	case binEq:
+		return tokEQ
+	case binNeq:
+		return tokNEQ
+	case binLt:
+		return tokLT
+	case binLeq:
+		return tokLEQ
+	case binGt:
+		return tokGT
+	case binGeq:
+		return tokGEQ
+	case binAnd:
+		return tokAnd
+	case binOr:
+		return tokOr
+	case binBitAnd:
+		return tokBitAnd
+	case binBitOr:
+		return tokBitOr
+	case binBitXor:
+		return tokBitXor
+	case binShl:
+		return tokShl
+	case binShr:
+		return tokShr
+	}
+	return tokIllegal
+}
+
+// Osty: mirLegacyPrimTypeName
+func mirLegacyPrimTypeName(
+	kind int,
+	primInt, primInt8, primInt16, primInt32, primInt64 int,
+	primUInt8, primUInt16, primUInt32, primUInt64 int,
+	primByte int,
+	primFloat, primFloat32, primFloat64 int,
+	primBool, primChar, primString, primBytes int,
+) string {
+	switch kind {
+	case primInt:
+		return "Int"
+	case primInt8:
+		return "Int8"
+	case primInt16:
+		return "Int16"
+	case primInt32:
+		return "Int32"
+	case primInt64:
+		return "Int64"
+	case primUInt8:
+		return "UInt8"
+	case primUInt16:
+		return "UInt16"
+	case primUInt32:
+		return "UInt32"
+	case primUInt64:
+		return "UInt64"
+	case primByte:
+		return "Byte"
+	case primFloat:
+		return "Float"
+	case primFloat32:
+		return "Float32"
+	case primFloat64:
+		return "Float64"
+	case primBool:
+		return "Bool"
+	case primChar:
+		return "Char"
+	case primString:
+		return "String"
+	case primBytes:
+		return "Bytes"
+	}
+	return ""
+}
+
+// Osty: mirLegacyIntrinsicName
+func mirLegacyIntrinsicName(
+	kind int,
+	intrinsicPrint, intrinsicPrintln, intrinsicEprint, intrinsicEprintln int,
+) string {
+	switch kind {
+	case intrinsicPrint:
+		return "print"
+	case intrinsicPrintln:
+		return "println"
+	case intrinsicEprint:
+		return "eprint"
+	case intrinsicEprintln:
+		return "eprintln"
+	}
+	return ""
+}
+
+// Osty: mirLlvmCapturingClosureThunkDefinition
+func mirLlvmCapturingClosureThunkDefinition(
+	symbol, returnType string,
+	origParamTypes, captureTypes []string,
+	capturesOffset int,
+) string {
+	ret := returnType
+	if ret == "" {
+		ret = "void"
+	}
+	thunk := mirThunkName(symbol)
+	headerParts := []string{"ptr %env"}
+	origArgParts := make([]string, 0, len(origParamTypes))
+	for i, p := range origParamTypes {
+		idxStr := strconv.Itoa(i)
+		headerParts = append(headerParts, p+" %arg"+idxStr)
+		origArgParts = append(origArgParts, p+" %arg"+idxStr)
+	}
+	header := llvmStrings.Join(headerParts, ", ")
+	lines := []string{
+		mirThunkDefineHeaderText(ret, thunk, header),
+		"entry:",
+	}
+	captureArgParts := make([]string, 0, len(captureTypes))
+	for k, ct := range captureTypes {
+		offset := capturesOffset + k*8
+		kStr := strconv.Itoa(k)
+		lines = append(lines, mirCaptureSlotGEPText(kStr, "%env", strconv.Itoa(offset)))
+		lines = append(lines, mirCaptureLoadText(kStr, ct))
+		captureArgParts = append(captureArgParts, ct+" %cap"+kStr)
+	}
+	allArgs := append(origArgParts, captureArgParts...)
+	callArgs := llvmStrings.Join(allArgs, ", ")
+	if ret == "void" {
+		lines = append(lines, mirThunkCallVoidText(symbol, callArgs))
+		lines = append(lines, mirThunkRetVoidText())
+	} else {
+		lines = append(lines, mirThunkCallValueText(ret, symbol, callArgs))
+		lines = append(lines, mirThunkRetValueText(ret))
+	}
+	lines = append(lines, mirThunkBraceCloseText())
+	return llvmStrings.Join(lines, "\n")
+}
+
+// Osty: mirJoinCommaSep
+func mirJoinCommaSep(parts []string) string {
+	return llvmStrings.Join(parts, ", ")
+}
+
+// Osty: mirJoinNewline
+func mirJoinNewline(parts []string) string {
+	return llvmStrings.Join(parts, "\n")
+}
+
+// Osty: mirGEPI8ByteStrideText
+func mirGEPI8ByteStrideText(reg, basePtr, offDigits string) string {
+	return "  " + reg + " = getelementptr i8, ptr " + basePtr + ", i64 " + offDigits
+}
+
+// Osty: mirCaptureSlotGEPText
+func mirCaptureSlotGEPText(idxDigits, env, offDigits string) string {
+	return "  %cap" + idxDigits + "_slot = getelementptr i8, ptr " + env + ", i64 " + offDigits
+}
+
+// Osty: mirCaptureLoadText
+func mirCaptureLoadText(idxDigits, ty string) string {
+	return "  %cap" + idxDigits + " = load " + ty + ", ptr %cap" + idxDigits + "_slot"
+}
+
+// Osty: mirCaptureSlotGEPLine
+func mirCaptureSlotGEPLine(idxDigits, env, offDigits string) string {
+	return mirCaptureSlotGEPText(idxDigits, env, offDigits) + "\n"
+}
+
+// Osty: mirCaptureLoadLine
+func mirCaptureLoadLine(idxDigits, ty string) string {
+	return mirCaptureLoadText(idxDigits, ty) + "\n"
+}
+
+// Osty: mirThunkDefineHeaderText
+func mirThunkDefineHeaderText(ret, thunk, header string) string {
+	return "define private " + ret + " @" + thunk + "(" + header + ") {"
+}
+
+// Osty: mirThunkCallVoidText
+func mirThunkCallVoidText(sym, callArgs string) string {
+	return "  call void @" + sym + "(" + callArgs + ")"
+}
+
+// Osty: mirThunkCallValueText
+func mirThunkCallValueText(ret, sym, callArgs string) string {
+	return "  %ret = call " + ret + " @" + sym + "(" + callArgs + ")"
+}
+
+// Osty: mirThunkRetVoidText
+func mirThunkRetVoidText() string {
+	return "  ret void"
+}
+
+// Osty: mirThunkRetValueText
+func mirThunkRetValueText(ret string) string {
+	return "  ret " + ret + " %ret"
+}
+
+// Osty: mirThunkBraceCloseText
+func mirThunkBraceCloseText() string {
+	return "}"
+}
+
+// Osty: mirEnvCaptureStoreText
+func mirEnvCaptureStoreText(ty, val, slot string) string {
+	return "  store " + ty + " " + val + ", ptr " + slot
+}
+
+// Osty: mirEnvCaptureSlotPtrGEPText
+func mirEnvCaptureSlotPtrGEPText(slotPtr, env, offDigits string) string {
+	return "  " + slotPtr + " = getelementptr i8, ptr " + env + ", i64 " + offDigits
+}
+
+// Osty: mirThunkCallVoidLine
+func mirThunkCallVoidLine(sym, callArgs string) string {
+	return mirThunkCallVoidText(sym, callArgs) + "\n"
+}
+
+// Osty: mirThunkCallValueLine
+func mirThunkCallValueLine(ret, sym, callArgs string) string {
+	return mirThunkCallValueText(ret, sym, callArgs) + "\n"
+}
+
+// Osty: mirThunkRetVoidLine
+func mirThunkRetVoidLine() string {
+	return "  ret void\n"
+}
+
+// Osty: mirThunkRetValueLine
+func mirThunkRetValueLine(ret string) string {
+	return "  ret " + ret + " %ret\n"
+}
+
+// Osty: mirThunkDefineHeaderLine
+func mirThunkDefineHeaderLine(ret, thunk, header string) string {
+	return mirThunkDefineHeaderText(ret, thunk, header) + "\n"
+}
+
+// Osty: mirLlvmMethodIRName
+func mirLlvmMethodIRName(ownerName, methodName string) string {
+	return mirSanitizeLLVMName(ownerName) + "__" + mirSanitizeLLVMName(methodName)
+}
+
+// Osty: mirLlvmMethodReceiverIRType
+func mirLlvmMethodReceiverIRType(ownerType string, mutable bool) string {
+	if mutable {
+		return "ptr"
+	}
+	return ownerType
+}
+
+// Osty: mirIntrinsicVectorListFastPathSafe
+//
+// Renamed on the Osty side to avoid colliding with the existing
+// host-side `mirIntrinsicSafeForVectorListFastPath` symbol in
+// `mir_generator.go` — both would land in the same package.
+func mirIntrinsicVectorListFastPathSafe(
+	kind, intrinsicListLen, intrinsicListIsEmpty int,
+) bool {
+	switch kind {
+	case intrinsicListLen, intrinsicListIsEmpty:
+		return true
+	}
+	return false
+}
+
+// Osty: mirNativeShimDefineHeaderText
+func mirNativeShimDefineHeaderText(ret, structName, ifaceName, methodName, rest string) string {
+	return "define " + ret + " @osty.shim." + structName + "__" + ifaceName + "__" + methodName +
+		"(ptr %self_data" + rest + ") {\nentry:\n"
+}
+
+// Osty: mirNativeShimLoadSelfText
+func mirNativeShimLoadSelfText(structLLVM string) string {
+	return "  %self = load " + structLLVM + ", ptr %self_data, align 8\n"
+}
+
+// Osty: mirNativeShimCallVoidText
+func mirNativeShimCallVoidText(ret, sym, argList string) string {
+	return "  call " + ret + " @" + sym + "(" + argList + ")\n"
+}
+
+// Osty: mirNativeShimCallValueText
+func mirNativeShimCallValueText(ret, sym, argList string) string {
+	return "  %res = call " + ret + " @" + sym + "(" + argList + ")\n"
+}
+
+// Osty: mirNativeShimRetVoidText
+func mirNativeShimRetVoidText() string {
+	return "  ret void\n"
+}
+
+// Osty: mirNativeShimRetValueText
+func mirNativeShimRetValueText(ret string) string {
+	return "  ret " + ret + " %res\n"
+}
+
+// Osty: mirArrayI64TypeText
+func mirArrayI64TypeText(nDigits string) string {
+	return "[" + nDigits + " x i64]"
+}
+
+// Osty: mirArrayPtrTypeText
+func mirArrayPtrTypeText(nDigits string) string {
+	return "[" + nDigits + " x ptr]"
+}
+
+// Osty: mirArrayI8TypeText
+func mirArrayI8TypeText(nDigits string) string {
+	return "[" + nDigits + " x i8]"
+}
+
+// Osty: mirInternalConstantGlobalLine
+func mirInternalConstantGlobalLine(irName, ty, init string) string {
+	return irName + " = internal constant " + ty + " " + init + "\n"
+}
+
+// Osty: mirInternalGlobalLine
+func mirInternalGlobalLine(irName, ty, init string) string {
+	return irName + " = internal global " + ty + " " + init + "\n"
+}
+
+// Osty: mirInternalGlobalDefForKind
+func mirInternalGlobalDefForKind(irName string, mutable bool, ty, init string) string {
+	if mutable {
+		return mirInternalGlobalLine(irName, ty, init)
+	}
+	return mirInternalConstantGlobalLine(irName, ty, init)
+}
+
+// Osty: mirConstStructInitText
+func mirConstStructInitText(parts string) string {
+	return "{ " + parts + " }"
+}
+
+// Osty: mirConstEnumVariantInitText
+func mirConstEnumVariantInitText(tagDigits, typedPayload string) string {
+	return "{ i64 " + tagDigits + ", " + typedPayload + " }"
+}
+
+// Osty: mirConstTypedInitText
+func mirConstTypedInitText(ty, init string) string {
+	return ty + " " + init
+}
+
+// Osty: mirSyntheticArgName
+func mirSyntheticArgName(idxDigits string) string {
+	return "__arg" + idxDigits
+}
+
+// Osty: mirCallArgsPtrPrefix
+func mirCallArgsPtrPrefix(selfPtr string) string {
+	return "ptr " + selfPtr
+}
+
+// Osty: mirCallArgsTypePair
+func mirCallArgsTypePair(ty, val string) string {
+	return ty + " " + val
+}
+
+// Osty: mirAppendArgWithComma
+func mirAppendArgWithComma(existing, ty, val string) string {
+	return existing + ", " + ty + " " + val
+}
+
+// Osty: mirAppendCallArgPart
+func mirAppendCallArgPart(existing, ty, val string) string {
+	if existing == "" {
+		return ty + " " + val
+	}
+	return existing + ", " + ty + " " + val
+}
+
+// Osty: mirLlvmFloat64HexLiteral
+func mirLlvmFloat64HexLiteral(hexDigits string) string {
+	return "0x" + hexDigits
+}
+
+// Osty: mirFormatFloatEnsureDot
+func mirFormatFloatEnsureDot(formatted string) string {
+	if llvmStrings.ContainsAny(formatted, ".eE") {
+		return formatted
+	}
+	return formatted + ".0"
+}
+
+// (mirParamSlotName / mirLocalSlotName already defined earlier in this
+// file as part of the §8 LLVM-text local-name composers — same body,
+// kept singleton.)
+
+// Osty: mirRuntimeDeclareI1FromTwoPtrText
+func mirRuntimeDeclareI1FromTwoPtrText(sym string) string {
+	return "declare i1 @" + sym + "(ptr, ptr)"
+}
+
+// Osty: mirRuntimeDeclareI64FromTwoPtrText
+func mirRuntimeDeclareI64FromTwoPtrText(sym string) string {
+	return "declare i64 @" + sym + "(ptr, ptr)"
+}
+
+// Osty: mirIntrinsicWrittenByText
+func mirIntrinsicWrittenByText(kindDigits, lineDigits, colDigits string) string {
+	return "written by intrinsic kind=" + kindDigits + " at " + lineDigits + ":" + colDigits
+}
+
+// Osty: mirCallWrittenByText
+func mirCallWrittenByText(callee, lineDigits, colDigits string) string {
+	return "written by call `" + callee + "` at " + lineDigits + ":" + colDigits
+}
+
+// Osty: mirAssignWrittenByText
+func mirAssignWrittenByText(lineDigits, colDigits, src string) string {
+	return "written by assign at " + lineDigits + ":" + colDigits + " (src=" + src + ")"
+}
+
+// Osty: mirRValueBinaryDebugText
+func mirRValueBinaryDebugText(opDigits, typeStr string) string {
+	return "BinaryRV(op=" + opDigits + ", T=" + typeStr + ")"
+}
+
+// Osty: mirRValueUnaryDebugText
+func mirRValueUnaryDebugText(opDigits, typeStr string) string {
+	return "UnaryRV(op=" + opDigits + ", T=" + typeStr + ")"
+}
+
+// Osty: mirRValueAggregateDebugText
+func mirRValueAggregateDebugText(kindDigits, typeStr string) string {
+	return "AggregateRV(kind=" + kindDigits + ", T=" + typeStr + ")"
+}
+
+// Osty: mirRValueCastDebugText
+func mirRValueCastDebugText(kindDigits, typeStr string) string {
+	return "CastRV(kind=" + kindDigits + ", To=" + typeStr + ")"
+}
+
+// Osty: mirIntrinsicLabelKindFallback
+func mirIntrinsicLabelKindFallback(kindDigits string) string {
+	return "kind=" + kindDigits
+}
+
+// Osty: mirTestingFailureMessage
+func mirTestingFailureMessage(method, label string) string {
+	return "testing." + method + " failed at " + label
+}
+
+// Osty: mirSourceLineLabelText
+func mirSourceLineLabelText(source, lineDigits string) string {
+	return source + ":" + lineDigits
+}
+
+// Osty: mirAssertExprFragmentText
+func mirAssertExprFragmentText(base, label, exprText string) string {
+	return base + ": " + label + "=`" + exprText + "`"
+}
+
+// Osty: mirAssertExprLeftFragmentText
+func mirAssertExprLeftFragmentText(base, leftText string) string {
+	return base + ": left=`" + leftText + "`"
+}
+
+// Osty: mirAssertExprRightFragmentText
+func mirAssertExprRightFragmentText(rightText string) string {
+	return " right=`" + rightText + "`"
+}
+
+// Osty: mirOptionUnwrapNoneMessage
+func mirOptionUnwrapNoneMessage(label string) string {
+	return "unwrap on None at " + label
+}
+
+// Osty: mirDebugIdentText
+func mirDebugIdentText(quotedName string) string {
+	return "ident " + quotedName
+}
+
+// Osty: mirDebugVariantNoArgsText
+func mirDebugVariantNoArgsText(path string) string {
+	return "variant " + path + " (no args)"
+}
+
+// Osty: mirDebugVariantWithArgsText
+func mirDebugVariantWithArgsText(path, argDigits string) string {
+	return "variant " + path + " with " + argDigits + " arg(s)"
+}
+
+// Osty: mirDebugTupleText
+func mirDebugTupleText(elemDigits string) string {
+	return "tuple of " + elemDigits
+}
+
+// Osty: mirDebugStructText
+func mirDebugStructText(typePath string) string {
+	return "struct " + typePath
+}
+
+// Osty: mirParamIndexedName
+func mirParamIndexedName(idxDigits string) string {
+	return "arg" + idxDigits
+}
+
+// Osty: mirParamRegRef
+func mirParamRegRef(idxDigits string) string {
+	return "%arg" + idxDigits
+}
+
+// Osty: mirCaptureRegRef
+func mirCaptureRegRef(idxDigits string) string {
+	return "%cap" + idxDigits
+}
+
+// Osty: mirReturnRegRef
+func mirReturnRegRef() string {
+	return "%ret"
+}
+
+// Osty: mirSelfRegRef
+func mirSelfRegRef() string {
+	return "%self"
+}
+
+// Osty: mirSelfDataRegRef
+func mirSelfDataRegRef() string {
+	return "%self_data"
+}
+
+// Osty: mirEnvRegRef
+func mirEnvRegRef() string {
+	return "%env"
+}
+
+// Osty: mirCapSlotRegRef
+func mirCapSlotRegRef(idxDigits string) string {
+	return "%cap" + idxDigits + "_slot"
+}
+
+// Osty: mirAtPosLabelText
+func mirAtPosLabelText(pos, offsetDigits string) string {
+	return "at " + pos + " (offset " + offsetDigits + ")"
+}
+
+// Osty: mirAtPosNoOffsetLabelText
+func mirAtPosNoOffsetLabelText(pos string) string {
+	return "at " + pos
+}
+
+// Osty: mirInternalDeclareTextNoArgs
+func mirInternalDeclareTextNoArgs(retTy, sym string) string {
+	return "declare " + retTy + " @" + sym + "()"
+}
+
+// Osty: mirInternalDeclareTextOnePtr
+func mirInternalDeclareTextOnePtr(retTy, sym string) string {
+	return "declare " + retTy + " @" + sym + "(ptr)"
+}
+
+// Osty: mirInternalDeclareTextOneI64
+func mirInternalDeclareTextOneI64(retTy, sym string) string {
+	return "declare " + retTy + " @" + sym + "(i64)"
+}
+
+// Osty: mirInternalDeclareTextOneI32
+func mirInternalDeclareTextOneI32(retTy, sym string) string {
+	return "declare " + retTy + " @" + sym + "(i32)"
+}
+
+// Osty: mirInternalDeclareTextI1FromPtrI64
+func mirInternalDeclareTextI1FromPtrI64(sym string) string {
+	return "declare i1 @" + sym + "(ptr, i64)"
+}
+
+// Osty: mirInternalDeclareTextPtrFromPtrI64
+func mirInternalDeclareTextPtrFromPtrI64(sym string) string {
+	return "declare ptr @" + sym + "(ptr, i64)"
+}
+
+// Osty: mirInternalDeclareTextI64FromPtr
+func mirInternalDeclareTextI64FromPtr(sym string) string {
+	return "declare i64 @" + sym + "(ptr)"
+}
+
+// Osty: mirInternalDeclareTextI32FromPtr
+func mirInternalDeclareTextI32FromPtr(sym string) string {
+	return "declare i32 @" + sym + "(ptr)"
+}
+
+// Osty: mirInternalDeclareTextVoidFromPtr
+func mirInternalDeclareTextVoidFromPtr(sym string) string {
+	return "declare void @" + sym + "(ptr)"
+}
+
+// Osty: mirInternalDeclareTextVoidNoArgs
+func mirInternalDeclareTextVoidNoArgs(sym string) string {
+	return "declare void @" + sym + "()"
+}
+
+// Osty: mirSelfStateRegRef
+func mirSelfStateRegRef() string {
+	return "%self_state"
+}
+
+// Osty: mirSelfPtrRegRef
+func mirSelfPtrRegRef() string {
+	return "%self.ptr"
+}
+
+// Osty: mirSelfValRegRef
+func mirSelfValRegRef() string {
+	return "%self.val"
+}
+
+// Osty: mirRetValRegRef
+func mirRetValRegRef() string {
+	return "%ret.val"
+}
+
+// Osty: mirInterfaceShimVoidCallText
+func mirInterfaceShimVoidCallText(sym, argList string) string {
+	return "  call void @" + sym + "(" + argList + ")"
+}
+
+// Osty: mirInterfaceShimValueCallText
+func mirInterfaceShimValueCallText(retTy, sym, argList string) string {
+	return "  %ret.val = call " + retTy + " @" + sym + "(" + argList + ")"
+}
+
+// Osty: mirInterfaceShimRetVoidText
+func mirInterfaceShimRetVoidText() string {
+	return "  ret void"
+}
+
+// Osty: mirInterfaceShimRetValueText
+func mirInterfaceShimRetValueText(retTy string) string {
+	return "  ret " + retTy + " %ret.val"
 }

@@ -13,7 +13,7 @@
 package llvmgen
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
@@ -187,7 +187,7 @@ func synthFnSigFromFnType(ft *ast.FnType, env typeEnv) (*fnSig, error) {
 			return nil, err
 		}
 		info := paramInfo{
-			name:  fmt.Sprintf("arg%d", i),
+			name:  mirParamIndexedName(strconv.Itoa(i)),
 			typ:   typ,
 			irTyp: typ,
 		}
@@ -350,8 +350,8 @@ func (g *generator) emitClosureMakerCall(call *ast.CallExpr) (value, bool, error
 	for i, cv := range captureVals {
 		offset := llvmClosureEnvCapturesOffset() + i*8
 		slotPtr := llvmNextTemp(emitter)
-		emitter.body = append(emitter.body, fmt.Sprintf("  %s = getelementptr i8, ptr %s, i64 %d", slotPtr, env.name, offset))
-		emitter.body = append(emitter.body, fmt.Sprintf("  store %s %s, ptr %s", cv.typ, cv.ref, slotPtr))
+		emitter.body = append(emitter.body, mirEnvCaptureSlotPtrGEPText(slotPtr, env.name, strconv.Itoa(offset)))
+		emitter.body = append(emitter.body, mirEnvCaptureStoreText(cv.typ, cv.ref, slotPtr))
 	}
 	g.takeOstyEmitter(emitter)
 	return value{
@@ -402,44 +402,18 @@ func (g *generator) ensureCapturingClosureThunk(rec *liftedClosure, origParamCou
 
 // llvmCapturingClosureThunkDefinition emits the LLVM IR for a
 // Phase 4 capturing thunk. See ensureCapturingClosureThunk for the
-// shape and call ABI.
+// shape and call ABI. Delegates to the Osty-sourced
+// `mirLlvmCapturingClosureThunkDefinition`
+// (`toolchain/mir_generator.osty`); the host-side wrapper plumbs the
+// fixed `closureEnvCapturesOffset` so the Osty function can stay pure.
 func llvmCapturingClosureThunkDefinition(symbol string, returnType string, origParamTypes []string, captureTypes []string) string {
-	ret := returnType
-	if ret == "" {
-		ret = "void"
-	}
-	headerParts := []string{"ptr %env"}
-	origArgParts := make([]string, 0, len(origParamTypes))
-	for i, p := range origParamTypes {
-		headerParts = append(headerParts, fmt.Sprintf("%s %%arg%d", p, i))
-		origArgParts = append(origArgParts, fmt.Sprintf("%s %%arg%d", p, i))
-	}
-	header := strings.Join(headerParts, ", ")
-	thunk := llvmClosureThunkName(symbol)
-	lines := []string{
-		fmt.Sprintf("define private %s @%s(%s) {", ret, thunk, header),
-		"entry:",
-	}
-	captureArgParts := make([]string, 0, len(captureTypes))
-	for i, ct := range captureTypes {
-		offset := llvmClosureEnvCapturesOffset() + i*8
-		slotName := fmt.Sprintf("%%cap%d_slot", i)
-		valName := fmt.Sprintf("%%cap%d", i)
-		lines = append(lines, fmt.Sprintf("  %s = getelementptr i8, ptr %%env, i64 %d", slotName, offset))
-		lines = append(lines, fmt.Sprintf("  %s = load %s, ptr %s", valName, ct, slotName))
-		captureArgParts = append(captureArgParts, fmt.Sprintf("%s %s", ct, valName))
-	}
-	allArgs := append(origArgParts, captureArgParts...)
-	callArgs := strings.Join(allArgs, ", ")
-	if ret == "void" {
-		lines = append(lines, fmt.Sprintf("  call void @%s(%s)", symbol, callArgs))
-		lines = append(lines, "  ret void")
-	} else {
-		lines = append(lines, fmt.Sprintf("  %%ret = call %s @%s(%s)", ret, symbol, callArgs))
-		lines = append(lines, fmt.Sprintf("  ret %s %%ret", ret))
-	}
-	lines = append(lines, "}")
-	return strings.Join(lines, "\n")
+	return mirLlvmCapturingClosureThunkDefinition(
+		symbol,
+		returnType,
+		origParamTypes,
+		captureTypes,
+		llvmClosureEnvCapturesOffset(),
+	)
 }
 
 func (g *generator) protectFnValueCallback(prefix string, v value, label string) (value, *fnSig, error) {
