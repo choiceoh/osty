@@ -1,15 +1,23 @@
 package check
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
+)
+
+var (
+	repoNativeCheckerOnce sync.Once
+	repoNativeCheckerPath string
+	repoNativeCheckerErr  error
 )
 
 func TestNativeBoundaryExecutesRepoCheckerBinary(t *testing.T) {
@@ -175,9 +183,20 @@ func TestNativeBoundaryExecChecksStructuredPackageInput(t *testing.T) {
 
 func buildRepoNativeChecker(t *testing.T) string {
 	t.Helper()
+
+	repoNativeCheckerOnce.Do(func() {
+		repoNativeCheckerPath, repoNativeCheckerErr = buildRepoNativeCheckerOnce()
+	})
+	if repoNativeCheckerErr != nil {
+		t.Fatalf("build repo native checker: %v", repoNativeCheckerErr)
+	}
+	return repoNativeCheckerPath
+}
+
+func buildRepoNativeCheckerOnce() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		t.Fatalf("getwd: %v", err)
+		return "", err
 	}
 	root := filepath.Clean(filepath.Join(cwd, "..", ".."))
 	name := "osty-native-checker"
@@ -189,12 +208,16 @@ func buildRepoNativeChecker(t *testing.T) string {
 		// handles the extension transparently, so either form works.
 		name += ".exe"
 	}
-	bin := filepath.Join(t.TempDir(), name)
+	dir, err := os.MkdirTemp("", "osty-native-checker-test-*")
+	if err != nil {
+		return "", err
+	}
+	bin := filepath.Join(dir, name)
 	cmd := exec.Command("go", "build", "-o", bin, "./cmd/osty-native-checker")
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("go build osty-native-checker: %v\n%s", err, out)
+		return "", fmt.Errorf("go build osty-native-checker: %w\n%s", err, out)
 	}
-	return bin
+	return bin, nil
 }

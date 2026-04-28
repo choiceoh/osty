@@ -111,6 +111,9 @@ func newBackendRequest(t *testing.T, emit EmitMode, src string) Request {
 
 func requireClangForBackendTest(t *testing.T) {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("clang backend integration skipped in -short")
+	}
 	if _, err := exec.LookPath("clang"); err != nil {
 		t.Skip("clang not found on PATH")
 	}

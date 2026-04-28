@@ -21,6 +21,9 @@ import (
 // Info-only: never fails. Run with `go test -v -run
 // TestSweepToolchainLargeTail` to see the histogram.
 func TestSweepToolchainLargeTail(t *testing.T) {
+	if testing.Short() {
+		t.Skip("info-only toolchain sweep skipped in -short")
+	}
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("abs root: %v", err)
@@ -94,6 +97,9 @@ func TestSweepToolchainLargeTail(t *testing.T) {
 //
 // Info-only.
 func TestSweepToolchainLargeTailLLVM011Subwalls(t *testing.T) {
+	if testing.Short() {
+		t.Skip("info-only toolchain sweep skipped in -short")
+	}
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("abs root: %v", err)
@@ -169,6 +175,9 @@ func TestSweepToolchainLargeTailLLVM011Subwalls(t *testing.T) {
 // ir.osty and check_env.osty so the first-hit signature is visible
 // without scrolling the full sweep output. Info-only.
 func TestSweepToolchainLargeTailFocus(t *testing.T) {
+	if testing.Short() {
+		t.Skip("info-only toolchain sweep skipped in -short")
+	}
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("abs root: %v", err)
@@ -199,6 +208,9 @@ func TestSweepToolchainLargeTailFocus(t *testing.T) {
 // TestSweepToolchainLargeTailLLVM015Subwalls — same as LLVM011 sweep
 // but for LLVM015 (call dispatch). Info-only.
 func TestSweepToolchainLargeTailLLVM015Subwalls(t *testing.T) {
+	if testing.Short() {
+		t.Skip("info-only toolchain sweep skipped in -short")
+	}
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("abs root: %v", err)
@@ -247,6 +259,9 @@ func TestSweepToolchainLargeTailLLVM015Subwalls(t *testing.T) {
 // operator can tell whether the remaining single-file LLVM015 was a
 // true capability gap or just missing-symbol noise.
 func TestSweepToolchainPackageLevel(t *testing.T) {
+	if testing.Short() {
+		t.Skip("info-only toolchain sweep skipped in -short")
+	}
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("abs root: %v", err)

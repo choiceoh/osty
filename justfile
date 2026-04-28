@@ -64,7 +64,7 @@ spec:
     go test {{test_flags}} ./internal/speccorpus -v
 
 short:
-    go test {{test_flags}} -short ./...
+    go list ./... | rg -v '^github\.com/osty/osty/benchmarks/' | xargs go test {{test_flags}} -short
 
 full:
     go test {{test_flags}} ./...
@@ -134,4 +134,4 @@ watch-pipe target:
     watchexec -e go,osty --restart -- just pipe {{target}}
 
 sum pkg="./...":
-    if command -v gotestsum >/dev/null 2>&1; then gotestsum -- {{pkg}}; else go test {{test_flags}} {{pkg}}; fi
+    if command -v gotestsum >/dev/null 2>&1; then gotestsum -- {{test_flags}} {{pkg}}; else go test {{test_flags}} {{pkg}}; fi
