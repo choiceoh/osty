@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -1841,6 +1842,171 @@ int main(void) {
 	// cost so that future diff clearly shows the improvement.
 	if pauseUs > 500000 {
 		t.Fatalf("STW major pause regressed: %dus (ceiling 500000us)", pauseUs)
+	}
+}
+
+// TestBundledRuntimeGcPauseConcurrentVsStw runs the same 40MB heap
+// workload as the baseline above through both collector paths and
+// reports the pause + throughput difference. The STW path blocks the
+// main thread for the entire mark+sweep window; the concurrent path
+// (Phase 0a–0jk) only blocks for the start handshake + final remark
+// + sweep cleanup, with mark and concurrent sweep happening in the
+// background marker thread while the mutator continues allocating.
+//
+// The test isn't a hard regression gate (pause numbers are
+// machine-dependent) but it logs a structured comparison the PR
+// body can quote, and it fails if the concurrent path's pause is
+// somehow LARGER than the STW path's (which would mean the
+// concurrent stack delivered nothing).
+func TestBundledRuntimeGcPauseConcurrentVsStw(t *testing.T) {
+	if testing.Short() {
+		t.Skip("gc pause comparison skipped in -short")
+	}
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_pause_compare_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_pause_compare_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+void osty_gc_debug_collect_major(void);
+
+void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count);
+void osty_gc_collect_incremental_finish(void);
+
+#define N_ROOTED 1000
+#define N_GARBAGE 9000
+
+static long long now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;
+}
+
+static void seed_heap(void **rooted) {
+    /* 4KB blocks: 1000 × 4KB = 4MB long-lived, 9000 × 4KB = 36MB
+     * garbage. Same shape as the baseline test so timings are
+     * comparable. */
+    for (int i = 0; i < N_ROOTED; i++) {
+        rooted[i] = osty_gc_alloc_v1(7, 4096, "rooted");
+        osty_gc_root_bind_v1(rooted[i]);
+    }
+    for (int i = 0; i < N_GARBAGE; i++) {
+        (void)osty_gc_alloc_v1(7, 4096, "garbage");
+    }
+}
+
+static void release_rooted(void **rooted) {
+    for (int i = 0; i < N_ROOTED; i++) {
+        osty_gc_root_release_v1(rooted[i]);
+    }
+}
+
+int main(void) {
+    const char *mode = getenv("BENCH_MODE");
+    if (mode == NULL) mode = "stw";
+
+    static void *rooted[N_ROOTED];
+    seed_heap(rooted);
+
+    if (strcmp(mode, "stw") == 0) {
+        long long before = now_ns();
+        osty_gc_debug_collect_major();
+        long long after = now_ns();
+        long long pause_us = (after - before) / 1000;
+        printf("mode=stw pause_us=%lld\n", pause_us);
+    } else {
+        /* Concurrent path: start handshake + bg drain + finish.
+         * Compares apples-to-apples with STW by keeping the heap
+         * size constant during the wait window — sleep only, no
+         * additional allocations. The bg marker has 100ms to
+         * finish mark + sweep on the same 40MB heap, then we
+         * measure the finish-side pause. */
+        long long t_start_before = now_ns();
+        osty_gc_collect_incremental_start_with_stack_roots(NULL, 0);
+        long long t_start_after = now_ns();
+
+        /* Pure sleep — bg marker drains the heap while the main
+         * thread is parked. */
+        struct timespec sleep_req = {0, 100L * 1000L * 1000L};  /* 100ms */
+        nanosleep(&sleep_req, NULL);
+
+        long long t_finish_before = now_ns();
+        osty_gc_collect_incremental_finish();
+        long long t_finish_after = now_ns();
+
+        long long start_pause_us  = (t_start_after  - t_start_before)  / 1000;
+        long long finish_pause_us = (t_finish_after - t_finish_before) / 1000;
+        long long total_pause_us  = start_pause_us + finish_pause_us;
+        printf("mode=concurrent start_us=%lld finish_us=%lld pause_us=%lld\n",
+            start_pause_us, finish_pause_us, total_pause_us);
+    }
+
+    release_rooted(rooted);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := runtimeClangCommand("-O2", "-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, out)
+	}
+
+	runMode := func(mode string, env ...string) string {
+		runCmd := exec.Command(binaryPath)
+		runCmd.Env = append(os.Environ(), append([]string{
+			"BENCH_MODE=" + mode,
+			"OSTY_GC_ASSIST_BYTES_PER_UNIT=0",
+		}, env...)...)
+		out, err := runCmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("running %q (mode=%s) failed: %v\n%s", binaryPath, mode, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	stwOut := runMode("stw")
+	concOut := runMode("concurrent", "OSTY_GC_BG_MARKER=1")
+
+	var stwPauseUs int64
+	if _, err := fmt.Sscanf(stwOut, "mode=stw pause_us=%d", &stwPauseUs); err != nil {
+		t.Fatalf("parse stw output %q: %v", stwOut, err)
+	}
+	var startUs, finishUs, concPauseUs int64
+	if _, err := fmt.Sscanf(concOut,
+		"mode=concurrent start_us=%d finish_us=%d pause_us=%d",
+		&startUs, &finishUs, &concPauseUs); err != nil {
+		t.Fatalf("parse concurrent output %q: %v", concOut, err)
+	}
+
+	t.Logf("STW          pause: %dus", stwPauseUs)
+	t.Logf("Concurrent   pause: %dus  (start=%dus + finish=%dus)",
+		concPauseUs, startUs, finishUs)
+	if stwPauseUs > 0 {
+		t.Logf("Concurrent / STW ratio: %.3f", float64(concPauseUs)/float64(stwPauseUs))
+	}
+	if concPauseUs > stwPauseUs {
+		t.Fatalf("concurrent pause (%dus) is LARGER than STW pause (%dus); "+
+			"the concurrent stack should at minimum not regress the all-STW path",
+			concPauseUs, stwPauseUs)
 	}
 }
 
