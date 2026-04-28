@@ -1,11 +1,9 @@
 use std.testing
 
-use go "strings" as docTestStrings {
-    fn Contains(s: String, substr: String) -> Bool
-}
+use std.strings as docTestStrings
 
 fn assertSelfDocContains(output: String, text: String) {
-    if !(docTestStrings.Contains(output, text)) {
+    if !(docTestStrings.contains(output, text)) {
         testing.fail("missing {text} in {output}")
     }
 }

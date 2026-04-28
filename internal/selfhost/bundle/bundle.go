@@ -36,21 +36,37 @@ var toolchainCheckerFiles = []string{
 	"internal/selfhost/ast_lower.osty",
 }
 
-const stringsPrelude = `use go "strings" as strings {
+const stringsPrelude = `use runtime.strings as strings {
     fn Compare(a: String, b: String) -> Int
+    fn compare(a: String, b: String) -> Int
     fn Contains(s: String, substr: String) -> Bool
+    fn contains(s: String, substr: String) -> Bool
     fn Count(s: String, substr: String) -> Int
+    fn count(s: String, substr: String) -> Int
     fn Fields(s: String) -> List<String>
+    fn fields(s: String) -> List<String>
     fn HasPrefix(s: String, prefix: String) -> Bool
+    fn hasPrefix(s: String, prefix: String) -> Bool
     fn HasSuffix(s: String, suffix: String) -> Bool
+    fn hasSuffix(s: String, suffix: String) -> Bool
     fn Join(elems: List<String>, sep: String) -> String
+    fn join(elems: List<String>, sep: String) -> String
+    fn Len(s: String) -> Int
     fn ReplaceAll(s: String, old: String, new: String) -> String
+    fn replaceAll(s: String, old: String, new: String) -> String
     fn Repeat(s: String, count: Int) -> String
+    fn repeat(s: String, count: Int) -> String
     fn Split(s: String, sep: String) -> List<String>
+    fn split(s: String, sep: String) -> List<String>
     fn SplitN(s: String, sep: String, n: Int) -> List<String>
+    fn splitN(s: String, sep: String, n: Int) -> List<String>
     fn TrimPrefix(s: String, prefix: String) -> String
+    fn trimPrefix(s: String, prefix: String) -> String
     fn TrimSpace(s: String) -> String
+    fn trimSpace(s: String) -> String
     fn TrimSuffix(s: String, suffix: String) -> String
+    fn trimSuffix(s: String, suffix: String) -> String
+    fn len(s: String) -> Int
 }
 
 fn ostyStringsConcat(a: String, b: String) -> String { a + b }
@@ -130,8 +146,7 @@ func stripLeadingStringsUse(src string) string {
 func normalizeStdStringsCalls(src string) string {
 	for _, pair := range [][2]string{
 		// Route split through an Osty shim so `sep == ""` keeps the
-		// selfhost/runtime "split into source units" behavior instead of
-		// Go strings.Split's leading/trailing empty elements.
+		// selfhost/runtime "split into source units" behavior everywhere.
 		{"strings.split(", "ostyStringsSplit("},
 		{"strings.join(", "strings.Join("},
 		{"strings.compare(", "strings.Compare("},
@@ -146,8 +161,8 @@ func normalizeStdStringsCalls(src string) string {
 		{"strings.count(", "strings.Count("},
 		{"strings.fields(", "strings.Fields("},
 		{"strings.splitN(", "strings.SplitN("},
-		// std.strings extras not covered by the Go `strings` package: route
-		// through Osty shims defined at the top of the merged bundle.
+		// std.strings extras route through Osty shims defined at the top of
+		// the merged bundle so the bundle stays native-selfhostable.
 		{"strings.concat(", "ostyStringsConcat("},
 		{"strings.chars(", "ostyStringsChars("},
 		{"strings.slice(", "ostyStringsSlice("},

@@ -17,7 +17,7 @@ import (
 //
 //   - A concrete code: `L0001`, `L0040`, ...
 //   - A category alias: `unused`, `shadow`, `dead_code`, `naming`,
-//     `simplify`
+//     `simplify`, `complexity`, `docs`
 //   - A rule alias: `unused_let`, `unused_param`, `redundant_bool`, …
 //   - The wildcards `lint` or `all`
 //

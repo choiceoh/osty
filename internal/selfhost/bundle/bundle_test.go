@@ -59,13 +59,16 @@ fn demoRuntime() -> Int {
 	if !strings.HasPrefix(got, stringsPrelude+"\n") {
 		t.Fatalf("merged source missing shared strings prelude:\n%s", got)
 	}
-	if count := strings.Count(got, `use go "strings" as strings {`); count != 1 {
-		t.Fatalf("merged source should keep exactly one shared Go strings import, got %d:\n%s", count, got)
+	if strings.Contains(got, `use go "strings" as strings {`) {
+		t.Fatalf("merged source kept Go strings import:\n%s", got)
+	}
+	if count := strings.Count(got, `use runtime.strings as strings {`); count != 1 {
+		t.Fatalf("merged source should keep exactly one shared runtime strings import, got %d:\n%s", count, got)
 	}
 	if strings.Contains(got, "use std.strings as strings") {
 		t.Fatalf("merged source kept per-file std.strings import:\n%s", got)
 	}
-	if strings.Contains(got, "use runtime.strings as strings") {
+	if strings.Count(got, "use runtime.strings as strings") != 1 {
 		t.Fatalf("merged source kept per-file runtime.strings import:\n%s", got)
 	}
 	if strings.Contains(got, "strings.join(") {

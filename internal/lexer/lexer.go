@@ -39,17 +39,3 @@ func (l *Lexer) Errors() []*diag.Diagnostic {
 func (l *Lexer) Comments() []token.Comment {
 	return l.comments
 }
-
-// IsIdentStart reports whether b is accepted by the compatibility helper
-// retained from the former Go lexer. The self-hosted lexer semantics live in
-// toolchain/frontend.osty.
-func IsIdentStart(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_'
-}
-
-// IsIdentCont reports whether b is accepted by the compatibility helper
-// retained from the former Go lexer. The self-hosted lexer semantics live in
-// toolchain/frontend.osty.
-func IsIdentCont(b byte) bool {
-	return IsIdentStart(b) || (b >= '0' && b <= '9')
-}
