@@ -726,7 +726,7 @@ match 분해)를 추가한다.
 
 ### 분류 규칙
 
-`internal/llvmgen/multifile_probe_test.go:isBootstrapOnlyOstyFile`가 다음 세 패턴 중 하나라도 포함한 파일을 자동 bootstrap-only로 분류한다:
+`internal/selfhost/bundle.IsBootstrapOnlyOstyFile`가 주석을 걷어낸 top-level `use` / `pub use` 스탠자에서 다음 세 패턴 중 하나라도 포함한 파일을 자동 bootstrap-only로 분류한다. checker bundle guard와 `internal/llvmgen` whole-toolchain probe가 이 함수를 공유하므로 두 측정면의 skip 기준은 같이 움직인다:
 
 - `use runtime.golegacy.*` — 명시적 legacy bootstrap 브릿지
 - `use runtime.cihost` — CI runner 의 Go host adapter 를 runtime namespace 로 감싼 형태

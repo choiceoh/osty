@@ -21,6 +21,10 @@ The exact merged Osty inputs live in
 
 - `ToolchainCheckerFiles()` is the native-checker-ready toolchain core; it
   deliberately excludes bootstrap-only Go bridge adapters.
+- `IsBootstrapOnlyOstyFile()` is the shared FFI-stanza classifier used by both
+  the checker bundle guard and the `internal/llvmgen` native toolchain probes.
+  It scans comment-stripped top-level `use` / `pub use` FFI stanzas so
+  documentation examples cannot accidentally remove a native file from probes.
 
 Notable inputs currently include:
 

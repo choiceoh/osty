@@ -11,6 +11,7 @@ import (
 	"github.com/osty/osty/internal/mir"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost/bundle"
 	"github.com/osty/osty/internal/stdlib"
 )
 
@@ -37,7 +38,7 @@ func collectToolchainProbeFiles(dir string, skipBootstrapOnly bool) ([]string, [
 		if err != nil {
 			continue
 		}
-		if isBootstrapOnlyOstyFile(src) {
+		if bundle.IsBootstrapOnlyOstyFile(src) {
 			skipped = append(skipped, name)
 			continue
 		}
@@ -170,38 +171,10 @@ func TestProbeWholeToolchainMerged(t *testing.T) {
 	t.Logf("WHOLE TOOLCHAIN first wall: %s", formatWall(err))
 }
 
-// isBootstrapOnlyOstyFile reports whether the source is a
-// host-boundary bootstrap adapter — i.e., whether it declares either
-//
-//   - a `use runtime.golegacy.*` FFI (the legacy Go AST bridge),
-//   - a `use runtime.cihost` FFI (the CI runner's Go host adapter), or
-//   - a `use go "..."` FFI (arbitrary Go package host binding)
-//
-// Both forms require the Osty compiler to be running under the
-// Go-hosted bootstrap CLI; neither has native LLVM runtime lowering
-// by design. Files carrying either stanza are skipped by the
-// native-path whole-toolchain probe. See LLVM_MIGRATION_PLAN.md
-// § "astbridge bootstrap-only adapter" for the migration path.
-func isBootstrapOnlyOstyFile(src []byte) bool {
-	for _, line := range strings.Split(string(src), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "//") {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "use runtime.golegacy.") ||
-			strings.HasPrefix(trimmed, "use runtime.cihost") ||
-			strings.HasPrefix(trimmed, "use go \"") {
-			return true
-		}
-	}
-	return false
-}
-
 // TestProbeNativeToolchainMerged is the whole-toolchain probe with
-// bootstrap-only files (those that import runtime.golegacy.*) filtered
-// out. Reveals the first real LLVM wall along the native self-host
-// path — the wall that remains once the CLI is rewired off the
-// Go-hosted bridge adapter. Info-only.
+// bootstrap-only host adapters filtered out. Reveals the first real LLVM wall
+// along the native self-host path — the wall that remains once the CLI is
+// rewired off Go-hosted bridge adapters. Info-only.
 //
 // Pair with TestProbeWholeToolchainMerged: the difference between the
 // two walls tells us how much signal the bootstrap bridge is injecting

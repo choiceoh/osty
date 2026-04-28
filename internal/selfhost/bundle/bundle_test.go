@@ -39,13 +39,13 @@ func TestToolchainCheckerBundleExcludesBootstrapOnlyAdapters(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", rel, err)
 		}
-		if hasBootstrapOnlyUse(data) {
+		if IsBootstrapOnlyOstyFile(data) {
 			t.Fatalf("toolchain checker bundle includes bootstrap-only adapter %q", rel)
 		}
 	}
 }
 
-func TestToolchainCheckerBootstrapOnlyUseDetection(t *testing.T) {
+func TestIsBootstrapOnlyOstyFile(t *testing.T) {
 	tests := []struct {
 		name string
 		src  string
@@ -72,6 +72,31 @@ func TestToolchainCheckerBootstrapOnlyUseDetection(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "block comment only",
+			src:  "/* use go \"strings\" as strings { } */\npub fn keep() -> Int { 1 }\n",
+			want: false,
+		},
+		{
+			name: "multiline block comment only",
+			src:  "/*\nuse runtime.cihost as host {\n    fn KeepAlive() -> Bool\n}\n*/\npub fn keep() -> Int { 1 }\n",
+			want: false,
+		},
+		{
+			name: "inline block comment before real runtime cihost",
+			src:  "/* ignored */ use runtime.cihost as host {\n    fn KeepAlive() -> Bool\n}\n",
+			want: true,
+		},
+		{
+			name: "public use go",
+			src:  "pub use go \"strings\" as strings {\n    fn TrimSpace(s: String) -> String\n}\n",
+			want: true,
+		},
+		{
+			name: "public runtime golegacy",
+			src:  "pub use runtime.golegacy.astbridge as astbridge {\n    fn File() -> Bool\n}\n",
+			want: true,
+		},
+		{
 			name: "native runtime strings",
 			src:  "use runtime.strings as strings {\n    fn Split(s: String, sep: String) -> List<String>\n}\n",
 			want: false,
@@ -80,8 +105,8 @@ func TestToolchainCheckerBootstrapOnlyUseDetection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := hasBootstrapOnlyUse([]byte(tt.src)); got != tt.want {
-				t.Fatalf("hasBootstrapOnlyUse() = %v, want %v", got, tt.want)
+			if got := IsBootstrapOnlyOstyFile([]byte(tt.src)); got != tt.want {
+				t.Fatalf("IsBootstrapOnlyOstyFile() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -194,21 +219,6 @@ func writeBundleFile(t *testing.T, root, rel, contents string) {
 func contains(items []string, want string) bool {
 	for _, item := range items {
 		if item == want {
-			return true
-		}
-	}
-	return false
-}
-
-func hasBootstrapOnlyUse(src []byte) bool {
-	for _, line := range strings.Split(string(src), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "//") {
-			continue
-		}
-		if strings.HasPrefix(trimmed, `use go "`) ||
-			strings.HasPrefix(trimmed, "use runtime.golegacy.") ||
-			strings.HasPrefix(trimmed, "use runtime.cihost") {
 			return true
 		}
 	}

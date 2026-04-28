@@ -87,6 +87,49 @@ func ToolchainCheckerFiles() []string {
 	return append([]string(nil), toolchainCheckerFiles...)
 }
 
+// IsBootstrapOnlyOstyFile reports whether the source declares a host-boundary
+// bootstrap adapter that must stay outside native selfhost bundles/probes.
+func IsBootstrapOnlyOstyFile(src []byte) bool {
+	inBlockComment := false
+	for _, line := range strings.Split(string(src), "\n") {
+		trimmed := strings.TrimSpace(stripBlockCommentsFromLine(line, &inBlockComment))
+		if strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		trimmed = strings.TrimPrefix(trimmed, "pub ")
+		if strings.HasPrefix(trimmed, `use go "`) ||
+			strings.HasPrefix(trimmed, "use runtime.golegacy.") ||
+			strings.HasPrefix(trimmed, "use runtime.cihost") {
+			return true
+		}
+	}
+	return false
+}
+
+func stripBlockCommentsFromLine(line string, inBlock *bool) string {
+	var out strings.Builder
+	for len(line) > 0 {
+		if *inBlock {
+			end := strings.Index(line, "*/")
+			if end < 0 {
+				return out.String()
+			}
+			line = line[end+len("*/"):]
+			*inBlock = false
+			continue
+		}
+		start := strings.Index(line, "/*")
+		if start < 0 {
+			out.WriteString(line)
+			return out.String()
+		}
+		out.WriteString(line[:start])
+		line = line[start+len("/*"):]
+		*inBlock = true
+	}
+	return out.String()
+}
+
 func MergeToolchainChecker(root string) ([]byte, error) {
 	return MergeFiles(root, toolchainCheckerFiles)
 }

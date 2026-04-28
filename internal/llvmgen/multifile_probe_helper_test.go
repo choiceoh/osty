@@ -4,33 +4,35 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/osty/osty/internal/selfhost/bundle"
 )
 
-func TestIsBootstrapOnlyOstyFile(t *testing.T) {
+func TestProbeUsesSharedBootstrapOnlyClassifier(t *testing.T) {
 	t.Run("detects real use go ffi", func(t *testing.T) {
 		src := []byte("use go \"strings\" as strings {\n    pub fn trimSpace(s: String) -> String\n}\n")
-		if !isBootstrapOnlyOstyFile(src) {
+		if !bundle.IsBootstrapOnlyOstyFile(src) {
 			t.Fatalf("expected real use-go file to be classified as bootstrap-only")
 		}
 	})
 
 	t.Run("detects real runtime golegacy ffi", func(t *testing.T) {
 		src := []byte("use runtime.golegacy.astbridge as astbridge {\n    pub fn pos() -> Int\n}\n")
-		if !isBootstrapOnlyOstyFile(src) {
+		if !bundle.IsBootstrapOnlyOstyFile(src) {
 			t.Fatalf("expected runtime.golegacy file to be classified as bootstrap-only")
 		}
 	})
 
 	t.Run("detects real runtime cihost ffi", func(t *testing.T) {
 		src := []byte("use runtime.cihost as host {\n    pub fn LoadRunnerState(root: String) -> Bool\n}\n")
-		if !isBootstrapOnlyOstyFile(src) {
+		if !bundle.IsBootstrapOnlyOstyFile(src) {
 			t.Fatalf("expected runtime.cihost file to be classified as bootstrap-only")
 		}
 	})
 
 	t.Run("ignores comments mentioning bootstrap syntax", func(t *testing.T) {
 		src := []byte("// `use go \"...\" { ... }` stays in comments only.\n// `use runtime.golegacy.foo` is also documentation here.\n// `use runtime.cihost as host` too.\npub fn keep() -> Int { 1 }\n")
-		if isBootstrapOnlyOstyFile(src) {
+		if bundle.IsBootstrapOnlyOstyFile(src) {
 			t.Fatalf("expected comment-only mentions to stay in the native merged set")
 		}
 	})

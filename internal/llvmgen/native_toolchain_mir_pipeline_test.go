@@ -2,7 +2,6 @@ package llvmgen
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,24 +43,9 @@ func TestNativeToolchainMergedMIRPipelineIsClean(t *testing.T) {
 		t.Fatalf("abs root: %v", err)
 	}
 	dir := filepath.Join(root, "toolchain")
-	entries, err := os.ReadDir(dir)
+	files, _, err := collectToolchainProbeFiles(dir, true)
 	if err != nil {
 		t.Fatalf("read toolchain: %v", err)
-	}
-	var files []string
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
-			continue
-		}
-		src, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			continue
-		}
-		if isBootstrapOnlyOstyFile(src) {
-			continue
-		}
-		files = append(files, name)
 	}
 	merged := mergeToolchainSources(t, root, files)
 	file, _ := parser.ParseDiagnostics(merged)
@@ -142,24 +126,9 @@ func TestNativeToolchainMergedMIRErrTypeFloor(t *testing.T) {
 		t.Fatalf("abs root: %v", err)
 	}
 	dir := filepath.Join(root, "toolchain")
-	entries, err := os.ReadDir(dir)
+	files, _, err := collectToolchainProbeFiles(dir, true)
 	if err != nil {
 		t.Fatalf("read toolchain: %v", err)
-	}
-	var files []string
-	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
-			continue
-		}
-		src, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			continue
-		}
-		if isBootstrapOnlyOstyFile(src) {
-			continue
-		}
-		files = append(files, name)
 	}
 	merged := mergeToolchainSources(t, root, files)
 	file, _ := parser.ParseDiagnostics(merged)
