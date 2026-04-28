@@ -1,3 +1,4 @@
+use std.bytes as bytes
 use std.strings as strings
 
 // ===================================================================
@@ -54,12 +55,13 @@ pub struct OstyLexComment {
     pub lines: Int,
 }
 
-/// OstyLexStringPart is the Go adapter-ready string part shape.
+/// OstyLexStringPart is the Go adapter-ready string part shape. `text` is the
+/// final public token text; escape decoding belongs to this self-hosted layer,
+/// not to the Go adapter.
 pub struct OstyLexStringPart {
     pub ownerToken: Int,
     pub kindCode: Int,
     pub text: String,
-    pub decodeEscapes: Bool,
     pub exprTokenStart: Int,
     pub exprTokenCount: Int,
 }
@@ -153,6 +155,8 @@ pub fn ostyLex(source: String) -> OstyLexResult {
 
 /// ostyLexFactsFromStream converts diagnostic/comment/string-part side tables
 /// into a compact shape the Go adapter can copy into public compiler structs.
+/// Lexeme legality belongs to frontendLexStream; this layer only formats
+/// already-scanned facts and assembles comments/string parts.
 pub fn ostyLexFactsFromStream(source: String, stream: FrontLexStream) -> OstyLexFacts {
     let units = strings.split(source, "")
 
@@ -162,9 +166,6 @@ pub fn ostyLexFactsFromStream(source: String, stream: FrontLexStream) -> OstyLex
     for di < diagCount {
         errors.push(ostyLexErrorFromDiagnostic(units, frontLexDiagnosticAt(stream, di)))
         di = di + 1
-    }
-    for fat in ostyFatArrowDiagnostics(units) {
-        errors.push(fat)
     }
 
     let mut comments: List<OstyLexComment> = []
@@ -236,35 +237,6 @@ fn ostyLexErrorFromDiagnostic(units: List<String>, d: FrontLexDiagnostic) -> Ost
     }
 }
 
-fn ostyFatArrowDiagnostics(units: List<String>) -> List<OstyLexError> {
-    let mut out: List<OstyLexError> = []
-    let unitCount = ostyStringListCount(units)
-    let mut idx = 0
-    for idx < unitCount - 1 {
-        if frontUnitAt(units, idx) == "=" && frontUnitAt(units, idx + 1) == ">" {
-            let start = frontPositionAt(units, idx)
-            let end = frontPositionAt(units, idx + 2)
-            let gt = ">"
-            out.push(
-                OstyLexError {
-                    code: FrontDiagIllegalCharacter,
-                    diagCode: "E0007",
-                    message: "`={gt}` is not valid Osty syntax; use `->`",
-                    hint: "",
-                    startOffset: start.offset,
-                    startLine: start.line,
-                    startCol: start.column,
-                    endOffset: end.offset,
-                    endLine: end.line,
-                    endCol: end.column,
-                },
-            )
-        }
-        idx = idx + 1
-    }
-    out
-}
-
 fn ostyLexDiagnosticCode(code: FrontLexDiagnosticCode) -> String {
     match code {
         FrontDiagUnterminatedBlockComment -> "E0004",
@@ -279,6 +251,7 @@ fn ostyLexDiagnosticCode(code: FrontLexDiagnosticCode) -> String {
         FrontDiagEmptyByte -> "E0009",
         FrontDiagIllegalCharacter -> "E0005",
         FrontDiagBadNumericSeparator -> "E0008",
+        FrontDiagFatArrowRemoved -> "E0007",
     }
 }
 
@@ -296,6 +269,7 @@ fn ostyLexDiagnosticMessage(units: List<String>, d: FrontLexDiagnostic) -> Strin
         FrontDiagEmptyByte -> ostyCharDiagnosticMessage(units, d.start.offset, true),
         FrontDiagIllegalCharacter -> "illegal character",
         FrontDiagBadNumericSeparator -> "numeric separator `_` must appear between two digits",
+        FrontDiagFatArrowRemoved -> "`=>` is not valid Osty syntax; use `->`",
     }
 }
 
@@ -332,6 +306,7 @@ fn ostyLexDiagnosticHint(code: FrontLexDiagnosticCode) -> String {
         FrontDiagEmptyChar -> "",
         FrontDiagEmptyByte -> "",
         FrontDiagBadNumericSeparator -> "place `_` only between two digits",
+        FrontDiagFatArrowRemoved -> "",
     }
 }
 
@@ -383,35 +358,29 @@ fn ostyLexStringPartFromFront(
             ownerToken: part.ownerToken,
             kindCode: 1,
             text: "",
-            decodeEscapes: false,
             exprTokenStart: part.exprTokenStart,
             exprTokenCount: part.exprTokenCount,
         }
     }
-    let mut text = frontLexemeFromUnits(units, part.start.offset, part.end.offset - part.start.offset)
-    if tok.triple {
-        text = ostyNormalizeTripleSegment(text)
-    }
+    let text = ostyPublicStringText(
+        tok,
+        frontLexemeFromUnits(units, part.start.offset, part.end.offset - part.start.offset),
+    )
     OstyLexStringPart {
         ownerToken: part.ownerToken,
         kindCode: 0,
         text,
-        decodeEscapes: tok.kind == FrontString,
         exprTokenStart: 0,
         exprTokenCount: 0,
     }
 }
 
 fn ostyDefaultStringPart(units: List<String>, tok: FrontLexToken, owner: Int) -> OstyLexStringPart {
-    let mut text = ostyStringContentRaw(units, tok)
-    if tok.triple {
-        text = ostyNormalizeTripleSegment(text)
-    }
+    let text = ostyPublicStringText(tok, ostyStringContentRaw(units, tok))
     OstyLexStringPart {
         ownerToken: owner,
         kindCode: 0,
         text,
-        decodeEscapes: tok.kind == FrontString,
         exprTokenStart: 0,
         exprTokenCount: 0,
     }
@@ -433,6 +402,183 @@ fn ostyStringContentRaw(units: List<String>, tok: FrontLexToken) -> String {
         return frontLexemeFromUnits(units, start + 1, end - start - 2)
     }
     ""
+}
+
+fn ostyPublicStringText(tok: FrontLexToken, raw: String) -> String {
+    let mut text = raw
+    if tok.triple {
+        text = ostyNormalizeTripleSegment(text)
+    }
+    if tok.kind == FrontString {
+        return ostyDecodeEscapes(text)
+    }
+    text
+}
+
+fn ostyDecodeEscapes(text: String) -> String {
+    let units = strings.split(text, "")
+    let mut buf: List<Byte> = []
+    let mut idx = 0
+    let count = ostyStringListCount(units)
+    for idx < count {
+        let unit = frontUnitAt(units, idx)
+        if unit != "\\" {
+            ostyPushStringBytes(buf, unit)
+            idx = idx + 1
+            continue
+        }
+        if idx + 1 >= count {
+            ostyPushByte(buf, 92)
+            idx = idx + 1
+            continue
+        }
+        let esc = frontUnitAt(units, idx + 1)
+        if esc == "n" {
+            ostyPushByte(buf, 10)
+            idx = idx + 2
+        } else if esc == "r" {
+            ostyPushByte(buf, 13)
+            idx = idx + 2
+        } else if esc == "t" {
+            ostyPushByte(buf, 9)
+            idx = idx + 2
+        } else if esc == "0" {
+            ostyPushByte(buf, 0)
+            idx = idx + 2
+        } else if esc == "\"" || esc == "'" || esc == "\\" || esc == r"{" || esc == r"}" {
+            ostyPushStringBytes(buf, esc)
+            idx = idx + 2
+        } else if esc == "x" {
+            if idx + 3 < count {
+                let hi = frontHexValue(frontUnitAt(units, idx + 2))
+                let lo = frontHexValue(frontUnitAt(units, idx + 3))
+                if hi >= 0 && lo >= 0 {
+                    ostyPushByte(buf, hi * 16 + lo)
+                    idx = idx + 4
+                    continue
+                }
+            }
+            ostyPushStringBytes(buf, esc)
+            idx = idx + 2
+        } else if esc == "u" {
+            let scan = ostyScanUnicodeEscape(units, idx + 2, count)
+            if scan.consumed > 0 {
+                ostyEncodeUtf8(buf, scan.value)
+                idx = idx + 2 + scan.consumed
+                continue
+            }
+            ostyPushStringBytes(buf, esc)
+            idx = idx + 2
+        } else {
+            ostyPushStringBytes(buf, esc)
+            idx = idx + 2
+        }
+    }
+    bytes.toString(bytes.from(buf)).unwrapOr("")
+}
+
+struct OstyUnicodeEscapeScan {
+    consumed: Int,
+    value: Int,
+}
+
+fn ostyScanUnicodeEscape(units: List<String>, start: Int, limit: Int) -> OstyUnicodeEscapeScan {
+    if start >= limit || frontUnitAt(units, start) != r"{" {
+        return OstyUnicodeEscapeScan { consumed: 0, value: 0 }
+    }
+    let mut idx = start + 1
+    let mut digits = 0
+    let mut value = 0
+    for idx < limit {
+        let unit = frontUnitAt(units, idx)
+        if unit == r"}" {
+            if digits > 0 {
+                if ostyIsValidUnicodeScalar(value) {
+                    return OstyUnicodeEscapeScan { consumed: idx - start + 1, value }
+                }
+                if value <= 0x7FFFFFFF {
+                    return OstyUnicodeEscapeScan { consumed: idx - start + 1, value: 0xFFFD }
+                }
+            }
+            return OstyUnicodeEscapeScan { consumed: 0, value: 0 }
+        }
+        let digit = frontHexValue(unit)
+        if digit < 0 {
+            return OstyUnicodeEscapeScan { consumed: 0, value: 0 }
+        }
+        value = value * 16 + digit
+        digits = digits + 1
+        idx = idx + 1
+    }
+    OstyUnicodeEscapeScan { consumed: 0, value: 0 }
+}
+
+fn ostyIsValidUnicodeScalar(value: Int) -> Bool {
+    value >= 0 && value <= 0x10FFFF && !(value >= 0xD800 && value <= 0xDFFF)
+}
+
+fn ostyPushStringBytes(buf: List<Byte>, text: String) {
+    for b in text.bytes() {
+        buf.push(b)
+    }
+}
+
+fn ostyPushByte(buf: List<Byte>, value: Int) {
+    buf.push(value.toByte())
+}
+
+fn ostyEncodeUtf8(buf: List<Byte>, value: Int) {
+    if value < 0x80 {
+        ostyPushByte(buf, value)
+    } else if value < 0x800 {
+        ostyPushByte(buf, 0xC0 | (value >> 6))
+        ostyPushByte(buf, 0x80 | (value & 0x3F))
+    } else if value < 0x10000 {
+        ostyPushByte(buf, 0xE0 | (value >> 12))
+        ostyPushByte(buf, 0x80 | ((value >> 6) & 0x3F))
+        ostyPushByte(buf, 0x80 | (value & 0x3F))
+    } else {
+        ostyPushByte(buf, 0xF0 | (value >> 18))
+        ostyPushByte(buf, 0x80 | ((value >> 12) & 0x3F))
+        ostyPushByte(buf, 0x80 | ((value >> 6) & 0x3F))
+        ostyPushByte(buf, 0x80 | (value & 0x3F))
+    }
+}
+
+fn ostyDecodeCharLiteralValue(text: String) -> String {
+    let body = ostyCharLiteralBody(text)
+    let decoded = ostyDecodeEscapes(body)
+    if decoded == "" {
+        return "\u{FFFD}"
+    }
+    decoded
+}
+
+fn ostyDecodeByteLiteralValue(text: String) -> String {
+    let decoded = ostyDecodeCharLiteralValue(text)
+    let chars = decoded.chars()
+    if chars.len() == 0 {
+        return 0.toChar().toString()
+    }
+    let value = chars[0].toInt()
+    if value > 255 {
+        return 0.toChar().toString()
+    }
+    value.toChar().toString()
+}
+
+fn ostyCharLiteralBody(text: String) -> String {
+    let mut body = text
+    if strings.hasPrefix(body, "b") {
+        body = ostyDropPrefixUnits(body, 1)
+    }
+    if strings.hasPrefix(body, "'") {
+        body = ostyDropPrefixUnits(body, 1)
+    }
+    if strings.hasSuffix(body, "'") {
+        body = ostyDropSuffixUnits(body, 1)
+    }
+    body
 }
 
 fn ostyNormalizeTripleSegment(text: String) -> String {

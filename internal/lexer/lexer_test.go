@@ -43,6 +43,17 @@ func expectNoLexErrors(t *testing.T, src string) {
 	t.Fatalf("expected no lex errors, got %d: [%s]", len(errs), strings.Join(got, "; "))
 }
 
+func firstTokenOfKind(t *testing.T, toks []token.Token, kind token.Kind) *token.Token {
+	t.Helper()
+	for i := range toks {
+		if toks[i].Kind == kind {
+			return &toks[i]
+		}
+	}
+	t.Fatalf("missing %s token in %v", kind, toks)
+	return nil
+}
+
 func TestLexUnterminatedString(t *testing.T) {
 	expectCode(t, "let s = \"hello", "E0001")
 	expectCode(t, "let s = \"hello\n", "E0001")
@@ -77,7 +88,113 @@ func TestLexBadTripleIndent(t *testing.T) {
 }
 
 func TestLexFatArrowRemoved(t *testing.T) {
-	expectCode(t, "fn f() -> Int { match 0 { 0 => 1, _ => 2 } }", "E0007")
+	src := "let x = 0 => 1"
+	l := New([]byte(src))
+	toks := l.Lex()
+	var fat *token.Token
+	for i := range toks {
+		if toks[i].Kind == token.ILLEGAL && toks[i].Value == "=>" {
+			fat = &toks[i]
+			break
+		}
+	}
+	if fat == nil {
+		t.Fatalf("missing single ILLEGAL(`=>`) token in %v", toks)
+	}
+	if fat.End.Offset-fat.Pos.Offset != len("=>") {
+		t.Fatalf("fat-arrow token span = [%d,%d), want width 2", fat.Pos.Offset, fat.End.Offset)
+	}
+	var saw bool
+	for _, d := range l.Errors() {
+		if d.Code == "E0007" {
+			saw = true
+			if len(d.Spans) == 0 || d.Spans[0].Span.Start.Offset != fat.Pos.Offset || d.Spans[0].Span.End.Offset != fat.End.Offset {
+				t.Fatalf("E0007 span offsets = [%d,%d), want token span [%d,%d) (spans=%+v)",
+					d.Spans[0].Span.Start.Offset, d.Spans[0].Span.End.Offset, fat.Pos.Offset, fat.End.Offset, d.Spans)
+			}
+		}
+	}
+	if !saw {
+		t.Fatalf("expected E0007, got %v", l.Errors())
+	}
+}
+
+func TestLexFatArrowIgnoredInStringAndComment(t *testing.T) {
+	expectNoLexErrors(t, "let s = \"=>\"\n// =>\n")
+}
+
+func TestLexStringPartsAlreadyDecodedBySelfhost(t *testing.T) {
+	src := `let s = "line\n\u{1F600}\{ok\}\""`
+	l := New([]byte(src))
+	toks := l.Lex()
+	if errs := l.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected lex errors: %v", errs)
+	}
+	got := firstTokenOfKind(t, toks, token.STRING)
+	if len(got.Parts) != 1 || got.Parts[0].Kind != token.PartText {
+		t.Fatalf("expected one PartText, got parts=%+v", got.Parts)
+	}
+	want := "line\n😀{ok}\""
+	if got.Parts[0].Text != want {
+		t.Fatalf("string part text = %q; want %q", got.Parts[0].Text, want)
+	}
+}
+
+func TestLexRawStringPartsStayRaw(t *testing.T) {
+	src := `let s = r"\n\u{41}"`
+	l := New([]byte(src))
+	toks := l.Lex()
+	if errs := l.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected lex errors: %v", errs)
+	}
+	got := firstTokenOfKind(t, toks, token.RAWSTRING)
+	if len(got.Parts) != 1 || got.Parts[0].Kind != token.PartText {
+		t.Fatalf("expected one PartText, got parts=%+v", got.Parts)
+	}
+	want := `\n\u{41}`
+	if got.Parts[0].Text != want {
+		t.Fatalf("raw string part text = %q; want %q", got.Parts[0].Text, want)
+	}
+}
+
+func TestLexInterpolatedStringTextPartsAlreadyDecoded(t *testing.T) {
+	src := `let s = "a\n{foo}\t"`
+	l := New([]byte(src))
+	toks := l.Lex()
+	if errs := l.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected lex errors: %v", errs)
+	}
+	got := firstTokenOfKind(t, toks, token.STRING)
+	if len(got.Parts) != 3 {
+		t.Fatalf("part count = %d; want 3 (parts=%+v)", len(got.Parts), got.Parts)
+	}
+	if got.Parts[0].Kind != token.PartText || got.Parts[0].Text != "a\n" {
+		t.Fatalf("first part = %+v; want decoded text %q", got.Parts[0], "a\n")
+	}
+	if got.Parts[1].Kind != token.PartExpr || len(got.Parts[1].Expr) == 0 {
+		t.Fatalf("middle part = %+v; want non-empty interpolation expr", got.Parts[1])
+	}
+	if got.Parts[2].Kind != token.PartText || got.Parts[2].Text != "\t" {
+		t.Fatalf("last part = %+v; want decoded tab", got.Parts[2])
+	}
+}
+
+func TestLexCharAndByteValuesDecodedBySelfhost(t *testing.T) {
+	src := `let c = '\u{1F600}'
+let b = b'\u{41}'`
+	l := New([]byte(src))
+	toks := l.Lex()
+	if errs := l.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected lex errors: %v", errs)
+	}
+	ch := firstTokenOfKind(t, toks, token.CHAR)
+	if ch.Value != "😀" {
+		t.Fatalf("char value = %q; want %q", ch.Value, "😀")
+	}
+	bt := firstTokenOfKind(t, toks, token.BYTE)
+	if bt.Value != "A" {
+		t.Fatalf("byte value = %q; want A", bt.Value)
+	}
 }
 
 func TestLexBadNumericSeparatorTrailing(t *testing.T) {
@@ -105,6 +222,11 @@ func TestLexBadNumericSeparatorAroundFloatPunct(t *testing.T) {
 	// is expected. We only assert the in-literal cases.
 	expectCode(t, "let a = 1_.5", "E0008")
 	expectCode(t, "let a = 1.5_e2", "E0008")
+}
+
+func TestLexBadNumericSeparatorInInterpolation(t *testing.T) {
+	expectCode(t, `let s = "bad {1_}"`, "E0008")
+	expectCode(t, `let s = "bad {0x_FF}"`, "E0008")
 }
 
 func TestLexValidNumericSeparatorsAccepted(t *testing.T) {
@@ -228,6 +350,38 @@ func TestLexInterpolationEscapedQuoteSpansOuter(t *testing.T) {
 // is invisible to the interpolation's brace tracking.
 func TestLexInterpolationNestedStringWithBraceOk(t *testing.T) {
 	expectNoLexErrors(t, `let s = "a.{f(x, "}")}"`)
+}
+
+func TestLexInterpolationNestedBlockCommentWithBraceOk(t *testing.T) {
+	expectNoLexErrors(t, `let s = "a {f(/* } */ 1)} b"`)
+}
+
+func TestLexInterpolationRawCharByteWithBraceOk(t *testing.T) {
+	expectNoLexErrors(t, `let s = "a {f(r"}", '}', b'}')} b"`)
+}
+
+func TestLexUnterminatedInterpolationSpan(t *testing.T) {
+	src := `let s = "a {1`
+	l := New([]byte(src))
+	_ = l.Lex()
+	wantStart := strings.IndexByte(src, '{')
+	if wantStart < 0 {
+		t.Fatal("test source missing interpolation start")
+	}
+	for _, d := range l.Errors() {
+		if d.Code == "E0001" && d.Message == "unterminated interpolation in string" {
+			if len(d.Spans) == 0 {
+				t.Fatalf("unterminated interpolation diagnostic has no spans: %+v", d)
+			}
+			got := d.Spans[0].Span
+			if got.Start.Offset != wantStart || got.End.Offset != len(src) {
+				t.Fatalf("unterminated interpolation span = [%d,%d), want [%d,%d)",
+					got.Start.Offset, got.End.Offset, wantStart, len(src))
+			}
+			return
+		}
+	}
+	t.Fatalf("missing unterminated interpolation diagnostic; got %+v", l.Errors())
 }
 
 // Same nested-string rule applies to triple-quoted strings. Triple strings

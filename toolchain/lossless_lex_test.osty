@@ -181,10 +181,8 @@ fn losslessTriviaFirst(stream: LosslessStream) -> LosslessTrivia {
 // -------------------------------------------------------------------
 
 fn testFatArrowEmitsE0007() {
-    // Build the source so the test file itself never contains a literal
-    // fat arrow — the bootstrap lexer scans raw units, so writing the
-    // two-char sequence in a comment would fire our synthesized E0007
-    // on our own test file.
+    // Build the source so the test file itself does not depend on the
+    // formatter/parser accepting the removed two-character token.
     let gt = ">"
     let fatSrc = "fn f() \{\n    match x \{\n        1 ={gt} 2,\n    \}\n\}"
     let stream = losslessLex(fatSrc)

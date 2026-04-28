@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 type ostyStringer interface {
@@ -721,6 +723,14 @@ func (FrontLexDiagnosticCode_FrontDiagEmptyChar) _isFrontLexDiagnosticCode() {}
 type FrontLexDiagnosticCode_FrontDiagEmptyByte struct{ _ref byte }
 
 func (FrontLexDiagnosticCode_FrontDiagEmptyByte) _isFrontLexDiagnosticCode() {}
+
+type FrontLexDiagnosticCode_FrontDiagBadNumericSeparator struct{ _ref byte }
+
+func (FrontLexDiagnosticCode_FrontDiagBadNumericSeparator) _isFrontLexDiagnosticCode() {}
+
+type FrontLexDiagnosticCode_FrontDiagFatArrowRemoved struct{ _ref byte }
+
+func (FrontLexDiagnosticCode_FrontDiagFatArrowRemoved) _isFrontLexDiagnosticCode() {}
 
 // Osty: /tmp/docgen_merged.osty:508:5
 type FrontStringPartKind interface{ _isFrontStringPartKind() }
@@ -2286,6 +2296,9 @@ func frontendLexStream(source string) *FrontLexStream {
 						return struct{}{}
 					}()
 				}
+				if frontNumberHasBadSeparator(units, idx, scan.consumed) {
+					diagnostics = append(diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagBadNumericSeparator{}), start, frontPositionAt(units, idx+scan.consumed)))
+				}
 				// Osty: /tmp/docgen_merged.osty:1325:17
 				pendingDocLines = 0
 				// Osty: /tmp/docgen_merged.osty:1326:17
@@ -2406,6 +2419,7 @@ func frontendLexStream(source string) *FrontLexStream {
 					// Osty: /tmp/docgen_merged.osty:1381:21
 					insertTerm = frontKindInsertsTerm(scan.kind)
 				} else {
+					diagCode := frontIllegalDiagnosticCode(units, idx, scan)
 					// Osty: /tmp/docgen_merged.osty:1383:21
 					func() struct{} {
 						tokens = append(tokens, frontLexTokenFromScan(units, idx, scan.consumed, FrontTokenKind(&FrontTokenKind_FrontIllegal{}), leadingDocLines, false, 0, false))
@@ -2425,7 +2439,7 @@ func frontendLexStream(source string) *FrontLexStream {
 					}()
 					// Osty: /tmp/docgen_merged.osty:1396:21
 					func() struct{} {
-						diagnostics = append(diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagIllegalCharacter{}), start, frontPositionAt(units, func() int {
+						diagnostics = append(diagnostics, frontLexDiagnostic(diagCode, start, frontPositionAt(units, func() int {
 							var _p148 int = idx
 							var _rhs149 int = scan.consumed
 							if _rhs149 > 0 && _p148 > math.MaxInt-_rhs149 {
@@ -4078,6 +4092,12 @@ func frontInterpolationScan(units []string, start int, limit int, ownerPart int)
 						return struct{}{}
 					}()
 				}
+				if frontScanIsNumber(tokenScan) && frontNumberHasBadSeparator(units, idx, tokenScan.consumed) {
+					out.diagnostics = append(out.diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagBadNumericSeparator{}), frontPositionAt(units, idx), frontPositionAt(units, idx+tokenScan.consumed)))
+				}
+				if frontScanIsFatArrow(units, idx, tokenScan) {
+					out.diagnostics = append(out.diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagFatArrowRemoved{}), frontPositionAt(units, idx), frontPositionAt(units, idx+tokenScan.consumed)))
+				}
 				// Osty: /tmp/docgen_merged.osty:1998:20
 				out.consumed = func() int {
 					var _p346 int = func() int {
@@ -5319,7 +5339,7 @@ func frontNumberScan(units []string, start int, unitCount int) *FrontScanResult 
 			}
 		}
 		// Osty: /tmp/docgen_merged.osty:2720:9
-		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix), false, 0, true, prefix == "X")
+		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix)+frontNumberBadSeparatorErrors(units, start, consumed), false, 0, true, prefix == "X")
 	}
 	// Osty: /tmp/docgen_merged.osty:2731:5
 	if first == "0" && (prefix == "b" || prefix == "B") {
@@ -5361,7 +5381,7 @@ func frontNumberScan(units []string, start int, unitCount int) *FrontScanResult 
 			}
 		}
 		// Osty: /tmp/docgen_merged.osty:2741:9
-		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix), false, 0, true, prefix == "B")
+		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix)+frontNumberBadSeparatorErrors(units, start, consumed), false, 0, true, prefix == "B")
 	}
 	// Osty: /tmp/docgen_merged.osty:2752:5
 	if first == "0" && (prefix == "o" || prefix == "O") {
@@ -5403,7 +5423,7 @@ func frontNumberScan(units []string, start int, unitCount int) *FrontScanResult 
 			}
 		}
 		// Osty: /tmp/docgen_merged.osty:2762:9
-		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix), false, 0, true, prefix == "O")
+		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix)+frontNumberBadSeparatorErrors(units, start, consumed), false, 0, true, prefix == "O")
 	}
 	// Osty: /tmp/docgen_merged.osty:2774:5
 	consumed := 0
@@ -5510,7 +5530,7 @@ func frontNumberScan(units []string, start int, unitCount int) *FrontScanResult 
 			break
 		}
 	}
-	return frontScanResult(kind, consumed, true)
+	return frontDetailedScanResult(kind, consumed, true, frontNumberBadSeparatorErrors(units, start, consumed), false, 0, false, false)
 }
 
 // Osty: /tmp/docgen_merged.osty:2804:5
@@ -5527,6 +5547,64 @@ func frontUppercaseBaseError(prefix string) int {
 // Osty: /tmp/docgen_merged.osty:2812:5
 func frontIsHexDigit(unit string) bool {
 	return digitStringValue(unit) >= 0 || (unit >= "a" && unit <= "f") || (unit >= "A" && unit <= "F")
+}
+
+func frontNumberBadSeparatorErrors(units []string, start int, consumed int) int {
+	if frontNumberHasBadSeparator(units, start, consumed) {
+		return 1
+	}
+	return 0
+}
+
+func frontScanIsNumber(scan *FrontScanResult) bool {
+	return ostyEqual(scan.kind, FrontTokenKind(&FrontTokenKind_FrontInt{})) || ostyEqual(scan.kind, FrontTokenKind(&FrontTokenKind_FrontFloat{}))
+}
+
+func frontNumberHasBadSeparator(units []string, start int, consumed int) bool {
+	base := frontNumberBase(units, start)
+	bodyStart := start
+	if base != 10 {
+		bodyStart = start + 2
+	}
+	for idx := bodyStart; idx < start+consumed; idx++ {
+		if frontUnitAt(units, idx) == "_" {
+			prev := frontUnitAt(units, idx-1)
+			next := frontUnitAt(units, idx+1)
+			if !frontIsBaseDigit(prev, base) || !frontIsBaseDigit(next, base) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func frontNumberBase(units []string, start int) int {
+	if frontUnitAt(units, start) == "0" {
+		prefix := frontUnitAt(units, start+1)
+		if prefix == "x" || prefix == "X" {
+			return 16
+		}
+		if prefix == "b" || prefix == "B" {
+			return 2
+		}
+		if prefix == "o" || prefix == "O" {
+			return 8
+		}
+	}
+	return 10
+}
+
+func frontIsBaseDigit(unit string, base int) bool {
+	switch base {
+	case 2:
+		return unit == "0" || unit == "1"
+	case 8:
+		return unit >= "0" && unit <= "7"
+	case 16:
+		return frontIsHexDigit(unit)
+	default:
+		return digitStringValue(unit) >= 0
+	}
 }
 
 // Osty: /tmp/docgen_merged.osty:2816:5
@@ -5575,6 +5653,9 @@ func frontPunctuationScan(units []string, start int, unitCount int) *FrontScanRe
 		// Osty: /tmp/docgen_merged.osty:2827:9
 		return frontScanResult(FrontTokenKind(&FrontTokenKind_FrontShrEq{}), 3, true)
 	}
+	if one == "=" && two == ">" {
+		return frontScanResult(FrontTokenKind(&FrontTokenKind_FrontIllegal{}), 2, false)
+	}
 	// Osty: /tmp/docgen_merged.osty:2829:5
 	twoKind := frontPunctuationPairKind(one, two)
 	_ = twoKind
@@ -5592,6 +5673,17 @@ func frontPunctuationScan(units []string, start int, unitCount int) *FrontScanRe
 		return frontScanResult(oneKind, 1, true)
 	}
 	return frontScanResult(FrontTokenKind(&FrontTokenKind_FrontIllegal{}), 1, false)
+}
+
+func frontIllegalDiagnosticCode(units []string, start int, scan *FrontScanResult) FrontLexDiagnosticCode {
+	if frontScanIsFatArrow(units, start, scan) {
+		return FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagFatArrowRemoved{})
+	}
+	return FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagIllegalCharacter{})
+}
+
+func frontScanIsFatArrow(units []string, start int, scan *FrontScanResult) bool {
+	return !scan.ok && scan.consumed == 2 && frontUnitAt(units, start) == "=" && frontUnitAt(units, start+1) == ">"
 }
 
 // Osty: /tmp/docgen_merged.osty:2840:5
@@ -7990,7 +8082,6 @@ type OstyLexStringPart struct {
 	ownerToken     int
 	kindCode       int
 	text           string
-	decodeEscapes  bool
 	exprTokenStart int
 	exprTokenCount int
 }
@@ -8111,11 +8202,6 @@ func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts
 			}
 			di = _cur1629 + _rhs1630
 		}()
-	}
-	// Osty: /tmp/docgen_merged.osty:6174:5
-	for _, fat := range ostyFatArrowDiagnostics(units) {
-		// Osty: /tmp/docgen_merged.osty:6175:9
-		func() struct{} { errors = append(errors, fat); return struct{}{} }()
 	}
 	// Osty: /tmp/docgen_merged.osty:6178:5
 	var comments []*OstyLexComment = make([]*OstyLexComment, 0, 1)
@@ -8254,82 +8340,6 @@ func ostyLexErrorFromDiagnostic(units []string, d *FrontLexDiagnostic) *OstyLexE
 	return &OstyLexError{code: d.code, diagCode: ostyLexDiagnosticCode(d.code), message: ostyLexDiagnosticMessage(units, d), hint: ostyLexDiagnosticHint(d.code), startOffset: d.start.offset, startLine: d.start.line, startCol: d.start.column, endOffset: d.end.offset, endLine: d.end.line, endCol: d.end.column}
 }
 
-// Osty: /tmp/docgen_merged.osty:6247:1
-func ostyFatArrowDiagnostics(units []string) []*OstyLexError {
-	// Osty: /tmp/docgen_merged.osty:6248:5
-	var out []*OstyLexError = make([]*OstyLexError, 0, 1)
-	_ = out
-	// Osty: /tmp/docgen_merged.osty:6249:5
-	unitCount := ostyStringListCount(units)
-	_ = unitCount
-	// Osty: /tmp/docgen_merged.osty:6250:5
-	idx := 0
-	_ = idx
-	// Osty: /tmp/docgen_merged.osty:6251:5
-	for idx < func() int {
-		var _p1639 int = unitCount
-		var _rhs1640 int = 1
-		if _rhs1640 < 0 && _p1639 > math.MaxInt+_rhs1640 {
-			panic("integer overflow")
-		}
-		if _rhs1640 > 0 && _p1639 < math.MinInt+_rhs1640 {
-			panic("integer overflow")
-		}
-		return _p1639 - _rhs1640
-	}() {
-		// Osty: /tmp/docgen_merged.osty:6252:9
-		if frontUnitAt(units, idx) == "=" && frontUnitAt(units, func() int {
-			var _p1641 int = idx
-			var _rhs1642 int = 1
-			if _rhs1642 > 0 && _p1641 > math.MaxInt-_rhs1642 {
-				panic("integer overflow")
-			}
-			if _rhs1642 < 0 && _p1641 < math.MinInt-_rhs1642 {
-				panic("integer overflow")
-			}
-			return _p1641 + _rhs1642
-		}()) == ">" {
-			// Osty: /tmp/docgen_merged.osty:6253:13
-			start := frontPositionAt(units, idx)
-			_ = start
-			// Osty: /tmp/docgen_merged.osty:6254:13
-			end := frontPositionAt(units, func() int {
-				var _p1643 int = idx
-				var _rhs1644 int = 2
-				if _rhs1644 > 0 && _p1643 > math.MaxInt-_rhs1644 {
-					panic("integer overflow")
-				}
-				if _rhs1644 < 0 && _p1643 < math.MinInt-_rhs1644 {
-					panic("integer overflow")
-				}
-				return _p1643 + _rhs1644
-			}())
-			_ = end
-			// Osty: /tmp/docgen_merged.osty:6255:13
-			gt := ">"
-			_ = gt
-			// Osty: /tmp/docgen_merged.osty:6256:13
-			func() struct{} {
-				out = append(out, &OstyLexError{code: FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagIllegalCharacter{}), diagCode: "E0007", message: fmt.Sprintf("`=%s` is not valid Osty syntax; use `->`", ostyToString(gt)), hint: "", startOffset: start.offset, startLine: start.line, startCol: start.column, endOffset: end.offset, endLine: end.line, endCol: end.column})
-				return struct{}{}
-			}()
-		}
-		// Osty: /tmp/docgen_merged.osty:6271:9
-		func() {
-			var _cur1645 int = idx
-			var _rhs1646 int = 1
-			if _rhs1646 > 0 && _cur1645 > math.MaxInt-_rhs1646 {
-				panic("integer overflow")
-			}
-			if _rhs1646 < 0 && _cur1645 < math.MinInt-_rhs1646 {
-				panic("integer overflow")
-			}
-			idx = _cur1645 + _rhs1646
-		}()
-	}
-	return out
-}
-
 // Osty: /tmp/docgen_merged.osty:6276:1
 func ostyLexDiagnosticCode(code FrontLexDiagnosticCode) string {
 	return func() string {
@@ -8367,6 +8377,12 @@ func ostyLexDiagnosticCode(code FrontLexDiagnosticCode) string {
 		}
 		if func() bool { _, ok := _m1647.(*FrontLexDiagnosticCode_FrontDiagIllegalCharacter); return ok }() {
 			return "E0005"
+		}
+		if func() bool { _, ok := _m1647.(*FrontLexDiagnosticCode_FrontDiagBadNumericSeparator); return ok }() {
+			return "E0008"
+		}
+		if func() bool { _, ok := _m1647.(*FrontLexDiagnosticCode_FrontDiagFatArrowRemoved); return ok }() {
+			return "E0007"
 		}
 		panic("unreachable match")
 	}()
@@ -8409,6 +8425,12 @@ func ostyLexDiagnosticMessage(units []string, d *FrontLexDiagnostic) string {
 		}
 		if func() bool { _, ok := _m1648.(*FrontLexDiagnosticCode_FrontDiagIllegalCharacter); return ok }() {
 			return "illegal character"
+		}
+		if func() bool { _, ok := _m1648.(*FrontLexDiagnosticCode_FrontDiagBadNumericSeparator); return ok }() {
+			return "numeric separator `_` must appear between two digits"
+		}
+		if func() bool { _, ok := _m1648.(*FrontLexDiagnosticCode_FrontDiagFatArrowRemoved); return ok }() {
+			return "`=>` is not valid Osty syntax; use `->`"
 		}
 		panic("unreachable match")
 	}()
@@ -8512,6 +8534,12 @@ func ostyLexDiagnosticHint(code FrontLexDiagnosticCode) string {
 			return ""
 		}
 		if func() bool { _, ok := _m1655.(*FrontLexDiagnosticCode_FrontDiagEmptyByte); return ok }() {
+			return ""
+		}
+		if func() bool { _, ok := _m1655.(*FrontLexDiagnosticCode_FrontDiagBadNumericSeparator); return ok }() {
+			return "place `_` only between two digits"
+		}
+		if func() bool { _, ok := _m1655.(*FrontLexDiagnosticCode_FrontDiagFatArrowRemoved); return ok }() {
 			return ""
 		}
 		panic("unreachable match")
@@ -8672,7 +8700,7 @@ func ostyLexStringPartFromFront(units []string, tok *FrontLexToken, part *FrontS
 	// Osty: /tmp/docgen_merged.osty:6386:5
 	if ostyEqual(part.kind, FrontStringPartKind(&FrontStringPartKind_FrontStringInterpolation{})) {
 		// Osty: /tmp/docgen_merged.osty:6387:9
-		return &OstyLexStringPart{ownerToken: part.ownerToken, kindCode: 1, text: "", decodeEscapes: false, exprTokenStart: part.exprTokenStart, exprTokenCount: part.exprTokenCount}
+		return &OstyLexStringPart{ownerToken: part.ownerToken, kindCode: 1, text: "", exprTokenStart: part.exprTokenStart, exprTokenCount: part.exprTokenCount}
 	}
 	// Osty: /tmp/docgen_merged.osty:6396:5
 	text := frontLexemeFromUnits(units, part.start.offset, func() int {
@@ -8687,12 +8715,8 @@ func ostyLexStringPartFromFront(units []string, tok *FrontLexToken, part *FrontS
 		return _p1677 - _rhs1678
 	}())
 	_ = text
-	// Osty: /tmp/docgen_merged.osty:6397:5
-	if tok.triple {
-		// Osty: /tmp/docgen_merged.osty:6398:9
-		text = ostyNormalizeTripleSegment(text)
-	}
-	return &OstyLexStringPart{ownerToken: part.ownerToken, kindCode: 0, text: text, decodeEscapes: ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})), exprTokenStart: 0, exprTokenCount: 0}
+	text = ostyPublicStringText(tok, text)
+	return &OstyLexStringPart{ownerToken: part.ownerToken, kindCode: 0, text: text, exprTokenStart: 0, exprTokenCount: 0}
 }
 
 // Osty: /tmp/docgen_merged.osty:6410:1
@@ -8700,12 +8724,108 @@ func ostyDefaultStringPart(units []string, tok *FrontLexToken, owner int) *OstyL
 	// Osty: /tmp/docgen_merged.osty:6411:5
 	text := ostyStringContentRaw(units, tok)
 	_ = text
-	// Osty: /tmp/docgen_merged.osty:6412:5
+	text = ostyPublicStringText(tok, text)
+	return &OstyLexStringPart{ownerToken: owner, kindCode: 0, text: text, exprTokenStart: 0, exprTokenCount: 0}
+}
+
+func ostyPublicStringText(tok *FrontLexToken, raw string) string {
+	text := raw
 	if tok.triple {
-		// Osty: /tmp/docgen_merged.osty:6413:9
 		text = ostyNormalizeTripleSegment(text)
 	}
-	return &OstyLexStringPart{ownerToken: owner, kindCode: 0, text: text, decodeEscapes: ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})), exprTokenStart: 0, exprTokenCount: 0}
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) {
+		return ostyDecodeEscapes(text)
+	}
+	return text
+}
+
+func ostyDecodeEscapes(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r != '\\' {
+			b.WriteRune(r)
+			i += size
+			continue
+		}
+		if i+1 >= len(s) {
+			b.WriteByte('\\')
+			i++
+			continue
+		}
+		next, nextSize := utf8.DecodeRuneInString(s[i+1:])
+		switch next {
+		case 'n':
+			b.WriteByte('\n')
+			i += 1 + nextSize
+		case 'r':
+			b.WriteByte('\r')
+			i += 1 + nextSize
+		case 't':
+			b.WriteByte('\t')
+			i += 1 + nextSize
+		case '0':
+			b.WriteByte(0)
+			i += 1 + nextSize
+		case '"', '\'', '\\', '{', '}':
+			b.WriteRune(next)
+			i += 1 + nextSize
+		case 'x':
+			if i+3 < len(s) {
+				if v, err := strconv.ParseUint(s[i+2:i+4], 16, 8); err == nil {
+					b.WriteByte(byte(v))
+					i += 4
+					continue
+				}
+			}
+			b.WriteRune(next)
+			i += 1 + nextSize
+		case 'u':
+			if i+2 < len(s) && s[i+2] == '{' {
+				if end := strings.IndexByte(s[i+3:], '}'); end >= 0 {
+					hex := s[i+3 : i+3+end]
+					if v, err := strconv.ParseInt(hex, 16, 32); err == nil {
+						b.WriteRune(rune(v))
+						i += 4 + end
+						continue
+					}
+				}
+			}
+			b.WriteRune(next)
+			i += 1 + nextSize
+		default:
+			b.WriteRune(next)
+			i += 1 + nextSize
+		}
+	}
+	return b.String()
+}
+
+func ostyDecodeCharLiteralValue(s string) string {
+	if strings.HasPrefix(s, "b") {
+		s = s[1:]
+	}
+	if strings.HasPrefix(s, "'") {
+		s = s[1:]
+	}
+	if strings.HasSuffix(s, "'") {
+		s = s[:len(s)-1]
+	}
+	decoded := ostyDecodeEscapes(s)
+	if decoded == "" {
+		return "\uFFFD"
+	}
+	return decoded
+}
+
+func ostyDecodeByteLiteralValue(s string) string {
+	v := ostyDecodeCharLiteralValue(s)
+	r, _ := utf8.DecodeRuneInString(v)
+	if r > 255 {
+		return string(byte(0))
+	}
+	return string(byte(r))
 }
 
 // Osty: /tmp/docgen_merged.osty:6425:1

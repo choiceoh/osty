@@ -1,10 +1,6 @@
 package docgen
 
 import (
-	"strconv"
-	"strings"
-	"unicode/utf8"
-
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/token"
 )
@@ -108,7 +104,6 @@ func adaptLexStream(rt runeTable, stream *FrontLexStream, facts *OstyLexFacts) (
 		fillLiteralParts(&tok, rt, stream, facts.stringParts, len(toks))
 		toks = append(toks, tok)
 	}
-	toks = collapseFatArrows(toks)
 
 	comments := make([]token.Comment, 0, len(facts.comments))
 	for _, c := range facts.comments {
@@ -374,80 +369,13 @@ func fillLiteralParts(tok *token.Token, rt runeTable, stream *FrontLexStream, pa
 				})
 				continue
 			}
-			raw := p.text
-			if p.decodeEscapes {
-				raw = decodeEscapes(raw)
-			}
-			tok.Parts = append(tok.Parts, token.StringPart{Kind: token.PartText, Text: raw})
+			tok.Parts = append(tok.Parts, token.StringPart{Kind: token.PartText, Text: p.text})
 		}
 	case token.CHAR:
-		tok.Value = decodeChar(tok.Value)
+		tok.Value = ostyDecodeCharLiteralValue(tok.Value)
 	case token.BYTE:
-		tok.Value = decodeByte(tok.Value)
+		tok.Value = ostyDecodeByteLiteralValue(tok.Value)
 	}
-}
-
-func decodeEscapes(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	for i := 0; i < len(s); {
-		r, size := utf8.DecodeRuneInString(s[i:])
-		if r != '\\' {
-			b.WriteRune(r)
-			i += size
-			continue
-		}
-		if i+1 >= len(s) {
-			b.WriteByte('\\')
-			i++
-			continue
-		}
-		next, nextSize := utf8.DecodeRuneInString(s[i+1:])
-		switch next {
-		case 'n':
-			b.WriteByte('\n')
-			i += 1 + nextSize
-		case 'r':
-			b.WriteByte('\r')
-			i += 1 + nextSize
-		case 't':
-			b.WriteByte('\t')
-			i += 1 + nextSize
-		case '0':
-			b.WriteByte(0)
-			i += 1 + nextSize
-		case '"', '\'', '\\', '{', '}':
-			b.WriteRune(next)
-			i += 1 + nextSize
-		case 'x':
-			if i+3 < len(s) {
-				if v, err := strconv.ParseUint(s[i+2:i+4], 16, 8); err == nil {
-					b.WriteByte(byte(v))
-					i += 4
-					continue
-				}
-			}
-			b.WriteRune(next)
-			i += 1 + nextSize
-		case 'u':
-			if i+2 < len(s) && s[i+2] == '{' {
-				if end := strings.IndexByte(s[i+3:], '}'); end >= 0 {
-					hex := s[i+3 : i+3+end]
-					if v, err := strconv.ParseInt(hex, 16, 32); err == nil {
-						b.WriteRune(rune(v))
-						i += 4 + end
-						continue
-					}
-				}
-			}
-			b.WriteRune(next)
-			i += 1 + nextSize
-		default:
-			b.WriteRune(next)
-			i += 1 + nextSize
-		}
-	}
-	return b.String()
 }
 
 func interpolationTokens(stream *FrontLexStream, start, count int, rt runeTable) []token.Token {
@@ -476,27 +404,6 @@ func interpolationTokens(stream *FrontLexStream, start, count int, rt runeTable)
 	return out
 }
 
-func decodeChar(s string) string {
-	if strings.HasPrefix(s, "b") {
-		s = s[1:]
-	}
-	body := strings.Trim(s, "'")
-	decoded := decodeEscapes(body)
-	if decoded == "" {
-		return "\uFFFD"
-	}
-	return decoded
-}
-
-func decodeByte(s string) string {
-	v := decodeChar(s)
-	r, _ := utf8.DecodeRuneInString(v)
-	if r > 255 {
-		return string(byte(0))
-	}
-	return string(byte(r))
-}
-
 func lexDiagnostic(d *OstyLexError, rt runeTable) *diag.Diagnostic {
 	start := token.Pos{Offset: rt.byteOffset(d.startOffset), Line: d.startLine, Column: d.startCol}
 	end := token.Pos{Offset: rt.byteOffset(d.endOffset), Line: d.endLine, Column: d.endCol}
@@ -514,21 +421,4 @@ func stringAt(items []string, idx int) string {
 		return ""
 	}
 	return items[idx]
-}
-
-func collapseFatArrows(in []token.Token) []token.Token {
-	out := make([]token.Token, 0, len(in))
-	for i := 0; i < len(in); i++ {
-		if i+1 < len(in) && in[i].Kind == token.ASSIGN && in[i+1].Kind == token.GT && in[i].End.Offset == in[i+1].Pos.Offset {
-			tok := in[i]
-			tok.Kind = token.ILLEGAL
-			tok.Value = "=>"
-			tok.End = in[i+1].End
-			out = append(out, tok)
-			i++
-			continue
-		}
-		out = append(out, in[i])
-	}
-	return out
 }

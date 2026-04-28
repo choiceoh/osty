@@ -8,8 +8,10 @@ import (
 	"github.com/osty/osty/internal/selfhost/astbridge"
 	"math"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 type ostyStringer interface {
@@ -1392,6 +1394,10 @@ func (FrontLexDiagnosticCode_FrontDiagEmptyByte) _isFrontLexDiagnosticCode() {}
 type FrontLexDiagnosticCode_FrontDiagBadNumericSeparator struct{ _ref byte }
 
 func (FrontLexDiagnosticCode_FrontDiagBadNumericSeparator) _isFrontLexDiagnosticCode() {}
+
+type FrontLexDiagnosticCode_FrontDiagFatArrowRemoved struct{ _ref byte }
+
+func (FrontLexDiagnosticCode_FrontDiagFatArrowRemoved) _isFrontLexDiagnosticCode() {}
 
 // Osty: /tmp/selfhost_merged.osty:631:5
 type FrontStringPartKind interface{ _isFrontStringPartKind() }
@@ -3016,6 +3022,9 @@ func frontendLexStream(source string) *FrontLexStream {
 						return struct{}{}
 					}()
 				}
+				if frontNumberHasBadSeparator(units, idx, scan.consumed) {
+					diagnostics = append(diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagBadNumericSeparator{}), start, frontPositionAt(units, idx+scan.consumed)))
+				}
 				// Osty: /tmp/selfhost_merged.osty:1472:17
 				pendingDocLines = 0
 				// Osty: /tmp/selfhost_merged.osty:1473:17
@@ -3136,6 +3145,7 @@ func frontendLexStream(source string) *FrontLexStream {
 					// Osty: /tmp/selfhost_merged.osty:1528:21
 					insertTerm = frontKindInsertsTerm(scan.kind)
 				} else {
+					diagCode := frontIllegalDiagnosticCode(units, idx, scan)
 					// Osty: /tmp/selfhost_merged.osty:1530:21
 					func() struct{} {
 						tokens = append(tokens, frontLexTokenFromScan(units, idx, scan.consumed, FrontTokenKind(&FrontTokenKind_FrontIllegal{}), leadingDocLines, false, 0, false))
@@ -3155,7 +3165,7 @@ func frontendLexStream(source string) *FrontLexStream {
 					}()
 					// Osty: /tmp/selfhost_merged.osty:1543:21
 					func() struct{} {
-						diagnostics = append(diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagIllegalCharacter{}), start, frontPositionAt(units, func() int {
+						diagnostics = append(diagnostics, frontLexDiagnostic(diagCode, start, frontPositionAt(units, func() int {
 							var _p154 int = idx
 							var _rhs155 int = scan.consumed
 							if _rhs155 > 0 && _p154 > math.MaxInt-_rhs155 {
@@ -4767,6 +4777,12 @@ func frontInterpolationScan(units []string, start int, limit int, ownerPart int)
 						}())))
 						return struct{}{}
 					}()
+				}
+				if frontScanIsNumber(tokenScan) && frontNumberHasBadSeparator(units, idx, tokenScan.consumed) {
+					out.diagnostics = append(out.diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagBadNumericSeparator{}), frontPositionAt(units, idx), frontPositionAt(units, idx+tokenScan.consumed)))
+				}
+				if frontScanIsFatArrow(units, idx, tokenScan) {
+					out.diagnostics = append(out.diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagFatArrowRemoved{}), frontPositionAt(units, idx), frontPositionAt(units, idx+tokenScan.consumed)))
 				}
 				// Osty: /tmp/selfhost_merged.osty:2147:20
 				out.consumed = func() int {
@@ -6853,256 +6869,77 @@ func frontUnitsMatch(units []string, start int, consumed int, text string) bool 
 	return matchTextUnits(units, start, text)
 }
 
-// Osty: /tmp/selfhost_merged.osty:2894:5
 func frontNumberScan(units []string, start int, unitCount int) *FrontScanResult {
-	// Osty: /tmp/selfhost_merged.osty:2895:5
 	first := frontUnitAt(units, start)
-	_ = first
-	// Osty: /tmp/selfhost_merged.osty:2896:5
-	prefix := frontUnitAt(units, func() int {
-		var _p560 int = start
-		var _rhs561 int = 1
-		if _rhs561 > 0 && _p560 > math.MaxInt-_rhs561 {
-			panic("integer overflow")
-		}
-		if _rhs561 < 0 && _p560 < math.MinInt-_rhs561 {
-			panic("integer overflow")
-		}
-		return _p560 + _rhs561
-	}())
-	_ = prefix
-	// Osty: /tmp/selfhost_merged.osty:2897:5
+	prefix := frontUnitAt(units, start+1)
 	if first == "0" && (prefix == "x" || prefix == "X") {
-		// Osty: /tmp/selfhost_merged.osty:2898:9
 		consumed := 2
-		_ = consumed
-		// Osty: /tmp/selfhost_merged.osty:2899:9
-		for idx := func() int {
-			var _p562 int = start
-			var _rhs563 int = 2
-			if _rhs563 > 0 && _p562 > math.MaxInt-_rhs563 {
-				panic("integer overflow")
-			}
-			if _rhs563 < 0 && _p562 < math.MinInt-_rhs563 {
-				panic("integer overflow")
-			}
-			return _p562 + _rhs563
-		}(); idx < unitCount; idx++ {
-			// Osty: /tmp/selfhost_merged.osty:2900:13
+		for idx := start + 2; idx < unitCount; idx++ {
 			unit := frontUnitAt(units, idx)
-			_ = unit
-			// Osty: /tmp/selfhost_merged.osty:2901:13
 			if frontIsHexDigit(unit) || unit == "_" {
-				// Osty: /tmp/selfhost_merged.osty:2902:17
-				func() {
-					var _cur564 int = consumed
-					var _rhs565 int = 1
-					if _rhs565 > 0 && _cur564 > math.MaxInt-_rhs565 {
-						panic("integer overflow")
-					}
-					if _rhs565 < 0 && _cur564 < math.MinInt-_rhs565 {
-						panic("integer overflow")
-					}
-					consumed = _cur564 + _rhs565
-				}()
+				consumed++
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:2904:17
 				break
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:2907:9
-		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix), false, 0, true, prefix == "X")
+		badSeparators := frontNumberBadSeparatorErrors(units, start, consumed)
+		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix)+badSeparators, false, 0, true, prefix == "X")
 	}
-	// Osty: /tmp/selfhost_merged.osty:2918:5
 	if first == "0" && (prefix == "b" || prefix == "B") {
-		// Osty: /tmp/selfhost_merged.osty:2919:9
 		consumed := 2
-		_ = consumed
-		// Osty: /tmp/selfhost_merged.osty:2920:9
-		for idx := func() int {
-			var _p566 int = start
-			var _rhs567 int = 2
-			if _rhs567 > 0 && _p566 > math.MaxInt-_rhs567 {
-				panic("integer overflow")
-			}
-			if _rhs567 < 0 && _p566 < math.MinInt-_rhs567 {
-				panic("integer overflow")
-			}
-			return _p566 + _rhs567
-		}(); idx < unitCount; idx++ {
-			// Osty: /tmp/selfhost_merged.osty:2921:13
+		for idx := start + 2; idx < unitCount; idx++ {
 			unit := frontUnitAt(units, idx)
-			_ = unit
-			// Osty: /tmp/selfhost_merged.osty:2922:13
 			if unit == "0" || unit == "1" || unit == "_" {
-				// Osty: /tmp/selfhost_merged.osty:2923:17
-				func() {
-					var _cur568 int = consumed
-					var _rhs569 int = 1
-					if _rhs569 > 0 && _cur568 > math.MaxInt-_rhs569 {
-						panic("integer overflow")
-					}
-					if _rhs569 < 0 && _cur568 < math.MinInt-_rhs569 {
-						panic("integer overflow")
-					}
-					consumed = _cur568 + _rhs569
-				}()
+				consumed++
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:2925:17
 				break
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:2928:9
-		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix), false, 0, true, prefix == "B")
+		badSeparators := frontNumberBadSeparatorErrors(units, start, consumed)
+		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix)+badSeparators, false, 0, true, prefix == "B")
 	}
-	// Osty: /tmp/selfhost_merged.osty:2939:5
 	if first == "0" && (prefix == "o" || prefix == "O") {
-		// Osty: /tmp/selfhost_merged.osty:2940:9
 		consumed := 2
-		_ = consumed
-		// Osty: /tmp/selfhost_merged.osty:2941:9
-		for idx := func() int {
-			var _p570 int = start
-			var _rhs571 int = 2
-			if _rhs571 > 0 && _p570 > math.MaxInt-_rhs571 {
-				panic("integer overflow")
-			}
-			if _rhs571 < 0 && _p570 < math.MinInt-_rhs571 {
-				panic("integer overflow")
-			}
-			return _p570 + _rhs571
-		}(); idx < unitCount; idx++ {
-			// Osty: /tmp/selfhost_merged.osty:2942:13
+		for idx := start + 2; idx < unitCount; idx++ {
 			unit := frontUnitAt(units, idx)
-			_ = unit
-			// Osty: /tmp/selfhost_merged.osty:2943:13
 			if (unit >= "0" && unit <= "7") || unit == "_" {
-				// Osty: /tmp/selfhost_merged.osty:2944:17
-				func() {
-					var _cur572 int = consumed
-					var _rhs573 int = 1
-					if _rhs573 > 0 && _cur572 > math.MaxInt-_rhs573 {
-						panic("integer overflow")
-					}
-					if _rhs573 < 0 && _cur572 < math.MinInt-_rhs573 {
-						panic("integer overflow")
-					}
-					consumed = _cur572 + _rhs573
-				}()
+				consumed++
 			} else {
-				// Osty: /tmp/selfhost_merged.osty:2946:17
 				break
 			}
 		}
-		// Osty: /tmp/selfhost_merged.osty:2949:9
-		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix), false, 0, true, prefix == "O")
+		badSeparators := frontNumberBadSeparatorErrors(units, start, consumed)
+		return frontDetailedScanResult(FrontTokenKind(&FrontTokenKind_FrontInt{}), consumed, true, frontUppercaseBaseError(prefix)+badSeparators, false, 0, true, prefix == "O")
 	}
-	// Osty: /tmp/selfhost_merged.osty:2961:5
+
 	consumed := 0
-	_ = consumed
-	// Osty: /tmp/selfhost_merged.osty:2962:5
 	kind := FrontTokenKind(&FrontTokenKind_FrontInt{})
-	_ = kind
-	// Osty: /tmp/selfhost_merged.osty:2963:5
 	seenDot := false
-	_ = seenDot
-	// Osty: /tmp/selfhost_merged.osty:2964:5
 	seenExp := false
-	_ = seenExp
-	// Osty: /tmp/selfhost_merged.osty:2965:5
 	expCanSign := false
-	_ = expCanSign
-	// Osty: /tmp/selfhost_merged.osty:2966:5
 	for idx := start; idx < unitCount; idx++ {
-		// Osty: /tmp/selfhost_merged.osty:2967:9
 		unit := frontUnitAt(units, idx)
-		_ = unit
-		// Osty: /tmp/selfhost_merged.osty:2968:9
-		next := frontUnitAt(units, func() int {
-			var _p574 int = idx
-			var _rhs575 int = 1
-			if _rhs575 > 0 && _p574 > math.MaxInt-_rhs575 {
-				panic("integer overflow")
-			}
-			if _rhs575 < 0 && _p574 < math.MinInt-_rhs575 {
-				panic("integer overflow")
-			}
-			return _p574 + _rhs575
-		}())
-		_ = next
-		// Osty: /tmp/selfhost_merged.osty:2969:9
+		next := frontUnitAt(units, idx+1)
 		if digitStringValue(unit) >= 0 || unit == "_" {
-			// Osty: /tmp/selfhost_merged.osty:2970:13
-			func() {
-				var _cur576 int = consumed
-				var _rhs577 int = 1
-				if _rhs577 > 0 && _cur576 > math.MaxInt-_rhs577 {
-					panic("integer overflow")
-				}
-				if _rhs577 < 0 && _cur576 < math.MinInt-_rhs577 {
-					panic("integer overflow")
-				}
-				consumed = _cur576 + _rhs577
-			}()
-			// Osty: /tmp/selfhost_merged.osty:2971:13
+			consumed++
 			expCanSign = false
-		} else if unit == "." && !(seenDot) && !(seenExp) && digitStringValue(next) >= 0 {
-			// Osty: /tmp/selfhost_merged.osty:2973:13
+		} else if unit == "." && !seenDot && !seenExp && digitStringValue(next) >= 0 {
 			kind = FrontTokenKind(&FrontTokenKind_FrontFloat{})
-			// Osty: /tmp/selfhost_merged.osty:2974:13
 			seenDot = true
-			// Osty: /tmp/selfhost_merged.osty:2975:13
-			func() {
-				var _cur578 int = consumed
-				var _rhs579 int = 1
-				if _rhs579 > 0 && _cur578 > math.MaxInt-_rhs579 {
-					panic("integer overflow")
-				}
-				if _rhs579 < 0 && _cur578 < math.MinInt-_rhs579 {
-					panic("integer overflow")
-				}
-				consumed = _cur578 + _rhs579
-			}()
-		} else if (unit == "e" || unit == "E") && !(seenExp) && (digitStringValue(next) >= 0 || next == "+" || next == "-") {
-			// Osty: /tmp/selfhost_merged.osty:2977:13
+			consumed++
+		} else if (unit == "e" || unit == "E") && !seenExp && (digitStringValue(next) >= 0 || next == "+" || next == "-") {
 			kind = FrontTokenKind(&FrontTokenKind_FrontFloat{})
-			// Osty: /tmp/selfhost_merged.osty:2978:13
 			seenExp = true
-			// Osty: /tmp/selfhost_merged.osty:2979:13
 			expCanSign = true
-			// Osty: /tmp/selfhost_merged.osty:2980:13
-			func() {
-				var _cur580 int = consumed
-				var _rhs581 int = 1
-				if _rhs581 > 0 && _cur580 > math.MaxInt-_rhs581 {
-					panic("integer overflow")
-				}
-				if _rhs581 < 0 && _cur580 < math.MinInt-_rhs581 {
-					panic("integer overflow")
-				}
-				consumed = _cur580 + _rhs581
-			}()
+			consumed++
 		} else if (unit == "+" || unit == "-") && expCanSign {
-			// Osty: /tmp/selfhost_merged.osty:2982:13
 			expCanSign = false
-			// Osty: /tmp/selfhost_merged.osty:2983:13
-			func() {
-				var _cur582 int = consumed
-				var _rhs583 int = 1
-				if _rhs583 > 0 && _cur582 > math.MaxInt-_rhs583 {
-					panic("integer overflow")
-				}
-				if _rhs583 < 0 && _cur582 < math.MinInt-_rhs583 {
-					panic("integer overflow")
-				}
-				consumed = _cur582 + _rhs583
-			}()
+			consumed++
 		} else {
-			// Osty: /tmp/selfhost_merged.osty:2985:13
 			break
 		}
 	}
-	return frontScanResult(kind, consumed, true)
+	return frontDetailedScanResult(kind, consumed, true, frontNumberBadSeparatorErrors(units, start, consumed), false, 0, false, false)
 }
 
 // Osty: /tmp/selfhost_merged.osty:2991:5
@@ -7119,6 +6956,64 @@ func frontUppercaseBaseError(prefix string) int {
 // Osty: /tmp/selfhost_merged.osty:2999:5
 func frontIsHexDigit(unit string) bool {
 	return digitStringValue(unit) >= 0 || (unit >= "a" && unit <= "f") || (unit >= "A" && unit <= "F")
+}
+
+func frontNumberBadSeparatorErrors(units []string, start int, consumed int) int {
+	if frontNumberHasBadSeparator(units, start, consumed) {
+		return 1
+	}
+	return 0
+}
+
+func frontScanIsNumber(scan *FrontScanResult) bool {
+	return ostyEqual(scan.kind, FrontTokenKind(&FrontTokenKind_FrontInt{})) || ostyEqual(scan.kind, FrontTokenKind(&FrontTokenKind_FrontFloat{}))
+}
+
+func frontNumberHasBadSeparator(units []string, start int, consumed int) bool {
+	base := frontNumberBase(units, start)
+	bodyStart := start
+	if base != 10 {
+		bodyStart = start + 2
+	}
+	for idx := bodyStart; idx < start+consumed; idx++ {
+		if frontUnitAt(units, idx) == "_" {
+			prev := frontUnitAt(units, idx-1)
+			next := frontUnitAt(units, idx+1)
+			if !frontIsBaseDigit(prev, base) || !frontIsBaseDigit(next, base) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func frontNumberBase(units []string, start int) int {
+	if frontUnitAt(units, start) == "0" {
+		prefix := frontUnitAt(units, start+1)
+		if prefix == "x" || prefix == "X" {
+			return 16
+		}
+		if prefix == "b" || prefix == "B" {
+			return 2
+		}
+		if prefix == "o" || prefix == "O" {
+			return 8
+		}
+	}
+	return 10
+}
+
+func frontIsBaseDigit(unit string, base int) bool {
+	switch base {
+	case 2:
+		return unit == "0" || unit == "1"
+	case 8:
+		return unit >= "0" && unit <= "7"
+	case 16:
+		return frontIsHexDigit(unit)
+	default:
+		return digitStringValue(unit) >= 0
+	}
 }
 
 // Osty: /tmp/selfhost_merged.osty:3003:5
@@ -7167,6 +7062,9 @@ func frontPunctuationScan(units []string, start int, unitCount int) *FrontScanRe
 		// Osty: /tmp/selfhost_merged.osty:3014:9
 		return frontScanResult(FrontTokenKind(&FrontTokenKind_FrontShrEq{}), 3, true)
 	}
+	if one == "=" && two == ">" {
+		return frontScanResult(FrontTokenKind(&FrontTokenKind_FrontIllegal{}), 2, false)
+	}
 	// Osty: /tmp/selfhost_merged.osty:3016:5
 	twoKind := frontPunctuationPairKind(one, two)
 	_ = twoKind
@@ -7184,6 +7082,17 @@ func frontPunctuationScan(units []string, start int, unitCount int) *FrontScanRe
 		return frontScanResult(oneKind, 1, true)
 	}
 	return frontScanResult(FrontTokenKind(&FrontTokenKind_FrontIllegal{}), 1, false)
+}
+
+func frontIllegalDiagnosticCode(units []string, start int, scan *FrontScanResult) FrontLexDiagnosticCode {
+	if frontScanIsFatArrow(units, start, scan) {
+		return FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagFatArrowRemoved{})
+	}
+	return FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagIllegalCharacter{})
+}
+
+func frontScanIsFatArrow(units []string, start int, scan *FrontScanResult) bool {
+	return !scan.ok && scan.consumed == 2 && frontUnitAt(units, start) == "=" && frontUnitAt(units, start+1) == ">"
 }
 
 // Osty: /tmp/selfhost_merged.osty:3027:5
@@ -8316,6 +8225,9 @@ func frontLexDiagnosticCodeName(code FrontLexDiagnosticCode) string {
 		}
 		if func() bool { _, ok := _m605.(*FrontLexDiagnosticCode_FrontDiagBadNumericSeparator); return ok }() {
 			return "E_LEX_BAD_NUMERIC_SEPARATOR"
+		}
+		if func() bool { _, ok := _m605.(*FrontLexDiagnosticCode_FrontDiagFatArrowRemoved); return ok }() {
+			return "E_LEX_FAT_ARROW_REMOVED"
 		}
 		panic("unreachable match")
 	}()
@@ -17059,7 +16971,6 @@ type OstyLexStringPart struct {
 	ownerToken     int
 	kindCode       int
 	text           string
-	decodeEscapes  bool
 	exprTokenStart int
 	exprTokenCount int
 }
@@ -17184,11 +17095,6 @@ func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts
 			di = _cur1649 + _rhs1650
 		}()
 	}
-	// Osty: /tmp/selfhost_merged.osty:6381:5
-	for _, fat := range ostyFatArrowDiagnostics(units) {
-		// Osty: /tmp/selfhost_merged.osty:6382:9
-		func() struct{} { errors = append(errors, fat); return struct{}{} }()
-	}
 	// Osty: /tmp/selfhost_merged.osty:6385:5
 	var comments []*OstyLexComment = make([]*OstyLexComment, 0, 1)
 	_ = comments
@@ -17310,82 +17216,6 @@ func ostyLexErrorFromDiagnostic(units []string, d *FrontLexDiagnostic) *OstyLexE
 	return &OstyLexError{code: d.code, diagCode: ostyLexDiagnosticCode(d.code), message: ostyLexDiagnosticMessage(units, d), hint: ostyLexDiagnosticHint(d.code), startOffset: d.start.offset, startLine: d.start.line, startCol: d.start.column, endOffset: d.end.offset, endLine: d.end.line, endCol: d.end.column}
 }
 
-// Osty: /tmp/selfhost_merged.osty:6454:1
-func ostyFatArrowDiagnostics(units []string) []*OstyLexError {
-	// Osty: /tmp/selfhost_merged.osty:6455:5
-	var out []*OstyLexError = make([]*OstyLexError, 0, 1)
-	_ = out
-	// Osty: /tmp/selfhost_merged.osty:6456:5
-	unitCount := ostyStringListCount(units)
-	_ = unitCount
-	// Osty: /tmp/selfhost_merged.osty:6457:5
-	idx := 0
-	_ = idx
-	// Osty: /tmp/selfhost_merged.osty:6458:5
-	for idx < func() int {
-		var _p1659 int = unitCount
-		var _rhs1660 int = 1
-		if _rhs1660 < 0 && _p1659 > math.MaxInt+_rhs1660 {
-			panic("integer overflow")
-		}
-		if _rhs1660 > 0 && _p1659 < math.MinInt+_rhs1660 {
-			panic("integer overflow")
-		}
-		return _p1659 - _rhs1660
-	}() {
-		// Osty: /tmp/selfhost_merged.osty:6459:9
-		if frontUnitAt(units, idx) == "=" && frontUnitAt(units, func() int {
-			var _p1661 int = idx
-			var _rhs1662 int = 1
-			if _rhs1662 > 0 && _p1661 > math.MaxInt-_rhs1662 {
-				panic("integer overflow")
-			}
-			if _rhs1662 < 0 && _p1661 < math.MinInt-_rhs1662 {
-				panic("integer overflow")
-			}
-			return _p1661 + _rhs1662
-		}()) == ">" {
-			// Osty: /tmp/selfhost_merged.osty:6460:13
-			start := frontPositionAt(units, idx)
-			_ = start
-			// Osty: /tmp/selfhost_merged.osty:6461:13
-			end := frontPositionAt(units, func() int {
-				var _p1663 int = idx
-				var _rhs1664 int = 2
-				if _rhs1664 > 0 && _p1663 > math.MaxInt-_rhs1664 {
-					panic("integer overflow")
-				}
-				if _rhs1664 < 0 && _p1663 < math.MinInt-_rhs1664 {
-					panic("integer overflow")
-				}
-				return _p1663 + _rhs1664
-			}())
-			_ = end
-			// Osty: /tmp/selfhost_merged.osty:6462:13
-			gt := ">"
-			_ = gt
-			// Osty: /tmp/selfhost_merged.osty:6463:13
-			func() struct{} {
-				out = append(out, &OstyLexError{code: FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagIllegalCharacter{}), diagCode: "E0007", message: fmt.Sprintf("`=%s` is not valid Osty syntax; use `->`", ostyToString(gt)), hint: "", startOffset: start.offset, startLine: start.line, startCol: start.column, endOffset: end.offset, endLine: end.line, endCol: end.column})
-				return struct{}{}
-			}()
-		}
-		// Osty: /tmp/selfhost_merged.osty:6478:9
-		func() {
-			var _cur1665 int = idx
-			var _rhs1666 int = 1
-			if _rhs1666 > 0 && _cur1665 > math.MaxInt-_rhs1666 {
-				panic("integer overflow")
-			}
-			if _rhs1666 < 0 && _cur1665 < math.MinInt-_rhs1666 {
-				panic("integer overflow")
-			}
-			idx = _cur1665 + _rhs1666
-		}()
-	}
-	return out
-}
-
 // Osty: /tmp/selfhost_merged.osty:6483:1
 func ostyLexDiagnosticCode(code FrontLexDiagnosticCode) string {
 	return func() string {
@@ -17426,6 +17256,9 @@ func ostyLexDiagnosticCode(code FrontLexDiagnosticCode) string {
 		}
 		if func() bool { _, ok := _m1667.(*FrontLexDiagnosticCode_FrontDiagBadNumericSeparator); return ok }() {
 			return "E0008"
+		}
+		if func() bool { _, ok := _m1667.(*FrontLexDiagnosticCode_FrontDiagFatArrowRemoved); return ok }() {
+			return "E0007"
 		}
 		panic("unreachable match")
 	}()
@@ -17471,6 +17304,9 @@ func ostyLexDiagnosticMessage(units []string, d *FrontLexDiagnostic) string {
 		}
 		if func() bool { _, ok := _m1668.(*FrontLexDiagnosticCode_FrontDiagBadNumericSeparator); return ok }() {
 			return "numeric separator `_` must appear between two digits"
+		}
+		if func() bool { _, ok := _m1668.(*FrontLexDiagnosticCode_FrontDiagFatArrowRemoved); return ok }() {
+			return "`=>` is not valid Osty syntax; use `->`"
 		}
 		panic("unreachable match")
 	}()
@@ -17578,6 +17414,9 @@ func ostyLexDiagnosticHint(code FrontLexDiagnosticCode) string {
 		}
 		if func() bool { _, ok := _m1675.(*FrontLexDiagnosticCode_FrontDiagBadNumericSeparator); return ok }() {
 			return "place `_` only between two digits"
+		}
+		if func() bool { _, ok := _m1675.(*FrontLexDiagnosticCode_FrontDiagFatArrowRemoved); return ok }() {
+			return ""
 		}
 		panic("unreachable match")
 	}()
@@ -17737,7 +17576,7 @@ func ostyLexStringPartFromFront(units []string, tok *FrontLexToken, part *FrontS
 	// Osty: /tmp/selfhost_merged.osty:6596:5
 	if ostyEqual(part.kind, FrontStringPartKind(&FrontStringPartKind_FrontStringInterpolation{})) {
 		// Osty: /tmp/selfhost_merged.osty:6597:9
-		return &OstyLexStringPart{ownerToken: part.ownerToken, kindCode: 1, text: "", decodeEscapes: false, exprTokenStart: part.exprTokenStart, exprTokenCount: part.exprTokenCount}
+		return &OstyLexStringPart{ownerToken: part.ownerToken, kindCode: 1, text: "", exprTokenStart: part.exprTokenStart, exprTokenCount: part.exprTokenCount}
 	}
 	// Osty: /tmp/selfhost_merged.osty:6606:5
 	text := frontLexemeFromUnits(units, part.start.offset, func() int {
@@ -17752,12 +17591,8 @@ func ostyLexStringPartFromFront(units []string, tok *FrontLexToken, part *FrontS
 		return _p1697 - _rhs1698
 	}())
 	_ = text
-	// Osty: /tmp/selfhost_merged.osty:6607:5
-	if tok.triple {
-		// Osty: /tmp/selfhost_merged.osty:6608:9
-		text = ostyNormalizeTripleSegment(text)
-	}
-	return &OstyLexStringPart{ownerToken: part.ownerToken, kindCode: 0, text: text, decodeEscapes: ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})), exprTokenStart: 0, exprTokenCount: 0}
+	text = ostyPublicStringText(tok, text)
+	return &OstyLexStringPart{ownerToken: part.ownerToken, kindCode: 0, text: text, exprTokenStart: 0, exprTokenCount: 0}
 }
 
 // Osty: /tmp/selfhost_merged.osty:6620:1
@@ -17765,12 +17600,108 @@ func ostyDefaultStringPart(units []string, tok *FrontLexToken, owner int) *OstyL
 	// Osty: /tmp/selfhost_merged.osty:6621:5
 	text := ostyStringContentRaw(units, tok)
 	_ = text
-	// Osty: /tmp/selfhost_merged.osty:6622:5
+	text = ostyPublicStringText(tok, text)
+	return &OstyLexStringPart{ownerToken: owner, kindCode: 0, text: text, exprTokenStart: 0, exprTokenCount: 0}
+}
+
+func ostyPublicStringText(tok *FrontLexToken, raw string) string {
+	text := raw
 	if tok.triple {
-		// Osty: /tmp/selfhost_merged.osty:6623:9
 		text = ostyNormalizeTripleSegment(text)
 	}
-	return &OstyLexStringPart{ownerToken: owner, kindCode: 0, text: text, decodeEscapes: ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})), exprTokenStart: 0, exprTokenCount: 0}
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) {
+		return ostyDecodeEscapes(text)
+	}
+	return text
+}
+
+func ostyDecodeEscapes(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r != '\\' {
+			b.WriteRune(r)
+			i += size
+			continue
+		}
+		if i+1 >= len(s) {
+			b.WriteByte('\\')
+			i++
+			continue
+		}
+		next, nextSize := utf8.DecodeRuneInString(s[i+1:])
+		switch next {
+		case 'n':
+			b.WriteByte('\n')
+			i += 1 + nextSize
+		case 'r':
+			b.WriteByte('\r')
+			i += 1 + nextSize
+		case 't':
+			b.WriteByte('\t')
+			i += 1 + nextSize
+		case '0':
+			b.WriteByte(0)
+			i += 1 + nextSize
+		case '"', '\'', '\\', '{', '}':
+			b.WriteRune(next)
+			i += 1 + nextSize
+		case 'x':
+			if i+3 < len(s) {
+				if v, err := strconv.ParseUint(s[i+2:i+4], 16, 8); err == nil {
+					b.WriteByte(byte(v))
+					i += 4
+					continue
+				}
+			}
+			b.WriteRune(next)
+			i += 1 + nextSize
+		case 'u':
+			if i+2 < len(s) && s[i+2] == '{' {
+				if end := strings.IndexByte(s[i+3:], '}'); end >= 0 {
+					hex := s[i+3 : i+3+end]
+					if v, err := strconv.ParseInt(hex, 16, 32); err == nil {
+						b.WriteRune(rune(v))
+						i += 4 + end
+						continue
+					}
+				}
+			}
+			b.WriteRune(next)
+			i += 1 + nextSize
+		default:
+			b.WriteRune(next)
+			i += 1 + nextSize
+		}
+	}
+	return b.String()
+}
+
+func ostyDecodeCharLiteralValue(s string) string {
+	if strings.HasPrefix(s, "b") {
+		s = s[1:]
+	}
+	if strings.HasPrefix(s, "'") {
+		s = s[1:]
+	}
+	if strings.HasSuffix(s, "'") {
+		s = s[:len(s)-1]
+	}
+	decoded := ostyDecodeEscapes(s)
+	if decoded == "" {
+		return "\uFFFD"
+	}
+	return decoded
+}
+
+func ostyDecodeByteLiteralValue(s string) string {
+	v := ostyDecodeCharLiteralValue(s)
+	r, _ := utf8.DecodeRuneInString(v)
+	if r > 255 {
+		return string(byte(0))
+	}
+	return string(byte(r))
 }
 
 // Osty: /tmp/selfhost_merged.osty:6635:1
