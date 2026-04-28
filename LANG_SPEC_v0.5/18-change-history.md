@@ -43,8 +43,8 @@ real program.
 
 **Additions — stdlib.**
 
-- **`Option<T>`** combinators: `isSome / isNone / isSomeAnd / isNoneOr / contains / take / replace / unwrap / expect / unwrapOr / unwrapOrElse / and / andThen / or / orElse / xor / filter / inspect / map / mapOr / mapOrElse / zip / okOr / okOrElse`.
-- **`Result<T, E>`** combinators: `isOk / isErr / isOkAnd / isErrAnd / contains / containsErr / unwrap / expect / unwrapErr / expectErr / unwrapOr / unwrapOrElse / ok / err / and / andThen / or / orElse / inspect / inspectErr / map / mapErr / mapOr / mapOrElse`.
+- **`Option<T>`** combinators: `isSome / isNone / isSomeAnd / isNoneOr / contains / count / take / replace / unwrap / expect / unwrapOr / unwrapOrElse / and / andThen / or / orElse / xor / filter / inspect / forEach / map / mapOr / mapOrElse / zip / zipWith / reduce / okOr / okOrElse / toList`; module helpers `flatten / transpose / unzip / values / any / all / traverse / filterMap / findMap / map2 / map3`.
+- **`Result<T, E>`** combinators: `isOk / isErr / isOkAnd / isErrAnd / contains / containsErr / count / unwrap / expect / unwrapErr / expectErr / unwrapOr / unwrapOrElse / ok / err / and / andThen / or / orElse / inspect / inspectErr / forEach / map / mapErr / mapOr / mapOrElse / zip / zipWith / toList`; module helpers `flatten / transpose / values / errors / partition / all / traverse / map2 / map3 / allErrors / traverseErrors`.
 - **`List<T>`** extensions: `groupBy / chunked / windowed / partition / reduce / scan / flatMap / zip3` in addition to the existing `map / filter / fold / sorted / sortedBy / reversed / take / drop / appended / concat / zip / enumerate / push / pop / insert / removeAt / sort / reverse / clear`.
 - **`Map<K, V>`** extensions: `getOrInsert / getOrInsertWith / merge / mapValues / filter` on top of `get / containsKey / keys / values / entries / insert / remove / clear`.
 - **§10/24 `std.strings`** — full Unicode-aware chapter (previously referenced by name only).

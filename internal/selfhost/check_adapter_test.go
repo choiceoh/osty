@@ -560,20 +560,30 @@ fn main() {
     let some: Bool = maybe.isSomeAnd(|v| v > 0)
     let noneOr: Bool = maybe.isNoneOr(|v| v > 0)
     let contains: Bool = maybe.contains(1)
+    let countMaybe: Int = maybe.count()
     let expected: Int = maybe.expect("need value")
     let fallback: Int = maybe.unwrapOrElse(|| 0)
     let zipped: (Int, String)? = maybe.zip(Some("ok"))
+    let zippedWith: String? = maybe.zipWith(Some("ok"), |v: Int, label: String| "{label}:{v}")
+    let reducedMaybe: Int? = maybe.reduce(Some(2), |a, b| a + b)
     let mapped: String? = maybe.map(|v| "{v}")
     let mappedOr: String = maybe.mapOr("zero", |v| "{v}")
     let okOr: Result<Int, Error> = maybe.okOr("missing")
     let okOrElse: Result<Int, FsError> = maybe.okOrElse(|| FsError.NotFound("fallback"))
+    let maybeList: List<Int> = maybe.toList()
+    maybe.forEach(|v| println("{v}"))
 
     let good: Result<Int, FsError> = Ok(1)
     let okAnd: Bool = good.isOkAnd(|v| v > 0)
     let containsOk: Bool = good.contains(1)
+    let resultCount: Int = good.count()
     let inspected: Result<Int, FsError> = good.inspect(|v| println("{v}"))
     let mappedRes: Result<String, FsError> = good.map(|v| "{v}")
     let mappedOrElse: String = good.mapOrElse(|e| e.message(), |v| "{v}")
+    let zippedResult: Result<(Int, String), FsError> = good.zip(Ok("ok"))
+    let zippedResultWith: Result<String, FsError> = good.zipWith(Ok("ok"), |v: Int, label: String| "{label}:{v}")
+    let goodList: List<Int> = good.toList()
+    good.forEach(|v| println("{v}"))
 
     let bad: Result<Int, FsError> = Err(FsError.NotFound("broken"))
     let errAnd: Bool = bad.isErrAnd(|e| e.message().len() > 0)
@@ -586,8 +596,9 @@ fn main() {
     let containsErr: Bool = textErr.containsErr("bad")
     let expectErr: String = textErr.expectErr("want err")
 
-    let _ = (msg, parent, chain, some, noneOr, contains, expected, fallback, zipped, mapped, mappedOr, okOr, okOrElse)
-    let _ = (okAnd, containsOk, inspected, mappedRes, mappedOrElse, errAnd, recovered, chained, alt, containsErr, expectErr)
+    let _ = (msg, parent, chain, some, noneOr, contains, countMaybe, expected, fallback, zipped, zippedWith, reducedMaybe, mapped, mappedOr, okOr, okOrElse)
+    let _ = (maybeList, okAnd, containsOk, resultCount, inspected, mappedRes, mappedOrElse, zippedResult, zippedResultWith, goodList)
+    let _ = (errAnd, recovered, chained, alt, containsErr, expectErr)
 }
 `)
 
@@ -601,14 +612,22 @@ fn main() {
 		got[binding.Name] = binding.Type.String()
 	}
 	want := map[string]string{
-		"chain":        "List<Error>",
-		"okOrElse":     "Result<Int, FsError>",
-		"mappedOr":     "String",
-		"mappedRes":    "Result<String, FsError>",
-		"promoted":     "Result<Int, Error>",
-		"containsErr":  "Bool",
-		"expectErr":    "String",
-		"mappedOrElse": "String",
+		"chain":            "List<Error>",
+		"countMaybe":       "Int",
+		"zippedWith":       "String?",
+		"reducedMaybe":     "Int?",
+		"okOrElse":         "Result<Int, FsError>",
+		"maybeList":        "List<Int>",
+		"resultCount":      "Int",
+		"mappedOr":         "String",
+		"mappedRes":        "Result<String, FsError>",
+		"mappedOrElse":     "String",
+		"zippedResult":     "Result<(Int, String), FsError>",
+		"zippedResultWith": "Result<String, FsError>",
+		"goodList":         "List<Int>",
+		"promoted":         "Result<Int, Error>",
+		"containsErr":      "Bool",
+		"expectErr":        "String",
 	}
 	for name, wantType := range want {
 		if got[name] != wantType {

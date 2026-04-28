@@ -19,6 +19,46 @@ func TestLookupFnDeclFindsStringsCompare(t *testing.T) {
 	}
 }
 
+func TestLookupFnDeclFindsOptionAndResultHelpers(t *testing.T) {
+	reg := LoadCached()
+	cases := []struct {
+		module string
+		name   string
+	}{
+		{"option", "flatten"},
+		{"option", "transpose"},
+		{"option", "unzip"},
+		{"option", "values"},
+		{"option", "any"},
+		{"option", "all"},
+		{"option", "traverse"},
+		{"option", "filterMap"},
+		{"option", "findMap"},
+		{"option", "map2"},
+		{"option", "map3"},
+		{"result", "flatten"},
+		{"result", "transpose"},
+		{"result", "values"},
+		{"result", "errors"},
+		{"result", "partition"},
+		{"result", "all"},
+		{"result", "traverse"},
+		{"result", "map2"},
+		{"result", "map3"},
+		{"result", "allErrors"},
+		{"result", "traverseErrors"},
+	}
+	for _, tc := range cases {
+		fn := reg.LookupFnDecl(tc.module, tc.name)
+		if fn == nil {
+			t.Fatalf("LookupFnDecl(%s, %s) = nil, want *ast.FnDecl", tc.module, tc.name)
+		}
+		if fn.Body == nil {
+			t.Fatalf("LookupFnDecl(%s, %s) body = nil, want bodied helper", tc.module, tc.name)
+		}
+	}
+}
+
 func TestLookupFnDeclUnknownReturnsNil(t *testing.T) {
 	reg := LoadCached()
 	cases := []struct {
@@ -68,6 +108,30 @@ func TestLookupMethodDeclFindsEnumMethod(t *testing.T) {
 	}
 	if fn.Body == nil {
 		t.Fatalf("fn.Body = nil, want bodied enum method")
+	}
+}
+
+func TestLookupMethodDeclFindsExpandedOptionAndResultMethods(t *testing.T) {
+	reg := LoadCached()
+	cases := []struct {
+		module   string
+		typeName string
+		method   string
+	}{
+		{"option", "Option", "zipWith"},
+		{"option", "Option", "reduce"},
+		{"result", "Result", "zip"},
+		{"result", "Result", "zipWith"},
+		{"result", "Result", "toList"},
+	}
+	for _, tc := range cases {
+		fn := reg.LookupMethodDecl(tc.module, tc.typeName, tc.method)
+		if fn == nil {
+			t.Fatalf("LookupMethodDecl(%s, %s, %s) = nil, want *ast.FnDecl", tc.module, tc.typeName, tc.method)
+		}
+		if fn.Body == nil {
+			t.Fatalf("LookupMethodDecl(%s, %s, %s) body = nil, want bodied enum method", tc.module, tc.typeName, tc.method)
+		}
 	}
 }
 

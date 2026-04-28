@@ -186,7 +186,7 @@ func applyPackageFixes(pkg *resolve.Package, diags []*diag.Diagnostic, flags cli
 func runLintFile(path string, src []byte, formatter *diag.Formatter, flags cliFlags, lintCfg lint.Config, lintCfgOk bool) int {
 	parsed := parser.ParseDetailed(src)
 	file, parseDiags := parsed.File, parsed.Diagnostics
-	res := resolveFile(file)
+	res := resolveFile(src, file)
 	chk := check.SelfhostFile(file, res, checkOptsForFile(path, canonical.Source(src, file)))
 	lr := runLintEngine(file, src, res, chk)
 	if lintCfgOk {

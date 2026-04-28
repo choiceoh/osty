@@ -170,6 +170,8 @@ func TestLLVMBackendEmitBinaryBuildsBundledRuntime(t *testing.T) {
 		"osty_rt_list_push_bytes_roots_v1",
 		"osty_rt_list_get_bytes_v1",
 		"osty_rt_strings_Equal",
+		"osty_rt_crypto_sha256",
+		"osty_rt_crypto_random_bytes",
 		"osty.gc.pre_write_v1",
 		"osty.gc.load_v1",
 		"osty.gc.root_bind_v1",

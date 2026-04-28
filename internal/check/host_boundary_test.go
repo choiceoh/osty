@@ -116,6 +116,64 @@ fn main() {
 	}
 }
 
+func TestNativeBoundaryRebindsOptionResultImportSurfaceBuiltins(t *testing.T) {
+	src := []byte(`use std.option
+use std.result
+
+fn main() {}
+`)
+	file, res := parseResolvedFile(t, src)
+
+	fake := &fakeNativePackageChecker{t: t}
+	oldFactory := nativeCheckerFactory
+	nativeCheckerFactory = func() (nativeChecker, string) { return fake, "" }
+	t.Cleanup(func() { nativeCheckerFactory = oldFactory })
+
+	_ = SelfhostFile(file, res, Opts{Source: src, Stdlib: stdlib.LoadCached()})
+
+	if fake.packageCalls != 1 {
+		t.Fatalf("packageCalls = %d, want 1", fake.packageCalls)
+	}
+	assertNoQualifiedBuiltin := func(t *testing.T, alias, bad string) {
+		t.Helper()
+		for _, imp := range fake.imports {
+			if imp.Alias != alias {
+				continue
+			}
+			for _, fn := range imp.Functions {
+				if containsQualifiedBuiltinType(fn.ReturnType, bad) {
+					t.Fatalf("%s fn %s return type leaked %q: %s", alias, fn.Name, bad, fn.ReturnType)
+				}
+				for _, param := range fn.ParamTypes {
+					if containsQualifiedBuiltinType(param, bad) {
+						t.Fatalf("%s fn %s param type leaked %q: %s", alias, fn.Name, bad, param)
+					}
+				}
+			}
+			for _, field := range imp.Fields {
+				if containsQualifiedBuiltinType(field.TypeName, bad) {
+					t.Fatalf("%s field %s leaked %q: %s", alias, field.Name, bad, field.TypeName)
+				}
+			}
+		}
+	}
+
+	assertNoQualifiedBuiltin(t, "option", "option.Option")
+	assertNoQualifiedBuiltin(t, "result", "result.Result")
+}
+
+func containsQualifiedBuiltinType(text, qualified string) bool {
+	if text == qualified {
+		return true
+	}
+	for _, suffix := range []string{"<", "?", ",", ")", ">", " "} {
+		if strings.Contains(text, qualified+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestNativeBoundaryOverlaysStructuredCheckResult(t *testing.T) {
 	src := []byte(`fn id<T>(value: T) -> T { value }
 
