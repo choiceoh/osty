@@ -2579,6 +2579,11 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 			return err
 		}
 	}
+	if strings.HasPrefix(fnRef.Symbol, "std.fs.") {
+		if handled, err := g.emitStdFsCall(c, fnRef); handled {
+			return err
+		}
+	}
 	if strings.HasPrefix(fnRef.Symbol, "std.hint.") {
 		if handled, err := g.emitStdHintCall(c, fnRef); handled {
 			return err

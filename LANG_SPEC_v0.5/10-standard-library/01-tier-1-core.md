@@ -1,7 +1,9 @@
 ### 10.1 Tier 1 (Core)
 
 - `std.io` — `print`, `println`, `eprint`, `eprintln`, `readLine`
-- `std.fs` — file I/O
+- `std.fs` — whole-file and path operations:
+  `read`, `readToString`, `write`, `writeString`, `exists`,
+  `create`, `remove`, `rename`, `copy`, `mkdir`, `mkdirAll`
 - `std.strings` — string manipulation
 - `std.collections` — `List`, `Map`, `Set`
 - `std.option` — `Option`, `Some`, `None` (auto-imported)

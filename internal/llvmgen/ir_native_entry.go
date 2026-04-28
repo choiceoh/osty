@@ -157,6 +157,7 @@ type nativeProjectionCtx struct {
 	runtimeFFI            map[string]map[string]*nativeRuntimeFFIFunction
 	testingAliases        map[string]bool
 	stdIoAliases          map[string]bool
+	stdFsAliases          map[string]bool
 	runtimeDecls          []string
 	runtimeDeclSet        map[string]bool
 	scopes                []map[string]nativeExprInfo
@@ -331,6 +332,7 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 		runtimeFFI:        map[string]map[string]*nativeRuntimeFFIFunction{},
 		testingAliases:    map[string]bool{},
 		stdIoAliases:      map[string]bool{},
+		stdFsAliases:      map[string]bool{},
 		runtimeDeclSet:    map[string]bool{},
 		sourcePath:        firstNonEmpty(opts.SourcePath, "<unknown>"),
 		source:            append([]byte(nil), opts.Source...),
@@ -370,6 +372,9 @@ func nativeModuleFromIR(mod *ostyir.Module, opts Options) (*llvmNativeModule, bo
 			}
 			if nativeIsStdIoUse(d) {
 				ctx.stdIoAliases[nativeUseAlias(d)] = true
+			}
+			if nativeIsStdFsUse(d) {
+				ctx.stdFsAliases[nativeUseAlias(d)] = true
 			}
 		case *ostyir.StructDecl:
 			info, ok := nativeRegisterStructDecl(d)
@@ -1926,6 +1931,10 @@ func nativeIsStdIoUse(d *ostyir.UseDecl) bool {
 	return d != nil && !d.IsGoFFI && !d.IsRuntimeFFI && d.RawPath == "std.io"
 }
 
+func nativeIsStdFsUse(d *ostyir.UseDecl) bool {
+	return d != nil && !d.IsGoFFI && !d.IsRuntimeFFI && d.RawPath == "std.fs"
+}
+
 func nativeStdIoCallMethod(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (string, bool) {
 	alias, name, ok := nativeQualifiedAliasCall(call)
 	if !ok || ctx == nil || !ctx.stdIoAliases[alias] || !isStdIoOutputMethod(name) {
@@ -2062,6 +2071,283 @@ func nativeStdIoIntrinsicExpr(ctx *nativeProjectionCtx, e *ostyir.IntrinsicCall)
 		return nil, false
 	}
 	return nativeStdIoWriteExpr(ctx, e.Args[0].Value, method)
+}
+
+func nativeStdFsCallMethod(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (string, bool) {
+	alias, name, ok := nativeQualifiedAliasCall(call)
+	if !ok || ctx == nil || !ctx.stdFsAliases[alias] {
+		return "", false
+	}
+	return name, true
+}
+
+func nativeStdFsStringExpr(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeExpr, bool) {
+	if ctx == nil || expr == nil || !nativeTypeIsString(expr.Type()) {
+		return nil, false
+	}
+	return nativeExprFromIR(ctx, expr)
+}
+
+func nativeStdFsBytesExpr(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeExpr, bool) {
+	if ctx == nil || expr == nil || !nativeTypeIsBytes(expr.Type()) {
+		return nil, false
+	}
+	return nativeExprFromIR(ctx, expr)
+}
+
+func nativeStdFsResultInfo(ctx *nativeProjectionCtx, method string) (*nativeResultInfo, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	var okIR ostyir.Type
+	switch method {
+	case "read":
+		okIR = ostyir.TBytes
+	case "readToString":
+		okIR = ostyir.TString
+	case "write", "writeString", "create", "remove", "rename", "copy", "mkdir", "mkdirAll":
+		okIR = &ostyir.TupleType{}
+	default:
+		return nil, false
+	}
+	errIR := &ostyir.NamedType{Name: "Error", Builtin: true}
+	llvmType, ok := nativeRegisterResultType(ctx, okIR, errIR)
+	if !ok {
+		return nil, false
+	}
+	info := ctx.resultsByLLVMType[llvmType]
+	return info, info != nil
+}
+
+func nativeStdFsPtrResultExpr(ctx *nativeProjectionCtx, call *ostyir.CallExpr, valueSymbol, errorSymbol string) (*llvmNativeExpr, bool) {
+	if ctx == nil || call == nil || len(call.Args) != 1 || call.Args[0].IsKeyword() || call.Args[0].Value == nil {
+		return nil, false
+	}
+	method, _, _ := strings.Cut(strings.TrimPrefix(valueSymbol, "osty_rt_fs_"), "_")
+	if valueSymbol == ostyRtFsReadSymbol {
+		method = "read"
+	}
+	if valueSymbol == ostyRtFsReadStringSymbol {
+		method = "readToString"
+	}
+	resultInfo, ok := nativeStdFsResultInfo(ctx, method)
+	if !ok {
+		return nil, false
+	}
+	path, ok := nativeStdFsStringExpr(ctx, call.Args[0].Value)
+	if !ok {
+		return nil, false
+	}
+	ctx.addRuntimeDecl("declare ptr @" + valueSymbol + "(ptr)")
+	ctx.addRuntimeDecl("declare ptr @" + errorSymbol + "()")
+	read := nativeRuntimeCallExpr("ptr", valueSymbol, path)
+	return &llvmNativeExpr{
+		kind:     llvmNativeExprIf,
+		llvmType: resultInfo.def.llvmType,
+		childExprs: []*llvmNativeExpr{{
+			kind:     llvmNativeExprBinary,
+			llvmType: "i1",
+			op:       "==",
+			childExprs: []*llvmNativeExpr{
+				read,
+				nativeZeroExprForLLVMType("ptr"),
+			},
+		}},
+		childBlocks: []*llvmNativeBlock{
+			{
+				hasResult: true,
+				result: &llvmNativeExpr{
+					kind:     llvmNativeExprStructLit,
+					llvmType: resultInfo.def.llvmType,
+					childExprs: []*llvmNativeExpr{
+						{kind: llvmNativeExprInt, llvmType: "i64", text: "1"},
+						nativeZeroExprForLLVMType(resultInfo.okType),
+						nativeRuntimeCallExpr("ptr", errorSymbol),
+					},
+				},
+			},
+			{
+				hasResult: true,
+				result: &llvmNativeExpr{
+					kind:     llvmNativeExprStructLit,
+					llvmType: resultInfo.def.llvmType,
+					childExprs: []*llvmNativeExpr{
+						{kind: llvmNativeExprInt, llvmType: "i64", text: "0"},
+						read,
+						nativeZeroExprForLLVMType(resultInfo.errType),
+					},
+				},
+			},
+		},
+	}, true
+}
+
+func nativeStdFsUnitResultExpr(ctx *nativeProjectionCtx, call *ostyir.CallExpr, symbol string, args ...*llvmNativeExpr) (*llvmNativeExpr, bool) {
+	if ctx == nil || call == nil {
+		return nil, false
+	}
+	method := strings.TrimPrefix(symbol, "osty_rt_fs_")
+	if method == "write_bytes" {
+		method = "write"
+	}
+	if method == "write_string" {
+		method = "writeString"
+	}
+	if method == "mkdir_all" {
+		method = "mkdirAll"
+	}
+	resultInfo, ok := nativeStdFsResultInfo(ctx, method)
+	if !ok {
+		return nil, false
+	}
+	ctx.addRuntimeDecl("declare ptr @" + symbol + "(" + strings.Join(nativeStdFsDeclParams(len(args)), ", ") + ")")
+	errExpr := nativeRuntimeCallExpr("ptr", symbol, args...)
+	return &llvmNativeExpr{
+		kind:     llvmNativeExprIf,
+		llvmType: resultInfo.def.llvmType,
+		childExprs: []*llvmNativeExpr{{
+			kind:     llvmNativeExprBinary,
+			llvmType: "i1",
+			op:       "==",
+			childExprs: []*llvmNativeExpr{
+				errExpr,
+				nativeZeroExprForLLVMType("ptr"),
+			},
+		}},
+		childBlocks: []*llvmNativeBlock{
+			{
+				hasResult: true,
+				result: &llvmNativeExpr{
+					kind:     llvmNativeExprStructLit,
+					llvmType: resultInfo.def.llvmType,
+					childExprs: []*llvmNativeExpr{
+						{kind: llvmNativeExprInt, llvmType: "i64", text: "0"},
+						nativeZeroExprForLLVMType(resultInfo.okType),
+						nativeZeroExprForLLVMType(resultInfo.errType),
+					},
+				},
+			},
+			{
+				hasResult: true,
+				result: &llvmNativeExpr{
+					kind:     llvmNativeExprStructLit,
+					llvmType: resultInfo.def.llvmType,
+					childExprs: []*llvmNativeExpr{
+						{kind: llvmNativeExprInt, llvmType: "i64", text: "1"},
+						nativeZeroExprForLLVMType(resultInfo.okType),
+						errExpr,
+					},
+				},
+			},
+		},
+	}, true
+}
+
+func nativeStdFsDeclParams(n int) []string {
+	if n <= 0 {
+		return nil
+	}
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, "ptr")
+	}
+	return out
+}
+
+func nativeStdFsSinglePathUnitResultExpr(ctx *nativeProjectionCtx, call *ostyir.CallExpr, symbol string) (*llvmNativeExpr, bool) {
+	if ctx == nil || call == nil || len(call.Args) != 1 || call.Args[0].IsKeyword() || call.Args[0].Value == nil {
+		return nil, false
+	}
+	path, ok := nativeStdFsStringExpr(ctx, call.Args[0].Value)
+	if !ok {
+		return nil, false
+	}
+	return nativeStdFsUnitResultExpr(ctx, call, symbol, path)
+}
+
+func nativeStdFsExprFromIR(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (*llvmNativeExpr, bool) {
+	method, ok := nativeStdFsCallMethod(ctx, call)
+	if !ok {
+		return nil, false
+	}
+	switch method {
+	case "read":
+		return nativeStdFsPtrResultExpr(ctx, call, ostyRtFsReadSymbol, ostyRtFsReadErrorSymbol)
+	case "readToString":
+		return nativeStdFsPtrResultExpr(ctx, call, ostyRtFsReadStringSymbol, ostyRtFsReadStringErrorSymbol)
+	case "write":
+		if len(call.Args) != 2 || call.Args[0].IsKeyword() || call.Args[1].IsKeyword() || call.Args[0].Value == nil || call.Args[1].Value == nil {
+			return nil, false
+		}
+		path, ok := nativeStdFsStringExpr(ctx, call.Args[0].Value)
+		if !ok {
+			return nil, false
+		}
+		contents, ok := nativeStdFsBytesExpr(ctx, call.Args[1].Value)
+		if !ok {
+			return nil, false
+		}
+		return nativeStdFsUnitResultExpr(ctx, call, ostyRtFsWriteBytesSymbol, path, contents)
+	case "writeString":
+		if len(call.Args) != 2 || call.Args[0].IsKeyword() || call.Args[1].IsKeyword() || call.Args[0].Value == nil || call.Args[1].Value == nil {
+			return nil, false
+		}
+		path, ok := nativeStdFsStringExpr(ctx, call.Args[0].Value)
+		if !ok {
+			return nil, false
+		}
+		contents, ok := nativeStdFsStringExpr(ctx, call.Args[1].Value)
+		if !ok {
+			return nil, false
+		}
+		return nativeStdFsUnitResultExpr(ctx, call, ostyRtFsWriteStringSymbol, path, contents)
+	case "exists":
+		if len(call.Args) != 1 || call.Args[0].IsKeyword() || call.Args[0].Value == nil {
+			return nil, false
+		}
+		path, ok := nativeStdFsStringExpr(ctx, call.Args[0].Value)
+		if !ok {
+			return nil, false
+		}
+		ctx.addRuntimeDecl("declare i1 @" + ostyRtFsExistsSymbol + "(ptr)")
+		return nativeRuntimeCallExpr("i1", ostyRtFsExistsSymbol, path), true
+	case "create":
+		return nativeStdFsSinglePathUnitResultExpr(ctx, call, ostyRtFsCreateSymbol)
+	case "remove":
+		return nativeStdFsSinglePathUnitResultExpr(ctx, call, ostyRtFsRemoveSymbol)
+	case "rename":
+		if len(call.Args) != 2 || call.Args[0].IsKeyword() || call.Args[1].IsKeyword() || call.Args[0].Value == nil || call.Args[1].Value == nil {
+			return nil, false
+		}
+		from, ok := nativeStdFsStringExpr(ctx, call.Args[0].Value)
+		if !ok {
+			return nil, false
+		}
+		to, ok := nativeStdFsStringExpr(ctx, call.Args[1].Value)
+		if !ok {
+			return nil, false
+		}
+		return nativeStdFsUnitResultExpr(ctx, call, ostyRtFsRenameSymbol, from, to)
+	case "copy":
+		if len(call.Args) != 2 || call.Args[0].IsKeyword() || call.Args[1].IsKeyword() || call.Args[0].Value == nil || call.Args[1].Value == nil {
+			return nil, false
+		}
+		from, ok := nativeStdFsStringExpr(ctx, call.Args[0].Value)
+		if !ok {
+			return nil, false
+		}
+		to, ok := nativeStdFsStringExpr(ctx, call.Args[1].Value)
+		if !ok {
+			return nil, false
+		}
+		return nativeStdFsUnitResultExpr(ctx, call, ostyRtFsCopySymbol, from, to)
+	case "mkdir":
+		return nativeStdFsSinglePathUnitResultExpr(ctx, call, ostyRtFsMkdirSymbol)
+	case "mkdirAll":
+		return nativeStdFsSinglePathUnitResultExpr(ctx, call, ostyRtFsMkdirAllSymbol)
+	default:
+		return nil, false
+	}
 }
 
 func nativeSourceSpanText(ctx *nativeProjectionCtx, n ostyir.Node) string {
@@ -3412,6 +3698,9 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 	case *ostyir.CallExpr:
 		if stdIoExpr, ok := nativeStdIoExprFromIR(ctx, e); ok {
 			return stdIoExpr, true
+		}
+		if stdFsExpr, ok := nativeStdFsExprFromIR(ctx, e); ok {
+			return stdFsExpr, true
 		}
 		if testingExpr, ok := nativeTestingResultExprFromIR(ctx, e); ok {
 			return testingExpr, true
@@ -5442,6 +5731,8 @@ func nativeLLVMTypeFromIR(ctx *nativeProjectionCtx, t ostyir.Type) (string, bool
 		if tt.Builtin {
 			switch tt.Name {
 			case "List", "Map", "Set":
+				return "ptr", true
+			case "Error":
 				return "ptr", true
 			case "Result":
 				if len(tt.Args) != 2 {

@@ -1,8 +1,10 @@
 ## 16. I/O Protocol
 
 The `Reader` and `Writer` interfaces define the streaming I/O contract
-shared across `std.io`, `std.fs`, `std.compress`, `std.http`, and the
-FFI byte-stream bridges.
+shared across `std.io`, stream-oriented standard-library modules, and
+FFI byte-stream bridges. `std.fs` currently exposes whole-file and
+path-mutation helpers; future handle-based filesystem APIs plug into
+this same protocol surface.
 
 ```osty
 pub interface Reader {
