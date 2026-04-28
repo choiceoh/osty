@@ -340,11 +340,6 @@ func airepairFixAllEdit(doc *document) *TextEdit {
 		return nil
 	}
 	repaired := result.Repaired
-	if file := selfhost.LowerPublicFileFromRun(parser.ParseRun(repaired)); file != nil {
-		if canonicalRepaired := canonical.Source(repaired, file); len(canonicalRepaired) > 0 {
-			repaired = canonicalRepaired
-		}
-	}
 	rng := doc.analysis.lines.rangeFromOffsets(0, len(doc.src))
 	return &TextEdit{
 		Range:   rng,

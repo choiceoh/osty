@@ -62,19 +62,18 @@ func normalizeSourceNewlines(text string) string {
 // lowered AST, and diagnostic adaptation so callers do not accidentally
 // re-run the front end.
 type FrontendRun struct {
-	text      string
-	rt        runeTable
-	stream    *FrontLexStream
-	lexFacts  *OstyLexFacts
-	parser    *OstyParser
-	toks      []token.Token
-	comments  []token.Comment
-	file      *ast.File
-	semantic  *AstFile
-	lowerings []StableLowering
-	lexDiags  []*diag.Diagnostic
-	diags     []*diag.Diagnostic
-	adapted   bool
+	text     string
+	rt       runeTable
+	stream   *FrontLexStream
+	lexFacts *OstyLexFacts
+	parser   *OstyParser
+	toks     []token.Token
+	comments []token.Comment
+	file     *ast.File
+	semantic *AstFile
+	lexDiags []*diag.Diagnostic
+	diags    []*diag.Diagnostic
+	adapted  bool
 }
 
 // Run executes the self-hosted lexer and parser once and keeps all adapted
@@ -241,18 +240,8 @@ func (r *FrontendRun) semanticAstFile() *AstFile {
 	if r.semantic != nil {
 		return r.semantic
 	}
-	r.semantic, r.lowerings = selfhostSemanticAstFileWithLowerings(r.astFile())
+	r.semantic = selfhostSemanticAstFile(r.astFile())
 	return r.semantic
-}
-
-// StableLowerings returns the compatibility lowerings applied while building
-// the semantic arena. Calling it does not materialize the public *ast.File.
-func (r *FrontendRun) StableLowerings() []StableLowering {
-	if r == nil {
-		return nil
-	}
-	r.semanticAstFile()
-	return append([]StableLowering(nil), r.lowerings...)
 }
 
 // LexDiagnostics returns lexer-only diagnostics.

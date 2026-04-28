@@ -19253,7 +19253,7 @@ func astInfixRBP(kind FrontTokenKind) int {
 
 // Osty: /tmp/selfhost_merged.osty:7301:1
 func astStartsExpr(kind FrontTokenKind) bool {
-	return ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLabel{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontInt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFloat{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontString{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMinus{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitNot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIf{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMatch{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontOr{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUnderscore{}))
+	return ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLabel{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontInt{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontFloat{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontString{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBracket{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMinus{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontNot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitNot{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontStar{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontIf{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontMatch{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontBitOr{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontOr{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontUnderscore{}))
 }
 
 // Osty: /tmp/selfhost_merged.osty:7312:1
@@ -19508,7 +19508,7 @@ func opParsePrefix(p *OstyParser) int {
 	tok := opPeek(p)
 	_ = tok
 	// Osty: /tmp/selfhost_merged.osty:7442:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontMinus{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontNot{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontBitNot{})) {
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontMinus{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontNot{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontBitNot{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontStar{})) {
 		// Osty: /tmp/selfhost_merged.osty:7443:9
 		start := p.pos
 		_ = start
@@ -20122,8 +20122,10 @@ func opParseBlock(p *OstyParser) int {
 	_ = errsBefore
 	// Osty: /tmp/selfhost_merged.osty:7702:5
 	for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRBrace{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
-		// Osty: /tmp/selfhost_merged.osty:7703:9
-		func() struct{} { stmts = append(stmts, opParseStmt(p)); return struct{}{} }()
+		// Osty: toolchain/parser.osty: canonical statement expansion hand-port.
+		stmt := opParseStmt(p)
+		_ = stmt
+		stmts = opAppendCanonicalStmt(p, stmts, stmt)
 		// Osty: /tmp/selfhost_merged.osty:7704:9
 		if opErrorCount(p) > errsBefore {
 			// Osty: /tmp/selfhost_merged.osty:7704:43
@@ -20144,6 +20146,299 @@ func opParseBlock(p *OstyParser) int {
 	// Osty: /tmp/selfhost_merged.osty:7711:6
 	n.end = p.pos
 	return opAddNode(p, n)
+}
+
+// Canonical parser helpers hand-ported from toolchain/parser.osty. These keep
+// helper syntax canonical in the parser arena so the Go compatibility lowerer
+// no longer owns len/append/enumerate shapes.
+func opIdentName(p *OstyParser, idx int) string {
+	if idx < 0 {
+		return ""
+	}
+	n := astArenaNodeAt(p.arena, idx)
+	if !ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+		return ""
+	}
+	return n.text
+}
+
+func opIsIdentNamed(p *OstyParser, idx int, name string) bool {
+	return opIdentName(p, idx) == name
+}
+
+func opSimpleIdentPatternName(p *OstyParser, idx int) string {
+	if idx < 0 {
+		return ""
+	}
+	n := astArenaNodeAt(p.arena, idx)
+	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) && n.extra == astPatternIdentKind() && n.text != "_" {
+		return n.text
+	}
+	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) && n.text != "_" {
+		return n.text
+	}
+	return ""
+}
+
+func opIsWildcardPattern(p *OstyParser, idx int) bool {
+	if idx < 0 {
+		return false
+	}
+	n := astArenaNodeAt(p.arena, idx)
+	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) {
+		return n.extra == astPatternWildcardKind() || n.text == "_" || n.text == "wildcard"
+	}
+	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+		return n.text == "_"
+	}
+	return false
+}
+
+func opIdentExpr(p *OstyParser, name string, start, end int) int {
+	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIdent{}))
+	n.text = name
+	n.start = start
+	n.end = end
+	return opAddNode(p, n)
+}
+
+func opIdentPattern(p *OstyParser, name string, start, end int) int {
+	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNPattern{}))
+	n.text = name
+	n.extra = astPatternIdentKind()
+	n.start = start
+	n.end = end
+	return opAddNode(p, n)
+}
+
+func opMethodCall(p *OstyParser, receiver int, method string, args []int, start, end int) int {
+	field := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField{}))
+	field.left = receiver
+	field.text = method
+	field.start = start
+	field.end = end
+	fieldIdx := opAddNode(p, field)
+
+	call := emptyAstNode(AstNodeKind(&AstNodeKind_AstNCall{}))
+	call.left = fieldIdx
+	call.children = args
+	call.start = start
+	call.end = end
+	return opAddNode(p, call)
+}
+
+func opPushCallExpr(p *OstyParser, receiverName string, item int, start, end int) int {
+	return opMethodCall(p, opIdentExpr(p, receiverName, start, end), "push", []int{item}, start, end)
+}
+
+func opPushExprStmt(p *OstyParser, receiverName string, item int, start, end int) int {
+	stmt := emptyAstNode(AstNodeKind(&AstNodeKind_AstNExprStmt{}))
+	stmt.left = opPushCallExpr(p, receiverName, item, start, end)
+	stmt.start = start
+	stmt.end = end
+	return opAddNode(p, stmt)
+}
+
+func opAppendCallBase(p *OstyParser, idx int) int {
+	if idx < 0 {
+		return -1
+	}
+	call := astArenaNodeAt(p.arena, idx)
+	if !ostyEqual(call.kind, AstNodeKind(&AstNodeKind_AstNCall{})) || !opIsIdentNamed(p, call.left, "append") || len(call.children) != 2 {
+		return -1
+	}
+	return call.children[0]
+}
+
+func opAppendCallItem(p *OstyParser, idx int) int {
+	base := opAppendCallBase(p, idx)
+	if base < 0 {
+		return -1
+	}
+	return astArenaNodeAt(p.arena, idx).children[1]
+}
+
+func opLowerAppendAssignmentStmt(p *OstyParser, left, right, start, end int) int {
+	targetName := opIdentName(p, left)
+	if targetName == "" {
+		return -1
+	}
+	base := opAppendCallBase(p, right)
+	item := opAppendCallItem(p, right)
+	if base < 0 || item < 0 || opIdentName(p, base) != targetName {
+		return -1
+	}
+	stmt := emptyAstNode(AstNodeKind(&AstNodeKind_AstNExprStmt{}))
+	stmt.left = opPushCallExpr(p, targetName, item, start, end)
+	stmt.start = start
+	stmt.end = end
+	return opAddNode(p, stmt)
+}
+
+func opLowerAppendExprStmt(p *OstyParser, expr, start, end int) int {
+	base := opAppendCallBase(p, expr)
+	item := opAppendCallItem(p, expr)
+	baseName := opIdentName(p, base)
+	if base < 0 || item < 0 || baseName == "" {
+		return -1
+	}
+	stmt := emptyAstNode(AstNodeKind(&AstNodeKind_AstNExprStmt{}))
+	stmt.left = opPushCallExpr(p, baseName, item, start, end)
+	stmt.start = start
+	stmt.end = end
+	return opAddNode(p, stmt)
+}
+
+func opAppendCanonicalStmt(p *OstyParser, stmts []int, stmtIdx int) []int {
+	out := stmts
+	if stmtIdx < 0 {
+		return out
+	}
+	stmt := astArenaNodeAt(p.arena, stmtIdx)
+	if ostyEqual(stmt.kind, AstNodeKind(&AstNodeKind_AstNLet{})) {
+		name := opSimpleIdentPatternName(p, stmt.left)
+		base := opAppendCallBase(p, stmt.right)
+		item := opAppendCallItem(p, stmt.right)
+		baseName := opIdentName(p, base)
+		if name != "" && base >= 0 && item >= 0 && baseName != "" && baseName != name {
+			stmt.flags = 1
+			stmt.right = base
+			p.arena.nodes[stmtIdx] = stmt
+			out = append(out, stmtIdx)
+			out = append(out, opPushExprStmt(p, name, item, stmt.start, stmt.end))
+			return out
+		}
+	}
+	if ostyEqual(stmt.kind, AstNodeKind(&AstNodeKind_AstNFor{})) && stmt.text == "forin" {
+		temp := opLowerEnumerateForStmt(p, stmtIdx)
+		if temp >= 0 {
+			out = append(out, temp)
+			out = append(out, stmtIdx)
+			return out
+		}
+	}
+	out = append(out, stmtIdx)
+	return out
+}
+
+func opTuplePatternFirst(p *OstyParser, idx int) int {
+	if idx < 0 {
+		return -1
+	}
+	n := astArenaNodeAt(p.arena, idx)
+	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) && n.extra == astPatternTupleKind() && len(n.children) == 2 {
+		return n.children[0]
+	}
+	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNTuple{})) && len(n.children) == 2 {
+		return n.children[0]
+	}
+	return -1
+}
+
+func opTuplePatternSecond(p *OstyParser, idx int) int {
+	if idx < 0 {
+		return -1
+	}
+	n := astArenaNodeAt(p.arena, idx)
+	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNPattern{})) && n.extra == astPatternTupleKind() && len(n.children) == 2 {
+		return n.children[1]
+	}
+	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNTuple{})) && len(n.children) == 2 {
+		return n.children[1]
+	}
+	return -1
+}
+
+func opEnumerateIterExpr(p *OstyParser, idx int) int {
+	if idx < 0 {
+		return -1
+	}
+	call := astArenaNodeAt(p.arena, idx)
+	if !ostyEqual(call.kind, AstNodeKind(&AstNodeKind_AstNCall{})) {
+		return -1
+	}
+	if opIsIdentNamed(p, call.left, "enumerate") && len(call.children) == 1 {
+		return call.children[0]
+	}
+	callee := astArenaNodeAt(p.arena, call.left)
+	if ostyEqual(callee.kind, AstNodeKind(&AstNodeKind_AstNField{})) && callee.text == "enumerate" && len(call.children) == 0 {
+		return callee.left
+	}
+	return -1
+}
+
+func opLowerEnumerateForStmt(p *OstyParser, loopIdx int) int {
+	loop := astArenaNodeAt(p.arena, loopIdx)
+	if len(loop.children) < 2 {
+		return -1
+	}
+	tuplePat := loop.children[0]
+	iterExpr := opEnumerateIterExpr(p, loop.children[1])
+	if iterExpr < 0 {
+		return -1
+	}
+	indexPattern := opTuplePatternFirst(p, tuplePat)
+	valuePattern := opTuplePatternSecond(p, tuplePat)
+	if indexPattern < 0 || valuePattern < 0 {
+		return -1
+	}
+	loopPattern := indexPattern
+	indexExpr := -1
+	if opIsWildcardPattern(p, indexPattern) {
+		indexName := fmt.Sprintf("_osty_index%d", len(p.arena.nodes))
+		loopPattern = opIdentPattern(p, indexName, loop.start, loop.end)
+		indexExpr = opIdentExpr(p, indexName, loop.start, loop.end)
+	} else {
+		indexName := opSimpleIdentPatternName(p, indexPattern)
+		if indexName == "" {
+			return -1
+		}
+		indexExpr = opIdentExpr(p, indexName, loop.start, loop.end)
+	}
+
+	tempName := fmt.Sprintf("_osty_enumerate%d", len(p.arena.nodes))
+	tempLet := emptyAstNode(AstNodeKind(&AstNodeKind_AstNLet{}))
+	tempLet.left = opIdentPattern(p, tempName, loop.start, loop.end)
+	tempLet.right = iterExpr
+	tempLet.children = []int{-1}
+	tempLet.start = loop.start
+	tempLet.end = loop.end
+	tempIdx := opAddNode(p, tempLet)
+
+	indexNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIndex{}))
+	indexNode.left = opIdentExpr(p, tempName, loop.start, loop.end)
+	indexNode.right = indexExpr
+	indexNode.start = loop.start
+	indexNode.end = loop.end
+	indexIdx := opAddNode(p, indexNode)
+
+	prelude := emptyAstNode(AstNodeKind(&AstNodeKind_AstNLet{}))
+	prelude.left = valuePattern
+	prelude.right = indexIdx
+	prelude.children = []int{-1}
+	prelude.start = loop.start
+	prelude.end = loop.end
+	preludeIdx := opAddNode(p, prelude)
+
+	body := astArenaNodeAt(p.arena, loop.right)
+	body.children = append([]int{preludeIdx}, body.children...)
+
+	rangeStart := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIntLit{}))
+	rangeStart.text = "0"
+	rangeStart.start = loop.start
+	rangeStart.end = loop.start
+	rangeStartIdx := opAddNode(p, rangeStart)
+
+	rangeStop := opMethodCall(p, opIdentExpr(p, tempName, loop.start, loop.end), "len", nil, loop.start, loop.end)
+	rangeNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNRange{}))
+	rangeNode.left = rangeStartIdx
+	rangeNode.right = rangeStop
+	rangeNode.start = loop.start
+	rangeNode.end = loop.end
+	rangeIdx := opAddNode(p, rangeNode)
+
+	loop.children = []int{loopPattern, rangeIdx}
+	return tempIdx
 }
 
 // Osty: /tmp/selfhost_merged.osty:7715:1
@@ -20769,6 +21064,10 @@ func opParseCallArgs(p *OstyParser, callee int) int {
 	}
 	// Osty: /tmp/selfhost_merged.osty:8008:5
 	opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
+	// Osty: toolchain/parser.osty: parser canonical len(x) -> x.len().
+	if opIsIdentNamed(p, callee, "len") && len(args) == 1 {
+		return opMethodCall(p, args[0], "len", nil, start, p.pos)
+	}
 	// Osty: /tmp/selfhost_merged.osty:8009:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNCall{}))
 	_ = n
@@ -21349,6 +21648,14 @@ func opParseStmt(p *OstyParser) int {
 		// Osty: /tmp/selfhost_merged.osty:8270:5
 		leftNode := astArenaNodeAt(p.arena, expr)
 		_ = leftNode
+		// Osty: toolchain/parser.osty: parser canonical append assignment.
+		if ostyEqual(next.kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
+			lowered := opLowerAppendAssignmentStmt(p, expr, v, leftNode.start, p.pos)
+			_ = lowered
+			if lowered >= 0 {
+				return lowered
+			}
+		}
 		// Osty: /tmp/selfhost_merged.osty:8271:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNAssign{}))
 		_ = n
@@ -21368,6 +21675,12 @@ func opParseStmt(p *OstyParser) int {
 	// Osty: /tmp/selfhost_merged.osty:8278:5
 	exprNode := astArenaNodeAt(p.arena, expr)
 	_ = exprNode
+	// Osty: toolchain/parser.osty: parser canonical append expr statement.
+	appendStmt := opLowerAppendExprStmt(p, expr, exprNode.start, p.pos)
+	_ = appendStmt
+	if appendStmt >= 0 {
+		return appendStmt
+	}
 	// Osty: /tmp/selfhost_merged.osty:8279:5
 	n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNExprStmt{}))
 	_ = n
@@ -23215,6 +23528,10 @@ func opParseUseDecl(p *OstyParser, isPub bool) int {
 			// Osty: /tmp/selfhost_merged.osty:9148:13
 			_ = opAdvance(p)
 			// Osty: /tmp/selfhost_merged.osty:9149:13
+			return opParseScopedUseDecl(p, start, rawPath, isPub)
+		}
+		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontDot{})) && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontLBrace{})) {
+			_ = opAdvance(p)
 			return opParseScopedUseDecl(p, start, rawPath, isPub)
 		}
 	}

@@ -750,7 +750,7 @@ func TestCheckWithAIRepairPassesPythonEnumerateLoops(t *testing.T) {
 	if with.exit != 0 {
 		t.Fatalf("check auto airepair exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", with.exit, with.stdout, with.stderr)
 	}
-	if !strings.Contains(with.stderr, "osty check --airepair: applied 3 repair(s)") {
+	if !strings.Contains(with.stderr, "osty check --airepair: applied 2 repair(s)") {
 		t.Fatalf("stderr = %q, want Python enumerate airepair summary", with.stderr)
 	}
 }

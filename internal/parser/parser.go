@@ -13,8 +13,8 @@ import (
 type Error = diag.Diagnostic
 
 // Result is the full parse pipeline output, including parser-level
-// normalization/lowering provenance for callers that need to surface or retain
-// how foreign syntax was absorbed into canonical Osty.
+// normalization provenance for callers that need to surface or retain how
+// foreign syntax was absorbed into canonical Osty.
 type Result struct {
 	File        *ast.File
 	Diagnostics []*diag.Diagnostic
@@ -32,15 +32,14 @@ func Parse(src []byte) (*ast.File, []error) {
 }
 
 // ParseDetailed lexes, parses, and canonicalizes src, returning the public
-// semantic AST plus parser-level compatibility provenance. Source alias
-// provenance is collected here; parser-owned helper lowerings are applied once
-// while building the selfhost semantic arena and lifted into this result.
+// semantic AST plus parser-level compatibility provenance. Compatibility
+// helper syntax is canonicalized in the parser core; this facade only records
+// source alias provenance that remains useful at legacy boundaries.
 func ParseDetailed(src []byte) Result {
 	pipeline := newParsePipeline(src)
 	run := pipeline.parseRun()
 	pipeline.applySourceCompat(run)
 	file, diags := run.File(), run.Diagnostics()
-	pipeline.applyArenaCompatProvenance(run)
 	return pipeline.result(file, diags)
 }
 

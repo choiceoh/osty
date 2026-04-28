@@ -158,7 +158,7 @@ fn main() {
 `),
 		},
 		{
-			name: "stable helper lowerings",
+			name: "parser canonical helpers",
 			src: []byte(`fn main() {
     let mut items = [1, 2]
     let count = len(items)
