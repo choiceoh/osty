@@ -3,7 +3,7 @@
 _Auto-generated. Refresh with `just airepair-capture` (or rerun in CI)._
 
 **Scanned:** 320 `.osty` file(s)  
-**Captured:** 153 residual case(s) — **0** AI-slip(s) airepair rewrote, **153** untouched (toolchain self-host / backend gap, not airepair's job)  
+**Captured:** 154 residual case(s) — **0** AI-slip(s) airepair rewrote, **154** untouched (toolchain self-host / backend gap, not airepair's job)  
 **Corpus coverage:** 16 promoted case(s)
 
 ## AI-slip backlog (changed=true)

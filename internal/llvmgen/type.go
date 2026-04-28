@@ -442,6 +442,12 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		if src, ok := g.staticStdEnvCallSourceType(e); ok {
 			return src, true
 		}
+		if src, ok := g.staticStdRandomCallSourceType(e); ok {
+			return src, true
+		}
+		if src, ok := g.staticStdRandomMethodSourceType(e); ok {
+			return src, true
+		}
 		if src, ok := g.staticStdCryptoCallSourceType(e); ok {
 			return src, true
 		}
@@ -938,6 +944,12 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 			return out, true
 		}
 		if out, ok := g.stdEnvCallStaticResult(e); ok {
+			return out, true
+		}
+		if out, ok := g.stdRandomCallStaticResult(e); ok {
+			return out, true
+		}
+		if out, ok := g.stdRandomMethodStaticResult(e); ok {
 			return out, true
 		}
 		if out, ok := g.stdCryptoCallStaticResult(e); ok {
@@ -1955,6 +1967,9 @@ func llvmType(t ast.Type, env typeEnv) (string, error) {
 		}
 		if typ := llvmNamedType(name, len(tt.Path), len(tt.Args), structType, enumType); typ != "" {
 			return typ, nil
+		}
+		if len(tt.Path) == 1 && len(tt.Args) == 0 && tt.Path[0] == "Rng" {
+			return "ptr", nil
 		}
 		return "", unsupportedf("type-system", "type %q", strings.Join(tt.Path, "."))
 	case *ast.OptionalType, *ast.FnType:
