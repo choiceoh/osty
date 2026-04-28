@@ -2656,11 +2656,19 @@ func (g *mirGen) emitPrimitiveMethodCall(c *mir.CallInstr, fnRef *mir.FnRef) (bo
 	llvmTy := g.llvmType(c.Args[0].Type())
 
 	var isSigned bool
+	var isFloat bool
 	switch owner {
 	case "Int", "Int64", "Int32", "Int16", "Int8", "Char":
 		isSigned = true
 	case "Byte":
 		llvmTy = "i8"
+	case "UInt8", "UInt16", "UInt32", "UInt64":
+		// Unsigned narrow ints: arithmetic methods (abs/signum) take
+		// the unsigned-identity branch below; toString needs a zext
+		// to i64 before dispatching to `osty_rt_int_to_string`.
+		isSigned = false
+	case "Float", "Float32", "Float64":
+		isFloat = true
 	default:
 		return false, nil
 	}
@@ -2786,6 +2794,58 @@ func (g *mirGen) emitPrimitiveMethodCall(c *mir.CallInstr, fnRef *mir.FnRef) (bo
 				body = mirSignumSignLine(llvmTy, g.fresh(), g.fresh(), g.fresh(), resultReg, recv)
 			}
 		}
+
+	case "toString":
+		// Dispatch every numeric width to the runtime intrinsic that
+		// matches its ABI lane. PR #1007 registered the method on the
+		// checker side for every Int/Float kind; this is the lowering
+		// half — without it the checker accepts the call and the MIR
+		// emitter falls through with "call to unresolved symbol
+		// Int8__toString" because the symbol-mangling pipeline never
+		// resolves a runtime body for the narrow widths.
+		if isFloat {
+			// Float family: route through float_to_string. The
+			// runtime entry takes `double`, so Float32 (LLVM `float`)
+			// needs an `fpext` first; Float / Float64 (LLVM `double`)
+			// pass through.
+			doubleReg := recv
+			if llvmTy == "float" {
+				doubleReg = g.fresh()
+				body = "  " + doubleReg + " = fpext float " + recv + " to double\n"
+			}
+			g.declareRuntime(mirRtFloatToStringSymbol(),
+				mirRuntimeDeclarePtrFromScalarLine(mirRtFloatToStringSymbol(), "double"))
+			resultReg = g.fresh()
+			body += "  " + resultReg + " = call ptr @" + mirRtFloatToStringSymbol() + "(double " + doubleReg + ")\n"
+			break
+		}
+		if owner == "Char" {
+			// Char has its own UTF-8 codepoint formatter; route there
+			// instead of the integer-stringify path so users get
+			// `'a'.toString() == "a"` not `"97"`.
+			g.declareRuntime(mirRtCharToStringSymbol(),
+				mirRuntimeDeclarePtrFromScalarLine(mirRtCharToStringSymbol(), "i32"))
+			resultReg = g.fresh()
+			body = "  " + resultReg + " = call ptr @" + mirRtCharToStringSymbol() + "(i32 " + recv + ")\n"
+			break
+		}
+		// Int family: extend narrow widths to i64 (sext for signed,
+		// zext for unsigned) and call int_to_string.
+		var extReg string
+		if llvmTy == "i64" {
+			extReg = recv
+		} else {
+			extReg = g.fresh()
+			ext := "sext"
+			if !isSigned {
+				ext = "zext"
+			}
+			body = "  " + extReg + " = " + ext + " " + llvmTy + " " + recv + " to i64\n"
+		}
+		g.declareRuntime(mirRtIntToStringSymbol(),
+			mirRuntimeDeclarePtrFromScalarLine(mirRtIntToStringSymbol(), "i64"))
+		resultReg = g.fresh()
+		body += "  " + resultReg + " = call ptr @" + mirRtIntToStringSymbol() + "(i64 " + extReg + ")\n"
 
 	default:
 		return false, nil
