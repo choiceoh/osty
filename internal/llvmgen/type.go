@@ -817,6 +817,8 @@ func (g *generator) staticCollectionMethodSourceType(call *ast.CallExpr) (ast.Ty
 			return valAST, true
 		case "keys":
 			return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{keyAST}}, true
+		case "values":
+			return &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{valAST}}, true
 		case "mergeWith":
 			return baseSource, true
 		case "mapValues":
@@ -1929,7 +1931,7 @@ func (g *generator) mapMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, s
 		return nil, "", "", false, false
 	}
 	switch field.Name {
-	case "containsKey", "insert", "remove", "keys", "len", "isEmpty", "get", "getOr", "getOrInsert", "getOrInsertWith", "update", "retainIf", "mergeWith", "mapValues", "clear":
+	case "containsKey", "insert", "remove", "keys", "values", "len", "isEmpty", "get", "getOr", "getOrInsert", "getOrInsertWith", "update", "retainIf", "mergeWith", "mapValues", "clear":
 	default:
 		return nil, "", "", false, false
 	}
@@ -1946,7 +1948,7 @@ func (g *generator) setMethodInfo(call *ast.CallExpr) (*ast.FieldExpr, string, b
 		return nil, "", false, false
 	}
 	switch field.Name {
-	case "len", "isEmpty", "contains", "insert", "remove", "toList":
+	case "len", "isEmpty", "contains", "insert", "remove", "toList", "clear":
 	default:
 		return nil, "", false, false
 	}

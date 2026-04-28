@@ -3466,7 +3466,31 @@ func (g *generator) emitMapRetainIfStmt(call *ast.CallExpr, base value, keyTyp s
 
 func (g *generator) emitSetMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	field, elemTyp, elemString, found := g.setMethodInfo(call)
-	if !found || field.Name != "insert" {
+	if !found {
+		return false, nil
+	}
+	if field.Name == "clear" {
+		if len(call.Args) != 0 {
+			return true, unsupported("call", "set.clear requires no arguments")
+		}
+		base, err := g.emitExpr(field.X)
+		if err != nil {
+			return true, err
+		}
+		loaded, err := g.loadIfPointer(base)
+		if err != nil {
+			return true, err
+		}
+		g.declareRuntimeSymbol(setRuntimeClearSymbol(), "void", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
+			setRuntimeClearSymbol(),
+			llvmCallArgs([]*LlvmValue{toOstyValue(loaded)}),
+		))
+		g.takeOstyEmitter(emitter)
+		return true, nil
+	}
+	if field.Name != "insert" {
 		return false, nil
 	}
 	if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {

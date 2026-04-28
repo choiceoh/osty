@@ -1174,11 +1174,13 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		return true
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapGetOr,
 		mir.IntrinsicMapSet, mir.IntrinsicMapContains, mir.IntrinsicMapLen,
-		mir.IntrinsicMapKeys, mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted,
-		mir.IntrinsicMapIncr, mir.IntrinsicMapToString:
+		mir.IntrinsicMapKeys, mir.IntrinsicMapValues, mir.IntrinsicMapRemove,
+		mir.IntrinsicMapKeysSorted, mir.IntrinsicMapIncr, mir.IntrinsicMapToString,
+		mir.IntrinsicMapClear:
 		return true
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
-		mir.IntrinsicSetToList, mir.IntrinsicSetRemove, mir.IntrinsicSetToString:
+		mir.IntrinsicSetToList, mir.IntrinsicSetRemove, mir.IntrinsicSetToString,
+		mir.IntrinsicSetClear:
 		return true
 	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesEndsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesLastIndexOf, mir.IntrinsicBytesSplit, mir.IntrinsicBytesJoin, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat, mir.IntrinsicBytesReplace, mir.IntrinsicBytesReplaceAll, mir.IntrinsicBytesTrimLeft, mir.IntrinsicBytesTrimRight, mir.IntrinsicBytesTrim, mir.IntrinsicBytesTrimSpace, mir.IntrinsicBytesToUpper, mir.IntrinsicBytesToLower, mir.IntrinsicBytesToHex, mir.IntrinsicBytesSlice, mir.IntrinsicBytesFromList, mir.IntrinsicBytesFromString, mir.IntrinsicBytesToString, mir.IntrinsicBytesFromHex:
 		return true
@@ -4169,11 +4171,13 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitListIntrinsic(i)
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapGetOr,
 		mir.IntrinsicMapSet, mir.IntrinsicMapContains, mir.IntrinsicMapLen,
-		mir.IntrinsicMapKeys, mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted,
-		mir.IntrinsicMapIncr, mir.IntrinsicMapToString:
+		mir.IntrinsicMapKeys, mir.IntrinsicMapValues, mir.IntrinsicMapRemove,
+		mir.IntrinsicMapKeysSorted, mir.IntrinsicMapIncr, mir.IntrinsicMapToString,
+		mir.IntrinsicMapClear:
 		return g.emitMapIntrinsic(i)
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
-		mir.IntrinsicSetToList, mir.IntrinsicSetRemove, mir.IntrinsicSetToString:
+		mir.IntrinsicSetToList, mir.IntrinsicSetRemove, mir.IntrinsicSetToString,
+		mir.IntrinsicSetClear:
 		return g.emitSetIntrinsic(i)
 	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesEndsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesLastIndexOf, mir.IntrinsicBytesSplit, mir.IntrinsicBytesJoin, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat, mir.IntrinsicBytesReplace, mir.IntrinsicBytesReplaceAll, mir.IntrinsicBytesTrimLeft, mir.IntrinsicBytesTrimRight, mir.IntrinsicBytesTrim, mir.IntrinsicBytesTrimSpace, mir.IntrinsicBytesToUpper, mir.IntrinsicBytesToLower, mir.IntrinsicBytesToHex, mir.IntrinsicBytesSlice, mir.IntrinsicBytesFromList, mir.IntrinsicBytesFromString, mir.IntrinsicBytesToString, mir.IntrinsicBytesFromHex:
 		return g.emitBytesIntrinsic(i)
@@ -5095,6 +5099,23 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		result := llvmMapKeys(em, &LlvmValue{typ: "ptr", name: mapReg})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicMapValues:
+		sym := mapRuntimeValuesSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
+		tmp := g.fresh()
+		g.fnBuf.WriteString(mirCallMapValuesLine(tmp, mapReg))
+		if i.Dest != nil {
+			g.fnBuf.WriteString(mirStorePtrLine(tmp, g.localSlots[i.Dest.Local]))
+		}
+		return nil
+	case mir.IntrinsicMapClear:
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "map_clear arity")
+		}
+		sym := mapRuntimeClearSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclareVoidFromPtrLine(sym))
+		g.fnBuf.WriteString(mirCallMapClearLine(mapReg))
+		return nil
 	case mir.IntrinsicMapContains:
 		if len(i.Args) != 2 {
 			return unsupported("mir-mvp", "map_contains arity")
@@ -5284,16 +5305,42 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 			return err
 		}
 		sym := mapRuntimeRemoveSymbol(keyLLVM, keyString)
-		// Runtime returns i1 (true = was present); MIR ignores it — the
-		// temp fall-through to DCE is fine but the decl must match the
-		// C runtime so the verifier accepts the call.
-		g.declareRuntime(sym, mirRuntimeDeclareMapContainsLine(sym, keyLLVM))
-		em := g.ostyEmitter()
-		_ = llvmMapRemove(em,
-			&LlvmValue{typ: "ptr", name: mapReg},
-			&LlvmValue{typ: keyLLVM, name: kReg},
-			keyString)
-		g.flushOstyEmitter(em)
+		g.declareRuntime(sym, mirRuntimeDeclareMapRemoveLine(sym, keyLLVM))
+		if i.Dest == nil {
+			tmp := g.fresh()
+			g.fnBuf.WriteString(mirCallI1MapKeyLine(tmp, sym, mapReg, keyLLVM, kReg))
+			return nil
+		}
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return fmt.Errorf("mir-mvp: map_remove into unknown local %d", i.Dest.Local)
+		}
+		optT, ok := destLoc.Type.(*ir.OptionalType)
+		if !ok {
+			return unsupportedf("mir-mvp", "map_remove dest type %s, expected Optional<V>", mirTypeString(destLoc.Type))
+		}
+		vLLVM := g.llvmType(valT)
+		optLLVM := g.llvmType(optT)
+		destSlot := g.localSlots[i.Dest.Local]
+		present, slot := g.emitMapGetProbe(mapReg, kReg, keyLLVM, keyString, vLLVM)
+		removed := g.fresh()
+		g.fnBuf.WriteString(mirCallI1MapKeyLine(removed, sym, mapReg, keyLLVM, kReg))
+		someLabel := g.freshLabel("map.remove.some")
+		noneLabel := g.freshLabel("map.remove.none")
+		endLabel := g.freshLabel("map.remove.end")
+		g.fnBuf.WriteString(mirBrCondLine(present, someLabel, noneLabel))
+		g.fnBuf.WriteString(mirLabelLine(someLabel))
+		loaded := g.fresh()
+		g.fnBuf.WriteString(mirLoadLine(loaded, vLLVM, slot))
+		payloadI64, err := g.toI64Slot(loaded, valT)
+		if err != nil {
+			return unsupportedf("mir-mvp", "map_remove payload widen unsupported for %s", vLLVM)
+		}
+		someStep := g.fresh()
+		someValue := g.fresh()
+		g.fnBuf.WriteString(mirSomeStoreThenJumpLines(someStep, someValue, optLLVM, payloadI64, destSlot, endLabel))
+		g.fnBuf.WriteString(mirNoneBranchLines(noneLabel, optLLVM, destSlot, endLabel))
+		g.fnBuf.WriteString(mirLabelLine(endLabel))
 		return nil
 	case mir.IntrinsicMapKeysSorted:
 		// Fused `map.keys().sorted()` → single runtime call. Saves the
@@ -5421,6 +5468,14 @@ func (g *mirGen) emitSetIntrinsic(i *mir.IntrinsicInstr) error {
 		result := llvmSetToList(em, &LlvmValue{typ: "ptr", name: setReg})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicSetClear:
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "set_clear arity")
+		}
+		sym := setRuntimeClearSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclareVoidFromPtrLine(sym))
+		g.fnBuf.WriteString(mirCallSetClearLine(setReg))
+		return nil
 	case mir.IntrinsicSetContains:
 		if len(i.Args) != 2 {
 			return unsupported("mir-mvp", "set_contains arity")

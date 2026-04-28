@@ -49,3 +49,26 @@ func TestListClearI64(t *testing.T) {
 		t.Fatalf("list.clear<Int> did not invoke osty_rt_list_clear:\n%s", got)
 	}
 }
+
+func TestSetClearI64(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn main() {
+    let xs: List<Int> = [1, 2, 3]
+    let mut s: Set<Int> = xs.toSet()
+    s.clear()
+    println(s.len())
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/set_clear_i64.osty"})
+	if err != nil {
+		t.Fatalf("set.clear<Int> errored: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"@osty_rt_set_clear",
+		"declare void @osty_rt_set_clear(ptr)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("set.clear<Int> missing %q:\n%s", want, got)
+		}
+	}
+}

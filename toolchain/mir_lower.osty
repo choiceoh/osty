@@ -5618,11 +5618,15 @@ fn mirLowerListStdlibMethod(name: String) -> MirIntrinsicKind {
 fn mirLowerMapStdlibMethod(name: String) -> MirIntrinsicKind {
     if name == "get" { return MirIntrinsicMapGet }
     if name == "set" { return MirIntrinsicMapSet }
+    if name == "insert" { return MirIntrinsicMapSet }
     if name == "contains" { return MirIntrinsicMapContains }
+    if name == "containsKey" { return MirIntrinsicMapContains }
     if name == "len" { return MirIntrinsicMapLen }
     if name == "keys" { return MirIntrinsicMapKeys }
     if name == "values" { return MirIntrinsicMapValues }
+    if name == "clear" { return MirIntrinsicMapClear }
     if name == "remove" { return MirIntrinsicMapRemove }
+    if name == "toString" { return MirIntrinsicMapToString }
     MirIntrinsicInvalid
 }
 
@@ -5632,6 +5636,8 @@ fn mirLowerSetStdlibMethod(name: String) -> MirIntrinsicKind {
     if name == "len" { return MirIntrinsicSetLen }
     if name == "toList" { return MirIntrinsicSetToList }
     if name == "remove" { return MirIntrinsicSetRemove }
+    if name == "clear" { return MirIntrinsicSetClear }
+    if name == "toString" { return MirIntrinsicSetToString }
     MirIntrinsicInvalid
 }
 
@@ -5706,8 +5712,9 @@ pub fn mirLowerIsVoidStdlibIntrinsic(k: MirIntrinsicKind) -> Bool {
         MirIntrinsicListInsert -> true,
         MirIntrinsicListClear -> true,
         MirIntrinsicMapSet -> true,
-        MirIntrinsicMapRemove -> true,
+        MirIntrinsicMapClear -> true,
         MirIntrinsicSetInsert -> true,
+        MirIntrinsicSetClear -> true,
         _ -> false,
     }
 }
