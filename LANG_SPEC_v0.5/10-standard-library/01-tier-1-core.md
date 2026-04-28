@@ -3,7 +3,9 @@
 - `std.io` — `print`, `println`, `eprint`, `eprintln`, `readLine`, the
   `Reader`/`Writer` protocol, in-memory `BytesReader`/`Buffer`, and core
   stream helpers such as `readAll`, `readExact`, `copy`, `writeString`
-- `std.fs` — file I/O
+- `std.fs` — whole-file and path operations:
+  `read`, `readToString`, `write`, `writeString`, `exists`,
+  `create`, `remove`, `rename`, `copy`, `mkdir`, `mkdirAll`
 - `std.strings` — string manipulation
 - `std.collections` — `List`, `Map`, `Set`
 - `std.option` — `Option`, `Some`, `None` (auto-imported), plus rich

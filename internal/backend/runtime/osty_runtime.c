@@ -19833,6 +19833,433 @@ void *osty_rt_env_set_current_dir(const char *path) {
 #endif
 }
 
+/* ---- std.fs whole-file and path-mutation helpers --------------------- */
+
+static OSTY_RT_TLS const char *osty_rt_fs_last_error_literal = NULL;
+
+static void osty_rt_fs_clear_last_error(void) {
+    osty_rt_fs_last_error_literal = NULL;
+}
+
+static void osty_rt_fs_set_last_error_literal(const char *detail) {
+    osty_rt_fs_last_error_literal = detail;
+}
+
+static void *osty_rt_fs_error_message(const char *prefix, const char *site) {
+    if (osty_rt_fs_last_error_literal != NULL) {
+        return osty_rt_env_error_message(prefix, osty_rt_fs_last_error_literal, site);
+    }
+    if (errno == 0) {
+        return osty_rt_env_error_message(prefix, "unknown error", site);
+    }
+    return osty_rt_env_error_message(prefix, strerror(errno), site);
+}
+
+static int osty_rt_fs_read_all(const char *path, unsigned char **out, size_t *out_len) {
+    FILE *f;
+    long sz;
+    unsigned char *buf;
+    size_t got;
+
+    if (path == NULL) {
+        osty_rt_fs_set_last_error_literal("path is null");
+        errno = 0;
+        *out = NULL;
+        *out_len = 0;
+        return -1;
+    }
+    osty_rt_fs_clear_last_error();
+    f = fopen(path, "rb");
+    if (f == NULL) {
+        *out = NULL;
+        *out_len = 0;
+        return -1;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        int err = errno;
+        fclose(f);
+        errno = err;
+        *out = NULL;
+        *out_len = 0;
+        return -1;
+    }
+    sz = ftell(f);
+    if (sz < 0 || fseek(f, 0, SEEK_SET) != 0) {
+        int err = errno;
+        fclose(f);
+        errno = err;
+        *out = NULL;
+        *out_len = 0;
+        return -1;
+    }
+    buf = (unsigned char *)osty_rt_xmalloc((size_t)sz + 1, "runtime.fs.read.buf");
+    got = fread(buf, 1, (size_t)sz, f);
+    if (got != (size_t)sz) {
+        int err = errno;
+        free(buf);
+        fclose(f);
+        errno = err;
+        *out = NULL;
+        *out_len = 0;
+        return -1;
+    }
+    if (fclose(f) != 0) {
+        int err = errno;
+        free(buf);
+        errno = err;
+        *out = NULL;
+        *out_len = 0;
+        return -1;
+    }
+    buf[sz] = '\0';
+    *out = buf;
+    *out_len = (size_t)sz;
+    return 0;
+}
+
+static int osty_rt_fs_write_all(const char *path, const unsigned char *data, size_t len) {
+    FILE *f;
+
+    if (path == NULL) {
+        osty_rt_fs_set_last_error_literal("path is null");
+        errno = 0;
+        return -1;
+    }
+    osty_rt_fs_clear_last_error();
+    f = fopen(path, "wb");
+    if (f == NULL) {
+        return -1;
+    }
+    if (len != 0) {
+        size_t wrote = fwrite(data, 1, len, f);
+        if (wrote != len) {
+            int err = errno;
+            fclose(f);
+            errno = err;
+            return -1;
+        }
+    }
+    if (fclose(f) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int osty_rt_fs_mkdir_allow_existing(const char *path) {
+    if (path == NULL || path[0] == '\0') {
+        errno = ENOENT;
+        return -1;
+    }
+    if (OSTY_RT_MKDIR_ONE(path) == 0) {
+        return 0;
+    }
+    if (errno != EEXIST) {
+        return -1;
+    }
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    {
+        DWORD attrs = GetFileAttributesA(path);
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+            return 0;
+        }
+    }
+    errno = ENOTDIR;
+    return -1;
+#else
+    {
+        struct stat st;
+        if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+            return 0;
+        }
+    }
+    errno = ENOTDIR;
+    return -1;
+#endif
+}
+
+static int osty_rt_fs_mkdir_p(const char *path) {
+    size_t n;
+    char *buf;
+    size_t i;
+    int rc;
+
+    if (path == NULL) {
+        osty_rt_fs_set_last_error_literal("path is null");
+        errno = 0;
+        return -1;
+    }
+    if (path[0] == '\0') {
+        errno = ENOENT;
+        return -1;
+    }
+    osty_rt_fs_clear_last_error();
+    n = strlen(path);
+    buf = osty_rt_strndup(path, n, "runtime.fs.mkdir_all.buf");
+    for (i = 1; i < n; i++) {
+        char c = buf[i];
+        if (c == '/' || c == '\\') {
+            buf[i] = '\0';
+            rc = osty_rt_fs_mkdir_allow_existing(buf);
+            buf[i] = c;
+            if (rc != 0) {
+                free(buf);
+                return -1;
+            }
+        }
+    }
+    rc = osty_rt_fs_mkdir_allow_existing(buf);
+    free(buf);
+    return rc;
+}
+
+void *osty_rt_fs_read(const char *path) {
+    char path_buf[9];
+    unsigned char *raw = NULL;
+    size_t raw_len = 0;
+    void *out;
+
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    if (osty_rt_fs_read_all(path, &raw, &raw_len) != 0) {
+        return NULL;
+    }
+    out = osty_rt_bytes_dup_site(raw_len == 0 ? NULL : raw, raw_len,
+                                 raw_len == 0 ? "runtime.fs.read.empty" : "runtime.fs.read");
+    free(raw);
+    return out;
+}
+
+void *osty_rt_fs_read_error(void) {
+    return osty_rt_fs_error_message("failed to read file", "runtime.fs.read.error");
+}
+
+void *osty_rt_fs_read_string(const char *path) {
+    char path_buf[9];
+    unsigned char *raw = NULL;
+    size_t raw_len = 0;
+    void *out;
+
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    if (osty_rt_fs_read_all(path, &raw, &raw_len) != 0) {
+        return NULL;
+    }
+    if (!osty_rt_bytes_validate_utf8_data(raw, raw_len)) {
+        free(raw);
+        osty_rt_fs_set_last_error_literal("file is not valid UTF-8");
+        errno = 0;
+        return NULL;
+    }
+    out = osty_rt_string_dup_site((const char *)raw, raw_len,
+                                  raw_len == 0 ? "runtime.fs.read_string.empty" : "runtime.fs.read_string");
+    free(raw);
+    return out;
+}
+
+void *osty_rt_fs_read_string_error(void) {
+    return osty_rt_fs_error_message("failed to read text file", "runtime.fs.read_string.error");
+}
+
+bool osty_rt_fs_exists(const char *path) {
+    char path_buf[9];
+
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    if (path == NULL || path[0] == '\0') {
+        return false;
+    }
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+#else
+    {
+        struct stat st;
+        return stat(path, &st) == 0;
+    }
+#endif
+}
+
+void *osty_rt_fs_write_bytes(const char *path, void *raw_bytes) {
+    char path_buf[9];
+    osty_rt_bytes *bytes = (osty_rt_bytes *)raw_bytes;
+
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    if (bytes == NULL) {
+        osty_rt_fs_set_last_error_literal("contents is null");
+        errno = 0;
+        return osty_rt_fs_error_message("failed to write file", "runtime.fs.write.error");
+    }
+    if (osty_rt_fs_write_all(path, bytes->data, (size_t)bytes->len) != 0) {
+        return osty_rt_fs_error_message("failed to write file", "runtime.fs.write.error");
+    }
+    return NULL;
+}
+
+void *osty_rt_fs_write_string(const char *path, const char *contents) {
+    char path_buf[9];
+    char contents_buf[9];
+    size_t len;
+
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    osty_rt_string_decode_to_buf_if_inline(&contents, contents_buf);
+    if (contents == NULL) {
+        osty_rt_fs_set_last_error_literal("contents is null");
+        errno = 0;
+        return osty_rt_fs_error_message("failed to write text file", "runtime.fs.write_string.error");
+    }
+    len = osty_rt_string_len(contents);
+    if (osty_rt_fs_write_all(path, (const unsigned char *)contents, len) != 0) {
+        return osty_rt_fs_error_message("failed to write text file", "runtime.fs.write_string.error");
+    }
+    return NULL;
+}
+
+void *osty_rt_fs_create(const char *path) {
+    char path_buf[9];
+
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    if (osty_rt_fs_write_all(path, NULL, 0) != 0) {
+        return osty_rt_fs_error_message("failed to create file", "runtime.fs.create.error");
+    }
+    return NULL;
+}
+
+void *osty_rt_fs_remove(const char *path) {
+    char path_buf[9];
+
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    if (path == NULL) {
+        osty_rt_fs_set_last_error_literal("path is null");
+        errno = 0;
+        return osty_rt_fs_error_message("failed to remove path", "runtime.fs.remove.error");
+    }
+    osty_rt_fs_clear_last_error();
+    if (remove(path) == 0) {
+        return NULL;
+    }
+    return osty_rt_fs_error_message("failed to remove path", "runtime.fs.remove.error");
+}
+
+void *osty_rt_fs_rename(const char *from, const char *to) {
+    char from_buf[9];
+    char to_buf[9];
+
+    osty_rt_string_decode_to_buf_if_inline(&from, from_buf);
+    osty_rt_string_decode_to_buf_if_inline(&to, to_buf);
+    if (from == NULL) {
+        osty_rt_fs_set_last_error_literal("source path is null");
+        errno = 0;
+        return osty_rt_fs_error_message("failed to rename path", "runtime.fs.rename.error");
+    }
+    if (to == NULL) {
+        osty_rt_fs_set_last_error_literal("destination path is null");
+        errno = 0;
+        return osty_rt_fs_error_message("failed to rename path", "runtime.fs.rename.error");
+    }
+    osty_rt_fs_clear_last_error();
+    if (rename(from, to) == 0) {
+        return NULL;
+    }
+    return osty_rt_fs_error_message("failed to rename path", "runtime.fs.rename.error");
+}
+
+void *osty_rt_fs_copy(const char *from, const char *to) {
+    char from_buf[9];
+    char to_buf[9];
+    FILE *src = NULL;
+    FILE *dst = NULL;
+    unsigned char buf[8192];
+    int err = 0;
+
+    osty_rt_string_decode_to_buf_if_inline(&from, from_buf);
+    osty_rt_string_decode_to_buf_if_inline(&to, to_buf);
+    if (from == NULL) {
+        osty_rt_fs_set_last_error_literal("source path is null");
+        errno = 0;
+        return osty_rt_fs_error_message("failed to copy file", "runtime.fs.copy.error");
+    }
+    if (to == NULL) {
+        osty_rt_fs_set_last_error_literal("destination path is null");
+        errno = 0;
+        return osty_rt_fs_error_message("failed to copy file", "runtime.fs.copy.error");
+    }
+    osty_rt_fs_clear_last_error();
+    src = fopen(from, "rb");
+    if (src == NULL) {
+        return osty_rt_fs_error_message("failed to copy file", "runtime.fs.copy.error");
+    }
+    dst = fopen(to, "wb");
+    if (dst == NULL) {
+        err = errno;
+        fclose(src);
+        errno = err;
+        return osty_rt_fs_error_message("failed to copy file", "runtime.fs.copy.error");
+    }
+    for (;;) {
+        size_t n = fread(buf, 1, sizeof(buf), src);
+        if (n != 0) {
+            size_t wrote = fwrite(buf, 1, n, dst);
+            if (wrote != n) {
+                err = errno;
+                goto copy_fail;
+            }
+        }
+        if (n < sizeof(buf)) {
+            if (ferror(src)) {
+                err = errno;
+                goto copy_fail;
+            }
+            break;
+        }
+    }
+    if (fclose(dst) != 0) {
+        err = errno;
+        dst = NULL;
+        goto copy_fail;
+    }
+    dst = NULL;
+    if (fclose(src) != 0) {
+        err = errno;
+        src = NULL;
+        goto copy_fail;
+    }
+    return NULL;
+
+copy_fail:
+    if (dst != NULL) {
+        fclose(dst);
+    }
+    if (src != NULL) {
+        fclose(src);
+    }
+    if (err != 0) {
+        errno = err;
+    }
+    return osty_rt_fs_error_message("failed to copy file", "runtime.fs.copy.error");
+}
+
+void *osty_rt_fs_mkdir(const char *path) {
+    char path_buf[9];
+
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    if (path == NULL) {
+        osty_rt_fs_set_last_error_literal("path is null");
+        errno = 0;
+        return osty_rt_fs_error_message("failed to create directory", "runtime.fs.mkdir.error");
+    }
+    osty_rt_fs_clear_last_error();
+    if (OSTY_RT_MKDIR_ONE(path) == 0) {
+        return NULL;
+    }
+    return osty_rt_fs_error_message("failed to create directory", "runtime.fs.mkdir.error");
+}
+
+void *osty_rt_fs_mkdir_all(const char *path) {
+    char path_buf[9];
+
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    if (osty_rt_fs_mkdir_p(path) == 0) {
+        return NULL;
+    }
+    return osty_rt_fs_error_message("failed to create directory tree", "runtime.fs.mkdir_all.error");
+}
+
 /* std.os process-control surface.
  *
  * `std.os.exec` / `execShell` lower to `osty_rt_os_exec(cmd, args, shell)`.
