@@ -78,6 +78,9 @@
 #  include <sys/types.h>
 #  include <sys/wait.h>
 #  include <unistd.h>
+#  if defined(__linux__)
+#    include <sys/random.h>
+#  endif
 #  define OSTY_RT_MKDIR_ONE(path) mkdir((path), 0755)
 #endif
 
@@ -714,6 +717,15 @@ typedef struct osty_gc_kind_descriptor {
     /* Whether the no-header young arena can carry this kind. Toggle
      * at the table row, not in `osty_gc_young_eligible`. */
     bool young_eligible;
+    /* Phase 0h: whether the trace function is safe to invoke without
+     * `osty_gc_lock` held. False for kinds whose payload backing
+     * storage can be reallocated mid-trace by the mutator (list,
+     * map, set, channel) — those would need deferred-realloc or
+     * hazard-pointer reclamation, which is its own piece of work.
+     * True for kinds whose tracer reads either fixed-layout fields
+     * (closure_env captures, generic enum payloads) or single
+     * pointer slots that cannot move. */
+    bool trace_lockfree_safe;
     /* Per-kind cleanup for UNFORWARDED young objects swept by
      * `cheney_destroy_dead_from_space`. NULL when the payload has
      * no external buffers. */
@@ -747,18 +759,26 @@ enum {
 
 static const osty_gc_kind_descriptor osty_gc_generic_patterns[] = {
     /* NONE — opaque payload, cheney handles it as raw bytes. */
-    [OSTY_GC_GENERIC_NONE] = {.young_eligible = true},
+    [OSTY_GC_GENERIC_NONE] = {
+        .young_eligible = true,
+        /* Phase 0h: NONE has no trace fn, so the lockfree flag is
+         * moot. Setting true keeps the predicate result consistent
+         * (no trace = nothing to race on). */
+        .trace_lockfree_safe = true,
+    },
     /* ENUM_PTR routes through `OSTY_GC_KIND_GENERIC_ENUM_PTR`'s row
      * in the kind table; this row is only consulted on the headerful
      * fallback dispatch, so the young flag stays false. */
     [OSTY_GC_GENERIC_ENUM_PTR] = {
         .trace = osty_rt_enum_ptr_payload_trace,
+        .trace_lockfree_safe = true,
     },
     /* Same shape as ENUM_PTR — TASK_HANDLE now routes through
      * `OSTY_GC_KIND_GENERIC_TASK_HANDLE`'s row in the kind table.
      * This row is parity-only for the headerful fallback dispatch. */
     [OSTY_GC_GENERIC_TASK_HANDLE] = {
         .destroy = osty_rt_task_handle_destroy,
+        .trace_lockfree_safe = true,
     },
 };
 
@@ -807,6 +827,10 @@ static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
     [OSTY_GC_KIND_CLOSURE_ENV - OSTY_GC_KIND_LIST] = {
         .trace = osty_rt_closure_env_trace,
         .young_eligible = true,
+        /* Phase 0h: captures populated synchronously at creation, never
+         * mutated, fixed-length array — safe to trace without the GC
+         * lock once the rest of the lock-free invariants are in place. */
+        .trace_lockfree_safe = true,
         .remap = osty_gc_remap_closure_env_payload,
     },
     /* CHANNEL young-safe through the same handoff pattern as Map:
@@ -819,12 +843,21 @@ static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
         .trace = osty_rt_chan_trace,
         .destroy = osty_rt_chan_destroy,
         .young_eligible = true,
+        /* Phase 0h: NOT lockfree-safe — the channel slot ring uses a
+         * mutex+cond and the head/tail counters mutate on send/recv;
+         * even reading the slots while a sender is mid-update could
+         * race the slot allocation. Future lock-free path needs a
+         * snapshot or hazard pointer. */
         .cleanup_young_dead = osty_gc_cleanup_young_dead_chan,
         .remap = osty_gc_remap_chan_payload,
     },
     [OSTY_GC_KIND_GENERIC_ENUM_PTR - OSTY_GC_KIND_LIST] = {
         .trace = osty_rt_enum_ptr_payload_trace,
         .young_eligible = true,
+        /* Phase 0h: payload is a single managed pointer slot — read
+         * is atomic on aligned platforms and the slot itself doesn't
+         * move. SATB barrier on slot writes preserves the invariant. */
+        .trace_lockfree_safe = true,
         .remap = osty_gc_remap_slot,
     },
     /* TASK_HANDLE young-safe through `osty_gc_task_handle_safe_handoff`
@@ -833,6 +866,10 @@ static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
     [OSTY_GC_KIND_GENERIC_TASK_HANDLE - OSTY_GC_KIND_LIST] = {
         .destroy = osty_rt_task_handle_destroy,
         .young_eligible = true,
+        /* Phase 0h: no trace fn at all (no managed pointer payload),
+         * so the lockfree flag is moot — but mark it true so a future
+         * trace fn addition would have to opt out explicitly. */
+        .trace_lockfree_safe = true,
         .cleanup_young_dead = osty_gc_cleanup_young_dead_task_handle,
     },
 };
@@ -850,6 +887,26 @@ static inline const osty_gc_kind_descriptor *osty_gc_kind_descriptor_lookup(
         return NULL;
     }
     return &osty_gc_kind_table[kind - OSTY_GC_KIND_LIST];
+}
+
+/* Phase 0h: predicate that decides whether `mark_drain_budget` may
+ * release `osty_gc_lock` around the tracer call for this header.
+ * GENERIC kinds fall through to their generic_pattern row, which
+ * defaults to NOT-safe except for the patterns marked above —
+ * conservative because GENERIC users that add a trace fn need to
+ * audit it explicitly before flipping the flag. */
+static inline bool osty_gc_trace_lockfree_safe(osty_gc_header *header) {
+    const osty_gc_kind_descriptor *desc =
+        osty_gc_kind_descriptor_lookup(header->object_kind);
+    if (desc != NULL) {
+        return desc->trace_lockfree_safe;
+    }
+    /* GENERIC fallback. Look at the pattern row. */
+    uint8_t pat = header->generic_pattern;
+    if (pat >= OSTY_GC_GENERIC_PATTERN_COUNT) {
+        return false;
+    }
+    return osty_gc_generic_patterns[pat].trace_lockfree_safe;
 }
 
 /* Phase 2 dispatch (RUNTIME_GC_DELTA tiny-tag young plan).
@@ -4534,8 +4591,15 @@ static void *osty_gc_allocate_managed_headerful(size_t byte_size,
      * referenced from a register or a not-yet-published slot. */
     if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL ||
         osty_gc_state == OSTY_GC_STATE_SWEEPING) {
-        header->color = OSTY_GC_COLOR_BLACK;
-        header->marked = true;
+        /* Phase 0g: atomic store. Today the alloc path holds the GC
+         * lock so concurrent readers can't observe a torn color, but
+         * once Phase 0h lets the tracer run lock-free this RELEASE
+         * pairs with the tracer's ACQUIRE in `mark_header` so a
+         * tracer that finds this header via index probe sees BLACK
+         * (and skips it) consistently with the marker_count store. */
+        __atomic_store_n(&header->color, OSTY_GC_COLOR_BLACK,
+                         __ATOMIC_RELEASE);
+        __atomic_store_n(&header->marked, true, __ATOMIC_RELAXED);
     }
     /* Phase C3 mutator assist: if an incremental major is active,
      * borrow a proportional amount of mark work from the allocator
@@ -4708,6 +4772,14 @@ bool osty_rt_bytes_is_valid_utf8(void *raw_bytes);
 const char *osty_rt_bytes_to_string(void *raw_bytes);
 uint8_t osty_rt_bytes_get(void *raw_bytes, int64_t index);
 void *osty_rt_bytes_slice(void *raw_bytes, int64_t start, int64_t end);
+void *osty_rt_crypto_sha256(void *raw_data);
+void *osty_rt_crypto_sha512(void *raw_data);
+void *osty_rt_crypto_sha1(void *raw_data);
+void *osty_rt_crypto_md5(void *raw_data);
+void *osty_rt_crypto_hmac_sha256(void *raw_key, void *raw_message);
+void *osty_rt_crypto_hmac_sha512(void *raw_key, void *raw_message);
+void *osty_rt_crypto_random_bytes(int64_t n);
+bool osty_rt_crypto_constant_time_eq(void *raw_a, void *raw_b);
 bool osty_rt_set_insert_i64(void *raw_set, int64_t item);
 bool osty_rt_set_insert_i1(void *raw_set, bool item);
 bool osty_rt_set_insert_f64(void *raw_set, double item);
@@ -5234,6 +5306,14 @@ static OSTY_RT_TLS bool osty_gc_local_mark_active = false;
 static int64_t osty_gc_local_mark_pushes_total = 0;
 static int64_t osty_gc_local_mark_overflow_total = 0;
 
+/* Phase 0h: TLS flag set while a marker thread is mid-dispatch on a
+ * lockfree-safe kind. `mark_stack_push` consults it to abort with a
+ * clear message if the local TLS stack overflows during such a
+ * dispatch — central pushes without `osty_gc_lock` would race
+ * mutator-side SATB pushes. Defined ahead of `mark_stack_push` so
+ * the reference resolves in single-pass C compilation. */
+static OSTY_RT_TLS bool osty_gc_in_lockfree_trace = false;
+
 static void osty_gc_mark_stack_push_central(osty_gc_header *header) {
     if (osty_gc_mark_stack_count == osty_gc_mark_stack_cap) {
         int64_t new_cap;
@@ -5285,16 +5365,53 @@ static void osty_gc_mark_stack_push(osty_gc_header *header) {
          * confirm the local cap is sized right for the workload. */
         (void)__atomic_add_fetch(&osty_gc_local_mark_overflow_total, 1,
                                  __ATOMIC_RELAXED);
+        /* Phase 0h safety: a lockfree-safe tracer is currently
+         * mid-dispatch with `osty_gc_lock` released. Pushing to the
+         * central stack here would race with mutator-side SATB
+         * pushes (which take `osty_gc_lock`). Abort with a clear
+         * message so the issue is visible — this is a design bound
+         * (closure captures cap at 64, generic enum ptr pushes 1),
+         * so realistic workloads can't hit it. If a future kind
+         * lifts the bound, the kind's `trace_lockfree_safe` flag
+         * needs to flip to false. */
+        if (osty_gc_in_lockfree_trace) {
+            osty_rt_abort(
+                "lockfree trace: local mark stack overflow without "
+                "gc_lock held — bound the kind's trace push count "
+                "below OSTY_GC_LOCAL_MARK_STACK_CAP or set "
+                "trace_lockfree_safe=false in the kind descriptor");
+        }
     }
     osty_gc_mark_stack_push_central(header);
 }
+
+/* Phase 0g: counters for atomic color transitions. CAS failures
+ * (another thread already moved this header out of WHITE) are
+ * harmless — they just mean the racer pushed first — but tracking
+ * them is the only way to observe contention while the lock around
+ * `dispatch_trace` is still in place. With the lock dropped (Phase
+ * 0h) these counters become the contention signal. */
+static int64_t osty_gc_mark_cas_attempts_total = 0;
+static int64_t osty_gc_mark_cas_failures_total = 0;
+
+/* Phase 0h: counters for trace-dispatch lock state. Each call to
+ * `dispatch_trace` either ran with `osty_gc_lock` released
+ * (`lockfree_total`) or held (`locked_total`). The TLS flag itself
+ * is defined ahead of `mark_stack_push` for forward-reference. */
+static int64_t osty_gc_lockfree_trace_total = 0;
+static int64_t osty_gc_locked_trace_total = 0;
 
 static void osty_gc_mark_header(osty_gc_header *header) {
     /* Enqueue only — the actual trace happens in `osty_gc_mark_drain`.
      * Phase C: the tri-colour check `color != WHITE` short-circuits
      * both already-enqueued (GREY) and already-traced (BLACK) cases
-     * so repeated reach via different edges pushes at most once. */
-    if (header == NULL || header->color != OSTY_GC_COLOR_WHITE) {
+     * so repeated reach via different edges pushes at most once.
+     *
+     * Phase 0g: the CAS makes WHITE→GREY atomic so two markers (or
+     * a marker + SATB barrier) racing on the same header don't both
+     * push it onto the mark stack. The reload-on-failure path is a
+     * no-op — whoever lost the CAS leaves the push to the winner. */
+    if (header == NULL) {
         return;
     }
     /* Phase B: during a minor collection, OLD headers are treated as
@@ -5303,11 +5420,22 @@ static void osty_gc_mark_header(osty_gc_header *header) {
      * `osty_gc_collect_minor_with_stack_roots`. Without this filter the
      * minor pass would sweep through tenured objects unnecessarily,
      * collapsing back to major semantics. */
-    if (osty_gc_minor_in_progress && header->generation == OSTY_GC_GEN_OLD) {
+    if (osty_gc_minor_in_progress &&
+        __atomic_load_n(&header->generation, __ATOMIC_RELAXED) ==
+            OSTY_GC_GEN_OLD) {
         return;
     }
-    header->color = OSTY_GC_COLOR_GREY;
-    header->marked = true;
+    uint8_t expected = OSTY_GC_COLOR_WHITE;
+    osty_gc_mark_cas_attempts_total += 1;
+    if (!__atomic_compare_exchange_n(&header->color, &expected,
+                                     OSTY_GC_COLOR_GREY,
+                                     false /* strong */,
+                                     __ATOMIC_ACQ_REL,
+                                     __ATOMIC_ACQUIRE)) {
+        osty_gc_mark_cas_failures_total += 1;
+        return;
+    }
+    __atomic_store_n(&header->marked, true, __ATOMIC_RELAXED);
     osty_gc_mark_stack_push(header);
 }
 
@@ -5342,12 +5470,37 @@ static int64_t osty_gc_mark_drain_budget(int64_t budget) {
         } else {
             header = osty_gc_mark_stack[--osty_gc_mark_stack_count];
         }
-        header->color = OSTY_GC_COLOR_BLACK;
-        /* Trace callbacks re-enter `osty_gc_mark_*` for children,
-         * which push more GREY work — into TLS via mark_stack_push's
-         * routing. The C call stack stays bounded regardless of
-         * object graph depth. */
-        osty_gc_dispatch_trace(header);
+        /* Phase 0g: atomic store. The pop above already serialised
+         * "this header is exclusively ours to trace", so we don't need
+         * a CAS — but the RELEASE pairs with the ACQUIRE in
+         * `mark_header` so other threads that subsequently see BLACK
+         * also see the trace's full effects (children pushed). */
+        __atomic_store_n(&header->color, OSTY_GC_COLOR_BLACK,
+                         __ATOMIC_RELEASE);
+        /* Phase 0h: per-kind decision on whether the tracer can run
+         * with `osty_gc_lock` released. closure_env / generic enum
+         * payloads are safe (fixed-layout reads, bounded push count
+         * within local TLS cap); list / map / set / channel still
+         * need the lock because their backing storage can be
+         * reallocated by a concurrent mutator. */
+        bool lockfree = osty_gc_trace_lockfree_safe(header);
+        if (lockfree) {
+            (void)__atomic_add_fetch(&osty_gc_lockfree_trace_total, 1,
+                                     __ATOMIC_RELAXED);
+            osty_gc_in_lockfree_trace = true;
+            osty_gc_release();
+            osty_gc_dispatch_trace(header);
+            osty_gc_acquire();
+            osty_gc_in_lockfree_trace = false;
+        } else {
+            (void)__atomic_add_fetch(&osty_gc_locked_trace_total, 1,
+                                     __ATOMIC_RELAXED);
+            /* Trace callbacks re-enter `osty_gc_mark_*` for children,
+             * which push more GREY work — into TLS via mark_stack_push's
+             * routing. The C call stack stays bounded regardless of
+             * object graph depth. */
+            osty_gc_dispatch_trace(header);
+        }
         done += 1;
     }
 
@@ -5840,15 +5993,22 @@ static int64_t osty_gc_compact_major_with_stack_roots(
     header = osty_gc_objects;
     while (header != NULL) {
         next = header->next;
-        if (header->color == OSTY_GC_COLOR_WHITE) {
+        /* Phase 0g: atomic load + atomic reset for the BLACK→WHITE
+         * survivor recolour. Compact_major runs inside the STW
+         * finish handshake, so no concurrent reader touches color
+         * during this walk — the atomics are for invariant
+         * consistency with the rest of the lock-free-ready paths. */
+        uint8_t color = __atomic_load_n(&header->color, __ATOMIC_ACQUIRE);
+        if (color == OSTY_GC_COLOR_WHITE) {
             osty_gc_swept_count_total += 1;
             osty_gc_swept_bytes_total += header->byte_size;
             osty_gc_dispatch_destroy(header);
             osty_gc_unlink(header);
             osty_gc_reclaim_swept_header(header);
         } else {
-            header->color = OSTY_GC_COLOR_WHITE;
-            header->marked = false;
+            __atomic_store_n(&header->color, OSTY_GC_COLOR_WHITE,
+                             __ATOMIC_RELEASE);
+            __atomic_store_n(&header->marked, false, __ATOMIC_RELAXED);
             header->card_dirty = 0;
             if (osty_gc_header_is_movable(header)) {
                 osty_gc_header *clone = osty_gc_clone_header(header);
@@ -6629,7 +6789,13 @@ static int64_t osty_gc_incremental_sweep_step(int64_t budget) {
     header = osty_gc_sweep_cursor;
     while (header != NULL && (unlimited || done < budget)) {
         next = header->next;
-        if (header->color == OSTY_GC_COLOR_WHITE) {
+        /* Phase 0g: atomic load to pair with mark/SATB releases. The
+         * sweep itself runs under `osty_gc_lock` so the value won't
+         * change mid-iteration, but the ACQUIRE makes the colour
+         * read happen-before any subsequent header field access (e.g.
+         * `byte_size`, `dispatch_destroy`) that the WHITE branch does. */
+        uint8_t color = __atomic_load_n(&header->color, __ATOMIC_ACQUIRE);
+        if (color == OSTY_GC_COLOR_WHITE) {
             osty_gc_swept_count_total += 1;
             osty_gc_swept_bytes_total += header->byte_size;
             osty_gc_dispatch_destroy(header);
@@ -6653,9 +6819,11 @@ static int64_t osty_gc_incremental_sweep_step(int64_t budget) {
 static void osty_gc_reset_survivors_walk(void) {
     osty_gc_header *header = osty_gc_objects;
     while (header != NULL) {
-        if (header->color != OSTY_GC_COLOR_WHITE) {
-            header->color = OSTY_GC_COLOR_WHITE;
-            header->marked = false;
+        uint8_t color = __atomic_load_n(&header->color, __ATOMIC_ACQUIRE);
+        if (color != OSTY_GC_COLOR_WHITE) {
+            __atomic_store_n(&header->color, OSTY_GC_COLOR_WHITE,
+                             __ATOMIC_RELEASE);
+            __atomic_store_n(&header->marked, false, __ATOMIC_RELAXED);
             header->card_dirty = 0;
         }
         header = header->next;
@@ -8018,6 +8186,208 @@ const char *osty_rt_int_to_string(int64_t value) {
         osty_rt_abort("failed to format Int as String");
     }
     return osty_rt_string_dup_site(buffer, (size_t)written, "runtime.int.to_string");
+}
+
+/* List<T>.toString runtime entries. One per element ABI lane; each
+ * walks the list once, formats each element with the per-kind
+ * stringifier, and joins with ", " inside "[" / "]" brackets.
+ *
+ * `osty_rt_list_to_string_buf` is the shared body — caller passes a
+ * `format_one` callback that emits one element's text into the
+ * growing buffer. Buffer growth uses the standard size + len pattern
+ * (start at 64 bytes, double on overflow); the result is materialised
+ * into a GC-managed String via `osty_rt_string_dup_site` and the
+ * temporary heap buffer freed.
+ *
+ * The element stringifications match the canonical primitive
+ * formatters: Int via "%lld", Float via the same NaN/Inf-aware path
+ * `osty_rt_float_to_string` already uses, Bool as "true"/"false",
+ * String quoted with `"…"`, Char quoted with `'…'`. Nested
+ * collections are NOT recursed today — `List<List<Int>>.toString()`
+ * still trips a backend gap because there's no list_to_string_ptr
+ * lane registered. Per-list-element `toString` callbacks for
+ * struct / enum payloads land in a follow-up. */
+typedef void (*osty_rt_list_format_one_fn)(char **buf_inout, size_t *cap_inout, size_t *len_inout, const unsigned char *elem);
+
+static void osty_rt_list_to_string_grow(char **buf_inout, size_t *cap_inout, size_t needed) {
+    if (*cap_inout >= needed) {
+        return;
+    }
+    size_t cap = *cap_inout;
+    while (cap < needed) {
+        cap *= 2;
+    }
+    char *next = (char *)realloc(*buf_inout, cap);
+    if (next == NULL) {
+        osty_rt_abort("runtime.list.to_string: out of memory");
+    }
+    *buf_inout = next;
+    *cap_inout = cap;
+}
+
+static void osty_rt_list_to_string_append(char **buf_inout, size_t *cap_inout, size_t *len_inout, const char *src, size_t n) {
+    osty_rt_list_to_string_grow(buf_inout, cap_inout, *len_inout + n + 1);
+    memcpy(*buf_inout + *len_inout, src, n);
+    *len_inout += n;
+}
+
+static const char *osty_rt_list_to_string_finish(osty_rt_list *list, size_t elem_size, osty_rt_list_format_one_fn format_one) {
+    if (list == NULL || list->len == 0) {
+        return osty_rt_string_dup_site("[]", 2, "runtime.list.to_string");
+    }
+    size_t cap = 64;
+    size_t len = 0;
+    char *buf = (char *)malloc(cap);
+    if (buf == NULL) {
+        osty_rt_abort("runtime.list.to_string: out of memory");
+    }
+    buf[len++] = '[';
+    for (int64_t i = 0; i < list->len; i++) {
+        if (i > 0) {
+            osty_rt_list_to_string_append(&buf, &cap, &len, ", ", 2);
+        }
+        const unsigned char *elem = list->data + (size_t)i * elem_size;
+        format_one(&buf, &cap, &len, elem);
+    }
+    osty_rt_list_to_string_grow(&buf, &cap, len + 2);
+    buf[len++] = ']';
+    const char *out = osty_rt_string_dup_site(buf, len, "runtime.list.to_string");
+    free(buf);
+    return out;
+}
+
+static void osty_rt_list_format_i64(char **buf, size_t *cap, size_t *len, const unsigned char *elem) {
+    int64_t v;
+    memcpy(&v, elem, sizeof(v));
+    char tmp[32];
+    int n = snprintf(tmp, sizeof(tmp), "%lld", (long long)v);
+    if (n < 0) {
+        osty_rt_abort("runtime.list.to_string.i64: snprintf failed");
+    }
+    osty_rt_list_to_string_append(buf, cap, len, tmp, (size_t)n);
+}
+
+static void osty_rt_list_format_f64(char **buf, size_t *cap, size_t *len, const unsigned char *elem) {
+    double v;
+    memcpy(&v, elem, sizeof(v));
+    /* Mirror osty_rt_float_to_string's NaN/Inf strings so per-list
+     * formatting matches `f.toString()` byte-for-byte. */
+    if (v != v) {
+        osty_rt_list_to_string_append(buf, cap, len, "NaN", 3);
+        return;
+    }
+    if (v == (double)(1.0 / 0.0)) {
+        osty_rt_list_to_string_append(buf, cap, len, "+Inf", 4);
+        return;
+    }
+    if (v == (double)(-1.0 / 0.0)) {
+        osty_rt_list_to_string_append(buf, cap, len, "-Inf", 4);
+        return;
+    }
+    char tmp[64];
+    int n = snprintf(tmp, sizeof(tmp), "%f", v);
+    if (n < 0) {
+        osty_rt_abort("runtime.list.to_string.f64: snprintf failed");
+    }
+    osty_rt_list_to_string_append(buf, cap, len, tmp, (size_t)n);
+}
+
+static void osty_rt_list_format_i1(char **buf, size_t *cap, size_t *len, const unsigned char *elem) {
+    bool v;
+    memcpy(&v, elem, sizeof(v));
+    if (v) {
+        osty_rt_list_to_string_append(buf, cap, len, "true", 4);
+    } else {
+        osty_rt_list_to_string_append(buf, cap, len, "false", 5);
+    }
+}
+
+static void osty_rt_list_format_string(char **buf, size_t *cap, size_t *len, const unsigned char *elem) {
+    const char *s = NULL;
+    memcpy(&s, elem, sizeof(s));
+    s = (const char *)osty_gc_load_v1((void *)s);
+    osty_rt_list_to_string_append(buf, cap, len, "\"", 1);
+    if (s != NULL) {
+        char decoded[OSTY_RT_SSO_DECODE_BUF_BYTES];
+        const char *src = s;
+        osty_rt_string_decode_to_buf_if_inline(&src, decoded);
+        size_t n = osty_rt_string_len(s);
+        osty_rt_list_to_string_append(buf, cap, len, src, n);
+    }
+    osty_rt_list_to_string_append(buf, cap, len, "\"", 1);
+}
+
+static void osty_rt_list_format_char(char **buf, size_t *cap, size_t *len, const unsigned char *elem) {
+    int32_t cp_signed;
+    memcpy(&cp_signed, elem, sizeof(cp_signed));
+    uint32_t cp = (uint32_t)cp_signed;
+    /* Mirror the UTF-8 layout in `osty_rt_char_to_string`. Inlined
+     * because the existing function returns a heap String and we
+     * just need the raw bytes here. */
+    unsigned char encoded[4];
+    size_t n;
+    if (cp < 0x80U) {
+        encoded[0] = (unsigned char)cp;
+        n = 1;
+    } else if (cp < 0x800U) {
+        encoded[0] = (unsigned char)(0xC0U | (cp >> 6));
+        encoded[1] = (unsigned char)(0x80U | (cp & 0x3FU));
+        n = 2;
+    } else if (cp < 0x10000U) {
+        encoded[0] = (unsigned char)(0xE0U | (cp >> 12));
+        encoded[1] = (unsigned char)(0x80U | ((cp >> 6) & 0x3FU));
+        encoded[2] = (unsigned char)(0x80U | (cp & 0x3FU));
+        n = 3;
+    } else {
+        encoded[0] = (unsigned char)(0xF0U | (cp >> 18));
+        encoded[1] = (unsigned char)(0x80U | ((cp >> 12) & 0x3FU));
+        encoded[2] = (unsigned char)(0x80U | ((cp >> 6) & 0x3FU));
+        encoded[3] = (unsigned char)(0x80U | (cp & 0x3FU));
+        n = 4;
+    }
+    osty_rt_list_to_string_append(buf, cap, len, "'", 1);
+    osty_rt_list_to_string_append(buf, cap, len, (const char *)encoded, n);
+    osty_rt_list_to_string_append(buf, cap, len, "'", 1);
+}
+
+static void osty_rt_list_format_byte(char **buf, size_t *cap, size_t *len, const unsigned char *elem) {
+    int64_t v = (int64_t)*elem;
+    char tmp[8];
+    int n = snprintf(tmp, sizeof(tmp), "%lld", (long long)v);
+    if (n < 0) {
+        osty_rt_abort("runtime.list.to_string.byte: snprintf failed");
+    }
+    osty_rt_list_to_string_append(buf, cap, len, tmp, (size_t)n);
+}
+
+const char *osty_rt_list_to_string_i64(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    return osty_rt_list_to_string_finish(list, sizeof(int64_t), osty_rt_list_format_i64);
+}
+
+const char *osty_rt_list_to_string_f64(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    return osty_rt_list_to_string_finish(list, sizeof(double), osty_rt_list_format_f64);
+}
+
+const char *osty_rt_list_to_string_i1(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    return osty_rt_list_to_string_finish(list, sizeof(bool), osty_rt_list_format_i1);
+}
+
+const char *osty_rt_list_to_string_string(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    return osty_rt_list_to_string_finish(list, sizeof(void *), osty_rt_list_format_string);
+}
+
+const char *osty_rt_list_to_string_char(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    return osty_rt_list_to_string_finish(list, sizeof(int32_t), osty_rt_list_format_char);
+}
+
+const char *osty_rt_list_to_string_byte(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    return osty_rt_list_to_string_finish(list, sizeof(uint8_t), osty_rt_list_format_byte);
 }
 
 /* Monotonic-clock sample in nanoseconds, exported for the benchmark
@@ -9860,6 +10230,81 @@ void *osty_rt_map_keys_sorted_i64(void *raw_map) {
     return keys;
 }
 
+/* Map<K, V>.toString — `{k1: v1, k2: v2}`-shaped. Reuses the per-
+ * element formatters from the list_to_string family; a single
+ * runtime entry is enough because the Map struct already carries
+ * `key_kind` / `value_kind` (set at `osty_rt_map_new` time) and we
+ * dispatch on those internally. The value-side formatter has to know
+ * the slot size — Map<K, Int> stores 8-byte values, Map<K, Bool>
+ * stores `sizeof(bool)` — so we look it up from `map->value_size`
+ * directly rather than recomputing from `value_kind`. Keys always
+ * use the kind's canonical width via `osty_rt_kind_size`.
+ *
+ * Format: empty → "{}". Pairs joined with ", "; keys and values
+ * separated by ": ". String values are quoted to match the
+ * list_to_string convention so users can pattern-match round-trip
+ * representations across collection kinds. */
+static osty_rt_list_format_one_fn osty_rt_map_pick_kind_formatter(int64_t kind) {
+    switch (kind) {
+    case OSTY_RT_ABI_I64:
+        return osty_rt_list_format_i64;
+    case OSTY_RT_ABI_F64:
+        return osty_rt_list_format_f64;
+    case OSTY_RT_ABI_I1:
+        return osty_rt_list_format_i1;
+    case OSTY_RT_ABI_STRING:
+        return osty_rt_list_format_string;
+    case OSTY_RT_ABI_PTR:
+        /* Reuse the string formatter for the ptr lane: today the only
+         * ptr-shaped Map keys/values that show up at this entry are
+         * Strings (per `osty_rt_map_key_hash`'s OSTY_RT_ABI_PTR arm,
+         * which already special-cases String content). Composite ptr
+         * values trigger the abort below — the caller gets a clear
+         * message instead of garbage bytes. */
+        return osty_rt_list_format_string;
+    default:
+        return NULL;
+    }
+}
+
+const char *osty_rt_map_to_string(void *raw_map) {
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
+    if (map == NULL || map->len == 0) {
+        return osty_rt_string_dup_site("{}", 2, "runtime.map.to_string");
+    }
+    osty_rt_list_format_one_fn fmt_key = osty_rt_map_pick_kind_formatter(map->key_kind);
+    osty_rt_list_format_one_fn fmt_val = osty_rt_map_pick_kind_formatter(map->value_kind);
+    if (fmt_key == NULL || fmt_val == NULL) {
+        osty_rt_abort("runtime.map.to_string: unsupported key/value kind");
+    }
+    size_t key_size = osty_rt_kind_size(map->key_kind);
+    size_t value_size = map->value_size;
+    size_t cap = 64;
+    size_t len = 0;
+    char *buf = (char *)malloc(cap);
+    if (buf == NULL) {
+        osty_rt_abort("runtime.map.to_string: out of memory");
+    }
+    buf[len++] = '{';
+    osty_rt_map_lock(raw_map);
+    for (int64_t i = 0; i < map->len; i++) {
+        if (i > 0) {
+            osty_rt_list_to_string_append(&buf, &cap, &len, ", ", 2);
+        }
+        const unsigned char *key_slot = map->keys + (size_t)i * key_size;
+        const unsigned char *value_slot = map->values + (size_t)i * value_size;
+        fmt_key(&buf, &cap, &len, key_slot);
+        osty_rt_list_to_string_append(&buf, &cap, &len, ": ", 2);
+        fmt_val(&buf, &cap, &len, value_slot);
+    }
+    osty_rt_map_unlock(raw_map);
+    osty_rt_list_to_string_grow(&buf, &cap, len + 2);
+    buf[len++] = '}';
+    const char *out = osty_rt_string_dup_site(buf, len, "runtime.map.to_string");
+    free(buf);
+    return out;
+}
+
 // Every public keyed op takes the per-map lock, runs the raw op, and
 // releases. Recursive so that `update`'s outer lock + a re-entrant op
 // from a user callback (e.g. counts.len() inside f) don't deadlock.
@@ -10049,6 +10494,64 @@ int64_t osty_rt_set_len(void *raw_set) {
         osty_rt_abort("set is null");
     }
     return set->len;
+}
+
+/* Set<T>.toString — `{a, b, c}`-shaped (braces match Map's set-style
+ * output; lists use `[...]`). One runtime entry; the Set struct
+ * carries `elem_kind` set at `osty_rt_set_new` time, so dispatch on
+ * the per-kind formatter happens internally. Composite element types
+ * abort with a clear runtime message until a callback-driven entry
+ * lands. Reuses the list_to_string formatter / grow / append helpers
+ * so empty / numeric / quoting conventions stay byte-identical
+ * across List, Map, and Set output. */
+const char *osty_rt_set_to_string(void *raw_set) {
+    osty_rt_set *set = osty_rt_set_cast(raw_set);
+    if (set == NULL || set->len == 0) {
+        return osty_rt_string_dup_site("{}", 2, "runtime.set.to_string");
+    }
+    osty_rt_list_format_one_fn fmt;
+    switch (set->elem_kind) {
+    case OSTY_RT_ABI_I64:
+        fmt = osty_rt_list_format_i64;
+        break;
+    case OSTY_RT_ABI_F64:
+        fmt = osty_rt_list_format_f64;
+        break;
+    case OSTY_RT_ABI_I1:
+        fmt = osty_rt_list_format_i1;
+        break;
+    case OSTY_RT_ABI_PTR:
+    case OSTY_RT_ABI_STRING:
+        /* Same caveat as Map's ptr lane: the only ptr-shaped Set
+         * elements that reach this entry today are Strings; composite
+         * ptrs would surface garbage, so we route them through the
+         * String formatter and rely on the Set's `elem_kind` having
+         * been set to PTR only for hashable string-equivalent types. */
+        fmt = osty_rt_list_format_string;
+        break;
+    default:
+        osty_rt_abort("runtime.set.to_string: unsupported element kind");
+    }
+    size_t elem_size = osty_rt_kind_size(set->elem_kind);
+    size_t cap = 64;
+    size_t len = 0;
+    char *buf = (char *)malloc(cap);
+    if (buf == NULL) {
+        osty_rt_abort("runtime.set.to_string: out of memory");
+    }
+    buf[len++] = '{';
+    for (int64_t i = 0; i < set->len; i++) {
+        if (i > 0) {
+            osty_rt_list_to_string_append(&buf, &cap, &len, ", ", 2);
+        }
+        const unsigned char *slot = set->items + (size_t)i * elem_size;
+        fmt(&buf, &cap, &len, slot);
+    }
+    osty_rt_list_to_string_grow(&buf, &cap, len + 2);
+    buf[len++] = '}';
+    const char *out = osty_rt_string_dup_site(buf, len, "runtime.set.to_string");
+    free(buf);
+    return out;
 }
 
 void *osty_rt_set_to_list(void *raw_set) {
@@ -11215,6 +11718,1057 @@ void *osty_rt_bytes_slice(void *raw_bytes, int64_t start, int64_t end) {
     return out;
 }
 
+static inline uint32_t osty_rt_crypto_rotr32(uint32_t x, unsigned n) {
+    return (x >> n) | (x << (32U - n));
+}
+
+static inline uint64_t osty_rt_crypto_rotr64(uint64_t x, unsigned n) {
+    return (x >> n) | (x << (64U - n));
+}
+
+static inline uint32_t osty_rt_crypto_rotl32(uint32_t x, unsigned n) {
+    return (x << n) | (x >> (32U - n));
+}
+
+static inline uint32_t osty_rt_crypto_load_be32(const unsigned char *p) {
+    return ((uint32_t)p[0] << 24) |
+           ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) |
+           (uint32_t)p[3];
+}
+
+static inline uint64_t osty_rt_crypto_load_be64(const unsigned char *p) {
+    return ((uint64_t)p[0] << 56) |
+           ((uint64_t)p[1] << 48) |
+           ((uint64_t)p[2] << 40) |
+           ((uint64_t)p[3] << 32) |
+           ((uint64_t)p[4] << 24) |
+           ((uint64_t)p[5] << 16) |
+           ((uint64_t)p[6] << 8) |
+           (uint64_t)p[7];
+}
+
+static inline uint32_t osty_rt_crypto_load_le32(const unsigned char *p) {
+    return (uint32_t)p[0] |
+           ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
+
+static inline void osty_rt_crypto_store_be32(unsigned char *p, uint32_t x) {
+    p[0] = (unsigned char)(x >> 24);
+    p[1] = (unsigned char)(x >> 16);
+    p[2] = (unsigned char)(x >> 8);
+    p[3] = (unsigned char)x;
+}
+
+static inline void osty_rt_crypto_store_be64(unsigned char *p, uint64_t x) {
+    p[0] = (unsigned char)(x >> 56);
+    p[1] = (unsigned char)(x >> 48);
+    p[2] = (unsigned char)(x >> 40);
+    p[3] = (unsigned char)(x >> 32);
+    p[4] = (unsigned char)(x >> 24);
+    p[5] = (unsigned char)(x >> 16);
+    p[6] = (unsigned char)(x >> 8);
+    p[7] = (unsigned char)x;
+}
+
+static inline void osty_rt_crypto_store_le32(unsigned char *p, uint32_t x) {
+    p[0] = (unsigned char)x;
+    p[1] = (unsigned char)(x >> 8);
+    p[2] = (unsigned char)(x >> 16);
+    p[3] = (unsigned char)(x >> 24);
+}
+
+static void osty_rt_crypto_bytes_view(void *raw_bytes,
+                                      const unsigned char **data,
+                                      size_t *len,
+                                      const char *op) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    *data = NULL;
+    *len = 0;
+    if (b == NULL) {
+        return;
+    }
+    if (b->len < 0) {
+        osty_rt_abort(op);
+    }
+    *len = (size_t)b->len;
+    if (*len != 0 && b->data == NULL) {
+        osty_rt_abort(op);
+    }
+    *data = b->data;
+}
+
+static osty_rt_bytes *osty_rt_crypto_alloc_bytes(size_t len, const char *site) {
+    size_t total;
+    osty_rt_bytes *out;
+    unsigned char *data;
+
+    if (len > SIZE_MAX - sizeof(osty_rt_bytes)) {
+        osty_rt_abort("runtime.crypto.alloc_bytes: size overflow");
+    }
+    total = sizeof(osty_rt_bytes) + len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, site, NULL, NULL);
+    data = (unsigned char *)(out + 1);
+    out->data = data;
+    out->len = (int64_t)len;
+    return out;
+}
+
+static void osty_rt_crypto_secure_zero(void *ptr, size_t len) {
+    volatile unsigned char *p = (volatile unsigned char *)ptr;
+    while (len-- != 0) {
+        *p++ = 0U;
+    }
+}
+
+static bool osty_rt_crypto_digest_matches_hex(const unsigned char *digest,
+                                              size_t digest_len,
+                                              const char *hex) {
+    size_t i;
+    if (hex == NULL) {
+        return false;
+    }
+    if (strlen(hex) != digest_len * 2U) {
+        return false;
+    }
+    for (i = 0; i < digest_len; i++) {
+        int hi = osty_rt_hex_nibble((unsigned char)hex[i * 2U]);
+        int lo = osty_rt_hex_nibble((unsigned char)hex[i * 2U + 1U]);
+        if (hi < 0 || lo < 0) {
+            return false;
+        }
+        if (digest[i] != (unsigned char)((hi << 4) | lo)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static const uint32_t osty_rt_crypto_sha256_k[64] = {
+    0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U,
+    0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
+    0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U,
+    0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U,
+    0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU,
+    0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU,
+    0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U,
+    0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U,
+    0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U,
+    0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U,
+    0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U,
+    0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U,
+    0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U,
+    0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU, 0x682e6ff3U,
+    0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U,
+    0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U,
+};
+
+static const uint64_t osty_rt_crypto_sha512_k[80] = {
+    0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL,
+    0xb5c0fbcfec4d3b2fULL, 0xe9b5dba58189dbbcULL,
+    0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL,
+    0x923f82a4af194f9bULL, 0xab1c5ed5da6d8118ULL,
+    0xd807aa98a3030242ULL, 0x12835b0145706fbeULL,
+    0x243185be4ee4b28cULL, 0x550c7dc3d5ffb4e2ULL,
+    0x72be5d74f27b896fULL, 0x80deb1fe3b1696b1ULL,
+    0x9bdc06a725c71235ULL, 0xc19bf174cf692694ULL,
+    0xe49b69c19ef14ad2ULL, 0xefbe4786384f25e3ULL,
+    0x0fc19dc68b8cd5b5ULL, 0x240ca1cc77ac9c65ULL,
+    0x2de92c6f592b0275ULL, 0x4a7484aa6ea6e483ULL,
+    0x5cb0a9dcbd41fbd4ULL, 0x76f988da831153b5ULL,
+    0x983e5152ee66dfabULL, 0xa831c66d2db43210ULL,
+    0xb00327c898fb213fULL, 0xbf597fc7beef0ee4ULL,
+    0xc6e00bf33da88fc2ULL, 0xd5a79147930aa725ULL,
+    0x06ca6351e003826fULL, 0x142929670a0e6e70ULL,
+    0x27b70a8546d22ffcULL, 0x2e1b21385c26c926ULL,
+    0x4d2c6dfc5ac42aedULL, 0x53380d139d95b3dfULL,
+    0x650a73548baf63deULL, 0x766a0abb3c77b2a8ULL,
+    0x81c2c92e47edaee6ULL, 0x92722c851482353bULL,
+    0xa2bfe8a14cf10364ULL, 0xa81a664bbc423001ULL,
+    0xc24b8b70d0f89791ULL, 0xc76c51a30654be30ULL,
+    0xd192e819d6ef5218ULL, 0xd69906245565a910ULL,
+    0xf40e35855771202aULL, 0x106aa07032bbd1b8ULL,
+    0x19a4c116b8d2d0c8ULL, 0x1e376c085141ab53ULL,
+    0x2748774cdf8eeb99ULL, 0x34b0bcb5e19b48a8ULL,
+    0x391c0cb3c5c95a63ULL, 0x4ed8aa4ae3418acbULL,
+    0x5b9cca4f7763e373ULL, 0x682e6ff3d6b2b8a3ULL,
+    0x748f82ee5defb2fcULL, 0x78a5636f43172f60ULL,
+    0x84c87814a1f0ab72ULL, 0x8cc702081a6439ecULL,
+    0x90befffa23631e28ULL, 0xa4506cebde82bde9ULL,
+    0xbef9a3f7b2c67915ULL, 0xc67178f2e372532bULL,
+    0xca273eceea26619cULL, 0xd186b8c721c0c207ULL,
+    0xeada7dd6cde0eb1eULL, 0xf57d4f7fee6ed178ULL,
+    0x06f067aa72176fbaULL, 0x0a637dc5a2c898a6ULL,
+    0x113f9804bef90daeULL, 0x1b710b35131c471bULL,
+    0x28db77f523047d84ULL, 0x32caab7b40c72493ULL,
+    0x3c9ebe0a15c9bebcULL, 0x431d67c49c100d4cULL,
+    0x4cc5d4becb3e42b6ULL, 0x597f299cfc657e2aULL,
+    0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL,
+};
+
+static const uint32_t osty_rt_crypto_md5_k[64] = {
+    0xd76aa478U, 0xe8c7b756U, 0x242070dbU, 0xc1bdceeeU,
+    0xf57c0fafU, 0x4787c62aU, 0xa8304613U, 0xfd469501U,
+    0x698098d8U, 0x8b44f7afU, 0xffff5bb1U, 0x895cd7beU,
+    0x6b901122U, 0xfd987193U, 0xa679438eU, 0x49b40821U,
+    0xf61e2562U, 0xc040b340U, 0x265e5a51U, 0xe9b6c7aaU,
+    0xd62f105dU, 0x02441453U, 0xd8a1e681U, 0xe7d3fbc8U,
+    0x21e1cde6U, 0xc33707d6U, 0xf4d50d87U, 0x455a14edU,
+    0xa9e3e905U, 0xfcefa3f8U, 0x676f02d9U, 0x8d2a4c8aU,
+    0xfffa3942U, 0x8771f681U, 0x6d9d6122U, 0xfde5380cU,
+    0xa4beea44U, 0x4bdecfa9U, 0xf6bb4b60U, 0xbebfbc70U,
+    0x289b7ec6U, 0xeaa127faU, 0xd4ef3085U, 0x04881d05U,
+    0xd9d4d039U, 0xe6db99e5U, 0x1fa27cf8U, 0xc4ac5665U,
+    0xf4292244U, 0x432aff97U, 0xab9423a7U, 0xfc93a039U,
+    0x655b59c3U, 0x8f0ccc92U, 0xffeff47dU, 0x85845dd1U,
+    0x6fa87e4fU, 0xfe2ce6e0U, 0xa3014314U, 0x4e0811a1U,
+    0xf7537e82U, 0xbd3af235U, 0x2ad7d2bbU, 0xeb86d391U,
+};
+
+static const uint32_t osty_rt_crypto_md5_s[64] = {
+    7U, 12U, 17U, 22U, 7U, 12U, 17U, 22U,
+    7U, 12U, 17U, 22U, 7U, 12U, 17U, 22U,
+    5U, 9U, 14U, 20U, 5U, 9U, 14U, 20U,
+    5U, 9U, 14U, 20U, 5U, 9U, 14U, 20U,
+    4U, 11U, 16U, 23U, 4U, 11U, 16U, 23U,
+    4U, 11U, 16U, 23U, 4U, 11U, 16U, 23U,
+    6U, 10U, 15U, 21U, 6U, 10U, 15U, 21U,
+    6U, 10U, 15U, 21U, 6U, 10U, 15U, 21U,
+};
+
+static void osty_rt_crypto_sha256_compress(uint32_t state[8], const unsigned char block[64]) {
+    uint32_t w[64];
+    uint32_t a, b, c, d, e, f, g, h;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        w[i] = osty_rt_crypto_load_be32(block + ((size_t)i * 4U));
+    }
+    for (i = 16; i < 64; i++) {
+        uint32_t s0 = osty_rt_crypto_rotr32(w[i - 15], 7) ^
+                      osty_rt_crypto_rotr32(w[i - 15], 18) ^
+                      (w[i - 15] >> 3);
+        uint32_t s1 = osty_rt_crypto_rotr32(w[i - 2], 17) ^
+                      osty_rt_crypto_rotr32(w[i - 2], 19) ^
+                      (w[i - 2] >> 10);
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+
+    a = state[0];
+    b = state[1];
+    c = state[2];
+    d = state[3];
+    e = state[4];
+    f = state[5];
+    g = state[6];
+    h = state[7];
+
+    for (i = 0; i < 64; i++) {
+        uint32_t s1 = osty_rt_crypto_rotr32(e, 6) ^
+                      osty_rt_crypto_rotr32(e, 11) ^
+                      osty_rt_crypto_rotr32(e, 25);
+        uint32_t ch = (e & f) ^ ((~e) & g);
+        uint32_t temp1 = h + s1 + ch + osty_rt_crypto_sha256_k[i] + w[i];
+        uint32_t s0 = osty_rt_crypto_rotr32(a, 2) ^
+                      osty_rt_crypto_rotr32(a, 13) ^
+                      osty_rt_crypto_rotr32(a, 22);
+        uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+        uint32_t temp2 = s0 + maj;
+
+        h = g;
+        g = f;
+        f = e;
+        e = d + temp1;
+        d = c;
+        c = b;
+        b = a;
+        a = temp1 + temp2;
+    }
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+    state[4] += e;
+    state[5] += f;
+    state[6] += g;
+    state[7] += h;
+}
+
+typedef struct osty_rt_crypto_sha256_ctx {
+    uint32_t state[8];
+    uint64_t total_len;
+    size_t block_len;
+    unsigned char block[64];
+} osty_rt_crypto_sha256_ctx;
+
+static void osty_rt_crypto_sha256_init(osty_rt_crypto_sha256_ctx *ctx) {
+    ctx->state[0] = 0x6a09e667U;
+    ctx->state[1] = 0xbb67ae85U;
+    ctx->state[2] = 0x3c6ef372U;
+    ctx->state[3] = 0xa54ff53aU;
+    ctx->state[4] = 0x510e527fU;
+    ctx->state[5] = 0x9b05688cU;
+    ctx->state[6] = 0x1f83d9abU;
+    ctx->state[7] = 0x5be0cd19U;
+    ctx->total_len = 0;
+    ctx->block_len = 0;
+}
+
+static void osty_rt_crypto_sha256_update(osty_rt_crypto_sha256_ctx *ctx,
+                                         const unsigned char *data,
+                                         size_t len) {
+    if (len == 0) {
+        return;
+    }
+    if (ctx->total_len > UINT64_MAX - (uint64_t)len) {
+        osty_rt_abort("runtime.crypto.sha256: input too large");
+    }
+    ctx->total_len += (uint64_t)len;
+    if (ctx->block_len != 0) {
+        size_t want = 64U - ctx->block_len;
+        if (want > len) {
+            want = len;
+        }
+        memcpy(ctx->block + ctx->block_len, data, want);
+        ctx->block_len += want;
+        data += want;
+        len -= want;
+        if (ctx->block_len == 64U) {
+            osty_rt_crypto_sha256_compress(ctx->state, ctx->block);
+            ctx->block_len = 0;
+        }
+    }
+    while (len >= 64U) {
+        osty_rt_crypto_sha256_compress(ctx->state, data);
+        data += 64U;
+        len -= 64U;
+    }
+    if (len != 0) {
+        memcpy(ctx->block, data, len);
+        ctx->block_len = len;
+    }
+}
+
+static void osty_rt_crypto_sha256_final(osty_rt_crypto_sha256_ctx *ctx,
+                                        unsigned char out[32]) {
+    unsigned char final[128];
+    uint64_t bit_len;
+    size_t padded;
+    int i;
+
+    if (ctx->total_len > (UINT64_MAX >> 3)) {
+        osty_rt_abort("runtime.crypto.sha256: input too large");
+    }
+    bit_len = ctx->total_len * 8ULL;
+    memset(final, 0, sizeof(final));
+    if (ctx->block_len != 0) {
+        memcpy(final, ctx->block, ctx->block_len);
+    }
+    final[ctx->block_len] = 0x80U;
+    padded = (ctx->block_len + 1U + 8U <= 64U) ? 64U : 128U;
+    osty_rt_crypto_store_be64(final + padded - 8U, bit_len);
+    osty_rt_crypto_sha256_compress(ctx->state, final);
+    if (padded == 128U) {
+        osty_rt_crypto_sha256_compress(ctx->state, final + 64U);
+    }
+    for (i = 0; i < 8; i++) {
+        osty_rt_crypto_store_be32(out + ((size_t)i * 4U), ctx->state[i]);
+    }
+    osty_rt_crypto_secure_zero(final, sizeof(final));
+    osty_rt_crypto_secure_zero(ctx, sizeof(*ctx));
+}
+
+static void osty_rt_crypto_sha256_digest(const unsigned char *data, size_t len, unsigned char out[32]) {
+    osty_rt_crypto_sha256_ctx ctx;
+    osty_rt_crypto_sha256_init(&ctx);
+    osty_rt_crypto_sha256_update(&ctx, data, len);
+    osty_rt_crypto_sha256_final(&ctx, out);
+}
+
+static void osty_rt_crypto_sha512_compress(uint64_t state[8], const unsigned char block[128]) {
+    uint64_t w[80];
+    uint64_t a, b, c, d, e, f, g, h;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        w[i] = osty_rt_crypto_load_be64(block + ((size_t)i * 8U));
+    }
+    for (i = 16; i < 80; i++) {
+        uint64_t s0 = osty_rt_crypto_rotr64(w[i - 15], 1) ^
+                      osty_rt_crypto_rotr64(w[i - 15], 8) ^
+                      (w[i - 15] >> 7);
+        uint64_t s1 = osty_rt_crypto_rotr64(w[i - 2], 19) ^
+                      osty_rt_crypto_rotr64(w[i - 2], 61) ^
+                      (w[i - 2] >> 6);
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+
+    a = state[0];
+    b = state[1];
+    c = state[2];
+    d = state[3];
+    e = state[4];
+    f = state[5];
+    g = state[6];
+    h = state[7];
+
+    for (i = 0; i < 80; i++) {
+        uint64_t s1 = osty_rt_crypto_rotr64(e, 14) ^
+                      osty_rt_crypto_rotr64(e, 18) ^
+                      osty_rt_crypto_rotr64(e, 41);
+        uint64_t ch = (e & f) ^ ((~e) & g);
+        uint64_t temp1 = h + s1 + ch + osty_rt_crypto_sha512_k[i] + w[i];
+        uint64_t s0 = osty_rt_crypto_rotr64(a, 28) ^
+                      osty_rt_crypto_rotr64(a, 34) ^
+                      osty_rt_crypto_rotr64(a, 39);
+        uint64_t maj = (a & b) ^ (a & c) ^ (b & c);
+        uint64_t temp2 = s0 + maj;
+
+        h = g;
+        g = f;
+        f = e;
+        e = d + temp1;
+        d = c;
+        c = b;
+        b = a;
+        a = temp1 + temp2;
+    }
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+    state[4] += e;
+    state[5] += f;
+    state[6] += g;
+    state[7] += h;
+}
+
+typedef struct osty_rt_crypto_sha512_ctx {
+    uint64_t state[8];
+    uint64_t total_lo;
+    uint64_t total_hi;
+    size_t block_len;
+    unsigned char block[128];
+} osty_rt_crypto_sha512_ctx;
+
+static void osty_rt_crypto_sha512_init(osty_rt_crypto_sha512_ctx *ctx) {
+    ctx->state[0] = 0x6a09e667f3bcc908ULL;
+    ctx->state[1] = 0xbb67ae8584caa73bULL;
+    ctx->state[2] = 0x3c6ef372fe94f82bULL;
+    ctx->state[3] = 0xa54ff53a5f1d36f1ULL;
+    ctx->state[4] = 0x510e527fade682d1ULL;
+    ctx->state[5] = 0x9b05688c2b3e6c1fULL;
+    ctx->state[6] = 0x1f83d9abfb41bd6bULL;
+    ctx->state[7] = 0x5be0cd19137e2179ULL;
+    ctx->total_lo = 0;
+    ctx->total_hi = 0;
+    ctx->block_len = 0;
+}
+
+static void osty_rt_crypto_sha512_add_bytes(osty_rt_crypto_sha512_ctx *ctx,
+                                            size_t len) {
+    uint64_t add = (uint64_t)len;
+    uint64_t prev = ctx->total_lo;
+    ctx->total_lo += add;
+    if (ctx->total_lo < prev) {
+        if (ctx->total_hi == UINT64_MAX) {
+            osty_rt_abort("runtime.crypto.sha512: input too large");
+        }
+        ctx->total_hi += 1U;
+    }
+}
+
+static void osty_rt_crypto_sha512_update(osty_rt_crypto_sha512_ctx *ctx,
+                                         const unsigned char *data,
+                                         size_t len) {
+    if (len == 0) {
+        return;
+    }
+    osty_rt_crypto_sha512_add_bytes(ctx, len);
+    if (ctx->block_len != 0) {
+        size_t want = 128U - ctx->block_len;
+        if (want > len) {
+            want = len;
+        }
+        memcpy(ctx->block + ctx->block_len, data, want);
+        ctx->block_len += want;
+        data += want;
+        len -= want;
+        if (ctx->block_len == 128U) {
+            osty_rt_crypto_sha512_compress(ctx->state, ctx->block);
+            ctx->block_len = 0;
+        }
+    }
+    while (len >= 128U) {
+        osty_rt_crypto_sha512_compress(ctx->state, data);
+        data += 128U;
+        len -= 128U;
+    }
+    if (len != 0) {
+        memcpy(ctx->block, data, len);
+        ctx->block_len = len;
+    }
+}
+
+static void osty_rt_crypto_sha512_final(osty_rt_crypto_sha512_ctx *ctx,
+                                        unsigned char out[64]) {
+    unsigned char final[256];
+    uint64_t bit_hi = (ctx->total_hi << 3) | (ctx->total_lo >> 61);
+    uint64_t bit_lo = ctx->total_lo << 3;
+    size_t padded;
+    int i;
+
+    memset(final, 0, sizeof(final));
+    if (ctx->block_len != 0) {
+        memcpy(final, ctx->block, ctx->block_len);
+    }
+    final[ctx->block_len] = 0x80U;
+    padded = (ctx->block_len + 1U + 16U <= 128U) ? 128U : 256U;
+    osty_rt_crypto_store_be64(final + padded - 16U, bit_hi);
+    osty_rt_crypto_store_be64(final + padded - 8U, bit_lo);
+    osty_rt_crypto_sha512_compress(ctx->state, final);
+    if (padded == 256U) {
+        osty_rt_crypto_sha512_compress(ctx->state, final + 128U);
+    }
+    for (i = 0; i < 8; i++) {
+        osty_rt_crypto_store_be64(out + ((size_t)i * 8U), ctx->state[i]);
+    }
+    osty_rt_crypto_secure_zero(final, sizeof(final));
+    osty_rt_crypto_secure_zero(ctx, sizeof(*ctx));
+}
+
+static void osty_rt_crypto_sha512_digest(const unsigned char *data, size_t len, unsigned char out[64]) {
+    osty_rt_crypto_sha512_ctx ctx;
+    osty_rt_crypto_sha512_init(&ctx);
+    osty_rt_crypto_sha512_update(&ctx, data, len);
+    osty_rt_crypto_sha512_final(&ctx, out);
+}
+
+static void osty_rt_crypto_sha1_compress(uint32_t state[5], const unsigned char block[64]) {
+    uint32_t w[80];
+    uint32_t a, b, c, d, e;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        w[i] = osty_rt_crypto_load_be32(block + ((size_t)i * 4U));
+    }
+    for (i = 16; i < 80; i++) {
+        w[i] = osty_rt_crypto_rotl32(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+    }
+
+    a = state[0];
+    b = state[1];
+    c = state[2];
+    d = state[3];
+    e = state[4];
+
+    for (i = 0; i < 80; i++) {
+        uint32_t f;
+        uint32_t k;
+        uint32_t temp;
+        if (i < 20) {
+            f = (b & c) | ((~b) & d);
+            k = 0x5a827999U;
+        } else if (i < 40) {
+            f = b ^ c ^ d;
+            k = 0x6ed9eba1U;
+        } else if (i < 60) {
+            f = (b & c) | (b & d) | (c & d);
+            k = 0x8f1bbcdcU;
+        } else {
+            f = b ^ c ^ d;
+            k = 0xca62c1d6U;
+        }
+        temp = osty_rt_crypto_rotl32(a, 5) + f + e + k + w[i];
+        e = d;
+        d = c;
+        c = osty_rt_crypto_rotl32(b, 30);
+        b = a;
+        a = temp;
+    }
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+    state[4] += e;
+}
+
+static void osty_rt_crypto_sha1_digest(const unsigned char *data, size_t len, unsigned char out[20]) {
+    uint32_t state[5] = {
+        0x67452301U, 0xefcdab89U, 0x98badcfeU, 0x10325476U, 0xc3d2e1f0U,
+    };
+    unsigned char final[128];
+    uint64_t bit_len;
+    size_t rem;
+    size_t padded;
+    int i;
+
+    if (len > (size_t)(UINT64_MAX >> 3)) {
+        osty_rt_abort("runtime.crypto.sha1: input too large");
+    }
+    bit_len = (uint64_t)len * 8ULL;
+
+    while (len >= 64U) {
+        osty_rt_crypto_sha1_compress(state, data);
+        data += 64U;
+        len -= 64U;
+    }
+
+    rem = len;
+    memset(final, 0, sizeof(final));
+    if (rem != 0) {
+        memcpy(final, data, rem);
+    }
+    final[rem] = 0x80U;
+    padded = (rem + 1U + 8U <= 64U) ? 64U : 128U;
+    osty_rt_crypto_store_be64(final + padded - 8U, bit_len);
+    osty_rt_crypto_sha1_compress(state, final);
+    if (padded == 128U) {
+        osty_rt_crypto_sha1_compress(state, final + 64U);
+    }
+
+    for (i = 0; i < 5; i++) {
+        osty_rt_crypto_store_be32(out + ((size_t)i * 4U), state[i]);
+    }
+    osty_rt_crypto_secure_zero(final, sizeof(final));
+    osty_rt_crypto_secure_zero(state, sizeof(state));
+}
+
+static void osty_rt_crypto_md5_compress(uint32_t state[4], const unsigned char block[64]) {
+    uint32_t m[16];
+    uint32_t a, b, c, d;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        m[i] = osty_rt_crypto_load_le32(block + ((size_t)i * 4U));
+    }
+
+    a = state[0];
+    b = state[1];
+    c = state[2];
+    d = state[3];
+
+    for (i = 0; i < 64; i++) {
+        uint32_t f;
+        uint32_t g;
+        uint32_t temp;
+        if (i < 16) {
+            f = (b & c) | ((~b) & d);
+            g = (uint32_t)i;
+        } else if (i < 32) {
+            f = (d & b) | ((~d) & c);
+            g = (uint32_t)((5 * i + 1) & 15);
+        } else if (i < 48) {
+            f = b ^ c ^ d;
+            g = (uint32_t)((3 * i + 5) & 15);
+        } else {
+            f = c ^ (b | (~d));
+            g = (uint32_t)((7 * i) & 15);
+        }
+        temp = d;
+        d = c;
+        c = b;
+        b = b + osty_rt_crypto_rotl32(a + f + osty_rt_crypto_md5_k[i] + m[g], osty_rt_crypto_md5_s[i]);
+        a = temp;
+    }
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+}
+
+static void osty_rt_crypto_md5_digest(const unsigned char *data, size_t len, unsigned char out[16]) {
+    uint32_t state[4] = {
+        0x67452301U, 0xefcdab89U, 0x98badcfeU, 0x10325476U,
+    };
+    unsigned char final[128];
+    uint64_t bit_len;
+    size_t rem;
+    size_t padded;
+    int i;
+
+    if (len > (size_t)(UINT64_MAX >> 3)) {
+        osty_rt_abort("runtime.crypto.md5: input too large");
+    }
+    bit_len = (uint64_t)len * 8ULL;
+
+    while (len >= 64U) {
+        osty_rt_crypto_md5_compress(state, data);
+        data += 64U;
+        len -= 64U;
+    }
+
+    rem = len;
+    memset(final, 0, sizeof(final));
+    if (rem != 0) {
+        memcpy(final, data, rem);
+    }
+    final[rem] = 0x80U;
+    padded = (rem + 1U + 8U <= 64U) ? 64U : 128U;
+    osty_rt_crypto_store_le32(final + padded - 8U, (uint32_t)bit_len);
+    osty_rt_crypto_store_le32(final + padded - 4U, (uint32_t)(bit_len >> 32));
+    osty_rt_crypto_md5_compress(state, final);
+    if (padded == 128U) {
+        osty_rt_crypto_md5_compress(state, final + 64U);
+    }
+
+    for (i = 0; i < 4; i++) {
+        osty_rt_crypto_store_le32(out + ((size_t)i * 4U), state[i]);
+    }
+    osty_rt_crypto_secure_zero(final, sizeof(final));
+    osty_rt_crypto_secure_zero(state, sizeof(state));
+}
+
+static void osty_rt_crypto_hmac_sha256_digest(const unsigned char *key,
+                                              size_t key_len,
+                                              const unsigned char *message,
+                                              size_t message_len,
+                                              unsigned char out[32]) {
+    unsigned char key_block[64];
+    unsigned char pad[64];
+    unsigned char inner_digest[32];
+    osty_rt_crypto_sha256_ctx ctx;
+    size_t i;
+
+    memset(key_block, 0, sizeof(key_block));
+    if (key_len > sizeof(key_block)) {
+        osty_rt_crypto_sha256_digest(key, key_len, key_block);
+    } else if (key_len != 0) {
+        memcpy(key_block, key, key_len);
+    }
+
+    for (i = 0; i < sizeof(key_block); i++) {
+        pad[i] = (unsigned char)(key_block[i] ^ 0x36U);
+    }
+    osty_rt_crypto_sha256_init(&ctx);
+    osty_rt_crypto_sha256_update(&ctx, pad, sizeof(pad));
+    osty_rt_crypto_sha256_update(&ctx, message, message_len);
+    osty_rt_crypto_sha256_final(&ctx, inner_digest);
+
+    for (i = 0; i < sizeof(key_block); i++) {
+        pad[i] = (unsigned char)(key_block[i] ^ 0x5cU);
+    }
+    osty_rt_crypto_sha256_init(&ctx);
+    osty_rt_crypto_sha256_update(&ctx, pad, sizeof(pad));
+    osty_rt_crypto_sha256_update(&ctx, inner_digest, sizeof(inner_digest));
+    osty_rt_crypto_sha256_final(&ctx, out);
+
+    osty_rt_crypto_secure_zero(key_block, sizeof(key_block));
+    osty_rt_crypto_secure_zero(pad, sizeof(pad));
+    osty_rt_crypto_secure_zero(inner_digest, sizeof(inner_digest));
+}
+
+static void osty_rt_crypto_hmac_sha512_digest(const unsigned char *key,
+                                              size_t key_len,
+                                              const unsigned char *message,
+                                              size_t message_len,
+                                              unsigned char out[64]) {
+    unsigned char key_block[128];
+    unsigned char pad[128];
+    unsigned char inner_digest[64];
+    osty_rt_crypto_sha512_ctx ctx;
+    size_t i;
+
+    memset(key_block, 0, sizeof(key_block));
+    if (key_len > sizeof(key_block)) {
+        osty_rt_crypto_sha512_digest(key, key_len, key_block);
+    } else if (key_len != 0) {
+        memcpy(key_block, key, key_len);
+    }
+
+    for (i = 0; i < sizeof(key_block); i++) {
+        pad[i] = (unsigned char)(key_block[i] ^ 0x36U);
+    }
+    osty_rt_crypto_sha512_init(&ctx);
+    osty_rt_crypto_sha512_update(&ctx, pad, sizeof(pad));
+    osty_rt_crypto_sha512_update(&ctx, message, message_len);
+    osty_rt_crypto_sha512_final(&ctx, inner_digest);
+
+    for (i = 0; i < sizeof(key_block); i++) {
+        pad[i] = (unsigned char)(key_block[i] ^ 0x5cU);
+    }
+    osty_rt_crypto_sha512_init(&ctx);
+    osty_rt_crypto_sha512_update(&ctx, pad, sizeof(pad));
+    osty_rt_crypto_sha512_update(&ctx, inner_digest, sizeof(inner_digest));
+    osty_rt_crypto_sha512_final(&ctx, out);
+
+    osty_rt_crypto_secure_zero(key_block, sizeof(key_block));
+    osty_rt_crypto_secure_zero(pad, sizeof(pad));
+    osty_rt_crypto_secure_zero(inner_digest, sizeof(inner_digest));
+}
+
+static osty_rt_once_t osty_rt_crypto_selftest_once = OSTY_RT_ONCE_INIT;
+
+static void osty_rt_crypto_selftest(void) {
+    static const unsigned char abc[] = {'a', 'b', 'c'};
+    static const unsigned char quick_msg[] = "The quick brown fox jumps over the lazy dog";
+    static const unsigned char quick_key[] = "key";
+    unsigned char long_key[200];
+    unsigned char long_msg_local[3000];
+    unsigned char digest[64];
+    size_t i;
+
+    memset(long_key, 'a', sizeof(long_key));
+    for (i = 0; i < sizeof(long_msg_local); i += 3U) {
+        long_msg_local[i] = 'a';
+        long_msg_local[i + 1U] = 'b';
+        long_msg_local[i + 2U] = 'c';
+    }
+
+    osty_rt_crypto_sha256_digest(abc, sizeof(abc), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 32U, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")) {
+        osty_rt_abort("runtime.crypto.selftest: sha256 failed");
+    }
+    osty_rt_crypto_sha512_digest(abc, sizeof(abc), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 64U, "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f")) {
+        osty_rt_abort("runtime.crypto.selftest: sha512 failed");
+    }
+    osty_rt_crypto_sha1_digest(abc, sizeof(abc), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 20U, "a9993e364706816aba3e25717850c26c9cd0d89d")) {
+        osty_rt_abort("runtime.crypto.selftest: sha1 failed");
+    }
+    osty_rt_crypto_md5_digest(abc, sizeof(abc), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 16U, "900150983cd24fb0d6963f7d28e17f72")) {
+        osty_rt_abort("runtime.crypto.selftest: md5 failed");
+    }
+    osty_rt_crypto_hmac_sha256_digest(
+        quick_key, sizeof(quick_key) - 1U,
+        quick_msg, sizeof(quick_msg) - 1U,
+        digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 32U, "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8")) {
+        osty_rt_abort("runtime.crypto.selftest: hmac-sha256 failed");
+    }
+    osty_rt_crypto_hmac_sha512_digest(
+        quick_key, sizeof(quick_key) - 1U,
+        quick_msg, sizeof(quick_msg) - 1U,
+        digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 64U, "b42af09057bac1e2d41708e48a902e09b5ff7f12ab428a4fe86653c73dd248fb82f948a549f7b791a5b41915ee4d1ec3935357e4e2317250d0372afa2ebeeb3a")) {
+        osty_rt_abort("runtime.crypto.selftest: hmac-sha512 failed");
+    }
+    osty_rt_crypto_sha256_digest(long_msg_local, sizeof(long_msg_local), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 32U, "328de8f1895f8bb09f6e6b4c2012ef2b2a6f067cd002794b750aa040a6f6d8bd")) {
+        osty_rt_abort("runtime.crypto.selftest: long sha256 failed");
+    }
+    osty_rt_crypto_sha512_digest(long_msg_local, sizeof(long_msg_local), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 64U, "14e615e6e7d4cf8cc75df5f408c558ddc98ad6eace44cabff9b4dcc9c8a4c22c0d772680f0267eb2595847c4dae7ecae06fc374d37f9f65db8502b0b7c048db1")) {
+        osty_rt_abort("runtime.crypto.selftest: long sha512 failed");
+    }
+    osty_rt_crypto_hmac_sha256_digest(long_key, sizeof(long_key), long_msg_local, sizeof(long_msg_local), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 32U, "7068ec7fdc9547b40e98e4bd5f7213d3c31088b993dfe87067c7636c786fc8b7")) {
+        osty_rt_abort("runtime.crypto.selftest: long hmac-sha256 failed");
+    }
+    osty_rt_crypto_hmac_sha512_digest(long_key, sizeof(long_key), long_msg_local, sizeof(long_msg_local), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 64U, "c1d9c61a8a67c829edae908bd74acf67d556379eabb0fa52d63cde5fa016dc339e8f323bb3d11c699a6feeb6189370744f7ef33565b180ae0395d574497fdd5b")) {
+        osty_rt_abort("runtime.crypto.selftest: long hmac-sha512 failed");
+    }
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    osty_rt_crypto_secure_zero(long_key, sizeof(long_key));
+    osty_rt_crypto_secure_zero(long_msg_local, sizeof(long_msg_local));
+}
+
+static void osty_rt_crypto_require_selftest(void) {
+    osty_rt_once(&osty_rt_crypto_selftest_once, osty_rt_crypto_selftest);
+}
+
+static void osty_rt_crypto_fill_random(unsigned char *out, size_t len) {
+    size_t offset = 0;
+
+    if (len == 0) {
+        return;
+    }
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    while (offset < len) {
+        unsigned int word = 0;
+        size_t chunk = len - offset;
+        if (rand_s(&word) != 0) {
+            osty_rt_abort("runtime.crypto.random_bytes: rand_s failed");
+        }
+        if (chunk > sizeof(word)) {
+            chunk = sizeof(word);
+        }
+        memcpy(out + offset, &word, chunk);
+        offset += chunk;
+    }
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    arc4random_buf(out, len);
+#else
+#  if defined(__linux__)
+    while (offset < len) {
+        ssize_t n = getrandom(out + offset, len - offset, 0);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == ENOSYS) {
+                break;
+            }
+            osty_rt_abort("runtime.crypto.random_bytes: getrandom failed");
+        }
+        offset += (size_t)n;
+    }
+    if (offset == len) {
+        return;
+    }
+#  endif
+    {
+        int fd = open("/dev/urandom", O_RDONLY);
+        if (fd < 0) {
+            osty_rt_abort("runtime.crypto.random_bytes: open /dev/urandom failed");
+        }
+        while (offset < len) {
+            ssize_t n = read(fd, out + offset, len - offset);
+            if (n < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                close(fd);
+                osty_rt_abort("runtime.crypto.random_bytes: read /dev/urandom failed");
+            }
+            if (n == 0) {
+                close(fd);
+                osty_rt_abort("runtime.crypto.random_bytes: short read from /dev/urandom");
+            }
+            offset += (size_t)n;
+        }
+        close(fd);
+    }
+#endif
+}
+
+void *osty_rt_crypto_sha256(void *raw_data) {
+    const unsigned char *data;
+    size_t len;
+    unsigned char digest[32];
+    void *out;
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_bytes_view(raw_data, &data, &len, "runtime.crypto.sha256: invalid bytes");
+    osty_rt_crypto_sha256_digest(data, len, digest);
+    out = osty_rt_bytes_dup_site(digest, sizeof(digest), "runtime.crypto.sha256");
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    return out;
+}
+
+void *osty_rt_crypto_sha512(void *raw_data) {
+    const unsigned char *data;
+    size_t len;
+    unsigned char digest[64];
+    void *out;
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_bytes_view(raw_data, &data, &len, "runtime.crypto.sha512: invalid bytes");
+    osty_rt_crypto_sha512_digest(data, len, digest);
+    out = osty_rt_bytes_dup_site(digest, sizeof(digest), "runtime.crypto.sha512");
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    return out;
+}
+
+void *osty_rt_crypto_sha1(void *raw_data) {
+    const unsigned char *data;
+    size_t len;
+    unsigned char digest[20];
+    void *out;
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_bytes_view(raw_data, &data, &len, "runtime.crypto.sha1: invalid bytes");
+    osty_rt_crypto_sha1_digest(data, len, digest);
+    out = osty_rt_bytes_dup_site(digest, sizeof(digest), "runtime.crypto.sha1");
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    return out;
+}
+
+void *osty_rt_crypto_md5(void *raw_data) {
+    const unsigned char *data;
+    size_t len;
+    unsigned char digest[16];
+    void *out;
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_bytes_view(raw_data, &data, &len, "runtime.crypto.md5: invalid bytes");
+    osty_rt_crypto_md5_digest(data, len, digest);
+    out = osty_rt_bytes_dup_site(digest, sizeof(digest), "runtime.crypto.md5");
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    return out;
+}
+
+void *osty_rt_crypto_hmac_sha256(void *raw_key, void *raw_message) {
+    const unsigned char *key;
+    const unsigned char *message;
+    size_t key_len;
+    size_t message_len;
+    unsigned char digest[32];
+    void *out;
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_bytes_view(raw_key, &key, &key_len, "runtime.crypto.hmac_sha256: invalid key");
+    osty_rt_crypto_bytes_view(raw_message, &message, &message_len, "runtime.crypto.hmac_sha256: invalid message");
+    osty_rt_crypto_hmac_sha256_digest(key, key_len, message, message_len, digest);
+    out = osty_rt_bytes_dup_site(digest, sizeof(digest), "runtime.crypto.hmac_sha256");
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    return out;
+}
+
+void *osty_rt_crypto_hmac_sha512(void *raw_key, void *raw_message) {
+    const unsigned char *key;
+    const unsigned char *message;
+    size_t key_len;
+    size_t message_len;
+    unsigned char digest[64];
+    void *out;
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_bytes_view(raw_key, &key, &key_len, "runtime.crypto.hmac_sha512: invalid key");
+    osty_rt_crypto_bytes_view(raw_message, &message, &message_len, "runtime.crypto.hmac_sha512: invalid message");
+    osty_rt_crypto_hmac_sha512_digest(key, key_len, message, message_len, digest);
+    out = osty_rt_bytes_dup_site(digest, sizeof(digest), "runtime.crypto.hmac_sha512");
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    return out;
+}
+
+void *osty_rt_crypto_random_bytes(int64_t n) {
+    size_t len;
+    osty_rt_bytes *out;
+
+    osty_rt_crypto_require_selftest();
+    if (n < 0) {
+        osty_rt_abort("runtime.crypto.random_bytes: negative length");
+    }
+    len = (size_t)n;
+    out = osty_rt_crypto_alloc_bytes(len, len == 0 ? "runtime.crypto.random_bytes.empty" : "runtime.crypto.random_bytes");
+    if (len != 0) {
+        osty_rt_crypto_fill_random(out->data, len);
+    }
+    return out;
+}
+
+bool osty_rt_crypto_constant_time_eq(void *raw_a, void *raw_b) {
+    const unsigned char *a;
+    const unsigned char *b;
+    size_t a_len;
+    size_t b_len;
+    size_t max_len;
+    size_t i;
+    size_t diff;
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_bytes_view(raw_a, &a, &a_len, "runtime.crypto.constant_time_eq: invalid left bytes");
+    osty_rt_crypto_bytes_view(raw_b, &b, &b_len, "runtime.crypto.constant_time_eq: invalid right bytes");
+    max_len = a_len > b_len ? a_len : b_len;
+    diff = a_len ^ b_len;
+    for (i = 0; i < max_len; i++) {
+        unsigned char av = i < a_len ? a[i] : 0U;
+        unsigned char bv = i < b_len ? b[i] : 0U;
+        diff |= (size_t)(av ^ bv);
+    }
+    return diff == 0;
+}
+
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
 void *osty_gc_alloc_pinned_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_pinned_v1"));
 void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
@@ -11413,6 +12967,20 @@ static OSTY_HOT_INLINE void osty_gc_dirty_old_push(osty_gc_header *header) {
     osty_gc_dirty_old_headers[osty_gc_dirty_old_count++] = header;
 }
 
+/* Phase F barrier helper: flip `card_dirty` 0→1 once per major cycle
+ * and push the owner onto the dirty list. The bit doubles as the
+ * membership flag, so subsequent stores from the same owner short-
+ * circuit on the `if (!card_dirty)` test without re-pushing. Inlined
+ * at every call site so the hot path stays branch-free post-codegen. */
+static OSTY_HOT_INLINE void osty_gc_card_dirty_set(
+    osty_gc_header *owner_header) {
+    if (!owner_header->card_dirty) {
+        owner_header->card_dirty = 1;
+        osty_gc_dirty_old_push(owner_header);
+        osty_gc_cards_dirtied_total += 1;
+    }
+}
+
 static bool osty_gc_remembered_edges_contains(void *owner, void *value) {
     int64_t i;
     for (i = 0; i < osty_gc_remembered_edge_count; i++) {
@@ -11468,12 +13036,28 @@ void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) {
      * end, even if the mutator rewrites the slot mid-cycle. Outside
      * MARK_INCREMENTAL the barrier is a no-op (STW cycles don't need
      * SATB). */
-    if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL &&
-        old_header->color == OSTY_GC_COLOR_WHITE) {
-        old_header->color = OSTY_GC_COLOR_GREY;
-        old_header->marked = true;
-        osty_gc_mark_stack_push(old_header);
-        osty_gc_satb_barrier_greyed_total += 1;
+    if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL) {
+        /* Phase 0g: same WHITE→GREY CAS as `mark_header`. The barrier
+         * runs under `osty_gc_lock`, so today it can't lose the race
+         * to a concurrent tracer — but once the lock drops around
+         * `dispatch_trace` (Phase 0h) two paths grey the same header:
+         * SATB on a slot overwrite, and the tracer that just popped
+         * this header off the mark stack. CAS keeps either path
+         * idempotent and ensures exactly one push per WHITE→GREY
+         * transition. */
+        uint8_t expected = OSTY_GC_COLOR_WHITE;
+        osty_gc_mark_cas_attempts_total += 1;
+        if (__atomic_compare_exchange_n(&old_header->color, &expected,
+                                        OSTY_GC_COLOR_GREY,
+                                        false /* strong */,
+                                        __ATOMIC_ACQ_REL,
+                                        __ATOMIC_ACQUIRE)) {
+            __atomic_store_n(&old_header->marked, true, __ATOMIC_RELAXED);
+            osty_gc_mark_stack_push(old_header);
+            osty_gc_satb_barrier_greyed_total += 1;
+        } else {
+            osty_gc_mark_cas_failures_total += 1;
+        }
     }
     owner_header = osty_gc_find_header_or_forwarded(owner);
     if (owner_header != NULL && osty_gc_header_is_pinned(owner_header)) {
@@ -11549,20 +13133,51 @@ void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) {
             !osty_gc_header_is_pinned(owner_header)) {
             return;
         }
+        if (osty_gc_card_marking_now()) {
+            /* Cards-on young-arena fast path. Most cross-gen edges
+             * target a value in the young arena (the headerful YOUNG
+             * route only handles humongous allocations); the same 4-
+             * compare range check that owner-side already uses confirms
+             * managed + YOUNG without a hash probe. Skipping
+             * `forward_payload` + `find_header` here lets the cards
+             * barrier collapse to "range-check value, set bit, push"
+             * for every Map.insert / List.push into a long-lived
+             * collection — exactly the pattern the lru-sim and
+             * dedup-stress wins ride. */
+            if (osty_gc_arena_is_young_page(value)) {
+                osty_gc_post_write_managed_count += 1;
+                osty_gc_card_dirty_set(owner_header);
+                if (osty_gc_header_is_pinned(owner_header)) {
+                    osty_gc_collection_requested = true;
+                }
+                return;
+            }
+            /* Slow fallback: humongous YOUNG, OLD, or unmanaged value.
+             * Filter OLD→OLD eagerly — the legacy edge log relied on
+             * `compact_after_minor` to drop them post-cycle, but the
+             * dirty list has no equivalent compaction so the only way
+             * to keep the next minor focused on real cross-gen work is
+             * to never insert OLD→OLD entries. */
+            value = osty_gc_forward_payload(value);
+            osty_gc_header *value_header = osty_gc_find_header(value);
+            if (value_header == NULL) {
+                return;
+            }
+            osty_gc_post_write_managed_count += 1;
+            if (value_header->generation == OSTY_GC_GEN_YOUNG) {
+                osty_gc_card_dirty_set(owner_header);
+            }
+            if (osty_gc_header_is_pinned(owner_header)) {
+                osty_gc_collection_requested = true;
+            }
+            return;
+        }
         value = osty_gc_forward_payload(value);
         if (osty_gc_find_header(value) == NULL) {
             return;
         }
         osty_gc_post_write_managed_count += 1;
-        if (osty_gc_card_marking_now()) {
-            if (!owner_header->card_dirty) {
-                owner_header->card_dirty = 1;
-                osty_gc_dirty_old_push(owner_header);
-                osty_gc_cards_dirtied_total += 1;
-            }
-        } else {
-            osty_gc_remembered_edges_append(owner_header->payload, value);
-        }
+        osty_gc_remembered_edges_append(owner_header->payload, value);
         if (osty_gc_header_is_pinned(owner_header)) {
             osty_gc_collection_requested = true;
         }
@@ -11582,21 +13197,41 @@ locked_path:
         osty_gc_release();
         return;
     }
+    if (osty_gc_card_marking_now()) {
+        if (osty_gc_arena_is_young_page(value)) {
+            osty_gc_post_write_managed_count += 1;
+            osty_gc_card_dirty_set(owner_header);
+            if (osty_gc_header_is_pinned(owner_header)) {
+                osty_gc_collection_requested = true;
+            }
+            osty_gc_release();
+            return;
+        }
+        value = osty_gc_forward_payload(value);
+        {
+            osty_gc_header *value_header = osty_gc_find_header(value);
+            if (value_header == NULL) {
+                osty_gc_release();
+                return;
+            }
+            osty_gc_post_write_managed_count += 1;
+            if (value_header->generation == OSTY_GC_GEN_YOUNG) {
+                osty_gc_card_dirty_set(owner_header);
+            }
+        }
+        if (osty_gc_header_is_pinned(owner_header)) {
+            osty_gc_collection_requested = true;
+        }
+        osty_gc_release();
+        return;
+    }
     value = osty_gc_forward_payload(value);
     if (osty_gc_find_header(value) == NULL) {
         osty_gc_release();
         return;
     }
     osty_gc_post_write_managed_count += 1;
-    if (osty_gc_card_marking_now()) {
-        if (!owner_header->card_dirty) {
-            owner_header->card_dirty = 1;
-            osty_gc_dirty_old_push(owner_header);
-            osty_gc_cards_dirtied_total += 1;
-        }
-    } else {
-        osty_gc_remembered_edges_append(owner_header->payload, value);
-    }
+    osty_gc_remembered_edges_append(owner_header->payload, value);
     if (osty_gc_header_is_pinned(owner_header)) {
         osty_gc_collection_requested = true;
     }
@@ -12244,6 +13879,37 @@ int64_t osty_gc_debug_index_pregrow_total(void) {
 
 int64_t osty_gc_debug_index_grow_deferred_total(void) {
     return osty_gc_index_grow_deferred_total;
+}
+
+/* Phase 0g atomic-color CAS counters. `attempts` increments on
+ * every WHITE→GREY transition site (mark_header + SATB pre_write),
+ * `failures` only when another thread won the race. With the
+ * trace lock still in place (Phase 0g) failures stay at 0; once
+ * Phase 0h drops the lock around dispatch_trace, contention shows
+ * up here and the ratio (failures/attempts) becomes the lock-free
+ * trace overhead signal. */
+int64_t osty_gc_debug_mark_cas_attempts_total(void) {
+    return osty_gc_mark_cas_attempts_total;
+}
+
+int64_t osty_gc_debug_mark_cas_failures_total(void) {
+    return osty_gc_mark_cas_failures_total;
+}
+
+/* Phase 0h trace-dispatch counters. `lockfree_trace_total` is the
+ * count of `dispatch_trace` calls that ran with `osty_gc_lock`
+ * released (closure_env, generic enum); `locked_trace_total` is the
+ * count that kept the lock (list/map/set/channel). The ratio is the
+ * fraction of trace work newly able to run concurrently with
+ * mutator activity. */
+int64_t osty_gc_debug_lockfree_trace_total(void) {
+    return __atomic_load_n(&osty_gc_lockfree_trace_total,
+                           __ATOMIC_ACQUIRE);
+}
+
+int64_t osty_gc_debug_locked_trace_total(void) {
+    return __atomic_load_n(&osty_gc_locked_trace_total,
+                           __ATOMIC_ACQUIRE);
 }
 
 int64_t osty_gc_debug_color_of(void *payload) {

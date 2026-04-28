@@ -4203,6 +4203,8 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 			return IntrinsicListReverse
 		case "reversed":
 			return IntrinsicListReversed
+		case "toString":
+			return IntrinsicListToString
 		}
 	case "Map":
 		switch name {
@@ -4226,6 +4228,8 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 			return IntrinsicMapValues
 		case "remove":
 			return IntrinsicMapRemove
+		case "toString":
+			return IntrinsicMapToString
 		}
 	case "Set":
 		switch name {
@@ -4239,6 +4243,8 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 			return IntrinsicSetToList
 		case "remove":
 			return IntrinsicSetRemove
+		case "toString":
+			return IntrinsicSetToString
 		}
 	case "Option", "Maybe":
 		switch name {

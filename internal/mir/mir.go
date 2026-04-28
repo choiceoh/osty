@@ -493,6 +493,11 @@ const (
 	// IntrinsicListReversed returns a freshly allocated copy of the list
 	// with elements in reverse order. Args: [list]. Dest is List<T>.
 	IntrinsicListReversed
+	// IntrinsicListToString returns a `[a, b, c]`-shaped String. Args:
+	// [list]. Dest is String. Backend dispatches to one of
+	// `osty_rt_list_to_string_{i64,f64,i1,string,char,byte}` based on
+	// the receiver's element ABI lane.
+	IntrinsicListToString
 
 	// ---- stdlib collections: Map<K, V> ----
 
@@ -522,6 +527,11 @@ const (
 	// registered (i64 / string); the HIR pattern matcher that emits
 	// this rejects other keys and falls back to the unfused lowering.
 	IntrinsicMapKeysSorted
+	// IntrinsicMapToString returns a `{k1: v1, k2: v2}`-shaped String.
+	// Args: [map]. Dest is String. The runtime entry inspects the
+	// Map's stored `key_kind` / `value_kind` to pick per-element
+	// formatters; the lowering side just emits the call.
+	IntrinsicMapToString
 
 	// ---- stdlib collections: Set<T> ----
 
@@ -538,6 +548,13 @@ const (
 	IntrinsicSetToList
 	// IntrinsicSetRemove deletes an element. Args: [set, elem]. Dest nil.
 	IntrinsicSetRemove
+	// IntrinsicSetToString returns a `{a, b, c}`-shaped String. Args:
+	// [set]. Dest is String. The runtime entry inspects the Set's
+	// stored `elem_kind` to pick a per-element formatter; the
+	// lowering side just emits the call. Braces match the
+	// set-equivalent surface (Map uses braces too); composite element
+	// types abort inside the runtime today.
+	IntrinsicSetToString
 
 	// ---- stdlib: String ----
 
@@ -1621,6 +1638,8 @@ func (k IntrinsicKind) String() string {
 		return "map_remove"
 	case IntrinsicMapKeysSorted:
 		return "map_keys_sorted"
+	case IntrinsicMapToString:
+		return "map_to_string"
 	case IntrinsicSetNew:
 		return "set_new"
 	case IntrinsicSetInsert:
@@ -1633,6 +1652,8 @@ func (k IntrinsicKind) String() string {
 		return "set_to_list"
 	case IntrinsicSetRemove:
 		return "set_remove"
+	case IntrinsicSetToString:
+		return "set_to_string"
 	case IntrinsicStringLen:
 		return "string_len"
 	case IntrinsicStringIsEmpty:
