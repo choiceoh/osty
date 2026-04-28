@@ -159,6 +159,10 @@ func (r *FrontendRun) Comments() []token.Comment {
 // arena via astLowerPublicFile. Subsequent calls return the cached result
 // without touching astbridge again, so each FrontendRun contributes at most one
 // lowering to AstbridgeLowerCount regardless of how many callers poke it.
+//
+// Deprecated: production front-end paths should keep FrontendRun / arena /
+// structured results as the source of truth. Use LowerPublicFileFromRun only at
+// explicit public-AST compatibility boundaries.
 func (r *FrontendRun) File() *ast.File {
 	if r.file != nil {
 		return r.file

@@ -34,12 +34,14 @@ func Parse(src []byte) (*ast.File, []error) {
 // ParseDetailed lexes, parses, and canonicalizes src, returning the public
 // semantic AST plus parser-level compatibility provenance. Compatibility
 // helper syntax is canonicalized in the parser core; this facade only records
-// source alias provenance that remains useful at legacy boundaries.
+// source alias provenance that remains useful at legacy boundaries. The public
+// AST is produced through the explicit compatibility adapter so ParseDetailed
+// does not exercise FrontendRun.File's legacy astbridge entry point.
 func ParseDetailed(src []byte) Result {
 	pipeline := newParsePipeline(src)
 	run := pipeline.parseRun()
 	pipeline.applySourceCompat(run)
-	file, diags := run.File(), run.Diagnostics()
+	file, diags := selfhost.LowerPublicFileFromRun(run), run.Diagnostics()
 	return pipeline.result(file, diags)
 }
 
@@ -52,7 +54,7 @@ func ParseDetailed(src []byte) Result {
 func ParseCanonical(src []byte) (*ast.File, []*diag.Diagnostic) {
 	pipeline := newParsePipeline(src)
 	run := pipeline.parseRun()
-	return run.File(), run.Diagnostics()
+	return selfhost.LowerPublicFileFromRun(run), run.Diagnostics()
 }
 
 // ParseDiagnostics lexes and parses src, returning the AST and rich
