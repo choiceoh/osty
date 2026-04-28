@@ -1,4 +1,4 @@
-// std.result — Result helpers for the Osty standard library.
+// std.result — Result helpers and nested-shape adapters.
 //
 // Canonical definition site of `Result<T, E>`, `Ok`, and `Err`.
 // The prelude auto-imports these so user code can write `Ok(x)` /
@@ -48,6 +48,13 @@ pub enum Result<T, E> {
         match self {
             Ok(_) -> false,
             Err(error) -> error == err,
+        }
+    }
+
+    pub fn count(self) -> Int {
+        match self {
+            Ok(_) -> 1,
+            Err(_) -> 0,
         }
     }
 
@@ -155,6 +162,13 @@ pub enum Result<T, E> {
         }
     }
 
+    pub fn forEach(self, f: fn(T) -> ()) {
+        match self {
+            Ok(value) -> f(value),
+            Err(_) -> {},
+        }
+    }
+
     pub fn map<U>(self, f: fn(T) -> U) -> Result<U, E> {
         match self {
             Ok(value) -> Ok(f(value)),
@@ -183,11 +197,158 @@ pub enum Result<T, E> {
         }
     }
 
+    pub fn zip<U>(self, other: Result<U, E>) -> Result<(T, U), E> {
+        match self {
+            Ok(left) -> match other {
+                Ok(right) -> Ok((left, right)),
+                Err(error) -> Err(error),
+            },
+            Err(error) -> Err(error),
+        }
+    }
+
+    pub fn zipWith<U, R>(self, other: Result<U, E>, f: fn(T, U) -> R) -> Result<R, E> {
+        match self {
+            Ok(left) -> match other {
+                Ok(right) -> Ok(f(left, right)),
+                Err(error) -> Err(error),
+            },
+            Err(error) -> Err(error),
+        }
+    }
+
+    pub fn toList(self) -> List<T> {
+        match self {
+            Ok(value) -> [value],
+            Err(_) -> [],
+        }
+    }
+
     pub fn toString(self) -> String {
         match self {
             Ok(value) -> "Ok({value})",
             Err(error) -> "Err({error})",
         }
+    }
+}
+
+pub fn flatten<T, E>(value: Result<Result<T, E>, E>) -> Result<T, E> {
+    match value {
+        Ok(inner) -> inner,
+        Err(err) -> Err(err),
+    }
+}
+
+pub fn transpose<T, E>(value: Result<T?, E>) -> Result<T, E>? {
+    match value {
+        Ok(Some(item)) -> Some(Ok(item)),
+        Ok(None) -> None,
+        Err(err) -> Some(Err(err)),
+    }
+}
+
+pub fn values<T, E>(items: List<Result<T, E>>) -> List<T> {
+    let mut out: List<T> = []
+    for item in items {
+        match item {
+            Ok(value) -> out.push(value),
+            Err(_) -> {},
+        }
+    }
+    out
+}
+
+pub fn errors<T, E>(items: List<Result<T, E>>) -> List<E> {
+    let mut out: List<E> = []
+    for item in items {
+        match item {
+            Ok(_) -> {},
+            Err(err) -> out.push(err),
+        }
+    }
+    out
+}
+
+pub fn partition<T, E>(items: List<Result<T, E>>) -> (List<T>, List<E>) {
+    let mut oks: List<T> = []
+    let mut errs: List<E> = []
+    for item in items {
+        match item {
+            Ok(value) -> oks.push(value),
+            Err(err) -> errs.push(err),
+        }
+    }
+    (oks, errs)
+}
+
+pub fn all<T, E>(items: List<Result<T, E>>) -> Result<List<T>, E> {
+    let mut out: List<T> = []
+    for item in items {
+        match item {
+            Ok(value) -> out.push(value),
+            Err(err) -> return Err(err),
+        }
+    }
+    Ok(out)
+}
+
+pub fn traverse<T, U, E>(items: List<T>, f: fn(T) -> Result<U, E>) -> Result<List<U>, E> {
+    let mut out: List<U> = []
+    for item in items {
+        match f(item) {
+            Ok(value) -> out.push(value),
+            Err(err) -> return Err(err),
+        }
+    }
+    Ok(out)
+}
+
+pub fn map2<A, B, E, R>(left: Result<A, E>, right: Result<B, E>, f: fn(A, B) -> R) -> Result<R, E> {
+    left.zipWith(right, f)
+}
+
+pub fn map3<A, B, C, E, R>(a: Result<A, E>, b: Result<B, E>, c: Result<C, E>, f: fn(A, B, C) -> R) -> Result<R, E> {
+    match a {
+        Ok(av) -> match b {
+            Ok(bv) -> match c {
+                Ok(cv) -> Ok(f(av, bv, cv)),
+                Err(error) -> Err(error),
+            },
+            Err(error) -> Err(error),
+        },
+        Err(error) -> Err(error),
+    }
+}
+
+pub fn allErrors<T, E>(items: List<Result<T, E>>) -> Result<List<T>, List<E>> {
+    let mut values: List<T> = []
+    let mut errs: List<E> = []
+    for item in items {
+        match item {
+            Ok(value) -> values.push(value),
+            Err(err) -> errs.push(err),
+        }
+    }
+    if errs.isEmpty() {
+        Ok(values)
+    } else {
+        Err(errs)
+    }
+}
+
+pub fn traverseErrors<T, U, E>(items: List<T>, f: fn(T) -> Result<U, E>) -> Result<List<U>, List<E>> {
+    let mut values: List<U> = []
+    let mut errs: List<E> = []
+    for item in items {
+        match f(item) {
+            Ok(value) -> values.push(value),
+            Err(err) -> errs.push(err),
+        }
+    }
+    if errs.isEmpty() {
+        Ok(values)
+    } else {
+        Err(errs)
     }
 }
 

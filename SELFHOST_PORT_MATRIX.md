@@ -267,10 +267,12 @@ regression 없음을 확인하고 이 문서의 ⏳ → ✅ 전환. **2026-04-26
 embedded adapter / 아직 포팅되지 않은 consumer shape 를 담당한다:
 
 - **Resolver**
-  - `internal/resolve/workspace.go::LoadPackage` → Go-native resolver helper
-    (CLI check/typecheck/resolve happy path 아님; 삭제 대상)
+  - `internal/resolve/workspace.go::LoadPackage` → arena-first alias over
+    `LoadPackageNative` (Go parser/resolver-specific load path retired)
   - `internal/resolve/workspace_native.go::LoadPackageNative` → `selfhost.LowerPublicFileFromRun`
   - `internal/resolve/native_adapter.go` → `selfhost.ResolvePackageStructured` (Osty `resolve.osty` 구동)
+  - `internal/resolve/workspace.go::ResolveAll` → per-package native resolve bridge
+    + cycle-diag stitching (Go 2-pass resolve walk retired)
 - **Checker** (`toolchain/README.md`에 문서화됨)
   - `internal/check/host_boundary.go::nativeCheckerExec` → 외부 `osty-native-checker`
   - `embeddedNativeChecker` → `selfhost.CheckPackageStructured` (Osty `check.osty` + `elab.osty` 구동)
@@ -316,8 +318,8 @@ embedded adapter / 아직 포팅되지 않은 consumer shape 를 담당한다:
 | Closure scope isolation | `internal/resolve/resolve.go:900` | `toolchain/resolve.osty:1124` | E0605, E0606 | ported | inLoop 리셋 |
 | **Partial struct/enum merge** | `internal/resolve/merge.go:47` | `toolchain/resolve.osty::srHandlePartialType` | E0501 (R19 variants) | **partial** | 2026-04-23 Osty 측 `SelfPartialDecl` + R19 검증기 (pub/generics/fields/method dup) 착륙. 현재 single-file 범위만; cross-file stitching 은 workspace pass 모델 생기면 확장 |
 | **Workspace cycle detection** | `internal/resolve/workspace.go:468` | `toolchain/resolve.osty::selfDetectImportCycles` | E0506 | **ported** | 2026-04-23 DFS (tri-state colour) Osty 이식, Go 쪽은 그래프 prep + token.Pos 복원 + diag 렌더링 glue 만 남음 |
-| **Workspace 2-pass (declare/body)** | `internal/resolve/workspace.go:356` | — | — | n/a | 호스트 경계 — `internal/selfhost/workspace_driver.go` 쪽에서 담당 |
-| **#[cfg] 사전 필터** | `internal/resolve/cfg.go:69` | `toolchain/resolve.osty::srCfgDeclPasses` | E0405, E0739 | **partial** | 2026-04-22 native 경로 Osty 구동 (srCfgDeclPasses + selfResolveAstFileWithCfg). Go `cfg.go` 는 레거시 `ResolveAll` 에 남아있음 — 레거시 retire 시 제거 |
+| **Workspace package dispatch** | `internal/resolve/workspace.go::ResolveAll` | `toolchain/resolve.osty` (per-package via `ResolvePackageStructured`) | — | **ported** | 2026-04-28 workspace가 Go declare/body pass 대신 package별 native resolve bridge + cycle stitching 으로 전환 |
+| **#[cfg] 사전 필터** | `internal/resolve/native_adapter.go:nativeCfgEnvFor` | `toolchain/resolve.osty::srCfgDeclPasses` | E0405, E0739 | **ported** | 2026-04-28 workspace/package 모두 selfhost cfg 필터 경로만 사용. `cfg.go` 는 AST-only compatibility fallback 전용 잔여 |
 | **Cross-package member lookup (E0507/E0508)** | `internal/resolve/resolve.go:420::lookupPackageMember` | `toolchain/resolve.osty::selfLookupPackageMember` + `SelfMemberLookupResult` | E0507, E0508 | **ported** | 2026-04-24 Osty 가 wording (message/primary/note/hint) 단일 소스. Go `lookupPackageMember` 는 Scope lookup 만 수행 후 `selfhost.LookupPackageMember(pkgName, member, typePos, found, public)` 로 분기. status 0/1/2 → OK/Private(E0507)/Missing(E0508). `pub use` 체인 traversal (E0553) 은 별도 |
 | **`pub use` re-export visibility (E0553)** | — | — | E0553 | **go-only (silent)** | `resolve.go:368-390` pub 재노출만 기록; 소스가 private 인데 re-export 하는 케이스 진단 없음. Phase 2.2+ follow-up — workspace pub-symbol graph 필요 |
 | **Runtime privilege gate (E0770)** | `internal/check/privilege.go` (47 LOC 잔존, `isPrivilegedPackage[Path]` helper) | `toolchain/check_gates.osty::runCheckGates` | E0770 | **ported** | 2026-04-23 consolidation. 상세는 Checker 매트릭스 "Privilege system" row 참조 |
@@ -327,7 +329,7 @@ embedded adapter / 아직 포팅되지 않은 consumer shape 를 담당한다:
 
 ### Resolver 포팅 우선순위
 
-1. ~~**`#[cfg]` 사전 필터** (E0405)~~ — **착륙 2026-04-22**. `toolchain/resolve.osty` 의 `srCfgDeclPasses` + `selfResolveAstFileWithCfg` + `srCheckCfgArgs` 로 이식, `PackageResolveInput.Cfg` / `ResolveSourceStructuredWithCfg` 로 bridge. native 경로는 `workspace.cfgEnv` / `DefaultCfgEnv()` 자동 상속. 레거시 `internal/resolve/cfg.go` 는 `ResolveAll` 경로가 살아있는 동안 유지.
+1. ~~**`#[cfg]` 사전 필터** (E0405)~~ — **착륙 2026-04-22**, **workspace 전환 2026-04-28**. `toolchain/resolve.osty` 의 `srCfgDeclPasses` + `selfResolveAstFileWithCfg` + `srCheckCfgArgs` 로 이식, `PackageResolveInput.Cfg` / `ResolveSourceStructuredWithCfg` 로 bridge. native 경로는 `workspace.cfgEnv` / `DefaultCfgEnv()` 자동 상속. `internal/resolve/cfg.go` 는 AST-only compatibility fallback 에만 남음.
 2. ~~**Partial struct/enum merge** (E0509/E0501)~~ — **착륙 2026-04-23**. `SelfPartialDecl` 트래커 + `srHandlePartialType`, R19 4 invariants (pub / generics / fields-in-one / method name uniqueness) 검증. 현재는 single-file (native_adapter 가 `ResolvePackageStructured` 로 다중 파일을 synthetic 단일 네임스페이스로 합쳐 통과). True cross-file stitching 은 workspace 모델 등장 이후.
 3. ~~**Workspace cycle detection** (E0506)~~ — **착륙 2026-04-23**. `selfDetectImportCycles` + `SelfWorkspaceUses` / `SelfPackageUses` / `SelfUseEdge` / `SelfCycleDiag` (toolchain/resolve.osty). `selfhost.DetectImportCycles` Go bridge. `internal/resolve/workspace.go::detectCycles` 는 그래프 준비 + offset 기반 roundtrip 후 `token.Pos` 복원 + 진단 렌더링 glue 만 남김. 알고리즘 (DFS 3-상태 색칠) 은 완전히 Osty 쪽.
 4. ~~**Cross-package member lookup (E0507/E0508)**~~ — **착륙 2026-04-24**. `selfLookupPackageMember` + `SelfMemberLookupResult` 가 wording 단일 소스. Go `lookupPackageMember` 는 Scope lookup 후 bridge 로 분기. `pub use` 재노출 체인 (E0553) 은 workspace pub-symbol graph 가 별도로 필요해 다음 우선순위로 분리.

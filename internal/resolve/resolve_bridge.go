@@ -23,6 +23,16 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 	}
 
 	pkgScope := NewScope(prelude, "package:"+pkg.Name)
+	diags := nativeParseDiagnostics(pkg)
+	for _, pf := range pkg.Files {
+		if pf.File == nil || len(pf.Source) == 0 && len(pf.CanonicalSource) == 0 {
+			continue
+		}
+		fi := nativeResolveFileInfoFor(files, pf.Path)
+		declIdx := buildDeclIndex(pf.File)
+		defineTopLevelSymbols(pkgScope, result.Symbols, fi, declIdx)
+	}
+
 	for _, pf := range pkg.Files {
 		if pf.File == nil || len(pf.Source) == 0 && len(pf.CanonicalSource) == 0 {
 			continue
@@ -31,23 +41,138 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 		identIdx := buildIdentIndex(pf.File)
 		typeIdx := buildNamedTypeIndex(pf.File)
 		declIdx := buildDeclIndex(pf.File)
-
-		defineTopLevelSymbols(pkgScope, result.Symbols, fi, declIdx)
+		fileScope := NewScope(pkgScope, "file:"+pf.Path)
+		nativeDeclareUses(fileScope, pkgScope, pkg, pf, &diags)
 
 		refsByID, refIdents := bridgeRefs(result.Refs, fi, identIdx, declIdx)
 		pf.RefsByID = refsByID
 		pf.RefIdents = refIdents
 
-		typeRefsByID, typeRefIdents := bridgeTypeRefs(result.TypeRefs, fi, typeIdx, pkgScope)
+		typeRefsByID, typeRefIdents := bridgeTypeRefs(result.TypeRefs, fi, typeIdx, fileScope)
 		pf.TypeRefsByID = typeRefsByID
 		pf.TypeRefIdents = typeRefIdents
 
-		pf.FileScope = NewScope(pkgScope, "file:"+pf.Path)
+		pf.FileScope = fileScope
 	}
 	pkg.PkgScope = pkgScope
 
-	diags := nativeResolveDiagnosticsFromArtifacts(result, files)
+	diags = append(diags, nativeResolveDiagnosticsFromArtifacts(result, files)...)
 	return &PackageResult{PackageScope: pkgScope, Diags: diags}
+}
+
+func nativeParseDiagnostics(pkg *Package) []*diag.Diagnostic {
+	if pkg == nil {
+		return nil
+	}
+	var out []*diag.Diagnostic
+	for _, pf := range pkg.Files {
+		if pf == nil {
+			continue
+		}
+		for _, d := range pf.ParseDiags {
+			if d == nil {
+				continue
+			}
+			clone := *d
+			if clone.File == "" {
+				clone.File = pf.Path
+			}
+			out = append(out, &clone)
+		}
+	}
+	return out
+}
+
+func nativeDeclareUses(fileScope, pkgScope *Scope, pkg *Package, pf *PackageFile, diags *[]*diag.Diagnostic) {
+	if pf == nil || pf.File == nil || fileScope == nil {
+		return
+	}
+	for _, u := range pf.File.Uses {
+		name := nativeUseAlias(u)
+		if name == "" {
+			continue
+		}
+		sym := &Symbol{
+			Name: name,
+			Kind: SymPackage,
+			Pos:  u.PosV,
+			Decl: u,
+			Pub:  u.IsPub,
+		}
+		if !u.IsFFI() && pkg != nil && pkg.workspace != nil {
+			targetPath := UseKey(u)
+			target, d := pkg.workspace.ResolveUseTarget(targetPath, u.PosV)
+			if d != nil && diags != nil {
+				*diags = append(*diags, d)
+			}
+			if target != nil && !target.isCycleMarker {
+				sym.Package = target
+			}
+		}
+		if prev, ok := fileScope.Define(sym); !ok {
+			if diags != nil {
+				*diags = append(*diags, duplicateSymbolDiag(u.PosV, name, prev, pf.Path))
+			}
+			continue
+		}
+		if u.IsPub && pkgScope != nil && pkgScope != fileScope {
+			pkgSym := &Symbol{
+				Name:    sym.Name,
+				Kind:    sym.Kind,
+				Pos:     sym.Pos,
+				Decl:    sym.Decl,
+				Pub:     sym.Pub,
+				Package: sym.Package,
+			}
+			if _, ok := pkgScope.Define(pkgSym); !ok {
+				// Re-export collisions remain intentionally silent until the
+				// workspace-level E0553 pass lands.
+			}
+		}
+	}
+}
+
+func nativeUseAlias(u *ast.UseDecl) string {
+	if u == nil {
+		return ""
+	}
+	if u.Alias != "" {
+		return u.Alias
+	}
+	if u.IsFFI() {
+		name := lastSeg(u.FFIPath(), '/')
+		return lastSeg(name, '.')
+	}
+	if u.RawPath != "" && lastSeg(u.RawPath, '/') != u.RawPath {
+		if name := lastSeg(u.RawPath, '/'); name != "" {
+			return name
+		}
+	}
+	if len(u.Path) == 0 {
+		return ""
+	}
+	return lastSeg(u.Path[len(u.Path)-1], '/')
+}
+
+func duplicateSymbolDiag(pos token.Pos, name string, prev *Symbol, file string) *diag.Diagnostic {
+	kind := SymUnknown
+	if prev != nil {
+		kind = prev.Kind
+	}
+	d := diag.New(diag.Error, fmt.Sprintf("`%s` is already defined as a %s", name, kind)).
+		Code(diag.CodeDuplicateDecl).
+		PrimaryPos(pos, "duplicate declaration here")
+	if prev != nil {
+		if prev.Pos.Line > 0 {
+			d.Secondary(diag.Span{Start: prev.Pos, End: prev.Pos}, "previous declaration here")
+		}
+	}
+	d.Hint("rename one of the declarations or remove the duplicate")
+	out := d.Build()
+	if out.File == "" {
+		out.File = file
+	}
+	return out
 }
 
 // --- Offset helpers ---

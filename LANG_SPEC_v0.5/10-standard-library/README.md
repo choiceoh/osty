@@ -33,3 +33,7 @@ lowering remains implementation backlog.
 - [§10.18 CSV (`std.csv`)](./18-csv.md)
 - [§10.19 Compression (`std.compress`)](./19-compression.md)
 - [§10.20 Time Extensions (`std.time`)](./20-time-extensions.md)
+- [§10.21 Bytes (`std.bytes`)](./21-bytes.md)
+- [§10.22 Formatting (`std.fmt`)](./22-fmt.md)
+- [§10.23 Network (`std.net`)](./23-net.md)
+- [§10.24 HTTP (`std.http`)](./24-http.md)

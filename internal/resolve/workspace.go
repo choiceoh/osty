@@ -176,104 +176,11 @@ func NewWorkspace(root string) (*Workspace, error) {
 
 // LoadPackage loads the package identified by dotPath into the
 // workspace. If the package has already been loaded it is returned from
-// cache. The walk recursively loads any packages referenced by `use`
-// declarations so a single top-level call assembles the whole import
-// closure.
-//
-// Cycles are detected via the `loading` set and produce a
-// CodeCyclicImport diagnostic attached to the offending `use` site.
-// The cyclic package is still returned (so the caller can keep resolving
-// other parts of the tree), but its diagnostics list will contain the
-// cycle notice.
+// cache. The active implementation is arena-first and delegates to
+// LoadPackageArenaFirst so the workspace no longer has a Go-parser /
+// Go-resolver-specific loading path.
 func (w *Workspace) LoadPackage(dotPath string) (*Package, error) {
-	if pkg, ok := w.Packages[dotPath]; ok {
-		return pkg, nil
-	}
-	if w.loading[dotPath] {
-		// Caller is the cycle-detection entry; return a marker package
-		// with a cycle-note diagnostic so downstream reporting lines up.
-		return cycleMarker(dotPath), nil
-	}
-
-	// URL-style keys never live under w.Root — they route straight
-	// through the DepProvider to the vendor directory. No `stat` on
-	// a bogus path, no std-prefix branch.
-	if isURLStyle(dotPath) {
-		return w.loadExternalDep(dotPath)
-	}
-
-	dir := w.dirFor(dotPath)
-	if _, err := os.Stat(dir); err != nil {
-		if os.IsNotExist(err) && strings.HasPrefix(dotPath, StdPrefix) {
-			// Prefer a resolver-ready Package from the Stdlib provider
-			// when one is attached. The provider owns the symbol table
-			// for the module, so member access (`io.print`) validates
-			// against real `Pub` symbols rather than falling through to
-			// the opaque stub.
-			if w.Stdlib != nil {
-				if pkg := w.Stdlib.LookupPackage(dotPath); pkg != nil {
-					w.Packages[dotPath] = pkg
-					return pkg, nil
-				}
-			}
-			if w.stdlibStub {
-				// Opaque stub fallback: the package exists for resolver
-				// purposes, but there are no sources to parse. Member
-				// access is permissive so `std.fs.readFile` compiles
-				// cleanly until the stdlib provider is wired up.
-				stub := stdlibStub(dotPath)
-				w.Packages[dotPath] = stub
-				return stub, nil
-			}
-		}
-		// Bare-alias fallback: single-segment name that isn't a sibling
-		// package. Consult the DepProvider in case the package manager
-		// has vendored a matching dep.
-		if os.IsNotExist(err) && w.Deps != nil && !strings.ContainsAny(dotPath, ".") {
-			if extDir, ok := w.Deps.LookupDep(dotPath); ok {
-				return w.loadFromExternalDir(dotPath, extDir)
-			}
-		}
-		return nil, fmt.Errorf("package %q: %w", dotPath, err)
-	}
-
-	w.loading[dotPath] = true
-	defer delete(w.loading, dotPath)
-
-	pkg, err := LoadPackageWithTransform(dir, w.SourceTransform)
-	if err != nil {
-		return nil, err
-	}
-	pkg.Name = lastDotSeg(dotPath)
-	w.Packages[dotPath] = pkg
-
-	// Recurse into every `use` target so the closure of dependencies is
-	// loaded before we run resolution on this package.
-	for _, f := range pkg.Files {
-		for _, u := range f.File.Uses {
-			if u.IsFFI() {
-				continue
-			}
-			target := UseKey(u)
-			if target == "" {
-				continue
-			}
-			if w.loading[target] {
-				// Defer the cycle diagnostic to resolver pass — it has
-				// access to the use-site position. We just stop
-				// recursing here.
-				continue
-			}
-			if _, alreadyLoaded := w.Packages[target]; alreadyLoaded {
-				continue
-			}
-			// Best-effort load; missing-package diagnostics are
-			// reported by the resolver, not here, so we swallow the
-			// error and let resolution surface it with source context.
-			_, _ = w.LoadPackage(target)
-		}
-	}
-	return pkg, nil
+	return w.LoadPackageArenaFirst(dotPath)
 }
 
 // loadExternalDep routes a URL-style use target through the
@@ -347,48 +254,24 @@ func (w *Workspace) dirFor(dotPath string) string {
 	return filepath.Join(append([]string{w.Root}, segs...)...)
 }
 
-// ResolveAll runs ResolvePackage on every loaded package, sharing one
-// prelude across the workspace. Before walking bodies it does a cycle
-// check over the import graph; every edge that would close a cycle
-// emits CodeCyclicImport against the offending `use` site.
-//
-// The function does NOT re-walk packages across workspaces; call it
-// once after all LoadPackage calls are done.
+// ResolveAll runs the selfhost resolver over every loaded package,
+// sharing one prelude across the workspace, then stitches cycle
+// diagnostics back onto the owning package result. The Go side no
+// longer performs a workspace-wide two-pass resolve walk.
 func (w *Workspace) ResolveAll() map[string]*PackageResult {
 	cycleDiags := w.detectCycles()
-
 	prelude := NewPrelude()
-
-	// v0.5 (G29) §5: `#[cfg(...)]` pre-resolve filter. Drop every
-	// declaration whose cfg guard is false before any package
-	// resolver inspects the file. Runs across every non-stub,
-	// non-pre-resolved package so cross-package symbol lookups in
-	// subsequent passes see the filtered surface only.
-	cfgEnv := w.cfgEnv
-	if cfgEnv == nil {
-		cfgEnv = DefaultCfgEnv()
-	}
-	cfgDiagsPerPkg := map[string][]*diag.Diagnostic{}
-	for path, pkg := range w.Packages {
-		if pkg.isStub {
-			continue
-		}
-		if w.isPreResolvedStdlib(path, pkg) {
-			continue
-		}
-		for _, f := range pkg.Files {
-			if ds := filterCfgDecls(f.File, cfgEnv); len(ds) > 0 {
-				cfgDiagsPerPkg[path] = append(cfgDiagsPerPkg[path], ds...)
-			}
-		}
-	}
-
-	// Per-package resolvers are needed so diagnostics stay
-	// segregated, but every one shares the same prelude. Build a
-	// resolver for each non-stub package up front.
-	resolvers := map[string]*resolver{}
 	results := map[string]*PackageResult{}
-	for path, pkg := range w.Packages {
+	paths := make([]string, 0, len(w.Packages))
+	for path := range w.Packages {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		pkg := w.Packages[path]
+		if pkg == nil {
+			continue
+		}
 		if pkg.isStub {
 			results[path] = &PackageResult{PackageScope: nil}
 			continue
@@ -398,48 +281,13 @@ func (w *Workspace) ResolveAll() map[string]*PackageResult {
 			results[path] = &PackageResult{PackageScope: pkg.PkgScope}
 			continue
 		}
-		resolvers[path] = newPkgResolver(pkg, prelude)
-	}
-	// Pass A (across workspace): populate every package's PkgScope
-	// with its top-level declarations. Cross-package member lookups in
-	// Pass B can now succeed regardless of iteration order.
-	for path, pkg := range w.Packages {
-		if pkg.isStub {
-			continue
-		}
-		if r := resolvers[path]; r != nil {
-			r.declarePass(pkg)
-		}
-	}
-	// Pass B (across workspace): walk bodies, expression references,
-	// type references. Each resolver sees every other package through
-	// their already-populated PkgScope.
-	for path, pkg := range w.Packages {
-		if pkg.isStub {
-			continue
-		}
-		r := resolvers[path]
-		if r == nil {
-			continue
-		}
-		r.bodyPass(pkg)
-		results[path] = &PackageResult{
-			PackageScope: pkg.PkgScope,
-			Diags:        r.diags,
-		}
+		results[path] = ResolvePackage(pkg, prelude)
 	}
 	// Attach cycle diagnostics to the package they were reported from.
 	// Each entry is (importerPath, diagnostic).
 	for _, cd := range cycleDiags {
 		if r, ok := results[cd.importer]; ok {
 			r.Diags = append(r.Diags, cd.diag)
-		}
-	}
-	// Surface any cfg-argument diagnostics produced by the pre-filter.
-	// These attach to the package the bad cfg lived in.
-	for path, ds := range cfgDiagsPerPkg {
-		if r, ok := results[path]; ok {
-			r.Diags = append(r.Diags, ds...)
 		}
 	}
 	return results
