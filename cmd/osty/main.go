@@ -998,8 +998,8 @@ func isTraceableSingleFileCmd(cmd string) bool {
 // resolveFile runs single-file name resolution with the cached stdlib
 // registry attached. Collapses what would otherwise be a three-line
 // incantation in every single-file subcommand.
-func resolveFile(file *ast.File) *resolve.Result {
-	return resolve.ResolveFileDefault(file, stdlib.LoadCached())
+func resolveFile(src []byte, file *ast.File) *resolve.Result {
+	return resolve.ResolveFileSourceDefault(src, file, stdlib.LoadCached())
 }
 
 // checkOpts builds the check.Opts every subcommand passes to the type

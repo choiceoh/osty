@@ -2,9 +2,10 @@
 //
 // Pure-Osty surface:
 //   - Ipv4Addr / Ipv6Addr / IpAddr  — parsing, classification, formatting
-//   - SocketAddr                    — (ip, port) pairs with text round-trips
+//   - SocketAddr / Addr             — parsed socket addrs and ergonomic host:port pairs
 //   - Ipv4Net                       — CIDR blocks (mask, network, broadcast, contains)
-//   - splitHostPort / parseSocketAddr / parseCidr
+//   - splitHostPort / parseSocketAddr / parseAddr / parseCidr
+//   - connect / connectTimeout / listen / resolve / resolveAll convenience wrappers
 //
 // Runtime-bridged surface (body-less declarations, gen supplies Go):
 //   - TcpStream / TcpListener       — TCP client and server
@@ -14,6 +15,30 @@
 
 use std.strings
 use std.error
+use c "osty_runtime" as rt {
+    fn osty_rt_net_failed() -> Bool
+    fn osty_rt_net_last_error() -> String
+    fn osty_rt_net_lookup_text(host: String) -> List<String>
+    fn osty_rt_net_lookup_addr(ip: String) -> List<String>
+    fn osty_rt_net_tcp_connect(host: String, port: Int) -> Int64
+    fn osty_rt_net_tcp_connect_timeout(host: String, port: Int, timeoutMs: Int) -> Int64
+    fn osty_rt_net_tcp_listen(host: String, port: Int) -> Int64
+    fn osty_rt_net_tcp_read(handle: Int64, maxBytes: Int) -> Bytes
+    fn osty_rt_net_tcp_read_exact(handle: Int64, n: Int) -> Bytes
+    fn osty_rt_net_tcp_write(handle: Int64, data: Bytes) -> Int
+    fn osty_rt_net_tcp_write_all(handle: Int64, data: Bytes)
+    fn osty_rt_net_tcp_flush(handle: Int64)
+    fn osty_rt_net_tcp_close(handle: Int64)
+    fn osty_rt_net_tcp_local_addr(handle: Int64) -> String
+    fn osty_rt_net_tcp_peer_addr(handle: Int64) -> String
+    fn osty_rt_net_tcp_set_read_timeout(handle: Int64, timeoutMs: Int)
+    fn osty_rt_net_tcp_set_write_timeout(handle: Int64, timeoutMs: Int)
+    fn osty_rt_net_tcp_set_nodelay(handle: Int64, on: Bool)
+    fn osty_rt_net_tcp_set_keepalive(handle: Int64, on: Bool)
+    fn osty_rt_net_tcp_accept(handle: Int64) -> Int64
+    fn osty_rt_net_tcp_listener_local_addr(handle: Int64) -> String
+    fn osty_rt_net_tcp_listener_close(handle: Int64)
+}
 
 // ── IPv4 addresses ────────────────────────────────────────────────────────────
 
@@ -85,6 +110,30 @@ pub struct Ipv4Addr {
         false
     }
 
+    pub fn isShared(self) -> Bool {
+        self.a == 100 && self.b >= 64 && self.b <= 127
+    }
+
+    pub fn isBenchmarking(self) -> Bool {
+        self.a == 198 && (self.b == 18 || self.b == 19)
+    }
+
+    pub fn isReserved(self) -> Bool {
+        if self.a == 0 {
+            return true
+        }
+        if self.a == 192 && self.b == 0 && self.c == 0 && self.d != 9 && self.d != 10 {
+            return true
+        }
+        if self.a == 192 && self.b == 88 && self.c == 99 {
+            return true
+        }
+        if self.a >= 240 && !self.isBroadcast() {
+            return true
+        }
+        false
+    }
+
     pub fn isGlobalUnicast(self) -> Bool {
         if self.isLoopback() {
             return false
@@ -107,6 +156,15 @@ pub struct Ipv4Addr {
         if self.isDocumentation() {
             return false
         }
+        if self.isShared() {
+            return false
+        }
+        if self.isBenchmarking() {
+            return false
+        }
+        if self.isReserved() {
+            return false
+        }
         true
     }
 }
@@ -126,6 +184,9 @@ pub struct Ipv6Addr {
     pub groups: List<Int>,
 
     pub fn toString(self) -> String {
+        if let Some(addr) = self.toMappedIpv4() {
+            return "::ffff:{addr}"
+        }
         let g = self.groups
         let mut bestStart = -1
         let mut bestLen = 0
@@ -213,6 +274,14 @@ pub struct Ipv6Addr {
         (self.groups[0] & 0xFFC0) == 0xFE80
     }
 
+    pub fn isUniqueLocal(self) -> Bool {
+        (self.groups[0] & 0xFE00) == 0xFC00
+    }
+
+    pub fn isDocumentation(self) -> Bool {
+        self.groups[0] == 0x2001 && self.groups[1] == 0x0DB8
+    }
+
     pub fn isMappedIpv4(self) -> Bool {
         let g = self.groups
         g[0] == 0 && g[1] == 0 && g[2] == 0 && g[3] == 0 &&
@@ -232,6 +301,31 @@ pub struct Ipv6Addr {
         } else {
             None
         }
+    }
+
+    pub fn isGlobalUnicast(self) -> Bool {
+        if let Some(addr) = self.toMappedIpv4() {
+            return addr.isGlobalUnicast()
+        }
+        if self.isLoopback() {
+            return false
+        }
+        if self.isUnspecified() {
+            return false
+        }
+        if self.isMulticast() {
+            return false
+        }
+        if self.isLinkLocal() {
+            return false
+        }
+        if self.isUniqueLocal() {
+            return false
+        }
+        if self.isDocumentation() {
+            return false
+        }
+        true
     }
 }
 
@@ -266,6 +360,13 @@ pub enum IpAddr {
         match self {
             V4(addr) -> addr.isMulticast(),
             V6(addr) -> addr.isMulticast(),
+        }
+    }
+
+    pub fn isGlobalUnicast(self) -> Bool {
+        match self {
+            V4(addr) -> addr.isGlobalUnicast(),
+            V6(addr) -> addr.isGlobalUnicast(),
         }
     }
 
@@ -317,6 +418,23 @@ pub struct SocketAddr {
 
     pub fn isV6(self) -> Bool {
         self.ip.isV6()
+    }
+}
+
+pub struct Addr {
+    pub host: String,
+    pub port: Int,
+
+    pub fn toString(self) -> String {
+        if strings.contains(self.host, ":") {
+            return "[{self.host}]:{self.port}"
+        }
+        "{self.host}:{self.port}"
+    }
+
+    pub fn toSocketAddr(self) -> Result<SocketAddr, Error> {
+        let ip = parseIp(self.host)?
+        Ok(SocketAddr { ip, port: self.port })
     }
 }
 
@@ -435,12 +553,15 @@ pub fn parseIp(text: String) -> Result<IpAddr, Error> {
 
 pub fn parseSocketAddr(text: String) -> Result<SocketAddr, Error> {
     let (host, portStr) = splitHostPort(text)?
-    let port = parseDecInt(portStr)?
-    if port < 0 || port > 65535 {
-        return Err(error.new("net: port out of range: {portStr}"))
-    }
+    let port = parsePort(portStr)?
     let ip = parseIp(host)?
     Ok(SocketAddr { ip, port })
+}
+
+pub fn parseAddr(text: String) -> Result<Addr, Error> {
+    let (host, portStr) = splitHostPort(text)?
+    let port = parsePort(portStr)?
+    Ok(Addr { host, port })
 }
 
 pub fn parseCidr(text: String) -> Result<Ipv4Net, Error> {
@@ -473,8 +594,17 @@ pub fn splitHostPort(hostport: String) -> Result<(String, String), Error> {
         if rest.isEmpty() || rest.chars()[0] != ':' {
             return Err(error.new("net: missing port after ] in address: {hostport}"))
         }
+        if host.isEmpty() {
+            return Err(error.new("net: missing host in address: {hostport}"))
+        }
         let port = rest[1..]
+        if port.isEmpty() {
+            return Err(error.new("net: missing port in address: {hostport}"))
+        }
         return Ok((host, port))
+    }
+    if countChar(hostport, ':') > 1 {
+        return Err(error.new("net: IPv6 addresses with ports must use [host]:port: {hostport}"))
     }
     let lastColon = lastIndexOfChar(hostport, ':')
     if lastColon == -1 {
@@ -482,43 +612,212 @@ pub fn splitHostPort(hostport: String) -> Result<(String, String), Error> {
     }
     let host = hostport[0..lastColon]
     let port = hostport[lastColon + 1..]
+    if host.isEmpty() {
+        return Err(error.new("net: missing host in address: {hostport}"))
+    }
+    if port.isEmpty() {
+        return Err(error.new("net: missing port in address: {hostport}"))
+    }
     Ok((host, port))
+}
+
+pub fn resolve(addr: String) -> Result<Addr, Error> {
+    let parsed = parseAddr(addr)?
+    match parseIp(parsed.host) {
+        Ok(ip) -> Ok(Addr { host: ip.toString(), port: parsed.port }),
+        Err(_) -> {
+            let ips = lookup(parsed.host)?
+            if ips.isEmpty() {
+                return Err(error.new("net: no addresses found for host: {parsed.host}"))
+            }
+            Ok(Addr { host: ips[0].toString(), port: parsed.port })
+        },
+    }
+}
+
+pub fn resolveAll(host: String) -> Result<List<Addr>, Error> {
+    match parseIp(host) {
+        Ok(ip) -> Ok([Addr { host: ip.toString(), port: 0 }]),
+        Err(_) -> {
+            let ips = lookup(host)?
+            let mut out: List<Addr> = []
+            for ip in ips {
+                out.push(Addr { host: ip.toString(), port: 0 })
+            }
+            Ok(out)
+        },
+    }
 }
 
 // ── DNS (runtime-bridged) ─────────────────────────────────────────────────────
 
-pub fn lookup(host: String) -> Result<List<IpAddr>, Error>
+pub fn lookup(host: String) -> Result<List<IpAddr>, Error> {
+    let texts = rt.osty_rt_net_lookup_text(host)
+    if rt.osty_rt_net_failed() {
+        return Err(netError())
+    }
+    let mut out: List<IpAddr> = []
+    for text in texts {
+        out.push(parseIp(text)?)
+    }
+    Ok(out)
+}
 
-pub fn lookupAddr(ip: IpAddr) -> Result<List<String>, Error>
+pub fn lookupAddr(ip: IpAddr) -> Result<List<String>, Error> {
+    netStringListResult(rt.osty_rt_net_lookup_addr(ip.toString()))
+}
 
 // ── TCP (runtime-bridged) ─────────────────────────────────────────────────────
 
+pub type TcpConn = TcpStream
+
 pub struct TcpStream {
-    pub fn read(self, maxBytes: Int) -> Result<Bytes, Error>
-    pub fn readExact(self, n: Int) -> Result<Bytes, Error>
-    pub fn write(self, data: Bytes) -> Result<Int, Error>
-    pub fn writeAll(self, data: Bytes) -> Result<(), Error>
-    pub fn flush(self) -> Result<(), Error>
-    pub fn close(self) -> Result<(), Error>
-    pub fn localAddr(self) -> Result<SocketAddr, Error>
-    pub fn peerAddr(self) -> Result<SocketAddr, Error>
-    pub fn setReadTimeout(self, ms: Int?) -> Result<(), Error>
-    pub fn setWriteTimeout(self, ms: Int?) -> Result<(), Error>
-    pub fn setNoDelay(self, on: Bool) -> Result<(), Error>
-    pub fn setKeepAlive(self, on: Bool) -> Result<(), Error>
+    rawHandle: Int64,
+
+    pub fn read(self, maxBytes: Int) -> Result<Bytes, Error> {
+        netBytesResult(rt.osty_rt_net_tcp_read(self.rawHandle, maxBytes))
+    }
+
+    pub fn readExact(self, n: Int) -> Result<Bytes, Error> {
+        netBytesResult(rt.osty_rt_net_tcp_read_exact(self.rawHandle, n))
+    }
+
+    pub fn write(self, data: Bytes) -> Result<Int, Error> {
+        netIntResult(rt.osty_rt_net_tcp_write(self.rawHandle, data))
+    }
+
+    pub fn writeAll(self, data: Bytes) -> Result<(), Error> {
+        rt.osty_rt_net_tcp_write_all(self.rawHandle, data)
+        netUnitResult()
+    }
+
+    pub fn flush(self) -> Result<(), Error> {
+        rt.osty_rt_net_tcp_flush(self.rawHandle)
+        netUnitResult()
+    }
+
+    pub fn close(self) -> Result<(), Error> {
+        rt.osty_rt_net_tcp_close(self.rawHandle)
+        netUnitResult()
+    }
+
+    pub fn localAddr(self) -> Result<SocketAddr, Error> {
+        let text = rt.osty_rt_net_tcp_local_addr(self.rawHandle)
+        if rt.osty_rt_net_failed() {
+            return Err(netError())
+        }
+        parseSocketAddr(text)
+    }
+
+    pub fn peerAddr(self) -> Result<SocketAddr, Error> {
+        let text = rt.osty_rt_net_tcp_peer_addr(self.rawHandle)
+        if rt.osty_rt_net_failed() {
+            return Err(netError())
+        }
+        parseSocketAddr(text)
+    }
+
+    pub fn setReadTimeout(self, ms: Int?) -> Result<(), Error> {
+        rt.osty_rt_net_tcp_set_read_timeout(self.rawHandle, netTimeoutValue(ms))
+        netUnitResult()
+    }
+
+    pub fn setWriteTimeout(self, ms: Int?) -> Result<(), Error> {
+        rt.osty_rt_net_tcp_set_write_timeout(self.rawHandle, netTimeoutValue(ms))
+        netUnitResult()
+    }
+
+    pub fn setNoDelay(self, on: Bool) -> Result<(), Error> {
+        rt.osty_rt_net_tcp_set_nodelay(self.rawHandle, on)
+        netUnitResult()
+    }
+
+    pub fn setKeepAlive(self, on: Bool) -> Result<(), Error> {
+        rt.osty_rt_net_tcp_set_keepalive(self.rawHandle, on)
+        netUnitResult()
+    }
+
+    pub fn send(self, data: Bytes) -> Result<Int, Error> {
+        self.write(data)
+    }
+
+    pub fn sendAll(self, data: Bytes) -> Result<(), Error> {
+        self.writeAll(data)
+    }
+
+    pub fn recv(self, maxBytes: Int) -> Result<Bytes, Error> {
+        self.read(maxBytes)
+    }
+
+    pub fn remoteAddr(self) -> Result<Addr, Error> {
+        let addr = self.peerAddr()?
+        Ok(socketAddrToAddr(addr))
+    }
 }
 
 pub struct TcpListener {
-    pub fn accept(self) -> Result<TcpStream, Error>
-    pub fn localAddr(self) -> Result<SocketAddr, Error>
-    pub fn close(self) -> Result<(), Error>
+    rawHandle: Int64,
+
+    pub fn accept(self) -> Result<TcpStream, Error> {
+        let handle = rt.osty_rt_net_tcp_accept(self.rawHandle)
+        if rt.osty_rt_net_failed() {
+            return Err(netError())
+        }
+        Ok(TcpStream { rawHandle: handle })
+    }
+
+    pub fn localAddr(self) -> Result<SocketAddr, Error> {
+        let text = rt.osty_rt_net_tcp_listener_local_addr(self.rawHandle)
+        if rt.osty_rt_net_failed() {
+            return Err(netError())
+        }
+        parseSocketAddr(text)
+    }
+
+    pub fn close(self) -> Result<(), Error> {
+        rt.osty_rt_net_tcp_listener_close(self.rawHandle)
+        netUnitResult()
+    }
 }
 
-pub fn tcpConnect(addr: String) -> Result<TcpStream, Error>
+pub fn tcpConnect(addr: String) -> Result<TcpStream, Error> {
+    let parsed = parseAddr(addr)?
+    let handle = rt.osty_rt_net_tcp_connect(parsed.host, parsed.port)
+    if rt.osty_rt_net_failed() {
+        return Err(netError())
+    }
+    Ok(TcpStream { rawHandle: handle })
+}
 
-pub fn tcpConnectTimeout(addr: String, timeoutMs: Int) -> Result<TcpStream, Error>
+pub fn tcpConnectTimeout(addr: String, timeoutMs: Int) -> Result<TcpStream, Error> {
+    let parsed = parseAddr(addr)?
+    let handle = rt.osty_rt_net_tcp_connect_timeout(parsed.host, parsed.port, timeoutMs)
+    if rt.osty_rt_net_failed() {
+        return Err(netError())
+    }
+    Ok(TcpStream { rawHandle: handle })
+}
 
-pub fn tcpListen(addr: String) -> Result<TcpListener, Error>
+pub fn tcpListen(addr: String) -> Result<TcpListener, Error> {
+    let parsed = parseAddr(addr)?
+    let handle = rt.osty_rt_net_tcp_listen(parsed.host, parsed.port)
+    if rt.osty_rt_net_failed() {
+        return Err(netError())
+    }
+    Ok(TcpListener { rawHandle: handle })
+}
+
+pub fn connect(addr: String) -> Result<TcpConn, Error> {
+    tcpConnect(addr)
+}
+
+pub fn connectTimeout(addr: String, timeoutMs: Int) -> Result<TcpConn, Error> {
+    tcpConnectTimeout(addr, timeoutMs)
+}
+
+pub fn listen(addr: String) -> Result<TcpListener, Error> {
+    tcpListen(addr)
+}
 
 // ── UDP (runtime-bridged) ─────────────────────────────────────────────────────
 
@@ -539,12 +838,77 @@ pub fn udpBind(addr: String) -> Result<UdpSocket, Error>
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
+fn socketAddrToAddr(addr: SocketAddr) -> Addr {
+    Addr { host: addr.ip.toString(), port: addr.port }
+}
+
+fn netError() -> Error {
+    error.new(rt.osty_rt_net_last_error())
+}
+
+fn netUnitResult() -> Result<(), Error> {
+    if rt.osty_rt_net_failed() {
+        return Err(netError())
+    }
+    Ok(())
+}
+
+fn netBytesResult(data: Bytes) -> Result<Bytes, Error> {
+    if rt.osty_rt_net_failed() {
+        return Err(netError())
+    }
+    Ok(data)
+}
+
+fn netStringResult(text: String) -> Result<String, Error> {
+    if rt.osty_rt_net_failed() {
+        return Err(netError())
+    }
+    Ok(text)
+}
+
+fn netStringListResult(items: List<String>) -> Result<List<String>, Error> {
+    if rt.osty_rt_net_failed() {
+        return Err(netError())
+    }
+    Ok(items)
+}
+
+fn netIntResult(n: Int) -> Result<Int, Error> {
+    if rt.osty_rt_net_failed() {
+        return Err(netError())
+    }
+    Ok(n)
+}
+
+fn netHandleResult(handle: Int64) -> Result<Int64, Error> {
+    if rt.osty_rt_net_failed() {
+        return Err(netError())
+    }
+    Ok(handle)
+}
+
+fn netTimeoutValue(ms: Int?) -> Int {
+    match ms {
+        Some(timeout) -> timeout,
+        None          -> -1,
+    }
+}
+
 fn parseOctet(s: String) -> Result<Int, Error> {
     let n = parseDecInt(s)?
     if n < 0 || n > 255 {
         return Err(error.new("net: octet out of range: {s}"))
     }
     Ok(n)
+}
+
+fn parsePort(s: String) -> Result<Int, Error> {
+    let port = parseDecInt(s)?
+    if port < 0 || port > 65535 {
+        return Err(error.new("net: port out of range: {s}"))
+    }
+    Ok(port)
 }
 
 fn parseDecInt(s: String) -> Result<Int, Error> {
@@ -569,15 +933,28 @@ fn parseDecInt(s: String) -> Result<Int, Error> {
 fn parseHexGroups(text: String) -> Result<List<Int>, Error> {
     let parts = strings.split(text, ":")
     let mut groups: List<Int> = []
-    for part in parts {
+    let mut i = 0
+    for i < parts.len() {
+        let part = parts[i]
         if part.isEmpty() {
             return Err(error.new("net: empty group in IPv6 address"))
+        }
+        if strings.contains(part, ".") {
+            if i != parts.len() - 1 {
+                return Err(error.new("net: embedded IPv4 must be last group in IPv6 address: {text}"))
+            }
+            let addr = parseIpv4(part)?
+            groups.push(((addr.a & 0xFF) << 8) | (addr.b & 0xFF))
+            groups.push(((addr.c & 0xFF) << 8) | (addr.d & 0xFF))
+            i = i + 1
+            continue
         }
         let v = parseHexInt(part)?
         if v < 0 || v > 0xFFFF {
             return Err(error.new("net: group out of range: {part}"))
         }
         groups.push(v)
+        i = i + 1
     }
     Ok(groups)
 }
@@ -665,6 +1042,17 @@ fn lastIndexOfChar(s: String, target: Char) -> Int {
         i = i - 1
     }
     -1
+}
+
+fn countChar(s: String, target: Char) -> Int {
+    let chars = s.chars()
+    let mut count = 0
+    for c in chars {
+        if c == target {
+            count = count + 1
+        }
+    }
+    count
 }
 
 fn cidrMask(prefix: Int) -> Int {

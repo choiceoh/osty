@@ -109,7 +109,7 @@ func runResolveFile(path string, src []byte, formatter *diag.Formatter, flags cl
 	}
 	ensureGoResolve := func() *resolve.Result {
 		if res == nil {
-			res = resolveFile(ensureLoweredFile())
+			res = resolveFile(src, ensureLoweredFile())
 		}
 		return res
 	}

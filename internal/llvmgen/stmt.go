@@ -1273,6 +1273,9 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 	if emitted, err := g.emitStdIoCallStmt(call); emitted || err != nil {
 		return err
 	}
+	if emitted, err := g.emitStdOsCallStmt(call); emitted || err != nil {
+		return err
+	}
 	if emitted, err := g.emitOptionalUserCallStmt(call); emitted || err != nil {
 		return err
 	}
@@ -1286,6 +1289,14 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 		return g.emitPrintln(call)
 	}
 	return g.emitPrintln(call)
+}
+
+func (g *generator) emitStdOsCallStmt(call *ast.CallExpr) (bool, error) {
+	if _, ok := g.stdOsCallField(call); !ok {
+		return false, nil
+	}
+	_, _, err := g.emitStdOsCall(call)
+	return true, err
 }
 
 func (g *generator) emitTestingCallStmt(call *ast.CallExpr) (bool, error) {
@@ -1894,7 +1905,7 @@ func (g *generator) testingFailureMessage(call *ast.CallExpr, name string) strin
 	if call != nil {
 		line = call.Pos().Line
 	}
-	return fmt.Sprintf("testing.%s failed at %s", name, g.sourceLineLabel(line, "<test>"))
+	return mirTestingFailureMessage(name, g.sourceLineLabel(line, "<test>"))
 }
 
 // sourceLineLabel renders `<abs-path>:<line>` for a diagnostic site.
@@ -1907,7 +1918,7 @@ func (g *generator) sourceLineLabel(line int, fallback string) string {
 	} else if abs, err := filepath.Abs(source); err == nil {
 		source = abs
 	}
-	return fmt.Sprintf("%s:%d", source, line)
+	return mirSourceLineLabelText(source, strconv.Itoa(line))
 }
 
 // emitTestingAssertionLazy mirrors emitTestingAssertion but builds the
@@ -1959,11 +1970,11 @@ func (g *generator) buildAssertCompareMessage(call *ast.CallExpr, name, leftText
 	if leftText == "" && rightText == "" && !leftHasVal && !rightHasVal {
 		return g.foldAssertionMessage(staticAssertPart(base))
 	}
-	parts := []assertMsgPart{staticAssertPart(fmt.Sprintf("%s: left=`%s`", base, leftText))}
+	parts := []assertMsgPart{staticAssertPart(mirAssertExprLeftFragmentText(base, leftText))}
 	if leftHasVal {
 		parts = append(parts, staticAssertPart(" = "), dynamicAssertPart(leftStr))
 	}
-	parts = append(parts, staticAssertPart(fmt.Sprintf(" right=`%s`", rightText)))
+	parts = append(parts, staticAssertPart(mirAssertExprRightFragmentText(rightText)))
 	if rightHasVal {
 		parts = append(parts, staticAssertPart(" = "), dynamicAssertPart(rightStr))
 	}
@@ -2075,7 +2086,7 @@ func (g *generator) buildAssertCondMessage(call *ast.CallExpr, name, exprText st
 	if name == "expectOk" || name == "expectError" {
 		label = "expr"
 	}
-	return g.foldAssertionMessage(staticAssertPart(fmt.Sprintf("%s: %s=`%s`", base, label, exprText)))
+	return g.foldAssertionMessage(staticAssertPart(mirAssertExprFragmentText(base, label, exprText)))
 }
 
 // assertMsgPart is a single fragment of a failure message: either a

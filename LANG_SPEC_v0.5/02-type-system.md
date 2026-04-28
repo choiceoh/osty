@@ -210,7 +210,7 @@ typing).
 
 ```osty
 interface Reader {
-    fn read(self, buf: Bytes) -> Result<Int, Error>
+    fn read(self, maxBytes: Int) -> Result<Bytes, Error>
 }
 
 interface ReadWriter {

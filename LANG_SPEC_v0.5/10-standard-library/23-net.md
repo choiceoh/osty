@@ -1,7 +1,7 @@
 ### 10.23 Network (`std.net`)
 
 Low-level TCP and UDP networking. Higher-level HTTP is in `std.http`
-(§10.2). All blocking operations are cancellation-aware (§8.4.2).
+(§10.24). All blocking operations are cancellation-aware (§8.4.2).
 
 ```osty
 use std.net
@@ -48,7 +48,7 @@ net.listen(addr: String) -> Result<TcpListener, Error>
 
 pub struct TcpConn {
     // implements Reader, Writer, Closer (§16)
-    fn read(self, buf: mut Bytes) -> Result<Int, Error>
+    fn read(self, maxBytes: Int) -> Result<Bytes, Error>
     fn write(self, data: Bytes) -> Result<Int, Error>
     fn flush(self) -> Result<(), Error>
     fn close(self) -> Result<(), Error>

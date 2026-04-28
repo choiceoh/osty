@@ -456,7 +456,7 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 
 	// --- resolve ---
 	t0 = time.Now()
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault(src, file, stdlib.LoadCached())
 	r.Resolve = res
 	r.AllDiags = append(r.AllDiags, res.Diags...)
 	emit(Stage{

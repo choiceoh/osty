@@ -2214,6 +2214,10 @@ pub fn llvmClangLinkBinaryArgs(
     // the -pthread flag under clang-msvc, so it is omitted there.
     if !target.contains("windows") {
         args.push("-pthread")
+        // The gzip runtime uses zlib on POSIX targets. Link it
+        // explicitly so the bundled runtime object can resolve
+        // deflate/inflate at binary-link time.
+        args.push("-lz")
     }
     args.push("-o")
     args.push(binaryPath)

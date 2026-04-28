@@ -1033,45 +1033,19 @@ func legacyBindingTypeFromIR(typ ostyir.Type, hasValue bool) ast.Type {
 	return legacyTypeFromIR(typ)
 }
 
+// legacyPrimTypeName returns the user-visible Osty type name for an
+// `ir.PrimKind`. Delegates to the Osty-sourced `mirLegacyPrimTypeName`.
 func legacyPrimTypeName(kind ostyir.PrimKind) string {
-	switch kind {
-	case ostyir.PrimInt:
-		return "Int"
-	case ostyir.PrimInt8:
-		return "Int8"
-	case ostyir.PrimInt16:
-		return "Int16"
-	case ostyir.PrimInt32:
-		return "Int32"
-	case ostyir.PrimInt64:
-		return "Int64"
-	case ostyir.PrimUInt8:
-		return "UInt8"
-	case ostyir.PrimUInt16:
-		return "UInt16"
-	case ostyir.PrimUInt32:
-		return "UInt32"
-	case ostyir.PrimUInt64:
-		return "UInt64"
-	case ostyir.PrimByte:
-		return "Byte"
-	case ostyir.PrimFloat:
-		return "Float"
-	case ostyir.PrimFloat32:
-		return "Float32"
-	case ostyir.PrimFloat64:
-		return "Float64"
-	case ostyir.PrimBool:
-		return "Bool"
-	case ostyir.PrimChar:
-		return "Char"
-	case ostyir.PrimString:
-		return "String"
-	case ostyir.PrimBytes:
-		return "Bytes"
-	default:
-		return ""
-	}
+	return mirLegacyPrimTypeName(int(kind),
+		int(ostyir.PrimInt), int(ostyir.PrimInt8), int(ostyir.PrimInt16),
+		int(ostyir.PrimInt32), int(ostyir.PrimInt64),
+		int(ostyir.PrimUInt8), int(ostyir.PrimUInt16),
+		int(ostyir.PrimUInt32), int(ostyir.PrimUInt64),
+		int(ostyir.PrimByte),
+		int(ostyir.PrimFloat), int(ostyir.PrimFloat32), int(ostyir.PrimFloat64),
+		int(ostyir.PrimBool), int(ostyir.PrimChar),
+		int(ostyir.PrimString), int(ostyir.PrimBytes),
+	)
 }
 
 func legacyBlockFromIR(block *ostyir.Block) (*ast.Block, error) {
@@ -1208,33 +1182,22 @@ func legacyAssignStmtFromIR(stmt *ostyir.AssignStmt) (ast.Stmt, error) {
 	return out, nil
 }
 
+// legacyAssignOp maps the IR-level `AssignOp` to the `token.Kind` used
+// by AST AssignStmt nodes. Delegates to the Osty-sourced
+// `mirLegacyAssignOpCode`; the wrapper plumbs every relevant enum int
+// so the mapping stays in lockstep with both `internal/ir.AssignOp` and
+// `internal/token`.
 func legacyAssignOp(op ostyir.AssignOp) token.Kind {
-	switch op {
-	case ostyir.AssignEq:
-		return token.ASSIGN
-	case ostyir.AssignAdd:
-		return token.PLUSEQ
-	case ostyir.AssignSub:
-		return token.MINUSEQ
-	case ostyir.AssignMul:
-		return token.STAREQ
-	case ostyir.AssignDiv:
-		return token.SLASHEQ
-	case ostyir.AssignMod:
-		return token.PERCENTEQ
-	case ostyir.AssignAnd:
-		return token.BITANDEQ
-	case ostyir.AssignOr:
-		return token.BITOREQ
-	case ostyir.AssignXor:
-		return token.BITXOREQ
-	case ostyir.AssignShl:
-		return token.SHLEQ
-	case ostyir.AssignShr:
-		return token.SHREQ
-	default:
-		return token.ASSIGN
-	}
+	return token.Kind(mirLegacyAssignOpCode(int(op),
+		int(ostyir.AssignEq), int(ostyir.AssignAdd), int(ostyir.AssignSub),
+		int(ostyir.AssignMul), int(ostyir.AssignDiv), int(ostyir.AssignMod),
+		int(ostyir.AssignAnd), int(ostyir.AssignOr), int(ostyir.AssignXor),
+		int(ostyir.AssignShl), int(ostyir.AssignShr),
+		int(token.ASSIGN), int(token.PLUSEQ), int(token.MINUSEQ),
+		int(token.STAREQ), int(token.SLASHEQ), int(token.PERCENTEQ),
+		int(token.BITANDEQ), int(token.BITOREQ), int(token.BITXOREQ),
+		int(token.SHLEQ), int(token.SHREQ),
+	))
 }
 
 func legacyIfStmtFromIR(stmt *ostyir.IfStmt) (ast.Stmt, error) {
@@ -2072,77 +2035,51 @@ func legacyPatternFromIR(pattern ostyir.Pattern) (ast.Pattern, error) {
 	}
 }
 
+// legacyUnaryOp maps the IR-level `UnOp` to the `token.Kind` used by
+// AST UnaryExpr nodes. Delegates to the Osty-sourced
+// `mirLegacyUnaryOpCode`.
 func legacyUnaryOp(op ostyir.UnOp) token.Kind {
-	switch op {
-	case ostyir.UnNeg:
-		return token.MINUS
-	case ostyir.UnPlus:
-		return token.PLUS
-	case ostyir.UnNot:
-		return token.NOT
-	case ostyir.UnBitNot:
-		return token.BITNOT
-	default:
-		return token.ILLEGAL
-	}
+	return token.Kind(mirLegacyUnaryOpCode(int(op),
+		int(ostyir.UnNeg), int(ostyir.UnPlus), int(ostyir.UnNot), int(ostyir.UnBitNot),
+		int(token.MINUS), int(token.PLUS), int(token.NOT), int(token.BITNOT),
+		int(token.ILLEGAL),
+	))
 }
 
+// legacyBinaryOp maps the IR-level `BinOp` to the `token.Kind` used by
+// AST BinaryExpr nodes. Delegates to the Osty-sourced
+// `mirLegacyBinaryOpCode`.
 func legacyBinaryOp(op ostyir.BinOp) token.Kind {
-	switch op {
-	case ostyir.BinAdd:
-		return token.PLUS
-	case ostyir.BinSub:
-		return token.MINUS
-	case ostyir.BinMul:
-		return token.STAR
-	case ostyir.BinDiv:
-		return token.SLASH
-	case ostyir.BinMod:
-		return token.PERCENT
-	case ostyir.BinEq:
-		return token.EQ
-	case ostyir.BinNeq:
-		return token.NEQ
-	case ostyir.BinLt:
-		return token.LT
-	case ostyir.BinLeq:
-		return token.LEQ
-	case ostyir.BinGt:
-		return token.GT
-	case ostyir.BinGeq:
-		return token.GEQ
-	case ostyir.BinAnd:
-		return token.AND
-	case ostyir.BinOr:
-		return token.OR
-	case ostyir.BinBitAnd:
-		return token.BITAND
-	case ostyir.BinBitOr:
-		return token.BITOR
-	case ostyir.BinBitXor:
-		return token.BITXOR
-	case ostyir.BinShl:
-		return token.SHL
-	case ostyir.BinShr:
-		return token.SHR
-	default:
-		return token.ILLEGAL
-	}
+	return token.Kind(mirLegacyBinaryOpCode(int(op),
+		int(ostyir.BinAdd), int(ostyir.BinSub), int(ostyir.BinMul),
+		int(ostyir.BinDiv), int(ostyir.BinMod),
+		int(ostyir.BinEq), int(ostyir.BinNeq),
+		int(ostyir.BinLt), int(ostyir.BinLeq),
+		int(ostyir.BinGt), int(ostyir.BinGeq),
+		int(ostyir.BinAnd), int(ostyir.BinOr),
+		int(ostyir.BinBitAnd), int(ostyir.BinBitOr), int(ostyir.BinBitXor),
+		int(ostyir.BinShl), int(ostyir.BinShr),
+		int(token.PLUS), int(token.MINUS), int(token.STAR),
+		int(token.SLASH), int(token.PERCENT),
+		int(token.EQ), int(token.NEQ),
+		int(token.LT), int(token.LEQ), int(token.GT), int(token.GEQ),
+		int(token.AND), int(token.OR),
+		int(token.BITAND), int(token.BITOR), int(token.BITXOR),
+		int(token.SHL), int(token.SHR),
+		int(token.ILLEGAL),
+	))
 }
 
+// legacyIntrinsicName returns the user-visible name for an
+// `ir.IntrinsicKind`. Delegates to the Osty-sourced
+// `mirLegacyIntrinsicName`. Note this is distinct from the MIR
+// IntrinsicKind label table — IR-level intrinsics today only cover the
+// print family, while MIR's `mirIntrinsicLabel` covers ~114 cases.
 func legacyIntrinsicName(kind ostyir.IntrinsicKind) string {
-	switch kind {
-	case ostyir.IntrinsicPrint:
-		return "print"
-	case ostyir.IntrinsicPrintln:
-		return "println"
-	case ostyir.IntrinsicEprint:
-		return "eprint"
-	case ostyir.IntrinsicEprintln:
-		return "eprintln"
-	default:
-		return ""
-	}
+	return mirLegacyIntrinsicName(int(kind),
+		int(ostyir.IntrinsicPrint), int(ostyir.IntrinsicPrintln),
+		int(ostyir.IntrinsicEprint), int(ostyir.IntrinsicEprintln),
+	)
 }
 
 func legacyTypeExpr(name string, start, end token.Pos) ast.Expr {
