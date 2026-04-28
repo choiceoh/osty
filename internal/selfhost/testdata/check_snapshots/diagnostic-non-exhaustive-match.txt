@@ -1,0 +1,15 @@
+summary assignments=0 accepted=0 errors=1
+errorsByContext E0731=1
+errorDetails E0731 match is not exhaustive: missing `Option.Some(_)` @L2:C5=1
+typedNodes
+  node=4 nodeId=4 typeId=118 kind=Ident span=43:44 type=Option<Int>
+  node=7 nodeId=7 typeId=2 kind=IntLit span=67:68 type=Int
+  node=10 nodeId=10 typeId=2 kind=IntLit span=86:87 type=Int
+  node=12 nodeId=12 typeId=2 kind=Match span=37:94 type=Int
+  node=14 nodeId=14 typeId=2 kind=Block span=31:96 type=Int
+bindings
+symbols
+  symbolId=0 node=15 nodeId=15 kind=fn name=code owner= typeId=119 span=0:96 type=fn(Option<Int>) -> Int
+instantiations
+diagnostics
+  code=E0731 severity=error span=37:94 line=2:5-5:6 message=match is not exhaustive: missing `Option.Some(_)`

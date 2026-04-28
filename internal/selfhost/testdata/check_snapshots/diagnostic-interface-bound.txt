@@ -1,0 +1,26 @@
+summary assignments=1 accepted=1 errors=1
+errorsByContext E0749=1
+errorDetails E0749 type parameter `T` requires bound `Named`, but `User` does not satisfy it @L6:C32=1
+typedNodes
+  node=12 nodeId=12 typeId=25 kind=Ident span=112:117 type=T
+  node=14 nodeId=14 typeId=17 kind=Call span=122:124 type=String
+  node=16 nodeId=16 typeId=17 kind=Block span=110:126 type=String
+  node=21 nodeId=21 typeId=2 kind=IntLit span=172:174 type=Int
+  node=23 nodeId=23 typeId=120 kind=StructLit span=165:176 type=User
+  node=28 nodeId=28 typeId=120 kind=Ident span=209:213 type=User
+  node=29 nodeId=29 typeId=17 kind=Call span=208:214 type=String
+  node=31 nodeId=31 typeId=19 kind=Block span=137:216 type=()
+bindings
+  bindingId=0 node=18 nodeId=18 name=user mutable=false typeId=120 span=147:151 type=User
+  bindingId=1 node=25 nodeId=25 name=label mutable=false typeId=17 span=185:190 type=String
+symbols
+  symbolId=0 node=3 nodeId=3 kind=interface name=Named owner= typeId=118 span=0:43 type=Named
+  symbolId=1 node=2 nodeId=2 kind=fn name=name owner=Named typeId=119 span=18:41 type=fn() -> String
+  symbolId=2 node=6 nodeId=6 kind=struct name=User owner= typeId=120 span=44:68 type=User
+  symbolId=3 node=5 nodeId=5 kind=field name=age owner=User typeId=2 span=58:66 type=Int
+  symbolId=4 node=17 nodeId=17 kind=fn name=display owner= typeId=121 span=69:126 type=fn(T) -> String
+  symbolId=5 node=32 nodeId=32 kind=fn name=main owner= typeId=122 span=127:216 type=fn() -> ()
+instantiations
+  instantiationId=0 node=29 nodeId=29 callee=display span=208:214 typeArgIds=[120] typeArgs=[User] resultTypeId=17 resultType=String
+diagnostics
+  code=E0749 severity=error span=208:214 line=6:32-6:38 message=type parameter `T` requires bound `Named`, but `User` does not satisfy it

@@ -30,6 +30,20 @@ func TestCheckPackageStructuredSingleFileKeepsLetBindings(t *testing.T) {
 	if got := findCheckedBindingType(checked, "value"); got != "UntypedInt" {
 		t.Fatalf("binding type for value = %q, want UntypedInt", got)
 	}
+	item := findCheckedBinding(checked, "item")
+	value := findCheckedBinding(checked, "value")
+	if item == nil || value == nil {
+		t.Fatalf("missing item/value bindings in structured result: %#v", checked.Bindings)
+	}
+	if item.NodeID != item.Node || value.NodeID != value.Node {
+		t.Fatalf("binding NodeID should mirror stable checker node: item=%+v value=%+v", *item, *value)
+	}
+	if item.BindingID == value.BindingID {
+		t.Fatalf("binding ids should be stable and distinct: item=%+v value=%+v", *item, *value)
+	}
+	if item.TypeID < 0 || value.TypeID < 0 {
+		t.Fatalf("binding type ids should be populated: item=%+v value=%+v", *item, *value)
+	}
 }
 
 func TestCheckPackageStructuredSingleFileKeepsLetBindingsASTNative(t *testing.T) {
@@ -96,6 +110,59 @@ fn helper() -> dep.Item {
 	}
 	if checked.Summary.Errors != 0 {
 		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails)
+	}
+	if got := findCheckedBindingType(checked, "item"); got != "dep.Item" {
+		t.Fatalf("binding type for item = %q, want dep.Item", got)
+	}
+	if got := findCheckedBindingType(checked, "value"); got != "Int" {
+		t.Fatalf("binding type for value = %q, want Int", got)
+	}
+}
+
+func TestCheckPackageStructuredPrefersImportSurfaceTypeReprs(t *testing.T) {
+	fileA := canonicalSelfhostSource(t, []byte(`use dep
+
+fn helper() -> dep.Item {
+    dep.make()
+}
+`))
+	fileB := canonicalSelfhostSource(t, []byte(`fn main() {
+    let item = helper()
+    let value = item.value
+}
+`))
+	depItem := &selfhost.TypeRepr{Kind: "named", Name: "dep.Item"}
+	intType := &selfhost.TypeRepr{Kind: "primitive", Name: "Int"}
+	input := selfhost.PackageCheckInput{
+		Files: []selfhost.PackageCheckFile{
+			{Source: fileA, Base: 0},
+			{Source: fileB, Base: len(fileA) + 1},
+		},
+		Imports: []selfhost.PackageCheckImport{{
+			Alias: "dep",
+			Functions: []selfhost.PackageCheckFn{{
+				Name:           "make",
+				Owner:          "dep",
+				ReturnType:     "String",
+				ReturnTypeRepr: depItem,
+			}},
+			Fields: []selfhost.PackageCheckField{
+				{Owner: "dep", Name: "Item", TypeName: "String", Type: depItem, HasDefault: true},
+				{Owner: "dep.Item", Name: "value", TypeName: "String", Type: intType},
+			},
+			TypeDecls: []selfhost.PackageCheckType{{
+				Name: "dep.Item",
+				Kind: "struct",
+			}},
+		}},
+	}
+
+	checked, err := selfhost.CheckPackageStructured(input)
+	if err != nil {
+		t.Fatalf("CheckPackageStructured: %v", err)
+	}
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
 	}
 	if got := findCheckedBindingType(checked, "item"); got != "dep.Item" {
 		t.Fatalf("binding type for item = %q, want dep.Item", got)
@@ -439,12 +506,20 @@ fn main() {
 }
 
 func findCheckedBindingType(result selfhost.CheckResult, name string) string {
-	for _, binding := range result.Bindings {
-		if binding.Name == name {
-			return binding.Type.String()
+	binding := findCheckedBinding(result, name)
+	if binding == nil || binding.Type == nil {
+		return ""
+	}
+	return binding.Type.String()
+}
+
+func findCheckedBinding(result selfhost.CheckResult, name string) *selfhost.CheckedBinding {
+	for i := range result.Bindings {
+		if result.Bindings[i].Name == name {
+			return &result.Bindings[i]
 		}
 	}
-	return ""
+	return nil
 }
 
 func findDiagnosticCode(result selfhost.CheckResult, code string) *selfhost.CheckDiagnosticRecord {

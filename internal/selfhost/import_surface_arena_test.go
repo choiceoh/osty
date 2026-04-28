@@ -42,6 +42,52 @@ func TestPackageImportSurfaceRebindsStdOptionResultBuiltinTypes(t *testing.T) {
 	assertNoQualifiedBuiltin(t, resultSurface, "result.Result")
 }
 
+func TestPackageImportSurfaceEmitsStructuredTypeReprs(t *testing.T) {
+	run := selfhost.Run([]byte(`pub struct Box<T> {
+    pub value: T
+}
+
+pub fn make(value: Int) -> Box<Int> {
+    Box { value }
+}
+`))
+	if run == nil {
+		t.Fatal("Run returned nil")
+	}
+	surface := selfhost.PackageImportSurface("dep", "dep", []*selfhost.FrontendRun{run})
+
+	var makeFn *selfhost.PackageCheckFn
+	for i := range surface.Functions {
+		if surface.Functions[i].Name == "make" && surface.Functions[i].Owner == "" {
+			makeFn = &surface.Functions[i]
+			break
+		}
+	}
+	if makeFn == nil {
+		t.Fatalf("missing make function in surface: %#v", surface.Functions)
+	}
+	if makeFn.ReturnTypeRepr == nil || makeFn.ReturnTypeRepr.String() != "dep.Box<Int>" {
+		t.Fatalf("make return TypeRepr = %#v, want dep.Box<Int>", makeFn.ReturnTypeRepr)
+	}
+	if len(makeFn.ParamTypeReprs) != 1 || makeFn.ParamTypeReprs[0].String() != "Int" {
+		t.Fatalf("make param TypeReprs = %#v, want [Int]", makeFn.ParamTypeReprs)
+	}
+
+	var valueField *selfhost.PackageCheckField
+	for i := range surface.Fields {
+		if surface.Fields[i].Owner == "dep.Box" && surface.Fields[i].Name == "value" {
+			valueField = &surface.Fields[i]
+			break
+		}
+	}
+	if valueField == nil {
+		t.Fatalf("missing dep.Box.value field in surface: %#v", surface.Fields)
+	}
+	if valueField.Type == nil || valueField.Type.Kind != "typevar" || valueField.Type.Name != "T" {
+		t.Fatalf("value field TypeRepr = %#v, want typevar T", valueField.Type)
+	}
+}
+
 func containsQualifiedType(text, qualified string) bool {
 	if text == qualified {
 		return true

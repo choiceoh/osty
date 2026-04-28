@@ -27426,6 +27426,10 @@ func checkCodeReturnMismatch() string {
 	return "E0726"
 }
 
+func checkCodeGenericArgCount() string {
+	return "E0727"
+}
+
 // Osty: /tmp/selfhost_merged.osty:10824:5
 func checkCodeUnknownVariant() string {
 	return "E0728"
@@ -27573,6 +27577,16 @@ func diagArgCount(fnName string, want int, got int, start int, end int) *CheckDi
 	}()
 	_ = msg
 	return checkDiag(checkCodeArgCount(), msg, start, end)
+}
+
+func diagGenericArgCount(name string, want int, got int, start int, end int) *CheckDiagnostic {
+	msg := func() string {
+		if name == "" {
+			return fmt.Sprintf("this generic requires %s type argument(s) but %s were supplied", ostyToString(want), ostyToString(got))
+		}
+		return fmt.Sprintf("`%s` requires %s type argument(s) but %s were supplied", ostyToString(name), ostyToString(want), ostyToString(got))
+	}()
+	return checkDiag(checkCodeGenericArgCount(), msg, start, end)
 }
 
 // Osty: /tmp/selfhost_merged.osty:10927:5
@@ -40146,6 +40160,9 @@ func elabInferCall(cx *ElabCx, callIdx int, node *AstNode, expected int) *ElabRe
 	// Osty: /tmp/selfhost_merged.osty:19090:5
 	instSeedExpectedRet(cx, inst, sig.retTy, expected)
 	// Osty: /tmp/selfhost_merged.osty:19093:5
+	if checkIntListLenHelper(explicitArgs) > 0 && checkIntListLenHelper(explicitArgs) != checkStringListLenHelper(sig.generics) {
+		cx.env.diagnostics = append(cx.env.diagnostics, diagGenericArgCount(sig.name, checkStringListLenHelper(sig.generics), checkIntListLenHelper(explicitArgs), callee.start, callee.end))
+	}
 	instSeedPositionalArgs(cx, inst, explicitArgs)
 	// Osty: /tmp/selfhost_merged.osty:19095:5
 	coreFn := coreIdent(cx.core, baseCallee.text, IdentKind(&IdentKind_IkFn{}), fnSigToTy(cx.env, sig), baseCallee.start, baseCallee.end)
@@ -47163,41 +47180,53 @@ func pmLiteralPatternAsInt(cx *ElabCx, patIdx int) *PmIntParse {
 // Osty: /tmp/selfhost_merged.osty:23104:5
 type FrontCheckedNode struct {
 	node     int
+	nodeId   int
 	kind     string
 	typeRepr *FrontTypeRepr
+	typeId   int
 	start    int
 	end      int
 }
 
 // Osty: /tmp/selfhost_merged.osty:23112:5
 type FrontCheckedBinding struct {
-	node     int
-	name     string
-	typeRepr *FrontTypeRepr
-	mutable  bool
-	start    int
-	end      int
+	node      int
+	nodeId    int
+	bindingId int
+	name      string
+	typeRepr  *FrontTypeRepr
+	typeId    int
+	mutable   bool
+	start     int
+	end       int
 }
 
 // Osty: /tmp/selfhost_merged.osty:23121:5
 type FrontCheckedSymbol struct {
 	node     int
+	nodeId   int
+	symbolId int
 	kind     string
 	name     string
 	owner    string
 	typeRepr *FrontTypeRepr
+	typeId   int
 	start    int
 	end      int
 }
 
 // Osty: /tmp/selfhost_merged.osty:23131:5
 type FrontCheckInstantiation struct {
-	node       int
-	callee     string
-	typeArgs   []*FrontTypeRepr
-	resultType *FrontTypeRepr
-	start      int
-	end        int
+	node            int
+	nodeId          int
+	instantiationId int
+	callee          string
+	typeArgs        []*FrontTypeRepr
+	typeArgIds      []int
+	resultType      *FrontTypeRepr
+	resultTypeId    int
+	start           int
+	end             int
 }
 
 // Osty: /tmp/selfhost_merged.osty:23140:5
@@ -48689,50 +48718,59 @@ func serializeCheckResult(cx *ElabCx) *FrontCheckResult {
 		_ = astNode
 		// Osty: /tmp/selfhost_merged.osty:24265:9
 		func() struct{} {
-			typedNodes = append(typedNodes, &FrontCheckedNode{node: node.originAst, kind: kind, typeRepr: tyToRepr(cx.env.tys, node.ty), start: astNode.start, end: astNode.end})
+			typedNodes = append(typedNodes, &FrontCheckedNode{node: node.originAst, nodeId: node.originAst, kind: kind, typeRepr: tyToRepr(cx.env.tys, node.ty), typeId: node.ty, start: astNode.start, end: astNode.end})
 			return struct{}{}
 		}()
 	}
 	// Osty: /tmp/selfhost_merged.osty:24274:5
 	var bindings []*FrontCheckedBinding = make([]*FrontCheckedBinding, 0, 1)
 	_ = bindings
+	bindingId := 0
 	// Osty: /tmp/selfhost_merged.osty:24275:5
 	for _, b := range cx.env.bindingRecords {
 		// Osty: /tmp/selfhost_merged.osty:24276:9
 		func() struct{} {
-			bindings = append(bindings, &FrontCheckedBinding{node: b.node, name: b.name, typeRepr: tyToRepr(cx.env.tys, b.ty), mutable: b.mutable, start: b.start, end: b.end})
+			bindings = append(bindings, &FrontCheckedBinding{node: b.node, nodeId: b.node, bindingId: bindingId, name: b.name, typeRepr: tyToRepr(cx.env.tys, b.ty), typeId: b.ty, mutable: b.mutable, start: b.start, end: b.end})
 			return struct{}{}
 		}()
+		bindingId++
 	}
 	// Osty: /tmp/selfhost_merged.osty:24286:5
 	var symbols []*FrontCheckedSymbol = make([]*FrontCheckedSymbol, 0, 1)
 	_ = symbols
+	symbolId := 0
 	// Osty: /tmp/selfhost_merged.osty:24287:5
 	for _, s := range cx.env.symbolRecords {
 		// Osty: /tmp/selfhost_merged.osty:24288:9
 		func() struct{} {
-			symbols = append(symbols, &FrontCheckedSymbol{node: s.node, kind: s.kind, name: s.name, owner: s.owner, typeRepr: tyToRepr(cx.env.tys, s.ty), start: s.start, end: s.end})
+			symbols = append(symbols, &FrontCheckedSymbol{node: s.node, nodeId: s.node, symbolId: symbolId, kind: s.kind, name: s.name, owner: s.owner, typeRepr: tyToRepr(cx.env.tys, s.ty), typeId: s.ty, start: s.start, end: s.end})
 			return struct{}{}
 		}()
+		symbolId++
 	}
 	// Osty: /tmp/selfhost_merged.osty:24299:5
 	var instantiations []*FrontCheckInstantiation = make([]*FrontCheckInstantiation, 0, 1)
 	_ = instantiations
+	instantiationId := 0
 	// Osty: /tmp/selfhost_merged.osty:24300:5
 	for _, inst := range cx.env.instantiations {
 		// Osty: /tmp/selfhost_merged.osty:24301:9
 		var typeArgReprs []*FrontTypeRepr = make([]*FrontTypeRepr, 0, 1)
 		_ = typeArgReprs
+		var typeArgIds []int = make([]int, 0, 1)
+		_ = typeArgIds
 		// Osty: /tmp/selfhost_merged.osty:24302:9
 		for _, tyArg := range inst.typeArgs {
 			// Osty: /tmp/selfhost_merged.osty:24303:13
 			func() struct{} { typeArgReprs = append(typeArgReprs, tyToRepr(cx.env.tys, tyArg)); return struct{}{} }()
+			func() struct{} { typeArgIds = append(typeArgIds, tyArg); return struct{}{} }()
 		}
 		// Osty: /tmp/selfhost_merged.osty:24305:9
 		func() struct{} {
-			instantiations = append(instantiations, &FrontCheckInstantiation{node: inst.node, callee: inst.callee, typeArgs: typeArgReprs, resultType: tyToRepr(cx.env.tys, inst.resultTy), start: inst.start, end: inst.end})
+			instantiations = append(instantiations, &FrontCheckInstantiation{node: inst.node, nodeId: inst.node, instantiationId: instantiationId, callee: inst.callee, typeArgs: typeArgReprs, typeArgIds: typeArgIds, resultType: tyToRepr(cx.env.tys, inst.resultTy), resultTypeId: inst.resultTy, start: inst.start, end: inst.end})
 			return struct{}{}
 		}()
+		instantiationId++
 	}
 	return &FrontCheckResult{summary: summary, typedNodes: typedNodes, bindings: bindings, symbols: symbols, instantiations: instantiations, diagnostics: cx.env.diagnostics}
 }
@@ -59746,12 +59784,12 @@ func selfLintMaybeEmitUnusedMethod(member *AstNode, idx int, typePub bool, acces
 type SelfLintTypeHints struct {
 	enabled bool
 	nodes   []int
-	types   []string
+	types   []*FrontTypeRepr
 }
 
 // Osty: /tmp/selfhost_merged.osty:32186:1
 func selfLintNoTypeHints() *SelfLintTypeHints {
-	return &SelfLintTypeHints{enabled: false, nodes: make([]int, 0, 1), types: make([]string, 0, 1)}
+	return &SelfLintTypeHints{enabled: false, nodes: make([]int, 0, 1), types: make([]*FrontTypeRepr, 0, 1)}
 }
 
 // Osty: /tmp/selfhost_merged.osty:32190:1
@@ -59760,24 +59798,24 @@ func selfLintTypeHintsFromChecked(checked *FrontCheckResult) *SelfLintTypeHints 
 	var nodes []int = make([]int, 0, 1)
 	_ = nodes
 	// Osty: /tmp/selfhost_merged.osty:32192:5
-	var types []string = make([]string, 0, 1)
+	var types []*FrontTypeRepr = make([]*FrontTypeRepr, 0, 1)
 	_ = types
 	// Osty: /tmp/selfhost_merged.osty:32193:5
 	for _, tn := range checked.typedNodes {
 		// Osty: /tmp/selfhost_merged.osty:32194:9
 		func() struct{} { nodes = append(nodes, tn.node); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:32195:9
-		func() struct{} { types = append(types, frontTypeReprToString(tn.typeRepr)); return struct{}{} }()
+		func() struct{} { types = append(types, tn.typeRepr); return struct{}{} }()
 	}
 	return &SelfLintTypeHints{enabled: true, nodes: nodes, types: types}
 }
 
 // Osty: /tmp/selfhost_merged.osty:32200:1
-func selfLintTypeAt(hints *SelfLintTypeHints, nodeIdx int) string {
+func selfLintTypeAt(hints *SelfLintTypeHints, nodeIdx int) *FrontTypeRepr {
 	// Osty: /tmp/selfhost_merged.osty:32201:5
 	if nodeIdx < 0 || !(hints.enabled) {
 		// Osty: /tmp/selfhost_merged.osty:32202:9
-		return ""
+		return frontInvalidTypeRepr()
 	}
 	// Osty: /tmp/selfhost_merged.osty:32204:5
 	i := 0
@@ -59787,7 +59825,7 @@ func selfLintTypeAt(hints *SelfLintTypeHints, nodeIdx int) string {
 		// Osty: /tmp/selfhost_merged.osty:32206:9
 		if target == nodeIdx {
 			// Osty: /tmp/selfhost_merged.osty:32207:13
-			return selfLintStringAt(hints.types, i)
+			return selfLintTypeReprAt(hints.types, i)
 		}
 		// Osty: /tmp/selfhost_merged.osty:32209:9
 		func() {
@@ -59802,11 +59840,11 @@ func selfLintTypeAt(hints *SelfLintTypeHints, nodeIdx int) string {
 			i = _cur2554 + _rhs2555
 		}()
 	}
-	return ""
+	return frontInvalidTypeRepr()
 }
 
 // Osty: /tmp/selfhost_merged.osty:32214:1
-func selfLintStringAt(items []string, target int) string {
+func selfLintTypeReprAt(items []*FrontTypeRepr, target int) *FrontTypeRepr {
 	// Osty: /tmp/selfhost_merged.osty:32215:5
 	idx := 0
 	_ = idx
@@ -59830,27 +59868,27 @@ func selfLintStringAt(items []string, target int) string {
 			idx = _cur2556 + _rhs2557
 		}()
 	}
-	return ""
+	return frontInvalidTypeRepr()
 }
 
 // Osty: /tmp/selfhost_merged.osty:32229:1
-func selfLintTypeIsMustUse(typeName string) bool {
+func selfLintTypeIsMustUse(typeRepr *FrontTypeRepr) bool {
 	// Osty: /tmp/selfhost_merged.osty:32230:5
-	if typeName == "" || typeName == "Invalid" || typeName == "Poison" {
+	if typeRepr == nil || typeRepr.kind == "error" || typeRepr.kind == "poison" {
 		// Osty: /tmp/selfhost_merged.osty:32231:9
 		return false
 	}
 	// Osty: /tmp/selfhost_merged.osty:32233:5
-	if typeName == "Result" || typeName == "Option" {
+	if typeRepr.kind == "optional" {
 		// Osty: /tmp/selfhost_merged.osty:32234:9
 		return true
 	}
 	// Osty: /tmp/selfhost_merged.osty:32236:5
-	if strings.HasPrefix(typeName, "Result<") || strings.HasPrefix(typeName, "Option<") {
+	if typeRepr.kind == "named" && (typeRepr.name == "Result" || typeRepr.name == "Option") {
 		// Osty: /tmp/selfhost_merged.osty:32237:9
 		return true
 	}
-	return strings.HasSuffix(typeName, "?")
+	return false
 }
 
 // Osty: /tmp/selfhost_merged.osty:32249:1
@@ -59987,12 +60025,12 @@ func selfLintIgnoredResultStmt(file *AstFile, idx int, hints *SelfLintTypeHints,
 		// Osty: /tmp/selfhost_merged.osty:32328:9
 		if !(tailIsValue) {
 			// Osty: /tmp/selfhost_merged.osty:32329:13
-			typeName := selfLintTypeAt(hints, exprIdx)
-			_ = typeName
+			typeRepr := selfLintTypeAt(hints, exprIdx)
+			_ = typeRepr
 			// Osty: /tmp/selfhost_merged.osty:32330:13
-			if selfLintTypeIsMustUse(typeName) {
+			if selfLintTypeIsMustUse(typeRepr) {
 				// Osty: /tmp/selfhost_merged.osty:32331:17
-				out = selfLintEmitAtNode(out, "L0007", "discarded must-use value — handle the error or assign to `_`", typeName, node.start, node.end, exprIdx)
+				out = selfLintEmitAtNode(out, "L0007", "discarded must-use value — handle the error or assign to `_`", frontTypeReprToString(typeRepr), node.start, node.end, exprIdx)
 			}
 		}
 		// Osty: /tmp/selfhost_merged.osty:32342:9
@@ -60021,12 +60059,12 @@ func selfLintIgnoredResultStmt(file *AstFile, idx int, hints *SelfLintTypeHints,
 		exprIdx := node.left
 		_ = exprIdx
 		// Osty: /tmp/selfhost_merged.osty:32356:9
-		typeName := selfLintTypeAt(hints, exprIdx)
-		_ = typeName
+		typeRepr := selfLintTypeAt(hints, exprIdx)
+		_ = typeRepr
 		// Osty: /tmp/selfhost_merged.osty:32357:9
-		if selfLintTypeIsMustUse(typeName) {
+		if selfLintTypeIsMustUse(typeRepr) {
 			// Osty: /tmp/selfhost_merged.osty:32358:13
-			out = selfLintEmitAtNode(out, "L0007", "discarded must-use value in `defer` — wrap with `ignoreError` / `logError` (§10.1) or handle explicitly", typeName, node.start, node.end, exprIdx)
+			out = selfLintEmitAtNode(out, "L0007", "discarded must-use value in `defer` — wrap with `ignoreError` / `logError` (§10.1) or handle explicitly", frontTypeReprToString(typeRepr), node.start, node.end, exprIdx)
 		}
 		// Osty: /tmp/selfhost_merged.osty:32368:9
 		return selfLintIgnoredResultExpr(file, exprIdx, hints, out)
@@ -64045,7 +64083,7 @@ type InspectRecord struct {
 	end      int
 	nodeKind string
 	rule     string
-	typeName string
+	typeRepr *FrontTypeRepr
 	hintName string
 	notes    []string
 }
@@ -64526,7 +64564,7 @@ func inspectBindingTypeByPattern(checked *FrontCheckResult) []*InspectBindingEnt
 	for _, bnd := range checked.bindings {
 		// Osty: /tmp/selfhost_merged.osty:34916:9
 		func() struct{} {
-			out = append(out, &InspectBindingEntry{node: bnd.node, typeName: frontTypeReprToString(bnd.typeRepr)})
+			out = append(out, &InspectBindingEntry{node: bnd.node, typeRepr: bnd.typeRepr})
 			return struct{}{}
 		}()
 	}
@@ -64545,7 +64583,7 @@ func inspectLookupBindingType(entries []*InspectBindingEntry, patternIdx int) st
 		// Osty: /tmp/selfhost_merged.osty:34926:9
 		if e.node == patternIdx {
 			// Osty: /tmp/selfhost_merged.osty:34927:13
-			return e.typeName
+			return frontTypeReprToString(e.typeRepr)
 		}
 	}
 	return ""
@@ -64668,7 +64706,7 @@ func inspectThreadHint(arena *AstArena, idx int, hint string, hints []string) {
 // Osty: /tmp/selfhost_merged.osty:34988:1
 type InspectBindingEntry struct {
 	node     int
-	typeName string
+	typeRepr *FrontTypeRepr
 }
 
 // Osty: /tmp/selfhost_merged.osty:34993:1
@@ -64691,7 +64729,7 @@ func inspectBuildRecords(checked *FrontCheckResult, letPatterns []int, hintsByNo
 		_ = hint
 		// Osty: /tmp/selfhost_merged.osty:35005:9
 		func() struct{} {
-			out = append(out, &InspectRecord{start: tn.start, end: tn.end, nodeKind: tn.kind, rule: rule, typeName: frontTypeReprToString(tn.typeRepr), hintName: hint, notes: make([]string, 0, 1)})
+			out = append(out, &InspectRecord{start: tn.start, end: tn.end, nodeKind: tn.kind, rule: rule, typeRepr: tn.typeRepr, hintName: hint, notes: make([]string, 0, 1)})
 			return struct{}{}
 		}()
 	}
@@ -64720,7 +64758,7 @@ func inspectBuildRecords(checked *FrontCheckResult, letPatterns []int, hintsByNo
 		}
 		// Osty: /tmp/selfhost_merged.osty:35027:9
 		func() struct{} {
-			out = append(out, &InspectRecord{start: sym.start, end: sym.end, nodeKind: inspectNodeKindForSymbolKind(sym.kind), rule: rule, typeName: frontTypeReprToString(sym.typeRepr), hintName: "", notes: notes})
+			out = append(out, &InspectRecord{start: sym.start, end: sym.end, nodeKind: inspectNodeKindForSymbolKind(sym.kind), rule: rule, typeRepr: sym.typeRepr, hintName: "", notes: notes})
 			return struct{}{}
 		}()
 	}
@@ -64764,7 +64802,7 @@ func inspectBuildRecords(checked *FrontCheckResult, letPatterns []int, hintsByNo
 		}
 		// Osty: /tmp/selfhost_merged.osty:35049:9
 		func() struct{} {
-			out = append(out, &InspectRecord{start: bnd.start, end: bnd.end, nodeKind: nodeKind, rule: rule, typeName: frontTypeReprToString(bnd.typeRepr), hintName: "", notes: notes})
+			out = append(out, &InspectRecord{start: bnd.start, end: bnd.end, nodeKind: nodeKind, rule: rule, typeRepr: bnd.typeRepr, hintName: "", notes: notes})
 			return struct{}{}
 		}()
 	}
@@ -65105,7 +65143,7 @@ func inspectRecordRule(recs []*InspectRecord, i int) string {
 
 // Osty: /tmp/selfhost_merged.osty:35187:5
 func inspectRecordTypeName(recs []*InspectRecord, i int) string {
-	return recs[i].typeName
+	return frontTypeReprToString(recs[i].typeRepr)
 }
 
 // Osty: /tmp/selfhost_merged.osty:35191:5
@@ -69029,4 +69067,320 @@ func astLowerIntListAt(xs []int, target int) int {
 		return -1
 	}
 	return xs[target]
+}
+
+// Osty: toolchain/check_gates.osty:1135:1
+func runPureGate(cx *ElabCx) {
+	if cx == nil || cx.ast == nil || cx.ast.arena == nil {
+		return
+	}
+	arena := cx.ast.arena
+	pureNames := collectPureFnNames(arena)
+	if len(pureNames) == 0 {
+		return
+	}
+	for _, declIdx := range arena.decls {
+		node := astArenaNodeAt(arena, declIdx)
+		if node == nil {
+			continue
+		}
+		switch node.kind.(type) {
+		case *AstNodeKind_AstNFnDecl:
+			pureCheckFn(cx, arena, node, pureNames)
+		case *AstNodeKind_AstNStructDecl, *AstNodeKind_AstNEnumDecl:
+			pureCheckMethods(cx, arena, node, pureNames)
+		}
+	}
+}
+
+// Osty: toolchain/check_gates.osty:1150:1
+func collectPureFnNames(arena *AstArena) map[string]struct{} {
+	out := map[string]struct{}{}
+	if arena == nil {
+		return out
+	}
+	for _, declIdx := range arena.decls {
+		node := astArenaNodeAt(arena, declIdx)
+		if node == nil {
+			continue
+		}
+		switch node.kind.(type) {
+		case *AstNodeKind_AstNFnDecl:
+			if fnHasPureAnnotationAndBody(arena, node) {
+				out[node.text] = struct{}{}
+			}
+		case *AstNodeKind_AstNStructDecl, *AstNodeKind_AstNEnumDecl:
+			for _, memberIdx := range node.children {
+				member := astArenaNodeAt(arena, memberIdx)
+				if member == nil {
+					continue
+				}
+				if _, ok := member.kind.(*AstNodeKind_AstNFnDecl); ok && fnHasPureAnnotationAndBody(arena, member) {
+					out[member.text] = struct{}{}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// Osty: toolchain/check_gates.osty:1175:1
+func fnHasPureAnnotationAndBody(arena *AstArena, fn *AstNode) bool {
+	return fn != nil && fn.right >= 0 && checkGateAnnotationContains(arena, fn.extra, "pure")
+}
+
+// Osty: toolchain/check_gates.osty:1179:1
+func pureCheckFn(cx *ElabCx, arena *AstArena, fn *AstNode, pureNames map[string]struct{}) {
+	if !fnHasPureAnnotationAndBody(arena, fn) {
+		return
+	}
+	locals := map[string]struct{}{}
+	for _, paramIdx := range fn.children {
+		param := astArenaNodeAt(arena, paramIdx)
+		if param == nil {
+			continue
+		}
+		if _, ok := param.kind.(*AstNodeKind_AstNParam); ok && param.text != "" && param.text != "self" {
+			locals[param.text] = struct{}{}
+		}
+	}
+	pureWalkExpr(cx, arena, fn.right, fn.text, pureNames, locals)
+}
+
+// Osty: toolchain/check_gates.osty:1193:1
+func pureCheckMethods(cx *ElabCx, arena *AstArena, parent *AstNode, pureNames map[string]struct{}) {
+	if parent == nil {
+		return
+	}
+	for _, memberIdx := range parent.children {
+		member := astArenaNodeAt(arena, memberIdx)
+		if member == nil {
+			continue
+		}
+		if _, ok := member.kind.(*AstNodeKind_AstNFnDecl); ok {
+			pureCheckFn(cx, arena, member, pureNames)
+		}
+	}
+}
+
+// Osty: toolchain/check_gates.osty:1216:1
+func pureEmit(cx *ElabCx, fnName, what, fixHint string, start, end int) {
+	if cx == nil || cx.env == nil {
+		return
+	}
+	notes := []string{"LANG_SPEC v0.6 A13: `#[pure]` lowers to LLVM `readnone`, so the body must not write non-local state, perform I/O, allocate, or call impure functions"}
+	if fixHint != "" {
+		notes = append(notes, "hint: "+fixHint)
+	}
+	cx.env.diagnostics = append(cx.env.diagnostics, checkDiagWithNotes(
+		"E0775",
+		fmt.Sprintf("`#[pure]` function `%s` cannot %s", fnName, what),
+		start,
+		end,
+		notes,
+	))
+}
+
+// Osty: toolchain/check_gates.osty:1220:1
+func pureWalkExpr(cx *ElabCx, arena *AstArena, idx int, fnName string, pureNames map[string]struct{}, locals map[string]struct{}) {
+	if arena == nil || idx < 0 || idx >= len(arena.nodes) {
+		return
+	}
+	node := arena.nodes[idx]
+	if node == nil {
+		return
+	}
+	switch node.kind.(type) {
+	case *AstNodeKind_AstNList:
+		pureEmit(cx, fnName, "allocate a list literal", "remove `#[pure]`, pass in precomputed data, or rewrite without managed allocation", node.start, node.end)
+		for _, childIdx := range node.children {
+			pureWalkExpr(cx, arena, childIdx, fnName, pureNames, locals)
+		}
+	case *AstNodeKind_AstNMap:
+		pureEmit(cx, fnName, "allocate a map literal", "remove `#[pure]`, pass in precomputed data, or rewrite without managed allocation", node.start, node.end)
+		for _, childIdx := range node.children {
+			pureWalkExpr(cx, arena, childIdx, fnName, pureNames, locals)
+		}
+		for _, childIdx := range node.children2 {
+			pureWalkExpr(cx, arena, childIdx, fnName, pureNames, locals)
+		}
+	case *AstNodeKind_AstNStructLit:
+		pureEmit(cx, fnName, "allocate a struct literal", "return scalar data or drop `#[pure]` until the value construction can be proven allocation-free", node.start, node.end)
+		for _, fieldIdx := range node.children {
+			field := astArenaNodeAt(arena, fieldIdx)
+			if field != nil {
+				pureWalkExpr(cx, arena, field.left, fnName, pureNames, locals)
+			}
+		}
+		pureWalkExpr(cx, arena, node.right, fnName, pureNames, locals)
+	case *AstNodeKind_AstNClosure:
+		pureEmit(cx, fnName, "allocate a closure", "closures capture an environment; use a direct `#[pure]` helper function instead", node.start, node.end)
+	case *AstNodeKind_AstNStringLit:
+		if isAllocatingStringText(node.text) {
+			pureEmit(cx, fnName, classifyAllocatingString(node.text), "only plain `\"...\"` literals are accepted in `#[pure]` bodies", node.start, node.end)
+		}
+	case *AstNodeKind_AstNCall:
+		if !pureCalleeAllowed(arena, node.left, pureNames) {
+			what := "call a function that is not `#[pure]`"
+			if pureCalleeLooksLikeIO(arena, node.left) {
+				what = "perform I/O"
+			}
+			pureEmit(cx, fnName, what, "mark the callee `#[pure]` only if it is side-effect free, or remove `#[pure]` from this function", node.start, node.end)
+		}
+		pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+		for _, argIdx := range node.children {
+			pureWalkExpr(cx, arena, argIdx, fnName, pureNames, locals)
+		}
+	case *AstNodeKind_AstNAssign:
+		if !pureAssignTargetLocal(arena, node.left, locals) {
+			pureEmit(cx, fnName, "write non-local state", "only assignment to local bindings declared inside the `#[pure]` function is allowed", node.start, node.end)
+		}
+		pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+		pureWalkExpr(cx, arena, node.right, fnName, pureNames, locals)
+	case *AstNodeKind_AstNChanSend:
+		pureEmit(cx, fnName, "send on a channel", "channel sends are observable side effects; remove `#[pure]`", node.start, node.end)
+		pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+		pureWalkExpr(cx, arena, node.right, fnName, pureNames, locals)
+	case *AstNodeKind_AstNDefer:
+		pureEmit(cx, fnName, "register a deferred effect", "defer runs code after the function returns and is not allowed in `#[pure]` bodies", node.start, node.end)
+		pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+	case *AstNodeKind_AstNLet:
+		pureWalkExpr(cx, arena, node.right, fnName, pureNames, locals)
+	case *AstNodeKind_AstNBlock:
+		scoped := pureCopyLocals(locals)
+		for _, stmtIdx := range node.children {
+			pureWalkExpr(cx, arena, stmtIdx, fnName, pureNames, scoped)
+			stmt := astArenaNodeAt(arena, stmtIdx)
+			if stmt != nil {
+				if _, ok := stmt.kind.(*AstNodeKind_AstNLet); ok {
+					pureCollectPatternBindings(arena, stmt.left, scoped)
+				}
+			}
+		}
+	case *AstNodeKind_AstNExprStmt, *AstNodeKind_AstNReturn, *AstNodeKind_AstNQuestion, *AstNodeKind_AstNField, *AstNodeKind_AstNParen, *AstNodeKind_AstNTurbofish:
+		pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+	case *AstNodeKind_AstNFor:
+		loopLocals := pureCopyLocals(locals)
+		pureCollectPatternBindings(arena, node.left, loopLocals)
+		pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+		if len(node.children) >= 2 {
+			pureWalkExpr(cx, arena, node.children[1], fnName, pureNames, locals)
+		}
+		pureWalkExpr(cx, arena, node.right, fnName, pureNames, loopLocals)
+	case *AstNodeKind_AstNIf:
+		pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+		pureWalkExpr(cx, arena, node.right, fnName, pureNames, locals)
+		if len(node.children) > 0 {
+			pureWalkExpr(cx, arena, node.children[0], fnName, pureNames, locals)
+		}
+	case *AstNodeKind_AstNMatch:
+		pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+		for _, armIdx := range node.children {
+			arm := astArenaNodeAt(arena, armIdx)
+			if arm == nil {
+				continue
+			}
+			armLocals := pureCopyLocals(locals)
+			pureCollectPatternBindings(arena, arm.left, armLocals)
+			if len(arm.children) > 0 {
+				pureWalkExpr(cx, arena, arm.children[0], fnName, pureNames, armLocals)
+			}
+			pureWalkExpr(cx, arena, arm.right, fnName, pureNames, armLocals)
+		}
+	case *AstNodeKind_AstNUnary:
+		pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+	case *AstNodeKind_AstNBinary, *AstNodeKind_AstNIndex, *AstNodeKind_AstNRange:
+		pureWalkExpr(cx, arena, node.left, fnName, pureNames, locals)
+		pureWalkExpr(cx, arena, node.right, fnName, pureNames, locals)
+	case *AstNodeKind_AstNTuple:
+		for _, childIdx := range node.children {
+			pureWalkExpr(cx, arena, childIdx, fnName, pureNames, locals)
+		}
+	}
+}
+
+// Osty: toolchain/check_gates.osty:1356:1
+func pureAssignTargetLocal(arena *AstArena, targetIdx int, locals map[string]struct{}) bool {
+	target := astArenaNodeAt(arena, targetIdx)
+	if target == nil {
+		return false
+	}
+	if _, ok := target.kind.(*AstNodeKind_AstNIdent); !ok {
+		return false
+	}
+	_, ok := locals[target.text]
+	return ok
+}
+
+// Osty: toolchain/check_gates.osty:1367:1
+func pureCalleeAllowed(arena *AstArena, calleeIdx int, pureNames map[string]struct{}) bool {
+	callee := astArenaNodeAt(arena, calleeIdx)
+	if callee == nil {
+		return false
+	}
+	switch callee.kind.(type) {
+	case *AstNodeKind_AstNIdent, *AstNodeKind_AstNField:
+		_, ok := pureNames[callee.text]
+		return ok
+	case *AstNodeKind_AstNTurbofish:
+		return pureCalleeAllowed(arena, callee.left, pureNames)
+	default:
+		return false
+	}
+}
+
+// Osty: toolchain/check_gates.osty:1384:1
+func pureCalleeLooksLikeIO(arena *AstArena, calleeIdx int) bool {
+	switch pureCalleeLastName(arena, calleeIdx) {
+	case "print", "println", "eprint", "eprintln", "read", "readAll", "readToString", "write", "writeAll", "open", "create":
+		return true
+	default:
+		return false
+	}
+}
+
+// Osty: toolchain/check_gates.osty:1399:1
+func pureCalleeLastName(arena *AstArena, calleeIdx int) string {
+	callee := astArenaNodeAt(arena, calleeIdx)
+	if callee == nil {
+		return ""
+	}
+	switch callee.kind.(type) {
+	case *AstNodeKind_AstNIdent, *AstNodeKind_AstNField:
+		return callee.text
+	case *AstNodeKind_AstNTurbofish:
+		return pureCalleeLastName(arena, callee.left)
+	default:
+		return ""
+	}
+}
+
+// Osty: toolchain/check_gates.osty:1419:1
+func pureCollectPatternBindings(arena *AstArena, patIdx int, out map[string]struct{}) {
+	pat := astArenaNodeAt(arena, patIdx)
+	if pat == nil {
+		return
+	}
+	if _, ok := pat.kind.(*AstNodeKind_AstNPattern); !ok {
+		return
+	}
+	if pat.extra == astPatternIdentKind() || pat.extra == astPatternBindingKind() {
+		if pat.text != "" && pat.text != "_" {
+			out[pat.text] = struct{}{}
+		}
+	}
+	pureCollectPatternBindings(arena, pat.left, out)
+	pureCollectPatternBindings(arena, pat.right, out)
+	for _, childIdx := range pat.children {
+		pureCollectPatternBindings(arena, childIdx, out)
+	}
+}
+
+// Osty: toolchain/check_gates.osty:1413:1
+func pureCopyLocals(in map[string]struct{}) map[string]struct{} {
+	out := make(map[string]struct{}, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }

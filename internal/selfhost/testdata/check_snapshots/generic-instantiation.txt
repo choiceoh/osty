@@ -1,0 +1,15 @@
+summary assignments=1 accepted=1 errors=0
+typedNodes
+  node=4 nodeId=4 typeId=25 kind=Ident span=26:31 type=T
+  node=6 nodeId=6 typeId=25 kind=Block span=24:33 type=T
+  node=12 nodeId=12 typeId=2 kind=IntLit span=69:70 type=Int
+  node=13 nodeId=13 typeId=2 kind=Call span=68:71 type=Int
+  node=15 nodeId=15 typeId=19 kind=Block span=44:73 type=()
+bindings
+  bindingId=0 node=8 nodeId=8 name=answer mutable=false typeId=2 span=50:56 type=Int
+symbols
+  symbolId=0 node=7 nodeId=7 kind=fn name=id owner= typeId=108 span=0:33 type=fn(T) -> T
+  symbolId=1 node=16 nodeId=16 kind=fn name=main owner= typeId=118 span=34:73 type=fn() -> ()
+instantiations
+  instantiationId=0 node=13 nodeId=13 callee=id span=68:71 typeArgIds=[2] typeArgs=[Int] resultTypeId=2 resultType=Int
+diagnostics

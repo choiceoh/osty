@@ -1,0 +1,10 @@
+summary assignments=0 accepted=0 errors=0
+typedNodes
+  node=2 nodeId=2 typeId=2 kind=IntLit span=34:36 type=Int
+  node=4 nodeId=4 typeId=19 kind=Block span=10:38 type=()
+bindings
+  bindingId=0 node=0 nodeId=0 name=answer mutable=false typeId=2 span=20:26 type=Int
+symbols
+  symbolId=0 node=5 nodeId=5 kind=fn name=main owner= typeId=118 span=0:38 type=fn() -> ()
+instantiations
+diagnostics

@@ -125,44 +125,56 @@ func joinTypeReprStrings(ss []string, sep string) string {
 	return result
 }
 
-// CheckedNode records a checked expression node and its inferred type name.
+// CheckedNode records a checked expression node and its inferred type.
 type CheckedNode struct {
-	Node  int       `json:"node"`
-	Kind  string    `json:"kind"`
-	Type  *TypeRepr `json:"type"`
-	Start int       `json:"start"`
-	End   int       `json:"end"`
+	Node   int       `json:"node"`   // legacy alias for NodeID
+	NodeID int       `json:"nodeId"` // stable selfhost AST node id
+	Kind   string    `json:"kind"`
+	Type   *TypeRepr `json:"type"`
+	TypeID int       `json:"typeId"`
+	Start  int       `json:"start"`
+	End    int       `json:"end"`
 }
 
 // CheckedBinding records a local binding that the bootstrapped checker typed.
 type CheckedBinding struct {
-	Node    int       `json:"node"`
-	Name    string    `json:"name"`
-	Type    *TypeRepr `json:"type"`
-	Mutable bool      `json:"mutable"`
-	Start   int       `json:"start"`
-	End     int       `json:"end"`
+	Node      int       `json:"node"` // legacy alias for NodeID
+	NodeID    int       `json:"nodeId"`
+	BindingID int       `json:"bindingId"`
+	Name      string    `json:"name"`
+	Type      *TypeRepr `json:"type"`
+	TypeID    int       `json:"typeId"`
+	Mutable   bool      `json:"mutable"`
+	Start     int       `json:"start"`
+	End       int       `json:"end"`
 }
 
 // CheckedSymbol records a declaration collected by the bootstrapped checker.
 type CheckedSymbol struct {
-	Node  int       `json:"node"`
-	Kind  string    `json:"kind"`
-	Name  string    `json:"name"`
-	Owner string    `json:"owner"`
-	Type  *TypeRepr `json:"type"`
-	Start int       `json:"start"`
-	End   int       `json:"end"`
+	Node     int       `json:"node"` // legacy alias for NodeID
+	NodeID   int       `json:"nodeId"`
+	SymbolID int       `json:"symbolId"`
+	Kind     string    `json:"kind"`
+	Name     string    `json:"name"`
+	Owner    string    `json:"owner"`
+	Type     *TypeRepr `json:"type"`
+	TypeID   int       `json:"typeId"`
+	Start    int       `json:"start"`
+	End      int       `json:"end"`
 }
 
 // CheckInstantiation records a generic function or method instantiation.
 type CheckInstantiation struct {
-	Node       int        `json:"node"`
-	Callee     string     `json:"callee"`
-	TypeArgs   []TypeRepr `json:"typeArgs"`
-	ResultType *TypeRepr  `json:"resultType,omitempty"`
-	Start      int        `json:"start"`
-	End        int        `json:"end"`
+	Node            int        `json:"node"` // legacy alias for NodeID
+	NodeID          int        `json:"nodeId"`
+	InstantiationID int        `json:"instantiationId"`
+	Callee          string     `json:"callee"`
+	TypeArgs        []TypeRepr `json:"typeArgs"`
+	TypeArgIDs      []int      `json:"typeArgIds,omitempty"`
+	ResultType      *TypeRepr  `json:"resultType,omitempty"`
+	ResultTypeID    int        `json:"resultTypeId"`
+	Start           int        `json:"start"`
+	End             int        `json:"end"`
 }
 
 // CheckDiagnosticRecord is a structured diagnostic produced by the
@@ -194,6 +206,74 @@ type CheckResult struct {
 	Symbols        []CheckedSymbol         `json:"symbols"`
 	Instantiations []CheckInstantiation    `json:"instantiations"`
 	Diagnostics    []CheckDiagnosticRecord `json:"diagnostics,omitempty"`
+}
+
+// CheckResultIndex is a stable-id lookup table over CheckResult. It is not
+// serialized; callers build it from an authoritative CheckResult when they
+// want to consume checker facts without span/name rematching.
+type CheckResultIndex struct {
+	TypedNodesByNodeID     map[int]*CheckedNode
+	BindingsByID           map[int]*CheckedBinding
+	BindingsByNodeID       map[int][]*CheckedBinding
+	SymbolsByID            map[int]*CheckedSymbol
+	SymbolsByNodeID        map[int][]*CheckedSymbol
+	InstantiationsByID     map[int]*CheckInstantiation
+	InstantiationsByNodeID map[int][]*CheckInstantiation
+}
+
+// Index builds a stable-id lookup table for r. Pointer values refer to records
+// inside r, so callers should treat r as immutable while using the index.
+func (r *CheckResult) Index() CheckResultIndex {
+	if r == nil {
+		return CheckResultIndex{
+			TypedNodesByNodeID:     map[int]*CheckedNode{},
+			BindingsByID:           map[int]*CheckedBinding{},
+			BindingsByNodeID:       map[int][]*CheckedBinding{},
+			SymbolsByID:            map[int]*CheckedSymbol{},
+			SymbolsByNodeID:        map[int][]*CheckedSymbol{},
+			InstantiationsByID:     map[int]*CheckInstantiation{},
+			InstantiationsByNodeID: map[int][]*CheckInstantiation{},
+		}
+	}
+	idx := CheckResultIndex{
+		TypedNodesByNodeID:     make(map[int]*CheckedNode, len(r.TypedNodes)),
+		BindingsByID:           make(map[int]*CheckedBinding, len(r.Bindings)),
+		BindingsByNodeID:       make(map[int][]*CheckedBinding),
+		SymbolsByID:            make(map[int]*CheckedSymbol, len(r.Symbols)),
+		SymbolsByNodeID:        make(map[int][]*CheckedSymbol),
+		InstantiationsByID:     make(map[int]*CheckInstantiation, len(r.Instantiations)),
+		InstantiationsByNodeID: make(map[int][]*CheckInstantiation),
+	}
+	for i := range r.TypedNodes {
+		rec := &r.TypedNodes[i]
+		idx.TypedNodesByNodeID[checkRecordNodeID(rec.NodeID, rec.Node)] = rec
+	}
+	for i := range r.Bindings {
+		rec := &r.Bindings[i]
+		nodeID := checkRecordNodeID(rec.NodeID, rec.Node)
+		idx.BindingsByID[rec.BindingID] = rec
+		idx.BindingsByNodeID[nodeID] = append(idx.BindingsByNodeID[nodeID], rec)
+	}
+	for i := range r.Symbols {
+		rec := &r.Symbols[i]
+		nodeID := checkRecordNodeID(rec.NodeID, rec.Node)
+		idx.SymbolsByID[rec.SymbolID] = rec
+		idx.SymbolsByNodeID[nodeID] = append(idx.SymbolsByNodeID[nodeID], rec)
+	}
+	for i := range r.Instantiations {
+		rec := &r.Instantiations[i]
+		nodeID := checkRecordNodeID(rec.NodeID, rec.Node)
+		idx.InstantiationsByID[rec.InstantiationID] = rec
+		idx.InstantiationsByNodeID[nodeID] = append(idx.InstantiationsByNodeID[nodeID], rec)
+	}
+	return idx
+}
+
+func checkRecordNodeID(nodeID, legacyNode int) int {
+	if nodeID != 0 {
+		return nodeID
+	}
+	return legacyNode
 }
 
 // CheckRequest is the wire shape consumed by the cmd/osty-native-checker
@@ -293,11 +373,9 @@ type ResolveRequest struct {
 // InspectRecord is the exported shape of one inspector observation
 // produced by the self-hosted inspect pass (toolchain/inspect.osty).
 //
-// Unlike internal/check.InspectRecord — which carries structured
-// types.Type values and token.Pos spans — this record stays in the
-// self-host's pre-lift representation: raw byte offsets and rendered
-// type strings. Callers that need structured types should continue to
-// use the Go-side Inspect until the self-host surfaces a typed form.
+// Unlike internal/check.InspectRecord — which carries types.Type values and
+// token.Pos spans — this record stays in the self-host's pre-lift span
+// representation while carrying the same structured TypeRepr as CheckResult.
 type InspectRecord struct {
 	Start    int       `json:"start"`
 	End      int       `json:"end"`

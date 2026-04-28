@@ -180,6 +180,7 @@ func PackageImportSurface(importPath, alias string, runs []*FrontendRun) Package
 			Owner:      alias,
 			Name:       arenaLocalTypeName(qualified),
 			TypeName:   qualified,
+			Type:       arenaNamedTypeRepr(qualified, nil),
 			HasDefault: true,
 		})
 	}
@@ -217,6 +218,7 @@ func PackageImportSurface(importPath, alias string, runs []*FrontendRun) Package
 					Owner:      alias,
 					Name:       n.text,
 					TypeName:   arenaFnTypeSource(arena, localTypes, nil, n),
+					Type:       arenaFnTypeRepr(arena, localTypes, nil, n),
 					HasDefault: true,
 				})
 			case *AstNodeKind_AstNStructDecl:
@@ -252,13 +254,16 @@ func PackageImportSurface(importPath, alias string, runs []*FrontendRun) Package
 					continue
 				}
 				typeName := ""
+				typeIdx := -1
 				if len(n.children) > 0 && n.children[0] >= 0 {
+					typeIdx = n.children[0]
 					typeName = arenaImportedTypeSource(arena, localTypes, nil, n.children[0])
 				}
 				surface.Fields = append(surface.Fields, PackageCheckField{
 					Owner:      alias,
 					Name:       arenaLetDeclName(arena, n),
 					TypeName:   typeName,
+					Type:       arenaImportedTypeRepr(arena, localTypes, nil, typeIdx),
 					HasDefault: true,
 				})
 			}
@@ -396,6 +401,7 @@ func arenaAppendImportedStruct(surface *PackageCheckImport, arena *AstArena, ali
 				Owner:      name,
 				Name:       child.text,
 				TypeName:   fieldType,
+				Type:       arenaImportedTypeRepr(arena, localTypes, scopeGenerics, child.right),
 				Exported:   child.flags == 1,
 				HasDefault: child.left >= 0,
 			})
@@ -427,14 +433,19 @@ func arenaAppendImportedEnum(surface *PackageCheckImport, arena *AstArena, alias
 		switch child.kind.(type) {
 		case *AstNodeKind_AstNVariant:
 			fields := make([]string, 0, len(child.children))
+			fieldReprs := make([]TypeRepr, 0, len(child.children))
 			for _, typeIdx := range child.children {
 				fields = append(fields, arenaImportedTypeSource(arena, localTypes, scopeGenerics, typeIdx))
+				if repr := arenaImportedTypeRepr(arena, localTypes, scopeGenerics, typeIdx); repr != nil {
+					fieldReprs = append(fieldReprs, *repr)
+				}
 			}
 			surface.Variants = append(surface.Variants, PackageCheckVariant{
-				Owner:      name,
-				Name:       child.text,
-				FieldTypes: fields,
-				Generics:   append([]string(nil), generics...),
+				Owner:          name,
+				Name:           child.text,
+				FieldTypes:     fields,
+				FieldTypeReprs: fieldReprs,
+				Generics:       append([]string(nil), generics...),
 			})
 		case *AstNodeKind_AstNFnDecl:
 			surface.Functions = append(surface.Functions, arenaBuildImportedFn(arena, localTypes, alias, name, generics, bounds, child))
@@ -468,8 +479,9 @@ func arenaAppendImportedInterface(surface *PackageCheckImport, arena *AstArena, 
 		}
 		// Non-fn members on an interface are `extends` type references.
 		surface.InterfaceExts = append(surface.InterfaceExts, PackageCheckInterfaceExt{
-			Owner:         name,
-			InterfaceType: arenaImportedTypeSource(arena, localTypes, scopeGenerics, childIdx),
+			Owner:             name,
+			InterfaceType:     arenaImportedTypeSource(arena, localTypes, scopeGenerics, childIdx),
+			InterfaceTypeRepr: arenaImportedTypeRepr(arena, localTypes, scopeGenerics, childIdx),
 		})
 	}
 }
@@ -490,9 +502,10 @@ func arenaAppendImportedAlias(surface *PackageCheckImport, arena *AstArena, alia
 		target = arenaImportedTypeSource(arena, localTypes, arenaGenericSet(generics), n.left)
 	}
 	surface.Aliases = append(surface.Aliases, PackageCheckAlias{
-		Name:     name,
-		Target:   target,
-		Generics: generics,
+		Name:       name,
+		Target:     target,
+		TargetRepr: arenaImportedTypeRepr(arena, localTypes, arenaGenericSet(generics), n.left),
+		Generics:   generics,
 	})
 }
 
@@ -502,6 +515,7 @@ func arenaBuildImportedFn(arena *AstArena, localTypes map[string]string, alias, 
 	scopeGenerics := arenaGenericSet(combinedGenerics)
 	paramNames := make([]string, 0, len(n.children))
 	paramTypes := make([]string, 0, len(n.children))
+	paramTypeReprs := make([]TypeRepr, 0, len(n.children))
 	paramDefaults := make([]bool, 0, len(n.children))
 	argIdx := 0
 	for i, childIdx := range n.children {
@@ -542,29 +556,39 @@ func arenaBuildImportedFn(arena *AstArena, localTypes map[string]string, alias, 
 			typeSrc = arenaImportedTypeSource(arena, localTypes, scopeGenerics, child.right)
 		}
 		paramTypes = append(paramTypes, typeSrc)
+		if repr := arenaImportedTypeRepr(arena, localTypes, scopeGenerics, child.right); repr != nil {
+			paramTypeReprs = append(paramTypeReprs, *repr)
+		}
 		paramDefaults = append(paramDefaults, hasDefault)
 	}
 	bounds := append([]PackageCheckGenericBound(nil), ownerBounds...)
 	bounds = append(bounds, arenaGenericBounds(arena, localTypes, combinedGenerics, n.children2)...)
 	receiverType := ""
+	var receiverTypeRepr *TypeRepr
 	if owner != "" {
 		receiverType = arenaNamedTypeSource(owner, ownerGenerics)
+		receiverTypeRepr = arenaNamedTypeRepr(owner, ownerGenerics)
 	}
 	returnType := ""
+	var returnTypeRepr *TypeRepr
 	if n.left >= 0 {
 		returnType = arenaImportedTypeSource(arena, localTypes, scopeGenerics, n.left)
+		returnTypeRepr = arenaImportedTypeRepr(arena, localTypes, scopeGenerics, n.left)
 	}
 	return PackageCheckFn{
-		Name:          n.text,
-		Owner:         owner,
-		ReceiverType:  receiverType,
-		ReturnType:    returnType,
-		HasBody:       n.right >= 0,
-		ParamNames:    paramNames,
-		ParamTypes:    paramTypes,
-		ParamDefaults: paramDefaults,
-		Generics:      combinedGenerics,
-		GenericBounds: bounds,
+		Name:             n.text,
+		Owner:            owner,
+		ReceiverType:     receiverType,
+		ReceiverTypeRepr: receiverTypeRepr,
+		ReturnType:       returnType,
+		ReturnTypeRepr:   returnTypeRepr,
+		HasBody:          n.right >= 0,
+		ParamNames:       paramNames,
+		ParamTypes:       paramTypes,
+		ParamTypeReprs:   paramTypeReprs,
+		ParamDefaults:    paramDefaults,
+		Generics:         combinedGenerics,
+		GenericBounds:    bounds,
 	}
 }
 
@@ -625,8 +649,9 @@ func arenaGenericBounds(arena *AstArena, localTypes map[string]string, scopeGene
 		}
 		for _, constraintIdx := range n.children {
 			out = append(out, PackageCheckGenericBound{
-				TyParam:       n.text,
-				InterfaceType: arenaImportedTypeSource(arena, localTypes, generics, constraintIdx),
+				TyParam:           n.text,
+				InterfaceType:     arenaImportedTypeSource(arena, localTypes, generics, constraintIdx),
+				InterfaceTypeRepr: arenaImportedTypeRepr(arena, localTypes, generics, constraintIdx),
 			})
 		}
 	}
@@ -694,11 +719,104 @@ func arenaImportedTypeSource(arena *AstArena, localTypes map[string]string, gene
 	return name + "<" + strings.Join(args, ", ") + ">"
 }
 
+func arenaImportedTypeRepr(arena *AstArena, localTypes map[string]string, generics map[string]struct{}, idx int) *TypeRepr {
+	if idx < 0 || idx >= len(arena.nodes) {
+		return &TypeRepr{Kind: "unit"}
+	}
+	n := arena.nodes[idx]
+	if n == nil {
+		return &TypeRepr{Kind: "unit"}
+	}
+	switch n.text {
+	case "optional":
+		return &TypeRepr{Kind: "optional", Return: arenaImportedTypeRepr(arena, localTypes, generics, n.left)}
+	case "tuple":
+		elems := make([]TypeRepr, 0, len(n.children))
+		for _, childIdx := range n.children {
+			if repr := arenaImportedTypeRepr(arena, localTypes, generics, childIdx); repr != nil {
+				elems = append(elems, *repr)
+			}
+		}
+		return &TypeRepr{Kind: "tuple", Args: elems}
+	case "fn":
+		params := make([]TypeRepr, 0, len(n.children))
+		for _, childIdx := range n.children {
+			if repr := arenaImportedTypeRepr(arena, localTypes, generics, childIdx); repr != nil {
+				params = append(params, *repr)
+			}
+		}
+		ret := &TypeRepr{Kind: "unit"}
+		if n.right >= 0 {
+			ret = arenaImportedTypeRepr(arena, localTypes, generics, n.right)
+		}
+		return &TypeRepr{Kind: "fn", Args: params, Return: ret}
+	}
+	name := n.text
+	if name == "" {
+		return &TypeRepr{Kind: "error", Name: "Invalid"}
+	}
+	if !strings.ContainsRune(name, '.') {
+		if _, isGeneric := generics[name]; !isGeneric {
+			if qualified := localTypes[name]; qualified != "" {
+				name = qualified
+			}
+		}
+	}
+	args := make([]TypeRepr, 0, len(n.children))
+	for _, childIdx := range n.children {
+		if repr := arenaImportedTypeRepr(arena, localTypes, generics, childIdx); repr != nil {
+			args = append(args, *repr)
+		}
+	}
+	return arenaTypeReprForName(name, args, generics)
+}
+
 func arenaNamedTypeSource(name string, generics []string) string {
 	if len(generics) == 0 {
 		return name
 	}
 	return name + "<" + strings.Join(generics, ", ") + ">"
+}
+
+func arenaNamedTypeRepr(name string, generics []string) *TypeRepr {
+	args := make([]TypeRepr, 0, len(generics))
+	for _, generic := range generics {
+		args = append(args, TypeRepr{Kind: "typevar", Name: generic})
+	}
+	return arenaTypeReprForName(name, args, arenaGenericSet(generics))
+}
+
+func arenaTypeReprForName(name string, args []TypeRepr, generics map[string]struct{}) *TypeRepr {
+	if name == "()" {
+		return &TypeRepr{Kind: "unit"}
+	}
+	if name == "Never" {
+		return &TypeRepr{Kind: "never", Name: "Never"}
+	}
+	if name == "Invalid" {
+		return &TypeRepr{Kind: "error", Name: "Invalid"}
+	}
+	if _, ok := generics[name]; ok && len(args) == 0 {
+		return &TypeRepr{Kind: "typevar", Name: name}
+	}
+	kind := "named"
+	if arenaIsPrimitiveTypeName(name) && len(args) == 0 {
+		kind = "primitive"
+	}
+	return &TypeRepr{Kind: kind, Name: name, Args: args}
+}
+
+func arenaIsPrimitiveTypeName(name string) bool {
+	switch name {
+	case "Int", "Int8", "Int16", "Int32", "Int64",
+		"UInt8", "UInt16", "UInt32", "UInt64",
+		"Byte", "Float", "Float32", "Float64",
+		"Bool", "Char", "String", "Bytes",
+		"UntypedInt", "UntypedFloat":
+		return true
+	default:
+		return false
+	}
 }
 
 // arenaFnTypeSource renders the synthetic `fn(T1, T2) -> R` string for a
@@ -732,6 +850,37 @@ func arenaFnTypeSource(arena *AstArena, localTypes map[string]string, generics m
 		out += " -> " + arenaImportedTypeSource(arena, localTypes, generics, fnNode.left)
 	}
 	return out
+}
+
+func arenaFnTypeRepr(arena *AstArena, localTypes map[string]string, generics map[string]struct{}, fnNode *AstNode) *TypeRepr {
+	paramTypes := make([]TypeRepr, 0, len(fnNode.children))
+	for i, childIdx := range fnNode.children {
+		if childIdx < 0 || childIdx >= len(arena.nodes) {
+			continue
+		}
+		child := arena.nodes[childIdx]
+		if child == nil {
+			continue
+		}
+		if _, ok := child.kind.(*AstNodeKind_AstNParam); !ok {
+			continue
+		}
+		if i == 0 && child.text == "self" {
+			continue
+		}
+		if child.right < 0 {
+			paramTypes = append(paramTypes, TypeRepr{Kind: "unit"})
+			continue
+		}
+		if repr := arenaImportedTypeRepr(arena, localTypes, generics, child.right); repr != nil {
+			paramTypes = append(paramTypes, *repr)
+		}
+	}
+	ret := &TypeRepr{Kind: "unit"}
+	if fnNode.left >= 0 {
+		ret = arenaImportedTypeRepr(arena, localTypes, generics, fnNode.left)
+	}
+	return &TypeRepr{Kind: "fn", Args: paramTypes, Return: ret}
 }
 
 // arenaIsPubLet reports whether the AstNLet top-level decl at `n` was

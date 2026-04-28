@@ -100,6 +100,17 @@ func (r *Result) NativeResult() *api.CheckResult {
 	return r.NativeCheckResult
 }
 
+// NativeIndex returns stable-id lookups over the authoritative selfhost result.
+// It is empty when the native checker did not run. Compatibility callers may
+// keep using the legacy maps above; new downstream consumers should use this
+// surface to avoid span/name rematching through the Go AST.
+func (r *Result) NativeIndex() api.CheckResultIndex {
+	if r == nil || r.NativeCheckResult == nil {
+		return (*api.CheckResult)(nil).Index()
+	}
+	return r.NativeCheckResult.Index()
+}
+
 // Opts bundles optional inputs to File / Package / Workspace.
 type Opts struct {
 

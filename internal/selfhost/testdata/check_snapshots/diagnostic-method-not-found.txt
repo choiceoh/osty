@@ -1,0 +1,18 @@
+summary assignments=1 accepted=1 errors=1
+errorsByContext E0703=1
+errorDetails E0703 no method `label` on type `User` @L4:C21=1
+typedNodes
+  node=5 nodeId=5 typeId=17 kind=StringLit span=69:74 type=String
+  node=7 nodeId=7 typeId=118 kind=StructLit span=61:76 type=User
+  node=10 nodeId=10 typeId=118 kind=Ident span=93:97 type=User
+  node=14 nodeId=14 typeId=19 kind=Block span=39:107 type=()
+bindings
+  bindingId=0 node=3 nodeId=3 name=user mutable=false typeId=118 span=49:53 type=User
+  bindingId=1 node=9 nodeId=9 name=label mutable=false typeId=1 span=85:90 type=Poison
+symbols
+  symbolId=0 node=2 nodeId=2 kind=struct name=User owner= typeId=118 span=0:28 type=User
+  symbolId=1 node=1 nodeId=1 kind=field name=name owner=User typeId=17 span=14:26 type=String
+  symbolId=2 node=15 nodeId=15 kind=fn name=main owner= typeId=119 span=29:107 type=fn() -> ()
+instantiations
+diagnostics
+  code=E0703 severity=error span=97:103 line=4:21-4:27 message=no method `label` on type `User`

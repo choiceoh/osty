@@ -18,50 +18,57 @@ type PackageCheckFile struct {
 // PackageCheckGenericBound describes one `<T: Iface>` constraint on a
 // generic decl surfaced from an imported package.
 type PackageCheckGenericBound struct {
-	TyParam       string `json:"tyParam,omitempty"`
-	InterfaceType string `json:"interfaceType,omitempty"`
+	TyParam           string    `json:"tyParam,omitempty"`
+	InterfaceType     string    `json:"interfaceType,omitempty"` // legacy fallback
+	InterfaceTypeRepr *TypeRepr `json:"interfaceTypeRepr,omitempty"`
 }
 
 // PackageCheckFn describes one function or method declared in an
 // imported package surface.
 type PackageCheckFn struct {
-	Name          string                     `json:"name,omitempty"`
-	Owner         string                     `json:"owner,omitempty"`
-	ReceiverType  string                     `json:"receiverType,omitempty"`
-	ReturnType    string                     `json:"returnType,omitempty"`
-	HasBody       bool                       `json:"hasBody,omitempty"`
-	ParamNames    []string                   `json:"paramNames,omitempty"`
-	ParamTypes    []string                   `json:"paramTypes,omitempty"`
-	ParamDefaults []bool                     `json:"paramDefaults,omitempty"`
-	Generics      []string                   `json:"generics,omitempty"`
-	GenericBounds []PackageCheckGenericBound `json:"genericBounds,omitempty"`
+	Name             string                     `json:"name,omitempty"`
+	Owner            string                     `json:"owner,omitempty"`
+	ReceiverType     string                     `json:"receiverType,omitempty"` // legacy fallback
+	ReceiverTypeRepr *TypeRepr                  `json:"receiverTypeRepr,omitempty"`
+	ReturnType       string                     `json:"returnType,omitempty"` // legacy fallback
+	ReturnTypeRepr   *TypeRepr                  `json:"returnTypeRepr,omitempty"`
+	HasBody          bool                       `json:"hasBody,omitempty"`
+	ParamNames       []string                   `json:"paramNames,omitempty"`
+	ParamTypes       []string                   `json:"paramTypes,omitempty"` // legacy fallback
+	ParamTypeReprs   []TypeRepr                 `json:"paramTypeReprs,omitempty"`
+	ParamDefaults    []bool                     `json:"paramDefaults,omitempty"`
+	Generics         []string                   `json:"generics,omitempty"`
+	GenericBounds    []PackageCheckGenericBound `json:"genericBounds,omitempty"`
 }
 
 // PackageCheckField describes one struct field exported by an imported
 // package.
 type PackageCheckField struct {
-	Owner      string `json:"owner,omitempty"`
-	Name       string `json:"name,omitempty"`
-	TypeName   string `json:"typeName,omitempty"`
-	Exported   bool   `json:"exported,omitempty"`
-	HasDefault bool   `json:"hasDefault,omitempty"`
+	Owner      string    `json:"owner,omitempty"`
+	Name       string    `json:"name,omitempty"`
+	TypeName   string    `json:"typeName,omitempty"` // legacy fallback
+	Type       *TypeRepr `json:"type,omitempty"`
+	Exported   bool      `json:"exported,omitempty"`
+	HasDefault bool      `json:"hasDefault,omitempty"`
 }
 
 // PackageCheckVariant describes one enum variant exported by an
 // imported package.
 type PackageCheckVariant struct {
-	Owner      string   `json:"owner,omitempty"`
-	Name       string   `json:"name,omitempty"`
-	FieldTypes []string `json:"fieldTypes,omitempty"`
-	Generics   []string `json:"generics,omitempty"`
+	Owner          string     `json:"owner,omitempty"`
+	Name           string     `json:"name,omitempty"`
+	FieldTypes     []string   `json:"fieldTypes,omitempty"` // legacy fallback
+	FieldTypeReprs []TypeRepr `json:"fieldTypeReprs,omitempty"`
+	Generics       []string   `json:"generics,omitempty"`
 }
 
 // PackageCheckAlias describes one `type Alias = Target` declaration
 // exported by an imported package.
 type PackageCheckAlias struct {
-	Name     string   `json:"name,omitempty"`
-	Target   string   `json:"target,omitempty"`
-	Generics []string `json:"generics,omitempty"`
+	Name       string    `json:"name,omitempty"`
+	Target     string    `json:"target,omitempty"` // legacy fallback
+	TargetRepr *TypeRepr `json:"targetRepr,omitempty"`
+	Generics   []string  `json:"generics,omitempty"`
 }
 
 // PackageCheckType describes one struct / enum / interface declaration
@@ -76,8 +83,9 @@ type PackageCheckType struct {
 // PackageCheckInterfaceExt records one interface extension
 // (`impl Iface for T`) coming from an imported package.
 type PackageCheckInterfaceExt struct {
-	Owner         string `json:"owner,omitempty"`
-	InterfaceType string `json:"interfaceType,omitempty"`
+	Owner             string    `json:"owner,omitempty"`
+	InterfaceType     string    `json:"interfaceType,omitempty"` // legacy fallback
+	InterfaceTypeRepr *TypeRepr `json:"interfaceTypeRepr,omitempty"`
 }
 
 // PackageCheckImport is the surface of one imported package: its

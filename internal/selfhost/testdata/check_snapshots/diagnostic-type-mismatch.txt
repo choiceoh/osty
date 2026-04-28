@@ -1,0 +1,13 @@
+summary assignments=1 accepted=0 errors=1
+errorsByContext E0700=1
+errorDetails E0700 type mismatch: expected `Int`, found `String` @L2:C23=1
+typedNodes
+  node=2 nodeId=2 typeId=17 kind=StringLit span=34:40 type=String
+  node=4 nodeId=4 typeId=19 kind=Block span=10:42 type=()
+bindings
+  bindingId=0 node=0 nodeId=0 name=answer mutable=false typeId=2 span=20:26 type=Int
+symbols
+  symbolId=0 node=5 nodeId=5 kind=fn name=main owner= typeId=118 span=0:42 type=fn() -> ()
+instantiations
+diagnostics
+  code=E0700 severity=error span=34:40 line=2:23-2:29 message=type mismatch: expected `Int`, found `String`

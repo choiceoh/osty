@@ -34,6 +34,7 @@ func TestRunEmitsStructuredCheckResult(t *testing.T) {
 	if len(resp.Instantiations) == 0 {
 		t.Fatalf("instantiations = %#v, want generic instantiation facts", resp.Instantiations)
 	}
+	assertStableCheckIDs(t, resp)
 }
 
 func TestRunRejectsInvalidJSON(t *testing.T) {
@@ -60,6 +61,7 @@ func TestRunChecksGenericBoundsAndInterfaceExtends(t *testing.T) {
 	if len(goodResp.Instantiations) == 0 {
 		t.Fatalf("good instantiations = %#v, want generic call facts", goodResp.Instantiations)
 	}
+	assertStableCheckIDs(t, goodResp)
 
 	var badOut bytes.Buffer
 	badIn := strings.NewReader(`{"source":"interface Named { fn name(self) -> String }\nstruct User { age: Int }\nfn display<T: Named>(value: T) -> String { value.name() }\nfn main() { let user: User = User { age: 37 } let label: String = display(user) }\n"}`)
@@ -110,5 +112,66 @@ func TestRunChecksPackageStructuredRequest(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("bindings = %#v, want value:Int from package request", resp.Bindings)
+	}
+	assertStableCheckIDs(t, resp)
+}
+
+func assertStableCheckIDs(t *testing.T, resp api.CheckResult) {
+	t.Helper()
+
+	seenNonZeroNodeID := false
+	for _, node := range resp.TypedNodes {
+		if node.NodeID != node.Node {
+			t.Fatalf("typed node stable id mismatch: %#v", node)
+		}
+		if node.NodeID != 0 {
+			seenNonZeroNodeID = true
+		}
+		if node.Type == nil {
+			t.Fatalf("typed node missing structured type: %#v", node)
+		}
+	}
+	if !seenNonZeroNodeID {
+		t.Fatalf("typed nodes did not expose any non-zero stable node ids: %#v", resp.TypedNodes)
+	}
+
+	seenBindingIDs := map[int]bool{}
+	for _, binding := range resp.Bindings {
+		if binding.NodeID != binding.Node {
+			t.Fatalf("binding stable id mismatch: %#v", binding)
+		}
+		if seenBindingIDs[binding.BindingID] {
+			t.Fatalf("duplicate binding id %d in %#v", binding.BindingID, resp.Bindings)
+		}
+		seenBindingIDs[binding.BindingID] = true
+		if binding.Type == nil {
+			t.Fatalf("binding missing structured type: %#v", binding)
+		}
+	}
+
+	seenSymbolIDs := map[int]bool{}
+	for _, symbol := range resp.Symbols {
+		if symbol.NodeID != symbol.Node {
+			t.Fatalf("symbol stable id mismatch: %#v", symbol)
+		}
+		if seenSymbolIDs[symbol.SymbolID] {
+			t.Fatalf("duplicate symbol id %d in %#v", symbol.SymbolID, resp.Symbols)
+		}
+		seenSymbolIDs[symbol.SymbolID] = true
+		if symbol.Type == nil {
+			t.Fatalf("symbol missing structured type: %#v", symbol)
+		}
+	}
+
+	for _, inst := range resp.Instantiations {
+		if inst.NodeID != inst.Node {
+			t.Fatalf("instantiation stable id mismatch: %#v", inst)
+		}
+		if len(inst.TypeArgIDs) != len(inst.TypeArgs) {
+			t.Fatalf("instantiation type arg ids = %#v, type args = %#v", inst.TypeArgIDs, inst.TypeArgs)
+		}
+		if inst.ResultType == nil || inst.ResultTypeID <= 0 {
+			t.Fatalf("instantiation missing result type identity: %#v", inst)
+		}
 	}
 }
