@@ -1690,12 +1690,14 @@ fn mirLowerStringLitOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
 }
 
 /// mirLowerIdentOperand lowers an ident reference to an operand.
-/// Locals / params resolve to a Copy of the bound place; fn / global
-/// / variant idents record Stage 4e TODOs and fall back to a temp
-/// holding the Stage 4b unit-const stub so the surrounding code
-/// still has a well-typed operand to consume.
+/// Locals / params resolve to a Copy of the bound place; fn idents
+/// become FnConst operands; globals and bare variants materialise a
+/// fresh temp so callers can consume them as ordinary operands.
 fn mirLowerIdentOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
     let typeText = hirTypeString(e.typ)
+    if e.identName == "None" && e.identKind != HirIdentLocal && e.identKind != HirIdentParam {
+        return mirLowerNoneOperandHint(bs, e, mirLowerVariantValueType(bs.l, "None", e.typ))
+    }
     match e.identKind {
         HirIdentLocal -> mirLowerIdentLocalOperand(bs, e, typeText),
         HirIdentParam -> mirLowerIdentLocalOperand(bs, e, typeText),
@@ -1736,16 +1738,49 @@ fn mirLowerIdentGlobalOperand(bs: MirLowerBodyState, e: HirExpr, typeText: Strin
     mirOperandCopy(mirPlace(tmp), typeText)
 }
 
-/// mirLowerIdentVariantOperand handles a bare variant ident like
-/// `None` / `Red`. Stage 4e wires full variant aggregate emission;
-/// Stage 4d-1 records an issue and returns a unit-const so the
-/// lowering at least terminates.
+/// mirLowerIdentVariantOperand handles a bare payload-free variant
+/// ident like `Red`. It mirrors Go MIR's IdentVariant path: recover
+/// the owner enum when the HIR type is missing, emit an enum aggregate
+/// into a fresh temp, then return a Copy operand for that temp.
 fn mirLowerIdentVariantOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
-    mirLowerNoteIssue(
-        bs.l,
-        "mir_lower Stage 4e TODO: bare variant ident \"" + e.identName + "\"",
+    let t = mirLowerVariantValueType(bs.l, e.identName, e.typ)
+    let span = mirSpanFromHir(e.span)
+    let tmp = mirLowerFreshTemp(bs, t, span)
+    let variantIdx = mirLowerVariantIndexByName(bs.l, t, e.identName)
+    let fields: List<MirOperand> = []
+    let rv = mirRVVariant(
+        variantIdx,
+        e.identName,
+        fields,
+        hirTypeString(t),
     )
-    mirOperandConst(mirConstUnit())
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(tmp), rv, span))
+    mirOperandCopy(mirPlace(tmp), hirTypeString(t))
+}
+
+fn mirLowerVariantValueType(l: MirLowerer, variantName: String, t: HirType) -> HirType {
+    if hirTypeIsValid(t) && !hirTypeIsErr(t) {
+        return t
+    }
+    let enumName = mirLowerEnumForVariant(l, variantName)
+    if enumName != "" {
+        return hirTypeNamed(enumName, [])
+    }
+    if hirTypeIsValid(t) {
+        return t
+    }
+    hirTypeErr()
+}
+
+fn mirLowerEnumForVariant(l: MirLowerer, variantName: String) -> String {
+    for e in l.enums {
+        for v in e.variants {
+            if v.name == variantName {
+                return e.name
+            }
+        }
+    }
+    ""
 }
 
 fn mirLowerIdentUnsupported(bs: MirLowerBodyState, e: HirExpr, kindName: String) -> MirOperand {
@@ -3459,15 +3494,94 @@ fn mirLowerCallIdent(
         HirIdentFn -> mirLowerDirectFnCall(bs, e, callee, dest, destT, span),
         HirIdentLocal -> mirLowerIndirectCall(bs, e, callee, dest, destT, span),
         HirIdentParam -> mirLowerIndirectCall(bs, e, callee, dest, destT, span),
-        HirIdentVariant -> mirLowerCallUnsupported(
-            bs, e, dest, destT, span,
-            "variant-ctor call (routed through VariantLit; Stage 4e-2)",
-        ),
+        HirIdentVariant -> mirLowerVariantCtorCallInto(bs, e, callee, dest, destT, span),
+        HirIdentBuiltin -> {
+            if mirLowerIsPreludeVariantName(callee.identName) {
+                mirLowerVariantCtorCallInto(bs, e, callee, dest, destT, span)
+            } else {
+                mirLowerCallUnsupported(
+                    bs, e, dest, destT, span,
+                    "ident kind " + hirIdentKindName(callee.identKind),
+                )
+            }
+        },
         _ -> mirLowerCallUnsupported(
             bs, e, dest, destT, span,
             "ident kind " + hirIdentKindName(callee.identKind),
         ),
     }
+}
+
+fn mirLowerVariantCtorCallInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    callee: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) {
+    if mirLowerCallArgsHaveKeyword(e.callArgs) {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: keyword args in variant constructor \"" + callee.identName + "\" use source order",
+        )
+    }
+    let hintedT = mirLowerChooseVariantType(e.typ, destT)
+    let variantT = mirLowerVariantValueType(bs.l, callee.identName, hintedT)
+    let enumName = hirTypeNameOf(variantT)
+    let variantIdx = if enumName != "" {
+        let found = mirLowerFindVariantIndex(bs.l, enumName, callee.identName)
+        if found >= 0 {
+            found
+        } else {
+            mirLowerVariantIndexByName(bs.l, variantT, callee.identName)
+        }
+    } else {
+        mirLowerVariantIndexByName(bs.l, variantT, callee.identName)
+    }
+    let fields = mirLowerVariantCtorArgs(bs, e.callArgs, enumName, variantT, callee.identName)
+    let rv = mirRVVariant(
+        variantIdx,
+        callee.identName,
+        fields,
+        hirTypeString(variantT),
+    )
+    mirLowerEmitInstr(bs, mirAssignInstr(dest, rv, span))
+}
+
+fn mirLowerVariantCtorArgs(
+    bs: MirLowerBodyState,
+    args: List<HirArg>,
+    enumName: String,
+    variantT: HirType,
+    variantName: String,
+) -> List<MirOperand> {
+    let mut out: List<MirOperand> = []
+    let mut i = 0
+    for a in args {
+        let payloadT = mirLowerVariantPayloadTypeForScrut(
+            bs.l,
+            variantT,
+            enumName,
+            variantName,
+            i,
+        )
+        if hirTypeIsValid(payloadT) && !hirTypeIsErr(payloadT) {
+            out.push(mirLowerExprAsOperandHint(bs, a.value, payloadT))
+        } else {
+            out.push(mirLowerExprAsOperand(bs, a.value))
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn mirLowerIsPreludeVariantName(name: String) -> Bool {
+    if name == "Some" { return true }
+    if name == "None" { return true }
+    if name == "Ok" { return true }
+    if name == "Err" { return true }
+    false
 }
 
 /// mirLowerDirectFnCall emits `CallInstr` with a FnRef callee. When
