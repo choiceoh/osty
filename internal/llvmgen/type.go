@@ -1986,25 +1986,9 @@ func llvmParamIRType(param paramInfo) string {
 	return param.typ
 }
 
+// sanitizeLLVMName folds an arbitrary identifier into the LLVM
+// global-name alphabet `[A-Za-z_][A-Za-z0-9_]*`. Delegates to the
+// Osty-sourced `mirSanitizeLLVMName` (`toolchain/mir_generator.osty`).
 func sanitizeLLVMName(name string) string {
-	if name == "" {
-		return "anon"
-	}
-	var b strings.Builder
-	for i, c := range name {
-		if c == '_' || ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || (i > 0 && '0' <= c && c <= '9') {
-			b.WriteRune(c)
-			continue
-		}
-		if i == 0 && '0' <= c && c <= '9' {
-			b.WriteByte('_')
-			b.WriteRune(c)
-			continue
-		}
-		b.WriteByte('_')
-	}
-	if b.Len() == 0 {
-		return "anon"
-	}
-	return b.String()
+	return mirSanitizeLLVMName(name)
 }

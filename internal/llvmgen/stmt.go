@@ -362,22 +362,10 @@ func astExprTextEq(g *generator, a, b ast.Expr) bool {
 }
 
 // mapKeySuffix maps an LLVM key type string + string-flag to the
-// suffix used by the `osty_rt_map_*_<suffix>` runtime helpers.
+// suffix used by the `osty_rt_map_*_<suffix>` runtime helpers. Delegates
+// to the Osty-sourced `mirMapKeySuffix` (`toolchain/mir_generator.osty`).
 func mapKeySuffix(llvmTyp string, isString bool) string {
-	if isString {
-		return "string"
-	}
-	switch llvmTyp {
-	case "i64":
-		return "i64"
-	case "i1":
-		return "i1"
-	case "double":
-		return "f64"
-	case "ptr":
-		return "ptr"
-	}
-	return ""
+	return mirMapKeySuffix(llvmTyp, isString)
 }
 
 func (g *generator) emitStmt(stmt ast.Stmt) error {
@@ -593,32 +581,27 @@ func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
 
 // compoundBinaryOp maps a compound-assignment token (`+=`, `-=`, …) to the
 // binary operator token it desugars to (`+`, `-`, …). Returns false when the
-// token is not a compound assignment.
+// token is not a compound assignment. Delegates to the Osty-sourced
+// `mirCompoundBinaryOpCode` (`toolchain/mir_generator.osty`); the
+// Osty-side function takes the int code of every relevant token kind so
+// the mapping stays in lockstep with the `internal/token` enum without
+// re-implementing the table on the Osty side. The wrapper returns
+// `(0, false)` for the no-match sentinel to match the pre-port behavior.
 func compoundBinaryOp(op token.Kind) (token.Kind, bool) {
-	switch op {
-	case token.PLUSEQ:
-		return token.PLUS, true
-	case token.MINUSEQ:
-		return token.MINUS, true
-	case token.STAREQ:
-		return token.STAR, true
-	case token.SLASHEQ:
-		return token.SLASH, true
-	case token.PERCENTEQ:
-		return token.PERCENT, true
-	case token.BITANDEQ:
-		return token.BITAND, true
-	case token.BITOREQ:
-		return token.BITOR, true
-	case token.BITXOREQ:
-		return token.BITXOR, true
-	case token.SHLEQ:
-		return token.SHL, true
-	case token.SHREQ:
-		return token.SHR, true
-	default:
+	code := mirCompoundBinaryOpCode(int(op),
+		int(token.PLUSEQ), int(token.MINUSEQ), int(token.STAREQ),
+		int(token.SLASHEQ), int(token.PERCENTEQ),
+		int(token.BITANDEQ), int(token.BITOREQ), int(token.BITXOREQ),
+		int(token.SHLEQ), int(token.SHREQ),
+		int(token.PLUS), int(token.MINUS), int(token.STAR),
+		int(token.SLASH), int(token.PERCENT),
+		int(token.BITAND), int(token.BITOR), int(token.BITXOR),
+		int(token.SHL), int(token.SHR),
+	)
+	if code < 0 {
 		return 0, false
 	}
+	return token.Kind(code), true
 }
 
 // emitCompoundAssign lowers `x op= v` to `x = x op v`. Ident and single-level
@@ -1249,7 +1232,7 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 	case stmt.Value == nil && g.returnType == "":
 		llvmReturnI32Zero(emitter)
 	case stmt.Value == nil && g.returnType == "void":
-		emitter.body = append(emitter.body, "  ret void")
+		emitter.body = append(emitter.body, mirRetVoidText())
 	default:
 		llvmReturn(emitter, toOstyValue(ret))
 	}
@@ -1503,8 +1486,8 @@ func (g *generator) emitTestingExpect(call *ast.CallExpr, wantErr bool) (value, 
 	emitter = g.toOstyEmitter()
 	llvmPrintlnString(emitter, toOstyValue(msg))
 	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
-	emitter.body = append(emitter.body, "  call void @exit(i32 1)")
-	emitter.body = append(emitter.body, "  unreachable")
+	emitter.body = append(emitter.body, mirCallExitOneText())
+	emitter.body = append(emitter.body, mirUnreachableText())
 	emitter.body = append(emitter.body, mirLabelText(okLabel))
 	payload := llvmExtractValue(emitter, toOstyValue(result), payloadType, payloadIndex)
 	g.takeOstyEmitter(emitter)
@@ -1901,8 +1884,8 @@ func (g *generator) emitTestingAbortWithEmitter(emitter *LlvmEmitter, message st
 	text := llvmStringLiteral(emitter, message)
 	llvmPrintlnString(emitter, text)
 	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
-	emitter.body = append(emitter.body, "  call void @exit(i32 1)")
-	emitter.body = append(emitter.body, "  unreachable")
+	emitter.body = append(emitter.body, mirCallExitOneText())
+	emitter.body = append(emitter.body, mirUnreachableText())
 	emitter.body = append(emitter.body, mirLabelText(nextLabel))
 }
 
@@ -1955,8 +1938,8 @@ func (g *generator) emitTestingAssertionLazy(cond value, buildMessage func() (va
 	emitter = g.toOstyEmitter()
 	llvmPrintlnString(emitter, toOstyValue(msg))
 	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
-	emitter.body = append(emitter.body, "  call void @exit(i32 1)")
-	emitter.body = append(emitter.body, "  unreachable")
+	emitter.body = append(emitter.body, mirCallExitOneText())
+	emitter.body = append(emitter.body, mirUnreachableText())
 	emitter.body = append(emitter.body, mirLabelText(okLabel))
 	g.takeOstyEmitter(emitter)
 	g.currentBlock = okLabel

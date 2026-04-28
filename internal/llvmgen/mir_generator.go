@@ -1227,35 +1227,16 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 	return false
 }
 
+// mirIntrinsicLabel returns a human-readable label for a MIR intrinsic
+// kind. Delegates to the Osty-sourced `mirIntrinsicKindLabelFull`
+// (`toolchain/mir_generator.osty`); the kind-int and the
+// `kind=<n>` fallback string are the two host-side inputs the Osty
+// function needs. The legacy table only handled the "string" + "print"
+// families, so the fallback is the same `fmt.Sprintf("kind=%d", int(k))`
+// the original implementation used for unrecognised codes.
 func mirIntrinsicLabel(k mir.IntrinsicKind) string {
-	// Use the MIR printer's label if reachable; fall back to numeric.
-	switch k {
-	case mir.IntrinsicPrint:
-		return "print"
-	case mir.IntrinsicPrintln:
-		return "println"
-	case mir.IntrinsicEprint:
-		return "eprint"
-	case mir.IntrinsicEprintln:
-		return "eprintln"
-	case mir.IntrinsicStringConcat:
-		return "string_concat"
-	case mir.IntrinsicStringChars:
-		return "string_chars"
-	case mir.IntrinsicStringBytes:
-		return "string_bytes"
-	case mir.IntrinsicStringLen:
-		return "string_len"
-	case mir.IntrinsicStringIsEmpty:
-		return "string_is_empty"
-	case mir.IntrinsicStringToInt:
-		return "string_to_int"
-	case mir.IntrinsicStringToFloat:
-		return "string_to_float"
-	case mir.IntrinsicRawNull:
-		return "raw.null"
-	}
-	return fmt.Sprintf("kind=%d", int(k))
+	fallback := fmt.Sprintf("kind=%d", int(k))
+	return mirIntrinsicKindLabelFull(int(k), fallback)
 }
 
 // ==== header + runtime declares ====
@@ -2123,9 +2104,8 @@ func (g *mirGen) emitShadowStackFramePush() {
 	for _, chunk := range g.gcRootChunks {
 		frame := g.fresh()
 		// `{prev:ptr, slots:ptr, count:i64}` — 24 bytes on 64-bit hosts.
-		g.fnBuf.WriteString(frame + " = alloca { ptr, ptr, i64 }\n")
-		g.fnBuf.WriteString("  call void @osty.gc.root_frame_enter_v1(ptr " + frame +
-			", ptr " + chunk.slotsPtr + ", i64 " + strconv.Itoa(chunk.count) + ")\n")
+		g.fnBuf.WriteString(mirAllocaRootFrameStructLine(frame))
+		g.fnBuf.WriteString(mirRootFrameEnterLine(frame, chunk.slotsPtr, strconv.Itoa(chunk.count)))
 		g.gcRootFrames = append(g.gcRootFrames, frame)
 	}
 }
@@ -2142,7 +2122,7 @@ func (g *mirGen) emitGCReleaseRoots() {
 	// is defensive against out-of-order pops, but matching push order
 	// keeps the common path branch-free.
 	for i := len(g.gcRootFrames) - 1; i >= 0; i-- {
-		g.fnBuf.WriteString("  call void @osty.gc.root_frame_leave_v1(ptr " + g.gcRootFrames[i] + ")\n")
+		g.fnBuf.WriteString(mirRootFrameLeaveLine(g.gcRootFrames[i]))
 	}
 }
 
@@ -5245,7 +5225,7 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 		baseLen := llvmCall(em, "i64", lenSym, []*LlvmValue{{typ: "ptr", name: bytesReg}})
 		suffixLen := llvmCall(em, "i64", lenSym, []*LlvmValue{{typ: "ptr", name: suffixReg}})
 		expected := llvmNextTemp(em)
-		em.body = append(em.body, fmt.Sprintf("  %s = sub i64 %s, %s", expected, baseLen.name, suffixLen.name))
+		em.body = append(em.body, mirSubI64Text(expected, baseLen.name, suffixLen.name))
 		found := llvmCompare(em, "sge", index, llvmIntLiteral(0))
 		atEnd := llvmCompare(em, "eq", index, &LlvmValue{typ: "i64", name: expected})
 		result := llvmLogicalI1(em, "and", found, atEnd)
@@ -5889,14 +5869,15 @@ func (g *mirGen) emitStringConcatN(parts []*LlvmValue) *LlvmValue {
 	g.declareRuntime(sym, mirRuntimeDeclarePtrFromI64PtrLine(sym))
 	em := g.ostyEmitter()
 	arr := llvmNextTemp(em)
-	em.body = append(em.body, fmt.Sprintf("  %s = alloca [%d x ptr]", arr, len(parts)))
+	nDigits := strconv.Itoa(len(parts))
+	em.body = append(em.body, mirAllocaPtrArrayText(arr, nDigits))
 	for i, part := range parts {
 		slot := llvmNextTemp(em)
-		em.body = append(em.body, fmt.Sprintf("  %s = getelementptr [%d x ptr], ptr %s, i64 0, i64 %d", slot, len(parts), arr, i))
-		em.body = append(em.body, fmt.Sprintf("  store ptr %s, ptr %s", part.name, slot))
+		em.body = append(em.body, mirGEPInboundsPtrArrayText(slot, nDigits, arr, strconv.Itoa(i)))
+		em.body = append(em.body, mirStorePtrText(part.name, slot))
 	}
 	out := llvmNextTemp(em)
-	em.body = append(em.body, fmt.Sprintf("  %s = call ptr @%s(i64 %d, ptr %s)", out, sym, len(parts), arr))
+	em.body = append(em.body, mirCallPtrFromI64PtrText(out, sym, nDigits, arr))
 	g.flushOstyEmitter(em)
 	return &LlvmValue{typ: "ptr", name: out}
 }
@@ -6034,7 +6015,7 @@ func (g *mirGen) emitStringSplitInto(i *mir.IntrinsicInstr) error {
 	sym := mirRtStringSplitIntoSymbol()
 	g.declareRuntime(sym, mirRuntimeDeclareThreePtrVoidLine(sym))
 	em := g.ostyEmitter()
-	em.body = append(em.body, fmt.Sprintf("  call void @%s(ptr %s, ptr %s, ptr %s)", sym, outReg, valReg, sepReg))
+	em.body = append(em.body, mirCallVoidThreePtrText(sym, outReg, valReg, sepReg))
 	g.flushOstyEmitter(em)
 	return nil
 }
@@ -6254,7 +6235,7 @@ func (g *mirGen) emitChannelIntrinsic(i *mir.IntrinsicInstr) error {
 			g.flushOstyEmitter(em)
 			return fmt.Errorf("mir-mvp: chan_recv dest %d", i.Dest.Local)
 		}
-		em.body = append(em.body, fmt.Sprintf("  store { i64, i64 } %s, ptr %s", result.name, g.localSlots[i.Dest.Local]))
+		em.body = append(em.body, mirStoreI64I64StructText(result.name, g.localSlots[i.Dest.Local]))
 		g.flushOstyEmitter(em)
 		return nil
 	case mir.IntrinsicChanClose:

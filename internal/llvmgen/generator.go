@@ -251,7 +251,7 @@ func (g *generator) attachVectorizeMD(emitter *LlvmEmitter, condLabel string) {
 	if emitter == nil || !g.loopHintsActive() {
 		return
 	}
-	target := fmt.Sprintf("  br label %%%s", condLabel)
+	target := mirBrUncondText(condLabel)
 	for i := len(emitter.body) - 1; i >= 0; i-- {
 		if emitter.body[i] == target {
 			ref := g.nextLoopMD()
@@ -727,17 +727,17 @@ func renderInterfaceShim(iface *interfaceInfo, impl interfaceImpl, m interfaceMe
 	}
 	var body strings.Builder
 	if !receiver.byRef {
-		body.WriteString(fmt.Sprintf("  %%self.val = load %s, ptr %%self.ptr\n", receiver.typ))
+		body.WriteString(mirInterfaceShimLoadSelfValLine(receiver.typ))
 	}
 	if ret == "void" {
 		// Void call sites must NOT bind an SSA destination —
 		// `%x = call void @f()` is not valid LLVM IR. Emit the bare
 		// call + `ret void`.
-		body.WriteString(fmt.Sprintf("  call void @%s(%s)\n", sig.irName, strings.Join(callArgs, ", ")))
-		body.WriteString("  ret void\n")
+		body.WriteString(mirInterfaceShimCallVoidLine(sig.irName, strings.Join(callArgs, ", ")))
+		body.WriteString(mirInterfaceShimRetVoidLine())
 	} else {
-		body.WriteString(fmt.Sprintf("  %%ret.val = call %s @%s(%s)\n", ret, sig.irName, strings.Join(callArgs, ", ")))
-		body.WriteString(fmt.Sprintf("  ret %s %%ret.val\n", ret))
+		body.WriteString(mirInterfaceShimCallValueLine(ret, sig.irName, strings.Join(callArgs, ", ")))
+		body.WriteString(mirInterfaceShimRetValueLine(ret))
 	}
 	def := fmt.Sprintf("define internal %s %s(%s) {\n%s}",
 		ret, shimSym, strings.Join(shimParams, ", "), body.String())
@@ -1381,30 +1381,18 @@ type gcSafepointRoot struct {
 	path []int
 }
 
+// cloneRootPaths deep-copies a list of int-list paths so the caller can
+// mutate the result without aliasing the source. Delegates to the
+// Osty-sourced `mirCloneRootPaths` (`toolchain/mir_generator.osty`).
 func cloneRootPaths(paths [][]int) [][]int {
-	if len(paths) == 0 {
-		return nil
-	}
-	out := make([][]int, 0, len(paths))
-	for _, path := range paths {
-		next := append([]int(nil), path...)
-		out = append(out, next)
-	}
-	return out
+	return mirCloneRootPaths(paths)
 }
 
+// prependRootIndex returns a new path list where each input path has
+// `index` prepended. Delegates to the Osty-sourced `mirPrependRootIndex`
+// (`toolchain/mir_generator.osty`).
 func prependRootIndex(index int, paths [][]int) [][]int {
-	if len(paths) == 0 {
-		return nil
-	}
-	out := make([][]int, 0, len(paths))
-	for _, path := range paths {
-		next := make([]int, 0, len(path)+1)
-		next = append(next, index)
-		next = append(next, path...)
-		out = append(out, next)
-	}
-	return out
+	return mirPrependRootIndex(index, paths)
 }
 
 func llvmPointerOperand(name string) string {
