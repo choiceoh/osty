@@ -80,22 +80,22 @@ same audit (note: `verify-selfhost` is narrow — it runs
 not the merged toolchain MIR pipeline).
 
 The current red lights are explicit native LLVM/backend coverage gaps from
-`go test -count=1 -vet=off -short ./...`:
+`just short` / `go test -count=1 -vet=off -short`:
 
-- **`osty test` benchmark error propagation.**
-  `TestRunTestMainBenchModeQuestionMarkErrPathFails` currently treats a
-  benchmark closure whose `?` propagates `Err` as a passing benchmark instead
-  of a failing run.
 - **Native-owned aggregate and pattern lowering.** The native path still lacks
-  complete coverage for `Profile?` struct payload `?`, optional field chains
-  (`profile?.name`), and nested binding/destructuring patterns such as
-  `outer @ Outer { inner: Inner { x } }`.
-- **Native-owned generic and interface calls.** Generic method turbofish calls
-  (`b.get::<Int>(7)`) and interface boxing / indirect dispatch with non-self
-  arguments remain short-suite failures.
-- **Map helper lowering.** `Map.update(k, callback)` must keep its dedicated
+  complete coverage for struct field assignment, `Profile?` struct payload `?`,
+  optional field chains (`profile?.name`), and nested binding/destructuring
+  patterns such as `outer @ Outer { inner: Inner { x } }`.
+- **Native-owned generic, interface, and runtime-helper calls.** Generic method
+  turbofish calls (`b.get::<Int>(7)`), interface boxing / indirect dispatch
+  with non-self arguments, runtime string split/list-to-set coverage, and the
+  `Bytes` compare-policy shape remain short-suite failures.
+- **Map/std helper lowering.** `Map.update(k, callback)` must keep its dedicated
   locked lowering (`osty_rt_map_lock` / `osty_rt_map_unlock`) instead of
-  falling through to the specialized stdlib body path.
+  falling through to the specialized stdlib body path; the specialized Map
+  method set and the std.url checker surface also still need cleanup.
+- **Prelude rebinding guard.** `internal/stdlib` still has a short-suite panic
+  in `TestPreludeBuiltinRebindings`.
 
 The `TestGoGenerateSelfhostLeavesGeneratedArtifactsClean` red light cited
 in earlier revisions of this section is gone — that test was removed when
@@ -648,7 +648,7 @@ Fast local loops are captured in the `justfile`:
 
 ```sh
 just front                 # uncached front-end packages, usually a few seconds
-just short                 # skips generated-Go/runtime-heavy integration paths
+just short                 # skips benchmark fixtures, clang e2e, and info-only sweeps
 just gen TestQuestionOp    # one gen test or regex
 just lsp TestCompletion    # one LSP test or regex
 just pipe examples/calc    # front-end timing for an Osty package

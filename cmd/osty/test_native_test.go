@@ -687,6 +687,9 @@ fn benchShouldNotRun() {
 
 func requireClangForNativeTest(t *testing.T) {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("native clang integration skipped in -short")
+	}
 	if _, err := exec.LookPath("clang"); err != nil {
 		t.Skipf("clang not available: %v", err)
 	}
