@@ -1086,7 +1086,7 @@ fn opTuplePatternFirst(p: OstyParser, idx: Int) -> Int {
     if n.kind == AstNTuple && n.children.len() == 2 {
         return n.children[0]
     }
-    -1
+    return -1
 }
 
 fn opTuplePatternSecond(p: OstyParser, idx: Int) -> Int {
@@ -1100,7 +1100,7 @@ fn opTuplePatternSecond(p: OstyParser, idx: Int) -> Int {
     if n.kind == AstNTuple && n.children.len() == 2 {
         return n.children[1]
     }
-    -1
+    return -1
 }
 
 fn opEnumerateIterExpr(p: OstyParser, idx: Int) -> Int {
@@ -1118,7 +1118,7 @@ fn opEnumerateIterExpr(p: OstyParser, idx: Int) -> Int {
     if callee.kind == AstNField && callee.text == "enumerate" && call.children.len() == 0 {
         return callee.left
     }
-    -1
+    return -1
 }
 
 fn opLowerEnumerateForStmt(p: OstyParser, loopIdx: Int) -> Int {
