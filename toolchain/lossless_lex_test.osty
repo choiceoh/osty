@@ -319,6 +319,52 @@ fn testRelexStablePrefix() {
 // COMPAT BRIDGE TESTS
 // -------------------------------------------------------------------
 
+fn testLosslessAndCanonicalLexerResponsibilityBoundary() {
+    let src = strings.join(
+        [
+            "/// doc",
+            "fn f() \{",
+            "    // trivia",
+            "    let x = 1",
+            "\}",
+        ],
+        "\n",
+    )
+    let lossless = losslessLex(src)
+    let fronts = losslessToFrontTokens(lossless)
+
+    testing.assertEq(losslessReconstruct(lossless), losslessNormalize(src))
+    testing.assert(lossless.trivia.len() > 0)
+    testing.assertEq(losslessTokenCount(lossless), fronts.len())
+
+    let first = losslessTokenAt(lossless, 0)
+    testing.assert(first.kind == FrontFn)
+    testing.assert(first.leadingCount > 0)
+    testing.assertEq(fronts[0].text, "fn")
+    testing.assertEq(first.leadingDoc, "doc")
+}
+
+fn testLosslessKeepsRawTripleWhileFrontendRecordsNormalizedLength() {
+    let src = strings.join(
+        [
+            "let s = \"\"\"",
+            "      body",
+            "    \"\"\"",
+        ],
+        "\n",
+    )
+    let lossless = losslessLex(src)
+
+    let mut raw = ""
+    for tok in lossless.tokens {
+        if tok.kind == FrontString {
+            raw = losslessTokenText(lossless, tok)
+        }
+    }
+    testing.assertEq(raw, "\"\"\"\n      body\n    \"\"\"")
+    testing.assertEq(lossless.inner.normalizedTripleUnits, stringUnitCount("  body"))
+}
+
 fn testCompatBridgeTokenKinds() {
     let src = "fn f() { let x = 1 }"
     let stream = losslessLex(src)

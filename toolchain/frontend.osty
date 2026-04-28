@@ -1503,6 +1503,14 @@ pub fn frontEscapeScan(units: List<String>, start: Int, limit: Int) -> FrontEsca
     if unit == "n" || unit == "t" || unit == "r" || unit == "0" || unit == "\\" || unit == "'" || unit == "\"" || unit == r"{" || unit == r"}" {
         return FrontEscapeScan { consumed: 1, ok: true }
     }
+    if unit == "x" {
+        if start + 2 >= limit {
+            return FrontEscapeScan { consumed: limit - start, ok: false }
+        }
+        let hi = frontHexValue(frontUnitAt(units, start + 1))
+        let lo = frontHexValue(frontUnitAt(units, start + 2))
+        return FrontEscapeScan { consumed: 3, ok: hi >= 0 && lo >= 0 }
+    }
     if unit == "u" {
         if frontUnitAt(units, start + 1) != r"{" {
             return FrontEscapeScan { consumed: 1, ok: false }
@@ -1639,6 +1647,10 @@ pub fn frontInterpolationScan(
                     ),
                 )
                 out.tokenCount = out.tokenCount + 1
+                let nestedString = frontInterpolationStringDiagnostics(units, idx, limit, tokenScan)
+                for diag in nestedString.diagnostics {
+                    out.diagnostics.push(diag)
+                }
                 if tokenScan.uppercaseBasePrefix {
                     out.diagnostics.push(
                         frontLexDiagnostic(
@@ -1680,6 +1692,32 @@ pub fn frontInterpolationScan(
             frontPositionAt(units, limit),
         ),
     )
+    out
+}
+
+pub fn frontInterpolationStringDiagnostics(
+    units: List<String>,
+    start: Int,
+    limit: Int,
+    tokenScan: FrontScanResult,
+) -> FrontStringStructureScan {
+    if tokenScan.kind != FrontString && tokenScan.kind != FrontRawString && tokenScan.kind != FrontChar && tokenScan.kind != FrontByte {
+        return emptyFrontStringStructureScan()
+    }
+    let mut out = emptyFrontStringStructureScan()
+    let facts = frontStringStructureScan(units, start, limit, tokenScan.kind, -1, 0, 0, tokenScan)
+    for diag in facts.diagnostics {
+        out.diagnostics.push(diag)
+    }
+    if tokenScan.errors > 0 {
+        out.diagnostics.push(
+            frontLexDiagnostic(
+                frontStringDiagnosticCode(units, start, limit, tokenScan.kind, tokenScan),
+                frontPositionAt(units, start),
+                frontPositionAt(units, start + tokenScan.consumed),
+            ),
+        )
+    }
     out
 }
 
