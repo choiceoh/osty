@@ -527,6 +527,11 @@ const (
 	// registered (i64 / string); the HIR pattern matcher that emits
 	// this rejects other keys and falls back to the unfused lowering.
 	IntrinsicMapKeysSorted
+	// IntrinsicMapToString returns a `{k1: v1, k2: v2}`-shaped String.
+	// Args: [map]. Dest is String. The runtime entry inspects the
+	// Map's stored `key_kind` / `value_kind` to pick per-element
+	// formatters; the lowering side just emits the call.
+	IntrinsicMapToString
 
 	// ---- stdlib collections: Set<T> ----
 
@@ -1626,6 +1631,8 @@ func (k IntrinsicKind) String() string {
 		return "map_remove"
 	case IntrinsicMapKeysSorted:
 		return "map_keys_sorted"
+	case IntrinsicMapToString:
+		return "map_to_string"
 	case IntrinsicSetNew:
 		return "set_new"
 	case IntrinsicSetInsert:
