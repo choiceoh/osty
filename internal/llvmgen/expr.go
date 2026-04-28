@@ -1846,9 +1846,10 @@ func (g *generator) emitIfExprPhi(labels *LlvmIfLabels, thenPred, elsePred strin
 // unchanged so the surrounding check reports the real "no arm
 // produced a value" failure.
 func coerceVoidArm(a, b value) (value, value) {
-	if a.typ == "void" && b.typ != "void" && b.typ != "" {
+	switch mirCoerceVoidArmStatus(a.typ, b.typ) {
+	case 1:
 		a = value{typ: b.typ, ref: "undef"}
-	} else if b.typ == "void" && a.typ != "void" && a.typ != "" {
+	case 2:
 		b = value{typ: a.typ, ref: "undef"}
 	}
 	return a, b

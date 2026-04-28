@@ -119,12 +119,12 @@ func (g *generator) emitOptionToString(base value, opt *ast.OptionalType) (value
 
 	emitter := g.toOstyEmitter()
 	cmp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp eq ptr %s, null", cmp, base.ref))
+	emitter.body = append(emitter.body, mirICmpEqPtrNullText(cmp, base.ref))
 	noneLabel := llvmNextLabel(emitter, "tostring.none")
 	someLabel := llvmNextLabel(emitter, "tostring.some")
 	endLabel := llvmNextLabel(emitter, "tostring.optend")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cmp, noneLabel, someLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", noneLabel))
+	emitter.body = append(emitter.body, mirBrCondText(cmp, noneLabel, someLabel))
+	emitter.body = append(emitter.body, mirLabelText(noneLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(noneLabel)
 
@@ -133,7 +133,7 @@ func (g *generator) emitOptionToString(base value, opt *ast.OptionalType) (value
 	g.branchTo(endLabel)
 
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", someLabel))
+	emitter.body = append(emitter.body, mirLabelText(someLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(someLabel)
 
@@ -155,9 +155,9 @@ func (g *generator) emitOptionToString(base value, opt *ast.OptionalType) (value
 	g.branchTo(endLabel)
 
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	emitter.body = append(emitter.body, mirLabelText(endLabel))
 	tmp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi ptr [ %s, %%%s ], [ %s, %%%s ]", tmp, noneStr.ref, nonePred, someStr.ref, somePred))
+	emitter.body = append(emitter.body, mirPhi2WayText(tmp, "ptr", noneStr.ref, nonePred, someStr.ref, somePred))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
 
@@ -327,14 +327,15 @@ func (g *generator) emitEnumToString(base value, info *enumInfo) (value, error) 
 		nextLabel := ""
 		{
 			emitter := g.toOstyEmitter()
-			armLabel = llvmNextLabel(emitter, fmt.Sprintf("tostring.v%d", i))
-			nextLabel = llvmNextLabel(emitter, fmt.Sprintf("tostring.n%d", i))
+			iDigits := mirGenIntToString(i)
+			armLabel = llvmNextLabel(emitter, "tostring.v"+iDigits)
+			nextLabel = llvmNextLabel(emitter, "tostring.n"+iDigits)
 			g.takeOstyEmitter(emitter)
 		}
 		emitter := g.toOstyEmitter()
 		cond := llvmCompare(emitter, "eq", tag, toOstyValue(value{typ: "i64", ref: strconv.Itoa(variant.tag)}))
-		emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, armLabel, nextLabel))
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", armLabel))
+		emitter.body = append(emitter.body, mirBrCondText(cond.name, armLabel, nextLabel))
+		emitter.body = append(emitter.body, mirLabelText(armLabel))
 		g.takeOstyEmitter(emitter)
 		g.enterBlock(armLabel)
 
@@ -348,7 +349,7 @@ func (g *generator) emitEnumToString(base value, info *enumInfo) (value, error) 
 		}
 
 		emitter = g.toOstyEmitter()
-		emitter.body = append(emitter.body, fmt.Sprintf("%s:", nextLabel))
+		emitter.body = append(emitter.body, mirLabelText(nextLabel))
 		g.takeOstyEmitter(emitter)
 		g.enterBlock(nextLabel)
 	}
@@ -360,14 +361,14 @@ func (g *generator) emitEnumToString(base value, info *enumInfo) (value, error) 
 	}
 
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	emitter.body = append(emitter.body, mirLabelText(endLabel))
 	tmp := llvmNextTemp(emitter)
-	phi := fmt.Sprintf("  %s = phi ptr ", tmp)
+	phi := "  " + tmp + " = phi ptr "
 	for i, ex := range exits {
 		if i > 0 {
 			phi += ", "
 		}
-		phi += fmt.Sprintf("[ %s, %%%s ]", ex.ref, ex.pred)
+		phi += "[ " + ex.ref + ", %" + ex.pred + " ]"
 	}
 	emitter.body = append(emitter.body, phi)
 	g.takeOstyEmitter(emitter)
@@ -507,8 +508,8 @@ func (g *generator) emitResultToString(base value, info builtinResultType) (valu
 	okLabel := llvmNextLabel(emitter, "tostring.ok")
 	errLabel := llvmNextLabel(emitter, "tostring.err")
 	endLabel := llvmNextLabel(emitter, "tostring.resend")
-	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", cond.name, okLabel, errLabel))
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", okLabel))
+	emitter.body = append(emitter.body, mirBrCondText(cond.name, okLabel, errLabel))
+	emitter.body = append(emitter.body, mirLabelText(okLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(okLabel)
 
@@ -520,7 +521,7 @@ func (g *generator) emitResultToString(base value, info builtinResultType) (valu
 	g.branchTo(endLabel)
 
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", errLabel))
+	emitter.body = append(emitter.body, mirLabelText(errLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(errLabel)
 
@@ -532,9 +533,9 @@ func (g *generator) emitResultToString(base value, info builtinResultType) (valu
 	g.branchTo(endLabel)
 
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", endLabel))
+	emitter.body = append(emitter.body, mirLabelText(endLabel))
 	tmp := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = phi ptr [ %s, %%%s ], [ %s, %%%s ]", tmp, okStr.ref, okPred, errStr.ref, errPred))
+	emitter.body = append(emitter.body, mirPhi2WayText(tmp, "ptr", okStr.ref, okPred, errStr.ref, errPred))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(endLabel)
 

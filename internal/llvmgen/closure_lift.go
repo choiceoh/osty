@@ -39,8 +39,6 @@
 package llvmgen
 
 import (
-	"fmt"
-
 	"github.com/osty/osty/internal/ast"
 	ostyir "github.com/osty/osty/internal/ir"
 )
@@ -170,7 +168,8 @@ func liftClosuresFromModule(mod *ostyir.Module) []ast.Decl {
 			return true
 		}
 		closureLiftCounter++
-		fnName := fmt.Sprintf("__osty_closure_%d", closureLiftCounter)
+		idDigits := mirGenIntToString(closureLiftCounter)
+		fnName := mirNativeLiftedClosureName(idDigits)
 		fnDecl.Name = fnName
 		rec := &liftedClosure{
 			name:     fnName,
@@ -178,7 +177,7 @@ func liftClosuresFromModule(mod *ostyir.Module) []ast.Decl {
 			captures: captures,
 		}
 		if len(captures) > 0 {
-			rec.makerName = fmt.Sprintf("%s%d", closureMakerNamePrefix, closureLiftCounter)
+			rec.makerName = mirClosureMakerName(idDigits)
 			currentLiftedClosuresByMaker[rec.makerName] = rec
 		}
 		currentLiftedClosures[c] = rec

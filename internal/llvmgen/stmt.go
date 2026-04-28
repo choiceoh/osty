@@ -12,7 +12,6 @@
 package llvmgen
 
 import (
-	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -521,10 +520,7 @@ func interfaceNominalName(t ast.Type) string {
 	if !ok || nt == nil {
 		return ""
 	}
-	if len(nt.Path) != 1 {
-		return ""
-	}
-	return nt.Path[0]
+	return mirNamedTypeSingleSegmentName(len(nt.Path), firstPathOrEmpty(nt.Path))
 }
 
 func (g *generator) emitAssign(stmt *ast.AssignStmt) error {
@@ -1732,7 +1728,7 @@ func (g *generator) emitBenchAutoTuneN(stmts []ast.Stmt, declaredN string) (stri
 	g.currentBlock = probeLabel
 
 	const probeIters int64 = 10
-	probeCount := value{typ: "i64", ref: fmt.Sprintf("%d", probeIters)}
+	probeCount := value{typ: "i64", ref: mirGenIntToString(int(probeIters))}
 	if err := g.emitBenchInlineLoop(stmts, probeCount, "bench.probe", ""); err != nil {
 		return "", err
 	}
@@ -2450,7 +2446,7 @@ func (g *generator) emitResultMatchStmt(scrutinee value, info builtinResultType,
 
 	emitter := g.toOstyEmitter()
 	tag := llvmExtractValue(emitter, toOstyValue(scrutinee), "i64", 0)
-	cond := llvmCompare(emitter, "eq", tag, toOstyValue(value{typ: "i64", ref: fmt.Sprintf("%d", firstInfo.tag)}))
+	cond := llvmCompare(emitter, "eq", tag, toOstyValue(value{typ: "i64", ref: mirGenIntToString(firstInfo.tag)}))
 	thenLabel := llvmNextLabel(emitter, "match.result.first")
 	elseLabel := llvmNextLabel(emitter, "match.result.second")
 	endLabel := llvmNextLabel(emitter, "match.result.end")

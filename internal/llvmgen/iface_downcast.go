@@ -35,8 +35,6 @@ package llvmgen
 // program that uses the syntax.
 
 import (
-	"fmt"
-
 	"github.com/osty/osty/internal/ast"
 )
 
@@ -64,17 +62,13 @@ func (g *generator) emitIfaceDowncastIR(ifaceVal value, targetVtableSym string) 
 	}
 	emitter := g.toOstyEmitter()
 	vt := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  %s = extractvalue %%osty.iface %s, 1", vt, ifaceVal.ref))
+	emitter.body = append(emitter.body, mirExtractValueIfaceVtableText(vt, ifaceVal.ref))
 	data := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  %s = extractvalue %%osty.iface %s, 0", data, ifaceVal.ref))
+	emitter.body = append(emitter.body, mirExtractValueIfacePtrText(data, ifaceVal.ref))
 	isT := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  %s = icmp eq ptr %s, %s", isT, vt, targetVtableSym))
+	emitter.body = append(emitter.body, mirICmpEqText(isT, "ptr", vt, targetVtableSym))
 	opt := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf(
-		"  %s = select i1 %s, ptr %s, ptr null", opt, isT, data))
+	emitter.body = append(emitter.body, mirSelectPtrText(opt, isT, data, "null"))
 	g.takeOstyEmitter(emitter)
 	return value{typ: "ptr", ref: opt}, nil
 }
@@ -225,8 +219,5 @@ func namedTypeSingleSegment(t ast.Type) string {
 	if !ok || nt == nil {
 		return ""
 	}
-	if len(nt.Path) != 1 {
-		return ""
-	}
-	return nt.Path[0]
+	return mirNamedTypeSingleSegmentName(len(nt.Path), firstPathOrEmpty(nt.Path))
 }

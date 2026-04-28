@@ -12122,3 +12122,34 @@ func mirSwitchOpenLine(typ, scrut, defaultLbl string) string {
 func mirSwitchCloseLine() string {
 	return mirSwitchFooterLine()
 }
+
+// Osty: toolchain/mir_generator.osty — mirNamedTypeSingleSegmentName
+// returns firstPath when pathLen == 1, else "".
+func mirNamedTypeSingleSegmentName(pathLen int, firstPath string) string {
+	if pathLen != 1 {
+		return ""
+	}
+	return firstPath
+}
+
+// Osty: toolchain/mir_generator.osty — mirCoerceVoidArmStatus
+// classifies the two-arm void coercion: 1 ⇒ promote A to B's type,
+// 2 ⇒ promote B to A's type, 0 ⇒ no-op. Both-void and empty-type
+// fall to 0 so the surrounding diagnostic surfaces.
+func mirCoerceVoidArmStatus(aType, bType string) int {
+	if aType == "void" && bType != "void" && bType != "" {
+		return 1
+	}
+	if bType == "void" && aType != "void" && aType != "" {
+		return 2
+	}
+	return 0
+}
+
+// Osty: toolchain/mir_generator.osty — mirClosureMakerName formats
+// `__osty_make_closure_<id>`. The prefix is matched by
+// fn_value.go::isClosureMakerCall via strings.HasPrefix, so
+// byte-stability is required.
+func mirClosureMakerName(idDigits string) string {
+	return "__osty_make_closure_" + idDigits
+}

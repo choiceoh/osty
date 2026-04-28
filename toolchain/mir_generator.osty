@@ -18282,3 +18282,37 @@ pub fn mirSwitchOpenLine(typ: String, scrut: String, defaultLbl: String) -> Stri
 pub fn mirSwitchCloseLine() -> String {
     mirSwitchFooterLine()
 }
+
+/// mirNamedTypeSingleSegmentName returns `firstPath` when `pathLen`
+/// is 1, else `""`. The bare-leaf-name extraction for AST-NamedType
+/// path shapes — multi-segment / qualified paths fall through.
+pub fn mirNamedTypeSingleSegmentName(pathLen: Int, firstPath: String) -> String {
+    if pathLen != 1 {
+        return ""
+    }
+    firstPath
+}
+
+/// mirCoerceVoidArmStatus classifies the two-arm void coercion needed
+/// for joinpoint phi typing. Returns 1 to promote A to B's type, 2 to
+/// promote B to A's type, 0 otherwise (both typed, both void, or one
+/// side has the empty-type sentinel — the empty case is left to
+/// surrounding diagnostics).
+pub fn mirCoerceVoidArmStatus(aType: String, bType: String) -> Int {
+    if aType == "void" && bType != "void" && bType != "" {
+        return 1
+    }
+    if bType == "void" && aType != "void" && aType != "" {
+        return 2
+    }
+    0
+}
+
+/// mirClosureMakerName formats the `__osty_make_closure_<id>` symbol
+/// the bridge stamps on the closure-construction call. The prefix is
+/// load-bearing: `fn_value.go::isClosureMakerCall` matches it via
+/// `strings.HasPrefix`, so byte-stability is required.
+pub fn mirClosureMakerName(idDigits: String) -> String {
+    "__osty_make_closure_" + idDigits
+}
+
