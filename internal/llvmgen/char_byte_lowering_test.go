@@ -93,6 +93,47 @@ fn main() {
 	}
 }
 
+func TestByteAndCharArithmeticWidenToInt(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn hexDigit(b: Byte) -> Int {
+    if b >= b'0' && b <= b'9' {
+        return b - b'0'
+    }
+    if b >= b'a' && b <= b'f' {
+        return b - b'a' + 10
+    }
+    return -1
+}
+
+fn charOffset(c: Char) -> Int {
+    return c - 'A'
+}
+
+fn byteMixedCompare(b: Byte) -> Bool {
+    return b > 0 && b + 1 > 2
+}
+
+fn main() {
+    println(hexDigit(b'a') + charOffset('C'))
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/byte_char_arith.osty"})
+	if err != nil {
+		t.Fatalf("Byte/Char arithmetic still errors: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"zext i8",
+		"zext i32",
+		"sub i64",
+		"add i64",
+		"icmp sgt i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // Int.toChar() lowers as a trunc so the Osty-level `(n + '0'.toInt()).toChar()`
 // pattern in stdlib/char.osty hex digit construction works.
 func TestIntToCharTruncates(t *testing.T) {

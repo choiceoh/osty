@@ -978,6 +978,66 @@ func TestGenerateInterpolatedIntAndFloatUseRuntimeToString(t *testing.T) {
 	}
 }
 
+func TestGenerateInterpolatedStringCallResultsKeepSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+fn prefix(parts: List<String>) -> String {
+    strings.join(parts, ", ")
+}
+
+fn render(parts: List<String>) -> String {
+    "{prefix(parts)}::{strings.join(parts, ", ")}"
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/interp_string_call_results.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	assertGeneratedIRContains(t, got, "call ptr @osty_rt_strings_Join")
+	if strings.Contains(got, "osty_rt_int_to_string") || strings.Contains(got, "osty_rt_float_to_string") {
+		t.Fatalf("String interpolation routed String call result through primitive toString:\n%s", got)
+	}
+}
+
+func TestGenerateInterpolatedIfLocalWithStdStringsJoinKeepsSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.strings as strings
+
+struct Outcome {
+    expectedCode: String,
+    emittedCodes: List<String>,
+    phase: String,
+}
+
+fn format(outcome: Outcome) -> String {
+    let observed = if outcome.emittedCodes.isEmpty() {
+        "<none>"
+    } else {
+        strings.join(outcome.emittedCodes, ", ")
+    }
+    "{outcome.expectedCode} ({outcome.phase}): got [{observed}]"
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/interp_if_std_join_source.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	assertGeneratedIRContains(t, got, "define ptr @format(%Outcome %outcome)")
+	assertGeneratedIRContains(t, got, "call ptr @osty_rt_strings_Join")
+	assertGeneratedIRContains(t, got, "call ptr @osty_rt_strings_ConcatN")
+}
+
 func TestGeneratedMapRuntimeSymbolsAreOstyOwned(t *testing.T) {
 	cases := []struct {
 		name string

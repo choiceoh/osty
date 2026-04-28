@@ -132,6 +132,120 @@ fn requireName(profile: Profile?) -> String? {
 	}
 }
 
+func TestGenerateMethodSelfFieldMapGetCoalesceKeepsSourceType(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct RuntimeDecls {
+    signatures: Map<String, String>
+
+    pub fn signature(self, name: String) -> String {
+        self.signatures.get(name) ?? ""
+    }
+}
+
+fn read(decls: RuntimeDecls) -> String {
+    decls.signature("osty")
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "core",
+		SourcePath:  "/tmp/self_field_map_get_coalesce.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"define ptr @RuntimeDecls__signature",
+		"call i1 @osty_rt_map_get_string",
+		"phi ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateOptionUnwrapOrStringIntAndStruct(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct Profile {
+    name: String
+}
+
+fn text(name: String?) -> String {
+    name.unwrapOr("")
+}
+
+fn score(n: Int?) -> Int {
+    n.unwrapOr(7)
+}
+
+fn profileName(profile: Profile?) -> String {
+    profile.unwrapOr(Profile { name: "anon" }).name
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "core",
+		SourcePath:  "/tmp/option_unwrap_or.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"define ptr @text(ptr %name)",
+		"define i64 @score(ptr %n)",
+		"define ptr @profileName(ptr %profile)",
+		"icmp eq ptr",
+		"phi ptr",
+		"phi i64",
+		"phi %Profile",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateResultUnwrapOrStringAndInt(t *testing.T) {
+	file := parseLLVMGenFile(t, `fn decodeText() -> String {
+    "ab".toBytes().toString().unwrapOr("")
+}
+
+fn score(ok: Result<Int, String>) -> Int {
+    ok.unwrapOr(7)
+}
+
+fn check(ok: Result<Int, String>) -> Bool {
+    ok.isOk() && !ok.isErr()
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "core",
+		SourcePath:  "/tmp/result_unwrap_or.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"define ptr @decodeText()",
+		"define i64 @score(%Result.i64.ptr %ok)",
+		"define i1 @check(%Result.i64.ptr %ok)",
+		"@osty_rt_bytes_to_string",
+		"extractvalue %Result.ptr.ptr",
+		"phi ptr",
+		"phi i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateResultQuestionExprInt covers `?` on Result<T, E> where the
 // enclosing function returns Result<_, E> with the same error type.
 // Expected shape: extract tag → icmp eq against 1 (Err) → branch →

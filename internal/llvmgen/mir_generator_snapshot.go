@@ -8698,7 +8698,9 @@ func mirMapScalarValueByteSize(valTyp string) int {
 	switch valTyp {
 	case "i64", "double":
 		return 8
-	case "i1":
+	case "i32":
+		return 4
+	case "i8", "i1":
 		return 1
 	}
 	return 0

@@ -4861,6 +4861,8 @@ bool osty_rt_strings_Equal(const char *left, const char *right);
 int64_t osty_rt_strings_Compare(const char *left, const char *right);
 int64_t osty_rt_strings_Count(const char *value, const char *substr);
 int64_t osty_rt_strings_IndexOf(const char *value, const char *substr);
+int64_t osty_rt_strings_LastIndexOf(const char *value, const char *substr);
+int32_t osty_rt_strings_CharAt(const char *value, int64_t index);
 bool osty_rt_strings_Contains(const char *value, const char *substr);
 bool osty_rt_strings_HasSuffix(const char *value, const char *suffix);
 const char *osty_rt_strings_Join(void *raw_parts, const char *sep);
@@ -9137,6 +9139,105 @@ int64_t osty_rt_strings_IndexOf(const char *value, const char *substr) {
         return -1;
     }
     return (int64_t)(next - value);
+}
+
+int64_t osty_rt_strings_LastIndexOf(const char *value, const char *substr) {
+    const char *next;
+    const char *last;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char substr_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    size_t substr_len;
+
+    value = (value == NULL) ? "" : value;
+    substr = (substr == NULL) ? "" : substr;
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    osty_rt_string_decode_to_buf_if_inline(&substr, substr_buf);
+    substr_len = strlen(substr);
+    if (substr_len == 0) {
+        return (int64_t)strlen(value);
+    }
+    last = NULL;
+    next = value;
+    while ((next = strstr(next, substr)) != NULL) {
+        last = next;
+        next += 1;
+    }
+    if (last == NULL) {
+        return -1;
+    }
+    return (int64_t)(last - value);
+}
+
+int32_t osty_rt_strings_CharAt(const char *value, int64_t index) {
+    const unsigned char *cursor;
+    size_t len;
+    size_t i;
+    unsigned char b1;
+    int continuations;
+    unsigned char min2;
+    unsigned char max2;
+    int32_t accumulator;
+    char value_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+
+    if (value == NULL || index < 0) {
+        return 0;
+    }
+    osty_rt_string_decode_to_buf_if_inline(&value, value_buf);
+    len = strlen(value);
+    if ((uint64_t)index >= (uint64_t)len) {
+        return 0;
+    }
+    cursor = (const unsigned char *)value + index;
+    b1 = *cursor;
+    if (b1 < 0x80) {
+        return (int32_t)b1;
+    }
+
+    continuations = 0;
+    min2 = 0x80;
+    max2 = 0xBF;
+    accumulator = 0;
+    if (b1 >= 0xC2 && b1 <= 0xDF) {
+        continuations = 1;
+        accumulator = (int32_t)(b1 & 0x1F);
+    } else if (b1 == 0xE0) {
+        continuations = 2;
+        min2 = 0xA0;
+    } else if ((b1 >= 0xE1 && b1 <= 0xEC) || b1 == 0xEE || b1 == 0xEF) {
+        continuations = 2;
+        accumulator = (int32_t)(b1 & 0x0F);
+    } else if (b1 == 0xED) {
+        continuations = 2;
+        max2 = 0x9F;
+        accumulator = (int32_t)(b1 & 0x0F);
+    } else if (b1 == 0xF0) {
+        continuations = 3;
+        min2 = 0x90;
+    } else if (b1 >= 0xF1 && b1 <= 0xF3) {
+        continuations = 3;
+        accumulator = (int32_t)(b1 & 0x07);
+    } else if (b1 == 0xF4) {
+        continuations = 3;
+        max2 = 0x8F;
+        accumulator = (int32_t)(b1 & 0x07);
+    } else {
+        return 0xFFFD;
+    }
+
+    if ((uint64_t)index + (uint64_t)continuations >= (uint64_t)len) {
+        return 0xFFFD;
+    }
+    cursor += 1;
+    for (i = 0; i < (size_t)continuations; i++) {
+        unsigned char bn = cursor[i];
+        unsigned char lo = (i == 0) ? min2 : 0x80;
+        unsigned char hi = (i == 0) ? max2 : 0xBF;
+        if (bn < lo || bn > hi) {
+            return 0xFFFD;
+        }
+        accumulator = (accumulator << 6) | (int32_t)(bn & 0x3F);
+    }
+    return accumulator;
 }
 
 int64_t osty_rt_strings_ByteLen(const char *value) {
