@@ -48,7 +48,7 @@ net.listen(addr: String) -> Result<TcpListener, Error>
 
 pub struct TcpConn {
     // implements Reader, Writer, Closer (§16)
-    fn read(self, buf: mut Bytes) -> Result<Int, Error>
+    fn read(self, maxBytes: Int) -> Result<Bytes, Error>
     fn write(self, data: Bytes) -> Result<Int, Error>
     fn flush(self) -> Result<(), Error>
     fn close(self) -> Result<(), Error>
