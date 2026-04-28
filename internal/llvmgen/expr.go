@@ -259,21 +259,12 @@ func (g *generator) emitRuntimeStringConcatN(pieces []value) (value, error) {
 }
 
 func (g *generator) emitInterpolationStringPiece(v value) (value, error) {
-	switch v.typ {
-	case "ptr":
-		if v.listElemTyp == "" && v.mapKeyTyp == "" && v.setElemTyp == "" {
-			return v, nil
-		}
-	case "i64":
-		return g.emitRuntimeIntToString(v)
-	case "double":
-		return g.emitRuntimeFloatToString(v)
-	case "i1":
-		return g.emitRuntimeBoolToString(v)
-	case "i32":
-		return g.emitRuntimeCharToString(v)
-	case "i8":
-		return g.emitRuntimeByteToString(v)
+	out, handled, err := g.emitValueToString(v)
+	if err != nil {
+		return value{}, err
+	}
+	if handled {
+		return out, nil
 	}
 	return value{}, unsupportedf("type-system", "interpolation of %s value requires .toString() which the LLVM backend does not yet lower", v.typ)
 }
@@ -7409,6 +7400,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return v, err
 	}
 	if v, found, err := g.emitStdRandomMethodCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitDerivedToStringCall(call); found || err != nil {
 		return v, err
 	}
 	if v, found, err := g.emitCharByteConversionCall(call); found || err != nil {

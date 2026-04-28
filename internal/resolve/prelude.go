@@ -57,10 +57,11 @@ var preludeNames = []struct {
 	{"Ok", SymBuiltin},
 	{"Err", SymBuiltin},
 
-	// Built-in interfaces (§2.6.4).
+	// Built-in interfaces (§2.6.4, §17).
 	{"Equal", SymBuiltin},
 	{"Ordered", SymBuiltin},
 	{"Hashable", SymBuiltin},
+	{"ToString", SymBuiltin},
 
 	// Runtime-only marker interface (LANG_SPEC §19.4). Resolved as a
 	// built-in symbol so generic bound clauses `<T: Pod>` inside

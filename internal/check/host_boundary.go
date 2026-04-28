@@ -1700,7 +1700,7 @@ func lookupSelfhostTypeSymbol(head string, scope *resolve.Scope) *resolve.Symbol
 		return syntheticBuiltinSym(name)
 	}
 	switch name {
-	case "List", "Map", "Set", "Option", "Result", "Error", "Equal", "Ordered", "Hashable", "Chan", "Channel", "Handle", "TaskGroup", "Iter":
+	case "List", "Map", "Set", "Option", "Result", "Error", "Equal", "Ordered", "Hashable", "ToString", "Chan", "Channel", "Handle", "TaskGroup", "Iter":
 		return syntheticBuiltinSym(name)
 	}
 	if name == "Self" || looksLikeSelfhostGeneric(name) {

@@ -1236,11 +1236,22 @@ fn checkBuiltinPrimitiveInterfaceInstance(tys: TyArena, concrete: Int, ifaceHead
             || tyIsPrim(tys, concrete, PkString)
             || tyIsPrim(tys, concrete, PkBytes)
     }
+    if ifaceHead == "ToString" {
+        return tyIsInteger(tys, concrete)
+            || tyIsFloat(tys, concrete)
+            || tyIsPrim(tys, concrete, PkBool)
+            || tyIsPrim(tys, concrete, PkChar)
+            || tyIsPrim(tys, concrete, PkString)
+            || tyIsPrim(tys, concrete, PkBytes)
+    }
     false
 }
 
 fn checkBuiltinTupleInterfaceInstance(env: CheckEnv, items: List<Int>, ifaceHead: String, seen: List<String>) -> Bool {
     if ifaceHead == "Ordered" {
+        return false
+    }
+    if ifaceHead != "Equal" && ifaceHead != "Hashable" && ifaceHead != "ToString" {
         return false
     }
     let ifaceTy = tyNamed(env.tys, ifaceHead, [])
@@ -1253,7 +1264,7 @@ fn checkBuiltinTupleInterfaceInstance(env: CheckEnv, items: List<Int>, ifaceHead
 }
 
 fn checkBuiltinOptionInterfaceInstance(env: CheckEnv, inner: Int, ifaceHead: String, seen: List<String>) -> Bool {
-    if ifaceHead != "Equal" && ifaceHead != "Ordered" && ifaceHead != "Hashable" {
+    if ifaceHead != "Equal" && ifaceHead != "Ordered" && ifaceHead != "Hashable" && ifaceHead != "ToString" {
         return false
     }
     checkTypeSatisfiesInterfaceSeen(env, inner, tyNamed(env.tys, ifaceHead, []), seen)
@@ -1263,7 +1274,7 @@ fn checkBuiltinResultInterfaceInstance(env: CheckEnv, okTy: Int, errTy: Int, ifa
     if ifaceHead == "Ordered" {
         return false
     }
-    if ifaceHead != "Equal" && ifaceHead != "Hashable" {
+    if ifaceHead != "Equal" && ifaceHead != "Hashable" && ifaceHead != "ToString" {
         return false
     }
     let ifaceTy = tyNamed(env.tys, ifaceHead, [])
@@ -1275,7 +1286,7 @@ fn checkBuiltinUnaryCollectionInterfaceInstance(env: CheckEnv, itemTy: Int, ifac
     if ifaceHead == "Ordered" {
         return false
     }
-    if ifaceHead != "Equal" && ifaceHead != "Hashable" {
+    if ifaceHead != "Equal" && ifaceHead != "Hashable" && ifaceHead != "ToString" {
         return false
     }
     checkTypeSatisfiesInterfaceSeen(env, itemTy, tyNamed(env.tys, ifaceHead, []), seen)
@@ -1285,7 +1296,7 @@ fn checkBuiltinBinaryCollectionInterfaceInstance(env: CheckEnv, leftTy: Int, rig
     if ifaceHead == "Ordered" {
         return false
     }
-    if ifaceHead != "Equal" && ifaceHead != "Hashable" {
+    if ifaceHead != "Equal" && ifaceHead != "Hashable" && ifaceHead != "ToString" {
         return false
     }
     let ifaceTy = tyNamed(env.tys, ifaceHead, [])
@@ -1294,7 +1305,7 @@ fn checkBuiltinBinaryCollectionInterfaceInstance(env: CheckEnv, leftTy: Int, rig
 }
 
 fn checkDerivedNominalInterfaceInstance(env: CheckEnv, concrete: Int, ifaceHead: String, seen: List<String>) -> Bool {
-    if ifaceHead != "Equal" && ifaceHead != "Hashable" {
+    if ifaceHead != "Equal" && ifaceHead != "Hashable" && ifaceHead != "ToString" {
         return false
     }
     let concreteHead = tyHeadAt(env.tys, concrete)
@@ -1355,6 +1366,9 @@ fn checkBuiltinInterfaceMethodNames(ifaceHead: String) -> List<String> {
     if ifaceHead == "Hashable" {
         return ["eq", "ne", "hash"]
     }
+    if ifaceHead == "ToString" {
+        return ["toString"]
+    }
     []
 }
 
@@ -1374,6 +1388,9 @@ fn checkReceiverFallbackInterfaces(name: String) -> List<String> {
     }
     if name == "hash" {
         return ["Hashable"]
+    }
+    if name == "toString" {
+        return ["ToString"]
     }
     if name == "source" || name == "wrap" || name == "chain" || name == "downcast" {
         return ["Error"]
@@ -1637,7 +1654,7 @@ pub fn checkMethodNamesOf(env: CheckEnv, owner: String) -> List<String> {
 
 pub fn checkMethodNamesForReceiver(env: CheckEnv, recvTy: Int, owner: String) -> List<String> {
     let mut out = checkMethodNamesOf(env, owner)
-    for ifaceHead in ["Equal", "Ordered", "Hashable", "Error"] {
+    for ifaceHead in ["Equal", "Ordered", "Hashable", "ToString", "Error"] {
         let ifaceTy = tyNamed(env.tys, ifaceHead, [])
         if !(checkTypeSatisfiesInterface(env, recvTy, ifaceTy)) {
             continue
@@ -1727,11 +1744,13 @@ pub fn emptyCheckTypeSig() -> CheckTypeSig {
 
 pub fn checkInstallPrelude(env: CheckEnv) {
     let _ = env
-    // Register the built-in `Equal`, `Ordered`, and `Hashable`
-    // interfaces so `<T: Ordered>` bounds in user code find them.
+    // Register the built-in `Equal`, `Ordered`, `Hashable`, and
+    // `ToString` interfaces so `<T: Ordered>` / `<T: ToString>`
+    // bounds in user code find them.
     checkRegisterInterface(env, "Equal")
     checkRegisterInterface(env, "Ordered")
     checkRegisterInterface(env, "Hashable")
+    checkRegisterInterface(env, "ToString")
     checkRegisterInterfaceExtends(env, CheckInterfaceExt {
         owner: "Ordered",
         ifaceTy: tyNamed(env.tys, "Equal", []),
@@ -1810,6 +1829,16 @@ pub fn checkInstallPrelude(env: CheckEnv) {
         owner: "Hashable",
         receiverTy: tSelfCmp, hasReceiver: true,
         retTy: tInt(env.tys),
+        paramNames: [],
+        paramTys: [],
+        generics: [],
+        genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toString",
+        owner: "ToString",
+        receiverTy: tSelfCmp,
+        retTy: tString(env.tys),
         paramNames: [],
         paramTys: [],
         generics: [],
