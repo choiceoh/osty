@@ -39,8 +39,6 @@ func CheckPackageStructured(input PackageCheckInput) (CheckResult, error) {
 	selfhostInstallImportSurfaces(cx.env, input.Imports)
 	elabFile(cx)
 	result := adaptCheckResultWithTokenLayout(serializeCheckResult(cx), layout)
-	selfhostAppendIntrinsicBodyGateForPackage(&result, input)
-	selfhostAppendPureGateForPackage(&result, input)
 	return result, nil
 }
 
@@ -49,6 +47,8 @@ type selfhostPackageTokenLayout struct {
 	ends       []int
 	startLines []int
 	startCols  []int
+	endLines   []int
+	endCols    []int
 	// fileIdx[i] indexes into files for token i. -1 when the file carried no
 	// display name (selfhostLayoutTokenPos then emits an empty filename and
 	// the telemetry suffix drops back to `@Lnn:Cnn`).
@@ -75,9 +75,13 @@ func selfhostBuildPackageAst(files []PackageCheckFile) (*AstFile, *selfhostPacka
 		parsed = selfhostSemanticAstFile(parsed)
 		tokenBase := len(layout.starts)
 		fileIdx := -1
-		if file.Name != "" {
+		displayName := file.Path
+		if displayName == "" {
+			displayName = file.Name
+		}
+		if displayName != "" {
 			fileIdx = len(layout.files)
-			layout.files = append(layout.files, file.Name)
+			layout.files = append(layout.files, displayName)
 		}
 		selfhostAppendTokenLayout(layout, lexed, file.Base, fileIdx)
 		selfhostMergeAstArena(arena, parsed.arena, tokenBase)
@@ -104,6 +108,8 @@ func selfhostAppendTokenLayout(layout *selfhostPackageTokenLayout, lexed *OstyLe
 	layout.ends = selfhostGrowIntSlice(layout.ends, newLen)
 	layout.startLines = selfhostGrowIntSlice(layout.startLines, newLen)
 	layout.startCols = selfhostGrowIntSlice(layout.startCols, newLen)
+	layout.endLines = selfhostGrowIntSlice(layout.endLines, newLen)
+	layout.endCols = selfhostGrowIntSlice(layout.endCols, newLen)
 	layout.fileIdx = selfhostGrowIntSlice(layout.fileIdx, newLen)
 	for _, tok := range lexed.stream.tokens {
 		if tok == nil || tok.start == nil || tok.end == nil {
@@ -111,6 +117,8 @@ func selfhostAppendTokenLayout(layout *selfhostPackageTokenLayout, lexed *OstyLe
 			layout.ends = append(layout.ends, base)
 			layout.startLines = append(layout.startLines, 0)
 			layout.startCols = append(layout.startCols, 0)
+			layout.endLines = append(layout.endLines, 0)
+			layout.endCols = append(layout.endCols, 0)
 			layout.fileIdx = append(layout.fileIdx, fileIdx)
 			continue
 		}
@@ -118,6 +126,8 @@ func selfhostAppendTokenLayout(layout *selfhostPackageTokenLayout, lexed *OstyLe
 		layout.ends = append(layout.ends, base+rt.byteOffset(tok.end.offset))
 		layout.startLines = append(layout.startLines, tok.start.line)
 		layout.startCols = append(layout.startCols, tok.start.column)
+		layout.endLines = append(layout.endLines, tok.end.line)
+		layout.endCols = append(layout.endCols, tok.end.column)
 		layout.fileIdx = append(layout.fileIdx, fileIdx)
 	}
 }
@@ -178,10 +188,7 @@ func selfhostMergeAstArena(dst *AstArena, src *AstArena, tokenBase int) {
 		cloned.end = selfhostShiftTokenIndex(cloned.end, tokenBase)
 		cloned.left = selfhostShiftNodeIndex(cloned.left, nodeBase)
 		cloned.right = selfhostShiftNodeIndex(cloned.right, nodeBase)
-		// Parser AST nodes reuse `extra` for enum-like metadata such as pattern
-		// kinds and packed annotations, so it cannot be shifted blindly during a
-		// multi-file merge the way child node references can.
-		cloned.extra = node.extra
+		cloned.extra = selfhostShiftExtraForKind(node, nodeBase)
 		cloned.children = selfhostShiftNodeList(cloned.children, nodeBase)
 		cloned.children2 = selfhostShiftNodeList(cloned.children2, nodeBase)
 		dst.nodes = append(dst.nodes, &cloned)
@@ -197,6 +204,29 @@ func selfhostMergeAstArena(dst *AstArena, src *AstArena, tokenBase int) {
 		cloned := *parseErr
 		cloned.tokenIndex = selfhostShiftTokenIndex(cloned.tokenIndex, tokenBase)
 		dst.errors = append(dst.errors, &cloned)
+	}
+}
+
+func selfhostShiftExtraForKind(node *AstNode, base int) int {
+	if node == nil || node.extra < 0 {
+		return -1
+	}
+	// `extra` is overloaded in the parser arena. Pattern nodes store small
+	// enum tags there, while declaration-ish nodes store packed annotation node
+	// indices. Shift only the annotation-bearing shapes during package merges.
+	switch node.kind.(type) {
+	case *AstNodeKind_AstNFnDecl,
+		*AstNodeKind_AstNStructDecl,
+		*AstNodeKind_AstNEnumDecl,
+		*AstNodeKind_AstNInterfaceDecl,
+		*AstNodeKind_AstNTypeAlias,
+		*AstNodeKind_AstNLet,
+		*AstNodeKind_AstNLetDecl,
+		*AstNodeKind_AstNField_,
+		*AstNodeKind_AstNVariant:
+		return selfhostShiftNodeIndex(node.extra, base)
+	default:
+		return node.extra
 	}
 }
 
@@ -245,7 +275,7 @@ func adaptCheckResultWithTokenLayout(checked *FrontCheckResult, layout *selfhost
 		result.TypedNodes = append(result.TypedNodes, CheckedNode{
 			Node:  node.node,
 			Kind:  node.kind,
-			Type:  parseTypeRepr(node.typeName),
+			Type:  frontTypeReprToAPI(node.typeRepr),
 			Start: start,
 			End:   end,
 		})
@@ -258,7 +288,7 @@ func adaptCheckResultWithTokenLayout(checked *FrontCheckResult, layout *selfhost
 		result.Bindings = append(result.Bindings, CheckedBinding{
 			Node:    binding.node,
 			Name:    binding.name,
-			Type:    parseTypeRepr(binding.typeName),
+			Type:    frontTypeReprToAPI(binding.typeRepr),
 			Mutable: binding.mutable,
 			Start:   start,
 			End:     end,
@@ -274,7 +304,7 @@ func adaptCheckResultWithTokenLayout(checked *FrontCheckResult, layout *selfhost
 			Kind:  symbol.kind,
 			Name:  symbol.name,
 			Owner: symbol.owner,
-			Type:  parseTypeRepr(symbol.typeName),
+			Type:  frontTypeReprToAPI(symbol.typeRepr),
 			Start: start,
 			End:   end,
 		})
@@ -287,8 +317,8 @@ func adaptCheckResultWithTokenLayout(checked *FrontCheckResult, layout *selfhost
 		result.Instantiations = append(result.Instantiations, CheckInstantiation{
 			Node:       inst.node,
 			Callee:     inst.callee,
-			TypeArgs:   parseTypeReprSlice(inst.typeArgs),
-			ResultType: parseTypeRepr(inst.resultType),
+			TypeArgs:   frontTypeReprSliceToAPI(inst.typeArgs),
+			ResultType: frontTypeReprToAPI(inst.resultType),
 			Start:      start,
 			End:        end,
 		})
@@ -297,18 +327,39 @@ func adaptCheckResultWithTokenLayout(checked *FrontCheckResult, layout *selfhost
 		if d == nil {
 			continue
 		}
-		start, end := checkNodeOffsetsWithTokenLayout(layout, d.start, d.end)
+		start, end, startLine, startColumn, endLine, endColumn := checkNodeRangeWithTokenLayout(layout, d.start, d.end)
 		result.Diagnostics = append(result.Diagnostics, CheckDiagnosticRecord{
-			Code:     d.code,
-			Severity: diagnosticSeverityName(d.severity),
-			Message:  d.message,
-			Start:    start,
-			End:      end,
-			File:     "",
-			Notes:    append([]string(nil), d.notes...),
+			Code:        d.code,
+			Severity:    diagnosticSeverityName(d.severity),
+			Message:     d.message,
+			Start:       start,
+			End:         end,
+			StartLine:   startLine,
+			StartColumn: startColumn,
+			EndLine:     endLine,
+			EndColumn:   endColumn,
+			File:        checkFilePathWithTokenLayout(layout, d.start),
+			Notes:       append([]string(nil), d.notes...),
 		})
 	}
 	return result
+}
+
+func checkFilePathWithTokenLayout(layout *selfhostPackageTokenLayout, tokenIdx int) string {
+	if layout == nil || tokenIdx < 0 || tokenIdx >= len(layout.fileIdx) {
+		return ""
+	}
+	idx := layout.fileIdx[tokenIdx]
+	if idx < 0 || idx >= len(layout.files) {
+		return ""
+	}
+	return layout.files[idx]
+}
+
+func checkNodeRangeWithTokenLayout(layout *selfhostPackageTokenLayout, startToken, endToken int) (start, end, startLine, startColumn, endLine, endColumn int) {
+	start, end = checkNodeOffsetsWithTokenLayout(layout, startToken, endToken)
+	startLine, startColumn, endLine, endColumn = checkTokenDisplayRangeWithTokenLayout(layout, startToken, endToken)
+	return start, end, startLine, startColumn, endLine, endColumn
 }
 
 func checkNodeOffsetsWithTokenLayout(layout *selfhostPackageTokenLayout, startToken, endToken int) (int, int) {
@@ -336,6 +387,34 @@ func checkNodeOffsetsWithTokenLayout(layout *selfhostPackageTokenLayout, startTo
 	return start, end
 }
 
+func checkTokenDisplayRangeWithTokenLayout(layout *selfhostPackageTokenLayout, startToken, endToken int) (startLine, startColumn, endLine, endColumn int) {
+	if layout == nil || len(layout.startLines) == 0 {
+		return 0, 0, 0, 0
+	}
+	if startToken < 0 {
+		startToken = 0
+	}
+	if startToken >= len(layout.startLines) {
+		startToken = len(layout.startLines) - 1
+	}
+	endIndex := endToken - 1
+	if endIndex < startToken {
+		endIndex = startToken
+	}
+	if endIndex >= len(layout.endLines) {
+		endIndex = len(layout.endLines) - 1
+	}
+	if startToken < len(layout.startCols) {
+		startLine = layout.startLines[startToken]
+		startColumn = layout.startCols[startToken]
+	}
+	if endIndex >= 0 && endIndex < len(layout.endCols) {
+		endLine = layout.endLines[endIndex]
+		endColumn = layout.endCols[endIndex]
+	}
+	return startLine, startColumn, endLine, endColumn
+}
+
 func selfhostInstallImportSurfaces(env *CheckEnv, imports []PackageCheckImport) {
 	if env == nil {
 		return
@@ -345,6 +424,7 @@ func selfhostInstallImportSurfaces(env *CheckEnv, imports []PackageCheckImport) 
 			continue
 		}
 		checkBind(env, imp.Alias, tyNamed(env.tys, imp.Alias, nil))
+		checkMarkImportAlias(env, imp.Alias)
 		for _, iface := range imp.RegisterAsIface {
 			if iface != "" {
 				checkRegisterInterface(env, iface)

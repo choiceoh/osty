@@ -385,6 +385,7 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 	policy := nativeDiagPolicy{privileged: privileged}
 	result.Diags = append(result.Diags, nativeCheckerDiags(checkedSrc.source, checked, policy)...)
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
+	result.NativeCheckResult = cloneNativeCheckResult(checked)
 	overlaySelfhostResult(result, checkedSrc, checked)
 }
 
@@ -438,6 +439,7 @@ func applySelfhostPackageResult(result *Result, pkg *resolve.Package, _ *resolve
 	policy := nativeDiagPolicy{privileged: privileged}
 	result.Diags = append(result.Diags, nativeCheckerDiags(src.source, checked, policy)...)
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
+	result.NativeCheckResult = cloneNativeCheckResult(checked)
 	overlaySelfhostResult(result, src, checked)
 }
 
@@ -578,7 +580,68 @@ func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, ws *re
 	defer mu.Unlock()
 	result.Diags = append(result.Diags, diags...)
 	result.NativeCheckerTelemetry = telemetry
+	result.NativeCheckResult = cloneNativeCheckResult(checked)
 	overlaySelfhostResult(result, src, checked)
+}
+
+func cloneNativeCheckResult(checked api.CheckResult) *api.CheckResult {
+	out := checked
+	out.Summary.ErrorsByContext = cloneStringIntMap(checked.Summary.ErrorsByContext)
+	out.Summary.ErrorDetails = cloneErrorDetailMap(checked.Summary.ErrorDetails)
+	out.TypedNodes = append([]api.CheckedNode(nil), checked.TypedNodes...)
+	for i := range out.TypedNodes {
+		out.TypedNodes[i].Type = cloneTypeRepr(out.TypedNodes[i].Type)
+	}
+	out.Bindings = append([]api.CheckedBinding(nil), checked.Bindings...)
+	for i := range out.Bindings {
+		out.Bindings[i].Type = cloneTypeRepr(out.Bindings[i].Type)
+	}
+	out.Symbols = append([]api.CheckedSymbol(nil), checked.Symbols...)
+	for i := range out.Symbols {
+		out.Symbols[i].Type = cloneTypeRepr(out.Symbols[i].Type)
+	}
+	out.Instantiations = append([]api.CheckInstantiation(nil), checked.Instantiations...)
+	for i := range out.Instantiations {
+		out.Instantiations[i].TypeArgs = cloneTypeReprList(out.Instantiations[i].TypeArgs)
+		out.Instantiations[i].ResultType = cloneTypeRepr(out.Instantiations[i].ResultType)
+	}
+	out.Diagnostics = cloneNativeDiagnostics(checked.Diagnostics)
+	return &out
+}
+
+func cloneTypeRepr(src *api.TypeRepr) *api.TypeRepr {
+	if src == nil {
+		return nil
+	}
+	out := *src
+	out.Args = cloneTypeReprList(src.Args)
+	out.Return = cloneTypeRepr(src.Return)
+	return &out
+}
+
+func cloneTypeReprList(src []api.TypeRepr) []api.TypeRepr {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]api.TypeRepr, len(src))
+	for i := range src {
+		out[i] = src[i]
+		out[i].Args = cloneTypeReprList(src[i].Args)
+		out[i].Return = cloneTypeRepr(src[i].Return)
+	}
+	return out
+}
+
+func cloneNativeDiagnostics(src []api.CheckDiagnosticRecord) []api.CheckDiagnosticRecord {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]api.CheckDiagnosticRecord, len(src))
+	for i := range src {
+		out[i] = src[i]
+		out[i].Notes = append([]string(nil), src[i].Notes...)
+	}
+	return out
 }
 
 type nativeDiagPolicy struct {
@@ -704,13 +767,9 @@ func nativeDiagIsError(d api.CheckDiagnosticRecord) bool {
 
 // convertNativeDiag lifts a per-record structured diagnostic emitted by
 // the Osty-native checker (see toolchain/check_diag.osty) into a
-// `*diag.Diagnostic`. Start/End are byte offsets in the bundled source
-// the native checker consumed; we translate to line/column via a
-// single linear scan of that byte buffer. Position accuracy is
-// best-effort — the bundled source prepends stdlib imports so the
-// reported line/column may diverge from the user's file by a fixed
-// offset. Downstream consumers still get the structured code + message
-// + notes, which is what the migrated gates (§19.6 E0773, ...) rely on.
+// `*diag.Diagnostic`. Modern records carry checker-owned display
+// positions; older subprocesses that only send byte offsets still fall
+// back to a source scan.
 func convertNativeDiag(src []byte, d api.CheckDiagnosticRecord) *diag.Diagnostic {
 	if d.Code == "" && d.Message == "" {
 		return nil
@@ -727,7 +786,7 @@ func convertNativeDiag(src []byte, d api.CheckDiagnosticRecord) *diag.Diagnostic
 	if d.File != "" {
 		b = b.File(d.File)
 	}
-	b = b.Primary(byteRangeSpan(src, d.Start, d.End), "")
+	b = b.Primary(nativeDiagSpan(src, d), "")
 	for _, note := range d.Notes {
 		if strings.TrimSpace(note) == "" {
 			continue
@@ -735,6 +794,24 @@ func convertNativeDiag(src []byte, d api.CheckDiagnosticRecord) *diag.Diagnostic
 		b = b.Note(note)
 	}
 	return b.Build()
+}
+
+func nativeDiagSpan(src []byte, d api.CheckDiagnosticRecord) diag.Span {
+	if d.StartLine > 0 && d.StartColumn > 0 {
+		endLine := d.EndLine
+		endColumn := d.EndColumn
+		if endLine <= 0 {
+			endLine = d.StartLine
+		}
+		if endColumn <= 0 {
+			endColumn = d.StartColumn
+		}
+		return diag.Span{
+			Start: token.Pos{Line: d.StartLine, Column: d.StartColumn, Offset: d.Start},
+			End:   token.Pos{Line: endLine, Column: endColumn, Offset: d.End},
+		}
+	}
+	return byteRangeSpan(src, d.Start, d.End)
 }
 
 // byteRangeSpan builds a `diag.Span` for a [start, end) byte range

@@ -163,6 +163,33 @@ func TestCheckDiagnosticRecordAsDiagPreservesOffsetMapping(t *testing.T) {
 	}
 }
 
+func TestCheckDiagnosticRecordAsDiagPrefersStructuredPositions(t *testing.T) {
+	src := []byte("one-line fallback source\n")
+	got := selfhost.CheckDiagnosticRecordAsDiag(src, selfhost.CheckDiagnosticRecord{
+		Code:        "Estructured",
+		Message:     "mapped",
+		Start:       99,
+		End:         104,
+		StartLine:   7,
+		StartColumn: 3,
+		EndLine:     7,
+		EndColumn:   8,
+	})
+	if got == nil {
+		t.Fatal("nil diagnostic")
+	}
+	span := got.Spans[0].Span
+	if span.Start.Line != 7 || span.Start.Column != 3 {
+		t.Fatalf("start = %d:%d, want 7:3", span.Start.Line, span.Start.Column)
+	}
+	if span.End.Line != 7 || span.End.Column != 8 {
+		t.Fatalf("end = %d:%d, want 7:8", span.End.Line, span.End.Column)
+	}
+	if span.Start.Offset != 99 || span.End.Offset != 104 {
+		t.Fatalf("offsets = %d..%d, want 99..104", span.Start.Offset, span.End.Offset)
+	}
+}
+
 func BenchmarkCheckDiagnosticsAsDiag(b *testing.B) {
 	var src strings.Builder
 	src.Grow(32 * 256)

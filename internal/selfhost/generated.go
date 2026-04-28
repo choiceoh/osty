@@ -33529,6 +33529,7 @@ type CheckEnv struct {
 	interfaceIndexKeys      []string
 	interfaceIndexHashes    []int
 	interfaceExtends        []*CheckInterfaceExt
+	importAliases           []string
 	genericBounds           []*CheckGenericBound
 	genericBoundIndexNames  []string
 	genericBoundIndexHashes []int
@@ -33550,7 +33551,7 @@ type CheckEnv struct {
 
 // Osty: /tmp/selfhost_merged.osty:14398:5
 func emptyCheckEnv(tys *TyArena) *CheckEnv {
-	return &CheckEnv{tys: tys, bindings: make([]*CheckBinding, 0, 1), bindingIndexNames: make([]string, 0, 1), bindingIndexHashes: make([]int, 0, 1), bindingIndexStacks: make([][]*CheckBinding, 0, 1), fns: make([]*CheckFnSig, 0, 1), fnIndexKeys: make([]string, 0, 1), fnIndexHashes: make([]int, 0, 1), fnIndexValues: make([]int, 0, 1), fnBodyKeys: make([]string, 0, 1), fnBodyHashes: make([]int, 0, 1), fields: make([]*CheckFieldSig, 0, 1), fieldIndexKeys: make([]string, 0, 1), fieldIndexHashes: make([]int, 0, 1), fieldIndexValues: make([]int, 0, 1), variants: make([]*CheckVariantSig, 0, 1), variantIndexKeys: make([]string, 0, 1), variantIndexHashes: make([]int, 0, 1), variantIndexValues: make([]int, 0, 1), variantOwnerIndexKeys: make([]string, 0, 1), variantOwnerIndexHashes: make([]int, 0, 1), variantOwnerIndexValues: make([]int, 0, 1), aliases: make([]*CheckAliasSig, 0, 1), aliasIndexKeys: make([]string, 0, 1), aliasIndexHashes: make([]int, 0, 1), aliasIndexValues: make([]int, 0, 1), types: make([]*CheckTypeSig, 0, 1), typeIndexKeys: make([]string, 0, 1), typeIndexHashes: make([]int, 0, 1), typeIndexValues: make([]int, 0, 1), interfaces: make([]string, 0, 1), interfaceIndexKeys: make([]string, 0, 1), interfaceIndexHashes: make([]int, 0, 1), interfaceExtends: make([]*CheckInterfaceExt, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1), genericBoundIndexNames: make([]string, 0, 1), genericBoundIndexHashes: make([]int, 0, 1), genericBoundIndexStacks: make([][]int, 0, 1), aliasDeepCache: make([]int, 0, 1), substCacheKeys: make([]string, 0, 1), substCacheHashes: make([]int, 0, 1), substCacheValues: make([]int, 0, 1), returnTy: tErr(tys), fnName: "", inLoop: false, diagnostics: make([]*CheckDiagnostic, 0, 1), assignments: 0, accepted: 0, bindingRecords: make([]*CheckBindingRecord, 0, 1), symbolRecords: make([]*CheckSymbolRecord, 0, 1), instantiations: make([]*CheckInstantiationRecord, 0, 1)}
+	return &CheckEnv{tys: tys, bindings: make([]*CheckBinding, 0, 1), bindingIndexNames: make([]string, 0, 1), bindingIndexHashes: make([]int, 0, 1), bindingIndexStacks: make([][]*CheckBinding, 0, 1), fns: make([]*CheckFnSig, 0, 1), fnIndexKeys: make([]string, 0, 1), fnIndexHashes: make([]int, 0, 1), fnIndexValues: make([]int, 0, 1), fnBodyKeys: make([]string, 0, 1), fnBodyHashes: make([]int, 0, 1), fields: make([]*CheckFieldSig, 0, 1), fieldIndexKeys: make([]string, 0, 1), fieldIndexHashes: make([]int, 0, 1), fieldIndexValues: make([]int, 0, 1), variants: make([]*CheckVariantSig, 0, 1), variantIndexKeys: make([]string, 0, 1), variantIndexHashes: make([]int, 0, 1), variantIndexValues: make([]int, 0, 1), variantOwnerIndexKeys: make([]string, 0, 1), variantOwnerIndexHashes: make([]int, 0, 1), variantOwnerIndexValues: make([]int, 0, 1), aliases: make([]*CheckAliasSig, 0, 1), aliasIndexKeys: make([]string, 0, 1), aliasIndexHashes: make([]int, 0, 1), aliasIndexValues: make([]int, 0, 1), types: make([]*CheckTypeSig, 0, 1), typeIndexKeys: make([]string, 0, 1), typeIndexHashes: make([]int, 0, 1), typeIndexValues: make([]int, 0, 1), interfaces: make([]string, 0, 1), interfaceIndexKeys: make([]string, 0, 1), interfaceIndexHashes: make([]int, 0, 1), interfaceExtends: make([]*CheckInterfaceExt, 0, 1), importAliases: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1), genericBoundIndexNames: make([]string, 0, 1), genericBoundIndexHashes: make([]int, 0, 1), genericBoundIndexStacks: make([][]int, 0, 1), aliasDeepCache: make([]int, 0, 1), substCacheKeys: make([]string, 0, 1), substCacheHashes: make([]int, 0, 1), substCacheValues: make([]int, 0, 1), returnTy: tErr(tys), fnName: "", inLoop: false, diagnostics: make([]*CheckDiagnostic, 0, 1), assignments: 0, accepted: 0, bindingRecords: make([]*CheckBindingRecord, 0, 1), symbolRecords: make([]*CheckSymbolRecord, 0, 1), instantiations: make([]*CheckInstantiationRecord, 0, 1)}
 }
 
 // Osty: /tmp/selfhost_merged.osty:14463:5
@@ -33734,6 +33735,25 @@ func checkRegisterFn(env *CheckEnv, sig *CheckFnSig) {
 		// Osty: /tmp/selfhost_merged.osty:14562:26
 		env.fnIndexValues[slot] = idx
 	}
+}
+
+func checkMarkImportAlias(env *CheckEnv, alias string) {
+	if env == nil || alias == "" || checkHasImportAlias(env, alias) {
+		return
+	}
+	env.importAliases = append(env.importAliases, alias)
+}
+
+func checkHasImportAlias(env *CheckEnv, alias string) bool {
+	if env == nil || alias == "" {
+		return false
+	}
+	for _, existing := range env.importAliases {
+		if existing == alias {
+			return true
+		}
+	}
+	return false
 }
 
 // Osty: /tmp/selfhost_merged.osty:14566:5
@@ -35046,14 +35066,13 @@ func checkExpectAssignable(env *CheckEnv, expected int, got int, start int, end 
 	return false
 }
 
-var checkIsAssignableRecursionDepth int
-var checkIsAssignableActive = map[string]int{}
-
 // Osty: /tmp/selfhost_merged.osty:15205:5
 func checkIsAssignable(env *CheckEnv, dst int, src int) bool {
-	checkIsAssignableRecursionDepth++
-	defer func() { checkIsAssignableRecursionDepth-- }()
-	if checkIsAssignableRecursionDepth > 128 {
+	return checkIsAssignableDepth(env, dst, src, 0)
+}
+
+func checkIsAssignableDepth(env *CheckEnv, dst int, src int, depth int) bool {
+	if depth > 128 {
 		return true
 	}
 	// Osty: /tmp/selfhost_merged.osty:15206:5
@@ -35062,17 +35081,6 @@ func checkIsAssignable(env *CheckEnv, dst int, src int) bool {
 	// Osty: /tmp/selfhost_merged.osty:15207:5
 	s := checkResolveAliasDeep(env, src)
 	_ = s
-	activeKey := fmt.Sprintf("%d:%d", d, s)
-	if checkIsAssignableActive[activeKey] > 0 {
-		return true
-	}
-	checkIsAssignableActive[activeKey]++
-	defer func() {
-		checkIsAssignableActive[activeKey]--
-		if checkIsAssignableActive[activeKey] == 0 {
-			delete(checkIsAssignableActive, activeKey)
-		}
-	}()
 	// Osty: /tmp/selfhost_merged.osty:15208:5
 	if tyIsBad(env.tys, d) || tyIsBad(env.tys, s) {
 		// Osty: /tmp/selfhost_merged.osty:15209:9
@@ -35150,7 +35158,7 @@ func checkIsAssignable(env *CheckEnv, dst int, src int) bool {
 		// Osty: /tmp/selfhost_merged.osty:15250:9
 		for _, de := range da {
 			// Osty: /tmp/selfhost_merged.osty:15251:13
-			if !(checkIsAssignable(env, de, sa[i])) {
+			if !(checkIsAssignableDepth(env, de, sa[i], depth+1)) {
 				// Osty: /tmp/selfhost_merged.osty:15252:17
 				return false
 			}
@@ -35192,7 +35200,7 @@ func checkIsAssignable(env *CheckEnv, dst int, src int) bool {
 			spe := sp[i]
 			_ = spe
 			// Osty: /tmp/selfhost_merged.osty:15269:13
-			if !(checkIsAssignable(env, dpe, spe)) || !(checkIsAssignable(env, spe, dpe)) {
+			if !(checkIsAssignableDepth(env, dpe, spe, depth+1)) || !(checkIsAssignableDepth(env, spe, dpe, depth+1)) {
 				// Osty: /tmp/selfhost_merged.osty:15270:17
 				return false
 			}
@@ -35210,7 +35218,7 @@ func checkIsAssignable(env *CheckEnv, dst int, src int) bool {
 			}()
 		}
 		// Osty: /tmp/selfhost_merged.osty:15274:9
-		return checkIsAssignable(env, tyRetAt(env.tys, d), tyRetAt(env.tys, s))
+		return checkIsAssignableDepth(env, tyRetAt(env.tys, d), tyRetAt(env.tys, s), depth+1)
 	}
 	// Osty: /tmp/selfhost_merged.osty:15276:5
 	if ostyEqual(dk, TyKind(&TyKind_TkNamed{})) && ostyEqual(sk, TyKind(&TyKind_TkNamed{})) && tyHeadAt(env.tys, d) == tyHeadAt(env.tys, s) {
@@ -35231,7 +35239,7 @@ func checkIsAssignable(env *CheckEnv, dst int, src int) bool {
 		// Osty: /tmp/selfhost_merged.osty:15283:9
 		for _, de := range da {
 			// Osty: /tmp/selfhost_merged.osty:15284:13
-			if !(checkIsAssignable(env, de, sa[i])) {
+			if !(checkIsAssignableDepth(env, de, sa[i], depth+1)) {
 				// Osty: /tmp/selfhost_merged.osty:15285:17
 				return false
 			}
@@ -35254,7 +35262,7 @@ func checkIsAssignable(env *CheckEnv, dst int, src int) bool {
 	// Osty: /tmp/selfhost_merged.osty:15291:5
 	if ostyEqual(dk, TyKind(&TyKind_TkOptional{})) && ostyEqual(sk, TyKind(&TyKind_TkOptional{})) {
 		// Osty: /tmp/selfhost_merged.osty:15292:9
-		return checkIsAssignable(env, tyInnerAt(env.tys, d), tyInnerAt(env.tys, s))
+		return checkIsAssignableDepth(env, tyInnerAt(env.tys, d), tyInnerAt(env.tys, s), depth+1)
 	}
 	// Osty: /tmp/selfhost_merged.osty:15296:5
 	if ostyEqual(dk, TyKind(&TyKind_TkOptional{})) && ostyEqual(sk, TyKind(&TyKind_TkNamed{})) && tyHeadAt(env.tys, s) == "Option" {
@@ -35264,7 +35272,7 @@ func checkIsAssignable(env *CheckEnv, dst int, src int) bool {
 		// Osty: /tmp/selfhost_merged.osty:15298:9
 		if checkIntListLen(sa) == 1 {
 			// Osty: /tmp/selfhost_merged.osty:15299:13
-			return checkIsAssignable(env, tyInnerAt(env.tys, d), sa[0])
+			return checkIsAssignableDepth(env, tyInnerAt(env.tys, d), sa[0], depth+1)
 		}
 	}
 	// Osty: /tmp/selfhost_merged.osty:15302:5
@@ -35275,7 +35283,7 @@ func checkIsAssignable(env *CheckEnv, dst int, src int) bool {
 		// Osty: /tmp/selfhost_merged.osty:15304:9
 		if checkIntListLen(da) == 1 {
 			// Osty: /tmp/selfhost_merged.osty:15305:13
-			return checkIsAssignable(env, da[0], tyInnerAt(env.tys, s))
+			return checkIsAssignableDepth(env, da[0], tyInnerAt(env.tys, s), depth+1)
 		}
 	}
 	// Osty: /tmp/selfhost_merged.osty:15308:5
@@ -47202,7 +47210,7 @@ func pmLiteralPatternAsInt(cx *ElabCx, patIdx int) *PmIntParse {
 type FrontCheckedNode struct {
 	node     int
 	kind     string
-	typeName string
+	typeRepr *FrontTypeRepr
 	start    int
 	end      int
 }
@@ -47211,7 +47219,7 @@ type FrontCheckedNode struct {
 type FrontCheckedBinding struct {
 	node     int
 	name     string
-	typeName string
+	typeRepr *FrontTypeRepr
 	mutable  bool
 	start    int
 	end      int
@@ -47223,7 +47231,7 @@ type FrontCheckedSymbol struct {
 	kind     string
 	name     string
 	owner    string
-	typeName string
+	typeRepr *FrontTypeRepr
 	start    int
 	end      int
 }
@@ -47232,8 +47240,8 @@ type FrontCheckedSymbol struct {
 type FrontCheckInstantiation struct {
 	node       int
 	callee     string
-	typeArgs   []string
-	resultType string
+	typeArgs   []*FrontTypeRepr
+	resultType *FrontTypeRepr
 	start      int
 	end        int
 }
@@ -47388,7 +47396,9 @@ func collectUseDecl(cx *ElabCx, declIdx int, node *AstNode) {
 			}
 		}
 		// Osty: /tmp/selfhost_merged.osty:23273:9
-		if node.text == "std.strings" {
+		if checkHasImportAlias(env, alias) {
+			_ = env
+		} else if node.text == "std.strings" {
 			// Osty: /tmp/selfhost_merged.osty:23274:13
 			registerStdStringsAliasFns(env, alias)
 		} else if node.text == "std.testing" {
@@ -48725,7 +48735,7 @@ func serializeCheckResult(cx *ElabCx) *FrontCheckResult {
 		_ = astNode
 		// Osty: /tmp/selfhost_merged.osty:24265:9
 		func() struct{} {
-			typedNodes = append(typedNodes, &FrontCheckedNode{node: node.originAst, kind: kind, typeName: tyToString(cx.env.tys, node.ty), start: astNode.start, end: astNode.end})
+			typedNodes = append(typedNodes, &FrontCheckedNode{node: node.originAst, kind: kind, typeRepr: tyToRepr(cx.env.tys, node.ty), start: astNode.start, end: astNode.end})
 			return struct{}{}
 		}()
 	}
@@ -48736,7 +48746,7 @@ func serializeCheckResult(cx *ElabCx) *FrontCheckResult {
 	for _, b := range cx.env.bindingRecords {
 		// Osty: /tmp/selfhost_merged.osty:24276:9
 		func() struct{} {
-			bindings = append(bindings, &FrontCheckedBinding{node: b.node, name: b.name, typeName: tyToString(cx.env.tys, b.ty), mutable: b.mutable, start: b.start, end: b.end})
+			bindings = append(bindings, &FrontCheckedBinding{node: b.node, name: b.name, typeRepr: tyToRepr(cx.env.tys, b.ty), mutable: b.mutable, start: b.start, end: b.end})
 			return struct{}{}
 		}()
 	}
@@ -48747,7 +48757,7 @@ func serializeCheckResult(cx *ElabCx) *FrontCheckResult {
 	for _, s := range cx.env.symbolRecords {
 		// Osty: /tmp/selfhost_merged.osty:24288:9
 		func() struct{} {
-			symbols = append(symbols, &FrontCheckedSymbol{node: s.node, kind: s.kind, name: s.name, owner: s.owner, typeName: tyToString(cx.env.tys, s.ty), start: s.start, end: s.end})
+			symbols = append(symbols, &FrontCheckedSymbol{node: s.node, kind: s.kind, name: s.name, owner: s.owner, typeRepr: tyToRepr(cx.env.tys, s.ty), start: s.start, end: s.end})
 			return struct{}{}
 		}()
 	}
@@ -48757,16 +48767,16 @@ func serializeCheckResult(cx *ElabCx) *FrontCheckResult {
 	// Osty: /tmp/selfhost_merged.osty:24300:5
 	for _, inst := range cx.env.instantiations {
 		// Osty: /tmp/selfhost_merged.osty:24301:9
-		var typeArgStrs []string = make([]string, 0, 1)
-		_ = typeArgStrs
+		var typeArgReprs []*FrontTypeRepr = make([]*FrontTypeRepr, 0, 1)
+		_ = typeArgReprs
 		// Osty: /tmp/selfhost_merged.osty:24302:9
 		for _, tyArg := range inst.typeArgs {
 			// Osty: /tmp/selfhost_merged.osty:24303:13
-			func() struct{} { typeArgStrs = append(typeArgStrs, tyToString(cx.env.tys, tyArg)); return struct{}{} }()
+			func() struct{} { typeArgReprs = append(typeArgReprs, tyToRepr(cx.env.tys, tyArg)); return struct{}{} }()
 		}
 		// Osty: /tmp/selfhost_merged.osty:24305:9
 		func() struct{} {
-			instantiations = append(instantiations, &FrontCheckInstantiation{node: inst.node, callee: inst.callee, typeArgs: typeArgStrs, resultType: tyToString(cx.env.tys, inst.resultTy), start: inst.start, end: inst.end})
+			instantiations = append(instantiations, &FrontCheckInstantiation{node: inst.node, callee: inst.callee, typeArgs: typeArgReprs, resultType: tyToRepr(cx.env.tys, inst.resultTy), start: inst.start, end: inst.end})
 			return struct{}{}
 		}()
 	}
@@ -48788,7 +48798,7 @@ func frontCheckResultBindingType(result *FrontCheckResult, name string) string {
 		// Osty: /tmp/selfhost_merged.osty:24338:9
 		if b.name == name {
 			// Osty: /tmp/selfhost_merged.osty:24339:13
-			found = b.typeName
+			found = frontTypeReprToString(b.typeRepr)
 		}
 	}
 	return found
@@ -48888,7 +48898,7 @@ func selfCheckTypeNameAtOffset(result *FrontCheckResult, offset int) string {
 		// Osty: /tmp/selfhost_merged.osty:24403:9
 		return ""
 	}
-	return result.typedNodes[bestIdx].typeName
+	return frontTypeReprToString(result.typedNodes[bestIdx].typeRepr)
 }
 
 // Osty: /tmp/selfhost_merged.osty:24412:5
@@ -48898,7 +48908,7 @@ func selfCheckLetTypeNameAtOffset(result *FrontCheckResult, offset int) string {
 		// Osty: /tmp/selfhost_merged.osty:24414:9
 		if selfCheckOffsetContains(b.start, b.end, offset) {
 			// Osty: /tmp/selfhost_merged.osty:24415:13
-			return b.typeName
+			return frontTypeReprToString(b.typeRepr)
 		}
 	}
 	return ""
@@ -49020,7 +49030,7 @@ func selfCheckHoverAtOffset(result *FrontCheckResult, offset int) *SelfCheckHove
 		// Osty: /tmp/selfhost_merged.osty:24472:13
 		info.symbolKind = result.symbols[bestIdx].kind
 		// Osty: /tmp/selfhost_merged.osty:24473:13
-		info.symbolType = result.symbols[bestIdx].typeName
+		info.symbolType = frontTypeReprToString(result.symbols[bestIdx].typeRepr)
 	}
 	return info
 }
@@ -49045,6 +49055,7 @@ func runCheckGates(cx *ElabCx) {
 	runPrivilegeGate(cx)
 	// Osty: /tmp/selfhost_merged.osty:24547:5
 	runNoAllocGate(cx)
+	runPureGate(cx)
 }
 
 // Osty: /tmp/selfhost_merged.osty:24554:1
@@ -59766,7 +59777,7 @@ func selfLintTypeHintsFromChecked(checked *FrontCheckResult) *SelfLintTypeHints 
 		// Osty: /tmp/selfhost_merged.osty:32194:9
 		func() struct{} { nodes = append(nodes, tn.node); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:32195:9
-		func() struct{} { types = append(types, tn.typeName); return struct{}{} }()
+		func() struct{} { types = append(types, frontTypeReprToString(tn.typeRepr)); return struct{}{} }()
 	}
 	return &SelfLintTypeHints{enabled: true, nodes: nodes, types: types}
 }
@@ -64283,7 +64294,7 @@ func inspectTypeNameByNode(arena *AstArena, checked *FrontCheckResult) []string 
 		// Osty: /tmp/selfhost_merged.osty:34746:9
 		if tn.node >= 0 && tn.node < n {
 			// Osty: /tmp/selfhost_merged.osty:34747:16
-			out[tn.node] = tn.typeName
+			out[tn.node] = frontTypeReprToString(tn.typeRepr)
 		}
 	}
 	return out
@@ -64463,7 +64474,7 @@ func inspectThreadHintsThroughContainers(arena *AstArena, checked *FrontCheckRes
 		// Osty: /tmp/selfhost_merged.osty:34876:9
 		if sym.kind == "fn" {
 			// Osty: /tmp/selfhost_merged.osty:34877:13
-			sig := hintFnSignature(sym.typeName)
+			sig := hintFnSignature(frontTypeReprToString(sym.typeRepr))
 			_ = sig
 			// Osty: /tmp/selfhost_merged.osty:34878:13
 			if !sig.ok || sig.returnType == "" {
@@ -64477,14 +64488,14 @@ func inspectThreadHintsThroughContainers(arena *AstArena, checked *FrontCheckRes
 			}
 		} else if sym.kind == "let" {
 			// Osty: /tmp/selfhost_merged.osty:34885:13
-			if sym.typeName == "" {
+			if frontTypeReprToString(sym.typeRepr) == "" {
 				// Osty: /tmp/selfhost_merged.osty:34886:17
 				continue
 			}
 			// Osty: /tmp/selfhost_merged.osty:34888:13
 			if (ostyEqual(declNode.kind, AstNodeKind(&AstNodeKind_AstNLet{})) || ostyEqual(declNode.kind, AstNodeKind(&AstNodeKind_AstNLetDecl{}))) && declNode.right >= 0 {
 				// Osty: /tmp/selfhost_merged.osty:34889:17
-				inspectThreadHint(arena, declNode.right, sym.typeName, hints)
+				inspectThreadHint(arena, declNode.right, frontTypeReprToString(sym.typeRepr), hints)
 			}
 		}
 	}
@@ -64525,7 +64536,7 @@ func inspectBindingTypeByPattern(checked *FrontCheckResult) []*InspectBindingEnt
 	for _, bnd := range checked.bindings {
 		// Osty: /tmp/selfhost_merged.osty:34916:9
 		func() struct{} {
-			out = append(out, &InspectBindingEntry{node: bnd.node, typeName: bnd.typeName})
+			out = append(out, &InspectBindingEntry{node: bnd.node, typeName: frontTypeReprToString(bnd.typeRepr)})
 			return struct{}{}
 		}()
 	}
@@ -64690,7 +64701,7 @@ func inspectBuildRecords(checked *FrontCheckResult, letPatterns []int, hintsByNo
 		_ = hint
 		// Osty: /tmp/selfhost_merged.osty:35005:9
 		func() struct{} {
-			out = append(out, &InspectRecord{start: tn.start, end: tn.end, nodeKind: tn.kind, rule: rule, typeName: tn.typeName, hintName: hint, notes: make([]string, 0, 1)})
+			out = append(out, &InspectRecord{start: tn.start, end: tn.end, nodeKind: tn.kind, rule: rule, typeName: frontTypeReprToString(tn.typeRepr), hintName: hint, notes: make([]string, 0, 1)})
 			return struct{}{}
 		}()
 	}
@@ -64719,7 +64730,7 @@ func inspectBuildRecords(checked *FrontCheckResult, letPatterns []int, hintsByNo
 		}
 		// Osty: /tmp/selfhost_merged.osty:35027:9
 		func() struct{} {
-			out = append(out, &InspectRecord{start: sym.start, end: sym.end, nodeKind: inspectNodeKindForSymbolKind(sym.kind), rule: rule, typeName: sym.typeName, hintName: "", notes: notes})
+			out = append(out, &InspectRecord{start: sym.start, end: sym.end, nodeKind: inspectNodeKindForSymbolKind(sym.kind), rule: rule, typeName: frontTypeReprToString(sym.typeRepr), hintName: "", notes: notes})
 			return struct{}{}
 		}()
 	}
@@ -64763,7 +64774,7 @@ func inspectBuildRecords(checked *FrontCheckResult, letPatterns []int, hintsByNo
 		}
 		// Osty: /tmp/selfhost_merged.osty:35049:9
 		func() struct{} {
-			out = append(out, &InspectRecord{start: bnd.start, end: bnd.end, nodeKind: nodeKind, rule: rule, typeName: bnd.typeName, hintName: "", notes: notes})
+			out = append(out, &InspectRecord{start: bnd.start, end: bnd.end, nodeKind: nodeKind, rule: rule, typeName: frontTypeReprToString(bnd.typeRepr), hintName: "", notes: notes})
 			return struct{}{}
 		}()
 	}

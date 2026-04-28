@@ -1,8 +1,6 @@
 package selfhost
 
 import (
-	"strings"
-
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost/api"
 )
@@ -44,8 +42,6 @@ func CheckSourceStructured(src []byte) CheckResult {
 		return CheckResult{}
 	}
 	result := adaptCheckResult(checked, lexed)
-	selfhostAppendIntrinsicBodyGateForSource(&result, src)
-	selfhostAppendPureGateForSource(&result, src)
 	return result
 }
 
@@ -70,11 +66,8 @@ func CheckFromSource(src []byte) ([]*diag.Diagnostic, CheckResult) {
 // re-lex/re-parse pass that the source-based entry performs.
 //
 // Output matches CheckSourceStructured(src) byte-for-byte. The
-// astbridge *ast.File lowering is still triggered exactly once per
-// run by the intrinsic-body gate adapter (see
-// selfhostAppendIntrinsicBodyGateForRun); porting that gate walker
-// to AstArena is the follow-up that would make this path fully
-// astbridge-free.
+// generated checker path owns the post-elaboration policy gates, so
+// this path stays astbridge-free.
 func CheckStructuredFromRun(run *FrontendRun) CheckResult {
 	if run == nil {
 		return CheckResult{}
@@ -88,8 +81,6 @@ func CheckStructuredFromRun(run *FrontendRun) CheckResult {
 		return CheckResult{}
 	}
 	result := adaptCheckResultFromRuneStream(checked, run.rt, run.stream)
-	selfhostAppendIntrinsicBodyGateForRun(&result, run)
-	selfhostAppendPureGateForRun(&result, run)
 	return result
 }
 
@@ -167,7 +158,7 @@ func adaptCheckResultFromRuneStream(checked *FrontCheckResult, rt runeTable, str
 		result.TypedNodes = append(result.TypedNodes, CheckedNode{
 			Node:  node.node,
 			Kind:  node.kind,
-			Type:  parseTypeRepr(node.typeName),
+			Type:  frontTypeReprToAPI(node.typeRepr),
 			Start: start,
 			End:   end,
 		})
@@ -180,7 +171,7 @@ func adaptCheckResultFromRuneStream(checked *FrontCheckResult, rt runeTable, str
 		result.Bindings = append(result.Bindings, CheckedBinding{
 			Node:    binding.node,
 			Name:    binding.name,
-			Type:    parseTypeRepr(binding.typeName),
+			Type:    frontTypeReprToAPI(binding.typeRepr),
 			Mutable: binding.mutable,
 			Start:   start,
 			End:     end,
@@ -196,7 +187,7 @@ func adaptCheckResultFromRuneStream(checked *FrontCheckResult, rt runeTable, str
 			Kind:  symbol.kind,
 			Name:  symbol.name,
 			Owner: symbol.owner,
-			Type:  parseTypeRepr(symbol.typeName),
+			Type:  frontTypeReprToAPI(symbol.typeRepr),
 			Start: start,
 			End:   end,
 		})
@@ -209,8 +200,8 @@ func adaptCheckResultFromRuneStream(checked *FrontCheckResult, rt runeTable, str
 		result.Instantiations = append(result.Instantiations, CheckInstantiation{
 			Node:       inst.node,
 			Callee:     inst.callee,
-			TypeArgs:   parseTypeReprSlice(inst.typeArgs),
-			ResultType: parseTypeRepr(inst.resultType),
+			TypeArgs:   frontTypeReprSliceToAPI(inst.typeArgs),
+			ResultType: frontTypeReprToAPI(inst.resultType),
 			Start:      start,
 			End:        end,
 		})
@@ -219,18 +210,28 @@ func adaptCheckResultFromRuneStream(checked *FrontCheckResult, rt runeTable, str
 		if d == nil {
 			continue
 		}
-		start, end := checkNodeOffsets(rt, stream, d.start, d.end)
+		start, end, startLine, startColumn, endLine, endColumn := checkNodeRange(rt, stream, d.start, d.end)
 		result.Diagnostics = append(result.Diagnostics, CheckDiagnosticRecord{
-			Code:     d.code,
-			Severity: diagnosticSeverityName(d.severity),
-			Message:  d.message,
-			Start:    start,
-			End:      end,
-			File:     "",
-			Notes:    append([]string(nil), d.notes...),
+			Code:        d.code,
+			Severity:    diagnosticSeverityName(d.severity),
+			Message:     d.message,
+			Start:       start,
+			End:         end,
+			StartLine:   startLine,
+			StartColumn: startColumn,
+			EndLine:     endLine,
+			EndColumn:   endColumn,
+			File:        "",
+			Notes:       append([]string(nil), d.notes...),
 		})
 	}
 	return result
+}
+
+func checkNodeRange(rt runeTable, stream *FrontLexStream, startToken, endToken int) (start, end, startLine, startColumn, endLine, endColumn int) {
+	start, end = checkNodeOffsets(rt, stream, startToken, endToken)
+	startLine, startColumn, endLine, endColumn = checkTokenDisplayRange(stream, startToken, endToken)
+	return start, end, startLine, startColumn, endLine, endColumn
 }
 
 func checkNodeOffsets(rt runeTable, stream *FrontLexStream, startToken, endToken int) (int, int) {
@@ -258,197 +259,35 @@ func checkNodeOffsets(rt runeTable, stream *FrontLexStream, startToken, endToken
 	return start, end
 }
 
-// parseTypeRepr converts an Osty-rendered type string into a structured
-// *api.TypeRepr.
-//
-// Transitional: internal/selfhost/generated.go still uses string-based
-// typeName fields in FrontCheckedNode/FrontCheckedBinding/FrontCheckedSymbol
-// and []string typeArgs in FrontCheckInstantiation because it was produced by
-// the Osty→Go transpiler before the FrontTypeRepr struct landed in
-// toolchain/check.osty. Once generated.go is regenerated with the new
-// FrontTypeRepr-based fields, this function and its helpers (parseFnTypeRepr,
-// splitGenericRepr, splitTypeReprList, matchingTypeReprParen,
-// parseTypeReprSlice) can be deleted entirely — the adapters will read
-// structured FrontTypeRepr values directly from the generated structs.
-func parseTypeRepr(raw string) *api.TypeRepr {
-	text := strings.TrimSpace(raw)
-	if text == "" {
-		return nil
+func checkTokenDisplayRange(stream *FrontLexStream, startToken, endToken int) (startLine, startColumn, endLine, endColumn int) {
+	if stream == nil || len(stream.tokens) == 0 {
+		return 0, 0, 0, 0
 	}
-	switch text {
-	case "Invalid", "Poison":
-		return &api.TypeRepr{Kind: "error", Name: text}
-	case "()", "Unit":
-		return &api.TypeRepr{Kind: "unit"}
-	case "Never":
-		return &api.TypeRepr{Kind: "never", Name: "Never"}
-	case "UntypedInt":
-		return &api.TypeRepr{Kind: "primitive", Name: "UntypedInt"}
-	case "UntypedFloat":
-		return &api.TypeRepr{Kind: "primitive", Name: "UntypedFloat"}
+	if startToken < 0 {
+		startToken = 0
 	}
-	// Optional suffix: "Int?"
-	if strings.HasSuffix(text, "?") {
-		inner := parseTypeRepr(strings.TrimSuffix(text, "?"))
-		return &api.TypeRepr{Kind: "optional", Return: inner}
+	if startToken >= len(stream.tokens) {
+		startToken = len(stream.tokens) - 1
 	}
-	// Function type: "fn(...) -> ..."
-	if strings.HasPrefix(text, "fn(") {
-		return parseFnTypeRepr(text)
+	endIndex := endToken - 1
+	if endIndex < startToken {
+		endIndex = startToken
 	}
-	// Tuple: "(A, B, ...)" or "()" (already handled above)
-	if strings.HasPrefix(text, "(") && strings.HasSuffix(text, ")") {
-		inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "("), ")"))
-		if inner == "" {
-			return &api.TypeRepr{Kind: "unit"}
-		}
-		parts := splitTypeReprList(inner)
-		if len(parts) == 1 {
-			return parseTypeRepr(parts[0])
-		}
-		args := make([]api.TypeRepr, 0, len(parts))
-		for _, part := range parts {
-			if tr := parseTypeRepr(part); tr != nil {
-				args = append(args, *tr)
-			}
-		}
-		return &api.TypeRepr{Kind: "tuple", Args: args}
+	if endIndex >= len(stream.tokens) {
+		endIndex = len(stream.tokens) - 1
 	}
-	// Named with generics: "List<Int>"
-	head, argText, hasArgs := splitGenericRepr(text)
-	if hasArgs {
-		parts := splitTypeReprList(argText)
-		typeArgs := make([]api.TypeRepr, 0, len(parts))
-		for _, a := range parts {
-			if tr := parseTypeRepr(a); tr != nil {
-				typeArgs = append(typeArgs, *tr)
-			}
-		}
-		return &api.TypeRepr{Kind: "named", Name: head, Args: typeArgs}
+	startTok := stream.tokens[startToken]
+	endTok := stream.tokens[endIndex]
+	if startTok != nil && startTok.start != nil {
+		startLine = startTok.start.line
+		startColumn = startTok.start.column
 	}
-	// Single uppercase letter → type variable
-	if len(head) == 1 && head[0] >= 'A' && head[0] <= 'Z' {
-		return &api.TypeRepr{Kind: "typevar", Name: head}
+	if endTok != nil && endTok.end != nil {
+		endLine = endTok.end.line
+		endColumn = endTok.end.column
+	} else if endTok != nil && endTok.start != nil {
+		endLine = endTok.start.line
+		endColumn = endTok.start.column
 	}
-	return &api.TypeRepr{Kind: "primitive", Name: head}
-}
-
-func parseFnTypeRepr(text string) *api.TypeRepr {
-	open := strings.IndexByte(text, '(')
-	if open < 0 {
-		return &api.TypeRepr{Kind: "error", Name: text}
-	}
-	close := matchingTypeReprParen(text, open)
-	if close < 0 {
-		return &api.TypeRepr{Kind: "error", Name: text}
-	}
-	paramText := strings.TrimSpace(text[open+1 : close])
-	var params []api.TypeRepr
-	if paramText != "" {
-		for _, part := range splitTypeReprList(paramText) {
-			if tr := parseTypeRepr(part); tr != nil {
-				params = append(params, *tr)
-			}
-		}
-	}
-	var ret *api.TypeRepr
-	rest := strings.TrimSpace(text[close+1:])
-	if strings.HasPrefix(rest, "->") {
-		ret = parseTypeRepr(strings.TrimSpace(strings.TrimPrefix(rest, "->")))
-	}
-	if ret == nil {
-		ret = &api.TypeRepr{Kind: "unit"}
-	}
-	return &api.TypeRepr{Kind: "fn", Args: params, Return: ret}
-}
-
-// splitGenericRepr splits "List<Int>" into ("List", "Int", true)
-// and "Int" into ("Int", "", false).
-func splitGenericRepr(text string) (head, args string, ok bool) {
-	depth := 0
-	start := -1
-	for i, r := range text {
-		switch r {
-		case '<':
-			if depth == 0 {
-				start = i
-			}
-			depth++
-		case '>':
-			depth--
-			if depth == 0 && i == len(text)-1 && start >= 0 {
-				return strings.TrimSpace(text[:start]), strings.TrimSpace(text[start+1 : i]), true
-			}
-		}
-	}
-	return strings.TrimSpace(text), "", false
-}
-
-// splitTypeReprList splits "A, B, C" into ["A", "B", "C"] respecting
-// angle brackets and parens.
-func splitTypeReprList(text string) []string {
-	var out []string
-	start := 0
-	angle := 0
-	paren := 0
-	for i, r := range text {
-		switch r {
-		case '<':
-			angle++
-		case '>':
-			if angle > 0 {
-				angle--
-			}
-		case '(':
-			paren++
-		case ')':
-			if paren > 0 {
-				paren--
-			}
-		case ',':
-			if angle == 0 && paren == 0 {
-				part := strings.TrimSpace(text[start:i])
-				if part != "" {
-					out = append(out, part)
-				}
-				start = i + 1
-			}
-		}
-	}
-	if part := strings.TrimSpace(text[start:]); part != "" {
-		out = append(out, part)
-	}
-	return out
-}
-
-// matchingTypeReprParen finds the index of the closing paren matching the
-// opening paren at position open.
-func matchingTypeReprParen(text string, open int) int {
-	depth := 0
-	for i := open; i < len(text); i++ {
-		switch text[i] {
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
-}
-
-// parseTypeReprSlice converts a slice of Osty type strings to []api.TypeRepr.
-func parseTypeReprSlice(raw []string) []api.TypeRepr {
-	if len(raw) == 0 {
-		return nil
-	}
-	out := make([]api.TypeRepr, 0, len(raw))
-	for _, s := range raw {
-		if tr := parseTypeRepr(s); tr != nil {
-			out = append(out, *tr)
-		}
-	}
-	return out
+	return startLine, startColumn, endLine, endColumn
 }

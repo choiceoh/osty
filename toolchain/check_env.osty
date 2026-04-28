@@ -165,6 +165,7 @@ pub struct CheckEnv {
     pub interfaceIndexKeys: List<String>,
     pub interfaceIndexHashes: List<Int>,
     pub interfaceExtends: List<CheckInterfaceExt>,
+    pub importAliases: List<String>,
 
     // Generic bounds currently in scope (owner fn / struct / impl).
     pub genericBounds: List<CheckGenericBound>,
@@ -233,6 +234,7 @@ pub fn emptyCheckEnv(tys: TyArena) -> CheckEnv {
         interfaceIndexKeys: [],
         interfaceIndexHashes: [],
         interfaceExtends: [],
+        importAliases: [],
         genericBounds: [],
         genericBoundIndexNames: [],
         genericBoundIndexHashes: [],
@@ -363,6 +365,22 @@ pub fn checkRegisterFn(env: CheckEnv, sig: CheckFnSig) {
     } else {
         env.fnIndexValues[slot] = idx
     }
+}
+
+pub fn checkMarkImportAlias(env: CheckEnv, alias: String) {
+    if alias == "" || checkHasImportAlias(env, alias) {
+        return
+    }
+    env.importAliases.push(alias)
+}
+
+pub fn checkHasImportAlias(env: CheckEnv, alias: String) -> Bool {
+    for existing in env.importAliases {
+        if existing == alias {
+            return true
+        }
+    }
+    false
 }
 
 pub fn checkMarkFnHasBody(env: CheckEnv, name: String, owner: String) {

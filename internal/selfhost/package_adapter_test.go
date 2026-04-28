@@ -195,6 +195,27 @@ pub fn violator() -> Int { 42 }
 	}
 }
 
+func TestCheckPackageStructuredUsesProvidedImportSurfaceBeforeManualStdAliases(t *testing.T) {
+	input := canonicalSelfhostInput(t, []byte(`use std.strings as strings
+
+fn main() {
+    let joined = strings.join(["a"], ",")
+}
+`), 0)
+	checked, err := selfhost.CheckPackageStructured(selfhost.PackageCheckInput{
+		Files: []selfhost.PackageCheckFile{input},
+		Imports: []selfhost.PackageCheckImport{{
+			Alias: "strings",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("CheckPackageStructured: %v", err)
+	}
+	if checked.Summary.Errors == 0 {
+		t.Fatalf("summary errors = 0, want package input surface to be authoritative over manual std aliases (diagnostics=%#v)", checked.Diagnostics)
+	}
+}
+
 func TestCheckSourceStructuredClosurePatternParam(t *testing.T) {
 	src := canonicalSelfhostSource(t, []byte(`fn main() {
     let f: fn((Int, Int)) -> Int = |(a, b): (Int, Int)| a + b
@@ -290,6 +311,12 @@ pub fn violator() -> Int { 42 }
 	}
 	if want := len(good) + 1; got.Start < want {
 		t.Fatalf("diagnostic start = %d, want >= %d so second-file base survives", got.Start, want)
+	}
+	if got.StartLine <= 0 || got.StartLine > 3 {
+		t.Fatalf("diagnostic start line = %d, want per-file checker-owned line near bad source", got.StartLine)
+	}
+	if got.StartColumn <= 0 || got.EndLine <= 0 || got.EndColumn <= 0 {
+		t.Fatalf("diagnostic structured span = %d:%d..%d:%d, want populated line/column", got.StartLine, got.StartColumn, got.EndLine, got.EndColumn)
 	}
 	if got := checked.Summary.ErrorsByContext["E0773"]; got != 1 {
 		t.Fatalf("summary E0773 count = %d, want 1 (summary=%#v)", got, checked.Summary)
