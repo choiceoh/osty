@@ -10113,6 +10113,81 @@ void *osty_rt_map_keys_sorted_i64(void *raw_map) {
     return keys;
 }
 
+/* Map<K, V>.toString — `{k1: v1, k2: v2}`-shaped. Reuses the per-
+ * element formatters from the list_to_string family; a single
+ * runtime entry is enough because the Map struct already carries
+ * `key_kind` / `value_kind` (set at `osty_rt_map_new` time) and we
+ * dispatch on those internally. The value-side formatter has to know
+ * the slot size — Map<K, Int> stores 8-byte values, Map<K, Bool>
+ * stores `sizeof(bool)` — so we look it up from `map->value_size`
+ * directly rather than recomputing from `value_kind`. Keys always
+ * use the kind's canonical width via `osty_rt_kind_size`.
+ *
+ * Format: empty → "{}". Pairs joined with ", "; keys and values
+ * separated by ": ". String values are quoted to match the
+ * list_to_string convention so users can pattern-match round-trip
+ * representations across collection kinds. */
+static osty_rt_list_format_one_fn osty_rt_map_pick_kind_formatter(int64_t kind) {
+    switch (kind) {
+    case OSTY_RT_ABI_I64:
+        return osty_rt_list_format_i64;
+    case OSTY_RT_ABI_F64:
+        return osty_rt_list_format_f64;
+    case OSTY_RT_ABI_I1:
+        return osty_rt_list_format_i1;
+    case OSTY_RT_ABI_STRING:
+        return osty_rt_list_format_string;
+    case OSTY_RT_ABI_PTR:
+        /* Reuse the string formatter for the ptr lane: today the only
+         * ptr-shaped Map keys/values that show up at this entry are
+         * Strings (per `osty_rt_map_key_hash`'s OSTY_RT_ABI_PTR arm,
+         * which already special-cases String content). Composite ptr
+         * values trigger the abort below — the caller gets a clear
+         * message instead of garbage bytes. */
+        return osty_rt_list_format_string;
+    default:
+        return NULL;
+    }
+}
+
+const char *osty_rt_map_to_string(void *raw_map) {
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
+    if (map == NULL || map->len == 0) {
+        return osty_rt_string_dup_site("{}", 2, "runtime.map.to_string");
+    }
+    osty_rt_list_format_one_fn fmt_key = osty_rt_map_pick_kind_formatter(map->key_kind);
+    osty_rt_list_format_one_fn fmt_val = osty_rt_map_pick_kind_formatter(map->value_kind);
+    if (fmt_key == NULL || fmt_val == NULL) {
+        osty_rt_abort("runtime.map.to_string: unsupported key/value kind");
+    }
+    size_t key_size = osty_rt_kind_size(map->key_kind);
+    size_t value_size = map->value_size;
+    size_t cap = 64;
+    size_t len = 0;
+    char *buf = (char *)malloc(cap);
+    if (buf == NULL) {
+        osty_rt_abort("runtime.map.to_string: out of memory");
+    }
+    buf[len++] = '{';
+    osty_rt_map_lock(raw_map);
+    for (int64_t i = 0; i < map->len; i++) {
+        if (i > 0) {
+            osty_rt_list_to_string_append(&buf, &cap, &len, ", ", 2);
+        }
+        const unsigned char *key_slot = map->keys + (size_t)i * key_size;
+        const unsigned char *value_slot = map->values + (size_t)i * value_size;
+        fmt_key(&buf, &cap, &len, key_slot);
+        osty_rt_list_to_string_append(&buf, &cap, &len, ": ", 2);
+        fmt_val(&buf, &cap, &len, value_slot);
+    }
+    osty_rt_map_unlock(raw_map);
+    osty_rt_list_to_string_grow(&buf, &cap, len + 2);
+    buf[len++] = '}';
+    const char *out = osty_rt_string_dup_site(buf, len, "runtime.map.to_string");
+    free(buf);
+    return out;
+}
+
 // Every public keyed op takes the per-map lock, runs the raw op, and
 // releases. Recursive so that `update`'s outer lock + a re-entrant op
 // from a user callback (e.g. counts.len() inside f) don't deadlock.

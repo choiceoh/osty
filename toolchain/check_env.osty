@@ -2287,6 +2287,15 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         paramNames: [], paramTys: [],
         generics: ["K", "V"], genericBounds: [],
     })
+    // `{k: v, k: v}`-shaped stringification. Single runtime entry —
+    // `osty_rt_map_to_string` dispatches on the Map's stored
+    // `key_kind` / `value_kind` to pick per-element formatters.
+    // Composite K/V types abort inside the runtime today.
+    checkRegisterFn(env, CheckFnSig {
+        name: "toString", owner: "Map", receiverTy: tMapKV, hasReceiver: true, retTy: tString_,
+        paramNames: [], paramTys: [],
+        generics: ["K", "V"], genericBounds: [],
+    })
     // Map helpers backed by runtime intrinsics in `osty_runtime.c`
     // (see PR #470). `get` is already registered above; these five
     // surface the matching checker signatures so user code can call

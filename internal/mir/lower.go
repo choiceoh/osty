@@ -4228,6 +4228,8 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 			return IntrinsicMapValues
 		case "remove":
 			return IntrinsicMapRemove
+		case "toString":
+			return IntrinsicMapToString
 		}
 	case "Set":
 		switch name {

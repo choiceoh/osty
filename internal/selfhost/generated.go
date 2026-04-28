@@ -36550,6 +36550,11 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "containsKey", owner: "Map", receiverTy: tMapKV, retTy: tBool(tys), paramNames: []string{"key"}, paramTys: []int{tK}, generics: []string{"K", "V"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16451:5
 	checkRegisterFn(env, &CheckFnSig{name: "clear", owner: "Map", receiverTy: tMapKV, retTy: tUnit(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"K", "V"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// Map<K, V>.toString() -> String — mirrors List.toString. Single
+	// runtime entry; the Map carries `key_kind` / `value_kind` so the
+	// C code dispatches per-element formatters internally. Composite
+	// keys/values abort with a clear runtime message.
+	checkRegisterFn(env, &CheckFnSig{name: "toString", owner: "Map", receiverTy: tMapKV, retTy: tString(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"K", "V"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16460:5
 	tR_map := tyNamed(tys, "R", make([]int, 0, 1))
 	_ = tR_map

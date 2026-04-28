@@ -5779,6 +5779,7 @@ func mirRtMapLenSymbolName() string   { return mirRtMapSymbol("len") }
 func mirRtMapValuesSymbol() string    { return mirRtMapSymbol("values") }
 func mirRtMapEntriesSymbol() string   { return mirRtMapSymbol("entries") }
 func mirRtMapMergeWithSymbol() string { return mirRtMapSymbol("merge_with") }
+func mirRtMapToStringSymbol() string  { return mirRtMapSymbol("to_string") }
 
 // Osty: mirRtSet* fixed-symbols
 func mirRtSetClearSymbol() string   { return mirRtSetSymbol("clear") }

@@ -1174,7 +1174,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapGetOr,
 		mir.IntrinsicMapSet, mir.IntrinsicMapContains, mir.IntrinsicMapLen,
 		mir.IntrinsicMapKeys, mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted,
-		mir.IntrinsicMapIncr:
+		mir.IntrinsicMapIncr, mir.IntrinsicMapToString:
 		return true
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
@@ -4053,7 +4053,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapGetOr,
 		mir.IntrinsicMapSet, mir.IntrinsicMapContains, mir.IntrinsicMapLen,
 		mir.IntrinsicMapKeys, mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted,
-		mir.IntrinsicMapIncr:
+		mir.IntrinsicMapIncr, mir.IntrinsicMapToString:
 		return g.emitMapIntrinsic(i)
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
@@ -5027,6 +5027,18 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 			g.fnBuf.WriteString(mirStorePtrLine(tmp, g.localSlots[i.Dest.Local]))
 		}
 		return nil
+	case mir.IntrinsicMapToString:
+		// `{k: v, k: v}`-shaped stringification. One runtime entry —
+		// the Map struct already carries `key_kind` / `value_kind` set
+		// at allocation time, so dispatch happens inside C; lowering
+		// just emits the call. Composite key/value types (struct,
+		// enum, nested collection) abort inside the runtime today.
+		sym := mirRtMapToStringSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: mapReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("map intrinsic kind %d", i.Kind))
 }
