@@ -3566,68 +3566,78 @@ func llvmStringToBytes(emitter *LlvmEmitter, value *LlvmValue) *LlvmValue {
 // Osty: toolchain/llvmgen.osty:2935:5
 func llvmBuiltinType(name string) string {
 	// Osty: toolchain/llvmgen.osty:2936:5
-	if name == "Int" {
+	if name == "Int" || name == "Int64" || name == "UInt64" {
 		// Osty: toolchain/llvmgen.osty:2937:9
 		return "i64"
 	}
 	// Osty: toolchain/llvmgen.osty:2939:5
-	if name == "Float" {
+	if name == "Int32" || name == "UInt32" || name == "Char" {
 		// Osty: toolchain/llvmgen.osty:2940:9
-		return "double"
-	}
-	// Osty: toolchain/llvmgen.osty:2942:5
-	if name == "Bool" {
-		// Osty: toolchain/llvmgen.osty:2943:9
-		return "i1"
-	}
-	// Osty: toolchain/llvmgen.osty:2945:5
-	if name == "Char" {
-		// Osty: toolchain/llvmgen.osty:2946:9
 		return "i32"
 	}
-	// Osty: toolchain/llvmgen.osty:2948:5
-	if name == "Byte" {
-		// Osty: toolchain/llvmgen.osty:2949:9
+	// Osty: toolchain/llvmgen.osty:2942:5
+	if name == "Int16" || name == "UInt16" {
+		// Osty: toolchain/llvmgen.osty:2943:9
+		return "i16"
+	}
+	// Osty: toolchain/llvmgen.osty:2945:5
+	if name == "Int8" || name == "UInt8" || name == "Byte" {
+		// Osty: toolchain/llvmgen.osty:2946:9
 		return "i8"
 	}
+	// Osty: toolchain/llvmgen.osty:2948:5
+	if name == "Float" || name == "Float64" {
+		// Osty: toolchain/llvmgen.osty:2949:9
+		return "double"
+	}
 	// Osty: toolchain/llvmgen.osty:2951:5
-	if name == "String" || name == "Bytes" || name == "Error" {
+	if name == "Float32" {
 		// Osty: toolchain/llvmgen.osty:2952:9
+		return "float"
+	}
+	// Osty: toolchain/llvmgen.osty:2954:5
+	if name == "Bool" {
+		// Osty: toolchain/llvmgen.osty:2955:9
+		return "i1"
+	}
+	// Osty: toolchain/llvmgen.osty:2957:5
+	if name == "String" || name == "Bytes" || name == "Error" {
+		// Osty: toolchain/llvmgen.osty:2958:9
 		return "ptr"
 	}
 	return ""
 }
 
-// Osty: toolchain/llvmgen.osty:2957:5
+// Osty: toolchain/llvmgen.osty:2963:5
 func llvmRuntimeAbiBuiltinType(name string) string {
-	// Osty: toolchain/llvmgen.osty:2958:5
-	if name == "Int" || name == "Float" || name == "Bool" || name == "Char" || name == "Byte" || name == "String" {
-		// Osty: toolchain/llvmgen.osty:2959:9
+	// Osty: toolchain/llvmgen.osty:2964:5
+	if llvmBuiltinType(name) != "" {
+		// Osty: toolchain/llvmgen.osty:2965:9
 		return llvmBuiltinType(name)
 	}
 	return ""
 }
 
-// Osty: toolchain/llvmgen.osty:2964:5
+// Osty: toolchain/llvmgen.osty:2970:5
 func llvmEnumPayloadBuiltinType(name string) string {
-	// Osty: toolchain/llvmgen.osty:2965:5
-	if name == "Int" || name == "Float" || name == "Char" || name == "Byte" || name == "String" {
-		// Osty: toolchain/llvmgen.osty:2966:9
+	// Osty: toolchain/llvmgen.osty:2971:5
+	if llvmBuiltinType(name) != "" {
+		// Osty: toolchain/llvmgen.osty:2972:9
 		return llvmBuiltinType(name)
 	}
 	return ""
 }
 
-// Osty: toolchain/llvmgen.osty:2971:5
+// Osty: toolchain/llvmgen.osty:2977:5
 func llvmZeroLiteral(typ string) string {
-	// Osty: toolchain/llvmgen.osty:2972:5
-	if typ == "double" {
-		// Osty: toolchain/llvmgen.osty:2973:9
+	// Osty: toolchain/llvmgen.osty:2978:5
+	if typ == "double" || typ == "float" {
+		// Osty: toolchain/llvmgen.osty:2979:9
 		return "0.0"
 	}
-	// Osty: toolchain/llvmgen.osty:2975:5
+	// Osty: toolchain/llvmgen.osty:2981:5
 	if typ == "ptr" {
-		// Osty: toolchain/llvmgen.osty:2976:9
+		// Osty: toolchain/llvmgen.osty:2982:9
 		return "null"
 	}
 	return "0"

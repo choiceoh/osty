@@ -3963,20 +3963,26 @@ pub fn llvmStringToBytes(emitter: LlvmEmitter, value: LlvmValue) -> LlvmValue {
 }
 
 pub fn llvmBuiltinType(name: String) -> String {
-    if name == "Int" {
+    if name == "Int" || name == "Int64" || name == "UInt64" {
         return "i64"
     }
-    if name == "Float" {
+    if name == "Int32" || name == "UInt32" || name == "Char" {
+        return "i32"
+    }
+    if name == "Int16" || name == "UInt16" {
+        return "i16"
+    }
+    if name == "Int8" || name == "UInt8" || name == "Byte" {
+        return "i8"
+    }
+    if name == "Float" || name == "Float64" {
         return "double"
+    }
+    if name == "Float32" {
+        return "float"
     }
     if name == "Bool" {
         return "i1"
-    }
-    if name == "Char" {
-        return "i32"
-    }
-    if name == "Byte" {
-        return "i8"
     }
     if name == "String" || name == "Bytes" || name == "Error" {
         return "ptr"
@@ -3985,21 +3991,21 @@ pub fn llvmBuiltinType(name: String) -> String {
 }
 
 pub fn llvmRuntimeAbiBuiltinType(name: String) -> String {
-    if name == "Int" || name == "Float" || name == "Bool" || name == "Char" || name == "Byte" || name == "String" {
+    if llvmBuiltinType(name) != "" {
         return llvmBuiltinType(name)
     }
     ""
 }
 
 pub fn llvmEnumPayloadBuiltinType(name: String) -> String {
-    if name == "Int" || name == "Float" || name == "Char" || name == "Byte" || name == "String" {
+    if llvmBuiltinType(name) != "" {
         return llvmBuiltinType(name)
     }
     ""
 }
 
 pub fn llvmZeroLiteral(typ: String) -> String {
-    if typ == "double" {
+    if typ == "double" || typ == "float" {
         return "0.0"
     }
     if typ == "ptr" {

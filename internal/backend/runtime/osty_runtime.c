@@ -8569,6 +8569,257 @@ const char *osty_rt_float_to_string(double value) {
     return osty_rt_string_dup_site(buffer, strlen(buffer), "runtime.float.to_string");
 }
 
+double osty_rt_float_abs(double value) {
+    return fabs(value);
+}
+
+double osty_rt_float_min(double left, double right) {
+    return fmin(left, right);
+}
+
+double osty_rt_float_max(double left, double right) {
+    return fmax(left, right);
+}
+
+double osty_rt_float_clamp(double value, double lo, double hi) {
+    return fmax(lo, fmin(value, hi));
+}
+
+double osty_rt_float_signum(double value) {
+    if (isnan(value)) {
+        return value;
+    }
+    if (value == 0.0) {
+        return copysign(0.0, value);
+    }
+    return copysign(1.0, value);
+}
+
+double osty_rt_float_floor(double value) {
+    return floor(value);
+}
+
+double osty_rt_float_ceil(double value) {
+    return ceil(value);
+}
+
+double osty_rt_float_round(double value) {
+    return nearbyint(value);
+}
+
+double osty_rt_float_trunc(double value) {
+    return trunc(value);
+}
+
+double osty_rt_float_fract(double value) {
+    return value - trunc(value);
+}
+
+double osty_rt_float_sqrt(double value) {
+    return sqrt(value);
+}
+
+double osty_rt_float_cbrt(double value) {
+    return cbrt(value);
+}
+
+double osty_rt_float_ln(double value) {
+    return log(value);
+}
+
+double osty_rt_float_log2(double value) {
+    return log2(value);
+}
+
+double osty_rt_float_log10(double value) {
+    return log10(value);
+}
+
+double osty_rt_float_exp(double value) {
+    return exp(value);
+}
+
+double osty_rt_float_sinh(double value) {
+    return sinh(value);
+}
+
+double osty_rt_float_cosh(double value) {
+    return cosh(value);
+}
+
+double osty_rt_float_tanh(double value) {
+    return tanh(value);
+}
+
+double osty_rt_float_sin(double value) {
+    return sin(value);
+}
+
+double osty_rt_float_cos(double value) {
+    return cos(value);
+}
+
+double osty_rt_float_tan(double value) {
+    return tan(value);
+}
+
+double osty_rt_float_asin(double value) {
+    return asin(value);
+}
+
+double osty_rt_float_acos(double value) {
+    return acos(value);
+}
+
+double osty_rt_float_atan(double value) {
+    return atan(value);
+}
+
+double osty_rt_float_atan2(double y, double x) {
+    return atan2(y, x);
+}
+
+double osty_rt_float_pow(double left, double right) {
+    return pow(left, right);
+}
+
+double osty_rt_float_hypot(double left, double right) {
+    return hypot(left, right);
+}
+
+double osty_rt_math_log(double value, double base) {
+    if (base == 0.0) {
+        return log(value);
+    }
+    return log(value) / log(base);
+}
+
+bool osty_rt_float_is_nan(double value) {
+    return isnan(value);
+}
+
+bool osty_rt_float_is_infinite(double value) {
+    return isinf(value);
+}
+
+bool osty_rt_float_is_finite(double value) {
+    return isfinite(value);
+}
+
+uint64_t osty_rt_float64_to_bits(double value) {
+    union {
+        double f64;
+        uint64_t bits;
+    } u;
+    u.f64 = value;
+    return u.bits;
+}
+
+uint64_t osty_rt_float32_to_bits(float value) {
+    union {
+        float f32;
+        uint32_t bits;
+    } u;
+    u.f32 = value;
+    return (uint64_t)u.bits;
+}
+
+const char *osty_rt_float_to_fixed(double value, int64_t precision) {
+    int digits;
+    int needed;
+    char *buffer;
+    const char *out;
+
+    if (isnan(value)) {
+        return osty_rt_string_dup_site("NaN", 3, "runtime.float.to_fixed");
+    }
+    if (isinf(value)) {
+        if (value < 0) {
+            return osty_rt_string_dup_site("-Inf", 4, "runtime.float.to_fixed");
+        }
+        return osty_rt_string_dup_site("Inf", 3, "runtime.float.to_fixed");
+    }
+    digits = precision < 0 ? 0 : (precision > 1000 ? 1000 : (int)precision);
+    needed = snprintf(NULL, 0, "%.*f", digits, value);
+    if (needed < 0) {
+        osty_rt_abort("failed to format Float.toFixed()");
+    }
+    buffer = (char *)malloc((size_t)needed + 1);
+    if (buffer == NULL) {
+        osty_rt_abort("out of memory formatting Float.toFixed()");
+    }
+    if (snprintf(buffer, (size_t)needed + 1, "%.*f", digits, value) < 0) {
+        free(buffer);
+        osty_rt_abort("failed to format Float.toFixed()");
+    }
+    out = osty_rt_string_dup_site(buffer, (size_t)needed, "runtime.float.to_fixed");
+    free(buffer);
+    return out;
+}
+
+static const char *osty_rt_float_checked_to_int(double value, double rounded,
+                                                int64_t *out, const char *site) {
+    if (isnan(value)) {
+        return osty_rt_string_dup_site("float conversion failed: NaN", 28, site);
+    }
+    if (isinf(value)) {
+        return osty_rt_string_dup_site("float conversion failed: infinite", 33, site);
+    }
+    if (rounded < (double)INT64_MIN || rounded > (double)INT64_MAX) {
+        return osty_rt_string_dup_site("float conversion failed: overflow", 33, site);
+    }
+    *out = (int64_t)rounded;
+    return NULL;
+}
+
+const char *osty_rt_float_to_int_trunc(double value, int64_t *out) {
+    return osty_rt_float_checked_to_int(value, trunc(value), out, "runtime.float.to_int_trunc");
+}
+
+const char *osty_rt_float_to_int_round(double value, int64_t *out) {
+    return osty_rt_float_checked_to_int(value, nearbyint(value), out, "runtime.float.to_int_round");
+}
+
+const char *osty_rt_float_to_int_floor(double value, int64_t *out) {
+    return osty_rt_float_checked_to_int(value, floor(value), out, "runtime.float.to_int_floor");
+}
+
+const char *osty_rt_float_to_int_ceil(double value, int64_t *out) {
+    return osty_rt_float_checked_to_int(value, ceil(value), out, "runtime.float.to_int_ceil");
+}
+
+static int64_t osty_rt_float_saturating_i64(double value) {
+    if (isnan(value)) {
+        return 0;
+    }
+    if (value >= (double)INT64_MAX) {
+        return INT64_MAX;
+    }
+    if (value <= (double)INT64_MIN) {
+        return INT64_MIN;
+    }
+    return (int64_t)trunc(value);
+}
+
+int64_t osty_rt_float_to_int_lossy(double value) {
+    return osty_rt_float_saturating_i64(value);
+}
+
+int32_t osty_rt_float_to_int32_lossy(double value) {
+    int64_t wide = osty_rt_float_saturating_i64(value);
+    if (wide > (int64_t)INT32_MAX) {
+        return INT32_MAX;
+    }
+    if (wide < (int64_t)INT32_MIN) {
+        return INT32_MIN;
+    }
+    return (int32_t)wide;
+}
+
+int64_t osty_rt_float_to_int64_lossy(double value) {
+    return osty_rt_float_saturating_i64(value);
+}
+
 int64_t osty_rt_strings_Compare(const char *left, const char *right) {
     int result;
     /* `osty_rt_string_compare_bytes` decodes any inline operand

@@ -232,6 +232,9 @@ func (clangToolchain) CompileCObject(ctx context.Context, sourcePath, objectPath
 
 func (clangToolchain) LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string) error {
 	args := llvmgen.ClangLinkBinaryArgs(target, objectPaths, binaryPath)
+	if !isWindowsTarget(target) {
+		args = append(args, "-lm")
+	}
 	return runClang(ctx, "link binary", args)
 }
 
