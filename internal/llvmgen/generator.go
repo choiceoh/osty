@@ -55,6 +55,7 @@ type generator struct {
 	stdCompressAliases   map[string]bool
 	stdStringsAliases    map[string]bool
 	stdEnvAliases        map[string]bool
+	stdNetAliases        map[string]bool
 	stdCryptoAliases     map[string]bool
 	runtimeDecls         map[string]runtimeDecl
 	runtimeDeclOrder     []string

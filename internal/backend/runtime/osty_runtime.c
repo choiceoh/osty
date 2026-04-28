@@ -123,8 +123,16 @@ typedef INIT_ONCE          osty_rt_once_t;
 #else
 #  define OSTY_RT_PLATFORM_POSIX 1
 #  include <pthread.h>
+#  include <poll.h>
 #  include <sched.h>
 #  include <signal.h>
+#  include <fcntl.h>
+#  include <netdb.h>
+#  include <arpa/inet.h>
+#  include <netinet/in.h>
+#  include <netinet/tcp.h>
+#  include <sys/socket.h>
+#  include <sys/time.h>
 #  if defined(__APPLE__)
 #    include <crt_externs.h>
 #  endif
@@ -18412,6 +18420,778 @@ void *osty_rt_io_read_line(void) {
     free(buf);
     return out;
 }
+
+/* std.net TCP/DNS surface.
+ *
+ * The Osty `std.net` module keeps the public API in Osty source and
+ * calls into these runtime helpers through `use c "osty_runtime"`.
+ * Every helper clears the thread-local net status before work, and on
+ * failure records a human-readable error string retrievable via
+ * `osty_rt_net_last_error()`. */
+static OSTY_RT_TLS int osty_rt_net_failed_flag = 0;
+static OSTY_RT_TLS char *osty_rt_net_error_text = NULL;
+
+static void osty_rt_net_clear_status(void) {
+    osty_rt_net_failed_flag = 0;
+    if (osty_rt_net_error_text != NULL) {
+        free(osty_rt_net_error_text);
+        osty_rt_net_error_text = NULL;
+    }
+}
+
+static void osty_rt_net_set_error_text(const char *prefix, const char *detail, const char *site) {
+    const char *lhs = prefix == NULL ? "network error" : prefix;
+    const char *rhs = (detail != NULL && detail[0] != '\0') ? detail : "unknown error";
+    size_t lhs_len = strlen(lhs);
+    size_t rhs_len = strlen(rhs);
+    size_t total = lhs_len + 2 + rhs_len;
+    char *buf = (char *)osty_rt_xmalloc(total + 1, site);
+
+    memcpy(buf, lhs, lhs_len);
+    buf[lhs_len] = ':';
+    buf[lhs_len + 1] = ' ';
+    memcpy(buf + lhs_len + 2, rhs, rhs_len);
+    buf[total] = '\0';
+
+    osty_rt_net_clear_status();
+    osty_rt_net_failed_flag = 1;
+    osty_rt_net_error_text = buf;
+}
+
+static void osty_rt_net_set_errno_error(const char *prefix, const char *site) {
+    osty_rt_net_set_error_text(prefix, strerror(errno), site);
+}
+
+static void *osty_rt_net_empty_string(void) {
+    return osty_rt_string_dup_site("", 0, "runtime.net.empty_string");
+}
+
+static void *osty_rt_net_empty_bytes(void) {
+    return osty_rt_bytes_dup_site(NULL, 0, "runtime.net.empty_bytes");
+}
+
+static void *osty_rt_net_empty_list(void) {
+    return osty_rt_list_new();
+}
+
+static const char *osty_rt_net_decode_string_arg(const char *value, char *buf) {
+    const char *out = value != NULL ? value : "";
+    osty_rt_string_decode_to_buf_if_inline(&out, buf);
+    return out;
+}
+
+bool osty_rt_net_failed(void) {
+    return osty_rt_net_failed_flag != 0;
+}
+
+void *osty_rt_net_last_error(void) {
+    const char *msg = osty_rt_net_error_text != NULL
+        ? osty_rt_net_error_text
+        : "network error";
+    return osty_rt_string_dup_site(msg, strlen(msg), "runtime.net.last_error");
+}
+
+#if defined(OSTY_RT_PLATFORM_WIN32)
+
+static void osty_rt_net_unsupported(const char *site) {
+    osty_rt_net_set_error_text("network runtime is not available on this platform",
+                               "Windows socket support is not wired into the current runtime yet",
+                               site);
+}
+
+void *osty_rt_net_lookup_text(const char *host) {
+    (void)host;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.lookup_text");
+    return osty_rt_net_empty_list();
+}
+
+void *osty_rt_net_lookup_addr(const char *ip) {
+    (void)ip;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.lookup_addr");
+    return osty_rt_net_empty_list();
+}
+
+int64_t osty_rt_net_tcp_connect(const char *host, int64_t port) {
+    (void)host;
+    (void)port;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_connect");
+    return 0;
+}
+
+int64_t osty_rt_net_tcp_connect_timeout(const char *host, int64_t port, int64_t timeout_ms) {
+    (void)host;
+    (void)port;
+    (void)timeout_ms;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_connect_timeout");
+    return 0;
+}
+
+int64_t osty_rt_net_tcp_listen(const char *host, int64_t port) {
+    (void)host;
+    (void)port;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_listen");
+    return 0;
+}
+
+void *osty_rt_net_tcp_read(int64_t handle, int64_t max_bytes) {
+    (void)handle;
+    (void)max_bytes;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_read");
+    return osty_rt_net_empty_bytes();
+}
+
+void *osty_rt_net_tcp_read_exact(int64_t handle, int64_t n) {
+    (void)handle;
+    (void)n;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_read_exact");
+    return osty_rt_net_empty_bytes();
+}
+
+int64_t osty_rt_net_tcp_write(int64_t handle, void *data) {
+    (void)handle;
+    (void)data;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_write");
+    return 0;
+}
+
+void osty_rt_net_tcp_write_all(int64_t handle, void *data) {
+    (void)handle;
+    (void)data;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_write_all");
+}
+
+void osty_rt_net_tcp_flush(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+}
+
+void osty_rt_net_tcp_close(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_close");
+}
+
+void *osty_rt_net_tcp_local_addr(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_local_addr");
+    return osty_rt_net_empty_string();
+}
+
+void *osty_rt_net_tcp_peer_addr(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_peer_addr");
+    return osty_rt_net_empty_string();
+}
+
+void osty_rt_net_tcp_set_read_timeout(int64_t handle, int64_t timeout_ms) {
+    (void)handle;
+    (void)timeout_ms;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_set_read_timeout");
+}
+
+void osty_rt_net_tcp_set_write_timeout(int64_t handle, int64_t timeout_ms) {
+    (void)handle;
+    (void)timeout_ms;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_set_write_timeout");
+}
+
+void osty_rt_net_tcp_set_nodelay(int64_t handle, bool on) {
+    (void)handle;
+    (void)on;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_set_nodelay");
+}
+
+void osty_rt_net_tcp_set_keepalive(int64_t handle, bool on) {
+    (void)handle;
+    (void)on;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_set_keepalive");
+}
+
+int64_t osty_rt_net_tcp_accept(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_accept");
+    return 0;
+}
+
+void *osty_rt_net_tcp_listener_local_addr(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_listener_local_addr");
+    return osty_rt_net_empty_string();
+}
+
+void osty_rt_net_tcp_listener_close(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_listener_close");
+}
+
+#else
+
+static void osty_rt_net_set_gai_error(const char *prefix, int code, const char *site) {
+    osty_rt_net_set_error_text(prefix, gai_strerror(code), site);
+}
+
+static bool osty_rt_net_service_string(int64_t port, char *buf, size_t buf_size, const char *site) {
+    int written;
+    if (port < 0 || port > 65535) {
+        osty_rt_net_set_error_text("invalid port", "port must be in 0..65535", site);
+        return false;
+    }
+    written = snprintf(buf, buf_size, "%lld", (long long)port);
+    if (written < 0 || (size_t)written >= buf_size) {
+        osty_rt_net_set_error_text("failed to format port", "buffer overflow", site);
+        return false;
+    }
+    return true;
+}
+
+static void osty_rt_net_prepare_stream_socket(int fd) {
+#if defined(__APPLE__)
+    int on = 1;
+    if (fd >= 0) {
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, (socklen_t)sizeof(on));
+    }
+#else
+    (void)fd;
+#endif
+}
+
+static int osty_rt_net_send_flags(void) {
+#if defined(MSG_NOSIGNAL)
+    return MSG_NOSIGNAL;
+#else
+    return 0;
+#endif
+}
+
+static int osty_rt_net_set_blocking(int fd, bool blocking) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return -1;
+    }
+    if (blocking) {
+        flags &= ~O_NONBLOCK;
+    } else {
+        flags |= O_NONBLOCK;
+    }
+    return fcntl(fd, F_SETFL, flags);
+}
+
+static void *osty_rt_net_sockaddr_text(const struct sockaddr *sa, socklen_t len, const char *site) {
+    char host[NI_MAXHOST];
+    char serv[NI_MAXSERV];
+    char text[NI_MAXHOST + NI_MAXSERV + 8];
+    int rc = getnameinfo(sa, len, host, sizeof(host), serv, sizeof(serv),
+                         NI_NUMERICHOST | NI_NUMERICSERV);
+    int written;
+    if (rc != 0) {
+        osty_rt_net_set_gai_error("failed to format socket address", rc, site);
+        return osty_rt_net_empty_string();
+    }
+    if (sa->sa_family == AF_INET6) {
+        written = snprintf(text, sizeof(text), "[%s]:%s", host, serv);
+    } else {
+        written = snprintf(text, sizeof(text), "%s:%s", host, serv);
+    }
+    if (written < 0 || (size_t)written >= sizeof(text)) {
+        osty_rt_net_set_error_text("failed to format socket address", "buffer overflow", site);
+        return osty_rt_net_empty_string();
+    }
+    return osty_rt_string_dup_site(text, (size_t)written, site);
+}
+
+static bool osty_rt_net_apply_timeout(int fd, int64_t timeout_ms, int optname, const char *site) {
+    struct timeval tv;
+    if (timeout_ms < 0) {
+        tv.tv_sec = 0;
+        tv.tv_usec = 0;
+    } else {
+        tv.tv_sec = (time_t)(timeout_ms / 1000);
+        tv.tv_usec = (suseconds_t)((timeout_ms % 1000) * 1000);
+    }
+    if (setsockopt(fd, SOL_SOCKET, optname, &tv, (socklen_t)sizeof(tv)) != 0) {
+        osty_rt_net_set_errno_error("failed to configure socket timeout", site);
+        return false;
+    }
+    return true;
+}
+
+static int64_t osty_rt_net_connect_impl(const char *host, int64_t port, int64_t timeout_ms, const char *site) {
+    char service[32];
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    struct addrinfo *ai;
+    int rc;
+    int last_errno = 0;
+
+    if (host == NULL || host[0] == '\0') {
+        osty_rt_net_set_error_text("failed to connect", "host is empty", site);
+        return 0;
+    }
+    if (!osty_rt_net_service_string(port, service, sizeof(service), site)) {
+        return 0;
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    rc = getaddrinfo(host, service, &hints, &res);
+    if (rc != 0) {
+        osty_rt_net_set_gai_error("failed to resolve remote address", rc, site);
+        return 0;
+    }
+
+    for (ai = res; ai != NULL; ai = ai->ai_next) {
+        int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) {
+            last_errno = errno;
+            continue;
+        }
+
+        osty_rt_net_prepare_stream_socket(fd);
+        if (timeout_ms >= 0) {
+            struct pollfd pfd;
+            int so_error = 0;
+            socklen_t so_error_len = (socklen_t)sizeof(so_error);
+
+            if (osty_rt_net_set_blocking(fd, false) != 0) {
+                last_errno = errno;
+                close(fd);
+                continue;
+            }
+
+            do {
+                rc = connect(fd, ai->ai_addr, ai->ai_addrlen);
+            } while (rc != 0 && errno == EINTR);
+
+            if (rc != 0) {
+                if (errno != EINPROGRESS) {
+                    last_errno = errno;
+                    close(fd);
+                    continue;
+                }
+                pfd.fd = fd;
+                pfd.events = POLLOUT;
+                do {
+                    rc = poll(&pfd, 1, (int)timeout_ms);
+                } while (rc < 0 && errno == EINTR);
+                if (rc == 0) {
+                    close(fd);
+                    freeaddrinfo(res);
+                    osty_rt_net_set_error_text("failed to connect", "connect timed out", site);
+                    return 0;
+                }
+                if (rc < 0) {
+                    last_errno = errno;
+                    close(fd);
+                    continue;
+                }
+                if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &so_error_len) != 0) {
+                    last_errno = errno;
+                    close(fd);
+                    continue;
+                }
+                if (so_error != 0) {
+                    last_errno = so_error;
+                    close(fd);
+                    continue;
+                }
+            }
+            if (osty_rt_net_set_blocking(fd, true) != 0) {
+                last_errno = errno;
+                close(fd);
+                continue;
+            }
+            freeaddrinfo(res);
+            return (int64_t)fd;
+        }
+
+        do {
+            rc = connect(fd, ai->ai_addr, ai->ai_addrlen);
+        } while (rc != 0 && errno == EINTR);
+        if (rc == 0) {
+            freeaddrinfo(res);
+            return (int64_t)fd;
+        }
+        last_errno = errno;
+        close(fd);
+    }
+
+    freeaddrinfo(res);
+    if (last_errno != 0) {
+        errno = last_errno;
+        osty_rt_net_set_errno_error("failed to connect", site);
+    } else {
+        osty_rt_net_set_error_text("failed to connect", "no reachable address", site);
+    }
+    return 0;
+}
+
+void *osty_rt_net_lookup_text(const char *host) {
+    char host_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    const char *decoded = osty_rt_net_decode_string_arg(host, host_buf);
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    struct addrinfo *ai;
+    int rc;
+    void *out;
+
+    osty_rt_net_clear_status();
+    if (decoded[0] == '\0') {
+        osty_rt_net_set_error_text("failed to resolve host", "host is empty", "runtime.net.lookup_text");
+        return osty_rt_net_empty_list();
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    rc = getaddrinfo(decoded, NULL, &hints, &res);
+    if (rc != 0) {
+        osty_rt_net_set_gai_error("failed to resolve host", rc, "runtime.net.lookup_text");
+        return osty_rt_net_empty_list();
+    }
+
+    out = osty_rt_list_new();
+    for (ai = res; ai != NULL; ai = ai->ai_next) {
+        char text[NI_MAXHOST];
+        rc = getnameinfo(ai->ai_addr, ai->ai_addrlen, text, sizeof(text), NULL, 0, NI_NUMERICHOST);
+        if (rc != 0) {
+            continue;
+        }
+        osty_rt_list_push_ptr(out,
+                              osty_rt_string_dup_site(text, strlen(text), "runtime.net.lookup_text.entry"));
+    }
+    freeaddrinfo(res);
+    return out;
+}
+
+void *osty_rt_net_lookup_addr(const char *ip) {
+    char ip_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    const char *decoded = osty_rt_net_decode_string_arg(ip, ip_buf);
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    struct addrinfo *ai;
+    int rc;
+    void *out;
+    int64_t count = 0;
+
+    osty_rt_net_clear_status();
+    if (decoded[0] == '\0') {
+        osty_rt_net_set_error_text("failed to reverse lookup address", "address is empty", "runtime.net.lookup_addr");
+        return osty_rt_net_empty_list();
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_NUMERICHOST;
+    rc = getaddrinfo(decoded, NULL, &hints, &res);
+    if (rc != 0) {
+        osty_rt_net_set_gai_error("failed to parse reverse-lookup address", rc, "runtime.net.lookup_addr");
+        return osty_rt_net_empty_list();
+    }
+
+    out = osty_rt_list_new();
+    for (ai = res; ai != NULL; ai = ai->ai_next) {
+        char text[NI_MAXHOST];
+        rc = getnameinfo(ai->ai_addr, ai->ai_addrlen, text, sizeof(text), NULL, 0, NI_NAMEREQD);
+        if (rc != 0) {
+            continue;
+        }
+        osty_rt_list_push_ptr(out,
+                              osty_rt_string_dup_site(text, strlen(text), "runtime.net.lookup_addr.entry"));
+        count++;
+    }
+    freeaddrinfo(res);
+
+    if (count == 0) {
+        osty_rt_net_set_error_text("failed to reverse lookup address", "no names found", "runtime.net.lookup_addr");
+        return osty_rt_net_empty_list();
+    }
+    return out;
+}
+
+int64_t osty_rt_net_tcp_connect(const char *host, int64_t port) {
+    char host_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    const char *decoded = osty_rt_net_decode_string_arg(host, host_buf);
+    osty_rt_net_clear_status();
+    return osty_rt_net_connect_impl(decoded, port, -1, "runtime.net.tcp_connect");
+}
+
+int64_t osty_rt_net_tcp_connect_timeout(const char *host, int64_t port, int64_t timeout_ms) {
+    char host_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    const char *decoded = osty_rt_net_decode_string_arg(host, host_buf);
+    osty_rt_net_clear_status();
+    return osty_rt_net_connect_impl(decoded, port, timeout_ms, "runtime.net.tcp_connect_timeout");
+}
+
+int64_t osty_rt_net_tcp_listen(const char *host, int64_t port) {
+    char host_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    const char *decoded_host = osty_rt_net_decode_string_arg(host, host_buf);
+    const char *bind_host = (decoded_host[0] == '\0' || strcmp(decoded_host, "*") == 0) ? NULL : decoded_host;
+    char service[32];
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    struct addrinfo *ai;
+    int rc;
+    int last_errno = 0;
+
+    osty_rt_net_clear_status();
+    if (!osty_rt_net_service_string(port, service, sizeof(service), "runtime.net.tcp_listen")) {
+        return 0;
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+    rc = getaddrinfo(bind_host, service, &hints, &res);
+    if (rc != 0) {
+        osty_rt_net_set_gai_error("failed to resolve listen address", rc, "runtime.net.tcp_listen");
+        return 0;
+    }
+
+    for (ai = res; ai != NULL; ai = ai->ai_next) {
+        int on = 1;
+        int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) {
+            last_errno = errno;
+            continue;
+        }
+        osty_rt_net_prepare_stream_socket(fd);
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, (socklen_t)sizeof(on));
+        if (bind(fd, ai->ai_addr, ai->ai_addrlen) != 0) {
+            last_errno = errno;
+            close(fd);
+            continue;
+        }
+        if (listen(fd, SOMAXCONN) != 0) {
+            last_errno = errno;
+            close(fd);
+            continue;
+        }
+        freeaddrinfo(res);
+        return (int64_t)fd;
+    }
+
+    freeaddrinfo(res);
+    if (last_errno != 0) {
+        errno = last_errno;
+        osty_rt_net_set_errno_error("failed to listen", "runtime.net.tcp_listen");
+    } else {
+        osty_rt_net_set_error_text("failed to listen", "no bindable address", "runtime.net.tcp_listen");
+    }
+    return 0;
+}
+
+void *osty_rt_net_tcp_read(int64_t handle, int64_t max_bytes) {
+    unsigned char *buf;
+    ssize_t n;
+    void *out;
+
+    osty_rt_net_clear_status();
+    if (max_bytes < 0) {
+        osty_rt_net_set_error_text("failed to read from socket", "maxBytes must be non-negative", "runtime.net.tcp_read");
+        return osty_rt_net_empty_bytes();
+    }
+    if (max_bytes == 0) {
+        return osty_rt_net_empty_bytes();
+    }
+
+    buf = (unsigned char *)osty_rt_xmalloc((size_t)max_bytes, "runtime.net.tcp_read.buf");
+    do {
+        n = recv((int)handle, buf, (size_t)max_bytes, 0);
+    } while (n < 0 && errno == EINTR);
+    if (n < 0) {
+        free(buf);
+        osty_rt_net_set_errno_error("failed to read from socket", "runtime.net.tcp_read");
+        return osty_rt_net_empty_bytes();
+    }
+    out = osty_rt_bytes_dup_site(n == 0 ? NULL : buf, (size_t)n, "runtime.net.tcp_read");
+    free(buf);
+    return out;
+}
+
+void *osty_rt_net_tcp_read_exact(int64_t handle, int64_t want) {
+    unsigned char *buf;
+    size_t off = 0;
+    void *out;
+
+    osty_rt_net_clear_status();
+    if (want < 0) {
+        osty_rt_net_set_error_text("failed to read from socket", "byte count must be non-negative", "runtime.net.tcp_read_exact");
+        return osty_rt_net_empty_bytes();
+    }
+    if (want == 0) {
+        return osty_rt_net_empty_bytes();
+    }
+
+    buf = (unsigned char *)osty_rt_xmalloc((size_t)want, "runtime.net.tcp_read_exact.buf");
+    while (off < (size_t)want) {
+        ssize_t n;
+        do {
+            n = recv((int)handle, buf + off, (size_t)want - off, 0);
+        } while (n < 0 && errno == EINTR);
+        if (n < 0) {
+            free(buf);
+            osty_rt_net_set_errno_error("failed to read from socket", "runtime.net.tcp_read_exact");
+            return osty_rt_net_empty_bytes();
+        }
+        if (n == 0) {
+            free(buf);
+            osty_rt_net_set_error_text("failed to read from socket", "unexpected EOF", "runtime.net.tcp_read_exact");
+            return osty_rt_net_empty_bytes();
+        }
+        off += (size_t)n;
+    }
+    out = osty_rt_bytes_dup_site(buf, (size_t)want, "runtime.net.tcp_read_exact");
+    free(buf);
+    return out;
+}
+
+int64_t osty_rt_net_tcp_write(int64_t handle, void *raw_data) {
+    osty_rt_bytes *data = (osty_rt_bytes *)raw_data;
+    ssize_t written;
+    size_t len = (data == NULL || data->len <= 0) ? 0 : (size_t)data->len;
+
+    osty_rt_net_clear_status();
+    if (len == 0) {
+        return 0;
+    }
+
+    do {
+        written = send((int)handle, data->data, len, osty_rt_net_send_flags());
+    } while (written < 0 && errno == EINTR);
+    if (written < 0) {
+        osty_rt_net_set_errno_error("failed to write to socket", "runtime.net.tcp_write");
+        return 0;
+    }
+    return (int64_t)written;
+}
+
+void osty_rt_net_tcp_write_all(int64_t handle, void *raw_data) {
+    osty_rt_bytes *data = (osty_rt_bytes *)raw_data;
+    size_t len = (data == NULL || data->len <= 0) ? 0 : (size_t)data->len;
+    size_t off = 0;
+
+    osty_rt_net_clear_status();
+    while (off < len) {
+        ssize_t written;
+        do {
+            written = send((int)handle, data->data + off, len - off, osty_rt_net_send_flags());
+        } while (written < 0 && errno == EINTR);
+        if (written < 0) {
+            osty_rt_net_set_errno_error("failed to write to socket", "runtime.net.tcp_write_all");
+            return;
+        }
+        if (written == 0) {
+            osty_rt_net_set_error_text("failed to write to socket", "socket write made no progress", "runtime.net.tcp_write_all");
+            return;
+        }
+        off += (size_t)written;
+    }
+}
+
+void osty_rt_net_tcp_flush(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+}
+
+void osty_rt_net_tcp_close(int64_t handle) {
+    osty_rt_net_clear_status();
+    if (close((int)handle) != 0) {
+        osty_rt_net_set_errno_error("failed to close socket", "runtime.net.tcp_close");
+    }
+}
+
+void *osty_rt_net_tcp_local_addr(int64_t handle) {
+    struct sockaddr_storage addr;
+    socklen_t len = (socklen_t)sizeof(addr);
+    osty_rt_net_clear_status();
+    if (getsockname((int)handle, (struct sockaddr *)&addr, &len) != 0) {
+        osty_rt_net_set_errno_error("failed to read local socket address", "runtime.net.tcp_local_addr");
+        return osty_rt_net_empty_string();
+    }
+    return osty_rt_net_sockaddr_text((struct sockaddr *)&addr, len, "runtime.net.tcp_local_addr");
+}
+
+void *osty_rt_net_tcp_peer_addr(int64_t handle) {
+    struct sockaddr_storage addr;
+    socklen_t len = (socklen_t)sizeof(addr);
+    osty_rt_net_clear_status();
+    if (getpeername((int)handle, (struct sockaddr *)&addr, &len) != 0) {
+        osty_rt_net_set_errno_error("failed to read peer socket address", "runtime.net.tcp_peer_addr");
+        return osty_rt_net_empty_string();
+    }
+    return osty_rt_net_sockaddr_text((struct sockaddr *)&addr, len, "runtime.net.tcp_peer_addr");
+}
+
+void osty_rt_net_tcp_set_read_timeout(int64_t handle, int64_t timeout_ms) {
+    osty_rt_net_clear_status();
+    osty_rt_net_apply_timeout((int)handle, timeout_ms, SO_RCVTIMEO, "runtime.net.tcp_set_read_timeout");
+}
+
+void osty_rt_net_tcp_set_write_timeout(int64_t handle, int64_t timeout_ms) {
+    osty_rt_net_clear_status();
+    osty_rt_net_apply_timeout((int)handle, timeout_ms, SO_SNDTIMEO, "runtime.net.tcp_set_write_timeout");
+}
+
+void osty_rt_net_tcp_set_nodelay(int64_t handle, bool on) {
+    int flag = on ? 1 : 0;
+    osty_rt_net_clear_status();
+    if (setsockopt((int)handle, IPPROTO_TCP, TCP_NODELAY, &flag, (socklen_t)sizeof(flag)) != 0) {
+        osty_rt_net_set_errno_error("failed to configure TCP_NODELAY", "runtime.net.tcp_set_nodelay");
+    }
+}
+
+void osty_rt_net_tcp_set_keepalive(int64_t handle, bool on) {
+    int flag = on ? 1 : 0;
+    osty_rt_net_clear_status();
+    if (setsockopt((int)handle, SOL_SOCKET, SO_KEEPALIVE, &flag, (socklen_t)sizeof(flag)) != 0) {
+        osty_rt_net_set_errno_error("failed to configure SO_KEEPALIVE", "runtime.net.tcp_set_keepalive");
+    }
+}
+
+int64_t osty_rt_net_tcp_accept(int64_t handle) {
+    int fd;
+    osty_rt_net_clear_status();
+    do {
+        fd = accept((int)handle, NULL, NULL);
+    } while (fd < 0 && errno == EINTR);
+    if (fd < 0) {
+        osty_rt_net_set_errno_error("failed to accept TCP connection", "runtime.net.tcp_accept");
+        return 0;
+    }
+    osty_rt_net_prepare_stream_socket(fd);
+    return (int64_t)fd;
+}
+
+void *osty_rt_net_tcp_listener_local_addr(int64_t handle) {
+    return osty_rt_net_tcp_local_addr(handle);
+}
+
+void osty_rt_net_tcp_listener_close(int64_t handle) {
+    osty_rt_net_tcp_close(handle);
+}
+
+#endif
 
 static uint64_t osty_rt_test_gen_mix_u64(uint64_t x) {
     x += 0x9E3779B97F4A7C15ULL;
