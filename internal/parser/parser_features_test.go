@@ -200,7 +200,7 @@ func TestParseStableAliasesPreservedAsIdentifiers(t *testing.T) {
 	}
 }
 
-func TestParseDetailedLowersEnumerateLoop(t *testing.T) {
+func TestParseDetailedCanonicalizesEnumerateLoop(t *testing.T) {
 	src := []byte("fn main() {\n    let items = [1, 2]\n    for (i, item) in enumerate(items) {\n        println(item)\n    }\n}\n")
 
 	result := ParseDetailed(src)
@@ -232,12 +232,12 @@ func TestParseDetailedLowersEnumerateLoop(t *testing.T) {
 	if _, ok := prelude.Value.(*ast.IndexExpr); !ok {
 		t.Fatalf("loop prelude value type = %T, want *ast.IndexExpr", prelude.Value)
 	}
-	if result.Provenance == nil || len(result.Provenance.Lowerings) == 0 {
-		t.Fatalf("lowering provenance = %#v, want enumerate lowering", result.Provenance)
+	if result.Provenance != nil {
+		t.Fatalf("provenance = %#v, want parser-native canonical enumerate without compatibility provenance", result.Provenance)
 	}
 }
 
-func TestParseDetailedLowersSemanticHelpers(t *testing.T) {
+func TestParseDetailedCanonicalizesSemanticHelpers(t *testing.T) {
 	src := []byte("fn main() {\n    let mut items = [1, 2]\n    let count = len(items)\n    let size = items.length\n    items = append(items, count + size)\n}\n")
 
 	result := ParseDetailed(src)
@@ -263,8 +263,8 @@ func TestParseDetailedLowersSemanticHelpers(t *testing.T) {
 	if _, ok := fn.Body.Stmts[3].(*ast.ExprStmt); !ok {
 		t.Fatalf("stmt[3] type = %T, want append lowered to *ast.ExprStmt", fn.Body.Stmts[3])
 	}
-	if result.Provenance == nil || len(result.Provenance.Lowerings) < 2 {
-		t.Fatalf("lowering provenance = %#v, want helper lowerings", result.Provenance)
+	if result.Provenance != nil {
+		t.Fatalf("provenance = %#v, want parser-native helper canonicalization without compatibility provenance", result.Provenance)
 	}
 }
 
@@ -275,13 +275,6 @@ func TestParseRunKeepsPublicASTLoweringLazy(t *testing.T) {
 	run := ParseRun(src)
 	if got := selfhost.AstbridgeLowerCount(); got != 0 {
 		t.Fatalf("ParseRun astbridge count = %d, want 0", got)
-	}
-	lowerings := run.StableLowerings()
-	if got, want := len(lowerings), 1; got != want {
-		t.Fatalf("StableLowerings len = %d, want %d (%#v)", got, want, lowerings)
-	}
-	if got := selfhost.AstbridgeLowerCount(); got != 0 {
-		t.Fatalf("StableLowerings materialized public AST: astbridge count = %d, want 0", got)
 	}
 
 	file := run.File()

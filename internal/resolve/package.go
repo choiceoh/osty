@@ -55,7 +55,7 @@ type PackageFile struct {
 	// source snippets without re-reading the file.
 	Source []byte
 	// CanonicalSource is the checker-facing canonical Osty source produced from
-	// the parsed AST after parser-owned normalization/lowering. When empty,
+	// the parsed AST after parser-owned canonicalization. When empty,
 	// callers should fall back to Source.
 	CanonicalSource []byte
 	// CanonicalMap projects canonical source spans back onto the original source
@@ -82,8 +82,9 @@ type PackageFile struct {
 	// file. They are merged with resolver diagnostics by the package
 	// walker.
 	ParseDiags []*diag.Diagnostic
-	// ParseProvenance records parser-owned stable alias absorption and AST
-	// lowerings that were applied before resolve/check.
+	// ParseProvenance records parser-owned stable alias absorption that remains
+	// useful at legacy boundaries. Helper syntax is canonicalized in the parser
+	// core before resolve/check.
 	ParseProvenance *parser.Provenance
 	// FileScope is the file-local scope (contains this file's `use`
 	// aliases). Populated by ResolvePackage. Its parent is the package

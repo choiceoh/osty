@@ -9,7 +9,7 @@ import (
 
 // parseExprFromFn parses `fn __test() -> X { <expr> }` (or a statement-ish
 // wrapper) and returns the final expression. Used to pin down exactly what
-// the post-lowering AST shape looks like for a given source fragment.
+// the public AST shape looks like for a given source fragment.
 func parseExprInMain(t *testing.T, src string) ast.Expr {
 	t.Helper()
 	file, diags := ParseDiagnostics([]byte("fn __test() { let _probe = " + src + "\n}\n"))
@@ -145,6 +145,20 @@ func TestUnaryPostfixBindsBitNot(t *testing.T) {
 	}
 	if u.Op != token.BITNOT {
 		t.Fatalf("op = %s, want ~", u.Op)
+	}
+}
+
+func TestUnaryPostfixBindsDerefStar(t *testing.T) {
+	expr := parseExprInMain(t, "*ptr.field")
+	u, ok := expr.(*ast.UnaryExpr)
+	if !ok {
+		t.Fatalf("root type = %T, want *ast.UnaryExpr", expr)
+	}
+	if u.Op != token.STAR {
+		t.Fatalf("op = %s, want *", u.Op)
+	}
+	if _, ok := u.X.(*ast.FieldExpr); !ok {
+		t.Fatalf("inner type = %T, want *ast.FieldExpr", u.X)
 	}
 }
 

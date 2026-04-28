@@ -120,9 +120,16 @@ var fuzzSeeds = []string{
 	"let",
 	"let =",
 	"fn f() -> { }\n",
+	"fn f<T<U>(x: T) { }\n",
+	"fn f<T,>(x: T { }\n",
 	"match {}\n",
+	"match x { Some(v) =>, _ => 0 }\n",
 	"if {}\n",
 	"|",
+	"use std::{open,, exists as}\n",
+	"fn f() { let x = call([1, 2).field( }\n",
+	"fn f() { let s = \"unterminated\n    let x = 1\n}\n",
+	"fn f() { let s = \"value {missing\"\n}\n",
 	"a < b < c\n",
 	"1..=2..3\n",
 }
@@ -163,6 +170,10 @@ func TestParseTerminatesOnMinimalInputs(t *testing.T) {
 		[]byte("a"),
 		[]byte("fn"),
 		[]byte("fn f() {}\n"),
+		[]byte("fn f<T<U>(x: T) { }\n"),
+		[]byte("match x { Some(v) =>, _ => 0 }\n"),
+		[]byte("use std::{open,, exists as}\n"),
+		[]byte("fn f() { let x = call([1, 2).field( }\n"),
 	}
 	for _, src := range inputs {
 		src := src
@@ -178,6 +189,11 @@ func TestParseMalformedInputsReturnDiagnostics(t *testing.T) {
 		[]byte("#["),
 		[]byte("fn"),
 		[]byte("let ="),
+		[]byte("fn f<T<U>(x: T) { }\n"),
+		[]byte("fn f<T,>(x: T { }\n"),
+		[]byte("match x { Some(v) =>, _ => 0 }\n"),
+		[]byte("use std::{open,, exists as}\n"),
+		[]byte("fn f() { let x = call([1, 2).field( }\n"),
 		[]byte("a < b < c\n"),
 		[]byte("1..=2..3\n"),
 	}

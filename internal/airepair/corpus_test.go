@@ -197,7 +197,7 @@ func TestAnalyzeCorpus(t *testing.T) {
 			minBeforeTotalErrs: 1,
 			wantAfterParseErrs: 0,
 			wantAfterTotalErrs: 0,
-			wantChangeKinds:    []string{"python_for_block", "python_enumerate_loop", "enumerate_index_loop"},
+			wantChangeKinds:    []string{"python_for_block", "python_enumerate_loop"},
 		},
 		{
 			name:               "foreign_len_helpers",

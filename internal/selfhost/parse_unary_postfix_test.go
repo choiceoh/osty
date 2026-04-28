@@ -7,12 +7,14 @@ func TestParserPrefixUnaryOwnsPostfixArena(t *testing.T) {
 		name string
 		src  string
 		want string
+		op   FrontTokenKind
 	}{
 		{name: "field", src: "!x.y", want: "field"},
 		{name: "index", src: "!x[0]", want: "index"},
 		{name: "call", src: "!x()", want: "call"},
 		{name: "question", src: "!x?", want: "question"},
 		{name: "method call", src: "!x.m()", want: "methodCall"},
+		{name: "deref field", src: "*x.y", want: "field", op: FrontTokenKind(&FrontTokenKind_FrontStar{})},
 	}
 
 	for _, tc := range cases {
@@ -23,8 +25,12 @@ func TestParserPrefixUnaryOwnsPostfixArena(t *testing.T) {
 			if got := arenaKindForTest(root); got != "unary" {
 				t.Fatalf("root kind = %s, want unary", got)
 			}
-			if !ostyEqual(root.op, FrontTokenKind(&FrontTokenKind_FrontNot{})) {
-				t.Fatalf("root op = %#v, want FrontNot", root.op)
+			wantOp := FrontTokenKind(&FrontTokenKind_FrontNot{})
+			if tc.op != nil {
+				wantOp = tc.op
+			}
+			if !ostyEqual(root.op, wantOp) {
+				t.Fatalf("root op = %#v, want %#v", root.op, wantOp)
 			}
 			inner := arenaNodeForTest(t, arena, root.left)
 			switch tc.want {
@@ -124,6 +130,12 @@ func arenaKindForTest(n *AstNode) string {
 		return "let"
 	case *AstNodeKind_AstNFnDecl:
 		return "fn"
+	case *AstNodeKind_AstNExprStmt:
+		return "exprStmt"
+	case *AstNodeKind_AstNFor:
+		return "for"
+	case *AstNodeKind_AstNRange:
+		return "range"
 	default:
 		return "other"
 	}

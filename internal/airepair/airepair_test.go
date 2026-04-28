@@ -325,7 +325,7 @@ func TestAnalyzeFrontEndAssistRewritesPythonEnumerateLoop(t *testing.T) {
 	if !result.Changed {
 		t.Fatal("expected airepair to rewrite a Python enumerate loop")
 	}
-	if got, want := string(result.Repaired), "fn main() {\n    let items = [1, 2]\n    let _osty_enumerate0 = items\n    for i in 0.._osty_enumerate0.len() {\n        let item = _osty_enumerate0[i]\n        println(item)\n    }\n}\n"; got != want {
+	if got, want := string(result.Repaired), "fn main() {\n    let items = [1, 2]\n    for (i, item) in items.enumerate() {\n        println(item)\n    }\n}\n"; got != want {
 		t.Fatalf("repaired source = %q, want %q", got, want)
 	}
 	if result.Before.Parse.Errors == 0 {
@@ -335,7 +335,7 @@ func TestAnalyzeFrontEndAssistRewritesPythonEnumerateLoop(t *testing.T) {
 		t.Fatalf("after.parse.errors = %d, want 0 after repair", result.After.Parse.Errors)
 	}
 	if result.After.TotalErrors != 0 {
-		t.Fatalf("after.total_errors = %d, want 0 after checker-friendly lowering", result.After.TotalErrors)
+		t.Fatalf("after.total_errors = %d, want 0 after parser-native enumerate canonicalization", result.After.TotalErrors)
 	}
 }
 

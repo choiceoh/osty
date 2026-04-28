@@ -29,6 +29,7 @@ import (
 	"github.com/osty/osty/internal/nativellvmgen"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
@@ -109,11 +110,15 @@ type Stage struct {
 type Result struct {
 	Stages   []Stage
 	Tokens   []token.Token
+	ParseRun *selfhost.FrontendRun
 	File     *ast.File
 	Resolve  *resolve.Result
 	Check    *check.Result
 	Lint     *lint.Result
 	AllDiags []*diag.Diagnostic // every diag from every phase, in phase order
+
+	nativeResolve *selfhost.ResolveResult
+	nativeCheck   *selfhost.CheckResult
 
 	// PerDecl is populated when Config.PerDecl is set. One entry per
 	// (declaration, pass) pair the type checker visited. Sorted by
@@ -130,6 +135,34 @@ type Result struct {
 	// for caret snippets even when the pipeline spans multiple files or
 	// packages.
 	Sources map[string][]byte
+}
+
+// NativeResolveResult returns the self-host resolver's structured result for
+// the retained ParseRun without touching the public *ast.File boundary. The
+// legacy Result.Resolve field remains populated for existing consumers.
+func (r *Result) NativeResolveResult() *selfhost.ResolveResult {
+	if r == nil || r.ParseRun == nil {
+		return nil
+	}
+	if r.nativeResolve == nil {
+		resolved := selfhost.ResolveStructuredFromRun(r.ParseRun)
+		r.nativeResolve = &resolved
+	}
+	return r.nativeResolve
+}
+
+// NativeCheckResult returns the self-host checker's structured result for the
+// retained ParseRun without touching the public *ast.File boundary. The legacy
+// Result.Check field remains populated for existing consumers.
+func (r *Result) NativeCheckResult() *selfhost.CheckResult {
+	if r == nil || r.ParseRun == nil {
+		return nil
+	}
+	if r.nativeCheck == nil {
+		checked := selfhost.CheckStructuredFromRun(r.ParseRun)
+		r.nativeCheck = &checked
+	}
+	return r.nativeCheck
 }
 
 // DeclTiming records how long the type checker spent on one
@@ -432,7 +465,10 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 
 	// --- parse ---
 	t0 = time.Now()
-	file, parseDiags := parser.ParseDiagnostics(src)
+	parseRun := parser.ParseRun(src)
+	parseDiags := parseRun.Diagnostics()
+	file := selfhost.LowerPublicFileFromRun(parseRun)
+	r.ParseRun = parseRun
 	r.File = file
 	r.AllDiags = append(r.AllDiags, parseDiags...)
 	declCount, stmtCount, useCount := 0, 0, 0

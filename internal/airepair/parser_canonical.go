@@ -11,17 +11,34 @@ import (
 
 func parserCanonicalSource(src []byte) repair.Result {
 	parsed := parser.ParseDetailed(src)
-	if parsed.File == nil || hasParseErrors(parsed.Diagnostics) || parsed.Provenance == nil || parsed.Provenance.Empty() {
+	if parsed.File == nil || hasParseErrors(parsed.Diagnostics) {
 		return repair.Result{Source: src}
 	}
-	canonicalSrc := canonical.Source(src, parsed.File)
-	if len(canonicalSrc) == 0 || bytes.Equal(canonicalSrc, src) {
+	if parsed.Provenance != nil && !parsed.Provenance.Empty() {
+		canonicalSrc := canonical.Source(src, parsed.File)
+		if len(canonicalSrc) == 0 || bytes.Equal(canonicalSrc, src) {
+			return repair.Result{Source: src}
+		}
+		return repair.Result{
+			Source:  canonicalSrc,
+			Changes: provenanceChanges(parsed.Provenance),
+		}
+	}
+
+	current := append([]byte(nil), src...)
+	var changes []repair.Change
+	if out, rewritten, ok := rewriteSemanticAppendLines(current); ok {
+		current = out
+		changes = append(changes, rewritten...)
+	}
+	if out, rewritten, ok := rewriteBuiltinLenCalls(current); ok {
+		current = out
+		changes = append(changes, rewritten...)
+	}
+	if len(changes) == 0 || bytes.Equal(current, src) {
 		return repair.Result{Source: src}
 	}
-	return repair.Result{
-		Source:  canonicalSrc,
-		Changes: provenanceChanges(parsed.Provenance),
-	}
+	return repair.Result{Source: current, Changes: changes}
 }
 
 func hasParseErrors(diags []*diag.Diagnostic) bool {
@@ -37,9 +54,8 @@ func provenanceChanges(prov *parser.Provenance) []repair.Change {
 	if prov == nil {
 		return nil
 	}
-	steps := make([]parser.ProvenanceStep, 0, len(prov.Aliases)+len(prov.Lowerings))
+	steps := make([]parser.ProvenanceStep, 0, len(prov.Aliases))
 	steps = append(steps, prov.Aliases...)
-	steps = append(steps, prov.Lowerings...)
 	out := make([]repair.Change, 0, len(steps))
 	for _, step := range steps {
 		out = append(out, repair.Change{

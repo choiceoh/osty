@@ -109,6 +109,46 @@ use std.io
 	}
 }
 
+func TestUseFormsShapeContract(t *testing.T) {
+	src := []byte(`use foo
+use foo.bar
+pub use foo.Bar
+use foo.baz as baz
+use foo.{qux, quux as alias}
+`)
+	file, diags := ParseDiagnostics(src)
+	if len(diags) > 0 {
+		t.Fatalf("ParseDiagnostics returned %d diagnostics: %v", len(diags), diags[0])
+	}
+	if file == nil {
+		t.Fatal("parse failed")
+	}
+	want := []struct {
+		path   string
+		alias  string
+		pub    bool
+		scoped bool
+		base   string
+		member string
+	}{
+		{path: "foo"},
+		{path: "foo.bar"},
+		{path: "foo.Bar", pub: true},
+		{path: "foo.baz", alias: "baz"},
+		{path: "foo.qux", scoped: true, base: "foo", member: "qux"},
+		{path: "foo.quux", alias: "alias", scoped: true, base: "foo", member: "quux"},
+	}
+	if len(file.Uses) != len(want) {
+		t.Fatalf("use count = %d, want %d", len(file.Uses), len(want))
+	}
+	for i, w := range want {
+		got := file.Uses[i]
+		if got.RawPath != w.path || got.Alias != w.alias || got.IsPub != w.pub || got.IsScoped != w.scoped || joinPath(got.ScopedBase) != w.base || got.ScopedMember != w.member {
+			t.Fatalf("use[%d] = %+v, want path=%q alias=%q pub=%v scoped=%v base=%q member=%q", i, got, w.path, w.alias, w.pub, w.scoped, w.base, w.member)
+		}
+	}
+}
+
 func TestParseCanonicalScopedImport(t *testing.T) {
 	src := []byte(`use std.fs::{open, exists}
 `)

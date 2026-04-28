@@ -450,7 +450,7 @@ pub fn astInfixRBP(kind: FrontTokenKind) -> Int {
 }
 
 fn astStartsExpr(kind: FrontTokenKind) -> Bool {
-    kind == FrontIdent || kind == FrontLabel || kind == FrontInt || kind == FrontFloat || kind == FrontString || kind == FrontRawString || kind == FrontChar || kind == FrontByte || kind == FrontLParen || kind == FrontLBracket || kind == FrontLBrace || kind == FrontMinus || kind == FrontNot || kind == FrontBitNot || kind == FrontIf || kind == FrontMatch || kind == FrontBitOr || kind == FrontOr || kind == FrontUnderscore
+    kind == FrontIdent || kind == FrontLabel || kind == FrontInt || kind == FrontFloat || kind == FrontString || kind == FrontRawString || kind == FrontChar || kind == FrontByte || kind == FrontLParen || kind == FrontLBracket || kind == FrontLBrace || kind == FrontMinus || kind == FrontNot || kind == FrontBitNot || kind == FrontStar || kind == FrontIf || kind == FrontMatch || kind == FrontBitOr || kind == FrontOr || kind == FrontUnderscore
 }
 
 /// opCanStartScriptStmt decides whether the current top-level token
@@ -590,7 +590,7 @@ fn opParseExprBP(p: OstyParser, minBP: Int) -> Int {
 
 fn opParsePrefix(p: OstyParser) -> Int {
     let tok = opPeek(p)
-    if tok.kind == FrontMinus || tok.kind == FrontNot || tok.kind == FrontBitNot {
+    if tok.kind == FrontMinus || tok.kind == FrontNot || tok.kind == FrontBitNot || tok.kind == FrontStar {
         let start = p.pos
         opAdvance(p)
         let x = opParsePrefix(p)
@@ -852,7 +852,8 @@ fn opParseBlock(p: OstyParser) -> Int {
     opSkipNewlines(p)
     let errsBefore = opErrorCount(p)
     for !(opAt(p, FrontRBrace)) && !(opAt(p, FrontEOF)) {
-        stmts.push(opParseStmt(p))
+        let stmt = opParseStmt(p)
+        stmts = opAppendCanonicalStmt(p, stmts, stmt)
         if opErrorCount(p) > errsBefore { opSyncStmt(p) }
         opSkipNewlines(p)
     }
@@ -862,6 +863,302 @@ fn opParseBlock(p: OstyParser) -> Int {
     n.start = start
     n.end = p.pos
     opAddNode(p, n)
+}
+
+fn opIdentName(p: OstyParser, idx: Int) -> String {
+    if idx < 0 {
+        return ""
+    }
+    let n = astArenaNodeAt(p.arena, idx)
+    if n.kind != AstNIdent {
+        return ""
+    }
+    n.text
+}
+
+fn opIsIdentNamed(p: OstyParser, idx: Int, name: String) -> Bool {
+    opIdentName(p, idx) == name
+}
+
+fn opSimpleIdentPatternName(p: OstyParser, idx: Int) -> String {
+    if idx < 0 {
+        return ""
+    }
+    let n = astArenaNodeAt(p.arena, idx)
+    if n.kind == AstNPattern && n.extra == astPatternIdentKind() && n.text != "_" {
+        return n.text
+    }
+    if n.kind == AstNIdent && n.text != "_" {
+        return n.text
+    }
+    ""
+}
+
+fn opIsWildcardPattern(p: OstyParser, idx: Int) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let n = astArenaNodeAt(p.arena, idx)
+    if n.kind == AstNPattern {
+        return n.extra == astPatternWildcardKind() || n.text == "_" || n.text == "wildcard"
+    }
+    if n.kind == AstNIdent {
+        return n.text == "_"
+    }
+    false
+}
+
+fn opIdentExpr(p: OstyParser, name: String, start: Int, end: Int) -> Int {
+    let mut n = emptyAstNode(AstNIdent)
+    n.text = name
+    n.start = start
+    n.end = end
+    opAddNode(p, n)
+}
+
+fn opIdentPattern(p: OstyParser, name: String, start: Int, end: Int) -> Int {
+    let mut n = emptyAstNode(AstNPattern)
+    n.text = name
+    n.extra = astPatternIdentKind()
+    n.start = start
+    n.end = end
+    opAddNode(p, n)
+}
+
+fn opMethodCall(p: OstyParser, receiver: Int, method: String, args: List<Int>, start: Int, end: Int) -> Int {
+    let mut field = emptyAstNode(AstNField)
+    field.left = receiver
+    field.text = method
+    field.start = start
+    field.end = end
+    let fieldIdx = opAddNode(p, field)
+    let mut call = emptyAstNode(AstNCall)
+    call.left = fieldIdx
+    call.children = args
+    call.start = start
+    call.end = end
+    opAddNode(p, call)
+}
+
+fn opPushCallExpr(p: OstyParser, receiverName: String, item: Int, start: Int, end: Int) -> Int {
+    opMethodCall(p, opIdentExpr(p, receiverName, start, end), "push", [item], start, end)
+}
+
+fn opPushExprStmt(p: OstyParser, receiverName: String, item: Int, start: Int, end: Int) -> Int {
+    let mut stmt = emptyAstNode(AstNExprStmt)
+    stmt.left = opPushCallExpr(p, receiverName, item, start, end)
+    stmt.start = start
+    stmt.end = end
+    opAddNode(p, stmt)
+}
+
+fn opAppendCallBase(p: OstyParser, idx: Int) -> Int {
+    if idx < 0 {
+        return -1
+    }
+    let call = astArenaNodeAt(p.arena, idx)
+    if call.kind != AstNCall || !(opIsIdentNamed(p, call.left, "append")) || call.children.len() != 2 {
+        return -1
+    }
+    call.children[0]
+}
+
+fn opAppendCallItem(p: OstyParser, idx: Int) -> Int {
+    let base = opAppendCallBase(p, idx)
+    if base < 0 {
+        return -1
+    }
+    astArenaNodeAt(p.arena, idx).children[1]
+}
+
+fn opLowerAppendAssignmentStmt(p: OstyParser, left: Int, right: Int, start: Int, end: Int) -> Int {
+    let targetName = opIdentName(p, left)
+    if targetName == "" {
+        return -1
+    }
+    let base = opAppendCallBase(p, right)
+    let item = opAppendCallItem(p, right)
+    if base < 0 || item < 0 || opIdentName(p, base) != targetName {
+        return -1
+    }
+    let mut stmt = emptyAstNode(AstNExprStmt)
+    stmt.left = opPushCallExpr(p, targetName, item, start, end)
+    stmt.start = start
+    stmt.end = end
+    opAddNode(p, stmt)
+}
+
+fn opLowerAppendExprStmt(p: OstyParser, expr: Int, start: Int, end: Int) -> Int {
+    let base = opAppendCallBase(p, expr)
+    let item = opAppendCallItem(p, expr)
+    let baseName = opIdentName(p, base)
+    if base < 0 || item < 0 || baseName == "" {
+        return -1
+    }
+    let mut stmt = emptyAstNode(AstNExprStmt)
+    stmt.left = opPushCallExpr(p, baseName, item, start, end)
+    stmt.start = start
+    stmt.end = end
+    opAddNode(p, stmt)
+}
+
+fn opAppendCanonicalStmt(p: OstyParser, stmts: List<Int>, stmtIdx: Int) -> List<Int> {
+    let mut out = stmts
+    if stmtIdx < 0 {
+        return out
+    }
+    let stmt = astArenaNodeAt(p.arena, stmtIdx)
+    if stmt.kind == AstNLet {
+        let name = opSimpleIdentPatternName(p, stmt.left)
+        let base = opAppendCallBase(p, stmt.right)
+        let item = opAppendCallItem(p, stmt.right)
+        let baseName = opIdentName(p, base)
+        if name != "" && base >= 0 && item >= 0 && baseName != "" && baseName != name {
+            let mut rewritten = stmt
+            rewritten.flags = 1
+            rewritten.right = base
+            p.arena.nodes[stmtIdx] = rewritten
+            out.push(stmtIdx)
+            out.push(opPushExprStmt(p, name, item, stmt.start, stmt.end))
+            return out
+        }
+    }
+    if stmt.kind == AstNFor && stmt.text == "forin" {
+        let temp = opLowerEnumerateForStmt(p, stmtIdx)
+        if temp >= 0 {
+            out.push(temp)
+            out.push(stmtIdx)
+            return out
+        }
+    }
+    out.push(stmtIdx)
+    out
+}
+
+fn opTuplePatternFirst(p: OstyParser, idx: Int) -> Int {
+    if idx < 0 {
+        return -1
+    }
+    let n = astArenaNodeAt(p.arena, idx)
+    if n.kind == AstNPattern && n.extra == astPatternTupleKind() && n.children.len() == 2 {
+        return n.children[0]
+    }
+    if n.kind == AstNTuple && n.children.len() == 2 {
+        return n.children[0]
+    }
+    -1
+}
+
+fn opTuplePatternSecond(p: OstyParser, idx: Int) -> Int {
+    if idx < 0 {
+        return -1
+    }
+    let n = astArenaNodeAt(p.arena, idx)
+    if n.kind == AstNPattern && n.extra == astPatternTupleKind() && n.children.len() == 2 {
+        return n.children[1]
+    }
+    if n.kind == AstNTuple && n.children.len() == 2 {
+        return n.children[1]
+    }
+    -1
+}
+
+fn opEnumerateIterExpr(p: OstyParser, idx: Int) -> Int {
+    if idx < 0 {
+        return -1
+    }
+    let call = astArenaNodeAt(p.arena, idx)
+    if call.kind != AstNCall {
+        return -1
+    }
+    if opIsIdentNamed(p, call.left, "enumerate") && call.children.len() == 1 {
+        return call.children[0]
+    }
+    let callee = astArenaNodeAt(p.arena, call.left)
+    if callee.kind == AstNField && callee.text == "enumerate" && call.children.len() == 0 {
+        return callee.left
+    }
+    -1
+}
+
+fn opLowerEnumerateForStmt(p: OstyParser, loopIdx: Int) -> Int {
+    let mut loop = astArenaNodeAt(p.arena, loopIdx)
+    if loop.children.len() < 2 {
+        return -1
+    }
+    let tuplePat = loop.children[0]
+    let iterExpr = opEnumerateIterExpr(p, loop.children[1])
+    if iterExpr < 0 {
+        return -1
+    }
+    let indexPattern = opTuplePatternFirst(p, tuplePat)
+    let valuePattern = opTuplePatternSecond(p, tuplePat)
+    if indexPattern < 0 || valuePattern < 0 {
+        return -1
+    }
+    let mut loopPattern = indexPattern
+    let mut indexExpr = -1
+    if opIsWildcardPattern(p, indexPattern) {
+        let indexName = "_osty_index{p.arena.nodes.len()}"
+        loopPattern = opIdentPattern(p, indexName, loop.start, loop.end)
+        indexExpr = opIdentExpr(p, indexName, loop.start, loop.end)
+    } else {
+        let indexName = opSimpleIdentPatternName(p, indexPattern)
+        if indexName == "" {
+            return -1
+        }
+        indexExpr = opIdentExpr(p, indexName, loop.start, loop.end)
+    }
+
+    let tempName = "_osty_enumerate{p.arena.nodes.len()}"
+    let mut tempLet = emptyAstNode(AstNLet)
+    tempLet.left = opIdentPattern(p, tempName, loop.start, loop.end)
+    tempLet.right = iterExpr
+    tempLet.children = [-1]
+    tempLet.start = loop.start
+    tempLet.end = loop.end
+    let tempIdx = opAddNode(p, tempLet)
+
+    let mut indexNode = emptyAstNode(AstNIndex)
+    indexNode.left = opIdentExpr(p, tempName, loop.start, loop.end)
+    indexNode.right = indexExpr
+    indexNode.start = loop.start
+    indexNode.end = loop.end
+    let indexIdx = opAddNode(p, indexNode)
+
+    let mut prelude = emptyAstNode(AstNLet)
+    prelude.left = valuePattern
+    prelude.right = indexIdx
+    prelude.children = [-1]
+    prelude.start = loop.start
+    prelude.end = loop.end
+    let preludeIdx = opAddNode(p, prelude)
+
+    let mut body = astArenaNodeAt(p.arena, loop.right)
+    let mut bodyStmts: List<Int> = [preludeIdx]
+    for child in body.children {
+        bodyStmts.push(child)
+    }
+    body.children = bodyStmts
+    p.arena.nodes[loop.right] = body
+
+    let mut rangeStart = emptyAstNode(AstNIntLit)
+    rangeStart.text = "0"
+    rangeStart.start = loop.start
+    rangeStart.end = loop.start
+    let rangeStartIdx = opAddNode(p, rangeStart)
+
+    let rangeStop = opMethodCall(p, opIdentExpr(p, tempName, loop.start, loop.end), "len", [], loop.start, loop.end)
+    let mut rangeNode = emptyAstNode(AstNRange)
+    rangeNode.left = rangeStartIdx
+    rangeNode.right = rangeStop
+    rangeNode.start = loop.start
+    rangeNode.end = loop.end
+    let rangeIdx = opAddNode(p, rangeNode)
+
+    loop.children = [loopPattern, rangeIdx]
+    p.arena.nodes[loopIdx] = loop
+    tempIdx
 }
 
 fn opParseIfExpr(p: OstyParser) -> Int {
@@ -1158,6 +1455,9 @@ fn opParseCallArgs(p: OstyParser, callee: Int) -> Int {
         opSkipNewlines(p)
     }
     opExpect(p, FrontRParen)
+    if opIsIdentNamed(p, callee, "len") && args.len() == 1 {
+        return opMethodCall(p, args[0], "len", [], start, p.pos)
+    }
     let mut n = emptyAstNode(AstNCall)
     n.left = callee
     n.children = args
@@ -1426,6 +1726,12 @@ fn opParseStmt(p: OstyParser) -> Int {
     let _ = opAdvance(p)
     let v = opParseExpr(p)
     let leftNode = astArenaNodeAt(p.arena, expr)
+    if next.kind == FrontAssign {
+        let lowered = opLowerAppendAssignmentStmt(p, expr, v, leftNode.start, p.pos)
+        if lowered >= 0 {
+            return lowered
+        }
+    }
     let mut n = emptyAstNode(AstNAssign)
     n.left = expr
     n.right = v
@@ -1434,6 +1740,10 @@ fn opParseStmt(p: OstyParser) -> Int {
     n.end = p.pos
     return opAddNode(p, n) }
     let exprNode = astArenaNodeAt(p.arena, expr)
+    let appendStmt = opLowerAppendExprStmt(p, expr, exprNode.start, p.pos)
+    if appendStmt >= 0 {
+        return appendStmt
+    }
     let mut n = emptyAstNode(AstNExprStmt)
     n.left = expr
     n.start = exprNode.start
@@ -2303,6 +2613,10 @@ fn opParseUseDecl(p: OstyParser, isPub: Bool) -> Int {
     } else {
         rawPath = opParseUsePath(p)
         if opAt(p, FrontColonColon) && opPeekAt(p, 1).kind == FrontLBrace {
+            let _ = opAdvance(p)
+            return opParseScopedUseDecl(p, start, rawPath, isPub)
+        }
+        if opAt(p, FrontDot) && opPeekAt(p, 1).kind == FrontLBrace {
             let _ = opAdvance(p)
             return opParseScopedUseDecl(p, start, rawPath, isPub)
         }

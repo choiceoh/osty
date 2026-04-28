@@ -7,7 +7,43 @@ import (
 	"testing"
 
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 )
+
+func TestRunKeepsNativeParseRunAndUsesExplicitPublicAdapter(t *testing.T) {
+	selfhost.ResetAstbridgeLowerCount()
+	got := Run([]byte("fn main() {\n    let items = [1]\n    let n = len(items)\n}\n"), nil)
+	if got.ParseRun == nil {
+		t.Fatal("Run().ParseRun is nil, want native FrontendRun retained")
+	}
+	if got.File == nil {
+		t.Fatal("Run().File is nil, want legacy public AST still available")
+	}
+	countAfterRun := selfhost.AstbridgeLowerCount()
+	nativeResolve := got.NativeResolveResult()
+	if nativeResolve == nil {
+		t.Fatal("NativeResolveResult() is nil, want structured native resolve result")
+	}
+	if nativeResolve.Summary.Symbols == 0 {
+		t.Fatalf("NativeResolveResult().Summary.Symbols = 0, want native symbols")
+	}
+	nativeCheck := got.NativeCheckResult()
+	if nativeCheck == nil {
+		t.Fatal("NativeCheckResult() is nil, want structured native check result")
+	}
+	if len(nativeCheck.Symbols) == 0 && len(nativeCheck.TypedNodes) == 0 && len(nativeCheck.Bindings) == 0 {
+		t.Fatalf("NativeCheckResult() is empty, want native checker facts")
+	}
+	if gotCount := selfhost.AstbridgeLowerCount(); gotCount != countAfterRun {
+		t.Fatalf("native pipeline result access bumped astbridge count = %d, want %d", gotCount, countAfterRun)
+	}
+	if got.ParseRun.File() == nil {
+		t.Fatal("ParseRun.File() returned nil")
+	}
+	if gotCount := selfhost.AstbridgeLowerCount(); gotCount != countAfterRun+1 {
+		t.Fatalf("AstbridgeLowerCount after explicit ParseRun.File() = %d, want %d", gotCount, countAfterRun+1)
+	}
+}
 
 func TestRunLoadedPackageGenUsesPackageLoweringForSiblingFiles(t *testing.T) {
 	forcePipelineGenFallback(t)

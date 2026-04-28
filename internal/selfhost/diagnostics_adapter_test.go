@@ -56,13 +56,16 @@ func TestParserDiagnosticLiftsCodeHintNoteAndSpan(t *testing.T) {
 	if d.Code != "E0204" {
 		t.Fatalf("diagnostic code = %q, want E0204: %#v", d.Code, d)
 	}
+	if d.Message != "unexpected : in expression" {
+		t.Fatalf("diagnostic message = %q, want stable parser-core message", d.Message)
+	}
 	if d.Hint == "" {
 		t.Fatalf("diagnostic hint is empty: %#v", d)
 	}
 	if got := d.PrimaryPos(); got.Line != 2 || got.Column != 13 {
 		t.Fatalf("diagnostic primary pos = %s, want 2:13", got)
 	}
-	if len(d.Spans) == 0 || d.Spans[0].Span.End.Offset <= d.Spans[0].Span.Start.Offset {
+	if len(d.Spans) == 0 || !d.Spans[0].Primary || d.Spans[0].Span.End.Offset <= d.Spans[0].Span.Start.Offset {
 		t.Fatalf("diagnostic span is not a positive token span: %#v", d.Spans)
 	}
 }
