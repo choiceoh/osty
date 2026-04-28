@@ -63,12 +63,14 @@ pub struct SelfResolvedRef {
     pub targetEnd: Int,
 }
 
-/// SelfResolvedTypeRef is one resolved type-ref head site. Carrying just
-/// the ident's AST node is enough — type-ref consumers only need the name
-/// and the node for disambiguation.
+/// SelfResolvedTypeRef is one resolved type-ref head site plus the resolver-
+/// owned target span when the head resolved to a declared symbol.
 pub struct SelfResolvedTypeRef {
     pub name: String,
     pub node: Int,
+    pub target: Int,
+    pub targetStart: Int,
+    pub targetEnd: Int,
 }
 
 /// SelfResolveResult contains package symbols plus resolver diagnostics and
@@ -1494,10 +1496,10 @@ fn srResolveOneAstType(
         if owner == "" {
             return srSelfTypeOutsideAtNode(out, start, end, node)
         }
-        return srRecordTypeRef(out, name, node)
+        return srRecordTypeRef(out, name, node, srScopeLookup(scope, head))
     }
     if srIsBuiltinTypeName(head) {
-        return srRecordTypeRef(out, name, node)
+        return srRecordTypeRef(out, name, node, srEmptySymbol())
     }
     let sym = srScopeLookup(scope, head)
     if sym.name == "" {
@@ -1509,7 +1511,7 @@ fn srResolveOneAstType(
         out.diagnostics.push(selfResolveDiagnosticAtNode("E0502", "name is not a type", head, start, end, node))
         return out
     }
-    srRecordTypeRef(out, name, node)
+    srRecordTypeRef(out, name, node, sym)
 }
 
 fn srResolvePackageMember(
@@ -1577,10 +1579,16 @@ fn srRecordBareRef(result: SelfResolveResult, name: String, node: Int) -> SelfRe
     srRecordRef(result, name, node, srEmptySymbol())
 }
 
-fn srRecordTypeRef(result: SelfResolveResult, name: String, node: Int) -> SelfResolveResult {
+fn srRecordTypeRef(result: SelfResolveResult, name: String, node: Int, target: SelfSymbol) -> SelfResolveResult {
     let mut out = result
     out.typeRefs = out.typeRefs + 1
-    out.typeRefList.push(SelfResolvedTypeRef { name: name, node: node })
+    out.typeRefList.push(SelfResolvedTypeRef {
+        name: name,
+        node: node,
+        target: target.node,
+        targetStart: target.start,
+        targetEnd: target.end,
+    })
     out
 }
 
@@ -1876,13 +1884,14 @@ fn srResolvePatternTypePath(
         return out
     }
     if head == "Self" {
-        if srScopeHas(scope, head) {
-            return srRecordTypeRef(out, head, node)
+        let sym = srScopeLookup(scope, head)
+        if sym.name != "" {
+            return srRecordTypeRef(out, head, node, sym)
         }
         return srSelfTypeOutsideAtNode(out, start, end, node)
     }
     if srIsBuiltinTypeName(head) {
-        return srRecordTypeRef(out, head, node)
+        return srRecordTypeRef(out, head, node, srEmptySymbol())
     }
     let sym = srScopeLookup(scope, head)
     if sym.name == "" {
@@ -1894,7 +1903,7 @@ fn srResolvePatternTypePath(
         out.diagnostics.push(selfResolveDiagnosticAtNode("E0502", "name is not a type", head, start, end, node))
         return out
     }
-    srRecordTypeRef(out, head, node)
+    srRecordTypeRef(out, head, node, sym)
 }
 
 fn srResolvePatternVariantPath(
@@ -1928,7 +1937,7 @@ fn srResolvePatternVariantPath(
         return out
     }
     if srIsBuiltinTypeName(head) {
-        return srRecordTypeRef(out, head, node)
+        return srRecordTypeRef(out, head, node, srEmptySymbol())
     }
     let sym = srScopeLookup(scope, head)
     if sym.name == "" {
@@ -1937,7 +1946,7 @@ fn srResolvePatternVariantPath(
         return out
     }
     if srSymbolCanBeType(sym) {
-        return srRecordTypeRef(out, head, node)
+        return srRecordTypeRef(out, head, node, sym)
     }
     if sym.kind == "variant" {
         return srRecordRef(out, head, node, sym)

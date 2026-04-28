@@ -339,13 +339,18 @@ type ResolvedRef struct {
 
 // ResolvedTypeRef records one resolved type-name reference.
 type ResolvedTypeRef struct {
-	ID        string `json:"typeRefId,omitempty"`
-	PackageID string `json:"packageId,omitempty"`
-	Name      string `json:"name"`
-	Node      int    `json:"node"`
-	Start     int    `json:"start"`
-	End       int    `json:"end"`
-	File      string `json:"file,omitempty"`
+	ID             string `json:"typeRefId,omitempty"`
+	PackageID      string `json:"packageId,omitempty"`
+	TargetSymbolID string `json:"targetSymbolId,omitempty"`
+	Name           string `json:"name"`
+	Node           int    `json:"node"`
+	Start          int    `json:"start"`
+	End            int    `json:"end"`
+	File           string `json:"file,omitempty"`
+	TargetNode     int    `json:"targetNode"`
+	TargetStart    int    `json:"targetStart"`
+	TargetEnd      int    `json:"targetEnd"`
+	TargetFile     string `json:"targetFile,omitempty"`
 }
 
 // ResolveDiagnosticRecord is one structured diagnostic produced by the

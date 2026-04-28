@@ -236,6 +236,9 @@ func ResolveStructuredFromRunForPath(run *FrontendRun, path string) ResolveResul
 	}
 	for i := range result.TypeRefs {
 		result.TypeRefs[i].File = path
+		if result.TypeRefs[i].TargetNode >= 0 {
+			result.TypeRefs[i].TargetFile = path
+		}
 	}
 	for i := range result.Diagnostics {
 		result.Diagnostics[i].File = path
@@ -453,11 +456,18 @@ func adaptResolveResult(resolved *SelfResolveResult, file *AstFile, offsets func
 			continue
 		}
 		start, end := selfhostResolveNodeOffsets(file, tref.node, offsets)
+		targetStart, targetEnd := -1, -1
+		if tref.target >= 0 {
+			targetStart, targetEnd = offsets(tref.targetStart, tref.targetEnd)
+		}
 		result.TypeRefs = append(result.TypeRefs, ResolvedTypeRef{
-			Name:  tref.name,
-			Node:  tref.node,
-			Start: start,
-			End:   end,
+			Name:        tref.name,
+			Node:        tref.node,
+			Start:       start,
+			End:         end,
+			TargetNode:  tref.target,
+			TargetStart: targetStart,
+			TargetEnd:   targetEnd,
 		})
 	}
 	for _, d := range resolved.diagnostics {
@@ -523,7 +533,12 @@ func selfhostAssignResolveIDs(result *ResolveResult, packageKey string) {
 	for i := range result.TypeRefs {
 		ref := &result.TypeRefs[i]
 		ref.PackageID = packageID
-		ref.ID = stableResolveID("type-ref", packageKey, ref.File, ref.Name, fmt.Sprint(ref.Node), fmt.Sprint(ref.Start), fmt.Sprint(ref.End))
+		ref.ID = stableResolveID("type-ref", packageKey, ref.File, ref.Name, fmt.Sprint(ref.Node), fmt.Sprint(ref.Start), fmt.Sprint(ref.End), fmt.Sprint(ref.TargetNode), fmt.Sprint(ref.TargetStart), fmt.Sprint(ref.TargetEnd), ref.TargetFile)
+		if id := byTarget[resolveTargetKey(ref.TargetFile, ref.TargetNode, ref.TargetStart, ref.TargetEnd)]; id != "" {
+			ref.TargetSymbolID = id
+		} else if ref.TargetNode >= 0 {
+			ref.TargetSymbolID = stableResolveID("symbol-target", packageKey, ref.TargetFile, ref.Name, fmt.Sprint(ref.TargetNode), fmt.Sprint(ref.TargetStart), fmt.Sprint(ref.TargetEnd))
+		}
 	}
 	for i := range result.Diagnostics {
 		d := &result.Diagnostics[i]
@@ -569,6 +584,9 @@ func selfhostAnnotateResolveFiles(result *ResolveResult, files []PackageResolveF
 	}
 	for i := range result.TypeRefs {
 		result.TypeRefs[i].File = selfhostResolveFilePath(files, result.TypeRefs[i].Start)
+		if result.TypeRefs[i].TargetNode >= 0 {
+			result.TypeRefs[i].TargetFile = selfhostResolveFilePath(files, result.TypeRefs[i].TargetStart)
+		}
 	}
 	for i := range result.Diagnostics {
 		result.Diagnostics[i].File = selfhostResolveFilePath(files, result.Diagnostics[i].Start)
