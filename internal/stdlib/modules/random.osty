@@ -1,7 +1,8 @@
 // std.random — non-cryptographic pseudorandom numbers (spec §10.14).
 //
-// Constructors and primitive methods are runtime-backed. `choice`
-// stays as the canonical derived helper over the primitive surface.
+// Constructors and primitive methods are runtime-backed. `choice` and
+// `shuffle` stay as canonical derived helpers over that primitive
+// surface, so their edge-case behavior is visible in the stdlib source.
 
 pub struct Rng {
     pub fn int(self, min: Int, max: Int) -> Int
@@ -18,7 +19,21 @@ pub struct Rng {
         }
     }
 
-    pub fn shuffle<T>(self, items: List<T>)
+    /// Shuffle `items` in place with Fisher-Yates. Empty and single-item
+    /// lists are left unchanged; every other permutation is produced by
+    /// the receiver's own random stream.
+    pub fn shuffle<T>(self, items: List<T>) {
+        let mut i = items.len()
+        for i > 1 {
+            i = i - 1
+            let j = self.int(0, i + 1)
+            if j != i {
+                let tmp = items[i]
+                items[i] = items[j]
+                items[j] = tmp
+            }
+        }
+    }
 }
 
 pub fn default() -> Rng
