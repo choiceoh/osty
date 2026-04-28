@@ -70,6 +70,18 @@ fn testElabAllowsParameterReassignment() {
     testing.assertEq(checked.summary.errors, 0)
 }
 
+fn testElabEarlyReturnIfBeforeNegativeTail() {
+    let checked = frontendCheckSourceStructured(
+        r"""
+            fn pick(a: Bool, b: Bool) -> Int {
+                if a && b { return 1 }
+                -1
+            }
+            """,
+    )
+    testing.assertEq(checked.summary.errors, 0)
+}
+
 fn testElabAllowsFieldAssignmentThroughParameters() {
     let checked = frontendCheckSourceStructured(
         r"""

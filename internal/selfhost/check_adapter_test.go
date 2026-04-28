@@ -454,6 +454,19 @@ func TestCheckSourceStructuredRecordsTypedExprCoverage(t *testing.T) {
 	}
 }
 
+func TestCheckSourceStructuredAcceptsEarlyReturnIfBeforeNegativeTail(t *testing.T) {
+	src := []byte(`fn pick(a: Bool, b: Bool) -> Int {
+    if a && b { return 1 }
+    -1
+}
+`)
+
+	checked := CheckSourceStructured(src)
+	if checked.Summary.Errors != 0 {
+		t.Fatalf("summary errors = %d, want 0 (contexts=%v details=%v diagnostics=%#v)", checked.Summary.Errors, checked.Summary.ErrorsByContext, checked.Summary.ErrorDetails, checked.Diagnostics)
+	}
+}
+
 func TestCheckSourceStructuredRegistersPreludeFunctions(t *testing.T) {
 	src := []byte(`fn main() {
     let p0 = print
