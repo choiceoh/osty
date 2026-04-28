@@ -7292,6 +7292,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitStdBytesCall(call); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitStdCompressCall(call); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.emitBytesNamespaceCall(call); found || err != nil {
 		return v, err
 	}
@@ -7304,10 +7307,19 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitStdEnvCall(call); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitStdNetCall(call); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.emitStdCryptoCall(call); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitStdOsCall(call); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.emitStdIoCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitStdRandomCall(call); found || err != nil {
 		return v, err
 	}
 	if v, found, err := g.emitPtrBackedErrorCall(call); found || err != nil {
@@ -7345,6 +7357,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return v, err
 	}
 	if v, found, err := g.emitPrimitiveToStringCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitStdRandomMethodCall(call); found || err != nil {
 		return v, err
 	}
 	if v, found, err := g.emitCharByteConversionCall(call); found || err != nil {

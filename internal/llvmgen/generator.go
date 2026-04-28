@@ -52,10 +52,14 @@ type generator struct {
 	stdTestingGenAliases map[string]bool
 	stdIoAliases         map[string]bool
 	stdBytesAliases      map[string]bool
+	stdCompressAliases   map[string]bool
 	stdStringsAliases    map[string]bool
 	stdEnvAliases        map[string]bool
 	stdFsAliases         map[string]bool
+	stdRandomAliases     map[string]bool
+	stdNetAliases        map[string]bool
 	stdCryptoAliases     map[string]bool
+	stdOsAliases         map[string]bool
 	runtimeDecls         map[string]runtimeDecl
 	runtimeDeclOrder     []string
 	traceHelpers         map[string]string

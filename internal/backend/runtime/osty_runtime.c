@@ -28,6 +28,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <errno.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,7 +36,14 @@
 #include <time.h>
 
 #if !defined(_WIN32)
+#include <zlib.h>
+#endif
+
+#if !defined(_WIN32)
 #include <sys/mman.h>
+#if defined(__linux__)
+#include <sys/random.h>
+#endif
 /* `MAP_ANON` is the BSD/macOS spelling; `MAP_ANONYMOUS` is the GNU
  * spelling. Both flags are bit-equal aliases on every supported target.
  * Pick whichever is exposed at runtime-build time (macOS requires
@@ -73,9 +81,10 @@
 #  include <direct.h>
 #  define OSTY_RT_MKDIR_ONE(path) _mkdir(path)
 #else
+#  include <fcntl.h>
 #  include <sys/stat.h>
 #  include <sys/types.h>
-#  include <fcntl.h>
+#  include <sys/wait.h>
 #  include <unistd.h>
 #  if defined(__linux__)
 #    include <sys/random.h>
@@ -118,8 +127,16 @@ typedef INIT_ONCE          osty_rt_once_t;
 #else
 #  define OSTY_RT_PLATFORM_POSIX 1
 #  include <pthread.h>
+#  include <poll.h>
 #  include <sched.h>
 #  include <signal.h>
+#  include <fcntl.h>
+#  include <netdb.h>
+#  include <arpa/inet.h>
+#  include <netinet/in.h>
+#  include <netinet/tcp.h>
+#  include <sys/socket.h>
+#  include <sys/time.h>
 #  if defined(__APPLE__)
 #    include <crt_externs.h>
 #  endif
@@ -4771,6 +4788,8 @@ bool osty_rt_bytes_is_valid_utf8(void *raw_bytes);
 const char *osty_rt_bytes_to_string(void *raw_bytes);
 uint8_t osty_rt_bytes_get(void *raw_bytes, int64_t index);
 void *osty_rt_bytes_slice(void *raw_bytes, int64_t start, int64_t end);
+void *osty_rt_compress_gzip_encode(void *raw_bytes);
+void *osty_rt_compress_gzip_decode(void *raw_bytes);
 void *osty_rt_crypto_sha256(void *raw_data);
 void *osty_rt_crypto_sha512(void *raw_data);
 void *osty_rt_crypto_sha1(void *raw_data);
@@ -10822,6 +10841,214 @@ static void *osty_rt_bytes_dup_site(const unsigned char *start, size_t len, cons
     return out;
 }
 
+static unsigned char *osty_rt_compress_grow_buffer(unsigned char *buf, size_t *cap, size_t min_cap, const char *site) {
+    unsigned char *grown;
+    size_t next = (*cap == 0) ? 256 : *cap;
+
+    if (min_cap <= *cap) {
+        return buf;
+    }
+    while (next < min_cap) {
+        if (next > SIZE_MAX / 2) {
+            next = min_cap;
+            break;
+        }
+        next *= 2;
+    }
+    grown = (unsigned char *)realloc(buf, next);
+    if (grown == NULL) {
+        free(buf);
+        osty_rt_abort(site);
+    }
+    *cap = next;
+    return grown;
+}
+
+static bool osty_rt_compress_all_zero(const unsigned char *data, size_t len) {
+    size_t i;
+
+    for (i = 0; i < len; i++) {
+        if (data[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void *osty_rt_compress_gzip_encode(void *raw_bytes) {
+#if defined(_WIN32)
+    (void)raw_bytes;
+    osty_rt_abort("runtime.compress.gzip.encode: zlib unavailable on windows");
+    return NULL;
+#else
+    osty_rt_bytes *input = (osty_rt_bytes *)raw_bytes;
+    const unsigned char *input_data = NULL;
+    size_t input_len = 0;
+    size_t input_off = 0;
+    unsigned char *out = NULL;
+    size_t out_cap = 0;
+    z_stream stream;
+    int rc;
+
+    if (input != NULL) {
+        if (input->len < 0) {
+            osty_rt_abort("runtime.compress.gzip.encode: negative length");
+        }
+        input_data = input->data;
+        input_len = (size_t)input->len;
+    }
+
+    memset(&stream, 0, sizeof(stream));
+    rc = deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY);
+    if (rc != Z_OK) {
+        osty_rt_abort("runtime.compress.gzip.encode: deflateInit2 failed");
+    }
+
+    out = osty_rt_compress_grow_buffer(NULL, &out_cap, 256, "runtime.compress.gzip.encode: out of memory");
+    stream.next_out = out;
+    stream.avail_out = (uInt)((out_cap > (size_t)UINT_MAX) ? (size_t)UINT_MAX : out_cap);
+
+    for (;;) {
+        if (stream.avail_in == 0 && input_off < input_len) {
+            size_t chunk = input_len - input_off;
+            if (chunk > (size_t)UINT_MAX) {
+                chunk = (size_t)UINT_MAX;
+            }
+            stream.next_in = (Bytef *)(input_data + input_off);
+            stream.avail_in = (uInt)chunk;
+            input_off += chunk;
+        }
+
+        rc = deflate(&stream, (input_off == input_len && stream.avail_in == 0) ? Z_FINISH : Z_NO_FLUSH);
+        if (rc == Z_STREAM_END) {
+            size_t produced = (size_t)(stream.next_out - out);
+            void *managed = osty_rt_bytes_dup_site(produced == 0 ? NULL : out, produced, "runtime.compress.gzip.encode");
+            free(out);
+            deflateEnd(&stream);
+            return managed;
+        }
+        if (rc != Z_OK) {
+            free(out);
+            deflateEnd(&stream);
+            osty_rt_abort("runtime.compress.gzip.encode: deflate failed");
+        }
+        if (stream.avail_out == 0) {
+            size_t produced = (size_t)(stream.next_out - out);
+            size_t min_cap = out_cap + ((out_cap < 4096) ? out_cap : 4096);
+            if (min_cap <= out_cap) {
+                min_cap = out_cap + 1;
+            }
+            out = osty_rt_compress_grow_buffer(out, &out_cap, min_cap, "runtime.compress.gzip.encode: out of memory");
+            stream.next_out = out + produced;
+            stream.avail_out = (uInt)(((out_cap - produced) > (size_t)UINT_MAX) ? (size_t)UINT_MAX : (out_cap - produced));
+        }
+    }
+#endif
+}
+
+void *osty_rt_compress_gzip_decode(void *raw_bytes) {
+#if defined(_WIN32)
+    (void)raw_bytes;
+    return NULL;
+#else
+    osty_rt_bytes *input = (osty_rt_bytes *)raw_bytes;
+    const unsigned char *input_data = NULL;
+    size_t input_len = 0;
+    size_t input_off = 0;
+    unsigned char *out = NULL;
+    size_t out_cap = 0;
+    z_stream stream;
+    int rc;
+
+    if (input != NULL) {
+        if (input->len < 0) {
+            osty_rt_abort("runtime.compress.gzip.decode: negative length");
+        }
+        input_data = input->data;
+        input_len = (size_t)input->len;
+    }
+    if (input_len == 0) {
+        return NULL;
+    }
+
+    memset(&stream, 0, sizeof(stream));
+    rc = inflateInit2(&stream, 15 + 16);
+    if (rc != Z_OK) {
+        osty_rt_abort("runtime.compress.gzip.decode: inflateInit2 failed");
+    }
+
+    out = osty_rt_compress_grow_buffer(NULL, &out_cap, 256, "runtime.compress.gzip.decode: out of memory");
+    stream.next_out = out;
+    stream.avail_out = (uInt)((out_cap > (size_t)UINT_MAX) ? (size_t)UINT_MAX : out_cap);
+
+    for (;;) {
+        if (stream.avail_in == 0 && input_off < input_len) {
+            size_t chunk = input_len - input_off;
+            if (chunk > (size_t)UINT_MAX) {
+                chunk = (size_t)UINT_MAX;
+            }
+            stream.next_in = (Bytef *)(input_data + input_off);
+            stream.avail_in = (uInt)chunk;
+            input_off += chunk;
+        }
+
+        rc = inflate(&stream, Z_NO_FLUSH);
+        if (rc == Z_STREAM_END) {
+            size_t consumed = input_off - (size_t)stream.avail_in;
+            size_t remaining = input_len - consumed;
+
+            if (remaining == 0 || osty_rt_compress_all_zero(input_data + consumed, remaining)) {
+                size_t produced = (size_t)(stream.next_out - out);
+                void *managed = osty_rt_bytes_dup_site(produced == 0 ? NULL : out, produced, "runtime.compress.gzip.decode");
+                free(out);
+                inflateEnd(&stream);
+                return managed;
+            }
+            rc = inflateReset(&stream);
+            if (rc != Z_OK) {
+                free(out);
+                inflateEnd(&stream);
+                return NULL;
+            }
+            continue;
+        }
+        if (rc == Z_BUF_ERROR) {
+            if (stream.avail_out == 0) {
+                size_t produced = (size_t)(stream.next_out - out);
+                size_t min_cap = out_cap + ((out_cap < 4096) ? out_cap : 4096);
+                if (min_cap <= out_cap) {
+                    min_cap = out_cap + 1;
+                }
+                out = osty_rt_compress_grow_buffer(out, &out_cap, min_cap, "runtime.compress.gzip.decode: out of memory");
+                stream.next_out = out + produced;
+                stream.avail_out = (uInt)(((out_cap - produced) > (size_t)UINT_MAX) ? (size_t)UINT_MAX : (out_cap - produced));
+                continue;
+            }
+            if (stream.avail_in == 0 && input_off == input_len) {
+                free(out);
+                inflateEnd(&stream);
+                return NULL;
+            }
+        } else if (rc != Z_OK) {
+            free(out);
+            inflateEnd(&stream);
+            return NULL;
+        }
+
+        if (stream.avail_out == 0) {
+            size_t produced = (size_t)(stream.next_out - out);
+            size_t min_cap = out_cap + ((out_cap < 4096) ? out_cap : 4096);
+            if (min_cap <= out_cap) {
+                min_cap = out_cap + 1;
+            }
+            out = osty_rt_compress_grow_buffer(out, &out_cap, min_cap, "runtime.compress.gzip.decode: out of memory");
+            stream.next_out = out + produced;
+            stream.avail_out = (uInt)(((out_cap - produced) > (size_t)UINT_MAX) ? (size_t)UINT_MAX : (out_cap - produced));
+        }
+    }
+#endif
+}
+
 void *osty_rt_bytes_from_list(void *raw_list) {
     osty_rt_list *list = (osty_rt_list *)raw_list;
     size_t len;
@@ -11715,6 +11942,268 @@ void *osty_rt_bytes_slice(void *raw_bytes, int64_t start, int64_t end) {
         memcpy(data, b->data + (size_t)start, slice_len);
     }
     return out;
+}
+
+typedef struct osty_rt_random_state {
+    uint64_t s[4];
+} osty_rt_random_state;
+
+static uint64_t osty_rt_random_rotl(uint64_t x, int k) {
+    return (x << k) | (x >> (64 - k));
+}
+
+static uint64_t osty_rt_random_splitmix64_step(uint64_t *state) {
+    uint64_t x = *state + 0x9E3779B97F4A7C15ULL;
+    *state = x;
+    x ^= x >> 30;
+    x *= 0xBF58476D1CE4E5B9ULL;
+    x ^= x >> 27;
+    x *= 0x94D049BB133111EBULL;
+    x ^= x >> 31;
+    return x;
+}
+
+static void osty_rt_random_seed_words(osty_rt_random_state *state,
+                                      uint64_t material) {
+    int i;
+    int all_zero = 1;
+    uint64_t x = material;
+
+    if (state == NULL) {
+        osty_rt_abort("runtime.random: nil state");
+    }
+    for (i = 0; i < 4; i++) {
+        state->s[i] = osty_rt_random_splitmix64_step(&x);
+        if (state->s[i] != 0) {
+            all_zero = 0;
+        }
+    }
+    if (all_zero) {
+        x ^= 0xD1B54A32D192ED03ULL;
+        state->s[0] = osty_rt_random_splitmix64_step(&x);
+    }
+}
+
+static int osty_rt_random_fill_entropy(unsigned char *dst, size_t len) {
+    size_t off = 0;
+    FILE *f;
+
+    if (dst == NULL) {
+        return 0;
+    }
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    while (off < len) {
+        unsigned int word = 0;
+        size_t take;
+        if (rand_s(&word) != 0) {
+            break;
+        }
+        take = len - off;
+        if (take > sizeof(word)) {
+            take = sizeof(word);
+        }
+        memcpy(dst + off, &word, take);
+        off += take;
+    }
+    if (off == len) {
+        return 1;
+    }
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    arc4random_buf(dst, len);
+    return 1;
+#elif defined(__linux__)
+    while (off < len) {
+        ssize_t got = getrandom(dst + off, len - off, 0);
+        if (got > 0) {
+            off += (size_t)got;
+            continue;
+        }
+        if (got < 0 && errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+    if (off == len) {
+        return 1;
+    }
+#endif
+    f = fopen("/dev/urandom", "rb");
+    if (f == NULL) {
+        return 0;
+    }
+    off = fread(dst, 1, len, f);
+    fclose(f);
+    return off == len;
+}
+
+static osty_rt_random_state *osty_rt_random_new(const char *site) {
+    return (osty_rt_random_state *)osty_gc_allocate_managed(
+        sizeof(osty_rt_random_state), OSTY_GC_KIND_GENERIC, site, NULL, NULL);
+}
+
+static void osty_rt_random_seed_default_state(osty_rt_random_state *state) {
+    unsigned char seed_bytes[32];
+    uint64_t material = 0;
+
+    if (osty_rt_random_fill_entropy(seed_bytes, sizeof(seed_bytes))) {
+        memcpy(state->s, seed_bytes, sizeof(seed_bytes));
+        if (state->s[0] == 0 && state->s[1] == 0 && state->s[2] == 0 &&
+            state->s[3] == 0) {
+            memcpy(&material, seed_bytes, sizeof(material));
+            osty_rt_random_seed_words(state, material ^ 0xA0761D6478BD642FULL);
+        }
+        return;
+    }
+    material = ((uint64_t)(uintptr_t)state << 17) ^
+               ((uint64_t)time(NULL) << 1) ^
+               0xA0761D6478BD642FULL;
+    osty_rt_random_seed_words(state, material);
+}
+
+static uint64_t osty_rt_random_next_u64(osty_rt_random_state *state) {
+    uint64_t result;
+    uint64_t t;
+
+    if (state == NULL) {
+        osty_rt_abort("runtime.random: nil state");
+    }
+    result = osty_rt_random_rotl(state->s[0] + state->s[3], 23) + state->s[0];
+    t = state->s[1] << 17;
+    state->s[2] ^= state->s[0];
+    state->s[3] ^= state->s[1];
+    state->s[1] ^= state->s[2];
+    state->s[0] ^= state->s[3];
+    state->s[2] ^= t;
+    state->s[3] = osty_rt_random_rotl(state->s[3], 45);
+    return result;
+}
+
+static uint64_t osty_rt_random_sample_below(osty_rt_random_state *state,
+                                            uint64_t bound) {
+    uint64_t x;
+    uint64_t limit;
+
+    if (bound == 0) {
+        osty_rt_abort("runtime.random: zero bound");
+    }
+    limit = UINT64_MAX - (UINT64_MAX % bound);
+    do {
+        x = osty_rt_random_next_u64(state);
+    } while (x >= limit);
+    return x % bound;
+}
+
+void *osty_rt_random_default(void) {
+    osty_rt_random_state *state = osty_rt_random_new("runtime.random.default");
+    osty_rt_random_seed_default_state(state);
+    return state;
+}
+
+void *osty_rt_random_seeded(int64_t seed) {
+    osty_rt_random_state *state = osty_rt_random_new("runtime.random.seeded");
+    osty_rt_random_seed_words(state, (uint64_t)seed ^ 0x9E3779B97F4A7C15ULL);
+    return state;
+}
+
+int64_t osty_rt_random_int(void *raw_state, int64_t min, int64_t max) {
+    osty_rt_random_state *state = (osty_rt_random_state *)raw_state;
+    uint64_t span;
+    uint64_t offset;
+
+    if (max <= min) {
+        osty_rt_abort("runtime.random.int: invalid bounds");
+    }
+    span = (uint64_t)max - (uint64_t)min;
+    offset = osty_rt_random_sample_below(state, span);
+    return (int64_t)((uint64_t)min + offset);
+}
+
+int64_t osty_rt_random_int_inclusive(void *raw_state, int64_t min,
+                                     int64_t max) {
+    osty_rt_random_state *state = (osty_rt_random_state *)raw_state;
+    uint64_t span;
+    uint64_t offset;
+
+    if (max < min) {
+        osty_rt_abort("runtime.random.int_inclusive: invalid bounds");
+    }
+    span = (uint64_t)max - (uint64_t)min;
+    if (span == UINT64_MAX) {
+        return (int64_t)osty_rt_random_next_u64(state);
+    }
+    offset = osty_rt_random_sample_below(state, span + 1);
+    return (int64_t)((uint64_t)min + offset);
+}
+
+double osty_rt_random_float(void *raw_state) {
+    osty_rt_random_state *state = (osty_rt_random_state *)raw_state;
+    uint64_t x = osty_rt_random_next_u64(state);
+    return (double)(x >> 11) * (1.0 / 9007199254740992.0);
+}
+
+bool osty_rt_random_bool(void *raw_state) {
+    osty_rt_random_state *state = (osty_rt_random_state *)raw_state;
+    return (osty_rt_random_next_u64(state) & 1ULL) != 0;
+}
+
+void *osty_rt_random_bytes(void *raw_state, int64_t n) {
+    osty_rt_random_state *state = (osty_rt_random_state *)raw_state;
+    osty_rt_bytes *out;
+    size_t len;
+    size_t total;
+    size_t i;
+
+    if (n < 0) {
+        osty_rt_abort("runtime.random.bytes: negative length");
+    }
+    len = (size_t)n;
+    if (len > SIZE_MAX - sizeof(osty_rt_bytes)) {
+        osty_rt_abort("runtime.random.bytes: size overflow");
+    }
+    total = sizeof(osty_rt_bytes) + len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(
+        total, OSTY_GC_KIND_BYTES,
+        len == 0 ? "runtime.random.bytes.empty" : "runtime.random.bytes", NULL,
+        NULL);
+    out->data = (unsigned char *)(out + 1);
+    out->len = (int64_t)len;
+    i = 0;
+    while (i < len) {
+        uint64_t chunk = osty_rt_random_next_u64(state);
+        size_t take = len - i;
+        if (take > sizeof(chunk)) {
+            take = sizeof(chunk);
+        }
+        memcpy(out->data + i, &chunk, take);
+        i += take;
+    }
+    return out;
+}
+
+void osty_rt_random_shuffle(void *raw_state, void *raw_list) {
+    osty_rt_random_state *state = (osty_rt_random_state *)raw_state;
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    int64_t i;
+
+    if (list == NULL || list->len <= 1 || list->elem_size <= 0) {
+        return;
+    }
+    for (i = list->len - 1; i > 0; i--) {
+        int64_t j =
+            (int64_t)osty_rt_random_sample_below(state, (uint64_t)i + 1ULL);
+        if (i != j) {
+            unsigned char *base = (unsigned char *)list->data;
+            size_t elem_size = (size_t)list->elem_size;
+            size_t a = (size_t)i * elem_size;
+            size_t b = (size_t)j * elem_size;
+            size_t k;
+            for (k = 0; k < elem_size; k++) {
+                unsigned char tmp = base[a + k];
+                base[a + k] = base[b + k];
+                base[b + k] = tmp;
+            }
+        }
+    }
 }
 
 static inline uint32_t osty_rt_crypto_rotr32(uint32_t x, unsigned n) {
@@ -18198,6 +18687,778 @@ void *osty_rt_io_read_line(void) {
     return out;
 }
 
+/* std.net TCP/DNS surface.
+ *
+ * The Osty `std.net` module keeps the public API in Osty source and
+ * calls into these runtime helpers through `use c "osty_runtime"`.
+ * Every helper clears the thread-local net status before work, and on
+ * failure records a human-readable error string retrievable via
+ * `osty_rt_net_last_error()`. */
+static OSTY_RT_TLS int osty_rt_net_failed_flag = 0;
+static OSTY_RT_TLS char *osty_rt_net_error_text = NULL;
+
+static void osty_rt_net_clear_status(void) {
+    osty_rt_net_failed_flag = 0;
+    if (osty_rt_net_error_text != NULL) {
+        free(osty_rt_net_error_text);
+        osty_rt_net_error_text = NULL;
+    }
+}
+
+static void osty_rt_net_set_error_text(const char *prefix, const char *detail, const char *site) {
+    const char *lhs = prefix == NULL ? "network error" : prefix;
+    const char *rhs = (detail != NULL && detail[0] != '\0') ? detail : "unknown error";
+    size_t lhs_len = strlen(lhs);
+    size_t rhs_len = strlen(rhs);
+    size_t total = lhs_len + 2 + rhs_len;
+    char *buf = (char *)osty_rt_xmalloc(total + 1, site);
+
+    memcpy(buf, lhs, lhs_len);
+    buf[lhs_len] = ':';
+    buf[lhs_len + 1] = ' ';
+    memcpy(buf + lhs_len + 2, rhs, rhs_len);
+    buf[total] = '\0';
+
+    osty_rt_net_clear_status();
+    osty_rt_net_failed_flag = 1;
+    osty_rt_net_error_text = buf;
+}
+
+static void osty_rt_net_set_errno_error(const char *prefix, const char *site) {
+    osty_rt_net_set_error_text(prefix, strerror(errno), site);
+}
+
+static void *osty_rt_net_empty_string(void) {
+    return osty_rt_string_dup_site("", 0, "runtime.net.empty_string");
+}
+
+static void *osty_rt_net_empty_bytes(void) {
+    return osty_rt_bytes_dup_site(NULL, 0, "runtime.net.empty_bytes");
+}
+
+static void *osty_rt_net_empty_list(void) {
+    return osty_rt_list_new();
+}
+
+static const char *osty_rt_net_decode_string_arg(const char *value, char *buf) {
+    const char *out = value != NULL ? value : "";
+    osty_rt_string_decode_to_buf_if_inline(&out, buf);
+    return out;
+}
+
+bool osty_rt_net_failed(void) {
+    return osty_rt_net_failed_flag != 0;
+}
+
+void *osty_rt_net_last_error(void) {
+    const char *msg = osty_rt_net_error_text != NULL
+        ? osty_rt_net_error_text
+        : "network error";
+    return osty_rt_string_dup_site(msg, strlen(msg), "runtime.net.last_error");
+}
+
+#if defined(OSTY_RT_PLATFORM_WIN32)
+
+static void osty_rt_net_unsupported(const char *site) {
+    osty_rt_net_set_error_text("network runtime is not available on this platform",
+                               "Windows socket support is not wired into the current runtime yet",
+                               site);
+}
+
+void *osty_rt_net_lookup_text(const char *host) {
+    (void)host;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.lookup_text");
+    return osty_rt_net_empty_list();
+}
+
+void *osty_rt_net_lookup_addr(const char *ip) {
+    (void)ip;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.lookup_addr");
+    return osty_rt_net_empty_list();
+}
+
+int64_t osty_rt_net_tcp_connect(const char *host, int64_t port) {
+    (void)host;
+    (void)port;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_connect");
+    return 0;
+}
+
+int64_t osty_rt_net_tcp_connect_timeout(const char *host, int64_t port, int64_t timeout_ms) {
+    (void)host;
+    (void)port;
+    (void)timeout_ms;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_connect_timeout");
+    return 0;
+}
+
+int64_t osty_rt_net_tcp_listen(const char *host, int64_t port) {
+    (void)host;
+    (void)port;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_listen");
+    return 0;
+}
+
+void *osty_rt_net_tcp_read(int64_t handle, int64_t max_bytes) {
+    (void)handle;
+    (void)max_bytes;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_read");
+    return osty_rt_net_empty_bytes();
+}
+
+void *osty_rt_net_tcp_read_exact(int64_t handle, int64_t n) {
+    (void)handle;
+    (void)n;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_read_exact");
+    return osty_rt_net_empty_bytes();
+}
+
+int64_t osty_rt_net_tcp_write(int64_t handle, void *data) {
+    (void)handle;
+    (void)data;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_write");
+    return 0;
+}
+
+void osty_rt_net_tcp_write_all(int64_t handle, void *data) {
+    (void)handle;
+    (void)data;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_write_all");
+}
+
+void osty_rt_net_tcp_flush(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+}
+
+void osty_rt_net_tcp_close(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_close");
+}
+
+void *osty_rt_net_tcp_local_addr(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_local_addr");
+    return osty_rt_net_empty_string();
+}
+
+void *osty_rt_net_tcp_peer_addr(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_peer_addr");
+    return osty_rt_net_empty_string();
+}
+
+void osty_rt_net_tcp_set_read_timeout(int64_t handle, int64_t timeout_ms) {
+    (void)handle;
+    (void)timeout_ms;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_set_read_timeout");
+}
+
+void osty_rt_net_tcp_set_write_timeout(int64_t handle, int64_t timeout_ms) {
+    (void)handle;
+    (void)timeout_ms;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_set_write_timeout");
+}
+
+void osty_rt_net_tcp_set_nodelay(int64_t handle, bool on) {
+    (void)handle;
+    (void)on;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_set_nodelay");
+}
+
+void osty_rt_net_tcp_set_keepalive(int64_t handle, bool on) {
+    (void)handle;
+    (void)on;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_set_keepalive");
+}
+
+int64_t osty_rt_net_tcp_accept(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_accept");
+    return 0;
+}
+
+void *osty_rt_net_tcp_listener_local_addr(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_listener_local_addr");
+    return osty_rt_net_empty_string();
+}
+
+void osty_rt_net_tcp_listener_close(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+    osty_rt_net_unsupported("runtime.net.tcp_listener_close");
+}
+
+#else
+
+static void osty_rt_net_set_gai_error(const char *prefix, int code, const char *site) {
+    osty_rt_net_set_error_text(prefix, gai_strerror(code), site);
+}
+
+static bool osty_rt_net_service_string(int64_t port, char *buf, size_t buf_size, const char *site) {
+    int written;
+    if (port < 0 || port > 65535) {
+        osty_rt_net_set_error_text("invalid port", "port must be in 0..65535", site);
+        return false;
+    }
+    written = snprintf(buf, buf_size, "%lld", (long long)port);
+    if (written < 0 || (size_t)written >= buf_size) {
+        osty_rt_net_set_error_text("failed to format port", "buffer overflow", site);
+        return false;
+    }
+    return true;
+}
+
+static void osty_rt_net_prepare_stream_socket(int fd) {
+#if defined(__APPLE__)
+    int on = 1;
+    if (fd >= 0) {
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, (socklen_t)sizeof(on));
+    }
+#else
+    (void)fd;
+#endif
+}
+
+static int osty_rt_net_send_flags(void) {
+#if defined(MSG_NOSIGNAL)
+    return MSG_NOSIGNAL;
+#else
+    return 0;
+#endif
+}
+
+static int osty_rt_net_set_blocking(int fd, bool blocking) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        return -1;
+    }
+    if (blocking) {
+        flags &= ~O_NONBLOCK;
+    } else {
+        flags |= O_NONBLOCK;
+    }
+    return fcntl(fd, F_SETFL, flags);
+}
+
+static void *osty_rt_net_sockaddr_text(const struct sockaddr *sa, socklen_t len, const char *site) {
+    char host[NI_MAXHOST];
+    char serv[NI_MAXSERV];
+    char text[NI_MAXHOST + NI_MAXSERV + 8];
+    int rc = getnameinfo(sa, len, host, sizeof(host), serv, sizeof(serv),
+                         NI_NUMERICHOST | NI_NUMERICSERV);
+    int written;
+    if (rc != 0) {
+        osty_rt_net_set_gai_error("failed to format socket address", rc, site);
+        return osty_rt_net_empty_string();
+    }
+    if (sa->sa_family == AF_INET6) {
+        written = snprintf(text, sizeof(text), "[%s]:%s", host, serv);
+    } else {
+        written = snprintf(text, sizeof(text), "%s:%s", host, serv);
+    }
+    if (written < 0 || (size_t)written >= sizeof(text)) {
+        osty_rt_net_set_error_text("failed to format socket address", "buffer overflow", site);
+        return osty_rt_net_empty_string();
+    }
+    return osty_rt_string_dup_site(text, (size_t)written, site);
+}
+
+static bool osty_rt_net_apply_timeout(int fd, int64_t timeout_ms, int optname, const char *site) {
+    struct timeval tv;
+    if (timeout_ms < 0) {
+        tv.tv_sec = 0;
+        tv.tv_usec = 0;
+    } else {
+        tv.tv_sec = (time_t)(timeout_ms / 1000);
+        tv.tv_usec = (suseconds_t)((timeout_ms % 1000) * 1000);
+    }
+    if (setsockopt(fd, SOL_SOCKET, optname, &tv, (socklen_t)sizeof(tv)) != 0) {
+        osty_rt_net_set_errno_error("failed to configure socket timeout", site);
+        return false;
+    }
+    return true;
+}
+
+static int64_t osty_rt_net_connect_impl(const char *host, int64_t port, int64_t timeout_ms, const char *site) {
+    char service[32];
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    struct addrinfo *ai;
+    int rc;
+    int last_errno = 0;
+
+    if (host == NULL || host[0] == '\0') {
+        osty_rt_net_set_error_text("failed to connect", "host is empty", site);
+        return 0;
+    }
+    if (!osty_rt_net_service_string(port, service, sizeof(service), site)) {
+        return 0;
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    rc = getaddrinfo(host, service, &hints, &res);
+    if (rc != 0) {
+        osty_rt_net_set_gai_error("failed to resolve remote address", rc, site);
+        return 0;
+    }
+
+    for (ai = res; ai != NULL; ai = ai->ai_next) {
+        int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) {
+            last_errno = errno;
+            continue;
+        }
+
+        osty_rt_net_prepare_stream_socket(fd);
+        if (timeout_ms >= 0) {
+            struct pollfd pfd;
+            int so_error = 0;
+            socklen_t so_error_len = (socklen_t)sizeof(so_error);
+
+            if (osty_rt_net_set_blocking(fd, false) != 0) {
+                last_errno = errno;
+                close(fd);
+                continue;
+            }
+
+            do {
+                rc = connect(fd, ai->ai_addr, ai->ai_addrlen);
+            } while (rc != 0 && errno == EINTR);
+
+            if (rc != 0) {
+                if (errno != EINPROGRESS) {
+                    last_errno = errno;
+                    close(fd);
+                    continue;
+                }
+                pfd.fd = fd;
+                pfd.events = POLLOUT;
+                do {
+                    rc = poll(&pfd, 1, (int)timeout_ms);
+                } while (rc < 0 && errno == EINTR);
+                if (rc == 0) {
+                    close(fd);
+                    freeaddrinfo(res);
+                    osty_rt_net_set_error_text("failed to connect", "connect timed out", site);
+                    return 0;
+                }
+                if (rc < 0) {
+                    last_errno = errno;
+                    close(fd);
+                    continue;
+                }
+                if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &so_error_len) != 0) {
+                    last_errno = errno;
+                    close(fd);
+                    continue;
+                }
+                if (so_error != 0) {
+                    last_errno = so_error;
+                    close(fd);
+                    continue;
+                }
+            }
+            if (osty_rt_net_set_blocking(fd, true) != 0) {
+                last_errno = errno;
+                close(fd);
+                continue;
+            }
+            freeaddrinfo(res);
+            return (int64_t)fd;
+        }
+
+        do {
+            rc = connect(fd, ai->ai_addr, ai->ai_addrlen);
+        } while (rc != 0 && errno == EINTR);
+        if (rc == 0) {
+            freeaddrinfo(res);
+            return (int64_t)fd;
+        }
+        last_errno = errno;
+        close(fd);
+    }
+
+    freeaddrinfo(res);
+    if (last_errno != 0) {
+        errno = last_errno;
+        osty_rt_net_set_errno_error("failed to connect", site);
+    } else {
+        osty_rt_net_set_error_text("failed to connect", "no reachable address", site);
+    }
+    return 0;
+}
+
+void *osty_rt_net_lookup_text(const char *host) {
+    char host_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    const char *decoded = osty_rt_net_decode_string_arg(host, host_buf);
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    struct addrinfo *ai;
+    int rc;
+    void *out;
+
+    osty_rt_net_clear_status();
+    if (decoded[0] == '\0') {
+        osty_rt_net_set_error_text("failed to resolve host", "host is empty", "runtime.net.lookup_text");
+        return osty_rt_net_empty_list();
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    rc = getaddrinfo(decoded, NULL, &hints, &res);
+    if (rc != 0) {
+        osty_rt_net_set_gai_error("failed to resolve host", rc, "runtime.net.lookup_text");
+        return osty_rt_net_empty_list();
+    }
+
+    out = osty_rt_list_new();
+    for (ai = res; ai != NULL; ai = ai->ai_next) {
+        char text[NI_MAXHOST];
+        rc = getnameinfo(ai->ai_addr, ai->ai_addrlen, text, sizeof(text), NULL, 0, NI_NUMERICHOST);
+        if (rc != 0) {
+            continue;
+        }
+        osty_rt_list_push_ptr(out,
+                              osty_rt_string_dup_site(text, strlen(text), "runtime.net.lookup_text.entry"));
+    }
+    freeaddrinfo(res);
+    return out;
+}
+
+void *osty_rt_net_lookup_addr(const char *ip) {
+    char ip_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    const char *decoded = osty_rt_net_decode_string_arg(ip, ip_buf);
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    struct addrinfo *ai;
+    int rc;
+    void *out;
+    int64_t count = 0;
+
+    osty_rt_net_clear_status();
+    if (decoded[0] == '\0') {
+        osty_rt_net_set_error_text("failed to reverse lookup address", "address is empty", "runtime.net.lookup_addr");
+        return osty_rt_net_empty_list();
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_NUMERICHOST;
+    rc = getaddrinfo(decoded, NULL, &hints, &res);
+    if (rc != 0) {
+        osty_rt_net_set_gai_error("failed to parse reverse-lookup address", rc, "runtime.net.lookup_addr");
+        return osty_rt_net_empty_list();
+    }
+
+    out = osty_rt_list_new();
+    for (ai = res; ai != NULL; ai = ai->ai_next) {
+        char text[NI_MAXHOST];
+        rc = getnameinfo(ai->ai_addr, ai->ai_addrlen, text, sizeof(text), NULL, 0, NI_NAMEREQD);
+        if (rc != 0) {
+            continue;
+        }
+        osty_rt_list_push_ptr(out,
+                              osty_rt_string_dup_site(text, strlen(text), "runtime.net.lookup_addr.entry"));
+        count++;
+    }
+    freeaddrinfo(res);
+
+    if (count == 0) {
+        osty_rt_net_set_error_text("failed to reverse lookup address", "no names found", "runtime.net.lookup_addr");
+        return osty_rt_net_empty_list();
+    }
+    return out;
+}
+
+int64_t osty_rt_net_tcp_connect(const char *host, int64_t port) {
+    char host_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    const char *decoded = osty_rt_net_decode_string_arg(host, host_buf);
+    osty_rt_net_clear_status();
+    return osty_rt_net_connect_impl(decoded, port, -1, "runtime.net.tcp_connect");
+}
+
+int64_t osty_rt_net_tcp_connect_timeout(const char *host, int64_t port, int64_t timeout_ms) {
+    char host_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    const char *decoded = osty_rt_net_decode_string_arg(host, host_buf);
+    osty_rt_net_clear_status();
+    return osty_rt_net_connect_impl(decoded, port, timeout_ms, "runtime.net.tcp_connect_timeout");
+}
+
+int64_t osty_rt_net_tcp_listen(const char *host, int64_t port) {
+    char host_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    const char *decoded_host = osty_rt_net_decode_string_arg(host, host_buf);
+    const char *bind_host = (decoded_host[0] == '\0' || strcmp(decoded_host, "*") == 0) ? NULL : decoded_host;
+    char service[32];
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    struct addrinfo *ai;
+    int rc;
+    int last_errno = 0;
+
+    osty_rt_net_clear_status();
+    if (!osty_rt_net_service_string(port, service, sizeof(service), "runtime.net.tcp_listen")) {
+        return 0;
+    }
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+    rc = getaddrinfo(bind_host, service, &hints, &res);
+    if (rc != 0) {
+        osty_rt_net_set_gai_error("failed to resolve listen address", rc, "runtime.net.tcp_listen");
+        return 0;
+    }
+
+    for (ai = res; ai != NULL; ai = ai->ai_next) {
+        int on = 1;
+        int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+        if (fd < 0) {
+            last_errno = errno;
+            continue;
+        }
+        osty_rt_net_prepare_stream_socket(fd);
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, (socklen_t)sizeof(on));
+        if (bind(fd, ai->ai_addr, ai->ai_addrlen) != 0) {
+            last_errno = errno;
+            close(fd);
+            continue;
+        }
+        if (listen(fd, SOMAXCONN) != 0) {
+            last_errno = errno;
+            close(fd);
+            continue;
+        }
+        freeaddrinfo(res);
+        return (int64_t)fd;
+    }
+
+    freeaddrinfo(res);
+    if (last_errno != 0) {
+        errno = last_errno;
+        osty_rt_net_set_errno_error("failed to listen", "runtime.net.tcp_listen");
+    } else {
+        osty_rt_net_set_error_text("failed to listen", "no bindable address", "runtime.net.tcp_listen");
+    }
+    return 0;
+}
+
+void *osty_rt_net_tcp_read(int64_t handle, int64_t max_bytes) {
+    unsigned char *buf;
+    ssize_t n;
+    void *out;
+
+    osty_rt_net_clear_status();
+    if (max_bytes < 0) {
+        osty_rt_net_set_error_text("failed to read from socket", "maxBytes must be non-negative", "runtime.net.tcp_read");
+        return osty_rt_net_empty_bytes();
+    }
+    if (max_bytes == 0) {
+        return osty_rt_net_empty_bytes();
+    }
+
+    buf = (unsigned char *)osty_rt_xmalloc((size_t)max_bytes, "runtime.net.tcp_read.buf");
+    do {
+        n = recv((int)handle, buf, (size_t)max_bytes, 0);
+    } while (n < 0 && errno == EINTR);
+    if (n < 0) {
+        free(buf);
+        osty_rt_net_set_errno_error("failed to read from socket", "runtime.net.tcp_read");
+        return osty_rt_net_empty_bytes();
+    }
+    out = osty_rt_bytes_dup_site(n == 0 ? NULL : buf, (size_t)n, "runtime.net.tcp_read");
+    free(buf);
+    return out;
+}
+
+void *osty_rt_net_tcp_read_exact(int64_t handle, int64_t want) {
+    unsigned char *buf;
+    size_t off = 0;
+    void *out;
+
+    osty_rt_net_clear_status();
+    if (want < 0) {
+        osty_rt_net_set_error_text("failed to read from socket", "byte count must be non-negative", "runtime.net.tcp_read_exact");
+        return osty_rt_net_empty_bytes();
+    }
+    if (want == 0) {
+        return osty_rt_net_empty_bytes();
+    }
+
+    buf = (unsigned char *)osty_rt_xmalloc((size_t)want, "runtime.net.tcp_read_exact.buf");
+    while (off < (size_t)want) {
+        ssize_t n;
+        do {
+            n = recv((int)handle, buf + off, (size_t)want - off, 0);
+        } while (n < 0 && errno == EINTR);
+        if (n < 0) {
+            free(buf);
+            osty_rt_net_set_errno_error("failed to read from socket", "runtime.net.tcp_read_exact");
+            return osty_rt_net_empty_bytes();
+        }
+        if (n == 0) {
+            free(buf);
+            osty_rt_net_set_error_text("failed to read from socket", "unexpected EOF", "runtime.net.tcp_read_exact");
+            return osty_rt_net_empty_bytes();
+        }
+        off += (size_t)n;
+    }
+    out = osty_rt_bytes_dup_site(buf, (size_t)want, "runtime.net.tcp_read_exact");
+    free(buf);
+    return out;
+}
+
+int64_t osty_rt_net_tcp_write(int64_t handle, void *raw_data) {
+    osty_rt_bytes *data = (osty_rt_bytes *)raw_data;
+    ssize_t written;
+    size_t len = (data == NULL || data->len <= 0) ? 0 : (size_t)data->len;
+
+    osty_rt_net_clear_status();
+    if (len == 0) {
+        return 0;
+    }
+
+    do {
+        written = send((int)handle, data->data, len, osty_rt_net_send_flags());
+    } while (written < 0 && errno == EINTR);
+    if (written < 0) {
+        osty_rt_net_set_errno_error("failed to write to socket", "runtime.net.tcp_write");
+        return 0;
+    }
+    return (int64_t)written;
+}
+
+void osty_rt_net_tcp_write_all(int64_t handle, void *raw_data) {
+    osty_rt_bytes *data = (osty_rt_bytes *)raw_data;
+    size_t len = (data == NULL || data->len <= 0) ? 0 : (size_t)data->len;
+    size_t off = 0;
+
+    osty_rt_net_clear_status();
+    while (off < len) {
+        ssize_t written;
+        do {
+            written = send((int)handle, data->data + off, len - off, osty_rt_net_send_flags());
+        } while (written < 0 && errno == EINTR);
+        if (written < 0) {
+            osty_rt_net_set_errno_error("failed to write to socket", "runtime.net.tcp_write_all");
+            return;
+        }
+        if (written == 0) {
+            osty_rt_net_set_error_text("failed to write to socket", "socket write made no progress", "runtime.net.tcp_write_all");
+            return;
+        }
+        off += (size_t)written;
+    }
+}
+
+void osty_rt_net_tcp_flush(int64_t handle) {
+    (void)handle;
+    osty_rt_net_clear_status();
+}
+
+void osty_rt_net_tcp_close(int64_t handle) {
+    osty_rt_net_clear_status();
+    if (close((int)handle) != 0) {
+        osty_rt_net_set_errno_error("failed to close socket", "runtime.net.tcp_close");
+    }
+}
+
+void *osty_rt_net_tcp_local_addr(int64_t handle) {
+    struct sockaddr_storage addr;
+    socklen_t len = (socklen_t)sizeof(addr);
+    osty_rt_net_clear_status();
+    if (getsockname((int)handle, (struct sockaddr *)&addr, &len) != 0) {
+        osty_rt_net_set_errno_error("failed to read local socket address", "runtime.net.tcp_local_addr");
+        return osty_rt_net_empty_string();
+    }
+    return osty_rt_net_sockaddr_text((struct sockaddr *)&addr, len, "runtime.net.tcp_local_addr");
+}
+
+void *osty_rt_net_tcp_peer_addr(int64_t handle) {
+    struct sockaddr_storage addr;
+    socklen_t len = (socklen_t)sizeof(addr);
+    osty_rt_net_clear_status();
+    if (getpeername((int)handle, (struct sockaddr *)&addr, &len) != 0) {
+        osty_rt_net_set_errno_error("failed to read peer socket address", "runtime.net.tcp_peer_addr");
+        return osty_rt_net_empty_string();
+    }
+    return osty_rt_net_sockaddr_text((struct sockaddr *)&addr, len, "runtime.net.tcp_peer_addr");
+}
+
+void osty_rt_net_tcp_set_read_timeout(int64_t handle, int64_t timeout_ms) {
+    osty_rt_net_clear_status();
+    osty_rt_net_apply_timeout((int)handle, timeout_ms, SO_RCVTIMEO, "runtime.net.tcp_set_read_timeout");
+}
+
+void osty_rt_net_tcp_set_write_timeout(int64_t handle, int64_t timeout_ms) {
+    osty_rt_net_clear_status();
+    osty_rt_net_apply_timeout((int)handle, timeout_ms, SO_SNDTIMEO, "runtime.net.tcp_set_write_timeout");
+}
+
+void osty_rt_net_tcp_set_nodelay(int64_t handle, bool on) {
+    int flag = on ? 1 : 0;
+    osty_rt_net_clear_status();
+    if (setsockopt((int)handle, IPPROTO_TCP, TCP_NODELAY, &flag, (socklen_t)sizeof(flag)) != 0) {
+        osty_rt_net_set_errno_error("failed to configure TCP_NODELAY", "runtime.net.tcp_set_nodelay");
+    }
+}
+
+void osty_rt_net_tcp_set_keepalive(int64_t handle, bool on) {
+    int flag = on ? 1 : 0;
+    osty_rt_net_clear_status();
+    if (setsockopt((int)handle, SOL_SOCKET, SO_KEEPALIVE, &flag, (socklen_t)sizeof(flag)) != 0) {
+        osty_rt_net_set_errno_error("failed to configure SO_KEEPALIVE", "runtime.net.tcp_set_keepalive");
+    }
+}
+
+int64_t osty_rt_net_tcp_accept(int64_t handle) {
+    int fd;
+    osty_rt_net_clear_status();
+    do {
+        fd = accept((int)handle, NULL, NULL);
+    } while (fd < 0 && errno == EINTR);
+    if (fd < 0) {
+        osty_rt_net_set_errno_error("failed to accept TCP connection", "runtime.net.tcp_accept");
+        return 0;
+    }
+    osty_rt_net_prepare_stream_socket(fd);
+    return (int64_t)fd;
+}
+
+void *osty_rt_net_tcp_listener_local_addr(int64_t handle) {
+    return osty_rt_net_tcp_local_addr(handle);
+}
+
+void osty_rt_net_tcp_listener_close(int64_t handle) {
+    osty_rt_net_tcp_close(handle);
+}
+
+#endif
+
 static uint64_t osty_rt_test_gen_mix_u64(uint64_t x) {
     x += 0x9E3779B97F4A7C15ULL;
     x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
@@ -18997,4 +20258,669 @@ void *osty_rt_fs_mkdir_all(const char *path) {
         return NULL;
     }
     return osty_rt_fs_error_message("failed to create directory tree", "runtime.fs.mkdir_all.error");
+}
+
+/* std.os process-control surface.
+ *
+ * `std.os.exec` / `execShell` lower to `osty_rt_os_exec(cmd, args, shell)`.
+ * The helper returns a by-value aggregate so the emitter can distinguish
+ * launch/runtime failures from ordinary non-zero child exit codes without
+ * re-running the process:
+ *
+ *   tag = 0 -> success, exit_code/stdout/stderr populated, error_text NULL
+ *   tag = 1 -> failure, error_text populated, output fields zeroed
+ *
+ * `std.os.hostname()` follows the same pattern with a narrower
+ * `{tag, value, error}` result. `pid()` and `exit(code)` are direct
+ * runtime calls. `onSignal` is intentionally not implemented here. */
+typedef struct osty_rt_os_exec_result {
+    int64_t tag;
+    int64_t exit_code;
+    void *stdout_text;
+    void *stderr_text;
+    void *error_text;
+} osty_rt_os_exec_result;
+
+typedef struct osty_rt_os_string_result {
+    int64_t tag;
+    void *value_text;
+    void *error_text;
+} osty_rt_os_string_result;
+
+static void *osty_rt_os_error_message(const char *prefix, const char *detail, const char *site) {
+    const char *lhs = prefix == NULL ? "process error" : prefix;
+    const char *rhs = (detail != NULL && detail[0] != '\0') ? detail : "unknown error";
+    size_t lhs_len = strlen(lhs);
+    size_t rhs_len = strlen(rhs);
+    size_t total = lhs_len + 2 + rhs_len;
+    char *buf = (char *)osty_rt_xmalloc(total + 1, site);
+    memcpy(buf, lhs, lhs_len);
+    buf[lhs_len] = ':';
+    buf[lhs_len + 1] = ' ';
+    memcpy(buf + lhs_len + 2, rhs, rhs_len);
+    buf[total] = '\0';
+    void *out = osty_rt_string_dup_site(buf, total, site);
+    free(buf);
+    return out;
+}
+
+static void *osty_rt_os_empty_string(const char *site) {
+    return osty_rt_string_dup_site("", 0, site);
+}
+
+static void *osty_rt_os_read_file_to_string(const char *path, const char *site) {
+    FILE *fp;
+    long size;
+    size_t read_n;
+    char *buf;
+    void *out;
+    if (path == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
+    fp = fopen(path, "rb");
+    if (fp == NULL) {
+        return NULL;
+    }
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        return NULL;
+    }
+    size = ftell(fp);
+    if (size < 0) {
+        fclose(fp);
+        return NULL;
+    }
+    if (fseek(fp, 0, SEEK_SET) != 0) {
+        fclose(fp);
+        return NULL;
+    }
+    buf = (char *)osty_rt_xmalloc((size_t)size + 1, site);
+    read_n = fread(buf, 1, (size_t)size, fp);
+    if (read_n != (size_t)size) {
+        free(buf);
+        fclose(fp);
+        return NULL;
+    }
+    buf[size] = '\0';
+    out = osty_rt_string_dup_site(buf, (size_t)size, site);
+    free(buf);
+    fclose(fp);
+    return out;
+}
+
+static osty_rt_os_exec_result *osty_rt_os_exec_error_result(const char *prefix, const char *detail, const char *site) {
+    osty_rt_os_exec_result *out =
+        (osty_rt_os_exec_result *)osty_rt_xmalloc(sizeof(*out), site);
+    out->tag = 1;
+    out->exit_code = 0;
+    out->stdout_text = NULL;
+    out->stderr_text = NULL;
+    out->error_text = osty_rt_os_error_message(prefix, detail, site);
+    return out;
+}
+
+static osty_rt_os_string_result *osty_rt_os_string_error_result(const char *prefix, const char *detail, const char *site) {
+    osty_rt_os_string_result *out =
+        (osty_rt_os_string_result *)osty_rt_xmalloc(sizeof(*out), site);
+    out->tag = 1;
+    out->value_text = NULL;
+    out->error_text = osty_rt_os_error_message(prefix, detail, site);
+    return out;
+}
+
+#if defined(_WIN32)
+static char *osty_rt_os_win_strdup(const char *text, const char *site) {
+    size_t n = text == NULL ? 0 : strlen(text);
+    char *out = (char *)osty_rt_xmalloc(n + 1, site);
+    if (n != 0) {
+        memcpy(out, text, n);
+    }
+    out[n] = '\0';
+    return out;
+}
+
+static bool osty_rt_os_open_tempfile_win(char **out_path, HANDLE *out_handle) {
+    char dir[MAX_PATH + 1];
+    char name[MAX_PATH + 1];
+    SECURITY_ATTRIBUTES sa;
+    DWORD dir_len;
+    if (out_path == NULL || out_handle == NULL) {
+        return false;
+    }
+    dir_len = GetTempPathA((DWORD)sizeof(dir), dir);
+    if (dir_len == 0 || dir_len >= sizeof(dir)) {
+        return false;
+    }
+    if (GetTempFileNameA(dir, "ost", 0, name) == 0) {
+        return false;
+    }
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = NULL;
+    sa.bInheritHandle = TRUE;
+    *out_handle = CreateFileA(
+        name,
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        &sa,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_SEQUENTIAL_SCAN,
+        NULL
+    );
+    if (*out_handle == INVALID_HANDLE_VALUE) {
+        DeleteFileA(name);
+        return false;
+    }
+    *out_path = osty_rt_os_win_strdup(name, "runtime.os.tempfile.path");
+    return true;
+}
+
+static size_t osty_rt_os_win_quoted_len(const char *arg) {
+    size_t n = 0;
+    size_t backslashes = 0;
+    bool needs_quotes = false;
+    const unsigned char *p = (const unsigned char *)(arg == NULL ? "" : arg);
+    if (*p == '\0') {
+        return 2;
+    }
+    for (; *p != '\0'; p++) {
+        if (*p == ' ' || *p == '\t' || *p == '"') {
+            needs_quotes = true;
+        }
+    }
+    if (!needs_quotes) {
+        return strlen(arg);
+    }
+    n = 2;
+    p = (const unsigned char *)(arg == NULL ? "" : arg);
+    for (; *p != '\0'; p++) {
+        if (*p == '\\') {
+            backslashes++;
+            continue;
+        }
+        if (*p == '"') {
+            n += backslashes * 2 + 2;
+            backslashes = 0;
+            continue;
+        }
+        n += backslashes + 1;
+        backslashes = 0;
+    }
+    n += backslashes * 2;
+    return n;
+}
+
+static char *osty_rt_os_win_append_quoted(char *dst, const char *arg) {
+    size_t backslashes = 0;
+    bool needs_quotes = false;
+    const unsigned char *p = (const unsigned char *)(arg == NULL ? "" : arg);
+    if (*p == '\0') {
+        *dst++ = '"';
+        *dst++ = '"';
+        return dst;
+    }
+    for (; *p != '\0'; p++) {
+        if (*p == ' ' || *p == '\t' || *p == '"') {
+            needs_quotes = true;
+        }
+    }
+    if (!needs_quotes) {
+        size_t n = strlen(arg);
+        memcpy(dst, arg, n);
+        return dst + n;
+    }
+    *dst++ = '"';
+    p = (const unsigned char *)(arg == NULL ? "" : arg);
+    for (; *p != '\0'; p++) {
+        if (*p == '\\') {
+            backslashes++;
+            continue;
+        }
+        if (*p == '"') {
+            while (backslashes-- > 0) {
+                *dst++ = '\\';
+                *dst++ = '\\';
+            }
+            backslashes = 0;
+            *dst++ = '\\';
+            *dst++ = '"';
+            continue;
+        }
+        while (backslashes-- > 0) {
+            *dst++ = '\\';
+        }
+        backslashes = 0;
+        *dst++ = (char)(*p);
+    }
+    while (backslashes-- > 0) {
+        *dst++ = '\\';
+        *dst++ = '\\';
+    }
+    *dst++ = '"';
+    return dst;
+}
+
+static char *osty_rt_os_build_windows_command_line(const char *cmd, void *args, bool shell) {
+    int64_t arg_count = args != NULL ? osty_rt_list_len(args) : 0;
+    size_t total = 1;
+    char *buf;
+    char *cursor;
+    int64_t i;
+    if (shell) {
+        total += osty_rt_os_win_quoted_len("cmd.exe") + 1;
+        total += osty_rt_os_win_quoted_len("/d") + 1;
+        total += osty_rt_os_win_quoted_len("/s") + 1;
+        total += osty_rt_os_win_quoted_len("/c") + 1;
+        total += osty_rt_os_win_quoted_len(cmd == NULL ? "" : cmd);
+    } else {
+        total += osty_rt_os_win_quoted_len(cmd == NULL ? "" : cmd);
+        for (i = 0; i < arg_count; i++) {
+            const char *arg = (const char *)osty_rt_list_get_ptr(args, i);
+            total += 1 + osty_rt_os_win_quoted_len(arg == NULL ? "" : arg);
+        }
+    }
+    buf = (char *)osty_rt_xmalloc(total, "runtime.os.exec.win.cmdline");
+    cursor = buf;
+    if (shell) {
+        cursor = osty_rt_os_win_append_quoted(cursor, "cmd.exe");
+        *cursor++ = ' ';
+        cursor = osty_rt_os_win_append_quoted(cursor, "/d");
+        *cursor++ = ' ';
+        cursor = osty_rt_os_win_append_quoted(cursor, "/s");
+        *cursor++ = ' ';
+        cursor = osty_rt_os_win_append_quoted(cursor, "/c");
+        *cursor++ = ' ';
+        cursor = osty_rt_os_win_append_quoted(cursor, cmd == NULL ? "" : cmd);
+    } else {
+        cursor = osty_rt_os_win_append_quoted(cursor, cmd == NULL ? "" : cmd);
+        for (i = 0; i < arg_count; i++) {
+            const char *arg = (const char *)osty_rt_list_get_ptr(args, i);
+            *cursor++ = ' ';
+            cursor = osty_rt_os_win_append_quoted(cursor, arg == NULL ? "" : arg);
+        }
+    }
+    *cursor = '\0';
+    return buf;
+}
+
+static osty_rt_os_exec_result *osty_rt_os_exec_windows(const char *cmd, void *args, bool shell) {
+    char *stdout_path = NULL;
+    char *stderr_path = NULL;
+    char *cmdline = NULL;
+    void *stdout_text = NULL;
+    void *stderr_text = NULL;
+    HANDLE stdout_handle = INVALID_HANDLE_VALUE;
+    HANDLE stderr_handle = INVALID_HANDLE_VALUE;
+    HANDLE stdin_handle = INVALID_HANDLE_VALUE;
+    PROCESS_INFORMATION pi;
+    STARTUPINFOA si;
+    DWORD exit_code = 0;
+    osty_rt_os_exec_result *out;
+    if (cmd == NULL || cmd[0] == '\0') {
+        return osty_rt_os_exec_error_result("failed to launch process", "command is empty", "runtime.os.exec.error");
+    }
+    if (!osty_rt_os_open_tempfile_win(&stdout_path, &stdout_handle)) {
+        return osty_rt_os_exec_error_result("failed to launch process", "could not create stdout temp file", "runtime.os.exec.error");
+    }
+    if (!osty_rt_os_open_tempfile_win(&stderr_path, &stderr_handle)) {
+        CloseHandle(stdout_handle);
+        DeleteFileA(stdout_path);
+        free(stdout_path);
+        return osty_rt_os_exec_error_result("failed to launch process", "could not create stderr temp file", "runtime.os.exec.error");
+    }
+    {
+        SECURITY_ATTRIBUTES sa;
+        sa.nLength = sizeof(sa);
+        sa.lpSecurityDescriptor = NULL;
+        sa.bInheritHandle = TRUE;
+        stdin_handle = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (stdin_handle == INVALID_HANDLE_VALUE) {
+            CloseHandle(stdout_handle);
+            CloseHandle(stderr_handle);
+            DeleteFileA(stdout_path);
+            DeleteFileA(stderr_path);
+            free(stdout_path);
+            free(stderr_path);
+            return osty_rt_os_exec_error_result("failed to launch process", "could not open NUL for stdin", "runtime.os.exec.error");
+        }
+    }
+    cmdline = osty_rt_os_build_windows_command_line(cmd, args, shell);
+    ZeroMemory(&pi, sizeof(pi));
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = stdin_handle;
+    si.hStdOutput = stdout_handle;
+    si.hStdError = stderr_handle;
+    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+        DWORD code = GetLastError();
+        char buf[96];
+        int written = snprintf(buf, sizeof(buf), "win32 error %lu", (unsigned long)code);
+        CloseHandle(stdin_handle);
+        CloseHandle(stdout_handle);
+        CloseHandle(stderr_handle);
+        DeleteFileA(stdout_path);
+        DeleteFileA(stderr_path);
+        free(stdout_path);
+        free(stderr_path);
+        free(cmdline);
+        if (written < 0) {
+            return osty_rt_os_exec_error_result("failed to launch process", "CreateProcessA failed", "runtime.os.exec.error");
+        }
+        return osty_rt_os_exec_error_result("failed to launch process", buf, "runtime.os.exec.error");
+    }
+    CloseHandle(stdin_handle);
+    CloseHandle(stdout_handle);
+    CloseHandle(stderr_handle);
+    free(cmdline);
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    if (!GetExitCodeProcess(pi.hProcess, &exit_code)) {
+        DWORD code = GetLastError();
+        char buf[96];
+        int written = snprintf(buf, sizeof(buf), "win32 error %lu", (unsigned long)code);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        DeleteFileA(stdout_path);
+        DeleteFileA(stderr_path);
+        free(stdout_path);
+        free(stderr_path);
+        if (written < 0) {
+            return osty_rt_os_exec_error_result("failed to inspect process exit code", "GetExitCodeProcess failed", "runtime.os.exec.error");
+        }
+        return osty_rt_os_exec_error_result("failed to inspect process exit code", buf, "runtime.os.exec.error");
+    }
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    stdout_text = osty_rt_os_read_file_to_string(stdout_path, "runtime.os.exec.stdout");
+    stderr_text = osty_rt_os_read_file_to_string(stderr_path, "runtime.os.exec.stderr");
+    DeleteFileA(stdout_path);
+    DeleteFileA(stderr_path);
+    free(stdout_path);
+    free(stderr_path);
+    if (stdout_text == NULL) {
+        return osty_rt_os_exec_error_result("failed to read process stdout", strerror(errno), "runtime.os.exec.error");
+    }
+    if (stderr_text == NULL) {
+        return osty_rt_os_exec_error_result("failed to read process stderr", strerror(errno), "runtime.os.exec.error");
+    }
+    out = (osty_rt_os_exec_result *)osty_rt_xmalloc(sizeof(*out), "runtime.os.exec.result");
+    out->tag = 0;
+    out->exit_code = (int64_t)exit_code;
+    out->stdout_text = stdout_text;
+    out->stderr_text = stderr_text;
+    out->error_text = NULL;
+    return out;
+}
+#else
+static char **osty_rt_os_build_posix_argv(const char *cmd, void *args, bool shell) {
+    int64_t arg_count = args != NULL ? osty_rt_list_len(args) : 0;
+    char **argv;
+    int64_t i;
+    if (shell) {
+        argv = (char **)osty_rt_xmalloc(sizeof(char *) * 4, "runtime.os.exec.argv");
+        argv[0] = (char *)"/bin/sh";
+        argv[1] = (char *)"-c";
+        argv[2] = (char *)(cmd == NULL ? "" : cmd);
+        argv[3] = NULL;
+        return argv;
+    }
+    argv = (char **)osty_rt_xmalloc(sizeof(char *) * (size_t)(arg_count + 2), "runtime.os.exec.argv");
+    argv[0] = (char *)(cmd == NULL ? "" : cmd);
+    for (i = 0; i < arg_count; i++) {
+        char *arg = (char *)osty_rt_list_get_ptr(args, i);
+        argv[i + 1] = arg == NULL ? (char *)"" : arg;
+    }
+    argv[arg_count + 1] = NULL;
+    return argv;
+}
+
+static int osty_rt_os_open_tempfile_posix(const char *prefix, char **out_path) {
+    const char *tmp = getenv("TMPDIR");
+    size_t tmp_len;
+    size_t total;
+    char *path;
+    int fd;
+    if (out_path == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (tmp == NULL || tmp[0] == '\0') {
+        tmp = "/tmp";
+    }
+    tmp_len = strlen(tmp);
+    total = tmp_len + 1 + strlen(prefix) + 6 + 1;
+    path = (char *)osty_rt_xmalloc(total, "runtime.os.exec.tmp.path");
+    snprintf(path, total, "%s/%sXXXXXX", tmp, prefix);
+    fd = mkstemp(path);
+    if (fd < 0) {
+        free(path);
+        return -1;
+    }
+    *out_path = path;
+    return fd;
+}
+
+static osty_rt_os_exec_result *osty_rt_os_exec_posix(const char *cmd, void *args, bool shell) {
+    char *stdout_path = NULL;
+    char *stderr_path = NULL;
+    int stdout_fd = -1;
+    int stderr_fd = -1;
+    int exec_pipe[2] = {-1, -1};
+    char **argv = NULL;
+    pid_t pid;
+    int status = 0;
+    int exec_errno = 0;
+    ssize_t exec_read;
+    pid_t waited;
+    void *stdout_text = NULL;
+    void *stderr_text = NULL;
+    osty_rt_os_exec_result *out;
+    sigset_t sigurg_mask;
+    sigset_t old_mask;
+    int sigmask_set = 0;
+    struct sigaction old_sigchld;
+    struct sigaction default_sigchld;
+    int sigchld_reset = 0;
+    if (cmd == NULL || cmd[0] == '\0') {
+        return osty_rt_os_exec_error_result("failed to launch process", "command is empty", "runtime.os.exec.error");
+    }
+    stdout_fd = osty_rt_os_open_tempfile_posix("osty-out.", &stdout_path);
+    if (stdout_fd < 0) {
+        return osty_rt_os_exec_error_result("failed to launch process", strerror(errno), "runtime.os.exec.error");
+    }
+    stderr_fd = osty_rt_os_open_tempfile_posix("osty-err.", &stderr_path);
+    if (stderr_fd < 0) {
+        close(stdout_fd);
+        unlink(stdout_path);
+        free(stdout_path);
+        return osty_rt_os_exec_error_result("failed to launch process", strerror(errno), "runtime.os.exec.error");
+    }
+    if (pipe(exec_pipe) != 0) {
+        close(stdout_fd);
+        close(stderr_fd);
+        unlink(stdout_path);
+        unlink(stderr_path);
+        free(stdout_path);
+        free(stderr_path);
+        return osty_rt_os_exec_error_result("failed to launch process", strerror(errno), "runtime.os.exec.error");
+    }
+    (void)fcntl(exec_pipe[1], F_SETFD, FD_CLOEXEC);
+    argv = osty_rt_os_build_posix_argv(cmd, args, shell);
+    if (sigaction(SIGCHLD, NULL, &old_sigchld) == 0 && old_sigchld.sa_handler == SIG_IGN) {
+        memset(&default_sigchld, 0, sizeof(default_sigchld));
+        default_sigchld.sa_handler = SIG_DFL;
+        sigemptyset(&default_sigchld.sa_mask);
+        if (sigaction(SIGCHLD, &default_sigchld, NULL) == 0) {
+            sigchld_reset = 1;
+        }
+    }
+    pid = fork();
+    if (pid < 0) {
+        int err = errno;
+        if (sigchld_reset) {
+            (void)sigaction(SIGCHLD, &old_sigchld, NULL);
+        }
+        close(stdout_fd);
+        close(stderr_fd);
+        close(exec_pipe[0]);
+        close(exec_pipe[1]);
+        unlink(stdout_path);
+        unlink(stderr_path);
+        free(stdout_path);
+        free(stderr_path);
+        free(argv);
+        return osty_rt_os_exec_error_result("failed to launch process", strerror(err), "runtime.os.exec.error");
+    }
+    if (pid == 0) {
+        close(exec_pipe[0]);
+        if (dup2(stdout_fd, STDOUT_FILENO) < 0 || dup2(stderr_fd, STDERR_FILENO) < 0) {
+            int err = errno;
+            (void)write(exec_pipe[1], &err, sizeof(err));
+            _exit(127);
+        }
+        close(stdout_fd);
+        close(stderr_fd);
+        if (shell) {
+            execv("/bin/sh", argv);
+        } else {
+            execvp(cmd, argv);
+        }
+        {
+            int err = errno;
+            (void)write(exec_pipe[1], &err, sizeof(err));
+        }
+        _exit(127);
+    }
+    close(stdout_fd);
+    close(stderr_fd);
+    close(exec_pipe[1]);
+    sigemptyset(&sigurg_mask);
+    sigaddset(&sigurg_mask, SIGURG);
+    if (sigprocmask(SIG_BLOCK, &sigurg_mask, &old_mask) == 0) {
+        sigmask_set = 1;
+    }
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    do {
+        exec_read = read(exec_pipe[0], &exec_errno, sizeof(exec_errno));
+    } while (exec_read < 0 && errno == EINTR);
+    close(exec_pipe[0]);
+    if (sigmask_set) {
+        (void)sigprocmask(SIG_SETMASK, &old_mask, NULL);
+    }
+    if (sigchld_reset) {
+        (void)sigaction(SIGCHLD, &old_sigchld, NULL);
+    }
+    free(argv);
+    if (waited < 0) {
+        unlink(stdout_path);
+        unlink(stderr_path);
+        free(stdout_path);
+        free(stderr_path);
+        return osty_rt_os_exec_error_result("failed to wait for process", strerror(errno), "runtime.os.exec.error");
+    }
+    if (exec_read > 0) {
+        unlink(stdout_path);
+        unlink(stderr_path);
+        free(stdout_path);
+        free(stderr_path);
+        return osty_rt_os_exec_error_result("failed to launch process", strerror(exec_errno), "runtime.os.exec.error");
+    }
+    stdout_text = osty_rt_os_read_file_to_string(stdout_path, "runtime.os.exec.stdout");
+    stderr_text = osty_rt_os_read_file_to_string(stderr_path, "runtime.os.exec.stderr");
+    unlink(stdout_path);
+    unlink(stderr_path);
+    free(stdout_path);
+    free(stderr_path);
+    if (stdout_text == NULL) {
+        return osty_rt_os_exec_error_result("failed to read process stdout", strerror(errno), "runtime.os.exec.error");
+    }
+    if (stderr_text == NULL) {
+        return osty_rt_os_exec_error_result("failed to read process stderr", strerror(errno), "runtime.os.exec.error");
+    }
+    out = (osty_rt_os_exec_result *)osty_rt_xmalloc(sizeof(*out), "runtime.os.exec.result");
+    out->tag = 0;
+    if (WIFEXITED(status)) {
+        out->exit_code = (int64_t)WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        out->exit_code = 128 + (int64_t)WTERMSIG(status);
+    } else {
+        out->exit_code = 1;
+    }
+    out->stdout_text = stdout_text;
+    out->stderr_text = stderr_text;
+    out->error_text = NULL;
+    return out;
+}
+#endif
+
+osty_rt_os_exec_result *osty_rt_os_exec(const char *cmd, void *args, bool shell) {
+#if defined(_WIN32)
+    return osty_rt_os_exec_windows(cmd, args, shell);
+#else
+    return osty_rt_os_exec_posix(cmd, args, shell);
+#endif
+}
+
+osty_rt_os_string_result *osty_rt_os_hostname(void) {
+#if defined(_WIN32)
+    char buf[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD size = (DWORD)sizeof(buf);
+    if (!GetComputerNameA(buf, &size)) {
+        DWORD code = GetLastError();
+        char errbuf[96];
+        int written = snprintf(errbuf, sizeof(errbuf), "win32 error %lu", (unsigned long)code);
+        if (written < 0) {
+            return osty_rt_os_string_error_result("failed to get hostname", "GetComputerNameA failed", "runtime.os.hostname.error");
+        }
+        return osty_rt_os_string_error_result("failed to get hostname", errbuf, "runtime.os.hostname.error");
+    }
+    {
+        osty_rt_os_string_result *out =
+            (osty_rt_os_string_result *)osty_rt_xmalloc(sizeof(*out), "runtime.os.hostname.result");
+        out->tag = 0;
+        out->value_text = osty_rt_string_dup_site(buf, (size_t)size, "runtime.os.hostname");
+        out->error_text = NULL;
+        return out;
+    }
+#else
+    char buf[256];
+    if (gethostname(buf, sizeof(buf)) != 0) {
+        int err = errno;
+        if (err == 0) {
+            return osty_rt_os_string_error_result("failed to get hostname", "gethostname failed", "runtime.os.hostname.error");
+        }
+        return osty_rt_os_string_error_result("failed to get hostname", strerror(err), "runtime.os.hostname.error");
+    }
+    buf[sizeof(buf) - 1] = '\0';
+    {
+        osty_rt_os_string_result *out =
+            (osty_rt_os_string_result *)osty_rt_xmalloc(sizeof(*out), "runtime.os.hostname.result");
+        out->tag = 0;
+        out->value_text = osty_rt_string_dup_site(buf, strlen(buf), "runtime.os.hostname");
+        out->error_text = NULL;
+        return out;
+    }
+#endif
+}
+
+void osty_rt_os_exec_result_free(osty_rt_os_exec_result *result) {
+    free(result);
+}
+
+void osty_rt_os_string_result_free(osty_rt_os_string_result *result) {
+    free(result);
+}
+
+int64_t osty_rt_os_pid(void) {
+#if defined(_WIN32)
+    return (int64_t)GetCurrentProcessId();
+#else
+    return (int64_t)getpid();
+#endif
+}
+
+void osty_rt_os_exit(int32_t code) {
+    exit((int)code);
 }

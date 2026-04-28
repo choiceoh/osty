@@ -148,6 +148,31 @@ func TestGeneratedClangLinkBinaryArgsPthreadWindowsBranching(t *testing.T) {
 	}
 }
 
+func TestGeneratedClangLinkBinaryArgsZlibWindowsBranching(t *testing.T) {
+	cases := []struct {
+		target string
+		want   bool
+	}{
+		{"", true},
+		{"x86_64-unknown-linux-gnu", true},
+		{"aarch64-unknown-linux-gnu", true},
+		{"x86_64-apple-darwin", true},
+		{"arm64-apple-darwin", true},
+		{"x86_64-pc-windows-msvc", false},
+		{"aarch64-pc-windows-msvc", false},
+		{"x86_64-pc-windows-gnu", false},
+	}
+	for _, c := range cases {
+		args := llvmClangLinkBinaryArgs(c.target, []string{"/tmp/main.o"}, "/tmp/app")
+		got := strings.Join(args, " ")
+		has := strings.Contains(got, "-lz")
+		if has != c.want {
+			t.Errorf("target=%q: -lz present=%v, want=%v; full args: %s",
+				c.target, has, c.want, got)
+		}
+	}
+}
+
 func TestGeneratedComparePoliciesAreOstyOwned(t *testing.T) {
 	if !llvmIsCompareOp("==") {
 		t.Fatal(`llvmIsCompareOp("==") = false, want true`)

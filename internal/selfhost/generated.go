@@ -47406,6 +47406,10 @@ func collectUseDecl(cx *ElabCx, declIdx int, node *AstNode) {
 		} else if node.text == "std.io" {
 			// Osty: /tmp/selfhost_merged.osty:23286:13
 			registerStdIoAliasFns(env, alias)
+		} else if node.text == "std.compress" {
+			registerStdCompressAliasFields(env, alias)
+		} else if node.text == "std.encoding" {
+			registerStdEncodingAliasFields(env, alias)
 		} else {
 			// Osty: /tmp/selfhost_merged.osty:23288:13
 			_ = env
@@ -47770,6 +47774,22 @@ func registerStdIoAliasFns(env *CheckEnv, alias string) {
 	}
 	// Osty: /tmp/selfhost_merged.osty:23710:5
 	checkRegisterFn(env, &CheckFnSig{name: "readLine", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+}
+
+func registerStdCompressAliasFields(env *CheckEnv, alias string) {
+	tys := env.tys
+	tGzip := tyNamed(tys, "Gzip", make([]int, 0, 1))
+	tBytes_ := tBytes(tys)
+	tResultBytesError := tyNamed(tys, "Result", []int{tBytes_, tyNamed(tys, "Error", make([]int, 0, 1))})
+	checkRegisterField(env, &CheckFieldSig{owner: alias, name: "gzip", ty: tGzip, exported: true, hasDefault: false})
+	checkRegisterFn(env, &CheckFnSig{name: "encode", owner: "Gzip", receiverTy: tGzip, hasReceiver: true, retTy: tBytes_, paramNames: []string{"data"}, paramTys: []int{tBytes_}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "decode", owner: "Gzip", receiverTy: tGzip, hasReceiver: true, retTy: tResultBytesError, paramNames: []string{"data"}, paramTys: []int{tBytes_}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+}
+
+func registerStdEncodingAliasFields(env *CheckEnv, alias string) {
+	checkRegisterField(env, &CheckFieldSig{owner: alias, name: "base64", ty: tyNamed(env.tys, "Base64", make([]int, 0, 1)), exported: true, hasDefault: false})
+	checkRegisterField(env, &CheckFieldSig{owner: alias, name: "hex", ty: tyNamed(env.tys, "Hex", make([]int, 0, 1)), exported: true, hasDefault: false})
+	checkRegisterField(env, &CheckFieldSig{owner: alias, name: "url", ty: tyNamed(env.tys, "UrlEncoding", make([]int, 0, 1)), exported: true, hasDefault: false})
 }
 
 // Osty: /tmp/selfhost_merged.osty:23720:1

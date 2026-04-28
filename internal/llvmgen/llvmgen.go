@@ -272,11 +272,14 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 		g.stdTestingGenAliases = collectStdTestingGenAliases(file)
 		g.stdIoAliases = collectStdIoAliases(file)
 		g.stdBytesAliases = collectStdBytesAliases(file)
+		g.stdCompressAliases = collectStdCompressAliases(file)
 		g.stdStringsAliases = collectStdStringsAliases(file)
 		g.stdEnvAliases = collectStdEnvAliases(file)
 		g.stdFsAliases = collectStdFsAliases(file)
+		g.stdRandomAliases = collectStdRandomAliases(file)
+		g.stdNetAliases = collectStdNetAliases(file)
 		g.stdCryptoAliases = collectStdCryptoAliases(file)
-		g.stdFsAliases = collectStdFsAliases(file)
+		g.stdOsAliases = collectStdOsAliases(file)
 		mainIR, err := g.emitScriptMain(file.Stmts)
 		if err != nil {
 			return nil, err
@@ -308,11 +311,14 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 	g.stdTestingGenAliases = collectStdTestingGenAliases(file)
 	g.stdIoAliases = collectStdIoAliases(file)
 	g.stdBytesAliases = collectStdBytesAliases(file)
+	g.stdCompressAliases = collectStdCompressAliases(file)
 	g.stdStringsAliases = collectStdStringsAliases(file)
 	g.stdEnvAliases = collectStdEnvAliases(file)
 	g.stdFsAliases = collectStdFsAliases(file)
+	g.stdRandomAliases = collectStdRandomAliases(file)
+	g.stdNetAliases = collectStdNetAliases(file)
 	g.stdCryptoAliases = collectStdCryptoAliases(file)
-	g.stdFsAliases = collectStdFsAliases(file)
+	g.stdOsAliases = collectStdOsAliases(file)
 	if err := g.emitGlobalLets(decls.globalsOrdered); err != nil {
 		return nil, err
 	}

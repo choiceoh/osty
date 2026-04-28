@@ -67,6 +67,27 @@ func collectStdBytesAliases(file *ast.File) map[string]bool {
 	return out
 }
 
+func collectStdNetAliases(file *ast.File) map[string]bool {
+	out := map[string]bool{}
+	if file == nil {
+		return out
+	}
+	for _, use := range file.Uses {
+		if use == nil || use.IsFFI() {
+			continue
+		}
+		if len(use.Path) != 2 || use.Path[0] != "std" || use.Path[1] != "net" {
+			continue
+		}
+		alias := use.Alias
+		if alias == "" {
+			alias = "net"
+		}
+		out[alias] = true
+	}
+	return out
+}
+
 func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 	if call == nil || len(g.stdBytesAliases) == 0 {
 		return value{}, false, nil
@@ -501,6 +522,54 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		return v, true, nil
 	}
 	return value{}, false, nil
+}
+
+func (g *generator) emitStdNetCall(call *ast.CallExpr) (value, bool, error) {
+	if call == nil || len(g.stdNetAliases) == 0 {
+		return value{}, false, nil
+	}
+	field, ok := fieldExprOfCallFn(call)
+	if !ok || field == nil || field.IsOptional {
+		return value{}, false, nil
+	}
+	alias, ok := field.X.(*ast.Ident)
+	if !ok || !g.stdNetAliases[alias.Name] {
+		return value{}, false, nil
+	}
+	sig := g.functions[field.Name]
+	if sig == nil {
+		return value{}, false, nil
+	}
+	if sig.ret == "" || sig.ret == "void" {
+		return value{}, true, unsupportedf("call", "function %q has no return value", sig.name)
+	}
+	if g.hasVisibleSafepointRoots() {
+		emitter := g.toOstyEmitter()
+		g.emitGCSafepointKind(emitter, safepointKindCall)
+		g.takeOstyEmitter(emitter)
+	}
+	g.pushScope()
+	args, err := g.userCallArgs(sig, nil, call)
+	if err != nil {
+		g.popScope()
+		return value{}, true, err
+	}
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, sig.ret, sig.irName, args)
+	g.takeOstyEmitter(emitter)
+	g.popScope()
+	ret := fromOstyValue(out)
+	ret.listElemTyp = sig.retListElemTyp
+	ret.listElemString = sig.retListString
+	ret.mapKeyTyp = sig.retMapKeyTyp
+	ret.mapValueTyp = sig.retMapValueTyp
+	ret.mapKeyString = sig.retMapKeyString
+	ret.setElemTyp = sig.retSetElemTyp
+	ret.setElemString = sig.retSetElemString
+	ret.sourceType = sig.returnSourceType
+	ret.gcManaged = valueNeedsManagedRoot(ret)
+	ret.rootPaths = g.rootPathsForType(sig.ret)
+	return ret, true, nil
 }
 
 func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) {
