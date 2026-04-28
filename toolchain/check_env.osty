@@ -2231,6 +2231,15 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         paramNames: [], paramTys: [],
         generics: ["T"], genericBounds: [],
     })
+    // `[a, b, c]`-style stringification. The backend dispatches on
+    // element ABI lane to `osty_rt_list_to_string_*`; primitives +
+    // String are wired today, composite element types still surface
+    // as "not implemented yet".
+    checkRegisterFn(env, CheckFnSig {
+        name: "toString", owner: "List", receiverTy: tListT, hasReceiver: true, retTy: tString_,
+        paramNames: [], paramTys: [],
+        generics: ["T"], genericBounds: [],
+    })
 
     // ----- Map<K, V> intrinsics (spec §10.6) -----
     checkRegisterFn(env, CheckFnSig {

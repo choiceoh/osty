@@ -4203,6 +4203,8 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 			return IntrinsicListReverse
 		case "reversed":
 			return IntrinsicListReversed
+		case "toString":
+			return IntrinsicListToString
 		}
 	case "Map":
 		switch name {
