@@ -84,3 +84,26 @@ func TestLookupEnumMethodReachesOptionIsSome(t *testing.T) {
 		t.Fatalf("Option.isSome found but body is nil")
 	}
 }
+
+func TestLookupEnumMethodReachesExpandedOptionAndResultBodies(t *testing.T) {
+	reg := stdlib.LoadCached()
+	cases := []struct {
+		enumName   string
+		methodName string
+	}{
+		{"Option", "zipWith"},
+		{"Option", "reduce"},
+		{"Result", "zip"},
+		{"Result", "zipWith"},
+		{"Result", "toList"},
+	}
+	for _, tc := range cases {
+		fn := LookupEnumMethod(reg, tc.enumName, tc.methodName)
+		if fn == nil {
+			t.Fatalf("%s.%s not reachable via enum-method lookup", tc.enumName, tc.methodName)
+		}
+		if fn.Body == nil {
+			t.Fatalf("%s.%s found but body is nil", tc.enumName, tc.methodName)
+		}
+	}
+}

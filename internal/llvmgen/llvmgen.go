@@ -275,6 +275,7 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 		g.stdStringsAliases = collectStdStringsAliases(file)
 		g.stdEnvAliases = collectStdEnvAliases(file)
 		g.stdRandomAliases = collectStdRandomAliases(file)
+		g.stdCryptoAliases = collectStdCryptoAliases(file)
 		mainIR, err := g.emitScriptMain(file.Stmts)
 		if err != nil {
 			return nil, err
@@ -309,6 +310,7 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 	g.stdStringsAliases = collectStdStringsAliases(file)
 	g.stdEnvAliases = collectStdEnvAliases(file)
 	g.stdRandomAliases = collectStdRandomAliases(file)
+	g.stdCryptoAliases = collectStdCryptoAliases(file)
 	if err := g.emitGlobalLets(decls.globalsOrdered); err != nil {
 		return nil, err
 	}

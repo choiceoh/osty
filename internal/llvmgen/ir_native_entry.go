@@ -926,58 +926,42 @@ func emitNativeInterfaceVtable(impl nativeInterfaceImpl) []byte {
 //
 // For unit-returning methods (ret == "void") the shim ends with
 // `ret void` without capturing a result value.
+// emitNativeInterfaceShim renders an interface→impl shim function for
+// the IR-driven native projection. The shim's signature is
+// `define <ret> @osty.shim.<struct>__<iface>__<method>(ptr %self_data, ...)`;
+// the body loads `%self` from `%self_data` (`align 8`) and forwards
+// to the underlying struct method, then returns. Most of the textual
+// shape lives in the Osty-sourced
+// `mirNativeShim*` helpers (`toolchain/mir_generator.osty`); this
+// wrapper composes them with the param-list and arg-list assembly that
+// is Go-side because it walks the in-memory ifaceMethod / structMethod
+// structs.
 func emitNativeInterfaceShim(impl nativeInterfaceImpl, m nativeInterfaceImplMethod) []byte {
 	var b strings.Builder
 	ret := m.ifaceMethod.returnLLVM
 	if ret == "" {
 		ret = "void"
 	}
-	b.WriteString("define ")
-	b.WriteString(ret)
-	b.WriteString(" @osty.shim.")
-	b.WriteString(impl.structName)
-	b.WriteString("__")
-	b.WriteString(impl.ifaceName)
-	b.WriteString("__")
-	b.WriteString(m.ifaceMethod.name)
-	b.WriteString("(ptr %self_data")
+	// Build the `, <ty> %argN` extension for each ifaceMethod param —
+	// these flow into both the def-header and the call-arg list.
+	var paramExt strings.Builder
 	for i, pt := range m.ifaceMethod.paramLLVMs {
-		b.WriteString(", ")
-		b.WriteString(pt)
-		b.WriteString(" %arg")
-		b.WriteString(strconv.Itoa(i))
+		paramExt.WriteString(", ")
+		paramExt.WriteString(pt)
+		paramExt.WriteString(" %arg")
+		paramExt.WriteString(strconv.Itoa(i))
 	}
-	b.WriteString(") {\nentry:\n")
-	b.WriteString("  %self = load ")
-	b.WriteString(impl.structLLVM)
-	b.WriteString(", ptr %self_data, align 8\n")
-	callLHS := ""
-	if ret != "void" {
-		callLHS = "  %res = "
-	} else {
-		callLHS = "  "
-	}
-	b.WriteString(callLHS)
-	b.WriteString("call ")
-	b.WriteString(ret)
-	b.WriteString(" @")
-	b.WriteString(m.structMethod.irName)
-	b.WriteString("(")
-	b.WriteString(impl.structLLVM)
-	b.WriteString(" %self")
-	for i, pt := range m.ifaceMethod.paramLLVMs {
-		b.WriteString(", ")
-		b.WriteString(pt)
-		b.WriteString(" %arg")
-		b.WriteString(strconv.Itoa(i))
-	}
-	b.WriteString(")\n")
+	b.WriteString(mirNativeShimDefineHeaderText(ret, impl.structName, impl.ifaceName, m.ifaceMethod.name, paramExt.String()))
+	b.WriteString(mirNativeShimLoadSelfText(impl.structLLVM))
+	// Compose the call-arg list: receiver `<structLLVM> %self` plus
+	// the same `, <ty> %argN` extension paramExt holds.
+	argList := mirCallArgsTypePair(impl.structLLVM, "%self") + paramExt.String()
 	if ret == "void" {
-		b.WriteString("  ret void\n")
+		b.WriteString(mirNativeShimCallVoidText(ret, m.structMethod.irName, argList))
+		b.WriteString(mirNativeShimRetVoidText())
 	} else {
-		b.WriteString("  ret ")
-		b.WriteString(ret)
-		b.WriteString(" %res\n")
+		b.WriteString(mirNativeShimCallValueText(ret, m.structMethod.irName, argList))
+		b.WriteString(mirNativeShimRetValueText(ret))
 	}
 	b.WriteString("}\n")
 	return []byte(b.String())
@@ -4520,8 +4504,9 @@ func appendNativeClosureThunks(out []byte, ctx *nativeProjectionCtx) []byte {
 		b.WriteString(") {\nentry:\n")
 		// Load each capture from env at offset `closureEnvCapturesOffset + i*8`.
 		for i, capType := range info.captureLLVMs {
-			b.WriteString(fmt.Sprintf("  %%cap%d_slot = getelementptr i8, ptr %%env, i64 %d\n", i, llvmClosureEnvCapturesOffset()+i*8))
-			b.WriteString(fmt.Sprintf("  %%cap%d = load %s, ptr %%cap%d_slot\n", i, capType, i))
+			idxStr := strconv.Itoa(i)
+			b.WriteString(mirCaptureSlotGEPLine(idxStr, "%env", strconv.Itoa(llvmClosureEnvCapturesOffset()+i*8)))
+			b.WriteString(mirCaptureLoadLine(idxStr, capType))
 		}
 		// Call the lifted fn: (orig_args..., cap0, cap1, ...). Env
 		// is dropped because the lifted fn takes captures as regular

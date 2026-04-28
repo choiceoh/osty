@@ -1,15 +1,16 @@
 // std.url — URL parsing and building (spec §10.16).
 //
-// Pure-Osty parsing: scheme / host / port / path / query / fragment are
-// decomposed via `strings.splitN`. IPv6 literal hosts (`[::1]:8080`) are
-// not yet supported — the scheme expects a flat `host[:port]` authority,
-// matching the spec's §10.16 example. `join` implements a minimal
-// relative-reference merge: absolute refs (with scheme) replace the
-// base entirely, root-relative refs ("/x") keep the base authority, and
-// otherwise the relative path is appended to the base path's directory.
+// Goals of this implementation:
+//   - accept hierarchical absolute URLs plus relative references for `join`
+//   - handle bracketed IPv6 literal authorities (`https://[::1]:8443/...`)
+//   - percent-decode query / fragment components while preserving path escapes
+//   - produce deterministic query-string output even though `query` is a Map
+//   - resolve dot-segments per RFC 3986 when merging relative references
 
-use std.strings
+use std.bytes
+use std.char
 use std.error
+use std.strings
 
 pub struct Url {
     pub scheme: String,
@@ -20,20 +21,7 @@ pub struct Url {
     pub fragment: String?,
 
     pub fn toString(self) -> String {
-        let mut out = "{self.scheme}://{self.host}"
-        out = match self.port {
-            Some(p) -> "{out}:{p}",
-            None    -> out,
-        }
-        out = "{out}{self.path}"
-        if self.query.isEmpty() == false {
-            out = "{out}?{encodeQuery(self.query)}"
-        }
-        out = match self.fragment {
-            Some(f) -> "{out}#{f}",
-            None    -> out,
-        }
-        out
+        stringifyParts(urlPartsFromUrl(self))
     }
 
     pub fn queryValues(self, key: String) -> List<String> {
@@ -44,153 +32,608 @@ pub struct Url {
     }
 }
 
-pub fn parse(text: String) -> Result<Url, error.BasicError> {
-    let schemeParts = strings.splitN(text, "://", 2)
-    if schemeParts.len() != 2 {
-        return Err(urlError("url: missing scheme in {text}"))
-    }
-    let scheme = schemeParts[0]
-    if scheme.isEmpty() {
-        return Err(urlError("url: empty scheme in {text}"))
-    }
-    let rest = schemeParts[1]
+pub fn parse(text: String) -> Result<Url, Error> {
+    let parts = parseReference(text, true)?
+    Ok(urlFromParts(parts))
+}
 
-    let fragSplit = strings.splitN(rest, "#", 2)
-    let beforeFragment = fragSplit[0]
-    let fragment: String? = if fragSplit.len() == 2 { Some(fragSplit[1]) } else { None }
+pub fn join(base: String, relative: String) -> Result<String, Error> {
+    if relative.isEmpty() {
+        return Ok(base)
+    }
+    let rel = parseReference(relative, false)?
+    if !rel.scheme.isEmpty() {
+        return Ok(stringifyParts(normalizeAbsoluteReference(rel)))
+    }
+    let baseParts = parseReference(base, true)?
+    Ok(stringifyParts(resolveReference(baseParts, rel)))
+}
 
-    let querySplit = strings.splitN(beforeFragment, "?", 2)
-    let beforeQuery = querySplit[0]
-    let query: Map<String, String> = if querySplit.len() == 2 {
-        parseQuery(querySplit[1])
+struct UrlParts {
+    scheme: String,
+    host: String,
+    port: Int?,
+    path: String,
+    query: Map<String, String>,
+    hasQuery: Bool,
+    fragment: String?,
+    hasAuthority: Bool,
+}
+
+fn urlPartsFromUrl(u: Url) -> UrlParts {
+    UrlParts {
+        scheme: asciiLowerString(u.scheme),
+        host: asciiLowerString(u.host),
+        port: u.port,
+        path: u.path,
+        query: u.query,
+        hasQuery: !u.query.isEmpty(),
+        fragment: u.fragment,
+        hasAuthority: inferHasAuthority(u),
+    }
+}
+
+fn urlFromParts(parts: UrlParts) -> Url {
+    Url {
+        scheme: parts.scheme,
+        host: parts.host,
+        port: parts.port,
+        path: parts.path,
+        query: parts.query,
+        fragment: parts.fragment,
+    }
+}
+
+fn inferHasAuthority(u: Url) -> Bool {
+    if !u.host.isEmpty() || u.port.isSome() {
+        return true
+    }
+    !u.scheme.isEmpty() && strings.startsWith(u.path, "/")
+}
+
+fn parseReference(text: String, requireScheme: Bool) -> Result<UrlParts, Error> {
+    let chars = text.chars()
+    let hash = findChar(chars, '#', 0)
+    let beforeFragment = if hash < 0 {
+        text
     } else {
-        {:}
+        sliceChars(chars, 0, hash)
+    }
+    let fragment = if hash < 0 {
+        None
+    } else {
+        Some(decodePercentComponent(sliceChars(chars, hash + 1, chars.len()), "fragment")?)
     }
 
-    let pathSplit = strings.splitN(beforeQuery, "/", 2)
-    let authority = pathSplit[0]
-    let path = if pathSplit.len() == 2 { "/{pathSplit[1]}" } else { "" }
+    let beforeChars = beforeFragment.chars()
+    let qmark = findChar(beforeChars, '?', 0)
+    let beforeQuery = if qmark < 0 {
+        beforeFragment
+    } else {
+        sliceChars(beforeChars, 0, qmark)
+    }
+    let hasQuery = qmark >= 0
+    let query = if qmark < 0 {
+        {:}
+    } else {
+        parseQuery(sliceChars(beforeChars, qmark + 1, beforeChars.len()))?
+    }
 
-    let (host, port) = parseAuthority(authority)?
+    let (scheme, rest) = parseSchemeAndRest(beforeQuery, requireScheme)?
+    let (hasAuthority, host, port, path) = parseAuthorityAndPath(rest)?
 
-    Ok(Url {
+    Ok(UrlParts {
         scheme: scheme,
         host: host,
         port: port,
         path: path,
         query: query,
+        hasQuery: hasQuery,
         fragment: fragment,
+        hasAuthority: hasAuthority,
     })
 }
 
-pub fn join(base: String, relative: String) -> Result<String, error.BasicError> {
-    if relative.isEmpty() {
-        return Ok(base)
-    }
-    if strings.contains(relative, "://") {
-        return Ok(relative)
-    }
-    let baseUrl = parse(base)?
-    let relativeChars = relative.chars()
-    if relativeChars.len() > 0 && relativeChars[0] == '/' {
-        let merged = Url {
-            scheme: baseUrl.scheme,
-            host: baseUrl.host,
-            port: baseUrl.port,
-            path: relative,
-            query: {:},
-            fragment: None,
-        }
-        return Ok(merged.toString())
-    }
-    let dir = dirnameOf(baseUrl.path)
-    let merged = Url {
-        scheme: baseUrl.scheme,
-        host: baseUrl.host,
-        port: baseUrl.port,
-        path: "{dir}{relative}",
-        query: {:},
-        fragment: None,
-    }
-    Ok(merged.toString())
-}
-
-fn parseAuthority(authority: String) -> Result<(String, Int?), error.BasicError> {
-    if authority.isEmpty() {
-        return Ok(("", None))
-    }
-    let parts = strings.splitN(authority, ":", 2)
-    if parts.len() == 1 {
-        return Ok((parts[0], None))
-    }
-    let host = parts[0]
-    let portStr = parts[1]
-    if portStr.isEmpty() {
-        return Ok((host, None))
-    }
-    let port = parsePort(portStr)?
-    Ok((host, Some(port)))
-}
-
-fn parsePort(s: String) -> Result<Int, error.BasicError> {
-    if s.isEmpty() {
-        return Err(urlError("url: empty port"))
-    }
-    let chars = s.chars()
-    let mut n = 0
+fn parseSchemeAndRest(text: String, requireScheme: Bool) -> Result<(String, String), Error> {
+    let chars = text.chars()
+    let mut colon = -1
     let mut i = 0
     for i < chars.len() {
         let c = chars[i]
-        if c >= '0' && c <= '9' {
-            n = n * 10 + (c.toInt() - '0'.toInt())
-        } else {
-            return Err(urlError("url: invalid port {s}"))
+        if c == ':' {
+            colon = i
+            break
+        }
+        if c == '/' || c == '?' || c == '#' {
+            break
         }
         i = i + 1
     }
-    if n > 65535 {
-        return Err(urlError("url: port out of range: {s}"))
+    if colon < 0 {
+        if requireScheme {
+            return Err(urlError("url: missing scheme in {text}"))
+        }
+        return Ok(("", text))
+    }
+    let scheme = sliceChars(chars, 0, colon)
+    if isValidScheme(scheme) {
+        return Ok((asciiLowerString(scheme), sliceChars(chars, colon + 1, chars.len())))
+    }
+    if requireScheme {
+        return Err(urlError("url: invalid scheme in {text}"))
+    }
+    Ok(("", text))
+}
+
+fn parseAuthorityAndPath(rest: String) -> Result<(Bool, String, Int?, String), Error> {
+    if !strings.startsWith(rest, "//") {
+        validatePercentEncoding(rest, "path")?
+        return Ok((false, "", None, rest))
+    }
+    let chars = rest.chars()
+    let after = sliceChars(chars, 2, chars.len())
+    let afterChars = after.chars()
+    let slash = findChar(afterChars, '/', 0)
+    let authority = if slash < 0 {
+        after
+    } else {
+        sliceChars(afterChars, 0, slash)
+    }
+    let path = if slash < 0 {
+        ""
+    } else {
+        sliceChars(afterChars, slash, afterChars.len())
+    }
+    validatePercentEncoding(path, "path")?
+    let (host, port) = parseAuthority(authority)?
+    Ok((true, host, port, path))
+}
+
+fn parseAuthority(authority: String) -> Result<(String, Int?), Error> {
+    if authority.isEmpty() {
+        return Ok(("", None))
+    }
+    let chars = authority.chars()
+    if findChar(chars, '@', 0) >= 0 {
+        return Err(urlError("url: userinfo not supported: {authority}"))
+    }
+    if chars[0] == '[' {
+        let close = findChar(chars, ']', 1)
+        if close < 0 {
+            return Err(urlError("url: missing ] in authority: {authority}"))
+        }
+        let host = asciiLowerString(sliceChars(chars, 1, close))
+        let rest = sliceChars(chars, close + 1, chars.len())
+        if rest.isEmpty() {
+            return Ok((host, None))
+        }
+        let restChars = rest.chars()
+        if restChars[0] != ':' {
+            return Err(urlError("url: unexpected trailing data in authority: {authority}"))
+        }
+        let portText = sliceChars(restChars, 1, restChars.len())
+        if portText.isEmpty() {
+            return Err(urlError("url: empty port in authority: {authority}"))
+        }
+        return Ok((host, Some(parsePort(portText)?)))
+    }
+    let lastColon = lastIndexOfChar(chars, ':')
+    if lastColon < 0 {
+        return Ok((asciiLowerString(authority), None))
+    }
+    let host = sliceChars(chars, 0, lastColon)
+    let portText = sliceChars(chars, lastColon + 1, chars.len())
+    if findChar(host.chars(), ':', 0) >= 0 {
+        return Err(urlError("url: bracket IPv6 literals in authority: {authority}"))
+    }
+    if portText.isEmpty() {
+        return Err(urlError("url: empty port in authority: {authority}"))
+    }
+    Ok((asciiLowerString(host), Some(parsePort(portText)?)))
+}
+
+fn parsePort(s: String) -> Result<Int, Error> {
+    if s.isEmpty() {
+        return Err(urlError("url: empty port"))
+    }
+    let mut n = 0
+    for c in s.chars() {
+        match char.digitValue(c) {
+            Some(d) -> {
+                n = n * 10 + d
+                if n > 65535 {
+                    return Err(urlError("url: port out of range: {s}"))
+                }
+            },
+            None -> return Err(urlError("url: invalid port {s}")),
+        }
     }
     Ok(n)
 }
 
-fn urlError(message: String) -> error.BasicError {
-    error.BasicError { message: message }
-}
-
-fn parseQuery(s: String) -> Map<String, String> {
+fn parseQuery(s: String) -> Result<Map<String, String>, Error> {
     let mut out: Map<String, String> = {:}
     if s.isEmpty() {
-        return out
+        return Ok(out)
     }
     for pair in strings.split(s, "&") {
         if pair.isEmpty() {
             continue
         }
         let kv = strings.splitN(pair, "=", 2)
-        let key = kv[0]
-        let value = if kv.len() == 2 { kv[1] } else { "" }
+        let key = decodePercentComponent(kv[0], "query key")?
+        let value = if kv.len() == 2 {
+            decodePercentComponent(kv[1], "query value")?
+        } else {
+            ""
+        }
         out.insert(key, value)
     }
-    out
+    Ok(out)
 }
 
 fn encodeQuery(q: Map<String, String>) -> String {
     let mut parts: List<String> = []
-    for (k, v) in q {
-        parts.push("{k}={v}")
+    for key in q.keys().sorted() {
+        let value = q.getOr(key, "")
+        parts.push("{encodeQueryComponent(key)}={encodeQueryComponent(value)}")
     }
     strings.join(parts, "&")
 }
 
-fn dirnameOf(path: String) -> String {
-    let chars = path.chars()
+fn resolveReference(base: UrlParts, rel: UrlParts) -> UrlParts {
+    if !rel.scheme.isEmpty() {
+        return normalizeAbsoluteReference(rel)
+    }
+    if rel.hasAuthority {
+        return UrlParts {
+            scheme: base.scheme,
+            host: rel.host,
+            port: rel.port,
+            path: removeDotSegments(rel.path),
+            query: rel.query,
+            hasQuery: rel.hasQuery,
+            fragment: rel.fragment,
+            hasAuthority: true,
+        }
+    }
+    if rel.path.isEmpty() {
+        let query = if rel.hasQuery { rel.query } else { base.query }
+        let hasQuery = if rel.hasQuery { true } else { base.hasQuery }
+        return UrlParts {
+            scheme: base.scheme,
+            host: base.host,
+            port: base.port,
+            path: base.path,
+            query: query,
+            hasQuery: hasQuery,
+            fragment: rel.fragment,
+            hasAuthority: base.hasAuthority,
+        }
+    }
+    let mergedPath = if strings.startsWith(rel.path, "/") {
+        removeDotSegments(rel.path)
+    } else {
+        removeDotSegments(mergePaths(base.path, rel.path, base.hasAuthority))
+    }
+    UrlParts {
+        scheme: base.scheme,
+        host: base.host,
+        port: base.port,
+        path: mergedPath,
+        query: rel.query,
+        hasQuery: rel.hasQuery,
+        fragment: rel.fragment,
+        hasAuthority: base.hasAuthority,
+    }
+}
+
+fn normalizeAbsoluteReference(parts: UrlParts) -> UrlParts {
+    UrlParts {
+        scheme: parts.scheme,
+        host: parts.host,
+        port: parts.port,
+        path: removeDotSegments(parts.path),
+        query: parts.query,
+        hasQuery: parts.hasQuery,
+        fragment: parts.fragment,
+        hasAuthority: parts.hasAuthority,
+    }
+}
+
+fn mergePaths(basePath: String, relPath: String, baseHasAuthority: Bool) -> String {
+    if baseHasAuthority && basePath.isEmpty() {
+        return "/{relPath}"
+    }
+    let chars = basePath.chars()
+    let slash = lastIndexOfChar(chars, '/')
+    if slash < 0 {
+        return relPath
+    }
+    "{sliceChars(chars, 0, slash + 1)}{relPath}"
+}
+
+fn removeDotSegments(path: String) -> String {
+    let mut input = path
+    let mut output = ""
+    for !input.isEmpty() {
+        if strings.startsWith(input, "../") {
+            input = tailChars(input, 3)
+        } else if strings.startsWith(input, "./") {
+            input = tailChars(input, 2)
+        } else if strings.startsWith(input, "/./") {
+            input = "/{tailChars(input, 3)}"
+        } else if input == "/." {
+            input = "/"
+        } else if strings.startsWith(input, "/../") {
+            input = "/{tailChars(input, 4)}"
+            output = removeLastSegment(output)
+        } else if input == "/.." {
+            input = "/"
+            output = removeLastSegment(output)
+        } else if input == "." || input == ".." {
+            input = ""
+        } else {
+            let cut = nextPathSegmentBoundary(input)
+            output = "{output}{takeChars(input, cut)}"
+            input = tailChars(input, cut)
+        }
+    }
+    output
+}
+
+fn nextPathSegmentBoundary(s: String) -> Int {
+    let chars = s.chars()
+    if chars.len() == 0 {
+        return 0
+    }
+    let mut i = if chars[0] == '/' { 1 } else { 0 }
+    for i < chars.len() {
+        if chars[i] == '/' {
+            return i
+        }
+        i = i + 1
+    }
+    chars.len()
+}
+
+fn removeLastSegment(s: String) -> String {
+    let chars = s.chars()
+    let last = lastIndexOfChar(chars, '/')
+    if last < 0 {
+        return ""
+    }
+    sliceChars(chars, 0, last)
+}
+
+fn stringifyParts(parts: UrlParts) -> String {
+    let mut out = ""
+    if !parts.scheme.isEmpty() {
+        out = "{parts.scheme}:"
+    }
+    if parts.hasAuthority {
+        out = "{out}//{authorityText(parts.host, parts.port)}"
+    }
+    out = "{out}{encodePath(parts.path)}"
+    if parts.hasQuery {
+        out = "{out}?"
+        if !parts.query.isEmpty() {
+            out = "{out}{encodeQuery(parts.query)}"
+        }
+    }
+    out = match parts.fragment {
+        Some(f) -> "{out}#{encodeFragment(f)}",
+        None    -> out,
+    }
+    out
+}
+
+fn authorityText(host: String, port: Int?) -> String {
+    let renderedHost = if hostNeedsBrackets(host) {
+        "[{host}]"
+    } else {
+        host
+    }
+    match port {
+        Some(p) -> "{renderedHost}:{p}",
+        None    -> renderedHost,
+    }
+}
+
+fn hostNeedsBrackets(host: String) -> Bool {
+    findChar(host.chars(), ':', 0) >= 0
+}
+
+fn encodePath(path: String) -> String {
+    encodeComponent(path, pathMode)
+}
+
+fn encodeQueryComponent(text: String) -> String {
+    encodeComponent(text, queryMode)
+}
+
+fn encodeFragment(text: String) -> String {
+    encodeComponent(text, fragmentMode)
+}
+
+let pathMode = 0
+let queryMode = 1
+let fragmentMode = 2
+
+fn encodeComponent(text: String, mode: Int) -> String {
+    let chars = text.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        let c = chars[i]
+        if c == '%' && isHexTriplet(chars, i) {
+            out = "{out}%{char.toAsciiUpper(chars[i + 1])}{char.toAsciiUpper(chars[i + 2])}"
+            i = i + 3
+            continue
+        }
+        if componentAllows(c, mode) {
+            out = "{out}{c}"
+        } else {
+            out = "{out}{percentEncodeChar(c)}"
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn componentAllows(c: Char, mode: Int) -> Bool {
+    if isUnreserved(c) {
+        return true
+    }
+    if mode == queryMode {
+        return false
+    }
+    if isSubdelim(c) || c == ':' || c == '@' {
+        return true
+    }
+    if mode == pathMode {
+        return c == '/'
+    }
+    c == '/' || c == '?'
+}
+
+fn isUnreserved(c: Char) -> Bool {
+    char.isAsciiAlphanumeric(c) || c == '-' || c == '.' || c == '_' || c == '~'
+}
+
+fn isSubdelim(c: Char) -> Bool {
+    c == '!' || c == '$' || c == '&' || c == '(' || c == ')' ||
+    c == '*' || c == '+' || c == ',' || c == ';' || c == '='
+}
+
+fn percentEncodeChar(c: Char) -> String {
+    let mut out = ""
+    for b in c.toString().bytes() {
+        let n = b.toInt()
+        let hi = char.toAsciiUpper(char.fromDigit((n >> 4) & 0x0F, 16).unwrap())
+        let lo = char.toAsciiUpper(char.fromDigit(n & 0x0F, 16).unwrap())
+        out = "{out}%{hi}{lo}"
+    }
+    out
+}
+
+fn decodePercentComponent(text: String, kind: String) -> Result<String, Error> {
+    let chars = text.chars()
+    let mut out: List<Byte> = []
+    let mut i = 0
+    for i < chars.len() {
+        if chars[i] == '%' {
+            if !isHexTriplet(chars, i) {
+                return Err(urlError("url: invalid percent-escape in {kind}: {text}"))
+            }
+            let hi = char.hexDigitValue(chars[i + 1]).unwrap()
+            let lo = char.hexDigitValue(chars[i + 2]).unwrap()
+            out.push(((hi << 4) | lo).toByte().unwrap())
+            i = i + 3
+            continue
+        }
+        for b in chars[i].toString().bytes() {
+            out.push(b)
+        }
+        i = i + 1
+    }
+    bytes.from(out).toString()
+}
+
+fn validatePercentEncoding(text: String, kind: String) -> Result<(), Error> {
+    let chars = text.chars()
+    let mut i = 0
+    for i < chars.len() {
+        if chars[i] == '%' && !isHexTriplet(chars, i) {
+            return Err(urlError("url: invalid percent-escape in {kind}: {text}"))
+        }
+        if chars[i] == '%' {
+            i = i + 3
+        } else {
+            i = i + 1
+        }
+    }
+    Ok(())
+}
+
+fn isHexTriplet(chars: List<Char>, at: Int) -> Bool {
+    at + 2 < chars.len() &&
+    char.isAsciiHexDigit(chars[at + 1]) &&
+    char.isAsciiHexDigit(chars[at + 2])
+}
+
+fn isValidScheme(s: String) -> Bool {
+    let chars = s.chars()
+    if chars.len() == 0 || !char.isAsciiAlpha(chars[0]) {
+        return false
+    }
+    let mut i = 1
+    for i < chars.len() {
+        let c = chars[i]
+        if !char.isAsciiAlphanumeric(c) && c != '+' && c != '-' && c != '.' {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+fn asciiLowerString(s: String) -> String {
+    let mut out = ""
+    for c in s.chars() {
+        out = "{out}{char.toAsciiLower(c)}"
+    }
+    out
+}
+
+fn sliceChars(chars: List<Char>, start: Int, end: Int) -> String {
+    let mut out = ""
+    let mut i = start
+    for i < end {
+        out = "{out}{chars[i]}"
+        i = i + 1
+    }
+    out
+}
+
+fn takeChars(s: String, n: Int) -> String {
+    let chars = s.chars()
+    sliceChars(chars, 0, n)
+}
+
+fn tailChars(s: String, n: Int) -> String {
+    let chars = s.chars()
+    sliceChars(chars, n, chars.len())
+}
+
+fn findChar(chars: List<Char>, target: Char, start: Int) -> Int {
+    let mut i = start
+    for i < chars.len() {
+        if chars[i] == target {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn lastIndexOfChar(chars: List<Char>, target: Char) -> Int {
+    if chars.len() == 0 {
+        return -1
+    }
     let mut i = chars.len() - 1
     for i >= 0 {
-        if chars[i] == '/' {
-            return path[0..i + 1]
+        if chars[i] == target {
+            return i
+        }
+        if i == 0 {
+            break
         }
         i = i - 1
     }
-    ""
+    -1
+}
+
+fn urlError(message: String) -> Error {
+    error.new(message)
 }

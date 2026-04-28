@@ -10,7 +10,6 @@
 package llvmgen
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
@@ -444,6 +443,9 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 			return src, true
 		}
 		if src, ok := g.staticStdRandomMethodSourceType(e); ok {
+			return src, true
+		}
+		if src, ok := g.staticStdCryptoCallSourceType(e); ok {
 			return src, true
 		}
 		if src, ok := g.staticPtrBackedErrorCallSourceType(e); ok {
@@ -939,6 +941,9 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 			return out, true
 		}
 		if out, ok := g.stdRandomMethodStaticResult(e); ok {
+			return out, true
+		}
+		if out, ok := g.stdCryptoCallStaticResult(e); ok {
 			return out, true
 		}
 	case *ast.FieldExpr:
@@ -1900,13 +1905,12 @@ func resolveAliasNamedTarget(name string, env typeEnv, seen map[string]bool) (st
 	return target.Path[0], true, nil
 }
 
+// llvmAggregatePathIndices joins a sequence of GEP path indices into the
+// LLVM `i32 0, i32 N0, i32 N1, ...` form expected by GEP instructions
+// that traverse nested aggregates. Delegates to the Osty-sourced
+// `mirLlvmAggregatePathIndices` (`toolchain/mir_generator.osty`).
 func llvmAggregatePathIndices(path []int) string {
-	parts := make([]string, 0, len(path)+1)
-	parts = append(parts, "i32 0")
-	for _, index := range path {
-		parts = append(parts, fmt.Sprintf("i32 %d", index))
-	}
-	return strings.Join(parts, ", ")
+	return mirLlvmAggregatePathIndices(path)
 }
 
 func llvmType(t ast.Type, env typeEnv) (string, error) {
@@ -1983,15 +1987,17 @@ func llvmMethodOwnerType(ownerName string, structs map[string]*structInfo, enums
 	return "", false
 }
 
+// llvmMethodIRName composes the LLVM IR symbol for a named method.
+// Delegates to the Osty-sourced `mirLlvmMethodIRName`
+// (`toolchain/mir_generator.osty`).
 func llvmMethodIRName(ownerName, methodName string) string {
-	return sanitizeLLVMName(ownerName) + "__" + sanitizeLLVMName(methodName)
+	return mirLlvmMethodIRName(ownerName, methodName)
 }
 
+// llvmMethodReceiverIRType returns the LLVM type for a method receiver.
+// Delegates to `mirLlvmMethodReceiverIRType`.
 func llvmMethodReceiverIRType(ownerType string, mutable bool) string {
-	if mutable {
-		return "ptr"
-	}
-	return ownerType
+	return mirLlvmMethodReceiverIRType(ownerType, mutable)
 }
 
 func llvmParamIRType(param paramInfo) string {

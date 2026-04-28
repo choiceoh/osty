@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/osty/osty/internal/resolve"
@@ -58,4 +59,29 @@ func TestCharModuleSurface(t *testing.T) {
 			t.Errorf("std.char.%s not public", name)
 		}
 	}
+}
+
+func TestCharModuleSourcePinsAsciiContracts(t *testing.T) {
+	src := charModuleSource(t)
+	for _, want := range []string{
+		"'0' <= c && c <= '9'",
+		"('a' <= c && c <= 'f')",
+		"radix < 2 || radix > 36",
+		"toAsciiLower(a) == toAsciiLower(b)",
+		"('a'.toInt() + d - 10).toChar()",
+	} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("std.char source missing %q", want)
+		}
+	}
+}
+
+func charModuleSource(t *testing.T) string {
+	t.Helper()
+	reg := LoadCached()
+	mod := reg.Modules["char"]
+	if mod == nil {
+		t.Fatal("stdlib char module missing")
+	}
+	return string(mod.Source)
 }
