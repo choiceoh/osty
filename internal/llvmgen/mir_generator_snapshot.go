@@ -5785,6 +5785,7 @@ func mirRtMapToStringSymbol() string  { return mirRtMapSymbol("to_string") }
 func mirRtSetClearSymbol() string   { return mirRtSetSymbol("clear") }
 func mirRtSetLenSymbolName() string { return mirRtSetSymbol("len") }
 func mirRtSetToListSymbol() string  { return mirRtSetSymbol("to_list") }
+func mirRtSetToStringSymbol() string { return mirRtSetSymbol("to_string") }
 
 // Osty: mirRtBytes* fixed-symbols
 func mirRtBytesLenSymbolName() string { return mirRtBytesSymbol("len") }

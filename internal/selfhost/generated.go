@@ -36634,6 +36634,12 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "clear", owner: "Set", receiverTy: tSetT, retTy: tUnit(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16579:5
 	checkRegisterFn(env, &CheckFnSig{name: "toList", owner: "Set", receiverTy: tSetT, retTy: tListT, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// Set<T>.toString() -> String — mirrors List.toString / Map.toString.
+	// Single runtime entry; the Set carries `elem_kind` so the C code
+	// dispatches per-element formatters internally. Composite element
+	// types abort with a clear runtime message. Output uses braces
+	// (`{a, b, c}`) to match the set-equivalent surface of Map.
+	checkRegisterFn(env, &CheckFnSig{name: "toString", owner: "Set", receiverTy: tSetT, retTy: tString(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16585:5
 	checkRegisterFn(env, &CheckFnSig{name: "union", owner: "Set", receiverTy: tSetT, retTy: tSetT, paramNames: []string{"other"}, paramTys: []int{tSetT}, generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16590:5

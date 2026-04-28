@@ -10379,6 +10379,64 @@ int64_t osty_rt_set_len(void *raw_set) {
     return set->len;
 }
 
+/* Set<T>.toString — `{a, b, c}`-shaped (braces match Map's set-style
+ * output; lists use `[...]`). One runtime entry; the Set struct
+ * carries `elem_kind` set at `osty_rt_set_new` time, so dispatch on
+ * the per-kind formatter happens internally. Composite element types
+ * abort with a clear runtime message until a callback-driven entry
+ * lands. Reuses the list_to_string formatter / grow / append helpers
+ * so empty / numeric / quoting conventions stay byte-identical
+ * across List, Map, and Set output. */
+const char *osty_rt_set_to_string(void *raw_set) {
+    osty_rt_set *set = osty_rt_set_cast(raw_set);
+    if (set == NULL || set->len == 0) {
+        return osty_rt_string_dup_site("{}", 2, "runtime.set.to_string");
+    }
+    osty_rt_list_format_one_fn fmt;
+    switch (set->elem_kind) {
+    case OSTY_RT_ABI_I64:
+        fmt = osty_rt_list_format_i64;
+        break;
+    case OSTY_RT_ABI_F64:
+        fmt = osty_rt_list_format_f64;
+        break;
+    case OSTY_RT_ABI_I1:
+        fmt = osty_rt_list_format_i1;
+        break;
+    case OSTY_RT_ABI_PTR:
+    case OSTY_RT_ABI_STRING:
+        /* Same caveat as Map's ptr lane: the only ptr-shaped Set
+         * elements that reach this entry today are Strings; composite
+         * ptrs would surface garbage, so we route them through the
+         * String formatter and rely on the Set's `elem_kind` having
+         * been set to PTR only for hashable string-equivalent types. */
+        fmt = osty_rt_list_format_string;
+        break;
+    default:
+        osty_rt_abort("runtime.set.to_string: unsupported element kind");
+    }
+    size_t elem_size = osty_rt_kind_size(set->elem_kind);
+    size_t cap = 64;
+    size_t len = 0;
+    char *buf = (char *)malloc(cap);
+    if (buf == NULL) {
+        osty_rt_abort("runtime.set.to_string: out of memory");
+    }
+    buf[len++] = '{';
+    for (int64_t i = 0; i < set->len; i++) {
+        if (i > 0) {
+            osty_rt_list_to_string_append(&buf, &cap, &len, ", ", 2);
+        }
+        const unsigned char *slot = set->items + (size_t)i * elem_size;
+        fmt(&buf, &cap, &len, slot);
+    }
+    osty_rt_list_to_string_grow(&buf, &cap, len + 2);
+    buf[len++] = '}';
+    const char *out = osty_rt_string_dup_site(buf, len, "runtime.set.to_string");
+    free(buf);
+    return out;
+}
+
 void *osty_rt_set_to_list(void *raw_set) {
     osty_rt_set *set = osty_rt_set_cast(raw_set);
     void *out = osty_rt_list_new();

@@ -1178,7 +1178,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicMapIncr, mir.IntrinsicMapToString:
 		return true
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
-		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
+		mir.IntrinsicSetToList, mir.IntrinsicSetRemove, mir.IntrinsicSetToString:
 		return true
 	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesEndsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesLastIndexOf, mir.IntrinsicBytesSplit, mir.IntrinsicBytesJoin, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat, mir.IntrinsicBytesReplace, mir.IntrinsicBytesReplaceAll, mir.IntrinsicBytesTrimLeft, mir.IntrinsicBytesTrimRight, mir.IntrinsicBytesTrim, mir.IntrinsicBytesTrimSpace, mir.IntrinsicBytesToUpper, mir.IntrinsicBytesToLower, mir.IntrinsicBytesToHex, mir.IntrinsicBytesSlice:
 		return true
@@ -4057,7 +4057,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicMapIncr, mir.IntrinsicMapToString:
 		return g.emitMapIntrinsic(i)
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
-		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
+		mir.IntrinsicSetToList, mir.IntrinsicSetRemove, mir.IntrinsicSetToString:
 		return g.emitSetIntrinsic(i)
 	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesEndsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesLastIndexOf, mir.IntrinsicBytesSplit, mir.IntrinsicBytesJoin, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat, mir.IntrinsicBytesReplace, mir.IntrinsicBytesReplaceAll, mir.IntrinsicBytesTrimLeft, mir.IntrinsicBytesTrimRight, mir.IntrinsicBytesTrim, mir.IntrinsicBytesTrimSpace, mir.IntrinsicBytesToUpper, mir.IntrinsicBytesToLower, mir.IntrinsicBytesToHex, mir.IntrinsicBytesSlice:
 		return g.emitBytesIntrinsic(i)
@@ -5188,6 +5188,18 @@ func (g *mirGen) emitSetIntrinsic(i *mir.IntrinsicInstr) error {
 			&LlvmValue{typ: "ptr", name: setReg},
 			&LlvmValue{typ: elemLLVM, name: vReg},
 			elemString)
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicSetToString:
+		// `{a, b, c}`-shaped stringification. One runtime entry —
+		// the Set struct carries `elem_kind` set at allocation time,
+		// so the per-kind formatter is picked inside C; lowering just
+		// emits the call. Composite element types abort inside the
+		// runtime today.
+		sym := mirRtSetToStringSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: setReg}})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	}
