@@ -334,8 +334,11 @@ func builtinResultTypeFromAST(t ast.Type, env typeEnv) (builtinResultType, bool)
 	}, true
 }
 
+// llvmRangeTypeName returns the canonical LLVM aggregate name for
+// `Range<T>` — e.g. `%osty.Range_i64`. Delegates to the Osty-sourced
+// `mirLlvmRangeTypeName` (`toolchain/mir_generator.osty`).
 func llvmRangeTypeName(elemTyp string) string {
-	return llvmBuiltinAggregateName("Range", elemTyp)
+	return mirLlvmRangeTypeName(elemTyp)
 }
 
 func builtinRangeTypeFromAST(t ast.Type, env typeEnv) (builtinRangeType, bool) {
@@ -1360,10 +1363,11 @@ func (g *generator) emitEnvArgsPrologue() {
 	g.declareRuntimeSymbol(ostyRtEnvArgsInitSymbol, "void", []paramInfo{
 		{typ: "i64"}, {typ: "ptr"},
 	})
-	argcI64 := fmt.Sprintf("%%%s.i64", ostyEnvArgsArgcParam)
+	argcI64 := "%" + ostyEnvArgsArgcParam + ".i64"
 	g.body = append(g.body,
-		fmt.Sprintf("  %s = sext i32 %%%s to i64", argcI64, ostyEnvArgsArgcParam),
-		fmt.Sprintf("  call void @%s(i64 %s, ptr %%%s)", ostyRtEnvArgsInitSymbol, argcI64, ostyEnvArgsArgvParam),
+		mirSExtI32ToI64Text(argcI64, "%"+ostyEnvArgsArgcParam),
+		mirCallVoidI64PtrText(ostyRtEnvArgsInitSymbol, argcI64,
+			"%"+ostyEnvArgsArgvParam),
 	)
 }
 
@@ -1567,7 +1571,7 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 		if g.currentReachable {
 			emitter := g.toOstyEmitter()
 			g.releaseGCRoots(emitter)
-			emitter.body = append(emitter.body, "  ret void")
+			emitter.body = append(emitter.body, mirRetVoidText())
 			g.takeOstyEmitter(emitter)
 		}
 	} else {
@@ -2020,6 +2024,9 @@ func llvmFloatConstLiteral(value float64) string {
 	}
 }
 
+// llvmGlobalIRName composes the LLVM IR symbol used for an Osty
+// top-level `let` global. Delegates to the Osty-sourced
+// `mirLlvmGlobalIRName` (`toolchain/mir_generator.osty`).
 func llvmGlobalIRName(name string) string {
-	return "@osty_global_" + sanitizeLLVMName(name)
+	return mirLlvmGlobalIRName(name)
 }

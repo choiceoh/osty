@@ -1531,7 +1531,7 @@ func (g *generator) emitQuestionExpr(expr *ast.QuestionExpr) (value, error) {
 		g.emitTestingAbortWithEmitter(emitter, g.benchQuestionFailMessage(expr), contLabel)
 	} else {
 		g.releaseGCRoots(emitter)
-		emitter.body = append(emitter.body, "  ret ptr null")
+		emitter.body = append(emitter.body, mirRetPtrNullText())
 		emitter.body = append(emitter.body, mirLabelText(contLabel))
 	}
 	g.takeOstyEmitter(emitter)
@@ -5715,21 +5715,20 @@ func (g *generator) emitListGetCall(call *ast.CallExpr, base value, elemTyp stri
 // already ptr-backed (element = ptr), the caller routes to the
 // direct null=None / non-null=Some phi instead. The third return is
 // `ok=false` for element types the backend does not yet know how to
-// box (anything outside i1 / i8 / i32 / i64 / double / ptr).
+// box (anything outside i1 / i8 / i32 / i64 / double / ptr). Delegates
+// to the Osty-sourced `mirListGetBoxByteSize`
+// (`toolchain/mir_generator.osty`); the Osty side returns the size as a
+// single int with a `-1` sentinel for the unsupported case so we can
+// reconstruct `(size, scalar, ok)` from the integer alone.
 func listGetBoxByteSize(elemTyp string) (int, bool, bool) {
-	switch elemTyp {
-	case "ptr":
-		return 0, false, true
-	case "i64", "double":
-		return 8, true, true
-	case "i32":
-		return 4, true, true
-	case "i8":
-		return 1, true, true
-	case "i1":
-		return 1, true, true
+	code := mirListGetBoxByteSize(elemTyp)
+	if code < 0 {
+		return 0, false, false
 	}
-	return 0, false, false
+	if code == 0 {
+		return 0, false, true
+	}
+	return code, true, true
 }
 
 func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
@@ -5845,14 +5844,12 @@ func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
 // box used by `Map.get` / `Map.getOr` when V is not already ptr. Only
 // the set of V types supported by the map-key runtime macros is
 // recognised; anything else routes to the unsupported diagnostic.
+// Delegates to the Osty-sourced `mirMapScalarValueByteSize`
+// (`toolchain/mir_generator.osty`); the Osty side returns `0` for
+// unsupported types so the Go wrapper rebuilds the bool from `> 0`.
 func mapScalarValueByteSize(valTyp string) (int, bool) {
-	switch valTyp {
-	case "i64", "double":
-		return 8, true
-	case "i1":
-		return 1, true
-	}
-	return 0, false
+	size := mirMapScalarValueByteSize(valTyp)
+	return size, size > 0
 }
 
 // emitMapGet lowers `m.get(key) -> V?` as the real Option-returning
@@ -6758,7 +6755,7 @@ func (g *generator) emitResultAbortCall(call *ast.CallExpr) (value, error) {
 		llvmPrintlnString(emitter, msgPtr)
 	}
 	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
-	emitter.body = append(emitter.body, "  call void @exit(i32 1)")
+	emitter.body = append(emitter.body, mirCallExitOneText())
 	g.takeOstyEmitter(emitter)
 	return value{typ: "void", ref: "undef"}, nil
 }
@@ -6790,8 +6787,8 @@ func (g *generator) emitOptionUnwrap(base value, optType *ast.OptionalType, call
 	msgPtr := llvmStringLiteral(emitter, msg)
 	llvmPrintlnString(emitter, msgPtr)
 	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
-	emitter.body = append(emitter.body, "  call void @exit(i32 1)")
-	emitter.body = append(emitter.body, "  unreachable")
+	emitter.body = append(emitter.body, mirCallExitOneText())
+	emitter.body = append(emitter.body, mirUnreachableText())
 	emitter.body = append(emitter.body, mirLabelText(someLabel))
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(someLabel)

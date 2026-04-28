@@ -19,6 +19,7 @@ package llvmgen
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
@@ -1222,10 +1223,7 @@ func (g *generator) emitBuiltinOptionSomeCall(call *ast.CallExpr) (value, bool, 
 			toOstyValue(size),
 			sitePtr,
 		})
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  store %s %s, ptr %s",
-			loaded.typ, loaded.ref, box.name,
-		))
+		emitter.body = append(emitter.body, mirStoreText(loaded.typ, loaded.ref, box.name))
 		g.takeOstyEmitter(emitter)
 		g.needsGCRuntime = true
 		out := fromOstyValue(box)
@@ -1244,13 +1242,10 @@ func (g *generator) emitBuiltinOptionSomeCall(call *ast.CallExpr) (value, bool, 
 		sitePtr := llvmStringLiteral(emitter, siteName)
 		box := llvmCall(emitter, "ptr", "osty.gc.alloc_v1", []*LlvmValue{
 			toOstyValue(value{typ: "i64", ref: "1"}),
-			toOstyValue(value{typ: "i64", ref: fmt.Sprintf("%d", size)}),
+			toOstyValue(value{typ: "i64", ref: strconv.Itoa(size)}),
 			sitePtr,
 		})
-		emitter.body = append(emitter.body, fmt.Sprintf(
-			"  store %s %s, ptr %s",
-			loaded.typ, loaded.ref, box.name,
-		))
+		emitter.body = append(emitter.body, mirStoreText(loaded.typ, loaded.ref, box.name))
 		g.takeOstyEmitter(emitter)
 		g.needsGCRuntime = true
 		out := fromOstyValue(box)
