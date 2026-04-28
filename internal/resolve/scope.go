@@ -92,8 +92,16 @@ func (k SymbolKind) IsValue() bool {
 
 // Symbol is a single declared name.
 type Symbol struct {
-	Name string
-	Kind SymbolKind
+	// StableID is the selfhost resolver's canonical symbol_id when the
+	// symbol was projected from a ResolveResult. Legacy Go-created symbols may
+	// leave it empty and use ID() as a compatibility identity.
+	StableID string
+	// PackageID and DeclID mirror the resolver-owned package_id / decl_id
+	// fields from the selfhost structured result.
+	PackageID string
+	DeclID    string
+	Name      string
+	Kind      SymbolKind
 	// Pos is the position of the declaration. Builtin symbols return the
 	// zero Pos.
 	Pos token.Pos

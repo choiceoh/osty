@@ -1,7 +1,6 @@
 package resolve
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
@@ -89,12 +88,15 @@ func importedUseSymbol(source *Symbol, u *ast.UseDecl, name string) *Symbol {
 		return placeholderUseSymbol(u, name, SymUnknown, false)
 	}
 	return &Symbol{
-		Name:    name,
-		Kind:    source.Kind,
-		Pos:     source.Pos,
-		Decl:    source.Decl,
-		Pub:     source.Pub,
-		Package: source.Package,
+		StableID:  source.StableID,
+		PackageID: source.PackageID,
+		DeclID:    source.DeclID,
+		Name:      name,
+		Kind:      source.Kind,
+		Pos:       source.Pos,
+		Decl:      source.Decl,
+		Pub:       source.Pub,
+		Package:   source.Package,
 	}
 }
 
@@ -117,13 +119,17 @@ func packageMemberDiagnostic(pkgName, member string, pos token.Pos, file string,
 }
 
 func privateReexportDiagnostic(pos token.Pos, pkgName, member, file string) *diag.Diagnostic {
-	target := pkgName + "." + member
-	out := diag.New(diag.Error, fmt.Sprintf("`pub use` cannot re-export private symbol `%s`", target)).
-		Code(diag.CodeReexportPrivate).
-		PrimaryPos(pos, "private re-export").
-		Note(fmt.Sprintf("`%s` is declared without `pub` in package `%s`", member, pkgName)).
-		Hint(fmt.Sprintf("make `%s` public or remove `pub` from this use", member)).
-		Build()
+	res := selfhost.ReexportPrivateDiagnostic(pkgName, member)
+	d := diag.New(diag.Error, res.Message).
+		Code(res.Code).
+		PrimaryPos(pos, res.Primary)
+	if res.Note != "" {
+		d.Note(res.Note)
+	}
+	if res.Hint != "" {
+		d.Hint(res.Hint)
+	}
+	out := d.Build()
 	if out.File == "" {
 		out.File = file
 	}

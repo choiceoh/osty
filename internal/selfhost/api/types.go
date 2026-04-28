@@ -224,57 +224,69 @@ type ResolveSummary struct {
 
 // ResolvedSymbol records one symbol declared by the self-host resolver.
 type ResolvedSymbol struct {
-	Node   int       `json:"node"`
-	Name   string    `json:"name"`
-	Kind   string    `json:"kind"`
-	Type   *TypeRepr `json:"type"`
-	Arity  int       `json:"arity"`
-	Depth  int       `json:"depth"`
-	Start  int       `json:"start"`
-	End    int       `json:"end"`
-	Public bool      `json:"public"`
-	File   string    `json:"file,omitempty"`
+	ID        string    `json:"symbolId,omitempty"`
+	PackageID string    `json:"packageId,omitempty"`
+	DeclID    string    `json:"declId,omitempty"`
+	Node      int       `json:"node"`
+	Name      string    `json:"name"`
+	Kind      string    `json:"kind"`
+	Type      *TypeRepr `json:"type"`
+	Arity     int       `json:"arity"`
+	Depth     int       `json:"depth"`
+	Start     int       `json:"start"`
+	End       int       `json:"end"`
+	Public    bool      `json:"public"`
+	File      string    `json:"file,omitempty"`
 }
 
 // ResolvedRef records one value/name reference plus its resolved target span
 // when available.
 type ResolvedRef struct {
-	Name        string `json:"name"`
-	Node        int    `json:"node"`
-	Start       int    `json:"start"`
-	End         int    `json:"end"`
-	File        string `json:"file,omitempty"`
-	TargetNode  int    `json:"targetNode"`
-	TargetStart int    `json:"targetStart"`
-	TargetEnd   int    `json:"targetEnd"`
-	TargetFile  string `json:"targetFile,omitempty"`
+	ID             string `json:"refId,omitempty"`
+	PackageID      string `json:"packageId,omitempty"`
+	BindingID      string `json:"bindingId,omitempty"`
+	TargetSymbolID string `json:"targetSymbolId,omitempty"`
+	Name           string `json:"name"`
+	Node           int    `json:"node"`
+	Start          int    `json:"start"`
+	End            int    `json:"end"`
+	File           string `json:"file,omitempty"`
+	TargetNode     int    `json:"targetNode"`
+	TargetStart    int    `json:"targetStart"`
+	TargetEnd      int    `json:"targetEnd"`
+	TargetFile     string `json:"targetFile,omitempty"`
 }
 
 // ResolvedTypeRef records one resolved type-name reference.
 type ResolvedTypeRef struct {
-	Name  string `json:"name"`
-	Node  int    `json:"node"`
-	Start int    `json:"start"`
-	End   int    `json:"end"`
-	File  string `json:"file,omitempty"`
+	ID        string `json:"typeRefId,omitempty"`
+	PackageID string `json:"packageId,omitempty"`
+	Name      string `json:"name"`
+	Node      int    `json:"node"`
+	Start     int    `json:"start"`
+	End       int    `json:"end"`
+	File      string `json:"file,omitempty"`
 }
 
 // ResolveDiagnosticRecord is one structured diagnostic produced by the
 // self-host resolver.
 type ResolveDiagnosticRecord struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Name    string `json:"name,omitempty"`
-	Hint    string `json:"hint,omitempty"`
-	Node    int    `json:"node"`
-	Start   int    `json:"start"`
-	End     int    `json:"end"`
-	File    string `json:"file,omitempty"`
+	ID        string `json:"diagnosticId,omitempty"`
+	PackageID string `json:"packageId,omitempty"`
+	Code      string `json:"code"`
+	Message   string `json:"message"`
+	Name      string `json:"name,omitempty"`
+	Hint      string `json:"hint,omitempty"`
+	Node      int    `json:"node"`
+	Start     int    `json:"start"`
+	End       int    `json:"end"`
+	File      string `json:"file,omitempty"`
 }
 
 // ResolveResult is the structured Go-facing surface for the bootstrapped
 // resolver.
 type ResolveResult struct {
+	PackageID   string                    `json:"packageId,omitempty"`
 	Summary     ResolveSummary            `json:"summary"`
 	Symbols     []ResolvedSymbol          `json:"symbols"`
 	Refs        []ResolvedRef             `json:"refs"`

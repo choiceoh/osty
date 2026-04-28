@@ -125,6 +125,120 @@ func TestNativeResolutionRowsCrossFile(t *testing.T) {
 	}
 }
 
+func TestNativeStructuredCrossFileRefCarriesStableTargetID(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.osty")
+	bPath := filepath.Join(dir, "b.osty")
+	if err := os.WriteFile(aPath, []byte(`pub fn helper() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte(`fn main() {
+    let value = helper()
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pkg, err := LoadPackageArenaFirst(dir)
+	if err != nil {
+		t.Fatalf("LoadPackageArenaFirst: %v", err)
+	}
+	result := ResolvePackage(pkg, NewPrelude())
+	if len(result.Diags) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", result.Diags)
+	}
+	helper := pkg.PkgScope.LookupLocal("helper")
+	if helper == nil || helper.StableID == "" || helper.PackageID == "" || helper.DeclID == "" {
+		t.Fatalf("helper stable ids missing: %#v", helper)
+	}
+	structured, err := NativeStructuredResult(pkg)
+	if err != nil {
+		t.Fatalf("NativeStructuredResult: %v", err)
+	}
+	var helperSym *selfhost.ResolvedSymbol
+	for i := range structured.Symbols {
+		if structured.Symbols[i].Name == "helper" && structured.Symbols[i].File == aPath {
+			helperSym = &structured.Symbols[i]
+			break
+		}
+	}
+	if helperSym == nil || helperSym.ID == "" {
+		t.Fatalf("missing native helper symbol id: %#v", structured.Symbols)
+	}
+	if helper.StableID != helperSym.ID || helper.DeclID != helperSym.DeclID {
+		t.Fatalf("bridged helper ids = stable:%q decl:%q, want native stable:%q decl:%q",
+			helper.StableID, helper.DeclID, helperSym.ID, helperSym.DeclID)
+	}
+	foundRef := false
+	for _, ref := range structured.Refs {
+		if ref.Name == "helper" && ref.File == bPath && ref.TargetSymbolID == helperSym.ID && ref.BindingID != "" {
+			foundRef = true
+			break
+		}
+	}
+	if !foundRef {
+		t.Fatalf("missing native helper ref with target symbol id %q: %#v", helperSym.ID, structured.Refs)
+	}
+}
+
+func TestNativeBridgeImportedUseCarriesStableTargetID(t *testing.T) {
+	root := t.TempDir()
+	alphaDir := filepath.Join(root, "alpha")
+	betaDir := filepath.Join(root, "beta")
+	if err := os.MkdirAll(alphaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(betaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(alphaDir, "lib.osty"), []byte(`pub fn helper() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(betaDir, "lib.osty"), []byte(`use alpha::{helper}
+
+fn main() {
+    let value = helper()
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	for _, path := range []string{"alpha", "beta"} {
+		if _, err := ws.LoadPackageNative(path); err != nil {
+			t.Fatalf("LoadPackageNative %s: %v", path, err)
+		}
+	}
+	results := ws.ResolveAll()
+	if got := results["beta"]; got == nil || len(got.Diags) != 0 {
+		t.Fatalf("beta diagnostics = %#v, want none", got)
+	}
+
+	alphaHelper := ws.Packages["alpha"].PkgScope.LookupLocal("helper")
+	if alphaHelper == nil || alphaHelper.StableID == "" || alphaHelper.PackageID == "" || alphaHelper.DeclID == "" {
+		t.Fatalf("alpha helper stable ids missing: %#v", alphaHelper)
+	}
+	betaFile := ws.Packages["beta"].Files[0]
+	imported := betaFile.FileScope.LookupLocal("helper")
+	if imported == nil {
+		t.Fatalf("missing imported helper in file scope")
+	}
+	if imported.Kind != SymFn {
+		t.Fatalf("imported helper kind = %v, want SymFn (%#v)", imported.Kind, imported)
+	}
+	if imported.StableID != alphaHelper.StableID {
+		t.Fatalf("imported helper stable id = %q, want target id %q", imported.StableID, alphaHelper.StableID)
+	}
+	if imported.DeclID != alphaHelper.DeclID {
+		t.Fatalf("imported helper decl id = %q, want target decl id %q", imported.DeclID, alphaHelper.DeclID)
+	}
+}
+
 func TestNativeResolutionRowsCachesResult(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
@@ -226,6 +340,32 @@ fn main() {
 	}
 	if sym.Package == nil || sym.Package.PkgScope == nil {
 		t.Fatalf("fs package = %#v, want resolved stdlib package", sym.Package)
+	}
+}
+
+func TestResolveFileDefaultScopedStdlibMemberUse(t *testing.T) {
+	src := []byte(`use std.fs::{readToString as read}
+
+fn main() {
+    let _ = read("demo.txt")
+}
+`)
+	file, diags := parser.ParseDiagnostics(src)
+	if len(diags) != 0 {
+		t.Fatalf("parse diagnostics = %#v, want none", diags)
+	}
+	pkgScope := NewScope(NewPrelude(), "package:std.fs")
+	pkgScope.DefineForce(&Symbol{Name: "readToString", Kind: SymFn, Pub: true})
+	reg := stubStdlibProvider{
+		"std.fs": &Package{Name: "fs", PkgScope: pkgScope},
+	}
+	res := ResolveFileSourceDefault(src, file, reg)
+	if len(res.Diags) != 0 {
+		t.Fatalf("resolve diagnostics = %#v, want none", res.Diags)
+	}
+	sym := res.FileScope.Lookup("read")
+	if sym == nil || sym.Kind != SymFn || !sym.Pub {
+		t.Fatalf("read = %#v, want public function imported from std.fs", sym)
 	}
 }
 
@@ -511,6 +651,121 @@ func TestResolvePackageViaNativePubScopedUsePrivateMemberEmitsE0553(t *testing.T
 	}
 	if sym := ws.Packages["beta"].PkgScope.LookupLocal("hidden"); sym != nil {
 		t.Fatalf("private pub use should not export hidden, got %#v", sym)
+	}
+}
+
+func TestResolvePackageViaNativeUseShapeParity(t *testing.T) {
+	root := t.TempDir()
+	writePkg := func(path, src string) {
+		t.Helper()
+		dir := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "lib.osty"), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writePkg("foo", `pub fn bar() -> Int { 1 }
+pub struct Baz {}
+`)
+	writePkg("foo/bar", `pub fn leaf() -> Int { 2 }
+`)
+	writePkg("foo/Bar", `pub fn make() -> Int { 3 }
+`)
+	writePkg("client", `use foo
+use foo.bar
+use foo::{bar as callBar, Baz}
+use foo.Bar as BazPkg
+pub use foo.Bar as PublicBar
+
+fn main() {
+    let _ = foo.bar()
+    let _ = bar.leaf()
+    let _ = callBar()
+    let _ = BazPkg.make()
+}
+`)
+
+	ws, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	for _, path := range []string{"foo", "foo.bar", "foo.Bar", "client"} {
+		if _, err := ws.LoadPackageNative(path); err != nil {
+			t.Fatalf("LoadPackageNative %s: %v", path, err)
+		}
+	}
+	results := ws.ResolveAll()
+	if got := results["client"]; got == nil || len(got.Diags) != 0 {
+		t.Fatalf("client diagnostics = %#v, want none", got)
+	}
+	client := ws.Packages["client"]
+	fileScope := client.Files[0].FileScope
+	cases := []struct {
+		name string
+		kind SymbolKind
+	}{
+		{"foo", SymPackage},
+		{"bar", SymPackage},
+		{"callBar", SymFn},
+		{"Baz", SymStruct},
+		{"BazPkg", SymPackage},
+	}
+	for _, tc := range cases {
+		sym := fileScope.Lookup(tc.name)
+		if sym == nil || sym.Kind != tc.kind {
+			t.Fatalf("%s = %#v, want kind %v", tc.name, sym, tc.kind)
+		}
+	}
+	pub := client.PkgScope.LookupLocal("PublicBar")
+	if pub == nil || pub.Kind != SymPackage || !pub.Pub {
+		t.Fatalf("PublicBar = %#v, want exported package alias", pub)
+	}
+}
+
+func TestResolvePackageViaNativeScopedUsePrivateMemberEmitsE0507(t *testing.T) {
+	root := t.TempDir()
+	alphaDir := filepath.Join(root, "alpha")
+	betaDir := filepath.Join(root, "beta")
+	if err := os.MkdirAll(alphaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(betaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(alphaDir, "lib.osty"), []byte(`fn hidden() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(betaDir, "lib.osty"), []byte(`use alpha::{hidden}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	for _, path := range WorkspacePackagePaths(root) {
+		if _, err := ws.LoadPackageNative(path); err != nil {
+			t.Fatalf("LoadPackageNative %s: %v", path, err)
+		}
+	}
+	results := ws.ResolveAll()
+	betaResult := results["beta"]
+	if betaResult == nil {
+		t.Fatalf("missing beta result")
+	}
+	found := false
+	for _, d := range betaResult.Diags {
+		if d.Code == diag.CodePrivateAcrossPackages {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected %s, got %#v", diag.CodePrivateAcrossPackages, betaResult.Diags)
 	}
 }
 

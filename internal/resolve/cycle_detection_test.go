@@ -132,6 +132,53 @@ func TestWorkspaceDetectsReexportCycleTwoPackage(t *testing.T) {
 	}
 }
 
+func TestWorkspaceDetectsCycleThroughScopedUse(t *testing.T) {
+	root := t.TempDir()
+	pkgA := filepath.Join(root, "alpha")
+	pkgB := filepath.Join(root, "beta")
+	if err := os.MkdirAll(pkgA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(pkgB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgA, "lib.osty"), []byte(`use beta::{world}
+
+pub fn hello() -> Int { world() }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgB, "lib.osty"), []byte(`use alpha::{hello}
+
+pub fn world() -> Int { hello() }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	for _, p := range WorkspacePackagePaths(root) {
+		if _, err := ws.LoadPackageArenaFirst(p); err != nil {
+			t.Fatalf("LoadPackage %s: %v", p, err)
+		}
+	}
+	results := ws.ResolveAll()
+
+	for _, pr := range results {
+		if pr == nil {
+			continue
+		}
+		for _, d := range pr.Diags {
+			if d.Code == diag.CodeCyclicImport {
+				return
+			}
+		}
+	}
+	t.Fatalf("expected %s for scoped-use cycle, got %#v", diag.CodeCyclicImport, results)
+}
+
 // Three-package cycle: alpha → beta → gamma → alpha. Exactly one
 // back-edge should emit E0506 (the gamma → alpha edge closes the cycle
 // during DFS starting from alpha).

@@ -84,6 +84,100 @@ func TestResolvePackageStructuredHandlesCrossFileRefsASTNative(t *testing.T) {
 	}
 }
 
+func TestResolvePackageStructuredAssignsStableIDs(t *testing.T) {
+	dir := t.TempDir()
+	helperPath := filepath.Join(dir, "helper.osty")
+	mainPath := filepath.Join(dir, "main.osty")
+
+	helper := canonicalSelfhostInput(t, []byte(`pub fn helper() -> Int {
+    41
+}
+`), 0)
+	helper.Name = "helper.osty"
+	helper.Path = helperPath
+
+	main := canonicalSelfhostInput(t, []byte(`fn main() {
+    let value = helper()
+}
+`), len(helper.Source)+1)
+	main.Name = "main.osty"
+	main.Path = mainPath
+
+	resolved, err := selfhost.ResolvePackageStructured(selfhost.PackageResolveInput{
+		PackagePath: "demo.pkg",
+		Files:       []selfhost.PackageResolveFile{helper, main},
+	})
+	if err != nil {
+		t.Fatalf("ResolvePackageStructured: %v", err)
+	}
+	helperSym := findResolvedSymbol(resolved, "helper", "fn")
+	if helperSym == nil {
+		t.Fatalf("missing helper symbol in %#v", resolved.Symbols)
+	}
+	ref := findResolvedRef(resolved, "helper")
+	if ref == nil {
+		t.Fatalf("missing helper ref in %#v", resolved.Refs)
+	}
+	if resolved.PackageID == "" || helperSym.ID == "" || helperSym.PackageID == "" || helperSym.DeclID == "" {
+		t.Fatalf("stable symbol ids missing: package=%q helper=%#v", resolved.PackageID, helperSym)
+	}
+	if ref.ID == "" || ref.BindingID == "" || ref.TargetSymbolID == "" || ref.PackageID == "" {
+		t.Fatalf("stable ref ids missing: %#v", ref)
+	}
+	if helperSym.PackageID != resolved.PackageID || ref.PackageID != resolved.PackageID {
+		t.Fatalf("package ids diverged: result=%q helper=%q ref=%q", resolved.PackageID, helperSym.PackageID, ref.PackageID)
+	}
+	if ref.TargetSymbolID != helperSym.ID {
+		t.Fatalf("ref target symbol id = %q, want helper symbol id %q", ref.TargetSymbolID, helperSym.ID)
+	}
+
+	surface := selfhost.ResolveSurfaceFromResult(resolved)
+	if surface.PackageID != resolved.PackageID {
+		t.Fatalf("surface package id = %q, want %q", surface.PackageID, resolved.PackageID)
+	}
+	if len(surface.Symbols) != len(resolved.Symbols) || len(surface.Refs) != len(resolved.Refs) {
+		t.Fatalf("surface sizes = symbols:%d refs:%d, want symbols:%d refs:%d",
+			len(surface.Symbols), len(surface.Refs), len(resolved.Symbols), len(resolved.Refs))
+	}
+	foundSurfaceRef := false
+	for _, r := range surface.Refs {
+		if r.Name == "helper" && r.TargetSymbolID == helperSym.ID && r.BindingID == ref.BindingID {
+			foundSurfaceRef = true
+			break
+		}
+	}
+	if !foundSurfaceRef {
+		t.Fatalf("surface missing helper ref with stable ids: %#v", surface.Refs)
+	}
+}
+
+func TestResolveSnapshotGolden(t *testing.T) {
+	resolved := selfhost.ResolveSourceStructured([]byte(`fn helper(x: Int) -> Int {
+    x
+}
+
+fn main() {
+    let value = helper(1)
+}
+`))
+	got := selfhost.ResolveSnapshot(resolved)
+	const want = `package efc54114cf42
+symbols
+  <source> fn helper 0:34 pub=false id=acd850f616a7 decl=9d2ba9416b05
+  <source> fn main 36:75 pub=false id=4ab9ed6ae928 decl=d820d6987074
+refs
+  <source> x 31:32 -> <source> 10:16 target=3c1090f85cd3 binding=3b74ed8bdf62
+  <source> helper 64:70 -> <source> 0:34 target=acd850f616a7 binding=d165f3eb124f
+typeRefs
+  <source> Int 13:16 id=0c33e363e987
+  <source> Int 21:24 id=a14d0d87d94d
+diagnostics
+`
+	if got != want {
+		t.Fatalf("ResolveSnapshot mismatch\nwant:\n%s\ngot:\n%s", want, got)
+	}
+}
+
 func TestResolvePackageStructuredUseBodyMissingMemberASTNative(t *testing.T) {
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "main.osty")
@@ -1052,5 +1146,18 @@ func TestLookupPackageMemberPrivateIgnoresTypePos(t *testing.T) {
 	if valueRes.Message != typeRes.Message {
 		t.Errorf("E0507 message must not vary with typePos\n  value: %q\n  type:  %q",
 			valueRes.Message, typeRes.Message)
+	}
+}
+
+func TestReexportPrivateDiagnosticEmitsE0553(t *testing.T) {
+	res := selfhost.ReexportPrivateDiagnostic("pkg", "hidden")
+	if res.Code != "E0553" {
+		t.Fatalf("code = %q, want E0553", res.Code)
+	}
+	if res.Primary != "private re-export" {
+		t.Fatalf("primary = %q, want private re-export", res.Primary)
+	}
+	if !strings.Contains(res.Message, "pkg.hidden") || !strings.Contains(res.Hint, "remove `pub`") {
+		t.Fatalf("unexpected diagnostic shape: %#v", res)
 	}
 }

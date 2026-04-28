@@ -260,7 +260,7 @@ func (w *Workspace) ResolveAll() map[string]*PackageResult {
 	for path := range w.Packages {
 		paths = append(paths, path)
 	}
-	sort.Strings(paths)
+	paths = w.resolveOrder(paths)
 	for _, path := range paths {
 		pkg := w.Packages[path]
 		if pkg == nil {
@@ -285,6 +285,66 @@ func (w *Workspace) ResolveAll() map[string]*PackageResult {
 		}
 	}
 	return results
+}
+
+func (w *Workspace) resolveOrder(paths []string) []string {
+	sort.Strings(paths)
+	inSet := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		inSet[path] = true
+	}
+	visiting := map[string]bool{}
+	visited := map[string]bool{}
+	out := make([]string, 0, len(paths))
+	var visit func(string)
+	visit = func(path string) {
+		if visited[path] {
+			return
+		}
+		if visiting[path] {
+			return
+		}
+		visiting[path] = true
+		for _, dep := range w.packageUseTargets(path) {
+			if inSet[dep] {
+				visit(dep)
+			}
+		}
+		visiting[path] = false
+		visited[path] = true
+		out = append(out, path)
+	}
+	for _, path := range paths {
+		visit(path)
+	}
+	return out
+}
+
+func (w *Workspace) packageUseTargets(path string) []string {
+	pkg := w.Packages[path]
+	if pkg == nil || pkg.isStub || pkg.isCycleMarker {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range pkg.Files {
+		if f == nil || f.File == nil {
+			continue
+		}
+		for _, u := range f.File.Uses {
+			if u == nil || u.IsFFI() {
+				continue
+			}
+			target := w.useGraphTarget(u)
+			if target == "" || seen[target] {
+				continue
+			}
+			seen[target] = true
+			out = append(out, target)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // isPreResolvedStdlib reports whether pkg came from an attached

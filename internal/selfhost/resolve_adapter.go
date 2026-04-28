@@ -1,6 +1,12 @@
 package selfhost
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"sort"
+	"strings"
+
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost/api"
 )
@@ -65,6 +71,22 @@ func LookupPackageMember(pkgName, member string, typePos, found, public bool) Me
 		Primary: r.primary,
 		Note:    r.note,
 		Hint:    r.hint,
+	}
+}
+
+// ReexportPrivateDiagnostic owns the E0553 wording for `pub use` of a private
+// package member. The Go resolver still knows which imported symbol is private,
+// but it converts this selfhost-owned diagnostic shape instead of rendering its
+// own message.
+func ReexportPrivateDiagnostic(pkgName, member string) MemberLookupResult {
+	target := pkgName + "." + member
+	return MemberLookupResult{
+		Status:  MemberLookupPrivate,
+		Code:    diag.CodeReexportPrivate,
+		Message: fmt.Sprintf("`pub use` cannot re-export private symbol `%s`", target),
+		Primary: "private re-export",
+		Note:    fmt.Sprintf("`%s` is declared without `pub` in package `%s`", member, pkgName),
+		Hint:    fmt.Sprintf("make `%s` public or remove `pub` from this use", member),
 	}
 }
 
@@ -200,6 +222,7 @@ func ResolveFromSource(src []byte, path string) ([]*diag.Diagnostic, ResolveResu
 func ResolveStructuredFromRunForPath(run *FrontendRun, path string) ResolveResult {
 	result := ResolveStructuredFromRun(run)
 	if path == "" {
+		selfhostAssignResolveIDs(&result, "")
 		return result
 	}
 	for i := range result.Symbols {
@@ -217,6 +240,7 @@ func ResolveStructuredFromRunForPath(run *FrontendRun, path string) ResolveResul
 	for i := range result.Diagnostics {
 		result.Diagnostics[i].File = path
 	}
+	selfhostAssignResolveIDs(&result, path)
 	return result
 }
 
@@ -245,6 +269,7 @@ func ResolvePackageStructured(input PackageResolveInput) (ResolveResult, error) 
 		return checkNodeOffsetsWithTokenLayout(layout, start, end)
 	})
 	selfhostAnnotateResolveFiles(&result, input.Files)
+	selfhostAssignResolveIDs(&result, selfhostResolvePackageKey(input))
 	return result, nil
 }
 
@@ -450,7 +475,74 @@ func adaptResolveResult(resolved *SelfResolveResult, file *AstFile, offsets func
 			End:     end,
 		})
 	}
+	selfhostAssignResolveIDs(&result, "")
 	return result
+}
+
+func selfhostResolvePackageKey(input PackageResolveInput) string {
+	if input.PackagePath != "" {
+		return input.PackagePath
+	}
+	parts := make([]string, 0, len(input.Files))
+	for _, file := range input.Files {
+		if file.Path != "" {
+			parts = append(parts, file.Path)
+		} else if file.Name != "" {
+			parts = append(parts, file.Name)
+		}
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\x00")
+}
+
+func selfhostAssignResolveIDs(result *ResolveResult, packageKey string) {
+	if result == nil {
+		return
+	}
+	packageID := stableResolveID("package", packageKey)
+	result.PackageID = packageID
+	byTarget := map[string]string{}
+	for i := range result.Symbols {
+		sym := &result.Symbols[i]
+		sym.PackageID = packageID
+		sym.DeclID = stableResolveID("decl", packageKey, sym.File, sym.Kind, sym.Name, fmt.Sprint(sym.Node), fmt.Sprint(sym.Start), fmt.Sprint(sym.End))
+		sym.ID = stableResolveID("symbol", packageKey, sym.File, sym.Kind, sym.Name, fmt.Sprint(sym.Node), fmt.Sprint(sym.Start), fmt.Sprint(sym.End), fmt.Sprint(sym.Public))
+		byTarget[resolveTargetKey(sym.File, sym.Node, sym.Start, sym.End)] = sym.ID
+	}
+	for i := range result.Refs {
+		ref := &result.Refs[i]
+		ref.PackageID = packageID
+		ref.BindingID = stableResolveID("binding", packageKey, ref.File, ref.Name, fmt.Sprint(ref.Node), fmt.Sprint(ref.Start), fmt.Sprint(ref.End))
+		ref.ID = stableResolveID("ref", packageKey, ref.File, ref.Name, fmt.Sprint(ref.Node), fmt.Sprint(ref.Start), fmt.Sprint(ref.End), fmt.Sprint(ref.TargetNode), fmt.Sprint(ref.TargetStart), fmt.Sprint(ref.TargetEnd), ref.TargetFile)
+		if id := byTarget[resolveTargetKey(ref.TargetFile, ref.TargetNode, ref.TargetStart, ref.TargetEnd)]; id != "" {
+			ref.TargetSymbolID = id
+		} else if ref.TargetNode >= 0 {
+			ref.TargetSymbolID = stableResolveID("symbol-target", packageKey, ref.TargetFile, ref.Name, fmt.Sprint(ref.TargetNode), fmt.Sprint(ref.TargetStart), fmt.Sprint(ref.TargetEnd))
+		}
+	}
+	for i := range result.TypeRefs {
+		ref := &result.TypeRefs[i]
+		ref.PackageID = packageID
+		ref.ID = stableResolveID("type-ref", packageKey, ref.File, ref.Name, fmt.Sprint(ref.Node), fmt.Sprint(ref.Start), fmt.Sprint(ref.End))
+	}
+	for i := range result.Diagnostics {
+		d := &result.Diagnostics[i]
+		d.PackageID = packageID
+		d.ID = stableResolveID("diagnostic", packageKey, d.File, d.Code, d.Name, fmt.Sprint(d.Node), fmt.Sprint(d.Start), fmt.Sprint(d.End), d.Message)
+	}
+}
+
+func resolveTargetKey(file string, node, start, end int) string {
+	return file + "\x00" + fmt.Sprint(node) + "\x00" + fmt.Sprint(start) + "\x00" + fmt.Sprint(end)
+}
+
+func stableResolveID(parts ...string) string {
+	h := sha256.New()
+	for _, part := range parts {
+		_, _ = h.Write([]byte(part))
+		_, _ = h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func selfhostResolveNodeOffsets(file *AstFile, node int, offsets func(start, end int) (int, int)) (int, int) {
