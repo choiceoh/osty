@@ -16317,3 +16317,1975 @@ pub fn mirInterfaceShimRetVoidText() -> String {
 pub fn mirInterfaceShimRetValueText(retTy: String) -> String {
     "  ret " + retTy + " %ret.val"
 }
+
+/// mirConstFloatBinary applies a binary operator to two double operands
+/// at compile time. The operator is identified by its `token.Kind` int
+/// code; the same code values flow from `mirConstFloatBinaryStatus`
+/// below. Returns the computed double — for division-by-zero the
+/// caller's status helper supplies the IEEE-754 special outcome via
+/// `mirConstFloatDivByZero`. Mirrors `constFloatBinary` in
+/// `internal/llvmgen/decl.go`.
+pub fn mirConstFloatBinary(
+    op: Int,
+    left: Float,
+    right: Float,
+    plus: Int,
+    minus: Int,
+    star: Int,
+    slash: Int,
+) -> Float {
+    if op == plus { return left + right }
+    if op == minus { return left - right }
+    if op == star { return left * right }
+    if op == slash {
+        if right == 0.0 { return 0.0 }
+        return left / right
+    }
+    0.0
+}
+
+/// mirConstFloatBinaryStatus reports the error sentinel for
+/// `mirConstFloatBinary`. `0` = success (caller uses returned value);
+/// `1` = unsupported operator (caller emits `unsupported expression
+/// binary operator`); `2` = division by zero, requiring the IEEE-754
+/// special-case branch (NaN/Inf depending on left). The sign of `left`
+/// must be inspected on the Go side because Osty's Float→Int
+/// classification helpers haven't landed yet. Mirrors the err-branch
+/// logic of `constFloatBinary` in `internal/llvmgen/decl.go`.
+pub fn mirConstFloatBinaryStatus(
+    op: Int,
+    right: Float,
+    plus: Int,
+    minus: Int,
+    star: Int,
+    slash: Int,
+) -> Int {
+    if op == plus { return 0 }
+    if op == minus { return 0 }
+    if op == star { return 0 }
+    if op == slash {
+        if right == 0.0 { return 2 }
+        return 0
+    }
+    1
+}
+
+/// mirConstCompareIntStatus reports the success/failure sentinel for an
+/// integer-typed constant compare. `0` = success (caller materializes
+/// the bool result); `1` = unsupported operator. Mirrors the int branch
+/// of `constCompare` in `internal/llvmgen/decl.go` — the comparison
+/// itself stays on the Go side because `constValue` is host-typed, but
+/// the operator dispatch lives here so any future operator additions
+/// only have to touch one place.
+pub fn mirConstCompareIntStatus(
+    op: Int,
+    tokEQ: Int,
+    tokNEQ: Int,
+    tokLT: Int,
+    tokLEQ: Int,
+    tokGT: Int,
+    tokGEQ: Int,
+) -> Int {
+    if op == tokEQ { return 0 }
+    if op == tokNEQ { return 0 }
+    if op == tokLT { return 0 }
+    if op == tokLEQ { return 0 }
+    if op == tokGT { return 0 }
+    if op == tokGEQ { return 0 }
+    1
+}
+
+/// mirConstCompareIntValue evaluates an integer comparison at compile
+/// time. The operator is identified by its `token.Kind` int code; the
+/// same code values flow from `mirConstCompareIntStatus`. Returns `1`
+/// for true, `0` for false. Caller wraps the result into a `constValue`
+/// of LLVM `i1`. Mirrors the int branch of `constBoolCompare` in
+/// `internal/llvmgen/decl.go`.
+pub fn mirConstCompareIntValue(
+    op: Int,
+    left: Int,
+    right: Int,
+    tokEQ: Int,
+    tokNEQ: Int,
+    tokLT: Int,
+    tokLEQ: Int,
+    tokGT: Int,
+    tokGEQ: Int,
+) -> Int {
+    if op == tokEQ {
+        if left == right { return 1 }
+        return 0
+    }
+    if op == tokNEQ {
+        if left != right { return 1 }
+        return 0
+    }
+    if op == tokLT {
+        if left < right { return 1 }
+        return 0
+    }
+    if op == tokLEQ {
+        if left <= right { return 1 }
+        return 0
+    }
+    if op == tokGT {
+        if left > right { return 1 }
+        return 0
+    }
+    if op == tokGEQ {
+        if left >= right { return 1 }
+        return 0
+    }
+    0
+}
+
+/// mirConstCompareFloatValue evaluates a float comparison at compile
+/// time. Uses the same operator-code convention as the int variant.
+/// Returns `1` for true, `0` for false. Mirrors the float branch of
+/// `constBoolCompare` in `internal/llvmgen/decl.go`.
+pub fn mirConstCompareFloatValue(
+    op: Int,
+    left: Float,
+    right: Float,
+    tokEQ: Int,
+    tokNEQ: Int,
+    tokLT: Int,
+    tokLEQ: Int,
+    tokGT: Int,
+    tokGEQ: Int,
+) -> Int {
+    if op == tokEQ {
+        if left == right { return 1 }
+        return 0
+    }
+    if op == tokNEQ {
+        if left != right { return 1 }
+        return 0
+    }
+    if op == tokLT {
+        if left < right { return 1 }
+        return 0
+    }
+    if op == tokLEQ {
+        if left <= right { return 1 }
+        return 0
+    }
+    if op == tokGT {
+        if left > right { return 1 }
+        return 0
+    }
+    if op == tokGEQ {
+        if left >= right { return 1 }
+        return 0
+    }
+    0
+}
+
+/// mirConstCompareEqOnlyStatus reports the success/failure sentinel for
+/// constant compares that only support equality / inequality
+/// (Bool and String today). `0` = success; `1` = unsupported operator.
+/// The two callers used to have separate copies of this body
+/// (`constBoolCompare` and the string branch of `constCompare`); they
+/// now share. Mirrors the bool/string branches of
+/// `internal/llvmgen/decl.go`.
+pub fn mirConstCompareEqOnlyStatus(op: Int, tokEQ: Int, tokNEQ: Int) -> Int {
+    if op == tokEQ { return 0 }
+    if op == tokNEQ { return 0 }
+    1
+}
+
+/// mirConstCompareBoolStatus is an alias of
+/// `mirConstCompareEqOnlyStatus` — the bool-typed const-compare
+/// surface only supports `==` / `!=`.
+pub fn mirConstCompareBoolStatus(op: Int, tokEQ: Int, tokNEQ: Int) -> Int {
+    mirConstCompareEqOnlyStatus(op, tokEQ, tokNEQ)
+}
+
+/// mirConstCompareStringStatus is an alias of
+/// `mirConstCompareEqOnlyStatus` — the string-typed const-compare
+/// surface only supports `==` / `!=` today (no lex ordering at compile
+/// time).
+pub fn mirConstCompareStringStatus(op: Int, tokEQ: Int, tokNEQ: Int) -> Int {
+    mirConstCompareEqOnlyStatus(op, tokEQ, tokNEQ)
+}
+
+/// mirIRBinOpString returns the source-level `+`/`-`/`*`/etc. text for
+/// an `ostyir.BinOp` int code. Returns the empty string for unknown /
+/// future kinds. Mirrors `nativeBinaryOpString` in
+/// `internal/llvmgen/ir_native_entry.go`. The op codes are the iota
+/// order in `internal/ir/ir.go` (`BinAdd = 0`, `BinSub = 1`, …,
+/// `BinShr = 17`).
+pub fn mirIRBinOpString(op: Int) -> String {
+    if op == 0 { return "+" }
+    if op == 1 { return "-" }
+    if op == 2 { return "*" }
+    if op == 3 { return "/" }
+    if op == 4 { return "%" }
+    if op == 5 { return "==" }
+    if op == 6 { return "!=" }
+    if op == 7 { return "<" }
+    if op == 8 { return "<=" }
+    if op == 9 { return ">" }
+    if op == 10 { return ">=" }
+    if op == 11 { return "&&" }
+    if op == 12 { return "||" }
+    if op == 13 { return "&" }
+    if op == 14 { return "|" }
+    if op == 15 { return "^" }
+    if op == 16 { return "<<" }
+    if op == 17 { return ">>" }
+    ""
+}
+
+/// mirIRUnaryOpString returns the source-level prefix-op text for an
+/// `ostyir.UnOp` int code. Mirrors `nativeUnaryOpString` in
+/// `internal/llvmgen/ir_native_entry.go`. Op codes follow the iota
+/// order in `internal/ir/ir.go`: `UnNeg = 0`, `UnPlus = 1`,
+/// `UnNot = 2`, `UnBitNot = 3`.
+pub fn mirIRUnaryOpString(op: Int) -> String {
+    if op == 0 { return "-" }
+    if op == 1 { return "+" }
+    if op == 2 { return "!" }
+    if op == 3 { return "~" }
+    ""
+}
+
+/// mirIRAssignOpString returns the source-level operator text (without
+/// the trailing `=`) for an `ostyir.AssignOp` int code. Plain
+/// assignments return `=`; compound forms return the bare operator (so
+/// callers can paste `op + "="` for the full token). Mirrors
+/// `nativeAssignOpString` in `internal/llvmgen/ir_native_entry.go`.
+/// Op codes follow the iota order in `internal/ir/ir.go`:
+/// `AssignEq = 0`, `AssignAdd = 1`, …, `AssignShr = 10`.
+pub fn mirIRAssignOpString(op: Int) -> String {
+    if op == 0 { return "=" }
+    if op == 1 { return "+" }
+    if op == 2 { return "-" }
+    if op == 3 { return "*" }
+    if op == 4 { return "/" }
+    if op == 5 { return "%" }
+    if op == 6 { return "&" }
+    if op == 7 { return "|" }
+    if op == 8 { return "^" }
+    if op == 9 { return "<<" }
+    if op == 10 { return ">>" }
+    ""
+}
+
+/// mirNormalizeNativeIntText canonicalises an integer literal's text
+/// for code-gen: underscores are stripped and the prefix family
+/// (`0x`/`0o`/`0b`) is decoded back to a base-10 digit string. Returns
+/// `("", false)` collapsed to a sentinel "" when parsing fails (the Go
+/// wrapper rebuilds the bool from `result == ""`). Mirrors
+/// `normalizeNativeIntText` in `internal/llvmgen/ir_native_entry.go`.
+/// The hex/oct/bin parsing keeps the legacy lexical surface in sync
+/// with the runtime decoders (`std.io` writers all consume base-10).
+pub fn mirNormalizeNativeIntText(text: String) -> String {
+    let stripped = mirStripUnderscores(text)
+    if stripped == "" { return "" }
+    let prefix = mirAsciiToLower(mirSubstringRange(stripped, 0, 2))
+    if prefix == "0x" {
+        let body = mirSubstringRange(stripped, 2, stripped.len())
+        if body == "" { return "" }
+        return mirParseIntBaseDecimal(body, 16)
+    }
+    if prefix == "0o" {
+        let body = mirSubstringRange(stripped, 2, stripped.len())
+        if body == "" { return "" }
+        return mirParseIntBaseDecimal(body, 8)
+    }
+    if prefix == "0b" {
+        let body = mirSubstringRange(stripped, 2, stripped.len())
+        if body == "" { return "" }
+        return mirParseIntBaseDecimal(body, 2)
+    }
+    mirParseIntBaseDecimal(stripped, 10)
+}
+
+/// mirStripUnderscores returns `text` with every `_` removed. Used by
+/// `mirNormalizeNativeIntText` so the digit grouping accepted by the
+/// parser (`1_000_000`) doesn't trip the runtime base-N decoders.
+pub fn mirStripUnderscores(text: String) -> String {
+    let n = text.len()
+    let mut out = ""
+    let mut i = 0
+    for i < n {
+        let ch = mirSubstringRange(text, i, i + 1)
+        if ch != "_" {
+            out = out + ch
+        }
+        i = i + 1
+    }
+    out
+}
+
+/// mirAsciiToLower returns a copy of the input with each ASCII
+/// uppercase letter mapped to its lowercase counterpart via a tiny
+/// fixed table. Bytes outside `A-Z` are unchanged. Used by
+/// `mirNormalizeNativeIntText` to detect `0X` / `0O` / `0B` prefixes
+/// case-insensitively. The table is hard-coded because Osty does not
+/// expose byte-level char arithmetic today; the call set is bounded
+/// (only consumed for the 2-byte literal prefixes) so this is fine.
+pub fn mirAsciiToLower(text: String) -> String {
+    let n = text.len()
+    let mut out = ""
+    let mut i = 0
+    for i < n {
+        let chs = text.charAt(i)
+        out = out + mirAsciiUpperToLowerChar(chs)
+        i = i + 1
+    }
+    out
+}
+
+/// mirAsciiUpperToLowerChar maps a single character: `A`–`Z` →
+/// `a`–`z`, every other character returned unchanged. Used by
+/// `mirAsciiToLower`. Tiny fixed table keeps the body O(1) per char.
+pub fn mirAsciiUpperToLowerChar(c: String) -> String {
+    if c == "A" { return "a" }
+    if c == "B" { return "b" }
+    if c == "C" { return "c" }
+    if c == "D" { return "d" }
+    if c == "E" { return "e" }
+    if c == "F" { return "f" }
+    if c == "G" { return "g" }
+    if c == "H" { return "h" }
+    if c == "I" { return "i" }
+    if c == "J" { return "j" }
+    if c == "K" { return "k" }
+    if c == "L" { return "l" }
+    if c == "M" { return "m" }
+    if c == "N" { return "n" }
+    if c == "O" { return "o" }
+    if c == "P" { return "p" }
+    if c == "Q" { return "q" }
+    if c == "R" { return "r" }
+    if c == "S" { return "s" }
+    if c == "T" { return "t" }
+    if c == "U" { return "u" }
+    if c == "V" { return "v" }
+    if c == "W" { return "w" }
+    if c == "X" { return "x" }
+    if c == "Y" { return "y" }
+    if c == "Z" { return "z" }
+    c
+}
+
+/// mirSubstringRange returns the substring `text[start:end]` clamped
+/// to the input bounds. `start < 0` clamps to `0`, `end > len` clamps
+/// to `len`, and `start >= end` returns the empty string. Implements
+/// the byte-level slicing the int-text normaliser expects.
+pub fn mirSubstringRange(text: String, start: Int, end: Int) -> String {
+    let n = text.len()
+    let mut lo = start
+    let mut hi = end
+    if lo < 0 { lo = 0 }
+    if hi > n { hi = n }
+    if lo >= hi { return "" }
+    let mut out = ""
+    let mut i = lo
+    for i < hi {
+        out = out + text.charAt(i)
+        i = i + 1
+    }
+    out
+}
+
+/// mirAsciiOrd returns the byte ordinal of the first character of `s`,
+/// or `-1` for the empty string. Defined here so the case-folding /
+/// digit-detection helpers can stay self-contained.
+pub fn mirAsciiOrd(s: String) -> Int {
+    if s == "" { return -1 }
+    if s == "0" { return 48 }
+    if s == "1" { return 49 }
+    if s == "2" { return 50 }
+    if s == "3" { return 51 }
+    if s == "4" { return 52 }
+    if s == "5" { return 53 }
+    if s == "6" { return 54 }
+    if s == "7" { return 55 }
+    if s == "8" { return 56 }
+    if s == "9" { return 57 }
+    if s == "A" { return 65 }
+    if s == "B" { return 66 }
+    if s == "C" { return 67 }
+    if s == "D" { return 68 }
+    if s == "E" { return 69 }
+    if s == "F" { return 70 }
+    if s == "G" { return 71 }
+    if s == "H" { return 72 }
+    if s == "I" { return 73 }
+    if s == "J" { return 74 }
+    if s == "K" { return 75 }
+    if s == "L" { return 76 }
+    if s == "M" { return 77 }
+    if s == "N" { return 78 }
+    if s == "O" { return 79 }
+    if s == "P" { return 80 }
+    if s == "Q" { return 81 }
+    if s == "R" { return 82 }
+    if s == "S" { return 83 }
+    if s == "T" { return 84 }
+    if s == "U" { return 85 }
+    if s == "V" { return 86 }
+    if s == "W" { return 87 }
+    if s == "X" { return 88 }
+    if s == "Y" { return 89 }
+    if s == "Z" { return 90 }
+    if s == "a" { return 97 }
+    if s == "b" { return 98 }
+    if s == "c" { return 99 }
+    if s == "d" { return 100 }
+    if s == "e" { return 101 }
+    if s == "f" { return 102 }
+    -1
+}
+
+/// mirAsciiChr returns a single-character String for the given ASCII
+/// ordinal. Returns "" for ordinals outside the lowercase letter range
+/// — the only consumer is `mirAsciiToLower`.
+pub fn mirAsciiChr(ord: Int) -> String {
+    if ord == 97 { return "a" }
+    if ord == 98 { return "b" }
+    if ord == 99 { return "c" }
+    if ord == 100 { return "d" }
+    if ord == 101 { return "e" }
+    if ord == 102 { return "f" }
+    if ord == 103 { return "g" }
+    if ord == 104 { return "h" }
+    if ord == 105 { return "i" }
+    if ord == 106 { return "j" }
+    if ord == 107 { return "k" }
+    if ord == 108 { return "l" }
+    if ord == 109 { return "m" }
+    if ord == 110 { return "n" }
+    if ord == 111 { return "o" }
+    if ord == 112 { return "p" }
+    if ord == 113 { return "q" }
+    if ord == 114 { return "r" }
+    if ord == 115 { return "s" }
+    if ord == 116 { return "t" }
+    if ord == 117 { return "u" }
+    if ord == 118 { return "v" }
+    if ord == 119 { return "w" }
+    if ord == 120 { return "x" }
+    if ord == 121 { return "y" }
+    if ord == 122 { return "z" }
+    ""
+}
+
+/// mirParseIntBaseDecimal parses `text` as an integer in the given
+/// base (2/8/10/16) and returns the decimal text representation. On
+/// parse failure (empty input, illegal digit, numeric overflow) returns
+/// the empty string — the Go wrapper translates that to `(_, false)`.
+pub fn mirParseIntBaseDecimal(text: String, base: Int) -> String {
+    if text == "" { return "" }
+    let mut acc: Int = 0
+    let mut i = 0
+    let n = text.len()
+    for i < n {
+        let ch = mirSubstringRange(text, i, i + 1)
+        let digit = mirHexDigitValue(ch)
+        if digit < 0 || digit >= base { return "" }
+        acc = acc * base + digit
+        i = i + 1
+    }
+    mirGenIntToString(acc)
+}
+
+/// mirHexDigitValue returns the numeric value of a single hex digit
+/// (`0-9` → 0..9, `a-f`/`A-F` → 10..15). Returns `-1` for any other
+/// input, signalling the parent parser to fail.
+pub fn mirHexDigitValue(s: String) -> Int {
+    if s == "0" { return 0 }
+    if s == "1" { return 1 }
+    if s == "2" { return 2 }
+    if s == "3" { return 3 }
+    if s == "4" { return 4 }
+    if s == "5" { return 5 }
+    if s == "6" { return 6 }
+    if s == "7" { return 7 }
+    if s == "8" { return 8 }
+    if s == "9" { return 9 }
+    if s == "a" || s == "A" { return 10 }
+    if s == "b" || s == "B" { return 11 }
+    if s == "c" || s == "C" { return 12 }
+    if s == "d" || s == "D" { return 13 }
+    if s == "e" || s == "E" { return 14 }
+    if s == "f" || s == "F" { return 15 }
+    -1
+}
+
+/// mirNativeMapSetKeySupportedScalar reports whether a scalar map/set
+/// key type can flow through the runtime's scalar-key path. Only
+/// `i64` / `i1` / `double` / `ptr` are supported today (see
+/// `osty_rt_map_*` / `osty_rt_set_*` runtime contract). The "string"
+/// branch is handled separately in the caller because it consults the
+/// owning AST type info, not just the LLVM type. Mirrors the non-
+/// string branch of `nativeMapSetKeySupported` in
+/// `internal/llvmgen/ir_native_entry.go`.
+pub fn mirNativeMapSetKeySupportedScalar(llvmType: String) -> Bool {
+    if llvmType == "i64" { return true }
+    if llvmType == "i1" { return true }
+    if llvmType == "double" { return true }
+    if llvmType == "ptr" { return true }
+    false
+}
+
+/// mirTestingConstSourceTextInt formats an int constant as the literal
+/// text the assert-message pretty printer expects (decimal, no quoting,
+/// standard sign). Mirrors the IntConst branch of
+/// `testingConstSourceText` in `internal/llvmgen/mir_generator.go`.
+pub fn mirTestingConstSourceTextInt(value: Int) -> String {
+    mirGenIntToString(value)
+}
+
+/// mirTestingConstSourceTextBool formats a bool constant as `"true"` or
+/// `"false"`. Mirrors the BoolConst branch of `testingConstSourceText`
+/// in `internal/llvmgen/mir_generator.go`.
+pub fn mirTestingConstSourceTextBool(value: Bool) -> String {
+    if value { return "true" }
+    "false"
+}
+
+/// mirBuiltinResultIRTypeArgIndex returns the index into a `Result<T,
+/// E>` type's `Args` slice for the named constructor — `Ok` → `0`,
+/// `Err` → `1`, anything else → `-1`. Mirrors the constructor branch
+/// of `builtinResultPayloadSourceType` in
+/// `internal/llvmgen/expr.go`.
+pub fn mirBuiltinResultIRTypeArgIndex(constructor: String) -> Int {
+    if constructor == "Err" { return 1 }
+    if constructor == "Ok" { return 0 }
+    -1
+}
+
+/// mirIsListPtrTypeName reports whether a NamedType.Name plus its
+/// `Builtin` flag identifies the heap-managed `List<T>` / `Map<K, V>`
+/// / `Set<T>` containers that always lower to a `ptr`. Used by the
+/// MIR generator to decide between scalar and ptr-typed parameters.
+pub fn mirIsContainerNamedType(name: String, builtin: Bool) -> Bool {
+    if !builtin { return false }
+    if name == "List" { return true }
+    if name == "Map" { return true }
+    if name == "Set" { return true }
+    false
+}
+
+/// mirIsPrimUnitName reports whether a primitive-type kind name maps
+/// to the pseudo "unit" type (LLVM `void`). Mirrors the `PrimUnit`
+/// branch of `nativeLLVMTypeFromIR` in
+/// `internal/llvmgen/ir_native_entry.go`.
+pub fn mirIsPrimUnitName(name: String) -> Bool {
+    name == "Unit"
+}
+
+/// mirSetElemTypeArgIndex returns the index of the element type in
+/// `Set<T>.Args`, or `-1` if the named type isn't shaped like a
+/// `Set<T>`. Mirrors `setElemType` in
+/// `internal/llvmgen/mir_generator.go` — kept thin since the actual
+/// `mir.Type` slice access stays on the Go side.
+pub fn mirSetElemTypeArgIndex(name: String, argCount: Int) -> Int {
+    if name != "Set" { return -1 }
+    if argCount == 0 { return -1 }
+    0
+}
+
+/// mirMapKeyValueTypeArgs returns a packed `(keyIdx, valueIdx)` pair as
+/// integers `keyIdx * 100 + valueIdx`. Returns `-1` when the named
+/// type isn't shaped like a `Map<K, V>` with two args. Mirrors
+/// `mapKeyValueTypes` in `internal/llvmgen/mir_generator.go`.
+pub fn mirMapKeyValueArgsValid(name: String, argCount: Int) -> Bool {
+    name == "Map" && argCount >= 2
+}
+
+/// mirListElemArgsValid reports whether a NamedType is `List<T>` with
+/// exactly one type argument. Mirrors the predicate inside
+/// `listElementType` in `internal/llvmgen/ir_native_entry.go` /
+/// `listElemType` in `internal/llvmgen/mir_generator.go` — both paths
+/// just check for `Builtin && Name == "List" && len(Args) == 1`.
+pub fn mirListElemArgsValid(name: String, builtin: Bool, argCount: Int) -> Bool {
+    builtin && name == "List" && argCount == 1
+}
+
+/// mirIsTagAggEnum reports whether a MIR aggregate-rvalue kind is the
+/// enum-variant constructor. Mirrors the dispatch arm in
+/// `mirGen.emitAggregate` (`internal/llvmgen/mir_generator.go`). Kind
+/// codes follow the iota order in `internal/mir/mir.go`:
+/// `AggEnumVariant = 0`, `AggList = 1`, `AggClosure = 2`,
+/// `AggStruct = 3`, `AggTuple = 4`.
+pub fn mirIsAggKindEnumVariant(kind: Int) -> Bool { kind == 0 }
+pub fn mirIsAggKindList(kind: Int) -> Bool { kind == 1 }
+pub fn mirIsAggKindClosure(kind: Int) -> Bool { kind == 2 }
+pub fn mirIsAggKindStruct(kind: Int) -> Bool { kind == 3 }
+pub fn mirIsAggKindTuple(kind: Int) -> Bool { kind == 4 }
+
+/// mirStdIoMethodIsReadLine reports whether a `std.io.*` method name
+/// is the special read-line shape that takes zero args. Mirrors the
+/// dispatch arm in `mirGen.emitStdIoCall` (mir_generator.go).
+pub fn mirStdIoMethodIsReadLine(method: String) -> Bool {
+    method == "readLine"
+}
+
+/// mirStdTestingMethodKind returns a small int code naming the std.testing
+/// method we recognise at the MIR boundary. `0` = unknown / fall-through;
+/// `1` = assertEq family (assertEq/assertNe/assert/assertTrue/assertFalse);
+/// `2` = fail; `3` = expectOk; `4` = expectError; `5` = context;
+/// `6` = benchmark; `7` = snapshot. Mirrors the dispatch in
+/// `mirGen.emitStdTestingCall` (`internal/llvmgen/mir_generator.go`).
+pub fn mirStdTestingMethodKind(method: String) -> Int {
+    if method == "assertEq" { return 1 }
+    if method == "assertNe" { return 1 }
+    if method == "assert" { return 1 }
+    if method == "assertTrue" { return 1 }
+    if method == "assertFalse" { return 1 }
+    if method == "fail" { return 2 }
+    if method == "expectOk" { return 3 }
+    if method == "expectError" { return 4 }
+    if method == "context" { return 5 }
+    if method == "benchmark" { return 6 }
+    if method == "snapshot" { return 7 }
+    0
+}
+
+/// mirIRBuiltinResultIsResultName reports whether the `Args` length
+/// of a NamedType plus its leading-path token names a `Result<T, E>`
+/// shape. Mirrors the predicate `len(named.Path) != 1 || named.Path[0]
+/// != "Result" || len(named.Args) != 2` in `expr.go`.
+pub fn mirIRIsResultPathShape(pathToken: String, argCount: Int) -> Bool {
+    pathToken == "Result" && argCount == 2
+}
+
+/// mirNativeMethodOwnerNameValid reports whether a NamedType is a bare
+/// owner reference suitable for method-owner lookup — non-builtin,
+/// no package qualifier, no type args. Mirrors the predicate in
+/// `nativeMethodOwnerName` (`ir_native_entry.go`).
+pub fn mirNativeMethodOwnerNameValid(builtin: Bool, packageName: String, argCount: Int) -> Bool {
+    if builtin { return false }
+    if packageName != "" { return false }
+    argCount == 0
+}
+
+/// mirRuntimeDeclareVoidPtrI64Line renders an LLVM declare line for a
+/// runtime helper returning `void` and taking `(ptr, i64)`. Trailing
+/// newline included.
+pub fn mirRuntimeDeclareVoidPtrI64Line(sym: String) -> String {
+    "declare void @" + sym + "(ptr, i64)\n"
+}
+
+/// mirRuntimeDeclareI64PtrI64Line renders an LLVM declare line for a
+/// runtime helper returning `i64` and taking `(ptr, i64)`. Used by the
+/// list/set arity-style probes. Trailing newline included.
+pub fn mirRuntimeDeclareI64PtrI64Line(sym: String) -> String {
+    "declare i64 @" + sym + "(ptr, i64)\n"
+}
+
+/// mirRuntimeDeclareI1PtrPtrLine renders an LLVM declare line for a
+/// runtime helper returning `i1` and taking `(ptr, ptr)`. Used for
+/// container equality / containment probes.
+pub fn mirRuntimeDeclareI1PtrPtrLine(sym: String) -> String {
+    "declare i1 @" + sym + "(ptr, ptr)\n"
+}
+
+/// mirRuntimeDeclarePtrPtrLine renders an LLVM declare line for a
+/// runtime helper returning `ptr` and taking `(ptr)` — the canonical
+/// "container clone / view" shape (clone List, snapshot Map, etc.).
+pub fn mirRuntimeDeclarePtrPtrLine(sym: String) -> String {
+    "declare ptr @" + sym + "(ptr)\n"
+}
+
+/// mirRuntimeDeclarePtrPtrPtrLine renders an LLVM declare line for a
+/// runtime helper returning `ptr` and taking `(ptr, ptr)`. Common for
+/// container concat / merge primitives.
+pub fn mirRuntimeDeclarePtrPtrPtrLine(sym: String) -> String {
+    "declare ptr @" + sym + "(ptr, ptr)\n"
+}
+
+/// mirRuntimeDeclareVoidPtrPtrLine renders an LLVM declare line for a
+/// runtime helper returning `void` and taking `(ptr, ptr)`.
+pub fn mirRuntimeDeclareVoidPtrPtrLine(sym: String) -> String {
+    "declare void @" + sym + "(ptr, ptr)\n"
+}
+
+/// mirRuntimeDeclareI64PtrPtrLine renders an LLVM declare line for a
+/// runtime helper returning `i64` and taking `(ptr, ptr)`.
+pub fn mirRuntimeDeclareI64PtrPtrLine(sym: String) -> String {
+    "declare i64 @" + sym + "(ptr, ptr)\n"
+}
+
+/// mirRuntimeDeclareDoublePtrLine renders an LLVM declare line for a
+/// runtime helper returning `double` and taking `(ptr)`.
+pub fn mirRuntimeDeclareDoublePtrLine(sym: String) -> String {
+    "declare double @" + sym + "(ptr)\n"
+}
+
+/// mirRuntimeDeclareDoublePtrI64Line renders an LLVM declare line for a
+/// runtime helper returning `double` and taking `(ptr, i64)`. Used by
+/// the float-list scalar-load primitives.
+pub fn mirRuntimeDeclareDoublePtrI64Line(sym: String) -> String {
+    "declare double @" + sym + "(ptr, i64)\n"
+}
+
+/// mirRuntimeDeclareI1PtrLine renders an LLVM declare line for a
+/// runtime helper returning `i1` and taking `(ptr)`. Used by the
+/// "is-empty" / "is-defined" predicates.
+pub fn mirRuntimeDeclareI1PtrLine(sym: String) -> String {
+    "declare i1 @" + sym + "(ptr)\n"
+}
+
+/// mirRuntimeDeclareVoidPtrLine renders an LLVM declare line for a
+/// runtime helper returning `void` and taking `(ptr)`. Used by free /
+/// drop / reset primitives.
+pub fn mirRuntimeDeclareVoidPtrLine(sym: String) -> String {
+    "declare void @" + sym + "(ptr)\n"
+}
+
+/// mirRuntimeDeclareI32PtrLine renders an LLVM declare line for a
+/// runtime helper returning `i32` and taking `(ptr)`.
+pub fn mirRuntimeDeclareI32PtrLine(sym: String) -> String {
+    "declare i32 @" + sym + "(ptr)\n"
+}
+
+/// mirRuntimeDeclareI64PtrLine renders an LLVM declare line for a
+/// runtime helper returning `i64` and taking `(ptr)`. Common shape
+/// for `len` / `size` / `hash` primitives.
+pub fn mirRuntimeDeclareI64PtrLine(sym: String) -> String {
+    "declare i64 @" + sym + "(ptr)\n"
+}
+
+/// mirRuntimeDeclarePtrI64Line renders an LLVM declare line for a
+/// runtime helper returning `ptr` and taking `(i64)`. Common for
+/// "make a fresh container of size N" allocators.
+pub fn mirRuntimeDeclarePtrI64Line(sym: String) -> String {
+    "declare ptr @" + sym + "(i64)\n"
+}
+
+/// mirRuntimeDeclareDoubleDoubleLine renders an LLVM declare line for a
+/// runtime helper returning `double` and taking `(double)`. Used for
+/// the std-math intrinsics that pass single doubles (sqrt, sin, …).
+pub fn mirRuntimeDeclareDoubleDoubleLine(sym: String) -> String {
+    "declare double @" + sym + "(double)\n"
+}
+
+/// mirRuntimeDeclareDoubleDoubleDoubleLine renders an LLVM declare
+/// line for a runtime helper returning `double` and taking
+/// `(double, double)` — the binary float intrinsics.
+pub fn mirRuntimeDeclareDoubleDoubleDoubleLine(sym: String) -> String {
+    "declare double @" + sym + "(double, double)\n"
+}
+
+/// mirRuntimeDeclareI64I64I64Line renders an LLVM declare line for a
+/// runtime helper returning `i64` and taking `(i64, i64)` — the
+/// integer-binary intrinsics (gcd, max, min, …).
+pub fn mirRuntimeDeclareI64I64I64Line(sym: String) -> String {
+    "declare i64 @" + sym + "(i64, i64)\n"
+}
+
+/// mirRuntimeDeclareI64I64Line renders an LLVM declare line for a
+/// runtime helper returning `i64` and taking `(i64)`.
+pub fn mirRuntimeDeclareI64I64Line(sym: String) -> String {
+    "declare i64 @" + sym + "(i64)\n"
+}
+
+/// mirRuntimeDeclareDoubleI64Line renders an LLVM declare line for a
+/// runtime helper returning `double` and taking `(i64)` — used for
+/// "convert int to float" intrinsics that bypass standard sitofp.
+pub fn mirRuntimeDeclareDoubleI64Line(sym: String) -> String {
+    "declare double @" + sym + "(i64)\n"
+}
+
+/// mirRuntimeDeclareI64DoubleLine renders an LLVM declare line for a
+/// runtime helper returning `i64` and taking `(double)` — inverse of
+/// the previous shape.
+pub fn mirRuntimeDeclareI64DoubleLine(sym: String) -> String {
+    "declare i64 @" + sym + "(double)\n"
+}
+
+/// mirRuntimeDeclarePtrI8Line renders an LLVM declare line for a
+/// runtime helper returning `ptr` and taking `(i8)`. Used for the
+/// byte-decoder intrinsics.
+pub fn mirRuntimeDeclarePtrI8Line(sym: String) -> String {
+    "declare ptr @" + sym + "(i8)\n"
+}
+
+/// mirRuntimeDeclarePtrI32Line renders an LLVM declare line for a
+/// runtime helper returning `ptr` and taking `(i32)`. Used for the
+/// char-as-string and unicode-conversion intrinsics.
+pub fn mirRuntimeDeclarePtrI32Line(sym: String) -> String {
+    "declare ptr @" + sym + "(i32)\n"
+}
+
+/// mirRuntimeDeclareI32I32Line renders an LLVM declare line for a
+/// runtime helper returning `i32` and taking `(i32)`.
+pub fn mirRuntimeDeclareI32I32Line(sym: String) -> String {
+    "declare i32 @" + sym + "(i32)\n"
+}
+
+/// mirRuntimeDeclareI8I8Line renders an LLVM declare line for a
+/// runtime helper returning `i8` and taking `(i8)`.
+pub fn mirRuntimeDeclareI8I8Line(sym: String) -> String {
+    "declare i8 @" + sym + "(i8)\n"
+}
+
+/// mirRuntimeDeclareI64I64I32Line renders an LLVM declare line for a
+/// runtime helper returning `i64` and taking `(i64, i32)`.
+pub fn mirRuntimeDeclareI64I64I32Line(sym: String) -> String {
+    "declare i64 @" + sym + "(i64, i32)\n"
+}
+
+/// mirRuntimeDeclareI32PtrI64Line renders an LLVM declare line for a
+/// runtime helper returning `i32` and taking `(ptr, i64)`.
+pub fn mirRuntimeDeclareI32PtrI64Line(sym: String) -> String {
+    "declare i32 @" + sym + "(ptr, i64)\n"
+}
+
+/// mirRuntimeDeclareI8PtrI64Line renders an LLVM declare line for a
+/// runtime helper returning `i8` and taking `(ptr, i64)`.
+pub fn mirRuntimeDeclareI8PtrI64Line(sym: String) -> String {
+    "declare i8 @" + sym + "(ptr, i64)\n"
+}
+
+/// mirRuntimeDeclarePtrPtrI64Line renders an LLVM declare line for a
+/// runtime helper returning `ptr` and taking `(ptr, i64)`.
+pub fn mirRuntimeDeclarePtrPtrI64Line(sym: String) -> String {
+    "declare ptr @" + sym + "(ptr, i64)\n"
+}
+
+/// mirRuntimeDeclarePtrPtrPtrPtrLine renders an LLVM declare line for
+/// a runtime helper returning `ptr` and taking `(ptr, ptr, ptr)`.
+/// Used by 3-arg container merges (e.g. updateMap(map, key, fn)).
+pub fn mirRuntimeDeclarePtrPtrPtrPtrLine(sym: String) -> String {
+    "declare ptr @" + sym + "(ptr, ptr, ptr)\n"
+}
+
+/// mirRuntimeDeclareI1PtrPtrPtrLine renders an LLVM declare line for a
+/// runtime helper returning `i1` and taking `(ptr, ptr, ptr)`.
+pub fn mirRuntimeDeclareI1PtrPtrPtrLine(sym: String) -> String {
+    "declare i1 @" + sym + "(ptr, ptr, ptr)\n"
+}
+
+/// mirRuntimeDeclareI64PtrPtrPtrLine renders an LLVM declare line for
+/// a runtime helper returning `i64` and taking `(ptr, ptr, ptr)`.
+pub fn mirRuntimeDeclareI64PtrPtrPtrLine(sym: String) -> String {
+    "declare i64 @" + sym + "(ptr, ptr, ptr)\n"
+}
+
+/// mirRuntimeDeclareVoidPtrPtrPtrLine renders an LLVM declare line for
+/// a runtime helper returning `void` and taking `(ptr, ptr, ptr)`.
+pub fn mirRuntimeDeclareVoidPtrPtrPtrLine(sym: String) -> String {
+    "declare void @" + sym + "(ptr, ptr, ptr)\n"
+}
+
+/// mirRuntimeDeclarePtrPtrI64I64Line renders an LLVM declare line for
+/// a runtime helper returning `ptr` and taking `(ptr, i64, i64)`.
+pub fn mirRuntimeDeclarePtrPtrI64I64Line(sym: String) -> String {
+    "declare ptr @" + sym + "(ptr, i64, i64)\n"
+}
+
+/// mirRuntimeDeclareI64PtrI64I64Line renders an LLVM declare line for
+/// a runtime helper returning `i64` and taking `(ptr, i64, i64)`.
+pub fn mirRuntimeDeclareI64PtrI64I64Line(sym: String) -> String {
+    "declare i64 @" + sym + "(ptr, i64, i64)\n"
+}
+
+/// mirRuntimeDeclareDoublePtrI64I64Line renders an LLVM declare line
+/// for a runtime helper returning `double` and taking
+/// `(ptr, i64, i64)`.
+pub fn mirRuntimeDeclareDoublePtrI64I64Line(sym: String) -> String {
+    "declare double @" + sym + "(ptr, i64, i64)\n"
+}
+
+/// mirRuntimeDeclareI1PtrI64Line renders an LLVM declare line for a
+/// runtime helper returning `i1` and taking `(ptr, i64)`.
+pub fn mirRuntimeDeclareI1PtrI64Line(sym: String) -> String {
+    "declare i1 @" + sym + "(ptr, i64)\n"
+}
+
+/// mirRuntimeDeclareVoidI64Line renders an LLVM declare line for a
+/// runtime helper returning `void` and taking `(i64)`. Used by exit-
+/// style abort intrinsics.
+pub fn mirRuntimeDeclareVoidI64Line(sym: String) -> String {
+    "declare void @" + sym + "(i64)\n"
+}
+
+/// mirRuntimeDeclareI64Line renders an LLVM declare line for a
+/// runtime helper returning `i64` and taking no arguments. Sibling of
+/// `mirRuntimeDeclareI64NoArgsLine` — both forms are kept so call
+/// sites can pick the more readable name.
+pub fn mirRuntimeDeclareI64Line(sym: String) -> String {
+    "declare i64 @" + sym + "()\n"
+}
+
+/// mirRuntimeDeclareDoubleLine renders an LLVM declare line for a
+/// runtime helper returning `double` and taking no arguments.
+pub fn mirRuntimeDeclareDoubleLine(sym: String) -> String {
+    "declare double @" + sym + "()\n"
+}
+
+/// mirRuntimeDeclarePtrLine renders an LLVM declare line for a
+/// runtime helper returning `ptr` and taking no arguments.
+pub fn mirRuntimeDeclarePtrLine(sym: String) -> String {
+    "declare ptr @" + sym + "()\n"
+}
+
+/// mirRuntimeDeclareVoidLine renders an LLVM declare line for a
+/// runtime helper returning `void` and taking no arguments.
+pub fn mirRuntimeDeclareVoidLine(sym: String) -> String {
+    "declare void @" + sym + "()\n"
+}
+
+/// mirRuntimeDeclareI1Line renders an LLVM declare line for a
+/// runtime helper returning `i1` and taking no arguments.
+pub fn mirRuntimeDeclareI1Line(sym: String) -> String {
+    "declare i1 @" + sym + "()\n"
+}
+
+/// mirRuntimeDeclareI32Line renders an LLVM declare line for a
+/// runtime helper returning `i32` and taking no arguments.
+pub fn mirRuntimeDeclareI32Line(sym: String) -> String {
+    "declare i32 @" + sym + "()\n"
+}
+
+/// mirRuntimeDeclareI8Line renders an LLVM declare line for a
+/// runtime helper returning `i8` and taking no arguments.
+pub fn mirRuntimeDeclareI8Line(sym: String) -> String {
+    "declare i8 @" + sym + "()\n"
+}
+
+/// mirRuntimeDeclarePtrPtrI64I64I64Line renders an LLVM declare line
+/// for a runtime helper returning `ptr` and taking `(ptr, i64, i64,
+/// i64)` — used for the 3-int-argument container slicers.
+pub fn mirRuntimeDeclarePtrPtrI64I64I64Line(sym: String) -> String {
+    "declare ptr @" + sym + "(ptr, i64, i64, i64)\n"
+}
+
+/// mirRuntimeDeclareI64PtrI64I64I64Line renders an LLVM declare line
+/// for a runtime helper returning `i64` and taking `(ptr, i64, i64,
+/// i64)`.
+pub fn mirRuntimeDeclareI64PtrI64I64I64Line(sym: String) -> String {
+    "declare i64 @" + sym + "(ptr, i64, i64, i64)\n"
+}
+
+/// mirCalloutCallTypedLine renders a `<dst> = call <retTy>
+/// @<sym>(<args>)` line (with trailing newline). When `retTy` is
+/// `"void"`, `dst` is ignored and the form `  call void @<sym>(<args>)`
+/// is emitted (no `<dst> =` prefix). All return-type-typed callout
+/// builders are sugar wrappers over this; keeping the dispatch in one
+/// place minimises the cost of evolving the call shape (e.g. adding
+/// trailing function attributes).
+pub fn mirCalloutCallTypedLine(dst: String, retTy: String, sym: String, args: String) -> String {
+    if retTy == "void" {
+        return "  call void @" + sym + "(" + args + ")\n"
+    }
+    "  " + dst + " = call " + retTy + " @" + sym + "(" + args + ")\n"
+}
+
+/// mirCalloutCallVoidLine — sugar wrapper for the void-return shape.
+pub fn mirCalloutCallVoidLine(sym: String, args: String) -> String {
+    mirCalloutCallTypedLine("", "void", sym, args)
+}
+
+/// mirCalloutCallI64Line — sugar wrapper for `i64`-return shape.
+pub fn mirCalloutCallI64Line(dst: String, sym: String, args: String) -> String {
+    mirCalloutCallTypedLine(dst, "i64", sym, args)
+}
+
+/// mirCalloutCallPtrLine — sugar wrapper for `ptr`-return shape.
+pub fn mirCalloutCallPtrLine(dst: String, sym: String, args: String) -> String {
+    mirCalloutCallTypedLine(dst, "ptr", sym, args)
+}
+
+/// mirCalloutCallDoubleLine — sugar wrapper for `double`-return shape.
+pub fn mirCalloutCallDoubleLine(dst: String, sym: String, args: String) -> String {
+    mirCalloutCallTypedLine(dst, "double", sym, args)
+}
+
+/// mirCalloutCallI1Line — sugar wrapper for `i1`-return shape.
+pub fn mirCalloutCallI1Line(dst: String, sym: String, args: String) -> String {
+    mirCalloutCallTypedLine(dst, "i1", sym, args)
+}
+
+/// mirCalloutCallI32Line — sugar wrapper for `i32`-return shape.
+pub fn mirCalloutCallI32Line(dst: String, sym: String, args: String) -> String {
+    mirCalloutCallTypedLine(dst, "i32", sym, args)
+}
+
+/// mirCalloutCallI8Line — sugar wrapper for `i8`-return shape.
+pub fn mirCalloutCallI8Line(dst: String, sym: String, args: String) -> String {
+    mirCalloutCallTypedLine(dst, "i8", sym, args)
+}
+
+/// mirScalarLLVMTypeForOptionInnerName maps a primitive type name to
+/// its LLVM scalar representation when used as an `Option<T>` inner.
+/// Returns "" for ptr-backed or aggregate payloads which don't need a
+/// scalar load at unwrap time. Mirrors `scalarLLVMTypeForOptionInner`
+/// in `internal/llvmgen/expr.go`.
+pub fn mirScalarLLVMTypeForOptionInnerName(name: String) -> String {
+    if name == "Int" { return "i64" }
+    if name == "Bool" { return "i1" }
+    if name == "Float" { return "double" }
+    if name == "Char" { return "i32" }
+    if name == "Byte" { return "i8" }
+    ""
+}
+
+/// mirIsScalarOptionInnerName reports whether a primitive type name
+/// has a heap-boxed scalar `Option<T>` representation. Sugar wrapper
+/// around `mirScalarLLVMTypeForOptionInnerName`.
+pub fn mirIsScalarOptionInnerName(name: String) -> Bool {
+    mirScalarLLVMTypeForOptionInnerName(name) != ""
+}
+
+/// mirIRPrimKindCanonicalName returns the canonical Osty type name for
+/// an `ir.PrimKind` int code (kind values match the iota order in
+/// `internal/ir/ir.go`). The result is the user-visible name used in
+/// diagnostic strings — `Int8`, `UInt32`, etc. Returns "" for unknown
+/// or pseudo kinds. Sibling of `mirLegacyPrimTypeName` but covers the
+/// extra kinds that pseudo-codes (Unit, Never, RawPtr) need to label.
+pub fn mirIRPrimKindCanonicalName(
+    kind: Int,
+    primInt: Int,
+    primInt8: Int,
+    primInt16: Int,
+    primInt32: Int,
+    primInt64: Int,
+    primUInt8: Int,
+    primUInt16: Int,
+    primUInt32: Int,
+    primUInt64: Int,
+    primByte: Int,
+    primFloat: Int,
+    primFloat32: Int,
+    primFloat64: Int,
+    primBool: Int,
+    primChar: Int,
+    primString: Int,
+    primBytes: Int,
+    primUnit: Int,
+    primNever: Int,
+    primRawPtr: Int,
+) -> String {
+    if kind == primInt { return "Int" }
+    if kind == primInt8 { return "Int8" }
+    if kind == primInt16 { return "Int16" }
+    if kind == primInt32 { return "Int32" }
+    if kind == primInt64 { return "Int64" }
+    if kind == primUInt8 { return "UInt8" }
+    if kind == primUInt16 { return "UInt16" }
+    if kind == primUInt32 { return "UInt32" }
+    if kind == primUInt64 { return "UInt64" }
+    if kind == primByte { return "Byte" }
+    if kind == primFloat { return "Float" }
+    if kind == primFloat32 { return "Float32" }
+    if kind == primFloat64 { return "Float64" }
+    if kind == primBool { return "Bool" }
+    if kind == primChar { return "Char" }
+    if kind == primString { return "String" }
+    if kind == primBytes { return "Bytes" }
+    if kind == primUnit { return "Unit" }
+    if kind == primNever { return "Never" }
+    if kind == primRawPtr { return "RawPtr" }
+    ""
+}
+
+/// mirIsLegacyResultPathShape reports whether an AST `*ast.NamedType` is
+/// shaped like `Result<T, E>`. Mirrors the predicate in
+/// `builtinResultPayloadSourceType` for the AST surface. Path is a
+/// single-token slice with `"Result"` and exactly two args.
+pub fn mirIsLegacyResultPathShape(pathTokenCount: Int, firstPathToken: String, argCount: Int) -> Bool {
+    if pathTokenCount != 1 { return false }
+    if firstPathToken != "Result" { return false }
+    argCount == 2
+}
+
+/// mirIsLegacyOptionPathShape reports whether an AST `*ast.NamedType`
+/// is shaped like `Option<T>`. Path is a single-token slice with
+/// `"Option"` and exactly one arg.
+pub fn mirIsLegacyOptionPathShape(pathTokenCount: Int, firstPathToken: String, argCount: Int) -> Bool {
+    if pathTokenCount != 1 { return false }
+    if firstPathToken != "Option" { return false }
+    argCount == 1
+}
+
+/// mirIsLegacyListPathShape reports whether an AST `*ast.NamedType` is
+/// shaped like `List<T>`. Path is a single-token slice with `"List"`
+/// and exactly one arg.
+pub fn mirIsLegacyListPathShape(pathTokenCount: Int, firstPathToken: String, argCount: Int) -> Bool {
+    if pathTokenCount != 1 { return false }
+    if firstPathToken != "List" { return false }
+    argCount == 1
+}
+
+/// mirIsLegacyMapPathShape reports whether an AST `*ast.NamedType` is
+/// shaped like `Map<K, V>`. Path is a single-token slice with `"Map"`
+/// and exactly two args.
+pub fn mirIsLegacyMapPathShape(pathTokenCount: Int, firstPathToken: String, argCount: Int) -> Bool {
+    if pathTokenCount != 1 { return false }
+    if firstPathToken != "Map" { return false }
+    argCount == 2
+}
+
+/// mirIsLegacySetPathShape reports whether an AST `*ast.NamedType` is
+/// shaped like `Set<T>`. Path is a single-token slice with `"Set"` and
+/// exactly one arg.
+pub fn mirIsLegacySetPathShape(pathTokenCount: Int, firstPathToken: String, argCount: Int) -> Bool {
+    if pathTokenCount != 1 { return false }
+    if firstPathToken != "Set" { return false }
+    argCount == 1
+}
+
+/// mirIsLegacyChannelPathShape reports whether an AST `*ast.NamedType`
+/// is shaped like `Channel<T>`. Path is a single-token slice with
+/// `"Channel"` and exactly one arg.
+pub fn mirIsLegacyChannelPathShape(pathTokenCount: Int, firstPathToken: String, argCount: Int) -> Bool {
+    if pathTokenCount != 1 { return false }
+    if firstPathToken != "Channel" { return false }
+    argCount == 1
+}
+
+/// mirIsLegacyRangePathShape reports whether an AST `*ast.NamedType` is
+/// shaped like `Range<T>`. Path is a single-token slice with `"Range"`
+/// and exactly one arg.
+pub fn mirIsLegacyRangePathShape(pathTokenCount: Int, firstPathToken: String, argCount: Int) -> Bool {
+    if pathTokenCount != 1 { return false }
+    if firstPathToken != "Range" { return false }
+    argCount == 1
+}
+
+/// mirIsLegacyHandlePathShape reports whether an AST `*ast.NamedType`
+/// is shaped like `Handle<T>`. Path is a single-token slice with
+/// `"Handle"` and exactly one arg.
+pub fn mirIsLegacyHandlePathShape(pathTokenCount: Int, firstPathToken: String, argCount: Int) -> Bool {
+    if pathTokenCount != 1 { return false }
+    if firstPathToken != "Handle" { return false }
+    argCount == 1
+}
+
+/// mirIsLegacyTaskGroupPathShape reports whether an AST `*ast.NamedType`
+/// is shaped like `TaskGroup`. Path is a single-token slice with
+/// `"TaskGroup"` and zero args (the only TaskGroup shape today).
+pub fn mirIsLegacyTaskGroupPathShape(pathTokenCount: Int, firstPathToken: String, argCount: Int) -> Bool {
+    if pathTokenCount != 1 { return false }
+    if firstPathToken != "TaskGroup" { return false }
+    argCount == 0
+}
+
+/// mirIsLegacyZeroArgPathName reports whether a Path single-token name
+/// matches a target name with exactly zero type args. Used by the
+/// `String` / `Bytes` / `Byte` / `Int` / etc. predicate sites to share
+/// the shape check.
+pub fn mirIsLegacyZeroArgPathName(pathTokenCount: Int, firstPathToken: String, argCount: Int, target: String) -> Bool {
+    if pathTokenCount != 1 { return false }
+    if firstPathToken != target { return false }
+    argCount == 0
+}
+
+/// mirExprPosLabel formats the `at <pos> (offset <offset>)` label
+/// used by diagnostic messages tied to a source node. Mirrors the
+/// `fmt.Sprintf("at %s (offset %d)", ...)` call in `exprPosLabel`
+/// (`internal/llvmgen/expr.go`); position rendering stays on the Go
+/// side because Osty has no equivalent of `(token.Pos).String()`.
+pub fn mirExprPosLabel(posText: String, offsetText: String) -> String {
+    "at " + posText + " (offset " + offsetText + ")"
+}
+
+/// mirTestingFailureLabelLine formats `<label>:<line>` for the
+/// "testing.<method> failed at <file>:<line>" diagnostic. Mirrors the
+/// inline `fmt.Sprintf("%s:%d", label, line)` in
+/// `nativeTestingFailureMessage` (`internal/llvmgen/ir_native_entry.go`).
+pub fn mirTestingFailureLabelLine(label: String, lineDigits: String) -> String {
+    label + ":" + lineDigits
+}
+
+/// mirTestingFailureMessageBare formats `testing.<method> failed at
+/// <label>` — the bare form without the `expr=...` suffix.
+/// Mirrors the inline `fmt.Sprintf("testing.%s failed at %s", method,
+/// label)` in `nativeTestingFailureMessage`.
+pub fn mirTestingFailureMessageBare(method: String, label: String) -> String {
+    "testing." + method + " failed at " + label
+}
+
+/// mirTestingFailureMessageWithExpr appends `; expr=`<text>`` to a
+/// pre-rendered base message. Used for `expectOk` / `expectError`
+/// shapes where the expression text adds debugging context.
+pub fn mirTestingFailureMessageWithExpr(base: String, exprText: String) -> String {
+    base + "; expr=`" + exprText + "`"
+}
+
+/// mirNativeStringConstantName formats the `@.strN` global symbol
+/// name for static string literals. Mirrors the `fmt.Sprintf("@.str%d",
+/// id)` call in `ir_native_entry.go`.
+pub fn mirNativeStringConstantName(idDigits: String) -> String {
+    "@.str" + idDigits
+}
+
+/// mirNativeLiftedClosureName formats the `__osty_closure_<id>`
+/// symbol used for lifted closure bodies. Mirrors the
+/// `fmt.Sprintf("__osty_closure_%d", id)` call in
+/// `ir_native_entry.go`.
+pub fn mirNativeLiftedClosureName(idDigits: String) -> String {
+    "__osty_closure_" + idDigits
+}
+
+/// mirHiddenBenchLocalName formats the synthetic `__bench_i_<id>`
+/// local that the bench runner uses for the per-iteration counter.
+/// Mirrors the `fmt.Sprintf("__bench_i_%d", id)` call in
+/// `internal/llvmgen/stmt.go`.
+pub fn mirHiddenBenchLocalName(idDigits: String) -> String {
+    "__bench_i_" + idDigits
+}
+
+/// mirBenchSourceLineLabelText formats the `bench <label>` prefix the
+/// runner emits before the failure-message body. Mirrors the inline
+/// `fmt.Sprintf("bench %s", g.sourceLineLabel(...))` in
+/// `internal/llvmgen/stmt.go`.
+pub fn mirBenchSourceLineLabelText(label: String) -> String {
+    "bench " + label
+}
+
+/// mirBenchPropagatedFailureText formats the `bench `?` propagated
+/// failure at <label>` message used when the bench-body returns an
+/// `Err(...)` through `?`.
+pub fn mirBenchPropagatedFailureText(label: String) -> String {
+    "bench `?` propagated failure at " + label
+}
+
+/// mirLlvmZeroValueIsScalar reports whether `typ` is one of the four
+/// canonical scalar LLVM types (`ptr`, `i64`, `i1`, `double`) whose
+/// zero values have a dedicated literal (`null`, `0`, `false`, `0.0`).
+/// All other types fall through to the `zeroinitializer` aggregate
+/// form. Mirrors the negated-OR predicate in `llvmZeroValue`
+/// (`internal/llvmgen/generator.go`).
+pub fn mirLlvmZeroValueIsScalar(typ: String) -> Bool {
+    if typ == "ptr" { return true }
+    if typ == "i64" { return true }
+    if typ == "i1" { return true }
+    if typ == "double" { return true }
+    false
+}
+
+/// mirIsCanonicalScalarLLVMType reports whether `typ` is one of the
+/// "canonical" scalar LLVM types reachable from the source surface
+/// (`ptr`, `i64`, `i1`, `double`, `i32`, `i8`, `i16`, `float`).
+/// Used by intrinsic / runtime ABI gates to decide between the
+/// "by-value" path and the "by-pointer" aggregate path.
+pub fn mirIsCanonicalScalarLLVMType(typ: String) -> Bool {
+    if typ == "ptr" { return true }
+    if typ == "i64" { return true }
+    if typ == "i1" { return true }
+    if typ == "double" { return true }
+    if typ == "i32" { return true }
+    if typ == "i8" { return true }
+    if typ == "i16" { return true }
+    if typ == "float" { return true }
+    false
+}
+
+/// mirIsIntegerLLVMType reports whether `typ` is an integer LLVM
+/// type. Same as `intLLVMBits(typ) > 0` but kept as a sugar predicate
+/// so call sites read clearly.
+pub fn mirIsIntegerLLVMType(typ: String) -> Bool {
+    if typ == "i1" { return true }
+    if typ == "i8" { return true }
+    if typ == "i16" { return true }
+    if typ == "i32" { return true }
+    if typ == "i64" { return true }
+    if typ == "i128" { return true }
+    false
+}
+
+/// mirIsFloatLLVMType reports whether `typ` is a float LLVM type.
+pub fn mirIsFloatLLVMType(typ: String) -> Bool {
+    if typ == "float" { return true }
+    if typ == "double" { return true }
+    if typ == "fp128" { return true }
+    false
+}
+
+/// mirIsPtrLLVMType reports whether `typ` is the canonical opaque
+/// `ptr` LLVM type.
+pub fn mirIsPtrLLVMType(typ: String) -> Bool {
+    typ == "ptr"
+}
+
+/// mirLLVMTypeBitWidth returns the bit-width of an integer LLVM type
+/// (`iN`). Returns 0 for non-integer or unknown types.
+pub fn mirLLVMTypeBitWidth(typ: String) -> Int {
+    if typ == "i1" { return 1 }
+    if typ == "i8" { return 8 }
+    if typ == "i16" { return 16 }
+    if typ == "i32" { return 32 }
+    if typ == "i64" { return 64 }
+    if typ == "i128" { return 128 }
+    0
+}
+
+/// mirLLVMFloatBitWidth returns the bit-width of a float LLVM type.
+/// Returns 0 for non-float or unknown types.
+pub fn mirLLVMFloatBitWidth(typ: String) -> Int {
+    if typ == "float" { return 32 }
+    if typ == "double" { return 64 }
+    if typ == "fp128" { return 128 }
+    0
+}
+
+/// mirInteriorPointerOffsetText formats the byte offset for an
+/// interior-pointer GEP. Used by callers that do `getelementptr i8,
+/// ptr <base>, i64 <byteOffset>`.
+pub fn mirInteriorPointerOffsetText(byteOffset: Int) -> String {
+    mirGenIntToString(byteOffset)
+}
+
+/// mirCallSiteFunctionAttribute formats the trailing function-
+/// attribute suffix appended to a `call` instruction. Empty when no
+/// attribute is required.
+pub fn mirCallSiteFunctionAttribute(attr: String) -> String {
+    if attr == "" { return "" }
+    " " + attr
+}
+
+/// mirIRPrintIntrinsicNameByCode maps the print-family `IntrinsicKind`
+/// int code to the user-visible name. Mirrors the `intrinsicPrint /
+/// Println / Eprint / Eprintln` arms in
+/// `mirLegacyIntrinsicName`. The wider catalogue of intrinsics
+/// (allocator, vtable, …) returns "" because the legacy emitter
+/// only labelled these four.
+pub fn mirIRPrintIntrinsicNameByCode(
+    kind: Int,
+    intrinsicPrint: Int,
+    intrinsicPrintln: Int,
+    intrinsicEprint: Int,
+    intrinsicEprintln: Int,
+) -> String {
+    if kind == intrinsicPrint { return "print" }
+    if kind == intrinsicPrintln { return "println" }
+    if kind == intrinsicEprint { return "eprint" }
+    if kind == intrinsicEprintln { return "eprintln" }
+    ""
+}
+
+/// mirLegacyChannelKindOpcode maps a channel-recv "suffix" opcode
+/// flag (the small int the runtime uses to distinguish recv shapes)
+/// to the suffix label. Returns "" for unknown flags.
+pub fn mirLegacyChannelKindOpcode(flag: Int) -> String {
+    if flag == 0 { return "" }
+    if flag == 1 { return "_i64" }
+    if flag == 2 { return "_i1" }
+    if flag == 3 { return "_double" }
+    if flag == 4 { return "_ptr" }
+    ""
+}
+
+/// mirLegacyHandleJoinReturnTypeName maps the int code of a
+/// `Handle<T>.join` callee's return type to the canonical LLVM type
+/// name used for the result slot. `0` -> `void`, `1` -> `ptr`,
+/// `2` -> `i64`, `3` -> `i1`, `4` -> `double`. Mirrors the legacy
+/// dispatch in `mir_generator.go`.
+pub fn mirLegacyHandleJoinReturnTypeName(code: Int) -> String {
+    if code == 0 { return "void" }
+    if code == 1 { return "ptr" }
+    if code == 2 { return "i64" }
+    if code == 3 { return "i1" }
+    if code == 4 { return "double" }
+    ""
+}
+
+/// mirSafepointKindLabel maps a safepoint-kind int code to its
+/// human-readable diagnostic label. Mirrors the dispatch in
+/// `mirGen.emitGCSafepointKind` for the kinds the diagnostic surface
+/// names (entry / loop / yield).
+pub fn mirSafepointKindLabel(code: Int) -> String {
+    if code == 0 { return "entry" }
+    if code == 1 { return "loop" }
+    if code == 2 { return "yield" }
+    ""
+}
+
+/// mirChanRecvOpcodeFromElemLLVM maps an LLVM element type to the
+/// `osty_rt_chan_recv` runtime suffix integer. `0` = unsupported;
+/// `1` = i64; `2` = i1; `3` = double; `4` = ptr.
+pub fn mirChanRecvOpcodeFromElemLLVM(elemLLVM: String) -> Int {
+    if elemLLVM == "i64" { return 1 }
+    if elemLLVM == "i1" { return 2 }
+    if elemLLVM == "double" { return 3 }
+    if elemLLVM == "ptr" { return 4 }
+    0
+}
+
+/// mirInterfaceShimEmitterStateNew returns the canonical empty
+/// interface-shim emitter state shape — an empty body line list. The
+/// dedicated builder lets the caller fold an emit pipeline through a
+/// single sentinel without juggling raw `[]string` initializers.
+pub fn mirInterfaceShimEmitterStateNew() -> List<String> {
+    let xs: List<String> = []
+    xs
+}
+
+/// mirJoinNewlineText flattens a list of strings with `\n`
+/// separators. Sibling of the existing `mirJoinNewline`. Used by
+/// callers building multi-line block bodies that get joined later.
+pub fn mirJoinNewlineText(parts: List<String>) -> String {
+    mirJoinNewline(parts)
+}
+
+/// mirIRConstKindLabel returns the human-readable label for an
+/// `ir.ConstKind` int code (used by `testingConstSourceText`-like
+/// callers to label the const family without dispatching on the
+/// host-side type assertion). `0` = Int; `1` = Bool; `2` = Float;
+/// `3` = String; `4` = Char; `5` = Bytes.
+pub fn mirIRConstKindLabel(code: Int) -> String {
+    if code == 0 { return "Int" }
+    if code == 1 { return "Bool" }
+    if code == 2 { return "Float" }
+    if code == 3 { return "String" }
+    if code == 4 { return "Char" }
+    if code == 5 { return "Bytes" }
+    ""
+}
+
+/// mirEnumLayoutVariantTagName returns the canonical name used for the
+/// enum-layout discriminant when emitting an `i64` tag variant. Used by
+/// the LLVM payload writer to keep tag-only variants distinguishable
+/// from data-bearing ones.
+pub fn mirEnumLayoutVariantTagName(enumName: String, variantName: String) -> String {
+    "%" + enumName + "." + variantName
+}
+
+/// mirEnumLayoutPayloadName returns the canonical type name for an
+/// enum variant's payload struct (the `%Enum.Variant.payload` shape
+/// used by the lowering when emitting `extractvalue` chains).
+pub fn mirEnumLayoutPayloadName(enumName: String, variantName: String) -> String {
+    "%" + enumName + "." + variantName + ".payload"
+}
+
+/// mirVtableSlotIndexLine renders the GEP into a vtable slot at a
+/// fixed `i64` index — `<dst> = getelementptr ptr, ptr <vt>, i64
+/// <index>`. Trailing newline included.
+pub fn mirVtableSlotIndexLine(dst: String, vt: String, index: String) -> String {
+    "  " + dst + " = getelementptr ptr, ptr " + vt + ", i64 " + index + "\n"
+}
+
+/// mirVtableSlotIndexText is the no-newline variant of
+/// `mirVtableSlotIndexLine` — used by emitter `body` slice consumers
+/// that join with `\n` later.
+pub fn mirVtableSlotIndexText(dst: String, vt: String, index: String) -> String {
+    "  " + dst + " = getelementptr ptr, ptr " + vt + ", i64 " + index
+}
+
+/// mirInterfaceFatPointerExtractLine renders the LLVM IR for pulling
+/// the data ptr (`extractvalue %osty.iface <fat>, 0`) or vtable ptr
+/// (`extractvalue %osty.iface <fat>, 1`) from an interface fat
+/// pointer. Slot 0 is data, slot 1 is vtable. Trailing newline.
+pub fn mirInterfaceFatPointerExtractLine(dst: String, fat: String, slot: Int) -> String {
+    "  " + dst + " = extractvalue %osty.iface " + fat + ", " + mirGenIntToString(slot) + "\n"
+}
+
+/// mirInterfaceFatPointerExtractText is the no-newline variant.
+pub fn mirInterfaceFatPointerExtractText(dst: String, fat: String, slot: Int) -> String {
+    "  " + dst + " = extractvalue %osty.iface " + fat + ", " + mirGenIntToString(slot)
+}
+
+/// mirInterfaceFatPointerInsertDataLine renders the LLVM IR for
+/// inserting a data pointer into a zeroinitializer interface
+/// fat-pointer aggregate (slot 0). Trailing newline.
+pub fn mirInterfaceFatPointerInsertDataLine(dst: String, dataReg: String) -> String {
+    "  " + dst + " = insertvalue %osty.iface zeroinitializer, ptr " + dataReg + ", 0\n"
+}
+
+/// mirInterfaceFatPointerInsertDataText is the no-newline variant.
+pub fn mirInterfaceFatPointerInsertDataText(dst: String, dataReg: String) -> String {
+    "  " + dst + " = insertvalue %osty.iface zeroinitializer, ptr " + dataReg + ", 0"
+}
+
+/// mirInterfaceFatPointerInsertVtableLine renders the LLVM IR for
+/// inserting a vtable pointer into an existing fat-pointer aggregate
+/// (slot 1). Trailing newline.
+pub fn mirInterfaceFatPointerInsertVtableLine(dst: String, base: String, vtReg: String) -> String {
+    "  " + dst + " = insertvalue %osty.iface " + base + ", ptr " + vtReg + ", 1\n"
+}
+
+/// mirInterfaceFatPointerInsertVtableText is the no-newline variant.
+pub fn mirInterfaceFatPointerInsertVtableText(dst: String, base: String, vtReg: String) -> String {
+    "  " + dst + " = insertvalue %osty.iface " + base + ", ptr " + vtReg + ", 1"
+}
+
+/// mirIndirectCallVoidText renders the no-newline form of the
+/// `call void <fnPtr>(<args>)` indirect call shape.
+pub fn mirIndirectCallVoidText(fnPtr: String, args: String) -> String {
+    "  call void " + fnPtr + "(" + args + ")"
+}
+
+/// mirIndirectCallValueText renders the no-newline form of an
+/// indirect call that produces a value: `<dst> = call <retTy>
+/// <fnPtr>(<args>)`.
+pub fn mirIndirectCallValueText(dst: String, retTy: String, fnPtr: String, args: String) -> String {
+    "  " + dst + " = call " + retTy + " " + fnPtr + "(" + args + ")"
+}
+
+/// mirGEPI8ByteOffsetLine renders the byte-offset GEP shape used for
+/// closure env slot addressing — `<dst> = getelementptr i8, ptr <env>,
+/// i64 <offset>`. Trailing newline.
+pub fn mirGEPI8ByteOffsetLine(dst: String, base: String, offset: String) -> String {
+    "  " + dst + " = getelementptr i8, ptr " + base + ", i64 " + offset + "\n"
+}
+
+/// mirGEPI8ByteOffsetText is the no-newline variant.
+pub fn mirGEPI8ByteOffsetText(dst: String, base: String, offset: String) -> String {
+    "  " + dst + " = getelementptr i8, ptr " + base + ", i64 " + offset
+}
+
+/// mirStoreTypedToPtrLine renders the typed-store form `store <typ>
+/// <val>, ptr <slot>`. Trailing newline.
+pub fn mirStoreTypedToPtrLine(typ: String, val: String, slot: String) -> String {
+    "  store " + typ + " " + val + ", ptr " + slot + "\n"
+}
+
+/// mirStoreTypedToPtrText is the no-newline variant.
+pub fn mirStoreTypedToPtrText(typ: String, val: String, slot: String) -> String {
+    "  store " + typ + " " + val + ", ptr " + slot
+}
+
+/// mirLoadTypedFromPtrLine renders `<dst> = load <typ>, ptr <slot>`.
+/// Trailing newline.
+pub fn mirLoadTypedFromPtrLine(dst: String, typ: String, slot: String) -> String {
+    "  " + dst + " = load " + typ + ", ptr " + slot + "\n"
+}
+
+/// mirLoadTypedFromPtrText is the no-newline variant.
+pub fn mirLoadTypedFromPtrText(dst: String, typ: String, slot: String) -> String {
+    "  " + dst + " = load " + typ + ", ptr " + slot
+}
+
+/// mirCondBrLine renders `br i1 <cond>, label %<thenL>, label %<elseL>`.
+/// Trailing newline.
+pub fn mirCondBrLine(cond: String, thenL: String, elseL: String) -> String {
+    "  br i1 " + cond + ", label %" + thenL + ", label %" + elseL + "\n"
+}
+
+/// mirCondBrText is the no-newline variant.
+pub fn mirCondBrText(cond: String, thenL: String, elseL: String) -> String {
+    "  br i1 " + cond + ", label %" + thenL + ", label %" + elseL
+}
+
+/// mirUncondBrLine renders `br label %<target>`. Trailing newline.
+pub fn mirUncondBrLine(target: String) -> String {
+    "  br label %" + target + "\n"
+}
+
+/// mirUncondBrText is the no-newline variant.
+pub fn mirUncondBrText(target: String) -> String {
+    "  br label %" + target
+}
+
+/// mirPhi2WayLine renders a 2-incoming-edge phi: `<dst> = phi <typ> [
+/// <vA>, %<labelA> ], [ <vB>, %<labelB> ]`. Trailing newline.
+pub fn mirPhi2WayLine(dst: String, typ: String, vA: String, labelA: String, vB: String, labelB: String) -> String {
+    "  " + dst + " = phi " + typ + " [ " + vA + ", %" + labelA + " ], [ " + vB + ", %" + labelB + " ]\n"
+}
+
+/// mirPhi2WayText is the no-newline variant of `mirPhi2WayLine`.
+pub fn mirPhi2WayText(dst: String, typ: String, vA: String, labelA: String, vB: String, labelB: String) -> String {
+    "  " + dst + " = phi " + typ + " [ " + vA + ", %" + labelA + " ], [ " + vB + ", %" + labelB + " ]"
+}
+
+/// mirInsertvalueGenericLine renders the generic insertvalue shape
+/// `<dst> = insertvalue <aggTy> <agg>, <fieldTy> <fieldVal>, <idx>`.
+/// Trailing newline.
+pub fn mirInsertvalueGenericLine(dst: String, aggTy: String, agg: String, fieldTy: String, fieldVal: String, idx: String) -> String {
+    "  " + dst + " = insertvalue " + aggTy + " " + agg + ", " + fieldTy + " " + fieldVal + ", " + idx + "\n"
+}
+
+/// mirInsertvalueGenericText is the no-newline variant of
+/// `mirInsertvalueGenericLine`.
+pub fn mirInsertvalueGenericText(dst: String, aggTy: String, agg: String, fieldTy: String, fieldVal: String, idx: String) -> String {
+    "  " + dst + " = insertvalue " + aggTy + " " + agg + ", " + fieldTy + " " + fieldVal + ", " + idx
+}
+
+/// mirExtractvalueGenericLine renders `<dst> = extractvalue <aggTy>
+/// <agg>, <idx>`. Trailing newline.
+pub fn mirExtractvalueGenericLine(dst: String, aggTy: String, agg: String, idx: String) -> String {
+    "  " + dst + " = extractvalue " + aggTy + " " + agg + ", " + idx + "\n"
+}
+
+/// mirExtractvalueGenericText is the no-newline variant.
+pub fn mirExtractvalueGenericText(dst: String, aggTy: String, agg: String, idx: String) -> String {
+    "  " + dst + " = extractvalue " + aggTy + " " + agg + ", " + idx
+}
+
+/// mirSelectGenericLine renders the LLVM `select` form: `<dst> =
+/// select i1 <cond>, <typ> <vIfTrue>, <typ> <vIfFalse>`. Trailing
+/// newline.
+pub fn mirSelectGenericLine(dst: String, cond: String, typ: String, vTrue: String, vFalse: String) -> String {
+    "  " + dst + " = select i1 " + cond + ", " + typ + " " + vTrue + ", " + typ + " " + vFalse + "\n"
+}
+
+/// mirSelectGenericText is the no-newline variant.
+pub fn mirSelectGenericText(dst: String, cond: String, typ: String, vTrue: String, vFalse: String) -> String {
+    "  " + dst + " = select i1 " + cond + ", " + typ + " " + vTrue + ", " + typ + " " + vFalse
+}
+
+/// mirICmpNeLine renders `<dst> = icmp ne <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirICmpNeLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = icmp ne " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirICmpSltLine renders `<dst> = icmp slt <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirICmpSltLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = icmp slt " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirICmpSleLine renders `<dst> = icmp sle <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirICmpSleLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = icmp sle " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirICmpSgtLine renders `<dst> = icmp sgt <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirICmpSgtLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = icmp sgt " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirICmpSgeLine renders `<dst> = icmp sge <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirICmpSgeLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = icmp sge " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirSiToFpLine renders `<dst> = sitofp <fromTy> <val> to <toTy>`.
+/// Trailing newline.
+pub fn mirSiToFpLine(dst: String, fromTy: String, val: String, toTy: String) -> String {
+    "  " + dst + " = sitofp " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+/// mirFpToSiLine renders `<dst> = fptosi <fromTy> <val> to <toTy>`.
+/// Trailing newline.
+pub fn mirFpToSiLine(dst: String, fromTy: String, val: String, toTy: String) -> String {
+    "  " + dst + " = fptosi " + fromTy + " " + val + " to " + toTy + "\n"
+}
+
+/// mirAllocaTypedLine renders `<slot> = alloca <typ>` with trailing
+/// newline.
+pub fn mirAllocaTypedLine(slot: String, typ: String) -> String {
+    "  " + slot + " = alloca " + typ + "\n"
+}
+
+/// mirAddTypedLine renders `<dst> = add <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirAddTypedLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = add " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirSubTypedLine renders `<dst> = sub <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirSubTypedLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = sub " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirMulTypedLine renders `<dst> = mul <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirMulTypedLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = mul " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirSdivTypedLine renders `<dst> = sdiv <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirSdivTypedLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = sdiv " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirSremTypedLine renders `<dst> = srem <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirSremTypedLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = srem " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirAndTypedLine renders `<dst> = and <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirAndTypedLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = and " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirOrTypedLine renders `<dst> = or <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirOrTypedLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = or " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirXorTypedLine renders `<dst> = xor <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirXorTypedLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = xor " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirShlTypedLine renders `<dst> = shl <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirShlTypedLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = shl " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirAshrTypedLine renders `<dst> = ashr <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirAshrTypedLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = ashr " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirLshrTypedLine renders `<dst> = lshr <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirLshrTypedLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = lshr " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirFCmpOEqLine renders `<dst> = fcmp oeq <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirFCmpOEqLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = fcmp oeq " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirFCmpOneLine renders `<dst> = fcmp one <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirFCmpOneLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = fcmp one " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirFCmpOltLine renders `<dst> = fcmp olt <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirFCmpOltLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = fcmp olt " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirFCmpOleLine renders `<dst> = fcmp ole <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirFCmpOleLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = fcmp ole " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirFCmpOgtLine renders `<dst> = fcmp ogt <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirFCmpOgtLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = fcmp ogt " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirFCmpOgeLine renders `<dst> = fcmp oge <typ> <a>, <b>`. Trailing
+/// newline.
+pub fn mirFCmpOgeLine(dst: String, typ: String, a: String, b: String) -> String {
+    "  " + dst + " = fcmp oge " + typ + " " + a + ", " + b + "\n"
+}
+
+/// mirSdivByZeroChecksLine renders the cond-branch chunk used to guard
+/// integer division by zero: `<cond> = icmp eq <typ> <divisor>, 0`
+/// followed by `br i1 <cond>, label %<panicLabel>, label %<contLabel>`.
+/// Returns one multi-line String with both lines and trailing newline.
+pub fn mirSdivByZeroChecksLine(cond: String, typ: String, divisor: String, panicLabel: String, contLabel: String) -> String {
+    "  " + cond + " = icmp eq " + typ + " " + divisor + ", 0\n  br i1 " + cond + ", label %" + panicLabel + ", label %" + contLabel + "\n"
+}
+
+/// mirCallStringLitToManagedLine renders an LLVM call-site that
+/// converts a `@.strN` global-string pointer to a managed runtime
+/// string via `osty_rt_str_from_cstr`. Trailing newline.
+pub fn mirCallStringLitToManagedLine(dst: String, lit: String) -> String {
+    "  " + dst + " = call ptr @osty_rt_str_from_cstr(ptr " + lit + ")\n"
+}
+
+/// mirGetelementptrIndexedLine renders the indexed-GEP shape
+/// `<dst> = getelementptr inbounds <elemTy>, ptr <base>, i64 <idx>`.
+/// Trailing newline.
+pub fn mirGetelementptrIndexedLine(dst: String, elemTy: String, base: String, idx: String) -> String {
+    "  " + dst + " = getelementptr inbounds " + elemTy + ", ptr " + base + ", i64 " + idx + "\n"
+}
+
+/// mirGetelementptrIndexedText is the no-newline variant.
+pub fn mirGetelementptrIndexedText(dst: String, elemTy: String, base: String, idx: String) -> String {
+    "  " + dst + " = getelementptr inbounds " + elemTy + ", ptr " + base + ", i64 " + idx
+}
+
+/// mirGetelementptrAggTwoIdxLine renders the aggregate-typed GEP form
+/// `<dst> = getelementptr inbounds <aggTy>, ptr <base>, i32 0, i32
+/// <idx>`. Trailing newline.
+pub fn mirGetelementptrAggTwoIdxLine(dst: String, aggTy: String, base: String, idx: String) -> String {
+    "  " + dst + " = getelementptr inbounds " + aggTy + ", ptr " + base + ", i32 0, i32 " + idx + "\n"
+}
+
+/// mirGetelementptrAggTwoIdxText is the no-newline variant.
+pub fn mirGetelementptrAggTwoIdxText(dst: String, aggTy: String, base: String, idx: String) -> String {
+    "  " + dst + " = getelementptr inbounds " + aggTy + ", ptr " + base + ", i32 0, i32 " + idx
+}
+
+/// mirGcAllocBytesCallLine renders the GC-allocation runtime call
+/// `<dst> = call ptr @osty.gc.alloc_v1(i64 <size>)`. The standard
+/// allocator entry for managed heap objects. Trailing newline.
+pub fn mirGcAllocBytesCallLine(dst: String, size: String) -> String {
+    "  " + dst + " = call ptr @osty.gc.alloc_v1(i64 " + size + ")\n"
+}
+
+/// mirSafepointPollEmitLine renders the per-loop safepoint poll
+/// `call void @osty.gc.safepoint_v1(i64 <kind>, ptr null, i64 0)`.
+/// Trailing newline.
+pub fn mirSafepointPollEmitLine(kind: String) -> String {
+    "  call void @osty.gc.safepoint_v1(i64 " + kind + ", ptr null, i64 0)\n"
+}
+
+/// mirRegisterFromIntLiteral renders the register text form of a
+/// numeric literal: `<reg>` for non-numeric strings, returns the
+/// integer or float text directly so it can flow into a typed-arg
+/// slot. Used internally by callers that build operand strings.
+pub fn mirRegisterFromIntLiteral(value: Int) -> String {
+    mirGenIntToString(value)
+}
+
+/// mirAggregateFieldExtractLine renders `<dst> = extractvalue
+/// <aggTy> <agg>, <fieldIdx>` for indexing into an aggregate. Mirror
+/// of `mirExtractvalueGenericLine` — separately named so call sites
+/// can express "field index" semantics distinct from "tuple index".
+pub fn mirAggregateFieldExtractLine(dst: String, aggTy: String, agg: String, fieldIdx: Int) -> String {
+    "  " + dst + " = extractvalue " + aggTy + " " + agg + ", " + mirGenIntToString(fieldIdx) + "\n"
+}
+
+/// mirAggregateFieldExtractText is the no-newline variant.
+pub fn mirAggregateFieldExtractText(dst: String, aggTy: String, agg: String, fieldIdx: Int) -> String {
+    "  " + dst + " = extractvalue " + aggTy + " " + agg + ", " + mirGenIntToString(fieldIdx)
+}
+
+/// mirVtableSlotIndexFromIntLine renders the vtable-slot GEP with an
+/// integer index. Mirrors `mirVtableSlotIndexLine` but accepts a raw
+/// `Int` rather than a pre-formatted string. Trailing newline.
+pub fn mirVtableSlotIndexFromIntLine(dst: String, vt: String, fieldIdx: Int) -> String {
+    "  " + dst + " = getelementptr ptr, ptr " + vt + ", i64 " + mirGenIntToString(fieldIdx) + "\n"
+}
+
+/// mirLoadPtrFromPtrLine renders `<dst> = load ptr, ptr <slot>` —
+/// the indirect-fn-pointer load in vtable dispatch. Trailing newline.
+pub fn mirLoadPtrFromPtrLine(dst: String, slot: String) -> String {
+    "  " + dst + " = load ptr, ptr " + slot + "\n"
+}
+
+/// mirLoadPtrFromPtrText is the no-newline variant.
+pub fn mirLoadPtrFromPtrText(dst: String, slot: String) -> String {
+    "  " + dst + " = load ptr, ptr " + slot
+}
+
+/// mirLoadI64FromPtrLine renders `<dst> = load i64, ptr <slot>`.
+/// Trailing newline.
+pub fn mirLoadI64FromPtrLine(dst: String, slot: String) -> String {
+    "  " + dst + " = load i64, ptr " + slot + "\n"
+}
+
+/// mirLoadI1FromPtrLine renders `<dst> = load i1, ptr <slot>`.
+/// Trailing newline.
+pub fn mirLoadI1FromPtrLine(dst: String, slot: String) -> String {
+    "  " + dst + " = load i1, ptr " + slot + "\n"
+}
+
+/// mirLoadI32FromPtrLine renders `<dst> = load i32, ptr <slot>`.
+/// Trailing newline.
+pub fn mirLoadI32FromPtrLine(dst: String, slot: String) -> String {
+    "  " + dst + " = load i32, ptr " + slot + "\n"
+}
+
+/// mirLoadI8FromPtrLine renders `<dst> = load i8, ptr <slot>`.
+/// Trailing newline.
+pub fn mirLoadI8FromPtrLine(dst: String, slot: String) -> String {
+    "  " + dst + " = load i8, ptr " + slot + "\n"
+}
+
+/// mirLoadDoubleFromPtrLine renders `<dst> = load double, ptr
+/// <slot>`. Trailing newline.
+pub fn mirLoadDoubleFromPtrLine(dst: String, slot: String) -> String {
+    "  " + dst + " = load double, ptr " + slot + "\n"
+}
+
+/// mirStorePtrToPtrLine renders `store ptr <val>, ptr <slot>`.
+/// Trailing newline.
+pub fn mirStorePtrToPtrLine(val: String, slot: String) -> String {
+    "  store ptr " + val + ", ptr " + slot + "\n"
+}
+
+/// mirStoreI64ToPtrLine renders `store i64 <val>, ptr <slot>`.
+/// Trailing newline.
+pub fn mirStoreI64ToPtrLine(val: String, slot: String) -> String {
+    "  store i64 " + val + ", ptr " + slot + "\n"
+}
+
+/// mirStoreI1ToPtrLine renders `store i1 <val>, ptr <slot>`.
+/// Trailing newline.
+pub fn mirStoreI1ToPtrLine(val: String, slot: String) -> String {
+    "  store i1 " + val + ", ptr " + slot + "\n"
+}
+
+/// mirStoreI32ToPtrLine renders `store i32 <val>, ptr <slot>`.
+/// Trailing newline.
+pub fn mirStoreI32ToPtrLine(val: String, slot: String) -> String {
+    "  store i32 " + val + ", ptr " + slot + "\n"
+}
+
+/// mirStoreI8ToPtrLine renders `store i8 <val>, ptr <slot>`.
+/// Trailing newline.
+pub fn mirStoreI8ToPtrLine(val: String, slot: String) -> String {
+    "  store i8 " + val + ", ptr " + slot + "\n"
+}
+
+/// mirStoreDoubleToPtrLine renders `store double <val>, ptr <slot>`.
+/// Trailing newline.
+pub fn mirStoreDoubleToPtrLine(val: String, slot: String) -> String {
+    "  store double " + val + ", ptr " + slot + "\n"
+}
+
+/// mirRetTypedValueLine renders `ret <typ> <val>`. Trailing newline.
+pub fn mirRetTypedValueLine(typ: String, val: String) -> String {
+    "  ret " + typ + " " + val + "\n"
+}
+
+/// mirRetTypedValueText is the no-newline variant.
+pub fn mirRetTypedValueText(typ: String, val: String) -> String {
+    "  ret " + typ + " " + val
+}
+
+/// mirUnreachableTextLine renders `unreachable` with a trailing
+/// newline. Sibling of the existing `mirUnreachableLine` builder kept
+/// for callers using the `Text`/`Line` distinction explicitly.
+pub fn mirUnreachableTextLine() -> String {
+    "  unreachable\n"
+}
+
+/// mirGlobalStringLiteralDeclLine renders the `@.strN = private
+/// constant [<size> x i8] c"<bytes>"` shape used for static string
+/// literals. The caller is expected to pre-encode `<bytes>` (escape +
+/// length-prefix). Trailing newline.
+pub fn mirGlobalStringLiteralDeclLine(name: String, size: String, bytes: String) -> String {
+    "@" + name + " = private constant [" + size + " x i8] c\"" + bytes + "\"\n"
+}
+
+/// mirGlobalCharArrayDeclLine renders the `@.<name> = private
+/// constant [<size> x i8] c"<bytes>"` shape — variant of
+/// `mirGlobalStringLiteralDeclLine` for callers that want explicit
+/// dotted prefix control.
+pub fn mirGlobalCharArrayDeclLine(name: String, size: String, bytes: String) -> String {
+    name + " = private constant [" + size + " x i8] c\"" + bytes + "\"\n"
+}
+
+/// mirCallVtableSlotVoidLine renders an indirect-call invocation
+/// through a vtable slot: `call void <fnPtr>(<args>)` followed by a
+/// trailing newline. Sibling of `mirIndirectCallVoidLine`, kept
+/// separately so the call-site convention can evolve independently
+/// (e.g. attach `!llvm.callees` metadata).
+pub fn mirCallVtableSlotVoidLine(fnPtr: String, args: String) -> String {
+    "  call void " + fnPtr + "(" + args + ")\n"
+}
+
+/// mirCallVtableSlotValueLine renders `<dst> = call <retTy>
+/// <fnPtr>(<args>)`. Trailing newline.
+pub fn mirCallVtableSlotValueLine(dst: String, retTy: String, fnPtr: String, args: String) -> String {
+    "  " + dst + " = call " + retTy + " " + fnPtr + "(" + args + ")\n"
+}
+
+/// mirSwitchOpenLine — alias of `mirSwitchHeaderLine` for call sites
+/// that prefer the open/close terminology. The Go side delegates.
+pub fn mirSwitchOpenLine(typ: String, scrut: String, defaultLbl: String) -> String {
+    mirSwitchHeaderLine(typ, scrut, defaultLbl)
+}
+
+/// mirSwitchCloseLine — alias of `mirSwitchFooterLine`.
+pub fn mirSwitchCloseLine() -> String {
+    mirSwitchFooterLine()
+}

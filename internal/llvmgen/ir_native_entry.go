@@ -1,7 +1,6 @@
 package llvmgen
 
 import (
-	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -2346,14 +2345,19 @@ func nativeSourceSpanText(ctx *nativeProjectionCtx, n ostyir.Node) string {
 	return strings.TrimSpace(string(ctx.source[start:end]))
 }
 
+// nativeTestingFailureMessage formats the diagnostic produced when a
+// test-time `testing.<method>` assertion fails. The base shape and
+// the optional `; expr=…` suffix are in
+// `mirTestingFailureMessage{Bare,WithExpr}`; the `<file>:<line>`
+// label is built via `mirTestingFailureLabelLine`.
 func nativeTestingFailureMessage(ctx *nativeProjectionCtx, method string, n ostyir.Node, exprText string) string {
 	label := firstNonEmpty(ctx.sourcePath, "<test>")
 	if n != nil && n.At().Start.Line > 0 {
-		label = fmt.Sprintf("%s:%d", label, n.At().Start.Line)
+		label = mirTestingFailureLabelLine(label, strconv.Itoa(n.At().Start.Line))
 	}
-	msg := fmt.Sprintf("testing.%s failed at %s", method, label)
+	msg := mirTestingFailureMessageBare(method, label)
 	if exprText != "" && (method == "expectOk" || method == "expectError") {
-		msg += fmt.Sprintf("; expr=`%s`", exprText)
+		msg = mirTestingFailureMessageWithExpr(msg, exprText)
 	}
 	return msg
 }
@@ -3085,7 +3089,7 @@ func nativeConstFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (nativeConstV
 		if !ok {
 			return nativeConstValue{}, false
 		}
-		name := fmt.Sprintf("@.str%d", ctx.nextStringID)
+		name := mirNativeStringConstantName(strconv.Itoa(ctx.nextStringID))
 		ctx.nextStringID++
 		cstring := llvmCString(text)
 		ctx.stringGlobals = append(ctx.stringGlobals, &LlvmStringGlobal{
@@ -4639,7 +4643,7 @@ func nativeRegisterClosure(ctx *nativeProjectionCtx, c *ostyir.Closure) (*native
 	}
 	ctx.closureCounter++
 	id := ctx.closureCounter
-	lifted := fmt.Sprintf("__osty_closure_%d", id)
+	lifted := mirNativeLiftedClosureName(strconv.Itoa(id))
 	info := &nativeClosureInfo{
 		id:           id,
 		liftedName:   lifted,
@@ -4814,11 +4818,8 @@ func appendNativeClosureThunks(out []byte, ctx *nativeProjectionCtx) []byte {
 			argList += capType + " %cap" + strconv.Itoa(i)
 		}
 		if info.returnLLVM == "" || info.returnLLVM == "void" {
-			b.WriteString("  call void @")
-			b.WriteString(info.liftedName)
-			b.WriteString("(")
-			b.WriteString(argList)
-			b.WriteString(")\n  ret void\n")
+			b.WriteString(mirCalloutCallVoidLine(info.liftedName, argList))
+			b.WriteString(mirRetVoidLine())
 		} else {
 			b.WriteString("  %ret = call ")
 			b.WriteString(info.returnLLVM)
@@ -4826,9 +4827,8 @@ func appendNativeClosureThunks(out []byte, ctx *nativeProjectionCtx) []byte {
 			b.WriteString(info.liftedName)
 			b.WriteString("(")
 			b.WriteString(argList)
-			b.WriteString(")\n  ret ")
-			b.WriteString(info.returnLLVM)
-			b.WriteString(" %ret\n")
+			b.WriteString(")\n")
+			b.WriteString(mirRetTypedValueLine(info.returnLLVM, "%ret"))
 		}
 		b.WriteString("}\n")
 		out = append(out, b.String()...)
@@ -5658,9 +5658,15 @@ func wrapOptionalIRType(t ostyir.Type) ostyir.Type {
 	return &ostyir.OptionalType{Inner: t}
 }
 
+// listElementType returns the inner element type of a `List<T>` named
+// type, or nil if `t` isn't shaped that way. Shape predicate is in
+// `mirListElemArgsValid`.
 func listElementType(t ostyir.Type) ostyir.Type {
 	named, ok := t.(*ostyir.NamedType)
-	if !ok || named == nil || !named.Builtin || named.Name != "List" || len(named.Args) != 1 {
+	if !ok || named == nil {
+		return nil
+	}
+	if !mirListElemArgsValid(named.Name, named.Builtin, len(named.Args)) {
 		return nil
 	}
 	return named.Args[0]
@@ -5676,21 +5682,27 @@ func nativeTypeIsBytes(t ostyir.Type) bool {
 	return ok && prim.Kind == ostyir.PrimBytes
 }
 
+// nativeMapSetKeySupported reports whether the map/set key type can flow
+// through the runtime's scalar-key path. Strings use a separate
+// pointer-key contract and are handled here; the scalar branch
+// delegates to the Osty-sourced `mirNativeMapSetKeySupportedScalar`.
 func nativeMapSetKeySupported(llvmType string, isString bool) bool {
 	if isString {
 		return true
 	}
-	switch llvmType {
-	case "i64", "i1", "double", "ptr":
-		return true
-	default:
-		return false
-	}
+	return mirNativeMapSetKeySupportedScalar(llvmType)
 }
 
+// nativeMethodOwnerName returns (name, true) when `t` is a bare
+// owner-named reference (non-builtin, no package qualifier, no type
+// args) suitable for method-owner lookup. The shape predicate is in
+// `mirNativeMethodOwnerNameValid`.
 func nativeMethodOwnerName(t ostyir.Type) (string, bool) {
 	named, ok := t.(*ostyir.NamedType)
-	if !ok || named == nil || named.Builtin || named.Package != "" || len(named.Args) != 0 {
+	if !ok || named == nil {
+		return "", false
+	}
+	if !mirNativeMethodOwnerNameValid(named.Builtin, named.Package, len(named.Args)) {
 		return "", false
 	}
 	return named.Name, true
@@ -5791,110 +5803,37 @@ func nativePlainStringText(lit *ostyir.StringLit) (string, bool) {
 	return b.String(), true
 }
 
+// normalizeNativeIntText canonicalises an integer literal's source text
+// to base-10 digits the runtime can consume directly. Underscore
+// separators are stripped; `0x` / `0o` / `0b` prefixes (case-insensitive)
+// are decoded back to base-10. Returns `("", false)` on parse failure.
+// Delegates to the Osty-sourced `mirNormalizeNativeIntText`
+// (`toolchain/mir_generator.osty`); the bool channel is rebuilt from the
+// "" sentinel since the multi-value Osty bridge isn't supported in the
+// snapshot boundary.
 func normalizeNativeIntText(text string) (string, bool) {
-	raw := strings.ReplaceAll(text, "_", "")
-	base := 10
-	switch {
-	case strings.HasPrefix(raw, "0x") || strings.HasPrefix(raw, "0X"):
-		base, raw = 16, raw[2:]
-	case strings.HasPrefix(raw, "0o") || strings.HasPrefix(raw, "0O"):
-		base, raw = 8, raw[2:]
-	case strings.HasPrefix(raw, "0b") || strings.HasPrefix(raw, "0B"):
-		base, raw = 2, raw[2:]
-	}
-	if raw == "" {
+	out := mirNormalizeNativeIntText(text)
+	if out == "" {
 		return "", false
 	}
-	value, err := strconv.ParseInt(raw, base, 64)
-	if err != nil {
-		return "", false
-	}
-	return strconv.FormatInt(value, 10), true
+	return out, true
 }
 
+// nativeUnaryOpString returns the source-level prefix-op text for an
+// `ostyir.UnOp`. Delegates to the Osty-sourced `mirIRUnaryOpString`.
 func nativeUnaryOpString(op ostyir.UnOp) string {
-	switch op {
-	case ostyir.UnNeg:
-		return "-"
-	case ostyir.UnPlus:
-		return "+"
-	case ostyir.UnNot:
-		return "!"
-	case ostyir.UnBitNot:
-		return "~"
-	default:
-		return ""
-	}
+	return mirIRUnaryOpString(int(op))
 }
 
+// nativeBinaryOpString returns the source-level operator text for an
+// `ostyir.BinOp`. Delegates to the Osty-sourced `mirIRBinOpString`.
 func nativeBinaryOpString(op ostyir.BinOp) string {
-	switch op {
-	case ostyir.BinAdd:
-		return "+"
-	case ostyir.BinSub:
-		return "-"
-	case ostyir.BinMul:
-		return "*"
-	case ostyir.BinDiv:
-		return "/"
-	case ostyir.BinMod:
-		return "%"
-	case ostyir.BinEq:
-		return "=="
-	case ostyir.BinNeq:
-		return "!="
-	case ostyir.BinLt:
-		return "<"
-	case ostyir.BinLeq:
-		return "<="
-	case ostyir.BinGt:
-		return ">"
-	case ostyir.BinGeq:
-		return ">="
-	case ostyir.BinAnd:
-		return "&&"
-	case ostyir.BinOr:
-		return "||"
-	case ostyir.BinBitAnd:
-		return "&"
-	case ostyir.BinBitOr:
-		return "|"
-	case ostyir.BinBitXor:
-		return "^"
-	case ostyir.BinShl:
-		return "<<"
-	case ostyir.BinShr:
-		return ">>"
-	default:
-		return ""
-	}
+	return mirIRBinOpString(int(op))
 }
 
+// nativeAssignOpString returns the source-level operator text (without
+// the trailing `=`) for an `ostyir.AssignOp`. Delegates to the
+// Osty-sourced `mirIRAssignOpString`.
 func nativeAssignOpString(op ostyir.AssignOp) string {
-	switch op {
-	case ostyir.AssignEq:
-		return "="
-	case ostyir.AssignAdd:
-		return "+"
-	case ostyir.AssignSub:
-		return "-"
-	case ostyir.AssignMul:
-		return "*"
-	case ostyir.AssignDiv:
-		return "/"
-	case ostyir.AssignMod:
-		return "%"
-	case ostyir.AssignAnd:
-		return "&"
-	case ostyir.AssignOr:
-		return "|"
-	case ostyir.AssignXor:
-		return "^"
-	case ostyir.AssignShl:
-		return "<<"
-	case ostyir.AssignShr:
-		return ">>"
-	default:
-		return ""
-	}
+	return mirIRAssignOpString(int(op))
 }

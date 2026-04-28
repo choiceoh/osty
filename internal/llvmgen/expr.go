@@ -408,6 +408,11 @@ func (g *generator) emitRangeExpr(expr *ast.RangeExpr) (value, error) {
 // usually not useful — but line:col plus byte-offset plus `%T` lets
 // the investigator grep the merge buffer and pinpoint the offending
 // expression immediately.
+// exprPosLabel formats an `at <pos> (offset N)` label for a source
+// node. Returns the empty string for a nil node or a synthesized
+// node with no source provenance. Delegates to the Osty-sourced
+// `mirExprPosLabel` for the body shape; the host stays responsible
+// for rendering the position via `p.String()`.
 func exprPosLabel(node ast.Node) string {
 	if node == nil {
 		return ""
@@ -416,7 +421,7 @@ func exprPosLabel(node ast.Node) string {
 	if p.Line == 0 && p.Column == 0 && p.Offset == 0 {
 		return ""
 	}
-	return fmt.Sprintf("at %s (offset %d)", p, p.Offset)
+	return mirExprPosLabel(p.String(), strconv.Itoa(p.Offset))
 }
 
 func (g *generator) emitIdent(name string) (value, error) {
@@ -2686,15 +2691,25 @@ func (g *generator) emitExprWithHint(expr ast.Expr, listElemTyp string, listElem
 	return g.emitExpr(expr)
 }
 
+// builtinResultPayloadSourceType returns the AST type of the payload
+// for the named constructor (`Ok` -> args[0], `Err` -> args[1]) when
+// `sourceType` is shaped as `Result<T, E>`. Mirror predicate +
+// constructor-index live in `mirIRIsResultPathShape` and
+// `mirBuiltinResultIRTypeArgIndex`.
 func builtinResultPayloadSourceType(sourceType ast.Type, constructor string) ast.Type {
 	named, ok := sourceType.(*ast.NamedType)
-	if !ok || len(named.Path) != 1 || named.Path[0] != "Result" || len(named.Args) != 2 {
+	if !ok || len(named.Path) != 1 {
 		return nil
 	}
-	if constructor == "Err" {
-		return named.Args[1]
+	if !mirIRIsResultPathShape(named.Path[0], len(named.Args)) {
+		return nil
 	}
-	return named.Args[0]
+	idx := mirBuiltinResultIRTypeArgIndex(constructor)
+	if idx < 0 {
+		// Legacy fallthrough — preserve the previous default of "Ok index".
+		return named.Args[0]
+	}
+	return named.Args[idx]
 }
 
 func bytesToStringResultSourceType() ast.Type {
@@ -6819,25 +6834,18 @@ func (g *generator) emitOptionUnwrap(base value, optType *ast.OptionalType, call
 // Some(x) / list.get / map.get box on the heap. Returns (llvmType,
 // true) for Int / Bool / Float / Char / Byte, (zero, false) for
 // ptr-backed or aggregate payloads which don't need a load at
-// unwrap time.
+// unwrap time. Type-name → LLVM mapping lives in
+// `mirScalarLLVMTypeForOptionInnerName`.
 func scalarLLVMTypeForOptionInner(t ast.Type) (string, bool) {
 	named, ok := t.(*ast.NamedType)
 	if !ok || len(named.Path) != 1 || len(named.Args) != 0 {
 		return "", false
 	}
-	switch named.Path[0] {
-	case "Int":
-		return "i64", true
-	case "Bool":
-		return "i1", true
-	case "Float":
-		return "double", true
-	case "Char":
-		return "i32", true
-	case "Byte":
-		return "i8", true
+	llvmTyp := mirScalarLLVMTypeForOptionInnerName(named.Path[0])
+	if llvmTyp == "" {
+		return "", false
 	}
-	return "", false
+	return llvmTyp, true
 }
 
 func (g *generator) emitSetMethodCall(call *ast.CallExpr) (value, bool, error) {

@@ -497,9 +497,15 @@ func (g *generator) emitLoopSafepoint(emitter *LlvmEmitter, counterSlot string) 
 	emitter.body = append(emitter.body, mirLabelText(afterLabel))
 }
 
+// llvmZeroValue returns a `value` representing the LLVM zero of `typ`.
+// For the canonical scalar types (`ptr`, `i64`, `i1`, `double`) the ref
+// is the type's literal zero (`null`, `0`, `false`, `0.0`); for any
+// other type — aggregates, integer-narrow, struct handles — the
+// `zeroinitializer` form covers the bits. The scalar/aggregate
+// classifier lives in `mirLlvmZeroValueIsScalar`.
 func llvmZeroValue(typ string) value {
 	ref := llvmZeroLiteral(typ)
-	if typ != "ptr" && typ != "i64" && typ != "i1" && typ != "double" {
+	if !mirLlvmZeroValueIsScalar(typ) {
 		ref = "zeroinitializer"
 	}
 	return value{typ: typ, ref: ref}
@@ -1453,7 +1459,7 @@ func (g *generator) traceCallbackSymbol(typ string, rootPaths [][]int) string {
 		}
 		body = append(body, mirGCMarkSlotText(addr))
 	}
-	body = append(body, "  ret void")
+	body = append(body, mirRetVoidText())
 	g.traceHelperDefs = append(g.traceHelperDefs, llvmRenderFunction("void", name, []*LlvmParam{llvmParam("value.addr", "ptr")}, body))
 	return name
 }

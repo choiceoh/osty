@@ -1672,7 +1672,7 @@ func (g *generator) emitTestingBenchmarkStmt(call *ast.CallExpr) error {
 	if call != nil {
 		callLine = call.Pos().Line
 	}
-	prefix := fmt.Sprintf("bench %s", g.sourceLineLabel(callLine, "<bench>"))
+	prefix := mirBenchSourceLineLabelText(g.sourceLineLabel(callLine, "<bench>"))
 	msg, err := g.foldAssertionMessage(
 		staticAssertPart(prefix+" iter="),
 		dynamicAssertPart(itersStr),
@@ -1861,14 +1861,15 @@ func (g *generator) benchQuestionFailMessage(expr *ast.QuestionExpr) string {
 	if expr != nil {
 		line = expr.Pos().Line
 	}
-	return fmt.Sprintf("bench `?` propagated failure at %s", g.sourceLineLabel(line, "<bench>"))
+	return mirBenchPropagatedFailureText(g.sourceLineLabel(line, "<bench>"))
 }
 
 // hiddenBenchIterName allocates a loop-counter name that can't shadow a
 // user identifier; llvmRangeStart needs somewhere to bind `%current`.
+// Naming via the Osty-sourced `mirHiddenBenchLocalName`.
 func (g *generator) hiddenBenchIterName() string {
 	g.hiddenLocalID++
-	return fmt.Sprintf("__bench_i_%d", g.hiddenLocalID)
+	return mirHiddenBenchLocalName(strconv.Itoa(g.hiddenLocalID))
 }
 
 func (g *generator) emitTestingAssertion(cond value, message string) error {
