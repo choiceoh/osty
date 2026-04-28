@@ -41,7 +41,49 @@ func installPrimitiveArithMethods(env *CheckEnv) {
 		registerSelfShapedBinary(env, k.owner, k.ty, "min", "other")
 		registerSelfShapedBinary(env, k.owner, k.ty, "max", "other")
 		registerSelfShapedClamp(env, k.owner, k.ty)
+		// toString — narrow widths share the i64 ABI on the LLVM side
+		// and the dispatcher in `g.emitRuntimeIntToString` already
+		// handles every Int kind by routing through `osty_rt_int_to_string`.
+		// Register here so `let n: Int8 = 3; n.toString()` /
+		// `let n: UInt32 = 3; n.toString()` resolve uniformly. The
+		// `Int` registration in generated.go (paired with the
+		// UntypedInt → "Int" promotion from #992) covered only the
+		// canonical width — the other 9 surfaced as
+		// `E0703 no method on type Int8` despite the lowering being
+		// ready.
+		registerToString(env, k.owner, k.ty)
 	}
+
+	// Float family — same `#[intrinsic_methods(Float, Float32, Float64)]`
+	// shape as the integer loop above, all routed to
+	// `osty_rt_float_to_string` via `g.emitRuntimeFloatToString` (the
+	// LLVM lowering classifies every Float width to `double`).
+	floatKinds := []struct {
+		owner string
+		ty    int
+	}{
+		{"Float", tFloat(tys)},
+		{"Float32", tFloat32(tys)},
+		{"Float64", tFloat64(tys)},
+	}
+	for _, k := range floatKinds {
+		registerToString(env, k.owner, k.ty)
+	}
+}
+
+func registerToString(env *CheckEnv, owner string, ty int) {
+	tys := env.tys
+	checkRegisterFn(env, &CheckFnSig{
+		name:          "toString",
+		owner:         owner,
+		receiverTy:    ty,
+		hasReceiver:   true,
+		retTy:         tString(tys),
+		paramNames:    make([]string, 0, 1),
+		paramTys:      make([]int, 0, 1),
+		generics:      make([]string, 0, 1),
+		genericBounds: make([]*CheckGenericBound, 0, 1),
+	})
 }
 
 func registerSelfShapedNullary(env *CheckEnv, owner string, ty int, name string) {

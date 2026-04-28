@@ -3080,6 +3080,38 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
             paramNames: ["lo", "hi"], paramTys: [ty, ty],
             generics: [], genericBounds: [],
         })
+        // toString — narrow widths share the i64 ABI on the LLVM side
+        // and dispatch through `osty_rt_int_to_string`. The loop here
+        // matches the `#[intrinsic_methods(Int, Int8, …)]` decoration
+        // on `primitives/int.osty` so `let n: Int8 = 3; n.toString()`
+        // resolves the same way `let n: Int = 3; n.toString()` does.
+        // The Int (untyped-default) registration below is kept too so
+        // the per-kind loop doesn't collide with explicit fixtures —
+        // duplicates are deduped by `checkRegisterFn`.
+        checkRegisterFn(env, CheckFnSig {
+            name: "toString", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tString_,
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+    }
+
+    // ----- Float arithmetic + toString (`primitives/float.osty`) -----
+    // Same `#[intrinsic_methods(Float, Float32, Float64)]` shape as the
+    // integer loop above. The LLVM dispatcher in
+    // `g.emitRuntimeFloatToString` already handles every Float width
+    // by routing through the `double` LLVM type, so the checker just
+    // needs the declarations to match.
+    let floatArithKinds: List<(String, Int)> = [
+        ("Float", tFloat(tys)),
+        ("Float32", tFloat32(tys)),
+        ("Float64", tFloat64(tys)),
+    ]
+    for (ownerName, ty) in floatArithKinds {
+        checkRegisterFn(env, CheckFnSig {
+            name: "toString", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tString_,
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
     }
 }
 
