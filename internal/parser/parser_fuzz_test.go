@@ -21,16 +21,13 @@ import (
 	"time"
 )
 
-// parseTimeout is the per-iteration budget for a single fuzz parse. The
-// current self-hosted parser has at least one pre-existing hang (e.g. on a
-// bare `#` input) which will be fixed during the Phase 4 parser rewrite. For
-// Phase 0 we detect hangs so the fuzzer can continue past them.
+// parseTimeout is the per-iteration budget for a single fuzz parse.
 const parseTimeout = 3 * time.Second
 
-// parseWithTimeout runs ParseDiagnostics on src and reports whether it
-// completed within the budget. Panics inside the parse propagate out of the
-// goroutine to the t.Fatal path via recover + fatalf.
-func parseWithTimeout(t *testing.T, src []byte) (done bool) {
+// parseWithTimeout runs ParseDiagnostics on src and requires it to complete
+// within the budget. Panics inside the parse propagate out of the goroutine to
+// the t.Fatal path via recover + fatalf.
+func parseWithTimeout(t *testing.T, src []byte) {
 	t.Helper()
 	d := make(chan struct{})
 	var panicVal any
@@ -52,15 +49,8 @@ func parseWithTimeout(t *testing.T, src []byte) (done bool) {
 		if panicVal != nil {
 			t.Fatalf("ParseDiagnostics panicked on %q: %v\n%s", truncate(src), panicVal, panicStack)
 		}
-		return true
 	case <-time.After(parseTimeout):
-		// Pre-existing hang. This is a known bug in the current parser that
-		// the Phase 4 rewrite must fix. For Phase 0 baseline we log and
-		// continue so the fuzzer can explore other inputs; the curated
-		// regression set in TestParseTerminatesOnMinimalInputs is the
-		// non-fuzz tripwire that catches the common forms.
-		t.Logf("ParseDiagnostics did not terminate within %s on %q (pre-existing hang)", parseTimeout, truncate(src))
-		return false
+		t.Fatalf("ParseDiagnostics did not terminate within %s on %q", parseTimeout, truncate(src))
 	}
 }
 
@@ -157,8 +147,6 @@ func FuzzParse(f *testing.F) {
 	f.Fuzz(func(t *testing.T, src []byte) {
 		// Property: parsing any input, however malformed, must return without
 		// panic within parseTimeout. Diagnostics may be empty or populated.
-		// Hangs are reported as t.Errorf (non-fatal) so the fuzzer keeps
-		// exploring; panics propagate via t.Fatalf.
 		parseWithTimeout(t, src)
 	})
 }
@@ -179,8 +167,30 @@ func TestParseTerminatesOnMinimalInputs(t *testing.T) {
 	for _, src := range inputs {
 		src := src
 		t.Run(truncate(src), func(t *testing.T) {
-			if !parseWithTimeout(t, src) {
-				t.Fatalf("ParseDiagnostics did not terminate within %s on %q", parseTimeout, truncate(src))
+			parseWithTimeout(t, src)
+		})
+	}
+}
+
+func TestParseMalformedInputsReturnDiagnostics(t *testing.T) {
+	inputs := [][]byte{
+		[]byte("#"),
+		[]byte("#["),
+		[]byte("fn"),
+		[]byte("let ="),
+		[]byte("a < b < c\n"),
+		[]byte("1..=2..3\n"),
+	}
+	for _, src := range inputs {
+		src := src
+		t.Run(truncate(src), func(t *testing.T) {
+			parseWithTimeout(t, src)
+			file, diags := ParseDiagnostics(src)
+			if len(diags) == 0 {
+				t.Fatalf("ParseDiagnostics returned no diagnostics for malformed input %q; file=%#v", truncate(src), file)
+			}
+			if file == nil {
+				t.Fatalf("ParseDiagnostics returned nil partial AST for malformed input %q; diagnostics=%#v", truncate(src), diags)
 			}
 		})
 	}

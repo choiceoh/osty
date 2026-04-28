@@ -63,18 +63,19 @@ func normalizeSourceNewlines(text string) string {
 // lowered AST, and diagnostic adaptation so callers do not accidentally
 // re-run the front end.
 type FrontendRun struct {
-	text     string
-	rt       runeTable
-	stream   *FrontLexStream
-	lexFacts *OstyLexFacts
-	parser   *OstyParser
-	toks     []token.Token
-	comments []token.Comment
-	file     *ast.File
-	semantic *AstFile
-	lexDiags []*diag.Diagnostic
-	diags    []*diag.Diagnostic
-	adapted  bool
+	text      string
+	rt        runeTable
+	stream    *FrontLexStream
+	lexFacts  *OstyLexFacts
+	parser    *OstyParser
+	toks      []token.Token
+	comments  []token.Comment
+	file      *ast.File
+	semantic  *AstFile
+	lowerings []StableLowering
+	lexDiags  []*diag.Diagnostic
+	diags     []*diag.Diagnostic
+	adapted   bool
 }
 
 // Run executes the self-hosted lexer and parser once and keeps all adapted
@@ -203,20 +204,22 @@ func (r *FrontendRun) Comments() []token.Comment {
 	return r.comments
 }
 
-// File returns the lowered semantic AST for this front-end pass.
+// File returns the public semantic AST for this front-end pass.
 //
-// First call materializes the *ast.File via astLowerPublicFile — the
-// single astbridge (`runtime.golegacy.astbridge`) entry point on the
-// resolve / check / llvmgen side of the compiler. Subsequent calls
-// return the cached result without touching astbridge again, so each
-// FrontendRun contributes at most one lowering to
-// AstbridgeLowerCount regardless of how many callers poke it.
+// First call materializes the *ast.File from the already-lowered semantic
+// arena via astLowerPublicFile. Subsequent calls return the cached result
+// without touching astbridge again, so each FrontendRun contributes at most one
+// lowering to AstbridgeLowerCount regardless of how many callers poke it.
 func (r *FrontendRun) File() *ast.File {
 	if r.file != nil {
 		return r.file
 	}
 	atomic.AddInt64(&astbridgeLowerCount, 1)
-	r.file = astLowerPublicFile(r.parser.arena, r.Tokens())
+	arena := r.parser.arena
+	if semantic := r.semanticAstFile(); semantic != nil && semantic.arena != nil {
+		arena = semantic.arena
+	}
+	r.file = astLowerPublicFile(arena, r.Tokens())
 	ast.AssignIDs(r.file)
 	return r.file
 }
@@ -239,8 +242,18 @@ func (r *FrontendRun) semanticAstFile() *AstFile {
 	if r.semantic != nil {
 		return r.semantic
 	}
-	r.semantic = selfhostSemanticAstFile(r.astFile())
+	r.semantic, r.lowerings = selfhostSemanticAstFileWithLowerings(r.astFile())
 	return r.semantic
+}
+
+// StableLowerings returns the compatibility lowerings applied while building
+// the semantic arena. Calling it does not materialize the public *ast.File.
+func (r *FrontendRun) StableLowerings() []StableLowering {
+	if r == nil {
+		return nil
+	}
+	r.semanticAstFile()
+	return append([]StableLowering(nil), r.lowerings...)
 }
 
 // LexDiagnostics returns lexer-only diagnostics.

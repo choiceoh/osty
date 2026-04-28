@@ -5,7 +5,7 @@ import (
 	"github.com/osty/osty/internal/diag"
 )
 
-// ParseCST lexes and parses src, then lifts the parsed AST plus its token
+// ParseCST lexes and parses src, then lifts the parser run plus its token
 // stream into a concrete-syntax Red/Green tree. The returned *cst.Tree is a
 // lossless projection — every source byte (after CRLF normalization) is
 // reachable from the tree.
@@ -18,13 +18,26 @@ import (
 //     reproduce source text (formatter, LSP hover highlights, incremental
 //     reparse candidates) use this variant.
 //
+// This is still the compatibility CST path: structure is projected through the
+// semantic public AST until the parser emits a native Green tree or lossless
+// event stream. Keep that dependency explicit and local to this adapter.
+//
 // Diagnostics are identical to Parse — no new analysis is performed.
 func ParseCST(src []byte) (*cst.Tree, []*diag.Diagnostic) {
 	normalized := cst.Normalize(src)
 	run := runFrontend(normalized, true)
+	return ParseCSTFromRun(run, normalized)
+}
+
+// ParseCSTFromRun builds the compatibility CST from an existing front-end run.
+// normalized must be the CRLF-normalized source bytes used to create run.
+func ParseCSTFromRun(run *FrontendRun, normalized []byte) (*cst.Tree, []*diag.Diagnostic) {
+	if run == nil {
+		return nil, nil
+	}
 	toks := run.Tokens()
 	trivias := cst.Extract(normalized, toks)
-	file := run.File()
+	file := LowerPublicFileFromRun(run)
 	tree := cst.BuildFromParsed(normalized, file, toks, trivias)
 	return tree, run.Diagnostics()
 }

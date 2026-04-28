@@ -31,27 +31,29 @@ func Parse(src []byte) (*ast.File, []error) {
 	return file, errs
 }
 
-// ParseDetailed lexes, parses, and canonicalizes src, returning the semantic
-// AST plus parser-level provenance.
+// ParseDetailed lexes, parses, and canonicalizes src, returning the public
+// semantic AST plus parser-level compatibility provenance. Source alias
+// provenance is collected here; parser-owned helper lowerings are applied once
+// while building the selfhost semantic arena and lifted into this result.
 func ParseDetailed(src []byte) Result {
 	pipeline := newParsePipeline(src)
-	pipeline.applySourceCompat()
-	file, diags := pipeline.parse()
-	pipeline.applyASTFixups(file)
+	run := pipeline.parseRun()
+	pipeline.applySourceCompat(run)
+	file, diags := run.File(), run.Diagnostics()
+	pipeline.applyArenaCompatProvenance(run)
 	return pipeline.result(file, diags)
 }
 
-// ParseCanonical parses trusted source without collecting the parser-owned
-// compatibility provenance that ParseDetailed records for user-authored code.
+// ParseCanonical parses trusted source and returns the public semantic AST
+// without collecting the compatibility provenance that ParseDetailed records for
+// user-authored code.
 //
-// Unlike calling selfhost.Parse directly, this still applies the parser's
-// shared AST fixups so canonical sources that use lowered surface forms such
-// as builtin `len(...)` continue to match the rest of the compiler pipeline.
+// The returned file is lowered from the same semantic arena used by ParseRun's
+// native consumers; no host-side AST fixup pass runs after astbridge lowering.
 func ParseCanonical(src []byte) (*ast.File, []*diag.Diagnostic) {
 	pipeline := newParsePipeline(src)
-	file, diags := pipeline.parse()
-	pipeline.applyASTFixups(file)
-	return file, diags
+	run := pipeline.parseRun()
+	return run.File(), run.Diagnostics()
 }
 
 // ParseDiagnostics lexes and parses src, returning the AST and rich
@@ -62,12 +64,12 @@ func ParseDiagnostics(src []byte) (*ast.File, []*diag.Diagnostic) {
 }
 
 // ParseRun lexes and parses src and returns the underlying selfhost
-// FrontendRun without lowering the result to the *ast.File semantic AST.
-// Callers that only need the Osty-native parser arena (native resolver,
-// native checker, native llvmgen) should use this entry point so the
-// astbridge-based *ast.File lowering is not triggered. Calling
-// run.File() afterwards remains valid if the *ast.File is eventually
-// needed — it is computed lazily on first access.
+// FrontendRun without lowering the result to the public *ast.File semantic AST.
+// Callers that only need the Osty-native parser arena (native resolver, native
+// checker, native llvmgen) should use this entry point so astbridge-based
+// public lowering is not triggered. Calling run.File() afterwards remains valid
+// if the *ast.File is eventually needed; it is computed lazily from the
+// semantic arena on first access.
 func ParseRun(src []byte) *selfhost.FrontendRun {
 	return selfhost.Run(src)
 }

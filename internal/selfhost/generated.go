@@ -3278,7 +3278,7 @@ func frontPositionAt(units []string, target int) *FrontPos {
 	frontPositionCacheMu.Lock()
 	defer frontPositionCacheMu.Unlock()
 
-	if !frontSameUnits(frontPositionCache.units, units) {
+	if len(frontPositionCache.positions) == 0 || !frontSameUnits(frontPositionCache.units, units) {
 		positions := make([]FrontPos, len(units)+1)
 		positions[0] = FrontPos{offset: 0, line: 1, column: 1}
 		frontPositionCache = frontPositionCacheState{

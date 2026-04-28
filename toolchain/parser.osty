@@ -588,7 +588,8 @@ fn opParsePrefix(p: OstyParser) -> Int {
         let x = opParsePrefix(p)
         // Prefix unary binds tighter than infix but LOOSER than
         // postfix — `!s.ok` parses as `!(s.ok)`, not `(!s).ok`.
-        // Mirrors the Go-side parser hoist from #434.
+        // This is the source of truth; public AST lowering only projects
+        // the arena shape.
         let operand = opApplyPostfix(p, x)
         let mut node = emptyAstNode(AstNUnary)
         node.op = tok.kind

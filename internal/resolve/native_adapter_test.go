@@ -12,10 +12,9 @@ import (
 // TestLoadPackageForNativeMultiFileIsAstbridgeFree pins the PR6 wedge:
 // running the package resolve path via LoadPackageForNative +
 // NativeResolutionRows / NativeDiagnostics over a multi-file package
-// must not trigger the astbridge-based *ast.File lowering. The counter
-// stays at zero throughout; calling EnsureFiles afterwards bumps it by
-// exactly one per file, proving the lazy lowering is wired correctly
-// for the fallback paths (--show-scopes, printResolutionRefs).
+// must not trigger FrontendRun.File public lowering. The counter stays at zero
+// throughout; calling EnsureFiles afterwards uses the explicit compatibility
+// adapter and still does not bump FrontendRun.File.
 func TestLoadPackageForNativeMultiFileIsAstbridgeFree(t *testing.T) {
 	dir := t.TempDir()
 	aPath := filepath.Join(dir, "a.osty")
@@ -72,8 +71,8 @@ func TestLoadPackageForNativeMultiFileIsAstbridgeFree(t *testing.T) {
 	}
 
 	pkg.EnsureFiles()
-	if got := selfhost.AstbridgeLowerCount(); got != int64(len(pkg.Files)) {
-		t.Fatalf("after EnsureFiles: AstbridgeLowerCount = %d, want %d (one lowering per file)", got, len(pkg.Files))
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("after EnsureFiles: AstbridgeLowerCount = %d, want 0 (explicit compatibility adapter must not call FrontendRun.File)", got)
 	}
 	for _, pf := range pkg.Files {
 		if pf.File == nil {
@@ -82,8 +81,8 @@ func TestLoadPackageForNativeMultiFileIsAstbridgeFree(t *testing.T) {
 	}
 
 	pkg.EnsureFiles()
-	if got := selfhost.AstbridgeLowerCount(); got != int64(len(pkg.Files)) {
-		t.Fatalf("second EnsureFiles re-lowered: AstbridgeLowerCount = %d, want %d (cached)", got, len(pkg.Files))
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("second EnsureFiles re-lowered through FrontendRun.File: AstbridgeLowerCount = %d, want 0", got)
 	}
 }
 
