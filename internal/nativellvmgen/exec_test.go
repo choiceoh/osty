@@ -2,13 +2,21 @@ package nativellvmgen
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/osty/osty/internal/resolve"
+)
+
+var (
+	fakeNativeLLVMGenOnce sync.Once
+	fakeNativeLLVMGenPath string
+	fakeNativeLLVMGenErr  error
 )
 
 func TestTrySourceUsesEnvBinaryAndDecodesResponse(t *testing.T) {
@@ -107,10 +115,23 @@ func TestTryPackageUsesManagedBinaryWhenEnvUnset(t *testing.T) {
 func buildFakeNativeLLVMGen(t *testing.T) string {
 	t.Helper()
 
-	dir := t.TempDir()
+	fakeNativeLLVMGenOnce.Do(func() {
+		fakeNativeLLVMGenPath, fakeNativeLLVMGenErr = buildFakeNativeLLVMGenOnce()
+	})
+	if fakeNativeLLVMGenErr != nil {
+		t.Fatal(fakeNativeLLVMGenErr)
+	}
+	return fakeNativeLLVMGenPath
+}
+
+func buildFakeNativeLLVMGenOnce() (string, error) {
+	dir, err := os.MkdirTemp("", "fake-native-llvmgen-*")
+	if err != nil {
+		return "", fmt.Errorf("mktemp: %w", err)
+	}
 	src := filepath.Join(dir, "main.go")
 	if err := os.WriteFile(src, []byte(fakeNativeLLVMGenProgram), 0o644); err != nil {
-		t.Fatalf("write fake native llvmgen: %v", err)
+		return "", fmt.Errorf("write fake native llvmgen: %w", err)
 	}
 	name := "fake-native-llvmgen"
 	if runtime.GOOS == "windows" {
@@ -120,9 +141,9 @@ func buildFakeNativeLLVMGen(t *testing.T) string {
 	cmd := exec.Command("go", "build", "-o", bin, src)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("go build fake native llvmgen: %v\n%s", err, out)
+		return "", fmt.Errorf("go build fake native llvmgen: %w\n%s", err, out)
 	}
-	return bin
+	return bin, nil
 }
 
 func decodeCapturedRequest(t *testing.T, path string, out any) {

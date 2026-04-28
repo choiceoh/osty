@@ -10,6 +10,8 @@ import (
 )
 
 func TestRunLoadedPackageGenUsesPackageLoweringForSiblingFiles(t *testing.T) {
+	forcePipelineGenFallback(t)
+
 	dir := t.TempDir()
 	writePipelineTestFile(t, dir, "a.osty", "pub fn helper() -> Int { 1 }\n")
 	writePipelineTestFile(t, dir, "b.osty", "fn main() { println(helper()) }\n")
@@ -35,6 +37,8 @@ func TestRunLoadedPackageGenUsesPackageLoweringForSiblingFiles(t *testing.T) {
 }
 
 func TestRunWorkspaceGenAggregatesPerPackageModules(t *testing.T) {
+	forcePipelineGenFallback(t)
+
 	root := t.TempDir()
 	alpha := filepath.Join(root, "alpha")
 	beta := filepath.Join(root, "beta")
@@ -135,4 +139,13 @@ func writePipelineTestFile(t *testing.T, dir, name, contents string) string {
 		t.Fatalf("write %s: %v", path, err)
 	}
 	return path
+}
+
+func forcePipelineGenFallback(t *testing.T) {
+	t.Helper()
+	oldTry := tryExternalPipelineLLVMIR
+	tryExternalPipelineLLVMIR = func(string, *resolve.Package) ([]byte, bool, []error, error) {
+		return nil, false, nil, nil
+	}
+	t.Cleanup(func() { tryExternalPipelineLLVMIR = oldTry })
 }
